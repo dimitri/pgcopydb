@@ -1,0 +1,53 @@
+{
+    "string": "lorem ipsum",
+    "utf string": "lorem ipsum",
+    "utf-8 string": "あいうえお",
+    "surrogate string": "lorem𝄞ipsum𝍧lorem",
+    "string with null": "abc\u0000def",
+    "positive one": 1,
+    "negative one": -1,
+    "pi": 3.1400000000000001,
+    "hard to parse number": -0.00031399999999999999,
+    "big int": 2147483647,
+    "big uint": 4294967295,
+    "double underflow": 6.9041432094973937e-310,
+    "boolean true": true,
+    "boolean false": false,
+    "null": null,
+    "string array": [
+        "lorem",
+        "ipsum"
+    ],
+    "x^2 array": [
+        0,
+        1,
+        4,
+        9,
+        16,
+        25,
+        36,
+        49,
+        64,
+        81,
+        100
+    ],
+    "\/*": null,
+    "object": {
+        "nested string": "str",
+        "nested true": true,
+        "nested false": false,
+        "nested null": null,
+        "nested number": 123,
+        "nested array": [
+            "lorem",
+            "ipsum"
+        ]
+    },
+    "*\/": null,
+    "\/**\/": "comment",
+    "\/\/": "comment",
+    "url": "https:\/\/www.example.com\/search?q=12345",
+    "escaped chars": "\" \\ \/",
+    "empty object": {},
+    "empty array": []
+}

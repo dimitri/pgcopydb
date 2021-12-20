@@ -1,0 +1,45 @@
+/* 
+ *Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor 
+ *ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud 
+ *dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. 
+*/
+// Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor 
+{ /* lorem ipsum */
+	"string" : "lorem ipsum", // lorem ipsum 
+	"utf string" : "\u006corem\u0020ipsum", // lorem ipsum //
+   "utf-8 string": "あいうえお", // /* lorem ipsum */
+    "surrogate string": "lorem\uD834\uDD1Eipsum\uD834\uDF67lorem",
+    "string with null": "abc\u0000def",
+	"positive one" : 1, 
+	"negative one" : -1,
+	"pi" : 3.14,
+	"hard to parse number" : -3.14e-4,
+	"big int": 2147483647,
+    "big uint": 4294967295,
+	"double underflow": 6.9041432094973937e-310,
+	"boolean true" : true,
+	"boolean false" : false,
+	"null" : null,
+	"string array" : ["lorem",/*in array*/"ipsum"],
+	"x^2 array" : [0, 1, 4, 9, 16, 25, 36, 49, 64, 81, 100],
+/*	"x^2 array" : [],
+*/ 
+	"/*" : null,
+	"object" : { "nested string" : "str",
+				 "nested true" : /* lorem ipsum */ true,
+				 "nested false" : false,
+				 "nested null" : null, // lorem ipsum
+				 "nested number" : 123,
+				 "nested array" : ["lorem", "ipsum"],
+				 "nested object" : {"lorem": "ipsum"}
+	},
+	"*/" : null,
+	"/**/" : "comment",
+	"//" : "comment",
+	"url" : "https:\/\/www.example.com\/search?q=12345",
+	"escaped chars" : "\" \\ \/",
+	"empty object" : {},
+	"empty array" : []
+}
+/**/
+//

@@ -1,0 +1,26 @@
+*		whitespace=space-before-tab,trailing-space
+*.[chly]	whitespace=space-before-tab,trailing-space,indent-with-non-tab,tabwidth=4
+*.dsl		whitespace=space-before-tab,trailing-space,tab-in-indent
+*.patch		-whitespace
+*.pl		whitespace=space-before-tab,trailing-space,tabwidth=4
+*.po		whitespace=space-before-tab,trailing-space,tab-in-indent,-blank-at-eof
+*.sgml		whitespace=space-before-tab,trailing-space,tab-in-indent,-blank-at-eol
+*.x[ms]l	whitespace=space-before-tab,trailing-space,tab-in-indent
+
+# Avoid confusing ASCII underlines with leftover merge conflict markers
+README		conflict-marker-size=32
+README.*	conflict-marker-size=32
+
+
+# These files are maintained or generated elsewhere.  We take them as is.
+configure				-whitespace
+
+# all C files (implementation and header) use our style...
+*.[ch] citus-style
+
+# except these exceptions...
+src/bin/lib/parson/** -citus-style
+src/bin/lib/log/** -citus-style
+src/bin/lib/libs/** -citus-style
+src/bin/lib/pg/** -citus-style
+src/bin/lib/subcommands.c/** -citus-style
