@@ -7,6 +7,8 @@
 
 #include <stdbool.h>
 
+#define IS_EMPTY_STRING_BUFFER(strbuf) (strbuf[0] == '\0')
+
 #define streq(a, b) (a != NULL && b != NULL && strcmp(a, b) == 0)
 
 #define strneq(x, y) \

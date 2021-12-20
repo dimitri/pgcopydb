@@ -33,4 +33,8 @@ extern CommandLine *root_subcommands_with_debug[];
 int root_options(int argc, char **argv);
 
 
+/* cli_copy.h */
+extern CommandLine copy_commands;
+
+
 #endif  /* CLI_ROOT_H */

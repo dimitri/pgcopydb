@@ -16,7 +16,7 @@ When using `pgcopydb` it is possible to achieve the result outlined before
 with this simple command line:
 
 ```bash
-$ pgcopydb copy db --jobs=N --from postgres://user@source/dbname --into postgres://user@target/dbname
+$ pgcopydb copy db --jobs=N --source postgres://user@source/dbname --target postgres://user@target/dbname
 ```
 
 Then `pgcopydb` implements the following steps:

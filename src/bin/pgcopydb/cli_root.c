@@ -22,6 +22,7 @@ CommandLine version =
  * Command line options when using PGCOPYDB_DEBUG=1, as sub-processes do.
  */
 CommandLine *root_subcommands_with_debug[] = {
+	&copy_commands,
 	&help,
 	&version,
 	NULL
@@ -37,6 +38,7 @@ CommandLine root_with_debug =
  * Command line options intended to normal users.
  */
 CommandLine *root_subcommands[] = {
+	&copy_commands,
 	&help,
 	&version,
 	NULL

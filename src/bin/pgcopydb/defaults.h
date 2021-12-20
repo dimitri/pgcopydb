@@ -23,6 +23,8 @@
 #define POSTGRES_PING_RETRY_CAP_SLEEP_TIME (2 * 1000) /* milliseconds */
 #define POSTGRES_PING_RETRY_BASE_SLEEP_TIME 5         /* milliseconds */
 
+#define POSTGRES_PORT 5432
+
 /* internal default for allocating strings  */
 #define BUFSIZE 1024
 
