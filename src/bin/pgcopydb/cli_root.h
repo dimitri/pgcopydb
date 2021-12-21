@@ -42,4 +42,7 @@ extern CommandLine dump_commands;
 /* cli_restore.h */
 extern CommandLine restore_commands;
 
+/* cli_list.h */
+extern CommandLine list_commands;
+
 #endif  /* CLI_ROOT_H */

@@ -54,11 +54,8 @@
 /* abstract representation of a Postgres server that we can connect to */
 typedef enum
 {
-	PGSQL_CONN_LOCAL = 0,
-	PGSQL_CONN_MONITOR,
-	PGSQL_CONN_COORDINATOR,
-	PGSQL_CONN_UPSTREAM,
-	PGSQL_CONN_APP
+	PGSQL_CONN_SOURCE = 0,
+	PGSQL_CONN_TARGET,
 } ConnectionType;
 
 

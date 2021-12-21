@@ -347,24 +347,14 @@ ConnectionTypeToString(ConnectionType connectionType)
 {
 	switch (connectionType)
 	{
-		case PGSQL_CONN_LOCAL:
+		case PGSQL_CONN_SOURCE:
 		{
-			return "local";
+			return "source";
 		}
 
-		case PGSQL_CONN_MONITOR:
+		case PGSQL_CONN_TARGET:
 		{
-			return "monitor";
-		}
-
-		case PGSQL_CONN_COORDINATOR:
-		{
-			return "coordinator";
-		}
-
-		case PGSQL_CONN_UPSTREAM:
-		{
-			return "upstream";
+			return "target";
 		}
 
 		default:
@@ -1023,7 +1013,7 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 		int lineNumber = 0;
 
 		char *prefix =
-			pgsql->connectionType == PGSQL_CONN_MONITOR ? "Monitor" : "Postgres";
+			pgsql->connectionType == PGSQL_CONN_SOURCE ? "[SOURCE]" : "[TARGET]";
 
 		/*
 		 * PostgreSQL Error message might contain several lines. Log each of
@@ -1034,26 +1024,8 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 			log_error("%s %s", prefix, errorLines[lineNumber]);
 		}
 
-		/*
-		 * The monitor uses those error codes in situations we know how to
-		 * handle, so if we have one of those, it's not a client-side error
-		 * with a badly formed SQL query etc.
-		 */
-		if (pgsql->connectionType == PGSQL_CONN_MONITOR &&
-			sqlstate != NULL &&
-			!(strcmp(sqlstate, STR_ERRCODE_INVALID_OBJECT_DEFINITION) == 0 ||
-			  strcmp(sqlstate, STR_ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE) == 0 ||
-			  strcmp(sqlstate, STR_ERRCODE_OBJECT_IN_USE) == 0 ||
-			  strcmp(sqlstate, STR_ERRCODE_UNDEFINED_OBJECT) == 0))
-		{
-			log_error("SQL query: %s", sql);
-			log_error("SQL params: %s", debugParameters);
-		}
-		else
-		{
-			log_debug("SQL query: %s", sql);
-			log_debug("SQL params: %s", debugParameters);
-		}
+		log_error("SQL query: %s", sql);
+		log_error("SQL params: %s", debugParameters);
 
 		/* now stash away the SQL STATE if any */
 		if (context && sqlstate)
