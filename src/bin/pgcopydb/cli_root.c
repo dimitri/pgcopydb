@@ -39,6 +39,7 @@ CommandLine root_with_debug =
  */
 CommandLine *root_subcommands[] = {
 	&copy_commands,
+	&dump_commands,
 	&help,
 	&version,
 	NULL
