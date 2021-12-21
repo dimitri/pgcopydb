@@ -23,6 +23,8 @@ CommandLine version =
  */
 CommandLine *root_subcommands_with_debug[] = {
 	&copy_commands,
+	&dump_commands,
+	&restore_commands,
 	&help,
 	&version,
 	NULL
@@ -40,6 +42,7 @@ CommandLine root_with_debug =
 CommandLine *root_subcommands[] = {
 	&copy_commands,
 	&dump_commands,
+	&restore_commands,
 	&help,
 	&version,
 	NULL

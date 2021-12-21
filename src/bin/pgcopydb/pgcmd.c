@@ -399,6 +399,67 @@ pg_dump_db(PostgresPaths *pgPaths,
 
 
 /*
+ * Call pg_restore from the given filename and restores it to the target
+ * database connection.
+ */
+bool
+pg_restore_db(PostgresPaths *pgPaths,
+			  const char *pguri,
+			  const char *filename)
+{
+	char *args[16];
+	int argsIndex = 0;
+
+	char command[BUFSIZE] = { 0 };
+
+	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+
+	args[argsIndex++] = (char *) pgPaths->pg_restore;
+	args[argsIndex++] = "-d";
+	args[argsIndex++] = (char *) pguri;
+	args[argsIndex++] = (char *) filename;
+
+	args[argsIndex] = NULL;
+
+	/*
+	 * We do not want to call setsid() when running pg_dump.
+	 */
+	Program program = { 0 };
+
+	(void) initialize_program(&program, args, false);
+	program.processBuffer = &processBufferCallback;
+
+	/* log the exact command line we're using */
+	int commandSize = snprintf_program_command_line(&program, command, BUFSIZE);
+
+	if (commandSize >= BUFSIZE)
+	{
+		/* we only display the first BUFSIZE bytes of the real command */
+		log_info("%s...", command);
+	}
+	else
+	{
+		log_info("%s", command);
+	}
+
+	(void) execute_subprogram(&program);
+
+	if (program.returnCode != 0)
+	{
+		log_error("Failed to run pg_restore: exit code %d", program.returnCode);
+		(void) log_program_output(&program, LOG_ERROR, LOG_ERROR);
+
+		free_program(&program);
+
+		return false;
+	}
+
+	free_program(&program);
+	return true;
+}
+
+
+/*
  * log_program_output logs the output of the given program.
  */
 static void

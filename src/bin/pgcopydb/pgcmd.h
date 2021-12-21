@@ -42,6 +42,9 @@ bool pg_dump_db(PostgresPaths *pgPaths,
 				const char *section,
 				const char *filename);
 
+bool pg_restore_db(PostgresPaths *pgPaths,
+				   const char *pguri,
+				   const char *filename);
 
 
 #endif /* PGCMD_H */

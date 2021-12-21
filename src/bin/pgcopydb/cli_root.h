@@ -39,5 +39,7 @@ extern CommandLine copy_commands;
 /* cli_dump.h */
 extern CommandLine dump_commands;
 
+/* cli_restore.h */
+extern CommandLine restore_commands;
 
 #endif  /* CLI_ROOT_H */
