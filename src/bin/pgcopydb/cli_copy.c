@@ -11,6 +11,7 @@
 #include "cli_common.h"
 #include "cli_copy.h"
 #include "cli_root.h"
+#include "copydb.h"
 #include "commandline.h"
 #include "log.h"
 #include "pgsql.h"
@@ -207,10 +208,43 @@ cli_copy_db_getopts(int argc, char **argv)
 static void
 cli_copy_db(int argc, char **argv)
 {
-	log_info("Copying database from \"%s\"", copyDBoptions.source_pguri);
-	log_info("Copying database into \"%s\"", copyDBoptions.target_pguri);
+	CopyFilePaths cfPaths = { 0 };
+	PostgresPaths pgPaths = { 0 };
+
+	log_info("[SOURCE] Copying database from \"%s\"", copyDBoptions.source_pguri);
+	log_info("[TARGET] Copying database into \"%s\"", copyDBoptions.target_pguri);
 	log_info("Using %d concurrent jobs (sub-processes)", copyDBoptions.jobs);
 
-	log_fatal("copy db: not yet implemented");
+	(void) find_pg_commands(&pgPaths);
+
+	if (!copydb_init_workdir(&cfPaths, NULL))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_info("Step 1: dump the source database schema (pre/post data)");
+
+	/* use a temporary directory for the whole copy operation */
+
+	if (!copydb_dump_source_schema(&pgPaths,
+								   &cfPaths,
+								   copyDBoptions.source_pguri))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_info("Step 2: restore the pre-data section to the target database");
+
+	if (!copydb_target_prepare_schema(&pgPaths,
+									  &cfPaths,
+									  copyDBoptions.target_pguri))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_TARGET);
+	}
+
+	log_fatal("copy db: not all the steps are implemented yet");
 	exit(EXIT_CODE_INTERNAL_ERROR);
 }

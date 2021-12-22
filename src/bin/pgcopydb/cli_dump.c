@@ -11,6 +11,7 @@
 #include "cli_common.h"
 #include "cli_dump.h"
 #include "cli_root.h"
+#include "copydb.h"
 #include "commandline.h"
 #include "log.h"
 #include "pgcmd.h"
@@ -201,6 +202,7 @@ cli_dump_db_getopts(int argc, char **argv)
 static void
 cli_dump_db(int argc, char **argv)
 {
+	CopyFilePaths cfPaths = { 0 };
 	PostgresPaths pgPaths = { 0 };
 
 	log_info("Dumping database from \"%s\"", dumpDBoptions.source_pguri);
@@ -208,42 +210,21 @@ cli_dump_db(int argc, char **argv)
 
 	(void) find_pg_commands(&pgPaths);
 
+	if (!copydb_init_workdir(&cfPaths, dumpDBoptions.target_dir))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
 	log_info("Using pg_dump for Postgres \"%s\" at \"%s\"",
 			 pgPaths.pg_version,
 			 pgPaths.pg_dump);
 
-	char *dir = dumpDBoptions.target_dir;
-	char preFilename[MAXPGPATH] = { 0 };
-	char postFilename[MAXPGPATH] = { 0 };
-
-	if (!directory_exists(dir))
-	{
-		log_debug("mkdir -p \"%s\"", dir);
-		if (!ensure_empty_dir(dir, 0700))
-		{
-			/* errors have already been logged. */
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
-	}
-
-	sformat(preFilename, MAXPGPATH, "%s/%s", dir, "pre.dump");
-	sformat(postFilename, MAXPGPATH, "%s/%s", dir, "post.dump");
-
-	if (!pg_dump_db(&pgPaths,
-					dumpDBoptions.source_pguri,
-					"pre-data",
-					preFilename))
+	if (!copydb_dump_source_schema(&pgPaths,
+								   &cfPaths,
+								   dumpDBoptions.source_pguri))
 	{
 		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
-	}
-
-	if (!pg_dump_db(&pgPaths,
-					dumpDBoptions.source_pguri,
-					"post-data",
-					postFilename))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 }

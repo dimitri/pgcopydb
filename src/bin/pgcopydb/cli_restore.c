@@ -11,6 +11,7 @@
 #include "cli_common.h"
 #include "cli_restore.h"
 #include "cli_root.h"
+#include "copydb.h"
 #include "commandline.h"
 #include "log.h"
 #include "pgcmd.h"
@@ -201,6 +202,7 @@ cli_restore_db_getopts(int argc, char **argv)
 static void
 cli_restore_db(int argc, char **argv)
 {
+	CopyFilePaths cfPaths = { 0 };
 	PostgresPaths pgPaths = { 0 };
 
 	log_info("Restoring database from \"%s\"", restoreDBoptions.source_dir);
@@ -209,26 +211,21 @@ cli_restore_db(int argc, char **argv)
 
 	(void) find_pg_commands(&pgPaths);
 
+	if (!copydb_init_workdir(&cfPaths, restoreDBoptions.source_dir))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
 	log_info("Using pg_restore for Postgres \"%s\" at \"%s\"",
 			 pgPaths.pg_version,
 			 pgPaths.pg_restore);
 
-	char *dir = restoreDBoptions.source_dir;
-	char preFilename[MAXPGPATH] = { 0 };
-
-	sformat(preFilename, MAXPGPATH, "%s/%s", dir, "pre.dump");
-
-	if (!file_exists(preFilename))
-	{
-		log_fatal("File \"%s\" does not exists", preFilename);
-		exit(EXIT_CODE_BAD_ARGS);
-	}
-
-	if (!pg_restore_db(&pgPaths,
-					   restoreDBoptions.target_pguri,
-					   preFilename))
+	if (!copydb_target_prepare_schema(&pgPaths,
+									  &cfPaths,
+									  restoreDBoptions.target_pguri))
 	{
 		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
+		exit(EXIT_CODE_TARGET);
 	}
 }

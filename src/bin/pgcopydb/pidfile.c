@@ -78,15 +78,6 @@ create_pidfile(const char *pidfile, pid_t pid)
 bool
 prepare_pidfile_buffer(PQExpBuffer content, pid_t pid)
 {
-	char pgdata[MAXPGPATH] = { 0 };
-
-	/* we get PGDATA from the environment */
-	if (!get_env_pgdata(pgdata))
-	{
-		log_fatal("Failed to get PGDATA to create the PID file");
-		return false;
-	}
-
 	/*
 	 * line #
 	 *		1	supervisor PID
