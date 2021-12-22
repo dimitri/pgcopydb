@@ -69,8 +69,8 @@ cli_list_db_getopts(int argc, char **argv)
 
 	static struct option long_options[] = {
 		{ "source", required_argument, NULL, 'S' },
-		{ "schema", required_argument, NULL, 's' },
-		{ "table", required_argument, NULL, 't' },
+		{ "schema-name", required_argument, NULL, 's' },
+		{ "table-name", required_argument, NULL, 't' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "quiet", no_argument, NULL, 'q' },
@@ -243,9 +243,51 @@ cli_list_indexes(int argc, char **argv)
 		exit(EXIT_CODE_SOURCE);
 	}
 
-	if (!schema_list_all_indexes(&pgsql, &indexArray))
+	if (IS_EMPTY_STRING_BUFFER(listDBoptions.table_name) &&
+		IS_EMPTY_STRING_BUFFER(listDBoptions.schema_name))
 	{
-		/* errors have already been logged */
+		log_info("Fetching all indexes in source database");
+
+		if (!schema_list_all_indexes(&pgsql, &indexArray))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+	}
+	else if (IS_EMPTY_STRING_BUFFER(listDBoptions.schema_name) &&
+			 !IS_EMPTY_STRING_BUFFER(listDBoptions.table_name))
+	{
+		log_info("Fetching all indexes for table \"public\".\"%s\"",
+				 listDBoptions.table_name);
+
+		if (!schema_list_table_indexes(&pgsql,
+									   "public",
+									   listDBoptions.table_name,
+									   &indexArray))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+	}
+	else if (!IS_EMPTY_STRING_BUFFER(listDBoptions.schema_name) &&
+			 !IS_EMPTY_STRING_BUFFER(listDBoptions.table_name))
+	{
+		log_info("Fetching all indexes for table \"%s\".\"%s\"",
+				 listDBoptions.schema_name,
+				 listDBoptions.table_name);
+
+		if (!schema_list_table_indexes(&pgsql,
+									   listDBoptions.schema_name,
+									   listDBoptions.table_name,
+									   &indexArray))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+	}
+	else
+	{
+		log_error("Option --schema-name can't be used without --table-name");
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 

@@ -61,4 +61,9 @@ typedef struct SourceIndexArray
 bool schema_list_ordinary_tables(PGSQL *pgsql, SourceTableArray *tableArray);
 bool schema_list_all_indexes(PGSQL *pgsql, SourceIndexArray *indexArray);
 
+bool schema_list_table_indexes(PGSQL *pgsql,
+							   const char *shemaName,
+							   const char *tableName,
+							   SourceIndexArray *indexArray);
+
 #endif /* SCHEMA_H */

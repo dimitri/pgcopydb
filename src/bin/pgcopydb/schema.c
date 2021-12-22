@@ -143,6 +143,72 @@ schema_list_all_indexes(PGSQL *pgsql, SourceIndexArray *indexArray)
 
 
 /*
+ * schema_list_all_indexes grabs the list of indexes from the given source
+ * Postgres instance and allocates a SourceIndex array with the result of the
+ * query.
+ */
+bool
+schema_list_table_indexes(PGSQL *pgsql,
+						  const char *schemaName,
+						  const char *tableName,
+						  SourceIndexArray *indexArray)
+{
+	SourceIndexArrayContext context = { { 0 }, indexArray, false };
+
+	char *sql =
+		"   select i.oid, n.nspname, i.relname,"
+		"          r.oid, rn.nspname, r.relname,"
+		"          indisprimary,"
+		"          indisunique,"
+		"          (select string_agg(attname, ',')"
+		"             from pg_attribute"
+		"            where attrelid = r.oid"
+		"              and array[attnum::integer] <@ indkey::integer[]"
+		"          ) as cols,"
+		"          pg_get_indexdef(indexrelid),"
+		"          c.conname,"
+		"          pg_get_constraintdef(c.oid)"
+		"     from pg_index x"
+		"          join pg_class i ON i.oid = x.indexrelid"
+		"          join pg_class r ON r.oid = x.indrelid"
+		"          join pg_namespace n ON n.oid = i.relnamespace"
+		"          join pg_namespace rn ON rn.oid = r.relnamespace"
+		"          left join pg_depend d "
+		"                 on d.classid = 'pg_class'::regclass"
+		"                and d.objid = i.oid"
+		"                and d.refclassid = 'pg_constraint'::regclass"
+		"                and d.deptype = 'i'"
+		"          left join pg_constraint c ON c.oid = d.refobjid"
+		"    where r.relkind = 'r' and r.relpersistence = 'p' "
+		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and rn.nspname = $1 and r.relname = $2"
+		" order by n.nspname, r.relname";
+
+	int paramCount = 2;
+	Oid paramTypes[2] = { TEXTOID, TEXTOID };
+	const char *paramValues[2] = { schemaName, tableName };
+
+	log_trace("schema_list_table_indexes");
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   &context, &getIndexArray))
+	{
+		log_error("Failed to retrieve current state from the monitor");
+		return false;
+	}
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to parse current state from the monitor");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * getTableArray loops over the SQL result for the tables array query and
  * allocates an array of tables then populates it with the query result.
  */
