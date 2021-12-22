@@ -25,7 +25,7 @@ static void cli_restore_db(int argc, char **argv);
 static CommandLine restore_db_command =
 	make_command(
 		"db",
-		"Restore an entire database from source to target",
+		"Restore an entire database from source to target (schema only)",
 		" --source ... --target ... ",
 		"  --source          Directory where to save the restore files\n"
 		"  --target          Postgres URI to the source database\n",
@@ -35,7 +35,7 @@ static CommandLine restore_db_command =
 static CommandLine restore_table_command =
 	make_command(
 		"table",
-		"Restore a given table from source to target",
+		"Restore a given table from source to target (schema only)",
 		" --source ... --target ... ",
 		"  --source          Directory where to save the restore files\n"
 		"  --target          Postgres URI to the source database\n"

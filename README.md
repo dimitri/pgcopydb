@@ -29,7 +29,7 @@ Then `pgcopydb` implements the following steps:
      target database.
      
   3. `pgcopydb` gets the list of ordinary and partitioned tables and for
-     each of them runs a COPY FREEZE job as a sub-process, and starts and
+     each of them runs a `pg_dump` job as a sub-process, and starts and
      control the sub-processes until all the data has been copied over.
      
      Postgres catalog table pg_class is used to get the list of tables with

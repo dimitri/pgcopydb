@@ -49,7 +49,7 @@ schema_list_ordinary_tables(PGSQL *pgsql, SourceTableArray *tableArray)
 		"      on c.relnamespace = n.oid "
 		"   where c.relkind = 'r' and c.relpersistence = 'p' "
 		"     and n.nspname not in ('pg_catalog', 'information_schema') "
-		"order by c.reltuples::bigint desc";
+		"order by c.reltuples::bigint desc, n.nspname, c.relname";
 
 	log_trace("schema_list_ordinary_tables");
 

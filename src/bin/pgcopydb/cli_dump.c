@@ -25,7 +25,7 @@ static void cli_dump_db(int argc, char **argv);
 static CommandLine dump_db_command =
 	make_command(
 		"db",
-		"Dump an entire database from source to target",
+		"Dump an entire database from source to target (schema only)",
 		" --source ... --target ... ",
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Directory where to save the dump files\n",
@@ -35,7 +35,7 @@ static CommandLine dump_db_command =
 static CommandLine dump_table_command =
 	make_command(
 		"table",
-		"Dump a given table from source to target",
+		"Dump a given table from source to target (schema only)",
 		" --source ... --target ... ",
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Directory where to save the dump files\n"

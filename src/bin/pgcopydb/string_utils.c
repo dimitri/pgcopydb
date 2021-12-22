@@ -544,16 +544,13 @@ processBufferCallback(const char *buffer, bool error)
 	int lineCount = splitLines((char *) buffer, outLines, BUFSIZE);
 	int lineNumber = 0;
 
+	int logLevel = error ? LOG_ERROR : LOG_INFO;
+
 	for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
 	{
 		if (strneq(outLines[lineNumber], ""))
 		{
-			/*
-			 * pg_basebackup and other utilities write their progress output on
-			 * stderr, we don't want to have ERROR message when it's all good.
-			 * As a result we always target INFO log level here.
-			 */
-			log_info("%s", outLines[lineNumber]);
+			log_level(logLevel, "%s", outLines[lineNumber]);
 		}
 	}
 }

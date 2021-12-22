@@ -26,9 +26,6 @@
 #define RUN_PROGRAM_IMPLEMENTATION
 #include "runprogram.h"
 
-static void log_program_output(Program *prog,
-							   int outLogLevel, int errorLogLevel);
-
 /*
  * Get psql --version output in pgPaths->pg_version.
  */
@@ -386,8 +383,6 @@ pg_dump_db(PostgresPaths *pgPaths,
 	if (program.returnCode != 0)
 	{
 		log_error("Failed to run pg_dump: exit code %d", program.returnCode);
-		(void) log_program_output(&program, LOG_ERROR, LOG_ERROR);
-
 		free_program(&program);
 
 		return false;
@@ -447,8 +442,6 @@ pg_restore_db(PostgresPaths *pgPaths,
 	if (program.returnCode != 0)
 	{
 		log_error("Failed to run pg_restore: exit code %d", program.returnCode);
-		(void) log_program_output(&program, LOG_ERROR, LOG_ERROR);
-
 		free_program(&program);
 
 		return false;
@@ -456,36 +449,4 @@ pg_restore_db(PostgresPaths *pgPaths,
 
 	free_program(&program);
 	return true;
-}
-
-
-/*
- * log_program_output logs the output of the given program.
- */
-static void
-log_program_output(Program *prog, int outLogLevel, int errorLogLevel)
-{
-	if (prog->stdOut != NULL)
-	{
-		char *outLines[BUFSIZE];
-		int lineCount = splitLines(prog->stdOut, outLines, BUFSIZE);
-		int lineNumber = 0;
-
-		for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
-		{
-			log_level(outLogLevel, "%s", outLines[lineNumber]);
-		}
-	}
-
-	if (prog->stdErr != NULL)
-	{
-		char *errorLines[BUFSIZE];
-		int lineCount = splitLines(prog->stdErr, errorLines, BUFSIZE);
-		int lineNumber = 0;
-
-		for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
-		{
-			log_level(errorLogLevel, "%s", errorLines[lineNumber]);
-		}
-	}
 }
