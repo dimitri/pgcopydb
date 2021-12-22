@@ -7,7 +7,10 @@
 #define COPYDB_H
 
 #include "pgcmd.h"
+#include "schema.h"
 
+
+/* maintain all the internal paths we need in one place */
 typedef struct CopyFilePaths
 {
 	char topdir[MAXPGPATH];		      /* /tmp/pgcopydb */
@@ -20,6 +23,53 @@ typedef struct CopyFilePaths
 } CopyFilePaths;
 
 
+/* tracking sub-processes that are used for TABLE DATA copying */
+typedef struct TableDataProcess
+{
+	pid_t pid;
+	uint32_t oid;
+	char lockFile[MAXPGPATH];	/* /tmp/pgcopydb/run/tables/{oid} */
+	char doneFile[MAXPGPATH];	/* /tmp/pgcopydb/run/tables/{oid}.done */
+} TableDataProcess;
+
+
+typedef struct TableDataProcessArray
+{
+	int count;
+	TableDataProcess *array;	/* malloc'ed area */
+} TableDataProcessArray;
+
+
+/* all that's needed to start a TABLE DATA copy for a whole database */
+typedef struct CopyDataSpec
+{
+	CopyFilePaths *cfPaths;
+	PostgresPaths *pgPaths;
+
+	char *source_pguri;
+	char *target_pguri;
+
+	int tableJobs;
+	int indexJobs;
+} CopyDataSpec;
+
+
+/* all that's needed to drive a single TABLE DATA copy process */
+typedef struct CopyTableDataSpec
+{
+	CopyFilePaths *cfPaths;
+	PostgresPaths *pgPaths;
+
+	char *source_pguri;
+	char *target_pguri;
+
+	SourceTable *sourceTable;
+	TableDataProcess *process;
+
+	int tableJobs;
+	int indexJobs;
+} CopyTableDataSpec;
+
 bool copydb_init_workdir(CopyFilePaths *cfPaths, char *dir);
 
 bool copydb_dump_source_schema(PostgresPaths *pgPaths,
@@ -29,5 +79,12 @@ bool copydb_dump_source_schema(PostgresPaths *pgPaths,
 bool copydb_target_prepare_schema(PostgresPaths *pgPaths,
 								  CopyFilePaths *cfPaths,
 								  const char *pguri);
+
+bool copydb_copy_all_table_data(CopyDataSpec *specs);
+bool copydb_start_table_data(CopyTableDataSpec *spec);
+bool copydb_copy_table(CopyTableDataSpec *tableSpecs);
+
+bool copydb_fatal_exit(TableDataProcessArray *subprocessArray);
+bool copydb_wait_for_subprocesses(void);
 
 #endif  /* COPYDB_H */

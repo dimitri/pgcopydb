@@ -223,7 +223,7 @@ cli_copy_db(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	log_info("Step 1: dump the source database schema (pre/post data)");
+	log_info("STEP 1: dump the source database schema (pre/post data)");
 
 	/* use a temporary directory for the whole copy operation */
 
@@ -235,7 +235,7 @@ cli_copy_db(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	log_info("Step 2: restore the pre-data section to the target database");
+	log_info("STEP 2: restore the pre-data section to the target database");
 
 	if (!copydb_target_prepare_schema(&pgPaths,
 									  &cfPaths,
@@ -245,6 +245,29 @@ cli_copy_db(int argc, char **argv)
 		exit(EXIT_CODE_TARGET);
 	}
 
-	log_fatal("copy db: not all the steps are implemented yet");
+	log_info("STEP 3: copy data from source to target in sub-processes");
+	log_info("STEP 4: create indexes and constraints in parallel");
+	log_info("STEP 5: vacuum analyze each table");
+
+	CopyDataSpec copySpecs = {
+		.cfPaths = &cfPaths,
+		.pgPaths = &pgPaths,
+
+		.source_pguri = copyDBoptions.source_pguri,
+		.target_pguri = copyDBoptions.target_pguri,
+
+		.tableJobs = copyDBoptions.jobs,
+		.indexJobs = copyDBoptions.jobs
+	};
+
+	if (!copydb_copy_all_table_data(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_info("STEP 6: [restore the post-data section to the target database]");
+
+	log_fatal("copy db: not all the steps are implemented [yet]");
 	exit(EXIT_CODE_INTERNAL_ERROR);
 }

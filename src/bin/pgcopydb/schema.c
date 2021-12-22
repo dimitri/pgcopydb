@@ -241,6 +241,12 @@ getTableArray(void *ctx, PGresult *result)
 	context->tableArray->array =
 		(SourceTable *) malloc(nTuples * sizeof(SourceTable));
 
+	if (context->tableArray->array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return;
+	}
+
 	bool parsedOk = true;
 
 	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
@@ -350,6 +356,12 @@ getIndexArray(void *ctx, PGresult *result)
 	context->indexArray->count = nTuples;
 	context->indexArray->array =
 		(SourceIndex *) malloc(nTuples * sizeof(SourceIndex));
+
+	if (context->indexArray->array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return;
+	}
 
 	bool parsedOk = true;
 

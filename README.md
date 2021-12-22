@@ -47,10 +47,10 @@ Then `pgcopydb` implements the following steps:
      index, allowing the primary key index itself to be created in parallel
      with other indexes on the same table.
      
-  6. Then VACUUM ANALYZE is run on the each target table as soon as the data
-     and indexes are all created.
+  5. Then VACUUM ANALYZE is run on each target table as soon as the data and
+     indexes are all created.
      
-  7. The final stage consists now of running the rest of the `post-data`
+  6. The final stage consists now of running the rest of the `post-data`
      section script for the whole database, and that's where the foreign key
      constraints and other elements are created.
 
