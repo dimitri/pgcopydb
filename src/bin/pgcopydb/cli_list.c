@@ -232,6 +232,46 @@ cli_list_tables(int argc, char **argv)
 static void
 cli_list_indexes(int argc, char **argv)
 {
-	log_fatal("Not Implemented Yet");
-	exit(EXIT_CODE_INTERNAL_ERROR);
+	PGSQL pgsql = { 0 };
+	SourceIndexArray indexArray = { 0, NULL };
+
+	log_info("Listing indexes in \"%s\"", listDBoptions.source_pguri);
+
+	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	if (!schema_list_all_indexes(&pgsql, &indexArray))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_info("Fetched information for %d indexes", indexArray.count);
+
+	fformat(stdout, "%8s | %10s | %20s | %15s | %25s | %s\n",
+			"OID", "Schema", "Index Name", "conname", "Constraint", "DDL");
+
+	fformat(stdout, "%8s-+-%10s-+-%20s-+-%15s-+-%25s-+-%s\n",
+			"--------",
+			"----------",
+			"--------------------",
+			"---------------",
+			"-------------------------",
+			"--------------------");
+
+	for (int i = 0; i < indexArray.count; i++)
+	{
+		fformat(stdout, "%8d | %10s | %20s | %15s | %25s | %s\n",
+				indexArray.array[i].indexOid,
+				indexArray.array[i].indexNamespace,
+				indexArray.array[i].indexRelname,
+				indexArray.array[i].constraintName,
+				indexArray.array[i].constraintDef,
+				indexArray.array[i].indexDef);
+	}
+
+	fformat(stdout, "\n");
 }
