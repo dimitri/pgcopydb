@@ -46,6 +46,7 @@ typedef struct SourceIndex
 	bool isUnique;
 	char indexColumns[BUFSIZE];
 	char indexDef[BUFSIZE];
+	uint32_t constraintOid;
 	char constraintName[NAMEDATALEN];
 	char constraintDef[BUFSIZE];
 } SourceIndex;

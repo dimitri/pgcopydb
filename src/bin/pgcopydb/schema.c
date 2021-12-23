@@ -106,6 +106,7 @@ schema_list_all_indexes(PGSQL *pgsql, SourceIndexArray *indexArray)
 		"              and array[attnum::integer] <@ indkey::integer[]"
 		"          ) as cols,"
 		"          pg_get_indexdef(indexrelid),"
+		"          c.oid,"
 		"          c.conname,"
 		"          pg_get_constraintdef(c.oid)"
 		"     from pg_index x"
@@ -166,6 +167,7 @@ schema_list_table_indexes(PGSQL *pgsql,
 		"              and array[attnum::integer] <@ indkey::integer[]"
 		"          ) as cols,"
 		"          pg_get_indexdef(indexrelid),"
+		"          c.oid,"
 		"          c.conname,"
 		"          pg_get_constraintdef(c.oid)"
 		"     from pg_index x"
@@ -336,9 +338,9 @@ getIndexArray(void *ctx, PGresult *result)
 
 	log_trace("getIndexArray: %d", nTuples);
 
-	if (PQnfields(result) != 12)
+	if (PQnfields(result) != 13)
 	{
-		log_error("Query returned %d columns, expected 12", PQnfields(result));
+		log_error("Query returned %d columns, expected 13", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -508,8 +510,18 @@ parseCurrentSourceIndex(PGresult *result, int rowNumber, SourceIndex *index)
 		++errors;
 	}
 
-	/* 11. conname */
+	/* 11. c.oid */
 	value = PQgetvalue(result, rowNumber, 10);
+
+	if (!stringToUInt32(value, &(index->constraintOid)) ||
+		index->constraintOid == 0)
+	{
+		log_error("Invalid OID \"%s\"", value);
+		++errors;
+	}
+
+	/* 12. conname */
+	value = PQgetvalue(result, rowNumber, 11);
 	length = strlcpy(index->constraintName, value, NAMEDATALEN);
 
 	if (length >= NAMEDATALEN)
@@ -520,8 +532,8 @@ parseCurrentSourceIndex(PGresult *result, int rowNumber, SourceIndex *index)
 		++errors;
 	}
 
-	/* 12. pg_get_constraintdef */
-	value = PQgetvalue(result, rowNumber, 11);
+	/* 13. pg_get_constraintdef */
+	value = PQgetvalue(result, rowNumber, 12);
 	length = strlcpy(index->constraintDef, value, BUFSIZE);
 
 	if (length >= BUFSIZE)
