@@ -45,8 +45,9 @@ Then `pgcopydb` implements the following steps:
      The primary indexes are created as UNIQUE indexes at this stage.
      
      Then the PRIMARY KEY constraints are created USING the just built
-     index, allowing the primary key index itself to be created in parallel
-     with other indexes on the same table.
+     indexes. This two-steps approach allows the primary key index itself to
+     be created in parallel with other indexes on the same table, avoiding
+     an EXCLUSIVE LOCK while creating the index.
      
   5. Then VACUUM ANALYZE is run on each target table as soon as the data and
      indexes are all created.
@@ -69,6 +70,11 @@ Then `pgcopydb` implements the following steps:
 At run-time `pgcopydb` depends on the `pg_dump` and `pg_restore` tools being
 available in the `PATH`. The tools version should match the Postgres version
 of the target database.
+
+When you have multiple versions of Postgres installed, consider exporting
+the `PG_CONFIG` environment variable to the version you want to use.
+`pgcopydb` then uses the `PG_CONFIG` from the path and runs `${PG_CONFIG}
+--bindir` to find the `pg_dump` and `pg_restore` binaries it needs.
 
 ## Authors
 
