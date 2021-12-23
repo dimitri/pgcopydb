@@ -215,4 +215,7 @@ bool hostname_from_uri(const char *pguri,
 					   char *hostname, int maxHostLength, int *port);
 bool validate_connection_string(const char *connectionString);
 
+bool pg_copy(PGSQL *src, PGSQL *dst,
+			 const char *srcQname, const char *dstQname);
+
 #endif /* PGSQL_H */

@@ -29,8 +29,9 @@ Then `pgcopydb` implements the following steps:
      target database.
      
   3. `pgcopydb` gets the list of ordinary and partitioned tables and for
-     each of them runs a `pg_dump` job as a sub-process, and starts and
-     control the sub-processes until all the data has been copied over.
+     each of them runs COPY the data from the source to the target in a
+     dedicated sub-process, and starts and control the sub-processes until
+     all the data has been copied over.
      
      Postgres catalog table pg_class is used to get the list of tables with
      data to copy around, and the `reltuples` is used to start with the

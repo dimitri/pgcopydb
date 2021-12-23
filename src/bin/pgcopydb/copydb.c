@@ -507,31 +507,46 @@ copydb_start_table_data(CopyTableDataSpec *tableSpecs)
 bool
 copydb_copy_table(CopyTableDataSpec *tableSpecs)
 {
-	PGSQL pgsql = { 0 };
+	PGSQL src = { 0 };
+	PGSQL dst = { 0 };
+
 	SourceIndexArray indexArray = { 0, NULL };
 
 	/* First, write the lockFile file */
 	write_file("", 0, tableSpecs->process->lockFile);
 
-	log_info("pg_dump --data-only --schema \"%s\" --table \"%s\" | "
-			 "pg_restore",
-			 tableSpecs->sourceTable->nspname,
-			 tableSpecs->sourceTable->relname);
+	/* Now copy the data from source to target */
+	char qname[BUFSIZE] = { 0 };
 
-	/* pretend we're copying the data around */
-	sleep(3);
+	sformat(qname, sizeof(qname), "\"%s\".\"%s\"",
+			tableSpecs->sourceTable->nspname,
+			tableSpecs->sourceTable->relname);
 
-	/* now say we're done with the table data */
-	write_file("", 0, tableSpecs->process->doneFile);
+	log_info("COPY %s;", qname);
 
-	/* then fetch the index list for this table */
-	if (!pgsql_init(&pgsql, tableSpecs->source_pguri, PGSQL_CONN_SOURCE))
+	if (!pgsql_init(&src, tableSpecs->source_pguri, PGSQL_CONN_SOURCE))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	if (!schema_list_table_indexes(&pgsql,
+	if (!pgsql_init(&dst, tableSpecs->target_pguri, PGSQL_CONN_TARGET))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pg_copy(&src, &dst, qname, qname))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now say we're done with the table data */
+	write_file("", 0, tableSpecs->process->doneFile);
+
+	/* then fetch the index list for this table */
+	if (!schema_list_table_indexes(&src,
 								   tableSpecs->sourceTable->nspname,
 								   tableSpecs->sourceTable->relname,
 								   &indexArray))

@@ -43,6 +43,11 @@ static bool is_response_ok(PGresult *result);
 static bool clear_results(PGSQL *pgsql);
 static void pgsql_handle_notifications(PGSQL *pgsql);
 
+static bool pg_copy_send_query(PGSQL *pgsql,
+							   const char *qname,
+							   ExecStatusType status);
+static void pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context);
+
 
 /*
  * parseSingleValueResult is a ParsePostgresResultCB callback that reads the
@@ -1285,4 +1290,217 @@ validate_connection_string(const char *connectionString)
 	PQconninfoFree(connInfo);
 
 	return true;
+}
+
+
+/*
+ * pg_copy implements a COPY operation from a source Postgres instance (src) to
+ * a target Postgres instance (dst), for the data found in the table referenced
+ * by the qualified identifier name srcQname on the source, into the table
+ * referenced by the qualified identifier name dstQname on the target.
+ */
+bool
+pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname)
+{
+	PGconn *srcConn = pgsql_open_connection(src);
+
+	if (srcConn == NULL)
+	{
+		return false;
+	}
+
+	PGconn *dstConn = pgsql_open_connection(dst);
+
+	if (dstConn == NULL)
+	{
+		pgsql_finish(src);
+		return false;
+	}
+
+	/* SRC: COPY schema.table TO STDOUT */
+	if (!pg_copy_send_query(src, srcQname, PGRES_COPY_OUT))
+	{
+		pgsql_finish(src);
+		pgsql_finish(dst);
+
+		return false;
+	}
+
+	/* DST: COPY schema.table FROM STDIN */
+	if (!pg_copy_send_query(dst, dstQname, PGRES_COPY_IN))
+	{
+		pgsql_finish(src);
+		pgsql_finish(dst);
+
+		return false;
+	}
+
+	/* now implement the copy loop */
+	char *copybuf;
+	bool failedOnSrc = false;
+	bool failedOnDst = false;
+
+	for (;;)
+	{
+		int bufsize = PQgetCopyData(srcConn, &copybuf, 0);
+
+		/*
+		 * A result of -2 indicates that an error occurred.
+		 */
+		if (bufsize == -2)
+		{
+			failedOnSrc = true;
+
+			pgcopy_log_error(src, NULL, "Failed to fetch data from source");
+			break;
+		}
+
+		/*
+		 * PQgetCopyData returns -1 to indicate that the COPY is done. Call
+		 * PQgetResult to obtain the final result status of the COPY command.
+		 */
+		else if (bufsize == -1)
+		{
+			PGresult *res = PQgetResult(srcConn);
+
+			if (PQresultStatus(res) != PGRES_COMMAND_OK)
+			{
+				failedOnSrc = true;
+
+				pgcopy_log_error(src, res, "Failed to fetch data from source");
+				break;
+			}
+
+			/* we're done here */
+			clear_results(src);
+			pgsql_finish(src);
+
+			/* make sure to pass through and send this last COPY buffer */
+		}
+
+		/*
+		 * We got a COPY buffer from the source database, send it over as-is to
+		 * the target database, which speaks the same COPY protocol, after all.
+		 */
+		if (copybuf)
+		{
+			int ret = PQputCopyData(dstConn, copybuf, bufsize);
+			PQfreemem(copybuf);
+
+			if (ret == -1)
+			{
+				failedOnDst = true;
+
+				pgcopy_log_error(dst, NULL, "Failed to copy data to target");
+
+				clear_results(src);
+				pgsql_finish(src);
+
+				break;
+			}
+		}
+
+		/* when we've reached the end of COPY from the source, stop here */
+		if (bufsize == -1)
+		{
+			break;
+		}
+	}
+
+	/*
+	 * The COPY loop is over now.
+	 *
+	 * Time to send end-of-data indication to the server during COPY_IN state.
+	 */
+	if (!failedOnDst)
+	{
+		char *errormsg =
+			failedOnSrc ? "Failed to get data from source" : NULL;
+
+		int res = PQputCopyEnd(dstConn, errormsg);
+
+		if (res > 0)
+		{
+			PGresult *res = PQgetResult(dstConn);
+
+			if (PQresultStatus(res) != PGRES_COMMAND_OK)
+			{
+				pgcopy_log_error(dst, res, "Failed to copy data to target");
+			}
+		}
+
+		clear_results(dst);
+		pgsql_finish(dst);
+	}
+
+	return !failedOnSrc && ! failedOnDst;
+}
+
+
+/*
+ * pg_copy_send_query prepares the SQL query that opens a COPY protocol from or
+ * to a Postgres instance, and checks that the server's result is as expected.
+ */
+static bool
+pg_copy_send_query(PGSQL *pgsql, const char *qname, ExecStatusType status)
+{
+	char sql[BUFSIZE] = { 0 };
+
+	if (status == PGRES_COPY_OUT)
+	{
+		sformat(sql, sizeof(sql), "copy %s to stdout", qname);
+	}
+	else if (status == PGRES_COPY_IN)
+	{
+		sformat(sql, sizeof(sql), "copy %s from stdin", qname);
+	}
+	else
+	{
+		log_error("BUG: pg_copy_send_query: unknown ExecStatusType %d", status);
+		return false;
+	}
+
+	PGresult *res = PQexec(pgsql->connection, sql);
+
+	if (PQresultStatus(res) != status)
+	{
+		pgcopy_log_error(pgsql, res, sql);
+
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * pgcopy_log_error logs an error message when the PGresult obtained during
+ * COPY is not as expected.
+ */
+static void
+pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context)
+{
+	char *message = PQerrorMessage(pgsql->connection);
+	char *errorLines[BUFSIZE] = { 0 };
+	int lineCount = splitLines(message, errorLines, BUFSIZE);
+	int lineNumber = 0;
+
+	/*
+	 * PostgreSQL Error message might contain several lines. Log each of
+	 * them as a separate ERROR line here.
+	 */
+	for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
+	{
+		log_error("%s", errorLines[lineNumber]);
+	}
+
+	log_error("Context: %s", context);
+
+	if (res != NULL)
+	{
+		PQclear(res);
+	}
+
+	clear_results(pgsql);
+	pgsql_finish(pgsql);
 }
