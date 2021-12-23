@@ -511,37 +511,50 @@ parseCurrentSourceIndex(PGresult *result, int rowNumber, SourceIndex *index)
 	}
 
 	/* 11. c.oid */
-	value = PQgetvalue(result, rowNumber, 10);
-
-	if (!stringToUInt32(value, &(index->constraintOid)) ||
-		index->constraintOid == 0)
+	if (PQgetisnull(result, rowNumber, 10))
 	{
-		log_error("Invalid OID \"%s\"", value);
-		++errors;
+		index->constraintOid = 0;
+	}
+	else
+	{
+		value = PQgetvalue(result, rowNumber, 10);
+
+		if (!stringToUInt32(value, &(index->constraintOid)) ||
+			index->constraintOid == 0)
+		{
+			log_error("Invalid OID \"%s\"", value);
+			++errors;
+		}
 	}
 
 	/* 12. conname */
-	value = PQgetvalue(result, rowNumber, 11);
-	length = strlcpy(index->constraintName, value, NAMEDATALEN);
-
-	if (length >= NAMEDATALEN)
+	if (!PQgetisnull(result, rowNumber, 11))
 	{
-		log_error("Index name \"%s\" is %d bytes long, "
-				  "the maximum expected is %d (NAMEDATALEN - 1)",
-				  value, length, NAMEDATALEN - 1);
-		++errors;
+		value = PQgetvalue(result, rowNumber, 11);
+		length = strlcpy(index->constraintName, value, NAMEDATALEN);
+
+		if (length >= NAMEDATALEN)
+		{
+			log_error("Index name \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (NAMEDATALEN - 1)",
+					  value, length, NAMEDATALEN - 1);
+			++errors;
+		}
 	}
 
 	/* 13. pg_get_constraintdef */
-	value = PQgetvalue(result, rowNumber, 12);
-	length = strlcpy(index->constraintDef, value, BUFSIZE);
-
-	if (length >= BUFSIZE)
+	if (!PQgetisnull(result, rowNumber, 12))
 	{
-		log_error("Index name \"%s\" is %d bytes long, "
-				  "the maximum expected is %d (BUFSIZE - 1)",
-				  value, length, BUFSIZE - 1);
-		++errors;
+		value = PQgetvalue(result, rowNumber, 12);
+		length = strlcpy(index->constraintDef, value, BUFSIZE);
+
+		if (length >= BUFSIZE)
+		{
+			log_error("Index name \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (BUFSIZE - 1)",
+					  value, length, BUFSIZE - 1);
+			++errors;
+		}
 	}
 
 	return errors == 0;

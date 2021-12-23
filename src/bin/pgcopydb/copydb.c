@@ -798,7 +798,8 @@ copydb_create_indexes(CopyTableDataSpec *tableSpecs)
 							 "might fail because of already existing objects");
 				}
 
-				if (!IS_EMPTY_STRING_BUFFER(index->constraintName))
+				if (index->constraintOid > 0 &&
+					!IS_EMPTY_STRING_BUFFER(index->constraintName))
 				{
 					char sql[BUFSIZE] = { 0 };
 
