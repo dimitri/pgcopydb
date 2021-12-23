@@ -266,8 +266,16 @@ cli_copy_db(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	log_info("STEP 6: [restore the post-data section to the target database]");
+	log_info("STEP 6: restore the post-data section to the target database");
 
-	log_fatal("copy db: not all the steps are implemented [yet]");
-	exit(EXIT_CODE_INTERNAL_ERROR);
+	if (!copydb_target_finalize_schema(&pgPaths,
+									   &cfPaths,
+									   copyDBoptions.target_pguri))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_TARGET);
+	}
+
+	log_info("Done. Your target database is ready at \"%s\"",
+			 copyDBoptions.target_pguri);
 }

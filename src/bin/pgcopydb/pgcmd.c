@@ -348,12 +348,11 @@ pg_dump_db(PostgresPaths *pgPaths,
 
 	args[argsIndex++] = (char *) pgPaths->pg_dump;
 	args[argsIndex++] = "-Fc";
-	args[argsIndex++] = "-d";
-	args[argsIndex++] = (char *) pguri;
 	args[argsIndex++] = "--section";
 	args[argsIndex++] = (char *) section;
 	args[argsIndex++] = "--file";
 	args[argsIndex++] = (char *) filename;
+	args[argsIndex++] = (char *) pguri;
 
 	args[argsIndex] = NULL;
 
@@ -400,7 +399,8 @@ pg_dump_db(PostgresPaths *pgPaths,
 bool
 pg_restore_db(PostgresPaths *pgPaths,
 			  const char *pguri,
-			  const char *filename)
+			  const char *dumpFilename,
+			  const char *listFilename)
 {
 	char *args[16];
 	int argsIndex = 0;
@@ -410,9 +410,16 @@ pg_restore_db(PostgresPaths *pgPaths,
 	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
 
 	args[argsIndex++] = (char *) pgPaths->pg_restore;
-	args[argsIndex++] = "-d";
+	args[argsIndex++] = "--dbname";
 	args[argsIndex++] = (char *) pguri;
-	args[argsIndex++] = (char *) filename;
+
+	if (listFilename != NULL)
+	{
+		args[argsIndex++] = "--use-list";
+		args[argsIndex++] = (char *) listFilename;
+	}
+
+	args[argsIndex++] = (char *) dumpFilename;
 
 	args[argsIndex] = NULL;
 
@@ -448,5 +455,132 @@ pg_restore_db(PostgresPaths *pgPaths,
 	}
 
 	free_program(&program);
+	return true;
+}
+
+
+/*
+ * pg_restore_list runs the command pg_restore -f- -l on the given custom
+ * format dump file and returns an array of pg_dump archive objects.
+ */
+bool
+pg_restore_list(PostgresPaths *pgPaths, const char *filename,
+				ArchiveContentArray *archive)
+{
+	Program prog =
+		run_program(pgPaths->pg_restore, "-f-", "-l", filename, NULL);
+
+	if (prog.returnCode != 0)
+	{
+		log_error("Failed to run pg_restore: exit code %d", prog.returnCode);
+		free_program(&prog);
+
+		return false;
+	}
+
+	if (!parse_archive_list(prog.stdOut, archive))
+	{
+		/* errors have already been logged */
+		free_program(&prog);
+		return false;
+	}
+
+	free_program(&prog);
+	return true;
+}
+
+
+/*
+ * parse_archive_list parses a archive content list as obtained with the
+ * pg_restore --list option.
+ *
+ * We are parsing the following format, plus a preamble that contains lines
+ * that all start with a semi-colon, the comment separator for this format.
+ *
+ * ahprintf(AH, "%d; %u %u %s %s %s %s\n", te->dumpId,
+ *          te->catalogId.tableoid, te->catalogId.oid,
+ *          te->desc, sanitized_schema, sanitized_name,
+ *          sanitized_owner);
+ *
+ * We only parse the dumpId, catalogOid, and objectOid.
+ */
+bool
+parse_archive_list(char *list, ArchiveContentArray *contents)
+{
+	/* only parse the first 128 * 1024 lines */
+	char *lines[128 * BUFSIZE];
+	int lineCount = splitLines(list, lines, 128 * BUFSIZE);
+
+	/* the pg_restore --list preamble is 15 lines long */
+	int objectCount = lineCount - 15;
+
+	contents->count = 0;
+	contents->array =
+		(ArchiveContentItem *) malloc(objectCount * sizeof(ArchiveContentItem));
+
+	for (int lineNumber = 0; lineNumber < lineCount; lineNumber++)
+	{
+		ArchiveContentItem *item = &(contents->array[contents->count]);
+
+		char *ptr = lines[lineNumber];
+		char *sep = strchr(ptr, ';');
+
+		/* skip lines that start with a separator */
+		if (sep == NULL || sep == ptr)
+		{
+			continue;
+		}
+
+		/* parse the archive dumpId before the separator */
+		*sep = '\0';
+
+		if (!stringToInt(ptr, &(item->dumpId)))
+		{
+			log_error("Failed to parse dumpId \"%s\" from pg_restore --list",
+					  ptr);
+			return false;
+		}
+
+		/* skip "; " */
+		ptr = sep + 2;
+		sep = strchr(ptr, ' ');
+
+		if (sep == NULL)
+		{
+			log_error("Failed to parse pg_restore --list output");
+			return false;
+		}
+
+		*sep = '\0';
+
+		if (!stringToUInt32(ptr, &(item->catalogOid)))
+		{
+			log_error("Failed to parse catalog OID \"%s\" from pg_restore --list",
+					  ptr);
+			return false;
+		}
+
+		/* skip " " */
+		ptr = sep + 1;
+		sep = strchr(ptr, ' ');
+
+		if (sep == NULL)
+		{
+			log_error("Failed to parse pg_restore --list output");
+			return false;
+		}
+
+		*sep = '\0';
+
+		if (!stringToUInt32(ptr, &(item->objectOid)))
+		{
+			log_error("Failed to parse OID \"%s\" from pg_restore --list",
+					  ptr);
+			return false;
+		}
+
+		++contents->count;
+	}
+
 	return true;
 }

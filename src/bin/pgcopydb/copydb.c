@@ -56,6 +56,7 @@ copydb_init_workdir(CopyFilePaths *cfPaths, char *dir)
 	sformat(cfPaths->schemadir, MAXPGPATH, "%s/schema", cfPaths->topdir);
 	sformat(cfPaths->rundir, MAXPGPATH, "%s/run", cfPaths->topdir);
 	sformat(cfPaths->tbldir, MAXPGPATH, "%s/run/tables", cfPaths->topdir);
+	sformat(cfPaths->idxdir, MAXPGPATH, "%s/run/indexes", cfPaths->topdir);
 
 	sformat(cfPaths->idxfilepath, MAXPGPATH,
 			"%s/run/indexes.json", cfPaths->topdir);
@@ -115,6 +116,7 @@ copydb_init_workdir(CopyFilePaths *cfPaths, char *dir)
 		cfPaths->schemadir,
 		cfPaths->rundir,
 		cfPaths->tbldir,
+		cfPaths->idxdir,
 		NULL
 	};
 
@@ -198,7 +200,121 @@ copydb_target_prepare_schema(PostgresPaths *pgPaths,
 		return false;
 	}
 
-	if (!pg_restore_db(pgPaths, pguri, preFilename))
+	if (!pg_restore_db(pgPaths, pguri, preFilename, NULL))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * copydb_target_finalize_schema finalizes the schema after all the data has
+ * been copied over, and after indexes and their constraints have been created
+ * too.
+ */
+bool
+copydb_target_finalize_schema(PostgresPaths *pgPaths,
+							  CopyFilePaths *cfPaths,
+							  const char *pguri)
+{
+	char postFilename[MAXPGPATH] = { 0 };
+	char listFilename[MAXPGPATH] = { 0 };
+
+	sformat(postFilename, MAXPGPATH, "%s/%s", cfPaths->schemadir, "post.dump");
+	sformat(listFilename, MAXPGPATH, "%s/%s", cfPaths->schemadir, "post.list");
+
+	if (!file_exists(postFilename))
+	{
+		log_fatal("File \"%s\" does not exists", postFilename);
+		return false;
+	}
+
+	/*
+	 * The post.dump archive file contains all the objects to create once the
+	 * table data has been copied over. It contains in particular the
+	 * constraints and indexes that we have already built concurrently in the
+	 * previous step, so we want to filter those out.
+	 *
+	 * Here's how to filter out some objects with pg_restore:
+	 *
+	 *   1. pg_restore -f- --list post.dump > post.list
+	 *   2. edit post.list to comment out lines
+	 *   3. pg_restore --use-list post.list post.dump
+	 */
+	ArchiveContentArray contents = { 0 };
+
+	if (!pg_restore_list(pgPaths, postFilename, &contents))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* edit our post.list file now */
+	PQExpBuffer listContents = createPQExpBuffer();
+
+	if (listContents == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		free(listContents);
+		return false;
+	}
+
+	for (int i = 0; i < contents.count; i++)
+	{
+		char *prefix = "";
+		char doneFile[MAXPGPATH] = { 0 };
+
+		sformat(doneFile, sizeof(doneFile), "%s/%u.done",
+				cfPaths->idxdir,
+				contents.array[i].objectOid);
+
+		if (file_exists(doneFile))
+		{
+			char *sql = NULL;
+			long size = 0L;
+
+			if (!read_file(doneFile, &sql, &size))
+			{
+				/* no worries, just skip then */
+			}
+
+			log_debug("Skipping dumpId %d: %u %u (%s)",
+					  contents.array[i].dumpId,
+					  contents.array[i].catalogOid,
+					  contents.array[i].objectOid,
+					  sql);
+
+			prefix = ";";
+		}
+
+		appendPQExpBuffer(listContents, "%s%d; %u %u\n",
+						  prefix,
+						  contents.array[i].dumpId,
+						  contents.array[i].catalogOid,
+						  contents.array[i].objectOid);
+	}
+
+	/* memory allocation could have failed while building string */
+	if (PQExpBufferBroken(listContents))
+	{
+		log_error("Failed to create pg_restore list file: out of memory");
+		destroyPQExpBuffer(listContents);
+		return false;
+	}
+
+	if (!write_file(listContents->data, listContents->len, listFilename))
+	{
+		/* errors have already been logged */
+		destroyPQExpBuffer(listContents);
+		return false;
+	}
+
+	destroyPQExpBuffer(listContents);
+
+	if (!pg_restore_db(pgPaths, pguri, postFilename, listFilename))
 	{
 		/* errors have already been logged */
 		return false;
@@ -263,17 +379,6 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 		SourceTable *source = &(tableArray.array[tableIndex]);
 		TableDataProcess *process = &(tableProcessArray.array[subProcessIndex]);
 
-		process->oid = source->oid;
-
-		sformat(process->lockFile, sizeof(process->lockFile),
-				"%s/%d", specs->cfPaths->tbldir, process->oid);
-
-		sformat(process->doneFile, sizeof(process->doneFile),
-				"%s/%d.done", specs->cfPaths->tbldir, process->oid);
-
-		log_debug("process slot[%d] oid %d file \"%s\" ",
-				  subProcessIndex, process->oid, process->doneFile);
-
 		/* okay now start the subprocess for this table */
 		CopyTableDataSpec tableSpecs = {
 			.cfPaths = specs->cfPaths,
@@ -283,6 +388,7 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 			.target_pguri = specs->target_pguri,
 
 			.sourceTable = source,
+			.indexArray = NULL,
 			.process = process,
 
 			.tableJobs = specs->tableJobs,
@@ -424,13 +530,6 @@ waitUntilOneSubprocessIsDone(TableDataProcessArray *subProcessArray)
 				log_debug("waitUntilOneSubprocessIsDone: found \"%s\"",
 						  subProcessArray->array[procIndex].doneFile);
 
-				if (!unlink_file(subProcessArray->array[procIndex].doneFile))
-				{
-					/* errors have already been logged */
-					(void) copydb_fatal_exit(subProcessArray);
-					return -1;
-				}
-
 				/* clean-up the array entry, stop tracking this PID */
 				subProcessArray->array[procIndex].pid = 0;
 
@@ -458,6 +557,18 @@ waitUntilOneSubprocessIsDone(TableDataProcessArray *subProcessArray)
 bool
 copydb_start_table_data(CopyTableDataSpec *tableSpecs)
 {
+	/* first prepare the status and summary files paths and contents */
+	SourceTable *source = tableSpecs->sourceTable;
+	TableDataProcess *process = tableSpecs->process;
+
+	process->oid = source->oid;
+
+	sformat(process->lockFile, sizeof(process->lockFile),
+			"%s/%d", tableSpecs->cfPaths->tbldir, process->oid);
+
+	sformat(process->doneFile, sizeof(process->doneFile),
+			"%s/%d.done", tableSpecs->cfPaths->tbldir, process->oid);
+
 	/* Flush stdio channels just before fork, to avoid double-output problems */
 	fflush(stdout);
 	fflush(stderr);
@@ -478,12 +589,35 @@ copydb_start_table_data(CopyTableDataSpec *tableSpecs)
 
 		case 0:
 		{
+			uint64_t startTime = time(NULL);
+			instr_time startTimeMs;
+
+			INSTR_TIME_SET_CURRENT(startTimeMs);
+
 			/* child process runs the command */
 			if (!copydb_copy_table(tableSpecs))
 			{
 				/* errors have already been logged */
 				exit(EXIT_CODE_INTERNAL_ERROR);
 			}
+
+			uint64_t doneTime = time(NULL);
+			instr_time durationMs;
+
+			INSTR_TIME_SET_CURRENT(durationMs);
+			INSTR_TIME_SUBTRACT(durationMs, startTimeMs);
+
+			char summary[BUFSIZE] = { 0 };
+
+			sformat(summary, BUFSIZE,
+					"%d\n%lld\n%lld\n%lld\n",
+					process->pid,
+					(long long) startTime,
+					(long long) doneTime,
+					(long long) INSTR_TIME_GET_MILLISEC(durationMs));
+
+			/* write the summary to the doneFile */
+			write_file(summary, strlen(summary), process->doneFile);
 
 			exit(EXIT_CODE_QUIT);
 		}
@@ -509,8 +643,6 @@ copydb_copy_table(CopyTableDataSpec *tableSpecs)
 {
 	PGSQL src = { 0 };
 	PGSQL dst = { 0 };
-
-	SourceIndexArray indexArray = { 0, NULL };
 
 	/* First, write the lockFile file */
 	write_file("", 0, tableSpecs->process->lockFile);
@@ -546,24 +678,25 @@ copydb_copy_table(CopyTableDataSpec *tableSpecs)
 	write_file("", 0, tableSpecs->process->doneFile);
 
 	/* then fetch the index list for this table */
+	SourceIndexArray indexArray = { 0 };
+
+	tableSpecs->indexArray = &indexArray;
+
 	if (!schema_list_table_indexes(&src,
 								   tableSpecs->sourceTable->nspname,
 								   tableSpecs->sourceTable->relname,
-								   &indexArray))
+								   tableSpecs->indexArray))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
 	log_info("Creating %d indexes for table \"%s\".\"%s\"",
-			 indexArray.count,
+			 tableSpecs->indexArray->count,
 			 tableSpecs->sourceTable->nspname,
 			 tableSpecs->sourceTable->relname);
 
-	if (!copydb_create_indexes(tableSpecs->target_pguri,
-							   tableSpecs->sourceTable,
-							   &indexArray,
-							   tableSpecs->indexJobs))
+	if (!copydb_create_indexes(tableSpecs))
 	{
 		log_error("Failed to create indexes, see above for details");
 		return false;
@@ -592,12 +725,17 @@ copydb_copy_table(CopyTableDataSpec *tableSpecs)
  * using a sub-process to send each index command.
  */
 bool
-copydb_create_indexes(const char *pguri,
-					  SourceTable *sourceTable,
-					  SourceIndexArray *indexArray,
-					  int jobs)
+copydb_create_indexes(CopyTableDataSpec *tableSpecs)
 {
 	/* At the moment we disregard the jobs limitation */
+	int jobs = tableSpecs->indexJobs;
+
+	(void) jobs;				/* TODO */
+
+	const char *pguri = tableSpecs->target_pguri;
+	SourceTable *sourceTable = tableSpecs->sourceTable;
+	SourceIndexArray *indexArray = tableSpecs->indexArray;
+
 	for (int i = 0; i < indexArray->count; i++)
 	{
 		SourceIndex *index = &(indexArray->array[i]);
@@ -643,6 +781,23 @@ copydb_create_indexes(const char *pguri,
 					exit(EXIT_CODE_TARGET);
 				}
 
+				/* create the doneFile for the index */
+				char indexDoneFile[MAXPGPATH] = { 0 };
+
+				sformat(indexDoneFile, sizeof(indexDoneFile),
+						"%s/%u.done",
+						tableSpecs->cfPaths->idxdir,
+						index->indexOid);
+
+				if (!write_file(index->indexDef,
+								strlen(index->indexDef),
+								indexDoneFile))
+				{
+					log_warn("Failed to create the index done file");
+					log_warn("Restoring the --post-data part of the schema "
+							 "might fail because of already existing objects");
+				}
+
 				if (!IS_EMPTY_STRING_BUFFER(index->constraintName))
 				{
 					char sql[BUFSIZE] = { 0 };
@@ -665,6 +820,21 @@ copydb_create_indexes(const char *pguri,
 					{
 						/* errors have already been logged */
 						exit(EXIT_CODE_TARGET);
+					}
+
+					/* create the doneFile for the constraint */
+					char constraintDoneFile[MAXPGPATH] = { 0 };
+
+					sformat(constraintDoneFile, sizeof(constraintDoneFile),
+							"%s/%u.done",
+							tableSpecs->cfPaths->idxdir,
+							index->constraintOid);
+
+					if (!write_file(sql, strlen(sql), constraintDoneFile))
+					{
+						log_warn("Failed to create the constraint done file");
+						log_warn("Restoring the --post-data part of the schema "
+								 "might fail because of already existing objects");
 					}
 				}
 

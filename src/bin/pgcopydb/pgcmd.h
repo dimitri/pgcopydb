@@ -29,6 +29,38 @@ typedef struct PostgresPaths
 } PostgresPaths;
 
 
+/*
+ * The Postgres pg_restore tool allows listing the contents of an archive. The
+ * archive content is formatted the following way:
+ *
+ * ahprintf(AH, "%d; %u %u %s %s %s %s\n", te->dumpId,
+ *          te->catalogId.tableoid, te->catalogId.oid,
+ *          te->desc, sanitized_schema, sanitized_name,
+ *          sanitized_owner);
+ *
+ * We need to parse the list of SQL objects to restore in the post-data step
+ * and filter out the indexes and constraints that we already created in our
+ * parallel step.
+ *
+ * We match the items we have restored already with the items in the archive
+ * contents by their OID on the source database, so that's the most important
+ * field we need.
+ */
+typedef struct ArchiveContentItem
+{
+	int dumpId;
+	uint32_t catalogOid;
+	uint32_t objectOid;
+} ArchiveContentItem;
+
+
+typedef struct ArchiveContentArray
+{
+	int count;
+	ArchiveContentItem *array;	/* malloc'ed area */
+} ArchiveContentArray;
+
+
 bool psql_version(PostgresPaths *pgPaths);
 
 void find_pg_commands(PostgresPaths *pgPaths);
@@ -44,7 +76,12 @@ bool pg_dump_db(PostgresPaths *pgPaths,
 
 bool pg_restore_db(PostgresPaths *pgPaths,
 				   const char *pguri,
-				   const char *filename);
+				   const char *dumpFilename,
+				   const char *listFilename);
 
+bool pg_restore_list(PostgresPaths *pgPaths, const char *filename,
+					 ArchiveContentArray *archive);
+
+bool parse_archive_list(char *list, ArchiveContentArray *archive);
 
 #endif /* PGCMD_H */

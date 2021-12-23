@@ -18,6 +18,7 @@ typedef struct CopyFilePaths
 	char schemadir[MAXPGPATH];	      /* /tmp/pgcopydb/schema */
 	char rundir[MAXPGPATH];		      /* /tmp/pgcopydb/run */
 	char tbldir[MAXPGPATH];		      /* /tmp/pgcopydb/run/tables */
+	char idxdir[MAXPGPATH];		      /* /tmp/pgcopydb/run/indexes */
 	char idxfilepath[MAXPGPATH];	  /* /tmp/pgcopydb/run/indexes.json */
 	char listdonefilepath[MAXPGPATH]; /* /tmp/pgcopydb/objects.list */
 } CopyFilePaths;
@@ -64,6 +65,7 @@ typedef struct CopyTableDataSpec
 	char *target_pguri;
 
 	SourceTable *sourceTable;
+	SourceIndexArray *indexArray;
 	TableDataProcess *process;
 
 	int tableJobs;
@@ -80,13 +82,14 @@ bool copydb_target_prepare_schema(PostgresPaths *pgPaths,
 								  CopyFilePaths *cfPaths,
 								  const char *pguri);
 
+bool copydb_target_finalize_schema(PostgresPaths *pgPaths,
+								   CopyFilePaths *cfPaths,
+								   const char *pguri);
+
 bool copydb_copy_all_table_data(CopyDataSpec *specs);
 bool copydb_start_table_data(CopyTableDataSpec *spec);
 bool copydb_copy_table(CopyTableDataSpec *tableSpecs);
-bool copydb_create_indexes(const char *pguri,
-						   SourceTable *sourceTable,
-						   SourceIndexArray *indexArray,
-						   int jobs);
+bool copydb_create_indexes(CopyTableDataSpec *tableSpecs);
 
 bool copydb_fatal_exit(TableDataProcessArray *subprocessArray);
 bool copydb_wait_for_subprocesses(void);

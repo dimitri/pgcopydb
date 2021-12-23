@@ -228,4 +228,12 @@ cli_restore_db(int argc, char **argv)
 		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);
 	}
+
+	if (!copydb_target_finalize_schema(&pgPaths,
+									   &cfPaths,
+									   restoreDBoptions.target_pguri))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_TARGET);
+	}
 }
