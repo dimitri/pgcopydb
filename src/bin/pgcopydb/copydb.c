@@ -560,31 +560,124 @@ copydb_copy_table(CopyTableDataSpec *tableSpecs)
 			 tableSpecs->sourceTable->nspname,
 			 tableSpecs->sourceTable->relname);
 
-	/* pretend we're creating the indexes */
-	for (int i = 0; i < indexArray.count; i++)
+	if (!copydb_create_indexes(tableSpecs->target_pguri,
+							   tableSpecs->sourceTable,
+							   &indexArray,
+							   tableSpecs->indexJobs))
 	{
-		SourceIndex *index = &(indexArray.array[i]);
-
-		log_info("%s", index->indexDef);
-
-		sleep(1);
-
-		if (!IS_EMPTY_STRING_BUFFER(index->constraintName))
-		{
-			log_info("alter table \"%s\".\"%s\" add constraint \"%s\" %s",
-					 index->tableNamespace,
-					 index->tableRelname,
-					 index->constraintName,
-					 index->constraintDef);
-
-			sleep(1);
-		}
+		log_error("Failed to create indexes, see above for details");
+		return false;
 	}
 
 	/* finally, vacuum analyze the table and its indexes */
-	log_info("vacuum analyze \"%s\".\"%s\"",
-			 tableSpecs->sourceTable->nspname,
-			 tableSpecs->sourceTable->relname);
+	char vacuum[BUFSIZE] = { 0 };
+
+	sformat(vacuum, sizeof(vacuum), "VACUUM ANALYZE %s", qname);
+
+	log_info("%s;", vacuum);
+
+	if (!pgsql_execute(&dst, vacuum))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	/* now we're done */
 	return true;
+}
+
+
+/*
+ * copydb_create_indexes creates all the indexes for a given table in parallel,
+ * using a sub-process to send each index command.
+ */
+bool
+copydb_create_indexes(const char *pguri,
+					  SourceTable *sourceTable,
+					  SourceIndexArray *indexArray,
+					  int jobs)
+{
+	/* At the moment we disregard the jobs limitation */
+	for (int i = 0; i < indexArray->count; i++)
+	{
+		SourceIndex *index = &(indexArray->array[i]);
+
+		/*
+		 * Fork a sub-process for each index, so that they're created in
+		 * parallel. Flush stdio channels just before fork, to avoid
+		 * double-output problems.
+		 */
+		fflush(stdout);
+		fflush(stderr);
+
+		/* time to create the node_active sub-process */
+		int fpid = fork();
+
+		switch (fpid)
+		{
+			case -1:
+			{
+				log_error("Failed to fork a process for creating index for "
+						  "table \"%s\".\"%s\"",
+						  sourceTable->nspname,
+						  sourceTable->relname);
+				return -1;
+			}
+
+			case 0:
+			{
+				/* child process runs the command */
+				PGSQL pgconn = { 0 };
+
+				if (!pgsql_init(&pgconn, (char *) pguri, PGSQL_CONN_TARGET))
+				{
+					/* errors have already been logged */
+					exit(EXIT_CODE_TARGET);
+				}
+
+				log_info("%s;", index->indexDef);
+
+				if (!pgsql_execute(&pgconn, index->indexDef))
+				{
+					/* errors have already been logged */
+					exit(EXIT_CODE_TARGET);
+				}
+
+				if (!IS_EMPTY_STRING_BUFFER(index->constraintName))
+				{
+					char sql[BUFSIZE] = { 0 };
+
+					sformat(sql, sizeof(sql),
+							"ALTER TABLE \"%s\".\"%s\" "
+							"ADD CONSTRAINT \"%s\" %s "
+							"USING INDEX \"%s\"",
+							index->tableNamespace,
+							index->tableRelname,
+							index->constraintName,
+							index->isPrimary
+							? "PRIMARY KEY"
+							: (index->isUnique ? "UNIQUE" : ""),
+							index->indexRelname);
+
+					log_info("%s;", sql);
+
+					if (!pgsql_execute(&pgconn, sql))
+					{
+						/* errors have already been logged */
+						exit(EXIT_CODE_TARGET);
+					}
+				}
+
+				exit(EXIT_CODE_QUIT);
+			}
+
+			default:
+			{
+				/* fork succeeded, in parent */
+				break;
+			}
+		}
+	}
+
+	return copydb_wait_for_subprocesses();
 }
