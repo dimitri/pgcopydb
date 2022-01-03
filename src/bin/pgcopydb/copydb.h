@@ -13,13 +13,13 @@
 /* maintain all the internal paths we need in one place */
 typedef struct CopyFilePaths
 {
-	char topdir[MAXPGPATH];		      /* /tmp/pgcopydb */
-	char pidfile[MAXPGPATH];		  /* /tmp/pgcopydb/pgcopydb.pid */
-	char schemadir[MAXPGPATH];	      /* /tmp/pgcopydb/schema */
-	char rundir[MAXPGPATH];		      /* /tmp/pgcopydb/run */
-	char tbldir[MAXPGPATH];		      /* /tmp/pgcopydb/run/tables */
-	char idxdir[MAXPGPATH];		      /* /tmp/pgcopydb/run/indexes */
-	char idxfilepath[MAXPGPATH];	  /* /tmp/pgcopydb/run/indexes.json */
+	char topdir[MAXPGPATH];           /* /tmp/pgcopydb */
+	char pidfile[MAXPGPATH];          /* /tmp/pgcopydb/pgcopydb.pid */
+	char schemadir[MAXPGPATH];        /* /tmp/pgcopydb/schema */
+	char rundir[MAXPGPATH];           /* /tmp/pgcopydb/run */
+	char tbldir[MAXPGPATH];           /* /tmp/pgcopydb/run/tables */
+	char idxdir[MAXPGPATH];           /* /tmp/pgcopydb/run/indexes */
+	char idxfilepath[MAXPGPATH];      /* /tmp/pgcopydb/run/indexes.json */
 	char listdonefilepath[MAXPGPATH]; /* /tmp/pgcopydb/objects.list */
 } CopyFilePaths;
 
@@ -29,15 +29,15 @@ typedef struct TableDataProcess
 {
 	pid_t pid;
 	uint32_t oid;
-	char lockFile[MAXPGPATH];	/* /tmp/pgcopydb/run/tables/{oid} */
-	char doneFile[MAXPGPATH];	/* /tmp/pgcopydb/run/tables/{oid}.done */
+	char lockFile[MAXPGPATH];   /* /tmp/pgcopydb/run/tables/{oid} */
+	char doneFile[MAXPGPATH];   /* /tmp/pgcopydb/run/tables/{oid}.done */
 } TableDataProcess;
 
 
 typedef struct TableDataProcessArray
 {
 	int count;
-	TableDataProcess *array;	/* malloc'ed area */
+	TableDataProcess *array;    /* malloc'ed area */
 } TableDataProcessArray;
 
 

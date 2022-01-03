@@ -26,7 +26,7 @@ typedef struct SourceTable
 typedef struct SourceTableArray
 {
 	int count;
-	SourceTable *array;			/* malloc'ed area */
+	SourceTable *array;         /* malloc'ed area */
 } SourceTableArray;
 
 
@@ -55,7 +55,7 @@ typedef struct SourceIndex
 typedef struct SourceIndexArray
 {
 	int count;
-	SourceIndex *array;			/* malloc'ed area */
+	SourceIndex *array;         /* malloc'ed area */
 } SourceIndexArray;
 
 

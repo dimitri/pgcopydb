@@ -443,7 +443,7 @@ copydb_wait_for_subprocesses()
 
 	log_debug("Waiting for sub-processes to finish");
 
-	for(;;)
+	for (;;)
 	{
 		int status;
 
@@ -730,7 +730,7 @@ copydb_create_indexes(CopyTableDataSpec *tableSpecs)
 	/* At the moment we disregard the jobs limitation */
 	int jobs = tableSpecs->indexJobs;
 
-	(void) jobs;				/* TODO */
+	(void) jobs;                /* TODO */
 
 	const char *pguri = tableSpecs->target_pguri;
 	SourceTable *sourceTable = tableSpecs->sourceTable;

@@ -1433,7 +1433,7 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname)
 		pgsql_finish(dst);
 	}
 
-	return !failedOnSrc && ! failedOnDst;
+	return !failedOnSrc && !failedOnDst;
 }
 
 

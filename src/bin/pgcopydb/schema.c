@@ -256,7 +256,7 @@ getTableArray(void *ctx, PGresult *result)
 		SourceTable *table = &(context->tableArray->array[rowNumber]);
 
 		parsedOk = parsedOk &&
-			parseCurrentSourceTable(result, rowNumber, table);
+				   parseCurrentSourceTable(result, rowNumber, table);
 	}
 
 	if (!parsedOk)
@@ -266,8 +266,6 @@ getTableArray(void *ctx, PGresult *result)
 	}
 
 	context->parsedOk = parsedOk;
-
-	return;
 }
 
 
@@ -372,7 +370,7 @@ getIndexArray(void *ctx, PGresult *result)
 		SourceIndex *index = &(context->indexArray->array[rowNumber]);
 
 		parsedOk = parsedOk &&
-			parseCurrentSourceIndex(result, rowNumber, index);
+				   parseCurrentSourceIndex(result, rowNumber, index);
 	}
 
 	if (!parsedOk)
@@ -382,8 +380,6 @@ getIndexArray(void *ctx, PGresult *result)
 	}
 
 	context->parsedOk = parsedOk;
-
-	return;
 }
 
 

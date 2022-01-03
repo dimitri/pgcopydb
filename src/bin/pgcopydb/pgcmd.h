@@ -57,7 +57,7 @@ typedef struct ArchiveContentItem
 typedef struct ArchiveContentArray
 {
 	int count;
-	ArchiveContentItem *array;	/* malloc'ed area */
+	ArchiveContentItem *array;  /* malloc'ed area */
 } ArchiveContentArray;
 
 
