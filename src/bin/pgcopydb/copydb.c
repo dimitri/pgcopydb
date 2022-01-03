@@ -62,9 +62,6 @@ copydb_init_workdir(CopyFilePaths *cfPaths, char *dir)
 	sformat(cfPaths->idxfilepath, MAXPGPATH,
 			"%s/run/indexes.json", cfPaths->topdir);
 
-	sformat(cfPaths->listdonefilepath, MAXPGPATH,
-			"%s/objects.list", cfPaths->topdir);
-
 	/* now create the target directories that we depend on. */
 	if (directory_exists(cfPaths->topdir))
 	{
@@ -565,7 +562,7 @@ copydb_start_table_data(CopyTableDataSpec *tableSpecs)
 	process->oid = source->oid;
 
 	sformat(process->lockFile, sizeof(process->lockFile),
-			"%s/%d", tableSpecs->cfPaths->tbldir, process->oid);
+			"%s/%d", tableSpecs->cfPaths->rundir, process->oid);
 
 	sformat(process->doneFile, sizeof(process->doneFile),
 			"%s/%d.done", tableSpecs->cfPaths->tbldir, process->oid);
@@ -670,6 +667,14 @@ copydb_copy_table(CopyTableDataSpec *tableSpecs)
 		log_info("Failed to create the summary file at \"%s\"",
 				 tableSpecs->process->doneFile);
 		return false;
+	}
+
+	/* also remove the lockFile, we don't need it anymore */
+	if (!unlink_file(tableSpecs->process->lockFile))
+	{
+		/* just continue, this is not a show-stopper */
+		log_warn("Failed to remove the lockFile \"%s\"",
+				 tableSpecs->process->lockFile);
 	}
 
 	/* then fetch the index list for this table */
@@ -813,7 +818,7 @@ copydb_create_index(CopyTableDataSpec *tableSpecs, int idx)
 
 	sformat(indexLockFile, sizeof(indexLockFile),
 			"%s/%u",
-			tableSpecs->cfPaths->idxdir,
+			tableSpecs->cfPaths->rundir,
 			index->indexOid);
 
 	sformat(indexDoneFile, sizeof(indexDoneFile),
@@ -826,7 +831,7 @@ copydb_create_index(CopyTableDataSpec *tableSpecs, int idx)
 		.index = index,
 	};
 
-	strlcpy(summary.command, index->indexDef, sizeof(summary.command));
+	sformat(summary.command, sizeof(summary.command), "%s;", index->indexDef);
 
 	if (!open_index_summary(&summary, indexLockFile))
 	{
@@ -853,6 +858,13 @@ copydb_create_index(CopyTableDataSpec *tableSpecs, int idx)
 	{
 		log_info("Failed to create the summary file at \"%s\"", indexDoneFile);
 		return false;
+	}
+
+	/* also remove the lockFile, we don't need it anymore */
+	if (!unlink_file(indexLockFile))
+	{
+		/* just continue, this is not a show-stopper */
+		log_warn("Failed to remove the lockFile \"%s\"", indexLockFile);
 	}
 
 	return true;
@@ -914,7 +926,11 @@ copydb_create_constraints(CopyTableDataSpec *tableSpecs)
 					tableSpecs->cfPaths->idxdir,
 					index->constraintOid);
 
-			if (!write_file(sql, strlen(sql), constraintDoneFile))
+			char contents[BUFSIZE] = { 0 };
+
+			sformat(contents, sizeof(contents), "%s;\n", sql);
+
+			if (!write_file(contents, strlen(contents), constraintDoneFile))
 			{
 				log_warn("Failed to create the constraint done file");
 				log_warn("Restoring the --post-data part of the schema "

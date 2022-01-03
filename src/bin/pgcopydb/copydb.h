@@ -20,7 +20,6 @@ typedef struct CopyFilePaths
 	char tbldir[MAXPGPATH];           /* /tmp/pgcopydb/run/tables */
 	char idxdir[MAXPGPATH];           /* /tmp/pgcopydb/run/indexes */
 	char idxfilepath[MAXPGPATH];      /* /tmp/pgcopydb/run/indexes.json */
-	char listdonefilepath[MAXPGPATH]; /* /tmp/pgcopydb/objects.list */
 } CopyFilePaths;
 
 
