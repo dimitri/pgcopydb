@@ -89,7 +89,8 @@ bool copydb_target_finalize_schema(PostgresPaths *pgPaths,
 bool copydb_copy_all_table_data(CopyDataSpec *specs);
 bool copydb_start_table_data(CopyTableDataSpec *spec);
 bool copydb_copy_table(CopyTableDataSpec *tableSpecs);
-bool copydb_create_indexes(CopyTableDataSpec *tableSpecs);
+bool copydb_start_create_indexes(CopyTableDataSpec *tableSpecs);
+bool copydb_create_index(CopyTableDataSpec *tableSpecs, int idx);
 
 bool copydb_fatal_exit(TableDataProcessArray *subprocessArray);
 bool copydb_wait_for_subprocesses(void);

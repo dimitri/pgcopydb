@@ -696,7 +696,7 @@ copydb_copy_table(CopyTableDataSpec *tableSpecs)
 			 tableSpecs->sourceTable->nspname,
 			 tableSpecs->sourceTable->relname);
 
-	if (!copydb_create_indexes(tableSpecs))
+	if (!copydb_start_create_indexes(tableSpecs))
 	{
 		log_error("Failed to create indexes, see above for details");
 		return false;
@@ -721,25 +721,22 @@ copydb_copy_table(CopyTableDataSpec *tableSpecs)
 
 
 /*
- * copydb_create_indexes creates all the indexes for a given table in parallel,
- * using a sub-process to send each index command.
+ * copydb_start_create_indexes creates all the indexes for a given table in
+ * parallel, using a sub-process to send each index command.
  */
 bool
-copydb_create_indexes(CopyTableDataSpec *tableSpecs)
+copydb_start_create_indexes(CopyTableDataSpec *tableSpecs)
 {
 	/* At the moment we disregard the jobs limitation */
 	int jobs = tableSpecs->indexJobs;
 
 	(void) jobs;                /* TODO */
 
-	const char *pguri = tableSpecs->target_pguri;
 	SourceTable *sourceTable = tableSpecs->sourceTable;
 	SourceIndexArray *indexArray = tableSpecs->indexArray;
 
 	for (int i = 0; i < indexArray->count; i++)
 	{
-		SourceIndex *index = &(indexArray->array[i]);
-
 		/*
 		 * Fork a sub-process for each index, so that they're created in
 		 * parallel. Flush stdio channels just before fork, to avoid
@@ -765,78 +762,10 @@ copydb_create_indexes(CopyTableDataSpec *tableSpecs)
 			case 0:
 			{
 				/* child process runs the command */
-				PGSQL pgconn = { 0 };
-
-				if (!pgsql_init(&pgconn, (char *) pguri, PGSQL_CONN_TARGET))
+				if (!copydb_create_index(tableSpecs, i))
 				{
 					/* errors have already been logged */
-					exit(EXIT_CODE_TARGET);
-				}
-
-				log_info("%s;", index->indexDef);
-
-				if (!pgsql_execute(&pgconn, index->indexDef))
-				{
-					/* errors have already been logged */
-					exit(EXIT_CODE_TARGET);
-				}
-
-				/* create the doneFile for the index */
-				char indexDoneFile[MAXPGPATH] = { 0 };
-
-				sformat(indexDoneFile, sizeof(indexDoneFile),
-						"%s/%u.done",
-						tableSpecs->cfPaths->idxdir,
-						index->indexOid);
-
-				if (!write_file(index->indexDef,
-								strlen(index->indexDef),
-								indexDoneFile))
-				{
-					log_warn("Failed to create the index done file");
-					log_warn("Restoring the --post-data part of the schema "
-							 "might fail because of already existing objects");
-				}
-
-				if (index->constraintOid > 0 &&
-					!IS_EMPTY_STRING_BUFFER(index->constraintName))
-				{
-					char sql[BUFSIZE] = { 0 };
-
-					sformat(sql, sizeof(sql),
-							"ALTER TABLE \"%s\".\"%s\" "
-							"ADD CONSTRAINT \"%s\" %s "
-							"USING INDEX \"%s\"",
-							index->tableNamespace,
-							index->tableRelname,
-							index->constraintName,
-							index->isPrimary
-							? "PRIMARY KEY"
-							: (index->isUnique ? "UNIQUE" : ""),
-							index->indexRelname);
-
-					log_info("%s;", sql);
-
-					if (!pgsql_execute(&pgconn, sql))
-					{
-						/* errors have already been logged */
-						exit(EXIT_CODE_TARGET);
-					}
-
-					/* create the doneFile for the constraint */
-					char constraintDoneFile[MAXPGPATH] = { 0 };
-
-					sformat(constraintDoneFile, sizeof(constraintDoneFile),
-							"%s/%u.done",
-							tableSpecs->cfPaths->idxdir,
-							index->constraintOid);
-
-					if (!write_file(sql, strlen(sql), constraintDoneFile))
-					{
-						log_warn("Failed to create the constraint done file");
-						log_warn("Restoring the --post-data part of the schema "
-								 "might fail because of already existing objects");
-					}
+					exit(EXIT_CODE_INTERNAL_ERROR);
 				}
 
 				exit(EXIT_CODE_QUIT);
@@ -851,4 +780,93 @@ copydb_create_indexes(CopyTableDataSpec *tableSpecs)
 	}
 
 	return copydb_wait_for_subprocesses();
+}
+
+
+/*
+ * copydb_create_indexes creates all the indexes for a given table in
+ * parallel, using a sub-process to send each index command.
+ */
+bool
+copydb_create_index(CopyTableDataSpec *tableSpecs, int idx)
+{
+	SourceIndexArray *indexArray = tableSpecs->indexArray;
+	SourceIndex *index = &(indexArray->array[idx]);
+
+	const char *pguri = tableSpecs->target_pguri;
+	PGSQL pgconn = { 0 };
+
+	if (!pgsql_init(&pgconn, (char *) pguri, PGSQL_CONN_TARGET))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_TARGET);
+	}
+
+	log_info("%s;", index->indexDef);
+
+	if (!pgsql_execute(&pgconn, index->indexDef))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_TARGET);
+	}
+
+	/* create the doneFile for the index */
+	char indexDoneFile[MAXPGPATH] = { 0 };
+
+	sformat(indexDoneFile, sizeof(indexDoneFile),
+			"%s/%u.done",
+			tableSpecs->cfPaths->idxdir,
+			index->indexOid);
+
+	if (!write_file(index->indexDef,
+					strlen(index->indexDef),
+					indexDoneFile))
+	{
+		log_warn("Failed to create the index done file");
+		log_warn("Restoring the --post-data part of the schema "
+				 "might fail because of already existing objects");
+	}
+
+	if (index->constraintOid > 0 &&
+		!IS_EMPTY_STRING_BUFFER(index->constraintName))
+	{
+		char sql[BUFSIZE] = { 0 };
+
+		sformat(sql, sizeof(sql),
+				"ALTER TABLE \"%s\".\"%s\" "
+				"ADD CONSTRAINT \"%s\" %s "
+				"USING INDEX \"%s\"",
+				index->tableNamespace,
+				index->tableRelname,
+				index->constraintName,
+				index->isPrimary
+				? "PRIMARY KEY"
+				: (index->isUnique ? "UNIQUE" : ""),
+				index->indexRelname);
+
+		log_info("%s;", sql);
+
+		if (!pgsql_execute(&pgconn, sql))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_TARGET);
+		}
+
+		/* create the doneFile for the constraint */
+		char constraintDoneFile[MAXPGPATH] = { 0 };
+
+		sformat(constraintDoneFile, sizeof(constraintDoneFile),
+				"%s/%u.done",
+				tableSpecs->cfPaths->idxdir,
+				index->constraintOid);
+
+		if (!write_file(sql, strlen(sql), constraintDoneFile))
+		{
+			log_warn("Failed to create the constraint done file");
+			log_warn("Restoring the --post-data part of the schema "
+					 "might fail because of already existing objects");
+		}
+	}
+
+	return true;
 }
