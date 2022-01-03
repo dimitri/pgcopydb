@@ -17,6 +17,7 @@
 #include "schema.h"
 #include "signals.h"
 #include "string_utils.h"
+#include "summary.h"
 
 
 static int waitUntilOneSubprocessIsDone(TableDataProcessArray *subProcessArray);
@@ -589,35 +590,12 @@ copydb_start_table_data(CopyTableDataSpec *tableSpecs)
 
 		case 0:
 		{
-			uint64_t startTime = time(NULL);
-			instr_time startTimeMs;
-
-			INSTR_TIME_SET_CURRENT(startTimeMs);
-
 			/* child process runs the command */
 			if (!copydb_copy_table(tableSpecs))
 			{
 				/* errors have already been logged */
 				exit(EXIT_CODE_INTERNAL_ERROR);
 			}
-
-			uint64_t doneTime = time(NULL);
-			instr_time durationMs;
-
-			INSTR_TIME_SET_CURRENT(durationMs);
-			INSTR_TIME_SUBTRACT(durationMs, startTimeMs);
-
-			char summary[BUFSIZE] = { 0 };
-
-			sformat(summary, BUFSIZE,
-					"%d\n%lld\n%lld\n%lld\n",
-					process->pid,
-					(long long) startTime,
-					(long long) doneTime,
-					(long long) INSTR_TIME_GET_MILLISEC(durationMs));
-
-			/* write the summary to the doneFile */
-			write_file(summary, strlen(summary), process->doneFile);
 
 			exit(EXIT_CODE_QUIT);
 		}
@@ -644,17 +622,29 @@ copydb_copy_table(CopyTableDataSpec *tableSpecs)
 	PGSQL src = { 0 };
 	PGSQL dst = { 0 };
 
-	/* First, write the lockFile file */
-	write_file("", 0, tableSpecs->process->lockFile);
-
-	/* Now copy the data from source to target */
 	char qname[BUFSIZE] = { 0 };
 
 	sformat(qname, sizeof(qname), "\"%s\".\"%s\"",
 			tableSpecs->sourceTable->nspname,
 			tableSpecs->sourceTable->relname);
 
-	log_info("COPY %s;", qname);
+	/* First, write the lockFile, with a summary of what's going-on */
+	CopyTableSummary summary = {
+		.pid = getpid(),
+		.table = tableSpecs->sourceTable,
+	};
+
+	sformat(summary.command, sizeof(summary.command), "COPY %s;", qname);
+
+	if (!open_table_summary(&summary, tableSpecs->process->lockFile))
+	{
+		log_info("Failed to create the lock file at \"%s\"",
+				 tableSpecs->process->lockFile);
+		return false;
+	}
+
+	/* Now copy the data from source to target */
+	log_info("%s", summary.command);
 
 	if (!pgsql_init(&src, tableSpecs->source_pguri, PGSQL_CONN_SOURCE))
 	{
@@ -675,7 +665,12 @@ copydb_copy_table(CopyTableDataSpec *tableSpecs)
 	}
 
 	/* now say we're done with the table data */
-	write_file("", 0, tableSpecs->process->doneFile);
+	if (!finish_table_summary(&summary, tableSpecs->process->doneFile))
+	{
+		log_info("Failed to create the summary file at \"%s\"",
+				 tableSpecs->process->doneFile);
+		return false;
+	}
 
 	/* then fetch the index list for this table */
 	SourceIndexArray indexArray = { 0 };
@@ -691,6 +686,10 @@ copydb_copy_table(CopyTableDataSpec *tableSpecs)
 		return false;
 	}
 
+	/*
+	 * Indexes are created all-at-once in parallel, a sub-process is forked per
+	 * index definition to send each SQL/DDL command to the Postgres server.
+	 */
 	log_info("Creating %d indexes for table \"%s\".\"%s\"",
 			 tableSpecs->indexArray->count,
 			 tableSpecs->sourceTable->nspname,
@@ -699,6 +698,18 @@ copydb_copy_table(CopyTableDataSpec *tableSpecs)
 	if (!copydb_start_create_indexes(tableSpecs))
 	{
 		log_error("Failed to create indexes, see above for details");
+		return false;
+	}
+
+	/*
+	 * Once all the indexes have been created in parallel, then we can create
+	 * the constraints that are associated with the indexes. The ALTER TABLE
+	 * commands are taking an exclusive lock on the table, so it's better to
+	 * just run the commands serially (one after the other).
+	 */
+	if (!copydb_create_constraints(tableSpecs))
+	{
+		log_error("Failed to create constraints, see above for details");
 		return false;
 	}
 
@@ -796,6 +807,33 @@ copydb_create_index(CopyTableDataSpec *tableSpecs, int idx)
 	const char *pguri = tableSpecs->target_pguri;
 	PGSQL pgconn = { 0 };
 
+	/* First, write the lockFile, with a summary of what's going-on */
+	char indexLockFile[MAXPGPATH] = { 0 };
+	char indexDoneFile[MAXPGPATH] = { 0 };
+
+	sformat(indexLockFile, sizeof(indexLockFile),
+			"%s/%u",
+			tableSpecs->cfPaths->idxdir,
+			index->indexOid);
+
+	sformat(indexDoneFile, sizeof(indexDoneFile),
+			"%s/%u.done",
+			tableSpecs->cfPaths->idxdir,
+			index->indexOid);
+
+	CopyIndexSummary summary = {
+		.pid = getpid(),
+		.index = index,
+	};
+
+	strlcpy(summary.command, index->indexDef, sizeof(summary.command));
+
+	if (!open_index_summary(&summary, indexLockFile))
+	{
+		log_info("Failed to create the lock file at \"%s\"", indexLockFile);
+		return false;
+	}
+
 	if (!pgsql_init(&pgconn, (char *) pguri, PGSQL_CONN_TARGET))
 	{
 		/* errors have already been logged */
@@ -811,60 +849,77 @@ copydb_create_index(CopyTableDataSpec *tableSpecs, int idx)
 	}
 
 	/* create the doneFile for the index */
-	char indexDoneFile[MAXPGPATH] = { 0 };
-
-	sformat(indexDoneFile, sizeof(indexDoneFile),
-			"%s/%u.done",
-			tableSpecs->cfPaths->idxdir,
-			index->indexOid);
-
-	if (!write_file(index->indexDef,
-					strlen(index->indexDef),
-					indexDoneFile))
+	if (!finish_index_summary(&summary, indexDoneFile))
 	{
-		log_warn("Failed to create the index done file");
-		log_warn("Restoring the --post-data part of the schema "
-				 "might fail because of already existing objects");
+		log_info("Failed to create the summary file at \"%s\"", indexDoneFile);
+		return false;
 	}
 
-	if (index->constraintOid > 0 &&
-		!IS_EMPTY_STRING_BUFFER(index->constraintName))
+	return true;
+}
+
+
+/*
+ * copydb_create_constraints loops over the index definitions for a given table
+ * and creates all the associated constraints, one after the other.
+ */
+bool
+copydb_create_constraints(CopyTableDataSpec *tableSpecs)
+{
+	SourceIndexArray *indexArray = tableSpecs->indexArray;
+
+	const char *pguri = tableSpecs->target_pguri;
+	PGSQL pgconn = { 0 };
+
+	if (!pgsql_init(&pgconn, (char *) pguri, PGSQL_CONN_TARGET))
 	{
-		char sql[BUFSIZE] = { 0 };
+		/* errors have already been logged */
+		return false;
+	}
 
-		sformat(sql, sizeof(sql),
-				"ALTER TABLE \"%s\".\"%s\" "
-				"ADD CONSTRAINT \"%s\" %s "
-				"USING INDEX \"%s\"",
-				index->tableNamespace,
-				index->tableRelname,
-				index->constraintName,
-				index->isPrimary
-				? "PRIMARY KEY"
-				: (index->isUnique ? "UNIQUE" : ""),
-				index->indexRelname);
+	for (int i = 0; i < indexArray->count; i++)
+	{
+		SourceIndex *index = &(indexArray->array[i]);
 
-		log_info("%s;", sql);
-
-		if (!pgsql_execute(&pgconn, sql))
+		if (index->constraintOid > 0 &&
+			!IS_EMPTY_STRING_BUFFER(index->constraintName))
 		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_TARGET);
-		}
+			char sql[BUFSIZE] = { 0 };
 
-		/* create the doneFile for the constraint */
-		char constraintDoneFile[MAXPGPATH] = { 0 };
+			sformat(sql, sizeof(sql),
+					"ALTER TABLE \"%s\".\"%s\" "
+					"ADD CONSTRAINT \"%s\" %s "
+					"USING INDEX \"%s\"",
+					index->tableNamespace,
+					index->tableRelname,
+					index->constraintName,
+					index->isPrimary
+					? "PRIMARY KEY"
+					: (index->isUnique ? "UNIQUE" : ""),
+					index->indexRelname);
 
-		sformat(constraintDoneFile, sizeof(constraintDoneFile),
-				"%s/%u.done",
-				tableSpecs->cfPaths->idxdir,
-				index->constraintOid);
+			log_info("%s;", sql);
 
-		if (!write_file(sql, strlen(sql), constraintDoneFile))
-		{
-			log_warn("Failed to create the constraint done file");
-			log_warn("Restoring the --post-data part of the schema "
-					 "might fail because of already existing objects");
+			if (!pgsql_execute(&pgconn, sql))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			/* create the doneFile for the constraint */
+			char constraintDoneFile[MAXPGPATH] = { 0 };
+
+			sformat(constraintDoneFile, sizeof(constraintDoneFile),
+					"%s/%u.done",
+					tableSpecs->cfPaths->idxdir,
+					index->constraintOid);
+
+			if (!write_file(sql, strlen(sql), constraintDoneFile))
+			{
+				log_warn("Failed to create the constraint done file");
+				log_warn("Restoring the --post-data part of the schema "
+						 "might fail because of already existing objects");
+			}
 		}
 	}
 
