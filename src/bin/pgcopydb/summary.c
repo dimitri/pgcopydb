@@ -182,6 +182,95 @@ finish_table_summary(CopyTableSummary *summary, char *filename)
 
 
 /*
+ * create_table_index_file creates a file with one line per index attached to a
+ * table. Each line contains only the index oid, from which we can find the
+ * index doneFile.
+ */
+bool
+create_table_index_file(CopyTableSummary *summary,
+						SourceIndexArray *indexArray,
+						char *filename)
+{
+	if (indexArray->count < 1)
+	{
+		return true;
+	}
+
+	PQExpBuffer content = createPQExpBuffer();
+
+	if (content == NULL)
+	{
+		log_fatal("Failed to allocate memory to create the "
+				  " index list file \"%s\"", filename);
+		return false;
+	}
+
+	for (int i = 0; i < indexArray->count; i++)
+	{
+		SourceIndex *index = &(indexArray->array[i]);
+
+		appendPQExpBuffer(content, "%d\n", index->indexOid);
+	}
+
+	/* memory allocation could have failed while building string */
+	if (PQExpBufferBroken(content))
+	{
+		log_error("Failed to create file \"%s\": out of memory", filename);
+		destroyPQExpBuffer(content);
+		return false;
+	}
+
+	bool success = write_file(content->data, content->len, filename);
+	destroyPQExpBuffer(content);
+
+	return success;
+}
+
+
+/*
+ * read_table_index_file reads an index list file and populates an array of
+ * indexes with only the indexOid information. The actual array memory
+ * allocation is done in the function.
+ */
+bool
+read_table_index_file(char *filename, SourceIndexArray *indexArray)
+{
+	char *fileContents = NULL;
+	long fileSize = 0L;
+
+	if (!read_file(filename, &fileContents, &fileSize))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	char *fileLines[BUFSIZE] = { 0 };
+	int lineCount = splitLines(fileContents, fileLines, BUFSIZE);
+
+	/* we expect to have an indexOid per line, no comments, etc */
+	indexArray->count = lineCount;
+	indexArray->array = (SourceIndex *) malloc(lineCount * sizeof(SourceIndex));
+
+	for (int i = 0; i < lineCount; i++)
+	{
+		SourceIndex *index = &(indexArray->array[i]);
+
+		if (!stringToUInt32(fileLines[i], &(index->indexOid)))
+		{
+			log_error("Failed to read the index oid \"%s\" "
+					  "in file \"%s\" at line %d",
+					  fileLines[i],
+					  filename,
+					  i);
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
  * write_index_summary writes the current Index Summary to given filename.
  */
 bool
@@ -293,6 +382,10 @@ read_index_summary(CopyIndexSummary *summary, const char *filename)
 }
 
 
+/*
+ * open_index_summary initializes the time elements of an index summary and
+ * writes the summary in the given filename. Typically, the lockFile.
+ */
 bool
 open_index_summary(CopyIndexSummary *summary, char *filename)
 {
@@ -312,6 +405,10 @@ open_index_summary(CopyIndexSummary *summary, char *filename)
 }
 
 
+/*
+ * finish_index_summary sets the duration of the summary fields and writes the
+ * summary in the given filename. Typically, the doneFile.
+ */
 bool
 finish_index_summary(CopyIndexSummary *summary, char *filename)
 {

@@ -40,6 +40,15 @@ typedef struct TableDataProcessArray
 } TableDataProcessArray;
 
 
+/* the main pg_dump and pg_restore process are driven from split files */
+typedef struct DumpPaths
+{
+	char preFilename[MAXPGPATH];  /* pg_dump --section=pre-data */
+	char postFilename[MAXPGPATH]; /* pg_dump --section=post-data */
+	char listFilename[MAXPGPATH]; /* pg_restore --list */
+} DumpPaths;
+
+
 /* all that's needed to start a TABLE DATA copy for a whole database */
 typedef struct CopyDataSpec
 {
@@ -51,7 +60,33 @@ typedef struct CopyDataSpec
 
 	int tableJobs;
 	int indexJobs;
+
+	DumpPaths dumpPaths;
 } CopyDataSpec;
+
+
+/* per-table file paths */
+typedef struct TableFilePaths
+{
+	char lockFile[MAXPGPATH];    /* table lock file */
+	char doneFile[MAXPGPATH];    /* table done file (summary) */
+	char idxListFile[MAXPGPATH]; /* index oids list file */
+} TableFilePaths;
+
+
+/* per-index file paths */
+typedef struct IndexFilePaths
+{
+	char lockFile[MAXPGPATH];           /* index lock file */
+	char doneFile[MAXPGPATH];           /* index done file (summary) */
+	char constraintDoneFile[MAXPGPATH]; /* constraint done file */
+} IndexFilePaths;
+
+typedef struct IndexFilePathsArray
+{
+	int count;
+	IndexFilePaths *array;      /* malloc'ed area */
+} IndexFilePathsArray;
 
 
 /* all that's needed to drive a single TABLE DATA copy process */
@@ -69,21 +104,34 @@ typedef struct CopyTableDataSpec
 
 	int tableJobs;
 	int indexJobs;
+
+	TableFilePaths tablePaths;
+	IndexFilePathsArray indexPathsArray;
 } CopyTableDataSpec;
 
 bool copydb_init_workdir(CopyFilePaths *cfPaths, char *dir);
 
-bool copydb_dump_source_schema(PostgresPaths *pgPaths,
-							   CopyFilePaths *cfPaths,
-							   const char *pguri);
+bool copydb_init_specs(CopyDataSpec *specs,
+					   CopyFilePaths *cfPaths,
+					   PostgresPaths *pgPaths,
+					   char *source_pguri,
+					   char *target_pguri,
+					   int tableJobs,
+					   int indexJobs);
 
-bool copydb_target_prepare_schema(PostgresPaths *pgPaths,
-								  CopyFilePaths *cfPaths,
-								  const char *pguri);
+bool copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
+							 CopyDataSpec *specs,
+							 SourceTable *source,
+							 TableDataProcess *process);
 
-bool copydb_target_finalize_schema(PostgresPaths *pgPaths,
-								   CopyFilePaths *cfPaths,
-								   const char *pguri);
+bool copydb_init_indexes_paths(CopyTableDataSpec *tableSpecs);
+
+bool copydb_dump_source_schema(CopyDataSpec *specs);
+bool copydb_target_prepare_schema(CopyDataSpec *specs);
+bool copydb_target_finalize_schema(CopyDataSpec *specs);
+
+bool copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
+												uint32_t oid);
 
 bool copydb_copy_all_table_data(CopyDataSpec *specs);
 bool copydb_start_table_data(CopyTableDataSpec *spec);

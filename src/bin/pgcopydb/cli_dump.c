@@ -220,9 +220,21 @@ cli_dump_db(int argc, char **argv)
 			 pgPaths.pg_version,
 			 pgPaths.pg_dump);
 
-	if (!copydb_dump_source_schema(&pgPaths,
-								   &cfPaths,
-								   dumpDBoptions.source_pguri))
+	CopyDataSpec copySpecs = { 0 };
+
+	if (!copydb_init_specs(&copySpecs,
+						   &cfPaths,
+						   &pgPaths,
+						   dumpDBoptions.source_pguri,
+						   NULL, /* target_pguri */
+						   1,    /* table jobs */
+						   1))   /* index jobs */
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!copydb_dump_source_schema(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

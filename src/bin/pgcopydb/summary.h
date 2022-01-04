@@ -53,6 +53,11 @@ bool read_table_summary(CopyTableSummary *summary, const char *filename);
 bool open_table_summary(CopyTableSummary *summary, char *filename);
 bool finish_table_summary(CopyTableSummary *summary, char *filename);
 
+bool create_table_index_file(CopyTableSummary *summary,
+							 SourceIndexArray *indexArray,
+							 char *filename);
+bool read_table_index_file(char *filename, SourceIndexArray *indexArray);
+
 
 bool write_index_summary(CopyIndexSummary *summary, char *filename);
 bool read_index_summary(CopyIndexSummary *summary, const char *filename);

@@ -173,27 +173,192 @@ copydb_init_workdir(CopyFilePaths *cfPaths, char *dir)
 
 
 /*
+ * copydb_init_specs prepares a CopyDataSpec structure from its pieces, and
+ * initialises files paths necessary for collecting a Postgres dump splitted in
+ * pre-data and post-data section, and then also a pg_restore --list output
+ * file.
+ */
+bool
+copydb_init_specs(CopyDataSpec *specs,
+				  CopyFilePaths *cfPaths,
+				  PostgresPaths *pgPaths,
+				  char *source_pguri,
+				  char *target_pguri,
+				  int tableJobs,
+				  int indexJobs)
+{
+	/* fill-in a structure with the help of the C compiler */
+	CopyDataSpec tmpCopySpecs = {
+		.cfPaths = cfPaths,
+		.pgPaths = pgPaths,
+
+		.source_pguri = source_pguri,
+		.target_pguri = target_pguri,
+
+		.tableJobs = tableJobs,
+		.indexJobs = indexJobs
+	};
+
+	/* copy the structure as a whole memory area to the target place */
+	*specs = tmpCopySpecs;
+
+	/* now compute some global paths that are needed for pgcopydb */
+	sformat(specs->dumpPaths.preFilename, MAXPGPATH, "%s/%s",
+			cfPaths->schemadir, "pre.dump");
+
+	sformat(specs->dumpPaths.postFilename, MAXPGPATH, "%s/%s",
+			cfPaths->schemadir, "post.dump");
+
+	sformat(specs->dumpPaths.listFilename, MAXPGPATH, "%s/%s",
+			cfPaths->schemadir, "post.list");
+
+	return true;
+}
+
+
+/*
+ * copydb_init_table_specs prepares a CopyTableDataSpec structure from its
+ * pieces and also initialises files paths necessary for the orchestration of
+ * the per-table processes and their summary files.
+ */
+bool
+copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
+						CopyDataSpec *specs,
+						SourceTable *source,
+						TableDataProcess *process)
+{
+	/* fill-in a structure with the help of the C compiler */
+	CopyTableDataSpec tmpTableSpecs = {
+		.cfPaths = specs->cfPaths,
+		.pgPaths = specs->pgPaths,
+
+		.source_pguri = specs->source_pguri,
+		.target_pguri = specs->target_pguri,
+
+		.sourceTable = source,
+		.indexArray = NULL,
+		.process = process,
+
+		.tableJobs = specs->tableJobs,
+		.indexJobs = specs->indexJobs
+	};
+
+	/* copy the structure as a whole memory area to the target place */
+	*tableSpecs = tmpTableSpecs;
+
+	/* now compute the table-specific paths we are using in copydb */
+	sformat(tableSpecs->tablePaths.lockFile, MAXPGPATH, "%s/%d",
+			tableSpecs->cfPaths->rundir,
+			source->oid);
+
+	sformat(tableSpecs->tablePaths.doneFile, MAXPGPATH, "%s/%d.done",
+			tableSpecs->cfPaths->tbldir,
+			source->oid);
+
+	sformat(tableSpecs->tablePaths.idxListFile, MAXPGPATH, "%s/%u.idx",
+			tableSpecs->cfPaths->tbldir,
+			source->oid);
+
+	return true;
+}
+
+
+/*
+ * copydb_init_index_file_paths prepares a given index (and constraint) file
+ * paths to help orchestrate the concurrent operations.
+ */
+bool
+copydb_init_indexes_paths(CopyTableDataSpec *tableSpecs)
+{
+	SourceIndexArray *indexArray = tableSpecs->indexArray;
+	IndexFilePathsArray *indexPathsArray = &(tableSpecs->indexPathsArray);
+
+	indexPathsArray->count = indexArray->count;
+	indexPathsArray->array =
+		(IndexFilePaths *) malloc(indexArray->count * sizeof(IndexFilePaths));
+
+	for (int i = 0; i < indexArray->count; i++)
+	{
+		SourceIndex *index = &(indexArray->array[i]);
+		IndexFilePaths *indexPaths = &(indexPathsArray->array[i]);
+
+		sformat(indexPaths->lockFile, sizeof(indexPaths->lockFile),
+				"%s/%u",
+				tableSpecs->cfPaths->rundir,
+				index->indexOid);
+
+		sformat(indexPaths->doneFile, sizeof(indexPaths->doneFile),
+				"%s/%u.done",
+				tableSpecs->cfPaths->idxdir,
+				index->indexOid);
+
+		sformat(indexPaths->constraintDoneFile,
+				sizeof(indexPaths->constraintDoneFile),
+				"%s/%u.done",
+				tableSpecs->cfPaths->idxdir,
+				index->constraintOid);
+	}
+
+	return true;
+}
+
+
+/*
+ * copydb_objectid_has_been_processed_already returns true when a doneFile
+ * could be found on-disk for the given target object OID.
+ */
+bool
+copydb_objectid_has_been_processed_already(CopyDataSpec *specs, uint32_t oid)
+{
+	char doneFile[MAXPGPATH] = { 0 };
+
+	/* build the doneFile for the target index or constraint */
+	sformat(doneFile, sizeof(doneFile), "%s/%u.done",
+			specs->cfPaths->idxdir,
+			oid);
+
+	if (file_exists(doneFile))
+	{
+		char *sql = NULL;
+		long size = 0L;
+
+		if (!read_file(doneFile, &sql, &size))
+		{
+			/* no worries, just skip then */
+		}
+
+		log_debug("Skipping dumpId %d (%s)", oid, sql);
+
+		/* read_file allocates memory */
+		free(sql);
+
+		return true;
+	}
+
+	return false;
+}
+
+
+/*
  * copydb_dump_source_schema uses pg_dump -Fc --schema --section=pre-data or
  * --section=post-data to dump the source database schema to files.
  */
 bool
-copydb_dump_source_schema(PostgresPaths *pgPaths,
-						  CopyFilePaths *cfPaths,
-						  const char *pguri)
+copydb_dump_source_schema(CopyDataSpec *specs)
 {
-	char preFilename[MAXPGPATH] = { 0 };
-	char postFilename[MAXPGPATH] = { 0 };
-
-	sformat(preFilename, MAXPGPATH, "%s/%s", cfPaths->schemadir, "pre.dump");
-	sformat(postFilename, MAXPGPATH, "%s/%s", cfPaths->schemadir, "post.dump");
-
-	if (!pg_dump_db(pgPaths, pguri, "pre-data", preFilename))
+	if (!pg_dump_db(specs->pgPaths,
+					specs->source_pguri,
+					"pre-data",
+					specs->dumpPaths.preFilename))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	if (!pg_dump_db(pgPaths, pguri, "post-data", postFilename))
+	if (!pg_dump_db(specs->pgPaths,
+					specs->source_pguri,
+					"post-data",
+					specs->dumpPaths.postFilename))
 	{
 		/* errors have already been logged */
 		return false;
@@ -208,21 +373,18 @@ copydb_dump_source_schema(PostgresPaths *pgPaths,
  * database.
  */
 bool
-copydb_target_prepare_schema(PostgresPaths *pgPaths,
-							 CopyFilePaths *cfPaths,
-							 const char *pguri)
+copydb_target_prepare_schema(CopyDataSpec *specs)
 {
-	char preFilename[MAXPGPATH] = { 0 };
-
-	sformat(preFilename, MAXPGPATH, "%s/%s", cfPaths->schemadir, "pre.dump");
-
-	if (!file_exists(preFilename))
+	if (!file_exists(specs->dumpPaths.preFilename))
 	{
-		log_fatal("File \"%s\" does not exists", preFilename);
+		log_fatal("File \"%s\" does not exists", specs->dumpPaths.preFilename);
 		return false;
 	}
 
-	if (!pg_restore_db(pgPaths, pguri, preFilename, NULL))
+	if (!pg_restore_db(specs->pgPaths,
+					   specs->target_pguri,
+					   specs->dumpPaths.preFilename,
+					   NULL))
 	{
 		/* errors have already been logged */
 		return false;
@@ -238,19 +400,11 @@ copydb_target_prepare_schema(PostgresPaths *pgPaths,
  * too.
  */
 bool
-copydb_target_finalize_schema(PostgresPaths *pgPaths,
-							  CopyFilePaths *cfPaths,
-							  const char *pguri)
+copydb_target_finalize_schema(CopyDataSpec *specs)
 {
-	char postFilename[MAXPGPATH] = { 0 };
-	char listFilename[MAXPGPATH] = { 0 };
-
-	sformat(postFilename, MAXPGPATH, "%s/%s", cfPaths->schemadir, "post.dump");
-	sformat(listFilename, MAXPGPATH, "%s/%s", cfPaths->schemadir, "post.list");
-
-	if (!file_exists(postFilename))
+	if (!file_exists(specs->dumpPaths.postFilename))
 	{
-		log_fatal("File \"%s\" does not exists", postFilename);
+		log_fatal("File \"%s\" does not exists", specs->dumpPaths.postFilename);
 		return false;
 	}
 
@@ -268,7 +422,9 @@ copydb_target_finalize_schema(PostgresPaths *pgPaths,
 	 */
 	ArchiveContentArray contents = { 0 };
 
-	if (!pg_restore_list(pgPaths, postFilename, &contents))
+	if (!pg_restore_list(specs->pgPaths,
+						 specs->dumpPaths.postFilename,
+						 &contents))
 	{
 		/* errors have already been logged */
 		return false;
@@ -284,33 +440,14 @@ copydb_target_finalize_schema(PostgresPaths *pgPaths,
 		return false;
 	}
 
+	/* for each object in the list, comment when we already processed it */
 	for (int i = 0; i < contents.count; i++)
 	{
-		char *prefix = "";
-		char doneFile[MAXPGPATH] = { 0 };
+		uint32_t oid = contents.array[i].objectOid;
 
-		sformat(doneFile, sizeof(doneFile), "%s/%u.done",
-				cfPaths->idxdir,
-				contents.array[i].objectOid);
-
-		if (file_exists(doneFile))
-		{
-			char *sql = NULL;
-			long size = 0L;
-
-			if (!read_file(doneFile, &sql, &size))
-			{
-				/* no worries, just skip then */
-			}
-
-			log_debug("Skipping dumpId %d: %u %u (%s)",
-					  contents.array[i].dumpId,
-					  contents.array[i].catalogOid,
-					  contents.array[i].objectOid,
-					  sql);
-
-			prefix = ";";
-		}
+		/* commenting is done by prepending ";" as prefix to the line */
+		char *prefix =
+			copydb_objectid_has_been_processed_already(specs, oid) ? ";" : "";
 
 		appendPQExpBuffer(listContents, "%s%d; %u %u\n",
 						  prefix,
@@ -327,7 +464,9 @@ copydb_target_finalize_schema(PostgresPaths *pgPaths,
 		return false;
 	}
 
-	if (!write_file(listContents->data, listContents->len, listFilename))
+	if (!write_file(listContents->data,
+					listContents->len,
+					specs->dumpPaths.listFilename))
 	{
 		/* errors have already been logged */
 		destroyPQExpBuffer(listContents);
@@ -336,7 +475,10 @@ copydb_target_finalize_schema(PostgresPaths *pgPaths,
 
 	destroyPQExpBuffer(listContents);
 
-	if (!pg_restore_db(pgPaths, pguri, postFilename, listFilename))
+	if (!pg_restore_db(specs->pgPaths,
+					   specs->target_pguri,
+					   specs->dumpPaths.postFilename,
+					   specs->dumpPaths.listFilename))
 	{
 		/* errors have already been logged */
 		return false;
@@ -402,20 +544,13 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 		TableDataProcess *process = &(tableProcessArray.array[subProcessIndex]);
 
 		/* okay now start the subprocess for this table */
-		CopyTableDataSpec tableSpecs = {
-			.cfPaths = specs->cfPaths,
-			.pgPaths = specs->pgPaths,
+		CopyTableDataSpec tableSpecs = { 0 };
 
-			.source_pguri = specs->source_pguri,
-			.target_pguri = specs->target_pguri,
-
-			.sourceTable = source,
-			.indexArray = NULL,
-			.process = process,
-
-			.tableJobs = specs->tableJobs,
-			.indexJobs = specs->indexJobs
-		};
+		if (!copydb_init_table_specs(&tableSpecs, specs, source, process))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 
 		if (!copydb_start_table_data(&tableSpecs))
 		{
@@ -724,10 +859,31 @@ copydb_copy_table(CopyTableDataSpec *tableSpecs)
 			 tableSpecs->sourceTable->nspname,
 			 tableSpecs->sourceTable->relname);
 
+	/* build the index file paths we need for the upcoming operations */
+	if (!copydb_init_indexes_paths(tableSpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (!copydb_start_create_indexes(tableSpecs))
 	{
 		log_error("Failed to create indexes, see above for details");
 		return false;
+	}
+
+	/*
+	 * Create an index list file for the table, so that we can easily find
+	 * relevant indexing information from the table itself.
+	 */
+	if (!create_table_index_file(&summary,
+								 tableSpecs->indexArray,
+								 tableSpecs->tablePaths.idxListFile))
+	{
+		/* this only means summary is missing some indexing information */
+		log_warn("Failed to create table %s index list file \"%s\"",
+				 qname,
+				 tableSpecs->tablePaths.idxListFile);
 	}
 
 	/*
@@ -830,6 +986,7 @@ copydb_start_create_indexes(CopyTableDataSpec *tableSpecs)
 bool
 copydb_create_index(CopyTableDataSpec *tableSpecs, int idx)
 {
+	IndexFilePaths *indexPaths = &(tableSpecs->indexPathsArray.array[idx]);
 	SourceIndexArray *indexArray = tableSpecs->indexArray;
 	SourceIndex *index = &(indexArray->array[idx]);
 
@@ -837,19 +994,6 @@ copydb_create_index(CopyTableDataSpec *tableSpecs, int idx)
 	PGSQL pgconn = { 0 };
 
 	/* First, write the lockFile, with a summary of what's going-on */
-	char indexLockFile[MAXPGPATH] = { 0 };
-	char indexDoneFile[MAXPGPATH] = { 0 };
-
-	sformat(indexLockFile, sizeof(indexLockFile),
-			"%s/%u",
-			tableSpecs->cfPaths->rundir,
-			index->indexOid);
-
-	sformat(indexDoneFile, sizeof(indexDoneFile),
-			"%s/%u.done",
-			tableSpecs->cfPaths->idxdir,
-			index->indexOid);
-
 	CopyIndexSummary summary = {
 		.pid = getpid(),
 		.index = index,
@@ -857,9 +1001,10 @@ copydb_create_index(CopyTableDataSpec *tableSpecs, int idx)
 
 	sformat(summary.command, sizeof(summary.command), "%s;", index->indexDef);
 
-	if (!open_index_summary(&summary, indexLockFile))
+	if (!open_index_summary(&summary, indexPaths->lockFile))
 	{
-		log_info("Failed to create the lock file at \"%s\"", indexLockFile);
+		log_info("Failed to create the lock file at \"%s\"",
+				 indexPaths->lockFile);
 		return false;
 	}
 
@@ -878,17 +1023,18 @@ copydb_create_index(CopyTableDataSpec *tableSpecs, int idx)
 	}
 
 	/* create the doneFile for the index */
-	if (!finish_index_summary(&summary, indexDoneFile))
+	if (!finish_index_summary(&summary, indexPaths->doneFile))
 	{
-		log_info("Failed to create the summary file at \"%s\"", indexDoneFile);
+		log_info("Failed to create the summary file at \"%s\"",
+				 indexPaths->doneFile);
 		return false;
 	}
 
 	/* also remove the lockFile, we don't need it anymore */
-	if (!unlink_file(indexLockFile))
+	if (!unlink_file(indexPaths->lockFile))
 	{
 		/* just continue, this is not a show-stopper */
-		log_warn("Failed to remove the lockFile \"%s\"", indexLockFile);
+		log_warn("Failed to remove the lockFile \"%s\"", indexPaths->lockFile);
 	}
 
 	return true;
@@ -916,6 +1062,7 @@ copydb_create_constraints(CopyTableDataSpec *tableSpecs)
 	for (int i = 0; i < indexArray->count; i++)
 	{
 		SourceIndex *index = &(indexArray->array[i]);
+		IndexFilePaths *indexPaths = &(tableSpecs->indexPathsArray.array[i]);
 
 		if (index->constraintOid > 0 &&
 			!IS_EMPTY_STRING_BUFFER(index->constraintName))
@@ -943,18 +1090,13 @@ copydb_create_constraints(CopyTableDataSpec *tableSpecs)
 			}
 
 			/* create the doneFile for the constraint */
-			char constraintDoneFile[MAXPGPATH] = { 0 };
-
-			sformat(constraintDoneFile, sizeof(constraintDoneFile),
-					"%s/%u.done",
-					tableSpecs->cfPaths->idxdir,
-					index->constraintOid);
-
 			char contents[BUFSIZE] = { 0 };
 
 			sformat(contents, sizeof(contents), "%s;\n", sql);
 
-			if (!write_file(contents, strlen(contents), constraintDoneFile))
+			if (!write_file(contents,
+							strlen(contents),
+							indexPaths->constraintDoneFile))
 			{
 				log_warn("Failed to create the constraint done file");
 				log_warn("Restoring the --post-data part of the schema "

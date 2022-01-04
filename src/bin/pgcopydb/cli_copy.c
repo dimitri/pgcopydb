@@ -223,13 +223,25 @@ cli_copy_db(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	CopyDataSpec copySpecs = { 0 };
+
+	if (!copydb_init_specs(&copySpecs,
+						   &cfPaths,
+						   &pgPaths,
+						   copyDBoptions.source_pguri,
+						   copyDBoptions.target_pguri,
+						   copyDBoptions.jobs,
+						   copyDBoptions.jobs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
 	log_info("STEP 1: dump the source database schema (pre/post data)");
 
 	/* use a temporary directory for the whole copy operation */
 
-	if (!copydb_dump_source_schema(&pgPaths,
-								   &cfPaths,
-								   copyDBoptions.source_pguri))
+	if (!copydb_dump_source_schema(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -237,9 +249,7 @@ cli_copy_db(int argc, char **argv)
 
 	log_info("STEP 2: restore the pre-data section to the target database");
 
-	if (!copydb_target_prepare_schema(&pgPaths,
-									  &cfPaths,
-									  copyDBoptions.target_pguri))
+	if (!copydb_target_prepare_schema(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);
@@ -249,17 +259,6 @@ cli_copy_db(int argc, char **argv)
 	log_info("STEP 4: create indexes and constraints in parallel");
 	log_info("STEP 5: vacuum analyze each table");
 
-	CopyDataSpec copySpecs = {
-		.cfPaths = &cfPaths,
-		.pgPaths = &pgPaths,
-
-		.source_pguri = copyDBoptions.source_pguri,
-		.target_pguri = copyDBoptions.target_pguri,
-
-		.tableJobs = copyDBoptions.jobs,
-		.indexJobs = copyDBoptions.jobs
-	};
-
 	if (!copydb_copy_all_table_data(&copySpecs))
 	{
 		/* errors have already been logged */
@@ -268,9 +267,7 @@ cli_copy_db(int argc, char **argv)
 
 	log_info("STEP 6: restore the post-data section to the target database");
 
-	if (!copydb_target_finalize_schema(&pgPaths,
-									   &cfPaths,
-									   copyDBoptions.target_pguri))
+	if (!copydb_target_finalize_schema(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);

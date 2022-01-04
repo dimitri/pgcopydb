@@ -221,17 +221,27 @@ cli_restore_db(int argc, char **argv)
 			 pgPaths.pg_version,
 			 pgPaths.pg_restore);
 
-	if (!copydb_target_prepare_schema(&pgPaths,
-									  &cfPaths,
-									  restoreDBoptions.target_pguri))
+	CopyDataSpec copySpecs = { 0 };
+
+	if (!copydb_init_specs(&copySpecs,
+						   &cfPaths,
+						   &pgPaths,
+						   NULL, /* source_pguri */
+						   restoreDBoptions.target_pguri,
+						   1,    /* table jobs */
+						   1))   /* index jobs */
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!copydb_target_prepare_schema(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);
 	}
 
-	if (!copydb_target_finalize_schema(&pgPaths,
-									   &cfPaths,
-									   restoreDBoptions.target_pguri))
+	if (!copydb_target_finalize_schema(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);
