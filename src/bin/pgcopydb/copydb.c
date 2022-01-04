@@ -93,7 +93,30 @@ copydb_init_workdir(CopyFilePaths *cfPaths, char *dir)
 		}
 	}
 
-	if (dir == NULL)
+	/*
+	 * dir is the --target provided in file-based commands such as `pgcopydb
+	 * dump db`, and we might have to create the whole directory hierarchy that
+	 * we expect when given a --target /tmp/demo or something.
+	 *
+	 * When using a command such as `pgcopydb copy db` then the target is a
+	 * Postgres URI and we use internal directories such as /tmp/pgcopydb/ and
+	 * we want to avoid deleting files from a previous run, so we bypass
+	 * creating empty directories with ensure_empty_dir in that case.
+	 *
+	 * dir is NULL when the command uses its own internal directories
+	 * dir is NOT NULL when the command uses --source dir or --target dir
+	 */
+	bool shouldCreateDirectories =
+		dir == NULL || !directory_exists(cfPaths->topdir);
+
+	/*
+	 * And that's why we should cache our decision making: right after this
+	 * point, the target directory exists, and we might still have to make the
+	 * decision again to create sub-directories. We should ensure consistent
+	 * decision making, so we can't call directory_exists(cfPaths->topdir)
+	 * anymore.
+	 */
+	if (shouldCreateDirectories)
 	{
 		log_debug("mkdir -p \"%s\"", cfPaths->topdir);
 		if (!ensure_empty_dir(cfPaths->topdir, 0700))
@@ -118,10 +141,11 @@ copydb_init_workdir(CopyFilePaths *cfPaths, char *dir)
 		NULL
 	};
 
-	if (dir == NULL)
+	if (shouldCreateDirectories)
 	{
 		for (int i = 0; dirs[i] != NULL; i++)
 		{
+			log_debug("mkdir -p \"%s\"", dirs[i]);
 			if (!ensure_empty_dir(dirs[i], 0700))
 			{
 				return false;
