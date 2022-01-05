@@ -16,6 +16,7 @@
 #include "log.h"
 #include "pgsql.h"
 #include "string_utils.h"
+#include "summary.h"
 
 CopyDBOptions copyDBoptions = { 0 };
 
@@ -278,4 +279,7 @@ cli_copy_db(int argc, char **argv)
 
 	log_info("Done. Your target database is ready at \"%s\"",
 			 copyDBoptions.target_pguri);
+
+	/* print a nice summary of operations */
+	(void) print_summary(&copySpecs);
 }

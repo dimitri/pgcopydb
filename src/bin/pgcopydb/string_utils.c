@@ -450,9 +450,15 @@ stringToDouble(const char *str, double *number)
  * value given as a double precision float number.
  */
 bool
-IntervalToString(double seconds, char *buffer, size_t size)
+IntervalToString(uint64_t millisecs, char *buffer, size_t size)
 {
-	if (seconds < 1.0)
+	double seconds = millisecs / 1000.0;
+
+	if (millisecs < 1000)
+	{
+		sformat(buffer, size, "%3lldms", (long long) millisecs);
+	}
+	else if (seconds < 1.0)
 	{
 		/* when we have < 1s, we round to 1s */
 		sformat(buffer, size, "  %ds", 1);

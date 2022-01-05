@@ -17,6 +17,12 @@
 #include "summary.h"
 
 
+static void print_summary_table(SummaryTable *summary);
+static bool prepare_summary_table(SummaryTable *summary, CopyDataSpec *specs);
+static void prepare_summary_table_headers(SummaryTable *summary);
+static void prepareLineSeparator(char dashes[], int size);
+
+
 /*
  * create_table_summary creates a summary file for the copy operation of a
  * given table. The summary file contains identification information and
@@ -233,7 +239,7 @@ create_table_index_file(CopyTableSummary *summary,
  * allocation is done in the function.
  */
 bool
-read_table_index_file(char *filename, SourceIndexArray *indexArray)
+read_table_index_file(SourceIndexArray *indexArray, char *filename)
 {
 	char *fileContents = NULL;
 	long fileSize = 0L;
@@ -420,4 +426,271 @@ finish_index_summary(CopyIndexSummary *summary, char *filename)
 	summary->durationMs = INSTR_TIME_GET_MILLISEC(summary->durationInstr);
 
 	return write_index_summary(summary, filename);
+}
+
+
+/*
+ * print_summary prints a summary of the pgcopydb operations on stdout.
+ *
+ * The summary contains a line per table that has been copied and then the
+ * count of indexes created for each table, and then the sum of the timing of
+ * creating those indexes.
+ *
+ * TODO: also add-in the time it took to prepare and finalize the schema.
+ */
+bool
+print_summary(CopyDataSpec *specs)
+{
+	SummaryTable summaryTable = { 0 };
+
+	if (!prepare_summary_table(&summaryTable, specs))
+	{
+		log_error("Failed to prepare the summary table");
+		return false;
+	}
+
+	(void) prepare_summary_table_headers(&summaryTable);
+	(void) print_summary_table(&summaryTable);
+
+	return true;
+}
+
+
+/*
+ * prepare_summary_table prepares the summar table array with the durations
+ * read from disk in the doneFile for each oid that has been processed.
+ */
+static bool
+prepare_summary_table(SummaryTable *summary, CopyDataSpec *specs)
+{
+	CopyTableDataSpecsArray *tableSpecsArray = &(specs->tableSpecsArray);
+
+	int count = tableSpecsArray->count;
+
+	summary->count = count;
+	summary->array =
+		(SummaryTableEntry *) malloc(count * sizeof(SummaryTableEntry));
+
+	if (summary->array == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	for (int tableIndex = 0; tableIndex < tableSpecsArray->count; tableIndex++)
+	{
+		CopyTableDataSpec *tableSpecs = &(tableSpecsArray->array[tableIndex]);
+		SourceTable *table = tableSpecs->sourceTable;
+
+		SummaryTableEntry *entry = &(summary->array[tableIndex]);
+
+		/* prepare some of the information we already have */
+		IntString oidString = intToString(table->oid);
+
+		strlcpy(entry->oid, oidString.strValue, sizeof(entry->oid));
+		strlcpy(entry->nspname, table->nspname, sizeof(entry->nspname));
+		strlcpy(entry->relname, table->relname, sizeof(entry->relname));
+
+		/* the specs doesn't contain timing information */
+		CopyTableSummary tableSummary = { .table = table };
+
+		if (!read_table_summary(&tableSummary, tableSpecs->tablePaths.doneFile))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		(void) IntervalToString(tableSummary.durationMs,
+								entry->tableMs,
+								sizeof(entry->tableMs));
+
+		/* read the index oid list from the table oid */
+		uint64_t indexingDurationMs = 0;
+
+		SourceIndexArray indexArray = { 0 };
+
+		if (!read_table_index_file(&indexArray,
+								   tableSpecs->tablePaths.idxListFile))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		/* for reach index, read the index summary */
+		for (int i = 0; i < indexArray.count; i++)
+		{
+			SourceIndex *index = &(indexArray.array[i]);
+			CopyIndexSummary indexSummary = { .index = index };
+			char indexDoneFile[MAXPGPATH] = { 0 };
+
+			/* build the indexDoneFile for the target index */
+			sformat(indexDoneFile, sizeof(indexDoneFile), "%s/%u.done",
+					specs->cfPaths->idxdir,
+					index->indexOid);
+
+			if (!read_index_summary(&indexSummary, indexDoneFile))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			/* accumulate total duration of creating all the indexes */
+			indexingDurationMs += indexSummary.durationMs;
+		}
+
+		IntString indexCountString = intToString(indexArray.count);
+
+		strlcpy(entry->indexCount,
+				indexCountString.strValue,
+				sizeof(entry->indexCount));
+
+		(void) IntervalToString(indexingDurationMs,
+								entry->indexMs,
+								sizeof(entry->indexMs));
+	}
+
+	return true;
+}
+
+
+/*
+ * print_summary_table loops over a fully prepared summary table and prints
+ * each element. It also prints the headers.
+ */
+static void
+print_summary_table(SummaryTable *summary)
+{
+	SummaryTableHeaders *headers = &(summary->headers);
+
+	fformat(stdout, "\n");
+
+	fformat(stdout, "%*s | %*s | %*s | %*s | %*s | %*s\n",
+			headers->maxOidSize, "OID",
+			headers->maxNspnameSize, "Schema",
+			headers->maxRelnameSize, "Name",
+			headers->maxTableMsSize, "copy duration",
+			headers->maxIndexCountSize, "indexes",
+			headers->maxIndexMsSize, "create index duration");
+
+	fformat(stdout, "%s-+-%s-+-%s-+-%s-+-%s-+-%s\n",
+			headers->oidSeparator,
+			headers->nspnameSeparator,
+			headers->relnameSeparator,
+			headers->tableMsSeparator,
+			headers->indexCountSeparator,
+			headers->indexMsSeparator);
+
+	for (int i = 0; i < summary->count; i++)
+	{
+		SummaryTableEntry *entry = &(summary->array[i]);
+
+		fformat(stdout, "%*s | %*s | %*s | %*s | %*s | %*s\n",
+				headers->maxOidSize, entry->oid,
+				headers->maxNspnameSize, entry->nspname,
+				headers->maxRelnameSize, entry->relname,
+				headers->maxTableMsSize, entry->tableMs,
+				headers->maxIndexCountSize, entry->indexCount,
+				headers->maxIndexMsSize, entry->indexMs);
+	}
+
+	fformat(stdout, "\n");
+}
+
+
+/*
+ * prepare_summary_table_headers computes the actual max length of all the
+ * columns that we are going to display, and fills in the dashed separators
+ * too.
+ */
+static void
+prepare_summary_table_headers(SummaryTable *summary)
+{
+	SummaryTableHeaders *headers = &(summary->headers);
+
+	/* assign static maximums from the lenghts of the column headers */
+	headers->maxOidSize = 3;        /* "oid" */
+	headers->maxNspnameSize = 6;    /* "schema" */
+	headers->maxRelnameSize = 4;    /* "name" */
+	headers->maxTableMsSize = 13;   /* "copy duration" */
+	headers->maxIndexCountSize = 7; /* "indexes" */
+	headers->maxIndexMsSize = 21;   /* "create index duration" */
+
+	/* now adjust to the actual table's content */
+	for (int i = 0; i < summary->count; i++)
+	{
+		int len = 0;
+		SummaryTableEntry *entry = &(summary->array[i]);
+
+		len = strlen(entry->oid);
+
+		if (headers->maxOidSize < len)
+		{
+			headers->maxOidSize = len;
+		}
+
+		len = strlen(entry->nspname);
+
+		if (headers->maxNspnameSize < len)
+		{
+			headers->maxNspnameSize = len;
+		}
+
+		len = strlen(entry->relname);
+
+		if (headers->maxRelnameSize < len)
+		{
+			headers->maxRelnameSize = len;
+		}
+
+		len = strlen(entry->tableMs);
+
+		if (headers->maxTableMsSize < len)
+		{
+			headers->maxTableMsSize = len;
+		}
+
+		len = strlen(entry->indexCount);
+
+		if (headers->maxIndexCountSize < len)
+		{
+			headers->maxIndexCountSize = len;
+		}
+
+		len = strlen(entry->indexMs);
+
+		if (headers->maxIndexMsSize < len)
+		{
+			headers->maxIndexMsSize = len;
+		}
+	}
+
+	/* now prepare the header line with dashes */
+	prepareLineSeparator(headers->oidSeparator, headers->maxOidSize);
+	prepareLineSeparator(headers->nspnameSeparator, headers->maxNspnameSize);
+	prepareLineSeparator(headers->relnameSeparator, headers->maxRelnameSize);
+	prepareLineSeparator(headers->tableMsSeparator, headers->maxTableMsSize);
+	prepareLineSeparator(headers->indexCountSeparator, headers->maxIndexCountSize);
+	prepareLineSeparator(headers->indexMsSeparator, headers->maxIndexMsSize);
+}
+
+
+/*
+ * prepareLineSeparator fills in the pre-allocated given string with the
+ * expected amount of dashes to use as a separator line in our tabular output.
+ */
+static void
+prepareLineSeparator(char dashes[], int size)
+{
+	for (int i = 0; i <= size; i++)
+	{
+		if (i < size)
+		{
+			dashes[i] = '-';
+		}
+		else
+		{
+			dashes[i] = '\0';
+			break;
+		}
+	}
 }
