@@ -209,8 +209,13 @@ cli_copy_db_getopts(int argc, char **argv)
 static void
 cli_copy_db(int argc, char **argv)
 {
+	Summary summary = { 0 };
+	TopLevelTimings *timings = &(summary.timings);
+
 	CopyFilePaths cfPaths = { 0 };
 	PostgresPaths pgPaths = { 0 };
+
+	(void) summary_set_current_time(timings, TIMING_STEP_START);
 
 	log_info("[SOURCE] Copying database from \"%s\"", copyDBoptions.source_pguri);
 	log_info("[TARGET] Copying database into \"%s\"", copyDBoptions.target_pguri);
@@ -240,7 +245,7 @@ cli_copy_db(int argc, char **argv)
 
 	log_info("STEP 1: dump the source database schema (pre/post data)");
 
-	/* use a temporary directory for the whole copy operation */
+	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_SCHEMA_DUMP);
 
 	if (!copydb_dump_source_schema(&copySpecs))
 	{
@@ -250,11 +255,15 @@ cli_copy_db(int argc, char **argv)
 
 	log_info("STEP 2: restore the pre-data section to the target database");
 
+	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_PREPARE_SCHEMA);
+
 	if (!copydb_target_prepare_schema(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);
 	}
+
+	(void) summary_set_current_time(timings, TIMING_STEP_AFTER_PREPARE_SCHEMA);
 
 	log_info("STEP 3: copy data from source to target in sub-processes");
 	log_info("STEP 4: create indexes and constraints in parallel");
@@ -268,18 +277,15 @@ cli_copy_db(int argc, char **argv)
 
 	log_info("STEP 6: restore the post-data section to the target database");
 
+	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_FINALIZE_SCHEMA);
+
 	if (!copydb_target_finalize_schema(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);
 	}
 
-	log_info("TABLE DATA from %d tables have been copied",
-			 copySpecs.tableSpecsArray.count);
+	(void) summary_set_current_time(timings, TIMING_STEP_AFTER_FINALIZE_SCHEMA);
 
-	log_info("Done. Your target database is ready at \"%s\"",
-			 copyDBoptions.target_pguri);
-
-	/* print a nice summary of operations */
-	(void) print_summary(&copySpecs);
+	(void) print_summary(&summary, &copySpecs);
 }

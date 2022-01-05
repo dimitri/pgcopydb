@@ -17,8 +17,10 @@
 #include "summary.h"
 
 
+static void summary_prepare_toplevel_durations(Summary *summary);
+static void print_toplevel_summary(Summary *summary);
 static void print_summary_table(SummaryTable *summary);
-static bool prepare_summary_table(SummaryTable *summary, CopyDataSpec *specs);
+static bool prepare_summary_table(Summary *summary, CopyDataSpec *specs);
 static void prepare_summary_table_headers(SummaryTable *summary);
 static void prepareLineSeparator(char dashes[], int size);
 
@@ -439,20 +441,189 @@ finish_index_summary(CopyIndexSummary *summary, char *filename)
  * TODO: also add-in the time it took to prepare and finalize the schema.
  */
 bool
-print_summary(CopyDataSpec *specs)
+print_summary(Summary *summary, CopyDataSpec *specs)
 {
-	SummaryTable summaryTable = { 0 };
+	SummaryTable *summaryTable = &(summary->table);
 
-	if (!prepare_summary_table(&summaryTable, specs))
+	/* first, we have to scan the available data from memory and files */
+	if (!prepare_summary_table(summary, specs))
 	{
 		log_error("Failed to prepare the summary table");
 		return false;
 	}
 
-	(void) prepare_summary_table_headers(&summaryTable);
-	(void) print_summary_table(&summaryTable);
+	/* then we can prepare the headers and print the table */
+	(void) prepare_summary_table_headers(summaryTable);
+	(void) print_summary_table(summaryTable);
+
+	/* and then finally prepare the top-level counters and print them */
+	(void) summary_prepare_toplevel_durations(summary);
+	(void) print_toplevel_summary(summary);
 
 	return true;
+}
+
+
+/*
+ * summary_set_current_time sets the current timing to the appropriate
+ * TopLevelTimings entry given the step we're at.
+ */
+void
+summary_set_current_time(TopLevelTimings *timings, TimingStep step)
+{
+	switch (step)
+	{
+		case TIMING_STEP_START:
+		{
+			INSTR_TIME_SET_CURRENT(timings->startTime);
+			break;
+		}
+
+		case TIMING_STEP_BEFORE_SCHEMA_DUMP:
+		{
+			INSTR_TIME_SET_CURRENT(timings->beforeSchemaDump);
+			break;
+		}
+
+		case TIMING_STEP_BEFORE_PREPARE_SCHEMA:
+		{
+			INSTR_TIME_SET_CURRENT(timings->beforePrepareSchema);
+			break;
+		}
+
+		case TIMING_STEP_AFTER_PREPARE_SCHEMA:
+		{
+			INSTR_TIME_SET_CURRENT(timings->afterPrepareSchema);
+			break;
+		}
+
+		case TIMING_STEP_BEFORE_FINALIZE_SCHEMA:
+		{
+			INSTR_TIME_SET_CURRENT(timings->beforeFinalizeSchema);
+			break;
+		}
+
+		case TIMING_STEP_AFTER_FINALIZE_SCHEMA:
+		{
+			INSTR_TIME_SET_CURRENT(timings->afterFinalizeSchema);
+			break;
+		}
+	}
+}
+
+
+/*
+ * summary_prepare_toplevel_durations prepares the top-level durations in a
+ * form that's suitable for printing on-screen.
+ */
+static void
+summary_prepare_toplevel_durations(Summary *summary)
+{
+	TopLevelTimings *timings = &(summary->timings);
+
+	instr_time duration;
+	uint64_t durationMs;
+
+	/* compute schema dump duration, part of schemaDurationMs */
+	duration = timings->beforePrepareSchema;
+	INSTR_TIME_SUBTRACT(duration, timings->beforeSchemaDump);
+	durationMs = INSTR_TIME_GET_MILLISEC(duration);
+
+	IntervalToString(durationMs, timings->dumpSchemaMs, INTSTRING_MAX_DIGITS);
+
+	timings->schemaDurationMs = durationMs;
+
+	/* compute prepare schema duration, part of schemaDurationMs */
+	duration = timings->afterPrepareSchema;
+	INSTR_TIME_SUBTRACT(duration, timings->beforePrepareSchema);
+	durationMs = INSTR_TIME_GET_MILLISEC(duration);
+
+	IntervalToString(durationMs, timings->prepareSchemaMs, INTSTRING_MAX_DIGITS);
+
+	timings->schemaDurationMs += durationMs;
+
+	/* compute data + index duration, between prepare schema and finalize */
+	duration = timings->beforeFinalizeSchema;
+	INSTR_TIME_SUBTRACT(duration, timings->afterPrepareSchema);
+	durationMs = INSTR_TIME_GET_MILLISEC(duration);
+
+	IntervalToString(durationMs, timings->dataAndIndexMs, INTSTRING_MAX_DIGITS);
+
+	timings->dataAndIndexesDurationMs = durationMs;
+
+	/* compute finalize schema duration, part of schemaDurationMs */
+	duration = timings->afterFinalizeSchema;
+	INSTR_TIME_SUBTRACT(duration, timings->beforeFinalizeSchema);
+	durationMs = INSTR_TIME_GET_MILLISEC(duration);
+
+	IntervalToString(durationMs, timings->finalizeSchemaMs, INTSTRING_MAX_DIGITS);
+
+	timings->schemaDurationMs += durationMs;
+
+	/* compute total duration, wall clock elapsed time */
+	duration = timings->afterFinalizeSchema;
+	INSTR_TIME_SUBTRACT(duration, timings->startTime);
+	durationMs = INSTR_TIME_GET_MILLISEC(duration);
+
+	IntervalToString(durationMs, timings->totalMs, INTSTRING_MAX_DIGITS);
+
+	timings->totalDurationMs = durationMs;
+
+	/* prepare the pretty printed string for the cumulative parallel part */
+	IntervalToString(timings->tableDurationMs,
+					 timings->totalTableMs,
+					 INTSTRING_MAX_DIGITS);
+
+	IntervalToString(timings->indexDurationMs,
+					 timings->totalIndexMs,
+					 INTSTRING_MAX_DIGITS);
+}
+
+
+/*
+ * print_toplevel_summary prints a summary of the top-level timings.
+ */
+static void
+print_toplevel_summary(Summary *summary)
+{
+	char *d10s = "----------";
+	char *d35s = "-----------------------------------";
+
+	fformat(stdout, "\n");
+
+	fformat(stdout, " %35s   %10s  %10s\n", "Step", "Location", "Duration");
+	fformat(stdout, " %35s   %10s  %10s\n", d35s, d10s, d10s);
+
+	fformat(stdout, " %35s   %10s  %10s\n", "Dump Schema", "source",
+			summary->timings.dumpSchemaMs);
+
+	fformat(stdout, " %35s   %10s  %10s\n", "Prepare Schema", "target",
+			summary->timings.prepareSchemaMs);
+
+	fformat(stdout, " %35s   %10s  %10s\n",
+			"COPY and CREATE INDEX (wall clock)", "both",
+			summary->timings.dataAndIndexMs);
+
+	fformat(stdout, " %35s   %10s  %10s\n",
+			"Cumulative COPY duration", "both",
+			summary->timings.totalTableMs);
+
+	fformat(stdout, " %35s   %10s  %10s\n",
+			"Cumulative CREATE INDEX duration", "target",
+			summary->timings.totalIndexMs);
+
+	fformat(stdout, " %35s   %10s  %10s\n", "Finalize Schema", "target",
+			summary->timings.finalizeSchemaMs);
+
+	fformat(stdout, " %35s   %10s  %10s\n", d35s, d10s, d10s);
+
+	fformat(stdout, " %35s   %10s  %10s\n",
+			"Total Wall Clock Duration", "both",
+			summary->timings.totalMs);
+
+	fformat(stdout, " %35s   %10s  %10s\n", d35s, d10s, d10s);
+
+	fformat(stdout, "\n");
 }
 
 
@@ -461,17 +632,19 @@ print_summary(CopyDataSpec *specs)
  * read from disk in the doneFile for each oid that has been processed.
  */
 static bool
-prepare_summary_table(SummaryTable *summary, CopyDataSpec *specs)
+prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 {
+	TopLevelTimings *timings = &(summary->timings);
+	SummaryTable *summaryTable = &(summary->table);
 	CopyTableDataSpecsArray *tableSpecsArray = &(specs->tableSpecsArray);
 
 	int count = tableSpecsArray->count;
 
-	summary->count = count;
-	summary->array =
+	summaryTable->count = count;
+	summaryTable->array =
 		(SummaryTableEntry *) malloc(count * sizeof(SummaryTableEntry));
 
-	if (summary->array == NULL)
+	if (summaryTable->array == NULL)
 	{
 		log_error(ALLOCATION_FAILED_ERROR);
 		return false;
@@ -482,7 +655,7 @@ prepare_summary_table(SummaryTable *summary, CopyDataSpec *specs)
 		CopyTableDataSpec *tableSpecs = &(tableSpecsArray->array[tableIndex]);
 		SourceTable *table = tableSpecs->sourceTable;
 
-		SummaryTableEntry *entry = &(summary->array[tableIndex]);
+		SummaryTableEntry *entry = &(summaryTable->array[tableIndex]);
 
 		/* prepare some of the information we already have */
 		IntString oidString = intToString(table->oid);
@@ -499,6 +672,8 @@ prepare_summary_table(SummaryTable *summary, CopyDataSpec *specs)
 			/* errors have already been logged */
 			return false;
 		}
+
+		timings->tableDurationMs += tableSummary.durationMs;
 
 		(void) IntervalToString(tableSummary.durationMs,
 								entry->tableMs,
@@ -535,6 +710,7 @@ prepare_summary_table(SummaryTable *summary, CopyDataSpec *specs)
 			}
 
 			/* accumulate total duration of creating all the indexes */
+			timings->indexDurationMs += indexSummary.durationMs;
 			indexingDurationMs += indexSummary.durationMs;
 		}
 

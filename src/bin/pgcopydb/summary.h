@@ -92,6 +92,52 @@ typedef struct SummaryTable
 } SummaryTable;
 
 
+typedef enum
+{
+	TIMING_STEP_START = 0,
+	TIMING_STEP_BEFORE_SCHEMA_DUMP,
+	TIMING_STEP_BEFORE_PREPARE_SCHEMA,
+	TIMING_STEP_AFTER_PREPARE_SCHEMA,
+	TIMING_STEP_BEFORE_FINALIZE_SCHEMA,
+	TIMING_STEP_AFTER_FINALIZE_SCHEMA,
+} TimingStep;
+
+typedef struct TopLevelTimings
+{
+	instr_time startTime;
+	instr_time beforeSchemaDump;
+	instr_time beforePrepareSchema;
+	instr_time afterPrepareSchema;
+	instr_time beforeFinalizeSchema;
+	instr_time afterFinalizeSchema;
+
+	char totalMs[INTSTRING_MAX_DIGITS];
+	char dumpSchemaMs[INTSTRING_MAX_DIGITS];
+	char prepareSchemaMs[INTSTRING_MAX_DIGITS];
+	char dataAndIndexMs[INTSTRING_MAX_DIGITS];
+	char finalizeSchemaMs[INTSTRING_MAX_DIGITS];
+	char totalTableMs[INTSTRING_MAX_DIGITS];
+	char totalIndexMs[INTSTRING_MAX_DIGITS];
+
+	/* allow computing the overhead */
+	uint64_t totalDurationMs;   /* wall clock total duration */
+	uint64_t schemaDurationMs;  /* dump + prepare + finalize duration */
+	uint64_t dataAndIndexesDurationMs;
+	uint64_t tableDurationMs;   /* sum of COPY (TABLE DATA) durations */
+	uint64_t indexDurationMs;   /* sum of CREATE INDEX durations */
+
+	char totalCopyDataMs[INTSTRING_MAX_DIGITS];
+	char totalCreateIndexMs[INTSTRING_MAX_DIGITS];
+} TopLevelTimings;
+
+
+typedef struct Summary
+{
+	TopLevelTimings timings;
+	SummaryTable table;
+} Summary;
+
+
 bool write_table_summary(CopyTableSummary *summary, char *filename);
 bool read_table_summary(CopyTableSummary *summary, const char *filename);
 bool open_table_summary(CopyTableSummary *summary, char *filename);
@@ -103,12 +149,15 @@ bool create_table_index_file(CopyTableSummary *summary,
 bool read_table_index_file(SourceIndexArray *indexArray, char *filename);
 
 
+void summary_set_current_time(TopLevelTimings *timings, TimingStep step);
+
+
 bool write_index_summary(CopyIndexSummary *summary, char *filename);
 bool read_index_summary(CopyIndexSummary *summary, const char *filename);
 bool open_index_summary(CopyIndexSummary *summary, char *filename);
 bool finish_index_summary(CopyIndexSummary *summary, char *filename);
 
-bool print_summary(CopyDataSpec *specs);
+bool print_summary(Summary *summary, CopyDataSpec *specs);
 
 
 #endif /* SUMMARY_H */
