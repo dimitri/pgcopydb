@@ -502,8 +502,8 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 {
 	PGSQL pgsql = { 0 };
 	SourceTableArray tableArray = { 0, NULL };
-
 	TableDataProcessArray tableProcessArray = { specs->tableJobs, NULL };
+	CopyTableDataSpecsArray *tableSpecsArray = &(specs->tableSpecsArray);
 
 	tableProcessArray.array =
 		(TableDataProcess *) malloc(specs->tableJobs * sizeof(TableDataProcess));
@@ -534,6 +534,12 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 
 	log_info("Fetched information for %d tables", tableArray.count);
 
+	int count = tableArray.count;
+
+	specs->tableSpecsArray.count = count;
+	specs->tableSpecsArray.array =
+		(CopyTableDataSpec *) malloc(count * sizeof(CopyTableDataSpec));
+
 	for (int tableIndex = 0; tableIndex < tableArray.count; tableIndex++)
 	{
 		int subProcessIndex =
@@ -544,31 +550,31 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 		TableDataProcess *process = &(tableProcessArray.array[subProcessIndex]);
 
 		/* okay now start the subprocess for this table */
-		CopyTableDataSpec tableSpecs = { 0 };
+		CopyTableDataSpec *tableSpecs = &(tableSpecsArray->array[tableIndex]);
 
-		if (!copydb_init_table_specs(&tableSpecs, specs, source, process))
+		if (!copydb_init_table_specs(tableSpecs, specs, source, process))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 
-		if (!copydb_start_table_data(&tableSpecs))
+		if (!copydb_start_table_data(tableSpecs))
 		{
 			log_fatal("Failed to start a table data copy process for table "
 					  "\"%s\".\"%s\", see above for details",
-					  tableSpecs.sourceTable->nspname,
-					  tableSpecs.sourceTable->relname);
+					  tableSpecs->sourceTable->nspname,
+					  tableSpecs->sourceTable->relname);
 
 			(void) copydb_fatal_exit(&tableProcessArray);
 			return false;
 		}
 
 		log_debug("[%d] is processing table %d \"%s\".\"%s\" with oid %d",
-				  tableSpecs.process->pid,
+				  tableSpecs->process->pid,
 				  tableIndex,
-				  tableSpecs.sourceTable->nspname,
-				  tableSpecs.sourceTable->relname,
-				  tableSpecs.process->oid);
+				  tableSpecs->sourceTable->nspname,
+				  tableSpecs->sourceTable->relname,
+				  tableSpecs->process->oid);
 	}
 
 	/* now we have a unknown count of subprocesses still running */

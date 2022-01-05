@@ -273,6 +273,9 @@ cli_copy_db(int argc, char **argv)
 		exit(EXIT_CODE_TARGET);
 	}
 
+	log_info("TABLE DATA from %d tables have been copied",
+			 copySpecs.tableSpecsArray.count);
+
 	log_info("Done. Your target database is ready at \"%s\"",
 			 copyDBoptions.target_pguri);
 }

@@ -49,22 +49,6 @@ typedef struct DumpPaths
 } DumpPaths;
 
 
-/* all that's needed to start a TABLE DATA copy for a whole database */
-typedef struct CopyDataSpec
-{
-	CopyFilePaths *cfPaths;
-	PostgresPaths *pgPaths;
-
-	char *source_pguri;
-	char *target_pguri;
-
-	int tableJobs;
-	int indexJobs;
-
-	DumpPaths dumpPaths;
-} CopyDataSpec;
-
-
 /* per-table file paths */
 typedef struct TableFilePaths
 {
@@ -108,6 +92,30 @@ typedef struct CopyTableDataSpec
 	TableFilePaths tablePaths;
 	IndexFilePathsArray indexPathsArray;
 } CopyTableDataSpec;
+
+
+typedef struct CopyTableDataSpecsArray
+{
+	int count;
+	CopyTableDataSpec *array;   /* malloc'ed area */
+} CopyTableDataSpecsArray;
+
+
+/* all that's needed to start a TABLE DATA copy for a whole database */
+typedef struct CopyDataSpec
+{
+	CopyFilePaths *cfPaths;
+	PostgresPaths *pgPaths;
+
+	char *source_pguri;
+	char *target_pguri;
+
+	int tableJobs;
+	int indexJobs;
+
+	DumpPaths dumpPaths;
+	CopyTableDataSpecsArray tableSpecsArray;
+} CopyDataSpec;
 
 bool copydb_init_workdir(CopyFilePaths *cfPaths, char *dir);
 
