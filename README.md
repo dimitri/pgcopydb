@@ -16,7 +16,10 @@ When using `pgcopydb` it is possible to achieve the result outlined before
 with this simple command line:
 
 ```bash
-$ pgcopydb copy db --jobs=N --source postgres://user@source/dbname --target postgres://user@target/dbname
+$ export PGCOPYDB_SOURCE_PGURI="postgres://user@source.host.dev/dbname"
+$ export PGCOPYDB_TARGET_PGURI="postgres://role@target.host.dev/dbname"
+
+$ pgcopydb copy db --table-jobs 8 --index-jobs 12
 ```
 
 Then `pgcopydb` implements the following steps:
@@ -27,31 +30,31 @@ Then `pgcopydb` implements the following steps:
   2. The `pre-data` section of the dump is restored on the target database,
      creating all the Postgres objects from the source database into the
      target database.
-     
+
   3. `pgcopydb` gets the list of ordinary and partitioned tables and for
      each of them runs COPY the data from the source to the target in a
      dedicated sub-process, and starts and control the sub-processes until
      all the data has been copied over.
-     
+
      Postgres catalog table pg_class is used to get the list of tables with
      data to copy around, and the `reltuples` is used to start with the
      tables with the greatest number of rows first, as an attempt to
      minimize the copy time.
-     
+
   4. In each copy table sub-process, as soon as the data copying is done,
      then `pgcopydb` gets the list of index definitions attached to the
      current target table and creates them in parallel.
-     
+
      The primary indexes are created as UNIQUE indexes at this stage.
-     
+
      Then the PRIMARY KEY constraints are created USING the just built
      indexes. This two-steps approach allows the primary key index itself to
      be created in parallel with other indexes on the same table, avoiding
      an EXCLUSIVE LOCK while creating the index.
-     
+
   5. Then VACUUM ANALYZE is run on each target table as soon as the data and
      indexes are all created.
-     
+
   6. The final stage consists now of running the rest of the `post-data`
      section script for the whole database, and that's where the foreign key
      constraints and other elements are created.
@@ -59,7 +62,7 @@ Then `pgcopydb` implements the following steps:
      The `post-data` script is filtered out using the `pg_restore
      --use-list` option so that indexes and primary key constraints already
      created in step 4. are properly skipped now.
-     
+
      This is done by the per-table sub-processes sharing the dump IDs of the
      `post-data` items they have created with the main process, which can
      then filter out the `pg_restore --list` output and comment the already
