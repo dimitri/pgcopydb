@@ -860,10 +860,20 @@ copydb_copy_table(CopyTableDataSpec *tableSpecs)
 	 * Indexes are created all-at-once in parallel, a sub-process is forked per
 	 * index definition to send each SQL/DDL command to the Postgres server.
 	 */
-	log_info("Creating %d indexes for table \"%s\".\"%s\"",
-			 tableSpecs->indexArray->count,
-			 tableSpecs->sourceTable->nspname,
-			 tableSpecs->sourceTable->relname);
+	if (tableSpecs->indexArray->count >= 1)
+	{
+		log_info("Creating %d index%s for table \"%s\".\"%s\"",
+				 tableSpecs->indexArray->count,
+				 tableSpecs->indexArray->count > 1 ? "es" : "",
+				 tableSpecs->sourceTable->nspname,
+				 tableSpecs->sourceTable->relname);
+	}
+	else
+	{
+		log_debug("Table \"%s\".\"%s\" has no index attached",
+				  tableSpecs->sourceTable->nspname,
+				  tableSpecs->sourceTable->relname);
+	}
 
 	/* build the index file paths we need for the upcoming operations */
 	if (!copydb_init_indexes_paths(tableSpecs))
