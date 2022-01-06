@@ -19,7 +19,48 @@ with this simple command line:
 $ export PGCOPYDB_SOURCE_PGURI="postgres://user@source.host.dev/dbname"
 $ export PGCOPYDB_TARGET_PGURI="postgres://role@target.host.dev/dbname"
 
-$ pgcopydb copy db --table-jobs 8 --index-jobs 12
+$ pgcopydb copy db --table-jobs 8 --index-jobs 2
+```
+
+A typical output from the command would contain lots of lines of logs, and
+then a table summary with a line per table and some information (timing for
+the table COPY, cumulative timing for the CREATE INDEX commands), and then
+an overall summary that looks like the following:
+
+```
+18:26:35 77615 INFO  [SOURCE] Copying database from "port=54311 host=localhost dbname=pgloader"
+18:26:35 77615 INFO  [TARGET] Copying database into "port=54311 dbname=plop"
+18:26:35 77615 INFO  STEP 1: dump the source database schema (pre/post data)
+18:26:35 77615 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_dump -Fc --section pre-data --file /tmp/pgcopydb/schema/pre.dump 'port=54311 host=localhost dbname=pgloader'
+18:26:35 77615 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_dump -Fc --section post-data --file /tmp/pgcopydb/schema/post.dump 'port=54311 host=localhost dbname=pgloader'
+18:26:36 77615 INFO  STEP 2: restore the pre-data section to the target database
+18:26:36 77615 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_restore --dbname 'port=54311 dbname=plop' /tmp/pgcopydb/schema/pre.dump
+18:26:36 77615 INFO  STEP 3: copy data from source to target in sub-processes
+18:26:36 77615 INFO  STEP 4: create indexes and constraints in parallel
+18:26:36 77615 INFO  STEP 5: vacuum analyze each table
+18:26:36 77615 INFO  Listing ordinary tables in "port=54311 host=localhost dbname=pgloader"
+18:26:36 77615 INFO  Fetched information for 56 tables
+...
+18:26:37 77615 INFO  STEP 6: restore the post-data section to the target database
+18:26:37 77615 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_restore --dbname 'port=54311 dbname=plop' --use-list /tmp/pgcopydb/schema/post.list /tmp/pgcopydb/schema/post.dump
+
+  OID |   Schema |            Name | copy duration | indexes | create index duration
+------+----------+-----------------+---------------+---------+----------------------
+17085 |      csv |           track |          62ms |       1 |                  24ms
+  ...
+  ...
+
+                                          Step   Connection    Duration   Concurrency
+ ---------------------------------------------   ----------  ----------  ------------
+                                   Dump Schema       source       884ms             1
+                                Prepare Schema       target       405ms             1
+ COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both       1s281         8 + 2
+                             COPY (cumulative)         both       2s040             8
+                     CREATE INDEX (cumulative)       target       381ms             2
+                               Finalize Schema       target        29ms             1
+ ---------------------------------------------   ----------  ----------  ------------
+                     Total Wall Clock Duration         both       2s639         8 + 2
+ ---------------------------------------------   ----------  ----------  ------------
 ```
 
 Then `pgcopydb` implements the following steps:
