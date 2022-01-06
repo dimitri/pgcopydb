@@ -18,7 +18,7 @@
 
 
 static void summary_prepare_toplevel_durations(Summary *summary);
-static void print_toplevel_summary(Summary *summary);
+static void print_toplevel_summary(Summary *summary, int tableJobs, int indexJobs);
 static void print_summary_table(SummaryTable *summary);
 static bool prepare_summary_table(Summary *summary, CopyDataSpec *specs);
 static void prepare_summary_table_headers(SummaryTable *summary);
@@ -458,7 +458,7 @@ print_summary(Summary *summary, CopyDataSpec *specs)
 
 	/* and then finally prepare the top-level counters and print them */
 	(void) summary_prepare_toplevel_durations(summary);
-	(void) print_toplevel_summary(summary);
+	(void) print_toplevel_summary(summary, specs->tableJobs, specs->indexJobs);
 
 	return true;
 }
@@ -584,44 +584,54 @@ summary_prepare_toplevel_durations(Summary *summary)
  * print_toplevel_summary prints a summary of the top-level timings.
  */
 static void
-print_toplevel_summary(Summary *summary)
+print_toplevel_summary(Summary *summary, int tableJobs, int indexJobs)
 {
 	char *d10s = "----------";
+	char *d12s = "------------";
 	char *d35s = "-----------------------------------";
 
 	fformat(stdout, "\n");
 
-	fformat(stdout, " %35s   %10s  %10s\n", "Step", "Location", "Duration");
-	fformat(stdout, " %35s   %10s  %10s\n", d35s, d10s, d10s);
+	fformat(stdout, " %35s   %10s  %10s  %12s\n",
+			"Step", "Connection", "Duration", "Concurrency");
 
-	fformat(stdout, " %35s   %10s  %10s\n", "Dump Schema", "source",
-			summary->timings.dumpSchemaMs);
+	fformat(stdout, " %35s   %10s  %10s  %12s\n", d35s, d10s, d10s, d12s);
 
-	fformat(stdout, " %35s   %10s  %10s\n", "Prepare Schema", "target",
-			summary->timings.prepareSchemaMs);
+	fformat(stdout, " %35s   %10s  %10s  %12d\n", "Dump Schema", "source",
+			summary->timings.dumpSchemaMs, 1);
 
-	fformat(stdout, " %35s   %10s  %10s\n",
+	fformat(stdout, " %35s   %10s  %10s  %12d\n", "Prepare Schema", "target",
+			summary->timings.prepareSchemaMs, 1);
+
+	char concurrency[BUFSIZE] = { 0 };
+	sformat(concurrency, sizeof(concurrency), "%d + %d", tableJobs, indexJobs);
+
+	fformat(stdout, " %35s   %10s  %10s  %12s\n",
 			"COPY and CREATE INDEX (wall clock)", "both",
-			summary->timings.dataAndIndexMs);
+			summary->timings.dataAndIndexMs,
+			concurrency);
 
-	fformat(stdout, " %35s   %10s  %10s\n",
-			"Cumulative COPY duration", "both",
-			summary->timings.totalTableMs);
+	fformat(stdout, " %35s   %10s  %10s  %12d\n",
+			"COPY (cumulative)", "both",
+			summary->timings.totalTableMs,
+			tableJobs);
 
-	fformat(stdout, " %35s   %10s  %10s\n",
-			"Cumulative CREATE INDEX duration", "target",
-			summary->timings.totalIndexMs);
+	fformat(stdout, " %35s   %10s  %10s  %12d\n",
+			"CREATE INDEX (cumulative)", "target",
+			summary->timings.totalIndexMs,
+			indexJobs);
 
-	fformat(stdout, " %35s   %10s  %10s\n", "Finalize Schema", "target",
-			summary->timings.finalizeSchemaMs);
+	fformat(stdout, " %35s   %10s  %10s  %12d\n", "Finalize Schema", "target",
+			summary->timings.finalizeSchemaMs, 1);
 
-	fformat(stdout, " %35s   %10s  %10s\n", d35s, d10s, d10s);
+	fformat(stdout, " %35s   %10s  %10s  %12s\n", d35s, d10s, d10s, d12s);
 
-	fformat(stdout, " %35s   %10s  %10s\n",
+	fformat(stdout, " %35s   %10s  %10s  %12s\n",
 			"Total Wall Clock Duration", "both",
-			summary->timings.totalMs);
+			summary->timings.totalMs,
+			concurrency);
 
-	fformat(stdout, " %35s   %10s  %10s\n", d35s, d10s, d10s);
+	fformat(stdout, " %35s   %10s  %10s  %12s\n", d35s, d10s, d10s, d12s);
 
 	fformat(stdout, "\n");
 }
