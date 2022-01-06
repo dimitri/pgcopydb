@@ -15,6 +15,12 @@
 /* environment variable for containing the id of the logging semaphore */
 #define PGCOPYDB_LOG_SEMAPHORE "PGCOPYDB_LOG_SEMAPHORE"
 
+/* environment variables for the command line options */
+#define PGCOPYDB_SOURCE_PGURI "PGCOPYDB_SOURCE_PGURI"
+#define PGCOPYDB_TARGET_PGURI "PGCOPYDB_TARGET_PGURI"
+#define PGCOPYDB_TARGET_TABLE_JOBS "PGCOPYDB_TARGET_TABLE_JOBS"
+#define PGCOPYDB_TARGET_INDEX_JOBS "PGCOPYDB_TARGET_INDEX_JOBS"
+
 #define POSTGRES_CONNECT_TIMEOUT "2"
 
 

@@ -13,6 +13,7 @@
 #include "cli_root.h"
 #include "copydb.h"
 #include "commandline.h"
+#include "env_utils.h"
 #include "log.h"
 #include "pgsql.h"
 #include "string_utils.h"
@@ -20,6 +21,7 @@
 
 CopyDBOptions copyDBoptions = { 0 };
 
+static bool cli_copydb_getenv(CopyDBOptions *options);
 static int cli_copy_db_getopts(int argc, char **argv);
 static void cli_copy_db(int argc, char **argv);
 
@@ -28,7 +30,7 @@ static CommandLine copy_db_command =
 	make_command(
 		"db",
 		"Copy an entire database from source to target",
-		" --source ... --target ... [ --jobs ] ",
+		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Postgres URI to the target database\n"
 		"  --table-jobs      Number of concurrent COPY jobs to run\n"
@@ -40,7 +42,7 @@ static CommandLine copy_table_command =
 	make_command(
 		"table",
 		"Copy a given table from source to target",
-		" --source ... --target ... [ --jobs ] ",
+		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Postgres URI to the target database\n"
 		"  --schema-name     Name of the schema where to find the table\n"
@@ -70,7 +72,7 @@ static int
 cli_copy_db_getopts(int argc, char **argv)
 {
 	CopyDBOptions options = { 0 };
-	int c, option_index = 0;
+	int c, option_index = 0, errors = 0;
 	int verboseCount = 0;
 
 	static struct option long_options[] = {
@@ -96,7 +98,14 @@ cli_copy_db_getopts(int argc, char **argv)
 
 	strlcpy(options.schema_name, "public", NAMEDATALEN);
 
-	while ((c = getopt_long(argc, argv, "S:T:j:s:t:Vvqh",
+	/* read values from the environment */
+	if (!cli_copydb_getenv(&options))
+	{
+		log_fatal("Failed to read default values from the environment");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	while ((c = getopt_long(argc, argv, "S:T:J:I:s:t:Vvqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -105,9 +114,9 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				if (!validate_connection_string(optarg))
 				{
-					log_fatal("Failed to parse --monitor connection string, "
+					log_fatal("Failed to parse --source connection string, "
 							  "see above for details.");
-					exit(EXIT_CODE_BAD_ARGS);
+					++errors;
 				}
 				strlcpy(options.source_pguri, optarg, MAXCONNINFO);
 				log_trace("--source %s", options.source_pguri);
@@ -118,9 +127,9 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				if (!validate_connection_string(optarg))
 				{
-					log_fatal("Failed to parse --monitor connection string, "
+					log_fatal("Failed to parse --target connection string, "
 							  "see above for details.");
-					exit(EXIT_CODE_BAD_ARGS);
+					++errors;
 				}
 				strlcpy(options.target_pguri, optarg, MAXCONNINFO);
 				log_trace("--target %s", options.target_pguri);
@@ -134,7 +143,7 @@ cli_copy_db_getopts(int argc, char **argv)
 					options.tableJobs > 128)
 				{
 					log_fatal("Failed to parse --jobs count: \"%s\"", optarg);
-					exit(EXIT_CODE_BAD_ARGS);
+					++errors;
 				}
 				log_trace("--table-jobs %d", options.tableJobs);
 				break;
@@ -147,7 +156,7 @@ cli_copy_db_getopts(int argc, char **argv)
 					options.indexJobs > 128)
 				{
 					log_fatal("Failed to parse --index-jobs count: \"%s\"", optarg);
-					exit(EXIT_CODE_BAD_ARGS);
+					++errors;
 				}
 				log_trace("--jobs %d", options.indexJobs);
 				break;
@@ -215,10 +224,103 @@ cli_copy_db_getopts(int argc, char **argv)
 		}
 	}
 
+	if (IS_EMPTY_STRING_BUFFER(options.source_pguri) ||
+		IS_EMPTY_STRING_BUFFER(options.target_pguri))
+	{
+		log_fatal("Options --source and --target are mandatory");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	if (errors > 0)
+	{
+		commandline_help(stderr);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
 	/* publish our option parsing in the global variable */
 	copyDBoptions = options;
 
 	return optind;
+}
+
+
+/*
+ * cli_copydb_getenv reads from the environment variables and fills-in the
+ * command line options.
+ */
+static bool
+cli_copydb_getenv(CopyDBOptions *options)
+{
+	int errors = 0;
+
+	/* now some of the options can be also set from the environment */
+	if (env_exists(PGCOPYDB_SOURCE_PGURI))
+	{
+		if (!get_env_copy(PGCOPYDB_SOURCE_PGURI,
+						  options->source_pguri,
+						  sizeof(options->source_pguri)))
+		{
+			/* errors have already been logged */
+			++errors;
+		}
+	}
+
+	if (env_exists(PGCOPYDB_TARGET_PGURI))
+	{
+		if (!get_env_copy(PGCOPYDB_TARGET_PGURI,
+						  options->target_pguri,
+						  sizeof(options->target_pguri)))
+		{
+			/* errors have already been logged */
+			++errors;
+		}
+	}
+
+	if (env_exists(PGCOPYDB_TARGET_TABLE_JOBS))
+	{
+		char jobs[BUFSIZE] = { 0 };
+
+		if (get_env_copy(PGCOPYDB_TARGET_TABLE_JOBS, jobs, sizeof(jobs)))
+		{
+			if (!stringToInt(optarg, &options->tableJobs) ||
+				options->tableJobs < 1 ||
+				options->tableJobs > 128)
+			{
+				log_fatal("Failed to parse PGCOPYDB_TARGET_TABLE_JOBS: \"%s\"",
+						  jobs);
+				++errors;
+			}
+		}
+		else
+		{
+			/* errors have already been logged */
+			++errors;
+		}
+	}
+
+	if (env_exists(PGCOPYDB_TARGET_INDEX_JOBS))
+	{
+		char jobs[BUFSIZE] = { 0 };
+
+		if (get_env_copy(PGCOPYDB_TARGET_INDEX_JOBS, jobs, sizeof(jobs)))
+		{
+			if (!stringToInt(optarg, &options->indexJobs) ||
+				options->indexJobs < 1 ||
+				options->indexJobs > 128)
+			{
+				log_fatal("Failed to parse PGCOPYDB_TARGET_INDEX_JOBS: \"%s\"",
+						  jobs);
+				++errors;
+			}
+		}
+		else
+		{
+			/* errors have already been logged */
+			++errors;
+		}
+	}
+
+	return errors == 0;
 }
 
 
