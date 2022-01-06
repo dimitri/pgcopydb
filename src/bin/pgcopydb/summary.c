@@ -595,50 +595,50 @@ print_toplevel_summary(Summary *summary, int tableJobs, int indexJobs)
 {
 	char *d10s = "----------";
 	char *d12s = "------------";
-	char *d35s = "-----------------------------------";
+	char *d45s = "---------------------------------------------";
 
 	fformat(stdout, "\n");
 
-	fformat(stdout, " %35s   %10s  %10s  %12s\n",
+	fformat(stdout, " %45s   %10s  %10s  %12s\n",
 			"Step", "Connection", "Duration", "Concurrency");
 
-	fformat(stdout, " %35s   %10s  %10s  %12s\n", d35s, d10s, d10s, d12s);
+	fformat(stdout, " %45s   %10s  %10s  %12s\n", d45s, d10s, d10s, d12s);
 
-	fformat(stdout, " %35s   %10s  %10s  %12d\n", "Dump Schema", "source",
+	fformat(stdout, " %45s   %10s  %10s  %12d\n", "Dump Schema", "source",
 			summary->timings.dumpSchemaMs, 1);
 
-	fformat(stdout, " %35s   %10s  %10s  %12d\n", "Prepare Schema", "target",
+	fformat(stdout, " %45s   %10s  %10s  %12d\n", "Prepare Schema", "target",
 			summary->timings.prepareSchemaMs, 1);
 
 	char concurrency[BUFSIZE] = { 0 };
 	sformat(concurrency, sizeof(concurrency), "%d + %d", tableJobs, indexJobs);
 
-	fformat(stdout, " %35s   %10s  %10s  %12s\n",
-			"COPY and CREATE INDEX (wall clock)", "both",
+	fformat(stdout, " %45s   %10s  %10s  %12s\n",
+			"COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)", "both",
 			summary->timings.dataAndIndexMs,
 			concurrency);
 
-	fformat(stdout, " %35s   %10s  %10s  %12d\n",
+	fformat(stdout, " %45s   %10s  %10s  %12d\n",
 			"COPY (cumulative)", "both",
 			summary->timings.totalTableMs,
 			tableJobs);
 
-	fformat(stdout, " %35s   %10s  %10s  %12d\n",
+	fformat(stdout, " %45s   %10s  %10s  %12d\n",
 			"CREATE INDEX (cumulative)", "target",
 			summary->timings.totalIndexMs,
 			indexJobs);
 
-	fformat(stdout, " %35s   %10s  %10s  %12d\n", "Finalize Schema", "target",
+	fformat(stdout, " %45s   %10s  %10s  %12d\n", "Finalize Schema", "target",
 			summary->timings.finalizeSchemaMs, 1);
 
-	fformat(stdout, " %35s   %10s  %10s  %12s\n", d35s, d10s, d10s, d12s);
+	fformat(stdout, " %45s   %10s  %10s  %12s\n", d45s, d10s, d10s, d12s);
 
-	fformat(stdout, " %35s   %10s  %10s  %12s\n",
+	fformat(stdout, " %45s   %10s  %10s  %12s\n",
 			"Total Wall Clock Duration", "both",
 			summary->timings.totalMs,
 			concurrency);
 
-	fformat(stdout, " %35s   %10s  %10s  %12s\n", d35s, d10s, d10s, d12s);
+	fformat(stdout, " %45s   %10s  %10s  %12s\n", d45s, d10s, d10s, d12s);
 
 	fformat(stdout, "\n");
 }

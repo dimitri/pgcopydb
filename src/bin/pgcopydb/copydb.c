@@ -12,6 +12,7 @@
 #include "cli_root.h"
 #include "copydb.h"
 #include "env_utils.h"
+#include "lock_utils.h"
 #include "log.h"
 #include "pidfile.h"
 #include "schema.h"
@@ -196,7 +197,8 @@ copydb_init_specs(CopyDataSpec *specs,
 		.target_pguri = target_pguri,
 
 		.tableJobs = tableJobs,
-		.indexJobs = indexJobs
+		.indexJobs = indexJobs,
+		.indexSemaphore = { 0 }
 	};
 
 	/* copy the structure as a whole memory area to the target place */
@@ -211,6 +213,17 @@ copydb_init_specs(CopyDataSpec *specs,
 
 	sformat(specs->dumpPaths.listFilename, MAXPGPATH, "%s/%s",
 			cfPaths->schemadir, "post.list");
+
+	/* create the index semaphore */
+	specs->indexSemaphore.initValue = indexJobs;
+
+	if (!semaphore_create(&(specs->indexSemaphore)))
+	{
+		log_error("Failed to create the index concurrency semaphore "
+				  "to orchestrate up to %d CREATE INDEX jobs at the same time",
+				  indexJobs);
+		return false;
+	}
 
 	return true;
 }
@@ -240,7 +253,8 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 		.process = process,
 
 		.tableJobs = specs->tableJobs,
-		.indexJobs = specs->indexJobs
+		.indexJobs = specs->indexJobs,
+		.indexSemaphore = &(specs->indexSemaphore)
 	};
 
 	/* copy the structure as a whole memory area to the target place */
@@ -578,7 +592,20 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 	}
 
 	/* now we have a unknown count of subprocesses still running */
-	return copydb_wait_for_subprocesses();
+	bool success = copydb_wait_for_subprocesses();
+
+	/*
+	 * Now that all the sub-processes are done, we can also unlink the index
+	 * concurrency semaphore.
+	 */
+	if (!semaphore_finish(&(specs->indexSemaphore)))
+	{
+		log_warn("Failed to remove index concurrency semaphore %d, "
+				 "see above for details",
+				 specs->indexSemaphore.semId);
+	}
+
+	return success;
 }
 
 
@@ -1024,6 +1051,9 @@ copydb_create_index(CopyTableDataSpec *tableSpecs, int idx)
 		return false;
 	}
 
+	/* now grab an index semaphore lock */
+	(void) semaphore_lock(tableSpecs->indexSemaphore);
+
 	if (!pgsql_init(&pgconn, (char *) pguri, PGSQL_CONN_TARGET))
 	{
 		/* errors have already been logged */
@@ -1035,8 +1065,12 @@ copydb_create_index(CopyTableDataSpec *tableSpecs, int idx)
 	if (!pgsql_execute(&pgconn, index->indexDef))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(tableSpecs->indexSemaphore);
 		exit(EXIT_CODE_TARGET);
 	}
+
+	/* the CREATE INDEX command is done, release our lock */
+	(void) semaphore_unlock(tableSpecs->indexSemaphore);
 
 	/* create the doneFile for the index */
 	if (!finish_index_summary(&summary, indexPaths->doneFile))

@@ -31,7 +31,8 @@ static CommandLine copy_db_command =
 		" --source ... --target ... [ --jobs ] ",
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Postgres URI to the target database\n"
-		"  --jobs            Number of concurrent subprocess jobs to run\n",
+		"  --table-jobs      Number of concurrent COPY jobs to run\n"
+		"  --index-jobs      Number of concurrent CREATE INDEX jobs to run\n",
 		cli_copy_db_getopts,
 		cli_copy_db);
 
@@ -44,7 +45,8 @@ static CommandLine copy_table_command =
 		"  --target          Postgres URI to the target database\n"
 		"  --schema-name     Name of the schema where to find the table\n"
 		"  --table-name      Name of the target table\n"
-		"  --jobs            Number of concurrent subprocess jobs to run\n",
+		"  --table-jobs      Number of concurrent COPY jobs to run\n"
+		"  --index-jobs      Number of concurrent CREATE INDEX jobs to run\n",
 		cli_copy_db_getopts,
 		cli_copy_db);
 
@@ -75,6 +77,8 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "source", required_argument, NULL, 'S' },
 		{ "target", required_argument, NULL, 'T' },
 		{ "jobs", required_argument, NULL, 'J' },
+		{ "table-jobs", required_argument, NULL, 'J' },
+		{ "index-jobs", required_argument, NULL, 'I' },
 		{ "schema", required_argument, NULL, 's' },
 		{ "table", required_argument, NULL, 't' },
 		{ "version", no_argument, NULL, 'V' },
@@ -87,7 +91,9 @@ cli_copy_db_getopts(int argc, char **argv)
 	optind = 0;
 
 	/* install default values */
-	options.jobs = 4;
+	options.tableJobs = 4;
+	options.indexJobs = 4;
+
 	strlcpy(options.schema_name, "public", NAMEDATALEN);
 
 	while ((c = getopt_long(argc, argv, "S:T:j:s:t:Vvqh",
@@ -123,14 +129,27 @@ cli_copy_db_getopts(int argc, char **argv)
 
 			case 'J':
 			{
-				if (!stringToInt(optarg, &options.jobs) ||
-					options.jobs < 1 ||
-					options.jobs > 128)
+				if (!stringToInt(optarg, &options.tableJobs) ||
+					options.tableJobs < 1 ||
+					options.tableJobs > 128)
 				{
 					log_fatal("Failed to parse --jobs count: \"%s\"", optarg);
 					exit(EXIT_CODE_BAD_ARGS);
 				}
-				log_trace("--jobs %d", options.jobs);
+				log_trace("--table-jobs %d", options.tableJobs);
+				break;
+			}
+
+			case 'I':
+			{
+				if (!stringToInt(optarg, &options.indexJobs) ||
+					options.indexJobs < 1 ||
+					options.indexJobs > 128)
+				{
+					log_fatal("Failed to parse --index-jobs count: \"%s\"", optarg);
+					exit(EXIT_CODE_BAD_ARGS);
+				}
+				log_trace("--jobs %d", options.indexJobs);
 				break;
 			}
 
@@ -219,7 +238,6 @@ cli_copy_db(int argc, char **argv)
 
 	log_info("[SOURCE] Copying database from \"%s\"", copyDBoptions.source_pguri);
 	log_info("[TARGET] Copying database into \"%s\"", copyDBoptions.target_pguri);
-	log_info("Using %d concurrent jobs (sub-processes)", copyDBoptions.jobs);
 
 	(void) find_pg_commands(&pgPaths);
 
@@ -236,8 +254,8 @@ cli_copy_db(int argc, char **argv)
 						   &pgPaths,
 						   copyDBoptions.source_pguri,
 						   copyDBoptions.target_pguri,
-						   copyDBoptions.jobs,
-						   copyDBoptions.jobs))
+						   copyDBoptions.tableJobs,
+						   copyDBoptions.indexJobs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

@@ -6,6 +6,7 @@
 #ifndef COPYDB_H
 #define COPYDB_H
 
+#include "lock_utils.h"
 #include "pgcmd.h"
 #include "schema.h"
 
@@ -88,6 +89,7 @@ typedef struct CopyTableDataSpec
 
 	int tableJobs;
 	int indexJobs;
+	Semaphore *indexSemaphore;  /* pointer to the main specs semaphore */
 
 	TableFilePaths tablePaths;
 	IndexFilePathsArray indexPathsArray;
@@ -112,6 +114,7 @@ typedef struct CopyDataSpec
 
 	int tableJobs;
 	int indexJobs;
+	Semaphore indexSemaphore;
 
 	DumpPaths dumpPaths;
 	CopyTableDataSpecsArray tableSpecsArray;

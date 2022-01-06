@@ -115,7 +115,8 @@ semaphore_finish(Semaphore *semaphore)
 
 
 /*
- * semaphore_create creates a new semaphore with the value 1.
+ * semaphore_create creates a new semaphore with the value 1, or the value
+ * semaphore->initValue when it's not zero.
  */
 bool
 semaphore_create(Semaphore *semaphore)
@@ -135,7 +136,10 @@ semaphore_create(Semaphore *semaphore)
 	/* to see this log line, change the default log level in set_logger() */
 	log_trace("Created semaphore %d", semaphore->semId);
 
-	semun.val = 1;
+	/* by default the Semaphore struct is initialized to { 0 }, fix it */
+	semaphore->initValue = semaphore->initValue == 0 ? 1 : semaphore->initValue;
+
+	semun.val = semaphore->initValue;
 	if (semctl(semaphore->semId, 0, SETVAL, semun) < 0)
 	{
 		/* the semaphore_log_lock_function has not been set yet */

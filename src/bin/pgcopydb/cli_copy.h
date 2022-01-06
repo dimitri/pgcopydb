@@ -19,7 +19,8 @@ typedef struct CopyDBOptions
 {
 	char source_pguri[MAXCONNINFO];
 	char target_pguri[MAXCONNINFO];
-	int jobs;
+	int tableJobs;
+	int indexJobs;
 	char schema_name[NAMEDATALEN];
 	char table_name[NAMEDATALEN];
 } CopyDBOptions;
