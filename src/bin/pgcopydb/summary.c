@@ -246,6 +246,13 @@ read_table_index_file(SourceIndexArray *indexArray, char *filename)
 	char *fileContents = NULL;
 	long fileSize = 0L;
 
+	if (!file_exists(filename))
+	{
+		indexArray->count = 0;
+		indexArray->array = NULL;
+		return true;
+	}
+
 	if (!read_file(filename, &fileContents, &fileSize))
 	{
 		/* errors have already been logged */
@@ -713,15 +720,19 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 					specs->cfPaths->idxdir,
 					index->indexOid);
 
-			if (!read_index_summary(&indexSummary, indexDoneFile))
+			/* when a table has no indexes, the file doesn't exists */
+			if (file_exists(indexDoneFile))
 			{
-				/* errors have already been logged */
-				return false;
-			}
+				if (!read_index_summary(&indexSummary, indexDoneFile))
+				{
+					/* errors have already been logged */
+					return false;
+				}
 
-			/* accumulate total duration of creating all the indexes */
-			timings->indexDurationMs += indexSummary.durationMs;
-			indexingDurationMs += indexSummary.durationMs;
+				/* accumulate total duration of creating all the indexes */
+				timings->indexDurationMs += indexSummary.durationMs;
+				indexingDurationMs += indexSummary.durationMs;
+			}
 		}
 
 		IntString indexCountString = intToString(indexArray.count);
