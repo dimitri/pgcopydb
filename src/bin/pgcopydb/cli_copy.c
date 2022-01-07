@@ -282,7 +282,7 @@ cli_copydb_getenv(CopyDBOptions *options)
 
 		if (get_env_copy(PGCOPYDB_TARGET_TABLE_JOBS, jobs, sizeof(jobs)))
 		{
-			if (!stringToInt(optarg, &options->tableJobs) ||
+			if (!stringToInt(jobs, &options->tableJobs) ||
 				options->tableJobs < 1 ||
 				options->tableJobs > 128)
 			{
@@ -304,7 +304,7 @@ cli_copydb_getenv(CopyDBOptions *options)
 
 		if (get_env_copy(PGCOPYDB_TARGET_INDEX_JOBS, jobs, sizeof(jobs)))
 		{
-			if (!stringToInt(optarg, &options->indexJobs) ||
+			if (!stringToInt(jobs, &options->indexJobs) ||
 				options->indexJobs < 1 ||
 				options->indexJobs > 128)
 			{
