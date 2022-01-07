@@ -60,6 +60,7 @@ RUN apt-get update \
     psutils \
     libpq5 \
     postgresql-client-common \
+    postgresql-client-13 \
 	&& rm -rf /var/lib/apt/lists/*
 
 RUN adduser --disabled-password --gecos '' --home /var/lib/postgres docker

@@ -11,6 +11,11 @@ bin:
 clean:
 	$(MAKE) -C src/bin/ clean
 
+test:
+	$(MAKE) -C tests all
+
+tests: test ;
+
 install: bin
 	$(MAKE) -C src/bin/ install
 
@@ -20,3 +25,4 @@ indent:
 
 .PHONY: all
 .PHONY: bin clean install
+.PHONY: test tests
