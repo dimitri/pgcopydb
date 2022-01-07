@@ -463,7 +463,7 @@ IntervalToString(uint64_t millisecs, char *buffer, size_t size)
 		int s = (int) seconds;
 		uint64_t ms = millisecs - (1000 * s);
 
-		sformat(buffer, size, "%2ds%03lld", s, ms);
+		sformat(buffer, size, "%2ds%03lld", s, (long long) ms);
 	}
 	else if (seconds < 60.0)
 	{

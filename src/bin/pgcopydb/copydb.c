@@ -6,6 +6,8 @@
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "cli_common.h"
 #include "cli_copy.h"
