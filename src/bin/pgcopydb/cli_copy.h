@@ -21,6 +21,7 @@ typedef struct CopyDBOptions
 	char target_pguri[MAXCONNINFO];
 	int tableJobs;
 	int indexJobs;
+	bool dropIfExists;
 } CopyDBOptions;
 
 

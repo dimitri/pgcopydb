@@ -400,7 +400,8 @@ bool
 pg_restore_db(PostgresPaths *pgPaths,
 			  const char *pguri,
 			  const char *dumpFilename,
-			  const char *listFilename)
+			  const char *listFilename,
+			  bool dropIfExists)
 {
 	char *args[16];
 	int argsIndex = 0;
@@ -412,6 +413,12 @@ pg_restore_db(PostgresPaths *pgPaths,
 	args[argsIndex++] = (char *) pgPaths->pg_restore;
 	args[argsIndex++] = "--dbname";
 	args[argsIndex++] = (char *) pguri;
+
+	if (dropIfExists)
+	{
+		args[argsIndex++] = "--clean";
+		args[argsIndex++] = "--if-exists";
+	}
 
 	if (listFilename != NULL)
 	{

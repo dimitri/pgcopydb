@@ -188,7 +188,8 @@ copydb_init_specs(CopyDataSpec *specs,
 				  char *source_pguri,
 				  char *target_pguri,
 				  int tableJobs,
-				  int indexJobs)
+				  int indexJobs,
+				  bool dropIfExists)
 {
 	/* fill-in a structure with the help of the C compiler */
 	CopyDataSpec tmpCopySpecs = {
@@ -197,6 +198,8 @@ copydb_init_specs(CopyDataSpec *specs,
 
 		.source_pguri = source_pguri,
 		.target_pguri = target_pguri,
+
+		.dropIfExists = dropIfExists,
 
 		.tableJobs = tableJobs,
 		.indexJobs = indexJobs,
@@ -410,7 +413,8 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 	if (!pg_restore_db(specs->pgPaths,
 					   specs->target_pguri,
 					   specs->dumpPaths.preFilename,
-					   NULL))
+					   NULL,
+					   specs->dropIfExists))
 	{
 		/* errors have already been logged */
 		return false;
@@ -504,7 +508,8 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 	if (!pg_restore_db(specs->pgPaths,
 					   specs->target_pguri,
 					   specs->dumpPaths.postFilename,
-					   specs->dumpPaths.listFilename))
+					   specs->dumpPaths.listFilename,
+					   specs->dropIfExists))
 	{
 		/* errors have already been logged */
 		return false;

@@ -15,6 +15,7 @@
 #include "commandline.h"
 #include "env_utils.h"
 #include "log.h"
+#include "parsing.h"
 #include "pgcmd.h"
 #include "pgsql.h"
 #include "string_utils.h"
@@ -34,7 +35,8 @@ static CommandLine restore_schema_command =
 		"Restore a database schema from custom files to target database",
 		" --source <dir> --target <URI> ",
 		"  --source          Directory where to find the schema custom files\n"
-		"  --target          Postgres URI to the source database\n",
+		"  --target          Postgres URI to the source database\n"
+		"  --drop-if-exists  On the target database, clean-up from a previous run first\n",
 		cli_restore_schema_getopts,
 		cli_restore_schema);
 
@@ -44,7 +46,8 @@ static CommandLine restore_schema_pre_data_command =
 		"Restore a database pre-data schema from custom file to target database",
 		" --source <dir> --target <URI> ",
 		"  --source          Directory where to find the schema custom files\n"
-		"  --target          Postgres URI to the source database\n",
+		"  --target          Postgres URI to the source database\n"
+		"  --drop-if-exists  On the target database, clean-up from a previous run first\n",
 		cli_restore_schema_getopts,
 		cli_restore_schema_pre_data);
 
@@ -85,7 +88,7 @@ cli_restore_schema_getopts(int argc, char **argv)
 		{ "source", required_argument, NULL, 'S' },
 		{ "target", required_argument, NULL, 'T' },
 		{ "schema", required_argument, NULL, 's' },
-		{ "table", required_argument, NULL, 't' },
+		{ "drop-if-exists", no_argument, NULL, 'c' }, /* pg_restore -c */
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "quiet", no_argument, NULL, 'q' },
@@ -95,7 +98,7 @@ cli_restore_schema_getopts(int argc, char **argv)
 
 	optind = 0;
 
-	while ((c = getopt_long(argc, argv, "S:T:j:s:t:Vvqh",
+	while ((c = getopt_long(argc, argv, "S:T:cVvqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -117,6 +120,13 @@ cli_restore_schema_getopts(int argc, char **argv)
 				}
 				strlcpy(options.target_pguri, optarg, MAXCONNINFO);
 				log_trace("--target %s", options.target_pguri);
+				break;
+			}
+
+			case 'c':
+			{
+				options.dropIfExists = true;
+				log_trace("--drop-if-exists");
 				break;
 			}
 
@@ -195,6 +205,31 @@ cli_restore_schema_getopts(int argc, char **argv)
 		++errors;
 	}
 
+	/* when --drop-if-exists has not been used, check PGCOPYDB_DROP_IF_EXISTS */
+	if (!options.dropIfExists)
+	{
+		if (env_exists(PGCOPYDB_DROP_IF_EXISTS))
+		{
+			char DROP_IF_EXISTS[BUFSIZE] = { 0 };
+
+			if (!get_env_copy(PGCOPYDB_DROP_IF_EXISTS,
+							  DROP_IF_EXISTS,
+							  sizeof(DROP_IF_EXISTS)))
+			{
+				/* errors have already been logged */
+				++errors;
+			}
+			else if (!parse_bool(DROP_IF_EXISTS, &(options.dropIfExists)))
+			{
+				log_error("Failed to parse environment variable \"%s\" "
+						  "value \"%s\", expected a boolean (on/off)",
+						  PGCOPYDB_DROP_IF_EXISTS,
+						  DROP_IF_EXISTS);
+				++errors;
+			}
+		}
+	}
+
 	if (errors > 0)
 	{
 		exit(EXIT_CODE_BAD_ARGS);
@@ -267,6 +302,10 @@ cli_restore_schema_post_data(int argc, char **argv)
 }
 
 
+/*
+ * cli_restore_prepare_specs prepares the CopyDataSpecs needed to drive the
+ * restore commands.
+ */
 static void
 cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 {
@@ -295,7 +334,8 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 						   NULL, /* source_pguri */
 						   restoreDBoptions.target_pguri,
 						   1,    /* table jobs */
-						   1))   /* index jobs */
+						   1,    /* index jobs */
+						   restoreDBoptions.dropIfExists))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

@@ -112,6 +112,8 @@ typedef struct CopyDataSpec
 	char *source_pguri;
 	char *target_pguri;
 
+	bool dropIfExists;
+
 	int tableJobs;
 	int indexJobs;
 	Semaphore indexSemaphore;
@@ -140,7 +142,8 @@ bool copydb_init_specs(CopyDataSpec *specs,
 					   char *source_pguri,
 					   char *target_pguri,
 					   int tableJobs,
-					   int indexJobs);
+					   int indexJobs,
+					   bool dropIfExists);
 
 bool copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 							 CopyDataSpec *specs,

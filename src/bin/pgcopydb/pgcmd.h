@@ -77,7 +77,8 @@ bool pg_dump_db(PostgresPaths *pgPaths,
 bool pg_restore_db(PostgresPaths *pgPaths,
 				   const char *pguri,
 				   const char *dumpFilename,
-				   const char *listFilename);
+				   const char *listFilename,
+				   bool dropIfExists);
 
 bool pg_restore_list(PostgresPaths *pgPaths, const char *filename,
 					 ArchiveContentArray *archive);

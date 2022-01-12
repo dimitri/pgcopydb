@@ -15,6 +15,7 @@
 #include "commandline.h"
 #include "env_utils.h"
 #include "log.h"
+#include "parsing.h"
 #include "pgsql.h"
 #include "string_utils.h"
 #include "summary.h"
@@ -34,7 +35,8 @@ CommandLine copy_db_command =
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Postgres URI to the target database\n"
 		"  --table-jobs      Number of concurrent COPY jobs to run\n"
-		"  --index-jobs      Number of concurrent CREATE INDEX jobs to run\n",
+		"  --index-jobs      Number of concurrent CREATE INDEX jobs to run\n"
+		"  --drop-if-exists  On the target database, clean-up from a previous run first\n",
 		cli_copy_db_getopts,
 		cli_copy_db);
 
@@ -55,6 +57,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "jobs", required_argument, NULL, 'J' },
 		{ "table-jobs", required_argument, NULL, 'J' },
 		{ "index-jobs", required_argument, NULL, 'I' },
+		{ "drop-if-exists", no_argument, NULL, 'c' }, /* pg_restore -c */
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "quiet", no_argument, NULL, 'q' },
@@ -75,7 +78,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:J:I:s:t:Vvqh",
+	while ((c = getopt_long(argc, argv, "S:T:J:I:cVvqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -129,6 +132,13 @@ cli_copy_db_getopts(int argc, char **argv)
 					++errors;
 				}
 				log_trace("--jobs %d", options.indexJobs);
+				break;
+			}
+
+			case 'c':
+			{
+				options.dropIfExists = true;
+				log_trace("--drop-if-exists");
 				break;
 			}
 
@@ -276,6 +286,31 @@ cli_copydb_getenv(CopyDBOptions *options)
 		}
 	}
 
+	/* when --drop-if-exists has not been used, check PGCOPYDB_DROP_IF_EXISTS */
+	if (!options->dropIfExists)
+	{
+		if (env_exists(PGCOPYDB_DROP_IF_EXISTS))
+		{
+			char DROP_IF_EXISTS[BUFSIZE] = { 0 };
+
+			if (!get_env_copy(PGCOPYDB_DROP_IF_EXISTS,
+							  DROP_IF_EXISTS,
+							  sizeof(DROP_IF_EXISTS)))
+			{
+				/* errors have already been logged */
+				++errors;
+			}
+			else if (!parse_bool(DROP_IF_EXISTS, &(options->dropIfExists)))
+			{
+				log_error("Failed to parse environment variable \"%s\" "
+						  "value \"%s\", expected a boolean (on/off)",
+						  PGCOPYDB_DROP_IF_EXISTS,
+						  DROP_IF_EXISTS);
+				++errors;
+			}
+		}
+	}
+
 	return errors == 0;
 }
 
@@ -313,7 +348,8 @@ cli_copy_db(int argc, char **argv)
 						   copyDBoptions.source_pguri,
 						   copyDBoptions.target_pguri,
 						   copyDBoptions.tableJobs,
-						   copyDBoptions.indexJobs))
+						   copyDBoptions.indexJobs,
+						   copyDBoptions.dropIfExists))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

@@ -94,7 +94,7 @@ cli_dump_schema_getopts(int argc, char **argv)
 
 	optind = 0;
 
-	while ((c = getopt_long(argc, argv, "S:T:j:s:t:Vvqh",
+	while ((c = getopt_long(argc, argv, "S:T:Vvqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -270,7 +270,8 @@ cli_dump_schema_section(DumpDBOptions *dumpDBoptions,
 						   dumpDBoptions->source_pguri,
 						   NULL, /* target_pguri */
 						   1,    /* table jobs */
-						   1))   /* index jobs */
+						   1,    /* index jobs */
+						   false /* dropIfExists */))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
