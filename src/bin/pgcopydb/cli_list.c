@@ -220,22 +220,25 @@ cli_list_tables(int argc, char **argv)
 
 	log_info("Fetched information for %d tables", tableArray.count);
 
-	fformat(stdout, "%8s | %20s | %20s | %15s\n",
-			"OID", "Schema Name", "Table Name", "Est. Row Count");
+	fformat(stdout, "%8s | %20s | %20s | %15s | %15s\n",
+			"OID", "Schema Name", "Table Name",
+			"Est. Row Count", "On-disk size");
 
-	fformat(stdout, "%8s-+-%20s-+-%20s-+-%15s\n",
+	fformat(stdout, "%8s-+-%20s-+-%20s-+-%15s-+-%15s\n",
 			"--------",
 			"--------------------",
 			"--------------------",
+			"---------------",
 			"---------------");
 
 	for (int i = 0; i < tableArray.count; i++)
 	{
-		fformat(stdout, "%8d | %20s | %20s | %15lld\n",
+		fformat(stdout, "%8d | %20s | %20s | %15lld | %15s\n",
 				tableArray.array[i].oid,
 				tableArray.array[i].nspname,
 				tableArray.array[i].relname,
-				(long long) tableArray.array[i].reltuples);
+				(long long) tableArray.array[i].reltuples,
+				tableArray.array[i].bytesPretty);
 	}
 
 	fformat(stdout, "\n");

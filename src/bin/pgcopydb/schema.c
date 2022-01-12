@@ -59,12 +59,14 @@ schema_list_ordinary_tables(PGSQL *pgsql, SourceTableArray *tableArray)
 	SourceTableArrayContext context = { { 0 }, tableArray, false };
 
 	char *sql =
-		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint "
+		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
+		"         pg_table_size(c.oid) as bytes, "
+		"         pg_size_pretty(pg_table_size(c.oid)) "
 		"    from pg_catalog.pg_class c join pg_catalog.pg_namespace n "
 		"      on c.relnamespace = n.oid "
 		"   where c.relkind = 'r' and c.relpersistence = 'p' "
-		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
-		"order by c.reltuples::bigint desc, n.nspname, c.relname";
+		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+		"order by bytes desc, n.nspname, c.relname";
 
 	log_trace("schema_list_ordinary_tables");
 
@@ -222,9 +224,9 @@ getTableArray(void *ctx, PGresult *result)
 
 	log_trace("getTableArray: %d", nTuples);
 
-	if (PQnfields(result) != 4)
+	if (PQnfields(result) != 6)
 	{
-		log_error("Query returned %d columns, expected 4", PQnfields(result));
+		log_error("Query returned %d columns, expected 6", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -317,6 +319,27 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	if (!stringToInt64(value, &(table->reltuples)))
 	{
 		log_error("Invalid reltuples::bigint \"%s\"", value);
+		++errors;
+	}
+
+	/* 5. pg_table_size(c.oid) as bytes */
+	value = PQgetvalue(result, rowNumber, 4);
+
+	if (!stringToInt64(value, &(table->bytes)))
+	{
+		log_error("Invalid reltuples::bigint \"%s\"", value);
+		++errors;
+	}
+
+	/* 6. pg_size_pretty(c.oid) */
+	value = PQgetvalue(result, rowNumber, 5);
+	length = strlcpy(table->bytesPretty, value, NAMEDATALEN);
+
+	if (length >= NAMEDATALEN)
+	{
+		log_error("Pretty printed byte size \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (NAMEDATALEN - 1)",
+				  value, length, NAMEDATALEN - 1);
 		++errors;
 	}
 

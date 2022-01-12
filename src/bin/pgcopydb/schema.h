@@ -20,6 +20,8 @@ typedef struct SourceTable
 	char nspname[NAMEDATALEN];
 	char relname[NAMEDATALEN];
 	int64_t reltuples;
+	int64_t bytes;
+	char bytesPretty[NAMEDATALEN]; /* pg_size_pretty */
 } SourceTable;
 
 
