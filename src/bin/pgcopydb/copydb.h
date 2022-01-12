@@ -120,6 +120,18 @@ typedef struct CopyDataSpec
 	CopyTableDataSpecsArray tableSpecsArray;
 } CopyDataSpec;
 
+
+/* specify section of a dump: pre-data, post-data, data, schema */
+typedef enum
+{
+	PG_DUMP_SECTION_ALL = 0,
+	PG_DUMP_SECTION_SCHEMA,
+	PG_DUMP_SECTION_PRE_DATA,
+	PG_DUMP_SECTION_POST_DATA,
+	PG_DUMP_SECTION_DATA
+} PostgresDumpSection;
+
+
 bool copydb_init_workdir(CopyFilePaths *cfPaths, char *dir);
 
 bool copydb_init_specs(CopyDataSpec *specs,
@@ -137,7 +149,7 @@ bool copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 
 bool copydb_init_indexes_paths(CopyTableDataSpec *tableSpecs);
 
-bool copydb_dump_source_schema(CopyDataSpec *specs);
+bool copydb_dump_source_schema(CopyDataSpec *specs, PostgresDumpSection section);
 bool copydb_target_prepare_schema(CopyDataSpec *specs);
 bool copydb_target_finalize_schema(CopyDataSpec *specs);
 

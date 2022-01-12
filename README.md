@@ -19,7 +19,7 @@ with this simple command line:
 $ export PGCOPYDB_SOURCE_PGURI="postgres://user@source.host.dev/dbname"
 $ export PGCOPYDB_TARGET_PGURI="postgres://role@target.host.dev/dbname"
 
-$ pgcopydb copy db --table-jobs 8 --index-jobs 2
+$ pgcopydb copy-db --table-jobs 8 --index-jobs 2
 ```
 
 A typical output from the command would contain lots of lines of logs, and

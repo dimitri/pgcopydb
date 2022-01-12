@@ -19,8 +19,6 @@ typedef struct DumpDBOptions
 {
 	char source_pguri[MAXCONNINFO];
 	char target_dir[MAXPGPATH];
-	char schema_name[NAMEDATALEN];
-	char table_name[NAMEDATALEN];
 } DumpDBOptions;
 
 

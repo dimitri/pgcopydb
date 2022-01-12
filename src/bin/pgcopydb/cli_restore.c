@@ -13,6 +13,7 @@
 #include "cli_root.h"
 #include "copydb.h"
 #include "commandline.h"
+#include "env_utils.h"
 #include "log.h"
 #include "pgcmd.h"
 #include "pgsql.h"
@@ -20,35 +21,47 @@
 
 RestoreDBOptions restoreDBoptions = { 0 };
 
-static int cli_restore_db_getopts(int argc, char **argv);
-static void cli_restore_db(int argc, char **argv);
+static int cli_restore_schema_getopts(int argc, char **argv);
+static void cli_restore_schema(int argc, char **argv);
+static void cli_restore_schema_pre_data(int argc, char **argv);
+static void cli_restore_schema_post_data(int argc, char **argv);
 
-static CommandLine restore_db_command =
+static void cli_restore_prepare_specs(CopyDataSpec *copySpecs);
+
+static CommandLine restore_schema_command =
 	make_command(
-		"db",
-		"Restore an entire database from source to target (schema only)",
-		" --source ... --target ... ",
-		"  --source          Directory where to save the restore files\n"
+		"schema",
+		"Restore a database schema from custom files to target database",
+		" --source <dir> --target <URI> ",
+		"  --source          Directory where to find the schema custom files\n"
 		"  --target          Postgres URI to the source database\n",
-		cli_restore_db_getopts,
-		cli_restore_db);
+		cli_restore_schema_getopts,
+		cli_restore_schema);
 
-static CommandLine restore_table_command =
+static CommandLine restore_schema_pre_data_command =
 	make_command(
-		"table",
-		"Restore a given table from source to target (schema only)",
-		" --source ... --target ... ",
-		"  --source          Directory where to save the restore files\n"
-		"  --target          Postgres URI to the source database\n"
-		"  --schema-name     Name of the schema where to find the table\n"
-		"  --table-name      Name of the target table\n",
-		cli_restore_db_getopts,
-		cli_restore_db);
+		"pre-data",
+		"Restore a database pre-data schema from custom file to target database",
+		" --source <dir> --target <URI> ",
+		"  --source          Directory where to find the schema custom files\n"
+		"  --target          Postgres URI to the source database\n",
+		cli_restore_schema_getopts,
+		cli_restore_schema_pre_data);
 
+static CommandLine restore_schema_post_data_command =
+	make_command(
+		"post-data",
+		"Restore a database post-data schema from custom file to target database",
+		" --source <dir> --target <URI> ",
+		"  --source          Directory where to find the schema custom files\n"
+		"  --target          Postgres URI to the source database\n",
+		cli_restore_schema_getopts,
+		cli_restore_schema_post_data);
 
 static CommandLine *restore_subcommands[] = {
-	&restore_db_command,
-	&restore_table_command,
+	&restore_schema_command,
+	&restore_schema_pre_data_command,
+	&restore_schema_post_data_command,
 	NULL
 };
 
@@ -59,10 +72,10 @@ CommandLine restore_commands =
 
 
 /*
- * cli_restore_db_getopts parses the CLI options for the `restore db` command.
+ * cli_restore_schema_getopts parses the CLI options for the `restore db` command.
  */
 static int
-cli_restore_db_getopts(int argc, char **argv)
+cli_restore_schema_getopts(int argc, char **argv)
 {
 	RestoreDBOptions options = { 0 };
 	int c, option_index = 0;
@@ -81,9 +94,6 @@ cli_restore_db_getopts(int argc, char **argv)
 	};
 
 	optind = 0;
-
-	/* install default values */
-	strlcpy(options.schema_name, "public", NAMEDATALEN);
 
 	while ((c = getopt_long(argc, argv, "S:T:j:s:t:Vvqh",
 							long_options, &option_index)) != -1)
@@ -107,20 +117,6 @@ cli_restore_db_getopts(int argc, char **argv)
 				}
 				strlcpy(options.target_pguri, optarg, MAXCONNINFO);
 				log_trace("--target %s", options.target_pguri);
-				break;
-			}
-
-			case 's':
-			{
-				strlcpy(options.schema_name, optarg, NAMEDATALEN);
-				log_trace("--schema %s", options.schema_name);
-				break;
-			}
-
-			case 't':
-			{
-				strlcpy(options.table_name, optarg, NAMEDATALEN);
-				log_trace("--table %s", options.table_name);
 				break;
 			}
 
@@ -178,6 +174,21 @@ cli_restore_db_getopts(int argc, char **argv)
 		++errors;
 	}
 
+	/* restore commands support the target URI environment variable */
+	if (IS_EMPTY_STRING_BUFFER(options.target_pguri))
+	{
+		if (env_exists(PGCOPYDB_TARGET_PGURI))
+		{
+			if (!get_env_copy(PGCOPYDB_TARGET_PGURI,
+							  options.target_pguri,
+							  sizeof(options.target_pguri)))
+			{
+				/* errors have already been logged */
+				++errors;
+			}
+		}
+	}
+
 	if (IS_EMPTY_STRING_BUFFER(options.target_pguri))
 	{
 		log_fatal("Option --target is mandatory");
@@ -197,16 +208,73 @@ cli_restore_db_getopts(int argc, char **argv)
 
 
 /*
- * cli_restore_db implements the command: pgrestoredb restore db
+ * cli_restore_schema implements the command: pgrestoredb restore schema
  */
 static void
-cli_restore_db(int argc, char **argv)
+cli_restore_schema(int argc, char **argv)
+{
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) cli_restore_prepare_specs(&copySpecs);
+
+	if (!copydb_target_prepare_schema(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_TARGET);
+	}
+
+	if (!copydb_target_finalize_schema(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_TARGET);
+	}
+}
+
+
+/*
+ * cli_restore_schema implements the command: pgrestoredb restore pre-data
+ */
+static void
+cli_restore_schema_pre_data(int argc, char **argv)
+{
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) cli_restore_prepare_specs(&copySpecs);
+
+	if (!copydb_target_prepare_schema(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_TARGET);
+	}
+}
+
+
+/*
+ * cli_restore_schema implements the command: pgrestoredb restore post-data
+ */
+static void
+cli_restore_schema_post_data(int argc, char **argv)
+{
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) cli_restore_prepare_specs(&copySpecs);
+
+	if (!copydb_target_finalize_schema(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_TARGET);
+	}
+}
+
+
+static void
+cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 {
 	CopyFilePaths cfPaths = { 0 };
 	PostgresPaths pgPaths = { 0 };
 
 	log_info("Restoring database from \"%s\"", restoreDBoptions.source_dir);
-	log_info("Restoring database into directory \"%s\"",
+	log_info("Restoring database into \"%s\"",
 			 restoreDBoptions.target_pguri);
 
 	(void) find_pg_commands(&pgPaths);
@@ -221,9 +289,7 @@ cli_restore_db(int argc, char **argv)
 			 pgPaths.pg_version,
 			 pgPaths.pg_restore);
 
-	CopyDataSpec copySpecs = { 0 };
-
-	if (!copydb_init_specs(&copySpecs,
+	if (!copydb_init_specs(copySpecs,
 						   &cfPaths,
 						   &pgPaths,
 						   NULL, /* source_pguri */
@@ -233,17 +299,5 @@ cli_restore_db(int argc, char **argv)
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	if (!copydb_target_prepare_schema(&copySpecs))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_TARGET);
-	}
-
-	if (!copydb_target_finalize_schema(&copySpecs))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_TARGET);
 	}
 }

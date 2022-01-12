@@ -13,6 +13,7 @@
 #include "cli_root.h"
 #include "copydb.h"
 #include "commandline.h"
+#include "env_utils.h"
 #include "log.h"
 #include "pgcmd.h"
 #include "pgsql.h"
@@ -20,35 +21,48 @@
 
 DumpDBOptions dumpDBoptions = { 0 };
 
-static int cli_dump_db_getopts(int argc, char **argv);
-static void cli_dump_db(int argc, char **argv);
+static int cli_dump_schema_getopts(int argc, char **argv);
+static void cli_dump_schema(int argc, char **argv);
+static void cli_dump_schema_pre_data(int argc, char **argv);
+static void cli_dump_schema_post_data(int argc, char **argv);
 
-static CommandLine dump_db_command =
+static void cli_dump_schema_section(DumpDBOptions *dumpDBoptions,
+									PostgresDumpSection section);
+
+static CommandLine dump_schema_command =
 	make_command(
-		"db",
-		"Dump an entire database from source to target (schema only)",
-		" --source ... --target ... ",
+		"schema",
+		"Dump source database schema as custom files in target directory",
+		" --source <URI> --target <dir> ",
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Directory where to save the dump files\n",
-		cli_dump_db_getopts,
-		cli_dump_db);
+		cli_dump_schema_getopts,
+		cli_dump_schema);
 
-static CommandLine dump_table_command =
+static CommandLine dump_schema_pre_data_command =
 	make_command(
-		"table",
-		"Dump a given table from source to target (schema only)",
-		" --source ... --target ... ",
+		"pre-data",
+		"Dump source database pre-data schema as custom files in target directory",
+		" --source <URI> --target <dir> ",
 		"  --source          Postgres URI to the source database\n"
-		"  --target          Directory where to save the dump files\n"
-		"  --schema-name     Name of the schema where to find the table\n"
-		"  --table-name      Name of the target table\n",
-		cli_dump_db_getopts,
-		cli_dump_db);
+		"  --target          Directory where to save the dump files\n",
+		cli_dump_schema_getopts,
+		cli_dump_schema_pre_data);
 
+static CommandLine dump_schema_post_data_command =
+	make_command(
+		"post-data",
+		"Dump source database post-data schema as custom files in target directory",
+		" --source <URI> --target <dir>",
+		"  --source          Postgres URI to the source database\n"
+		"  --target          Directory where to save the dump files\n",
+		cli_dump_schema_getopts,
+		cli_dump_schema_post_data);
 
 static CommandLine *dump_subcommands[] = {
-	&dump_db_command,
-	&dump_table_command,
+	&dump_schema_command,
+	&dump_schema_pre_data_command,
+	&dump_schema_post_data_command,
 	NULL
 };
 
@@ -59,10 +73,10 @@ CommandLine dump_commands =
 
 
 /*
- * cli_dump_db_getopts parses the CLI options for the `dump db` command.
+ * cli_dump_schema_getopts parses the CLI options for the `dump db` command.
  */
 static int
-cli_dump_db_getopts(int argc, char **argv)
+cli_dump_schema_getopts(int argc, char **argv)
 {
 	DumpDBOptions options = { 0 };
 	int c, option_index = 0;
@@ -71,8 +85,6 @@ cli_dump_db_getopts(int argc, char **argv)
 	static struct option long_options[] = {
 		{ "source", required_argument, NULL, 'S' },
 		{ "target", required_argument, NULL, 'T' },
-		{ "schema", required_argument, NULL, 's' },
-		{ "table", required_argument, NULL, 't' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "quiet", no_argument, NULL, 'q' },
@@ -81,9 +93,6 @@ cli_dump_db_getopts(int argc, char **argv)
 	};
 
 	optind = 0;
-
-	/* install default values */
-	strlcpy(options.schema_name, "public", NAMEDATALEN);
 
 	while ((c = getopt_long(argc, argv, "S:T:j:s:t:Vvqh",
 							long_options, &option_index)) != -1)
@@ -107,20 +116,6 @@ cli_dump_db_getopts(int argc, char **argv)
 			{
 				strlcpy(options.target_dir, optarg, MAXPGPATH);
 				log_trace("--target %s", options.target_dir);
-				break;
-			}
-
-			case 's':
-			{
-				strlcpy(options.schema_name, optarg, NAMEDATALEN);
-				log_trace("--schema %s", options.schema_name);
-				break;
-			}
-
-			case 't':
-			{
-				strlcpy(options.table_name, optarg, NAMEDATALEN);
-				log_trace("--table %s", options.table_name);
 				break;
 			}
 
@@ -172,6 +167,21 @@ cli_dump_db_getopts(int argc, char **argv)
 		}
 	}
 
+	/* dump commands support the source URI environment variable */
+	if (IS_EMPTY_STRING_BUFFER(options.source_pguri))
+	{
+		if (env_exists(PGCOPYDB_SOURCE_PGURI))
+		{
+			if (!get_env_copy(PGCOPYDB_SOURCE_PGURI,
+							  options.source_pguri,
+							  sizeof(options.source_pguri)))
+			{
+				/* errors have already been logged */
+				++errors;
+			}
+		}
+	}
+
 	if (IS_EMPTY_STRING_BUFFER(options.source_pguri))
 	{
 		log_fatal("Option --source is mandatory");
@@ -197,20 +207,52 @@ cli_dump_db_getopts(int argc, char **argv)
 
 
 /*
- * cli_dump_db implements the command: pgdumpdb dump db
+ * cli_dump_schema implements the command: pgcopydb dump schema
  */
 static void
-cli_dump_db(int argc, char **argv)
+cli_dump_schema(int argc, char **argv)
+{
+	(void) cli_dump_schema_section(&dumpDBoptions, PG_DUMP_SECTION_SCHEMA);
+}
+
+
+/*
+ * cli_dump_schema implements the command: pgcopydb dump pre-data
+ */
+static void
+cli_dump_schema_pre_data(int argc, char **argv)
+{
+	(void) cli_dump_schema_section(&dumpDBoptions, PG_DUMP_SECTION_PRE_DATA);
+}
+
+
+/*
+ * cli_dump_schema implements the command: pgcopydb dump post-data
+ */
+static void
+cli_dump_schema_post_data(int argc, char **argv)
+{
+	(void) cli_dump_schema_section(&dumpDBoptions, PG_DUMP_SECTION_POST_DATA);
+}
+
+
+/*
+ * cli_dump_schema_section implements the actual work for the commands in this
+ * file.
+ */
+static void
+cli_dump_schema_section(DumpDBOptions *dumpDBoptions,
+						PostgresDumpSection section)
 {
 	CopyFilePaths cfPaths = { 0 };
 	PostgresPaths pgPaths = { 0 };
 
-	log_info("Dumping database from \"%s\"", dumpDBoptions.source_pguri);
-	log_info("Dumping database into directory \"%s\"", dumpDBoptions.target_dir);
+	log_info("Dumping database from \"%s\"", dumpDBoptions->source_pguri);
+	log_info("Dumping database into directory \"%s\"", dumpDBoptions->target_dir);
 
 	(void) find_pg_commands(&pgPaths);
 
-	if (!copydb_init_workdir(&cfPaths, dumpDBoptions.target_dir))
+	if (!copydb_init_workdir(&cfPaths, dumpDBoptions->target_dir))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -225,7 +267,7 @@ cli_dump_db(int argc, char **argv)
 	if (!copydb_init_specs(&copySpecs,
 						   &cfPaths,
 						   &pgPaths,
-						   dumpDBoptions.source_pguri,
+						   dumpDBoptions->source_pguri,
 						   NULL, /* target_pguri */
 						   1,    /* table jobs */
 						   1))   /* index jobs */
@@ -234,7 +276,7 @@ cli_dump_db(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (!copydb_dump_source_schema(&copySpecs))
+	if (!copydb_dump_source_schema(&copySpecs, section))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

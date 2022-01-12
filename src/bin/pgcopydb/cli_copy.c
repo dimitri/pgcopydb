@@ -26,9 +26,9 @@ static int cli_copy_db_getopts(int argc, char **argv);
 static void cli_copy_db(int argc, char **argv);
 
 
-static CommandLine copy_db_command =
+CommandLine copy_db_command =
 	make_command(
-		"db",
+		"copy-db",
 		"Copy an entire database from source to target",
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
 		"  --source          Postgres URI to the source database\n"
@@ -37,32 +37,6 @@ static CommandLine copy_db_command =
 		"  --index-jobs      Number of concurrent CREATE INDEX jobs to run\n",
 		cli_copy_db_getopts,
 		cli_copy_db);
-
-static CommandLine copy_table_command =
-	make_command(
-		"table",
-		"Copy a given table from source to target",
-		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
-		"  --source          Postgres URI to the source database\n"
-		"  --target          Postgres URI to the target database\n"
-		"  --schema-name     Name of the schema where to find the table\n"
-		"  --table-name      Name of the target table\n"
-		"  --table-jobs      Number of concurrent COPY jobs to run\n"
-		"  --index-jobs      Number of concurrent CREATE INDEX jobs to run\n",
-		cli_copy_db_getopts,
-		cli_copy_db);
-
-
-static CommandLine *copy_subcommands[] = {
-	&copy_db_command,
-	&copy_table_command,
-	NULL
-};
-
-CommandLine copy_commands =
-	make_command_set("copy",
-					 "Copy database objects from a Postgres instance to another",
-					 NULL, NULL, NULL, copy_subcommands);
 
 
 /*
@@ -81,8 +55,6 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "jobs", required_argument, NULL, 'J' },
 		{ "table-jobs", required_argument, NULL, 'J' },
 		{ "index-jobs", required_argument, NULL, 'I' },
-		{ "schema", required_argument, NULL, 's' },
-		{ "table", required_argument, NULL, 't' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "quiet", no_argument, NULL, 'q' },
@@ -95,8 +67,6 @@ cli_copy_db_getopts(int argc, char **argv)
 	/* install default values */
 	options.tableJobs = 4;
 	options.indexJobs = 4;
-
-	strlcpy(options.schema_name, "public", NAMEDATALEN);
 
 	/* read values from the environment */
 	if (!cli_copydb_getenv(&options))
@@ -159,20 +129,6 @@ cli_copy_db_getopts(int argc, char **argv)
 					++errors;
 				}
 				log_trace("--jobs %d", options.indexJobs);
-				break;
-			}
-
-			case 's':
-			{
-				strlcpy(options.schema_name, optarg, NAMEDATALEN);
-				log_trace("--schema %s", options.schema_name);
-				break;
-			}
-
-			case 't':
-			{
-				strlcpy(options.table_name, optarg, NAMEDATALEN);
-				log_trace("--table %s", options.table_name);
 				break;
 			}
 
@@ -367,7 +323,7 @@ cli_copy_db(int argc, char **argv)
 
 	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_SCHEMA_DUMP);
 
-	if (!copydb_dump_source_schema(&copySpecs))
+	if (!copydb_dump_source_schema(&copySpecs, PG_DUMP_SECTION_SCHEMA))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

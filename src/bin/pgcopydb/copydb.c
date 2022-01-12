@@ -360,24 +360,34 @@ copydb_objectid_has_been_processed_already(CopyDataSpec *specs, uint32_t oid)
  * --section=post-data to dump the source database schema to files.
  */
 bool
-copydb_dump_source_schema(CopyDataSpec *specs)
+copydb_dump_source_schema(CopyDataSpec *specs, PostgresDumpSection section)
 {
-	if (!pg_dump_db(specs->pgPaths,
-					specs->source_pguri,
-					"pre-data",
-					specs->dumpPaths.preFilename))
+	if (section == PG_DUMP_SECTION_SCHEMA ||
+		section == PG_DUMP_SECTION_PRE_DATA ||
+		section == PG_DUMP_SECTION_ALL)
 	{
-		/* errors have already been logged */
-		return false;
+		if (!pg_dump_db(specs->pgPaths,
+						specs->source_pguri,
+						"pre-data",
+						specs->dumpPaths.preFilename))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
-	if (!pg_dump_db(specs->pgPaths,
-					specs->source_pguri,
-					"post-data",
-					specs->dumpPaths.postFilename))
+	if (section == PG_DUMP_SECTION_SCHEMA ||
+		section == PG_DUMP_SECTION_POST_DATA ||
+		section == PG_DUMP_SECTION_ALL)
 	{
-		/* errors have already been logged */
-		return false;
+		if (!pg_dump_db(specs->pgPaths,
+						specs->source_pguri,
+						"post-data",
+						specs->dumpPaths.postFilename))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	return true;

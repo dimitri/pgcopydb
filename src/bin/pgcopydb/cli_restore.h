@@ -19,8 +19,6 @@ typedef struct RestoreDBOptions
 {
 	char source_dir[MAXPGPATH];
 	char target_pguri[MAXCONNINFO];
-	char schema_name[NAMEDATALEN];
-	char table_name[NAMEDATALEN];
 } RestoreDBOptions;
 
 

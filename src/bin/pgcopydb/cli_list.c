@@ -12,6 +12,7 @@
 #include "cli_list.h"
 #include "cli_root.h"
 #include "commandline.h"
+#include "env_utils.h"
 #include "log.h"
 #include "pgcmd.h"
 #include "pgsql.h"
@@ -156,6 +157,21 @@ cli_list_db_getopts(int argc, char **argv)
 				commandline_help(stderr);
 				exit(EXIT_CODE_QUIT);
 				break;
+			}
+		}
+	}
+
+	/* list commands support the source URI environment variable */
+	if (IS_EMPTY_STRING_BUFFER(options.source_pguri))
+	{
+		if (env_exists(PGCOPYDB_SOURCE_PGURI))
+		{
+			if (!get_env_copy(PGCOPYDB_SOURCE_PGURI,
+							  options.source_pguri,
+							  sizeof(options.source_pguri)))
+			{
+				/* errors have already been logged */
+				++errors;
 			}
 		}
 	}
