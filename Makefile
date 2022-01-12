@@ -11,7 +11,7 @@ bin:
 clean:
 	$(MAKE) -C src/bin/ clean
 
-test:
+test: build
 	$(MAKE) -C tests all
 
 tests: test ;
@@ -22,6 +22,8 @@ install: bin
 indent:
 	citus_indent
 
+build:
+	docker build -t pgcopydb .
 
 .PHONY: all
 .PHONY: bin clean install
