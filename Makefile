@@ -11,6 +11,9 @@ bin:
 clean:
 	$(MAKE) -C src/bin/ clean
 
+docs:
+	$(MAKE) -C docs clean man html
+
 test: build
 	$(MAKE) -C tests all
 
@@ -26,5 +29,5 @@ build:
 	docker build -t pgcopydb .
 
 .PHONY: all
-.PHONY: bin clean install
+.PHONY: bin clean install docs
 .PHONY: test tests
