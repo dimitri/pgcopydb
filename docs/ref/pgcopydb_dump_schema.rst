@@ -23,6 +23,17 @@ definitions from the given source Postgres instance.
 Description
 -----------
 
+The ``pgcopydb dump schema`` command implements the first step of the full
+database migration and fetches the schema definitions from the source
+database.
+
+When the command runs, it calls ``pg_dump`` to get first the pre-data schema
+output in a Postgres custom file, and then again to get the post-data schema
+output in another Postgres custom file.
+
+The output files are written to the ``schema`` sub-directory of the
+``--target`` directory.
+
 Options
 -------
 
@@ -39,7 +50,7 @@ The following options are available to ``pg_autoctl create postgres``:
 
 --target
 
-  Connection string to the target Postgres instance.
+  Target directory where to write output and temporary files.
 
 Environment
 -----------
@@ -49,7 +60,33 @@ PGCOPYDB_SOURCE_PGURI
   Connection string to the source Postgres instance. When ``--source`` is
   ommitted from the command line, then this environment variable is used.
 
-PGCOPYDB_TARGET_PGURI
+Examples
+--------
 
-  Connection string to the target Postgres instance. When ``--target`` is
-  ommitted from the command line, then this environment variable is used.
+::
+
+   $ pgcopydb dump schema --source "port=5501 dbname=demo" --target /tmp/target
+   09:35:21 3926 INFO  Dumping database from "port=5501 dbname=demo"
+   09:35:21 3926 INFO  Dumping database into directory "/tmp/target"
+   09:35:21 3926 INFO  Found a stale pidfile at "/tmp/target/pgcopydb.pid"
+   09:35:21 3926 WARN  Removing the stale pid file "/tmp/target/pgcopydb.pid"
+   09:35:21 3926 INFO  Using pg_dump for Postgres "12.9" at "/Applications/Postgres.app/Contents/Versions/12/bin/pg_dump"
+   09:35:21 3926 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_dump -Fc --section pre-data --file /tmp/target/schema/pre.dump 'port=5501 dbname=demo'
+   09:35:22 3926 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_dump -Fc --section post-data --file /tmp/target/schema/post.dump 'port=5501 dbname=demo'
+
+
+Once the previous command is finished, the pg_dump output files can be found
+in ``/tmp/target/schema`` and are named ``pre.dump`` and ``post.dump``.
+Other files and directories have been created.
+
+::
+
+   $ find /tmp/target
+   /tmp/target
+   /tmp/target/pgcopydb.pid
+   /tmp/target/schema
+   /tmp/target/schema/post.dump
+   /tmp/target/schema/pre.dump
+   /tmp/target/run
+   /tmp/target/run/tables
+   /tmp/target/run/indexes
