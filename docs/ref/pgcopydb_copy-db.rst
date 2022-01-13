@@ -144,3 +144,42 @@ PGCOPYDB_DROP_IF_EXISTS
    When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
    then pgcopydb uses the pg_restore options ``--clean --if-exists`` when
    creating the schema on the target Postgres instance.
+
+
+Examples
+--------
+
+::
+
+   $ export PGCOPYDB_SOURCE_PGURI="port=54311 host=localhost dbname=pgloader"
+   $ export PGCOPYDB_TARGET_PGURI="port=54311 dbname=plop"
+   $ export PGCOPYDB_DROP_IF_EXISTS=on
+
+   $ pgcopydb copy-db --table-jobs 8 --index-jobs 12
+   10:04:49 29268 INFO  [SOURCE] Copying database from "port=54311 host=localhost dbname=pgloader"
+   10:04:49 29268 INFO  [TARGET] Copying database into "port=54311 dbname=plop"
+   10:04:49 29268 INFO  Found a stale pidfile at "/tmp/pgcopydb/pgcopydb.pid"
+   10:04:49 29268 WARN  Removing the stale pid file "/tmp/pgcopydb/pgcopydb.pid"
+   10:04:49 29268 WARN  Directory "/tmp/pgcopydb" already exists: removing it entirely
+   10:04:49 29268 INFO  STEP 1: dump the source database schema (pre/post data)
+   ...
+   10:04:52 29268 INFO  STEP 3: copy data from source to target in sub-processes
+   10:04:52 29268 INFO  STEP 4: create indexes and constraints in parallel
+   10:04:52 29268 INFO  STEP 5: vacuum analyze each table
+   10:04:52 29268 INFO  Listing ordinary tables in "port=54311 host=localhost dbname=pgloader"
+   10:04:52 29268 INFO  Fetched information for 56 tables
+   ...
+   10:04:53 29268 INFO  STEP 6: restore the post-data section to the target database
+   ...
+
+                                             Step   Connection    Duration   Concurrency
+    ---------------------------------------------   ----------  ----------  ------------
+                                      Dump Schema       source       1s275             1
+                                   Prepare Schema       target       1s560             1
+    COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both       1s095        8 + 12
+                                COPY (cumulative)         both       2s645             8
+                        CREATE INDEX (cumulative)       target       333ms            12
+                                  Finalize Schema       target        29ms             1
+    ---------------------------------------------   ----------  ----------  ------------
+                        Total Wall Clock Duration         both       4s013        8 + 12
+    ---------------------------------------------   ----------  ----------  ------------
