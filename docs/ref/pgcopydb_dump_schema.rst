@@ -37,7 +37,7 @@ The output files are written to the ``schema`` sub-directory of the
 Options
 -------
 
-The following options are available to ``pg_autoctl create postgres``:
+The following options are available to ``pgcopydb dump schema``:
 
 --source
 

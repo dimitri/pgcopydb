@@ -70,7 +70,7 @@ The ``pgcopydb copy-db`` command implements the following steps:
 Options
 -------
 
-The following options are available to ``pg_autoctl create postgres``:
+The following options are available to ``pgcopydb copy-db``:
 
 --source
 

@@ -1,9 +1,9 @@
-.. _pg_autoctl_dump:
+.. _pgcopydb_dump:
 
-pg_autoctl dump
+pgcopydb dump
 ===============
 
-pg_autoctl dump - Dump database objects from a Postgres instance
+pgcopydb dump - Dump database objects from a Postgres instance
 
 .. toctree::
    :maxdepth: 1

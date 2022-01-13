@@ -35,7 +35,7 @@ To get the full recursive list of supported commands, use::
 Version
 -------
 
-To grab the version of pg_autoctl that you're using, use::
+To grab the version of pgcopydb that you're using, use::
 
    pgcopydb --version
    pgcopydb version
