@@ -1,0 +1,21 @@
+#!/usr/bin/make -f
+
+override_dh_auto_build:
+	+make -C $(shell pwd)/src/bin/pgcopydb
+	+make -C $(shell pwd)/docs man
+
+override_dh_auto_clean:
+	+make -C $(shell pwd)/src/bin/pgcopydb clean
+	+make -C $(shell pwd)/docs clean
+
+override_dh_auto_test:
+	# nothing to do here, see debian/tests/* instead
+
+override_dh_auto_install:
+	+make -C $(shell pwd)/src/bin/pgcopydb install \
+		DESTDIR=$(CURDIR)/debian/pgcopydb \
+		BINDIR=/usr/bin
+	dh_installman docs/_build/man/*
+
+%:
+	dh $@

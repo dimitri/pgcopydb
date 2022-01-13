@@ -1,0 +1,47 @@
+FROM debian:sid
+
+ENV TAR v0.1.tar.gz
+ENV ORIG pgcopydb_0.1.orig.tar.gz
+ENV WORKDIR /usr/src/pgcopydb-0.1
+ENV ARCHIVE https://github.com/dimitri/pgcopydb/archive/refs/tags/
+ENV RELEASE ${ARCHIVE}${TAR}
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+        build-essential \
+        devscripts \
+        debhelper \
+        autotools-dev \
+        flex \
+        libedit-dev \
+        libpam0g-dev \
+        libreadline-dev \
+        libselinux1-dev \
+        libxslt1-dev \
+        libssl-dev \
+        libkrb5-dev \
+        zlib1g-dev \
+        liblz4-dev \
+    	libpq5 \
+        libpq-dev \
+        postgresql-server-dev-all \
+        postgresql-common \
+        python3-sphinx \
+        lintian \
+        curl \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /usr/src
+
+RUN curl -L -o ${TAR} ${RELEASE}
+RUN tar xf ${TAR}
+RUN mv ${TAR} ${ORIG}
+
+WORKDIR ${WORKDIR}
+COPY ./debian/ ./debian/
+
+RUN dpkg-buildpackage --no-sign
+
+WORKDIR /usr/src
+
+#RUN lintian --suppress-tags bad-whatis-entry *.changes

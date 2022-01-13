@@ -28,6 +28,13 @@ indent:
 build:
 	docker build -t pgcopydb .
 
+deb:
+	docker build -f Dockerfile.debian -t pgcopydb_debian .
+
+debsh: deb
+	docker run --rm -it pgcopydb_debian bash
+
 .PHONY: all
 .PHONY: bin clean install docs
 .PHONY: test tests
+.PHONY: deb
