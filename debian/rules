@@ -9,7 +9,7 @@ override_dh_auto_clean:
 	$(MAKE) -C docs clean
 
 override_dh_auto_test:
-	debian/tests/copydb
+	PATH=$(CURDIR)/src/bin/pgcopydb:$(PATH) debian/tests/copydb
 
 override_dh_auto_install:
 	$(MAKE) -C src/bin/pgcopydb install \
