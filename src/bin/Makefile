@@ -1,4 +1,4 @@
-# Copyright (c) Microsoft Corporation. All rights reserved.
+# Copyright (c) 2021 The PostgreSQL Global Development Group.
 # Licensed under the PostgreSQL License.
 
 all: pgcopydb ;
