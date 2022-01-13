@@ -12,7 +12,6 @@ RUN apt-get update \
         devscripts \
         debhelper \
         autotools-dev \
-        flex \
         libedit-dev \
         libpam0g-dev \
         libreadline-dev \

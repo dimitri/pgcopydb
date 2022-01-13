@@ -1,0 +1,13 @@
+#!/bin/sh
+
+set -eux
+
+pg_virtualenv << EOF
+  set -eux
+  createdb src
+  createdb dst
+  psql -c 'create table foo as select 123+456' src
+  pgcopydb copy-db --source "dbname=src" --target "dbname=dst"
+  pg_dump -t foo dst
+  pg_dump -t foo dst | grep 579
+EOF
