@@ -1,8 +1,8 @@
 FROM debian:sid
 
-ENV TAR v0.1.tar.gz
-ENV ORIG pgcopydb_0.1.orig.tar.gz
-ENV WORKDIR /usr/src/pgcopydb-0.1
+ENV TAR v0.2.tar.gz
+ENV ORIG pgcopydb_0.2.orig.tar.gz
+ENV WORKDIR /usr/src/pgcopydb-0.2
 ENV ARCHIVE https://github.com/dimitri/pgcopydb/archive/refs/tags/
 ENV RELEASE ${ARCHIVE}${TAR}
 
@@ -25,6 +25,7 @@ RUN apt-get update \
         libpq-dev \
         postgresql-server-dev-all \
         postgresql-common \
+        postgresql \
         python3-sphinx \
         lintian \
         curl \
