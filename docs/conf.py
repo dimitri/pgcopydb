@@ -104,4 +104,11 @@ man_pages = [
         [author],
         1,
     ),
+    (
+        "ref/pgcopydb_list",
+        "pgcopydb list",
+        "pgcopydb list",
+        [author],
+        1,
+    ),
 ]
