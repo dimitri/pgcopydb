@@ -22,6 +22,7 @@ typedef struct CopyDBOptions
 	int tableJobs;
 	int indexJobs;
 	bool dropIfExists;
+	bool noOwner;
 } CopyDBOptions;
 
 

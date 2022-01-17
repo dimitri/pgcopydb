@@ -20,6 +20,7 @@ typedef struct RestoreDBOptions
 	char source_dir[MAXPGPATH];
 	char target_pguri[MAXCONNINFO];
 	bool dropIfExists;
+	bool noOwner;
 } RestoreDBOptions;
 
 

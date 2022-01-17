@@ -271,7 +271,8 @@ cli_dump_schema_section(DumpDBOptions *dumpDBoptions,
 						   NULL, /* target_pguri */
 						   1,    /* table jobs */
 						   1,    /* index jobs */
-						   false /* dropIfExists */))
+						   false, /* dropIfExists */
+						   false)) /* noOwner */
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

@@ -113,6 +113,7 @@ typedef struct CopyDataSpec
 	char *target_pguri;
 
 	bool dropIfExists;
+	bool noOwner;
 
 	int tableJobs;
 	int indexJobs;
@@ -143,7 +144,8 @@ bool copydb_init_specs(CopyDataSpec *specs,
 					   char *target_pguri,
 					   int tableJobs,
 					   int indexJobs,
-					   bool dropIfExists);
+					   bool dropIfExists,
+					   bool noOwner);
 
 bool copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 							 CopyDataSpec *specs,

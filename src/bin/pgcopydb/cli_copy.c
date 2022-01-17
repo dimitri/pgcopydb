@@ -36,7 +36,8 @@ CommandLine copy_db_command =
 		"  --target          Postgres URI to the target database\n"
 		"  --table-jobs      Number of concurrent COPY jobs to run\n"
 		"  --index-jobs      Number of concurrent CREATE INDEX jobs to run\n"
-		"  --drop-if-exists  On the target database, clean-up from a previous run first\n",
+		"  --drop-if-exists  On the target database, clean-up from a previous run first\n"
+		"  --no-owner        Do not set ownership of objects to match the original database\n",
 		cli_copy_db_getopts,
 		cli_copy_db);
 
@@ -58,6 +59,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "table-jobs", required_argument, NULL, 'J' },
 		{ "index-jobs", required_argument, NULL, 'I' },
 		{ "drop-if-exists", no_argument, NULL, 'c' }, /* pg_restore -c */
+		{ "no-owner", no_argument, NULL, 'O' },       /* pg_restore -O */
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "quiet", no_argument, NULL, 'q' },
@@ -78,7 +80,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:J:I:cVvqh",
+	while ((c = getopt_long(argc, argv, "S:T:J:I:cOVvqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -139,6 +141,13 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				options.dropIfExists = true;
 				log_trace("--drop-if-exists");
+				break;
+			}
+
+			case 'O':
+			{
+				options.noOwner = true;
+				log_trace("--no-owner");
 				break;
 			}
 
@@ -349,7 +358,8 @@ cli_copy_db(int argc, char **argv)
 						   copyDBoptions.target_pguri,
 						   copyDBoptions.tableJobs,
 						   copyDBoptions.indexJobs,
-						   copyDBoptions.dropIfExists))
+						   copyDBoptions.dropIfExists,
+						   copyDBoptions.noOwner))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

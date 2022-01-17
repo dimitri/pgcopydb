@@ -36,7 +36,8 @@ static CommandLine restore_schema_command =
 		" --source <dir> --target <URI> ",
 		"  --source          Directory where to find the schema custom files\n"
 		"  --target          Postgres URI to the source database\n"
-		"  --drop-if-exists  On the target database, clean-up from a previous run first\n",
+		"  --drop-if-exists  On the target database, clean-up from a previous run first\n"
+		"  --no-owner        Do not set ownership of objects to match the original database\n",
 		cli_restore_schema_getopts,
 		cli_restore_schema);
 
@@ -47,7 +48,8 @@ static CommandLine restore_schema_pre_data_command =
 		" --source <dir> --target <URI> ",
 		"  --source          Directory where to find the schema custom files\n"
 		"  --target          Postgres URI to the source database\n"
-		"  --drop-if-exists  On the target database, clean-up from a previous run first\n",
+		"  --drop-if-exists  On the target database, clean-up from a previous run first\n"
+		"  --no-owner        Do not set ownership of objects to match the original database\n",
 		cli_restore_schema_getopts,
 		cli_restore_schema_pre_data);
 
@@ -57,7 +59,8 @@ static CommandLine restore_schema_post_data_command =
 		"Restore a database post-data schema from custom file to target database",
 		" --source <dir> --target <URI> ",
 		"  --source          Directory where to find the schema custom files\n"
-		"  --target          Postgres URI to the source database\n",
+		"  --target          Postgres URI to the source database\n"
+		"  --no-owner        Do not set ownership of objects to match the original database\n",
 		cli_restore_schema_getopts,
 		cli_restore_schema_post_data);
 
@@ -89,6 +92,7 @@ cli_restore_schema_getopts(int argc, char **argv)
 		{ "target", required_argument, NULL, 'T' },
 		{ "schema", required_argument, NULL, 's' },
 		{ "drop-if-exists", no_argument, NULL, 'c' }, /* pg_restore -c */
+		{ "no-owner", no_argument, NULL, 'O' },       /* pg_restore -O */
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "quiet", no_argument, NULL, 'q' },
@@ -98,7 +102,7 @@ cli_restore_schema_getopts(int argc, char **argv)
 
 	optind = 0;
 
-	while ((c = getopt_long(argc, argv, "S:T:cVvqh",
+	while ((c = getopt_long(argc, argv, "S:T:cOVvqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -127,6 +131,13 @@ cli_restore_schema_getopts(int argc, char **argv)
 			{
 				options.dropIfExists = true;
 				log_trace("--drop-if-exists");
+				break;
+			}
+
+			case 'O':
+			{
+				options.noOwner = true;
+				log_trace("--no-owner");
 				break;
 			}
 
@@ -335,7 +346,8 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 						   restoreDBoptions.target_pguri,
 						   1,    /* table jobs */
 						   1,    /* index jobs */
-						   restoreDBoptions.dropIfExists))
+						   restoreDBoptions.dropIfExists,
+						   restoreDBoptions.noOwner))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

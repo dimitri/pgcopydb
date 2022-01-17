@@ -189,7 +189,8 @@ copydb_init_specs(CopyDataSpec *specs,
 				  char *target_pguri,
 				  int tableJobs,
 				  int indexJobs,
-				  bool dropIfExists)
+				  bool dropIfExists,
+				  bool noOwner)
 {
 	/* fill-in a structure with the help of the C compiler */
 	CopyDataSpec tmpCopySpecs = {
@@ -200,6 +201,7 @@ copydb_init_specs(CopyDataSpec *specs,
 		.target_pguri = target_pguri,
 
 		.dropIfExists = dropIfExists,
+		.noOwner = noOwner,
 
 		.tableJobs = tableJobs,
 		.indexJobs = indexJobs,
@@ -414,7 +416,8 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 					   specs->target_pguri,
 					   specs->dumpPaths.preFilename,
 					   NULL,
-					   specs->dropIfExists))
+					   specs->dropIfExists,
+					   specs->noOwner))
 	{
 		/* errors have already been logged */
 		return false;
@@ -509,7 +512,8 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 					   specs->target_pguri,
 					   specs->dumpPaths.postFilename,
 					   specs->dumpPaths.listFilename,
-					   specs->dropIfExists))
+					   specs->dropIfExists,
+					   specs->noOwner))
 	{
 		/* errors have already been logged */
 		return false;

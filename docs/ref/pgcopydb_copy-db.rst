@@ -21,6 +21,7 @@ Postgres instance to the target Postgres instance.
      --table-jobs      Number of concurrent COPY jobs to run
      --index-jobs      Number of concurrent CREATE INDEX jobs to run
      --drop-if-exists  On the target database, clean-up from a previous run first
+     --no-owner        Do not set ownership of objects to match the original database
 
 
 Description
@@ -113,6 +114,16 @@ The following options are available to ``pgcopydb copy-db``:
 
   This option causes ``DROP TABLE`` and ``DROP INDEX`` and other DROP
   commands to be used. Make sure you understand what you're doing here!
+
+--no-owner
+
+  Do not output commands to set ownership of objects to match the original
+  database. By default, ``pg_restore`` issues ``ALTER OWNER`` or ``SET
+  SESSION AUTHORIZATION`` statements to set ownership of created schema
+  elements. These statements will fail unless the initial connection to the
+  database is made by a superuser (or the same user that owns all of the
+  objects in the script). With ``--no-owner``, any user name can be used for
+  the initial connection, and this user will own all the created objects.
 
 Environment
 -----------

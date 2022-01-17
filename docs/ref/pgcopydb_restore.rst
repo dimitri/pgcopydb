@@ -34,6 +34,7 @@ be fed with the directory output from the ``pgcopydb dump ...`` commands.
      --source          Directory where to find the schema custom files
      --target          Postgres URI to the source database
      --drop-if-exists  On the target database, clean-up from a previous run first
+     --no-owner        Do not set ownership of objects to match the original database
 
 
 .. _pgcopydb_restore_pre_data:
@@ -56,6 +57,7 @@ be fed with the directory output from the ``pgcopydb dump ...`` commands.
      --source          Directory where to find the schema custom files
      --target          Postgres URI to the source database
      --drop-if-exists  On the target database, clean-up from a previous run first
+     --no-owner        Do not set ownership of objects to match the original database
 
 .. _pgcopydb_restore_post_data:
 
@@ -76,7 +78,8 @@ be fed with the directory output from the ``pgcopydb dump ...`` commands.
 
      --source          Directory where to find the schema custom files
      --target          Postgres URI to the source database
-     --drop-if-exists  On the target database, clean-up from a postvious run first
+     --drop-if-exists  On the target database, clean-up from a previous run first
+     --no-owner        Do not set ownership of objects to match the original database
 
 Description
 -----------
@@ -112,6 +115,29 @@ The following options are available to ``pgcopydb restore schema``:
   ``postgres://user@host:5432/dbname`` are supported.
 
   __ https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNSTRING
+
+--drop-if-exists
+
+  When restoring the schema on the target Postgres instance, ``pgcopydb``
+  actually uses ``pg_restore``. When this options is specified, then the
+  following pg_restore options are also used: ``--clean --if-exists``.
+
+  This option is useful when the same command is run several times in a row,
+  either to fix a previous mistake or for instance when used in a continuous
+  integration system.
+
+  This option causes ``DROP TABLE`` and ``DROP INDEX`` and other DROP
+  commands to be used. Make sure you understand what you're doing here!
+
+--no-owner
+
+  Do not output commands to set ownership of objects to match the original
+  database. By default, ``pg_restore`` issues ``ALTER OWNER`` or ``SET
+  SESSION AUTHORIZATION`` statements to set ownership of created schema
+  elements. These statements will fail unless the initial connection to the
+  database is made by a superuser (or the same user that owns all of the
+  objects in the script). With ``--no-owner``, any user name can be used for
+  the initial connection, and this user will own all the created objects.
 
 Environment
 -----------

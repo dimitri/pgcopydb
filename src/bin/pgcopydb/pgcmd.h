@@ -78,7 +78,8 @@ bool pg_restore_db(PostgresPaths *pgPaths,
 				   const char *pguri,
 				   const char *dumpFilename,
 				   const char *listFilename,
-				   bool dropIfExists);
+				   bool dropIfExists,
+				   bool noOwner);
 
 bool pg_restore_list(PostgresPaths *pgPaths, const char *filename,
 					 ArchiveContentArray *archive);

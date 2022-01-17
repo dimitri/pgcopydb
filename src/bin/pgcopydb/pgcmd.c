@@ -401,7 +401,8 @@ pg_restore_db(PostgresPaths *pgPaths,
 			  const char *pguri,
 			  const char *dumpFilename,
 			  const char *listFilename,
-			  bool dropIfExists)
+			  bool dropIfExists,
+			  bool noOwner)
 {
 	char *args[16];
 	int argsIndex = 0;
@@ -418,6 +419,11 @@ pg_restore_db(PostgresPaths *pgPaths,
 	{
 		args[argsIndex++] = "--clean";
 		args[argsIndex++] = "--if-exists";
+	}
+
+	if (noOwner)
+	{
+		args[argsIndex++] = "--no-owner";
 	}
 
 	if (listFilename != NULL)
