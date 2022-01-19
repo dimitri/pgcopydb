@@ -9,10 +9,11 @@ This command prefixes the following sub-commands:
 
 ::
 
-   pgcopydb copy
+  pgcopydb copy
     db           Copy an entire database from source to target
     data         Copy the data section from source to target
     table-data   Copy the data from all tables in database from source to target
+    sequences    Copy the current value from all sequences in database from source to target
     indexes      Create all the indexes found in the source database in the target
     constraints  Create all the constraints found in the source database in the target
 
@@ -81,6 +82,7 @@ The ``pgcopydb copy data`` command implements the following steps::
    $ pgcopydb copy table-data
    $ pgcopydb copy indexes
    $ pgcopydb copy constraints
+   $ pgcopydb copy sequences
    $ vacuumdb -z
 
 Those steps are actually done concurrently to one another when that's
@@ -105,6 +107,28 @@ avoiding disks entirely.
 
    pgcopydb copy table-data: Copy the data from all tables in database from source to target
    usage: pgcopydb copy table-data  --source ... --target ... [ --table-jobs ... --index-jobs ... ]
+
+     --source          Postgres URI to the source database
+     --target          Postgres URI to the target database
+     --table-jobs      Number of concurrent COPY jobs to run
+
+.. _pgcopydb_copy_sequences:
+
+pgcopydb copy sequences
+-----------------------
+
+pgcopydb copy sequences - Copy the current value from all sequences in database from source to target
+
+The command ``pgcopydb copy sequences`` fetches the list of sequences from
+the source database, then for each sequence fetches the ``last_value`` and
+``is_called`` properties the same way pg_dump would on the source database,
+and then for each sequence call ``pg_catalog.setval()`` on the target
+database.
+
+::
+
+   pgcopydb copy sequences: Copy the current value from all sequences in database from source to target
+   usage: pgcopydb copy sequences  --source ... --target ... [ --table-jobs ... --index-jobs ... ]
 
      --source          Postgres URI to the source database
      --target          Postgres URI to the target database
@@ -178,6 +202,7 @@ use the following recipe:
    $ pgcopydb dump schema
    $ pgcopydb restore pre-data
    $ pgcopydb copy table-data
+   $ pgcopydb copy sequences
    $ pgcopydb copy indexes
    $ pgcopydb copy constraints
    $ vacuumdb -z

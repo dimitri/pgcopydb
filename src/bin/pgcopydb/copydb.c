@@ -657,6 +657,94 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 
 
 /*
+ * copydb_copy_all_sequences fetches the list of sequences from the source
+ * database and then for each of them runs a SELECT last_value, is_called FROM
+ * the sequence on the source database and then calls SELECT setval(); on the
+ * target database with the same values.
+ */
+bool
+copydb_copy_all_sequences(CopyDataSpec *specs)
+{
+	PGSQL src = { 0 };
+	PGSQL dst = { 0 };
+
+	/* initialize our connection objects, connection is opened lazily */
+	if (!pgsql_init(&src, specs->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_init(&dst, specs->target_pguri, PGSQL_CONN_TARGET))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	SourceSequenceArray sequenceArray = { 0, NULL };
+
+	log_info("Listing sequences in \"%s\"", specs->source_pguri);
+
+	if (!schema_list_sequences(&src, &sequenceArray))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_info("Fetched information for %d sequences", sequenceArray.count);
+
+	if (!pgsql_begin(&src))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_begin(&dst))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	for (int seqIndex = 0; seqIndex < sequenceArray.count; seqIndex++)
+	{
+		SourceSequence *seq = &(sequenceArray.array[seqIndex]);
+
+		char qname[BUFSIZE] = { 0 };
+
+		sformat(qname, sizeof(qname), "\"%s\".\"%s\"",
+				seq->nspname,
+				seq->relname);
+
+		if (!schema_get_sequence_value(&src, seq))
+		{
+			log_error("Failed to get sequence values for %s", qname);
+			return false;
+		}
+
+		if (!schema_set_sequence_value(&dst, seq))
+		{
+			log_error("Failed to set sequence values for %s", qname);
+			return false;
+		}
+	}
+
+	if (!pgsql_commit(&dst))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_commit(&src))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * copydb_fatal_exit sends a termination signal to all the subprocess and waits
  * until all the known subprocess are finished, then returns true.
  */

@@ -218,4 +218,8 @@ bool validate_connection_string(const char *connectionString);
 bool pg_copy(PGSQL *src, PGSQL *dst,
 			 const char *srcQname, const char *dstQname);
 
+bool pgsql_get_sequence(PGSQL *pgsql, const char *nspname, const char *relname,
+						int64_t *lastValue,
+						bool *isCalled);
+
 #endif /* PGSQL_H */

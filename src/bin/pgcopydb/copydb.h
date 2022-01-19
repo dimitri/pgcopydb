@@ -83,6 +83,7 @@ typedef enum
 {
 	DATA_SECTION_NONE = 0,
 	DATA_SECTION_TABLE_DATA,
+	DATA_SECTION_SET_SEQUENCES,
 	DATA_SECTION_INDEXES,
 	DATA_SECTION_CONSTRAINTS,
 	DATA_SECTION_VACUUM,
@@ -177,6 +178,8 @@ bool copydb_target_finalize_schema(CopyDataSpec *specs);
 
 bool copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
 												uint32_t oid);
+
+bool copydb_copy_all_sequences(CopyDataSpec *specs);
 
 bool copydb_copy_all_table_data(CopyDataSpec *specs);
 bool copydb_start_table_data(CopyTableDataSpec *spec);

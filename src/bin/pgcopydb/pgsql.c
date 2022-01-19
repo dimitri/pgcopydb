@@ -48,6 +48,8 @@ static bool pg_copy_send_query(PGSQL *pgsql,
 							   ExecStatusType status);
 static void pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context);
 
+static void getSequenceValue(void *ctx, PGresult *result);
+
 
 /*
  * parseSingleValueResult is a ParsePostgresResultCB callback that reads the
@@ -1503,4 +1505,138 @@ pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context)
 
 	clear_results(pgsql);
 	pgsql_finish(pgsql);
+}
+
+
+/* Context used when fetching metadata for a given sequence */
+typedef struct SourceSequenceContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	int64_t lastValue;
+	bool isCalled;
+	bool parsedOk;
+} SourceSequenceContext;
+
+
+/*
+ * pgsql_get_sequence queries the Postgres catalog object for the sequence to
+ * get the last_value and is_called columns.
+ *
+ * The connection is expected to be opened and closed from the caller.
+ */
+bool
+pgsql_get_sequence(PGSQL *pgsql, const char *nspname, const char *relname,
+				   int64_t *lastValue,
+				   bool *isCalled)
+{
+	SourceSequenceContext context = { 0 };
+
+	char *escapedNspname, *escapedRelname;
+
+	char sql[BUFSIZE] = { 0 };
+
+	PGconn *connection = pgsql->connection;
+
+	/* escape identifiers */
+	escapedNspname = PQescapeIdentifier(connection, nspname, strlen(nspname));
+	if (escapedNspname == NULL)
+	{
+		log_error("Failed to get values from sequence \"%s\".\"%s\": %s",
+				  nspname,
+				  relname,
+				  PQerrorMessage(connection));
+		return false;
+	}
+
+	escapedRelname = PQescapeIdentifier(connection, relname, strlen(relname));
+	if (escapedRelname == NULL)
+	{
+		log_error("Failed to get values from sequence \"%s\".\"%s\": %s",
+				  nspname,
+				  relname,
+				  PQerrorMessage(connection));
+		PQfreemem(escapedNspname);
+		return false;
+	}
+
+	sformat(sql, sizeof(sql), "select last_value, is_called from %s.%s",
+			escapedNspname,
+			escapedRelname);
+
+	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+								   &context, &getSequenceValue))
+	{
+		log_error("Failed to retrieve current state from the monitor");
+		return false;
+	}
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to parse current state from the monitor");
+		return false;
+	}
+
+	/* publish values */
+	*lastValue = context.lastValue;
+	*isCalled = context.isCalled;
+
+	return true;
+}
+
+
+/*
+ * getSequenceValue parses a single row of the table listing query
+ * result.
+ */
+static void
+getSequenceValue(void *ctx, PGresult *result)
+{
+	SourceSequenceContext *context = (SourceSequenceContext *) ctx;
+
+	if (PQntuples(result) != 1)
+	{
+		log_error("Query returned %d rows, expected 1", PQntuples(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	if (PQnfields(result) != 2)
+	{
+		log_error("Query returned %d columns, expected 2", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	int errors = 0;
+
+	/* 1. last_value */
+	char *value = PQgetvalue(result, 0, 0);
+
+	if (!stringToInt64(value, &(context->lastValue)))
+	{
+		log_error("Invalid sequence last_value \"%s\"", value);
+		++errors;
+	}
+
+	/* 2. is_called */
+	value = PQgetvalue(result, 0, 1);
+
+	if (value == NULL || ((*value != 't') && (*value != 'f')))
+	{
+		log_error("Invalid is_called value \"%s\"", value);
+		++errors;
+	}
+	else
+	{
+		context->isCalled = (*value) == 't';
+	}
+
+	if (errors > 0)
+	{
+		context->parsedOk = false;
+		return;
+	}
+
+	/* if we reach this line, then we're good. */
+	context->parsedOk = true;
 }

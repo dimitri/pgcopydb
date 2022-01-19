@@ -60,7 +60,15 @@ The ``pgcopydb copy-db`` command implements the following steps:
   6. Then ``VACUUM ANALYZE`` is run on each target table as soon as the data
      and indexes are all created.
 
-  7. The final stage consists now of running the rest of the ``post-data``
+  8. Then pgcopydb gets the list of the sequences on the source database and
+     for each of them runs a separate query on the source to fetch the
+     ``last_value`` and the ``is_called`` metadata the same way that pg_dump
+     does.
+
+	 For each sequence, pgcopydb then calls ``pg_catalog.setval()`` on the
+	 target database with the information obtained on the source database.
+
+  9. The final stage consists now of running the rest of the ``post-data``
      section script for the whole database, and that's where the foreign key
      constraints and other elements are created.
 

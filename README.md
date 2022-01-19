@@ -212,6 +212,7 @@ implementing any step on its own.
   1. `pgcopydb dump schema`
   2. `pgcopydb restore pre-data`
   3. `pgcopydb copy table-data`
+  4. `pgcopydb copy sequences`
   4. `pgcopydb copy indexes`
   5. `pgcopydb copy constraints`
   6. `pgcopydb vacuumdb`

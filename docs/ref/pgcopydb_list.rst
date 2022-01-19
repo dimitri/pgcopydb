@@ -10,8 +10,9 @@ This command prefixes the following sub-commands:
 ::
 
   pgcopydb list
-    tables   List all the source tables to copy data from
-    indexes  List all the indexes to create again after copying the data
+    tables     List all the source tables to copy data from
+    sequences  List all the source sequences to copy data from
+    indexes    List all the indexes to create again after copying the data
 
 
 .. _pgcopydb_list_tables:
@@ -29,6 +30,24 @@ tables to COPY the data from.
 
    pgcopydb list tables: List all the source tables to copy data from
    usage: pgcopydb list tables  --source ...
+
+     --source          Postgres URI to the source database
+
+.. _pgcopydb_list_sequences:
+
+pgcopydb list sequences
+--------------------
+
+pgcopydb list sequences - List all the source sequences to copy data from
+
+The command ``pgcopydb list sequences`` connects to the source database and
+executes a SQL query using the Postgres catalogs to get a list of all the
+sequences to COPY the data from.
+
+::
+
+   pgcopydb list sequences: List all the source sequences to copy data from
+   usage: pgcopydb list sequences  --source ...
 
      --source          Postgres URI to the source database
 

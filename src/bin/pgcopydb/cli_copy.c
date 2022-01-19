@@ -28,6 +28,7 @@ static int cli_copy_db_getopts(int argc, char **argv);
 static void cli_copy_db(int argc, char **argv);
 static void cli_copy_data(int argc, char **argv);
 static void cli_copy_table_data(int argc, char **argv);
+static void cli_copy_sequences(int argc, char **argv);
 static void cli_copy_indexes(int argc, char **argv);
 static void cli_copy_constraints(int argc, char **argv);
 
@@ -91,6 +92,17 @@ static CommandLine copy_table_data_command =
 		cli_copy_db_getopts,
 		cli_copy_table_data);
 
+static CommandLine copy_sequence_command =
+	make_command(
+		"sequences",
+		"Copy the current value from all sequences in database from source to target",
+		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
+		"  --source          Postgres URI to the source database\n"
+		"  --target          Postgres URI to the target database\n"
+		"  --table-jobs      Number of concurrent COPY jobs to run\n",
+		cli_copy_db_getopts,
+		cli_copy_sequences);
+
 static CommandLine copy_indexes_command =
 	make_command(
 		"indexes",
@@ -117,6 +129,7 @@ static CommandLine *copy_subcommands[] = {
 	&copy_db_command,
 	&copy_data_command,
 	&copy_table_data_command,
+	&copy_sequence_command,
 	&copy_indexes_command,
 	&copy_constraints_command,
 	NULL
@@ -457,7 +470,15 @@ cli_copy_db(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	log_info("STEP 6: restore the post-data section to the target database");
+	log_info("STEP 6: reset the sequences values on the target database");
+
+	if (!copydb_copy_all_sequences(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_info("STEP 7: restore the post-data section to the target database");
 
 	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_FINALIZE_SCHEMA);
 
@@ -494,11 +515,19 @@ cli_copy_data(int argc, char **argv)
 
 	(void) summary_set_current_time(timings, TIMING_STEP_START);
 
-	log_info("STEP 3: copy data from source to target in sub-processes");
-	log_info("STEP 4: create indexes and constraints in parallel");
-	log_info("STEP 5: vacuum analyze each table");
+	log_info("Copy data from source to target in sub-processes");
+	log_info("Create indexes and constraints in parallel");
+	log_info("Vacuum analyze each table");
 
 	if (!copydb_copy_all_table_data(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_info("Reset the sequences values on the target database");
+
+	if (!copydb_copy_all_sequences(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -526,9 +555,39 @@ cli_copy_table_data(int argc, char **argv)
 
 	(void) summary_set_current_time(timings, TIMING_STEP_START);
 
-	log_info("STEP 3: copy data from source to target in sub-processes");
+	log_info("Copy data from source to target in sub-processes");
 
 	if (!copydb_copy_all_table_data(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	(void) summary_set_current_time(timings, TIMING_STEP_END);
+	(void) print_summary(&summary, &copySpecs);
+}
+
+
+/*
+ * cli_copy_sequences implements the SEQUENCE SET parts of the pg_dump |
+ * pg_restore job, using our own internal implementation for it, as pg_dump
+ * considers SEQUENCE SET operations parts of the data section, and thus it's
+ * not possible to set sequences without also dumping the whole content of the
+ * source database.
+ */
+static void
+cli_copy_sequences(int argc, char **argv)
+{
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_SET_SEQUENCES);
+
+	Summary summary = { 0 };
+	TopLevelTimings *timings = &(summary.timings);
+
+	(void) summary_set_current_time(timings, TIMING_STEP_START);
+
+	if (!copydb_copy_all_sequences(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -555,7 +614,7 @@ cli_copy_indexes(int argc, char **argv)
 
 	(void) summary_set_current_time(timings, TIMING_STEP_START);
 
-	log_info("STEP 4: create indexes in parallel");
+	log_info("Create indexes in parallel");
 
 	if (!copydb_copy_all_table_data(&copySpecs))
 	{
@@ -585,7 +644,7 @@ cli_copy_constraints(int argc, char **argv)
 
 	(void) summary_set_current_time(timings, TIMING_STEP_START);
 
-	log_info("STEP 4: create constraints");
+	log_info("Create constraints");
 
 	if (!copydb_copy_all_table_data(&copySpecs))
 	{

@@ -27,6 +27,14 @@ typedef struct SourceTableArrayContext
 	bool parsedOk;
 } SourceTableArrayContext;
 
+/* Context used when fetching all the sequence definitions */
+typedef struct SourceSequenceArrayContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	SourceSequenceArray *sequenceArray;
+	bool parsedOk;
+} SourceSequenceArrayContext;
+
 /* Context used when fetching all the indexes definitions */
 typedef struct SourceIndexArrayContext
 {
@@ -40,6 +48,12 @@ static void getTableArray(void *ctx, PGresult *result);
 static bool parseCurrentSourceTable(PGresult *result,
 									int rowNumber,
 									SourceTable *table);
+
+static void getSequenceArray(void *ctx, PGresult *result);
+
+static bool parseCurrentSourceSequence(PGresult *result,
+									   int rowNumber,
+									   SourceSequence *table);
 
 static void getIndexArray(void *ctx, PGresult *result);
 
@@ -80,6 +94,96 @@ schema_list_ordinary_tables(PGSQL *pgsql, SourceTableArray *tableArray)
 	if (!context.parsedOk)
 	{
 		log_error("Failed to parse current state from the monitor");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * schema_list_sequences grabs the list of sequences from the given source
+ * Postgres instance and allocates a SourceSequence array with the result of
+ * the query.
+ */
+bool
+schema_list_sequences(PGSQL *pgsql, SourceSequenceArray *seqArray)
+{
+	SourceSequenceArrayContext context = { { 0 }, seqArray, false };
+
+	char *sql =
+		"  select c.oid, n.nspname, c.relname "
+		"    from pg_catalog.pg_class c join pg_catalog.pg_namespace n "
+		"      on c.relnamespace = n.oid "
+		"   where c.relkind = 'S' and c.relpersistence = 'p' "
+		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+		"order by n.nspname, c.relname";
+
+	log_trace("schema_list_sequences");
+
+	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+								   &context, &getSequenceArray))
+	{
+		log_error("Failed to retrieve current state from the monitor");
+		return false;
+	}
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to parse current state from the monitor");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * schema_get_sequence_value fetches sequence metadata last_value and
+ * is_called for the given sequence.
+ */
+bool
+schema_get_sequence_value(PGSQL *pgsql, SourceSequence *seq)
+{
+	return pgsql_get_sequence(pgsql,
+							  seq->nspname,
+							  seq->relname,
+							  &(seq->lastValue),
+							  &(seq->isCalled));
+}
+
+
+/*
+ * schema_set_sequence_value calls pg_catalog.setval() on the given sequence.
+ */
+bool
+schema_set_sequence_value(PGSQL *pgsql, SourceSequence *seq)
+{
+	SingleValueResultContext parseContext = { { 0 }, PGSQL_RESULT_BIGINT, false };
+	char *sql = "select pg_catalog.setval(format('%I.%I', $1, $2), $3, $4)";
+
+	int paramCount = 4;
+	Oid paramTypes[4] = { TEXTOID, TEXTOID, INT8OID, BOOLOID };
+	const char *paramValues[4];
+
+	paramValues[0] = seq->nspname;
+	paramValues[1] = seq->relname;
+	paramValues[2] = intToString(seq->lastValue).strValue;
+	paramValues[3] = seq->isCalled ? "true" : "false";
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   &parseContext, &parseSingleValueResult))
+	{
+		log_error("Failed to set sequence \"%s\".\"%s\" last value to %lld",
+				  seq->nspname, seq->relname, (long long) seq->lastValue);
+		return false;
+	}
+
+	if (!parseContext.parsedOk)
+	{
+		log_error("Failed to set sequence \"%s\".\"%s\" last value to %lld",
+				  seq->nspname, seq->relname, (long long) seq->lastValue);
 		return false;
 	}
 
@@ -338,6 +442,111 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	if (length >= NAMEDATALEN)
 	{
 		log_error("Pretty printed byte size \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (NAMEDATALEN - 1)",
+				  value, length, NAMEDATALEN - 1);
+		++errors;
+	}
+
+	return errors == 0;
+}
+
+
+/*
+ * getSequenceArray loops over the SQL result for the sequence array query and
+ * allocates an array of tables then populates it with the query result.
+ */
+static void
+getSequenceArray(void *ctx, PGresult *result)
+{
+	SourceSequenceArrayContext *context = (SourceSequenceArrayContext *) ctx;
+	int nTuples = PQntuples(result);
+
+	log_trace("getSequenceArray: %d", nTuples);
+
+	if (PQnfields(result) != 3)
+	{
+		log_error("Query returned %d columns, expected 3", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	/* we're not supposed to re-cycle arrays here */
+	if (context->sequenceArray->array != NULL)
+	{
+		/* issue a warning but let's try anyway */
+		log_warn("BUG? context's array is not null in getSequenceArray");
+
+		free(context->sequenceArray->array);
+		context->sequenceArray->array = NULL;
+	}
+
+	context->sequenceArray->count = nTuples;
+	context->sequenceArray->array =
+		(SourceSequence *) malloc(nTuples * sizeof(SourceSequence));
+
+	if (context->sequenceArray->array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return;
+	}
+
+	bool parsedOk = true;
+
+	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
+	{
+		SourceSequence *sequence = &(context->sequenceArray->array[rowNumber]);
+
+		parsedOk = parsedOk &&
+				   parseCurrentSourceSequence(result, rowNumber, sequence);
+	}
+
+	if (!parsedOk)
+	{
+		free(context->sequenceArray->array);
+		context->sequenceArray->array = NULL;
+	}
+
+	context->parsedOk = parsedOk;
+}
+
+
+/*
+ * parseCurrentSourceSequence parses a single row of the table listing query
+ * result.
+ */
+static bool
+parseCurrentSourceSequence(PGresult *result, int rowNumber, SourceSequence *seq)
+{
+	int errors = 0;
+
+	/* 1. c.oid */
+	char *value = PQgetvalue(result, rowNumber, 0);
+
+	if (!stringToUInt32(value, &(seq->oid)) || seq->oid == 0)
+	{
+		log_error("Invalid OID \"%s\"", value);
+		++errors;
+	}
+
+	/* 2. n.nspname */
+	value = PQgetvalue(result, rowNumber, 1);
+	int length = strlcpy(seq->nspname, value, NAMEDATALEN);
+
+	if (length >= NAMEDATALEN)
+	{
+		log_error("Schema name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (NAMEDATALEN - 1)",
+				  value, length, NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* 3. c.relname */
+	value = PQgetvalue(result, rowNumber, 2);
+	length = strlcpy(seq->relname, value, NAMEDATALEN);
+
+	if (length >= NAMEDATALEN)
+	{
+		log_error("Sequence name \"%s\" is %d bytes long, "
 				  "the maximum expected is %d (NAMEDATALEN - 1)",
 				  value, length, NAMEDATALEN - 1);
 		++errors;

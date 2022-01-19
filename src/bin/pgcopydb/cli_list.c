@@ -23,6 +23,7 @@ ListDBOptions listDBoptions = { 0 };
 
 static int cli_list_db_getopts(int argc, char **argv);
 static void cli_list_tables(int argc, char **argv);
+static void cli_list_sequences(int argc, char **argv);
 static void cli_list_indexes(int argc, char **argv);
 
 static CommandLine list_tables_command =
@@ -33,6 +34,15 @@ static CommandLine list_tables_command =
 		"  --source          Postgres URI to the source database\n",
 		cli_list_db_getopts,
 		cli_list_tables);
+
+static CommandLine list_sequences_command =
+	make_command(
+		"sequences",
+		"List all the source sequences to copy data from",
+		" --source ... ",
+		"  --source          Postgres URI to the source database\n",
+		cli_list_db_getopts,
+		cli_list_sequences);
 
 static CommandLine list_indexes_command =
 	make_command(
@@ -48,6 +58,7 @@ static CommandLine list_indexes_command =
 
 static CommandLine *list_subcommands[] = {
 	&list_tables_command,
+	&list_sequences_command,
 	&list_indexes_command,
 	NULL
 };
@@ -239,6 +250,52 @@ cli_list_tables(int argc, char **argv)
 				tableArray.array[i].relname,
 				(long long) tableArray.array[i].reltuples,
 				tableArray.array[i].bytesPretty);
+	}
+
+	fformat(stdout, "\n");
+}
+
+
+/*
+ * cli_list_tables implements the command: pglistdb list tables
+ */
+static void
+cli_list_sequences(int argc, char **argv)
+{
+	PGSQL pgsql = { 0 };
+	SourceSequenceArray sequenceArray = { 0, NULL };
+
+	log_info("Listing ordinary sequences in \"%s\"",
+			 listDBoptions.source_pguri);
+
+	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	if (!schema_list_sequences(&pgsql, &sequenceArray))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_info("Fetched information for %d sequences", sequenceArray.count);
+
+	fformat(stdout, "%8s | %20s | %30s\n",
+			"OID", "Schema Name", "Sequence Name");
+
+	fformat(stdout, "%8s-+-%20s-+-%30s\n",
+			"--------",
+			"--------------------",
+			"------------------------------");
+
+	for (int i = 0; i < sequenceArray.count; i++)
+	{
+		fformat(stdout, "%8d | %20s | %30s\n",
+				sequenceArray.array[i].oid,
+				sequenceArray.array[i].nspname,
+				sequenceArray.array[i].relname);
 	}
 
 	fformat(stdout, "\n");
