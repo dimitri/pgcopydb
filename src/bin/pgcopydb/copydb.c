@@ -705,6 +705,8 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 		return false;
 	}
 
+	int errors = 0;
+
 	for (int seqIndex = 0; seqIndex < sequenceArray.count; seqIndex++)
 	{
 		SourceSequence *seq = &(sequenceArray.array[seqIndex]);
@@ -717,21 +719,25 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 
 		if (!schema_get_sequence_value(&src, seq))
 		{
-			log_error("Failed to get sequence values for %s", qname);
-			return false;
+			/* just skip this one */
+			log_warn("Failed to get sequence values for %s", qname);
+			++errors;
+			continue;
 		}
 
 		if (!schema_set_sequence_value(&dst, seq))
 		{
-			log_error("Failed to set sequence values for %s", qname);
-			return false;
+			/* just skip this one */
+			log_warn("Failed to set sequence values for %s", qname);
+			++errors;
+			continue;
 		}
 	}
 
 	if (!pgsql_commit(&dst))
 	{
 		/* errors have already been logged */
-		return false;
+		++errors;
 	}
 
 	if (!pgsql_commit(&src))
@@ -740,7 +746,7 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 		return false;
 	}
 
-	return true;
+	return errors == 0;
 }
 
 
