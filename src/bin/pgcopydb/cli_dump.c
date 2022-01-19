@@ -188,12 +188,6 @@ cli_dump_schema_getopts(int argc, char **argv)
 		++errors;
 	}
 
-	if (IS_EMPTY_STRING_BUFFER(options.target_dir))
-	{
-		log_fatal("Option --target is mandatory");
-		++errors;
-	}
-
 	if (errors > 0)
 	{
 		exit(EXIT_CODE_BAD_ARGS);
@@ -244,39 +238,42 @@ static void
 cli_dump_schema_section(DumpDBOptions *dumpDBoptions,
 						PostgresDumpSection section)
 {
-	CopyFilePaths cfPaths = { 0 };
-	PostgresPaths pgPaths = { 0 };
+	CopyDataSpec copySpecs = { 0 };
 
-	log_info("Dumping database from \"%s\"", dumpDBoptions->source_pguri);
-	log_info("Dumping database into directory \"%s\"", dumpDBoptions->target_dir);
+	(void) find_pg_commands(&(copySpecs.pgPaths));
 
-	(void) find_pg_commands(&pgPaths);
+	char *dir =
+		IS_EMPTY_STRING_BUFFER(dumpDBoptions->target_dir)
+		? NULL
+		: dumpDBoptions->target_dir;
 
-	if (!copydb_init_workdir(&cfPaths, dumpDBoptions->target_dir))
+	bool removeDir = true;
+
+	if (!copydb_init_workdir(&(copySpecs.cfPaths), dir, removeDir))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	log_info("Using pg_dump for Postgres \"%s\" at \"%s\"",
-			 pgPaths.pg_version,
-			 pgPaths.pg_dump);
-
-	CopyDataSpec copySpecs = { 0 };
-
 	if (!copydb_init_specs(&copySpecs,
-						   &cfPaths,
-						   &pgPaths,
 						   dumpDBoptions->source_pguri,
 						   NULL, /* target_pguri */
 						   1,    /* table jobs */
 						   1,    /* index jobs */
+						   DATA_SECTION_NONE,
 						   false, /* dropIfExists */
 						   false)) /* noOwner */
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
+
+	log_info("Dumping database from \"%s\"", copySpecs.source_pguri);
+	log_info("Dumping database into directory \"%s\"", copySpecs.cfPaths.topdir);
+
+	log_info("Using pg_dump for Postgres \"%s\" at \"%s\"",
+			 copySpecs.pgPaths.pg_version,
+			 copySpecs.pgPaths.pg_dump);
 
 	if (!copydb_dump_source_schema(&copySpecs, section))
 	{

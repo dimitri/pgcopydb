@@ -460,8 +460,12 @@ print_summary(Summary *summary, CopyDataSpec *specs)
 	}
 
 	/* then we can prepare the headers and print the table */
-	(void) prepare_summary_table_headers(summaryTable);
-	(void) print_summary_table(summaryTable);
+	if (specs->section == DATA_SECTION_TABLE_DATA ||
+		specs->section == DATA_SECTION_ALL)
+	{
+		(void) prepare_summary_table_headers(summaryTable);
+		(void) print_summary_table(summaryTable);
+	}
 
 	/* and then finally prepare the top-level counters and print them */
 	(void) summary_prepare_toplevel_durations(summary);
@@ -515,9 +519,19 @@ summary_set_current_time(TopLevelTimings *timings, TimingStep step)
 			INSTR_TIME_SET_CURRENT(timings->afterFinalizeSchema);
 			break;
 		}
+
+		case TIMING_STEP_END:
+		{
+			INSTR_TIME_SET_CURRENT(timings->endTime);
+			break;
+		}
 	}
 }
 
+
+/* avoid non-initialized durations or clock oddities */
+#define INSTR_TIME_MS(x) \
+	(INSTR_TIME_GET_MILLISEC(x) > 0 ? INSTR_TIME_GET_MILLISEC(x) : 0)
 
 /*
  * summary_prepare_toplevel_durations prepares the top-level durations in a
@@ -534,7 +548,7 @@ summary_prepare_toplevel_durations(Summary *summary)
 	/* compute schema dump duration, part of schemaDurationMs */
 	duration = timings->beforePrepareSchema;
 	INSTR_TIME_SUBTRACT(duration, timings->beforeSchemaDump);
-	durationMs = INSTR_TIME_GET_MILLISEC(duration);
+	durationMs = INSTR_TIME_MS(duration);
 
 	IntervalToString(durationMs, timings->dumpSchemaMs, INTSTRING_MAX_DIGITS);
 
@@ -543,7 +557,7 @@ summary_prepare_toplevel_durations(Summary *summary)
 	/* compute prepare schema duration, part of schemaDurationMs */
 	duration = timings->afterPrepareSchema;
 	INSTR_TIME_SUBTRACT(duration, timings->beforePrepareSchema);
-	durationMs = INSTR_TIME_GET_MILLISEC(duration);
+	durationMs = INSTR_TIME_MS(duration);
 
 	IntervalToString(durationMs, timings->prepareSchemaMs, INTSTRING_MAX_DIGITS);
 
@@ -552,7 +566,7 @@ summary_prepare_toplevel_durations(Summary *summary)
 	/* compute data + index duration, between prepare schema and finalize */
 	duration = timings->beforeFinalizeSchema;
 	INSTR_TIME_SUBTRACT(duration, timings->afterPrepareSchema);
-	durationMs = INSTR_TIME_GET_MILLISEC(duration);
+	durationMs = INSTR_TIME_MS(duration);
 
 	IntervalToString(durationMs, timings->dataAndIndexMs, INTSTRING_MAX_DIGITS);
 
@@ -561,16 +575,16 @@ summary_prepare_toplevel_durations(Summary *summary)
 	/* compute finalize schema duration, part of schemaDurationMs */
 	duration = timings->afterFinalizeSchema;
 	INSTR_TIME_SUBTRACT(duration, timings->beforeFinalizeSchema);
-	durationMs = INSTR_TIME_GET_MILLISEC(duration);
+	durationMs = INSTR_TIME_MS(duration);
 
 	IntervalToString(durationMs, timings->finalizeSchemaMs, INTSTRING_MAX_DIGITS);
 
 	timings->schemaDurationMs += durationMs;
 
 	/* compute total duration, wall clock elapsed time */
-	duration = timings->afterFinalizeSchema;
+	duration = timings->endTime;
 	INSTR_TIME_SUBTRACT(duration, timings->startTime);
-	durationMs = INSTR_TIME_GET_MILLISEC(duration);
+	durationMs = INSTR_TIME_MS(duration);
 
 	IntervalToString(durationMs, timings->totalMs, INTSTRING_MAX_DIGITS);
 
@@ -717,7 +731,7 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 
 			/* build the indexDoneFile for the target index */
 			sformat(indexDoneFile, sizeof(indexDoneFile), "%s/%u.done",
-					specs->cfPaths->idxdir,
+					specs->cfPaths.idxdir,
 					index->indexOid);
 
 			/* when a table has no indexes, the file doesn't exists */

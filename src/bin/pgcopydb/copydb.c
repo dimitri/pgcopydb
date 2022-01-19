@@ -31,7 +31,7 @@ static int waitUntilOneSubprocessIsDone(TableDataProcessArray *subProcessArray);
  * store temporary information while the pgcopydb process is running.
  */
 bool
-copydb_init_workdir(CopyFilePaths *cfPaths, char *dir)
+copydb_init_workdir(CopyFilePaths *cfPaths, char *dir, bool removeDir)
 {
 	pid_t pid = getpid();
 
@@ -89,7 +89,7 @@ copydb_init_workdir(CopyFilePaths *cfPaths, char *dir)
 		}
 
 		/* warn about trashing data from a previous run */
-		if (dir == NULL)
+		if (removeDir)
 		{
 			log_warn("Directory \"%s\" already exists: removing it entirely",
 					 cfPaths->topdir);
@@ -122,10 +122,22 @@ copydb_init_workdir(CopyFilePaths *cfPaths, char *dir)
 	if (shouldCreateDirectories)
 	{
 		log_debug("mkdir -p \"%s\"", cfPaths->topdir);
-		if (!ensure_empty_dir(cfPaths->topdir, 0700))
+
+		if (removeDir)
 		{
-			/* errors have already been logged. */
-			return false;
+			if (!ensure_empty_dir(cfPaths->topdir, 0700))
+			{
+				/* errors have already been logged. */
+				return false;
+			}
+		}
+		else
+		{
+			if (pg_mkdir_p((char *) cfPaths->topdir, 0700) == -1)
+			{
+				log_fatal("Failed to create directory \"%s\"", cfPaths->topdir);
+				return false;
+			}
 		}
 	}
 
@@ -149,18 +161,15 @@ copydb_init_workdir(CopyFilePaths *cfPaths, char *dir)
 		for (int i = 0; dirs[i] != NULL; i++)
 		{
 			log_debug("mkdir -p \"%s\"", dirs[i]);
-			if (!ensure_empty_dir(dirs[i], 0700))
+
+			if (removeDir)
 			{
-				return false;
+				if (!ensure_empty_dir(dirs[i], 0700))
+				{
+					return false;
+				}
 			}
-		}
-	}
-	else
-	{
-		/* with dir is not null, refrain from removing anything */
-		for (int i = 0; dirs[i] != NULL; i++)
-		{
-			if (!directory_exists(dir))
+			else
 			{
 				if (pg_mkdir_p((char *) dirs[i], 0700) == -1)
 				{
@@ -183,23 +192,23 @@ copydb_init_workdir(CopyFilePaths *cfPaths, char *dir)
  */
 bool
 copydb_init_specs(CopyDataSpec *specs,
-				  CopyFilePaths *cfPaths,
-				  PostgresPaths *pgPaths,
 				  char *source_pguri,
 				  char *target_pguri,
 				  int tableJobs,
 				  int indexJobs,
+				  CopyDataSection section,
 				  bool dropIfExists,
 				  bool noOwner)
 {
 	/* fill-in a structure with the help of the C compiler */
 	CopyDataSpec tmpCopySpecs = {
-		.cfPaths = cfPaths,
-		.pgPaths = pgPaths,
+		.cfPaths = specs->cfPaths,
+		.pgPaths = specs->pgPaths,
 
-		.source_pguri = source_pguri,
-		.target_pguri = target_pguri,
+		.source_pguri = { 0 },
+		.target_pguri = { 0 },
 
+		.section = section,
 		.dropIfExists = dropIfExists,
 		.noOwner = noOwner,
 
@@ -208,18 +217,29 @@ copydb_init_specs(CopyDataSpec *specs,
 		.indexSemaphore = { 0 }
 	};
 
+	/* initialize the connection strings */
+	if (source_pguri != NULL)
+	{
+		strlcpy(tmpCopySpecs.source_pguri, source_pguri, MAXCONNINFO);
+	}
+
+	if (target_pguri != NULL)
+	{
+		strlcpy(tmpCopySpecs.target_pguri, target_pguri, MAXCONNINFO);
+	}
+
 	/* copy the structure as a whole memory area to the target place */
 	*specs = tmpCopySpecs;
 
 	/* now compute some global paths that are needed for pgcopydb */
 	sformat(specs->dumpPaths.preFilename, MAXPGPATH, "%s/%s",
-			cfPaths->schemadir, "pre.dump");
+			specs->cfPaths.schemadir, "pre.dump");
 
 	sformat(specs->dumpPaths.postFilename, MAXPGPATH, "%s/%s",
-			cfPaths->schemadir, "post.dump");
+			specs->cfPaths.schemadir, "post.dump");
 
 	sformat(specs->dumpPaths.listFilename, MAXPGPATH, "%s/%s",
-			cfPaths->schemadir, "post.list");
+			specs->cfPaths.schemadir, "post.list");
 
 	/* create the index semaphore */
 	specs->indexSemaphore.initValue = indexJobs;
@@ -249,11 +269,13 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 {
 	/* fill-in a structure with the help of the C compiler */
 	CopyTableDataSpec tmpTableSpecs = {
-		.cfPaths = specs->cfPaths,
-		.pgPaths = specs->pgPaths,
+		.cfPaths = &(specs->cfPaths),
+		.pgPaths = &(specs->pgPaths),
 
-		.source_pguri = specs->source_pguri,
-		.target_pguri = specs->target_pguri,
+		.source_pguri = { 0 },
+		.target_pguri = { 0 },
+
+		.section = specs->section,
 
 		.sourceTable = source,
 		.indexArray = NULL,
@@ -263,6 +285,10 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 		.indexJobs = specs->indexJobs,
 		.indexSemaphore = &(specs->indexSemaphore)
 	};
+
+	/* initialize the connection strings */
+	strlcpy(tmpTableSpecs.source_pguri, specs->source_pguri, MAXCONNINFO);
+	strlcpy(tmpTableSpecs.target_pguri, specs->target_pguri, MAXCONNINFO);
 
 	/* copy the structure as a whole memory area to the target place */
 	*tableSpecs = tmpTableSpecs;
@@ -335,7 +361,7 @@ copydb_objectid_has_been_processed_already(CopyDataSpec *specs, uint32_t oid)
 
 	/* build the doneFile for the target index or constraint */
 	sformat(doneFile, sizeof(doneFile), "%s/%u.done",
-			specs->cfPaths->idxdir,
+			specs->cfPaths.idxdir,
 			oid);
 
 	if (file_exists(doneFile))
@@ -371,7 +397,7 @@ copydb_dump_source_schema(CopyDataSpec *specs, PostgresDumpSection section)
 		section == PG_DUMP_SECTION_PRE_DATA ||
 		section == PG_DUMP_SECTION_ALL)
 	{
-		if (!pg_dump_db(specs->pgPaths,
+		if (!pg_dump_db(&(specs->pgPaths),
 						specs->source_pguri,
 						"pre-data",
 						specs->dumpPaths.preFilename))
@@ -385,7 +411,7 @@ copydb_dump_source_schema(CopyDataSpec *specs, PostgresDumpSection section)
 		section == PG_DUMP_SECTION_POST_DATA ||
 		section == PG_DUMP_SECTION_ALL)
 	{
-		if (!pg_dump_db(specs->pgPaths,
+		if (!pg_dump_db(&(specs->pgPaths),
 						specs->source_pguri,
 						"post-data",
 						specs->dumpPaths.postFilename))
@@ -412,7 +438,7 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 		return false;
 	}
 
-	if (!pg_restore_db(specs->pgPaths,
+	if (!pg_restore_db(&(specs->pgPaths),
 					   specs->target_pguri,
 					   specs->dumpPaths.preFilename,
 					   NULL,
@@ -455,7 +481,7 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 	 */
 	ArchiveContentArray contents = { 0 };
 
-	if (!pg_restore_list(specs->pgPaths,
+	if (!pg_restore_list(&(specs->pgPaths),
 						 specs->dumpPaths.postFilename,
 						 &contents))
 	{
@@ -508,7 +534,7 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 
 	destroyPQExpBuffer(listContents);
 
-	if (!pg_restore_db(specs->pgPaths,
+	if (!pg_restore_db(&(specs->pgPaths),
 					   specs->target_pguri,
 					   specs->dumpPaths.postFilename,
 					   specs->dumpPaths.listFilename,
@@ -853,9 +879,7 @@ copydb_copy_table(CopyTableDataSpec *tableSpecs)
 		return false;
 	}
 
-	/* Now copy the data from source to target */
-	log_info("%s", summary.command);
-
+	/* initialize our connection objects, connection is opened lazily */
 	if (!pgsql_init(&src, tableSpecs->source_pguri, PGSQL_CONN_SOURCE))
 	{
 		/* errors have already been logged */
@@ -868,10 +892,18 @@ copydb_copy_table(CopyTableDataSpec *tableSpecs)
 		return false;
 	}
 
-	if (!pg_copy(&src, &dst, qname, qname))
+	/* COPY the data from the source table to the target table */
+	if (tableSpecs->section == DATA_SECTION_TABLE_DATA ||
+		tableSpecs->section == DATA_SECTION_ALL)
 	{
-		/* errors have already been logged */
-		return false;
+		/* Now copy the data from source to target */
+		log_info("%s", summary.command);
+
+		if (!pg_copy(&src, &dst, qname, qname))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	/* now say we're done with the table data */
@@ -895,59 +927,69 @@ copydb_copy_table(CopyTableDataSpec *tableSpecs)
 
 	tableSpecs->indexArray = &indexArray;
 
-	if (!schema_list_table_indexes(&src,
-								   tableSpecs->sourceTable->nspname,
-								   tableSpecs->sourceTable->relname,
-								   tableSpecs->indexArray))
+	if (tableSpecs->section == DATA_SECTION_INDEXES ||
+		tableSpecs->section == DATA_SECTION_CONSTRAINTS ||
+		tableSpecs->section == DATA_SECTION_ALL)
 	{
-		/* errors have already been logged */
-		return false;
-	}
+		if (!schema_list_table_indexes(&src,
+									   tableSpecs->sourceTable->nspname,
+									   tableSpecs->sourceTable->relname,
+									   tableSpecs->indexArray))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 
-	/*
-	 * Indexes are created all-at-once in parallel, a sub-process is forked per
-	 * index definition to send each SQL/DDL command to the Postgres server.
-	 */
-	if (tableSpecs->indexArray->count >= 1)
-	{
-		log_info("Creating %d index%s for table \"%s\".\"%s\"",
-				 tableSpecs->indexArray->count,
-				 tableSpecs->indexArray->count > 1 ? "es" : "",
-				 tableSpecs->sourceTable->nspname,
-				 tableSpecs->sourceTable->relname);
-	}
-	else
-	{
-		log_debug("Table \"%s\".\"%s\" has no index attached",
-				  tableSpecs->sourceTable->nspname,
-				  tableSpecs->sourceTable->relname);
-	}
+		/* build the index file paths we need for the upcoming operations */
+		if (!copydb_init_indexes_paths(tableSpecs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 
-	/* build the index file paths we need for the upcoming operations */
-	if (!copydb_init_indexes_paths(tableSpecs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
+		/* pgcopydb copy constraints does not create indexes again */
+		if (tableSpecs->section != DATA_SECTION_CONSTRAINTS)
+		{
+			/*
+			 * Indexes are created all-at-once in parallel, a sub-process is
+			 * forked per index definition to send each SQL/DDL command to the
+			 * Postgres server.
+			 */
+			if (tableSpecs->indexArray->count >= 1)
+			{
+				log_info("Creating %d index%s for table \"%s\".\"%s\"",
+						 tableSpecs->indexArray->count,
+						 tableSpecs->indexArray->count > 1 ? "es" : "",
+						 tableSpecs->sourceTable->nspname,
+						 tableSpecs->sourceTable->relname);
+			}
+			else
+			{
+				log_debug("Table \"%s\".\"%s\" has no index attached",
+						  tableSpecs->sourceTable->nspname,
+						  tableSpecs->sourceTable->relname);
+			}
 
-	if (!copydb_start_create_indexes(tableSpecs))
-	{
-		log_error("Failed to create indexes, see above for details");
-		return false;
-	}
+			if (!copydb_start_create_indexes(tableSpecs))
+			{
+				log_error("Failed to create indexes, see above for details");
+				return false;
+			}
+		}
 
-	/*
-	 * Create an index list file for the table, so that we can easily find
-	 * relevant indexing information from the table itself.
-	 */
-	if (!create_table_index_file(&summary,
-								 tableSpecs->indexArray,
-								 tableSpecs->tablePaths.idxListFile))
-	{
-		/* this only means summary is missing some indexing information */
-		log_warn("Failed to create table %s index list file \"%s\"",
-				 qname,
-				 tableSpecs->tablePaths.idxListFile);
+		/*
+		 * Create an index list file for the table, so that we can easily find
+		 * relevant indexing information from the table itself.
+		 */
+		if (!create_table_index_file(&summary,
+									 tableSpecs->indexArray,
+									 tableSpecs->tablePaths.idxListFile))
+		{
+			/* this only means summary is missing some indexing information */
+			log_warn("Failed to create table %s index list file \"%s\"",
+					 qname,
+					 tableSpecs->tablePaths.idxListFile);
+		}
 	}
 
 	/*
@@ -956,23 +998,31 @@ copydb_copy_table(CopyTableDataSpec *tableSpecs)
 	 * commands are taking an exclusive lock on the table, so it's better to
 	 * just run the commands serially (one after the other).
 	 */
-	if (!copydb_create_constraints(tableSpecs))
+	if (tableSpecs->section == DATA_SECTION_CONSTRAINTS ||
+		tableSpecs->section == DATA_SECTION_ALL)
 	{
-		log_error("Failed to create constraints, see above for details");
-		return false;
+		if (!copydb_create_constraints(tableSpecs))
+		{
+			log_error("Failed to create constraints, see above for details");
+			return false;
+		}
 	}
 
 	/* finally, vacuum analyze the table and its indexes */
-	char vacuum[BUFSIZE] = { 0 };
-
-	sformat(vacuum, sizeof(vacuum), "VACUUM ANALYZE %s", qname);
-
-	log_info("%s;", vacuum);
-
-	if (!pgsql_execute(&dst, vacuum))
+	if (tableSpecs->section == DATA_SECTION_VACUUM ||
+		tableSpecs->section == DATA_SECTION_ALL)
 	{
-		/* errors have already been logged */
-		return false;
+		char vacuum[BUFSIZE] = { 0 };
+
+		sformat(vacuum, sizeof(vacuum), "VACUUM ANALYZE %s", qname);
+
+		log_info("%s;", vacuum);
+
+		if (!pgsql_execute(&dst, vacuum))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	/* now we're done */
@@ -1061,9 +1111,43 @@ copydb_create_index(CopyTableDataSpec *tableSpecs, int idx)
 	CopyIndexSummary summary = {
 		.pid = getpid(),
 		.index = index,
+		.command = { 0 }
 	};
 
-	sformat(summary.command, sizeof(summary.command), "%s;", index->indexDef);
+	/* prepare the CREATE INDEX command, adding IF NOT EXISTS */
+	if (tableSpecs->section == DATA_SECTION_INDEXES)
+	{
+		int ci_len = strlen("CREATE INDEX ");
+		int cu_len = strlen("CREATE UNIQUE INDEX ");
+
+		if (strncmp(index->indexDef, "CREATE INDEX ", ci_len) == 0)
+		{
+			sformat(summary.command, sizeof(summary.command),
+					"CREATE INDEX IF NOT EXISTS %s;",
+					index->indexDef + ci_len);
+		}
+		else if (strncmp(index->indexDef, "CREATE UNIQUE INDEX ", cu_len) == 0)
+		{
+			sformat(summary.command, sizeof(summary.command),
+					"CREATE UNIQUE INDEX IF NOT EXISTS %s;",
+					index->indexDef + cu_len);
+		}
+		else
+		{
+			log_error("Failed to parse \"%s\"", index->indexDef);
+			return false;
+		}
+	}
+	else
+	{
+		/*
+		 * Just use the pg_get_indexdef() command, with an added semi-colon for
+		 * logging clarity.
+		 */
+		sformat(summary.command, sizeof(summary.command),
+				"%s;",
+				index->indexDef);
+	}
 
 	if (!open_index_summary(&summary, indexPaths->lockFile))
 	{
@@ -1081,9 +1165,9 @@ copydb_create_index(CopyTableDataSpec *tableSpecs, int idx)
 		exit(EXIT_CODE_TARGET);
 	}
 
-	log_info("%s;", index->indexDef);
+	log_info("%s", summary.command);
 
-	if (!pgsql_execute(&pgconn, index->indexDef))
+	if (!pgsql_execute(&pgconn, summary.command))
 	{
 		/* errors have already been logged */
 		(void) semaphore_unlock(tableSpecs->indexSemaphore);

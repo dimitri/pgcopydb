@@ -15,3 +15,4 @@ their own manual page.
    pgcopydb_dump
    pgcopydb_restore
    pgcopydb_list
+   pgcopydb_copy

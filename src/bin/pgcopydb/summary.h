@@ -100,6 +100,7 @@ typedef enum
 	TIMING_STEP_AFTER_PREPARE_SCHEMA,
 	TIMING_STEP_BEFORE_FINALIZE_SCHEMA,
 	TIMING_STEP_AFTER_FINALIZE_SCHEMA,
+	TIMING_STEP_END,
 } TimingStep;
 
 typedef struct TopLevelTimings
@@ -110,6 +111,7 @@ typedef struct TopLevelTimings
 	instr_time afterPrepareSchema;
 	instr_time beforeFinalizeSchema;
 	instr_time afterFinalizeSchema;
+	instr_time endTime;
 
 	char totalMs[INTSTRING_MAX_DIGITS];
 	char dumpSchemaMs[INTSTRING_MAX_DIGITS];

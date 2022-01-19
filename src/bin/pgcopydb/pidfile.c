@@ -143,8 +143,8 @@ read_pidfile(const char *pidfile, pid_t *pid)
 		log_debug("Failed to signal pid %d: %m", *pid);
 		*pid = 0;
 
-		log_info("Found a stale pidfile at \"%s\"", pidfile);
-		log_warn("Removing the stale pid file \"%s\"", pidfile);
+		log_debug("Found a stale pidfile at \"%s\"", pidfile);
+		log_info("Removing the stale pid file \"%s\"", pidfile);
 
 		/*
 		 * We must return false here, after having determined that the

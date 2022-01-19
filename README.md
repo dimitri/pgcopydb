@@ -88,15 +88,15 @@ Then `pgcopydb` implements the following steps:
 
      The primary indexes are created as UNIQUE indexes at this stage.
 
-     Then the PRIMARY KEY constraints are created USING the just built
+  5. Then the PRIMARY KEY constraints are created USING the just built
      indexes. This two-steps approach allows the primary key index itself to
      be created in parallel with other indexes on the same table, avoiding
      an EXCLUSIVE LOCK while creating the index.
 
-  5. Then VACUUM ANALYZE is run on each target table as soon as the data and
+  6. Then VACUUM ANALYZE is run on each target table as soon as the data and
      indexes are all created.
 
-  6. The final stage consists now of running the rest of the `post-data`
+  7. The final stage consists now of running the rest of the `post-data`
      section script for the whole database, and that's where the foreign key
      constraints and other elements are created.
 
@@ -203,6 +203,23 @@ When you have multiple versions of Postgres installed, consider exporting
 the `PG_CONFIG` environment variable to the version you want to use.
 `pgcopydb` then uses the `PG_CONFIG` from the path and runs `${PG_CONFIG}
 --bindir` to find the `pg_dump` and `pg_restore` binaries it needs.
+
+## Manual Steps
+
+The `pgcopydb` command line also includes entry points that allows
+implementing any step on its own.
+
+  1. `pgcopydb dump schema`
+  2. `pgcopydb restore pre-data`
+  3. `pgcopydb copy table-data`
+  4. `pgcopydb copy indexes`
+  5. `pgcopydb copy constraints`
+  6. `pgcopydb vacuumdb`
+  7. `pgcopydb restore post-data`
+
+Using individual commands fails to provide the advanced concurrency
+capabilities of the main `pgcopydb copy-db` command, so it is strongly
+advised to prefer tha main command.
 
 ## Authors
 

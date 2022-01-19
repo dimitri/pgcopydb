@@ -74,14 +74,31 @@ typedef struct IndexFilePathsArray
 } IndexFilePathsArray;
 
 
+/*
+ * pgcopydb relies on pg_dump and pg_restore to implement the pre-data and the
+ * post-data section of the operation, and implements the data section
+ * differently. The data section itself is actually split in separate steps.
+ */
+typedef enum
+{
+	DATA_SECTION_NONE = 0,
+	DATA_SECTION_TABLE_DATA,
+	DATA_SECTION_INDEXES,
+	DATA_SECTION_CONSTRAINTS,
+	DATA_SECTION_VACUUM,
+	DATA_SECTION_ALL
+} CopyDataSection;
+
 /* all that's needed to drive a single TABLE DATA copy process */
 typedef struct CopyTableDataSpec
 {
 	CopyFilePaths *cfPaths;
 	PostgresPaths *pgPaths;
 
-	char *source_pguri;
-	char *target_pguri;
+	char source_pguri[MAXCONNINFO];
+	char target_pguri[MAXCONNINFO];
+
+	CopyDataSection section;
 
 	SourceTable *sourceTable;
 	SourceIndexArray *indexArray;
@@ -106,12 +123,13 @@ typedef struct CopyTableDataSpecsArray
 /* all that's needed to start a TABLE DATA copy for a whole database */
 typedef struct CopyDataSpec
 {
-	CopyFilePaths *cfPaths;
-	PostgresPaths *pgPaths;
+	CopyFilePaths cfPaths;
+	PostgresPaths pgPaths;
 
-	char *source_pguri;
-	char *target_pguri;
+	char source_pguri[MAXCONNINFO];
+	char target_pguri[MAXCONNINFO];
 
+	CopyDataSection section;
 	bool dropIfExists;
 	bool noOwner;
 
@@ -135,15 +153,14 @@ typedef enum
 } PostgresDumpSection;
 
 
-bool copydb_init_workdir(CopyFilePaths *cfPaths, char *dir);
+bool copydb_init_workdir(CopyFilePaths *cfPaths, char *dir, bool removeDir);
 
 bool copydb_init_specs(CopyDataSpec *specs,
-					   CopyFilePaths *cfPaths,
-					   PostgresPaths *pgPaths,
 					   char *source_pguri,
 					   char *target_pguri,
 					   int tableJobs,
 					   int indexJobs,
+					   CopyDataSection section,
 					   bool dropIfExists,
 					   bool noOwner);
 

@@ -487,11 +487,11 @@ IntervalToString(uint64_t millisecs, char *buffer, size_t size)
 	}
 	else
 	{
-		int days = (int) (seconds / (24.0 * 60.0 * 60.0));
-		int hours =
-			(int) ((seconds - (days * 24.0 * 60.0 * 60.0)) / (60.0 * 60.0));
+		long days = (long) (seconds / (24.0 * 60.0 * 60.0));
+		long hours =
+			(long) ((seconds - (days * 24.0 * 60.0 * 60.0)) / (60.0 * 60.0));
 
-		sformat(buffer, size, "%2dd%02dh", days, hours);
+		sformat(buffer, size, "%2ldd%02ldh", days, hours);
 	}
 
 	return true;

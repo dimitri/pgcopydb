@@ -34,7 +34,8 @@ int root_options(int argc, char **argv);
 
 
 /* cli_copy.h */
-extern CommandLine copy_db_command;
+extern CommandLine copy__db_command;
+extern CommandLine copy_commands;
 
 /* cli_dump.h */
 extern CommandLine dump_commands;

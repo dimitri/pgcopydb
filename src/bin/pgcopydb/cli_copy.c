@@ -24,10 +24,18 @@ CopyDBOptions copyDBoptions = { 0 };
 
 static bool cli_copydb_getenv(CopyDBOptions *options);
 static int cli_copy_db_getopts(int argc, char **argv);
+
 static void cli_copy_db(int argc, char **argv);
+static void cli_copy_data(int argc, char **argv);
+static void cli_copy_table_data(int argc, char **argv);
+static void cli_copy_indexes(int argc, char **argv);
+static void cli_copy_constraints(int argc, char **argv);
+
+static void cli_copy_prepare_specs(CopyDataSpec *copySpecs,
+								   CopyDataSection section);
 
 
-CommandLine copy_db_command =
+CommandLine copy__db_command =
 	make_command(
 		"copy-db",
 		"Copy an entire database from source to target",
@@ -40,6 +48,84 @@ CommandLine copy_db_command =
 		"  --no-owner        Do not set ownership of objects to match the original database\n",
 		cli_copy_db_getopts,
 		cli_copy_db);
+
+/* have pgcopydb copy-db and pgcopydb copy db aliases to each-other */
+static CommandLine copy_db_command =
+	make_command(
+		"db",
+		"Copy an entire database from source to target",
+		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
+		"  --source          Postgres URI to the source database\n"
+		"  --target          Postgres URI to the target database\n"
+		"  --table-jobs      Number of concurrent COPY jobs to run\n"
+		"  --index-jobs      Number of concurrent CREATE INDEX jobs to run\n"
+		"  --drop-if-exists  On the target database, clean-up from a previous run first\n"
+		"  --no-owner        Do not set ownership of objects to match the original database\n",
+		cli_copy_db_getopts,
+		cli_copy_db);
+
+/*
+ * pgcopydb copy data does the data section only, skips pre-data and post-data
+ * both.
+ */
+static CommandLine copy_data_command =
+	make_command(
+		"data",
+		"Copy the data section from source to target",
+		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
+		"  --source          Postgres URI to the source database\n"
+		"  --target          Postgres URI to the target database\n"
+		"  --table-jobs      Number of concurrent COPY jobs to run\n"
+		"  --index-jobs      Number of concurrent CREATE INDEX jobs to run\n",
+		cli_copy_db_getopts,
+		cli_copy_data);
+
+static CommandLine copy_table_data_command =
+	make_command(
+		"table-data",
+		"Copy the data from all tables in database from source to target",
+		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
+		"  --source          Postgres URI to the source database\n"
+		"  --target          Postgres URI to the target database\n"
+		"  --table-jobs      Number of concurrent COPY jobs to run\n",
+		cli_copy_db_getopts,
+		cli_copy_table_data);
+
+static CommandLine copy_indexes_command =
+	make_command(
+		"indexes",
+		"Create all the indexes found in the source database in the target",
+		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
+		"  --source          Postgres URI to the source database\n"
+		"  --target          Postgres URI to the target database\n"
+		"  --table-jobs      Number of concurrent COPY jobs to run\n",
+		cli_copy_db_getopts,
+		cli_copy_indexes);
+
+static CommandLine copy_constraints_command =
+	make_command(
+		"constraints",
+		"Create all the constraints found in the source database in the target",
+		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
+		"  --source          Postgres URI to the source database\n"
+		"  --target          Postgres URI to the target database\n"
+		"  --table-jobs      Number of concurrent COPY jobs to run\n",
+		cli_copy_db_getopts,
+		cli_copy_constraints);
+
+static CommandLine *copy_subcommands[] = {
+	&copy_db_command,
+	&copy_data_command,
+	&copy_table_data_command,
+	&copy_indexes_command,
+	&copy_constraints_command,
+	NULL
+};
+
+CommandLine copy_commands =
+	make_command_set("copy",
+					 "Implement the data section of the database copy",
+					 NULL, NULL, NULL, copy_subcommands);
 
 
 /*
@@ -330,40 +416,14 @@ cli_copydb_getenv(CopyDBOptions *options)
 static void
 cli_copy_db(int argc, char **argv)
 {
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_ALL);
+
 	Summary summary = { 0 };
 	TopLevelTimings *timings = &(summary.timings);
 
-	CopyFilePaths cfPaths = { 0 };
-	PostgresPaths pgPaths = { 0 };
-
 	(void) summary_set_current_time(timings, TIMING_STEP_START);
-
-	log_info("[SOURCE] Copying database from \"%s\"", copyDBoptions.source_pguri);
-	log_info("[TARGET] Copying database into \"%s\"", copyDBoptions.target_pguri);
-
-	(void) find_pg_commands(&pgPaths);
-
-	if (!copydb_init_workdir(&cfPaths, NULL))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	CopyDataSpec copySpecs = { 0 };
-
-	if (!copydb_init_specs(&copySpecs,
-						   &cfPaths,
-						   &pgPaths,
-						   copyDBoptions.source_pguri,
-						   copyDBoptions.target_pguri,
-						   copyDBoptions.tableJobs,
-						   copyDBoptions.indexJobs,
-						   copyDBoptions.dropIfExists,
-						   copyDBoptions.noOwner))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
 
 	log_info("STEP 1: dump the source database schema (pre/post data)");
 
@@ -408,6 +468,178 @@ cli_copy_db(int argc, char **argv)
 	}
 
 	(void) summary_set_current_time(timings, TIMING_STEP_AFTER_FINALIZE_SCHEMA);
+	(void) summary_set_current_time(timings, TIMING_STEP_END);
 
 	(void) print_summary(&summary, &copySpecs);
+}
+
+
+/*
+ * cli_copy_data implements the data section of the pgcopydb program, skipping
+ * the pre-data and post-data operations on the schema. It expects the tables
+ * to have already been created (empty) on the target database.
+ *
+ * It could creatively be used to federate/merge data from different sources
+ * all into the same single target instance, too.
+ */
+static void
+cli_copy_data(int argc, char **argv)
+{
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_ALL);
+
+	Summary summary = { 0 };
+	TopLevelTimings *timings = &(summary.timings);
+
+	(void) summary_set_current_time(timings, TIMING_STEP_START);
+
+	log_info("STEP 3: copy data from source to target in sub-processes");
+	log_info("STEP 4: create indexes and constraints in parallel");
+	log_info("STEP 5: vacuum analyze each table");
+
+	if (!copydb_copy_all_table_data(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	(void) summary_set_current_time(timings, TIMING_STEP_END);
+	(void) print_summary(&summary, &copySpecs);
+}
+
+
+/*
+ * cli_copy_table_data implements only the TABLE DATA parts of the pg_dump |
+ * pg_restore job, using our own internal COPY based implementation to avoid
+ * the need to spill to disk.
+ */
+static void
+cli_copy_table_data(int argc, char **argv)
+{
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_TABLE_DATA);
+
+	Summary summary = { 0 };
+	TopLevelTimings *timings = &(summary.timings);
+
+	(void) summary_set_current_time(timings, TIMING_STEP_START);
+
+	log_info("STEP 3: copy data from source to target in sub-processes");
+
+	if (!copydb_copy_all_table_data(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	(void) summary_set_current_time(timings, TIMING_STEP_END);
+	(void) print_summary(&summary, &copySpecs);
+}
+
+
+/*
+ * cli_copy_indexes implements only the CREATE INDEX parts of the whole copy
+ * operations.
+ */
+static void
+cli_copy_indexes(int argc, char **argv)
+{
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_INDEXES);
+
+	Summary summary = { 0 };
+	TopLevelTimings *timings = &(summary.timings);
+
+	(void) summary_set_current_time(timings, TIMING_STEP_START);
+
+	log_info("STEP 4: create indexes in parallel");
+
+	if (!copydb_copy_all_table_data(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	(void) summary_set_current_time(timings, TIMING_STEP_END);
+	(void) print_summary(&summary, &copySpecs);
+}
+
+
+/*
+ * cli_copy_indexes implements only the ALTER TABLE ... ADD CONSTRAINT parts of
+ * the whole copy operations. The tables and indexes should have already been
+ * created before hand.
+ */
+static void
+cli_copy_constraints(int argc, char **argv)
+{
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_CONSTRAINTS);
+
+	Summary summary = { 0 };
+	TopLevelTimings *timings = &(summary.timings);
+
+	(void) summary_set_current_time(timings, TIMING_STEP_START);
+
+	log_info("STEP 4: create constraints");
+
+	if (!copydb_copy_all_table_data(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	(void) summary_set_current_time(timings, TIMING_STEP_END);
+	(void) print_summary(&summary, &copySpecs);
+}
+
+
+/*
+ * cli_copy_prepare_specs initializes our internal data structure that are used
+ * to drive the operations.
+ */
+static void
+cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
+{
+	CopyFilePaths *cfPaths = &(copySpecs->cfPaths);
+	PostgresPaths *pgPaths = &(copySpecs->pgPaths);
+
+	log_info("[SOURCE] Copying database from \"%s\"", copyDBoptions.source_pguri);
+	log_info("[TARGET] Copying database into \"%s\"", copyDBoptions.target_pguri);
+
+	(void) find_pg_commands(pgPaths);
+
+	log_debug("Using pg_dump for Postgres \"%s\" at \"%s\"",
+			  copySpecs->pgPaths.pg_version,
+			  copySpecs->pgPaths.pg_dump);
+
+	log_debug("Using pg_restore for Postgres \"%s\" at \"%s\"",
+			  copySpecs->pgPaths.pg_version,
+			  copySpecs->pgPaths.pg_restore);
+
+	/* only remove the top-level directory when doing a full copy  */
+	bool removeDir = section == DATA_SECTION_ALL;
+
+	if (!copydb_init_workdir(cfPaths, NULL, removeDir))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!copydb_init_specs(copySpecs,
+						   copyDBoptions.source_pguri,
+						   copyDBoptions.target_pguri,
+						   copyDBoptions.tableJobs,
+						   copyDBoptions.indexJobs,
+						   section,
+						   copyDBoptions.dropIfExists,
+						   copyDBoptions.noOwner))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
 }

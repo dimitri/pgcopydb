@@ -52,15 +52,15 @@ The ``pgcopydb copy-db`` command implements the following steps:
 
      The primary indexes are created as UNIQUE indexes at this stage.
 
-     Then the PRIMARY KEY constraints are created USING the just built
+  5. Then the PRIMARY KEY constraints are created USING the just built
      indexes. This two-steps approach allows the primary key index itself to
      be created in parallel with other indexes on the same table, avoiding
      an EXCLUSIVE LOCK while creating the index.
 
-  5. Then ``VACUUM ANALYZE`` is run on each target table as soon as the data
+  6. Then ``VACUUM ANALYZE`` is run on each target table as soon as the data
      and indexes are all created.
 
-  6. The final stage consists now of running the rest of the ``post-data``
+  7. The final stage consists now of running the rest of the ``post-data``
      section script for the whole database, and that's where the foreign key
      constraints and other elements are created.
 
