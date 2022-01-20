@@ -1005,15 +1005,6 @@ pgsql_set_snapshot(PGSQL *pgsql, char *snapshot)
 {
 	char sql[BUFSIZE] = { 0 };
 
-	if (!pgsql_execute(pgsql,
-					   "SET TRANSACTION ISOLATION LEVEL "
-					   "REPEATABLE READ, "
-					   "READ ONLY, "
-					   "DEFERRABLE"))
-	{
-		return false;
-	}
-
 	sformat(sql, sizeof(sql), "SET TRANSACTION SNAPSHOT '%s'", snapshot);
 
 	return pgsql_execute(pgsql, sql);
