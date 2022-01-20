@@ -397,7 +397,11 @@ copydb_objectid_has_been_processed_already(CopyDataSpec *specs, uint32_t oid)
 			/* no worries, just skip then */
 		}
 
-		log_debug("Skipping dumpId %d (%s)", oid, sql);
+		/* we're interested in the last line of the file */
+		char *lines[BUFSIZE] = { 0 };
+		int lineCount = splitLines(sql, lines, BUFSIZE);
+
+		log_debug("Skipping dumpId %d (%s)", oid, lines[lineCount - 1]);
 
 		/* read_file allocates memory */
 		free(sql);
