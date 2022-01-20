@@ -65,8 +65,8 @@ The ``pgcopydb copy-db`` command implements the following steps:
      ``last_value`` and the ``is_called`` metadata the same way that pg_dump
      does.
 
-	 For each sequence, pgcopydb then calls ``pg_catalog.setval()`` on the
-	 target database with the information obtained on the source database.
+     For each sequence, pgcopydb then calls ``pg_catalog.setval()`` on the
+     target database with the information obtained on the source database.
 
   9. The final stage consists now of running the rest of the ``post-data``
      section script for the whole database, and that's where the foreign key
