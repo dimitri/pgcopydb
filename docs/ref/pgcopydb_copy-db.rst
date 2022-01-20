@@ -16,13 +16,13 @@ Postgres instance to the target Postgres instance.
    pgcopydb copy-db: Copy an entire database from source to target
    usage: pgcopydb copy-db  --source <URI> --target <URI> [ ... ]
 
-     --source          Postgres URI to the source database
-     --target          Postgres URI to the target database
-     --table-jobs      Number of concurrent COPY jobs to run
-     --index-jobs      Number of concurrent CREATE INDEX jobs to run
-     --drop-if-exists  On the target database, clean-up from a previous run first
-     --no-owner        Do not set ownership of objects to match the original database
-
+     --source              Postgres URI to the source database
+     --target              Postgres URI to the target database
+     --table-jobs          Number of concurrent COPY jobs to run
+     --index-jobs          Number of concurrent CREATE INDEX jobs to run
+     --drop-if-exists      On the target database, clean-up from a previous run first
+     --no-owner            Do not set ownership of objects to match the original database
+     --skip-large-objects  Skip copying large objects (blobs)
 
 Description
 -----------
@@ -132,6 +132,11 @@ The following options are available to ``pgcopydb copy-db``:
   database is made by a superuser (or the same user that owns all of the
   objects in the script). With ``--no-owner``, any user name can be used for
   the initial connection, and this user will own all the created objects.
+
+--skip-large-objects
+
+  Skip copying large objects, also known as blobs, when copying the data
+  from the source database to the target database.
 
 Environment
 -----------

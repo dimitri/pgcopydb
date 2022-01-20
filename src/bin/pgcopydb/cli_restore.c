@@ -339,7 +339,8 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 						   1,    /* index jobs */
 						   DATA_SECTION_NONE,
 						   restoreDBoptions.dropIfExists,
-						   restoreDBoptions.noOwner))
+						   restoreDBoptions.noOwner,
+						   false)) /* skipLargeObjects */
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

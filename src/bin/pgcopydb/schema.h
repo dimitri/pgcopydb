@@ -95,4 +95,6 @@ bool schema_list_table_indexes(PGSQL *pgsql,
 							   const char *tableName,
 							   SourceIndexArray *indexArray);
 
+bool schema_count_large_objects(PGSQL *pgsql, int64_t *count);
+
 #endif /* SCHEMA_H */

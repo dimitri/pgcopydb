@@ -198,7 +198,8 @@ copydb_init_specs(CopyDataSpec *specs,
 				  int indexJobs,
 				  CopyDataSection section,
 				  bool dropIfExists,
-				  bool noOwner)
+				  bool noOwner,
+				  bool skipLargeObjects)
 {
 	/* fill-in a structure with the help of the C compiler */
 	CopyDataSpec tmpCopySpecs = {
@@ -218,6 +219,7 @@ copydb_init_specs(CopyDataSpec *specs,
 		.section = section,
 		.dropIfExists = dropIfExists,
 		.noOwner = noOwner,
+		.skipLargeObjects = skipLargeObjects,
 
 		.tableJobs = tableJobs,
 		.indexJobs = indexJobs,
@@ -724,8 +726,6 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 		   0,
 		   specs->tableJobs * sizeof(TableDataProcess));
 
-	log_info("Listing ordinary tables in \"%s\"", specs->source_pguri);
-
 	/*
 	 * First, we need to open a snapshot that we're going to re-use in all our
 	 * connections to the source database.
@@ -738,6 +738,35 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 		return false;
 	}
 
+	/*
+	 * Check if we have large objects to take into account, because that's not
+	 * supported at the moment.
+	 */
+	if (!specs->skipLargeObjects)
+	{
+		int64_t largeObjectCount = 0;
+
+		if (!schema_count_large_objects(&(specs->sourceSnapshot.pgsql),
+										&largeObjectCount))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (largeObjectCount >= 0)
+		{
+			log_fatal("pgcopydb version %s has no support for large objects",
+					  PGCOPYDB_VERSION);
+			log_fatal("Consider using --skip-large-objects");
+			return false;
+		}
+	}
+
+	log_info("Listing ordinary tables in \"%s\"", specs->source_pguri);
+
+	/*
+	 * Now get the list of the tables we want to COPY over.
+	 */
 	if (!schema_list_ordinary_tables(&(specs->sourceSnapshot.pgsql),
 									 &tableArray))
 	{

@@ -36,7 +36,7 @@ tables to COPY the data from.
 .. _pgcopydb_list_sequences:
 
 pgcopydb list sequences
---------------------
+-----------------------
 
 pgcopydb list sequences - List all the source sequences to copy data from
 

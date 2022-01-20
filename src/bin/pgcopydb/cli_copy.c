@@ -41,12 +41,13 @@ CommandLine copy__db_command =
 		"copy-db",
 		"Copy an entire database from source to target",
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
-		"  --source          Postgres URI to the source database\n"
-		"  --target          Postgres URI to the target database\n"
-		"  --table-jobs      Number of concurrent COPY jobs to run\n"
-		"  --index-jobs      Number of concurrent CREATE INDEX jobs to run\n"
-		"  --drop-if-exists  On the target database, clean-up from a previous run first\n"
-		"  --no-owner        Do not set ownership of objects to match the original database\n",
+		"  --source              Postgres URI to the source database\n"
+		"  --target              Postgres URI to the target database\n"
+		"  --table-jobs          Number of concurrent COPY jobs to run\n"
+		"  --index-jobs          Number of concurrent CREATE INDEX jobs to run\n"
+		"  --drop-if-exists      On the target database, clean-up from a previous run first\n"
+		"  --no-owner            Do not set ownership of objects to match the original database\n"
+		"  --skip-large-objects  Skip copying large objects (blobs)\n",
 		cli_copy_db_getopts,
 		cli_copy_db);
 
@@ -56,12 +57,13 @@ static CommandLine copy_db_command =
 		"db",
 		"Copy an entire database from source to target",
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
-		"  --source          Postgres URI to the source database\n"
-		"  --target          Postgres URI to the target database\n"
-		"  --table-jobs      Number of concurrent COPY jobs to run\n"
-		"  --index-jobs      Number of concurrent CREATE INDEX jobs to run\n"
-		"  --drop-if-exists  On the target database, clean-up from a previous run first\n"
-		"  --no-owner        Do not set ownership of objects to match the original database\n",
+		"  --source              Postgres URI to the source database\n"
+		"  --target              Postgres URI to the target database\n"
+		"  --table-jobs          Number of concurrent COPY jobs to run\n"
+		"  --index-jobs          Number of concurrent CREATE INDEX jobs to run\n"
+		"  --drop-if-exists      On the target database, clean-up from a previous run first\n"
+		"  --no-owner            Do not set ownership of objects to match the original database\n"
+		"  --skip-large-objects  Skip copying large objects (blobs)\n",
 		cli_copy_db_getopts,
 		cli_copy_db);
 
@@ -74,10 +76,11 @@ static CommandLine copy_data_command =
 		"data",
 		"Copy the data section from source to target",
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
-		"  --source          Postgres URI to the source database\n"
-		"  --target          Postgres URI to the target database\n"
-		"  --table-jobs      Number of concurrent COPY jobs to run\n"
-		"  --index-jobs      Number of concurrent CREATE INDEX jobs to run\n",
+		"  --source              Postgres URI to the source database\n"
+		"  --target              Postgres URI to the target database\n"
+		"  --table-jobs          Number of concurrent COPY jobs to run\n"
+		"  --index-jobs          Number of concurrent CREATE INDEX jobs to run\n"
+		"  --skip-large-objects  Skip copying large objects (blobs)\n",
 		cli_copy_db_getopts,
 		cli_copy_data);
 
@@ -159,6 +162,8 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "index-jobs", required_argument, NULL, 'I' },
 		{ "drop-if-exists", no_argument, NULL, 'c' }, /* pg_restore -c */
 		{ "no-owner", no_argument, NULL, 'O' },       /* pg_restore -O */
+		{ "skip-blobs", no_argument, NULL, 'B' },
+		{ "skip-large-objects", no_argument, NULL, 'B' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "quiet", no_argument, NULL, 'q' },
@@ -179,7 +184,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:J:I:cOVvqh",
+	while ((c = getopt_long(argc, argv, "S:T:J:I:cOBVvqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -247,6 +252,13 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				options.noOwner = true;
 				log_trace("--no-owner");
+				break;
+			}
+
+			case 'B':
+			{
+				options.skipLargeObjects = true;
+				log_trace("--skip-large-objects");
 				break;
 			}
 
@@ -696,7 +708,8 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 						   copyDBoptions.indexJobs,
 						   section,
 						   copyDBoptions.dropIfExists,
-						   copyDBoptions.noOwner))
+						   copyDBoptions.noOwner,
+						   copyDBoptions.skipLargeObjects))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

@@ -262,7 +262,8 @@ cli_dump_schema_section(DumpDBOptions *dumpDBoptions,
 						   1,    /* index jobs */
 						   DATA_SECTION_NONE,
 						   false, /* dropIfExists */
-						   false)) /* noOwner */
+						   false, /* noOwner */
+						   false)) /* skipLargeObjects */
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

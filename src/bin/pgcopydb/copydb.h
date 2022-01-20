@@ -151,6 +151,7 @@ typedef struct CopyDataSpec
 	CopyDataSection section;
 	bool dropIfExists;
 	bool noOwner;
+	bool skipLargeObjects;
 
 	int tableJobs;
 	int indexJobs;
@@ -181,7 +182,8 @@ bool copydb_init_specs(CopyDataSpec *specs,
 					   int indexJobs,
 					   CopyDataSection section,
 					   bool dropIfExists,
-					   bool noOwner);
+					   bool noOwner,
+					   bool skipLargeObjects);
 
 bool copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 							 CopyDataSpec *specs,

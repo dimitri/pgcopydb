@@ -23,6 +23,7 @@ typedef struct CopyDBOptions
 	int indexJobs;
 	bool dropIfExists;
 	bool noOwner;
+	bool skipLargeObjects;
 } CopyDBOptions;
 
 
