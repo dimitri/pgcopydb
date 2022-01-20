@@ -208,6 +208,13 @@ copydb_init_specs(CopyDataSpec *specs,
 		.source_pguri = { 0 },
 		.target_pguri = { 0 },
 
+		.sourceSnapshot = {
+			.pgsql = { 0 },
+			.pguri = { 0 },
+			.connectionType = PGSQL_CONN_SOURCE,
+			.snapshot = { 0 }
+		},
+
 		.section = section,
 		.dropIfExists = dropIfExists,
 		.noOwner = noOwner,
@@ -221,6 +228,7 @@ copydb_init_specs(CopyDataSpec *specs,
 	if (source_pguri != NULL)
 	{
 		strlcpy(tmpCopySpecs.source_pguri, source_pguri, MAXCONNINFO);
+		strlcpy(tmpCopySpecs.sourceSnapshot.pguri, source_pguri, MAXCONNINFO);
 	}
 
 	if (target_pguri != NULL)
@@ -274,6 +282,12 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 
 		.source_pguri = { 0 },
 		.target_pguri = { 0 },
+		.sourceSnapshot = {
+			.pgsql = { 0 },
+			.pguri = { 0 },
+			.connectionType = specs->sourceSnapshot.connectionType,
+			.snapshot = { 0 }
+		},
 
 		.section = specs->section,
 
@@ -289,6 +303,15 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 	/* initialize the connection strings */
 	strlcpy(tmpTableSpecs.source_pguri, specs->source_pguri, MAXCONNINFO);
 	strlcpy(tmpTableSpecs.target_pguri, specs->target_pguri, MAXCONNINFO);
+
+	/* initialize the sourceSnapshot buffers */
+	strlcpy(tmpTableSpecs.sourceSnapshot.pguri,
+			specs->sourceSnapshot.pguri,
+			sizeof(tmpTableSpecs.sourceSnapshot.pguri));
+
+	strlcpy(tmpTableSpecs.sourceSnapshot.snapshot,
+			specs->sourceSnapshot.snapshot,
+			sizeof(tmpTableSpecs.sourceSnapshot.snapshot));
 
 	/* copy the structure as a whole memory area to the target place */
 	*tableSpecs = tmpTableSpecs;
@@ -550,6 +573,106 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 
 
 /*
+ * copydb_open_snapshot opens a snapshot on the given connection.
+ *
+ * This is needed in the main process, so that COPY processes can then re-use
+ * the snapshot, and thus we get a consistent view of the database all along.
+ */
+bool
+copydb_export_snapshot(TransactionSnapshot *snapshot)
+{
+	PGSQL *pgsql = &(snapshot->pgsql);
+
+	if (!pgsql_init(pgsql, snapshot->pguri, snapshot->connectionType))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_begin(pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	IsolationLevel level = ISOLATION_SERIALIZABLE;
+	bool readOnly = true;
+	bool deferrable = true;
+
+	if (!pgsql_set_transaction(pgsql, level, readOnly, deferrable))
+	{
+		/* errors have already been logged */
+		(void) pgsql_finish(pgsql);
+		return false;
+	}
+
+	if (!pgsql_export_snapshot(pgsql,
+							   snapshot->snapshot,
+							   sizeof(snapshot->snapshot)))
+	{
+		/* errors have already been logged */
+		(void) pgsql_finish(pgsql);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * copydb_set_snapshot opens a transaction and set it to re-use an existing
+ * snapshot.
+ */
+bool
+copydb_set_snapshot(TransactionSnapshot *snapshot)
+{
+	PGSQL *pgsql = &(snapshot->pgsql);
+
+	if (!pgsql_init(pgsql, snapshot->pguri, snapshot->connectionType))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_begin(pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_set_snapshot(pgsql, snapshot->snapshot))
+	{
+		/* errors have already been logged */
+		(void) pgsql_finish(pgsql);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * copydb_close_snapshot closes the snapshot on Postgres by committing the
+ * transaction and finishing the connection.
+ */
+bool
+copydb_close_snapshot(TransactionSnapshot *snapshot)
+{
+	PGSQL *pgsql = &(snapshot->pgsql);
+
+	if (!pgsql_commit(pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	(void) pgsql_finish(pgsql);
+
+	return true;
+}
+
+
+/*
  * copydb_table_data fetches the list of tables from the source database and
  * then run a pg_dump --data-only --schema ... --table ... | pg_restore on each
  * of them, using up to tblJobs sub-processes for that.
@@ -561,7 +684,6 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 bool
 copydb_copy_all_table_data(CopyDataSpec *specs)
 {
-	PGSQL pgsql = { 0 };
 	SourceTableArray tableArray = { 0, NULL };
 	TableDataProcessArray tableProcessArray = { specs->tableJobs, NULL };
 	CopyTableDataSpecsArray *tableSpecsArray = &(specs->tableSpecsArray);
@@ -581,13 +703,20 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 
 	log_info("Listing ordinary tables in \"%s\"", specs->source_pguri);
 
-	if (!pgsql_init(&pgsql, specs->source_pguri, PGSQL_CONN_SOURCE))
+	/*
+	 * First, we need to open a snapshot that we're going to re-use in all our
+	 * connections to the source database.
+	 */
+	TransactionSnapshot *sourceSnapshot = &(specs->sourceSnapshot);
+
+	if (!copydb_export_snapshot(sourceSnapshot))
 	{
-		/* errors have already been logged */
+		log_fatal("Failed to export a snapshot on \"%s\"", sourceSnapshot->pguri);
 		return false;
 	}
 
-	if (!schema_list_ordinary_tables(&pgsql, &tableArray))
+	if (!schema_list_ordinary_tables(&(specs->sourceSnapshot.pgsql),
+									 &tableArray))
 	{
 		/* errors have already been logged */
 		return false;
@@ -596,6 +725,7 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 	log_info("Fetched information for %d tables", tableArray.count);
 
 	int count = tableArray.count;
+	int errors = 0;
 
 	specs->tableSpecsArray.count = count;
 	specs->tableSpecsArray.array =
@@ -616,7 +746,8 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 		if (!copydb_init_table_specs(tableSpecs, specs, source, process))
 		{
 			/* errors have already been logged */
-			return false;
+			++errors;
+			continue;
 		}
 
 		if (!copydb_start_table_data(tableSpecs))
@@ -627,7 +758,8 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 					  tableSpecs->sourceTable->relname);
 
 			(void) copydb_fatal_exit(&tableProcessArray);
-			return false;
+
+			++errors;
 		}
 
 		log_debug("[%d] is processing table %d \"%s\".\"%s\" with oid %d",
@@ -638,8 +770,36 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 				  tableSpecs->process->oid);
 	}
 
+	/*
+	 * Now is a good time to reset sequences: we're waiting for the TABLE DATA
+	 * sections and the CREATE INDEX, CONSTRAINTS and VACUUM ANALYZE to be done
+	 * with. Sequences can be reset to their expected values while the COPY are
+	 * still running, as COPY won't drain identifiers from the sequences
+	 * anyway.
+	 */
+	log_info("Reset the sequences values on the target database");
+
+	if (!copydb_copy_all_sequences(specs))
+	{
+		/* errors have already been logged */
+		++errors;
+	}
+
+	/* close the source transaction snapshot now */
+	if (!copydb_close_snapshot(sourceSnapshot))
+	{
+		log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
+				  sourceSnapshot->snapshot,
+				  sourceSnapshot->pguri);
+		++errors;
+	}
+
 	/* now we have a unknown count of subprocesses still running */
-	bool success = copydb_wait_for_subprocesses();
+	if (!copydb_wait_for_subprocesses())
+	{
+		/* errors have already been logged */
+		++errors;
+	}
 
 	/*
 	 * Now that all the sub-processes are done, we can also unlink the index
@@ -652,7 +812,7 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 				 specs->indexSemaphore.semId);
 	}
 
-	return success;
+	return errors == 0;
 }
 
 
@@ -665,15 +825,9 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 bool
 copydb_copy_all_sequences(CopyDataSpec *specs)
 {
-	PGSQL src = { 0 };
+	/* re-use the main snapshot and transaction to list sequences */
+	PGSQL *src = &(specs->sourceSnapshot.pgsql);
 	PGSQL dst = { 0 };
-
-	/* initialize our connection objects, connection is opened lazily */
-	if (!pgsql_init(&src, specs->source_pguri, PGSQL_CONN_SOURCE))
-	{
-		/* errors have already been logged */
-		return false;
-	}
 
 	if (!pgsql_init(&dst, specs->target_pguri, PGSQL_CONN_TARGET))
 	{
@@ -685,19 +839,13 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 
 	log_info("Listing sequences in \"%s\"", specs->source_pguri);
 
-	if (!schema_list_sequences(&src, &sequenceArray))
+	if (!schema_list_sequences(src, &sequenceArray))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
 	log_info("Fetched information for %d sequences", sequenceArray.count);
-
-	if (!pgsql_begin(&src))
-	{
-		/* errors have already been logged */
-		return false;
-	}
 
 	if (!pgsql_begin(&dst))
 	{
@@ -717,7 +865,7 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 				seq->nspname,
 				seq->relname);
 
-		if (!schema_get_sequence_value(&src, seq))
+		if (!schema_get_sequence_value(src, seq))
 		{
 			/* just skip this one */
 			log_warn("Failed to get sequence values for %s", qname);
@@ -738,12 +886,6 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 	{
 		/* errors have already been logged */
 		++errors;
-	}
-
-	if (!pgsql_commit(&src))
-	{
-		/* errors have already been logged */
-		return false;
 	}
 
 	return errors == 0;
@@ -811,13 +953,15 @@ copydb_wait_for_subprocesses()
 
 				if (returnCode == 0)
 				{
-					log_debug("Sub-processes exited with code %d", returnCode);
+					log_debug("Sub-processes %d exited with code %d",
+							  pid, returnCode);
 				}
 				else
 				{
 					allReturnCodeAreZero = false;
 
-					log_error("Sub-processes exited with code %d", returnCode);
+					log_error("Sub-processes %d exited with code %d",
+							  pid, returnCode);
 				}
 			}
 		}
@@ -949,7 +1093,8 @@ copydb_start_table_data(CopyTableDataSpec *tableSpecs)
 bool
 copydb_copy_table(CopyTableDataSpec *tableSpecs)
 {
-	PGSQL src = { 0 };
+	/* we want to set transaction snapshot to the main one on the source */
+	PGSQL *src = &(tableSpecs->sourceSnapshot.pgsql);
 	PGSQL dst = { 0 };
 
 	char qname[BUFSIZE] = { 0 };
@@ -974,7 +1119,7 @@ copydb_copy_table(CopyTableDataSpec *tableSpecs)
 	}
 
 	/* initialize our connection objects, connection is opened lazily */
-	if (!pgsql_init(&src, tableSpecs->source_pguri, PGSQL_CONN_SOURCE))
+	if (!copydb_set_snapshot(&(tableSpecs->sourceSnapshot)))
 	{
 		/* errors have already been logged */
 		return false;
@@ -993,7 +1138,7 @@ copydb_copy_table(CopyTableDataSpec *tableSpecs)
 		/* Now copy the data from source to target */
 		log_info("%s", summary.command);
 
-		if (!pg_copy(&src, &dst, qname, qname))
+		if (!pg_copy(src, &dst, qname, qname))
 		{
 			/* errors have already been logged */
 			return false;
@@ -1025,7 +1170,7 @@ copydb_copy_table(CopyTableDataSpec *tableSpecs)
 		tableSpecs->section == DATA_SECTION_CONSTRAINTS ||
 		tableSpecs->section == DATA_SECTION_ALL)
 	{
-		if (!schema_list_table_indexes(&src,
+		if (!schema_list_table_indexes(src,
 									   tableSpecs->sourceTable->nspname,
 									   tableSpecs->sourceTable->relname,
 									   tableSpecs->indexArray))
@@ -1199,7 +1344,7 @@ copydb_create_index(CopyTableDataSpec *tableSpecs, int idx)
 	SourceIndex *index = &(indexArray->array[idx]);
 
 	const char *pguri = tableSpecs->target_pguri;
-	PGSQL pgconn = { 0 };
+	PGSQL dst = { 0 };
 
 	/* First, write the lockFile, with a summary of what's going-on */
 	CopyIndexSummary summary = {
@@ -1253,7 +1398,7 @@ copydb_create_index(CopyTableDataSpec *tableSpecs, int idx)
 	/* now grab an index semaphore lock */
 	(void) semaphore_lock(tableSpecs->indexSemaphore);
 
-	if (!pgsql_init(&pgconn, (char *) pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&dst, (char *) pguri, PGSQL_CONN_TARGET))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);
@@ -1261,7 +1406,7 @@ copydb_create_index(CopyTableDataSpec *tableSpecs, int idx)
 
 	log_info("%s", summary.command);
 
-	if (!pgsql_execute(&pgconn, summary.command))
+	if (!pgsql_execute(&dst, summary.command))
 	{
 		/* errors have already been logged */
 		(void) semaphore_unlock(tableSpecs->indexSemaphore);
@@ -1300,9 +1445,9 @@ copydb_create_constraints(CopyTableDataSpec *tableSpecs)
 	SourceIndexArray *indexArray = tableSpecs->indexArray;
 
 	const char *pguri = tableSpecs->target_pguri;
-	PGSQL pgconn = { 0 };
+	PGSQL dst = { 0 };
 
-	if (!pgsql_init(&pgconn, (char *) pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&dst, (char *) pguri, PGSQL_CONN_TARGET))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1332,7 +1477,7 @@ copydb_create_constraints(CopyTableDataSpec *tableSpecs)
 
 			log_info("%s;", sql);
 
-			if (!pgsql_execute(&pgconn, sql))
+			if (!pgsql_execute(&dst, sql))
 			{
 				/* errors have already been logged */
 				return false;

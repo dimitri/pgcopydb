@@ -470,14 +470,6 @@ cli_copy_db(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	log_info("STEP 6: reset the sequences values on the target database");
-
-	if (!copydb_copy_all_sequences(&copySpecs))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
 	log_info("STEP 7: restore the post-data section to the target database");
 
 	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_FINALIZE_SCHEMA);
@@ -520,14 +512,6 @@ cli_copy_data(int argc, char **argv)
 	log_info("Vacuum analyze each table");
 
 	if (!copydb_copy_all_table_data(&copySpecs))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	log_info("Reset the sequences values on the target database");
-
-	if (!copydb_copy_all_sequences(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -587,10 +571,26 @@ cli_copy_sequences(int argc, char **argv)
 
 	(void) summary_set_current_time(timings, TIMING_STEP_START);
 
+	TransactionSnapshot *sourceSnapshot = &(copySpecs.sourceSnapshot);
+
+	if (!copydb_export_snapshot(sourceSnapshot))
+	{
+		log_fatal("Failed to export a snapshot on \"%s\"", sourceSnapshot->pguri);
+		exit(EXIT_CODE_SOURCE);
+	}
+
 	if (!copydb_copy_all_sequences(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!copydb_close_snapshot(sourceSnapshot))
+	{
+		log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
+				  sourceSnapshot->snapshot,
+				  sourceSnapshot->pguri);
+		exit(EXIT_CODE_SOURCE);
 	}
 
 	(void) summary_set_current_time(timings, TIMING_STEP_END);

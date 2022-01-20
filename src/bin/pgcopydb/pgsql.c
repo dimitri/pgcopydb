@@ -930,6 +930,97 @@ pgsql_commit(PGSQL *pgsql)
 
 
 /*
+ * pgsql_set_transaction calls SET ISOLATION LEVEl with the specific
+ * transaction modes parameters.
+ */
+bool
+pgsql_set_transaction(PGSQL *pgsql,
+					  IsolationLevel level, bool readOnly, bool deferrable)
+{
+	char sql[BUFSIZE] = { 0 };
+
+	char *isolationLevels[] = {
+		"SERIALIZABLE",
+		"REPEATABLE READ",
+		"READ COMMITTED",
+		"READ UNCOMMITTED"
+	};
+
+	int isolationLevelCount = sizeof(isolationLevels) / sizeof(char *);
+
+	if (level < 0 || level >= isolationLevelCount)
+	{
+		log_error("BUG: unknown isolation level %d", level);
+		return false;
+	}
+
+	sformat(sql, sizeof(sql),
+			"SET TRANSACTION ISOLATION LEVEL %s, %s, %s",
+			isolationLevels[level],
+			readOnly ? "READ ONLY" : "READ WRITE",
+			deferrable ? "DEFERRABLE" : "NOT DEFERRABLE");
+
+	return pgsql_execute(pgsql, sql);
+}
+
+
+/*
+ * pgsql_export_snapshot calls pg_export_snapshot() and copies the text into
+ * the given string buffer, that must have been allocated by the caller.
+ */
+bool
+pgsql_export_snapshot(PGSQL *pgsql, char *snapshot, size_t size)
+{
+	char *sql = "select pg_export_snapshot()";
+
+	SingleValueResultContext parseContext = { { 0 }, PGSQL_RESULT_STRING, false };
+
+	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+								   &parseContext, &parseSingleValueResult))
+	{
+		log_error("Failed to export snaphost");
+		return false;
+	}
+
+	if (!parseContext.parsedOk)
+	{
+		log_error("Failed to export snaphost");
+		return false;
+	}
+
+	strlcpy(snapshot, parseContext.strVal, size);
+
+	return true;
+}
+
+
+/*
+ * pgsql_set_snapshot calls SET TRANSACTION SNAPSHOT with the given snapshot.
+ * Before we can set a transaction snapshot though, we must set the transaction
+ * isolation level. Same as pg_dump, when sharing a snapshot between worker
+ * processes then REPEATABLE READ is used in there.
+ */
+bool
+pgsql_set_snapshot(PGSQL *pgsql, char *snapshot)
+{
+	char sql[BUFSIZE] = { 0 };
+
+	if (!pgsql_execute(pgsql,
+					   "SET TRANSACTION ISOLATION LEVEL "
+					   "REPEATABLE READ, "
+					   "READ ONLY, "
+					   "DEFERRABLE"))
+	{
+		return false;
+	}
+
+	sformat(sql, sizeof(sql), "SET TRANSACTION SNAPSHOT '%s'", snapshot);
+
+	return pgsql_execute(pgsql, sql);
+}
+
+
+/*
  * pgsql_execute opens a connection, runs a given SQL command, and closes
  * the connection again.
  *

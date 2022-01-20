@@ -119,6 +119,20 @@ typedef enum
 	PG_CONNECTION_BAD
 } PGConnStatus;
 
+/*
+ * Support for ISOLATION LEVEL in pgsql_set_transaction transaction modes.
+ *
+ * ISOLATION LEVEL
+ * { SERIALIZABLE | REPEATABLE READ | READ COMMITTED | READ UNCOMMITTED }
+ */
+typedef enum
+{
+	ISOLATION_SERIALIZABLE = 0,
+	ISOLATION_REPEATABLE_READ,
+	ISOLATION_READ_COMMITTED,
+	ISOLATION_READ_UNCOMMITTED,
+} IsolationLevel;
+
 /* notification processing */
 typedef bool (*ProcessNotificationFunction)(int notificationGroupId,
 											int64_t notificationNodeId,
@@ -204,6 +218,10 @@ void fetchedRows(void *ctx, PGresult *result);
 bool pgsql_begin(PGSQL *pgsql);
 bool pgsql_commit(PGSQL *pgsql);
 bool pgsql_rollback(PGSQL *pgsql);
+bool pgsql_set_transaction(PGSQL *pgsql,
+						   IsolationLevel level, bool readOnly, bool deferrable);
+bool pgsql_export_snapshot(PGSQL *pgsql, char *snapshot, size_t size);
+bool pgsql_set_snapshot(PGSQL *pgsql, char *snapshot);
 bool pgsql_execute(PGSQL *pgsql, const char *sql);
 bool pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 							   const Oid *paramTypes, const char **paramValues,

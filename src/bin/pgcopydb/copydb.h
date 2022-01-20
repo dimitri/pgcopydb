@@ -8,6 +8,7 @@
 
 #include "lock_utils.h"
 #include "pgcmd.h"
+#include "pgsql.h"
 #include "schema.h"
 
 
@@ -75,6 +76,19 @@ typedef struct IndexFilePathsArray
 
 
 /*
+ * pgcopydb uses Postgres facility to export snapshot and re-use them in other
+ * transactions to use a consistent view of the data on the source database.
+ */
+typedef struct TransactionSnapshot
+{
+	PGSQL pgsql;
+	char pguri[MAXCONNINFO];
+	ConnectionType connectionType;
+	char snapshot[BUFSIZE];
+} TransactionSnapshot;
+
+
+/*
  * pgcopydb relies on pg_dump and pg_restore to implement the pre-data and the
  * post-data section of the operation, and implements the data section
  * differently. The data section itself is actually split in separate steps.
@@ -98,6 +112,8 @@ typedef struct CopyTableDataSpec
 
 	char source_pguri[MAXCONNINFO];
 	char target_pguri[MAXCONNINFO];
+
+	TransactionSnapshot sourceSnapshot;
 
 	CopyDataSection section;
 
@@ -129,6 +145,8 @@ typedef struct CopyDataSpec
 
 	char source_pguri[MAXCONNINFO];
 	char target_pguri[MAXCONNINFO];
+
+	TransactionSnapshot sourceSnapshot;
 
 	CopyDataSection section;
 	bool dropIfExists;
@@ -178,6 +196,10 @@ bool copydb_target_finalize_schema(CopyDataSpec *specs);
 
 bool copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
 												uint32_t oid);
+
+bool copydb_export_snapshot(TransactionSnapshot *snapshot);
+bool copydb_set_snapshot(TransactionSnapshot *snapshot);
+bool copydb_close_snapshot(TransactionSnapshot *snapshot);
 
 bool copydb_copy_all_sequences(CopyDataSpec *specs);
 
