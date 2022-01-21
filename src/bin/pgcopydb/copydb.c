@@ -23,9 +23,6 @@
 #include "summary.h"
 
 
-static int waitUntilOneSubprocessIsDone(TableDataProcessArray *subProcessArray);
-
-
 /*
  * copydb_init_tempdir initialises the file paths that are going to be used to
  * store temporary information while the pgcopydb process is running.
@@ -251,7 +248,18 @@ copydb_init_specs(CopyDataSpec *specs,
 	sformat(specs->dumpPaths.listFilename, MAXPGPATH, "%s/%s",
 			specs->cfPaths.schemadir, "post.list");
 
-	/* create the index semaphore */
+	/* create the table semaphore (critical section, one at a time please) */
+	specs->tableSemaphore.initValue = 1;
+
+	if (!semaphore_create(&(specs->tableSemaphore)))
+	{
+		log_error("Failed to create the table concurrency semaphore "
+				  "to orchestrate %d TABLE DATA COPY jobs",
+				  tableJobs);
+		return false;
+	}
+
+	/* create the index semaphore (allow jobs to start) */
 	specs->indexSemaphore.initValue = indexJobs;
 
 	if (!semaphore_create(&(specs->indexSemaphore)))
@@ -274,8 +282,7 @@ copydb_init_specs(CopyDataSpec *specs,
 bool
 copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 						CopyDataSpec *specs,
-						SourceTable *source,
-						TableDataProcess *process)
+						SourceTable *source)
 {
 	/* fill-in a structure with the help of the C compiler */
 	CopyTableDataSpec tmpTableSpecs = {
@@ -295,7 +302,7 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 
 		.sourceTable = source,
 		.indexArray = NULL,
-		.process = process,
+		.summary = NULL,
 
 		.tableJobs = specs->tableJobs,
 		.indexJobs = specs->indexJobs,
@@ -317,6 +324,13 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 
 	/* copy the structure as a whole memory area to the target place */
 	*tableSpecs = tmpTableSpecs;
+
+	/* compute the table fully qualified name */
+	sformat(tableSpecs->qname, sizeof(tableSpecs->qname),
+			"\"%s\".\"%s\"",
+			tableSpecs->sourceTable->nspname,
+			tableSpecs->sourceTable->relname);
+
 
 	/* now compute the table-specific paths we are using in copydb */
 	sformat(tableSpecs->tablePaths.lockFile, MAXPGPATH, "%s/%d",
@@ -710,21 +724,7 @@ bool
 copydb_copy_all_table_data(CopyDataSpec *specs)
 {
 	SourceTableArray tableArray = { 0, NULL };
-	TableDataProcessArray tableProcessArray = { specs->tableJobs, NULL };
 	CopyTableDataSpecsArray *tableSpecsArray = &(specs->tableSpecsArray);
-
-	tableProcessArray.array =
-		(TableDataProcess *) malloc(specs->tableJobs * sizeof(TableDataProcess));
-
-	if (tableProcessArray.array == NULL)
-	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
-	}
-
-	/* ensure the memory area is initialized to all zeroes */
-	memset((void *) tableProcessArray.array,
-		   0,
-		   specs->tableJobs * sizeof(TableDataProcess));
 
 	/*
 	 * First, we need to open a snapshot that we're going to re-use in all our
@@ -776,52 +776,51 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 		return false;
 	}
 
-	log_info("Fetched information for %d tables", tableArray.count);
-
 	int count = tableArray.count;
 	int errors = 0;
+
+	/* only use as many processes as required */
+	if (count < specs->tableJobs)
+	{
+		specs->tableJobs = count;
+	}
+
+	log_info("Fetched information for %d tables, now starting %d processes",
+			 tableArray.count,
+			 specs->tableJobs);
 
 	specs->tableSpecsArray.count = count;
 	specs->tableSpecsArray.array =
 		(CopyTableDataSpec *) malloc(count * sizeof(CopyTableDataSpec));
 
+	/*
+	 * Prepare the copy specs for each table we have.
+	 */
 	for (int tableIndex = 0; tableIndex < tableArray.count; tableIndex++)
 	{
-		int subProcessIndex =
-			waitUntilOneSubprocessIsDone(&tableProcessArray);
-
 		/* initialize our TableDataProcess entry now */
 		SourceTable *source = &(tableArray.array[tableIndex]);
-		TableDataProcess *process = &(tableProcessArray.array[subProcessIndex]);
 
 		/* okay now start the subprocess for this table */
 		CopyTableDataSpec *tableSpecs = &(tableSpecsArray->array[tableIndex]);
 
-		if (!copydb_init_table_specs(tableSpecs, specs, source, process))
+		if (!copydb_init_table_specs(tableSpecs, specs, source))
 		{
 			/* errors have already been logged */
-			++errors;
-			continue;
+			goto terminate;
 		}
+	}
 
-		if (!copydb_start_table_data(tableSpecs))
-		{
-			log_fatal("Failed to start a table data copy process for table "
-					  "\"%s\".\"%s\", see above for details",
-					  tableSpecs->sourceTable->nspname,
-					  tableSpecs->sourceTable->relname);
-
-			(void) copydb_fatal_exit(&tableProcessArray);
-
-			++errors;
-		}
-
-		log_debug("[%d] is processing table %d \"%s\".\"%s\" with oid %d",
-				  tableSpecs->process->pid,
-				  tableIndex,
-				  tableSpecs->sourceTable->nspname,
-				  tableSpecs->sourceTable->relname,
-				  tableSpecs->process->oid);
+	/*
+	 * Now we have tableArray.count tables to migrate and we want to use
+	 * specs->tableJobs sub-processes to work on those migrations. Start the
+	 * processes, each sub-process walks through the array and pick the first
+	 * table that's not being processed already, until all has been done.
+	 */
+	if (!copydb_start_table_processes(specs))
+	{
+		log_fatal("Failed to start a sub-process to COPY the data");
+		(void) copydb_fatal_exit();
 	}
 
 	/*
@@ -838,6 +837,8 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 		/* errors have already been logged */
 		++errors;
 	}
+
+terminate:
 
 	/* close the source transaction snapshot now */
 	if (!copydb_close_snapshot(sourceSnapshot))
@@ -859,6 +860,13 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 	 * Now that all the sub-processes are done, we can also unlink the index
 	 * concurrency semaphore.
 	 */
+	if (!semaphore_finish(&(specs->tableSemaphore)))
+	{
+		log_warn("Failed to remove table concurrency semaphore %d, "
+				 "see above for details",
+				 specs->tableSemaphore.semId);
+	}
+
 	if (!semaphore_finish(&(specs->indexSemaphore)))
 	{
 		log_warn("Failed to remove index concurrency semaphore %d, "
@@ -947,195 +955,255 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 
 
 /*
- * copydb_fatal_exit sends a termination signal to all the subprocess and waits
- * until all the known subprocess are finished, then returns true.
+ * copydb_start_table_processes forks() as many as specs->tableJobs processes
+ * that will all concurrently process TABLE DATA and then CREATE INDEX and then
+ * also VACUUM ANALYZE each table.
  */
 bool
-copydb_fatal_exit(TableDataProcessArray *subProcessArray)
+copydb_start_table_processes(CopyDataSpec *specs)
 {
-	log_fatal("Terminating all subprocesses");
+	for (int i = 0; i < specs->tableJobs; i++)
+	{
+		/*
+		 * Flush stdio channels just before fork, to avoid double-output
+		 * problems.
+		 */
+		fflush(stdout);
+		fflush(stderr);
+
+		int fpid = fork();
+
+		switch (fpid)
+		{
+			case -1:
+			{
+				log_error("Failed to fork a worker process");
+				return false;
+			}
+
+			case 0:
+			{
+				/* child process runs the command */
+				if (!copydb_start_table_process(specs))
+				{
+					/* errors have already been logged */
+					exit(EXIT_CODE_INTERNAL_ERROR);
+				}
+
+				exit(EXIT_CODE_QUIT);
+			}
+
+			default:
+			{
+				/* fork succeeded, in parent */
+				break;
+			}
+		}
+	}
+
 	return copydb_wait_for_subprocesses();
 }
 
 
 /*
- * copydb_wait_for_subprocesses calls waitpid() until no child process is known
- * running. It also fetches the return code of all the sub-processes, and
- * returns true only when all the subprocesses have returned zero (success).
+ * copydb_start_table_process stats a sub-process that walks through the array
+ * of tables to COPY over from the source database to the target database.
+ *
+ * Each process walks through the entire array, and for each entry:
+ *
+ *  - acquires a semaphore to enter the critical section, alone
+ *    - check if the current entry is already done, or being processed
+ *    - if not, create the lock file
+ *  - exit the critical section
+ *  - if we created a lock file, process the selected table
  */
 bool
-copydb_wait_for_subprocesses()
+copydb_start_table_process(CopyDataSpec *specs)
 {
-	bool allReturnCodeAreZero = true;
+	int errors = 0;
+	pid_t pid = getpid();
 
-	log_debug("Waiting for sub-processes to finish");
+	CopyTableDataSpecsArray *tableSpecsArray = &(specs->tableSpecsArray);
 
-	for (;;)
+	for (int tableIndex = 0; tableIndex < tableSpecsArray->count; tableIndex++)
 	{
-		int status;
+		/* initialize our TableDataProcess entry now */
+		CopyTableDataSpec *tableSpecs = &(tableSpecsArray->array[tableIndex]);
 
-		/* ignore errors */
-		pid_t pid = waitpid(-1, &status, WNOHANG);
+		CopyTableSummary currentSummary = { .pid = pid, .table = NULL };
 
-		switch (pid)
+		/* enter the critical section */
+		(void) semaphore_lock(&(specs->tableSemaphore));
+
+		/*
+		 * If the doneFile exists, then the table has been processed already,
+		 * skip it.
+		 *
+		 * If the lockFile exists, then the table is currently being processed
+		 * by another worker process, skip it.
+		 *
+		 * Otherwise, the table is not being processed yet, that must be our
+		 * job to take care of it.
+		 */
+		if (!(file_exists(tableSpecs->tablePaths.doneFile) ||
+			  file_exists(tableSpecs->tablePaths.lockFile)))
 		{
-			case -1:
-			{
-				if (errno == ECHILD)
-				{
-					/* no more childrens */
-					return true;
-				}
+			/* First, write the lockFile, with a summary of what's going-on */
+			currentSummary.table = tableSpecs->sourceTable;
 
-				pg_usleep(100 * 1000); /* 100 ms */
-				break;
+			sformat(currentSummary.command, sizeof(currentSummary.command),
+					"COPY %s;",
+					tableSpecs->qname);
+
+			if (!open_table_summary(&currentSummary,
+									tableSpecs->tablePaths.lockFile))
+			{
+				log_info("Failed to create the lock file at \"%s\"",
+						 tableSpecs->tablePaths.lockFile);
+
+				/* end of the critical section */
+				(void) semaphore_unlock(&(specs->tableSemaphore));
+
+				return false;
 			}
 
-			case 0:
-			{
-				/*
-				 * We're using WNOHANG, 0 means there are no stopped or exited
-				 * children sleep for awhile and ask again later.
-				 */
-				pg_usleep(100 * 1000); /* 100 ms */
-				break;
-			}
-
-			default:
-			{
-				int returnCode = WEXITSTATUS(status);
-
-				if (returnCode == 0)
-				{
-					log_debug("Sub-processes %d exited with code %d",
-							  pid, returnCode);
-				}
-				else
-				{
-					allReturnCodeAreZero = false;
-
-					log_error("Sub-processes %d exited with code %d",
-							  pid, returnCode);
-				}
-			}
-		}
-	}
-
-	return allReturnCodeAreZero;
-}
-
-
-/*
- * waitUntilOneSubprocessIsDone waits until one of the subprocess (any one of
- * them) has created its doneFile, and returns the array index of that process.
- *
- * The subProcessArray entry that is found done is also cleaned-up.
- */
-static int
-waitUntilOneSubprocessIsDone(TableDataProcessArray *subProcessArray)
-{
-	for (;;)
-	{
-		/* don't block user's interrupt (C-c and the like) */
-		if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
-		{
-			(void) copydb_fatal_exit(subProcessArray);
-			return false;
+			tableSpecs->summary = &currentSummary;
 		}
 
-		/* probe each sub-process' doneFile */
-		for (int procIndex = 0; procIndex < subProcessArray->count; procIndex++)
+		/* end of the critical section */
+		(void) semaphore_unlock(&(specs->tableSemaphore));
+
+		/* if we didn't select this table to process, move on to the next one */
+		if (tableSpecs->summary == NULL)
 		{
-			/* when the subprocess pid is zero, we have found an entry */
-			if (subProcessArray->array[procIndex].pid == 0)
-			{
-				log_debug("waitUntilOneSubprocessIsDone: %d", procIndex);
-				return procIndex;
-			}
-
-			/* when we have a doneFile, the process is done */
-			if (file_exists(subProcessArray->array[procIndex].doneFile))
-			{
-				log_debug("waitUntilOneSubprocessIsDone: found \"%s\"",
-						  subProcessArray->array[procIndex].doneFile);
-
-				/* clean-up the array entry, stop tracking this PID */
-				subProcessArray->array[procIndex].pid = 0;
-
-				/* now we have a slot to process the current table */
-				log_debug("waitUntilOneSubprocessIsDone: %d", procIndex);
-				return procIndex;
-			}
+			log_debug("Skipping table %s, already done or being processed",
+					  tableSpecs->qname);
+			continue;
 		}
 
 		/*
-		 * If all subprocesses are still running, wait for a little
-		 * while and then check again. The check being cheap enough
-		 * (it's just an access(2) system call), we sleep for 150ms
-		 * only.
+		 * 1. Now COPY the TABLE DATA from the source to the destination.
 		 */
-		pg_usleep(150 * 1000);
-	}
-}
-
-
-/*
- * copydb_start_table_data forks a sub-process that handles the table data
- * copying, using pg_dump | pg_restore for a specific given table.
- */
-bool
-copydb_start_table_data(CopyTableDataSpec *tableSpecs)
-{
-	/* first prepare the status and summary files paths and contents */
-	SourceTable *source = tableSpecs->sourceTable;
-	TableDataProcess *process = tableSpecs->process;
-
-	process->oid = source->oid;
-
-	sformat(process->lockFile, sizeof(process->lockFile),
-			"%s/%d", tableSpecs->cfPaths->rundir, process->oid);
-
-	sformat(process->doneFile, sizeof(process->doneFile),
-			"%s/%d.done", tableSpecs->cfPaths->tbldir, process->oid);
-
-	/* Flush stdio channels just before fork, to avoid double-output problems */
-	fflush(stdout);
-	fflush(stderr);
-
-	/* time to create the node_active sub-process */
-	int fpid = fork();
-
-	switch (fpid)
-	{
-		case -1:
+		if (!copydb_set_snapshot(&(tableSpecs->sourceSnapshot)))
 		{
-			log_error("Failed to fork a process for copying table data for "
-					  "\"%s\".\"%s\"",
-					  tableSpecs->sourceTable->nspname,
-					  tableSpecs->sourceTable->relname);
-			return -1;
+			/* errors have already been logged */
+			return false;
 		}
 
-		case 0:
+		if (!copydb_copy_table(tableSpecs))
 		{
-			/* child process runs the command */
-			if (!copydb_copy_table(tableSpecs))
+			/* errors have already been logged */
+			return false;
+		}
+
+		/* enter the critical section to communicate that we're done */
+		(void) semaphore_lock(&(specs->tableSemaphore));
+
+		if (!unlink_file(tableSpecs->tablePaths.lockFile))
+		{
+			log_error("Failed to remove the lockFile \"%s\"",
+					  tableSpecs->tablePaths.lockFile);
+			(void) semaphore_unlock(&(specs->tableSemaphore));
+			return false;
+		}
+
+		/* write the doneFile with the summary and timings now */
+		if (!finish_table_summary(&currentSummary,
+								  tableSpecs->tablePaths.doneFile))
+		{
+			log_info("Failed to create the summary file at \"%s\"",
+					 tableSpecs->tablePaths.doneFile);
+			(void) semaphore_unlock(&(specs->tableSemaphore));
+			return false;
+		}
+
+		/* end of the critical section */
+		(void) semaphore_unlock(&(specs->tableSemaphore));
+
+		/*
+		 * 2. Fetch the list of indexes and constraints attached to this table.
+		 */
+		SourceIndexArray indexArray = { 0 };
+
+		tableSpecs->indexArray = &indexArray;
+
+		if (tableSpecs->section == DATA_SECTION_INDEXES ||
+			tableSpecs->section == DATA_SECTION_CONSTRAINTS ||
+			tableSpecs->section == DATA_SECTION_ALL)
+		{
+			if (!schema_list_table_indexes(&(tableSpecs->sourceSnapshot.pgsql),
+										   tableSpecs->sourceTable->nspname,
+										   tableSpecs->sourceTable->relname,
+										   tableSpecs->indexArray))
 			{
 				/* errors have already been logged */
-				exit(EXIT_CODE_INTERNAL_ERROR);
+				++errors;
 			}
 
-			exit(EXIT_CODE_QUIT);
+			/* build the index file paths we need for the upcoming operations */
+			if (!copydb_init_indexes_paths(tableSpecs))
+			{
+				/* errors have already been logged */
+				++errors;
+			}
 		}
 
-		default:
-		{
-			/* fork succeeded, in parent */
-			tableSpecs->process->pid = fpid;
+		/* terminate our connection to the source database now */
+		(void) pgsql_finish(&(tableSpecs->sourceSnapshot.pgsql));
 
-			return true;
+		/*
+		 * 3. Now start the CREATE INDEX sub-processes for this table.
+		 *
+		 *    This starts a main sub-process that launches as many worker
+		 *    processes as indexes to be built concurrently, and waits until
+		 *    these CREATE INDEX commands are all done.
+		 *
+		 *    When the indexes are done being built, then the constraints are
+		 *    created in the main sub-process.
+		 */
+		if (!copydb_copy_table_indexes(tableSpecs))
+		{
+			log_warn("Failed to create all the indexes for %s, "
+					 "see above for details",
+					 tableSpecs->qname);
+			log_warn("Consider `pgcopydb copy indexes` to try again");
+			++errors;
+		}
+
+		/*
+		 * 4. Now start the VACUUM ANALYZE parts of the processing, in a
+		 *    concurrent sub-process. The sub-process is running in parallel to
+		 *    the CREATE INDEX and constraints processes.
+		 */
+		if (!copydb_start_vacuum_table(tableSpecs))
+		{
+			log_warn("Failed to VACUUM ANALYZE %s", tableSpecs->qname);
+			++errors;
+		}
+
+		/*
+		 * 4. Opportunistically see if some CREATE INDEX processed have
+		 *    finished already.
+		 */
+		if (!copydb_collect_finished_subprocesses())
+		{
+			/* errors have already been logged */
+			++errors;
 		}
 	}
+
+	/*
+	 * When this process has finished looping over all the tables in the table
+	 * array, then it waits until all the sub-processes are done. That's the
+	 * CREATE INDEX workers and the VACUUM workers.
+	 */
+	if (!copydb_wait_for_subprocesses())
+	{
+		/* errors have already been logged */
+		++errors;
+	}
+
+	return errors == 0;
 }
 
 
@@ -1151,34 +1219,9 @@ copydb_copy_table(CopyTableDataSpec *tableSpecs)
 	PGSQL *src = &(tableSpecs->sourceSnapshot.pgsql);
 	PGSQL dst = { 0 };
 
-	char qname[BUFSIZE] = { 0 };
+	CopyTableSummary *summary = tableSpecs->summary;
 
-	sformat(qname, sizeof(qname), "\"%s\".\"%s\"",
-			tableSpecs->sourceTable->nspname,
-			tableSpecs->sourceTable->relname);
-
-	/* First, write the lockFile, with a summary of what's going-on */
-	CopyTableSummary summary = {
-		.pid = getpid(),
-		.table = tableSpecs->sourceTable,
-	};
-
-	sformat(summary.command, sizeof(summary.command), "COPY %s;", qname);
-
-	if (!open_table_summary(&summary, tableSpecs->process->lockFile))
-	{
-		log_info("Failed to create the lock file at \"%s\"",
-				 tableSpecs->process->lockFile);
-		return false;
-	}
-
-	/* initialize our connection objects, connection is opened lazily */
-	if (!copydb_set_snapshot(&(tableSpecs->sourceSnapshot)))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
+	/* initialize our connection to the target database */
 	if (!pgsql_init(&dst, tableSpecs->target_pguri, PGSQL_CONN_TARGET))
 	{
 		/* errors have already been logged */
@@ -1190,135 +1233,115 @@ copydb_copy_table(CopyTableDataSpec *tableSpecs)
 		tableSpecs->section == DATA_SECTION_ALL)
 	{
 		/* Now copy the data from source to target */
-		log_info("%s", summary.command);
+		log_info("%s", summary->command);
 
-		if (!pg_copy(src, &dst, qname, qname))
+		if (!pg_copy(src, &dst, tableSpecs->qname, tableSpecs->qname))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 	}
 
-	/* now say we're done with the table data */
-	if (!finish_table_summary(&summary, tableSpecs->process->doneFile))
+	return true;
+}
+
+
+/*
+ * copydb_copy_table_indexes fetches the index definitions attached to the
+ * given source table, and starts as many processes as we have definitions to
+ * create all indexes in parallel to each other.
+ */
+bool
+copydb_copy_table_indexes(CopyTableDataSpec *tableSpecs)
+{
+	if (tableSpecs->section != DATA_SECTION_INDEXES &&
+		tableSpecs->section != DATA_SECTION_ALL)
 	{
-		log_info("Failed to create the summary file at \"%s\"",
-				 tableSpecs->process->doneFile);
-		return false;
-	}
-
-	/* also remove the lockFile, we don't need it anymore */
-	if (!unlink_file(tableSpecs->process->lockFile))
-	{
-		/* just continue, this is not a show-stopper */
-		log_warn("Failed to remove the lockFile \"%s\"",
-				 tableSpecs->process->lockFile);
-	}
-
-	/* then fetch the index list for this table */
-	SourceIndexArray indexArray = { 0 };
-
-	tableSpecs->indexArray = &indexArray;
-
-	if (tableSpecs->section == DATA_SECTION_INDEXES ||
-		tableSpecs->section == DATA_SECTION_CONSTRAINTS ||
-		tableSpecs->section == DATA_SECTION_ALL)
-	{
-		if (!schema_list_table_indexes(src,
-									   tableSpecs->sourceTable->nspname,
-									   tableSpecs->sourceTable->relname,
-									   tableSpecs->indexArray))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		/* build the index file paths we need for the upcoming operations */
-		if (!copydb_init_indexes_paths(tableSpecs))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		/* pgcopydb copy constraints does not create indexes again */
-		if (tableSpecs->section != DATA_SECTION_CONSTRAINTS)
-		{
-			/*
-			 * Indexes are created all-at-once in parallel, a sub-process is
-			 * forked per index definition to send each SQL/DDL command to the
-			 * Postgres server.
-			 */
-			if (tableSpecs->indexArray->count >= 1)
-			{
-				log_info("Creating %d index%s for table \"%s\".\"%s\"",
-						 tableSpecs->indexArray->count,
-						 tableSpecs->indexArray->count > 1 ? "es" : "",
-						 tableSpecs->sourceTable->nspname,
-						 tableSpecs->sourceTable->relname);
-			}
-			else
-			{
-				log_debug("Table \"%s\".\"%s\" has no index attached",
-						  tableSpecs->sourceTable->nspname,
-						  tableSpecs->sourceTable->relname);
-			}
-
-			if (!copydb_start_create_indexes(tableSpecs))
-			{
-				log_error("Failed to create indexes, see above for details");
-				return false;
-			}
-		}
-
-		/*
-		 * Create an index list file for the table, so that we can easily find
-		 * relevant indexing information from the table itself.
-		 */
-		if (!create_table_index_file(&summary,
-									 tableSpecs->indexArray,
-									 tableSpecs->tablePaths.idxListFile))
-		{
-			/* this only means summary is missing some indexing information */
-			log_warn("Failed to create table %s index list file \"%s\"",
-					 qname,
-					 tableSpecs->tablePaths.idxListFile);
-		}
+		return true;
 	}
 
 	/*
-	 * Once all the indexes have been created in parallel, then we can create
-	 * the constraints that are associated with the indexes. The ALTER TABLE
-	 * commands are taking an exclusive lock on the table, so it's better to
-	 * just run the commands serially (one after the other).
+	 * Indexes are created all-at-once in parallel, a sub-process is
+	 * forked per index definition to send each SQL/DDL command to the
+	 * Postgres server.
 	 */
-	if (tableSpecs->section == DATA_SECTION_CONSTRAINTS ||
-		tableSpecs->section == DATA_SECTION_ALL)
+	if (tableSpecs->indexArray->count >= 1)
 	{
-		if (!copydb_create_constraints(tableSpecs))
+		log_info("Creating %d index%s for table %s",
+				 tableSpecs->indexArray->count,
+				 tableSpecs->indexArray->count > 1 ? "es" : "",
+				 tableSpecs->qname);
+	}
+	else
+	{
+		log_debug("Table %s has no index attached", tableSpecs->qname);
+		return true;
+	}
+
+	/*
+	 * Flush stdio channels just before fork, to avoid double-output problems.
+	 */
+	fflush(stdout);
+	fflush(stderr);
+
+	int fpid = fork();
+
+	switch (fpid)
+	{
+		case -1:
 		{
-			log_error("Failed to create constraints, see above for details");
+			log_error("Failed to fork a worker process");
 			return false;
+		}
+
+		case 0:
+		{
+			/* child process runs the command */
+			if (!copydb_start_create_indexes(tableSpecs))
+			{
+				log_error("Failed to create indexes, see above for details");
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			/*
+			 * When done as part of the full copy, we also create each index's
+			 * constraint as soon as the parallel index built is done.
+			 */
+			if (tableSpecs->section == DATA_SECTION_ALL)
+			{
+				if (!copydb_create_constraints(tableSpecs))
+				{
+					log_error("Failed to create constraints, "
+							  "see above for details");
+					exit(EXIT_CODE_INTERNAL_ERROR);
+				}
+			}
+
+			/*
+			 * Create an index list file for the table, so that we can easily
+			 * find relevant indexing information from the table itself.
+			 */
+			if (!create_table_index_file(tableSpecs->summary,
+										 tableSpecs->indexArray,
+										 tableSpecs->tablePaths.idxListFile))
+			{
+				/* this only means summary is missing some indexing information */
+				log_warn("Failed to create table %s index list file \"%s\"",
+						 tableSpecs->qname,
+						 tableSpecs->tablePaths.idxListFile);
+			}
+
+			exit(EXIT_CODE_QUIT);
+		}
+
+		default:
+		{
+			/* fork succeeded, in parent */
+			break;
 		}
 	}
 
-	/* finally, vacuum analyze the table and its indexes */
-	if (tableSpecs->section == DATA_SECTION_VACUUM ||
-		tableSpecs->section == DATA_SECTION_ALL)
-	{
-		char vacuum[BUFSIZE] = { 0 };
-
-		sformat(vacuum, sizeof(vacuum), "VACUUM ANALYZE %s", qname);
-
-		log_info("%s;", vacuum);
-
-		if (!pgsql_execute(&dst, vacuum))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-	}
-
-	/* now we're done */
+	/* now we're done, and we want async behavior, do not wait */
 	return true;
 }
 
@@ -1330,11 +1353,6 @@ copydb_copy_table(CopyTableDataSpec *tableSpecs)
 bool
 copydb_start_create_indexes(CopyTableDataSpec *tableSpecs)
 {
-	/* At the moment we disregard the jobs limitation */
-	int jobs = tableSpecs->indexJobs;
-
-	(void) jobs;                /* TODO */
-
 	SourceTable *sourceTable = tableSpecs->sourceTable;
 	SourceIndexArray *indexArray = tableSpecs->indexArray;
 
@@ -1382,6 +1400,11 @@ copydb_start_create_indexes(CopyTableDataSpec *tableSpecs)
 		}
 	}
 
+	/*
+	 * Here we need to be sync, so that the caller can continue with creating
+	 * the constraints from the indexes right when all the indexes have been
+	 * built.
+	 */
 	return copydb_wait_for_subprocesses();
 }
 
@@ -1496,6 +1519,7 @@ copydb_create_index(CopyTableDataSpec *tableSpecs, int idx)
 bool
 copydb_create_constraints(CopyTableDataSpec *tableSpecs)
 {
+	int errors = 0;
 	SourceIndexArray *indexArray = tableSpecs->indexArray;
 
 	const char *pguri = tableSpecs->target_pguri;
@@ -1551,6 +1575,362 @@ copydb_create_constraints(CopyTableDataSpec *tableSpecs)
 						 "might fail because of already existing objects");
 			}
 		}
+	}
+
+	return errors == 0;
+}
+
+
+/*
+ * copydb_start_vacuum_table runs VACUUM ANALYSE on the given table.
+ */
+bool
+copydb_start_vacuum_table(CopyTableDataSpec *tableSpecs)
+{
+	if (tableSpecs->section != DATA_SECTION_VACUUM &&
+		tableSpecs->section != DATA_SECTION_ALL)
+	{
+		return true;
+	}
+
+	/*
+	 * Flush stdio channels just before fork, to avoid double-output problems.
+	 */
+	fflush(stdout);
+	fflush(stderr);
+
+	int fpid = fork();
+
+	switch (fpid)
+	{
+		case -1:
+		{
+			log_error("Failed to fork a worker process");
+			return false;
+		}
+
+		case 0:
+		{
+			/* child process runs the command */
+			PGSQL dst = { 0 };
+
+			/* initialize our connection to the target database */
+			if (!pgsql_init(&dst, tableSpecs->target_pguri, PGSQL_CONN_TARGET))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			/* finally, vacuum analyze the table and its indexes */
+			char vacuum[BUFSIZE] = { 0 };
+
+			sformat(vacuum, sizeof(vacuum),
+					"VACUUM ANALYZE %s",
+					tableSpecs->qname);
+
+			log_info("%s;", vacuum);
+
+			if (!pgsql_execute(&dst, vacuum))
+			{
+				/* errors have already been logged */
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			exit(EXIT_CODE_QUIT);
+		}
+
+		default:
+		{
+			/* fork succeeded, in parent */
+			break;
+		}
+	}
+
+	/* now we're done, and we want async behavior, do not wait */
+	return true;
+}
+
+
+/*
+ * copydb_fatal_exit sends a termination signal to all the subprocess and waits
+ * until all the known subprocess are finished, then returns true.
+ */
+bool
+copydb_fatal_exit()
+{
+	log_fatal("Terminating all subprocesses");
+	return copydb_wait_for_subprocesses();
+}
+
+
+/*
+ * copydb_wait_for_subprocesses calls waitpid() until no child process is known
+ * running. It also fetches the return code of all the sub-processes, and
+ * returns true only when all the subprocesses have returned zero (success).
+ */
+bool
+copydb_wait_for_subprocesses()
+{
+	bool allReturnCodeAreZero = true;
+
+	log_debug("Waiting for sub-processes to finish");
+
+	for (;;)
+	{
+		int status;
+
+		/* ignore errors */
+		pid_t pid = waitpid(-1, &status, WNOHANG);
+
+		switch (pid)
+		{
+			case -1:
+			{
+				if (errno == ECHILD)
+				{
+					/* no more childrens */
+					return true;
+				}
+
+				pg_usleep(100 * 1000); /* 100 ms */
+				break;
+			}
+
+			case 0:
+			{
+				/*
+				 * We're using WNOHANG, 0 means there are no stopped or exited
+				 * children sleep for awhile and ask again later.
+				 */
+				pg_usleep(100 * 1000); /* 100 ms */
+				break;
+			}
+
+			default:
+			{
+				int returnCode = WEXITSTATUS(status);
+
+				if (returnCode == 0)
+				{
+					log_debug("Sub-processes %d exited with code %d",
+							  pid, returnCode);
+				}
+				else
+				{
+					allReturnCodeAreZero = false;
+
+					log_error("Sub-processes %d exited with code %d",
+							  pid, returnCode);
+				}
+			}
+		}
+	}
+
+	return allReturnCodeAreZero;
+}
+
+
+/*
+ * copydb_collect_finished_subprocesses calls waitpid() to acknowledge finished
+ * processes, without waiting for all of them.
+ */
+bool
+copydb_collect_finished_subprocesses()
+{
+	bool allReturnCodeAreZero = true;
+
+	for (;;)
+	{
+		int status;
+
+		/* ignore errors */
+		pid_t pid = waitpid(-1, &status, WNOHANG);
+
+		switch (pid)
+		{
+			case -1:
+			{
+				if (errno == ECHILD)
+				{
+					/* no more childrens */
+					return true;
+				}
+
+				break;
+			}
+
+			case 0:
+			{
+				/*
+				 * We're using WNOHANG, 0 means there are no stopped or exited
+				 * children.
+				 */
+				return true;
+			}
+
+			default:
+			{
+				int returnCode = WEXITSTATUS(status);
+
+				if (returnCode == 0)
+				{
+					log_debug("Sub-processes %d exited with code %d",
+							  pid, returnCode);
+				}
+				else
+				{
+					allReturnCodeAreZero = false;
+
+					log_error("Sub-processes %d exited with code %d",
+							  pid, returnCode);
+				}
+
+				break;
+			}
+		}
+	}
+
+	return allReturnCodeAreZero;
+}
+
+
+/*
+ * print_summary prints a summary of the pgcopydb operations on stdout.
+ *
+ * The summary contains a line per table that has been copied and then the
+ * count of indexes created for each table, and then the sum of the timing of
+ * creating those indexes.
+ *
+ * TODO: also add-in the time it took to prepare and finalize the schema.
+ */
+bool
+print_summary(Summary *summary, CopyDataSpec *specs)
+{
+	SummaryTable *summaryTable = &(summary->table);
+
+	/* first, we have to scan the available data from memory and files */
+	if (!prepare_summary_table(summary, specs))
+	{
+		log_error("Failed to prepare the summary table");
+		return false;
+	}
+
+	/* then we can prepare the headers and print the table */
+	if (specs->section == DATA_SECTION_TABLE_DATA ||
+		specs->section == DATA_SECTION_ALL)
+	{
+		(void) prepare_summary_table_headers(summaryTable);
+		(void) print_summary_table(summaryTable);
+	}
+
+	/* and then finally prepare the top-level counters and print them */
+	(void) summary_prepare_toplevel_durations(summary);
+	(void) print_toplevel_summary(summary, specs->tableJobs, specs->indexJobs);
+
+	return true;
+}
+
+
+/*
+ * prepare_summary_table prepares the summar table array with the durations
+ * read from disk in the doneFile for each oid that has been processed.
+ */
+bool
+prepare_summary_table(Summary *summary, CopyDataSpec *specs)
+{
+	TopLevelTimings *timings = &(summary->timings);
+	SummaryTable *summaryTable = &(summary->table);
+	CopyTableDataSpecsArray *tableSpecsArray = &(specs->tableSpecsArray);
+
+	int count = tableSpecsArray->count;
+
+	summaryTable->count = count;
+	summaryTable->array =
+		(SummaryTableEntry *) malloc(count * sizeof(SummaryTableEntry));
+
+	if (summaryTable->array == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	for (int tableIndex = 0; tableIndex < tableSpecsArray->count; tableIndex++)
+	{
+		CopyTableDataSpec *tableSpecs = &(tableSpecsArray->array[tableIndex]);
+		SourceTable *table = tableSpecs->sourceTable;
+
+		SummaryTableEntry *entry = &(summaryTable->array[tableIndex]);
+
+		/* prepare some of the information we already have */
+		IntString oidString = intToString(table->oid);
+
+		strlcpy(entry->oid, oidString.strValue, sizeof(entry->oid));
+		strlcpy(entry->nspname, table->nspname, sizeof(entry->nspname));
+		strlcpy(entry->relname, table->relname, sizeof(entry->relname));
+
+		/* the specs doesn't contain timing information */
+		CopyTableSummary tableSummary = { .table = table };
+
+		if (!read_table_summary(&tableSummary, tableSpecs->tablePaths.doneFile))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		timings->tableDurationMs += tableSummary.durationMs;
+
+		(void) IntervalToString(tableSummary.durationMs,
+								entry->tableMs,
+								sizeof(entry->tableMs));
+
+		/* read the index oid list from the table oid */
+		uint64_t indexingDurationMs = 0;
+
+		SourceIndexArray indexArray = { 0 };
+
+		if (!read_table_index_file(&indexArray,
+								   tableSpecs->tablePaths.idxListFile))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		/* for reach index, read the index summary */
+		for (int i = 0; i < indexArray.count; i++)
+		{
+			SourceIndex *index = &(indexArray.array[i]);
+			CopyIndexSummary indexSummary = { .index = index };
+			char indexDoneFile[MAXPGPATH] = { 0 };
+
+			/* build the indexDoneFile for the target index */
+			sformat(indexDoneFile, sizeof(indexDoneFile), "%s/%u.done",
+					specs->cfPaths.idxdir,
+					index->indexOid);
+
+			/* when a table has no indexes, the file doesn't exists */
+			if (file_exists(indexDoneFile))
+			{
+				if (!read_index_summary(&indexSummary, indexDoneFile))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+
+				/* accumulate total duration of creating all the indexes */
+				timings->indexDurationMs += indexSummary.durationMs;
+				indexingDurationMs += indexSummary.durationMs;
+			}
+		}
+
+		IntString indexCountString = intToString(indexArray.count);
+
+		strlcpy(entry->indexCount,
+				indexCountString.strValue,
+				sizeof(entry->indexCount));
+
+		(void) IntervalToString(indexingDurationMs,
+								entry->indexMs,
+								sizeof(entry->indexMs));
 	}
 
 	return true;

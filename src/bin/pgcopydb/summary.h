@@ -159,7 +159,9 @@ bool read_index_summary(CopyIndexSummary *summary, const char *filename);
 bool open_index_summary(CopyIndexSummary *summary, char *filename);
 bool finish_index_summary(CopyIndexSummary *summary, char *filename);
 
-bool print_summary(Summary *summary, CopyDataSpec *specs);
-
+void summary_prepare_toplevel_durations(Summary *summary);
+void print_toplevel_summary(Summary *summary, int tableJobs, int indexJobs);
+void print_summary_table(SummaryTable *summary);
+void prepare_summary_table_headers(SummaryTable *summary);
 
 #endif /* SUMMARY_H */

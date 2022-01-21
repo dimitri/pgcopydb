@@ -10,6 +10,7 @@
 #include "pgcmd.h"
 #include "pgsql.h"
 #include "schema.h"
+#include "summary.h"
 
 
 /* maintain all the internal paths we need in one place */
@@ -23,23 +24,6 @@ typedef struct CopyFilePaths
 	char idxdir[MAXPGPATH];           /* /tmp/pgcopydb/run/indexes */
 	char idxfilepath[MAXPGPATH];      /* /tmp/pgcopydb/run/indexes.json */
 } CopyFilePaths;
-
-
-/* tracking sub-processes that are used for TABLE DATA copying */
-typedef struct TableDataProcess
-{
-	pid_t pid;
-	uint32_t oid;
-	char lockFile[MAXPGPATH];   /* /tmp/pgcopydb/run/tables/{oid} */
-	char doneFile[MAXPGPATH];   /* /tmp/pgcopydb/run/tables/{oid}.done */
-} TableDataProcess;
-
-
-typedef struct TableDataProcessArray
-{
-	int count;
-	TableDataProcess *array;    /* malloc'ed area */
-} TableDataProcessArray;
 
 
 /* the main pg_dump and pg_restore process are driven from split files */
@@ -117,9 +101,10 @@ typedef struct CopyTableDataSpec
 
 	CopyDataSection section;
 
+	char qname[NAMEDATALEN * 2 + 1];
 	SourceTable *sourceTable;
+	CopyTableSummary *summary;
 	SourceIndexArray *indexArray;
-	TableDataProcess *process;
 
 	int tableJobs;
 	int indexJobs;
@@ -155,6 +140,7 @@ typedef struct CopyDataSpec
 
 	int tableJobs;
 	int indexJobs;
+	Semaphore tableSemaphore;
 	Semaphore indexSemaphore;
 
 	DumpPaths dumpPaths;
@@ -187,8 +173,7 @@ bool copydb_init_specs(CopyDataSpec *specs,
 
 bool copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 							 CopyDataSpec *specs,
-							 SourceTable *source,
-							 TableDataProcess *process);
+							 SourceTable *source);
 
 bool copydb_init_indexes_paths(CopyTableDataSpec *tableSpecs);
 
@@ -206,13 +191,23 @@ bool copydb_close_snapshot(TransactionSnapshot *snapshot);
 bool copydb_copy_all_sequences(CopyDataSpec *specs);
 
 bool copydb_copy_all_table_data(CopyDataSpec *specs);
-bool copydb_start_table_data(CopyTableDataSpec *spec);
+bool copydb_start_table_processes(CopyDataSpec *specs);
+bool copydb_start_table_process(CopyDataSpec *specs);
+
 bool copydb_copy_table(CopyTableDataSpec *tableSpecs);
+bool copydb_copy_table_indexes(CopyTableDataSpec *tableSpecs);
+
 bool copydb_start_create_indexes(CopyTableDataSpec *tableSpecs);
 bool copydb_create_index(CopyTableDataSpec *tableSpecs, int idx);
 bool copydb_create_constraints(CopyTableDataSpec *tableSpecs);
 
-bool copydb_fatal_exit(TableDataProcessArray *subprocessArray);
+bool copydb_start_vacuum_table(CopyTableDataSpec *tableSpecs);
+
+bool copydb_fatal_exit(void);
 bool copydb_wait_for_subprocesses(void);
+bool copydb_collect_finished_subprocesses(void);
+
+bool prepare_summary_table(Summary *summary, CopyDataSpec *specs);
+bool print_summary(Summary *summary, CopyDataSpec *specs);
 
 #endif  /* COPYDB_H */
