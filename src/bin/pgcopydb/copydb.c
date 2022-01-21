@@ -753,10 +753,12 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 			return false;
 		}
 
-		if (largeObjectCount >= 0)
+		if (largeObjectCount > 0)
 		{
-			log_fatal("pgcopydb version %s has no support for large objects",
-					  PGCOPYDB_VERSION);
+			log_fatal("pgcopydb version %s has no support for large objects, "
+					  "and we found %lld rows in pg_largeobject_metadata",
+					  PGCOPYDB_VERSION,
+					  (long long) largeObjectCount);
 			log_fatal("Consider using --skip-large-objects");
 			return false;
 		}
