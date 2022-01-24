@@ -1386,6 +1386,7 @@ validate_connection_string(const char *connectionString)
 bool
 pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname)
 {
+	bool srcConnIsOurs = src->connection == NULL;
 	PGconn *srcConn = pgsql_open_connection(src);
 
 	if (srcConn == NULL)
@@ -1404,7 +1405,10 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname)
 	/* SRC: COPY schema.table TO STDOUT */
 	if (!pg_copy_send_query(src, srcQname, PGRES_COPY_OUT))
 	{
-		pgsql_finish(src);
+		if (srcConnIsOurs)
+		{
+			pgsql_finish(src);
+		}
 		pgsql_finish(dst);
 
 		return false;
@@ -1413,7 +1417,10 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname)
 	/* DST: COPY schema.table FROM STDIN */
 	if (!pg_copy_send_query(dst, dstQname, PGRES_COPY_IN))
 	{
-		pgsql_finish(src);
+		if (srcConnIsOurs)
+		{
+			pgsql_finish(src);
+		}
 		pgsql_finish(dst);
 
 		return false;
@@ -1457,7 +1464,11 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname)
 
 			/* we're done here */
 			clear_results(src);
-			pgsql_finish(src);
+
+			if (srcConnIsOurs)
+			{
+				pgsql_finish(src);
+			}
 
 			/* make sure to pass through and send this last COPY buffer */
 		}
@@ -1478,7 +1489,11 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname)
 				pgcopy_log_error(dst, NULL, "Failed to copy data to target");
 
 				clear_results(src);
-				pgsql_finish(src);
+
+				if (srcConnIsOurs)
+				{
+					pgsql_finish(src);
+				}
 
 				break;
 			}

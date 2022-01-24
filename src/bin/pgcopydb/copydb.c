@@ -1024,6 +1024,13 @@ copydb_start_table_process(CopyDataSpec *specs)
 
 	CopyTableDataSpecsArray *tableSpecsArray = &(specs->tableSpecsArray);
 
+	/* connect once to the source database for the whole process */
+	if (!copydb_set_snapshot(&(specs->sourceSnapshot)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	for (int tableIndex = 0; tableIndex < tableSpecsArray->count; tableIndex++)
 	{
 		/* initialize our TableDataProcess entry now */
@@ -1054,11 +1061,7 @@ copydb_start_table_process(CopyDataSpec *specs)
 		/*
 		 * 1. Now COPY the TABLE DATA from the source to the destination.
 		 */
-		if (!copydb_set_snapshot(&(tableSpecs->sourceSnapshot)))
-		{
-			/* errors have already been logged */
-			return false;
-		}
+		tableSpecs->sourceSnapshot = specs->sourceSnapshot;
 
 		if (!copydb_copy_table(tableSpecs))
 		{
@@ -1101,9 +1104,6 @@ copydb_start_table_process(CopyDataSpec *specs)
 			}
 		}
 
-		/* terminate our connection to the source database now */
-		(void) pgsql_finish(&(tableSpecs->sourceSnapshot.pgsql));
-
 		/*
 		 * 3. Now start the CREATE INDEX sub-processes for this table.
 		 *
@@ -1144,6 +1144,9 @@ copydb_start_table_process(CopyDataSpec *specs)
 			++errors;
 		}
 	}
+
+	/* terminate our connection to the source database now */
+	(void) pgsql_finish(&(specs->sourceSnapshot.pgsql));
 
 	/*
 	 * When this process has finished looping over all the tables in the table
