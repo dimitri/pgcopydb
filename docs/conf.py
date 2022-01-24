@@ -22,8 +22,8 @@ copyright = '2022, Dimitri Fontaine'
 author = 'Dimitri Fontaine'
 
 # The full version, including alpha/beta/rc tags
-version = '0'
-release = '0.2'
+version = '0.3'
+release = '0.3'
 
 
 # -- General configuration ---------------------------------------------------
