@@ -207,6 +207,14 @@ bool copydb_fatal_exit(void);
 bool copydb_wait_for_subprocesses(void);
 bool copydb_collect_finished_subprocesses(void);
 
+bool copydb_table_is_being_processed(CopyDataSpec *specs,
+									 CopyTableDataSpec *tableSpecs,
+									 bool *isBeingProcessed);
+
+bool copydb_mark_table_as_done(CopyDataSpec *specs,
+							   CopyTableDataSpec *tableSpecs);
+
+
 bool prepare_summary_table(Summary *summary, CopyDataSpec *specs);
 bool print_summary(Summary *summary, CopyDataSpec *specs);
 

@@ -1021,7 +1021,6 @@ bool
 copydb_start_table_process(CopyDataSpec *specs)
 {
 	int errors = 0;
-	pid_t pid = getpid();
 
 	CopyTableDataSpecsArray *tableSpecsArray = &(specs->tableSpecsArray);
 
@@ -1030,51 +1029,22 @@ copydb_start_table_process(CopyDataSpec *specs)
 		/* initialize our TableDataProcess entry now */
 		CopyTableDataSpec *tableSpecs = &(tableSpecsArray->array[tableIndex]);
 
-		CopyTableSummary currentSummary = { .pid = pid, .table = NULL };
+		bool isBeingProcessed = false;
 
-		/* enter the critical section */
-		(void) semaphore_lock(&(specs->tableSemaphore));
-
-		/*
-		 * If the doneFile exists, then the table has been processed already,
-		 * skip it.
-		 *
-		 * If the lockFile exists, then the table is currently being processed
-		 * by another worker process, skip it.
-		 *
-		 * Otherwise, the table is not being processed yet, that must be our
-		 * job to take care of it.
-		 */
-		if (!(file_exists(tableSpecs->tablePaths.doneFile) ||
-			  file_exists(tableSpecs->tablePaths.lockFile)))
+		if (!copydb_table_is_being_processed(specs,
+											 tableSpecs,
+											 &isBeingProcessed))
 		{
-			/* First, write the lockFile, with a summary of what's going-on */
-			currentSummary.table = tableSpecs->sourceTable;
-
-			sformat(currentSummary.command, sizeof(currentSummary.command),
-					"COPY %s;",
-					tableSpecs->qname);
-
-			if (!open_table_summary(&currentSummary,
-									tableSpecs->tablePaths.lockFile))
-			{
-				log_info("Failed to create the lock file at \"%s\"",
-						 tableSpecs->tablePaths.lockFile);
-
-				/* end of the critical section */
-				(void) semaphore_unlock(&(specs->tableSemaphore));
-
-				return false;
-			}
-
-			tableSpecs->summary = &currentSummary;
+			/* errors have already been logged */
+			return false;
 		}
 
-		/* end of the critical section */
-		(void) semaphore_unlock(&(specs->tableSemaphore));
+		log_trace("%s isBeingProcessed: %s",
+				  tableSpecs->qname,
+				  isBeingProcessed ? "yes" : "no");
 
-		/* if we didn't select this table to process, move on to the next one */
-		if (tableSpecs->summary == NULL)
+		/* if the table is being processed, we should skip it now */
+		if (isBeingProcessed)
 		{
 			log_debug("Skipping table %s, already done or being processed",
 					  tableSpecs->qname);
@@ -1097,28 +1067,11 @@ copydb_start_table_process(CopyDataSpec *specs)
 		}
 
 		/* enter the critical section to communicate that we're done */
-		(void) semaphore_lock(&(specs->tableSemaphore));
-
-		if (!unlink_file(tableSpecs->tablePaths.lockFile))
+		if (!copydb_mark_table_as_done(specs, tableSpecs))
 		{
-			log_error("Failed to remove the lockFile \"%s\"",
-					  tableSpecs->tablePaths.lockFile);
-			(void) semaphore_unlock(&(specs->tableSemaphore));
+			/* errors have already been logged */
 			return false;
 		}
-
-		/* write the doneFile with the summary and timings now */
-		if (!finish_table_summary(&currentSummary,
-								  tableSpecs->tablePaths.doneFile))
-		{
-			log_info("Failed to create the summary file at \"%s\"",
-					 tableSpecs->tablePaths.doneFile);
-			(void) semaphore_unlock(&(specs->tableSemaphore));
-			return false;
-		}
-
-		/* end of the critical section */
-		(void) semaphore_unlock(&(specs->tableSemaphore));
 
 		/*
 		 * 2. Fetch the list of indexes and constraints attached to this table.
@@ -1204,6 +1157,114 @@ copydb_start_table_process(CopyDataSpec *specs)
 	}
 
 	return errors == 0;
+}
+
+
+/*
+ * copydb_table_is_being_processed checks lock and done files to see if a given
+ * table is already being processed, or has already been processed entirely by
+ * another process. In which case the table is to be skipped by the current
+ * process.
+ */
+bool
+copydb_table_is_being_processed(CopyDataSpec *specs,
+								CopyTableDataSpec *tableSpecs,
+								bool *isBeingProcessed)
+{
+	/* enter the critical section */
+	(void) semaphore_lock(&(specs->tableSemaphore));
+
+	/*
+	 * If the doneFile exists, then the table has been processed already,
+	 * skip it.
+	 *
+	 * If the lockFile exists, then the table is currently being processed
+	 * by another worker process, skip it.
+	 */
+	if (file_exists(tableSpecs->tablePaths.doneFile) ||
+		file_exists(tableSpecs->tablePaths.lockFile))
+	{
+		*isBeingProcessed = true;
+		(void) semaphore_unlock(&(specs->tableSemaphore));
+		return true;
+	}
+
+	/*
+	 * Otherwise, the table is not being processed yet.
+	 */
+	*isBeingProcessed = false;
+
+	/*
+	 * First, write the lockFile, with a summary of what's going-on.
+	 */
+	CopyTableSummary emptySummary = { 0 };
+	CopyTableSummary *summary =
+		(CopyTableSummary *) malloc(sizeof(CopyTableSummary));
+
+	*summary = emptySummary;
+
+	summary->pid = getpid();
+	summary->table = tableSpecs->sourceTable;
+
+	sformat(summary->command, sizeof(summary->command),
+			"COPY %s;",
+			tableSpecs->qname);
+
+	if (!open_table_summary(summary, tableSpecs->tablePaths.lockFile))
+	{
+		log_info("Failed to create the lock file at \"%s\"",
+				 tableSpecs->tablePaths.lockFile);
+
+		/* end of the critical section */
+		(void) semaphore_unlock(&(specs->tableSemaphore));
+
+		return false;
+	}
+
+	/* attach the new summary to the tableSpecs, where it was NULL before */
+	tableSpecs->summary = summary;
+
+	/* end of the critical section */
+	(void) semaphore_unlock(&(specs->tableSemaphore));
+
+	return true;
+}
+
+
+/*
+ * copydb_mark_table_as_done creates the table doneFile with the expected
+ * summary content. To create a doneFile we must acquire the synchronisation
+ * semaphore first. The lockFile is also removed here.
+ */
+bool
+copydb_mark_table_as_done(CopyDataSpec *specs,
+						  CopyTableDataSpec *tableSpecs)
+{
+	/* enter the critical section to communicate that we're done */
+	(void) semaphore_lock(&(specs->tableSemaphore));
+
+	if (!unlink_file(tableSpecs->tablePaths.lockFile))
+	{
+		log_error("Failed to remove the lockFile \"%s\"",
+				  tableSpecs->tablePaths.lockFile);
+		(void) semaphore_unlock(&(specs->tableSemaphore));
+		return false;
+	}
+
+	/* write the doneFile with the summary and timings now */
+	if (!finish_table_summary(tableSpecs->summary,
+							  tableSpecs->tablePaths.doneFile))
+	{
+		log_info("Failed to create the summary file at \"%s\"",
+				 tableSpecs->tablePaths.doneFile);
+		(void) semaphore_unlock(&(specs->tableSemaphore));
+		return false;
+	}
+
+	/* end of the critical section */
+	(void) semaphore_unlock(&(specs->tableSemaphore));
+
+	return true;
 }
 
 
