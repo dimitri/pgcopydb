@@ -765,8 +765,6 @@ prepareLineSeparator(char dashes[], int size)
  * The summary contains a line per table that has been copied and then the
  * count of indexes created for each table, and then the sum of the timing of
  * creating those indexes.
- *
- * TODO: also add-in the time it took to prepare and finalize the schema.
  */
 bool
 print_summary(Summary *summary, CopyDataSpec *specs)
