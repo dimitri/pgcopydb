@@ -214,7 +214,7 @@ bool copydb_table_is_being_processed(CopyDataSpec *specs,
 bool copydb_mark_table_as_done(CopyDataSpec *specs,
 							   CopyTableDataSpec *tableSpecs);
 
-
+/* summary.c */
 bool prepare_summary_table(Summary *summary, CopyDataSpec *specs);
 bool print_summary(Summary *summary, CopyDataSpec *specs);
 

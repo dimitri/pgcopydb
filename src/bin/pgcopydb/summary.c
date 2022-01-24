@@ -757,3 +757,146 @@ prepareLineSeparator(char dashes[], int size)
 		}
 	}
 }
+
+
+/*
+ * print_summary prints a summary of the pgcopydb operations on stdout.
+ *
+ * The summary contains a line per table that has been copied and then the
+ * count of indexes created for each table, and then the sum of the timing of
+ * creating those indexes.
+ *
+ * TODO: also add-in the time it took to prepare and finalize the schema.
+ */
+bool
+print_summary(Summary *summary, CopyDataSpec *specs)
+{
+	SummaryTable *summaryTable = &(summary->table);
+
+	/* first, we have to scan the available data from memory and files */
+	if (!prepare_summary_table(summary, specs))
+	{
+		log_error("Failed to prepare the summary table");
+		return false;
+	}
+
+	/* then we can prepare the headers and print the table */
+	if (specs->section == DATA_SECTION_TABLE_DATA ||
+		specs->section == DATA_SECTION_ALL)
+	{
+		(void) prepare_summary_table_headers(summaryTable);
+		(void) print_summary_table(summaryTable);
+	}
+
+	/* and then finally prepare the top-level counters and print them */
+	(void) summary_prepare_toplevel_durations(summary);
+	(void) print_toplevel_summary(summary, specs->tableJobs, specs->indexJobs);
+
+	return true;
+}
+
+
+/*
+ * prepare_summary_table prepares the summary table array with the durations
+ * read from disk in the doneFile for each oid that has been processed.
+ */
+bool
+prepare_summary_table(Summary *summary, CopyDataSpec *specs)
+{
+	TopLevelTimings *timings = &(summary->timings);
+	SummaryTable *summaryTable = &(summary->table);
+	CopyTableDataSpecsArray *tableSpecsArray = &(specs->tableSpecsArray);
+
+	int count = tableSpecsArray->count;
+
+	summaryTable->count = count;
+	summaryTable->array =
+		(SummaryTableEntry *) malloc(count * sizeof(SummaryTableEntry));
+
+	if (summaryTable->array == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	for (int tableIndex = 0; tableIndex < tableSpecsArray->count; tableIndex++)
+	{
+		CopyTableDataSpec *tableSpecs = &(tableSpecsArray->array[tableIndex]);
+		SourceTable *table = tableSpecs->sourceTable;
+
+		SummaryTableEntry *entry = &(summaryTable->array[tableIndex]);
+
+		/* prepare some of the information we already have */
+		IntString oidString = intToString(table->oid);
+
+		strlcpy(entry->oid, oidString.strValue, sizeof(entry->oid));
+		strlcpy(entry->nspname, table->nspname, sizeof(entry->nspname));
+		strlcpy(entry->relname, table->relname, sizeof(entry->relname));
+
+		/* the specs doesn't contain timing information */
+		CopyTableSummary tableSummary = { .table = table };
+
+		if (!read_table_summary(&tableSummary, tableSpecs->tablePaths.doneFile))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		timings->tableDurationMs += tableSummary.durationMs;
+
+		(void) IntervalToString(tableSummary.durationMs,
+								entry->tableMs,
+								sizeof(entry->tableMs));
+
+		/* read the index oid list from the table oid */
+		uint64_t indexingDurationMs = 0;
+
+		SourceIndexArray indexArray = { 0 };
+
+		if (!read_table_index_file(&indexArray,
+								   tableSpecs->tablePaths.idxListFile))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		/* for reach index, read the index summary */
+		for (int i = 0; i < indexArray.count; i++)
+		{
+			SourceIndex *index = &(indexArray.array[i]);
+			CopyIndexSummary indexSummary = { .index = index };
+			char indexDoneFile[MAXPGPATH] = { 0 };
+
+			/* build the indexDoneFile for the target index */
+			sformat(indexDoneFile, sizeof(indexDoneFile), "%s/%u.done",
+					specs->cfPaths.idxdir,
+					index->indexOid);
+
+			/* when a table has no indexes, the file doesn't exists */
+			if (file_exists(indexDoneFile))
+			{
+				if (!read_index_summary(&indexSummary, indexDoneFile))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+
+				/* accumulate total duration of creating all the indexes */
+				timings->indexDurationMs += indexSummary.durationMs;
+				indexingDurationMs += indexSummary.durationMs;
+			}
+		}
+
+		IntString indexCountString = intToString(indexArray.count);
+
+		strlcpy(entry->indexCount,
+				indexCountString.strValue,
+				sizeof(entry->indexCount));
+
+		(void) IntervalToString(indexingDurationMs,
+								entry->indexMs,
+								sizeof(entry->indexMs));
+	}
+
+	return true;
+}
