@@ -45,7 +45,8 @@ static void pgsql_handle_notifications(PGSQL *pgsql);
 
 static bool pg_copy_send_query(PGSQL *pgsql,
 							   const char *qname,
-							   ExecStatusType status);
+							   ExecStatusType status,
+							   bool freeze);
 static void pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context);
 
 static void getSequenceValue(void *ctx, PGresult *result);
@@ -1378,13 +1379,29 @@ validate_connection_string(const char *connectionString)
 
 
 /*
+ * pgsql_truncate executes the TRUNCATE command on the given quoted relation
+ * name qname, in the given Postgres connection.
+ */
+bool
+pgsql_truncate(PGSQL *pgsql, const char *qname)
+{
+	char sql[BUFSIZE] = { 0 };
+
+	sformat(sql, sizeof(sql), "TRUNCATE %s", qname);
+
+	return pgsql_execute(pgsql, sql);
+}
+
+
+/*
  * pg_copy implements a COPY operation from a source Postgres instance (src) to
  * a target Postgres instance (dst), for the data found in the table referenced
  * by the qualified identifier name srcQname on the source, into the table
  * referenced by the qualified identifier name dstQname on the target.
  */
 bool
-pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname)
+pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
+		bool truncate)
 {
 	bool srcConnIsOurs = src->connection == NULL;
 	PGconn *srcConn = pgsql_open_connection(src);
@@ -1398,12 +1415,42 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname)
 
 	if (dstConn == NULL)
 	{
-		pgsql_finish(src);
+		/* errors have already been logged */
+		if (srcConnIsOurs)
+		{
+			pgsql_finish(src);
+		}
 		return false;
 	}
 
+	if (!pgsql_begin(dst))
+	{
+		/* errors have already been logged */
+		if (srcConnIsOurs)
+		{
+			pgsql_finish(src);
+		}
+		return false;
+	}
+
+	/* DST: TRUNCATE schema.table */
+	if (truncate)
+	{
+		if (!pgsql_truncate(dst, dstQname))
+		{
+			/* errors have already been logged */
+			if (srcConnIsOurs)
+			{
+				pgsql_finish(src);
+			}
+			pgsql_finish(dst);
+
+			return false;
+		}
+	}
+
 	/* SRC: COPY schema.table TO STDOUT */
-	if (!pg_copy_send_query(src, srcQname, PGRES_COPY_OUT))
+	if (!pg_copy_send_query(src, srcQname, PGRES_COPY_OUT, false))
 	{
 		if (srcConnIsOurs)
 		{
@@ -1414,8 +1461,8 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname)
 		return false;
 	}
 
-	/* DST: COPY schema.table FROM STDIN */
-	if (!pg_copy_send_query(dst, dstQname, PGRES_COPY_IN))
+	/* DST: COPY schema.table FROM STDIN WITH (FREEZE) */
+	if (!pg_copy_send_query(dst, dstQname, PGRES_COPY_IN, truncate))
 	{
 		if (srcConnIsOurs)
 		{
@@ -1529,7 +1576,11 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname)
 		}
 
 		clear_results(dst);
-		pgsql_finish(dst);
+
+		if (!pgsql_commit(dst))
+		{
+			failedOnDst = true;
+		}
 	}
 
 	return !failedOnSrc && !failedOnDst;
@@ -1541,23 +1592,32 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname)
  * to a Postgres instance, and checks that the server's result is as expected.
  */
 static bool
-pg_copy_send_query(PGSQL *pgsql, const char *qname, ExecStatusType status)
+pg_copy_send_query(PGSQL *pgsql,
+				   const char *qname, ExecStatusType status, bool freeze)
 {
 	char sql[BUFSIZE] = { 0 };
 
 	if (status == PGRES_COPY_OUT)
 	{
-		sformat(sql, sizeof(sql), "copy %s to stdout", qname);
+		sformat(sql, sizeof(sql),
+				"copy %s to stdout %s",
+				qname,
+				freeze ? "with (freeze)" : "");
 	}
 	else if (status == PGRES_COPY_IN)
 	{
-		sformat(sql, sizeof(sql), "copy %s from stdin", qname);
+		sformat(sql, sizeof(sql),
+				"copy %s from stdin %s",
+				qname,
+				freeze ? "with (freeze)" : "");
 	}
 	else
 	{
 		log_error("BUG: pg_copy_send_query: unknown ExecStatusType %d", status);
 		return false;
 	}
+
+	log_debug("%s;", sql);
 
 	PGresult *res = PQexec(pgsql->connection, sql);
 

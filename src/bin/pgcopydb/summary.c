@@ -820,7 +820,7 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 	for (int tableIndex = 0; tableIndex < tableSpecsArray->count; tableIndex++)
 	{
 		CopyTableDataSpec *tableSpecs = &(tableSpecsArray->array[tableIndex]);
-		SourceTable *table = tableSpecs->sourceTable;
+		SourceTable *table = &(tableSpecs->sourceTable);
 
 		SummaryTableEntry *entry = &(summaryTable->array[tableIndex]);
 

@@ -63,7 +63,10 @@ static CommandLine copy_db_command =
 		"  --index-jobs          Number of concurrent CREATE INDEX jobs to run\n"
 		"  --drop-if-exists      On the target database, clean-up from a previous run first\n"
 		"  --no-owner            Do not set ownership of objects to match the original database\n"
-		"  --skip-large-objects  Skip copying large objects (blobs)\n",
+		"  --skip-large-objects  Skip copying large objects (blobs)\n"
+		"  --restart             Allow restarting when temp files exist already\n"
+		"  --resume              Allow resuming operations after a failure\n"
+		"  --not-consistent      Allow taking a new snapshot on the source database\n",
 		cli_copy_db_getopts,
 		cli_copy_db);
 
@@ -80,7 +83,10 @@ static CommandLine copy_data_command =
 		"  --target              Postgres URI to the target database\n"
 		"  --table-jobs          Number of concurrent COPY jobs to run\n"
 		"  --index-jobs          Number of concurrent CREATE INDEX jobs to run\n"
-		"  --skip-large-objects  Skip copying large objects (blobs)\n",
+		"  --skip-large-objects  Skip copying large objects (blobs)\n"
+		"  --restart             Allow restarting when temp files exist already\n"
+		"  --resume              Allow resuming operations after a failure\n"
+		"  --not-consistent      Allow taking a new snapshot on the source database\n",
 		cli_copy_db_getopts,
 		cli_copy_data);
 
@@ -91,7 +97,10 @@ static CommandLine copy_table_data_command =
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Postgres URI to the target database\n"
-		"  --table-jobs      Number of concurrent COPY jobs to run\n",
+		"  --table-jobs      Number of concurrent COPY jobs to run\n"
+		"  --restart             Allow restarting when temp files exist already\n"
+		"  --resume              Allow resuming operations after a failure\n"
+		"  --not-consistent      Allow taking a new snapshot on the source database\n",
 		cli_copy_db_getopts,
 		cli_copy_table_data);
 
@@ -102,7 +111,10 @@ static CommandLine copy_sequence_command =
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Postgres URI to the target database\n"
-		"  --table-jobs      Number of concurrent COPY jobs to run\n",
+		"  --table-jobs      Number of concurrent COPY jobs to run\n"
+		"  --restart             Allow restarting when temp files exist already\n"
+		"  --resume              Allow resuming operations after a failure\n"
+		"  --not-consistent      Allow taking a new snapshot on the source database\n",
 		cli_copy_db_getopts,
 		cli_copy_sequences);
 
@@ -113,7 +125,10 @@ static CommandLine copy_indexes_command =
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Postgres URI to the target database\n"
-		"  --table-jobs      Number of concurrent COPY jobs to run\n",
+		"  --table-jobs      Number of concurrent COPY jobs to run\n"
+		"  --restart             Allow restarting when temp files exist already\n"
+		"  --resume              Allow resuming operations after a failure\n"
+		"  --not-consistent      Allow taking a new snapshot on the source database\n",
 		cli_copy_db_getopts,
 		cli_copy_indexes);
 
@@ -124,7 +139,10 @@ static CommandLine copy_constraints_command =
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Postgres URI to the target database\n"
-		"  --table-jobs      Number of concurrent COPY jobs to run\n",
+		"  --table-jobs      Number of concurrent COPY jobs to run\n"
+		"  --restart             Allow restarting when temp files exist already\n"
+		"  --resume              Allow resuming operations after a failure\n"
+		"  --not-consistent      Allow taking a new snapshot on the source database\n",
 		cli_copy_db_getopts,
 		cli_copy_constraints);
 
@@ -164,6 +182,9 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "no-owner", no_argument, NULL, 'O' },       /* pg_restore -O */
 		{ "skip-blobs", no_argument, NULL, 'B' },
 		{ "skip-large-objects", no_argument, NULL, 'B' },
+		{ "restart", no_argument, NULL, 'r' },
+		{ "resume", no_argument, NULL, 'R' },
+		{ "not-consistent", no_argument, NULL, 'C' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "quiet", no_argument, NULL, 'q' },
@@ -184,7 +205,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:J:I:cOBVvqh",
+	while ((c = getopt_long(argc, argv, "S:T:J:I:cOBrRCVvqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -262,6 +283,37 @@ cli_copy_db_getopts(int argc, char **argv)
 				break;
 			}
 
+			case 'r':
+			{
+				options.restart = true;
+				log_trace("--restart");
+
+				if (options.resume)
+				{
+					log_fatal("Options --resume and --restart are not compatible");
+				}
+				break;
+			}
+
+			case 'R':
+			{
+				options.resume = true;
+				log_trace("--resume");
+
+				if (options.restart)
+				{
+					log_fatal("Options --resume and --restart are not compatible");
+				}
+				break;
+			}
+
+			case 'C':
+			{
+				options.notConsistent = true;
+				log_trace("--not-consistent");
+				break;
+			}
+
 			case 'V':
 			{
 				/* keeper_cli_print_version prints version and exits. */
@@ -314,6 +366,12 @@ cli_copy_db_getopts(int argc, char **argv)
 		IS_EMPTY_STRING_BUFFER(options.target_pguri))
 	{
 		log_fatal("Options --source and --target are mandatory");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	if (options.resume && !options.notConsistent)
+	{
+		log_fatal("Option --resume requires option --not-consistent");
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
@@ -626,9 +684,7 @@ cli_copy_indexes(int argc, char **argv)
 
 	(void) summary_set_current_time(timings, TIMING_STEP_START);
 
-	log_info("Create indexes in parallel");
-
-	if (!copydb_copy_all_table_data(&copySpecs))
+	if (!copydb_copy_all_indexes(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -676,7 +732,6 @@ cli_copy_constraints(int argc, char **argv)
 static void
 cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 {
-	CopyFilePaths *cfPaths = &(copySpecs->cfPaths);
 	PostgresPaths *pgPaths = &(copySpecs->pgPaths);
 
 	log_info("[SOURCE] Copying database from \"%s\"", copyDBoptions.source_pguri);
@@ -692,10 +747,10 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 			  copySpecs->pgPaths.pg_version,
 			  copySpecs->pgPaths.pg_restore);
 
-	/* only remove the top-level directory when doing a full copy  */
-	bool removeDir = section == DATA_SECTION_ALL;
-
-	if (!copydb_init_workdir(cfPaths, NULL, removeDir))
+	if (!copydb_init_workdir(copySpecs,
+							 NULL,
+							 copyDBoptions.restart,
+							 copyDBoptions.resume))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -709,7 +764,9 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 						   section,
 						   copyDBoptions.dropIfExists,
 						   copyDBoptions.noOwner,
-						   copyDBoptions.skipLargeObjects))
+						   copyDBoptions.skipLargeObjects,
+						   copyDBoptions.restart,
+						   copyDBoptions.resume))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

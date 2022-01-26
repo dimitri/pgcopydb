@@ -85,6 +85,9 @@ cli_dump_schema_getopts(int argc, char **argv)
 	static struct option long_options[] = {
 		{ "source", required_argument, NULL, 'S' },
 		{ "target", required_argument, NULL, 'T' },
+		{ "restart", no_argument, NULL, 'r' },
+		{ "resume", no_argument, NULL, 'R' },
+		{ "not-consistent", no_argument, NULL, 'C' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "quiet", no_argument, NULL, 'q' },
@@ -116,6 +119,27 @@ cli_dump_schema_getopts(int argc, char **argv)
 			{
 				strlcpy(options.target_dir, optarg, MAXPGPATH);
 				log_trace("--target %s", options.target_dir);
+				break;
+			}
+
+			case 'r':
+			{
+				options.restart = true;
+				log_trace("--restart");
+				break;
+			}
+
+			case 'R':
+			{
+				options.resume = true;
+				log_trace("--resume");
+				break;
+			}
+
+			case 'C':
+			{
+				options.notConsistent = true;
+				log_trace("--not-consistent");
 				break;
 			}
 
@@ -188,6 +212,12 @@ cli_dump_schema_getopts(int argc, char **argv)
 		++errors;
 	}
 
+	if (options.resume && !options.notConsistent)
+	{
+		log_fatal("Option --resume requires option --not-consistent");
+		++errors;
+	}
+
 	if (errors > 0)
 	{
 		exit(EXIT_CODE_BAD_ARGS);
@@ -240,16 +270,20 @@ cli_dump_schema_section(DumpDBOptions *dumpDBoptions,
 {
 	CopyDataSpec copySpecs = { 0 };
 
-	(void) find_pg_commands(&(copySpecs.pgPaths));
+	CopyFilePaths *cfPaths = &(copySpecs.cfPaths);
+	PostgresPaths *pgPaths = &(copySpecs.pgPaths);
+
+	(void) find_pg_commands(pgPaths);
 
 	char *dir =
 		IS_EMPTY_STRING_BUFFER(dumpDBoptions->target_dir)
 		? NULL
 		: dumpDBoptions->target_dir;
 
-	bool removeDir = true;
-
-	if (!copydb_init_workdir(&(copySpecs.cfPaths), dir, removeDir))
+	if (!copydb_init_workdir(&copySpecs,
+							 dir,
+							 dumpDBoptions->restart,
+							 dumpDBoptions->resume))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -263,18 +297,20 @@ cli_dump_schema_section(DumpDBOptions *dumpDBoptions,
 						   DATA_SECTION_NONE,
 						   false, /* dropIfExists */
 						   false, /* noOwner */
-						   false)) /* skipLargeObjects */
+						   false, /* skipLargeObjects */
+						   dumpDBoptions->restart,
+						   dumpDBoptions->resume))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	log_info("Dumping database from \"%s\"", copySpecs.source_pguri);
-	log_info("Dumping database into directory \"%s\"", copySpecs.cfPaths.topdir);
+	log_info("Dumping database into directory \"%s\"", cfPaths->topdir);
 
 	log_info("Using pg_dump for Postgres \"%s\" at \"%s\"",
-			 copySpecs.pgPaths.pg_version,
-			 copySpecs.pgPaths.pg_dump);
+			 pgPaths->pg_version,
+			 pgPaths->pg_dump);
 
 	if (!copydb_dump_source_schema(&copySpecs, section))
 	{

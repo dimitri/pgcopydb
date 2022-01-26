@@ -13,6 +13,41 @@
 #include "summary.h"
 
 
+/* we can inspect a work directory and discover previous run state */
+typedef struct DirectoryState
+{
+	/* first, about the directory itself */
+	bool directoryExists;
+	bool directoryIsReady;
+
+	/* when we have a directory, what part of the job has been done? */
+	bool schemaDumpIsDone;
+	bool schemaPreDataHasBeenRestored;
+	bool schemaPostDataHasBeenRestored;
+
+	bool tableCopyIsDone;
+	bool indexCopyIsDone;
+	bool sequenceCopyIsDone;
+	bool blobsCopyIsDone;
+
+	bool allDone;
+} DirectoryState;
+
+/* track activity and allow resuming from a known state */
+typedef struct CopyDoneFilePaths
+{
+	char preDataDump[MAXPGPATH];     /* /tmp/pgcopydb/run/dump-pre.done */
+	char postDataDump[MAXPGPATH];    /* /tmp/pgcopydb/run/dump-post.done */
+	char preDataRestore[MAXPGPATH];  /* /tmp/pgcopydb/run/restore-pre.done */
+	char postDataRestore[MAXPGPATH]; /* /tmp/pgcopydb/run/restore-post.done */
+
+	char tables[MAXPGPATH];     /* /tmp/pgcopydb/run/tables.done */
+	char indexes[MAXPGPATH];    /* /tmp/pgcopydb/run/indexes.done */
+	char sequences[MAXPGPATH];  /* /tmp/pgcopydb/run/sequences.done */
+	char blobs[MAXPGPATH];      /* /tmp/pgcopydb/run/blobs.done */
+} CopyDoneFilePaths;
+
+
 /* maintain all the internal paths we need in one place */
 typedef struct CopyFilePaths
 {
@@ -22,7 +57,8 @@ typedef struct CopyFilePaths
 	char rundir[MAXPGPATH];           /* /tmp/pgcopydb/run */
 	char tbldir[MAXPGPATH];           /* /tmp/pgcopydb/run/tables */
 	char idxdir[MAXPGPATH];           /* /tmp/pgcopydb/run/indexes */
-	char idxfilepath[MAXPGPATH];      /* /tmp/pgcopydb/run/indexes.json */
+
+	CopyDoneFilePaths done;
 } CopyFilePaths;
 
 
@@ -100,9 +136,10 @@ typedef struct CopyTableDataSpec
 	TransactionSnapshot sourceSnapshot;
 
 	CopyDataSection section;
+	bool resume;
 
 	char qname[NAMEDATALEN * 2 + 1];
-	SourceTable *sourceTable;
+	SourceTable sourceTable;
 	CopyTableSummary *summary;
 	SourceIndexArray *indexArray;
 
@@ -127,6 +164,7 @@ typedef struct CopyDataSpec
 {
 	CopyFilePaths cfPaths;
 	PostgresPaths pgPaths;
+	DirectoryState dirState;
 
 	char source_pguri[MAXCONNINFO];
 	char target_pguri[MAXCONNINFO];
@@ -137,6 +175,9 @@ typedef struct CopyDataSpec
 	bool dropIfExists;
 	bool noOwner;
 	bool skipLargeObjects;
+
+	bool restart;
+	bool resume;
 
 	int tableJobs;
 	int indexJobs;
@@ -159,7 +200,16 @@ typedef enum
 } PostgresDumpSection;
 
 
-bool copydb_init_workdir(CopyFilePaths *cfPaths, char *dir, bool removeDir);
+bool copydb_init_workdir(CopyDataSpec *copySpecs,
+						 char *dir,
+						 bool restart,
+						 bool resume);
+
+bool copydb_prepare_filepaths(CopyFilePaths *cfPaths, const char *topdir);
+bool copydb_inspect_workdir(CopyFilePaths *cfPaths, DirectoryState *dirState);
+
+bool copydb_rmdir_or_mkdir(const char *dir, bool removeDir);
+bool copydb_prepare_dump_paths(CopyFilePaths *cfPaths, DumpPaths *dumpPaths);
 
 bool copydb_init_specs(CopyDataSpec *specs,
 					   char *source_pguri,
@@ -169,37 +219,19 @@ bool copydb_init_specs(CopyDataSpec *specs,
 					   CopyDataSection section,
 					   bool dropIfExists,
 					   bool noOwner,
-					   bool skipLargeObjects);
+					   bool skipLargeObjects,
+					   bool restart,
+					   bool resume);
 
 bool copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 							 CopyDataSpec *specs,
 							 SourceTable *source);
 
-bool copydb_init_indexes_paths(CopyTableDataSpec *tableSpecs);
-
-bool copydb_dump_source_schema(CopyDataSpec *specs, PostgresDumpSection section);
-bool copydb_target_prepare_schema(CopyDataSpec *specs);
-bool copydb_target_finalize_schema(CopyDataSpec *specs);
-
-bool copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
-												uint32_t oid);
-
 bool copydb_export_snapshot(TransactionSnapshot *snapshot);
 bool copydb_set_snapshot(TransactionSnapshot *snapshot);
 bool copydb_close_snapshot(TransactionSnapshot *snapshot);
 
-bool copydb_copy_all_sequences(CopyDataSpec *specs);
-
-bool copydb_copy_all_table_data(CopyDataSpec *specs);
-bool copydb_start_table_processes(CopyDataSpec *specs);
-bool copydb_start_table_process(CopyDataSpec *specs);
-
-bool copydb_copy_table(CopyTableDataSpec *tableSpecs);
-bool copydb_copy_table_indexes(CopyTableDataSpec *tableSpecs);
-
-bool copydb_start_create_indexes(CopyTableDataSpec *tableSpecs);
-bool copydb_create_index(CopyTableDataSpec *tableSpecs, int idx);
-bool copydb_create_constraints(CopyTableDataSpec *tableSpecs);
+bool copydb_prepare_table_specs(CopyDataSpec *specs);
 
 bool copydb_start_vacuum_table(CopyTableDataSpec *tableSpecs);
 
@@ -207,12 +239,80 @@ bool copydb_fatal_exit(void);
 bool copydb_wait_for_subprocesses(void);
 bool copydb_collect_finished_subprocesses(void);
 
+
+/* indexes.c */
+bool copydb_init_indexes_paths(CopyFilePaths *cfPaths,
+							   SourceIndexArray *indexArray,
+							   IndexFilePathsArray *indexPathsArray);
+
+bool copydb_copy_all_indexes(CopyDataSpec *specs);
+
+bool copydb_start_index_processes(CopyDataSpec *specs,
+								  SourceIndexArray *indexArray,
+								  IndexFilePathsArray *indexPathsArray);
+
+bool copydb_start_index_process(CopyDataSpec *specs,
+								SourceIndexArray *indexArray,
+								IndexFilePathsArray *indexPathsArray,
+								Semaphore *lockFileSemaphore);
+
+bool copydb_create_index(const char *pguri,
+						 SourceIndex *index,
+						 IndexFilePaths *indexPaths,
+						 Semaphore *lockFileSemaphore,
+						 Semaphore *createIndexSemaphore,
+						 bool ifNotExists);
+
+
+bool copydb_index_is_being_processed(SourceIndex *index,
+									 IndexFilePaths *indexPaths,
+									 Semaphore *lockFileSemaphore,
+									 CopyIndexSummary *summary,
+									 bool *isDone,
+									 bool *isBeingProcessed);
+
+bool copydb_mark_index_as_done(SourceIndex *index,
+							   IndexFilePaths *indexPaths,
+							   Semaphore *lockFileSemaphore,
+							   CopyIndexSummary *summary);
+
+bool copydb_prepare_create_index_command(SourceIndex *index,
+										 bool ifNotExists,
+										 char *command,
+										 size_t size);
+
+/* dump_restore.c */
+bool copydb_dump_source_schema(CopyDataSpec *specs, PostgresDumpSection section);
+bool copydb_target_prepare_schema(CopyDataSpec *specs);
+bool copydb_target_finalize_schema(CopyDataSpec *specs);
+
+bool copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
+												uint32_t oid);
+
+/* sequence.c */
+bool copydb_copy_all_sequences(CopyDataSpec *specs);
+
+/* table-data.c */
+bool copydb_copy_all_table_data(CopyDataSpec *specs);
+
+bool copydb_start_table_processes(CopyDataSpec *specs);
+bool copydb_start_table_process(CopyDataSpec *specs);
+
+bool copydb_copy_table(CopyTableDataSpec *tableSpecs);
+
+bool copydb_copy_table_indexes(CopyTableDataSpec *tableSpecs);
+bool copydb_start_create_table_indexes(CopyTableDataSpec *tableSpecs);
+
+bool copydb_create_constraints(CopyTableDataSpec *tableSpecs);
+
 bool copydb_table_is_being_processed(CopyDataSpec *specs,
 									 CopyTableDataSpec *tableSpecs,
+									 bool *isDone,
 									 bool *isBeingProcessed);
 
 bool copydb_mark_table_as_done(CopyDataSpec *specs,
 							   CopyTableDataSpec *tableSpecs);
+
 
 /* summary.c */
 bool prepare_summary_table(Summary *summary, CopyDataSpec *specs);

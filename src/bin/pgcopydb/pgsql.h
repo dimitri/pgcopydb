@@ -233,8 +233,10 @@ bool hostname_from_uri(const char *pguri,
 					   char *hostname, int maxHostLength, int *port);
 bool validate_connection_string(const char *connectionString);
 
+bool pgsql_truncate(PGSQL *pgsql, const char *qname);
+
 bool pg_copy(PGSQL *src, PGSQL *dst,
-			 const char *srcQname, const char *dstQname);
+			 const char *srcQname, const char *dstQname, bool truncate);
 
 bool pgsql_get_sequence(PGSQL *pgsql, const char *nspname, const char *relname,
 						int64_t *lastValue,

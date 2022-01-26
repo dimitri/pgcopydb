@@ -19,6 +19,9 @@ typedef struct DumpDBOptions
 {
 	char source_pguri[MAXCONNINFO];
 	char target_dir[MAXPGPATH];
+	bool restart;
+	bool resume;
+	bool notConsistent;
 } DumpDBOptions;
 
 
