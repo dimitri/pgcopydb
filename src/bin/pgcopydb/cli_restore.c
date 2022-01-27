@@ -37,7 +37,9 @@ static CommandLine restore_schema_command =
 		"  --source          Directory where to find the schema custom files\n"
 		"  --target          Postgres URI to the source database\n"
 		"  --drop-if-exists  On the target database, clean-up from a previous run first\n"
-		"  --no-owner        Do not set ownership of objects to match the original database\n",
+		"  --no-owner        Do not set ownership of objects to match the original database\n"
+		"  --no-acl              Prevent restoration of access privileges (grant/revoke commands).\n"
+		"  --no-comments         Do not output commands to restore comments\n",
 		cli_restore_schema_getopts,
 		cli_restore_schema);
 
@@ -49,7 +51,9 @@ static CommandLine restore_schema_pre_data_command =
 		"  --source          Directory where to find the schema custom files\n"
 		"  --target          Postgres URI to the source database\n"
 		"  --drop-if-exists  On the target database, clean-up from a previous run first\n"
-		"  --no-owner        Do not set ownership of objects to match the original database\n",
+		"  --no-owner        Do not set ownership of objects to match the original database\n"
+		"  --no-acl              Prevent restoration of access privileges (grant/revoke commands).\n"
+		"  --no-comments         Do not output commands to restore comments\n",
 		cli_restore_schema_getopts,
 		cli_restore_schema_pre_data);
 
@@ -60,7 +64,9 @@ static CommandLine restore_schema_post_data_command =
 		" --source <dir> --target <URI> ",
 		"  --source          Directory where to find the schema custom files\n"
 		"  --target          Postgres URI to the source database\n"
-		"  --no-owner        Do not set ownership of objects to match the original database\n",
+		"  --no-owner        Do not set ownership of objects to match the original database\n"
+		"  --no-acl              Prevent restoration of access privileges (grant/revoke commands).\n"
+		"  --no-comments         Do not output commands to restore comments\n",
 		cli_restore_schema_getopts,
 		cli_restore_schema_post_data);
 
@@ -93,6 +99,8 @@ cli_restore_schema_getopts(int argc, char **argv)
 		{ "schema", required_argument, NULL, 's' },
 		{ "drop-if-exists", no_argument, NULL, 'c' }, /* pg_restore -c */
 		{ "no-owner", no_argument, NULL, 'O' },       /* pg_restore -O */
+		{ "no-comments", no_argument, NULL, 'X' },
+		{ "no-acl", no_argument, NULL, 'x' }, /* pg_restore -x */
 		{ "restart", no_argument, NULL, 'r' },
 		{ "resume", no_argument, NULL, 'R' },
 		{ "not-consistent", no_argument, NULL, 'C' },
@@ -105,7 +113,7 @@ cli_restore_schema_getopts(int argc, char **argv)
 
 	optind = 0;
 
-	while ((c = getopt_long(argc, argv, "S:T:cOVvqh",
+	while ((c = getopt_long(argc, argv, "S:T:cOxXVvqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -132,15 +140,29 @@ cli_restore_schema_getopts(int argc, char **argv)
 
 			case 'c':
 			{
-				options.dropIfExists = true;
+				options.restoreOptions.dropIfExists = true;
 				log_trace("--drop-if-exists");
 				break;
 			}
 
 			case 'O':
 			{
-				options.noOwner = true;
+				options.restoreOptions.noOwner = true;
 				log_trace("--no-owner");
+				break;
+			}
+
+			case 'x':
+			{
+				options.restoreOptions.noACL = true;
+				log_trace("--no-ack");
+				break;
+			}
+
+			case 'X':
+			{
+				options.restoreOptions.noComments = true;
+				log_trace("--no-comments");
 				break;
 			}
 
@@ -235,7 +257,7 @@ cli_restore_schema_getopts(int argc, char **argv)
 	}
 
 	/* when --drop-if-exists has not been used, check PGCOPYDB_DROP_IF_EXISTS */
-	if (!options.dropIfExists)
+	if (!options.restoreOptions.dropIfExists)
 	{
 		if (env_exists(PGCOPYDB_DROP_IF_EXISTS))
 		{
@@ -248,7 +270,8 @@ cli_restore_schema_getopts(int argc, char **argv)
 				/* errors have already been logged */
 				++errors;
 			}
-			else if (!parse_bool(DROP_IF_EXISTS, &(options.dropIfExists)))
+			else if (!parse_bool(DROP_IF_EXISTS,
+								 &(options.restoreOptions.dropIfExists)))
 			{
 				log_error("Failed to parse environment variable \"%s\" "
 						  "value \"%s\", expected a boolean (on/off)",
@@ -369,8 +392,7 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 						   1,    /* table jobs */
 						   1,    /* index jobs */
 						   DATA_SECTION_NONE,
-						   restoreDBoptions.dropIfExists,
-						   restoreDBoptions.noOwner,
+						   restoreDBoptions.restoreOptions,
 						   false, /* skipLargeObjects */
 						   restoreDBoptions.restart,
 						   restoreDBoptions.resume))

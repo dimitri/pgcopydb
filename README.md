@@ -213,10 +213,10 @@ implementing any step on its own.
   2. `pgcopydb restore pre-data`
   3. `pgcopydb copy table-data`
   4. `pgcopydb copy sequences`
-  4. `pgcopydb copy indexes`
-  5. `pgcopydb copy constraints`
-  6. `pgcopydb vacuumdb`
-  7. `pgcopydb restore post-data`
+  5. `pgcopydb copy indexes`
+  6. `pgcopydb copy constraints`
+  7. `pgcopydb vacuumdb`
+  8. `pgcopydb restore post-data`
 
 Using individual commands fails to provide the advanced concurrency
 capabilities of the main `pgcopydb copy-db` command, so it is strongly

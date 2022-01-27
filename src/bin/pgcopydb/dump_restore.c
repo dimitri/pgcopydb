@@ -153,9 +153,8 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 	if (!pg_restore_db(&(specs->pgPaths),
 					   specs->target_pguri,
 					   specs->dumpPaths.preFilename,
-					   NULL,
-					   specs->dropIfExists,
-					   specs->noOwner))
+					   NULL,    /* --list filename */
+					   specs->restoreOptions))
 	{
 		/* errors have already been logged */
 		return false;
@@ -265,8 +264,7 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 					   specs->target_pguri,
 					   specs->dumpPaths.postFilename,
 					   specs->dumpPaths.listFilename,
-					   specs->dropIfExists,
-					   specs->noOwner))
+					   specs->restoreOptions))
 	{
 		/* errors have already been logged */
 		return false;

@@ -61,6 +61,14 @@ typedef struct ArchiveContentArray
 } ArchiveContentArray;
 
 
+typedef struct RestoreOptions
+{
+	bool dropIfExists;
+	bool noOwner;
+	bool noComments;
+	bool noACL;
+} RestoreOptions;
+
 bool psql_version(PostgresPaths *pgPaths);
 
 void find_pg_commands(PostgresPaths *pgPaths);
@@ -78,8 +86,7 @@ bool pg_restore_db(PostgresPaths *pgPaths,
 				   const char *pguri,
 				   const char *dumpFilename,
 				   const char *listFilename,
-				   bool dropIfExists,
-				   bool noOwner);
+				   RestoreOptions options);
 
 bool pg_restore_list(PostgresPaths *pgPaths, const char *filename,
 					 ArchiveContentArray *archive);

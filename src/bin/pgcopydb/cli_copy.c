@@ -47,6 +47,8 @@ CommandLine copy__db_command =
 		"  --index-jobs          Number of concurrent CREATE INDEX jobs to run\n"
 		"  --drop-if-exists      On the target database, clean-up from a previous run first\n"
 		"  --no-owner            Do not set ownership of objects to match the original database\n"
+		"  --no-acl              Prevent restoration of access privileges (grant/revoke commands).\n"
+		"  --no-comments         Do not output commands to restore comments\n"
 		"  --skip-large-objects  Skip copying large objects (blobs)\n"
 		"  --restart             Allow restarting when temp files exist already\n"
 		"  --resume              Allow resuming operations after a failure\n"
@@ -66,6 +68,8 @@ static CommandLine copy_db_command =
 		"  --index-jobs          Number of concurrent CREATE INDEX jobs to run\n"
 		"  --drop-if-exists      On the target database, clean-up from a previous run first\n"
 		"  --no-owner            Do not set ownership of objects to match the original database\n"
+		"  --no-acl              Prevent restoration of access privileges (grant/revoke commands).\n"
+		"  --no-comments         Do not output commands to restore comments\n"
 		"  --skip-large-objects  Skip copying large objects (blobs)\n"
 		"  --restart             Allow restarting when temp files exist already\n"
 		"  --resume              Allow resuming operations after a failure\n"
@@ -181,6 +185,8 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "index-jobs", required_argument, NULL, 'I' },
 		{ "drop-if-exists", no_argument, NULL, 'c' }, /* pg_restore -c */
 		{ "no-owner", no_argument, NULL, 'O' },       /* pg_restore -O */
+		{ "no-comments", no_argument, NULL, 'X' },
+		{ "no-acl", no_argument, NULL, 'x' }, /* pg_restore -x */
 		{ "skip-blobs", no_argument, NULL, 'B' },
 		{ "skip-large-objects", no_argument, NULL, 'B' },
 		{ "restart", no_argument, NULL, 'r' },
@@ -206,7 +212,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:J:I:cOBrRCVvqh",
+	while ((c = getopt_long(argc, argv, "S:T:J:I:cOBrRCxXVvqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -265,15 +271,29 @@ cli_copy_db_getopts(int argc, char **argv)
 
 			case 'c':
 			{
-				options.dropIfExists = true;
+				options.restoreOptions.dropIfExists = true;
 				log_trace("--drop-if-exists");
 				break;
 			}
 
 			case 'O':
 			{
-				options.noOwner = true;
+				options.restoreOptions.noOwner = true;
 				log_trace("--no-owner");
+				break;
+			}
+
+			case 'x':
+			{
+				options.restoreOptions.noACL = true;
+				log_trace("--no-ack");
+				break;
+			}
+
+			case 'X':
+			{
+				options.restoreOptions.noComments = true;
+				log_trace("--no-comments");
 				break;
 			}
 
@@ -466,7 +486,7 @@ cli_copydb_getenv(CopyDBOptions *options)
 	}
 
 	/* when --drop-if-exists has not been used, check PGCOPYDB_DROP_IF_EXISTS */
-	if (!options->dropIfExists)
+	if (!options->restoreOptions.dropIfExists)
 	{
 		if (env_exists(PGCOPYDB_DROP_IF_EXISTS))
 		{
@@ -479,7 +499,8 @@ cli_copydb_getenv(CopyDBOptions *options)
 				/* errors have already been logged */
 				++errors;
 			}
-			else if (!parse_bool(DROP_IF_EXISTS, &(options->dropIfExists)))
+			else if (!parse_bool(DROP_IF_EXISTS,
+								 &(options->restoreOptions.dropIfExists)))
 			{
 				log_error("Failed to parse environment variable \"%s\" "
 						  "value \"%s\", expected a boolean (on/off)",
@@ -763,8 +784,7 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 						   copyDBoptions.tableJobs,
 						   copyDBoptions.indexJobs,
 						   section,
-						   copyDBoptions.dropIfExists,
-						   copyDBoptions.noOwner,
+						   copyDBoptions.restoreOptions,
 						   copyDBoptions.skipLargeObjects,
 						   copyDBoptions.restart,
 						   copyDBoptions.resume))

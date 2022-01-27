@@ -172,8 +172,7 @@ typedef struct CopyDataSpec
 	TransactionSnapshot sourceSnapshot;
 
 	CopyDataSection section;
-	bool dropIfExists;
-	bool noOwner;
+	RestoreOptions restoreOptions;
 	bool skipLargeObjects;
 
 	bool restart;
@@ -217,8 +216,7 @@ bool copydb_init_specs(CopyDataSpec *specs,
 					   int tableJobs,
 					   int indexJobs,
 					   CopyDataSection section,
-					   bool dropIfExists,
-					   bool noOwner,
+					   RestoreOptions restoreOptions,
 					   bool skipLargeObjects,
 					   bool restart,
 					   bool resume);
