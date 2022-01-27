@@ -47,7 +47,10 @@ CommandLine copy__db_command =
 		"  --index-jobs          Number of concurrent CREATE INDEX jobs to run\n"
 		"  --drop-if-exists      On the target database, clean-up from a previous run first\n"
 		"  --no-owner            Do not set ownership of objects to match the original database\n"
-		"  --skip-large-objects  Skip copying large objects (blobs)\n",
+		"  --skip-large-objects  Skip copying large objects (blobs)\n"
+		"  --restart             Allow restarting when temp files exist already\n"
+		"  --resume              Allow resuming operations after a failure\n"
+		"  --not-consistent      Allow taking a new snapshot on the source database\n",
 		cli_copy_db_getopts,
 		cli_copy_db);
 
@@ -98,9 +101,9 @@ static CommandLine copy_table_data_command =
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Postgres URI to the target database\n"
 		"  --table-jobs      Number of concurrent COPY jobs to run\n"
-		"  --restart             Allow restarting when temp files exist already\n"
-		"  --resume              Allow resuming operations after a failure\n"
-		"  --not-consistent      Allow taking a new snapshot on the source database\n",
+		"  --restart         Allow restarting when temp files exist already\n"
+		"  --resume          Allow resuming operations after a failure\n"
+		"  --not-consistent  Allow taking a new snapshot on the source database\n",
 		cli_copy_db_getopts,
 		cli_copy_table_data);
 
@@ -111,10 +114,9 @@ static CommandLine copy_sequence_command =
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Postgres URI to the target database\n"
-		"  --table-jobs      Number of concurrent COPY jobs to run\n"
-		"  --restart             Allow restarting when temp files exist already\n"
-		"  --resume              Allow resuming operations after a failure\n"
-		"  --not-consistent      Allow taking a new snapshot on the source database\n",
+		"  --restart         Allow restarting when temp files exist already\n"
+		"  --resume          Allow resuming operations after a failure\n"
+		"  --not-consistent  Allow taking a new snapshot on the source database\n",
 		cli_copy_db_getopts,
 		cli_copy_sequences);
 
@@ -125,10 +127,10 @@ static CommandLine copy_indexes_command =
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Postgres URI to the target database\n"
-		"  --table-jobs      Number of concurrent COPY jobs to run\n"
-		"  --restart             Allow restarting when temp files exist already\n"
-		"  --resume              Allow resuming operations after a failure\n"
-		"  --not-consistent      Allow taking a new snapshot on the source database\n",
+		"  --index-jobs      Number of concurrent CREATE INDEX jobs to run\n"
+		"  --restart         Allow restarting when temp files exist already\n"
+		"  --resume          Allow resuming operations after a failure\n"
+		"  --not-consistent  Allow taking a new snapshot on the source database\n",
 		cli_copy_db_getopts,
 		cli_copy_indexes);
 
@@ -139,10 +141,9 @@ static CommandLine copy_constraints_command =
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Postgres URI to the target database\n"
-		"  --table-jobs      Number of concurrent COPY jobs to run\n"
-		"  --restart             Allow restarting when temp files exist already\n"
-		"  --resume              Allow resuming operations after a failure\n"
-		"  --not-consistent      Allow taking a new snapshot on the source database\n",
+		"  --restart         Allow restarting when temp files exist already\n"
+		"  --resume          Allow resuming operations after a failure\n"
+		"  --not-consistent  Allow taking a new snapshot on the source database\n",
 		cli_copy_db_getopts,
 		cli_copy_constraints);
 
