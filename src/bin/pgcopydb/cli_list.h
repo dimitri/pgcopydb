@@ -20,6 +20,7 @@ typedef struct ListDBOptions
 	char source_pguri[MAXCONNINFO];
 	char schema_name[NAMEDATALEN];
 	char table_name[NAMEDATALEN];
+	bool noPKey;
 } ListDBOptions;
 
 

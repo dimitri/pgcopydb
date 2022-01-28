@@ -83,6 +83,9 @@ typedef struct SourceIndexArray
 
 bool schema_list_ordinary_tables(PGSQL *pgsql, SourceTableArray *tableArray);
 
+bool schema_list_ordinary_tables_without_pk(PGSQL *pgsql,
+											SourceTableArray *tableArray);
+
 bool schema_list_sequences(PGSQL *pgsql, SourceSequenceArray *seqArray);
 
 bool schema_get_sequence_value(PGSQL *pgsql, SourceSequence *seq);

@@ -32,6 +32,7 @@ tables to COPY the data from.
    usage: pgcopydb list tables  --source ...
 
      --source          Postgres URI to the source database
+     --without-pkey    List only tables that have no primary key
 
 .. _pgcopydb_list_sequences:
 
@@ -94,6 +95,11 @@ The following options are available to ``pgcopydb dump schema``:
 
   Filter indexes from a given table only (use ``--schema-name`` to fully
   qualify the table).
+
+--without-pkey
+
+  List only tables from the source database when they have no primary key
+  attached to their schema.
 
 Environment
 -----------

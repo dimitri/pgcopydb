@@ -87,13 +87,60 @@ schema_list_ordinary_tables(PGSQL *pgsql, SourceTableArray *tableArray)
 	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
 								   &context, &getTableArray))
 	{
-		log_error("Failed to retrieve current state from the monitor");
+		log_error("Failed to list tables");
 		return false;
 	}
 
 	if (!context.parsedOk)
 	{
-		log_error("Failed to parse current state from the monitor");
+		log_error("Failed to list tables");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * schema_list_ordinary_tables_without_pk lists all tables that do not have a
+ * primary key. This is useful to prepare a migration when some kind of change
+ * data capture technique is considered.
+ */
+bool
+schema_list_ordinary_tables_without_pk(PGSQL *pgsql,
+									   SourceTableArray *tableArray)
+{
+	SourceTableArrayContext context = { { 0 }, tableArray, false };
+
+	char *sql =
+		"  select r.oid, n.nspname, r.relname, r.reltuples::bigint, "
+		"         pg_table_size(r.oid) as bytes, "
+		"         pg_size_pretty(pg_table_size(r.oid)) "
+		"    from pg_class r "
+		"         join pg_namespace n ON n.oid = r.relnamespace "
+		"   where r.relkind = 'r' and r.relpersistence = 'p'  "
+		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+		"     and not exists "
+		"         ( "
+		"           select c.oid "
+		"             from pg_constraint c "
+		"            where c.conrelid = r.oid "
+		"              and c.contype = 'p' "
+		"         ) "
+		"order by n.nspname, r.relname";
+
+	log_trace("schema_list_ordinary_tables_without_pk");
+
+	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+								   &context, &getTableArray))
+	{
+		log_error("Failed to list tables without primary key");
+		return false;
+	}
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to list tables without primary key");
 		return false;
 	}
 
@@ -124,13 +171,13 @@ schema_list_sequences(PGSQL *pgsql, SourceSequenceArray *seqArray)
 	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
 								   &context, &getSequenceArray))
 	{
-		log_error("Failed to retrieve current state from the monitor");
+		log_error("Failed to list sequences");
 		return false;
 	}
 
 	if (!context.parsedOk)
 	{
-		log_error("Failed to parse current state from the monitor");
+		log_error("Failed to list sequences");
 		return false;
 	}
 

@@ -31,7 +31,8 @@ static CommandLine list_tables_command =
 		"tables",
 		"List all the source tables to copy data from",
 		" --source ... ",
-		"  --source          Postgres URI to the source database\n",
+		"  --source          Postgres URI to the source database\n"
+		"  --without-pkey    List only tables that have no primary key\n",
 		cli_list_db_getopts,
 		cli_list_tables);
 
@@ -83,6 +84,7 @@ cli_list_db_getopts(int argc, char **argv)
 		{ "source", required_argument, NULL, 'S' },
 		{ "schema-name", required_argument, NULL, 's' },
 		{ "table-name", required_argument, NULL, 't' },
+		{ "without-pkey", no_argument, NULL, 'P' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "quiet", no_argument, NULL, 'q' },
@@ -92,7 +94,7 @@ cli_list_db_getopts(int argc, char **argv)
 
 	optind = 0;
 
-	while ((c = getopt_long(argc, argv, "S:T:j:s:t:Vvqh",
+	while ((c = getopt_long(argc, argv, "S:T:j:s:t:PVvqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -121,6 +123,13 @@ cli_list_db_getopts(int argc, char **argv)
 			{
 				strlcpy(options.table_name, optarg, NAMEDATALEN);
 				log_trace("--table %s", options.table_name);
+				break;
+			}
+
+			case 'P':
+			{
+				options.noPKey = true;
+				log_trace("--without-pkey");
 				break;
 			}
 
@@ -214,19 +223,33 @@ cli_list_tables(int argc, char **argv)
 	PGSQL pgsql = { 0 };
 	SourceTableArray tableArray = { 0, NULL };
 
-	log_info("Listing ordinary tables in \"%s\"",
-			 listDBoptions.source_pguri);
-
 	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);
 	}
 
-	if (!schema_list_ordinary_tables(&pgsql, &tableArray))
+	if (listDBoptions.noPKey)
 	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
+		log_info("Listing tables without primary key in \"%s\"",
+				 listDBoptions.source_pguri);
+
+		if (!schema_list_ordinary_tables_without_pk(&pgsql, &tableArray))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+	}
+	else
+	{
+		log_info("Listing ordinary tables in \"%s\"",
+				 listDBoptions.source_pguri);
+
+		if (!schema_list_ordinary_tables(&pgsql, &tableArray))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
 	}
 
 	log_info("Fetched information for %d tables", tableArray.count);
