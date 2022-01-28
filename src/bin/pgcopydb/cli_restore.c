@@ -93,6 +93,9 @@ cli_restore_schema_getopts(int argc, char **argv)
 		{ "schema", required_argument, NULL, 's' },
 		{ "drop-if-exists", no_argument, NULL, 'c' }, /* pg_restore -c */
 		{ "no-owner", no_argument, NULL, 'O' },       /* pg_restore -O */
+		{ "restart", no_argument, NULL, 'r' },
+		{ "resume", no_argument, NULL, 'R' },
+		{ "not-consistent", no_argument, NULL, 'C' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "quiet", no_argument, NULL, 'q' },
@@ -138,6 +141,27 @@ cli_restore_schema_getopts(int argc, char **argv)
 			{
 				options.noOwner = true;
 				log_trace("--no-owner");
+				break;
+			}
+
+			case 'r':
+			{
+				options.restart = true;
+				log_trace("--restart");
+				break;
+			}
+
+			case 'R':
+			{
+				options.resume = true;
+				log_trace("--resume");
+				break;
+			}
+
+			case 'C':
+			{
+				options.notConsistent = true;
+				log_trace("--not-consistent");
 				break;
 			}
 
@@ -235,6 +259,12 @@ cli_restore_schema_getopts(int argc, char **argv)
 		}
 	}
 
+	if (options.resume && !options.notConsistent)
+	{
+		log_fatal("Option --resume requires option --not-consistent");
+		++errors;
+	}
+
 	if (errors > 0)
 	{
 		exit(EXIT_CODE_BAD_ARGS);
@@ -324,9 +354,10 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 		? NULL
 		: restoreDBoptions.source_dir;
 
-	bool removeDir = false;
-
-	if (!copydb_init_workdir(cfPaths, dir, removeDir))
+	if (!copydb_init_workdir(copySpecs,
+							 dir,
+							 restoreDBoptions.restart,
+							 restoreDBoptions.resume))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -340,7 +371,9 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 						   DATA_SECTION_NONE,
 						   restoreDBoptions.dropIfExists,
 						   restoreDBoptions.noOwner,
-						   false)) /* skipLargeObjects */
+						   false, /* skipLargeObjects */
+						   restoreDBoptions.restart,
+						   restoreDBoptions.resume))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

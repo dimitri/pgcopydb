@@ -235,13 +235,13 @@ schema_list_all_indexes(PGSQL *pgsql, SourceIndexArray *indexArray)
 	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
 								   &context, &getIndexArray))
 	{
-		log_error("Failed to retrieve current state from the monitor");
+		log_error("Failed to list all indexes");
 		return false;
 	}
 
 	if (!context.parsedOk)
 	{
-		log_error("Failed to parse current state from the monitor");
+		log_error("Failed to list all indexes");
 		return false;
 	}
 
@@ -302,13 +302,15 @@ schema_list_table_indexes(PGSQL *pgsql,
 								   paramCount, paramTypes, paramValues,
 								   &context, &getIndexArray))
 	{
-		log_error("Failed to retrieve current state from the monitor");
+		log_error("Failed to list all indexes for table \"%s\".\"%s\"",
+				  schemaName, tableName);
 		return false;
 	}
 
 	if (!context.parsedOk)
 	{
-		log_error("Failed to parse current state from the monitor");
+		log_error("Failed to list all indexes for table \"%s\".\"%s\"",
+				  schemaName, tableName);
 		return false;
 	}
 

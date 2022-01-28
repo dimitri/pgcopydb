@@ -21,6 +21,9 @@ typedef struct RestoreDBOptions
 	char target_pguri[MAXCONNINFO];
 	bool dropIfExists;
 	bool noOwner;
+	bool restart;
+	bool resume;
+	bool notConsistent;
 } RestoreDBOptions;
 
 

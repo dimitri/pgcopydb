@@ -49,6 +49,9 @@ see full documentation coverage at section section :ref:`pgcopydb_copy-db`.
      --drop-if-exists      On the target database, clean-up from a previous run first
      --no-owner            Do not set ownership of objects to match the original database
      --skip-large-objects  Skip copying large objects (blobs)
+     --restart             Allow restarting when temp files exist already
+     --resume              Allow resuming operations after a failure
+     --not-consistent      Allow taking a new snapshot on the source database
 
 
 .. _pgcopydb_copy_data:
@@ -70,7 +73,12 @@ copy-db steps.
      --target              Postgres URI to the target database
      --table-jobs          Number of concurrent COPY jobs to run
      --index-jobs          Number of concurrent CREATE INDEX jobs to run
+     --drop-if-exists      On the target database, clean-up from a previous run first
+     --no-owner            Do not set ownership of objects to match the original database
      --skip-large-objects  Skip copying large objects (blobs)
+     --restart             Allow restarting when temp files exist already
+     --resume              Allow resuming operations after a failure
+     --not-consistent      Allow taking a new snapshot on the source database
 
 .. note::
 
@@ -113,6 +121,9 @@ avoiding disks entirely.
      --source          Postgres URI to the source database
      --target          Postgres URI to the target database
      --table-jobs      Number of concurrent COPY jobs to run
+     --restart         Allow restarting when temp files exist already
+     --resume          Allow resuming operations after a failure
+     --not-consistent  Allow taking a new snapshot on the source database
 
 .. _pgcopydb_copy_sequences:
 
@@ -134,7 +145,9 @@ database.
 
      --source          Postgres URI to the source database
      --target          Postgres URI to the target database
-     --table-jobs      Number of concurrent COPY jobs to run
+     --restart         Allow restarting when temp files exist already
+     --resume          Allow resuming operations after a failure
+     --not-consistent  Allow taking a new snapshot on the source database
 
 .. _pgcopydb_copy_indexes:
 
@@ -156,7 +169,10 @@ target database.
 
      --source          Postgres URI to the source database
      --target          Postgres URI to the target database
-     --table-jobs      Number of concurrent COPY jobs to run
+	 --index-jobs      Number of concurrent CREATE INDEX jobs to run
+     --restart         Allow restarting when temp files exist already
+     --resume          Allow resuming operations after a failure
+     --not-consistent  Allow taking a new snapshot on the source database
 
 .. _pgcopydb_copy_constraints:
 
@@ -179,8 +195,9 @@ is found existing already on the target database.
 
      --source          Postgres URI to the source database
      --target          Postgres URI to the target database
-     --table-jobs      Number of concurrent COPY jobs to run
-
+     --restart         Allow restarting when temp files exist already
+     --resume          Allow resuming operations after a failure
+     --not-consistent  Allow taking a new snapshot on the source data
 
 Description
 -----------
@@ -202,13 +219,13 @@ use the following recipe:
    $ export PGCOPYDB_TARGET_PGURI="postgres://user@target/dbname"
 
    $ pgcopydb dump schema
-   $ pgcopydb restore pre-data
-   $ pgcopydb copy table-data
-   $ pgcopydb copy sequences
-   $ pgcopydb copy indexes
-   $ pgcopydb copy constraints
+   $ pgcopydb restore pre-data --resume --not-consistent
+   $ pgcopydb copy table-data --resume --not-consistent
+   $ pgcopydb copy sequences --resume --not-consistent
+   $ pgcopydb copy indexes --resume --not-consistent
+   $ pgcopydb copy constraints --resume --not-consistent
    $ vacuumdb -z
-   $ pgcopydb restore post-data
+   $ pgcopydb restore post-data --resume --not-consistent
 
 The main ``pgcopydb copy-db`` is still better at concurrency than doing
 those steps manually, as it will create the indexes for any given table as
@@ -255,6 +272,58 @@ The following options are available to ``pgcopydb copy`` sub-commands:
   Skip copying large objects, also known as blobs, when copying the data
   from the source database to the target database.
 
+--restart
+
+  When running the pgcopydb command again, if the work directory already
+  contains information from a previous run, then the command refuses to
+  proceed and delete information that might be used for diagnostics and
+  forensics.
+
+  In that case, the ``--restart`` option can be used to allow pgcopydb to
+  delete traces from a previous run.
+
+--resume
+
+  When the pgcopydb command was terminated before completion, either by an
+  interrupt signal (such as C-c or SIGTERM) or because it crashed, it is
+  possible to resume the database migration.
+
+  When resuming activity from a previous run, table data that was fully
+  copied over to the target server is not sent again. Table data that was
+  interrupted during the COPY has to be started from scratch even when using
+  ``--resume``: the COPY command in Postgres is transactional and was rolled
+  back.
+
+  Same reasonning applies to the CREATE INDEX commands and ALTER TABLE
+  commands that pgcopydb issues, those commands are skipped on a
+  ``--resume`` run only if known to have run through to completion on the
+  previous one.
+
+  Finally, using ``--resume`` requires the use of ``--not-consistent``.
+
+--not-consistent
+
+  In order to be consistent, pgcopydb exports a Postgres snapshot by calling
+  the `pg_export_snapshot()`__ function on the source database server. The
+  snapshot is then re-used in all the connections to the source database
+  server by using the ``SET TRANSACTION SNAPSHOT`` command.
+
+  Per the Postgres documentation about ``pg_export_snapshot``:
+
+    Saves the transaction's current snapshot and returns a text string
+    identifying the snapshot. This string must be passed (outside the
+    database) to clients that want to import the snapshot. The snapshot is
+    available for import only until the end of the transaction that exported
+    it.
+
+  __ https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-SNAPSHOT-SYNCHRONIZATION-TABLE
+
+  Now, when the pgcopydb process was interrupted (or crashed) on a previous
+  run, it is possible to resume operations, but the snapshot that was
+  exported does not exists anymore. The pgcopydb command can only resume
+  operations with a new snapshot, and thus can not ensure consistency of the
+  whole data set, because each run is now using their own snapshot.
+
 Environment
 -----------
 
@@ -285,6 +354,20 @@ PGCOPYDB_DROP_IF_EXISTS
    When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
    then pgcopydb uses the pg_restore options ``--clean --if-exists`` when
    creating the schema on the target Postgres instance.
+
+XDG_RUNTIME_DIR
+
+  As per the `XDG Base Directory Specification`__ the XDG_RUNTIME_DIR
+  environment variable defines the base directory relative to which
+  user-specific non-essential runtime files and other file objects (such as
+  sockets, named pipes, ...) should be stored. The directory MUST be owned
+  by the user, and he MUST be the only one having read and write access to
+  it. Its Unix access mode MUST be 0700.
+
+  The pgcopydb command creates all its work files and directories in
+  ``${XDG_RUNTIME_DIR}/pgcopydb``.
+
+__ https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
 
 Examples
 --------
@@ -329,7 +412,7 @@ Then copy the data over:
 
 ::
 
-   $ pgcopydb copy table-data
+   $ pgcopydb copy table-data --resume --not-consistent
    15:24:36 75688 INFO  [SOURCE] Copying database from "port=54311 host=localhost dbname=pgloader"
    15:24:36 75688 INFO  [TARGET] Copying database into "port=54311 dbname=plop"
    15:24:36 75688 INFO  Removing the stale pid file "/tmp/pgcopydb/pgcopydb.pid"
@@ -355,7 +438,7 @@ definitions from the source database:
 
 ::
 
-   $ pgcopydb copy indexes
+   $ pgcopydb copy indexes --resume --not-consistent
    15:24:40 75918 INFO  [SOURCE] Copying database from "port=54311 host=localhost dbname=pgloader"
    15:24:40 75918 INFO  [TARGET] Copying database into "port=54311 dbname=plop"
    15:24:40 75918 INFO  Removing the stale pid file "/tmp/pgcopydb/pgcopydb.pid"
@@ -403,7 +486,7 @@ source database schema into the target database:
 
 ::
 
-   $ pgcopydb copy constraints
+   $ pgcopydb copy constraints --resume --not-consistent
    15:24:43 76095 INFO  [SOURCE] Copying database from "port=54311 host=localhost dbname=pgloader"
    15:24:43 76095 INFO  [TARGET] Copying database into "port=54311 dbname=plop"
    15:24:43 76095 INFO  Removing the stale pid file "/tmp/pgcopydb/pgcopydb.pid"
@@ -448,7 +531,7 @@ Finally we can restore the post-data section of the schema:
 
 ::
 
-   $ pgcopydb restore post-data
+   $ pgcopydb restore post-data --resume --not-consistent
    15:24:50 76328 INFO  Removing the stale pid file "/tmp/pgcopydb/pgcopydb.pid"
    15:24:50 76328 INFO  Restoring database from "/tmp/pgcopydb"
    15:24:50 76328 INFO  Restoring database into "port=54311 dbname=plop"

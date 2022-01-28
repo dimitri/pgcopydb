@@ -24,6 +24,9 @@ typedef struct CopyDBOptions
 	bool dropIfExists;
 	bool noOwner;
 	bool skipLargeObjects;
+	bool restart;
+	bool resume;
+	bool notConsistent;
 } CopyDBOptions;
 
 
