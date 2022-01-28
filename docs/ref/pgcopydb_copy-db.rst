@@ -22,6 +22,8 @@ Postgres instance to the target Postgres instance.
      --index-jobs          Number of concurrent CREATE INDEX jobs to run
      --drop-if-exists      On the target database, clean-up from a previous run first
      --no-owner            Do not set ownership of objects to match the original database
+     --no-acl              Prevent restoration of access privileges (grant/revoke commands).
+     --no-comments         Do not output commands to restore comments
      --skip-large-objects  Skip copying large objects (blobs)
      --restart             Allow restarting when temp files exist already
      --resume              Allow resuming operations after a failure
@@ -63,7 +65,7 @@ The ``pgcopydb copy-db`` command implements the following steps:
   6. Then ``VACUUM ANALYZE`` is run on each target table as soon as the data
      and indexes are all created.
 
-  8. Then pgcopydb gets the list of the sequences on the source database and
+  7. Then pgcopydb gets the list of the sequences on the source database and
      for each of them runs a separate query on the source to fetch the
      ``last_value`` and the ``is_called`` metadata the same way that pg_dump
      does.
@@ -71,7 +73,7 @@ The ``pgcopydb copy-db`` command implements the following steps:
      For each sequence, pgcopydb then calls ``pg_catalog.setval()`` on the
      target database with the information obtained on the source database.
 
-  9. The final stage consists now of running the rest of the ``post-data``
+  8. The final stage consists now of running the rest of the ``post-data``
      section script for the whole database, and that's where the foreign key
      constraints and other elements are created.
 

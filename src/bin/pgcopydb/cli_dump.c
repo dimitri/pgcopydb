@@ -289,14 +289,15 @@ cli_dump_schema_section(DumpDBOptions *dumpDBoptions,
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	RestoreOptions restoreOptions = { 0 };
+
 	if (!copydb_init_specs(&copySpecs,
 						   dumpDBoptions->source_pguri,
 						   NULL, /* target_pguri */
 						   1,    /* table jobs */
 						   1,    /* index jobs */
 						   DATA_SECTION_NONE,
-						   false, /* dropIfExists */
-						   false, /* noOwner */
+						   restoreOptions,
 						   false, /* skipLargeObjects */
 						   dumpDBoptions->restart,
 						   dumpDBoptions->resume))
