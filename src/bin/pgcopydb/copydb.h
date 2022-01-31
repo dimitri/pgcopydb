@@ -280,7 +280,9 @@ bool copydb_prepare_create_index_command(SourceIndex *index,
 										 size_t size);
 
 /* dump_restore.c */
-bool copydb_dump_source_schema(CopyDataSpec *specs, PostgresDumpSection section);
+bool copydb_dump_source_schema(CopyDataSpec *specs,
+							   const char *snapshot,
+							   PostgresDumpSection section);
 bool copydb_target_prepare_schema(CopyDataSpec *specs);
 bool copydb_target_finalize_schema(CopyDataSpec *specs);
 

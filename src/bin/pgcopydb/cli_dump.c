@@ -313,7 +313,7 @@ cli_dump_schema_section(DumpDBOptions *dumpDBoptions,
 			 pgPaths->pg_version,
 			 pgPaths->pg_dump);
 
-	if (!copydb_dump_source_schema(&copySpecs, section))
+	if (!copydb_dump_source_schema(&copySpecs, NULL, section))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

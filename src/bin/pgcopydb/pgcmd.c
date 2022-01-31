@@ -336,6 +336,7 @@ set_psql_from_pg_config(PostgresPaths *pgPaths)
 bool
 pg_dump_db(PostgresPaths *pgPaths,
 		   const char *pguri,
+		   const char *snapshot,
 		   const char *section,
 		   const char *filename)
 {
@@ -348,6 +349,13 @@ pg_dump_db(PostgresPaths *pgPaths,
 
 	args[argsIndex++] = (char *) pgPaths->pg_dump;
 	args[argsIndex++] = "-Fc";
+
+	if (snapshot != NULL)
+	{
+		args[argsIndex++] = "--snapshot";
+		args[argsIndex++] = (char *) snapshot;
+	}
+
 	args[argsIndex++] = "--section";
 	args[argsIndex++] = (char *) section;
 	args[argsIndex++] = "--file";

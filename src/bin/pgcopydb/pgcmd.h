@@ -79,6 +79,7 @@ bool set_psql_from_pg_config(PostgresPaths *pgPaths);
 
 bool pg_dump_db(PostgresPaths *pgPaths,
 				const char *pguri,
+				const char *snapshot,
 				const char *section,
 				const char *filename);
 

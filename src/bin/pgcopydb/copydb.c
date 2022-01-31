@@ -567,6 +567,8 @@ copydb_export_snapshot(TransactionSnapshot *snapshot)
 {
 	PGSQL *pgsql = &(snapshot->pgsql);
 
+	log_debug("copydb_export_snapshot");
+
 	if (!pgsql_init(pgsql, snapshot->pguri, snapshot->connectionType))
 	{
 		/* errors have already been logged */
@@ -598,6 +600,9 @@ copydb_export_snapshot(TransactionSnapshot *snapshot)
 		(void) pgsql_finish(pgsql);
 		return false;
 	}
+
+	log_info("Exported snapshot \"%s\" from the source database",
+			 snapshot->snapshot);
 
 	return true;
 }

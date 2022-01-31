@@ -534,9 +534,24 @@ cli_copy_db(int argc, char **argv)
 
 	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_SCHEMA_DUMP);
 
-	if (!copydb_dump_source_schema(&copySpecs, PG_DUMP_SECTION_SCHEMA))
+	/*
+	 * First, we need to open a snapshot that we're going to re-use in all our
+	 * connections to the source database.
+	 */
+	TransactionSnapshot *sourceSnapshot = &(copySpecs.sourceSnapshot);
+
+	if (!copydb_export_snapshot(sourceSnapshot))
+	{
+		log_fatal("Failed to export a snapshot on \"%s\"", sourceSnapshot->pguri);
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!copydb_dump_source_schema(&copySpecs,
+								   sourceSnapshot->snapshot,
+								   PG_DUMP_SECTION_SCHEMA))
 	{
 		/* errors have already been logged */
+		(void) copydb_close_snapshot(sourceSnapshot);
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
@@ -559,8 +574,12 @@ cli_copy_db(int argc, char **argv)
 	if (!copydb_copy_all_table_data(&copySpecs))
 	{
 		/* errors have already been logged */
+		(void) copydb_close_snapshot(sourceSnapshot);
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
+
+	/* now close the snapshot we kept for the whole operation */
+	(void) copydb_close_snapshot(sourceSnapshot);
 
 	log_info("STEP 7: restore the post-data section to the target database");
 

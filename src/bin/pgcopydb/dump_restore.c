@@ -68,7 +68,9 @@ copydb_objectid_has_been_processed_already(CopyDataSpec *specs, uint32_t oid)
  * --section=post-data to dump the source database schema to files.
  */
 bool
-copydb_dump_source_schema(CopyDataSpec *specs, PostgresDumpSection section)
+copydb_dump_source_schema(CopyDataSpec *specs,
+						  const char *snapshot,
+						  PostgresDumpSection section)
 {
 	if (section == PG_DUMP_SECTION_SCHEMA ||
 		section == PG_DUMP_SECTION_PRE_DATA ||
@@ -82,6 +84,7 @@ copydb_dump_source_schema(CopyDataSpec *specs, PostgresDumpSection section)
 		}
 		else if (!pg_dump_db(&(specs->pgPaths),
 							 specs->source_pguri,
+							 snapshot,
 							 "pre-data",
 							 specs->dumpPaths.preFilename))
 		{
@@ -110,6 +113,7 @@ copydb_dump_source_schema(CopyDataSpec *specs, PostgresDumpSection section)
 		}
 		else if (!pg_dump_db(&(specs->pgPaths),
 							 specs->source_pguri,
+							 snapshot,
 							 "post-data",
 							 specs->dumpPaths.postFilename))
 		{

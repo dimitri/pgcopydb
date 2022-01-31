@@ -46,23 +46,10 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 		return true;
 	}
 
-	/*
-	 * First, we need to open a snapshot that we're going to re-use in all our
-	 * connections to the source database.
-	 */
-	TransactionSnapshot *sourceSnapshot = &(specs->sourceSnapshot);
-
-	if (!copydb_export_snapshot(sourceSnapshot))
-	{
-		log_fatal("Failed to export a snapshot on \"%s\"", sourceSnapshot->pguri);
-		return false;
-	}
-
 	/* now fetch the list of tables from the source database */
 	if (!copydb_prepare_table_specs(specs))
 	{
 		/* errors have already been logged */
-		(void) copydb_close_snapshot(sourceSnapshot);
 		return false;
 	}
 
@@ -75,7 +62,6 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 	if (!copydb_start_table_processes(specs))
 	{
 		log_fatal("Failed to start a sub-process to COPY the data");
-		(void) copydb_close_snapshot(sourceSnapshot);
 		(void) copydb_fatal_exit();
 	}
 
@@ -98,9 +84,6 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 		/* errors have already been logged */
 		++errors;
 	}
-
-	/* we don't need the snapshot anymore */
-	(void) copydb_close_snapshot(sourceSnapshot);
 
 	/*
 	 * Now that all the sub-processes are done, we can also unlink the index
