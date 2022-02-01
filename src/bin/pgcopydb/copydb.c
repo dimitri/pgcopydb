@@ -397,6 +397,7 @@ copydb_init_specs(CopyDataSpec *specs,
 				  int tableJobs,
 				  int indexJobs,
 				  CopyDataSection section,
+				  char *snapshot,
 				  RestoreOptions restoreOptions,
 				  bool skipLargeObjects,
 				  bool restart,
@@ -439,6 +440,13 @@ copydb_init_specs(CopyDataSpec *specs,
 	if (target_pguri != NULL)
 	{
 		strlcpy(tmpCopySpecs.target_pguri, target_pguri, MAXCONNINFO);
+	}
+
+	if (snapshot != NULL && !IS_EMPTY_STRING_BUFFER(snapshot))
+	{
+		strlcpy(tmpCopySpecs.sourceSnapshot.snapshot,
+				snapshot,
+				sizeof(tmpCopySpecs.sourceSnapshot.snapshot));
 	}
 
 	/* copy the structure as a whole memory area to the target place */

@@ -32,6 +32,7 @@ definitions from the given source Postgres instance.
 
      --source          Postgres URI to the source database
      --target          Directory where to save the dump files
+     --snapshot            Use snapshot obtained with pg_export_snapshot
 
 .. _pgcopydb_dump_pre_data:
 
@@ -50,6 +51,7 @@ The command ``pgcopydb dump pre-data`` uses pg_dump to export SQL schema
 
      --source          Postgres URI to the source database
      --target          Directory where to save the dump files
+     --snapshot            Use snapshot obtained with pg_export_snapshot
 
 .. _pgcopydb_dump_post_data:
 
@@ -68,6 +70,7 @@ The command ``pgcopydb dump post-data`` uses pg_dump to export SQL schema
 
      --source          Postgres URI to the source database
      --target          Directory where to save the dump files
+     --snapshot            Use snapshot obtained with pg_export_snapshot
 
 
 Description
@@ -105,6 +108,12 @@ The following options are available to ``pgcopydb dump schema``:
 --target
 
   Target directory where to write output and temporary files.
+
+--snapshot
+
+  Instead of exporting its own snapshot by calling the PostgreSQL function
+  ``pg_export_snapshot()`` it is possible for pgcopydb to re-use an already
+  exported snapshot.
 
 Environment
 -----------
