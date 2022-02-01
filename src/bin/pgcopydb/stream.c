@@ -14,6 +14,8 @@
 #include "access/xlog_internal.h"
 #include "access/xlogdefs.h"
 
+#include "parson.h"
+
 #include "cli_common.h"
 #include "cli_root.h"
 #include "copydb.h"
@@ -28,6 +30,9 @@
 #include "string_utils.h"
 #include "summary.h"
 
+
+static bool updateStreamCounters(StreamContext *context,
+								 LogicalMessageMetadata *metadata);
 
 /*
  * startLogicalStreaming opens a replication connection to the given source
@@ -130,7 +135,166 @@ streamToFiles(LogicalStreamContext *context)
 		strlcpy(privateContext->walFileName, walFileName, MAXPGPATH);
 	}
 
-	log_info("received: %s", context->buffer);
+	LogicalMessageMetadata metadata = { 0 };
+
+	if (!parseMessageMetadata(&metadata, context->buffer))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	(void) updateStreamCounters(privateContext, &metadata);
+
+	log_info("Received action %c for XID %u in LSN %s",
+			 metadata.action,
+			 metadata.xid,
+			 metadata.lsn);
+
+	if (privateContext->counters.insert > 10)
+	{
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * parseMessageMetadata parses just the metadata of the JSON replication
+ * message we got from wal2json.
+ */
+bool
+parseMessageMetadata(LogicalMessageMetadata *metadata, const char *buffer)
+{
+	JSON_Value *json = json_parse_string(buffer);
+	JSON_Object *jsobj = json_value_get_object(json);
+
+	if (json_type(json) != JSONObject)
+	{
+		log_error("Failed to parse JSON message: \"%s\"", buffer);
+		json_value_free(json);
+		return false;
+	}
+
+	/* action is one of "B", "C", "I", "U", "D", "T" */
+	char *action = (char *) json_object_get_string(jsobj, "action");
+
+	if (action == NULL || strlen(action) != 1)
+	{
+		log_error("Failed to parse JSON message: \"%s\"", buffer);
+		json_value_free(json);
+		return false;
+	}
+
+	switch (action[0])
+	{
+		case 'B':
+		{
+			metadata->action = STREAM_ACTION_BEGIN;
+			break;
+		}
+
+		case 'C':
+		{
+			metadata->action = STREAM_ACTION_COMMIT;
+			break;
+		}
+
+		case 'I':
+		{
+			metadata->action = STREAM_ACTION_INSERT;
+			break;
+		}
+
+		case 'U':
+		{
+			metadata->action = STREAM_ACTION_UPDATE;
+			break;
+		}
+
+		case 'D':
+		{
+			metadata->action = STREAM_ACTION_DELETE;
+			break;
+		}
+
+		case 'T':
+		{
+			metadata->action = STREAM_ACTION_TRUNCATE;
+			break;
+		}
+
+		default:
+		{
+			log_error("Failed to parse JSON message action: \"%s\"", action);
+			return false;
+		}
+	}
+
+	char *lsn = (char *) json_object_get_string(jsobj, "lsn");
+
+	if (lsn == NULL)
+	{
+		log_error("Failed to parse JSON message: \"%s\"", buffer);
+		json_value_free(json);
+		return false;
+	}
+
+	strlcpy(metadata->lsn, lsn, sizeof(metadata->lsn));
+
+	double xid = json_object_get_number(jsobj, "xid");
+	metadata->xid = (uint32_t) xid;
+
+	json_value_free(json);
+	return true;
+}
+
+
+/*
+ */
+static bool
+updateStreamCounters(StreamContext *context, LogicalMessageMetadata *metadata)
+{
+	++context->counters.total;
+
+	switch (metadata->action)
+	{
+		case STREAM_ACTION_BEGIN:
+		{
+			++context->counters.begin;
+			break;
+		}
+
+		case STREAM_ACTION_COMMIT:
+		{
+			++context->counters.commit;
+			break;
+		}
+
+		case STREAM_ACTION_INSERT:
+		{
+			++context->counters.insert;
+			break;
+		}
+
+		case STREAM_ACTION_UPDATE:
+		{
+			++context->counters.update;
+			break;
+		}
+
+		case STREAM_ACTION_DELETE:
+		{
+			++context->counters.delete;
+			break;
+		}
+
+		case STREAM_ACTION_TRUNCATE:
+		{
+			++context->counters.truncate;
+			break;
+		}
+	}
 
 	return true;
 }
