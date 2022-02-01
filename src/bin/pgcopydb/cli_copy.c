@@ -52,7 +52,8 @@ CommandLine copy__db_command =
 		"  --skip-large-objects  Skip copying large objects (blobs)\n"
 		"  --restart             Allow restarting when temp files exist already\n"
 		"  --resume              Allow resuming operations after a failure\n"
-		"  --not-consistent      Allow taking a new snapshot on the source database\n",
+		"  --not-consistent      Allow taking a new snapshot on the source database\n"
+		"  --snapshot            Use snapshot obtained with pg_export_snapshot\n",
 		cli_copy_db_getopts,
 		cli_copy_db);
 
@@ -73,7 +74,8 @@ static CommandLine copy_db_command =
 		"  --skip-large-objects  Skip copying large objects (blobs)\n"
 		"  --restart             Allow restarting when temp files exist already\n"
 		"  --resume              Allow resuming operations after a failure\n"
-		"  --not-consistent      Allow taking a new snapshot on the source database\n",
+		"  --not-consistent      Allow taking a new snapshot on the source database\n"
+		"  --snapshot            Use snapshot obtained with pg_export_snapshot\n",
 		cli_copy_db_getopts,
 		cli_copy_db);
 
@@ -93,7 +95,8 @@ static CommandLine copy_data_command =
 		"  --skip-large-objects  Skip copying large objects (blobs)\n"
 		"  --restart             Allow restarting when temp files exist already\n"
 		"  --resume              Allow resuming operations after a failure\n"
-		"  --not-consistent      Allow taking a new snapshot on the source database\n",
+		"  --not-consistent      Allow taking a new snapshot on the source database\n"
+		"  --snapshot            Use snapshot obtained with pg_export_snapshot\n",
 		cli_copy_db_getopts,
 		cli_copy_data);
 
@@ -107,7 +110,8 @@ static CommandLine copy_table_data_command =
 		"  --table-jobs      Number of concurrent COPY jobs to run\n"
 		"  --restart         Allow restarting when temp files exist already\n"
 		"  --resume          Allow resuming operations after a failure\n"
-		"  --not-consistent  Allow taking a new snapshot on the source database\n",
+		"  --not-consistent  Allow taking a new snapshot on the source database\n"
+		"  --snapshot        Use snapshot obtained with pg_export_snapshot\n",
 		cli_copy_db_getopts,
 		cli_copy_table_data);
 
@@ -120,7 +124,8 @@ static CommandLine copy_sequence_command =
 		"  --target          Postgres URI to the target database\n"
 		"  --restart         Allow restarting when temp files exist already\n"
 		"  --resume          Allow resuming operations after a failure\n"
-		"  --not-consistent  Allow taking a new snapshot on the source database\n",
+		"  --not-consistent  Allow taking a new snapshot on the source database\n"
+		"  --snapshot        Use snapshot obtained with pg_export_snapshot\n",
 		cli_copy_db_getopts,
 		cli_copy_sequences);
 
@@ -192,6 +197,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "restart", no_argument, NULL, 'r' },
 		{ "resume", no_argument, NULL, 'R' },
 		{ "not-consistent", no_argument, NULL, 'C' },
+		{ "snapshot", required_argument, NULL, 'N' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "quiet", no_argument, NULL, 'q' },
@@ -212,7 +218,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:J:I:cOBrRCxXVvqh",
+	while ((c = getopt_long(argc, argv, "S:T:J:I:cOBrRCN:xXVvqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -332,6 +338,13 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				options.notConsistent = true;
 				log_trace("--not-consistent");
+				break;
+			}
+
+			case 'N':
+			{
+				strlcpy(options.snapshot, optarg, sizeof(options.snapshot));
+				log_trace("--snapshot %s", options.snapshot);
 				break;
 			}
 
@@ -536,14 +549,28 @@ cli_copy_db(int argc, char **argv)
 
 	/*
 	 * First, we need to open a snapshot that we're going to re-use in all our
-	 * connections to the source database.
+	 * connections to the source database. When the --snapshot option has been
+	 * used, instead of exporting a new snapshot, we can just re-use it.
 	 */
 	TransactionSnapshot *sourceSnapshot = &(copySpecs.sourceSnapshot);
 
-	if (!copydb_export_snapshot(sourceSnapshot))
+	if (IS_EMPTY_STRING_BUFFER(sourceSnapshot->snapshot))
 	{
-		log_fatal("Failed to export a snapshot on \"%s\"", sourceSnapshot->pguri);
-		exit(EXIT_CODE_INTERNAL_ERROR);
+		if (!copydb_export_snapshot(sourceSnapshot))
+		{
+			log_fatal("Failed to export a snapshot on \"%s\"",
+					  sourceSnapshot->pguri);
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+	}
+	else
+	{
+		if (!copydb_set_snapshot(sourceSnapshot))
+		{
+			log_fatal("Failed to use given --snapshot \"%s\"",
+					  sourceSnapshot->snapshot);
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
 	}
 
 	if (!copydb_dump_source_schema(&copySpecs,
@@ -682,12 +709,30 @@ cli_copy_sequences(int argc, char **argv)
 
 	(void) summary_set_current_time(timings, TIMING_STEP_START);
 
+	/*
+	 * First, we need to open a snapshot that we're going to re-use in all our
+	 * connections to the source database. When the --snapshot option has been
+	 * used, instead of exporting a new snapshot, we can just re-use it.
+	 */
 	TransactionSnapshot *sourceSnapshot = &(copySpecs.sourceSnapshot);
 
-	if (!copydb_export_snapshot(sourceSnapshot))
+	if (IS_EMPTY_STRING_BUFFER(sourceSnapshot->snapshot))
 	{
-		log_fatal("Failed to export a snapshot on \"%s\"", sourceSnapshot->pguri);
-		exit(EXIT_CODE_SOURCE);
+		if (!copydb_export_snapshot(sourceSnapshot))
+		{
+			log_fatal("Failed to export a snapshot on \"%s\"",
+					  sourceSnapshot->pguri);
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+	}
+	else
+	{
+		if (!copydb_set_snapshot(sourceSnapshot))
+		{
+			log_fatal("Failed to use given --snapshot \"%s\"",
+					  sourceSnapshot->snapshot);
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
 	}
 
 	if (!copydb_copy_all_sequences(&copySpecs))
@@ -803,6 +848,7 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 						   copyDBoptions.tableJobs,
 						   copyDBoptions.indexJobs,
 						   section,
+						   copyDBoptions.snapshot,
 						   copyDBoptions.restoreOptions,
 						   copyDBoptions.skipLargeObjects,
 						   copyDBoptions.restart,

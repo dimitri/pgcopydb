@@ -35,7 +35,8 @@ static CommandLine dump_schema_command =
 		"Dump source database schema as custom files in target directory",
 		" --source <URI> --target <dir> ",
 		"  --source          Postgres URI to the source database\n"
-		"  --target          Directory where to save the dump files\n",
+		"  --target          Directory where to save the dump files\n"
+		"  --snapshot        Use snapshot obtained with pg_export_snapshot\n",
 		cli_dump_schema_getopts,
 		cli_dump_schema);
 
@@ -45,7 +46,8 @@ static CommandLine dump_schema_pre_data_command =
 		"Dump source database pre-data schema as custom files in target directory",
 		" --source <URI> --target <dir> ",
 		"  --source          Postgres URI to the source database\n"
-		"  --target          Directory where to save the dump files\n",
+		"  --target          Directory where to save the dump files\n"
+		"  --snapshot        Use snapshot obtained with pg_export_snapshot\n",
 		cli_dump_schema_getopts,
 		cli_dump_schema_pre_data);
 
@@ -55,7 +57,8 @@ static CommandLine dump_schema_post_data_command =
 		"Dump source database post-data schema as custom files in target directory",
 		" --source <URI> --target <dir>",
 		"  --source          Postgres URI to the source database\n"
-		"  --target          Directory where to save the dump files\n",
+		"  --target          Directory where to save the dump files\n"
+		"  --snapshot        Use snapshot obtained with pg_export_snapshot\n",
 		cli_dump_schema_getopts,
 		cli_dump_schema_post_data);
 
@@ -88,6 +91,7 @@ cli_dump_schema_getopts(int argc, char **argv)
 		{ "restart", no_argument, NULL, 'r' },
 		{ "resume", no_argument, NULL, 'R' },
 		{ "not-consistent", no_argument, NULL, 'C' },
+		{ "snapshot", required_argument, NULL, 'N' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "quiet", no_argument, NULL, 'q' },
@@ -140,6 +144,13 @@ cli_dump_schema_getopts(int argc, char **argv)
 			{
 				options.notConsistent = true;
 				log_trace("--not-consistent");
+				break;
+			}
+
+			case 'N':
+			{
+				strlcpy(options.snapshot, optarg, sizeof(options.snapshot));
+				log_trace("--snapshot %s", options.snapshot);
 				break;
 			}
 
@@ -297,6 +308,7 @@ cli_dump_schema_section(DumpDBOptions *dumpDBoptions,
 						   1,    /* table jobs */
 						   1,    /* index jobs */
 						   DATA_SECTION_NONE,
+						   dumpDBoptions->snapshot,
 						   restoreOptions,
 						   false, /* skipLargeObjects */
 						   dumpDBoptions->restart,

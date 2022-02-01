@@ -22,6 +22,7 @@ typedef struct DumpDBOptions
 	bool restart;
 	bool resume;
 	bool notConsistent;
+	char snapshot[BUFSIZE];
 } DumpDBOptions;
 
 

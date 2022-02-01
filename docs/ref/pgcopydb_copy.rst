@@ -54,6 +54,7 @@ see full documentation coverage at section section :ref:`pgcopydb_copy-db`.
      --restart             Allow restarting when temp files exist already
      --resume              Allow resuming operations after a failure
      --not-consistent      Allow taking a new snapshot on the source database
+     --snapshot            Use snapshot obtained with pg_export_snapshot
 
 
 .. _pgcopydb_copy_data:
@@ -81,6 +82,7 @@ copy-db steps.
      --restart             Allow restarting when temp files exist already
      --resume              Allow resuming operations after a failure
      --not-consistent      Allow taking a new snapshot on the source database
+     --snapshot            Use snapshot obtained with pg_export_snapshot
 
 .. note::
 
@@ -126,6 +128,7 @@ avoiding disks entirely.
      --restart         Allow restarting when temp files exist already
      --resume          Allow resuming operations after a failure
      --not-consistent  Allow taking a new snapshot on the source database
+     --snapshot        Use snapshot obtained with pg_export_snapshot
 
 .. _pgcopydb_copy_sequences:
 
@@ -325,6 +328,12 @@ The following options are available to ``pgcopydb copy`` sub-commands:
   exported does not exists anymore. The pgcopydb command can only resume
   operations with a new snapshot, and thus can not ensure consistency of the
   whole data set, because each run is now using their own snapshot.
+
+--snapshot
+
+  Instead of exporting its own snapshot by calling the PostgreSQL function
+  ``pg_export_snapshot()`` it is possible for pgcopydb to re-use an already
+  exported snapshot.
 
 Environment
 -----------

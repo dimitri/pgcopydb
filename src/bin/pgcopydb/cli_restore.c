@@ -392,6 +392,7 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 						   1,    /* table jobs */
 						   1,    /* index jobs */
 						   DATA_SECTION_NONE,
+						   NULL, /* source database snapshot */
 						   restoreDBoptions.restoreOptions,
 						   false, /* skipLargeObjects */
 						   restoreDBoptions.restart,

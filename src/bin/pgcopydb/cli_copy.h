@@ -27,6 +27,7 @@ typedef struct CopyDBOptions
 	bool restart;
 	bool resume;
 	bool notConsistent;
+	char snapshot[BUFSIZE];
 } CopyDBOptions;
 
 
