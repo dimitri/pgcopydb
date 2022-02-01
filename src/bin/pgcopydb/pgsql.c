@@ -12,6 +12,8 @@
 #include "libpq/libpq-fs.h"
 #include "pqexpbuffer.h"
 #include "portability/instr_time.h"
+#include "access/xlog_internal.h"
+#include "access/xlogdefs.h"
 
 #if PG_MAJORVERSION_NUM >= 15
 #include "common/pg_prng.h"
@@ -24,17 +26,9 @@
 #include "log.h"
 #include "parsing.h"
 #include "pgsql.h"
+#include "pg_utils.h"
 #include "signals.h"
 #include "string_utils.h"
-
-
-#define STR_ERRCODE_DUPLICATE_OBJECT "42710"
-#define STR_ERRCODE_DUPLICATE_DATABASE "42P04"
-
-#define STR_ERRCODE_INVALID_OBJECT_DEFINITION "42P17"
-#define STR_ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE "55000"
-#define STR_ERRCODE_OBJECT_IN_USE "55006"
-#define STR_ERRCODE_UNDEFINED_OBJECT "42704"
 
 static char * ConnectionTypeToString(ConnectionType connectionType);
 static void log_connection_error(PGconn *connection, int logLevel);
@@ -52,6 +46,16 @@ static bool pg_copy_send_query(PGSQL *pgsql,
 static void pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context);
 
 static void getSequenceValue(void *ctx, PGresult *result);
+
+static bool pgsqlSendFeedback(LogicalStreamClient *client,
+							  bool force,
+							  bool replyRequested);
+
+static bool flushAndSendFeedback(LogicalStreamClient *client);
+
+static void prepareToTerminate(LogicalStreamClient *client,
+							   bool keepalive,
+							   XLogRecPtr lsn);
 
 
 /*
@@ -2268,5 +2272,544 @@ parseBlobMetadataArray(void *ctx, PGresult *result)
 			context->parsedOk = false;
 			return;
 		}
+	}
+}
+
+
+/*
+ * pgsql_init_stream initializes the logical decoding streaming client with the
+ * given parameters.
+ */
+bool
+pgsql_init_stream(LogicalStreamClient *client,
+				  const char *pguri,
+				  const char *slotName,
+				  XLogRecPtr startpos,
+				  XLogRecPtr endpos)
+{
+	PGSQL *pgsql = &(client->pgsql);
+
+	if (!pgsql_init(pgsql, (char *) pguri, PGSQL_CONN_SOURCE))
+	strlcpy(client->slotName, slotName, sizeof(client->slotName));
+
+	client->startpos = startpos;
+
+	client->standby_message_timeout = 10 * 1000;    /* 10 sec = default */
+
+	client->current.written_lsn = InvalidXLogRecPtr;
+	client->current.flushed_lsn = InvalidXLogRecPtr;
+	client->current.applied_lsn = InvalidXLogRecPtr;
+
+	client->feedback.written_lsn = InvalidXLogRecPtr;
+	client->feedback.flushed_lsn = InvalidXLogRecPtr;
+	client->feedback.applied_lsn = InvalidXLogRecPtr;
+
+	return true;
+}
+
+
+/*
+ * Send the START_REPLICATION command.
+ */
+bool
+pgsql_start_replication(LogicalStreamClient *client)
+{
+	PGSQL *pgsql = &(client->pgsql);
+
+	/*
+	 * Start the replication, build the START_REPLICATION query.
+	 */
+	log_debug("starting log streaming at %X/%X (slot %s)",
+			  LSN_FORMAT_ARGS(client->startpos),
+			  client->slotName);
+
+	/* Initiate the replication stream at specified location */
+	PQExpBuffer query = createPQExpBuffer();
+
+	appendPQExpBuffer(query, "START_REPLICATION SLOT \"%s\" LOGICAL %X/%X",
+					  client->slotName, LSN_FORMAT_ARGS(client->startpos));
+
+	/* print options if there are any */
+	if (client->pluginOptions.count > 0)
+	{
+		appendPQExpBufferStr(query, " (");
+	}
+
+	for (int i = 0; i < client->pluginOptions.count; i++)
+	{
+		/* separator */
+		if (i > 0)
+		{
+			appendPQExpBufferStr(query, ", ");
+		}
+
+		/* write option name */
+		appendPQExpBuffer(query, "\"%s\"", client->pluginOptions.keywords[i]);
+
+		/* write option value if specified */
+		if (client->pluginOptions.values[i] != NULL)
+		{
+			appendPQExpBuffer(query, " '%s'", client->pluginOptions.values[i]);
+		}
+	}
+
+	if (client->pluginOptions.count > 0)
+	{
+		appendPQExpBufferChar(query, ')');
+	}
+
+	if (!pgsql_open_connection(pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	PGresult *res = PQexec(pgsql->connection, query->data);
+
+	if (PQresultStatus(res) != PGRES_COPY_BOTH)
+	{
+		log_error("Failed to send replication command:");
+
+		(void) pgcopy_log_error(pgsql, res, query->data);
+
+		destroyPQExpBuffer(query);
+
+		return false;
+	}
+
+	log_debug("streaming initiated");
+
+	destroyPQExpBuffer(query);
+
+	return true;
+}
+
+
+/*
+ * pgsql_stream_logical streams replication information from the given
+ * pre-established source connection.
+ *
+ * From postgres/src/bin/pg_basebackup/pg_recvlogical.c
+ */
+bool
+pgsql_stream_logical(LogicalStreamClient *client)
+{
+	PGconn *conn = client->pgsql.connection;
+
+	PGresult *res;
+	char *copybuf = NULL;
+
+	bool time_to_abort = false;
+
+	client->last_status = -1;
+	client->current.written_lsn = InvalidXLogRecPtr;
+
+	while (!(asked_to_stop || asked_to_stop_fast || asked_to_quit || time_to_abort))
+	{
+		int r;
+		int hdr_len;
+		XLogRecPtr cur_record_lsn = InvalidXLogRecPtr;
+
+		if (copybuf != NULL)
+		{
+			PQfreemem(copybuf);
+			copybuf = NULL;
+		}
+
+		/*
+		 * Potentially send a status message to the primary.
+		 */
+		client->now = feGetCurrentTimestamp();
+
+		if (client->standby_message_timeout > 0 &&
+			feTimestampDifferenceExceeds(client->last_status,
+										 client->now,
+										 client->standby_message_timeout))
+		{
+			/* Time to send feedback! */
+			if (!pgsqlSendFeedback(client, true, false))
+			{
+				goto error;
+			}
+
+			client->last_status = client->now;
+		}
+
+		r = PQgetCopyData(conn, &copybuf, 1);
+		if (r == 0)
+		{
+			/*
+			 * In async mode, and no data available. We block on reading but
+			 * not more than the specified timeout, so that we can send a
+			 * response back to the client.
+			 */
+			fd_set input_mask;
+			TimestampTz message_target = 0;
+			TimestampTz fsync_target = 0;
+			struct timeval timeout;
+			struct timeval *timeoutptr = NULL;
+
+			if (PQsocket(conn) < 0)
+			{
+				log_error("invalid socket: %s", PQerrorMessage(conn));
+				goto error;
+			}
+
+			FD_ZERO(&input_mask);
+			FD_SET(PQsocket(conn), &input_mask);
+
+			/* Compute when we need to wakeup to send a keepalive message. */
+			if (client->standby_message_timeout)
+			{
+				message_target =
+					client->last_status +
+					(client->standby_message_timeout - 1) * ((int64) 1000);
+			}
+
+			/* Now compute when to wakeup. */
+			if (message_target > 0 || fsync_target > 0)
+			{
+				TimestampTz targettime;
+				long secs;
+				int usecs;
+
+				targettime = message_target;
+
+				feTimestampDifference(client->now,
+									  targettime,
+									  &secs,
+									  &usecs);
+				if (secs <= 0)
+				{
+					timeout.tv_sec = 1; /* Always sleep at least 1 sec */
+				}
+				else
+				{
+					timeout.tv_sec = secs;
+				}
+				timeout.tv_usec = usecs;
+				timeoutptr = &timeout;
+			}
+
+			r = select(PQsocket(conn) + 1, &input_mask, NULL, NULL, timeoutptr);
+			if (r == 0 || (r < 0 && errno == EINTR))
+			{
+				/*
+				 * Got a timeout or signal. Continue the loop and either
+				 * deliver a status packet to the server or just go back into
+				 * blocking.
+				 */
+				continue;
+			}
+			else if (r < 0)
+			{
+				log_error("%s() failed: %m", "select");
+				goto error;
+			}
+
+			/* Else there is actually data on the socket */
+			if (PQconsumeInput(conn) == 0)
+			{
+				log_error("could not receive data from WAL stream: %s",
+						  PQerrorMessage(conn));
+				goto error;
+			}
+			continue;
+		}
+
+		/* End of copy stream */
+		if (r == -1)
+		{
+			break;
+		}
+
+		/* Failure while reading the copy stream */
+		if (r == -2)
+		{
+			log_error("could not read COPY data: %s",
+					  PQerrorMessage(conn));
+			goto error;
+		}
+
+		/* Check the message type. */
+		if (copybuf[0] == 'k')
+		{
+			int pos;
+			bool replyRequested;
+			XLogRecPtr walEnd;
+			bool endposReached = false;
+
+			/*
+			 * Parse the keepalive message, enclosed in the CopyData message.
+			 * We just check if the server requested a reply, and ignore the
+			 * rest.
+			 */
+			pos = 1;            /* skip msgtype 'k' */
+			walEnd = fe_recvint64(&copybuf[pos]);
+
+			client->current.written_lsn =
+				Max(walEnd, client->current.written_lsn);
+
+			pos += 8;           /* read walEnd */
+
+			pos += 8;           /* skip sendTime */
+
+			if (r < pos + 1)
+			{
+				log_error("streaming header too small: %d", r);
+				goto error;
+			}
+			replyRequested = copybuf[pos];
+
+			if (client->endpos != InvalidXLogRecPtr && walEnd >= client->endpos)
+			{
+				/*
+				 * If there's nothing to read on the socket until a keepalive
+				 * we know that the server has nothing to send us; and if
+				 * walEnd has passed endpos, we know nothing else can have
+				 * committed before endpos.  So we can bail out now.
+				 */
+				endposReached = true;
+			}
+
+			/* Send a reply, if necessary */
+			if (replyRequested || endposReached)
+			{
+				if (!flushAndSendFeedback(client))
+				{
+					goto error;
+				}
+				client->last_status = client->now;
+			}
+
+			if (endposReached)
+			{
+				prepareToTerminate(client, true, InvalidXLogRecPtr);
+				time_to_abort = true;
+				break;
+			}
+
+			continue;
+		}
+		else if (copybuf[0] != 'w')
+		{
+			log_error("unrecognized streaming header: \"%c\"",
+					  copybuf[0]);
+			goto error;
+		}
+
+		/*
+		 * Read the header of the XLogData message, enclosed in the CopyData
+		 * message. We only need the WAL location field (dataStart), the rest
+		 * of the header is ignored.
+		 */
+		hdr_len = 1;            /* msgtype 'w' */
+		hdr_len += 8;           /* dataStart */
+		hdr_len += 8;           /* walEnd */
+		hdr_len += 8;           /* sendTime */
+		if (r < hdr_len + 1)
+		{
+			log_error("streaming header too small: %d", r);
+			goto error;
+		}
+
+		/* Extract WAL location for this block */
+		cur_record_lsn = fe_recvint64(&copybuf[1]);
+
+		if (client->endpos != InvalidXLogRecPtr &&
+			cur_record_lsn > client->endpos)
+		{
+			/*
+			 * We've read past our endpoint, so prepare to go away being
+			 * cautious about what happens to our output data.
+			 */
+			if (!flushAndSendFeedback(client))
+			{
+				goto error;
+			}
+			prepareToTerminate(client, false, cur_record_lsn);
+			time_to_abort = true;
+			break;
+		}
+
+		client->current.written_lsn =
+			Max(cur_record_lsn, client->current.written_lsn);
+
+		log_info("pgsql_stream_logical: %s", copybuf + hdr_len);
+
+		if (client->endpos != InvalidXLogRecPtr &&
+			cur_record_lsn == client->endpos)
+		{
+			/* endpos was exactly the record we just processed, we're done */
+			if (!flushAndSendFeedback(client))
+			{
+				goto error;
+			}
+			prepareToTerminate(client, false, cur_record_lsn);
+			time_to_abort = true;
+			break;
+		}
+	}
+	res = PQgetResult(conn);
+	if (PQresultStatus(res) == PGRES_COPY_OUT)
+	{
+		PQclear(res);
+
+		/*
+		 * We're doing a client-initiated clean exit and have sent CopyDone to
+		 * the server. Drain any messages, so we don't miss a last-minute
+		 * ErrorResponse. The walsender stops generating XLogData records once
+		 * it sees CopyDone, so expect this to finish quickly. After CopyDone,
+		 * it's too late for sendFeedback(), even if this were to take a long
+		 * time. Hence, use synchronous-mode PQgetCopyData().
+		 */
+		while (1)
+		{
+			int r;
+
+			if (copybuf != NULL)
+			{
+				PQfreemem(copybuf);
+				copybuf = NULL;
+			}
+			r = PQgetCopyData(conn, &copybuf, 0);
+			if (r == -1)
+			{
+				break;
+			}
+			if (r == -2)
+			{
+				log_error("could not read COPY data: %s",
+						  PQerrorMessage(conn));
+				time_to_abort = false;  /* unclean exit */
+				goto error;
+			}
+		}
+
+		res = PQgetResult(conn);
+	}
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+	{
+		log_error("unexpected termination of replication stream: %s",
+				  PQresultErrorMessage(res));
+		goto error;
+	}
+	PQclear(res);
+
+	return true;
+
+error:
+	if (copybuf != NULL)
+	{
+		PQfreemem(copybuf);
+		copybuf = NULL;
+	}
+
+	PQfinish(conn);
+	conn = NULL;
+
+	return false;
+}
+
+
+/*
+ * pgsqlSendFeedback sends feedback to a logical replication connection.
+ *
+ * From postgres/src/bin/pg_basebackup/pg_recvlogical.c
+ */
+static bool
+pgsqlSendFeedback(LogicalStreamClient *client,
+				  bool force,
+				  bool replyRequested)
+{
+	PGconn *conn = client->pgsql.connection;
+
+	char replybuf[1 + 8 + 8 + 8 + 8 + 1];
+	int len = 0;
+
+	/*
+	 * we normally don't want to send superfluous feedback, but if it's
+	 * because of a timeout we need to, otherwise wal_sender_timeout will kill
+	 * us.
+	 */
+	if (!force &&
+		client->feedback.written_lsn == client->current.written_lsn &&
+		client->feedback.flushed_lsn == client->current.flushed_lsn)
+	{
+		return true;
+	}
+
+	log_info("confirming write up to %X/%X, flush to %X/%X",
+			 LSN_FORMAT_ARGS(client->current.written_lsn),
+			 LSN_FORMAT_ARGS(client->current.flushed_lsn));
+
+	replybuf[len] = 'r';
+	len += 1;
+	fe_sendint64(client->current.written_lsn, &replybuf[len]);   /* write */
+	len += 8;
+	fe_sendint64(client->current.flushed_lsn, &replybuf[len]); /* flush */
+	len += 8;
+	fe_sendint64(client->current.applied_lsn, &replybuf[len]);    /* apply */
+	len += 8;
+	fe_sendint64(client->now, &replybuf[len]);  /* sendTime */
+	len += 8;
+	replybuf[len] = replyRequested ? 1 : 0; /* replyRequested */
+	len += 1;
+
+	client->startpos = client->current.written_lsn;
+	client->feedback.written_lsn = client->current.written_lsn;
+	client->feedback.flushed_lsn = client->current.flushed_lsn;
+	client->feedback.applied_lsn = client->current.applied_lsn;
+
+	if (PQputCopyData(conn, replybuf, len) <= 0 || PQflush(conn))
+	{
+		log_error("could not send feedback packet: %s",
+				  PQerrorMessage(conn));
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * If successful, *now is updated to the current timestamp just before sending
+ * feedback.
+ */
+static bool
+flushAndSendFeedback(LogicalStreamClient *client)
+{
+	client->now = feGetCurrentTimestamp();
+	if (!pgsqlSendFeedback(client, true, false))
+	{
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * Try to inform the server about our upcoming demise, but don't wait around or
+ * retry on failure.
+ */
+static void
+prepareToTerminate(LogicalStreamClient *client, bool keepalive, XLogRecPtr lsn)
+{
+	PGconn *conn = client->pgsql.connection;
+
+	(void) PQputCopyEnd(conn, NULL);
+	(void) PQflush(conn);
+
+	if (keepalive)
+	{
+		log_info("end position %X/%X reached by keepalive",
+				 LSN_FORMAT_ARGS(client->endpos));
+	}
+	else
+	{
+		log_info("end position %X/%X reached by WAL record at %X/%X",
+				 LSN_FORMAT_ARGS(client->endpos),
+				 LSN_FORMAT_ARGS(client->current.written_lsn));
 	}
 }

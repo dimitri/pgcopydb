@@ -12,7 +12,10 @@
 
 #include <stdbool.h>
 
-#include "pgsql.h"
+/*
+ * Maximum connection info length as used in walreceiver.h
+ */
+#define MAXCONNINFO 1024
 
 char * regexp_first_match(const char *string, const char *re);
 

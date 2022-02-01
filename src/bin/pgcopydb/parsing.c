@@ -14,6 +14,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "postgres_fe.h"
+#include "libpq-fe.h"
+#include "pqexpbuffer.h"
+
+#include "defaults.h"
 #include "log.h"
 #include "parsing.h"
 #include "file_utils.h"
@@ -52,7 +57,7 @@ regexp_first_match(const char *string, const char *regex)
 		 * We could also dynamically allocate memory for the error message, but
 		 * the error might be "out of memory" already...
 		 */
-		char message[BUFSIZE];
+		char message[BUFSIZE] = { 0 };
 		size_t bytes = regerror(status, &compiledRegex, message, BUFSIZE);
 
 		log_error("Failed to compile regex \"%s\": %s%s",

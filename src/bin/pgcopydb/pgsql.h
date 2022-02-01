@@ -14,14 +14,19 @@
 #include "libpq-fe.h"
 #include "portability/instr_time.h"
 
+#include "access/xlogdefs.h"
+
 #if PG_MAJORVERSION_NUM >= 15
 #include "common/pg_prng.h"
 #endif
 
 #include "defaults.h"
+#include "parsing.h"
+#include "pg_utils.h"
 
 
 /*
+<<<<<<< HEAD
  * OID values from PostgreSQL src/include/catalog/pg_type.h
  */
 #define BOOLOID 16
@@ -49,6 +54,8 @@
 #define PGSR_SYNC_STATE_MAXLENGTH 10
 
 /*
+=======
+>>>>>>> 31ea4ec (First batch of work to implement support for logical decoding.)
  * We receive a list of "other nodes" from the monitor, and we store that list
  * in local memory. We pre-allocate the memory storage, and limit how many node
  * addresses we can handle because of the pre-allocation strategy.
@@ -263,5 +270,43 @@ bool pgsql_set_gucs(PGSQL *pgsql, GUC *settings);
 
 bool pg_copy_large_objects(PGSQL *src, PGSQL *dst,
 						   bool dropIfExists, uint32_t *count);
+
+/*
+ * Logical Decoding support.
+ */
+typedef struct LogicalTrackLSN
+{
+	XLogRecPtr written_lsn;
+	XLogRecPtr flushed_lsn;
+	XLogRecPtr applied_lsn;
+} LogicalTrackLSN;
+
+typedef struct LogicalStreamClient
+{
+	PGSQL pgsql;
+	char slotName[NAMEDATALEN];
+	KeyVal pluginOptions;
+
+	XLogRecPtr startpos;
+	XLogRecPtr endpos;
+
+	TimestampTz now;
+	TimestampTz last_status;
+
+	LogicalTrackLSN current;    /* updated at receive time */
+	LogicalTrackLSN feedback;   /* updated at feedback sending time */
+
+	int standby_message_timeout;
+} LogicalStreamClient;
+
+
+bool pgsql_init_stream(LogicalStreamClient *client,
+					   const char *pguri,
+					   const char *slotName,
+					   XLogRecPtr startpos,
+					   XLogRecPtr endpos);
+
+bool pgsql_start_replication(LogicalStreamClient *client);
+bool pgsql_stream_logical(LogicalStreamClient *client);
 
 #endif /* PGSQL_H */
