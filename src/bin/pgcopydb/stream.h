@@ -10,14 +10,23 @@
 
 #include "pgsql.h"
 
+typedef struct StreamContext
+{
+	uint64_t startLSN;
+	char walFileName[MAXPGPATH];
+	FILE *jsonFile;
+} StreamContext;
+
 bool startLogicalStreaming(const char *pguri,
 						   const char *slotName,
 						   uint64_t startLSN);
+
+bool startLogicalStreaming(const char *pguri,
+						   const char *slotName,
+						   uint64_t startLSN);
+
+bool streamToFiles(LogicalStreamContext *context);
 
 bool buildReplicationURI(const char *pguri, char *repl_pguri);
-
-bool startLogicalStreaming(const char *pguri,
-						   const char *slotName,
-						   uint64_t startLSN);
 
 #endif /* STREAM_H */

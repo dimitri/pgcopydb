@@ -39,6 +39,8 @@ static bool is_response_ok(PGresult *result);
 static bool clear_results(PGSQL *pgsql);
 static void pgsql_handle_notifications(PGSQL *pgsql);
 
+static void parseIdentifySystemResult(void *ctx, PGresult *result);
+
 static bool pg_copy_send_query(PGSQL *pgsql,
 							   const char *qname,
 							   ExecStatusType status,
@@ -1945,6 +1947,135 @@ getSequenceValue(void *ctx, PGresult *result)
 }
 
 
+typedef struct IdentifySystemResult
+{
+	char sqlstate[6];
+	bool parsedOk;
+	IdentifySystem *system;
+} IdentifySystemResult;
+
+
+/*
+ * pgsql_identify_system connects to the given pgsql client and issue the
+ * replication command IDENTIFY_SYSTEM. The pgsql connection string should
+ * contain the 'replication=1' parameter.
+ */
+bool
+pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system)
+{
+	bool connIsOurs = pgsql->connection == NULL;
+
+	PGconn *connection = pgsql_open_connection(pgsql);
+	if (connection == NULL)
+	{
+		/* error message was logged in pgsql_open_connection */
+		return false;
+	}
+
+	/* extended query protocol not supported in a replication connection */
+	PGresult *result = PQexec(connection, "IDENTIFY_SYSTEM");
+
+	if (!is_response_ok(result))
+	{
+		log_error("Failed to IDENTIFY_SYSTEM: %s", PQerrorMessage(connection));
+		PQclear(result);
+		clear_results(pgsql);
+
+		PQfinish(connection);
+
+		return false;
+	}
+
+	IdentifySystemResult isContext = { { 0 }, false, system };
+
+	(void) parseIdentifySystemResult((void *) &isContext, result);
+
+	PQclear(result);
+	clear_results(pgsql);
+
+	log_debug("IDENTIFY_SYSTEM: timeline %d, xlogpos %s, systemid %" PRIu64,
+			  system->timeline,
+			  system->xlogpos,
+			  system->identifier);
+
+	if (!isContext.parsedOk)
+	{
+		log_error("Failed to get result from IDENTIFY_SYSTEM");
+		PQfinish(connection);
+		return false;
+	}
+
+	if (connIsOurs)
+	{
+		(void) pgsql_finish(pgsql);
+	}
+
+	return true;
+}
+
+
+/*
+ * parsePgMetadata parses the result from a PostgreSQL query fetching
+ * two columns from pg_stat_replication: sync_state and currentLSN.
+ */
+static void
+parseIdentifySystemResult(void *ctx, PGresult *result)
+{
+	IdentifySystemResult *context = (IdentifySystemResult *) ctx;
+
+	if (PQnfields(result) != 4)
+	{
+		log_error("Query returned %d columns, expected 4", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	if (PQntuples(result) == 0)
+	{
+		log_debug("parseIdentifySystem: query returned no rows");
+		context->parsedOk = false;
+		return;
+	}
+	if (PQntuples(result) != 1)
+	{
+		log_error("Query returned %d rows, expected 1", PQntuples(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	/* systemid (text) */
+	char *value = PQgetvalue(result, 0, 0);
+	if (!stringToUInt64(value, &(context->system->identifier)))
+	{
+		log_error("Failed to parse system_identifier \"%s\"", value);
+		context->parsedOk = false;
+		return;
+	}
+
+	/* timeline (int4) */
+	value = PQgetvalue(result, 0, 1);
+	if (!stringToUInt32(value, &(context->system->timeline)))
+	{
+		log_error("Failed to parse timeline \"%s\"", value);
+		context->parsedOk = false;
+		return;
+	}
+
+	/* xlogpos (text) */
+	value = PQgetvalue(result, 0, 2);
+	strlcpy(context->system->xlogpos, value, PG_LSN_MAXLENGTH);
+
+	/* dbname (text) Database connected to or null */
+	if (!PQgetisnull(result, 0, 3))
+	{
+		value = PQgetvalue(result, 0, 3);
+		strlcpy(context->system->dbname, value, NAMEDATALEN);
+	}
+
+	context->parsedOk = true;
+}
+
+
 /*
  * pgsql_set_gucs sets the given GUC array in the current session attached to
  * the pgsql client.
@@ -2290,6 +2421,14 @@ pgsql_init_stream(LogicalStreamClient *client,
 	PGSQL *pgsql = &(client->pgsql);
 
 	if (!pgsql_init(pgsql, (char *) pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* we're going to send several replication commands */
+	pgsql->connectionStatementType = PGSQL_CONNECTION_MULTI_STATEMENT;
+
 	strlcpy(client->slotName, slotName, sizeof(client->slotName));
 
 	client->startpos = startpos;
@@ -2364,6 +2503,19 @@ pgsql_start_replication(LogicalStreamClient *client)
 		return false;
 	}
 
+	/* fetch the source timeline */
+	if (!pgsql_identify_system(pgsql, &(client->system)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* determine remote server's xlog segment size */
+	if (!RetrieveWalSegSize(client))
+	{
+		return false;
+	}
+
 	PGresult *res = PQexec(pgsql->connection, query->data);
 
 	if (PQresultStatus(res) != PGRES_COPY_BOTH)
@@ -2392,7 +2544,7 @@ pgsql_start_replication(LogicalStreamClient *client)
  * From postgres/src/bin/pg_basebackup/pg_recvlogical.c
  */
 bool
-pgsql_stream_logical(LogicalStreamClient *client)
+pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 {
 	PGconn *conn = client->pgsql.connection;
 
@@ -2403,6 +2555,10 @@ pgsql_stream_logical(LogicalStreamClient *client)
 
 	client->last_status = -1;
 	client->current.written_lsn = InvalidXLogRecPtr;
+
+	context->timeline = client->system.timeline;
+	context->WalSegSz = client->WalSegSz;
+	context->tracking = &(client->current);
 
 	while (!(asked_to_stop || asked_to_stop_fast || asked_to_quit || time_to_abort))
 	{
@@ -2632,10 +2788,17 @@ pgsql_stream_logical(LogicalStreamClient *client)
 			break;
 		}
 
-		client->current.written_lsn =
-			Max(cur_record_lsn, client->current.written_lsn);
+		/* call the consumer function */
+		context->cur_record_lsn = cur_record_lsn;
+		context->buffer = copybuf + hdr_len;
 
-		log_info("pgsql_stream_logical: %s", copybuf + hdr_len);
+		/* the tracking LSN information is updated in the receiverFunction */
+		if (!(*client->receiverFunction)(context))
+		{
+			log_error("Failed to consume from the stream at pos %X/%X",
+					  LSN_FORMAT_ARGS(cur_record_lsn));
+			goto error;
+		}
 
 		if (client->endpos != InvalidXLogRecPtr &&
 			cur_record_lsn == client->endpos)
@@ -2812,4 +2975,84 @@ prepareToTerminate(LogicalStreamClient *client, bool keepalive, XLogRecPtr lsn)
 				 LSN_FORMAT_ARGS(client->endpos),
 				 LSN_FORMAT_ARGS(client->current.written_lsn));
 	}
+}
+
+
+/*
+ * From version 10, explicitly set wal segment size using SHOW wal_segment_size
+ * since ControlFile is not accessible here.
+ */
+bool
+RetrieveWalSegSize(LogicalStreamClient *client)
+{
+	PGconn *conn = client->pgsql.connection;
+
+	PGresult *res;
+	char xlog_unit[3];
+	int xlog_val,
+		multiplier = 1;
+
+	/* check connection existence */
+	Assert(conn != NULL);
+
+	/* for previous versions set the default xlog seg size */
+	if (PQserverVersion(conn) < MINIMUM_VERSION_FOR_SHOW_CMD)
+	{
+		client->WalSegSz = DEFAULT_XLOG_SEG_SIZE;
+		return true;
+	}
+
+	res = PQexec(conn, "SHOW wal_segment_size");
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+	{
+		log_error("could not send replication command \"%s\": %s",
+				  "SHOW wal_segment_size", PQerrorMessage(conn));
+
+		PQclear(res);
+		return false;
+	}
+	if (PQntuples(res) != 1 || PQnfields(res) < 1)
+	{
+		log_error("could not fetch WAL segment size: got %d rows and %d fields, "
+				  "expected %d rows and %d or more fields",
+				  PQntuples(res), PQnfields(res), 1, 1);
+
+		PQclear(res);
+		return false;
+	}
+
+	/* fetch xlog value and unit from the result */
+	if (sscanf(PQgetvalue(res, 0, 0), "%d%2s", &xlog_val, xlog_unit) != 2)
+	{
+		log_error("WAL segment size could not be parsed");
+		PQclear(res);
+		return false;
+	}
+
+	PQclear(res);
+
+	/* set the multiplier based on unit to convert xlog_val to bytes */
+	if (strcmp(xlog_unit, "MB") == 0)
+	{
+		multiplier = 1024 * 1024;
+	}
+	else if (strcmp(xlog_unit, "GB") == 0)
+	{
+		multiplier = 1024 * 1024 * 1024;
+	}
+
+	/* convert and set WalSegSz */
+	client->WalSegSz = xlog_val * multiplier;
+
+	if (!IsValidWalSegSize(client->WalSegSz))
+	{
+		log_error("WAL segment size must be a power of two between 1 MB and 1 GB, "
+				  "but the remote server reported a value of %d bytes",
+				  client->WalSegSz);
+		return false;
+	}
+
+	log_debug("RetrieveWalSegSize: %d", client->WalSegSz);
+
+	return true;
 }
