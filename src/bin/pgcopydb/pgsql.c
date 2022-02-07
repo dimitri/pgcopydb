@@ -2791,6 +2791,7 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 		/* call the consumer function */
 		context->cur_record_lsn = cur_record_lsn;
 		context->buffer = copybuf + hdr_len;
+		context->now = client->now;
 
 		/* the tracking LSN information is updated in the receiverFunction */
 		if (!(*client->receiverFunction)(context))
@@ -2902,7 +2903,7 @@ pgsqlSendFeedback(LogicalStreamClient *client,
 		return true;
 	}
 
-	log_info("confirming write up to %X/%X, flush to %X/%X",
+	log_info("Report write_lsn %X/%X, flush_lsn %X/%X",
 			 LSN_FORMAT_ARGS(client->current.written_lsn),
 			 LSN_FORMAT_ARGS(client->current.flushed_lsn));
 

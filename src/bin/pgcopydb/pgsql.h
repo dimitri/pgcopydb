@@ -314,8 +314,10 @@ typedef struct LogicalStreamContext
 	uint32_t WalSegSz;
 	const char *buffer;
 
+	TimestampTz now;
 	LogicalTrackLSN *tracking;
 } LogicalStreamContext;
+
 
 typedef bool (*LogicalStreamReceiver) (LogicalStreamContext *context);
 

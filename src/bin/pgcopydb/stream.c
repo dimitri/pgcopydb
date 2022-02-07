@@ -97,6 +97,8 @@ startLogicalStreaming(StreamSpecs *specs)
 
 	privateContext.cfPaths = &(specs->cfPaths);
 	privateContext.startLSN = specs->startLSN;
+	privateContext.last_fsync = -1;
+	privateContext.fsync_interval = 10 * 1000; /* 10s by default */
 
 	context.private = (void *) &(privateContext);
 
@@ -160,14 +162,14 @@ streamToFiles(LogicalStreamContext *context)
 		{
 			log_info("Close %s", privateContext->walFileName);
 
-			if (!fclose(privateContext->jsonFile))
+			if (fclose(privateContext->jsonFile) != 0)
 			{
 				/* errors have already been logged */
 				return false;
 			}
 		}
 
-		log_info("Open %s", walFileName);
+		log_info(" Open %s", walFileName);
 		strlcpy(privateContext->walFileName, walFileName, MAXPGPATH);
 
 		/*
@@ -185,6 +187,8 @@ streamToFiles(LogicalStreamContext *context)
 		if (privateContext->jsonFile == NULL)
 		{
 			/* errors have already been logged */
+			log_error("Failed to open file \"%s\": %m",
+					  privateContext->walFileName);
 			return false;
 		}
 	}
@@ -196,8 +200,13 @@ streamToFiles(LogicalStreamContext *context)
 		/* errors have already been logged */
 		if (privateContext->jsonFile != NULL)
 		{
-			fclose(privateContext->jsonFile);
+			if (fclose(privateContext->jsonFile) != 0)
+			{
+				log_error("Failed to close file \"%s\": %m",
+						  privateContext->walFileName);
+			}
 		}
+
 		return false;
 	}
 
@@ -237,39 +246,51 @@ streamToFiles(LogicalStreamContext *context)
 		if (fwrite("\n", sizeof(char), 1, privateContext->jsonFile) != 1)
 		{
 			log_error("Failed to write %d bytes to log file \"%s\": %m",
-					  1, privateContext->walFileName);
+					  1,
+					  privateContext->walFileName);
 
 			if (privateContext->jsonFile != NULL)
 			{
-				fclose(privateContext->jsonFile);
+				if (fclose(privateContext->jsonFile) != 0)
+				{
+					log_error("Failed to close file \"%s\": %m",
+							  privateContext->walFileName);
+				}
 			}
 			return false;
 		}
 
 		/* update the LSN tracking that's reported in the feedback */
 		context->tracking->written_lsn = context->cur_record_lsn;
-	}
 
-	/*
-	 * TODO: just log statistics once in a while, and also fflush() the file
-	 * and advance the context->tracking->flushed_lsn when doing that.
-	 */
-	log_info("Received action %c for XID %u in LSN %s",
-			 metadata.action,
-			 metadata.xid,
-			 metadata.lsn);
-
-	/*
-	 * TODO: remove that bits, that's testing only.
-	 */
-	if (privateContext->counters.insert > 10)
-	{
-		if (privateContext->jsonFile != NULL)
+		/* we might want to fsync, once in a while */
+		if (feTimestampDifferenceExceeds(privateContext->last_fsync,
+										 context->now,
+										 privateContext->fsync_interval) &&
+			context->tracking->flushed_lsn < context->tracking->written_lsn)
 		{
-			fclose(privateContext->jsonFile);
+			int fd = fileno(privateContext->jsonFile);
+
+			if (fsync(fd) != 0)
+			{
+				log_error("Failed to fsync file \"%s\": %m",
+						  privateContext->walFileName);
+				return false;
+			}
+
+			privateContext->last_fsync = context->now;
+			context->tracking->flushed_lsn = context->tracking->written_lsn;
+
+			log_debug("Flushed up to %X/%X in file \"%s\"",
+					  LSN_FORMAT_ARGS(context->tracking->flushed_lsn),
+					  privateContext->walFileName);
 		}
-		return false;
 	}
+
+	log_debug("Received action %c for XID %u in LSN %s",
+			  metadata.action,
+			  metadata.xid,
+			  metadata.lsn);
 
 	return true;
 }

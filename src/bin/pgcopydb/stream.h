@@ -40,6 +40,9 @@ typedef struct StreamContext
 	char walFileName[MAXPGPATH];
 	FILE *jsonFile;
 
+	TimestampTz last_fsync;
+	int fsync_interval;
+
 	StreamCounters counters;
 } StreamContext;
 
