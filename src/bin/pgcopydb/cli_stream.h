@@ -20,6 +20,12 @@ typedef struct StreamDBOptions
 	char source_pguri[MAXCONNINFO];
 	char target_pguri[MAXCONNINFO];
 	char slotName[NAMEDATALEN];
+
+	bool restart;
+	bool resume;
+
+	bool notConsistent;
+	char snapshot[BUFSIZE];
 } StreamDBOptions;
 
 

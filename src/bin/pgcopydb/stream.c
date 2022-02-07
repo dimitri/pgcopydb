@@ -35,11 +35,39 @@ static bool updateStreamCounters(StreamContext *context,
 								 LogicalMessageMetadata *metadata);
 
 /*
+ * stream_init_specs initializes Change Data Capture streaming specifications
+ * from a copyDBSpecs structure.
+ */
+bool
+stream_init_specs(CopyDataSpec *copySpecs, StreamSpecs *specs, char *slotName)
+{
+	/* just copy into StreamSpecs what's been initialized in copySpecs */
+	specs->cfPaths = copySpecs->cfPaths;
+	specs->pgPaths = copySpecs->pgPaths;
+
+	strlcpy(specs->source_pguri, copySpecs->source_pguri, MAXCONNINFO);
+	strlcpy(specs->target_pguri, copySpecs->target_pguri, MAXCONNINFO);
+
+	strlcpy(specs->slotName, slotName, sizeof(specs->slotName));
+
+	specs->sourceSnapshot = copySpecs->sourceSnapshot;
+
+	if (!buildReplicationURI(specs->source_pguri, specs->logrep_pguri))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * startLogicalStreaming opens a replication connection to the given source
  * database and issues the START REPLICATION command there.
  */
 bool
-startLogicalStreaming(const char *pguri, const char *slotName, uint64_t startLSN)
+startLogicalStreaming(StreamSpecs *specs)
 {
 	/* wal2json options we want to use for the plugin */
 	KeyVal options = {
@@ -58,14 +86,6 @@ startLogicalStreaming(const char *pguri, const char *slotName, uint64_t startLSN
 		}
 	};
 
-	char replicationURI[MAXCONNINFO] = { 0 };
-
-	if (!buildReplicationURI(pguri, replicationURI))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	/* prepare the stream options */
 	LogicalStreamClient stream = { 0 };
 
@@ -75,11 +95,16 @@ startLogicalStreaming(const char *pguri, const char *slotName, uint64_t startLSN
 	StreamContext privateContext = { 0 };
 	LogicalStreamContext context = { 0 };
 
-	privateContext.startLSN = startLSN;
+	privateContext.cfPaths = &(specs->cfPaths);
+	privateContext.startLSN = specs->startLSN;
 
 	context.private = (void *) &(privateContext);
 
-	if (!pgsql_init_stream(&stream, replicationURI, slotName, startLSN, 0))
+	if (!pgsql_init_stream(&stream,
+						   specs->logrep_pguri,
+						   specs->slotName,
+						   specs->startLSN,
+						   0))
 	{
 		/* errors have already been logged */
 		return false;
@@ -115,12 +140,17 @@ streamToFiles(LogicalStreamContext *context)
 
 	/* get the segment number from the current_record_lsn */
 	XLogSegNo segno;
+	char wal[MAXPGPATH] = { 0 };
 	char walFileName[MAXPGPATH] = { 0 };
 
 	XLByteToSeg(context->cur_record_lsn, segno, context->WalSegSz);
 
 	/* compute the WAL filename that would host the current LSN */
-	XLogFileName(walFileName, context->timeline, segno, context->WalSegSz);
+	XLogFileName(wal, context->timeline, segno, context->WalSegSz);
+
+	sformat(walFileName, sizeof(walFileName), "%s/%s.json",
+			privateContext->cfPaths->cdcdir,
+			wal);
 
 	if (strcmp(privateContext->walFileName, walFileName) != 0)
 	{
@@ -129,10 +159,34 @@ streamToFiles(LogicalStreamContext *context)
 			privateContext->jsonFile != NULL)
 		{
 			log_info("Close %s", privateContext->walFileName);
+
+			if (!fclose(privateContext->jsonFile))
+			{
+				/* errors have already been logged */
+				return false;
+			}
 		}
 
 		log_info("Open %s", walFileName);
 		strlcpy(privateContext->walFileName, walFileName, MAXPGPATH);
+
+		/*
+		 * TODO
+		 *
+		 * At the moment if the file already exists, we just continue writing
+		 * to it, considering that we are receiving the next bits of
+		 * information from the server. That might not be the case though, so
+		 * we might want to check the LSN that we're going to write, and maybe
+		 * skip it.
+		 */
+		privateContext->jsonFile =
+			fopen_with_umask(walFileName, "ab", FOPEN_FLAGS_A, 0644);
+
+		if (privateContext->jsonFile == NULL)
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	LogicalMessageMetadata metadata = { 0 };
@@ -140,18 +194,80 @@ streamToFiles(LogicalStreamContext *context)
 	if (!parseMessageMetadata(&metadata, context->buffer))
 	{
 		/* errors have already been logged */
+		if (privateContext->jsonFile != NULL)
+		{
+			fclose(privateContext->jsonFile);
+		}
 		return false;
 	}
 
 	(void) updateStreamCounters(privateContext, &metadata);
 
+	/*
+	 * Write the logical decoding message to disk, appending to the already
+	 * opened file we track in the privateContext.
+	 */
+	if (privateContext->jsonFile != NULL)
+	{
+		long bytes_left = strlen(context->buffer);
+		long bytes_written = 0;
+
+		while (bytes_left > 0)
+		{
+			int ret;
+
+			ret = fwrite(context->buffer + bytes_written,
+						 sizeof(char),
+						 bytes_left,
+						 privateContext->jsonFile);
+
+			if (ret < 0)
+			{
+				log_error("Failed to write %ld bytes to file \"%s\": %m",
+						  bytes_left,
+						  privateContext->walFileName);
+				return false;
+			}
+
+			/* Write was successful, advance our position */
+			bytes_written += ret;
+			bytes_left -= ret;
+		}
+
+		if (fwrite("\n", sizeof(char), 1, privateContext->jsonFile) != 1)
+		{
+			log_error("Failed to write %d bytes to log file \"%s\": %m",
+					  1, privateContext->walFileName);
+
+			if (privateContext->jsonFile != NULL)
+			{
+				fclose(privateContext->jsonFile);
+			}
+			return false;
+		}
+
+		/* update the LSN tracking that's reported in the feedback */
+		context->tracking->written_lsn = context->cur_record_lsn;
+	}
+
+	/*
+	 * TODO: just log statistics once in a while, and also fflush() the file
+	 * and advance the context->tracking->flushed_lsn when doing that.
+	 */
 	log_info("Received action %c for XID %u in LSN %s",
 			 metadata.action,
 			 metadata.xid,
 			 metadata.lsn);
 
+	/*
+	 * TODO: remove that bits, that's testing only.
+	 */
 	if (privateContext->counters.insert > 10)
 	{
+		if (privateContext->jsonFile != NULL)
+		{
+			fclose(privateContext->jsonFile);
+		}
 		return false;
 	}
 

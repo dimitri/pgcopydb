@@ -8,6 +8,7 @@
 
 #include <stdbool.h>
 
+#include "copydb.h"
 #include "pgsql.h"
 
 typedef enum
@@ -33,6 +34,8 @@ typedef struct StreamCounters
 
 typedef struct StreamContext
 {
+	CopyFilePaths *cfPaths;
+
 	uint64_t startLSN;
 	char walFileName[MAXPGPATH];
 	FILE *jsonFile;
@@ -48,13 +51,26 @@ typedef struct LogicalMessageMetadata
 } LogicalMessageMetadata;
 
 
-bool startLogicalStreaming(const char *pguri,
-						   const char *slotName,
-						   uint64_t startLSN);
+typedef struct StreamSpecs
+{
+	CopyFilePaths cfPaths;
+	PostgresPaths pgPaths;
 
-bool startLogicalStreaming(const char *pguri,
-						   const char *slotName,
-						   uint64_t startLSN);
+	char source_pguri[MAXCONNINFO];
+	char logrep_pguri[MAXCONNINFO];
+	char target_pguri[MAXCONNINFO];
+
+	TransactionSnapshot sourceSnapshot;
+	char slotName[NAMEDATALEN];
+	uint64_t startLSN;
+
+	bool restart;
+	bool resume;
+} StreamSpecs;
+
+bool stream_init_specs(CopyDataSpec *copySpecs, StreamSpecs *specs, char *slotName);
+
+bool startLogicalStreaming(StreamSpecs *specs);
 
 bool streamToFiles(LogicalStreamContext *context);
 

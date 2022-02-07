@@ -241,11 +241,45 @@ cli_stream_getopts(int argc, char **argv)
 static void
 cli_stream_receive(int argc, char **argv)
 {
-	uint64_t startLSN = 0;
+	CopyDataSpec copySpecs = { 0 };
+	StreamSpecs specs = { 0 };
 
-	if (!startLogicalStreaming(streamDBoptions.source_pguri,
-							   streamDBoptions.slotName,
-							   startLSN))
+	(void) find_pg_commands(&(copySpecs.pgPaths));
+
+	if (!copydb_init_workdir(&copySpecs,
+							 NULL,
+							 streamDBoptions.restart,
+							 streamDBoptions.resume))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	RestoreOptions restoreOptions = { 0 };
+
+	if (!copydb_init_specs(&copySpecs,
+						   streamDBoptions.source_pguri,
+						   streamDBoptions.target_pguri,
+						   1,   /* tableJobs */
+						   1,   /* indexJobs */
+						   DATA_SECTION_ALL,
+						   streamDBoptions.snapshot,
+						   restoreOptions,
+						   false, /* skipLargeObjects */
+						   streamDBoptions.restart,
+						   streamDBoptions.resume))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!stream_init_specs(&copySpecs, &specs, streamDBoptions.slotName))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!startLogicalStreaming(&specs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);
