@@ -267,7 +267,8 @@ cli_stream_receive(int argc, char **argv)
 						   restoreOptions,
 						   false, /* skipLargeObjects */
 						   streamDBoptions.restart,
-						   streamDBoptions.resume))
+						   streamDBoptions.resume,
+						   !streamDBoptions.notConsistent))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
