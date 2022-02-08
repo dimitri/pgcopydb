@@ -90,15 +90,15 @@ startLogicalStreaming(StreamSpecs *specs)
 	LogicalStreamClient stream = { 0 };
 
 	stream.pluginOptions = options;
-	stream.receiverFunction = &streamToFiles;
+	stream.writeFunction = &streamWrite;
+	stream.flushFunction = &streamFlush;
+	stream.closeFunction = &streamClose;
 
 	StreamContext privateContext = { 0 };
 	LogicalStreamContext context = { 0 };
 
 	privateContext.cfPaths = &(specs->cfPaths);
 	privateContext.startLSN = specs->startLSN;
-	privateContext.last_fsync = -1;
-	privateContext.fsync_interval = 10 * 1000; /* 10s by default */
 
 	context.private = (void *) &(privateContext);
 
@@ -129,14 +129,14 @@ startLogicalStreaming(StreamSpecs *specs)
 
 
 /*
- * streamToFiles is a callback function for our LogicalStreamClient.
+ * streamWrite is a callback function for our LogicalStreamClient.
  *
  * This function is called for each message received in pgsql_stream_logical.
  * It records the logical message to file. The message is expected to be in
  * JSON format, from the wal2json logical decoder.
  */
 bool
-streamToFiles(LogicalStreamContext *context)
+streamWrite(LogicalStreamContext *context)
 {
 	StreamContext *privateContext = (StreamContext *) context->private;
 
@@ -245,8 +245,7 @@ streamToFiles(LogicalStreamContext *context)
 
 		if (fwrite("\n", sizeof(char), 1, privateContext->jsonFile) != 1)
 		{
-			log_error("Failed to write %d bytes to log file \"%s\": %m",
-					  1,
+			log_error("Failed to write 1 byte to file \"%s\": %m",
 					  privateContext->walFileName);
 
 			if (privateContext->jsonFile != NULL)
@@ -262,35 +261,88 @@ streamToFiles(LogicalStreamContext *context)
 
 		/* update the LSN tracking that's reported in the feedback */
 		context->tracking->written_lsn = context->cur_record_lsn;
-
-		/* we might want to fsync, once in a while */
-		if (feTimestampDifferenceExceeds(privateContext->last_fsync,
-										 context->now,
-										 privateContext->fsync_interval) &&
-			context->tracking->flushed_lsn < context->tracking->written_lsn)
-		{
-			int fd = fileno(privateContext->jsonFile);
-
-			if (fsync(fd) != 0)
-			{
-				log_error("Failed to fsync file \"%s\": %m",
-						  privateContext->walFileName);
-				return false;
-			}
-
-			privateContext->last_fsync = context->now;
-			context->tracking->flushed_lsn = context->tracking->written_lsn;
-
-			log_debug("Flushed up to %X/%X in file \"%s\"",
-					  LSN_FORMAT_ARGS(context->tracking->flushed_lsn),
-					  privateContext->walFileName);
-		}
 	}
 
 	log_debug("Received action %c for XID %u in LSN %s",
 			  metadata.action,
 			  metadata.xid,
 			  metadata.lsn);
+
+	return true;
+}
+
+
+/*
+ * streamFlush is a callback function for our LogicalStreamClient.
+ *
+ * This function is called when it's time to flush the data that's currently
+ * being written to disk, by calling fsync(). This is triggerred either on a
+ * time basis from within the writeFunction callback, or when it's
+ * time_to_abort in pgsql_stream_logical.
+ */
+bool
+streamFlush(LogicalStreamContext *context)
+{
+	StreamContext *privateContext = (StreamContext *) context->private;
+
+	/* when there is currently no file opened, just skip the flush operation */
+	if (privateContext->jsonFile == NULL)
+	{
+		return true;
+	}
+
+	if (context->tracking->flushed_lsn < context->tracking->written_lsn)
+	{
+		int fd = fileno(privateContext->jsonFile);
+
+		if (fsync(fd) != 0)
+		{
+			log_error("Failed to fsync file \"%s\": %m",
+					  privateContext->walFileName);
+			return false;
+		}
+
+		context->tracking->flushed_lsn = context->tracking->written_lsn;
+
+		log_debug("Flushed up to %X/%X in file \"%s\"",
+				  LSN_FORMAT_ARGS(context->tracking->flushed_lsn),
+				  privateContext->walFileName);
+	}
+
+	return true;
+}
+
+
+/*
+ * streamClose is a callback function for our LogicalStreamClient.
+ *
+ * This function is called when it's time to close the currently opened file
+ * before quitting. On the way out, a call to streamFlush is included.
+ */
+bool
+streamClose(LogicalStreamContext *context)
+{
+	StreamContext *privateContext = (StreamContext *) context->private;
+
+	/* when there is currently no file opened, just skip the close operation */
+	if (privateContext->jsonFile == NULL)
+	{
+		return true;
+	}
+
+	if (!streamFlush(context))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_debug("streamClose: closing file \"%s\"", privateContext->walFileName);
+
+	if (fclose(privateContext->jsonFile) != 0)
+	{
+		log_error("Failed to close file \"%s\": %m",
+				  privateContext->walFileName);
+	}
 
 	return true;
 }

@@ -335,12 +335,16 @@ typedef struct LogicalStreamClient
 
 	TimestampTz now;
 	TimestampTz last_status;
+	TimestampTz last_fsync;
 
 	LogicalTrackLSN current;    /* updated at receive time */
 	LogicalTrackLSN feedback;   /* updated at feedback sending time */
 
-	LogicalStreamReceiver receiverFunction;
+	LogicalStreamReceiver writeFunction;
+	LogicalStreamReceiver flushFunction;
+	LogicalStreamReceiver closeFunction;
 
+	int fsync_interval;
 	int standby_message_timeout;
 } LogicalStreamClient;
 

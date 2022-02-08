@@ -40,9 +40,6 @@ typedef struct StreamContext
 	char walFileName[MAXPGPATH];
 	FILE *jsonFile;
 
-	TimestampTz last_fsync;
-	int fsync_interval;
-
 	StreamCounters counters;
 } StreamContext;
 
@@ -75,7 +72,9 @@ bool stream_init_specs(CopyDataSpec *copySpecs, StreamSpecs *specs, char *slotNa
 
 bool startLogicalStreaming(StreamSpecs *specs);
 
-bool streamToFiles(LogicalStreamContext *context);
+bool streamWrite(LogicalStreamContext *context);
+bool streamFlush(LogicalStreamContext *context);
+bool streamClose(LogicalStreamContext *context);
 
 bool parseMessageMetadata(LogicalMessageMetadata *metadata, const char *buffer);
 

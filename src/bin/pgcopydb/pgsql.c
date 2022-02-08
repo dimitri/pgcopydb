@@ -53,7 +53,8 @@ static bool pgsqlSendFeedback(LogicalStreamClient *client,
 							  bool force,
 							  bool replyRequested);
 
-static bool flushAndSendFeedback(LogicalStreamClient *client);
+static bool flushAndSendFeedback(LogicalStreamClient *client,
+								 LogicalStreamContext *context);
 
 static void prepareToTerminate(LogicalStreamClient *client,
 							   bool keepalive,
@@ -2433,7 +2434,9 @@ pgsql_init_stream(LogicalStreamClient *client,
 
 	client->startpos = startpos;
 
-	client->standby_message_timeout = 10 * 1000;    /* 10 sec = default */
+	client->last_fsync = -1;
+	client->fsync_interval = 10 * 1000;          /* 10 sec = default */
+	client->standby_message_timeout = 10 * 1000; /* 10 sec = default */
 
 	client->current.written_lsn = InvalidXLogRecPtr;
 	client->current.flushed_lsn = InvalidXLogRecPtr;
@@ -2560,16 +2563,50 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 	context->WalSegSz = client->WalSegSz;
 	context->tracking = &(client->current);
 
-	while (!(asked_to_stop || asked_to_stop_fast || asked_to_quit || time_to_abort))
+	while (!time_to_abort)
 	{
 		int r;
 		int hdr_len;
 		XLogRecPtr cur_record_lsn = InvalidXLogRecPtr;
 
+		/*
+		 * When receiving a signal to stop operations, cleanly terminate the
+		 * streaming connection, flushing the current position on the way out.
+		 */
+		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		{
+			if (!flushAndSendFeedback(client, context))
+			{
+				goto error;
+			}
+
+			prepareToTerminate(client, false, cur_record_lsn);
+			time_to_abort = true;
+			break;
+		}
+
 		if (copybuf != NULL)
 		{
 			PQfreemem(copybuf);
 			copybuf = NULL;
+		}
+
+		/*
+		 * Is it time to ask the logical decoding client to flush?
+		 */
+		if (client->fsync_interval > 0 &&
+			feTimestampDifferenceExceeds(client->last_fsync,
+										 client->now,
+										 client->fsync_interval))
+		{
+			/* the flushFunction manages the LogicalTrackLSN tracking */
+			if (!(*client->flushFunction)(context))
+			{
+				/* errors have already been logged */
+				goto error;
+			}
+
+			client->last_fsync = client->now;
 		}
 
 		/*
@@ -2731,7 +2768,7 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 			/* Send a reply, if necessary */
 			if (replyRequested || endposReached)
 			{
-				if (!flushAndSendFeedback(client))
+				if (!flushAndSendFeedback(client, context))
 				{
 					goto error;
 				}
@@ -2779,7 +2816,7 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 			 * We've read past our endpoint, so prepare to go away being
 			 * cautious about what happens to our output data.
 			 */
-			if (!flushAndSendFeedback(client))
+			if (!flushAndSendFeedback(client, context))
 			{
 				goto error;
 			}
@@ -2793,8 +2830,8 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 		context->buffer = copybuf + hdr_len;
 		context->now = client->now;
 
-		/* the tracking LSN information is updated in the receiverFunction */
-		if (!(*client->receiverFunction)(context))
+		/* the tracking LSN information is updated in the writeFunction */
+		if (!(*client->writeFunction)(context))
 		{
 			log_error("Failed to consume from the stream at pos %X/%X",
 					  LSN_FORMAT_ARGS(cur_record_lsn));
@@ -2805,7 +2842,7 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 			cur_record_lsn == client->endpos)
 		{
 			/* endpos was exactly the record we just processed, we're done */
-			if (!flushAndSendFeedback(client))
+			if (!flushAndSendFeedback(client, context))
 			{
 				goto error;
 			}
@@ -2859,6 +2896,13 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 		goto error;
 	}
 	PQclear(res);
+
+	/* call the closeFunction callback now */
+	if (!(*client->closeFunction)(context))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	return true;
 
@@ -2941,8 +2985,15 @@ pgsqlSendFeedback(LogicalStreamClient *client,
  * feedback.
  */
 static bool
-flushAndSendFeedback(LogicalStreamClient *client)
+flushAndSendFeedback(LogicalStreamClient *client, LogicalStreamContext *context)
 {
+	/* call the flushFunction callback now */
+	if (!(*client->flushFunction)(context))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	client->now = feGetCurrentTimestamp();
 	if (!pgsqlSendFeedback(client, true, false))
 	{
@@ -2967,14 +3018,14 @@ prepareToTerminate(LogicalStreamClient *client, bool keepalive, XLogRecPtr lsn)
 
 	if (keepalive)
 	{
-		log_info("end position %X/%X reached by keepalive",
-				 LSN_FORMAT_ARGS(client->endpos));
+		log_debug("end position %X/%X reached by keepalive",
+				  LSN_FORMAT_ARGS(client->endpos));
 	}
 	else
 	{
-		log_info("end position %X/%X reached by WAL record at %X/%X",
-				 LSN_FORMAT_ARGS(client->endpos),
-				 LSN_FORMAT_ARGS(client->current.written_lsn));
+		log_debug("end position %X/%X reached by WAL record at %X/%X",
+				  LSN_FORMAT_ARGS(client->endpos),
+				  LSN_FORMAT_ARGS(client->current.written_lsn));
 	}
 }
 
