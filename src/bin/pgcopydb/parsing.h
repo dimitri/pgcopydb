@@ -28,6 +28,8 @@ bool parse_dotted_version_string(const char *pg_version_string,
 								 int *pg_version);
 bool parse_pg_version_string(const char *pg_version_string,
 							 int *pg_version);
+
+bool parseLSN(const char *str, uint64_t *lsn);
 bool parse_bool(const char *value, bool *result);
 
 #define boolToString(value) (value) ? "true" : "false"

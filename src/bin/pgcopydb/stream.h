@@ -45,9 +45,10 @@ typedef struct StreamContext
 
 typedef struct LogicalMessageMetadata
 {
+	StreamAction action;
 	uint32_t xid;
 	char lsn[PG_LSN_MAXLENGTH];
-	StreamAction action;
+	char nextlsn[PG_LSN_MAXLENGTH];
 } LogicalMessageMetadata;
 
 
@@ -68,6 +69,17 @@ typedef struct StreamSpecs
 	bool resume;
 } StreamSpecs;
 
+#define MAX_STREAM_CONTENT_COUNT 16 * 1024
+
+typedef struct StreamContent
+{
+	char filename[MAXPGPATH];
+	int count;
+	char *buffer;
+	char *lines[MAX_STREAM_CONTENT_COUNT];
+	LogicalMessageMetadata messages[MAX_STREAM_CONTENT_COUNT];
+} StreamContent;
+
 bool stream_init_specs(CopyDataSpec *copySpecs, StreamSpecs *specs, char *slotName);
 
 bool startLogicalStreaming(StreamSpecs *specs);
@@ -77,6 +89,9 @@ bool streamFlush(LogicalStreamContext *context);
 bool streamClose(LogicalStreamContext *context);
 
 bool parseMessageMetadata(LogicalMessageMetadata *metadata, const char *buffer);
+
+bool stream_read_file(StreamContent *content);
+bool stream_read_latest(StreamSpecs *specs, StreamContent *content);
 
 bool buildReplicationURI(const char *pguri, char *repl_pguri);
 

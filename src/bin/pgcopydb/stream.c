@@ -102,6 +102,36 @@ startLogicalStreaming(StreamSpecs *specs)
 
 	context.private = (void *) &(privateContext);
 
+	/*
+	 * Read possibly already existing file to initialize the start LSN from a
+	 * previous run of our command.
+	 */
+	StreamContent latestStreamedContent = { 0 };
+
+	if (!stream_read_latest(specs, &latestStreamedContent))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (latestStreamedContent.count > 0)
+	{
+		LogicalMessageMetadata *latest =
+			&(latestStreamedContent.messages[latestStreamedContent.count - 1]);
+
+		if (!parseLSN(latest->nextlsn, &(specs->startLSN)))
+		{
+			log_error("Failed to parse start LSN \"%s\" to resume "
+					  "streaming from file \"%s\"",
+					  latest->nextlsn,
+					  latestStreamedContent.filename);
+			return false;
+		}
+
+		log_info("Resuming streaming at LSN %X/%X",
+				 LSN_FORMAT_ARGS(specs->startLSN));
+	}
+
 	if (!pgsql_init_stream(&stream,
 						   specs->logrep_pguri,
 						   specs->slotName,
@@ -145,9 +175,8 @@ streamWrite(LogicalStreamContext *context)
 	char wal[MAXPGPATH] = { 0 };
 	char walFileName[MAXPGPATH] = { 0 };
 
-	XLByteToSeg(context->cur_record_lsn, segno, context->WalSegSz);
-
 	/* compute the WAL filename that would host the current LSN */
+	XLByteToSeg(context->cur_record_lsn, segno, context->WalSegSz);
 	XLogFileName(wal, context->timeline, segno, context->WalSegSz);
 
 	sformat(walFileName, sizeof(walFileName), "%s/%s.json",
@@ -160,7 +189,7 @@ streamWrite(LogicalStreamContext *context)
 		if (!IS_EMPTY_STRING_BUFFER(privateContext->walFileName) &&
 			privateContext->jsonFile != NULL)
 		{
-			log_info("Close %s", privateContext->walFileName);
+			log_debug("closing %s", privateContext->walFileName);
 
 			if (fclose(privateContext->jsonFile) != 0)
 			{
@@ -169,26 +198,37 @@ streamWrite(LogicalStreamContext *context)
 			}
 		}
 
-		log_info(" Open %s", walFileName);
+		log_info("Now streaming changes to \"%s\"", walFileName);
 		strlcpy(privateContext->walFileName, walFileName, MAXPGPATH);
 
 		/*
-		 * TODO
-		 *
-		 * At the moment if the file already exists, we just continue writing
-		 * to it, considering that we are receiving the next bits of
-		 * information from the server. That might not be the case though, so
-		 * we might want to check the LSN that we're going to write, and maybe
-		 * skip it.
+		 * When the target file already exists, open it in append mode.
 		 */
+		int flags = file_exists(walFileName) ? FOPEN_FLAGS_A : FOPEN_FLAGS_W;
+
 		privateContext->jsonFile =
-			fopen_with_umask(walFileName, "ab", FOPEN_FLAGS_A, 0644);
+			fopen_with_umask(walFileName, "ab", flags, 0644);
 
 		if (privateContext->jsonFile == NULL)
 		{
 			/* errors have already been logged */
 			log_error("Failed to open file \"%s\": %m",
 					  privateContext->walFileName);
+			return false;
+		}
+
+		/*
+		 * Also maintain the "latest" symbolic link to the latest file where
+		 * we've been streaming changes in.
+		 */
+		char latest[MAXPGPATH] = { 0 };
+
+		sformat(latest, sizeof(latest), "%s/latest",
+				privateContext->cfPaths->cdcdir);
+
+		if (!create_symbolic_link(privateContext->walFileName, latest))
+		{
+			/* errors have already been logged */
 			return false;
 		}
 	}
@@ -420,6 +460,9 @@ parseMessageMetadata(LogicalMessageMetadata *metadata, const char *buffer)
 		}
 	}
 
+	double xid = json_object_get_number(jsobj, "xid");
+	metadata->xid = (uint32_t) xid;
+
 	char *lsn = (char *) json_object_get_string(jsobj, "lsn");
 
 	if (lsn == NULL)
@@ -431,11 +474,99 @@ parseMessageMetadata(LogicalMessageMetadata *metadata, const char *buffer)
 
 	strlcpy(metadata->lsn, lsn, sizeof(metadata->lsn));
 
-	double xid = json_object_get_number(jsobj, "xid");
-	metadata->xid = (uint32_t) xid;
+	char *nextlsn = (char *) json_object_get_string(jsobj, "nextlsn");
+
+	if (nextlsn == NULL)
+	{
+		log_error("Failed to parse JSON message: \"%s\"", buffer);
+		json_value_free(json);
+		return false;
+	}
+
+	strlcpy(metadata->nextlsn, nextlsn, sizeof(metadata->nextlsn));
 
 	json_value_free(json);
 	return true;
+}
+
+
+/*
+ * stream_read_file reads a JSON file that is expected to contain messages
+ * received via logical decoding when using the wal2json output plugin with the
+ * format-version 2.
+ */
+bool
+stream_read_file(StreamContent *content)
+{
+	long size = 0L;
+
+	if (!read_file(content->filename, &(content->buffer), &size))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	content->count =
+		splitLines(content->buffer, content->lines, MAX_STREAM_CONTENT_COUNT);
+
+	if (content->count >= MAX_STREAM_CONTENT_COUNT)
+	{
+		log_error("Failed to split file \"%s\" in lines: pgcopydb support only "
+				  "files with up to %d lines, and more were found",
+				  content->filename,
+				  MAX_STREAM_CONTENT_COUNT);
+		free(content->buffer);
+		return false;
+	}
+
+	for (int i = 0; i < content->count; i++)
+	{
+		char *message = content->lines[i];
+		LogicalMessageMetadata *metadata = &(content->messages[i]);
+
+		if (!parseMessageMetadata(metadata, message))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * stream_read_latest reads the "latest" file that was written into, if any,
+ * using the symbolic link named "latest". When the file exists, its content is
+ * parsed as an array of LogicalMessageMetadata.
+ *
+ * One message per physical line is expected (wal2json uses Postgres internal
+ * function escape_json which deals with escaping newlines and other special
+ * characters).
+ */
+bool
+stream_read_latest(StreamSpecs *specs, StreamContent *content)
+{
+	char latest[MAXPGPATH] = { 0 };
+
+	sformat(latest, sizeof(latest), "%s/latest", specs->cfPaths.cdcdir);
+
+	if (!file_exists(latest))
+	{
+		return true;
+	}
+
+	if (!normalize_filename(latest,
+							content->filename,
+							sizeof(content->filename)))
+	{
+		/* errors have already been logged  */
+		return false;
+	}
+
+	log_info("Resuming streaming from latest file \"%s\"", content->filename);
+
+	return stream_read_file(content);
 }
 
 
