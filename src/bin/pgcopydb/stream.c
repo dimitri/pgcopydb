@@ -132,26 +132,44 @@ startLogicalStreaming(StreamSpecs *specs)
 				 LSN_FORMAT_ARGS(specs->startLSN));
 	}
 
-	if (!pgsql_init_stream(&stream,
-						   specs->logrep_pguri,
-						   specs->slotName,
-						   specs->startLSN,
-						   0))
+	/*
+	 * In case of being disconnected or other transient errors, reconnect and
+	 * continue streaming.
+	 */
+	while (true)
 	{
-		/* errors have already been logged */
-		return false;
-	}
+		if (!pgsql_init_stream(&stream,
+							   specs->logrep_pguri,
+							   specs->slotName,
+							   specs->startLSN,
+							   0))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 
-	if (!pgsql_start_replication(&stream))
-	{
-		/* errors have already been logged */
-		return false;
-	}
+		if (!pgsql_start_replication(&stream))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 
-	if (!pgsql_stream_logical(&stream, &context))
-	{
-		/* errors have already been logged */
-		return false;
+		/* ignore errors, try again unless asked to stop */
+		bool cleanExit = pgsql_stream_logical(&stream, &context);
+
+		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		{
+			return true;
+		}
+
+		if (!cleanExit)
+		{
+			log_warn("Streaming got interrupted at %X/%X, reconnecting in 1s",
+					 LSN_FORMAT_ARGS(context.tracking->written_lsn));
+		}
+
+		/* sleep for one entire second before retrying */
+		(void) pg_usleep(1 * 1000 * 1000);
 	}
 
 	return true;

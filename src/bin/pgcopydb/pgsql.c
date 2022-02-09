@@ -49,6 +49,9 @@ static void pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context);
 
 static void getSequenceValue(void *ctx, PGresult *result);
 
+static void pgsql_stream_log_error(PGSQL *pgsql,
+								   PGresult *res, const char *message);
+
 static bool pgsqlSendFeedback(LogicalStreamClient *client,
 							  bool force,
 							  bool replyRequested);
@@ -1232,7 +1235,16 @@ clear_results(PGSQL *pgsql)
 
 		if (!is_response_ok(result))
 		{
-			log_error("Failure from Postgres: %s", PQerrorMessage(connection));
+			char *pqmessage = PQerrorMessage(connection);
+			char *errorLines[BUFSIZE] = { 0 };
+			int lineCount = splitLines(pqmessage, errorLines, BUFSIZE);
+
+			log_error("Failure from Postgres:");
+
+			for (int lineNumber = 0; lineNumber < lineCount; lineNumber++)
+			{
+				log_error("%s", errorLines[lineNumber]);
+			}
 
 			PQclear(result);
 			pgsql_finish(pgsql);
@@ -2548,6 +2560,7 @@ pgsql_start_replication(LogicalStreamClient *client)
 bool
 pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 {
+	PGSQL *pgsql = &(client->pgsql);
 	PGconn *conn = client->pgsql.connection;
 
 	PGresult *res;
@@ -2644,7 +2657,7 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 
 			if (PQsocket(conn) < 0)
 			{
-				log_error("invalid socket: %s", PQerrorMessage(conn));
+				(void) pgsql_stream_log_error(pgsql, NULL, "invalid socket");
 				goto error;
 			}
 
@@ -2696,15 +2709,17 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 			}
 			else if (r < 0)
 			{
-				log_error("%s() failed: %m", "select");
+				(void) pgsql_stream_log_error(pgsql, NULL, "select failed: %m");
 				goto error;
 			}
 
 			/* Else there is actually data on the socket */
 			if (PQconsumeInput(conn) == 0)
 			{
-				log_error("could not receive data from WAL stream: %s",
-						  PQerrorMessage(conn));
+				(void) pgsql_stream_log_error(
+					pgsql,
+					NULL,
+					"could not receive data from WAL stream");
 				goto error;
 			}
 			continue;
@@ -2719,8 +2734,7 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 		/* Failure while reading the copy stream */
 		if (r == -2)
 		{
-			log_error("could not read COPY data: %s",
-					  PQerrorMessage(conn));
+			(void) pgsql_stream_log_error(pgsql, NULL, "could not read COPY data");
 			goto error;
 		}
 
@@ -2891,11 +2905,16 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 	}
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
 	{
-		log_error("unexpected termination of replication stream: %s",
-				  PQresultErrorMessage(res));
+		(void) pgsql_stream_log_error(
+			pgsql,
+			NULL,
+			"unexpected termination of replication stream");
+
 		goto error;
 	}
-	PQclear(res);
+
+	clear_results(pgsql);
+	pgsql_finish(pgsql);
 
 	/* call the closeFunction callback now */
 	if (!(*client->closeFunction)(context))
@@ -2913,10 +2932,57 @@ error:
 		copybuf = NULL;
 	}
 
-	PQfinish(conn);
-	conn = NULL;
+	clear_results(pgsql);
+	pgsql_finish(pgsql);
 
 	return false;
+}
+
+
+/*
+ * pgsql_stream_log_error logs an error message when something wrong happens
+ * within a logical streaming connection.
+ */
+static void
+pgsql_stream_log_error(PGSQL *pgsql, PGresult *res, const char *message)
+{
+	char *pqmessage = PQerrorMessage(pgsql->connection);
+
+	if (strcmp(pqmessage, "") == 0)
+	{
+		log_error("%s", message);
+	}
+	else
+	{
+		char *errorLines[BUFSIZE] = { 0 };
+		int lineCount = splitLines(pqmessage, errorLines, BUFSIZE);
+
+		if (lineCount == 1)
+		{
+			log_error("%s: %s", message, errorLines[0]);
+		}
+		else
+		{
+			/*
+			 * PostgreSQL Error message contains several lines. Log each of
+			 * them as a separate ERROR line here.
+			 */
+			log_error("%s:", message);
+
+			for (int lineNumber = 0; lineNumber < lineCount; lineNumber++)
+			{
+				log_error("%s", errorLines[lineNumber]);
+			}
+		}
+	}
+
+	if (res != NULL)
+	{
+		PQclear(res);
+	}
+
+	clear_results(pgsql);
+	pgsql_finish(pgsql);
 }
 
 
