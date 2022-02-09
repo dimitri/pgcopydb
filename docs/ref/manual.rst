@@ -17,3 +17,4 @@ their own manual page.
    pgcopydb_list
    pgcopydb_copy
    pgcopydb_config
+   pgcopydb_stream

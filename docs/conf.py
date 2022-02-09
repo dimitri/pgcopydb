@@ -119,4 +119,11 @@ man_pages = [
         [author],
         1,
     ),
+    (
+        "ref/pgcopydb_stream",
+        "pgcopydb stream",
+        "pgcopydb stream",
+        [author],
+        1,
+    ),
 ]
