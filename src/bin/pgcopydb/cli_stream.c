@@ -17,6 +17,7 @@
 #include "pgcmd.h"
 #include "pgsql.h"
 #include "schema.h"
+#include "signals.h"
 #include "stream.h"
 #include "string_utils.h"
 
@@ -279,6 +280,10 @@ cli_stream_receive(int argc, char **argv)
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
+
+	/* arrange to handle SIGINT (C-c) and other termination signals */
+	bool exitOnQuit = true;
+	(void) set_signal_handlers(exitOnQuit);
 
 	if (!startLogicalStreaming(&specs))
 	{
