@@ -53,6 +53,7 @@ typedef struct CopyFilePaths
 {
 	char topdir[MAXPGPATH];           /* /tmp/pgcopydb */
 	char pidfile[MAXPGPATH];          /* /tmp/pgcopydb/pgcopydb.pid */
+	char snfile[MAXPGPATH];           /* /tmp/pgcopydb/snapshot */
 	char schemadir[MAXPGPATH];        /* /tmp/pgcopydb/schema */
 	char rundir[MAXPGPATH];           /* /tmp/pgcopydb/run */
 	char tbldir[MAXPGPATH];           /* /tmp/pgcopydb/run/tables */

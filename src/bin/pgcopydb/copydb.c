@@ -298,6 +298,7 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths, const char *dir)
 
 	/* now that we have our topdir, prepare all the others from there */
 	sformat(cfPaths->pidfile, MAXPGPATH, "%s/pgcopydb.pid", cfPaths->topdir);
+	sformat(cfPaths->snfile, MAXPGPATH, "%s/snapshot", cfPaths->topdir);
 	sformat(cfPaths->schemadir, MAXPGPATH, "%s/schema", cfPaths->topdir);
 	sformat(cfPaths->rundir, MAXPGPATH, "%s/run", cfPaths->topdir);
 	sformat(cfPaths->tbldir, MAXPGPATH, "%s/run/tables", cfPaths->topdir);

@@ -35,6 +35,8 @@ static void cli_copy_constraints(int argc, char **argv);
 static void cli_copy_prepare_specs(CopyDataSpec *copySpecs,
 								   CopyDataSection section);
 
+static bool cli_copydb_is_consistent(CopyDBOptions *options);
+
 
 CommandLine copy__db_command =
 	make_command(
@@ -403,7 +405,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	if (options.resume && !options.notConsistent)
+	if (!cli_copydb_is_consistent(&options))
 	{
 		log_fatal("Option --resume requires option --not-consistent");
 		exit(EXIT_CODE_BAD_ARGS);
@@ -529,6 +531,66 @@ cli_copydb_getenv(CopyDBOptions *options)
 
 
 /*
+ * cli_copydb_is_consistent returns false when the option --not-consistent
+ * should be used.
+ */
+static bool
+cli_copydb_is_consistent(CopyDBOptions *options)
+{
+	/* when --resume is not used, we're good */
+	if (!options->resume)
+	{
+		return true;
+	}
+
+	/* when --resume and --not-consistent are used, we're good */
+	if (options->resume && options->notConsistent)
+	{
+		return true;
+	}
+
+	/* okay --resume is being used, do we have a snapshot? */
+	if (IS_EMPTY_STRING_BUFFER(options->snapshot))
+	{
+		/* --resume without --snapshot requires --not-consistent */
+		return false;
+	}
+
+	/* okay, a --snapshot is required, is it the same as the previous run? */
+	CopyFilePaths cfPaths = { 0 };
+
+	if (!copydb_prepare_filepaths(&cfPaths, NULL))
+	{
+		return false;
+	}
+
+	char *previous_snapshot = NULL;
+	long size = 0L;
+
+	if (!read_file(cfPaths.snfile, &previous_snapshot, &size))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (strcmp(previous_snapshot, options->snapshot) != 0)
+	{
+		log_error("Failed to ensure a consistent snapshot to resume operations");
+		log_error("Previous run was done with snapshot \"%s\" and current run "
+				  "is using --resume --snapshot \"%s\"",
+				  previous_snapshot,
+				  options->snapshot);
+
+		free(previous_snapshot);
+		return false;
+	}
+
+	free(previous_snapshot);
+	return true;
+}
+
+
+/*
  * cli_copy_db implements the command: pgcopydb copy db
  */
 static void
@@ -571,6 +633,16 @@ cli_copy_db(int argc, char **argv)
 					  sourceSnapshot->snapshot);
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
+	}
+
+	/* store the snapshot in a file, to support --resume --snapshot ... */
+	if (!write_file(sourceSnapshot->snapshot,
+					strlen(sourceSnapshot->snapshot),
+					copySpecs.cfPaths.snfile))
+	{
+		log_fatal("Failed to create the snapshot file \"%s\"",
+				  copySpecs.cfPaths.snfile);
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	if (!copydb_dump_source_schema(&copySpecs,
@@ -733,6 +805,16 @@ cli_copy_sequences(int argc, char **argv)
 					  sourceSnapshot->snapshot);
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
+	}
+
+	/* store the snapshot in a file, to support --resume --snapshot ... */
+	if (!write_file(sourceSnapshot->snapshot,
+					strlen(sourceSnapshot->snapshot),
+					copySpecs.cfPaths.snfile))
+	{
+		log_fatal("Failed to create the snapshot file \"%s\"",
+				  copySpecs.cfPaths.snfile);
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	if (!copydb_copy_all_sequences(&copySpecs))
