@@ -9,7 +9,6 @@
 #include <inttypes.h>
 
 #include "cli_common.h"
-#include "cli_copy.h"
 #include "cli_root.h"
 #include "copydb.h"
 #include "commandline.h"
@@ -22,7 +21,6 @@
 
 CopyDBOptions copyDBoptions = { 0 };
 
-static bool cli_copydb_getenv(CopyDBOptions *options);
 static int cli_copy_db_getopts(int argc, char **argv);
 
 static void cli_copy_db(int argc, char **argv);
@@ -35,7 +33,7 @@ static void cli_copy_constraints(int argc, char **argv);
 static void cli_copy_prepare_specs(CopyDataSpec *copySpecs,
 								   CopyDataSection section);
 
-static bool cli_copydb_is_consistent(CopyDBOptions *options);
+static bool copydb_prepare_snapshot(CopyDataSpec *copySpecs);
 
 
 CommandLine copy__db_command =
@@ -45,6 +43,7 @@ CommandLine copy__db_command =
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
 		"  --source              Postgres URI to the source database\n"
 		"  --target              Postgres URI to the target database\n"
+		"  --dir                 Work directory to use\n"
 		"  --table-jobs          Number of concurrent COPY jobs to run\n"
 		"  --index-jobs          Number of concurrent CREATE INDEX jobs to run\n"
 		"  --drop-if-exists      On the target database, clean-up from a previous run first\n"
@@ -92,6 +91,7 @@ static CommandLine copy_data_command =
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
 		"  --source              Postgres URI to the source database\n"
 		"  --target              Postgres URI to the target database\n"
+		"  --dir                 Work directory to use\n"
 		"  --table-jobs          Number of concurrent COPY jobs to run\n"
 		"  --index-jobs          Number of concurrent CREATE INDEX jobs to run\n"
 		"  --skip-large-objects  Skip copying large objects (blobs)\n"
@@ -109,6 +109,7 @@ static CommandLine copy_table_data_command =
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Postgres URI to the target database\n"
+		"  --dir             Work directory to use\n"
 		"  --table-jobs      Number of concurrent COPY jobs to run\n"
 		"  --restart         Allow restarting when temp files exist already\n"
 		"  --resume          Allow resuming operations after a failure\n"
@@ -124,6 +125,7 @@ static CommandLine copy_sequence_command =
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Postgres URI to the target database\n"
+		"  --dir             Work directory to use\n"
 		"  --restart         Allow restarting when temp files exist already\n"
 		"  --resume          Allow resuming operations after a failure\n"
 		"  --not-consistent  Allow taking a new snapshot on the source database\n"
@@ -138,6 +140,7 @@ static CommandLine copy_indexes_command =
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Postgres URI to the target database\n"
+		"  --dir             Work directory to use\n"
 		"  --index-jobs      Number of concurrent CREATE INDEX jobs to run\n"
 		"  --restart         Allow restarting when temp files exist already\n"
 		"  --resume          Allow resuming operations after a failure\n"
@@ -152,6 +155,7 @@ static CommandLine copy_constraints_command =
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Postgres URI to the target database\n"
+		"  --dir             Work directory to use\n"
 		"  --restart         Allow restarting when temp files exist already\n"
 		"  --resume          Allow resuming operations after a failure\n"
 		"  --not-consistent  Allow taking a new snapshot on the source database\n",
@@ -187,6 +191,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	static struct option long_options[] = {
 		{ "source", required_argument, NULL, 'S' },
 		{ "target", required_argument, NULL, 'T' },
+		{ "dir", required_argument, NULL, 'D' },
 		{ "jobs", required_argument, NULL, 'J' },
 		{ "table-jobs", required_argument, NULL, 'J' },
 		{ "index-jobs", required_argument, NULL, 'I' },
@@ -220,7 +225,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:J:I:cOBrRCN:xXVvqh",
+	while ((c = getopt_long(argc, argv, "S:T:D:J:I:cOBrRCN:xXVvqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -248,6 +253,13 @@ cli_copy_db_getopts(int argc, char **argv)
 				}
 				strlcpy(options.target_pguri, optarg, MAXCONNINFO);
 				log_trace("--target %s", options.target_pguri);
+				break;
+			}
+
+			case 'D':
+			{
+				strlcpy(options.dir, optarg, MAXPGPATH);
+				log_trace("--dir %s", options.dir);
 				break;
 			}
 
@@ -425,172 +437,6 @@ cli_copy_db_getopts(int argc, char **argv)
 
 
 /*
- * cli_copydb_getenv reads from the environment variables and fills-in the
- * command line options.
- */
-static bool
-cli_copydb_getenv(CopyDBOptions *options)
-{
-	int errors = 0;
-
-	/* now some of the options can be also set from the environment */
-	if (env_exists(PGCOPYDB_SOURCE_PGURI))
-	{
-		if (!get_env_copy(PGCOPYDB_SOURCE_PGURI,
-						  options->source_pguri,
-						  sizeof(options->source_pguri)))
-		{
-			/* errors have already been logged */
-			++errors;
-		}
-	}
-
-	if (env_exists(PGCOPYDB_TARGET_PGURI))
-	{
-		if (!get_env_copy(PGCOPYDB_TARGET_PGURI,
-						  options->target_pguri,
-						  sizeof(options->target_pguri)))
-		{
-			/* errors have already been logged */
-			++errors;
-		}
-	}
-
-	if (env_exists(PGCOPYDB_TARGET_TABLE_JOBS))
-	{
-		char jobs[BUFSIZE] = { 0 };
-
-		if (get_env_copy(PGCOPYDB_TARGET_TABLE_JOBS, jobs, sizeof(jobs)))
-		{
-			if (!stringToInt(jobs, &options->tableJobs) ||
-				options->tableJobs < 1 ||
-				options->tableJobs > 128)
-			{
-				log_fatal("Failed to parse PGCOPYDB_TARGET_TABLE_JOBS: \"%s\"",
-						  jobs);
-				++errors;
-			}
-		}
-		else
-		{
-			/* errors have already been logged */
-			++errors;
-		}
-	}
-
-	if (env_exists(PGCOPYDB_TARGET_INDEX_JOBS))
-	{
-		char jobs[BUFSIZE] = { 0 };
-
-		if (get_env_copy(PGCOPYDB_TARGET_INDEX_JOBS, jobs, sizeof(jobs)))
-		{
-			if (!stringToInt(jobs, &options->indexJobs) ||
-				options->indexJobs < 1 ||
-				options->indexJobs > 128)
-			{
-				log_fatal("Failed to parse PGCOPYDB_TARGET_INDEX_JOBS: \"%s\"",
-						  jobs);
-				++errors;
-			}
-		}
-		else
-		{
-			/* errors have already been logged */
-			++errors;
-		}
-	}
-
-	/* when --drop-if-exists has not been used, check PGCOPYDB_DROP_IF_EXISTS */
-	if (!options->restoreOptions.dropIfExists)
-	{
-		if (env_exists(PGCOPYDB_DROP_IF_EXISTS))
-		{
-			char DROP_IF_EXISTS[BUFSIZE] = { 0 };
-
-			if (!get_env_copy(PGCOPYDB_DROP_IF_EXISTS,
-							  DROP_IF_EXISTS,
-							  sizeof(DROP_IF_EXISTS)))
-			{
-				/* errors have already been logged */
-				++errors;
-			}
-			else if (!parse_bool(DROP_IF_EXISTS,
-								 &(options->restoreOptions.dropIfExists)))
-			{
-				log_error("Failed to parse environment variable \"%s\" "
-						  "value \"%s\", expected a boolean (on/off)",
-						  PGCOPYDB_DROP_IF_EXISTS,
-						  DROP_IF_EXISTS);
-				++errors;
-			}
-		}
-	}
-
-	return errors == 0;
-}
-
-
-/*
- * cli_copydb_is_consistent returns false when the option --not-consistent
- * should be used.
- */
-static bool
-cli_copydb_is_consistent(CopyDBOptions *options)
-{
-	/* when --resume is not used, we're good */
-	if (!options->resume)
-	{
-		return true;
-	}
-
-	/* when --resume and --not-consistent are used, we're good */
-	if (options->resume && options->notConsistent)
-	{
-		return true;
-	}
-
-	/* okay --resume is being used, do we have a snapshot? */
-	if (IS_EMPTY_STRING_BUFFER(options->snapshot))
-	{
-		/* --resume without --snapshot requires --not-consistent */
-		return false;
-	}
-
-	/* okay, a --snapshot is required, is it the same as the previous run? */
-	CopyFilePaths cfPaths = { 0 };
-
-	if (!copydb_prepare_filepaths(&cfPaths, NULL))
-	{
-		return false;
-	}
-
-	char *previous_snapshot = NULL;
-	long size = 0L;
-
-	if (!read_file(cfPaths.snfile, &previous_snapshot, &size))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (strcmp(previous_snapshot, options->snapshot) != 0)
-	{
-		log_error("Failed to ensure a consistent snapshot to resume operations");
-		log_error("Previous run was done with snapshot \"%s\" and current run "
-				  "is using --resume --snapshot \"%s\"",
-				  previous_snapshot,
-				  options->snapshot);
-
-		free(previous_snapshot);
-		return false;
-	}
-
-	free(previous_snapshot);
-	return true;
-}
-
-
-/*
  * cli_copy_db implements the command: pgcopydb copy db
  */
 static void
@@ -614,36 +460,13 @@ cli_copy_db(int argc, char **argv)
 	 * connections to the source database. When the --snapshot option has been
 	 * used, instead of exporting a new snapshot, we can just re-use it.
 	 */
-	TransactionSnapshot *sourceSnapshot = &(copySpecs.sourceSnapshot);
-
-	if (IS_EMPTY_STRING_BUFFER(sourceSnapshot->snapshot))
+	if (!copydb_prepare_snapshot(&copySpecs))
 	{
-		if (!copydb_export_snapshot(sourceSnapshot))
-		{
-			log_fatal("Failed to export a snapshot on \"%s\"",
-					  sourceSnapshot->pguri);
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
-	}
-	else
-	{
-		if (!copydb_set_snapshot(sourceSnapshot))
-		{
-			log_fatal("Failed to use given --snapshot \"%s\"",
-					  sourceSnapshot->snapshot);
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
-	}
-
-	/* store the snapshot in a file, to support --resume --snapshot ... */
-	if (!write_file(sourceSnapshot->snapshot,
-					strlen(sourceSnapshot->snapshot),
-					copySpecs.cfPaths.snfile))
-	{
-		log_fatal("Failed to create the snapshot file \"%s\"",
-				  copySpecs.cfPaths.snfile);
+		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
+
+	TransactionSnapshot *sourceSnapshot = &(copySpecs.sourceSnapshot);
 
 	if (!copydb_dump_source_schema(&copySpecs,
 								   sourceSnapshot->snapshot,
@@ -717,6 +540,17 @@ cli_copy_data(int argc, char **argv)
 
 	(void) summary_set_current_time(timings, TIMING_STEP_START);
 
+	/*
+	 * First, we need to open a snapshot that we're going to re-use in all our
+	 * connections to the source database. When the --snapshot option has been
+	 * used, instead of exporting a new snapshot, we can just re-use it.
+	 */
+	if (!copydb_prepare_snapshot(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
 	log_info("Copy data from source to target in sub-processes");
 	log_info("Create indexes and constraints in parallel");
 	log_info("Vacuum analyze each table");
@@ -725,6 +559,14 @@ cli_copy_data(int argc, char **argv)
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!copydb_close_snapshot(&(copySpecs.sourceSnapshot)))
+	{
+		log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
+				  copySpecs.sourceSnapshot.snapshot,
+				  copySpecs.sourceSnapshot.pguri);
+		exit(EXIT_CODE_SOURCE);
 	}
 
 	(void) summary_set_current_time(timings, TIMING_STEP_END);
@@ -749,12 +591,31 @@ cli_copy_table_data(int argc, char **argv)
 
 	(void) summary_set_current_time(timings, TIMING_STEP_START);
 
+	/*
+	 * First, we need to open a snapshot that we're going to re-use in all our
+	 * connections to the source database. When the --snapshot option has been
+	 * used, instead of exporting a new snapshot, we can just re-use it.
+	 */
+	if (!copydb_prepare_snapshot(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
 	log_info("Copy data from source to target in sub-processes");
 
 	if (!copydb_copy_all_table_data(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!copydb_close_snapshot(&(copySpecs.sourceSnapshot)))
+	{
+		log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
+				  copySpecs.sourceSnapshot.snapshot,
+				  copySpecs.sourceSnapshot.pguri);
+		exit(EXIT_CODE_SOURCE);
 	}
 
 	(void) summary_set_current_time(timings, TIMING_STEP_END);
@@ -786,34 +647,9 @@ cli_copy_sequences(int argc, char **argv)
 	 * connections to the source database. When the --snapshot option has been
 	 * used, instead of exporting a new snapshot, we can just re-use it.
 	 */
-	TransactionSnapshot *sourceSnapshot = &(copySpecs.sourceSnapshot);
-
-	if (IS_EMPTY_STRING_BUFFER(sourceSnapshot->snapshot))
+	if (!copydb_prepare_snapshot(&copySpecs))
 	{
-		if (!copydb_export_snapshot(sourceSnapshot))
-		{
-			log_fatal("Failed to export a snapshot on \"%s\"",
-					  sourceSnapshot->pguri);
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
-	}
-	else
-	{
-		if (!copydb_set_snapshot(sourceSnapshot))
-		{
-			log_fatal("Failed to use given --snapshot \"%s\"",
-					  sourceSnapshot->snapshot);
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
-	}
-
-	/* store the snapshot in a file, to support --resume --snapshot ... */
-	if (!write_file(sourceSnapshot->snapshot,
-					strlen(sourceSnapshot->snapshot),
-					copySpecs.cfPaths.snfile))
-	{
-		log_fatal("Failed to create the snapshot file \"%s\"",
-				  copySpecs.cfPaths.snfile);
+		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
@@ -823,11 +659,11 @@ cli_copy_sequences(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (!copydb_close_snapshot(sourceSnapshot))
+	if (!copydb_close_snapshot(&(copySpecs.sourceSnapshot)))
 	{
 		log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
-				  sourceSnapshot->snapshot,
-				  sourceSnapshot->pguri);
+				  copySpecs.sourceSnapshot.snapshot,
+				  copySpecs.sourceSnapshot.pguri);
 		exit(EXIT_CODE_SOURCE);
 	}
 
@@ -915,8 +751,13 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 			  copySpecs->pgPaths.pg_version,
 			  copySpecs->pgPaths.pg_restore);
 
+	char *dir =
+		IS_EMPTY_STRING_BUFFER(copyDBoptions.dir)
+		? NULL
+		: copyDBoptions.dir;
+
 	if (!copydb_init_workdir(copySpecs,
-							 NULL,
+							 dir,
 							 copyDBoptions.restart,
 							 copyDBoptions.resume))
 	{
@@ -939,4 +780,52 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
+}
+
+
+/*
+ * copydb_prepare_snapshot connects to the source database and either export a
+ * new Postgres snapshot, or set the transaction's snapshot to the given
+ * already exported snapshot (see --snapshot and PGCOPYDB_SNAPSHOT).
+ */
+static bool
+copydb_prepare_snapshot(CopyDataSpec *copySpecs)
+{
+	/*
+	 * First, we need to open a snapshot that we're going to re-use in all our
+	 * connections to the source database. When the --snapshot option has been
+	 * used, instead of exporting a new snapshot, we can just re-use it.
+	 */
+	TransactionSnapshot *sourceSnapshot = &(copySpecs->sourceSnapshot);
+
+	if (IS_EMPTY_STRING_BUFFER(sourceSnapshot->snapshot))
+	{
+		if (!copydb_export_snapshot(sourceSnapshot))
+		{
+			log_fatal("Failed to export a snapshot on \"%s\"",
+					  sourceSnapshot->pguri);
+			return false;
+		}
+	}
+	else
+	{
+		if (!copydb_set_snapshot(sourceSnapshot))
+		{
+			log_fatal("Failed to use given --snapshot \"%s\"",
+					  sourceSnapshot->snapshot);
+			return false;
+		}
+	}
+
+	/* store the snapshot in a file, to support --resume --snapshot ... */
+	if (!write_file(sourceSnapshot->snapshot,
+					strlen(sourceSnapshot->snapshot),
+					copySpecs->cfPaths.snfile))
+	{
+		log_fatal("Failed to create the snapshot file \"%s\"",
+				  copySpecs->cfPaths.snfile);
+		return false;
+	}
+
+	return true;
 }

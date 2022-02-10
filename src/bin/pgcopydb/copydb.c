@@ -10,7 +10,6 @@
 #include <unistd.h>
 
 #include "cli_common.h"
-#include "cli_copy.h"
 #include "cli_root.h"
 #include "copydb.h"
 #include "env_utils.h"
@@ -43,6 +42,8 @@ copydb_init_workdir(CopyDataSpec *copySpecs,
 		/* errors have already been logged */
 		return false;
 	}
+
+	log_info("Using work dir \"%s\"", cfPaths->topdir);
 
 	/* check to see if there is already another pgcopydb running */
 	if (directory_exists(cfPaths->topdir))

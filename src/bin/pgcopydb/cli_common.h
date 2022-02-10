@@ -16,8 +16,31 @@
 
 #include "defaults.h"
 #include "parson.h"
+#include "pgcmd.h"
+#include "pgsql.h"
 
 extern bool outputJSON;
+
+typedef struct CopyDBOptions
+{
+	char dir[MAXPGPATH];
+
+	char source_pguri[MAXCONNINFO];
+	char target_pguri[MAXCONNINFO];
+
+	int tableJobs;
+	int indexJobs;
+
+	RestoreOptions restoreOptions;
+
+	bool skipLargeObjects;
+
+	bool restart;
+	bool resume;
+	bool notConsistent;
+	char snapshot[BUFSIZE];
+} CopyDBOptions;
+
 
 void cli_help(int argc, char **argv);
 
@@ -26,5 +49,8 @@ void cli_print_version(int argc, char **argv);
 
 void cli_pprint_json(JSON_Value *js);
 char * logLevelToString(int logLevel);
+
+bool cli_copydb_getenv(CopyDBOptions *options);
+bool cli_copydb_is_consistent(CopyDBOptions *options);
 
 #endif  /* CLI_COMMON_H */

@@ -44,6 +44,7 @@ see full documentation coverage at section section :ref:`pgcopydb_copy-db`.
 
      --source              Postgres URI to the source database
      --target              Postgres URI to the target database
+     --dir                 Work directory to use
      --table-jobs          Number of concurrent COPY jobs to run
      --index-jobs          Number of concurrent CREATE INDEX jobs to run
      --drop-if-exists      On the target database, clean-up from a previous run first
@@ -74,6 +75,7 @@ copy-db steps.
 
      --source              Postgres URI to the source database
      --target              Postgres URI to the target database
+     --dir                 Work directory to use
      --table-jobs          Number of concurrent COPY jobs to run
      --index-jobs          Number of concurrent CREATE INDEX jobs to run
      --drop-if-exists      On the target database, clean-up from a previous run first
@@ -124,6 +126,7 @@ avoiding disks entirely.
 
      --source          Postgres URI to the source database
      --target          Postgres URI to the target database
+     --dir                 Work directory to use
      --table-jobs      Number of concurrent COPY jobs to run
      --restart         Allow restarting when temp files exist already
      --resume          Allow resuming operations after a failure
@@ -150,6 +153,7 @@ database.
 
      --source          Postgres URI to the source database
      --target          Postgres URI to the target database
+     --dir                 Work directory to use
      --restart         Allow restarting when temp files exist already
      --resume          Allow resuming operations after a failure
      --not-consistent  Allow taking a new snapshot on the source database
@@ -174,6 +178,7 @@ target database.
 
      --source          Postgres URI to the source database
      --target          Postgres URI to the target database
+     --dir                 Work directory to use
 	 --index-jobs      Number of concurrent CREATE INDEX jobs to run
      --restart         Allow restarting when temp files exist already
      --resume          Allow resuming operations after a failure
@@ -200,6 +205,7 @@ is found existing already on the target database.
 
      --source          Postgres URI to the source database
      --target          Postgres URI to the target database
+     --dir                 Work directory to use
      --restart         Allow restarting when temp files exist already
      --resume          Allow resuming operations after a failure
      --not-consistent  Allow taking a new snapshot on the source data
@@ -255,6 +261,14 @@ The following options are available to ``pgcopydb copy`` sub-commands:
 --target
 
   Connection string to the target Postgres instance.
+
+--dir
+
+  During its normal operations pgcopydb creates a lot of temporary files to
+  track sub-processes progress. Temporary files are created in the directory
+  location given by this option, or defaults to
+  ``${XDG_RUNTIME_DIR}/pgcopydb`` when the environment variable is set, or
+  then to ``/tmp/pgcopydb``.
 
 --table-jobs
 
@@ -365,6 +379,10 @@ PGCOPYDB_DROP_IF_EXISTS
    When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
    then pgcopydb uses the pg_restore options ``--clean --if-exists`` when
    creating the schema on the target Postgres instance.
+
+PGCOPYDB_SNAPSHOT
+
+  Postgres snapshot identifier to re-use, see also ``--snapshot``.
 
 XDG_RUNTIME_DIR
 
