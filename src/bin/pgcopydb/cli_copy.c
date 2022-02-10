@@ -33,8 +33,6 @@ static void cli_copy_constraints(int argc, char **argv);
 static void cli_copy_prepare_specs(CopyDataSpec *copySpecs,
 								   CopyDataSection section);
 
-static bool copydb_prepare_snapshot(CopyDataSpec *copySpecs);
-
 
 CommandLine copy__db_command =
 	make_command(
@@ -688,10 +686,29 @@ cli_copy_indexes(int argc, char **argv)
 
 	(void) summary_set_current_time(timings, TIMING_STEP_START);
 
+	/*
+	 * First, we need to open a snapshot that we're going to re-use in all our
+	 * connections to the source database. When the --snapshot option has been
+	 * used, instead of exporting a new snapshot, we can just re-use it.
+	 */
+	if (!copydb_prepare_snapshot(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
 	if (!copydb_copy_all_indexes(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!copydb_close_snapshot(&(copySpecs.sourceSnapshot)))
+	{
+		log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
+				  copySpecs.sourceSnapshot.snapshot,
+				  copySpecs.sourceSnapshot.pguri);
+		exit(EXIT_CODE_SOURCE);
 	}
 
 	(void) summary_set_current_time(timings, TIMING_STEP_END);
@@ -700,9 +717,9 @@ cli_copy_indexes(int argc, char **argv)
 
 
 /*
- * cli_copy_indexes implements only the ALTER TABLE ... ADD CONSTRAINT parts of
- * the whole copy operations. The tables and indexes should have already been
- * created before hand.
+ * cli_copy_constraints implements only the ALTER TABLE ... ADD CONSTRAINT
+ * parts of the whole copy operations. The tables and indexes should have
+ * already been created before hand.
  */
 static void
 cli_copy_constraints(int argc, char **argv)
@@ -718,10 +735,29 @@ cli_copy_constraints(int argc, char **argv)
 
 	log_info("Create constraints");
 
+	/*
+	 * First, we need to open a snapshot that we're going to re-use in all our
+	 * connections to the source database. When the --snapshot option has been
+	 * used, instead of exporting a new snapshot, we can just re-use it.
+	 */
+	if (!copydb_prepare_snapshot(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
 	if (!copydb_copy_all_table_data(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!copydb_close_snapshot(&(copySpecs.sourceSnapshot)))
+	{
+		log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
+				  copySpecs.sourceSnapshot.snapshot,
+				  copySpecs.sourceSnapshot.pguri);
+		exit(EXIT_CODE_SOURCE);
 	}
 
 	(void) summary_set_current_time(timings, TIMING_STEP_END);
@@ -780,52 +816,4 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
-}
-
-
-/*
- * copydb_prepare_snapshot connects to the source database and either export a
- * new Postgres snapshot, or set the transaction's snapshot to the given
- * already exported snapshot (see --snapshot and PGCOPYDB_SNAPSHOT).
- */
-static bool
-copydb_prepare_snapshot(CopyDataSpec *copySpecs)
-{
-	/*
-	 * First, we need to open a snapshot that we're going to re-use in all our
-	 * connections to the source database. When the --snapshot option has been
-	 * used, instead of exporting a new snapshot, we can just re-use it.
-	 */
-	TransactionSnapshot *sourceSnapshot = &(copySpecs->sourceSnapshot);
-
-	if (IS_EMPTY_STRING_BUFFER(sourceSnapshot->snapshot))
-	{
-		if (!copydb_export_snapshot(sourceSnapshot))
-		{
-			log_fatal("Failed to export a snapshot on \"%s\"",
-					  sourceSnapshot->pguri);
-			return false;
-		}
-	}
-	else
-	{
-		if (!copydb_set_snapshot(sourceSnapshot))
-		{
-			log_fatal("Failed to use given --snapshot \"%s\"",
-					  sourceSnapshot->snapshot);
-			return false;
-		}
-	}
-
-	/* store the snapshot in a file, to support --resume --snapshot ... */
-	if (!write_file(sourceSnapshot->snapshot,
-					strlen(sourceSnapshot->snapshot),
-					copySpecs->cfPaths.snfile))
-	{
-		log_fatal("Failed to create the snapshot file \"%s\"",
-				  copySpecs->cfPaths.snfile);
-		return false;
-	}
-
-	return true;
 }

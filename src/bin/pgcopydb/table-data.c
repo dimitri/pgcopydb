@@ -38,7 +38,8 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 
 	if (specs->dirState.tableCopyIsDone &&
 		specs->dirState.indexCopyIsDone &&
-		specs->dirState.sequenceCopyIsDone)
+		specs->dirState.sequenceCopyIsDone &&
+		specs->section != DATA_SECTION_CONSTRAINTS)
 	{
 		log_info("Skipping tables, indexes, and sequences, "
 				 "already done on a previous run");
@@ -335,11 +336,12 @@ copydb_start_table_process(CopyDataSpec *specs)
 		 * 2. Fetch the list of indexes and constraints attached to this table
 		 *    and create them in a background process.
 		 */
-		if (specs->dirState.indexCopyIsDone)
+		if (specs->dirState.indexCopyIsDone &&
+			specs->section != DATA_SECTION_CONSTRAINTS)
 		{
 			log_info("Skipping indexes, already done on a previous run");
 		}
-		else if ((!isDone && !isBeingProcessed))
+		else if (!isDone && !isBeingProcessed)
 		{
 			if (!copydb_copy_table_indexes(tableSpecs))
 			{

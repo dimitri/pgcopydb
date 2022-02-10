@@ -350,6 +350,17 @@ cli_copydb_is_consistent(CopyDBOptions *options)
 		return false;
 	}
 
+	/*
+	 * If the snapshot file does not exists, then it might be that a snapshot
+	 * has been created by another script/tool, and pgcopydb is now asked to
+	 * re-use that external snapshot. Just get along with it, and let Postgres
+	 * check for the snapshot at SET TRANSACTION SNAPSHOT time.
+	 */
+	if (!file_exists(cfPaths.snfile))
+	{
+		return true;
+	}
+
 	char *previous_snapshot = NULL;
 	long size = 0L;
 

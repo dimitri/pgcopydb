@@ -316,9 +316,30 @@ cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 			 pgPaths->pg_version,
 			 pgPaths->pg_dump);
 
-	if (!copydb_dump_source_schema(&copySpecs, NULL, section))
+	/*
+	 * First, we need to open a snapshot that we're going to re-use in all our
+	 * connections to the source database. When the --snapshot option has been
+	 * used, instead of exporting a new snapshot, we can just re-use it.
+	 */
+	if (!copydb_prepare_snapshot(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!copydb_dump_source_schema(&copySpecs,
+								   copySpecs.sourceSnapshot.snapshot,
+								   section))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!copydb_close_snapshot(&(copySpecs.sourceSnapshot)))
+	{
+		log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
+				  copySpecs.sourceSnapshot.snapshot,
+				  copySpecs.sourceSnapshot.pguri);
+		exit(EXIT_CODE_SOURCE);
 	}
 }

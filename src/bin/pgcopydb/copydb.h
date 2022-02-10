@@ -227,6 +227,7 @@ bool copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 							 CopyDataSpec *specs,
 							 SourceTable *source);
 
+bool copydb_prepare_snapshot(CopyDataSpec *copySpecs);
 bool copydb_export_snapshot(TransactionSnapshot *snapshot);
 bool copydb_set_snapshot(TransactionSnapshot *snapshot);
 bool copydb_close_snapshot(TransactionSnapshot *snapshot);
