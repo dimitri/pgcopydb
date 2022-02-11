@@ -10,7 +10,6 @@
 #include <unistd.h>
 
 #include "cli_common.h"
-#include "cli_copy.h"
 #include "cli_root.h"
 #include "copydb.h"
 #include "env_utils.h"
@@ -43,6 +42,8 @@ copydb_init_workdir(CopyDataSpec *copySpecs,
 		/* errors have already been logged */
 		return false;
 	}
+
+	log_info("Using work dir \"%s\"", cfPaths->topdir);
 
 	/* check to see if there is already another pgcopydb running */
 	if (directory_exists(cfPaths->topdir))
@@ -92,10 +93,10 @@ copydb_init_workdir(CopyDataSpec *copySpecs,
 		/* if we did nothing yet, just act as if --resume was used */
 		else if (!dirState->schemaDumpIsDone)
 		{
-			log_debug("schema dump is done, just continue");
+			log_debug("schema dump has not been done yet, just continue");
 		}
 
-		/* if --resume --not-consistent has been used, we just continue */
+		/* if --resume has been used, we just continue */
 		else if (!resume)
 		{
 			log_fatal("Please use --resume --not-consistent to allow "
@@ -246,8 +247,7 @@ copydb_inspect_workdir(CopyFilePaths *cfPaths, DirectoryState *dirState)
 
 	if (dirState->indexCopyIsDone)
 	{
-		log_info("All the indexes and constraints "
-				 "have been copied to the target instance");
+		log_info("All the indexes have been copied to the target instance");
 	}
 
 	if (dirState->sequenceCopyIsDone)
@@ -298,6 +298,7 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths, const char *dir)
 
 	/* now that we have our topdir, prepare all the others from there */
 	sformat(cfPaths->pidfile, MAXPGPATH, "%s/pgcopydb.pid", cfPaths->topdir);
+	sformat(cfPaths->snfile, MAXPGPATH, "%s/snapshot", cfPaths->topdir);
 	sformat(cfPaths->schemadir, MAXPGPATH, "%s/schema", cfPaths->topdir);
 	sformat(cfPaths->rundir, MAXPGPATH, "%s/run", cfPaths->topdir);
 	sformat(cfPaths->tbldir, MAXPGPATH, "%s/run/tables", cfPaths->topdir);
@@ -685,6 +686,57 @@ copydb_close_snapshot(TransactionSnapshot *snapshot)
 	}
 
 	(void) pgsql_finish(pgsql);
+
+	return true;
+}
+
+
+/*
+ * copydb_prepare_snapshot connects to the source database and either export a
+ * new Postgres snapshot, or set the transaction's snapshot to the given
+ * already exported snapshot (see --snapshot and PGCOPYDB_SNAPSHOT).
+ */
+bool
+copydb_prepare_snapshot(CopyDataSpec *copySpecs)
+{
+	/*
+	 * First, we need to open a snapshot that we're going to re-use in all our
+	 * connections to the source database. When the --snapshot option has been
+	 * used, instead of exporting a new snapshot, we can just re-use it.
+	 */
+	TransactionSnapshot *sourceSnapshot = &(copySpecs->sourceSnapshot);
+
+	if (IS_EMPTY_STRING_BUFFER(sourceSnapshot->snapshot))
+	{
+		if (!copydb_export_snapshot(sourceSnapshot))
+		{
+			log_fatal("Failed to export a snapshot on \"%s\"",
+					  sourceSnapshot->pguri);
+			return false;
+		}
+	}
+	else
+	{
+		if (!copydb_set_snapshot(sourceSnapshot))
+		{
+			log_fatal("Failed to use given --snapshot \"%s\"",
+					  sourceSnapshot->snapshot);
+			return false;
+		}
+
+		log_info("[SNAPSHOT] Using snapshot \"%s\" on the source database",
+				 sourceSnapshot->snapshot);
+	}
+
+	/* store the snapshot in a file, to support --resume --snapshot ... */
+	if (!write_file(sourceSnapshot->snapshot,
+					strlen(sourceSnapshot->snapshot),
+					copySpecs->cfPaths.snfile))
+	{
+		log_fatal("Failed to create the snapshot file \"%s\"",
+				  copySpecs->cfPaths.snfile);
+		return false;
+	}
 
 	return true;
 }

@@ -17,9 +17,11 @@
 #include "cli_common.h"
 #include "cli_root.h"
 #include "commandline.h"
+#include "copydb.h"
 #include "env_utils.h"
 #include "file_utils.h"
 #include "log.h"
+#include "parsing.h"
 #include "string_utils.h"
 
 /* handle command line options for our setup. */
@@ -190,4 +192,200 @@ logLevelToString(int logLevel)
 	}
 
 	return "";
+}
+
+
+/*
+ * cli_copydb_getenv reads from the environment variables and fills-in the
+ * command line options.
+ */
+bool
+cli_copydb_getenv(CopyDBOptions *options)
+{
+	int errors = 0;
+
+	/* now some of the options can be also set from the environment */
+	if (env_exists(PGCOPYDB_SOURCE_PGURI))
+	{
+		if (!get_env_copy(PGCOPYDB_SOURCE_PGURI,
+						  options->source_pguri,
+						  sizeof(options->source_pguri)))
+		{
+			/* errors have already been logged */
+			++errors;
+		}
+	}
+
+	if (env_exists(PGCOPYDB_TARGET_PGURI))
+	{
+		if (!get_env_copy(PGCOPYDB_TARGET_PGURI,
+						  options->target_pguri,
+						  sizeof(options->target_pguri)))
+		{
+			/* errors have already been logged */
+			++errors;
+		}
+	}
+
+	if (env_exists(PGCOPYDB_TARGET_TABLE_JOBS))
+	{
+		char jobs[BUFSIZE] = { 0 };
+
+		if (get_env_copy(PGCOPYDB_TARGET_TABLE_JOBS, jobs, sizeof(jobs)))
+		{
+			if (!stringToInt(jobs, &options->tableJobs) ||
+				options->tableJobs < 1 ||
+				options->tableJobs > 128)
+			{
+				log_fatal("Failed to parse PGCOPYDB_TARGET_TABLE_JOBS: \"%s\"",
+						  jobs);
+				++errors;
+			}
+		}
+		else
+		{
+			/* errors have already been logged */
+			++errors;
+		}
+	}
+
+	if (env_exists(PGCOPYDB_TARGET_INDEX_JOBS))
+	{
+		char jobs[BUFSIZE] = { 0 };
+
+		if (get_env_copy(PGCOPYDB_TARGET_INDEX_JOBS, jobs, sizeof(jobs)))
+		{
+			if (!stringToInt(jobs, &options->indexJobs) ||
+				options->indexJobs < 1 ||
+				options->indexJobs > 128)
+			{
+				log_fatal("Failed to parse PGCOPYDB_TARGET_INDEX_JOBS: \"%s\"",
+						  jobs);
+				++errors;
+			}
+		}
+		else
+		{
+			/* errors have already been logged */
+			++errors;
+		}
+	}
+
+	/* when --snapshot has not been used, check PGCOPYDB_SNAPSHOT */
+	if (env_exists(PGCOPYDB_SNAPSHOT))
+	{
+		if (!get_env_copy(PGCOPYDB_SNAPSHOT,
+						  options->snapshot,
+						  sizeof(options->snapshot)))
+		{
+			/* errors have already been logged */
+			++errors;
+		}
+	}
+
+	/* when --drop-if-exists has not been used, check PGCOPYDB_DROP_IF_EXISTS */
+	if (!options->restoreOptions.dropIfExists)
+	{
+		if (env_exists(PGCOPYDB_DROP_IF_EXISTS))
+		{
+			char DROP_IF_EXISTS[BUFSIZE] = { 0 };
+
+			if (!get_env_copy(PGCOPYDB_DROP_IF_EXISTS,
+							  DROP_IF_EXISTS,
+							  sizeof(DROP_IF_EXISTS)))
+			{
+				/* errors have already been logged */
+				++errors;
+			}
+			else if (!parse_bool(DROP_IF_EXISTS,
+								 &(options->restoreOptions.dropIfExists)))
+			{
+				log_error("Failed to parse environment variable \"%s\" "
+						  "value \"%s\", expected a boolean (on/off)",
+						  PGCOPYDB_DROP_IF_EXISTS,
+						  DROP_IF_EXISTS);
+				++errors;
+			}
+		}
+	}
+
+	return errors == 0;
+}
+
+
+/*
+ * cli_copydb_is_consistent returns false when the option --not-consistent
+ * should be used.
+ */
+bool
+cli_copydb_is_consistent(CopyDBOptions *options)
+{
+	/* when --resume is not used, we're good */
+	if (!options->resume)
+	{
+		return true;
+	}
+
+	/* when --resume and --not-consistent are used, we're good */
+	if (options->resume && options->notConsistent)
+	{
+		return true;
+	}
+
+	/* okay --resume is being used, do we have a snapshot? */
+	if (IS_EMPTY_STRING_BUFFER(options->snapshot))
+	{
+		/* --resume without --snapshot requires --not-consistent */
+		return false;
+	}
+
+	/* okay, a --snapshot is required, is it the same as the previous run? */
+	CopyFilePaths cfPaths = { 0 };
+
+	char *dir =
+		IS_EMPTY_STRING_BUFFER(options->dir) ? NULL : options->dir;
+
+	if (!copydb_prepare_filepaths(&cfPaths, dir))
+	{
+		return false;
+	}
+
+	/*
+	 * If the snapshot file does not exists, then it might be that a snapshot
+	 * has been created by another script/tool, and pgcopydb is now asked to
+	 * re-use that external snapshot. Just get along with it, and let Postgres
+	 * check for the snapshot at SET TRANSACTION SNAPSHOT time.
+	 */
+	if (!file_exists(cfPaths.snfile))
+	{
+		return true;
+	}
+
+	char *previous_snapshot = NULL;
+	long size = 0L;
+
+	if (!read_file(cfPaths.snfile, &previous_snapshot, &size))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* make sure to use only the first line of the file, without \n */
+	char *snLines[BUFSIZE] = { 0 };
+	int lineCount = splitLines(previous_snapshot, snLines, BUFSIZE);
+
+	if (lineCount != 1 || strcmp(snLines[0], options->snapshot) != 0)
+	{
+		log_error("Failed to ensure a consistent snapshot to resume operations");
+		log_error("Previous run was done with snapshot \"%s\" and current run "
+				  "is using --resume --snapshot \"%s\"",
+				  snLines[0],
+				  options->snapshot);
+
+		free(previous_snapshot);
+		return false;
+	}
+
+	free(previous_snapshot);
+	return true;
 }

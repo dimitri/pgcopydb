@@ -10,7 +10,6 @@
 #include <unistd.h>
 
 #include "cli_common.h"
-#include "cli_copy.h"
 #include "cli_root.h"
 #include "copydb.h"
 #include "env_utils.h"
@@ -51,6 +50,12 @@ copydb_init_indexes_paths(CopyFilePaths *cfPaths,
 				cfPaths->idxdir,
 				index->indexOid);
 
+		sformat(indexPaths->constraintLockFile,
+				sizeof(indexPaths->constraintLockFile),
+				"%s/%u",
+				cfPaths->rundir,
+				index->constraintOid);
+
 		sformat(indexPaths->constraintDoneFile,
 				sizeof(indexPaths->constraintDoneFile),
 				"%s/%u.done",
@@ -66,6 +71,10 @@ copydb_init_indexes_paths(CopyFilePaths *cfPaths,
  * copydb_copy_all_indexes fetches the list of indexes from the source database
  * and then create all the same indexes on the target database, which is
  * expected to have the same tables created already.
+ *
+ * When specs->section is DATA_SECTION_INDEXES then only indexes are created,
+ * when specs->section is DATA_SECTION_CONSTRAINTS then only constraints are
+ * created.
  */
 bool
 copydb_copy_all_indexes(CopyDataSpec *specs)
@@ -232,6 +241,7 @@ copydb_start_index_process(CopyDataSpec *specs,
 						   Semaphore *lockFileSemaphore)
 {
 	int errors = 0;
+	bool constraint = specs->section == DATA_SECTION_CONSTRAINTS;
 
 	for (int i = 0; i < indexArray->count; i++)
 	{
@@ -245,6 +255,7 @@ copydb_start_index_process(CopyDataSpec *specs,
 								 indexPaths,
 								 lockFileSemaphore,
 								 &(specs->indexSemaphore),
+								 constraint,
 								 ifNotExists))
 		{
 			/* errors have already been logged */
@@ -283,6 +294,7 @@ copydb_create_index(const char *pguri,
 					IndexFilePaths *indexPaths,
 					Semaphore *lockFileSemaphore,
 					Semaphore *createIndexSemaphore,
+					bool constraint,
 					bool ifNotExists)
 {
 	PGSQL dst = { 0 };
@@ -297,9 +309,21 @@ copydb_create_index(const char *pguri,
 	bool isDone = false;
 	bool isBeingProcessed = false;
 
+	/*
+	 * When asked to create the constraint and there is no constraint attached
+	 * to this index, skip the operation entirely.
+	 */
+	if (constraint &&
+		(index->constraintOid <= 0 ||
+		 IS_EMPTY_STRING_BUFFER(index->constraintName)))
+	{
+		return true;
+	}
+
 	/* deal with same-index concurrency if we have to */
 	if (!copydb_index_is_being_processed(index,
 										 indexPaths,
+										 constraint,
 										 lockFileSemaphore,
 										 &summary,
 										 &isDone,
@@ -320,13 +344,26 @@ copydb_create_index(const char *pguri,
 	(void) semaphore_lock(createIndexSemaphore);
 
 	/* prepare the create index command, maybe adding IF NOT EXISTS */
-	if (!copydb_prepare_create_index_command(index,
-											 ifNotExists,
-											 summary.command,
-											 sizeof(summary.command)))
+	if (constraint)
 	{
-		/* errors have already been logged */
-		return false;
+		if (!copydb_prepare_create_constraint_command(index,
+													  summary.command,
+													  sizeof(summary.command)))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+	else
+	{
+		if (!copydb_prepare_create_index_command(index,
+												 ifNotExists,
+												 summary.command,
+												 sizeof(summary.command)))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	log_info("%s", summary.command);
@@ -350,6 +387,7 @@ copydb_create_index(const char *pguri,
 
 	if (!copydb_mark_index_as_done(index,
 								   indexPaths,
+								   constraint,
 								   lockFileSemaphore,
 								   &summary))
 	{
@@ -369,18 +407,24 @@ copydb_create_index(const char *pguri,
 bool
 copydb_index_is_being_processed(SourceIndex *index,
 								IndexFilePaths *indexPaths,
+								bool constraint,
 								Semaphore *lockFileSemaphore,
 								CopyIndexSummary *summary,
 								bool *isDone,
 								bool *isBeingProcessed)
 {
+	char *lockFile =
+		constraint ? indexPaths->constraintLockFile : indexPaths->lockFile;
+
+	char *doneFile =
+		constraint ? indexPaths->constraintDoneFile : indexPaths->doneFile;
+
 	/* some callers have no same-index concurrency, just create the lockFile */
 	if (lockFileSemaphore == NULL)
 	{
-		if (!open_index_summary(summary, indexPaths->lockFile))
+		if (!open_index_summary(summary, lockFile))
 		{
-			log_info("Failed to create the lock file at \"%s\"",
-					 indexPaths->lockFile);
+			log_info("Failed to create the lock file at \"%s\"", lockFile);
 			(void) semaphore_unlock(lockFileSemaphore);
 			return false;
 		}
@@ -394,7 +438,7 @@ copydb_index_is_being_processed(SourceIndex *index,
 	/* enter the critical section */
 	(void) semaphore_lock(lockFileSemaphore);
 
-	if (file_exists(indexPaths->doneFile))
+	if (file_exists(doneFile))
 	{
 		*isDone = true;
 		*isBeingProcessed = false;
@@ -407,11 +451,11 @@ copydb_index_is_being_processed(SourceIndex *index,
 	*isDone = false;
 
 	/* check if the lockFile has already been claimed for this index */
-	if (file_exists(indexPaths->lockFile))
+	if (file_exists(lockFile))
 	{
 		CopyIndexSummary indexSummary = { .index = index };
 
-		if (!read_index_summary(&indexSummary, indexPaths->lockFile))
+		if (!read_index_summary(&indexSummary, lockFile))
 		{
 			/* errors have already been logged */
 			(void) semaphore_unlock(lockFileSemaphore);
@@ -434,14 +478,13 @@ copydb_index_is_being_processed(SourceIndex *index,
 			log_warn("Found stale pid %d in file \"%s\", removing it "
 					 "and creating index %s",
 					 indexSummary.pid,
-					 indexPaths->lockFile,
+					 lockFile,
 					 index->indexRelname);
 
 			/* stale pid, remove the old lockFile now, then process index */
-			if (!unlink_file(indexPaths->lockFile))
+			if (!unlink_file(lockFile))
 			{
-				log_error("Failed to remove the lockFile \"%s\"",
-						  indexPaths->lockFile);
+				log_error("Failed to remove the lockFile \"%s\"", lockFile);
 				(void) semaphore_unlock(lockFileSemaphore);
 				return false;
 			}
@@ -453,10 +496,9 @@ copydb_index_is_being_processed(SourceIndex *index,
 	 */
 	*isBeingProcessed = false;
 
-	if (!open_index_summary(summary, indexPaths->lockFile))
+	if (!open_index_summary(summary, lockFile))
 	{
-		log_info("Failed to create the lock file at \"%s\"",
-				 indexPaths->lockFile);
+		log_info("Failed to create the lock file at \"%s\"", lockFile);
 		(void) semaphore_unlock(lockFileSemaphore);
 		return false;
 	}
@@ -476,19 +518,25 @@ copydb_index_is_being_processed(SourceIndex *index,
 bool
 copydb_mark_index_as_done(SourceIndex *index,
 						  IndexFilePaths *indexPaths,
+						  bool constraint,
 						  Semaphore *lockFileSemaphore,
 						  CopyIndexSummary *summary)
 {
+	char *lockFile =
+		constraint ? indexPaths->constraintLockFile : indexPaths->lockFile;
+
+	char *doneFile =
+		constraint ? indexPaths->constraintDoneFile : indexPaths->doneFile;
+
 	if (lockFileSemaphore != NULL)
 	{
 		(void) semaphore_lock(lockFileSemaphore);
 	}
 
 	/* create the doneFile for the index */
-	if (!finish_index_summary(summary, indexPaths->doneFile))
+	if (!finish_index_summary(summary, doneFile))
 	{
-		log_info("Failed to create the summary file at \"%s\"",
-				 indexPaths->doneFile);
+		log_info("Failed to create the summary file at \"%s\"", doneFile);
 
 		if (lockFileSemaphore != NULL)
 		{
@@ -498,9 +546,9 @@ copydb_mark_index_as_done(SourceIndex *index,
 	}
 
 	/* also remove the lockFile, we don't need it anymore */
-	if (!unlink_file(indexPaths->lockFile))
+	if (!unlink_file(lockFile))
 	{
-		log_error("Failed to remove the lockFile \"%s\"", indexPaths->lockFile);
+		log_error("Failed to remove the lockFile \"%s\"", lockFile);
 		if (lockFileSemaphore != NULL)
 		{
 			(void) semaphore_unlock(lockFileSemaphore);
@@ -518,7 +566,9 @@ copydb_mark_index_as_done(SourceIndex *index,
 
 
 /*
- * copydb_prepare_create_index_command prepares the
+ * copydb_prepare_create_index_command prepares the SQL command to use to
+ * create a given index. When ifNotExists is true the IF NOT EXISTS keywords
+ * are added to the command, necessary to resume operations in some cases.
  */
 bool
 copydb_prepare_create_index_command(SourceIndex *index,
@@ -556,6 +606,31 @@ copydb_prepare_create_index_command(SourceIndex *index,
 		 */
 		sformat(command, size, "%s;", index->indexDef);
 	}
+
+	return true;
+}
+
+
+/*
+ * copydb_prepare_create_constraint_command prepares the SQL command to use to
+ * create the given constraint on-top of an already existing Index.
+ */
+bool
+copydb_prepare_create_constraint_command(SourceIndex *index,
+										 char *command,
+										 size_t size)
+{
+	sformat(command, size,
+			"ALTER TABLE \"%s\".\"%s\" "
+			"ADD CONSTRAINT \"%s\" %s "
+			"USING INDEX \"%s\";",
+			index->tableNamespace,
+			index->tableRelname,
+			index->constraintName,
+			index->isPrimary
+			? "PRIMARY KEY"
+			: (index->isUnique ? "UNIQUE" : ""),
+			index->indexRelname);
 
 	return true;
 }

@@ -10,7 +10,6 @@
 #include <unistd.h>
 
 #include "cli_common.h"
-#include "cli_copy.h"
 #include "cli_root.h"
 #include "copydb.h"
 #include "env_utils.h"

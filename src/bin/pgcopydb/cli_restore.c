@@ -9,7 +9,6 @@
 #include <inttypes.h>
 
 #include "cli_common.h"
-#include "cli_restore.h"
 #include "cli_root.h"
 #include "copydb.h"
 #include "commandline.h"
@@ -20,7 +19,7 @@
 #include "pgsql.h"
 #include "string_utils.h"
 
-RestoreDBOptions restoreDBoptions = { 0 };
+CopyDBOptions restoreDBoptions = { 0 };
 
 static int cli_restore_schema_getopts(int argc, char **argv);
 static void cli_restore_schema(int argc, char **argv);
@@ -89,7 +88,7 @@ CommandLine restore_commands =
 static int
 cli_restore_schema_getopts(int argc, char **argv)
 {
-	RestoreDBOptions options = { 0 };
+	CopyDBOptions options = { 0 };
 	int c, option_index = 0;
 	int errors = 0, verboseCount = 0;
 
@@ -113,6 +112,13 @@ cli_restore_schema_getopts(int argc, char **argv)
 
 	optind = 0;
 
+	/* read values from the environment */
+	if (!cli_copydb_getenv(&options))
+	{
+		log_fatal("Failed to read default values from the environment");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
 	while ((c = getopt_long(argc, argv, "S:T:cOxXVvqh",
 							long_options, &option_index)) != -1)
 	{
@@ -120,8 +126,8 @@ cli_restore_schema_getopts(int argc, char **argv)
 		{
 			case 'S':
 			{
-				strlcpy(options.source_dir, optarg, MAXPGPATH);
-				log_trace("--source %s", options.source_dir);
+				strlcpy(options.dir, optarg, MAXPGPATH);
+				log_trace("--source %s", options.dir);
 				break;
 			}
 
@@ -235,57 +241,16 @@ cli_restore_schema_getopts(int argc, char **argv)
 		}
 	}
 
-	/* restore commands support the target URI environment variable */
-	if (IS_EMPTY_STRING_BUFFER(options.target_pguri))
-	{
-		if (env_exists(PGCOPYDB_TARGET_PGURI))
-		{
-			if (!get_env_copy(PGCOPYDB_TARGET_PGURI,
-							  options.target_pguri,
-							  sizeof(options.target_pguri)))
-			{
-				/* errors have already been logged */
-				++errors;
-			}
-		}
-	}
-
 	if (IS_EMPTY_STRING_BUFFER(options.target_pguri))
 	{
 		log_fatal("Option --target is mandatory");
 		++errors;
 	}
 
-	/* when --drop-if-exists has not been used, check PGCOPYDB_DROP_IF_EXISTS */
-	if (!options.restoreOptions.dropIfExists)
-	{
-		if (env_exists(PGCOPYDB_DROP_IF_EXISTS))
-		{
-			char DROP_IF_EXISTS[BUFSIZE] = { 0 };
-
-			if (!get_env_copy(PGCOPYDB_DROP_IF_EXISTS,
-							  DROP_IF_EXISTS,
-							  sizeof(DROP_IF_EXISTS)))
-			{
-				/* errors have already been logged */
-				++errors;
-			}
-			else if (!parse_bool(DROP_IF_EXISTS,
-								 &(options.restoreOptions.dropIfExists)))
-			{
-				log_error("Failed to parse environment variable \"%s\" "
-						  "value \"%s\", expected a boolean (on/off)",
-						  PGCOPYDB_DROP_IF_EXISTS,
-						  DROP_IF_EXISTS);
-				++errors;
-			}
-		}
-	}
-
-	if (options.resume && !options.notConsistent)
+	if (!cli_copydb_is_consistent(&options))
 	{
 		log_fatal("Option --resume requires option --not-consistent");
-		++errors;
+		exit(EXIT_CODE_BAD_ARGS);
 	}
 
 	if (errors > 0)
@@ -373,9 +338,9 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 	(void) find_pg_commands(pgPaths);
 
 	char *dir =
-		IS_EMPTY_STRING_BUFFER(restoreDBoptions.source_dir)
+		IS_EMPTY_STRING_BUFFER(restoreDBoptions.dir)
 		? NULL
-		: restoreDBoptions.source_dir;
+		: restoreDBoptions.dir;
 
 	if (!copydb_init_workdir(copySpecs,
 							 dir,
