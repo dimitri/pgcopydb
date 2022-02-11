@@ -774,8 +774,17 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 {
 	PostgresPaths *pgPaths = &(copySpecs->pgPaths);
 
-	log_info("[SOURCE] Copying database from \"%s\"", copyDBoptions.source_pguri);
-	log_info("[TARGET] Copying database into \"%s\"", copyDBoptions.target_pguri);
+	char scrubbedSourceURI[MAXCONNINFO] = { 0 };
+	char scrubbedTargetURI[MAXCONNINFO] = { 0 };
+
+	(void) parse_and_scrub_connection_string(copyDBoptions.source_pguri,
+											 scrubbedSourceURI);
+
+	(void) parse_and_scrub_connection_string(copyDBoptions.target_pguri,
+											 scrubbedTargetURI);
+
+	log_info("[SOURCE] Copying database from \"%s\"", scrubbedSourceURI);
+	log_info("[TARGET] Copying database into \"%s\"", scrubbedTargetURI);
 
 	(void) find_pg_commands(pgPaths);
 

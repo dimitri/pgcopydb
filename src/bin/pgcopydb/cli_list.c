@@ -14,6 +14,7 @@
 #include "commandline.h"
 #include "env_utils.h"
 #include "log.h"
+#include "parsing.h"
 #include "pgcmd.h"
 #include "pgsql.h"
 #include "schema.h"
@@ -334,7 +335,12 @@ cli_list_indexes(int argc, char **argv)
 	PGSQL pgsql = { 0 };
 	SourceIndexArray indexArray = { 0, NULL };
 
-	log_info("Listing indexes in \"%s\"", listDBoptions.source_pguri);
+	char scrubbedSourceURI[MAXCONNINFO] = { 0 };
+
+	(void) parse_and_scrub_connection_string(listDBoptions.source_pguri,
+											 scrubbedSourceURI);
+
+	log_info("Listing indexes in \"%s\"", scrubbedSourceURI);
 
 	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
 	{

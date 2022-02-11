@@ -367,8 +367,13 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	char scrubbedTargetURI[MAXCONNINFO] = { 0 };
+
+	(void) parse_and_scrub_connection_string(copySpecs->target_pguri,
+											 scrubbedTargetURI);
+
 	log_info("Restoring database from \"%s\"", cfPaths->topdir);
-	log_info("Restoring database into \"%s\"", copySpecs->target_pguri);
+	log_info("Restoring database into \"%s\"", scrubbedTargetURI);
 
 	log_info("Using pg_restore for Postgres \"%s\" at \"%s\"",
 			 pgPaths->pg_version,
