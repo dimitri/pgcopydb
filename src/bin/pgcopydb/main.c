@@ -18,6 +18,7 @@
 #include "file_utils.h"
 #include "log.h"
 #include "lock_utils.h"
+#include "signals.h"
 #include "string_utils.h"
 
 
@@ -142,6 +143,10 @@ main(int argc, char **argv)
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
+
+	/* Establish a handler for signals. */
+	bool exitOnQuit = true;
+	(void) set_signal_handlers(exitOnQuit);
 
 	if (!commandline_run(&command, argc, argv))
 	{

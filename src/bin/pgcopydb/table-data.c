@@ -65,6 +65,25 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 		(void) copydb_fatal_exit();
 	}
 
+	if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
+	{
+		int signal = get_current_signal(SIGTERM);
+		const char *signalStr = signal_to_string(signal);
+
+		log_warn("Received signal %s, terminating", signalStr);
+
+		/* ensure we return false, signaling something unexpected happened */
+		++errors;
+		goto terminate;
+	}
+
+	/* Now write that we successfully finished copying all indexes */
+	if (!write_file("", 0, specs->cfPaths.done.indexes))
+	{
+		log_warn("Failed to write the tracking file \%s\"",
+				 specs->cfPaths.done.indexes);
+	}
+
 	/*
 	 * Now is a good time to reset sequences: we're waiting for the TABLE DATA
 	 * sections and the CREATE INDEX, CONSTRAINTS and VACUUM ANALYZE to be done
@@ -77,6 +96,8 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 		/* errors have already been logged */
 		++errors;
 	}
+
+terminate:
 
 	/* now we have a unknown count of subprocesses still running */
 	if (!copydb_wait_for_subprocesses())
@@ -101,13 +122,6 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 		log_warn("Failed to remove index concurrency semaphore %d, "
 				 "see above for details",
 				 specs->indexSemaphore.semId);
-	}
-
-	/* and write that we successfully finished copying all indexes */
-	if (!write_file("", 0, specs->cfPaths.done.indexes))
-	{
-		log_warn("Failed to write the tracking file \%s\"",
-				 specs->cfPaths.done.indexes);
 	}
 
 	return errors == 0;
@@ -300,6 +314,15 @@ copydb_start_table_process(CopyDataSpec *specs)
 
 		/* reuse the same connection to the source database */
 		tableSpecs->sourceSnapshot = specs->sourceSnapshot;
+
+		if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
+		{
+			int signal = get_current_signal(SIGTERM);
+			const char *signalStr = signal_to_string(signal);
+
+			log_debug("Received signal %s, terminating", signalStr);
+			break;
+		}
 
 		bool isDone = false;
 		bool isBeingProcessed = false;
