@@ -746,7 +746,7 @@ cli_copy_constraints(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (!copydb_copy_all_table_data(&copySpecs))
+	if (!copydb_copy_all_indexes(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

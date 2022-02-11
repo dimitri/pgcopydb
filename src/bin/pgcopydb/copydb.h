@@ -86,6 +86,7 @@ typedef struct IndexFilePaths
 {
 	char lockFile[MAXPGPATH];           /* index lock file */
 	char doneFile[MAXPGPATH];           /* index done file (summary) */
+	char constraintLockFile[MAXPGPATH]; /* constraint lock file */
 	char constraintDoneFile[MAXPGPATH]; /* constraint done file */
 } IndexFilePaths;
 
@@ -262,11 +263,13 @@ bool copydb_create_index(const char *pguri,
 						 IndexFilePaths *indexPaths,
 						 Semaphore *lockFileSemaphore,
 						 Semaphore *createIndexSemaphore,
+						 bool constraint,
 						 bool ifNotExists);
 
 
 bool copydb_index_is_being_processed(SourceIndex *index,
 									 IndexFilePaths *indexPaths,
+									 bool constraint,
 									 Semaphore *lockFileSemaphore,
 									 CopyIndexSummary *summary,
 									 bool *isDone,
@@ -274,6 +277,7 @@ bool copydb_index_is_being_processed(SourceIndex *index,
 
 bool copydb_mark_index_as_done(SourceIndex *index,
 							   IndexFilePaths *indexPaths,
+							   bool constraint,
 							   Semaphore *lockFileSemaphore,
 							   CopyIndexSummary *summary);
 
@@ -281,6 +285,10 @@ bool copydb_prepare_create_index_command(SourceIndex *index,
 										 bool ifNotExists,
 										 char *command,
 										 size_t size);
+
+bool copydb_prepare_create_constraint_command(SourceIndex *index,
+											  char *command,
+											  size_t size);
 
 /* dump_restore.c */
 bool copydb_dump_source_schema(CopyDataSpec *specs,
