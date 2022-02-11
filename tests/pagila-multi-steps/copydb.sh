@@ -52,4 +52,6 @@ pgcopydb copy constraints --resume
 pgcopydb restore post-data --resume
 
 echo 'commit;' >&"${COPROC[1]}"
-echo 'quit;' >&"${COPROC[1]}"
+echo '\q' >&"${COPROC[1]}"
+
+wait ${COPROC_PID}
