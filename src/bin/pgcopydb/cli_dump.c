@@ -14,6 +14,7 @@
 #include "commandline.h"
 #include "env_utils.h"
 #include "log.h"
+#include "parsing.h"
 #include "pgcmd.h"
 #include "pgsql.h"
 #include "string_utils.h"
@@ -309,7 +310,12 @@ cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	log_info("Dumping database from \"%s\"", copySpecs.source_pguri);
+	char scrubbedSourceURI[MAXCONNINFO] = { 0 };
+
+	(void) parse_and_scrub_connection_string(copySpecs.source_pguri,
+											 scrubbedSourceURI);
+
+	log_info("Dumping database from \"%s\"", scrubbedSourceURI);
 	log_info("Dumping database into directory \"%s\"", cfPaths->topdir);
 
 	log_info("Using pg_dump for Postgres \"%s\" at \"%s\"",
