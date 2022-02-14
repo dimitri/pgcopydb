@@ -21,6 +21,34 @@
 #include "string_utils.h"
 #include "summary.h"
 
+#define COMMON_GUC_SETTINGS \
+	{ "client_encoding", "'UTF-8'" },
+
+GUC srcSettings[] = {
+	COMMON_GUC_SETTINGS
+	{ NULL, NULL },
+};
+
+
+GUC dstSettings[] = {
+	COMMON_GUC_SETTINGS
+	{ "maintenance_work_mem", "'1 GB'" },
+	{ "synchronous_commit", "'off'" },
+	{ NULL, NULL },
+};
+
+
+/*
+ * Not used at the moment. We would like to ensure those settings have values
+ * well-suited for the bulk loading operation, but we can't change those
+ * settings on the fly.
+ */
+GUC serverSetttings[] = {
+	{ "checkpoint_timeout", "'1 h'" },
+	{ "max_wal_size", "' 20 GB'" },
+	{ NULL, NULL },
+};
+
 
 /*
  * copydb_init_tempdir initialises the file paths that are going to be used to
@@ -664,6 +692,14 @@ copydb_set_snapshot(TransactionSnapshot *snapshot)
 		return false;
 	}
 
+	/* also set our GUC values for the source connection */
+	if (!pgsql_set_gucs(pgsql, srcSettings))
+	{
+		log_fatal("Failed to set our GUC settings on the source connection, "
+				  "see above for details");
+		return false;
+	}
+
 	return true;
 }
 
@@ -735,6 +771,14 @@ copydb_prepare_snapshot(CopyDataSpec *copySpecs)
 	{
 		log_fatal("Failed to create the snapshot file \"%s\"",
 				  copySpecs->cfPaths.snfile);
+		return false;
+	}
+
+	/* also set our GUC values for the source connection */
+	if (!pgsql_set_gucs(&(sourceSnapshot->pgsql), srcSettings))
+	{
+		log_fatal("Failed to set our GUC settings on the source connection, "
+				  "see above for details");
 		return false;
 	}
 

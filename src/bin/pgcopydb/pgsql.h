@@ -199,6 +199,14 @@ typedef struct SingleValueResultContext
 } SingleValueResultContext;
 
 
+/* PostgreSQL ("Grand Unified Configuration") setting */
+typedef struct GUC
+{
+	char *name;
+	char *value;
+} GUC;
+
+
 bool pgsql_init(PGSQL *pgsql, char *url, ConnectionType connectionType);
 
 void pgsql_set_retry_policy(ConnectionRetryPolicy *retryPolicy,
@@ -241,5 +249,7 @@ bool pg_copy(PGSQL *src, PGSQL *dst,
 bool pgsql_get_sequence(PGSQL *pgsql, const char *nspname, const char *relname,
 						int64_t *lastValue,
 						bool *isCalled);
+
+bool pgsql_set_gucs(PGSQL *pgsql, GUC *settings);
 
 #endif /* PGSQL_H */
