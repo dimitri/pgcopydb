@@ -868,6 +868,14 @@ copydb_create_constraints(CopyTableDataSpec *tableSpecs)
 		return false;
 	}
 
+	/* also set our GUC values for the target connection */
+	if (!pgsql_set_gucs(&dst, dstSettings))
+	{
+		log_fatal("Failed to set our GUC settings on the target connection, "
+				  "see above for details");
+		return false;
+	}
+
 	/*
 	 * Postgres doesn't implement ALTER TABLE ... ADD CONSTRAINT ... IF NOT
 	 * EXISTS, which we would be using here in some cases otherwise.

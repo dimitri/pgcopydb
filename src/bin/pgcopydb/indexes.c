@@ -375,6 +375,14 @@ copydb_create_index(const char *pguri,
 		return false;
 	}
 
+	/* also set our GUC values for the target connection */
+	if (!pgsql_set_gucs(&dst, dstSettings))
+	{
+		log_fatal("Failed to set our GUC settings on the target connection, "
+				  "see above for details");
+		return false;
+	}
+
 	if (!pgsql_execute(&dst, summary.command))
 	{
 		/* errors have already been logged */

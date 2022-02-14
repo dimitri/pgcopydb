@@ -1797,3 +1797,45 @@ getSequenceValue(void *ctx, PGresult *result)
 	/* if we reach this line, then we're good. */
 	context->parsedOk = true;
 }
+
+
+/*
+ * pgsql_set_gucs sets the given GUC array in the current session attached to
+ * the pgsql client.
+ */
+bool
+pgsql_set_gucs(PGSQL *pgsql, GUC *settings)
+{
+	/*
+	 * This only works for already opened connections set-up for multiple
+	 * statements, otherwise after the SET command is done, the setting changes
+	 * would be lost already.
+	 */
+	if (pgsql->connection == NULL)
+	{
+		/* open a multi-statements connection then */
+		pgsql->connectionStatementType = PGSQL_CONNECTION_MULTI_STATEMENT;
+	}
+	else if (pgsql->connectionStatementType != PGSQL_CONNECTION_MULTI_STATEMENT)
+	{
+		log_error("BUG: calling pgsql_set_gucs with a "
+				  "non PGSQL_CONNECTION_MULTI_STATEMENT connection");
+		pgsql_finish(pgsql);
+		return false;
+	}
+
+	for (int i = 0; settings[i].name != NULL; i++)
+	{
+		char sql[BUFSIZE] = { 0 };
+
+		sformat(sql, sizeof(sql), "SET %s TO %s",
+				settings[i].name, settings[i].value);
+
+		if (!pgsql_execute(pgsql, sql))
+		{
+			return false;
+		}
+	}
+
+	return true;
+}

@@ -201,6 +201,9 @@ typedef enum
 } PostgresDumpSection;
 
 
+extern GUC srcSettings[];
+extern GUC dstSettings[];
+
 bool copydb_init_workdir(CopyDataSpec *copySpecs,
 						 char *dir,
 						 bool restart,
