@@ -13,6 +13,7 @@
 #include "cli_root.h"
 #include "commandline.h"
 #include "env_utils.h"
+#include "filtering.h"
 #include "log.h"
 #include "parsing.h"
 #include "pgcmd.h"
@@ -32,8 +33,9 @@ static CommandLine list_tables_command =
 		"tables",
 		"List all the source tables to copy data from",
 		" --source ... ",
-		"  --source          Postgres URI to the source database\n"
-		"  --without-pkey    List only tables that have no primary key\n",
+		"  --source            Postgres URI to the source database\n"
+		"  --filter <filename> Use the filters defined in <filename>\n"
+		"  --without-pkey      List only tables that have no primary key\n",
 		cli_list_db_getopts,
 		cli_list_tables);
 
@@ -42,7 +44,8 @@ static CommandLine list_sequences_command =
 		"sequences",
 		"List all the source sequences to copy data from",
 		" --source ... ",
-		"  --source          Postgres URI to the source database\n",
+		"  --source            Postgres URI to the source database\n"
+		"  --filter <filename> Use the filters defined in <filename>\n",
 		cli_list_db_getopts,
 		cli_list_sequences);
 
@@ -85,6 +88,7 @@ cli_list_db_getopts(int argc, char **argv)
 		{ "source", required_argument, NULL, 'S' },
 		{ "schema-name", required_argument, NULL, 's' },
 		{ "table-name", required_argument, NULL, 't' },
+		{ "filter", required_argument, NULL, 'F' },
 		{ "without-pkey", no_argument, NULL, 'P' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
@@ -124,6 +128,20 @@ cli_list_db_getopts(int argc, char **argv)
 			{
 				strlcpy(options.table_name, optarg, NAMEDATALEN);
 				log_trace("--table %s", options.table_name);
+				break;
+			}
+
+			case 'F':
+			{
+				strlcpy(options.filterFileName, optarg, MAXPGPATH);
+				log_trace("---filter \"%s\"", options.filterFileName);
+
+				if (!file_exists(options.filterFileName))
+				{
+					log_error("Filter file \"%s\" does not exists",
+							  options.filterFileName);
+					++errors;
+				}
 				break;
 			}
 
@@ -223,6 +241,17 @@ cli_list_tables(int argc, char **argv)
 {
 	PGSQL pgsql = { 0 };
 	SourceTableArray tableArray = { 0, NULL };
+	SourceFilters filters = { 0 };
+
+	if (!IS_EMPTY_STRING_BUFFER(listDBoptions.filterFileName))
+	{
+		if (!parse_filters(listDBoptions.filterFileName, &filters))
+		{
+			log_error("Failed to parse filters in file \"%s\"",
+					  listDBoptions.filterFileName);
+			exit(EXIT_CODE_BAD_ARGS);
+		}
+	}
 
 	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
 	{
@@ -244,7 +273,7 @@ cli_list_tables(int argc, char **argv)
 	{
 		log_info("Listing ordinary tables in source database");
 
-		if (!schema_list_ordinary_tables(&pgsql, &tableArray))
+		if (!schema_list_ordinary_tables(&pgsql, &filters, &tableArray))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);

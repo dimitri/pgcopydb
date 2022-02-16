@@ -11,12 +11,21 @@
 
 #include "defaults.h"
 #include "env_utils.h"
+#include "filtering.h"
 #include "log.h"
 #include "parsing.h"
 #include "pgsql.h"
 #include "schema.h"
 #include "signals.h"
 #include "string_utils.h"
+
+
+static bool shouldPrepareFilters(SourceFilters *filters);
+static bool prepareFilters(PGSQL *pgsql, SourceFilters *filters);
+static bool prepareFilterCopyExcludeSchema(PGSQL *pgsql, SourceFilters *filters);
+static bool prepareFilterCopyTableList(PGSQL *pgsql,
+									   SourceFilterTableList *tableList,
+									   const char *temp_table_name);
 
 
 /* Context used when fetching all the table definitions */
@@ -68,21 +77,87 @@ static bool parseCurrentSourceIndex(PGresult *result,
  * query.
  */
 bool
-schema_list_ordinary_tables(PGSQL *pgsql, SourceTableArray *tableArray)
+schema_list_ordinary_tables(PGSQL *pgsql,
+							SourceFilters *filters,
+							SourceTableArray *tableArray)
 {
+	char *sql = NULL;
 	SourceTableArrayContext context = { { 0 }, tableArray, false };
 
-	char *sql =
-		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
-		"         pg_table_size(c.oid) as bytes, "
-		"         pg_size_pretty(pg_table_size(c.oid)) "
-		"    from pg_catalog.pg_class c join pg_catalog.pg_namespace n "
-		"      on c.relnamespace = n.oid "
-		"   where c.relkind = 'r' and c.relpersistence = 'p' "
-		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
-		"order by bytes desc, n.nspname, c.relname";
-
 	log_trace("schema_list_ordinary_tables");
+
+	bool withFilters = shouldPrepareFilters(filters);
+
+	if (withFilters)
+	{
+		if (!prepareFilters(pgsql, filters))
+		{
+			log_error("Failed to prepare pgcopydb filters, "
+					  "see above for details");
+			return false;
+		}
+	}
+
+	if (withFilters && filters->includeOnlyTableList.count > 0)
+	{
+		sql =
+			"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
+			"         pg_table_size(c.oid) as bytes, "
+			"         pg_size_pretty(pg_table_size(c.oid)) "
+			"    from pg_catalog.pg_class c "
+			"         join pg_catalog.pg_namespace n "
+			"           on c.relnamespace = n.oid "
+
+			/* include-only-table */
+			"         join pg_temp.filter_include_only_table inc "
+			"           on n.nspname = inc.nspname "
+			"          and c.relname = inc.relname "
+			"   where c.relkind = 'r' and c.relpersistence = 'p' "
+			"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+			"order by bytes desc, n.nspname, c.relname";
+	}
+	else if (withFilters)
+	{
+		sql =
+			"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
+			"         pg_table_size(c.oid) as bytes, "
+			"         pg_size_pretty(pg_table_size(c.oid)) "
+			"    from pg_catalog.pg_class c "
+			"         join pg_catalog.pg_namespace n "
+			"           on c.relnamespace = n.oid "
+
+			/* exclude-schema */
+			"         left join pg_temp.filter_exclude_schema fn "
+			"                on n.nspname = fn.nspname "
+
+			/* exclude-table */
+			"         left join pg_temp.filter_exclude_table ft "
+			"                on n.nspname = ft.nspname "
+			"               and c.relname = ft.relname "
+
+			/* exclude-table-data */
+			"         left join pg_temp.filter_exclude_table_data ftd "
+			"                on n.nspname = ftd.nspname "
+			"               and c.relname = ftd.relname "
+			"   where c.relkind = 'r' and c.relpersistence = 'p' "
+			"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+			"     and fn.nspname is null "
+			"     and ft.relname is null "
+			"     and ftd.relname is null "
+			"order by bytes desc, n.nspname, c.relname";
+	}
+	else
+	{
+		sql =
+			"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
+			"         pg_table_size(c.oid) as bytes, "
+			"         pg_size_pretty(pg_table_size(c.oid)) "
+			"    from pg_catalog.pg_class c join pg_catalog.pg_namespace n "
+			"      on c.relnamespace = n.oid "
+			"   where c.relkind = 'r' and c.relpersistence = 'p' "
+			"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+			"order by bytes desc, n.nspname, c.relname";
+	}
 
 	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
 								   &context, &getTableArray))
@@ -358,6 +433,186 @@ schema_list_table_indexes(PGSQL *pgsql,
 	{
 		log_error("Failed to list all indexes for table \"%s\".\"%s\"",
 				  schemaName, tableName);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * shouldPrepareFilters returns true when the SQL query should include some
+ * filtering. Every filtering that pgcopydb supports is implemented via
+ * temporary tables and (anti_) joins, so we need to know if we need to prepare
+ * the SQL objects to pick the right SQL query.
+ */
+static bool
+shouldPrepareFilters(SourceFilters *filters)
+{
+	return filters->excludeSchemaList.count > 0 ||
+		   filters->includeOnlyTableList.count > 0 ||
+		   filters->excludeTableList.count > 0 ||
+		   filters->excludeTableDataList.count > 0 ||
+		   filters->excludeIndexList.count > 0;
+}
+
+
+/*
+ * prepareFilters prepares the temporary tables that are needed on the Postgres
+ * session where we want to implement a catalog query with filtering. The
+ * filtering rules are then uploaded in those temp tables, and the filtering is
+ * implemented with SQL joins.
+ */
+static bool
+prepareFilters(PGSQL *pgsql, SourceFilters *filters)
+{
+	/*
+	 * Temporary tables only are available within a session, so we need a
+	 * multi-statement connection here.
+	 */
+	if (pgsql->connection == NULL)
+	{
+		/* open a multi-statements connection then */
+		pgsql->connectionStatementType = PGSQL_CONNECTION_MULTI_STATEMENT;
+	}
+	else if (pgsql->connectionStatementType != PGSQL_CONNECTION_MULTI_STATEMENT)
+	{
+		log_error("BUG: calling prepareFilters with a "
+				  "non PGSQL_CONNECTION_MULTI_STATEMENT connection");
+		pgsql_finish(pgsql);
+		return false;
+	}
+
+	/*
+	 * First, create the temp tables.
+	 */
+	char *tempTables[] = {
+		"create temp table filter_exclude_schema(nspname name)",
+		"create temp table filter_include_only_table(nspname name, relname name)",
+		"create temp table filter_exclude_table(nspname name, relname name)",
+		"create temp table filter_exclude_table_data(nspname name, relname name)",
+		"create temp table filter_exclude_index(nspname name, relname name)",
+		NULL
+	};
+
+	for (int i = 0; tempTables[i] != NULL; i++)
+	{
+		if (!pgsql_execute(pgsql, tempTables[i]))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	/*
+	 * Now, fill-in the temp tables with the data that we have.
+	 */
+	if (!prepareFilterCopyExcludeSchema(pgsql, filters))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	struct name_list_pair
+	{
+		char *name;
+		SourceFilterTableList *list;
+	};
+
+	struct name_list_pair nameListPair[] = {
+		{ "filter_include_only_table", &(filters->includeOnlyTableList) },
+		{ "filter_exclude_table", &(filters->excludeTableList) },
+		{ "filter_exclude_table_data", &(filters->excludeTableDataList) },
+		{ "filter_exclude_index", &(filters->excludeIndexList) },
+		{ NULL, NULL },
+	};
+
+	for (int i = 0; nameListPair[i].name != NULL; i++)
+	{
+		if (!prepareFilterCopyTableList(pgsql,
+										nameListPair[i].list,
+										nameListPair[i].name))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * prepareFilterCopyExcludeSchema sends a COPY from STDIN query and then
+ * uploads the local filters that we have in the pg_temp.filter_exclude_schema
+ * table.
+ */
+static bool
+prepareFilterCopyExcludeSchema(PGSQL *pgsql, SourceFilters *filters)
+{
+	char *qname = "\"pg_temp\".\"filter_exclude_schema\"";
+
+	if (!pg_copy_from_stdin(pgsql, qname))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	for (int i = 0; i < filters->excludeSchemaList.count; i++)
+	{
+		char *nspname = filters->excludeSchemaList.array[i].nspname;
+
+		if (!pg_copy_row_from_stdin(pgsql, "s", nspname))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	if (!pg_copy_end(pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * prepareFilterCopyTableList sends a COPY from STDIN query and then uploads
+ * the local filters that we have in the given target table.
+ */
+static bool
+prepareFilterCopyTableList(PGSQL *pgsql,
+						   SourceFilterTableList *tableList,
+						   const char *temp_table_name)
+{
+	char qname[BUFSIZE] = { 0 };
+
+	sformat(qname, sizeof(qname), "\"pg_temp\".\"%s\"", temp_table_name);
+
+	if (!pg_copy_from_stdin(pgsql, qname))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	for (int i = 0; i < tableList->count; i++)
+	{
+		char *nspname = tableList->array[i].nspname;
+		char *relname = tableList->array[i].relname;
+
+		if (!pg_copy_row_from_stdin(pgsql, "ss", nspname, relname))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	if (!pg_copy_end(pgsql))
+	{
+		/* errors have already been logged */
 		return false;
 	}
 

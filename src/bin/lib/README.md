@@ -22,6 +22,10 @@ The single-header library is used to implement parsing "modern" command lines.
 The parson librairy at https://github.com/kgabis/parson is a single C file
 and MIT licenced. It allows parsing from and serializing to JSON.
 
+## Configuration file parsing
+
+We utilize the "ini.h" ini-file reader from https://github.com/mattiasgustavsson/libs
+
 ## pg
 
 We vendor-in some code from the Postgres project at

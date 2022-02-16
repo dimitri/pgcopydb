@@ -131,7 +131,10 @@ copydb_prepare_table_specs(CopyDataSpec *specs)
 	/*
 	 * Now get the list of the tables we want to COPY over.
 	 */
+	SourceFilters filters = { 0 };
+
 	if (!schema_list_ordinary_tables(&(specs->sourceSnapshot.pgsql),
+									 &filters,
 									 &tableArray))
 	{
 		/* errors have already been logged */

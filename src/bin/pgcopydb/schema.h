@@ -8,6 +8,7 @@
 
 #include <stdbool.h>
 
+#include "filtering.h"
 #include "pgsql.h"
 
 /*
@@ -81,7 +82,9 @@ typedef struct SourceIndexArray
 } SourceIndexArray;
 
 
-bool schema_list_ordinary_tables(PGSQL *pgsql, SourceTableArray *tableArray);
+bool schema_list_ordinary_tables(PGSQL *pgsql,
+								 SourceFilters *filters,
+								 SourceTableArray *tableArray);
 
 bool schema_list_ordinary_tables_without_pk(PGSQL *pgsql,
 											SourceTableArray *tableArray);
