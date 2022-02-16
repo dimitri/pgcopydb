@@ -20,7 +20,6 @@
 #include "string_utils.h"
 
 
-static bool shouldPrepareFilters(SourceFilters *filters);
 static bool prepareFilters(PGSQL *pgsql, SourceFilters *filters);
 static bool prepareFilterCopyExcludeSchema(PGSQL *pgsql, SourceFilters *filters);
 static bool prepareFilterCopyTableList(PGSQL *pgsql,
@@ -70,6 +69,89 @@ static bool parseCurrentSourceIndex(PGresult *result,
 									int rowNumber,
 									SourceIndex *index);
 
+struct FilteringQueries
+{
+	SourceFilterType type;
+	char *sql;
+};
+
+/*
+ * For code simplicity the index array is also the SourceFilterType enum value.
+ */
+struct FilteringQueries listSourceTablesSQL[] = {
+	{ SOURCE_FILTER_TYPE_UNKNOWN, "" },
+
+	{
+		SOURCE_FILTER_TYPE_NONE,
+
+		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
+		"         pg_table_size(c.oid) as bytes, "
+		"         pg_size_pretty(pg_table_size(c.oid)) "
+		"    from pg_catalog.pg_class c join pg_catalog.pg_namespace n "
+		"      on c.relnamespace = n.oid "
+		"   where c.relkind = 'r' and c.relpersistence = 'p' "
+		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+		"order by bytes desc, n.nspname, c.relname"
+	},
+
+	{
+		SOURCE_FILTER_TYPE_INCL,
+
+		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
+		"         pg_table_size(c.oid) as bytes, "
+		"         pg_size_pretty(pg_table_size(c.oid)) "
+		"    from pg_catalog.pg_class c "
+		"         join pg_catalog.pg_namespace n "
+		"           on c.relnamespace = n.oid "
+
+		/* include-only-table */
+		"         join pg_temp.filter_include_only_table inc "
+		"           on n.nspname = inc.nspname "
+		"          and c.relname = inc.relname "
+
+		"   where c.relkind = 'r' and c.relpersistence = 'p' "
+		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+		"order by bytes desc, n.nspname, c.relname"
+	},
+
+	{
+		SOURCE_FILTER_TYPE_EXCL,
+
+		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
+		"         pg_table_size(c.oid) as bytes, "
+		"         pg_size_pretty(pg_table_size(c.oid)) "
+		"    from pg_catalog.pg_class c "
+		"         join pg_catalog.pg_namespace n "
+		"           on c.relnamespace = n.oid "
+
+		/* exclude-schema */
+		"         left join pg_temp.filter_exclude_schema fn "
+		"                on n.nspname = fn.nspname "
+
+		/* exclude-table */
+		"         left join pg_temp.filter_exclude_table ft "
+		"                on n.nspname = ft.nspname "
+		"               and c.relname = ft.relname "
+
+		/* exclude-table-data */
+		"         left join pg_temp.filter_exclude_table_data ftd "
+		"                on n.nspname = ftd.nspname "
+		"               and c.relname = ftd.relname "
+
+		"   where c.relkind = 'r' and c.relpersistence = 'p' "
+		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+
+		/* WHERE clause for exclusion filters */
+		"     and fn.nspname is null "
+		"     and ft.relname is null "
+		"     and ftd.relname is null "
+
+		"order by bytes desc, n.nspname, c.relname"
+	},
+
+	{ SOURCE_FILTER_TYPE_EXCL_INDEX, "" },
+};
+
 
 /*
  * schema_list_ordinary_tables grabs the list of tables from the given source
@@ -81,14 +163,12 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 							SourceFilters *filters,
 							SourceTableArray *tableArray)
 {
-	char *sql = NULL;
 	SourceTableArrayContext context = { { 0 }, tableArray, false };
 
 	log_trace("schema_list_ordinary_tables");
 
-	bool withFilters = shouldPrepareFilters(filters);
-
-	if (withFilters)
+	if (filters->type == SOURCE_FILTER_TYPE_INCL ||
+		filters->type == SOURCE_FILTER_TYPE_EXCL)
 	{
 		if (!prepareFilters(pgsql, filters))
 		{
@@ -98,66 +178,7 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 		}
 	}
 
-	if (withFilters && filters->includeOnlyTableList.count > 0)
-	{
-		sql =
-			"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
-			"         pg_table_size(c.oid) as bytes, "
-			"         pg_size_pretty(pg_table_size(c.oid)) "
-			"    from pg_catalog.pg_class c "
-			"         join pg_catalog.pg_namespace n "
-			"           on c.relnamespace = n.oid "
-
-			/* include-only-table */
-			"         join pg_temp.filter_include_only_table inc "
-			"           on n.nspname = inc.nspname "
-			"          and c.relname = inc.relname "
-			"   where c.relkind = 'r' and c.relpersistence = 'p' "
-			"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
-			"order by bytes desc, n.nspname, c.relname";
-	}
-	else if (withFilters)
-	{
-		sql =
-			"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
-			"         pg_table_size(c.oid) as bytes, "
-			"         pg_size_pretty(pg_table_size(c.oid)) "
-			"    from pg_catalog.pg_class c "
-			"         join pg_catalog.pg_namespace n "
-			"           on c.relnamespace = n.oid "
-
-			/* exclude-schema */
-			"         left join pg_temp.filter_exclude_schema fn "
-			"                on n.nspname = fn.nspname "
-
-			/* exclude-table */
-			"         left join pg_temp.filter_exclude_table ft "
-			"                on n.nspname = ft.nspname "
-			"               and c.relname = ft.relname "
-
-			/* exclude-table-data */
-			"         left join pg_temp.filter_exclude_table_data ftd "
-			"                on n.nspname = ftd.nspname "
-			"               and c.relname = ftd.relname "
-			"   where c.relkind = 'r' and c.relpersistence = 'p' "
-			"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
-			"     and fn.nspname is null "
-			"     and ft.relname is null "
-			"     and ftd.relname is null "
-			"order by bytes desc, n.nspname, c.relname";
-	}
-	else
-	{
-		sql =
-			"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
-			"         pg_table_size(c.oid) as bytes, "
-			"         pg_size_pretty(pg_table_size(c.oid)) "
-			"    from pg_catalog.pg_class c join pg_catalog.pg_namespace n "
-			"      on c.relnamespace = n.oid "
-			"   where c.relkind = 'r' and c.relpersistence = 'p' "
-			"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
-			"order by bytes desc, n.nspname, c.relname";
-	}
+	char *sql = listSourceTablesSQL[filters->type].sql;
 
 	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
 								   &context, &getTableArray))
@@ -177,17 +198,14 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 
 
 /*
- * schema_list_ordinary_tables_without_pk lists all tables that do not have a
- * primary key. This is useful to prepare a migration when some kind of change
- * data capture technique is considered.
+ * For code simplicity the index array is also the SourceFilterType enum value.
  */
-bool
-schema_list_ordinary_tables_without_pk(PGSQL *pgsql,
-									   SourceTableArray *tableArray)
-{
-	SourceTableArrayContext context = { { 0 }, tableArray, false };
+struct FilteringQueries listSourceTablesNoPKSQL[] = {
+	{ SOURCE_FILTER_TYPE_UNKNOWN, "" },
 
-	char *sql =
+	{
+		SOURCE_FILTER_TYPE_NONE,
+
 		"  select r.oid, n.nspname, r.relname, r.reltuples::bigint, "
 		"         pg_table_size(r.oid) as bytes, "
 		"         pg_size_pretty(pg_table_size(r.oid)) "
@@ -202,9 +220,105 @@ schema_list_ordinary_tables_without_pk(PGSQL *pgsql,
 		"            where c.conrelid = r.oid "
 		"              and c.contype = 'p' "
 		"         ) "
-		"order by n.nspname, r.relname";
+		"order by n.nspname, r.relname"
+	},
+
+	{
+		SOURCE_FILTER_TYPE_INCL,
+
+		"  select r.oid, n.nspname, r.relname, r.reltuples::bigint, "
+		"         pg_table_size(r.oid) as bytes, "
+		"         pg_size_pretty(pg_table_size(r.oid)) "
+		"    from pg_class r "
+		"         join pg_namespace n ON n.oid = r.relnamespace "
+
+		/* include-only-table */
+		"         join pg_temp.filter_include_only_table inc "
+		"           on n.nspname = inc.nspname "
+		"          and r.relname = inc.relname "
+
+		"   where r.relkind = 'r' and r.relpersistence = 'p'  "
+		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+		"     and not exists "
+		"         ( "
+		"           select c.oid "
+		"             from pg_constraint c "
+		"            where c.conrelid = r.oid "
+		"              and c.contype = 'p' "
+		"         ) "
+		"order by n.nspname, r.relname"
+	},
+
+	{
+		SOURCE_FILTER_TYPE_EXCL,
+
+		"  select r.oid, n.nspname, r.relname, r.reltuples::bigint, "
+		"         pg_table_size(r.oid) as bytes, "
+		"         pg_size_pretty(pg_table_size(r.oid)) "
+		"    from pg_class r "
+		"         join pg_namespace n ON n.oid = r.relnamespace "
+
+		/* exclude-schema */
+		"         left join pg_temp.filter_exclude_schema fn "
+		"                on n.nspname = fn.nspname "
+
+		/* exclude-table */
+		"         left join pg_temp.filter_exclude_table ft "
+		"                on n.nspname = ft.nspname "
+		"               and r.relname = ft.relname "
+
+		/* exclude-table-data */
+		"         left join pg_temp.filter_exclude_table_data ftd "
+		"                on n.nspname = ftd.nspname "
+		"               and r.relname = ftd.relname "
+
+		"   where r.relkind = 'r' and r.relpersistence = 'p'  "
+		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+		"     and not exists "
+		"         ( "
+		"           select c.oid "
+		"             from pg_constraint c "
+		"            where c.conrelid = r.oid "
+		"              and c.contype = 'p' "
+		"         ) "
+
+		/* WHERE clause for exclusion filters */
+		"     and fn.nspname is null "
+		"     and ft.relname is null "
+		"     and ftd.relname is null "
+
+		"order by n.nspname, r.relname"
+	},
+
+	{ SOURCE_FILTER_TYPE_EXCL_INDEX, "" },
+};
+
+/*
+ * schema_list_ordinary_tables_without_pk lists all tables that do not have a
+ * primary key. This is useful to prepare a migration when some kind of change
+ * data capture technique is considered.
+ */
+bool
+schema_list_ordinary_tables_without_pk(PGSQL *pgsql,
+									   SourceFilters *filters,
+									   SourceTableArray *tableArray)
+{
+	SourceTableArrayContext context = { { 0 }, tableArray, false };
 
 	log_trace("schema_list_ordinary_tables_without_pk");
+
+	if (filters->type == SOURCE_FILTER_TYPE_INCL ||
+		filters->type == SOURCE_FILTER_TYPE_EXCL)
+	{
+		if (!prepareFilters(pgsql, filters))
+		{
+			log_error("Failed to prepare pgcopydb filters, "
+					  "see above for details");
+			return false;
+		}
+	}
+
+	char *sql = listSourceTablesNoPKSQL[filters->type].sql;
 
 	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
 								   &context, &getTableArray))
@@ -233,6 +347,8 @@ schema_list_sequences(PGSQL *pgsql, SourceSequenceArray *seqArray)
 {
 	SourceSequenceArrayContext context = { { 0 }, seqArray, false };
 
+	log_trace("schema_list_sequences");
+
 	char *sql =
 		"  select c.oid, n.nspname, c.relname "
 		"    from pg_catalog.pg_class c join pg_catalog.pg_namespace n "
@@ -240,8 +356,6 @@ schema_list_sequences(PGSQL *pgsql, SourceSequenceArray *seqArray)
 		"   where c.relkind = 'S' and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"order by n.nspname, c.relname";
-
-	log_trace("schema_list_sequences");
 
 	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
 								   &context, &getSequenceArray))
@@ -314,16 +428,14 @@ schema_set_sequence_value(PGSQL *pgsql, SourceSequence *seq)
 
 
 /*
- * schema_list_all_indexes grabs the list of indexes from the given source
- * Postgres instance and allocates a SourceIndex array with the result of the
- * query.
+ * For code simplicity the index array is also the SourceFilterType enum value.
  */
-bool
-schema_list_all_indexes(PGSQL *pgsql, SourceIndexArray *indexArray)
-{
-	SourceIndexArrayContext context = { { 0 }, indexArray, false };
+struct FilteringQueries listSourceIndexesSQL[] = {
+	{ SOURCE_FILTER_TYPE_UNKNOWN, "" },
 
-	char *sql =
+	{
+		SOURCE_FILTER_TYPE_NONE,
+
 		"   select i.oid, n.nspname, i.relname,"
 		"          r.oid, rn.nspname, r.relname,"
 		"          indisprimary,"
@@ -350,9 +462,130 @@ schema_list_all_indexes(PGSQL *pgsql, SourceIndexArray *indexArray)
 		"          left join pg_constraint c ON c.oid = d.refobjid"
 		"    where r.relkind = 'r' and r.relpersistence = 'p' "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
-		" order by n.nspname, r.relname";
+		" order by n.nspname, r.relname"
+	},
+
+	{
+		SOURCE_FILTER_TYPE_INCL,
+
+		"   select i.oid, n.nspname, i.relname,"
+		"          r.oid, rn.nspname, r.relname,"
+		"          indisprimary,"
+		"          indisunique,"
+		"          (select string_agg(attname, ',')"
+		"             from pg_attribute"
+		"            where attrelid = r.oid"
+		"              and array[attnum::integer] <@ indkey::integer[]"
+		"          ) as cols,"
+		"          pg_get_indexdef(indexrelid),"
+		"          c.oid,"
+		"          c.conname,"
+		"          pg_get_constraintdef(c.oid)"
+		"     from pg_index x"
+		"          join pg_class i ON i.oid = x.indexrelid"
+		"          join pg_class r ON r.oid = x.indrelid"
+		"          join pg_namespace n ON n.oid = i.relnamespace"
+		"          join pg_namespace rn ON rn.oid = r.relnamespace"
+		"          left join pg_depend d "
+		"                 on d.classid = 'pg_class'::regclass"
+		"                and d.objid = i.oid"
+		"                and d.refclassid = 'pg_constraint'::regclass"
+		"                and d.deptype = 'i'"
+		"          left join pg_constraint c ON c.oid = d.refobjid"
+
+		/* include-only-table */
+		"         join pg_temp.filter_include_only_table inc "
+		"           on rn.nspname = inc.nspname "
+		"          and r.relname = inc.relname "
+
+		"    where r.relkind = 'r' and r.relpersistence = 'p' "
+		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		" order by n.nspname, r.relname"
+	},
+
+	{
+		SOURCE_FILTER_TYPE_EXCL,
+
+		"   select i.oid, n.nspname, i.relname,"
+		"          r.oid, rn.nspname, r.relname,"
+		"          indisprimary,"
+		"          indisunique,"
+		"          (select string_agg(attname, ',')"
+		"             from pg_attribute"
+		"            where attrelid = r.oid"
+		"              and array[attnum::integer] <@ indkey::integer[]"
+		"          ) as cols,"
+		"          pg_get_indexdef(indexrelid),"
+		"          c.oid,"
+		"          c.conname,"
+		"          pg_get_constraintdef(c.oid)"
+		"     from pg_index x"
+		"          join pg_class i ON i.oid = x.indexrelid"
+		"          join pg_class r ON r.oid = x.indrelid"
+		"          join pg_namespace n ON n.oid = i.relnamespace"
+		"          join pg_namespace rn ON rn.oid = r.relnamespace"
+		"          left join pg_depend d "
+		"                 on d.classid = 'pg_class'::regclass"
+		"                and d.objid = i.oid"
+		"                and d.refclassid = 'pg_constraint'::regclass"
+		"                and d.deptype = 'i'"
+		"          left join pg_constraint c ON c.oid = d.refobjid"
+
+		/* exclude-schema */
+		"         left join pg_temp.filter_exclude_schema fn "
+		"                on rn.nspname = fn.nspname "
+
+		/* exclude-table */
+		"         left join pg_temp.filter_exclude_table ft "
+		"                on rn.nspname = ft.nspname "
+		"               and r.relname = ft.relname "
+
+		/* exclude-table-data */
+		"         left join pg_temp.filter_exclude_table_data ftd "
+		"                on rn.nspname = ftd.nspname "
+		"               and r.relname = ftd.relname "
+
+		"    where r.relkind = 'r' and r.relpersistence = 'p' "
+		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+
+		/* WHERE clause for exclusion filters */
+		"     and fn.nspname is null "
+		"     and ft.relname is null "
+		"     and ftd.relname is null "
+
+		" order by n.nspname, r.relname"
+	},
+
+	{ SOURCE_FILTER_TYPE_EXCL_INDEX, "" },
+};
+
+
+/*
+ * schema_list_all_indexes grabs the list of indexes from the given source
+ * Postgres instance and allocates a SourceIndex array with the result of the
+ * query.
+ */
+bool
+schema_list_all_indexes(PGSQL *pgsql,
+						SourceFilters *filters,
+						SourceIndexArray *indexArray)
+{
+	SourceIndexArrayContext context = { { 0 }, indexArray, false };
 
 	log_trace("schema_list_all_indexes");
+
+	if (filters->type == SOURCE_FILTER_TYPE_INCL ||
+		filters->type == SOURCE_FILTER_TYPE_EXCL)
+	{
+		if (!prepareFilters(pgsql, filters))
+		{
+			log_error("Failed to prepare pgcopydb filters, "
+					  "see above for details");
+			return false;
+		}
+	}
+
+	char *sql = listSourceIndexesSQL[filters->type].sql;
 
 	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
 								   &context, &getIndexArray))
@@ -437,23 +670,6 @@ schema_list_table_indexes(PGSQL *pgsql,
 	}
 
 	return true;
-}
-
-
-/*
- * shouldPrepareFilters returns true when the SQL query should include some
- * filtering. Every filtering that pgcopydb supports is implemented via
- * temporary tables and (anti_) joins, so we need to know if we need to prepare
- * the SQL objects to pick the right SQL query.
- */
-static bool
-shouldPrepareFilters(SourceFilters *filters)
-{
-	return filters->excludeSchemaList.count > 0 ||
-		   filters->includeOnlyTableList.count > 0 ||
-		   filters->excludeTableList.count > 0 ||
-		   filters->excludeTableDataList.count > 0 ||
-		   filters->excludeIndexList.count > 0;
 }
 
 

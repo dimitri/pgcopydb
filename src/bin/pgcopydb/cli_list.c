@@ -252,6 +252,10 @@ cli_list_tables(int argc, char **argv)
 			exit(EXIT_CODE_BAD_ARGS);
 		}
 	}
+	else
+	{
+		filters.type = SOURCE_FILTER_TYPE_NONE;
+	}
 
 	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
 	{
@@ -263,7 +267,9 @@ cli_list_tables(int argc, char **argv)
 	{
 		log_info("Listing tables without primary key in source database");
 
-		if (!schema_list_ordinary_tables_without_pk(&pgsql, &tableArray))
+		if (!schema_list_ordinary_tables_without_pk(&pgsql,
+													&filters,
+													&tableArray))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);
@@ -379,7 +385,23 @@ cli_list_indexes(int argc, char **argv)
 	{
 		log_info("Fetching all indexes in source database");
 
-		if (!schema_list_all_indexes(&pgsql, &indexArray))
+		SourceFilters filters = { 0 };
+
+		if (!IS_EMPTY_STRING_BUFFER(listDBoptions.filterFileName))
+		{
+			if (!parse_filters(listDBoptions.filterFileName, &filters))
+			{
+				log_error("Failed to parse filters in file \"%s\"",
+						  listDBoptions.filterFileName);
+				exit(EXIT_CODE_BAD_ARGS);
+			}
+		}
+		else
+		{
+			filters.type = SOURCE_FILTER_TYPE_NONE;
+		}
+
+		if (!schema_list_all_indexes(&pgsql, &filters, &indexArray))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);

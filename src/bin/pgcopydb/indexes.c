@@ -100,7 +100,9 @@ copydb_copy_all_indexes(CopyDataSpec *specs)
 
 	log_info("Listing indexes in source database");
 
-	if (!schema_list_all_indexes(src, &indexArray))
+	SourceFilters filters = { 0 };
+
+	if (!schema_list_all_indexes(src, &filters, &indexArray))
 	{
 		/* errors have already been logged */
 		return false;

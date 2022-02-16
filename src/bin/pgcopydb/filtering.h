@@ -49,8 +49,32 @@ typedef struct SourceFilterTableList
 	SourceFilterTable *array;   /* malloc'ed area */
 } SourceFilterTableList;
 
+
+/*
+ * Define a Source Filter Type that allows producing the right kind of SQL
+ * query. To that end, we only need to distinguish if we're going to:
+ *
+ * - include only some tables (inner join)
+ *
+ * - exclude some tables (exclude-schema, exclude-table, exclude-table-data all
+ *   lead to the same kind of anti-join form based on left join where
+ *   right-side is null)
+ *
+ * - or exclude only some indexes (no filtering on schema queries for tables,
+ *   only on the schema queries for indexes).
+ */
+typedef enum
+{
+	SOURCE_FILTER_TYPE_UNKNOWN = 0,
+	SOURCE_FILTER_TYPE_NONE,
+	SOURCE_FILTER_TYPE_INCL,
+	SOURCE_FILTER_TYPE_EXCL,
+	SOURCE_FILTER_TYPE_EXCL_INDEX
+} SourceFilterType;
+
 typedef struct SourceFilters
 {
+	SourceFilterType type;
 	SourceFilterSchemaList excludeSchemaList;
 	SourceFilterTableList includeOnlyTableList;
 	SourceFilterTableList excludeTableList;

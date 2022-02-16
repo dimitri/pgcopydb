@@ -177,6 +177,34 @@ parse_filters(const char *filename, SourceFilters *filters)
 		return false;
 	}
 
+	/*
+	 * Now assign a proper type to the source filter.
+	 */
+	if (filters->includeOnlyTableList.count > 0)
+	{
+		filters->type = SOURCE_FILTER_TYPE_INCL;
+	}
+	else if (filters->excludeSchemaList.count > 0 ||
+			 filters->excludeTableList.count > 0 ||
+			 filters->excludeTableDataList.count > 0)
+	{
+		filters->type = SOURCE_FILTER_TYPE_EXCL;
+	}
+	else if (filters->excludeIndexList.count > 0)
+	{
+		/*
+		 * If we reach this part of the code, it means we didn't include-only
+		 * tables nor exclude any table (exclude-schema, exclude-table,
+		 * exclude-table-data have not been used in the filtering setup), still
+		 * the exclude-index clause has been used.
+		 */
+		filters->type = SOURCE_FILTER_TYPE_EXCL_INDEX;
+	}
+	else
+	{
+		filters->type = SOURCE_FILTER_TYPE_NONE;
+	}
+
 	return true;
 }
 
