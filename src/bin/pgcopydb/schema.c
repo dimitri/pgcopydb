@@ -335,6 +335,7 @@ schema_list_table_indexes(PGSQL *pgsql,
 		"                and d.deptype = 'i'"
 		"          left join pg_constraint c ON c.oid = d.refobjid"
 		"    where r.relkind = 'r' and r.relpersistence = 'p' "
+		"          and not x.indisexclusion "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
 		"      and rn.nspname = $1 and r.relname = $2"
 		" order by n.nspname, r.relname";
