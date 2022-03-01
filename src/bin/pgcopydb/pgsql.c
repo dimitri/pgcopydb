@@ -9,6 +9,7 @@
 #include "postgres.h"
 #include "postgres_fe.h"
 #include "libpq-fe.h"
+#include "libpq/libpq-fs.h"
 #include "pqexpbuffer.h"
 #include "portability/instr_time.h"
 
@@ -1838,4 +1839,211 @@ pgsql_set_gucs(PGSQL *pgsql, GUC *settings)
 	}
 
 	return true;
+}
+
+
+#define MAX_BLOB_PER_FETCH 1000
+
+typedef struct BlobMetadataArray
+{
+	int count;
+	Oid oids[MAX_BLOB_PER_FETCH];
+} BlobMetadataArray;
+
+typedef struct BlobMetadataArrayContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	BlobMetadataArray array;
+	bool parsedOk;
+} BlobMetadataArrayContext;
+
+void parseBlobMetadataArray(void *ctx, PGresult *result);
+
+
+/*
+ * pg_copy_large_objects copies all large objects found on the src database
+ * into the dst database. The copy includes re-using the same OID for the large
+ * objects on both sides.
+ */
+bool
+pg_copy_large_objects(PGSQL *src, PGSQL *dst)
+{
+	/*
+	 * We need to keep the same connection throughout the operations here.
+	 */
+	PGSQL *array[2] = { src, dst };
+
+	for (int i = 0; i < 2; i++)
+	{
+		PGSQL *pgsql = array[i];
+
+		if (pgsql->connection == NULL)
+		{
+			/* open a multi-statements connection then */
+			pgsql->connectionStatementType = PGSQL_CONNECTION_MULTI_STATEMENT;
+		}
+		else if (pgsql->connectionStatementType != PGSQL_CONNECTION_MULTI_STATEMENT)
+		{
+			log_error("BUG: calling pg_copy_large_objects with a "
+					  "non PGSQL_CONNECTION_MULTI_STATEMENT connection (%s)",
+					  i == 0 ? "source" : "target");
+			pgsql_finish(pgsql);
+			return false;
+		}
+	}
+
+	BlobMetadataArrayContext context = { 0 };
+	char *sql =
+		"DECLARE bloboid CURSOR FOR "
+		"SELECT oid FROM pg_largeobject_metadata ORDER BY 1";
+
+	if (!pgsql_execute(src, sql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	do {
+		/* Do a fetch */
+		const char *fetchSQL = "FETCH 1000 IN bloboid";
+
+		if (!pgsql_execute_with_params(src, fetchSQL, 0, NULL, NULL,
+									   &context, &parseBlobMetadataArray))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		for (int i = 0; i < context.array.count; i++)
+		{
+			Oid blobOid = context.array.oids[i];
+
+			/*
+			 * 1. Open the blob on the source database
+			 */
+			int srcfd = lo_open(src->connection, blobOid, INV_READ);
+
+			if (srcfd == -1)
+			{
+				char context[BUFSIZE] = { 0 };
+
+				sformat(context, sizeof(context),
+						"Failed to open large object %u", blobOid);
+
+				(void) pgcopy_log_error(src, NULL, context);
+
+				return false;
+			}
+
+			/*
+			 * 2. Create the blob on the target database
+			 */
+			Oid dstBlobOid = lo_create(dst->connection, blobOid);
+
+			if (dstBlobOid != blobOid)
+			{
+				char context[BUFSIZE] = { 0 };
+
+				sformat(context, sizeof(context),
+						"Failed to create large object %u", blobOid);
+
+				(void) pgcopy_log_error(dst, NULL, context);
+
+				return false;
+			}
+
+			int dstfd = lo_open(src->connection, blobOid, INV_WRITE);
+
+			if (dstfd == -1)
+			{
+				char context[BUFSIZE] = { 0 };
+
+				sformat(context, sizeof(context),
+						"Failed to open new large object %u", blobOid);
+
+				(void) pgcopy_log_error(dst, NULL, context);
+
+				return false;
+			}
+
+			/*
+			 * 3. Read the large object content in chunks and write them on the
+			 * target database.
+			 */
+			int bytesRead = 0;
+			int bytesWritten = 0;
+
+			do {
+				char buffer[LOBBUFSIZE] = { 0 };
+
+				bytesRead =
+					lo_read(src->connection, srcfd, buffer, LOBBUFSIZE);
+
+				if (bytesRead < 0)
+				{
+					char context[BUFSIZE] = { 0 };
+
+					sformat(context, sizeof(context),
+							"Failed to read large object %u", blobOid);
+
+					(void) pgcopy_log_error(dst, NULL, context);
+
+					return false;
+				}
+
+				bytesWritten =
+					lo_write(dst->connection, dstfd, buffer, bytesRead);
+
+				if (bytesWritten != bytesRead)
+				{
+					char context[BUFSIZE] = { 0 };
+
+					sformat(context, sizeof(context),
+							"Failed to write large object %u", blobOid);
+
+					(void) pgcopy_log_error(dst, NULL, context);
+
+					return false;
+				}
+			} while (bytesRead > 0);
+
+			lo_close(src->connection, srcfd);
+			lo_close(dst->connection, dstfd);
+		}
+	} while (context.array.count > 0);
+
+	return true;
+}
+
+
+/*
+ * parseBlobMetadataArray parses the resultset from a FETCH on the cursor for
+ * the large object metadata.
+ */
+void
+parseBlobMetadataArray(void *ctx, PGresult *result)
+{
+	BlobMetadataArrayContext *context = (BlobMetadataArrayContext *) ctx;
+
+	if (PQnfields(result) != 1)
+	{
+		log_error("Query returned %d columns, expected 1", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	context->array.count = PQntuples(result);
+
+	for (int i = 0; i < context->array.count; i++)
+	{
+		char *value = PQgetvalue(result, i, 0);
+
+		if (!stringToUInt32(value, &(context->array.oids[i])))
+		{
+			log_error("Invalid OID \"%s\"", value);
+
+			context->parsedOk = false;
+			return;
+		}
+	}
 }

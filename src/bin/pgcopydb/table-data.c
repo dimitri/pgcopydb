@@ -976,3 +976,36 @@ copydb_create_constraints(CopyTableDataSpec *tableSpecs)
 
 	return errors == 0;
 }
+
+
+/*
+ * copydb_copy_blobs copies the large objects.
+ */
+bool
+copydb_copy_blobs(CopyDataSpec *specs)
+{
+	PGSQL *src = &(specs->sourceSnapshot.pgsql);
+	PGSQL dst = { 0 };
+
+	if (!pgsql_init(&dst, (char *) specs->target_pguri, PGSQL_CONN_TARGET))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* also set our GUC values for the target connection */
+	if (!pgsql_set_gucs(&dst, dstSettings))
+	{
+		log_fatal("Failed to set our GUC settings on the target connection, "
+				  "see above for details");
+		return false;
+	}
+
+	if (!pg_copy_large_objects(src, &dst))
+	{
+		log_error("Failed to copy large objects");
+		return false;
+	}
+
+	return true;
+}
