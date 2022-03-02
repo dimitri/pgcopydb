@@ -434,6 +434,29 @@ finish_index_summary(CopyIndexSummary *summary, char *filename)
 
 
 /*
+ * write_blobs_summary writes the given pre-filled summary to disk.
+ */
+bool
+write_blobs_summary(CopyBlobsSummary *summary, char *filename)
+{
+	char contents[BUFSIZE] = { 0 };
+
+	sformat(contents, sizeof(contents), "%d\n%lld\n%lld\n",
+			summary->pid,
+			(long long) summary->count,
+			(long long) summary->durationMs);
+
+	if (!write_file(contents, strlen(contents), filename))
+	{
+		log_warn("Failed to write the tracking file \%s\"", filename);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * read_blobs_summary reads a blobs process summary file from disk.
  */
 bool

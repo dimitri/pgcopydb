@@ -1061,19 +1061,14 @@ copydb_copy_blobs(CopyDataSpec *specs)
 	INSTR_TIME_SUBTRACT(duration, startTime);
 
 	/* and write that we successfully finished copying all blobs */
-	pid_t pid = getpid();
-	char summary[BUFSIZE] = { 0 };
+	CopyBlobsSummary summary = {
+		.pid = getpid(),
+		.count = count,
+		.durationMs = INSTR_TIME_GET_MILLISEC(duration)
+	};
 
-	sformat(summary, sizeof(summary), "%d\n%lld\n%lld\n",
-			pid,
-			(long long) count,
-			(long long) INSTR_TIME_GET_MILLISEC(duration));
-
-	if (!write_file(summary, strlen(summary), specs->cfPaths.done.blobs))
-	{
-		log_warn("Failed to write the tracking file \%s\"",
-				 specs->cfPaths.done.blobs);
-	}
+	/* ignore errors on the blob file summary */
+	(void) write_blobs_summary(&summary, specs->cfPaths.done.blobs);
 
 	return true;
 }

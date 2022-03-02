@@ -162,6 +162,7 @@ bool create_table_index_file(CopyTableSummary *summary,
 							 char *filename);
 bool read_table_index_file(SourceIndexArray *indexArray, char *filename);
 
+bool write_blobs_summary(CopyBlobsSummary *summary, char *filename);
 bool read_blobs_summary(CopyBlobsSummary *summary, char *filename);
 
 
