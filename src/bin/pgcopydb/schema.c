@@ -366,35 +366,6 @@ schema_list_table_indexes(PGSQL *pgsql,
 
 
 /*
- * schema_count_large_objects counts how many objects large objects are known
- * in the Postgres catalogs.
- */
-bool
-schema_count_large_objects(PGSQL *pgsql, int64_t *count)
-{
-	SingleValueResultContext parseContext = { { 0 }, PGSQL_RESULT_BIGINT, false };
-	char *sql = "select count(*) from pg_catalog.pg_largeobject_metadata";
-
-	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
-								   &parseContext, &parseSingleValueResult))
-	{
-		log_error("Failed to count large objects");
-		return false;
-	}
-
-	if (!parseContext.parsedOk)
-	{
-		log_error("Failed to count large objects");
-		return false;
-	}
-
-	*count = parseContext.bigint;
-
-	return true;
-}
-
-
-/*
  * getTableArray loops over the SQL result for the tables array query and
  * allocates an array of tables then populates it with the query result.
  */

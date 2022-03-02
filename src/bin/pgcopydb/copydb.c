@@ -239,7 +239,7 @@ copydb_inspect_workdir(CopyFilePaths *cfPaths, DirectoryState *dirState)
 	dirState->tableCopyIsDone = file_exists(cfPaths->done.tables);
 	dirState->indexCopyIsDone = file_exists(cfPaths->done.indexes);
 	dirState->sequenceCopyIsDone = file_exists(cfPaths->done.sequences);
-	dirState->blobsCopyIsDone = false;
+	dirState->blobsCopyIsDone = file_exists(cfPaths->done.blobs);
 
 	dirState->allDone =
 		dirState->schemaDumpIsDone &&
@@ -247,7 +247,8 @@ copydb_inspect_workdir(CopyFilePaths *cfPaths, DirectoryState *dirState)
 		dirState->schemaPostDataHasBeenRestored &&
 		dirState->tableCopyIsDone &&
 		dirState->indexCopyIsDone &&
-		dirState->sequenceCopyIsDone;
+		dirState->sequenceCopyIsDone &&
+		dirState->blobsCopyIsDone;
 
 	/* let's be verbose about our inspection results */
 	log_info("Work directory \"%s\" already exists", cfPaths->topdir);
@@ -281,6 +282,11 @@ copydb_inspect_workdir(CopyFilePaths *cfPaths, DirectoryState *dirState)
 	if (dirState->sequenceCopyIsDone)
 	{
 		log_info("All the sequences have been copied to the target instance");
+	}
+
+	if (dirState->blobsCopyIsDone)
+	{
+		log_info("All the large objects have been copied to the target instance");
 	}
 
 	if (dirState->schemaPostDataHasBeenRestored)

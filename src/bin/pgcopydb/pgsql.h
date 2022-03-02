@@ -257,6 +257,7 @@ bool pgsql_get_sequence(PGSQL *pgsql, const char *nspname, const char *relname,
 
 bool pgsql_set_gucs(PGSQL *pgsql, GUC *settings);
 
-bool pg_copy_large_objects(PGSQL *src, PGSQL *dst);
+bool pg_copy_large_objects(PGSQL *src, PGSQL *dst,
+						   bool dropIfExists, uint32_t *count);
 
 #endif /* PGSQL_H */

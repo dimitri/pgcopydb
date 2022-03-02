@@ -1866,7 +1866,8 @@ void parseBlobMetadataArray(void *ctx, PGresult *result);
  * objects on both sides.
  */
 bool
-pg_copy_large_objects(PGSQL *src, PGSQL *dst)
+pg_copy_large_objects(PGSQL *src, PGSQL *dst,
+					  bool dropIfExists, uint32_t *count)
 {
 	/*
 	 * We need to keep the same connection throughout the operations here.
@@ -1903,6 +1904,10 @@ pg_copy_large_objects(PGSQL *src, PGSQL *dst)
 		return false;
 	}
 
+	log_info("Copying large objects");
+
+	uint32_t totalCount = 0;
+
 	do {
 		/* Do a fetch */
 		const char *fetchSQL = "FETCH 1000 IN bloboid";
@@ -1913,6 +1918,8 @@ pg_copy_large_objects(PGSQL *src, PGSQL *dst)
 			/* errors have already been logged */
 			return false;
 		}
+
+		log_debug("Processing %d large objects", context.array.count);
 
 		/*
 		 * The server-side large object API is transaction based. Several
@@ -1926,9 +1933,13 @@ pg_copy_large_objects(PGSQL *src, PGSQL *dst)
 			return false;
 		}
 
+		totalCount += context.array.count;
+
 		for (int i = 0; i < context.array.count; i++)
 		{
 			Oid blobOid = context.array.oids[i];
+
+			log_trace("Processing large object %u", blobOid);
 
 			/*
 			 * 1. Open the blob on the source database
@@ -1950,11 +1961,21 @@ pg_copy_large_objects(PGSQL *src, PGSQL *dst)
 				return false;
 			}
 
-			log_trace("src lo fd %d", srcfd);
-
 			/*
-			 * 2. Create the blob on the target database
+			 * 2. Create the blob on the target database.
+			 *
+			 *    When using --drop-if-exists, we first try to unlink the
+			 *    target large object, then copy the data all over again.
 			 */
+			if (dropIfExists)
+			{
+				if (!lo_unlink(dst->connection, blobOid))
+				{
+					/* ignore errors, the object might not exists */
+					log_debug("Failed to delete large object %u", blobOid);
+				}
+			}
+
 			Oid dstBlobOid = lo_create(dst->connection, blobOid);
 
 			if (dstBlobOid != blobOid)
@@ -1995,8 +2016,6 @@ pg_copy_large_objects(PGSQL *src, PGSQL *dst)
 
 				return false;
 			}
-
-			log_trace("dst lo fd %d", dstfd);
 
 			/*
 			 * 4. Read the large object content in chunks on the source
@@ -2065,6 +2084,8 @@ pg_copy_large_objects(PGSQL *src, PGSQL *dst)
 			return false;
 		}
 	} while (context.array.count > 0);
+
+	*count = totalCount;
 
 	return true;
 }

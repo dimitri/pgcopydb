@@ -327,6 +327,7 @@ bool copydb_table_is_being_processed(CopyDataSpec *specs,
 bool copydb_mark_table_as_done(CopyDataSpec *specs,
 							   CopyTableDataSpec *tableSpecs);
 
+bool copydb_start_blob_process(CopyDataSpec *specs);
 bool copydb_copy_blobs(CopyDataSpec *specs);
 
 /* summary.c */
