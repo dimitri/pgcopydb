@@ -117,6 +117,22 @@ static CommandLine copy_table_data_command =
 		cli_copy_db_getopts,
 		cli_copy_table_data);
 
+static CommandLine copy_blobs_command =
+	make_command(
+		"blobs",
+		"Copy the blob data from ther source database to the target",
+		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
+		"  --source          Postgres URI to the source database\n"
+		"  --target          Postgres URI to the target database\n"
+		"  --dir             Work directory to use\n"
+		"  --table-jobs      Number of concurrent COPY jobs to run\n"
+		"  --restart         Allow restarting when temp files exist already\n"
+		"  --resume          Allow resuming operations after a failure\n"
+		"  --not-consistent  Allow taking a new snapshot on the source database\n"
+		"  --snapshot        Use snapshot obtained with pg_export_snapshot\n",
+		cli_copy_db_getopts,
+		cli_copy_blobs);
+
 static CommandLine copy_sequence_command =
 	make_command(
 		"sequences",
@@ -161,24 +177,14 @@ static CommandLine copy_constraints_command =
 		cli_copy_db_getopts,
 		cli_copy_constraints);
 
-static CommandLine copy_blobs_command =
-	make_command(
-		"blobs",
-		"Copy the blob data from ther source database to the target",
-		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
-		"  --source          Postgres URI to the source database\n"
-		"  --target          Postgres URI to the target database\n",
-		cli_copy_db_getopts,
-		cli_copy_blobs);
-
 static CommandLine *copy_subcommands[] = {
 	&copy_db_command,
 	&copy_data_command,
 	&copy_table_data_command,
+	&copy_blobs_command,
 	&copy_sequence_command,
 	&copy_indexes_command,
 	&copy_constraints_command,
-	&copy_blobs_command,
 	NULL
 };
 

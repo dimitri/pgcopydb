@@ -1914,6 +1914,18 @@ pg_copy_large_objects(PGSQL *src, PGSQL *dst)
 			return false;
 		}
 
+		/*
+		 * The server-side large object API is transaction based. Several
+		 * functions need to be called in the same transaction. Here, we batch
+		 * large objects copying and open a transaction per batch / fetch.
+		 */
+		if (!pgsql_begin(dst))
+		{
+			/* errors have already been logged */
+			pgsql_finish(src);
+			return false;
+		}
+
 		for (int i = 0; i < context.array.count; i++)
 		{
 			Oid blobOid = context.array.oids[i];
@@ -1932,8 +1944,13 @@ pg_copy_large_objects(PGSQL *src, PGSQL *dst)
 
 				(void) pgcopy_log_error(src, NULL, context);
 
+				pgsql_finish(src);
+				pgsql_finish(dst);
+
 				return false;
 			}
+
+			log_trace("src lo fd %d", srcfd);
 
 			/*
 			 * 2. Create the blob on the target database
@@ -1949,10 +1966,18 @@ pg_copy_large_objects(PGSQL *src, PGSQL *dst)
 
 				(void) pgcopy_log_error(dst, NULL, context);
 
+				lo_close(src->connection, srcfd);
+
+				pgsql_finish(src);
+				pgsql_finish(dst);
+
 				return false;
 			}
 
-			int dstfd = lo_open(src->connection, blobOid, INV_WRITE);
+			/*
+			 * 3. Open the blob on the target database
+			 */
+			int dstfd = lo_open(dst->connection, blobOid, INV_WRITE);
 
 			if (dstfd == -1)
 			{
@@ -1963,12 +1988,19 @@ pg_copy_large_objects(PGSQL *src, PGSQL *dst)
 
 				(void) pgcopy_log_error(dst, NULL, context);
 
+				lo_close(src->connection, srcfd);
+
+				pgsql_finish(src);
+				pgsql_finish(dst);
+
 				return false;
 			}
 
+			log_trace("dst lo fd %d", dstfd);
+
 			/*
-			 * 3. Read the large object content in chunks and write them on the
-			 * target database.
+			 * 4. Read the large object content in chunks on the source
+			 *    database, and write them on the target database.
 			 */
 			int bytesRead = 0;
 			int bytesWritten = 0;
@@ -1986,7 +2018,13 @@ pg_copy_large_objects(PGSQL *src, PGSQL *dst)
 					sformat(context, sizeof(context),
 							"Failed to read large object %u", blobOid);
 
-					(void) pgcopy_log_error(dst, NULL, context);
+					(void) pgcopy_log_error(src, NULL, context);
+
+					lo_close(src->connection, srcfd);
+					lo_close(dst->connection, dstfd);
+
+					pgsql_finish(src);
+					pgsql_finish(dst);
 
 					return false;
 				}
@@ -2003,12 +2041,28 @@ pg_copy_large_objects(PGSQL *src, PGSQL *dst)
 
 					(void) pgcopy_log_error(dst, NULL, context);
 
+					lo_close(src->connection, srcfd);
+					lo_close(dst->connection, dstfd);
+
+					pgsql_finish(src);
+					pgsql_finish(dst);
+
 					return false;
 				}
 			} while (bytesRead > 0);
 
 			lo_close(src->connection, srcfd);
 			lo_close(dst->connection, dstfd);
+		}
+
+		/*
+		 * COMMIT; the current batch of large objects
+		 */
+		if (!pgsql_commit(dst))
+		{
+			/* errors have already been logged */
+			pgsql_finish(src);
+			return false;
 		}
 	} while (context.array.count > 0);
 
