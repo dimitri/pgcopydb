@@ -1914,7 +1914,7 @@ pg_copy_large_objects(PGSQL *src, PGSQL *dst,
 			return false;
 		}
 
-		log_debug("Processing %d large objects", context.array.count);
+		log_info("Processing %d large objects", context.array.count);
 
 		/*
 		 * The server-side large object API is transaction based. Several

@@ -13,6 +13,7 @@ This command prefixes the following sub-commands:
     db           Copy an entire database from source to target
     data         Copy the data section from source to target
     table-data   Copy the data from all tables in database from source to target
+    blobs        Copy the blob data from ther source database to the target
     sequences    Copy the current value from all sequences in database from source to target
     indexes      Create all the indexes found in the source database in the target
     constraints  Create all the constraints found in the source database in the target
@@ -96,6 +97,7 @@ copy-db steps.
 The ``pgcopydb copy data`` command implements the following steps::
 
    $ pgcopydb copy table-data
+   $ pgcopydb copy blobs
    $ pgcopydb copy indexes
    $ pgcopydb copy constraints
    $ pgcopydb copy sequences
@@ -126,12 +128,39 @@ avoiding disks entirely.
 
      --source          Postgres URI to the source database
      --target          Postgres URI to the target database
-     --dir                 Work directory to use
+     --dir             Work directory to use
      --table-jobs      Number of concurrent COPY jobs to run
      --restart         Allow restarting when temp files exist already
      --resume          Allow resuming operations after a failure
      --not-consistent  Allow taking a new snapshot on the source database
      --snapshot        Use snapshot obtained with pg_export_snapshot
+
+.. _pgcopydb_copy_blobs:
+
+pgcopydb copy blobs
+-------------------
+
+pgcopydb copy blobs - Copy the blob data from ther source database to the target
+
+The command ``pgcopydb copy blobs`` fetches list of large objects (aka
+blobs) from the source database and copies their data parts to the target
+database. By default the command assumes that the large objects metadata
+have already been taken care of, because of the behaviour of
+``pg_dump --section=pre-data``.
+
+::
+
+   pgcopydb copy blobs: Copy the blob data from ther source database to the target
+   usage: pgcopydb copy blobs  --source ... --target ...
+
+     --source          Postgres URI to the source database
+     --target          Postgres URI to the target database
+     --dir             Work directory to use
+     --restart         Allow restarting when temp files exist already
+     --resume          Allow resuming operations after a failure
+     --not-consistent  Allow taking a new snapshot on the source database
+     --snapshot        Use snapshot obtained with pg_export_snapshot
+     --drop-if-exists  On the target database, drop and create large objects
 
 .. _pgcopydb_copy_sequences:
 
