@@ -22,6 +22,42 @@ Full documentation is available online, including manual pages of all the
 pgcopydb sub-commands. Check out
 [https://pgcopydb.readthedocs.io/](https://pgcopydb.readthedocs.io/en/latest/).
 
+```
+$ pgcopydb help
+  pgcopydb
+    copy-db  Copy an entire database from source to target
+  + dump     Dump database objects from a Postgres instance
+  + restore  Restore database objects into a Postgres instance
+  + copy     Implement the data section of the database copy
+  + list     List database objects from a Postgres instance
+    help     print help message
+    version  print pgcopydb version
+
+  pgcopydb dump
+    schema     Dump source database schema as custom files in target directory
+    pre-data   Dump source database pre-data schema as custom files in target directory
+    post-data  Dump source database post-data schema as custom files in target directory
+
+  pgcopydb restore
+    schema     Restore a database schema from custom files to target database
+    pre-data   Restore a database pre-data schema from custom file to target database
+    post-data  Restore a database post-data schema from custom file to target database
+
+  pgcopydb copy
+    db           Copy an entire database from source to target
+    data         Copy the data section from source to target
+    table-data   Copy the data from all tables in database from source to target
+    blobs        Copy the blob data from ther source database to the target
+    sequences    Copy the current value from all sequences in database from source to target
+    indexes      Create all the indexes found in the source database in the target
+    constraints  Create all the constraints found in the source database in the target
+
+  pgcopydb list
+    tables     List all the source tables to copy data from
+    sequences  List all the source sequences to copy data from
+    indexes    List all the indexes to create again after copying the data
+```
+
 ## Examples
 
 When using `pgcopydb` it is possible to achieve the result outlined before
