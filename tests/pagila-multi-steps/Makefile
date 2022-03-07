@@ -3,7 +3,7 @@
 
 INTERACTIVE_OPTS = --abort-on-container-exit --exit-code-from pgcopydb
 
-test: build up down ;
+test: build down up down ;
 
 up:
 	docker-compose up $(INTERACTIVE_OPTS)

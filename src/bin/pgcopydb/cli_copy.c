@@ -29,6 +29,7 @@ static void cli_copy_table_data(int argc, char **argv);
 static void cli_copy_sequences(int argc, char **argv);
 static void cli_copy_indexes(int argc, char **argv);
 static void cli_copy_constraints(int argc, char **argv);
+static void cli_copy_blobs(int argc, char **argv);
 
 static void cli_copy_prepare_specs(CopyDataSpec *copySpecs,
 								   CopyDataSection section);
@@ -116,6 +117,22 @@ static CommandLine copy_table_data_command =
 		cli_copy_db_getopts,
 		cli_copy_table_data);
 
+static CommandLine copy_blobs_command =
+	make_command(
+		"blobs",
+		"Copy the blob data from ther source database to the target",
+		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
+		"  --source          Postgres URI to the source database\n"
+		"  --target          Postgres URI to the target database\n"
+		"  --dir             Work directory to use\n"
+		"  --drop-if-exists  On the target database, drop and create large objects\n"
+		"  --restart         Allow restarting when temp files exist already\n"
+		"  --resume          Allow resuming operations after a failure\n"
+		"  --not-consistent  Allow taking a new snapshot on the source database\n"
+		"  --snapshot        Use snapshot obtained with pg_export_snapshot\n",
+		cli_copy_db_getopts,
+		cli_copy_blobs);
+
 static CommandLine copy_sequence_command =
 	make_command(
 		"sequences",
@@ -164,6 +181,7 @@ static CommandLine *copy_subcommands[] = {
 	&copy_db_command,
 	&copy_data_command,
 	&copy_table_data_command,
+	&copy_blobs_command,
 	&copy_sequence_command,
 	&copy_indexes_command,
 	&copy_constraints_command,
@@ -747,6 +765,54 @@ cli_copy_constraints(int argc, char **argv)
 	}
 
 	if (!copydb_copy_all_indexes(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!copydb_close_snapshot(&(copySpecs.sourceSnapshot)))
+	{
+		log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
+				  copySpecs.sourceSnapshot.snapshot,
+				  copySpecs.sourceSnapshot.pguri);
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	(void) summary_set_current_time(timings, TIMING_STEP_END);
+	(void) print_summary(&summary, &copySpecs);
+}
+
+
+/*
+ * cli_copy_blobs copies the large object data from the source to the target
+ * database instanceds, preserving the OIDs.
+ */
+static void
+cli_copy_blobs(int argc, char **argv)
+{
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_CONSTRAINTS);
+
+	Summary summary = { 0 };
+	TopLevelTimings *timings = &(summary.timings);
+
+	(void) summary_set_current_time(timings, TIMING_STEP_START);
+
+	log_info("Copy large objects");
+
+	/*
+	 * First, we need to open a snapshot that we're going to re-use in all our
+	 * connections to the source database. When the --snapshot option has been
+	 * used, instead of exporting a new snapshot, we can just re-use it.
+	 */
+	if (!copydb_prepare_snapshot(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!copydb_copy_blobs(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

@@ -434,6 +434,82 @@ finish_index_summary(CopyIndexSummary *summary, char *filename)
 
 
 /*
+ * write_blobs_summary writes the given pre-filled summary to disk.
+ */
+bool
+write_blobs_summary(CopyBlobsSummary *summary, char *filename)
+{
+	char contents[BUFSIZE] = { 0 };
+
+	sformat(contents, sizeof(contents), "%d\n%lld\n%lld\n",
+			summary->pid,
+			(long long) summary->count,
+			(long long) summary->durationMs);
+
+	if (!write_file(contents, strlen(contents), filename))
+	{
+		log_warn("Failed to write the tracking file \%s\"", filename);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * read_blobs_summary reads a blobs process summary file from disk.
+ */
+bool
+read_blobs_summary(CopyBlobsSummary *summary, char *filename)
+{
+	char *fileContents = NULL;
+	long fileSize = 0L;
+
+	if (!read_file(filename, &fileContents, &fileSize))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	char *fileLines[BUFSIZE] = { 0 };
+	int lineCount = splitLines(fileContents, fileLines, BUFSIZE);
+
+	if (lineCount < COPY_BLOBS_SUMMARY_LINES)
+	{
+		log_error("Failed to parse summary file \"%s\" which contains only "
+				  "%d lines, at least %d lines are expected",
+				  filename,
+				  lineCount,
+				  COPY_BLOBS_SUMMARY_LINES);
+
+		free(fileContents);
+
+		return false;
+	}
+
+	if (!stringToInt(fileLines[0], &(summary->pid)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!stringToUInt32(fileLines[1], &(summary->count)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!stringToUInt64(fileLines[2], &(summary->durationMs)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * summary_set_current_time sets the current timing to the appropriate
  * TopLevelTimings entry given the step we're at.
  */
@@ -594,6 +670,11 @@ print_toplevel_summary(Summary *summary, int tableJobs, int indexJobs)
 			"COPY (cumulative)", "both",
 			summary->timings.totalTableMs,
 			tableJobs);
+
+	fformat(stdout, " %45s   %10s  %10s  %12d\n",
+			"Large Objects", "both",
+			summary->timings.blobsMs,
+			1);
 
 	fformat(stdout, " %45s   %10s  %10s  %12d\n",
 			"CREATE INDEX (cumulative)", "target",
@@ -894,6 +975,26 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 		(void) IntervalToString(indexingDurationMs,
 								entry->indexMs,
 								sizeof(entry->indexMs));
+	}
+
+	/*
+	 * Also read the blobs summary file.
+	 */
+	if (file_exists(specs->cfPaths.done.blobs))
+	{
+		CopyBlobsSummary blobsSummary = { 0 };
+
+		if (!read_blobs_summary(&blobsSummary, specs->cfPaths.done.blobs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		timings->blobDurationMs = blobsSummary.durationMs;
+
+		(void) IntervalToString(blobsSummary.durationMs,
+								timings->blobsMs,
+								sizeof(timings->blobsMs));
 	}
 
 	return true;

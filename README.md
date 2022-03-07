@@ -212,15 +212,21 @@ implementing any step on its own.
   1. `pgcopydb dump schema`
   2. `pgcopydb restore pre-data`
   3. `pgcopydb copy table-data`
-  4. `pgcopydb copy sequences`
-  5. `pgcopydb copy indexes`
-  6. `pgcopydb copy constraints`
-  7. `pgcopydb vacuumdb`
-  8. `pgcopydb restore post-data`
+  4. `pgcopydb copy blobs`
+  5. `pgcopydb copy sequences`
+  6. `pgcopydb copy indexes`
+  7. `pgcopydb copy constraints`
+  8. `pgcopydb vacuumdb`
+  9. `pgcopydb restore post-data`
 
 Using individual commands fails to provide the advanced concurrency
 capabilities of the main `pgcopydb copy-db` command, so it is strongly
-advised to prefer tha main command.
+advised to prefer that main command.
+
+Also when using separate commands, one has to consider the `--snapshot`
+option that allows for consistent operations. A background process should
+then export the snapshot and maintain a transaction opened for the duration
+of the operations.
 
 ## Authors
 

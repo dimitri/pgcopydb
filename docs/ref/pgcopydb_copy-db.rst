@@ -53,21 +53,30 @@ The ``pgcopydb copy-db`` command implements the following steps:
      source table to start with the largest tables first, as an attempt to
      minimize the copy time.
 
-  4. In each copy table sub-process, as soon as the data copying is done,
+  4. An auxiliary process is started concurrently to the main COPY workers.
+     This auxiliary process loops through all the Large Objects found on the
+     source database and copies its data parts over to the target database,
+     much like pg_dump itself would.
+
+     This step is much like ``pg_dump | pg_restore`` for large objects data
+     parts, except that there isn't a good way to do just that with the
+     tooling.
+
+  5. In each copy table sub-process, as soon as the data copying is done,
      then ``pgcopydb`` gets the list of index definitions attached to the
      current target table and creates them in parallel.
 
      The primary indexes are created as UNIQUE indexes at this stage.
 
-  5. Then the PRIMARY KEY constraints are created USING the just built
+  6. Then the PRIMARY KEY constraints are created USING the just built
      indexes. This two-steps approach allows the primary key index itself to
      be created in parallel with other indexes on the same table, avoiding
      an EXCLUSIVE LOCK while creating the index.
 
-  6. Then ``VACUUM ANALYZE`` is run on each target table as soon as the data
+  7. Then ``VACUUM ANALYZE`` is run on each target table as soon as the data
      and indexes are all created.
 
-  7. Then pgcopydb gets the list of the sequences on the source database and
+  8. Then pgcopydb gets the list of the sequences on the source database and
      for each of them runs a separate query on the source to fetch the
      ``last_value`` and the ``is_called`` metadata the same way that pg_dump
      does.
@@ -75,7 +84,7 @@ The ``pgcopydb copy-db`` command implements the following steps:
      For each sequence, pgcopydb then calls ``pg_catalog.setval()`` on the
      target database with the information obtained on the source database.
 
-  8. The final stage consists now of running the rest of the ``post-data``
+  9. The final stage consists now of running the rest of the ``post-data``
      section script for the whole database, and that's where the foreign key
      constraints and other elements are created.
 

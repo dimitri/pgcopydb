@@ -1,6 +1,7 @@
 #! /bin/bash
 
 set -x
+set -e
 
 # This script expects the following environment variables to be set:
 #
@@ -46,6 +47,7 @@ pgcopydb restore pre-data --resume
 
 pgcopydb copy table-data --resume
 pgcopydb copy sequences --resume
+pgcopydb copy blobs --resume
 pgcopydb copy indexes --resume
 pgcopydb copy constraints --resume
 

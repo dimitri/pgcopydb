@@ -1,4 +1,4 @@
-FROM pgcopydb
+FROM debian:bullseye-slim as pagila
 
 USER root
 RUN apt-get update \
@@ -10,6 +10,11 @@ RUN apt-get update \
 
 WORKDIR /usr/src/
 RUN git clone --depth 1 https://github.com/devrimgunduz/pagila.git
+
+
+FROM pgcopydb
+
+COPY --from=pagila /usr/src/pagila /usr/src/pagila
 
 WORKDIR /usr/src/pgcopydb
 COPY ./copydb.sh copydb.sh

@@ -139,32 +139,6 @@ copydb_prepare_table_specs(CopyDataSpec *specs)
 	SourceTableArray tableArray = { 0, NULL };
 	CopyTableDataSpecsArray *tableSpecsArray = &(specs->tableSpecsArray);
 
-	/*
-	 * Check if we have large objects to take into account, because that's not
-	 * supported at the moment.
-	 */
-	if (!specs->skipLargeObjects)
-	{
-		int64_t largeObjectCount = 0;
-
-		if (!schema_count_large_objects(&(specs->sourceSnapshot.pgsql),
-										&largeObjectCount))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		if (largeObjectCount > 0)
-		{
-			log_fatal("pgcopydb version %s has no support for large objects, "
-					  "and we found %lld rows in pg_largeobject_metadata",
-					  PGCOPYDB_VERSION,
-					  (long long) largeObjectCount);
-			log_fatal("Consider using --skip-large-objects");
-			return false;
-		}
-	}
-
 	log_info("Listing ordinary tables in \"%s\"", specs->source_pguri);
 
 	/*
@@ -229,6 +203,18 @@ copydb_prepare_table_specs(CopyDataSpec *specs)
 bool
 copydb_start_table_processes(CopyDataSpec *specs)
 {
+	/*
+	 * Are blobs table data? well pg_dump --section sayth yes.
+	 */
+	if (!copydb_start_blob_process(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * Now create as many sub-process as needed, per --table-jobs.
+	 */
 	for (int i = 0; i < specs->tableJobs; i++)
 	{
 		/*
@@ -975,4 +961,114 @@ copydb_create_constraints(CopyTableDataSpec *tableSpecs)
 	free(dstIndexArray.array);
 
 	return errors == 0;
+}
+
+
+/*
+ * copydb_start_blob_process starts an auxilliary process that copies the large
+ * objects (blobs) from the source database into the target database.
+ */
+bool
+copydb_start_blob_process(CopyDataSpec *specs)
+{
+	if (specs->skipLargeObjects)
+	{
+		return true;
+	}
+
+	/*
+	 * Flush stdio channels just before fork, to avoid double-output problems.
+	 */
+	fflush(stdout);
+	fflush(stderr);
+
+	int fpid = fork();
+
+	switch (fpid)
+	{
+		case -1:
+		{
+			log_error("Failed to fork a worker process");
+			return false;
+		}
+
+		case 0:
+		{
+			/* child process runs the command */
+			if (!copydb_copy_blobs(specs))
+			{
+				log_error("Failed to copy large objects, "
+						  "see above for details");
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			exit(EXIT_CODE_QUIT);
+		}
+
+		default:
+		{
+			/* fork succeeded, in parent */
+			break;
+		}
+	}
+
+	/* now we're done, and we want async behavior, do not wait */
+	return true;
+}
+
+
+/*
+ * copydb_copy_blobs copies the large objects.
+ */
+bool
+copydb_copy_blobs(CopyDataSpec *specs)
+{
+	PGSQL *src = &(specs->sourceSnapshot.pgsql);
+	PGSQL dst = { 0 };
+
+	instr_time startTime;
+
+	INSTR_TIME_SET_CURRENT(startTime);
+
+	if (!pgsql_init(&dst, (char *) specs->target_pguri, PGSQL_CONN_TARGET))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* also set our GUC values for the target connection */
+	if (!pgsql_set_gucs(&dst, dstSettings))
+	{
+		log_fatal("Failed to set our GUC settings on the target connection, "
+				  "see above for details");
+		return false;
+	}
+
+	uint32_t count = 0;
+
+	if (!pg_copy_large_objects(src,
+							   &dst,
+							   specs->restoreOptions.dropIfExists,
+							   &count))
+	{
+		log_error("Failed to copy large objects");
+		return false;
+	}
+
+	instr_time duration;
+
+	INSTR_TIME_SET_CURRENT(duration);
+	INSTR_TIME_SUBTRACT(duration, startTime);
+
+	/* and write that we successfully finished copying all blobs */
+	CopyBlobsSummary summary = {
+		.pid = getpid(),
+		.count = count,
+		.durationMs = INSTR_TIME_GET_MILLISEC(duration)
+	};
+
+	/* ignore errors on the blob file summary */
+	(void) write_blobs_summary(&summary, specs->cfPaths.done.blobs);
+
+	return true;
 }

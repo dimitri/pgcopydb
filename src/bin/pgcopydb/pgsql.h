@@ -36,6 +36,11 @@
  */
 #define MAXCONNINFO 1024
 
+/*
+ * Chunk size for reading and writting large objects
+ */
+#define LOBBUFSIZE 16384
+
 
 /*
  * pg_stat_replication.sync_state is one if:
@@ -251,5 +256,8 @@ bool pgsql_get_sequence(PGSQL *pgsql, const char *nspname, const char *relname,
 						bool *isCalled);
 
 bool pgsql_set_gucs(PGSQL *pgsql, GUC *settings);
+
+bool pg_copy_large_objects(PGSQL *src, PGSQL *dst,
+						   bool dropIfExists, uint32_t *count);
 
 #endif /* PGSQL_H */

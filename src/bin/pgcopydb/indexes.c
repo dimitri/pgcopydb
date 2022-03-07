@@ -134,7 +134,7 @@ copydb_copy_all_indexes(CopyDataSpec *specs)
 	free(indexArray.array);
 	free(indexPathsArray.array);
 
-	return false;
+	return true;
 }
 
 

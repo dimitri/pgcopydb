@@ -49,6 +49,16 @@ typedef struct CopyIndexSummary
 } CopyIndexSummary;
 
 
+#define COPY_BLOBS_SUMMARY_LINES 3
+
+typedef struct CopyBlobsSummary
+{
+	pid_t pid;
+	uint32_t count;
+	uint64_t durationMs;
+} CopyBlobsSummary;
+
+
 /*
  * To print the summary, we fill-in a table in-memory and then compute the max
  * size of each column and then we can adjust the display to the actual size
@@ -120,6 +130,7 @@ typedef struct TopLevelTimings
 	char finalizeSchemaMs[INTSTRING_MAX_DIGITS];
 	char totalTableMs[INTSTRING_MAX_DIGITS];
 	char totalIndexMs[INTSTRING_MAX_DIGITS];
+	char blobsMs[INTSTRING_MAX_DIGITS];
 
 	/* allow computing the overhead */
 	uint64_t totalDurationMs;   /* wall clock total duration */
@@ -127,6 +138,7 @@ typedef struct TopLevelTimings
 	uint64_t dataAndIndexesDurationMs;
 	uint64_t tableDurationMs;   /* sum of COPY (TABLE DATA) durations */
 	uint64_t indexDurationMs;   /* sum of CREATE INDEX durations */
+	uint64_t blobDurationMs;
 
 	char totalCopyDataMs[INTSTRING_MAX_DIGITS];
 	char totalCreateIndexMs[INTSTRING_MAX_DIGITS];
@@ -149,6 +161,9 @@ bool create_table_index_file(CopyTableSummary *summary,
 							 SourceIndexArray *indexArray,
 							 char *filename);
 bool read_table_index_file(SourceIndexArray *indexArray, char *filename);
+
+bool write_blobs_summary(CopyBlobsSummary *summary, char *filename);
+bool read_blobs_summary(CopyBlobsSummary *summary, char *filename);
 
 
 void summary_set_current_time(TopLevelTimings *timings, TimingStep step);
