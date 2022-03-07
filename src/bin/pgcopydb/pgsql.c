@@ -1903,15 +1903,26 @@ pg_copy_large_objects(PGSQL *src, PGSQL *dst,
 
 	uint32_t totalCount = 0;
 
-	do {
+	/* break out of the loop when FETCH returns 0 rows */
+	for (;;)
+	{
 		/* Do a fetch */
-		const char *fetchSQL = "FETCH 1000 IN bloboid";
+		char fetchSQL[BUFSIZE] = { 0 };
+
+		sformat(fetchSQL, sizeof(fetchSQL),
+				"FETCH %d IN bloboid",
+				MAX_BLOB_PER_FETCH);
 
 		if (!pgsql_execute_with_params(src, fetchSQL, 0, NULL, NULL,
 									   &context, &parseBlobMetadataArray))
 		{
 			/* errors have already been logged */
 			return false;
+		}
+
+		if (context.array.count == 0)
+		{
+			break;
 		}
 
 		log_info("Processing %d large objects", context.array.count);
@@ -2082,7 +2093,7 @@ pg_copy_large_objects(PGSQL *src, PGSQL *dst,
 			pgsql_finish(src);
 			return false;
 		}
-	} while (context.array.count > 0);
+	}
 
 	*count = totalCount;
 
