@@ -58,9 +58,9 @@ The ``pgcopydb copy-db`` command implements the following steps:
      source database and copies its data parts over to the target database,
      much like pg_dump itself would.
 
-	 This step is much like ``pg_dump | pg_restore`` for large objects data
-	 parts, except that there isn't a good way to do just that with the
-	 tooling.
+     This step is much like ``pg_dump | pg_restore`` for large objects data
+     parts, except that there isn't a good way to do just that with the
+     tooling.
 
   5. In each copy table sub-process, as soon as the data copying is done,
      then ``pgcopydb`` gets the list of index definitions attached to the
