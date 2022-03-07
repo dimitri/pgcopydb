@@ -1,5 +1,9 @@
 # pgcopydb
 
+[![Documentation Status](https://readthedocs.org/projects/pgcopydb/badge/?version=latest)](https://pgcopydb.readthedocs.io/en/latest/?badge=latest)
+
+## Introduction
+
 pgcopydb is a tool that automates running `pg_dump | pg_restore` between two
 running Postgres servers. To make a copy of a database to another server as
 quickly as possible, one would like to use the parallel options of `pg_dump`
@@ -11,6 +15,14 @@ postgres://user@target/dbname` in a way. This command line can't be made to
 work, unfortunately, because `pg_dump --format=directory` writes to local
 files and directories first, and then later `pg_restore --format=directory`
 can be used to read from those files again.
+
+## Documentation
+
+Full documentation is available online, including manual pages of all the
+pgcopydb sub-commands. Check out
+[https://pgcopydb.readthedocs.io/](https://pgcopydb.readthedocs.io/en/latest/).
+
+## Examples
 
 When using `pgcopydb` it is possible to achieve the result outlined before
 with this simple command line:
@@ -63,6 +75,8 @@ an overall summary that looks like the following:
  ---------------------------------------------   ----------  ----------  ------------
 ```
 
+## Overview
+
 Then `pgcopydb` implements the following steps:
 
   1. `pgcopydb` produces `pre-data` section and the `post-data` sections of
@@ -82,21 +96,38 @@ Then `pgcopydb` implements the following steps:
      tables with the greatest number of rows first, as an attempt to
      minimize the copy time.
 
-  4. In each copy table sub-process, as soon as the data copying is done,
+  4. An auxiliary process is started concurrently to the main COPY workers.
+     This auxiliary process loops through all the Large Objects found on the
+     source database and copies its data parts over to the target database,
+     much like pg_dump itself would.
+
+     This step is much like ``pg_dump | pg_restore`` for large objects data
+     parts, except that there isn't a good way to do just that with the
+     tooling.
+
+  5. In each copy table sub-process, as soon as the data copying is done,
      then `pgcopydb` gets the list of index definitions attached to the
      current target table and creates them in parallel.
 
      The primary indexes are created as UNIQUE indexes at this stage.
 
-  5. Then the PRIMARY KEY constraints are created USING the just built
+  6. Then the PRIMARY KEY constraints are created USING the just built
      indexes. This two-steps approach allows the primary key index itself to
      be created in parallel with other indexes on the same table, avoiding
      an EXCLUSIVE LOCK while creating the index.
 
-  6. Then VACUUM ANALYZE is run on each target table as soon as the data and
+  7. Then VACUUM ANALYZE is run on each target table as soon as the data and
      indexes are all created.
 
-  7. The final stage consists now of running the rest of the `post-data`
+  8. Then pgcopydb gets the list of the sequences on the source database and
+     for each of them runs a separate query on the source to fetch the
+     ``last_value`` and the ``is_called`` metadata the same way that pg_dump
+     does.
+
+     For each sequence, pgcopydb then calls ``pg_catalog.setval()`` on the
+     target database with the information obtained on the source database.
+
+  9. The final stage consists now of running the rest of the `post-data`
      section script for the whole database, and that's where the foreign key
      constraints and other elements are created.
 
@@ -104,10 +135,58 @@ Then `pgcopydb` implements the following steps:
      --use-list` option so that indexes and primary key constraints already
      created in step 4. are properly skipped now.
 
-     This is done by the per-table sub-processes sharing the dump IDs of the
-     `post-data` items they have created with the main process, which can
-     then filter out the `pg_restore --list` output and comment the already
-     created objects from there, by dump ID.
+## Installing pgcopydb
+
+Several distributions are available for pgcopydb:
+
+  1. Install from [apt.postgresql.org](https://wiki.postgresql.org/wiki/Apt)
+     packages by following the linked documentation and then:
+
+	 ```
+	 $ sudo apt-get install pgcopydb
+	 ```
+
+  2. Install from [yum.postgresql.org](https://yum.postgresql.org) is not
+     available at this time.
+
+  3. Use a docker image.
+
+     Either use
+     [dimitri/pgcopydb](https://hub.docker.com/r/dimitri/pgcopydb#!) from
+     DockerHub, where the latest release is made available with the Postgres
+     version currently in debian stable.
+
+	 ```
+	 $ docker run --rm -it dimitri/pgcopydb:v0.3 pgcopydb --version
+	 ```
+
+	 Or you can use the CI/CD integration that publishes packages from the
+     main branch to the GitHub docker repository:
+
+	 ```
+	 $ docker pull ghcr.io/dimitri/pgcopydb:latest
+	 $ docker run --rm -it ghcr.io/dimitri/pgcopydb:latest pgcopydb --version
+	 $ docker run --rm -it ghcr.io/dimitri/pgcopydb:latest pgcopydb --help
+	 ```
+
+  4. Build from sources
+
+     Building from source requires a list of build-dependencies that's
+     comparable to that of Postgres itself. The pgcopydb source code is
+     written in C and the build process uses a GNU Makefile.
+
+	 See our main
+     [Dockerfile](https://github.com/dimitri/pgcopydb/blob/main/Dockerfile)
+     for a complete recipe to build pgcopydb when using a debian environment.
+
+	 Then the build process is pretty simple, in its simplest form you can
+     just use `make clean install`, if you want to be more fancy consider
+     also:
+
+	 ```
+	 $ make -s clean
+	 $ make -s -j12 install
+	 ```
 
 
 ## Design Considerations (why oh why)
