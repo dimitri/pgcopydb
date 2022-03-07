@@ -1645,16 +1645,19 @@ pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context)
 	int lineCount = splitLines(message, errorLines, BUFSIZE);
 	int lineNumber = 0;
 
+	char *prefix =
+		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
+
 	/*
 	 * PostgreSQL Error message might contain several lines. Log each of
 	 * them as a separate ERROR line here.
 	 */
 	for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
 	{
-		log_error("%s", errorLines[lineNumber]);
+		log_error("%s %s", prefix, errorLines[lineNumber]);
 	}
 
-	log_error("Context: %s", context);
+	log_error("%s Context: %s", prefix, context);
 
 	if (res != NULL)
 	{
@@ -1872,25 +1875,17 @@ pg_copy_large_objects(PGSQL *src, PGSQL *dst,
 	/*
 	 * We need to keep the same connection throughout the operations here.
 	 */
-	PGSQL *array[2] = { src, dst };
-
-	for (int i = 0; i < 2; i++)
+	if (src->connection == NULL)
 	{
-		PGSQL *pgsql = array[i];
-
-		if (pgsql->connection == NULL)
-		{
-			/* open a multi-statements connection then */
-			pgsql->connectionStatementType = PGSQL_CONNECTION_MULTI_STATEMENT;
-		}
-		else if (pgsql->connectionStatementType != PGSQL_CONNECTION_MULTI_STATEMENT)
-		{
-			log_error("BUG: calling pg_copy_large_objects with a "
-					  "non PGSQL_CONNECTION_MULTI_STATEMENT connection (%s)",
-					  i == 0 ? "source" : "target");
-			pgsql_finish(pgsql);
-			return false;
-		}
+		/* open a multi-statements connection then */
+		src->connectionStatementType = PGSQL_CONNECTION_MULTI_STATEMENT;
+	}
+	else if (src->connectionStatementType != PGSQL_CONNECTION_MULTI_STATEMENT)
+	{
+		log_error("BUG: calling pg_copy_large_objects with a "
+				  "non SRC_CONNECTION_MULTI_STATEMENT connection");
+		pgsql_finish(src);
+		return false;
 	}
 
 	BlobMetadataArrayContext context = { 0 };
@@ -1962,10 +1957,14 @@ pg_copy_large_objects(PGSQL *src, PGSQL *dst,
 			}
 
 			/*
-			 * 2. Create the blob on the target database.
+			 * 2. Drop/Create the blob on the target database.
 			 *
 			 *    When using --drop-if-exists, we first try to unlink the
 			 *    target large object, then copy the data all over again.
+			 *
+			 *    In normal cases `pg_dump --section=pre-data` outputs the
+			 *    large object metadata and we only have to take care of the
+			 *    contents of the large objects.
 			 */
 			if (dropIfExists)
 			{
@@ -1974,25 +1973,25 @@ pg_copy_large_objects(PGSQL *src, PGSQL *dst,
 					/* ignore errors, the object might not exists */
 					log_debug("Failed to delete large object %u", blobOid);
 				}
-			}
 
-			Oid dstBlobOid = lo_create(dst->connection, blobOid);
+				Oid dstBlobOid = lo_create(dst->connection, blobOid);
 
-			if (dstBlobOid != blobOid)
-			{
-				char context[BUFSIZE] = { 0 };
+				if (dstBlobOid != blobOid)
+				{
+					char context[BUFSIZE] = { 0 };
 
-				sformat(context, sizeof(context),
-						"Failed to create large object %u", blobOid);
+					sformat(context, sizeof(context),
+							"Failed to create large object %u", blobOid);
 
-				(void) pgcopy_log_error(dst, NULL, context);
+					(void) pgcopy_log_error(dst, NULL, context);
 
-				lo_close(src->connection, srcfd);
+					lo_close(src->connection, srcfd);
 
-				pgsql_finish(src);
-				pgsql_finish(dst);
+					pgsql_finish(src);
+					pgsql_finish(dst);
 
-				return false;
+					return false;
+				}
 			}
 
 			/*
