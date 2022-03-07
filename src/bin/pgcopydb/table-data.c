@@ -930,10 +930,38 @@ copydb_create_constraints(CopyTableDataSpec *tableSpecs)
 		{
 			log_info("%s", sql);
 
+			/*
+			 * Unique and Primary Key indexes have been built already, in the
+			 * other cases the index is built within the ALTER TABLE ... ADD
+			 * CONSTRAINT command.
+			 */
+			bool buildingIndex = !(index->isPrimary || index->isUnique);
+
+			/*
+			 * If we're building the index, then we want to acquire the index
+			 * semaphore first.
+			 */
+			Semaphore *createIndexSemaphore = tableSpecs->indexSemaphore;
+
+			if (buildingIndex)
+			{
+				(void) semaphore_lock(createIndexSemaphore);
+			}
+
 			if (!pgsql_execute(&dst, sql))
 			{
 				/* errors have already been logged */
+				if (buildingIndex)
+				{
+					(void) semaphore_unlock(createIndexSemaphore);
+				}
+
 				return false;
+			}
+
+			if (buildingIndex)
+			{
+				(void) semaphore_unlock(createIndexSemaphore);
 			}
 		}
 

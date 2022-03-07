@@ -320,6 +320,28 @@ copydb_create_index(const char *pguri,
 		return true;
 	}
 
+	/*
+	 * When asked to create an index for a constraint and the index is neither
+	 * a UNIQUE nor a PRIMARY KEY index, then we can't use the ALTER TABLE ...
+	 * ADD CONSTRAINT ... USING INDEX ... command, because this only works with
+	 * UNIQUE and PRIMARY KEY indexes.
+	 *
+	 * This means that we have to skip creating the index first, and will only
+	 * then create it during the constraint phase, as part of the "plain" ALTER
+	 * TABLE ... ADD CONSTRAINT ... command.
+	 */
+	else if (!constraint && !index->isPrimary && !index->isUnique)
+	{
+		log_warn("Skipping concurrent build of index for constraint "
+				 "\"%s\" %s on \"%s\".\"%s\", "
+				 "it is not a UNIQUE or a PRIMARY constraint",
+				 index->constraintName,
+				 index->constraintDef,
+				 index->tableNamespace,
+				 index->tableRelname);
+		return true;
+	}
+
 	/* deal with same-index concurrency if we have to */
 	if (!copydb_index_is_being_processed(index,
 										 indexPaths,
@@ -340,7 +362,7 @@ copydb_create_index(const char *pguri,
 		return true;
 	}
 
-	/* now grab an index semaphore lock to deal if we have one */
+	/* now grab an index semaphore lock if we have one */
 	(void) semaphore_lock(createIndexSemaphore);
 
 	/* prepare the create index command, maybe adding IF NOT EXISTS */
@@ -628,17 +650,30 @@ copydb_prepare_create_constraint_command(SourceIndex *index,
 										 char *command,
 										 size_t size)
 {
-	sformat(command, size,
-			"ALTER TABLE \"%s\".\"%s\" "
-			"ADD CONSTRAINT \"%s\" %s "
-			"USING INDEX \"%s\";",
-			index->tableNamespace,
-			index->tableRelname,
-			index->constraintName,
-			index->isPrimary
-			? "PRIMARY KEY"
-			: (index->isUnique ? "UNIQUE" : ""),
-			index->indexRelname);
+	if (index->isPrimary || index->isUnique)
+	{
+		char *constraintType = index->isPrimary ? "PRIMARY KEY" : "UNIQUE";
+
+		sformat(command, size,
+				"ALTER TABLE \"%s\".\"%s\" "
+				"ADD CONSTRAINT \"%s\" %s "
+				"USING INDEX \"%s\";",
+				index->tableNamespace,
+				index->tableRelname,
+				index->constraintName,
+				constraintType,
+				index->indexRelname);
+	}
+	else
+	{
+		sformat(command, size,
+				"ALTER TABLE \"%s\".\"%s\" "
+				"ADD CONSTRAINT \"%s\" %s ",
+				index->tableNamespace,
+				index->tableRelname,
+				index->constraintName,
+				index->constraintDef);
+	}
 
 	return true;
 }
