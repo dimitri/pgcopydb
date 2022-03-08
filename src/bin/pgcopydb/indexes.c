@@ -309,6 +309,8 @@ copydb_create_index(const char *pguri,
 	bool isDone = false;
 	bool isBeingProcessed = false;
 
+	bool isConstraintIndex = index->constraintOid != 0;
+
 	/*
 	 * When asked to create the constraint and there is no constraint attached
 	 * to this index, skip the operation entirely.
@@ -330,12 +332,12 @@ copydb_create_index(const char *pguri,
 	 * then create it during the constraint phase, as part of the "plain" ALTER
 	 * TABLE ... ADD CONSTRAINT ... command.
 	 */
-	else if (!constraint && !index->isPrimary && !index->isUnique)
+	else if (isConstraintIndex && !index->isPrimary && !index->isUnique)
 	{
-		log_warn("Skipping concurrent build of index for constraint "
-				 "\"%s\" %s on \"%s\".\"%s\", "
+		log_warn("Skipping concurrent build of index "
+				 "\"%s\" for constraint %s on \"%s\".\"%s\", "
 				 "it is not a UNIQUE or a PRIMARY constraint",
-				 index->constraintName,
+				 index->indexRelname,
 				 index->constraintDef,
 				 index->tableNamespace,
 				 index->tableRelname);
