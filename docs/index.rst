@@ -25,6 +25,7 @@ __ https://github.com/dimitri/pgcopydb
 
    intro
    design
+   install
    ref/manual
 
 Indices and tables
