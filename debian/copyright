@@ -4,6 +4,7 @@ Source: https://github.com/pgcopydb/pgcopydb
 
 Files: *
 Copyright: Copyright (c) Dimitri Fontaine.
+           Copyright (c) Microsoft Corporation. All rights reserved.
 License: PostgreSQL
 
 Files: src/bin/lib/parson/*
