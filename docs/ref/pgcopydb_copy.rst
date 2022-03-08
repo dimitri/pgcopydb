@@ -296,7 +296,7 @@ The following options are available to ``pgcopydb copy`` sub-commands:
   During its normal operations pgcopydb creates a lot of temporary files to
   track sub-processes progress. Temporary files are created in the directory
   location given by this option, or defaults to
-  ``${XDG_RUNTIME_DIR}/pgcopydb`` when the environment variable is set, or
+  ``${TMPDIR}/pgcopydb`` when the environment variable is set, or
   then to ``/tmp/pgcopydb``.
 
 --table-jobs
@@ -413,19 +413,10 @@ PGCOPYDB_SNAPSHOT
 
   Postgres snapshot identifier to re-use, see also ``--snapshot``.
 
-XDG_RUNTIME_DIR
-
-  As per the `XDG Base Directory Specification`__ the XDG_RUNTIME_DIR
-  environment variable defines the base directory relative to which
-  user-specific non-essential runtime files and other file objects (such as
-  sockets, named pipes, ...) should be stored. The directory MUST be owned
-  by the user, and he MUST be the only one having read and write access to
-  it. Its Unix access mode MUST be 0700.
+TMPDIR
 
   The pgcopydb command creates all its work files and directories in
-  ``${XDG_RUNTIME_DIR}/pgcopydb``.
-
-__ https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
+  ``${TMPDIR}/pgcopydb``, and defaults to ``/tmp/pgcopydb``.
 
 Examples
 --------
