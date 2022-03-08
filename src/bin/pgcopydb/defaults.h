@@ -7,7 +7,7 @@
 #define DEFAULTS_H
 
 /* additional version information for printing version on CLI */
-#define PGCOPYDB_VERSION "0.3"
+#define PGCOPYDB_VERSION "0.4"
 
 /* environment variable to use to make DEBUG facilities available */
 #define PGCOPYDB_DEBUG "PGCOPYDB_DEBUG"
