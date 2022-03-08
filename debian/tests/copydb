@@ -2,6 +2,9 @@
 
 set -eux
 
+# remove run leftovers
+trap "rm -rf /tmp/pgcopydb" EXIT
+
 pg_virtualenv << EOF
   set -eux
   createdb src
