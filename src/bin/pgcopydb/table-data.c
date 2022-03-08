@@ -954,30 +954,31 @@ copydb_create_constraints(CopyTableDataSpec *tableSpecs)
 			 */
 			bool buildingIndex = !(index->isPrimary || index->isUnique);
 
-			/*
-			 * If we're building the index, then we want to acquire the index
-			 * semaphore first.
-			 */
-			Semaphore *createIndexSemaphore = tableSpecs->indexSemaphore;
-
-			if (buildingIndex)
+			if (!buildingIndex)
 			{
-				(void) semaphore_lock(createIndexSemaphore);
-			}
-
-			if (!pgsql_execute(&dst, summary.command))
-			{
-				/* errors have already been logged */
-				if (buildingIndex)
+				if (!pgsql_execute(&dst, summary.command))
 				{
+					/* errors have already been logged */
+					return false;
+				}
+			}
+			else
+			{
+				/*
+				 * If we're building the index, then we want to acquire the
+				 * index semaphore first.
+				 */
+				Semaphore *createIndexSemaphore = tableSpecs->indexSemaphore;
+
+				(void) semaphore_lock(createIndexSemaphore);
+
+				if (!pgsql_execute(&dst, summary.command))
+				{
+					/* errors have already been logged */
 					(void) semaphore_unlock(createIndexSemaphore);
+					return false;
 				}
 
-				return false;
-			}
-
-			if (buildingIndex)
-			{
 				(void) semaphore_unlock(createIndexSemaphore);
 			}
 		}
