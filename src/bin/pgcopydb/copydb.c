@@ -315,7 +315,7 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths, const char *dir)
 	{
 		char tmpdir[MAXPGPATH] = { 0 };
 
-		if (!get_env_copy_with_fallback("XDG_RUNTIME_DIR",
+		if (!get_env_copy_with_fallback("TMPDIR",
 										tmpdir,
 										sizeof(tmpdir),
 										"/tmp"))
