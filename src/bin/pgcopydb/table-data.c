@@ -699,7 +699,7 @@ copydb_copy_table_indexes(CopyTableDataSpec *tableSpecs)
 		case 0:
 		{
 			/* child process runs the command */
-			if (!copydb_start_create_table_indexes(tableSpecs))
+			if (!copydb_create_table_indexes(tableSpecs))
 			{
 				log_error("Failed to create indexes, see above for details");
 				exit(EXIT_CODE_INTERNAL_ERROR);
@@ -750,11 +750,11 @@ copydb_copy_table_indexes(CopyTableDataSpec *tableSpecs)
 
 
 /*
- * copydb_start_create_indexes creates all the indexes for a given table in
- * parallel, using a sub-process to send each index command.
+ * copydb_create_indexes creates all the indexes for a given table in parallel,
+ * using a sub-process to send each index command.
  */
 bool
-copydb_start_create_table_indexes(CopyTableDataSpec *tableSpecs)
+copydb_create_table_indexes(CopyTableDataSpec *tableSpecs)
 {
 	SourceTable *sourceTable = &(tableSpecs->sourceTable);
 	SourceIndexArray *indexArray = tableSpecs->indexArray;
