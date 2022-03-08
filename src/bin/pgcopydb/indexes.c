@@ -452,7 +452,7 @@ copydb_index_is_being_processed(SourceIndex *index,
 	/* some callers have no same-index concurrency, just create the lockFile */
 	if (lockFileSemaphore == NULL)
 	{
-		if (!open_index_summary(summary, lockFile))
+		if (!open_index_summary(summary, lockFile, constraint))
 		{
 			log_info("Failed to create the lock file at \"%s\"", lockFile);
 			(void) semaphore_unlock(lockFileSemaphore);
@@ -526,7 +526,7 @@ copydb_index_is_being_processed(SourceIndex *index,
 	 */
 	*isBeingProcessed = false;
 
-	if (!open_index_summary(summary, lockFile))
+	if (!open_index_summary(summary, lockFile, constraint))
 	{
 		log_info("Failed to create the lock file at \"%s\"", lockFile);
 		(void) semaphore_unlock(lockFileSemaphore);
@@ -564,7 +564,7 @@ copydb_mark_index_as_done(SourceIndex *index,
 	}
 
 	/* create the doneFile for the index */
-	if (!finish_index_summary(summary, doneFile))
+	if (!finish_index_summary(summary, doneFile, constraint))
 	{
 		log_info("Failed to create the summary file at \"%s\"", doneFile);
 

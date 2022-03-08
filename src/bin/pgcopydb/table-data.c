@@ -901,6 +901,23 @@ copydb_create_constraints(CopyTableDataSpec *tableSpecs)
 			continue;
 		}
 
+		/* First, write the lockFile, with a summary of what's going-on */
+		CopyIndexSummary summary = {
+			.pid = getpid(),
+			.index = index,
+			.command = { 0 }
+		};
+
+		/* we only install constraints in this part of the code */
+		bool constraint = true;
+		char *lockFile = indexPaths->constraintLockFile;
+
+		if (!open_index_summary(&summary, lockFile, constraint))
+		{
+			log_info("Failed to create the lock file at \"%s\"", lockFile);
+			continue;
+		}
+
 		/* skip constraints that already exist on the target database */
 		bool foundConstraintOnTarget = false;
 
@@ -917,9 +934,9 @@ copydb_create_constraints(CopyTableDataSpec *tableSpecs)
 			}
 		}
 
-		char sql[BUFSIZE] = { 0 };
-
-		if (!copydb_prepare_create_constraint_command(index, sql, sizeof(sql)))
+		if (!copydb_prepare_create_constraint_command(index,
+													  summary.command,
+													  sizeof(summary.command)))
 		{
 			log_warn("Failed to prepare SQL command to create constraint \"%s\"",
 					 index->constraintName);
@@ -928,7 +945,7 @@ copydb_create_constraints(CopyTableDataSpec *tableSpecs)
 
 		if (!foundConstraintOnTarget)
 		{
-			log_info("%s", sql);
+			log_info("%s", summary.command);
 
 			/*
 			 * Unique and Primary Key indexes have been built already, in the
@@ -948,7 +965,7 @@ copydb_create_constraints(CopyTableDataSpec *tableSpecs)
 				(void) semaphore_lock(createIndexSemaphore);
 			}
 
-			if (!pgsql_execute(&dst, sql))
+			if (!pgsql_execute(&dst, summary.command))
 			{
 				/* errors have already been logged */
 				if (buildingIndex)
@@ -971,17 +988,21 @@ copydb_create_constraints(CopyTableDataSpec *tableSpecs)
 		 * already existing objects from the pg_restore --section post-data
 		 * later.
 		 */
-		char contents[BUFSIZE] = { 0 };
+		char *doneFile = indexPaths->constraintDoneFile;
 
-		sformat(contents, sizeof(contents), "%s\n", sql);
-
-		if (!write_file(contents,
-						strlen(contents),
-						indexPaths->constraintDoneFile))
+		if (!finish_index_summary(&summary, doneFile, constraint))
 		{
-			log_warn("Failed to create the constraint done file");
+			log_warn("Failed to create the constraint done file at \"%s\"",
+					 doneFile);
 			log_warn("Restoring the --post-data part of the schema "
 					 "might fail because of already existing objects");
+			continue;
+		}
+
+		if (!unlink_file(lockFile))
+		{
+			log_error("Failed to remove the lockFile \"%s\"", lockFile);
+			continue;
 		}
 	}
 
