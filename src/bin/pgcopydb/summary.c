@@ -685,7 +685,7 @@ print_toplevel_summary(Summary *summary, int tableJobs, int indexJobs)
 			tableJobs);
 
 	fformat(stdout, " %45s   %10s  %10s  %12d\n",
-			"Large Objects", "both",
+			"Large Objects (cumulative)", "both",
 			summary->timings.blobsMs,
 			1);
 
