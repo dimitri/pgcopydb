@@ -213,6 +213,7 @@ create_table_index_file(CopyTableSummary *summary,
 		SourceIndex *index = &(indexArray->array[i]);
 
 		appendPQExpBuffer(content, "%d\n", index->indexOid);
+		appendPQExpBuffer(content, "%d\n", index->constraintOid);
 	}
 
 	/* memory allocation could have failed while building string */
@@ -281,19 +282,31 @@ read_table_index_file(SourceIndexArray *indexArray, char *filename)
 
 
 /*
- * write_index_summary writes the current Index Summary to given filename.
+ * write_index_summary writes the current Index Summary to given filename. The
+ * constraint bool allows to write the constraint definition instead of the
+ * index definition.
  */
 bool
-write_index_summary(CopyIndexSummary *summary, char *filename)
+write_index_summary(CopyIndexSummary *summary, char *filename, bool constraint)
 {
 	char contents[BUFSIZE] = { 0 };
+
+	uint32_t oid =
+		constraint
+		? summary->index->constraintOid
+		: summary->index->indexOid;
+
+	char *name =
+		constraint
+		? summary->index->constraintName
+		: summary->index->indexRelname;
 
 	sformat(contents, BUFSIZE,
 			"%d\n%u\n%s\n%s\n%lld\n%lld\n%lld\n%s\n",
 			summary->pid,
-			summary->index->indexOid,
+			oid,
 			summary->index->indexNamespace,
-			summary->index->indexRelname,
+			name,
 			(long long) summary->startTime,
 			(long long) summary->doneTime,
 			(long long) summary->durationMs,
@@ -397,7 +410,7 @@ read_index_summary(CopyIndexSummary *summary, const char *filename)
  * writes the summary in the given filename. Typically, the lockFile.
  */
 bool
-open_index_summary(CopyIndexSummary *summary, char *filename)
+open_index_summary(CopyIndexSummary *summary, char *filename, bool constraint)
 {
 	summary->startTime = time(NULL);
 	summary->doneTime = 0;
@@ -411,7 +424,7 @@ open_index_summary(CopyIndexSummary *summary, char *filename)
 
 	INSTR_TIME_SET_CURRENT(summary->startTimeInstr);
 
-	return write_index_summary(summary, filename);
+	return write_index_summary(summary, filename, constraint);
 }
 
 
@@ -420,7 +433,7 @@ open_index_summary(CopyIndexSummary *summary, char *filename)
  * summary in the given filename. Typically, the doneFile.
  */
 bool
-finish_index_summary(CopyIndexSummary *summary, char *filename)
+finish_index_summary(CopyIndexSummary *summary, char *filename, bool constraint)
 {
 	summary->doneTime = time(NULL);
 
@@ -429,7 +442,7 @@ finish_index_summary(CopyIndexSummary *summary, char *filename)
 
 	summary->durationMs = INSTR_TIME_GET_MILLISEC(summary->durationInstr);
 
-	return write_index_summary(summary, filename);
+	return write_index_summary(summary, filename, constraint);
 }
 
 
@@ -672,12 +685,12 @@ print_toplevel_summary(Summary *summary, int tableJobs, int indexJobs)
 			tableJobs);
 
 	fformat(stdout, " %45s   %10s  %10s  %12d\n",
-			"Large Objects", "both",
+			"Large Objects (cumulative)", "both",
 			summary->timings.blobsMs,
 			1);
 
 	fformat(stdout, " %45s   %10s  %10s  %12d\n",
-			"CREATE INDEX (cumulative)", "target",
+			"CREATE INDEX, CONSTRAINTS (cumulative)", "target",
 			summary->timings.totalIndexMs,
 			indexJobs);
 

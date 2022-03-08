@@ -398,26 +398,62 @@ cli_list_indexes(int argc, char **argv)
 
 	log_info("Fetched information for %d indexes", indexArray.count);
 
-	fformat(stdout, "%8s | %10s | %20s | %15s | %25s | %s\n",
-			"OID", "Schema", "Index Name", "conname", "Constraint", "DDL");
+	fformat(stdout, "%8s | %10s | %20s | %20s | %25s | %s\n",
+			"OID", "Schema",
+			"Index Name", "Constraint Name",
+			"Constraint", "DDL");
 
-	fformat(stdout, "%8s-+-%10s-+-%20s-+-%15s-+-%25s-+-%s\n",
+	fformat(stdout, "%8s-+-%10s-+-%20s-+-%20s-+-%25s-+-%s\n",
 			"--------",
 			"----------",
 			"--------------------",
-			"---------------",
+			"--------------------",
 			"-------------------------",
 			"--------------------");
 
 	for (int i = 0; i < indexArray.count; i++)
 	{
-		fformat(stdout, "%8d | %10s | %20s | %15s | %25s | %s\n",
-				indexArray.array[i].indexOid,
-				indexArray.array[i].indexNamespace,
-				indexArray.array[i].indexRelname,
-				indexArray.array[i].constraintName,
-				indexArray.array[i].constraintDef,
-				indexArray.array[i].indexDef);
+		SourceIndex *index = &(indexArray.array[i]);
+
+		if (!IS_EMPTY_STRING_BUFFER(index->constraintName))
+		{
+			if (index->isPrimary || index->isUnique)
+			{
+				fformat(stdout, "%8d | %10s | %20s | %20s | %25s | %s\n",
+						index->indexOid,
+						index->indexNamespace,
+						index->indexRelname,
+						index->constraintName,
+						index->constraintDef,
+						index->indexDef);
+			}
+			else
+			{
+				/*
+				 * We can't create the index separately when it's not a UNIQUE
+				 * or PRIMARY KEY index. EXCLUDE USING constraints are done
+				 * with indexes that don't implement the constraint themselves.
+				 */
+				fformat(stdout, "%8d | %10s | %20s | %20s | %25s | %s\n",
+						index->indexOid,
+						index->indexNamespace,
+						"",
+						index->constraintName,
+						index->constraintDef,
+						"");
+			}
+		}
+		else
+		{
+			/* when the constraint name is empty, the default display is ok */
+			fformat(stdout, "%8d | %10s | %20s | %20s | %25s | %s\n",
+					index->indexOid,
+					index->indexNamespace,
+					index->indexRelname,
+					index->constraintName,
+					index->constraintDef,
+					index->indexDef);
+		}
 	}
 
 	fformat(stdout, "\n");

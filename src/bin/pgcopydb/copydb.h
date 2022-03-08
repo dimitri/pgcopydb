@@ -315,7 +315,7 @@ bool copydb_start_table_process(CopyDataSpec *specs);
 bool copydb_copy_table(CopyTableDataSpec *tableSpecs);
 
 bool copydb_copy_table_indexes(CopyTableDataSpec *tableSpecs);
-bool copydb_start_create_table_indexes(CopyTableDataSpec *tableSpecs);
+bool copydb_create_table_indexes(CopyTableDataSpec *tableSpecs);
 
 bool copydb_create_constraints(CopyTableDataSpec *tableSpecs);
 

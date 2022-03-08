@@ -699,7 +699,7 @@ copydb_copy_table_indexes(CopyTableDataSpec *tableSpecs)
 		case 0:
 		{
 			/* child process runs the command */
-			if (!copydb_start_create_table_indexes(tableSpecs))
+			if (!copydb_create_table_indexes(tableSpecs))
 			{
 				log_error("Failed to create indexes, see above for details");
 				exit(EXIT_CODE_INTERNAL_ERROR);
@@ -750,11 +750,11 @@ copydb_copy_table_indexes(CopyTableDataSpec *tableSpecs)
 
 
 /*
- * copydb_start_create_indexes creates all the indexes for a given table in
- * parallel, using a sub-process to send each index command.
+ * copydb_create_indexes creates all the indexes for a given table in parallel,
+ * using a sub-process to send each index command.
  */
 bool
-copydb_start_create_table_indexes(CopyTableDataSpec *tableSpecs)
+copydb_create_table_indexes(CopyTableDataSpec *tableSpecs)
 {
 	SourceTable *sourceTable = &(tableSpecs->sourceTable);
 	SourceIndexArray *indexArray = tableSpecs->indexArray;
@@ -901,6 +901,23 @@ copydb_create_constraints(CopyTableDataSpec *tableSpecs)
 			continue;
 		}
 
+		/* First, write the lockFile, with a summary of what's going-on */
+		CopyIndexSummary summary = {
+			.pid = getpid(),
+			.index = index,
+			.command = { 0 }
+		};
+
+		/* we only install constraints in this part of the code */
+		bool constraint = true;
+		char *lockFile = indexPaths->constraintLockFile;
+
+		if (!open_index_summary(&summary, lockFile, constraint))
+		{
+			log_info("Failed to create the lock file at \"%s\"", lockFile);
+			continue;
+		}
+
 		/* skip constraints that already exist on the target database */
 		bool foundConstraintOnTarget = false;
 
@@ -917,9 +934,9 @@ copydb_create_constraints(CopyTableDataSpec *tableSpecs)
 			}
 		}
 
-		char sql[BUFSIZE] = { 0 };
-
-		if (!copydb_prepare_create_constraint_command(index, sql, sizeof(sql)))
+		if (!copydb_prepare_create_constraint_command(index,
+													  summary.command,
+													  sizeof(summary.command)))
 		{
 			log_warn("Failed to prepare SQL command to create constraint \"%s\"",
 					 index->constraintName);
@@ -928,12 +945,41 @@ copydb_create_constraints(CopyTableDataSpec *tableSpecs)
 
 		if (!foundConstraintOnTarget)
 		{
-			log_info("%s", sql);
+			log_info("%s", summary.command);
 
-			if (!pgsql_execute(&dst, sql))
+			/*
+			 * Unique and Primary Key indexes have been built already, in the
+			 * other cases the index is built within the ALTER TABLE ... ADD
+			 * CONSTRAINT command.
+			 */
+			bool buildingIndex = !(index->isPrimary || index->isUnique);
+
+			if (!buildingIndex)
 			{
-				/* errors have already been logged */
-				return false;
+				if (!pgsql_execute(&dst, summary.command))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+			}
+			else
+			{
+				/*
+				 * If we're building the index, then we want to acquire the
+				 * index semaphore first.
+				 */
+				Semaphore *createIndexSemaphore = tableSpecs->indexSemaphore;
+
+				(void) semaphore_lock(createIndexSemaphore);
+
+				if (!pgsql_execute(&dst, summary.command))
+				{
+					/* errors have already been logged */
+					(void) semaphore_unlock(createIndexSemaphore);
+					return false;
+				}
+
+				(void) semaphore_unlock(createIndexSemaphore);
 			}
 		}
 
@@ -943,17 +989,21 @@ copydb_create_constraints(CopyTableDataSpec *tableSpecs)
 		 * already existing objects from the pg_restore --section post-data
 		 * later.
 		 */
-		char contents[BUFSIZE] = { 0 };
+		char *doneFile = indexPaths->constraintDoneFile;
 
-		sformat(contents, sizeof(contents), "%s\n", sql);
-
-		if (!write_file(contents,
-						strlen(contents),
-						indexPaths->constraintDoneFile))
+		if (!finish_index_summary(&summary, doneFile, constraint))
 		{
-			log_warn("Failed to create the constraint done file");
+			log_warn("Failed to create the constraint done file at \"%s\"",
+					 doneFile);
 			log_warn("Restoring the --post-data part of the schema "
 					 "might fail because of already existing objects");
+			continue;
+		}
+
+		if (!unlink_file(lockFile))
+		{
+			log_error("Failed to remove the lockFile \"%s\"", lockFile);
+			continue;
 		}
 	}
 

@@ -169,10 +169,13 @@ bool read_blobs_summary(CopyBlobsSummary *summary, char *filename);
 void summary_set_current_time(TopLevelTimings *timings, TimingStep step);
 
 
-bool write_index_summary(CopyIndexSummary *summary, char *filename);
+bool write_index_summary(CopyIndexSummary *summary, char *filename,
+						 bool constraint);
 bool read_index_summary(CopyIndexSummary *summary, const char *filename);
-bool open_index_summary(CopyIndexSummary *summary, char *filename);
-bool finish_index_summary(CopyIndexSummary *summary, char *filename);
+bool open_index_summary(CopyIndexSummary *summary, char *filename,
+						bool constraint);
+bool finish_index_summary(CopyIndexSummary *summary, char *filename,
+						  bool constraint);
 
 void summary_prepare_toplevel_durations(Summary *summary);
 void print_toplevel_summary(Summary *summary, int tableJobs, int indexJobs);
