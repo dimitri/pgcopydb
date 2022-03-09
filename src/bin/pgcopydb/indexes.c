@@ -414,6 +414,8 @@ copydb_create_index(const char *pguri,
 		return false;
 	}
 
+	(void) pgsql_finish(&dst);
+
 	/* the CREATE INDEX command is done, release our lock */
 	(void) semaphore_unlock(createIndexSemaphore);
 

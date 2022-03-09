@@ -1584,6 +1584,9 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 		}
 	}
 
+	/* always close the target connection, that we opened in this function */
+	(void) pgsql_finish(dst);
+
 	return !failedOnSrc && !failedOnDst;
 }
 

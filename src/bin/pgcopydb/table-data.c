@@ -59,10 +59,12 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 	 * processes, each sub-process walks through the array and pick the first
 	 * table that's not being processed already, until all has been done.
 	 */
-	if (!copydb_start_table_processes(specs))
+	if (!copydb_process_table_data(specs))
 	{
 		log_fatal("Failed to start a sub-process to COPY the data");
 		(void) copydb_fatal_exit();
+
+		return false;
 	}
 
 	if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
@@ -82,19 +84,6 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 	{
 		log_warn("Failed to write the tracking file \%s\"",
 				 specs->cfPaths.done.indexes);
-	}
-
-	/*
-	 * Now is a good time to reset sequences: we're waiting for the TABLE DATA
-	 * sections and the CREATE INDEX, CONSTRAINTS and VACUUM ANALYZE to be done
-	 * with. Sequences can be reset to their expected values while the COPY are
-	 * still running, as COPY won't drain identifiers from the sequences
-	 * anyway.
-	 */
-	if (!copydb_copy_all_sequences(specs))
-	{
-		/* errors have already been logged */
-		++errors;
 	}
 
 terminate:
@@ -196,13 +185,15 @@ copydb_prepare_table_specs(CopyDataSpec *specs)
 
 
 /*
- * copydb_start_table_processes forks() as many as specs->tableJobs processes
- * that will all concurrently process TABLE DATA and then CREATE INDEX and then
- * also VACUUM ANALYZE each table.
+ * copydb_process_table_data forks() as many as specs->tableJobs processes that
+ * will all concurrently process TABLE DATA and then CREATE INDEX and then also
+ * VACUUM ANALYZE each table.
  */
 bool
-copydb_start_table_processes(CopyDataSpec *specs)
+copydb_process_table_data(CopyDataSpec *specs)
 {
+	int errors = 0;
+
 	/*
 	 * Are blobs table data? well pg_dump --section sayth yes.
 	 */
@@ -237,7 +228,7 @@ copydb_start_table_processes(CopyDataSpec *specs)
 			case 0:
 			{
 				/* child process runs the command */
-				if (!copydb_start_table_process(specs))
+				if (!copydb_process_table_data_worker(specs))
 				{
 					/* errors have already been logged */
 					exit(EXIT_CODE_INTERNAL_ERROR);
@@ -254,6 +245,19 @@ copydb_start_table_processes(CopyDataSpec *specs)
 		}
 	}
 
+	/*
+	 * Now is a good time to reset sequences: we're waiting for the TABLE DATA
+	 * sections and the CREATE INDEX, CONSTRAINTS and VACUUM ANALYZE to be done
+	 * with. Sequences can be reset to their expected values while the COPY are
+	 * still running, as COPY won't drain identifiers from the sequences
+	 * anyway.
+	 */
+	if (!copydb_copy_all_sequences(specs))
+	{
+		/* errors have already been logged */
+		++errors;
+	}
+
 	bool success = copydb_wait_for_subprocesses();
 
 	/* and write that we successfully finished copying all tables */
@@ -263,13 +267,14 @@ copydb_start_table_processes(CopyDataSpec *specs)
 				 specs->cfPaths.done.tables);
 	}
 
-	return success;
+	return success && errors == 0;
 }
 
 
 /*
- * copydb_start_table_process stats a sub-process that walks through the array
- * of tables to COPY over from the source database to the target database.
+ * copydb_process_table_data_worker stats a sub-process that walks through the
+ * array of tables to COPY over from the source database to the target
+ * database.
  *
  * Each process walks through the entire array, and for each entry:
  *
@@ -280,7 +285,7 @@ copydb_start_table_processes(CopyDataSpec *specs)
  *  - if we created a lock file, process the selected table
  */
 bool
-copydb_start_table_process(CopyDataSpec *specs)
+copydb_process_table_data_worker(CopyDataSpec *specs)
 {
 	int errors = 0;
 
@@ -388,7 +393,7 @@ copydb_start_table_process(CopyDataSpec *specs)
 	}
 
 	/* terminate our connection to the source database now */
-	(void) pgsql_finish(&(specs->sourceSnapshot.pgsql));
+	(void) copydb_close_snapshot(&(specs->sourceSnapshot));
 
 	/*
 	 * When this process has finished looping over all the tables in the table
@@ -1007,6 +1012,9 @@ copydb_create_constraints(CopyTableDataSpec *tableSpecs)
 		}
 	}
 
+	/* close connection to the target database now */
+	(void) pgsql_finish(&dst);
+
 	/* free malloc'ed memory area */
 	free(dstIndexArray.array);
 
@@ -1073,12 +1081,46 @@ copydb_start_blob_process(CopyDataSpec *specs)
 bool
 copydb_copy_blobs(CopyDataSpec *specs)
 {
-	PGSQL *src = &(specs->sourceSnapshot.pgsql);
-	PGSQL dst = { 0 };
-
 	instr_time startTime;
 
 	INSTR_TIME_SET_CURRENT(startTime);
+
+	TransactionSnapshot snapshot = { 0 };
+
+	PGSQL *src = &(snapshot.pgsql);
+	PGSQL dst = { 0 };
+
+	/*
+	 * The large object fetching and copying is done within the same snapshot
+	 * as per the main process, or per the --snapshot argument. That said, When
+	 * running in an auxiliary process, we need to avoid piggybacking on the
+	 * main CopyDataSpecs snapshot and libpq connection structure instance.
+	 */
+	if (!copydb_copy_snapshot(specs, &snapshot))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_info("copydb_copy_blobs: \"%s\"", snapshot.pguri);
+	log_info("copydb_copy_blobs: \"%s\"", snapshot.snapshot);
+
+	if (!IS_EMPTY_STRING_BUFFER(snapshot.snapshot))
+	{
+		if (!copydb_set_snapshot(&snapshot))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+	else
+	{
+		if (!pgsql_init(src, (char *) specs->source_pguri, PGSQL_CONN_SOURCE))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
 
 	if (!pgsql_init(&dst, (char *) specs->target_pguri, PGSQL_CONN_TARGET))
 	{
@@ -1104,6 +1146,17 @@ copydb_copy_blobs(CopyDataSpec *specs)
 		log_error("Failed to copy large objects");
 		return false;
 	}
+
+	if (!copydb_close_snapshot(&snapshot))
+	{
+		log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
+				  snapshot.snapshot,
+				  snapshot.pguri);
+		return false;
+	}
+
+	/* close connection to the target database now */
+	(void) pgsql_finish(&dst);
 
 	instr_time duration;
 
