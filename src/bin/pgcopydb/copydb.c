@@ -890,7 +890,15 @@ copydb_start_vacuum_table(CopyTableDataSpec *tableSpecs)
 bool
 copydb_fatal_exit()
 {
-	log_fatal("Terminating all subprocesses");
+	log_fatal("Terminating all processes in our process group");
+
+	/* signal all sub-processes that now is the time to stop */
+	if (kill(0, SIGTERM) == -1)
+	{
+		log_error("Failed to signal pgcopydb process group: %m");
+		return false;
+	}
+
 	return copydb_wait_for_subprocesses();
 }
 
@@ -967,7 +975,7 @@ copydb_wait_for_subprocesses()
  * processes, without waiting for all of them.
  */
 bool
-copydb_collect_finished_subprocesses()
+copydb_collect_finished_subprocesses(bool *allDone)
 {
 	bool allReturnCodeAreZero = true;
 
@@ -985,7 +993,7 @@ copydb_collect_finished_subprocesses()
 				if (errno == ECHILD)
 				{
 					/* no more childrens */
-					return true;
+					return allReturnCodeAreZero;
 				}
 
 				break;
@@ -997,7 +1005,8 @@ copydb_collect_finished_subprocesses()
 				 * We're using WNOHANG, 0 means there are no stopped or exited
 				 * children.
 				 */
-				return true;
+				*allDone = true;
+				return allReturnCodeAreZero;
 			}
 
 			default:

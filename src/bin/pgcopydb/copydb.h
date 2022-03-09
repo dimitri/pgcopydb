@@ -245,7 +245,7 @@ bool copydb_start_vacuum_table(CopyTableDataSpec *tableSpecs);
 
 bool copydb_fatal_exit(void);
 bool copydb_wait_for_subprocesses(void);
-bool copydb_collect_finished_subprocesses(void);
+bool copydb_collect_finished_subprocesses(bool *allDone);
 
 
 /* indexes.c */

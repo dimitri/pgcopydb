@@ -61,9 +61,7 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 	 */
 	if (!copydb_process_table_data(specs))
 	{
-		log_fatal("Failed to start a sub-process to COPY the data");
-		(void) copydb_fatal_exit();
-
+		log_fatal("Failed to COPY the data, see above for details");
 		return false;
 	}
 
@@ -258,7 +256,20 @@ copydb_process_table_data(CopyDataSpec *specs)
 		++errors;
 	}
 
-	bool success = copydb_wait_for_subprocesses();
+	bool allDone = false;
+
+	while (!allDone)
+	{
+		if (!copydb_collect_finished_subprocesses(&allDone))
+		{
+			/* errors have already been logged */
+			(void) copydb_fatal_exit();
+
+			return false;
+		}
+
+		pg_usleep(100 * 1000); /* 100 ms */
+	}
 
 	/* and write that we successfully finished copying all tables */
 	if (!write_file("", 0, specs->cfPaths.done.tables))
@@ -267,7 +278,7 @@ copydb_process_table_data(CopyDataSpec *specs)
 				 specs->cfPaths.done.tables);
 	}
 
-	return success && errors == 0;
+	return errors == 0;
 }
 
 
@@ -385,7 +396,9 @@ copydb_process_table_data_worker(CopyDataSpec *specs)
 		 * 4. Opportunistically see if some CREATE INDEX processed have
 		 *    finished already.
 		 */
-		if (!copydb_collect_finished_subprocesses())
+		bool allDone = false;
+
+		if (!copydb_collect_finished_subprocesses(&allDone))
 		{
 			/* errors have already been logged */
 			++errors;
@@ -1101,9 +1114,6 @@ copydb_copy_blobs(CopyDataSpec *specs)
 		/* errors have already been logged */
 		return false;
 	}
-
-	log_info("copydb_copy_blobs: \"%s\"", snapshot.pguri);
-	log_info("copydb_copy_blobs: \"%s\"", snapshot.snapshot);
 
 	if (!IS_EMPTY_STRING_BUFFER(snapshot.snapshot))
 	{
