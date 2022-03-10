@@ -232,8 +232,7 @@ cli_list_tables(int argc, char **argv)
 
 	if (listDBoptions.noPKey)
 	{
-		log_info("Listing tables without primary key in \"%s\"",
-				 listDBoptions.source_pguri);
+		log_info("Listing tables without primary key in source database");
 
 		if (!schema_list_ordinary_tables_without_pk(&pgsql, &tableArray))
 		{
@@ -243,8 +242,7 @@ cli_list_tables(int argc, char **argv)
 	}
 	else
 	{
-		log_info("Listing ordinary tables in \"%s\"",
-				 listDBoptions.source_pguri);
+		log_info("Listing ordinary tables in source database");
 
 		if (!schema_list_ordinary_tables(&pgsql, &tableArray))
 		{
@@ -289,8 +287,7 @@ cli_list_sequences(int argc, char **argv)
 	PGSQL pgsql = { 0 };
 	SourceSequenceArray sequenceArray = { 0, NULL };
 
-	log_info("Listing ordinary sequences in \"%s\"",
-			 listDBoptions.source_pguri);
+	log_info("Listing ordinary sequences in source database");
 
 	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
 	{

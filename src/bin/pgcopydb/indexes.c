@@ -98,7 +98,7 @@ copydb_copy_all_indexes(CopyDataSpec *specs)
 	SourceIndexArray indexArray = { 0, NULL };
 	IndexFilePathsArray indexPathsArray = { 0, NULL };
 
-	log_info("Listing indexes in \"%s\"", specs->source_pguri);
+	log_info("Listing indexes in source database");
 
 	if (!schema_list_all_indexes(src, &indexArray))
 	{

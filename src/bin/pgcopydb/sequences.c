@@ -58,7 +58,7 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 
 	SourceSequenceArray sequenceArray = { 0, NULL };
 
-	log_info("Listing sequences in \"%s\"", specs->source_pguri);
+	log_info("Listing sequences in source database");
 
 	if (!schema_list_sequences(src, &sequenceArray))
 	{

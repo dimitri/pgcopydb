@@ -609,3 +609,60 @@ parse_and_scrub_connection_string(const char *pguri, char *scrubbedPguri)
 
 	return true;
 }
+
+
+/*
+ * extract_connection_string_password parses the given connection string and if
+ * it contains a password, then extracts it into the SafeURI structure and
+ * provide a pguri without password instead.
+ */
+bool
+extract_connection_string_password(const char *pguri, SafeURI *safeURI)
+{
+	char *errmsg;
+	PQconninfoOption *conninfo, *option;
+
+	conninfo = PQconninfoParse(pguri, &errmsg);
+	if (conninfo == NULL)
+	{
+		log_error("Failed to parse pguri: %s", errmsg);
+
+		PQfreemem(errmsg);
+		return false;
+	}
+
+	for (option = conninfo; option->keyword != NULL; option++)
+	{
+		if (streq(option->keyword, "password"))
+		{
+			if (option->val != NULL)
+			{
+				strlcpy(safeURI->password, option->val, MAXCONNINFO);
+			}
+			continue;
+		}
+	}
+
+	PQconninfoFree(conninfo);
+
+	URIParams *uriParams = &(safeURI->uriParams);
+	KeyVal overrides = {
+		.count = 1,
+		.keywords = { "password" },
+		.values = { "" }
+	};
+
+	bool checkForCompleteURI = false;
+
+	if (!parse_pguri_info_key_vals(pguri,
+								   &overrides,
+								   uriParams,
+								   checkForCompleteURI))
+	{
+		return false;
+	}
+
+	buildPostgresURIfromPieces(uriParams, safeURI->pguri);
+
+	return true;
+}
