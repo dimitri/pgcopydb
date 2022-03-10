@@ -1100,36 +1100,37 @@ copydb_copy_blobs(CopyDataSpec *specs)
 
 	TransactionSnapshot snapshot = { 0 };
 
-	PGSQL *src = &(snapshot.pgsql);
+	PGSQL *src = NULL;
 	PGSQL dst = { 0 };
 
 	/*
-	 * The large object fetching and copying is done within the same snapshot
-	 * as per the main process, or per the --snapshot argument. That said, When
-	 * running in an auxiliary process, we need to avoid piggybacking on the
-	 * main CopyDataSpecs snapshot and libpq connection structure instance.
+	 * In the context of the `pgcopydb copy blobs` command, we want to re-use
+	 * the already prepared snapshot.
 	 */
-	if (!copydb_copy_snapshot(specs, &snapshot))
+	if (specs->section == DATA_SECTION_BLOBS)
 	{
-		/* errors have already been logged */
-		return false;
+		src = &(specs->sourceSnapshot.pgsql);
 	}
-
-	if (!IS_EMPTY_STRING_BUFFER(snapshot.snapshot))
+	else
 	{
+		/*
+		 * In the context of a full copy command, we want to re-use the already
+		 * exported snapshot and make sure to use a private PGSQL client
+		 * connection instance.
+		 */
+		if (!copydb_copy_snapshot(specs, &snapshot))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
 		if (!copydb_set_snapshot(&snapshot))
 		{
 			/* errors have already been logged */
 			return false;
 		}
-	}
-	else
-	{
-		if (!pgsql_init(src, (char *) specs->source_pguri, PGSQL_CONN_SOURCE))
-		{
-			/* errors have already been logged */
-			return false;
-		}
+
+		src = &(snapshot.pgsql);
 	}
 
 	if (!pgsql_init(&dst, (char *) specs->target_pguri, PGSQL_CONN_TARGET))
@@ -1157,12 +1158,16 @@ copydb_copy_blobs(CopyDataSpec *specs)
 		return false;
 	}
 
-	if (!copydb_close_snapshot(&snapshot))
+	/* if we opened a snapshot, now is the time to close it */
+	if (!IS_EMPTY_STRING_BUFFER(snapshot.snapshot))
 	{
-		log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
-				  snapshot.snapshot,
-				  snapshot.pguri);
-		return false;
+		if (!copydb_close_snapshot(&snapshot))
+		{
+			log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
+					  snapshot.snapshot,
+					  snapshot.pguri);
+			return false;
+		}
 	}
 
 	/* close connection to the target database now */
