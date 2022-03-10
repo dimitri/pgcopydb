@@ -24,7 +24,7 @@
 
 char pgcopydb_argv0[MAXPGPATH];
 char pgcopydb_program[MAXPGPATH];
-int pgconnect_timeout = 2;      /* see also POSTGRES_CONNECT_TIMEOUT */
+int pgconnect_timeout = 10;     /* see also POSTGRES_CONNECT_TIMEOUT */
 
 char *ps_buffer;                /* will point to argv area */
 size_t ps_buffer_size;          /* space determined at run time */
