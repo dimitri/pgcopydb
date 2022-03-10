@@ -53,5 +53,5 @@ debsh-qa: deb-qa
 
 .PHONY: all
 .PHONY: bin clean install docs
-.PHONY: test tests tests/pagila
+.PHONY: test tests tests/pagila tests/pagila-multi-steps tests/blobs
 .PHONY: deb debsh deb-qa debsh-qa
