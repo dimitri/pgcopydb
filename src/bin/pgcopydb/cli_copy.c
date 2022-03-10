@@ -792,7 +792,7 @@ cli_copy_blobs(int argc, char **argv)
 {
 	CopyDataSpec copySpecs = { 0 };
 
-	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_CONSTRAINTS);
+	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_BLOBS);
 
 	Summary summary = { 0 };
 	TopLevelTimings *timings = &(summary.timings);

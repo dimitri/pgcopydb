@@ -1,5 +1,11 @@
 FROM debian:sid
 
+ENV TAR v0.4.tar.gz
+ENV ORIG pgcopydb_0.4.orig.tar.gz
+ENV WORKDIR /usr/src/pgcopydb-0.4
+ENV ARCHIVE https://github.com/dimitri/pgcopydb/archive/refs/tags/
+ENV RELEASE ${ARCHIVE}${TAR}
+
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
         build-essential \
@@ -25,21 +31,15 @@ RUN apt-get update \
         curl \
   && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /usr/src/pgcopydb
-
-COPY ./Makefile ./
-COPY ./README.md ./
-COPY ./CHANGELOG.md ./
-COPY ./LICENSE ./
-COPY ./src ./src/
-COPY ./docs ./docs/
-
 WORKDIR /usr/src
-RUN tar czf pgcopydb_0.4.orig.tar.gz pgcopydb
 
-WORKDIR /usr/src/pgcopydb
+RUN curl -L -o ${TAR} ${RELEASE}
+RUN tar xf ${TAR}
+RUN mv ${TAR} ${ORIG}
 
+WORKDIR ${WORKDIR}
 COPY ./debian/ ./debian/
+
 RUN dpkg-buildpackage --no-sign
 
 WORKDIR /usr/src

@@ -561,13 +561,11 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 	strlcpy(tmpTableSpecs.target_pguri, specs->target_pguri, MAXCONNINFO);
 
 	/* initialize the sourceSnapshot buffers */
-	strlcpy(tmpTableSpecs.sourceSnapshot.pguri,
-			specs->sourceSnapshot.pguri,
-			sizeof(tmpTableSpecs.sourceSnapshot.pguri));
-
-	strlcpy(tmpTableSpecs.sourceSnapshot.snapshot,
-			specs->sourceSnapshot.snapshot,
-			sizeof(tmpTableSpecs.sourceSnapshot.snapshot));
+	if (!copydb_copy_snapshot(specs, &(tmpTableSpecs.sourceSnapshot)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	/* copy the SourceTable into our memory area */
 	tmpTableSpecs.sourceTable = *source;
@@ -594,6 +592,27 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 	sformat(tableSpecs->tablePaths.idxListFile, MAXPGPATH, "%s/%u.idx",
 			tableSpecs->cfPaths->tbldir,
 			source->oid);
+
+	return true;
+}
+
+
+/*
+ * copydb_copy_snapshot initializes a new TransactionSnapshot from another
+ * snapshot that's been exported already, copying the connection string and the
+ * snapshot identifier.
+ */
+bool
+copydb_copy_snapshot(CopyDataSpec *specs, TransactionSnapshot *snapshot)
+{
+	PGSQL pgsql = { 0 };
+	TransactionSnapshot *source = &(specs->sourceSnapshot);
+
+	snapshot->pgsql = pgsql;
+	snapshot->connectionType = source->connectionType;
+
+	strlcpy(snapshot->pguri, source->pguri, sizeof(snapshot->pguri));
+	strlcpy(snapshot->snapshot, source->snapshot, sizeof(snapshot->snapshot));
 
 	return true;
 }
@@ -847,6 +866,8 @@ copydb_start_vacuum_table(CopyTableDataSpec *tableSpecs)
 				exit(EXIT_CODE_INTERNAL_ERROR);
 			}
 
+			(void) pgsql_finish(&dst);
+
 			exit(EXIT_CODE_QUIT);
 		}
 
@@ -869,7 +890,15 @@ copydb_start_vacuum_table(CopyTableDataSpec *tableSpecs)
 bool
 copydb_fatal_exit()
 {
-	log_fatal("Terminating all subprocesses");
+	log_fatal("Terminating all processes in our process group");
+
+	/* signal all sub-processes that now is the time to stop */
+	if (kill(0, SIGTERM) == -1)
+	{
+		log_error("Failed to signal pgcopydb process group: %m");
+		return false;
+	}
+
 	return copydb_wait_for_subprocesses();
 }
 
@@ -900,7 +929,7 @@ copydb_wait_for_subprocesses()
 				if (errno == ECHILD)
 				{
 					/* no more childrens */
-					return true;
+					return allReturnCodeAreZero;
 				}
 
 				pg_usleep(100 * 1000); /* 100 ms */
@@ -946,7 +975,7 @@ copydb_wait_for_subprocesses()
  * processes, without waiting for all of them.
  */
 bool
-copydb_collect_finished_subprocesses()
+copydb_collect_finished_subprocesses(bool *allDone)
 {
 	bool allReturnCodeAreZero = true;
 
@@ -964,7 +993,7 @@ copydb_collect_finished_subprocesses()
 				if (errno == ECHILD)
 				{
 					/* no more childrens */
-					return true;
+					return allReturnCodeAreZero;
 				}
 
 				break;
@@ -976,7 +1005,8 @@ copydb_collect_finished_subprocesses()
 				 * We're using WNOHANG, 0 means there are no stopped or exited
 				 * children.
 				 */
-				return true;
+				*allDone = true;
+				return allReturnCodeAreZero;
 			}
 
 			default:

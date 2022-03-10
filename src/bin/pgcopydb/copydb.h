@@ -122,6 +122,7 @@ typedef enum
 	DATA_SECTION_SET_SEQUENCES,
 	DATA_SECTION_INDEXES,
 	DATA_SECTION_CONSTRAINTS,
+	DATA_SECTION_BLOBS,
 	DATA_SECTION_VACUUM,
 	DATA_SECTION_ALL
 } CopyDataSection;
@@ -231,6 +232,8 @@ bool copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 							 CopyDataSpec *specs,
 							 SourceTable *source);
 
+bool copydb_copy_snapshot(CopyDataSpec *specs, TransactionSnapshot *snapshot);
+
 bool copydb_prepare_snapshot(CopyDataSpec *copySpecs);
 bool copydb_export_snapshot(TransactionSnapshot *snapshot);
 bool copydb_set_snapshot(TransactionSnapshot *snapshot);
@@ -242,7 +245,7 @@ bool copydb_start_vacuum_table(CopyTableDataSpec *tableSpecs);
 
 bool copydb_fatal_exit(void);
 bool copydb_wait_for_subprocesses(void);
-bool copydb_collect_finished_subprocesses(void);
+bool copydb_collect_finished_subprocesses(bool *allDone);
 
 
 /* indexes.c */
@@ -309,8 +312,8 @@ bool copydb_copy_all_sequences(CopyDataSpec *specs);
 /* table-data.c */
 bool copydb_copy_all_table_data(CopyDataSpec *specs);
 
-bool copydb_start_table_processes(CopyDataSpec *specs);
-bool copydb_start_table_process(CopyDataSpec *specs);
+bool copydb_process_table_data(CopyDataSpec *specs);
+bool copydb_process_table_data_worker(CopyDataSpec *specs);
 
 bool copydb_copy_table(CopyTableDataSpec *tableSpecs);
 

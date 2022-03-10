@@ -93,19 +93,14 @@ copydb_copy_all_indexes(CopyDataSpec *specs)
 		return true;
 	}
 
-	PGSQL src = { 0 };
+	PGSQL *src = &(specs->sourceSnapshot.pgsql);
+
 	SourceIndexArray indexArray = { 0, NULL };
 	IndexFilePathsArray indexPathsArray = { 0, NULL };
 
 	log_info("Listing indexes in \"%s\"", specs->source_pguri);
 
-	if (!pgsql_init(&src, specs->source_pguri, PGSQL_CONN_SOURCE))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!schema_list_all_indexes(&src, &indexArray))
+	if (!schema_list_all_indexes(src, &indexArray))
 	{
 		/* errors have already been logged */
 		return false;
@@ -120,7 +115,7 @@ copydb_copy_all_indexes(CopyDataSpec *specs)
 		return false;
 	}
 
-	log_info("Creating %d indexes in the target database using %d processed",
+	log_info("Creating %d indexes in the target database using %d processes",
 			 indexArray.count,
 			 specs->indexJobs);
 
@@ -413,6 +408,8 @@ copydb_create_index(const char *pguri,
 		(void) semaphore_unlock(createIndexSemaphore);
 		return false;
 	}
+
+	(void) pgsql_finish(&dst);
 
 	/* the CREATE INDEX command is done, release our lock */
 	(void) semaphore_unlock(createIndexSemaphore);
