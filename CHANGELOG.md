@@ -1,3 +1,17 @@
+### pgcopydb v0.5 (March 11, 2022) ###
+
+Quick turnaround release with Postgres connection management bug fixes. The
+bug was caught by our debian test suite which defaults to using SSL, and
+using SSL makes the problem systematic rather than unlucky.
+
+### Changed
+* Refrain from using XDG_RUNTIME_DIR for temp files. (#26)
+* Increase the default timeout from 2s to 10s. (#28)
+
+### Fixed
+* Assorted bug fixes for Postgres connection handling. (#27)
+* Hide more connection string passwords from pgcopydb output. (#29)
+
 ### pgcopydb v0.4 (March 8, 2022) ###
 
 Improve pgcopydb with large object support, better documentation, and the
