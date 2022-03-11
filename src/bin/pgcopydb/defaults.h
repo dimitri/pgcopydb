@@ -23,7 +23,7 @@
 #define PGCOPYDB_DROP_IF_EXISTS "PGCOPYDB_DROP_IF_EXISTS"
 #define PGCOPYDB_SNAPSHOT "PGCOPYDB_SNAPSHOT"
 
-#define POSTGRES_CONNECT_TIMEOUT "2"
+#define POSTGRES_CONNECT_TIMEOUT "10"
 
 
 /* retry PQping for a maximum of 15 mins, up to 2 secs between attemps */
