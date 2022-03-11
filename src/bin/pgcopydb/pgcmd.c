@@ -345,7 +345,29 @@ pg_dump_db(PostgresPaths *pgPaths,
 
 	char command[BUFSIZE] = { 0 };
 
+	SafeURI safeURI = { 0 };
+	bool pgpassword_found_in_env = env_exists("PGPASSWORD");
+	char PGPASSWORD[MAXCONNINFO] = { 0 };
+
+	if (!extract_connection_string_password(pguri, &safeURI))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+
+	/* override PGPASSWORD environment variable if the pguri contains one */
+	if (!IS_EMPTY_STRING_BUFFER(safeURI.password))
+	{
+		if (pgpassword_found_in_env &&
+			!get_env_copy("PGPASSWORD", PGPASSWORD, MAXCONNINFO))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+		setenv("PGPASSWORD", safeURI.password, 1);
+	}
 
 	args[argsIndex++] = (char *) pgPaths->pg_dump;
 	args[argsIndex++] = "-Fc";
@@ -360,7 +382,7 @@ pg_dump_db(PostgresPaths *pgPaths,
 	args[argsIndex++] = (char *) section;
 	args[argsIndex++] = "--file";
 	args[argsIndex++] = (char *) filename;
-	args[argsIndex++] = (char *) pguri;
+	args[argsIndex++] = (char *) safeURI.pguri;
 
 	args[argsIndex] = NULL;
 
@@ -386,6 +408,12 @@ pg_dump_db(PostgresPaths *pgPaths,
 	}
 
 	(void) execute_subprogram(&program);
+
+	/* make sure to reset the environment PGPASSWORD if we edited it */
+	if (pgpassword_found_in_env && !IS_EMPTY_STRING_BUFFER(safeURI.password))
+	{
+		setenv("PGPASSWORD", PGPASSWORD, 1);
+	}
 
 	if (program.returnCode != 0)
 	{
@@ -416,11 +444,33 @@ pg_restore_db(PostgresPaths *pgPaths,
 
 	char command[BUFSIZE] = { 0 };
 
+	SafeURI safeURI = { 0 };
+	bool pgpassword_found_in_env = env_exists("PGPASSWORD");
+	char PGPASSWORD[MAXCONNINFO] = { 0 };
+
+	if (!extract_connection_string_password(pguri, &safeURI))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+
+	/* override PGPASSWORD environment variable if the pguri contains one */
+	if (!IS_EMPTY_STRING_BUFFER(safeURI.password))
+	{
+		if (pgpassword_found_in_env &&
+			!get_env_copy("PGPASSWORD", PGPASSWORD, MAXCONNINFO))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+		setenv("PGPASSWORD", safeURI.password, 1);
+	}
 
 	args[argsIndex++] = (char *) pgPaths->pg_restore;
 	args[argsIndex++] = "--dbname";
-	args[argsIndex++] = (char *) pguri;
+	args[argsIndex++] = (char *) safeURI.pguri;
 
 	if (options.dropIfExists)
 	{
@@ -475,6 +525,12 @@ pg_restore_db(PostgresPaths *pgPaths,
 	}
 
 	(void) execute_subprogram(&program);
+
+	/* make sure to reset the environment PGPASSWORD if we edited it */
+	if (pgpassword_found_in_env && !IS_EMPTY_STRING_BUFFER(safeURI.password))
+	{
+		setenv("PGPASSWORD", PGPASSWORD, 1);
+	}
 
 	if (program.returnCode != 0)
 	{

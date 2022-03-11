@@ -70,6 +70,14 @@ typedef struct URIParams
 	KeyVal parameters;
 } URIParams;
 
+
+typedef struct SafeURI
+{
+	char pguri[MAXCONNINFO];
+	char password[MAXCONNINFO];
+	URIParams uriParams;
+} SafeURI;
+
 bool parse_pguri_info_key_vals(const char *pguri,
 							   KeyVal *overrides,
 							   URIParams *uriParameters,
@@ -78,5 +86,7 @@ bool parse_pguri_info_key_vals(const char *pguri,
 bool buildPostgresURIfromPieces(URIParams *uriParams, char *pguri);
 
 bool parse_and_scrub_connection_string(const char *pguri, char *scrubbedPguri);
+
+bool extract_connection_string_password(const char *pguri, SafeURI *safeURI);
 
 #endif /* PARSING_H */

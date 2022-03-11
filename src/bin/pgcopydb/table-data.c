@@ -126,7 +126,7 @@ copydb_prepare_table_specs(CopyDataSpec *specs)
 	SourceTableArray tableArray = { 0, NULL };
 	CopyTableDataSpecsArray *tableSpecsArray = &(specs->tableSpecsArray);
 
-	log_info("Listing ordinary tables in \"%s\"", specs->source_pguri);
+	log_info("Listing ordinary tables in source database");
 
 	/*
 	 * Now get the list of the tables we want to COPY over.
