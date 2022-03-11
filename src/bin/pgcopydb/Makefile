@@ -41,6 +41,9 @@ DEFAULT_CFLAGS += -Werror=implicit-function-declaration
 DEFAULT_CFLAGS += -Werror=return-type
 DEFAULT_CFLAGS += -Wno-declaration-after-statement
 
+# Needed for FreeBSD
+DEFAULT_CFLAGS += -D_WANT_SEMUN
+
 # Needed for OSX
 DEFAULT_CFLAGS += -Wno-missing-braces
 DEFAULT_CFLAGS += $(COMMON_LIBS)
