@@ -33,6 +33,9 @@
 
 #define POSTGRES_PORT 5432
 
+/* masqurade  passwords with that value in logs */
+#define PASSWORD_MASK "****"
+
 /* internal default for allocating strings  */
 #define BUFSIZE 1024
 

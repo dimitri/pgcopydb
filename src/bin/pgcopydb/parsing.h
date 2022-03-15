@@ -85,6 +85,8 @@ bool parse_pguri_info_key_vals(const char *pguri,
 
 bool buildPostgresURIfromPieces(URIParams *uriParams, char *pguri);
 
+bool escapeWithPercentEncoding(const char *str, char *dst);
+
 bool parse_and_scrub_connection_string(const char *pguri, char *scrubbedPguri);
 
 bool extract_connection_string_password(const char *pguri, SafeURI *safeURI);
