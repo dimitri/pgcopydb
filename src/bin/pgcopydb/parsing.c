@@ -504,30 +504,170 @@ buildPostgresURIfromPieces(URIParams *uriParams, char *pguri)
 {
 	int index = 0;
 
+	char escapedUsername[MAXCONNINFO] = { 0 };
+	char escapedHostname[MAXCONNINFO] = { 0 };
+	char escapedDBName[MAXCONNINFO] = { 0 };
+
+	/*
+	 * We want to escape uriParams username, hostname, and dbname, in exactly
+	 * the same way, and also wish to report which URI parameter we failed to
+	 * escape in case of errors, and we also want to avoid copy pasting the
+	 * same code 3 times in a row.
+	 *
+	 * We would rather loop over an array where we would have the parameter
+	 * name (keyword), and a pointer to the value to escape, and a pointer to
+	 * where to store the escaped string bytes then.
+	 */
+	struct namedPair
+	{
+		char *name;
+		char *raw;
+		char *escaped;
+	};
+
+	struct namedPair args[] = {
+		{ "username", uriParams->username, escapedUsername },
+		{ "hostname", uriParams->hostname, escapedHostname },
+		{ "dbname", uriParams->dbname, escapedDBName },
+		{ NULL, NULL, NULL }
+	};
+
+	for (int i = 0; args[i].name != NULL; i++)
+	{
+		if (!escapeWithPercentEncoding(args[i].raw, args[i].escaped))
+		{
+			log_error("Failed to percent-escape URI %s", args[i].name);
+			return false;
+		}
+	}
+
+	/* prepare the mandatory part of the Postgres URI */
 	sformat(pguri, MAXCONNINFO,
 			"postgres://%s@%s:%s/%s?",
-			uriParams->username,
-			uriParams->hostname,
+			escapedUsername,
+			escapedHostname,
 			uriParams->port,
-			uriParams->dbname);
+			escapedDBName);
 
+	/* now add optional parameters to the Postgres URI */
 	for (index = 0; index < uriParams->parameters.count; index++)
 	{
+		char *keyword = uriParams->parameters.keywords[index];
+		char *value = uriParams->parameters.values[index];
+
+		char escapedValue[MAXCONNINFO] = { 0 };
+
+		/* if we have password="****" then just keep that */
+		if (streq(keyword, "password") && streq(value, PASSWORD_MASK))
+		{
+			strlcpy(escapedValue, value, sizeof(escapedValue));
+		}
+		else
+		{
+			if (!escapeWithPercentEncoding(value, escapedValue))
+			{
+				if (streq(keyword, "password"))
+				{
+					log_error("Failed to percent-escape URI parameter \"%s\"",
+							  "password");
+				}
+				else
+				{
+					log_error("Failed to percent-escape URI parameter \"%s\" "
+							  "value \"%s\"",
+							  keyword, value);
+				}
+				return false;
+			}
+		}
+
 		if (index == 0)
 		{
 			sformat(pguri, MAXCONNINFO,
 					"%s%s=%s",
-					pguri,
-					uriParams->parameters.keywords[index],
-					uriParams->parameters.values[index]);
+					pguri, keyword, escapedValue);
 		}
 		else
 		{
 			sformat(pguri, MAXCONNINFO,
 					"%s&%s=%s",
-					pguri,
-					uriParams->parameters.keywords[index],
-					uriParams->parameters.values[index]);
+					pguri, keyword, escapedValue);
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * escapeWithPercentEncoding applies percent-encoding as required by Postgres
+ * URI parsing. The destination buffer must have been allocated already and be
+ * of size MAXCONNINFO.
+ *
+ * See https://www.postgresql.org/docs/current/libpq-connect.html
+ * See https://datatracker.ietf.org/doc/html/rfc3986#section-2.1
+ */
+bool
+escapeWithPercentEncoding(const char *str, char *dst)
+{
+	const char empty[MAXCONNINFO] = { 0 };
+	const char *hex = "0123456789abcdef";
+
+	if (str == NULL || IS_EMPTY_STRING_BUFFER(str))
+	{
+		strlcpy(dst, empty, MAXCONNINFO);
+
+		return true;
+	}
+
+	int pos = 0;
+	int len = strlen(str);
+
+	for (int i = 0; i < len; i++)
+	{
+		/*
+		 * 2.3 Unreserved Characters
+		 *
+		 * https://datatracker.ietf.org/doc/html/rfc3986#section-2.3
+		 *
+		 *       unreserved  = ALPHA / DIGIT / "-" / "." / "_" / "~"
+		 */
+		if (isalpha(str[i]) || isdigit(str[i]) ||
+			str[i] == '-' ||
+			str[i] == '.' ||
+			str[i] == '_' ||
+			str[i] == '~')
+		{
+			if (MAXCONNINFO <= (pos + 1))
+			{
+				/* we really do not expect that to ever happen */
+				log_error("BUG: percent-encoded Postgres URI does not fit "
+						  "in MAXCONNINFO (%d) bytes", MAXCONNINFO);
+				return false;
+			}
+			dst[pos++] = str[i];
+		}
+
+		/*
+		 * 2.1 Percent-Encoding
+		 *
+		 * https://datatracker.ietf.org/doc/html/rfc3986#section-2.1
+		 *
+		 *       pct-encoded = "%" HEXDIG HEXDIG
+		 */
+		else
+		{
+			if (MAXCONNINFO <= (pos + 3))
+			{
+				/* we really do not expect that to ever happen */
+				log_error("BUG: percent-encoded Postgres URI does not fit "
+						  "in MAXCONNINFO (%d) bytes", MAXCONNINFO);
+				return false;
+			}
+
+			dst[pos++] = '%';
+			dst[pos++] = hex[str[i] >> 4];
+			dst[pos++] = hex[str[i] & 15];
 		}
 	}
 
@@ -591,7 +731,7 @@ parse_and_scrub_connection_string(const char *pguri, char *scrubbedPguri)
 		overrides = (KeyVal) {
 			.count = 1,
 			.keywords = { "password" },
-			.values = { "****" }
+			.values = { PASSWORD_MASK }
 		};
 	}
 
