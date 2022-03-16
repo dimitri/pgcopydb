@@ -508,14 +508,40 @@ buildPostgresURIfromPieces(URIParams *uriParams, char *pguri)
 	char escapedHostname[MAXCONNINFO] = { 0 };
 	char escapedDBName[MAXCONNINFO] = { 0 };
 
-	if (!escapeWithPercentEncoding(uriParams->username, escapedUsername) ||
-		!escapeWithPercentEncoding(uriParams->hostname, escapedHostname) ||
-		!escapeWithPercentEncoding(uriParams->dbname, escapedDBName))
+	/*
+	 * We want to escape uriParams username, hostname, and dbname, in exactly
+	 * the same way, and also wish to report which URI parameter we failed to
+	 * escape in case of errors, and we also want to avoid copy pasting the
+	 * same code 3 times in a row.
+	 *
+	 * We would rather loop over an array where we would have the parameter
+	 * name (keyword), and a pointer to the value to escape, and a pointer to
+	 * where to store the escaped string bytes then.
+	 */
+	struct namedPair
 	{
-		log_error("Failed to percent-escape URI username, hostname, or dbname");
-		return false;
+		char *name;
+		char *raw;
+		char *escaped;
+	};
+
+	struct namedPair args[] = {
+		{ "username", uriParams->username, escapedUsername },
+		{ "hostname", uriParams->hostname, escapedHostname },
+		{ "dbname", uriParams->dbname, escapedDBName },
+		{ NULL, NULL, NULL }
+	};
+
+	for (int i = 0; args[i].name != NULL; i++)
+	{
+		if (!escapeWithPercentEncoding(args[i].raw, args[i].escaped))
+		{
+			log_error("Failed to percent-escape URI %s", args[i].name);
+			return false;
+		}
 	}
 
+	/* prepare the mandatory part of the Postgres URI */
 	sformat(pguri, MAXCONNINFO,
 			"postgres://%s@%s:%s/%s?",
 			escapedUsername,
@@ -523,6 +549,7 @@ buildPostgresURIfromPieces(URIParams *uriParams, char *pguri)
 			uriParams->port,
 			escapedDBName);
 
+	/* now add optional parameters to the Postgres URI */
 	for (index = 0; index < uriParams->parameters.count; index++)
 	{
 		char *keyword = uriParams->parameters.keywords[index];
@@ -574,8 +601,8 @@ buildPostgresURIfromPieces(URIParams *uriParams, char *pguri)
 
 /*
  * escapeWithPercentEncoding applies percent-encoding as required by Postgres
- * URI parsing. The destination buffer must have allocated already and be of
- * size MAXCONNINFO.
+ * URI parsing. The destination buffer must have been allocated already and be
+ * of size MAXCONNINFO.
  *
  * See https://www.postgresql.org/docs/current/libpq-connect.html
  * See https://datatracker.ietf.org/doc/html/rfc3986#section-2.1
@@ -611,6 +638,13 @@ escapeWithPercentEncoding(const char *str, char *dst)
 			str[i] == '_' ||
 			str[i] == '~')
 		{
+			if (MAXCONNINFO <= (pos + 1))
+			{
+				/* we really do not expect that to ever happen */
+				log_error("BUG: percent-encoded Postgres URI does not fit "
+						  "in MAXCONNINFO (%d) bytes", MAXCONNINFO);
+				return false;
+			}
 			dst[pos++] = str[i];
 		}
 
@@ -623,6 +657,14 @@ escapeWithPercentEncoding(const char *str, char *dst)
 		 */
 		else
 		{
+			if (MAXCONNINFO <= (pos + 3))
+			{
+				/* we really do not expect that to ever happen */
+				log_error("BUG: percent-encoded Postgres URI does not fit "
+						  "in MAXCONNINFO (%d) bytes", MAXCONNINFO);
+				return false;
+			}
+
 			dst[pos++] = '%';
 			dst[pos++] = hex[str[i] >> 4];
 			dst[pos++] = hex[str[i] & 15];
