@@ -79,8 +79,6 @@ struct FilteringQueries
  * For code simplicity the index array is also the SourceFilterType enum value.
  */
 struct FilteringQueries listSourceTablesSQL[] = {
-	{ SOURCE_FILTER_TYPE_UNKNOWN, "" },
-
 	{
 		SOURCE_FILTER_TYPE_NONE,
 
@@ -201,8 +199,6 @@ schema_list_ordinary_tables(PGSQL *pgsql,
  * For code simplicity the index array is also the SourceFilterType enum value.
  */
 struct FilteringQueries listSourceTablesNoPKSQL[] = {
-	{ SOURCE_FILTER_TYPE_UNKNOWN, "" },
-
 	{
 		SOURCE_FILTER_TYPE_NONE,
 
@@ -431,8 +427,6 @@ schema_set_sequence_value(PGSQL *pgsql, SourceSequence *seq)
  * For code simplicity the index array is also the SourceFilterType enum value.
  */
 struct FilteringQueries listSourceIndexesSQL[] = {
-	{ SOURCE_FILTER_TYPE_UNKNOWN, "" },
-
 	{
 		SOURCE_FILTER_TYPE_NONE,
 

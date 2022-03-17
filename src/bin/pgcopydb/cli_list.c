@@ -89,6 +89,7 @@ cli_list_db_getopts(int argc, char **argv)
 		{ "schema-name", required_argument, NULL, 's' },
 		{ "table-name", required_argument, NULL, 't' },
 		{ "filter", required_argument, NULL, 'F' },
+		{ "filters", required_argument, NULL, 'F' },
 		{ "without-pkey", no_argument, NULL, 'P' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
@@ -134,11 +135,11 @@ cli_list_db_getopts(int argc, char **argv)
 			case 'F':
 			{
 				strlcpy(options.filterFileName, optarg, MAXPGPATH);
-				log_trace("---filter \"%s\"", options.filterFileName);
+				log_trace("--filters \"%s\"", options.filterFileName);
 
 				if (!file_exists(options.filterFileName))
 				{
-					log_error("Filter file \"%s\" does not exists",
+					log_error("Filters file \"%s\" does not exists",
 							  options.filterFileName);
 					++errors;
 				}
@@ -251,10 +252,6 @@ cli_list_tables(int argc, char **argv)
 					  listDBoptions.filterFileName);
 			exit(EXIT_CODE_BAD_ARGS);
 		}
-	}
-	else
-	{
-		filters.type = SOURCE_FILTER_TYPE_NONE;
 	}
 
 	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
@@ -395,10 +392,6 @@ cli_list_indexes(int argc, char **argv)
 						  listDBoptions.filterFileName);
 				exit(EXIT_CODE_BAD_ARGS);
 			}
-		}
-		else
-		{
-			filters.type = SOURCE_FILTER_TYPE_NONE;
 		}
 
 		if (!schema_list_all_indexes(&pgsql, &filters, &indexArray))
