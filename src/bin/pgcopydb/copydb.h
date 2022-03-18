@@ -6,6 +6,7 @@
 #ifndef COPYDB_H
 #define COPYDB_H
 
+#include "filtering.h"
 #include "lock_utils.h"
 #include "pgcmd.h"
 #include "pgsql.h"
@@ -168,6 +169,7 @@ typedef struct CopyDataSpec
 	CopyFilePaths cfPaths;
 	PostgresPaths pgPaths;
 	DirectoryState dirState;
+	SourceFilters filters;
 
 	char source_pguri[MAXCONNINFO];
 	char target_pguri[MAXCONNINFO];

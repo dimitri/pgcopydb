@@ -643,8 +643,20 @@ copydb_export_snapshot(TransactionSnapshot *snapshot)
 		return false;
 	}
 
+	/*
+	 * As Postgres docs for SET TRANSACTION SNAPSHOT say:
+	 *
+	 * Furthermore, the transaction must already be set to SERIALIZABLE or
+	 * REPEATABLE READ isolation level (otherwise, the snapshot would be
+	 * discarded immediately, since READ COMMITTED mode takes a new snapshot
+	 * for each command).
+	 *
+	 * When --filters are used, pgcopydb creates TEMP tables on the source
+	 * database to then implement the filtering as JOINs with the Postgres
+	 * catalogs. And even TEMP tables need read-write transaction.
+	 */
 	IsolationLevel level = ISOLATION_SERIALIZABLE;
-	bool readOnly = true;
+	bool readOnly = false;
 	bool deferrable = true;
 
 	if (!pgsql_set_transaction(pgsql, level, readOnly, deferrable))
@@ -698,9 +710,13 @@ copydb_set_snapshot(TransactionSnapshot *snapshot)
 	 * REPEATABLE READ isolation level (otherwise, the snapshot would be
 	 * discarded immediately, since READ COMMITTED mode takes a new snapshot
 	 * for each command).
+	 *
+	 * When --filters are used, pgcopydb creates TEMP tables on the source
+	 * database to then implement the filtering as JOINs with the Postgres
+	 * catalogs. And even TEMP tables need read-write transaction.
 	 */
 	IsolationLevel level = ISOLATION_REPEATABLE_READ;
-	bool readOnly = true;
+	bool readOnly = false;
 	bool deferrable = true;
 
 	if (!pgsql_set_transaction(pgsql, level, readOnly, deferrable))

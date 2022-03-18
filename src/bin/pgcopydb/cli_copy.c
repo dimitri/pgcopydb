@@ -217,6 +217,8 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "no-acl", no_argument, NULL, 'x' }, /* pg_restore -x */
 		{ "skip-blobs", no_argument, NULL, 'B' },
 		{ "skip-large-objects", no_argument, NULL, 'B' },
+		{ "filter", required_argument, NULL, 'F' },
+		{ "filters", required_argument, NULL, 'F' },
 		{ "restart", no_argument, NULL, 'r' },
 		{ "resume", no_argument, NULL, 'R' },
 		{ "not-consistent", no_argument, NULL, 'C' },
@@ -375,6 +377,20 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				strlcpy(options.snapshot, optarg, sizeof(options.snapshot));
 				log_trace("--snapshot %s", options.snapshot);
+				break;
+			}
+
+			case 'F':
+			{
+				strlcpy(options.filterFileName, optarg, MAXPGPATH);
+				log_trace("--filters \"%s\"", options.filterFileName);
+
+				if (!file_exists(options.filterFileName))
+				{
+					log_error("Filters file \"%s\" does not exists",
+							  options.filterFileName);
+					++errors;
+				}
 				break;
 			}
 
@@ -890,5 +906,17 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!IS_EMPTY_STRING_BUFFER(copyDBoptions.filterFileName))
+	{
+		SourceFilters *filters = &(copySpecs->filters);
+
+		if (!parse_filters(copyDBoptions.filterFileName, filters))
+		{
+			log_error("Failed to parse filters in file \"%s\"",
+					  copyDBoptions.filterFileName);
+			exit(EXIT_CODE_BAD_ARGS);
+		}
 	}
 }
