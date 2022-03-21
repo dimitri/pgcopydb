@@ -73,6 +73,7 @@ typedef enum
 
 typedef struct SourceFilters
 {
+	bool prepared;
 	SourceFilterType type;
 	SourceFilterSchemaList excludeSchemaList;
 	SourceFilterTableList includeOnlyTableList;

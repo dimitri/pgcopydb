@@ -90,7 +90,9 @@ bool schema_list_ordinary_tables_without_pk(PGSQL *pgsql,
 											SourceFilters *filters,
 											SourceTableArray *tableArray);
 
-bool schema_list_sequences(PGSQL *pgsql, SourceSequenceArray *seqArray);
+bool schema_list_sequences(PGSQL *pgsql,
+						   SourceFilters *filters,
+						   SourceSequenceArray *seqArray);
 
 bool schema_get_sequence_value(PGSQL *pgsql, SourceSequence *seq);
 bool schema_set_sequence_value(PGSQL *pgsql, SourceSequence *seq);

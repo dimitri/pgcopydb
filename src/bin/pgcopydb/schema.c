@@ -334,24 +334,142 @@ schema_list_ordinary_tables_without_pk(PGSQL *pgsql,
 
 
 /*
- * schema_list_sequences grabs the list of sequences from the given source
- * Postgres instance and allocates a SourceSequence array with the result of
- * the query.
+ * For code simplicity the index array is also the SourceFilterType enum value.
  */
-bool
-schema_list_sequences(PGSQL *pgsql, SourceSequenceArray *seqArray)
-{
-	SourceSequenceArrayContext context = { { 0 }, seqArray, false };
+struct FilteringQueries listSourceSequencesSQL[] = {
+	{
+		SOURCE_FILTER_TYPE_NONE,
 
-	log_trace("schema_list_sequences");
-
-	char *sql =
 		"  select c.oid, n.nspname, c.relname "
 		"    from pg_catalog.pg_class c join pg_catalog.pg_namespace n "
 		"      on c.relnamespace = n.oid "
 		"   where c.relkind = 'S' and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
-		"order by n.nspname, c.relname";
+		"order by n.nspname, c.relname"
+	},
+
+	{
+		SOURCE_FILTER_TYPE_INCL,
+
+		"  select s.oid as seqoid, "
+		"         sn.nspname, "
+		"         s.relname "
+
+		/*
+		 * we don't need dependent table name and column name:
+		 *
+		 * "         a.adrelid as reloid, "
+		 * "         a.adrelid::regclass as relname, "
+		 * "         at.attname as colname "
+		 */
+
+		"    from pg_class s "
+		"         join pg_namespace sn on sn.oid = s.relnamespace "
+		"         join pg_depend d on d.refobjid = s.oid "
+		"         join pg_attrdef a on d.objid = a.oid "
+		"         join pg_attribute at "
+		"           on at.attrelid = a.adrelid "
+		"          and at.attnum = a.adnum "
+
+		/* include-only-table */
+		"         join pg_class r on r.oid = a.adrelid "
+		"         join pg_namespace rn on rn.oid = r.relnamespace "
+
+		"         join pg_temp.filter_include_only_table inc "
+		"           on rn.nspname = inc.nspname "
+		"          and r.relname = inc.relname "
+
+		"  where s.relkind = 'S' "
+		"    and d.classid = 'pg_attrdef'::regclass "
+		"    and d.refclassid = 'pg_class'::regclass "
+
+		"order by sn.nspname, s.relname"
+	},
+
+	{
+		SOURCE_FILTER_TYPE_EXCL,
+
+
+		"  select s.oid as seqoid, "
+		"         sn.nspname, "
+		"         s.relname "
+
+		/*
+		 * we don't need dependent table name and column name:
+		 *
+		 * "         a.adrelid as reloid, "
+		 * "         a.adrelid::regclass as relname, "
+		 * "         at.attname as colname "
+		 */
+
+		"    from pg_class s "
+		"         join pg_namespace sn on sn.oid = s.relnamespace "
+		"         join pg_depend d on d.refobjid = s.oid "
+		"         join pg_attrdef a on d.objid = a.oid "
+		"         join pg_attribute at "
+		"           on at.attrelid = a.adrelid "
+		"          and at.attnum = a.adnum "
+
+		/* filters are edited in terms of the main relation pg_class entry */
+		"         join pg_class r on r.oid = a.adrelid "
+		"         join pg_namespace rn on rn.oid = r.relnamespace "
+
+		/* exclude-schema */
+		"         left join pg_temp.filter_exclude_schema fn "
+		"                on rn.nspname = fn.nspname "
+
+		/* exclude-table */
+		"         left join pg_temp.filter_exclude_table ft "
+		"                on rn.nspname = ft.nspname "
+		"               and r.relname = ft.relname "
+
+		/* exclude-table-data */
+		"         left join pg_temp.filter_exclude_table_data ftd "
+		"                on rn.nspname = ftd.nspname "
+		"               and r.relname = ftd.relname "
+
+		"  where s.relkind = 'S' "
+		"    and d.classid = 'pg_attrdef'::regclass "
+		"    and d.refclassid = 'pg_class'::regclass "
+
+		/* WHERE clause for exclusion filters */
+		"     and fn.nspname is null "
+		"     and ft.relname is null "
+		"     and ftd.relname is null "
+
+		"order by sn.nspname, s.relname"
+	},
+
+	{ SOURCE_FILTER_TYPE_EXCL_INDEX, "" },
+};
+
+
+/*
+ * schema_list_sequences grabs the list of sequences from the given source
+ * Postgres instance and allocates a SourceSequence array with the result of
+ * the query.
+ */
+bool
+schema_list_sequences(PGSQL *pgsql,
+					  SourceFilters *filters,
+					  SourceSequenceArray *seqArray)
+{
+	SourceSequenceArrayContext context = { { 0 }, seqArray, false };
+
+	log_trace("schema_list_sequences");
+
+	if (filters->type == SOURCE_FILTER_TYPE_INCL ||
+		filters->type == SOURCE_FILTER_TYPE_EXCL)
+	{
+		if (!prepareFilters(pgsql, filters))
+		{
+			log_error("Failed to prepare pgcopydb filters, "
+					  "see above for details");
+			return false;
+		}
+	}
+
+	char *sql = listSourceSequencesSQL[filters->type].sql;
 
 	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
 								   &context, &getSequenceArray))
@@ -693,6 +811,12 @@ prepareFilters(PGSQL *pgsql, SourceFilters *filters)
 		return false;
 	}
 
+	/* if the filters have already been prepared, we're good */
+	if (filters->prepared)
+	{
+		return true;
+	}
+
 	/*
 	 * First, create the temp tables.
 	 */
@@ -747,6 +871,9 @@ prepareFilters(PGSQL *pgsql, SourceFilters *filters)
 			return false;
 		}
 	}
+
+	/* mark the filters as prepared already */
+	filters->prepared = true;
 
 	return true;
 }

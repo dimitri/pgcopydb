@@ -317,9 +317,20 @@ static void
 cli_list_sequences(int argc, char **argv)
 {
 	PGSQL pgsql = { 0 };
+	SourceFilters filters = { 0 };
 	SourceSequenceArray sequenceArray = { 0, NULL };
 
 	log_info("Listing ordinary sequences in source database");
+
+	if (!IS_EMPTY_STRING_BUFFER(listDBoptions.filterFileName))
+	{
+		if (!parse_filters(listDBoptions.filterFileName, &filters))
+		{
+			log_error("Failed to parse filters in file \"%s\"",
+					  listDBoptions.filterFileName);
+			exit(EXIT_CODE_BAD_ARGS);
+		}
+	}
 
 	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
 	{
@@ -327,7 +338,7 @@ cli_list_sequences(int argc, char **argv)
 		exit(EXIT_CODE_SOURCE);
 	}
 
-	if (!schema_list_sequences(&pgsql, &sequenceArray))
+	if (!schema_list_sequences(&pgsql, &filters, &sequenceArray))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
