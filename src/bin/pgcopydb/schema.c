@@ -146,8 +146,6 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		"order by bytes desc, n.nspname, c.relname"
 	},
-
-	{ SOURCE_FILTER_TYPE_EXCL_INDEX, "" },
 };
 
 
@@ -285,8 +283,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 
 		"order by n.nspname, r.relname"
 	},
-
-	{ SOURCE_FILTER_TYPE_EXCL_INDEX, "" },
 };
 
 /*
@@ -439,8 +435,6 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 
 		"order by sn.nspname, s.relname"
 	},
-
-	{ SOURCE_FILTER_TYPE_EXCL_INDEX, "" },
 };
 
 
@@ -668,7 +662,47 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		" order by n.nspname, r.relname"
 	},
 
-	{ SOURCE_FILTER_TYPE_EXCL_INDEX, "" },
+	{
+		SOURCE_FILTER_TYPE_EXCL_INDEX,
+
+		"   select i.oid, n.nspname, i.relname,"
+		"          r.oid, rn.nspname, r.relname,"
+		"          indisprimary,"
+		"          indisunique,"
+		"          (select string_agg(attname, ',')"
+		"             from pg_attribute"
+		"            where attrelid = r.oid"
+		"              and array[attnum::integer] <@ indkey::integer[]"
+		"          ) as cols,"
+		"          pg_get_indexdef(indexrelid),"
+		"          c.oid,"
+		"          c.conname,"
+		"          pg_get_constraintdef(c.oid)"
+		"     from pg_index x"
+		"          join pg_class i ON i.oid = x.indexrelid"
+		"          join pg_class r ON r.oid = x.indrelid"
+		"          join pg_namespace n ON n.oid = i.relnamespace"
+		"          join pg_namespace rn ON rn.oid = r.relnamespace"
+		"          left join pg_depend d "
+		"                 on d.classid = 'pg_class'::regclass"
+		"                and d.objid = i.oid"
+		"                and d.refclassid = 'pg_constraint'::regclass"
+		"                and d.deptype = 'i'"
+		"          left join pg_constraint c ON c.oid = d.refobjid"
+
+		/* exclude-index */
+		"          left join filter_exclude_index ft "
+		"                 on n.nspname = ft.nspname "
+		"                and i.relname = ft.relname "
+
+		"    where r.relkind = 'r' and r.relpersistence = 'p' "
+		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+
+		/* WHERE clause for exclusion filters */
+		"     and fn.nspname is null "
+
+		" order by n.nspname, r.relname"
+	}
 };
 
 
@@ -687,7 +721,8 @@ schema_list_all_indexes(PGSQL *pgsql,
 	log_trace("schema_list_all_indexes");
 
 	if (filters->type == SOURCE_FILTER_TYPE_INCL ||
-		filters->type == SOURCE_FILTER_TYPE_EXCL)
+		filters->type == SOURCE_FILTER_TYPE_EXCL ||
+		filters->type == SOURCE_FILTER_TYPE_EXCL_INDEX)
 	{
 		if (!prepareFilters(pgsql, filters))
 		{
