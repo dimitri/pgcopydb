@@ -1388,7 +1388,7 @@ pgsql_truncate(PGSQL *pgsql, const char *qname)
 {
 	char sql[BUFSIZE] = { 0 };
 
-	sformat(sql, sizeof(sql), "TRUNCATE %s", qname);
+	sformat(sql, sizeof(sql), "TRUNCATE ONLY %s", qname);
 
 	return pgsql_execute(pgsql, sql);
 }
