@@ -1,0 +1,12 @@
+-[ RECORD 1 ]--------+-------------------------------------------------------------------
+nspname              | public
+relname              | constraint_fail_idx
+nspname              | public
+relname              | exclcon
+indisprimary         | f
+indisunique          | f
+cols                 | a
+pg_get_indexdef      | CREATE INDEX constraint_fail_idx ON public.exclcon USING btree (a)
+conname              | constraint_fail_idx
+pg_get_constraintdef | EXCLUDE USING btree (a WITH =)
+

@@ -28,6 +28,9 @@ tests/pagila-multi-steps: build
 tests/blobs: build
 	$(MAKE) -C tests/blobs
 
+tests/unit: build
+	$(MAKE) -C tests/unit
+
 install: bin
 	$(MAKE) -C src/bin/ install
 
@@ -53,5 +56,5 @@ debsh-qa: deb-qa
 
 .PHONY: all
 .PHONY: bin clean install docs
-.PHONY: test tests tests/pagila tests/pagila-multi-steps tests/blobs
+.PHONY: test tests tests/pagila tests/pagila-multi-steps tests/blobs tests/unit
 .PHONY: deb debsh deb-qa debsh-qa
