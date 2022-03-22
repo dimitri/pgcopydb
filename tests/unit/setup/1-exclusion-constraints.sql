@@ -1,6 +1,8 @@
-CREATE TABLE recreate (a integer, b integer);
+DROP TABLE IF EXISTS exclcon;
 
-insert into recreate values (1,2), (3,4);
+CREATE TABLE exclcon (a integer, b integer);
 
-ALTER TABLE recreate
+insert into exclcon values (1,2), (3,4);
+
+ALTER TABLE exclcon
   ADD CONSTRAINT constraint_fail_idx EXCLUDE USING btree (a WITH=);

@@ -13,5 +13,16 @@ testing / unit testing. At the moment there are two modes of operations:
   2. the pgcopydb is expected to have done something specific on the target
      database and we want to check that.
 
+## Regression testing
 
-At the moment only the first case is handled, because that's all we need.
+In the spirit of pg_regress, the regression testing is done in the following
+three steps:
+
+  1. run the sql/setup.sql file with psql
+
+     This creates the testing environment with tables, constraints, data, etc
+
+  2. for each file in the sql directory, run it with psql against the target
+     database and capture its output
+
+  3. compare the previous step output to the expected/${test}.out file

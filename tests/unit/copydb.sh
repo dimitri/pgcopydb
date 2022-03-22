@@ -14,15 +14,27 @@ set -e
 # pgcopydb list tables include a retry loop, so we use that as a proxy to
 # depend on the source/target Postgres images to be ready
 #
-pgcopydb list tables --source ${PGCOPYDB_SOURCE_PGURI}
+pgcopydb list tables --source "${PGCOPYDB_SOURCE_PGURI}"
 
-psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pgcopydb/test/setup/setup.sql
+psql -d "${PGCOPYDB_SOURCE_PGURI}" -1 -f ./setup/setup.sql
 
 # pgcopydb copy db uses the environment variables
 pgcopydb copy-db
 
-pgcopydb list tables --source ${PGCOPYDB_SOURCE_PGURI}
-pgcopydb list indexes --source ${PGCOPYDB_SOURCE_PGURI}
+# now compare the output of running the SQL command with what's expected
+# as we're not root when running tests, can't write in /usr/src
+mkdir -p /tmp/results
 
-pgcopydb list tables --source ${PGCOPYDB_TARGET_PGURI}
-pgcopydb list indexes --source ${PGCOPYDB_TARGET_PGURI}
+find .
+
+pgopts="--single-transaction --no-psqlrc --expanded"
+
+for f in ./sql/*.sql
+do
+    t=`basename $f .sql`
+    r=/tmp/results/${t}.out
+    e=./expected/${t}.out
+    psql -d "${PGCOPYDB_TARGET_PGURI}" ${pgopts} --file ./sql/$t.sql &> $r
+    test -f $e || cat $r
+    diff $e $r || exit 1
+done
