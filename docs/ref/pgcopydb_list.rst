@@ -31,8 +31,10 @@ tables to COPY the data from.
    pgcopydb list tables: List all the source tables to copy data from
    usage: pgcopydb list tables  --source ...
 
-     --source          Postgres URI to the source database
-     --without-pkey    List only tables that have no primary key
+     --source            Postgres URI to the source database
+     --filter <filename> Use the filters defined in <filename>
+     --list-skipped      List only tables that are setup to be skipped
+     --without-pkey      List only tables that have no primary key
 
 .. _pgcopydb_list_sequences:
 
@@ -50,7 +52,9 @@ sequences to COPY the data from.
    pgcopydb list sequences: List all the source sequences to copy data from
    usage: pgcopydb list sequences  --source ...
 
-     --source          Postgres URI to the source database
+     --source            Postgres URI to the source database
+     --filter <filename> Use the filters defined in <filename>
+     --list-skipped      List only tables that are setup to be skipped
 
 .. _pgcopydb_list_indexes:
 
@@ -68,9 +72,11 @@ indexes to COPY the data from.
   pgcopydb list indexes: List all the indexes to create again after copying the data
   usage: pgcopydb list indexes  --source ... [ --schema-name [ --table-name ] ]
 
-    --source          Postgres URI to the source database
-    --schema-name     Name of the schema where to find the table
-    --table-name      Name of the target table
+    --source            Postgres URI to the source database
+    --schema-name       Name of the schema where to find the table
+    --table-name        Name of the target table
+    --filter <filename> Use the filters defined in <filename>
+    --list-skipped      List only tables that are setup to be skipped
 
 
 Options
@@ -100,6 +106,18 @@ The following options are available to ``pgcopydb dump schema``:
 
   List only tables from the source database when they have no primary key
   attached to their schema.
+
+--filter <filename>
+
+  This option allows to skip objects in the list operations. See
+  :ref:`filtering` for details about the expected file format and the
+  filtering options available.
+
+--list-skipped
+
+  Instead of listing objects that are selected for copy by the filters
+  installed with the ``--filter`` option, list the objects that are going to
+  be skipped when using the filters.
 
 Environment
 -----------
