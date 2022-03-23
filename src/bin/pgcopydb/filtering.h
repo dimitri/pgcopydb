@@ -52,7 +52,7 @@ typedef struct SourceFilterTableList
 
 /*
  * Define a Source Filter Type that allows producing the right kind of SQL
- * query. To that end, we only need to distinguish if we're going to:
+ * query. To that end, we need to distinguish if we're going to:
  *
  * - include only some tables (inner join)
  *
@@ -62,13 +62,25 @@ typedef struct SourceFilterTableList
  *
  * - or exclude only some indexes (no filtering on schema queries for tables,
  *   only on the schema queries for indexes).
+ *
+ * Adding to that, we also need to produce a list of OIDs to skip in the
+ * pg_dump catalog when calling into pg_restore. The include-only-table filter
+ * is already implemented, see `copydb_objectid_has_been_processed_already'.
+ * The exclusion filters need to be implemented as an inner join query if we
+ * want to list the OIDs of skipped objects.
+ *
  */
 typedef enum
 {
 	SOURCE_FILTER_TYPE_NONE = 0,
 	SOURCE_FILTER_TYPE_INCL,
 	SOURCE_FILTER_TYPE_EXCL,
-	SOURCE_FILTER_TYPE_EXCL_INDEX
+
+	SOURCE_FILTER_TYPE_LIST_NOT_INCL,
+	SOURCE_FILTER_TYPE_LIST_EXCL,
+
+	SOURCE_FILTER_TYPE_EXCL_INDEX,
+	SOURCE_FILTER_TYPE_LIST_EXCL_INDEX
 } SourceFilterType;
 
 typedef struct SourceFilters
@@ -83,6 +95,7 @@ typedef struct SourceFilters
 } SourceFilters;
 
 
+SourceFilterType filterTypeComplement(SourceFilterType type);
 bool parse_filters(const char *filebname, SourceFilters *filters);
 
 #endif  /* FILTERING_H */

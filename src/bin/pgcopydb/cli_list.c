@@ -35,6 +35,7 @@ static CommandLine list_tables_command =
 		" --source ... ",
 		"  --source            Postgres URI to the source database\n"
 		"  --filter <filename> Use the filters defined in <filename>\n"
+		"  --list-skipped      List only tables that are setup to be skipped\n"
 		"  --without-pkey      List only tables that have no primary key\n",
 		cli_list_db_getopts,
 		cli_list_tables);
@@ -45,7 +46,8 @@ static CommandLine list_sequences_command =
 		"List all the source sequences to copy data from",
 		" --source ... ",
 		"  --source            Postgres URI to the source database\n"
-		"  --filter <filename> Use the filters defined in <filename>\n",
+		"  --filter <filename> Use the filters defined in <filename>\n"
+		"  --list-skipped      List only tables that are setup to be skipped\n",
 		cli_list_db_getopts,
 		cli_list_sequences);
 
@@ -54,9 +56,11 @@ static CommandLine list_indexes_command =
 		"indexes",
 		"List all the indexes to create again after copying the data",
 		" --source ... [ --schema-name [ --table-name ] ]",
-		"  --source          Postgres URI to the source database\n"
-		"  --schema-name     Name of the schema where to find the table\n"
-		"  --table-name      Name of the target table\n",
+		"  --source            Postgres URI to the source database\n"
+		"  --schema-name       Name of the schema where to find the table\n"
+		"  --table-name        Name of the target table\n"
+		"  --filter <filename> Use the filters defined in <filename>\n"
+		"  --list-skipped      List only tables that are setup to be skipped\n",
 		cli_list_db_getopts,
 		cli_list_indexes);
 
@@ -90,6 +94,7 @@ cli_list_db_getopts(int argc, char **argv)
 		{ "table-name", required_argument, NULL, 't' },
 		{ "filter", required_argument, NULL, 'F' },
 		{ "filters", required_argument, NULL, 'F' },
+		{ "list-skipped", no_argument, NULL, 'x' },
 		{ "without-pkey", no_argument, NULL, 'P' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
@@ -146,6 +151,13 @@ cli_list_db_getopts(int argc, char **argv)
 				break;
 			}
 
+			case 'x':
+			{
+				options.listSkipped = true;
+				log_trace("--list-skipped");
+				break;
+			}
+
 			case 'P':
 			{
 				options.noPKey = true;
@@ -198,6 +210,11 @@ cli_list_db_getopts(int argc, char **argv)
 				exit(EXIT_CODE_QUIT);
 				break;
 			}
+
+			default:
+			{
+				++errors;
+			}
 		}
 	}
 
@@ -219,6 +236,12 @@ cli_list_db_getopts(int argc, char **argv)
 	if (IS_EMPTY_STRING_BUFFER(options.source_pguri))
 	{
 		log_fatal("Option --source is mandatory");
+		++errors;
+	}
+
+	if (options.listSkipped && IS_EMPTY_STRING_BUFFER(options.filterFileName))
+	{
+		log_fatal("Option --list-skipped requires using option --filters");
 		++errors;
 	}
 
@@ -251,6 +274,22 @@ cli_list_tables(int argc, char **argv)
 			log_error("Failed to parse filters in file \"%s\"",
 					  listDBoptions.filterFileName);
 			exit(EXIT_CODE_BAD_ARGS);
+		}
+
+		if (listDBoptions.listSkipped)
+		{
+			if (filters.type != SOURCE_FILTER_TYPE_NONE)
+			{
+				filters.type = filterTypeComplement(filters.type);
+
+				if (filters.type == SOURCE_FILTER_TYPE_NONE)
+				{
+					log_error("BUG: can't list skipped tables from filtering "
+							  "type %d",
+							  filters.type);
+					exit(EXIT_CODE_INTERNAL_ERROR);
+				}
+			}
 		}
 	}
 
@@ -330,6 +369,22 @@ cli_list_sequences(int argc, char **argv)
 					  listDBoptions.filterFileName);
 			exit(EXIT_CODE_BAD_ARGS);
 		}
+
+		if (listDBoptions.listSkipped)
+		{
+			if (filters.type != SOURCE_FILTER_TYPE_NONE)
+			{
+				filters.type = filterTypeComplement(filters.type);
+
+				if (filters.type == SOURCE_FILTER_TYPE_NONE)
+				{
+					log_error("BUG: can't list skipped sequences "
+							  " from filtering type %d",
+							  filters.type);
+					exit(EXIT_CODE_INTERNAL_ERROR);
+				}
+			}
+		}
 	}
 
 	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
@@ -402,6 +457,22 @@ cli_list_indexes(int argc, char **argv)
 				log_error("Failed to parse filters in file \"%s\"",
 						  listDBoptions.filterFileName);
 				exit(EXIT_CODE_BAD_ARGS);
+			}
+
+			if (listDBoptions.listSkipped)
+			{
+				if (filters.type != SOURCE_FILTER_TYPE_NONE)
+				{
+					filters.type = filterTypeComplement(filters.type);
+
+					if (filters.type == SOURCE_FILTER_TYPE_NONE)
+					{
+						log_error("BUG: can't list skipped indexes "
+								  " from filtering type %d",
+								  filters.type);
+						exit(EXIT_CODE_INTERNAL_ERROR);
+					}
+				}
 			}
 		}
 
