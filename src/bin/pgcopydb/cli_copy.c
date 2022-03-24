@@ -532,6 +532,14 @@ cli_copy_db(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	/* prepare the Oids of objects that are filtered out */
+	if (!copydb_fetch_filtered_oids(&copySpecs))
+	{
+		/* errors have already been logged */
+		(void) copydb_close_snapshot(sourceSnapshot);
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
 	/* now close the snapshot we kept for the whole operation */
 	(void) copydb_close_snapshot(sourceSnapshot);
 

@@ -163,13 +163,34 @@ typedef struct CopyTableDataSpecsArray
 } CopyTableDataSpecsArray;
 
 
+/*
+ * From the SourceFilters we prepare an array of boolean where the array index
+ * is a Postgres OID and the boolean value is true when the Postgres object on
+ * the source database has been filtered-out.
+ *
+ * TODO: we could optimize this bool array size by handling an array of uin64_t
+ * (properly aligned in 64 bits architectures) and then doing some bit masking
+ * to get at the boolean value we need for a given oid (integer division and
+ * modulo). For the moment an array of booleans will do.
+ */
+typedef struct SourceFilterArray
+{
+	uint32_t count;
+	uint32_t first;
+	uint32_t last;
+	bool *oids;                 /* malloc'ed area */
+} SourceFilterArray;
+
+
 /* all that's needed to start a TABLE DATA copy for a whole database */
 typedef struct CopyDataSpec
 {
 	CopyFilePaths cfPaths;
 	PostgresPaths pgPaths;
 	DirectoryState dirState;
+
 	SourceFilters filters;
+	SourceFilterArray filterOidsArray;
 
 	char source_pguri[MAXCONNINFO];
 	char target_pguri[MAXCONNINFO];
@@ -312,6 +333,9 @@ bool copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
 bool copydb_copy_all_sequences(CopyDataSpec *specs);
 
 /* table-data.c */
+bool copydb_objectid_is_filtered_out(CopyDataSpec *specs, uint32_t oid);
+bool copydb_fetch_filtered_oids(CopyDataSpec *specs);
+
 bool copydb_copy_all_table_data(CopyDataSpec *specs);
 
 bool copydb_process_table_data(CopyDataSpec *specs);

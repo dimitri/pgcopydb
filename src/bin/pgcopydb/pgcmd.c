@@ -665,6 +665,11 @@ parse_archive_list(char *list, ArchiveContentArray *contents)
 			return false;
 		}
 
+		/* skip " " */
+		ptr = sep + 1;
+
+		strlcpy(item->desc, ptr, sizeof(item->desc));
+
 		++contents->count;
 	}
 

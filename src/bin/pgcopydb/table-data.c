@@ -184,6 +184,213 @@ copydb_prepare_table_specs(CopyDataSpec *specs)
 
 
 /*
+ * copydb_objectid_is_filtered_out returns true when the given oid belongs to a
+ * database object that's been filtered out by the filtering setup.
+ */
+bool
+copydb_objectid_is_filtered_out(CopyDataSpec *specs, uint32_t oid)
+{
+	SourceFilterArray *filterOidsArray = &(specs->filterOidsArray);
+
+	if (filterOidsArray->count == 0)
+	{
+		return false;
+	}
+
+	/*
+	 * We also probe for OIDs of objects that are not filtered out, so not in
+	 * the array at all.
+	 */
+	if (oid < filterOidsArray->first || oid > filterOidsArray->last)
+	{
+		return false;
+	}
+
+	uint32_t index = oid - filterOidsArray->first;
+
+	if (filterOidsArray->oids[index])
+	{
+		log_debug("Skipping filtered dumpId %d", oid);
+	}
+
+	return filterOidsArray->oids[index];
+}
+
+
+/*
+ * copydb_fetch_filtered_oids fetches the Postgres objects OID matching the
+ * installed filters. The SourceFilterArray associates a boolean with an OID
+ * that's used as a key to the array. The boolean is true when the OID has to
+ * be filtered out of the pg_restore catalog or other operations.
+ */
+bool
+copydb_fetch_filtered_oids(CopyDataSpec *specs)
+{
+	SourceFilters *filters = &(specs->filters);
+	SourceFilterArray *filterOidsArray = &(specs->filterOidsArray);
+
+	SourceTableArray tableArray = { 0, NULL };
+	SourceIndexArray indexArray = { 0, NULL };
+	SourceSequenceArray sequenceArray = { 0, NULL };
+
+	PGSQL *pgsql = &(specs->sourceSnapshot.pgsql);
+
+	/*
+	 * Take the complement of the filtering, to list the OIDs of objects that
+	 * we do not process.
+	 */
+	SourceFilterType type = filters->type;
+
+	filters->type = filterTypeComplement(type);
+
+	if (filters->type == SOURCE_FILTER_TYPE_NONE)
+	{
+		return true;
+	}
+
+	/*
+	 * Now fetch the OIDs of tables, indexes, and sequences that we filter out.
+	 */
+	if (!schema_list_ordinary_tables(pgsql, filters, &tableArray))
+	{
+		/* errors have already been logged */
+		filters->type = type;
+		return false;
+	}
+
+	if (!schema_list_all_indexes(pgsql, filters, &indexArray))
+	{
+		/* errors have already been logged */
+		filters->type = type;
+		return false;
+	}
+
+	if (!schema_list_sequences(pgsql, filters, &sequenceArray))
+	{
+		/* errors have already been logged */
+		filters->type = type;
+		return false;
+	}
+
+	/* re-install the actual filter type */
+	filters->type = type;
+
+	/* compute the min/max of the oids in the lists */
+	uint32_t firstOid = 0;
+	uint32_t lastOid = 0;
+
+	/* first the tables */
+	for (int i = 0; i < tableArray.count; i++)
+	{
+		if (firstOid == 0 || tableArray.array[i].oid < firstOid)
+		{
+			firstOid = tableArray.array[i].oid;
+		}
+
+		if (lastOid == 0 || tableArray.array[i].oid > lastOid)
+		{
+			lastOid = tableArray.array[i].oid;
+		}
+	}
+
+	/* now indexes and constraints */
+	for (int i = 0; i < indexArray.count; i++)
+	{
+		if (firstOid == 0 || indexArray.array[i].indexOid < firstOid)
+		{
+			firstOid = indexArray.array[i].indexOid;
+		}
+
+		if (lastOid == 0 || indexArray.array[i].indexOid > lastOid)
+		{
+			lastOid = indexArray.array[i].indexOid;
+		}
+
+		if (indexArray.array[i].constraintOid > 0)
+		{
+			if (firstOid == 0 || indexArray.array[i].constraintOid < firstOid)
+			{
+				firstOid = indexArray.array[i].constraintOid;
+			}
+
+			if (lastOid == 0 || indexArray.array[i].constraintOid > lastOid)
+			{
+				lastOid = indexArray.array[i].constraintOid;
+			}
+		}
+	}
+
+	/* finally sequences */
+	for (int i = 0; i < sequenceArray.count; i++)
+	{
+		if (firstOid == 0 || sequenceArray.array[i].oid < firstOid)
+		{
+			firstOid = sequenceArray.array[i].oid;
+		}
+
+		if (lastOid == 0 || sequenceArray.array[i].oid > lastOid)
+		{
+			lastOid = sequenceArray.array[i].oid;
+		}
+	}
+
+	/* Now we can allocate memory for our SourceFilterArray oids list */
+	filterOidsArray->first = firstOid;
+	filterOidsArray->last = lastOid;
+	filterOidsArray->count = lastOid - firstOid + 1;
+
+	filterOidsArray->oids =
+		(bool *) malloc(filterOidsArray->count * sizeof(bool));
+
+	log_debug("copydb_fetch_filtered_oids [%u .. %u] with %u objects",
+			  filterOidsArray->first,
+			  filterOidsArray->last,
+			  filterOidsArray->count);
+
+	if (filterOidsArray->oids == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	/* and finally fill-in our Oid array */
+	for (int i = 0; i < tableArray.count; i++)
+	{
+		uint32_t oid = tableArray.array[i].oid;
+
+		filterOidsArray->oids[oid - firstOid] = true;
+	}
+
+	for (int i = 0; i < indexArray.count; i++)
+	{
+		uint32_t indexOid = indexArray.array[i].indexOid;
+		uint32_t constraintOid = indexArray.array[i].constraintOid;
+
+		filterOidsArray->oids[indexOid - firstOid] = true;
+
+		if (constraintOid > 0)
+		{
+			filterOidsArray->oids[constraintOid - firstOid] = true;
+		}
+	}
+
+	for (int i = 0; i < sequenceArray.count; i++)
+	{
+		uint32_t oid = sequenceArray.array[i].oid;
+
+		filterOidsArray->oids[oid - firstOid] = true;
+	}
+
+	/* free dynamic memory that's not needed anymore */
+	free(tableArray.array);
+	free(indexArray.array);
+	free(sequenceArray.array);
+
+	return true;
+}
+
+
+/*
  * copydb_process_table_data forks() as many as specs->tableJobs processes that
  * will all concurrently process TABLE DATA and then CREATE INDEX and then also
  * VACUUM ANALYZE each table.

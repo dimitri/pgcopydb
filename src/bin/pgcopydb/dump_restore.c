@@ -233,15 +233,21 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 	{
 		uint32_t oid = contents.array[i].objectOid;
 
-		/* commenting is done by prepending ";" as prefix to the line */
-		char *prefix =
-			copydb_objectid_has_been_processed_already(specs, oid) ? ";" : "";
+		bool alreadyProcessed =
+			copydb_objectid_has_been_processed_already(specs, oid);
 
-		appendPQExpBuffer(listContents, "%s%d; %u %u\n",
+		bool filteredOut =
+			copydb_objectid_is_filtered_out(specs, oid);
+
+		/* commenting is done by prepending ";" as prefix to the line */
+		char *prefix = alreadyProcessed || filteredOut ? ";" : "";
+
+		appendPQExpBuffer(listContents, "%s%d; %u %u %s\n",
 						  prefix,
 						  contents.array[i].dumpId,
 						  contents.array[i].catalogOid,
-						  contents.array[i].objectOid);
+						  contents.array[i].objectOid,
+						  contents.array[i].desc);
 	}
 
 	/* memory allocation could have failed while building string */
