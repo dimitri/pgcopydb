@@ -190,18 +190,9 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                on n.nspname = ft.nspname "
 		"               and c.relname = ft.relname "
 
-		/* exclude-table-data */
-		"         left join pg_temp.filter_exclude_table_data ftd "
-		"                on n.nspname = ftd.nspname "
-		"               and c.relname = ftd.relname "
-
-		"   where c.relkind = 'r' and c.relpersistence = 'p' "
-		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
-
 		/* WHERE clause for exclusion filters */
 		"     and (   fn.nspname is not null "
-		"          or ft.relname is not null "
-		"          or ftd.relname is not null) "
+		"          or ft.relname is not null ) "
 
 		"order by bytes desc, n.nspname, c.relname"
 	}
@@ -412,11 +403,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"                on n.nspname = ft.nspname "
 		"               and r.relname = ft.relname "
 
-		/* exclude-table-data */
-		"         left join pg_temp.filter_exclude_table_data ftd "
-		"                on n.nspname = ftd.nspname "
-		"               and r.relname = ftd.relname "
-
 		"   where r.relkind = 'r' and r.relpersistence = 'p'  "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and not exists "
@@ -429,8 +415,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 
 		/* WHERE clause for exclusion filters */
 		"     and (   fn.nspname is not null "
-		"          or ft.relname is not null "
-		"          or ftd.relname is not null) "
+		"          or ft.relname is not null ) "
 
 		"order by n.nspname, r.relname"
 	}
@@ -686,19 +671,13 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"                on rn.nspname = ft.nspname "
 		"               and r.relname = ft.relname "
 
-		/* exclude-table-data */
-		"         left join pg_temp.filter_exclude_table_data ftd "
-		"                on rn.nspname = ftd.nspname "
-		"               and r.relname = ftd.relname "
-
 		"  where s.relkind = 'S' "
 		"    and d.classid = 'pg_attrdef'::regclass "
 		"    and d.refclassid = 'pg_class'::regclass "
 
 		/* WHERE clause for exclusion filters */
 		"     and (   fn.nspname is not null "
-		"          or ft.relname is not null "
-		"          or ftd.relname is not null) "
+		"          or ft.relname is not null) "
 
 		"order by sn.nspname, s.relname"
 	},
@@ -1029,18 +1008,12 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"                on rn.nspname = ft.nspname "
 		"               and r.relname = ft.relname "
 
-		/* exclude-table-data */
-		"         left join pg_temp.filter_exclude_table_data ftd "
-		"                on rn.nspname = ftd.nspname "
-		"               and r.relname = ftd.relname "
-
 		"    where r.relkind = 'r' and r.relpersistence = 'p' "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
 
 		/* WHERE clause for exclusion filters */
 		"     and (   fn.nspname is not null "
-		"          or ft.relname is not null "
-		"          or ftd.relname is not null) "
+		"          or ft.relname is not null ) "
 
 		" order by n.nspname, r.relname"
 	},
