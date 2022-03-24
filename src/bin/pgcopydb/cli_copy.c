@@ -50,6 +50,7 @@ CommandLine copy__db_command =
 		"  --no-acl              Prevent restoration of access privileges (grant/revoke commands).\n"
 		"  --no-comments         Do not output commands to restore comments\n"
 		"  --skip-large-objects  Skip copying large objects (blobs)\n"
+		"  --filters <filename>  Use the filters defined in <filename>\n"
 		"  --restart             Allow restarting when temp files exist already\n"
 		"  --resume              Allow resuming operations after a failure\n"
 		"  --not-consistent      Allow taking a new snapshot on the source database\n"
@@ -72,6 +73,7 @@ static CommandLine copy_db_command =
 		"  --no-acl              Prevent restoration of access privileges (grant/revoke commands).\n"
 		"  --no-comments         Do not output commands to restore comments\n"
 		"  --skip-large-objects  Skip copying large objects (blobs)\n"
+		"  --filters <filename>  Use the filters defined in <filename>\n"
 		"  --restart             Allow restarting when temp files exist already\n"
 		"  --resume              Allow resuming operations after a failure\n"
 		"  --not-consistent      Allow taking a new snapshot on the source database\n"
@@ -94,6 +96,7 @@ static CommandLine copy_data_command =
 		"  --table-jobs          Number of concurrent COPY jobs to run\n"
 		"  --index-jobs          Number of concurrent CREATE INDEX jobs to run\n"
 		"  --skip-large-objects  Skip copying large objects (blobs)\n"
+		"  --filters <filename>  Use the filters defined in <filename>\n"
 		"  --restart             Allow restarting when temp files exist already\n"
 		"  --resume              Allow resuming operations after a failure\n"
 		"  --not-consistent      Allow taking a new snapshot on the source database\n"
@@ -106,14 +109,15 @@ static CommandLine copy_table_data_command =
 		"table-data",
 		"Copy the data from all tables in database from source to target",
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
-		"  --source          Postgres URI to the source database\n"
-		"  --target          Postgres URI to the target database\n"
-		"  --dir             Work directory to use\n"
-		"  --table-jobs      Number of concurrent COPY jobs to run\n"
-		"  --restart         Allow restarting when temp files exist already\n"
-		"  --resume          Allow resuming operations after a failure\n"
-		"  --not-consistent  Allow taking a new snapshot on the source database\n"
-		"  --snapshot        Use snapshot obtained with pg_export_snapshot\n",
+		"  --source             Postgres URI to the source database\n"
+		"  --target             Postgres URI to the target database\n"
+		"  --dir                Work directory to use\n"
+		"  --table-jobs         Number of concurrent COPY jobs to run\n"
+		"  --filters <filename> Use the filters defined in <filename>\n"
+		"  --restart            Allow restarting when temp files exist already\n"
+		"  --resume             Allow resuming operations after a failure\n"
+		"  --not-consistent     Allow taking a new snapshot on the source database\n"
+		"  --snapshot           Use snapshot obtained with pg_export_snapshot\n",
 		cli_copy_db_getopts,
 		cli_copy_table_data);
 
@@ -138,13 +142,14 @@ static CommandLine copy_sequence_command =
 		"sequences",
 		"Copy the current value from all sequences in database from source to target",
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
-		"  --source          Postgres URI to the source database\n"
-		"  --target          Postgres URI to the target database\n"
-		"  --dir             Work directory to use\n"
-		"  --restart         Allow restarting when temp files exist already\n"
-		"  --resume          Allow resuming operations after a failure\n"
-		"  --not-consistent  Allow taking a new snapshot on the source database\n"
-		"  --snapshot        Use snapshot obtained with pg_export_snapshot\n",
+		"  --source             Postgres URI to the source database\n"
+		"  --target             Postgres URI to the target database\n"
+		"  --dir                Work directory to use\n"
+		"  --filters <filename> Use the filters defined in <filename>\n"
+		"  --restart            Allow restarting when temp files exist already\n"
+		"  --resume             Allow resuming operations after a failure\n"
+		"  --not-consistent     Allow taking a new snapshot on the source database\n"
+		"  --snapshot           Use snapshot obtained with pg_export_snapshot\n",
 		cli_copy_db_getopts,
 		cli_copy_sequences);
 
@@ -153,13 +158,14 @@ static CommandLine copy_indexes_command =
 		"indexes",
 		"Create all the indexes found in the source database in the target",
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
-		"  --source          Postgres URI to the source database\n"
-		"  --target          Postgres URI to the target database\n"
-		"  --dir             Work directory to use\n"
-		"  --index-jobs      Number of concurrent CREATE INDEX jobs to run\n"
-		"  --restart         Allow restarting when temp files exist already\n"
-		"  --resume          Allow resuming operations after a failure\n"
-		"  --not-consistent  Allow taking a new snapshot on the source database\n",
+		"  --source             Postgres URI to the source database\n"
+		"  --target             Postgres URI to the target database\n"
+		"  --dir                Work directory to use\n"
+		"  --index-jobs         Number of concurrent CREATE INDEX jobs to run\n"
+		"  --filters <filename> Use the filters defined in <filename>\n"
+		"  --restart            Allow restarting when temp files exist already\n"
+		"  --resume             Allow resuming operations after a failure\n"
+		"  --not-consistent     Allow taking a new snapshot on the source database\n",
 		cli_copy_db_getopts,
 		cli_copy_indexes);
 
@@ -168,12 +174,13 @@ static CommandLine copy_constraints_command =
 		"constraints",
 		"Create all the constraints found in the source database in the target",
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
-		"  --source          Postgres URI to the source database\n"
-		"  --target          Postgres URI to the target database\n"
-		"  --dir             Work directory to use\n"
-		"  --restart         Allow restarting when temp files exist already\n"
-		"  --resume          Allow resuming operations after a failure\n"
-		"  --not-consistent  Allow taking a new snapshot on the source database\n",
+		"  --source             Postgres URI to the source database\n"
+		"  --target             Postgres URI to the target database\n"
+		"  --dir                Work directory to use\n"
+		"  --filters <filename> Use the filters defined in <filename>\n"
+		"  --restart            Allow restarting when temp files exist already\n"
+		"  --resume             Allow resuming operations after a failure\n"
+		"  --not-consistent     Allow taking a new snapshot on the source database\n",
 		cli_copy_db_getopts,
 		cli_copy_constraints);
 

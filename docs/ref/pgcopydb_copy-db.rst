@@ -26,6 +26,7 @@ Postgres instance to the target Postgres instance.
      --no-acl              Prevent restoration of access privileges (grant/revoke commands).
      --no-comments         Do not output commands to restore comments
      --skip-large-objects  Skip copying large objects (blobs)
+     --filters <filename>  Use the filters defined in <filename>
      --restart             Allow restarting when temp files exist already
      --resume              Allow resuming operations after a failure
      --not-consistent      Allow taking a new snapshot on the source database
@@ -161,6 +162,12 @@ The following options are available to ``pgcopydb copy-db``:
 
   Skip copying large objects, also known as blobs, when copying the data
   from the source database to the target database.
+
+--filters <filename>
+
+  This option allows to exclude table and indexes from the copy operations.
+  See :ref:`filtering` for details about the expected file format and the
+  filtering options available.
 
 --restart
 
