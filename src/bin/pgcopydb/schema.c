@@ -84,9 +84,14 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
 		"         pg_table_size(c.oid) as bytes, "
-		"         pg_size_pretty(pg_table_size(c.oid)) "
-		"    from pg_catalog.pg_class c join pg_catalog.pg_namespace n "
-		"      on c.relnamespace = n.oid "
+		"         pg_size_pretty(pg_table_size(c.oid)), "
+		"         format('%s %s %s', "
+		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
+		"                regexp_replace(c.relname, '[\n\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"    from pg_catalog.pg_class c "
+		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
+		"         join pg_authid auth ON auth.oid = c.relowner"
 		"   where c.relkind = 'r' and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"order by bytes desc, n.nspname, c.relname"
@@ -97,10 +102,14 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
 		"         pg_table_size(c.oid) as bytes, "
-		"         pg_size_pretty(pg_table_size(c.oid)) "
+		"         pg_size_pretty(pg_table_size(c.oid)), "
+		"         format('%s %s %s', "
+		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
+		"                regexp_replace(c.relname, '[\n\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"    from pg_catalog.pg_class c "
-		"         join pg_catalog.pg_namespace n "
-		"           on c.relnamespace = n.oid "
+		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
+		"         join pg_authid auth ON auth.oid = c.relowner"
 
 		/* include-only-table */
 		"         join pg_temp.filter_include_only_table inc "
@@ -117,10 +126,14 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
 		"         pg_table_size(c.oid) as bytes, "
-		"         pg_size_pretty(pg_table_size(c.oid)) "
+		"         pg_size_pretty(pg_table_size(c.oid)), "
+		"         format('%s %s %s', "
+		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
+		"                regexp_replace(c.relname, '[\n\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"    from pg_catalog.pg_class c "
-		"         join pg_catalog.pg_namespace n "
-		"           on c.relnamespace = n.oid "
+		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
+		"         join pg_authid auth ON auth.oid = c.relowner"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -152,10 +165,14 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
 		"         pg_table_size(c.oid) as bytes, "
-		"         pg_size_pretty(pg_table_size(c.oid)) "
+		"         pg_size_pretty(pg_table_size(c.oid)), "
+		"         format('%s %s %s', "
+		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
+		"                regexp_replace(c.relname, '[\n\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"    from pg_catalog.pg_class c "
-		"         join pg_catalog.pg_namespace n "
-		"           on c.relnamespace = n.oid "
+		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
+		"         join pg_authid auth ON auth.oid = c.relowner"
 
 		/* include-only-table */
 		"    left join pg_temp.filter_include_only_table inc "
@@ -176,10 +193,14 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
 		"         pg_table_size(c.oid) as bytes, "
-		"         pg_size_pretty(pg_table_size(c.oid)) "
+		"         pg_size_pretty(pg_table_size(c.oid)), "
+		"         format('%s %s %s', "
+		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
+		"                regexp_replace(c.relname, '[\n\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"    from pg_catalog.pg_class c "
-		"         join pg_catalog.pg_namespace n "
-		"           on c.relnamespace = n.oid "
+		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
+		"         join pg_authid auth ON auth.oid = c.relowner"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -273,9 +294,14 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 
 		"  select r.oid, n.nspname, r.relname, r.reltuples::bigint, "
 		"         pg_table_size(r.oid) as bytes, "
-		"         pg_size_pretty(pg_table_size(r.oid)) "
+		"         pg_size_pretty(pg_table_size(r.oid)), "
+		"         format('%s %s %s', "
+		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
+		"                regexp_replace(r.relname, '[\n\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
+		"         join pg_authid auth ON auth.oid = r.relowner"
 		"   where r.relkind = 'r' and r.relpersistence = 'p'  "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and not exists "
@@ -293,9 +319,14 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 
 		"  select r.oid, n.nspname, r.relname, r.reltuples::bigint, "
 		"         pg_table_size(r.oid) as bytes, "
-		"         pg_size_pretty(pg_table_size(r.oid)) "
+		"         pg_size_pretty(pg_table_size(r.oid)), "
+		"         format('%s %s %s', "
+		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
+		"                regexp_replace(r.relname, '[\n\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
+		"         join pg_authid auth ON auth.oid = r.relowner"
 
 		/* include-only-table */
 		"         join pg_temp.filter_include_only_table inc "
@@ -319,9 +350,14 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 
 		"  select r.oid, n.nspname, r.relname, r.reltuples::bigint, "
 		"         pg_table_size(r.oid) as bytes, "
-		"         pg_size_pretty(pg_table_size(r.oid)) "
+		"         pg_size_pretty(pg_table_size(r.oid)), "
+		"         format('%s %s %s', "
+		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
+		"                regexp_replace(r.relname, '[\n\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
+		"         join pg_authid auth ON auth.oid = r.relowner"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -360,9 +396,14 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 
 		"  select r.oid, n.nspname, r.relname, r.reltuples::bigint, "
 		"         pg_table_size(r.oid) as bytes, "
-		"         pg_size_pretty(pg_table_size(r.oid)) "
+		"         pg_size_pretty(pg_table_size(r.oid)), "
+		"         format('%s %s %s', "
+		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
+		"                regexp_replace(r.relname, '[\n\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
+		"         join pg_authid auth ON auth.oid = r.relowner"
 
 		/* include-only-table */
 		"    left join pg_temp.filter_include_only_table inc "
@@ -390,9 +431,14 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 
 		"  select r.oid, n.nspname, r.relname, r.reltuples::bigint, "
 		"         pg_table_size(r.oid) as bytes, "
-		"         pg_size_pretty(pg_table_size(r.oid)) "
+		"         pg_size_pretty(pg_table_size(r.oid)), "
+		"         format('%s %s %s', "
+		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
+		"                regexp_replace(r.relname, '[\n\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
+		"         join pg_authid auth ON auth.oid = r.relowner"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -493,9 +539,14 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_NONE,
 
-		"  select c.oid, n.nspname, c.relname "
-		"    from pg_catalog.pg_class c join pg_catalog.pg_namespace n "
-		"      on c.relnamespace = n.oid "
+		"  select c.oid, n.nspname, c.relname, "
+		"         format('%s %s %s', "
+		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
+		"                regexp_replace(c.relname, '[\n\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"    from pg_catalog.pg_class c "
+		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
+		"         join pg_authid auth ON auth.oid = c.relowner"
 		"   where c.relkind = 'S' and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"order by n.nspname, c.relname"
@@ -506,7 +557,11 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 
 		"  select s.oid as seqoid, "
 		"         sn.nspname, "
-		"         s.relname "
+		"         s.relname, "
+		"         format('%s %s %s', "
+		"                regexp_replace(sn.nspname, '[\n\r]', ' '), "
+		"                regexp_replace(s.relname, '[\n\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
 
 		/*
 		 * we don't need dependent table name and column name:
@@ -518,6 +573,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 
 		"    from pg_class s "
 		"         join pg_namespace sn on sn.oid = s.relnamespace "
+		"         join pg_authid auth ON auth.oid = s.relowner"
 		"         join pg_depend d on d.refobjid = s.oid "
 		"         join pg_attrdef a on d.objid = a.oid "
 		"         join pg_attribute at "
@@ -545,7 +601,11 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 
 		"  select s.oid as seqoid, "
 		"         sn.nspname, "
-		"         s.relname "
+		"         s.relname, "
+		"         format('%s %s %s', "
+		"                regexp_replace(sn.nspname, '[\n\r]', ' '), "
+		"                regexp_replace(s.relname, '[\n\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
 
 		/*
 		 * we don't need dependent table name and column name:
@@ -557,6 +617,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 
 		"    from pg_class s "
 		"         join pg_namespace sn on sn.oid = s.relnamespace "
+		"         join pg_authid auth ON auth.oid = s.relowner"
 		"         join pg_depend d on d.refobjid = s.oid "
 		"         join pg_attrdef a on d.objid = a.oid "
 		"         join pg_attribute at "
@@ -598,7 +659,11 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 
 		"  select s.oid as seqoid, "
 		"         sn.nspname, "
-		"         s.relname "
+		"         s.relname, "
+		"         format('%s %s %s', "
+		"                regexp_replace(sn.nspname, '[\n\r]', ' '), "
+		"                regexp_replace(s.relname, '[\n\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
 
 		/*
 		 * we don't need dependent table name and column name:
@@ -610,6 +675,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 
 		"    from pg_class s "
 		"         join pg_namespace sn on sn.oid = s.relnamespace "
+		"         join pg_authid auth ON auth.oid = s.relowner"
 		"         join pg_depend d on d.refobjid = s.oid "
 		"         join pg_attrdef a on d.objid = a.oid "
 		"         join pg_attribute at "
@@ -640,7 +706,11 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 
 		"  select s.oid as seqoid, "
 		"         sn.nspname, "
-		"         s.relname "
+		"         s.relname, "
+		"         format('%s %s %s', "
+		"                regexp_replace(sn.nspname, '[\n\r]', ' '), "
+		"                regexp_replace(s.relname, '[\n\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
 
 		/*
 		 * we don't need dependent table name and column name:
@@ -652,6 +722,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 
 		"    from pg_class s "
 		"         join pg_namespace sn on sn.oid = s.relnamespace "
+		"         join pg_authid auth ON auth.oid = s.relowner"
 		"         join pg_depend d on d.refobjid = s.oid "
 		"         join pg_attrdef a on d.objid = a.oid "
 		"         join pg_attribute at "
@@ -821,12 +892,17 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          pg_get_indexdef(indexrelid),"
 		"          c.oid,"
 		"          c.conname,"
-		"          pg_get_constraintdef(c.oid)"
+		"          pg_get_constraintdef(c.oid),"
+		"          format('%s %s %s', "
+		"                 regexp_replace(n.nspname, '[\n\r]', ' '), "
+		"                 regexp_replace(i.relname, '[\n\r]', ' '), "
+		"                 regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"     from pg_index x"
 		"          join pg_class i ON i.oid = x.indexrelid"
 		"          join pg_class r ON r.oid = x.indrelid"
 		"          join pg_namespace n ON n.oid = i.relnamespace"
 		"          join pg_namespace rn ON rn.oid = r.relnamespace"
+		"          join pg_authid auth ON auth.oid = i.relowner"
 		"          left join pg_depend d "
 		"                 on d.classid = 'pg_class'::regclass"
 		"                and d.objid = i.oid"
@@ -853,12 +929,17 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          pg_get_indexdef(indexrelid),"
 		"          c.oid,"
 		"          c.conname,"
-		"          pg_get_constraintdef(c.oid)"
+		"          pg_get_constraintdef(c.oid),"
+		"          format('%s %s %s', "
+		"                 regexp_replace(n.nspname, '[\n\r]', ' '), "
+		"                 regexp_replace(i.relname, '[\n\r]', ' '), "
+		"                 regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"     from pg_index x"
 		"          join pg_class i ON i.oid = x.indexrelid"
 		"          join pg_class r ON r.oid = x.indrelid"
 		"          join pg_namespace n ON n.oid = i.relnamespace"
 		"          join pg_namespace rn ON rn.oid = r.relnamespace"
+		"          join pg_authid auth ON auth.oid = i.relowner"
 		"          left join pg_depend d "
 		"                 on d.classid = 'pg_class'::regclass"
 		"                and d.objid = i.oid"
@@ -891,12 +972,17 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          pg_get_indexdef(indexrelid),"
 		"          c.oid,"
 		"          c.conname,"
-		"          pg_get_constraintdef(c.oid)"
+		"          pg_get_constraintdef(c.oid),"
+		"          format('%s %s %s', "
+		"                 regexp_replace(n.nspname, '[\n\r]', ' '), "
+		"                 regexp_replace(i.relname, '[\n\r]', ' '), "
+		"                 regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"     from pg_index x"
 		"          join pg_class i ON i.oid = x.indexrelid"
 		"          join pg_class r ON r.oid = x.indrelid"
 		"          join pg_namespace n ON n.oid = i.relnamespace"
 		"          join pg_namespace rn ON rn.oid = r.relnamespace"
+		"          join pg_authid auth ON auth.oid = i.relowner"
 		"          left join pg_depend d "
 		"                 on d.classid = 'pg_class'::regclass"
 		"                and d.objid = i.oid"
@@ -944,12 +1030,17 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          pg_get_indexdef(indexrelid),"
 		"          c.oid,"
 		"          c.conname,"
-		"          pg_get_constraintdef(c.oid)"
+		"          pg_get_constraintdef(c.oid),"
+		"          format('%s %s %s', "
+		"                 regexp_replace(n.nspname, '[\n\r]', ' '), "
+		"                 regexp_replace(i.relname, '[\n\r]', ' '), "
+		"                 regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"     from pg_index x"
 		"          join pg_class i ON i.oid = x.indexrelid"
 		"          join pg_class r ON r.oid = x.indrelid"
 		"          join pg_namespace n ON n.oid = i.relnamespace"
 		"          join pg_namespace rn ON rn.oid = r.relnamespace"
+		"          join pg_authid auth ON auth.oid = i.relowner"
 		"          left join pg_depend d "
 		"                 on d.classid = 'pg_class'::regclass"
 		"                and d.objid = i.oid"
@@ -986,12 +1077,17 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          pg_get_indexdef(indexrelid),"
 		"          c.oid,"
 		"          c.conname,"
-		"          pg_get_constraintdef(c.oid)"
+		"          pg_get_constraintdef(c.oid),"
+		"          format('%s %s %s', "
+		"                 regexp_replace(n.nspname, '[\n\r]', ' '), "
+		"                 regexp_replace(i.relname, '[\n\r]', ' '), "
+		"                 regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"     from pg_index x"
 		"          join pg_class i ON i.oid = x.indexrelid"
 		"          join pg_class r ON r.oid = x.indrelid"
 		"          join pg_namespace n ON n.oid = i.relnamespace"
 		"          join pg_namespace rn ON rn.oid = r.relnamespace"
+		"          join pg_authid auth ON auth.oid = i.relowner"
 		"          left join pg_depend d "
 		"                 on d.classid = 'pg_class'::regclass"
 		"                and d.objid = i.oid"
@@ -1033,12 +1129,17 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          pg_get_indexdef(indexrelid),"
 		"          c.oid,"
 		"          c.conname,"
-		"          pg_get_constraintdef(c.oid)"
+		"          pg_get_constraintdef(c.oid),"
+		"          format('%s %s %s', "
+		"                 regexp_replace(n.nspname, '[\n\r]', ' '), "
+		"                 regexp_replace(i.relname, '[\n\r]', ' '), "
+		"                 regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"     from pg_index x"
 		"          join pg_class i ON i.oid = x.indexrelid"
 		"          join pg_class r ON r.oid = x.indrelid"
 		"          join pg_namespace n ON n.oid = i.relnamespace"
 		"          join pg_namespace rn ON rn.oid = r.relnamespace"
+		"          join pg_authid auth ON auth.oid = i.relowner"
 		"          left join pg_depend d "
 		"                 on d.classid = 'pg_class'::regclass"
 		"                and d.objid = i.oid"
@@ -1075,12 +1176,17 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          pg_get_indexdef(indexrelid),"
 		"          c.oid,"
 		"          c.conname,"
-		"          pg_get_constraintdef(c.oid)"
+		"          pg_get_constraintdef(c.oid),"
+		"          format('%s %s %s', "
+		"                 regexp_replace(n.nspname, '[\n\r]', ' '), "
+		"                 regexp_replace(i.relname, '[\n\r]', ' '), "
+		"                 regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"     from pg_index x"
 		"          join pg_class i ON i.oid = x.indexrelid"
 		"          join pg_class r ON r.oid = x.indrelid"
 		"          join pg_namespace n ON n.oid = i.relnamespace"
 		"          join pg_namespace rn ON rn.oid = r.relnamespace"
+		"          join pg_authid auth ON auth.oid = i.relowner"
 		"          left join pg_depend d "
 		"                 on d.classid = 'pg_class'::regclass"
 		"                and d.objid = i.oid"
@@ -1170,12 +1276,17 @@ schema_list_table_indexes(PGSQL *pgsql,
 		"          pg_get_indexdef(indexrelid),"
 		"          c.oid,"
 		"          c.conname,"
-		"          pg_get_constraintdef(c.oid)"
+		"          pg_get_constraintdef(c.oid),"
+		"          format('%s %s %s', "
+		"                 regexp_replace(n.nspname, '[\n\r]', ' '), "
+		"                 regexp_replace(i.relname, '[\n\r]', ' '), "
+		"                 regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"     from pg_index x"
 		"          join pg_class i ON i.oid = x.indexrelid"
 		"          join pg_class r ON r.oid = x.indrelid"
 		"          join pg_namespace n ON n.oid = i.relnamespace"
 		"          join pg_namespace rn ON rn.oid = r.relnamespace"
+		"          join pg_authid auth ON auth.oid = i.relowner"
 		"          left join pg_depend d "
 		"                 on d.classid = 'pg_class'::regclass"
 		"                and d.objid = i.oid"
@@ -1397,9 +1508,9 @@ getTableArray(void *ctx, PGresult *result)
 
 	log_trace("getTableArray: %d", nTuples);
 
-	if (PQnfields(result) != 6)
+	if (PQnfields(result) != 7)
 	{
-		log_error("Query returned %d columns, expected 6", PQnfields(result));
+		log_error("Query returned %d columns, expected 7", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -1516,6 +1627,18 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		++errors;
 	}
 
+	/* 7. indexRestoreListName */
+	value = PQgetvalue(result, rowNumber, 6);
+	length = strlcpy(table->restoreListName, value, RESTORE_LIST_NAMEDATALEN);
+
+	if (length >= RESTORE_LIST_NAMEDATALEN)
+	{
+		log_error("Table restore list name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (RESTORE_LIST_NAMEDATALEN - 1)",
+				  value, length, RESTORE_LIST_NAMEDATALEN - 1);
+		++errors;
+	}
+
 	return errors == 0;
 }
 
@@ -1532,9 +1655,9 @@ getSequenceArray(void *ctx, PGresult *result)
 
 	log_trace("getSequenceArray: %d", nTuples);
 
-	if (PQnfields(result) != 3)
+	if (PQnfields(result) != 4)
 	{
-		log_error("Query returned %d columns, expected 3", PQnfields(result));
+		log_error("Query returned %d columns, expected 4", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -1621,6 +1744,18 @@ parseCurrentSourceSequence(PGresult *result, int rowNumber, SourceSequence *seq)
 		++errors;
 	}
 
+	/* 7. indexRestoreListName */
+	value = PQgetvalue(result, rowNumber, 3);
+	length = strlcpy(seq->restoreListName, value, RESTORE_LIST_NAMEDATALEN);
+
+	if (length >= RESTORE_LIST_NAMEDATALEN)
+	{
+		log_error("Table restore list name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (RESTORE_LIST_NAMEDATALEN - 1)",
+				  value, length, RESTORE_LIST_NAMEDATALEN - 1);
+		++errors;
+	}
+
 	return errors == 0;
 }
 
@@ -1637,9 +1772,9 @@ getIndexArray(void *ctx, PGresult *result)
 
 	log_trace("getIndexArray: %d", nTuples);
 
-	if (PQnfields(result) != 13)
+	if (PQnfields(result) != 14)
 	{
-		log_error("Query returned %d columns, expected 13", PQnfields(result));
+		log_error("Query returned %d columns, expected 14", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -1852,6 +1987,19 @@ parseCurrentSourceIndex(PGresult *result, int rowNumber, SourceIndex *index)
 					  value, length, BUFSIZE - 1);
 			++errors;
 		}
+	}
+
+	/* 14. indexRestoreListName */
+	value = PQgetvalue(result, rowNumber, 13);
+	length =
+		strlcpy(index->indexRestoreListName, value, RESTORE_LIST_NAMEDATALEN);
+
+	if (length >= RESTORE_LIST_NAMEDATALEN)
+	{
+		log_error("Index restore list name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (RESTORE_LIST_NAMEDATALEN - 1)",
+				  value, length, RESTORE_LIST_NAMEDATALEN - 1);
+		++errors;
 	}
 
 	return errors == 0;

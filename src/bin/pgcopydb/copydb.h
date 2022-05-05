@@ -164,22 +164,41 @@ typedef struct CopyTableDataSpecsArray
 
 
 /*
- * From the SourceFilters we prepare an array of boolean where the array index
- * is a Postgres OID and the boolean value is true when the Postgres object on
- * the source database has been filtered-out.
+ * Build a hash-table of all the SQL level objects that we filter-out when
+ * applying our filtering rules. We need to find those objects again when
+ * parsing the pg_restore --list output, where we almost always have the object
+ * Oid, but sometimes have to use the "schema name owner" format instead, as in
+ * the following pg_restore --list example output:
  *
- * TODO: we could optimize this bool array size by handling an array of uin64_t
- * (properly aligned in 64 bits architectures) and then doing some bit masking
- * to get at the boolean value we need for a given oid (integer division and
- * modulo). For the moment an array of booleans will do.
+ *   3310; 0 0 INDEX ATTACH public payment_p2020_06_customer_id_idx postgres
  */
-typedef struct SourceFilterArray
+typedef enum
 {
-	uint32_t count;
-	uint32_t first;
-	uint32_t last;
-	bool *oids;                 /* malloc'ed area */
-} SourceFilterArray;
+	OBJECT_KIND_UNKNOWN = 0,
+	OBJECT_KIND_TABLE,
+	OBJECT_KIND_INDEX,
+	OBJECT_KIND_CONSTRAINT,
+	OBJECT_KIND_SEQUENCE
+} ObjectKind;
+
+
+typedef struct SourceFilterItem
+{
+	uint32_t oid;
+
+	ObjectKind kind;
+
+	/* it's going to be only one of those, depending on the object kind */
+	SourceTable table;
+	SourceSequence sequence;
+	SourceIndex index;
+
+	/* schema - name - owner */
+	char restoreListName[RESTORE_LIST_NAMEDATALEN];
+
+	UT_hash_handle hOid;            /* makes this structure hashable */
+	UT_hash_handle hName;           /* makes this structure hashable */
+} SourceFilterItem;
 
 
 /* all that's needed to start a TABLE DATA copy for a whole database */
@@ -190,7 +209,8 @@ typedef struct CopyDataSpec
 	DirectoryState dirState;
 
 	SourceFilters filters;
-	SourceFilterArray filterOidsArray;
+	SourceFilterItem *hOid;     /* hash table of objects, by Oid */
+	SourceFilterItem *hName;    /* hash table of objects, by pg_restore name */
 
 	char source_pguri[MAXCONNINFO];
 	char target_pguri[MAXCONNINFO];
@@ -333,8 +353,11 @@ bool copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
 bool copydb_copy_all_sequences(CopyDataSpec *specs);
 
 /* table-data.c */
-bool copydb_objectid_is_filtered_out(CopyDataSpec *specs, uint32_t oid);
+bool copydb_objectid_is_filtered_out(CopyDataSpec *specs,
+									 uint32_t oid,
+									 char *restoreListName);
 bool copydb_fetch_filtered_oids(CopyDataSpec *specs);
+char * copydb_ObjectKindToString(ObjectKind kind);
 
 bool copydb_copy_all_table_data(CopyDataSpec *specs);
 

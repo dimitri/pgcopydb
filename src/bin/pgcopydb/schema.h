@@ -8,8 +8,13 @@
 
 #include <stdbool.h>
 
+#include "uthash.h"
+
 #include "filtering.h"
 #include "pgsql.h"
+
+/* the pg_restore -l output uses "schema name owner" */
+#define RESTORE_LIST_NAMEDATALEN (3 * NAMEDATALEN + 3)
 
 /*
  * SourceTable caches the information we need about all the ordinary tables
@@ -23,6 +28,8 @@ typedef struct SourceTable
 	int64_t reltuples;
 	int64_t bytes;
 	char bytesPretty[NAMEDATALEN]; /* pg_size_pretty */
+
+	char restoreListName[RESTORE_LIST_NAMEDATALEN];
 } SourceTable;
 
 
@@ -44,6 +51,8 @@ typedef struct SourceSequence
 	char relname[NAMEDATALEN];
 	int64_t lastValue;
 	bool isCalled;
+
+	char restoreListName[RESTORE_LIST_NAMEDATALEN];
 } SourceSequence;
 
 
@@ -72,6 +81,8 @@ typedef struct SourceIndex
 	uint32_t constraintOid;
 	char constraintName[NAMEDATALEN];
 	char constraintDef[BUFSIZE];
+	char indexRestoreListName[RESTORE_LIST_NAMEDATALEN];
+	char constraintRestoreListName[RESTORE_LIST_NAMEDATALEN];
 } SourceIndex;
 
 

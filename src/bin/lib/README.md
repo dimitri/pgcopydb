@@ -31,3 +31,17 @@ We utilize the "ini.h" ini-file reader from https://github.com/mattiasgustavsson
 We vendor-in some code from the Postgres project at
 https://git.postgresql.org/gitweb/?p=postgresql.git;a=summary. This code is
 licenced under The PostgreSQL Licence, a derivative of the BSD licence.
+
+## uthash
+
+A hash in C that's available at
+
+  https://github.com/troydhanson/uthash
+
+It says that
+
+  All you need to do is copy the header file into your project, and include
+  it. Since uthash is a header file only, there is no library code to link
+  against.
+
+This directory contains only the `uthash.h` file, which implements hash tables.

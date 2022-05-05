@@ -26,6 +26,7 @@ COMMON_LIBS += -I${SRC_DIR}../lib/log/src/
 COMMON_LIBS += -I${SRC_DIR}../lib/subcommands.c/
 COMMON_LIBS += -I${SRC_DIR}../lib/libs/
 COMMON_LIBS += -I${SRC_DIR}../lib/parson/
+COMMON_LIBS += -I${SRC_DIR}../lib/uthash
 
 CC = $(shell $(PG_CONFIG) --cc)
 

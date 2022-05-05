@@ -24,3 +24,4 @@ src/bin/lib/log/** -citus-style
 src/bin/lib/libs/** -citus-style
 src/bin/lib/pg/** -citus-style
 src/bin/lib/subcommands.c/** -citus-style
+src/bin/lib/uthash/** -citus-style

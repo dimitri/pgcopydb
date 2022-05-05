@@ -52,6 +52,7 @@ typedef struct ArchiveContentItem
 	uint32_t catalogOid;
 	uint32_t objectOid;
 	char desc[BUFSIZE];
+	char restoreListName[BUFSIZE];
 } ArchiveContentItem;
 
 

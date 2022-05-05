@@ -188,32 +188,37 @@ copydb_prepare_table_specs(CopyDataSpec *specs)
  * database object that's been filtered out by the filtering setup.
  */
 bool
-copydb_objectid_is_filtered_out(CopyDataSpec *specs, uint32_t oid)
+copydb_objectid_is_filtered_out(CopyDataSpec *specs,
+								uint32_t oid,
+								char *restoreListName)
 {
-	SourceFilterArray *filterOidsArray = &(specs->filterOidsArray);
+	SourceFilterItem *hOid = specs->hOid;
+	SourceFilterItem *hName = specs->hName;
 
-	if (filterOidsArray->count == 0)
+	SourceFilterItem *item = NULL;
+
+	if (oid != 0)
 	{
-		return false;
+		HASH_FIND(hOid, hOid, &oid, sizeof(uint32_t), item);
+
+		if (item != NULL)
+		{
+			return true;
+		}
 	}
 
-	/*
-	 * We also probe for OIDs of objects that are not filtered out, so not in
-	 * the array at all.
-	 */
-	if (oid < filterOidsArray->first || oid > filterOidsArray->last)
+	if (restoreListName != NULL && !IS_EMPTY_STRING_BUFFER(restoreListName))
 	{
-		return false;
+		size_t len = strlen(restoreListName);
+		HASH_FIND(hName, hName, restoreListName, len, item);
+
+		if (item != NULL)
+		{
+			return true;
+		}
 	}
 
-	uint32_t index = oid - filterOidsArray->first;
-
-	if (filterOidsArray->oids[index])
-	{
-		log_debug("Skipping filtered dumpId %d", oid);
-	}
-
-	return filterOidsArray->oids[index];
+	return false;
 }
 
 
@@ -227,7 +232,8 @@ bool
 copydb_fetch_filtered_oids(CopyDataSpec *specs)
 {
 	SourceFilters *filters = &(specs->filters);
-	SourceFilterArray *filterOidsArray = &(specs->filterOidsArray);
+	SourceFilterItem *hOid = NULL;
+	SourceFilterItem *hName = NULL;
 
 	SourceTableArray tableArray = { 0, NULL };
 	SourceIndexArray indexArray = { 0, NULL };
@@ -275,111 +281,109 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs)
 	/* re-install the actual filter type */
 	filters->type = type;
 
-	/* compute the min/max of the oids in the lists */
-	uint32_t firstOid = 0;
-	uint32_t lastOid = 0;
-
 	/* first the tables */
 	for (int i = 0; i < tableArray.count; i++)
 	{
-		if (firstOid == 0 || tableArray.array[i].oid < firstOid)
+		SourceTable *table = &(tableArray.array[i]);
+
+		SourceFilterItem *item = malloc(sizeof(SourceFilterItem));
+
+		if (item == NULL)
 		{
-			firstOid = tableArray.array[i].oid;
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
 		}
 
-		if (lastOid == 0 || tableArray.array[i].oid > lastOid)
-		{
-			lastOid = tableArray.array[i].oid;
-		}
+		item->oid = table->oid;
+		item->kind = OBJECT_KIND_TABLE;
+		item->table = *table;
+
+		strlcpy(item->restoreListName,
+				table->restoreListName,
+				RESTORE_LIST_NAMEDATALEN);
+
+		HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), item);
+
+		size_t len = strlen(item->restoreListName);
+		HASH_ADD(hName, hName, restoreListName, len, item);
 	}
 
 	/* now indexes and constraints */
 	for (int i = 0; i < indexArray.count; i++)
 	{
-		if (firstOid == 0 || indexArray.array[i].indexOid < firstOid)
+		SourceIndex *index = &(indexArray.array[i]);
+
+		SourceFilterItem *idxItem = malloc(sizeof(SourceFilterItem));
+
+		if (idxItem == NULL)
 		{
-			firstOid = indexArray.array[i].indexOid;
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
 		}
 
-		if (lastOid == 0 || indexArray.array[i].indexOid > lastOid)
-		{
-			lastOid = indexArray.array[i].indexOid;
-		}
+		idxItem->oid = index->indexOid;
+		idxItem->kind = OBJECT_KIND_INDEX;
+		idxItem->index = *index;
+
+		strlcpy(idxItem->restoreListName,
+				index->indexRestoreListName,
+				RESTORE_LIST_NAMEDATALEN);
+
+
+		HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), idxItem);
+
+		size_t len = strlen(idxItem->restoreListName);
+		HASH_ADD(hName, hName, restoreListName, len, idxItem);
 
 		if (indexArray.array[i].constraintOid > 0)
 		{
-			if (firstOid == 0 || indexArray.array[i].constraintOid < firstOid)
+			SourceFilterItem *conItem = malloc(sizeof(SourceFilterItem));
+
+			if (conItem == NULL)
 			{
-				firstOid = indexArray.array[i].constraintOid;
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
 			}
 
-			if (lastOid == 0 || indexArray.array[i].constraintOid > lastOid)
-			{
-				lastOid = indexArray.array[i].constraintOid;
-			}
+			conItem->oid = index->constraintOid;
+			conItem->kind = OBJECT_KIND_CONSTRAINT;
+			conItem->index = *index;
+
+			/* at the moment we lack restore names for constraints */
+			HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), conItem);
 		}
 	}
 
 	/* finally sequences */
 	for (int i = 0; i < sequenceArray.count; i++)
 	{
-		if (firstOid == 0 || sequenceArray.array[i].oid < firstOid)
+		SourceSequence *seq = &(sequenceArray.array[i]);
+
+		SourceFilterItem *item = malloc(sizeof(SourceFilterItem));
+
+		if (item == NULL)
 		{
-			firstOid = sequenceArray.array[i].oid;
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
 		}
 
-		if (lastOid == 0 || sequenceArray.array[i].oid > lastOid)
-		{
-			lastOid = sequenceArray.array[i].oid;
-		}
+		item->oid = seq->oid;
+		item->kind = OBJECT_KIND_SEQUENCE;
+		item->sequence = *seq;
+
+		strlcpy(item->restoreListName,
+				seq->restoreListName,
+				RESTORE_LIST_NAMEDATALEN);
+
+		HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), item);
+
+		size_t len = strlen(seq->restoreListName);
+		HASH_ADD(hName, hName, restoreListName, len, item);
 	}
 
-	/* Now we can allocate memory for our SourceFilterArray oids list */
-	filterOidsArray->first = firstOid;
-	filterOidsArray->last = lastOid;
-	filterOidsArray->count = lastOid - firstOid + 1;
-
-	filterOidsArray->oids =
-		(bool *) malloc(filterOidsArray->count * sizeof(bool));
-
-	log_debug("copydb_fetch_filtered_oids [%u .. %u] with %u objects",
-			  filterOidsArray->first,
-			  filterOidsArray->last,
-			  filterOidsArray->count);
-
-	if (filterOidsArray->oids == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	/* and finally fill-in our Oid array */
-	for (int i = 0; i < tableArray.count; i++)
-	{
-		uint32_t oid = tableArray.array[i].oid;
-
-		filterOidsArray->oids[oid - firstOid] = true;
-	}
-
-	for (int i = 0; i < indexArray.count; i++)
-	{
-		uint32_t indexOid = indexArray.array[i].indexOid;
-		uint32_t constraintOid = indexArray.array[i].constraintOid;
-
-		filterOidsArray->oids[indexOid - firstOid] = true;
-
-		if (constraintOid > 0)
-		{
-			filterOidsArray->oids[constraintOid - firstOid] = true;
-		}
-	}
-
-	for (int i = 0; i < sequenceArray.count; i++)
-	{
-		uint32_t oid = sequenceArray.array[i].oid;
-
-		filterOidsArray->oids[oid - firstOid] = true;
-	}
+	/* publish our hash tables to the main CopyDataSpec instance */
+	specs->hOid = hOid;
+	specs->hName = hName;
 
 	/* free dynamic memory that's not needed anymore */
 	free(tableArray.array);
@@ -387,6 +391,43 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs)
 	free(sequenceArray.array);
 
 	return true;
+}
+
+
+/*
+ * copydb_ObjectKindToString returns the string representation of an ObjectKind
+ * enum value.
+ */
+char *
+copydb_ObjectKindToString(ObjectKind kind)
+{
+	switch (kind)
+	{
+		case OBJECT_KIND_UNKNOWN:
+		{
+			return "unknown";
+		}
+
+		case OBJECT_KIND_TABLE:
+		{
+			return "table";
+		}
+
+		case OBJECT_KIND_INDEX:
+		{
+			return "index";
+		}
+
+		case OBJECT_KIND_CONSTRAINT:
+		{
+			return "constraint";
+		}
+
+		case OBJECT_KIND_SEQUENCE:
+			return "sequence";
+	}
+
+	return "unknown";
 }
 
 
