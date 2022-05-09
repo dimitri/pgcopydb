@@ -623,10 +623,14 @@ copydb_process_table_data_worker(CopyDataSpec *specs)
 		 */
 		if (!isDone && !isBeingProcessed)
 		{
-			if (!copydb_copy_table(tableSpecs))
+			/* check for exclude-table-data filtering */
+			if (!tableSpecs->sourceTable.excludeData)
 			{
-				/* errors have already been logged */
-				return false;
+				if (!copydb_copy_table(tableSpecs))
+				{
+					/* errors have already been logged */
+					return false;
+				}
 			}
 
 			/* enter the critical section to communicate that we're done */

@@ -100,6 +100,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
 		"         pg_table_size(c.oid) as bytes, "
 		"         pg_size_pretty(pg_table_size(c.oid)), "
+		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
 		"                regexp_replace(c.relname, '[\n\r]', ' '), "
@@ -118,6 +119,10 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
 		"         pg_table_size(c.oid) as bytes, "
 		"         pg_size_pretty(pg_table_size(c.oid)), "
+		"         exists(select 1 "
+		"                  from pg_temp.filter_exclude_table_data ftd "
+		"                 where n.nspname = ftd.nspname "
+		"                   and c.relname = ftd.relname) as excludedata,"
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
 		"                regexp_replace(c.relname, '[\n\r]', ' '), "
@@ -142,6 +147,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
 		"         pg_table_size(c.oid) as bytes, "
 		"         pg_size_pretty(pg_table_size(c.oid)), "
+		"         ftd.relname is not null as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
 		"                regexp_replace(c.relname, '[\n\r]', ' '), "
@@ -181,6 +187,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
 		"         pg_table_size(c.oid) as bytes, "
 		"         pg_size_pretty(pg_table_size(c.oid)), "
+		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
 		"                regexp_replace(c.relname, '[\n\r]', ' '), "
@@ -209,6 +216,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
 		"         pg_table_size(c.oid) as bytes, "
 		"         pg_size_pretty(pg_table_size(c.oid)), "
+		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
 		"                regexp_replace(c.relname, '[\n\r]', ' '), "
@@ -1741,9 +1749,9 @@ getTableArray(void *ctx, PGresult *result)
 
 	log_trace("getTableArray: %d", nTuples);
 
-	if (PQnfields(result) != 7)
+	if (PQnfields(result) != 8)
 	{
-		log_error("Query returned %d columns, expected 7", PQnfields(result));
+		log_error("Query returned %d columns, expected 8", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -1860,8 +1868,12 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		++errors;
 	}
 
-	/* 7. indexRestoreListName */
+	/* 7. excludeData */
 	value = PQgetvalue(result, rowNumber, 6);
+	table->excludeData = (*value) == 't';
+
+	/* 8. restoreListName */
+	value = PQgetvalue(result, rowNumber, 7);
 	length = strlcpy(table->restoreListName, value, RESTORE_LIST_NAMEDATALEN);
 
 	if (length >= RESTORE_LIST_NAMEDATALEN)
