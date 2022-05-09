@@ -238,6 +238,7 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs)
 	SourceTableArray tableArray = { 0, NULL };
 	SourceIndexArray indexArray = { 0, NULL };
 	SourceSequenceArray sequenceArray = { 0, NULL };
+	SourceDependArray dependArray = { 0, NULL };
 
 	PGSQL *pgsql = &(specs->sourceSnapshot.pgsql);
 
@@ -272,6 +273,13 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs)
 	}
 
 	if (!schema_list_sequences(pgsql, filters, &sequenceArray))
+	{
+		/* errors have already been logged */
+		filters->type = type;
+		return false;
+	}
+
+	if (!schema_list_pg_depend(pgsql, filters, &dependArray))
 	{
 		/* errors have already been logged */
 		filters->type = type;
@@ -354,7 +362,7 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs)
 		}
 	}
 
-	/* finally sequences */
+	/* now sequences */
 	for (int i = 0; i < sequenceArray.count; i++)
 	{
 		SourceSequence *seq = &(sequenceArray.array[i]);
@@ -379,6 +387,29 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs)
 
 		size_t len = strlen(seq->restoreListName);
 		HASH_ADD(hName, hName, restoreListName, len, item);
+	}
+
+	/* finally table dependencies */
+	for (int i = 0; i < dependArray.count; i++)
+	{
+		SourceDepend *depend = &(dependArray.array[i]);
+
+		SourceFilterItem *item = malloc(sizeof(SourceFilterItem));
+
+		if (item == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		item->oid = depend->objid;
+		item->kind = OBJECT_KIND_UNKNOWN;
+
+		strlcpy(item->restoreListName,
+				depend->identity,
+				RESTORE_LIST_NAMEDATALEN);
+
+		HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), item);
 	}
 
 	/* publish our hash tables to the main CopyDataSpec instance */

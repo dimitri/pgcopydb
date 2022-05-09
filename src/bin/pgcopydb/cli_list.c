@@ -27,6 +27,7 @@ static int cli_list_db_getopts(int argc, char **argv);
 static void cli_list_tables(int argc, char **argv);
 static void cli_list_sequences(int argc, char **argv);
 static void cli_list_indexes(int argc, char **argv);
+static void cli_list_depends(int argc, char **argv);
 
 static CommandLine list_tables_command =
 	make_command(
@@ -64,11 +65,25 @@ static CommandLine list_indexes_command =
 		cli_list_db_getopts,
 		cli_list_indexes);
 
+static CommandLine list_depends_command =
+	make_command(
+		"depends",
+		"List all the dependencies to filter-out",
+		" --source ... [ --schema-name [ --table-name ] ]",
+		"  --source            Postgres URI to the source database\n"
+		"  --schema-name       Name of the schema where to find the table\n"
+		"  --table-name        Name of the target table\n"
+		"  --filter <filename> Use the filters defined in <filename>\n"
+		"  --list-skipped      List only tables that are setup to be skipped\n",
+		cli_list_db_getopts,
+		cli_list_depends);
+
 
 static CommandLine *list_subcommands[] = {
 	&list_tables_command,
 	&list_sequences_command,
 	&list_indexes_command,
+	&list_depends_command,
 	NULL
 };
 
@@ -258,7 +273,7 @@ cli_list_db_getopts(int argc, char **argv)
 
 
 /*
- * cli_list_tables implements the command: pglistdb list tables
+ * cli_list_tables implements the command: pgcopydb list tables
  */
 static void
 cli_list_tables(int argc, char **argv)
@@ -350,7 +365,7 @@ cli_list_tables(int argc, char **argv)
 
 
 /*
- * cli_list_tables implements the command: pglistdb list tables
+ * cli_list_tables implements the command: pgcopydb list tables
  */
 static void
 cli_list_sequences(int argc, char **argv)
@@ -422,7 +437,7 @@ cli_list_sequences(int argc, char **argv)
 
 
 /*
- * cli_list_indexes implements the command: pglistdb list indexes
+ * cli_list_indexes implements the command: pgcopydb list indexes
  */
 static void
 cli_list_indexes(int argc, char **argv)
@@ -577,6 +592,87 @@ cli_list_indexes(int argc, char **argv)
 					index->constraintDef,
 					index->indexDef);
 		}
+	}
+
+	fformat(stdout, "\n");
+}
+
+
+/*
+ * cli_list_indexes implements the command: pgcopydb list depends
+ */
+static void
+cli_list_depends(int argc, char **argv)
+{
+	PGSQL pgsql = { 0 };
+	SourceFilters filters = { 0 };
+	SourceDependArray dependArray = { 0, NULL };
+
+	log_info("Listing dependencies in source database");
+
+	if (IS_EMPTY_STRING_BUFFER(listDBoptions.filterFileName))
+	{
+		log_fatal("Option --filter is mandatory");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	if (!parse_filters(listDBoptions.filterFileName, &filters))
+	{
+		log_error("Failed to parse filters in file \"%s\"",
+				  listDBoptions.filterFileName);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	if (listDBoptions.listSkipped)
+	{
+		if (filters.type != SOURCE_FILTER_TYPE_NONE)
+		{
+			filters.type = filterTypeComplement(filters.type);
+
+			if (filters.type == SOURCE_FILTER_TYPE_NONE)
+			{
+				log_error("BUG: can't list skipped sequences "
+						  " from filtering type %d",
+						  filters.type);
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+		}
+	}
+
+	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	if (!schema_list_pg_depend(&pgsql, &filters, &dependArray))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_info("Fetched information for %d dependencies", dependArray.count);
+
+	fformat(stdout, "%20s | %30s | %8s | %8s | %20s | %s\n",
+			"Schema Name", "Table Name", "Catalog", "OID", "Type", "Identity");
+
+	fformat(stdout, "%20s-+-%30s-+-%8s-+-%8s-+-%20s-+-%30s\n",
+			"--------------------",
+			"------------------------------",
+			"--------",
+			"--------",
+			"--------------------",
+			"------------------------------");
+
+	for (int i = 0; i < dependArray.count; i++)
+	{
+		fformat(stdout, "%20s | %30s | %8u | %8u | %20s | %s\n",
+				dependArray.array[i].nspname,
+				dependArray.array[i].relname,
+				dependArray.array[i].classid,
+				dependArray.array[i].objid,
+				dependArray.array[i].type,
+				dependArray.array[i].identity);
 	}
 
 	fformat(stdout, "\n");

@@ -14,6 +14,7 @@
 #include "filtering.h"
 #include "log.h"
 #include "parsing.h"
+#include "pg_depend_sql.h"
 #include "pgsql.h"
 #include "schema.h"
 #include "signals.h"
@@ -51,6 +52,14 @@ typedef struct SourceIndexArrayContext
 	bool parsedOk;
 } SourceIndexArrayContext;
 
+/* Context used when fetching all the table dependencies */
+typedef struct SourceDependArrayContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	SourceDependArray *dependArray;
+	bool parsedOk;
+} SourceDependArrayContext;
+
 static void getTableArray(void *ctx, PGresult *result);
 
 static bool parseCurrentSourceTable(PGresult *result,
@@ -68,6 +77,12 @@ static void getIndexArray(void *ctx, PGresult *result);
 static bool parseCurrentSourceIndex(PGresult *result,
 									int rowNumber,
 									SourceIndex *index);
+
+static void getDependArray(void *ctx, PGresult *result);
+
+static bool parseCurrentSourceDepend(PGresult *result,
+									 int rowNumber,
+									 SourceDepend *depend);
 
 struct FilteringQueries
 {
@@ -1325,6 +1340,224 @@ schema_list_table_indexes(PGSQL *pgsql,
 
 
 /*
+ * For code simplicity the index array is also the SourceFilterType enum value.
+ */
+struct FilteringQueries listSourceDependSQL[] = {
+	{
+		SOURCE_FILTER_TYPE_NONE, ""
+	},
+
+	{
+		SOURCE_FILTER_TYPE_INCL,
+
+		PG_DEPEND_SQL
+		"  SELECT n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, "
+		"         deptype, type, identity "
+		"    FROM unconcat "
+
+		/* include-only-table */
+		"         join pg_class c "
+		"           on unconcat.refclassid = 'pg_class'::regclass "
+		"          and unconcat.refobjid = c.oid "
+
+		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
+
+		"         join pg_temp.filter_include_only_table inc "
+		"           on n.nspname = inc.nspname "
+		"          and c.relname = inc.relname "
+
+		"         , pg_identify_object(classid, objid, objsubid) "
+
+		"   WHERE NOT (refclassid = classid AND refobjid = objid) "
+		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and type not in ('toast table column', 'default value') "
+
+		/* remove duplicates due to multiple refobjsubid / objsubid */
+		"GROUP BY n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, deptype, type, identity"
+	},
+
+	{
+		SOURCE_FILTER_TYPE_EXCL,
+
+		PG_DEPEND_SQL
+		"  SELECT n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, "
+		"         deptype, type, identity "
+		"    FROM unconcat "
+
+		"         join pg_class c "
+		"           on unconcat.refclassid = 'pg_class'::regclass "
+		"          and unconcat.refobjid = c.oid "
+
+		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
+
+		/* exclude-schema */
+		"         left join pg_temp.filter_exclude_schema fn "
+		"                on n.nspname = fn.nspname "
+
+		/* exclude-table */
+		"         left join pg_temp.filter_exclude_table ft "
+		"                on n.nspname = ft.nspname "
+		"               and c.relname = ft.relname "
+
+		/* exclude-table-data */
+		"         left join pg_temp.filter_exclude_table_data ftd "
+		"                on n.nspname = ftd.nspname "
+		"               and c.relname = ftd.relname "
+
+		"         , pg_identify_object(classid, objid, objsubid) "
+
+		"   WHERE NOT (refclassid = classid AND refobjid = objid) "
+		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and type not in ('toast table column', 'default value') "
+
+		/* WHERE clause for exclusion filters */
+		"     and fn.nspname is null "
+		"     and ft.relname is null "
+		"     and ftd.relname is null "
+
+		/* remove duplicates due to multiple refobjsubid / objsubid */
+		"GROUP BY n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, deptype, type, identity"
+	},
+
+	{
+		SOURCE_FILTER_TYPE_LIST_NOT_INCL,
+
+		PG_DEPEND_SQL
+		"  SELECT n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, "
+		"         deptype, type, identity "
+		"    FROM unconcat "
+
+		"         join pg_class c "
+		"           on unconcat.refclassid = 'pg_class'::regclass "
+		"          and unconcat.refobjid = c.oid "
+
+		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
+
+		/* include-only-table */
+		"    left join pg_temp.filter_include_only_table inc "
+		"           on n.nspname = inc.nspname "
+		"          and c.relname = inc.relname "
+
+		"         , pg_identify_object(classid, objid, objsubid) "
+
+		"   WHERE NOT (refclassid = classid AND refobjid = objid) "
+		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and type not in ('toast table column', 'default value') "
+
+		/* WHERE clause for exclusion filters */
+		"     and inc.nspname is null "
+
+		/* remove duplicates due to multiple refobjsubid / objsubid */
+		"GROUP BY n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, deptype, type, identity"
+	},
+
+	{
+		SOURCE_FILTER_TYPE_LIST_EXCL,
+
+		PG_DEPEND_SQL
+		"  SELECT n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, "
+		"         deptype, type, identity "
+		"    FROM unconcat "
+
+		"         join pg_class c "
+		"           on unconcat.refclassid = 'pg_class'::regclass "
+		"          and unconcat.refobjid = c.oid "
+
+		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
+
+		/* exclude-schema */
+		"         left join pg_temp.filter_exclude_schema fn "
+		"                on n.nspname = fn.nspname "
+
+		/* exclude-table */
+		"         left join pg_temp.filter_exclude_table ft "
+		"                on n.nspname = ft.nspname "
+		"               and c.relname = ft.relname "
+
+		"         , pg_identify_object(classid, objid, objsubid) "
+
+		"   WHERE NOT (refclassid = classid AND refobjid = objid) "
+		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and type not in ('toast table column', 'default value') "
+
+		/* WHERE clause for exclusion filters */
+		"     and (   fn.nspname is not null "
+		"          or ft.relname is not null ) "
+
+		/* remove duplicates due to multiple refobjsubid / objsubid */
+		"GROUP BY n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, deptype, type, identity"
+	}
+};
+
+
+/*
+ * schema_list_pg_depend recursively walks the pg_catalog.pg_depend view and
+ * builds the list of objects that depend on tables that are filtered-out from
+ * our operations.
+ */
+bool
+schema_list_pg_depend(PGSQL *pgsql,
+					  SourceFilters *filters,
+					  SourceDependArray *dependArray)
+{
+	SourceDependArrayContext context = { { 0 }, dependArray, false };
+
+	log_trace("schema_list_pg_depend");
+
+	switch (filters->type)
+	{
+		case SOURCE_FILTER_TYPE_INCL:
+		case SOURCE_FILTER_TYPE_EXCL:
+		case SOURCE_FILTER_TYPE_LIST_NOT_INCL:
+		case SOURCE_FILTER_TYPE_LIST_EXCL:
+		{
+			if (!prepareFilters(pgsql, filters))
+			{
+				log_error("Failed to prepare pgcopydb filters, "
+						  "see above for details");
+				return false;
+			}
+			break;
+		}
+
+		/* SOURCE_FILTER_TYPE_EXCL_INDEX etc */
+		default:
+		{
+			log_error("BUG: schema_list_ordinary_tables called with "
+					  "filtering type %d",
+					  filters->type);
+			return false;
+		}
+	}
+
+	char *sql = listSourceDependSQL[filters->type].sql;
+
+	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+								   &context, &getDependArray))
+	{
+		log_error("Failed to list table dependencies");
+		return false;
+	}
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to list table dependencies");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * prepareFilters prepares the temporary tables that are needed on the Postgres
  * session where we want to implement a catalog query with filtering. The
  * filtering rules are then uploaded in those temp tables, and the filtering is
@@ -1999,6 +2232,167 @@ parseCurrentSourceIndex(PGresult *result, int rowNumber, SourceIndex *index)
 		log_error("Index restore list name \"%s\" is %d bytes long, "
 				  "the maximum expected is %d (RESTORE_LIST_NAMEDATALEN - 1)",
 				  value, length, RESTORE_LIST_NAMEDATALEN - 1);
+		++errors;
+	}
+
+	return errors == 0;
+}
+
+
+/*
+ * getDependArray loops over the SQL result for the table dependencies array
+ * query and allocates an array of tables then populates it with the query
+ * result.
+ */
+static void
+getDependArray(void *ctx, PGresult *result)
+{
+	SourceDependArrayContext *context = (SourceDependArrayContext *) ctx;
+	int nTuples = PQntuples(result);
+
+	log_trace("getDependArray: %d", nTuples);
+
+	if (PQnfields(result) != 9)
+	{
+		log_error("Query returned %d columns, expected 9", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	/* we're not supposed to re-cycle arrays here */
+	if (context->dependArray->array != NULL)
+	{
+		/* issue a warning but let's try anyway */
+		log_warn("BUG? context's array is not null in getDependArray");
+
+		free(context->dependArray->array);
+		context->dependArray->array = NULL;
+	}
+
+	context->dependArray->count = nTuples;
+	context->dependArray->array =
+		(SourceDepend *) malloc(nTuples * sizeof(SourceDepend));
+
+	if (context->dependArray->array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return;
+	}
+
+	bool parsedOk = true;
+
+	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
+	{
+		SourceDepend *depend = &(context->dependArray->array[rowNumber]);
+
+		parsedOk = parsedOk &&
+				   parseCurrentSourceDepend(result, rowNumber, depend);
+	}
+
+	if (!parsedOk)
+	{
+		free(context->dependArray->array);
+		context->dependArray->array = NULL;
+	}
+
+	context->parsedOk = parsedOk;
+}
+
+
+/*
+ * parseCurrentSourceDepend parses a single row of the table listing query
+ * result.
+ */
+static bool
+parseCurrentSourceDepend(PGresult *result, int rowNumber, SourceDepend *depend)
+{
+	int errors = 0;
+
+	/* 1. n.nspname */
+	char *value = PQgetvalue(result, rowNumber, 0);
+	int length = strlcpy(depend->nspname, value, NAMEDATALEN);
+
+	if (length >= NAMEDATALEN)
+	{
+		log_error("Schema name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (NAMEDATALEN - 1)",
+				  value, length, NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* 2. c.relname */
+	value = PQgetvalue(result, rowNumber, 1);
+	length = strlcpy(depend->relname, value, NAMEDATALEN);
+
+	if (length >= NAMEDATALEN)
+	{
+		log_error("Table name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (NAMEDATALEN - 1)",
+				  value, length, NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* 3. refclassid */
+	value = PQgetvalue(result, rowNumber, 2);
+
+	if (!stringToUInt32(value, &(depend->refclassid)) || depend->refclassid == 0)
+	{
+		log_error("Invalid OID \"%s\"", value);
+		++errors;
+	}
+
+	/* 4. refobjid */
+	value = PQgetvalue(result, rowNumber, 3);
+
+	if (!stringToUInt32(value, &(depend->refobjid)) || depend->refobjid == 0)
+	{
+		log_error("Invalid OID \"%s\"", value);
+		++errors;
+	}
+
+	/* 5. classid */
+	value = PQgetvalue(result, rowNumber, 4);
+
+	if (!stringToUInt32(value, &(depend->classid)) || depend->classid == 0)
+	{
+		log_error("Invalid OID \"%s\"", value);
+		++errors;
+	}
+
+	/* 6. objid */
+	value = PQgetvalue(result, rowNumber, 5);
+
+	if (!stringToUInt32(value, &(depend->objid)) || depend->objid == 0)
+	{
+		log_error("Invalid OID \"%s\"", value);
+		++errors;
+	}
+
+	/* 7. deptype */
+	value = PQgetvalue(result, rowNumber, 6);
+	depend->deptype = value[0];
+
+	/* 8. type */
+	value = PQgetvalue(result, rowNumber, 7);
+	length = strlcpy(depend->type, value, BUFSIZE);
+
+	if (length >= BUFSIZE)
+	{
+		log_error("Table dependency type \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (BUFSIZE - 1)",
+				  value, length, BUFSIZE - 1);
+		++errors;
+	}
+
+	/* 9. identity */
+	value = PQgetvalue(result, rowNumber, 8);
+	length = strlcpy(depend->identity, value, BUFSIZE);
+
+	if (length >= BUFSIZE)
+	{
+		log_error("Table dependency identity \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (BUFSIZE - 1)",
+				  value, length, BUFSIZE - 1);
 		++errors;
 	}
 

@@ -93,6 +93,33 @@ typedef struct SourceIndexArray
 } SourceIndexArray;
 
 
+/*
+ * SourceDepend caches the information about the dependency graph of
+ * filtered-out objects. When filtering-out a table, we want to also filter-out
+ * the foreign keys, views, materialized views and all that depend on this same
+ * object.
+ */
+typedef struct SourceDepend
+{
+	char nspname[NAMEDATALEN];
+	char relname[NAMEDATALEN];
+	uint32_t refclassid;
+	uint32_t refobjid;
+	uint32_t classid;
+	uint32_t objid;
+	char deptype;
+	char type[BUFSIZE];
+	char identity[BUFSIZE];
+} SourceDepend;
+
+
+typedef struct SourceDependArray
+{
+	int count;
+	SourceDepend *array;         /* malloc'ed area */
+} SourceDependArray;
+
+
 bool schema_list_ordinary_tables(PGSQL *pgsql,
 								 SourceFilters *filters,
 								 SourceTableArray *tableArray);
@@ -116,5 +143,9 @@ bool schema_list_table_indexes(PGSQL *pgsql,
 							   const char *shemaName,
 							   const char *tableName,
 							   SourceIndexArray *indexArray);
+
+bool schema_list_pg_depend(PGSQL *pgsql,
+						   SourceFilters *filters,
+						   SourceDependArray *dependArray);
 
 #endif /* SCHEMA_H */
