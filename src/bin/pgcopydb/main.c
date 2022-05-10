@@ -148,6 +148,10 @@ main(int argc, char **argv)
 	bool exitOnQuit = true;
 	(void) set_signal_handlers(exitOnQuit);
 
+	log_info("Running pgcopydb version %s from \"%s\"",
+			 VERSION_STRING,
+			 pgcopydb_program);
+
 	if (!commandline_run(&command, argc, argv))
 	{
 		exit(EXIT_CODE_BAD_ARGS);

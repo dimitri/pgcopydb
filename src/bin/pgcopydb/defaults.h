@@ -6,8 +6,18 @@
 #ifndef DEFAULTS_H
 #define DEFAULTS_H
 
+#if __has_include("git-version.h")
+#include "git-version.h"
+#endif
+
 /* additional version information for printing version on CLI */
 #define PGCOPYDB_VERSION "0.5"
+
+#ifdef GIT_VERSION
+#define VERSION_STRING GIT_VERSION
+#else
+#define VERSION_STRING PGCOPYDB_VERSION
+#endif
 
 /* environment variable to use to make DEBUG facilities available */
 #define PGCOPYDB_DEBUG "PGCOPYDB_DEBUG"

@@ -5,10 +5,16 @@ TOP := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 all: bin ;
 
-bin:
+GIT-VERSION-FILE:
+	@$(SHELL_PATH) ./GIT-VERSION-GEN
+
+-include GIT-VERSION-FILE
+
+bin: GIT-VERSION-FILE
 	$(MAKE) -C src/bin/ all
 
 clean:
+	rm -f GIT-VERSION-FILE
 	$(MAKE) -C src/bin/ clean
 
 docs:
@@ -49,3 +55,4 @@ debsh-qa: deb-qa
 .PHONY: bin clean install docs
 .PHONY: test tests tests/*
 .PHONY: deb debsh deb-qa debsh-qa
+.PHONY: GIT-VERSION-FILE
