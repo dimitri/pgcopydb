@@ -6,9 +6,7 @@
 #ifndef DEFAULTS_H
 #define DEFAULTS_H
 
-#if __has_include("git-version.h")
 #include "git-version.h"
-#endif
 
 /* additional version information for printing version on CLI */
 #define PGCOPYDB_VERSION "0.5"

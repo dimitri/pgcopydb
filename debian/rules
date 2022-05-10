@@ -1,6 +1,9 @@
 #!/usr/bin/make -f
 
+VERSION = $(shell dpkg-parsechangelog --show-field version)
+
 override_dh_auto_build:
+	$(MAKE) -C src/bin/pgcopydb GIT_VERSION=$(VERSION) git-version.h
 	$(MAKE) -C src/bin/pgcopydb
 	$(MAKE) -C docs man
 
