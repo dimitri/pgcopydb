@@ -80,7 +80,7 @@ include $(Po_files)
 endif
 
 
-$(PGCOPYDB): $(OBJS) $(INCLUDES) VERSION-FILE
+$(PGCOPYDB): VERSION-FILE $(OBJS) $(INCLUDES)
 	$(CC) $(CFLAGS) $(OBJS) $(LDFLAGS) $(LIBS) -o $@
 
 lib-snprintf.o: $(PG_SNPRINTF)
@@ -104,6 +104,7 @@ git-version.h:
 	echo "#define GIT_VERSION \""$(GIT_VERSION)"\"" > $@
 
 clean:
+	rm -f git-version.h
 	rm -f $(OBJS) $(PGCOPYDB)
 	rm -rf $(DEPDIR)
 
