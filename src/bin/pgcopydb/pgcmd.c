@@ -588,8 +588,69 @@ pg_restore_list(PostgresPaths *pgPaths, const char *filename,
  *          te->desc, sanitized_schema, sanitized_name,
  *          sanitized_owner);
  *
- * We only parse the dumpId, catalogOid, and objectOid.
  */
+
+struct StringWithLength
+{
+	int len;
+	char str[BUFSIZE];
+};
+
+#define INSERT_STRING_WITH_LENGTH(s) { strlen(s), s }
+
+/*
+ * List manually processed from describeDumpableObject in
+ * postgres/src/bin/pg_dump/pg_dump_sort.c
+ */
+struct StringWithLength pgRestoreDescriptionArray[] = {
+	INSERT_STRING_WITH_LENGTH("ACCESS METHOD"),
+	INSERT_STRING_WITH_LENGTH("AGGREGATE"),
+	INSERT_STRING_WITH_LENGTH("ATTRDEF"),
+	INSERT_STRING_WITH_LENGTH("BLOB DATA"),
+	INSERT_STRING_WITH_LENGTH("BLOB"),
+	INSERT_STRING_WITH_LENGTH("CAST"),
+	INSERT_STRING_WITH_LENGTH("COLLATION"),
+	INSERT_STRING_WITH_LENGTH("CONSTRAINT"),
+	INSERT_STRING_WITH_LENGTH("CONVERSION"),
+	INSERT_STRING_WITH_LENGTH("DEFAULT ACL"),
+	INSERT_STRING_WITH_LENGTH("DUMMY TYPE"),
+	INSERT_STRING_WITH_LENGTH("EVENT TRIGGER"),
+	INSERT_STRING_WITH_LENGTH("EXTENSION"),
+	INSERT_STRING_WITH_LENGTH("FK CONSTRAINT"),
+	INSERT_STRING_WITH_LENGTH("FOREIGN DATA WRAPPER"),
+	INSERT_STRING_WITH_LENGTH("FOREIGN SERVER"),
+	INSERT_STRING_WITH_LENGTH("FUNCTION"),
+	INSERT_STRING_WITH_LENGTH("INDEX ATTACH"),
+	INSERT_STRING_WITH_LENGTH("INDEX"),
+	INSERT_STRING_WITH_LENGTH("OPERATOR CLASS"),
+	INSERT_STRING_WITH_LENGTH("OPERATOR FAMILY"),
+	INSERT_STRING_WITH_LENGTH("OPERATOR"),
+	INSERT_STRING_WITH_LENGTH("POLICY"),
+	INSERT_STRING_WITH_LENGTH("PROCEDURAL LANGUAGE"),
+	INSERT_STRING_WITH_LENGTH("PUBLICATION TABLE"),
+	INSERT_STRING_WITH_LENGTH("PUBLICATION TABLES IN SCHEMA"),
+	INSERT_STRING_WITH_LENGTH("PUBLICATION"),
+	INSERT_STRING_WITH_LENGTH("REFRESH MATERIALIZED VIEW"),
+	INSERT_STRING_WITH_LENGTH("RULE"),
+	INSERT_STRING_WITH_LENGTH("SCHEMA"),
+	INSERT_STRING_WITH_LENGTH("SEQUENCE SET"),
+	INSERT_STRING_WITH_LENGTH("SHELL TYPE"),
+	INSERT_STRING_WITH_LENGTH("STATISTICS"),
+	INSERT_STRING_WITH_LENGTH("SUBSCRIPTION"),
+	INSERT_STRING_WITH_LENGTH("TABLE ATTACH"),
+	INSERT_STRING_WITH_LENGTH("TABLE DATA"),
+	INSERT_STRING_WITH_LENGTH("TABLE"),
+	INSERT_STRING_WITH_LENGTH("TEXT SEARCH CONFIGURATION"),
+	INSERT_STRING_WITH_LENGTH("TEXT SEARCH DICTIONARY"),
+	INSERT_STRING_WITH_LENGTH("TEXT SEARCH PARSER"),
+	INSERT_STRING_WITH_LENGTH("TEXT SEARCH TEMPLATE"),
+	INSERT_STRING_WITH_LENGTH("TRANSFORM"),
+	INSERT_STRING_WITH_LENGTH("TRIGGER"),
+	INSERT_STRING_WITH_LENGTH("TYPE"),
+	{ 0, "" }
+};
+
+
 bool
 parse_archive_list(char *list, ArchiveContentArray *contents)
 {
@@ -663,6 +724,27 @@ parse_archive_list(char *list, ArchiveContentArray *contents)
 			log_error("Failed to parse OID \"%s\" from pg_restore --list",
 					  ptr);
 			return false;
+		}
+
+		/* skip " " */
+		ptr = sep + 1;
+
+		for (int i = 0; pgRestoreDescriptionArray[i].len != 0; i++)
+		{
+			if (strncmp(ptr,
+						pgRestoreDescriptionArray[i].str,
+						pgRestoreDescriptionArray[i].len) == 0)
+			{
+				strlcpy(item->desc,
+						pgRestoreDescriptionArray[i].str,
+						sizeof(item->desc));
+
+				strlcpy(item->restoreListName,
+						ptr + pgRestoreDescriptionArray[i].len + 1,
+						sizeof(item->restoreListName));
+
+				break;
+			}
 		}
 
 		++contents->count;

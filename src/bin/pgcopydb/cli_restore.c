@@ -25,7 +25,7 @@ static int cli_restore_schema_getopts(int argc, char **argv);
 static void cli_restore_schema(int argc, char **argv);
 static void cli_restore_schema_pre_data(int argc, char **argv);
 static void cli_restore_schema_post_data(int argc, char **argv);
-
+static void cli_restore_schema_parse_list(int argc, char **argv);
 static void cli_restore_prepare_specs(CopyDataSpec *copySpecs);
 
 static CommandLine restore_schema_command =
@@ -69,10 +69,22 @@ static CommandLine restore_schema_post_data_command =
 		cli_restore_schema_getopts,
 		cli_restore_schema_post_data);
 
+static CommandLine restore_schema_parse_list_command =
+	make_command(
+		"parse-list",
+		"Parse pg_restore --list output from custom file",
+		" --source <dir> --target <URI> ",
+		"  --source          Directory where to find the schema custom files\n"
+		"  --target          Postgres URI to the source database\n",
+		cli_restore_schema_getopts,
+		cli_restore_schema_parse_list);
+
+
 static CommandLine *restore_subcommands[] = {
 	&restore_schema_command,
 	&restore_schema_pre_data_command,
 	&restore_schema_post_data_command,
+	&restore_schema_parse_list_command,
 	NULL
 };
 
@@ -266,7 +278,7 @@ cli_restore_schema_getopts(int argc, char **argv)
 
 
 /*
- * cli_restore_schema implements the command: pgrestoredb restore schema
+ * cli_restore_schema implements the command: pgcopydb restore schema
  */
 static void
 cli_restore_schema(int argc, char **argv)
@@ -290,7 +302,7 @@ cli_restore_schema(int argc, char **argv)
 
 
 /*
- * cli_restore_schema implements the command: pgrestoredb restore pre-data
+ * cli_restore_schema implements the command: pgcopydb restore pre-data
  */
 static void
 cli_restore_schema_pre_data(int argc, char **argv)
@@ -308,7 +320,7 @@ cli_restore_schema_pre_data(int argc, char **argv)
 
 
 /*
- * cli_restore_schema implements the command: pgrestoredb restore post-data
+ * cli_restore_schema implements the command: pgcopydb restore post-data
  */
 static void
 cli_restore_schema_post_data(int argc, char **argv)
@@ -321,6 +333,53 @@ cli_restore_schema_post_data(int argc, char **argv)
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);
+	}
+}
+
+
+/*
+ * cli_restore_schema implements the command: pgcopydb restore parse-list
+ */
+static void
+cli_restore_schema_parse_list(int argc, char **argv)
+{
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) cli_restore_prepare_specs(&copySpecs);
+
+	ArchiveContentArray contents = { 0 };
+
+	if (!pg_restore_list(&(copySpecs.pgPaths),
+						 copySpecs.dumpPaths.postFilename,
+						 &contents))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	for (int i = 0; i < contents.count; i++)
+	{
+		uint32_t oid = contents.array[i].objectOid;
+		char *name = contents.array[i].restoreListName;
+
+		bool alreadyProcessed =
+			copydb_objectid_has_been_processed_already(&copySpecs, oid);
+
+		/* avoid hash lookup on objects already processed */
+		bool filteredOut =
+			alreadyProcessed ||
+			copydb_objectid_is_filtered_out(&copySpecs, oid, name);
+
+		/* commenting is done by prepending ";" as prefix to the line */
+		char *prefix = alreadyProcessed || filteredOut ? ";" : "";
+
+		fformat(stdout, "%s%d; %u %u %s %s\n",
+				prefix,
+				contents.array[i].dumpId,
+				contents.array[i].catalogOid,
+				contents.array[i].objectOid,
+				contents.array[i].desc,
+				contents.array[i].restoreListName);
 	}
 }
 

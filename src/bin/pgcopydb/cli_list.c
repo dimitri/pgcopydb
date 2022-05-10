@@ -13,6 +13,7 @@
 #include "cli_root.h"
 #include "commandline.h"
 #include "env_utils.h"
+#include "filtering.h"
 #include "log.h"
 #include "parsing.h"
 #include "pgcmd.h"
@@ -26,14 +27,17 @@ static int cli_list_db_getopts(int argc, char **argv);
 static void cli_list_tables(int argc, char **argv);
 static void cli_list_sequences(int argc, char **argv);
 static void cli_list_indexes(int argc, char **argv);
+static void cli_list_depends(int argc, char **argv);
 
 static CommandLine list_tables_command =
 	make_command(
 		"tables",
 		"List all the source tables to copy data from",
 		" --source ... ",
-		"  --source          Postgres URI to the source database\n"
-		"  --without-pkey    List only tables that have no primary key\n",
+		"  --source            Postgres URI to the source database\n"
+		"  --filter <filename> Use the filters defined in <filename>\n"
+		"  --list-skipped      List only tables that are setup to be skipped\n"
+		"  --without-pkey      List only tables that have no primary key\n",
 		cli_list_db_getopts,
 		cli_list_tables);
 
@@ -42,7 +46,9 @@ static CommandLine list_sequences_command =
 		"sequences",
 		"List all the source sequences to copy data from",
 		" --source ... ",
-		"  --source          Postgres URI to the source database\n",
+		"  --source            Postgres URI to the source database\n"
+		"  --filter <filename> Use the filters defined in <filename>\n"
+		"  --list-skipped      List only tables that are setup to be skipped\n",
 		cli_list_db_getopts,
 		cli_list_sequences);
 
@@ -51,17 +57,33 @@ static CommandLine list_indexes_command =
 		"indexes",
 		"List all the indexes to create again after copying the data",
 		" --source ... [ --schema-name [ --table-name ] ]",
-		"  --source          Postgres URI to the source database\n"
-		"  --schema-name     Name of the schema where to find the table\n"
-		"  --table-name      Name of the target table\n",
+		"  --source            Postgres URI to the source database\n"
+		"  --schema-name       Name of the schema where to find the table\n"
+		"  --table-name        Name of the target table\n"
+		"  --filter <filename> Use the filters defined in <filename>\n"
+		"  --list-skipped      List only tables that are setup to be skipped\n",
 		cli_list_db_getopts,
 		cli_list_indexes);
+
+static CommandLine list_depends_command =
+	make_command(
+		"depends",
+		"List all the dependencies to filter-out",
+		" --source ... [ --schema-name [ --table-name ] ]",
+		"  --source            Postgres URI to the source database\n"
+		"  --schema-name       Name of the schema where to find the table\n"
+		"  --table-name        Name of the target table\n"
+		"  --filter <filename> Use the filters defined in <filename>\n"
+		"  --list-skipped      List only tables that are setup to be skipped\n",
+		cli_list_db_getopts,
+		cli_list_depends);
 
 
 static CommandLine *list_subcommands[] = {
 	&list_tables_command,
 	&list_sequences_command,
 	&list_indexes_command,
+	&list_depends_command,
 	NULL
 };
 
@@ -85,6 +107,9 @@ cli_list_db_getopts(int argc, char **argv)
 		{ "source", required_argument, NULL, 'S' },
 		{ "schema-name", required_argument, NULL, 's' },
 		{ "table-name", required_argument, NULL, 't' },
+		{ "filter", required_argument, NULL, 'F' },
+		{ "filters", required_argument, NULL, 'F' },
+		{ "list-skipped", no_argument, NULL, 'x' },
 		{ "without-pkey", no_argument, NULL, 'P' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
@@ -124,6 +149,27 @@ cli_list_db_getopts(int argc, char **argv)
 			{
 				strlcpy(options.table_name, optarg, NAMEDATALEN);
 				log_trace("--table %s", options.table_name);
+				break;
+			}
+
+			case 'F':
+			{
+				strlcpy(options.filterFileName, optarg, MAXPGPATH);
+				log_trace("--filters \"%s\"", options.filterFileName);
+
+				if (!file_exists(options.filterFileName))
+				{
+					log_error("Filters file \"%s\" does not exists",
+							  options.filterFileName);
+					++errors;
+				}
+				break;
+			}
+
+			case 'x':
+			{
+				options.listSkipped = true;
+				log_trace("--list-skipped");
 				break;
 			}
 
@@ -179,6 +225,11 @@ cli_list_db_getopts(int argc, char **argv)
 				exit(EXIT_CODE_QUIT);
 				break;
 			}
+
+			default:
+			{
+				++errors;
+			}
 		}
 	}
 
@@ -203,6 +254,12 @@ cli_list_db_getopts(int argc, char **argv)
 		++errors;
 	}
 
+	if (options.listSkipped && IS_EMPTY_STRING_BUFFER(options.filterFileName))
+	{
+		log_fatal("Option --list-skipped requires using option --filters");
+		++errors;
+	}
+
 	if (errors > 0)
 	{
 		exit(EXIT_CODE_BAD_ARGS);
@@ -216,13 +273,40 @@ cli_list_db_getopts(int argc, char **argv)
 
 
 /*
- * cli_list_tables implements the command: pglistdb list tables
+ * cli_list_tables implements the command: pgcopydb list tables
  */
 static void
 cli_list_tables(int argc, char **argv)
 {
 	PGSQL pgsql = { 0 };
 	SourceTableArray tableArray = { 0, NULL };
+	SourceFilters filters = { 0 };
+
+	if (!IS_EMPTY_STRING_BUFFER(listDBoptions.filterFileName))
+	{
+		if (!parse_filters(listDBoptions.filterFileName, &filters))
+		{
+			log_error("Failed to parse filters in file \"%s\"",
+					  listDBoptions.filterFileName);
+			exit(EXIT_CODE_BAD_ARGS);
+		}
+
+		if (listDBoptions.listSkipped)
+		{
+			if (filters.type != SOURCE_FILTER_TYPE_NONE)
+			{
+				filters.type = filterTypeComplement(filters.type);
+
+				if (filters.type == SOURCE_FILTER_TYPE_NONE)
+				{
+					log_error("BUG: can't list skipped tables from filtering "
+							  "type %d",
+							  filters.type);
+					exit(EXIT_CODE_INTERNAL_ERROR);
+				}
+			}
+		}
+	}
 
 	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
 	{
@@ -234,7 +318,9 @@ cli_list_tables(int argc, char **argv)
 	{
 		log_info("Listing tables without primary key in source database");
 
-		if (!schema_list_ordinary_tables_without_pk(&pgsql, &tableArray))
+		if (!schema_list_ordinary_tables_without_pk(&pgsql,
+													&filters,
+													&tableArray))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);
@@ -244,7 +330,7 @@ cli_list_tables(int argc, char **argv)
 	{
 		log_info("Listing ordinary tables in source database");
 
-		if (!schema_list_ordinary_tables(&pgsql, &tableArray))
+		if (!schema_list_ordinary_tables(&pgsql, &filters, &tableArray))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);
@@ -279,15 +365,42 @@ cli_list_tables(int argc, char **argv)
 
 
 /*
- * cli_list_tables implements the command: pglistdb list tables
+ * cli_list_tables implements the command: pgcopydb list tables
  */
 static void
 cli_list_sequences(int argc, char **argv)
 {
 	PGSQL pgsql = { 0 };
+	SourceFilters filters = { 0 };
 	SourceSequenceArray sequenceArray = { 0, NULL };
 
 	log_info("Listing ordinary sequences in source database");
+
+	if (!IS_EMPTY_STRING_BUFFER(listDBoptions.filterFileName))
+	{
+		if (!parse_filters(listDBoptions.filterFileName, &filters))
+		{
+			log_error("Failed to parse filters in file \"%s\"",
+					  listDBoptions.filterFileName);
+			exit(EXIT_CODE_BAD_ARGS);
+		}
+
+		if (listDBoptions.listSkipped)
+		{
+			if (filters.type != SOURCE_FILTER_TYPE_NONE)
+			{
+				filters.type = filterTypeComplement(filters.type);
+
+				if (filters.type == SOURCE_FILTER_TYPE_NONE)
+				{
+					log_error("BUG: can't list skipped sequences "
+							  " from filtering type %d",
+							  filters.type);
+					exit(EXIT_CODE_INTERNAL_ERROR);
+				}
+			}
+		}
+	}
 
 	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
 	{
@@ -295,7 +408,7 @@ cli_list_sequences(int argc, char **argv)
 		exit(EXIT_CODE_SOURCE);
 	}
 
-	if (!schema_list_sequences(&pgsql, &sequenceArray))
+	if (!schema_list_sequences(&pgsql, &filters, &sequenceArray))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -324,7 +437,7 @@ cli_list_sequences(int argc, char **argv)
 
 
 /*
- * cli_list_indexes implements the command: pglistdb list indexes
+ * cli_list_indexes implements the command: pgcopydb list indexes
  */
 static void
 cli_list_indexes(int argc, char **argv)
@@ -350,7 +463,35 @@ cli_list_indexes(int argc, char **argv)
 	{
 		log_info("Fetching all indexes in source database");
 
-		if (!schema_list_all_indexes(&pgsql, &indexArray))
+		SourceFilters filters = { 0 };
+
+		if (!IS_EMPTY_STRING_BUFFER(listDBoptions.filterFileName))
+		{
+			if (!parse_filters(listDBoptions.filterFileName, &filters))
+			{
+				log_error("Failed to parse filters in file \"%s\"",
+						  listDBoptions.filterFileName);
+				exit(EXIT_CODE_BAD_ARGS);
+			}
+
+			if (listDBoptions.listSkipped)
+			{
+				if (filters.type != SOURCE_FILTER_TYPE_NONE)
+				{
+					filters.type = filterTypeComplement(filters.type);
+
+					if (filters.type == SOURCE_FILTER_TYPE_NONE)
+					{
+						log_error("BUG: can't list skipped indexes "
+								  " from filtering type %d",
+								  filters.type);
+						exit(EXIT_CODE_INTERNAL_ERROR);
+					}
+				}
+			}
+		}
+
+		if (!schema_list_all_indexes(&pgsql, &filters, &indexArray))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);
@@ -451,6 +592,87 @@ cli_list_indexes(int argc, char **argv)
 					index->constraintDef,
 					index->indexDef);
 		}
+	}
+
+	fformat(stdout, "\n");
+}
+
+
+/*
+ * cli_list_indexes implements the command: pgcopydb list depends
+ */
+static void
+cli_list_depends(int argc, char **argv)
+{
+	PGSQL pgsql = { 0 };
+	SourceFilters filters = { 0 };
+	SourceDependArray dependArray = { 0, NULL };
+
+	log_info("Listing dependencies in source database");
+
+	if (IS_EMPTY_STRING_BUFFER(listDBoptions.filterFileName))
+	{
+		log_fatal("Option --filter is mandatory");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	if (!parse_filters(listDBoptions.filterFileName, &filters))
+	{
+		log_error("Failed to parse filters in file \"%s\"",
+				  listDBoptions.filterFileName);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	if (listDBoptions.listSkipped)
+	{
+		if (filters.type != SOURCE_FILTER_TYPE_NONE)
+		{
+			filters.type = filterTypeComplement(filters.type);
+
+			if (filters.type == SOURCE_FILTER_TYPE_NONE)
+			{
+				log_error("BUG: can't list skipped sequences "
+						  " from filtering type %d",
+						  filters.type);
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+		}
+	}
+
+	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	if (!schema_list_pg_depend(&pgsql, &filters, &dependArray))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_info("Fetched information for %d dependencies", dependArray.count);
+
+	fformat(stdout, "%20s | %30s | %8s | %8s | %20s | %s\n",
+			"Schema Name", "Table Name", "Catalog", "OID", "Type", "Identity");
+
+	fformat(stdout, "%20s-+-%30s-+-%8s-+-%8s-+-%20s-+-%30s\n",
+			"--------------------",
+			"------------------------------",
+			"--------",
+			"--------",
+			"--------------------",
+			"------------------------------");
+
+	for (int i = 0; i < dependArray.count; i++)
+	{
+		fformat(stdout, "%20s | %30s | %8u | %8u | %20s | %s\n",
+				dependArray.array[i].nspname,
+				dependArray.array[i].relname,
+				dependArray.array[i].classid,
+				dependArray.array[i].objid,
+				dependArray.array[i].type,
+				dependArray.array[i].identity);
 	}
 
 	fformat(stdout, "\n");

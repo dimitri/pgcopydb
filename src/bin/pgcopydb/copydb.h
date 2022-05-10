@@ -6,6 +6,7 @@
 #ifndef COPYDB_H
 #define COPYDB_H
 
+#include "filtering.h"
 #include "lock_utils.h"
 #include "pgcmd.h"
 #include "pgsql.h"
@@ -162,12 +163,54 @@ typedef struct CopyTableDataSpecsArray
 } CopyTableDataSpecsArray;
 
 
+/*
+ * Build a hash-table of all the SQL level objects that we filter-out when
+ * applying our filtering rules. We need to find those objects again when
+ * parsing the pg_restore --list output, where we almost always have the object
+ * Oid, but sometimes have to use the "schema name owner" format instead, as in
+ * the following pg_restore --list example output:
+ *
+ *   3310; 0 0 INDEX ATTACH public payment_p2020_06_customer_id_idx postgres
+ */
+typedef enum
+{
+	OBJECT_KIND_UNKNOWN = 0,
+	OBJECT_KIND_TABLE,
+	OBJECT_KIND_INDEX,
+	OBJECT_KIND_CONSTRAINT,
+	OBJECT_KIND_SEQUENCE
+} ObjectKind;
+
+
+typedef struct SourceFilterItem
+{
+	uint32_t oid;
+
+	ObjectKind kind;
+
+	/* it's going to be only one of those, depending on the object kind */
+	SourceTable table;
+	SourceSequence sequence;
+	SourceIndex index;
+
+	/* schema - name - owner */
+	char restoreListName[RESTORE_LIST_NAMEDATALEN];
+
+	UT_hash_handle hOid;            /* makes this structure hashable */
+	UT_hash_handle hName;           /* makes this structure hashable */
+} SourceFilterItem;
+
+
 /* all that's needed to start a TABLE DATA copy for a whole database */
 typedef struct CopyDataSpec
 {
 	CopyFilePaths cfPaths;
 	PostgresPaths pgPaths;
 	DirectoryState dirState;
+
+	SourceFilters filters;
+	SourceFilterItem *hOid;     /* hash table of objects, by Oid */
+	SourceFilterItem *hName;    /* hash table of objects, by pg_restore name */
 
 	char source_pguri[MAXCONNINFO];
 	char target_pguri[MAXCONNINFO];
@@ -310,6 +353,12 @@ bool copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
 bool copydb_copy_all_sequences(CopyDataSpec *specs);
 
 /* table-data.c */
+bool copydb_objectid_is_filtered_out(CopyDataSpec *specs,
+									 uint32_t oid,
+									 char *restoreListName);
+bool copydb_fetch_filtered_oids(CopyDataSpec *specs);
+char * copydb_ObjectKindToString(ObjectKind kind);
+
 bool copydb_copy_all_table_data(CopyDataSpec *specs);
 
 bool copydb_process_table_data(CopyDataSpec *specs);

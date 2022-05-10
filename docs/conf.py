@@ -83,6 +83,7 @@ PygmentsBridge.latex_formatter = CustomLatexFormatter
 # (source start file, name, description, authors, manual section).
 man_pages = [
     ("ref/pgcopydb", "pgcopydb", "pgcopydb", [author], 1),
+    ("ref/pgcopydb_config", "pgcopydb", "pgcopydb", [author], 5,),
     (
         "ref/pgcopydb_copy-db",
         "pgcopydb copy-db",

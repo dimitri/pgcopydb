@@ -132,6 +132,7 @@ copydb_prepare_table_specs(CopyDataSpec *specs)
 	 * Now get the list of the tables we want to COPY over.
 	 */
 	if (!schema_list_ordinary_tables(&(specs->sourceSnapshot.pgsql),
+									 &(specs->filters),
 									 &tableArray))
 	{
 		/* errors have already been logged */
@@ -179,6 +180,285 @@ copydb_prepare_table_specs(CopyDataSpec *specs)
 	free(tableArray.array);
 
 	return true;
+}
+
+
+/*
+ * copydb_objectid_is_filtered_out returns true when the given oid belongs to a
+ * database object that's been filtered out by the filtering setup.
+ */
+bool
+copydb_objectid_is_filtered_out(CopyDataSpec *specs,
+								uint32_t oid,
+								char *restoreListName)
+{
+	SourceFilterItem *hOid = specs->hOid;
+	SourceFilterItem *hName = specs->hName;
+
+	SourceFilterItem *item = NULL;
+
+	if (oid != 0)
+	{
+		HASH_FIND(hOid, hOid, &oid, sizeof(uint32_t), item);
+
+		if (item != NULL)
+		{
+			return true;
+		}
+	}
+
+	if (restoreListName != NULL && !IS_EMPTY_STRING_BUFFER(restoreListName))
+	{
+		size_t len = strlen(restoreListName);
+		HASH_FIND(hName, hName, restoreListName, len, item);
+
+		if (item != NULL)
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+
+/*
+ * copydb_fetch_filtered_oids fetches the Postgres objects OID matching the
+ * installed filters. The SourceFilterArray associates a boolean with an OID
+ * that's used as a key to the array. The boolean is true when the OID has to
+ * be filtered out of the pg_restore catalog or other operations.
+ */
+bool
+copydb_fetch_filtered_oids(CopyDataSpec *specs)
+{
+	SourceFilters *filters = &(specs->filters);
+	SourceFilterItem *hOid = NULL;
+	SourceFilterItem *hName = NULL;
+
+	SourceTableArray tableArray = { 0, NULL };
+	SourceIndexArray indexArray = { 0, NULL };
+	SourceSequenceArray sequenceArray = { 0, NULL };
+	SourceDependArray dependArray = { 0, NULL };
+
+	PGSQL *pgsql = &(specs->sourceSnapshot.pgsql);
+
+	/*
+	 * Take the complement of the filtering, to list the OIDs of objects that
+	 * we do not process.
+	 */
+	SourceFilterType type = filters->type;
+
+	filters->type = filterTypeComplement(type);
+
+	if (filters->type == SOURCE_FILTER_TYPE_NONE)
+	{
+		return true;
+	}
+
+	/*
+	 * Now fetch the OIDs of tables, indexes, and sequences that we filter out.
+	 */
+	if (!schema_list_ordinary_tables(pgsql, filters, &tableArray))
+	{
+		/* errors have already been logged */
+		filters->type = type;
+		return false;
+	}
+
+	if (!schema_list_all_indexes(pgsql, filters, &indexArray))
+	{
+		/* errors have already been logged */
+		filters->type = type;
+		return false;
+	}
+
+	if (!schema_list_sequences(pgsql, filters, &sequenceArray))
+	{
+		/* errors have already been logged */
+		filters->type = type;
+		return false;
+	}
+
+	if (!schema_list_pg_depend(pgsql, filters, &dependArray))
+	{
+		/* errors have already been logged */
+		filters->type = type;
+		return false;
+	}
+
+	/* re-install the actual filter type */
+	filters->type = type;
+
+	/* first the tables */
+	for (int i = 0; i < tableArray.count; i++)
+	{
+		SourceTable *table = &(tableArray.array[i]);
+
+		SourceFilterItem *item = malloc(sizeof(SourceFilterItem));
+
+		if (item == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		item->oid = table->oid;
+		item->kind = OBJECT_KIND_TABLE;
+		item->table = *table;
+
+		strlcpy(item->restoreListName,
+				table->restoreListName,
+				RESTORE_LIST_NAMEDATALEN);
+
+		HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), item);
+
+		size_t len = strlen(item->restoreListName);
+		HASH_ADD(hName, hName, restoreListName, len, item);
+	}
+
+	/* now indexes and constraints */
+	for (int i = 0; i < indexArray.count; i++)
+	{
+		SourceIndex *index = &(indexArray.array[i]);
+
+		SourceFilterItem *idxItem = malloc(sizeof(SourceFilterItem));
+
+		if (idxItem == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		idxItem->oid = index->indexOid;
+		idxItem->kind = OBJECT_KIND_INDEX;
+		idxItem->index = *index;
+
+		strlcpy(idxItem->restoreListName,
+				index->indexRestoreListName,
+				RESTORE_LIST_NAMEDATALEN);
+
+
+		HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), idxItem);
+
+		size_t len = strlen(idxItem->restoreListName);
+		HASH_ADD(hName, hName, restoreListName, len, idxItem);
+
+		if (indexArray.array[i].constraintOid > 0)
+		{
+			SourceFilterItem *conItem = malloc(sizeof(SourceFilterItem));
+
+			if (conItem == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			conItem->oid = index->constraintOid;
+			conItem->kind = OBJECT_KIND_CONSTRAINT;
+			conItem->index = *index;
+
+			/* at the moment we lack restore names for constraints */
+			HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), conItem);
+		}
+	}
+
+	/* now sequences */
+	for (int i = 0; i < sequenceArray.count; i++)
+	{
+		SourceSequence *seq = &(sequenceArray.array[i]);
+
+		SourceFilterItem *item = malloc(sizeof(SourceFilterItem));
+
+		if (item == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		item->oid = seq->oid;
+		item->kind = OBJECT_KIND_SEQUENCE;
+		item->sequence = *seq;
+
+		strlcpy(item->restoreListName,
+				seq->restoreListName,
+				RESTORE_LIST_NAMEDATALEN);
+
+		HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), item);
+
+		size_t len = strlen(seq->restoreListName);
+		HASH_ADD(hName, hName, restoreListName, len, item);
+	}
+
+	/* finally table dependencies */
+	for (int i = 0; i < dependArray.count; i++)
+	{
+		SourceDepend *depend = &(dependArray.array[i]);
+
+		SourceFilterItem *item = malloc(sizeof(SourceFilterItem));
+
+		if (item == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		item->oid = depend->objid;
+		item->kind = OBJECT_KIND_UNKNOWN;
+
+		strlcpy(item->restoreListName,
+				depend->identity,
+				RESTORE_LIST_NAMEDATALEN);
+
+		HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), item);
+	}
+
+	/* publish our hash tables to the main CopyDataSpec instance */
+	specs->hOid = hOid;
+	specs->hName = hName;
+
+	/* free dynamic memory that's not needed anymore */
+	free(tableArray.array);
+	free(indexArray.array);
+	free(sequenceArray.array);
+
+	return true;
+}
+
+
+/*
+ * copydb_ObjectKindToString returns the string representation of an ObjectKind
+ * enum value.
+ */
+char *
+copydb_ObjectKindToString(ObjectKind kind)
+{
+	switch (kind)
+	{
+		case OBJECT_KIND_UNKNOWN:
+		{
+			return "unknown";
+		}
+
+		case OBJECT_KIND_TABLE:
+		{
+			return "table";
+		}
+
+		case OBJECT_KIND_INDEX:
+		{
+			return "index";
+		}
+
+		case OBJECT_KIND_CONSTRAINT:
+		{
+			return "constraint";
+		}
+
+		case OBJECT_KIND_SEQUENCE:
+			return "sequence";
+	}
+
+	return "unknown";
 }
 
 
@@ -343,10 +623,14 @@ copydb_process_table_data_worker(CopyDataSpec *specs)
 		 */
 		if (!isDone && !isBeingProcessed)
 		{
-			if (!copydb_copy_table(tableSpecs))
+			/* check for exclude-table-data filtering */
+			if (!tableSpecs->sourceTable.excludeData)
 			{
-				/* errors have already been logged */
-				return false;
+				if (!copydb_copy_table(tableSpecs))
+				{
+					/* errors have already been logged */
+					return false;
+				}
 			}
 
 			/* enter the critical section to communicate that we're done */

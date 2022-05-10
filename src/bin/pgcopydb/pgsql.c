@@ -1592,6 +1592,131 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 
 
 /*
+ * pg_copy_from_stdin prepares the SQL query to open a COPY streaming to upload
+ * data to a Postgres table.
+ */
+bool
+pg_copy_from_stdin(PGSQL *pgsql, const char *qname)
+{
+	char sql[BUFSIZE] = { 0 };
+
+	sformat(sql, sizeof(sql), "COPY %s FROM stdin", qname);
+
+	log_debug("%s;", sql);
+
+	PGresult *res = PQexec(pgsql->connection, sql);
+
+	if (PQresultStatus(res) != PGRES_COPY_IN)
+	{
+		pgcopy_log_error(pgsql, res, sql);
+
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * pg_copy_row_from_stdin streams a row of data at a time into the already
+ * opened COPY protocol stream. Only default text mode is supported.
+ *
+ * The fmt string is a list of data type selectors, from the following list:
+ *
+ *  - 's' for a text column (string, as in %s)
+ */
+bool
+pg_copy_row_from_stdin(PGSQL *pgsql, char *fmt, ...)
+{
+	va_list args;
+
+	va_start(args, fmt);
+
+	for (int i = 0; fmt[i] != '\0'; i++)
+	{
+		if (i > 0)
+		{
+			if (PQputCopyData(pgsql->connection, "\t", 1) == -1)
+			{
+				va_end(args);
+
+				pgcopy_log_error(pgsql, NULL, "Failed to copy row from stdin");
+				pgsql_finish(pgsql);
+
+				return false;
+			}
+		}
+
+		switch (fmt[i])
+		{
+			case 's':
+			{
+				char *str = va_arg(args, char *);
+				int len = strlen(str);
+
+				if (PQputCopyData(pgsql->connection, str, len) == -1)
+				{
+					va_end(args);
+
+					pgcopy_log_error(pgsql, NULL, "Failed to copy row from stdin");
+					pgsql_finish(pgsql);
+
+					return false;
+				}
+
+				break;
+			}
+
+			/* at the moment we don't need to support numeric fields etc */
+			default:
+			{
+				va_end(args);
+
+				log_error("BUG: COPY data type %c is not supported", fmt[i]);
+				pgsql_finish(pgsql);
+
+				return false;
+			}
+		}
+	}
+
+	if (PQputCopyData(pgsql->connection, "\n", 1) == -1)
+	{
+		va_end(args);
+
+		pgcopy_log_error(pgsql, NULL, "Failed to copy row from stdin");
+		pgsql_finish(pgsql);
+
+		return false;
+	}
+
+	va_end(args);
+
+	return true;
+}
+
+
+/*
+ * pg_copy_end calls PQputCopyEnd and clears pending notifications and results
+ * from the connection.
+ */
+bool
+pg_copy_end(PGSQL *pgsql)
+{
+	if (PQputCopyEnd(pgsql->connection, NULL) == -1)
+	{
+		pgcopy_log_error(pgsql, NULL, "Failed to copy row from stdin");
+		pgsql_finish(pgsql);
+		return false;
+	}
+
+	clear_results(pgsql);
+
+	return true;
+}
+
+
+/*
  * pg_copy_send_query prepares the SQL query that opens a COPY protocol from or
  * to a Postgres instance, and checks that the server's result is as expected.
  */

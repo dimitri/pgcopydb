@@ -8,7 +8,13 @@
 
 #include <stdbool.h>
 
+#include "uthash.h"
+
+#include "filtering.h"
 #include "pgsql.h"
+
+/* the pg_restore -l output uses "schema name owner" */
+#define RESTORE_LIST_NAMEDATALEN (3 * NAMEDATALEN + 3)
 
 /*
  * SourceTable caches the information we need about all the ordinary tables
@@ -22,6 +28,9 @@ typedef struct SourceTable
 	int64_t reltuples;
 	int64_t bytes;
 	char bytesPretty[NAMEDATALEN]; /* pg_size_pretty */
+	bool excludeData;
+
+	char restoreListName[RESTORE_LIST_NAMEDATALEN];
 } SourceTable;
 
 
@@ -43,6 +52,8 @@ typedef struct SourceSequence
 	char relname[NAMEDATALEN];
 	int64_t lastValue;
 	bool isCalled;
+
+	char restoreListName[RESTORE_LIST_NAMEDATALEN];
 } SourceSequence;
 
 
@@ -71,6 +82,8 @@ typedef struct SourceIndex
 	uint32_t constraintOid;
 	char constraintName[NAMEDATALEN];
 	char constraintDef[BUFSIZE];
+	char indexRestoreListName[RESTORE_LIST_NAMEDATALEN];
+	char constraintRestoreListName[RESTORE_LIST_NAMEDATALEN];
 } SourceIndex;
 
 
@@ -81,21 +94,59 @@ typedef struct SourceIndexArray
 } SourceIndexArray;
 
 
-bool schema_list_ordinary_tables(PGSQL *pgsql, SourceTableArray *tableArray);
+/*
+ * SourceDepend caches the information about the dependency graph of
+ * filtered-out objects. When filtering-out a table, we want to also filter-out
+ * the foreign keys, views, materialized views and all that depend on this same
+ * object.
+ */
+typedef struct SourceDepend
+{
+	char nspname[NAMEDATALEN];
+	char relname[NAMEDATALEN];
+	uint32_t refclassid;
+	uint32_t refobjid;
+	uint32_t classid;
+	uint32_t objid;
+	char deptype;
+	char type[BUFSIZE];
+	char identity[BUFSIZE];
+} SourceDepend;
+
+
+typedef struct SourceDependArray
+{
+	int count;
+	SourceDepend *array;         /* malloc'ed area */
+} SourceDependArray;
+
+
+bool schema_list_ordinary_tables(PGSQL *pgsql,
+								 SourceFilters *filters,
+								 SourceTableArray *tableArray);
 
 bool schema_list_ordinary_tables_without_pk(PGSQL *pgsql,
+											SourceFilters *filters,
 											SourceTableArray *tableArray);
 
-bool schema_list_sequences(PGSQL *pgsql, SourceSequenceArray *seqArray);
+bool schema_list_sequences(PGSQL *pgsql,
+						   SourceFilters *filters,
+						   SourceSequenceArray *seqArray);
 
 bool schema_get_sequence_value(PGSQL *pgsql, SourceSequence *seq);
 bool schema_set_sequence_value(PGSQL *pgsql, SourceSequence *seq);
 
-bool schema_list_all_indexes(PGSQL *pgsql, SourceIndexArray *indexArray);
+bool schema_list_all_indexes(PGSQL *pgsql,
+							 SourceFilters *filters,
+							 SourceIndexArray *indexArray);
 
 bool schema_list_table_indexes(PGSQL *pgsql,
 							   const char *shemaName,
 							   const char *tableName,
 							   SourceIndexArray *indexArray);
+
+bool schema_list_pg_depend(PGSQL *pgsql,
+						   SourceFilters *filters,
+						   SourceDependArray *dependArray);
 
 #endif /* SCHEMA_H */

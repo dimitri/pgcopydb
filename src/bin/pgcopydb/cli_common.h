@@ -39,6 +39,8 @@ typedef struct CopyDBOptions
 	bool resume;
 	bool notConsistent;
 	char snapshot[BUFSIZE];
+
+	char filterFileName[MAXPGPATH];
 } CopyDBOptions;
 
 

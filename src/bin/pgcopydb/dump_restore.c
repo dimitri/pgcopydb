@@ -36,29 +36,7 @@ copydb_objectid_has_been_processed_already(CopyDataSpec *specs, uint32_t oid)
 			specs->cfPaths.idxdir,
 			oid);
 
-	if (file_exists(doneFile))
-	{
-		char *sql = NULL;
-		long size = 0L;
-
-		if (!read_file(doneFile, &sql, &size))
-		{
-			/* no worries, just skip then */
-		}
-
-		/* we're interested in the last line of the file */
-		char *lines[BUFSIZE] = { 0 };
-		int lineCount = splitLines(sql, lines, BUFSIZE);
-
-		log_debug("Skipping dumpId %d (%s)", oid, lines[lineCount - 1]);
-
-		/* read_file allocates memory */
-		free(sql);
-
-		return true;
-	}
-
-	return false;
+	return file_exists(doneFile);
 }
 
 
@@ -232,16 +210,37 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 	for (int i = 0; i < contents.count; i++)
 	{
 		uint32_t oid = contents.array[i].objectOid;
+		char *name = contents.array[i].restoreListName;
+		char *prefix = "";
 
-		/* commenting is done by prepending ";" as prefix to the line */
-		char *prefix =
-			copydb_objectid_has_been_processed_already(specs, oid) ? ";" : "";
+		if (copydb_objectid_has_been_processed_already(specs, oid))
+		{
+			prefix = ";";
 
-		appendPQExpBuffer(listContents, "%s%d; %u %u\n",
+			log_debug("Skipping already processed dumpId %d: %s %u %s",
+					  contents.array[i].dumpId,
+					  contents.array[i].desc,
+					  contents.array[i].objectOid,
+					  contents.array[i].restoreListName);
+		}
+		else if (copydb_objectid_is_filtered_out(specs, oid, name))
+		{
+			prefix = ";";
+
+			log_debug("Skipping filtered-out dumpId %d: %s %u %s",
+					  contents.array[i].dumpId,
+					  contents.array[i].desc,
+					  contents.array[i].objectOid,
+					  contents.array[i].restoreListName);
+		}
+
+		appendPQExpBuffer(listContents, "%s%d; %u %u %s %s\n",
 						  prefix,
 						  contents.array[i].dumpId,
 						  contents.array[i].catalogOid,
-						  contents.array[i].objectOid);
+						  contents.array[i].objectOid,
+						  contents.array[i].desc,
+						  contents.array[i].restoreListName);
 	}
 
 	/* memory allocation could have failed while building string */

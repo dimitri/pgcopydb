@@ -60,7 +60,7 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 
 	log_info("Listing sequences in source database");
 
-	if (!schema_list_sequences(src, &sequenceArray))
+	if (!schema_list_sequences(src, &(specs->filters), &sequenceArray))
 	{
 		/* errors have already been logged */
 		return false;
