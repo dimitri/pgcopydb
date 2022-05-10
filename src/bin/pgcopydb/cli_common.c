@@ -114,14 +114,12 @@ cli_print_version_getopts(int argc, char **argv)
 void
 cli_print_version(int argc, char **argv)
 {
-	const char *version = PGCOPYDB_VERSION;
-
 	if (outputJSON)
 	{
 		JSON_Value *js = json_value_init_object();
 		JSON_Object *root = json_value_get_object(js);
 
-		json_object_set_string(root, "pgcopydb", version);
+		json_object_set_string(root, "pgcopydb", VERSION_STRING);
 		json_object_set_string(root, "pg_major", PG_MAJORVERSION);
 		json_object_set_string(root, "pg_version", PG_VERSION);
 		json_object_set_string(root, "pg_version_str", PG_VERSION_STR);
@@ -131,7 +129,7 @@ cli_print_version(int argc, char **argv)
 	}
 	else
 	{
-		fformat(stdout, "pgcopydb version %s\n", version);
+		fformat(stdout, "pgcopydb version %s\n", VERSION_STRING);
 		fformat(stdout, "compiled with %s\n", PG_VERSION_STR);
 		fformat(stdout, "compatible with Postgres 10, 11, 12, 13, and 14\n");
 	}

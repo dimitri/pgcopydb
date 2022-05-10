@@ -39,3 +39,4 @@ lib*.pc
 /src/Makefile.custom
 /tests/__pycache__/
 /env/
+/GIT-VERSION-FILE
