@@ -42,4 +42,6 @@ bool IntervalToString(uint64_t millisecs, char *buffer, size_t size);
 int splitLines(char *errorMessage, char **linesArray, int size);
 void processBufferCallback(const char *buffer, bool error);
 
+void pretty_print_bytes(char *buffer, size_t size, uint64_t bytes);
+
 #endif /* STRING_UTILS_h */

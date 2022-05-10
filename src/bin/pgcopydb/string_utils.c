@@ -562,3 +562,34 @@ processBufferCallback(const char *buffer, bool error)
 		}
 	}
 }
+
+
+/*
+ * pretty_print_bytes pretty prints bytes in a human readable form. Given
+ * 17179869184 it places the string "16 GB" in the given buffer.
+ */
+void
+pretty_print_bytes(char *buffer, size_t size, uint64_t bytes)
+{
+	const char *suffixes[7] = {
+		"B",                    /* Bytes */
+		"kB",                   /* Kilo */
+		"MB",                   /* Mega */
+		"GB",                   /* Giga */
+		"TB",                   /* Tera */
+		"PB",                   /* Peta */
+		"EB"                    /* Exa */
+	};
+
+	uint sIndex = 0;
+	long double count = bytes;
+
+	while (count >= 10240 && sIndex < 7)
+	{
+		sIndex++;
+		count /= 1024;
+	}
+
+	/* forget about having more precision, Postgres wants integers here */
+	sformat(buffer, size, "%d %s", (int) count, suffixes[sIndex]);
+}
