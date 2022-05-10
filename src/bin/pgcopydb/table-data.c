@@ -147,13 +147,12 @@ copydb_prepare_table_specs(CopyDataSpec *specs)
 		specs->tableJobs = count;
 	}
 
-	log_info("Fetched information for %d tables, now starting %d processes",
-			 tableArray.count,
-			 specs->tableJobs);
-
 	specs->tableSpecsArray.count = count;
 	specs->tableSpecsArray.array =
 		(CopyTableDataSpec *) malloc(count * sizeof(CopyTableDataSpec));
+
+	uint64_t totalBytes = 0;
+	uint64_t totalTuples = 0;
 
 	/*
 	 * Prepare the copy specs for each table we have.
@@ -174,7 +173,22 @@ copydb_prepare_table_specs(CopyDataSpec *specs)
 			/* errors have already been logged */
 			return false;
 		}
+
+		totalBytes += source->bytes;
+		totalTuples += source->reltuples;
 	}
+
+	char bytesPretty[BUFSIZE] = { 0 };
+
+	(void) pretty_print_bytes(bytesPretty, BUFSIZE, totalBytes);
+
+	log_info("Fetched information for %d tables, "
+			 "with an estimated total of %lld tuples and %s",
+			 tableArray.count,
+			 (long long) totalTuples,
+			 bytesPretty);
+
+	log_info("Now starting %d processes", specs->tableJobs);
 
 	/* free our temporary memory that's been malloc'ed */
 	free(tableArray.array);
