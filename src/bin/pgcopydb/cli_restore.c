@@ -32,13 +32,18 @@ static CommandLine restore_schema_command =
 	make_command(
 		"schema",
 		"Restore a database schema from custom files to target database",
-		" --source <dir> --target <URI> ",
-		"  --source          Directory where to find the schema custom files\n"
-		"  --target          Postgres URI to the source database\n"
-		"  --drop-if-exists  On the target database, clean-up from a previous run first\n"
-		"  --no-owner        Do not set ownership of objects to match the original database\n"
-		"  --no-acl              Prevent restoration of access privileges (grant/revoke commands).\n"
-		"  --no-comments         Do not output commands to restore comments\n",
+		" --dir <dir> [ --source <URI> ] --target <URI> ",
+		"  --source             Postgres URI to the source database\n"
+		"  --target             Postgres URI to the target database\n"
+		"  --dir                Work directory to use\n"
+		"  --drop-if-exists     On the target database, clean-up from a previous run first\n"
+		"  --no-owner           Do not set ownership of objects to match the original database\n"
+		"  --no-acl             Prevent restoration of access privileges (grant/revoke commands).\n"
+		"  --no-comments        Do not output commands to restore comments\n"
+		"  --filters <filename> Use the filters defined in <filename>\n"
+		"  --restart            Allow restarting when temp files exist already\n"
+		"  --resume             Allow resuming operations after a failure\n"
+		"  --not-consistent     Allow taking a new snapshot on the source database\n",
 		cli_restore_schema_getopts,
 		cli_restore_schema);
 
@@ -46,13 +51,18 @@ static CommandLine restore_schema_pre_data_command =
 	make_command(
 		"pre-data",
 		"Restore a database pre-data schema from custom file to target database",
-		" --source <dir> --target <URI> ",
-		"  --source          Directory where to find the schema custom files\n"
-		"  --target          Postgres URI to the source database\n"
-		"  --drop-if-exists  On the target database, clean-up from a previous run first\n"
-		"  --no-owner        Do not set ownership of objects to match the original database\n"
-		"  --no-acl              Prevent restoration of access privileges (grant/revoke commands).\n"
-		"  --no-comments         Do not output commands to restore comments\n",
+		" --dir <dir> [ --source <URI> ] --target <URI> ",
+		"  --source             Postgres URI to the source database\n"
+		"  --target             Postgres URI to the target database\n"
+		"  --dir                Work directory to use\n"
+		"  --drop-if-exists     On the target database, clean-up from a previous run first\n"
+		"  --no-owner           Do not set ownership of objects to match the original database\n"
+		"  --no-acl             Prevent restoration of access privileges (grant/revoke commands).\n"
+		"  --no-comments        Do not output commands to restore comments\n"
+		"  --filters <filename> Use the filters defined in <filename>\n"
+		"  --restart            Allow restarting when temp files exist already\n"
+		"  --resume             Allow resuming operations after a failure\n"
+		"  --not-consistent     Allow taking a new snapshot on the source database\n",
 		cli_restore_schema_getopts,
 		cli_restore_schema_pre_data);
 
@@ -60,12 +70,17 @@ static CommandLine restore_schema_post_data_command =
 	make_command(
 		"post-data",
 		"Restore a database post-data schema from custom file to target database",
-		" --source <dir> --target <URI> ",
-		"  --source          Directory where to find the schema custom files\n"
-		"  --target          Postgres URI to the source database\n"
-		"  --no-owner        Do not set ownership of objects to match the original database\n"
-		"  --no-acl              Prevent restoration of access privileges (grant/revoke commands).\n"
-		"  --no-comments         Do not output commands to restore comments\n",
+		" --dir <dir> [ --source <URI> ] --target <URI> ",
+		"  --source             Postgres URI to the source database\n"
+		"  --target             Postgres URI to the target database\n"
+		"  --dir                Work directory to use\n"
+		"  --no-owner           Do not set ownership of objects to match the original database\n"
+		"  --no-acl             Prevent restoration of access privileges (grant/revoke commands).\n"
+		"  --no-comments        Do not output commands to restore comments\n"
+		"  --filters <filename> Use the filters defined in <filename>\n"
+		"  --restart            Allow restarting when temp files exist already\n"
+		"  --resume             Allow resuming operations after a failure\n"
+		"  --not-consistent     Allow taking a new snapshot on the source database\n",
 		cli_restore_schema_getopts,
 		cli_restore_schema_post_data);
 
@@ -73,9 +88,14 @@ static CommandLine restore_schema_parse_list_command =
 	make_command(
 		"parse-list",
 		"Parse pg_restore --list output from custom file",
-		" --source <dir> --target <URI> ",
-		"  --source          Directory where to find the schema custom files\n"
-		"  --target          Postgres URI to the source database\n",
+		" --dir <dir> [ --source <URI> ] --target <URI> ",
+		"  --source             Postgres URI to the source database\n"
+		"  --target             Postgres URI to the target database\n"
+		"  --dir                Work directory to use\n"
+		"  --filters <filename> Use the filters defined in <filename>\n"
+		"  --restart            Allow restarting when temp files exist already\n"
+		"  --resume             Allow resuming operations after a failure\n"
+		"  --not-consistent     Allow taking a new snapshot on the source database\n",
 		cli_restore_schema_getopts,
 		cli_restore_schema_parse_list);
 
@@ -107,14 +127,18 @@ cli_restore_schema_getopts(int argc, char **argv)
 	static struct option long_options[] = {
 		{ "source", required_argument, NULL, 'S' },
 		{ "target", required_argument, NULL, 'T' },
+		{ "dir", required_argument, NULL, 'D' },
 		{ "schema", required_argument, NULL, 's' },
 		{ "drop-if-exists", no_argument, NULL, 'c' }, /* pg_restore -c */
 		{ "no-owner", no_argument, NULL, 'O' },       /* pg_restore -O */
 		{ "no-comments", no_argument, NULL, 'X' },
 		{ "no-acl", no_argument, NULL, 'x' }, /* pg_restore -x */
+		{ "filter", required_argument, NULL, 'F' },
+		{ "filters", required_argument, NULL, 'F' },
 		{ "restart", no_argument, NULL, 'r' },
 		{ "resume", no_argument, NULL, 'R' },
 		{ "not-consistent", no_argument, NULL, 'C' },
+		{ "snapshot", required_argument, NULL, 'N' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "quiet", no_argument, NULL, 'q' },
@@ -153,6 +177,13 @@ cli_restore_schema_getopts(int argc, char **argv)
 				}
 				strlcpy(options.target_pguri, optarg, MAXCONNINFO);
 				log_trace("--target %s", options.target_pguri);
+				break;
+			}
+
+			case 'D':
+			{
+				strlcpy(options.dir, optarg, MAXPGPATH);
+				log_trace("--dir %s", options.dir);
 				break;
 			}
 
@@ -202,6 +233,27 @@ cli_restore_schema_getopts(int argc, char **argv)
 			{
 				options.notConsistent = true;
 				log_trace("--not-consistent");
+				break;
+			}
+
+			case 'N':
+			{
+				strlcpy(options.snapshot, optarg, sizeof(options.snapshot));
+				log_trace("--snapshot %s", options.snapshot);
+				break;
+			}
+
+			case 'F':
+			{
+				strlcpy(options.filterFileName, optarg, MAXPGPATH);
+				log_trace("--filters \"%s\"", options.filterFileName);
+
+				if (!file_exists(options.filterFileName))
+				{
+					log_error("Filters file \"%s\" does not exists",
+							  options.filterFileName);
+					++errors;
+				}
 				break;
 			}
 
@@ -347,6 +399,29 @@ cli_restore_schema_parse_list(int argc, char **argv)
 
 	(void) cli_restore_prepare_specs(&copySpecs);
 
+	SourceFilters *filters = &(copySpecs.filters);
+
+	if (filters->type != SOURCE_FILTER_TYPE_NONE)
+	{
+		if (!copydb_prepare_snapshot(&copySpecs))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		TransactionSnapshot *sourceSnapshot = &(copySpecs.sourceSnapshot);
+
+		/* prepare the Oids of objects that are filtered out */
+		if (!copydb_fetch_filtered_oids(&copySpecs))
+		{
+			/* errors have already been logged */
+			(void) copydb_close_snapshot(sourceSnapshot);
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		(void) copydb_close_snapshot(sourceSnapshot);
+	}
+
 	ArchiveContentArray contents = { 0 };
 
 	if (!pg_restore_list(&(copySpecs.pgPaths),
@@ -361,17 +436,28 @@ cli_restore_schema_parse_list(int argc, char **argv)
 	{
 		uint32_t oid = contents.array[i].objectOid;
 		char *name = contents.array[i].restoreListName;
+		char *prefix = "";
 
-		bool alreadyProcessed =
-			copydb_objectid_has_been_processed_already(&copySpecs, oid);
+		if (copydb_objectid_has_been_processed_already(&copySpecs, oid))
+		{
+			prefix = ";";
 
-		/* avoid hash lookup on objects already processed */
-		bool filteredOut =
-			alreadyProcessed ||
-			copydb_objectid_is_filtered_out(&copySpecs, oid, name);
+			log_debug("Skipping already processed dumpId %d: %s %u %s",
+					  contents.array[i].dumpId,
+					  contents.array[i].desc,
+					  contents.array[i].objectOid,
+					  contents.array[i].restoreListName);
+		}
+		else if (copydb_objectid_is_filtered_out(&copySpecs, oid, name))
+		{
+			prefix = ";";
 
-		/* commenting is done by prepending ";" as prefix to the line */
-		char *prefix = alreadyProcessed || filteredOut ? ";" : "";
+			log_debug("Skipping filtered-out dumpId %d: %s %u %s",
+					  contents.array[i].dumpId,
+					  contents.array[i].desc,
+					  contents.array[i].objectOid,
+					  contents.array[i].restoreListName);
+		}
 
 		fformat(stdout, "%s%d; %u %u %s %s\n",
 				prefix,
@@ -394,6 +480,18 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 	CopyFilePaths *cfPaths = &(copySpecs->cfPaths);
 	PostgresPaths *pgPaths = &(copySpecs->pgPaths);
 
+	char scrubbedSourceURI[MAXCONNINFO] = { 0 };
+	char scrubbedTargetURI[MAXCONNINFO] = { 0 };
+
+	(void) parse_and_scrub_connection_string(restoreDBoptions.source_pguri,
+											 scrubbedSourceURI);
+
+	(void) parse_and_scrub_connection_string(restoreDBoptions.target_pguri,
+											 scrubbedTargetURI);
+
+	log_info("[SOURCE] Restoring database from \"%s\"", scrubbedSourceURI);
+	log_info("[TARGET] Restoring database into \"%s\"", scrubbedTargetURI);
+
 	(void) find_pg_commands(pgPaths);
 
 	char *dir =
@@ -410,13 +508,15 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	log_info("Restoring database from existing files at \"%s\"", cfPaths->topdir);
+
 	if (!copydb_init_specs(copySpecs,
-						   NULL, /* source_pguri */
+						   restoreDBoptions.source_pguri,
 						   restoreDBoptions.target_pguri,
 						   1,    /* table jobs */
 						   1,    /* index jobs */
 						   DATA_SECTION_NONE,
-						   NULL, /* source database snapshot */
+						   restoreDBoptions.snapshot,
 						   restoreDBoptions.restoreOptions,
 						   false, /* skipLargeObjects */
 						   restoreDBoptions.restart,
@@ -426,13 +526,17 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	char scrubbedTargetURI[MAXCONNINFO] = { 0 };
+	if (!IS_EMPTY_STRING_BUFFER(restoreDBoptions.filterFileName))
+	{
+		SourceFilters *filters = &(copySpecs->filters);
 
-	(void) parse_and_scrub_connection_string(copySpecs->target_pguri,
-											 scrubbedTargetURI);
-
-	log_info("Restoring database from \"%s\"", cfPaths->topdir);
-	log_info("Restoring database into \"%s\"", scrubbedTargetURI);
+		if (!parse_filters(restoreDBoptions.filterFileName, filters))
+		{
+			log_error("Failed to parse filters in file \"%s\"",
+					  restoreDBoptions.filterFileName);
+			exit(EXIT_CODE_BAD_ARGS);
+		}
+	}
 
 	log_info("Using pg_restore for Postgres \"%s\" at \"%s\"",
 			 pgPaths->pg_version,
