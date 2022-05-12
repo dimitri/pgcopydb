@@ -107,7 +107,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
-		"         join pg_authid auth ON auth.oid = c.relowner"
+		"         join pg_roles auth ON auth.oid = c.relowner"
 		"   where c.relkind = 'r' and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"order by bytes desc, n.nspname, c.relname"
@@ -129,7 +129,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
-		"         join pg_authid auth ON auth.oid = c.relowner"
+		"         join pg_roles auth ON auth.oid = c.relowner"
 
 		/* include-only-table */
 		"         join pg_temp.filter_include_only_table inc "
@@ -154,7 +154,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
-		"         join pg_authid auth ON auth.oid = c.relowner"
+		"         join pg_roles auth ON auth.oid = c.relowner"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -194,7 +194,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
-		"         join pg_authid auth ON auth.oid = c.relowner"
+		"         join pg_roles auth ON auth.oid = c.relowner"
 
 		/* include-only-table */
 		"    left join pg_temp.filter_include_only_table inc "
@@ -223,7 +223,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
-		"         join pg_authid auth ON auth.oid = c.relowner"
+		"         join pg_roles auth ON auth.oid = c.relowner"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -324,7 +324,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
-		"         join pg_authid auth ON auth.oid = r.relowner"
+		"         join pg_roles auth ON auth.oid = r.relowner"
 		"   where r.relkind = 'r' and r.relpersistence = 'p'  "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and not exists "
@@ -349,7 +349,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
-		"         join pg_authid auth ON auth.oid = r.relowner"
+		"         join pg_roles auth ON auth.oid = r.relowner"
 
 		/* include-only-table */
 		"         join pg_temp.filter_include_only_table inc "
@@ -380,7 +380,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
-		"         join pg_authid auth ON auth.oid = r.relowner"
+		"         join pg_roles auth ON auth.oid = r.relowner"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -426,7 +426,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
-		"         join pg_authid auth ON auth.oid = r.relowner"
+		"         join pg_roles auth ON auth.oid = r.relowner"
 
 		/* include-only-table */
 		"    left join pg_temp.filter_include_only_table inc "
@@ -461,7 +461,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
-		"         join pg_authid auth ON auth.oid = r.relowner"
+		"         join pg_roles auth ON auth.oid = r.relowner"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -569,7 +569,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
-		"         join pg_authid auth ON auth.oid = c.relowner"
+		"         join pg_roles auth ON auth.oid = c.relowner"
 		"   where c.relkind = 'S' and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"order by n.nspname, c.relname"
@@ -596,7 +596,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 
 		"    from pg_class s "
 		"         join pg_namespace sn on sn.oid = s.relnamespace "
-		"         join pg_authid auth ON auth.oid = s.relowner"
+		"         join pg_roles auth ON auth.oid = s.relowner"
 		"         join pg_depend d on d.refobjid = s.oid "
 		"         join pg_attrdef a on d.objid = a.oid "
 		"         join pg_attribute at "
@@ -640,7 +640,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 
 		"    from pg_class s "
 		"         join pg_namespace sn on sn.oid = s.relnamespace "
-		"         join pg_authid auth ON auth.oid = s.relowner"
+		"         join pg_roles auth ON auth.oid = s.relowner"
 		"         join pg_depend d on d.refobjid = s.oid "
 		"         join pg_attrdef a on d.objid = a.oid "
 		"         join pg_attribute at "
@@ -698,7 +698,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 
 		"    from pg_class s "
 		"         join pg_namespace sn on sn.oid = s.relnamespace "
-		"         join pg_authid auth ON auth.oid = s.relowner"
+		"         join pg_roles auth ON auth.oid = s.relowner"
 		"         join pg_depend d on d.refobjid = s.oid "
 		"         join pg_attrdef a on d.objid = a.oid "
 		"         join pg_attribute at "
@@ -745,7 +745,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 
 		"    from pg_class s "
 		"         join pg_namespace sn on sn.oid = s.relnamespace "
-		"         join pg_authid auth ON auth.oid = s.relowner"
+		"         join pg_roles auth ON auth.oid = s.relowner"
 		"         join pg_depend d on d.refobjid = s.oid "
 		"         join pg_attrdef a on d.objid = a.oid "
 		"         join pg_attribute at "
@@ -925,7 +925,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          join pg_class r ON r.oid = x.indrelid"
 		"          join pg_namespace n ON n.oid = i.relnamespace"
 		"          join pg_namespace rn ON rn.oid = r.relnamespace"
-		"          join pg_authid auth ON auth.oid = i.relowner"
+		"          join pg_roles auth ON auth.oid = i.relowner"
 		"          left join pg_depend d "
 		"                 on d.classid = 'pg_class'::regclass"
 		"                and d.objid = i.oid"
@@ -962,7 +962,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          join pg_class r ON r.oid = x.indrelid"
 		"          join pg_namespace n ON n.oid = i.relnamespace"
 		"          join pg_namespace rn ON rn.oid = r.relnamespace"
-		"          join pg_authid auth ON auth.oid = i.relowner"
+		"          join pg_roles auth ON auth.oid = i.relowner"
 		"          left join pg_depend d "
 		"                 on d.classid = 'pg_class'::regclass"
 		"                and d.objid = i.oid"
@@ -1005,7 +1005,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          join pg_class r ON r.oid = x.indrelid"
 		"          join pg_namespace n ON n.oid = i.relnamespace"
 		"          join pg_namespace rn ON rn.oid = r.relnamespace"
-		"          join pg_authid auth ON auth.oid = i.relowner"
+		"          join pg_roles auth ON auth.oid = i.relowner"
 		"          left join pg_depend d "
 		"                 on d.classid = 'pg_class'::regclass"
 		"                and d.objid = i.oid"
@@ -1063,7 +1063,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          join pg_class r ON r.oid = x.indrelid"
 		"          join pg_namespace n ON n.oid = i.relnamespace"
 		"          join pg_namespace rn ON rn.oid = r.relnamespace"
-		"          join pg_authid auth ON auth.oid = i.relowner"
+		"          join pg_roles auth ON auth.oid = i.relowner"
 		"          left join pg_depend d "
 		"                 on d.classid = 'pg_class'::regclass"
 		"                and d.objid = i.oid"
@@ -1110,7 +1110,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          join pg_class r ON r.oid = x.indrelid"
 		"          join pg_namespace n ON n.oid = i.relnamespace"
 		"          join pg_namespace rn ON rn.oid = r.relnamespace"
-		"          join pg_authid auth ON auth.oid = i.relowner"
+		"          join pg_roles auth ON auth.oid = i.relowner"
 		"          left join pg_depend d "
 		"                 on d.classid = 'pg_class'::regclass"
 		"                and d.objid = i.oid"
@@ -1162,7 +1162,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          join pg_class r ON r.oid = x.indrelid"
 		"          join pg_namespace n ON n.oid = i.relnamespace"
 		"          join pg_namespace rn ON rn.oid = r.relnamespace"
-		"          join pg_authid auth ON auth.oid = i.relowner"
+		"          join pg_roles auth ON auth.oid = i.relowner"
 		"          left join pg_depend d "
 		"                 on d.classid = 'pg_class'::regclass"
 		"                and d.objid = i.oid"
@@ -1209,7 +1209,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          join pg_class r ON r.oid = x.indrelid"
 		"          join pg_namespace n ON n.oid = i.relnamespace"
 		"          join pg_namespace rn ON rn.oid = r.relnamespace"
-		"          join pg_authid auth ON auth.oid = i.relowner"
+		"          join pg_roles auth ON auth.oid = i.relowner"
 		"          left join pg_depend d "
 		"                 on d.classid = 'pg_class'::regclass"
 		"                and d.objid = i.oid"
@@ -1309,7 +1309,7 @@ schema_list_table_indexes(PGSQL *pgsql,
 		"          join pg_class r ON r.oid = x.indrelid"
 		"          join pg_namespace n ON n.oid = i.relnamespace"
 		"          join pg_namespace rn ON rn.oid = r.relnamespace"
-		"          join pg_authid auth ON auth.oid = i.relowner"
+		"          join pg_roles auth ON auth.oid = i.relowner"
 		"          left join pg_depend d "
 		"                 on d.classid = 'pg_class'::regclass"
 		"                and d.objid = i.oid"
