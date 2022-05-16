@@ -13,6 +13,7 @@ This command prefixes the following sub-commands:
     tables     List all the source tables to copy data from
     sequences  List all the source sequences to copy data from
     indexes    List all the indexes to create again after copying the data
+    depends    List all the dependencies to filter-out
 
 
 .. _pgcopydb_list_tables:
@@ -77,6 +78,28 @@ indexes to COPY the data from.
     --table-name        Name of the target table
     --filter <filename> Use the filters defined in <filename>
     --list-skipped      List only tables that are setup to be skipped
+
+.. _pgcopydb_list_depends:
+
+pgcopydb list depends
+---------------------
+
+pgcopydb list depends - List all the dependencies to filter-out
+
+The command ``pgcopydb list depends`` connects to the source database and
+executes a SQL query using the Postgres catalogs to get a list of all the
+objects that depend on excluded objects from the filtering rules.
+
+::
+
+   pgcopydb list depends: List all the dependencies to filter-out
+   usage: pgcopydb list depends  --source ... [ --schema-name [ --table-name ] ]
+
+     --source            Postgres URI to the source database
+     --schema-name       Name of the schema where to find the table
+     --table-name        Name of the target table
+     --filter <filename> Use the filters defined in <filename>
+     --list-skipped      List only tables that are setup to be skipped
 
 
 Options
