@@ -111,3 +111,15 @@ exclude-table-data
 This section allows to skip copying the data from a list of qualified table
 names. The schema, index, constraints, etc of the table are still copied
 over.
+
+Reviewing and Debugging the filters
+-----------------------------------
+
+Filtering a ``pg_restore`` archive file is done through rewriting the
+archive catalog obtained with ``pg_restore --list``. That's a little hackish
+at times, and we also have to deal with dependencies in pgcopydb itself.
+
+The following commands can be used to explore a set of filtering rules:
+
+  - :ref:`pgcopydb_list_depends`
+  - :ref:`pgcopydb_restore_parse_list`

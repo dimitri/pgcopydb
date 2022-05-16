@@ -16,6 +16,11 @@ work, unfortunately, because `pg_dump --format=directory` writes to local
 files and directories first, and then later `pg_restore --format=directory`
 can be used to read from those files again.
 
+Given that, pgcopydb then uses pg_dump and pg_restore for the schema parts
+of the process, and implements its own data copying multi-process streaming
+parts. Also, pgcopydb bypasses pg_restore index building and drives that
+internally so that all indexes may be built concurrently.
+
 ## Documentation
 
 Full documentation is available online, including manual pages of all the
@@ -39,9 +44,10 @@ $ pgcopydb help
     post-data  Dump source database post-data schema as custom files in target directory
 
   pgcopydb restore
-    schema     Restore a database schema from custom files to target database
-    pre-data   Restore a database pre-data schema from custom file to target database
-    post-data  Restore a database post-data schema from custom file to target database
+    schema      Restore a database schema from custom files to target database
+    pre-data    Restore a database pre-data schema from custom file to target database
+    post-data   Restore a database post-data schema from custom file to target database
+    parse-list  Parse pg_restore --list output from custom file
 
   pgcopydb copy
     db           Copy an entire database from source to target
@@ -56,6 +62,7 @@ $ pgcopydb help
     tables     List all the source tables to copy data from
     sequences  List all the source sequences to copy data from
     indexes    List all the indexes to create again after copying the data
+    depends    List all the dependencies to filter-out
 ```
 
 ## Examples
@@ -115,22 +122,22 @@ an overall summary that looks like the following:
 
 Then `pgcopydb` implements the following steps:
 
-  1. `pgcopydb` produces `pre-data` section and the `post-data` sections of
-     the dump using Postgres custom format.
+  1. `pgcopydb` calls into `pg_dump` to produce the `pre-data` section and
+     the `post-data` sections of the dump using Postgres custom format.
 
-  2. The `pre-data` section of the dump is restored on the target database,
-     creating all the Postgres objects from the source database into the
-     target database.
+  2. The `pre-data` section of the dump is restored on the target database
+     using the `pg_restore` command, creating all the Postgres objects from
+     the source database into the target database.
 
   3. `pgcopydb` gets the list of ordinary and partitioned tables and for
      each of them runs COPY the data from the source to the target in a
      dedicated sub-process, and starts and control the sub-processes until
      all the data has been copied over.
 
-     Postgres catalog table pg_class is used to get the list of tables with
-     data to copy around, and the `reltuples` is used to start with the
-     tables with the greatest number of rows first, as an attempt to
-     minimize the copy time.
+     A Postgres connection and a SQL query to the Postgres catalog table
+     pg_class is used to get the list of tables with data to copy around,
+     and the `reltuples` is used to start with the tables with the greatest
+     number of rows first, as an attempt to minimize the copy time.
 
   4. An auxiliary process is started concurrently to the main COPY workers.
      This auxiliary process loops through all the Large Objects found on the
@@ -155,17 +162,18 @@ Then `pgcopydb` implements the following steps:
   7. Then VACUUM ANALYZE is run on each target table as soon as the data and
      indexes are all created.
 
-  8. Then pgcopydb gets the list of the sequences on the source database and
-     for each of them runs a separate query on the source to fetch the
+  8. Then pgcopydb gets the list of the sequences on the source database
+     (via a Postgres connection and SQL queries on the Postgres catalogs)
+     and for each of them runs a separate query on the source to fetch the
      ``last_value`` and the ``is_called`` metadata the same way that pg_dump
      does.
 
      For each sequence, pgcopydb then calls ``pg_catalog.setval()`` on the
      target database with the information obtained on the source database.
 
-  9. The final stage consists now of running the rest of the `post-data`
-     section script for the whole database, and that's where the foreign key
-     constraints and other elements are created.
+  9. The final stage consists now of running the `pg_restore` command for
+     the `post-data` section script for the whole database, and that's where
+     the foreign key constraints and other elements are created.
 
      The `post-data` script is filtered out using the `pg_restore
      --use-list` option so that indexes and primary key constraints already

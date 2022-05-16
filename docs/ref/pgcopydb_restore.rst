@@ -9,10 +9,12 @@ This command prefixes the following sub-commands:
 
 ::
 
-   pgcopydb restore
-     schema     Restore a database schema from custom files to target database
-     pre-data   Restore a database pre-data schema from custom file to target database
-     post-data  Restore a database post-data schema from custom file to target database
+  pgcopydb restore
+    schema      Restore a database schema from custom files to target database
+    pre-data    Restore a database pre-data schema from custom file to target database
+    post-data   Restore a database post-data schema from custom file to target database
+    parse-list  Parse pg_restore --list output from custom file
+
 
 .. _pgcopydb_restore_schema:
 
@@ -96,6 +98,38 @@ be fed with the directory output from the ``pgcopydb dump ...`` commands.
      --no-owner           Do not set ownership of objects to match the original database
      --no-acl             Prevent restoration of access privileges (grant/revoke commands).
      --no-comments        Do not output commands to restore comments
+     --filters <filename> Use the filters defined in <filename>
+     --restart            Allow restarting when temp files exist already
+     --resume             Allow resuming operations after a failure
+     --not-consistent     Allow taking a new snapshot on the source database
+
+
+.. _pgcopydb_restore_parse_list:
+
+pgcopydb restore parse-list
+---------------------------
+
+pgcopydb restore parse-list - Parse pg_restore --list output from custom file
+
+The command ``pgcopydb restore parse-list`` outputs pg_restore to list the
+archive catalog of the custom file format file that has been exported for
+the post-data section.
+
+When using the ``--filters`` option , then the source database connection is
+used to grab all the dependend objects that should also be filtered, and the
+output of the command shows those pg_restore catalog entries commented out.
+
+A pg_restore archive catalog entry is commented out when its line starts
+with a semi-colon character (`;`).
+
+::
+
+   pgcopydb restore parse-list: Parse pg_restore --list output from custom file
+   usage: pgcopydb restore parse-list  --dir <dir> [ --source <URI> ] --target <URI>
+
+     --source             Postgres URI to the source database
+     --target             Postgres URI to the target database
+     --dir                Work directory to use
      --filters <filename> Use the filters defined in <filename>
      --restart            Allow restarting when temp files exist already
      --resume             Allow resuming operations after a failure
