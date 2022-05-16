@@ -19,6 +19,7 @@
 
 #include "cli_root.h"
 #include "defaults.h"
+#include "env_utils.h"
 #include "file_utils.h"
 #include "log.h"
 #include "parsing.h"
@@ -474,6 +475,12 @@ pgsql_open_connection(PGSQL *pgsql)
 	log_debug("Connecting to [%s] \"%s\"",
 			  ConnectionTypeToString(pgsql->connectionType),
 			  scrubbedConnectionString);
+
+	/* use our own application_name, unless the environment already is set */
+	if (!env_exists("PGAPPNAME"))
+	{
+		setenv("PGAPPNAME", PGCOPYDB_PGAPPNAME, 1);
+	}
 
 	/* we implement our own retry strategy */
 	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
