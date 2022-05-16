@@ -1,3 +1,22 @@
+### pgcopydb v0.6 (May 16, 2022) ###
+
+Improve pgcopydb with filtering support and the usual amount of bug fixes,
+thanks to community feedback and contributions. Of note is added support for
+the FreeBSD platform.
+
+### Added
+* Implement filtering support. (#19)
+* Implement Unit/Regression testing suite. (#34)
+
+### Changed
+* Add versioning information to the logs output. (#36)
+* Log size information about tables that are migrated (tuples, bytes). (#38)
+
+### Fixed
+* Percent-escape Postgres URI parameters. (#32)
+* Fix support for inherited tables. (#35)
+* Use pg_roles instead of pg_authid. (#40)
+
 ### pgcopydb v0.5 (March 11, 2022) ###
 
 Quick turnaround release with Postgres connection management bug fixes. The
