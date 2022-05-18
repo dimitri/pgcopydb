@@ -422,50 +422,28 @@ cli_restore_schema_parse_list(int argc, char **argv)
 		(void) copydb_close_snapshot(sourceSnapshot);
 	}
 
-	ArchiveContentArray contents = { 0 };
+	log_info("Preparing the pg_restore --use-list for the pre-data "
+			 "archive file \"%s\" at: \"%s\"",
+			 copySpecs.dumpPaths.preFilename,
+			 copySpecs.dumpPaths.preListFilename);
 
-	if (!pg_restore_list(&(copySpecs.pgPaths),
-						 copySpecs.dumpPaths.postFilename,
-						 &contents))
+	if (!copydb_write_restore_list(&copySpecs, PG_DUMP_SECTION_PRE_DATA))
 	{
-		/* errors have already been logged */
+		log_error("Failed to prepare the pg_restore --use-list catalogs, "
+				  "see above for details");
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	for (int i = 0; i < contents.count; i++)
+	log_info("Preparing the pg_restore --use-list for the post-data "
+			 "archive file \"%s\" at: \"%s\"",
+			 copySpecs.dumpPaths.postFilename,
+			 copySpecs.dumpPaths.postListFilename);
+
+	if (!copydb_write_restore_list(&copySpecs, PG_DUMP_SECTION_POST_DATA))
 	{
-		uint32_t oid = contents.array[i].objectOid;
-		char *name = contents.array[i].restoreListName;
-		char *prefix = "";
-
-		if (copydb_objectid_has_been_processed_already(&copySpecs, oid))
-		{
-			prefix = ";";
-
-			log_debug("Skipping already processed dumpId %d: %s %u %s",
-					  contents.array[i].dumpId,
-					  contents.array[i].desc,
-					  contents.array[i].objectOid,
-					  contents.array[i].restoreListName);
-		}
-		else if (copydb_objectid_is_filtered_out(&copySpecs, oid, name))
-		{
-			prefix = ";";
-
-			log_debug("Skipping filtered-out dumpId %d: %s %u %s",
-					  contents.array[i].dumpId,
-					  contents.array[i].desc,
-					  contents.array[i].objectOid,
-					  contents.array[i].restoreListName);
-		}
-
-		fformat(stdout, "%s%d; %u %u %s %s\n",
-				prefix,
-				contents.array[i].dumpId,
-				contents.array[i].catalogOid,
-				contents.array[i].objectOid,
-				contents.array[i].desc,
-				contents.array[i].restoreListName);
+		log_error("Failed to prepare the pg_restore --use-list catalogs, "
+				  "see above for details");
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 }
 

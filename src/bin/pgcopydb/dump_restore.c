@@ -131,10 +131,17 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 		return true;
 	}
 
+	if (!copydb_write_restore_list(specs, PG_DUMP_SECTION_PRE_DATA))
+	{
+		log_error("Failed to prepare the pg_restore --use-list catalogs, "
+				  "see above for details");
+		return true;
+	}
+
 	if (!pg_restore_db(&(specs->pgPaths),
 					   specs->target_pguri,
 					   specs->dumpPaths.preFilename,
-					   NULL,    /* --list filename */
+					   specs->dumpPaths.preListFilename,
 					   specs->restoreOptions))
 	{
 		/* errors have already been logged */
@@ -174,7 +181,76 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 		return true;
 	}
 
+	if (!copydb_write_restore_list(specs, PG_DUMP_SECTION_POST_DATA))
+	{
+		log_error("Failed to prepare the pg_restore --use-list catalogs, "
+				  "see above for details");
+		return true;
+	}
+
+	if (!pg_restore_db(&(specs->pgPaths),
+					   specs->target_pguri,
+					   specs->dumpPaths.postFilename,
+					   specs->dumpPaths.postListFilename,
+					   specs->restoreOptions))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now write the doneFile to keep track */
+	if (!write_file("", 0, specs->cfPaths.done.postDataRestore))
+	{
+		log_error("Failed to write the tracking file \%s\"",
+				  specs->cfPaths.done.postDataRestore);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * copydb_write_restore_list fetches the pg_restore --list output, parses it,
+ * and then writes it again to file and applies the filtering to the archive
+ * catalog that is meant to be used as pg_restore --use-list argument.
+ */
+bool
+copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
+{
+	char *dumpFilename = NULL;
+	char *listFilename = NULL;
+
+	switch (section)
+	{
+		case PG_DUMP_SECTION_PRE_DATA:
+		{
+			dumpFilename = specs->dumpPaths.preFilename;
+			listFilename = specs->dumpPaths.preListFilename;
+			break;
+		}
+
+		case PG_DUMP_SECTION_POST_DATA:
+		{
+			dumpFilename = specs->dumpPaths.postFilename;
+			listFilename = specs->dumpPaths.postListFilename;
+			break;
+		}
+
+		default:
+		{
+			log_error("BUG: copydb_write_restore_list: "
+					  "unknown pg_dump section %d",
+					  section);
+			return false;
+		}
+	}
+
 	/*
+	 * The pre.dump archive file contains all the objects to create in the
+	 * target database. We want to filter out the schemas and tables excluded
+	 * from the filtering setup.
+	 *
 	 * The post.dump archive file contains all the objects to create once the
 	 * table data has been copied over. It contains in particular the
 	 * constraints and indexes that we have already built concurrently in the
@@ -188,9 +264,7 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 	 */
 	ArchiveContentArray contents = { 0 };
 
-	if (!pg_restore_list(&(specs->pgPaths),
-						 specs->dumpPaths.postFilename,
-						 &contents))
+	if (!pg_restore_list(&(specs->pgPaths), dumpFilename, &contents))
 	{
 		/* errors have already been logged */
 		return false;
@@ -251,9 +325,7 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 		return false;
 	}
 
-	if (!write_file(listContents->data,
-					listContents->len,
-					specs->dumpPaths.listFilename))
+	if (!write_file(listContents->data, listContents->len, listFilename))
 	{
 		/* errors have already been logged */
 		destroyPQExpBuffer(listContents);
@@ -261,24 +333,6 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 	}
 
 	destroyPQExpBuffer(listContents);
-
-	if (!pg_restore_db(&(specs->pgPaths),
-					   specs->target_pguri,
-					   specs->dumpPaths.postFilename,
-					   specs->dumpPaths.listFilename,
-					   specs->restoreOptions))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/* now write the doneFile to keep track */
-	if (!write_file("", 0, specs->cfPaths.done.postDataRestore))
-	{
-		log_error("Failed to write the tracking file \%s\"",
-				  specs->cfPaths.done.postDataRestore);
-		return false;
-	}
 
 	return true;
 }

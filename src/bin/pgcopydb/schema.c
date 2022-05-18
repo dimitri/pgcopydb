@@ -108,7 +108,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 		"         join pg_roles auth ON auth.oid = c.relowner"
-		"   where c.relkind = 'r' and c.relpersistence = 'p' "
+		"   where relkind = 'r' and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"order by bytes desc, n.nspname, c.relname"
 	},
@@ -136,7 +136,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"           on n.nspname = inc.nspname "
 		"          and c.relname = inc.relname "
 
-		"   where c.relkind = 'r' and c.relpersistence = 'p' "
+		"   where relkind = 'r' and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"order by bytes desc, n.nspname, c.relname"
 	},
@@ -170,7 +170,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                on n.nspname = ftd.nspname "
 		"               and c.relname = ftd.relname "
 
-		"   where c.relkind = 'r' and c.relpersistence = 'p' "
+		"   where relkind in ('r', 'p') and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 
 		/* WHERE clause for exclusion filters */
@@ -201,7 +201,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"           on n.nspname = inc.nspname "
 		"          and c.relname = inc.relname "
 
-		"   where c.relkind = 'r' and c.relpersistence = 'p' "
+		"   where relkind in ('r', 'p') and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 
 		/* WHERE clause for exclusion filters */

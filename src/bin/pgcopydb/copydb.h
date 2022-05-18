@@ -67,9 +67,11 @@ typedef struct CopyFilePaths
 /* the main pg_dump and pg_restore process are driven from split files */
 typedef struct DumpPaths
 {
-	char preFilename[MAXPGPATH];  /* pg_dump --section=pre-data */
-	char postFilename[MAXPGPATH]; /* pg_dump --section=post-data */
-	char listFilename[MAXPGPATH]; /* pg_restore --list */
+	char preFilename[MAXPGPATH];     /* pg_dump --section=pre-data */
+	char preListFilename[MAXPGPATH]; /* pg_restore --list */
+
+	char postFilename[MAXPGPATH];     /* pg_dump --section=post-data */
+	char postListFilename[MAXPGPATH]; /* pg_restore --list */
 } DumpPaths;
 
 
@@ -349,10 +351,13 @@ bool copydb_target_finalize_schema(CopyDataSpec *specs);
 bool copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
 												uint32_t oid);
 
+bool copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section);
+
 /* sequence.c */
 bool copydb_copy_all_sequences(CopyDataSpec *specs);
 
 /* table-data.c */
+bool copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs);
 bool copydb_objectid_is_filtered_out(CopyDataSpec *specs,
 									 uint32_t oid,
 									 char *restoreListName);

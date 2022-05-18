@@ -556,6 +556,11 @@ pg_restore_list(PostgresPaths *pgPaths, const char *filename,
 	Program prog =
 		run_program(pgPaths->pg_restore, "-f-", "-l", filename, NULL);
 
+	char command[BUFSIZE] = { 0 };
+	(void) snprintf_program_command_line(&prog, command, BUFSIZE);
+
+	log_debug("%s", command);
+
 	if (prog.returnCode != 0)
 	{
 		log_error("Failed to run pg_restore: exit code %d", prog.returnCode);
