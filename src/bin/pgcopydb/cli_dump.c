@@ -36,6 +36,7 @@ static CommandLine dump_schema_command =
 		" --source <URI> --target <dir> ",
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Directory where to save the dump files\n"
+		"  --dir             Work directory to use\n"
 		"  --snapshot        Use snapshot obtained with pg_export_snapshot\n",
 		cli_dump_schema_getopts,
 		cli_dump_schema);
@@ -47,6 +48,7 @@ static CommandLine dump_schema_pre_data_command =
 		" --source <URI> --target <dir> ",
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Directory where to save the dump files\n"
+		"  --dir             Work directory to use\n"
 		"  --snapshot        Use snapshot obtained with pg_export_snapshot\n",
 		cli_dump_schema_getopts,
 		cli_dump_schema_pre_data);
@@ -58,6 +60,7 @@ static CommandLine dump_schema_post_data_command =
 		" --source <URI> --target <dir>",
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Directory where to save the dump files\n"
+		"  --dir             Work directory to use\n"
 		"  --snapshot        Use snapshot obtained with pg_export_snapshot\n",
 		cli_dump_schema_getopts,
 		cli_dump_schema_post_data);
@@ -88,6 +91,7 @@ cli_dump_schema_getopts(int argc, char **argv)
 	static struct option long_options[] = {
 		{ "source", required_argument, NULL, 'S' },
 		{ "target", required_argument, NULL, 'T' },
+		{ "dir", required_argument, NULL, 'D' },
 		{ "restart", no_argument, NULL, 'r' },
 		{ "resume", no_argument, NULL, 'R' },
 		{ "not-consistent", no_argument, NULL, 'C' },
@@ -128,8 +132,21 @@ cli_dump_schema_getopts(int argc, char **argv)
 
 			case 'T':
 			{
+				if (!validate_connection_string(optarg))
+				{
+					log_fatal("Failed to parse --target connection string, "
+							  "see above for details.");
+					exit(EXIT_CODE_BAD_ARGS);
+				}
+				strlcpy(options.target_pguri, optarg, MAXCONNINFO);
+				log_trace("--target %s", options.target_pguri);
+				break;
+			}
+
+			case 'D':
+			{
 				strlcpy(options.dir, optarg, MAXPGPATH);
-				log_trace("--target %s", options.dir);
+				log_trace("--dir %s", options.dir);
 				break;
 			}
 

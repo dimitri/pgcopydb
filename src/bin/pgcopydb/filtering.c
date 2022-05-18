@@ -21,6 +21,55 @@ static bool parse_filter_quoted_table_name(SourceFilterTable *table,
 
 
 /*
+ * filterTypeToString returns a string reprensentation of the enum value.
+ */
+char *
+filterTypeToString(SourceFilterType type)
+{
+	switch (type)
+	{
+		case SOURCE_FILTER_TYPE_NONE:
+		{
+			return "SOURCE_FILTER_TYPE_NONE";
+		}
+
+		case SOURCE_FILTER_TYPE_INCL:
+		{
+			return "SOURCE_FILTER_TYPE_INCL";
+		}
+
+		case SOURCE_FILTER_TYPE_EXCL:
+		{
+			return "SOURCE_FILTER_TYPE_EXCL";
+		}
+
+		case SOURCE_FILTER_TYPE_LIST_NOT_INCL:
+		{
+			return "SOURCE_FILTER_TYPE_LIST_NOT_INCL";
+		}
+
+		case SOURCE_FILTER_TYPE_LIST_EXCL:
+		{
+			return "SOURCE_FILTER_LIST_EXCL";
+		}
+
+		case SOURCE_FILTER_TYPE_EXCL_INDEX:
+		{
+			return "SOURCE_FILTER_TYPE_EXCL_INDEX";
+		}
+
+		case SOURCE_FILTER_TYPE_LIST_EXCL_INDEX:
+		{
+			return "SOURCE_FILTER_TYPE_LIST_EXCL_INDEX";
+		}
+	}
+
+	/* that's a bug, the lack of a default branch above should prevent it */
+	return "SOURCE FILTER TYPE UNKNOWN";
+}
+
+
+/*
  * filterTypeComplement returns the complement to the given filtering type:
  * instead of listing the include-only tables, list the tables that are not
  * included; instead of listing tables that are not excluded, list the tables

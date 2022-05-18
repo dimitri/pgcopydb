@@ -162,8 +162,14 @@ cli_restore_schema_getopts(int argc, char **argv)
 		{
 			case 'S':
 			{
-				strlcpy(options.dir, optarg, MAXPGPATH);
-				log_trace("--source %s", options.dir);
+				if (!validate_connection_string(optarg))
+				{
+					log_fatal("Failed to parse --target connection string, "
+							  "see above for details.");
+					exit(EXIT_CODE_BAD_ARGS);
+				}
+				strlcpy(options.source_pguri, optarg, MAXCONNINFO);
+				log_trace("--source %s", options.source_pguri);
 				break;
 			}
 
@@ -411,12 +417,12 @@ cli_restore_schema_parse_list(int argc, char **argv)
 
 		TransactionSnapshot *sourceSnapshot = &(copySpecs.sourceSnapshot);
 
-		/* prepare the Oids of objects that are filtered out */
-		if (!copydb_fetch_filtered_oids(&copySpecs))
+		/* fetch schema information from source catalogs, including filtering */
+		if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
 		{
 			/* errors have already been logged */
 			(void) copydb_close_snapshot(sourceSnapshot);
-			exit(EXIT_CODE_INTERNAL_ERROR);
+			exit(EXIT_CODE_TARGET);
 		}
 
 		(void) copydb_close_snapshot(sourceSnapshot);
