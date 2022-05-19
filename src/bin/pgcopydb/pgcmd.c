@@ -620,6 +620,7 @@ struct StringWithLength pgRestoreDescriptionArray[] = {
 	INSERT_STRING_WITH_LENGTH("COMMENT"),
 	INSERT_STRING_WITH_LENGTH("DEFAULT ACL"),
 	INSERT_STRING_WITH_LENGTH("DEFAULT"),
+	INSERT_STRING_WITH_LENGTH("DOMAIN"),
 	INSERT_STRING_WITH_LENGTH("DUMMY TYPE"),
 	INSERT_STRING_WITH_LENGTH("EVENT TRIGGER"),
 	INSERT_STRING_WITH_LENGTH("EXTENSION"),
@@ -656,6 +657,7 @@ struct StringWithLength pgRestoreDescriptionArray[] = {
 	INSERT_STRING_WITH_LENGTH("TRANSFORM"),
 	INSERT_STRING_WITH_LENGTH("TRIGGER"),
 	INSERT_STRING_WITH_LENGTH("TYPE"),
+	INSERT_STRING_WITH_LENGTH("VIEW"),
 	{ 0, "" }
 };
 
@@ -758,7 +760,7 @@ parse_archive_list(char *list, ArchiveContentArray *contents)
 
 		if (IS_EMPTY_STRING_BUFFER(item->desc))
 		{
-			log_error("Failed to parse desc \"%s\"", ptr);
+			log_warn("Failed to parse desc \"%s\"", ptr);
 		}
 
 		++contents->count;
