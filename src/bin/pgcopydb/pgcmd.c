@@ -608,6 +608,7 @@ struct StringWithLength
  * postgres/src/bin/pg_dump/pg_dump_sort.c
  */
 struct StringWithLength pgRestoreDescriptionArray[] = {
+	INSERT_STRING_WITH_LENGTH("ACL"),
 	INSERT_STRING_WITH_LENGTH("ACCESS METHOD"),
 	INSERT_STRING_WITH_LENGTH("AGGREGATE"),
 	INSERT_STRING_WITH_LENGTH("ATTRDEF"),
