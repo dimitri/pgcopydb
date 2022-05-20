@@ -556,6 +556,11 @@ pg_restore_list(PostgresPaths *pgPaths, const char *filename,
 	Program prog =
 		run_program(pgPaths->pg_restore, "-f-", "-l", filename, NULL);
 
+	char command[BUFSIZE] = { 0 };
+	(void) snprintf_program_command_line(&prog, command, BUFSIZE);
+
+	log_debug("%s", command);
+
 	if (prog.returnCode != 0)
 	{
 		log_error("Failed to run pg_restore: exit code %d", prog.returnCode);
@@ -603,6 +608,7 @@ struct StringWithLength
  * postgres/src/bin/pg_dump/pg_dump_sort.c
  */
 struct StringWithLength pgRestoreDescriptionArray[] = {
+	INSERT_STRING_WITH_LENGTH("ACL"),
 	INSERT_STRING_WITH_LENGTH("ACCESS METHOD"),
 	INSERT_STRING_WITH_LENGTH("AGGREGATE"),
 	INSERT_STRING_WITH_LENGTH("ATTRDEF"),
@@ -612,7 +618,10 @@ struct StringWithLength pgRestoreDescriptionArray[] = {
 	INSERT_STRING_WITH_LENGTH("COLLATION"),
 	INSERT_STRING_WITH_LENGTH("CONSTRAINT"),
 	INSERT_STRING_WITH_LENGTH("CONVERSION"),
+	INSERT_STRING_WITH_LENGTH("COMMENT"),
 	INSERT_STRING_WITH_LENGTH("DEFAULT ACL"),
+	INSERT_STRING_WITH_LENGTH("DEFAULT"),
+	INSERT_STRING_WITH_LENGTH("DOMAIN"),
 	INSERT_STRING_WITH_LENGTH("DUMMY TYPE"),
 	INSERT_STRING_WITH_LENGTH("EVENT TRIGGER"),
 	INSERT_STRING_WITH_LENGTH("EXTENSION"),
@@ -633,7 +642,9 @@ struct StringWithLength pgRestoreDescriptionArray[] = {
 	INSERT_STRING_WITH_LENGTH("REFRESH MATERIALIZED VIEW"),
 	INSERT_STRING_WITH_LENGTH("RULE"),
 	INSERT_STRING_WITH_LENGTH("SCHEMA"),
+	INSERT_STRING_WITH_LENGTH("SEQUENCE OWNED BY"),
 	INSERT_STRING_WITH_LENGTH("SEQUENCE SET"),
+	INSERT_STRING_WITH_LENGTH("SEQUENCE"),
 	INSERT_STRING_WITH_LENGTH("SHELL TYPE"),
 	INSERT_STRING_WITH_LENGTH("STATISTICS"),
 	INSERT_STRING_WITH_LENGTH("SUBSCRIPTION"),
@@ -647,6 +658,7 @@ struct StringWithLength pgRestoreDescriptionArray[] = {
 	INSERT_STRING_WITH_LENGTH("TRANSFORM"),
 	INSERT_STRING_WITH_LENGTH("TRIGGER"),
 	INSERT_STRING_WITH_LENGTH("TYPE"),
+	INSERT_STRING_WITH_LENGTH("VIEW"),
 	{ 0, "" }
 };
 
@@ -745,6 +757,11 @@ parse_archive_list(char *list, ArchiveContentArray *contents)
 
 				break;
 			}
+		}
+
+		if (IS_EMPTY_STRING_BUFFER(item->desc))
+		{
+			log_warn("Failed to parse desc \"%s\"", ptr);
 		}
 
 		++contents->count;

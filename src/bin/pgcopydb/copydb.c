@@ -380,7 +380,10 @@ copydb_prepare_dump_paths(CopyFilePaths *cfPaths, DumpPaths *dumpPaths)
 	sformat(dumpPaths->postFilename, MAXPGPATH, "%s/%s",
 			cfPaths->schemadir, "post.dump");
 
-	sformat(dumpPaths->listFilename, MAXPGPATH, "%s/%s",
+	sformat(dumpPaths->preListFilename, MAXPGPATH, "%s/%s",
+			cfPaths->schemadir, "pre.list");
+
+	sformat(dumpPaths->postListFilename, MAXPGPATH, "%s/%s",
 			cfPaths->schemadir, "post.list");
 
 	return true;

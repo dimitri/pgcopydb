@@ -94,6 +94,7 @@ typedef struct SourceFilters
 	SourceFilterTableList excludeIndexList;
 } SourceFilters;
 
+char * filterTypeToString(SourceFilterType type);
 SourceFilterType filterTypeComplement(SourceFilterType type);
 bool parse_filters(const char *filebname, SourceFilters *filters);
 

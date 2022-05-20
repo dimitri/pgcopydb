@@ -23,6 +23,35 @@
 
 
 /*
+ * copydb_fetch_schema_and_prepare_specs fetches the list of tables from the
+ * source database, and then fetches the list of objects that are filtered-out
+ * (schemas, tables, indexes, constraints, then objects that depend on those).
+ *
+ * Then the per-table CopyTableDataSpec are initialized in preparation of the
+ * rest of the work.
+ */
+bool
+copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
+{
+	/* now fetch the list of tables from the source database */
+	if (!copydb_prepare_table_specs(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* prepare the Oids of objects that are filtered out */
+	if (!copydb_fetch_filtered_oids(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * copydb_table_data fetches the list of tables from the source database and
  * then run a pg_dump --data-only --schema ... --table ... | pg_restore on each
  * of them, using up to tblJobs sub-processes for that.
@@ -44,13 +73,6 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 		log_info("Skipping tables, indexes, and sequences, "
 				 "already done on a previous run");
 		return true;
-	}
-
-	/* now fetch the list of tables from the source database */
-	if (!copydb_prepare_table_specs(specs))
-	{
-		/* errors have already been logged */
-		return false;
 	}
 
 	/*
@@ -187,8 +209,6 @@ copydb_prepare_table_specs(CopyDataSpec *specs)
 			 tableArray.count,
 			 (long long) totalTuples,
 			 bytesPretty);
-
-	log_info("Now starting %d processes", specs->tableJobs);
 
 	/* free our temporary memory that's been malloc'ed */
 	free(tableArray.array);
@@ -498,6 +518,8 @@ copydb_process_table_data(CopyDataSpec *specs)
 	/*
 	 * Now create as many sub-process as needed, per --table-jobs.
 	 */
+	log_info("Now starting %d processes", specs->tableJobs);
+
 	for (int i = 0; i < specs->tableJobs; i++)
 	{
 		/*

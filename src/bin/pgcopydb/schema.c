@@ -108,7 +108,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 		"         join pg_roles auth ON auth.oid = c.relowner"
-		"   where c.relkind = 'r' and c.relpersistence = 'p' "
+		"   where relkind = 'r' and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"order by bytes desc, n.nspname, c.relname"
 	},
@@ -136,7 +136,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"           on n.nspname = inc.nspname "
 		"          and c.relname = inc.relname "
 
-		"   where c.relkind = 'r' and c.relpersistence = 'p' "
+		"   where relkind = 'r' and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"order by bytes desc, n.nspname, c.relname"
 	},
@@ -170,7 +170,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                on n.nspname = ftd.nspname "
 		"               and c.relname = ftd.relname "
 
-		"   where c.relkind = 'r' and c.relpersistence = 'p' "
+		"   where relkind in ('r', 'p') and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 
 		/* WHERE clause for exclusion filters */
@@ -201,7 +201,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"           on n.nspname = inc.nspname "
 		"          and c.relname = inc.relname "
 
-		"   where c.relkind = 'r' and c.relpersistence = 'p' "
+		"   where relkind in ('r', 'p') and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 
 		/* WHERE clause for exclusion filters */
@@ -233,6 +233,9 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         left join pg_temp.filter_exclude_table ft "
 		"                on n.nspname = ft.nspname "
 		"               and c.relname = ft.relname "
+
+		"   where relkind in ('r', 'p') and c.relpersistence = 'p' "
+		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 
 		/* WHERE clause for exclusion filters */
 		"     and (   fn.nspname is not null "
@@ -288,6 +291,8 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 			return false;
 		}
 	}
+
+	log_debug("listSourceTablesSQL[%s]", filterTypeToString(filters->type));
 
 	char *sql = listSourceTablesSQL[filters->type].sql;
 
@@ -535,6 +540,8 @@ schema_list_ordinary_tables_without_pk(PGSQL *pgsql,
 			return false;
 		}
 	}
+
+	log_debug("listSourceTablesNoPKSQL[%s]", filterTypeToString(filters->type));
 
 	char *sql = listSourceTablesNoPKSQL[filters->type].sql;
 
@@ -823,6 +830,8 @@ schema_list_sequences(PGSQL *pgsql,
 			return false;
 		}
 	}
+
+	log_debug("listSourceSequencesSQL[%s]", filterTypeToString(filters->type));
 
 	char *sql = listSourceSequencesSQL[filters->type].sql;
 
@@ -1254,6 +1263,8 @@ schema_list_all_indexes(PGSQL *pgsql,
 		}
 	}
 
+	log_debug("listSourceIndexesSQL[%s]", filterTypeToString(filters->type));
+
 	char *sql = listSourceIndexesSQL[filters->type].sql;
 
 	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
@@ -1390,35 +1401,79 @@ struct FilteringQueries listSourceDependSQL[] = {
 		SOURCE_FILTER_TYPE_EXCL,
 
 		PG_DEPEND_SQL
-		"  SELECT n.nspname, c.relname, "
+		"  SELECT n.nspname, relname, "
+		"         refclassid, refobjid, classid, objid, "
+		"         deptype, type, identity "
+
+		"    FROM pg_namespace n "
+
+		/* exclude-schema */
+		"         join pg_temp.filter_exclude_schema fn "
+		"           on n.nspname = fn.nspname "
+
+		"         left join unconcat "
+		"           on unconcat.refclassid = 'pg_namespace'::regclass "
+		"          and unconcat.refobjid = n.oid "
+
+		"         left join pg_class c "
+		"           on unconcat.classid = 'pg_class'::regclass "
+		"          and unconcat.objid = c.oid "
+
+		"         , pg_identify_object(classid, objid, objsubid) "
+
+		/* remove duplicates due to multiple refobjsubid / objsubid */
+		"GROUP BY n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, deptype, type, identity"
+
+		" UNION ALL "
+		" ( "
+		"  SELECT n.nspname, null as relname, "
+		"         null as refclassid, null as refobjid, "
+		"         'pg_namespace'::regclass::oid as classid, n.oid as objid, "
+		"         null as deptype, type, identity "
+
+		"    FROM pg_namespace n "
+
+		/* exclude-schema */
+		"         join pg_temp.filter_exclude_schema fn "
+		"           on n.nspname = fn.nspname "
+
+		"         , pg_identify_object('pg_namespace'::regclass, n.oid, 0) "
+		" ) "
+
+		" UNION ALL "
+		" ( "
+
+		"  SELECT cn.nspname, c.relname, "
 		"         refclassid, refobjid, classid, objid, "
 		"         deptype, type, identity "
 		"    FROM unconcat "
 
-		"         join pg_class c "
+		"         left join pg_class c "
 		"           on unconcat.refclassid = 'pg_class'::regclass "
 		"          and unconcat.refobjid = c.oid "
 
-		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
+		"         left join pg_catalog.pg_namespace cn "
+		"           on c.relnamespace = cn.oid "
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
-		"                on n.nspname = fn.nspname "
+		"                on cn.nspname = fn.nspname "
 
 		/* exclude-table */
 		"         left join pg_temp.filter_exclude_table ft "
-		"                on n.nspname = ft.nspname "
+		"                on cn.nspname = ft.nspname "
 		"               and c.relname = ft.relname "
 
 		/* exclude-table-data */
 		"         left join pg_temp.filter_exclude_table_data ftd "
-		"                on n.nspname = ftd.nspname "
+		"                on cn.nspname = ftd.nspname "
 		"               and c.relname = ftd.relname "
 
 		"         , pg_identify_object(classid, objid, objsubid) "
 
 		"   WHERE NOT (refclassid = classid AND refobjid = objid) "
-		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and cn.nspname !~ '^pg_' and cn.nspname <> 'information_schema'"
 		"      and type not in ('toast table column', 'default value') "
 
 		/* WHERE clause for exclusion filters */
@@ -1427,8 +1482,10 @@ struct FilteringQueries listSourceDependSQL[] = {
 		"     and ftd.relname is null "
 
 		/* remove duplicates due to multiple refobjsubid / objsubid */
-		"GROUP BY n.nspname, c.relname, "
+		"GROUP BY cn.nspname, c.relname, "
 		"         refclassid, refobjid, classid, objid, deptype, type, identity"
+
+		" ) "
 	},
 
 	{
@@ -1469,6 +1526,49 @@ struct FilteringQueries listSourceDependSQL[] = {
 		SOURCE_FILTER_TYPE_LIST_EXCL,
 
 		PG_DEPEND_SQL
+		"  SELECT n.nspname, relname, "
+		"         refclassid, refobjid, classid, objid, "
+		"         deptype, type, identity "
+
+		"    FROM pg_namespace n "
+
+		/* exclude-schema */
+		"         join pg_temp.filter_exclude_schema fn "
+		"           on n.nspname = fn.nspname "
+
+		"         left join unconcat "
+		"           on unconcat.refclassid = 'pg_namespace'::regclass "
+		"          and unconcat.refobjid = n.oid "
+
+		"         left join pg_class c "
+		"           on unconcat.classid = 'pg_class'::regclass "
+		"          and unconcat.objid = c.oid "
+
+		"         , pg_identify_object(classid, objid, objsubid) "
+
+		/* remove duplicates due to multiple refobjsubid / objsubid */
+		"GROUP BY n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, deptype, type, identity"
+
+		" UNION ALL "
+		" ( "
+		"  SELECT n.nspname, null as relname, "
+		"         null as refclassid, null as refobjid, "
+		"         'pg_namespace'::regclass::oid as classid, n.oid as objid, "
+		"         null as deptype, type, identity "
+
+		"    FROM pg_namespace n "
+
+		/* exclude-schema */
+		"         join pg_temp.filter_exclude_schema fn "
+		"           on n.nspname = fn.nspname "
+
+		"         , pg_identify_object('pg_namespace'::regclass, n.oid, 0) "
+		" ) "
+
+		" UNION ALL "
+		" ( "
+
 		"  SELECT n.nspname, c.relname, "
 		"         refclassid, refobjid, classid, objid, "
 		"         deptype, type, identity "
@@ -1478,7 +1578,8 @@ struct FilteringQueries listSourceDependSQL[] = {
 		"           on unconcat.refclassid = 'pg_class'::regclass "
 		"          and unconcat.refobjid = c.oid "
 
-		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
+		"         join pg_catalog.pg_namespace n "
+		"           on c.relnamespace = n.oid "
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -1502,6 +1603,8 @@ struct FilteringQueries listSourceDependSQL[] = {
 		/* remove duplicates due to multiple refobjsubid / objsubid */
 		"GROUP BY n.nspname, c.relname, "
 		"         refclassid, refobjid, classid, objid, deptype, type, identity"
+
+		" ) "
 	}
 };
 
@@ -1545,6 +1648,8 @@ schema_list_pg_depend(PGSQL *pgsql,
 			return false;
 		}
 	}
+
+	log_debug("listSourceDependSQL[%s]", filterTypeToString(filters->type));
 
 	char *sql = listSourceDependSQL[filters->type].sql;
 
@@ -1747,7 +1852,7 @@ getTableArray(void *ctx, PGresult *result)
 	SourceTableArrayContext *context = (SourceTableArrayContext *) ctx;
 	int nTuples = PQntuples(result);
 
-	log_trace("getTableArray: %d", nTuples);
+	log_debug("getTableArray: %d", nTuples);
 
 	if (PQnfields(result) != 8)
 	{
@@ -1884,6 +1989,8 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		++errors;
 	}
 
+	log_trace("parseCurrentSourceTable: %s.%s", table->nspname, table->relname);
+
 	return errors == 0;
 }
 
@@ -1898,7 +2005,7 @@ getSequenceArray(void *ctx, PGresult *result)
 	SourceSequenceArrayContext *context = (SourceSequenceArrayContext *) ctx;
 	int nTuples = PQntuples(result);
 
-	log_trace("getSequenceArray: %d", nTuples);
+	log_debug("getSequenceArray: %d", nTuples);
 
 	if (PQnfields(result) != 4)
 	{
@@ -2015,7 +2122,7 @@ getIndexArray(void *ctx, PGresult *result)
 	SourceIndexArrayContext *context = (SourceIndexArrayContext *) ctx;
 	int nTuples = PQntuples(result);
 
-	log_trace("getIndexArray: %d", nTuples);
+	log_debug("getIndexArray: %d", nTuples);
 
 	if (PQnfields(result) != 14)
 	{
@@ -2262,7 +2369,7 @@ getDependArray(void *ctx, PGresult *result)
 	SourceDependArrayContext *context = (SourceDependArrayContext *) ctx;
 	int nTuples = PQntuples(result);
 
-	log_trace("getDependArray: %d", nTuples);
+	log_debug("getDependArray: %d", nTuples);
 
 	if (PQnfields(result) != 9)
 	{
@@ -2345,21 +2452,35 @@ parseCurrentSourceDepend(PGresult *result, int rowNumber, SourceDepend *depend)
 	}
 
 	/* 3. refclassid */
-	value = PQgetvalue(result, rowNumber, 2);
-
-	if (!stringToUInt32(value, &(depend->refclassid)) || depend->refclassid == 0)
+	if (PQgetisnull(result, rowNumber, 2))
 	{
-		log_error("Invalid OID \"%s\"", value);
-		++errors;
+		depend->refclassid = 0;
+	}
+	else
+	{
+		value = PQgetvalue(result, rowNumber, 2);
+
+		if (!stringToUInt32(value, &(depend->refclassid)) || depend->refclassid == 0)
+		{
+			log_error("Invalid OID \"%s\"", value);
+			++errors;
+		}
 	}
 
 	/* 4. refobjid */
-	value = PQgetvalue(result, rowNumber, 3);
-
-	if (!stringToUInt32(value, &(depend->refobjid)) || depend->refobjid == 0)
+	if (PQgetisnull(result, rowNumber, 3))
 	{
-		log_error("Invalid OID \"%s\"", value);
-		++errors;
+		depend->refobjid = 0;
+	}
+	else
+	{
+		value = PQgetvalue(result, rowNumber, 3);
+
+		if (!stringToUInt32(value, &(depend->refobjid)) || depend->refobjid == 0)
+		{
+			log_error("Invalid OID \"%s\"", value);
+			++errors;
+		}
 	}
 
 	/* 5. classid */
@@ -2381,8 +2502,15 @@ parseCurrentSourceDepend(PGresult *result, int rowNumber, SourceDepend *depend)
 	}
 
 	/* 7. deptype */
-	value = PQgetvalue(result, rowNumber, 6);
-	depend->deptype = value[0];
+	if (PQgetisnull(result, rowNumber, 6))
+	{
+		depend->deptype = 's';  /* invent something for schemas */
+	}
+	else
+	{
+		value = PQgetvalue(result, rowNumber, 6);
+		depend->deptype = value[0];
+	}
 
 	/* 8. type */
 	value = PQgetvalue(result, rowNumber, 7);

@@ -520,9 +520,18 @@ cli_copy_db(int argc, char **argv)
 
 	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_PREPARE_SCHEMA);
 
+	/* fetch schema information from source catalogs, including filtering */
+	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
+	{
+		/* errors have already been logged */
+		(void) copydb_close_snapshot(sourceSnapshot);
+		exit(EXIT_CODE_TARGET);
+	}
+
 	if (!copydb_target_prepare_schema(&copySpecs))
 	{
 		/* errors have already been logged */
+		(void) copydb_close_snapshot(sourceSnapshot);
 		exit(EXIT_CODE_TARGET);
 	}
 
@@ -533,14 +542,6 @@ cli_copy_db(int argc, char **argv)
 	log_info("STEP 5: vacuum analyze each table");
 
 	if (!copydb_copy_all_table_data(&copySpecs))
-	{
-		/* errors have already been logged */
-		(void) copydb_close_snapshot(sourceSnapshot);
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	/* prepare the Oids of objects that are filtered out */
-	if (!copydb_fetch_filtered_oids(&copySpecs))
 	{
 		/* errors have already been logged */
 		(void) copydb_close_snapshot(sourceSnapshot);
@@ -602,6 +603,14 @@ cli_copy_data(int argc, char **argv)
 	log_info("Create indexes and constraints in parallel");
 	log_info("Vacuum analyze each table");
 
+	/* fetch schema information from source catalogs, including filtering */
+	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
+	{
+		/* errors have already been logged */
+		(void) copydb_close_snapshot(&(copySpecs.sourceSnapshot));
+		exit(EXIT_CODE_TARGET);
+	}
+
 	if (!copydb_copy_all_table_data(&copySpecs))
 	{
 		/* errors have already been logged */
@@ -650,6 +659,14 @@ cli_copy_table_data(int argc, char **argv)
 	}
 
 	log_info("Copy data from source to target in sub-processes");
+
+	/* fetch schema information from source catalogs, including filtering */
+	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
+	{
+		/* errors have already been logged */
+		(void) copydb_close_snapshot(&(copySpecs.sourceSnapshot));
+		exit(EXIT_CODE_TARGET);
+	}
 
 	if (!copydb_copy_all_table_data(&copySpecs))
 	{
@@ -700,6 +717,14 @@ cli_copy_sequences(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	/* fetch schema information from source catalogs, including filtering */
+	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
+	{
+		/* errors have already been logged */
+		(void) copydb_close_snapshot(&(copySpecs.sourceSnapshot));
+		exit(EXIT_CODE_TARGET);
+	}
+
 	if (!copydb_copy_all_sequences(&copySpecs))
 	{
 		/* errors have already been logged */
@@ -744,6 +769,14 @@ cli_copy_indexes(int argc, char **argv)
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/* fetch schema information from source catalogs, including filtering */
+	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
+	{
+		/* errors have already been logged */
+		(void) copydb_close_snapshot(&(copySpecs.sourceSnapshot));
+		exit(EXIT_CODE_TARGET);
 	}
 
 	if (!copydb_copy_all_indexes(&copySpecs))
@@ -793,6 +826,14 @@ cli_copy_constraints(int argc, char **argv)
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/* fetch schema information from source catalogs, including filtering */
+	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
+	{
+		/* errors have already been logged */
+		(void) copydb_close_snapshot(&(copySpecs.sourceSnapshot));
+		exit(EXIT_CODE_TARGET);
 	}
 
 	if (!copydb_copy_all_indexes(&copySpecs))
