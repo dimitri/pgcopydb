@@ -15,6 +15,7 @@
 #include "env_utils.h"
 #include "lock_utils.h"
 #include "log.h"
+#include "parsing.h"
 #include "pidfile.h"
 #include "schema.h"
 #include "signals.h"
@@ -439,7 +440,8 @@ copydb_init_specs(CopyDataSpec *specs,
 				  RestoreOptions restoreOptions,
 				  bool skipLargeObjects,
 				  bool restart,
-				  bool resume)
+				  bool resume,
+				  bool consistent)
 {
 	/* fill-in a structure with the help of the C compiler */
 	CopyDataSpec tmpCopySpecs = {
@@ -462,6 +464,7 @@ copydb_init_specs(CopyDataSpec *specs,
 
 		.restart = restart,
 		.resume = resume,
+		.consistent = consistent,
 
 		.tableJobs = tableJobs,
 		.indexJobs = indexJobs,
@@ -517,6 +520,12 @@ copydb_init_specs(CopyDataSpec *specs,
 				  "to orchestrate up to %d CREATE INDEX jobs at the same time",
 				  indexJobs);
 		return false;
+	}
+
+	/* we only respect the --skip-blobs option in pgcopydb copy-db command */
+	if (specs->section != DATA_SECTION_ALL)
+	{
+		specs->skipLargeObjects = true;
 	}
 
 	return true;
@@ -611,6 +620,7 @@ copydb_copy_snapshot(CopyDataSpec *specs, TransactionSnapshot *snapshot)
 	PGSQL pgsql = { 0 };
 	TransactionSnapshot *source = &(specs->sourceSnapshot);
 
+	/* copy our source snapshot data into the new snapshot instance */
 	snapshot->pgsql = pgsql;
 	snapshot->connectionType = source->connectionType;
 
@@ -678,6 +688,8 @@ copydb_export_snapshot(TransactionSnapshot *snapshot)
 		return false;
 	}
 
+	snapshot->state = SNAPSHOT_STATE_EXPORTED;
+
 	log_info("Exported snapshot \"%s\" from the source database",
 			 snapshot->snapshot);
 
@@ -690,8 +702,9 @@ copydb_export_snapshot(TransactionSnapshot *snapshot)
  * snapshot.
  */
 bool
-copydb_set_snapshot(TransactionSnapshot *snapshot)
+copydb_set_snapshot(CopyDataSpec *copySpecs)
 {
+	TransactionSnapshot *snapshot = &(copySpecs->sourceSnapshot);
 	PGSQL *pgsql = &(snapshot->pgsql);
 
 	if (!pgsql_init(pgsql, snapshot->pguri, snapshot->connectionType))
@@ -706,34 +719,43 @@ copydb_set_snapshot(TransactionSnapshot *snapshot)
 		return false;
 	}
 
-	/*
-	 * As Postgres docs for SET TRANSACTION SNAPSHOT say:
-	 *
-	 * Furthermore, the transaction must already be set to SERIALIZABLE or
-	 * REPEATABLE READ isolation level (otherwise, the snapshot would be
-	 * discarded immediately, since READ COMMITTED mode takes a new snapshot
-	 * for each command).
-	 *
-	 * When --filters are used, pgcopydb creates TEMP tables on the source
-	 * database to then implement the filtering as JOINs with the Postgres
-	 * catalogs. And even TEMP tables need read-write transaction.
-	 */
-	IsolationLevel level = ISOLATION_REPEATABLE_READ;
-	bool readOnly = false;
-	bool deferrable = true;
-
-	if (!pgsql_set_transaction(pgsql, level, readOnly, deferrable))
+	if (copySpecs->consistent)
 	{
-		/* errors have already been logged */
-		(void) pgsql_finish(pgsql);
-		return false;
+		/*
+		 * As Postgres docs for SET TRANSACTION SNAPSHOT say:
+		 *
+		 * Furthermore, the transaction must already be set to SERIALIZABLE or
+		 * REPEATABLE READ isolation level (otherwise, the snapshot would be
+		 * discarded immediately, since READ COMMITTED mode takes a new
+		 * snapshot for each command).
+		 *
+		 * When --filters are used, pgcopydb creates TEMP tables on the source
+		 * database to then implement the filtering as JOINs with the Postgres
+		 * catalogs. And even TEMP tables need read-write transaction.
+		 */
+		IsolationLevel level = ISOLATION_REPEATABLE_READ;
+		bool readOnly = false;
+		bool deferrable = true;
+
+		if (!pgsql_set_transaction(pgsql, level, readOnly, deferrable))
+		{
+			/* errors have already been logged */
+			(void) pgsql_finish(pgsql);
+			return false;
+		}
+
+		if (!pgsql_set_snapshot(pgsql, snapshot->snapshot))
+		{
+			/* errors have already been logged */
+			(void) pgsql_finish(pgsql);
+			return false;
+		}
+
+		copySpecs->sourceSnapshot.state = SNAPSHOT_STATE_SET;
 	}
-
-	if (!pgsql_set_snapshot(pgsql, snapshot->snapshot))
+	else
 	{
-		/* errors have already been logged */
-		(void) pgsql_finish(pgsql);
-		return false;
+		copySpecs->sourceSnapshot.state = SNAPSHOT_STATE_NOT_CONSISTENT;
 	}
 
 	/* also set our GUC values for the source connection */
@@ -753,19 +775,31 @@ copydb_set_snapshot(TransactionSnapshot *snapshot)
  * transaction and finishing the connection.
  */
 bool
-copydb_close_snapshot(TransactionSnapshot *snapshot)
+copydb_close_snapshot(CopyDataSpec *copySpecs)
 {
+	TransactionSnapshot *snapshot = &(copySpecs->sourceSnapshot);
 	PGSQL *pgsql = &(snapshot->pgsql);
 
-	if (!pgsql_commit(pgsql))
+	if (copySpecs->sourceSnapshot.state == SNAPSHOT_STATE_SET ||
+		copySpecs->sourceSnapshot.state == SNAPSHOT_STATE_EXPORTED ||
+		copySpecs->sourceSnapshot.state == SNAPSHOT_STATE_NOT_CONSISTENT)
 	{
-		log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
-				  snapshot->snapshot,
-				  snapshot->pguri);
-		return false;
+		if (!pgsql_commit(pgsql))
+		{
+			char pguri[MAXCONNINFO] = { 0 };
+
+			(void) parse_and_scrub_connection_string(snapshot->pguri, pguri);
+
+			log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
+					  snapshot->snapshot,
+					  pguri);
+			return false;
+		}
+
+		(void) pgsql_finish(pgsql);
 	}
 
-	(void) pgsql_finish(pgsql);
+	copySpecs->sourceSnapshot.state = SNAPSHOT_STATE_CLOSED;
 
 	return true;
 }
@@ -779,6 +813,14 @@ copydb_close_snapshot(TransactionSnapshot *snapshot)
 bool
 copydb_prepare_snapshot(CopyDataSpec *copySpecs)
 {
+	/* when --not-consistent is used, we have nothing to do here */
+	if (!copySpecs->consistent)
+	{
+		copySpecs->sourceSnapshot.state = SNAPSHOT_STATE_SKIPPED;
+		log_debug("copydb_prepare_snapshot: --not-consistent, skipping");
+		return true;
+	}
+
 	/*
 	 * First, we need to open a snapshot that we're going to re-use in all our
 	 * connections to the source database. When the --snapshot option has been
@@ -797,7 +839,7 @@ copydb_prepare_snapshot(CopyDataSpec *copySpecs)
 	}
 	else
 	{
-		if (!copydb_set_snapshot(sourceSnapshot))
+		if (!copydb_set_snapshot(copySpecs))
 		{
 			log_fatal("Failed to use given --snapshot \"%s\"",
 					  sourceSnapshot->snapshot);
