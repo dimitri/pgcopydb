@@ -415,17 +415,15 @@ cli_restore_schema_parse_list(int argc, char **argv)
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 
-		TransactionSnapshot *sourceSnapshot = &(copySpecs.sourceSnapshot);
-
 		/* fetch schema information from source catalogs, including filtering */
 		if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
 		{
 			/* errors have already been logged */
-			(void) copydb_close_snapshot(sourceSnapshot);
+			(void) copydb_close_snapshot(&copySpecs);
 			exit(EXIT_CODE_TARGET);
 		}
 
-		(void) copydb_close_snapshot(sourceSnapshot);
+		(void) copydb_close_snapshot(&copySpecs);
 	}
 
 	log_info("Preparing the pg_restore --use-list for the pre-data "
@@ -504,7 +502,8 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 						   restoreDBoptions.restoreOptions,
 						   false, /* skipLargeObjects */
 						   restoreDBoptions.restart,
-						   restoreDBoptions.resume))
+						   restoreDBoptions.resume,
+						   !restoreDBoptions.notConsistent))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

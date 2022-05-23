@@ -1056,7 +1056,10 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 		return false;
 	}
 
-	log_debug("%s;", sql);
+	char *endpoint =
+		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
+
+	log_debug("[%s] %s;", endpoint, sql);
 
 	if (paramCount > 0)
 	{
@@ -1110,16 +1113,13 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 		int lineCount = splitLines(message, errorLines, BUFSIZE);
 		int lineNumber = 0;
 
-		char *prefix =
-			pgsql->connectionType == PGSQL_CONN_SOURCE ? "[SOURCE]" : "[TARGET]";
-
 		/*
 		 * PostgreSQL Error message might contain several lines. Log each of
 		 * them as a separate ERROR line here.
 		 */
 		for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
 		{
-			log_error("%s %s", prefix, errorLines[lineNumber]);
+			log_error("[%s] %s", endpoint, errorLines[lineNumber]);
 		}
 
 		log_error("SQL query: %s", sql);
@@ -1609,7 +1609,10 @@ pg_copy_from_stdin(PGSQL *pgsql, const char *qname)
 
 	sformat(sql, sizeof(sql), "COPY %s FROM stdin", qname);
 
-	log_debug("%s;", sql);
+	char *endpoint =
+		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
+
+	log_debug("[%s] %s;", endpoint, sql);
 
 	PGresult *res = PQexec(pgsql->connection, sql);
 

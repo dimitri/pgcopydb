@@ -505,14 +505,12 @@ cli_copy_db(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	TransactionSnapshot *sourceSnapshot = &(copySpecs.sourceSnapshot);
-
 	if (!copydb_dump_source_schema(&copySpecs,
-								   sourceSnapshot->snapshot,
+								   copySpecs.sourceSnapshot.snapshot,
 								   PG_DUMP_SECTION_SCHEMA))
 	{
 		/* errors have already been logged */
-		(void) copydb_close_snapshot(sourceSnapshot);
+		(void) copydb_close_snapshot(&copySpecs);
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
@@ -524,14 +522,14 @@ cli_copy_db(int argc, char **argv)
 	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
 	{
 		/* errors have already been logged */
-		(void) copydb_close_snapshot(sourceSnapshot);
+		(void) copydb_close_snapshot(&copySpecs);
 		exit(EXIT_CODE_TARGET);
 	}
 
 	if (!copydb_target_prepare_schema(&copySpecs))
 	{
 		/* errors have already been logged */
-		(void) copydb_close_snapshot(sourceSnapshot);
+		(void) copydb_close_snapshot(&copySpecs);
 		exit(EXIT_CODE_TARGET);
 	}
 
@@ -544,12 +542,12 @@ cli_copy_db(int argc, char **argv)
 	if (!copydb_copy_all_table_data(&copySpecs))
 	{
 		/* errors have already been logged */
-		(void) copydb_close_snapshot(sourceSnapshot);
+		(void) copydb_close_snapshot(&copySpecs);
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	/* now close the snapshot we kept for the whole operation */
-	(void) copydb_close_snapshot(sourceSnapshot);
+	(void) copydb_close_snapshot(&copySpecs);
 
 	log_info("STEP 7: restore the post-data section to the target database");
 
@@ -607,7 +605,7 @@ cli_copy_data(int argc, char **argv)
 	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
 	{
 		/* errors have already been logged */
-		(void) copydb_close_snapshot(&(copySpecs.sourceSnapshot));
+		(void) copydb_close_snapshot(&copySpecs);
 		exit(EXIT_CODE_TARGET);
 	}
 
@@ -617,7 +615,7 @@ cli_copy_data(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (!copydb_close_snapshot(&(copySpecs.sourceSnapshot)))
+	if (!copydb_close_snapshot(&copySpecs))
 	{
 		log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
 				  copySpecs.sourceSnapshot.snapshot,
@@ -664,7 +662,7 @@ cli_copy_table_data(int argc, char **argv)
 	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
 	{
 		/* errors have already been logged */
-		(void) copydb_close_snapshot(&(copySpecs.sourceSnapshot));
+		(void) copydb_close_snapshot(&copySpecs);
 		exit(EXIT_CODE_TARGET);
 	}
 
@@ -674,7 +672,7 @@ cli_copy_table_data(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (!copydb_close_snapshot(&(copySpecs.sourceSnapshot)))
+	if (!copydb_close_snapshot(&copySpecs))
 	{
 		log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
 				  copySpecs.sourceSnapshot.snapshot,
@@ -721,7 +719,7 @@ cli_copy_sequences(int argc, char **argv)
 	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
 	{
 		/* errors have already been logged */
-		(void) copydb_close_snapshot(&(copySpecs.sourceSnapshot));
+		(void) copydb_close_snapshot(&copySpecs);
 		exit(EXIT_CODE_TARGET);
 	}
 
@@ -731,7 +729,7 @@ cli_copy_sequences(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (!copydb_close_snapshot(&(copySpecs.sourceSnapshot)))
+	if (!copydb_close_snapshot(&copySpecs))
 	{
 		log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
 				  copySpecs.sourceSnapshot.snapshot,
@@ -775,7 +773,7 @@ cli_copy_indexes(int argc, char **argv)
 	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
 	{
 		/* errors have already been logged */
-		(void) copydb_close_snapshot(&(copySpecs.sourceSnapshot));
+		(void) copydb_close_snapshot(&copySpecs);
 		exit(EXIT_CODE_TARGET);
 	}
 
@@ -785,7 +783,7 @@ cli_copy_indexes(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (!copydb_close_snapshot(&(copySpecs.sourceSnapshot)))
+	if (!copydb_close_snapshot(&copySpecs))
 	{
 		log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
 				  copySpecs.sourceSnapshot.snapshot,
@@ -832,7 +830,7 @@ cli_copy_constraints(int argc, char **argv)
 	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
 	{
 		/* errors have already been logged */
-		(void) copydb_close_snapshot(&(copySpecs.sourceSnapshot));
+		(void) copydb_close_snapshot(&copySpecs);
 		exit(EXIT_CODE_TARGET);
 	}
 
@@ -842,7 +840,7 @@ cli_copy_constraints(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (!copydb_close_snapshot(&(copySpecs.sourceSnapshot)))
+	if (!copydb_close_snapshot(&copySpecs))
 	{
 		log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
 				  copySpecs.sourceSnapshot.snapshot,
@@ -890,7 +888,7 @@ cli_copy_blobs(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (!copydb_close_snapshot(&(copySpecs.sourceSnapshot)))
+	if (!copydb_close_snapshot(&copySpecs))
 	{
 		log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
 				  copySpecs.sourceSnapshot.snapshot,
@@ -958,7 +956,8 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 						   copyDBoptions.restoreOptions,
 						   copyDBoptions.skipLargeObjects,
 						   copyDBoptions.restart,
-						   copyDBoptions.resume))
+						   copyDBoptions.resume,
+						   !copyDBoptions.notConsistent))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

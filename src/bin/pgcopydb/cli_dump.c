@@ -321,7 +321,8 @@ cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 						   restoreOptions,
 						   false, /* skipLargeObjects */
 						   dumpDBoptions->restart,
-						   dumpDBoptions->resume))
+						   dumpDBoptions->resume,
+						   !dumpDBoptions->notConsistent))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -358,7 +359,7 @@ cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (!copydb_close_snapshot(&(copySpecs.sourceSnapshot)))
+	if (!copydb_close_snapshot(&copySpecs))
 	{
 		log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
 				  copySpecs.sourceSnapshot.snapshot,

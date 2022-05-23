@@ -104,8 +104,19 @@ typedef struct IndexFilePathsArray
  * pgcopydb uses Postgres facility to export snapshot and re-use them in other
  * transactions to use a consistent view of the data on the source database.
  */
+typedef enum
+{
+	SNAPSHOT_STATE_UNKNOWN = 0,
+	SNAPSHOT_STATE_SKIPPED,
+	SNAPSHOT_STATE_NOT_CONSISTENT,
+	SNAPSHOT_STATE_EXPORTED,
+	SNAPSHOT_STATE_SET,
+	SNAPSHOT_STATE_CLOSED
+} TransactionSnapshotState;
+
 typedef struct TransactionSnapshot
 {
+	TransactionSnapshotState state;
 	PGSQL pgsql;
 	char pguri[MAXCONNINFO];
 	ConnectionType connectionType;
@@ -225,6 +236,7 @@ typedef struct CopyDataSpec
 
 	bool restart;
 	bool resume;
+	bool consistent;
 
 	int tableJobs;
 	int indexJobs;
@@ -233,6 +245,7 @@ typedef struct CopyDataSpec
 
 	DumpPaths dumpPaths;
 	CopyTableDataSpecsArray tableSpecsArray;
+	SourceSequenceArray sequenceArray;
 } CopyDataSpec;
 
 
@@ -271,20 +284,19 @@ bool copydb_init_specs(CopyDataSpec *specs,
 					   RestoreOptions restoreOptions,
 					   bool skipLargeObjects,
 					   bool restart,
-					   bool resume);
+					   bool resume,
+					   bool consistent);
 
 bool copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 							 CopyDataSpec *specs,
 							 SourceTable *source);
 
-bool copydb_copy_snapshot(CopyDataSpec *specs, TransactionSnapshot *snapshot);
-
-bool copydb_prepare_snapshot(CopyDataSpec *copySpecs);
 bool copydb_export_snapshot(TransactionSnapshot *snapshot);
-bool copydb_set_snapshot(TransactionSnapshot *snapshot);
-bool copydb_close_snapshot(TransactionSnapshot *snapshot);
 
-bool copydb_prepare_table_specs(CopyDataSpec *specs);
+bool copydb_copy_snapshot(CopyDataSpec *specs, TransactionSnapshot *snapshot);
+bool copydb_prepare_snapshot(CopyDataSpec *copySpecs);
+bool copydb_set_snapshot(CopyDataSpec *copySpecs);
+bool copydb_close_snapshot(CopyDataSpec *copySpecs);
 
 bool copydb_start_vacuum_table(CopyTableDataSpec *tableSpecs);
 
@@ -355,13 +367,17 @@ bool copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 
 /* sequence.c */
 bool copydb_copy_all_sequences(CopyDataSpec *specs);
+bool copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql);
 
 /* table-data.c */
 bool copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs);
 bool copydb_objectid_is_filtered_out(CopyDataSpec *specs,
 									 uint32_t oid,
 									 char *restoreListName);
-bool copydb_fetch_filtered_oids(CopyDataSpec *specs);
+
+bool copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql);
+bool copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql);
+
 char * copydb_ObjectKindToString(ObjectKind kind);
 
 bool copydb_copy_all_table_data(CopyDataSpec *specs);

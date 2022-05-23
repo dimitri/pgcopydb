@@ -45,7 +45,7 @@ echo snapshot ${PGCOPYDB_SNAPSHOT}
 pgcopydb dump schema --snapshot "${sn}"
 pgcopydb restore pre-data --resume
 
-pgcopydb copy table-data --resume
+pgcopydb copy table-data --resume -vv
 pgcopydb copy sequences --resume
 pgcopydb copy blobs --resume
 pgcopydb copy indexes --resume

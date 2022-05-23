@@ -33,18 +33,74 @@
 bool
 copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 {
+	/*
+	 * Either use the already established connection and transaction that
+	 * exports our snapshot in the main process, or establish a transaction
+	 * that groups together the filters preparation in temp tables and then the
+	 * queries that join with those temp tables.
+	 */
+	PGSQL *src = NULL;
+	PGSQL pgsql = { 0 };
+
+	if (specs->consistent)
+	{
+		log_debug("re-use snapshot \"%s\"", specs->sourceSnapshot.snapshot);
+		src = &(specs->sourceSnapshot.pgsql);
+	}
+	else
+	{
+		log_debug("--not-consistent, create a fresh connection");
+		if (!pgsql_init(&pgsql, specs->source_pguri, PGSQL_CONN_SOURCE))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		src = &pgsql;
+
+		if (!pgsql_begin(src))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
 	/* now fetch the list of tables from the source database */
-	if (!copydb_prepare_table_specs(specs))
+	if (specs->section == DATA_SECTION_ALL ||
+		specs->section == DATA_SECTION_TABLE_DATA)
+	{
+		if (!copydb_prepare_table_specs(specs, src))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	if (specs->section == DATA_SECTION_ALL ||
+		specs->section == DATA_SECTION_SET_SEQUENCES)
+	{
+		if (!copydb_prepare_sequence_specs(specs, src))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	/* prepare the Oids of objects that are filtered out */
+	if (!copydb_fetch_filtered_oids(specs, src))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	/* prepare the Oids of objects that are filtered out */
-	if (!copydb_fetch_filtered_oids(specs))
+	if (!specs->consistent)
 	{
-		/* errors have already been logged */
-		return false;
+		log_debug("--not-consistent: commit and close SOURCE connection now");
+		if (!pgsql_commit(src))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	return true;
@@ -143,7 +199,7 @@ terminate:
  * CopyTableDataSpecsArray to drive the operations.
  */
 bool
-copydb_prepare_table_specs(CopyDataSpec *specs)
+copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 {
 	SourceTableArray tableArray = { 0, NULL };
 	CopyTableDataSpecsArray *tableSpecsArray = &(specs->tableSpecsArray);
@@ -153,7 +209,7 @@ copydb_prepare_table_specs(CopyDataSpec *specs)
 	/*
 	 * Now get the list of the tables we want to COPY over.
 	 */
-	if (!schema_list_ordinary_tables(&(specs->sourceSnapshot.pgsql),
+	if (!schema_list_ordinary_tables(pgsql,
 									 &(specs->filters),
 									 &tableArray))
 	{
@@ -263,7 +319,7 @@ copydb_objectid_is_filtered_out(CopyDataSpec *specs,
  * be filtered out of the pg_restore catalog or other operations.
  */
 bool
-copydb_fetch_filtered_oids(CopyDataSpec *specs)
+copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 {
 	SourceFilters *filters = &(specs->filters);
 	SourceFilterItem *hOid = NULL;
@@ -273,8 +329,6 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs)
 	SourceIndexArray indexArray = { 0, NULL };
 	SourceSequenceArray sequenceArray = { 0, NULL };
 	SourceDependArray dependArray = { 0, NULL };
-
-	PGSQL *pgsql = &(specs->sourceSnapshot.pgsql);
 
 	/*
 	 * Take the complement of the filtering, to list the OIDs of objects that
@@ -619,7 +673,7 @@ copydb_process_table_data_worker(CopyDataSpec *specs)
 	CopyTableDataSpecsArray *tableSpecsArray = &(specs->tableSpecsArray);
 
 	/* connect once to the source database for the whole process */
-	if (!copydb_set_snapshot(&(specs->sourceSnapshot)))
+	if (!copydb_set_snapshot(specs))
 	{
 		/* errors have already been logged */
 		return false;
@@ -726,7 +780,7 @@ copydb_process_table_data_worker(CopyDataSpec *specs)
 	}
 
 	/* terminate our connection to the source database now */
-	(void) copydb_close_snapshot(&(specs->sourceSnapshot));
+	(void) copydb_close_snapshot(specs);
 
 	/*
 	 * When this process has finished looping over all the tables in the table
@@ -812,7 +866,7 @@ copydb_table_is_being_processed(CopyDataSpec *specs,
 			*isBeingProcessed = true;
 			(void) semaphore_unlock(&(specs->tableSemaphore));
 
-			log_debug("Skipping table %s processed by concurrent worker %d",
+			log_trace("Skipping table %s processed by concurrent worker %d",
 					  tableSpecs->qname, tableSummary.pid);
 
 			return true;
@@ -1418,42 +1472,70 @@ copydb_copy_blobs(CopyDataSpec *specs)
 
 	INSTR_TIME_SET_CURRENT(startTime);
 
-	TransactionSnapshot snapshot = { 0 };
-
 	PGSQL *src = NULL;
+	PGSQL pgsql = { 0 };
 	PGSQL dst = { 0 };
 
-	/*
-	 * In the context of the `pgcopydb copy blobs` command, we want to re-use
-	 * the already prepared snapshot.
-	 */
-	if (specs->section == DATA_SECTION_BLOBS)
+	TransactionSnapshot snapshot = { 0 };
+
+	if (specs->consistent)
 	{
-		src = &(specs->sourceSnapshot.pgsql);
+		/*
+		 * In the context of the `pgcopydb copy blobs` command, we want to
+		 * re-use the already prepared snapshot.
+		 */
+		if (specs->section == DATA_SECTION_BLOBS)
+		{
+			src = &(specs->sourceSnapshot.pgsql);
+		}
+		else
+		{
+			/*
+			 * In the context of a full copy command, we want to re-use the
+			 * already exported snapshot and make sure to use a private PGSQL
+			 * client connection instance.
+			 */
+			if (!copydb_copy_snapshot(specs, &snapshot))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			/* swap the new instance in place of the previous one */
+			specs->sourceSnapshot = snapshot;
+
+			src = &(specs->sourceSnapshot.pgsql);
+
+			if (!copydb_set_snapshot(specs))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+		}
 	}
 	else
 	{
 		/*
-		 * In the context of a full copy command, we want to re-use the already
-		 * exported snapshot and make sure to use a private PGSQL client
-		 * connection instance.
+		 * In the context of --not-consistent we don't have an already
+		 * established snapshot to set nor a connection to piggyback onto, so
+		 * we have to initialize our client connection now.
 		 */
-		if (!copydb_copy_snapshot(specs, &snapshot))
+		if (!pgsql_init(&pgsql, specs->source_pguri, PGSQL_CONN_SOURCE))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 
-		if (!copydb_set_snapshot(&snapshot))
+		src = &pgsql;
+
+		if (!pgsql_begin(src))
 		{
 			/* errors have already been logged */
 			return false;
 		}
-
-		src = &(snapshot.pgsql);
 	}
 
-	if (!pgsql_init(&dst, (char *) specs->target_pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&dst, specs->target_pguri, PGSQL_CONN_TARGET))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1479,13 +1561,22 @@ copydb_copy_blobs(CopyDataSpec *specs)
 	}
 
 	/* if we opened a snapshot, now is the time to close it */
-	if (!IS_EMPTY_STRING_BUFFER(snapshot.snapshot))
+	if (specs->consistent)
 	{
-		if (!copydb_close_snapshot(&snapshot))
+		if (specs->section != DATA_SECTION_BLOBS)
 		{
-			log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
-					  snapshot.snapshot,
-					  snapshot.pguri);
+			if (!copydb_close_snapshot(specs))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+		}
+	}
+	else
+	{
+		if (!pgsql_commit(src))
+		{
+			/* errors have already been logged */
 			return false;
 		}
 	}

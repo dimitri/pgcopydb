@@ -23,6 +23,49 @@
 
 
 /*
+ * sequence_prepare_specs fetches the list of sequences at pgsql connection,
+ * using the filtering already prepared in the connection (as temp tables).
+ * Then the function loops over the sequences to fetch their current values.
+ */
+bool
+copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql)
+{
+	SourceSequenceArray *sequenceArray = &(specs->sequenceArray);
+
+	if (!schema_list_sequences(pgsql, &(specs->filters), sequenceArray))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_info("Fetching information for %d sequences", sequenceArray->count);
+
+	int errors = 0;
+
+	for (int seqIndex = 0; seqIndex < sequenceArray->count; seqIndex++)
+	{
+		SourceSequence *seq = &(sequenceArray->array[seqIndex]);
+
+		char qname[BUFSIZE] = { 0 };
+
+		sformat(qname, sizeof(qname), "\"%s\".\"%s\"",
+				seq->nspname,
+				seq->relname);
+
+		if (!schema_get_sequence_value(pgsql, seq))
+		{
+			/* just skip this one */
+			log_warn("Failed to get sequence values for %s", qname);
+			++errors;
+			continue;
+		}
+	}
+
+	return errors == 0;
+}
+
+
+/*
  * copydb_copy_all_sequences fetches the list of sequences from the source
  * database and then for each of them runs a SELECT last_value, is_called FROM
  * the sequence on the source database and then calls SELECT setval(); on the
@@ -46,8 +89,6 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 
 	log_info("Reset sequences values on the target database");
 
-	/* re-use the main snapshot and transaction to list sequences */
-	PGSQL *src = &(specs->sourceSnapshot.pgsql);
 	PGSQL dst = { 0 };
 
 	if (!pgsql_init(&dst, specs->target_pguri, PGSQL_CONN_TARGET))
@@ -55,18 +96,6 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 		/* errors have already been logged */
 		return false;
 	}
-
-	SourceSequenceArray sequenceArray = { 0, NULL };
-
-	log_info("Listing sequences in source database");
-
-	if (!schema_list_sequences(src, &(specs->filters), &sequenceArray))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	log_info("Fetched information for %d sequences", sequenceArray.count);
 
 	if (!pgsql_begin(&dst))
 	{
@@ -76,23 +105,17 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 
 	int errors = 0;
 
-	for (int seqIndex = 0; seqIndex < sequenceArray.count; seqIndex++)
+	SourceSequenceArray *sequenceArray = &(specs->sequenceArray);
+
+	for (int seqIndex = 0; seqIndex < sequenceArray->count; seqIndex++)
 	{
-		SourceSequence *seq = &(sequenceArray.array[seqIndex]);
+		SourceSequence *seq = &(sequenceArray->array[seqIndex]);
 
 		char qname[BUFSIZE] = { 0 };
 
 		sformat(qname, sizeof(qname), "\"%s\".\"%s\"",
 				seq->nspname,
 				seq->relname);
-
-		if (!schema_get_sequence_value(src, seq))
-		{
-			/* just skip this one */
-			log_warn("Failed to get sequence values for %s", qname);
-			++errors;
-			continue;
-		}
 
 		if (!schema_set_sequence_value(&dst, seq))
 		{
@@ -115,9 +138,6 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 		log_warn("Failed to write the tracking file \%s\"",
 				 specs->cfPaths.done.sequences);
 	}
-
-	/* free our temporary memory that's been malloc'ed */
-	free(sequenceArray.array);
 
 	return errors == 0;
 }

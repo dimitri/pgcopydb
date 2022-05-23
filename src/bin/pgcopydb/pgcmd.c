@@ -372,7 +372,7 @@ pg_dump_db(PostgresPaths *pgPaths,
 	args[argsIndex++] = (char *) pgPaths->pg_dump;
 	args[argsIndex++] = "-Fc";
 
-	if (snapshot != NULL)
+	if (!IS_EMPTY_STRING_BUFFER(snapshot))
 	{
 		args[argsIndex++] = "--snapshot";
 		args[argsIndex++] = (char *) snapshot;
