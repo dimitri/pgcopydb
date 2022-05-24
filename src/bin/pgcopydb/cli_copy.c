@@ -621,6 +621,14 @@ cli_copy_schema(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	/* fetch schema information from source catalogs, including filtering */
+	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
+	{
+		/* errors have already been logged */
+		(void) copydb_close_snapshot(&copySpecs);
+		exit(EXIT_CODE_TARGET);
+	}
+
 	/* now close the snapshot we kept for the whole operation */
 	(void) copydb_close_snapshot(&copySpecs);
 
