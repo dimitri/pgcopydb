@@ -1,3 +1,18 @@
+### pgcopydb v0.7 (May 24, 2022) ###
+
+Bug fix release on-top of v0.6. The filtering was not applied to the
+--pre-data parts of the schema.
+
+### Added
+* Use 'pgcopydb' as our application_name in Postgres connections. (#42)
+* Implement pgcopydb copy schema. (#46)
+
+### Changed
+* Skip long-running transactions when --not-consistent is used. (#45)
+
+### Fixed
+* Fix filtering of the pre-data section of the dump. (#44)
+
 ### pgcopydb v0.6 (May 16, 2022) ###
 
 Improve pgcopydb with filtering support and the usual amount of bug fixes,
