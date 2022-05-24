@@ -24,6 +24,7 @@ CopyDBOptions copyDBoptions = { 0 };
 static int cli_copy_db_getopts(int argc, char **argv);
 
 static void cli_copy_db(int argc, char **argv);
+static void cli_copy_schema(int argc, char **argv);
 static void cli_copy_data(int argc, char **argv);
 static void cli_copy_table_data(int argc, char **argv);
 static void cli_copy_sequences(int argc, char **argv);
@@ -80,6 +81,22 @@ static CommandLine copy_db_command =
 		"  --snapshot            Use snapshot obtained with pg_export_snapshot\n",
 		cli_copy_db_getopts,
 		cli_copy_db);
+
+static CommandLine copy_schema_command =
+	make_command(
+		"schema",
+		"Copy the database schema from source to target",
+		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
+		"  --source              Postgres URI to the source database\n"
+		"  --target              Postgres URI to the target database\n"
+		"  --dir                 Work directory to use\n"
+		"  --filters <filename>  Use the filters defined in <filename>\n"
+		"  --restart             Allow restarting when temp files exist already\n"
+		"  --resume              Allow resuming operations after a failure\n"
+		"  --not-consistent      Allow taking a new snapshot on the source database\n"
+		"  --snapshot            Use snapshot obtained with pg_export_snapshot\n",
+		cli_copy_db_getopts,
+		cli_copy_schema);
 
 /*
  * pgcopydb copy data does the data section only, skips pre-data and post-data
@@ -186,6 +203,7 @@ static CommandLine copy_constraints_command =
 
 static CommandLine *copy_subcommands[] = {
 	&copy_db_command,
+	&copy_schema_command,
 	&copy_data_command,
 	&copy_table_data_command,
 	&copy_blobs_command,
@@ -516,8 +534,6 @@ cli_copy_db(int argc, char **argv)
 
 	log_info("STEP 2: restore the pre-data section to the target database");
 
-	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_PREPARE_SCHEMA);
-
 	/* fetch schema information from source catalogs, including filtering */
 	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
 	{
@@ -525,6 +541,8 @@ cli_copy_db(int argc, char **argv)
 		(void) copydb_close_snapshot(&copySpecs);
 		exit(EXIT_CODE_TARGET);
 	}
+
+	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_PREPARE_SCHEMA);
 
 	if (!copydb_target_prepare_schema(&copySpecs))
 	{
@@ -550,6 +568,72 @@ cli_copy_db(int argc, char **argv)
 	(void) copydb_close_snapshot(&copySpecs);
 
 	log_info("STEP 7: restore the post-data section to the target database");
+
+	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_FINALIZE_SCHEMA);
+
+	if (!copydb_target_finalize_schema(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_TARGET);
+	}
+
+	(void) summary_set_current_time(timings, TIMING_STEP_AFTER_FINALIZE_SCHEMA);
+	(void) summary_set_current_time(timings, TIMING_STEP_END);
+
+	(void) print_summary(&summary, &copySpecs);
+}
+
+
+/*
+ * cli_copy_schema implements the command: pgcopydb copy schema
+ */
+static void
+cli_copy_schema(int argc, char **argv)
+{
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_SCHEMA);
+
+	Summary summary = { 0 };
+	TopLevelTimings *timings = &(summary.timings);
+
+	(void) summary_set_current_time(timings, TIMING_STEP_START);
+
+	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_SCHEMA_DUMP);
+
+	/*
+	 * First, we need to open a snapshot that we're going to re-use in all our
+	 * connections to the source database. When the --snapshot option has been
+	 * used, instead of exporting a new snapshot, we can just re-use it.
+	 */
+	if (!copydb_prepare_snapshot(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!copydb_dump_source_schema(&copySpecs,
+								   copySpecs.sourceSnapshot.snapshot,
+								   PG_DUMP_SECTION_SCHEMA))
+	{
+		/* errors have already been logged */
+		(void) copydb_close_snapshot(&copySpecs);
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/* now close the snapshot we kept for the whole operation */
+	(void) copydb_close_snapshot(&copySpecs);
+
+	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_PREPARE_SCHEMA);
+
+	if (!copydb_target_prepare_schema(&copySpecs))
+	{
+		/* errors have already been logged */
+		(void) copydb_close_snapshot(&copySpecs);
+		exit(EXIT_CODE_TARGET);
+	}
+
+	(void) summary_set_current_time(timings, TIMING_STEP_AFTER_PREPARE_SCHEMA);
 
 	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_FINALIZE_SCHEMA);
 
