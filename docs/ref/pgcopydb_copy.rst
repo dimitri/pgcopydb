@@ -11,6 +11,7 @@ This command prefixes the following sub-commands:
 
   pgcopydb copy
     db           Copy an entire database from source to target
+    schema       Copy the database schema from source to target
     data         Copy the data section from source to target
     table-data   Copy the data from all tables in database from source to target
     blobs        Copy the blob data from ther source database to the target
@@ -53,6 +54,31 @@ see full documentation coverage at section section :ref:`pgcopydb_copy-db`.
      --no-acl              Prevent restoration of access privileges (grant/revoke commands).
      --no-comments         Do not output commands to restore comments
      --skip-large-objects  Skip copying large objects (blobs)
+     --restart             Allow restarting when temp files exist already
+     --resume              Allow resuming operations after a failure
+     --not-consistent      Allow taking a new snapshot on the source database
+     --snapshot            Use snapshot obtained with pg_export_snapshot
+
+
+.. _pgcopydb_copy_schema:
+
+pgcopydb copy schema
+--------------------
+
+pgcopydb copy schema - Copy the database schema from source to target
+
+The command ``pgcopydb copy schema`` implements the schema only section of
+the copy-db steps.
+
+::
+
+   pgcopydb copy schema: Copy the database schema from source to target
+   usage: pgcopydb copy schema  --source ... --target ... [ --table-jobs ... --index-jobs ... ]
+
+     --source              Postgres URI to the source database
+     --target              Postgres URI to the target database
+     --dir                 Work directory to use
+     --filters <filename>  Use the filters defined in <filename>
      --restart             Allow restarting when temp files exist already
      --resume              Allow resuming operations after a failure
      --not-consistent      Allow taking a new snapshot on the source database
