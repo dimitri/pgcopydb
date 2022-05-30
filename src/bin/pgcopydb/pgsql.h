@@ -26,7 +26,6 @@
 
 
 /*
-<<<<<<< HEAD
  * OID values from PostgreSQL src/include/catalog/pg_type.h
  */
 #define BOOLOID 16
@@ -54,8 +53,6 @@
 #define PGSR_SYNC_STATE_MAXLENGTH 10
 
 /*
-=======
->>>>>>> 31ea4ec (First batch of work to implement support for logical decoding.)
  * We receive a list of "other nodes" from the monitor, and we store that list
  * in local memory. We pre-allocate the memory storage, and limit how many node
  * addresses we can handle because of the pre-allocation strategy.
