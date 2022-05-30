@@ -41,6 +41,7 @@ typedef struct CopyDBOptions
 	char snapshot[BUFSIZE];
 
 	char filterFileName[MAXPGPATH];
+	char slotName[MAXPGPATH];
 } CopyDBOptions;
 
 

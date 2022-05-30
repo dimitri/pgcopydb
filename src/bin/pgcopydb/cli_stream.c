@@ -9,7 +9,6 @@
 #include <inttypes.h>
 
 #include "cli_common.h"
-#include "cli_stream.h"
 #include "cli_root.h"
 #include "commandline.h"
 #include "env_utils.h"
@@ -21,7 +20,7 @@
 #include "stream.h"
 #include "string_utils.h"
 
-StreamDBOptions streamDBoptions = { 0 };
+CopyDBOptions streamDBoptions = { 0 };
 
 static int cli_stream_getopts(int argc, char **argv);
 static void cli_stream_receive(int argc, char **argv);
@@ -79,7 +78,7 @@ CommandLine stream_commands =
 static int
 cli_stream_getopts(int argc, char **argv)
 {
-	StreamDBOptions options = { 0 };
+	CopyDBOptions options = { 0 };
 	int c, option_index = 0;
 	int errors = 0, verboseCount = 0;
 
