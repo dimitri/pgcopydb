@@ -39,18 +39,17 @@ static bool updateStreamCounters(StreamContext *context,
  * from a copyDBSpecs structure.
  */
 bool
-stream_init_specs(CopyDataSpec *copySpecs, StreamSpecs *specs, char *slotName)
+stream_init_specs(StreamSpecs *specs,
+				  char *cdcdir,
+				  char *source_pguri,
+				  char *target_pguri,
+				  char *slotName)
 {
 	/* just copy into StreamSpecs what's been initialized in copySpecs */
-	specs->cfPaths = copySpecs->cfPaths;
-	specs->pgPaths = copySpecs->pgPaths;
-
-	strlcpy(specs->source_pguri, copySpecs->source_pguri, MAXCONNINFO);
-	strlcpy(specs->target_pguri, copySpecs->target_pguri, MAXCONNINFO);
-
+	strlcpy(specs->cdcdir, cdcdir, MAXCONNINFO);
+	strlcpy(specs->source_pguri, source_pguri, MAXCONNINFO);
+	strlcpy(specs->target_pguri, target_pguri, MAXCONNINFO);
 	strlcpy(specs->slotName, slotName, sizeof(specs->slotName));
-
-	specs->sourceSnapshot = copySpecs->sourceSnapshot;
 
 	if (!buildReplicationURI(specs->source_pguri, specs->logrep_pguri))
 	{
@@ -97,7 +96,7 @@ startLogicalStreaming(StreamSpecs *specs)
 	StreamContext privateContext = { 0 };
 	LogicalStreamContext context = { 0 };
 
-	privateContext.cfPaths = &(specs->cfPaths);
+	privateContext.cdcdir = specs->cdcdir;
 	privateContext.startLSN = specs->startLSN;
 
 	context.private = (void *) &(privateContext);
@@ -198,7 +197,7 @@ streamWrite(LogicalStreamContext *context)
 	XLogFileName(wal, context->timeline, segno, context->WalSegSz);
 
 	sformat(walFileName, sizeof(walFileName), "%s/%s.json",
-			privateContext->cfPaths->cdcdir,
+			privateContext->cdcdir,
 			wal);
 
 	if (strcmp(privateContext->walFileName, walFileName) != 0)
@@ -241,8 +240,7 @@ streamWrite(LogicalStreamContext *context)
 		 */
 		char latest[MAXPGPATH] = { 0 };
 
-		sformat(latest, sizeof(latest), "%s/latest",
-				privateContext->cfPaths->cdcdir);
+		sformat(latest, sizeof(latest), "%s/latest", privateContext->cdcdir);
 
 		if (!create_symbolic_link(privateContext->walFileName, latest))
 		{
@@ -567,7 +565,7 @@ stream_read_latest(StreamSpecs *specs, StreamContent *content)
 {
 	char latest[MAXPGPATH] = { 0 };
 
-	sformat(latest, sizeof(latest), "%s/latest", specs->cfPaths.cdcdir);
+	sformat(latest, sizeof(latest), "%s/latest", specs->cdcdir);
 
 	if (!file_exists(latest))
 	{

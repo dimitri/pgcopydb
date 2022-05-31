@@ -9,6 +9,7 @@
 #include <inttypes.h>
 
 #include "env_utils.h"
+#include "file_utils.h"
 #include "ini.h"
 #include "log.h"
 #include "filtering.h"

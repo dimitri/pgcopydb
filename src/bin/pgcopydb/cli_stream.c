@@ -11,6 +11,7 @@
 #include "cli_common.h"
 #include "cli_root.h"
 #include "commandline.h"
+#include "copydb.h"
 #include "env_utils.h"
 #include "log.h"
 #include "pgcmd.h"
@@ -274,7 +275,11 @@ cli_stream_receive(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (!stream_init_specs(&copySpecs, &specs, streamDBoptions.slotName))
+	if (!stream_init_specs(&specs,
+						   copySpecs.cfPaths.cdcdir,
+						   copySpecs.source_pguri,
+						   copySpecs.target_pguri,
+						   streamDBoptions.slotName))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

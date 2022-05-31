@@ -10,7 +10,6 @@
 
 #include "postgres_fe.h"        /* pqsignal, portable sigaction wrapper */
 
-#include "cli_root.h"
 #include "defaults.h"
 #include "lock_utils.h"
 #include "log.h"

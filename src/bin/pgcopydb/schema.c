@@ -11,6 +11,7 @@
 
 #include "defaults.h"
 #include "env_utils.h"
+#include "file_utils.h"
 #include "filtering.h"
 #include "log.h"
 #include "parsing.h"
