@@ -2445,6 +2445,7 @@ pgsql_init_stream(LogicalStreamClient *client,
 	strlcpy(client->slotName, slotName, sizeof(client->slotName));
 
 	client->startpos = startpos;
+	client->endpos = endpos;
 
 	client->fsync_interval = 10 * 1000;          /* 10 sec = default */
 	client->standby_message_timeout = 10 * 1000; /* 10 sec = default */
@@ -2777,6 +2778,10 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 				 * committed before endpos.  So we can bail out now.
 				 */
 				endposReached = true;
+
+				log_debug("pgsql_stream_logical: endpos reached on keepalive: "
+						  "%X/%X",
+						  LSN_FORMAT_ARGS(walEnd));
 			}
 
 			/* Send a reply, if necessary */
@@ -2830,6 +2835,9 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 			 * We've read past our endpoint, so prepare to go away being
 			 * cautious about what happens to our output data.
 			 */
+			log_debug("pgsql_stream_logical: endpos reached at %X/%X",
+					  LSN_FORMAT_ARGS(cur_record_lsn));
+
 			if (!flushAndSendFeedback(client, context))
 			{
 				goto error;
@@ -2856,6 +2864,9 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 			cur_record_lsn == client->endpos)
 		{
 			/* endpos was exactly the record we just processed, we're done */
+			log_debug("pgsql_stream_logical: endpos reached at %X/%X",
+					  LSN_FORMAT_ARGS(cur_record_lsn));
+
 			if (!flushAndSendFeedback(client, context))
 			{
 				goto error;

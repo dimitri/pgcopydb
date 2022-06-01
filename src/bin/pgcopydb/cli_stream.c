@@ -34,7 +34,12 @@ static CommandLine stream_receive_command =
 		"Stream changes from the source database",
 		" --source ... ",
 		"  --source         Postgres URI to the source database\n"
-		"  --slot-name      Stream changes recorded by this slot\n",
+		"  --dir            Work directory to use\n"
+		"  --restart        Allow restarting when temp files exist already\n"
+		"  --resume         Allow resuming operations after a failure\n"
+		"  --not-consistent Allow taking a new snapshot on the source database\n"
+		"  --slot-name      Stream changes recorded by this slot\n"
+		"  --endpos         LSN position where to stop receiving changes",
 		cli_stream_getopts,
 		cli_stream_receive);
 
@@ -86,7 +91,12 @@ cli_stream_getopts(int argc, char **argv)
 	static struct option long_options[] = {
 		{ "source", required_argument, NULL, 'S' },
 		{ "target", required_argument, NULL, 'T' },
+		{ "dir", required_argument, NULL, 'D' },
 		{ "slot-name", required_argument, NULL, 's' },
+		{ "endpos", required_argument, NULL, 'E' },
+		{ "restart", no_argument, NULL, 'r' },
+		{ "resume", no_argument, NULL, 'R' },
+		{ "not-consistent", no_argument, NULL, 'C' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "quiet", no_argument, NULL, 'q' },
@@ -127,10 +137,62 @@ cli_stream_getopts(int argc, char **argv)
 				break;
 			}
 
+			case 'D':
+			{
+				strlcpy(options.dir, optarg, MAXPGPATH);
+				log_trace("--dir %s", options.dir);
+				break;
+			}
+
 			case 's':
 			{
 				strlcpy(options.slotName, optarg, NAMEDATALEN);
 				log_trace("--slot-name %s", options.slotName);
+				break;
+			}
+
+			case 'E':
+			{
+				if (!parseLSN(optarg, &(options.endpos)))
+				{
+					log_fatal("Failed to parse endpos LSN: \"%s\"", optarg);
+					exit(EXIT_CODE_BAD_ARGS);
+				}
+
+				log_trace("--endpos %X/%X",
+						  (uint32_t) (options.endpos >> 32),
+						  (uint32_t) options.endpos);
+				break;
+			}
+
+			case 'r':
+			{
+				options.restart = true;
+				log_trace("--restart");
+
+				if (options.resume)
+				{
+					log_fatal("Options --resume and --restart are not compatible");
+				}
+				break;
+			}
+
+			case 'R':
+			{
+				options.resume = true;
+				log_trace("--resume");
+
+				if (options.restart)
+				{
+					log_fatal("Options --resume and --restart are not compatible");
+				}
+				break;
+			}
+
+			case 'C':
+			{
+				options.notConsistent = true;
+				log_trace("--not-consistent");
 				break;
 			}
 
@@ -279,7 +341,8 @@ cli_stream_receive(int argc, char **argv)
 						   copySpecs.cfPaths.cdcdir,
 						   copySpecs.source_pguri,
 						   copySpecs.target_pguri,
-						   streamDBoptions.slotName))
+						   streamDBoptions.slotName,
+						   streamDBoptions.endpos))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -294,8 +357,6 @@ cli_stream_receive(int argc, char **argv)
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);
 	}
-
-	exit(EXIT_CODE_INTERNAL_ERROR);
 }
 
 

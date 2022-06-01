@@ -61,6 +61,7 @@ typedef struct StreamSpecs
 
 	char slotName[NAMEDATALEN];
 	uint64_t startLSN;
+	uint64_t endpos;
 
 	bool restart;
 	bool resume;
@@ -81,7 +82,8 @@ bool stream_init_specs(StreamSpecs *specs,
 					   char *cdcdir,
 					   char *source_pguri,
 					   char *target_pguri,
-					   char *slotName);
+					   char *slotName,
+					   uint64_t endpos);
 
 bool startLogicalStreaming(StreamSpecs *specs);
 

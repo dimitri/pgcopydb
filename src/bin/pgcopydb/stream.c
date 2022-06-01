@@ -43,13 +43,16 @@ stream_init_specs(StreamSpecs *specs,
 				  char *cdcdir,
 				  char *source_pguri,
 				  char *target_pguri,
-				  char *slotName)
+				  char *slotName,
+				  uint64_t endpos)
 {
 	/* just copy into StreamSpecs what's been initialized in copySpecs */
 	strlcpy(specs->cdcdir, cdcdir, MAXCONNINFO);
 	strlcpy(specs->source_pguri, source_pguri, MAXCONNINFO);
 	strlcpy(specs->target_pguri, target_pguri, MAXCONNINFO);
 	strlcpy(specs->slotName, slotName, sizeof(specs->slotName));
+
+	specs->endpos = endpos;
 
 	if (!buildReplicationURI(specs->source_pguri, specs->logrep_pguri))
 	{
@@ -135,13 +138,15 @@ startLogicalStreaming(StreamSpecs *specs)
 	 * In case of being disconnected or other transient errors, reconnect and
 	 * continue streaming.
 	 */
-	while (true)
+	bool retry = true;
+
+	while (retry)
 	{
 		if (!pgsql_init_stream(&stream,
 							   specs->logrep_pguri,
 							   specs->slotName,
 							   specs->startLSN,
-							   0))
+							   specs->endpos))
 		{
 			/* errors have already been logged */
 			return false;
@@ -156,9 +161,9 @@ startLogicalStreaming(StreamSpecs *specs)
 		/* ignore errors, try again unless asked to stop */
 		bool cleanExit = pgsql_stream_logical(&stream, &context);
 
-		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		if (cleanExit || asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
-			return true;
+			retry = false;
 		}
 
 		if (!cleanExit)
@@ -416,7 +421,7 @@ parseMessageMetadata(LogicalMessageMetadata *metadata, const char *buffer)
 
 	if (json_type(json) != JSONObject)
 	{
-		log_error("Failed to parse JSON message: \"%s\"", buffer);
+		log_error("Failed to parse JSON message: %s", buffer);
 		json_value_free(json);
 		return false;
 	}
@@ -426,7 +431,9 @@ parseMessageMetadata(LogicalMessageMetadata *metadata, const char *buffer)
 
 	if (action == NULL || strlen(action) != 1)
 	{
-		log_error("Failed to parse JSON message: \"%s\"", buffer);
+		log_error("Failed to parse action \"%s\" in JSON message: %s",
+				  action ? "NULL" : action,
+				  buffer);
 		json_value_free(json);
 		return false;
 	}
@@ -492,14 +499,10 @@ parseMessageMetadata(LogicalMessageMetadata *metadata, const char *buffer)
 
 	char *nextlsn = (char *) json_object_get_string(jsobj, "nextlsn");
 
-	if (nextlsn == NULL)
+	if (nextlsn != NULL)
 	{
-		log_error("Failed to parse JSON message: \"%s\"", buffer);
-		json_value_free(json);
-		return false;
+		strlcpy(metadata->nextlsn, nextlsn, sizeof(metadata->nextlsn));
 	}
-
-	strlcpy(metadata->nextlsn, nextlsn, sizeof(metadata->nextlsn));
 
 	json_value_free(json);
 	return true;
