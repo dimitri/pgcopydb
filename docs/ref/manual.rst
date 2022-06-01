@@ -16,5 +16,5 @@ their own manual page.
    pgcopydb_restore
    pgcopydb_list
    pgcopydb_copy
-   pgcopydb_config
    pgcopydb_stream
+   pgcopydb_config

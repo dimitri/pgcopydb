@@ -48,10 +48,14 @@ tables to COPY the data from.
 ::
 
    pgcopydb stream receive: Stream changes from the source database
-   usage: pgcopydb stream receive  --source ...
-
+   usage: pgcopydb stream receive  --source ... 
+   
      --source         Postgres URI to the source database
+     --dir            Work directory to use
+     --restart        Allow restarting when temp files exist already
      --slot-name      Stream changes recorded by this slot
+     --endpos         LSN position where to stop receiving changes
+
 
 Options
 -------
@@ -67,6 +71,28 @@ The following options are available to ``pgcopydb stream receive``:
 
   __ https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNSTRING
 
+--target
+
+  Connection string to the target Postgres instance.
+
+--dir
+
+  During its normal operations pgcopydb creates a lot of temporary files to
+  track sub-processes progress. Temporary files are created in the directory
+  location given by this option, or defaults to
+  ``${TMPDIR}/pgcopydb`` when the environment variable is set, or
+  then to ``/tmp/pgcopydb``.
+
+--restart
+
+  When running the pgcopydb command again, if the work directory already
+  contains information from a previous run, then the command refuses to
+  proceed and delete information that might be used for diagnostics and
+  forensics.
+
+  In that case, the ``--restart`` option can be used to allow pgcopydb to
+  delete traces from a previous run.
+
 --slot-name
 
   Logical replication slot to use. At the moment pgcopydb doesn't know how
@@ -78,6 +104,22 @@ The following options are available to ``pgcopydb stream receive``:
 
   __ https://github.com/eulerto/wal2json/
 
+--endpos
+
+  Logical replication target LSN to use. Automatically stop replication and
+  exit with normal exit status 0 when receiving reaches the specified LSN.
+  If there's a record with LSN exactly equal to lsn, the record will be
+  output.
+
+  The ``--endpos`` option is not aware of transaction boundaries and may
+  truncate output partway through a transaction. Any partially output
+  transaction will not be consumed and will be replayed again when the slot
+  is next read from. Individual messages are never truncated.
+
+  See also documentation for `pg_recvlogical`__.
+
+  __ https://www.postgresql.org/docs/current/app-pgrecvlogical.html
+  
 Environment
 -----------
 
@@ -85,3 +127,15 @@ PGCOPYDB_SOURCE_PGURI
 
   Connection string to the source Postgres instance. When ``--source`` is
   ommitted from the command line, then this environment variable is used.
+
+PGCOPYDB_TARGET_PGURI
+
+  Connection string to the target Postgres instance. When ``--target`` is
+  ommitted from the command line, then this environment variable is used.
+
+TMPDIR
+
+  The pgcopydb command creates all its work files and directories in
+  ``${TMPDIR}/pgcopydb``, and defaults to ``/tmp/pgcopydb``.
+
+  
