@@ -1,0 +1,37 @@
+name: Run Tests
+
+on:
+  push:
+    branches:
+    - master
+  pull_request:
+    branches:
+    - master
+
+  workflow_dispatch:
+
+jobs:
+  build_package:
+    name: Run tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        TEST:
+          - pagila
+          - pagila-multi-steps
+          - unit
+          - blobs
+          - filtering
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Set environment variables
+        run: |
+            echo "TEST=${{ matrix.TEST }}" >> $GITHUB_ENV
+
+      - name: Run a test
+        timeout-minutes: 5
+        run: |
+          make tests/${TEST}
