@@ -9,8 +9,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "cli_common.h"
-#include "cli_root.h"
 #include "copydb.h"
 #include "env_utils.h"
 #include "lock_utils.h"

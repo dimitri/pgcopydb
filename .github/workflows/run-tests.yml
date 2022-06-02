@@ -3,10 +3,10 @@ name: Run Tests
 on:
   push:
     branches:
-    - master
+    - main
   pull_request:
     branches:
-    - master
+    - main
 
   workflow_dispatch:
 
@@ -23,6 +23,7 @@ jobs:
           - unit
           - blobs
           - filtering
+          - cdc
     steps:
       - name: Checkout repository
         uses: actions/checkout@v2

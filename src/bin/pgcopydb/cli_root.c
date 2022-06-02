@@ -27,6 +27,7 @@ CommandLine *root_subcommands_with_debug[] = {
 	&restore_commands,
 	&copy_commands,
 	&list_commands,
+	&stream_commands,
 	&help,
 	&version,
 	NULL
@@ -47,6 +48,7 @@ CommandLine *root_subcommands[] = {
 	&restore_commands,
 	&copy_commands,
 	&list_commands,
+	&stream_commands,
 	&help,
 	&version,
 	NULL

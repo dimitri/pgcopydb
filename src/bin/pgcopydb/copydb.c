@@ -9,8 +9,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "cli_common.h"
-#include "cli_root.h"
 #include "copydb.h"
 #include "env_utils.h"
 #include "lock_utils.h"
@@ -172,6 +170,7 @@ copydb_init_workdir(CopyDataSpec *copySpecs,
 		cfPaths->rundir,
 		cfPaths->tbldir,
 		cfPaths->idxdir,
+		cfPaths->cdcdir,
 		NULL
 	};
 
@@ -363,6 +362,48 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths, const char *dir)
 	{
 		sformat(donePaths[i].dst, MAXPGPATH, donePaths[i].fmt, cfPaths->topdir);
 	}
+
+	/*
+	 * Now prepare the Change Data Capture (logical decoding) intermediate
+	 * files directory. This needs more care than the transient files that
+	 * default to the TMPDIR (or /tmp), and we're using XDG_DATA_HOME this time
+	 * (/var, or ~/.local/share).
+	 *
+	 * When a directory has been provided, use a sub-directory there to store
+	 * the Change Data Capture date. Otherwise, use a pgcopydb specific
+	 * directory in ~/.local/share or XDG_DATA_HOME.
+	 */
+	if (dir != NULL && !IS_EMPTY_STRING_BUFFER(dir))
+	{
+		sformat(cfPaths->cdcdir, MAXPGPATH, "%s/cdc", cfPaths->topdir);
+	}
+	else
+	{
+		char homedir[MAXPGPATH] = { 0 };
+		char datadir[MAXPGPATH] = { 0 };
+		char fallback[MAXPGPATH] = { 0 };
+
+		if (!get_env_copy("HOME", homedir, MAXPGPATH))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		join_path_components(fallback, homedir, ".local/share");
+
+		if (!get_env_copy_with_fallback("XDG_DATA_HOME",
+										datadir,
+										sizeof(datadir),
+										fallback))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		sformat(cfPaths->cdcdir, MAXPGPATH, "%s/pgcopydb", datadir);
+	}
+
+	log_debug("Change Data Capture data is managed at \"%s\"", cfPaths->cdcdir);
 
 	return true;
 }

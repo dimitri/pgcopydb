@@ -11,8 +11,6 @@
 #include <getopt.h>
 #include <inttypes.h>
 
-#include "cli_common.h"
-#include "cli_root.h"
 #include "pgsql.h"
 
 

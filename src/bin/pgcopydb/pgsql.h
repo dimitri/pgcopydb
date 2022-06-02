@@ -14,11 +14,15 @@
 #include "libpq-fe.h"
 #include "portability/instr_time.h"
 
+#include "access/xlogdefs.h"
+
 #if PG_MAJORVERSION_NUM >= 15
 #include "common/pg_prng.h"
 #endif
 
 #include "defaults.h"
+#include "parsing.h"
+#include "pg_utils.h"
 
 
 /*
@@ -263,5 +267,98 @@ bool pgsql_set_gucs(PGSQL *pgsql, GUC *settings);
 
 bool pg_copy_large_objects(PGSQL *src, PGSQL *dst,
 						   bool dropIfExists, uint32_t *count);
+
+/*
+ * Maximum length of serialized pg_lsn value
+ * It is taken from postgres file pg_lsn.c.
+ * It defines MAXPG_LSNLEN to be 17 and
+ * allocates a buffer 1 byte larger. We
+ * went for 18 to make buffer allocation simpler.
+ */
+#define PG_LSN_MAXLENGTH 18
+
+/*
+ * The IdentifySystem contains information that is parsed from the
+ * IDENTIFY_SYSTEM replication command, and then the TIMELINE_HISTORY result.
+ */
+typedef struct IdentifySystem
+{
+	uint64_t identifier;
+	uint32_t timeline;
+	char xlogpos[PG_LSN_MAXLENGTH];
+	char dbname[NAMEDATALEN];
+} IdentifySystem;
+
+bool pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system);
+
+/*
+ * Logical Decoding support.
+ */
+typedef struct LogicalTrackLSN
+{
+	XLogRecPtr written_lsn;
+	XLogRecPtr flushed_lsn;
+	XLogRecPtr applied_lsn;
+} LogicalTrackLSN;
+
+
+typedef struct LogicalStreamContext
+{
+	void *private;
+
+	XLogRecPtr cur_record_lsn;
+	int timeline;
+	uint32_t WalSegSz;
+	const char *buffer;
+
+	TimestampTz now;
+	LogicalTrackLSN *tracking;
+} LogicalStreamContext;
+
+
+typedef bool (*LogicalStreamReceiver) (LogicalStreamContext *context);
+
+typedef struct LogicalStreamClient
+{
+	PGSQL pgsql;
+	IdentifySystem system;
+
+	char slotName[NAMEDATALEN];
+	KeyVal pluginOptions;
+	uint32_t WalSegSz;
+
+	XLogRecPtr startpos;
+	XLogRecPtr endpos;
+
+	TimestampTz now;
+	TimestampTz last_status;
+	TimestampTz last_fsync;
+
+	LogicalTrackLSN current;    /* updated at receive time */
+	LogicalTrackLSN feedback;   /* updated at feedback sending time */
+
+	LogicalStreamReceiver writeFunction;
+	LogicalStreamReceiver flushFunction;
+	LogicalStreamReceiver closeFunction;
+
+	int fsync_interval;
+	int standby_message_timeout;
+} LogicalStreamClient;
+
+
+bool pgsql_init_stream(LogicalStreamClient *client,
+					   const char *pguri,
+					   const char *slotName,
+					   XLogRecPtr startpos,
+					   XLogRecPtr endpos);
+
+bool pgsql_start_replication(LogicalStreamClient *client);
+bool pgsql_stream_logical(LogicalStreamClient *client,
+						  LogicalStreamContext *context);
+
+/* SHOW command for replication connection was introduced in version 10 */
+#define MINIMUM_VERSION_FOR_SHOW_CMD 100000
+
+bool RetrieveWalSegSize(LogicalStreamClient *client);
 
 #endif /* PGSQL_H */

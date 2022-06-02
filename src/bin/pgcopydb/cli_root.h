@@ -46,4 +46,8 @@ extern CommandLine restore_commands;
 /* cli_list.h */
 extern CommandLine list_commands;
 
+/* cli_stream.h */
+extern CommandLine stream_commands;
+
+
 #endif  /* CLI_ROOT_H */

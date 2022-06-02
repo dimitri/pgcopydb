@@ -14,6 +14,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "postgres_fe.h"
+#include "libpq-fe.h"
+#include "pqexpbuffer.h"
+
+#include "defaults.h"
 #include "log.h"
 #include "parsing.h"
 #include "file_utils.h"
@@ -52,7 +57,7 @@ regexp_first_match(const char *string, const char *regex)
 		 * We could also dynamically allocate memory for the error message, but
 		 * the error might be "out of memory" already...
 		 */
-		char message[BUFSIZE];
+		char message[BUFSIZE] = { 0 };
 		size_t bytes = regerror(status, &compiledRegex, message, BUFSIZE);
 
 		log_error("Failed to compile regex \"%s\": %s%s",
@@ -209,6 +214,44 @@ bool
 parse_pg_version_string(const char *pg_version_string, int *pg_version)
 {
 	return parse_dotted_version_string(pg_version_string, pg_version);
+}
+
+
+/*
+ * parseLSN is based on the Postgres code for pg_lsn_in_internal found at
+ * src/backend/utils/adt/pg_lsn.c in the Postgres source repository. In the
+ * pg_auto_failover context we don't need to typedef uint64 XLogRecPtr; so we
+ * just use uint64_t internally.
+ */
+#define MAXPG_LSNCOMPONENT 8
+
+bool
+parseLSN(const char *str, uint64_t *lsn)
+{
+	int len1,
+		len2;
+	uint32 id,
+		   off;
+
+	/* Sanity check input format. */
+	len1 = strspn(str, "0123456789abcdefABCDEF");
+	if (len1 < 1 || len1 > MAXPG_LSNCOMPONENT || str[len1] != '/')
+	{
+		return false;
+	}
+
+	len2 = strspn(str + len1 + 1, "0123456789abcdefABCDEF");
+	if (len2 < 1 || len2 > MAXPG_LSNCOMPONENT || str[len1 + 1 + len2] != '\0')
+	{
+		return false;
+	}
+
+	/* Decode result. */
+	id = (uint32) strtoul(str, NULL, 16);
+	off = (uint32) strtoul(str + len1 + 1, NULL, 16);
+	*lsn = ((uint64) id << 32) | off;
+
+	return true;
 }
 
 
