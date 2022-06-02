@@ -32,6 +32,13 @@ This command prefixes the following sub-commands:
      5. disconnect application from the old system, the source
      6. connect applications to the new system, the target
 
+   Steps 0, 1, 2, 3, and 4 would be implemented by a single ``pgcopydb``
+   command such as ``pgcopydb fork --follow`` or ``pgcopydb follow``. The
+   exact command is still in the design, stay tuned.
+
+   Steps 5 and 6 are not to be covered by pgcopydb, because pgcopydb has no
+   control over the application life cycle and connection strings.
+
 This is still a work in progress. Stay tuned.
 
 .. _pgcopydb_stream_receive:
@@ -82,6 +89,10 @@ The following options are available to ``pgcopydb stream receive``:
   location given by this option, or defaults to
   ``${TMPDIR}/pgcopydb`` when the environment variable is set, or
   then to ``/tmp/pgcopydb``.
+
+  Change Data Capture files are stored in the ``cdc`` sub-directory of the
+  ``--dir`` option when provided, otherwise see XDG_DATA_HOME environment
+  variable below.
 
 --restart
 
@@ -138,7 +149,13 @@ TMPDIR
   The pgcopydb command creates all its work files and directories in
   ``${TMPDIR}/pgcopydb``, and defaults to ``/tmp/pgcopydb``.
 
-  
+XDG_DATA_HOME
+
+  The pgcopydb command creates Change Data Capture files in the standard
+  place XDG_DATA_HOME, which defaults to ``~/.local/share``. See the `XDG
+  Base Directory Specification`__.
+
+  __ https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
 
 Examples
 --------
@@ -190,17 +207,18 @@ extracted by calling the ``pg_current_wal_lsn()`` SQL function:
    16:01:57 157 DEBUG pgsql.c:2009 IDENTIFY_SYSTEM: timeline 1, xlogpos 0/236D668, systemid 7104302452422938663
    16:01:57 157 DEBUG pgsql.c:3188 RetrieveWalSegSize: 16777216
    16:01:57 157 DEBUG pgsql.c:2547 streaming initiated
-   16:01:57 157 INFO  stream.c:223 Now streaming changes to "/var/lib/postgres/.local/share/pgcopydb/000000010000000000000002.json"
-   16:01:57 157 DEBUG stream.c:327 Received action B for XID 488 in LSN 0/236D638
-   16:01:57 157 DEBUG stream.c:327 Received action I for XID 488 in LSN 0/236D178
-   16:01:57 157 DEBUG stream.c:327 Received action I for XID 488 in LSN 0/236D308
-   16:01:57 157 DEBUG stream.c:327 Received action C for XID 488 in LSN 0/236D638
+   16:01:57 157 INFO  stream.c:237 Now streaming changes to "/var/lib/postgres/.local/share/pgcopydb/000000010000000000000002.json"
+   16:01:57 157 DEBUG stream.c:341 Received action B for XID 488 in LSN 0/236D638
+   16:01:57 157 DEBUG stream.c:341 Received action I for XID 488 in LSN 0/236D178
+   16:01:57 157 DEBUG stream.c:341 Received action I for XID 488 in LSN 0/236D308
+   16:01:57 157 DEBUG stream.c:341 Received action C for XID 488 in LSN 0/236D638
    16:01:57 157 DEBUG pgsql.c:2867 pgsql_stream_logical: endpos reached at 0/236D668
-   16:01:57 157 DEBUG stream.c:368 Flushed up to 0/236D668 in file "/var/lib/postgres/.local/share/pgcopydb/000000010000000000000002.json"
+   16:01:57 157 DEBUG stream.c:382 Flushed up to 0/236D668 in file "/var/lib/postgres/.local/share/pgcopydb/000000010000000000000002.json"
    16:01:57 157 INFO  pgsql.c:3030 Report write_lsn 0/236D668, flush_lsn 0/236D668
    16:01:57 157 DEBUG pgsql.c:3107 end position 0/236D668 reached by WAL record at 0/236D668
    16:01:57 157 DEBUG pgsql.c:408 Disconnecting from [source] "postgres://postgres@source:/postgres?password=****&replication=database"
-   16:01:57 157 DEBUG stream.c:400 streamClose: closing file "/var/lib/postgres/.local/share/pgcopydb/000000010000000000000002.json"
+   16:01:57 157 DEBUG stream.c:414 streamClose: closing file "/var/lib/postgres/.local/share/pgcopydb/000000010000000000000002.json"
+   16:01:57 157 INFO  stream.c:171 Streaming is now finished after processing 4 messages
 
 
 The JSON file then contains the following content, from the `wal2json`

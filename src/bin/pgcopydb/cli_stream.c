@@ -348,10 +348,6 @@ cli_stream_receive(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	/* arrange to handle SIGINT (C-c) and other termination signals */
-	bool exitOnQuit = true;
-	(void) set_signal_handlers(exitOnQuit);
-
 	if (!startLogicalStreaming(&specs))
 	{
 		/* errors have already been logged */

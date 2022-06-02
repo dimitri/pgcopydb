@@ -166,10 +166,24 @@ startLogicalStreaming(StreamSpecs *specs)
 			retry = false;
 		}
 
-		if (!cleanExit)
+		if (cleanExit)
+		{
+			log_info("Streaming is now finished after processing %lld message%s",
+					 (long long) privateContext.counters.total,
+					 privateContext.counters.total > 0 ? "s" : "");
+		}
+		else if (!(asked_to_stop || asked_to_stop_fast || asked_to_quit))
 		{
 			log_warn("Streaming got interrupted at %X/%X, reconnecting in 1s",
 					 LSN_FORMAT_ARGS(context.tracking->written_lsn));
+		}
+		else
+		{
+			log_warn("Streaming got interrupted at %X/%X "
+					 "after processing %lld message%s",
+					 LSN_FORMAT_ARGS(context.tracking->written_lsn),
+					 (long long) privateContext.counters.total,
+					 privateContext.counters.total > 0 ? "s" : "");
 		}
 
 		/* sleep for one entire second before retrying */
@@ -640,8 +654,8 @@ updateStreamCounters(StreamContext *context, LogicalMessageMetadata *metadata)
 
 
 /*
- * buildReplicationURI builds a connection string that includes replication=1
- * from the connection string that's passed as input.
+ * buildReplicationURI builds a connection string that includes
+ * replication=database from the connection string that's passed as input.
  */
 bool
 buildReplicationURI(const char *pguri, char *repl_pguri)

@@ -366,8 +366,8 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths, const char *dir)
 	/*
 	 * Now prepare the Change Data Capture (logical decoding) intermediate
 	 * files directory. This needs more care than the transient files that
-	 * default to the XDG_RUNTIME_DIR (or /tmp), and we're using XDG_DATA_HOME
-	 * this time (/var, or ~/.local/share).
+	 * default to the TMPDIR (or /tmp), and we're using XDG_DATA_HOME this time
+	 * (/var, or ~/.local/share).
 	 *
 	 * When a directory has been provided, use a sub-directory there to store
 	 * the Change Data Capture date. Otherwise, use a pgcopydb specific
