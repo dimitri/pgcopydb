@@ -255,13 +255,15 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 	}
 
 	char bytesPretty[BUFSIZE] = { 0 };
+	char relTuplesPretty[BUFSIZE] = { 0 };
 
 	(void) pretty_print_bytes(bytesPretty, BUFSIZE, totalBytes);
+	(void) pretty_print_count(relTuplesPretty, BUFSIZE, totalTuples);
 
 	log_info("Fetched information for %d tables, "
-			 "with an estimated total of %lld tuples and %s",
+			 "with an estimated total of %s tuples and %s",
 			 tableArray.count,
-			 (long long) totalTuples,
+			 relTuplesPretty,
 			 bytesPretty);
 
 	/* free our temporary memory that's been malloc'ed */

@@ -337,7 +337,27 @@ cli_list_tables(int argc, char **argv)
 		}
 	}
 
-	log_info("Fetched information for %d tables", tableArray.count);
+	/* compute total bytes and total reltuples, pretty print them */
+	uint64_t totalBytes = 0;
+	uint64_t totalTuples = 0;
+
+	for (int i = 0; i < tableArray.count; i++)
+	{
+		totalBytes += tableArray.array[i].bytes;
+		totalTuples += tableArray.array[i].reltuples;
+	}
+
+	char bytesPretty[BUFSIZE] = { 0 };
+	char relTuplesPretty[BUFSIZE] = { 0 };
+
+	(void) pretty_print_bytes(bytesPretty, BUFSIZE, totalBytes);
+	(void) pretty_print_count(relTuplesPretty, BUFSIZE, totalTuples);
+
+	log_info("Fetched information for %d tables, "
+			 "with an estimated total of %s tuples and %s",
+			 tableArray.count,
+			 relTuplesPretty,
+			 bytesPretty);
 
 	fformat(stdout, "%8s | %20s | %20s | %15s | %15s\n",
 			"OID", "Schema Name", "Table Name",

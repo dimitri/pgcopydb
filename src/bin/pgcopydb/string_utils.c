@@ -593,3 +593,48 @@ pretty_print_bytes(char *buffer, size_t size, uint64_t bytes)
 	/* forget about having more precision, Postgres wants integers here */
 	sformat(buffer, size, "%d %s", (int) count, suffixes[sIndex]);
 }
+
+
+/*
+ * pretty_print_bytes pretty prints bytes in a human readable form. Given
+ * 17179869184 it places the string "16 GB" in the given buffer.
+ */
+void
+pretty_print_count(char *buffer, size_t size, uint64_t number)
+{
+	const char *suffixes[7] = {
+		"",                     /* units */
+		"",                     /* thousands */
+		"million",              /* 10^6 */
+		"billion",              /* 10^9 */
+		"trillion",             /* 10^12 */
+		"quadrillion",          /* 10^15 */
+		"quintillion"           /* 10^18 */
+	};
+
+	if (number < 1000)
+	{
+		sformat(buffer, size, "%lld", (long long) number);
+	}
+	else if (number < (1000 * 1000))
+	{
+		int t = number / 1000;
+		int u = number - (t * 1000);
+
+		sformat(buffer, size, "%d %d", t, u);
+	}
+	else
+	{
+		uint sIndex = 0;
+		long double count = number;
+
+		/* issue 1234 million rather than 1 billion or 1.23 billion */
+		while (count >= 10000 && sIndex < 7)
+		{
+			sIndex++;
+			count /= 1000;
+		}
+
+		sformat(buffer, size, "%d %s", (int) count, suffixes[sIndex]);
+	}
+}
