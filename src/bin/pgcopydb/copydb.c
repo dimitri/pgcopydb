@@ -25,6 +25,7 @@
 
 GUC srcSettings[] = {
 	COMMON_GUC_SETTINGS
+	{ "tcp_keepalives_idle", "'60s'" },
 	{ NULL, NULL },
 };
 
