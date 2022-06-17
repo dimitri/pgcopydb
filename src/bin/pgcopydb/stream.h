@@ -12,12 +12,14 @@
 
 typedef enum
 {
+	STREAM_ACTION_UNKNOWN = 0,
 	STREAM_ACTION_BEGIN = 'B',
 	STREAM_ACTION_COMMIT = 'C',
 	STREAM_ACTION_INSERT = 'I',
 	STREAM_ACTION_UPDATE = 'U',
 	STREAM_ACTION_DELETE = 'D',
-	STREAM_ACTION_TRUNCATE = 'T'
+	STREAM_ACTION_TRUNCATE = 'T',
+	STREAM_ACTION_MESSAGE = 'M'
 } StreamAction;
 
 typedef struct StreamCounters
@@ -46,9 +48,117 @@ typedef struct LogicalMessageMetadata
 {
 	StreamAction action;
 	uint32_t xid;
-	char lsn[PG_LSN_MAXLENGTH];
-	char nextlsn[PG_LSN_MAXLENGTH];
+	uint64_t lsn;
+	uint64_t nextlsn;
 } LogicalMessageMetadata;
+
+/* see https://www.postgresql.org/docs/current/limits.html */
+#define MAX_COLUMN_COUNT 1600
+
+/* data types to support here are limited to what JSON/wal2json offers */
+typedef struct LogicalMessageValue
+{
+	int oid;                    /* BOOLOID, INT8OID, FLOAT8OID, TEXTOID */
+	bool isNull;
+
+	union value
+	{
+		bool boolean;
+		uint64_t int8;
+		double float8;
+		char *str;
+	} val;
+} LogicalMessageValue;
+
+typedef struct LogicalMessageValues
+{
+	int count;
+	LogicalMessageValue *array; /* malloc'ed area */
+} LogicalMessageValues;
+
+typedef struct LogicalMessageValuesArray
+{
+	int count;
+	LogicalMessageValues *array; /* malloc'ed area */
+} LogicalMessageValuesArray;
+
+typedef struct LogicalMessageTuple
+{
+	char columns[NAMEDATALEN][MAX_COLUMN_COUNT];
+	LogicalMessageValuesArray values;
+} LogicalMessageTuple;
+
+typedef struct LogicalMessageTupleArray
+{
+	int count;
+	LogicalMessageTuple *array; /* malloc'ed area */
+} LogicalMessageTupleArray;
+
+typedef struct LogicalMessageInsert
+{
+	char nspname[NAMEDATALEN];
+	char relname[NAMEDATALEN];
+	LogicalMessageTupleArray new;   /* {"columns": ...} */
+} LogicalMessageInsert;
+
+typedef struct LogicalMessageUpdate
+{
+	char nspname[NAMEDATALEN];
+	char relname[NAMEDATALEN];
+	LogicalMessageTupleArray old;   /* {"identity": ...} */
+	LogicalMessageTupleArray new;   /* {"columns": ...} */
+} LogicalMessageUpdate;
+
+typedef struct LogicalMessageDelete
+{
+	char nspname[NAMEDATALEN];
+	char relname[NAMEDATALEN];
+	LogicalMessageTupleArray old;   /* {"identity": ...} */
+} LogicalMessageDelete;
+
+typedef struct LogicalMessageTruncate
+{
+	char nspname[NAMEDATALEN];
+	char relname[NAMEDATALEN];
+} LogicalMessageTruncate;
+
+
+/*
+ * The JSON-lines logical decoding stream is then parsed into transactions that
+ * contains a series of insert/update/delete/truncate commands.
+ */
+typedef struct LogicalTransactionStatement
+{
+	StreamAction action;
+
+	union stmt
+	{
+		LogicalMessageInsert insert;
+		LogicalMessageUpdate update;
+		LogicalMessageDelete delete;
+		LogicalMessageTruncate truncate;
+	} stmt;
+
+	struct LogicalTransactionStatement *prev; /* double linked-list */
+	struct LogicalTransactionStatement *next; /* double linked-list */
+} LogicalTransactionStatement;
+
+typedef struct LogicalTransaction
+{
+	uint32_t xid;
+	uint64_t beginLSN;
+	uint64_t commitLSN;
+
+	uint32_t count;                     /* number of statements */
+	LogicalTransactionStatement *first;
+	LogicalTransactionStatement *last;
+} LogicalTransaction;
+
+typedef struct LogicalTransactionArray
+{
+	int count;
+	LogicalTransaction *array; /* malloc'ed area */
+} LogicalTransactionArray;
 
 
 typedef struct StreamSpecs
@@ -91,11 +201,22 @@ bool streamWrite(LogicalStreamContext *context);
 bool streamFlush(LogicalStreamContext *context);
 bool streamClose(LogicalStreamContext *context);
 
-bool parseMessageMetadata(LogicalMessageMetadata *metadata, const char *buffer);
+bool parseMessageMetadata(LogicalMessageMetadata *metadata,
+						  const char *buffer,
+						  JSON_Value *json);
 
 bool stream_read_file(StreamContent *content);
 bool stream_read_latest(StreamSpecs *specs, StreamContent *content);
 
 bool buildReplicationURI(const char *pguri, char *repl_pguri);
+
+StreamAction StreamActionFromChar(char action);
+
+bool stream_transform_file(char *jsonfilename, char *sqlfilename);
+
+bool parseMessage(LogicalTransaction *txn,
+				  LogicalMessageMetadata *metadata,
+				  char *message,
+				  JSON_Value *json);
 
 #endif /* STREAM_H */

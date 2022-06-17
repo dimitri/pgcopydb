@@ -24,6 +24,7 @@
 #include "log.h"
 #include "parsing.h"
 #include "pidfile.h"
+#include "pg_utils.h"
 #include "schema.h"
 #include "signals.h"
 #include "stream.h"
@@ -33,6 +34,16 @@
 
 static bool updateStreamCounters(StreamContext *context,
 								 LogicalMessageMetadata *metadata);
+
+static bool SetColumnNamesAndValues(LogicalMessageTuple *tuple,
+									const char *message,
+									JSON_Value *json,
+									const char *name);
+
+static bool streamLogicalTransactionAppendStatement(LogicalTransaction *txn,
+													LogicalTransactionStatement *stmt
+													);
+
 
 /*
  * stream_init_specs initializes Change Data Capture streaming specifications
@@ -78,10 +89,12 @@ startLogicalStreaming(StreamSpecs *specs)
 			"format-version",
 			"include-xids",
 			"include-lsn",
-			"include-transaction"
+			"include-transaction",
+			"include-timestamp"
 		},
 		.values = {
 			"2",
+			"true",
 			"true",
 			"true",
 			"true"
@@ -121,14 +134,7 @@ startLogicalStreaming(StreamSpecs *specs)
 		LogicalMessageMetadata *latest =
 			&(latestStreamedContent.messages[latestStreamedContent.count - 1]);
 
-		if (!parseLSN(latest->nextlsn, &(specs->startLSN)))
-		{
-			log_error("Failed to parse start LSN \"%s\" to resume "
-					  "streaming from file \"%s\"",
-					  latest->nextlsn,
-					  latestStreamedContent.filename);
-			return false;
-		}
+		specs->startLSN = latest->nextlsn;
 
 		log_info("Resuming streaming at LSN %X/%X",
 				 LSN_FORMAT_ARGS(specs->startLSN));
@@ -269,8 +275,9 @@ streamWrite(LogicalStreamContext *context)
 	}
 
 	LogicalMessageMetadata metadata = { 0 };
+	JSON_Value *json = json_parse_string(context->buffer);
 
-	if (!parseMessageMetadata(&metadata, context->buffer))
+	if (!parseMessageMetadata(&metadata, context->buffer, json))
 	{
 		/* errors have already been logged */
 		if (privateContext->jsonFile != NULL)
@@ -282,8 +289,11 @@ streamWrite(LogicalStreamContext *context)
 			}
 		}
 
+		json_value_free(json);
 		return false;
 	}
+
+	json_value_free(json);
 
 	(void) updateStreamCounters(privateContext, &metadata);
 
@@ -338,10 +348,10 @@ streamWrite(LogicalStreamContext *context)
 		context->tracking->written_lsn = context->cur_record_lsn;
 	}
 
-	log_debug("Received action %c for XID %u in LSN %s",
+	log_debug("Received action %c for XID %u in LSN %X/%X",
 			  metadata.action,
 			  metadata.xid,
-			  metadata.lsn);
+			  LSN_FORMAT_ARGS(metadata.lsn));
 
 	return true;
 }
@@ -428,15 +438,15 @@ streamClose(LogicalStreamContext *context)
  * message we got from wal2json.
  */
 bool
-parseMessageMetadata(LogicalMessageMetadata *metadata, const char *buffer)
+parseMessageMetadata(LogicalMessageMetadata *metadata,
+					 const char *buffer,
+					 JSON_Value *json)
 {
-	JSON_Value *json = json_parse_string(buffer);
 	JSON_Object *jsobj = json_value_get_object(json);
 
 	if (json_type(json) != JSONObject)
 	{
 		log_error("Failed to parse JSON message: %s", buffer);
-		json_value_free(json);
 		return false;
 	}
 
@@ -448,53 +458,22 @@ parseMessageMetadata(LogicalMessageMetadata *metadata, const char *buffer)
 		log_error("Failed to parse action \"%s\" in JSON message: %s",
 				  action ? "NULL" : action,
 				  buffer);
-		json_value_free(json);
 		return false;
 	}
 
-	switch (action[0])
+	metadata->action = StreamActionFromChar(action[0]);
+
+	if (metadata->action == STREAM_ACTION_UNKNOWN)
 	{
-		case 'B':
-		{
-			metadata->action = STREAM_ACTION_BEGIN;
-			break;
-		}
+		/* errors have already been logged */
+		return false;
+	}
 
-		case 'C':
-		{
-			metadata->action = STREAM_ACTION_COMMIT;
-			break;
-		}
-
-		case 'I':
-		{
-			metadata->action = STREAM_ACTION_INSERT;
-			break;
-		}
-
-		case 'U':
-		{
-			metadata->action = STREAM_ACTION_UPDATE;
-			break;
-		}
-
-		case 'D':
-		{
-			metadata->action = STREAM_ACTION_DELETE;
-			break;
-		}
-
-		case 'T':
-		{
-			metadata->action = STREAM_ACTION_TRUNCATE;
-			break;
-		}
-
-		default:
-		{
-			log_error("Failed to parse JSON message action: \"%s\"", action);
-			return false;
-		}
+	/* message entries {action: "M"} do not have xid, lsn, nextlsn fields */
+	if (metadata->action == STREAM_ACTION_MESSAGE)
+	{
+		log_debug("Skipping message: %s", buffer);
+		return true;
 	}
 
 	double xid = json_object_get_number(jsobj, "xid");
@@ -505,20 +484,26 @@ parseMessageMetadata(LogicalMessageMetadata *metadata, const char *buffer)
 	if (lsn == NULL)
 	{
 		log_error("Failed to parse JSON message: \"%s\"", buffer);
-		json_value_free(json);
 		return false;
 	}
 
-	strlcpy(metadata->lsn, lsn, sizeof(metadata->lsn));
+	if (!parseLSN(lsn, &(metadata->lsn)))
+	{
+		log_error("Failed to parse LSN \"%s\"", lsn);
+		return false;
+	}
 
 	char *nextlsn = (char *) json_object_get_string(jsobj, "nextlsn");
 
 	if (nextlsn != NULL)
 	{
-		strlcpy(metadata->nextlsn, nextlsn, sizeof(metadata->nextlsn));
+		if (!parseLSN(nextlsn, &(metadata->nextlsn)))
+		{
+			log_error("Failed to parse LSN \"%s\"", nextlsn);
+			return false;
+		}
 	}
 
-	json_value_free(json);
 	return true;
 }
 
@@ -557,11 +542,16 @@ stream_read_file(StreamContent *content)
 		char *message = content->lines[i];
 		LogicalMessageMetadata *metadata = &(content->messages[i]);
 
-		if (!parseMessageMetadata(metadata, message))
+		JSON_Value *json = json_parse_string(message);
+
+		if (!parseMessageMetadata(metadata, message, json))
 		{
 			/* errors have already been logged */
+			json_value_free(json);
 			return false;
 		}
+
+		json_value_free(json);
 	}
 
 	return true;
@@ -604,6 +594,8 @@ stream_read_latest(StreamSpecs *specs, StreamContent *content)
 
 
 /*
+ * updateStreamCounters increment the counter that matches the received
+ * message.
  */
 static bool
 updateStreamCounters(StreamContext *context, LogicalMessageMetadata *metadata)
@@ -647,6 +639,13 @@ updateStreamCounters(StreamContext *context, LogicalMessageMetadata *metadata)
 			++context->counters.truncate;
 			break;
 		}
+
+		default:
+		{
+			log_debug("Skipping counters for message action \"%c\"",
+					  metadata->action);
+			break;
+		}
 	}
 
 	return true;
@@ -683,6 +682,427 @@ buildReplicationURI(const char *pguri, char *repl_pguri)
 	{
 		log_error("Failed to produce the replication connection string");
 		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * StreamActionFromChar parses an action character as expected in a wal2json
+ * entry and returns our own internal enum value for it.
+ */
+StreamAction
+StreamActionFromChar(char action)
+{
+	switch (action)
+	{
+		case 'B':
+		{
+			return STREAM_ACTION_BEGIN;
+		}
+
+		case 'C':
+		{
+			return STREAM_ACTION_COMMIT;
+		}
+
+		case 'I':
+		{
+			return STREAM_ACTION_INSERT;
+		}
+
+		case 'U':
+		{
+			return STREAM_ACTION_UPDATE;
+		}
+
+		case 'D':
+		{
+			return STREAM_ACTION_DELETE;
+		}
+
+		case 'T':
+		{
+			return STREAM_ACTION_TRUNCATE;
+		}
+
+		case 'M':
+		{
+			return STREAM_ACTION_MESSAGE;
+		}
+
+		default:
+		{
+			log_error("Failed to parse JSON message action: \"%c\"", action);
+			return STREAM_ACTION_UNKNOWN;
+		}
+	}
+
+	/* keep compiler happy */
+	return STREAM_ACTION_UNKNOWN;
+}
+
+
+/*
+ * stream_transform_file transforms a JSON formatted file as received from the
+ * wal2json logical decoding plugin into an SQL file ready for applying to the
+ * target database.
+ */
+bool
+stream_transform_file(char *jsonfilename, char *sqlfilename)
+{
+	StreamContent content = { 0 };
+	long size = 0L;
+
+	strlcpy(content.filename, jsonfilename, sizeof(content.filename));
+
+	if (!read_file(content.filename, &(content.buffer), &size))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	content.count =
+		splitLines(content.buffer, content.lines, MAX_STREAM_CONTENT_COUNT);
+
+	if (content.count >= MAX_STREAM_CONTENT_COUNT)
+	{
+		log_error("Failed to split file \"%s\" in lines: pgcopydb support only "
+				  "files with up to %d lines, and more were found",
+				  content.filename,
+				  MAX_STREAM_CONTENT_COUNT);
+		free(content.buffer);
+		return false;
+	}
+
+	int maxTxnsCount = content.count / 2; /* {action: B} {action: C} */
+	LogicalTransactionArray txns = { 0 };
+
+	size_t arraySize = maxTxnsCount * sizeof(LogicalTransaction);
+
+	txns.array = (LogicalTransaction *) malloc(arraySize);
+	bzero((void *) &(txns.array), arraySize);
+
+	int currentTxIndex = 0;
+	LogicalTransaction *currentTx = &(txns.array[currentTxIndex]);
+
+	for (int i = 0; i < content.count; i++)
+	{
+		char *message = content.lines[i];
+		LogicalMessageMetadata *metadata = &(content.messages[i]);
+
+		JSON_Value *json = json_parse_string(message);
+
+		if (!parseMessageMetadata(metadata, message, json))
+		{
+			/* errors have already been logged */
+			json_value_free(json);
+			return false;
+		}
+
+		if (!parseMessage(currentTx, metadata, message, json))
+		{
+			log_error("Failed to parse JSON message: %s", message);
+			return false;
+		}
+
+		json_value_free(json);
+
+		/* it is time to close the current transaction and prepare a new one? */
+		if (metadata->action == STREAM_ACTION_COMMIT)
+		{
+			++currentTxIndex;
+
+			if ((maxTxnsCount - 1) < currentTxIndex)
+			{
+				log_error("Parsing transaction %d, which is more than the "
+						  "maximum allocated transaction count %d",
+						  currentTxIndex + 1,
+						  maxTxnsCount);
+				return false;
+			}
+
+			currentTx = &(txns.array[currentTxIndex]);
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * parseMessage parses a JSON message as emitted by wal2json into our own
+ * internal representation, that can be later output as SQL text.
+ */
+bool
+parseMessage(LogicalTransaction *txn,
+			 LogicalMessageMetadata *metadata,
+			 char *message,
+			 JSON_Value *json)
+{
+	if (txn->xid > 0 && txn->xid != metadata->xid)
+	{
+		log_debug("%s", message);
+		log_error("BUG: logical message xid is %lld, which is different "
+				  "from the current transaction xid %lld",
+				  (long long) metadata->xid,
+				  (long long) txn->xid);
+
+		return false;
+	}
+
+	/* common entries for supported statements */
+	LogicalTransactionStatement *stmt = NULL;
+
+	JSON_Object *jsobj = NULL;
+	char *schema = NULL;
+	char *table = NULL;
+
+	if (metadata->action == STREAM_ACTION_TRUNCATE ||
+		metadata->action == STREAM_ACTION_INSERT ||
+		metadata->action == STREAM_ACTION_UPDATE ||
+		metadata->action == STREAM_ACTION_DELETE)
+	{
+		stmt = (LogicalTransactionStatement *)
+			   malloc(sizeof(LogicalTransactionStatement));
+
+		if (stmt == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		stmt->action = metadata->action;
+
+		jsobj = json_value_get_object(json);
+		schema = (char *) json_object_get_string(jsobj, "schema");
+		table = (char *) json_object_get_string(jsobj, "table");
+
+		if (schema == NULL || table == NULL)
+		{
+			log_error("Failed to parse truncate message missing "
+					  "schema or table property: %s",
+					  message);
+			return false;
+		}
+	}
+
+	switch (metadata->action)
+	{
+		case STREAM_ACTION_BEGIN:
+		{
+			txn->xid = metadata->xid;
+			txn->beginLSN = metadata->lsn;
+			txn->first = NULL;
+
+			break;
+		}
+
+		case STREAM_ACTION_COMMIT:
+		{
+			txn->commitLSN = metadata->lsn;
+
+			break;
+		}
+
+		case STREAM_ACTION_TRUNCATE:
+		{
+			stmt->action = metadata->action;
+			strlcpy(stmt->stmt.truncate.nspname, schema, NAMEDATALEN);
+			strlcpy(stmt->stmt.truncate.relname, table, NAMEDATALEN);
+
+			(void) streamLogicalTransactionAppendStatement(txn, stmt);
+
+			break;
+		}
+
+		case STREAM_ACTION_INSERT:
+		{
+			stmt->action = metadata->action;
+			strlcpy(stmt->stmt.insert.nspname, schema, NAMEDATALEN);
+			strlcpy(stmt->stmt.insert.relname, table, NAMEDATALEN);
+
+			stmt->stmt.insert.new.count = 1;
+			stmt->stmt.insert.new.array =
+				(LogicalMessageTuple *) malloc(sizeof(LogicalMessageTupleArray));
+
+			LogicalMessageTuple zero = { 0 };
+			LogicalMessageTuple *tuple = &(stmt->stmt.insert.new.array[0]);
+
+			*tuple = zero;
+
+			if (!SetColumnNamesAndValues(tuple, message, json, "columns"))
+			{
+				log_error("Failed to parse INSERT columns for logical "
+						  "message %s",
+						  message);
+				return false;
+			}
+
+			(void) streamLogicalTransactionAppendStatement(txn, stmt);
+
+			break;
+		}
+
+		default:
+		{
+			log_error("Unknown message action %d", metadata->action);
+			return false;
+		}
+	}
+
+	/* keep compiler happy */
+	return true;
+}
+
+
+/*
+ * streamLogicalTransactionAppendStatement appends a statement to the current
+ * transaction.
+ *
+ * There are two ways to append a statement to an existing transaction:
+ *
+ *  1. it's a new statement altogether, we just append to the linked-list
+ *
+ *  2. it's the same statement as the previous one, we only add an entry to the
+ *     already existing tuple array created on the previous statement
+ *
+ * This allows to then generate multi-values insert commands, for instance.
+ *
+ * TODO: at the moment we don't pack several statements that look alike into
+ * the same one.
+ */
+static bool
+streamLogicalTransactionAppendStatement(LogicalTransaction *txn,
+										LogicalTransactionStatement *stmt)
+{
+	if (txn->first == NULL)
+	{
+		txn->first = stmt;
+		txn->last = stmt;
+	}
+	else
+	{
+		/* update the current last entry of the linked-list */
+		txn->last->next = stmt;
+
+		/* the new statement now becomes the last entry of the linked-list */
+		stmt->prev = txn->last;
+		txn->last = stmt;
+	}
+
+	return true;
+}
+
+
+/*
+ * SetColumnNames parses the "columns" (or "identity") JSON object from a
+ * wal2json logical replication message and fills-in our internal
+ * representation for a tuple.
+ */
+static bool
+SetColumnNamesAndValues(LogicalMessageTuple *tuple,
+						const char *message,
+						JSON_Value *json,
+						const char *name)
+{
+	JSON_Object *jsobj = json_value_get_object(json);
+	JSON_Array *jscols = json_object_get_array(jsobj, name);
+
+	int count = json_array_get_count(jscols);
+
+	if (MAX_COLUMN_COUNT < count)
+	{
+		log_error("Failed to parse logical decoding message that contains "
+				  "%d columns, maximum supported by pgcopydb is %d",
+				  count,
+				  MAX_COLUMN_COUNT);
+		return false;
+	}
+
+	/*
+	 * Allocate the tuple values, an array of VALUES, as in SQL.
+	 *
+	 * TODO: actually support multi-values clauses (single column names array,
+	 * multiple VALUES matching the same metadata definition). At the moment
+	 * it's always a single VALUES entry: VALUES(a, b, c).
+	 *
+	 * The goal is to be able to represent VALUES(a1, b1, c1), (a2, b2, c2).
+	 */
+	LogicalMessageValuesArray *values = &(tuple->values);
+	values->count = 1;
+	values->array =
+		(LogicalMessageValues *) malloc(sizeof(LogicalMessageValues));
+
+	bzero((void *) &(values->array), sizeof(LogicalMessageValues));
+
+	/* allocate one VALUES entry */
+	LogicalMessageValues *value = &(tuple->values.array[0]);
+	value->count = count;
+	value->array =
+		(LogicalMessageValue *) malloc(count * sizeof(LogicalMessageValue));
+
+	bzero((void *) &(value->array), count * sizeof(LogicalMessageValue));
+
+	for (int i = 0; i < count; i++)
+	{
+		JSON_Object *jscol = json_array_get_object(jscols, i);
+		const char *colname = json_object_get_string(jscol, "name");
+
+		strlcpy(tuple->columns[i], colname, NAMEDATALEN);
+
+		JSON_Value *jsval = json_object_get_value(jscol, "value");
+
+		switch (json_value_get_type(jsval))
+		{
+			case JSONNull:
+			{
+				/* default to TEXTOID to send NULLs over the wire */
+				value->array[i].oid = TEXTOID;
+				value->array[i].isNull = true;
+				break;
+			}
+
+			case JSONBoolean:
+			{
+				bool x = json_value_get_boolean(jsval);
+
+				value->array[i].oid = BOOLOID;
+				value->array[i].val.boolean = x;
+				value->array[i].isNull = false;
+				break;
+			}
+
+			case JSONNumber:
+			{
+				double x = json_value_get_number(jsval);
+
+				value->array[i].oid = FLOAT8OID;
+				value->array[i].val.float8 = x;
+				value->array[i].isNull = false;
+				break;
+			}
+
+			case JSONString:
+			{
+				const char *x = json_value_get_string(jsval);
+
+				value->array[i].oid = TEXTOID;
+				value->array[i].val.str = strdup(x);
+				value->array[i].isNull = false;
+				break;
+			}
+
+			default:
+			{
+				log_error("Failed to parse column \"%s\" "
+						  "JSON type for \"value\": %s",
+						  colname,
+						  message);
+				return false;
+			}
+		}
 	}
 
 	return true;
