@@ -84,7 +84,7 @@ startLogicalStreaming(StreamSpecs *specs)
 {
 	/* wal2json options we want to use for the plugin */
 	KeyVal options = {
-		.count = 4,
+		.count = 5,
 		.keywords = {
 			"format-version",
 			"include-xids",

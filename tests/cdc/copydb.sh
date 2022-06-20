@@ -50,7 +50,9 @@ cat ${SHAREDIR}/${WALFILE}
 expected=/tmp/expected.json
 result=/tmp/result.json
 
-jq 'del(.lsn) | del(.nextlsn)' /usr/src/pgcopydb/${WALFILE} > ${expected}
-jq 'del(.lsn) | del(.nextlsn)' ${SHAREDIR}/${WALFILE} > ${result}
+JQSCRIPT='del(.lsn) | del(.nextlsn) | del(.timestamp)'
+
+jq "${JQSCRIPT}" /usr/src/pgcopydb/${WALFILE} > ${expected}
+jq "${JQSCRIPT}" ${SHAREDIR}/${WALFILE} > ${result}
 
 diff ${expected} ${result}
