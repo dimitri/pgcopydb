@@ -771,7 +771,7 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 				  "files with up to %d lines, and more were found",
 				  content.filename,
 				  MAX_STREAM_CONTENT_COUNT);
-		free(&(content.buffer));
+		free(content.buffer);
 		return false;
 	}
 
