@@ -852,17 +852,31 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 	 * structure that represents SQL transactions with statements, output the
 	 * content in the SQL format.
 	 */
+	FILE *sql = fopen_with_umask(sqlfilename, "w", FOPEN_FLAGS_W, 0644);
+
+	if (sql == NULL)
+	{
+		log_error("Failed to create and open file \"%s\"", sqlfilename);
+		return false;
+	}
+
 	for (int i = 0; i < txns.count; i++)
 	{
 		LogicalTransaction *currentTx = &(txns.array[i]);
 
-		if (!stream_write_transaction(stdout, currentTx))
+		if (!stream_write_transaction(sql, currentTx))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 
 		(void) FreeLogicalTransaction(currentTx);
+	}
+
+	if (fclose(sql) == EOF)
+	{
+		log_error("Failed to write file \"%s\"", sqlfilename);
+		return false;
 	}
 
 	return true;

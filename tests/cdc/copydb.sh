@@ -61,3 +61,7 @@ diff ${expected} ${result}
 SQLFILE=`basename ${WALFILE} .json`.sql
 
 pgcopydb stream transform -vvv ${SHAREDIR}/${WALFILE} ${SHAREDIR}/${SQLFILE}
+
+DIFFOPTS='-I BEGIN -I COMMIT'
+
+diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} ${SHAREDIR}/${SQLFILE}
