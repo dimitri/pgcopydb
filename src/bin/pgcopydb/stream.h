@@ -52,9 +52,6 @@ typedef struct LogicalMessageMetadata
 	uint64_t nextlsn;
 } LogicalMessageMetadata;
 
-/* see https://www.postgresql.org/docs/current/limits.html */
-#define MAX_COLUMN_COUNT 1600
-
 /* data types to support here are limited to what JSON/wal2json offers */
 typedef struct LogicalMessageValue
 {
@@ -66,13 +63,13 @@ typedef struct LogicalMessageValue
 		bool boolean;
 		uint64_t int8;
 		double float8;
-		char *str;
+		char *str;              /* malloc'ed area (strdup) */
 	} val;
 } LogicalMessageValue;
 
 typedef struct LogicalMessageValues
 {
-	int count;
+	int cols;
 	LogicalMessageValue *array; /* malloc'ed area */
 } LogicalMessageValues;
 
@@ -84,7 +81,8 @@ typedef struct LogicalMessageValuesArray
 
 typedef struct LogicalMessageTuple
 {
-	char columns[NAMEDATALEN][MAX_COLUMN_COUNT];
+	int cols;
+	char **columns;                  /* malloc'ed area */
 	LogicalMessageValuesArray values;
 } LogicalMessageTuple;
 
@@ -213,10 +211,20 @@ bool buildReplicationURI(const char *pguri, char *repl_pguri);
 StreamAction StreamActionFromChar(char action);
 
 bool stream_transform_file(char *jsonfilename, char *sqlfilename);
+bool stream_write_transaction(FILE *out, LogicalTransaction *tx);
+bool stream_write_insert(FILE *out, LogicalMessageInsert *insert);
+bool stream_write_truncate(FILE *out, LogicalMessageTruncate *truncate);
+bool stream_write_update(FILE *out, LogicalMessageUpdate *update);
+bool stream_write_delete(FILE * out, LogicalMessageDelete *delete);
+bool stream_write_value(FILE *out, LogicalMessageValue *value);
+
+void FreeLogicalTransaction(LogicalTransaction *tx);
+void FreeLogicalMessageTupleArray(LogicalMessageTupleArray *tupleArray);
 
 bool parseMessage(LogicalTransaction *txn,
 				  LogicalMessageMetadata *metadata,
 				  char *message,
 				  JSON_Value *json);
+
 
 #endif /* STREAM_H */

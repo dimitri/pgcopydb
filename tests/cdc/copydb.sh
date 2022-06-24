@@ -56,3 +56,8 @@ jq "${JQSCRIPT}" /usr/src/pgcopydb/${WALFILE} > ${expected}
 jq "${JQSCRIPT}" ${SHAREDIR}/${WALFILE} > ${result}
 
 diff ${expected} ${result}
+
+# now transform the JSON file into SQL
+SQLFILE=`basename ${WALFILE} .json`.sql
+
+pgcopydb stream transform -vvv ${SHAREDIR}/${WALFILE} ${SHAREDIR}/${SQLFILE}
