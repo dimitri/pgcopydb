@@ -21,6 +21,9 @@ pgcopydb list tables --source ${PGCOPYDB_TARGET_PGURI}
 psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-schema.sql
 psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
 
+# alter the pagila schema to allow capturing DDLs without pkey
+psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/ddl.sql
+
 # create the replication slot that captures all the changes
 psql -d ${PGCOPYDB_SOURCE_PGURI} <<EOF
 begin;

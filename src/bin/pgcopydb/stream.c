@@ -1271,8 +1271,6 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple,
 		{
 			case JSONNull:
 			{
-				log_trace("SetColumnNamesAndValues[%s] is NULL", colname);
-
 				/* default to TEXTOID to send NULLs over the wire */
 				valueColumn->oid = TEXTOID;
 				valueColumn->isNull = true;
@@ -1282,10 +1280,6 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple,
 			case JSONBoolean:
 			{
 				bool x = json_value_get_boolean(jsval);
-
-				log_trace("SetColumnNamesAndValues[%s] is %s",
-						  colname,
-						  x ? "true" : "false");
 
 				valueColumn->oid = BOOLOID;
 				valueColumn->val.boolean = x;
@@ -1297,8 +1291,6 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple,
 			{
 				double x = json_value_get_number(jsval);
 
-				log_trace("SetColumnNamesAndValues[%s] = %g", colname, x);
-
 				valueColumn->oid = FLOAT8OID;
 				valueColumn->val.float8 = x;
 				valueColumn->isNull = false;
@@ -1308,8 +1300,6 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple,
 			case JSONString:
 			{
 				const char *x = json_value_get_string(jsval);
-
-				log_trace("SetColumnNamesAndValues[%s] = \"%s\"", colname, x);
 
 				valueColumn->oid = TEXTOID;
 				valueColumn->val.str = strdup(x);
@@ -1489,7 +1479,9 @@ stream_write_insert(FILE *out, LogicalMessageInsert *insert)
 	{
 		LogicalMessageTuple *stmt = &(insert->new.array[s]);
 
-		fformat(out, "INSERT INTO %s.%s ", insert->nspname, insert->relname);
+		fformat(out, "INSERT INTO \"%s\".\"%s\" ",
+				insert->nspname,
+				insert->relname);
 
 		/* loop over column names and add them to the out stream */
 		fformat(out, "(");
@@ -1538,7 +1530,98 @@ stream_write_insert(FILE *out, LogicalMessageInsert *insert)
 bool
 stream_write_update(FILE *out, LogicalMessageUpdate *update)
 {
-	fformat(stdout, "UPDATE %s.%s\n", update->nspname, update->relname);
+	if (update->old.count != update->new.count)
+	{
+		log_error("Failed to write UPDATE statement "
+				  "with %d old rows and %d new rows",
+				  update->old.count,
+				  update->new.count);
+		return false;
+	}
+
+	/* loop over UPDATE statements targeting the same table */
+	for (int s = 0; s < update->old.count; s++)
+	{
+		LogicalMessageTuple *old = &(update->old.array[s]);
+		LogicalMessageTuple *new = &(update->new.array[s]);
+
+		fformat(out, "UPDATE \"%s\".\"%s\" ", update->nspname, update->relname);
+
+		if (old->values.count != new->values.count ||
+			old->values.count != 1 ||
+			new->values.count != 1)
+		{
+			log_error("Failed to write multi-values UPDATE statement "
+					  "with %d old rows and %d new rows",
+					  old->values.count,
+					  new->values.count);
+			return false;
+		}
+
+		fformat(out, "SET ");
+
+		for (int r = 0; r < new->values.count; r++)
+		{
+			LogicalMessageValues *values = &(new->values.array[r]);
+
+			/* now loop over column values for this VALUES row */
+			for (int v = 0; v < values->cols; v++)
+			{
+				LogicalMessageValue *value = &(values->array[v]);
+
+				if (new->cols <= v)
+				{
+					log_error("Failed to write UPDATE statement with more "
+							  "VALUES (%d) than COLUMNS (%d)",
+							  values->cols,
+							  new->cols);
+					return false;
+				}
+
+				fformat(out, "%s", v > 0 ? ", " : "");
+				fformat(out, "\"%s\" = ", new->columns[v]);
+
+				if (!stream_write_value(out, value))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+			}
+		}
+
+		fformat(out, " WHERE ");
+
+		for (int r = 0; r < old->values.count; r++)
+		{
+			LogicalMessageValues *values = &(old->values.array[r]);
+
+			/* now loop over column values for this VALUES row */
+			for (int v = 0; v < values->cols; v++)
+			{
+				LogicalMessageValue *value = &(values->array[v]);
+
+				if (old->cols <= v)
+				{
+					log_error("Failed to write UPDATE statement with more "
+							  "VALUES (%d) than COLUMNS (%d)",
+							  values->cols,
+							  old->cols);
+					return false;
+				}
+
+				fformat(out, "%s", v > 0 ? " and " : "");
+				fformat(out, "\"%s\" = ", old->columns[v]);
+
+				if (!stream_write_value(out, value))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+			}
+		}
+
+		fformat(out, ";\n");
+	}
 
 	return true;
 }
@@ -1551,7 +1634,49 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 bool
 stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 {
-	fformat(stdout, "DELETE %s.%s\n", delete->nspname, delete->relname);
+	/* loop over DELETE statements targeting the same table */
+	for (int s = 0; s < delete->old.count; s++)
+	{
+		LogicalMessageTuple *old = &(delete->old.array[s]);
+
+		fformat(out,
+				"DELETE FROM \"%s\".\"%s\"",
+				delete->nspname,
+				delete->relname);
+
+		fformat(out, " WHERE ");
+
+		for (int r = 0; r < old->values.count; r++)
+		{
+			LogicalMessageValues *values = &(old->values.array[r]);
+
+			/* now loop over column values for this VALUES row */
+			for (int v = 0; v < values->cols; v++)
+			{
+				LogicalMessageValue *value = &(values->array[v]);
+
+				if (old->cols <= v)
+				{
+					log_error("Failed to write DELETE statement with more "
+							  "VALUES (%d) than COLUMNS (%d)",
+							  values->cols,
+							  old->cols);
+					return false;
+				}
+
+				fformat(out, "%s", v > 0 ? " and " : "");
+				fformat(out, "\"%s\" = ", old->columns[v]);
+
+				if (!stream_write_value(out, value))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+			}
+		}
+
+		fformat(out, ";\n");
+	}
 
 	return true;
 }
@@ -1564,7 +1689,7 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 bool
 stream_write_truncate(FILE *out, LogicalMessageTruncate *truncate)
 {
-	fformat(stdout, "TRUNCATE %s.%s\n", truncate->nspname, truncate->relname);
+	fformat(out, "TRUNCATE %s.%s\n", truncate->nspname, truncate->relname);
 
 	return true;
 }
