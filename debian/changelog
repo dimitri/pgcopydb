@@ -1,3 +1,9 @@
+pgcopydb (0.7-2) unstable; urgency=medium
+
+  * Update copyright of src/bin/lib/pg/snprintf.c and src/bin/lib/libs.
+
+ -- Christoph Berg <myon@debian.org>  Mon, 27 Jun 2022 16:11:21 +0200
+
 pgcopydb (0.7-1) unstable; urgency=low
 
   * Official 0.7 release of pgcopydb
