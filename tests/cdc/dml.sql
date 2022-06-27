@@ -25,3 +25,26 @@ with r as
         from r;
 
 commit;
+
+-- update 10 rows in a single UPDATE command
+update public.payment set amount = 11.95 where amount = 11.99;
+
+begin;
+
+delete from payment
+      using rental
+      where rental.rental_id = payment.rental_id
+        and rental.last_update = '2022-06-01';
+
+delete from rental where rental.last_update = '2022-06-01';
+
+commit;
+
+--
+-- update the payments back to their original values
+--
+begin;
+
+update public.payment set amount = 11.99 where amount = 11.95;
+
+commit;

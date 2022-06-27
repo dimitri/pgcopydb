@@ -35,6 +35,9 @@
 #define TEXTOID 25
 #define LSNOID 3220
 
+#define FLOAT4OID 700
+#define FLOAT8OID 701
+
 /*
  * Maximum connection info length as used in walreceiver.h
  */

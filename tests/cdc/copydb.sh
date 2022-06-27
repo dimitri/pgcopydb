@@ -21,6 +21,9 @@ pgcopydb list tables --source ${PGCOPYDB_TARGET_PGURI}
 psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-schema.sql
 psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
 
+# alter the pagila schema to allow capturing DDLs without pkey
+psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/ddl.sql
+
 # create the replication slot that captures all the changes
 psql -d ${PGCOPYDB_SOURCE_PGURI} <<EOF
 begin;
@@ -50,7 +53,18 @@ cat ${SHAREDIR}/${WALFILE}
 expected=/tmp/expected.json
 result=/tmp/result.json
 
-jq 'del(.lsn) | del(.nextlsn)' /usr/src/pgcopydb/${WALFILE} > ${expected}
-jq 'del(.lsn) | del(.nextlsn)' ${SHAREDIR}/${WALFILE} > ${result}
+JQSCRIPT='del(.lsn) | del(.nextlsn) | del(.timestamp)'
+
+jq "${JQSCRIPT}" /usr/src/pgcopydb/${WALFILE} > ${expected}
+jq "${JQSCRIPT}" ${SHAREDIR}/${WALFILE} > ${result}
 
 diff ${expected} ${result}
+
+# now transform the JSON file into SQL
+SQLFILE=`basename ${WALFILE} .json`.sql
+
+pgcopydb stream transform -vvv ${SHAREDIR}/${WALFILE} ${SHAREDIR}/${SQLFILE}
+
+DIFFOPTS='-I BEGIN -I COMMIT'
+
+diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} ${SHAREDIR}/${SQLFILE}

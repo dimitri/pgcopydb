@@ -47,9 +47,12 @@ static CommandLine stream_transform_command =
 	make_command(
 		"transform",
 		"Transform changes from the source database into SQL commands",
-		" --source ... ",
-		"  --source          Postgres URI to the source database\n"
-		"  --slot-name      Stream changes recorded by this slot\n",
+		" [ --source ... ] <json filename> <sql filename> ",
+		"  --source         Postgres URI to the source database\n"
+		"  --dir            Work directory to use\n"
+		"  --restart        Allow restarting when temp files exist already\n"
+		"  --resume         Allow resuming operations after a failure\n"
+		"  --not-consistent Allow taking a new snapshot on the source database\n",
 		cli_stream_getopts,
 		cli_stream_transform);
 
@@ -357,11 +360,29 @@ cli_stream_receive(int argc, char **argv)
 
 
 /*
+ * cli_stream_transform takes a logical decoding JSON file as obtained by the
+ * previous command `pgcopydb stream receive` and transforms it into an SQL
+ * file.
  */
 static void
 cli_stream_transform(int argc, char **argv)
 {
-	exit(EXIT_CODE_INTERNAL_ERROR);
+	if (argc != 2)
+	{
+		log_fatal("Please provide a filename argument");
+		commandline_help(stderr);
+
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	char *jsonfilename = argv[0];
+	char *sqlfilename = argv[1];
+
+	if (!stream_transform_file(jsonfilename, sqlfilename))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
 }
 
 
