@@ -48,15 +48,15 @@ pgcopydb stream receive
 
 pgcopydb stream receive - Stream changes from the source database
 
-The command ``pgcopydb stream tables`` connects to the source database and
+The command ``pgcopydb stream receive`` connects to the source database and
 executes a SQL query using the Postgres catalogs to get a stream of all the
 tables to COPY the data from.
 
 ::
 
    pgcopydb stream receive: Stream changes from the source database
-   usage: pgcopydb stream receive  --source ... 
-   
+   usage: pgcopydb stream receive  --source ...
+
      --source         Postgres URI to the source database
      --dir            Work directory to use
      --restart        Allow restarting when temp files exist already
@@ -64,10 +64,33 @@ tables to COPY the data from.
      --endpos         LSN position where to stop receiving changes
 
 
+.. _pgcopydb_stream_transform:
+
+pgcopydb stream transform
+-------------------------
+
+pgcopydb stream transform - Transform changes from the source database into SQL commands
+
+The command ``pgcopydb stream transform`` transforms a JSON file as received
+by the ``pgcopydb stream receive`` command into an SQL file with one query
+per line.
+
+::
+
+   pgcopydb stream transform: Transform changes from the source database into SQL commands
+   usage: pgcopydb stream transform  [ --source ... ] <json filename> <sql filename>
+
+     --source         Postgres URI to the source database
+     --dir            Work directory to use
+     --restart        Allow restarting when temp files exist already
+     --resume         Allow resuming operations after a failure
+     --not-consistent Allow taking a new snapshot on the source database
+
+
 Options
 -------
 
-The following options are available to ``pgcopydb stream receive``:
+The following options are available to ``pgcopydb stream`` sub-commands:
 
 --source
 
@@ -130,7 +153,7 @@ The following options are available to ``pgcopydb stream receive``:
   See also documentation for `pg_recvlogical`__.
 
   __ https://www.postgresql.org/docs/current/app-pgrecvlogical.html
-  
+
 Environment
 -----------
 
@@ -168,7 +191,7 @@ then the following INSERT statement is executed:
   :linenos:
 
    begin;
-   
+
    with r as
     (
       insert into rental(rental_date, inventory_id, customer_id, staff_id, last_update)
@@ -178,7 +201,7 @@ then the following INSERT statement is executed:
     insert into payment(customer_id, staff_id, rental_id, amount, payment_date)
          select customer_id, staff_id, rental_id, 5.99, '2020-06-01'
            from r;
-   
+
    commit;
 
 The command then looks like the following, where the ``--endpos`` has been
@@ -222,113 +245,31 @@ extracted by calling the ``pg_current_wal_lsn()`` SQL function:
 
 
 The JSON file then contains the following content, from the `wal2json`
-logical replication plugin:
-   
+logical replication plugin. Note that you're seeing diffent LSNs here
+because each run produces different ones, and the captures have not all been
+made from the same run.
+
 ::
-   
+
    $ cat /var/lib/postgres/.local/share/pgcopydb/000000010000000000000002.json
-   {"action":"B","xid":488,"lsn":"0/236D638","nextlsn":"0/236D668"}
-   {"action":"I","xid":488,"lsn":"0/236D178","schema":"public","table":"rental","columns":[{"name":"rental_id","type":"integer","value":16050},{"name":"rental_date","type":"timestamp with time zone","value":"2022-06-01 00:00:00+00"},{"name":"inventory_id","type":"integer","value":371},{"name":"customer_id","type":"integer","value":291},{"name":"return_date","type":"timestamp with time zone","value":null},{"name":"staff_id","type":"integer","value":1},{"name":"last_update","type":"timestamp with time zone","value":"2022-06-01 00:00:00+00"}]}
-   {"action":"I","xid":488,"lsn":"0/236D308","schema":"public","table":"payment_p2020_06","columns":[{"name":"payment_id","type":"integer","value":32099},{"name":"customer_id","type":"integer","value":291},{"name":"staff_id","type":"integer","value":1},{"name":"rental_id","type":"integer","value":16050},{"name":"amount","type":"numeric(5,2)","value":5.99},{"name":"payment_date","type":"timestamp with time zone","value":"2020-06-01 00:00:00+00"}]}
-   {"action":"C","xid":488,"lsn":"0/236D638","nextlsn":"0/236D668"}
+   {"action":"B","xid":489,"timestamp":"2022-06-27 13:24:31.460822+00","lsn":"0/236F5A8","nextlsn":"0/236F5D8"}
+   {"action":"I","xid":489,"timestamp":"2022-06-27 13:24:31.460822+00","lsn":"0/236F0E8","schema":"public","table":"rental","columns":[{"name":"rental_id","type":"integer","value":16050},{"name":"rental_date","type":"timestamp with time zone","value":"2022-06-01 00:00:00+00"},{"name":"inventory_id","type":"integer","value":371},{"name":"customer_id","type":"integer","value":291},{"name":"return_date","type":"timestamp with time zone","value":null},{"name":"staff_id","type":"integer","value":1},{"name":"last_update","type":"timestamp with time zone","value":"2022-06-01 00:00:00+00"}]}
+   {"action":"I","xid":489,"timestamp":"2022-06-27 13:24:31.460822+00","lsn":"0/236F278","schema":"public","table":"payment_p2020_06","columns":[{"name":"payment_id","type":"integer","value":32099},{"name":"customer_id","type":"integer","value":291},{"name":"staff_id","type":"integer","value":1},{"name":"rental_id","type":"integer","value":16050},{"name":"amount","type":"numeric(5,2)","value":5.99},{"name":"payment_date","type":"timestamp with time zone","value":"2020-06-01 00:00:00+00"}]}
+   {"action":"C","xid":489,"timestamp":"2022-06-27 13:24:31.460822+00","lsn":"0/236F5A8","nextlsn":"0/236F5D8"}
 
-A pretty printed version of the JSON contents follows:
-   
-.. code-block:: json
-  :linenos:
+It's then possible to transform the JSON into SQL:
 
-   {
-     "action": "B",
-     "xid": 488,
-     "lsn": "0/236D948",
-     "nextlsn": "0/236D978"
-   }
-   {
-     "action": "I",
-     "xid": 488,
-     "lsn": "0/236D488",
-     "schema": "public",
-     "table": "rental",
-     "columns": [
-       {
-         "name": "rental_id",
-         "type": "integer",
-         "value": 16050
-       },
-       {
-         "name": "rental_date",
-         "type": "timestamp with time zone",
-         "value": "2022-06-01 00:00:00+00"
-       },
-       {
-         "name": "inventory_id",
-         "type": "integer",
-         "value": 371
-       },
-       {
-         "name": "customer_id",
-         "type": "integer",
-         "value": 291
-       },
-       {
-         "name": "return_date",
-         "type": "timestamp with time zone",
-         "value": null
-       },
-       {
-         "name": "staff_id",
-         "type": "integer",
-         "value": 1
-       },
-       {
-         "name": "last_update",
-         "type": "timestamp with time zone",
-         "value": "2022-06-01 00:00:00+00"
-       }
-     ]
-   }
-   {
-     "action": "I",
-     "xid": 488,
-     "lsn": "0/236D618",
-     "schema": "public",
-     "table": "payment_p2020_06",
-     "columns": [
-       {
-         "name": "payment_id",
-         "type": "integer",
-         "value": 32099
-       },
-       {
-         "name": "customer_id",
-         "type": "integer",
-         "value": 291
-       },
-       {
-         "name": "staff_id",
-         "type": "integer",
-         "value": 1
-       },
-       {
-         "name": "rental_id",
-         "type": "integer",
-         "value": 16050
-       },
-       {
-         "name": "amount",
-         "type": "numeric(5,2)",
-         "value": 5.99
-       },
-       {
-         "name": "payment_date",
-         "type": "timestamp with time zone",
-         "value": "2020-06-01 00:00:00+00"
-       }
-     ]
-   }
-   {
-     "action": "C",
-     "xid": 488,
-     "lsn": "0/236D948",
-     "nextlsn": "0/236D978"
-   }
+
+::
+
+   $ pgcopydb stream transform  ./tests/cdc/000000010000000000000002.json /tmp/000000010000000000000002.sql
+
+And the SQL file obtained looks like this:
+
+::
+
+   $ cat /tmp/000000010000000000000002.sql
+   BEGIN; -- {"xid":489,"lsn":"0/236F5A8"}
+   INSERT INTO "public"."rental" (rental_id, rental_date, inventory_id, customer_id, return_date, staff_id, last_update) VALUES (16050, '2022-06-01 00:00:00+00', 371, 291, NULL, 1, '2022-06-01 00:00:00+00');
+   INSERT INTO "public"."payment_p2020_06" (payment_id, customer_id, staff_id, rental_id, amount, payment_date) VALUES (32099, 291, 1, 16050, 5.99, '2020-06-01 00:00:00+00');
+   COMMIT; -- {"xid": 489,"lsn":"0/236F5A8"}
