@@ -3126,7 +3126,11 @@ RetrieveWalSegSize(LogicalStreamClient *client)
 		multiplier = 1;
 
 	/* check connection existence */
-	Assert(conn != NULL);
+	if (conn == NULL)
+	{
+		log_error("BUG: RetrieveWalSegSize called with a NULL client connection");
+		return false;
+	}
 
 	/* for previous versions set the default xlog seg size */
 	if (PQserverVersion(conn) < MINIMUM_VERSION_FOR_SHOW_CMD)
