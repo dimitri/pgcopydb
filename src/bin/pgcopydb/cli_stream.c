@@ -60,10 +60,12 @@ static CommandLine stream_apply_command =
 	make_command(
 		"apply",
 		"Apply changes from the source database into the target database",
-		" --source ... [ --schema-name [ --table-name ] ]",
-		"  --source          Postgres URI to the source database\n"
-		"  --target          Postgres URI to the target database\n"
-		"  --slot-name      Stream changes recorded by this slot\n",
+		" --target ... <sql filename> ",
+		"  --target         Postgres URI to the target database\n"
+		"  --dir            Work directory to use\n"
+		"  --restart        Allow restarting when temp files exist already\n"
+		"  --resume         Allow resuming operations after a failure\n"
+		"  --not-consistent Allow taking a new snapshot on the source database\n",
 		cli_stream_getopts,
 		cli_stream_apply);
 
@@ -387,9 +389,57 @@ cli_stream_transform(int argc, char **argv)
 
 
 /*
+ * cli_stream_apply takes a SQL file as obtained by the previous command
+ * `pgcopydb stream transform` and applies it to the target database.
  */
 static void
 cli_stream_apply(int argc, char **argv)
 {
-	exit(EXIT_CODE_INTERNAL_ERROR);
+	CopyDataSpec copySpecs = { 0 };
+
+	if (argc != 1)
+	{
+		log_fatal("Please provide a filename argument");
+		commandline_help(stderr);
+
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	(void) find_pg_commands(&(copySpecs.pgPaths));
+
+	if (!copydb_init_workdir(&copySpecs,
+							 NULL,
+							 streamDBoptions.restart,
+							 streamDBoptions.resume))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	RestoreOptions restoreOptions = { 0 };
+
+	if (!copydb_init_specs(&copySpecs,
+						   streamDBoptions.source_pguri,
+						   streamDBoptions.target_pguri,
+						   1,   /* tableJobs */
+						   1,   /* indexJobs */
+						   DATA_SECTION_ALL,
+						   streamDBoptions.snapshot,
+						   restoreOptions,
+						   false, /* skipLargeObjects */
+						   streamDBoptions.restart,
+						   streamDBoptions.resume,
+						   !streamDBoptions.notConsistent))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	char *sqlfilename = argv[0];
+
+	if (!stream_apply_file(copySpecs.target_pguri, sqlfilename))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
 }

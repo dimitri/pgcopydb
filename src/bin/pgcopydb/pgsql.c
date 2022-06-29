@@ -83,7 +83,8 @@ parseSingleValueResult(void *ctx, PGresult *result)
 		/* this function is never used when we expect NULL values */
 		if (PQgetisnull(result, 0, 0))
 		{
-			context->parsedOk = false;
+			context->isNull = true;
+			context->parsedOk = true;
 			return;
 		}
 
@@ -3159,7 +3160,7 @@ RetrieveWalSegSize(LogicalStreamClient *client)
 	}
 
 	/* fetch xlog value and unit from the result */
-	if (sscanf(PQgetvalue(res, 0, 0), "%d%2s", &xlog_val, xlog_unit) != 2)
+	if (sscanf(PQgetvalue(res, 0, 0), "%d%2s", &xlog_val, xlog_unit) != 2) /* IGNORE-BANNED */
 	{
 		log_error("WAL segment size could not be parsed");
 		PQclear(res);
@@ -3190,6 +3191,203 @@ RetrieveWalSegSize(LogicalStreamClient *client)
 	}
 
 	log_debug("RetrieveWalSegSize: %d", client->WalSegSz);
+
+	return true;
+}
+
+
+/*
+ * pgsql_replication_origin_oid calls pg_replication_origin_oid().
+ */
+bool
+pgsql_replication_origin_oid(PGSQL *pgsql, char *nodeName, uint32_t *oid)
+{
+	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_BIGINT, false };
+
+	const char *sql = "select pg_replication_origin_oid($1)";
+	int paramCount = 1;
+	Oid paramTypes[1] = { TEXTOID };
+	const char *paramValues[1] = { nodeName };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   &context, &parseSingleValueResult))
+	{
+		log_error("Failed to get replication origin oid for \"%s\"", nodeName);
+		return false;
+	}
+
+	*oid = context.isNull ? 0 : context.bigint;
+
+	return true;
+}
+
+
+/*
+ * pgsql_replication_origin_create calls pg_replication_origin_create() on the
+ * given connection. The returned oid is ignored.
+ */
+bool
+pgsql_replication_origin_create(PGSQL *pgsql, char *nodeName)
+{
+	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_BIGINT, false };
+
+	const char *sql = "select pg_replication_origin_create($1)";
+	int paramCount = 1;
+	Oid paramTypes[1] = { TEXTOID };
+	const char *paramValues[1] = { nodeName };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   &context, &parseSingleValueResult))
+	{
+		log_error("Failed to create replication origin \"%s\"", nodeName);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * pgsql_replication_origin_drop calls pg_replication_origin_drop.
+ */
+bool
+pgsql_replication_origin_drop(PGSQL *pgsql, char *nodeName)
+{
+	const char *sql = "select pg_replication_origin_drop($1)";
+	int paramCount = 1;
+	Oid paramTypes[1] = { TEXTOID };
+	const char *paramValues[1] = { nodeName };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   NULL, NULL))
+	{
+		log_error("Failed to drop replication origin \"%s\"", nodeName);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * pgsql_replication_origin_session_setup calls the function
+ * pg_replication_origin_session_setup().
+ */
+bool
+pgsql_replication_origin_session_setup(PGSQL *pgsql, char *nodeName)
+{
+	const char *sql = "select pg_replication_origin_session_setup($1)";
+	int paramCount = 1;
+	Oid paramTypes[1] = { TEXTOID };
+	const char *paramValues[1] = { nodeName };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   NULL, NULL))
+	{
+		log_error("Failed to setup replication origin session for node \"%s\"",
+				  nodeName);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * pgsql_replication_origin_xact_setup calls pg_replication_origin_xact_setup().
+ */
+bool
+pgsql_replication_origin_xact_setup(PGSQL *pgsql,
+									char *origin_lsn,
+									char *origin_timestamp)
+{
+	const char *sql = "select pg_replication_origin_xact_setup($1, $2)";
+	int paramCount = 2;
+	Oid paramTypes[2] = { LSNOID, TIMESTAMPTZOID };
+	const char *paramValues[2] = { origin_lsn, origin_timestamp };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   NULL, NULL))
+	{
+		log_error("Failed to setup replication origin transaction at "
+				  "origin LSN %s and origin timestamp \"%s\"",
+				  origin_lsn,
+				  origin_timestamp);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * pgsql_replication_origin_advance calls pg_replication_origin_advance().
+ */
+bool
+pgsql_replication_origin_advance(PGSQL *pgsql, char *nodeName, char *lsn)
+{
+	const char *sql = "select pg_replication_origin_advance($1, $2)";
+	int paramCount = 2;
+	Oid paramTypes[2] = { TEXTOID, LSNOID };
+	const char *paramValues[2] = { nodeName, lsn };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   NULL, NULL))
+	{
+		log_error("Failed to advance replication origin for \"%s\" at LSN %s",
+				  nodeName, lsn);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * pgsql_replication_origin_progress calls pg_replication_origin_progress().
+ */
+bool
+pgsql_replication_origin_progress(PGSQL *pgsql,
+								  char *nodeName,
+								  bool flush,
+								  char *lsn)
+{
+	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_STRING, false };
+
+	const char *sql = "select pg_replication_origin_progress($1, $2)";
+	int paramCount = 2;
+	Oid paramTypes[2] = { TEXTOID, BOOLOID };
+	const char *paramValues[2] = { nodeName, flush ? "t" : "f" };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   &context, &parseSingleValueResult))
+	{
+		log_error("Failed to fetch progress of replication origin for \"%s\"",
+				  nodeName);
+		return false;
+	}
+
+	log_debug("pgsql_replication_origin_progress: %p: %s %s",
+			  context.strVal,
+			  context.strVal,
+			  context.isNull ? "isNull" : "is not null");
+
+	if (context.isNull)
+	{
+		sformat(lsn, PG_LSN_MAXLENGTH, "0/0");
+	}
+	else
+	{
+		strlcpy(lsn, context.strVal, PG_LSN_MAXLENGTH);
+		free(context.strVal);
+	}
 
 	return true;
 }

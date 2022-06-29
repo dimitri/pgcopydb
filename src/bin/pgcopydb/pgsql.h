@@ -203,6 +203,7 @@ typedef struct SingleValueResultContext
 	char sqlstate[SQLSTATE_LENGTH];
 	QueryResultType resultType;
 	bool parsedOk;
+	bool isNull;
 	int ntuples;
 	bool boolVal;
 	int intVal;
@@ -363,5 +364,22 @@ bool pgsql_stream_logical(LogicalStreamClient *client,
 #define MINIMUM_VERSION_FOR_SHOW_CMD 100000
 
 bool RetrieveWalSegSize(LogicalStreamClient *client);
+
+bool pgsql_replication_origin_oid(PGSQL *pgsql, char *nodeName, uint32_t *oid);
+bool pgsql_replication_origin_create(PGSQL *pgsql, char *nodeName);
+bool pgsql_replication_origin_drop(PGSQL *pgsql, char *nodeName);
+bool pgsql_replication_origin_session_setup(PGSQL *pgsql, char *nodeName);
+
+bool pgsql_replication_origin_xact_setup(PGSQL *pgsql,
+										 char *origin_lsn,
+										 char *origin_timestamp);
+
+bool pgsql_replication_origin_advance(PGSQL *pgsql, char *nodeName, char *lsn);
+
+bool pgsql_replication_origin_progress(PGSQL *pgsql,
+									   char *nodeName,
+									   bool flush,
+									   char *lsn);
+
 
 #endif /* PGSQL_H */
