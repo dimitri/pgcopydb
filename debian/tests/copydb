@@ -2,15 +2,14 @@
 
 set -eux
 
-# remove run leftovers
-trap "rm -rf /tmp/pgcopydb" EXIT
+WORKDIR=$PWD/debian/home
 
 pg_virtualenv << EOF
   set -eux
   createdb src
   createdb dst
   psql -c 'create table foo as select 123+456' src
-  pgcopydb copy-db --source "dbname=src" --target "dbname=dst"
+  HOME=$WORKDIR pgcopydb copy-db --source "dbname=src" --target "dbname=dst" --dir $WORKDIR
   pg_dump -t foo dst
   pg_dump -t foo dst | grep 579
 EOF
