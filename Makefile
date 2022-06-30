@@ -25,6 +25,9 @@ test: build
 
 tests: test ;
 
+tests/ci:
+	sh ./ci/banned.h.sh
+
 tests/*: build
 	$(MAKE) -C $@
 
@@ -53,6 +56,6 @@ debsh-qa: deb-qa
 
 .PHONY: all
 .PHONY: bin clean install docs
-.PHONY: test tests tests/*
+.PHONY: test tests tests/ci tests/*
 .PHONY: deb debsh deb-qa debsh-qa
 .PHONY: GIT-VERSION-FILE
