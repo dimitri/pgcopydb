@@ -87,6 +87,31 @@ per line.
      --not-consistent Allow taking a new snapshot on the source database
 
 
+pgcopydb stream apply
+---------------------
+
+pgcopydb stream apply - Apply changes from the source database into the target database
+
+The command ``pgcopydb stream apply`` applies a SQL file as prepared by the
+``pgcopydb stream transform`` command in the target database. The apply
+process tracks progress thanks to the Postgres API for `Replication Progress
+Tracking`__.
+
+__ https://www.postgresql.org/docs/current/replication-origins.html
+
+::
+
+   pgcopydb stream apply: Apply changes from the source database into the target database
+   usage: pgcopydb stream apply  --target ... <sql filename>
+
+     --target         Postgres URI to the target database
+     --dir            Work directory to use
+     --restart        Allow restarting when temp files exist already
+     --resume         Allow resuming operations after a failure
+     --not-consistent Allow taking a new snapshot on the source database
+     --origin         Name of the Postgres replication origin
+
+
 Options
 -------
 
@@ -153,6 +178,20 @@ The following options are available to ``pgcopydb stream`` sub-commands:
   See also documentation for `pg_recvlogical`__.
 
   __ https://www.postgresql.org/docs/current/app-pgrecvlogical.html
+
+--origin
+
+  Logical replication target system needs to track the transactions that
+  have been applied already, so that in case we get disconnected or need to
+  resume operations we can skip already replayed transaction.
+
+  Postgres uses a notion of an origin node name as documented in
+  `Replication Progress Tracking`__. This option allows to pick your own
+  node name and defaults to "pgcopydb". Picking a different name is useful
+  in some advanced scenarios like migrating several sources in the same
+  target, where each source should have their own unique origin node name.
+
+  __ https://www.postgresql.org/docs/current/replication-origins.html
 
 Environment
 -----------

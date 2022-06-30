@@ -68,3 +68,9 @@ pgcopydb stream transform -vvv ${SHAREDIR}/${WALFILE} ${SHAREDIR}/${SQLFILE}
 DIFFOPTS='-I BEGIN -I COMMIT'
 
 diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} ${SHAREDIR}/${SQLFILE}
+
+# now apply the SQL file to the target database
+pgcopydb stream apply -vvv ${SHAREDIR}/${SQLFILE}
+
+# now apply AGAIN the SQL file to the target database, skipping transactions
+pgcopydb stream apply -vvv ${SHAREDIR}/${SQLFILE}

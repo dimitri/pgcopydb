@@ -60,10 +60,13 @@ static CommandLine stream_apply_command =
 	make_command(
 		"apply",
 		"Apply changes from the source database into the target database",
-		" --source ... [ --schema-name [ --table-name ] ]",
-		"  --source          Postgres URI to the source database\n"
-		"  --target          Postgres URI to the target database\n"
-		"  --slot-name      Stream changes recorded by this slot\n",
+		" --target ... <sql filename> ",
+		"  --target         Postgres URI to the target database\n"
+		"  --dir            Work directory to use\n"
+		"  --restart        Allow restarting when temp files exist already\n"
+		"  --resume         Allow resuming operations after a failure\n"
+		"  --not-consistent Allow taking a new snapshot on the source database\n"
+		"  --origin         Name of the Postgres replication origin\n",
 		cli_stream_getopts,
 		cli_stream_apply);
 
@@ -96,6 +99,7 @@ cli_stream_getopts(int argc, char **argv)
 		{ "target", required_argument, NULL, 'T' },
 		{ "dir", required_argument, NULL, 'D' },
 		{ "slot-name", required_argument, NULL, 's' },
+		{ "origin", required_argument, NULL, 'o' },
 		{ "endpos", required_argument, NULL, 'E' },
 		{ "restart", no_argument, NULL, 'r' },
 		{ "resume", no_argument, NULL, 'R' },
@@ -109,7 +113,7 @@ cli_stream_getopts(int argc, char **argv)
 
 	optind = 0;
 
-	while ((c = getopt_long(argc, argv, "S:T:j:s:t:PVvqh",
+	while ((c = getopt_long(argc, argv, "S:T:j:s:o:t:PVvqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -151,6 +155,13 @@ cli_stream_getopts(int argc, char **argv)
 			{
 				strlcpy(options.slotName, optarg, NAMEDATALEN);
 				log_trace("--slot-name %s", options.slotName);
+				break;
+			}
+
+			case 'o':
+			{
+				strlcpy(options.origin, optarg, NAMEDATALEN);
+				log_trace("--origin %s", options.origin);
 				break;
 			}
 
@@ -283,6 +294,12 @@ cli_stream_getopts(int argc, char **argv)
 		}
 	}
 
+	if (IS_EMPTY_STRING_BUFFER(options.origin))
+	{
+		strlcpy(options.origin, REPLICATION_ORIGIN, sizeof(options.origin));
+		log_info("Using default origin node name \"%s\"", options.origin);
+	}
+
 	if (errors > 0)
 	{
 		exit(EXIT_CODE_BAD_ARGS);
@@ -387,9 +404,71 @@ cli_stream_transform(int argc, char **argv)
 
 
 /*
+ * cli_stream_apply takes a SQL file as obtained by the previous command
+ * `pgcopydb stream transform` and applies it to the target database.
  */
 static void
 cli_stream_apply(int argc, char **argv)
 {
-	exit(EXIT_CODE_INTERNAL_ERROR);
+	CopyDataSpec copySpecs = { 0 };
+
+	if (argc != 1)
+	{
+		log_fatal("Please provide a filename argument");
+		commandline_help(stderr);
+
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	(void) find_pg_commands(&(copySpecs.pgPaths));
+
+	if (!copydb_init_workdir(&copySpecs,
+							 NULL,
+							 streamDBoptions.restart,
+							 streamDBoptions.resume))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	RestoreOptions restoreOptions = { 0 };
+
+	if (!copydb_init_specs(&copySpecs,
+						   streamDBoptions.source_pguri,
+						   streamDBoptions.target_pguri,
+						   1,   /* tableJobs */
+						   1,   /* indexJobs */
+						   DATA_SECTION_ALL,
+						   streamDBoptions.snapshot,
+						   restoreOptions,
+						   false, /* skipLargeObjects */
+						   streamDBoptions.restart,
+						   streamDBoptions.resume,
+						   !streamDBoptions.notConsistent))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/* prepare the replication origin tracking */
+	StreamApplyContext context = { 0 };
+
+	if (!setupReplicationOrigin(&context,
+								streamDBoptions.target_pguri,
+								streamDBoptions.origin))
+	{
+		log_error("Failed to setup replication origin on the target database");
+		exit(EXIT_CODE_TARGET);
+	}
+
+	char *sqlfilename = argv[0];
+
+	if (!stream_apply_file(&context, sqlfilename))
+	{
+		/* errors have already been logged */
+		pgsql_finish(&(context.pgsql));
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	pgsql_finish(&(context.pgsql));
 }

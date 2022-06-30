@@ -10,6 +10,9 @@
 
 #include "pgsql.h"
 
+#define OUTPUT_BEGIN "BEGIN; -- "
+#define OUTPUT_COMMIT "COMMIT; -- "
+
 typedef enum
 {
 	STREAM_ACTION_UNKNOWN = 0,
@@ -44,12 +47,23 @@ typedef struct StreamContext
 	StreamCounters counters;
 } StreamContext;
 
+typedef struct StreamApplyContext
+{
+	PGSQL pgsql;
+	char target_pguri[MAXCONNINFO];
+	char origin[BUFSIZE];
+	uint64_t previousLSN;
+} StreamApplyContext;
+
+#define PG_MAX_TIMESTAMP 36     /* "2022-06-27 14:42:21.795714+00" */
+
 typedef struct LogicalMessageMetadata
 {
 	StreamAction action;
 	uint32_t xid;
 	uint64_t lsn;
 	uint64_t nextlsn;
+	char timestamp[PG_MAX_TIMESTAMP];
 } LogicalMessageMetadata;
 
 /* data types to support here are limited to what JSON/wal2json offers */
@@ -141,11 +155,13 @@ typedef struct LogicalTransactionStatement
 	struct LogicalTransactionStatement *next; /* double linked-list */
 } LogicalTransactionStatement;
 
+
 typedef struct LogicalTransaction
 {
 	uint32_t xid;
 	uint64_t beginLSN;
 	uint64_t commitLSN;
+	char timestamp[PG_MAX_TIMESTAMP];
 
 	uint32_t count;                     /* number of statements */
 	LogicalTransactionStatement *first;
@@ -201,7 +217,8 @@ bool streamClose(LogicalStreamContext *context);
 
 bool parseMessageMetadata(LogicalMessageMetadata *metadata,
 						  const char *buffer,
-						  JSON_Value *json);
+						  JSON_Value *json,
+						  bool skipAction);
 
 bool stream_read_file(StreamContent *content);
 bool stream_read_latest(StreamSpecs *specs, StreamContent *content);
@@ -210,6 +227,7 @@ bool buildReplicationURI(const char *pguri, char *repl_pguri);
 
 StreamAction StreamActionFromChar(char action);
 
+/* ld_transform.c */
 bool stream_transform_file(char *jsonfilename, char *sqlfilename);
 bool stream_write_transaction(FILE *out, LogicalTransaction *tx);
 bool stream_write_insert(FILE *out, LogicalMessageInsert *insert);
@@ -225,6 +243,14 @@ bool parseMessage(LogicalTransaction *txn,
 				  LogicalMessageMetadata *metadata,
 				  char *message,
 				  JSON_Value *json);
+
+/* ld_apply.c */
+bool stream_apply_file(StreamApplyContext *context, char *sqlfilename);
+bool setupReplicationOrigin(StreamApplyContext *context,
+							char *target_pguri,
+							char *origin);
+
+StreamAction parseSQLAction(const char *query, LogicalMessageMetadata *metadata);
 
 
 #endif /* STREAM_H */

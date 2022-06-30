@@ -34,6 +34,7 @@
 #define INT8OID 20
 #define TEXTOID 25
 #define LSNOID 3220
+#define TIMESTAMPTZOID 1184
 
 /*
  * Error codes that we use internally.

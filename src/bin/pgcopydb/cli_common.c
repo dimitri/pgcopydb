@@ -385,5 +385,45 @@ cli_copydb_is_consistent(CopyDBOptions *options)
 	}
 
 	free(previous_snapshot);
+
+	/*
+	 * Check that the --origin option is still the same as in the previous run
+	 * when we're using --resume, otherwise error out. If --not-consistent is
+	 * used, then we allow using a new origin node name.
+	 *
+	 * If the origin file does not exists, then we don't have to check about
+	 * re-using the same origin node name as in the previous run.
+	 */
+	if (!file_exists(cfPaths.originfile))
+	{
+		return true;
+	}
+
+	char *previous_origin = NULL;
+
+	if (!read_file(cfPaths.originfile, &previous_origin, &size))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* make sure to use only the first line of the file, without \n */
+	char *originLines[BUFSIZE] = { 0 };
+	lineCount = splitLines(previous_origin, originLines, BUFSIZE);
+
+	if (lineCount != 1 || strcmp(originLines[0], options->origin) != 0)
+	{
+		log_error("Failed to ensure a consistent origin to resume operations");
+		log_error("Previous run was done with origin \"%s\" and current run "
+				  "is using --resume --origin \"%s\"",
+				  originLines[0],
+				  options->origin);
+
+		free(previous_origin);
+		return false;
+	}
+
+	free(previous_origin);
+
 	return true;
 }
