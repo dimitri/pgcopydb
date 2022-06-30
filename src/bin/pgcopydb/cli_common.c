@@ -390,10 +390,18 @@ cli_copydb_is_consistent(CopyDBOptions *options)
 	 * Check that the --origin option is still the same as in the previous run
 	 * when we're using --resume, otherwise error out. If --not-consistent is
 	 * used, then we allow using a new origin node name.
+	 *
+	 * If the origin file does not exists, then we don't have to check about
+	 * re-using the same origin node name as in the previous run.
 	 */
+	if (!file_exists(cfPaths.originfile))
+	{
+		return true;
+	}
+
 	char *previous_origin = NULL;
 
-	if (!read_file(cfPaths.snfile, &previous_origin, &size))
+	if (!read_file(cfPaths.originfile, &previous_origin, &size))
 	{
 		/* errors have already been logged */
 		return false;
