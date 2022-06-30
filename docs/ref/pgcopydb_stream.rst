@@ -109,6 +109,7 @@ __ https://www.postgresql.org/docs/current/replication-origins.html
      --restart        Allow restarting when temp files exist already
      --resume         Allow resuming operations after a failure
      --not-consistent Allow taking a new snapshot on the source database
+     --origin         Name of the Postgres replication origin
 
 
 Options
@@ -177,6 +178,20 @@ The following options are available to ``pgcopydb stream`` sub-commands:
   See also documentation for `pg_recvlogical`__.
 
   __ https://www.postgresql.org/docs/current/app-pgrecvlogical.html
+
+--origin
+
+  Logical replication target system needs to track the transactions that
+  have been applied already, so that in case we get disconnected or need to
+  resume operations we can skip already replayed transaction.
+
+  Postgres uses a notion of an origin node name as documented in
+  `Replication Progress Tracking`__. This option allows to pick your own
+  node name and defaults to "pgcopydb". Picking a different name is useful
+  in some advanced scenarios like migrating several sources in the same
+  target, where each source should have their own unique origin node name.
+
+  __ https://www.postgresql.org/docs/current/replication-origins.html
 
 Environment
 -----------

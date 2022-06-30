@@ -37,7 +37,7 @@
  * given SQL file as prepared by the stream_transform_file function.
  */
 bool
-stream_apply_file(char *target_pguri, char *sqlfilename)
+stream_apply_file(StreamApplyContext *context, char *sqlfilename)
 {
 	StreamContent content = { 0 };
 	long size = 0L;
@@ -53,17 +53,7 @@ stream_apply_file(char *target_pguri, char *sqlfilename)
 	content.count =
 		splitLines(content.buffer, content.lines, MAX_STREAM_CONTENT_COUNT);
 
-	/* prepare the replication origin tracking */
-	PGSQL pgsql = { 0 };
-	char *nodeName = "pgcopydb"; /* FIXME */
-	uint64_t previousLSN = 0;
-
-	if (!setupReplicationOrigin(&pgsql, target_pguri, nodeName, &previousLSN))
-	{
-		log_error("Failed to setup replication origin on the target database");
-		return false;
-	}
-
+	PGSQL *pgsql = &(context->pgsql);
 	bool reachedStartingPosition = false;
 
 	/* replay the SQL commands from the SQL file */
@@ -78,16 +68,18 @@ stream_apply_file(char *target_pguri, char *sqlfilename)
 		{
 			case STREAM_ACTION_BEGIN:
 			{
+				bool skipping = metadata.lsn <= context->previousLSN;
+
 				log_debug("BEGIN %lld LSN %X/%X @%s, Previous LSN %X/%X %s",
 						  (long long) metadata.xid,
 						  LSN_FORMAT_ARGS(metadata.lsn),
 						  metadata.timestamp,
-						  LSN_FORMAT_ARGS(previousLSN),
-						  metadata.lsn <= previousLSN ? "[skipping]" : "");
+						  LSN_FORMAT_ARGS(context->previousLSN),
+						  skipping ? "[skipping]" : "");
 
 				if (!reachedStartingPosition)
 				{
-					if (previousLSN < metadata.lsn)
+					if (context->previousLSN < metadata.lsn)
 					{
 						reachedStartingPosition = true;
 					}
@@ -97,7 +89,7 @@ stream_apply_file(char *target_pguri, char *sqlfilename)
 					}
 				}
 
-				if (!pgsql_begin(&pgsql))
+				if (!pgsql_begin(pgsql))
 				{
 					/* errors have already been logged */
 					return false;
@@ -108,7 +100,7 @@ stream_apply_file(char *target_pguri, char *sqlfilename)
 				sformat(lsn, sizeof(lsn), "%X/%X",
 						LSN_FORMAT_ARGS(metadata.lsn));
 
-				if (!pgsql_replication_origin_xact_setup(&pgsql,
+				if (!pgsql_replication_origin_xact_setup(pgsql,
 														 lsn,
 														 metadata.timestamp))
 				{
@@ -131,7 +123,7 @@ stream_apply_file(char *target_pguri, char *sqlfilename)
 						  LSN_FORMAT_ARGS(metadata.lsn));
 
 				/* calling pgsql_commit() would finish the connection, avoid */
-				if (!pgsql_execute(&pgsql, sql))
+				if (!pgsql_execute(pgsql, sql))
 				{
 					/* errors have already been logged */
 					return false;
@@ -150,7 +142,7 @@ stream_apply_file(char *target_pguri, char *sqlfilename)
 					continue;
 				}
 
-				if (!pgsql_execute(&pgsql, sql))
+				if (!pgsql_execute(pgsql, sql))
 				{
 					/* errors have already been logged */
 					return false;
@@ -166,7 +158,6 @@ stream_apply_file(char *target_pguri, char *sqlfilename)
 		}
 	}
 
-	pgsql_finish(&pgsql);
 	free(content.buffer);
 
 	return true;
@@ -182,12 +173,17 @@ stream_apply_file(char *target_pguri, char *sqlfilename)
  * current connection, that is set to be
  */
 bool
-setupReplicationOrigin(PGSQL *pgsql,
+setupReplicationOrigin(StreamApplyContext *context,
 					   char *target_pguri,
-					   char *nodeName,
-					   uint64_t *previousLSN)
+					   char *origin)
 {
-	if (!pgsql_init(pgsql, target_pguri, PGSQL_CONN_TARGET))
+	PGSQL *pgsql = &(context->pgsql);
+	char *nodeName = context->origin;
+
+	strlcpy(context->target_pguri, target_pguri, sizeof(context->target_pguri));
+	strlcpy(context->origin, origin, sizeof(context->origin));
+
+	if (!pgsql_init(pgsql, context->target_pguri, PGSQL_CONN_TARGET))
 	{
 		/* errors have already been logged */
 		return false;
@@ -227,7 +223,7 @@ setupReplicationOrigin(PGSQL *pgsql,
 			return false;
 		}
 
-		if (!parseLSN(lsn, previousLSN))
+		if (!parseLSN(lsn, &(context->previousLSN)))
 		{
 			log_error("Failed to parse LSN \"%s\" returned from "
 					  "pg_replication_origin_progress('%s', true)",
@@ -239,7 +235,7 @@ setupReplicationOrigin(PGSQL *pgsql,
 		log_debug("setupReplicationOrigin: replication origin \"%s\" "
 				  "found at %X/%X",
 				  nodeName,
-				  LSN_FORMAT_ARGS(*previousLSN));
+				  LSN_FORMAT_ARGS(context->previousLSN));
 	}
 
 	if (!pgsql_replication_origin_session_setup(pgsql, nodeName))

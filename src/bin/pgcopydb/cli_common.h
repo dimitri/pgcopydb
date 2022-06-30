@@ -39,6 +39,7 @@ typedef struct CopyDBOptions
 	bool resume;
 	bool notConsistent;
 	char snapshot[BUFSIZE];
+	char origin[BUFSIZE];
 
 	uint64_t endpos;
 

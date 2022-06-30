@@ -45,6 +45,9 @@
 /* masqurade  passwords with that value in logs */
 #define PASSWORD_MASK "****"
 
+/* default replication origin for logical replication apply tracking */
+#define REPLICATION_ORIGIN "pgcopydb"
+
 /* internal default for allocating strings  */
 #define BUFSIZE 1024
 

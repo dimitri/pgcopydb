@@ -406,6 +406,9 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths, const char *dir)
 
 	log_debug("Change Data Capture data is managed at \"%s\"", cfPaths->cdcdir);
 
+	/* now prepare the originfile path */
+	sformat(cfPaths->originfile, MAXPGPATH, "%s/origin", cfPaths->cdcdir);
+
 	return true;
 }
 

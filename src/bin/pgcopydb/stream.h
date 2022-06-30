@@ -47,6 +47,14 @@ typedef struct StreamContext
 	StreamCounters counters;
 } StreamContext;
 
+typedef struct StreamApplyContext
+{
+	PGSQL pgsql;
+	char target_pguri[MAXCONNINFO];
+	char origin[BUFSIZE];
+	uint64_t previousLSN;
+} StreamApplyContext;
+
 #define PG_MAX_TIMESTAMP 36     /* "2022-06-27 14:42:21.795714+00" */
 
 typedef struct LogicalMessageMetadata
@@ -237,13 +245,12 @@ bool parseMessage(LogicalTransaction *txn,
 				  JSON_Value *json);
 
 /* ld_apply.c */
-bool stream_apply_file(char *target_pguri, char *sqlfilename);
+bool stream_apply_file(StreamApplyContext *context, char *sqlfilename);
+bool setupReplicationOrigin(StreamApplyContext *context,
+							char *target_pguri,
+							char *origin);
 
 StreamAction parseSQLAction(const char *query, LogicalMessageMetadata *metadata);
 
-bool setupReplicationOrigin(PGSQL *pgsql,
-							char *target_pguri,
-							char *nodeName,
-							uint64_t *previousLSN);
 
 #endif /* STREAM_H */
