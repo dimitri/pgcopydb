@@ -471,6 +471,7 @@ pg_restore_db(PostgresPaths *pgPaths,
 	args[argsIndex++] = (char *) pgPaths->pg_restore;
 	args[argsIndex++] = "--dbname";
 	args[argsIndex++] = (char *) safeURI.pguri;
+	args[argsIndex++] = "--single-transaction";
 
 	if (options.dropIfExists)
 	{
