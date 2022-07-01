@@ -30,6 +30,37 @@ step.
    This mode of operations is useful for debugging and advanced use cases
    only.
 
+.. _pgcopydb_copy_db:
+
+pgcopydb copy db
+----------------
+
+pgcopydb copy db - Copy an entire database from source to target
+
+The command ``pgcopydb copy db`` is an alias for ``pgcopydb clone``. See
+also :ref:`pgcopydb_clone`.
+
+::
+
+   pgcopydb copy db: Copy an entire database from source to target
+   usage: pgcopydb copy db  --source ... --target ... [ --table-jobs ... --index-jobs ... ]
+
+     --source              Postgres URI to the source database
+     --target              Postgres URI to the target database
+     --dir                 Work directory to use
+     --table-jobs          Number of concurrent COPY jobs to run
+     --index-jobs          Number of concurrent CREATE INDEX jobs to run
+     --drop-if-exists      On the target database, clean-up from a previous run first
+     --no-owner            Do not set ownership of objects to match the original database
+     --no-acl              Prevent restoration of access privileges (grant/revoke commands).
+     --no-comments         Do not output commands to restore comments
+     --skip-large-objects  Skip copying large objects (blobs)
+     --filters <filename>  Use the filters defined in <filename>
+     --restart             Allow restarting when temp files exist already
+     --resume              Allow resuming operations after a failure
+     --not-consistent      Allow taking a new snapshot on the source database
+     --snapshot            Use snapshot obtained with pg_export_snapshot
+
 .. _pgcopydb_copy_schema:
 
 pgcopydb copy schema

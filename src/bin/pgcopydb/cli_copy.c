@@ -35,6 +35,7 @@ CommandLine copy__db_command =
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
 		"  --source              Postgres URI to the source database\n"
 		"  --target              Postgres URI to the target database\n"
+		"  --dir                 Work directory to use\n"
 		"  --table-jobs          Number of concurrent COPY jobs to run\n"
 		"  --index-jobs          Number of concurrent CREATE INDEX jobs to run\n"
 		"  --drop-if-exists      On the target database, clean-up from a previous run first\n"
@@ -57,6 +58,7 @@ static CommandLine copy_db_command =
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
 		"  --source              Postgres URI to the source database\n"
 		"  --target              Postgres URI to the target database\n"
+		"  --dir                 Work directory to use\n"
 		"  --table-jobs          Number of concurrent COPY jobs to run\n"
 		"  --index-jobs          Number of concurrent CREATE INDEX jobs to run\n"
 		"  --drop-if-exists      On the target database, clean-up from a previous run first\n"

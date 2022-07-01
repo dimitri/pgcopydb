@@ -1,10 +1,12 @@
 pgcopydb clone
 ==============
 
-pgcopydb
-  clone    Clone an entire database from source to target
-  fork     Clone an entire database from source to target
-  follow   Replay changes from the source database to the target database
+::
+
+   pgcopydb
+     clone    Clone an entire database from source to target
+     fork     Clone an entire database from source to target
+     follow   Replay changes from the source database to the target database
 
 .. _pgcopydb_clone:
 
