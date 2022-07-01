@@ -43,6 +43,9 @@ extern CommandLine fork_command;
 extern CommandLine follow_command;
 extern CommandLine copy_commands;
 
+/* cli_create.c */
+extern CommandLine create_commands;
+
 /* cli_dump.h */
 extern CommandLine dump_commands;
 

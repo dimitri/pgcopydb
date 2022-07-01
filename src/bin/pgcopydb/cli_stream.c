@@ -332,7 +332,8 @@ cli_stream_receive(int argc, char **argv)
 	if (!copydb_init_workdir(&copySpecs,
 							 NULL,
 							 streamDBoptions.restart,
-							 streamDBoptions.resume))
+							 streamDBoptions.resume,
+							 false))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -425,7 +426,8 @@ cli_stream_apply(int argc, char **argv)
 	if (!copydb_init_workdir(&copySpecs,
 							 NULL,
 							 streamDBoptions.restart,
-							 streamDBoptions.resume))
+							 streamDBoptions.resume,
+							 false))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

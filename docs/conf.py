@@ -120,6 +120,13 @@ man_pages = [
         1,
     ),
     (
+        "ref/pgcopydb_create",
+        "pgcopydb copy",
+        "pgcopydb copy",
+        [author],
+        1,
+    ),
+    (
         "ref/pgcopydb_stream",
         "pgcopydb stream",
         "pgcopydb stream",

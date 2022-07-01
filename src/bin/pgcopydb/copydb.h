@@ -273,9 +273,12 @@ void cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section);
 bool copydb_init_workdir(CopyDataSpec *copySpecs,
 						 char *dir,
 						 bool restart,
-						 bool resume);
+						 bool resume,
+						 bool auxilliary);
 
-bool copydb_prepare_filepaths(CopyFilePaths *cfPaths, const char *topdir);
+bool copydb_prepare_filepaths(CopyFilePaths *cfPaths,
+							  const char *topdir,
+							  bool auxilliary);
 bool copydb_inspect_workdir(CopyFilePaths *cfPaths, DirectoryState *dirState);
 
 bool copydb_rmdir_or_mkdir(const char *dir, bool removeDir);

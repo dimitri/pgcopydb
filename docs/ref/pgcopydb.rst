@@ -14,9 +14,10 @@ pgcopydb provides the following commands::
     clone    Clone an entire database from source to target
     fork     Clone an entire database from source to target
     follow   Replay changes from the source database to the target database
+  + copy     Implement the data section of the database copy
+  + create   Create resources needed for pgcopydb
   + dump     Dump database objects from a Postgres instance
   + restore  Restore database objects into a Postgres instance
-  + copy     Implement the data section of the database copy
   + list     List database objects from a Postgres instance
   + stream   Stream changes from the source database
     help     print help message

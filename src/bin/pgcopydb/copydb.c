@@ -59,14 +59,15 @@ bool
 copydb_init_workdir(CopyDataSpec *copySpecs,
 					char *dir,
 					bool restart,
-					bool resume)
+					bool resume,
+					bool auxilliary)
 {
 	CopyFilePaths *cfPaths = &(copySpecs->cfPaths);
 	DirectoryState *dirState = &(copySpecs->dirState);
 
 	pid_t pid = getpid();
 
-	if (!copydb_prepare_filepaths(cfPaths, dir))
+	if (!copydb_prepare_filepaths(cfPaths, dir, auxilliary))
 	{
 		/* errors have already been logged */
 		return false;
@@ -305,7 +306,7 @@ copydb_inspect_workdir(CopyFilePaths *cfPaths, DirectoryState *dirState)
  * for top-level operations.
  */
 bool
-copydb_prepare_filepaths(CopyFilePaths *cfPaths, const char *dir)
+copydb_prepare_filepaths(CopyFilePaths *cfPaths, const char *dir, bool auxilliary)
 {
 	char topdir[MAXPGPATH] = { 0 };
 
@@ -332,8 +333,17 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths, const char *dir)
 	/* first copy the top directory */
 	strlcpy(cfPaths->topdir, topdir, sizeof(cfPaths->topdir));
 
+	/* auxilliary processes use a different pidfile */
+	if (auxilliary)
+	{
+		sformat(cfPaths->pidfile, MAXPGPATH, "%s/pgcopydb.aux.pid", cfPaths->topdir);
+	}
+	else
+	{
+		sformat(cfPaths->pidfile, MAXPGPATH, "%s/pgcopydb.pid", cfPaths->topdir);
+	}
+
 	/* now that we have our topdir, prepare all the others from there */
-	sformat(cfPaths->pidfile, MAXPGPATH, "%s/pgcopydb.pid", cfPaths->topdir);
 	sformat(cfPaths->snfile, MAXPGPATH, "%s/snapshot", cfPaths->topdir);
 	sformat(cfPaths->schemadir, MAXPGPATH, "%s/schema", cfPaths->topdir);
 	sformat(cfPaths->rundir, MAXPGPATH, "%s/run", cfPaths->topdir);
