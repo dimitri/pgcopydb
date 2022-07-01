@@ -22,10 +22,13 @@ CommandLine version =
  * Command line options when using PGCOPYDB_DEBUG=1, as sub-processes do.
  */
 CommandLine *root_subcommands_with_debug[] = {
-	&copy__db_command,
+	&clone_command,
+	&fork_command,
+	&follow_command,
+	&copy__db_command,          /* backward compat */
+	&copy_commands,
 	&dump_commands,
 	&restore_commands,
-	&copy_commands,
 	&list_commands,
 	&stream_commands,
 	&help,
@@ -43,10 +46,13 @@ CommandLine root_with_debug =
  * Command line options intended to normal users.
  */
 CommandLine *root_subcommands[] = {
-	&copy__db_command,
+	&clone_command,
+	&fork_command,
+	&follow_command,
+	&copy__db_command,          /* backward compat */
+	&copy_commands,
 	&dump_commands,
 	&restore_commands,
-	&copy_commands,
 	&list_commands,
 	&stream_commands,
 	&help,

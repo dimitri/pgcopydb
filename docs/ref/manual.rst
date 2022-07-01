@@ -11,7 +11,7 @@ their own manual page.
    :caption: Manual Pages:
 
    pgcopydb
-   pgcopydb_copy-db
+   pgcopydb_clone
    pgcopydb_dump
    pgcopydb_restore
    pgcopydb_list

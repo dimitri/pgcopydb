@@ -19,8 +19,6 @@
 #include "pgcmd.h"
 #include "pgsql.h"
 
-extern bool outputJSON;
-
 typedef struct CopyDBOptions
 {
 	char dir[MAXPGPATH];
@@ -41,12 +39,16 @@ typedef struct CopyDBOptions
 	char snapshot[BUFSIZE];
 	char origin[BUFSIZE];
 
+	bool follow;
+	bool createSlot;
 	uint64_t endpos;
 
 	char filterFileName[MAXPGPATH];
 	char slotName[MAXPGPATH];
 } CopyDBOptions;
 
+extern bool outputJSON;
+extern CopyDBOptions copyDBoptions;
 
 void cli_help(int argc, char **argv);
 
@@ -58,5 +60,7 @@ char * logLevelToString(int logLevel);
 
 bool cli_copydb_getenv(CopyDBOptions *options);
 bool cli_copydb_is_consistent(CopyDBOptions *options);
+
+int cli_copy_db_getopts(int argc, char **argv);
 
 #endif  /* CLI_COMMON_H */

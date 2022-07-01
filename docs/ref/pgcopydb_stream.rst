@@ -14,30 +14,18 @@ This command prefixes the following sub-commands:
     transform  Transform changes from the source database into SQL commands
     apply      Apply changes from the source database into the target database
 
+Those commands implement a part of the whole database replay operation as
+detailed in section :ref:`pgcopydb_follow`. Only use those commands to debug
+a specific part, or because you know that you just want to implement that
+step.
+
 .. warning::
 
-   Those commands are still experimental. The documentation will be expanded
-   later when the integration is complete. Meanwhile, this is an Open Source
-   project, consider contributing.
+   Using the ``pgcopydb follow`` command or the command ``pgcopydb
+   clone --follow`` is strongly advised.
 
-   Later, when this is implemented, it should be possible with pgcopydb to
-   implement an online migration approach, using a classic multi-phases
-   approach:
-
-     0. create and export a snapshot to re-use in the three phases
-     1. initial copy of schema and data visible in the exported snapshot
-     2. capture data changes (DML) applied after the exported snapshot
-     3. catch-up with the changes captured
-     4. switch to low-lag streaming of the changes
-     5. disconnect application from the old system, the source
-     6. connect applications to the new system, the target
-
-   Steps 0, 1, 2, 3, and 4 would be implemented by a single ``pgcopydb``
-   command such as ``pgcopydb fork --follow`` or ``pgcopydb follow``. The
-   exact command is still in the design, stay tuned.
-
-   Steps 5 and 6 are not to be covered by pgcopydb, because pgcopydb has no
-   control over the application life cycle and connection strings.
+   This mode of operations is useful for debugging and advanced use cases
+   only.
 
 This is still a work in progress. Stay tuned.
 
