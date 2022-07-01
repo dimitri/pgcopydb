@@ -13,7 +13,7 @@ with this simple command line::
   $ export PGCOPYDB_SOURCE_PGURI="postgres://user@source.host.dev/dbname"
   $ export PGCOPYDB_TARGET_PGURI="postgres://role@target.host.dev/dbname"
 
-  $ pgcopydb copy-db --table-jobs 4 --index-jobs 4
+  $ pgcopydb clone --table-jobs 4 --index-jobs 4
 
 How to copy a Postgres database
 -------------------------------

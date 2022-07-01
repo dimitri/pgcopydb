@@ -21,5 +21,5 @@ pgcopydb list tables --source ${PGCOPYDB_TARGET_PGURI}
 psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-schema.sql
 psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
 
-# pgcopydb copy db uses the environment variables
-pgcopydb copy-db
+# pgcopydb clone uses the environment variables
+pgcopydb clone

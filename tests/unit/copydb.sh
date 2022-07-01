@@ -18,8 +18,8 @@ pgcopydb list tables --source "${PGCOPYDB_SOURCE_PGURI}"
 
 psql -d "${PGCOPYDB_SOURCE_PGURI}" -1 -f ./setup/setup.sql
 
-# pgcopydb copy db uses the environment variables
-pgcopydb copy-db
+# pgcopydb fork uses the environment variables
+pgcopydb fork
 
 # now compare the output of running the SQL command with what's expected
 # as we're not root when running tests, can't write in /usr/src

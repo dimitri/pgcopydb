@@ -267,6 +267,9 @@ typedef enum
 extern GUC srcSettings[];
 extern GUC dstSettings[];
 
+/* copydb.h */
+void cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section);
+
 bool copydb_init_workdir(CopyDataSpec *copySpecs,
 						 char *dir,
 						 bool restart,

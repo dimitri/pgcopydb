@@ -32,9 +32,15 @@ extern CommandLine *root_subcommands_with_debug[];
 
 int root_options(int argc, char **argv);
 
+/* cli_clone_follow.c */
+void cli_clone(int argc, char **argv);
+void cli_follow(int argc, char **argv);
 
 /* cli_copy.h */
 extern CommandLine copy__db_command;
+extern CommandLine clone_command;
+extern CommandLine fork_command;
+extern CommandLine follow_command;
 extern CommandLine copy_commands;
 
 /* cli_dump.h */

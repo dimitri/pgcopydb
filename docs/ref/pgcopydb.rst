@@ -10,13 +10,17 @@ Synopsis
 
 pgcopydb provides the following commands::
 
-    pgcopydb
-      copy-db  Copy an entire database from source to target
-    + dump     Dump database objects from a Postgres instance
-    + restore  Restore database objects into a Postgres instance
-    + list     List database objects from a Postgres instance
-      help     print help message
-      version  print pgcopydb version
+  pgcopydb
+    clone    Clone an entire database from source to target
+    fork     Clone an entire database from source to target
+    follow   Replay changes from the source database to the target database
+  + dump     Dump database objects from a Postgres instance
+  + restore  Restore database objects into a Postgres instance
+  + copy     Implement the data section of the database copy
+  + list     List database objects from a Postgres instance
+  + stream   Stream changes from the source database
+    help     print help message
+    version  print pgcopydb version
 
 Description
 -----------

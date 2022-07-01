@@ -85,9 +85,9 @@ man_pages = [
     ("ref/pgcopydb", "pgcopydb", "pgcopydb", [author], 1),
     ("ref/pgcopydb_config", "pgcopydb", "pgcopydb", [author], 5,),
     (
-        "ref/pgcopydb_copy-db",
-        "pgcopydb copy-db",
-        "pgcopydb copy-db",
+        "ref/pgcopydb_clone",
+        "pgcopydb clone",
+        "pgcopydb clone",
         [author],
         1,
     ),

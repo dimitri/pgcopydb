@@ -1,20 +1,25 @@
-.. _pgcopydb_copy-db:
+pgcopydb clone
+==============
 
-pgcopydb copy-db
-================
+::
 
-pgcopydb copy-db - copy an entire Postgres database from source to target
+   pgcopydb
+     clone    Clone an entire database from source to target
+     fork     Clone an entire database from source to target
+     follow   Replay changes from the source database to the target database
 
-Synopsis
---------
+.. _pgcopydb_clone:
 
-The command ``pgcopydb copy-db`` copies a database from the given source
+pgcopydb clone
+--------------
+
+The command ``pgcopydb clone`` copies a database from the given source
 Postgres instance to the target Postgres instance.
 
 ::
 
-   pgcopydb copy-db: Copy an entire database from source to target
-   usage: pgcopydb copy-db  --source <URI> --target <URI> [ ... ]
+   pgcopydb clone: Clone an entire database from source to target
+   usage: pgcopydb clone  --source ... --target ... [ --table-jobs ... --index-jobs ... ]
 
      --source              Postgres URI to the source database
      --target              Postgres URI to the target database
@@ -31,11 +36,32 @@ Postgres instance to the target Postgres instance.
      --resume              Allow resuming operations after a failure
      --not-consistent      Allow taking a new snapshot on the source database
      --snapshot            Use snapshot obtained with pg_export_snapshot
+     --follow              Implement logical decoding to replay changes
+     --slot-name           Use this Postgres replication slot name
+     --create-slot         Create the replication slot
+     --origin              Use this Postgres replication origin node name
+     --endpos              Stop replaying changes when reaching this LSN
+
+.. _pgcopydb_fork:
+
+pgcopydb fork
+--------------
+
+The command ``pgcopydb fork`` copies a database from the given source
+Postgres instance to the target Postgres instance. This command is an alias
+to the command ``pgcopydb clone`` seen above.
+
+.. _pgcopydb_follow:
+
+pgcopydb follow
+---------------
+
+Not yet implemented.
 
 Description
 -----------
 
-The ``pgcopydb copy-db`` command implements the following steps:
+The ``pgcopydb clone`` command implements the following steps:
 
   1. ``pgcopydb`` calls into ``pg_dump`` to produce the ``pre-data`` section
      and the ``post-data`` sections of the dump using Postgres custom
@@ -97,7 +123,7 @@ The ``pgcopydb copy-db`` command implements the following steps:
 Options
 -------
 
-The following options are available to ``pgcopydb copy-db``:
+The following options are available to ``pgcopydb clone``:
 
 --source
 
@@ -228,6 +254,51 @@ The following options are available to ``pgcopydb copy-db``:
   ``pg_export_snapshot()`` it is possible for pgcopydb to re-use an already
   exported snapshot.
 
+--slot-name
+
+  Logical replication slot to use. At the moment pgcopydb doesn't know how
+  to create the logical replication slot itself. The slot should be created
+  within the same transaction snapshot as the initial data copy.
+
+  Must be using the `wal2json`__ output plugin, available with
+  format-version 2.
+
+  __ https://github.com/eulerto/wal2json/
+
+--create-slot
+
+  Instruct pgcopydb to create the logical replication slot to use.
+
+--endpos
+
+  Logical replication target LSN to use. Automatically stop replication and
+  exit with normal exit status 0 when receiving reaches the specified LSN.
+  If there's a record with LSN exactly equal to lsn, the record will be
+  output.
+
+  The ``--endpos`` option is not aware of transaction boundaries and may
+  truncate output partway through a transaction. Any partially output
+  transaction will not be consumed and will be replayed again when the slot
+  is next read from. Individual messages are never truncated.
+
+  See also documentation for `pg_recvlogical`__.
+
+  __ https://www.postgresql.org/docs/current/app-pgrecvlogical.html
+
+--origin
+
+  Logical replication target system needs to track the transactions that
+  have been applied already, so that in case we get disconnected or need to
+  resume operations we can skip already replayed transaction.
+
+  Postgres uses a notion of an origin node name as documented in
+  `Replication Progress Tracking`__. This option allows to pick your own
+  node name and defaults to "pgcopydb". Picking a different name is useful
+  in some advanced scenarios like migrating several sources in the same
+  target, where each source should have their own unique origin node name.
+
+  __ https://www.postgresql.org/docs/current/replication-origins.html
+
 Environment
 -----------
 
@@ -277,7 +348,7 @@ Examples
    $ export PGCOPYDB_TARGET_PGURI="port=54311 dbname=plop"
    $ export PGCOPYDB_DROP_IF_EXISTS=on
 
-   $ pgcopydb copy-db --table-jobs 8 --index-jobs 12
+   $ pgcopydb clone --table-jobs 8 --index-jobs 12
    10:04:49 29268 INFO  [SOURCE] Copying database from "port=54311 host=localhost dbname=pgloader"
    10:04:49 29268 INFO  [TARGET] Copying database into "port=54311 dbname=plop"
    10:04:49 29268 INFO  Found a stale pidfile at "/tmp/pgcopydb/pgcopydb.pid"

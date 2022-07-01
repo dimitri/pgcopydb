@@ -20,12 +20,12 @@ This command prefixes the following sub-commands:
     constraints  Create all the constraints found in the source database in the target
 
 Those commands implement a part of the whole database copy operation as
-detailed in section :ref:`pgcopydb_copy-db`. Only use those commands to
-debug a specific part, or because you know that you just want to implement
-that step.
+detailed in section :ref:`pgcopydb_clone`. Only use those commands to debug
+a specific part, or because you know that you just want to implement that
+step.
 
 .. warning::
-   Using the ``pgcopydb copy-db`` command is strongly advised.
+   Using the ``pgcopydb clone`` command is strongly advised.
 
    This mode of operations is useful for debugging and advanced use cases
    only.
@@ -35,9 +35,10 @@ that step.
 pgcopydb copy db
 ----------------
 
-The command ``pgcopydb copy db`` is an alias for the main command ``pgcopydb
-copy-db``, the idea is to refrain from being too pedantic about it. Please
-see full documentation coverage at section section :ref:`pgcopydb_copy-db`.
+pgcopydb copy db - Copy an entire database from source to target
+
+The command ``pgcopydb copy db`` is an alias for ``pgcopydb clone``. See
+also :ref:`pgcopydb_clone`.
 
 ::
 
@@ -54,11 +55,11 @@ see full documentation coverage at section section :ref:`pgcopydb_copy-db`.
      --no-acl              Prevent restoration of access privileges (grant/revoke commands).
      --no-comments         Do not output commands to restore comments
      --skip-large-objects  Skip copying large objects (blobs)
+     --filters <filename>  Use the filters defined in <filename>
      --restart             Allow restarting when temp files exist already
      --resume              Allow resuming operations after a failure
      --not-consistent      Allow taking a new snapshot on the source database
      --snapshot            Use snapshot obtained with pg_export_snapshot
-
 
 .. _pgcopydb_copy_schema:
 
@@ -68,7 +69,7 @@ pgcopydb copy schema
 pgcopydb copy schema - Copy the database schema from source to target
 
 The command ``pgcopydb copy schema`` implements the schema only section of
-the copy-db steps.
+the clone steps.
 
 ::
 
@@ -92,8 +93,8 @@ pgcopydb copy data
 
 pgcopydb copy data - Copy the data section from source to target
 
-The command ``pgcopydb copy data`` implements the data section of the
-copy-db steps.
+The command ``pgcopydb copy data`` implements the data section of the clone
+steps.
 
 ::
 
@@ -130,8 +131,8 @@ The ``pgcopydb copy data`` command implements the following steps::
    $ vacuumdb -z
 
 Those steps are actually done concurrently to one another when that's
-possible, in the same way as the main command ``pgcopydb copy-db`` would.
-The only difference is that the ``pgcopydb copy-db`` command also prepares
+possible, in the same way as the main command ``pgcopydb clone`` would.
+The only difference is that the ``pgcopydb clone`` command also prepares
 and finishes the schema parts of the operations (pre-data, then post-data),
 which the ``pgcopydb copy data`` command ignores.
 
@@ -276,7 +277,7 @@ The target schema is not created, so it needs to have been taken care of
 first. It is possible to use the commands :ref:`pgcopydb_dump_schema` and
 then :ref:`pgcopydb_restore_pre_data` to prepare your target database.
 
-To implement the same operations as a ``pgcopydb copy-db`` command would,
+To implement the same operations as a ``pgcopydb clone`` command would,
 use the following recipe:
 
 ::
@@ -293,7 +294,7 @@ use the following recipe:
    $ vacuumdb -z
    $ pgcopydb restore post-data --resume --not-consistent
 
-The main ``pgcopydb copy-db`` is still better at concurrency than doing
+The main ``pgcopydb clone`` is still better at concurrency than doing
 those steps manually, as it will create the indexes for any given table as
 soon as the table-data section is finished, without having to wait until the
 last table-data has been copied over. Same applies to constraints, and then

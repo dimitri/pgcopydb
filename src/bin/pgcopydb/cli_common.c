@@ -25,6 +25,7 @@
 #include "string_utils.h"
 
 /* handle command line options for our setup. */
+CopyDBOptions copyDBoptions = { 0 };
 bool outputJSON = false;
 
 
@@ -426,4 +427,401 @@ cli_copydb_is_consistent(CopyDBOptions *options)
 	free(previous_origin);
 
 	return true;
+}
+
+
+/*
+ * cli_copy_db_getopts parses the CLI options for the `copy db` command.
+ */
+int
+cli_copy_db_getopts(int argc, char **argv)
+{
+	CopyDBOptions options = { 0 };
+	int c, option_index = 0, errors = 0;
+	int verboseCount = 0;
+
+	static struct option long_options[] = {
+		{ "source", required_argument, NULL, 'S' },
+		{ "target", required_argument, NULL, 'T' },
+		{ "dir", required_argument, NULL, 'D' },
+		{ "jobs", required_argument, NULL, 'J' },
+		{ "table-jobs", required_argument, NULL, 'J' },
+		{ "index-jobs", required_argument, NULL, 'I' },
+		{ "drop-if-exists", no_argument, NULL, 'c' }, /* pg_restore -c */
+		{ "no-owner", no_argument, NULL, 'O' },       /* pg_restore -O */
+		{ "no-comments", no_argument, NULL, 'X' },
+		{ "no-acl", no_argument, NULL, 'x' }, /* pg_restore -x */
+		{ "skip-blobs", no_argument, NULL, 'B' },
+		{ "skip-large-objects", no_argument, NULL, 'B' },
+		{ "filter", required_argument, NULL, 'F' },
+		{ "filters", required_argument, NULL, 'F' },
+		{ "restart", no_argument, NULL, 'r' },
+		{ "resume", no_argument, NULL, 'R' },
+		{ "not-consistent", no_argument, NULL, 'C' },
+		{ "snapshot", required_argument, NULL, 'N' },
+		{ "follow", no_argument, NULL, 'f' },
+		{ "slot-name", required_argument, NULL, 's' },
+		{ "origin", required_argument, NULL, 'o' },
+		{ "create-slot", no_argument, NULL, 't' },
+		{ "endpos", required_argument, NULL, 'E' },
+		{ "version", no_argument, NULL, 'V' },
+		{ "verbose", no_argument, NULL, 'v' },
+		{ "quiet", no_argument, NULL, 'q' },
+		{ "help", no_argument, NULL, 'h' },
+		{ NULL, 0, NULL, 0 }
+	};
+
+	optind = 0;
+
+	/* install default values */
+	options.tableJobs = 4;
+	options.indexJobs = 4;
+
+	/* read values from the environment */
+	if (!cli_copydb_getenv(&options))
+	{
+		log_fatal("Failed to read default values from the environment");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	while ((c = getopt_long(argc, argv, "S:T:D:J:I:cOBrRCN:xXCtfo:s:E:F:Vvqh",
+							long_options, &option_index)) != -1)
+	{
+		switch (c)
+		{
+			case 'S':
+			{
+				if (!validate_connection_string(optarg))
+				{
+					log_fatal("Failed to parse --source connection string, "
+							  "see above for details.");
+					++errors;
+				}
+				strlcpy(options.source_pguri, optarg, MAXCONNINFO);
+				log_trace("--source %s", options.source_pguri);
+				break;
+			}
+
+			case 'T':
+			{
+				if (!validate_connection_string(optarg))
+				{
+					log_fatal("Failed to parse --target connection string, "
+							  "see above for details.");
+					++errors;
+				}
+				strlcpy(options.target_pguri, optarg, MAXCONNINFO);
+				log_trace("--target %s", options.target_pguri);
+				break;
+			}
+
+			case 'D':
+			{
+				strlcpy(options.dir, optarg, MAXPGPATH);
+				log_trace("--dir %s", options.dir);
+				break;
+			}
+
+			case 'J':
+			{
+				if (!stringToInt(optarg, &options.tableJobs) ||
+					options.tableJobs < 1 ||
+					options.tableJobs > 128)
+				{
+					log_fatal("Failed to parse --jobs count: \"%s\"", optarg);
+					++errors;
+				}
+				log_trace("--table-jobs %d", options.tableJobs);
+				break;
+			}
+
+			case 'I':
+			{
+				if (!stringToInt(optarg, &options.indexJobs) ||
+					options.indexJobs < 1 ||
+					options.indexJobs > 128)
+				{
+					log_fatal("Failed to parse --index-jobs count: \"%s\"", optarg);
+					++errors;
+				}
+				log_trace("--jobs %d", options.indexJobs);
+				break;
+			}
+
+			case 'c':
+			{
+				options.restoreOptions.dropIfExists = true;
+				log_trace("--drop-if-exists");
+				break;
+			}
+
+			case 'O':
+			{
+				options.restoreOptions.noOwner = true;
+				log_trace("--no-owner");
+				break;
+			}
+
+			case 'x':
+			{
+				options.restoreOptions.noACL = true;
+				log_trace("--no-ack");
+				break;
+			}
+
+			case 'X':
+			{
+				options.restoreOptions.noComments = true;
+				log_trace("--no-comments");
+				break;
+			}
+
+			case 'B':
+			{
+				options.skipLargeObjects = true;
+				log_trace("--skip-large-objects");
+				break;
+			}
+
+			case 'r':
+			{
+				options.restart = true;
+				log_trace("--restart");
+
+				if (options.resume)
+				{
+					log_fatal("Options --resume and --restart are not compatible");
+				}
+				break;
+			}
+
+			case 'R':
+			{
+				options.resume = true;
+				log_trace("--resume");
+
+				if (options.restart)
+				{
+					log_fatal("Options --resume and --restart are not compatible");
+				}
+				break;
+			}
+
+			case 'C':
+			{
+				options.notConsistent = true;
+				log_trace("--not-consistent");
+				break;
+			}
+
+			case 'N':
+			{
+				strlcpy(options.snapshot, optarg, sizeof(options.snapshot));
+				log_trace("--snapshot %s", options.snapshot);
+				break;
+			}
+
+			case 's':
+			{
+				strlcpy(options.slotName, optarg, NAMEDATALEN);
+				log_trace("--slot-name %s", options.slotName);
+				break;
+			}
+
+			case 'o':
+			{
+				strlcpy(options.origin, optarg, NAMEDATALEN);
+				log_trace("--origin %s", options.origin);
+				break;
+			}
+
+			case 't':
+			{
+				options.createSlot = true;
+				log_trace("--create-slot");
+				break;
+			}
+
+			case 'f':
+			{
+				options.follow = true;
+				log_trace("--follow");
+				break;
+			}
+
+			case 'E':
+			{
+				if (!parseLSN(optarg, &(options.endpos)))
+				{
+					log_fatal("Failed to parse endpos LSN: \"%s\"", optarg);
+					exit(EXIT_CODE_BAD_ARGS);
+				}
+
+				log_trace("--endpos %X/%X",
+						  (uint32_t) (options.endpos >> 32),
+						  (uint32_t) options.endpos);
+				break;
+			}
+
+			case 'F':
+			{
+				strlcpy(options.filterFileName, optarg, MAXPGPATH);
+				log_trace("--filters \"%s\"", options.filterFileName);
+
+				if (!file_exists(options.filterFileName))
+				{
+					log_error("Filters file \"%s\" does not exists",
+							  options.filterFileName);
+					++errors;
+				}
+				break;
+			}
+
+			case 'V':
+			{
+				/* keeper_cli_print_version prints version and exits. */
+				cli_print_version(argc, argv);
+				break;
+			}
+
+			case 'v':
+			{
+				++verboseCount;
+				switch (verboseCount)
+				{
+					case 1:
+					{
+						log_set_level(LOG_INFO);
+						break;
+					}
+
+					case 2:
+					{
+						log_set_level(LOG_DEBUG);
+						break;
+					}
+
+					default:
+					{
+						log_set_level(LOG_TRACE);
+						break;
+					}
+				}
+				break;
+			}
+
+			case 'q':
+			{
+				log_set_level(LOG_ERROR);
+				break;
+			}
+
+			case 'h':
+			{
+				commandline_help(stderr);
+				exit(EXIT_CODE_QUIT);
+				break;
+			}
+		}
+	}
+
+	if (IS_EMPTY_STRING_BUFFER(options.source_pguri) ||
+		IS_EMPTY_STRING_BUFFER(options.target_pguri))
+	{
+		log_fatal("Options --source and --target are mandatory");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	if (!cli_copydb_is_consistent(&options))
+	{
+		log_fatal("Option --resume requires option --not-consistent");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	if (errors > 0)
+	{
+		commandline_help(stderr);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	/* publish our option parsing in the global variable */
+	copyDBoptions = options;
+
+	return optind;
+}
+
+
+/*
+ * cli_copy_prepare_specs initializes our internal data structure that are used
+ * to drive the operations.
+ */
+void
+cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
+{
+	PostgresPaths *pgPaths = &(copySpecs->pgPaths);
+
+	char scrubbedSourceURI[MAXCONNINFO] = { 0 };
+	char scrubbedTargetURI[MAXCONNINFO] = { 0 };
+
+	(void) parse_and_scrub_connection_string(copyDBoptions.source_pguri,
+											 scrubbedSourceURI);
+
+	(void) parse_and_scrub_connection_string(copyDBoptions.target_pguri,
+											 scrubbedTargetURI);
+
+	log_info("[SOURCE] Copying database from \"%s\"", scrubbedSourceURI);
+	log_info("[TARGET] Copying database into \"%s\"", scrubbedTargetURI);
+
+	(void) find_pg_commands(pgPaths);
+
+	log_debug("Using pg_dump for Postgres \"%s\" at \"%s\"",
+			  copySpecs->pgPaths.pg_version,
+			  copySpecs->pgPaths.pg_dump);
+
+	log_debug("Using pg_restore for Postgres \"%s\" at \"%s\"",
+			  copySpecs->pgPaths.pg_version,
+			  copySpecs->pgPaths.pg_restore);
+
+	char *dir =
+		IS_EMPTY_STRING_BUFFER(copyDBoptions.dir)
+		? NULL
+		: copyDBoptions.dir;
+
+	if (!copydb_init_workdir(copySpecs,
+							 dir,
+							 copyDBoptions.restart,
+							 copyDBoptions.resume))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!copydb_init_specs(copySpecs,
+						   copyDBoptions.source_pguri,
+						   copyDBoptions.target_pguri,
+						   copyDBoptions.tableJobs,
+						   copyDBoptions.indexJobs,
+						   section,
+						   copyDBoptions.snapshot,
+						   copyDBoptions.restoreOptions,
+						   copyDBoptions.skipLargeObjects,
+						   copyDBoptions.restart,
+						   copyDBoptions.resume,
+						   !copyDBoptions.notConsistent))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!IS_EMPTY_STRING_BUFFER(copyDBoptions.filterFileName))
+	{
+		SourceFilters *filters = &(copySpecs->filters);
+
+		if (!parse_filters(copyDBoptions.filterFileName, filters))
+		{
+			log_error("Failed to parse filters in file \"%s\"",
+					  copyDBoptions.filterFileName);
+			exit(EXIT_CODE_BAD_ARGS);
+		}
+	}
 }
