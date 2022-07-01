@@ -331,20 +331,13 @@ cli_copydb_is_consistent(CopyDBOptions *options)
 		return true;
 	}
 
-	/* okay --resume is being used, do we have a snapshot? */
-	if (IS_EMPTY_STRING_BUFFER(options->snapshot))
-	{
-		/* --resume without --snapshot requires --not-consistent */
-		return false;
-	}
-
 	/* okay, a --snapshot is required, is it the same as the previous run? */
 	CopyFilePaths cfPaths = { 0 };
 
 	char *dir =
 		IS_EMPTY_STRING_BUFFER(options->dir) ? NULL : options->dir;
 
-	if (!copydb_prepare_filepaths(&cfPaths, dir))
+	if (!copydb_prepare_filepaths(&cfPaths, dir, false))
 	{
 		return false;
 	}
@@ -357,6 +350,11 @@ cli_copydb_is_consistent(CopyDBOptions *options)
 	 */
 	if (!file_exists(cfPaths.snfile))
 	{
+		if (IS_EMPTY_STRING_BUFFER(options->snapshot))
+		{
+			/* --resume without --snapshot requires --not-consistent */
+			return false;
+		}
 		return true;
 	}
 
@@ -373,7 +371,17 @@ cli_copydb_is_consistent(CopyDBOptions *options)
 	char *snLines[BUFSIZE] = { 0 };
 	int lineCount = splitLines(previous_snapshot, snLines, BUFSIZE);
 
-	if (lineCount != 1 || strcmp(snLines[0], options->snapshot) != 0)
+	if (lineCount != 1 && IS_EMPTY_STRING_BUFFER(options->snapshot))
+	{
+		/* --resume without snapshot requires --not-consistent */
+		return false;
+	}
+
+	if (IS_EMPTY_STRING_BUFFER(options->snapshot))
+	{
+		strlcpy(options->snapshot, snLines[0], sizeof(options->snapshot));
+	}
+	else if (strcmp(snLines[0], options->snapshot) != 0)
 	{
 		log_error("Failed to ensure a consistent snapshot to resume operations");
 		log_error("Previous run was done with snapshot \"%s\" and current run "
@@ -790,7 +798,8 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 	if (!copydb_init_workdir(copySpecs,
 							 dir,
 							 copyDBoptions.restart,
-							 copyDBoptions.resume))
+							 copyDBoptions.resume,
+							 false))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

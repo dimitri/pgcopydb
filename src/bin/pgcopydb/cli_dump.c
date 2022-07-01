@@ -303,7 +303,8 @@ cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 	if (!copydb_init_workdir(&copySpecs,
 							 dir,
 							 dumpDBoptions->restart,
-							 dumpDBoptions->resume))
+							 dumpDBoptions->resume,
+							 false))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

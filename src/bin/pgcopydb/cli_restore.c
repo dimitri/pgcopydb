@@ -484,7 +484,8 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 	if (!copydb_init_workdir(copySpecs,
 							 dir,
 							 restoreDBoptions.restart,
-							 restoreDBoptions.resume))
+							 restoreDBoptions.resume,
+							 false))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
