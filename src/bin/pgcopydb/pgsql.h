@@ -392,4 +392,6 @@ bool pgsql_create_replication_slot(PGSQL *pgsql,
 
 bool pgsql_drop_replication_slot(PGSQL *pgsql, const char *slotName);
 
+bool pgsql_role_exists(PGSQL *pgsql, const char *roleName, bool *exists);
+
 #endif /* PGSQL_H */

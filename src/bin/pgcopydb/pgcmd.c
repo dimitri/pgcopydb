@@ -528,83 +528,135 @@ pg_restore_roles(PostgresPaths *pgPaths,
 				 const char *pguri,
 				 const char *filename)
 {
-	char *args[16];
-	int argsIndex = 0;
+	char *content = NULL;
+	long size = 0L;
 
-	char command[BUFSIZE] = { 0 };
+	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
 
-	SafeURI safeURI = { 0 };
-	bool pgpassword_found_in_env = env_exists("PGPASSWORD");
-	char PGPASSWORD[MAXCONNINFO] = { 0 };
-
-	if (!extract_connection_string_password(pguri, &safeURI))
+	/*
+	 * Rather than using psql --single-transaction --file filename, we read the
+	 * given filename in memory and loop over the lines.
+	 *
+	 * We know that pg_dumpall --roles-only outputs a single SQL command per
+	 * line, so that we don't actually have to be smart about parse the content.
+	 *
+	 * Then again there is no CREATE ROLE IF NOT EXISTS in Postgres, that's why
+	 * we are reading the file and then sending the commands ourselves. When
+	 * the script contains a line such as
+	 *
+	 *  CREATE ROLE dim;
+	 *
+	 * instead of applying it as-is, we parse the usename and check if it
+	 * already exists on the target. We only send the SQL command when we fail
+	 * to find the username.
+	 */
+	if (!read_file(filename, &content, &size))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+	char *lines[BUFSIZE] = { 0 };
+	int lineCount = splitLines(content, lines, BUFSIZE);
 
-	/* override PGPASSWORD environment variable if the pguri contains one */
-	if (!IS_EMPTY_STRING_BUFFER(safeURI.password))
+	PGSQL pgsql = { 0 };
+
+	if (!pgsql_init(&pgsql, (char *) pguri, PGSQL_CONN_TARGET))
 	{
-		if (pgpassword_found_in_env &&
-			!get_env_copy("PGPASSWORD", PGPASSWORD, MAXCONNINFO))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-		setenv("PGPASSWORD", safeURI.password, 1);
-	}
-
-	args[argsIndex++] = (char *) pgPaths->psql;
-	args[argsIndex++] = "--dbname";
-	args[argsIndex++] = (char *) safeURI.pguri;
-	args[argsIndex++] = "--no-psqlrc";
-	args[argsIndex++] = "--single-transaction";
-	args[argsIndex++] = "--file";
-	args[argsIndex++] = (char *) filename;
-
-	args[argsIndex] = NULL;
-
-	/*
-	 * We do not want to call setsid() when running pg_dump.
-	 */
-	Program program = { 0 };
-
-	(void) initialize_program(&program, args, false);
-	program.processBuffer = &processBufferCallback;
-
-	/* log the exact command line we're using */
-	int commandSize = snprintf_program_command_line(&program, command, BUFSIZE);
-
-	if (commandSize >= BUFSIZE)
-	{
-		/* we only display the first BUFSIZE bytes of the real command */
-		log_info("%s...", command);
-	}
-	else
-	{
-		log_info("%s", command);
-	}
-
-	(void) execute_subprogram(&program);
-
-	/* make sure to reset the environment PGPASSWORD if we edited it */
-	if (pgpassword_found_in_env && !IS_EMPTY_STRING_BUFFER(safeURI.password))
-	{
-		setenv("PGPASSWORD", PGPASSWORD, 1);
-	}
-
-	if (program.returnCode != 0)
-	{
-		log_error("Failed to run pg_restore: exit code %d", program.returnCode);
-		free_program(&program);
-
+		/* errors have already been logged */
 		return false;
 	}
 
-	free_program(&program);
+	if (!pgsql_begin(&pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	for (int l = 0; l < lineCount; l++)
+	{
+		char *currentLine = lines[l];
+
+		if (strcmp(currentLine, "") == 0)
+		{
+			/* skip empty lines */
+			continue;
+		}
+
+		char *createRole = "CREATE ROLE ";
+		int createRoleLen = strlen(createRole);
+
+		if (strncmp(currentLine, "--", 2) == 0)
+		{
+			/* skip comments */
+			continue;
+		}
+		else if (strncmp(currentLine, createRole, createRoleLen) == 0)
+		{
+			/* we have a create role command */
+			int lineLen = strlen(currentLine);
+			char lastChar = currentLine[lineLen - 1];
+
+			if (lastChar != ';')
+			{
+				log_error("Failed to parse create role statement \"%s\"",
+						  currentLine);
+				return false;
+			}
+
+			/* chomp the last ';' character from the role name */
+			currentLine[lineLen - 1] = '\0';
+
+			char *roleNamePtr = currentLine + createRoleLen;
+			char roleName[NAMEDATALEN] = { 0 };
+
+			strlcpy(roleName, roleNamePtr, sizeof(roleName));
+
+			bool exists = false;
+
+			if (!pgsql_role_exists(&pgsql, roleName, &exists))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			if (exists)
+			{
+				log_info("Skipping CREATE ROLE %s, which already exists",
+						 roleName);
+				continue;
+			}
+
+			char createRole[BUFSIZE] = { 0 };
+
+			sformat(createRole, sizeof(createRole), "CREATE ROLE %s", roleName);
+
+			log_info("%s", createRole);
+
+			if (!pgsql_execute(&pgsql, createRole))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+		}
+		else
+		{
+			log_info("%s", currentLine);
+
+			if (!pgsql_execute(&pgsql, currentLine))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+		}
+	}
+
+	if (!pgsql_rollback(&pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	return true;
 }
 
