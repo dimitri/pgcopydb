@@ -651,7 +651,7 @@ pg_restore_roles(PostgresPaths *pgPaths,
 		}
 	}
 
-	if (!pgsql_rollback(&pgsql))
+	if (!pgsql_commit(&pgsql))
 	{
 		/* errors have already been logged */
 		return false;
