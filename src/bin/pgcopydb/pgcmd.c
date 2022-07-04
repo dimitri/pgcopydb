@@ -110,6 +110,7 @@ void
 set_postgres_commands(PostgresPaths *pgPaths)
 {
 	path_in_same_directory(pgPaths->psql, "pg_dump", pgPaths->pg_dump);
+	path_in_same_directory(pgPaths->psql, "pg_dumpall", pgPaths->pg_dumpall);
 	path_in_same_directory(pgPaths->psql, "pg_restore", pgPaths->pg_restore);
 }
 
@@ -418,6 +419,186 @@ pg_dump_db(PostgresPaths *pgPaths,
 	if (program.returnCode != 0)
 	{
 		log_error("Failed to run pg_dump: exit code %d", program.returnCode);
+		free_program(&program);
+
+		return false;
+	}
+
+	free_program(&program);
+	return true;
+}
+
+
+/*
+ * Call pg_dump and get the given section of the dump into the target file.
+ */
+bool
+pg_dumpall_roles(PostgresPaths *pgPaths,
+				 const char *pguri,
+				 const char *filename)
+{
+	char *args[16];
+	int argsIndex = 0;
+
+	char command[BUFSIZE] = { 0 };
+
+	SafeURI safeURI = { 0 };
+	bool pgpassword_found_in_env = env_exists("PGPASSWORD");
+	char PGPASSWORD[MAXCONNINFO] = { 0 };
+
+	if (!extract_connection_string_password(pguri, &safeURI))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+
+	/* override PGPASSWORD environment variable if the pguri contains one */
+	if (!IS_EMPTY_STRING_BUFFER(safeURI.password))
+	{
+		if (pgpassword_found_in_env &&
+			!get_env_copy("PGPASSWORD", PGPASSWORD, MAXCONNINFO))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+		setenv("PGPASSWORD", safeURI.password, 1);
+	}
+
+	args[argsIndex++] = (char *) pgPaths->pg_dumpall;
+	args[argsIndex++] = "--roles-only";
+
+	args[argsIndex++] = "--file";
+	args[argsIndex++] = (char *) filename;
+
+	args[argsIndex++] = "--dbname";
+	args[argsIndex++] = (char *) safeURI.pguri;
+
+	args[argsIndex] = NULL;
+
+	/*
+	 * We do not want to call setsid() when running pg_dump.
+	 */
+	Program program = { 0 };
+
+	(void) initialize_program(&program, args, false);
+	program.processBuffer = &processBufferCallback;
+
+	/* log the exact command line we're using */
+	int commandSize = snprintf_program_command_line(&program, command, BUFSIZE);
+
+	if (commandSize >= BUFSIZE)
+	{
+		/* we only display the first BUFSIZE bytes of the real command */
+		log_info("%s...", command);
+	}
+	else
+	{
+		log_info("%s", command);
+	}
+
+	(void) execute_subprogram(&program);
+
+	/* make sure to reset the environment PGPASSWORD if we edited it */
+	if (pgpassword_found_in_env && !IS_EMPTY_STRING_BUFFER(safeURI.password))
+	{
+		setenv("PGPASSWORD", PGPASSWORD, 1);
+	}
+
+	if (program.returnCode != 0)
+	{
+		log_error("Failed to run pg_dump: exit code %d", program.returnCode);
+		free_program(&program);
+
+		return false;
+	}
+
+	free_program(&program);
+	return true;
+}
+
+
+/*
+ * pg_restore_roles calls psql on the roles SQL file obtained with pg_dumpall
+ * or the function pg_dumpall_roles.
+ */
+bool
+pg_restore_roles(PostgresPaths *pgPaths,
+				 const char *pguri,
+				 const char *filename)
+{
+	char *args[16];
+	int argsIndex = 0;
+
+	char command[BUFSIZE] = { 0 };
+
+	SafeURI safeURI = { 0 };
+	bool pgpassword_found_in_env = env_exists("PGPASSWORD");
+	char PGPASSWORD[MAXCONNINFO] = { 0 };
+
+	if (!extract_connection_string_password(pguri, &safeURI))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+
+	/* override PGPASSWORD environment variable if the pguri contains one */
+	if (!IS_EMPTY_STRING_BUFFER(safeURI.password))
+	{
+		if (pgpassword_found_in_env &&
+			!get_env_copy("PGPASSWORD", PGPASSWORD, MAXCONNINFO))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+		setenv("PGPASSWORD", safeURI.password, 1);
+	}
+
+	args[argsIndex++] = (char *) pgPaths->psql;
+	args[argsIndex++] = "--dbname";
+	args[argsIndex++] = (char *) safeURI.pguri;
+	args[argsIndex++] = "--no-psqlrc";
+	args[argsIndex++] = "--single-transaction";
+	args[argsIndex++] = "--file";
+	args[argsIndex++] = (char *) filename;
+
+	args[argsIndex] = NULL;
+
+	/*
+	 * We do not want to call setsid() when running pg_dump.
+	 */
+	Program program = { 0 };
+
+	(void) initialize_program(&program, args, false);
+	program.processBuffer = &processBufferCallback;
+
+	/* log the exact command line we're using */
+	int commandSize = snprintf_program_command_line(&program, command, BUFSIZE);
+
+	if (commandSize >= BUFSIZE)
+	{
+		/* we only display the first BUFSIZE bytes of the real command */
+		log_info("%s...", command);
+	}
+	else
+	{
+		log_info("%s", command);
+	}
+
+	(void) execute_subprogram(&program);
+
+	/* make sure to reset the environment PGPASSWORD if we edited it */
+	if (pgpassword_found_in_env && !IS_EMPTY_STRING_BUFFER(safeURI.password))
+	{
+		setenv("PGPASSWORD", PGPASSWORD, 1);
+	}
+
+	if (program.returnCode != 0)
+	{
+		log_error("Failed to run pg_restore: exit code %d", program.returnCode);
 		free_program(&program);
 
 		return false;

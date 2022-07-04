@@ -24,6 +24,7 @@ typedef struct PostgresPaths
 	char psql[MAXPGPATH];
 	char pg_config[MAXPGPATH];
 	char pg_dump[MAXPGPATH];
+	char pg_dumpall[MAXPGPATH];
 	char pg_restore[MAXPGPATH];
 	char pg_version[PG_VERSION_STRING_MAX];
 } PostgresPaths;
@@ -84,6 +85,14 @@ bool pg_dump_db(PostgresPaths *pgPaths,
 				const char *snapshot,
 				const char *section,
 				const char *filename);
+
+bool pg_dumpall_roles(PostgresPaths *pgPaths,
+					  const char *pguri,
+					  const char *filename);
+
+bool pg_restore_roles(PostgresPaths *pgPaths,
+					  const char *pguri,
+					  const char *filename);
 
 bool pg_restore_db(PostgresPaths *pgPaths,
 				   const char *pguri,

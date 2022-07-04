@@ -13,6 +13,7 @@ This command prefixes the following sub-commands:
      schema     Dump source database schema as custom files in target directory
      pre-data   Dump source database pre-data schema as custom files in target directory
      post-data  Dump source database post-data schema as custom files in target directory
+     roles      Dump source database roles as custome file in work directory
 
 
 .. _pgcopydb_dump_schema:
@@ -71,6 +72,26 @@ The command ``pgcopydb dump post-data`` uses pg_dump to export SQL schema
      --source          Postgres URI to the source database
      --target          Directory where to save the dump files
      --snapshot            Use snapshot obtained with pg_export_snapshot
+
+
+.. _pgcopydb_dump_roles:
+
+pgcopydb dump roles
+-------------------
+
+pgcopydb dump roles - Dump source database roles as custome file in work directory
+
+The command ``pgcopydb dump roles`` uses pg_dumpall --roles-only to export
+SQL definitions of the roles found on the source Postgres instance.
+
+::
+
+   pgcopydb dump roles: Dump source database roles as custome file in work directory
+   usage: pgcopydb dump roles  --source <URI>
+
+     --source          Postgres URI to the source database
+     --target          Directory where to save the dump files
+     --dir             Work directory to use
 
 
 Description

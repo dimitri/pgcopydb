@@ -431,6 +431,9 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths, const char *dir, bool auxilliar
 bool
 copydb_prepare_dump_paths(CopyFilePaths *cfPaths, DumpPaths *dumpPaths)
 {
+	sformat(dumpPaths->rolesFilename, MAXPGPATH, "%s/%s",
+			cfPaths->schemadir, "roles.sql");
+
 	sformat(dumpPaths->preFilename, MAXPGPATH, "%s/%s",
 			cfPaths->schemadir, "pre.dump");
 
