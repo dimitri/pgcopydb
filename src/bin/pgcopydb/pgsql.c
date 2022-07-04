@@ -63,6 +63,8 @@ static void prepareToTerminate(LogicalStreamClient *client,
 							   bool keepalive,
 							   XLogRecPtr lsn);
 
+static void parseReplicationSlot(void *ctx, PGresult *result);
+
 
 /*
  * parseSingleValueResult is a ParsePostgresResultCB callback that reads the
@@ -3390,4 +3392,160 @@ pgsql_replication_origin_progress(PGSQL *pgsql,
 	}
 
 	return true;
+}
+
+
+/*
+ * pgsql_replication_slot_maintain advances the current confirmed position of
+ * the given replication slot up to the given LSN position, create the
+ * replication slot if it does not exist yet, and remove the slots that exist
+ * in Postgres but are ommited in the given array of slots.
+ */
+typedef struct ReplicationSlotContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	char slotName[BUFSIZE];
+	char lsn[PG_LSN_MAXLENGTH];
+	bool parsedOK;
+} ReplicationSlotContext;
+
+
+/*
+ * pgsql_replication_slot_exists checks that a replication slot with the given
+ * slotName exists on the Postgres server.
+ */
+bool
+pgsql_replication_slot_exists(PGSQL *pgsql, const char *slotName,
+							  bool *slotExists)
+{
+	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_BOOL, false };
+	char *sql = "SELECT 1 FROM pg_replication_slots WHERE slot_name = $1";
+	int paramCount = 1;
+	Oid paramTypes[1] = { NAMEOID };
+	const char *paramValues[1] = { slotName };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   &context, &fetchedRows))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to check if the replication slot \"%s\" exists",
+				  slotName);
+		return false;
+	}
+
+	/* we receive 0 rows in the result when the slot does not exist yet */
+	*slotExists = context.intVal == 1;
+
+	return true;
+}
+
+
+/*
+ * pgsql_create_replication_slot tries to create a replication slot on the
+ * database identified by a connection string. It's implemented as CREATE IF
+ * NOT EXISTS so that it's idempotent and can be retried easily.
+ */
+bool
+pgsql_create_replication_slot(PGSQL *pgsql,
+							  const char *slotName,
+							  const char *plugin,
+							  uint64_t *lsn)
+{
+	ReplicationSlotContext context = { 0 };
+	char *sql =
+		"SELECT slot_name, lsn "
+		"  FROM pg_create_logical_replication_slot($1, $2)";
+	int paramCount = 2;
+	const Oid paramTypes[2] = { TEXTOID, TEXTOID };
+	const char *paramValues[2] = { slotName, plugin };
+
+	log_debug("Creating logical replication slot \"%s\" with plugin \"%s\"",
+			  slotName, plugin);
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   &context, parseReplicationSlot))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!context.parsedOK)
+	{
+		log_error("Failed to create the logical replication slot \"%s\" with "
+				  "plugin \"%s\"",
+				  slotName, plugin);
+		return false;
+	}
+
+	if (!parseLSN(context.lsn, lsn))
+	{
+		log_error("Failed to parse LSN \"%s\"", context.lsn);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * pgsql_drop_replication_slot drops a given replication slot.
+ */
+bool
+pgsql_drop_replication_slot(PGSQL *pgsql, const char *slotName)
+{
+	char *sql =
+		"SELECT pg_drop_replication_slot(slot_name) "
+		"  FROM pg_replication_slots "
+		" WHERE slot_name = $1";
+	Oid paramTypes[1] = { TEXTOID };
+	const char *paramValues[1] = { slotName };
+
+	log_info("Dropping replication slot \"%s\"", slotName);
+
+	return pgsql_execute_with_params(pgsql, sql,
+									 1, paramTypes, paramValues,
+									 NULL, NULL);
+}
+
+
+/*
+ * parseReplicationSlotMaintain parses the result from a PostgreSQL query
+ * fetching two columns from pg_stat_replication: sync_state and currentLSN.
+ */
+static void
+parseReplicationSlot(void *ctx, PGresult *result)
+{
+	ReplicationSlotContext *context = (ReplicationSlotContext *) ctx;
+
+	if (PQnfields(result) != 2)
+	{
+		log_error("Query returned %d columns, expected 2", PQnfields(result));
+		context->parsedOK = false;
+		return;
+	}
+
+	if (PQntuples(result) != 1)
+	{
+		log_error("Query returned %d rows, expected 1", PQntuples(result));
+		context->parsedOK = false;
+		return;
+	}
+
+	char *value = PQgetvalue(result, 0, 0);
+	strlcpy(context->slotName, value, sizeof(context->slotName));
+
+	if (!PQgetisnull(result, 0, 1))
+	{
+		value = PQgetvalue(result, 0, 1);
+		strlcpy(context->lsn, value, sizeof(context->lsn));
+	}
+
+	context->parsedOK = true;
 }

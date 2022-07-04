@@ -28,6 +28,7 @@ CommandLine *root_subcommands_with_debug[] = {
 	&copy__db_command,          /* backward compat */
 	&copy_commands,
 	&create_commands,
+	&drop_commands,
 	&dump_commands,
 	&restore_commands,
 	&list_commands,
@@ -53,6 +54,7 @@ CommandLine *root_subcommands[] = {
 	&copy__db_command,          /* backward compat */
 	&copy_commands,
 	&create_commands,
+	&drop_commands,
 	&dump_commands,
 	&restore_commands,
 	&list_commands,

@@ -381,5 +381,15 @@ bool pgsql_replication_origin_progress(PGSQL *pgsql,
 									   bool flush,
 									   char *lsn);
 
+bool pgsql_replication_slot_exists(PGSQL *pgsql,
+								   const char *slotName,
+								   bool *slotExists);
+
+bool pgsql_create_replication_slot(PGSQL *pgsql,
+								   const char *slotName,
+								   const char *plugin,
+								   uint64_t *lsn);
+
+bool pgsql_drop_replication_slot(PGSQL *pgsql, const char *slotName);
 
 #endif /* PGSQL_H */
