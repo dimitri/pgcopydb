@@ -349,6 +349,7 @@ cli_stream_receive(int argc, char **argv)
 						   DATA_SECTION_ALL,
 						   streamDBoptions.snapshot,
 						   restoreOptions,
+						   false, /* roles */
 						   false, /* skipLargeObjects */
 						   streamDBoptions.restart,
 						   streamDBoptions.resume,
@@ -443,6 +444,7 @@ cli_stream_apply(int argc, char **argv)
 						   DATA_SECTION_ALL,
 						   streamDBoptions.snapshot,
 						   restoreOptions,
+						   false, /* roles */
 						   false, /* skipLargeObjects */
 						   streamDBoptions.restart,
 						   streamDBoptions.resume,

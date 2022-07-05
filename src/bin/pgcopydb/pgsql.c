@@ -3549,3 +3549,38 @@ parseReplicationSlot(void *ctx, PGresult *result)
 
 	context->parsedOK = true;
 }
+
+
+/*
+ * pgsql_role_exists checks that a role with the given roleName exists on the
+ * Postgres server.
+ */
+bool
+pgsql_role_exists(PGSQL *pgsql, const char *roleName, bool *exists)
+{
+	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_BOOL, false };
+	char *sql = "SELECT 1 FROM pg_roles WHERE rolname = $1";
+	int paramCount = 1;
+	Oid paramTypes[1] = { NAMEOID };
+	const char *paramValues[1] = { roleName };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   &context, &fetchedRows))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to check if the role \"%s\" already exists",
+				  roleName);
+		return false;
+	}
+
+	/* we receive 0 rows in the result when the slot does not exist yet */
+	*exists = context.intVal == 1;
+
+	return true;
+}

@@ -70,6 +70,8 @@ typedef struct CopyFilePaths
 /* the main pg_dump and pg_restore process are driven from split files */
 typedef struct DumpPaths
 {
+	char rolesFilename[MAXPGPATH];   /* pg_dumpall --roles-only */
+
 	char preFilename[MAXPGPATH];     /* pg_dump --section=pre-data */
 	char preListFilename[MAXPGPATH]; /* pg_restore --list */
 
@@ -236,6 +238,7 @@ typedef struct CopyDataSpec
 
 	CopyDataSection section;
 	RestoreOptions restoreOptions;
+	bool roles;
 	bool skipLargeObjects;
 
 	bool restart;
@@ -260,7 +263,8 @@ typedef enum
 	PG_DUMP_SECTION_SCHEMA,
 	PG_DUMP_SECTION_PRE_DATA,
 	PG_DUMP_SECTION_POST_DATA,
-	PG_DUMP_SECTION_DATA
+	PG_DUMP_SECTION_DATA,
+	PG_DUMP_SECTION_ROLES       /* pg_dumpall --roles-only */
 } PostgresDumpSection;
 
 
@@ -292,6 +296,7 @@ bool copydb_init_specs(CopyDataSpec *specs,
 					   CopyDataSection section,
 					   char *snapshot,
 					   RestoreOptions restoreOptions,
+					   bool roles,
 					   bool skipLargeObjects,
 					   bool restart,
 					   bool resume,
@@ -314,6 +319,7 @@ bool copydb_fatal_exit(void);
 bool copydb_wait_for_subprocesses(void);
 bool copydb_collect_finished_subprocesses(bool *allDone);
 
+bool copydb_copy_roles(CopyDataSpec *copySpecs);
 
 /* indexes.c */
 bool copydb_init_indexes_paths(CopyFilePaths *cfPaths,

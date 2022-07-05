@@ -31,6 +31,7 @@ typedef struct CopyDBOptions
 
 	RestoreOptions restoreOptions;
 
+	bool roles;
 	bool skipLargeObjects;
 
 	bool restart;

@@ -26,6 +26,8 @@ static void cli_restore_schema(int argc, char **argv);
 static void cli_restore_schema_pre_data(int argc, char **argv);
 static void cli_restore_schema_post_data(int argc, char **argv);
 static void cli_restore_schema_parse_list(int argc, char **argv);
+static void cli_restore_roles(int argc, char **argv);
+
 static void cli_restore_prepare_specs(CopyDataSpec *copySpecs);
 
 static CommandLine restore_schema_command =
@@ -84,6 +86,17 @@ static CommandLine restore_schema_post_data_command =
 		cli_restore_schema_getopts,
 		cli_restore_schema_post_data);
 
+static CommandLine restore_roles_command =
+	make_command(
+		"roles",
+		"Restore database roles from SQL file to target database",
+		" --dir <dir> [ --source <URI> ] --target <URI> ",
+		"  --source             Postgres URI to the source database\n"
+		"  --target             Postgres URI to the target database\n"
+		"  --dir                Work directory to use\n",
+		cli_restore_schema_getopts,
+		cli_restore_roles);
+
 static CommandLine restore_schema_parse_list_command =
 	make_command(
 		"parse-list",
@@ -104,6 +117,7 @@ static CommandLine *restore_subcommands[] = {
 	&restore_schema_command,
 	&restore_schema_pre_data_command,
 	&restore_schema_post_data_command,
+	&restore_roles_command,
 	&restore_schema_parse_list_command,
 	NULL
 };
@@ -396,6 +410,26 @@ cli_restore_schema_post_data(int argc, char **argv)
 
 
 /*
+ * cli_restore_roles implements the command: pgcopydb restore roles
+ */
+static void
+cli_restore_roles(int argc, char **argv)
+{
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) cli_restore_prepare_specs(&copySpecs);
+
+	if (!pg_restore_roles(&(copySpecs.pgPaths),
+						  copySpecs.target_pguri,
+						  copySpecs.dumpPaths.rolesFilename))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_TARGET);
+	}
+}
+
+
+/*
  * cli_restore_schema implements the command: pgcopydb restore parse-list
  */
 static void
@@ -501,6 +535,7 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 						   DATA_SECTION_NONE,
 						   restoreDBoptions.snapshot,
 						   restoreDBoptions.restoreOptions,
+						   false, /* roles */
 						   false, /* skipLargeObjects */
 						   restoreDBoptions.restart,
 						   restoreDBoptions.resume,

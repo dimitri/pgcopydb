@@ -13,6 +13,7 @@ This command prefixes the following sub-commands:
     schema      Restore a database schema from custom files to target database
     pre-data    Restore a database pre-data schema from custom file to target database
     post-data   Restore a database post-data schema from custom file to target database
+    roles       Restore database roles from SQL file to target database
     parse-list  Parse pg_restore --list output from custom file
 
 
@@ -102,6 +103,26 @@ be fed with the directory output from the ``pgcopydb dump ...`` commands.
      --restart            Allow restarting when temp files exist already
      --resume             Allow resuming operations after a failure
      --not-consistent     Allow taking a new snapshot on the source database
+
+
+.. _pgcopydb_restore_roles:
+
+pgcopydb restore roles
+----------------------
+
+pgcopydb restore roles - Restore database roles from SQL file to target database
+
+The command ``pgcopydb restore roles`` uses psql to create the SQL script
+obtained from the command ``pgcopydb dump roles``.
+
+::
+
+   pgcopydb restore roles: Restore database roles from SQL file to target database
+   usage: pgcopydb restore roles  --dir <dir> [ --source <URI> ] --target <URI>
+
+     --source             Postgres URI to the source database
+     --target             Postgres URI to the target database
+     --dir                Work directory to use
 
 
 .. _pgcopydb_restore_parse_list:

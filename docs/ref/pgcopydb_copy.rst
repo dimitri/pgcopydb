@@ -11,6 +11,7 @@ This command prefixes the following sub-commands:
 
   pgcopydb copy
     db           Copy an entire database from source to target
+    roles        Copy the roles from the source instance to the target instance
     schema       Copy the database schema from source to target
     data         Copy the data section from source to target
     table-data   Copy the data from all tables in database from source to target
@@ -51,6 +52,7 @@ also :ref:`pgcopydb_clone`.
      --table-jobs          Number of concurrent COPY jobs to run
      --index-jobs          Number of concurrent CREATE INDEX jobs to run
      --drop-if-exists      On the target database, clean-up from a previous run first
+     --roles               Also copy roles found on source to target
      --no-owner            Do not set ownership of objects to match the original database
      --no-acl              Prevent restoration of access privileges (grant/revoke commands).
      --no-comments         Do not output commands to restore comments
@@ -60,6 +62,36 @@ also :ref:`pgcopydb_clone`.
      --resume              Allow resuming operations after a failure
      --not-consistent      Allow taking a new snapshot on the source database
      --snapshot            Use snapshot obtained with pg_export_snapshot
+
+.. _pgcopydb_copy_roles:
+
+pgcopydb copy roles
+-------------------
+
+pgcopydb copy roles - Copy the roles from the source instance to the target instance
+
+The command ``pgcopydb copy roles`` implements both
+:ref:`pgcopydb_dump_roles` and then :ref:`pgcopydb_restore_roles`.
+
+::
+
+   pgcopydb copy roles: Copy the roles from the source instance to the target instance
+   usage: pgcopydb copy roles  --source ... --target ...
+
+     --source              Postgres URI to the source database
+     --target              Postgres URI to the target database
+     --dir                 Work directory to use
+
+.. note::
+
+   In Postgres, roles are a global object. This means roles do not belong to
+   any specific database, and as a result, even when the ``pgcopydb`` tool
+   otherwise works only in the context of a specific database, this command
+   is not limited to roles that are used within a single database.
+
+When a role already exists on the target database, its restoring is entirely
+skipped, which includes skipping both the ``CREATE ROLE`` and the ``ALTER
+ROLE`` commands produced by ``pg_dumpall --roles-only``.
 
 .. _pgcopydb_copy_schema:
 

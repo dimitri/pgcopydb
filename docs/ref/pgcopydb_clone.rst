@@ -27,6 +27,7 @@ Postgres instance to the target Postgres instance.
      --table-jobs          Number of concurrent COPY jobs to run
      --index-jobs          Number of concurrent CREATE INDEX jobs to run
      --drop-if-exists      On the target database, clean-up from a previous run first
+     --roles               Also copy roles found on source to target
      --no-owner            Do not set ownership of objects to match the original database
      --no-acl              Prevent restoration of access privileges (grant/revoke commands).
      --no-comments         Do not output commands to restore comments
@@ -174,6 +175,15 @@ The following options are available to ``pgcopydb clone``:
 
   This option causes ``DROP TABLE`` and ``DROP INDEX`` and other DROP
   commands to be used. Make sure you understand what you're doing here!
+
+--roles
+
+  The option ``--roles`` add a preliminary step that copies the roles found
+  on the source instance to the target instance. As Postgres roles are
+  global object, they do not exist only within the context of a specific
+  database, so all the roles are copied over when using this option.
+
+  See also :ref:`pgcopydb_copy_roles`.
 
 --no-owner
 

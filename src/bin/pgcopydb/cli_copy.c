@@ -19,6 +19,7 @@
 #include "string_utils.h"
 #include "summary.h"
 
+static void cli_copy_roles(int argc, char **argv);
 static void cli_copy_schema(int argc, char **argv);
 static void cli_copy_data(int argc, char **argv);
 static void cli_copy_table_data(int argc, char **argv);
@@ -39,6 +40,7 @@ CommandLine copy__db_command =
 		"  --table-jobs          Number of concurrent COPY jobs to run\n"
 		"  --index-jobs          Number of concurrent CREATE INDEX jobs to run\n"
 		"  --drop-if-exists      On the target database, clean-up from a previous run first\n"
+		"  --roles               Also copy roles found on source to target\n"
 		"  --no-owner            Do not set ownership of objects to match the original database\n"
 		"  --no-acl              Prevent restoration of access privileges (grant/revoke commands).\n"
 		"  --no-comments         Do not output commands to restore comments\n"
@@ -62,6 +64,7 @@ static CommandLine copy_db_command =
 		"  --table-jobs          Number of concurrent COPY jobs to run\n"
 		"  --index-jobs          Number of concurrent CREATE INDEX jobs to run\n"
 		"  --drop-if-exists      On the target database, clean-up from a previous run first\n"
+		"  --roles               Also copy roles found on source to target\n"
 		"  --no-owner            Do not set ownership of objects to match the original database\n"
 		"  --no-acl              Prevent restoration of access privileges (grant/revoke commands).\n"
 		"  --no-comments         Do not output commands to restore comments\n"
@@ -89,6 +92,17 @@ static CommandLine copy_schema_command =
 		"  --snapshot            Use snapshot obtained with pg_export_snapshot\n",
 		cli_copy_db_getopts,
 		cli_copy_schema);
+
+static CommandLine copy_roles_command =
+	make_command(
+		"roles",
+		"Copy the roles from the source instance to the target instance",
+		" --source ... --target ... ",
+		"  --source              Postgres URI to the source database\n"
+		"  --target              Postgres URI to the target database\n"
+		"  --dir                 Work directory to use\n",
+		cli_copy_db_getopts,
+		cli_copy_roles);
 
 /*
  * pgcopydb copy data does the data section only, skips pre-data and post-data
@@ -195,6 +209,7 @@ static CommandLine copy_constraints_command =
 
 static CommandLine *copy_subcommands[] = {
 	&copy_db_command,
+	&copy_roles_command,
 	&copy_schema_command,
 	&copy_data_command,
 	&copy_table_data_command,
@@ -617,4 +632,23 @@ cli_copy_blobs(int argc, char **argv)
 
 	(void) summary_set_current_time(timings, TIMING_STEP_END);
 	(void) print_summary(&summary, &copySpecs);
+}
+
+
+/*
+ * cli_copy_blobs copies the roles found on the source instance to the target
+ * instance, skipping those that already exist on the target instance.
+ */
+static void
+cli_copy_roles(int argc, char **argv)
+{
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_SCHEMA);
+
+	if (!copydb_copy_roles(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_TARGET);
+	}
 }

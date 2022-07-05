@@ -25,6 +25,7 @@ static int cli_dump_schema_getopts(int argc, char **argv);
 static void cli_dump_schema(int argc, char **argv);
 static void cli_dump_schema_pre_data(int argc, char **argv);
 static void cli_dump_schema_post_data(int argc, char **argv);
+static void cli_dump_roles(int argc, char **argv);
 
 static void cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 									PostgresDumpSection section);
@@ -32,8 +33,8 @@ static void cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 static CommandLine dump_schema_command =
 	make_command(
 		"schema",
-		"Dump source database schema as custom files in target directory",
-		" --source <URI> --target <dir> ",
+		"Dump source database schema as custom files in work directory",
+		" --source <URI> ",
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Directory where to save the dump files\n"
 		"  --dir             Work directory to use\n"
@@ -44,8 +45,8 @@ static CommandLine dump_schema_command =
 static CommandLine dump_schema_pre_data_command =
 	make_command(
 		"pre-data",
-		"Dump source database pre-data schema as custom files in target directory",
-		" --source <URI> --target <dir> ",
+		"Dump source database pre-data schema as custom files in work directory",
+		" --source <URI> ",
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Directory where to save the dump files\n"
 		"  --dir             Work directory to use\n"
@@ -56,8 +57,8 @@ static CommandLine dump_schema_pre_data_command =
 static CommandLine dump_schema_post_data_command =
 	make_command(
 		"post-data",
-		"Dump source database post-data schema as custom files in target directory",
-		" --source <URI> --target <dir>",
+		"Dump source database post-data schema as custom files in work directory",
+		" --source <URI>",
 		"  --source          Postgres URI to the source database\n"
 		"  --target          Directory where to save the dump files\n"
 		"  --dir             Work directory to use\n"
@@ -65,10 +66,22 @@ static CommandLine dump_schema_post_data_command =
 		cli_dump_schema_getopts,
 		cli_dump_schema_post_data);
 
+static CommandLine dump_roles_command =
+	make_command(
+		"roles",
+		"Dump source database roles as custome file in work directory",
+		" --source <URI>",
+		"  --source          Postgres URI to the source database\n"
+		"  --target          Directory where to save the dump files\n"
+		"  --dir             Work directory to use\n",
+		cli_dump_schema_getopts,
+		cli_dump_roles);
+
 static CommandLine *dump_subcommands[] = {
 	&dump_schema_command,
 	&dump_schema_pre_data_command,
 	&dump_schema_post_data_command,
+	&dump_roles_command,
 	NULL
 };
 
@@ -281,6 +294,16 @@ cli_dump_schema_post_data(int argc, char **argv)
 
 
 /*
+ * cli_dump_roles implements the command: pgcopydb dump roles
+ */
+static void
+cli_dump_roles(int argc, char **argv)
+{
+	(void) cli_dump_schema_section(&dumpDBoptions, PG_DUMP_SECTION_ROLES);
+}
+
+
+/*
  * cli_dump_schema_section implements the actual work for the commands in this
  * file.
  */
@@ -320,6 +343,7 @@ cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 						   DATA_SECTION_NONE,
 						   dumpDBoptions->snapshot,
 						   restoreOptions,
+						   false, /* roles */
 						   false, /* skipLargeObjects */
 						   dumpDBoptions->restart,
 						   dumpDBoptions->resume,
@@ -337,9 +361,18 @@ cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 	log_info("Dumping database from \"%s\"", scrubbedSourceURI);
 	log_info("Dumping database into directory \"%s\"", cfPaths->topdir);
 
-	log_info("Using pg_dump for Postgres \"%s\" at \"%s\"",
-			 pgPaths->pg_version,
-			 pgPaths->pg_dump);
+	if (section == PG_DUMP_SECTION_ROLES)
+	{
+		log_info("Using pg_dumpall for Postgres \"%s\" at \"%s\"",
+				 pgPaths->pg_version,
+				 pgPaths->pg_dump);
+	}
+	else
+	{
+		log_info("Using pg_dump for Postgres \"%s\" at \"%s\"",
+				 pgPaths->pg_version,
+				 pgPaths->pg_dumpall);
+	}
 
 	/*
 	 * First, we need to open a snapshot that we're going to re-use in all our
@@ -352,12 +385,25 @@ cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (!copydb_dump_source_schema(&copySpecs,
-								   copySpecs.sourceSnapshot.snapshot,
-								   section))
+	if (section == PG_DUMP_SECTION_ROLES)
 	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
+		if (!pg_dumpall_roles(&(copySpecs.pgPaths),
+							  copySpecs.source_pguri,
+							  copySpecs.dumpPaths.rolesFilename))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+	}
+	else
+	{
+		if (!copydb_dump_source_schema(&copySpecs,
+									   copySpecs.sourceSnapshot.snapshot,
+									   section))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
 	}
 
 	if (!copydb_close_snapshot(&copySpecs))
