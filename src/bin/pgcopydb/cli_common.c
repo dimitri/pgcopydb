@@ -456,6 +456,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "table-jobs", required_argument, NULL, 'J' },
 		{ "index-jobs", required_argument, NULL, 'I' },
 		{ "drop-if-exists", no_argument, NULL, 'c' }, /* pg_restore -c */
+		{ "roles", no_argument, NULL, 'A' },          /* pg_dumpall --roles-only */
 		{ "no-owner", no_argument, NULL, 'O' },       /* pg_restore -O */
 		{ "no-comments", no_argument, NULL, 'X' },
 		{ "no-acl", no_argument, NULL, 'x' }, /* pg_restore -x */
@@ -560,6 +561,13 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				options.restoreOptions.dropIfExists = true;
 				log_trace("--drop-if-exists");
+				break;
+			}
+
+			case 'A':
+			{
+				options.roles = true;
+				log_trace("--roles");
 				break;
 			}
 
@@ -813,6 +821,7 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 						   section,
 						   copyDBoptions.snapshot,
 						   copyDBoptions.restoreOptions,
+						   copyDBoptions.roles,
 						   copyDBoptions.skipLargeObjects,
 						   copyDBoptions.restart,
 						   copyDBoptions.resume,

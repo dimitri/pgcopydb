@@ -497,6 +497,7 @@ copydb_init_specs(CopyDataSpec *specs,
 				  CopyDataSection section,
 				  char *snapshot,
 				  RestoreOptions restoreOptions,
+				  bool roles,
 				  bool skipLargeObjects,
 				  bool restart,
 				  bool resume,
@@ -519,6 +520,7 @@ copydb_init_specs(CopyDataSpec *specs,
 
 		.section = section,
 		.restoreOptions = restoreOptions,
+		.roles = roles,
 		.skipLargeObjects = skipLargeObjects,
 
 		.restart = restart,
@@ -1152,4 +1154,32 @@ copydb_collect_finished_subprocesses(bool *allDone)
 	}
 
 	return allReturnCodeAreZero;
+}
+
+
+/*
+ * copydb_copy_roles copies roles from the source instance into the target
+ * instance, using pg_dumpall --roles-only and our own SQL client that reads
+ * the file and applies SQL command on the target system.
+ */
+bool
+copydb_copy_roles(CopyDataSpec *copySpecs)
+{
+	if (!pg_dumpall_roles(&(copySpecs->pgPaths),
+						  copySpecs->source_pguri,
+						  copySpecs->dumpPaths.rolesFilename))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pg_restore_roles(&(copySpecs->pgPaths),
+						  copySpecs->target_pguri,
+						  copySpecs->dumpPaths.rolesFilename))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
 }

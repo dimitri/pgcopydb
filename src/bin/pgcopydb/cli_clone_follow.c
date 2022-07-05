@@ -30,6 +30,7 @@ CommandLine clone_command =
 		"  --table-jobs          Number of concurrent COPY jobs to run\n"
 		"  --index-jobs          Number of concurrent CREATE INDEX jobs to run\n"
 		"  --drop-if-exists      On the target database, clean-up from a previous run first\n"
+		"  --roles               Also copy roles found on source to target\n"
 		"  --no-owner            Do not set ownership of objects to match the original database\n"
 		"  --no-acl              Prevent restoration of access privileges (grant/revoke commands).\n"
 		"  --no-comments         Do not output commands to restore comments\n"
@@ -58,6 +59,7 @@ CommandLine fork_command =
 		"  --table-jobs          Number of concurrent COPY jobs to run\n"
 		"  --index-jobs          Number of concurrent CREATE INDEX jobs to run\n"
 		"  --drop-if-exists      On the target database, clean-up from a previous run first\n"
+		"  --roles               Also copy roles found on source to target\n"
 		"  --no-owner            Do not set ownership of objects to match the original database\n"
 		"  --no-acl              Prevent restoration of access privileges (grant/revoke commands).\n"
 		"  --no-comments         Do not output commands to restore comments\n"
@@ -111,6 +113,17 @@ cli_clone(int argc, char **argv)
 	TopLevelTimings *timings = &(summary.timings);
 
 	(void) summary_set_current_time(timings, TIMING_STEP_START);
+
+	if (copySpecs.roles)
+	{
+		log_info("STEP 0: copy the source database roles");
+
+		if (!copydb_copy_roles(&copySpecs))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+	}
 
 	log_info("STEP 1: dump the source database schema (pre/post data)");
 

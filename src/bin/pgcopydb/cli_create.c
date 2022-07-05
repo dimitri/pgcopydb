@@ -250,6 +250,7 @@ cli_create_snapshot(int argc, char **argv)
 						   DATA_SECTION_ALL,
 						   createSNoptions.snapshot,
 						   restoreOptions,
+						   false, /* roles */
 						   false, /* skipLargeObjects */
 						   createSNoptions.restart,
 						   createSNoptions.resume,
@@ -486,6 +487,7 @@ cli_create_slot(int argc, char **argv)
 						   DATA_SECTION_ALL,
 						   createSlotOptions.snapshot,
 						   restoreOptions,
+						   false, /* roles */
 						   false, /* skipLargeObjects */
 						   createSlotOptions.restart,
 						   createSlotOptions.resume,
@@ -601,6 +603,7 @@ cli_drop_slot(int argc, char **argv)
 						   DATA_SECTION_ALL,
 						   createSlotOptions.snapshot,
 						   restoreOptions,
+						   false, /* roles */
 						   false, /* skipLargeObjects */
 						   createSlotOptions.restart,
 						   createSlotOptions.resume,

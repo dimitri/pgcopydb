@@ -238,6 +238,7 @@ typedef struct CopyDataSpec
 
 	CopyDataSection section;
 	RestoreOptions restoreOptions;
+	bool roles;
 	bool skipLargeObjects;
 
 	bool restart;
@@ -295,6 +296,7 @@ bool copydb_init_specs(CopyDataSpec *specs,
 					   CopyDataSection section,
 					   char *snapshot,
 					   RestoreOptions restoreOptions,
+					   bool roles,
 					   bool skipLargeObjects,
 					   bool restart,
 					   bool resume,
@@ -317,6 +319,7 @@ bool copydb_fatal_exit(void);
 bool copydb_wait_for_subprocesses(void);
 bool copydb_collect_finished_subprocesses(bool *allDone);
 
+bool copydb_copy_roles(CopyDataSpec *copySpecs);
 
 /* indexes.c */
 bool copydb_init_indexes_paths(CopyFilePaths *cfPaths,

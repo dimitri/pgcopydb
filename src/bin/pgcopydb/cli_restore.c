@@ -535,6 +535,7 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 						   DATA_SECTION_NONE,
 						   restoreDBoptions.snapshot,
 						   restoreDBoptions.restoreOptions,
+						   false, /* roles */
 						   false, /* skipLargeObjects */
 						   restoreDBoptions.restart,
 						   restoreDBoptions.resume,

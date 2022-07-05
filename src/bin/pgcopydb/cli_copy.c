@@ -40,6 +40,7 @@ CommandLine copy__db_command =
 		"  --table-jobs          Number of concurrent COPY jobs to run\n"
 		"  --index-jobs          Number of concurrent CREATE INDEX jobs to run\n"
 		"  --drop-if-exists      On the target database, clean-up from a previous run first\n"
+		"  --roles               Also copy roles found on source to target\n"
 		"  --no-owner            Do not set ownership of objects to match the original database\n"
 		"  --no-acl              Prevent restoration of access privileges (grant/revoke commands).\n"
 		"  --no-comments         Do not output commands to restore comments\n"
@@ -63,6 +64,7 @@ static CommandLine copy_db_command =
 		"  --table-jobs          Number of concurrent COPY jobs to run\n"
 		"  --index-jobs          Number of concurrent CREATE INDEX jobs to run\n"
 		"  --drop-if-exists      On the target database, clean-up from a previous run first\n"
+		"  --roles               Also copy roles found on source to target\n"
 		"  --no-owner            Do not set ownership of objects to match the original database\n"
 		"  --no-acl              Prevent restoration of access privileges (grant/revoke commands).\n"
 		"  --no-comments         Do not output commands to restore comments\n"
@@ -644,17 +646,7 @@ cli_copy_roles(int argc, char **argv)
 
 	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_SCHEMA);
 
-	if (!pg_dumpall_roles(&(copySpecs.pgPaths),
-						  copySpecs.source_pguri,
-						  copySpecs.dumpPaths.rolesFilename))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	if (!pg_restore_roles(&(copySpecs.pgPaths),
-						  copySpecs.target_pguri,
-						  copySpecs.dumpPaths.rolesFilename))
+	if (!copydb_copy_roles(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);
