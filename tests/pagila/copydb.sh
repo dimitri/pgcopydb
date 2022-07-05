@@ -26,8 +26,7 @@ create role pagila NOSUPERUSER CREATEDB NOCREATEROLE LOGIN PASSWORD '0wn3d';
 create database pagila owner pagila;
 EOF
 
-pgcopydb dump roles
-pgcopydb restore roles
+pgcopydb copy roles
 
 psql ${PGCOPYDB_TARGET_PGURI} <<EOF
 create database pagila owner pagila;

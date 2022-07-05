@@ -12,10 +12,10 @@ their own manual page.
 
    pgcopydb
    pgcopydb_clone
+   pgcopydb_copy
    pgcopydb_dump
    pgcopydb_restore
    pgcopydb_list
-   pgcopydb_copy
    pgcopydb_stream
    pgcopydb_create
    pgcopydb_config
