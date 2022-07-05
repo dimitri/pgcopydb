@@ -586,11 +586,13 @@ pg_restore_roles(PostgresPaths *pgPaths,
 		char *createRole = "CREATE ROLE ";
 		int createRoleLen = strlen(createRole);
 
+		/* skip comments */
 		if (strncmp(currentLine, "--", 2) == 0)
 		{
-			/* skip comments */
 			continue;
 		}
+
+		/* implement CREATE ROLE our own way (check if exists first) */
 		else if (strncmp(currentLine, createRole, createRoleLen) == 0)
 		{
 			/* we have a create role command */
