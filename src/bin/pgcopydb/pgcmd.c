@@ -573,9 +573,27 @@ pg_restore_roles(PostgresPaths *pgPaths,
 		return false;
 	}
 
+	/*
+	 * pg_dumpall always outputs first a line with the CREATE ROLE command and
+	 * immediately after that a line with an ALTER ROLE command that sets the
+	 * role options.
+	 *
+	 * When we skip a role, we also skip the next line, which is the ALTER ROLE
+	 * command for the same role.
+	 */
+	bool skipNextLine = false;
+
 	for (int l = 0; l < lineCount; l++)
 	{
 		char *currentLine = lines[l];
+
+		if (skipNextLine)
+		{
+			/* toggle the switch again, it's valid only once */
+			skipNextLine = false;
+			log_debug("Skipping line: %s", currentLine);
+			continue;
+		}
 
 		if (strcmp(currentLine, "") == 0)
 		{
@@ -624,6 +642,7 @@ pg_restore_roles(PostgresPaths *pgPaths,
 
 			if (exists)
 			{
+				skipNextLine = true;
 				log_info("Skipping CREATE ROLE %s, which already exists",
 						 roleName);
 				continue;
