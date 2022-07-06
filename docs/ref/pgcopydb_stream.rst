@@ -41,13 +41,13 @@ The command ``pgcopydb stream prefetch`` connects to the source database
 using the logical replication protocl and the given replication slot, that
 should be created with the logical decoding plugin `wal2json`__.
 
+__ https://github.com/eulerto/wal2json/
+
 The prefetch command receives the changes from the source database in a
 streaming fashion, and writes them in a series of JSON files named the same
 as their origin WAL filename (with the ``.json`` extension). Each time a
 JSON file is closed, a subprocess is started to transform the JSON into an
 SQL file.
-
-__ https://github.com/eulerto/wal2json/
 
 
 ::
@@ -74,6 +74,8 @@ pgcopydb stream receive - Stream changes from the source database
 The command ``pgcopydb stream receive`` connects to the source database
 using the logical replication protocl and the given replication slot, that
 should be created with the logical decoding plugin `wal2json`__.
+
+__ https://github.com/eulerto/wal2json/
 
 The receive command receives the changes from the source database in a
 streaming fashion, and writes them in a series of JSON files named the same
