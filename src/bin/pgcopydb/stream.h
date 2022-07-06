@@ -254,6 +254,12 @@ bool stream_read_latest(StreamSpecs *specs, StreamContent *content);
 
 bool buildReplicationURI(const char *pguri, char *repl_pguri);
 
+bool stream_create_repl_slot(CopyDataSpec *copySpecs,
+							 char *slotName, uint64_t *lsn);
+
+bool stream_create_origin(CopyDataSpec *copySpecs,
+						  char *nodeName, uint64_t startpos);
+
 StreamAction StreamActionFromChar(char action);
 
 /* ld_transform.c */

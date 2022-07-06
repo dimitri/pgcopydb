@@ -25,11 +25,7 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/ddl.sql
 
 # create the replication slot that captures all the changes
-psql -d ${PGCOPYDB_SOURCE_PGURI} <<EOF
-begin;
-SELECT 'init' FROM pg_create_logical_replication_slot('test_slot', 'wal2json');
-commit;
-EOF
+pgcopydb stream setup
 
 # pgcopydb copy db uses the environment variables
 pgcopydb copy-db
@@ -41,7 +37,7 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_lsn()'`
 
 # and prefetch the changes captured in our replication slot
-pgcopydb stream prefetch --slot-name test_slot --restart --endpos "${lsn}" -vv
+pgcopydb stream prefetch --restart --endpos "${lsn}" -vv
 
 SHAREDIR=/var/lib/postgres/.local/share/pgcopydb
 WALFILE=000000010000000000000002.json
@@ -62,7 +58,7 @@ diff ${expected} ${result} || cat ${SHAREDIR}/${WALFILE}
 diff ${expected} ${result}
 
 # now prefetch the changes again, which should be a noop
-pgcopydb stream prefetch --slot-name test_slot --resume --endpos "${lsn}" -vv
+pgcopydb stream prefetch --resume --endpos "${lsn}" -vv
 
 # now transform the JSON file into SQL
 SQLFILENAME=`basename ${WALFILE} .json`.sql
@@ -82,3 +78,7 @@ pgcopydb stream apply -vv ${SHAREDIR}/${SQLFILE}
 
 # now apply AGAIN the SQL file to the target database, skipping transactions
 pgcopydb stream apply -vv ${SHAREDIR}/${SQLFILE}
+
+# cleanup
+pgcopydb drop origin
+pgcopydb drop slot

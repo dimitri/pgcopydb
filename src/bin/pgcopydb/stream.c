@@ -963,3 +963,178 @@ streamWaitForSubprocess(LogicalStreamContext *context)
 
 	return true;
 }
+
+
+/*
+ * stream_create_repl_slot creates a replication slot on the source database.
+ */
+bool
+stream_create_repl_slot(CopyDataSpec *copySpecs, char *slotName, uint64_t *lsn)
+{
+	PGSQL *pgsql = &(copySpecs->sourceSnapshot.pgsql);
+
+	/*
+	 * When --snapshot has been used, open a transaction using that snapshot.
+	 */
+	if (!IS_EMPTY_STRING_BUFFER(copySpecs->sourceSnapshot.snapshot))
+	{
+		if (!copydb_set_snapshot(copySpecs))
+		{
+			/* errors have already been logged */
+			log_fatal("Failed to use given --snapshot \"%s\"",
+					  copySpecs->sourceSnapshot.snapshot);
+			return false;
+		}
+	}
+	else
+	{
+		if (!pgsql_init(pgsql, copySpecs->source_pguri, PGSQL_CONN_SOURCE))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!pgsql_begin(pgsql))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	bool slotExists = false;
+
+	if (!pgsql_replication_slot_exists(pgsql, slotName, &slotExists))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (slotExists)
+	{
+		log_error("Failed to create replication slot \"%s\": already exists",
+				  slotName);
+		pgsql_rollback(pgsql);
+		return false;
+	}
+
+	if (!pgsql_create_replication_slot(pgsql,
+									   slotName,
+									   REPLICATION_PLUGIN,
+									   lsn))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_commit(pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_info("Created logical replication slot \"%s\" with plugin \"%s\" "
+			 "at LSN %X/%X",
+			 slotName,
+			 REPLICATION_PLUGIN,
+			 LSN_FORMAT_ARGS(*lsn));
+
+	return true;
+}
+
+
+/*
+ * stream_create_origin creates a replication origin on the target database.
+ */
+bool
+stream_create_origin(CopyDataSpec *copySpecs, char *nodeName, uint64_t startpos)
+{
+	PGSQL dst = { 0 };
+
+	if (!pgsql_init(&dst, copySpecs->target_pguri, PGSQL_CONN_TARGET))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_begin(&dst))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	uint32_t oid = 0;
+
+	if (!pgsql_replication_origin_oid(&dst, nodeName, &oid))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (oid == 0)
+	{
+		if (!pgsql_replication_origin_create(&dst, nodeName))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		char startLSN[PG_LSN_MAXLENGTH] = { 0 };
+
+		sformat(startLSN, sizeof(startLSN), "%X/%X", LSN_FORMAT_ARGS(startpos));
+
+		if (!pgsql_replication_origin_advance(&dst, nodeName, startLSN))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		log_info("Created logical replication origin \"%s\" at LSN %X/%X",
+				 nodeName,
+				 LSN_FORMAT_ARGS(startpos));
+	}
+	else
+	{
+		uint64_t lsn = 0;
+		char lsnString[PG_LSN_MAXLENGTH] = { 0 };
+
+		if (!pgsql_replication_origin_progress(&dst,
+											   nodeName,
+											   true,
+											   lsnString))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!parseLSN(lsnString, &lsn))
+		{
+			log_error("Failed to parse LSN \"%s\" returned from "
+					  "pg_replication_origin_progress('%s', true)",
+					  lsnString,
+					  nodeName);
+			pgsql_finish(&dst);
+			return false;
+		}
+
+		log_level(lsn == startpos ? LOG_INFO : LOG_ERROR,
+				  "Replication origin \"%s\" already exists and "
+				  "progressed to LSN %X/%X",
+				  nodeName,
+				  LSN_FORMAT_ARGS(lsn));
+
+		if (lsn != startpos)
+		{
+			/* errors have already been logged */
+			pgsql_finish(&dst);
+			return false;
+		}
+	}
+
+	if (!pgsql_commit(&dst))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}

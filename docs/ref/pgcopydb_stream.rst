@@ -10,6 +10,7 @@ This command prefixes the following sub-commands:
 ::
 
   pgcopydb stream
+    setup      Setup source and target systems for logical decoding
     prefetch   Stream JSON changes from the source database and transform them to SQL
     receive    Stream changes from the source database
     transform  Transform changes from the source database into SQL commands
@@ -25,10 +26,39 @@ step.
    Using the ``pgcopydb follow`` command or the command ``pgcopydb
    clone --follow`` is strongly advised.
 
-   This mode of operations is useful for debugging and advanced use cases
-   only.
+   This mode of operations has been designed for unit testing.
 
 This is still a work in progress. Stay tuned.
+
+.. _pgcopydb_stream_setup:
+
+pgcopydb stream setup
+---------------------
+
+pgcopydb stream setup - Setup source and target systems for logical decoding
+
+The command ``pgcopydb stream setup`` connects to the source database and
+create a replication slot using the logical decoding plugin `wal2json`__,
+then connects to the target database and creates a replication origin
+positioned at the LSN position of the just created replication slot.
+
+__ https://github.com/eulerto/wal2json/
+
+
+::
+
+   pgcopydb stream setup: Setup source and target systems for logical decoding
+   usage: pgcopydb stream setup  --source ... --target ... --dir ...
+
+     --source         Postgres URI to the source database
+     --target         Postgres URI to the target database
+     --dir            Work directory to use
+     --restart        Allow restarting when temp files exist already
+     --resume         Allow resuming operations after a failure
+     --not-consistent Allow taking a new snapshot on the source database
+     --snapshot       Use snapshot obtained with pg_export_snapshot
+     --slot-name      Stream changes recorded by this slot
+     --origin         Name of the Postgres replication origin
 
 .. _pgcopydb_stream_prefetch:
 
@@ -62,7 +92,6 @@ SQL file.
      --not-consistent Allow taking a new snapshot on the source database
      --slot-name      Stream changes recorded by this slot
      --endpos         LSN position where to stop receiving changes
-
 
 .. _pgcopydb_stream_receive:
 

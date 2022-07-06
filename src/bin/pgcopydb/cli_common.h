@@ -43,6 +43,7 @@ typedef struct CopyDBOptions
 	bool follow;
 	bool createSlot;
 	uint64_t endpos;
+	uint64_t startpos;
 
 	char filterFileName[MAXPGPATH];
 	char slotName[MAXPGPATH];

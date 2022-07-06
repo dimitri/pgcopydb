@@ -14,12 +14,14 @@ pgcopydb create
   pgcopydb create
     snapshot  Create and exports a snapshot on the source database
     slot      Create a replication slot in the source database
+    origin    Create a replication origin in the target database
 
 
 ::
 
   pgcopydb drop
     slot  Drop a replication slot in the source database
+    origin  Drop a replication origin in the target database
 
 .. _pgcopydb_create_snapshot:
 
@@ -62,6 +64,27 @@ executes a SQL query to create a logical replication slot using the plugin
      --snapshot       Use snapshot obtained with pg_export_snapshot
      --slot-name      Use this Postgres replication slot name
 
+.. _pgcopydb_create_origin:
+
+pgcopydb create origin
+----------------------
+
+pgcopydb create origin - Create a replication origin in the target database
+
+The command ``pgcopydb create origin`` connects to the target database and
+executes a SQL query to create a logical replication origin. The starting
+LSN position ``--startpos`` is required.
+
+::
+
+   pgcopydb create origin: Create a replication origin in the target database
+   usage: pgcopydb create origin  --target ...
+
+     --target         Postgres URI to the target database
+     --dir            Work directory to use
+     --origin         Use this Postgres origin name
+     --start-pos      LSN position from where to start applying changes
+
 .. _pgcopydb_drop_slot:
 
 pgcopydb drop slot
@@ -82,11 +105,31 @@ name (that defaults to ``pgcopydb``).
      --dir            Work directory to use
      --slot-name      Use this Postgres replication slot name
 
+.. _pgcopydb_drop_origin:
+
+pgcopydb drop origin
+--------------------
+
+pgcopydb drop origin - Drop a replication origin in the target database
+
+The command ``pgcopydb drop origin`` connects to the target database and
+executes a SQL query to drop the logical replication origin with the given
+name (that defaults to ``pgcopydb``).
+
+::
+
+   usage: pgcopydb drop origin  --target ...
+
+     --target         Postgres URI to the target database
+     --dir            Work directory to use
+     --origin         Use this Postgres origin name
+
 
 Options
 -------
 
-The following options are available to ``pgcopydb create`` subcommands:
+The following options are available to ``pgcopydb create`` and ``pgcopydb
+drop`` subcommands:
 
 --source
 
@@ -121,6 +164,28 @@ The following options are available to ``pgcopydb create`` subcommands:
   format-version 2.
 
   __ https://github.com/eulerto/wal2json/
+
+--origin
+
+  Logical replication target system needs to track the transactions that
+  have been applied already, so that in case we get disconnected or need to
+  resume operations we can skip already replayed transaction.
+
+  Postgres uses a notion of an origin node name as documented in
+  `Replication Progress Tracking`__. This option allows to pick your own
+  node name and defaults to "pgcopydb". Picking a different name is useful
+  in some advanced scenarios like migrating several sources in the same
+  target, where each source should have their own unique origin node name.
+
+  __ https://www.postgresql.org/docs/current/replication-origins.html
+
+--startpos
+
+  Logical replication target system registers progress by assigning a
+  current LSN to the ``--origin`` node name. When creating an origin on the
+  target database system, it is required to provide the current LSN from the
+  source database system, in order to properly bootstrap pgcopydb logical
+  decoding.
 
 Environment
 -----------
