@@ -28,6 +28,25 @@ static void cli_stream_receive(int argc, char **argv);
 static void cli_stream_transform(int argc, char **argv);
 static void cli_stream_apply(int argc, char **argv);
 
+static void cli_stream_prefetch(int argc, char **argv);
+
+static void stream_start_in_mode(LogicalStreamMode mode);
+
+static CommandLine stream_prefetch_command =
+	make_command(
+		"prefetch",
+		"Stream JSON changes from the source database and transform them to SQL",
+		" --source ... ",
+		"  --source         Postgres URI to the source database\n"
+		"  --dir            Work directory to use\n"
+		"  --restart        Allow restarting when temp files exist already\n"
+		"  --resume         Allow resuming operations after a failure\n"
+		"  --not-consistent Allow taking a new snapshot on the source database\n"
+		"  --slot-name      Stream changes recorded by this slot\n"
+		"  --endpos         LSN position where to stop receiving changes",
+		cli_stream_getopts,
+		cli_stream_prefetch);
+
 static CommandLine stream_receive_command =
 	make_command(
 		"receive",
@@ -72,6 +91,7 @@ static CommandLine stream_apply_command =
 
 
 static CommandLine *stream_subcommands[] = {
+	&stream_prefetch_command,
 	&stream_receive_command,
 	&stream_transform_command,
 	&stream_apply_command,
@@ -324,57 +344,18 @@ cli_stream_getopts(int argc, char **argv)
 static void
 cli_stream_receive(int argc, char **argv)
 {
-	CopyDataSpec copySpecs = { 0 };
-	StreamSpecs specs = { 0 };
+	(void) stream_start_in_mode(STREAM_MODE_RECEIVE);
+}
 
-	(void) find_pg_commands(&(copySpecs.pgPaths));
 
-	if (!copydb_init_workdir(&copySpecs,
-							 NULL,
-							 streamDBoptions.restart,
-							 streamDBoptions.resume,
-							 false))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	RestoreOptions restoreOptions = { 0 };
-
-	if (!copydb_init_specs(&copySpecs,
-						   streamDBoptions.source_pguri,
-						   streamDBoptions.target_pguri,
-						   1,   /* tableJobs */
-						   1,   /* indexJobs */
-						   DATA_SECTION_ALL,
-						   streamDBoptions.snapshot,
-						   restoreOptions,
-						   false, /* roles */
-						   false, /* skipLargeObjects */
-						   streamDBoptions.restart,
-						   streamDBoptions.resume,
-						   !streamDBoptions.notConsistent))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	if (!stream_init_specs(&specs,
-						   copySpecs.cfPaths.cdcdir,
-						   copySpecs.source_pguri,
-						   copySpecs.target_pguri,
-						   streamDBoptions.slotName,
-						   streamDBoptions.endpos))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	if (!startLogicalStreaming(&specs))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
-	}
+/*
+ * cli_stream_prefetch implements receiving the JSON content and also
+ * transforming it to SQL on the fly, as soon as a JSON file is closed.
+ */
+static void
+cli_stream_prefetch(int argc, char **argv)
+{
+	(void) stream_start_in_mode(STREAM_MODE_PREFETCH);
 }
 
 
@@ -475,4 +456,67 @@ cli_stream_apply(int argc, char **argv)
 	}
 
 	pgsql_finish(&(context.pgsql));
+}
+
+
+/*
+ * stream_start_in_mode initialises streaming replication for the given mode,
+ * and then starts the logical replication client.
+ */
+static void
+stream_start_in_mode(LogicalStreamMode mode)
+{
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) find_pg_commands(&(copySpecs.pgPaths));
+
+	if (!copydb_init_workdir(&copySpecs,
+							 NULL,
+							 streamDBoptions.restart,
+							 streamDBoptions.resume,
+							 false))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	RestoreOptions restoreOptions = { 0 };
+
+	if (!copydb_init_specs(&copySpecs,
+						   streamDBoptions.source_pguri,
+						   streamDBoptions.target_pguri,
+						   1,   /* tableJobs */
+						   1,   /* indexJobs */
+						   DATA_SECTION_ALL,
+						   streamDBoptions.snapshot,
+						   restoreOptions,
+						   false, /* roles */
+						   false, /* skipLargeObjects */
+						   streamDBoptions.restart,
+						   streamDBoptions.resume,
+						   !streamDBoptions.notConsistent))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	StreamSpecs specs = { 0 };
+
+	if (!stream_init_specs(&specs,
+						   copySpecs.cfPaths.cdcdir,
+						   copySpecs.source_pguri,
+						   copySpecs.target_pguri,
+						   streamDBoptions.slotName,
+						   streamDBoptions.endpos,
+						   mode))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!startLogicalStreaming(&specs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
 }

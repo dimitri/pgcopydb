@@ -10,6 +10,7 @@ This command prefixes the following sub-commands:
 ::
 
   pgcopydb stream
+    prefetch   Stream JSON changes from the source database and transform them to SQL
     receive    Stream changes from the source database
     transform  Transform changes from the source database into SQL commands
     apply      Apply changes from the source database into the target database
@@ -29,6 +30,40 @@ step.
 
 This is still a work in progress. Stay tuned.
 
+.. _pgcopydb_stream_prefetch:
+
+pgcopydb stream prefetch
+------------------------
+
+pgcopydb stream prefetch - Stream JSON changes from the source database and transform them to SQL
+
+The command ``pgcopydb stream prefetch`` connects to the source database
+using the logical replication protocl and the given replication slot, that
+should be created with the logical decoding plugin `wal2json`__.
+
+The prefetch command receives the changes from the source database in a
+streaming fashion, and writes them in a series of JSON files named the same
+as their origin WAL filename (with the ``.json`` extension). Each time a
+JSON file is closed, a subprocess is started to transform the JSON into an
+SQL file.
+
+__ https://github.com/eulerto/wal2json/
+
+
+::
+
+   pgcopydb stream prefetch: Stream JSON changes from the source database and transform them to SQL
+   usage: pgcopydb stream prefetch  --source ...
+
+     --source         Postgres URI to the source database
+     --dir            Work directory to use
+     --restart        Allow restarting when temp files exist already
+     --resume         Allow resuming operations after a failure
+     --not-consistent Allow taking a new snapshot on the source database
+     --slot-name      Stream changes recorded by this slot
+     --endpos         LSN position where to stop receiving changes
+
+
 .. _pgcopydb_stream_receive:
 
 pgcopydb stream receive
@@ -36,9 +71,13 @@ pgcopydb stream receive
 
 pgcopydb stream receive - Stream changes from the source database
 
-The command ``pgcopydb stream receive`` connects to the source database and
-executes a SQL query using the Postgres catalogs to get a stream of all the
-tables to COPY the data from.
+The command ``pgcopydb stream receive`` connects to the source database
+using the logical replication protocl and the given replication slot, that
+should be created with the logical decoding plugin `wal2json`__.
+
+The receive command receives the changes from the source database in a
+streaming fashion, and writes them in a series of JSON files named the same
+as their origin WAL filename (with the ``.json`` extension).
 
 ::
 
@@ -48,6 +87,8 @@ tables to COPY the data from.
      --source         Postgres URI to the source database
      --dir            Work directory to use
      --restart        Allow restarting when temp files exist already
+     --resume         Allow resuming operations after a failure
+     --not-consistent Allow taking a new snapshot on the source database
      --slot-name      Stream changes recorded by this slot
      --endpos         LSN position where to stop receiving changes
 
@@ -139,6 +180,15 @@ The following options are available to ``pgcopydb stream`` sub-commands:
 
   In that case, the ``--restart`` option can be used to allow pgcopydb to
   delete traces from a previous run.
+
+--resume
+
+  When the pgcopydb command was terminated before completion, either by an
+  interrupt signal (such as C-c or SIGTERM) or because it crashed, it is
+  possible to resume the database migration.
+
+  To be able to resume a streaming operation in a consistent way, all that's
+  required is re-using the same replication slot as in previous run(s).
 
 --slot-name
 

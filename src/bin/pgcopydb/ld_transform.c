@@ -104,7 +104,7 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 		char *message = content.lines[i];
 		LogicalMessageMetadata *metadata = &(content.messages[i]);
 
-		log_debug("stream_transform_file[%d]: %s", i, message);
+		log_trace("stream_transform_file[%d]: %s", i, message);
 
 		JSON_Value *json = json_parse_string(message);
 
