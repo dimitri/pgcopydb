@@ -27,6 +27,12 @@ static void cli_create_snapshot(int argc, char **argv);
 static int cli_create_slot_getopts(int argc, char **argv);
 static void cli_create_slot(int argc, char **argv);
 static void cli_drop_slot(int argc, char **argv);
+
+static int cli_create_origin_getopts(int argc, char **argv);
+static void cli_create_origin(int argc, char **argv);
+static void cli_drop_origin(int argc, char **argv);
+
+
 static CommandLine create_snapshot_command =
 	make_command(
 		"snapshot",
@@ -49,9 +55,22 @@ static CommandLine create_repl_slot_command =
 		cli_create_slot_getopts,
 		cli_create_slot);
 
+static CommandLine create_origin_command =
+	make_command(
+		"origin",
+		"Create a replication origin in the target database",
+		" --target ... ",
+		"  --target         Postgres URI to the target database\n"
+		"  --dir            Work directory to use\n"
+		"  --origin         Use this Postgres origin name\n"
+		"  --start-pos      LSN position from where to start applying changes\n",
+		cli_create_origin_getopts,
+		cli_create_origin);
+
 static CommandLine *create_subcommands[] = {
 	&create_snapshot_command,
 	&create_repl_slot_command,
+	&create_origin_command,
 	NULL
 };
 
@@ -72,8 +91,20 @@ static CommandLine drop_repl_slot_command =
 		cli_create_slot_getopts,
 		cli_drop_slot);
 
+static CommandLine drop_origin_command =
+	make_command(
+		"origin",
+		"Drop a replication origin in the target database",
+		" --target ... ",
+		"  --target         Postgres URI to the target database\n"
+		"  --dir            Work directory to use\n"
+		"  --origin         Use this Postgres origin name\n",
+		cli_create_origin_getopts,
+		cli_drop_origin);
+
 static CommandLine *drop_subcommands[] = {
 	&drop_repl_slot_command,
+	&drop_origin_command,
 	NULL
 };
 
@@ -84,6 +115,7 @@ CommandLine drop_commands =
 
 CopyDBOptions createSNoptions = { 0 };
 CopyDBOptions createSlotOptions = { 0 };
+CopyDBOptions createOriginOptions = { 0 };
 
 static int
 cli_create_snapshot_getopts(int argc, char **argv)
@@ -497,77 +529,13 @@ cli_create_slot(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	uint64_t lsn = 0;
 
-	PGSQL *pgsql = &(copySpecs.sourceSnapshot.pgsql);
-
-	/*
-	 * When --snapshot has been used, open a transaction using that snapshot.
-	 */
-	if (!IS_EMPTY_STRING_BUFFER(createSlotOptions.snapshot))
-	{
-		if (!copydb_set_snapshot(&copySpecs))
-		{
-			/* errors have already been logged */
-			log_fatal("Failed to use given --snapshot \"%s\"",
-					  createSlotOptions.snapshot);
-			exit(EXIT_CODE_SOURCE);
-		}
-	}
-	else
-	{
-		if (!pgsql_init(pgsql, createSlotOptions.source_pguri, PGSQL_CONN_SOURCE))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_SOURCE);
-		}
-
-		if (!pgsql_begin(pgsql))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_SOURCE);
-		}
-	}
-
-	bool slotExists = false;
-
-	if (!pgsql_replication_slot_exists(pgsql,
-									   createSlotOptions.slotName,
-									   &slotExists))
+	if (!stream_create_repl_slot(&copySpecs, createSlotOptions.slotName, &lsn))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);
 	}
-
-	if (slotExists)
-	{
-		log_error("Failed to create replication slot \"%s\": already exists",
-				  createSlotOptions.slotName);
-		pgsql_rollback(pgsql);
-		exit(EXIT_CODE_SOURCE);
-	}
-
-	uint64_t lsn;
-
-	if (!pgsql_create_replication_slot(pgsql,
-									   createSlotOptions.slotName,
-									   REPLICATION_PLUGIN,
-									   &lsn))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
-	}
-
-	if (!pgsql_commit(pgsql))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
-	}
-
-	log_info("Created logical replication slot \"%s\" with plugin \"%s\" "
-			 "at LSN %X/%X",
-			 createSlotOptions.slotName,
-			 REPLICATION_PLUGIN,
-			 LSN_FORMAT_ARGS(lsn));
 }
 
 
@@ -626,5 +594,293 @@ cli_drop_slot(int argc, char **argv)
 		log_error("Failed to drop replication slot \"%s\"",
 				  createSlotOptions.slotName);
 		exit(EXIT_CODE_SOURCE);
+	}
+}
+
+
+/*
+ * cli_create_origin_getopts parses the command line options of the command:
+ * pgcopydb create slot
+ */
+static int
+cli_create_origin_getopts(int argc, char **argv)
+{
+	CopyDBOptions options = { 0 };
+	int c, option_index = 0;
+	int errors = 0, verboseCount = 0;
+
+	static struct option long_options[] = {
+		{ "target", required_argument, NULL, 'T' },
+		{ "dir", required_argument, NULL, 'D' },
+		{ "origin", required_argument, NULL, 'o' },
+		{ "startpos", required_argument, NULL, 's' },
+		{ "version", no_argument, NULL, 'V' },
+		{ "verbose", no_argument, NULL, 'v' },
+		{ "quiet", no_argument, NULL, 'q' },
+		{ "help", no_argument, NULL, 'h' },
+		{ NULL, 0, NULL, 0 }
+	};
+
+	optind = 0;
+
+	/* read values from the environment */
+	if (!cli_copydb_getenv(&options))
+	{
+		log_fatal("Failed to read default values from the environment");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	while ((c = getopt_long(argc, argv, "T:D:o:s:Vvqh",
+							long_options, &option_index)) != -1)
+	{
+		switch (c)
+		{
+			case 'T':
+			{
+				if (!validate_connection_string(optarg))
+				{
+					log_fatal("Failed to parse --target connection string, "
+							  "see above for details.");
+					++errors;
+				}
+				strlcpy(options.target_pguri, optarg, MAXCONNINFO);
+				log_trace("--target %s", options.target_pguri);
+				break;
+			}
+
+			case 'D':
+			{
+				strlcpy(options.dir, optarg, MAXPGPATH);
+				log_trace("--dir %s", options.dir);
+				break;
+			}
+
+			case 'o':
+			{
+				strlcpy(options.origin, optarg, NAMEDATALEN);
+				log_trace("--origin %s", options.origin);
+				break;
+			}
+
+			case 's':
+			{
+				if (!parseLSN(optarg, &(options.startpos)))
+				{
+					log_fatal("Failed to parse endpos LSN: \"%s\"", optarg);
+					exit(EXIT_CODE_BAD_ARGS);
+				}
+
+				log_trace("--startpos %X/%X",
+						  LSN_FORMAT_ARGS(options.startpos));
+				break;
+			}
+
+			case 'V':
+			{
+				/* keeper_cli_print_version prints version and exits. */
+				cli_print_version(argc, argv);
+				break;
+			}
+
+			case 'v':
+			{
+				++verboseCount;
+				switch (verboseCount)
+				{
+					case 1:
+					{
+						log_set_level(LOG_INFO);
+						break;
+					}
+
+					case 2:
+					{
+						log_set_level(LOG_DEBUG);
+						break;
+					}
+
+					default:
+					{
+						log_set_level(LOG_TRACE);
+						break;
+					}
+				}
+				break;
+			}
+
+			case 'q':
+			{
+				log_set_level(LOG_ERROR);
+				break;
+			}
+
+			case 'h':
+			{
+				commandline_help(stderr);
+				exit(EXIT_CODE_QUIT);
+				break;
+			}
+		}
+	}
+
+	/* stream commands support the source URI environment variable */
+	if (IS_EMPTY_STRING_BUFFER(options.target_pguri))
+	{
+		if (env_exists(PGCOPYDB_TARGET_PGURI))
+		{
+			if (!get_env_copy(PGCOPYDB_TARGET_PGURI,
+							  options.target_pguri,
+							  sizeof(options.target_pguri)))
+			{
+				/* errors have already been logged */
+				++errors;
+			}
+		}
+	}
+
+	if (IS_EMPTY_STRING_BUFFER(options.target_pguri))
+	{
+		log_fatal("Option --target is mandatory");
+		++errors;
+	}
+
+	/* when --origin is not used, use the default slot name "pgcopydb" */
+	if (IS_EMPTY_STRING_BUFFER(options.origin))
+	{
+		strlcpy(options.origin, REPLICATION_ORIGIN, sizeof(options.origin));
+	}
+
+	if (!cli_copydb_is_consistent(&options))
+	{
+		log_fatal("Option --resume requires option --not-consistent");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	if (errors > 0)
+	{
+		commandline_help(stderr);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	/* publish our option parsing in the global variable */
+	createOriginOptions = options;
+
+	return optind;
+}
+
+
+/*
+ * cli_create_origin implements the comand: pgcopydb create origin
+ */
+static void
+cli_create_origin(int argc, char **argv)
+{
+	if (createOriginOptions.startpos == 0)
+	{
+		log_fatal("Option --startpos is mandatory");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) find_pg_commands(&(copySpecs.pgPaths));
+
+	bool auxilliary = false;
+
+	if (!copydb_init_workdir(&copySpecs,
+							 NULL,
+							 createOriginOptions.restart,
+							 createOriginOptions.resume,
+							 auxilliary))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	RestoreOptions restoreOptions = { 0 };
+
+	if (!copydb_init_specs(&copySpecs,
+						   createOriginOptions.source_pguri,
+						   createOriginOptions.target_pguri,
+						   1,   /* tableJobs */
+						   1,   /* indexJobs */
+						   DATA_SECTION_ALL,
+						   createOriginOptions.snapshot,
+						   restoreOptions,
+						   false, /* roles */
+						   false, /* skipLargeObjects */
+						   createOriginOptions.restart,
+						   createOriginOptions.resume,
+						   !createOriginOptions.notConsistent))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!stream_create_origin(&copySpecs,
+							  createOriginOptions.origin,
+							  createOriginOptions.startpos))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_TARGET);
+	}
+}
+
+
+/*
+ * cli_create_origin implements the comand: pgcopydb drop origin
+ */
+static void
+cli_drop_origin(int argc, char **argv)
+{
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) find_pg_commands(&(copySpecs.pgPaths));
+
+	bool auxilliary = false;
+
+	if (!copydb_init_workdir(&copySpecs,
+							 NULL,
+							 createOriginOptions.restart,
+							 createOriginOptions.resume,
+							 auxilliary))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	RestoreOptions restoreOptions = { 0 };
+
+	if (!copydb_init_specs(&copySpecs,
+						   createOriginOptions.source_pguri,
+						   createOriginOptions.target_pguri,
+						   1,   /* tableJobs */
+						   1,   /* indexJobs */
+						   DATA_SECTION_ALL,
+						   createOriginOptions.snapshot,
+						   restoreOptions,
+						   false, /* roles */
+						   false, /* skipLargeObjects */
+						   createOriginOptions.restart,
+						   createOriginOptions.resume,
+						   !createOriginOptions.notConsistent))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	PGSQL dst = { 0 };
+	char *nodeName = createOriginOptions.origin;
+
+	if (!pgsql_init(&dst, copySpecs.target_pguri, PGSQL_CONN_TARGET))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_TARGET);
+	}
+
+	if (!pgsql_replication_origin_drop(&dst, nodeName))
+	{
+		log_error("Failed to drop replication origin \"%s\"", nodeName);
+		exit(EXIT_CODE_TARGET);
 	}
 }

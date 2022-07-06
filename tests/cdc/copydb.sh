@@ -25,11 +25,7 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/ddl.sql
 
 # create the replication slot that captures all the changes
-psql -d ${PGCOPYDB_SOURCE_PGURI} <<EOF
-begin;
-SELECT 'init' FROM pg_create_logical_replication_slot('test_slot', 'wal2json');
-commit;
-EOF
+pgcopydb stream setup
 
 # pgcopydb copy db uses the environment variables
 pgcopydb copy-db
@@ -40,13 +36,12 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 # grab the current LSN, it's going to be our streaming end position
 lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_lsn()'`
 
-# and receive the changes captured in our replication slot
-pgcopydb stream receive --slot-name test_slot --restart --endpos "${lsn}" -vv
+# and prefetch the changes captured in our replication slot
+pgcopydb stream prefetch --restart --endpos "${lsn}" -vv
 
 SHAREDIR=/var/lib/postgres/.local/share/pgcopydb
 WALFILE=000000010000000000000002.json
-
-cat ${SHAREDIR}/${WALFILE}
+SQLFILE=000000010000000000000002.sql
 
 # now compare JSON output, skipping the lsn and nextlsn fields which are
 # different at each run
@@ -58,19 +53,32 @@ JQSCRIPT='del(.lsn) | del(.nextlsn) | del(.timestamp)'
 jq "${JQSCRIPT}" /usr/src/pgcopydb/${WALFILE} > ${expected}
 jq "${JQSCRIPT}" ${SHAREDIR}/${WALFILE} > ${result}
 
+# first command to provide debug information, second to stop when returns non-zero
+diff ${expected} ${result} || cat ${SHAREDIR}/${WALFILE}
 diff ${expected} ${result}
 
+# now prefetch the changes again, which should be a noop
+pgcopydb stream prefetch --resume --endpos "${lsn}" -vv
+
 # now transform the JSON file into SQL
-SQLFILE=`basename ${WALFILE} .json`.sql
+SQLFILENAME=`basename ${WALFILE} .json`.sql
 
-pgcopydb stream transform -vvv ${SHAREDIR}/${WALFILE} ${SHAREDIR}/${SQLFILE}
+pgcopydb stream transform -vv ${SHAREDIR}/${WALFILE} /tmp/${SQLFILENAME}
 
+# we should get the same result as `pgcopydb stream prefetch`
+diff ${SHAREDIR}/${SQLFILE} /tmp/${SQLFILENAME}
+
+# we should also get the same result as expected (discarding LSN numbers)
 DIFFOPTS='-I BEGIN -I COMMIT'
 
-diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} ${SHAREDIR}/${SQLFILE}
+diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} ${SHAREDIR}/${SQLFILENAME}
 
 # now apply the SQL file to the target database
-pgcopydb stream apply -vvv ${SHAREDIR}/${SQLFILE}
+pgcopydb stream apply -vv ${SHAREDIR}/${SQLFILE}
 
 # now apply AGAIN the SQL file to the target database, skipping transactions
-pgcopydb stream apply -vvv ${SHAREDIR}/${SQLFILE}
+pgcopydb stream apply -vv ${SHAREDIR}/${SQLFILE}
+
+# cleanup
+pgcopydb drop origin
+pgcopydb drop slot

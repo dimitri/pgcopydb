@@ -36,13 +36,33 @@ typedef struct StreamCounters
 	uint64_t truncate;
 } StreamCounters;
 
+
+/*
+ * The detailed behavior of the LogicalStreamClient is implemented in the
+ * callback functions writeFunction, flushFunction, and closeFunction.
+ *
+ */
+typedef enum
+{
+	STREAM_MODE_UNKNOW = 0,
+	STREAM_MODE_RECEIVE,        /* pgcopydb receive */
+	STREAM_MODE_PREFETCH,       /* pgcopydb fetch */
+	STREAM_MODE_APPLY           /* pgcopydb replay */
+} LogicalStreamMode;
+
+
 typedef struct StreamContext
 {
 	char *cdcdir;
 
+	LogicalStreamMode mode;
+
 	uint64_t startLSN;
 	char walFileName[MAXPGPATH];
+	char sqlFileName[MAXPGPATH];
 	FILE *jsonFile;
+
+	pid_t subprocess;
 
 	StreamCounters counters;
 } StreamContext;
@@ -187,6 +207,8 @@ typedef struct StreamSpecs
 	uint64_t startLSN;
 	uint64_t endpos;
 
+	LogicalStreamMode mode;
+
 	bool restart;
 	bool resume;
 } StreamSpecs;
@@ -207,13 +229,20 @@ bool stream_init_specs(StreamSpecs *specs,
 					   char *source_pguri,
 					   char *target_pguri,
 					   char *slotName,
-					   uint64_t endpos);
+					   uint64_t endpos,
+					   LogicalStreamMode mode);
 
 bool startLogicalStreaming(StreamSpecs *specs);
 
 bool streamWrite(LogicalStreamContext *context);
 bool streamFlush(LogicalStreamContext *context);
 bool streamClose(LogicalStreamContext *context);
+
+bool streamRotateFile(LogicalStreamContext *context);
+bool streamCloseFile(LogicalStreamContext *context, bool time_to_abort);
+
+bool streamTransformFileInSubprocess(LogicalStreamContext *context);
+bool streamWaitForSubprocess(LogicalStreamContext *context);
 
 bool parseMessageMetadata(LogicalMessageMetadata *metadata,
 						  const char *buffer,
@@ -224,6 +253,12 @@ bool stream_read_file(StreamContent *content);
 bool stream_read_latest(StreamSpecs *specs, StreamContent *content);
 
 bool buildReplicationURI(const char *pguri, char *repl_pguri);
+
+bool stream_create_repl_slot(CopyDataSpec *copySpecs,
+							 char *slotName, uint64_t *lsn);
+
+bool stream_create_origin(CopyDataSpec *copySpecs,
+						  char *nodeName, uint64_t startpos);
 
 StreamAction StreamActionFromChar(char action);
 

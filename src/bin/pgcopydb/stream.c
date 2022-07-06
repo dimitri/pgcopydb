@@ -46,7 +46,8 @@ stream_init_specs(StreamSpecs *specs,
 				  char *source_pguri,
 				  char *target_pguri,
 				  char *slotName,
-				  uint64_t endpos)
+				  uint64_t endpos,
+				  LogicalStreamMode mode)
 {
 	/* just copy into StreamSpecs what's been initialized in copySpecs */
 	strlcpy(specs->cdcdir, cdcdir, MAXCONNINFO);
@@ -55,6 +56,8 @@ stream_init_specs(StreamSpecs *specs,
 	strlcpy(specs->slotName, slotName, sizeof(specs->slotName));
 
 	specs->endpos = endpos;
+
+	specs->mode = mode;
 
 	if (!buildReplicationURI(specs->source_pguri, specs->logrep_pguri))
 	{
@@ -103,6 +106,7 @@ startLogicalStreaming(StreamSpecs *specs)
 	StreamContext privateContext = { 0 };
 	LogicalStreamContext context = { 0 };
 
+	privateContext.mode = specs->mode;
 	privateContext.cdcdir = specs->cdcdir;
 	privateContext.startLSN = specs->startLSN;
 
@@ -203,66 +207,11 @@ streamWrite(LogicalStreamContext *context)
 {
 	StreamContext *privateContext = (StreamContext *) context->private;
 
-	/* get the segment number from the current_record_lsn */
-	XLogSegNo segno;
-	char wal[MAXPGPATH] = { 0 };
-	char walFileName[MAXPGPATH] = { 0 };
-
-	/* compute the WAL filename that would host the current LSN */
-	XLByteToSeg(context->cur_record_lsn, segno, context->WalSegSz);
-	XLogFileName(wal, context->timeline, segno, context->WalSegSz);
-
-	sformat(walFileName, sizeof(walFileName), "%s/%s.json",
-			privateContext->cdcdir,
-			wal);
-
-	if (strcmp(privateContext->walFileName, walFileName) != 0)
+	/* we might have to rotate to the next on-disk file */
+	if (!streamRotateFile(context))
 	{
-		/* if we had a WAL file opened, close it now */
-		if (!IS_EMPTY_STRING_BUFFER(privateContext->walFileName) &&
-			privateContext->jsonFile != NULL)
-		{
-			log_debug("closing %s", privateContext->walFileName);
-
-			if (fclose(privateContext->jsonFile) != 0)
-			{
-				/* errors have already been logged */
-				return false;
-			}
-		}
-
-		log_info("Now streaming changes to \"%s\"", walFileName);
-		strlcpy(privateContext->walFileName, walFileName, MAXPGPATH);
-
-		/*
-		 * When the target file already exists, open it in append mode.
-		 */
-		int flags = file_exists(walFileName) ? FOPEN_FLAGS_A : FOPEN_FLAGS_W;
-
-		privateContext->jsonFile =
-			fopen_with_umask(walFileName, "ab", flags, 0644);
-
-		if (privateContext->jsonFile == NULL)
-		{
-			/* errors have already been logged */
-			log_error("Failed to open file \"%s\": %m",
-					  privateContext->walFileName);
-			return false;
-		}
-
-		/*
-		 * Also maintain the "latest" symbolic link to the latest file where
-		 * we've been streaming changes in.
-		 */
-		char latest[MAXPGPATH] = { 0 };
-
-		sformat(latest, sizeof(latest), "%s/latest", privateContext->cdcdir);
-
-		if (!create_symbolic_link(privateContext->walFileName, latest))
-		{
-			/* errors have already been logged */
-			return false;
-		}
+		/* errors have already been logged */
+		return false;
 	}
 
 	LogicalMessageMetadata metadata = { 0 };
@@ -349,6 +298,171 @@ streamWrite(LogicalStreamContext *context)
 
 
 /*
+ * streamRotate decides if the received message should be appended to the
+ * already opened file or to a new file, and then opens that file and takes
+ * care of preparing the new file descriptor.
+ *
+ * A "latest" symbolic link is also maintained.
+ */
+bool
+streamRotateFile(LogicalStreamContext *context)
+{
+	StreamContext *privateContext = (StreamContext *) context->private;
+
+	/* get the segment number from the current_record_lsn */
+	XLogSegNo segno;
+	char wal[MAXPGPATH] = { 0 };
+	char walFileName[MAXPGPATH] = { 0 };
+
+	/* compute the WAL filename that would host the current LSN */
+	XLByteToSeg(context->cur_record_lsn, segno, context->WalSegSz);
+	XLogFileName(wal, context->timeline, segno, context->WalSegSz);
+
+	sformat(walFileName, sizeof(walFileName), "%s/%s.json",
+			privateContext->cdcdir,
+			wal);
+
+	/* in most cases, the file name is still the same */
+	if (strcmp(privateContext->walFileName, walFileName) == 0)
+	{
+		return true;
+	}
+
+	/* if we had a WAL file opened, close it now */
+	if (!IS_EMPTY_STRING_BUFFER(privateContext->walFileName) &&
+		privateContext->jsonFile != NULL)
+	{
+		bool time_to_abort = false;
+
+		if (!streamCloseFile(context, time_to_abort))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	log_info("Now streaming changes to \"%s\"", walFileName);
+	strlcpy(privateContext->walFileName, walFileName, MAXPGPATH);
+
+	/* when dealing with a new JSON name, also prepare the SQL name */
+	sformat(privateContext->sqlFileName, sizeof(privateContext->sqlFileName),
+			"%s/%s.sql",
+			privateContext->cdcdir,
+			wal);
+
+	/*
+	 * When the target file already exists, open it in append mode.
+	 */
+	int flags = file_exists(walFileName) ? FOPEN_FLAGS_A : FOPEN_FLAGS_W;
+
+	privateContext->jsonFile =
+		fopen_with_umask(walFileName, "ab", flags, 0644);
+
+	if (privateContext->jsonFile == NULL)
+	{
+		/* errors have already been logged */
+		log_error("Failed to open file \"%s\": %m",
+				  privateContext->walFileName);
+		return false;
+	}
+
+	/*
+	 * Also maintain the "latest" symbolic link to the latest file where
+	 * we've been streaming changes in.
+	 */
+	char latest[MAXPGPATH] = { 0 };
+
+	sformat(latest, sizeof(latest), "%s/latest", privateContext->cdcdir);
+
+	if (!create_symbolic_link(privateContext->walFileName, latest))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * streamCloseFile closes the current file where the stream messages are
+ * written to. It's called from either streamWrite or streamClose logical
+ * stream client callback functions.
+ */
+bool
+streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
+{
+	StreamContext *privateContext = (StreamContext *) context->private;
+
+	if (privateContext->jsonFile == NULL)
+	{
+		return true;
+	}
+
+	log_debug("Closing file \"%s\"", privateContext->walFileName);
+
+	if (fclose(privateContext->jsonFile) != 0)
+	{
+		log_error("Failed to close file \"%s\": %m",
+				  privateContext->walFileName);
+		return false;
+	}
+
+	/* in prefetch mode, kick-in a transform process */
+	switch (privateContext->mode)
+	{
+		case STREAM_MODE_RECEIVE:
+		{
+			/* nothing else to do in that streaming mode */
+			break;
+		}
+
+		case STREAM_MODE_PREFETCH:
+		{
+			/*
+			 * Now is the time to transform the JSON file into SQL.
+			 *
+			 * The transformation of the file uses enough CPU that we'd prefer
+			 * to start it in a subprocess.
+			 */
+			if (!streamTransformFileInSubprocess(context))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			/*
+			 * While streaming logical decoding JSON messages, the transforming
+			 * of the previous JSON file happens in parallel to the receiving
+			 * of the current one.
+			 *
+			 * When it's time_to_abort, we need to make sure the current file
+			 * has been transformed before exiting.
+			 */
+			if (time_to_abort)
+			{
+				if (!streamWaitForSubprocess(context))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+			}
+
+			break;
+		}
+
+		default:
+		{
+			log_error("BUG: unknown LogicalStreamMode %d", privateContext->mode);
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
  * streamFlush is a callback function for our LogicalStreamClient.
  *
  * This function is called when it's time to flush the data that's currently
@@ -398,26 +512,18 @@ streamFlush(LogicalStreamContext *context)
 bool
 streamClose(LogicalStreamContext *context)
 {
-	StreamContext *privateContext = (StreamContext *) context->private;
-
-	/* when there is currently no file opened, just skip the close operation */
-	if (privateContext->jsonFile == NULL)
-	{
-		return true;
-	}
-
 	if (!streamFlush(context))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	log_debug("streamClose: closing file \"%s\"", privateContext->walFileName);
+	bool time_to_abort = true;
 
-	if (fclose(privateContext->jsonFile) != 0)
+	if (!streamCloseFile(context, time_to_abort))
 	{
-		log_error("Failed to close file \"%s\": %m",
-				  privateContext->walFileName);
+		/* errors have already been logged */
+		return false;
 	}
 
 	return true;
@@ -754,4 +860,281 @@ StreamActionFromChar(char action)
 
 	/* keep compiler happy */
 	return STREAM_ACTION_UNKNOWN;
+}
+
+
+/*
+ * streamTransformFileInSubprocess creates an auxiliary process to run the
+ * stream_transform_file() function on the just closed JSON file.
+ */
+bool
+streamTransformFileInSubprocess(LogicalStreamContext *context)
+{
+	StreamContext *privateContext = (StreamContext *) context->private;
+
+	/*
+	 * First, wait any already started subprocess.
+	 *
+	 * The assumption here is that by the time we have received another WAL
+	 * size content of JSON messages, the transform subprocess should be
+	 * finished already.
+	 */
+	if (!streamWaitForSubprocess(context))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now we can fork a sub-process to transform the current file */
+	pid_t fpid = fork();
+
+	switch (fpid)
+	{
+		case -1:
+		{
+			log_error("Failed to fork a subprocess to transform "
+					  "JSON file \"%s\" into SQL",
+					  privateContext->walFileName);
+			return -1;
+		}
+
+		case 0:
+		{
+			/* child process runs the command */
+			if (!stream_transform_file(privateContext->walFileName,
+									   privateContext->sqlFileName))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			/* and we're done */
+			exit(EXIT_CODE_QUIT);
+		}
+
+		default:
+		{
+			privateContext->subprocess = fpid;
+			log_info("Starting subprocess %d to prepare \"%s\"",
+					 fpid,
+					 privateContext->sqlFileName);
+			break;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * streamWaitForSubprocess calls waitpid() and blocks until the current
+ * subprocess is reported terminated by the Operating System.
+ */
+bool
+streamWaitForSubprocess(LogicalStreamContext *context)
+{
+	StreamContext *privateContext = (StreamContext *) context->private;
+
+	/* if a subprocess had been started before, wait until it's done. */
+	if (privateContext->subprocess > 0)
+	{
+		int status = 0;
+
+		if (waitpid(privateContext->subprocess, &status, 0) == -1)
+		{
+			log_error("Failed to wait for pid %d: %m",
+					  privateContext->subprocess);
+			return false;
+		}
+
+		if (WEXITSTATUS(status) != 0)
+		{
+			log_error("Failed to transform previous JSON file into SQL, "
+					  "see above for details");
+			return false;
+		}
+
+		log_debug("Transform subprocess %d exited successfully [%d]",
+				  privateContext->subprocess,
+				  status);
+
+		privateContext->subprocess = 0;
+	}
+
+	return true;
+}
+
+
+/*
+ * stream_create_repl_slot creates a replication slot on the source database.
+ */
+bool
+stream_create_repl_slot(CopyDataSpec *copySpecs, char *slotName, uint64_t *lsn)
+{
+	PGSQL *pgsql = &(copySpecs->sourceSnapshot.pgsql);
+
+	/*
+	 * When --snapshot has been used, open a transaction using that snapshot.
+	 */
+	if (!IS_EMPTY_STRING_BUFFER(copySpecs->sourceSnapshot.snapshot))
+	{
+		if (!copydb_set_snapshot(copySpecs))
+		{
+			/* errors have already been logged */
+			log_fatal("Failed to use given --snapshot \"%s\"",
+					  copySpecs->sourceSnapshot.snapshot);
+			return false;
+		}
+	}
+	else
+	{
+		if (!pgsql_init(pgsql, copySpecs->source_pguri, PGSQL_CONN_SOURCE))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!pgsql_begin(pgsql))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	bool slotExists = false;
+
+	if (!pgsql_replication_slot_exists(pgsql, slotName, &slotExists))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (slotExists)
+	{
+		log_error("Failed to create replication slot \"%s\": already exists",
+				  slotName);
+		pgsql_rollback(pgsql);
+		return false;
+	}
+
+	if (!pgsql_create_replication_slot(pgsql,
+									   slotName,
+									   REPLICATION_PLUGIN,
+									   lsn))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_commit(pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_info("Created logical replication slot \"%s\" with plugin \"%s\" "
+			 "at LSN %X/%X",
+			 slotName,
+			 REPLICATION_PLUGIN,
+			 LSN_FORMAT_ARGS(*lsn));
+
+	return true;
+}
+
+
+/*
+ * stream_create_origin creates a replication origin on the target database.
+ */
+bool
+stream_create_origin(CopyDataSpec *copySpecs, char *nodeName, uint64_t startpos)
+{
+	PGSQL dst = { 0 };
+
+	if (!pgsql_init(&dst, copySpecs->target_pguri, PGSQL_CONN_TARGET))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_begin(&dst))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	uint32_t oid = 0;
+
+	if (!pgsql_replication_origin_oid(&dst, nodeName, &oid))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (oid == 0)
+	{
+		if (!pgsql_replication_origin_create(&dst, nodeName))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		char startLSN[PG_LSN_MAXLENGTH] = { 0 };
+
+		sformat(startLSN, sizeof(startLSN), "%X/%X", LSN_FORMAT_ARGS(startpos));
+
+		if (!pgsql_replication_origin_advance(&dst, nodeName, startLSN))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		log_info("Created logical replication origin \"%s\" at LSN %X/%X",
+				 nodeName,
+				 LSN_FORMAT_ARGS(startpos));
+	}
+	else
+	{
+		uint64_t lsn = 0;
+		char lsnString[PG_LSN_MAXLENGTH] = { 0 };
+
+		if (!pgsql_replication_origin_progress(&dst,
+											   nodeName,
+											   true,
+											   lsnString))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!parseLSN(lsnString, &lsn))
+		{
+			log_error("Failed to parse LSN \"%s\" returned from "
+					  "pg_replication_origin_progress('%s', true)",
+					  lsnString,
+					  nodeName);
+			pgsql_finish(&dst);
+			return false;
+		}
+
+		log_level(lsn == startpos ? LOG_INFO : LOG_ERROR,
+				  "Replication origin \"%s\" already exists and "
+				  "progressed to LSN %X/%X",
+				  nodeName,
+				  LSN_FORMAT_ARGS(lsn));
+
+		if (lsn != startpos)
+		{
+			/* errors have already been logged */
+			pgsql_finish(&dst);
+			return false;
+		}
+	}
+
+	if (!pgsql_commit(&dst))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
 }

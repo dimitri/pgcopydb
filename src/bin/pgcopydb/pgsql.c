@@ -3262,6 +3262,8 @@ pgsql_replication_origin_drop(PGSQL *pgsql, char *nodeName)
 	Oid paramTypes[1] = { TEXTOID };
 	const char *paramValues[1] = { nodeName };
 
+	log_info("Dropping replication origin \"%s\"", nodeName);
+
 	if (!pgsql_execute_with_params(pgsql, sql,
 								   paramCount, paramTypes, paramValues,
 								   NULL, NULL))
