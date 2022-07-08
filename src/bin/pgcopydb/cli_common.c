@@ -403,14 +403,14 @@ cli_copydb_is_consistent(CopyDBOptions *options)
 	 * If the origin file does not exists, then we don't have to check about
 	 * re-using the same origin node name as in the previous run.
 	 */
-	if (!file_exists(cfPaths.originfile))
+	if (!file_exists(cfPaths.cdc.originfile))
 	{
 		return true;
 	}
 
 	char *previous_origin = NULL;
 
-	if (!read_file(cfPaths.originfile, &previous_origin, &size))
+	if (!read_file(cfPaths.cdc.originfile, &previous_origin, &size))
 	{
 		/* errors have already been logged */
 		return false;

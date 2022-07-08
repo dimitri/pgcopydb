@@ -77,6 +77,8 @@ stream_apply_file(StreamApplyContext *context, char *sqlfilename)
 						  LSN_FORMAT_ARGS(context->previousLSN),
 						  skipping ? "[skipping]" : "");
 
+				context->nextlsn = metadata.nextlsn;
+
 				if (!reachedStartingPosition)
 				{
 					if (context->previousLSN < metadata.lsn)
@@ -118,12 +120,15 @@ stream_apply_file(StreamApplyContext *context, char *sqlfilename)
 					continue;
 				}
 
-				log_debug("COMMIT %lld LSN %X/%X",
+				log_debug("COMMIT %lld LSN %X/%X next LSN %X/%X",
 						  (long long) metadata.xid,
-						  LSN_FORMAT_ARGS(metadata.lsn));
+						  LSN_FORMAT_ARGS(metadata.lsn),
+						  LSN_FORMAT_ARGS(metadata.nextlsn));
+
+				context->nextlsn = metadata.nextlsn;
 
 				/* calling pgsql_commit() would finish the connection, avoid */
-				if (!pgsql_execute(pgsql, sql))
+				if (!pgsql_execute(pgsql, "COMMIT"))
 				{
 					/* errors have already been logged */
 					return false;
@@ -140,6 +145,15 @@ stream_apply_file(StreamApplyContext *context, char *sqlfilename)
 				if (!reachedStartingPosition)
 				{
 					continue;
+				}
+
+				/* chomp the final semi-colon that we added */
+				int len = strlen(sql);
+
+				if (sql[len - 1] == ';')
+				{
+					char *ptr = (char *) sql + len - 1;
+					*ptr = '\0';
 				}
 
 				if (!pgsql_execute(pgsql, sql))
@@ -174,12 +188,14 @@ stream_apply_file(StreamApplyContext *context, char *sqlfilename)
  */
 bool
 setupReplicationOrigin(StreamApplyContext *context,
+					   CDCPaths *paths,
 					   char *target_pguri,
 					   char *origin)
 {
 	PGSQL *pgsql = &(context->pgsql);
 	char *nodeName = context->origin;
 
+	context->paths = *paths;
 	strlcpy(context->target_pguri, target_pguri, sizeof(context->target_pguri));
 	strlcpy(context->origin, origin, sizeof(context->origin));
 
@@ -204,45 +220,67 @@ setupReplicationOrigin(StreamApplyContext *context,
 
 	if (oid == 0)
 	{
-		if (!pgsql_replication_origin_create(pgsql, nodeName))
-		{
-			/* errors have already been logged */
-			return false;
-		}
+		log_error("Failed to fetch progress for replication origin \"%s\": "
+				  "replication origin not found on target database",
+				  nodeName);
+		(void) pgsql_finish(pgsql);
+		return false;
 	}
-	else
+
+	if (!pgsql_replication_origin_progress(pgsql,
+										   nodeName,
+										   true,
+										   &(context->previousLSN)))
 	{
-		char lsn[PG_LSN_MAXLENGTH] = { 0 };
-
-		if (!pgsql_replication_origin_progress(pgsql,
-											   nodeName,
-											   true,
-											   lsn))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		if (!parseLSN(lsn, &(context->previousLSN)))
-		{
-			log_error("Failed to parse LSN \"%s\" returned from "
-					  "pg_replication_origin_progress('%s', true)",
-					  lsn,
-					  nodeName);
-			return false;
-		}
-
-		log_debug("setupReplicationOrigin: replication origin \"%s\" "
-				  "found at %X/%X",
-				  nodeName,
-				  LSN_FORMAT_ARGS(context->previousLSN));
+		/* errors have already been logged */
+		return false;
 	}
+
+	/*
+	 * At init time, we trick nextlsn to open the sql filename that matches
+	 * with our previousLSN from progress tracking.
+	 */
+	context->nextlsn = context->previousLSN;
+
+	if (!computeSQLFileName(context))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* compute the WAL filename that would host the previous LSN */
+	log_debug("setupReplicationOrigin: replication origin \"%s\" "
+			  "found at %X/%X, expected in file \"%s\"",
+			  nodeName,
+			  LSN_FORMAT_ARGS(context->previousLSN),
+			  context->sqlFileName);
 
 	if (!pgsql_replication_origin_session_setup(pgsql, nodeName))
 	{
 		/* errors have already been logged */
 		return false;
 	}
+
+	return true;
+}
+
+
+/*
+ * computeSQLFileName updates the StreamApplyContext structure with the current
+ * LSN applied to the target system, and computed
+ */
+bool
+computeSQLFileName(StreamApplyContext *context)
+{
+	XLogSegNo segno;
+
+	XLByteToSeg(context->nextlsn, segno, context->WalSegSz);
+	XLogFileName(context->wal, context->system.timeline, segno, context->WalSegSz);
+
+	sformat(context->sqlFileName, sizeof(context->sqlFileName),
+			"%s/%s.sql",
+			context->paths.dir,
+			context->wal);
 
 	return true;
 }

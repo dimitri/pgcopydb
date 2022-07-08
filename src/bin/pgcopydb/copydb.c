@@ -173,7 +173,7 @@ copydb_init_workdir(CopyDataSpec *copySpecs,
 		cfPaths->rundir,
 		cfPaths->tbldir,
 		cfPaths->idxdir,
-		cfPaths->cdcdir,
+		cfPaths->cdc.dir,
 		NULL
 	};
 
@@ -387,7 +387,7 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths, const char *dir, bool auxilliar
 	 */
 	if (dir != NULL && !IS_EMPTY_STRING_BUFFER(dir))
 	{
-		sformat(cfPaths->cdcdir, MAXPGPATH, "%s/cdc", cfPaths->topdir);
+		sformat(cfPaths->cdc.dir, MAXPGPATH, "%s/cdc", cfPaths->topdir);
 	}
 	else
 	{
@@ -412,13 +412,28 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths, const char *dir, bool auxilliar
 			return false;
 		}
 
-		sformat(cfPaths->cdcdir, MAXPGPATH, "%s/pgcopydb", datadir);
+		sformat(cfPaths->cdc.dir, MAXPGPATH, "%s/pgcopydb", datadir);
 	}
 
-	log_debug("Change Data Capture data is managed at \"%s\"", cfPaths->cdcdir);
+	log_debug("Change Data Capture data is managed at \"%s\"",
+			  cfPaths->cdc.dir);
 
-	/* now prepare the originfile path */
-	sformat(cfPaths->originfile, MAXPGPATH, "%s/origin", cfPaths->cdcdir);
+	/* now prepare the originfile and timelinehistfile path */
+	sformat(cfPaths->cdc.originfile, MAXPGPATH,
+			"%s/origin",
+			cfPaths->cdc.dir);
+
+	sformat(cfPaths->cdc.tlihistfile, MAXPGPATH,
+			"%s/tli.history",
+			cfPaths->cdc.dir);
+
+	sformat(cfPaths->cdc.tlifile, MAXPGPATH,
+			"%s/tli",
+			cfPaths->cdc.dir);
+
+	sformat(cfPaths->cdc.walsegsizefile, MAXPGPATH,
+			"%s/wal_segment_size",
+			cfPaths->cdc.dir);
 
 	return true;
 }

@@ -8,6 +8,7 @@
 
 #include <stdbool.h>
 
+#include "copydb.h"
 #include "pgsql.h"
 
 #define OUTPUT_BEGIN "BEGIN; -- "
@@ -53,8 +54,7 @@ typedef enum
 
 typedef struct StreamContext
 {
-	char *cdcdir;
-
+	CDCPaths paths;
 	LogicalStreamMode mode;
 
 	uint64_t startLSN;
@@ -67,13 +67,25 @@ typedef struct StreamContext
 	StreamCounters counters;
 } StreamContext;
 
+
 typedef struct StreamApplyContext
 {
+	CDCPaths paths;
+
 	PGSQL pgsql;
 	char target_pguri[MAXCONNINFO];
 	char origin[BUFSIZE];
-	uint64_t previousLSN;
+
+	IdentifySystem system;      /* information about source database */
+	uint32_t WalSegSz;          /* information about source database */
+
+	uint64_t nextlsn;           /* read from SQL file COMMIT comments */
+	uint64_t previousLSN;       /* target database progress */
+
+	char wal[MAXPGPATH];
+	char sqlFileName[MAXPGPATH];
 } StreamApplyContext;
+
 
 #define PG_MAX_TIMESTAMP 36     /* "2022-06-27 14:42:21.795714+00" */
 
@@ -181,6 +193,7 @@ typedef struct LogicalTransaction
 	uint32_t xid;
 	uint64_t beginLSN;
 	uint64_t commitLSN;
+	uint64_t nextlsn;
 	char timestamp[PG_MAX_TIMESTAMP];
 
 	uint32_t count;                     /* number of statements */
@@ -197,7 +210,7 @@ typedef struct LogicalTransactionArray
 
 typedef struct StreamSpecs
 {
-	char cdcdir[MAXPGPATH];
+	CDCPaths paths;
 
 	char source_pguri[MAXCONNINFO];
 	char logrep_pguri[MAXCONNINFO];
@@ -225,7 +238,7 @@ typedef struct StreamContent
 } StreamContent;
 
 bool stream_init_specs(StreamSpecs *specs,
-					   char *cdcdir,
+					   CDCPaths *paths,
 					   char *source_pguri,
 					   char *target_pguri,
 					   char *slotName,
@@ -260,6 +273,11 @@ bool stream_create_repl_slot(CopyDataSpec *copySpecs,
 bool stream_create_origin(CopyDataSpec *copySpecs,
 						  char *nodeName, uint64_t startpos);
 
+bool stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream);
+bool stream_read_context(StreamSpecs *specs,
+						 IdentifySystem *system,
+						 uint32_t *WalSegSz);
+
 StreamAction StreamActionFromChar(char action);
 
 /* ld_transform.c */
@@ -281,9 +299,13 @@ bool parseMessage(LogicalTransaction *txn,
 
 /* ld_apply.c */
 bool stream_apply_file(StreamApplyContext *context, char *sqlfilename);
+
 bool setupReplicationOrigin(StreamApplyContext *context,
+							CDCPaths *paths,
 							char *target_pguri,
 							char *origin);
+
+bool computeSQLFileName(StreamApplyContext *context);
 
 StreamAction parseSQLAction(const char *query, LogicalMessageMetadata *metadata);
 

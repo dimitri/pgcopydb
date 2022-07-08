@@ -127,6 +127,8 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 		/* it is time to close the current transaction and prepare a new one? */
 		if (metadata->action == STREAM_ACTION_COMMIT)
 		{
+			currentTx->nextlsn = metadata->nextlsn;
+
 			++txns.count;
 			++currentTxIndex;
 
@@ -704,10 +706,12 @@ bool
 stream_write_transaction(FILE *out, LogicalTransaction *tx)
 {
 	fformat(out,
-			"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
+			"%s{\"xid\":%lld,\"lsn\":\"%X/%X\","
+			"\"nextlsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
 			OUTPUT_BEGIN,
 			(long long) tx->xid,
 			LSN_FORMAT_ARGS(tx->beginLSN),
+			LSN_FORMAT_ARGS(tx->nextlsn),
 			tx->timestamp);
 
 	LogicalTransactionStatement *currentStmt = tx->first;
@@ -761,10 +765,13 @@ stream_write_transaction(FILE *out, LogicalTransaction *tx)
 		}
 	}
 
-	fformat(out, "%s{\"xid\": %lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
+	fformat(out,
+			"%s{\"xid\": %lld,\"lsn\":\"%X/%X\","
+			"\"nextlsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
 			OUTPUT_COMMIT,
 			(long long) tx->xid,
 			LSN_FORMAT_ARGS(tx->commitLSN),
+			LSN_FORMAT_ARGS(tx->nextlsn),
 			tx->timestamp);
 
 	return true;

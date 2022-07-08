@@ -12,6 +12,7 @@ This command prefixes the following sub-commands:
   pgcopydb stream
     setup      Setup source and target systems for logical decoding
     prefetch   Stream JSON changes from the source database and transform them to SQL
+    catchup    Apply prefetched changes from SQL files to the target database
     receive    Stream changes from the source database
     transform  Transform changes from the source database into SQL commands
     apply      Apply changes from the source database into the target database
@@ -27,6 +28,18 @@ step.
    clone --follow`` is strongly advised.
 
    This mode of operations has been designed for unit testing.
+
+.. note::
+
+   The sub-commands ``stream setup`` then ``stream prefetch`` and ``stream
+   catchup`` are higher level commands, that use internal information to
+   know which files to process. Those commands also keep track of their
+   progress.
+
+   The sub-commands ``stream receive``, ``stream transform``, and ``stream
+   apply`` are lower level interface that work on given files. Those
+   commands still keep track of their progress, but have to be given more
+   information to work.
 
 This is still a work in progress. Stay tuned.
 
@@ -92,6 +105,33 @@ SQL file.
      --not-consistent Allow taking a new snapshot on the source database
      --slot-name      Stream changes recorded by this slot
      --endpos         LSN position where to stop receiving changes
+
+.. _pgcopydb_stream_catchup:
+
+pgcopydb stream catchup
+-----------------------
+
+pgcopydb stream catchup - Apply prefetched changes from SQL files to the target database
+
+The command ``pgcopydb stream catchup`` connects to the target database and
+applies changes from the SQL files that have been prepared with the
+``pgcopydb stream prefetch`` command.
+
+
+::
+
+   pgcopydb stream catchup: Apply prefetched changes from SQL files to the target database
+   usage: pgcopydb stream catchup  --source ... --target ...
+
+     --source         Postgres URI to the source database
+     --target         Postgres URI to the target database
+     --dir            Work directory to use
+     --restart        Allow restarting when temp files exist already
+     --resume         Allow resuming operations after a failure
+     --not-consistent Allow taking a new snapshot on the source database
+     --slot-name      Stream changes recorded by this slot
+     --endpos         LSN position where to stop receiving changes  --origin         Name of the Postgres replication origin
+
 
 .. _pgcopydb_stream_receive:
 
