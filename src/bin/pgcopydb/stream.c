@@ -42,7 +42,7 @@ static bool updateStreamCounters(StreamContext *context,
  */
 bool
 stream_init_specs(StreamSpecs *specs,
-				  char *cdcdir,
+				  CDCPaths *paths,
 				  char *source_pguri,
 				  char *target_pguri,
 				  char *slotName,
@@ -50,14 +50,13 @@ stream_init_specs(StreamSpecs *specs,
 				  LogicalStreamMode mode)
 {
 	/* just copy into StreamSpecs what's been initialized in copySpecs */
-	strlcpy(specs->cdcdir, cdcdir, MAXCONNINFO);
+	specs->mode = mode;
+	specs->paths = *paths;
+	specs->endpos = endpos;
+
 	strlcpy(specs->source_pguri, source_pguri, MAXCONNINFO);
 	strlcpy(specs->target_pguri, target_pguri, MAXCONNINFO);
 	strlcpy(specs->slotName, slotName, sizeof(specs->slotName));
-
-	specs->endpos = endpos;
-
-	specs->mode = mode;
 
 	if (!buildReplicationURI(specs->source_pguri, specs->logrep_pguri))
 	{
@@ -107,7 +106,7 @@ startLogicalStreaming(StreamSpecs *specs)
 	LogicalStreamContext context = { 0 };
 
 	privateContext.mode = specs->mode;
-	privateContext.cdcdir = specs->cdcdir;
+	privateContext.paths = specs->paths;
 	privateContext.startLSN = specs->startLSN;
 
 	context.private = (void *) &(privateContext);
@@ -154,6 +153,13 @@ startLogicalStreaming(StreamSpecs *specs)
 		}
 
 		if (!pgsql_start_replication(&stream))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		/* write the wal_segment_size and timeline history files */
+		if (!stream_write_context(specs, &stream))
 		{
 			/* errors have already been logged */
 			return false;
@@ -319,7 +325,7 @@ streamRotateFile(LogicalStreamContext *context)
 	XLogFileName(wal, context->timeline, segno, context->WalSegSz);
 
 	sformat(walFileName, sizeof(walFileName), "%s/%s.json",
-			privateContext->cdcdir,
+			privateContext->paths.dir,
 			wal);
 
 	/* in most cases, the file name is still the same */
@@ -347,7 +353,7 @@ streamRotateFile(LogicalStreamContext *context)
 	/* when dealing with a new JSON name, also prepare the SQL name */
 	sformat(privateContext->sqlFileName, sizeof(privateContext->sqlFileName),
 			"%s/%s.sql",
-			privateContext->cdcdir,
+			privateContext->paths.dir,
 			wal);
 
 	/*
@@ -372,7 +378,7 @@ streamRotateFile(LogicalStreamContext *context)
 	 */
 	char latest[MAXPGPATH] = { 0 };
 
-	sformat(latest, sizeof(latest), "%s/latest", privateContext->cdcdir);
+	sformat(latest, sizeof(latest), "%s/latest", privateContext->paths.dir);
 
 	if (!create_symbolic_link(privateContext->walFileName, latest))
 	{
@@ -691,7 +697,7 @@ stream_read_latest(StreamSpecs *specs, StreamContent *content)
 {
 	char latest[MAXPGPATH] = { 0 };
 
-	sformat(latest, sizeof(latest), "%s/latest", specs->cdcdir);
+	sformat(latest, sizeof(latest), "%s/latest", specs->paths.dir);
 
 	if (!file_exists(latest))
 	{
@@ -1095,24 +1101,13 @@ stream_create_origin(CopyDataSpec *copySpecs, char *nodeName, uint64_t startpos)
 	else
 	{
 		uint64_t lsn = 0;
-		char lsnString[PG_LSN_MAXLENGTH] = { 0 };
 
 		if (!pgsql_replication_origin_progress(&dst,
 											   nodeName,
 											   true,
-											   lsnString))
+											   &lsn))
 		{
 			/* errors have already been logged */
-			return false;
-		}
-
-		if (!parseLSN(lsnString, &lsn))
-		{
-			log_error("Failed to parse LSN \"%s\" returned from "
-					  "pg_replication_origin_progress('%s', true)",
-					  lsnString,
-					  nodeName);
-			pgsql_finish(&dst);
 			return false;
 		}
 
@@ -1131,6 +1126,113 @@ stream_create_origin(CopyDataSpec *copySpecs, char *nodeName, uint64_t startpos)
 	}
 
 	if (!pgsql_commit(&dst))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * stream_write_context writes the wal_segment_size and timeline history to
+ * files.
+ */
+bool
+stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream)
+{
+	IdentifySystem *system = &(stream->system);
+
+	char wal_segment_size[BUFSIZE] = { 0 };
+
+	int bytes =
+		sformat(wal_segment_size, sizeof(wal_segment_size), "%lld",
+				(long long) stream->WalSegSz);
+
+	if (!write_file(wal_segment_size, bytes, specs->paths.walsegsizefile))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_debug("Wrote wal_segment_size %s into \"%s\"",
+			  wal_segment_size,
+			  specs->paths.walsegsizefile);
+
+	char tli[BUFSIZE] = { 0 };
+
+	bytes = sformat(tli, sizeof(tli), "%d", system->timeline);
+
+	if (!write_file(tli, bytes, specs->paths.tlifile))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_debug("Wrote tli %s timeline file \"%s\"", tli, specs->paths.tlifile);
+
+	if (!write_file(system->timelines.content,
+					strlen(system->timelines.content),
+					specs->paths.tlihistfile))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_debug("Wrote timeline history file \"%s\"", specs->paths.tlihistfile);
+
+	return true;
+}
+
+
+/*
+ * stream_read_context reads the stream context back from files
+ * wal_segment_size and timeline history.
+ */
+bool
+stream_read_context(StreamSpecs *specs,
+					IdentifySystem *system,
+					uint32_t *WalSegSz)
+{
+	char *wal_segment_size = NULL;
+	long size = 0L;
+
+	if (!read_file(specs->paths.walsegsizefile, &wal_segment_size, &size))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!stringToUInt(wal_segment_size, WalSegSz))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	char *tli;
+
+	if (!read_file(specs->paths.tlifile, &tli, &size))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!stringToUInt(tli, &(system->timeline)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	char *history = NULL;
+
+	if (!read_file(specs->paths.tlihistfile, &history, &size))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!parseTimeLineHistory(specs->paths.tlihistfile, history, system))
 	{
 		/* errors have already been logged */
 		return false;

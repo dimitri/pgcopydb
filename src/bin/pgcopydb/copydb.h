@@ -48,6 +48,15 @@ typedef struct CopyDoneFilePaths
 	char blobs[MAXPGPATH];      /* /tmp/pgcopydb/run/blobs.done */
 } CopyDoneFilePaths;
 
+/* Change Data Capture (logical decoding) paths */
+typedef struct CDCPaths
+{
+	char dir[MAXPGPATH];              /* /tmp/pgcopydb/cdc */
+	char originfile[MAXPGPATH];       /* /tmp/pgcopydb/cdc/origin */
+	char walsegsizefile[MAXPGPATH];   /* /tmp/pgcopydb/cdc/wal_segment_size */
+	char tlifile[MAXPGPATH];          /* /tmp/pgcopydb/cdc/tli */
+	char tlihistfile[MAXPGPATH];      /* /tmp/pgcopydb/cdc/tli.history */
+} CDCPaths;
 
 /* maintain all the internal paths we need in one place */
 typedef struct CopyFilePaths
@@ -60,9 +69,7 @@ typedef struct CopyFilePaths
 	char tbldir[MAXPGPATH];           /* /tmp/pgcopydb/run/tables */
 	char idxdir[MAXPGPATH];           /* /tmp/pgcopydb/run/indexes */
 
-	char cdcdir[MAXPGPATH];           /* /tmp/pgcopydb/cdc */
-	char originfile[MAXPGPATH];       /* /tmp/pgcopydb/cdc/origin */
-
+	CDCPaths cdc;
 	CopyDoneFilePaths done;
 } CopyFilePaths;
 

@@ -1,8 +1,8 @@
-BEGIN; -- {"xid":489,"lsn":"0/236F5A8"}
+BEGIN; -- {"xid":489,"lsn":"0/236F5A8","nextlsn":"0/236F5D8","timestamp":"2022-06-27 13:24:31.460822+00"}
 INSERT INTO "public"."rental" (rental_id, rental_date, inventory_id, customer_id, return_date, staff_id, last_update) VALUES (16050, '2022-06-01 00:00:00+00', 371, 291, NULL, 1, '2022-06-01 00:00:00+00');
 INSERT INTO "public"."payment_p2020_06" (payment_id, customer_id, staff_id, rental_id, amount, payment_date) VALUES (32099, 291, 1, 16050, 5.99, '2020-06-01 00:00:00+00');
-COMMIT; -- {"xid": 489,"lsn":"0/236F5A8"}
-BEGIN; -- {"xid":490,"lsn":"0/2370540"}
+COMMIT; -- {"xid": 489,"lsn":"0/236F5A8","nextlsn":"0/236F5D8","timestamp":"2022-06-27 13:24:31.460822+00"}
+BEGIN; -- {"xid":490,"lsn":"0/2370540","nextlsn":"0/2370570","timestamp":"2022-06-27 13:24:31.465929+00"}
 UPDATE "public"."payment_p2020_01" SET "payment_id" = 17055, "customer_id" = 196, "staff_id" = 2, "rental_id" = 106, "amount" = 11.95, "payment_date" = '2020-01-25 16:46:45.996577+00' WHERE "payment_id" = 17055 and "customer_id" = 196 and "staff_id" = 2 and "rental_id" = 106 and "amount" = 11.99 and "payment_date" = '2020-01-25 16:46:45.996577+00';
 UPDATE "public"."payment_p2020_02" SET "payment_id" = 17354, "customer_id" = 305, "staff_id" = 1, "rental_id" = 2166, "amount" = 11.95, "payment_date" = '2020-02-17 22:19:47.996577+00' WHERE "payment_id" = 17354 and "customer_id" = 305 and "staff_id" = 1 and "rental_id" = 2166 and "amount" = 11.99 and "payment_date" = '2020-02-17 22:19:47.996577+00';
 UPDATE "public"."payment_p2020_03" SET "payment_id" = 20403, "customer_id" = 362, "staff_id" = 1, "rental_id" = 14759, "amount" = 11.95, "payment_date" = '2020-03-21 21:57:24.996577+00' WHERE "payment_id" = 20403 and "customer_id" = 362 and "staff_id" = 1 and "rental_id" = 14759 and "amount" = 11.99 and "payment_date" = '2020-03-21 21:57:24.996577+00';
@@ -13,12 +13,12 @@ UPDATE "public"."payment_p2020_03" SET "payment_id" = 24866, "customer_id" = 237
 UPDATE "public"."payment_p2020_04" SET "payment_id" = 28799, "customer_id" = 591, "staff_id" = 2, "rental_id" = 4383, "amount" = 11.95, "payment_date" = '2020-04-07 18:14:17.996577+00' WHERE "payment_id" = 28799 and "customer_id" = 591 and "staff_id" = 2 and "rental_id" = 4383 and "amount" = 11.99 and "payment_date" = '2020-04-07 18:14:17.996577+00';
 UPDATE "public"."payment_p2020_04" SET "payment_id" = 28814, "customer_id" = 592, "staff_id" = 1, "rental_id" = 3973, "amount" = 11.95, "payment_date" = '2020-04-06 20:26:57.996577+00' WHERE "payment_id" = 28814 and "customer_id" = 592 and "staff_id" = 1 and "rental_id" = 3973 and "amount" = 11.99 and "payment_date" = '2020-04-06 20:26:57.996577+00';
 UPDATE "public"."payment_p2020_04" SET "payment_id" = 29136, "customer_id" = 13, "staff_id" = 2, "rental_id" = 8831, "amount" = 11.95, "payment_date" = '2020-04-29 20:06:07.996577+00' WHERE "payment_id" = 29136 and "customer_id" = 13 and "staff_id" = 2 and "rental_id" = 8831 and "amount" = 11.99 and "payment_date" = '2020-04-29 20:06:07.996577+00';
-COMMIT; -- {"xid": 490,"lsn":"0/2370540"}
-BEGIN; -- {"xid":491,"lsn":"0/2370810"}
+COMMIT; -- {"xid": 490,"lsn":"0/2370540","nextlsn":"0/2370570","timestamp":"2022-06-27 13:24:31.465929+00"}
+BEGIN; -- {"xid":491,"lsn":"0/2370810","nextlsn":"0/2370840","timestamp":"2022-06-27 13:24:31.483417+00"}
 DELETE FROM "public"."payment_p2020_06" WHERE "payment_id" = 32099 and "customer_id" = 291 and "staff_id" = 1 and "rental_id" = 16050 and "amount" = 5.99 and "payment_date" = '2020-06-01 00:00:00+00';
 DELETE FROM "public"."rental" WHERE "rental_id" = 16050;
-COMMIT; -- {"xid": 491,"lsn":"0/2370810"}
-BEGIN; -- {"xid":492,"lsn":"0/2370D90"}
+COMMIT; -- {"xid": 491,"lsn":"0/2370810","nextlsn":"0/2370840","timestamp":"2022-06-27 13:24:31.483417+00"}
+BEGIN; -- {"xid":492,"lsn":"0/2370D90","nextlsn":"0/2370DC0","timestamp":"2022-06-27 13:24:31.487749+00"}
 UPDATE "public"."payment_p2020_01" SET "payment_id" = 17055, "customer_id" = 196, "staff_id" = 2, "rental_id" = 106, "amount" = 11.99, "payment_date" = '2020-01-25 16:46:45.996577+00' WHERE "payment_id" = 17055 and "customer_id" = 196 and "staff_id" = 2 and "rental_id" = 106 and "amount" = 11.95 and "payment_date" = '2020-01-25 16:46:45.996577+00';
 UPDATE "public"."payment_p2020_02" SET "payment_id" = 17354, "customer_id" = 305, "staff_id" = 1, "rental_id" = 2166, "amount" = 11.99, "payment_date" = '2020-02-17 22:19:47.996577+00' WHERE "payment_id" = 17354 and "customer_id" = 305 and "staff_id" = 1 and "rental_id" = 2166 and "amount" = 11.95 and "payment_date" = '2020-02-17 22:19:47.996577+00';
 UPDATE "public"."payment_p2020_03" SET "payment_id" = 20403, "customer_id" = 362, "staff_id" = 1, "rental_id" = 14759, "amount" = 11.99, "payment_date" = '2020-03-21 21:57:24.996577+00' WHERE "payment_id" = 20403 and "customer_id" = 362 and "staff_id" = 1 and "rental_id" = 14759 and "amount" = 11.95 and "payment_date" = '2020-03-21 21:57:24.996577+00';
@@ -29,4 +29,4 @@ UPDATE "public"."payment_p2020_03" SET "payment_id" = 24866, "customer_id" = 237
 UPDATE "public"."payment_p2020_04" SET "payment_id" = 28799, "customer_id" = 591, "staff_id" = 2, "rental_id" = 4383, "amount" = 11.99, "payment_date" = '2020-04-07 18:14:17.996577+00' WHERE "payment_id" = 28799 and "customer_id" = 591 and "staff_id" = 2 and "rental_id" = 4383 and "amount" = 11.95 and "payment_date" = '2020-04-07 18:14:17.996577+00';
 UPDATE "public"."payment_p2020_04" SET "payment_id" = 28814, "customer_id" = 592, "staff_id" = 1, "rental_id" = 3973, "amount" = 11.99, "payment_date" = '2020-04-06 20:26:57.996577+00' WHERE "payment_id" = 28814 and "customer_id" = 592 and "staff_id" = 1 and "rental_id" = 3973 and "amount" = 11.95 and "payment_date" = '2020-04-06 20:26:57.996577+00';
 UPDATE "public"."payment_p2020_04" SET "payment_id" = 29136, "customer_id" = 13, "staff_id" = 2, "rental_id" = 8831, "amount" = 11.99, "payment_date" = '2020-04-29 20:06:07.996577+00' WHERE "payment_id" = 29136 and "customer_id" = 13 and "staff_id" = 2 and "rental_id" = 8831 and "amount" = 11.95 and "payment_date" = '2020-04-29 20:06:07.996577+00';
-COMMIT; -- {"xid": 492,"lsn":"0/2370D90"}
+COMMIT; -- {"xid": 492,"lsn":"0/2370D90","nextlsn":"0/2370DC0","timestamp":"2022-06-27 13:24:31.487749+00"}

@@ -40,6 +40,7 @@ static bool clear_results(PGSQL *pgsql);
 static void pgsql_handle_notifications(PGSQL *pgsql);
 
 static void parseIdentifySystemResult(void *ctx, PGresult *result);
+static void parseTimelineHistoryResult(void *ctx, PGresult *result);
 
 static bool pg_copy_send_query(PGSQL *pgsql,
 							   const char *qname,
@@ -1971,6 +1972,14 @@ typedef struct IdentifySystemResult
 } IdentifySystemResult;
 
 
+typedef struct TimelineHistoryResult
+{
+	char sqlstate[6];
+	bool parsedOk;
+	char filename[MAXPGPATH];
+	char content[BUFSIZE * BUFSIZE]; /* 1MB should get us quite very far */
+} TimelineHistoryResult;
+
 /*
  * pgsql_identify_system connects to the given pgsql client and issue the
  * replication command IDENTIFY_SYSTEM. The pgsql connection string should
@@ -2019,6 +2028,57 @@ pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system)
 		log_error("Failed to get result from IDENTIFY_SYSTEM");
 		PQfinish(connection);
 		return false;
+	}
+
+	/* while at it, we also run the TIMELINE_HISTORY command */
+	if (system->timeline > 1)
+	{
+		TimelineHistoryResult hContext = { 0 };
+
+		char sql[BUFSIZE] = { 0 };
+		sformat(sql, sizeof(sql), "TIMELINE_HISTORY %d", system->timeline);
+
+		result = PQexec(connection, sql);
+
+		if (!is_response_ok(result))
+		{
+			log_error("Failed to request TIMELINE_HISTORY: %s",
+					  PQerrorMessage(connection));
+			PQclear(result);
+			clear_results(pgsql);
+
+			PQfinish(connection);
+
+			return false;
+		}
+
+		(void) parseTimelineHistoryResult((void *) &hContext, result);
+
+		PQclear(result);
+		clear_results(pgsql);
+
+		if (!hContext.parsedOk)
+		{
+			log_error("Failed to get result from TIMELINE_HISTORY");
+			PQfinish(connection);
+			return false;
+		}
+
+		if (!parseTimeLineHistory(hContext.filename, hContext.content, system))
+		{
+			/* errors have already been logged */
+			PQfinish(connection);
+			return false;
+		}
+
+		TimeLineHistoryEntry *current =
+			&(system->timelines.history[system->timelines.count - 1]);
+
+		log_debug("TIMELINE_HISTORY: \"%s\", timeline %d started at %X/%X",
+				  hContext.filename,
+				  current->tli,
+				  (uint32_t) (current->begin >> 32),
+				  (uint32_t) current->begin);
 	}
 
 	if (connIsOurs)
@@ -2089,6 +2149,181 @@ parseIdentifySystemResult(void *ctx, PGresult *result)
 	}
 
 	context->parsedOk = true;
+}
+
+
+/*
+ * parseTimelineHistory parses the result of the TIMELINE_HISTORY replication
+ * command.
+ */
+static void
+parseTimelineHistoryResult(void *ctx, PGresult *result)
+{
+	TimelineHistoryResult *context = (TimelineHistoryResult *) ctx;
+
+	if (PQnfields(result) != 2)
+	{
+		log_error("Query returned %d columns, expected 2", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	if (PQntuples(result) == 0)
+	{
+		log_debug("parseTimelineHistory: query returned no rows");
+		context->parsedOk = false;
+		return;
+	}
+
+	if (PQntuples(result) != 1)
+	{
+		log_error("Query returned %d rows, expected 1", PQntuples(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	/* filename (text) */
+	char *value = PQgetvalue(result, 0, 0);
+	strlcpy(context->filename, value, sizeof(context->filename));
+
+	/* content (bytea) */
+	value = PQgetvalue(result, 0, 1);
+
+	if (strlen(value) >= sizeof(context->content))
+	{
+		log_error("Received a timeline history file of %lu bytes, "
+				  "pgcopydb is limited to files of up to %lu bytes.",
+				  (unsigned long) strlen(value),
+				  (unsigned long) sizeof(context->content));
+		context->parsedOk = false;
+	}
+	strlcpy(context->content, value, sizeof(context->content));
+
+	context->parsedOk = true;
+}
+
+
+/*
+ * parseTimeLineHistory parses the content of a timeline history file.
+ */
+bool
+parseTimeLineHistory(const char *filename, const char *content,
+					 IdentifySystem *system)
+{
+	char *historyLines[BUFSIZE] = { 0 };
+	int lineCount = splitLines((char *) content, historyLines, BUFSIZE);
+	int lineNumber = 0;
+
+	if (lineCount >= PGCOPYDB_MAX_TIMELINES)
+	{
+		log_error("history file \"%s\" contains %d lines, "
+				  "pgcopydb only supports up to %d lines",
+				  filename, lineCount, PGCOPYDB_MAX_TIMELINES - 1);
+		return false;
+	}
+
+	/* keep the original content around */
+	strlcpy(system->timelines.filename, filename, MAXPGPATH);
+	strlcpy(system->timelines.content, content, PGCOPYDB_MAX_TIMELINE_CONTENT);
+
+	uint64_t prevend = InvalidXLogRecPtr;
+
+	system->timelines.count = 0;
+
+	TimeLineHistoryEntry *entry =
+		&(system->timelines.history[system->timelines.count]);
+
+	for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
+	{
+		char *ptr = historyLines[lineNumber];
+
+		/* skip leading whitespace and check for # comment */
+		for (; *ptr; ptr++)
+		{
+			if (!isspace((unsigned char) *ptr))
+			{
+				break;
+			}
+		}
+
+		if (*ptr == '\0' || *ptr == '#')
+		{
+			continue;
+		}
+
+		log_trace("parseTimeLineHistory line %d is \"%s\"",
+				  lineNumber,
+				  historyLines[lineNumber]);
+
+		char *tabptr = strchr(historyLines[lineNumber], '\t');
+
+		if (tabptr == NULL)
+		{
+			log_error("Failed to parse history file line %d: \"%s\"",
+					  lineNumber, ptr);
+			return false;
+		}
+
+		*tabptr = '\0';
+
+		if (!stringToUInt(historyLines[lineNumber], &(entry->tli)))
+		{
+			log_error("Failed to parse history timeline \"%s\"", tabptr);
+			return false;
+		}
+
+		char *lsn = tabptr + 1;
+
+		for (char *lsnend = lsn; *lsnend; lsnend++)
+		{
+			if (!(isxdigit((unsigned char) *lsnend) || *lsnend == '/'))
+			{
+				*lsnend = '\0';
+				break;
+			}
+		}
+
+		if (!parseLSN(lsn, &(entry->end)))
+		{
+			log_error("Failed to parse history timeline %d LSN \"%s\"",
+					  entry->tli, lsn);
+			return false;
+		}
+
+		entry->begin = prevend;
+		prevend = entry->end;
+
+		log_trace("parseTimeLineHistory[%d]: tli %d [%X/%X %X/%X]",
+				  system->timelines.count,
+				  entry->tli,
+				  (uint32) (entry->begin >> 32),
+				  (uint32) entry->begin,
+				  (uint32) (entry->end >> 32),
+				  (uint32) entry->end);
+
+		entry = &(system->timelines.history[++system->timelines.count]);
+	}
+
+	/*
+	 * Create one more entry for the "tip" of the timeline, which has no entry
+	 * in the history file.
+	 */
+	entry->tli = system->timeline;
+	entry->begin = prevend;
+	entry->end = InvalidXLogRecPtr;
+
+	log_trace("parseTimeLineHistory[%d]: tli %d [%X/%X %X/%X]",
+			  system->timelines.count,
+			  entry->tli,
+			  (uint32) (entry->begin >> 32),
+			  (uint32) entry->begin,
+			  (uint32) (entry->end >> 32),
+			  (uint32) entry->end);
+
+	/* fix the off-by-one so that the count is a count, not an index */
+	++system->timelines.count;
+
+	return true;
 }
 
 
@@ -3360,7 +3595,7 @@ bool
 pgsql_replication_origin_progress(PGSQL *pgsql,
 								  char *nodeName,
 								  bool flush,
-								  char *lsn)
+								  uint64_t *lsn)
 {
 	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_STRING, false };
 
@@ -3385,12 +3620,22 @@ pgsql_replication_origin_progress(PGSQL *pgsql,
 
 	if (context.isNull)
 	{
-		sformat(lsn, PG_LSN_MAXLENGTH, "0/0");
+		/* when we get a NULL, return 0/0 instead */
+		*lsn = InvalidXLogRecPtr;
 	}
 	else
 	{
-		strlcpy(lsn, context.strVal, PG_LSN_MAXLENGTH);
-		free(context.strVal);
+		if (!parseLSN(context.strVal, lsn))
+		{
+			log_error("Failed to parse LSN \"%s\" returned from "
+					  "pg_replication_origin_progress('%s', %s)",
+					  context.strVal,
+					  nodeName,
+					  flush ? "true" : "false");
+			free(context.strVal);
+
+			return false;
+		}
 	}
 
 	return true;
