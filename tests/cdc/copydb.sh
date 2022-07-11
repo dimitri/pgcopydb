@@ -74,10 +74,10 @@ DIFFOPTS='-I BEGIN -I COMMIT'
 diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} ${SHAREDIR}/${SQLFILENAME}
 
 # now apply the SQL file to the target database
-pgcopydb stream catchup -vv
+pgcopydb stream catchup --endpos "${lsn}" -vv
 
 # now apply AGAIN the SQL file to the target database, skipping transactions
-pgcopydb stream catchup -vv
+pgcopydb stream catchup --endpos "${lsn}" -vv
 
 # cleanup
 pgcopydb drop origin

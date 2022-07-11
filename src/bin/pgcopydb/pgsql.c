@@ -3613,11 +3613,6 @@ pgsql_replication_origin_progress(PGSQL *pgsql,
 		return false;
 	}
 
-	log_debug("pgsql_replication_origin_progress: %p: %s %s",
-			  context.strVal,
-			  context.strVal,
-			  context.isNull ? "isNull" : "is not null");
-
 	if (context.isNull)
 	{
 		/* when we get a NULL, return 0/0 instead */

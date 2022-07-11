@@ -50,6 +50,8 @@
 #define REPLICATION_PLUGIN "wal2json"
 #define REPLICATION_SLOT_NAME "pgcopydb"
 
+#define CATCHINGUP_SLEEP_MS 10 * 1000 /* 10s */
+
 /* internal default for allocating strings  */
 #define BUFSIZE 1024
 
