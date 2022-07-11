@@ -352,6 +352,9 @@ cli_create_slot_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
+	/* pretend that --resume was used */
+	options.resume = true;
+
 	while ((c = getopt_long(argc, argv, "S:T:D:Vvqh",
 							long_options, &option_index)) != -1)
 	{
@@ -629,6 +632,9 @@ cli_create_origin_getopts(int argc, char **argv)
 		log_fatal("Failed to read default values from the environment");
 		exit(EXIT_CODE_BAD_ARGS);
 	}
+
+	/* pretend that --resume was used */
+	options.resume = true;
 
 	while ((c = getopt_long(argc, argv, "T:D:o:s:Vvqh",
 							long_options, &option_index)) != -1)
