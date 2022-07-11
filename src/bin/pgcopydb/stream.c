@@ -1125,13 +1125,20 @@ stream_create_origin(CopyDataSpec *copySpecs, char *nodeName, uint64_t startpos)
 			return false;
 		}
 
-		log_level(lsn == startpos ? LOG_INFO : LOG_ERROR,
+		/*
+		 * We accept the current target origin position when --resume has been
+		 * used, and also when a --startpos has been given that matches exactly
+		 * the current tracked position.
+		 */
+		bool acceptTrackedLSN = copySpecs->resume || lsn == startpos;
+
+		log_level(acceptTrackedLSN ? LOG_INFO : LOG_ERROR,
 				  "Replication origin \"%s\" already exists and "
 				  "progressed to LSN %X/%X",
 				  nodeName,
 				  LSN_FORMAT_ARGS(lsn));
 
-		if (lsn != startpos)
+		if (!acceptTrackedLSN)
 		{
 			/* errors have already been logged */
 			pgsql_finish(&dst);

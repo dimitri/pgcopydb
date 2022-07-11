@@ -113,12 +113,6 @@ copydb_init_workdir(CopyDataSpec *copySpecs,
 		{
 			removeDir = true;
 		}
-		else if (dirState->allDone)
-		{
-			log_fatal("Please use --restart to allow for removing files "
-					  "that belong to a completed previous run.");
-			return false;
-		}
 
 		/* if we did nothing yet, just act as if --resume was used */
 		else if (!dirState->schemaDumpIsDone)
@@ -127,6 +121,17 @@ copydb_init_workdir(CopyDataSpec *copySpecs,
 		}
 
 		/* if --resume has been used, we just continue */
+		else if (resume)
+		{
+			/* no-op */
+			(void) 0;
+		}
+		else if (dirState->allDone)
+		{
+			log_fatal("Please use --restart to allow for removing files "
+					  "that belong to a completed previous run.");
+			return false;
+		}
 		else if (!resume)
 		{
 			log_fatal("Please use --resume --not-consistent to allow "

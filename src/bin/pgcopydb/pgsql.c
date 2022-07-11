@@ -3678,6 +3678,14 @@ pgsql_replication_slot_exists(PGSQL *pgsql, const char *slotName,
 		return false;
 	}
 
+	if (context.ntuples == 0)
+	{
+		/* we receive 0 rows in the result when the slot does not exist yet */
+		*slotExists = false;
+		return true;
+	}
+
+	/* the parsedOk status is only updated when ntuples == 1 */
 	if (!context.parsedOk)
 	{
 		log_error("Failed to check if the replication slot \"%s\" exists",
@@ -3685,7 +3693,6 @@ pgsql_replication_slot_exists(PGSQL *pgsql, const char *slotName,
 		return false;
 	}
 
-	/* we receive 0 rows in the result when the slot does not exist yet */
 	*slotExists = context.ntuples == 1;
 
 	if (*slotExists)
