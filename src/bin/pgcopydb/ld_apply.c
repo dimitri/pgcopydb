@@ -51,6 +51,56 @@ stream_apply_catchup(StreamSpecs *specs)
 	log_debug("Source database wal_segment_size is %u", context.WalSegSz);
 	log_debug("Source database timeline is %d", context.system.timeline);
 
+	/*
+	 * Now fetch the current pgcopydb sentinel values on the source database:
+	 * the catchup processing only gets to start when the sentinel "apply"
+	 * column has been set to true.
+	 */
+	PGSQL src = { 0 };
+
+	uint64_t startpos;
+	uint64_t endpos;
+	bool apply = false;
+
+	bool firstLoop = true;
+
+	if (!pgsql_init(&src, specs->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	while (!apply)
+	{
+		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		{
+			log_info("Received a shutdown signal, quitting now");
+			return false;
+		}
+
+		/* this reconnects on each loop iteration, every 10s by default */
+		if (!pgsql_get_sentinel(&src, &startpos, &endpos, &apply))
+		{
+			log_warn("Retrying to fetch pgcopydb sentinel values in %ds",
+					 CATCHINGUP_SLEEP_MS / 10);
+			pg_usleep(CATCHINGUP_SLEEP_MS * 1000);
+
+			continue;
+		}
+
+		if (firstLoop)
+		{
+			firstLoop = false;
+
+			log_info("Waiting until the pgcopydb sentinel apply is enabled");
+		}
+
+		/* avoid buzy looping and avoid hammering the source database */
+		pg_usleep(CATCHINGUP_SLEEP_MS * 1000);
+	}
+
+	log_info("Catching-up has been enabled");
+
 	if (!setupReplicationOrigin(&context,
 								&(specs->paths),
 								specs->target_pguri,

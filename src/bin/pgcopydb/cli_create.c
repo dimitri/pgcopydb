@@ -33,7 +33,7 @@ static void cli_create_origin(int argc, char **argv);
 static void cli_drop_origin(int argc, char **argv);
 
 
-static CommandLine create_snapshot_command =
+CommandLine create_snapshot_command =
 	make_command(
 		"snapshot",
 		"Create and exports a snapshot on the source database",
@@ -68,7 +68,6 @@ static CommandLine create_origin_command =
 		cli_create_origin);
 
 static CommandLine *create_subcommands[] = {
-	&create_snapshot_command,
 	&create_repl_slot_command,
 	&create_origin_command,
 	NULL

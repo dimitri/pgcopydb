@@ -431,4 +431,12 @@ bool pgsql_drop_replication_slot(PGSQL *pgsql, const char *slotName);
 
 bool pgsql_role_exists(PGSQL *pgsql, const char *roleName, bool *exists);
 
+bool pgsql_update_sentinel_startpos(PGSQL *pgsql, uint64_t startpos);
+bool pgsql_update_sentinel_endpos(PGSQL *pgsql, uint64_t endpos);
+bool pgsql_update_sentinel_apply(PGSQL *pgsql, bool apply);
+
+bool pgsql_get_sentinel(PGSQL *pgsql,
+						uint64_t *startpos, uint64_t *endpos, bool *apply);
+
+
 #endif /* PGSQL_H */

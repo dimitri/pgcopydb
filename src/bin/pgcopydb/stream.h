@@ -273,11 +273,23 @@ bool stream_read_latest(StreamSpecs *specs, StreamContent *content);
 
 bool buildReplicationURI(const char *pguri, char *repl_pguri);
 
+bool stream_setup_databases(CopyDataSpec *copySpecs,
+							char *slotName,
+							char *origin);
+
+bool stream_cleanup_databases(CopyDataSpec *copySpecs,
+							  char *slotName,
+							  char *origin);
+
 bool stream_create_repl_slot(CopyDataSpec *copySpecs,
 							 char *slotName, uint64_t *lsn);
 
 bool stream_create_origin(CopyDataSpec *copySpecs,
 						  char *nodeName, uint64_t startpos);
+
+bool stream_create_sentinel(CopyDataSpec *copySpecs,
+							uint64_t startpos,
+							uint64_t endpos);
 
 bool stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream);
 bool stream_read_context(StreamSpecs *specs,

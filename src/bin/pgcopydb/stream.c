@@ -974,6 +974,99 @@ streamWaitForSubprocess(LogicalStreamContext *context)
 
 
 /*
+ * stream_setup_source_database sets up the source database with a replication
+ * slot, a sentinel table, and the target database with a replication origin.
+ */
+bool
+stream_setup_databases(CopyDataSpec *copySpecs, char *slotName, char *origin)
+{
+	uint64_t lsn = 0;
+
+	if (!stream_create_repl_slot(copySpecs, slotName, &lsn))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!stream_create_sentinel(copySpecs, lsn, InvalidXLogRecPtr))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!stream_create_origin(copySpecs, origin, lsn))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * stream_cleanup_source_database cleans up the source database and the target
+ * database.
+ */
+bool
+stream_cleanup_databases(CopyDataSpec *copySpecs, char *slotName, char *origin)
+{
+	PGSQL src = { 0 };
+	PGSQL dst = { 0 };
+
+	/*
+	 * Cleanup the source database (replication slot, pgcopydb sentinel).
+	 */
+	if (!pgsql_init(&src, copySpecs->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_begin(&src))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_drop_replication_slot(&src, slotName))
+	{
+		log_error("Failed to drop replication slot \"%s\"", slotName);
+		return false;
+	}
+
+	if (!pgsql_execute(&src, "drop schema if exists pgcopydb cascade"))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_commit(&src))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * Now cleanup the target database (replication origin).
+	 */
+	if (!pgsql_init(&dst, copySpecs->target_pguri, PGSQL_CONN_TARGET))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_replication_origin_drop(&dst, origin))
+	{
+		log_error("Failed to drop replication origin \"%s\"", origin);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * stream_create_repl_slot creates a replication slot on the source database.
  */
 bool
@@ -1147,6 +1240,88 @@ stream_create_origin(CopyDataSpec *copySpecs, char *nodeName, uint64_t startpos)
 	}
 
 	if (!pgsql_commit(&dst))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * stream_create_sentinel creates the pgcopydb sentinel table on the source
+ * database and registers the startpos, usually the same as the LSN returned
+ * from stream_create_repl_slot.
+ */
+bool
+stream_create_sentinel(CopyDataSpec *copySpecs,
+					   uint64_t startpos,
+					   uint64_t endpos)
+{
+	char *sql[] = {
+		"create schema if not exists pgcopydb",
+		"drop table if exists pgcopydb.sentinel",
+		"create table pgcopydb.sentinel(startpos pg_lsn, endpos pg_lsn, apply bool)",
+		NULL
+	};
+
+	char *index = "create unique index on pgcopydb.sentinel((1))";
+
+	PGSQL *pgsql = &(copySpecs->sourceSnapshot.pgsql);
+
+	if (!pgsql_init(pgsql, copySpecs->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_begin(pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* create the schema and the table for pgcopydb.sentinel */
+	for (int i = 0; sql[i] != NULL; i++)
+	{
+		log_info("%s", sql[i]);
+
+		if (!pgsql_execute(pgsql, sql[i]))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_SOURCE);
+		}
+	}
+
+	/* now insert the sentinel values (startpos, endpos, false as apply) */
+	char *insert = "insert into pgcopydb.sentinel values($1, $2, $3)";
+
+	char startLSN[PG_LSN_MAXLENGTH] = { 0 };
+	char endLSN[PG_LSN_MAXLENGTH] = { 0 };
+
+	sformat(startLSN, sizeof(startLSN), "%X/%X", LSN_FORMAT_ARGS(startpos));
+	sformat(endLSN, sizeof(endLSN), "%X/%X", LSN_FORMAT_ARGS(endpos));
+
+	int paramCount = 3;
+	Oid paramTypes[3] = { LSNOID, LSNOID, BOOLOID };
+	const char *paramValues[3] = { startLSN, endLSN, "false" };
+
+	if (!pgsql_execute_with_params(pgsql, insert,
+								   paramCount, paramTypes, paramValues,
+								   NULL, NULL))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_execute(pgsql, index))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_commit(pgsql))
 	{
 		/* errors have already been logged */
 		return false;

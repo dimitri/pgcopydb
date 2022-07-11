@@ -231,18 +231,10 @@ cli_follow(int argc, char **argv)
 	 * First create the replication slot on the source database, and the origin
 	 * (replication progress tracking) on the target database.
 	 */
-	uint64_t lsn = 0;
-
-	if (!stream_create_repl_slot(&copySpecs, specs.slotName, &lsn))
+	if (!stream_setup_databases(&copySpecs, specs.slotName, specs.origin))
 	{
 		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
-	}
-
-	if (!stream_create_origin(&copySpecs, specs.origin, lsn))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_TARGET);
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	pid_t prefetch = -1;

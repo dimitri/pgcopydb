@@ -44,6 +44,7 @@ extern CommandLine follow_command;
 extern CommandLine copy_commands;
 
 /* cli_create.c */
+extern CommandLine create_snapshot_command;
 extern CommandLine create_commands;
 extern CommandLine drop_commands;
 
@@ -59,5 +60,7 @@ extern CommandLine list_commands;
 /* cli_stream.h */
 extern CommandLine stream_commands;
 
+/* cli_sentinel.h */
+extern CommandLine sentinel_commands;
 
 #endif  /* CLI_ROOT_H */
