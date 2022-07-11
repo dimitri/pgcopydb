@@ -33,16 +33,104 @@
 
 
 /*
+ * stream_apply_catchup catches up with SQL files that have been prepared by
+ * either the `pgcopydb stream prefetch` command. If an endpos
+ */
+bool
+stream_apply_catchup(StreamSpecs *specs)
+{
+	StreamApplyContext context = { 0 };
+
+	if (!stream_read_context(specs, &(context.system), &(context.WalSegSz)))
+	{
+		log_error("Failed to read the streaming context information "
+				  "from the source database, see above for details");
+		return false;
+	}
+
+	log_debug("Source database wal_segment_size is %u", context.WalSegSz);
+	log_debug("Source database timeline is %d", context.system.timeline);
+
+	if (!setupReplicationOrigin(&context,
+								&(specs->paths),
+								specs->target_pguri,
+								specs->origin,
+								specs->endpos))
+	{
+		log_error("Failed to setup replication origin on the target database");
+		return false;
+	}
+
+	log_info("Catching up from LSN %X/%X in \"%s\"",
+			 LSN_FORMAT_ARGS(context.previousLSN),
+			 context.sqlFileName);
+
+	if (context.endpos != InvalidXLogRecPtr)
+	{
+		log_info("Stopping at endpos LSN %X/%X",
+				 LSN_FORMAT_ARGS(context.endpos));
+	}
+
+	/*
+	 * Our main loop reads the current SQL file, applying all the queries from
+	 * there and tracking progress, and then goes on to the next file, until no
+	 * such file exists.
+	 */
+	for (;;)
+	{
+		char *currentSQLFileName = context.sqlFileName;
+
+		if (!stream_apply_file(&context))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (context.reachedEndPos)
+		{
+			/* information has already been logged */
+			break;
+		}
+
+		if (!computeSQLFileName(&context))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (strcmp(context.sqlFileName, currentSQLFileName) == 0)
+		{
+			log_debug("Reached end of file \"%s\", "
+					  "and nextlsn %X/%X still belongs to the same file",
+					  currentSQLFileName,
+					  LSN_FORMAT_ARGS(context.nextlsn));
+
+			/*
+			 * Sleep for a while (10s typically) then try again, new data might
+			 * have been appended to the same file again.
+			 */
+			pg_usleep(CATCHINGUP_SLEEP_MS * 1000);
+		}
+	}
+
+	/* we might still have to disconnect now */
+	(void) pgsql_finish(&(context.pgsql));
+
+	return true;
+}
+
+
+/*
  * stream_apply_file connects to the target database system and applies the
  * given SQL file as prepared by the stream_transform_file function.
  */
 bool
-stream_apply_file(StreamApplyContext *context, char *sqlfilename)
+stream_apply_file(StreamApplyContext *context)
 {
 	StreamContent content = { 0 };
 	long size = 0L;
 
-	strlcpy(content.filename, sqlfilename, sizeof(content.filename));
+	strlcpy(content.filename, context->sqlFileName, sizeof(content.filename));
 
 	if (!read_file(content.filename, &(content.buffer), &size))
 	{
@@ -57,7 +145,7 @@ stream_apply_file(StreamApplyContext *context, char *sqlfilename)
 	bool reachedStartingPosition = false;
 
 	/* replay the SQL commands from the SQL file */
-	for (int i = 0; i < content.count; i++)
+	for (int i = 0; i < content.count && !context->reachedEndPos; i++)
 	{
 		const char *sql = content.lines[i];
 		LogicalMessageMetadata metadata = { 0 };
@@ -68,29 +156,61 @@ stream_apply_file(StreamApplyContext *context, char *sqlfilename)
 		{
 			case STREAM_ACTION_BEGIN:
 			{
-				bool skipping = metadata.lsn <= context->previousLSN;
+				/* did we reach the starting LSN positions now? */
+				if (!reachedStartingPosition)
+				{
+					reachedStartingPosition =
+						context->previousLSN < metadata.lsn;
+				}
 
-				log_debug("BEGIN %lld LSN %X/%X @%s, Previous LSN %X/%X %s",
+				log_debug("BEGIN %lld LSN %X/%X @%s, "
+						  "Previous LSN %X/%X, Next LSN %X/%X %s",
 						  (long long) metadata.xid,
 						  LSN_FORMAT_ARGS(metadata.lsn),
 						  metadata.timestamp,
 						  LSN_FORMAT_ARGS(context->previousLSN),
-						  skipping ? "[skipping]" : "");
+						  LSN_FORMAT_ARGS(metadata.nextlsn),
+						  reachedStartingPosition ? "" : "[skipping]");
 
 				context->nextlsn = metadata.nextlsn;
 
-				if (!reachedStartingPosition)
+				/*
+				 * Check if we reached the endpos LSN already. This is known to
+				 * be the case in the following two cases:
+				 *
+				 *  1. the current record LSN is equal or past the target endpos
+				 *
+				 *  2. we didn't reach starting replay position yet, and
+				 *     nextlsn is equal or past the target endpos: this happens
+				 *     when we did reach the endpos on a previous apply round.
+				 */
+				if (context->endpos != InvalidXLogRecPtr)
 				{
-					if (context->previousLSN < metadata.lsn)
+					context->reachedEndPos =
+						context->endpos <= metadata.lsn ||
+
+						(!reachedStartingPosition &&
+						 context->endpos <= metadata.nextlsn);
+
+					if (context->reachedEndPos)
 					{
-						reachedStartingPosition = true;
-					}
-					else
-					{
-						continue;
+						log_info("Apply reached end position %X/%X at %X/%X",
+								 LSN_FORMAT_ARGS(context->endpos),
+								 LSN_FORMAT_ARGS(metadata.lsn));
+						break;
 					}
 				}
 
+				/* actually skip this one if we didn't reach start pos yet */
+				if (!reachedStartingPosition)
+				{
+					continue;
+				}
+
+				/*
+				 * We're all good to replay that transaction, let's BEGIN and
+				 * register our origin tracking on the target database.
+				 */
 				if (!pgsql_begin(pgsql))
 				{
 					/* errors have already been logged */
@@ -125,13 +245,32 @@ stream_apply_file(StreamApplyContext *context, char *sqlfilename)
 						  LSN_FORMAT_ARGS(metadata.lsn),
 						  LSN_FORMAT_ARGS(metadata.nextlsn));
 
-				context->nextlsn = metadata.nextlsn;
 
 				/* calling pgsql_commit() would finish the connection, avoid */
 				if (!pgsql_execute(pgsql, "COMMIT"))
 				{
 					/* errors have already been logged */
 					return false;
+				}
+
+				context->nextlsn = metadata.nextlsn;
+				context->previousLSN = metadata.lsn;
+
+				/*
+				 * At COMMIT time we might have reached the endpos: we know
+				 * that already when endpos <= nextlsn. It's important to check
+				 * that at COMMIT record time, because that record might be the
+				 * last entry of the file we're applying.
+				 */
+				if (context->endpos != InvalidXLogRecPtr &&
+					context->endpos <= context->nextlsn)
+				{
+					context->reachedEndPos = true;
+
+					log_info("Applied reached end position %X/%X at %X/%X",
+							 LSN_FORMAT_ARGS(context->endpos),
+							 LSN_FORMAT_ARGS(context->nextlsn));
+					break;
 				}
 
 				break;
@@ -190,12 +329,14 @@ bool
 setupReplicationOrigin(StreamApplyContext *context,
 					   CDCPaths *paths,
 					   char *target_pguri,
-					   char *origin)
+					   char *origin,
+					   uint64_t endpos)
 {
 	PGSQL *pgsql = &(context->pgsql);
 	char *nodeName = context->origin;
 
 	context->paths = *paths;
+	context->endpos = endpos;
 	strlcpy(context->target_pguri, target_pguri, sizeof(context->target_pguri));
 	strlcpy(context->origin, origin, sizeof(context->origin));
 

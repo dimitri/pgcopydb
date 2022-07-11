@@ -46,6 +46,7 @@ stream_init_specs(StreamSpecs *specs,
 				  char *source_pguri,
 				  char *target_pguri,
 				  char *slotName,
+				  char *origin,
 				  uint64_t endpos,
 				  LogicalStreamMode mode)
 {
@@ -57,6 +58,7 @@ stream_init_specs(StreamSpecs *specs,
 	strlcpy(specs->source_pguri, source_pguri, MAXCONNINFO);
 	strlcpy(specs->target_pguri, target_pguri, MAXCONNINFO);
 	strlcpy(specs->slotName, slotName, sizeof(specs->slotName));
+	strlcpy(specs->origin, origin, sizeof(specs->origin));
 
 	if (!buildReplicationURI(specs->source_pguri, specs->logrep_pguri))
 	{

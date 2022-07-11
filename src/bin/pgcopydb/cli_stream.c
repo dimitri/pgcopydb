@@ -525,6 +525,7 @@ cli_stream_catchup(int argc, char **argv)
 						   copySpecs.source_pguri,
 						   copySpecs.target_pguri,
 						   streamDBoptions.slotName,
+						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   STREAM_MODE_APPLY))
 	{
@@ -537,61 +538,10 @@ cli_stream_catchup(int argc, char **argv)
 	 * able to generate WAL file names. That's means the current timeline and
 	 * the wal_segment_size.
 	 */
-	StreamApplyContext context = { 0 };
-
-	if (!stream_read_context(&specs, &(context.system), &(context.WalSegSz)))
+	if (!stream_apply_catchup(&specs))
 	{
-		log_error("Failed to read the streaming context information "
-				  "from the source database, see above for details");
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	log_debug("Source database wal_segment_size is %u", context.WalSegSz);
-	log_debug("Source database timeline is %d", context.system.timeline);
-
-	if (!setupReplicationOrigin(&context,
-								&(specs.paths),
-								copySpecs.target_pguri,
-								streamDBoptions.origin))
-	{
-		log_error("Failed to setup replication origin on the target database");
+		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);
-	}
-
-	log_info("Catching up from LSN %X/%X in \"%s\"",
-			 LSN_FORMAT_ARGS(context.previousLSN),
-			 context.sqlFileName);
-
-	/*
-	 * Our main loop reads the current SQL file, applying all the queries from
-	 * there and tracking progress, and then goes on to the next file, until no
-	 * such file exists.
-	 */
-	for (;;)
-	{
-		char *currentSQLFileName = context.sqlFileName;
-
-		if (!stream_apply_file(&context, context.sqlFileName))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_TARGET);
-		}
-
-		if (!computeSQLFileName(&context))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_TARGET);
-		}
-
-		if (strcmp(context.sqlFileName, currentSQLFileName) == 0)
-		{
-			log_debug("Reached end of file \"%s\", "
-					  "and nextlsn %X/%X still belongs to the same file: "
-					  "catching-up is done",
-					  currentSQLFileName,
-					  LSN_FORMAT_ARGS(context.nextlsn));
-			break;
-		}
 	}
 }
 
@@ -678,15 +628,23 @@ cli_stream_apply(int argc, char **argv)
 	if (!setupReplicationOrigin(&context,
 								&(copySpecs.cfPaths.cdc),
 								streamDBoptions.target_pguri,
-								streamDBoptions.origin))
+								streamDBoptions.origin,
+								streamDBoptions.endpos))
 	{
 		log_error("Failed to setup replication origin on the target database");
 		exit(EXIT_CODE_TARGET);
 	}
 
+	/*
+	 * Force the SQL filename to the given argument, bypassing filename
+	 * computations based on origin tracking. Already known-applied
+	 * transactions are still skipped.
+	 */
 	char *sqlfilename = argv[0];
 
-	if (!stream_apply_file(&context, sqlfilename))
+	strlcpy(context.sqlFileName, sqlfilename, sizeof(context.sqlFileName));
+
+	if (!stream_apply_file(&context))
 	{
 		/* errors have already been logged */
 		pgsql_finish(&(context.pgsql));
@@ -745,6 +703,7 @@ stream_start_in_mode(LogicalStreamMode mode)
 						   copySpecs.source_pguri,
 						   copySpecs.target_pguri,
 						   streamDBoptions.slotName,
+						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   mode))
 	{

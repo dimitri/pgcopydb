@@ -79,8 +79,12 @@ typedef struct StreamApplyContext
 	IdentifySystem system;      /* information about source database */
 	uint32_t WalSegSz;          /* information about source database */
 
+	uint64_t lsn;               /* read from SQL file COMMIT comments */
 	uint64_t nextlsn;           /* read from SQL file COMMIT comments */
 	uint64_t previousLSN;       /* target database progress */
+	uint64_t endpos;            /* finish applying when endpos is reached */
+
+	bool reachedEndPos;
 
 	char wal[MAXPGPATH];
 	char sqlFileName[MAXPGPATH];
@@ -217,6 +221,7 @@ typedef struct StreamSpecs
 	char target_pguri[MAXCONNINFO];
 
 	char slotName[NAMEDATALEN];
+	char origin[NAMEDATALEN];
 	uint64_t startLSN;
 	uint64_t endpos;
 
@@ -242,6 +247,7 @@ bool stream_init_specs(StreamSpecs *specs,
 					   char *source_pguri,
 					   char *target_pguri,
 					   char *slotName,
+					   char *origin,
 					   uint64_t endpos,
 					   LogicalStreamMode mode);
 
@@ -298,12 +304,14 @@ bool parseMessage(LogicalTransaction *txn,
 				  JSON_Value *json);
 
 /* ld_apply.c */
-bool stream_apply_file(StreamApplyContext *context, char *sqlfilename);
+bool stream_apply_catchup(StreamSpecs *specs);
+bool stream_apply_file(StreamApplyContext *context);
 
 bool setupReplicationOrigin(StreamApplyContext *context,
 							CDCPaths *paths,
 							char *target_pguri,
-							char *origin);
+							char *origin,
+							uint64_t endpos);
 
 bool computeSQLFileName(StreamApplyContext *context);
 
