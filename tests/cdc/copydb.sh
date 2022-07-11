@@ -37,7 +37,7 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_lsn()'`
 
 # and prefetch the changes captured in our replication slot
-pgcopydb stream prefetch --restart --endpos "${lsn}" -vv
+pgcopydb stream prefetch --resume --endpos "${lsn}" -vv
 
 SHAREDIR=/var/lib/postgres/.local/share/pgcopydb
 WALFILE=000000010000000000000002.json
@@ -74,10 +74,10 @@ DIFFOPTS='-I BEGIN -I COMMIT'
 diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} ${SHAREDIR}/${SQLFILENAME}
 
 # now apply the SQL file to the target database
-pgcopydb stream catchup --endpos "${lsn}" -vv
+pgcopydb stream catchup --resume --endpos "${lsn}" -vv
 
 # now apply AGAIN the SQL file to the target database, skipping transactions
-pgcopydb stream catchup --endpos "${lsn}" -vv
+pgcopydb stream catchup --resume --endpos "${lsn}" -vv
 
 # cleanup
 pgcopydb drop origin
