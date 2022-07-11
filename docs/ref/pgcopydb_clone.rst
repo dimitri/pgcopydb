@@ -57,7 +57,16 @@ to the command ``pgcopydb clone`` seen above.
 pgcopydb follow
 ---------------
 
-Not yet implemented.
+The command ``pgcopydb follow`` replays the database changes registered at
+the source database with the logical decoding pluing `wal2json`__ into the
+target database.
+
+__ https://github.com/eulerto/wal2json/
+
+This command runs two concurrent subproces. The first one pre-fetches the
+changes into local JSON files and transforms the JSON files in SQL files.
+The second process catches-up by applying the SQL files to the target
+database system.
 
 Description
 -----------

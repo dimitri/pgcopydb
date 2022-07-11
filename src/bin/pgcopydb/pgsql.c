@@ -3658,22 +3658,34 @@ typedef struct ReplicationSlotContext
  */
 bool
 pgsql_replication_slot_exists(PGSQL *pgsql, const char *slotName,
-							  bool *slotExists)
+							  bool *slotExists, uint64_t *lsn)
 {
-	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_BOOL, false };
-	char *sql = "SELECT 1 FROM pg_replication_slots WHERE slot_name = $1";
+	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_STRING, false };
+	char *sql =
+		"SELECT confirmed_flush_lsn "
+		"FROM pg_replication_slots "
+		"WHERE slot_name = $1";
+
 	int paramCount = 1;
 	Oid paramTypes[1] = { NAMEOID };
 	const char *paramValues[1] = { slotName };
 
 	if (!pgsql_execute_with_params(pgsql, sql,
 								   paramCount, paramTypes, paramValues,
-								   &context, &fetchedRows))
+								   &context, &parseSingleValueResult))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
+	if (context.ntuples == 0)
+	{
+		/* we receive 0 rows in the result when the slot does not exist yet */
+		*slotExists = false;
+		return true;
+	}
+
+	/* the parsedOk status is only updated when ntuples == 1 */
 	if (!context.parsedOk)
 	{
 		log_error("Failed to check if the replication slot \"%s\" exists",
@@ -3681,8 +3693,29 @@ pgsql_replication_slot_exists(PGSQL *pgsql, const char *slotName,
 		return false;
 	}
 
-	/* we receive 0 rows in the result when the slot does not exist yet */
-	*slotExists = context.intVal == 1;
+	*slotExists = context.ntuples == 1;
+
+	if (*slotExists)
+	{
+		if (context.isNull)
+		{
+			/* when we get a NULL, return 0/0 instead */
+			*lsn = InvalidXLogRecPtr;
+		}
+		else
+		{
+			if (!parseLSN(context.strVal, lsn))
+			{
+				log_error("Failed to parse LSN \"%s\" returned from "
+						  "confirmed_flush_lsn for slot \"%s\"",
+						  context.strVal,
+						  slotName);
+				free(context.strVal);
+
+				return false;
+			}
+		}
+	}
 
 	return true;
 }

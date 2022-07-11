@@ -493,6 +493,10 @@ cli_copy_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
+	/* install default slotname and origin */
+	strlcpy(options.slotName, REPLICATION_SLOT_NAME, sizeof(options.slotName));
+	strlcpy(options.origin, REPLICATION_ORIGIN, sizeof(options.origin));
+
 	while ((c = getopt_long(argc, argv, "S:T:D:J:I:cOBrRCN:xXCtfo:s:E:F:Vvqh",
 							long_options, &option_index)) != -1)
 	{
@@ -803,11 +807,13 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 		? NULL
 		: copyDBoptions.dir;
 
+	bool auxilliary = false;
+
 	if (!copydb_init_workdir(copySpecs,
 							 dir,
 							 copyDBoptions.restart,
 							 copyDBoptions.resume,
-							 false))
+							 auxilliary))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

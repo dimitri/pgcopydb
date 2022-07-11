@@ -25,6 +25,7 @@ jobs:
           - blobs
           - filtering
           - cdc
+          - follow
     steps:
       - name: Checkout repository
         uses: actions/checkout@v2
