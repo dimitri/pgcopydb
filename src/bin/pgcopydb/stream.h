@@ -318,4 +318,9 @@ bool computeSQLFileName(StreamApplyContext *context);
 StreamAction parseSQLAction(const char *query, LogicalMessageMetadata *metadata);
 
 
+/* follow.c */
+bool follow_start_prefetch(StreamSpecs *specs, pid_t *pid);
+bool follow_start_catchup(StreamSpecs *specs, pid_t *pid);
+bool follow_wait_subprocesses(StreamSpecs *specs, pid_t prefetch, pid_t catchup);
+
 #endif /* STREAM_H */

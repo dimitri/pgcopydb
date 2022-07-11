@@ -80,22 +80,35 @@ stream_apply_catchup(StreamSpecs *specs)
 	{
 		char *currentSQLFileName = context.sqlFileName;
 
-		if (!stream_apply_file(&context))
+		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		if (context.reachedEndPos)
-		{
-			/* information has already been logged */
 			break;
 		}
 
-		if (!computeSQLFileName(&context))
+		/*
+		 * It might be the expected file doesn't exist already, in that case
+		 * continue looping until the concurrent prefetch mechanism has created
+		 * it.
+		 */
+		if (file_exists(context.sqlFileName))
 		{
-			/* errors have already been logged */
-			return false;
+			if (!stream_apply_file(&context))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			if (context.reachedEndPos)
+			{
+				/* information has already been logged */
+				break;
+			}
+
+			if (!computeSQLFileName(&context))
+			{
+				/* errors have already been logged */
+				return false;
+			}
 		}
 
 		if (strcmp(context.sqlFileName, currentSQLFileName) == 0)

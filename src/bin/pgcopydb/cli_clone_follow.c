@@ -16,6 +16,7 @@
 #include "log.h"
 #include "parsing.h"
 #include "pgsql.h"
+#include "stream.h"
 #include "string_utils.h"
 #include "summary.h"
 
@@ -207,6 +208,68 @@ cli_clone(int argc, char **argv)
 void
 cli_follow(int argc, char **argv)
 {
-	log_fatal("pgcopydb follow is not implemented yet");
-	exit(EXIT_CODE_INTERNAL_ERROR);
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_ALL);
+
+	StreamSpecs specs = { 0 };
+
+	if (!stream_init_specs(&specs,
+						   &(copySpecs.cfPaths.cdc),
+						   copySpecs.source_pguri,
+						   copySpecs.target_pguri,
+						   copyDBoptions.slotName,
+						   copyDBoptions.origin,
+						   copyDBoptions.endpos,
+						   STREAM_MODE_PREFETCH))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/*
+	 * First create the replication slot on the source database, and the origin
+	 * (replication progress tracking) on the target database.
+	 */
+	uint64_t lsn = 0;
+
+	if (!stream_create_repl_slot(&copySpecs, specs.slotName, &lsn))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	if (!stream_create_origin(&copySpecs, specs.origin, lsn))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_TARGET);
+	}
+
+	pid_t prefetch = -1;
+	pid_t catchup = -1;
+
+	if (!follow_start_prefetch(&specs, &prefetch))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	/*
+	 * We need to wait for the prefetch process to create the stream context
+	 * files (wal_segment_size, current timeline, timeline history) before we
+	 * start the catchup process.
+	 */
+	pg_usleep(CATCHINGUP_SLEEP_MS * 1000);
+
+	if (!follow_start_catchup(&specs, &catchup))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_TARGET);
+	}
+
+	if (!follow_wait_subprocesses(&specs, prefetch, catchup))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
 }
