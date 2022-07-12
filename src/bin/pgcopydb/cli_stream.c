@@ -500,12 +500,14 @@ cli_stream_cleanup(int argc, char **argv)
 
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
+	bool resume = true;         /* pretend --resume has been used */
+	bool restart = false;       /* pretend --restart has NOT been used */
 	bool auxilliary = false;
 
 	if (!copydb_init_workdir(&copySpecs,
 							 NULL,
-							 streamDBoptions.restart,
-							 streamDBoptions.resume,
+							 restart,
+							 resume,
 							 auxilliary))
 	{
 		/* errors have already been logged */
@@ -524,8 +526,8 @@ cli_stream_cleanup(int argc, char **argv)
 						   restoreOptions,
 						   false, /* roles */
 						   false, /* skipLargeObjects */
-						   streamDBoptions.restart,
-						   streamDBoptions.resume,
+						   restart,
+						   resume,
 						   !streamDBoptions.notConsistent))
 	{
 		/* errors have already been logged */
@@ -696,7 +698,8 @@ cli_stream_apply(int argc, char **argv)
 								&(copySpecs.cfPaths.cdc),
 								streamDBoptions.target_pguri,
 								streamDBoptions.origin,
-								streamDBoptions.endpos))
+								streamDBoptions.endpos,
+								true))
 	{
 		log_error("Failed to setup replication origin on the target database");
 		exit(EXIT_CODE_TARGET);

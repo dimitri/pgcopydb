@@ -41,6 +41,16 @@ stream_apply_catchup(StreamSpecs *specs)
 {
 	StreamApplyContext context = { 0 };
 
+	/* in prefetch mode, wait until the sentinel enables the apply process */
+	if (specs->mode == STREAM_MODE_PREFETCH)
+	{
+		if (!stream_apply_wait_for_sentinel(specs, &context))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
 	if (!stream_read_context(specs, &(context.system), &(context.WalSegSz)))
 	{
 		log_error("Failed to read the streaming context information "
@@ -51,61 +61,12 @@ stream_apply_catchup(StreamSpecs *specs)
 	log_debug("Source database wal_segment_size is %u", context.WalSegSz);
 	log_debug("Source database timeline is %d", context.system.timeline);
 
-	/*
-	 * Now fetch the current pgcopydb sentinel values on the source database:
-	 * the catchup processing only gets to start when the sentinel "apply"
-	 * column has been set to true.
-	 */
-	PGSQL src = { 0 };
-
-	uint64_t startpos;
-	uint64_t endpos;
-	bool apply = false;
-
-	bool firstLoop = true;
-
-	if (!pgsql_init(&src, specs->source_pguri, PGSQL_CONN_SOURCE))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	while (!apply)
-	{
-		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
-		{
-			log_info("Received a shutdown signal, quitting now");
-			return false;
-		}
-
-		/* this reconnects on each loop iteration, every 10s by default */
-		if (!pgsql_get_sentinel(&src, &startpos, &endpos, &apply))
-		{
-			log_warn("Retrying to fetch pgcopydb sentinel values in %ds",
-					 CATCHINGUP_SLEEP_MS / 10);
-			pg_usleep(CATCHINGUP_SLEEP_MS * 1000);
-
-			continue;
-		}
-
-		if (firstLoop)
-		{
-			firstLoop = false;
-
-			log_info("Waiting until the pgcopydb sentinel apply is enabled");
-		}
-
-		/* avoid buzy looping and avoid hammering the source database */
-		pg_usleep(CATCHINGUP_SLEEP_MS * 1000);
-	}
-
-	log_info("Catching-up has been enabled");
-
 	if (!setupReplicationOrigin(&context,
 								&(specs->paths),
 								specs->target_pguri,
 								specs->origin,
-								specs->endpos))
+								specs->endpos,
+								context.apply))
 	{
 		log_error("Failed to setup replication origin on the target database");
 		return false;
@@ -178,6 +139,73 @@ stream_apply_catchup(StreamSpecs *specs)
 
 	/* we might still have to disconnect now */
 	(void) pgsql_finish(&(context.pgsql));
+
+	return true;
+}
+
+
+/*
+ * stream_apply_wait_for_sentinel fetches the current pgcopydb sentinel values
+ * on the source database: the catchup processing only gets to start when the
+ * sentinel "apply" column has been set to true.
+ */
+bool
+stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
+{
+	PGSQL src = { 0 };
+
+	uint64_t *startpos = &(context->startpos);
+	uint64_t *endpos = &(context->endpos);
+	bool *apply = &(context->apply);
+
+	bool firstLoop = true;
+
+	if (!pgsql_init(&src, specs->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	while (!context->apply)
+	{
+		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		{
+			log_info("Received a shutdown signal, quitting now");
+			return false;
+		}
+
+		/* this reconnects on each loop iteration, every 10s by default */
+		if (!pgsql_get_sentinel(&src, startpos, endpos, apply))
+		{
+			log_warn("Retrying to fetch pgcopydb sentinel values in %ds",
+					 CATCHINGUP_SLEEP_MS / 10);
+			pg_usleep(CATCHINGUP_SLEEP_MS * 1000);
+
+			continue;
+		}
+
+		log_debug("startpos %X/%X endpos %X/%X apply %s",
+				  LSN_FORMAT_ARGS(context->startpos),
+				  LSN_FORMAT_ARGS(context->endpos),
+				  context->apply ? "enabled" : "disabled");
+
+		if (context->apply)
+		{
+			break;
+		}
+
+		if (firstLoop)
+		{
+			firstLoop = false;
+
+			log_info("Waiting until the pgcopydb sentinel apply is enabled");
+		}
+
+		/* avoid buzy looping and avoid hammering the source database */
+		pg_usleep(CATCHINGUP_SLEEP_MS * 1000);
+	}
+
+	log_info("The pgcopydb sentinel has enabled applying changes");
 
 	return true;
 }
@@ -393,13 +421,35 @@ setupReplicationOrigin(StreamApplyContext *context,
 					   CDCPaths *paths,
 					   char *target_pguri,
 					   char *origin,
-					   uint64_t endpos)
+					   uint64_t endpos,
+					   bool apply)
 {
 	PGSQL *pgsql = &(context->pgsql);
 	char *nodeName = context->origin;
 
+	/*
+	 * We have to consider both the --endpos command line option and the
+	 * pgcopydb sentinel endpos value. Typically the sentinel is updated after
+	 * the fact, but we still give precedence to --endpos.
+	 *
+	 * The endpos parameter here comes from the --endpos command line option,
+	 * the context->endpos might have been set by calling
+	 * stream_apply_wait_for_sentinel() earlier (when in STREAM_MODE_PREFETCH).
+	 */
+	if (endpos != InvalidXLogRecPtr)
+	{
+		if (context->endpos != InvalidXLogRecPtr)
+		{
+			log_warn("Option --endpos %X/%X is used, "
+					 "even when the pgcopydb sentinel endpos is set to %X/%X",
+					 LSN_FORMAT_ARGS(endpos),
+					 LSN_FORMAT_ARGS(context->endpos));
+		}
+		context->endpos = endpos;
+	}
+
 	context->paths = *paths;
-	context->endpos = endpos;
+	context->apply = apply;
 	strlcpy(context->target_pguri, target_pguri, sizeof(context->target_pguri));
 	strlcpy(context->origin, origin, sizeof(context->origin));
 

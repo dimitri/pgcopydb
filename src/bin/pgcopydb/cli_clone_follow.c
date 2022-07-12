@@ -237,6 +237,17 @@ cli_follow(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	/*
+	 * Now remove the possibly still existing stream context files from
+	 * previous round of operations (--resume, etc). We want to make sure that
+	 * the catchup process reads the files created on this connection.
+	 */
+	if (!stream_cleanup_context(&specs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
 	pid_t prefetch = -1;
 	pid_t catchup = -1;
 
@@ -245,13 +256,6 @@ cli_follow(int argc, char **argv)
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);
 	}
-
-	/*
-	 * We need to wait for the prefetch process to create the stream context
-	 * files (wal_segment_size, current timeline, timeline history) before we
-	 * start the catchup process.
-	 */
-	pg_usleep(CATCHINGUP_SLEEP_MS * 1000);
 
 	if (!follow_start_catchup(&specs, &catchup))
 	{

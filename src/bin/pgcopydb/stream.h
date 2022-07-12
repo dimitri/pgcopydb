@@ -82,6 +82,9 @@ typedef struct StreamApplyContext
 	uint64_t lsn;               /* read from SQL file COMMIT comments */
 	uint64_t nextlsn;           /* read from SQL file COMMIT comments */
 	uint64_t previousLSN;       /* target database progress */
+
+	bool apply;                 /* from the pgcopydb sentinel */
+	uint64_t startpos;          /* from the pgcopydb sentinel */
 	uint64_t endpos;            /* finish applying when endpos is reached */
 
 	bool reachedEndPos;
@@ -222,7 +225,8 @@ typedef struct StreamSpecs
 
 	char slotName[NAMEDATALEN];
 	char origin[NAMEDATALEN];
-	uint64_t startLSN;
+
+	uint64_t startpos;
 	uint64_t endpos;
 
 	LogicalStreamMode mode;
@@ -292,6 +296,7 @@ bool stream_create_sentinel(CopyDataSpec *copySpecs,
 							uint64_t endpos);
 
 bool stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream);
+bool stream_cleanup_context(StreamSpecs *specs);
 bool stream_read_context(StreamSpecs *specs,
 						 IdentifySystem *system,
 						 uint32_t *WalSegSz);
@@ -317,13 +322,18 @@ bool parseMessage(LogicalTransaction *txn,
 
 /* ld_apply.c */
 bool stream_apply_catchup(StreamSpecs *specs);
+
+bool stream_apply_wait_for_sentinel(StreamSpecs *specs,
+									StreamApplyContext *context);
+
 bool stream_apply_file(StreamApplyContext *context);
 
 bool setupReplicationOrigin(StreamApplyContext *context,
 							CDCPaths *paths,
 							char *target_pguri,
 							char *origin,
-							uint64_t endpos);
+							uint64_t endpos,
+							bool apply);
 
 bool computeSQLFileName(StreamApplyContext *context);
 

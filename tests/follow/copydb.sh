@@ -30,6 +30,10 @@ pgcopydb stream setup
 # pgcopydb copy db uses the environment variables
 pgcopydb copy-db
 
+# once the base copy is done, we can apply changes already
+pgcopydb stream sentinel set apply -vv
+pgcopydb stream sentinel get
+
 # now that the copying is done, inject some SQL DML changes to the source
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 
@@ -43,5 +47,4 @@ pgcopydb follow --resume --not-consistent --endpos "${lsn}" -vv
 pgcopydb follow --resume --not-consistent --endpos "${lsn}" -vv
 
 # cleanup
-pgcopydb drop origin
-pgcopydb drop slot
+pgcopydb stream cleanup

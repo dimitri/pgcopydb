@@ -79,20 +79,22 @@ startLogicalStreaming(StreamSpecs *specs)
 {
 	/* wal2json options we want to use for the plugin */
 	KeyVal options = {
-		.count = 5,
+		.count = 6,
 		.keywords = {
 			"format-version",
 			"include-xids",
 			"include-lsn",
 			"include-transaction",
-			"include-timestamp"
+			"include-timestamp",
+			"filter-tables"
 		},
 		.values = {
 			"2",
 			"true",
 			"true",
 			"true",
-			"true"
+			"true",
+			"pgcopydb.*"
 		}
 	};
 
@@ -109,7 +111,7 @@ startLogicalStreaming(StreamSpecs *specs)
 
 	privateContext.mode = specs->mode;
 	privateContext.paths = specs->paths;
-	privateContext.startLSN = specs->startLSN;
+	privateContext.startLSN = specs->startpos;
 
 	context.private = (void *) &(privateContext);
 
@@ -130,10 +132,10 @@ startLogicalStreaming(StreamSpecs *specs)
 		LogicalMessageMetadata *latest =
 			&(latestStreamedContent.messages[latestStreamedContent.count - 1]);
 
-		specs->startLSN = latest->nextlsn;
+		specs->startpos = latest->nextlsn;
 
 		log_info("Resuming streaming at LSN %X/%X",
-				 LSN_FORMAT_ARGS(specs->startLSN));
+				 LSN_FORMAT_ARGS(specs->startpos));
 	}
 
 	/*
@@ -147,7 +149,7 @@ startLogicalStreaming(StreamSpecs *specs)
 		if (!pgsql_init_stream(&stream,
 							   specs->logrep_pguri,
 							   specs->slotName,
-							   specs->startLSN,
+							   specs->startpos,
 							   specs->endpos))
 		{
 			/* errors have already been logged */
@@ -1226,8 +1228,7 @@ stream_create_origin(CopyDataSpec *copySpecs, char *nodeName, uint64_t startpos)
 		bool acceptTrackedLSN = copySpecs->resume || lsn == startpos;
 
 		log_level(acceptTrackedLSN ? LOG_INFO : LOG_ERROR,
-				  "Replication origin \"%s\" already exists and "
-				  "progressed to LSN %X/%X",
+				  "Replication origin \"%s\" already exists at LSN %X/%X",
 				  nodeName,
 				  LSN_FORMAT_ARGS(lsn));
 
@@ -1259,6 +1260,12 @@ stream_create_sentinel(CopyDataSpec *copySpecs,
 					   uint64_t startpos,
 					   uint64_t endpos)
 {
+	if (copySpecs->resume)
+	{
+		log_info("Skipping creation of pgcopydb.sentinel (--resume)");
+		return true;
+	}
+
 	char *sql[] = {
 		"create schema if not exists pgcopydb",
 		"drop table if exists pgcopydb.sentinel",
@@ -1383,6 +1390,23 @@ stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream)
 
 
 /*
+ * stream_cleanup_context removes the context files that are created upon
+ * connecting to the source database with the logical replication protocol.
+ */
+bool
+stream_cleanup_context(StreamSpecs *specs)
+{
+	bool success = true;
+
+	success = success && unlink_file(specs->paths.walsegsizefile);
+	success = success && unlink_file(specs->paths.tlifile);
+	success = success && unlink_file(specs->paths.tlihistfile);
+
+	return success;
+}
+
+
+/*
  * stream_read_context reads the stream context back from files
  * wal_segment_size and timeline history.
  */
@@ -1394,6 +1418,42 @@ stream_read_context(StreamSpecs *specs,
 	char *wal_segment_size = NULL;
 	long size = 0L;
 
+	/*
+	 * We need to read the 3 streaming context files that the receive process
+	 * prepares when connecting to the source database. Because the catchup
+	 * process might get here early, we implement a retry loop in case the
+	 * files have not been created yet.
+	 */
+	ConnectionRetryPolicy retryPolicy = { 0 };
+
+	(void) pgsql_set_retry_policy(&retryPolicy,
+								  CATCHINGUP_SLEEP_MS,
+								  -1, /* unbounded number of attempts */
+								  CATCHINGUP_SLEEP_MS / 1000,
+								  CATCHINGUP_SLEEP_MS / 1000);
+
+	while (!pgsql_retry_policy_expired(&retryPolicy))
+	{
+		if (file_exists(specs->paths.walsegsizefile) &&
+			file_exists(specs->paths.tlifile) &&
+			file_exists(specs->paths.tlihistfile))
+		{
+			/* success: break out of the retry loop */
+			break;
+		}
+
+		int sleepTimeMs =
+			pgsql_compute_connection_retry_sleep_time(&retryPolicy);
+
+		log_debug("stream_read_context: waiting for context files "
+				  "to have been created, retrying in %dms",
+				  sleepTimeMs);
+
+		/* we have milliseconds, pg_usleep() wants microseconds */
+		(void) pg_usleep(sleepTimeMs * 1000);
+	}
+
+	/* we don't want to retry anymore, error out if files still don't exist */
 	if (!read_file(specs->paths.walsegsizefile, &wal_segment_size, &size))
 	{
 		/* errors have already been logged */
