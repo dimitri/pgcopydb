@@ -3896,25 +3896,40 @@ pgsql_update_sentinel_startpos(PGSQL *pgsql, uint64_t startpos)
  * pgsql_update_sentinel_endpos updates our pgcopydb sentinel table end pos.
  */
 bool
-pgsql_update_sentinel_endpos(PGSQL *pgsql, uint64_t endpos)
+pgsql_update_sentinel_endpos(PGSQL *pgsql, bool current, uint64_t endpos)
 {
-	char *update = "update pgcopydb.sentinel set endpos = $1";
+	char *update =
+		current
+		? "update pgcopydb.sentinel set endpos = pg_current_wal_lsn()"
+		: "update pgcopydb.sentinel set endpos = $1";
 
-	char endLSN[PG_LSN_MAXLENGTH] = { 0 };
-
-	sformat(endLSN, sizeof(endLSN), "%X/%X", LSN_FORMAT_ARGS(endpos));
-
-	int paramCount = 1;
-	Oid paramTypes[1] = { LSNOID };
-	const char *paramValues[1] = { endLSN };
-
-	if (!pgsql_execute_with_params(pgsql, update,
-								   paramCount, paramTypes, paramValues,
-								   NULL, NULL))
+	if (current)
 	{
-		log_error("Failed to update pgcopydb.sentinel endpos to %X/%X",
-				  LSN_FORMAT_ARGS(endpos));
-		return false;
+		if (!pgsql_execute(pgsql, update))
+		{
+			log_error("Failed to update pgcopydb.sentinel endpos to %X/%X",
+					  LSN_FORMAT_ARGS(endpos));
+			return false;
+		}
+	}
+	else
+	{
+		char endLSN[PG_LSN_MAXLENGTH] = { 0 };
+
+		sformat(endLSN, sizeof(endLSN), "%X/%X", LSN_FORMAT_ARGS(endpos));
+
+		int paramCount = 1;
+		Oid paramTypes[1] = { LSNOID };
+		const char *paramValues[1] = { endLSN };
+
+		if (!pgsql_execute_with_params(pgsql, update,
+									   paramCount, paramTypes, paramValues,
+									   NULL, NULL))
+		{
+			log_error("Failed to update pgcopydb.sentinel endpos to %X/%X",
+					  LSN_FORMAT_ARGS(endpos));
+			return false;
+		}
 	}
 
 	return true;

@@ -256,6 +256,7 @@ bool stream_init_specs(StreamSpecs *specs,
 					   LogicalStreamMode mode);
 
 bool startLogicalStreaming(StreamSpecs *specs);
+bool streamCheckResumePosition(StreamSpecs *specs);
 
 bool streamWrite(LogicalStreamContext *context);
 bool streamFlush(LogicalStreamContext *context);

@@ -32,19 +32,20 @@ pgcopydb copy-db
 
 # once the base copy is done, we can apply changes already
 pgcopydb stream sentinel set apply -vv
-pgcopydb stream sentinel get
 
 # now that the copying is done, inject some SQL DML changes to the source
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 
 # grab the current LSN, it's going to be our streaming end position
 lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_lsn()'`
+pgcopydb stream sentinel set endpos --current
+pgcopydb stream sentinel get
 
 # and prefetch the changes captured in our replication slot
-pgcopydb follow --resume --not-consistent --endpos "${lsn}" -vv
+pgcopydb follow --resume --not-consistent -vv
 
 # and do it again
-pgcopydb follow --resume --not-consistent --endpos "${lsn}" -vv
+pgcopydb follow --resume --not-consistent -vv
 
 # cleanup
 pgcopydb stream cleanup

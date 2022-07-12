@@ -101,25 +101,35 @@ stream_apply_catchup(StreamSpecs *specs)
 		 * continue looping until the concurrent prefetch mechanism has created
 		 * it.
 		 */
-		if (file_exists(context.sqlFileName))
+		if (!file_exists(context.sqlFileName))
 		{
-			if (!stream_apply_file(&context))
-			{
-				/* errors have already been logged */
-				return false;
-			}
+			log_debug("File \"%s\" does not exists yet, retrying in %dms",
+					  context.sqlFileName,
+					  CATCHINGUP_SLEEP_MS);
 
-			if (context.reachedEndPos)
-			{
-				/* information has already been logged */
-				break;
-			}
+			pg_usleep(CATCHINGUP_SLEEP_MS * 1000);
+			continue;
+		}
 
-			if (!computeSQLFileName(&context))
-			{
-				/* errors have already been logged */
-				return false;
-			}
+		/*
+		 * The SQL file exists already, apply it now.
+		 */
+		if (!stream_apply_file(&context))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (context.reachedEndPos)
+		{
+			/* information has already been logged */
+			break;
+		}
+
+		if (!computeSQLFileName(&context))
+		{
+			/* errors have already been logged */
+			return false;
 		}
 
 		if (strcmp(context.sqlFileName, currentSQLFileName) == 0)
@@ -128,13 +138,13 @@ stream_apply_catchup(StreamSpecs *specs)
 					  "and nextlsn %X/%X still belongs to the same file",
 					  currentSQLFileName,
 					  LSN_FORMAT_ARGS(context.nextlsn));
-
-			/*
-			 * Sleep for a while (10s typically) then try again, new data might
-			 * have been appended to the same file again.
-			 */
-			pg_usleep(CATCHINGUP_SLEEP_MS * 1000);
 		}
+
+		/*
+		 * Sleep for a while (10s typically) then try again, new data might
+		 * have been appended to the same file again.
+		 */
+		pg_usleep(CATCHINGUP_SLEEP_MS * 1000);
 	}
 
 	/* we might still have to disconnect now */

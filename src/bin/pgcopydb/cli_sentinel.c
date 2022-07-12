@@ -73,14 +73,15 @@ CommandLine sentinel_set_endpos_command =
 		"endpos",
 		"Set the sentinel end position LSN on the source database",
 		" --source ... <end LSN>",
-		"  --source      Postgres URI to the source database\n",
+		"  --source      Postgres URI to the source database\n"
+		"  --current     Use pg_current_wal_lsn() as the endpos\n",
 		cli_sentinel_getopts,
 		cli_sentinel_set_endpos);
 
 CommandLine sentinel_set_apply_command =
 	make_command(
 		"apply",
-		"Set the sentinel end position LSN on the source database",
+		"Set the sentinel apply mode on the source database",
 		" --source ... <true|false>",
 		"  --source      Postgres URI to the source database\n",
 		cli_sentinel_getopts,
@@ -89,7 +90,7 @@ CommandLine sentinel_set_apply_command =
 CommandLine sentinel_set_prefetch_command =
 	make_command(
 		"prefetch",
-		"Set the sentinel end position LSN on the source database",
+		"Set the sentinel prefetch mode on the source database",
 		" --source ... <true|false>",
 		"  --source      Postgres URI to the source database\n",
 		cli_sentinel_getopts,
@@ -136,6 +137,7 @@ cli_sentinel_getopts(int argc, char **argv)
 		{ "source", required_argument, NULL, 'S' },
 		{ "endpos", required_argument, NULL, 'E' },
 		{ "startpos", required_argument, NULL, 's' },
+		{ "current", no_argument, NULL, 'C' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "quiet", no_argument, NULL, 'q' },
@@ -152,7 +154,7 @@ cli_sentinel_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:s:E:Vvqh",
+	while ((c = getopt_long(argc, argv, "S:s:E:CVvqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -194,6 +196,13 @@ cli_sentinel_getopts(int argc, char **argv)
 
 				log_trace("--startpos %X/%X",
 						  LSN_FORMAT_ARGS(options.startpos));
+				break;
+			}
+
+			case 'C':
+			{
+				options.currentpos = true;
+				log_trace("--current");
 				break;
 			}
 
@@ -263,7 +272,13 @@ cli_sentinel_getopts(int argc, char **argv)
 	if (IS_EMPTY_STRING_BUFFER(options.source_pguri))
 	{
 		log_fatal("Options --source is mandatory");
-		exit(EXIT_CODE_BAD_ARGS);
+		++errors;
+	}
+
+	if (options.currentpos && options.endpos != InvalidXLogRecPtr)
+	{
+		log_fatal("Please choose only one of --endpos and --current");
+		++errors;
 	}
 
 	if (errors > 0)
@@ -422,6 +437,7 @@ static void
 cli_sentinel_set_endpos(int argc, char **argv)
 {
 	uint64_t endpos = InvalidXLogRecPtr;
+	bool useCurrentLSN = sentinelDBoptions.currentpos;
 
 	switch (argc)
 	{
@@ -429,7 +445,8 @@ cli_sentinel_set_endpos(int argc, char **argv)
 		{
 			endpos = sentinelDBoptions.endpos;
 
-			if (sentinelDBoptions.endpos == InvalidXLogRecPtr)
+			if (!useCurrentLSN &&
+				sentinelDBoptions.endpos == InvalidXLogRecPtr)
 			{
 				log_fatal("Please provide <endpos> or --endpos option");
 				commandline_help(stderr);
@@ -441,6 +458,13 @@ cli_sentinel_set_endpos(int argc, char **argv)
 
 		case 1:
 		{
+			if (useCurrentLSN)
+			{
+				log_fatal("Please choose only one of <endpos> and --current");
+				commandline_help(stderr);
+				exit(EXIT_CODE_BAD_ARGS);
+			}
+
 			if (!parseLSN(argv[0], &endpos))
 			{
 				log_fatal("Failed to parse endpos LSN: \"%s\"", argv[0]);
@@ -466,10 +490,28 @@ cli_sentinel_set_endpos(int argc, char **argv)
 		exit(EXIT_CODE_SOURCE);
 	}
 
-	if (!pgsql_update_sentinel_endpos(&pgsql, endpos))
+	if (!pgsql_update_sentinel_endpos(&pgsql, useCurrentLSN, endpos))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);
+	}
+
+	if (useCurrentLSN)
+	{
+		uint64_t startpos;
+		uint64_t endpos;
+		bool apply;
+
+		if (!pgsql_get_sentinel(&pgsql, &startpos, &endpos, &apply))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_SOURCE);
+		}
+
+		log_info("pgcopydb sentinel endpos has been set to %X/%X",
+				 LSN_FORMAT_ARGS(endpos));
+
+		fformat(stdout, "%X/%X\n", LSN_FORMAT_ARGS(endpos));
 	}
 }
 

@@ -106,37 +106,24 @@ startLogicalStreaming(StreamSpecs *specs)
 	stream.flushFunction = &streamFlush;
 	stream.closeFunction = &streamClose;
 
-	StreamContext privateContext = { 0 };
+	/*
+	 * Read possibly already existing file to initialize the start LSN from a
+	 * previous run of our command.
+	 */
+	if (!streamCheckResumePosition(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	LogicalStreamContext context = { 0 };
+	StreamContext privateContext = { 0 };
 
 	privateContext.mode = specs->mode;
 	privateContext.paths = specs->paths;
 	privateContext.startLSN = specs->startpos;
 
 	context.private = (void *) &(privateContext);
-
-	/*
-	 * Read possibly already existing file to initialize the start LSN from a
-	 * previous run of our command.
-	 */
-	StreamContent latestStreamedContent = { 0 };
-
-	if (!stream_read_latest(specs, &latestStreamedContent))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (latestStreamedContent.count > 0)
-	{
-		LogicalMessageMetadata *latest =
-			&(latestStreamedContent.messages[latestStreamedContent.count - 1]);
-
-		specs->startpos = latest->nextlsn;
-
-		log_info("Resuming streaming at LSN %X/%X",
-				 LSN_FORMAT_ARGS(specs->startpos));
-	}
 
 	/*
 	 * In case of being disconnected or other transient errors, reconnect and
@@ -199,6 +186,117 @@ startLogicalStreaming(StreamSpecs *specs)
 
 		/* sleep for one entire second before retrying */
 		(void) pg_usleep(1 * 1000 * 1000);
+	}
+
+	return true;
+}
+
+
+/*
+ * streamCheckResumePosition checks that the resume position on the replication
+ * slot on the source database is in-sync with the lastest on-file LSN we have.
+ */
+bool
+streamCheckResumePosition(StreamSpecs *specs)
+{
+	StreamContent latestStreamedContent = { 0 };
+
+	if (!stream_read_latest(specs, &latestStreamedContent))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * When we don't have any file on-disk yet, we might have specifications
+	 * for when to start in the pgcopydb sentinel table. The sentinel only
+	 * applies to STREAM_MODE_PREFETCH, in STREAM_MODE_RECEIVE we bypass that
+	 * mechanism entirely.
+	 *
+	 * When STREAM_MODE_PREFETCH is set, it is expected that the pgcopydb
+	 * sentinel table has been setup before starting the logical decoding
+	 * client.
+	 *
+	 * The pgcopydb sentinel table also contains an endpos. The --endpos
+	 * command line option (found in specs->endpos) prevails, but when it's not
+	 * been used, we have a look at the sentinel value.
+	 */
+	PGSQL src = { 0 };
+
+	if (!pgsql_init(&src, specs->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	uint64_t startpos = 0;
+	uint64_t endpos = 0;
+	bool apply = false;
+
+	if (!pgsql_get_sentinel(&src, &startpos, &endpos, &apply))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (specs->endpos == InvalidXLogRecPtr)
+	{
+		specs->endpos = endpos;
+
+		if (specs->endpos != InvalidXLogRecPtr)
+		{
+			log_info("Streaming is setup to end at LSN %X/%X",
+					 LSN_FORMAT_ARGS(specs->endpos));
+		}
+	}
+
+	if (latestStreamedContent.count == 0)
+	{
+		if (specs->mode == STREAM_MODE_RECEIVE)
+		{
+			return true;
+		}
+
+		if (startpos != InvalidXLogRecPtr)
+		{
+			specs->startpos = startpos;
+
+			log_info("Resuming streaming at LSN %X/%X",
+					 LSN_FORMAT_ARGS(specs->startpos));
+		}
+	}
+	else
+	{
+		LogicalMessageMetadata *latest =
+			&(latestStreamedContent.messages[latestStreamedContent.count - 1]);
+
+		specs->startpos = latest->nextlsn;
+
+		log_info("Resuming streaming at LSN %X/%X",
+				 LSN_FORMAT_ARGS(specs->startpos));
+	}
+
+	bool flush = false;
+	uint64_t lsn = 0;
+
+	if (!pgsql_replication_slot_exists(&src, specs->slotName, &flush, &lsn))
+	{
+		/* errors have already been logged */
+	}
+
+	/*
+	 * The receive process knows how to skip over LSNs that have already been
+	 * fetched in a previous run. What we are not able to do is fill-in a gap
+	 * between what we have on-disk and what the replication slot can send us.
+	 */
+	if (specs->startpos < lsn)
+	{
+		log_error("Failed to resume replication: on-disk next LSN is %X/%X  "
+				  "and replication slot LSN is %X/%X",
+				  LSN_FORMAT_ARGS(specs->startpos),
+				  LSN_FORMAT_ARGS(lsn));
+
+		return false;
 	}
 
 	return true;
