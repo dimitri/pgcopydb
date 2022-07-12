@@ -105,6 +105,7 @@ startLogicalStreaming(StreamSpecs *specs)
 	stream.writeFunction = &streamWrite;
 	stream.flushFunction = &streamFlush;
 	stream.closeFunction = &streamClose;
+	stream.feedbackFunction = &streamFeedback;
 
 	/*
 	 * Read possibly already existing file to initialize the start LSN from a
@@ -121,7 +122,7 @@ startLogicalStreaming(StreamSpecs *specs)
 
 	privateContext.mode = specs->mode;
 	privateContext.paths = specs->paths;
-	privateContext.startLSN = specs->startpos;
+	privateContext.startpos = specs->startpos;
 
 	context.private = (void *) &(privateContext);
 
@@ -633,6 +634,70 @@ streamClose(LogicalStreamContext *context)
 		/* errors have already been logged */
 		return false;
 	}
+
+	return true;
+}
+
+
+/*
+ * streamFeedback is a callback function for our LogicalStreamClient.
+ *
+ * This function is called when it's time to send feedback to the source
+ * Postgres instance, include write_lsn, flush_lsn, and replay_lsn. Once in a
+ * while we fetch the replay_lsn from the pgcopydb sentinel table on the source
+ * database, and sync with the current progress.
+ */
+bool
+streamFeedback(LogicalStreamContext *context)
+{
+	StreamContext *privateContext = (StreamContext *) context->private;
+
+	int feedbackInterval = 10 * 1000; /* a minute */
+
+	if (!feTimestampDifferenceExceeds(context->lastFeedbackSync,
+									  context->now,
+									  feedbackInterval))
+	{
+		return true;
+	}
+
+	PGSQL src = { 0 };
+
+	if (!pgsql_init(&src, privateContext->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	uint64_t replay_lsn = 0;
+
+	if (!pgsql_sync_sentinel_recv(&src,
+								  context->tracking->written_lsn,
+								  context->tracking->flushed_lsn,
+								  &replay_lsn,
+								  &(privateContext->endpos),
+								  &(privateContext->apply)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * Update the main LogicalStreamClient parts, API with the lower-level
+	 * logical decoding client.
+	 */
+	context->endpos = privateContext->endpos;
+	context->tracking->applied_lsn = replay_lsn;
+
+	context->lastFeedbackSync = context->now;
+
+	log_debug("streamFeedback: written %X/%X flushed %X/%X applied %X/%X "
+			  " endpos %X/%X apply %s",
+			  LSN_FORMAT_ARGS(context->tracking->written_lsn),
+			  LSN_FORMAT_ARGS(context->tracking->flushed_lsn),
+			  LSN_FORMAT_ARGS(context->tracking->applied_lsn),
+			  LSN_FORMAT_ARGS(context->endpos),
+			  privateContext->apply ? "enabled" : "disabled");
 
 	return true;
 }
@@ -1367,7 +1432,9 @@ stream_create_sentinel(CopyDataSpec *copySpecs,
 	char *sql[] = {
 		"create schema if not exists pgcopydb",
 		"drop table if exists pgcopydb.sentinel",
-		"create table pgcopydb.sentinel(startpos pg_lsn, endpos pg_lsn, apply bool)",
+		"create table pgcopydb.sentinel"
+		"(startpos pg_lsn, endpos pg_lsn, apply bool, "
+		" write_lsn pg_lsn, flush_lsn pg_lsn, replay_lsn pg_lsn)",
 		NULL
 	};
 

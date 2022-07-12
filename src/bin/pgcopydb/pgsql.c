@@ -67,6 +67,8 @@ static void prepareToTerminate(LogicalStreamClient *client,
 static void parseReplicationSlot(void *ctx, PGresult *result);
 
 static void parseSentinel(void *ctx, PGresult *result);
+static void parseSentinelRecv(void *ctx, PGresult *result);
+static void parseSentinelApply(void *ctx, PGresult *result);
 
 
 /*
@@ -2874,6 +2876,24 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 										 client->standby_message_timeout))
 		{
 			/* Time to send feedback! */
+			if ((*client->feedbackFunction)(context))
+			{
+				/* we might have a new endpos from the client callback */
+				if (context->endpos != InvalidXLogRecPtr &&
+					context->endpos != client->endpos)
+				{
+					if (context->endpos <= cur_record_lsn)
+					{
+						log_warn("New endpos %X/%X is in the past, current "
+								 "record LSN is %X/%X",
+								 LSN_FORMAT_ARGS(context->endpos),
+								 LSN_FORMAT_ARGS(cur_record_lsn));
+					}
+
+					client->endpos = context->endpos;
+				}
+			}
+
 			if (!pgsqlSendFeedback(client, true, false))
 			{
 				goto error;
@@ -3961,13 +3981,28 @@ pgsql_update_sentinel_apply(PGSQL *pgsql, bool apply)
 }
 
 
+/*
+ * Use the same structure in three different contexts, so have all the fields
+ * defined and ready to get used.
+ */
 typedef struct SentinelContext
 {
 	char sqlstate[SQLSTATE_LENGTH];
+
 	char startLSN[PG_LSN_MAXLENGTH];
 	char endLSN[PG_LSN_MAXLENGTH];
+
+	char writeLSN[PG_LSN_MAXLENGTH];
+	char flushLSN[PG_LSN_MAXLENGTH];
+	char replayLSN[PG_LSN_MAXLENGTH];
+
 	uint64_t startpos;
 	uint64_t endpos;
+
+	uint64_t write_lsn;
+	uint64_t flush_lsn;
+	uint64_t replay_lsn;
+
 	bool apply;
 	bool parsedOK;
 } SentinelContext;
@@ -4006,8 +4041,101 @@ pgsql_get_sentinel(PGSQL *pgsql,
 
 
 /*
- * parseReplicationSlotMaintain parses the result from a PostgreSQL query
- * fetching two columns from pg_stat_replication: sync_state and currentLSN.
+ * pgsql_sync_sentinel_recv updates the current sentinel values for write_lsn
+ * and flush_lsn, and fetches the current value for replay_lsn, endpos, and
+ * apply.
+ */
+bool
+pgsql_sync_sentinel_recv(PGSQL *pgsql,
+						 uint64_t write_lsn, uint64_t flush_lsn,
+						 uint64_t *replay_lsn, uint64_t *endpos, bool *apply)
+{
+	SentinelContext context = { 0 };
+
+	char *sql =
+		"update pgcopydb.sentinel "
+		"set write_lsn = $1, flush_lsn = $2 "
+		"returning replay_lsn, endpos, apply";
+
+	char writeLSN[PG_LSN_MAXLENGTH] = { 0 };
+	char flushLSN[PG_LSN_MAXLENGTH] = { 0 };
+
+	sformat(writeLSN, sizeof(writeLSN), "%X/%X", LSN_FORMAT_ARGS(write_lsn));
+	sformat(flushLSN, sizeof(flushLSN), "%X/%X", LSN_FORMAT_ARGS(flush_lsn));
+
+	int paramCount = 2;
+	Oid paramTypes[2] = { LSNOID, LSNOID };
+	const char *paramValues[2] = { writeLSN, flushLSN };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   &context, &parseSentinelRecv))
+	{
+		log_error("Failed to fetch pgcopydb.sentinel current values");
+		return false;
+	}
+
+	if (!context.parsedOK)
+	{
+		log_error("Failed to fetch pgcopydb.sentinel current values");
+		return false;
+	}
+
+	*replay_lsn = context.replay_lsn;
+	*endpos = context.endpos;
+	*apply = context.apply;
+
+	return true;
+}
+
+
+/*
+ * pgsql_sync_sentinel_apply updates the current sentinel values for
+ * replay_lsn, and fetches the current value for endpos and apply.
+ */
+bool
+pgsql_sync_sentinel_apply(PGSQL *pgsql,
+						  uint64_t replay_lsn, uint64_t *endpos, bool *apply)
+{
+	SentinelContext context = { 0 };
+
+	char *sql =
+		"update pgcopydb.sentinel "
+		"set replay_lsn = $1 "
+		"returning endpos, apply";
+
+	char replayLSN[PG_LSN_MAXLENGTH] = { 0 };
+
+	sformat(replayLSN, sizeof(replayLSN), "%X/%X", LSN_FORMAT_ARGS(replay_lsn));
+
+	int paramCount = 1;
+	Oid paramTypes[1] = { LSNOID };
+	const char *paramValues[1] = { replayLSN };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   &context, &parseSentinelApply))
+	{
+		log_error("Failed to fetch pgcopydb.sentinel current values");
+		return false;
+	}
+
+	if (!context.parsedOK)
+	{
+		log_error("Failed to fetch pgcopydb.sentinel current values");
+		return false;
+	}
+
+	*endpos = context.endpos;
+	*apply = context.apply;
+
+	return true;
+}
+
+
+/*
+ * parseSentinel parses the result from a PostgreSQL query that fetches the
+ * sentinel values for startpos, endpos, and apply.
  */
 static void
 parseSentinel(void *ctx, PGresult *result)
@@ -4047,6 +4175,93 @@ parseSentinel(void *ctx, PGresult *result)
 	}
 
 	value = PQgetvalue(result, 0, 2);
+	context->apply = strcmp(value, "t") == 0;
+
+	context->parsedOK = true;
+}
+
+
+/*
+ * parseSentinelRecv parses the result from a PostgreSQL query that fetches the
+ * sentinel values for replay_lsn, endpos, and apply.
+ */
+static void
+parseSentinelRecv(void *ctx, PGresult *result)
+{
+	SentinelContext *context = (SentinelContext *) ctx;
+
+	if (PQnfields(result) != 3)
+	{
+		log_error("Query returned %d columns, expected 3", PQnfields(result));
+		context->parsedOK = false;
+		return;
+	}
+
+	if (PQntuples(result) != 1)
+	{
+		log_error("Query returned %d rows, expected 1", PQntuples(result));
+		context->parsedOK = false;
+		return;
+	}
+
+	char *value = PQgetvalue(result, 0, 0);
+	strlcpy(context->replayLSN, value, sizeof(context->replayLSN));
+
+	if (!parseLSN(context->replayLSN, &(context->replay_lsn)))
+	{
+		log_error("Failed to parse sentinel start LSN %s", context->replayLSN);
+		context->parsedOK = false;
+	}
+
+	value = PQgetvalue(result, 0, 1);
+	strlcpy(context->endLSN, value, sizeof(context->endLSN));
+
+	if (!parseLSN(context->endLSN, &(context->endpos)))
+	{
+		log_error("Failed to parse sentinel end LSN %s", context->endLSN);
+		context->parsedOK = false;
+	}
+
+	value = PQgetvalue(result, 0, 2);
+	context->apply = strcmp(value, "t") == 0;
+
+	context->parsedOK = true;
+}
+
+
+/*
+ * parseSentinelApply parses the result from a PostgreSQL query that fetches
+ * the sentinel values for endpos and apply.
+ */
+static void
+parseSentinelApply(void *ctx, PGresult *result)
+{
+	SentinelContext *context = (SentinelContext *) ctx;
+
+	if (PQnfields(result) != 2)
+	{
+		log_error("Query returned %d columns, expected 2", PQnfields(result));
+		context->parsedOK = false;
+		return;
+	}
+
+	if (PQntuples(result) != 1)
+	{
+		log_error("Query returned %d rows, expected 1", PQntuples(result));
+		context->parsedOK = false;
+		return;
+	}
+
+	char *value = PQgetvalue(result, 0, 0);
+	strlcpy(context->endLSN, value, sizeof(context->endLSN));
+
+	if (!parseLSN(context->endLSN, &(context->endpos)))
+	{
+		log_error("Failed to parse sentinel end LSN %s", context->endLSN);
+		context->parsedOK = false;
+	}
+
+	value = PQgetvalue(result, 0, 1);
 	context->apply = strcmp(value, "t") == 0;
 
 	context->parsedOK = true;

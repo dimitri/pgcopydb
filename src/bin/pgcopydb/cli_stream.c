@@ -696,6 +696,7 @@ cli_stream_apply(int argc, char **argv)
 
 	if (!setupReplicationOrigin(&context,
 								&(copySpecs.cfPaths.cdc),
+								streamDBoptions.source_pguri,
 								streamDBoptions.target_pguri,
 								streamDBoptions.origin,
 								streamDBoptions.endpos,

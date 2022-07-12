@@ -352,6 +352,9 @@ typedef struct LogicalStreamContext
 	const char *buffer;
 
 	TimestampTz now;
+	TimestampTz lastFeedbackSync;
+	XLogRecPtr endpos;          /* might be update at runtime */
+
 	LogicalTrackLSN *tracking;
 } LogicalStreamContext;
 
@@ -380,6 +383,7 @@ typedef struct LogicalStreamClient
 	LogicalStreamReceiver writeFunction;
 	LogicalStreamReceiver flushFunction;
 	LogicalStreamReceiver closeFunction;
+	LogicalStreamReceiver feedbackFunction;
 
 	int fsync_interval;
 	int standby_message_timeout;
@@ -438,5 +442,13 @@ bool pgsql_update_sentinel_apply(PGSQL *pgsql, bool apply);
 bool pgsql_get_sentinel(PGSQL *pgsql,
 						uint64_t *startpos, uint64_t *endpos, bool *apply);
 
+bool pgsql_sync_sentinel_recv(PGSQL *pgsql,
+							  uint64_t write_lsn, uint64_t flush_lsn,
+							  uint64_t *replay_lsn, uint64_t *endpos,
+							  bool *apply);
+
+bool pgsql_sync_sentinel_apply(PGSQL *pgsql,
+							   uint64_t replay_lsn,
+							   uint64_t *endpos, bool *apply);
 
 #endif /* PGSQL_H */

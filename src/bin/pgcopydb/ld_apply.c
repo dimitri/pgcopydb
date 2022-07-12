@@ -63,6 +63,7 @@ stream_apply_catchup(StreamSpecs *specs)
 
 	if (!setupReplicationOrigin(&context,
 								&(specs->paths),
+								specs->source_pguri,
 								specs->target_pguri,
 								specs->origin,
 								specs->endpos,
@@ -119,6 +120,13 @@ stream_apply_catchup(StreamSpecs *specs)
 			/* errors have already been logged */
 			return false;
 		}
+
+		/*
+		 * Each time we are done applying a file, we update our progress and
+		 * fetch new values from the pgcopydb sentinel. Errors are warning
+		 * here, we'll update next time.
+		 */
+		(void) stream_apply_sync_sentinel(&context);
 
 		if (context.reachedEndPos)
 		{
@@ -216,6 +224,34 @@ stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
 	}
 
 	log_info("The pgcopydb sentinel has enabled applying changes");
+
+	return true;
+}
+
+
+/*
+ * stream_apply_sync_sentinel sync with the pgcopydb sentinel table, sending
+ * the current replay LSN position and fetching the maybe new endpos and apply
+ * values.
+ */
+bool
+stream_apply_sync_sentinel(StreamApplyContext *context)
+{
+	PGSQL src = { 0 };
+
+	uint64_t *endpos = &(context->endpos);
+	bool *apply = &(context->apply);
+
+	if (!pgsql_init(&src, context->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_sync_sentinel_apply(&src, context->previousLSN, endpos, apply))
+	{
+		log_warn("Failed to sync progress with the pgcopydb sentinel");
+	}
 
 	return true;
 }
@@ -429,6 +465,7 @@ stream_apply_file(StreamApplyContext *context)
 bool
 setupReplicationOrigin(StreamApplyContext *context,
 					   CDCPaths *paths,
+					   char *source_pguri,
 					   char *target_pguri,
 					   char *origin,
 					   uint64_t endpos,
@@ -460,6 +497,7 @@ setupReplicationOrigin(StreamApplyContext *context,
 
 	context->paths = *paths;
 	context->apply = apply;
+	strlcpy(context->source_pguri, source_pguri, sizeof(context->source_pguri));
 	strlcpy(context->target_pguri, target_pguri, sizeof(context->target_pguri));
 	strlcpy(context->origin, origin, sizeof(context->origin));
 

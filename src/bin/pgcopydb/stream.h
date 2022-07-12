@@ -57,7 +57,12 @@ typedef struct StreamContext
 	CDCPaths paths;
 	LogicalStreamMode mode;
 
-	uint64_t startLSN;
+	char source_pguri[MAXCONNINFO];
+
+	uint64_t startpos;
+	uint64_t endpos;
+	bool apply;
+
 	char walFileName[MAXPGPATH];
 	char sqlFileName[MAXPGPATH];
 	FILE *jsonFile;
@@ -73,6 +78,7 @@ typedef struct StreamApplyContext
 	CDCPaths paths;
 
 	PGSQL pgsql;
+	char source_pguri[MAXCONNINFO];
 	char target_pguri[MAXCONNINFO];
 	char origin[BUFSIZE];
 
@@ -261,6 +267,7 @@ bool streamCheckResumePosition(StreamSpecs *specs);
 bool streamWrite(LogicalStreamContext *context);
 bool streamFlush(LogicalStreamContext *context);
 bool streamClose(LogicalStreamContext *context);
+bool streamFeedback(LogicalStreamContext *context);
 
 bool streamRotateFile(LogicalStreamContext *context);
 bool streamCloseFile(LogicalStreamContext *context, bool time_to_abort);
@@ -327,10 +334,13 @@ bool stream_apply_catchup(StreamSpecs *specs);
 bool stream_apply_wait_for_sentinel(StreamSpecs *specs,
 									StreamApplyContext *context);
 
+bool stream_apply_sync_sentinel(StreamApplyContext *context);
+
 bool stream_apply_file(StreamApplyContext *context);
 
 bool setupReplicationOrigin(StreamApplyContext *context,
 							CDCPaths *paths,
+							char *source_pguri,
 							char *target_pguri,
 							char *origin,
 							uint64_t endpos,
