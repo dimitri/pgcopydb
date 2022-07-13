@@ -6,12 +6,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends jq \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=pagila /usr/src/pagila /usr/src/pagila
-
 WORKDIR /usr/src/pgcopydb
-COPY ./copydb.sh copydb.sh
+COPY ./inject.sh inject.sh
 COPY ./dml.sql dml.sql
-COPY ./ddl.sql ddl.sql
 
 USER docker
-CMD /usr/src/pgcopydb/copydb.sh
+CMD /usr/src/pgcopydb/inject.sh

@@ -2883,7 +2883,8 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 			client->last_status = client->now;
 
 			/* the endpos target might have been updated in the past */
-			if (context->endpos <= cur_record_lsn)
+			if (context->endpos != InvalidXLogRecPtr &&
+				context->endpos <= cur_record_lsn)
 			{
 				log_warn("New endpos %X/%X is in the past, current "
 						 "record LSN is %X/%X",
@@ -3923,7 +3924,7 @@ pgsql_update_sentinel_endpos(PGSQL *pgsql, bool current, uint64_t endpos)
 {
 	char *update =
 		current
-		? "update pgcopydb.sentinel set endpos = pg_current_wal_lsn()"
+		? "update pgcopydb.sentinel set endpos = pg_current_wal_flush_lsn()"
 		: "update pgcopydb.sentinel set endpos = $1";
 
 	if (current)

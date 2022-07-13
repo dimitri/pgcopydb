@@ -88,9 +88,11 @@ stream_apply_catchup(StreamSpecs *specs)
 	 * there and tracking progress, and then goes on to the next file, until no
 	 * such file exists.
 	 */
+	char currentSQLFileName[MAXPGPATH] = { 0 };
+
 	for (;;)
 	{
-		char *currentSQLFileName = context.sqlFileName;
+		strlcpy(currentSQLFileName, context.sqlFileName, MAXPGPATH);
 
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
@@ -128,6 +130,20 @@ stream_apply_catchup(StreamSpecs *specs)
 		 */
 		(void) stream_apply_sync_sentinel(&context);
 
+		/*
+		 * When syncing with the pgcopydb sentinel we might receive a new
+		 * endpos, and it might mean we're done already.
+		 */
+		if (context.endpos != InvalidXLogRecPtr &&
+			context.endpos <= context.nextlsn)
+		{
+			context.reachedEndPos = true;
+
+			log_info("Applied reached end position %X/%X at %X/%X",
+					 LSN_FORMAT_ARGS(context.endpos),
+					 LSN_FORMAT_ARGS(context.nextlsn));
+		}
+
 		if (context.reachedEndPos)
 		{
 			/* information has already been logged */
@@ -146,13 +162,13 @@ stream_apply_catchup(StreamSpecs *specs)
 					  "and nextlsn %X/%X still belongs to the same file",
 					  currentSQLFileName,
 					  LSN_FORMAT_ARGS(context.nextlsn));
-		}
 
-		/*
-		 * Sleep for a while (10s typically) then try again, new data might
-		 * have been appended to the same file again.
-		 */
-		pg_usleep(CATCHINGUP_SLEEP_MS * 1000);
+			/*
+			 * Sleep for a while (10s typically) then try again, new data might
+			 * have been appended to the same file again.
+			 */
+			pg_usleep(CATCHINGUP_SLEEP_MS * 1000);
+		}
 	}
 
 	/* we might still have to disconnect now */
@@ -279,6 +295,10 @@ stream_apply_file(StreamApplyContext *context)
 
 	content.count =
 		splitLines(content.buffer, content.lines, MAX_STREAM_CONTENT_COUNT);
+
+	log_debug("Read %d lines in file \"%s\"",
+			  content.count,
+			  content.filename);
 
 	PGSQL *pgsql = &(context->pgsql);
 	bool reachedStartingPosition = false;

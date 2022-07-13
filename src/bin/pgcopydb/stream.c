@@ -325,10 +325,13 @@ streamWrite(LogicalStreamContext *context)
 		return false;
 	}
 
-	LogicalMessageMetadata metadata = { 0 };
+	LogicalMessageMetadata *metadata = &(privateContext->metadata);
 	JSON_Value *json = json_parse_string(context->buffer);
 
-	if (!parseMessageMetadata(&metadata, context->buffer, json, false))
+	/* ensure we have a new all-zero metadata structure for the new message */
+	(void) memset(metadata, 0, sizeof(LogicalMessageMetadata));
+
+	if (!parseMessageMetadata(metadata, context->buffer, json, false))
 	{
 		/* errors have already been logged */
 		if (privateContext->jsonFile != NULL)
@@ -346,7 +349,7 @@ streamWrite(LogicalStreamContext *context)
 
 	json_value_free(json);
 
-	(void) updateStreamCounters(privateContext, &metadata);
+	(void) updateStreamCounters(privateContext, metadata);
 
 	/*
 	 * Write the logical decoding message to disk, appending to the already
@@ -399,10 +402,11 @@ streamWrite(LogicalStreamContext *context)
 		context->tracking->written_lsn = context->cur_record_lsn;
 	}
 
-	log_debug("Received action %c for XID %u in LSN %X/%X",
-			  metadata.action,
-			  metadata.xid,
-			  LSN_FORMAT_ARGS(metadata.lsn));
+	log_debug("Received action %c for XID %u in LSN %X/%X, Next LSN %X/%X",
+			  metadata->action,
+			  metadata->xid,
+			  LSN_FORMAT_ARGS(metadata->lsn),
+			  LSN_FORMAT_ARGS(metadata->nextlsn));
 
 	return true;
 }
@@ -445,6 +449,24 @@ streamRotateFile(LogicalStreamContext *context)
 	{
 		bool time_to_abort = false;
 
+		/*
+		 * Here we might have an early WAL file rotation, either because of
+		 * archive_timeout or a call to pg_switch_wal() for instance. In case
+		 * the current message nextlsn doesn't belong to the new file we're
+		 * about to create, add an extra empty transaction with the expected
+		 * nextlsn.
+		 */
+		if (privateContext->metadata.nextlsn < context->cur_record_lsn)
+		{
+			fformat(privateContext->jsonFile,
+					"{\"action\":\"X\",\"lsn\":\"%X/%X\",\"nextlsn\":\"%X/%X\"}\n",
+					LSN_FORMAT_ARGS(privateContext->metadata.nextlsn),
+					LSN_FORMAT_ARGS(context->cur_record_lsn));
+
+			log_debug("Inserted action SWITCH for nextlsn %X/%X",
+					  LSN_FORMAT_ARGS(context->cur_record_lsn));
+		}
+
 		if (!streamCloseFile(context, time_to_abort))
 		{
 			/* errors have already been logged */
@@ -484,6 +506,15 @@ streamRotateFile(LogicalStreamContext *context)
 	char latest[MAXPGPATH] = { 0 };
 
 	sformat(latest, sizeof(latest), "%s/latest", privateContext->paths.dir);
+
+	if (file_exists(latest))
+	{
+		if (!unlink_file(latest))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
 
 	if (!create_symbolic_link(privateContext->walFileName, latest))
 	{
@@ -727,7 +758,7 @@ parseMessageMetadata(LogicalMessageMetadata *metadata,
 
 	if (!skipAction)
 	{
-		/* action is one of "B", "C", "I", "U", "D", "T" */
+		/* action is one of "B", "C", "I", "U", "D", "T", "X" */
 		char *action = (char *) json_object_get_string(jsobj, "action");
 
 		if (action == NULL || strlen(action) != 1)
@@ -754,8 +785,11 @@ parseMessageMetadata(LogicalMessageMetadata *metadata,
 		}
 	}
 
-	double xid = json_object_get_number(jsobj, "xid");
-	metadata->xid = (uint32_t) xid;
+	if (metadata->action != STREAM_ACTION_SWITCH)
+	{
+		double xid = json_object_get_number(jsobj, "xid");
+		metadata->xid = (uint32_t) xid;
+	}
 
 	char *lsn = (char *) json_object_get_string(jsobj, "lsn");
 
@@ -1026,6 +1060,11 @@ StreamActionFromChar(char action)
 		case 'M':
 		{
 			return STREAM_ACTION_MESSAGE;
+		}
+
+		case 'X':
+		{
+			return STREAM_ACTION_SWITCH;
 		}
 
 		default:
@@ -1471,7 +1510,10 @@ stream_create_sentinel(CopyDataSpec *copySpecs,
 	}
 
 	/* now insert the sentinel values (startpos, endpos, false as apply) */
-	char *insert = "insert into pgcopydb.sentinel values($1, $2, $3)";
+	char *insert =
+		"insert into pgcopydb.sentinel "
+		"(startpos, endpos, apply, write_lsn, flush_lsn, replay_lsn) "
+		"values($1, $2, $3, '0/0', '0/0', '0/0')";
 
 	char startLSN[PG_LSN_MAXLENGTH] = { 0 };
 	char endLSN[PG_LSN_MAXLENGTH] = { 0 };

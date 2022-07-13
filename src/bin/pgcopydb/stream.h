@@ -23,7 +23,8 @@ typedef enum
 	STREAM_ACTION_UPDATE = 'U',
 	STREAM_ACTION_DELETE = 'D',
 	STREAM_ACTION_TRUNCATE = 'T',
-	STREAM_ACTION_MESSAGE = 'M'
+	STREAM_ACTION_MESSAGE = 'M',
+	STREAM_ACTION_SWITCH = 'X'
 } StreamAction;
 
 typedef struct StreamCounters
@@ -36,6 +37,18 @@ typedef struct StreamCounters
 	uint64_t delete;
 	uint64_t truncate;
 } StreamCounters;
+
+
+#define PG_MAX_TIMESTAMP 36     /* "2022-06-27 14:42:21.795714+00" */
+
+typedef struct LogicalMessageMetadata
+{
+	StreamAction action;
+	uint32_t xid;
+	uint64_t lsn;
+	uint64_t nextlsn;
+	char timestamp[PG_MAX_TIMESTAMP];
+} LogicalMessageMetadata;
 
 
 /*
@@ -63,6 +76,7 @@ typedef struct StreamContext
 	uint64_t endpos;
 	bool apply;
 
+	LogicalMessageMetadata metadata;
 	char walFileName[MAXPGPATH];
 	char sqlFileName[MAXPGPATH];
 	FILE *jsonFile;
@@ -99,17 +113,6 @@ typedef struct StreamApplyContext
 	char sqlFileName[MAXPGPATH];
 } StreamApplyContext;
 
-
-#define PG_MAX_TIMESTAMP 36     /* "2022-06-27 14:42:21.795714+00" */
-
-typedef struct LogicalMessageMetadata
-{
-	StreamAction action;
-	uint32_t xid;
-	uint64_t lsn;
-	uint64_t nextlsn;
-	char timestamp[PG_MAX_TIMESTAMP];
-} LogicalMessageMetadata;
 
 /* data types to support here are limited to what JSON/wal2json offers */
 typedef struct LogicalMessageValue
