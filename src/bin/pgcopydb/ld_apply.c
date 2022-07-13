@@ -171,12 +171,8 @@ bool
 stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
 {
 	PGSQL src = { 0 };
-
-	uint64_t *startpos = &(context->startpos);
-	uint64_t *endpos = &(context->endpos);
-	bool *apply = &(context->apply);
-
 	bool firstLoop = true;
+	CopyDBSentinel sentinel = { 0 };
 
 	if (!pgsql_init(&src, specs->source_pguri, PGSQL_CONN_SOURCE))
 	{
@@ -184,7 +180,7 @@ stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
 		return false;
 	}
 
-	while (!context->apply)
+	while (!sentinel.apply)
 	{
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
@@ -193,7 +189,7 @@ stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
 		}
 
 		/* this reconnects on each loop iteration, every 10s by default */
-		if (!pgsql_get_sentinel(&src, startpos, endpos, apply))
+		if (!pgsql_get_sentinel(&src, &sentinel))
 		{
 			log_warn("Retrying to fetch pgcopydb sentinel values in %ds",
 					 CATCHINGUP_SLEEP_MS / 10);
@@ -203,12 +199,16 @@ stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
 		}
 
 		log_debug("startpos %X/%X endpos %X/%X apply %s",
-				  LSN_FORMAT_ARGS(context->startpos),
-				  LSN_FORMAT_ARGS(context->endpos),
-				  context->apply ? "enabled" : "disabled");
+				  LSN_FORMAT_ARGS(sentinel.startpos),
+				  LSN_FORMAT_ARGS(sentinel.endpos),
+				  sentinel.apply ? "enabled" : "disabled");
 
-		if (context->apply)
+		if (sentinel.apply)
 		{
+			context->startpos = sentinel.startpos;
+			context->endpos = sentinel.endpos;
+			context->apply = sentinel.apply;
+
 			break;
 		}
 
@@ -238,9 +238,7 @@ bool
 stream_apply_sync_sentinel(StreamApplyContext *context)
 {
 	PGSQL src = { 0 };
-
-	uint64_t *endpos = &(context->endpos);
-	bool *apply = &(context->apply);
+	CopyDBSentinel sentinel = { 0 };
 
 	if (!pgsql_init(&src, context->source_pguri, PGSQL_CONN_SOURCE))
 	{
@@ -248,10 +246,14 @@ stream_apply_sync_sentinel(StreamApplyContext *context)
 		return false;
 	}
 
-	if (!pgsql_sync_sentinel_apply(&src, context->previousLSN, endpos, apply))
+	if (!pgsql_sync_sentinel_apply(&src, context->previousLSN, &sentinel))
 	{
 		log_warn("Failed to sync progress with the pgcopydb sentinel");
 	}
+
+	context->apply = sentinel.apply;
+	context->endpos = sentinel.endpos;
+	context->startpos = sentinel.startpos;
 
 	return true;
 }

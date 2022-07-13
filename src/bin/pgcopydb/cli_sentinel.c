@@ -498,20 +498,18 @@ cli_sentinel_set_endpos(int argc, char **argv)
 
 	if (useCurrentLSN)
 	{
-		uint64_t startpos;
-		uint64_t endpos;
-		bool apply;
+		CopyDBSentinel sentinel = { 0 };
 
-		if (!pgsql_get_sentinel(&pgsql, &startpos, &endpos, &apply))
+		if (!pgsql_get_sentinel(&pgsql, &sentinel))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_SOURCE);
 		}
 
 		log_info("pgcopydb sentinel endpos has been set to %X/%X",
-				 LSN_FORMAT_ARGS(endpos));
+				 LSN_FORMAT_ARGS(sentinel.endpos));
 
-		fformat(stdout, "%X/%X\n", LSN_FORMAT_ARGS(endpos));
+		fformat(stdout, "%X/%X\n", LSN_FORMAT_ARGS(sentinel.endpos));
 	}
 }
 
@@ -581,17 +579,24 @@ cli_sentinel_get(int argc, char **argv)
 		exit(EXIT_CODE_SOURCE);
 	}
 
-	uint64_t startpos;
-	uint64_t endpos;
-	bool apply;
+	CopyDBSentinel sentinel = { 0 };
 
-	if (!pgsql_get_sentinel(&pgsql, &startpos, &endpos, &apply))
+	if (!pgsql_get_sentinel(&pgsql, &sentinel))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);
 	}
 
-	fformat(stdout, "%-10s %X/%X\n", "startpos", LSN_FORMAT_ARGS(startpos));
-	fformat(stdout, "%-10s %X/%X\n", "endpos", LSN_FORMAT_ARGS(endpos));
-	fformat(stdout, "%-10s %s\n", "apply", apply ? "enabled" : "disabled");
+	fformat(stdout, "%-10s %X/%X\n", "startpos",
+			LSN_FORMAT_ARGS(sentinel.startpos));
+	fformat(stdout, "%-10s %X/%X\n", "endpos",
+			LSN_FORMAT_ARGS(sentinel.endpos));
+	fformat(stdout, "%-10s %s\n", "apply",
+			sentinel.apply ? "enabled" : "disabled");
+	fformat(stdout, "%-10s %X/%X\n", "write_lsn",
+			LSN_FORMAT_ARGS(sentinel.write_lsn));
+	fformat(stdout, "%-10s %X/%X\n", "flush_lsn",
+			LSN_FORMAT_ARGS(sentinel.flush_lsn));
+	fformat(stdout, "%-10s %X/%X\n", "replay_lsn",
+			LSN_FORMAT_ARGS(sentinel.replay_lsn));
 }

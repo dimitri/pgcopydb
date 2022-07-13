@@ -48,4 +48,5 @@ pgcopydb follow --resume --not-consistent -vv
 pgcopydb follow --resume --not-consistent -vv
 
 # cleanup
+pgcopydb stream sentinel get
 pgcopydb stream cleanup

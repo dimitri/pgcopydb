@@ -124,6 +124,10 @@ startLogicalStreaming(StreamSpecs *specs)
 	privateContext.paths = specs->paths;
 	privateContext.startpos = specs->startpos;
 
+	strlcpy(privateContext.source_pguri,
+			specs->source_pguri,
+			sizeof(privateContext.source_pguri));
+
 	context.private = (void *) &(privateContext);
 
 	/*
@@ -230,11 +234,9 @@ streamCheckResumePosition(StreamSpecs *specs)
 		return false;
 	}
 
-	uint64_t startpos = 0;
-	uint64_t endpos = 0;
-	bool apply = false;
+	CopyDBSentinel sentinel = { 0 };
 
-	if (!pgsql_get_sentinel(&src, &startpos, &endpos, &apply))
+	if (!pgsql_get_sentinel(&src, &sentinel))
 	{
 		/* errors have already been logged */
 		return false;
@@ -242,7 +244,7 @@ streamCheckResumePosition(StreamSpecs *specs)
 
 	if (specs->endpos == InvalidXLogRecPtr)
 	{
-		specs->endpos = endpos;
+		specs->endpos = sentinel.endpos;
 
 		if (specs->endpos != InvalidXLogRecPtr)
 		{
@@ -258,9 +260,9 @@ streamCheckResumePosition(StreamSpecs *specs)
 			return true;
 		}
 
-		if (startpos != InvalidXLogRecPtr)
+		if (sentinel.startpos != InvalidXLogRecPtr)
 		{
-			specs->startpos = startpos;
+			specs->startpos = sentinel.startpos;
 
 			log_info("Resuming streaming at LSN %X/%X",
 					 LSN_FORMAT_ARGS(specs->startpos));
@@ -669,14 +671,12 @@ streamFeedback(LogicalStreamContext *context)
 		return false;
 	}
 
-	uint64_t replay_lsn = 0;
+	CopyDBSentinel sentinel = { 0 };
 
 	if (!pgsql_sync_sentinel_recv(&src,
 								  context->tracking->written_lsn,
 								  context->tracking->flushed_lsn,
-								  &replay_lsn,
-								  &(privateContext->endpos),
-								  &(privateContext->apply)))
+								  &sentinel))
 	{
 		/* errors have already been logged */
 		return false;
@@ -686,8 +686,12 @@ streamFeedback(LogicalStreamContext *context)
 	 * Update the main LogicalStreamClient parts, API with the lower-level
 	 * logical decoding client.
 	 */
+	privateContext->apply = sentinel.apply;
+	privateContext->endpos = sentinel.endpos;
+	privateContext->startpos = sentinel.startpos;
+
 	context->endpos = privateContext->endpos;
-	context->tracking->applied_lsn = replay_lsn;
+	context->tracking->applied_lsn = sentinel.replay_lsn;
 
 	context->lastFeedbackSync = context->now;
 
