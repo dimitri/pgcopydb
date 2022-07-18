@@ -152,8 +152,8 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 		{
 			log_debug("WAL switch, previous commit nextlsn was %X/%X, "
 					  "now set to %X/%X",
-					  LSN_FORMAT_ARGS(metadata->nextlsn),
-					  LSN_FORMAT_ARGS(previousTx->nextlsn));
+					  LSN_FORMAT_ARGS(previousTx->nextlsn),
+					  LSN_FORMAT_ARGS(metadata->nextlsn));
 
 			previousTx->nextlsn = metadata->nextlsn;
 		}
