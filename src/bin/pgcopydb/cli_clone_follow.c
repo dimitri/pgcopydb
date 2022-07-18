@@ -108,7 +108,29 @@ cli_clone(int argc, char **argv)
 {
 	CopyDataSpec copySpecs = { 0 };
 
+	bool follow = copyDBoptions.follow;
+	StreamSpecs specs = { 0 };
+
+	pid_t prefetch = -1;
+	pid_t catchup = -1;
+
 	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_ALL);
+
+	if (follow)
+	{
+		if (!stream_init_specs(&specs,
+							   &(copySpecs.cfPaths.cdc),
+							   copySpecs.source_pguri,
+							   copySpecs.target_pguri,
+							   copyDBoptions.slotName,
+							   copyDBoptions.origin,
+							   copyDBoptions.endpos,
+							   STREAM_MODE_PREFETCH))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+	}
 
 	Summary summary = { 0 };
 	TopLevelTimings *timings = &(summary.timings);
@@ -160,6 +182,36 @@ cli_clone(int argc, char **argv)
 		exit(EXIT_CODE_TARGET);
 	}
 
+	if (follow)
+	{
+		/*
+		 * Create the replication slot on the source database, and the origin
+		 * (replication progress tracking) on the target database.
+		 */
+		if (!stream_setup_databases(&copySpecs, specs.slotName, specs.origin))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		/*
+		 * Remove the possibly still existing stream context files from
+		 * previous round of operations (--resume, etc). We want to make sure
+		 * that the catchup process reads the files created on this connection.
+		 */
+		if (!stream_cleanup_context(&specs))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		if (!follow_start_prefetch(&specs, &prefetch))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_SOURCE);
+		}
+	}
+
 	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_PREPARE_SCHEMA);
 
 	if (!copydb_target_prepare_schema(&copySpecs))
@@ -199,6 +251,52 @@ cli_clone(int argc, char **argv)
 	(void) summary_set_current_time(timings, TIMING_STEP_END);
 
 	(void) print_summary(&summary, &copySpecs);
+
+	/*
+	 * When option --follow is used, now is the time to start the catchup
+	 * process: the base copy has been done with, and the prefetch process was
+	 * already started earlier.
+	 */
+	if (follow)
+	{
+		PGSQL pgsql = { 0 };
+
+		/*
+		 * First, set the "apply" mode on the sentinel.
+		 */
+		if (!pgsql_init(&pgsql, copySpecs.source_pguri, PGSQL_CONN_SOURCE))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_SOURCE);
+		}
+
+		if (!pgsql_update_sentinel_apply(&pgsql, true))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_SOURCE);
+		}
+
+		/*
+		 * Second, start the catchup process.
+		 */
+		if (!follow_start_catchup(&specs, &catchup))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_TARGET);
+		}
+
+		/*
+		 * Finally wait until the process are finished.
+		 *
+		 * This happens when the sentinel endpos is set, typically using the
+		 * command: pgcopydb stream sentinel set endpos --current.
+		 */
+		if (!follow_wait_subprocesses(&specs, prefetch, catchup))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+	}
 }
 
 
