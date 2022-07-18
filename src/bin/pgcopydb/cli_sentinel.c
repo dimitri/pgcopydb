@@ -74,7 +74,7 @@ CommandLine sentinel_set_endpos_command =
 		"Set the sentinel end position LSN on the source database",
 		" --source ... <end LSN>",
 		"  --source      Postgres URI to the source database\n"
-		"  --current     Use pg_current_wal_lsn() as the endpos\n",
+		"  --current     Use pg_current_wal_flush_lsn() as the endpos\n",
 		cli_sentinel_getopts,
 		cli_sentinel_set_endpos);
 
