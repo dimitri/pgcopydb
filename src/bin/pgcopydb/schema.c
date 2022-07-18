@@ -2490,21 +2490,35 @@ parseCurrentSourceDepend(PGresult *result, int rowNumber, SourceDepend *depend)
 	}
 
 	/* 5. classid */
-	value = PQgetvalue(result, rowNumber, 4);
-
-	if (!stringToUInt32(value, &(depend->classid)) || depend->classid == 0)
+	if (PQgetisnull(result, rowNumber, 4))
 	{
-		log_error("Invalid OID \"%s\"", value);
-		++errors;
+		depend->classid = 0;
+	}
+	else
+	{
+		value = PQgetvalue(result, rowNumber, 4);
+
+		if (!stringToUInt32(value, &(depend->classid)) || depend->classid == 0)
+		{
+			log_error("Invalid OID \"%s\"", value);
+			++errors;
+		}
 	}
 
 	/* 6. objid */
-	value = PQgetvalue(result, rowNumber, 5);
-
-	if (!stringToUInt32(value, &(depend->objid)) || depend->objid == 0)
+	if (PQgetisnull(result, rowNumber, 5))
 	{
-		log_error("Invalid OID \"%s\"", value);
-		++errors;
+		depend->objid = 0;
+	}
+	else
+	{
+		value = PQgetvalue(result, rowNumber, 5);
+
+		if (!stringToUInt32(value, &(depend->objid)) || depend->objid == 0)
+		{
+			log_error("Invalid OID \"%s\"", value);
+			++errors;
+		}
 	}
 
 	/* 7. deptype */
