@@ -41,6 +41,16 @@ stream_apply_catchup(StreamSpecs *specs)
 {
 	StreamApplyContext context = { 0 };
 
+	/* in prefetch mode, wait until the sentinel enables the apply process */
+	if (specs->mode == STREAM_MODE_PREFETCH)
+	{
+		if (!stream_apply_wait_for_sentinel(specs, &context))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
 	if (!stream_read_context(specs, &(context.system), &(context.WalSegSz)))
 	{
 		log_error("Failed to read the streaming context information "
@@ -53,9 +63,11 @@ stream_apply_catchup(StreamSpecs *specs)
 
 	if (!setupReplicationOrigin(&context,
 								&(specs->paths),
+								specs->source_pguri,
 								specs->target_pguri,
 								specs->origin,
-								specs->endpos))
+								specs->endpos,
+								context.apply))
 	{
 		log_error("Failed to setup replication origin on the target database");
 		return false;
@@ -76,9 +88,11 @@ stream_apply_catchup(StreamSpecs *specs)
 	 * there and tracking progress, and then goes on to the next file, until no
 	 * such file exists.
 	 */
+	char currentSQLFileName[MAXPGPATH] = { 0 };
+
 	for (;;)
 	{
-		char *currentSQLFileName = context.sqlFileName;
+		strlcpy(currentSQLFileName, context.sqlFileName, MAXPGPATH);
 
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
@@ -90,25 +104,56 @@ stream_apply_catchup(StreamSpecs *specs)
 		 * continue looping until the concurrent prefetch mechanism has created
 		 * it.
 		 */
-		if (file_exists(context.sqlFileName))
+		if (!file_exists(context.sqlFileName))
 		{
-			if (!stream_apply_file(&context))
-			{
-				/* errors have already been logged */
-				return false;
-			}
+			log_debug("File \"%s\" does not exists yet, retrying in %dms",
+					  context.sqlFileName,
+					  CATCHINGUP_SLEEP_MS);
 
-			if (context.reachedEndPos)
-			{
-				/* information has already been logged */
-				break;
-			}
+			pg_usleep(CATCHINGUP_SLEEP_MS * 1000);
+			continue;
+		}
 
-			if (!computeSQLFileName(&context))
-			{
-				/* errors have already been logged */
-				return false;
-			}
+		/*
+		 * The SQL file exists already, apply it now.
+		 */
+		if (!stream_apply_file(&context))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		/*
+		 * Each time we are done applying a file, we update our progress and
+		 * fetch new values from the pgcopydb sentinel. Errors are warning
+		 * here, we'll update next time.
+		 */
+		(void) stream_apply_sync_sentinel(&context);
+
+		/*
+		 * When syncing with the pgcopydb sentinel we might receive a new
+		 * endpos, and it might mean we're done already.
+		 */
+		if (context.endpos != InvalidXLogRecPtr &&
+			context.endpos <= context.nextlsn)
+		{
+			context.reachedEndPos = true;
+
+			log_info("Applied reached end position %X/%X at %X/%X",
+					 LSN_FORMAT_ARGS(context.endpos),
+					 LSN_FORMAT_ARGS(context.nextlsn));
+		}
+
+		if (context.reachedEndPos)
+		{
+			/* information has already been logged */
+			break;
+		}
+
+		if (!computeSQLFileName(&context))
+		{
+			/* errors have already been logged */
+			return false;
 		}
 
 		if (strcmp(context.sqlFileName, currentSQLFileName) == 0)
@@ -134,6 +179,103 @@ stream_apply_catchup(StreamSpecs *specs)
 
 
 /*
+ * stream_apply_wait_for_sentinel fetches the current pgcopydb sentinel values
+ * on the source database: the catchup processing only gets to start when the
+ * sentinel "apply" column has been set to true.
+ */
+bool
+stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
+{
+	PGSQL src = { 0 };
+	bool firstLoop = true;
+	CopyDBSentinel sentinel = { 0 };
+
+	if (!pgsql_init(&src, specs->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	while (!sentinel.apply)
+	{
+		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		{
+			log_info("Received a shutdown signal, quitting now");
+			return false;
+		}
+
+		/* this reconnects on each loop iteration, every 10s by default */
+		if (!pgsql_get_sentinel(&src, &sentinel))
+		{
+			log_warn("Retrying to fetch pgcopydb sentinel values in %ds",
+					 CATCHINGUP_SLEEP_MS / 10);
+			pg_usleep(CATCHINGUP_SLEEP_MS * 1000);
+
+			continue;
+		}
+
+		log_debug("startpos %X/%X endpos %X/%X apply %s",
+				  LSN_FORMAT_ARGS(sentinel.startpos),
+				  LSN_FORMAT_ARGS(sentinel.endpos),
+				  sentinel.apply ? "enabled" : "disabled");
+
+		if (sentinel.apply)
+		{
+			context->startpos = sentinel.startpos;
+			context->endpos = sentinel.endpos;
+			context->apply = sentinel.apply;
+
+			break;
+		}
+
+		if (firstLoop)
+		{
+			firstLoop = false;
+
+			log_info("Waiting until the pgcopydb sentinel apply is enabled");
+		}
+
+		/* avoid buzy looping and avoid hammering the source database */
+		pg_usleep(CATCHINGUP_SLEEP_MS * 1000);
+	}
+
+	log_info("The pgcopydb sentinel has enabled applying changes");
+
+	return true;
+}
+
+
+/*
+ * stream_apply_sync_sentinel sync with the pgcopydb sentinel table, sending
+ * the current replay LSN position and fetching the maybe new endpos and apply
+ * values.
+ */
+bool
+stream_apply_sync_sentinel(StreamApplyContext *context)
+{
+	PGSQL src = { 0 };
+	CopyDBSentinel sentinel = { 0 };
+
+	if (!pgsql_init(&src, context->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_sync_sentinel_apply(&src, context->previousLSN, &sentinel))
+	{
+		log_warn("Failed to sync progress with the pgcopydb sentinel");
+	}
+
+	context->apply = sentinel.apply;
+	context->endpos = sentinel.endpos;
+	context->startpos = sentinel.startpos;
+
+	return true;
+}
+
+
+/*
  * stream_apply_file connects to the target database system and applies the
  * given SQL file as prepared by the stream_transform_file function.
  */
@@ -153,6 +295,10 @@ stream_apply_file(StreamApplyContext *context)
 
 	content.count =
 		splitLines(content.buffer, content.lines, MAX_STREAM_CONTENT_COUNT);
+
+	log_debug("Read %d lines in file \"%s\"",
+			  content.count,
+			  content.filename);
 
 	PGSQL *pgsql = &(context->pgsql);
 	bool reachedStartingPosition = false;
@@ -341,15 +487,39 @@ stream_apply_file(StreamApplyContext *context)
 bool
 setupReplicationOrigin(StreamApplyContext *context,
 					   CDCPaths *paths,
+					   char *source_pguri,
 					   char *target_pguri,
 					   char *origin,
-					   uint64_t endpos)
+					   uint64_t endpos,
+					   bool apply)
 {
 	PGSQL *pgsql = &(context->pgsql);
 	char *nodeName = context->origin;
 
+	/*
+	 * We have to consider both the --endpos command line option and the
+	 * pgcopydb sentinel endpos value. Typically the sentinel is updated after
+	 * the fact, but we still give precedence to --endpos.
+	 *
+	 * The endpos parameter here comes from the --endpos command line option,
+	 * the context->endpos might have been set by calling
+	 * stream_apply_wait_for_sentinel() earlier (when in STREAM_MODE_PREFETCH).
+	 */
+	if (endpos != InvalidXLogRecPtr)
+	{
+		if (context->endpos != InvalidXLogRecPtr)
+		{
+			log_warn("Option --endpos %X/%X is used, "
+					 "even when the pgcopydb sentinel endpos is set to %X/%X",
+					 LSN_FORMAT_ARGS(endpos),
+					 LSN_FORMAT_ARGS(context->endpos));
+		}
+		context->endpos = endpos;
+	}
+
 	context->paths = *paths;
-	context->endpos = endpos;
+	context->apply = apply;
+	strlcpy(context->source_pguri, source_pguri, sizeof(context->source_pguri));
 	strlcpy(context->target_pguri, target_pguri, sizeof(context->target_pguri));
 	strlcpy(context->origin, origin, sizeof(context->origin));
 

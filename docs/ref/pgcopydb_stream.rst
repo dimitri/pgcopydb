@@ -5,29 +5,52 @@ pgcopydb stream
 
 pgcopydb stream - Stream changes from source database
 
+.. warning::
+
+   **This mode of operations has been designed for unit testing only.**
+
+   Consider using the :ref:`pgcopydb_follow` command instead.
+
 This command prefixes the following sub-commands:
 
 ::
 
   pgcopydb stream
     setup      Setup source and target systems for logical decoding
+    cleanup    cleanup source and target systems for logical decoding
     prefetch   Stream JSON changes from the source database and transform them to SQL
     catchup    Apply prefetched changes from SQL files to the target database
+  + create     Create resources needed for pgcopydb
+  + drop       Drop resources needed for pgcopydb
+  + sentinel   Maintain a sentinel table on the source database
     receive    Stream changes from the source database
     transform  Transform changes from the source database into SQL commands
     apply      Apply changes from the source database into the target database
+
+  pgcopydb stream create
+    slot    Create a replication slot in the source database
+    origin  Create a replication origin in the target database
+
+  pgcopydb stream drop
+    slot    Drop a replication slot in the source database
+    origin  Drop a replication origin in the target database
+
+  pgcopydb stream sentinel
+    create  Create the sentinel table on the source database
+    drop    Drop the sentinel table on the source database
+    get     Get the sentinel table values on the source database
+  + set     Maintain a sentinel table on the source database
+
+  pgcopydb stream sentinel set
+    startpos  Set the sentinel start position LSN on the source database
+    endpos    Set the sentinel end position LSN on the source database
+    apply     Set the sentinel apply mode on the source database
+    prefetch  Set the sentinel prefetch mode on the source database
 
 Those commands implement a part of the whole database replay operation as
 detailed in section :ref:`pgcopydb_follow`. Only use those commands to debug
 a specific part, or because you know that you just want to implement that
 step.
-
-.. warning::
-
-   Using the ``pgcopydb follow`` command or the command ``pgcopydb
-   clone --follow`` is strongly advised.
-
-   This mode of operations has been designed for unit testing.
 
 .. note::
 
@@ -41,8 +64,6 @@ step.
    commands still keep track of their progress, but have to be given more
    information to work.
 
-This is still a work in progress. Stay tuned.
-
 .. _pgcopydb_stream_setup:
 
 pgcopydb stream setup
@@ -51,9 +72,10 @@ pgcopydb stream setup
 pgcopydb stream setup - Setup source and target systems for logical decoding
 
 The command ``pgcopydb stream setup`` connects to the source database and
-create a replication slot using the logical decoding plugin `wal2json`__,
-then connects to the target database and creates a replication origin
-positioned at the LSN position of the just created replication slot.
+creates a replication slot using the logical decoding plugin `wal2json`__,
+then creates a ``pgcopydb.sentinel`` table, and then connects to the target
+database and creates a replication origin positioned at the LSN position of
+the just created replication slot.
 
 __ https://github.com/eulerto/wal2json/
 
@@ -62,6 +84,32 @@ __ https://github.com/eulerto/wal2json/
 
    pgcopydb stream setup: Setup source and target systems for logical decoding
    usage: pgcopydb stream setup  --source ... --target ... --dir ...
+
+     --source         Postgres URI to the source database
+     --target         Postgres URI to the target database
+     --dir            Work directory to use
+     --restart        Allow restarting when temp files exist already
+     --resume         Allow resuming operations after a failure
+     --not-consistent Allow taking a new snapshot on the source database
+     --snapshot       Use snapshot obtained with pg_export_snapshot
+     --slot-name      Stream changes recorded by this slot
+     --origin         Name of the Postgres replication origin
+
+.. _pgcopydb_stream_cleanup:
+
+pgcopydb stream cleanup
+-----------------------
+
+pgcopydb stream cleanup - cleanup source and target systems for logical decoding
+
+The command ``pgcopydb stream cleanup`` connects to the source and target
+databases to delete the objects created in the ``pgcopydb stream setup``
+step.
+
+::
+
+   pgcopydb stream cleanup: cleanup source and target systems for logical decoding
+   usage: pgcopydb stream cleanup  --source ... --target ... --dir ...
 
      --source         Postgres URI to the source database
      --target         Postgres URI to the target database
@@ -131,6 +179,199 @@ applies changes from the SQL files that have been prepared with the
      --not-consistent Allow taking a new snapshot on the source database
      --slot-name      Stream changes recorded by this slot
      --endpos         LSN position where to stop receiving changes  --origin         Name of the Postgres replication origin
+
+
+.. _pgcopydb_stream_create_slot:
+
+pgcopydb stream create slot
+---------------------------
+
+pgcopydb stream create slot - Create a replication slot in the source database
+
+The command ``pgcopydb stream create slot`` connects to the source database
+and executes a SQL query to create a logical replication slot using the
+plugin ``wal2json``.
+
+::
+
+   pgcopydb create slot: Create a replication slot in the source database
+   usage: pgcopydb create slot  --source ...
+
+     --source         Postgres URI to the source database
+     --dir            Work directory to use
+     --snapshot       Use snapshot obtained with pg_export_snapshot
+     --slot-name      Use this Postgres replication slot name
+
+.. _pgcopydb_stream_create_origin:
+
+pgcopydb stream create origin
+-----------------------------
+
+pgcopydb stream create origin - Create a replication origin in the target database
+
+The command ``pgcopydb stream create origin`` connects to the target
+database and executes a SQL query to create a logical replication origin.
+The starting LSN position ``--startpos`` is required.
+
+::
+
+   pgcopydb stream create origin: Create a replication origin in the target database
+   usage: pgcopydb stream create origin  --target ...
+
+     --target         Postgres URI to the target database
+     --dir            Work directory to use
+     --origin         Use this Postgres origin name
+     --start-pos      LSN position from where to start applying changes
+
+.. _pgcopydb_stream_drop_slot:
+
+pgcopydb stream drop slot
+-------------------------
+
+pgcopydb stream drop slot - Drop a replication slot in the source database
+
+The command ``pgcopydb stream drop slot`` connects to the source database
+and executes a SQL query to drop the logical replication slot with the given
+name (that defaults to ``pgcopydb``).
+
+::
+
+   pgcopydb stream drop slot: Drop a replication slot in the source database
+   usage: pgcopydb stream drop slot  --source ...
+
+     --source         Postgres URI to the source database
+     --dir            Work directory to use
+     --slot-name      Use this Postgres replication slot name
+
+.. _pgcopydb_stream_drop_origin:
+
+pgcopydb stream drop origin
+---------------------------
+
+pgcopydb stream drop origin - Drop a replication origin in the target database
+
+The command ``pgcopydb stream drop origin`` connects to the target database
+and executes a SQL query to drop the logical replication origin with the
+given name (that defaults to ``pgcopydb``).
+
+::
+
+   usage: pgcopydb stream drop origin  --target ...
+
+     --target         Postgres URI to the target database
+     --dir            Work directory to use
+     --origin         Use this Postgres origin name
+
+
+.. _pgcopydb_stream_sentinel_create:
+
+pgcopydb stream sentinel create
+-------------------------------
+
+pgcopydb stream sentinel create - Create the sentinel table on the source database
+
+The ``pgcopydb.sentinel`` table allows to remote control the prefetch and
+catchup processes of the logical decoding implementation in pgcopydb.
+
+::
+
+   pgcopydb stream sentinel create: Create the sentinel table on the source database
+   usage: pgcopydb stream sentinel create  --source ...
+
+     --source      Postgres URI to the source database
+     --startpos    Start replaying changes when reaching this LSN
+     --endpos      Stop replaying changes when reaching this LSN
+
+
+.. _pgcopydb_stream_sentinel_drop:
+
+pgcopydb stream sentinel drop
+-----------------------------
+
+pgcopydb stream sentinel drop - Drop the sentinel table on the source database
+
+The ``pgcopydb.sentinel`` table allows to remote control the prefetch and
+catchup processes of the logical decoding implementation in pgcopydb.
+
+::
+
+   pgcopydb stream sentinel drop: Drop the sentinel table on the source database
+   usage: pgcopydb stream sentinel drop  --source ...
+
+     --source      Postgres URI to the source database
+
+.. _pgcopydb_stream_sentinel_get:
+
+pgcopydb stream sentinel get
+----------------------------
+
+pgcopydb stream sentinel get - Get the sentinel table values on the source database
+
+::
+
+   pgcopydb stream sentinel get: Get the sentinel table values on the source database
+   usage: pgcopydb stream sentinel get  --source ...
+
+     --source      Postgres URI to the source database
+
+.. _pgcopydb_stream_sentinel_set_startpos:
+
+pgcopydb stream sentinel set startpos
+-------------------------------------
+
+pgcopydb stream sentinel set startpos - Set the sentinel start position LSN on the source database
+
+::
+
+   pgcopydb stream sentinel set startpos: Set the sentinel start position LSN on the source database
+   usage: pgcopydb stream sentinel set startpos  --source ... <start LSN>
+
+     --source      Postgres URI to the source database
+
+.. _pgcopydb_stream_sentinel_set_endpos:
+
+pgcopydb stream sentinel set endpos
+-----------------------------------
+
+pgcopydb stream sentinel set endpos - Set the sentinel end position LSN on the source database
+
+::
+
+   pgcopydb stream sentinel set endpos: Set the sentinel end position LSN on the source database
+   usage: pgcopydb stream sentinel set endpos  --source ... <end LSN>
+
+     --source      Postgres URI to the source database
+     --current     Use pg_current_wal_flush_lsn() as the endpos
+
+
+.. _pgcopydb_stream_sentinel_set_apply:
+
+pgcopydb stream sentinel set apply
+----------------------------------
+
+pgcopydb stream sentinel set apply - Set the sentinel apply mode on the source database
+
+::
+
+   pgcopydb stream sentinel set apply: Set the sentinel apply mode on the source database
+   usage: pgcopydb stream sentinel set apply  --source ... <true|false>
+
+     --source      Postgres URI to the source database
+
+
+.. _pgcopydb_stream_sentinel_set_prefetch:
+
+pgcopydb stream sentinel set prefetch
+-------------------------------------
+
+pgcopydb stream sentinel set prefetch - Set the sentinel prefetch mode on the source database
+
+::
+
+   pgcopydb stream sentinel set prefetch: Set the sentinel prefetch mode on the source database
+   usage: pgcopydb stream sentinel set prefetch  --source ... <true|false>
+
+     --source      Postgres URI to the source database
 
 
 .. _pgcopydb_stream_receive:
@@ -301,6 +542,14 @@ The following options are available to ``pgcopydb stream`` sub-commands:
   target, where each source should have their own unique origin node name.
 
   __ https://www.postgresql.org/docs/current/replication-origins.html
+
+--startpos
+
+  Logical replication target system registers progress by assigning a
+  current LSN to the ``--origin`` node name. When creating an origin on the
+  target database system, it is required to provide the current LSN from the
+  source database system, in order to properly bootstrap pgcopydb logical
+  decoding.
 
 Environment
 -----------

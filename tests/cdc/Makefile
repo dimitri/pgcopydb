@@ -12,6 +12,7 @@ down:
 	docker-compose down
 
 build:
+	$(MAKE) -C .. build
 	docker-compose build
 
 .PHONY: up down build test

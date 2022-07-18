@@ -15,6 +15,10 @@ with this simple command line::
 
   $ pgcopydb clone --table-jobs 4 --index-jobs 4
 
+It is also possible with ``pgcopydb`` to implement Change Data Capture and
+replay data modifications happening on the source database to the target
+database. See the :ref:`pgcopydb_follow` command.
+
 How to copy a Postgres database
 -------------------------------
 

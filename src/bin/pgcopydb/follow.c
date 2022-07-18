@@ -128,9 +128,10 @@ follow_wait_subprocesses(StreamSpecs *specs, pid_t prefetch, pid_t catchup)
 
 			if (prefetchExited)
 			{
-				log_info("Prefetch process %d has terminated [%d]",
-						 prefetch,
-						 returnCode);
+				log_level(returnCode == 0 ? LOG_INFO : LOG_ERROR,
+						  "Prefetch process %d has terminated [%d]",
+						  prefetch,
+						  returnCode);
 			}
 
 			success = success || returnCode == 0;
@@ -148,9 +149,10 @@ follow_wait_subprocesses(StreamSpecs *specs, pid_t prefetch, pid_t catchup)
 
 			if (catchupExited)
 			{
-				log_info("Catch-up process %d has terminated [%d]",
-						 catchup,
-						 returnCode);
+				log_level(returnCode == 0 ? LOG_INFO : LOG_ERROR,
+						  "Catch-up process %d has terminated [%d]",
+						  catchup,
+						  returnCode);
 			}
 
 			success = success || returnCode == 0;

@@ -80,5 +80,4 @@ pgcopydb stream catchup --resume --endpos "${lsn}" -vv
 pgcopydb stream catchup --resume --endpos "${lsn}" -vv
 
 # cleanup
-pgcopydb drop origin
-pgcopydb drop slot
+pgcopydb stream cleanup

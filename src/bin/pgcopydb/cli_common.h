@@ -42,6 +42,7 @@ typedef struct CopyDBOptions
 
 	bool follow;
 	bool createSlot;
+	bool currentpos;
 	uint64_t endpos;
 	uint64_t startpos;
 

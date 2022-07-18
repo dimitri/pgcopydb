@@ -352,6 +352,9 @@ typedef struct LogicalStreamContext
 	const char *buffer;
 
 	TimestampTz now;
+	TimestampTz lastFeedbackSync;
+	XLogRecPtr endpos;          /* might be update at runtime */
+
 	LogicalTrackLSN *tracking;
 } LogicalStreamContext;
 
@@ -380,6 +383,7 @@ typedef struct LogicalStreamClient
 	LogicalStreamReceiver writeFunction;
 	LogicalStreamReceiver flushFunction;
 	LogicalStreamReceiver closeFunction;
+	LogicalStreamReceiver feedbackFunction;
 
 	int fsync_interval;
 	int standby_message_timeout;
@@ -430,5 +434,36 @@ bool pgsql_create_replication_slot(PGSQL *pgsql,
 bool pgsql_drop_replication_slot(PGSQL *pgsql, const char *slotName);
 
 bool pgsql_role_exists(PGSQL *pgsql, const char *roleName, bool *exists);
+
+
+/*
+ * pgcopydb sentinel is a table that's created on the source database and
+ * allows communicating elements from the outside, and in between the receive
+ * and apply processes.
+ */
+typedef struct CopyDBSentinel
+{
+	bool apply;
+	uint64_t startpos;
+	uint64_t endpos;
+	uint64_t write_lsn;
+	uint64_t flush_lsn;
+	uint64_t replay_lsn;
+} CopyDBSentinel;
+
+bool pgsql_update_sentinel_startpos(PGSQL *pgsql, uint64_t startpos);
+bool pgsql_update_sentinel_endpos(PGSQL *pgsql, bool current, uint64_t endpos);
+bool pgsql_update_sentinel_apply(PGSQL *pgsql, bool apply);
+
+bool pgsql_get_sentinel(PGSQL *pgsql, CopyDBSentinel *sentinel);
+
+bool pgsql_sync_sentinel_recv(PGSQL *pgsql,
+							  uint64_t write_lsn,
+							  uint64_t flush_lsn,
+							  CopyDBSentinel *sentinel);
+
+bool pgsql_sync_sentinel_apply(PGSQL *pgsql,
+							   uint64_t replay_lsn,
+							   CopyDBSentinel *sentinel);
 
 #endif /* PGSQL_H */

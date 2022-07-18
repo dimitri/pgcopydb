@@ -1,13 +1,6 @@
 pgcopydb clone
 ==============
 
-::
-
-   pgcopydb
-     clone    Clone an entire database from source to target
-     fork     Clone an entire database from source to target
-     follow   Replay changes from the source database to the target database
-
 .. _pgcopydb_clone:
 
 pgcopydb clone
@@ -46,27 +39,26 @@ Postgres instance to the target Postgres instance.
 .. _pgcopydb_fork:
 
 pgcopydb fork
---------------
+-------------
 
 The command ``pgcopydb fork`` copies a database from the given source
 Postgres instance to the target Postgres instance. This command is an alias
 to the command ``pgcopydb clone`` seen above.
 
-.. _pgcopydb_follow:
+.. _pgcopydb_copy__db:
 
-pgcopydb follow
----------------
+pgcopydb copy-db
+----------------
 
-The command ``pgcopydb follow`` replays the database changes registered at
-the source database with the logical decoding pluing `wal2json`__ into the
-target database.
+The command ``pgcopydb copy-db`` copies a database from the given source
+Postgres instance to the target Postgres instance. This command is an alias
+to the command ``pgcopydb clone`` seen above, and available for backward
+compatibility only.
 
-__ https://github.com/eulerto/wal2json/
+.. warning::
 
-This command runs two concurrent subproces. The first one pre-fetches the
-changes into local JSON files and transforms the JSON files in SQL files.
-The second process catches-up by applying the SQL files to the target
-database system.
+   This command is deprecated and will get removed from pgcopydb when
+   hitting version 1.0, please upgrade your scripts and integrations.
 
 Description
 -----------

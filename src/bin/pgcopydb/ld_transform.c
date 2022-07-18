@@ -77,7 +77,8 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 			  content.count,
 			  content.filename);
 
-	int maxTxnsCount = content.count / 2; /* {action: B} {action: C} */
+	/* {action: B} {action: C} {action: X} */
+	int maxTxnsCount = (content.count / 2) + 1;
 	LogicalTransactionArray txns = { 0 };
 
 	/* the actual count is maintained in the for loop below */
@@ -97,6 +98,7 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 	 * internal representation structure.
 	 */
 	int currentTxIndex = 0;
+	LogicalTransaction *previousTx = NULL;
 	LogicalTransaction *currentTx = &(txns.array[currentTxIndex]);
 
 	for (int i = 0; i < content.count; i++)
@@ -141,7 +143,19 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 				return false;
 			}
 
+			previousTx = currentTx;
 			currentTx = &(txns.array[currentTxIndex]);
+		}
+
+		/* do we have to hack the nextlsn of the previous transaction? */
+		else if (metadata->action == STREAM_ACTION_SWITCH)
+		{
+			log_debug("WAL switch, previous commit nextlsn was %X/%X, "
+					  "now set to %X/%X",
+					  LSN_FORMAT_ARGS(previousTx->nextlsn),
+					  LSN_FORMAT_ARGS(metadata->nextlsn));
+
+			previousTx->nextlsn = metadata->nextlsn;
 		}
 	}
 
@@ -279,6 +293,12 @@ parseMessage(LogicalTransaction *txn,
 		{
 			txn->commitLSN = metadata->lsn;
 
+			break;
+		}
+
+		case STREAM_ACTION_SWITCH:
+		{
+			/* nothing to retrieve here, the metadata is all we need */
 			break;
 		}
 

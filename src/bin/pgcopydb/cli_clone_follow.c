@@ -231,18 +231,21 @@ cli_follow(int argc, char **argv)
 	 * First create the replication slot on the source database, and the origin
 	 * (replication progress tracking) on the target database.
 	 */
-	uint64_t lsn = 0;
-
-	if (!stream_create_repl_slot(&copySpecs, specs.slotName, &lsn))
+	if (!stream_setup_databases(&copySpecs, specs.slotName, specs.origin))
 	{
 		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (!stream_create_origin(&copySpecs, specs.origin, lsn))
+	/*
+	 * Now remove the possibly still existing stream context files from
+	 * previous round of operations (--resume, etc). We want to make sure that
+	 * the catchup process reads the files created on this connection.
+	 */
+	if (!stream_cleanup_context(&specs))
 	{
 		/* errors have already been logged */
-		exit(EXIT_CODE_TARGET);
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	pid_t prefetch = -1;
@@ -253,13 +256,6 @@ cli_follow(int argc, char **argv)
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);
 	}
-
-	/*
-	 * We need to wait for the prefetch process to create the stream context
-	 * files (wal_segment_size, current timeline, timeline history) before we
-	 * start the catchup process.
-	 */
-	pg_usleep(CATCHINGUP_SLEEP_MS * 1000);
 
 	if (!follow_start_catchup(&specs, &catchup))
 	{

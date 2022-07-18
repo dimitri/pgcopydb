@@ -33,6 +33,7 @@ static void cli_stream_transform(int argc, char **argv);
 static void cli_stream_apply(int argc, char **argv);
 
 static void cli_stream_setup(int argc, char **argv);
+static void cli_stream_cleanup(int argc, char **argv);
 static void cli_stream_prefetch(int argc, char **argv);
 static void cli_stream_catchup(int argc, char **argv);
 
@@ -54,6 +55,23 @@ static CommandLine stream_setup_command =
 		"  --origin         Name of the Postgres replication origin\n",
 		cli_stream_getopts,
 		cli_stream_setup);
+
+static CommandLine stream_cleanup_command =
+	make_command(
+		"cleanup",
+		"cleanup source and target systems for logical decoding",
+		" --source ... --target ... --dir ...",
+		"  --source         Postgres URI to the source database\n"
+		"  --target         Postgres URI to the target database\n"
+		"  --dir            Work directory to use\n"
+		"  --restart        Allow restarting when temp files exist already\n"
+		"  --resume         Allow resuming operations after a failure\n"
+		"  --not-consistent Allow taking a new snapshot on the source database\n"
+		"  --snapshot       Use snapshot obtained with pg_export_snapshot\n"
+		"  --slot-name      Stream changes recorded by this slot\n"
+		"  --origin         Name of the Postgres replication origin\n",
+		cli_stream_getopts,
+		cli_stream_cleanup);
 
 static CommandLine stream_prefetch_command =
 	make_command(
@@ -132,8 +150,12 @@ static CommandLine stream_apply_command =
 
 static CommandLine *stream_subcommands[] = {
 	&stream_setup_command,
+	&stream_cleanup_command,
 	&stream_prefetch_command,
 	&stream_catchup_command,
+	&create_commands,
+	&drop_commands,
+	&sentinel_commands,
 	&stream_receive_command,
 	&stream_transform_command,
 	&stream_apply_command,
@@ -457,20 +479,67 @@ cli_stream_setup(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	uint64_t lsn = 0;
-
-	if (!stream_create_repl_slot(&copySpecs, streamDBoptions.slotName, &lsn))
+	if (!stream_setup_databases(&copySpecs,
+								streamDBoptions.slotName,
+								streamDBoptions.origin))
 	{
 		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+}
+
+
+/*
+ * cli_stream_cleanup cleans-up by dropping source sentinel table and
+ * replication slot, and dropping target replication origin.
+ */
+static void
+cli_stream_cleanup(int argc, char **argv)
+{
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) find_pg_commands(&(copySpecs.pgPaths));
+
+	bool resume = true;         /* pretend --resume has been used */
+	bool restart = false;       /* pretend --restart has NOT been used */
+	bool auxilliary = false;
+
+	if (!copydb_init_workdir(&copySpecs,
+							 NULL,
+							 restart,
+							 resume,
+							 auxilliary))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (!stream_create_origin(&copySpecs,
-							  streamDBoptions.origin,
-							  lsn))
+	RestoreOptions restoreOptions = { 0 };
+
+	if (!copydb_init_specs(&copySpecs,
+						   streamDBoptions.source_pguri,
+						   streamDBoptions.target_pguri,
+						   1,   /* tableJobs */
+						   1,   /* indexJobs */
+						   DATA_SECTION_ALL,
+						   streamDBoptions.snapshot,
+						   restoreOptions,
+						   false, /* roles */
+						   false, /* skipLargeObjects */
+						   restart,
+						   resume,
+						   !streamDBoptions.notConsistent))
 	{
 		/* errors have already been logged */
-		exit(EXIT_CODE_TARGET);
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!stream_cleanup_databases(&copySpecs,
+								  streamDBoptions.slotName,
+								  streamDBoptions.origin))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 }
 
@@ -627,9 +696,11 @@ cli_stream_apply(int argc, char **argv)
 
 	if (!setupReplicationOrigin(&context,
 								&(copySpecs.cfPaths.cdc),
+								streamDBoptions.source_pguri,
 								streamDBoptions.target_pguri,
 								streamDBoptions.origin,
-								streamDBoptions.endpos))
+								streamDBoptions.endpos,
+								true))
 	{
 		log_error("Failed to setup replication origin on the target database");
 		exit(EXIT_CODE_TARGET);

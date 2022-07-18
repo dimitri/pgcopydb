@@ -26,7 +26,7 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
 # we need to export a snapshot, and keep it while the indivual steps are
 # running, one at a time
 
-coproc ( pgcopydb create snapshot -vv )
+coproc ( pgcopydb snapshot -vv )
 
 sleep 1
 

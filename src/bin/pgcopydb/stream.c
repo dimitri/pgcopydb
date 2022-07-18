@@ -79,20 +79,22 @@ startLogicalStreaming(StreamSpecs *specs)
 {
 	/* wal2json options we want to use for the plugin */
 	KeyVal options = {
-		.count = 5,
+		.count = 6,
 		.keywords = {
 			"format-version",
 			"include-xids",
 			"include-lsn",
 			"include-transaction",
-			"include-timestamp"
+			"include-timestamp",
+			"filter-tables"
 		},
 		.values = {
 			"2",
 			"true",
 			"true",
 			"true",
-			"true"
+			"true",
+			"pgcopydb.*"
 		}
 	};
 
@@ -103,38 +105,30 @@ startLogicalStreaming(StreamSpecs *specs)
 	stream.writeFunction = &streamWrite;
 	stream.flushFunction = &streamFlush;
 	stream.closeFunction = &streamClose;
-
-	StreamContext privateContext = { 0 };
-	LogicalStreamContext context = { 0 };
-
-	privateContext.mode = specs->mode;
-	privateContext.paths = specs->paths;
-	privateContext.startLSN = specs->startLSN;
-
-	context.private = (void *) &(privateContext);
+	stream.feedbackFunction = &streamFeedback;
 
 	/*
 	 * Read possibly already existing file to initialize the start LSN from a
 	 * previous run of our command.
 	 */
-	StreamContent latestStreamedContent = { 0 };
-
-	if (!stream_read_latest(specs, &latestStreamedContent))
+	if (!streamCheckResumePosition(specs))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	if (latestStreamedContent.count > 0)
-	{
-		LogicalMessageMetadata *latest =
-			&(latestStreamedContent.messages[latestStreamedContent.count - 1]);
+	LogicalStreamContext context = { 0 };
+	StreamContext privateContext = { 0 };
 
-		specs->startLSN = latest->nextlsn;
+	privateContext.mode = specs->mode;
+	privateContext.paths = specs->paths;
+	privateContext.startpos = specs->startpos;
 
-		log_info("Resuming streaming at LSN %X/%X",
-				 LSN_FORMAT_ARGS(specs->startLSN));
-	}
+	strlcpy(privateContext.source_pguri,
+			specs->source_pguri,
+			sizeof(privateContext.source_pguri));
+
+	context.private = (void *) &(privateContext);
 
 	/*
 	 * In case of being disconnected or other transient errors, reconnect and
@@ -147,7 +141,7 @@ startLogicalStreaming(StreamSpecs *specs)
 		if (!pgsql_init_stream(&stream,
 							   specs->logrep_pguri,
 							   specs->slotName,
-							   specs->startLSN,
+							   specs->startpos,
 							   specs->endpos))
 		{
 			/* errors have already been logged */
@@ -204,6 +198,115 @@ startLogicalStreaming(StreamSpecs *specs)
 
 
 /*
+ * streamCheckResumePosition checks that the resume position on the replication
+ * slot on the source database is in-sync with the lastest on-file LSN we have.
+ */
+bool
+streamCheckResumePosition(StreamSpecs *specs)
+{
+	StreamContent latestStreamedContent = { 0 };
+
+	if (!stream_read_latest(specs, &latestStreamedContent))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * When we don't have any file on-disk yet, we might have specifications
+	 * for when to start in the pgcopydb sentinel table. The sentinel only
+	 * applies to STREAM_MODE_PREFETCH, in STREAM_MODE_RECEIVE we bypass that
+	 * mechanism entirely.
+	 *
+	 * When STREAM_MODE_PREFETCH is set, it is expected that the pgcopydb
+	 * sentinel table has been setup before starting the logical decoding
+	 * client.
+	 *
+	 * The pgcopydb sentinel table also contains an endpos. The --endpos
+	 * command line option (found in specs->endpos) prevails, but when it's not
+	 * been used, we have a look at the sentinel value.
+	 */
+	PGSQL src = { 0 };
+
+	if (!pgsql_init(&src, specs->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	CopyDBSentinel sentinel = { 0 };
+
+	if (!pgsql_get_sentinel(&src, &sentinel))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (specs->endpos == InvalidXLogRecPtr)
+	{
+		specs->endpos = sentinel.endpos;
+
+		if (specs->endpos != InvalidXLogRecPtr)
+		{
+			log_info("Streaming is setup to end at LSN %X/%X",
+					 LSN_FORMAT_ARGS(specs->endpos));
+		}
+	}
+
+	if (latestStreamedContent.count == 0)
+	{
+		if (specs->mode == STREAM_MODE_RECEIVE)
+		{
+			return true;
+		}
+
+		if (sentinel.startpos != InvalidXLogRecPtr)
+		{
+			specs->startpos = sentinel.startpos;
+
+			log_info("Resuming streaming at LSN %X/%X",
+					 LSN_FORMAT_ARGS(specs->startpos));
+		}
+	}
+	else
+	{
+		LogicalMessageMetadata *latest =
+			&(latestStreamedContent.messages[latestStreamedContent.count - 1]);
+
+		specs->startpos = latest->nextlsn;
+
+		log_info("Resuming streaming at LSN %X/%X",
+				 LSN_FORMAT_ARGS(specs->startpos));
+	}
+
+	bool flush = false;
+	uint64_t lsn = 0;
+
+	if (!pgsql_replication_slot_exists(&src, specs->slotName, &flush, &lsn))
+	{
+		/* errors have already been logged */
+	}
+
+	/*
+	 * The receive process knows how to skip over LSNs that have already been
+	 * fetched in a previous run. What we are not able to do is fill-in a gap
+	 * between what we have on-disk and what the replication slot can send us.
+	 */
+	if (specs->startpos < lsn)
+	{
+		log_error("Failed to resume replication: on-disk next LSN is %X/%X  "
+				  "and replication slot LSN is %X/%X",
+				  LSN_FORMAT_ARGS(specs->startpos),
+				  LSN_FORMAT_ARGS(lsn));
+
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * streamWrite is a callback function for our LogicalStreamClient.
  *
  * This function is called for each message received in pgsql_stream_logical.
@@ -222,10 +325,13 @@ streamWrite(LogicalStreamContext *context)
 		return false;
 	}
 
-	LogicalMessageMetadata metadata = { 0 };
+	LogicalMessageMetadata *metadata = &(privateContext->metadata);
 	JSON_Value *json = json_parse_string(context->buffer);
 
-	if (!parseMessageMetadata(&metadata, context->buffer, json, false))
+	/* ensure we have a new all-zero metadata structure for the new message */
+	(void) memset(metadata, 0, sizeof(LogicalMessageMetadata));
+
+	if (!parseMessageMetadata(metadata, context->buffer, json, false))
 	{
 		/* errors have already been logged */
 		if (privateContext->jsonFile != NULL)
@@ -243,7 +349,7 @@ streamWrite(LogicalStreamContext *context)
 
 	json_value_free(json);
 
-	(void) updateStreamCounters(privateContext, &metadata);
+	(void) updateStreamCounters(privateContext, metadata);
 
 	/*
 	 * Write the logical decoding message to disk, appending to the already
@@ -296,10 +402,11 @@ streamWrite(LogicalStreamContext *context)
 		context->tracking->written_lsn = context->cur_record_lsn;
 	}
 
-	log_debug("Received action %c for XID %u in LSN %X/%X",
-			  metadata.action,
-			  metadata.xid,
-			  LSN_FORMAT_ARGS(metadata.lsn));
+	log_debug("Received action %c for XID %u in LSN %X/%X, Next LSN %X/%X",
+			  metadata->action,
+			  metadata->xid,
+			  LSN_FORMAT_ARGS(metadata->lsn),
+			  LSN_FORMAT_ARGS(metadata->nextlsn));
 
 	return true;
 }
@@ -342,6 +449,24 @@ streamRotateFile(LogicalStreamContext *context)
 	{
 		bool time_to_abort = false;
 
+		/*
+		 * Here we might have an early WAL file rotation, either because of
+		 * archive_timeout or a call to pg_switch_wal() for instance. In case
+		 * the current message nextlsn doesn't belong to the new file we're
+		 * about to create, add an extra empty transaction with the expected
+		 * nextlsn.
+		 */
+		if (privateContext->metadata.nextlsn < context->cur_record_lsn)
+		{
+			fformat(privateContext->jsonFile,
+					"{\"action\":\"X\",\"lsn\":\"%X/%X\",\"nextlsn\":\"%X/%X\"}\n",
+					LSN_FORMAT_ARGS(privateContext->metadata.nextlsn),
+					LSN_FORMAT_ARGS(context->cur_record_lsn));
+
+			log_debug("Inserted action SWITCH for nextlsn %X/%X",
+					  LSN_FORMAT_ARGS(context->cur_record_lsn));
+		}
+
 		if (!streamCloseFile(context, time_to_abort))
 		{
 			/* errors have already been logged */
@@ -381,6 +506,15 @@ streamRotateFile(LogicalStreamContext *context)
 	char latest[MAXPGPATH] = { 0 };
 
 	sformat(latest, sizeof(latest), "%s/latest", privateContext->paths.dir);
+
+	if (file_exists(latest))
+	{
+		if (!unlink_file(latest))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
 
 	if (!create_symbolic_link(privateContext->walFileName, latest))
 	{
@@ -539,6 +673,72 @@ streamClose(LogicalStreamContext *context)
 
 
 /*
+ * streamFeedback is a callback function for our LogicalStreamClient.
+ *
+ * This function is called when it's time to send feedback to the source
+ * Postgres instance, include write_lsn, flush_lsn, and replay_lsn. Once in a
+ * while we fetch the replay_lsn from the pgcopydb sentinel table on the source
+ * database, and sync with the current progress.
+ */
+bool
+streamFeedback(LogicalStreamContext *context)
+{
+	StreamContext *privateContext = (StreamContext *) context->private;
+
+	int feedbackInterval = 10 * 1000; /* a minute */
+
+	if (!feTimestampDifferenceExceeds(context->lastFeedbackSync,
+									  context->now,
+									  feedbackInterval))
+	{
+		return true;
+	}
+
+	PGSQL src = { 0 };
+
+	if (!pgsql_init(&src, privateContext->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	CopyDBSentinel sentinel = { 0 };
+
+	if (!pgsql_sync_sentinel_recv(&src,
+								  context->tracking->written_lsn,
+								  context->tracking->flushed_lsn,
+								  &sentinel))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * Update the main LogicalStreamClient parts, API with the lower-level
+	 * logical decoding client.
+	 */
+	privateContext->apply = sentinel.apply;
+	privateContext->endpos = sentinel.endpos;
+	privateContext->startpos = sentinel.startpos;
+
+	context->endpos = privateContext->endpos;
+	context->tracking->applied_lsn = sentinel.replay_lsn;
+
+	context->lastFeedbackSync = context->now;
+
+	log_debug("streamFeedback: written %X/%X flushed %X/%X applied %X/%X "
+			  " endpos %X/%X apply %s",
+			  LSN_FORMAT_ARGS(context->tracking->written_lsn),
+			  LSN_FORMAT_ARGS(context->tracking->flushed_lsn),
+			  LSN_FORMAT_ARGS(context->tracking->applied_lsn),
+			  LSN_FORMAT_ARGS(context->endpos),
+			  privateContext->apply ? "enabled" : "disabled");
+
+	return true;
+}
+
+
+/*
  * parseMessageMetadata parses just the metadata of the JSON replication
  * message we got from wal2json.
  */
@@ -558,7 +758,7 @@ parseMessageMetadata(LogicalMessageMetadata *metadata,
 
 	if (!skipAction)
 	{
-		/* action is one of "B", "C", "I", "U", "D", "T" */
+		/* action is one of "B", "C", "I", "U", "D", "T", "X" */
 		char *action = (char *) json_object_get_string(jsobj, "action");
 
 		if (action == NULL || strlen(action) != 1)
@@ -585,8 +785,11 @@ parseMessageMetadata(LogicalMessageMetadata *metadata,
 		}
 	}
 
-	double xid = json_object_get_number(jsobj, "xid");
-	metadata->xid = (uint32_t) xid;
+	if (metadata->action != STREAM_ACTION_SWITCH)
+	{
+		double xid = json_object_get_number(jsobj, "xid");
+		metadata->xid = (uint32_t) xid;
+	}
 
 	char *lsn = (char *) json_object_get_string(jsobj, "lsn");
 
@@ -859,6 +1062,11 @@ StreamActionFromChar(char action)
 			return STREAM_ACTION_MESSAGE;
 		}
 
+		case 'X':
+		{
+			return STREAM_ACTION_SWITCH;
+		}
+
 		default:
 		{
 			log_error("Failed to parse JSON message action: \"%c\"", action);
@@ -967,6 +1175,99 @@ streamWaitForSubprocess(LogicalStreamContext *context)
 				  status);
 
 		privateContext->subprocess = 0;
+	}
+
+	return true;
+}
+
+
+/*
+ * stream_setup_source_database sets up the source database with a replication
+ * slot, a sentinel table, and the target database with a replication origin.
+ */
+bool
+stream_setup_databases(CopyDataSpec *copySpecs, char *slotName, char *origin)
+{
+	uint64_t lsn = 0;
+
+	if (!stream_create_repl_slot(copySpecs, slotName, &lsn))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!stream_create_sentinel(copySpecs, lsn, InvalidXLogRecPtr))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!stream_create_origin(copySpecs, origin, lsn))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * stream_cleanup_source_database cleans up the source database and the target
+ * database.
+ */
+bool
+stream_cleanup_databases(CopyDataSpec *copySpecs, char *slotName, char *origin)
+{
+	PGSQL src = { 0 };
+	PGSQL dst = { 0 };
+
+	/*
+	 * Cleanup the source database (replication slot, pgcopydb sentinel).
+	 */
+	if (!pgsql_init(&src, copySpecs->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_begin(&src))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_drop_replication_slot(&src, slotName))
+	{
+		log_error("Failed to drop replication slot \"%s\"", slotName);
+		return false;
+	}
+
+	if (!pgsql_execute(&src, "drop schema if exists pgcopydb cascade"))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_commit(&src))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * Now cleanup the target database (replication origin).
+	 */
+	if (!pgsql_init(&dst, copySpecs->target_pguri, PGSQL_CONN_TARGET))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_replication_origin_drop(&dst, origin))
+	{
+		log_error("Failed to drop replication origin \"%s\"", origin);
+		return false;
 	}
 
 	return true;
@@ -1133,8 +1434,7 @@ stream_create_origin(CopyDataSpec *copySpecs, char *nodeName, uint64_t startpos)
 		bool acceptTrackedLSN = copySpecs->resume || lsn == startpos;
 
 		log_level(acceptTrackedLSN ? LOG_INFO : LOG_ERROR,
-				  "Replication origin \"%s\" already exists and "
-				  "progressed to LSN %X/%X",
+				  "Replication origin \"%s\" already exists at LSN %X/%X",
 				  nodeName,
 				  LSN_FORMAT_ARGS(lsn));
 
@@ -1147,6 +1447,99 @@ stream_create_origin(CopyDataSpec *copySpecs, char *nodeName, uint64_t startpos)
 	}
 
 	if (!pgsql_commit(&dst))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * stream_create_sentinel creates the pgcopydb sentinel table on the source
+ * database and registers the startpos, usually the same as the LSN returned
+ * from stream_create_repl_slot.
+ */
+bool
+stream_create_sentinel(CopyDataSpec *copySpecs,
+					   uint64_t startpos,
+					   uint64_t endpos)
+{
+	if (copySpecs->resume)
+	{
+		log_info("Skipping creation of pgcopydb.sentinel (--resume)");
+		return true;
+	}
+
+	char *sql[] = {
+		"create schema if not exists pgcopydb",
+		"drop table if exists pgcopydb.sentinel",
+		"create table pgcopydb.sentinel"
+		"(startpos pg_lsn, endpos pg_lsn, apply bool, "
+		" write_lsn pg_lsn, flush_lsn pg_lsn, replay_lsn pg_lsn)",
+		NULL
+	};
+
+	char *index = "create unique index on pgcopydb.sentinel((1))";
+
+	PGSQL *pgsql = &(copySpecs->sourceSnapshot.pgsql);
+
+	if (!pgsql_init(pgsql, copySpecs->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_begin(pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* create the schema and the table for pgcopydb.sentinel */
+	for (int i = 0; sql[i] != NULL; i++)
+	{
+		log_info("%s", sql[i]);
+
+		if (!pgsql_execute(pgsql, sql[i]))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_SOURCE);
+		}
+	}
+
+	/* now insert the sentinel values (startpos, endpos, false as apply) */
+	char *insert =
+		"insert into pgcopydb.sentinel "
+		"(startpos, endpos, apply, write_lsn, flush_lsn, replay_lsn) "
+		"values($1, $2, $3, '0/0', '0/0', '0/0')";
+
+	char startLSN[PG_LSN_MAXLENGTH] = { 0 };
+	char endLSN[PG_LSN_MAXLENGTH] = { 0 };
+
+	sformat(startLSN, sizeof(startLSN), "%X/%X", LSN_FORMAT_ARGS(startpos));
+	sformat(endLSN, sizeof(endLSN), "%X/%X", LSN_FORMAT_ARGS(endpos));
+
+	int paramCount = 3;
+	Oid paramTypes[3] = { LSNOID, LSNOID, BOOLOID };
+	const char *paramValues[3] = { startLSN, endLSN, "false" };
+
+	if (!pgsql_execute_with_params(pgsql, insert,
+								   paramCount, paramTypes, paramValues,
+								   NULL, NULL))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_execute(pgsql, index))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_commit(pgsql))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1208,6 +1601,23 @@ stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream)
 
 
 /*
+ * stream_cleanup_context removes the context files that are created upon
+ * connecting to the source database with the logical replication protocol.
+ */
+bool
+stream_cleanup_context(StreamSpecs *specs)
+{
+	bool success = true;
+
+	success = success && unlink_file(specs->paths.walsegsizefile);
+	success = success && unlink_file(specs->paths.tlifile);
+	success = success && unlink_file(specs->paths.tlihistfile);
+
+	return success;
+}
+
+
+/*
  * stream_read_context reads the stream context back from files
  * wal_segment_size and timeline history.
  */
@@ -1219,6 +1629,42 @@ stream_read_context(StreamSpecs *specs,
 	char *wal_segment_size = NULL;
 	long size = 0L;
 
+	/*
+	 * We need to read the 3 streaming context files that the receive process
+	 * prepares when connecting to the source database. Because the catchup
+	 * process might get here early, we implement a retry loop in case the
+	 * files have not been created yet.
+	 */
+	ConnectionRetryPolicy retryPolicy = { 0 };
+
+	(void) pgsql_set_retry_policy(&retryPolicy,
+								  CATCHINGUP_SLEEP_MS,
+								  -1, /* unbounded number of attempts */
+								  CATCHINGUP_SLEEP_MS / 1000,
+								  CATCHINGUP_SLEEP_MS / 1000);
+
+	while (!pgsql_retry_policy_expired(&retryPolicy))
+	{
+		if (file_exists(specs->paths.walsegsizefile) &&
+			file_exists(specs->paths.tlifile) &&
+			file_exists(specs->paths.tlihistfile))
+		{
+			/* success: break out of the retry loop */
+			break;
+		}
+
+		int sleepTimeMs =
+			pgsql_compute_connection_retry_sleep_time(&retryPolicy);
+
+		log_debug("stream_read_context: waiting for context files "
+				  "to have been created, retrying in %dms",
+				  sleepTimeMs);
+
+		/* we have milliseconds, pg_usleep() wants microseconds */
+		(void) pg_usleep(sleepTimeMs * 1000);
+	}
+
+	/* we don't want to retry anymore, error out if files still don't exist */
 	if (!read_file(specs->paths.walsegsizefile, &wal_segment_size, &size))
 	{
 		/* errors have already been logged */
