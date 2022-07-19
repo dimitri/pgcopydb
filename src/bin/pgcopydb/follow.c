@@ -16,9 +16,6 @@
 #include "stream.h"
 
 
-static bool follow_wait_pid(pid_t subprocess, bool *exited, int *returnCode);
-
-
 /*
  * follow_start_prefetch starts a sub-process that prefetches changes from the
  * source database into local files.
@@ -40,6 +37,7 @@ follow_start_prefetch(StreamSpecs *specs, pid_t *pid)
 		case 0:
 		{
 			/* child process runs the command */
+			log_debug("Starting the prefetch sub-process");
 			if (!startLogicalStreaming(specs))
 			{
 				/* errors have already been logged */
@@ -82,6 +80,7 @@ follow_start_catchup(StreamSpecs *specs, pid_t *pid)
 		case 0:
 		{
 			/* child process runs the command */
+			log_debug("Starting the catchup sub-process");
 			if (!stream_apply_catchup(specs))
 			{
 				/* errors have already been logged */
@@ -104,7 +103,7 @@ follow_start_catchup(StreamSpecs *specs, pid_t *pid)
 
 
 /*
- * follow_waitpid waits until both sub-processes are finished.
+ * follow_wait_subprocesses waits until both sub-processes are finished.
  */
 bool
 follow_wait_subprocesses(StreamSpecs *specs, pid_t prefetch, pid_t catchup)
@@ -169,7 +168,7 @@ follow_wait_subprocesses(StreamSpecs *specs, pid_t prefetch, pid_t catchup)
 /*
  * follow_wait_pid waits for a given known sub-process.
  */
-static bool
+bool
 follow_wait_pid(pid_t subprocess, bool *exited, int *returnCode)
 {
 	int status = 0;

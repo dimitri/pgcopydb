@@ -252,6 +252,8 @@ typedef struct CopyDataSpec
 	bool resume;
 	bool consistent;
 
+	bool follow;                /* pgcopydb fork --follow */
+
 	int tableJobs;
 	int indexJobs;
 	Semaphore tableSemaphore;
