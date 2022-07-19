@@ -50,6 +50,9 @@
 /*
  * From postgres/src/include/access/xlogdefs.h
  */
+#ifdef LSN_FORMAT_ARGS
+#undef LSN_FORMAT_ARGS
+#endif
 #define LSN_FORMAT_ARGS(lsn) ((uint32) ((lsn) >> 32)), ((uint32) (lsn))
 
 
