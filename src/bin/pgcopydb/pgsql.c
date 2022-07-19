@@ -3290,9 +3290,10 @@ pgsqlSendFeedback(LogicalStreamClient *client,
 	if (client->current.written_lsn != InvalidXLogRecPtr ||
 		client->current.flushed_lsn != InvalidXLogRecPtr)
 	{
-		log_info("Report write_lsn %X/%X, flush_lsn %X/%X",
+		log_info("Report write_lsn %X/%X, flush_lsn %X/%X, replay_lsn %X/%X",
 				 LSN_FORMAT_ARGS(client->current.written_lsn),
-				 LSN_FORMAT_ARGS(client->current.flushed_lsn));
+				 LSN_FORMAT_ARGS(client->current.flushed_lsn),
+				 LSN_FORMAT_ARGS(client->current.applied_lsn));
 	}
 
 	replybuf[len] = 'r';

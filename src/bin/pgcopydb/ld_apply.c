@@ -134,7 +134,8 @@ stream_apply_catchup(StreamSpecs *specs)
 		 * When syncing with the pgcopydb sentinel we might receive a new
 		 * endpos, and it might mean we're done already.
 		 */
-		if (context.endpos != InvalidXLogRecPtr &&
+		if (!context.reachedEndPos &&
+			context.endpos != InvalidXLogRecPtr &&
 			context.endpos <= context.nextlsn)
 		{
 			context.reachedEndPos = true;
@@ -296,6 +297,8 @@ stream_apply_file(StreamApplyContext *context)
 	content.count =
 		splitLines(content.buffer, content.lines, MAX_STREAM_CONTENT_COUNT);
 
+	log_info("Replaying changes from file \"%s\"", context->sqlFileName);
+
 	log_debug("Read %d lines in file \"%s\"",
 			  content.count,
 			  content.filename);
@@ -353,9 +356,11 @@ stream_apply_file(StreamApplyContext *context)
 
 					if (context->reachedEndPos)
 					{
-						log_info("Apply reached end position %X/%X at %X/%X",
+						log_info("Apply reached end position %X/%X at %X/%X: "
+								 "next LSN is %X/%X",
 								 LSN_FORMAT_ARGS(context->endpos),
-								 LSN_FORMAT_ARGS(metadata.lsn));
+								 LSN_FORMAT_ARGS(metadata.lsn),
+								 LSN_FORMAT_ARGS(metadata.nextlsn));
 						break;
 					}
 				}

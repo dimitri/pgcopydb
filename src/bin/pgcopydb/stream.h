@@ -358,5 +358,6 @@ StreamAction parseSQLAction(const char *query, LogicalMessageMetadata *metadata)
 bool follow_start_prefetch(StreamSpecs *specs, pid_t *pid);
 bool follow_start_catchup(StreamSpecs *specs, pid_t *pid);
 bool follow_wait_subprocesses(StreamSpecs *specs, pid_t prefetch, pid_t catchup);
+bool follow_wait_pid(pid_t subprocess, bool *exited, int *returnCode);
 
 #endif /* STREAM_H */

@@ -150,7 +150,7 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 		/* do we have to hack the nextlsn of the previous transaction? */
 		else if (metadata->action == STREAM_ACTION_SWITCH)
 		{
-			log_debug("WAL switch, previous commit nextlsn was %X/%X, "
+			log_debug("WAL switch, commit message nextlsn was %X/%X, "
 					  "now set to %X/%X",
 					  LSN_FORMAT_ARGS(previousTx->nextlsn),
 					  LSN_FORMAT_ARGS(metadata->nextlsn));

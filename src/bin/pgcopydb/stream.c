@@ -264,8 +264,10 @@ streamCheckResumePosition(StreamSpecs *specs)
 		{
 			specs->startpos = sentinel.startpos;
 
-			log_info("Resuming streaming at LSN %X/%X",
-					 LSN_FORMAT_ARGS(specs->startpos));
+			log_info("Resuming streaming at LSN %X/%X "
+					 "from replication slot \"%s\"",
+					 LSN_FORMAT_ARGS(specs->startpos),
+					 specs->slotName);
 		}
 	}
 	else
@@ -275,8 +277,11 @@ streamCheckResumePosition(StreamSpecs *specs)
 
 		specs->startpos = latest->nextlsn;
 
-		log_info("Resuming streaming at LSN %X/%X",
-				 LSN_FORMAT_ARGS(specs->startpos));
+		log_info("Resuming streaming at LSN %X/%X "
+				 "from last message read in JSON file \"%s\", line %d",
+				 LSN_FORMAT_ARGS(specs->startpos),
+				 latestStreamedContent.filename,
+				 latestStreamedContent.count - 1);
 	}
 
 	bool flush = false;

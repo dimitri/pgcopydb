@@ -24,24 +24,8 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
 # alter the pagila schema to allow capturing DDLs without pkey
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/ddl.sql
 
-# create the replication slot that captures all the changes
-pgcopydb stream setup
-
 # pgcopydb copy db uses the environment variables
-pgcopydb copy-db
-
-#
-# Once the base copy is done, we can apply changes made by the inject
-# service that's running concurrently to this one.
-#
-# The inject script calls `pgcopydb stream sentinel set endpos --current`
-# when it's done injecting, and that's how we control when the command
-# `pgcopydb follow` stops.
-#
-pgcopydb stream sentinel set apply -vv
-
-# and prefetch the changes captured in our replication slot
-pgcopydb follow --resume --not-consistent -vv
+pgcopydb copy-db --follow
 
 # cleanup
 pgcopydb stream sentinel get

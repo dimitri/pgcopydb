@@ -122,6 +122,22 @@ The ``pgcopydb clone`` command implements the following steps:
      --use-list`` option so that indexes and primary key constraints already
      created in step 4. are properly skipped now.
 
+When using the ``--follow`` option the steps from the :ref:`pgcopydb_follow`
+command are also run concurrently to the main copy. The Change Data Capture
+is then automatically driven from a prefetch-only phase to the
+prefetch-and-catchup phase, which is enabled as soon as the base copy is
+done.
+
+See the command :ref:`pgcopydb_stream_sentinel_set_endpos` to remote control
+the follow parts of the command even while the command is already running.
+
+::
+
+   $ pgcopydb clone --follow &
+
+   # later when the application is ready to make the switch
+   $ pgcopydb stream sentinel set endpos --current
+
 Options
 -------
 
@@ -265,6 +281,21 @@ The following options are available to ``pgcopydb clone``:
   ``pg_export_snapshot()`` it is possible for pgcopydb to re-use an already
   exported snapshot.
 
+--follow
+
+  When the ``--follow`` option is used then pgcopydb implements Change Data
+  Capture as detailed in the manual page for :ref:`pgcopydb_follow` in
+  parallel to the main copy database steps.
+
+  The replication slot is created using the same snapshot as the main
+  database copy operation, and the changes to the source database are
+  prefetched only during the initial copy, then prefetched and applied in a
+  catchup process.
+
+  It is possible to give ``pgcopydb clone --follow`` a termination point
+  (the LSN endpos) while the command is running with the command
+  :ref:`pgcopydb_stream_sentinel_set_endpos`.
+
 --slot-name
 
   Logical replication slot to use. At the moment pgcopydb doesn't know how
@@ -309,6 +340,7 @@ The following options are available to ``pgcopydb clone``:
   target, where each source should have their own unique origin node name.
 
   __ https://www.postgresql.org/docs/current/replication-origins.html
+
 
 Environment
 -----------

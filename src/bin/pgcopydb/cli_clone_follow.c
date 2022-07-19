@@ -7,6 +7,8 @@
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "cli_common.h"
 #include "cli_root.h"
@@ -100,6 +102,18 @@ CommandLine follow_command =
 		cli_follow);
 
 
+static bool start_clone_process(CopyDataSpec *copySpecs, pid_t *pid);
+
+static bool start_follow_process(CopyDataSpec *copySpecs,
+								 StreamSpecs *streamSpecs,
+								 pid_t *pid);
+
+static bool cli_clone_follow_wait_subprocess(const char *name, pid_t pid);
+
+static bool cloneDB(CopyDataSpec *copySpecs);
+static bool followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
+
+
 /*
  * cli_clone implements the command: pgcopydb clone
  */
@@ -107,28 +121,28 @@ void
 cli_clone(int argc, char **argv)
 {
 	CopyDataSpec copySpecs = { 0 };
+	StreamSpecs streamSpecs = { 0 };
 
 	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_ALL);
 
-	Summary summary = { 0 };
-	TopLevelTimings *timings = &(summary.timings);
+	/* at the moment this is not covered by cli_copy_prepare_specs() */
+	copySpecs.follow = copyDBoptions.follow;
 
-	(void) summary_set_current_time(timings, TIMING_STEP_START);
-
-	if (copySpecs.roles)
+	if (copySpecs.follow)
 	{
-		log_info("STEP 0: copy the source database roles");
-
-		if (!copydb_copy_roles(&copySpecs))
+		if (!stream_init_specs(&streamSpecs,
+							   &(copySpecs.cfPaths.cdc),
+							   copySpecs.source_pguri,
+							   copySpecs.target_pguri,
+							   copyDBoptions.slotName,
+							   copyDBoptions.origin,
+							   copyDBoptions.endpos,
+							   STREAM_MODE_PREFETCH))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 	}
-
-	log_info("STEP 1: dump the source database schema (pre/post data)");
-
-	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_SCHEMA_DUMP);
 
 	/*
 	 * First, we need to open a snapshot that we're going to re-use in all our
@@ -141,64 +155,50 @@ cli_clone(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (!copydb_dump_source_schema(&copySpecs,
-								   copySpecs.sourceSnapshot.snapshot,
-								   PG_DUMP_SECTION_SCHEMA))
+	/*
+	 * Preparation and snapshot are now done, time to fork our two main worker
+	 * processes.
+	 */
+	pid_t clonePID = -1;
+	pid_t followPID = -1;
+
+	if (!start_clone_process(&copySpecs, &clonePID))
 	{
 		/* errors have already been logged */
-		(void) copydb_close_snapshot(&copySpecs);
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	log_info("STEP 2: restore the pre-data section to the target database");
-
-	/* fetch schema information from source catalogs, including filtering */
-	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
+	if (copySpecs.follow)
 	{
-		/* errors have already been logged */
-		(void) copydb_close_snapshot(&copySpecs);
-		exit(EXIT_CODE_TARGET);
+		if (!start_follow_process(&copySpecs, &streamSpecs, &followPID))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
 	}
 
-	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_PREPARE_SCHEMA);
+	/* wait until the clone process is finished */
+	bool success =
+		cli_clone_follow_wait_subprocess("clone", clonePID);
 
-	if (!copydb_target_prepare_schema(&copySpecs))
+	/* close our top-level copy db connection and snapshot */
+	if (!copydb_close_snapshot(&copySpecs))
 	{
 		/* errors have already been logged */
-		(void) copydb_close_snapshot(&copySpecs);
-		exit(EXIT_CODE_TARGET);
+		exit(EXIT_CODE_SOURCE);
 	}
 
-	(void) summary_set_current_time(timings, TIMING_STEP_AFTER_PREPARE_SCHEMA);
-
-	log_info("STEP 3: copy data from source to target in sub-processes");
-	log_info("STEP 4: create indexes and constraints in parallel");
-	log_info("STEP 5: vacuum analyze each table");
-
-	if (!copydb_copy_all_table_data(&copySpecs))
+	/* now wait until the follow process is finished */
+	if (copySpecs.follow)
 	{
-		/* errors have already been logged */
-		(void) copydb_close_snapshot(&copySpecs);
+		success = success &&
+				  cli_clone_follow_wait_subprocess("follow", followPID);
+	}
+
+	if (!success)
+	{
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
-
-	/* now close the snapshot we kept for the whole operation */
-	(void) copydb_close_snapshot(&copySpecs);
-
-	log_info("STEP 7: restore the post-data section to the target database");
-
-	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_FINALIZE_SCHEMA);
-
-	if (!copydb_target_finalize_schema(&copySpecs))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_TARGET);
-	}
-
-	(void) summary_set_current_time(timings, TIMING_STEP_AFTER_FINALIZE_SCHEMA);
-	(void) summary_set_current_time(timings, TIMING_STEP_END);
-
-	(void) print_summary(&summary, &copySpecs);
 }
 
 
@@ -268,4 +268,328 @@ cli_follow(int argc, char **argv)
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
+}
+
+
+/*
+ * start_clone_process starts a sub-process that clones the source database
+ * into the target database.
+ */
+static bool
+start_clone_process(CopyDataSpec *copySpecs, pid_t *pid)
+{
+	/* now we can fork a sub-process to transform the current file */
+	pid_t fpid = fork();
+
+	switch (fpid)
+	{
+		case -1:
+		{
+			log_error("Failed to fork a subprocess to prefetch changes");
+			return -1;
+		}
+
+		case 0:
+		{
+			/* child process runs the command */
+			log_debug("Starting the clone sub-process");
+
+			if (!cloneDB(copySpecs))
+			{
+				/* errors have already been logged */
+				exit(EXIT_CODE_SOURCE);
+			}
+
+			/* and we're done */
+			exit(EXIT_CODE_QUIT);
+		}
+
+		default:
+		{
+			*pid = fpid;
+			return true;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * cloneDB clones a source database into a target database.
+ */
+static bool
+cloneDB(CopyDataSpec *copySpecs)
+{
+	/*
+	 * The top-level process implements the preparation steps and exports a
+	 * snapshot, unless the --snapshot option has been used. Then the rest of
+	 * the work is split into a clone sub-process and a follow sub-process that
+	 * work concurrently.
+	 */
+	Summary summary = { 0 };
+	TopLevelTimings *timings = &(summary.timings);
+
+	(void) summary_set_current_time(timings, TIMING_STEP_START);
+
+	if (copySpecs->roles)
+	{
+		log_info("STEP 0: copy the source database roles");
+
+		if (!copydb_copy_roles(copySpecs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	log_info("STEP 1: dump the source database schema (pre/post data)");
+
+	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_SCHEMA_DUMP);
+
+	if (!copydb_dump_source_schema(copySpecs,
+								   copySpecs->sourceSnapshot.snapshot,
+								   PG_DUMP_SECTION_SCHEMA))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_info("STEP 2: restore the pre-data section to the target database");
+
+	/* make sure that we have our own process local connection */
+	TransactionSnapshot snapshot = { 0 };
+
+	if (!copydb_copy_snapshot(copySpecs, &snapshot))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* swap the new instance in place of the previous one */
+	copySpecs->sourceSnapshot = snapshot;
+
+	if (!copydb_set_snapshot(copySpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* fetch schema information from source catalogs, including filtering */
+	if (!copydb_fetch_schema_and_prepare_specs(copySpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_PREPARE_SCHEMA);
+
+	if (!copydb_target_prepare_schema(copySpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	(void) summary_set_current_time(timings, TIMING_STEP_AFTER_PREPARE_SCHEMA);
+
+	log_info("STEP 3: copy data from source to target in sub-processes");
+	log_info("STEP 4: create indexes and constraints in parallel");
+	log_info("STEP 5: vacuum analyze each table");
+
+	if (!copydb_copy_all_table_data(copySpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* close our snapshot: commit transaction and finish connection */
+	(void) copydb_close_snapshot(copySpecs);
+
+	log_info("STEP 7: restore the post-data section to the target database");
+
+	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_FINALIZE_SCHEMA);
+
+	if (!copydb_target_finalize_schema(copySpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * When --follow has been used, now is the time to allow for the catchup
+	 * process to start applying the prefetched changes.
+	 */
+	if (copySpecs->follow)
+	{
+		PGSQL pgsql = { 0 };
+
+		log_info("Updating the pgcopydb.sentinel to enable applying changes");
+
+		if (!pgsql_init(&pgsql, copySpecs->source_pguri, PGSQL_CONN_SOURCE))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!pgsql_update_sentinel_apply(&pgsql, true))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	(void) summary_set_current_time(timings, TIMING_STEP_AFTER_FINALIZE_SCHEMA);
+	(void) summary_set_current_time(timings, TIMING_STEP_END);
+
+	(void) print_summary(&summary, copySpecs);
+
+	return true;
+}
+
+
+/*
+ * start_follow_process starts a sub-process that clones the source database
+ * into the target database.
+ */
+static bool
+start_follow_process(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs,
+					 pid_t *pid)
+{
+	/* now we can fork a sub-process to transform the current file */
+	pid_t fpid = fork();
+
+	switch (fpid)
+	{
+		case -1:
+		{
+			log_error("Failed to fork a subprocess to prefetch changes");
+			return -1;
+		}
+
+		case 0:
+		{
+			/* child process runs the command */
+			log_debug("Starting the follow sub-process");
+
+			if (!followDB(copySpecs, streamSpecs))
+			{
+				/* errors have already been logged */
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			/* and we're done */
+			exit(EXIT_CODE_QUIT);
+		}
+
+		default:
+		{
+			*pid = fpid;
+			return true;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * followDB implements a logical decoding client for streaming changes from the
+ * source database into the target database.
+ */
+static bool
+followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
+{
+	/*
+	 * Create the replication slot on the source database, and the origin
+	 * (replication progress tracking) on the target database.
+	 */
+	if (!stream_setup_databases(copySpecs,
+								streamSpecs->slotName,
+								streamSpecs->origin))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * Remove the possibly still existing stream context files from
+	 * previous round of operations (--resume, etc). We want to make sure
+	 * that the catchup process reads the files created on this connection.
+	 */
+	if (!stream_cleanup_context(streamSpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	pid_t prefetch = -1;
+	pid_t catchup = -1;
+
+	if (!follow_start_prefetch(streamSpecs, &prefetch))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * Second, start the catchup process.
+	 */
+	if (!follow_start_catchup(streamSpecs, &catchup))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * Finally wait until the process are finished.
+	 *
+	 * This happens when the sentinel endpos is set, typically using the
+	 * command: pgcopydb stream sentinel set endpos --current.
+	 */
+	if (!follow_wait_subprocesses(streamSpecs, prefetch, catchup))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * cli_clone_follow_wait_subprocesses waits until both sub-processes are
+ * finished.
+ */
+static bool
+cli_clone_follow_wait_subprocess(const char *name, pid_t pid)
+{
+	bool exited = false;
+	bool success = true;
+
+	while (!exited)
+	{
+		int returnCode = -1;
+
+		if (!follow_wait_pid(pid, &exited, &returnCode))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (exited)
+		{
+			log_level(returnCode == 0 ? LOG_DEBUG : LOG_ERROR,
+					  "%s process %d has terminated [%d]",
+					  name,
+					  pid,
+					  returnCode);
+		}
+
+		success = success || returnCode == 0;
+
+		/* avoid busy looping, wait for 150ms before checking again */
+		pg_usleep(150 * 1000);
+	}
+
+	return true;
 }
