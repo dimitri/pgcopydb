@@ -1,3 +1,37 @@
+### pgcopydb v0.8 (July 20, 2022) ###
+
+Implement support for Change Data Capture, the ability to replay changes
+happening on the source database during and after the base copy. This is
+available thanks to the new `--follow` option and allows keeping the target
+database up-to-date. The Change Data Capture for Postgres is implemented
+using the Logical Decoding framework and the wal2json logical decoding
+plugin.
+
+In the course of adding that capability to pgcopydb, the command line
+interface have been updated. The main command is now `pgcopydb clone` and
+the command `pgcopydb fork` is an alias for it. The command `pgcopydb
+copy-db` has been kept around for backwards compatibility, and will be
+removed in a later release.
+
+### Added
+* Run our tests suites in the GitHub Action CI.
+* Implement `pgcopydb snapshot`. (#63)
+* Implement support for copying roles. (#64)
+* Implement pgcopydb stream prefetch. (#65)
+* Implement pgcopydb stream catchup. (#66)
+* Implement pgcopydb follow. (#68)
+* Implement pgcopydb clone --follow. (#72)
+
+### Changed
+* Set `tcp_keepalives_idle` to 60s on the source database.
+* Review the pgcopydb commands. (#62)
+
+### Fixed
+* Fix logging of total reltuples. (#47)
+* Fix pgcopydb list tables --without-pkeys SQL queries. (#55)
+* Make sure to use pg_restore --single-transaction.
+* Fix NULL columns processing when listing schema dependencies. (#71)
+
 ### pgcopydb v0.7 (May 24, 2022) ###
 
 Bug fix release on-top of v0.6. The filtering was not applied to the

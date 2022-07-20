@@ -21,6 +21,22 @@ of the process, and implements its own data copying multi-process streaming
 parts. Also, pgcopydb bypasses pg_restore index building and drives that
 internally so that all indexes may be built concurrently.
 
+## Base Copy and Change Data Capture
+
+pgcopydb implements both the base copy of a database and also Change Data
+Capture to allow replay of changes from the source database to the target
+database. The Change Data Capture facility is implemented using Postgres
+Logical Decoding infrastructure and the wal2json plugin.
+
+The `pgcopydb follow` command implements a logical replication client for
+the logical decoding plugin wal2json.
+
+The `pgcopydb clone --follow` command implements a full solution for online
+migration. Beware that online migrations involve a lot more complexities
+when compared to offline migration. It is always a good idea to first
+implement offline migration first. The command `pgcopydb clone` is used to
+implement the offline migration approach.
+
 ## Documentation
 
 Full documentation is available online, including manual pages of all the
@@ -30,27 +46,23 @@ pgcopydb sub-commands. Check out
 ```
 $ pgcopydb help
   pgcopydb
-    copy-db  Copy an entire database from source to target
-  + dump     Dump database objects from a Postgres instance
-  + restore  Restore database objects into a Postgres instance
-  + copy     Implement the data section of the database copy
-  + list     List database objects from a Postgres instance
-    help     print help message
-    version  print pgcopydb version
-
-  pgcopydb dump
-    schema     Dump source database schema as custom files in target directory
-    pre-data   Dump source database pre-data schema as custom files in target directory
-    post-data  Dump source database post-data schema as custom files in target directory
-
-  pgcopydb restore
-    schema      Restore a database schema from custom files to target database
-    pre-data    Restore a database pre-data schema from custom file to target database
-    post-data   Restore a database post-data schema from custom file to target database
-    parse-list  Parse pg_restore --list output from custom file
+    clone     Clone an entire database from source to target
+    fork      Clone an entire database from source to target
+    follow    Replay changes from the source database to the target database
+    copy-db   Copy an entire database from source to target
+    snapshot  Create and exports a snapshot on the source database
+  + copy      Implement the data section of the database copy
+  + dump      Dump database objects from a Postgres instance
+  + restore   Restore database objects into a Postgres instance
+  + list      List database objects from a Postgres instance
+  + stream    Stream changes from the source database
+    help      print help message
+    version   print pgcopydb version
 
   pgcopydb copy
     db           Copy an entire database from source to target
+    roles        Copy the roles from the source instance to the target instance
+    schema       Copy the database schema from source to target
     data         Copy the data section from source to target
     table-data   Copy the data from all tables in database from source to target
     blobs        Copy the blob data from ther source database to the target
@@ -58,14 +70,59 @@ $ pgcopydb help
     indexes      Create all the indexes found in the source database in the target
     constraints  Create all the constraints found in the source database in the target
 
+  pgcopydb dump
+    schema     Dump source database schema as custom files in work directory
+    pre-data   Dump source database pre-data schema as custom files in work directory
+    post-data  Dump source database post-data schema as custom files in work directory
+    roles      Dump source database roles as custome file in work directory
+
+  pgcopydb restore
+    schema      Restore a database schema from custom files to target database
+    pre-data    Restore a database pre-data schema from custom file to target database
+    post-data   Restore a database post-data schema from custom file to target database
+    roles       Restore database roles from SQL file to target database
+    parse-list  Parse pg_restore --list output from custom file
+
   pgcopydb list
     tables     List all the source tables to copy data from
     sequences  List all the source sequences to copy data from
     indexes    List all the indexes to create again after copying the data
     depends    List all the dependencies to filter-out
+
+  pgcopydb stream
+    setup      Setup source and target systems for logical decoding
+    cleanup    cleanup source and target systems for logical decoding
+    prefetch   Stream JSON changes from the source database and transform them to SQL
+    catchup    Apply prefetched changes from SQL files to the target database
+  + create     Create resources needed for pgcopydb
+  + drop       Drop resources needed for pgcopydb
+  + sentinel   Maintain a sentinel table on the source database
+    receive    Stream changes from the source database
+    transform  Transform changes from the source database into SQL commands
+    apply      Apply changes from the source database into the target database
+
+  pgcopydb stream create
+    slot    Create a replication slot in the source database
+    origin  Create a replication origin in the target database
+
+  pgcopydb stream drop
+    slot    Drop a replication slot in the source database
+    origin  Drop a replication origin in the target database
+
+  pgcopydb stream sentinel
+    create  Create the sentinel table on the source database
+    drop    Drop the sentinel table on the source database
+    get     Get the sentinel table values on the source database
+  + set     Maintain a sentinel table on the source database
+
+  pgcopydb stream sentinel set
+    startpos  Set the sentinel start position LSN on the source database
+    endpos    Set the sentinel end position LSN on the source database
+    apply     Set the sentinel apply mode on the source database
+    prefetch  Set the sentinel prefetch mode on the source database
 ```
 
-## Examples
+## Example
 
 When using `pgcopydb` it is possible to achieve the result outlined before
 with this simple command line:
@@ -74,7 +131,7 @@ with this simple command line:
 $ export PGCOPYDB_SOURCE_PGURI="postgres://user@source.host.dev/dbname"
 $ export PGCOPYDB_TARGET_PGURI="postgres://role@target.host.dev/dbname"
 
-$ pgcopydb copy-db --table-jobs 8 --index-jobs 2
+$ pgcopydb clone --table-jobs 8 --index-jobs 2
 ```
 
 A typical output from the command would contain lots of lines of logs, and
@@ -118,72 +175,13 @@ an overall summary that looks like the following:
  ---------------------------------------------   ----------  ----------  ------------
 ```
 
-## Overview
-
-Then `pgcopydb` implements the following steps:
-
-  1. `pgcopydb` calls into `pg_dump` to produce the `pre-data` section and
-     the `post-data` sections of the dump using Postgres custom format.
-
-  2. The `pre-data` section of the dump is restored on the target database
-     using the `pg_restore` command, creating all the Postgres objects from
-     the source database into the target database.
-
-  3. `pgcopydb` gets the list of ordinary and partitioned tables and for
-     each of them runs COPY the data from the source to the target in a
-     dedicated sub-process, and starts and control the sub-processes until
-     all the data has been copied over.
-
-     A Postgres connection and a SQL query to the Postgres catalog table
-     pg_class is used to get the list of tables with data to copy around,
-     and the `reltuples` is used to start with the tables with the greatest
-     number of rows first, as an attempt to minimize the copy time.
-
-  4. An auxiliary process is started concurrently to the main COPY workers.
-     This auxiliary process loops through all the Large Objects found on the
-     source database and copies its data parts over to the target database,
-     much like pg_dump itself would.
-
-     This step is much like ``pg_dump | pg_restore`` for large objects data
-     parts, except that there isn't a good way to do just that with the
-     tooling.
-
-  5. In each copy table sub-process, as soon as the data copying is done,
-     then `pgcopydb` gets the list of index definitions attached to the
-     current target table and creates them in parallel.
-
-     The primary indexes are created as UNIQUE indexes at this stage.
-
-  6. Then the PRIMARY KEY constraints are created USING the just built
-     indexes. This two-steps approach allows the primary key index itself to
-     be created in parallel with other indexes on the same table, avoiding
-     an EXCLUSIVE LOCK while creating the index.
-
-  7. Then VACUUM ANALYZE is run on each target table as soon as the data and
-     indexes are all created.
-
-  8. Then pgcopydb gets the list of the sequences on the source database
-     (via a Postgres connection and SQL queries on the Postgres catalogs)
-     and for each of them runs a separate query on the source to fetch the
-     ``last_value`` and the ``is_called`` metadata the same way that pg_dump
-     does.
-
-     For each sequence, pgcopydb then calls ``pg_catalog.setval()`` on the
-     target database with the information obtained on the source database.
-
-  9. The final stage consists now of running the `pg_restore` command for
-     the `post-data` section script for the whole database, and that's where
-     the foreign key constraints and other elements are created.
-
-     The `post-data` script is filtered out using the `pg_restore
-     --use-list` option so that indexes and primary key constraints already
-     created in step 4. are properly skipped now.
-
 ## Installing pgcopydb
 
 Several distributions are available for pgcopydb:
 
-  1. Install from [apt.postgresql.org](https://wiki.postgresql.org/wiki/Apt)
+  1. Install from either debian sid or testing (see [debian package for
+     pgcopydb](https://packages.debian.org/search?keywords=pgcopydb), or
+     from [apt.postgresql.org](https://wiki.postgresql.org/wiki/Apt)
      packages by following the linked documentation and then:
 
 	 ```
@@ -201,7 +199,7 @@ Several distributions are available for pgcopydb:
      version currently in debian stable.
 
 	 ```
-	 $ docker run --rm -it dimitri/pgcopydb:v0.7 pgcopydb --version
+	 $ docker run --rm -it dimitri/pgcopydb:v0.8 pgcopydb --version
 	 ```
 
 	 Or you can use the CI/CD integration that publishes packages from the
@@ -332,24 +330,26 @@ the `PG_CONFIG` environment variable to the version you want to use.
 The `pgcopydb` command line also includes entry points that allows
 implementing any step on its own.
 
-  1. `pgcopydb dump schema`
-  2. `pgcopydb restore pre-data`
-  3. `pgcopydb copy table-data`
-  4. `pgcopydb copy blobs`
-  5. `pgcopydb copy sequences`
-  6. `pgcopydb copy indexes`
-  7. `pgcopydb copy constraints`
-  8. `pgcopydb vacuumdb`
-  9. `pgcopydb restore post-data`
+  1. `pgcopydb snapshot &`
+  2. `pgcopydb dump schema`
+  3. `pgcopydb restore pre-data`
+  4. `pgcopydb copy table-data`
+  5. `pgcopydb copy blobs`
+  6. `pgcopydb copy sequences`
+  7. `pgcopydb copy indexes`
+  8. `pgcopydb copy constraints`
+  9. `pgcopydb vacuumdb`
+ 10. `pgcopydb restore post-data`
+ 11. `kill %1`
 
 Using individual commands fails to provide the advanced concurrency
-capabilities of the main `pgcopydb copy-db` command, so it is strongly
+capabilities of the main `pgcopydb clone` command, so it is strongly
 advised to prefer that main command.
 
 Also when using separate commands, one has to consider the `--snapshot`
 option that allows for consistent operations. A background process should
 then export the snapshot and maintain a transaction opened for the duration
-of the operations.
+of the operations. See documentation for `pgcopydb snapshot`.
 
 ## Authors
 

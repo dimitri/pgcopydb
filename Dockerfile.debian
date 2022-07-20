@@ -35,7 +35,7 @@ COPY ./src ./src/
 COPY ./docs ./docs/
 
 WORKDIR /usr/src
-RUN tar czf pgcopydb_0.7.orig.tar.gz pgcopydb
+RUN tar czf pgcopydb_0.8.orig.tar.gz pgcopydb
 
 WORKDIR /usr/src/pgcopydb
 
