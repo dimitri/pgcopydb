@@ -1,3 +1,9 @@
+pgcopydb (0.8-1) unstable; urgency=low
+
+  * Official 0.8 release of pgcopydb
+
+ -- Dimitri Fontaine <dim@tapoueh.org>  Wed, 20 Jul 2022 11:14:18 +0200
+
 pgcopydb (0.7-3) UNRELEASED; urgency=medium
 
   * debian/tests/copydb: Put temp files into debian/home.
