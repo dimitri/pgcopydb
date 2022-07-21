@@ -216,6 +216,7 @@ cli_clone(int argc, char **argv)
 		seqSpecs.restart = false;
 		seqSpecs.resume = true;
 		seqSpecs.consistent = false;
+		seqSpecs.section = DATA_SECTION_SET_SEQUENCES;
 
 		/* we don't want to re-use any snapshot */
 		TransactionSnapshot snapshot = { 0 };
