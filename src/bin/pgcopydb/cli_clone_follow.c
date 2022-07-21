@@ -193,6 +193,48 @@ cli_clone(int argc, char **argv)
 	{
 		success = success &&
 				  cli_clone_follow_wait_subprocess("follow", followPID);
+
+		/*
+		 * Now is a good time to reset the sequences on the target database to
+		 * match the state they are in at the moment on the source database.
+		 * Postgres logical decoding lacks support for syncing sequences.
+		 *
+		 * This step is implement as if running the following command:
+		 *
+		 *   $ pgcopydb copy sequences --resume --not-consistent
+		 *
+		 * The whole idea is to fetch the "new" current values of the
+		 * sequences, not the ones that were current when the main snapshot was
+		 * exported.
+		 */
+		CopyDataSpec seqSpecs = { 0 };
+
+		/* copy our structure wholesale */
+		seqSpecs = copySpecs;
+
+		/* then force some options such as --resume --not-consistent */
+		seqSpecs.restart = false;
+		seqSpecs.resume = true;
+		seqSpecs.consistent = false;
+		seqSpecs.section = DATA_SECTION_SET_SEQUENCES;
+
+		/* we don't want to re-use any snapshot */
+		TransactionSnapshot snapshot = { 0 };
+
+		seqSpecs.sourceSnapshot = snapshot;
+
+		/* fetch schema information from source catalogs, including filtering */
+		if (!copydb_fetch_schema_and_prepare_specs(&seqSpecs))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_TARGET);
+		}
+
+		if (!copydb_copy_all_sequences(&seqSpecs))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
 	}
 
 	if (!success)
