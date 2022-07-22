@@ -41,8 +41,9 @@ RUN adduser docker sudo
 WORKDIR /usr/src/pgcopydb
 
 COPY Makefile ./
-COPY GIT-VERSION-GEN ./
+COPY GIT-VERSION-* ./
 COPY ./src/ ./src
+RUN test -f GIT-VERSION-FILE && sed -e 's/^GIT_VERSION = //' < GIT-VERSION-FILE > version
 RUN make -s clean && make -s -j8 install
 
 #

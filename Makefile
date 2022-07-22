@@ -37,7 +37,7 @@ install: bin
 indent:
 	citus_indent
 
-build:
+build: GIT-VERSION-FILE
 	docker build -t pgcopydb .
 
 # debian packages built from the current sources
