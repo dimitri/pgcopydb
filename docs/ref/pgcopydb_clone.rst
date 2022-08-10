@@ -1,6 +1,17 @@
 pgcopydb clone
 ==============
 
+The main pgcopydb operation is the clone operation, and for historical and
+user friendlyness reasons three aliases are available that implement the
+same operation:
+
+::
+
+  pgcopydb
+    clone     Clone an entire database from source to target
+    fork      Clone an entire database from source to target
+    copy-db   Copy an entire database from source to target
+
 .. _pgcopydb_clone:
 
 pgcopydb clone
@@ -63,6 +74,16 @@ compatibility only.
 Description
 -----------
 
+The ``pgcopydb clone`` command implements both a base copy of a source
+database into a target database and also a full `Logical Decoding`__ client
+for the `wal2json`__ logical decoding plugin.
+
+__ https://www.postgresql.org/docs/current/logicaldecoding.html
+__ https://github.com/eulerto/wal2json/
+
+Base copy, or the clone operation
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 The ``pgcopydb clone`` command implements the following steps:
 
   1. ``pgcopydb`` calls into ``pg_dump`` to produce the ``pre-data`` section
@@ -122,6 +143,9 @@ The ``pgcopydb clone`` command implements the following steps:
      --use-list`` option so that indexes and primary key constraints already
      created in step 4. are properly skipped now.
 
+Change Data Capture using Postgres Logical Decoding
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 When using the ``--follow`` option the steps from the :ref:`pgcopydb_follow`
 command are also run concurrently to the main copy. The Change Data Capture
 is then automatically driven from a prefetch-only phase to the
@@ -131,12 +155,112 @@ done.
 See the command :ref:`pgcopydb_stream_sentinel_set_endpos` to remote control
 the follow parts of the command even while the command is already running.
 
-::
+The command :ref:`pgcopydb_stream_cleanup` must be used to free resources
+created to support the change data capture process.
+
+Change Data Capture Example 1
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A simple approach to applying changes after the initial base copy has been
+done follows:
+
+.. code-block:: bash
+  :linenos:
 
    $ pgcopydb clone --follow &
 
    # later when the application is ready to make the switch
    $ pgcopydb stream sentinel set endpos --current
+
+   # later when the migration is finished, clean-up both source and target
+   $ pgcopydb stream cleanup
+
+Change Data Capture Example 2
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+In some cases, it might be necessary to have more control over some of the
+steps taken here. Given pgcopydb flexibility, it's possible to implement the
+following steps:
+
+  1. Grab a snapshot from the source database and hold an open Postgres
+     connection for the duration of the base copy.
+
+     In case of crash or other problems with the main operations, it's then
+     possible to resume processing of the base copy and the applying of the
+     changes with the same snapshot again.
+
+     This step is also implemented when using ``pgcopydb clone --follow``.
+     That said, if the command was interrupted (or crashed), then the
+     snapshot would be lost.
+
+  2. Setup the logical decoding within the snapshot obtained in the previous
+     step, and the replication tracking on the target database.
+
+     The following SQL objects are then created:
+
+       - a replication slot on the source database,
+       - a ``pgcopydb.sentinel`` table on the source database,
+       - a replication origin on the target database.
+
+     This step is also implemented when using ``pgcopydb clone --follow``.
+     There is no way to implement Change Data Capture with pgcopydb and skip
+     creating those SQL objects.
+
+  3. Start the base copy of the source database, and prefetch logical
+     decoding changes to ensure that we consume from the replication slot
+     and allow the source database server to recycle its WAL files.
+
+  4. Remote control the apply process to stop consuming changes and applying
+     them on the target database.
+
+  5. Re-sync the sequences to their now-current values.
+
+     Sequences are not handled by Postgres logical decoding, so extra care
+     needs to be implemented manually here.
+
+     .. important::
+
+        The next version of pgcopydb will include that step in the
+        ``pgcopydb clone --snapshot`` command automatically, after it stops
+        consuming changes and before the process terminates.
+
+  6. Clean-up the specific resources created for supporting resumability of
+     the whole process (replication slot on the source database, pgcopydb
+     sentinel table on the source database, replication origin on the target
+     database).
+
+  7. Stop holding a snaphot on the source database by stopping the
+     ``pgcopydb snapshot`` process left running in the background.
+
+If the command ``pgcopydb clone --follow`` fails it's then possible to start
+it again. It will automatically discover what was done successfully and what
+needs to be done again because it failed or was interrupted (table copy,
+index creation, resuming replication slot consuming, resuming applying
+changes at the right LSN position, etc).
+
+Here is an example implement the previous steps:
+
+.. code-block:: bash
+  :linenos:
+
+   $ pgcopydb snapshot &
+
+   $ pgcopydb stream setup
+
+   $ pgcopydb clone --follow &
+
+   # later when the application is ready to make the switch
+   $ pgcopydb stream sentinel set endpos --current
+
+   # when the follow process has terminated, re-sync the sequences
+   $ pgcopydb copy sequences
+
+   # later when the migration is finished, clean-up both source and target
+   $ pgcopydb stream cleanup
+
+   # now stop holding the snapshot transaction (adjust PID to your environment)
+   $ kill %1
+
 
 Options
 -------
