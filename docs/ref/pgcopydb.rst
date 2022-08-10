@@ -30,6 +30,14 @@ The pgcopydb command implements a full migration of an entire Postgres
 database from a source instance to a target instance. Both the Postgres
 instances must be available for the entire duration of the command.
 
+The pgcopydb command also implements a full `Logical Decoding`__ client for
+the `wal2json`__ logical decoding plugin, allowing Change Data Capture to
+replay data changes (DML) happening on the source database after the base
+copy snapshot.
+
+__ https://www.postgresql.org/docs/current/logicaldecoding.html
+__ https://github.com/eulerto/wal2json/
+
 Help
 ----
 

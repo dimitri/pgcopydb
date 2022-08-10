@@ -112,8 +112,14 @@ pgcopydb restore roles
 
 pgcopydb restore roles - Restore database roles from SQL file to target database
 
-The command ``pgcopydb restore roles`` uses psql to create the SQL script
-obtained from the command ``pgcopydb dump roles``.
+The command ``pgcopydb restore roles`` runs the commands from the SQL script
+obtained from the command ``pgcopydb dump roles``. Roles that already exist
+on the target database are skipped.
+
+The ``pg_dumpall`` command issues two lines per role, the first one is a
+``CREATE ROLE`` SQL command, the second one is an ``ALTER ROLE`` SQL
+command. Both those lines are skipped when the role already exists on the
+target database.
 
 ::
 
