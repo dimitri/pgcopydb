@@ -21,7 +21,7 @@ with r as
      returning rental_id, customer_id, staff_id
  )
  insert into payment(customer_id, staff_id, rental_id, amount, payment_date)
-      select customer_id, staff_id, rental_id, 5.99, '2020-06-01'
+      select customer_id, staff_id, rental_id, 5.99, '2022-06-01'
         from r;
 
 commit;
