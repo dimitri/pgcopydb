@@ -156,6 +156,50 @@ cli_clone(int argc, char **argv)
 	}
 
 	/*
+	 * When --follow has been used, we start two subprocess (clone, follow).
+	 * Before doing that though, we want to make sure it was possible to setup
+	 * the source and target database for Change Data Capture: the wal2json
+	 * logical decoding plugin must be available on the source Postgres
+	 * instance, etc.
+	 */
+	if (copySpecs.follow)
+	{
+		/*
+		 * We want to make sure to use a private PGSQL client connection
+		 * instance when connecting to the source database now, as the main
+		 * connection is currently active holding a snapshot for the whole
+		 * process.
+		 */
+		CopyDataSpec setupSpecs = { 0 };
+		TransactionSnapshot snapshot = { 0 };
+
+		/* copy our structure wholesale */
+		setupSpecs = copySpecs;
+
+		/* ensure we use a new snapshot and connection in setupSpecs */
+		if (!copydb_copy_snapshot(&copySpecs, &snapshot))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		setupSpecs.sourceSnapshot = snapshot;
+
+		/*
+		 * Now create the replication slot and the pgcopydb sentinel table on
+		 * the source database, and the origin (replication progress tracking)
+		 * on the target database.
+		 */
+		if (!stream_setup_databases(&setupSpecs,
+									streamSpecs.slotName,
+									streamSpecs.origin))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+	}
+
+	/*
 	 * Preparation and snapshot are now done, time to fork our two main worker
 	 * processes.
 	 */
@@ -536,23 +580,14 @@ start_follow_process(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs,
 
 /*
  * followDB implements a logical decoding client for streaming changes from the
- * source database into the target database.
+ * source database into the target database. The stream_setup_databases() must
+ * have been called already so that the replication slot using wal2json is
+ * ready, the pgcopydb.sentinel table exists, and the target database
+ * replication origin has been created too.
  */
 static bool
 followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 {
-	/*
-	 * Create the replication slot on the source database, and the origin
-	 * (replication progress tracking) on the target database.
-	 */
-	if (!stream_setup_databases(copySpecs,
-								streamSpecs->slotName,
-								streamSpecs->origin))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	/*
 	 * Remove the possibly still existing stream context files from
 	 * previous round of operations (--resume, etc). We want to make sure
