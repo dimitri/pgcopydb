@@ -28,6 +28,8 @@ typedef struct CopyDBOptions
 
 	int tableJobs;
 	int indexJobs;
+	uint64_t splitTablesLargerThan;
+	char splitTablesLargerThanPretty[NAMEDATALEN];
 
 	RestoreOptions restoreOptions;
 

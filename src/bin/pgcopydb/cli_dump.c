@@ -340,6 +340,8 @@ cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 						   NULL, /* target_pguri */
 						   1,    /* table jobs */
 						   1,    /* index jobs */
+						   0,   /* skip threshold */
+						   "",  /* skip threshold pretty printed */
 						   DATA_SECTION_NONE,
 						   dumpDBoptions->snapshot,
 						   restoreOptions,

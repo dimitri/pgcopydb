@@ -532,6 +532,8 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 						   restoreDBoptions.target_pguri,
 						   1,    /* table jobs */
 						   1,    /* index jobs */
+						   0,   /* skip threshold */
+						   "",  /* skip threshold pretty printed */
 						   DATA_SECTION_NONE,
 						   restoreDBoptions.snapshot,
 						   restoreDBoptions.restoreOptions,

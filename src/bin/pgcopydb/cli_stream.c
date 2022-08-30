@@ -466,6 +466,8 @@ cli_stream_setup(int argc, char **argv)
 						   streamDBoptions.target_pguri,
 						   1,   /* tableJobs */
 						   1,   /* indexJobs */
+						   0,   /* skip threshold */
+						   "",  /* skip threshold pretty printed */
 						   DATA_SECTION_ALL,
 						   streamDBoptions.snapshot,
 						   restoreOptions,
@@ -521,6 +523,8 @@ cli_stream_cleanup(int argc, char **argv)
 						   streamDBoptions.target_pguri,
 						   1,   /* tableJobs */
 						   1,   /* indexJobs */
+						   0,   /* skip threshold */
+						   "",  /* skip threshold pretty printed */
 						   DATA_SECTION_ALL,
 						   streamDBoptions.snapshot,
 						   restoreOptions,
@@ -574,6 +578,8 @@ cli_stream_catchup(int argc, char **argv)
 						   streamDBoptions.target_pguri,
 						   1,   /* tableJobs */
 						   1,   /* indexJobs */
+						   0,   /* skip threshold */
+						   "",  /* skip threshold pretty printed */
 						   DATA_SECTION_ALL,
 						   streamDBoptions.snapshot,
 						   restoreOptions,
@@ -678,6 +684,8 @@ cli_stream_apply(int argc, char **argv)
 						   streamDBoptions.target_pguri,
 						   1,   /* tableJobs */
 						   1,   /* indexJobs */
+						   0,   /* skip threshold */
+						   "",  /* skip threshold pretty printed */
 						   DATA_SECTION_ALL,
 						   streamDBoptions.snapshot,
 						   restoreOptions,
@@ -754,6 +762,8 @@ stream_start_in_mode(LogicalStreamMode mode)
 						   streamDBoptions.target_pguri,
 						   1,   /* tableJobs */
 						   1,   /* indexJobs */
+						   0,   /* skip threshold */
+						   "",  /* skip threshold pretty printed */
 						   DATA_SECTION_ALL,
 						   streamDBoptions.snapshot,
 						   restoreOptions,

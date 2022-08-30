@@ -93,6 +93,8 @@ typedef struct TableFilePaths
 	char lockFile[MAXPGPATH];    /* table lock file */
 	char doneFile[MAXPGPATH];    /* table done file (summary) */
 	char idxListFile[MAXPGPATH]; /* index oids list file */
+
+	char truncateDoneFile[MAXPGPATH];    /* table truncate done file */
 } TableFilePaths;
 
 
@@ -155,6 +157,19 @@ typedef enum
 } CopyDataSection;
 
 /* all that's needed to drive a single TABLE DATA copy process */
+typedef struct CopyTableDataPartSpec
+{
+	int partNumber;
+	int partCount;              /* zero when table is not partitionned */
+
+	int64_t min;                /* WHERE partKey >= min */
+	int64_t max;                /*   AND partKey  < max */
+
+	char partKey[NAMEDATALEN];
+	char copyQuery[BUFSIZE];    /* COPY (...) TO STDOUT */
+} CopyTableDataPartSpec;
+
+
 typedef struct CopyTableDataSpec
 {
 	CopyFilePaths *cfPaths;
@@ -176,9 +191,13 @@ typedef struct CopyTableDataSpec
 	int tableJobs;
 	int indexJobs;
 	Semaphore *indexSemaphore;  /* pointer to the main specs semaphore */
+	Semaphore *truncateSemaphore;
 
 	TableFilePaths tablePaths;
 	IndexFilePathsArray indexPathsArray;
+
+	/* same-table concurrency with COPY WHERE clause partitioning */
+	CopyTableDataPartSpec part;
 } CopyTableDataSpec;
 
 
@@ -256,6 +275,9 @@ typedef struct CopyDataSpec
 
 	int tableJobs;
 	int indexJobs;
+	uint64_t splitTablesLargerThan;
+	char splitTablesLargerThanPretty[NAMEDATALEN];
+
 	Semaphore tableSemaphore;
 	Semaphore indexSemaphore;
 
@@ -302,6 +324,8 @@ bool copydb_init_specs(CopyDataSpec *specs,
 					   char *target_pguri,
 					   int tableJobs,
 					   int indexJobs,
+					   uint64_t splitTablesLargerThan,
+					   char *splitTablesLargerThanPretty,
 					   CopyDataSection section,
 					   char *snapshot,
 					   RestoreOptions restoreOptions,
@@ -313,7 +337,12 @@ bool copydb_init_specs(CopyDataSpec *specs,
 
 bool copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 							 CopyDataSpec *specs,
-							 SourceTable *source);
+							 SourceTable *source,
+							 int partNumber);
+
+bool copydb_init_tablepaths_for_part(CopyTableDataSpec *tableSpecs,
+									 TableFilePaths *tablePaths,
+									 int partNumber);
 
 bool copydb_export_snapshot(TransactionSnapshot *snapshot);
 
@@ -410,7 +439,7 @@ bool copydb_copy_all_table_data(CopyDataSpec *specs);
 bool copydb_process_table_data(CopyDataSpec *specs);
 bool copydb_process_table_data_worker(CopyDataSpec *specs);
 
-bool copydb_copy_table(CopyTableDataSpec *tableSpecs);
+bool copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs);
 
 bool copydb_copy_table_indexes(CopyTableDataSpec *tableSpecs);
 bool copydb_create_table_indexes(CopyTableDataSpec *tableSpecs);
@@ -424,6 +453,11 @@ bool copydb_table_is_being_processed(CopyDataSpec *specs,
 
 bool copydb_mark_table_as_done(CopyDataSpec *specs,
 							   CopyTableDataSpec *tableSpecs);
+
+bool copydb_table_parts_are_all_done(CopyDataSpec *specs,
+									 CopyTableDataSpec *tableSpecs,
+									 bool *allPartsDone,
+									 bool *isBeingProcessed);
 
 bool copydb_start_blob_process(CopyDataSpec *specs);
 bool copydb_copy_blobs(CopyDataSpec *specs);

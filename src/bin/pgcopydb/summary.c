@@ -43,7 +43,13 @@ write_table_summary(CopyTableSummary *summary, char *filename)
 			summary->command);
 
 	/* write the summary to the doneFile */
-	return write_file(contents, strlen(contents), filename);
+	if (!write_file(contents, strlen(contents), filename))
+	{
+		log_error("Failed to write table summary file \"%s\"", filename);
+		return false;
+	}
+
+	return true;
 }
 
 
@@ -224,10 +230,14 @@ create_table_index_file(CopyTableSummary *summary,
 		return false;
 	}
 
-	bool success = write_file(content->data, content->len, filename);
-	destroyPQExpBuffer(content);
+	if (!write_file(content->data, content->len, filename))
+	{
+		log_error("Failed to write file \"%s\"", filename);
+		destroyPQExpBuffer(content);
+		return false;
+	}
 
-	return success;
+	return true;
 }
 
 
