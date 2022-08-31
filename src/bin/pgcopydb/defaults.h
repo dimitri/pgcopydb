@@ -36,7 +36,7 @@
 /* default values for the command line options */
 #define DEFAULT_TABLE_JOBS 4
 #define DEFAULT_INDEX_JOBS 4
-#define DEFAULT_SPLIT_TABLES_LARGER_THAN (100 * 2 ^ 30) /* 100 GB */
+#define DEFAULT_SPLIT_TABLES_LARGER_THAN 0 /* no COPY partitioning by default */
 
 #define POSTGRES_CONNECT_TIMEOUT "10"
 

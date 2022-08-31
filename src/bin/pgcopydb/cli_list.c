@@ -454,19 +454,6 @@ cli_list_table_parts(int argc, char **argv)
 		exit(EXIT_CODE_SOURCE);
 	}
 
-	if (listDBoptions.splitTablesLargerThan == 0)
-	{
-		/* default to 200kB for (interactive) testing */
-		listDBoptions.splitTablesLargerThan = 200 * 1024;
-
-		char bytesPretty[BUFSIZE] = { 0 };
-		(void) pretty_print_bytes(bytesPretty,
-								  BUFSIZE,
-								  listDBoptions.splitTablesLargerThan);
-
-		log_warn("Using default partition size of %s", bytesPretty);
-	}
-
 	/*
 	 * Build a filter that includes only the given target table, our command
 	 * line is built to work on a single table at a time (--schema-name default

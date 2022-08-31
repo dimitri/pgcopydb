@@ -591,20 +591,23 @@ cli_copy_db_getopts(int argc, char **argv)
 
 			case 'L':
 			{
-				if (!stringToUInt64(optarg, &options.splitTablesLargerThan))
+				if (stringToUInt64(optarg, &options.splitTablesLargerThan))
+				{
+					pretty_print_bytes(
+						options.splitTablesLargerThanPretty,
+						sizeof(options.splitTablesLargerThanPretty),
+						options.splitTablesLargerThan);
+
+					log_trace("--split-tables-larger-than %s (%lld)",
+							  options.splitTablesLargerThanPretty,
+							  (long long) options.splitTablesLargerThan);
+				}
+				else
 				{
 					log_fatal("Failed to parse --split-tables-larger-than: \"%s\"",
 							  optarg);
 					++errors;
 				}
-
-				pretty_print_bytes(options.splitTablesLargerThanPretty,
-								   sizeof(options.splitTablesLargerThanPretty),
-								   options.splitTablesLargerThan);
-
-				log_trace("--split-tables-larger-than %s (%lld)",
-						  options.splitTablesLargerThanPretty,
-						  (long long) options.splitTablesLargerThan);
 				break;
 			}
 

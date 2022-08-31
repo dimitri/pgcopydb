@@ -225,7 +225,8 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 	{
 		SourceTable *source = &(tableArray.array[tableIndex]);
 
-		if (specs->splitTablesLargerThan <= source->bytes)
+		if (specs->splitTablesLargerThan > 0 &&
+			specs->splitTablesLargerThan <= source->bytes)
 		{
 			if (IS_EMPTY_STRING_BUFFER(source->partKey))
 			{
@@ -254,15 +255,22 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 				return false;
 			}
 
-			log_info("Table \"%s\".\"%s\" is %s large, "
-					 "%d COPY processes will be used, partitining on \"%s\".",
-					 source->nspname,
-					 source->relname,
-					 source->bytesPretty,
-					 source->partsArray.count,
-					 source->partKey);
+			if (source->partsArray.count > 1)
+			{
+				log_info("Table \"%s\".\"%s\" is %s large, "
+						 "%d COPY processes will be used, partitining on \"%s\".",
+						 source->nspname,
+						 source->relname,
+						 source->bytesPretty,
+						 source->partsArray.count,
+						 source->partKey);
 
-			copySpecsCount += source->partsArray.count;
+				copySpecsCount += source->partsArray.count;
+			}
+			else
+			{
+				++copySpecsCount;
+			}
 		}
 		else
 		{
