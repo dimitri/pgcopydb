@@ -7,8 +7,8 @@ set -e
 #
 #  - PGCOPYDB_SOURCE_PGURI
 #  - PGCOPYDB_TARGET_PGURI
-#  - PGCOPYDB_TARGET_TABLE_JOBS
-#  - PGCOPYDB_TARGET_INDEX_JOBS
+#  - PGCOPYDB_TABLE_JOBS
+#  - PGCOPYDB_INDEX_JOBS
 
 #
 # pgcopydb list tables include a retry loop, so we use that as a proxy to

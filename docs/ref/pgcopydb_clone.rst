@@ -485,13 +485,13 @@ PGCOPYDB_TARGET_PGURI
   Connection string to the target Postgres instance. When ``--target`` is
   ommitted from the command line, then this environment variable is used.
 
-PGCOPYDB_TARGET_TABLE_JOBS
+PGCOPYDB_TABLE_JOBS
 
    Number of concurrent jobs allowed to run COPY operations in parallel.
    When ``--table-jobs`` is ommitted from the command line, then this
    environment variable is used.
 
-PGCOPYDB_TARGET_INDEX_JOBS
+PGCOPYDB_INDEX_JOBS
 
    Number of concurrent jobs allowed to run CREATE INDEX operations in
    parallel. When ``--index-jobs`` is ommitted from the command line, then
