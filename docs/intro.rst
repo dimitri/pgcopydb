@@ -101,7 +101,7 @@ The process tree then looks like the following:
 
 When starting with the TABLE DATA copying step, then pgcopydb creates as
 many sub-processes as specified by the ``--table-jobs`` command line option
-(or the environment variable ``PGCOPYDB_TARGET_TABLE_JOBS``).
+(or the environment variable ``PGCOPYDB_TABLE_JOBS``).
 
 Then as soon as the COPY command is done, another sub-process can be
 created. At this time in the process, pgcopydb might be running more

@@ -226,17 +226,17 @@ cli_copydb_getenv(CopyDBOptions *options)
 		}
 	}
 
-	if (env_exists(PGCOPYDB_TARGET_TABLE_JOBS))
+	if (env_exists(PGCOPYDB_TABLE_JOBS))
 	{
 		char jobs[BUFSIZE] = { 0 };
 
-		if (get_env_copy(PGCOPYDB_TARGET_TABLE_JOBS, jobs, sizeof(jobs)))
+		if (get_env_copy(PGCOPYDB_TABLE_JOBS, jobs, sizeof(jobs)))
 		{
 			if (!stringToInt(jobs, &options->tableJobs) ||
 				options->tableJobs < 1 ||
 				options->tableJobs > 128)
 			{
-				log_fatal("Failed to parse PGCOPYDB_TARGET_TABLE_JOBS: \"%s\"",
+				log_fatal("Failed to parse PGCOPYDB_TABLE_JOBS: \"%s\"",
 						  jobs);
 				++errors;
 			}
@@ -248,17 +248,17 @@ cli_copydb_getenv(CopyDBOptions *options)
 		}
 	}
 
-	if (env_exists(PGCOPYDB_TARGET_INDEX_JOBS))
+	if (env_exists(PGCOPYDB_INDEX_JOBS))
 	{
 		char jobs[BUFSIZE] = { 0 };
 
-		if (get_env_copy(PGCOPYDB_TARGET_INDEX_JOBS, jobs, sizeof(jobs)))
+		if (get_env_copy(PGCOPYDB_INDEX_JOBS, jobs, sizeof(jobs)))
 		{
 			if (!stringToInt(jobs, &options->indexJobs) ||
 				options->indexJobs < 1 ||
 				options->indexJobs > 128)
 			{
-				log_fatal("Failed to parse PGCOPYDB_TARGET_INDEX_JOBS: \"%s\"",
+				log_fatal("Failed to parse PGCOPYDB_INDEX_JOBS: \"%s\"",
 						  jobs);
 				++errors;
 			}
