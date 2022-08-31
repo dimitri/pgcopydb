@@ -10,10 +10,11 @@ This command prefixes the following sub-commands:
 ::
 
   pgcopydb list
-    tables     List all the source tables to copy data from
-    sequences  List all the source sequences to copy data from
-    indexes    List all the indexes to create again after copying the data
-    depends    List all the dependencies to filter-out
+    tables       List all the source tables to copy data from
+    table-parts  List a source table copy partitions
+    sequences    List all the source sequences to copy data from
+    indexes      List all the indexes to create again after copying the data
+    depends      List all the dependencies to filter-out
 
 
 .. _pgcopydb_list_tables:
@@ -36,6 +37,28 @@ tables to COPY the data from.
      --filter <filename> Use the filters defined in <filename>
      --list-skipped      List only tables that are setup to be skipped
      --without-pkey      List only tables that have no primary key
+
+.. _pgcopydb_list_table_parts:
+
+pgcopydb list table-parts
+-------------------------
+
+pgcopydb list table-parts - List a source table copy partitions
+
+The command ``pgcopydb list table-parts`` connects to the source database
+and executes a SQL query using the Postgres catalogs to get detailed
+information about the given source table, and then another SQL query to
+compute how to split this source table given the size threshold argument.
+
+::
+
+   pgcopydb list table-parts: List a source table copy partitions
+   usage: pgcopydb list table-parts  --source ...
+
+     --source                    Postgres URI to the source database
+     --schema-name               Name of the schema where to find the table
+     --table-name                Name of the target table
+     --split-tables-larger-than  Size threshold to consider partitioning
 
 .. _pgcopydb_list_sequences:
 
@@ -218,6 +241,23 @@ Listing the tables:
       17387 |               public |             overflow |               0 |      8192 bytes
       17182 |               public |              tab_csv |               0 |      8192 bytes
       17210 |               public |                 temp |               0 |      8192 bytes
+
+Listing a table list of COPY partitions:
+
+::
+
+   $ pgcopydb list table-parts --table-name rental --split-at 300kB
+   16:43:26 73794 INFO  Running pgcopydb version 0.8.8.g0838291.dirty from "/Users/dim/dev/PostgreSQL/pgcopydb/src/bin/pgcopydb/pgcopydb"
+   16:43:26 73794 INFO  Listing COPY partitions for table "public"."rental" in "postgres://@:/pagila?"
+   16:43:26 73794 INFO  Table "public"."rental" COPY will be split 5-ways
+         Part |        Min |        Max |      Count
+   -----------+------------+------------+-----------
+          1/5 |          1 |       3211 |       3211
+          2/5 |       3212 |       6422 |       3211
+          3/5 |       6423 |       9633 |       3211
+          4/5 |       9634 |      12844 |       3211
+          5/5 |      12845 |      16049 |       3205
+
 
 Listing the indexes:
 
