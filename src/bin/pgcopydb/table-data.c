@@ -1176,6 +1176,7 @@ copydb_table_parts_are_all_done(CopyDataSpec *specs,
 		return true;
 	}
 
+	/* keep compiler happy, we should never end-up here */
 	return true;
 }
 
