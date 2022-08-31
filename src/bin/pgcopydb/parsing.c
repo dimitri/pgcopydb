@@ -451,8 +451,6 @@ parse_pretty_printed_bytes(const char *value, uint64_t *result)
 	char val[BUFSIZE] = { 0 };
 	strlcpy(val, digits, ptr - digits + 1);
 
-	log_info("parse_pretty_printed_bytes: digits \"%s\", ptr: %c", val, *ptr);
-
 	uint64_t number = 0;
 
 	if (!stringToUInt64(val, &number))
