@@ -34,6 +34,8 @@ bool parse_bool(const char *value, bool *result);
 
 #define boolToString(value) (value) ? "true" : "false"
 
+bool parse_pretty_printed_bytes(const char *value, uint64_t *result);
+
 
 /*
  * To parse Postgres URI we need to store keywords and values in separate

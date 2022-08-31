@@ -276,17 +276,17 @@ cli_copydb_getenv(CopyDBOptions *options)
 
 		if (get_env_copy(PGCOPYDB_SPLIT_TABLES_LARGER_THAN, bytes, sizeof(bytes)))
 		{
-			if (!stringToUInt64(bytes, &options->splitTablesLargerThan))
+			if (!cli_parse_bytes_pretty(
+					bytes,
+					&options->splitTablesLargerThan,
+					(char *) &options->splitTablesLargerThanPretty,
+					sizeof(options->splitTablesLargerThanPretty)))
 			{
 				log_fatal("Failed to parse PGCOPYDB_SPLIT_TABLES_LARGER_THAN: "
 						  " \"%s\"",
 						  bytes);
 				++errors;
 			}
-
-			pretty_print_bytes(options->splitTablesLargerThanPretty,
-							   sizeof(options->splitTablesLargerThanPretty),
-							   options->splitTablesLargerThan);
 		}
 		else
 		{
@@ -591,23 +591,20 @@ cli_copy_db_getopts(int argc, char **argv)
 
 			case 'L':
 			{
-				if (stringToUInt64(optarg, &options.splitTablesLargerThan))
-				{
-					pretty_print_bytes(
-						options.splitTablesLargerThanPretty,
-						sizeof(options.splitTablesLargerThanPretty),
-						options.splitTablesLargerThan);
-
-					log_trace("--split-tables-larger-than %s (%lld)",
-							  options.splitTablesLargerThanPretty,
-							  (long long) options.splitTablesLargerThan);
-				}
-				else
+				if (!cli_parse_bytes_pretty(
+						optarg,
+						&options.splitTablesLargerThan,
+						(char *) &options.splitTablesLargerThanPretty,
+						sizeof(options.splitTablesLargerThanPretty)))
 				{
 					log_fatal("Failed to parse --split-tables-larger-than: \"%s\"",
 							  optarg);
 					++errors;
 				}
+
+				log_trace("--split-tables-larger-than %s (%lld)",
+						  options.splitTablesLargerThanPretty,
+						  (long long) options.splitTablesLargerThan);
 				break;
 			}
 
@@ -818,6 +815,33 @@ cli_copy_db_getopts(int argc, char **argv)
 	copyDBoptions = options;
 
 	return optind;
+}
+
+
+/*
+ * cli_parse_bytes_pretty parses a pretty-printed bytes value in the bytestring
+ * argument, and converts it to a raw bytes value. Then it pretty-prints the
+ * raw value in the bytesPretty allocated string, using pgcopydb rules.
+ */
+bool
+cli_parse_bytes_pretty(const char *byteString,
+					   uint64_t *bytes,
+					   char *bytesPretty,
+					   size_t bytesPrettySize)
+{
+	if (!parse_pretty_printed_bytes(byteString, bytes))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* "1024 MB" will then be written as "1 GB" */
+	(void) pretty_print_bytes(bytesPretty, bytesPrettySize, *bytes);
+
+	log_trace("parsed bytes value: %lld", (long long) *bytes);
+	log_trace("pretty printed to : \"%s\"", bytesPretty);
+
+	return true;
 }
 
 

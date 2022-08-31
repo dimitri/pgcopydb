@@ -68,4 +68,9 @@ bool cli_copydb_is_consistent(CopyDBOptions *options);
 
 int cli_copy_db_getopts(int argc, char **argv);
 
+bool cli_parse_bytes_pretty(const char *byteString,
+							uint64_t *bytes,
+							char *bytesPretty,
+							size_t bytesPrettySize);
+
 #endif  /* CLI_COMMON_H */

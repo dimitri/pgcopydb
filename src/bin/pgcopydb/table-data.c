@@ -217,6 +217,12 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 
 	int copySpecsCount = 0;
 
+	if (specs->splitTablesLargerThan > 0)
+	{
+		log_info("Splitting source candidate tables larger than %s",
+				 specs->splitTablesLargerThanPretty);
+	}
+
 	/*
 	 * Source table might be split in several concurrent COPY processes. In
 	 * that case we produce a CopyDataSpec entry for each COPY partition.
