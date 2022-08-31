@@ -20,6 +20,25 @@
  * SourceTable caches the information we need about all the ordinary tables
  * found in the source database.
  */
+typedef struct SourceTableParts
+{
+	int partNumber;
+	int partCount;              /* zero when table is not partitionned */
+
+	int64_t min;                /* WHERE partKey >= min */
+	int64_t max;                /*   AND partKey  < max */
+
+	int64_t count;              /* max - min + 1 */
+} SourceTableParts;
+
+
+typedef struct SourceTablePartsArray
+{
+	int count;
+	SourceTableParts *array;    /* malloc'ed area */
+} SourceTablePartsArray;
+
+
 typedef struct SourceTable
 {
 	uint32_t oid;
@@ -31,6 +50,8 @@ typedef struct SourceTable
 	bool excludeData;
 
 	char restoreListName[RESTORE_LIST_NAMEDATALEN];
+	char partKey[NAMEDATALEN];
+	SourceTablePartsArray partsArray;
 } SourceTable;
 
 
@@ -128,6 +149,8 @@ bool schema_list_ordinary_tables(PGSQL *pgsql,
 bool schema_list_ordinary_tables_without_pk(PGSQL *pgsql,
 											SourceFilters *filters,
 											SourceTableArray *tableArray);
+
+bool schema_list_partitions(PGSQL *pgsql, SourceTable *table, uint64_t partSize);
 
 bool schema_list_sequences(PGSQL *pgsql,
 						   SourceFilters *filters,

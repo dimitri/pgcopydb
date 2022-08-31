@@ -61,6 +61,14 @@ typedef struct SourceDependArrayContext
 	bool parsedOk;
 } SourceDependArrayContext;
 
+/* Context used when fetching a list of COPY partitions for a table */
+typedef struct SourcePartitionContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	SourceTable *table;
+	bool parsedOk;
+} SourcePartitionContext;
+
 static void getTableArray(void *ctx, PGresult *result);
 
 static bool parseCurrentSourceTable(PGresult *result,
@@ -85,6 +93,12 @@ static bool parseCurrentSourceDepend(PGresult *result,
 									 int rowNumber,
 									 SourceDepend *depend);
 
+static void getPartitionList(void *ctx, PGresult *result);
+
+static bool parseCurrentPartition(PGresult *result,
+								  int rowNumber,
+								  SourceTableParts *parts);
+
 struct FilteringQueries
 {
 	SourceFilterType type;
@@ -105,10 +119,31 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
 		"                regexp_replace(c.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
-		"    from pg_catalog.pg_class c "
-		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
+		"                regexp_replace(auth.rolname, '[\n\r]', ' ')), "
+		"         pkeys.attname as partkey"
+
+		"    from pg_catalog.pg_class c"
+		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
 		"         join pg_roles auth ON auth.oid = c.relowner"
+
+		/* find a copy partition key candidate */
+		"         left join lateral ("
+		"             select indrelid, indexrelid, a.attname"
+
+		"               from pg_index x"
+		"               join pg_class i on i.oid = x.indexrelid"
+		"               join pg_attribute a on a.attrelid = c.oid and attnum = 1"
+
+		"              where x.indrelid = c.oid"
+		"                and (indisprimary or indisunique)"
+		"                and array_length(indkey::integer[], 1) = 1"
+		"                and atttypid in ('smallint'::regtype,"
+		"                                 'int'::regtype,"
+		"                                 'bigint'::regtype)"
+		"           order by not indisprimary, not indisunique"
+		"              limit 1"
+		"         ) as pkeys on true"
+
 		"   where relkind = 'r' and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"order by bytes desc, n.nspname, c.relname"
@@ -127,7 +162,9 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
 		"                regexp_replace(c.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"                regexp_replace(auth.rolname, '[\n\r]', ' ')), "
+		"         pkeys.attname as partkey"
+
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 		"         join pg_roles auth ON auth.oid = c.relowner"
@@ -136,6 +173,24 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         join pg_temp.filter_include_only_table inc "
 		"           on n.nspname = inc.nspname "
 		"          and c.relname = inc.relname "
+
+		/* find a copy partition key candidate */
+		"         left join lateral ("
+		"             select indrelid, indexrelid, a.attname"
+
+		"               from pg_index x"
+		"               join pg_class i on i.oid = x.indexrelid"
+		"               join pg_attribute a on a.attrelid = c.oid and attnum = 1"
+
+		"              where x.indrelid = c.oid"
+		"                and (indisprimary or indisunique)"
+		"                and array_length(indkey::integer[], 1) = 1"
+		"                and atttypid in ('smallint'::regtype,"
+		"                                 'int'::regtype,"
+		"                                 'bigint'::regtype)"
+		"           order by not indisprimary, not indisunique"
+		"              limit 1"
+		"         ) as pkeys on true"
 
 		"   where relkind = 'r' and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
@@ -152,7 +207,9 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
 		"                regexp_replace(c.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"                regexp_replace(auth.rolname, '[\n\r]', ' ')), "
+		"         pkeys.attname as partkey"
+
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 		"         join pg_roles auth ON auth.oid = c.relowner"
@@ -170,6 +227,24 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         left join pg_temp.filter_exclude_table_data ftd "
 		"                on n.nspname = ftd.nspname "
 		"               and c.relname = ftd.relname "
+
+		/* find a copy partition key candidate */
+		"         left join lateral ("
+		"             select indrelid, indexrelid, a.attname"
+
+		"               from pg_index x"
+		"               join pg_class i on i.oid = x.indexrelid"
+		"               join pg_attribute a on a.attrelid = c.oid and attnum = 1"
+
+		"              where x.indrelid = c.oid"
+		"                and (indisprimary or indisunique)"
+		"                and array_length(indkey::integer[], 1) = 1"
+		"                and atttypid in ('smallint'::regtype,"
+		"                                 'int'::regtype,"
+		"                                 'bigint'::regtype)"
+		"           order by not indisprimary, not indisunique"
+		"              limit 1"
+		"         ) as pkeys on true"
 
 		"   where relkind in ('r', 'p') and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
@@ -192,7 +267,9 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
 		"                regexp_replace(c.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"                regexp_replace(auth.rolname, '[\n\r]', ' ')), "
+		"         pkeys.attname as partkey"
+
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 		"         join pg_roles auth ON auth.oid = c.relowner"
@@ -201,6 +278,24 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"    left join pg_temp.filter_include_only_table inc "
 		"           on n.nspname = inc.nspname "
 		"          and c.relname = inc.relname "
+
+		/* find a copy partition key candidate */
+		"         left join lateral ("
+		"             select indrelid, indexrelid, a.attname"
+
+		"               from pg_index x"
+		"               join pg_class i on i.oid = x.indexrelid"
+		"               join pg_attribute a on a.attrelid = c.oid and attnum = 1"
+
+		"              where x.indrelid = c.oid"
+		"                and (indisprimary or indisunique)"
+		"                and array_length(indkey::integer[], 1) = 1"
+		"                and atttypid in ('smallint'::regtype,"
+		"                                 'int'::regtype,"
+		"                                 'bigint'::regtype)"
+		"           order by not indisprimary, not indisunique"
+		"              limit 1"
+		"         ) as pkeys on true"
 
 		"   where relkind in ('r', 'p') and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
@@ -221,7 +316,9 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
 		"                regexp_replace(c.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"                regexp_replace(auth.rolname, '[\n\r]', ' ')), "
+		"         pkeys.attname as partkey"
+
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 		"         join pg_roles auth ON auth.oid = c.relowner"
@@ -234,6 +331,24 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         left join pg_temp.filter_exclude_table ft "
 		"                on n.nspname = ft.nspname "
 		"               and c.relname = ft.relname "
+
+		/* find a copy partition key candidate */
+		"         left join lateral ("
+		"             select indrelid, indexrelid, a.attname"
+
+		"               from pg_index x"
+		"               join pg_class i on i.oid = x.indexrelid"
+		"               join pg_attribute a on a.attrelid = c.oid and attnum = 1"
+
+		"              where x.indrelid = c.oid"
+		"                and (indisprimary or indisunique)"
+		"                and array_length(indkey::integer[], 1) = 1"
+		"                and atttypid in ('smallint'::regtype,"
+		"                                 'int'::regtype,"
+		"                                 'bigint'::regtype)"
+		"           order by not indisprimary, not indisunique"
+		"              limit 1"
+		"         ) as pkeys on true"
 
 		"   where relkind in ('r', 'p') and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
@@ -1677,6 +1792,84 @@ schema_list_pg_depend(PGSQL *pgsql,
 
 
 /*
+ * schema_list_partitions prepares the list of partitions that we can drive
+ * from our parameters: table size, --split-tables-larger-than.
+ */
+bool
+schema_list_partitions(PGSQL *pgsql, SourceTable *table, uint64_t partSize)
+{
+	/* no partKey, no partitions, done. */
+	if (IS_EMPTY_STRING_BUFFER(table->partKey))
+	{
+		table->partsArray.count = 0;
+		return true;
+	}
+
+	/* when partSize is zero, just don't partition the COPY */
+	if (partSize == 0)
+	{
+		table->partsArray.count = 0;
+		return true;
+	}
+
+	SourcePartitionContext parseContext = { { 0 }, table, false };
+
+	char *sqlTemplate =
+		" with "
+		" t(min, max, parts) as "
+		" ( "
+		"   select min(\"%s\"), max(\"%s\"), "
+		"          ceil(pg_table_size('%s.%s')::float / $1) "
+		"     from \"%s\".\"%s\""
+		"  ), "
+		"  ranges(n, parts, a, b) as "
+		"  ( "
+		"    select n, "
+		"           parts, "
+		"           x as a, "
+		"           coalesce((lead(x, 1) over(order by n)) - 1, max) as b "
+		"      from t, "
+		"           generate_series(min, max, ((max-min+1)/parts)::integer + 1) "
+		"           with ordinality as s(x, n) "
+		"  ) "
+		" "
+		"  select n, parts, a, b, b-a+1 as count "
+		"    from ranges "
+		"order by n";
+
+	char sql[BUFSIZE] = { 0 };
+
+	sformat(sql, sizeof(sql), sqlTemplate,
+			table->partKey, table->partKey,
+			table->nspname, table->relname,
+			table->nspname, table->relname);
+
+	int paramCount = 1;
+	Oid paramTypes[1] = { INT8OID };
+	const char *paramValues[1];
+
+	paramValues[0] = intToString(partSize).strValue;
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   &parseContext, &getPartitionList))
+	{
+		log_error("Failed to compute partition list for table \"%s\".\"%s\"",
+				  table->nspname, table->relname);
+		return false;
+	}
+
+	if (!parseContext.parsedOk)
+	{
+		log_error("Failed to list table COPY partition list");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * prepareFilters prepares the temporary tables that are needed on the Postgres
  * session where we want to implement a catalog query with filtering. The
  * filtering rules are then uploaded in those temp tables, and the filtering is
@@ -1860,9 +2053,9 @@ getTableArray(void *ctx, PGresult *result)
 
 	log_debug("getTableArray: %d", nTuples);
 
-	if (PQnfields(result) != 8)
+	if (PQnfields(result) != 9)
 	{
-		log_error("Query returned %d columns, expected 8", PQnfields(result));
+		log_error("Query returned %d columns, expected 9", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -1879,7 +2072,7 @@ getTableArray(void *ctx, PGresult *result)
 
 	context->tableArray->count = nTuples;
 	context->tableArray->array =
-		(SourceTable *) malloc(nTuples * sizeof(SourceTable));
+		(SourceTable *) calloc(nTuples, sizeof(SourceTable));
 
 	if (context->tableArray->array == NULL)
 	{
@@ -1995,6 +2188,28 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		++errors;
 	}
 
+	/* 9. partkey */
+	if (PQgetisnull(result, rowNumber, 8))
+	{
+		log_debug("Table \"%s\".\"%s\" with oid %u has not part key column",
+				  table->nspname,
+				  table->relname,
+				  table->oid);
+	}
+	else
+	{
+		value = PQgetvalue(result, rowNumber, 8);
+		length = strlcpy(table->partKey, value, NAMEDATALEN);
+
+		if (length >= NAMEDATALEN)
+		{
+			log_error("Partition key column name \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (NAMEDATALEN - 1)",
+					  value, length, NAMEDATALEN - 1);
+			++errors;
+		}
+	}
+
 	log_trace("parseCurrentSourceTable: %s.%s", table->nspname, table->relname);
 
 	return errors == 0;
@@ -2032,7 +2247,7 @@ getSequenceArray(void *ctx, PGresult *result)
 
 	context->sequenceArray->count = nTuples;
 	context->sequenceArray->array =
-		(SourceSequence *) malloc(nTuples * sizeof(SourceSequence));
+		(SourceSequence *) calloc(nTuples, sizeof(SourceSequence));
 
 	if (context->sequenceArray->array == NULL)
 	{
@@ -2149,7 +2364,7 @@ getIndexArray(void *ctx, PGresult *result)
 
 	context->indexArray->count = nTuples;
 	context->indexArray->array =
-		(SourceIndex *) malloc(nTuples * sizeof(SourceIndex));
+		(SourceIndex *) calloc(nTuples, sizeof(SourceIndex));
 
 	if (context->indexArray->array == NULL)
 	{
@@ -2396,7 +2611,7 @@ getDependArray(void *ctx, PGresult *result)
 
 	context->dependArray->count = nTuples;
 	context->dependArray->array =
-		(SourceDepend *) malloc(nTuples * sizeof(SourceDepend));
+		(SourceDepend *) calloc(nTuples, sizeof(SourceDepend));
 
 	if (context->dependArray->array == NULL)
 	{
@@ -2553,6 +2768,124 @@ parseCurrentSourceDepend(PGresult *result, int rowNumber, SourceDepend *depend)
 		log_error("Table dependency identity \"%s\" is %d bytes long, "
 				  "the maximum expected is %d (BUFSIZE - 1)",
 				  value, length, BUFSIZE - 1);
+		++errors;
+	}
+
+	return errors == 0;
+}
+
+
+/*
+ * getPartitionList loops over the SQL result for the COPY partitions query and
+ * allocate an array of SourceTableParts and populates it with the query
+ * results.
+ */
+static void
+getPartitionList(void *ctx, PGresult *result)
+{
+	SourcePartitionContext *context = (SourcePartitionContext *) ctx;
+	int nTuples = PQntuples(result);
+
+	if (PQnfields(result) != 5)
+	{
+		log_error("Query returned %d columns, expected 5", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	/* we're not supposed to re-cycle arrays here */
+	if (context->table->partsArray.array != NULL)
+	{
+		/* issue a warning but let's try anyway */
+		log_warn("BUG? context's partsArray is not null in getPartitionList");
+
+		free(context->table->partsArray.array);
+		context->table->partsArray.array = NULL;
+		context->table->partsArray.count = 0;
+	}
+
+	context->table->partsArray.count = nTuples;
+	context->table->partsArray.array =
+		(SourceTableParts *) calloc(nTuples, sizeof(SourceTableParts));
+
+	if (context->table->partsArray.array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return;
+	}
+
+	bool parsedOk = true;
+
+	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
+	{
+		SourceTableParts *parts = &(context->table->partsArray.array[rowNumber]);
+
+		parsedOk = parsedOk &&
+				   parseCurrentPartition(result, rowNumber, parts);
+	}
+
+	if (!parsedOk)
+	{
+		free(context->table->partsArray.array);
+		context->table->partsArray.array = NULL;
+		context->table->partsArray.count = 0;
+	}
+
+	context->parsedOk = parsedOk;
+}
+
+
+/*
+ * parseCurrentPartition parses a single row of the table COPY partition
+ * listing query result.
+ */
+static bool
+parseCurrentPartition(PGresult *result, int rowNumber, SourceTableParts *parts)
+{
+	int errors = 0;
+
+	/* 1. partNumber */
+	char *value = PQgetvalue(result, rowNumber, 0);
+
+	if (!stringToInt(value, &(parts->partNumber)))
+	{
+		log_error("Invalid part number \"%s\"", value);
+		++errors;
+	}
+
+	/* 2. partCount */
+	value = PQgetvalue(result, rowNumber, 1);
+
+	if (!stringToInt(value, &(parts->partCount)))
+	{
+		log_error("Invalid part count \"%s\"", value);
+		++errors;
+	}
+
+	/* 3. min */
+	value = PQgetvalue(result, rowNumber, 2);
+
+	if (!stringToInt64(value, &(parts->min)))
+	{
+		log_error("Invalid part min \"%s\"", value);
+		++errors;
+	}
+
+	/* 4. max */
+	value = PQgetvalue(result, rowNumber, 3);
+
+	if (!stringToInt64(value, &(parts->max)))
+	{
+		log_error("Invalid part max \"%s\"", value);
+		++errors;
+	}
+
+	/* 5. count */
+	value = PQgetvalue(result, rowNumber, 4);
+
+	if (!stringToInt64(value, &(parts->count)))
+	{
+		log_error("Invalid part count \"%s\"", value);
 		++errors;
 	}
 

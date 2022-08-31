@@ -374,6 +374,12 @@ The following options are available to ``pgcopydb copy`` sub-commands:
   Postgres target system, minus some cores that are going to be used for
   handling the COPY operations.
 
+--split-tables-larger-than
+
+   Allow :ref:`same_table_concurrency` when processing the source database.
+   This environment variable value is expected to be a byte size, and bytes
+   units B, kB, MB, GB, TB, PB, and EB are known.
+
 --skip-large-objects
 
   Skip copying large objects, also known as blobs, when copying the data
@@ -461,6 +467,15 @@ PGCOPYDB_TARGET_INDEX_JOBS
    Number of concurrent jobs allowed to run CREATE INDEX operations in
    parallel. When ``--index-jobs`` is ommitted from the command line, then
    this environment variable is used.
+
+PGCOPYDB_SPLIT_TABLES_LARGER_THAN
+
+   Allow :ref:`same_table_concurrency` when processing the source database.
+   This environment variable value is expected to be a byte size, and bytes
+   units B, kB, MB, GB, TB, PB, and EB are known.
+
+   When ``--split-tables-larger-than`` is ommitted from the command line,
+   then this environment variable is used.
 
 PGCOPYDB_DROP_IF_EXISTS
 

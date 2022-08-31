@@ -1764,10 +1764,8 @@ pg_copy_send_query(PGSQL *pgsql,
 
 	if (status == PGRES_COPY_OUT)
 	{
-		sformat(sql, sizeof(sql),
-				"copy %s to stdout %s",
-				qname,
-				freeze ? "with (freeze)" : "");
+		/* There is no COPY TO with FREEZE */
+		sformat(sql, sizeof(sql), "copy %s to stdout", qname);
 	}
 	else if (status == PGRES_COPY_IN)
 	{

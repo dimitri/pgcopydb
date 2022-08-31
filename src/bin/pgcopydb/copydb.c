@@ -514,6 +514,8 @@ copydb_init_specs(CopyDataSpec *specs,
 				  char *target_pguri,
 				  int tableJobs,
 				  int indexJobs,
+				  uint64_t splitTablesLargerThan,
+				  char *splitTablesLargerThanPretty,
 				  CopyDataSection section,
 				  char *snapshot,
 				  RestoreOptions restoreOptions,
@@ -549,6 +551,8 @@ copydb_init_specs(CopyDataSpec *specs,
 
 		.tableJobs = tableJobs,
 		.indexJobs = indexJobs,
+		.splitTablesLargerThan = splitTablesLargerThan,
+
 		.indexSemaphore = { 0 }
 	};
 
@@ -570,6 +574,10 @@ copydb_init_specs(CopyDataSpec *specs,
 				snapshot,
 				sizeof(tmpCopySpecs.sourceSnapshot.snapshot));
 	}
+
+	strlcpy(tmpCopySpecs.splitTablesLargerThanPretty,
+			splitTablesLargerThanPretty,
+			sizeof(tmpCopySpecs.splitTablesLargerThanPretty));
 
 	/* copy the structure as a whole memory area to the target place */
 	*specs = tmpCopySpecs;
@@ -621,7 +629,8 @@ copydb_init_specs(CopyDataSpec *specs,
 bool
 copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 						CopyDataSpec *specs,
-						SourceTable *source)
+						SourceTable *source,
+						int partNumber)
 {
 	/* fill-in a structure with the help of the C compiler */
 	CopyTableDataSpec tmpTableSpecs = {
@@ -672,19 +681,108 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 			tableSpecs->sourceTable.nspname,
 			tableSpecs->sourceTable.relname);
 
+	/* This CopyTableDataSpec might be for a partial COPY */
+	if (source->partsArray.count >= 1)
+	{
+		CopyTableDataPartSpec part = {
+			.partNumber = partNumber,
+			.partCount = source->partsArray.array[partNumber].partCount,
+			.min = source->partsArray.array[partNumber].min,
+			.max = source->partsArray.array[partNumber].max
+		};
 
-	/* now compute the table-specific paths we are using in copydb */
-	sformat(tableSpecs->tablePaths.lockFile, MAXPGPATH, "%s/%d",
+		tableSpecs->part = part;
+
+		strlcpy(tableSpecs->part.partKey, source->partKey, NAMEDATALEN);
+
+		/*
+		 * Prepare the COPY command.
+		 *
+		 * The way schema_list_partitions prepares the boundaries is non
+		 * overlapping, so we can use the BETWEEN operator to select our source
+		 * rows in the COPY sub-query.
+		 */
+		sformat(tableSpecs->part.copyQuery, sizeof(tableSpecs->part.copyQuery),
+				"(SELECT * FROM %s"
+				" WHERE \"%s\" BETWEEN %lld AND %lld)",
+				tableSpecs->qname,
+				tableSpecs->part.partKey,
+				(long long) tableSpecs->part.min,
+				(long long) tableSpecs->part.max);
+
+		/* now compute the table-specific paths we are using in copydb */
+		if (!copydb_init_tablepaths_for_part(tableSpecs,
+											 &(tableSpecs->tablePaths),
+											 partNumber))
+		{
+			log_error("Failed to prepare pathnames for partition %d of table %s",
+					  partNumber,
+					  tableSpecs->qname);
+			return false;
+		}
+
+		/* used only by one process, the one finishing a partial COPY last */
+		sformat(tableSpecs->tablePaths.idxListFile, MAXPGPATH, "%s/%u.idx",
+				tableSpecs->cfPaths->tbldir,
+				source->oid);
+
+		/*
+		 * And now the truncateLockFile and truncateDoneFile, which are used to
+		 * provide a critical section to the same-table concurrent processes.
+		 */
+		sformat(tableSpecs->tablePaths.truncateDoneFile, MAXPGPATH,
+				"%s/%u.truncate",
+				tableSpecs->cfPaths->tbldir,
+				source->oid);
+	}
+	else
+	{
+		/* No partition found, so this should be a full table COPY */
+		if (partNumber > 0)
+		{
+			log_error("BUG: copydb_init_table_specs partNumber is %d and "
+					  "source table partArray.count is %d",
+					  partNumber,
+					  source->partsArray.count);
+			return false;
+		}
+
+		/* now compute the table-specific paths we are using in copydb */
+		sformat(tableSpecs->tablePaths.lockFile, MAXPGPATH, "%s/%d",
+				tableSpecs->cfPaths->rundir,
+				source->oid);
+
+		sformat(tableSpecs->tablePaths.doneFile, MAXPGPATH, "%s/%d.done",
+				tableSpecs->cfPaths->tbldir,
+				source->oid);
+
+		sformat(tableSpecs->tablePaths.idxListFile, MAXPGPATH, "%s/%u.idx",
+				tableSpecs->cfPaths->tbldir,
+				source->oid);
+	}
+
+	return true;
+}
+
+
+/*
+ * copydb_init_tablepaths_for_part computes the lockFile and doneFile pathnames
+ * for a given COPY partition of a table.
+ */
+bool
+copydb_init_tablepaths_for_part(CopyTableDataSpec *tableSpecs,
+								TableFilePaths *tablePaths,
+								int partNumber)
+{
+	sformat(tablePaths->lockFile, MAXPGPATH, "%s/%d.%d",
 			tableSpecs->cfPaths->rundir,
-			source->oid);
+			tableSpecs->sourceTable.oid,
+			partNumber);
 
-	sformat(tableSpecs->tablePaths.doneFile, MAXPGPATH, "%s/%d.done",
+	sformat(tablePaths->doneFile, MAXPGPATH, "%s/%d.%d.done",
 			tableSpecs->cfPaths->tbldir,
-			source->oid);
-
-	sformat(tableSpecs->tablePaths.idxListFile, MAXPGPATH, "%s/%u.idx",
-			tableSpecs->cfPaths->tbldir,
-			source->oid);
+			tableSpecs->sourceTable.oid,
+			partNumber);
 
 	return true;
 }

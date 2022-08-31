@@ -21,8 +21,12 @@ typedef struct ListDBOptions
 	char schema_name[NAMEDATALEN];
 	char table_name[NAMEDATALEN];
 	char filterFileName[MAXPGPATH];
+
 	bool listSkipped;
 	bool noPKey;
+
+	uint64_t splitTablesLargerThan;
+	char splitTablesLargerThanPretty[NAMEDATALEN];
 } ListDBOptions;
 
 

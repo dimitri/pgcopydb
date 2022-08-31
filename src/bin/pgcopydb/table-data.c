@@ -215,39 +215,132 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 		return false;
 	}
 
-	int count = tableArray.count;
+	int copySpecsCount = 0;
 
-	/* only use as many processes as required */
-	if (count < specs->tableJobs)
+	if (specs->splitTablesLargerThan > 0)
 	{
-		specs->tableJobs = count;
+		log_info("Splitting source candidate tables larger than %s",
+				 specs->splitTablesLargerThanPretty);
 	}
 
-	specs->tableSpecsArray.count = count;
+	/*
+	 * Source table might be split in several concurrent COPY processes. In
+	 * that case we produce a CopyDataSpec entry for each COPY partition.
+	 */
+	for (int tableIndex = 0; tableIndex < tableArray.count; tableIndex++)
+	{
+		SourceTable *source = &(tableArray.array[tableIndex]);
+
+		if (specs->splitTablesLargerThan > 0 &&
+			specs->splitTablesLargerThan <= source->bytes)
+		{
+			if (IS_EMPTY_STRING_BUFFER(source->partKey))
+			{
+				log_info("Table \"%s\".\"%s\" is %s large, "
+						 "which is larger than --split-tables-larger-than %s, "
+						 "but does not have a unique column of type integer "
+						 "(int2/int4/int8).",
+						 source->nspname,
+						 source->relname,
+						 source->bytesPretty,
+						 specs->splitTablesLargerThanPretty);
+
+				log_warn("Skipping same-table concurrency for table \"%s\".\"%s\"",
+						 source->nspname,
+						 source->relname);
+
+				++copySpecsCount;
+				continue;
+			}
+
+			if (!schema_list_partitions(pgsql,
+										source,
+										specs->splitTablesLargerThan))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			if (source->partsArray.count > 1)
+			{
+				log_info("Table \"%s\".\"%s\" is %s large, "
+						 "%d COPY processes will be used, partitining on \"%s\".",
+						 source->nspname,
+						 source->relname,
+						 source->bytesPretty,
+						 source->partsArray.count,
+						 source->partKey);
+
+				copySpecsCount += source->partsArray.count;
+			}
+			else
+			{
+				++copySpecsCount;
+			}
+		}
+		else
+		{
+			++copySpecsCount;
+		}
+	}
+
+	/* only use as many processes as required */
+	if (copySpecsCount < specs->tableJobs)
+	{
+		specs->tableJobs = copySpecsCount;
+	}
+
+	specs->tableSpecsArray.count = copySpecsCount;
 	specs->tableSpecsArray.array =
-		(CopyTableDataSpec *) malloc(count * sizeof(CopyTableDataSpec));
+		(CopyTableDataSpec *) malloc(copySpecsCount * sizeof(CopyTableDataSpec));
 
 	uint64_t totalBytes = 0;
 	uint64_t totalTuples = 0;
 
 	/*
-	 * Prepare the copy specs for each table we have.
+	 * Prepare the copy specs for each COPY source we have: each full table and
+	 * each table part when partitionning/splitting is in use.
 	 */
+	int specsIndex = 0;
+	CopyTableDataSpec *tableSpecs = &(tableSpecsArray->array[specsIndex]);
+
 	for (int tableIndex = 0; tableIndex < tableArray.count; tableIndex++)
 	{
 		/* initialize our TableDataProcess entry now */
 		SourceTable *source = &(tableArray.array[tableIndex]);
-		CopyTableDataSpec *tableSpecs = &(tableSpecsArray->array[tableIndex]);
 
 		/*
 		 * The CopyTableDataSpec structure has its own memory area for the
 		 * SourceTable entry, which is copied by the following function. This
 		 * means that 'SourceTableArray tableArray' is actually local memory.
 		 */
-		if (!copydb_init_table_specs(tableSpecs, specs, source))
+		int partCount = source->partsArray.count;
+
+		if (partCount <= 1)
 		{
-			/* errors have already been logged */
-			return false;
+			if (!copydb_init_table_specs(tableSpecs, specs, source, 0))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			tableSpecs = &(tableSpecsArray->array[++specsIndex]);
+		}
+		else
+		{
+			for (int partIndex = 0; partIndex < partCount; partIndex++)
+			{
+				if (!copydb_init_table_specs(tableSpecs,
+											 specs,
+											 source,
+											 partIndex))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+
+				tableSpecs = &(tableSpecsArray->array[++specsIndex]);
+			}
 		}
 
 		totalBytes += source->bytes;
@@ -716,7 +809,7 @@ copydb_process_table_data_worker(CopyDataSpec *specs)
 			/* check for exclude-table-data filtering */
 			if (!tableSpecs->sourceTable.excludeData)
 			{
-				if (!copydb_copy_table(tableSpecs))
+				if (!copydb_copy_table(specs, tableSpecs))
 				{
 					/* errors have already been logged */
 					return false;
@@ -734,7 +827,24 @@ copydb_process_table_data_worker(CopyDataSpec *specs)
 		/*
 		 * 2. Fetch the list of indexes and constraints attached to this table
 		 *    and create them in a background process.
+		 *
+		 * When done, if a partial COPY is happening, check that all the other
+		 * parts are done too. Whenever the last part is done, that's when we
+		 * kick the indexing. This check should be done in the critical section
+		 * too.
 		 */
+		bool allPartsDone = false;
+		bool indexesAreBeingProcessed = false;
+
+		if (!copydb_table_parts_are_all_done(specs,
+											 tableSpecs,
+											 &allPartsDone,
+											 &indexesAreBeingProcessed))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
 		if (specs->dirState.indexCopyIsDone &&
 			specs->section != DATA_SECTION_CONSTRAINTS)
 		{
@@ -742,13 +852,17 @@ copydb_process_table_data_worker(CopyDataSpec *specs)
 		}
 		else if (!isDone && !isBeingProcessed)
 		{
-			if (!copydb_copy_table_indexes(tableSpecs))
+			/* take care of same-table concurrency too */
+			if (allPartsDone && !indexesAreBeingProcessed)
 			{
-				log_warn("Failed to create all the indexes for %s, "
-						 "see above for details",
-						 tableSpecs->qname);
-				log_warn("Consider `pgcopydb copy indexes` to try again");
-				++errors;
+				if (!copydb_copy_table_indexes(tableSpecs))
+				{
+					log_warn("Failed to create all the indexes for %s, "
+							 "see above for details",
+							 tableSpecs->qname);
+					log_warn("Consider `pgcopydb copy indexes` to try again");
+					++errors;
+				}
 			}
 		}
 
@@ -759,10 +873,14 @@ copydb_process_table_data_worker(CopyDataSpec *specs)
 		 */
 		if (!isDone && !isBeingProcessed)
 		{
-			if (!copydb_start_vacuum_table(tableSpecs))
+			/* take care of same-table concurrency too */
+			if (allPartsDone && !isBeingProcessed)
 			{
-				log_warn("Failed to VACUUM ANALYZE %s", tableSpecs->qname);
-				++errors;
+				if (!copydb_start_vacuum_table(tableSpecs))
+				{
+					log_warn("Failed to VACUUM ANALYZE %s", tableSpecs->qname);
+					++errors;
+				}
 			}
 		}
 
@@ -902,20 +1020,30 @@ copydb_table_is_being_processed(CopyDataSpec *specs,
 	 */
 	CopyTableSummary emptySummary = { 0 };
 	CopyTableSummary *summary =
-		(CopyTableSummary *) malloc(sizeof(CopyTableSummary));
+		(CopyTableSummary *) calloc(1, sizeof(CopyTableSummary));
 
 	*summary = emptySummary;
 
 	summary->pid = getpid();
 	summary->table = &(tableSpecs->sourceTable);
 
-	sformat(summary->command, sizeof(summary->command),
-			"COPY %s;",
-			tableSpecs->qname);
+	if (IS_EMPTY_STRING_BUFFER(tableSpecs->part.copyQuery))
+	{
+		sformat(summary->command, sizeof(summary->command),
+				"COPY %s",
+				tableSpecs->qname);
+	}
+	else
+	{
+		sformat(summary->command, sizeof(summary->command),
+				"COPY %s",
+				tableSpecs->part.copyQuery);
+	}
 
 	if (!open_table_summary(summary, tableSpecs->tablePaths.lockFile))
 	{
-		log_info("Failed to create the lock file at \"%s\"",
+		log_info("Failed to create the lock file for table %s at \"%s\"",
+				 tableSpecs->qname,
 				 tableSpecs->tablePaths.lockFile);
 
 		/* end of the critical section */
@@ -972,12 +1100,94 @@ copydb_mark_table_as_done(CopyDataSpec *specs,
 
 
 /*
+ * copydb_table_parts_are_all_done return true when a table COPY is done in a
+ * single process, or when a table COPY has been partitionned in several
+ * concurrent process and all of them are known to be done.
+ */
+bool
+copydb_table_parts_are_all_done(CopyDataSpec *specs,
+								CopyTableDataSpec *tableSpecs,
+								bool *allPartsDone,
+								bool *isBeingProcessed)
+{
+	if (tableSpecs->part.partCount <= 1)
+	{
+		*allPartsDone = true;
+		*isBeingProcessed = false;
+		return true;
+	}
+
+	*allPartsDone = false;
+
+	/* enter the critical section */
+	(void) semaphore_lock(&(specs->tableSemaphore));
+
+	/* make sure only one process created the indexes/constraints */
+	if (file_exists(tableSpecs->tablePaths.idxListFile))
+	{
+		*allPartsDone = true;
+		*isBeingProcessed = true;
+
+		(void) semaphore_unlock(&(specs->tableSemaphore));
+		return true;
+	}
+
+	bool allDone = true;
+
+	for (int i = 0; i < tableSpecs->part.partCount; i++)
+	{
+		TableFilePaths partPaths = { 0 };
+
+		(void) copydb_init_tablepaths_for_part(tableSpecs, &partPaths, i);
+
+		if (!file_exists(partPaths.doneFile))
+		{
+			allDone = false;
+			break;
+		}
+	}
+
+	/* create an empty index list file now, when allDone is still true */
+	if (allDone)
+	{
+		if (!write_file("", 0, tableSpecs->tablePaths.idxListFile))
+		{
+			/* errors have already been logged */
+			(void) semaphore_unlock(&(specs->tableSemaphore));
+			return false;
+		}
+
+		*allPartsDone = true;
+		*isBeingProcessed = false; /* allow processing of the indexes */
+
+		/* end of the critical section */
+		(void) semaphore_unlock(&(specs->tableSemaphore));
+
+		return true;
+	}
+	else
+	{
+		/* end of the critical section */
+		(void) semaphore_unlock(&(specs->tableSemaphore));
+
+		*allPartsDone = false;
+		*isBeingProcessed = false;
+
+		return true;
+	}
+
+	/* keep compiler happy, we should never end-up here */
+	return true;
+}
+
+
+/*
  * copydb_copy_table implements the sub-process activity to pg_dump |
  * pg_restore the table's data and then create the indexes and the constraints
  * in parallel.
  */
 bool
-copydb_copy_table(CopyTableDataSpec *tableSpecs)
+copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 {
 	/* COPY the data from the source table to the target table */
 	if (tableSpecs->section != DATA_SECTION_TABLE_DATA &&
@@ -1000,13 +1210,68 @@ copydb_copy_table(CopyTableDataSpec *tableSpecs)
 		return false;
 	}
 
-	/* Now copy the data from source to target */
-	log_info("%s", summary->command);
-
 	/* when using `pgcopydb copy table-data`, we don't truncate */
 	bool truncate = tableSpecs->section != DATA_SECTION_TABLE_DATA;
 
-	if (!pg_copy(src, &dst, tableSpecs->qname, tableSpecs->qname, truncate))
+	/*
+	 * When COPYing a partition, TRUNCATE only when it's the first one. Both
+	 * checking of the partition is the first one being processed and the
+	 * TRUNCATE operation itself must be protected in a critical section.
+	 */
+	if (truncate && tableSpecs->part.partCount > 1)
+	{
+		/*
+		 * When partitioning for COPY we can only TRUNCATE once per table, we
+		 * avoid doing a TRUNCATE per part. So only the process that reaches
+		 * this area first is allowed to TRUNCATE, and it must do so within a
+		 * critical section.
+		 *
+		 * As processes for the other parts of the same source table are
+		 * waiting for the TRUNCATE to be done with, we can't do it in the same
+		 * transaction as the COPY, and we won't be able to COPY with FREEZE
+		 * either.
+		 */
+
+		/* enter the critical section */
+		(void) semaphore_lock(&(specs->tableSemaphore));
+
+		/* if the truncate done file already exists, it's been done already */
+		if (!file_exists(tableSpecs->tablePaths.truncateDoneFile))
+		{
+			if (!pgsql_truncate(&dst, tableSpecs->qname))
+			{
+				/* errors have already been logged */
+				(void) semaphore_unlock(&(specs->tableSemaphore));
+				return false;
+			}
+
+			if (!write_file("", 0, tableSpecs->tablePaths.truncateDoneFile))
+			{
+				/* errors have already been logged */
+				(void) semaphore_unlock(&(specs->tableSemaphore));
+				return false;
+			}
+		}
+
+		/* end of the critical section */
+		(void) semaphore_unlock(&(specs->tableSemaphore));
+
+		/* now TRUNCATE has been done, refrain from an extra one in pg_copy */
+		truncate = false;
+	}
+
+	/* Now copy the data from source to target */
+	log_info("%s", summary->command);
+
+	/* COPY FROM tablename, or maybe COPY FROM (SELECT ... WHERE ...) */
+	char *copySource = tableSpecs->qname;
+
+	if (tableSpecs->part.partCount > 1)
+	{
+		copySource = tableSpecs->part.copyQuery;
+	}
+
+	if (!pg_copy(src, &dst, copySource, tableSpecs->qname, truncate))
 	{
 		/* errors have already been logged */
 		return false;

@@ -270,6 +270,31 @@ cli_copydb_getenv(CopyDBOptions *options)
 		}
 	}
 
+	if (env_exists(PGCOPYDB_SPLIT_TABLES_LARGER_THAN))
+	{
+		char bytes[BUFSIZE] = { 0 };
+
+		if (get_env_copy(PGCOPYDB_SPLIT_TABLES_LARGER_THAN, bytes, sizeof(bytes)))
+		{
+			if (!cli_parse_bytes_pretty(
+					bytes,
+					&options->splitTablesLargerThan,
+					(char *) &options->splitTablesLargerThanPretty,
+					sizeof(options->splitTablesLargerThanPretty)))
+			{
+				log_fatal("Failed to parse PGCOPYDB_SPLIT_TABLES_LARGER_THAN: "
+						  " \"%s\"",
+						  bytes);
+				++errors;
+			}
+		}
+		else
+		{
+			/* errors have already been logged */
+			++errors;
+		}
+	}
+
 	/* when --snapshot has not been used, check PGCOPYDB_SNAPSHOT */
 	if (env_exists(PGCOPYDB_SNAPSHOT))
 	{
@@ -455,6 +480,8 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "jobs", required_argument, NULL, 'J' },
 		{ "table-jobs", required_argument, NULL, 'J' },
 		{ "index-jobs", required_argument, NULL, 'I' },
+		{ "split-tables-larger-than", required_argument, NULL, 'L' },
+		{ "split-at", required_argument, NULL, 'L' },
 		{ "drop-if-exists", no_argument, NULL, 'c' }, /* pg_restore -c */
 		{ "roles", no_argument, NULL, 'A' },          /* pg_dumpall --roles-only */
 		{ "no-owner", no_argument, NULL, 'O' },       /* pg_restore -O */
@@ -483,8 +510,9 @@ cli_copy_db_getopts(int argc, char **argv)
 	optind = 0;
 
 	/* install default values */
-	options.tableJobs = 4;
-	options.indexJobs = 4;
+	options.tableJobs = DEFAULT_TABLE_JOBS;
+	options.indexJobs = DEFAULT_INDEX_JOBS;
+	options.splitTablesLargerThan = DEFAULT_SPLIT_TABLES_LARGER_THAN;
 
 	/* read values from the environment */
 	if (!cli_copydb_getenv(&options))
@@ -497,7 +525,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	strlcpy(options.slotName, REPLICATION_SLOT_NAME, sizeof(options.slotName));
 	strlcpy(options.origin, REPLICATION_ORIGIN, sizeof(options.origin));
 
-	while ((c = getopt_long(argc, argv, "S:T:D:J:I:cOBrRCN:xXCtfo:s:E:F:Vvqh",
+	while ((c = getopt_long(argc, argv, "S:T:D:J:I:L:cOBrRCN:xXCtfo:s:E:F:Vvqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -558,6 +586,25 @@ cli_copy_db_getopts(int argc, char **argv)
 					++errors;
 				}
 				log_trace("--jobs %d", options.indexJobs);
+				break;
+			}
+
+			case 'L':
+			{
+				if (!cli_parse_bytes_pretty(
+						optarg,
+						&options.splitTablesLargerThan,
+						(char *) &options.splitTablesLargerThanPretty,
+						sizeof(options.splitTablesLargerThanPretty)))
+				{
+					log_fatal("Failed to parse --split-tables-larger-than: \"%s\"",
+							  optarg);
+					++errors;
+				}
+
+				log_trace("--split-tables-larger-than %s (%lld)",
+						  options.splitTablesLargerThanPretty,
+						  (long long) options.splitTablesLargerThan);
 				break;
 			}
 
@@ -772,6 +819,33 @@ cli_copy_db_getopts(int argc, char **argv)
 
 
 /*
+ * cli_parse_bytes_pretty parses a pretty-printed bytes value in the bytestring
+ * argument, and converts it to a raw bytes value. Then it pretty-prints the
+ * raw value in the bytesPretty allocated string, using pgcopydb rules.
+ */
+bool
+cli_parse_bytes_pretty(const char *byteString,
+					   uint64_t *bytes,
+					   char *bytesPretty,
+					   size_t bytesPrettySize)
+{
+	if (!parse_pretty_printed_bytes(byteString, bytes))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* "1024 MB" will then be written as "1 GB" */
+	(void) pretty_print_bytes(bytesPretty, bytesPrettySize, *bytes);
+
+	log_trace("parsed bytes value: %lld", (long long) *bytes);
+	log_trace("pretty printed to : \"%s\"", bytesPretty);
+
+	return true;
+}
+
+
+/*
  * cli_copy_prepare_specs initializes our internal data structure that are used
  * to drive the operations.
  */
@@ -824,6 +898,8 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 						   copyDBoptions.target_pguri,
 						   copyDBoptions.tableJobs,
 						   copyDBoptions.indexJobs,
+						   copyDBoptions.splitTablesLargerThan,
+						   copyDBoptions.splitTablesLargerThanPretty,
 						   section,
 						   copyDBoptions.snapshot,
 						   copyDBoptions.restoreOptions,

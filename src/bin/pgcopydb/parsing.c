@@ -402,6 +402,126 @@ parse_bool(const char *value, bool *result)
 
 
 /*
+ * parse_pretty_printed_bytes parses a pretty printed byte value and puts the
+ * actual number of bytes in the result field if it is not NULL. The function
+ * returns true on successful parse, returns false if any parse error is
+ * encountered.
+ */
+bool
+parse_pretty_printed_bytes(const char *value, uint64_t *result)
+{
+	if (result == NULL)
+	{
+		log_error("BUG: parse_pretty_printed_bytes called with NULL result");
+		return false;
+	}
+
+	if (value == NULL)
+	{
+		log_error("BUG: parse_pretty_printed_bytes called with NULL value");
+		return false;
+	}
+
+	if (strcmp(value, "") == 0)
+	{
+		log_error("Failed to parse empty string \"\" as a bytes value");
+		return false;
+	}
+
+	char *digits = NULL;
+	char *unit = NULL;
+	char *ptr = (char *) value;
+
+	/* skip front spaces if any */
+	while (*ptr != '\0' && isspace((unsigned char) *ptr))
+	{
+		++ptr;
+	}
+
+	/* after spaces, we want to find digits, as in " 1234 kB " */
+	digits = ptr;
+
+	/* now skip digits in " 1234 kB" until another space or a unit is found */
+	while (*ptr != '\0' && isdigit((unsigned char) *ptr))
+	{
+		++ptr;
+	}
+
+	/* not a digit anymore, copy digits into a zero-terminated string */
+	char val[BUFSIZE] = { 0 };
+	strlcpy(val, digits, ptr - digits + 1);
+
+	uint64_t number = 0;
+
+	if (!stringToUInt64(val, &number))
+	{
+		/* errors have already been logged */
+		log_error("Failed to parse number \"%s\"", digits);
+		return false;
+	}
+
+	/* now skip spaces again, we want to find the unit (kB, MB, etc) */
+	while (*ptr != '\0' && isspace((unsigned char) *ptr))
+	{
+		++ptr;
+	}
+
+	unit = ptr;
+
+	/* when we don't have a unit, take the number as it is */
+	if (*unit == '\0')
+	{
+		*result = number;
+		return true;
+	}
+
+	/* finally remove extra spaces at the end of the unit, if any */
+	while (*ptr != '\0' && isalpha((unsigned char) *ptr))
+	{
+		++ptr;
+	}
+
+	*ptr = '\0';
+
+	/* otherwise find the unit in our table and compute the result */
+	const char *suffixes[7] = {
+		"B",                    /* Bytes */
+		"kB",                   /* Kilo */
+		"MB",                   /* Mega */
+		"GB",                   /* Giga */
+		"TB",                   /* Tera */
+		"PB",                   /* Peta */
+		"EB"                    /* Exa */
+	};
+
+	uint64_t res = number;
+	uint sIndex = 0;
+
+	while (sIndex < 7 && strcmp(unit, suffixes[sIndex]) != 0)
+	{
+		++sIndex;
+
+		/* first suffix/unit is "B" which is not a multiplier */
+		if (sIndex > 0)
+		{
+			res = res * 1024;
+		}
+	}
+
+	if (sIndex == 7)
+	{
+		log_error("Failed to parse bytes string \"%s\": unknown unit \"%s\"",
+				  value,
+				  unit);
+	}
+
+	*result = res;
+
+	return true;
+}
+
+
+/*
  * parse_pguri_info_key_vals decomposes elements of a Postgres connection
  * string (URI) into separate arrays of keywords and values as expected by
  * PQconnectdbParams.

@@ -43,7 +43,13 @@ write_table_summary(CopyTableSummary *summary, char *filename)
 			summary->command);
 
 	/* write the summary to the doneFile */
-	return write_file(contents, strlen(contents), filename);
+	if (!write_file(contents, strlen(contents), filename))
+	{
+		log_error("Failed to write table summary file \"%s\"", filename);
+		return false;
+	}
+
+	return true;
 }
 
 
@@ -224,10 +230,14 @@ create_table_index_file(CopyTableSummary *summary,
 		return false;
 	}
 
-	bool success = write_file(content->data, content->len, filename);
-	destroyPQExpBuffer(content);
+	if (!write_file(content->data, content->len, filename))
+	{
+		log_error("Failed to write file \"%s\"", filename);
+		destroyPQExpBuffer(content);
+		return false;
+	}
 
-	return success;
+	return true;
 }
 
 
@@ -945,37 +955,45 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 
 		SourceIndexArray indexArray = { 0 };
 
-		if (!read_table_index_file(&indexArray,
-								   tableSpecs->tablePaths.idxListFile))
+		/*
+		 * When the table COPY processing was split into several processes,
+		 * ensure we only read the index list once: only one of those COPY
+		 * processes started the indexing.
+		 */
+		if (tableSpecs->part.partNumber == 0)
 		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		/* for reach index, read the index summary */
-		for (int i = 0; i < indexArray.count; i++)
-		{
-			SourceIndex *index = &(indexArray.array[i]);
-			CopyIndexSummary indexSummary = { .index = index };
-			char indexDoneFile[MAXPGPATH] = { 0 };
-
-			/* build the indexDoneFile for the target index */
-			sformat(indexDoneFile, sizeof(indexDoneFile), "%s/%u.done",
-					specs->cfPaths.idxdir,
-					index->indexOid);
-
-			/* when a table has no indexes, the file doesn't exists */
-			if (file_exists(indexDoneFile))
+			if (!read_table_index_file(&indexArray,
+									   tableSpecs->tablePaths.idxListFile))
 			{
-				if (!read_index_summary(&indexSummary, indexDoneFile))
-				{
-					/* errors have already been logged */
-					return false;
-				}
+				/* errors have already been logged */
+				return false;
+			}
 
-				/* accumulate total duration of creating all the indexes */
-				timings->indexDurationMs += indexSummary.durationMs;
-				indexingDurationMs += indexSummary.durationMs;
+			/* for reach index, read the index summary */
+			for (int i = 0; i < indexArray.count; i++)
+			{
+				SourceIndex *index = &(indexArray.array[i]);
+				CopyIndexSummary indexSummary = { .index = index };
+				char indexDoneFile[MAXPGPATH] = { 0 };
+
+				/* build the indexDoneFile for the target index */
+				sformat(indexDoneFile, sizeof(indexDoneFile), "%s/%u.done",
+						specs->cfPaths.idxdir,
+						index->indexOid);
+
+				/* when a table has no indexes, the file doesn't exists */
+				if (file_exists(indexDoneFile))
+				{
+					if (!read_index_summary(&indexSummary, indexDoneFile))
+					{
+						/* errors have already been logged */
+						return false;
+					}
+
+					/* accumulate total duration of creating all the indexes */
+					timings->indexDurationMs += indexSummary.durationMs;
+					indexingDurationMs += indexSummary.durationMs;
+				}
 			}
 		}
 

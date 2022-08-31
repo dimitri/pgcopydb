@@ -278,6 +278,8 @@ cli_create_snapshot(int argc, char **argv)
 						   createSNoptions.target_pguri,
 						   1,   /* tableJobs */
 						   1,   /* indexJobs */
+						   0,   /* skip threshold */
+						   "",  /* skip threshold pretty printed */
 						   DATA_SECTION_ALL,
 						   createSNoptions.snapshot,
 						   restoreOptions,
@@ -518,6 +520,8 @@ cli_create_slot(int argc, char **argv)
 						   createSlotOptions.target_pguri,
 						   1,   /* tableJobs */
 						   1,   /* indexJobs */
+						   0,   /* skip threshold */
+						   "",  /* skip threshold pretty printed */
 						   DATA_SECTION_ALL,
 						   createSlotOptions.snapshot,
 						   restoreOptions,
@@ -570,6 +574,8 @@ cli_drop_slot(int argc, char **argv)
 						   createSlotOptions.target_pguri,
 						   1,   /* tableJobs */
 						   1,   /* indexJobs */
+						   0,   /* skip threshold */
+						   "",  /* skip threshold pretty printed */
 						   DATA_SECTION_ALL,
 						   createSlotOptions.snapshot,
 						   restoreOptions,
@@ -809,6 +815,8 @@ cli_create_origin(int argc, char **argv)
 						   createOriginOptions.target_pguri,
 						   1,   /* tableJobs */
 						   1,   /* indexJobs */
+						   0,   /* skip threshold */
+						   "",  /* skip threshold pretty printed */
 						   DATA_SECTION_ALL,
 						   createOriginOptions.snapshot,
 						   restoreOptions,
@@ -861,6 +869,8 @@ cli_drop_origin(int argc, char **argv)
 						   createOriginOptions.target_pguri,
 						   1,   /* tableJobs */
 						   1,   /* indexJobs */
+						   0,   /* skip threshold */
+						   "",  /* skip threshold pretty printed */
 						   DATA_SECTION_ALL,
 						   createOriginOptions.snapshot,
 						   restoreOptions,

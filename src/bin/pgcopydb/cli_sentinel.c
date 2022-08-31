@@ -323,6 +323,8 @@ cli_sentinel_create(int argc, char **argv)
 						   sentinelDBoptions.target_pguri,
 						   1,   /* tableJobs */
 						   1,   /* indexJobs */
+						   0,   /* skip threshold */
+						   "",  /* skip threshold pretty printed */
 						   DATA_SECTION_ALL,
 						   sentinelDBoptions.snapshot,
 						   restoreOptions,

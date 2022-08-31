@@ -25,6 +25,7 @@ ListDBOptions listDBoptions = { 0 };
 
 static int cli_list_db_getopts(int argc, char **argv);
 static void cli_list_tables(int argc, char **argv);
+static void cli_list_table_parts(int argc, char **argv);
 static void cli_list_sequences(int argc, char **argv);
 static void cli_list_indexes(int argc, char **argv);
 static void cli_list_depends(int argc, char **argv);
@@ -40,6 +41,18 @@ static CommandLine list_tables_command =
 		"  --without-pkey      List only tables that have no primary key\n",
 		cli_list_db_getopts,
 		cli_list_tables);
+
+static CommandLine list_table_parts_command =
+	make_command(
+		"table-parts",
+		"List a source table copy partitions",
+		" --source ... ",
+		"  --source                    Postgres URI to the source database\n"
+		"  --schema-name               Name of the schema where to find the table\n"
+		"  --table-name                Name of the target table\n"
+		"  --split-tables-larger-than  Size threshold to consider partitioning\n",
+		cli_list_db_getopts,
+		cli_list_table_parts);
 
 static CommandLine list_sequences_command =
 	make_command(
@@ -81,6 +94,7 @@ static CommandLine list_depends_command =
 
 static CommandLine *list_subcommands[] = {
 	&list_tables_command,
+	&list_table_parts_command,
 	&list_sequences_command,
 	&list_indexes_command,
 	&list_depends_command,
@@ -111,6 +125,8 @@ cli_list_db_getopts(int argc, char **argv)
 		{ "filters", required_argument, NULL, 'F' },
 		{ "list-skipped", no_argument, NULL, 'x' },
 		{ "without-pkey", no_argument, NULL, 'P' },
+		{ "split-tables-larger-than", required_argument, NULL, 'L' },
+		{ "split-at", required_argument, NULL, 'L' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "quiet", no_argument, NULL, 'q' },
@@ -120,7 +136,7 @@ cli_list_db_getopts(int argc, char **argv)
 
 	optind = 0;
 
-	while ((c = getopt_long(argc, argv, "S:T:j:s:t:PVvqh",
+	while ((c = getopt_long(argc, argv, "S:T:j:s:t:PL:Vvqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -177,6 +193,25 @@ cli_list_db_getopts(int argc, char **argv)
 			{
 				options.noPKey = true;
 				log_trace("--without-pkey");
+				break;
+			}
+
+			case 'L':
+			{
+				if (!cli_parse_bytes_pretty(
+						optarg,
+						&options.splitTablesLargerThan,
+						(char *) &options.splitTablesLargerThanPretty,
+						sizeof(options.splitTablesLargerThanPretty)))
+				{
+					log_fatal("Failed to parse --split-tables-larger-than: \"%s\"",
+							  optarg);
+					++errors;
+				}
+
+				log_trace("--split-tables-larger-than %s (%lld)",
+						  options.splitTablesLargerThanPretty,
+						  (long long) options.splitTablesLargerThan);
 				break;
 			}
 
@@ -378,6 +413,143 @@ cli_list_tables(int argc, char **argv)
 				tableArray.array[i].relname,
 				(long long) tableArray.array[i].reltuples,
 				tableArray.array[i].bytesPretty);
+	}
+
+	fformat(stdout, "\n");
+}
+
+
+/*
+ * cli_list_tables implements the command: pgcopydb list table-parts
+ */
+static void
+cli_list_table_parts(int argc, char **argv)
+{
+	PGSQL pgsql = { 0 };
+	char scrubbedSourceURI[MAXCONNINFO] = { 0 };
+
+	if (IS_EMPTY_STRING_BUFFER(listDBoptions.table_name))
+	{
+		log_fatal("Option --table-name is mandatory");
+		commandline_help(stderr);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	if (IS_EMPTY_STRING_BUFFER(listDBoptions.schema_name))
+	{
+		strlcpy(listDBoptions.schema_name, "public", NAMEDATALEN);
+	}
+
+	(void) parse_and_scrub_connection_string(listDBoptions.source_pguri,
+											 scrubbedSourceURI);
+
+	log_info("Listing COPY partitions for table \"%s\".\"%s\" in \"%s\"",
+			 listDBoptions.schema_name,
+			 listDBoptions.table_name,
+			 scrubbedSourceURI);
+
+	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	/*
+	 * Build a filter that includes only the given target table, our command
+	 * line is built to work on a single table at a time (--schema-name default
+	 * to "public" and --table-name is mandatory).
+	 */
+	SourceFilterTable *tableFilter =
+		(SourceFilterTable *) malloc(1 * sizeof(SourceFilterTable));
+
+	strlcpy(tableFilter[0].nspname, listDBoptions.schema_name, NAMEDATALEN);
+	strlcpy(tableFilter[0].relname, listDBoptions.table_name, NAMEDATALEN);
+
+	SourceFilters filter =
+	{
+		.type = SOURCE_FILTER_TYPE_INCL,
+		.includeOnlyTableList =
+		{
+			.count = 1,
+			.array = tableFilter
+		}
+	};
+
+	SourceTableArray tableArray = { 0 };
+
+	if (!schema_list_ordinary_tables(&pgsql, &filter, &tableArray))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (tableArray.count != 1)
+	{
+		log_error("Expected to fetch a single table with schema name \"%s\" "
+				  "and table name \"%s\", fetched %d instead",
+				  listDBoptions.schema_name,
+				  listDBoptions.table_name,
+				  tableArray.count);
+
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	SourceTable *table = &(tableArray.array[0]);
+
+	if (IS_EMPTY_STRING_BUFFER(table->partKey))
+	{
+		log_info("Table \"%s\".\"%s\" (%s) will not be split: "
+				 "table lacks a unique integer column (int2/int4/int8).",
+				 table->nspname,
+				 table->relname,
+				 table->bytesPretty);
+		exit(EXIT_CODE_QUIT);
+	}
+
+	if (!schema_list_partitions(&pgsql, table,
+								listDBoptions.splitTablesLargerThan))
+	{
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (table->partsArray.count <= 1)
+	{
+		log_info("Table \"%s\".\"%s\" (%s) will not be split",
+				 table->nspname,
+				 table->relname,
+				 table->bytesPretty);
+		exit(EXIT_CODE_QUIT);
+	}
+
+	log_info("Table \"%s\".\"%s\" COPY will be split %d-ways",
+			 table->nspname,
+			 table->relname,
+			 table->partsArray.count);
+
+	fformat(stdout, "%10s | %10s | %10s | %10s\n",
+			"Part", "Min", "Max", "Count");
+
+	fformat(stdout, "%10s-+-%10s-+-%10s-+-%10s\n",
+			"----------",
+			"----------",
+			"----------",
+			"----------");
+
+	for (int i = 0; i < table->partsArray.count; i++)
+	{
+		SourceTableParts *part = &(table->partsArray.array[i]);
+
+		char partNC[BUFSIZE] = { 0 };
+
+		sformat(partNC, sizeof(partNC), "%d/%d",
+				part->partNumber,
+				part->partCount);
+
+		fformat(stdout, "%10s | %10lld | %10lld | %10lld\n",
+				partNC,
+				(long long) part->min,
+				(long long) part->max,
+				(long long) part->count);
 	}
 
 	fformat(stdout, "\n");
