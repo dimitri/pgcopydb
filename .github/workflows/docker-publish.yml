@@ -93,5 +93,7 @@ jobs:
         # against the sigstore community Fulcio instance.
         run: cosign sign ${TAGS}
         env:
-          TAGS: ${{ steps.meta.outputs.tags }}@${{ steps.build-and-push.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+          # should use @${{ steps.build-and-push.outputs.digest }}
+          # but that leads to "entity not found in registry"
           COSIGN_EXPERIMENTAL: "true"
