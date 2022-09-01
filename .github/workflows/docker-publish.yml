@@ -39,8 +39,13 @@ jobs:
           fetch-depth: 50
 
       # see https://github.com/actions/checkout/issues/6#issuecomment-544726471
-      - name: Prepare repository
+      - name: Re-Attach git head in PRs
+        run: git checkout "${GITHUB_HEADREF:11}"
+        if: github.head_ref != ''
+
+      - name: Re-Attach git head in main builds
         run: git checkout "${GITHUB_REF:11}"
+        if: github.head_ref == ''
 
       - name: Set Version String From .git
         run: |
