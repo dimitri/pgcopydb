@@ -22,32 +22,36 @@
 #include "string_utils.h"
 #include "summary.h"
 
+#define PGCOPYDB_CLONE_GETOPTS_HELP \
+	"  --source                   Postgres URI to the source database\n" \
+	"  --target                   Postgres URI to the target database\n" \
+	"  --dir                      Work directory to use\n" \
+	"  --table-jobs               Number of concurrent COPY jobs to run\n" \
+	"  --index-jobs               Number of concurrent CREATE INDEX jobs to run\n" \
+	"  --split-tables-larger-than Same-table concurrency size threshold\n" \
+	"  --drop-if-exists           On the target database, clean-up from a previous run first\n" \
+	"  --roles                    Also copy roles found on source to target\n" \
+	"  --no-owner                 Do not set ownership of objects to match the original database\n" \
+	"  --no-acl                   Prevent restoration of access privileges (grant/revoke commands).\n" \
+	"  --no-comments              Do not output commands to restore comments\n" \
+	"  --skip-large-objects       Skip copying large objects (blobs)\n" \
+	"  --filters <filename>       Use the filters defined in <filename>\n" \
+	"  --restart                  Allow restarting when temp files exist already\n" \
+	"  --resume                   Allow resuming operations after a failure\n" \
+	"  --not-consistent           Allow taking a new snapshot on the source database\n" \
+	"  --snapshot                 Use snapshot obtained with pg_export_snapshot\n" \
+	"  --follow                   Implement logical decoding to replay changes\n" \
+	"  --slot-name                Use this Postgres replication slot name\n" \
+	"  --create-slot              Create the replication slot\n" \
+	"  --origin                   Use this Postgres replication origin node name\n" \
+	"  --endpos                   Stop replaying changes when reaching this LSN\n" \
+
 CommandLine clone_command =
 	make_command(
 		"clone",
 		"Clone an entire database from source to target",
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
-		"  --source              Postgres URI to the source database\n"
-		"  --target              Postgres URI to the target database\n"
-		"  --dir                 Work directory to use\n"
-		"  --table-jobs          Number of concurrent COPY jobs to run\n"
-		"  --index-jobs          Number of concurrent CREATE INDEX jobs to run\n"
-		"  --drop-if-exists      On the target database, clean-up from a previous run first\n"
-		"  --roles               Also copy roles found on source to target\n"
-		"  --no-owner            Do not set ownership of objects to match the original database\n"
-		"  --no-acl              Prevent restoration of access privileges (grant/revoke commands).\n"
-		"  --no-comments         Do not output commands to restore comments\n"
-		"  --skip-large-objects  Skip copying large objects (blobs)\n"
-		"  --filters <filename>  Use the filters defined in <filename>\n"
-		"  --restart             Allow restarting when temp files exist already\n"
-		"  --resume              Allow resuming operations after a failure\n"
-		"  --not-consistent      Allow taking a new snapshot on the source database\n"
-		"  --snapshot            Use snapshot obtained with pg_export_snapshot\n"
-		"  --follow              Implement logical decoding to replay changes\n"
-		"  --slot-name           Use this Postgres replication slot name\n"
-		"  --create-slot         Create the replication slot\n"
-		"  --origin              Use this Postgres replication origin node name\n"
-		"  --endpos              Stop replaying changes when reaching this LSN\n",
+		PGCOPYDB_CLONE_GETOPTS_HELP,
 		cli_copy_db_getopts,
 		cli_clone);
 
@@ -56,27 +60,7 @@ CommandLine fork_command =
 		"fork",
 		"Clone an entire database from source to target",
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
-		"  --source              Postgres URI to the source database\n"
-		"  --target              Postgres URI to the target database\n"
-		"  --dir                 Work directory to use\n"
-		"  --table-jobs          Number of concurrent COPY jobs to run\n"
-		"  --index-jobs          Number of concurrent CREATE INDEX jobs to run\n"
-		"  --drop-if-exists      On the target database, clean-up from a previous run first\n"
-		"  --roles               Also copy roles found on source to target\n"
-		"  --no-owner            Do not set ownership of objects to match the original database\n"
-		"  --no-acl              Prevent restoration of access privileges (grant/revoke commands).\n"
-		"  --no-comments         Do not output commands to restore comments\n"
-		"  --skip-large-objects  Skip copying large objects (blobs)\n"
-		"  --filters <filename>  Use the filters defined in <filename>\n"
-		"  --restart             Allow restarting when temp files exist already\n"
-		"  --resume              Allow resuming operations after a failure\n"
-		"  --not-consistent      Allow taking a new snapshot on the source database\n"
-		"  --snapshot            Use snapshot obtained with pg_export_snapshot\n"
-		"  --follow              Implement logical decoding to replay changes\n"
-		"  --slot-name           Use this Postgres replication slot name\n"
-		"  --create-slot         Create the replication slot\n"
-		"  --origin              Use this Postgres replication origin node name\n"
-		"  --endpos              Stop replaying changes when reaching this LSN\n",
+		PGCOPYDB_CLONE_GETOPTS_HELP,
 		cli_copy_db_getopts,
 		cli_clone);
 

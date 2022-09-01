@@ -25,27 +25,28 @@ Postgres instance to the target Postgres instance.
    pgcopydb clone: Clone an entire database from source to target
    usage: pgcopydb clone  --source ... --target ... [ --table-jobs ... --index-jobs ... ]
 
-     --source              Postgres URI to the source database
-     --target              Postgres URI to the target database
-     --dir                 Work directory to use
-     --table-jobs          Number of concurrent COPY jobs to run
-     --index-jobs          Number of concurrent CREATE INDEX jobs to run
-     --drop-if-exists      On the target database, clean-up from a previous run first
-     --roles               Also copy roles found on source to target
-     --no-owner            Do not set ownership of objects to match the original database
-     --no-acl              Prevent restoration of access privileges (grant/revoke commands).
-     --no-comments         Do not output commands to restore comments
-     --skip-large-objects  Skip copying large objects (blobs)
-     --filters <filename>  Use the filters defined in <filename>
-     --restart             Allow restarting when temp files exist already
-     --resume              Allow resuming operations after a failure
-     --not-consistent      Allow taking a new snapshot on the source database
-     --snapshot            Use snapshot obtained with pg_export_snapshot
-     --follow              Implement logical decoding to replay changes
-     --slot-name           Use this Postgres replication slot name
-     --create-slot         Create the replication slot
-     --origin              Use this Postgres replication origin node name
-     --endpos              Stop replaying changes when reaching this LSN
+     --source                   Postgres URI to the source database
+     --target                   Postgres URI to the target database
+     --dir                      Work directory to use
+     --table-jobs               Number of concurrent COPY jobs to run
+     --index-jobs               Number of concurrent CREATE INDEX jobs to run
+     --split-tables-larger-than Same-table concurrency size threshold
+     --drop-if-exists           On the target database, clean-up from a previous run first
+     --roles                    Also copy roles found on source to target
+     --no-owner                 Do not set ownership of objects to match the original database
+     --no-acl                   Prevent restoration of access privileges (grant/revoke commands).
+     --no-comments              Do not output commands to restore comments
+     --skip-large-objects       Skip copying large objects (blobs)
+     --filters <filename>       Use the filters defined in <filename>
+     --restart                  Allow restarting when temp files exist already
+     --resume                   Allow resuming operations after a failure
+     --not-consistent           Allow taking a new snapshot on the source database
+     --snapshot                 Use snapshot obtained with pg_export_snapshot
+     --follow                   Implement logical decoding to replay changes
+     --slot-name                Use this Postgres replication slot name
+     --create-slot              Create the replication slot
+     --origin                   Use this Postgres replication origin node name
+     --endpos                   Stop replaying changes when reaching this LSN
 
 .. _pgcopydb_fork:
 
@@ -520,6 +521,38 @@ TMPDIR
 
   The pgcopydb command creates all its work files and directories in
   ``${TMPDIR}/pgcopydb``, and defaults to ``/tmp/pgcopydb``.
+
+XDG_DATA_HOME
+
+  The standard `XDG Base Directory Specification`__ defines several
+  environment variables that allow controling where programs should store
+  their files.
+
+  __ https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
+
+  .. epigraph::
+
+      *XDG_DATA_HOME defines the base directory relative to which user-specific
+      data files should be stored. If $XDG_DATA_HOME is either not set or empty,
+      a default equal to $HOME/.local/share should be used.*
+
+  When using Change Data Capture (through ``--follow`` option and Postgres
+  logical decoding with `wal2json`__) then pgcopydb pre-fetches changes in
+  JSON files and transform them into SQL files to apply to the target
+  database.
+
+  __ https://github.com/eulerto/wal2json/
+
+  These files are stored at the following location, tried in this order:
+
+    1. when ``--dir`` is used, then pgcopydb uses the ``cdc`` subdirectory
+       of the ``--dir`` location,
+
+    2. when ``XDG_DATA_HOME`` is set in the environment, then pgcopydb uses
+       that location,
+
+    3. when neither of the previous settings have been used then pgcopydb
+       defaults to using ``${HOME}/.local/share``.
 
 Examples
 --------
