@@ -93,5 +93,5 @@ jobs:
         # against the sigstore community Fulcio instance.
         run: cosign sign ${TAGS}
         env:
-          TAGS: ${{ steps.docker_meta.outputs.tags }}
+          TAGS: ${{ steps.meta.outputs.tags }}@${{ steps.build-and-push.outputs.digest }}
           COSIGN_EXPERIMENTAL: "true"
