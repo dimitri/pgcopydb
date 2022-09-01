@@ -235,3 +235,35 @@ TMPDIR
 
   The pgcopydb command creates all its work files and directories in
   ``${TMPDIR}/pgcopydb``, and defaults to ``/tmp/pgcopydb``.
+
+XDG_DATA_HOME
+
+  The standard `XDG Base Directory Specification`__ defines several
+  environment variables that allow controling where programs should store
+  their files.
+
+  __ https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
+
+  .. epigraph::
+
+      *XDG_DATA_HOME defines the base directory relative to which user-specific
+      data files should be stored. If $XDG_DATA_HOME is either not set or empty,
+      a default equal to $HOME/.local/share should be used.*
+
+  When using Change Data Capture (through ``--follow`` option and Postgres
+  logical decoding with `wal2json`__) then pgcopydb pre-fetches changes in
+  JSON files and transform them into SQL files to apply to the target
+  database.
+
+  __ https://github.com/eulerto/wal2json/
+
+  These files are stored at the following location, tried in this order:
+
+    1. when ``--dir`` is used, then pgcopydb uses the ``cdc`` subdirectory
+       of the ``--dir`` location,
+
+    2. when ``XDG_DATA_HOME`` is set in the environment, then pgcopydb uses
+       that location,
+
+    3. when neither of the previous settings have been used then pgcopydb
+       defaults to using ``${HOME}/.local/share``.
