@@ -7,8 +7,7 @@ all: bin ;
 
 GIT-VERSION-FILE:
 	@$(SHELL_PATH) ./GIT-VERSION-GEN
-
--include GIT-VERSION-FILE
+include GIT-VERSION-FILE
 
 bin: GIT-VERSION-FILE
 	$(MAKE) -C src/bin/ all
@@ -37,8 +36,8 @@ install: bin
 indent:
 	citus_indent
 
-build:
-	docker build -t pgcopydb .
+build: GIT-VERSION-FILE
+	docker build --build-arg VERSION=$(GIT_VERSION) -t pgcopydb .
 
 # debian packages built from the current sources
 deb:

@@ -11,6 +11,9 @@ LF='
 if test -f version
 then
 	VN=$(cat version) || VN="$DEF_VER"
+elif test -n "${VERSION}"
+then
+	VN="${VERSION}" || VN="$DEF_VER"
 elif test -d ${GIT_DIR:-.git} -o -f .git &&
 	VN=$(git describe --match "v[0-9]*" HEAD 2>/dev/null) &&
 	case "$VN" in
