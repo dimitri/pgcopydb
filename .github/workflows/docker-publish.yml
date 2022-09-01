@@ -38,6 +38,10 @@ jobs:
           # keep some git history to compute version (e.g. 0.8.13.g0055d90)
           fetch-depth: 50
 
+      # see https://github.com/actions/checkout/issues/6#issuecomment-544726471
+      - name: Prepare repository
+        run: git checkout "${GITHUB_REF:11}"
+
       - name: Set Version String From .git
         run: |
           echo "VERSION=$(make echo-version)" >> $GITHUB_ENV
