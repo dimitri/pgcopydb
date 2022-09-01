@@ -39,6 +39,9 @@ indent:
 build: GIT-VERSION-FILE
 	docker build --build-arg VERSION=$(GIT_VERSION) -t pgcopydb .
 
+echo-version: GIT-VERSION-FILE
+	@echo $(GIT_VERSION)
+
 # debian packages built from the current sources
 deb:
 	docker build -f Dockerfile.debian -t pgcopydb_debian .
