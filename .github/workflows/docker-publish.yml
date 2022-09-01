@@ -40,7 +40,7 @@ jobs:
 
       # see https://github.com/actions/checkout/issues/6#issuecomment-544726471
       - name: Re-Attach git head in PRs
-        run: git checkout "${GITHUB_HEADREF:11}"
+        run: git checkout "${GITHUB_HEAD_REF:11}"
         if: github.head_ref != ''
 
       - name: Re-Attach git head in main builds
