@@ -43,6 +43,7 @@ echo-version: GIT-VERSION-FILE
 
 version: GIT-VERSION-FILE
 	@awk '{print $$3}' $< > $@
+	@cat $@
 
 # debian packages built from the current sources
 deb:
