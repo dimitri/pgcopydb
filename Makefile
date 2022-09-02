@@ -6,7 +6,7 @@ TOP := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 all: bin ;
 
 GIT-VERSION-FILE:
-	@$(SHELL_PATH) ./GIT-VERSION-GEN > /dev/null
+	@$(SHELL_PATH) ./GIT-VERSION-GEN > /dev/null 2>&1
 
 bin: GIT-VERSION-FILE
 	$(MAKE) -C src/bin/ all
