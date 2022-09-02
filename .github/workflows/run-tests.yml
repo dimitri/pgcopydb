@@ -28,11 +28,17 @@ jobs:
           - follow
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0 # all history for all branches and tags
 
       - name: Set environment variables
         run: |
             echo "TEST=${{ matrix.TEST }}" >> $GITHUB_ENV
+
+      - name: Set Version String From .git
+        run: |
+          echo "VERSION=$(make echo-version)" >> $GITHUB_ENV
 
       - name: Run a test
         timeout-minutes: 5
