@@ -47,8 +47,7 @@ jobs:
           fetch-depth: 0 # all history for all branches and tags
 
       - name: Set Version String From .git
-        run: |
-          echo "VERSION=$(make echo-version)" >> $GITHUB_ENV
+        run: make version
 
       # Install the cosign tool (not used on PR, still installed)
       # https://github.com/sigstore/cosign-installer
