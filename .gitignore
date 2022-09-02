@@ -40,3 +40,4 @@ lib*.pc
 /tests/__pycache__/
 /env/
 /GIT-VERSION-FILE
+/version

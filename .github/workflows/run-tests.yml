@@ -36,10 +36,6 @@ jobs:
         run: |
             echo "TEST=${{ matrix.TEST }}" >> $GITHUB_ENV
 
-      - name: Set Version String From .git
-        run: |
-          echo "VERSION=$(make echo-version)" >> $GITHUB_ENV
-
       - name: Run a test
         timeout-minutes: 5
         run: |

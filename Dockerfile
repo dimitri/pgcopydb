@@ -42,9 +42,9 @@ WORKDIR /usr/src/pgcopydb
 
 COPY Makefile ./
 COPY GIT-VERSION-GEN ./
+COPY version ./
 COPY ./src/ ./src
 
-ARG VERSION
 RUN make -s clean && make -s -j8 install
 
 #

@@ -35,11 +35,14 @@ install: bin
 indent:
 	citus_indent
 
-build: GIT-VERSION-FILE
-	docker build --build-arg VERSION=`$(MAKE) echo-version` -t pgcopydb .
+build: version
+	docker build -t pgcopydb .
 
 echo-version: GIT-VERSION-FILE
 	@awk '{print $$3}' $<
+
+version: GIT-VERSION-FILE
+	@awk '{print $$3}' $< > $@
 
 # debian packages built from the current sources
 deb:
