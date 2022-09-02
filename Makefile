@@ -7,7 +7,6 @@ all: bin ;
 
 GIT-VERSION-FILE:
 	@$(SHELL_PATH) ./GIT-VERSION-GEN
-include GIT-VERSION-FILE
 
 bin: GIT-VERSION-FILE
 	$(MAKE) -C src/bin/ all
@@ -40,7 +39,7 @@ build: GIT-VERSION-FILE
 	docker build --build-arg VERSION=$(GIT_VERSION) -t pgcopydb .
 
 echo-version: GIT-VERSION-FILE
-	@echo $(GIT_VERSION)
+	awk '{print $$3}' $<
 
 # debian packages built from the current sources
 deb:
