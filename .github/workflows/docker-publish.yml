@@ -39,12 +39,12 @@ jobs:
           fetch-depth: 50
 
       # see https://github.com/actions/checkout/issues/6#issuecomment-544726471
-      - name: Re-Attach git head in PRs
-        run: git checkout "${GITHUB_HEAD_REF}"
+      - name: Fix detached HEAD state in PRs
+        run: git switch -c "${GITHUB_HEAD_REF}"
         if: github.head_ref != ''
 
-      - name: Re-Attach git head in main builds
-        run: git checkout "${GITHUB_REF:11}"
+      - name: Fix detached HEAD state in main
+        run: git checkout main
         if: github.head_ref == ''
 
       - name: Set Version String From .git
