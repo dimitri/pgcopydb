@@ -6,7 +6,7 @@ TOP := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 all: bin ;
 
 GIT-VERSION-FILE:
-	@$(SHELL_PATH) ./GIT-VERSION-GEN
+	@$(SHELL_PATH) ./GIT-VERSION-GEN > /dev/null
 
 bin: GIT-VERSION-FILE
 	$(MAKE) -C src/bin/ all
@@ -36,10 +36,10 @@ indent:
 	citus_indent
 
 build: GIT-VERSION-FILE
-	docker build --build-arg VERSION=$(GIT_VERSION) -t pgcopydb .
+	docker build --build-arg VERSION=`$(MAKE) echo-version` -t pgcopydb .
 
 echo-version: GIT-VERSION-FILE
-	awk '{print $$3}' $<
+	@awk '{print $$3}' $<
 
 # debian packages built from the current sources
 deb:
