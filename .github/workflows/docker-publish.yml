@@ -32,20 +32,19 @@ jobs:
       id-token: write
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v2
+      - name: Checkout repository (main)
+        if: github.event_name != 'pull_request'
+        uses: actions/checkout@v3
         with:
-          # keep some git history to compute version (e.g. 0.8.13.g0055d90)
+          ref: main
           fetch-depth: 50
 
-      # see https://github.com/actions/checkout/issues/6#issuecomment-544726471
-      - name: Fix detached HEAD state in PRs
-        run: git switch -c "${GITHUB_HEAD_REF}"
-        if: github.head_ref != ''
-
-      - name: Fix detached HEAD state in main
-        run: git checkout main
-        if: github.head_ref == ''
+      - name: Checkout repository (PR)
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 50
 
       - name: Set Version String From .git
         run: |
