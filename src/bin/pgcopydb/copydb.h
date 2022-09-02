@@ -65,6 +65,7 @@ typedef struct CopyFilePaths
 	char pidfile[MAXPGPATH];          /* /tmp/pgcopydb/pgcopydb.pid */
 	char snfile[MAXPGPATH];           /* /tmp/pgcopydb/snapshot */
 	char schemadir[MAXPGPATH];        /* /tmp/pgcopydb/schema */
+	char schemafile[MAXPGPATH];       /* /tmp/pgcopydb/schema.json */
 	char rundir[MAXPGPATH];           /* /tmp/pgcopydb/run */
 	char tbldir[MAXPGPATH];           /* /tmp/pgcopydb/run/tables */
 	char idxdir[MAXPGPATH];           /* /tmp/pgcopydb/run/indexes */
@@ -282,6 +283,8 @@ typedef struct CopyDataSpec
 	Semaphore indexSemaphore;
 
 	DumpPaths dumpPaths;
+	SourceTableArray sourceTableArray;
+	SourceIndexArray sourceIndexArray;
 	CopyTableDataSpecsArray tableSpecsArray;
 	SourceSequenceArray sequenceArray;
 } CopyDataSpec;
@@ -358,6 +361,8 @@ bool copydb_wait_for_subprocesses(void);
 bool copydb_collect_finished_subprocesses(bool *allDone);
 
 bool copydb_copy_roles(CopyDataSpec *copySpecs);
+
+bool copydb_prepare_schema_json_file(CopyDataSpec *copySpecs);
 
 /* indexes.c */
 bool copydb_init_indexes_paths(CopyFilePaths *cfPaths,

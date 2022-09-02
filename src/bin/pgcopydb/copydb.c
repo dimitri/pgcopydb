@@ -9,6 +9,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "parson.h"
+
 #include "cli_common.h"
 #include "copydb.h"
 #include "env_utils.h"
@@ -354,6 +356,9 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths, const char *dir, bool auxilliar
 	sformat(cfPaths->rundir, MAXPGPATH, "%s/run", cfPaths->topdir);
 	sformat(cfPaths->tbldir, MAXPGPATH, "%s/run/tables", cfPaths->topdir);
 	sformat(cfPaths->idxdir, MAXPGPATH, "%s/run/indexes", cfPaths->topdir);
+
+	/* prepare also the name of the schema file (JSON) */
+	sformat(cfPaths->schemafile, MAXPGPATH, "%s/schema.json", cfPaths->topdir);
 
 	/* now prepare the done files */
 	struct pair
@@ -1298,6 +1303,219 @@ copydb_copy_roles(CopyDataSpec *copySpecs)
 		/* errors have already been logged */
 		return false;
 	}
+
+	return true;
+}
+
+
+/*
+ * copydb_prepare_schema_json_file prepares a JSON formatted file that contains
+ * the list of all the tables and indexes and sequences that are going to be
+ * migrated.
+ */
+bool
+copydb_prepare_schema_json_file(CopyDataSpec *copySpecs)
+{
+	JSON_Value *js = json_value_init_object();
+	JSON_Object *jsobj = json_value_get_object(js);
+
+	/* snapshot */
+	if (!IS_EMPTY_STRING_BUFFER(copySpecs->sourceSnapshot.snapshot))
+	{
+		char *snapshot = copySpecs->sourceSnapshot.snapshot;
+		json_object_set_string(jsobj, "snapshot", snapshot);
+	}
+
+	/* source and target URIs, without passwords */
+	char scrubbedSourceURI[MAXCONNINFO] = { 0 };
+	char scrubbedTargetURI[MAXCONNINFO] = { 0 };
+
+	(void) parse_and_scrub_connection_string(copySpecs->source_pguri,
+											 scrubbedSourceURI);
+
+	(void) parse_and_scrub_connection_string(copySpecs->target_pguri,
+											 scrubbedTargetURI);
+
+	json_object_set_string(jsobj, "source_pguri", scrubbedSourceURI);
+	json_object_set_string(jsobj, "target_pguri", scrubbedTargetURI);
+
+	/* array of tables */
+	SourceTableArray *tableArray = &(copySpecs->sourceTableArray);
+
+	JSON_Value *jsTables = json_value_init_array();
+	JSON_Array *jsTableArray = json_value_get_array(jsTables);
+
+	for (int tableIndex = 0; tableIndex < tableArray->count; tableIndex++)
+	{
+		SourceTable *table = &(tableArray->array[tableIndex]);
+
+		JSON_Value *jsTable = json_value_init_object();
+		JSON_Object *jsTableObj = json_value_get_object(jsTable);
+
+		json_object_set_number(jsTableObj, "oid", (double) table->oid);
+		json_object_set_string(jsTableObj, "schema", table->nspname);
+		json_object_set_string(jsTableObj, "name", table->relname);
+
+		json_object_set_number(jsTableObj, "reltuples", (double) table->reltuples);
+		json_object_set_number(jsTableObj, "bytes", (double) table->bytes);
+		json_object_set_string(jsTableObj, "bytes-pretty", table->bytesPretty);
+
+		json_object_set_boolean(jsTableObj, "exclude-data", table->excludeData);
+
+		json_object_set_string(jsTableObj,
+							   "restore-list-name",
+							   table->restoreListName);
+
+		json_object_set_string(jsTableObj, "part-key", table->partKey);
+
+		/* if we have COPY partitioning, create an array of parts */
+		JSON_Value *jsParts = json_value_init_array();
+		JSON_Array *jsPartArray = json_value_get_array(jsParts);
+
+		if (table->partsArray.count > 1)
+		{
+			for (int i = 0; i < table->partsArray.count; i++)
+			{
+				SourceTableParts *part = &(table->partsArray.array[i]);
+
+				JSON_Value *jsPart = json_value_init_object();
+				JSON_Object *jsPartObj = json_value_get_object(jsPart);
+
+				json_object_set_number(jsPartObj, "number",
+									   (double) part->partNumber);
+
+				json_object_set_number(jsPartObj, "total",
+									   (double) part->partCount);
+
+				json_object_set_number(jsPartObj, "min",
+									   (double) part->min);
+
+				json_object_set_number(jsPartObj, "max",
+									   (double) part->max);
+
+				json_object_set_number(jsPartObj, "count",
+									   (double) part->count);
+
+				json_array_append_value(jsPartArray, jsPart);
+			}
+
+			json_object_set_value(jsTableObj, "parts", jsParts);
+		}
+
+		json_array_append_value(jsTableArray, jsTable);
+	}
+
+	json_object_set_value(jsobj, "tables", jsTables);
+
+	/* array of indexes */
+	SourceIndexArray *indexArray = &(copySpecs->sourceIndexArray);
+
+	JSON_Value *jsIndexes = json_value_init_array();
+	JSON_Array *jsIndexArray = json_value_get_array(jsIndexes);
+
+	for (int i = 0; i < indexArray->count; i++)
+	{
+		SourceIndex *index = &(indexArray->array[i]);
+
+		JSON_Value *jsIndex = json_value_init_object();
+		JSON_Object *jsIndexObj = json_value_get_object(jsIndex);
+
+		json_object_set_number(jsIndexObj, "oid", (double) index->indexOid);
+		json_object_set_string(jsIndexObj, "schema", index->indexNamespace);
+		json_object_set_string(jsIndexObj, "name", index->indexRelname);
+
+		json_object_set_boolean(jsIndexObj, "isPrimary", index->isPrimary);
+		json_object_set_boolean(jsIndexObj, "isUnique", index->isUnique);
+
+		json_object_set_string(jsIndexObj, "columns", index->indexColumns);
+		json_object_set_string(jsIndexObj, "sql", index->indexDef);
+
+		json_object_set_string(jsIndexObj,
+							   "restore-list-name",
+							   index->indexRestoreListName);
+
+		/* add a table object */
+		JSON_Value *jsTable = json_value_init_object();
+		JSON_Object *jsTableObj = json_value_get_object(jsTable);
+
+		json_object_set_number(jsTableObj, "oid", (double) index->tableOid);
+		json_object_set_string(jsTableObj, "schema", index->tableNamespace);
+		json_object_set_string(jsTableObj, "name", index->tableRelname);
+
+		json_object_set_value(jsIndexObj, "table", jsTable);
+
+		/* add a constraint object */
+		if (index->constraintOid != 0)
+		{
+			JSON_Value *jsConstraint = json_value_init_object();
+			JSON_Object *jsConstraintObj = json_value_get_object(jsConstraint);
+
+			json_object_set_number(jsConstraintObj,
+								   "oid",
+								   (double) index->constraintOid);
+
+			json_object_set_string(jsConstraintObj,
+								   "name",
+								   index->constraintName);
+
+			json_object_set_string(jsConstraintObj,
+								   "sql",
+								   index->constraintDef);
+
+			json_object_set_string(jsIndexObj,
+								   "restore-list-name",
+								   index->constraintRestoreListName);
+
+			json_object_set_value(jsIndexObj, "constraint", jsConstraint);
+		}
+
+		/* append the JSON index to the index table */
+		json_array_append_value(jsIndexArray, jsIndex);
+	}
+
+	json_object_set_value(jsobj, "indexes", jsIndexes);
+
+	/* array of sequences */
+	SourceSequenceArray *sequenceArray = &(copySpecs->sequenceArray);
+
+	JSON_Value *jsSeqs = json_value_init_array();
+	JSON_Array *jsSeqArray = json_value_get_array(jsSeqs);
+
+	for (int seqIndex = 0; seqIndex < sequenceArray->count; seqIndex++)
+	{
+		SourceSequence *seq = &(sequenceArray->array[seqIndex]);
+
+		JSON_Value *jsSeq = json_value_init_object();
+		JSON_Object *jsSeqObj = json_value_get_object(jsSeq);
+
+		json_object_set_number(jsSeqObj, "oid", (double) seq->oid);
+		json_object_set_string(jsSeqObj, "schema", seq->nspname);
+		json_object_set_string(jsSeqObj, "name", seq->relname);
+
+		json_object_set_number(jsSeqObj, "last-value", (double) seq->lastValue);
+		json_object_set_boolean(jsSeqObj, "is-called", (double) seq->isCalled);
+
+		json_object_set_string(jsSeqObj,
+							   "restore-list-name",
+							   seq->restoreListName);
+
+		json_array_append_value(jsSeqArray, jsSeq);
+	}
+
+	json_object_set_value(jsobj, "sequences", jsSeqs);
+
+	/* now pretty-print the JSON to file */
+	char *serialized_string = json_serialize_to_string_pretty(js);
+	size_t len = strlen(serialized_string);
+
+	if (!write_file(serialized_string, len, copySpecs->cfPaths.schemafile))
+	{
+		log_error("Failed to write schema JSON file, see above for details");
+		return false;
+	}
+
+	json_free_serialized_string(serialized_string);
+	json_value_free(js);
 
 	return true;
 }

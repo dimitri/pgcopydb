@@ -11,6 +11,7 @@
 #include "cli_common.h"
 #include "cli_list.h"
 #include "cli_root.h"
+#include "copydb.h"
 #include "commandline.h"
 #include "env_utils.h"
 #include "filtering.h"
@@ -29,6 +30,7 @@ static void cli_list_table_parts(int argc, char **argv);
 static void cli_list_sequences(int argc, char **argv);
 static void cli_list_indexes(int argc, char **argv);
 static void cli_list_depends(int argc, char **argv);
+static void cli_list_schema(int argc, char **argv);
 
 static CommandLine list_tables_command =
 	make_command(
@@ -91,6 +93,16 @@ static CommandLine list_depends_command =
 		cli_list_db_getopts,
 		cli_list_depends);
 
+static CommandLine list_schema_command =
+	make_command(
+		"schema",
+		"List the schema to migrate, formatted in JSON",
+		" --source ... ",
+		"  --source            Postgres URI to the source database\n"
+		"  --filter <filename> Use the filters defined in <filename>\n",
+		cli_list_db_getopts,
+		cli_list_schema);
+
 
 static CommandLine *list_subcommands[] = {
 	&list_tables_command,
@@ -98,6 +110,7 @@ static CommandLine *list_subcommands[] = {
 	&list_sequences_command,
 	&list_indexes_command,
 	&list_depends_command,
+	&list_schema_command,
 	NULL
 };
 
@@ -293,6 +306,31 @@ cli_list_db_getopts(int argc, char **argv)
 	{
 		log_fatal("Option --list-skipped requires using option --filters");
 		++errors;
+	}
+
+	if (env_exists(PGCOPYDB_SPLIT_TABLES_LARGER_THAN))
+	{
+		char bytes[BUFSIZE] = { 0 };
+
+		if (get_env_copy(PGCOPYDB_SPLIT_TABLES_LARGER_THAN, bytes, sizeof(bytes)))
+		{
+			if (!cli_parse_bytes_pretty(
+					bytes,
+					&options.splitTablesLargerThan,
+					(char *) &options.splitTablesLargerThanPretty,
+					sizeof(options.splitTablesLargerThanPretty)))
+			{
+				log_fatal("Failed to parse PGCOPYDB_SPLIT_TABLES_LARGER_THAN: "
+						  " \"%s\"",
+						  bytes);
+				++errors;
+			}
+		}
+		else
+		{
+			/* errors have already been logged */
+			++errors;
+		}
 	}
 
 	if (errors > 0)
@@ -868,4 +906,82 @@ cli_list_depends(int argc, char **argv)
 	}
 
 	fformat(stdout, "\n");
+}
+
+
+/*
+ * cli_list_schema implements the command: pgcopydb list schema
+ */
+static void
+cli_list_schema(int argc, char **argv)
+{
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) find_pg_commands(&(copySpecs.pgPaths));
+
+	/*
+	 * Assume --resume so that we can run the command alongside the main
+	 * process being active.
+	 */
+	bool auxilliary = true;
+
+	if (!copydb_init_workdir(&copySpecs,
+							 NULL,
+							 false, /* restart */
+							 true, /* resume */
+							 auxilliary))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	RestoreOptions restoreOptions = { 0 };
+
+	if (!copydb_init_specs(&copySpecs,
+						   listDBoptions.source_pguri,
+						   "",  /* target_pguri */
+						   1,   /* tableJobs */
+						   1,   /* indexJobs */
+						   listDBoptions.splitTablesLargerThan,
+						   listDBoptions.splitTablesLargerThanPretty,
+						   DATA_SECTION_ALL,
+						   "",  /* snapshot */
+						   restoreOptions,
+						   false, /* roles */
+						   false, /* skipLargeObjects */
+						   false, /* restart */
+						   true,  /* resume */
+						   false)) /* consistent */
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	char scrubbedSourceURI[MAXCONNINFO] = { 0 };
+
+	(void) parse_and_scrub_connection_string(copySpecs.source_pguri,
+											 scrubbedSourceURI);
+
+	log_info("Fetching schema from \"%s\"", scrubbedSourceURI);
+	log_info("Dumping schema into JSON file \"%s\"",
+			 copySpecs.cfPaths.schemafile);
+
+	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	/* output the JSON contents from the json schema file */
+	char *json = NULL;
+	long size = 0L;
+
+	if (!read_file(copySpecs.cfPaths.schemafile, &json, &size))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	fformat(stdout, "%s\n", json);
+	free(json);
 }
