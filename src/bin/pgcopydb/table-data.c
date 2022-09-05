@@ -74,6 +74,21 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 		}
 	}
 
+	/* fetch the list of all the indexes that are going to be created again */
+	if (specs->section == DATA_SECTION_ALL ||
+		specs->section == DATA_SECTION_INDEXES)
+	{
+		SourceIndexArray *indexArray = &(specs->sourceIndexArray);
+
+		if (!schema_list_all_indexes(src, &(specs->filters), indexArray))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		log_info("Fetched information for %d indexes", indexArray->count);
+	}
+
 	if (specs->section == DATA_SECTION_ALL ||
 		specs->section == DATA_SECTION_SET_SEQUENCES)
 	{
@@ -199,7 +214,7 @@ terminate:
 bool
 copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 {
-	SourceTableArray tableArray = { 0, NULL };
+	SourceTableArray *tableArray = &(specs->sourceTableArray);
 	CopyTableDataSpecsArray *tableSpecsArray = &(specs->tableSpecsArray);
 
 	log_info("Listing ordinary tables in source database");
@@ -209,7 +224,7 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 	 */
 	if (!schema_list_ordinary_tables(pgsql,
 									 &(specs->filters),
-									 &tableArray))
+									 tableArray))
 	{
 		/* errors have already been logged */
 		return false;
@@ -227,9 +242,9 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 	 * Source table might be split in several concurrent COPY processes. In
 	 * that case we produce a CopyDataSpec entry for each COPY partition.
 	 */
-	for (int tableIndex = 0; tableIndex < tableArray.count; tableIndex++)
+	for (int tableIndex = 0; tableIndex < tableArray->count; tableIndex++)
 	{
-		SourceTable *source = &(tableArray.array[tableIndex]);
+		SourceTable *source = &(tableArray->array[tableIndex]);
 
 		if (specs->splitTablesLargerThan > 0 &&
 			specs->splitTablesLargerThan <= source->bytes)
@@ -304,10 +319,10 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 	int specsIndex = 0;
 	CopyTableDataSpec *tableSpecs = &(tableSpecsArray->array[specsIndex]);
 
-	for (int tableIndex = 0; tableIndex < tableArray.count; tableIndex++)
+	for (int tableIndex = 0; tableIndex < tableArray->count; tableIndex++)
 	{
 		/* initialize our TableDataProcess entry now */
-		SourceTable *source = &(tableArray.array[tableIndex]);
+		SourceTable *source = &(tableArray->array[tableIndex]);
 
 		/*
 		 * The CopyTableDataSpec structure has its own memory area for the
@@ -355,12 +370,9 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 
 	log_info("Fetched information for %d tables, "
 			 "with an estimated total of %s tuples and %s",
-			 tableArray.count,
+			 tableArray->count,
 			 relTuplesPretty,
 			 bytesPretty);
-
-	/* free our temporary memory that's been malloc'ed */
-	free(tableArray.array);
 
 	return true;
 }
