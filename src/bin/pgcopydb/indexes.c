@@ -409,9 +409,6 @@ copydb_create_index(const char *pguri,
 
 	(void) pgsql_finish(&dst);
 
-	/* make things very slow */
-	sleep(5);
-
 	/* the CREATE INDEX command is done, release our lock */
 	(void) semaphore_unlock(createIndexSemaphore);
 
