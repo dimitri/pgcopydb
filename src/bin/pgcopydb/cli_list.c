@@ -31,6 +31,7 @@ static void cli_list_sequences(int argc, char **argv);
 static void cli_list_indexes(int argc, char **argv);
 static void cli_list_depends(int argc, char **argv);
 static void cli_list_schema(int argc, char **argv);
+static void cli_list_progress(int argc, char **argv);
 
 static CommandLine list_tables_command =
 	make_command(
@@ -103,6 +104,16 @@ static CommandLine list_schema_command =
 		cli_list_db_getopts,
 		cli_list_schema);
 
+static CommandLine list_progress_command =
+	make_command(
+		"progress",
+		"List the progress",
+		" --source ... ",
+		"  --source  Postgres URI to the source database\n"
+		"  --json    Format the output using JSON\n",
+		cli_list_db_getopts,
+		cli_list_progress);
+
 
 static CommandLine *list_subcommands[] = {
 	&list_tables_command,
@@ -111,6 +122,7 @@ static CommandLine *list_subcommands[] = {
 	&list_indexes_command,
 	&list_depends_command,
 	&list_schema_command,
+	&list_progress_command,
 	NULL
 };
 
@@ -118,7 +130,6 @@ CommandLine list_commands =
 	make_command_set("list",
 					 "List database objects from a Postgres instance",
 					 NULL, NULL, NULL, list_subcommands);
-
 
 /*
  * cli_list_db_getopts parses the CLI options for the `list db` command.
@@ -140,6 +151,7 @@ cli_list_db_getopts(int argc, char **argv)
 		{ "without-pkey", no_argument, NULL, 'P' },
 		{ "split-tables-larger-than", required_argument, NULL, 'L' },
 		{ "split-at", required_argument, NULL, 'L' },
+		{ "json", no_argument, NULL, 'J' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "quiet", no_argument, NULL, 'q' },
@@ -149,7 +161,7 @@ cli_list_db_getopts(int argc, char **argv)
 
 	optind = 0;
 
-	while ((c = getopt_long(argc, argv, "S:T:j:s:t:PL:Vvqh",
+	while ((c = getopt_long(argc, argv, "S:T:j:s:t:PL:JVvqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -225,6 +237,13 @@ cli_list_db_getopts(int argc, char **argv)
 				log_trace("--split-tables-larger-than %s (%lld)",
 						  options.splitTablesLargerThanPretty,
 						  (long long) options.splitTablesLargerThan);
+				break;
+			}
+
+			case 'J':
+			{
+				outputJSON = true;
+				log_trace("--json");
 				break;
 			}
 
@@ -984,4 +1003,169 @@ cli_list_schema(int argc, char **argv)
 
 	fformat(stdout, "%s\n", json);
 	free(json);
+}
+
+
+/*
+ * cli_list_progress implements the command: pgcopydb list progress
+ */
+static void
+cli_list_progress(int argc, char **argv)
+{
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) find_pg_commands(&(copySpecs.pgPaths));
+
+	/*
+	 * Assume --resume so that we can run the command alongside the main
+	 * process being active.
+	 */
+	bool auxilliary = true;
+
+	if (!copydb_init_workdir(&copySpecs,
+							 NULL,
+							 false, /* restart */
+							 true, /* resume */
+							 auxilliary))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	RestoreOptions restoreOptions = { 0 };
+
+	if (!copydb_init_specs(&copySpecs,
+						   listDBoptions.source_pguri,
+						   "",  /* target_pguri */
+						   1,   /* tableJobs */
+						   1,   /* indexJobs */
+						   listDBoptions.splitTablesLargerThan,
+						   listDBoptions.splitTablesLargerThanPretty,
+						   DATA_SECTION_ALL,
+						   "",  /* snapshot */
+						   restoreOptions,
+						   false, /* roles */
+						   false, /* skipLargeObjects */
+						   false, /* restart */
+						   true,  /* resume */
+						   false)) /* consistent */
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!copydb_parse_schema_json_file(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	CopyProgress progress = { 0 };
+
+	if (!copydb_update_progress(&copySpecs, &progress))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (outputJSON)
+	{
+		JSON_Value *js = json_value_init_object();
+		JSON_Object *jsobj = json_value_get_object(js);
+
+		json_object_set_number(jsobj, "table-jobs", copySpecs.tableJobs);
+		json_object_set_number(jsobj, "index-jobs", copySpecs.indexJobs);
+
+		/* table counts */
+		JSON_Value *jsTable = json_value_init_object();
+		JSON_Object *jsTableObj = json_value_get_object(jsTable);
+
+		json_object_set_number(jsTableObj, "total", progress.tableCount);
+		json_object_set_number(jsTableObj, "done", progress.tableDoneCount);
+
+		/* in-progress */
+		JSON_Value *jsTableInProgress = json_value_init_array();
+		JSON_Array *jsTableArray = json_value_get_array(jsTableInProgress);
+
+		for (int i = 0; i < progress.tableInProgress.count; i++)
+		{
+			SourceTable *table = &(progress.tableInProgress.array[i]);
+
+			JSON_Value *jsTable = json_value_init_object();
+			JSON_Object *jsTableObj = json_value_get_object(jsTable);
+
+			json_object_set_number(jsTableObj, "oid", table->oid);
+			json_object_set_string(jsTableObj, "schema", table->nspname);
+			json_object_set_string(jsTableObj, "name", table->relname);
+
+			json_array_append_value(jsTableArray, jsTable);
+		}
+
+		json_object_set_value(jsTableObj, "in-progress", jsTableInProgress);
+
+		json_object_set_value(jsobj, "tables", jsTable);
+
+		/* index counts */
+		JSON_Value *jsIndex = json_value_init_object();
+		JSON_Object *jsIndexObj = json_value_get_object(jsIndex);
+
+		json_object_set_number(jsIndexObj, "total", progress.indexCount);
+		json_object_set_number(jsIndexObj, "done", progress.indexDoneCount);
+
+		/* in-progress */
+		JSON_Value *jsIndexInProgress = json_value_init_array();
+		JSON_Array *jsIndexArray = json_value_get_array(jsIndexInProgress);
+
+		for (int i = 0; i < progress.indexInProgress.count; i++)
+		{
+			SourceIndex *index = &(progress.indexInProgress.array[i]);
+
+			JSON_Value *jsIndex = json_value_init_object();
+			JSON_Object *jsIndexObj = json_value_get_object(jsIndex);
+
+			json_object_set_number(jsIndexObj, "oid", index->indexOid);
+			json_object_set_string(jsIndexObj, "schema", index->indexNamespace);
+			json_object_set_string(jsIndexObj, "name", index->indexRelname);
+			json_object_set_string(jsIndexObj, "sql", index->indexDef);
+
+			json_array_append_value(jsIndexArray, jsIndex);
+		}
+
+		json_object_set_value(jsIndexObj, "in-progress", jsIndexInProgress);
+
+		json_object_set_value(jsobj, "indexes", jsIndex);
+
+		char *serialized_string = json_serialize_to_string_pretty(js);
+
+		fformat(stdout, "%s\n", serialized_string);
+
+		json_free_serialized_string(serialized_string);
+		json_value_free(js);
+	}
+	else
+	{
+		fformat(stdout, "%12s | %12s | %12s | %12s\n",
+				"",
+				"Total Count",
+				"In Progress",
+				"Done");
+
+		fformat(stdout, "%12s-+-%12s-+-%12s-+-%12s\n",
+				"------------",
+				"------------",
+				"------------",
+				"------------");
+
+		fformat(stdout, "%12s | %12d | %12d | %12d\n",
+				"Tables",
+				progress.tableCount,
+				progress.tableInProgress.count,
+				progress.tableDoneCount);
+
+		fformat(stdout, "%12s | %12d | %12d | %12d\n",
+				"Indexes",
+				progress.indexCount,
+				progress.indexInProgress.count,
+				progress.indexDoneCount);
+	}
 }

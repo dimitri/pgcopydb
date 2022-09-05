@@ -16,6 +16,7 @@ This command prefixes the following sub-commands:
     indexes      List all the indexes to create again after copying the data
     depends      List all the dependencies to filter-out
     schema       List the schema to migrate, formatted in JSON
+    progress     List the progress
 
 
 .. _pgcopydb_list_tables:
@@ -147,6 +148,30 @@ formatted string that contains detailed information about all those objects.
      --filter <filename> Use the filters defined in <filename>
 
 
+.. _pgcopydb_list_progress:
+
+pgcopydb list progress
+----------------------
+
+pgcopydb list progress - List the progress
+
+The command ``pgcopydb list progress`` reads the ``schema.json`` file in the
+work directory, parses it, and then computes how many tables and indexes are
+planned to be copied and created on the target database, how many have been
+done already, and how many are in-progress.
+
+When using the option ``--json`` the JSON formatted output also includes a
+list of all the tables and indexes that are currently being processed.
+
+::
+
+    pgcopydb list progress: List the progress
+    usage: pgcopydb list progress  --source ...
+
+      --source  Postgres URI to the source database
+      --json    Format the output using JSON
+
+
 Options
 -------
 
@@ -186,6 +211,11 @@ The following options are available to ``pgcopydb dump schema``:
   Instead of listing objects that are selected for copy by the filters
   installed with the ``--filter`` option, list the objects that are going to
   be skipped when using the filters.
+
+--json
+
+  The output of the command is formatted in JSON, when supported. Ignored
+  otherwise.
 
 Environment
 -----------
@@ -1546,4 +1576,43 @@ This gives the following JSON output:
                "restore-list-name": "public store_store_id_seq postgres"
            }
        ]
+   }
+
+
+Listing current progress (log lines removed):
+
+::
+
+   $ pgcopydb list progress 2>/dev/null
+                |  Total Count |  In Progress |         Done
+   -------------+--------------+--------------+-------------
+         Tables |           21 |            4 |            7
+        Indexes |           48 |           14 |            7
+
+
+Listing current progress, in JSON:
+
+::
+
+   $ pgcopydb list progress --json 2>/dev/null
+   {
+       "table-jobs": 4,
+       "index-jobs": 4,
+       "tables": {
+           "total": 21,
+           "done": 21,
+           "in-progress": []
+       },
+       "indexes": {
+           "total": 48,
+           "done": 47,
+           "in-progress": [
+               {
+                   "oid": 317998,
+                   "schema": "public",
+                   "name": "store_pkey",
+                   "sql": "CREATE UNIQUE INDEX store_pkey ON public.store USING btree (store_id)"
+               }
+           ]
+       }
    }

@@ -1289,6 +1289,9 @@ copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 		return false;
 	}
 
+	/* make things very slow */
+	sleep(5);
+
 	return true;
 }
 

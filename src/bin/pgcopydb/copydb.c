@@ -494,7 +494,10 @@ copydb_rmdir_or_mkdir(const char *dir, bool removeDir)
 	}
 	else
 	{
-		log_debug("mkdir -p \"%s\"", dir);
+		if (!directory_exists(dir))
+		{
+			log_debug("mkdir -p \"%s\"", dir);
+		}
 
 		if (pg_mkdir_p((char *) dir, 0700) == -1)
 		{
@@ -1566,7 +1569,7 @@ copydb_prepare_schema_json_file(CopyDataSpec *copySpecs)
 								   "sql",
 								   index->constraintDef);
 
-			json_object_set_string(jsIndexObj,
+			json_object_set_string(jsConstraintObj,
 								   "restore-list-name",
 								   index->constraintRestoreListName);
 
@@ -1626,6 +1629,334 @@ copydb_prepare_schema_json_file(CopyDataSpec *copySpecs)
 
 	json_free_serialized_string(serialized_string);
 	json_value_free(js);
+
+	return true;
+}
+
+
+/*
+ * copydb_parse_schema_json_file parses the JSON file prepared with
+ * copydb_prepare_schema_json_file and fills-in the given CopyDataSpec
+ * structure with the information found in the JSON file.
+ */
+bool
+copydb_parse_schema_json_file(CopyDataSpec *copySpecs)
+{
+	log_debug("copydb_parse_schema_json_file: \"%s\"",
+			  copySpecs->cfPaths.schemafile);
+
+	JSON_Value *json = json_parse_file(copySpecs->cfPaths.schemafile);
+
+	if (json == NULL)
+	{
+		log_error("Failed to parse JSON file \"%s\"",
+				  copySpecs->cfPaths.schemafile);
+		return false;
+	}
+
+	JSON_Object *jsObj = json_value_get_object(json);
+
+	/* setup section */
+	copySpecs->tableJobs = json_object_dotget_number(jsObj, "setup.table-jobs");
+	copySpecs->indexJobs = json_object_dotget_number(jsObj, "setup.index-jobs");
+
+	/* table section */
+	JSON_Array *jsTableArray = json_object_get_array(jsObj, "tables");
+	int tableCount = json_array_get_count(jsTableArray);
+
+	log_debug("copydb_parse_schema_json_file: parsing %d tables", tableCount);
+
+	copySpecs->sourceTableArray.count = tableCount;
+	copySpecs->sourceTableArray.array =
+		(SourceTable *) calloc(tableCount, sizeof(SourceTable));
+
+	if (copySpecs->sourceTableArray.array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	for (int tableIndex = 0; tableIndex < tableCount; tableIndex++)
+	{
+		SourceTable *table = &(copySpecs->sourceTableArray.array[tableIndex]);
+		JSON_Object *jsTable = json_array_get_object(jsTableArray, tableIndex);
+
+		table->oid = json_object_get_number(jsTable, "oid");
+
+		char *schema = (char *) json_object_get_string(jsTable, "schema");
+		char *name = (char *) json_object_get_string(jsTable, "name");
+
+		char *bytesPretty =
+			(char *) json_object_get_string(jsTable, "bytes-pretty");
+
+		char *restoreListName =
+			(char *) json_object_get_string(jsTable, "restore-list-name");
+
+		char *partKey = (char *) json_object_get_string(jsTable, "part-key");
+
+		strlcpy(table->nspname, schema, sizeof(table->nspname));
+		strlcpy(table->relname, name, sizeof(table->relname));
+
+		table->reltuples = json_object_get_number(jsTable, "reltuples");
+		table->bytes = json_object_get_number(jsTable, "bytes");
+		table->excludeData = json_object_get_boolean(jsTable, "exclude-data");
+
+		strlcpy(table->bytesPretty, bytesPretty, sizeof(table->bytesPretty));
+
+		strlcpy(table->restoreListName,
+				restoreListName,
+				sizeof(table->restoreListName));
+
+		strlcpy(table->partKey, partKey, sizeof(table->partKey));
+
+		if (json_object_has_value(jsTable, "parts"))
+		{
+			JSON_Array *jsPartsArray = json_object_get_array(jsTable, "parts");
+			int partsCount = json_array_get_count(jsPartsArray);
+
+			table->partsArray.count = partsCount;
+			table->partsArray.array =
+				(SourceTableParts *) calloc(partsCount, sizeof(SourceTableParts));
+
+			for (int i = 0; i < partsCount; i++)
+			{
+				SourceTableParts *part = &(table->partsArray.array[i]);
+				JSON_Object *jsPart = json_array_get_object(jsPartsArray, i);
+
+				part->partNumber = json_object_get_number(jsPart, "number");
+				part->partCount = json_object_get_number(jsPart, "total");
+				part->min = json_object_get_number(jsPart, "min");
+				part->max = json_object_get_number(jsPart, "max");
+				part->count = json_object_get_number(jsPart, "count");
+			}
+		}
+		else
+		{
+			table->partsArray.count = 0;
+			table->partsArray.array = NULL;
+		}
+	}
+
+	/* index section */
+	JSON_Array *jsIndexArray = json_object_get_array(jsObj, "indexes");
+	int indexCount = json_array_get_count(jsIndexArray);
+
+	log_debug("copydb_parse_schema_json_file: parsing %d indexes", indexCount);
+
+	copySpecs->sourceIndexArray.count = indexCount;
+	copySpecs->sourceIndexArray.array =
+		(SourceIndex *) calloc(indexCount, sizeof(SourceIndex));
+
+	if (copySpecs->sourceIndexArray.array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	for (int i = 0; i < indexCount; i++)
+	{
+		SourceIndex *index = &(copySpecs->sourceIndexArray.array[i]);
+		JSON_Object *jsIndex = json_array_get_object(jsIndexArray, i);
+
+		index->indexOid = json_object_get_number(jsIndex, "oid");
+
+		char *schema = (char *) json_object_get_string(jsIndex, "schema");
+		char *name = (char *) json_object_get_string(jsIndex, "name");
+		char *cols = (char *) json_object_get_string(jsIndex, "columns");
+		char *def = (char *) json_object_get_string(jsIndex, "sql");
+		char *listName =
+			(char *) json_object_get_string(jsIndex, "restore-list-name");
+
+		strlcpy(index->indexNamespace, schema, sizeof(index->indexNamespace));
+		strlcpy(index->indexRelname, name, sizeof(index->indexRelname));
+		strlcpy(index->indexColumns, cols, sizeof(index->indexColumns));
+		strlcpy(index->indexDef, def, sizeof(index->indexDef));
+
+		strlcpy(index->indexRestoreListName,
+				listName,
+				sizeof(index->indexRestoreListName));
+
+		index->isPrimary = json_object_get_boolean(jsIndex, "isPrimary");
+		index->isUnique = json_object_get_boolean(jsIndex, "isUnique");
+
+		index->tableOid = json_object_dotget_number(jsIndex, "table.oid");
+
+		schema = (char *) json_object_dotget_string(jsIndex, "table.schema");
+		name = (char *) json_object_dotget_string(jsIndex, "table.name");
+
+		strlcpy(index->tableNamespace, schema, sizeof(index->tableNamespace));
+		strlcpy(index->tableRelname, name, sizeof(index->tableRelname));
+
+		if (json_object_has_value(jsIndex, "constraint"))
+		{
+			index->constraintOid =
+				json_object_dotget_number(jsIndex, "constraint.oid");
+
+			name = (char *) json_object_dotget_string(jsIndex, "constraint.name");
+			def = (char *) json_object_dotget_string(jsIndex, "constraint.sql");
+
+			listName =
+				(char *) json_object_get_string(jsIndex,
+												"constraint.restore-list-name");
+
+			strlcpy(index->constraintName, name, sizeof(index->constraintName));
+			strlcpy(index->constraintDef, def, sizeof(index->constraintDef));
+
+			if (listName != NULL)
+			{
+				strlcpy(index->constraintRestoreListName,
+						listName,
+						sizeof(index->constraintRestoreListName));
+			}
+		}
+		else
+		{
+			index->constraintOid = 0;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * copydb_update_progress updates the progress counters with information found
+ * on-disk in the work directory (lock and done files, etc).
+ */
+bool
+copydb_update_progress(CopyDataSpec *copySpecs, CopyProgress *progress)
+{
+	SourceTableArray *tableArray = &(copySpecs->sourceTableArray);
+	SourceIndexArray *indexArray = &(copySpecs->sourceIndexArray);
+
+	progress->tableCount = tableArray->count;
+	progress->indexCount = indexArray->count;
+
+	log_debug("copydb_update_progress for %d tables, %d indexes",
+			  progress->tableCount,
+			  progress->indexCount);
+
+	/* count table in progress, table done */
+	progress->tableDoneCount = 0;
+	progress->tableInProgress.count = 0;
+
+	/* we can't have more table in progress than tableJobs */
+	progress->tableInProgress.array =
+		(SourceTable *) calloc(copySpecs->tableJobs, sizeof(SourceTable));
+
+	SourceTableArray *tableInProgress = &(progress->tableInProgress);
+
+	for (int i = 0; i < progress->tableCount; i++)
+	{
+		SourceTable *source = &(tableArray->array[i]);
+		int partCount = source->partsArray.count;
+
+		bool done = false;
+
+		if (partCount <= 1)
+		{
+			CopyTableDataSpec tableSpecs = { 0 };
+
+			if (!copydb_init_table_specs(&tableSpecs, copySpecs, source, 0))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			done = file_exists(tableSpecs.tablePaths.doneFile);
+
+			if (file_exists(tableSpecs.tablePaths.lockFile))
+			{
+				/*
+				 * Copy the SourceTable struct in-place to the tableInProgress
+				 * array.
+				 */
+				tableInProgress->array[progress->tableInProgress.count++] =
+					*source;
+			}
+		}
+		else
+		{
+			bool allPartsAreDone = true;
+
+			for (int partIndex = 0; partIndex < partCount; partIndex++)
+			{
+				CopyTableDataSpec tableSpecs = { 0 };
+
+				if (!copydb_init_table_specs(&tableSpecs,
+											 copySpecs,
+											 source,
+											 partIndex))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+
+				if (!file_exists(tableSpecs.tablePaths.doneFile))
+				{
+					allPartsAreDone = false;
+				}
+
+				if (file_exists(tableSpecs.tablePaths.lockFile))
+				{
+					/*
+					 * Copy the SourceTable struct in-place to the
+					 * tableInProgress array.
+					 */
+					tableInProgress->array[progress->tableInProgress.count++] =
+						*source;
+				}
+			}
+
+			done = allPartsAreDone;
+		}
+
+		if (done)
+		{
+			++progress->tableDoneCount;
+		}
+	}
+
+	/* count index in progress, index done */
+	progress->indexDoneCount = 0;
+	progress->indexInProgress.count = 0;
+
+	/* we can't have more index in progress than indexJobs */
+	progress->indexInProgress.array =
+		(SourceIndex *) calloc(copySpecs->indexJobs, sizeof(SourceIndex));
+
+	SourceIndexArray *indexInProgress = &(progress->indexInProgress);
+
+	IndexFilePathsArray indexPathsArray = { 0, NULL };
+
+	/* build the index file paths we need for the upcoming operations */
+	if (!copydb_init_indexes_paths(&(copySpecs->cfPaths),
+								   indexArray,
+								   &indexPathsArray))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	for (int i = 0; i < progress->indexCount; i++)
+	{
+		SourceIndex *index = &(indexArray->array[i]);
+		IndexFilePaths *indexPaths = &(indexPathsArray.array[i]);
+
+		if (file_exists(indexPaths->doneFile))
+		{
+			++progress->indexDoneCount;
+		}
+		else if (file_exists(indexPaths->lockFile))
+		{
+			/*
+			 * Copy the SourceIndex struct in-place to the indexInProgress
+			 * array.
+			 */
+			indexInProgress->array[progress->indexInProgress.count++] =
+				*index;
+		}
+	}
 
 	return true;
 }

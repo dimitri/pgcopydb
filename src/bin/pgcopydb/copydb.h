@@ -302,6 +302,19 @@ typedef enum
 } PostgresDumpSection;
 
 
+/* register progress being made, see `pgcopydb list progress` */
+typedef struct CopyProgress
+{
+	int tableCount;
+	int tableDoneCount;
+	SourceTableArray tableInProgress;
+
+	int indexCount;
+	int indexDoneCount;
+	SourceIndexArray indexInProgress;
+} CopyProgress;
+
+
 extern GUC srcSettings[];
 extern GUC dstSettings[];
 
@@ -363,6 +376,8 @@ bool copydb_collect_finished_subprocesses(bool *allDone);
 bool copydb_copy_roles(CopyDataSpec *copySpecs);
 
 bool copydb_prepare_schema_json_file(CopyDataSpec *copySpecs);
+bool copydb_parse_schema_json_file(CopyDataSpec *copySpecs);
+bool copydb_update_progress(CopyDataSpec *copySpecs, CopyProgress *progress);
 
 /* indexes.c */
 bool copydb_init_indexes_paths(CopyFilePaths *cfPaths,
