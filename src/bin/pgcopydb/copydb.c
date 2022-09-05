@@ -1319,11 +1319,17 @@ copydb_prepare_schema_json_file(CopyDataSpec *copySpecs)
 	JSON_Value *js = json_value_init_object();
 	JSON_Object *jsobj = json_value_get_object(js);
 
+	log_trace("copydb_prepare_schema_json_file");
+
+	/* main options for the setup */
+	JSON_Value *jsSetup = json_value_init_object();
+	JSON_Object *jsSetupObj = json_value_get_object(jsSetup);
+
 	/* snapshot */
 	if (!IS_EMPTY_STRING_BUFFER(copySpecs->sourceSnapshot.snapshot))
 	{
 		char *snapshot = copySpecs->sourceSnapshot.snapshot;
-		json_object_set_string(jsobj, "snapshot", snapshot);
+		json_object_set_string(jsSetupObj, "snapshot", snapshot);
 	}
 
 	/* source and target URIs, without passwords */
@@ -1336,11 +1342,102 @@ copydb_prepare_schema_json_file(CopyDataSpec *copySpecs)
 	(void) parse_and_scrub_connection_string(copySpecs->target_pguri,
 											 scrubbedTargetURI);
 
-	json_object_set_string(jsobj, "source_pguri", scrubbedSourceURI);
-	json_object_set_string(jsobj, "target_pguri", scrubbedTargetURI);
+	json_object_set_string(jsSetupObj, "source_pguri", scrubbedSourceURI);
+	json_object_set_string(jsSetupObj, "target_pguri", scrubbedTargetURI);
+
+	json_object_set_number(jsSetupObj,
+						   "table-jobs",
+						   (double) copySpecs->tableJobs);
+
+	json_object_set_number(jsSetupObj,
+						   "index-jobs",
+						   (double) copySpecs->indexJobs);
+
+	json_object_set_number(jsSetupObj,
+						   "split-tables-larger-than",
+						   (double) copySpecs->splitTablesLargerThan);
+
+	json_object_set_value(jsobj, "setup", jsSetup);
+
+	/* filtering, if any */
+	if (copySpecs->filters.type != SOURCE_FILTER_TYPE_NONE)
+	{
+		log_trace("copydb_prepare_schema_json_file: filtering");
+
+		SourceFilters *filters = &(copySpecs->filters);
+
+		JSON_Value *jsFilter = json_value_init_object();
+		JSON_Object *jsFilterObj = json_value_get_object(jsFilter);
+
+		json_object_set_string(jsFilterObj,
+							   "type",
+							   filterTypeToString(filters->type));
+
+		/* exclude-schema */
+		if (filters->excludeSchemaList.count > 0)
+		{
+			JSON_Value *jsSchema = json_value_init_array();
+			JSON_Array *jsSchemaArray = json_value_get_array(jsSchema);
+
+			for (int i = 0; i < filters->excludeSchemaList.count; i++)
+			{
+				char *nspname = filters->excludeSchemaList.array[i].nspname;
+
+				json_array_append_string(jsSchemaArray, nspname);
+			}
+
+			json_object_set_value(jsFilterObj, "exclude-schema", jsSchema);
+		}
+
+		/* exclude table lists */
+		struct section
+		{
+			char name[NAMEDATALEN];
+			SourceFilterTableList *list;
+		};
+
+		struct section sections[] = {
+			{ "exclude-table", &(filters->excludeTableList) },
+			{ "exclude-table-data", &(filters->excludeTableDataList) },
+			{ "exclude-index", &(filters->excludeIndexList) },
+			{ "include-only-table", &(filters->includeOnlyTableList) },
+			{ "", NULL },
+		};
+
+		for (int i = 0; sections[i].list != NULL; i++)
+		{
+			char *sectionName = sections[i].name;
+			SourceFilterTableList *list = sections[i].list;
+
+			if (list->count > 0)
+			{
+				JSON_Value *jsList = json_value_init_array();
+				JSON_Array *jsListArray = json_value_get_array(jsList);
+
+				for (int i = 0; i < list->count; i++)
+				{
+					SourceFilterTable *table = &(list->array[i]);
+
+					JSON_Value *jsTable = json_value_init_object();
+					JSON_Object *jsTableObj = json_value_get_object(jsTable);
+
+					json_object_set_string(jsTableObj, "schema", table->nspname);
+					json_object_set_string(jsTableObj, "name", table->relname);
+
+					json_array_append_value(jsListArray, jsTable);
+				}
+
+				json_object_set_value(jsFilterObj, sectionName, jsList);
+			}
+		}
+
+		json_object_set_value(jsobj, "filters", jsFilter);
+	}
 
 	/* array of tables */
 	SourceTableArray *tableArray = &(copySpecs->sourceTableArray);
+
+	log_trace("copydb_prepare_schema_json_file: %d tables", tableArray->count);
 
 	JSON_Value *jsTables = json_value_init_array();
 	JSON_Array *jsTableArray = json_value_get_array(jsTables);
@@ -1348,6 +1445,11 @@ copydb_prepare_schema_json_file(CopyDataSpec *copySpecs)
 	for (int tableIndex = 0; tableIndex < tableArray->count; tableIndex++)
 	{
 		SourceTable *table = &(tableArray->array[tableIndex]);
+
+		log_trace("copydb_prepare_schema_json_file: tables[%d]: %s.%s",
+				  tableIndex,
+				  table->nspname,
+				  table->relname);
 
 		JSON_Value *jsTable = json_value_init_object();
 		JSON_Object *jsTableObj = json_value_get_object(jsTable);
@@ -1409,6 +1511,8 @@ copydb_prepare_schema_json_file(CopyDataSpec *copySpecs)
 
 	/* array of indexes */
 	SourceIndexArray *indexArray = &(copySpecs->sourceIndexArray);
+
+	log_trace("copydb_prepare_schema_json_file: %d indexes", indexArray->count);
 
 	JSON_Value *jsIndexes = json_value_init_array();
 	JSON_Array *jsIndexArray = json_value_get_array(jsIndexes);
@@ -1477,6 +1581,9 @@ copydb_prepare_schema_json_file(CopyDataSpec *copySpecs)
 
 	/* array of sequences */
 	SourceSequenceArray *sequenceArray = &(copySpecs->sequenceArray);
+
+	log_trace("copydb_prepare_schema_json_file: %d sequences",
+			  sequenceArray->count);
 
 	JSON_Value *jsSeqs = json_value_init_array();
 	JSON_Array *jsSeqArray = json_value_get_array(jsSeqs);

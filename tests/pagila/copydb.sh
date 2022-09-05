@@ -41,4 +41,4 @@ psql -d ${PAGILA_SOURCE_PGURI} -1 -f /tmp/pagila-schema.sql
 psql -d ${PAGILA_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
 
 # pgcopydb clone uses the environment variables
-pgcopydb clone --source ${PAGILA_SOURCE_PGURI} --target ${PAGILA_TARGET_PGURI} -vv
+pgcopydb clone --source ${PAGILA_SOURCE_PGURI} --target ${PAGILA_TARGET_PGURI}

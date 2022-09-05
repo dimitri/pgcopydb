@@ -116,12 +116,6 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 		}
 	}
 
-	if (!copydb_prepare_schema_json_file(specs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	return true;
 }
 
@@ -379,9 +373,6 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 			 tableArray->count,
 			 relTuplesPretty,
 			 bytesPretty);
-
-	/* free our temporary memory that's been malloc'ed */
-	free(tableArray->array);
 
 	return true;
 }

@@ -366,7 +366,8 @@ start_clone_process(CopyDataSpec *copySpecs, pid_t *pid)
 
 			if (!cloneDB(copySpecs))
 			{
-				/* errors have already been logged */
+				log_error("Failed to start the clone sub-process, "
+						  "see above for details");
 				exit(EXIT_CODE_SOURCE);
 			}
 
@@ -447,6 +448,13 @@ cloneDB(CopyDataSpec *copySpecs)
 
 	/* fetch schema information from source catalogs, including filtering */
 	if (!copydb_fetch_schema_and_prepare_specs(copySpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* prepare the schema JSON file with all the migration details */
+	if (!copydb_prepare_schema_json_file(copySpecs))
 	{
 		/* errors have already been logged */
 		return false;
