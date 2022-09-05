@@ -1615,6 +1615,9 @@ copydb_prepare_schema_json_file(CopyDataSpec *copySpecs)
 	char *serialized_string = json_serialize_to_string_pretty(js);
 	size_t len = strlen(serialized_string);
 
+	log_debug("Storing migration schema in JSON file \"%s\"",
+			  copySpecs->cfPaths.schemafile);
+
 	if (!write_file(serialized_string, len, copySpecs->cfPaths.schemafile))
 	{
 		log_error("Failed to write schema JSON file, see above for details");
