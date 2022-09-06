@@ -1600,44 +1600,92 @@ Listing current progress, in JSON:
        "index-jobs": 4,
        "tables": {
            "total": 21,
-           "done": 20,
+           "done": 9,
            "in-progress": [
                {
-                   "oid": 317957,
+                   "oid": 317908,
                    "schema": "public",
-                   "name": "store",
-                   "reltuples": 0,
-                   "bytes": 8192,
-                   "bytes-pretty": "8192 bytes",
+                   "name": "payment_p2020_01",
+                   "reltuples": 1157,
+                   "bytes": 98304,
+                   "bytes-pretty": "96 kB",
                    "exclude-data": false,
-                   "restore-list-name": "public store postgres",
-                   "part-key": "store_id"
+                   "restore-list-name": "public payment_p2020_01 postgres",
+                   "part-key": "",
+                   "process": {
+                       "pid": 75159,
+                       "start-time-epoch": 1662476249,
+                       "start-time-string": "2022-09-06 16:57:29 CEST",
+                       "command": "COPY \"public\".\"payment_p2020_01\""
+                   }
+               },
+               {
+                   "oid": 317855,
+                   "schema": "public",
+                   "name": "city",
+                   "reltuples": 600,
+                   "bytes": 73728,
+                   "bytes-pretty": "72 kB",
+                   "exclude-data": false,
+                   "restore-list-name": "public city postgres",
+                   "part-key": "city_id",
+                   "process": {
+                       "pid": 75157,
+                       "start-time-epoch": 1662476249,
+                       "start-time-string": "2022-09-06 16:57:29 CEST",
+                       "command": "COPY \"public\".\"city\""
+                   }
                }
            ]
        },
-       "indexes": {
+          "indexes": {
            "total": 48,
-           "done": 41,
+           "done": 39,
            "in-progress": [
                {
-                   "oid": 317992,
+                   "oid": 378283,
+                   "schema": "pgcopydb",
+                   "name": "sentinel_expr_idx",
+                   "isPrimary": false,
+                   "isUnique": true,
+                   "columns": "",
+                   "sql": "CREATE UNIQUE INDEX sentinel_expr_idx ON pgcopydb.sentinel USING btree ((1))",
+                   "restore-list-name": "pgcopydb sentinel_expr_idx dim",
+                   "table": {
+                       "oid": 378280,
+                       "schema": "pgcopydb",
+                       "name": "sentinel"
+                   },
+                   "process": {
+                       "pid": 74372,
+                       "start-time-epoch": 1662476080,
+                       "start-time-string": "2022-09-06 16:54:40 CEST"
+                   }
+               },
+               {
+                   "oid": 317980,
                    "schema": "public",
-                   "name": "language_pkey",
+                   "name": "country_pkey",
                    "isPrimary": true,
                    "isUnique": true,
-                   "columns": "language_id",
-                   "sql": "CREATE UNIQUE INDEX language_pkey ON public.language USING btree (language_id)",
-                   "restore-list-name": "public language_pkey postgres",
+                   "columns": "country_id",
+                   "sql": "CREATE UNIQUE INDEX country_pkey ON public.country USING btree (country_id)",
+                   "restore-list-name": "public country_pkey postgres",
                    "table": {
-                       "oid": 317892,
+                       "oid": 317865,
                        "schema": "public",
-                       "name": "language"
+                       "name": "country"
                    },
                    "constraint": {
-                       "oid": 317993,
-                       "name": "language_pkey",
-                       "sql": "PRIMARY KEY (language_id)",
+                       "oid": 317981,
+                       "name": "country_pkey",
+                       "sql": "PRIMARY KEY (country_id)",
                        "restore-list-name": ""
+                   },
+                   "process": {
+                       "pid": 74358,
+                       "start-time-epoch": 1662476080,
+                       "start-time-string": "2022-09-06 16:54:40 CEST"
                    }
                },
                {
@@ -1659,6 +1707,11 @@ Listing current progress, in JSON:
                        "name": "staff_pkey",
                        "sql": "PRIMARY KEY (staff_id)",
                        "restore-list-name": ""
+                   },
+                   "process": {
+                       "pid": 74368,
+                       "start-time-epoch": 1662476080,
+                       "start-time-string": "2022-09-06 16:54:40 CEST"
                    }
                }
            ]

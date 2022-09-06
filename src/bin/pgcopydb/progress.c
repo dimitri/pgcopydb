@@ -16,8 +16,10 @@
 #include "log.h"
 #include "parsing.h"
 #include "pidfile.h"
+#include "progress.h"
 #include "schema.h"
 #include "string_utils.h"
+#include "summary.h"
 
 
 static bool copydb_setup_as_json(CopyDataSpec *copySpecs,
@@ -676,11 +678,18 @@ copydb_update_progress(CopyDataSpec *copySpecs, CopyProgress *progress)
 	progress->tableInProgress.array =
 		(SourceTable *) calloc(copySpecs->tableJobs, sizeof(SourceTable));
 
+	progress->tableSummaryArray.count = 0;
+	progress->tableSummaryArray.array =
+		(CopyTableSummary *) calloc(copySpecs->tableJobs,
+									sizeof(CopyTableSummary));
+
 	SourceTableArray *tableInProgress = &(progress->tableInProgress);
+	CopyTableSummaryArray *summaryArray = &(progress->tableSummaryArray);
 
 	for (int i = 0; i < progress->tableCount; i++)
 	{
 		SourceTable *source = &(tableArray->array[i]);
+
 		int partCount = source->partsArray.count;
 
 		bool done = false;
@@ -695,16 +704,30 @@ copydb_update_progress(CopyDataSpec *copySpecs, CopyProgress *progress)
 				return false;
 			}
 
-			done = file_exists(tableSpecs.tablePaths.doneFile);
-
-			if (file_exists(tableSpecs.tablePaths.lockFile))
+			if (file_exists(tableSpecs.tablePaths.doneFile))
 			{
+				done = true;
+			}
+			else if (file_exists(tableSpecs.tablePaths.lockFile))
+			{
+				CopyTableSummary summary = { .table = source };
+
+				if (!read_table_summary(&summary,
+										tableSpecs.tablePaths.lockFile))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+
 				/*
 				 * Copy the SourceTable struct in-place to the tableInProgress
 				 * array.
 				 */
 				tableInProgress->array[progress->tableInProgress.count++] =
 					*source;
+
+				summaryArray->array[progress->tableSummaryArray.count++] =
+					summary;
 			}
 		}
 		else
@@ -731,12 +754,24 @@ copydb_update_progress(CopyDataSpec *copySpecs, CopyProgress *progress)
 
 				if (file_exists(tableSpecs.tablePaths.lockFile))
 				{
+					CopyTableSummary summary = { .table = source };
+
+					if (!read_table_summary(&summary,
+											tableSpecs.tablePaths.lockFile))
+					{
+						/* errors have already been logged */
+						return false;
+					}
+
 					/*
 					 * Copy the SourceTable struct in-place to the
 					 * tableInProgress array.
 					 */
 					tableInProgress->array[progress->tableInProgress.count++] =
 						*source;
+
+					summaryArray->array[progress->tableSummaryArray.count++] =
+						summary;
 				}
 			}
 
@@ -757,7 +792,14 @@ copydb_update_progress(CopyDataSpec *copySpecs, CopyProgress *progress)
 	progress->indexInProgress.array =
 		(SourceIndex *) calloc(copySpecs->indexJobs, sizeof(SourceIndex));
 
+	progress->indexSummaryArray.count = 0;
+	progress->indexSummaryArray.array =
+		(CopyIndexSummary *) calloc(copySpecs->indexJobs,
+									sizeof(CopyIndexSummary));
+
+
 	SourceIndexArray *indexInProgress = &(progress->indexInProgress);
+	CopyIndexSummaryArray *summaryArrayIdx = &(progress->indexSummaryArray);
 
 	IndexFilePathsArray indexPathsArray = { 0, NULL };
 
@@ -781,12 +823,23 @@ copydb_update_progress(CopyDataSpec *copySpecs, CopyProgress *progress)
 		}
 		else if (file_exists(indexPaths->lockFile))
 		{
+			CopyIndexSummary summary = { .index = index };
+
+			if (!read_index_summary(&summary, indexPaths->lockFile))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
 			/*
 			 * Copy the SourceIndex struct in-place to the indexInProgress
 			 * array.
 			 */
 			indexInProgress->array[progress->indexInProgress.count++] =
 				*index;
+
+			summaryArrayIdx->array[progress->indexSummaryArray.count++] =
+				summary;
 		}
 	}
 
@@ -824,6 +877,24 @@ copydb_progress_as_json(CopyDataSpec *copySpecs,
 		return false;
 	}
 
+	/*
+	 * Now patch the JSON array table objects with information from the summary
+	 * file, such as the PID, startTime etc.
+	 */
+	JSON_Array *jsTableArray = json_object_get_array(jsTableObj, "in-progress");
+
+	for (int i = 0; i < tableArray->count; i++)
+	{
+		JSON_Object *jsTableObj = json_array_get_object(jsTableArray, i);
+		CopyTableSummary *summary = &(progress->tableSummaryArray.array[i]);
+
+		if (!prepare_table_summary_as_json(summary, jsTableObj, "process"))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
 	json_object_set_value(jsobj, "tables", jsTable);
 
 	/* index counts */
@@ -840,6 +911,24 @@ copydb_progress_as_json(CopyDataSpec *copySpecs,
 	{
 		/* errors have already been logged */
 		return false;
+	}
+
+	/*
+	 * Now patch the JSON array index objects with information from the summary
+	 * file, such as the PID, startTime etc.
+	 */
+	JSON_Array *jsIndexArray = json_object_get_array(jsIndexObj, "in-progress");
+
+	for (int i = 0; i < indexArray->count; i++)
+	{
+		JSON_Object *jsIndexObj = json_array_get_object(jsIndexArray, i);
+		CopyIndexSummary *summary = &(progress->indexSummaryArray.array[i]);
+
+		if (!prepare_index_summary_as_json(summary, jsIndexObj, "process"))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	json_object_set_value(jsobj, "indexes", jsIndex);

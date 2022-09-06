@@ -6,8 +6,6 @@
 #ifndef COPYDB_H
 #define COPYDB_H
 
-#include "parson.h"
-
 #include "filtering.h"
 #include "lock_utils.h"
 #include "pgcmd.h"
@@ -304,19 +302,6 @@ typedef enum
 } PostgresDumpSection;
 
 
-/* register progress being made, see `pgcopydb list progress` */
-typedef struct CopyProgress
-{
-	int tableCount;
-	int tableDoneCount;
-	SourceTableArray tableInProgress;
-
-	int indexCount;
-	int indexDoneCount;
-	SourceIndexArray indexInProgress;
-} CopyProgress;
-
-
 extern GUC srcSettings[];
 extern GUC dstSettings[];
 
@@ -483,14 +468,5 @@ bool copydb_copy_blobs(CopyDataSpec *specs);
 /* summary.c */
 bool prepare_summary_table(Summary *summary, CopyDataSpec *specs);
 bool print_summary(Summary *summary, CopyDataSpec *specs);
-
-/* progress.c */
-bool copydb_prepare_schema_json_file(CopyDataSpec *copySpecs);
-bool copydb_parse_schema_json_file(CopyDataSpec *copySpecs);
-bool copydb_update_progress(CopyDataSpec *copySpecs, CopyProgress *progress);
-
-bool copydb_progress_as_json(CopyDataSpec *copySpecs,
-							 CopyProgress *progress,
-							 JSON_Value *js);
 
 #endif  /* COPYDB_H */

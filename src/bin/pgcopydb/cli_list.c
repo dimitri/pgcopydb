@@ -19,6 +19,7 @@
 #include "parsing.h"
 #include "pgcmd.h"
 #include "pgsql.h"
+#include "progress.h"
 #include "schema.h"
 #include "string_utils.h"
 
