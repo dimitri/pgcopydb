@@ -1600,18 +1600,66 @@ Listing current progress, in JSON:
        "index-jobs": 4,
        "tables": {
            "total": 21,
-           "done": 21,
-           "in-progress": []
+           "done": 20,
+           "in-progress": [
+               {
+                   "oid": 317957,
+                   "schema": "public",
+                   "name": "store",
+                   "reltuples": 0,
+                   "bytes": 8192,
+                   "bytes-pretty": "8192 bytes",
+                   "exclude-data": false,
+                   "restore-list-name": "public store postgres",
+                   "part-key": "store_id"
+               }
+           ]
        },
        "indexes": {
            "total": 48,
-           "done": 47,
+           "done": 41,
            "in-progress": [
                {
-                   "oid": 317998,
+                   "oid": 317992,
                    "schema": "public",
-                   "name": "store_pkey",
-                   "sql": "CREATE UNIQUE INDEX store_pkey ON public.store USING btree (store_id)"
+                   "name": "language_pkey",
+                   "isPrimary": true,
+                   "isUnique": true,
+                   "columns": "language_id",
+                   "sql": "CREATE UNIQUE INDEX language_pkey ON public.language USING btree (language_id)",
+                   "restore-list-name": "public language_pkey postgres",
+                   "table": {
+                       "oid": 317892,
+                       "schema": "public",
+                       "name": "language"
+                   },
+                   "constraint": {
+                       "oid": 317993,
+                       "name": "language_pkey",
+                       "sql": "PRIMARY KEY (language_id)",
+                       "restore-list-name": ""
+                   }
+               },
+               {
+                   "oid": 317996,
+                   "schema": "public",
+                   "name": "staff_pkey",
+                   "isPrimary": true,
+                   "isUnique": true,
+                   "columns": "staff_id",
+                   "sql": "CREATE UNIQUE INDEX staff_pkey ON public.staff USING btree (staff_id)",
+                   "restore-list-name": "public staff_pkey postgres",
+                   "table": {
+                       "oid": 317946,
+                       "schema": "public",
+                       "name": "staff"
+                   },
+                   "constraint": {
+                       "oid": 317997,
+                       "name": "staff_pkey",
+                       "sql": "PRIMARY KEY (staff_id)",
+                       "restore-list-name": ""
+                   }
                }
            ]
        }

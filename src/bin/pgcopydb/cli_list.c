@@ -976,6 +976,17 @@ cli_list_schema(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	/* parse filters if provided */
+	if (!IS_EMPTY_STRING_BUFFER(listDBoptions.filterFileName))
+	{
+		if (!parse_filters(listDBoptions.filterFileName, &(copySpecs.filters)))
+		{
+			log_error("Failed to parse filters in file \"%s\"",
+					  listDBoptions.filterFileName);
+			exit(EXIT_CODE_BAD_ARGS);
+		}
+	}
+
 	char scrubbedSourceURI[MAXCONNINFO] = { 0 };
 
 	(void) parse_and_scrub_connection_string(copySpecs.source_pguri,
@@ -990,6 +1001,14 @@ cli_list_schema(int argc, char **argv)
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);
 	}
+
+	if (!copydb_prepare_schema_json_file(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_info("Wrote \"%s\"", copySpecs.cfPaths.schemafile);
 
 	/* output the JSON contents from the json schema file */
 	char *json = NULL;
@@ -1071,69 +1090,12 @@ cli_list_progress(int argc, char **argv)
 	if (outputJSON)
 	{
 		JSON_Value *js = json_value_init_object();
-		JSON_Object *jsobj = json_value_get_object(js);
 
-		json_object_set_number(jsobj, "table-jobs", copySpecs.tableJobs);
-		json_object_set_number(jsobj, "index-jobs", copySpecs.indexJobs);
-
-		/* table counts */
-		JSON_Value *jsTable = json_value_init_object();
-		JSON_Object *jsTableObj = json_value_get_object(jsTable);
-
-		json_object_set_number(jsTableObj, "total", progress.tableCount);
-		json_object_set_number(jsTableObj, "done", progress.tableDoneCount);
-
-		/* in-progress */
-		JSON_Value *jsTableInProgress = json_value_init_array();
-		JSON_Array *jsTableArray = json_value_get_array(jsTableInProgress);
-
-		for (int i = 0; i < progress.tableInProgress.count; i++)
+		if (!copydb_progress_as_json(&copySpecs, &progress, js))
 		{
-			SourceTable *table = &(progress.tableInProgress.array[i]);
-
-			JSON_Value *jsTable = json_value_init_object();
-			JSON_Object *jsTableObj = json_value_get_object(jsTable);
-
-			json_object_set_number(jsTableObj, "oid", table->oid);
-			json_object_set_string(jsTableObj, "schema", table->nspname);
-			json_object_set_string(jsTableObj, "name", table->relname);
-
-			json_array_append_value(jsTableArray, jsTable);
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
-
-		json_object_set_value(jsTableObj, "in-progress", jsTableInProgress);
-
-		json_object_set_value(jsobj, "tables", jsTable);
-
-		/* index counts */
-		JSON_Value *jsIndex = json_value_init_object();
-		JSON_Object *jsIndexObj = json_value_get_object(jsIndex);
-
-		json_object_set_number(jsIndexObj, "total", progress.indexCount);
-		json_object_set_number(jsIndexObj, "done", progress.indexDoneCount);
-
-		/* in-progress */
-		JSON_Value *jsIndexInProgress = json_value_init_array();
-		JSON_Array *jsIndexArray = json_value_get_array(jsIndexInProgress);
-
-		for (int i = 0; i < progress.indexInProgress.count; i++)
-		{
-			SourceIndex *index = &(progress.indexInProgress.array[i]);
-
-			JSON_Value *jsIndex = json_value_init_object();
-			JSON_Object *jsIndexObj = json_value_get_object(jsIndex);
-
-			json_object_set_number(jsIndexObj, "oid", index->indexOid);
-			json_object_set_string(jsIndexObj, "schema", index->indexNamespace);
-			json_object_set_string(jsIndexObj, "name", index->indexRelname);
-			json_object_set_string(jsIndexObj, "sql", index->indexDef);
-
-			json_array_append_value(jsIndexArray, jsIndex);
-		}
-
-		json_object_set_value(jsIndexObj, "in-progress", jsIndexInProgress);
-
-		json_object_set_value(jsobj, "indexes", jsIndex);
 
 		char *serialized_string = json_serialize_to_string_pretty(js);
 
