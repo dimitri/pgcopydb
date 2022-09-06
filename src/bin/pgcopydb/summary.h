@@ -12,6 +12,8 @@
 #include <inttypes.h>
 #include <signal.h>
 
+#include "parson.h"
+
 #include "postgres_fe.h"
 #include "pqexpbuffer.h"
 #include "portability/instr_time.h"
@@ -157,6 +159,10 @@ bool read_table_summary(CopyTableSummary *summary, const char *filename);
 bool open_table_summary(CopyTableSummary *summary, char *filename);
 bool finish_table_summary(CopyTableSummary *summary, char *filename);
 
+bool prepare_table_summary_as_json(CopyTableSummary *summary,
+								   JSON_Object *jsobj,
+								   const char *key);
+
 bool create_table_index_file(CopyTableSummary *summary,
 							 SourceIndexArray *indexArray,
 							 char *filename);
@@ -176,6 +182,10 @@ bool open_index_summary(CopyIndexSummary *summary, char *filename,
 						bool constraint);
 bool finish_index_summary(CopyIndexSummary *summary, char *filename,
 						  bool constraint);
+
+bool prepare_index_summary_as_json(CopyIndexSummary *summary,
+								   JSON_Object *jsobj,
+								   const char *key);
 
 void summary_prepare_toplevel_durations(Summary *summary);
 void print_toplevel_summary(Summary *summary, int tableJobs, int indexJobs);

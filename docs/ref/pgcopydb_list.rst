@@ -16,6 +16,7 @@ This command prefixes the following sub-commands:
     indexes      List all the indexes to create again after copying the data
     depends      List all the dependencies to filter-out
     schema       List the schema to migrate, formatted in JSON
+    progress     List the progress
 
 
 .. _pgcopydb_list_tables:
@@ -147,6 +148,30 @@ formatted string that contains detailed information about all those objects.
      --filter <filename> Use the filters defined in <filename>
 
 
+.. _pgcopydb_list_progress:
+
+pgcopydb list progress
+----------------------
+
+pgcopydb list progress - List the progress
+
+The command ``pgcopydb list progress`` reads the ``schema.json`` file in the
+work directory, parses it, and then computes how many tables and indexes are
+planned to be copied and created on the target database, how many have been
+done already, and how many are in-progress.
+
+When using the option ``--json`` the JSON formatted output also includes a
+list of all the tables and indexes that are currently being processed.
+
+::
+
+    pgcopydb list progress: List the progress
+    usage: pgcopydb list progress  --source ...
+
+      --source  Postgres URI to the source database
+      --json    Format the output using JSON
+
+
 Options
 -------
 
@@ -186,6 +211,11 @@ The following options are available to ``pgcopydb dump schema``:
   Instead of listing objects that are selected for copy by the filters
   installed with the ``--filter`` option, list the objects that are going to
   be skipped when using the filters.
+
+--json
+
+  The output of the command is formatted in JSON, when supported. Ignored
+  otherwise.
 
 Environment
 -----------
@@ -1546,4 +1576,144 @@ This gives the following JSON output:
                "restore-list-name": "public store_store_id_seq postgres"
            }
        ]
+   }
+
+
+Listing current progress (log lines removed):
+
+::
+
+   $ pgcopydb list progress 2>/dev/null
+                |  Total Count |  In Progress |         Done
+   -------------+--------------+--------------+-------------
+         Tables |           21 |            4 |            7
+        Indexes |           48 |           14 |            7
+
+
+Listing current progress, in JSON:
+
+::
+
+   $ pgcopydb list progress --json 2>/dev/null
+   {
+       "table-jobs": 4,
+       "index-jobs": 4,
+       "tables": {
+           "total": 21,
+           "done": 9,
+           "in-progress": [
+               {
+                   "oid": 317908,
+                   "schema": "public",
+                   "name": "payment_p2020_01",
+                   "reltuples": 1157,
+                   "bytes": 98304,
+                   "bytes-pretty": "96 kB",
+                   "exclude-data": false,
+                   "restore-list-name": "public payment_p2020_01 postgres",
+                   "part-key": "",
+                   "process": {
+                       "pid": 75159,
+                       "start-time-epoch": 1662476249,
+                       "start-time-string": "2022-09-06 16:57:29 CEST",
+                       "command": "COPY \"public\".\"payment_p2020_01\""
+                   }
+               },
+               {
+                   "oid": 317855,
+                   "schema": "public",
+                   "name": "city",
+                   "reltuples": 600,
+                   "bytes": 73728,
+                   "bytes-pretty": "72 kB",
+                   "exclude-data": false,
+                   "restore-list-name": "public city postgres",
+                   "part-key": "city_id",
+                   "process": {
+                       "pid": 75157,
+                       "start-time-epoch": 1662476249,
+                       "start-time-string": "2022-09-06 16:57:29 CEST",
+                       "command": "COPY \"public\".\"city\""
+                   }
+               }
+           ]
+       },
+          "indexes": {
+           "total": 48,
+           "done": 39,
+           "in-progress": [
+               {
+                   "oid": 378283,
+                   "schema": "pgcopydb",
+                   "name": "sentinel_expr_idx",
+                   "isPrimary": false,
+                   "isUnique": true,
+                   "columns": "",
+                   "sql": "CREATE UNIQUE INDEX sentinel_expr_idx ON pgcopydb.sentinel USING btree ((1))",
+                   "restore-list-name": "pgcopydb sentinel_expr_idx dim",
+                   "table": {
+                       "oid": 378280,
+                       "schema": "pgcopydb",
+                       "name": "sentinel"
+                   },
+                   "process": {
+                       "pid": 74372,
+                       "start-time-epoch": 1662476080,
+                       "start-time-string": "2022-09-06 16:54:40 CEST"
+                   }
+               },
+               {
+                   "oid": 317980,
+                   "schema": "public",
+                   "name": "country_pkey",
+                   "isPrimary": true,
+                   "isUnique": true,
+                   "columns": "country_id",
+                   "sql": "CREATE UNIQUE INDEX country_pkey ON public.country USING btree (country_id)",
+                   "restore-list-name": "public country_pkey postgres",
+                   "table": {
+                       "oid": 317865,
+                       "schema": "public",
+                       "name": "country"
+                   },
+                   "constraint": {
+                       "oid": 317981,
+                       "name": "country_pkey",
+                       "sql": "PRIMARY KEY (country_id)",
+                       "restore-list-name": ""
+                   },
+                   "process": {
+                       "pid": 74358,
+                       "start-time-epoch": 1662476080,
+                       "start-time-string": "2022-09-06 16:54:40 CEST"
+                   }
+               },
+               {
+                   "oid": 317996,
+                   "schema": "public",
+                   "name": "staff_pkey",
+                   "isPrimary": true,
+                   "isUnique": true,
+                   "columns": "staff_id",
+                   "sql": "CREATE UNIQUE INDEX staff_pkey ON public.staff USING btree (staff_id)",
+                   "restore-list-name": "public staff_pkey postgres",
+                   "table": {
+                       "oid": 317946,
+                       "schema": "public",
+                       "name": "staff"
+                   },
+                   "constraint": {
+                       "oid": 317997,
+                       "name": "staff_pkey",
+                       "sql": "PRIMARY KEY (staff_id)",
+                       "restore-list-name": ""
+                   },
+                   "process": {
+                       "pid": 74368,
+                       "start-time-epoch": 1662476080,
+                       "start-time-string": "2022-09-06 16:54:40 CEST"
+                   }
+               }
+           ]
+       }
    }

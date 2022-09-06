@@ -292,15 +292,18 @@ copydb_create_index(const char *pguri,
 {
 	PGSQL dst = { 0 };
 
-	/* First, write the lockFile, with a summary of what's going-on */
-	CopyIndexSummary summary = {
-		.pid = getpid(),
-		.index = index,
-		.command = { 0 }
-	};
-
 	bool isDone = false;
 	bool isBeingProcessed = false;
+
+	/* First, write the lockFile, with a summary of what's going-on */
+	CopyIndexSummary emptySummary = { 0 };
+	CopyIndexSummary *summary =
+		(CopyIndexSummary *) calloc(1, sizeof(CopyIndexSummary));
+
+	*summary = emptySummary;
+
+	summary->pid = getpid();
+	summary->index = index;
 
 	bool isConstraintIndex = index->constraintOid != 0;
 
@@ -342,7 +345,7 @@ copydb_create_index(const char *pguri,
 										 indexPaths,
 										 constraint,
 										 lockFileSemaphore,
-										 &summary,
+										 summary,
 										 &isDone,
 										 &isBeingProcessed))
 	{
@@ -364,8 +367,8 @@ copydb_create_index(const char *pguri,
 	if (constraint)
 	{
 		if (!copydb_prepare_create_constraint_command(index,
-													  summary.command,
-													  sizeof(summary.command)))
+													  summary->command,
+													  sizeof(summary->command)))
 		{
 			/* errors have already been logged */
 			return false;
@@ -375,15 +378,15 @@ copydb_create_index(const char *pguri,
 	{
 		if (!copydb_prepare_create_index_command(index,
 												 ifNotExists,
-												 summary.command,
-												 sizeof(summary.command)))
+												 summary->command,
+												 sizeof(summary->command)))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 	}
 
-	log_info("%s", summary.command);
+	log_info("%s", summary->command);
 
 	if (!pgsql_init(&dst, (char *) pguri, PGSQL_CONN_TARGET))
 	{
@@ -400,7 +403,7 @@ copydb_create_index(const char *pguri,
 		return false;
 	}
 
-	if (!pgsql_execute(&dst, summary.command))
+	if (!pgsql_execute(&dst, summary->command))
 	{
 		/* errors have already been logged */
 		(void) semaphore_unlock(createIndexSemaphore);
@@ -416,7 +419,7 @@ copydb_create_index(const char *pguri,
 								   indexPaths,
 								   constraint,
 								   lockFileSemaphore,
-								   &summary))
+								   summary))
 	{
 		/* errors have already been logged */
 		return false;

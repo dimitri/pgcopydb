@@ -7,6 +7,8 @@
 #include <getopt.h>
 #include <inttypes.h>
 
+#include "parson.h"
+
 #include "copydb.h"
 #include "env_utils.h"
 #include "log.h"
@@ -48,6 +50,51 @@ write_table_summary(CopyTableSummary *summary, char *filename)
 		log_error("Failed to write table summary file \"%s\"", filename);
 		return false;
 	}
+
+	return true;
+}
+
+
+/*
+ * prepare_table_summary_as_json prepares the summary information as a JSON
+ * object within the given JSON_Value.
+ */
+bool
+prepare_table_summary_as_json(CopyTableSummary *summary,
+							  JSON_Object *jsobj,
+							  const char *key)
+{
+	JSON_Value *jsSummary = json_value_init_object();
+	JSON_Object *jsSummaryObj = json_value_get_object(jsSummary);
+
+	json_object_set_number(jsSummaryObj, "pid", (double) summary->pid);
+
+	json_object_set_number(jsSummaryObj,
+						   "start-time-epoch",
+						   (double) summary->startTime);
+
+	/* pretty print start time */
+	time_t secs = summary->startTime;
+	struct tm ts = { 0 };
+	char startTimeStr[BUFSIZE] = { 0 };
+
+	if (localtime_r(&secs, &ts) == NULL)
+	{
+		log_error("Failed to convert seconds %lld to local time: %m",
+				  (long long) secs);
+		return false;
+	}
+
+	strftime(startTimeStr, sizeof(startTimeStr), "%Y-%m-%d %H:%M:%S %Z", &ts);
+
+	json_object_set_string(jsSummaryObj,
+						   "start-time-string",
+						   startTimeStr);
+
+	json_object_set_string(jsSummaryObj, "command", summary->command);
+
+	/* attach the JSON array to the main JSON object under the provided key */
+	json_object_set_value(jsobj, key, jsSummary);
 
 	return true;
 }
@@ -410,6 +457,49 @@ read_index_summary(CopyIndexSummary *summary, const char *filename)
 	summary->durationInstr = (instr_time) {
 		0
 	};
+
+	return true;
+}
+
+
+/*
+ * prepare_index_summary_as_json prepares the summary information as a JSON
+ * object within the given JSON_Value.
+ */
+bool
+prepare_index_summary_as_json(CopyIndexSummary *summary,
+							  JSON_Object *jsobj,
+							  const char *key)
+{
+	JSON_Value *jsSummary = json_value_init_object();
+	JSON_Object *jsSummaryObj = json_value_get_object(jsSummary);
+
+	json_object_set_number(jsSummaryObj, "pid", (double) summary->pid);
+
+	json_object_set_number(jsSummaryObj,
+						   "start-time-epoch",
+						   (double) summary->startTime);
+
+	/* pretty print start time */
+	time_t secs = summary->startTime;
+	struct tm ts = { 0 };
+	char startTimeStr[BUFSIZE] = { 0 };
+
+	if (localtime_r(&secs, &ts) == NULL)
+	{
+		log_error("Failed to convert seconds %lld to local time: %m",
+				  (long long) secs);
+		return false;
+	}
+
+	strftime(startTimeStr, sizeof(startTimeStr), "%Y-%m-%d %H:%M:%S %Z", &ts);
+
+	json_object_set_string(jsSummaryObj,
+						   "start-time-string",
+						   startTimeStr);
+
+	/* attach the JSON array to the main JSON object under the provided key */
+	json_object_set_value(jsobj, key, jsSummary);
 
 	return true;
 }

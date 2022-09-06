@@ -19,6 +19,7 @@
 #include "parsing.h"
 #include "pgcmd.h"
 #include "pgsql.h"
+#include "progress.h"
 #include "schema.h"
 #include "string_utils.h"
 
@@ -31,6 +32,7 @@ static void cli_list_sequences(int argc, char **argv);
 static void cli_list_indexes(int argc, char **argv);
 static void cli_list_depends(int argc, char **argv);
 static void cli_list_schema(int argc, char **argv);
+static void cli_list_progress(int argc, char **argv);
 
 static CommandLine list_tables_command =
 	make_command(
@@ -103,6 +105,16 @@ static CommandLine list_schema_command =
 		cli_list_db_getopts,
 		cli_list_schema);
 
+static CommandLine list_progress_command =
+	make_command(
+		"progress",
+		"List the progress",
+		" --source ... ",
+		"  --source  Postgres URI to the source database\n"
+		"  --json    Format the output using JSON\n",
+		cli_list_db_getopts,
+		cli_list_progress);
+
 
 static CommandLine *list_subcommands[] = {
 	&list_tables_command,
@@ -111,6 +123,7 @@ static CommandLine *list_subcommands[] = {
 	&list_indexes_command,
 	&list_depends_command,
 	&list_schema_command,
+	&list_progress_command,
 	NULL
 };
 
@@ -118,7 +131,6 @@ CommandLine list_commands =
 	make_command_set("list",
 					 "List database objects from a Postgres instance",
 					 NULL, NULL, NULL, list_subcommands);
-
 
 /*
  * cli_list_db_getopts parses the CLI options for the `list db` command.
@@ -140,6 +152,7 @@ cli_list_db_getopts(int argc, char **argv)
 		{ "without-pkey", no_argument, NULL, 'P' },
 		{ "split-tables-larger-than", required_argument, NULL, 'L' },
 		{ "split-at", required_argument, NULL, 'L' },
+		{ "json", no_argument, NULL, 'J' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "quiet", no_argument, NULL, 'q' },
@@ -149,7 +162,7 @@ cli_list_db_getopts(int argc, char **argv)
 
 	optind = 0;
 
-	while ((c = getopt_long(argc, argv, "S:T:j:s:t:PL:Vvqh",
+	while ((c = getopt_long(argc, argv, "S:T:j:s:t:PL:JVvqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -225,6 +238,13 @@ cli_list_db_getopts(int argc, char **argv)
 				log_trace("--split-tables-larger-than %s (%lld)",
 						  options.splitTablesLargerThanPretty,
 						  (long long) options.splitTablesLargerThan);
+				break;
+			}
+
+			case 'J':
+			{
+				outputJSON = true;
+				log_trace("--json");
 				break;
 			}
 
@@ -957,6 +977,17 @@ cli_list_schema(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	/* parse filters if provided */
+	if (!IS_EMPTY_STRING_BUFFER(listDBoptions.filterFileName))
+	{
+		if (!parse_filters(listDBoptions.filterFileName, &(copySpecs.filters)))
+		{
+			log_error("Failed to parse filters in file \"%s\"",
+					  listDBoptions.filterFileName);
+			exit(EXIT_CODE_BAD_ARGS);
+		}
+	}
+
 	char scrubbedSourceURI[MAXCONNINFO] = { 0 };
 
 	(void) parse_and_scrub_connection_string(copySpecs.source_pguri,
@@ -972,6 +1003,14 @@ cli_list_schema(int argc, char **argv)
 		exit(EXIT_CODE_SOURCE);
 	}
 
+	if (!copydb_prepare_schema_json_file(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_info("Wrote \"%s\"", copySpecs.cfPaths.schemafile);
+
 	/* output the JSON contents from the json schema file */
 	char *json = NULL;
 	long size = 0L;
@@ -984,4 +1023,112 @@ cli_list_schema(int argc, char **argv)
 
 	fformat(stdout, "%s\n", json);
 	free(json);
+}
+
+
+/*
+ * cli_list_progress implements the command: pgcopydb list progress
+ */
+static void
+cli_list_progress(int argc, char **argv)
+{
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) find_pg_commands(&(copySpecs.pgPaths));
+
+	/*
+	 * Assume --resume so that we can run the command alongside the main
+	 * process being active.
+	 */
+	bool auxilliary = true;
+
+	if (!copydb_init_workdir(&copySpecs,
+							 NULL,
+							 false, /* restart */
+							 true, /* resume */
+							 auxilliary))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	RestoreOptions restoreOptions = { 0 };
+
+	if (!copydb_init_specs(&copySpecs,
+						   listDBoptions.source_pguri,
+						   "",  /* target_pguri */
+						   1,   /* tableJobs */
+						   1,   /* indexJobs */
+						   listDBoptions.splitTablesLargerThan,
+						   listDBoptions.splitTablesLargerThanPretty,
+						   DATA_SECTION_ALL,
+						   "",  /* snapshot */
+						   restoreOptions,
+						   false, /* roles */
+						   false, /* skipLargeObjects */
+						   false, /* restart */
+						   true,  /* resume */
+						   false)) /* consistent */
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!copydb_parse_schema_json_file(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	CopyProgress progress = { 0 };
+
+	if (!copydb_update_progress(&copySpecs, &progress))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (outputJSON)
+	{
+		JSON_Value *js = json_value_init_object();
+
+		if (!copydb_progress_as_json(&copySpecs, &progress, js))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		char *serialized_string = json_serialize_to_string_pretty(js);
+
+		fformat(stdout, "%s\n", serialized_string);
+
+		json_free_serialized_string(serialized_string);
+		json_value_free(js);
+	}
+	else
+	{
+		fformat(stdout, "%12s | %12s | %12s | %12s\n",
+				"",
+				"Total Count",
+				"In Progress",
+				"Done");
+
+		fformat(stdout, "%12s-+-%12s-+-%12s-+-%12s\n",
+				"------------",
+				"------------",
+				"------------",
+				"------------");
+
+		fformat(stdout, "%12s | %12d | %12d | %12d\n",
+				"Tables",
+				progress.tableCount,
+				progress.tableInProgress.count,
+				progress.tableDoneCount);
+
+		fformat(stdout, "%12s | %12d | %12d | %12d\n",
+				"Indexes",
+				progress.indexCount,
+				progress.indexInProgress.count,
+				progress.indexDoneCount);
+	}
 }

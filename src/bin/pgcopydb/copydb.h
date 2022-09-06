@@ -362,8 +362,6 @@ bool copydb_collect_finished_subprocesses(bool *allDone);
 
 bool copydb_copy_roles(CopyDataSpec *copySpecs);
 
-bool copydb_prepare_schema_json_file(CopyDataSpec *copySpecs);
-
 /* indexes.c */
 bool copydb_init_indexes_paths(CopyFilePaths *cfPaths,
 							   SourceIndexArray *indexArray,

@@ -18,6 +18,7 @@
 #include "log.h"
 #include "parsing.h"
 #include "pgsql.h"
+#include "progress.h"
 #include "stream.h"
 #include "string_utils.h"
 #include "summary.h"
