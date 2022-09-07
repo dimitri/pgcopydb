@@ -82,6 +82,8 @@ root_options(int argc, char **argv)
 	static struct option long_options[] = {
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
+		{ "debug", no_argument, NULL, 'd' },
+		{ "trace", no_argument, NULL, 'z' },
 		{ "json", no_argument, NULL, 'J' },
 		{ "quiet", no_argument, NULL, 'q' },
 		{ "help", no_argument, NULL, 'h' },
@@ -92,7 +94,7 @@ root_options(int argc, char **argv)
 
 	optind = 0;
 
-	while ((c = getopt_long(argc, argv, "JVvqh",
+	while ((c = getopt_long(argc, argv, "JVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -117,7 +119,7 @@ root_options(int argc, char **argv)
 				{
 					case 1:
 					{
-						log_set_level(LOG_INFO);
+						log_set_level(LOG_NOTICE);
 						break;
 					}
 
@@ -133,6 +135,20 @@ root_options(int argc, char **argv)
 						break;
 					}
 				}
+				break;
+			}
+
+			case 'd':
+			{
+				verboseCount = 2;
+				log_set_level(LOG_DEBUG);
+				break;
+			}
+
+			case 'z':
+			{
+				verboseCount = 3;
+				log_set_level(LOG_TRACE);
 				break;
 			}
 

@@ -75,7 +75,7 @@ copydb_init_workdir(CopyDataSpec *copySpecs,
 		return false;
 	}
 
-	log_info("Using work dir \"%s\"", cfPaths->topdir);
+	log_notice("Using work dir \"%s\"", cfPaths->topdir);
 
 	/* check to see if there is already another pgcopydb running */
 	if (directory_exists(cfPaths->topdir))
@@ -261,7 +261,7 @@ copydb_inspect_workdir(CopyFilePaths *cfPaths, DirectoryState *dirState)
 		dirState->blobsCopyIsDone;
 
 	/* let's be verbose about our inspection results */
-	log_info("Work directory \"%s\" already exists", cfPaths->topdir);
+	log_notice("Work directory \"%s\" already exists", cfPaths->topdir);
 
 	if (dirState->allDone)
 	{

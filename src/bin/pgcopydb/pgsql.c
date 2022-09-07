@@ -1076,7 +1076,7 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 	char *endpoint =
 		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
 
-	log_debug("[%s] %s;", endpoint, sql);
+	log_notice("[%s] %s;", endpoint, sql);
 
 	if (paramCount > 0)
 	{

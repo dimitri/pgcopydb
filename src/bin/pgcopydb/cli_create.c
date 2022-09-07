@@ -128,6 +128,8 @@ cli_create_snapshot_getopts(int argc, char **argv)
 		{ "dir", required_argument, NULL, 'D' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
+		{ "debug", no_argument, NULL, 'd' },
+		{ "trace", no_argument, NULL, 'z' },
 		{ "quiet", no_argument, NULL, 'q' },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 }
@@ -142,7 +144,7 @@ cli_create_snapshot_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:D:Vvqh",
+	while ((c = getopt_long(argc, argv, "S:T:D:Vvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -181,7 +183,7 @@ cli_create_snapshot_getopts(int argc, char **argv)
 				{
 					case 1:
 					{
-						log_set_level(LOG_INFO);
+						log_set_level(LOG_NOTICE);
 						break;
 					}
 
@@ -197,6 +199,20 @@ cli_create_snapshot_getopts(int argc, char **argv)
 						break;
 					}
 				}
+				break;
+			}
+
+			case 'd':
+			{
+				verboseCount = 2;
+				log_set_level(LOG_DEBUG);
+				break;
+			}
+
+			case 'z':
+			{
+				verboseCount = 3;
+				log_set_level(LOG_TRACE);
 				break;
 			}
 
@@ -339,6 +355,8 @@ cli_create_slot_getopts(int argc, char **argv)
 		{ "snapshot", required_argument, NULL, 'N' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
+		{ "debug", no_argument, NULL, 'd' },
+		{ "trace", no_argument, NULL, 'z' },
 		{ "quiet", no_argument, NULL, 'q' },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 }
@@ -356,7 +374,7 @@ cli_create_slot_getopts(int argc, char **argv)
 	/* pretend that --resume was used */
 	options.resume = true;
 
-	while ((c = getopt_long(argc, argv, "S:T:D:Vvqh",
+	while ((c = getopt_long(argc, argv, "S:T:D:Vvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -409,7 +427,7 @@ cli_create_slot_getopts(int argc, char **argv)
 				{
 					case 1:
 					{
-						log_set_level(LOG_INFO);
+						log_set_level(LOG_NOTICE);
 						break;
 					}
 
@@ -425,6 +443,20 @@ cli_create_slot_getopts(int argc, char **argv)
 						break;
 					}
 				}
+				break;
+			}
+
+			case 'd':
+			{
+				verboseCount = 2;
+				log_set_level(LOG_DEBUG);
+				break;
+			}
+
+			case 'z':
+			{
+				verboseCount = 3;
+				log_set_level(LOG_TRACE);
 				break;
 			}
 
@@ -624,6 +656,8 @@ cli_create_origin_getopts(int argc, char **argv)
 		{ "startpos", required_argument, NULL, 's' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
+		{ "debug", no_argument, NULL, 'd' },
+		{ "trace", no_argument, NULL, 'z' },
 		{ "quiet", no_argument, NULL, 'q' },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 }
@@ -641,7 +675,7 @@ cli_create_origin_getopts(int argc, char **argv)
 	/* pretend that --resume was used */
 	options.resume = true;
 
-	while ((c = getopt_long(argc, argv, "T:D:o:s:Vvqh",
+	while ((c = getopt_long(argc, argv, "T:D:o:s:Vvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -700,7 +734,7 @@ cli_create_origin_getopts(int argc, char **argv)
 				{
 					case 1:
 					{
-						log_set_level(LOG_INFO);
+						log_set_level(LOG_NOTICE);
 						break;
 					}
 
@@ -716,6 +750,20 @@ cli_create_origin_getopts(int argc, char **argv)
 						break;
 					}
 				}
+				break;
+			}
+
+			case 'd':
+			{
+				verboseCount = 2;
+				log_set_level(LOG_DEBUG);
+				break;
+			}
+
+			case 'z':
+			{
+				verboseCount = 3;
+				log_set_level(LOG_TRACE);
 				break;
 			}
 
