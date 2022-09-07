@@ -155,6 +155,8 @@ cli_restore_schema_getopts(int argc, char **argv)
 		{ "snapshot", required_argument, NULL, 'N' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
+		{ "debug", no_argument, NULL, 'd' },
+		{ "trace", no_argument, NULL, 'z' },
 		{ "quiet", no_argument, NULL, 'q' },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 }
@@ -169,7 +171,7 @@ cli_restore_schema_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:cOxXVvqh",
+	while ((c = getopt_long(argc, argv, "S:T:cOxXVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -291,7 +293,7 @@ cli_restore_schema_getopts(int argc, char **argv)
 				{
 					case 1:
 					{
-						log_set_level(LOG_INFO);
+						log_set_level(LOG_NOTICE);
 						break;
 					}
 
@@ -307,6 +309,20 @@ cli_restore_schema_getopts(int argc, char **argv)
 						break;
 					}
 				}
+				break;
+			}
+
+			case 'd':
+			{
+				verboseCount = 2;
+				log_set_level(LOG_DEBUG);
+				break;
+			}
+
+			case 'z':
+			{
+				verboseCount = 3;
+				log_set_level(LOG_TRACE);
 				break;
 			}
 

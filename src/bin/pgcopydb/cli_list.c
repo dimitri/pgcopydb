@@ -154,6 +154,8 @@ cli_list_db_getopts(int argc, char **argv)
 		{ "split-at", required_argument, NULL, 'L' },
 		{ "json", no_argument, NULL, 'J' },
 		{ "version", no_argument, NULL, 'V' },
+		{ "debug", no_argument, NULL, 'd' },
+		{ "trace", no_argument, NULL, 'z' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "quiet", no_argument, NULL, 'q' },
 		{ "help", no_argument, NULL, 'h' },
@@ -162,7 +164,7 @@ cli_list_db_getopts(int argc, char **argv)
 
 	optind = 0;
 
-	while ((c = getopt_long(argc, argv, "S:T:j:s:t:PL:JVvqh",
+	while ((c = getopt_long(argc, argv, "S:T:j:s:t:PL:JVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -262,7 +264,7 @@ cli_list_db_getopts(int argc, char **argv)
 				{
 					case 1:
 					{
-						log_set_level(LOG_INFO);
+						log_set_level(LOG_NOTICE);
 						break;
 					}
 
@@ -278,6 +280,20 @@ cli_list_db_getopts(int argc, char **argv)
 						break;
 					}
 				}
+				break;
+			}
+
+			case 'd':
+			{
+				verboseCount = 2;
+				log_set_level(LOG_DEBUG);
+				break;
+			}
+
+			case 'z':
+			{
+				verboseCount = 3;
+				log_set_level(LOG_TRACE);
 				break;
 			}
 

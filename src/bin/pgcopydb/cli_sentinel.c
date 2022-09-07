@@ -140,6 +140,8 @@ cli_sentinel_getopts(int argc, char **argv)
 		{ "current", no_argument, NULL, 'C' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
+		{ "debug", no_argument, NULL, 'd' },
+		{ "trace", no_argument, NULL, 'z' },
 		{ "quiet", no_argument, NULL, 'q' },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 }
@@ -154,7 +156,7 @@ cli_sentinel_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:s:E:CVvqh",
+	while ((c = getopt_long(argc, argv, "S:s:E:CVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -220,7 +222,7 @@ cli_sentinel_getopts(int argc, char **argv)
 				{
 					case 1:
 					{
-						log_set_level(LOG_INFO);
+						log_set_level(LOG_NOTICE);
 						break;
 					}
 
@@ -236,6 +238,20 @@ cli_sentinel_getopts(int argc, char **argv)
 						break;
 					}
 				}
+				break;
+			}
+
+			case 'd':
+			{
+				verboseCount = 2;
+				log_set_level(LOG_DEBUG);
+				break;
+			}
+
+			case 'z':
+			{
+				verboseCount = 3;
+				log_set_level(LOG_TRACE);
 				break;
 			}
 

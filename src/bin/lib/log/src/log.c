@@ -42,11 +42,23 @@ static struct {
 
 
 static const char *level_names[] = {
-  "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"
+	"TRACE",
+	"DEBUG",
+	"NOTICE",
+	"INFO",
+	"WARN",
+	"ERROR",
+	"FATAL"
 };
 
 static const char *level_colors[] = {
-  "\x1b[94m", "\x1b[36m", "\x1b[32m", "\x1b[33m", "\x1b[31m", "\x1b[35m"
+  "\x1b[90m",					/* TRACE:  bright black (light gray) */
+  "\x1b[34m",					/* DEBUG:  blue */
+  "\x1b[36m",					/* NOTICE: cyan */
+  "\x1b[32m",					/* INFO:   green */
+  "\x1b[33m",					/* WARN:   yellow */
+  "\x1b[31m",					/* ERROR:  red */
+  "\x1b[35m"					/* FATAL:  magenta */
 };
 
 
@@ -128,7 +140,7 @@ void log_log(int level, const char *file, int line, const char *fmt, ...)
 
 	if (L.useColors)
 	{
-		pg_fprintf(stderr, "%s %d %s%-5s\x1b[0m ",
+		pg_fprintf(stderr, "%s %d %s%-6s\x1b[0m ",
 				   buf,
 				   getpid(),
 				   level_colors[level],

@@ -217,6 +217,25 @@ The following options are available to ``pgcopydb dump schema``:
   The output of the command is formatted in JSON, when supported. Ignored
   otherwise.
 
+--verbose
+
+  Increase current verbosity. The default level of verbosity is INFO. In
+  ascending order pgcopydb knows about the following verbosity levels:
+  FATAL, ERROR, WARN, INFO, NOTICE, DEBUG, TRACE.
+
+--debug
+
+  Set current verbosity to DEBUG level.
+
+--trace
+
+  Set current verbosity to TRACE level.
+
+--quiet
+
+  Set current verbosity to ERROR level.
+
+
 Environment
 -----------
 

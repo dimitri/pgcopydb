@@ -144,7 +144,7 @@ read_pidfile(const char *pidfile, pid_t *pid)
 		*pid = 0;
 
 		log_debug("Found a stale pidfile at \"%s\"", pidfile);
-		log_info("Removing the stale pid file \"%s\"", pidfile);
+		log_notice("Removing the stale pid file \"%s\"", pidfile);
 
 		/*
 		 * We must return false here, after having determined that the

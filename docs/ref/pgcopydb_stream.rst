@@ -551,6 +551,24 @@ The following options are available to ``pgcopydb stream`` sub-commands:
   source database system, in order to properly bootstrap pgcopydb logical
   decoding.
 
+--verbose
+
+  Increase current verbosity. The default level of verbosity is INFO. In
+  ascending order pgcopydb knows about the following verbosity levels:
+  FATAL, ERROR, WARN, INFO, NOTICE, DEBUG, TRACE.
+
+--debug
+
+  Set current verbosity to DEBUG level.
+
+--trace
+
+  Set current verbosity to TRACE level.
+
+--quiet
+
+  Set current verbosity to ERROR level.
+
 Environment
 -----------
 

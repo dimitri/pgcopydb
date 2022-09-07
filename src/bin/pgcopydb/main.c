@@ -168,7 +168,6 @@ main(int argc, char **argv)
 static void
 set_logger()
 {
-	/* we're verbose by default */
 	log_set_level(LOG_INFO);
 
 	/*
