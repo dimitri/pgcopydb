@@ -144,6 +144,8 @@ The ``pgcopydb clone`` command implements the following steps:
      --use-list`` option so that indexes and primary key constraints already
      created in step 4. are properly skipped now.
 
+.. _change_data_capture:
+
 Change Data Capture using Postgres Logical Decoding
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -158,6 +160,8 @@ the follow parts of the command even while the command is already running.
 
 The command :ref:`pgcopydb_stream_cleanup` must be used to free resources
 created to support the change data capture process.
+
+.. _change_data_capture_example_1:
 
 Change Data Capture Example 1
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -175,6 +179,8 @@ done follows:
 
    # later when the migration is finished, clean-up both source and target
    $ pgcopydb stream cleanup
+
+.. _change_data_capture_example_2:
 
 Change Data Capture Example 2
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
