@@ -144,6 +144,8 @@ The ``pgcopydb clone`` command implements the following steps:
      --use-list`` option so that indexes and primary key constraints already
      created in step 4. are properly skipped now.
 
+.. _change_data_capture:
+
 Change Data Capture using Postgres Logical Decoding
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -158,6 +160,8 @@ the follow parts of the command even while the command is already running.
 
 The command :ref:`pgcopydb_stream_cleanup` must be used to free resources
 created to support the change data capture process.
+
+.. _change_data_capture_example_1:
 
 Change Data Capture Example 1
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -175,6 +179,8 @@ done follows:
 
    # later when the migration is finished, clean-up both source and target
    $ pgcopydb stream cleanup
+
+.. _change_data_capture_example_2:
 
 Change Data Capture Example 2
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -581,30 +587,58 @@ Examples
    $ export PGCOPYDB_DROP_IF_EXISTS=on
 
    $ pgcopydb clone --table-jobs 8 --index-jobs 12
-   10:04:49 29268 INFO  [SOURCE] Copying database from "port=54311 host=localhost dbname=pgloader"
-   10:04:49 29268 INFO  [TARGET] Copying database into "port=54311 dbname=plop"
-   10:04:49 29268 INFO  Found a stale pidfile at "/tmp/pgcopydb/pgcopydb.pid"
-   10:04:49 29268 WARN  Removing the stale pid file "/tmp/pgcopydb/pgcopydb.pid"
-   10:04:49 29268 WARN  Directory "/tmp/pgcopydb" already exists: removing it entirely
-   10:04:49 29268 INFO  STEP 1: dump the source database schema (pre/post data)
+   13:09:08 81987 INFO  Running pgcopydb version 0.8.21.gacd2795.dirty from "/Applications/Postgres.app/Contents/Versions/12/bin/pgcopydb"
+   13:09:08 81987 INFO  [SOURCE] Copying database from "postgres://@:/pagila?"
+   13:09:08 81987 INFO  [TARGET] Copying database into "postgres://@:/plop?"
+   13:09:08 81987 INFO  Using work dir "/var/folders/d7/zzxmgs9s16gdxxcm0hs0sssw0000gn/T//pgcopydb"
+   13:09:08 81987 INFO  Exported snapshot "00000003-00076012-1" from the source database
+   13:09:08 81991 INFO  STEP 1: dump the source database schema (pre/post data)
+   13:09:08 81991 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_dump -Fc --snapshot 00000003-00076012-1 --section pre-data --file /var/folders/d7/zzxmgs9s16gdxxcm0hs0sssw0000gn/T//pgcopydb/schema/pre.dump 'postgres://@:/pagila?'
+   13:09:08 81991 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_dump -Fc --snapshot 00000003-00076012-1 --section post-data --file /var/folders/d7/zzxmgs9s16gdxxcm0hs0sssw0000gn/T//pgcopydb/schema/post.dump 'postgres://@:/pagila?'
+   13:09:08 81991 INFO  STEP 2: restore the pre-data section to the target database
+   13:09:09 81991 INFO  Listing ordinary tables in source database
+   13:09:09 81991 INFO  Fetched information for 21 tables, with an estimated total of 46 248 tuples and 3776 kB
+   13:09:09 81991 INFO  Fetching information for 13 sequences
+   13:09:09 81991 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_restore --dbname 'postgres://@:/plop?' --single-transaction --clean --if-exists --use-list /var/folders/d7/zzxmgs9s16gdxxcm0hs0sssw0000gn/T//pgcopydb/schema/pre.list /var/folders/d7/zzxmgs9s16gdxxcm0hs0sssw0000gn/T//pgcopydb/schema/pre.dump
+   13:09:09 81991 INFO  STEP 3: copy data from source to target in sub-processes
+   13:09:09 81991 INFO  STEP 4: create indexes and constraints in parallel
+   13:09:09 81991 INFO  STEP 5: vacuum analyze each table
+   13:09:09 81991 INFO  Now starting 8 processes
+   13:09:09 81991 INFO  Reset sequences values on the target database
+   13:09:09 82003 INFO  COPY "public"."rental"
+   13:09:09 82004 INFO  COPY "public"."film"
+   13:09:09 82009 INFO  COPY "public"."payment_p2020_04"
+   13:09:09 82002 INFO  Copying large objects
+   13:09:09 82007 INFO  COPY "public"."payment_p2020_03"
+   13:09:09 82010 INFO  COPY "public"."film_actor"
+   13:09:09 82005 INFO  COPY "public"."inventory"
+   13:09:09 82014 INFO  COPY "public"."payment_p2020_02"
+   13:09:09 82012 INFO  COPY "public"."customer"
+   13:09:09 82009 INFO  Creating 3 indexes for table "public"."payment_p2020_04"
+   13:09:09 82010 INFO  Creating 2 indexes for table "public"."film_actor"
+   13:09:09 82007 INFO  Creating 3 indexes for table "public"."payment_p2020_03"
+   13:09:09 82004 INFO  Creating 5 indexes for table "public"."film"
+   13:09:09 82005 INFO  Creating 2 indexes for table "public"."inventory"
+   13:09:09 82033 INFO  VACUUM ANALYZE "public"."payment_p2020_04";
+   13:09:09 82036 INFO  VACUUM ANALYZE "public"."film_actor";
+   13:09:09 82039 INFO  VACUUM ANALYZE "public"."payment_p2020_03";
+   13:09:09 82041 INFO  VACUUM ANALYZE "public"."film";
+   13:09:09 82043 INFO  VACUUM ANALYZE "public"."inventory";
    ...
-   10:04:52 29268 INFO  STEP 3: copy data from source to target in sub-processes
-   10:04:52 29268 INFO  STEP 4: create indexes and constraints in parallel
-   10:04:52 29268 INFO  STEP 5: vacuum analyze each table
-   10:04:52 29268 INFO  Listing ordinary tables in "port=54311 host=localhost dbname=pgloader"
-   10:04:52 29268 INFO  Fetched information for 56 tables
    ...
-   10:04:53 29268 INFO  STEP 6: restore the post-data section to the target database
    ...
+   13:09:09 81991 INFO  STEP 7: restore the post-data section to the target database
+   13:09:09 81991 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_restore --dbname 'postgres://@:/plop?' --single-transaction --clean --if-exists --use-list /var/folders/d7/zzxmgs9s16gdxxcm0hs0sssw0000gn/T//pgcopydb/schema/post.list /var/folders/d7/zzxmgs9s16gdxxcm0hs0sssw0000gn/T//pgcopydb/schema/post.dump
 
                                              Step   Connection    Duration   Concurrency
     ---------------------------------------------   ----------  ----------  ------------
-                                      Dump Schema       source       1s275             1
-                                   Prepare Schema       target       1s560             1
-    COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both       1s095        8 + 12
-                                COPY (cumulative)         both       2s645             8
-                        CREATE INDEX (cumulative)       target       333ms            12
-                                  Finalize Schema       target        29ms             1
+                                      Dump Schema       source       355ms             1
+                                   Prepare Schema       target       135ms             1
+    COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both       641ms        8 + 12
+                                COPY (cumulative)         both       1s598             8
+                       Large Objects (cumulative)         both        29ms             1
+           CREATE INDEX, CONSTRAINTS (cumulative)       target       4s072            12
+                                  Finalize Schema       target       366ms             1
     ---------------------------------------------   ----------  ----------  ------------
-                        Total Wall Clock Duration         both       4s013        8 + 12
+                        Total Wall Clock Duration         both       1s499        8 + 12
     ---------------------------------------------   ----------  ----------  ------------

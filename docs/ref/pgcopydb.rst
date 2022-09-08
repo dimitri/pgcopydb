@@ -38,17 +38,118 @@ copy snapshot.
 __ https://www.postgresql.org/docs/current/logicaldecoding.html
 __ https://github.com/eulerto/wal2json/
 
-Help
-----
+pgcopydb help
+-------------
 
-To get the full recursive list of supported commands, use::
+The ``pgcopydb help`` command lists all the supported sub-commands:
 
-  pgcopydb help
+::
 
-Version
--------
+   pgcopydb pgcopydb help
+     pgcopydb
+       clone     Clone an entire database from source to target
+       fork      Clone an entire database from source to target
+       follow    Replay changes from the source database to the target database
+       copy-db   Copy an entire database from source to target
+       snapshot  Create and exports a snapshot on the source database
+     + copy      Implement the data section of the database copy
+     + dump      Dump database objects from a Postgres instance
+     + restore   Restore database objects into a Postgres instance
+     + list      List database objects from a Postgres instance
+     + stream    Stream changes from the source database
+       help      print help message
+       version   print pgcopydb version
 
-To grab the version of pgcopydb that you're using, use::
+     pgcopydb copy
+       db           Copy an entire database from source to target
+       roles        Copy the roles from the source instance to the target instance
+       schema       Copy the database schema from source to target
+       data         Copy the data section from source to target
+       table-data   Copy the data from all tables in database from source to target
+       blobs        Copy the blob data from ther source database to the target
+       sequences    Copy the current value from all sequences in database from source to target
+       indexes      Create all the indexes found in the source database in the target
+       constraints  Create all the constraints found in the source database in the target
 
-   pgcopydb --version
-   pgcopydb version
+     pgcopydb dump
+       schema     Dump source database schema as custom files in work directory
+       pre-data   Dump source database pre-data schema as custom files in work directory
+       post-data  Dump source database post-data schema as custom files in work directory
+       roles      Dump source database roles as custome file in work directory
+
+     pgcopydb restore
+       schema      Restore a database schema from custom files to target database
+       pre-data    Restore a database pre-data schema from custom file to target database
+       post-data   Restore a database post-data schema from custom file to target database
+       roles       Restore database roles from SQL file to target database
+       parse-list  Parse pg_restore --list output from custom file
+
+     pgcopydb list
+       tables       List all the source tables to copy data from
+       table-parts  List a source table copy partitions
+       sequences    List all the source sequences to copy data from
+       indexes      List all the indexes to create again after copying the data
+       depends      List all the dependencies to filter-out
+
+     pgcopydb stream
+       setup      Setup source and target systems for logical decoding
+       cleanup    cleanup source and target systems for logical decoding
+       prefetch   Stream JSON changes from the source database and transform them to SQL
+       catchup    Apply prefetched changes from SQL files to the target database
+     + create     Create resources needed for pgcopydb
+     + drop       Drop resources needed for pgcopydb
+     + sentinel   Maintain a sentinel table on the source database
+       receive    Stream changes from the source database
+       transform  Transform changes from the source database into SQL commands
+       apply      Apply changes from the source database into the target database
+
+     pgcopydb stream create
+       slot    Create a replication slot in the source database
+       origin  Create a replication origin in the target database
+
+     pgcopydb stream drop
+       slot    Drop a replication slot in the source database
+       origin  Drop a replication origin in the target database
+
+     pgcopydb stream sentinel
+       create  Create the sentinel table on the source database
+       drop    Drop the sentinel table on the source database
+       get     Get the sentinel table values on the source database
+     + set     Maintain a sentinel table on the source database
+
+     pgcopydb stream sentinel set
+       startpos  Set the sentinel start position LSN on the source database
+       endpos    Set the sentinel end position LSN on the source database
+       apply     Set the sentinel apply mode on the source database
+       prefetch  Set the sentinel prefetch mode on the source database
+
+pgcopydb version
+----------------
+
+The ``pgcopydb version`` command outputs the version string of the version
+of pgcopydb used, and can do that in the JSON format when using the
+``--json`` option.
+
+::
+
+   $ pgcopydb version
+   pgcopydb version 0.8
+   compiled with PostgreSQL 12.12 on x86_64-apple-darwin16.7.0, compiled by Apple LLVM version 8.1.0 (clang-802.0.42), 64-bit
+   compatible with Postgres 10, 11, 12, 13, and 14
+
+In JSON:
+
+::
+
+   $ pgcopydb version --json
+   {
+       "pgcopydb": "0.8",
+       "pg_major": "12",
+       "pg_version": "12.12",
+       "pg_version_str": "PostgreSQL 12.12 on x86_64-apple-darwin16.7.0, compiled by Apple LLVM version 8.1.0 (clang-802.0.42), 64-bit",
+       "pg_version_num": 120012
+   }
+
+The details about the Postgres version applies to the version that's been
+used to build pgcopydb from sources, so that's the version of the client
+library ``libpq`` really.

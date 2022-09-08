@@ -84,10 +84,11 @@ $ pgcopydb help
     parse-list  Parse pg_restore --list output from custom file
 
   pgcopydb list
-    tables     List all the source tables to copy data from
-    sequences  List all the source sequences to copy data from
-    indexes    List all the indexes to create again after copying the data
-    depends    List all the dependencies to filter-out
+    tables       List all the source tables to copy data from
+    table-parts  List a source table copy partitions
+    sequences    List all the source sequences to copy data from
+    indexes      List all the indexes to create again after copying the data
+    depends      List all the dependencies to filter-out
 
   pgcopydb stream
     setup      Setup source and target systems for logical decoding

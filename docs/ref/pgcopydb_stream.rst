@@ -9,7 +9,26 @@ pgcopydb stream - Stream changes from source database
 
    **This mode of operations has been designed for unit testing only.**
 
-   Consider using the :ref:`pgcopydb_follow` command instead.
+   Consider using the :ref:`pgcopydb_clone` (with the ``--follow`` option)
+   or the :ref:`pgcopydb_follow` command instead.
+
+.. note::
+
+   Some *pgcopydb stream* commands are still designed for normal operations,
+   rather than unit testing only.
+
+   The :ref:`pgcopydb_stream_sentinel_set_startpos`,
+   :ref:`pgcopydb_stream_sentinel_set_endpos`,
+   :ref:`pgcopydb_stream_sentinel_set_apply`, and
+   :ref:`pgcopydb_stream_sentinel_set_prefetch` commands are necessary to
+   communicate with the main ``pgcopydb clone --follow`` or ``pgcopydb
+   follow`` process. See :ref:`change_data_capture_example_1` for a detailed
+   example using :ref:`pgcopydb_stream_sentinel_set_endpos`.
+
+   Also the commands :ref:`pgcopydb_stream_setup` and
+   :ref:`pgcopydb_stream_cleanup` might be used directly in normal
+   operations. See :ref:`change_data_capture_example_2` for a detailed
+   example.
 
 This command prefixes the following sub-commands:
 
