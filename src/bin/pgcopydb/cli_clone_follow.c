@@ -217,6 +217,25 @@ cli_clone(int argc, char **argv)
 		exit(EXIT_CODE_SOURCE);
 	}
 
+	/*
+	 * If we failed to do the clone parts (midway through, or entirely maybe),
+	 * we need to make it so that the follow sub-process isn't going to wait
+	 * forever to reach the apply mode and then the endpos. That will never
+	 * happen.
+	 */
+	if (!success)
+	{
+		log_warn("Failed to clone the source database, see above for details");
+
+		if (!copydb_fatal_exit())
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
 	/* now wait until the follow process is finished */
 	if (copySpecs.follow)
 	{
@@ -367,7 +386,7 @@ start_clone_process(CopyDataSpec *copySpecs, pid_t *pid)
 
 			if (!cloneDB(copySpecs))
 			{
-				log_error("Failed to start the clone sub-process, "
+				log_error("Failed to clone source database, "
 						  "see above for details");
 				exit(EXIT_CODE_SOURCE);
 			}
@@ -634,12 +653,10 @@ static bool
 cli_clone_follow_wait_subprocess(const char *name, pid_t pid)
 {
 	bool exited = false;
-	bool success = true;
+	int returnCode = -1;
 
 	while (!exited)
 	{
-		int returnCode = -1;
-
 		if (!follow_wait_pid(pid, &exited, &returnCode))
 		{
 			/* errors have already been logged */
@@ -655,11 +672,9 @@ cli_clone_follow_wait_subprocess(const char *name, pid_t pid)
 					  returnCode);
 		}
 
-		success = success || returnCode == 0;
-
 		/* avoid busy looping, wait for 150ms before checking again */
 		pg_usleep(150 * 1000);
 	}
 
-	return true;
+	return returnCode == 0;
 }

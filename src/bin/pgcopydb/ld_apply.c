@@ -201,7 +201,9 @@ stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
 	{
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
-			log_info("Received a shutdown signal, quitting now");
+			log_info("Apply process received a shutdown signal "
+					 "while waiting for apply mode, "
+					 "quitting now");
 			return false;
 		}
 
