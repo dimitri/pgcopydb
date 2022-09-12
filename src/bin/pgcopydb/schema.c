@@ -2143,12 +2143,23 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	}
 
 	/* 4. c.reltuples::bigint */
-	value = PQgetvalue(result, rowNumber, 3);
-
-	if (!stringToInt64(value, &(table->reltuples)))
+	if (PQgetisnull(result, rowNumber, 3))
 	{
-		log_error("Invalid reltuples::bigint \"%s\"", value);
-		++errors;
+		/*
+		 * reltuples is NULL when table has never been ANALYZEd, just count
+		 * zero then.
+		 */
+		table->reltuples = 0;
+	}
+	else
+	{
+		value = PQgetvalue(result, rowNumber, 3);
+
+		if (!stringToInt64(value, &(table->reltuples)))
+		{
+			log_error("Invalid reltuples::bigint \"%s\"", value);
+			++errors;
+		}
 	}
 
 	/* 5. pg_table_size(c.oid) as bytes */
