@@ -69,8 +69,9 @@ compatibility only.
 
 .. warning::
 
-   This command is deprecated and will get removed from pgcopydb when
-   hitting version 1.0, please upgrade your scripts and integrations.
+   The ``pgcopydb copy-db`` command is now deprecated and will get removed
+   from pgcopydb when hitting version 1.0, please upgrade your scripts and
+   integrations.
 
 Description
 -----------
