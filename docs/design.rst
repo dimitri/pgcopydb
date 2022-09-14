@@ -6,6 +6,8 @@ aspects that are not possible to achieve directly with ``pg_dump`` and
 ``pg_restore``, and that requires just enough fiddling around that not many
 scripts have been made available to automate around.
 
+.. _bypass_intermediate_files:
+
 Bypass intermediate files for the TABLE DATA
 --------------------------------------------
 
@@ -40,10 +42,126 @@ source database. In the context of ``pgcopydb`` requiring access to the source
 database is fine. In the context of ``pg_restore``, it would not be
 acceptable.
 
+.. _pgcopydb_concurrency:
+
+Notes about concurrency
+-----------------------
+
+The pgcopydb too implements many operations concurrently to one another, by
+ways of using the ``fork()`` system call. This means that pgcopydb creates
+sub-processes that each handle a part of the work.
+
+The process tree then looks like the following:
+
+ * pgcopydb clone --follow
+
+   * pgcopydb clone worker
+
+     * pgcopydb table-data worker (e.g. ``--table-jobs 4``)
+
+       #. pgcopydb table worker
+
+          * pgcopydb vacuum analyze worker
+
+          * pgcopydb create index worker
+
+          * pgcopydb create index worker
+
+          * pgcopydb create index worker
+
+       #. pgcopydb table worker
+
+          * pgcopydb vacuum analyze worker
+
+          * pgcopydb create index worker
+
+       #. pgcopydb table worker
+
+          * pgcopydb vacuum analyze worker
+
+          * pgcopydb create index worker
+
+          * pgcopydb create index worker
+
+       #. pgcopydb table worker
+
+          * pgcopydb vacuum analyze worker
+
+     * pgcopydb blob worker
+
+   * pgcopydb follow worker
+
+     * pgcopydb stream receive
+
+       * pgcopydb stream transform
+
+     * pgcopydb stream catchup
+
+
+When starting with the TABLE DATA copying step, then pgcopydb creates as
+many sub-processes as specified by the ``--table-jobs`` command line option
+(or the environment variable ``PGCOPYDB_TABLE_JOBS``).
+
+The process that's implementing the COPY command then turns its attention to
+the building of the indexes attached to the given table. That's because the
+CREATE INDEX command only consumes resources (CPU, memory, etc) on the
+target Postgres instance server, the pgcopydb process just sends the command
+and wait until completion.
+
+It is possible with Postgres to create several indexes for the same table in
+parallel, for that, the client just needs to open a separate database
+connection for each index and run each CREATE INDEX command in its own
+connection, at the same time. In pgcopydb this is implemented by running one
+sub-process per index to create.
+
+The command line option ``--index-jobs`` is used to limit how many CREATE
+INDEX commands are running at any given time -- by using a Unix semaphore.
+So when running with ``--index-jobs 2`` and when a specific table has 3
+indexes attached to it, then the 3rd index creation is blocked until another
+index is finished, though the corresponding sub-process is started anyways.
+
+That said, the index jobs setup is global for the whole pgcopydb operation
+rather than per-table. It means that in some cases, indexes for the same
+table might be created in a sequential fashion, depending on exact timing of
+the other index builds.
+
+The ``--index-jobs`` option has been made global so that it's easier to
+setup to the count of available CPU cores on the target Postgres instance.
+Usually, a given CREATE INDEX command uses 100% of a single core.
+
+When using the ``--follow`` option then another sub-process leader is
+created to handle the three Change Data Capture processes.
+
+  - One process implements :ref:`pgcopydb_stream_receive` to fetch changes
+    in the JSON format and pre-fetch them in JSON files.
+
+  - As soon as JSON file is completed, then a new process is
+    opportunistically started to transform the JSON file into SQL, as if by
+    calling the command :ref:`pgcopydb_stream_transform`.
+
+  - Another process implements :ref:`pgcopydb_stream_catchup` to apply SQL
+    changes to the target Postgres instance. This process loops over
+    querying the pgcopydb sentinel table until the apply mode has been
+    enabled, and then loops over the SQL files and run the queries from them.
+
 .. _index_concurrency:
 
 For each table, build all indexes concurrently
 ----------------------------------------------
+
+pgcopydb takes the extra step and makes sure to create all your indexes in
+parallel to one-another, going the extra mile when it comes to indexes that
+are associated with a constraint.
+
+Postgres introduced the configuration parameter `synchronize_seqscans`__ in
+version 8.3, eons ago. It is on by default and allows the following
+behavior:
+
+__ https://postgresqlco.nf/doc/en/param/synchronize_seqscans/
+
+  This allows sequential scans of large tables to synchronize with each
+  other, so that concurrent scans read the same block at about the same time
+  and hence share the I/O workload.
 
 The other aspect that ``pg_dump`` and ``pg_restore`` are not very smart about is
 how they deal with the indexes that are used to support constraints, in
