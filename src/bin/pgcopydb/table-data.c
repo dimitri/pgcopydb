@@ -694,7 +694,7 @@ copydb_process_table_data(CopyDataSpec *specs)
 		{
 			case -1:
 			{
-				log_error("Failed to fork a worker process");
+				log_error("Failed to fork a worker process: %m");
 				return false;
 			}
 
@@ -1361,7 +1361,7 @@ copydb_copy_table_indexes(CopyTableDataSpec *tableSpecs)
 	{
 		case -1:
 		{
-			log_error("Failed to fork a worker process");
+			log_error("Failed to fork a worker process: %m");
 			return false;
 		}
 
@@ -1447,7 +1447,7 @@ copydb_create_table_indexes(CopyTableDataSpec *tableSpecs)
 			case -1:
 			{
 				log_error("Failed to fork a process for creating index for "
-						  "table \"%s\".\"%s\"",
+						  "table \"%s\".\"%s\": %m",
 						  sourceTable->nspname,
 						  sourceTable->relname);
 				return -1;
@@ -1710,7 +1710,7 @@ copydb_start_blob_process(CopyDataSpec *specs)
 	{
 		case -1:
 		{
-			log_error("Failed to fork a worker process");
+			log_error("Failed to fork a worker process: %m");
 			return false;
 		}
 

@@ -168,7 +168,7 @@ copydb_start_index_processes(CopyDataSpec *specs,
 		{
 			case -1:
 			{
-				log_error("Failed to fork a worker process");
+				log_error("Failed to fork a worker process: %m");
 				return false;
 			}
 
