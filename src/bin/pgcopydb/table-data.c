@@ -76,7 +76,8 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 
 	/* fetch the list of all the indexes that are going to be created again */
 	if (specs->section == DATA_SECTION_ALL ||
-		specs->section == DATA_SECTION_INDEXES)
+		specs->section == DATA_SECTION_INDEXES ||
+		specs->section == DATA_SECTION_CONSTRAINTS)
 	{
 		SourceIndexArray *indexArray = &(specs->sourceIndexArray);
 
