@@ -814,7 +814,7 @@ pg_restore_list(PostgresPaths *pgPaths, const char *filename,
 	char command[BUFSIZE] = { 0 };
 	(void) snprintf_program_command_line(&prog, command, BUFSIZE);
 
-	log_debug("%s", command);
+	log_notice("%s", command);
 
 	if (prog.returnCode != 0)
 	{

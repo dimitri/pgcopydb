@@ -289,21 +289,21 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 		{
 			prefix = ";";
 
-			log_debug("Skipping already processed dumpId %d: %s %u %s",
-					  contents.array[i].dumpId,
-					  contents.array[i].desc,
-					  contents.array[i].objectOid,
-					  contents.array[i].restoreListName);
+			log_notice("Skipping already processed dumpId %d: %s %u %s",
+					   contents.array[i].dumpId,
+					   contents.array[i].desc,
+					   contents.array[i].objectOid,
+					   contents.array[i].restoreListName);
 		}
 		else if (copydb_objectid_is_filtered_out(specs, oid, name))
 		{
 			prefix = ";";
 
-			log_debug("Skipping filtered-out dumpId %d: %s %u %s",
-					  contents.array[i].dumpId,
-					  contents.array[i].desc,
-					  contents.array[i].objectOid,
-					  contents.array[i].restoreListName);
+			log_notice("Skipping filtered-out dumpId %d: %s %u %s",
+					   contents.array[i].dumpId,
+					   contents.array[i].desc,
+					   contents.array[i].objectOid,
+					   contents.array[i].restoreListName);
 		}
 
 		appendPQExpBuffer(listContents, "%s%d; %u %u %s %s\n",
