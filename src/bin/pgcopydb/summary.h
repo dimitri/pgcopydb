@@ -163,9 +163,7 @@ bool prepare_table_summary_as_json(CopyTableSummary *summary,
 								   JSON_Object *jsobj,
 								   const char *key);
 
-bool create_table_index_file(CopyTableSummary *summary,
-							 SourceIndexArray *indexArray,
-							 char *filename);
+bool create_table_index_file(SourceTable *table, char *filename);
 bool read_table_index_file(SourceIndexArray *indexArray, char *filename);
 
 bool write_blobs_summary(CopyBlobsSummary *summary, char *filename);

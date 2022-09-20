@@ -92,22 +92,30 @@ The ``pgcopydb clone`` command implements the following steps:
      and the ``post-data`` sections of the dump using Postgres custom
      format.
 
-  2. The ``pre-data`` section of the dump is restored on the target database
+  2. ``pgcopydb`` gets the list of ordinary and partitioned tables from a
+     catalog query on the source database, and also the list of indexes, and
+     the list of sequences with their current values.
+
+     When filtering is used, the list of objects OIDs that are meant to be
+     filtered out is built during this step.
+
+  3. The ``pre-data`` section of the dump is restored on the target database
      using the ``pg_restore`` command, creating all the Postgres objects
      from the source database into the target database.
 
-  3. ``pgcopydb`` gets the list of ordinary and partitioned tables and for
-     each of them runs COPY the data from the source to the target in a
-     dedicated sub-process, and starts and control the sub-processes until
-     all the data has been copied over.
+     When filtering is used, the ``pg_restore --use-list`` feature is used
+     to filter the list of objects to restore in this step.
+
+  4. Then as many as ``--table-jobs`` COPY sub-processes are started to
+     share the workload and COPY the data from the source to the target
+     database one table at a time, in a loop.
 
      A Postgres connection and a SQL query to the Postgres catalog table
      pg_class is used to get the list of tables with data to copy around,
-     and the `reltuples` is used to start with the tables with the greatest
-     number of rows first, as an attempt to minimize the copy time.
+     and the `reltuples` statistic is used to start with the tables with the
+     greatest number of rows first, as an attempt to minimize the copy time.
 
-  4. An auxiliary process is started concurrently to the main COPY workers.
-     This auxiliary process loops through all the Large Objects found on the
+  5. An auxiliary process loops through all the Large Objects found on the
      source database and copies its data parts over to the target database,
      much like pg_dump itself would.
 
@@ -115,35 +123,39 @@ The ``pgcopydb clone`` command implements the following steps:
      parts, except that there isn't a good way to do just that with the
      tooling.
 
-  5. In each copy table sub-process, as soon as the data copying is done,
-     then ``pgcopydb`` gets the list of index definitions attached to the
-     current target table and creates them in parallel.
+  6. As many as ``--index-jobs`` CREATE INDEX sub-processes are started to
+     share the workload and build indexes. In order to make sure to start
+     the CREATE INDEX commands only after the COPY operation has completed,
+     a queue mechanism is used. As soon as a table data COPY has completed,
+     all the indexes for the table are queued for processing by the CREATE
+     INDEX sub-processes.
 
      The primary indexes are created as UNIQUE indexes at this stage.
 
-  6. Then the PRIMARY KEY constraints are created USING the just built
+  7. Then the PRIMARY KEY constraints are created USING the just built
      indexes. This two-steps approach allows the primary key index itself to
      be created in parallel with other indexes on the same table, avoiding
      an EXCLUSIVE LOCK while creating the index.
 
-  7. Then ``VACUUM ANALYZE`` is run on each target table as soon as the data
-     and indexes are all created.
+  8. As many as ``-table-jobs`` VACUUM ANALYZE sub-processes are started to
+     share the workload. As soon as a table data COPY has completed, the
+     table is queued for processing by the VACUUM ANALYZE sub-processes.
 
-  8. Then pgcopydb gets the list of the sequences on the source database and
-     for each of them runs a separate query on the source to fetch the
-     ``last_value`` and the ``is_called`` metadata the same way that pg_dump
-     does.
+  9. An auxilliary process is loops over the sequences on the source
+     database and for each of them runs a separate query on the source to
+     fetch the ``last_value`` and the ``is_called`` metadata the same way
+     that pg_dump does.
 
      For each sequence, pgcopydb then calls ``pg_catalog.setval()`` on the
      target database with the information obtained on the source database.
 
-  9. The final stage consists now of running the ``pg_restore`` command for
-     the ``post-data`` section script for the whole database, and that's
-     where the foreign key constraints and other elements are created.
+  10. The final stage consists now of running the ``pg_restore`` command for
+      the ``post-data`` section script for the whole database, and that's
+      where the foreign key constraints and other elements are created.
 
-     The *post-data* script is filtered out using the ``pg_restore
-     --use-list`` option so that indexes and primary key constraints already
-     created in step 4. are properly skipped now.
+      The *post-data* script is filtered out using the ``pg_restore
+      --use-list`` option so that indexes and primary key constraints
+      already created in steps 6 and 7 are properly skipped now.
 
 .. _change_data_capture:
 

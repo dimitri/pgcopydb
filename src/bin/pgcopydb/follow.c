@@ -30,7 +30,7 @@ follow_start_prefetch(StreamSpecs *specs, pid_t *pid)
 	{
 		case -1:
 		{
-			log_error("Failed to fork a subprocess to prefetch changes");
+			log_error("Failed to fork a subprocess to prefetch changes: %m");
 			return -1;
 		}
 
@@ -73,7 +73,7 @@ follow_start_catchup(StreamSpecs *specs, pid_t *pid)
 	{
 		case -1:
 		{
-			log_error("Failed to fork a subprocess to prefetch changes");
+			log_error("Failed to fork a subprocess to prefetch changes: %m");
 			return -1;
 		}
 

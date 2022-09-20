@@ -103,62 +103,64 @@ copydb_init_workdir(CopyDataSpec *copySpecs,
 
 	bool removeDir = false;
 
-	if (!copydb_inspect_workdir(cfPaths, dirState))
+	if (restart)
 	{
-		/* errors have already been logged */
-		return false;
+		removeDir = true;
 	}
-
-	if (dirState->directoryExists)
+	else
 	{
-		if (restart)
+		if (!copydb_inspect_workdir(cfPaths, dirState))
 		{
-			removeDir = true;
-		}
-
-		/* if we did nothing yet, just act as if --resume was used */
-		else if (!dirState->schemaDumpIsDone)
-		{
-			log_debug("schema dump has not been done yet, just continue");
-		}
-
-		/* if --resume has been used, we just continue */
-		else if (resume)
-		{
-			/* no-op */
-			(void) 0;
-		}
-		else if (dirState->allDone)
-		{
-			log_fatal("Please use --restart to allow for removing files "
-					  "that belong to a completed previous run.");
-			return false;
-		}
-		else if (!resume)
-		{
-			log_fatal("Please use --resume --not-consistent to allow "
-					  "for resuming from the previous run, "
-					  "which failed before completion.");
+			/* errors have already been logged */
 			return false;
 		}
 
-		/*
-		 * Here we should have restart true or resume true or we didn't even do
-		 * the schema dump on the previous run.
-		 */
+		if (dirState->directoryExists)
+		{
+			/* if we did nothing yet, just act as if --resume was used */
+			if (!dirState->schemaDumpIsDone)
+			{
+				log_notice("Schema dump has not been done yet, just continue");
+			}
+
+			/* if --resume has been used, we just continue */
+			else if (resume)
+			{
+				/* no-op */
+				(void) 0;
+			}
+			else if (dirState->allDone)
+			{
+				log_fatal("Please use --restart to allow for removing files "
+						  "that belong to a completed previous run.");
+				return false;
+			}
+			else if (!resume)
+			{
+				log_fatal("Please use --resume --not-consistent to allow "
+						  "for resuming from the previous run, "
+						  "which failed before completion.");
+				return false;
+			}
+
+			/*
+			 * Here we should have restart true or resume true or we didn't even do
+			 * the schema dump on the previous run.
+			 */
+		}
 	}
 
 	/* warn about trashing data from a previous run */
 	if (removeDir && !restart)
 	{
-		log_info("Inspection of \"%s\" shows that it is safe "
-				 "to remove it and continue",
-				 cfPaths->topdir);
+		log_notice("Inspection of \"%s\" shows that it is safe "
+				   "to remove it and continue",
+				   cfPaths->topdir);
 	}
 
 	if (removeDir)
 	{
-		log_info("Removing directory \"%s\"", cfPaths->topdir);
+		log_notice("Removing directory \"%s\"", cfPaths->topdir);
 	}
 
 	/* make sure the directory exists, possibly making it empty */
@@ -559,9 +561,19 @@ copydb_init_specs(CopyDataSpec *specs,
 
 		.tableJobs = tableJobs,
 		.indexJobs = indexJobs,
+
+		/* at the moment we don't have --vacuumJobs separately */
+		.vacuumJobs = tableJobs,
+
 		.splitTablesLargerThan = splitTablesLargerThan,
 
-		.indexSemaphore = { 0 }
+		.tableSemaphore = { 0 },
+		.indexSemaphore = { 0 },
+
+		.vacuumQueue = { 0 },
+		.indexQueue = { 0 },
+
+		.sourceTableHashByOid = NULL
 	};
 
 	/* initialize the connection strings */
@@ -608,14 +620,28 @@ copydb_init_specs(CopyDataSpec *specs,
 		return false;
 	}
 
-	/* create the index semaphore (allow jobs to start) */
-	specs->indexSemaphore.initValue = indexJobs;
+	/* create the index semaphore (critical section, one at a time please) */
+	specs->indexSemaphore.initValue = 1;
 
 	if (!semaphore_create(&(specs->indexSemaphore)))
 	{
 		log_error("Failed to create the index concurrency semaphore "
-				  "to orchestrate up to %d CREATE INDEX jobs at the same time",
+				  "to orchestrate %d CREATE INDEX jobs",
 				  indexJobs);
+		return false;
+	}
+
+	/* create the VACUUM process queue */
+	if (!queue_create(&(specs->vacuumQueue)))
+	{
+		log_error("Failed to create the VACUUM process queue");
+		return false;
+	}
+
+	/* create the CREATE INDEX process queue */
+	if (!queue_create(&(specs->indexQueue)))
+	{
+		log_error("Failed to create the INDEX process queue");
 		return false;
 	}
 
@@ -657,12 +683,13 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 		.section = specs->section,
 		.resume = specs->resume,
 
-		.sourceTable = { 0 },
+		.sourceTable = source,
 		.indexArray = NULL,
 		.summary = NULL,
 
 		.tableJobs = specs->tableJobs,
 		.indexJobs = specs->indexJobs,
+
 		.indexSemaphore = &(specs->indexSemaphore)
 	};
 
@@ -677,17 +704,14 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 		return false;
 	}
 
-	/* copy the SourceTable into our memory area */
-	tmpTableSpecs.sourceTable = *source;
-
 	/* copy the structure as a whole memory area to the target place */
 	*tableSpecs = tmpTableSpecs;
 
 	/* compute the table fully qualified name */
 	sformat(tableSpecs->qname, sizeof(tableSpecs->qname),
 			"\"%s\".\"%s\"",
-			tableSpecs->sourceTable.nspname,
-			tableSpecs->sourceTable.relname);
+			tableSpecs->sourceTable->nspname,
+			tableSpecs->sourceTable->relname);
 
 	/* This CopyTableDataSpec might be for a partial COPY */
 	if (source->partsArray.count >= 1)
@@ -719,8 +743,9 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 				(long long) tableSpecs->part.max);
 
 		/* now compute the table-specific paths we are using in copydb */
-		if (!copydb_init_tablepaths_for_part(tableSpecs,
+		if (!copydb_init_tablepaths_for_part(tableSpecs->cfPaths,
 											 &(tableSpecs->tablePaths),
+											 tableSpecs->sourceTable->oid,
 											 partNumber))
 		{
 			log_error("Failed to prepare pathnames for partition %d of table %s",
@@ -756,18 +781,40 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 		}
 
 		/* now compute the table-specific paths we are using in copydb */
-		sformat(tableSpecs->tablePaths.lockFile, MAXPGPATH, "%s/%d",
-				tableSpecs->cfPaths->rundir,
-				source->oid);
-
-		sformat(tableSpecs->tablePaths.doneFile, MAXPGPATH, "%s/%d.done",
-				tableSpecs->cfPaths->tbldir,
-				source->oid);
-
-		sformat(tableSpecs->tablePaths.idxListFile, MAXPGPATH, "%s/%u.idx",
-				tableSpecs->cfPaths->tbldir,
-				source->oid);
+		if (!copydb_init_tablepaths(tableSpecs->cfPaths,
+									&(tableSpecs->tablePaths),
+									tableSpecs->sourceTable->oid))
+		{
+			log_error("Failed to prepare pathnames for table %u",
+					  tableSpecs->sourceTable->oid);
+			return false;
+		}
 	}
+
+	return true;
+}
+
+
+/*
+ * copydb_init_tablepaths computes the lockFile, doneFile, and idxListFile
+ * pathnames for a given table oid and global cfPaths setup.
+ */
+bool
+copydb_init_tablepaths(CopyFilePaths *cfPaths,
+					   TableFilePaths *tablePaths,
+					   uint32_t oid)
+{
+	sformat(tablePaths->lockFile, MAXPGPATH, "%s/%d",
+			cfPaths->rundir,
+			oid);
+
+	sformat(tablePaths->doneFile, MAXPGPATH, "%s/%d.done",
+			cfPaths->tbldir,
+			oid);
+
+	sformat(tablePaths->idxListFile, MAXPGPATH, "%s/%u.idx",
+			cfPaths->tbldir,
+			oid);
 
 	return true;
 }
@@ -778,18 +825,19 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
  * for a given COPY partition of a table.
  */
 bool
-copydb_init_tablepaths_for_part(CopyTableDataSpec *tableSpecs,
+copydb_init_tablepaths_for_part(CopyFilePaths *cfPaths,
 								TableFilePaths *tablePaths,
+								uint32_t oid,
 								int partNumber)
 {
 	sformat(tablePaths->lockFile, MAXPGPATH, "%s/%d.%d",
-			tableSpecs->cfPaths->rundir,
-			tableSpecs->sourceTable.oid,
+			cfPaths->rundir,
+			oid,
 			partNumber);
 
 	sformat(tablePaths->doneFile, MAXPGPATH, "%s/%d.%d.done",
-			tableSpecs->cfPaths->tbldir,
-			tableSpecs->sourceTable.oid,
+			cfPaths->tbldir,
+			oid,
 			partNumber);
 
 	return true;
@@ -1060,78 +1108,6 @@ copydb_prepare_snapshot(CopyDataSpec *copySpecs)
 
 
 /*
- * copydb_start_vacuum_table runs VACUUM ANALYSE on the given table.
- */
-bool
-copydb_start_vacuum_table(CopyTableDataSpec *tableSpecs)
-{
-	if (tableSpecs->section != DATA_SECTION_VACUUM &&
-		tableSpecs->section != DATA_SECTION_ALL)
-	{
-		return true;
-	}
-
-	/*
-	 * Flush stdio channels just before fork, to avoid double-output problems.
-	 */
-	fflush(stdout);
-	fflush(stderr);
-
-	int fpid = fork();
-
-	switch (fpid)
-	{
-		case -1:
-		{
-			log_error("Failed to fork a worker process");
-			return false;
-		}
-
-		case 0:
-		{
-			/* child process runs the command */
-			PGSQL dst = { 0 };
-
-			/* initialize our connection to the target database */
-			if (!pgsql_init(&dst, tableSpecs->target_pguri, PGSQL_CONN_TARGET))
-			{
-				/* errors have already been logged */
-				return false;
-			}
-
-			/* finally, vacuum analyze the table and its indexes */
-			char vacuum[BUFSIZE] = { 0 };
-
-			sformat(vacuum, sizeof(vacuum),
-					"VACUUM ANALYZE %s",
-					tableSpecs->qname);
-
-			log_info("%s;", vacuum);
-
-			if (!pgsql_execute(&dst, vacuum))
-			{
-				/* errors have already been logged */
-				exit(EXIT_CODE_INTERNAL_ERROR);
-			}
-
-			(void) pgsql_finish(&dst);
-
-			exit(EXIT_CODE_QUIT);
-		}
-
-		default:
-		{
-			/* fork succeeded, in parent */
-			break;
-		}
-	}
-
-	/* now we're done, and we want async behavior, do not wait */
-	return true;
-}
-
-
-/*
  * copydb_fatal_exit sends a termination signal to all the subprocess and waits
  * until all the known subprocess are finished, then returns true.
  */
@@ -1177,6 +1153,7 @@ copydb_wait_for_subprocesses()
 				if (errno == ECHILD)
 				{
 					/* no more childrens */
+					log_debug("copydb_wait_for_subprocesses: no more children");
 					return allReturnCodeAreZero;
 				}
 
@@ -1210,6 +1187,8 @@ copydb_wait_for_subprocesses()
 					log_error("Sub-processes %d exited with code %d",
 							  pid, returnCode);
 				}
+
+				break;
 			}
 		}
 	}

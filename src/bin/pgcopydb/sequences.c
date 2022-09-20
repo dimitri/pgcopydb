@@ -64,6 +64,55 @@ copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql)
 
 
 /*
+ * copydb_start_seq_process create a single sub-process that connects to the
+ * target database to issue the setval() calls to reset sequences.
+ */
+bool
+copydb_start_seq_process(CopyDataSpec *specs)
+{
+	log_info("STEP 9: reset sequences values");
+
+	/*
+	 * Flush stdio channels just before fork, to avoid double-output
+	 * problems.
+	 */
+	fflush(stdout);
+	fflush(stderr);
+
+	int fpid = fork();
+
+	switch (fpid)
+	{
+		case -1:
+		{
+			log_error("Failed to fork a worker process: %m");
+			return false;
+		}
+
+		case 0:
+		{
+			/* child process runs the command */
+			if (!copydb_copy_all_sequences(specs))
+			{
+				/* errors have already been logged */
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			exit(EXIT_CODE_QUIT);
+		}
+
+		default:
+		{
+			/* fork succeeded, in parent */
+			break;
+		}
+	}
+
+	return true;
+}
+
+
+/*
  * copydb_copy_all_sequences fetches the list of sequences from the source
  * database and then for each of them runs a SELECT last_value, is_called FROM
  * the sequence on the source database and then calls SELECT setval(); on the
@@ -72,6 +121,8 @@ copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql)
 bool
 copydb_copy_all_sequences(CopyDataSpec *specs)
 {
+	log_notice("Now starting setval process %d [%d]", getpid(), getppid());
+
 	if (specs->dirState.sequenceCopyIsDone)
 	{
 		log_info("Skipping sequences, already done on a previous run");
@@ -130,12 +181,20 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 		++errors;
 	}
 
-	/* and write that we successfully finished copying all tables */
+	/* and write that we successfully finished copying all sequences */
 	if (!write_file("", 0, specs->cfPaths.done.sequences))
 	{
 		log_warn("Failed to write the tracking file \%s\"",
 				 specs->cfPaths.done.sequences);
 	}
 
-	return errors == 0;
+	if (errors > 0)
+	{
+		log_warn("Failed to set values for %d sequences, "
+				 "see above for details",
+				 errors);
+		return false;
+	}
+
+	return true;
 }

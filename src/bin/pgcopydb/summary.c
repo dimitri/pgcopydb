@@ -243,15 +243,8 @@ finish_table_summary(CopyTableSummary *summary, char *filename)
  * index doneFile.
  */
 bool
-create_table_index_file(CopyTableSummary *summary,
-						SourceIndexArray *indexArray,
-						char *filename)
+create_table_index_file(SourceTable *table, char *filename)
 {
-	if (indexArray->count < 1)
-	{
-		return true;
-	}
-
 	PQExpBuffer content = createPQExpBuffer();
 
 	if (content == NULL)
@@ -261,9 +254,11 @@ create_table_index_file(CopyTableSummary *summary,
 		return false;
 	}
 
-	for (int i = 0; i < indexArray->count; i++)
+	SourceIndexList *indexListEntry = table->firstIndex;
+
+	for (; indexListEntry != NULL; indexListEntry = indexListEntry->next)
 	{
-		SourceIndex *index = &(indexArray->array[i]);
+		SourceIndex *index = indexListEntry->index;
 
 		appendPQExpBuffer(content, "%d\n", index->indexOid);
 		appendPQExpBuffer(content, "%d\n", index->constraintOid);
@@ -315,15 +310,23 @@ read_table_index_file(SourceIndexArray *indexArray, char *filename)
 	char *fileLines[BUFSIZE] = { 0 };
 	int lineCount = splitLines(fileContents, fileLines, BUFSIZE);
 
-	/* we expect to have an indexOid per line, no comments, etc */
-	indexArray->count = lineCount;
-	indexArray->array = (SourceIndex *) malloc(lineCount * sizeof(SourceIndex));
+	/*
+	 * We expect to have alternate lines with first indexOid and then
+	 * constraintOid (which could be zero). No comments, etc.
+	 */
+	indexArray->count = lineCount / 2;
+	indexArray->array = (SourceIndex *) calloc(lineCount, sizeof(SourceIndex));
+
+	int pos = 0;
 
 	for (int i = 0; i < lineCount; i++)
 	{
-		SourceIndex *index = &(indexArray->array[i]);
+		SourceIndex *index = &(indexArray->array[pos]);
 
-		if (!stringToUInt32(fileLines[i], &(index->indexOid)))
+		uint32_t *target =
+			i % 2 == 0 ? &(index->indexOid) : &(index->constraintOid);
+
+		if (!stringToUInt32(fileLines[i], target))
 		{
 			log_error("Failed to read the index oid \"%s\" "
 					  "in file \"%s\" at line %d",
@@ -331,6 +334,12 @@ read_table_index_file(SourceIndexArray *indexArray, char *filename)
 					  filename,
 					  i);
 			return false;
+		}
+
+		/* one index entry (indexOid, constraintOid) spans two lines */
+		if (i % 2 == 1)
+		{
+			pos++;
 		}
 	}
 
@@ -772,7 +781,9 @@ print_toplevel_summary(Summary *summary, int tableJobs, int indexJobs)
 			summary->timings.prepareSchemaMs, 1);
 
 	char concurrency[BUFSIZE] = { 0 };
-	sformat(concurrency, sizeof(concurrency), "%d + %d", tableJobs, indexJobs);
+	sformat(concurrency, sizeof(concurrency), "%d + %d",
+			tableJobs,
+			tableJobs + indexJobs);
 
 	fformat(stdout, " %45s   %10s  %10s  %12s\n",
 			"COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)", "both",
@@ -1014,7 +1025,7 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 	for (int tableIndex = 0; tableIndex < tableSpecsArray->count; tableIndex++)
 	{
 		CopyTableDataSpec *tableSpecs = &(tableSpecsArray->array[tableIndex]);
-		SourceTable *table = &(tableSpecs->sourceTable);
+		SourceTable *table = tableSpecs->sourceTable;
 
 		SummaryTableEntry *entry = &(summaryTable->array[tableIndex]);
 
@@ -1063,18 +1074,38 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 			for (int i = 0; i < indexArray.count; i++)
 			{
 				SourceIndex *index = &(indexArray.array[i]);
-				CopyIndexSummary indexSummary = { .index = index };
-				char indexDoneFile[MAXPGPATH] = { 0 };
 
-				/* build the indexDoneFile for the target index */
-				sformat(indexDoneFile, sizeof(indexDoneFile), "%s/%u.done",
-						specs->cfPaths.idxdir,
-						index->indexOid);
+				CopyFilePaths *cfPaths = &(specs->cfPaths);
+				IndexFilePaths indexPaths = { 0 };
+
+				if (!copydb_init_index_paths(cfPaths, index, &indexPaths))
+				{
+					/* errors have already been logged */
+					return false;
+				}
 
 				/* when a table has no indexes, the file doesn't exists */
-				if (file_exists(indexDoneFile))
+				if (file_exists(indexPaths.doneFile))
 				{
-					if (!read_index_summary(&indexSummary, indexDoneFile))
+					CopyIndexSummary indexSummary = { .index = index };
+
+					if (!read_index_summary(&indexSummary, indexPaths.doneFile))
+					{
+						/* errors have already been logged */
+						return false;
+					}
+
+					/* accumulate total duration of creating all the indexes */
+					timings->indexDurationMs += indexSummary.durationMs;
+					indexingDurationMs += indexSummary.durationMs;
+				}
+
+				if (file_exists(indexPaths.constraintDoneFile))
+				{
+					CopyIndexSummary indexSummary = { .index = index };
+
+					if (!read_index_summary(&indexSummary,
+											indexPaths.constraintDoneFile))
 					{
 						/* errors have already been logged */
 						return false;

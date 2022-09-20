@@ -1114,7 +1114,7 @@ streamTransformFileInSubprocess(LogicalStreamContext *context)
 		case -1:
 		{
 			log_error("Failed to fork a subprocess to transform "
-					  "JSON file \"%s\" into SQL",
+					  "JSON file \"%s\" into SQL: %m",
 					  privateContext->walFileName);
 			return -1;
 		}

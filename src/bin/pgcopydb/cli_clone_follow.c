@@ -375,7 +375,7 @@ start_clone_process(CopyDataSpec *copySpecs, pid_t *pid)
 	{
 		case -1:
 		{
-			log_error("Failed to fork a subprocess to prefetch changes");
+			log_error("Failed to fork a subprocess to prefetch changes: %m");
 			return -1;
 		}
 
@@ -446,8 +446,6 @@ cloneDB(CopyDataSpec *copySpecs)
 		return false;
 	}
 
-	log_info("STEP 2: restore the pre-data section to the target database");
-
 	/* make sure that we have our own process local connection */
 	TransactionSnapshot snapshot = { 0 };
 
@@ -467,6 +465,9 @@ cloneDB(CopyDataSpec *copySpecs)
 	}
 
 	/* fetch schema information from source catalogs, including filtering */
+
+	log_info("STEP 2: fetch source database tables, indexes, and sequences");
+
 	if (!copydb_fetch_schema_and_prepare_specs(copySpecs))
 	{
 		/* errors have already been logged */
@@ -482,6 +483,8 @@ cloneDB(CopyDataSpec *copySpecs)
 
 	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_PREPARE_SCHEMA);
 
+	log_info("STEP 3: restore the pre-data section to the target database");
+
 	if (!copydb_target_prepare_schema(copySpecs))
 	{
 		/* errors have already been logged */
@@ -490,9 +493,10 @@ cloneDB(CopyDataSpec *copySpecs)
 
 	(void) summary_set_current_time(timings, TIMING_STEP_AFTER_PREPARE_SCHEMA);
 
-	log_info("STEP 3: copy data from source to target in sub-processes");
-	log_info("STEP 4: create indexes and constraints in parallel");
-	log_info("STEP 5: vacuum analyze each table");
+	log_info("STEP 4: copy data from source to target in %d sub-processes",
+			 copySpecs->tableJobs);
+
+	/* STEPs 5, 6, 7, 8, and 9 are printed when starting the sub-processes */
 
 	if (!copydb_copy_all_table_data(copySpecs))
 	{
@@ -503,7 +507,7 @@ cloneDB(CopyDataSpec *copySpecs)
 	/* close our snapshot: commit transaction and finish connection */
 	(void) copydb_close_snapshot(copySpecs);
 
-	log_info("STEP 7: restore the post-data section to the target database");
+	log_info("STEP 10: restore the post-data section to the target database");
 
 	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_FINALIZE_SCHEMA);
 
@@ -560,7 +564,7 @@ start_follow_process(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs,
 	{
 		case -1:
 		{
-			log_error("Failed to fork a subprocess to prefetch changes");
+			log_error("Failed to fork a subprocess to prefetch changes: %m");
 			return -1;
 		}
 

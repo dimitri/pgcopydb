@@ -8,6 +8,7 @@
 
 #include "filtering.h"
 #include "lock_utils.h"
+#include "queue_utils.h"
 #include "pgcmd.h"
 #include "pgsql.h"
 #include "schema.h"
@@ -185,7 +186,7 @@ typedef struct CopyTableDataSpec
 	bool resume;
 
 	char qname[NAMEDATALEN * 2 + 1];
-	SourceTable sourceTable;
+	SourceTable *sourceTable;
 	CopyTableSummary *summary;
 	SourceIndexArray *indexArray;
 
@@ -276,17 +277,25 @@ typedef struct CopyDataSpec
 
 	int tableJobs;
 	int indexJobs;
+	int vacuumJobs;
+
 	uint64_t splitTablesLargerThan;
 	char splitTablesLargerThanPretty[NAMEDATALEN];
 
 	Semaphore tableSemaphore;
 	Semaphore indexSemaphore;
 
+	Queue vacuumQueue;
+	Queue indexQueue;
+
 	DumpPaths dumpPaths;
 	SourceTableArray sourceTableArray;
 	SourceIndexArray sourceIndexArray;
 	CopyTableDataSpecsArray tableSpecsArray;
 	SourceSequenceArray sequenceArray;
+
+	SourceTable *sourceTableHashByOid;
+	SourceIndex *sourceIndexHashByOid;
 } CopyDataSpec;
 
 
@@ -343,8 +352,13 @@ bool copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 							 SourceTable *source,
 							 int partNumber);
 
-bool copydb_init_tablepaths_for_part(CopyTableDataSpec *tableSpecs,
+bool copydb_init_tablepaths(CopyFilePaths *cfPaths,
+							TableFilePaths *tablePaths,
+							uint32_t oid);
+
+bool copydb_init_tablepaths_for_part(CopyFilePaths *cfPaths,
 									 TableFilePaths *tablePaths,
+									 uint32_t oid,
 									 int partNumber);
 
 bool copydb_export_snapshot(TransactionSnapshot *snapshot);
@@ -354,7 +368,7 @@ bool copydb_prepare_snapshot(CopyDataSpec *copySpecs);
 bool copydb_set_snapshot(CopyDataSpec *copySpecs);
 bool copydb_close_snapshot(CopyDataSpec *copySpecs);
 
-bool copydb_start_vacuum_table(CopyTableDataSpec *tableSpecs);
+/* bool copydb_start_vacuum_table(CopyTableDataSpec *tableSpecs); */
 
 bool copydb_fatal_exit(void);
 bool copydb_wait_for_subprocesses(void);
@@ -363,6 +377,26 @@ bool copydb_collect_finished_subprocesses(bool *allDone);
 bool copydb_copy_roles(CopyDataSpec *copySpecs);
 
 /* indexes.c */
+
+bool copydb_start_index_workers(CopyDataSpec *specs);
+bool copydb_index_worker(CopyDataSpec *specs);
+bool copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid);
+
+bool copydb_add_table_indexes(CopyDataSpec *specs,
+							  CopyTableDataSpec *tableSpecs);
+
+bool copydb_index_workers_send_stop(CopyDataSpec *specs);
+
+bool copydb_table_indexes_are_done(CopyDataSpec *specs,
+								   SourceTable *table,
+								   TableFilePaths *tablePaths,
+								   bool *indexesAreDone,
+								   bool *constraintsAreBeingBuilt);
+
+bool copydb_init_index_paths(CopyFilePaths *cfPaths,
+							 SourceIndex *index,
+							 IndexFilePaths *indexPaths);
+
 bool copydb_init_indexes_paths(CopyFilePaths *cfPaths,
 							   SourceIndexArray *indexArray,
 							   IndexFilePathsArray *indexPathsArray);
@@ -375,14 +409,12 @@ bool copydb_start_index_processes(CopyDataSpec *specs,
 
 bool copydb_start_index_process(CopyDataSpec *specs,
 								SourceIndexArray *indexArray,
-								IndexFilePathsArray *indexPathsArray,
-								Semaphore *lockFileSemaphore);
+								IndexFilePathsArray *indexPathsArray);
 
 bool copydb_create_index(const char *pguri,
 						 SourceIndex *index,
 						 IndexFilePaths *indexPaths,
 						 Semaphore *lockFileSemaphore,
-						 Semaphore *createIndexSemaphore,
 						 bool constraint,
 						 bool ifNotExists);
 
@@ -410,6 +442,8 @@ bool copydb_prepare_create_constraint_command(SourceIndex *index,
 											  char *command,
 											  size_t size);
 
+bool copydb_create_constraints(CopyDataSpec *spec, SourceTable *table);
+
 /* dump_restore.c */
 bool copydb_dump_source_schema(CopyDataSpec *specs,
 							   const char *snapshot,
@@ -422,8 +456,9 @@ bool copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
 
 bool copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section);
 
-/* sequence.c */
+/* sequences.c */
 bool copydb_copy_all_sequences(CopyDataSpec *specs);
+bool copydb_start_seq_process(CopyDataSpec *specs);
 bool copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql);
 
 /* table-data.c */
@@ -442,12 +477,9 @@ bool copydb_copy_all_table_data(CopyDataSpec *specs);
 bool copydb_process_table_data(CopyDataSpec *specs);
 bool copydb_process_table_data_worker(CopyDataSpec *specs);
 
+bool copydb_process_table_data_with_workers(CopyDataSpec *specs);
+
 bool copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs);
-
-bool copydb_copy_table_indexes(CopyTableDataSpec *tableSpecs);
-bool copydb_create_table_indexes(CopyTableDataSpec *tableSpecs);
-
-bool copydb_create_constraints(CopyTableDataSpec *tableSpecs);
 
 bool copydb_table_is_being_processed(CopyDataSpec *specs,
 									 CopyTableDataSpec *tableSpecs,
@@ -464,6 +496,13 @@ bool copydb_table_parts_are_all_done(CopyDataSpec *specs,
 
 bool copydb_start_blob_process(CopyDataSpec *specs);
 bool copydb_copy_blobs(CopyDataSpec *specs);
+
+/* vacuum.c */
+bool vacuum_start_workers(CopyDataSpec *specs);
+bool vacuum_worker(CopyDataSpec *specs);
+bool vacuum_analyze_table_by_oid(CopyDataSpec *specs, uint32_t oid);
+bool vacuum_add_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs);
+bool vacuum_send_stop(CopyDataSpec *specs);
 
 /* summary.c */
 bool prepare_summary_table(Summary *summary, CopyDataSpec *specs);

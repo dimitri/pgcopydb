@@ -23,13 +23,13 @@ pgcopydb list tables --source ${PGCOPYDB_TARGET_PGURI}
 #
 psql ${PGCOPYDB_SOURCE_PGURI} <<EOF
 create role pagila NOSUPERUSER CREATEDB NOCREATEROLE LOGIN PASSWORD '0wn3d';
-create database pagila owner pagila;
+create database pagila owner pagila connection limit 8;
 EOF
 
 pgcopydb copy roles
 
 psql ${PGCOPYDB_TARGET_PGURI} <<EOF
-create database pagila owner pagila;
+create database pagila owner pagila connection limit 10;
 EOF
 
 PAGILA_SOURCE_PGURI="postgres://pagila:0wn3d@source/pagila"
