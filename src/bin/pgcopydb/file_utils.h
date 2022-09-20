@@ -34,6 +34,7 @@ typedef struct SearchPath
 
 
 bool file_exists(const char *filename);
+bool file_is_empty(const char *filename);
 bool directory_exists(const char *path);
 bool ensure_empty_dir(const char *dirname, int mode);
 FILE * fopen_with_umask(const char *filePath, const char *modes, int flags, mode_t umask);

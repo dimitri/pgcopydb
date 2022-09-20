@@ -56,6 +56,34 @@ file_exists(const char *filename)
 
 
 /*
+ * file_is_empty returns true if the given filename is known to exist on the
+ * file system and is empty: its content is "".
+ */
+bool
+file_is_empty(const char *filename)
+{
+	if (file_exists(filename))
+	{
+		char *fileContents;
+		long fileSize;
+
+		if (!read_file(filename, &fileContents, &fileSize))
+		{
+			/* errors are logged */
+			return false;
+		}
+
+		if (fileSize == 0)
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+
+/*
  * directory_exists returns whether the given path is the name of a directory that
  * exists on the file system or not.
  */

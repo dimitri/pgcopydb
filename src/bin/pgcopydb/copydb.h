@@ -389,7 +389,9 @@ bool copydb_index_workers_send_stop(CopyDataSpec *specs);
 
 bool copydb_table_indexes_are_done(CopyDataSpec *specs,
 								   SourceTable *table,
-								   bool *indexesAreDone);
+								   TableFilePaths *tablePaths,
+								   bool *indexesAreDone,
+								   bool *constraintsAreBeingBuilt);
 
 bool copydb_init_index_paths(CopyFilePaths *cfPaths,
 							 SourceIndex *index,

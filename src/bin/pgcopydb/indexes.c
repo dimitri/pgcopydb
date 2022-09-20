@@ -218,14 +218,19 @@ copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid)
 	 * which takes an exclusive lock on the table.
 	 */
 	bool builtAllIndexes = false;
+	bool constraintsAreBeingBuilt = false;
 
-	if (!copydb_table_indexes_are_done(specs, table, &builtAllIndexes))
+	if (!copydb_table_indexes_are_done(specs,
+									   table,
+									   &tablePaths,
+									   &builtAllIndexes,
+									   &constraintsAreBeingBuilt))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	if (builtAllIndexes)
+	if (builtAllIndexes && !constraintsAreBeingBuilt)
 	{
 		if (!copydb_create_constraints(specs, table))
 		{
@@ -233,19 +238,6 @@ copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid)
 					  table->nspname,
 					  table->relname);
 			return false;
-		}
-
-		/*
-		 * Create an index list file for the table, so that we can easily
-		 * find relevant indexing information from the table itself.
-		 */
-		if (!create_table_index_file(table, tablePaths.idxListFile))
-		{
-			/* this only means summary is missing some indexing information */
-			log_warn("Failed to create table \"%s\".\"%s\" index list file \"%s\"",
-					 table->nspname,
-					 table->relname,
-					 tablePaths.idxListFile);
 		}
 	}
 
@@ -260,12 +252,31 @@ copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid)
 bool
 copydb_table_indexes_are_done(CopyDataSpec *specs,
 							  SourceTable *table,
-							  bool *indexesAreDone)
+							  TableFilePaths *tablePaths,
+							  bool *indexesAreDone,
+							  bool *constraintsAreBeingBuilt)
 {
 	bool builtAllIndexes = true;
 
 	/* enter the index lockfile/donefile critical section */
 	(void) semaphore_lock(&(specs->indexSemaphore));
+
+	/*
+	 * The table-data process creates an empty idxListFile, and is function
+	 * creates a file with proper content while in the critical section.
+	 *
+	 * As a result, if the file exists and is empty, then another process was
+	 * there first and is now taking care of the constraints.
+	 */
+	if (file_exists(tablePaths->idxListFile) &&
+		!file_is_empty(tablePaths->idxListFile))
+	{
+		*indexesAreDone = true;
+		*constraintsAreBeingBuilt = true;
+
+		(void) semaphore_unlock(&(specs->indexSemaphore));
+		return true;
+	}
 
 	SourceIndexList *indexListEntry = table->firstIndex;
 
@@ -284,7 +295,24 @@ copydb_table_indexes_are_done(CopyDataSpec *specs,
 		builtAllIndexes = builtAllIndexes && file_exists(indexPaths.doneFile);
 	}
 
+	if (builtAllIndexes)
+	{
+		/*
+		 * Create an index list file for the table, so that we can easily
+		 * find relevant indexing information from the table itself.
+		 */
+		if (!create_table_index_file(table, tablePaths->idxListFile))
+		{
+			/* this only means summary is missing some indexing information */
+			log_warn("Failed to create table \"%s\".\"%s\" index list file \"%s\"",
+					 table->nspname,
+					 table->relname,
+					 tablePaths->idxListFile);
+		}
+	}
+
 	*indexesAreDone = builtAllIndexes;
+	*constraintsAreBeingBuilt = false;
 
 	/* end of the critical section around lockfile and donefile handling */
 	(void) semaphore_unlock(&(specs->indexSemaphore));
@@ -1134,7 +1162,7 @@ copydb_create_constraints(CopyDataSpec *specs, SourceTable *table)
 		 */
 		char *doneFile = indexPaths.constraintDoneFile;
 
-		log_info("copydb_create_constraints: writing \"%s\"", doneFile);
+		log_debug("copydb_create_constraints: writing \"%s\"", doneFile);
 
 		if (!finish_index_summary(&summary, doneFile, constraint))
 		{
