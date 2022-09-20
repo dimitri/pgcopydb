@@ -39,6 +39,9 @@ typedef struct SourceTablePartsArray
 } SourceTablePartsArray;
 
 
+/* forward declaration */
+struct SourceIndexList;
+
 typedef struct SourceTable
 {
 	uint32_t oid;
@@ -52,6 +55,11 @@ typedef struct SourceTable
 	char restoreListName[RESTORE_LIST_NAMEDATALEN];
 	char partKey[NAMEDATALEN];
 	SourceTablePartsArray partsArray;
+
+	struct SourceIndexList *firstIndex;
+	struct SourceIndexList *lastIndex;
+
+	UT_hash_handle hh;          /* makes this structure hashable */
 } SourceTable;
 
 
@@ -105,6 +113,8 @@ typedef struct SourceIndex
 	char constraintDef[BUFSIZE];
 	char indexRestoreListName[RESTORE_LIST_NAMEDATALEN];
 	char constraintRestoreListName[RESTORE_LIST_NAMEDATALEN];
+
+	UT_hash_handle hh;          /* makes this structure hashable */
 } SourceIndex;
 
 
@@ -113,6 +123,13 @@ typedef struct SourceIndexArray
 	int count;
 	SourceIndex *array;         /* malloc'ed area */
 } SourceIndexArray;
+
+
+typedef struct SourceIndexList
+{
+	SourceIndex *index;
+	struct SourceIndexList *next;
+} SourceIndexList;
 
 
 /*
