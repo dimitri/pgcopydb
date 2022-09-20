@@ -96,15 +96,15 @@ The ``pgcopydb clone`` command implements the following steps:
      catalog query on the source database, and also the list of indexes, and
      the list of sequences with their current values.
 
-	 When filtering is used, the list of objects OIDs that are meant to be
-	 filtered out is built during this step.
+     When filtering is used, the list of objects OIDs that are meant to be
+     filtered out is built during this step.
 
   3. The ``pre-data`` section of the dump is restored on the target database
      using the ``pg_restore`` command, creating all the Postgres objects
      from the source database into the target database.
 
-	 When filtering is used, the ``pg_restore --use-list`` feature is used
-	 to filter the list of objects to restore in this step.
+     When filtering is used, the ``pg_restore --use-list`` feature is used
+     to filter the list of objects to restore in this step.
 
   4. Then as many as ``--table-jobs`` COPY sub-processes are started to
      share the workload and COPY the data from the source to the target
@@ -149,13 +149,13 @@ The ``pgcopydb clone`` command implements the following steps:
      For each sequence, pgcopydb then calls ``pg_catalog.setval()`` on the
      target database with the information obtained on the source database.
 
- 10. The final stage consists now of running the ``pg_restore`` command for
-     the ``post-data`` section script for the whole database, and that's
-     where the foreign key constraints and other elements are created.
+  10. The final stage consists now of running the ``pg_restore`` command for
+      the ``post-data`` section script for the whole database, and that's
+      where the foreign key constraints and other elements are created.
 
-     The *post-data* script is filtered out using the ``pg_restore
-     --use-list`` option so that indexes and primary key constraints already
-     created in steps 6 and 7 are properly skipped now.
+      The *post-data* script is filtered out using the ``pg_restore
+      --use-list`` option so that indexes and primary key constraints
+      already created in steps 6 and 7 are properly skipped now.
 
 .. _change_data_capture:
 
