@@ -768,7 +768,10 @@ copydb_process_table_data(CopyDataSpec *specs)
 	 */
 	log_trace("copydb_process_table_data: \"%s\"", specs->cfPaths.tbldir);
 
-	if (!vacuum_start_workers(specs))
+	/*
+	 * Are blobs table data? well pg_dump --section sayth yes.
+	 */
+	if (!copydb_start_blob_process(specs))
 	{
 		/* errors have already been logged */
 		return false;
@@ -780,10 +783,7 @@ copydb_process_table_data(CopyDataSpec *specs)
 		return false;
 	}
 
-	/*
-	 * Are blobs table data? well pg_dump --section sayth yes.
-	 */
-	if (!copydb_start_blob_process(specs))
+	if (!vacuum_start_workers(specs))
 	{
 		/* errors have already been logged */
 		return false;
@@ -862,7 +862,7 @@ copydb_process_table_data(CopyDataSpec *specs)
 bool
 copydb_process_table_data_with_workers(CopyDataSpec *specs)
 {
-	log_info("Now starting %d COPY processes", specs->tableJobs);
+	log_notice("Now starting %d COPY processes", specs->tableJobs);
 
 	/*
 	 * Flush stdio channels just before fork, to avoid double-output
@@ -884,7 +884,7 @@ copydb_process_table_data_with_workers(CopyDataSpec *specs)
 		case 0:
 		{
 			/* child process runs the command */
-			log_info("Started COPY supervisor %d [%d]", getpid(), getppid());
+			log_notice("Started COPY supervisor %d [%d]", getpid(), getppid());
 
 			for (int i = 0; i < specs->tableJobs; i++)
 			{
@@ -984,7 +984,7 @@ copydb_process_table_data_worker(CopyDataSpec *specs)
 	int errors = 0;
 	int copies = 0;
 
-	log_info("Started COPY worker %d [%d]", getpid(), getppid());
+	log_notice("Started COPY worker %d [%d]", getpid(), getppid());
 
 	CopyTableDataSpecsArray *tableSpecsArray = &(specs->tableSpecsArray);
 
@@ -1505,7 +1505,7 @@ copydb_start_blob_process(CopyDataSpec *specs)
 		return true;
 	}
 
-	log_info("Now starting 1 BLOB process");
+	log_info("STEP 5: copy Large Objects (BLOBs) in 1 sub-process");
 
 	/*
 	 * Flush stdio channels just before fork, to avoid double-output problems.

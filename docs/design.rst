@@ -53,41 +53,39 @@ sub-processes that each handle a part of the work.
 
 The process tree then looks like the following:
 
- * pgcopydb clone --follow
+ * pgcopydb clone --follow --table-jobs 4 --index-jobs 4
 
    * pgcopydb clone worker
 
-     * pgcopydb table-data worker (e.g. ``--table-jobs 4``)
+     * pgcopydb copy supervisor (``--table-jobs 4``)
 
-       #. pgcopydb table worker
+       #. pgcopydb copy worker
 
-          * pgcopydb vacuum analyze worker
+       #. pgcopydb copy worker
 
-          * pgcopydb create index worker
+       #. pgcopydb copy worker
 
-          * pgcopydb create index worker
-
-          * pgcopydb create index worker
-
-       #. pgcopydb table worker
-
-          * pgcopydb vacuum analyze worker
-
-          * pgcopydb create index worker
-
-       #. pgcopydb table worker
-
-          * pgcopydb vacuum analyze worker
-
-          * pgcopydb create index worker
-
-          * pgcopydb create index worker
-
-       #. pgcopydb table worker
-
-          * pgcopydb vacuum analyze worker
+       #. pgcopydb copy worker
 
      * pgcopydb blob worker
+
+     1. pgcopydb index/constraints worker (``--index-jobs 4``)
+
+     2. pgcopydb index/constraints worker (``--index-jobs 4``)
+
+     3. pgcopydb index/constraints worker (``--index-jobs 4``)
+
+     4. pgcopydb index/constraints worker (``--index-jobs 4``)
+
+     1. pgcopydb vacuum analyze worker (``--table-jobs 4``)
+
+     2. pgcopydb vacuum analyze worker (``--table-jobs 4``)
+
+     3. pgcopydb vacuum analyze worker (``--table-jobs 4``)
+
+     4. pgcopydb vacuum analyze worker (``--table-jobs 4``)
+
+     * pgcopydb sequences reset worker
 
    * pgcopydb follow worker
 
@@ -97,52 +95,71 @@ The process tree then looks like the following:
 
      * pgcopydb stream catchup
 
+We see that when using ``pgcopydb clone --follow --table-jobs 4 --index-jobs
+4`` then pgcopydb creates 20 sub-processes, including one transient
+sub-process each time a JSON file is to be converted to a SQL file for
+replay.
 
-When starting with the TABLE DATA copying step, then pgcopydb creates as
-many sub-processes as specified by the ``--table-jobs`` command line option
-(or the environment variable ``PGCOPYDB_TABLE_JOBS``).
+The 20 total is counted from:
 
-The process that's implementing the COPY command then turns its attention to
-the building of the indexes attached to the given table. That's because the
-CREATE INDEX command only consumes resources (CPU, memory, etc) on the
-target Postgres instance server, the pgcopydb process just sends the command
-and wait until completion.
+ - 1 clone worker + 1 copy supervisor + 4 copy workers + 1 blob worker + 4
+   index workers + 4 vacuum workers + 1 sequence reset worker
 
-It is possible with Postgres to create several indexes for the same table in
-parallel, for that, the client just needs to open a separate database
-connection for each index and run each CREATE INDEX command in its own
-connection, at the same time. In pgcopydb this is implemented by running one
-sub-process per index to create.
+   that's 1 + 1 + 4 + 1 + 4 + 4 + 1 = 16
 
-The command line option ``--index-jobs`` is used to limit how many CREATE
-INDEX commands are running at any given time -- by using a Unix semaphore.
-So when running with ``--index-jobs 2`` and when a specific table has 3
-indexes attached to it, then the 3rd index creation is blocked until another
-index is finished, though the corresponding sub-process is started anyways.
+ - 1 follow worker + 1 stream receive + 1 stream transform + 1 stream catchup
 
-That said, the index jobs setup is global for the whole pgcopydb operation
-rather than per-table. It means that in some cases, indexes for the same
-table might be created in a sequential fashion, depending on exact timing of
-the other index builds.
+   that's 1 + 1 + 1 + 1 = 4
 
-The ``--index-jobs`` option has been made global so that it's easier to
-setup to the count of available CPU cores on the target Postgres instance.
-Usually, a given CREATE INDEX command uses 100% of a single core.
+ - that's 16 + 4 = 20 total
 
-When using the ``--follow`` option then another sub-process leader is
-created to handle the three Change Data Capture processes.
+Here is a description of the process tree:
 
-  - One process implements :ref:`pgcopydb_stream_receive` to fetch changes
-    in the JSON format and pre-fetch them in JSON files.
+ * When starting with the TABLE DATA copying step, then pgcopydb creates as
+   many sub-processes as specified by the ``--table-jobs`` command line
+   option (or the environment variable ``PGCOPYDB_TABLE_JOBS``).
 
-  - As soon as JSON file is completed, then a new process is
-    opportunistically started to transform the JSON file into SQL, as if by
-    calling the command :ref:`pgcopydb_stream_transform`.
+ * A single sub-process is created by pgcopydb to copy the Postgres Large
+   Objects (BLOBs) found on the source database to the target database.
 
-  - Another process implements :ref:`pgcopydb_stream_catchup` to apply SQL
-    changes to the target Postgres instance. This process loops over
-    querying the pgcopydb sentinel table until the apply mode has been
-    enabled, and then loops over the SQL files and run the queries from them.
+ * To drive the index and constraint build on the target database, pgcopydb
+   creates as many sub-processes as specified by the ``--index-jobs``
+   command line option (or the environment variable
+   ``PGCOPYDB_INDEX_JOBS``).
+
+   It is possible with Postgres to create several indexes for the same table
+   in parallel, for that, the client just needs to open a separate database
+   connection for each index and run each CREATE INDEX command in its own
+   connection, at the same time. In pgcopydb this is implemented by running
+   one sub-process per index to create.
+
+   The ``--index-jobs`` option is global for the whole operation, so that
+   it's easier to setup to the count of available CPU cores on the target
+   Postgres instance. Usually, a given CREATE INDEX command uses 100% of a
+   single core.
+
+ * To drive the VACUUM ANALYZE workload on the target database pgcopydb
+   creates as many sub-processes as specified by the ``--table-jobs``
+   command line option.
+
+ * To reset sequences in parallel to COPYing the table data, pgcopydb
+   creates a single dedicated sub-process.
+
+ * When using the ``--follow`` option then another sub-process leader is
+   created to handle the three Change Data Capture processes.
+
+    - One process implements :ref:`pgcopydb_stream_receive` to fetch changes
+      in the JSON format and pre-fetch them in JSON files.
+
+    - As soon as JSON file is completed, then a new process is
+      opportunistically started to transform the JSON file into SQL, as if
+      by calling the command :ref:`pgcopydb_stream_transform`.
+
+    - Another process implements :ref:`pgcopydb_stream_catchup` to apply SQL
+      changes to the target Postgres instance. This process loops over
+      querying the pgcopydb sentinel table until the apply mode has been
+      enabled, and then loops over the SQL files and run the queries from
+      them.
 
 .. _index_concurrency:
 

@@ -70,6 +70,8 @@ copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql)
 bool
 copydb_start_seq_process(CopyDataSpec *specs)
 {
+	log_info("STEP 9: reset sequences values");
+
 	/*
 	 * Flush stdio channels just before fork, to avoid double-output
 	 * problems.

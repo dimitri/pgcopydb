@@ -23,7 +23,7 @@
 bool
 vacuum_start_workers(CopyDataSpec *specs)
 {
-	log_info("Now starting %d VACUUM processes", specs->vacuumJobs);
+	log_info("STEP 8: starting %d VACUUM processes", specs->vacuumJobs);
 	log_trace("vacuum_start_workers: \"%s\"", specs->cfPaths.tbldir);
 
 	for (int i = 0; i < specs->vacuumJobs; i++)

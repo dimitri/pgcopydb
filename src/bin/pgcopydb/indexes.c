@@ -27,7 +27,8 @@
 bool
 copydb_start_index_workers(CopyDataSpec *specs)
 {
-	log_info("Now starting %d CREATE INDEX processes", specs->indexJobs);
+	log_info("STEP 6: starting %d CREATE INDEX processes", specs->indexJobs);
+	log_info("STEP 7: constraints are built by the CREATE INDEX processes");
 
 	for (int i = 0; i < specs->indexJobs; i++)
 	{
