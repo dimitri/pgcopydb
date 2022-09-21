@@ -93,6 +93,11 @@ When a role already exists on the target database, its restoring is entirely
 skipped, which includes skipping both the ``CREATE ROLE`` and the ``ALTER
 ROLE`` commands produced by ``pg_dumpall --roles-only``.
 
+The ``pg_dumpall --roles-only`` is used to fetch the list of roles from the
+source database, and this command includes support for passwords. As a
+result, this operation requires the superuser privileges.
+
+
 .. _pgcopydb_copy_schema:
 
 pgcopydb copy schema

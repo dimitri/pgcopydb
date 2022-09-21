@@ -93,6 +93,9 @@ SQL definitions of the roles found on the source Postgres instance.
      --target          Directory where to save the dump files
      --dir             Work directory to use
 
+The ``pg_dumpall --roles-only`` is used to fetch the list of roles from the
+source database, and this command includes support for passwords. As a
+result, this operation requires the superuser privileges.
 
 Description
 -----------
