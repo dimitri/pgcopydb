@@ -7,6 +7,45 @@ target database.
 
 __ https://github.com/eulerto/wal2json/
 
+
+.. important::
+
+   While the ``pgcopydb follow`` is a full client for the logical decoding
+   plugin wal2json, the general use case involves using ``pgcopydb clone
+   --follow`` as documented in :ref:`change_data_capture`.
+
+When using Logical Decoding with pgcopydb or another tool, consider making
+sure you're familiar with the `Logical Replication Restrictions`__ that
+apply. In particular:
+
+__ https://www.postgresql.org/docs/current/logical-replication-restrictions.html
+
+ - DDL are not replicated.
+
+   When using DDL for partition scheme maintenance, such as when using the
+   `pg_partman`__ extension, then consider creating a week or a month of
+   partitions in advance, so that creating new partitions does not happen
+   during the migration window.
+
+   __ https://github.com/pgpartman/pg_partman
+
+ - Sequence data is not replicated.
+
+   When using ``pgcopydb clone --follow`` (starting with pgcopydb version
+   0.9) then the sequence data is synced at the end of the operation, after
+   the cutover point implemented via the
+   :ref:`pgcopydb_stream_sentinel_set_endpos`.
+
+   Updating the sequences manually is also possible by running the command
+   :ref:`pgcopydb_copy_sequences`.
+
+ - Large Objects are not replicated.
+
+See the Postgres documentation page for `Logical Replication Restrictions`__
+to read the exhaustive list of restrictions.
+
+__ https://www.postgresql.org/docs/current/logical-replication-restrictions.html
+
 .. _pgcopydb_follow:
 
 pgcopydb follow
@@ -33,7 +72,7 @@ pgcopydb follow
 Description
 -----------
 
-This command runs two concurrent subproces.
+This command runs two concurrent subprocesses.
 
   1. The first one pre-fetches the changes from the source database using
      the Postgres Logical Decoding protocol and save the JSON messages in
@@ -84,6 +123,188 @@ is important to make sure that the initial base copy is finished.
 Finally, it is also possible to setup the streaming replication options
 before using the ``pgcopydb follow`` command: see the
 :ref:`pgcopydb_stream_setup` and :ref:`pgcopydb_stream_cleanup` commands.
+
+Replica Identity and lack of Primary Keys
+-----------------------------------------
+
+Postgres Logical Decoding works with replaying changes using SQL statements,
+and for that exposes the concept of *Replica Identity* as described in the
+documentation for the `ALTER TABLE ... REPLICA IDENTITY`__ command.
+
+__ https://www.postgresql.org/docs/current/sql-altertable.html
+
+To quote Postgres docs:
+
+.. epigraph::
+
+   *This form changes the information which is written to the write-ahead
+   log to identify rows which are updated or deleted. In most cases, the old
+   value of each column is only logged if it differs from the new value;
+   however, if the old value is stored externally, it is always logged
+   regardless of whether it changed. This option has no effect except when
+   logical replication is in use.*
+
+To support Change Data Capture with Postgres Logical Decoding for tables
+that do not have a Primary Key, then it is necessary to use the ``ALTER
+TABLE ... REPLICA IDENTITY`` command for those tables.
+
+In practice the two following options are to be considered:
+
+  - REPLICA IDENTITY USING INDEX index_name
+
+	This form is prefered when a UNIQUE index exists for the table without a
+	primary key. The index must be unique, not partial, not deferrable, and
+	include only columns marked NOT NULL.
+
+  - REPLICA IDENTITY FULL
+
+	When this is used on a table, then the WAL records contain the old
+	values of all columns in the row.
+
+Logical Decoding Pre-Fetching
+-----------------------------
+
+When using ``pgcopydb clone --follow`` a logical replication slot is created
+on the source database before the initial COPY, using the same Postgres
+snapshot. This ensure data consistency.
+
+Within the ``pgcopydb clone --follow`` approach, it is only possible to
+start applying the changes from the source database after the initial COPY
+has finished on the target database.
+
+Also, from the Postgres documentation we read that `Postgres replication
+slots`__ provide an automated way to ensure that the primary does not remove
+WAL segments until they have been received by all standbys.
+
+__ https://www.postgresql.org/docs/current/warm-standby.html#STREAMING-REPLICATION-SLOTS
+
+Accumulating WAL segments on the primary during the whole duration of the
+initial COPY involves capacity hazards, which translate into potential *File
+System is Full* errors on the WAL disk of the source database. It is crucial
+to avoid such a situation.
+
+This is why pgcopydb implements CDC pre-fetching. In parallel to the initial
+COPY the command ``pgcopydb clone --follow`` pre-fetches the changes in
+local JSON and SQL files. Those files are placed in the XDG_DATA_HOME
+location, which could be a mount point for an infinite Blob Storage area.
+
+The ``pgcopydb follow`` command is a convenience command that's available as
+a logical decoding client for the wal2json plugin, and it shares the same
+implementation as the ``pgcopydb clone --follow`` command. As a result, the
+pre-fetching strategy is also relevant to the ``pgcopydb follow`` command.
+
+The sentinel table, or the Remote Control
+-----------------------------------------
+
+To track progress and allow resuming of operations, pgcopydb uses a sentinel
+table on the source database. The sentinel table consists of a single row
+with the following fields:
+
+::
+
+   $ pgcopydb stream sentinel get
+   startpos   1/8D173AF8
+   endpos     0/0
+   apply      disabled
+   write_lsn  0/0
+   flush_lsn  0/0
+   replay_lsn 0/0
+
+Note that you can use the command ``pgcopydb stream sentinel get --json`` to
+fetch a JSON formatted output, such as the following:
+
+.. code-block:: json
+
+   {
+     "startpos": "1/8D173AF8",
+     "endpos": "1/8D173AF8",
+     "apply": false,
+     "write_lsn": "0/0",
+     "flush_lsn": "0/0",
+     "replay_lsn": "0/0"
+   }
+
+The first three fields (startpos, endpos, apply) are specific to pgcopydb,
+then the following three fields (write_lsn, flush_lsn, replay_lsn) follow
+the Postgres replication protocol as visible in the docs for the
+`pg_stat_replication`__ function.
+
+__ https://www.postgresql.org/docs/current/monitoring-stats.html#MONITORING-PG-STAT-REPLICATION-VIEW
+
+  - ``startpos``
+
+    The startpos field is the current LSN on the source database at the time
+    when the Change Data Capture is setup in pgcopydb, such as when using the
+    :ref:`pgcopydb_stream_setup` command.
+
+    Note that both the ``pgcopydb follow`` and the ``pgcopydb clone --follow``
+    command implement the setup parts if the ``pgcopydb stream setup`` has not
+    been used already.
+
+  - ``endpos``
+
+    The endpos field is last LSN position from the source database that
+    pgcopydb replays. The command ``pgcopydb follow`` (or ``pgcopydb clone
+    --follow``) stops when reaching beyond this LSN position.
+
+    The ``endpos`` can be set at the start of the process, which is useful
+    for unit testing, or while the command is running, which is useful in
+    production to define a cutover point.
+
+    To define the ``endpos`` while the command is running, use
+    :ref:`pgcopydb_stream_sentinel_set_endpos`.
+
+  - ``apply``
+
+    The apply field is a boolean (enabled/disabled) that control the catchup
+    process. The pgcopydb catchup process replays the changes only when the
+    apply boolean is set to true.
+
+    The ``pgcopydb clone --follow`` command automatically enables the apply
+    field of the sentinel table as soon as the initial COPY is done.
+
+    To manually control the apply field, use the
+    :ref:`pgcopydb_stream_sentinel_set_apply` command.
+
+  - ``write_lsn``
+
+    The Postgres documentation for ``pg_stat_replication.write_lsn`` is:
+    Last write-ahead log location written to disk by this standby server.
+
+    In the pgcopydb case, the sentinel field write_lsn is the position that
+    has been written to disk (as JSON) by the streaming process.
+
+  - ``flush_lsn``
+
+    The Postgres documentation for ``pg_stat_replication.flush_lsn`` is:
+    Last write-ahead log location flushed to disk by this standby server
+
+    In the pgcopydb case, the sentinel field flush_lsn is the position that
+    has been written and then fsync'ed to disk (as JSON) by the streaming
+    process.
+
+  - ``replay_lsn``
+
+    The Postgres documentation for ``pg_stat_replication.replay_lsn`` is:
+    Last write-ahead log location replayed into the database on this standby server
+
+    In the pgcopydb case, the sentinel field replay_lsn is the position that
+    has been applied to the target database, as kept track from the WAL.json
+    and then the WAL.sql files, and using the Postgres API for `Replication
+    Progress Tracking`__.
+
+    __ https://www.postgresql.org/docs/current//replication-origins.html
+
+    The replay_lsn is also shared by the pgcopydb streaming process that
+    uses the Postgres logical replication protocol, so the
+    `pg_stat_replication`__ entry associated with the replication slot used
+    by pgcopydb can be used to monitor replication lag.
+
+    __ https://www.postgresql.org/docs/current/monitoring-stats.html#MONITORING-PG-STAT-REPLICATION-VIEW
+
+As the pgcopydb streaming processes maintain the sentinel table on the
+source database, it is also possible to use it to keep track of the logical
+replication progress.
 
 Options
 -------

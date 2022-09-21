@@ -55,7 +55,8 @@ CommandLine sentinel_get_command =
 		"get",
 		"Get the sentinel table values on the source database",
 		" --source ... ",
-		"  --source      Postgres URI to the source database\n",
+		"  --source      Postgres URI to the source database\n"
+		"  --json        Format the output using JSON\n",
 		cli_sentinel_getopts,
 		cli_sentinel_get);
 
@@ -138,6 +139,7 @@ cli_sentinel_getopts(int argc, char **argv)
 		{ "endpos", required_argument, NULL, 'E' },
 		{ "startpos", required_argument, NULL, 's' },
 		{ "current", no_argument, NULL, 'C' },
+		{ "json", no_argument, NULL, 'J' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "debug", no_argument, NULL, 'd' },
@@ -205,6 +207,13 @@ cli_sentinel_getopts(int argc, char **argv)
 			{
 				options.currentpos = true;
 				log_trace("--current");
+				break;
+			}
+
+			case 'J':
+			{
+				outputJSON = true;
+				log_trace("--json");
 				break;
 			}
 
@@ -605,16 +614,55 @@ cli_sentinel_get(int argc, char **argv)
 		exit(EXIT_CODE_SOURCE);
 	}
 
-	fformat(stdout, "%-10s %X/%X\n", "startpos",
-			LSN_FORMAT_ARGS(sentinel.startpos));
-	fformat(stdout, "%-10s %X/%X\n", "endpos",
-			LSN_FORMAT_ARGS(sentinel.endpos));
-	fformat(stdout, "%-10s %s\n", "apply",
-			sentinel.apply ? "enabled" : "disabled");
-	fformat(stdout, "%-10s %X/%X\n", "write_lsn",
-			LSN_FORMAT_ARGS(sentinel.write_lsn));
-	fformat(stdout, "%-10s %X/%X\n", "flush_lsn",
-			LSN_FORMAT_ARGS(sentinel.flush_lsn));
-	fformat(stdout, "%-10s %X/%X\n", "replay_lsn",
-			LSN_FORMAT_ARGS(sentinel.replay_lsn));
+	if (outputJSON)
+	{
+		JSON_Value *js = json_value_init_object();
+		JSON_Object *jsobj = json_value_get_object(js);
+
+		char startpos[PG_LSN_MAXLENGTH] = { 0 };
+		char endpos[PG_LSN_MAXLENGTH] = { 0 };
+		char write_lsn[PG_LSN_MAXLENGTH] = { 0 };
+		char flush_lsn[PG_LSN_MAXLENGTH] = { 0 };
+		char replay_lsn[PG_LSN_MAXLENGTH] = { 0 };
+
+		sformat(startpos, PG_LSN_MAXLENGTH, "%X/%X",
+				LSN_FORMAT_ARGS(sentinel.startpos));
+		sformat(endpos, PG_LSN_MAXLENGTH, "%X/%X",
+				LSN_FORMAT_ARGS(sentinel.endpos));
+		sformat(write_lsn, PG_LSN_MAXLENGTH, "%X/%X",
+				LSN_FORMAT_ARGS(sentinel.write_lsn));
+		sformat(flush_lsn, PG_LSN_MAXLENGTH, "%X/%X",
+				LSN_FORMAT_ARGS(sentinel.flush_lsn));
+		sformat(replay_lsn, PG_LSN_MAXLENGTH, "%X/%X",
+				LSN_FORMAT_ARGS(sentinel.replay_lsn));
+
+		json_object_set_string(jsobj, "startpos", startpos);
+		json_object_set_string(jsobj, "endpos", startpos);
+		json_object_set_boolean(jsobj, "apply", sentinel.apply);
+		json_object_set_string(jsobj, "write_lsn", write_lsn);
+		json_object_set_string(jsobj, "flush_lsn", flush_lsn);
+		json_object_set_string(jsobj, "replay_lsn", replay_lsn);
+
+		char *serialized_string = json_serialize_to_string_pretty(js);
+
+		fformat(stdout, "%s\n", serialized_string);
+
+		json_free_serialized_string(serialized_string);
+		json_value_free(js);
+	}
+	else
+	{
+		fformat(stdout, "%-10s %X/%X\n", "startpos",
+				LSN_FORMAT_ARGS(sentinel.startpos));
+		fformat(stdout, "%-10s %X/%X\n", "endpos",
+				LSN_FORMAT_ARGS(sentinel.endpos));
+		fformat(stdout, "%-10s %s\n", "apply",
+				sentinel.apply ? "enabled" : "disabled");
+		fformat(stdout, "%-10s %X/%X\n", "write_lsn",
+				LSN_FORMAT_ARGS(sentinel.write_lsn));
+		fformat(stdout, "%-10s %X/%X\n", "flush_lsn",
+				LSN_FORMAT_ARGS(sentinel.flush_lsn));
+		fformat(stdout, "%-10s %X/%X\n", "replay_lsn",
+				LSN_FORMAT_ARGS(sentinel.replay_lsn));
+	}
 }

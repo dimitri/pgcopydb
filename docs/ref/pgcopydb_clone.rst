@@ -174,6 +174,15 @@ the follow parts of the command even while the command is already running.
 The command :ref:`pgcopydb_stream_cleanup` must be used to free resources
 created to support the change data capture process.
 
+.. important::
+
+   Make sure to read the documentation for :ref:`pgcopydb_follow` and the
+   specifics about `Logical Replication Restrictions`__ as documented by
+   Postgres.
+
+   __ https://www.postgresql.org/docs/current/logical-replication-restrictions.html
+
+
 .. _change_data_capture_example_1:
 
 Change Data Capture Example 1
@@ -349,6 +358,10 @@ The following options are available to ``pgcopydb clone``:
   on the source instance to the target instance. As Postgres roles are
   global object, they do not exist only within the context of a specific
   database, so all the roles are copied over when using this option.
+
+  The ``pg_dumpall --roles-only`` is used to fetch the list of roles from
+  the source database, and this command includes support for passwords. As a
+  result, this operation requires the superuser privileges.
 
   See also :ref:`pgcopydb_copy_roles`.
 
