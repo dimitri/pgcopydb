@@ -33,7 +33,8 @@ definitions from the given source Postgres instance.
 
      --source          Postgres URI to the source database
      --target          Directory where to save the dump files
-     --snapshot            Use snapshot obtained with pg_export_snapshot
+     --dir             Work directory to use
+     --snapshot        Use snapshot obtained with pg_export_snapshot
 
 .. _pgcopydb_dump_pre_data:
 
@@ -52,7 +53,8 @@ The command ``pgcopydb dump pre-data`` uses pg_dump to export SQL schema
 
      --source          Postgres URI to the source database
      --target          Directory where to save the dump files
-     --snapshot            Use snapshot obtained with pg_export_snapshot
+     --dir             Work directory to use
+     --snapshot        Use snapshot obtained with pg_export_snapshot
 
 .. _pgcopydb_dump_post_data:
 
@@ -71,7 +73,8 @@ The command ``pgcopydb dump post-data`` uses pg_dump to export SQL schema
 
      --source          Postgres URI to the source database
      --target          Directory where to save the dump files
-     --snapshot            Use snapshot obtained with pg_export_snapshot
+     --dir             Work directory to use
+     --snapshot        Use snapshot obtained with pg_export_snapshot
 
 
 .. _pgcopydb_dump_roles:
@@ -131,7 +134,15 @@ The following options are available to ``pgcopydb dump schema``:
 
 --target
 
-  Target directory where to write output and temporary files.
+  Connection string to the target Postgres instance.
+
+--dir
+
+  During its normal operations pgcopydb creates a lot of temporary files to
+  track sub-processes progress. Temporary files are created in the directory
+  location given by this option, or defaults to
+  ``${TMPDIR}/pgcopydb`` when the environment variable is set, or
+  then to ``/tmp/pgcopydb``.
 
 --snapshot
 
