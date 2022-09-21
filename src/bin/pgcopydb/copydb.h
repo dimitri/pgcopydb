@@ -80,6 +80,7 @@ typedef struct CopyFilePaths
 typedef struct DumpPaths
 {
 	char rolesFilename[MAXPGPATH];   /* pg_dumpall --roles-only */
+	char extnspFilename[MAXPGPATH];  /* pg_dump --schema-only -n ... */
 
 	char preFilename[MAXPGPATH];     /* pg_dump --section=pre-data */
 	char preListFilename[MAXPGPATH]; /* pg_restore --list */
@@ -375,6 +376,8 @@ bool copydb_wait_for_subprocesses(void);
 bool copydb_collect_finished_subprocesses(bool *allDone);
 
 bool copydb_copy_roles(CopyDataSpec *copySpecs);
+bool copydb_copy_extensions(CopyDataSpec *copySpecs,
+							SourceExtensionArray *extensionArray);
 
 /* indexes.c */
 

@@ -461,6 +461,9 @@ copydb_prepare_dump_paths(CopyFilePaths *cfPaths, DumpPaths *dumpPaths)
 	sformat(dumpPaths->rolesFilename, MAXPGPATH, "%s/%s",
 			cfPaths->schemadir, "roles.sql");
 
+	sformat(dumpPaths->extnspFilename, MAXPGPATH, "%s/%s",
+			cfPaths->schemadir, "extnamespaces.dump");
+
 	sformat(dumpPaths->preFilename, MAXPGPATH, "%s/%s",
 			cfPaths->schemadir, "pre.dump");
 
@@ -1291,4 +1294,44 @@ copydb_copy_roles(CopyDataSpec *copySpecs)
 	}
 
 	return true;
+}
+
+
+/*
+ * copydb_copy_extensions copies extensions from the source instance into the
+ * target instance.
+ */
+bool
+copydb_copy_extensions(CopyDataSpec *copySpecs,
+					   SourceExtensionArray *extensionArray)
+{
+	int errors = 0;
+	PGSQL dst = { 0 };
+
+	if (!pgsql_init(&dst, copySpecs->target_pguri, PGSQL_CONN_TARGET))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_TARGET);
+	}
+
+	for (int i = 0; i < extensionArray->count; i++)
+	{
+		SourceExtension *ext = &(extensionArray->array[i]);
+
+		char sql[BUFSIZE] = { 0 };
+
+		sformat(sql, sizeof(sql),
+				"create extension if not exists \"%s\" cascade",
+				ext->extname);
+
+		log_info("Creating extension \"%s\"", ext->extname);
+
+		if (!pgsql_execute(&dst, sql))
+		{
+			log_error("Failed to create extension \"%s\"", ext->extname);
+			++errors;
+		}
+	}
+
+	return errors == 0;
 }
