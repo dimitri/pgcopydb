@@ -631,18 +631,22 @@ copydb_init_specs(CopyDataSpec *specs,
 		return false;
 	}
 
-	/* create the VACUUM process queue */
-	if (!queue_create(&(specs->vacuumQueue)))
+	if (specs->section == DATA_SECTION_ALL ||
+		specs->section == DATA_SECTION_TABLE_DATA)
 	{
-		log_error("Failed to create the VACUUM process queue");
-		return false;
-	}
+		/* create the VACUUM process queue */
+		if (!queue_create(&(specs->vacuumQueue)))
+		{
+			log_error("Failed to create the VACUUM process queue");
+			return false;
+		}
 
-	/* create the CREATE INDEX process queue */
-	if (!queue_create(&(specs->indexQueue)))
-	{
-		log_error("Failed to create the INDEX process queue");
-		return false;
+		/* create the CREATE INDEX process queue */
+		if (!queue_create(&(specs->indexQueue)))
+		{
+			log_error("Failed to create the INDEX process queue");
+			return false;
+		}
 	}
 
 	/* we only respect the --skip-blobs option in pgcopydb copy-db command */
