@@ -437,10 +437,11 @@ cli_list_extensions(int argc, char **argv)
 
 		for (int c = 0; c < ext->config.count; c++)
 		{
-			sformat(config, sizeof(config), "%s%s%u",
+			sformat(config, sizeof(config), "%s%s\"%s\".\"%s\"",
 					config,
 					c == 0 ? "" : ",",
-					ext->config.array[c].oid);
+					ext->config.array[c].nspname,
+					ext->config.array[c].relname);
 		}
 
 		fformat(stdout, "%10u | %20s | %20s | %10d | %s\n",

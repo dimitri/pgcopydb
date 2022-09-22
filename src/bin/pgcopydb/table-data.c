@@ -63,6 +63,21 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 		}
 	}
 
+	/* first, are we doing extensions? */
+	if (specs->section == DATA_SECTION_ALL ||
+		specs->section == DATA_SECTION_EXTENSION)
+	{
+		SourceExtensionArray *extensionArray = &(specs->extensionArray);
+
+		if (!schema_list_extensions(src, extensionArray))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		log_info("Fetched information for %d extensions", extensionArray->count);
+	}
+
 	/* now fetch the list of tables from the source database */
 	if (specs->section == DATA_SECTION_ALL ||
 		specs->section == DATA_SECTION_TABLE_DATA)

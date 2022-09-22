@@ -689,24 +689,23 @@ cli_copy_extensions(int argc, char **argv)
 {
 	CopyDataSpec copySpecs = { 0 };
 
-	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_SCHEMA);
+	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_EXTENSION);
 
-	PGSQL pgsql = { 0 };
-	SourceExtensionArray extensionArray = { 0, NULL };
-
-	if (!pgsql_init(&pgsql, copySpecs.source_pguri, PGSQL_CONN_SOURCE))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
-	}
-
-	if (!schema_list_extensions(&pgsql, &extensionArray))
+	if (!copydb_prepare_snapshot(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (!copydb_copy_extensions(&copySpecs, &extensionArray))
+	/* fetch schema information from source catalogs, including filtering */
+	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
+	{
+		/* errors have already been logged */
+		(void) copydb_close_snapshot(&copySpecs);
+		exit(EXIT_CODE_TARGET);
+	}
+
+	if (!copydb_copy_extensions(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);

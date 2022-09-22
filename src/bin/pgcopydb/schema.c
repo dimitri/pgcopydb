@@ -137,7 +137,9 @@ schema_list_extensions(PGSQL *pgsql, SourceExtensionArray *extArray)
 
 	char *sql =
 		"select oid, extname, extnamespace::regnamespace, extrelocatable, "
-		"       0 as count, null as n, null as extconfig, null as extcondition "
+		"       0 as count, null as n, "
+		"       null as extconfig, null as nspname, null as relname, "
+		"       null as extcondition "
 		"  from pg_extension e "
 		" where extconfig is null "
 
@@ -145,10 +147,15 @@ schema_list_extensions(PGSQL *pgsql, SourceExtensionArray *extArray)
 
 		"select oid, extname, extnamespace::regnamespace, extrelocatable, "
 		"       array_length(e.extconfig, 1) as count, "
-		"       extconfig.n, extconfig.extconfig, "
+		"       extconfig.n, "
+		"       extconfig.extconfig, n.nspname, c.relname, "
 		"       extcondition[extconfig.n] "
 		"  from pg_extension e, "
-		"       unnest(extconfig) with ordinality as extconfig(extconfig, n) ";
+		"       unnest(extconfig) with ordinality as extconfig(extconfig, n) "
+		"        left join pg_class c on c.oid = extconfig.extconfig "
+		"        join pg_namespace n on c.relnamespace = n.oid "
+		" where extconfig.extconfig is not null";
+
 	if (!pgsql_execute_with_params(pgsql, sql,
 								   0, NULL, NULL,
 								   &parseContext, &getExtensionList))
@@ -2275,9 +2282,9 @@ getExtensionList(void *ctx, PGresult *result)
 
 	log_debug("getExtensionList: %d", nTuples);
 
-	if (PQnfields(result) != 8)
+	if (PQnfields(result) != 10)
 	{
-		log_error("Query returned %d columns, expected 8", PQnfields(result));
+		log_error("Query returned %d columns, expected 10", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -2490,13 +2497,37 @@ parseCurrentExtensionConfig(PGresult *result,
 		++errors;
 	}
 
-	/* 8. extcondition */
+	/* 8. n.nspname */
 	value = PQgetvalue(result, rowNumber, 7);
+	int length = strlcpy(extConfig->nspname, value, NAMEDATALEN);
+
+	if (length >= NAMEDATALEN)
+	{
+		log_error("Schema name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (NAMEDATALEN - 1)",
+				  value, length, NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* 9. c.relname */
+	value = PQgetvalue(result, rowNumber, 8);
+	length = strlcpy(extConfig->relname, value, NAMEDATALEN);
+
+	if (length >= NAMEDATALEN)
+	{
+		log_error("Sequence name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (NAMEDATALEN - 1)",
+				  value, length, NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* 10. extcondition */
+	value = PQgetvalue(result, rowNumber, 9);
 	extConfig->condition = strdup(value);
 
 	if (extConfig->condition == NULL)
 	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
+		log_error(ALLOCATION_FAILED_ERROR);
 		++errors;
 	}
 

@@ -150,6 +150,7 @@ typedef enum
 {
 	DATA_SECTION_NONE = 0,
 	DATA_SECTION_SCHEMA,
+	DATA_SECTION_EXTENSION,
 	DATA_SECTION_TABLE_DATA,
 	DATA_SECTION_SET_SEQUENCES,
 	DATA_SECTION_INDEXES,
@@ -290,6 +291,7 @@ typedef struct CopyDataSpec
 	Queue indexQueue;
 
 	DumpPaths dumpPaths;
+	SourceExtensionArray extensionArray;
 	SourceTableArray sourceTableArray;
 	SourceIndexArray sourceIndexArray;
 	CopyTableDataSpecsArray tableSpecsArray;
@@ -376,8 +378,7 @@ bool copydb_wait_for_subprocesses(void);
 bool copydb_collect_finished_subprocesses(bool *allDone);
 
 bool copydb_copy_roles(CopyDataSpec *copySpecs);
-bool copydb_copy_extensions(CopyDataSpec *copySpecs,
-							SourceExtensionArray *extensionArray);
+bool copydb_copy_extensions(CopyDataSpec *copySpecs);
 
 /* indexes.c */
 

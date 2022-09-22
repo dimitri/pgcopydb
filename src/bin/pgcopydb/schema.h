@@ -18,12 +18,14 @@
 
 
 /*
- * SourceExtension caches the inforamtion we need about all the extensions
+ * SourceExtension caches the information we need about all the extensions
  * found in the source database.
  */
 typedef struct SourceExtensionConfig
 {
 	uint32_t oid;               /* pg_class.oid */
+	char nspname[NAMEDATALEN];
+	char relname[NAMEDATALEN];
 	char *condition;            /* strdup from PQresult: malloc'ed area */
 } SourceExtensionConfig;
 

@@ -1760,19 +1760,30 @@ static bool
 pg_copy_send_query(PGSQL *pgsql,
 				   const char *qname, ExecStatusType status, bool freeze)
 {
-	char sql[BUFSIZE] = { 0 };
+	char *sql = NULL;
 
 	if (status == PGRES_COPY_OUT)
 	{
 		/* There is no COPY TO with FREEZE */
-		sformat(sql, sizeof(sql), "copy %s to stdout", qname);
+		char *template = "copy %s to stdout";
+		size_t len = strlen(template) + strlen(qname) + 1;
+
+		sql = (char *) calloc(len, sizeof(char));
+
+		sformat(sql, len, template, qname);
 	}
 	else if (status == PGRES_COPY_IN)
 	{
-		sformat(sql, sizeof(sql),
-				"copy %s from stdin %s",
-				qname,
-				freeze ? "with (freeze)" : "");
+		char *template =
+			freeze
+			? "copy %s from stdin with (freeze)"
+			: "copy %s from stdin";
+
+		size_t len = strlen(template) + strlen(qname) + 1;
+
+		sql = (char *) calloc(len, sizeof(char));
+
+		sformat(sql, len, template, qname);
 	}
 	else
 	{
@@ -1780,9 +1791,11 @@ pg_copy_send_query(PGSQL *pgsql,
 		return false;
 	}
 
-	log_debug("%s;", sql);
+	log_notice("%s;", sql);
 
 	PGresult *res = PQexec(pgsql->connection, sql);
+
+	free(sql);
 
 	if (PQresultStatus(res) != status)
 	{
