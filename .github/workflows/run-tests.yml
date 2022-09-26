@@ -26,6 +26,7 @@ jobs:
           - filtering
           - cdc
           - follow
+          - extensions
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
