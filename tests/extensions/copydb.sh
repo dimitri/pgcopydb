@@ -26,6 +26,7 @@ EOF
 
 psql -q -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-schema.sql
 psql -q -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
+psql -q -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pgcopydb/countries.sql
 
 # pgcopydb copy db uses the environment variables
 pgcopydb copy-db
