@@ -940,7 +940,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"         select 1 "
 		"           from pg_depend d "
 		"          where d.classid = 'pg_class'::regclass "
-		"            and d.objid = c.oid "
+		"            and d.objid = s.oid "
 		"            and d.deptype = 'e' "
 		"       ) "
 
@@ -1009,7 +1009,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"         select 1 "
 		"           from pg_depend d "
 		"          where d.classid = 'pg_class'::regclass "
-		"            and d.objid = c.oid "
+		"            and d.objid = s.oid "
 		"            and d.deptype = 'e' "
 		"       ) "
 
@@ -1065,7 +1065,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"         select 1 "
 		"           from pg_depend d "
 		"          where d.classid = 'pg_class'::regclass "
-		"            and d.objid = c.oid "
+		"            and d.objid = s.oid "
 		"            and d.deptype = 'e' "
 		"       ) "
 
@@ -1128,7 +1128,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"         select 1 "
 		"           from pg_depend d "
 		"          where d.classid = 'pg_class'::regclass "
-		"            and d.objid = c.oid "
+		"            and d.objid = s.oid "
 		"            and d.deptype = 'e' "
 		"       ) "
 
