@@ -1060,6 +1060,7 @@ cli_list_schema(int argc, char **argv)
 						   restoreOptions,
 						   false, /* roles */
 						   false, /* skipLargeObjects */
+						   false, /* skipExtensions */
 						   false, /* restart */
 						   true,  /* resume */
 						   false)) /* consistent */
@@ -1157,6 +1158,7 @@ cli_list_progress(int argc, char **argv)
 						   restoreOptions,
 						   false, /* roles */
 						   false, /* skipLargeObjects */
+						   false, /* skipExtensions */
 						   false, /* restart */
 						   true,  /* resume */
 						   false)) /* consistent */

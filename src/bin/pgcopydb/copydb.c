@@ -534,6 +534,7 @@ copydb_init_specs(CopyDataSpec *specs,
 				  RestoreOptions restoreOptions,
 				  bool roles,
 				  bool skipLargeObjects,
+				  bool skipExtensions,
 				  bool restart,
 				  bool resume,
 				  bool consistent)
@@ -557,6 +558,7 @@ copydb_init_specs(CopyDataSpec *specs,
 		.restoreOptions = restoreOptions,
 		.roles = roles,
 		.skipLargeObjects = skipLargeObjects,
+		.skipExtensions = skipExtensions,
 
 		.restart = restart,
 		.resume = resume,
@@ -575,6 +577,12 @@ copydb_init_specs(CopyDataSpec *specs,
 
 		.vacuumQueue = { 0 },
 		.indexQueue = { 0 },
+
+		.extensionArray = { 0, NULL },
+		.sourceTableArray = { 0, NULL },
+		.sourceIndexArray = { 0, NULL },
+		.sequenceArray = { 0, NULL },
+		.tableSpecsArray = { 0, NULL },
 
 		.sourceTableHashByOid = NULL
 	};

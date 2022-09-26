@@ -29,6 +29,14 @@ static bool prepareFilterCopyTableList(PGSQL *pgsql,
 									   const char *temp_table_name);
 
 
+/* Context used when fetching schema definitions */
+typedef struct SourceSchemaArrayContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	SourceSchemaArray *schemaArray;
+	bool parsedOk;
+} SourceSchemaArrayContext;
+
 /* Context used when fetching all the extension definitions */
 typedef struct SourceExtensionArrayContext
 {
@@ -76,6 +84,8 @@ typedef struct SourcePartitionContext
 	SourceTable *table;
 	bool parsedOk;
 } SourcePartitionContext;
+
+static void getSchemaList(void *ctx, PGresult *result);
 
 static void getExtensionList(void *ctx, PGresult *result);
 
@@ -169,6 +179,47 @@ schema_list_extensions(PGSQL *pgsql, SourceExtensionArray *extArray)
 	if (!parseContext.parsedOk)
 	{
 		log_error("Failed to list extensions");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * schema_list_extensions grabs the list of extensions from the given source
+ * Postgres instance and allocates a SourceExtension array with the result of
+ * the query.
+ */
+bool
+schema_list_ext_schemas(PGSQL *pgsql, SourceSchemaArray *array)
+{
+	SourceSchemaArrayContext parseContext = { { 0 }, array, false };
+
+	char *sql =
+		"select n.oid, n.nspname, "
+		"       format('- %s %s', "
+		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\n\r]', ' ')) "
+		"  from pg_namespace n "
+		"       join pg_roles auth ON auth.oid = n.nspowner "
+		"       join pg_depend d "
+		"         on d.refclassid = 'pg_namespace'::regclass "
+		"        and d.refobjid = n.oid "
+		"        and d.classid = 'pg_extension'::regclass "
+		" where nspname <> 'public' and nspname !~ '^pg_'";
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   0, NULL, NULL,
+								   &parseContext, &getSchemaList))
+	{
+		log_error("Failed to list schemas that extensions depend on");
+		return false;
+	}
+
+	if (!parseContext.parsedOk)
+	{
+		log_error("Failed to list schemas that extensions depend on");
 		return false;
 	}
 
@@ -2343,6 +2394,89 @@ prepareFilterCopyTableList(PGSQL *pgsql,
 	}
 
 	return true;
+}
+
+
+/*
+ * getSchemaList loops over the SQL result for the schema array query and
+ * allocates an array of schemas then populates it with the query result.
+ */
+static void
+getSchemaList(void *ctx, PGresult *result)
+{
+	SourceSchemaArrayContext *context = (SourceSchemaArrayContext *) ctx;
+	int nTuples = PQntuples(result);
+
+	log_debug("getSchemaList: %d", nTuples);
+
+	if (PQnfields(result) != 3)
+	{
+		log_error("Query returned %d columns, expected 3", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	/* we're not supposed to re-cycle arrays here */
+	if (context->schemaArray->array != NULL)
+	{
+		/* issue a warning but let's try anyway */
+		log_warn("BUG? context's array is not null in getSchemaList");
+
+		free(context->schemaArray->array);
+		context->schemaArray->array = NULL;
+	}
+
+	context->schemaArray->count = nTuples;
+	context->schemaArray->array =
+		(SourceSchema *) calloc(nTuples, sizeof(SourceSchema));
+
+	if (context->schemaArray->array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return;
+	}
+
+	int errors = 0;
+
+	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
+	{
+		SourceSchema *schema = &(context->schemaArray->array[rowNumber]);
+
+		/* 1. oid */
+		char *value = PQgetvalue(result, rowNumber, 0);
+
+		if (!stringToUInt32(value, &(schema->oid)) || schema->oid == 0)
+		{
+			log_error("Invalid OID \"%s\"", value);
+			++errors;
+		}
+
+		/* 2. nspname */
+		value = PQgetvalue(result, rowNumber, 1);
+		int length = strlcpy(schema->nspname, value, NAMEDATALEN);
+
+		if (length >= NAMEDATALEN)
+		{
+			log_error("Extension name \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (NAMEDATALEN - 1)",
+					  value, length, NAMEDATALEN - 1);
+			++errors;
+		}
+
+		/* 3. restoreListName */
+		value = PQgetvalue(result, rowNumber, 2);
+		length = strlcpy(schema->restoreListName, value, RESTORE_LIST_NAMEDATALEN);
+
+		if (length >= RESTORE_LIST_NAMEDATALEN)
+		{
+			log_error("Table restore list name \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (RESTORE_LIST_NAMEDATALEN - 1)",
+					  value, length, RESTORE_LIST_NAMEDATALEN - 1);
+			++errors;
+		}
+	}
+
+	context->parsedOk = errors == 0;
 }
 
 

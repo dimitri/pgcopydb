@@ -16,6 +16,19 @@
 /* the pg_restore -l output uses "schema name owner" */
 #define RESTORE_LIST_NAMEDATALEN (3 * NAMEDATALEN + 3)
 
+typedef struct SourceSchema
+{
+	uint32_t oid;
+	char nspname[NAMEDATALEN];
+	char restoreListName[RESTORE_LIST_NAMEDATALEN];
+} SourceSchema;
+
+typedef struct SourceSchemaArray
+{
+	int count;
+	SourceSchema *array;        /* malloc'ed area */
+} SourceSchemaArray;
+
 
 /*
  * SourceExtension caches the information we need about all the extensions
@@ -196,6 +209,7 @@ typedef struct SourceDependArray
 	SourceDepend *array;         /* malloc'ed area */
 } SourceDependArray;
 
+bool schema_list_ext_schemas(PGSQL *pgsql, SourceSchemaArray *array);
 
 bool schema_list_extensions(PGSQL *pgsql, SourceExtensionArray *extArray);
 

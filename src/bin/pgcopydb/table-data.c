@@ -544,6 +544,82 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 	SourceSequenceArray sequenceArray = { 0, NULL };
 	SourceDependArray dependArray = { 0, NULL };
 
+	if (specs->skipExtensions)
+	{
+		SourceSchemaArray schemaArray = { 0, NULL };
+
+		/* fetch the list of schemas that extensions depend on */
+		if (!schema_list_ext_schemas(pgsql, &schemaArray))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		for (int i = 0; i < schemaArray.count; i++)
+		{
+			SourceSchema *schema = &(schemaArray.array[i]);
+
+			SourceFilterItem *item = malloc(sizeof(SourceFilterItem));
+
+			if (item == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			item->oid = schema->oid;
+			item->kind = OBJECT_KIND_SCHEMA;
+			item->schema = *schema;
+
+			strlcpy(item->restoreListName,
+					schema->restoreListName,
+					RESTORE_LIST_NAMEDATALEN);
+
+			log_info("Filtering extension schema %u %s %s",
+					 item->oid, schema->nspname, item->restoreListName);
+
+			HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), item);
+
+			size_t len = strlen(item->restoreListName);
+			HASH_ADD(hName, hName, restoreListName, len, item);
+		}
+
+		/* free dynamic memory that's not needed anymore */
+		free(schemaArray.array);
+
+		/*
+		 * The main extensionArray can be used both for filtering the
+		 * pg_restore archive catalog, as we either filter all of the
+		 * extensions or none of them.
+		 */
+		for (int i = 0; i < specs->extensionArray.count; i++)
+		{
+			SourceExtension *ext = &(specs->extensionArray.array[i]);
+
+			SourceFilterItem *item = malloc(sizeof(SourceFilterItem));
+
+			if (item == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			item->oid = ext->oid;
+			item->kind = OBJECT_KIND_EXTENSION;
+			item->extension = *ext;
+
+			/* an extension's pg_restore list name is just its name */
+			strlcpy(item->restoreListName,
+					ext->extname,
+					RESTORE_LIST_NAMEDATALEN);
+
+			HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), item);
+
+			size_t len = strlen(item->restoreListName);
+			HASH_ADD(hName, hName, restoreListName, len, item);
+		}
+	}
+
 	/*
 	 * Take the complement of the filtering, to list the OIDs of objects that
 	 * we do not process.
@@ -554,6 +630,12 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 
 	if (filters->type == SOURCE_FILTER_TYPE_NONE)
 	{
+		if (specs->skipExtensions)
+		{
+			/* publish our hash tables to the main CopyDataSpec instance */
+			specs->hOid = hOid;
+			specs->hName = hName;
+		}
 		return true;
 	}
 
@@ -739,6 +821,16 @@ copydb_ObjectKindToString(ObjectKind kind)
 		case OBJECT_KIND_UNKNOWN:
 		{
 			return "unknown";
+		}
+
+		case OBJECT_KIND_SCHEMA:
+		{
+			return "schema";
+		}
+
+		case OBJECT_KIND_EXTENSION:
+		{
+			return "extension";
 		}
 
 		case OBJECT_KIND_TABLE:

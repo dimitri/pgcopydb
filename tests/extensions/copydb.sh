@@ -28,8 +28,18 @@ psql -q -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-schema.sql
 psql -q -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
 psql -q -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pgcopydb/countries.sql
 
+coproc ( pgcopydb snapshot -vv )
+
+sleep 1
+
+# copy the extensions separately
+pgcopydb copy extensions
+
 # pgcopydb copy db uses the environment variables
-pgcopydb copy-db
+pgcopydb copy-db --skip-extensions
+
+kill -TERM ${COPROC_PID}
+wait ${COPROC_PID}
 
 pgcopydb list extensions --source ${PGCOPYDB_SOURCE_PGURI}
 pgcopydb list extensions --source ${PGCOPYDB_TARGET_PGURI}

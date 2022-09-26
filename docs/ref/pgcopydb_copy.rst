@@ -118,6 +118,11 @@ CREATE EXTENSION IF NOT EXISTS.
      --target              Postgres URI to the target database
      --dir                 Work directory to use
 
+When copying extensions, this command also takes care of copying any
+`Extension Configuration Tables`__ user-data to the target database.
+
+__ https://www.postgresql.org/docs/current/extend-extensions.html#EXTEND-EXTENSIONS-CONFIG-TABLES
+
 .. _pgcopydb_copy_schema:
 
 pgcopydb copy schema

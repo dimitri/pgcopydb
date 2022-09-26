@@ -491,6 +491,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "no-acl", no_argument, NULL, 'x' }, /* pg_restore -x */
 		{ "skip-blobs", no_argument, NULL, 'B' },
 		{ "skip-large-objects", no_argument, NULL, 'B' },
+		{ "skip-extensions", no_argument, NULL, 'e' },
 		{ "filter", required_argument, NULL, 'F' },
 		{ "filters", required_argument, NULL, 'F' },
 		{ "restart", no_argument, NULL, 'r' },
@@ -652,6 +653,13 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				options.skipLargeObjects = true;
 				log_trace("--skip-large-objects");
+				break;
+			}
+
+			case 'e':
+			{
+				options.skipExtensions = true;
+				log_trace("--skip-extensions");
 				break;
 			}
 
@@ -924,6 +932,7 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 						   copyDBoptions.restoreOptions,
 						   copyDBoptions.roles,
 						   copyDBoptions.skipLargeObjects,
+						   copyDBoptions.skipExtensions,
 						   copyDBoptions.restart,
 						   copyDBoptions.resume,
 						   !copyDBoptions.notConsistent))

@@ -37,6 +37,7 @@ Postgres instance to the target Postgres instance.
      --no-acl                   Prevent restoration of access privileges (grant/revoke commands).
      --no-comments              Do not output commands to restore comments
      --skip-large-objects       Skip copying large objects (blobs)
+     --skip-extensions          Skip restoring extensions
      --filters <filename>       Use the filters defined in <filename>
      --restart                  Allow restarting when temp files exist already
      --resume                   Allow resuming operations after a failure
@@ -379,6 +380,20 @@ The following options are available to ``pgcopydb clone``:
 
   Skip copying large objects, also known as blobs, when copying the data
   from the source database to the target database.
+
+--skip-extensions
+
+  Skip copying extensions from the source database to the target database.
+
+  When used, schema that extensions depend-on are also skipped: it is
+  expected that creating needed extensions on the target system is then the
+  responsibility of another command (such as
+  :ref:`pgcopydb_copy_extensions`), and schemas that extensions depend-on
+  are part of that responsibility.
+
+  Because creating extensions require superuser, this allows a multi-steps
+  approach where extensions are dealt with superuser privileges, and then
+  the rest of the pgcopydb operations are done without superuser privileges.
 
 --filters <filename>
 
