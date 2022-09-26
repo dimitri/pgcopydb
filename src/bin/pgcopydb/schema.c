@@ -145,7 +145,7 @@ schema_list_extensions(PGSQL *pgsql, SourceExtensionArray *extArray)
 
 		" UNION ALL "
 
-		"select oid, extname, extnamespace::regnamespace, extrelocatable, "
+		"select e.oid, extname, extnamespace::regnamespace, extrelocatable, "
 		"       array_length(e.extconfig, 1) as count, "
 		"       extconfig.n, "
 		"       extconfig.extconfig, n.nspname, c.relname, "
