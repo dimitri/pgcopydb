@@ -1007,14 +1007,31 @@ parse_archive_list(char *list, ArchiveContentArray *contents)
 						pgRestoreDescriptionArray[i].str,
 						pgRestoreDescriptionArray[i].len) == 0)
 			{
-				strlcpy(item->desc,
-						pgRestoreDescriptionArray[i].str,
-						sizeof(item->desc));
+				/*
+				 * Some pg_restore archive catalog TOC entries have a quite a
+				 * special restoreListName, that needs some tweaking to be able
+				 * to match it to the normal one we have in our hash tables.
+				 *
+				 */
+				if (strcmp(pgRestoreDescriptionArray[i].str, "ACL") == 0 ||
+					strcmp(pgRestoreDescriptionArray[i].str, "COMMENT") == 0)
+				{
+					/* ignore errors */
+					if (!parse_archive_acl_or_comment(ptr, item))
+					{
+						log_debug("Failed to parse ACL or COMMENT: %s", ptr);
+					}
+				}
+				else
+				{
+					strlcpy(item->desc,
+							pgRestoreDescriptionArray[i].str,
+							sizeof(item->desc));
 
-				strlcpy(item->restoreListName,
-						ptr + pgRestoreDescriptionArray[i].len + 1,
-						sizeof(item->restoreListName));
-
+					strlcpy(item->restoreListName,
+							ptr + pgRestoreDescriptionArray[i].len + 1,
+							sizeof(item->restoreListName));
+				}
 				break;
 			}
 		}
@@ -1026,6 +1043,102 @@ parse_archive_list(char *list, ArchiveContentArray *contents)
 
 		++contents->count;
 	}
+
+	return true;
+}
+
+
+/*
+ * parse_archive_acl_or_comment parses the ACL or COMMENT entry of the
+ * pg_restore archive catalog TOC.
+ *
+ * 4837; 0 0 ACL - SCHEMA public postgres
+ * 4838; 0 0 COMMENT - SCHEMA topology dim
+ * 4839; 0 0 COMMENT - EXTENSION intarray
+ * 4840; 0 0 COMMENT - EXTENSION postgis
+ *
+ * Here the - is for the namespace, which doesn't apply, and then the TAG is
+ * composite: TYPE name; where it usually is just the object name.
+ *
+ * The ptr argument is positioned at the start of either ACL or COMMENT.
+ */
+bool
+parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
+{
+	log_trace("parse_archive_acl_or_comment: %s", ptr);
+
+	/* skip "ACL - " or "COMMENT - " */
+	char *aclPrefix = "ACL - ";
+	size_t aclPrefixLen = strlen(aclPrefix);
+
+	char *commentPrefix = "COMMENT - ";
+	size_t commentPrefixLen = strlen(commentPrefix);
+
+	if (strncmp(ptr, aclPrefix, aclPrefixLen) == 0)
+	{
+		ptr += aclPrefixLen;
+		strlcpy(item->desc, "ACL", sizeof(item->desc));
+	}
+	else if (strncmp(ptr, commentPrefix, commentPrefixLen) == 0)
+	{
+		ptr += commentPrefixLen;
+		strlcpy(item->desc, "COMMENT", sizeof(item->desc));
+	}
+	else
+	{
+		log_warn("Failed to parse desc \"%s\" for ACL or COMMENT", ptr);
+		return false;
+	}
+
+	/*
+	 * At the moment we only support filtering ACLs and COMMENTS for SCHEMA and
+	 * EXTENSION objects, see --skip-extensions.
+	 */
+	char *SCHEMA = "SCHEMA ";
+	size_t SCHEMA_LEN = strlen(SCHEMA);
+
+	char *EXTENSION = "EXTENSION ";
+	size_t EXTENSION_LEN = strlen(EXTENSION);
+
+	if (strncmp(ptr, SCHEMA, SCHEMA_LEN) == 0)
+	{
+		/* a schema pg_restore list name is "- nspname rolname" */
+		char *nsp_rol_name = ptr + SCHEMA_LEN;
+
+		sformat(item->restoreListName, sizeof(item->restoreListName),
+				"- %s",
+				nsp_rol_name);
+	}
+	else if (strncmp(ptr, EXTENSION, EXTENSION_LEN) == 0)
+	{
+		/*
+		 * The extension name is following by a space, even though there is no
+		 * owner to follow that space. We don't want that space at the end of
+		 * the extension's name.
+		 */
+		char *extname = ptr + EXTENSION_LEN;
+		char *space = strchr(extname, ' ');
+		*space = '\0';
+
+		/* an extension's pg_restore list name is just its name */
+		sformat(item->restoreListName, sizeof(item->restoreListName),
+				"%s",
+				extname);
+	}
+	else
+	{
+		char *sep = strchr(ptr, ' ');
+		*sep = '\0';
+
+		log_debug("Failed to parse %s for %s: not supported yet",
+				  item->desc,
+				  ptr);
+		return false;
+	}
+
+	log_trace("parse_archive_acl_or_comment: %s [%s]",
+			  item->desc,
+			  item->restoreListName);
 
 	return true;
 }

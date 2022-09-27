@@ -105,4 +105,6 @@ bool pg_restore_list(PostgresPaths *pgPaths, const char *filename,
 
 bool parse_archive_list(char *list, ArchiveContentArray *archive);
 
+bool parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item);
+
 #endif /* PGCMD_H */
