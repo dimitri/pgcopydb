@@ -384,7 +384,7 @@ bool copydb_wait_for_subprocesses(void);
 bool copydb_collect_finished_subprocesses(bool *allDone);
 
 bool copydb_copy_roles(CopyDataSpec *copySpecs);
-bool copydb_copy_extensions(CopyDataSpec *copySpecs);
+bool copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions);
 
 /* indexes.c */
 

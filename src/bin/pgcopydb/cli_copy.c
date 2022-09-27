@@ -705,7 +705,9 @@ cli_copy_extensions(int argc, char **argv)
 		exit(EXIT_CODE_TARGET);
 	}
 
-	if (!copydb_copy_extensions(&copySpecs))
+	bool createExtensions = true;
+
+	if (!copydb_copy_extensions(&copySpecs, createExtensions))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);

@@ -1027,11 +1027,30 @@ copydb_process_table_data_with_workers(CopyDataSpec *specs)
 				}
 			}
 
+			/* now COPY the extension configuration tables, while waiting */
+			int errors = 0;
+
+			if (!specs->skipExtensions)
+			{
+				bool createExtensions = false;
+
+				if (!copydb_copy_extensions(specs, createExtensions))
+				{
+					/* errors have already been logged */
+					++errors;
+				}
+			}
+
 			/* the COPY supervisor waits for the COPY workers */
 			if (!copydb_wait_for_subprocesses())
 			{
 				log_error("Some COPY worker process(es) have exited with error, "
 						  "see above for details");
+				++errors;
+			}
+
+			if (errors > 0)
+			{
 				exit(EXIT_CODE_INTERNAL_ERROR);
 			}
 

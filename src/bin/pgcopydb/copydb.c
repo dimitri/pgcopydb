@@ -1310,7 +1310,7 @@ copydb_copy_roles(CopyDataSpec *copySpecs)
  * target instance.
  */
 bool
-copydb_copy_extensions(CopyDataSpec *copySpecs)
+copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions)
 {
 	int errors = 0;
 	PGSQL dst = { 0 };
@@ -1327,18 +1327,21 @@ copydb_copy_extensions(CopyDataSpec *copySpecs)
 	{
 		SourceExtension *ext = &(extensionArray->array[i]);
 
-		char sql[BUFSIZE] = { 0 };
-
-		sformat(sql, sizeof(sql),
-				"create extension if not exists \"%s\" cascade",
-				ext->extname);
-
-		log_info("Creating extension \"%s\"", ext->extname);
-
-		if (!pgsql_execute(&dst, sql))
+		if (createExtensions)
 		{
-			log_error("Failed to create extension \"%s\"", ext->extname);
-			++errors;
+			char sql[BUFSIZE] = { 0 };
+
+			sformat(sql, sizeof(sql),
+					"create extension if not exists \"%s\" cascade",
+					ext->extname);
+
+			log_info("Creating extension \"%s\"", ext->extname);
+
+			if (!pgsql_execute(&dst, sql))
+			{
+				log_error("Failed to create extension \"%s\"", ext->extname);
+				++errors;
+			}
 		}
 
 		/* do we have to take care of extensions config table? */
