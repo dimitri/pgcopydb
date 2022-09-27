@@ -36,6 +36,7 @@
 	"  --no-acl                   Prevent restoration of access privileges (grant/revoke commands).\n" \
 	"  --no-comments              Do not output commands to restore comments\n" \
 	"  --skip-large-objects       Skip copying large objects (blobs)\n" \
+	"  --skip-extensions          Skip restoring extensions\n" \
 	"  --filters <filename>       Use the filters defined in <filename>\n" \
 	"  --restart                  Allow restarting when temp files exist already\n" \
 	"  --resume                   Allow resuming operations after a failure\n" \

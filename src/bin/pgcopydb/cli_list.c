@@ -26,6 +26,7 @@
 ListDBOptions listDBoptions = { 0 };
 
 static int cli_list_db_getopts(int argc, char **argv);
+static void cli_list_extensions(int argc, char **argv);
 static void cli_list_tables(int argc, char **argv);
 static void cli_list_table_parts(int argc, char **argv);
 static void cli_list_sequences(int argc, char **argv);
@@ -33,6 +34,15 @@ static void cli_list_indexes(int argc, char **argv);
 static void cli_list_depends(int argc, char **argv);
 static void cli_list_schema(int argc, char **argv);
 static void cli_list_progress(int argc, char **argv);
+
+static CommandLine list_extensions_command =
+	make_command(
+		"extensions",
+		"List all the source extensions to copy",
+		" --source ... ",
+		"  --source            Postgres URI to the source database\n",
+		cli_list_db_getopts,
+		cli_list_extensions);
 
 static CommandLine list_tables_command =
 	make_command(
@@ -117,6 +127,7 @@ static CommandLine list_progress_command =
 
 
 static CommandLine *list_subcommands[] = {
+	&list_extensions_command,
 	&list_tables_command,
 	&list_table_parts_command,
 	&list_sequences_command,
@@ -378,6 +389,70 @@ cli_list_db_getopts(int argc, char **argv)
 	listDBoptions = options;
 
 	return optind;
+}
+
+
+/*
+ * cli_list_extensions implements the command: pgcopydb list extensions
+ */
+static void
+cli_list_extensions(int argc, char **argv)
+{
+	PGSQL pgsql = { 0 };
+	SourceExtensionArray extensionArray = { 0, NULL };
+
+	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	if (!schema_list_extensions(&pgsql, &extensionArray))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_info("Fetched information for %d extensions", extensionArray.count);
+
+	fformat(stdout, "%10s | %20s | %20s | %10s | %s\n",
+			"OID",
+			"Name",
+			"Schema",
+			"Count",
+			"Config");
+
+	fformat(stdout, "%10s-+-%20s-+-%20s-+-%10s-+-%10s\n",
+			"----------",
+			"--------------------",
+			"--------------------",
+			"----------",
+			"----------");
+
+	for (int i = 0; i < extensionArray.count; i++)
+	{
+		SourceExtension *ext = &(extensionArray.array[i]);
+
+		char config[BUFSIZE] = { 0 };
+
+		for (int c = 0; c < ext->config.count; c++)
+		{
+			sformat(config, sizeof(config), "%s%s\"%s\".\"%s\"",
+					config,
+					c == 0 ? "" : ",",
+					ext->config.array[c].nspname,
+					ext->config.array[c].relname);
+		}
+
+		fformat(stdout, "%10u | %20s | %20s | %10d | %s\n",
+				ext->oid,
+				ext->extname,
+				ext->extnamespace,
+				ext->config.count,
+				config);
+	}
+
+	fformat(stdout, "\n");
 }
 
 
@@ -985,6 +1060,7 @@ cli_list_schema(int argc, char **argv)
 						   restoreOptions,
 						   false, /* roles */
 						   false, /* skipLargeObjects */
+						   false, /* skipExtensions */
 						   false, /* restart */
 						   true,  /* resume */
 						   false)) /* consistent */
@@ -1082,6 +1158,7 @@ cli_list_progress(int argc, char **argv)
 						   restoreOptions,
 						   false, /* roles */
 						   false, /* skipLargeObjects */
+						   false, /* skipExtensions */
 						   false, /* restart */
 						   true,  /* resume */
 						   false)) /* consistent */

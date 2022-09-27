@@ -158,6 +158,7 @@ with a semi-colon character (`;`).
      --target             Postgres URI to the target database
      --dir                Work directory to use
      --filters <filename> Use the filters defined in <filename>
+     --skip-extensions    Skip restoring extensions
      --restart            Allow restarting when temp files exist already
      --resume             Allow resuming operations after a failure
      --not-consistent     Allow taking a new snapshot on the source database
@@ -232,6 +233,20 @@ The following options are available to ``pgcopydb restore schema``:
   This option allows to exclude table and indexes from the copy operations.
   See :ref:`filtering` for details about the expected file format and the
   filtering options available.
+
+--skip-extensions
+
+  Skip copying extensions from the source database to the target database.
+
+  When used, schema that extensions depend-on are also skipped: it is
+  expected that creating needed extensions on the target system is then the
+  responsibility of another command (such as
+  :ref:`pgcopydb_copy_extensions`), and schemas that extensions depend-on
+  are part of that responsibility.
+
+  Because creating extensions require superuser, this allows a multi-steps
+  approach where extensions are dealt with superuser privileges, and then
+  the rest of the pgcopydb operations are done without superuser privileges.
 
 --restart
 

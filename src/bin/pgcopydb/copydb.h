@@ -80,6 +80,7 @@ typedef struct CopyFilePaths
 typedef struct DumpPaths
 {
 	char rolesFilename[MAXPGPATH];   /* pg_dumpall --roles-only */
+	char extnspFilename[MAXPGPATH];  /* pg_dump --schema-only -n ... */
 
 	char preFilename[MAXPGPATH];     /* pg_dump --section=pre-data */
 	char preListFilename[MAXPGPATH]; /* pg_restore --list */
@@ -149,6 +150,7 @@ typedef enum
 {
 	DATA_SECTION_NONE = 0,
 	DATA_SECTION_SCHEMA,
+	DATA_SECTION_EXTENSION,
 	DATA_SECTION_TABLE_DATA,
 	DATA_SECTION_SET_SEQUENCES,
 	DATA_SECTION_INDEXES,
@@ -222,6 +224,8 @@ typedef struct CopyTableDataSpecsArray
 typedef enum
 {
 	OBJECT_KIND_UNKNOWN = 0,
+	OBJECT_KIND_SCHEMA,
+	OBJECT_KIND_EXTENSION,
 	OBJECT_KIND_TABLE,
 	OBJECT_KIND_INDEX,
 	OBJECT_KIND_CONSTRAINT,
@@ -236,6 +240,8 @@ typedef struct SourceFilterItem
 	ObjectKind kind;
 
 	/* it's going to be only one of those, depending on the object kind */
+	SourceSchema schema;
+	SourceExtension extension;
 	SourceTable table;
 	SourceSequence sequence;
 	SourceIndex index;
@@ -268,6 +274,7 @@ typedef struct CopyDataSpec
 	RestoreOptions restoreOptions;
 	bool roles;
 	bool skipLargeObjects;
+	bool skipExtensions;
 
 	bool restart;
 	bool resume;
@@ -289,6 +296,7 @@ typedef struct CopyDataSpec
 	Queue indexQueue;
 
 	DumpPaths dumpPaths;
+	SourceExtensionArray extensionArray;
 	SourceTableArray sourceTableArray;
 	SourceIndexArray sourceIndexArray;
 	CopyTableDataSpecsArray tableSpecsArray;
@@ -343,6 +351,7 @@ bool copydb_init_specs(CopyDataSpec *specs,
 					   RestoreOptions restoreOptions,
 					   bool roles,
 					   bool skipLargeObjects,
+					   bool skipExtensions,
 					   bool restart,
 					   bool resume,
 					   bool consistent);
@@ -375,6 +384,7 @@ bool copydb_wait_for_subprocesses(void);
 bool copydb_collect_finished_subprocesses(bool *allDone);
 
 bool copydb_copy_roles(CopyDataSpec *copySpecs);
+bool copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions);
 
 /* indexes.c */
 

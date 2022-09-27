@@ -10,6 +10,7 @@ This command prefixes the following sub-commands:
 ::
 
   pgcopydb list
+    extensions   List all the source extensions to copy
     tables       List all the source tables to copy data from
     table-parts  List a source table copy partitions
     sequences    List all the source sequences to copy data from
@@ -18,6 +19,24 @@ This command prefixes the following sub-commands:
     schema       List the schema to migrate, formatted in JSON
     progress     List the progress
 
+
+.. _pgcopydb_list_extensions:
+
+pgcopydb list extensions
+------------------------
+
+pgcopydb list extensions - List all the source extensions to copy
+
+The command ``pgcopydb list extensions`` connects to the source database and
+executes a SQL query using the Postgres catalogs to get a list of all the
+extensions to COPY to the target database.
+
+::
+
+   pgcopydb list extensions: List all the source extensions to copy
+   usage: pgcopydb list extensions  --source ...
+
+     --source            Postgres URI to the source database
 
 .. _pgcopydb_list_tables:
 

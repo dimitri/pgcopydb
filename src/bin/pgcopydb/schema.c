@@ -29,6 +29,22 @@ static bool prepareFilterCopyTableList(PGSQL *pgsql,
 									   const char *temp_table_name);
 
 
+/* Context used when fetching schema definitions */
+typedef struct SourceSchemaArrayContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	SourceSchemaArray *schemaArray;
+	bool parsedOk;
+} SourceSchemaArrayContext;
+
+/* Context used when fetching all the extension definitions */
+typedef struct SourceExtensionArrayContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	SourceExtensionArray *extensionArray;
+	bool parsedOk;
+} SourceExtensionArrayContext;
+
 /* Context used when fetching all the table definitions */
 typedef struct SourceTableArrayContext
 {
@@ -69,6 +85,19 @@ typedef struct SourcePartitionContext
 	bool parsedOk;
 } SourcePartitionContext;
 
+static void getSchemaList(void *ctx, PGresult *result);
+
+static void getExtensionList(void *ctx, PGresult *result);
+
+static bool parseCurrentExtension(PGresult *result,
+								  int rowNumber,
+								  SourceExtension *extension,
+								  int *confIndex);
+
+static bool parseCurrentExtensionConfig(PGresult *result,
+										int rowNumber,
+										SourceExtensionConfig *extConfig);
+
 static void getTableArray(void *ctx, PGresult *result);
 
 static bool parseCurrentSourceTable(PGresult *result,
@@ -104,6 +133,99 @@ struct FilteringQueries
 	SourceFilterType type;
 	char *sql;
 };
+
+
+/*
+ * schema_list_extensions grabs the list of extensions from the given source
+ * Postgres instance and allocates a SourceExtension array with the result of
+ * the query.
+ */
+bool
+schema_list_extensions(PGSQL *pgsql, SourceExtensionArray *extArray)
+{
+	SourceExtensionArrayContext parseContext = { { 0 }, extArray, false };
+
+	char *sql =
+		"select e.oid, extname, extnamespace::regnamespace, extrelocatable, "
+		"       0 as count, null as n, "
+		"       null as extconfig, null as nspname, null as relname, "
+		"       null as extcondition "
+		"  from pg_extension e "
+		" where extconfig is null "
+
+		" UNION ALL "
+
+		"  select e.oid, extname, extnamespace::regnamespace, extrelocatable, "
+		"         array_length(e.extconfig, 1) as count, "
+		"         extconfig.n, "
+		"         extconfig.extconfig, n.nspname, c.relname, "
+		"         extcondition[extconfig.n] "
+		"    from pg_extension e, "
+		"         unnest(extconfig) with ordinality as extconfig(extconfig, n) "
+		"          left join pg_class c on c.oid = extconfig.extconfig "
+		"          join pg_namespace n on c.relnamespace = n.oid "
+		"   where extconfig.extconfig is not null "
+
+		"order by oid, n";
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   0, NULL, NULL,
+								   &parseContext, &getExtensionList))
+	{
+		log_error("Failed to list extensions");
+		return false;
+	}
+
+	if (!parseContext.parsedOk)
+	{
+		log_error("Failed to list extensions");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * schema_list_extensions grabs the list of extensions from the given source
+ * Postgres instance and allocates a SourceExtension array with the result of
+ * the query.
+ */
+bool
+schema_list_ext_schemas(PGSQL *pgsql, SourceSchemaArray *array)
+{
+	SourceSchemaArrayContext parseContext = { { 0 }, array, false };
+
+	char *sql =
+		"select n.oid, n.nspname, "
+		"       format('- %s %s', "
+		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\n\r]', ' ')) "
+		"  from pg_namespace n "
+		"       join pg_roles auth ON auth.oid = n.nspowner "
+		"       join pg_depend d "
+		"         on d.refclassid = 'pg_namespace'::regclass "
+		"        and d.refobjid = n.oid "
+		"        and d.classid = 'pg_extension'::regclass "
+		" where nspname <> 'public' and nspname !~ '^pg_'";
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   0, NULL, NULL,
+								   &parseContext, &getSchemaList))
+	{
+		log_error("Failed to list schemas that extensions depend on");
+		return false;
+	}
+
+	if (!parseContext.parsedOk)
+	{
+		log_error("Failed to list schemas that extensions depend on");
+		return false;
+	}
+
+	return true;
+}
+
 
 /*
  * For code simplicity the index array is also the SourceFilterType enum value.
@@ -146,6 +268,17 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		"   where relkind = 'r' and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = c.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+
 		"order by bytes desc, n.nspname, c.relname"
 	},
 
@@ -194,6 +327,17 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		"   where relkind = 'r' and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = c.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+
 		"order by bytes desc, n.nspname, c.relname"
 	},
 
@@ -254,6 +398,16 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"     and ft.relname is null "
 		"     and ftd.relname is null "
 
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = c.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+
 		"order by bytes desc, n.nspname, c.relname"
 	},
 
@@ -302,6 +456,16 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		/* WHERE clause for exclusion filters */
 		"     and inc.nspname is null "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = c.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
 
 		"order by bytes desc, n.nspname, c.relname"
 	},
@@ -356,6 +520,16 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		/* WHERE clause for exclusion filters */
 		"     and (   fn.nspname is not null "
 		"          or ft.relname is not null ) "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = c.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
 
 		"order by bytes desc, n.nspname, c.relname"
 	}
@@ -444,9 +618,11 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
 		"                regexp_replace(r.relname, '[\n\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
+
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
 		"         join pg_roles auth ON auth.oid = r.relowner"
+
 		"   where r.relkind = 'r' and r.relpersistence = 'p'  "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and not exists "
@@ -456,6 +632,17 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"            where c.conrelid = r.oid "
 		"              and c.contype = 'p' "
 		"         ) "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = c.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+
 		"order by n.nspname, r.relname"
 	},
 
@@ -470,6 +657,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
 		"                regexp_replace(r.relname, '[\n\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
+
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
 		"         join pg_roles auth ON auth.oid = r.relowner"
@@ -488,6 +676,17 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"            where c.conrelid = r.oid "
 		"              and c.contype = 'p' "
 		"         ) "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = c.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+
 		"order by n.nspname, r.relname"
 	},
 
@@ -535,6 +734,16 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"     and ft.relname is null "
 		"     and ftd.relname is null "
 
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = c.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+
 		"order by n.nspname, r.relname"
 	},
 
@@ -570,6 +779,16 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 
 		/* WHERE clause for exclusion filters */
 		"     and inc.nspname is null "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = c.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
 
 		"order by n.nspname, r.relname"
 	},
@@ -611,6 +830,16 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		/* WHERE clause for exclusion filters */
 		"     and (   fn.nspname is not null "
 		"          or ft.relname is not null ) "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = c.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
 
 		"order by n.nspname, r.relname"
 	}
@@ -695,11 +924,24 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
 		"                regexp_replace(c.relname, '[\n\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
+
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 		"         join pg_roles auth ON auth.oid = c.relowner"
+
 		"   where c.relkind = 'S' and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = c.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+
 		"order by n.nspname, c.relname"
 	},
 
@@ -742,6 +984,16 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"  where s.relkind = 'S' "
 		"    and d.classid = 'pg_attrdef'::regclass "
 		"    and d.refclassid = 'pg_class'::regclass "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = s.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
 
 		"order by sn.nspname, s.relname"
 	},
@@ -802,6 +1054,16 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"     and ft.relname is null "
 		"     and ftd.relname is null "
 
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = s.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+
 		"order by sn.nspname, s.relname"
 	},
 
@@ -847,6 +1109,16 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 
 		/* WHERE clause for exclusion filters */
 		"     and inc.relname is null "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = s.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
 
 		"order by sn.nspname, s.relname"
 	},
@@ -900,6 +1172,16 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		/* WHERE clause for exclusion filters */
 		"     and (   fn.nspname is not null "
 		"          or ft.relname is not null) "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = s.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
 
 		"order by sn.nspname, s.relname"
 	},
@@ -1050,6 +1332,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"                 regexp_replace(n.nspname, '[\n\r]', ' '), "
 		"                 regexp_replace(i.relname, '[\n\r]', ' '), "
 		"                 regexp_replace(auth.rolname, '[\n\r]', ' '))"
+
 		"     from pg_index x"
 		"          join pg_class i ON i.oid = x.indexrelid"
 		"          join pg_class r ON r.oid = x.indrelid"
@@ -1062,8 +1345,20 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"                and d.refclassid = 'pg_constraint'::regclass"
 		"                and d.deptype = 'i'"
 		"          left join pg_constraint c ON c.oid = d.refobjid"
+
 		"    where r.relkind = 'r' and r.relpersistence = 'p' "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = r.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+
 		" order by n.nspname, r.relname"
 	},
 
@@ -1107,6 +1402,17 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 
 		"    where r.relkind = 'r' and r.relpersistence = 'p' "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = r.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+
 		" order by n.nspname, r.relname"
 	},
 
@@ -1165,6 +1471,16 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"     and ft.relname is null "
 		"     and ftd.relname is null "
 
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = r.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+
 		" order by n.nspname, r.relname"
 	},
 
@@ -1211,6 +1527,16 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 
 		/* WHERE clause for exclusion filters */
 		"     and inc.relname is null "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = r.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
 
 		" order by n.nspname, r.relname"
 	},
@@ -1264,6 +1590,16 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"     and (   fn.nspname is not null "
 		"          or ft.relname is not null ) "
 
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = r.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+
 		" order by n.nspname, r.relname"
 	},
 
@@ -1311,6 +1647,16 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		/* WHERE clause for exclusion filters */
 		"     and fn.nspname is null "
 
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = r.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+
 		" order by n.nspname, r.relname"
 	},
 
@@ -1354,6 +1700,16 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 
 		"    where r.relkind = 'r' and r.relpersistence = 'p' "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = r.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
 
 		" order by n.nspname, r.relname"
 	}
@@ -2038,6 +2394,358 @@ prepareFilterCopyTableList(PGSQL *pgsql,
 	}
 
 	return true;
+}
+
+
+/*
+ * getSchemaList loops over the SQL result for the schema array query and
+ * allocates an array of schemas then populates it with the query result.
+ */
+static void
+getSchemaList(void *ctx, PGresult *result)
+{
+	SourceSchemaArrayContext *context = (SourceSchemaArrayContext *) ctx;
+	int nTuples = PQntuples(result);
+
+	log_debug("getSchemaList: %d", nTuples);
+
+	if (PQnfields(result) != 3)
+	{
+		log_error("Query returned %d columns, expected 3", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	/* we're not supposed to re-cycle arrays here */
+	if (context->schemaArray->array != NULL)
+	{
+		/* issue a warning but let's try anyway */
+		log_warn("BUG? context's array is not null in getSchemaList");
+
+		free(context->schemaArray->array);
+		context->schemaArray->array = NULL;
+	}
+
+	context->schemaArray->count = nTuples;
+	context->schemaArray->array =
+		(SourceSchema *) calloc(nTuples, sizeof(SourceSchema));
+
+	if (context->schemaArray->array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return;
+	}
+
+	int errors = 0;
+
+	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
+	{
+		SourceSchema *schema = &(context->schemaArray->array[rowNumber]);
+
+		/* 1. oid */
+		char *value = PQgetvalue(result, rowNumber, 0);
+
+		if (!stringToUInt32(value, &(schema->oid)) || schema->oid == 0)
+		{
+			log_error("Invalid OID \"%s\"", value);
+			++errors;
+		}
+
+		/* 2. nspname */
+		value = PQgetvalue(result, rowNumber, 1);
+		int length = strlcpy(schema->nspname, value, NAMEDATALEN);
+
+		if (length >= NAMEDATALEN)
+		{
+			log_error("Extension name \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (NAMEDATALEN - 1)",
+					  value, length, NAMEDATALEN - 1);
+			++errors;
+		}
+
+		/* 3. restoreListName */
+		value = PQgetvalue(result, rowNumber, 2);
+		length = strlcpy(schema->restoreListName, value, RESTORE_LIST_NAMEDATALEN);
+
+		if (length >= RESTORE_LIST_NAMEDATALEN)
+		{
+			log_error("Table restore list name \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (RESTORE_LIST_NAMEDATALEN - 1)",
+					  value, length, RESTORE_LIST_NAMEDATALEN - 1);
+			++errors;
+		}
+	}
+
+	context->parsedOk = errors == 0;
+}
+
+
+/*
+ * getExtensionList loops over the SQL result for the extension array query and
+ * allocates an array of extensions then populates it with the query result.
+ */
+static void
+getExtensionList(void *ctx, PGresult *result)
+{
+	SourceExtensionArrayContext *context = (SourceExtensionArrayContext *) ctx;
+	int nTuples = PQntuples(result);
+
+	log_debug("getExtensionList: %d", nTuples);
+
+	if (PQnfields(result) != 10)
+	{
+		log_error("Query returned %d columns, expected 10", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	/* we're not supposed to re-cycle arrays here */
+	if (context->extensionArray->array != NULL)
+	{
+		/* issue a warning but let's try anyway */
+		log_warn("BUG? context's array is not null in getExtensionList");
+
+		free(context->extensionArray->array);
+		context->extensionArray->array = NULL;
+	}
+
+	context->extensionArray->count = 0;
+	context->extensionArray->array =
+		(SourceExtension *) calloc(nTuples, sizeof(SourceExtension));
+
+	if (context->extensionArray->array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return;
+	}
+
+	bool parsedOk = true;
+
+	int extArrayIndex = 0;
+	SourceExtension *extension = NULL;
+
+	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
+	{
+		SourceExtension rowExtension = { 0 };
+		int confIndex = 0;
+
+		parsedOk = parsedOk &&
+				   parseCurrentExtension(result, rowNumber, &rowExtension, &confIndex);
+
+		log_trace("getExtensionList: %s [%d/%d]",
+				  rowExtension.extname,
+				  confIndex,
+				  rowExtension.config.count);
+
+		/*
+		 * Only the first extension of a series gets into the extension list.
+		 *
+		 * Each extension has an array of extconfig (pg_class oids) and an
+		 * array of extcondition (WHERE clauses, as text) of the same
+		 * dimensions.
+		 *
+		 * The arrays may be empty, in which case confIndex == 0, and we can
+		 * skip the extension configuration parts.
+		 *
+		 * The arrays may contain a single entry, in which case parsing the
+		 * current row is self-contained.
+		 *
+		 * The arrays may contain 2 or more values, in which case the first row
+		 * we read in the loop is where we build the SourceExtension structure
+		 * instance, and then the next rows of the SQL query have the same
+		 * first columns values and vary only in their extconfig/extcondition
+		 * columns. The arrays have been UNNESTed, so each row contains the
+		 * next value from the array.
+		 */
+		if (confIndex == 0 || confIndex == 1)
+		{
+			/* copy the current rowExtension into the target array entry */
+			extension = &(context->extensionArray->array[extArrayIndex++]);
+			*extension = rowExtension;
+
+			/* update the extension array count too, not just the index */
+			context->extensionArray->count++;
+		}
+
+		/* now loop over extension configuration, if any */
+		if (extension->config.count > 0)
+		{
+			/* SQL arrays indexes start at 1, C arrays index start at 0 */
+			if (confIndex == 1)
+			{
+				extension->config.array =
+					(SourceExtensionConfig *)
+					calloc(extension->config.count,
+						   sizeof(SourceExtensionConfig));
+
+				if (extension->config.array == NULL)
+				{
+					log_fatal(ALLOCATION_FAILED_ERROR);
+					parsedOk = false;
+					return;
+				}
+			}
+
+			/* SQL arrays indexes start at 1, C arrays index start at 0 */
+			SourceExtensionConfig *extConfig =
+				&(extension->config.array[confIndex - 1]);
+
+			parsedOk = parsedOk &&
+					   parseCurrentExtensionConfig(result, rowNumber, extConfig);
+		}
+	}
+
+	if (!parsedOk)
+	{
+		free(context->extensionArray->array);
+		context->extensionArray->array = NULL;
+	}
+
+	context->parsedOk = parsedOk;
+}
+
+
+/*
+ * parseCurrentSourceTable parses a single row of the extension listing query
+ * result.
+ */
+static bool
+parseCurrentExtension(PGresult *result,
+					  int rowNumber,
+					  SourceExtension *extension,
+					  int *confIndex)
+{
+	int errors = 0;
+
+	/* 1. oid */
+	char *value = PQgetvalue(result, rowNumber, 0);
+
+	if (!stringToUInt32(value, &(extension->oid)) || extension->oid == 0)
+	{
+		log_error("Invalid OID \"%s\"", value);
+		++errors;
+	}
+
+	/* 2. extname */
+	value = PQgetvalue(result, rowNumber, 1);
+	int length = strlcpy(extension->extname, value, NAMEDATALEN);
+
+	if (length >= NAMEDATALEN)
+	{
+		log_error("Extension name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (NAMEDATALEN - 1)",
+				  value, length, NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* 3. extnamespace */
+	value = PQgetvalue(result, rowNumber, 2);
+	length = strlcpy(extension->extnamespace, value, NAMEDATALEN);
+
+	if (length >= NAMEDATALEN)
+	{
+		log_error("Extension extnamespace \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (NAMEDATALEN - 1)",
+				  value, length, NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* 4. extrelocatable */
+	value = PQgetvalue(result, rowNumber, 3);
+	extension->extrelocatable = (*value) == 't';
+
+	/* 5. array_length(extconfig), or NULL */
+	if (PQgetisnull(result, rowNumber, 4))
+	{
+		extension->config.count = 0;
+	}
+	else
+	{
+		value = PQgetvalue(result, rowNumber, 4);
+
+		if (!stringToInt(value, &(extension->config.count)))
+		{
+			log_error("Invalid extension configuration count \"%s\"", value);
+			++errors;
+		}
+	}
+
+	/* 6. n (position over count), or NULL */
+	if (PQgetisnull(result, rowNumber, 5))
+	{
+		*confIndex = 0;
+	}
+	else
+	{
+		value = PQgetvalue(result, rowNumber, 5);
+
+		if (!stringToInt(value, confIndex))
+		{
+			log_error("Invalid extension configuration index \"%s\"", value);
+			++errors;
+		}
+	}
+
+	return errors == 0;
+}
+
+
+/*
+ * parseCurrentExtensionConfig parses a single row of the extension listing
+ * query and adds the extconfig and extcondition columns to the given array
+ * entry of SourceExtensionConfig.
+ */
+static bool
+parseCurrentExtensionConfig(PGresult *result,
+							int rowNumber,
+							SourceExtensionConfig *extConfig)
+{
+	int errors = 0;
+
+	/* 7. extconfig (pg_class oid) */
+	char *value = PQgetvalue(result, rowNumber, 6);
+
+	if (!stringToUInt32(value, &(extConfig->oid)))
+	{
+		log_error("Invalid extension configuration OID \"%s\"", value);
+		++errors;
+	}
+
+	/* 8. n.nspname */
+	value = PQgetvalue(result, rowNumber, 7);
+	int length = strlcpy(extConfig->nspname, value, NAMEDATALEN);
+
+	if (length >= NAMEDATALEN)
+	{
+		log_error("Schema name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (NAMEDATALEN - 1)",
+				  value, length, NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* 9. c.relname */
+	value = PQgetvalue(result, rowNumber, 8);
+	length = strlcpy(extConfig->relname, value, NAMEDATALEN);
+
+	if (length >= NAMEDATALEN)
+	{
+		log_error("Extension configuration table name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (NAMEDATALEN - 1)",
+				  value, length, NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* 10. extcondition */
+	value = PQgetvalue(result, rowNumber, 9);
+	extConfig->condition = strdup(value);
+
+	if (extConfig->condition == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		++errors;
+	}
+
+	return errors == 0;
 }
 
 

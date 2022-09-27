@@ -1,0 +1,43 @@
+version: "3.9"  # optional since v1.27.0
+services:
+  source:
+    build:
+      context: .
+      dockerfile: Dockerfile.pg
+    expose:
+      - 5432
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: h4ckm3
+      POSTGRES_HOST_AUTH_METHOD: trust
+    command: >
+      -c wal_level=logical
+      -c ssl=on
+      -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
+      -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
+  target:
+    build:
+      context: .
+      dockerfile: Dockerfile.pg
+    expose:
+      - 5432
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: h4ckm3
+      POSTGRES_HOST_AUTH_METHOD: trust
+    command: >
+      -c ssl=on
+      -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
+      -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
+  pgcopydb:
+    build: .
+    environment:
+      PGSSLMODE: "require"
+      POSTGRES_SOURCE: postgres://postgres:h4ckm3@source/postgres
+      POSTGRES_TARGET: postgres://postgres:h4ckm3@target/postgres
+      PGCOPYDB_SOURCE_PGURI_SU: postgres://postgres:h4ckm3@source/pagila
+      PGCOPYDB_TARGET_PGURI_SU: postgres://postgres:h4ckm3@target/pagila
+      PGCOPYDB_SOURCE_PGURI: postgres://pagila:own3d@source/pagila
+      PGCOPYDB_TARGET_PGURI: postgres://pagila:own3d@target/pagila
+      PGCOPYDB_TABLE_JOBS: 4
+      PGCOPYDB_INDEX_JOBS: 2

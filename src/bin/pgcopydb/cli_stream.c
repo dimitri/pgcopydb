@@ -489,6 +489,7 @@ cli_stream_setup(int argc, char **argv)
 						   restoreOptions,
 						   false, /* roles */
 						   false, /* skipLargeObjects */
+						   false, /* skipExtensions */
 						   streamDBoptions.restart,
 						   streamDBoptions.resume,
 						   !streamDBoptions.notConsistent))
@@ -546,6 +547,7 @@ cli_stream_cleanup(int argc, char **argv)
 						   restoreOptions,
 						   false, /* roles */
 						   false, /* skipLargeObjects */
+						   false, /* skipExtensions */
 						   restart,
 						   resume,
 						   !streamDBoptions.notConsistent))
@@ -601,6 +603,7 @@ cli_stream_catchup(int argc, char **argv)
 						   restoreOptions,
 						   false, /* roles */
 						   false, /* skipLargeObjects */
+						   false, /* skipExtensions */
 						   streamDBoptions.restart,
 						   streamDBoptions.resume,
 						   !streamDBoptions.notConsistent))
@@ -707,6 +710,7 @@ cli_stream_apply(int argc, char **argv)
 						   restoreOptions,
 						   false, /* roles */
 						   false, /* skipLargeObjects */
+						   false, /* skipExtensions */
 						   streamDBoptions.restart,
 						   streamDBoptions.resume,
 						   !streamDBoptions.notConsistent))
@@ -785,6 +789,7 @@ stream_start_in_mode(LogicalStreamMode mode)
 						   restoreOptions,
 						   false, /* roles */
 						   false, /* skipLargeObjects */
+						   false, /* skipExtensions */
 						   streamDBoptions.restart,
 						   streamDBoptions.resume,
 						   !streamDBoptions.notConsistent))

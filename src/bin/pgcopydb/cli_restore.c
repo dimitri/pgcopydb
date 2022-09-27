@@ -106,6 +106,7 @@ static CommandLine restore_schema_parse_list_command =
 		"  --target             Postgres URI to the target database\n"
 		"  --dir                Work directory to use\n"
 		"  --filters <filename> Use the filters defined in <filename>\n"
+		"  --skip-extensions    Skip restoring extensions\n"
 		"  --restart            Allow restarting when temp files exist already\n"
 		"  --resume             Allow resuming operations after a failure\n"
 		"  --not-consistent     Allow taking a new snapshot on the source database\n",
@@ -149,6 +150,7 @@ cli_restore_schema_getopts(int argc, char **argv)
 		{ "no-acl", no_argument, NULL, 'x' }, /* pg_restore -x */
 		{ "filter", required_argument, NULL, 'F' },
 		{ "filters", required_argument, NULL, 'F' },
+		{ "skip-extensions", no_argument, NULL, 'e' },
 		{ "restart", no_argument, NULL, 'r' },
 		{ "resume", no_argument, NULL, 'R' },
 		{ "not-consistent", no_argument, NULL, 'C' },
@@ -234,6 +236,13 @@ cli_restore_schema_getopts(int argc, char **argv)
 			{
 				options.restoreOptions.noComments = true;
 				log_trace("--no-comments");
+				break;
+			}
+
+			case 'e':
+			{
+				options.skipExtensions = true;
+				log_trace("--skip-extensions");
 				break;
 			}
 
@@ -555,6 +564,7 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 						   restoreDBoptions.restoreOptions,
 						   false, /* roles */
 						   false, /* skipLargeObjects */
+						   restoreDBoptions.skipExtensions,
 						   restoreDBoptions.restart,
 						   restoreDBoptions.resume,
 						   !restoreDBoptions.notConsistent))

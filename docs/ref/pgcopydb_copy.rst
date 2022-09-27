@@ -12,6 +12,7 @@ This command prefixes the following sub-commands:
   pgcopydb copy
     db           Copy an entire database from source to target
     roles        Copy the roles from the source instance to the target instance
+    extensions   Copy the extensions from the source instance to the target instance
     schema       Copy the database schema from source to target
     data         Copy the data section from source to target
     table-data   Copy the data from all tables in database from source to target
@@ -97,6 +98,30 @@ The ``pg_dumpall --roles-only`` is used to fetch the list of roles from the
 source database, and this command includes support for passwords. As a
 result, this operation requires the superuser privileges.
 
+.. _pgcopydb_copy_extensions:
+
+pgcopydb copy extensions
+------------------------
+
+pgcopydb copy extensions - Copy the extensions from the source instance to the target instance
+
+The command ``pgcopydb copy extensions`` gets a list of the extensions
+installed on the source database, and for each of them run the SQL command
+CREATE EXTENSION IF NOT EXISTS.
+
+::
+
+   pgcopydb copy extensions: Copy the extensions from the source instance to the target instance
+   usage: pgcopydb copy extensions  --source ... --target ...
+
+     --source              Postgres URI to the source database
+     --target              Postgres URI to the target database
+     --dir                 Work directory to use
+
+When copying extensions, this command also takes care of copying any
+`Extension Configuration Tables`__ user-data to the target database.
+
+__ https://www.postgresql.org/docs/current/extend-extensions.html#EXTEND-EXTENSIONS-CONFIG-TABLES
 
 .. _pgcopydb_copy_schema:
 

@@ -20,6 +20,7 @@
 #include "summary.h"
 
 static void cli_copy_roles(int argc, char **argv);
+static void cli_copy_extensions(int argc, char **argv);
 static void cli_copy_schema(int argc, char **argv);
 static void cli_copy_data(int argc, char **argv);
 static void cli_copy_table_data(int argc, char **argv);
@@ -103,6 +104,17 @@ static CommandLine copy_roles_command =
 		"  --dir                 Work directory to use\n",
 		cli_copy_db_getopts,
 		cli_copy_roles);
+
+static CommandLine copy_extensions_command =
+	make_command(
+		"extensions",
+		"Copy the extensions from the source instance to the target instance",
+		" --source ... --target ... ",
+		"  --source              Postgres URI to the source database\n"
+		"  --target              Postgres URI to the target database\n"
+		"  --dir                 Work directory to use\n",
+		cli_copy_db_getopts,
+		cli_copy_extensions);
 
 /*
  * pgcopydb copy data does the data section only, skips pre-data and post-data
@@ -210,6 +222,7 @@ static CommandLine copy_constraints_command =
 static CommandLine *copy_subcommands[] = {
 	&copy_db_command,
 	&copy_roles_command,
+	&copy_extensions_command,
 	&copy_schema_command,
 	&copy_data_command,
 	&copy_table_data_command,
@@ -636,7 +649,7 @@ cli_copy_blobs(int argc, char **argv)
 
 
 /*
- * cli_copy_blobs copies the roles found on the source instance to the target
+ * cli_copy_roles copies the roles found on the source instance to the target
  * instance, skipping those that already exist on the target instance.
  */
 static void
@@ -651,4 +664,55 @@ cli_copy_roles(int argc, char **argv)
 		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);
 	}
+}
+
+
+/*
+ * cli_copy_extensions copies the extensions found on the source instance to
+ * the target instance, skipping those that already exist on the target
+ * instance.
+ *
+ * The command also copies the schemas that the extensions depend on, the
+ * extnamespace column in the pg_extension catalog, using pg_dump and
+ * pg_restore for them.
+ *
+ * In most cases, CREATE EXTENSION requires superuser. It might be best to then
+ * implement:
+ *
+ *  1. pgcopydb snapshot &
+ *  2. pgcopydb copy extensions --target <superuser connection>
+ *  3. pgcopydb clone
+ *
+ */
+static void
+cli_copy_extensions(int argc, char **argv)
+{
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_EXTENSION);
+
+	if (!copydb_prepare_snapshot(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/* fetch schema information from source catalogs, including filtering */
+	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
+	{
+		/* errors have already been logged */
+		(void) copydb_close_snapshot(&copySpecs);
+		exit(EXIT_CODE_TARGET);
+	}
+
+	bool createExtensions = true;
+
+	if (!copydb_copy_extensions(&copySpecs, createExtensions))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_TARGET);
+	}
+
+	/* now close the snapshot we kept for the whole operation */
+	(void) copydb_close_snapshot(&copySpecs);
 }

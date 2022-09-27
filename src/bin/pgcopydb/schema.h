@@ -16,6 +16,57 @@
 /* the pg_restore -l output uses "schema name owner" */
 #define RESTORE_LIST_NAMEDATALEN (3 * NAMEDATALEN + 3)
 
+typedef struct SourceSchema
+{
+	uint32_t oid;
+	char nspname[NAMEDATALEN];
+	char restoreListName[RESTORE_LIST_NAMEDATALEN];
+} SourceSchema;
+
+typedef struct SourceSchemaArray
+{
+	int count;
+	SourceSchema *array;        /* malloc'ed area */
+} SourceSchemaArray;
+
+
+/*
+ * SourceExtension caches the information we need about all the extensions
+ * found in the source database.
+ */
+typedef struct SourceExtensionConfig
+{
+	uint32_t oid;               /* pg_class.oid */
+	char nspname[NAMEDATALEN];
+	char relname[NAMEDATALEN];
+	char *condition;            /* strdup from PQresult: malloc'ed area */
+} SourceExtensionConfig;
+
+
+typedef struct SourceExtensionConfigArray
+{
+	int count;
+	SourceExtensionConfig *array; /* malloc'ed area */
+} SourceExtensionConfigArray;
+
+
+typedef struct SourceExtension
+{
+	uint32_t oid;
+	char extname[NAMEDATALEN];
+	char extnamespace[NAMEDATALEN];
+	bool extrelocatable;
+	SourceExtensionConfigArray config;
+} SourceExtension;
+
+
+typedef struct SourceExtensionArray
+{
+	int count;
+	SourceExtension *array;         /* malloc'ed area */
+} SourceExtensionArray;
+
+
 /*
  * SourceTable caches the information we need about all the ordinary tables
  * found in the source database.
@@ -157,6 +208,10 @@ typedef struct SourceDependArray
 	int count;
 	SourceDepend *array;         /* malloc'ed area */
 } SourceDependArray;
+
+bool schema_list_ext_schemas(PGSQL *pgsql, SourceSchemaArray *array);
+
+bool schema_list_extensions(PGSQL *pgsql, SourceExtensionArray *extArray);
 
 
 bool schema_list_ordinary_tables(PGSQL *pgsql,
