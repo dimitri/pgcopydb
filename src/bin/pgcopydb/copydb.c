@@ -1320,7 +1320,7 @@ copydb_copy_extensions(CopyDataSpec *copySpecs)
 	if (!pgsql_init(&dst, copySpecs->target_pguri, PGSQL_CONN_TARGET))
 	{
 		/* errors have already been logged */
-		exit(EXIT_CODE_TARGET);
+		return false;
 	}
 
 	for (int i = 0; i < extensionArray->count; i++)
@@ -1384,6 +1384,8 @@ copydb_copy_extensions(CopyDataSpec *copySpecs)
 			}
 		}
 	}
+
+	(void) pgsql_finish(&dst);
 
 	return errors == 0;
 }

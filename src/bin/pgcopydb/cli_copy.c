@@ -710,4 +710,7 @@ cli_copy_extensions(int argc, char **argv)
 		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);
 	}
+
+	/* now close the snapshot we kept for the whole operation */
+	(void) copydb_close_snapshot(&copySpecs);
 }
