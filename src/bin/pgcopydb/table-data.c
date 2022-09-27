@@ -575,9 +575,6 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 					schema->restoreListName,
 					RESTORE_LIST_NAMEDATALEN);
 
-			log_info("Filtering extension schema %u %s %s",
-					 item->oid, schema->nspname, item->restoreListName);
-
 			HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), item);
 
 			size_t len = strlen(item->restoreListName);
