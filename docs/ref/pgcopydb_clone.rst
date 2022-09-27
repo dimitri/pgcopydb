@@ -158,6 +158,82 @@ The ``pgcopydb clone`` command implements the following steps:
       --use-list`` option so that indexes and primary key constraints
       already created in steps 6 and 7 are properly skipped now.
 
+.. _superuser:
+
+Postgres privileges, superuser, and dump and restore
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Postgres has a notion of a superuser status that can be assigned to any role
+in the system, and the default role *postgres* has this status. From the
+`Role Attributes`__ documentation page we see that:
+
+__ https://www.postgresql.org/docs/current/role-attributes.html
+
+.. epigraph:: superuser status:
+
+   *A database superuser bypasses all permission checks, except the right to
+   log in. This is a dangerous privilege and should not be used carelessly;
+   it is best to do most of your work as a role that is not a superuser. To
+   create a new database superuser, use CREATE ROLE name SUPERUSER. You must
+   do this as a role that is already a superuser.*
+
+Some Postgres objects can only be created by superusers, and some read and
+write operations are only allowed to superuser roles, such as the following
+non-exclusive list:
+
+  - Reading the `pg_authid`__ role password (even when encrypted) is
+    restricted to roles with the superuser status. Reading this catalog
+    table is done when calling ``pg_dumpall --roles-only`` so that the dump
+    file can then be used to restore roles including their passwords.
+
+    __ https://www.postgresql.org/docs/current/catalog-pg-authid.html
+
+  - Most of the available Postgres extensions, at least when being written
+    in C, are then only allowed to be created by roles with superuser
+    status.
+
+    When such an extension contains `Extension Configuration Tables`__ and
+    has been created with a role having superuser status, then the same
+    superuser status is needed again to pg_dump and pg_restore that
+    extension and its current configuration.
+
+    __ https://www.postgresql.org/docs/current/extend-extensions.html#EXTEND-EXTENSIONS-CONFIG-TABLES
+
+When using pgcopydb it is possible to split your migration in privileged and
+non-privileged parts, like in the following examples:
+
+.. code-block:: bash
+  :linenos:
+
+   $ coproc ( pgcopydb snapshot )
+
+   # first two commands would use a superuser role to connect
+   $ pgcopydb copy roles --source ... --target ...
+   $ pgcopydb copy extensions --source ... --target ...
+
+   # now it's possible to use a non-superuser role to connect
+   $ pgcopydb clone --skip-extensions --source ... --target ...
+
+   $ kill -TERM ${COPROC_PID}
+   $ wait ${COPROC_PID}
+
+In such a script, the calls to :ref:`pgcopydb_copy_roles` and
+:ref:`pgcopydb_copy_extensions` would be done with connection strings that
+connects with a role having superuser status; and then the call to *pgcopydb
+clone* would be done with a non-privileged role, typically the role that
+owns the source and target databases.
+
+.. warning::
+
+   That said, there is currently a limitation in ``pg_dump`` that impacts
+   pgcopydb. When an extension with configuration table has been installed
+   as superuser, even the main ``pgcopydb clone`` operation has to be done
+   with superuser status.
+
+   That's because pg_dump filtering (here, there ``--exclude-table`` option)
+   does not apply to extension members, and pg_dump does not provide a
+   mechanism to exclude extensions.
+
 .. _change_data_capture:
 
 Change Data Capture using Postgres Logical Decoding
