@@ -13,5 +13,5 @@ COPY ./copydb.sh copydb.sh
 COPY ./countries.sql countries.sql
 
 USER docker
-COPY ./.psqlrc /users/docker/.psqlrc
+COPY ./.psqlrc /home/docker/.psqlrc
 CMD /usr/src/pgcopydb/copydb.sh

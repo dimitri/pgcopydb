@@ -1,5 +1,9 @@
 version: "3.9"  # optional since v1.27.0
 services:
+  pagila:
+    build:
+      context: ..
+      dockerfile: Dockerfile.pagila
   source:
     image: postgres:13-bullseye
     expose:
@@ -23,3 +27,6 @@ services:
       PGCOPYDB_TARGET_PGURI: postgres://postgres:h4ckm3@target/postgres
       PGCOPYDB_TABLE_JOBS: 2
       PGCOPYDB_INDEX_JOBS: 2
+    depends_on:
+      - source
+      - target

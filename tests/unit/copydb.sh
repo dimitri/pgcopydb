@@ -16,7 +16,7 @@ set -e
 #
 pgcopydb list tables --source "${PGCOPYDB_SOURCE_PGURI}"
 
-psql -d "${PGCOPYDB_SOURCE_PGURI}" -1 -f ./setup/setup.sql
+psql -q -d "${PGCOPYDB_SOURCE_PGURI}" -1 -f ./setup/setup.sql
 
 # pgcopydb fork uses the environment variables
 pgcopydb fork

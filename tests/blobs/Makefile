@@ -1,12 +1,10 @@
 # Copyright (c) 2021 The PostgreSQL Global Development Group.
 # Licensed under the PostgreSQL License.
 
-INTERACTIVE_OPTS = --abort-on-container-exit --exit-code-from pgcopydb
+test: down run down ;
 
-test: build down up down ;
-
-up:
-	docker-compose up $(INTERACTIVE_OPTS)
+run: build
+	docker-compose run pgcopydb
 
 down:
 	docker-compose down
@@ -18,4 +16,4 @@ import:
 	psql --single-transaction --no-psqlrc -f import.sql
 
 
-.PHONY: up down build test import
+.PHONY: run down build test import

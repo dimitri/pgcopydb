@@ -18,8 +18,8 @@ set -e
 pgcopydb list tables --source ${PGCOPYDB_SOURCE_PGURI}
 pgcopydb list tables --source ${PGCOPYDB_TARGET_PGURI}
 
-psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-schema.sql
-psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
+psql -o /tmp/s.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-schema.sql
+psql -o /tmp/d.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
 
 # alter the pagila schema to allow capturing DDLs without pkey
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/ddl.sql

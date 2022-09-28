@@ -1,0 +1,12 @@
+\set QUIET on
+
+\set ON_ERROR_STOP on
+\set ON_ERROR_ROLLBACK interactive
+
+\set VERBOSITY verbose
+
+\pset linestyle 'unicode'
+
+set intervalstyle to 'postgres_verbose';
+
+\set QUIET off

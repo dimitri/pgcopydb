@@ -1,5 +1,9 @@
 version: "3.9"  # optional since v1.27.0
 services:
+  pagila:
+    build:
+      context: ..
+      dockerfile: Dockerfile.pagila
   source:
     image: postgres:13-bullseye
     expose:
@@ -25,7 +29,9 @@ services:
       -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
       -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
   pgcopydb:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     environment:
       PGSSLMODE: "require"
       PGCOPYDB_SOURCE_PGURI: postgres://postgres:h4ckm3@source/postgres
@@ -33,3 +39,6 @@ services:
       PGCOPYDB_TABLE_JOBS: 4
       PGCOPYDB_INDEX_JOBS: 4
       PGCOPYDB_SPLIT_TABLES_LARGER_THAN: 200kB
+    depends_on:
+      - source
+      - target
