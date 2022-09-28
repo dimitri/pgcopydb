@@ -469,6 +469,8 @@ cloneDB(CopyDataSpec *copySpecs)
 
 	log_info("STEP 2: fetch source database tables, indexes, and sequences");
 
+	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_SCHEMA_FETCH);
+
 	if (!copydb_fetch_schema_and_prepare_specs(copySpecs))
 	{
 		/* errors have already been logged */

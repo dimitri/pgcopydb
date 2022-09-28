@@ -107,6 +107,7 @@ typedef struct SummaryTable
 typedef enum
 {
 	TIMING_STEP_START = 0,
+	TIMING_STEP_BEFORE_SCHEMA_FETCH,
 	TIMING_STEP_BEFORE_SCHEMA_DUMP,
 	TIMING_STEP_BEFORE_PREPARE_SCHEMA,
 	TIMING_STEP_AFTER_PREPARE_SCHEMA,
@@ -119,6 +120,7 @@ typedef struct TopLevelTimings
 {
 	instr_time startTime;
 	instr_time beforeSchemaDump;
+	instr_time beforeSchemaFetch;
 	instr_time beforePrepareSchema;
 	instr_time afterPrepareSchema;
 	instr_time beforeFinalizeSchema;
@@ -127,6 +129,7 @@ typedef struct TopLevelTimings
 
 	char totalMs[INTSTRING_MAX_DIGITS];
 	char dumpSchemaMs[INTSTRING_MAX_DIGITS];
+	char fetchSchemaMs[INTSTRING_MAX_DIGITS];
 	char prepareSchemaMs[INTSTRING_MAX_DIGITS];
 	char dataAndIndexMs[INTSTRING_MAX_DIGITS];
 	char finalizeSchemaMs[INTSTRING_MAX_DIGITS];
