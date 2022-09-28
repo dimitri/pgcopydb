@@ -244,15 +244,13 @@ typedef struct StreamSpecs
 	bool resume;
 } StreamSpecs;
 
-#define MAX_STREAM_CONTENT_COUNT 16 * 1024
-
 typedef struct StreamContent
 {
 	char filename[MAXPGPATH];
 	int count;
 	char *buffer;
-	char *lines[MAX_STREAM_CONTENT_COUNT];
-	LogicalMessageMetadata messages[MAX_STREAM_CONTENT_COUNT];
+	char **lines;                     /* malloc'ed area */
+	LogicalMessageMetadata *messages; /* malloc'ed area */
 } StreamContent;
 
 bool stream_init_specs(StreamSpecs *specs,
