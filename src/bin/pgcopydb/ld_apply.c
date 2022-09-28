@@ -296,8 +296,15 @@ stream_apply_file(StreamApplyContext *context)
 		return false;
 	}
 
-	content.count =
-		splitLines(content.buffer, content.lines, MAX_STREAM_CONTENT_COUNT);
+	content.count = countLines(content.buffer);
+	content.lines = (char **) calloc(content.count, sizeof(char *));
+	content.count = splitLines(content.buffer, content.lines, content.count);
+
+	if (content.lines == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
 
 	log_info("Replaying changes from file \"%s\"", context->sqlFileName);
 
@@ -477,7 +484,9 @@ stream_apply_file(StreamApplyContext *context)
 		}
 	}
 
+	/* free dynamic memory that's not needed anymore */
 	free(content.buffer);
+	free(content.lines);
 
 	return true;
 }

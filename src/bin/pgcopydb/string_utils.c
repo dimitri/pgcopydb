@@ -499,19 +499,61 @@ IntervalToString(uint64_t millisecs, char *buffer, size_t size)
 
 
 /*
+ * countLines returns how many line separators (\n) are found in the given
+ * string.
+ */
+int
+countLines(char *buffer)
+{
+	int lineNumber = 0;
+	char *currentLine = buffer;
+
+	if (buffer == NULL)
+	{
+		return 0;
+	}
+
+	do {
+		char *newLinePtr = strchr(currentLine, '\n');
+
+		if (newLinePtr == NULL)
+		{
+			if (strlen(currentLine) > 0)
+			{
+				++lineNumber;
+			}
+			currentLine = NULL;
+		}
+		else
+		{
+			++lineNumber;
+			currentLine = ++newLinePtr;
+		}
+	} while (currentLine != NULL && *currentLine != '\0');
+
+	return lineNumber;
+}
+
+
+/*
  * splitLines prepares a multi-line error message in a way that calling code
  * can loop around one line at a time and call log_error() or log_warn() on
  * individual lines.
  */
 int
-splitLines(char *errorMessage, char **linesArray, int size)
+splitLines(char *buffer, char **linesArray, int size)
 {
 	int lineNumber = 0;
-	char *currentLine = errorMessage;
+	char *currentLine = buffer;
 
-	if (errorMessage == NULL)
+	if (buffer == NULL)
 	{
 		return 0;
+	}
+
+	if (linesArray == NULL)
+	{
+		return -1;
 	}
 
 	do {

@@ -60,22 +60,29 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 		return false;
 	}
 
-	content.count =
-		splitLines(content.buffer, content.lines, MAX_STREAM_CONTENT_COUNT);
+	content.count = countLines(content.buffer);
+	content.lines = (char **) calloc(content.count, sizeof(char *));
+	content.count = splitLines(content.buffer, content.lines, content.count);
 
-	if (content.count >= MAX_STREAM_CONTENT_COUNT)
+	if (content.lines == NULL)
 	{
-		log_error("Failed to split file \"%s\" in lines: pgcopydb support only "
-				  "files with up to %d lines, and more were found",
-				  content.filename,
-				  MAX_STREAM_CONTENT_COUNT);
-		free(content.buffer);
+		log_error(ALLOCATION_FAILED_ERROR);
 		return false;
 	}
 
 	log_debug("stream_transform_file: read %d lines from \"%s\"",
 			  content.count,
 			  content.filename);
+
+	content.messages =
+		(LogicalMessageMetadata *) calloc(content.count,
+										  sizeof(LogicalMessageMetadata));
+
+	if (content.messages == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
 
 	/* {action: B} {action: C} {action: X} */
 	int maxTxnsCount = (content.count / 2) + 1;
@@ -158,6 +165,10 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 			previousTx->nextlsn = metadata->nextlsn;
 		}
 	}
+
+	/* free dynamic memory that's not needed anymore */
+	free(content.lines);
+	free(content.messages);
 
 	log_debug("stream_transform_file read %d transactions", txns.count);
 

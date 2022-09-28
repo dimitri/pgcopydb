@@ -859,16 +859,23 @@ stream_read_file(StreamContent *content)
 		return false;
 	}
 
-	content->count =
-		splitLines(content->buffer, content->lines, MAX_STREAM_CONTENT_COUNT);
+	content->count = countLines(content->buffer);
+	content->lines = (char **) calloc(content->count, sizeof(char *));
+	content->count = splitLines(content->buffer, content->lines, content->count);
 
-	if (content->count >= MAX_STREAM_CONTENT_COUNT)
+	if (content->lines == NULL)
 	{
-		log_error("Failed to split file \"%s\" in lines: pgcopydb support only "
-				  "files with up to %d lines, and more were found",
-				  content->filename,
-				  MAX_STREAM_CONTENT_COUNT);
-		free(content->buffer);
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	content->messages =
+		(LogicalMessageMetadata *) calloc(content->count,
+										  sizeof(LogicalMessageMetadata));
+
+	if (content->messages == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
 		return false;
 	}
 
