@@ -1,12 +1,4 @@
-FROM pgcopydb
-
-USER root
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends jq \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY --from=pagila /usr/src/pagila /usr/src/pagila
+FROM pagila
 
 WORKDIR /usr/src/pgcopydb
 COPY ./copydb.sh copydb.sh
@@ -16,5 +8,4 @@ COPY ./000000010000000000000002.json 000000010000000000000002.json
 COPY ./000000010000000000000002.sql 000000010000000000000002.sql
 
 USER docker
-COPY .psqlrc /var/lib/postgres/.psqlrc
 CMD /usr/src/pgcopydb/copydb.sh

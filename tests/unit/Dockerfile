@@ -1,4 +1,5 @@
-FROM pgcopydb
+# that image is built by docker-compose build: project-service
+FROM pagila
 
 WORKDIR /usr/src/pgcopydb
 COPY ./copydb.sh copydb.sh
@@ -7,6 +8,5 @@ COPY ./sql ./test/sql
 COPY ./expected ./test/expected
 
 USER docker
-COPY .psqlrc /home/docker/.psqlrc
 WORKDIR /usr/src/pgcopydb/test/
 CMD /usr/src/pgcopydb/copydb.sh

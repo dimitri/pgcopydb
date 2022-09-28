@@ -1,13 +1,5 @@
 version: "3.9"  # optional since v1.27.0
 services:
-  pgcopydb:
-    build:
-      context: ../..
-      dockerfile: Dockerfile
-  pagila:
-    build:
-      context: ..
-      dockerfile: Dockerfile.pagila
   source:
     build:
       context: .

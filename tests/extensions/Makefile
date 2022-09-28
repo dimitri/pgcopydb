@@ -10,6 +10,6 @@ down:
 	docker-compose down
 
 build:
-	docker-compose build
+	docker-compose build --quiet
 
 .PHONY: run down build test

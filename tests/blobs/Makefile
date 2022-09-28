@@ -10,7 +10,7 @@ down:
 	docker-compose down
 
 build:
-	docker-compose build
+	docker-compose build --quiet
 
 import:
 	psql --single-transaction --no-psqlrc -f import.sql

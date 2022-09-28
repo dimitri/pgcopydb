@@ -26,8 +26,8 @@ tests: test ;
 tests/ci:
 	sh ./ci/banned.h.sh
 
-tests/*:
-	$(MAKE) -C $@
+tests/*: build
+	$(MAKE) -C tests $(notdir $@)
 
 install: bin
 	$(MAKE) -C src/bin/ install

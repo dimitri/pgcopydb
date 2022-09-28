@@ -1,10 +1,10 @@
-FROM pgcopydb
+# that image is built by docker-compose build: project-service
+FROM pagila
 
-COPY --from=pagila /usr/src/pagila /usr/src/pagila
+COPY --from=pgcopydb /usr/local/bin/pgcopydb /usr/local/bin
 
 WORKDIR /usr/src/pgcopydb
-COPY ./copydb.sh copydb.sh
+COPY copydb.sh copydb.sh
 
 USER docker
-COPY .psqlrc /var/lib/postgres/.psqlrc
 CMD /usr/src/pgcopydb/copydb.sh

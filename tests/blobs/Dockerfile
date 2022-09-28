@@ -6,5 +6,4 @@ COPY ./import.sql import.sql
 COPY ./imgs imgs
 
 USER docker
-COPY .psqlrc /var/lib/postgres/.psqlrc
 CMD /usr/src/pgcopydb/copydb.sh

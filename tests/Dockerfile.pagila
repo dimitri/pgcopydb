@@ -1,12 +1,27 @@
 FROM debian:bullseye-slim
 
-USER root
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
+    openssl \
+	sudo \
+    tmux \
+    watch \
+    lsof \
+    psutils \
+    libpq5 \
+    postgresql-client-common \
+    postgresql-client-13 \
     curl \
-    git \
+	git \
+    jq \
 	&& rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src/
 RUN git clone --depth 1 https://github.com/devrimgunduz/pagila.git
+
+RUN adduser --disabled-password --gecos '' --home /var/lib/postgres docker
+RUN adduser docker sudo
+
+COPY --from=pgcopydb /usr/local/bin/pgcopydb /usr/local/bin
+COPY .psqlrc /var/lib/postgres

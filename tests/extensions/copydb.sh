@@ -38,9 +38,9 @@ create extension postgis_topology cascade;
 EOF
 
 # the partman extension needs to be installed as the pagila role
-psql -a -1 ${PGCOPYDB_SOURCE_PGURI} <<EOF
-create extension pg_partman cascade;
-EOF
+# psql -a -1 ${PGCOPYDB_SOURCE_PGURI} <<EOF
+# create extension pg_partman cascade;
+# EOF
 
 # create the application schema and data in the pagila database, role pagila
 grep -v "OWNER TO postgres" /usr/src/pagila/pagila-schema.sql > /tmp/pagila-schema.sql

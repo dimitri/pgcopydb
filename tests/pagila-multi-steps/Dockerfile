@@ -1,10 +1,7 @@
-FROM pgcopydb
-
-COPY --from=pagila /usr/src/pagila /usr/src/pagila
+FROM pagila
 
 WORKDIR /usr/src/pgcopydb
 COPY ./copydb.sh copydb.sh
 
 USER docker
-COPY .psqlrc /var/lib/postgres/.psqlrc
 CMD /usr/src/pgcopydb/copydb.sh
