@@ -646,6 +646,12 @@ summary_set_current_time(TopLevelTimings *timings, TimingStep step)
 			break;
 		}
 
+		case TIMING_STEP_BEFORE_SCHEMA_FETCH:
+		{
+			INSTR_TIME_SET_CURRENT(timings->beforeSchemaFetch);
+			break;
+		}
+
 		case TIMING_STEP_BEFORE_SCHEMA_DUMP:
 		{
 			INSTR_TIME_SET_CURRENT(timings->beforeSchemaDump);
@@ -702,13 +708,22 @@ summary_prepare_toplevel_durations(Summary *summary)
 	uint64_t durationMs;
 
 	/* compute schema dump duration, part of schemaDurationMs */
-	duration = timings->beforePrepareSchema;
+	duration = timings->beforeSchemaFetch;
 	INSTR_TIME_SUBTRACT(duration, timings->beforeSchemaDump);
 	durationMs = INSTR_TIME_MS(duration);
 
 	IntervalToString(durationMs, timings->dumpSchemaMs, INTSTRING_MAX_DIGITS);
 
 	timings->schemaDurationMs = durationMs;
+
+	/* compute schema fetch duration, part of schemaDurationMs */
+	duration = timings->beforePrepareSchema;
+	INSTR_TIME_SUBTRACT(duration, timings->beforeSchemaFetch);
+	durationMs = INSTR_TIME_MS(duration);
+
+	IntervalToString(durationMs, timings->fetchSchemaMs, INTSTRING_MAX_DIGITS);
+
+	timings->schemaDurationMs += durationMs;
 
 	/* compute prepare schema duration, part of schemaDurationMs */
 	duration = timings->afterPrepareSchema;
@@ -765,19 +780,25 @@ print_toplevel_summary(Summary *summary, int tableJobs, int indexJobs)
 {
 	char *d10s = "----------";
 	char *d12s = "------------";
-	char *d45s = "---------------------------------------------";
+	char *d50s = "--------------------------------------------------";
 
 	fformat(stdout, "\n");
 
-	fformat(stdout, " %45s   %10s  %10s  %12s\n",
+	fformat(stdout, " %50s   %10s  %10s  %12s\n",
 			"Step", "Connection", "Duration", "Concurrency");
 
-	fformat(stdout, " %45s   %10s  %10s  %12s\n", d45s, d10s, d10s, d12s);
+	fformat(stdout, " %50s   %10s  %10s  %12s\n", d50s, d10s, d10s, d12s);
 
-	fformat(stdout, " %45s   %10s  %10s  %12d\n", "Dump Schema", "source",
+	fformat(stdout, " %50s   %10s  %10s  %12d\n", "Dump Schema", "source",
 			summary->timings.dumpSchemaMs, 1);
 
-	fformat(stdout, " %45s   %10s  %10s  %12d\n", "Prepare Schema", "target",
+	fformat(stdout, " %50s   %10s  %10s  %12d\n",
+			"Catalog Queries (table ordering, filtering, etc)",
+			"source",
+			summary->timings.fetchSchemaMs,
+			1);
+
+	fformat(stdout, " %50s   %10s  %10s  %12d\n", "Prepare Schema", "target",
 			summary->timings.prepareSchemaMs, 1);
 
 	char concurrency[BUFSIZE] = { 0 };
@@ -785,37 +806,37 @@ print_toplevel_summary(Summary *summary, int tableJobs, int indexJobs)
 			tableJobs,
 			tableJobs + indexJobs);
 
-	fformat(stdout, " %45s   %10s  %10s  %12s\n",
+	fformat(stdout, " %50s   %10s  %10s  %12s\n",
 			"COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)", "both",
 			summary->timings.dataAndIndexMs,
 			concurrency);
 
-	fformat(stdout, " %45s   %10s  %10s  %12d\n",
+	fformat(stdout, " %50s   %10s  %10s  %12d\n",
 			"COPY (cumulative)", "both",
 			summary->timings.totalTableMs,
 			tableJobs);
 
-	fformat(stdout, " %45s   %10s  %10s  %12d\n",
+	fformat(stdout, " %50s   %10s  %10s  %12d\n",
 			"Large Objects (cumulative)", "both",
 			summary->timings.blobsMs,
 			1);
 
-	fformat(stdout, " %45s   %10s  %10s  %12d\n",
+	fformat(stdout, " %50s   %10s  %10s  %12d\n",
 			"CREATE INDEX, CONSTRAINTS (cumulative)", "target",
 			summary->timings.totalIndexMs,
 			indexJobs);
 
-	fformat(stdout, " %45s   %10s  %10s  %12d\n", "Finalize Schema", "target",
+	fformat(stdout, " %50s   %10s  %10s  %12d\n", "Finalize Schema", "target",
 			summary->timings.finalizeSchemaMs, 1);
 
-	fformat(stdout, " %45s   %10s  %10s  %12s\n", d45s, d10s, d10s, d12s);
+	fformat(stdout, " %50s   %10s  %10s  %12s\n", d50s, d10s, d10s, d12s);
 
-	fformat(stdout, " %45s   %10s  %10s  %12s\n",
+	fformat(stdout, " %50s   %10s  %10s  %12s\n",
 			"Total Wall Clock Duration", "both",
 			summary->timings.totalMs,
 			concurrency);
 
-	fformat(stdout, " %45s   %10s  %10s  %12s\n", d45s, d10s, d10s, d12s);
+	fformat(stdout, " %50s   %10s  %10s  %12s\n", d50s, d10s, d10s, d12s);
 
 	fformat(stdout, "\n");
 }
