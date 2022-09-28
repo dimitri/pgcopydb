@@ -16,5 +16,5 @@ COPY ./000000010000000000000002.json 000000010000000000000002.json
 COPY ./000000010000000000000002.sql 000000010000000000000002.sql
 
 USER docker
-COPY .psqlrc /home/docker/.psqlrc
+COPY .psqlrc /var/lib/postgres/.psqlrc
 CMD /usr/src/pgcopydb/copydb.sh

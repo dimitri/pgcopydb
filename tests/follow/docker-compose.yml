@@ -1,5 +1,9 @@
 version: "3.9"  # optional since v1.27.0
 services:
+  pgcopydb:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
   pagila:
     build:
       context: ..
@@ -39,7 +43,7 @@ services:
       PGSSLMODE: "require"
       PGCOPYDB_SOURCE_PGURI: postgres://postgres:h4ckm3@source/postgres
       PGCOPYDB_TARGET_PGURI: postgres://postgres:h4ckm3@target/postgres
-  pgcopydb:
+  test:
     build: .
     environment:
       PGSSLMODE: "require"

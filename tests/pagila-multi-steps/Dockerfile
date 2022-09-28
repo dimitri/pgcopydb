@@ -6,5 +6,5 @@ WORKDIR /usr/src/pgcopydb
 COPY ./copydb.sh copydb.sh
 
 USER docker
-COPY .psqlrc /home/docker/.psqlrc
+COPY .psqlrc /var/lib/postgres/.psqlrc
 CMD /usr/src/pgcopydb/copydb.sh

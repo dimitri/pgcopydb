@@ -1,4 +1,4 @@
-\set QUIET on
+\set QUIET off
 
 \set ON_ERROR_STOP on
 \set ON_ERROR_ROLLBACK interactive

@@ -1,5 +1,9 @@
 version: "3.9"  # optional since v1.27.0
 services:
+  pgcopydb:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
   pagila:
     build:
       context: ..
@@ -33,7 +37,7 @@ services:
       -c ssl=on
       -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
       -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
-  pgcopydb:
+  test:
     build: .
     environment:
       PGSSLMODE: "require"

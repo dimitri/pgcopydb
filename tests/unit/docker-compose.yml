@@ -1,5 +1,9 @@
 version: "3.9"  # optional since v1.27.0
 services:
+  pgcopydb:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
   source:
     image: postgres:13-bullseye
     expose:
@@ -16,7 +20,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: h4ckm3
       POSTGRES_HOST_AUTH_METHOD: trust
-  pgcopydb:
+  test:
     build: .
     environment:
       PGCOPYDB_SOURCE_PGURI: postgres://postgres:h4ckm3@source/postgres

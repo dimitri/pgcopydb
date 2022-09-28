@@ -4,7 +4,7 @@
 test: down run down ;
 
 run: build
-	docker-compose run pgcopydb
+	docker-compose run test
 
 down:
 	docker-compose down

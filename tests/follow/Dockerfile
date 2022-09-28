@@ -14,5 +14,5 @@ COPY ./dml.sql dml.sql
 COPY ./ddl.sql ddl.sql
 
 USER docker
-COPY .psqlrc /home/docker/.psqlrc
+COPY .psqlrc /var/lib/postgres/.psqlrc
 CMD /usr/src/pgcopydb/copydb.sh

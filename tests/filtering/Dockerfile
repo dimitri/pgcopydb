@@ -26,6 +26,6 @@ COPY ./sql ./test/sql
 COPY ./expected ./test/expected
 
 USER docker
-COPY .psqlrc /home/docker/.psqlrc
+COPY .psqlrc /var/lib/postgres/.psqlrc
 WORKDIR /usr/src/pgcopydb/test/
 CMD /usr/src/pgcopydb/copydb.sh
