@@ -16,10 +16,13 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: h4ckm3
       POSTGRES_HOST_AUTH_METHOD: trust
-  pgcopydb:
+  test:
     build: .
     environment:
       PGCOPYDB_SOURCE_PGURI: postgres://postgres:h4ckm3@source/postgres
       PGCOPYDB_TARGET_PGURI: postgres://postgres:h4ckm3@target/postgres
       PGCOPYDB_TABLE_JOBS: 2
       PGCOPYDB_INDEX_JOBS: 2
+    depends_on:
+      - source
+      - target

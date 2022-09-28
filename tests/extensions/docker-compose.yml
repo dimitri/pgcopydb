@@ -29,7 +29,7 @@ services:
       -c ssl=on
       -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
       -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
-  pgcopydb:
+  test:
     build: .
     environment:
       PGSSLMODE: "require"
@@ -41,3 +41,6 @@ services:
       PGCOPYDB_TARGET_PGURI: postgres://pagila:own3d@target/pagila
       PGCOPYDB_TABLE_JOBS: 4
       PGCOPYDB_INDEX_JOBS: 2
+    depends_on:
+      - source
+      - target

@@ -1,23 +1,10 @@
-FROM debian:bullseye-slim as pagila
+# that image is built by docker-compose build: project-service
+FROM pagila
 
-USER root
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
-    git \
-	&& rm -rf /var/lib/apt/lists/*
-
-WORKDIR /usr/src/
-RUN git clone --depth 1 https://github.com/devrimgunduz/pagila.git
-
-
-FROM pgcopydb
-
-COPY --from=pagila /usr/src/pagila /usr/src/pagila
+COPY --from=pgcopydb /usr/local/bin/pgcopydb /usr/local/bin
 
 WORKDIR /usr/src/pgcopydb
-COPY ./copydb.sh copydb.sh
+COPY copydb.sh copydb.sh
 
 USER docker
 CMD /usr/src/pgcopydb/copydb.sh

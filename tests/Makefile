@@ -9,13 +9,13 @@ pagila: build
 pagila-multi-steps: build
 	$(MAKE) -C pagila-multi-steps
 
-blobs:
+blobs: build
 	$(MAKE) -C blobs
 
-unit:
+unit: build
 	$(MAKE) -C unit
 
-filtering:
+filtering: build
 	$(MAKE) -C filtering
 
 cdc: build
@@ -24,8 +24,11 @@ cdc: build
 follow: build
 	$(MAKE) -C cdc
 
+extensions: build
+	$(MAKE) -C extensions
+
 build:
 	docker build -t pagila -f Dockerfile.pagila .
 
 .PHONY: all build
-.PHONY: pagila pagila-multi-steps blobs unit filtering cdc follow
+.PHONY: pagila pagila-multi-steps blobs unit filtering cdc follow extensions

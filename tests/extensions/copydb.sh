@@ -10,7 +10,6 @@ set -e
 #  - PGCOPYDB_TABLE_JOBS
 #  - PGCOPYDB_INDEX_JOBS
 
-
 #
 # pgcopydb list tables include a retry loop, so we use that as a proxy to
 # depend on the source/target Postgres images to be ready
@@ -39,16 +38,16 @@ create extension postgis_topology cascade;
 EOF
 
 # the partman extension needs to be installed as the pagila role
-psql -a -1 ${PGCOPYDB_SOURCE_PGURI} <<EOF
-create extension pg_partman cascade;
-EOF
+# psql -a -1 ${PGCOPYDB_SOURCE_PGURI} <<EOF
+# create extension pg_partman cascade;
+# EOF
 
 # create the application schema and data in the pagila database, role pagila
 grep -v "OWNER TO postgres" /usr/src/pagila/pagila-schema.sql > /tmp/pagila-schema.sql
 
-psql -q -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /tmp/pagila-schema.sql
-psql -q -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
-psql -q -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pgcopydb/countries.sql
+psql -o /tmp/s.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /tmp/pagila-schema.sql
+psql -o /tmp/d.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
+psql -o /tmp/c.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pgcopydb/countries.sql
 
 # take a snapshot using role pagila on source database
 coproc ( pgcopydb snapshot --debug )

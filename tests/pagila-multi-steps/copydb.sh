@@ -17,11 +17,11 @@ set -e
 pgcopydb list tables --source ${PGCOPYDB_SOURCE_PGURI}
 pgcopydb list tables --source ${PGCOPYDB_TARGET_PGURI}
 
-psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-schema.sql
-psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
+psql -o /tmp/d.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-schema.sql
+psql -o /tmp/s.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
 
 psql -d ${PGCOPYDB_TARGET_PGURI} <<EOF
-alter database pagila connection limit 2;
+alter database postgres connection limit 2;
 EOF
 
 #
