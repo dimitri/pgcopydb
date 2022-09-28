@@ -33,6 +33,9 @@ jobs:
         with:
           fetch-depth: 0 # all history for all branches and tags
 
+      - name: Set Version String From .git
+        run: make version
+
       - name: Set environment variables
         run: |
             echo "TEST=${{ matrix.TEST }}" >> $GITHUB_ENV
