@@ -42,6 +42,237 @@ static bool streamLogicalTransactionAppendStatement(LogicalTransaction *txn,
 
 
 /*
+ * stream_transform_start_worker creates a sub-process that transform JSON
+ * files into SQL files as needed, consuming requests from a queue.
+ */
+bool
+stream_transform_start_worker(LogicalStreamContext *context)
+{
+	StreamContext *privateContext = (StreamContext *) context->private;
+
+	/*
+	 * Flush stdio channels just before fork, to avoid double-output
+	 * problems.
+	 */
+	fflush(stdout);
+	fflush(stderr);
+
+	int fpid = fork();
+
+	switch (fpid)
+	{
+		case -1:
+		{
+			log_error("Failed to fork a stream transform worker process: %m");
+			return false;
+		}
+
+		case 0:
+		{
+			/* child process runs the command */
+			if (!stream_transform_worker(context))
+			{
+				/* errors have already been logged */
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			exit(EXIT_CODE_QUIT);
+		}
+
+		default:
+		{
+			/* fork succeeded, in parent */
+			privateContext->subprocess = fpid;
+			break;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * stream_transform_worker is a worker process that loops over messages
+ * received from a queue, each message contains the WAL.json and the WAL.sql
+ * file names. When receiving such a message, the WAL.json file is transformed
+ * into the WAL.sql file.
+ */
+bool
+stream_transform_worker(LogicalStreamContext *context)
+{
+	StreamContext *privateContext = (StreamContext *) context->private;
+
+	int errors = 0;
+	bool stop = false;
+
+	log_notice("Started Stream Transform worker %d [%d]", getpid(), getppid());
+
+	while (!stop)
+	{
+		QMessage mesg = { 0 };
+
+		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		{
+			return false;
+		}
+
+		if (!queue_receive(&(privateContext->transformQueue), &mesg))
+		{
+			/* errors have already been logged */
+			break;
+		}
+
+		log_debug("stream_transform_worker received message type %ld",
+				  mesg.type);
+
+		switch (mesg.type)
+		{
+			case QMSG_TYPE_STOP:
+			{
+				stop = true;
+				log_debug("Stop message received by stream transform worker");
+				break;
+			}
+
+			case QMSG_TYPE_STREAM_TRANSFORM:
+			{
+				log_debug("stream_transform_worker received transform %X/%X",
+						  LSN_FORMAT_ARGS(mesg.data.lsn));
+
+				if (!stream_compute_pathnames(context, mesg.data.lsn))
+				{
+					/* errors have already been logged, break from the loop */
+					++errors;
+					break;
+				}
+
+				if (!stream_transform_file(privateContext->walFileName,
+										   privateContext->sqlFileName))
+				{
+					/* errors have already been logged, break from the loop */
+					++errors;
+					break;
+				}
+				break;
+			}
+
+			default:
+			{
+				log_error("Received unknown message type %ld on vacuum queue %d",
+						  mesg.type,
+						  privateContext->transformQueue.qId);
+				break;
+			}
+		}
+	}
+
+	return stop == true && errors == 0;
+}
+
+
+/*
+ * stream_compute_pathnames computes the WAL.json and WAL.sql filenames from
+ * the given LSN, which is expected to be the first LSN processed in the file
+ * we need to find the name of.
+ */
+bool
+stream_compute_pathnames(LogicalStreamContext *context, uint64_t lsn)
+{
+	StreamContext *privateContext = (StreamContext *) context->private;
+
+	char wal[MAXPGPATH] = { 0 };
+
+	/*
+	 * The timeline and wal segment size are determined when connecting to the
+	 * source database, and stored to local files at that time. When the Stream
+	 * Transform Worker process is created, we don't have that information yet,
+	 * so the first time we process an LSN from the queue we go and fetch the
+	 * information from our local files.
+	 */
+	if (context->timeline == 0)
+	{
+		uint32_t WalSegSz;
+		IdentifySystem system = { 0 };
+
+		if (!stream_read_context(&(privateContext->paths), &system, &WalSegSz))
+		{
+			log_error("Failed to read the streaming context information "
+					  "from the source database, see above for details");
+			return false;
+		}
+
+		context->timeline = system.timeline;
+		context->WalSegSz = WalSegSz;
+	}
+
+	/* compute the WAL filename that would host the current LSN */
+	XLogSegNo segno;
+	XLByteToSeg(lsn, segno, context->WalSegSz);
+	XLogFileName(wal, context->timeline, segno, context->WalSegSz);
+
+	sformat(privateContext->walFileName,
+			sizeof(privateContext->walFileName),
+			"%s/%s.json",
+			privateContext->paths.dir,
+			wal);
+
+	sformat(privateContext->sqlFileName,
+			sizeof(privateContext->sqlFileName),
+			"%s/%s.sql",
+			privateContext->paths.dir,
+			wal);
+
+	return true;
+}
+
+
+/*
+ * vacuum_add_table sends a message to the VACUUM process queue to process
+ * given table.
+ */
+bool
+stream_transform_add_file(Queue *queue, uint64_t firstLSN)
+{
+	QMessage mesg = {
+		.type = QMSG_TYPE_STREAM_TRANSFORM,
+		.data.lsn = firstLSN
+	};
+
+	log_debug("stream_transform_add_file[%d]: %X/%X",
+			  queue->qId,
+			  LSN_FORMAT_ARGS(mesg.data.lsn));
+
+	if (!queue_send(queue, &mesg))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * vacuum_send_stop sends the STOP message to the Stream Transform worker.
+ */
+bool
+stream_transform_send_stop(Queue *queue)
+{
+	QMessage stop = { .type = QMSG_TYPE_STOP };
+
+	log_debug("Send STOP message to Transform Queue %d", queue->qId);
+
+	if (!queue_send(queue, &stop))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * stream_transform_file transforms a JSON formatted file as received from the
  * wal2json logical decoding plugin into an SQL file ready for applying to the
  * target database.
@@ -51,6 +282,10 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 {
 	StreamContent content = { 0 };
 	long size = 0L;
+
+	log_notice("Transforming JSON file \"%s\" into SQL file \"%s\"",
+			   jsonfilename,
+			   sqlfilename);
 
 	strlcpy(content.filename, jsonfilename, sizeof(content.filename));
 
@@ -203,6 +438,9 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 		log_error("Failed to write file \"%s\"", sqlfilename);
 		return false;
 	}
+
+	log_info("Transformed JSON messages into SQL file \"%s\"",
+			 sqlfilename);
 
 	return true;
 }

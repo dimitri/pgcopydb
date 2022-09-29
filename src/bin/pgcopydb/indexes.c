@@ -112,7 +112,7 @@ copydb_index_worker(CopyDataSpec *specs)
 
 			case QMSG_TYPE_INDEXOID:
 			{
-				if (!copydb_create_index_by_oid(specs, mesg.oid))
+				if (!copydb_create_index_by_oid(specs, mesg.data.oid))
 				{
 					++errors;
 				}
@@ -336,13 +336,13 @@ copydb_add_table_indexes(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 
 		QMessage mesg = {
 			.type = QMSG_TYPE_INDEXOID,
-			.oid = index->indexOid
+			.data.oid = index->indexOid
 		};
 
 		log_trace("Queueing index \"%s\".\"%s\" [%u] for table %s [%u]",
 				  index->indexNamespace,
 				  index->indexRelname,
-				  mesg.oid,
+				  mesg.data.oid,
 				  tableSpecs->qname,
 				  tableSpecs->sourceTable->oid);
 
@@ -369,7 +369,7 @@ copydb_index_workers_send_stop(CopyDataSpec *specs)
 {
 	for (int i = 0; i < specs->indexJobs; i++)
 	{
-		QMessage stop = { .type = QMSG_TYPE_STOP, .oid = 0 };
+		QMessage stop = { .type = QMSG_TYPE_STOP, .data.oid = 0 };
 
 		log_debug("Send STOP message to CREATE INDEX queue %d",
 				  specs->indexQueue.qId);

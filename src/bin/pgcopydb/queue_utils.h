@@ -31,13 +31,18 @@ typedef enum
 	QMSG_TYPE_UNKNOWN = 0,
 	QMSG_TYPE_TABLEOID,
 	QMSG_TYPE_INDEXOID,
+	QMSG_TYPE_STREAM_TRANSFORM,
 	QMSG_TYPE_STOP
 } QMessageType;
 
 typedef struct QMessage
 {
 	long type;
-	uint32_t oid;
+	union
+	{
+		uint32_t oid;
+		uint64_t lsn;
+	} data;
 } QMessage;
 
 bool queue_create(Queue *queue);
