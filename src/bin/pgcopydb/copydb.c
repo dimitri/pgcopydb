@@ -29,6 +29,7 @@
 GUC srcSettings[] = {
 	COMMON_GUC_SETTINGS
 	{ "tcp_keepalives_idle", "'60s'" },
+	{ "idle_in_transaction_session_timeout", "0" },
 	{ NULL, NULL },
 };
 
