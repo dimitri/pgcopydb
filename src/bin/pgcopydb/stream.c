@@ -562,22 +562,27 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 {
 	StreamContext *privateContext = (StreamContext *) context->private;
 
-	if (privateContext->jsonFile == NULL)
+	/*
+	 * If we have a JSON file currently opened, then close it.
+	 *
+	 * Some situations exist where there is no JSON file currently opened and
+	 * we still want to transform the latest JSON file into SQL: we might reach
+	 * endpos at startup, for instance.
+	 */
+	if (privateContext->jsonFile != NULL)
 	{
-		return true;
+		log_debug("Closing file \"%s\"", privateContext->walFileName);
+
+		if (fclose(privateContext->jsonFile) != 0)
+		{
+			log_error("Failed to close file \"%s\": %m",
+					  privateContext->walFileName);
+			return false;
+		}
+
+		/* reset the jsonFile FILE * pointer to NULL, it's closed now */
+		privateContext->jsonFile = NULL;
 	}
-
-	log_debug("Closing file \"%s\"", privateContext->walFileName);
-
-	if (fclose(privateContext->jsonFile) != 0)
-	{
-		log_error("Failed to close file \"%s\": %m",
-				  privateContext->walFileName);
-		return false;
-	}
-
-	/* reset the jsonFile FILE * pointer to NULL, it's closed now */
-	privateContext->jsonFile = NULL;
 
 	/* in prefetch mode, kick-in a transform process */
 	switch (privateContext->mode)
@@ -598,11 +603,14 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 			 */
 			Queue *transformQueue = &(privateContext->transformQueue);
 
-			if (!stream_transform_add_file(transformQueue,
-										   privateContext->firstLSN))
+			if (privateContext->firstLSN != InvalidXLogRecPtr)
 			{
-				/* errors have already been logged */
-				return false;
+				if (!stream_transform_add_file(transformQueue,
+											   privateContext->firstLSN))
+				{
+					/* errors have already been logged */
+					return false;
+				}
 			}
 
 			/*
