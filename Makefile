@@ -12,7 +12,7 @@ bin: GIT-VERSION-FILE
 	$(MAKE) -C src/bin/ all
 
 clean:
-	rm -f GIT-VERSION-FILE
+	rm -f GIT-VERSION-FILE version
 	$(MAKE) -C src/bin/ clean
 
 docs:
