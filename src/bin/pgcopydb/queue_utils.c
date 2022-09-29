@@ -87,10 +87,9 @@ queue_send(Queue *queue, QMessage *msg)
 	if (errStatus < 0)
 	{
 		log_error("Failed to send a message to queue %d "
-				  "with type %ld and oid %u: %m",
+				  "with type %ld: %m",
 				  queue->qId,
-				  msg->type,
-				  msg->oid);
+				  msg->type);
 		return false;
 	}
 

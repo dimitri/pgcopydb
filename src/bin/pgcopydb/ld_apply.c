@@ -51,7 +51,9 @@ stream_apply_catchup(StreamSpecs *specs)
 		}
 	}
 
-	if (!stream_read_context(specs, &(context.system), &(context.WalSegSz)))
+	if (!stream_read_context(&(specs->paths),
+							 &(context.system),
+							 &(context.WalSegSz)))
 	{
 		log_error("Failed to read the streaming context information "
 				  "from the source database, see above for details");

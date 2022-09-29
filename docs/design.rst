@@ -91,7 +91,7 @@ The process tree then looks like the following:
 
      * pgcopydb stream receive
 
-       * pgcopydb stream transform
+     * pgcopydb stream transform
 
      * pgcopydb stream catchup
 
@@ -151,9 +151,9 @@ Here is a description of the process tree:
     - One process implements :ref:`pgcopydb_stream_receive` to fetch changes
       in the JSON format and pre-fetch them in JSON files.
 
-    - As soon as JSON file is completed, then a new process is
-      opportunistically started to transform the JSON file into SQL, as if
-      by calling the command :ref:`pgcopydb_stream_transform`.
+    - As soon as JSON file is completed, the pgcopydb stream transform
+      worker transforms the JSON file into SQL, as if by calling the command
+      :ref:`pgcopydb_stream_transform`.
 
     - Another process implements :ref:`pgcopydb_stream_catchup` to apply SQL
       changes to the target Postgres instance. This process loops over

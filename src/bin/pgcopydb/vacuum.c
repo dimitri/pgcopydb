@@ -110,7 +110,7 @@ vacuum_worker(CopyDataSpec *specs)
 			case QMSG_TYPE_TABLEOID:
 			{
 				/* ignore errors */
-				if (!vacuum_analyze_table_by_oid(specs, mesg.oid))
+				if (!vacuum_analyze_table_by_oid(specs, mesg.data.oid))
 				{
 					++errors;
 				}
@@ -213,7 +213,7 @@ vacuum_add_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 {
 	QMessage mesg = {
 		.type = QMSG_TYPE_TABLEOID,
-		.oid = tableSpecs->sourceTable->oid
+		.data.oid = tableSpecs->sourceTable->oid
 	};
 
 	if (!queue_send(&(specs->vacuumQueue), &mesg))
@@ -237,7 +237,7 @@ vacuum_send_stop(CopyDataSpec *specs)
 {
 	for (int i = 0; i < specs->vacuumJobs; i++)
 	{
-		QMessage stop = { .type = QMSG_TYPE_STOP, .oid = 0 };
+		QMessage stop = { .type = QMSG_TYPE_STOP, .data.oid = 0 };
 
 		log_debug("Send STOP message to VACUUM queue %d",
 				  specs->vacuumQueue.qId);

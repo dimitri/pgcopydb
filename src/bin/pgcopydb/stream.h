@@ -77,6 +77,12 @@ typedef struct StreamContext
 	bool apply;
 
 	LogicalMessageMetadata metadata;
+
+	Queue transformQueue;
+	uint32_t WalSegSz;
+	uint32_t timeline;
+
+	uint64_t firstLSN;
 	char walFileName[MAXPGPATH];
 	char sqlFileName[MAXPGPATH];
 	FILE *jsonFile;
@@ -273,7 +279,6 @@ bool streamFeedback(LogicalStreamContext *context);
 bool streamRotateFile(LogicalStreamContext *context);
 bool streamCloseFile(LogicalStreamContext *context, bool time_to_abort);
 
-bool streamTransformFileInSubprocess(LogicalStreamContext *context);
 bool streamWaitForSubprocess(LogicalStreamContext *context);
 
 bool parseMessageMetadata(LogicalMessageMetadata *metadata,
@@ -306,13 +311,19 @@ bool stream_create_sentinel(CopyDataSpec *copySpecs,
 
 bool stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream);
 bool stream_cleanup_context(StreamSpecs *specs);
-bool stream_read_context(StreamSpecs *specs,
+bool stream_read_context(CDCPaths *paths,
 						 IdentifySystem *system,
 						 uint32_t *WalSegSz);
 
 StreamAction StreamActionFromChar(char action);
 
 /* ld_transform.c */
+bool stream_transform_start_worker(LogicalStreamContext *context);
+bool stream_transform_worker(LogicalStreamContext *context);
+bool stream_transform_add_file(Queue *queue, uint64_t firstLSN);
+bool stream_transform_send_stop(Queue *queue);
+bool stream_compute_pathnames(LogicalStreamContext *context, uint64_t lsn);
+
 bool stream_transform_file(char *jsonfilename, char *sqlfilename);
 bool stream_write_transaction(FILE *out, LogicalTransaction *tx);
 bool stream_write_insert(FILE *out, LogicalMessageInsert *insert);
