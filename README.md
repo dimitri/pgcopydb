@@ -62,6 +62,7 @@ $ pgcopydb help
   pgcopydb copy
     db           Copy an entire database from source to target
     roles        Copy the roles from the source instance to the target instance
+    extensions   Copy the extensions from the source instance to the target instance
     schema       Copy the database schema from source to target
     data         Copy the data section from source to target
     table-data   Copy the data from all tables in database from source to target
@@ -84,11 +85,14 @@ $ pgcopydb help
     parse-list  Parse pg_restore --list output from custom file
 
   pgcopydb list
+    extensions   List all the source extensions to copy
     tables       List all the source tables to copy data from
     table-parts  List a source table copy partitions
     sequences    List all the source sequences to copy data from
     indexes      List all the indexes to create again after copying the data
     depends      List all the dependencies to filter-out
+    schema       List the schema to migrate, formatted in JSON
+    progress     List the progress
 
   pgcopydb stream
     setup      Setup source and target systems for logical decoding
@@ -200,7 +204,7 @@ Several distributions are available for pgcopydb:
      version currently in debian stable.
 
 	 ```
-	 $ docker run --rm -it dimitri/pgcopydb:v0.8 pgcopydb --version
+	 $ docker run --rm -it dimitri/pgcopydb:v0.9 pgcopydb --version
 	 ```
 
 	 Or you can use the CI/CD integration that publishes packages from the
