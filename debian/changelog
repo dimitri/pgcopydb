@@ -1,3 +1,9 @@
+pgcopydb (0.9-1) unstable; urgency=low
+
+  * Official 0.9 release of pgcopydb
+
+ -- Dimitri Fontaine <dim@tapoueh.org>  Fri, 30 Sep 2022 12:16:46 +0200
+
 pgcopydb (0.8-1) unstable; urgency=low
 
   * Official 0.8 release of pgcopydb
