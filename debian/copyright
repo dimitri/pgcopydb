@@ -130,3 +130,13 @@ License: PostgreSQL
  AND FITNESS FOR A PARTICULAR PURPOSE. THE SOFTWARE PROVIDED HEREUNDER IS ON
  AN "AS IS" BASIS, AND THE UNIVERSITY OF CALIFORNIA HAS NO OBLIGATIONS TO
  PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
+
+Files: tests/blobs/imgs/*
+Copyright: Unsplash
+License:
+ Unsplash grants you an irrevocable, nonexclusive, worldwide copyright license
+ to download, copy, modify, distribute, perform, and use photos from Unsplash
+ for free, including for commercial purposes, without permission from or
+ attributing the photographer or Unsplash. This license does not include the
+ right to compile photos from Unsplash to replicate a similar or competing
+ service.
