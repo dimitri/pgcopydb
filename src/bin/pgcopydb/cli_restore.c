@@ -14,7 +14,7 @@
 #include "commandline.h"
 #include "env_utils.h"
 #include "log.h"
-#include "parsing.h"
+#include "parsing_utils.h"
 #include "pgcmd.h"
 #include "pgsql.h"
 #include "string_utils.h"

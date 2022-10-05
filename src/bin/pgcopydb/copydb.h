@@ -377,13 +377,10 @@ bool copydb_prepare_snapshot(CopyDataSpec *copySpecs);
 bool copydb_set_snapshot(CopyDataSpec *copySpecs);
 bool copydb_close_snapshot(CopyDataSpec *copySpecs);
 
-/* bool copydb_start_vacuum_table(CopyTableDataSpec *tableSpecs); */
-
 bool copydb_fatal_exit(void);
 bool copydb_wait_for_subprocesses(void);
-bool copydb_collect_finished_subprocesses(bool *allDone);
 
-bool copydb_copy_roles(CopyDataSpec *copySpecs);
+/* extensions.c */
 bool copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions);
 
 /* indexes.c */
@@ -471,7 +468,7 @@ bool copydb_copy_all_sequences(CopyDataSpec *specs);
 bool copydb_start_seq_process(CopyDataSpec *specs);
 bool copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql);
 
-/* table-data.c */
+/* copydb_schema.c */
 bool copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs);
 bool copydb_objectid_is_filtered_out(CopyDataSpec *specs,
 									 uint32_t oid,
@@ -482,6 +479,7 @@ bool copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql);
 
 char * copydb_ObjectKindToString(ObjectKind kind);
 
+/* table-data.c */
 bool copydb_copy_all_table_data(CopyDataSpec *specs);
 
 bool copydb_process_table_data(CopyDataSpec *specs);
@@ -504,6 +502,7 @@ bool copydb_table_parts_are_all_done(CopyDataSpec *specs,
 									 bool *allPartsDone,
 									 bool *isBeingProcessed);
 
+/* blobs.c */
 bool copydb_start_blob_process(CopyDataSpec *specs);
 bool copydb_copy_blobs(CopyDataSpec *specs);
 

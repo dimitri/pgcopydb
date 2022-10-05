@@ -11,9 +11,9 @@
 
 #include "cli_common.h"
 #include "cli_root.h"
+#include "ld_stream.h"
 #include "log.h"
 #include "signals.h"
-#include "stream.h"
 
 
 /*

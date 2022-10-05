@@ -18,7 +18,7 @@
 #include "env_utils.h"
 #include "file_utils.h"
 #include "log.h"
-#include "parsing.h"
+#include "parsing_utils.h"
 #include "pgcmd.h"
 #include "signals.h"
 #include "string_utils.h"
@@ -673,6 +673,33 @@ pg_restore_roles(PostgresPaths *pgPaths,
 	}
 
 	if (!pgsql_commit(&pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * pg_copy_roles copies roles from the source instance into the target
+ * instance, using pg_dumpall --roles-only and our own SQL client that reads
+ * the file and applies SQL command on the target system.
+ */
+bool
+pg_copy_roles(PostgresPaths *pgPaths,
+			  const char *source_pguri,
+			  const char *target_pguri,
+			  const char *filename)
+{
+	if (!pg_dumpall_roles(pgPaths, source_pguri, filename))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pg_restore_roles(pgPaths, target_pguri, filename))
 	{
 		/* errors have already been logged */
 		return false;

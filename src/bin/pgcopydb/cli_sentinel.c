@@ -13,10 +13,10 @@
 #include "copydb.h"
 #include "commandline.h"
 #include "env_utils.h"
+#include "ld_stream.h"
 #include "log.h"
-#include "parsing.h"
+#include "parsing_utils.h"
 #include "pgsql.h"
-#include "stream.h"
 #include "string_utils.h"
 
 CopyDBOptions sentinelDBoptions = { 0 };

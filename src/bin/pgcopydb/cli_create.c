@@ -13,12 +13,12 @@
 #include "commandline.h"
 #include "copydb.h"
 #include "env_utils.h"
+#include "ld_stream.h"
 #include "log.h"
 #include "pgcmd.h"
 #include "pgsql.h"
 #include "schema.h"
 #include "signals.h"
-#include "stream.h"
 #include "string_utils.h"
 
 static int cli_create_snapshot_getopts(int argc, char **argv);

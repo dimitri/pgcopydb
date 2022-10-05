@@ -7,8 +7,8 @@
  *
  */
 
-#ifndef PARSING_H
-#define PARSING_H
+#ifndef PARSING_UTILS_H
+#define PARSING_UTILS_H
 
 #include <stdbool.h>
 
@@ -98,4 +98,4 @@ bool parse_and_scrub_connection_string(const char *pguri, char *scrubbedPguri);
 
 bool extract_connection_string_password(const char *pguri, SafeURI *safeURI);
 
-#endif /* PARSING_H */
+#endif /* PARSING_UTILS_H */

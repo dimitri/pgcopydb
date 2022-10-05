@@ -14,7 +14,7 @@
 #include "commandline.h"
 #include "env_utils.h"
 #include "log.h"
-#include "parsing.h"
+#include "parsing_utils.h"
 #include "pgsql.h"
 #include "string_utils.h"
 #include "summary.h"
@@ -659,7 +659,10 @@ cli_copy_roles(int argc, char **argv)
 
 	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_SCHEMA);
 
-	if (!copydb_copy_roles(&copySpecs))
+	if (!pg_copy_roles(&(copySpecs.pgPaths),
+					   copySpecs.source_pguri,
+					   copySpecs.target_pguri,
+					   copySpecs.dumpPaths.rolesFilename))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);
