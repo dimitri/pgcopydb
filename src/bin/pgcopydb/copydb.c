@@ -36,6 +36,7 @@ GUC srcSettings[] = {
 
 GUC dstSettings[] = {
 	COMMON_GUC_SETTINGS
+	{ "tcp_keepalives_idle", "'60s'" },
 	{ "maintenance_work_mem", "'1 GB'" },
 	{ "synchronous_commit", "'off'" },
 	{ NULL, NULL },
