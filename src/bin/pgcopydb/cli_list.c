@@ -16,7 +16,7 @@
 #include "env_utils.h"
 #include "filtering.h"
 #include "log.h"
-#include "parsing.h"
+#include "parsing_utils.h"
 #include "pgcmd.h"
 #include "pgsql.h"
 #include "progress.h"

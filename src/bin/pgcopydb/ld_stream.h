@@ -3,8 +3,8 @@
  *	 SQL queries to discover the source database stream
  */
 
-#ifndef STREAM_H
-#define STREAM_H
+#ifndef LD_STREAM_H
+#define LD_STREAM_H
 
 #include <stdbool.h>
 
@@ -369,4 +369,4 @@ bool follow_start_catchup(StreamSpecs *specs, pid_t *pid);
 bool follow_wait_subprocesses(StreamSpecs *specs, pid_t prefetch, pid_t catchup);
 bool follow_wait_pid(pid_t subprocess, bool *exited, int *returnCode);
 
-#endif /* STREAM_H */
+#endif /* LD_STREAM_H */

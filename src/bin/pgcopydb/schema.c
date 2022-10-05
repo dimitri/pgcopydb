@@ -14,7 +14,7 @@
 #include "file_utils.h"
 #include "filtering.h"
 #include "log.h"
-#include "parsing.h"
+#include "parsing_utils.h"
 #include "pg_depend_sql.h"
 #include "pgsql.h"
 #include "schema.h"

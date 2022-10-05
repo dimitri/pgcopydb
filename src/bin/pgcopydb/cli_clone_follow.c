@@ -15,11 +15,11 @@
 #include "copydb.h"
 #include "commandline.h"
 #include "env_utils.h"
+#include "ld_stream.h"
 #include "log.h"
-#include "parsing.h"
+#include "parsing_utils.h"
 #include "pgsql.h"
 #include "progress.h"
-#include "stream.h"
 #include "string_utils.h"
 #include "summary.h"
 
@@ -428,7 +428,10 @@ cloneDB(CopyDataSpec *copySpecs)
 	{
 		log_info("STEP 0: copy the source database roles");
 
-		if (!copydb_copy_roles(copySpecs))
+		if (!pg_copy_roles(&(copySpecs->pgPaths),
+						   copySpecs->source_pguri,
+						   copySpecs->target_pguri,
+						   copySpecs->dumpPaths.rolesFilename))
 		{
 			/* errors have already been logged */
 			return false;

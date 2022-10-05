@@ -14,7 +14,7 @@
 #include "copydb.h"
 #include "env_utils.h"
 #include "log.h"
-#include "parsing.h"
+#include "parsing_utils.h"
 #include "pidfile.h"
 #include "progress.h"
 #include "schema.h"

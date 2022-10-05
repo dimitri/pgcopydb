@@ -22,7 +22,7 @@
 #include "defaults.h"
 #include "file_utils.h"
 #include "log.h"
-#include "parsing.h"
+#include "parsing_utils.h"
 #include "pgsql.h"
 #include "pg_utils.h"
 #include "signals.h"

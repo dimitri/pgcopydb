@@ -94,6 +94,11 @@ bool pg_restore_roles(PostgresPaths *pgPaths,
 					  const char *pguri,
 					  const char *filename);
 
+bool pg_copy_roles(PostgresPaths *pgPaths,
+				   const char *source_pguri,
+				   const char *target_pguri,
+				   const char *filename);
+
 bool pg_restore_db(PostgresPaths *pgPaths,
 				   const char *pguri,
 				   const char *dumpFilename,
