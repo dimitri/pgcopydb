@@ -26,6 +26,7 @@ jobs:
           - filtering
           - cdc
           - follow
+          - follow-9.6
           - extensions
     steps:
       - name: Checkout repository
