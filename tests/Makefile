@@ -24,6 +24,9 @@ cdc: build
 follow: build
 	$(MAKE) -C $@
 
+follow-9.6: build
+	$(MAKE) -C $@
+
 extensions: build
 	$(MAKE) -C $@
 

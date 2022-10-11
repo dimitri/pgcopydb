@@ -159,6 +159,9 @@ typedef struct PGSQL
 	ConnectionRetryPolicy retryPolicy;
 	PGConnStatus status;
 
+	char pgversion[12];         /* "x.yy.zz" or "xx.zz" */
+	int pgversion_num;
+
 	ProcessNotificationFunction notificationProcessFunction;
 	int notificationGroupId;
 	int64_t notificationNodeId;
@@ -239,6 +242,7 @@ void fetchedRows(void *ctx, PGresult *result);
 bool pgsql_begin(PGSQL *pgsql);
 bool pgsql_commit(PGSQL *pgsql);
 bool pgsql_rollback(PGSQL *pgsql);
+bool pgsql_server_version(PGSQL *pgsql);
 bool pgsql_set_transaction(PGSQL *pgsql,
 						   IsolationLevel level, bool readOnly, bool deferrable);
 bool pgsql_export_snapshot(PGSQL *pgsql, char *snapshot, size_t size);
@@ -396,6 +400,10 @@ bool pgsql_init_stream(LogicalStreamClient *client,
 					   XLogRecPtr startpos,
 					   XLogRecPtr endpos);
 
+bool pgsql_create_logical_replication_slot(LogicalStreamClient *client,
+										   uint64_t *lsn,
+										   char *snapshot,
+										   size_t size);
 bool pgsql_start_replication(LogicalStreamClient *client);
 bool pgsql_stream_logical(LogicalStreamClient *client,
 						  LogicalStreamContext *context);

@@ -1,5 +1,5 @@
 /*
- * src/bin/pgcopydb/stream.h
+ * src/bin/pgcopydb/ld_stream.h
  *	 SQL queries to discover the source database stream
  */
 
@@ -8,7 +8,10 @@
 
 #include <stdbool.h>
 
+#include "parson.h"
+
 #include "copydb.h"
+#include "queue_utils.h"
 #include "pgsql.h"
 
 #define OUTPUT_BEGIN "BEGIN; -- "

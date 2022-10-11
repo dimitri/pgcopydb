@@ -518,7 +518,25 @@ cli_sentinel_set_endpos(int argc, char **argv)
 		exit(EXIT_CODE_SOURCE);
 	}
 
+	if (!pgsql_begin(&pgsql))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	if (!pgsql_server_version(&pgsql))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
 	if (!pgsql_update_sentinel_endpos(&pgsql, useCurrentLSN, endpos))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	if (!pgsql_commit(&pgsql))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);
