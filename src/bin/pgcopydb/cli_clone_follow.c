@@ -134,12 +134,55 @@ cli_clone(int argc, char **argv)
 	 * First, we need to open a snapshot that we're going to re-use in all our
 	 * connections to the source database. When the --snapshot option has been
 	 * used, instead of exporting a new snapshot, we can just re-use it.
+	 *
+	 * When using PostgreSQL 9.6 logical decoding, we need to create our
+	 * replication slot and fetch the snapshot from that logical replication
+	 * command, it's the only way.
 	 */
-	if (!copydb_prepare_snapshot(&copySpecs))
+	bool snapshotExported = false;
+
+	if (copySpecs.follow)
+	{
+		TransactionSnapshot *snapshot = &(copySpecs.sourceSnapshot);
+		PGSQL *pgsql = &(snapshot->pgsql);
+
+		if (!pgsql_init(pgsql, copySpecs.source_pguri, PGSQL_CONN_SOURCE))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_SOURCE);
+		}
+
+		if (!pgsql_server_version(pgsql))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_SOURCE);
+		}
+
+		if (pgsql->pgversion_num < 100000)
+		{
+			if (!copydb_create_logical_replication_slot(&copySpecs,
+														streamSpecs.logrep_pguri,
+														streamSpecs.slotName))
+			{
+				/* errors have already been logged */
+				exit(EXIT_CODE_SOURCE);
+			}
+
+			snapshotExported = true;
+		}
+	}
+
+	/*
+	 * Make sure to export a snapshot if that's not been done just above.
+	 */
+	if (!snapshotExported && !copydb_prepare_snapshot(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
+
+	/* just keep track, even though we're not going to use this anymore */
+	snapshotExported = true;
 
 	/*
 	 * When --follow has been used, we start two subprocess (clone, follow).

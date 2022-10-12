@@ -1,0 +1,23 @@
+ARG PGVERSION=9.6
+
+FROM postgres:${PGVERSION}
+
+ARG PGVERSION
+
+RUN apt-get update \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    build-essential \
+    ca-certificates \
+	curl \
+	gnupg \
+    postgresql-common \
+	&& rm -rf /var/lib/apt/lists/*
+
+RUN curl https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
+RUN echo "deb http://apt.postgresql.org/pub/repos/apt stretch-pgdg main ${PGVERSION}" > /etc/apt/sources.list.d/pgdg.list
+
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends postgresql-${PGVERSION}-wal2json \
+	&& rm -rf /var/lib/apt/lists/*
+
+COPY allow-logical-rep.sh /docker-entrypoint-initdb.d

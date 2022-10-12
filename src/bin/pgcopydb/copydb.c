@@ -24,11 +24,19 @@
 #include "summary.h"
 
 #define COMMON_GUC_SETTINGS \
-	{ "client_encoding", "'UTF-8'" },
+	{ "client_encoding", "'UTF-8'" }, \
+	{ "tcp_keepalives_idle", "'60s'" },
+
+
+/* Postgres 9.5 does not have idle_in_transaction_session_timeout */
+GUC srcSettings95[] = {
+	COMMON_GUC_SETTINGS
+	{ NULL, NULL },
+};
+
 
 GUC srcSettings[] = {
 	COMMON_GUC_SETTINGS
-	{ "tcp_keepalives_idle", "'60s'" },
 	{ "idle_in_transaction_session_timeout", "0" },
 	{ NULL, NULL },
 };
@@ -36,7 +44,6 @@ GUC srcSettings[] = {
 
 GUC dstSettings[] = {
 	COMMON_GUC_SETTINGS
-	{ "tcp_keepalives_idle", "'60s'" },
 	{ "maintenance_work_mem", "'1 GB'" },
 	{ "synchronous_commit", "'off'" },
 	{ NULL, NULL },
@@ -856,269 +863,6 @@ copydb_init_tablepaths_for_part(CopyFilePaths *cfPaths,
 			cfPaths->tbldir,
 			oid,
 			partNumber);
-
-	return true;
-}
-
-
-/*
- * copydb_copy_snapshot initializes a new TransactionSnapshot from another
- * snapshot that's been exported already, copying the connection string and the
- * snapshot identifier.
- */
-bool
-copydb_copy_snapshot(CopyDataSpec *specs, TransactionSnapshot *snapshot)
-{
-	PGSQL pgsql = { 0 };
-	TransactionSnapshot *source = &(specs->sourceSnapshot);
-
-	/* copy our source snapshot data into the new snapshot instance */
-	snapshot->pgsql = pgsql;
-	snapshot->connectionType = source->connectionType;
-
-	strlcpy(snapshot->pguri, source->pguri, sizeof(snapshot->pguri));
-	strlcpy(snapshot->snapshot, source->snapshot, sizeof(snapshot->snapshot));
-
-	return true;
-}
-
-
-/*
- * copydb_open_snapshot opens a snapshot on the given connection.
- *
- * This is needed in the main process, so that COPY processes can then re-use
- * the snapshot, and thus we get a consistent view of the database all along.
- */
-bool
-copydb_export_snapshot(TransactionSnapshot *snapshot)
-{
-	PGSQL *pgsql = &(snapshot->pgsql);
-
-	log_debug("copydb_export_snapshot");
-
-	if (!pgsql_init(pgsql, snapshot->pguri, snapshot->connectionType))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!pgsql_begin(pgsql))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/*
-	 * As Postgres docs for SET TRANSACTION SNAPSHOT say:
-	 *
-	 * Furthermore, the transaction must already be set to SERIALIZABLE or
-	 * REPEATABLE READ isolation level (otherwise, the snapshot would be
-	 * discarded immediately, since READ COMMITTED mode takes a new snapshot
-	 * for each command).
-	 *
-	 * When --filters are used, pgcopydb creates TEMP tables on the source
-	 * database to then implement the filtering as JOINs with the Postgres
-	 * catalogs. And even TEMP tables need read-write transaction.
-	 */
-	IsolationLevel level = ISOLATION_SERIALIZABLE;
-	bool readOnly = false;
-	bool deferrable = true;
-
-	if (!pgsql_set_transaction(pgsql, level, readOnly, deferrable))
-	{
-		/* errors have already been logged */
-		(void) pgsql_finish(pgsql);
-		return false;
-	}
-
-	if (!pgsql_export_snapshot(pgsql,
-							   snapshot->snapshot,
-							   sizeof(snapshot->snapshot)))
-	{
-		/* errors have already been logged */
-		(void) pgsql_finish(pgsql);
-		return false;
-	}
-
-	snapshot->state = SNAPSHOT_STATE_EXPORTED;
-
-	log_info("Exported snapshot \"%s\" from the source database",
-			 snapshot->snapshot);
-
-	return true;
-}
-
-
-/*
- * copydb_set_snapshot opens a transaction and set it to re-use an existing
- * snapshot.
- */
-bool
-copydb_set_snapshot(CopyDataSpec *copySpecs)
-{
-	TransactionSnapshot *snapshot = &(copySpecs->sourceSnapshot);
-	PGSQL *pgsql = &(snapshot->pgsql);
-
-	if (!pgsql_init(pgsql, snapshot->pguri, snapshot->connectionType))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!pgsql_begin(pgsql))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (copySpecs->consistent)
-	{
-		/*
-		 * As Postgres docs for SET TRANSACTION SNAPSHOT say:
-		 *
-		 * Furthermore, the transaction must already be set to SERIALIZABLE or
-		 * REPEATABLE READ isolation level (otherwise, the snapshot would be
-		 * discarded immediately, since READ COMMITTED mode takes a new
-		 * snapshot for each command).
-		 *
-		 * When --filters are used, pgcopydb creates TEMP tables on the source
-		 * database to then implement the filtering as JOINs with the Postgres
-		 * catalogs. And even TEMP tables need read-write transaction.
-		 */
-		IsolationLevel level = ISOLATION_REPEATABLE_READ;
-		bool readOnly = false;
-		bool deferrable = true;
-
-		if (!pgsql_set_transaction(pgsql, level, readOnly, deferrable))
-		{
-			/* errors have already been logged */
-			(void) pgsql_finish(pgsql);
-			return false;
-		}
-
-		if (!pgsql_set_snapshot(pgsql, snapshot->snapshot))
-		{
-			/* errors have already been logged */
-			(void) pgsql_finish(pgsql);
-			return false;
-		}
-
-		copySpecs->sourceSnapshot.state = SNAPSHOT_STATE_SET;
-	}
-	else
-	{
-		copySpecs->sourceSnapshot.state = SNAPSHOT_STATE_NOT_CONSISTENT;
-	}
-
-	/* also set our GUC values for the source connection */
-	if (!pgsql_set_gucs(pgsql, srcSettings))
-	{
-		log_fatal("Failed to set our GUC settings on the source connection, "
-				  "see above for details");
-		return false;
-	}
-
-	return true;
-}
-
-
-/*
- * copydb_close_snapshot closes the snapshot on Postgres by committing the
- * transaction and finishing the connection.
- */
-bool
-copydb_close_snapshot(CopyDataSpec *copySpecs)
-{
-	TransactionSnapshot *snapshot = &(copySpecs->sourceSnapshot);
-	PGSQL *pgsql = &(snapshot->pgsql);
-
-	if (copySpecs->sourceSnapshot.state == SNAPSHOT_STATE_SET ||
-		copySpecs->sourceSnapshot.state == SNAPSHOT_STATE_EXPORTED ||
-		copySpecs->sourceSnapshot.state == SNAPSHOT_STATE_NOT_CONSISTENT)
-	{
-		if (!pgsql_commit(pgsql))
-		{
-			char pguri[MAXCONNINFO] = { 0 };
-
-			(void) parse_and_scrub_connection_string(snapshot->pguri, pguri);
-
-			log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
-					  snapshot->snapshot,
-					  pguri);
-			return false;
-		}
-
-		(void) pgsql_finish(pgsql);
-	}
-
-	copySpecs->sourceSnapshot.state = SNAPSHOT_STATE_CLOSED;
-
-	return true;
-}
-
-
-/*
- * copydb_prepare_snapshot connects to the source database and either export a
- * new Postgres snapshot, or set the transaction's snapshot to the given
- * already exported snapshot (see --snapshot and PGCOPYDB_SNAPSHOT).
- */
-bool
-copydb_prepare_snapshot(CopyDataSpec *copySpecs)
-{
-	/* when --not-consistent is used, we have nothing to do here */
-	if (!copySpecs->consistent)
-	{
-		copySpecs->sourceSnapshot.state = SNAPSHOT_STATE_SKIPPED;
-		log_debug("copydb_prepare_snapshot: --not-consistent, skipping");
-		return true;
-	}
-
-	/*
-	 * First, we need to open a snapshot that we're going to re-use in all our
-	 * connections to the source database. When the --snapshot option has been
-	 * used, instead of exporting a new snapshot, we can just re-use it.
-	 */
-	TransactionSnapshot *sourceSnapshot = &(copySpecs->sourceSnapshot);
-
-	if (IS_EMPTY_STRING_BUFFER(sourceSnapshot->snapshot))
-	{
-		if (!copydb_export_snapshot(sourceSnapshot))
-		{
-			log_fatal("Failed to export a snapshot on \"%s\"",
-					  sourceSnapshot->pguri);
-			return false;
-		}
-	}
-	else
-	{
-		if (!copydb_set_snapshot(copySpecs))
-		{
-			log_fatal("Failed to use given --snapshot \"%s\"",
-					  sourceSnapshot->snapshot);
-			return false;
-		}
-
-		log_info("[SNAPSHOT] Using snapshot \"%s\" on the source database",
-				 sourceSnapshot->snapshot);
-	}
-
-	/* store the snapshot in a file, to support --resume --snapshot ... */
-	if (!write_file(sourceSnapshot->snapshot,
-					strlen(sourceSnapshot->snapshot),
-					copySpecs->cfPaths.snfile))
-	{
-		log_fatal("Failed to create the snapshot file \"%s\"",
-				  copySpecs->cfPaths.snfile);
-		return false;
-	}
-
-	/* also set our GUC values for the source connection */
-	if (!pgsql_set_gucs(&(sourceSnapshot->pgsql), srcSettings))
-	{
-		log_fatal("Failed to set our GUC settings on the source connection, "
-				  "see above for details");
-		return false;
-	}
 
 	return true;
 }

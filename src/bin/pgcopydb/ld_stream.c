@@ -1277,6 +1277,61 @@ stream_create_repl_slot(CopyDataSpec *copySpecs, char *slotName, uint64_t *lsn)
 	PGSQL *pgsql = &(copySpecs->sourceSnapshot.pgsql);
 
 	/*
+	 * When using Postgres 9.6, we're using the logical decoding replication
+	 * protocol command CREATE_REPLICATION_SLOT to both create the replication
+	 * and also export a snapshot.
+	 */
+	if (copySpecs->sourceSnapshot.exportedCreateSlotSnapshot)
+	{
+		bool slotExists = false;
+
+		if (!pgsql_init(pgsql, copySpecs->source_pguri, PGSQL_CONN_SOURCE))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!pgsql_begin(pgsql))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!pgsql_server_version(pgsql))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		log_info("Postgres server version %s (%d)",
+				 pgsql->pgversion, pgsql->pgversion_num);
+
+		if (!pgsql_replication_slot_exists(pgsql, slotName, &slotExists, lsn))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!pgsql_commit(pgsql))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!slotExists)
+		{
+			log_error("Logical replication slot \"%s\" does not exist, "
+					  "it is expected to have been created by the replication "
+					  "command CREATE_REPLICATION_SLOT when using Postgres %s",
+					  slotName,
+					  copySpecs->sourceSnapshot.stream.pgsql.pgversion);
+			return false;
+		}
+
+		return true;
+	}
+
+	/*
 	 * When --snapshot has been used, open a transaction using that snapshot.
 	 */
 	if (!IS_EMPTY_STRING_BUFFER(copySpecs->sourceSnapshot.snapshot))
@@ -1302,6 +1357,18 @@ stream_create_repl_slot(CopyDataSpec *copySpecs, char *slotName, uint64_t *lsn)
 			/* errors have already been logged */
 			return false;
 		}
+	}
+
+	/*
+	 * The pgsql_create_replication_slot SQL query text depends on the source
+	 * Postgres version, because the "lsn" column used to be named
+	 * "xlog_position" in 9.6. Make sure to retrieve the source server version
+	 * now.
+	 */
+	if (!pgsql_server_version(pgsql))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	bool slotExists = false;

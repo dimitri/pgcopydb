@@ -418,6 +418,10 @@ pgsql_finish(PGSQL *pgsql)
 		PQfinish(pgsql->connection);
 		pgsql->connection = NULL;
 
+		/* cache invalidation for pgversion */
+		pgsql->pgversion[0] = '\0';
+		pgsql->pgversion_num = 0;
+
 		/*
 		 * When we fail to connect, on the way out we call pgsql_finish to
 		 * reset the connection to NULL. We still want the callers to be able
@@ -955,6 +959,105 @@ pgsql_commit(PGSQL *pgsql)
 }
 
 
+typedef struct PgVersionContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	char pgversion[12];
+	int pgversion_num;
+	bool parsedOk;
+} PgVersionContext;
+
+
+/*
+ * parseVersionContext parses the result of the pgsql_server_version SQL query.
+ */
+static void
+parseVersionContext(void *ctx, PGresult *result)
+{
+	PgVersionContext *context = (PgVersionContext *) ctx;
+	int nTuples = PQntuples(result);
+	int errors = 0;
+
+	if (nTuples != 1)
+	{
+		log_error("Query returned %d rows, expected 1", nTuples);
+		context->parsedOk = false;
+		return;
+	}
+
+	if (PQnfields(result) != 2)
+	{
+		log_error("Query returned %d columns, expected 2", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	/* 1. server_version */
+	char *value = PQgetvalue(result, 0, 0);
+	int length = strlcpy(context->pgversion, value, sizeof(context->pgversion));
+
+	if (length >= sizeof(context->pgversion))
+	{
+		log_error("Postgres version string \"%s\" is %d bytes long, "
+				  "the maximum expected is %ld",
+				  value, length, sizeof(context->pgversion) - 1);
+		++errors;
+	}
+
+	/* 2. server_version_num */
+	value = PQgetvalue(result, 0, 1);
+
+	if (!stringToInt(value, &(context->pgversion_num)))
+	{
+		log_error("Failed to parse Postgres server_version_num \"%s\"", value);
+		++errors;
+	}
+
+	context->parsedOk = errors == 0;
+}
+
+
+/*
+ * pgsql_server_version_num sets pgversion in the given PGSQL instance.
+ */
+bool
+pgsql_server_version(PGSQL *pgsql)
+{
+	PgVersionContext context = { { 0 }, { 0 }, 0, false };
+
+	const char *sql =
+		"select current_setting('server_version'), "
+		"       current_setting('server_version_num')::integer";
+
+	/* use the cache; invalidation happens in pgsql_finish() */
+	if (pgsql->pgversion_num > 0)
+	{
+		return true;
+	}
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   0, NULL, NULL,
+								   &context, &parseVersionContext))
+	{
+		log_error("Failed to get Postgres server_version_num");
+		return false;
+	}
+
+	strlcpy(pgsql->pgversion, context.pgversion, sizeof(pgsql->pgversion));
+	pgsql->pgversion_num = context.pgversion_num;
+
+	char *endpoint =
+		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
+
+	log_notice("[%s] Postgres version %s (%d)",
+			   endpoint,
+			   pgsql->pgversion,
+			   pgsql->pgversion_num);
+
+	return true;
+}
+
+
 /*
  * pgsql_set_transaction calls SET ISOLATION LEVEl with the specific
  * transaction modes parameters.
@@ -1166,8 +1269,7 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 		 */
 		if (pgsql->connectionStatementType == PGSQL_CONNECTION_SINGLE_STATEMENT)
 		{
-			PQfinish(pgsql->connection);
-			pgsql->connection = NULL;
+			(void) pgsql_finish(pgsql);
 		}
 
 		return false;
@@ -1182,8 +1284,7 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 	clear_results(pgsql);
 	if (pgsql->connectionStatementType == PGSQL_CONNECTION_SINGLE_STATEMENT)
 	{
-		PQfinish(pgsql->connection);
-		pgsql->connection = NULL;
+		(void) pgsql_finish(pgsql);
 	}
 
 	return true;
@@ -2715,7 +2816,151 @@ pgsql_init_stream(LogicalStreamClient *client,
 
 
 /*
- * Send the START_REPLICATION command.
+ * Send the CREATE_REPLICATION_SLOT logical replication command.
+ *
+ * This is a Postgres 9.6 compatibility function.
+ *
+ * There is a deadlock situation when calling
+ * pg_create_logical_replication_slot() within a transaction that uses an
+ * already exported snapshot in Postgres 9.6.
+ *
+ * So when the source server is running 9.6 we need to export the snapshot from
+ * the logical replication command CREATE_REPLICATION_SLOT,
+ */
+bool
+pgsql_create_logical_replication_slot(LogicalStreamClient *client,
+									  uint64_t *lsn,
+									  char *snapshot,
+									  size_t size)
+{
+	PGSQL *pgsql = &(client->pgsql);
+
+	/* Initiate the replication stream at specified location */
+	char query[BUFSIZE] = { 0 };
+
+	sformat(query, sizeof(query),
+			"CREATE_REPLICATION_SLOT \"%s\" LOGICAL \"%s\"",
+			client->slotName,
+			REPLICATION_PLUGIN);
+
+	if (!pgsql_open_connection(pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	PGresult *result = PQexec(pgsql->connection, query);
+
+	if (PQresultStatus(result) != PGRES_TUPLES_OK)
+	{
+		log_error("Failed to send CREATE_REPLICATION_SLOT command:");
+
+		(void) pgcopy_log_error(pgsql, result, query);
+
+		return false;
+	}
+
+	int nTuples = PQntuples(result);
+
+	if (nTuples != 1)
+	{
+		log_error("Logical replication command CREATE_REPLICATION_SLOT "
+				  "returned %d rows, expected 1",
+				  nTuples);
+		pgsql_finish(pgsql);
+		return false;
+	}
+
+	if (PQnfields(result) != 4)
+	{
+		log_error("Logical replication command CREATE_REPLICATION_SLOT "
+				  "returned %d columns, expected 4",
+				  PQnfields(result));
+		pgsql_finish(pgsql);
+		return false;
+	}
+
+	/* 1. slot_name */
+	char *value = PQgetvalue(result, 0, 0);
+
+	if (strcmp(value, client->slotName) != 0)
+	{
+		log_error("Logical replication command CREATE_REPLICATION_SLOT "
+				  "returned slot_name \"%s\", expected \"%s\"",
+				  value,
+				  client->slotName);
+		pgsql_finish(pgsql);
+		return false;
+	}
+
+	/* 2. consistent_point */
+	value = PQgetvalue(result, 0, 1);
+
+	if (!parseLSN(value, lsn))
+	{
+		log_error("Failed to parse consistent_point LSN \"%s\" returned by "
+				  " logical replication command CREATE_REPLICATION_SLOT",
+				  value);
+		pgsql_finish(pgsql);
+		return false;
+	}
+
+	/* 3. snapshot_name */
+	if (PQgetisnull(result, 0, 2))
+	{
+		log_error("Logical replication command CREATE_REPLICATION_SLOT "
+				  "returned snapshot_name NULL");
+		pgsql_finish(pgsql);
+		return false;
+	}
+	else
+	{
+		value = PQgetvalue(result, 0, 2);
+		int length = strlcpy(snapshot, value, BUFSIZE);
+
+		if (length >= size)
+		{
+			log_error("Snapshot \"%s\" is %d bytes long, the maximum is %ld",
+					  value, length, size - 1);
+			pgsql_finish(pgsql);
+			return false;
+		}
+	}
+
+	/* 4. output_plugin */
+	if (PQgetisnull(result, 0, 3))
+	{
+		log_error("Logical replication command CREATE_REPLICATION_SLOT "
+				  "returned output_plugin is NULL, expected \"%s\"",
+				  REPLICATION_PLUGIN);
+		pgsql_finish(pgsql);
+		return false;
+	}
+	else
+	{
+		value = PQgetvalue(result, 0, 3);
+
+		if (strcmp(value, REPLICATION_PLUGIN) != 0)
+		{
+			log_error("Logical replication command CREATE_REPLICATION_SLOT "
+					  "returned output_plugin \"%s\", expected \"%s\"",
+					  value,
+					  REPLICATION_PLUGIN);
+			pgsql_finish(pgsql);
+			return false;
+		}
+	}
+
+	log_notice("Created logical replication slot \"%s\" at %X/%X",
+			   client->slotName,
+			   LSN_FORMAT_ARGS(*lsn));
+
+	return true;
+}
+
+
+/*
+ * Send the START_REPLICATION logical replication command.
  */
 bool
 pgsql_start_replication(LogicalStreamClient *client)
@@ -3700,9 +3945,15 @@ pgsql_replication_slot_exists(PGSQL *pgsql, const char *slotName,
 {
 	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_STRING, false };
 	char *sql =
+		pgsql->pgversion_num < 90600
+		?
+
+		/* Postgres 9.5 does not have confirmed_flush_lsn */
+		"SELECT restart_lsn "
+		"FROM pg_replication_slots WHERE slot_name = $1"
+		:
 		"SELECT confirmed_flush_lsn "
-		"FROM pg_replication_slots "
-		"WHERE slot_name = $1";
+		"FROM pg_replication_slots WHERE slot_name = $1";
 
 	int paramCount = 1;
 	Oid paramTypes[1] = { NAMEOID };
@@ -3771,9 +4022,16 @@ pgsql_create_replication_slot(PGSQL *pgsql,
 							  uint64_t *lsn)
 {
 	ReplicationSlotContext context = { 0 };
+
 	char *sql =
+		pgsql->pgversion_num < 100000
+		?
+		"SELECT slot_name, xlog_position "
+		"  FROM pg_create_logical_replication_slot($1, $2)"
+		:
 		"SELECT slot_name, lsn "
 		"  FROM pg_create_logical_replication_slot($1, $2)";
+
 	int paramCount = 2;
 	const Oid paramTypes[2] = { TEXTOID, TEXTOID };
 	const char *paramValues[2] = { slotName, plugin };
@@ -3934,13 +4192,25 @@ pgsql_update_sentinel_startpos(PGSQL *pgsql, uint64_t startpos)
 bool
 pgsql_update_sentinel_endpos(PGSQL *pgsql, bool current, uint64_t endpos)
 {
-	char *update =
-		current
-		? "update pgcopydb.sentinel set endpos = pg_current_wal_flush_lsn()"
-		: "update pgcopydb.sentinel set endpos = $1";
-
 	if (current)
 	{
+		char *updateTmpl = "update pgcopydb.sentinel set endpos = %s()";
+		char update[BUFSIZE] = { 0 };
+		char *fn = "pg_current_wal_flush_lsn";
+
+		if (pgsql->pgversion_num < 90600)
+		{
+			/* Postgres 9.5 only had that one */
+			fn = "pg_current_xlog_location";
+		}
+		else if (pgsql->pgversion_num < 100000)
+		{
+			/* Postgres 9.6 then had that new one */
+			fn = "pg_current_xlog_flush_location";
+		}
+
+		sformat(update, sizeof(update), updateTmpl, fn);
+
 		if (!pgsql_execute(pgsql, update))
 		{
 			log_error("Failed to update pgcopydb.sentinel endpos to %X/%X",
@@ -3950,6 +4220,9 @@ pgsql_update_sentinel_endpos(PGSQL *pgsql, bool current, uint64_t endpos)
 	}
 	else
 	{
+		/* use endpos parameter */
+		char *update = "update pgcopydb.sentinel set endpos = $1";
+
 		char endLSN[PG_LSN_MAXLENGTH] = { 0 };
 
 		sformat(endLSN, sizeof(endLSN), "%X/%X", LSN_FORMAT_ARGS(endpos));
