@@ -101,6 +101,23 @@ copydb_export_snapshot(TransactionSnapshot *snapshot)
 	log_info("Exported snapshot \"%s\" from the source database",
 			 snapshot->snapshot);
 
+	/* also set our GUC values for the source connection */
+	if (!pgsql_server_version(pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	GUC *settings =
+		pgsql->pgversion_num < 90600 ? srcSettings95 : srcSettings;
+
+	if (!pgsql_set_gucs(pgsql, settings))
+	{
+		log_fatal("Failed to set our GUC settings on the source connection, "
+				  "see above for details");
+		return false;
+	}
+
 	return true;
 }
 
@@ -169,7 +186,16 @@ copydb_set_snapshot(CopyDataSpec *copySpecs)
 	}
 
 	/* also set our GUC values for the source connection */
-	if (!pgsql_set_gucs(pgsql, srcSettings))
+	if (!pgsql_server_version(pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	GUC *settings =
+		pgsql->pgversion_num < 90600 ? srcSettings95 : srcSettings;
+
+	if (!pgsql_set_gucs(pgsql, settings))
 	{
 		log_fatal("Failed to set our GUC settings on the source connection, "
 				  "see above for details");
@@ -194,9 +220,14 @@ copydb_close_snapshot(CopyDataSpec *copySpecs)
 		snapshot->state == SNAPSHOT_STATE_EXPORTED ||
 		snapshot->state == SNAPSHOT_STATE_NOT_CONSISTENT)
 	{
-		/* only COMMIT sql snapshot kinds, no need for logical rep ones */
-		if (snapshot->kind == SNAPSHOT_KIND_SQL)
+		/* we might need to close our logical stream connection, if any */
+		if (snapshot->kind == SNAPSHOT_KIND_LOGICAL)
 		{
+			(void) pgsql_finish(&(snapshot->stream.pgsql));
+		}
+		else if (snapshot->kind == SNAPSHOT_KIND_SQL)
+		{
+			/* only COMMIT sql snapshot kinds, no need for logical rep ones */
 			if (!pgsql_commit(pgsql))
 			{
 				char pguri[MAXCONNINFO] = { 0 };
@@ -271,14 +302,6 @@ copydb_prepare_snapshot(CopyDataSpec *copySpecs)
 	{
 		log_fatal("Failed to create the snapshot file \"%s\"",
 				  copySpecs->cfPaths.snfile);
-		return false;
-	}
-
-	/* also set our GUC values for the source connection */
-	if (!pgsql_set_gucs(&(sourceSnapshot->pgsql), srcSettings))
-	{
-		log_fatal("Failed to set our GUC settings on the source connection, "
-				  "see above for details");
 		return false;
 	}
 

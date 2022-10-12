@@ -3945,9 +3945,15 @@ pgsql_replication_slot_exists(PGSQL *pgsql, const char *slotName,
 {
 	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_STRING, false };
 	char *sql =
+		pgsql->pgversion_num < 90600
+		?
+
+		/* Postgres 9.5 does not have confirmed_flush_lsn */
+		"SELECT restart_lsn "
+		"FROM pg_replication_slots WHERE slot_name = $1"
+		:
 		"SELECT confirmed_flush_lsn "
-		"FROM pg_replication_slots "
-		"WHERE slot_name = $1";
+		"FROM pg_replication_slots WHERE slot_name = $1";
 
 	int paramCount = 1;
 	Oid paramTypes[1] = { NAMEOID };
@@ -4188,12 +4194,22 @@ pgsql_update_sentinel_endpos(PGSQL *pgsql, bool current, uint64_t endpos)
 {
 	if (current)
 	{
-		char *update =
-			pgsql->pgversion_num < 100000
-			?
-			"update pgcopydb.sentinel set endpos = pg_current_xlog_flush_location()"
-			:
-			"update pgcopydb.sentinel set endpos = pg_current_wal_flush_lsn()";
+		char *updateTmpl = "update pgcopydb.sentinel set endpos = %s()";
+		char update[BUFSIZE] = { 0 };
+		char *fn = "pg_current_wal_flush_lsn";
+
+		if (pgsql->pgversion_num < 90600)
+		{
+			/* Postgres 9.5 only had that one */
+			fn = "pg_current_xlog_location";
+		}
+		else if (pgsql->pgversion_num < 100000)
+		{
+			/* Postgres 9.6 then had that new one */
+			fn = "pg_current_xlog_flush_location";
+		}
+
+		sformat(update, sizeof(update), updateTmpl, fn);
 
 		if (!pgsql_execute(pgsql, update))
 		{

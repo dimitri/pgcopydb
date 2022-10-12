@@ -29,6 +29,13 @@ done
 # switch to another WAL file, to test that our streaming solution can follow
 # WAL file changes.
 #
+switchwal='select pg_switch_xlog()'
+
+if [ "${PGVERSION}" == "10" ]
+then
+    switchwal='select pg_switch_wal()'
+fi
+
 for i in `seq 5`
 do
     psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
@@ -37,12 +44,23 @@ do
     psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
     sleep 1
 
-    psql -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_switch_xlog()'
+    psql -d ${PGCOPYDB_SOURCE_PGURI} -c "${switchwal}"
     sleep 1
 done
 
 # grab the current LSN, it's going to be our streaming end position
-lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_xlog_flush_location()'`
+if [ "${PGVERSION}" == "9.5" ]
+then
+    sql="select pg_current_xlog_location()"
+elif [ "${PGVERSION}" == "9.6" ]
+then
+    sql="select pg_current_xlog_flush_location()"
+else
+    sql="select pg_current_wal_flush_lsn()"
+fi
+
+# print current lsn, see that it's the same when using --current
+lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c "${sql}"`
 pgcopydb stream sentinel set endpos --current
 pgcopydb stream sentinel get
 

@@ -1291,7 +1291,28 @@ stream_create_repl_slot(CopyDataSpec *copySpecs, char *slotName, uint64_t *lsn)
 			return false;
 		}
 
+		if (!pgsql_begin(pgsql))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!pgsql_server_version(pgsql))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		log_info("Postgres server version %s (%d)",
+				 pgsql->pgversion, pgsql->pgversion_num);
+
 		if (!pgsql_replication_slot_exists(pgsql, slotName, &slotExists, lsn))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!pgsql_commit(pgsql))
 		{
 			/* errors have already been logged */
 			return false;

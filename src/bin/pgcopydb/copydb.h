@@ -230,6 +230,7 @@ typedef enum
 } PostgresDumpSection;
 
 
+extern GUC srcSettings95[];
 extern GUC srcSettings[];
 extern GUC dstSettings[];
 
