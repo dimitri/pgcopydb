@@ -12,8 +12,11 @@ bin: GIT-VERSION-FILE
 	$(MAKE) -C src/bin/ all
 
 clean:
-	rm -f GIT-VERSION-FILE version
+	rm -f GIT-VERSION-FILE
 	$(MAKE) -C src/bin/ clean
+
+maintainer-clean: clean
+	rm -f version
 
 docs:
 	$(MAKE) -C docs clean man html
@@ -60,7 +63,7 @@ debsh-qa: deb-qa
 	docker run --rm -it pgcopydb_debian_qa bash
 
 .PHONY: all
-.PHONY: bin clean install docs
+.PHONY: bin clean install docs maintainer-clean
 .PHONY: test tests tests/ci tests/*
 .PHONY: deb debsh deb-qa debsh-qa
 .PHONY: GIT-VERSION-FILE
