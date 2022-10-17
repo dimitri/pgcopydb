@@ -136,6 +136,23 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 		return true;
 	}
 
+	/*
+	 * pg_restore --clean --if-exists gets easily confused when dealing with
+	 * partial schema information, such as when using only section=pre-data, or
+	 * when using the --use-list option as we do here.
+	 *
+	 * As a result, we implement --drop-if-exists our own way first, with a big
+	 * DROP IF EXISTS ... CASCADE statement that includes all our target tables.
+	 */
+	if (specs->restoreOptions.dropIfExists)
+	{
+		if (!copydb_target_drop_tables(specs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
 	if (!pg_restore_db(&(specs->pgPaths),
 					   specs->target_pguri,
 					   specs->dumpPaths.preFilename,
@@ -153,6 +170,63 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 				  specs->cfPaths.done.preDataRestore);
 		return false;
 	}
+
+	return true;
+}
+
+
+/*
+ * copydb_target_drop_tables prepares and executes a SQL query that prepares
+ * our target database by means of a DROP IF EXISTS ... CASCADE statement that
+ * includes all our target tables.
+ */
+bool
+copydb_target_drop_tables(CopyDataSpec *specs)
+{
+	PQExpBuffer query = createPQExpBuffer();
+
+	log_info("Drop tables on the target database, per --drop-if-exists");
+
+	appendPQExpBuffer(query, "DROP TABLE IF EXISTS");
+
+	SourceTableArray *tableArray = &(specs->sourceTableArray);
+
+	for (int tableIndex = 0; tableIndex < tableArray->count; tableIndex++)
+	{
+		SourceTable *source = &(tableArray->array[tableIndex]);
+
+		appendPQExpBuffer(query, "%s \"%s\".\"%s\"",
+						  tableIndex == 0 ? " " : ", ",
+						  source->nspname,
+						  source->relname);
+	}
+
+	appendPQExpBuffer(query, "CASCADE");
+
+	/* memory allocation could have failed while building string */
+	if (PQExpBufferBroken(query))
+	{
+		log_error("Failed to create DROP IF EXISTS query: out of memory");
+		destroyPQExpBuffer(query);
+		return false;
+	}
+
+	PGSQL dst = { 0 };
+
+	if (!pgsql_init(&dst, specs->target_pguri, PGSQL_CONN_TARGET))
+	{
+		/* errors have already been logged */
+		destroyPQExpBuffer(query);
+		return false;
+	}
+
+	if (!pgsql_execute(&dst, query->data))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	destroyPQExpBuffer(query);
 
 	return true;
 }
