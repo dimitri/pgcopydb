@@ -963,7 +963,7 @@ pgsql_commit(PGSQL *pgsql)
 typedef struct PgVersionContext
 {
 	char sqlstate[SQLSTATE_LENGTH];
-	char pgversion[12];
+	char pgversion[PG_VERSION_STRING_MAX_LENGTH];
 	int pgversion_num;
 	bool parsedOk;
 } PgVersionContext;

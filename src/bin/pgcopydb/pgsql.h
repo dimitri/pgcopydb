@@ -152,6 +152,12 @@ typedef enum
  */
 #define SQLSTATE_LENGTH 6
 
+/*
+ * That's "x.yy.zz" or "xx.zz" or maybe a debian style version string such as:
+ *  "13.8 (Debian 13.8-1.pgdg110+1)"
+ */
+#define PG_VERSION_STRING_MAX_LENGTH 45
+
 /* notification processing */
 typedef bool (*ProcessNotificationFunction)(int notificationGroupId,
 											int64_t notificationNodeId,
@@ -167,7 +173,7 @@ typedef struct PGSQL
 	PGConnStatus status;
 	char sqlstate[SQLSTATE_LENGTH];
 
-	char pgversion[45];         /* "x.yy.zz" or "xx.zz" or debian style */
+	char pgversion[PG_VERSION_STRING_MAX_LENGTH];
 	int pgversion_num;
 
 	ProcessNotificationFunction notificationProcessFunction;
