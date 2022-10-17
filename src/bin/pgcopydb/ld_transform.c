@@ -480,15 +480,22 @@ parseMessage(LogicalTransaction *txn,
 		return false;
 	}
 
-	if (txn->xid > 0 && txn->xid != metadata->xid)
+	/*
+	 * Check that XID make sense, except for SWITCH messages, which don't have
+	 * XID information, only have LSN information.
+	 */
+	if (metadata->action != STREAM_ACTION_SWITCH)
 	{
-		log_debug("%s", message);
-		log_error("BUG: logical message xid is %lld, which is different "
-				  "from the current transaction xid %lld",
-				  (long long) metadata->xid,
-				  (long long) txn->xid);
+		if (txn->xid > 0 && txn->xid != metadata->xid)
+		{
+			log_debug("%s", message);
+			log_error("BUG: logical message xid is %lld, which is different "
+					  "from the current transaction xid %lld",
+					  (long long) metadata->xid,
+					  (long long) txn->xid);
 
-		return false;
+			return false;
+		}
 	}
 
 	/* common entries for supported statements */
