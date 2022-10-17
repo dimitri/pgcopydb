@@ -421,24 +421,36 @@ copydb_process_table_data_worker(CopyDataSpec *specs)
 		/*
 		 * 1. Now COPY the TABLE DATA from the source to the destination.
 		 */
+		bool copySucceeded = true;
 
 		/* check for exclude-table-data filtering */
 		if (!tableSpecs->sourceTable->excludeData)
 		{
 			++copies;
 
+			/*
+			 * If we fail to copy a given table, continue looping. Otherwise
+			 * pgcopydb just continues processing all tables anyways (we wait
+			 * until all the sub-processes are finished, but we don't go and
+			 * signal them to stop immediately). We'd better continue with as
+			 * many processes as --table-jobs was given.
+			 */
 			if (!copydb_copy_table(specs, tableSpecs))
 			{
 				/* errors have already been logged */
-				return false;
+				copySucceeded = false;
+				++errors;
 			}
 		}
 
 		/* enter the critical section to communicate that we're done */
-		if (!copydb_mark_table_as_done(specs, tableSpecs))
+		if (copySucceeded)
 		{
-			/* errors have already been logged */
-			return false;
+			if (!copydb_mark_table_as_done(specs, tableSpecs))
+			{
+				/* errors have already been logged */
+				return false;
+			}
 		}
 
 		/*
@@ -461,7 +473,7 @@ copydb_process_table_data_worker(CopyDataSpec *specs)
 											 &indexesAreBeingProcessed))
 		{
 			/* errors have already been logged */
-			return false;
+			++errors;
 		}
 
 		if (specs->dirState.indexCopyIsDone &&
@@ -864,10 +876,61 @@ copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 		copySource = tableSpecs->part.copyQuery;
 	}
 
-	if (!pg_copy(src, &dst, copySource, tableSpecs->qname, truncate))
+	int attempts = 0;
+	int maxAttempts = 5;        /* allow 5 attempts total, 4 retries */
+
+	bool retry = true;
+
+	while (retry)
 	{
+		++attempts;
+
+		if (pg_copy(src, &dst, copySource, tableSpecs->qname, truncate))
+		{
+			/* success, get out of the retry loop */
+			if (attempts > 1)
+			{
+				log_info("Table %s COPY succeeded after %d attempts",
+						 tableSpecs->qname,
+						 attempts);
+			}
+			break;
+		}
+
 		/* errors have already been logged */
-		return false;
+		retry =
+			attempts < maxAttempts &&
+
+			/* retry only on Connection Exception errors */
+			(pgsql_state_is_connection_error(src) ||
+			 pgsql_state_is_connection_error(&dst));
+
+		if (maxAttempts <= attempts)
+		{
+			log_error("Failed to copy table %s even after %d attempts, "
+					  "see above for details",
+					  tableSpecs->qname,
+					  attempts);
+		}
+		else if (retry)
+		{
+			log_info("Failed to copy table %s (connection exception), "
+					 "retrying in %dms (attempt %d)",
+					 tableSpecs->qname,
+					 POSTGRES_PING_RETRY_CAP_SLEEP_TIME,
+					 attempts);
+		}
+
+		if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
+		{
+			break;
+		}
+
+		if (retry)
+		{
+			/* sleep a couple seconds then retry */
+			pg_usleep(POSTGRES_PING_RETRY_CAP_SLEEP_TIME * 1000);
+		}
 	}
 
 	return true;

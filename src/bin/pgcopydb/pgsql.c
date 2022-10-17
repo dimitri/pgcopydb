@@ -552,6 +552,7 @@ pgsql_open_connection(PGSQL *pgsql)
 
 	INSTR_TIME_SET_CURRENT(pgsql->retryPolicy.connectTime);
 	pgsql->status = PG_CONNECTION_OK;
+	pgsql->sqlstate[0] = '\0';
 
 	/* set the libpq notice receiver to integrate notifications as warnings. */
 	PQsetNoticeProcessor(pgsql->connection,
@@ -1233,6 +1234,8 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 		int lineCount = splitLines(message, errorLines, BUFSIZE);
 		int lineNumber = 0;
 
+		strlcpy(pgsql->sqlstate, sqlstate, sizeof(pgsql->sqlstate));
+
 		/*
 		 * PostgreSQL Error message might contain several lines. Log each of
 		 * them as a separate ERROR line here.
@@ -1302,6 +1305,28 @@ is_response_ok(PGresult *result)
 
 	return resultStatus == PGRES_SINGLE_TUPLE || resultStatus == PGRES_TUPLES_OK ||
 		   resultStatus == PGRES_COMMAND_OK;
+}
+
+
+/*
+ * is_connection_error returns true if the PGSQL sqlstate belongs to
+ *
+ *   Class 08 — Connection Exception.
+ *
+ * https://www.postgresql.org/docs/current/errcodes-appendix.html
+ *
+ * 08000	connection_exception
+ * 08003	connection_does_not_exist
+ * 08006	connection_failure
+ * 08001	sqlclient_unable_to_establish_sqlconnection
+ * 08004	sqlserver_rejected_establishment_of_sqlconnection
+ * 08007	transaction_resolution_unknown
+ * 08P01	protocol_violation
+ */
+bool
+pgsql_state_is_connection_error(PGSQL *pgsql)
+{
+	return pgsql->sqlstate[0] == '0' && pgsql->sqlstate[1] == '8';
 }
 
 
@@ -1916,10 +1941,13 @@ pg_copy_send_query(PGSQL *pgsql,
 static void
 pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context)
 {
+	char *sqlstate = PQresultErrorField(res, PG_DIAG_SQLSTATE);
 	char *message = PQerrorMessage(pgsql->connection);
 	char *errorLines[BUFSIZE] = { 0 };
 	int lineCount = splitLines(message, errorLines, BUFSIZE);
 	int lineNumber = 0;
+
+	strlcpy(pgsql->sqlstate, sqlstate, sizeof(pgsql->sqlstate));
 
 	char *prefix =
 		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
@@ -1930,7 +1958,14 @@ pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context)
 	 */
 	for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
 	{
-		log_error("%s %s", prefix, errorLines[lineNumber]);
+		if (lineNumber == 0)
+		{
+			log_error("%s [%s] %s", prefix, sqlstate, errorLines[lineNumber]);
+		}
+		else
+		{
+			log_error("%s %s", prefix, errorLines[lineNumber]);
+		}
 	}
 
 	log_error("%s Context: %s", prefix, context);
