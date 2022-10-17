@@ -43,7 +43,7 @@ static CommandLine stream_setup_command =
 	make_command(
 		"setup",
 		"Setup source and target systems for logical decoding",
-		" --source ... --target ... --dir ...",
+		"",
 		"  --source         Postgres URI to the source database\n"
 		"  --target         Postgres URI to the target database\n"
 		"  --dir            Work directory to use\n"
@@ -60,7 +60,7 @@ static CommandLine stream_cleanup_command =
 	make_command(
 		"cleanup",
 		"cleanup source and target systems for logical decoding",
-		" --source ... --target ... --dir ...",
+		"",
 		"  --source         Postgres URI to the source database\n"
 		"  --target         Postgres URI to the target database\n"
 		"  --dir            Work directory to use\n"
@@ -77,7 +77,7 @@ static CommandLine stream_prefetch_command =
 	make_command(
 		"prefetch",
 		"Stream JSON changes from the source database and transform them to SQL",
-		" --source ... ",
+		"",
 		"  --source         Postgres URI to the source database\n"
 		"  --dir            Work directory to use\n"
 		"  --restart        Allow restarting when temp files exist already\n"
@@ -92,7 +92,7 @@ static CommandLine stream_catchup_command =
 	make_command(
 		"catchup",
 		"Apply prefetched changes from SQL files to the target database",
-		" --source ... --target ...",
+		"",
 		"  --source         Postgres URI to the source database\n"
 		"  --target         Postgres URI to the target database\n"
 		"  --dir            Work directory to use\n"
@@ -109,7 +109,7 @@ static CommandLine stream_receive_command =
 	make_command(
 		"receive",
 		"Stream changes from the source database",
-		" --source ... ",
+		"",
 		"  --source         Postgres URI to the source database\n"
 		"  --dir            Work directory to use\n"
 		"  --restart        Allow restarting when temp files exist already\n"
@@ -124,7 +124,7 @@ static CommandLine stream_transform_command =
 	make_command(
 		"transform",
 		"Transform changes from the source database into SQL commands",
-		" [ --source ... ] <json filename> <sql filename> ",
+		" <json filename> <sql filename> ",
 		"  --source         Postgres URI to the source database\n"
 		"  --dir            Work directory to use\n"
 		"  --restart        Allow restarting when temp files exist already\n"
@@ -137,7 +137,7 @@ static CommandLine stream_apply_command =
 	make_command(
 		"apply",
 		"Apply changes from the source database into the target database",
-		" --target ... <sql filename> ",
+		" <sql filename> ",
 		"  --target         Postgres URI to the target database\n"
 		"  --dir            Work directory to use\n"
 		"  --restart        Allow restarting when temp files exist already\n"
@@ -433,6 +433,12 @@ cli_stream_getopts(int argc, char **argv)
 static void
 cli_stream_receive(int argc, char **argv)
 {
+	if (argc > 0)
+	{
+		commandline_help(stderr);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
 	(void) stream_start_in_mode(STREAM_MODE_RECEIVE);
 }
 
@@ -444,6 +450,12 @@ cli_stream_receive(int argc, char **argv)
 static void
 cli_stream_prefetch(int argc, char **argv)
 {
+	if (argc > 0)
+	{
+		commandline_help(stderr);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
 	(void) stream_start_in_mode(STREAM_MODE_PREFETCH);
 }
 
@@ -460,6 +472,12 @@ static void
 cli_stream_setup(int argc, char **argv)
 {
 	CopyDataSpec copySpecs = { 0 };
+
+	if (argc > 0)
+	{
+		commandline_help(stderr);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
 
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
@@ -516,6 +534,12 @@ static void
 cli_stream_cleanup(int argc, char **argv)
 {
 	CopyDataSpec copySpecs = { 0 };
+
+	if (argc > 0)
+	{
+		commandline_help(stderr);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
 
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
@@ -574,6 +598,12 @@ static void
 cli_stream_catchup(int argc, char **argv)
 {
 	CopyDataSpec copySpecs = { 0 };
+
+	if (argc > 0)
+	{
+		commandline_help(stderr);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
 
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
