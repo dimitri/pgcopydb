@@ -1094,11 +1094,13 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 {
 	log_trace("parse_archive_acl_or_comment: %s", ptr);
 
-	/* skip "ACL - " or "COMMENT - " */
-	char *aclPrefix = "ACL - ";
+	char *desc = ptr;
+
+	/* skip "ACL " or "COMMENT " */
+	char *aclPrefix = "ACL ";
 	size_t aclPrefixLen = strlen(aclPrefix);
 
-	char *commentPrefix = "COMMENT - ";
+	char *commentPrefix = "COMMENT ";
 	size_t commentPrefixLen = strlen(commentPrefix);
 
 	if (strncmp(ptr, aclPrefix, aclPrefixLen) == 0)
@@ -1113,14 +1115,33 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 	}
 	else
 	{
-		log_warn("Failed to parse desc \"%s\" for ACL or COMMENT", ptr);
+		log_warn("Failed to parse desc \"%s\" for ACL or COMMENT", desc);
 		return false;
 	}
 
 	/*
 	 * At the moment we only support filtering ACLs and COMMENTS for SCHEMA and
-	 * EXTENSION objects, see --skip-extensions.
+	 * EXTENSION objects, see --skip-extensions. So first, we skil the
+	 * namespace, which in our case would always be a dash.
 	 */
+
+	char nspname[NAMEDATALEN];
+
+	char *space = strchr(ptr, ' ');
+
+	if (space != NULL)
+	{
+		*space = '\0';
+		strlcpy(nspname, ptr, sizeof(nspname));
+
+		ptr = space + 1;
+	}
+	else
+	{
+		log_warn("Failed to parse desc \"%s\" for ACL or COMMENT", desc);
+		return false;
+	}
+
 	char *SCHEMA = "SCHEMA ";
 	size_t SCHEMA_LEN = strlen(SCHEMA);
 
