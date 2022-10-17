@@ -102,7 +102,7 @@ __ https://github.com/eulerto/wal2json/
 ::
 
    pgcopydb stream setup: Setup source and target systems for logical decoding
-   usage: pgcopydb stream setup  --source ... --target ... --dir ...
+   usage: pgcopydb stream setup
 
      --source         Postgres URI to the source database
      --target         Postgres URI to the target database
@@ -128,7 +128,7 @@ step.
 ::
 
    pgcopydb stream cleanup: cleanup source and target systems for logical decoding
-   usage: pgcopydb stream cleanup  --source ... --target ... --dir ...
+   usage: pgcopydb stream cleanup
 
      --source         Postgres URI to the source database
      --target         Postgres URI to the target database
@@ -163,7 +163,7 @@ SQL file.
 ::
 
    pgcopydb stream prefetch: Stream JSON changes from the source database and transform them to SQL
-   usage: pgcopydb stream prefetch  --source ...
+   usage: pgcopydb stream prefetch
 
      --source         Postgres URI to the source database
      --dir            Work directory to use
@@ -188,7 +188,7 @@ applies changes from the SQL files that have been prepared with the
 ::
 
    pgcopydb stream catchup: Apply prefetched changes from SQL files to the target database
-   usage: pgcopydb stream catchup  --source ... --target ...
+   usage: pgcopydb stream catchup
 
      --source         Postgres URI to the source database
      --target         Postgres URI to the target database
@@ -214,7 +214,7 @@ plugin ``wal2json``.
 ::
 
    pgcopydb create slot: Create a replication slot in the source database
-   usage: pgcopydb create slot  --source ...
+   usage: pgcopydb create slot
 
      --source         Postgres URI to the source database
      --dir            Work directory to use
@@ -235,7 +235,7 @@ The starting LSN position ``--startpos`` is required.
 ::
 
    pgcopydb stream create origin: Create a replication origin in the target database
-   usage: pgcopydb stream create origin  --target ...
+   usage: pgcopydb stream create origin
 
      --target         Postgres URI to the target database
      --dir            Work directory to use
@@ -256,7 +256,7 @@ name (that defaults to ``pgcopydb``).
 ::
 
    pgcopydb stream drop slot: Drop a replication slot in the source database
-   usage: pgcopydb stream drop slot  --source ...
+   usage: pgcopydb stream drop slot
 
      --source         Postgres URI to the source database
      --dir            Work directory to use
@@ -275,7 +275,7 @@ given name (that defaults to ``pgcopydb``).
 
 ::
 
-   usage: pgcopydb stream drop origin  --target ...
+   usage: pgcopydb stream drop origin
 
      --target         Postgres URI to the target database
      --dir            Work directory to use
@@ -295,7 +295,7 @@ catchup processes of the logical decoding implementation in pgcopydb.
 ::
 
    pgcopydb stream sentinel create: Create the sentinel table on the source database
-   usage: pgcopydb stream sentinel create  --source ...
+   usage: pgcopydb stream sentinel create
 
      --source      Postgres URI to the source database
      --startpos    Start replaying changes when reaching this LSN
@@ -315,7 +315,7 @@ catchup processes of the logical decoding implementation in pgcopydb.
 ::
 
    pgcopydb stream sentinel drop: Drop the sentinel table on the source database
-   usage: pgcopydb stream sentinel drop  --source ...
+   usage: pgcopydb stream sentinel drop
 
      --source      Postgres URI to the source database
 
@@ -329,7 +329,7 @@ pgcopydb stream sentinel get - Get the sentinel table values on the source datab
 ::
 
    pgcopydb stream sentinel get: Get the sentinel table values on the source database
-   usage: pgcopydb stream sentinel get  --source ...
+   usage: pgcopydb stream sentinel get
 
      --source      Postgres URI to the source database
      --json        Format the output using JSON
@@ -344,7 +344,7 @@ pgcopydb stream sentinel set startpos - Set the sentinel start position LSN on t
 ::
 
    pgcopydb stream sentinel set startpos: Set the sentinel start position LSN on the source database
-   usage: pgcopydb stream sentinel set startpos  --source ... <start LSN>
+   usage: pgcopydb stream sentinel set startpos <start LSN>
 
      --source      Postgres URI to the source database
 
@@ -358,7 +358,7 @@ pgcopydb stream sentinel set endpos - Set the sentinel end position LSN on the s
 ::
 
    pgcopydb stream sentinel set endpos: Set the sentinel end position LSN on the source database
-   usage: pgcopydb stream sentinel set endpos  --source ... <end LSN>
+   usage: pgcopydb stream sentinel set endpos <end LSN>
 
      --source      Postgres URI to the source database
      --current     Use pg_current_wal_flush_lsn() as the endpos
@@ -374,7 +374,7 @@ pgcopydb stream sentinel set apply - Set the sentinel apply mode on the source d
 ::
 
    pgcopydb stream sentinel set apply: Set the sentinel apply mode on the source database
-   usage: pgcopydb stream sentinel set apply  --source ... <true|false>
+   usage: pgcopydb stream sentinel set apply
 
      --source      Postgres URI to the source database
 
@@ -389,7 +389,7 @@ pgcopydb stream sentinel set prefetch - Set the sentinel prefetch mode on the so
 ::
 
    pgcopydb stream sentinel set prefetch: Set the sentinel prefetch mode on the source database
-   usage: pgcopydb stream sentinel set prefetch  --source ... <true|false>
+   usage: pgcopydb stream sentinel set prefetch
 
      --source      Postgres URI to the source database
 
@@ -439,7 +439,7 @@ per line.
 ::
 
    pgcopydb stream transform: Transform changes from the source database into SQL commands
-   usage: pgcopydb stream transform  [ --source ... ] <json filename> <sql filename>
+   usage: pgcopydb stream transform  <json filename> <sql filename>
 
      --source         Postgres URI to the source database
      --dir            Work directory to use
@@ -463,7 +463,7 @@ __ https://www.postgresql.org/docs/current/replication-origins.html
 ::
 
    pgcopydb stream apply: Apply changes from the source database into the target database
-   usage: pgcopydb stream apply  --target ... <sql filename>
+   usage: pgcopydb stream apply <sql filename>
 
      --target         Postgres URI to the target database
      --dir            Work directory to use

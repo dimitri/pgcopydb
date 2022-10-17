@@ -83,7 +83,7 @@ CommandLine sentinel_set_apply_command =
 	make_command(
 		"apply",
 		"Set the sentinel apply mode on the source database",
-		" --source ... <true|false>",
+		"",
 		"  --source      Postgres URI to the source database\n",
 		cli_sentinel_getopts,
 		cli_sentinel_set_apply);
@@ -92,7 +92,7 @@ CommandLine sentinel_set_prefetch_command =
 	make_command(
 		"prefetch",
 		"Set the sentinel prefetch mode on the source database",
-		" --source ... <true|false>",
+		"",
 		"  --source      Postgres URI to the source database\n",
 		cli_sentinel_getopts,
 		cli_sentinel_set_prefetch);
@@ -327,6 +327,12 @@ cli_sentinel_create(int argc, char **argv)
 {
 	CopyDataSpec copySpecs = { 0 };
 
+	if (argc > 0)
+	{
+		commandline_help(stderr);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
 	bool auxilliary = false;
@@ -382,6 +388,12 @@ cli_sentinel_drop(int argc, char **argv)
 {
 	char *pguri = (char *) sentinelDBoptions.source_pguri;
 	PGSQL pgsql = { 0 };
+
+	if (argc > 0)
+	{
+		commandline_help(stderr);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
 
 	if (!pgsql_init(&pgsql, pguri, PGSQL_CONN_SOURCE))
 	{
@@ -571,6 +583,12 @@ cli_sentinel_set_apply(int argc, char **argv)
 	char *pguri = (char *) sentinelDBoptions.source_pguri;
 	PGSQL pgsql = { 0 };
 
+	if (argc > 0)
+	{
+		commandline_help(stderr);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
 	if (!pgsql_init(&pgsql, pguri, PGSQL_CONN_SOURCE))
 	{
 		/* errors have already been logged */
@@ -596,6 +614,12 @@ cli_sentinel_set_prefetch(int argc, char **argv)
 	char *pguri = (char *) sentinelDBoptions.source_pguri;
 	PGSQL pgsql = { 0 };
 
+	if (argc > 0)
+	{
+		commandline_help(stderr);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
 	if (!pgsql_init(&pgsql, pguri, PGSQL_CONN_SOURCE))
 	{
 		/* errors have already been logged */
@@ -618,6 +642,12 @@ cli_sentinel_get(int argc, char **argv)
 {
 	char *pguri = (char *) sentinelDBoptions.source_pguri;
 	PGSQL pgsql = { 0 };
+
+	if (argc > 0)
+	{
+		commandline_help(stderr);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
 
 	if (!pgsql_init(&pgsql, pguri, PGSQL_CONN_SOURCE))
 	{
