@@ -122,9 +122,6 @@ stream_transform_worker(LogicalStreamContext *context)
 			break;
 		}
 
-		log_debug("stream_transform_worker received message type %ld",
-				  mesg.type);
-
 		switch (mesg.type)
 		{
 			case QMSG_TYPE_STOP:

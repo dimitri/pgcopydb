@@ -71,6 +71,46 @@ stream_init_specs(StreamSpecs *specs,
 
 
 /*
+ * stream_init_context initializes a LogicalStreamContext.
+ */
+bool
+stream_init_context(StreamContext *privateContext, StreamSpecs *specs)
+{
+	privateContext->mode = specs->mode;
+	privateContext->paths = specs->paths;
+	privateContext->startpos = specs->startpos;
+
+	strlcpy(privateContext->source_pguri,
+			specs->source_pguri,
+			sizeof(privateContext->source_pguri));
+
+	if (!queue_create(&(privateContext->transformQueue)))
+	{
+		log_error("Failed to create the Stream Transform process queue");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * stream_close_specs unlinks the stream context queue.
+ */
+bool
+stream_close_context(StreamContext *privateContext)
+{
+	if (!queue_unlink(&(privateContext->transformQueue)))
+	{
+		log_warn("Failed to remove the Transform Queue, see above for details");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * startLogicalStreaming opens a replication connection to the given source
  * database and issues the START REPLICATION command there.
  */
@@ -120,21 +160,13 @@ startLogicalStreaming(StreamSpecs *specs)
 	LogicalStreamContext context = { 0 };
 	StreamContext privateContext = { 0 };
 
-	privateContext.mode = specs->mode;
-	privateContext.paths = specs->paths;
-	privateContext.startpos = specs->startpos;
-
-	strlcpy(privateContext.source_pguri,
-			specs->source_pguri,
-			sizeof(privateContext.source_pguri));
-
-	context.private = (void *) &(privateContext);
-
-	if (!queue_create(&(privateContext.transformQueue)))
+	if (!stream_init_context(&privateContext, specs))
 	{
-		log_error("Failed to create the Stream Transform process queue");
+		/* errors have already been logged */
 		return false;
 	}
+
+	context.private = (void *) &(privateContext);
 
 	if (!stream_transform_start_worker(&context))
 	{
@@ -157,12 +189,14 @@ startLogicalStreaming(StreamSpecs *specs)
 							   specs->endpos))
 		{
 			/* errors have already been logged */
+			(void) stream_close_context(&privateContext);
 			return false;
 		}
 
 		if (!pgsql_start_replication(&stream))
 		{
 			/* errors have already been logged */
+			(void) stream_close_context(&privateContext);
 			return false;
 		}
 
@@ -170,6 +204,7 @@ startLogicalStreaming(StreamSpecs *specs)
 		if (!stream_write_context(specs, &stream))
 		{
 			/* errors have already been logged */
+			(void) stream_close_context(&privateContext);
 			return false;
 		}
 
@@ -203,6 +238,12 @@ startLogicalStreaming(StreamSpecs *specs)
 
 		/* sleep for one entire second before retrying */
 		(void) pg_usleep(1 * 1000 * 1000);
+	}
+
+	if (!stream_close_context(&privateContext))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	return true;
@@ -1142,36 +1183,38 @@ streamWaitForSubprocess(LogicalStreamContext *context)
 	StreamContext *privateContext = (StreamContext *) context->private;
 
 	/* if a subprocess had been started before, wait until it's done. */
-	if (privateContext->subprocess > 0)
+	if (privateContext->subprocess <= 0)
 	{
-		int status = 0;
+		return true;
+	}
+	int status = 0;
 
-		if (waitpid(privateContext->subprocess, &status, 0) == -1)
-		{
-			log_error("Failed to wait for pid %d: %m",
-					  privateContext->subprocess);
-			return false;
-		}
+	if (waitpid(privateContext->subprocess, &status, 0) == -1)
+	{
+		log_error("Failed to wait for pid %d: %m",
+				  privateContext->subprocess);
+		return false;
+	}
 
-		int returnCode = WEXITSTATUS(status);
+	int returnCode = WEXITSTATUS(status);
 
-		if (returnCode != 0)
-		{
-			log_error("Stream Transform Worker %d exited with code %d, "
-					  "see above for details",
-					  privateContext->subprocess,
-					  returnCode);
-			return false;
-		}
-
+	if (returnCode != 0)
+	{
+		log_error("Stream Transform Worker %d exited with code %d, "
+				  "see above for details",
+				  privateContext->subprocess,
+				  returnCode);
+	}
+	else
+	{
 		log_debug("Transform subprocess %d exited successfully [%d]",
 				  privateContext->subprocess,
 				  returnCode);
-
-		privateContext->subprocess = 0;
 	}
 
-	return true;
+	privateContext->subprocess = 0;
+
+	return returnCode == 0;
 }
 
 

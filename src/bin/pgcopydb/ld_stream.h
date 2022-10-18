@@ -271,6 +271,9 @@ bool stream_init_specs(StreamSpecs *specs,
 					   uint64_t endpos,
 					   LogicalStreamMode mode);
 
+bool stream_init_context(StreamContext *privateContext, StreamSpecs *specs);
+bool stream_close_context(StreamContext *privateContext);
+
 bool startLogicalStreaming(StreamSpecs *specs);
 bool streamCheckResumePosition(StreamSpecs *specs);
 
