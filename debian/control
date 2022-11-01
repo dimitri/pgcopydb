@@ -15,6 +15,7 @@ Build-Depends:
  libselinux1-dev,
  libssl-dev,
  libxslt1-dev,
+ libzstd-dev,
  postgresql,
  postgresql-server-dev-all (>= 158~),
  python3-sphinx,
