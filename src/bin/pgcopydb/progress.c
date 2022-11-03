@@ -479,6 +479,13 @@ copydb_parse_schema_json_file(CopyDataSpec *copySpecs)
 	log_debug("copydb_parse_schema_json_file: \"%s\"",
 			  copySpecs->cfPaths.schemafile);
 
+	if (!file_exists(copySpecs->cfPaths.schemafile))
+	{
+		log_error("Failed to parse JSON file \"%s\": file does not exists",
+				  copySpecs->cfPaths.schemafile);
+		return false;
+	}
+
 	JSON_Value *json = json_parse_file(copySpecs->cfPaths.schemafile);
 
 	if (json == NULL)
