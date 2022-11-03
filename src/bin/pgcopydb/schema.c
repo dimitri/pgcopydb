@@ -2871,12 +2871,23 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	}
 
 	/* 5. pg_table_size(c.oid) as bytes */
-	value = PQgetvalue(result, rowNumber, 4);
-
-	if (!stringToInt64(value, &(table->bytes)))
+	if (PQgetisnull(result, rowNumber, 4))
 	{
-		log_error("Invalid reltuples::bigint \"%s\"", value);
-		++errors;
+		/*
+		 * It may happen that pg_table_size() returns NULL (when failing to
+		 * open the given relation).
+		 */
+		table->bytes = 0;
+	}
+	else
+	{
+		value = PQgetvalue(result, rowNumber, 4);
+
+		if (!stringToInt64(value, &(table->bytes)))
+		{
+			log_error("Invalid reltuples::bigint \"%s\"", value);
+			++errors;
+		}
 	}
 
 	/* 6. pg_size_pretty(c.oid) */
