@@ -1,8 +1,8 @@
 BEGIN; -- {"xid":489,"lsn":"0/22E5088","nextlsn":"0/22E53C0","timestamp":"2022-08-10 14:22:55.526632+00"}
 COMMIT; -- {"xid": 489,"lsn":"0/22E5088","nextlsn":"0/22E53C0","timestamp":"2022-08-10 14:22:55.526632+00"}
 BEGIN; -- {"xid":490,"lsn":"0/22E57F0","nextlsn":"0/22E5820","timestamp":"2022-08-10 14:22:57.47845+00"}
-INSERT INTO "public"."rental" (rental_id, rental_date, inventory_id, customer_id, return_date, staff_id, last_update) VALUES (16050, '2022-06-01 00:00:00+00', 371, 291, NULL, 1, '2022-06-01 00:00:00+00');
-INSERT INTO "public"."payment_p2022_06" (payment_id, customer_id, staff_id, rental_id, amount, payment_date) VALUES (32099, 291, 1, 16050, 5.99, '2022-06-01 00:00:00+00');
+INSERT INTO "public"."rental" ("rental_id", "rental_date", "inventory_id", "customer_id", "return_date", "staff_id", "last_update") VALUES (16050, '2022-06-01 00:00:00+00', 371, 291, NULL, 1, '2022-06-01 00:00:00+00');
+INSERT INTO "public"."payment_p2022_06" ("payment_id", "customer_id", "staff_id", "rental_id", "amount", "payment_date") VALUES (32099, 291, 1, 16050, 5.99, '2022-06-01 00:00:00+00');
 COMMIT; -- {"xid": 490,"lsn":"0/22E57F0","nextlsn":"0/22E5820","timestamp":"2022-08-10 14:22:57.47845+00"}
 BEGIN; -- {"xid":491,"lsn":"0/22E6608","nextlsn":"0/22E6638","timestamp":"2022-08-10 14:22:57.483804+00"}
 UPDATE "public"."payment_p2022_02" SET "payment_id" = 23757, "customer_id" = 116, "staff_id" = 2, "rental_id" = 14763, "amount" = 11.95, "payment_date" = '2022-02-11 03:52:25.634006+00' WHERE "payment_id" = 23757 and "customer_id" = 116 and "staff_id" = 2 and "rental_id" = 14763 and "amount" = 11.99 and "payment_date" = '2022-02-11 03:52:25.634006+00';
