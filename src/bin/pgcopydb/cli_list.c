@@ -51,6 +51,7 @@ static CommandLine list_tables_command =
 		" --source ... ",
 		"  --source            Postgres URI to the source database\n"
 		"  --filter <filename> Use the filters defined in <filename>\n"
+		"  --cache             Cache table size in relation pgcopydb.table_size\n"
 		"  --list-skipped      List only tables that are setup to be skipped\n"
 		"  --without-pkey      List only tables that have no primary key\n",
 		cli_list_db_getopts,
@@ -165,6 +166,7 @@ cli_list_db_getopts(int argc, char **argv)
 		{ "without-pkey", no_argument, NULL, 'P' },
 		{ "split-tables-larger-than", required_argument, NULL, 'L' },
 		{ "split-at", required_argument, NULL, 'L' },
+		{ "cache", no_argument, NULL, 'c' },
 		{ "json", no_argument, NULL, 'J' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "debug", no_argument, NULL, 'd' },
@@ -260,6 +262,13 @@ cli_list_db_getopts(int argc, char **argv)
 				log_trace("--split-tables-larger-than %s (%lld)",
 						  options.splitTablesLargerThanPretty,
 						  (long long) options.splitTablesLargerThan);
+				break;
+			}
+
+			case 'c':
+			{
+				options.cache = true;
+				log_trace("--cache");
 				break;
 			}
 
@@ -507,6 +516,23 @@ cli_list_tables(int argc, char **argv)
 		exit(EXIT_CODE_SOURCE);
 	}
 
+	if (!pgsql_begin(&pgsql))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	bool createdTableSizeTable = false;
+
+	if (!schema_prepare_pgcopydb_table_size(&pgsql,
+											&filters,
+											listDBoptions.cache, /* force */
+											&createdTableSizeTable))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
 	if (listDBoptions.noPKey)
 	{
 		log_info("Listing tables without primary key in source database");
@@ -574,6 +600,21 @@ cli_list_tables(int argc, char **argv)
 	}
 
 	fformat(stdout, "\n");
+
+	if (createdTableSizeTable && !listDBoptions.cache)
+	{
+		if (!schema_drop_pgcopydb_table_size(&pgsql))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+	}
+
+	if (!pgsql_commit(&pgsql))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
 }
 
 

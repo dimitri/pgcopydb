@@ -213,6 +213,12 @@ bool schema_list_ext_schemas(PGSQL *pgsql, SourceSchemaArray *array);
 
 bool schema_list_extensions(PGSQL *pgsql, SourceExtensionArray *extArray);
 
+bool schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
+										SourceFilters *filters,
+										bool force,
+										bool *createdTableSizeTable);
+
+bool schema_drop_pgcopydb_table_size(PGSQL *pgsql);
 
 bool schema_list_ordinary_tables(PGSQL *pgsql,
 								 SourceFilters *filters,
