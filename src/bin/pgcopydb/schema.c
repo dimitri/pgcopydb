@@ -1270,6 +1270,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 
 		"   where c.relkind = 'S' and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+		"     and n.nspname !~ 'pgcopydb' "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -1323,6 +1324,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"  where s.relkind = 'S' "
 		"    and d.classid = 'pg_attrdef'::regclass "
 		"    and d.refclassid = 'pg_class'::regclass "
+		"     and sn.nspname !~ 'pgcopydb' "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -1387,6 +1389,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"  where s.relkind = 'S' "
 		"    and d.classid = 'pg_attrdef'::regclass "
 		"    and d.refclassid = 'pg_class'::regclass "
+		"    and sn.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
 		"     and fn.nspname is null "
@@ -1445,6 +1448,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"  where s.relkind = 'S' "
 		"    and d.classid = 'pg_attrdef'::regclass "
 		"    and d.refclassid = 'pg_class'::regclass "
+		"    and sn.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
 		"     and inc.relname is null "
@@ -1507,6 +1511,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"  where s.relkind = 'S' "
 		"    and d.classid = 'pg_attrdef'::regclass "
 		"    and d.refclassid = 'pg_class'::regclass "
+		"    and sn.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
 		"     and (   fn.nspname is not null "
@@ -1687,6 +1692,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 
 		"    where r.relkind = 'r' and r.relpersistence = 'p' "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -1741,6 +1747,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 
 		"    where r.relkind = 'r' and r.relpersistence = 'p' "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -1804,6 +1811,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 
 		"    where r.relkind = 'r' and r.relpersistence = 'p' "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
 		"     and fn.nspname is null "
@@ -1863,6 +1871,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 
 		"    where r.relkind = 'r' and r.relpersistence = 'p' "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
 		"     and inc.relname is null "
@@ -1924,6 +1933,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 
 		"    where r.relkind = 'r' and r.relpersistence = 'p' "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
 		"     and (   fn.nspname is not null "
@@ -1982,6 +1992,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 
 		"    where r.relkind = 'r' and r.relpersistence = 'p' "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
 		"     and fn.nspname is null "
@@ -2039,6 +2050,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 
 		"    where r.relkind = 'r' and r.relpersistence = 'p' "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -2145,6 +2157,7 @@ schema_list_table_indexes(PGSQL *pgsql,
 		"          left join pg_constraint c ON c.oid = d.refobjid"
 		"    where r.relkind = 'r' and r.relpersistence = 'p' "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
 		"      and rn.nspname = $1 and r.relname = $2"
 		" order by n.nspname, r.relname";
 
@@ -2206,6 +2219,7 @@ struct FilteringQueries listSourceDependSQL[] = {
 
 		"   WHERE NOT (refclassid = classid AND refobjid = objid) "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
 		"      and type not in ('toast table column', 'default value') "
 
 		/* remove duplicates due to multiple refobjsubid / objsubid */
@@ -2290,6 +2304,7 @@ struct FilteringQueries listSourceDependSQL[] = {
 
 		"   WHERE NOT (refclassid = classid AND refobjid = objid) "
 		"      and cn.nspname !~ '^pg_' and cn.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
 		"      and type not in ('toast table column', 'default value') "
 
 		/* WHERE clause for exclusion filters */
@@ -2328,6 +2343,7 @@ struct FilteringQueries listSourceDependSQL[] = {
 
 		"   WHERE NOT (refclassid = classid AND refobjid = objid) "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
 		"      and type not in ('toast table column', 'default value') "
 
 		/* WHERE clause for exclusion filters */
@@ -2410,6 +2426,7 @@ struct FilteringQueries listSourceDependSQL[] = {
 
 		"   WHERE NOT (refclassid = classid AND refobjid = objid) "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
 		"      and type not in ('toast table column', 'default value') "
 
 		/* WHERE clause for exclusion filters */
