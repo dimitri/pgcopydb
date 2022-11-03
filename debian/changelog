@@ -1,8 +1,8 @@
-pgcopydb (0.10-1) UNRELEASED; urgency=medium
+pgcopydb (0.10-1) unstable; urgency=medium
 
   * B-D on libzstd-dev. (Closes: #1022290)
 
- -- Christoph Berg <myon@debian.org>  Tue, 01 Nov 2022 11:14:20 +0100
+ -- Dimitri Fontaine <dim@tapoueh.org>  Thu, 03 Nov 2022 15:00:41 +0100
 
 pgcopydb (0.9-1) unstable; urgency=low
 
