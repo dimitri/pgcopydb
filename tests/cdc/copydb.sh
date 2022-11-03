@@ -48,7 +48,7 @@ SQLFILE=000000010000000000000002.sql
 expected=/tmp/expected.json
 result=/tmp/result.json
 
-JQSCRIPT='del(.lsn) | del(.nextlsn) | del(.timestamp)'
+JQSCRIPT='del(.lsn) | del(.nextlsn) | del(.timestamp) | del(.xid)'
 
 jq "${JQSCRIPT}" /usr/src/pgcopydb/${WALFILE} > ${expected}
 jq "${JQSCRIPT}" ${SHAREDIR}/${WALFILE} > ${result}
