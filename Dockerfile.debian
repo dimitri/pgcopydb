@@ -17,7 +17,8 @@ RUN apt-get update \
         liblz4-dev \
     	libpq5 \
         libpq-dev \
-        postgresql-server-dev-all \
+        libzstd-dev \
+		postgresql-server-dev-all \
         postgresql-common \
         postgresql \
         python3-sphinx \

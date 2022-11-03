@@ -23,6 +23,7 @@ RUN apt-get update \
         liblz4-dev \
     	libpq5 \
         libpq-dev \
+        libzstd-dev \
         postgresql-server-dev-all \
         postgresql-common \
         postgresql \
