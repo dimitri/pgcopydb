@@ -1,3 +1,33 @@
+### pgcopydb v0.10 (November 3, 2022) ###
+
+Bug fix release, with added compatibility to Postgres 9.5, 9.6 and 10.
+
+### Added
+* Implement our own --drop-if-exists approach. (#133)
+* Implement a retry strategy in case of Connection Exception. (#129)
+* Implement Logical Decoding compatibility with Postgres 9.6. (#124)
+* Also install tcp_keepalives_idle timeout on the target connection. (#120)
+
+### Changed
+* Made dropping of replication origin an idempotent call where we drop it only if it exists (#142)
+* Enforce argc == 0 for commands without arguments. (#128)
+
+### Fixed
+* When transforming into SQL statements, double quote column names. (#141)
+* Improve error message when schema.json file does not exists. (#140)
+* Fix parsing pg_table_size() result, could be NULL. (#139)
+* Make sure to delete the Transform Queue on exit. (#134)
+* Fix parsing ACL and COMMENT archive entries from pg_dump/pg_restore. (#132)
+* Fix Postgres version string max length. (#131)
+* Fix parsing a JSON switch ("X") message. (#130)
+* Refrain from removing the version file in make clean. (#125)
+* Make it easier to navigate the source code. (#121)
+
+### Packaging fixes
+* Debian: B-D on libzstd-dev. (Closes: #1022290)
+* Note where tests/extensions/countries.sql is from
+* debian/copyright: Add unsplash photo license
+
 ### pgcopydb v0.9 (September 30, 2022) ###
 
 Improve pgcopydb with same-table concurrency support, lots of bug fixes
