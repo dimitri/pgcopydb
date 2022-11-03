@@ -1071,7 +1071,7 @@ stream_write_insert(FILE *out, LogicalMessageInsert *insert)
 		fformat(out, "(");
 		for (int c = 0; c < stmt->cols; c++)
 		{
-			fformat(out, "%s%s", c > 0 ? ", " : "", stmt->columns[c]);
+			fformat(out, "%s\"%s\"", c > 0 ? ", " : "", stmt->columns[c]);
 		}
 		fformat(out, ")");
 
