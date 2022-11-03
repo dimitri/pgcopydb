@@ -3810,7 +3810,10 @@ pgsql_replication_origin_create(PGSQL *pgsql, char *nodeName)
 bool
 pgsql_replication_origin_drop(PGSQL *pgsql, char *nodeName)
 {
-	const char *sql = "select pg_replication_origin_drop($1)";
+	char *sql =
+		"SELECT pg_replication_origin_drop(roname) "
+		"  FROM pg_replication_origin "
+		" WHERE roname = $1";
 	int paramCount = 1;
 	Oid paramTypes[1] = { TEXTOID };
 	const char *paramValues[1] = { nodeName };
