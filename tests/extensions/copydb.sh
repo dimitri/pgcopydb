@@ -11,11 +11,11 @@ set -e
 #  - PGCOPYDB_INDEX_JOBS
 
 #
-# pgcopydb list tables include a retry loop, so we use that as a proxy to
-# depend on the source/target Postgres images to be ready
+# pgcopydb list extensions include a retry loop, so we use that as a proxy
+# to depend on the source/target Postgres images to be ready
 #
-pgcopydb list tables --source ${POSTGRES_SOURCE}
-pgcopydb list tables --source ${POSTGRES_TARGET}
+pgcopydb list extensions --source ${POSTGRES_SOURCE}
+pgcopydb list extensions --source ${POSTGRES_TARGET}
 
 psql -a ${POSTGRES_SOURCE} <<EOF
 create role pagila NOSUPERUSER CREATEDB NOCREATEROLE LOGIN PASSWORD '0wn3d';

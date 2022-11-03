@@ -12,11 +12,11 @@ set -e
 
 
 #
-# pgcopydb list tables include a retry loop, so we use that as a proxy to
-# depend on the source/target Postgres images to be ready
+# pgcopydb list extensions include a retry loop, so we use that as a proxy
+# to depend on the source/target Postgres images to be ready
 #
-pgcopydb list tables --source ${PGCOPYDB_SOURCE_PGURI}
-pgcopydb list tables --source ${PGCOPYDB_TARGET_PGURI}
+pgcopydb list extensions --source ${PGCOPYDB_SOURCE_PGURI}
+pgcopydb list extensions --source ${PGCOPYDB_TARGET_PGURI}
 
 #
 # Hack the pagila schema to make it compatible with Postgres 9.6. Remove:

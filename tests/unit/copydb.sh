@@ -11,10 +11,10 @@ set -e
 #  - PGCOPYDB_INDEX_JOBS
 
 #
-# pgcopydb list tables include a retry loop, so we use that as a proxy to
-# depend on the source/target Postgres images to be ready
+# pgcopydb list extensions include a retry loop, so we use that as a proxy
+# to depend on the source/target Postgres images to be ready
 #
-pgcopydb list tables --source "${PGCOPYDB_SOURCE_PGURI}"
+pgcopydb list extensions --source "${PGCOPYDB_SOURCE_PGURI}"
 
 psql -q -d "${PGCOPYDB_SOURCE_PGURI}" -1 -f ./setup/setup.sql
 
