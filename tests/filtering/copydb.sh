@@ -12,11 +12,11 @@ set -e
 
 
 #
-# pgcopydb list tables include a retry loop, so we use that as a proxy to
+# pgcopydb list extensions include a retry loop, so we use that as a proxy to
 # depend on the source/target Postgres images to be ready
 #
-pgcopydb list tables --source ${PGCOPYDB_SOURCE_PGURI}
-pgcopydb list tables --source ${PGCOPYDB_TARGET_PGURI}
+pgcopydb list extensions --source ${PGCOPYDB_SOURCE_PGURI}
+pgcopydb list extensions --source ${PGCOPYDB_TARGET_PGURI}
 
 psql -o /tmp/s.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-schema.sql
 psql -o /tmp/d.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql

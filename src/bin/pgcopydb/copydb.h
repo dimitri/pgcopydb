@@ -393,6 +393,7 @@ bool copydb_objectid_is_filtered_out(CopyDataSpec *specs,
 									 char *restoreListName);
 
 bool copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql);
+bool copydb_prepare_index_specs(CopyDataSpec *specs, PGSQL *pgsql);
 bool copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql);
 
 char * copydb_ObjectKindToString(ObjectKind kind);

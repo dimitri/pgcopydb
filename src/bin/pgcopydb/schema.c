@@ -230,13 +230,329 @@ schema_list_ext_schemas(PGSQL *pgsql, SourceSchemaArray *array)
 /*
  * For code simplicity the index array is also the SourceFilterType enum value.
  */
+struct FilteringQueries listSourceTableSizeSQL[] = {
+	{
+		SOURCE_FILTER_TYPE_NONE,
+
+		"create table if not exists pgcopydb.table_size as "
+
+		"  select c.oid, pg_table_size(c.oid) as bytes "
+		"    from pg_catalog.pg_class c"
+		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
+
+		"   where relkind = 'r' and c.relpersistence = 'p' "
+		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = c.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+	},
+
+	{
+		SOURCE_FILTER_TYPE_INCL,
+
+		"create table if not exists pgcopydb.table_size as "
+
+		"  select c.oid, pg_table_size(c.oid) as bytes "
+		"    from pg_catalog.pg_class c"
+		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
+
+		/* include-only-table */
+		"         join pg_temp.filter_include_only_table inc "
+		"           on n.nspname = inc.nspname "
+		"          and c.relname = inc.relname "
+
+		"   where relkind = 'r' and c.relpersistence = 'p' "
+		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = c.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+	},
+
+	{
+		SOURCE_FILTER_TYPE_EXCL,
+
+		"create table if not exists pgcopydb.table_size as "
+
+		"  select c.oid, pg_table_size(c.oid) as bytes "
+		"    from pg_catalog.pg_class c"
+		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
+
+		/* exclude-schema */
+		"         left join pg_temp.filter_exclude_schema fn "
+		"                on n.nspname = fn.nspname "
+
+		/* exclude-table */
+		"         left join pg_temp.filter_exclude_table ft "
+		"                on n.nspname = ft.nspname "
+		"               and c.relname = ft.relname "
+
+		/* exclude-table-data */
+		"         left join pg_temp.filter_exclude_table_data ftd "
+		"                on n.nspname = ftd.nspname "
+		"               and c.relname = ftd.relname "
+
+		"   where relkind = 'r' and c.relpersistence = 'p' "
+		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+
+		/* WHERE clause for exclusion filters */
+		"     and fn.nspname is null "
+		"     and ft.relname is null "
+		"     and ftd.relname is null "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = c.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+	},
+
+	{
+		SOURCE_FILTER_TYPE_LIST_NOT_INCL,
+
+		"create table if not exists pgcopydb.table_size as "
+
+		"  select c.oid, pg_table_size(c.oid) as bytes "
+		"    from pg_catalog.pg_class c"
+		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
+
+		/* include-only-table */
+		"    left join pg_temp.filter_include_only_table inc "
+		"           on n.nspname = inc.nspname "
+		"          and c.relname = inc.relname "
+
+		"   where relkind in ('r', 'p') and c.relpersistence = 'p' "
+		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+
+		/* WHERE clause for exclusion filters */
+		"     and inc.nspname is null "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = c.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+	},
+
+	{
+		SOURCE_FILTER_TYPE_LIST_EXCL,
+
+		"create table if not exists pgcopydb.table_size as "
+
+		"  select c.oid, pg_table_size(c.oid) as bytes "
+		"    from pg_catalog.pg_class c"
+		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
+
+		/* exclude-schema */
+		"         left join pg_temp.filter_exclude_schema fn "
+		"                on n.nspname = fn.nspname "
+
+		/* exclude-table */
+		"         left join pg_temp.filter_exclude_table ft "
+		"                on n.nspname = ft.nspname "
+		"               and c.relname = ft.relname "
+
+		/* WHERE clause for exclusion filters */
+		"     and (   fn.nspname is not null "
+		"          or ft.relname is not null ) "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = c.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+	}
+};
+
+
+/*
+ * schema_prepare_pgcopydb_table_size creates a table named pgcopydb.table_size
+ * on the given connection (typically, the source database). The creation is
+ * skipped if the table already exists.
+ */
+bool
+schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
+								   SourceFilters *filters,
+								   bool force,
+								   bool *createdTableSizeTable)
+{
+	log_trace("schema_prepare_pgcopydb_table_size");
+
+	switch (filters->type)
+	{
+		case SOURCE_FILTER_TYPE_NONE:
+		{
+			/* skip filters preparing (temp tables) */
+			break;
+		}
+
+		case SOURCE_FILTER_TYPE_INCL:
+		case SOURCE_FILTER_TYPE_EXCL:
+		case SOURCE_FILTER_TYPE_LIST_NOT_INCL:
+		case SOURCE_FILTER_TYPE_LIST_EXCL:
+		{
+			if (!prepareFilters(pgsql, filters))
+			{
+				log_error("Failed to prepare pgcopydb filters, "
+						  "see above for details");
+				return false;
+			}
+			break;
+		}
+
+		/* SOURCE_FILTER_TYPE_EXCL_INDEX etc */
+		default:
+		{
+			log_error("BUG: schema_list_ordinary_tables called with "
+					  "filtering type %d",
+					  filters->type);
+			return false;
+		}
+	}
+
+	log_debug("listSourceTablesSQL[%s]", filterTypeToString(filters->type));
+
+	char *createSchema = "create schema if not exists pgcopydb";
+
+	if (!pgsql_execute(pgsql, createSchema))
+	{
+		log_error("Failed to compute table size, see above for details");
+		return false;
+	}
+
+	/*
+	 * When the force option has been used, we DROP TABLE IF EXISTS and then
+	 * create it again (cache invalidation).
+	 */
+	bool createTable = false;
+
+	if (force)
+	{
+		if (!schema_drop_pgcopydb_table_size(pgsql))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		createTable = true;
+	}
+	else
+	{
+		char *existsQuery =
+			"select 1 "
+			"  from pg_class c "
+			"       join pg_namespace n on n.oid = c.relnamespace "
+			" where n.nspname = 'pgcopydb' and c.relname = 'table_size'";
+
+		SingleValueResultContext context = { { 0 }, PGSQL_RESULT_INT, false };
+
+		if (!pgsql_execute_with_params(pgsql, existsQuery, 0, NULL, NULL,
+									   &context, &fetchedRows))
+		{
+			log_error("Failed to check if \"pgcopydb\".\"table_size\" exists");
+			log_error("Failed to compute table size, see above for details");
+			return false;
+		}
+
+		if (!context.parsedOk)
+		{
+			log_error("Failed to check if \"pgcopydb\".\"table_size\" exists");
+			log_error("Failed to compute table size, see above for details");
+			return false;
+		}
+
+		/* if the exists query returns no rows, create pgcopydb.table_size */
+		createTable = context.intVal == 0;
+
+		log_trace("schema_prepare_pgcopydb_table_size: %d %s",
+				  context.intVal,
+				  createTable ? "create" : "skip");
+	}
+
+	if (createTable || force)
+	{
+		char *sql = listSourceTableSizeSQL[filters->type].sql;
+
+		if (!pgsql_execute(pgsql, sql))
+		{
+			log_error("Failed to compute table size, see above for details");
+			return false;
+		}
+
+		char *createIndex = "create index on pgcopydb.table_size(oid)";
+
+		if (!pgsql_execute(pgsql, createIndex))
+		{
+			log_error("Failed to compute table size, see above for details");
+			return false;
+		}
+
+		*createdTableSizeTable = true;
+	}
+	else
+	{
+		*createdTableSizeTable = false;
+
+		log_debug("Table pgcopydb.table_size already exists, re-using it");
+	}
+
+	return true;
+}
+
+
+/*
+ * schema_drop_pgcopydb_table_size drops the pgcopydb.table_size table.
+ */
+bool
+schema_drop_pgcopydb_table_size(PGSQL *pgsql)
+{
+	char *sql = "drop table if exists pgcopydb.table_size cascade";
+
+	if (!pgsql_execute(pgsql, sql))
+	{
+		log_error("Failed to compute table size, see above for details");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * For code simplicity the index array is also the SourceFilterType enum value.
+ */
 struct FilteringQueries listSourceTablesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_NONE,
 
 		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
-		"         pg_table_size(c.oid) as bytes, "
-		"         pg_size_pretty(pg_table_size(c.oid)), "
+		"         ts.bytes as bytes, "
+		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
@@ -247,6 +563,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
 		"         join pg_roles auth ON auth.oid = c.relowner"
+		"         left join pgcopydb.table_size ts on ts.oid = c.oid"
 
 		/* find a copy partition key candidate */
 		"         left join lateral ("
@@ -268,6 +585,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		"   where relkind = 'r' and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+		"     and n.nspname !~ 'pgcopydb' "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -286,8 +604,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		SOURCE_FILTER_TYPE_INCL,
 
 		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
-		"         pg_table_size(c.oid) as bytes, "
-		"         pg_size_pretty(pg_table_size(c.oid)), "
+		"         ts.bytes as bytes, "
+		"         pg_size_pretty(ts.bytes), "
 		"         exists(select 1 "
 		"                  from pg_temp.filter_exclude_table_data ftd "
 		"                 where n.nspname = ftd.nspname "
@@ -301,6 +619,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 		"         join pg_roles auth ON auth.oid = c.relowner"
+		"         left join pgcopydb.table_size ts on ts.oid = c.oid"
 
 		/* include-only-table */
 		"         join pg_temp.filter_include_only_table inc "
@@ -327,6 +646,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		"   where relkind = 'r' and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+		"     and n.nspname !~ 'pgcopydb' "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -345,8 +665,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		SOURCE_FILTER_TYPE_EXCL,
 
 		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
-		"         pg_table_size(c.oid) as bytes, "
-		"         pg_size_pretty(pg_table_size(c.oid)), "
+		"         ts.bytes as bytes, "
+		"         pg_size_pretty(ts.bytes), "
 		"         ftd.relname is not null as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
@@ -357,6 +677,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 		"         join pg_roles auth ON auth.oid = c.relowner"
+		"         left join pgcopydb.table_size ts on ts.oid = c.oid"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -392,6 +713,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		"   where relkind in ('r', 'p') and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+		"     and n.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
 		"     and fn.nspname is null "
@@ -415,8 +737,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		SOURCE_FILTER_TYPE_LIST_NOT_INCL,
 
 		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
-		"         pg_table_size(c.oid) as bytes, "
-		"         pg_size_pretty(pg_table_size(c.oid)), "
+		"         ts.bytes as bytes, "
+		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
@@ -427,6 +749,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 		"         join pg_roles auth ON auth.oid = c.relowner"
+		"         left join pgcopydb.table_size ts on ts.oid = c.oid"
 
 		/* include-only-table */
 		"    left join pg_temp.filter_include_only_table inc "
@@ -453,6 +776,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		"   where relkind in ('r', 'p') and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+		"     and n.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
 		"     and inc.nspname is null "
@@ -474,8 +798,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		SOURCE_FILTER_TYPE_LIST_EXCL,
 
 		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
-		"         pg_table_size(c.oid) as bytes, "
-		"         pg_size_pretty(pg_table_size(c.oid)), "
+		"         ts.bytes as bytes, "
+		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
@@ -486,6 +810,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 		"         join pg_roles auth ON auth.oid = c.relowner"
+		"         left join pgcopydb.table_size ts on ts.oid = c.oid"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -516,6 +841,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		"   where relkind in ('r', 'p') and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+		"     and n.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
 		"     and (   fn.nspname is not null "
@@ -611,17 +937,19 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		SOURCE_FILTER_TYPE_NONE,
 
 		"  select r.oid, n.nspname, r.relname, r.reltuples::bigint, "
-		"         pg_table_size(r.oid) as bytes, "
-		"         pg_size_pretty(pg_table_size(r.oid)), "
+		"         ts.bytes as bytes, "
+		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
 		"                regexp_replace(r.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"                regexp_replace(auth.rolname, '[\n\r]', ' ')),"
+		"         NULL as partkey"
 
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
 		"         join pg_roles auth ON auth.oid = r.relowner"
+		"         left join pgcopydb.table_size ts on ts.oid = r.oid"
 
 		"   where r.relkind = 'r' and r.relpersistence = 'p'  "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
@@ -639,7 +967,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         select 1 "
 		"           from pg_depend d "
 		"          where d.classid = 'pg_class'::regclass "
-		"            and d.objid = c.oid "
+		"            and d.objid = r.oid "
 		"            and d.deptype = 'e' "
 		"       ) "
 
@@ -650,17 +978,19 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		SOURCE_FILTER_TYPE_INCL,
 
 		"  select r.oid, n.nspname, r.relname, r.reltuples::bigint, "
-		"         pg_table_size(r.oid) as bytes, "
-		"         pg_size_pretty(pg_table_size(r.oid)), "
+		"         ts.bytes as bytes, "
+		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
 		"                regexp_replace(r.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"                regexp_replace(auth.rolname, '[\n\r]', ' ')),"
+		"         NULL as partkey"
 
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
 		"         join pg_roles auth ON auth.oid = r.relowner"
+		"         left join pgcopydb.table_size ts on ts.oid = r.oid"
 
 		/* include-only-table */
 		"         join pg_temp.filter_include_only_table inc "
@@ -683,7 +1013,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         select 1 "
 		"           from pg_depend d "
 		"          where d.classid = 'pg_class'::regclass "
-		"            and d.objid = c.oid "
+		"            and d.objid = r.oid "
 		"            and d.deptype = 'e' "
 		"       ) "
 
@@ -694,16 +1024,19 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		SOURCE_FILTER_TYPE_EXCL,
 
 		"  select r.oid, n.nspname, r.relname, r.reltuples::bigint, "
-		"         pg_table_size(r.oid) as bytes, "
-		"         pg_size_pretty(pg_table_size(r.oid)), "
+		"         ts.bytes as bytes, "
+		"         pg_size_pretty(ts.bytes), "
 		"         ftd.relname is not null as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
 		"                regexp_replace(r.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"                regexp_replace(auth.rolname, '[\n\r]', ' ')),"
+		"         NULL as partkey"
+
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
 		"         join pg_roles auth ON auth.oid = r.relowner"
+		"         left join pgcopydb.table_size ts on ts.oid = r.oid"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -740,7 +1073,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         select 1 "
 		"           from pg_depend d "
 		"          where d.classid = 'pg_class'::regclass "
-		"            and d.objid = c.oid "
+		"            and d.objid = r.oid "
 		"            and d.deptype = 'e' "
 		"       ) "
 
@@ -751,16 +1084,19 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		SOURCE_FILTER_TYPE_LIST_NOT_INCL,
 
 		"  select r.oid, n.nspname, r.relname, r.reltuples::bigint, "
-		"         pg_table_size(r.oid) as bytes, "
-		"         pg_size_pretty(pg_table_size(r.oid)), "
+		"         ts.bytes as bytes, "
+		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
 		"                regexp_replace(r.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"                regexp_replace(auth.rolname, '[\n\r]', ' ')),"
+		"         NULL as partkey"
+
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
 		"         join pg_roles auth ON auth.oid = r.relowner"
+		"         left join pgcopydb.table_size ts on ts.oid = r.oid"
 
 		/* include-only-table */
 		"    left join pg_temp.filter_include_only_table inc "
@@ -786,7 +1122,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         select 1 "
 		"           from pg_depend d "
 		"          where d.classid = 'pg_class'::regclass "
-		"            and d.objid = c.oid "
+		"            and d.objid = r.oid "
 		"            and d.deptype = 'e' "
 		"       ) "
 
@@ -797,16 +1133,19 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		SOURCE_FILTER_TYPE_LIST_EXCL,
 
 		"  select r.oid, n.nspname, r.relname, r.reltuples::bigint, "
-		"         pg_table_size(r.oid) as bytes, "
-		"         pg_size_pretty(pg_table_size(r.oid)), "
+		"         ts.bytes as bytes, "
+		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
 		"                regexp_replace(r.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"                regexp_replace(auth.rolname, '[\n\r]', ' ')),"
+		"         NULL as partkey"
+
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
 		"         join pg_roles auth ON auth.oid = r.relowner"
+		"         left join pgcopydb.table_size ts on ts.oid = r.oid"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -837,7 +1176,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         select 1 "
 		"           from pg_depend d "
 		"          where d.classid = 'pg_class'::regclass "
-		"            and d.objid = c.oid "
+		"            and d.objid = r.oid "
 		"            and d.deptype = 'e' "
 		"       ) "
 
@@ -931,6 +1270,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 
 		"   where c.relkind = 'S' and c.relpersistence = 'p' "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+		"     and n.nspname !~ 'pgcopydb' "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -984,6 +1324,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"  where s.relkind = 'S' "
 		"    and d.classid = 'pg_attrdef'::regclass "
 		"    and d.refclassid = 'pg_class'::regclass "
+		"     and sn.nspname !~ 'pgcopydb' "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -1048,6 +1389,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"  where s.relkind = 'S' "
 		"    and d.classid = 'pg_attrdef'::regclass "
 		"    and d.refclassid = 'pg_class'::regclass "
+		"    and sn.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
 		"     and fn.nspname is null "
@@ -1106,6 +1448,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"  where s.relkind = 'S' "
 		"    and d.classid = 'pg_attrdef'::regclass "
 		"    and d.refclassid = 'pg_class'::regclass "
+		"    and sn.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
 		"     and inc.relname is null "
@@ -1168,6 +1511,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"  where s.relkind = 'S' "
 		"    and d.classid = 'pg_attrdef'::regclass "
 		"    and d.refclassid = 'pg_class'::regclass "
+		"    and sn.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
 		"     and (   fn.nspname is not null "
@@ -1348,6 +1692,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 
 		"    where r.relkind = 'r' and r.relpersistence = 'p' "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -1402,6 +1747,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 
 		"    where r.relkind = 'r' and r.relpersistence = 'p' "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -1465,6 +1811,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 
 		"    where r.relkind = 'r' and r.relpersistence = 'p' "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
 		"     and fn.nspname is null "
@@ -1524,6 +1871,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 
 		"    where r.relkind = 'r' and r.relpersistence = 'p' "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
 		"     and inc.relname is null "
@@ -1585,6 +1933,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 
 		"    where r.relkind = 'r' and r.relpersistence = 'p' "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
 		"     and (   fn.nspname is not null "
@@ -1643,6 +1992,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 
 		"    where r.relkind = 'r' and r.relpersistence = 'p' "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
 		"     and fn.nspname is null "
@@ -1700,6 +2050,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 
 		"    where r.relkind = 'r' and r.relpersistence = 'p' "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -1806,6 +2157,7 @@ schema_list_table_indexes(PGSQL *pgsql,
 		"          left join pg_constraint c ON c.oid = d.refobjid"
 		"    where r.relkind = 'r' and r.relpersistence = 'p' "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
 		"      and rn.nspname = $1 and r.relname = $2"
 		" order by n.nspname, r.relname";
 
@@ -1867,6 +2219,7 @@ struct FilteringQueries listSourceDependSQL[] = {
 
 		"   WHERE NOT (refclassid = classid AND refobjid = objid) "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
 		"      and type not in ('toast table column', 'default value') "
 
 		/* remove duplicates due to multiple refobjsubid / objsubid */
@@ -1951,6 +2304,7 @@ struct FilteringQueries listSourceDependSQL[] = {
 
 		"   WHERE NOT (refclassid = classid AND refobjid = objid) "
 		"      and cn.nspname !~ '^pg_' and cn.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
 		"      and type not in ('toast table column', 'default value') "
 
 		/* WHERE clause for exclusion filters */
@@ -1989,6 +2343,7 @@ struct FilteringQueries listSourceDependSQL[] = {
 
 		"   WHERE NOT (refclassid = classid AND refobjid = objid) "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
 		"      and type not in ('toast table column', 'default value') "
 
 		/* WHERE clause for exclusion filters */
@@ -2071,6 +2426,7 @@ struct FilteringQueries listSourceDependSQL[] = {
 
 		"   WHERE NOT (refclassid = classid AND refobjid = objid) "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
 		"      and type not in ('toast table column', 'default value') "
 
 		/* WHERE clause for exclusion filters */

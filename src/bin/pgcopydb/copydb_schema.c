@@ -79,9 +79,28 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 	}
 
 	/* now fetch the list of tables from the source database */
+	bool createdTableSizeTable = false;
+
 	if (specs->section == DATA_SECTION_ALL ||
 		specs->section == DATA_SECTION_TABLE_DATA)
 	{
+		/*
+		 * First, if it doesn't exist yet, create the pgcopydb.table_size
+		 * table. Keep track of whether we had to create that table, if we did,
+		 * it is expected that we DROP it before the end of this transaction.
+		 *
+		 * In order to allow for users to prepare that table in advance, we do
+		 * not use a TEMP table here.
+		 */
+		if (!schema_prepare_pgcopydb_table_size(src,
+												&(specs->filters),
+												false, /* force */
+												&createdTableSizeTable))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
 		if (!copydb_prepare_table_specs(specs, src))
 		{
 			/* errors have already been logged */
@@ -94,94 +113,11 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 		specs->section == DATA_SECTION_INDEXES ||
 		specs->section == DATA_SECTION_CONSTRAINTS)
 	{
-		SourceIndexArray *indexArray = &(specs->sourceIndexArray);
-
-		if (!schema_list_all_indexes(src, &(specs->filters), indexArray))
+		if (!copydb_prepare_index_specs(specs, src))
 		{
 			/* errors have already been logged */
 			return false;
 		}
-
-		log_info("Fetched information for %d indexes", indexArray->count);
-	}
-
-	/*
-	 * Now build a SourceIndexList per table, when we retrieved both the table
-	 * list and the indexes list.
-	 */
-	if (specs->section == DATA_SECTION_ALL)
-	{
-		/* now build the index hash-table */
-		SourceIndex *sourceIndexHashByOid = NULL;
-		SourceIndexArray *indexArray = &(specs->sourceIndexArray);
-
-		for (int i = 0; i < indexArray->count; i++)
-		{
-			SourceIndex *index = &(indexArray->array[i]);
-
-			/* add the current table to the index Hash-by-OID */
-			HASH_ADD(hh, sourceIndexHashByOid, indexOid, sizeof(uint32_t), index);
-
-			/* find the index table, update its index list */
-			uint32_t oid = index->tableOid;
-			SourceTable *table = NULL;
-
-			HASH_FIND(hh, specs->sourceTableHashByOid, &oid, sizeof(oid), table);
-
-			if (table == NULL)
-			{
-				log_error("Failed to find table %u (\"%s\".\"%s\") "
-						  " in sourceTableHashByOid",
-						  oid,
-						  indexArray->array[i].tableNamespace,
-						  indexArray->array[i].tableRelname);
-				return false;
-			}
-
-			log_trace("Adding index %u %s to table %u %s",
-					  indexArray->array[i].indexOid,
-					  indexArray->array[i].indexRelname,
-					  table->oid,
-					  table->relname);
-
-			if (table->firstIndex == NULL)
-			{
-				table->firstIndex =
-					(SourceIndexList *) calloc(1, sizeof(SourceIndexList));
-
-				if (table->firstIndex == NULL)
-				{
-					log_error(ALLOCATION_FAILED_ERROR);
-					return false;
-				}
-
-				table->firstIndex->index = index;
-				table->firstIndex->next = NULL;
-
-				table->lastIndex = table->firstIndex;
-			}
-			else
-			{
-				SourceIndexList *current = table->lastIndex;
-
-				table->lastIndex =
-					(SourceIndexList *) calloc(1, sizeof(SourceIndexList));
-
-				if (table->lastIndex == NULL)
-				{
-					log_error(ALLOCATION_FAILED_ERROR);
-					return false;
-				}
-
-				table->lastIndex->index = index;
-				table->lastIndex->next = NULL;
-
-				current->next = table->lastIndex;
-			}
-		}
-
-		/* now attach the final hash table head to the specs */
-		specs->sourceIndexHashByOid = sourceIndexHashByOid;
 	}
 
 	if (specs->section == DATA_SECTION_ALL ||
@@ -201,6 +137,15 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 		return false;
 	}
 
+	if (createdTableSizeTable)
+	{
+		if (!schema_drop_pgcopydb_table_size(src))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
 	if (!specs->consistent)
 	{
 		log_debug("--not-consistent: commit and close SOURCE connection now");
@@ -216,7 +161,7 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 
 
 /*
- * copydb_prepare_table_data fetches the list of tables to COPY data from the
+ * copydb_prepare_table_specs fetches the list of tables to COPY data from the
  * source and into the target, and initialises our internal
  * CopyTableDataSpecsArray to drive the operations.
  */
@@ -389,6 +334,107 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 			 tableArray->count,
 			 relTuplesPretty,
 			 bytesPretty);
+
+	return true;
+}
+
+
+/*
+ * copydb_prepare_index_specs fetches the list of indexes to create again on
+ * the target database, and set our internal hash table entries with a
+ * linked-list of indexes per-table.
+ */
+bool
+copydb_prepare_index_specs(CopyDataSpec *specs, PGSQL *pgsql)
+{
+	SourceIndexArray *indexArray = &(specs->sourceIndexArray);
+
+	if (!schema_list_all_indexes(pgsql, &(specs->filters), indexArray))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_info("Fetched information for %d indexes", indexArray->count);
+
+	/*
+	 * Now build a SourceIndexList per table, when we retrieved both the table
+	 * list and the indexes list.
+	 */
+	if (specs->section == DATA_SECTION_ALL)
+	{
+		/* now build the index hash-table */
+		SourceIndex *sourceIndexHashByOid = NULL;
+		SourceIndexArray *indexArray = &(specs->sourceIndexArray);
+
+		for (int i = 0; i < indexArray->count; i++)
+		{
+			SourceIndex *index = &(indexArray->array[i]);
+
+			/* add the current table to the index Hash-by-OID */
+			HASH_ADD(hh, sourceIndexHashByOid, indexOid, sizeof(uint32_t), index);
+
+			/* find the index table, update its index list */
+			uint32_t oid = index->tableOid;
+			SourceTable *table = NULL;
+
+			HASH_FIND(hh, specs->sourceTableHashByOid, &oid, sizeof(oid), table);
+
+			if (table == NULL)
+			{
+				log_error("Failed to find table %u (\"%s\".\"%s\") "
+						  " in sourceTableHashByOid",
+						  oid,
+						  indexArray->array[i].tableNamespace,
+						  indexArray->array[i].tableRelname);
+				return false;
+			}
+
+			log_trace("Adding index %u %s to table %u %s",
+					  indexArray->array[i].indexOid,
+					  indexArray->array[i].indexRelname,
+					  table->oid,
+					  table->relname);
+
+			if (table->firstIndex == NULL)
+			{
+				table->firstIndex =
+					(SourceIndexList *) calloc(1, sizeof(SourceIndexList));
+
+				if (table->firstIndex == NULL)
+				{
+					log_error(ALLOCATION_FAILED_ERROR);
+					return false;
+				}
+
+				table->firstIndex->index = index;
+				table->firstIndex->next = NULL;
+
+				table->lastIndex = table->firstIndex;
+			}
+			else
+			{
+				SourceIndexList *current = table->lastIndex;
+
+				table->lastIndex =
+					(SourceIndexList *) calloc(1, sizeof(SourceIndexList));
+
+				if (table->lastIndex == NULL)
+				{
+					log_error(ALLOCATION_FAILED_ERROR);
+					return false;
+				}
+
+				table->lastIndex->index = index;
+				table->lastIndex->next = NULL;
+
+				current->next = table->lastIndex;
+			}
+		}
+
+		/* now attach the final hash table head to the specs */
+		specs->sourceIndexHashByOid = sourceIndexHashByOid;
+	}
 
 	return true;
 }
