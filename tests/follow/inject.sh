@@ -10,6 +10,11 @@ set -e
 #  - PGCOPYDB_TABLE_JOBS
 #  - PGCOPYDB_INDEX_JOBS
 
+#
+# pgcopydb list extensions include a retry loop, so we use that as a proxy
+# to depend on the source/target Postgres images to be ready
+#
+pgcopydb list extensions --source ${PGCOPYDB_SOURCE_PGURI}
 
 #
 # Only start injecting DML traffic on the source database when the pagila
@@ -17,7 +22,8 @@ set -e
 # that's the case is the existence of the pgcopydb.sentinel table on the
 # source database.
 #
-while [ `pgcopydb list tables | grep -c sentinel` -ne 1 ]
+sql="select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace where relname = 'sentinel' and nspname = 'pgcopydb' union all select 0 limit 1"
+while [ `psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c "${sql}"` -ne 1 ]
 do
     sleep 1
 done
