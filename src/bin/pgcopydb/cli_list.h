@@ -17,6 +17,8 @@
 
 typedef struct ListDBOptions
 {
+	char dir[MAXPGPATH];
+
 	char source_pguri[MAXCONNINFO];
 	char schema_name[NAMEDATALEN];
 	char table_name[NAMEDATALEN];

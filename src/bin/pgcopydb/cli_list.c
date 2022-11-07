@@ -121,7 +121,8 @@ static CommandLine list_progress_command =
 		"List the progress",
 		" --source ... ",
 		"  --source  Postgres URI to the source database\n"
-		"  --json    Format the output using JSON\n",
+		"  --json    Format the output using JSON\n"
+		"  --dir     Work directory to use\n",
 		cli_list_db_getopts,
 		cli_list_progress);
 
@@ -155,6 +156,7 @@ cli_list_db_getopts(int argc, char **argv)
 
 	static struct option long_options[] = {
 		{ "source", required_argument, NULL, 'S' },
+		{ "dir", required_argument, NULL, 'D' },
 		{ "schema-name", required_argument, NULL, 's' },
 		{ "table-name", required_argument, NULL, 't' },
 		{ "filter", required_argument, NULL, 'F' },
@@ -175,7 +177,7 @@ cli_list_db_getopts(int argc, char **argv)
 
 	optind = 0;
 
-	while ((c = getopt_long(argc, argv, "S:T:j:s:t:PL:JVvdzqh",
+	while ((c = getopt_long(argc, argv, "S:T:D:j:s:t:PL:JVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -197,6 +199,13 @@ cli_list_db_getopts(int argc, char **argv)
 			{
 				strlcpy(options.schema_name, optarg, NAMEDATALEN);
 				log_trace("--schema %s", options.schema_name);
+				break;
+			}
+
+			case 'D':
+			{
+				strlcpy(options.dir, optarg, MAXPGPATH);
+				log_trace("--dir %s", options.dir);
 				break;
 			}
 
@@ -1128,6 +1137,11 @@ cli_list_progress(int argc, char **argv)
 
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
+	char *dir =
+		IS_EMPTY_STRING_BUFFER(listDBoptions.dir)
+		? NULL
+		: listDBoptions.dir;
+
 	/*
 	 * Assume --resume so that we can run the command alongside the main
 	 * process being active.
@@ -1135,7 +1149,7 @@ cli_list_progress(int argc, char **argv)
 	bool auxilliary = true;
 
 	if (!copydb_init_workdir(&copySpecs,
-							 NULL,
+							 dir,
 							 false, /* restart */
 							 true, /* resume */
 							 auxilliary))
