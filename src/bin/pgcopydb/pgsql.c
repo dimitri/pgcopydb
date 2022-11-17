@@ -3326,9 +3326,16 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 						  LSN_FORMAT_ARGS(walEnd));
 			}
 
+			/* call the keepaliveFunction callback now, ignore errors */
+			context->now = client->now;
+			(void) (*client->keepaliveFunction)(context);
+
 			/* Send a reply, if necessary */
 			if (replyRequested || endposReached)
 			{
+				/* expose the keepalive LSN to the client */
+				context->cur_record_lsn = client->current.written_lsn;
+
 				if (!flushAndSendFeedback(client, context))
 				{
 					goto error;
@@ -3403,7 +3410,7 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 		}
 
 		if (client->endpos != InvalidXLogRecPtr &&
-			cur_record_lsn == client->endpos)
+			cur_record_lsn > client->endpos)
 		{
 			/* endpos was exactly the record we just processed, we're done */
 			log_debug("pgsql_stream_logical: endpos reached at %X/%X",
