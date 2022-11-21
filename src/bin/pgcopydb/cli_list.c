@@ -52,6 +52,7 @@ static CommandLine list_tables_command =
 		"  --source            Postgres URI to the source database\n"
 		"  --filter <filename> Use the filters defined in <filename>\n"
 		"  --cache             Cache table size in relation pgcopydb.table_size\n"
+		"  --drop-cache        Drop relation pgcopydb.table_size\n"
 		"  --list-skipped      List only tables that are setup to be skipped\n"
 		"  --without-pkey      List only tables that have no primary key\n",
 		cli_list_db_getopts,
@@ -167,6 +168,7 @@ cli_list_db_getopts(int argc, char **argv)
 		{ "split-tables-larger-than", required_argument, NULL, 'L' },
 		{ "split-at", required_argument, NULL, 'L' },
 		{ "cache", no_argument, NULL, 'c' },
+		{ "drop-cache", no_argument, NULL, 'C' },
 		{ "json", no_argument, NULL, 'J' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "debug", no_argument, NULL, 'd' },
@@ -179,7 +181,7 @@ cli_list_db_getopts(int argc, char **argv)
 
 	optind = 0;
 
-	while ((c = getopt_long(argc, argv, "S:T:D:j:s:t:PL:JVvdzqh",
+	while ((c = getopt_long(argc, argv, "S:T:D:j:s:t:PL:cCJVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -267,8 +269,27 @@ cli_list_db_getopts(int argc, char **argv)
 
 			case 'c':
 			{
+				if (options.dropCache)
+				{
+					log_fatal("Please choose either --cache or --drop-cache");
+					++errors;
+				}
+
 				options.cache = true;
 				log_trace("--cache");
+				break;
+			}
+
+			case 'C':
+			{
+				if (options.cache)
+				{
+					log_fatal("Please choose either --cache or --drop-cache");
+					++errors;
+				}
+
+				options.dropCache = true;
+				log_trace("--drop-cache");
 				break;
 			}
 
@@ -514,6 +535,17 @@ cli_list_tables(int argc, char **argv)
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);
+	}
+
+	if (listDBoptions.dropCache)
+	{
+		log_info("Dropping cache table pgcopydb.table_size");
+		if (!schema_drop_pgcopydb_table_size(&pgsql))
+		{
+			exit(EXIT_CODE_SOURCE);
+		}
+
+		exit(EXIT_CODE_QUIT);
 	}
 
 	if (!pgsql_begin(&pgsql))

@@ -57,6 +57,7 @@ tables to COPY the data from.
      --source            Postgres URI to the source database
      --filter <filename> Use the filters defined in <filename>
      --cache             Cache table size in relation pgcopydb.table_size
+     --drop-cache        Drop relation pgcopydb.table_size
      --list-skipped      List only tables that are setup to be skipped
      --without-pkey      List only tables that have no primary key
 
