@@ -25,7 +25,7 @@ psql -o /tmp/d.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/ddl.sql
 
 # pgcopydb copy db uses the environment variables
-pgcopydb copy-db --follow --debug
+pgcopydb copy-db --follow
 
 # cleanup
 pgcopydb stream sentinel get

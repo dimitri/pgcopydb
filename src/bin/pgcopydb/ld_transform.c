@@ -364,6 +364,14 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 
 		json_value_free(json);
 
+		log_trace("stream_transform_file[%2d]: %c %3d %X/%X [%2d]: %X/%X",
+				  i,
+				  metadata->action,
+				  metadata->xid,
+				  LSN_FORMAT_ARGS(metadata->lsn),
+				  currentTxIndex,
+				  LSN_FORMAT_ARGS(currentTx->beginLSN));
+
 		/* it is time to close the current transaction and prepare a new one? */
 		if (metadata->action == STREAM_ACTION_COMMIT)
 		{
@@ -540,6 +548,13 @@ parseMessage(LogicalTransaction *txn,
 			txn->beginLSN = metadata->lsn;
 			strlcpy(txn->timestamp, metadata->timestamp, sizeof(txn->timestamp));
 			txn->first = NULL;
+
+			if (metadata->lsn == InvalidXLogRecPtr ||
+				IS_EMPTY_STRING_BUFFER(txn->timestamp))
+			{
+				log_fatal("Failed to parse BEGIN message: %s", message);
+				return false;
+			}
 
 			break;
 		}
@@ -1010,52 +1025,6 @@ stream_write_transaction(FILE *out, LogicalTransaction *tx)
 	 * statement, and in that case we don't want to output BEGIN and COMMIT
 	 * statements at all.
 	 */
-	if (tx->count == 1)
-	{
-		switch (tx->first->action)
-		{
-			case STREAM_ACTION_SWITCH:
-			{
-				LogicalMessageSwitchWAL *stmt = &(tx->first->stmt.switchwal);
-
-				if (!stream_write_switchwal(out, stmt))
-				{
-					return false;
-				}
-
-				return true;
-			}
-
-			case STREAM_ACTION_KEEPALIVE:
-			{
-				LogicalMessageKeepalive *stmt = &(tx->first->stmt.keepalive);
-
-				if (!stream_write_keepalive(out, stmt))
-				{
-					return false;
-				}
-
-				return true;
-			}
-
-			default:
-			{
-				/* nothing special here, fall through */
-				break;
-			}
-		}
-	}
-
-
-	/*
-	 * Other shapes of LogicalTransactions are to be written out in a pretty
-	 * straightforward way: BEGIN; <stmt loop>; COMMIT;
-	 */
-	if (!stream_write_begin(out, tx))
-	{
-		/* errors have already been logged */
-		return false;
-	}
 
 	LogicalTransactionStatement *currentStmt = tx->first;
 
@@ -1063,6 +1032,42 @@ stream_write_transaction(FILE *out, LogicalTransaction *tx)
 	{
 		switch (currentStmt->action)
 		{
+			case STREAM_ACTION_BEGIN:
+			{
+				if (!stream_write_begin(out, tx))
+				{
+					return false;
+				}
+				break;
+			}
+
+			case STREAM_ACTION_COMMIT:
+			{
+				if (!stream_write_commit(out, tx))
+				{
+					return false;
+				}
+				break;
+			}
+
+			case STREAM_ACTION_SWITCH:
+			{
+				if (!stream_write_switchwal(out, &(currentStmt->stmt.switchwal)))
+				{
+					return false;
+				}
+				break;
+			}
+
+			case STREAM_ACTION_KEEPALIVE:
+			{
+				if (!stream_write_keepalive(out, &(currentStmt->stmt.keepalive)))
+				{
+					return false;
+				}
+				break;
+			}
+
 			case STREAM_ACTION_INSERT:
 			{
 				if (!stream_write_insert(out, &(currentStmt->stmt.insert)))
@@ -1099,24 +1104,6 @@ stream_write_transaction(FILE *out, LogicalTransaction *tx)
 				break;
 			}
 
-			case STREAM_ACTION_SWITCH:
-			{
-				if (!stream_write_switchwal(out, &(currentStmt->stmt.switchwal)))
-				{
-					return false;
-				}
-				break;
-			}
-
-			case STREAM_ACTION_KEEPALIVE:
-			{
-				if (!stream_write_keepalive(out, &(currentStmt->stmt.keepalive)))
-				{
-					return false;
-				}
-				break;
-			}
-
 			default:
 			{
 				log_error("BUG: Failed to write SQL action %d",
@@ -1124,12 +1111,6 @@ stream_write_transaction(FILE *out, LogicalTransaction *tx)
 				return false;
 			}
 		}
-	}
-
-	if (!stream_write_commit(out, tx))
-	{
-		/* errors have already been logged */
-		return false;
 	}
 
 	return true;

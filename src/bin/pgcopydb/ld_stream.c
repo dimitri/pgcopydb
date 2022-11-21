@@ -885,13 +885,13 @@ streamFeedback(LogicalStreamContext *context)
 
 	context->lastFeedbackSync = context->now;
 
-	log_info("streamFeedback: written %X/%X flushed %X/%X applied %X/%X "
-			 " endpos %X/%X apply %s",
-			 LSN_FORMAT_ARGS(context->tracking->written_lsn),
-			 LSN_FORMAT_ARGS(context->tracking->flushed_lsn),
-			 LSN_FORMAT_ARGS(context->tracking->applied_lsn),
-			 LSN_FORMAT_ARGS(context->endpos),
-			 privateContext->apply ? "enabled" : "disabled");
+	log_debug("streamFeedback: written %X/%X flushed %X/%X applied %X/%X "
+			  " endpos %X/%X apply %s",
+			  LSN_FORMAT_ARGS(context->tracking->written_lsn),
+			  LSN_FORMAT_ARGS(context->tracking->flushed_lsn),
+			  LSN_FORMAT_ARGS(context->tracking->applied_lsn),
+			  LSN_FORMAT_ARGS(context->endpos),
+			  privateContext->apply ? "enabled" : "disabled");
 
 	return true;
 }
