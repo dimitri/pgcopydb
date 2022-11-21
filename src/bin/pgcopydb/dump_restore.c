@@ -183,13 +183,20 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 bool
 copydb_target_drop_tables(CopyDataSpec *specs)
 {
-	PQExpBuffer query = createPQExpBuffer();
-
 	log_info("Drop tables on the target database, per --drop-if-exists");
+
+	SourceTableArray *tableArray = &(specs->sourceTableArray);
+
+	if (tableArray->count == 0) {
+		log_info("No tables to migrate, skipping drop tables on the target database");
+		return true;
+	}
+
+	PQExpBuffer query = createPQExpBuffer();
 
 	appendPQExpBuffer(query, "DROP TABLE IF EXISTS");
 
-	SourceTableArray *tableArray = &(specs->sourceTableArray);
+
 
 	for (int tableIndex = 0; tableIndex < tableArray->count; tableIndex++)
 	{
