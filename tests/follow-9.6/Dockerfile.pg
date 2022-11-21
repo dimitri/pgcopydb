@@ -1,20 +1,30 @@
 ARG PGVERSION=9.6
 
+#
+# We use the Docker image for postgres so as to benefit from entry point
+# scripts with some level of tweakability. We could use a bare debian image
+# instead, but we would have to provide and maintain those scripts.
+#
 FROM postgres:${PGVERSION}
 
 ARG PGVERSION
+
+# The apt.postgresql.org main repository does not have stretch Release anymore
+RUN rm -f /etc/apt/sources.list.d/pgdg.list
 
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     build-essential \
     ca-certificates \
+    apt-transport-https \
 	curl \
 	gnupg \
     postgresql-common \
 	&& rm -rf /var/lib/apt/lists/*
 
+# We can use apt-archive.postgresql.org to still have stretch support
 RUN curl https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
-RUN echo "deb http://apt.postgresql.org/pub/repos/apt stretch-pgdg main ${PGVERSION}" > /etc/apt/sources.list.d/pgdg.list
+RUN echo "deb http://apt-archive.postgresql.org/pub/repos/apt stretch-pgdg main ${PGVERSION}" > /etc/apt/sources.list.d/pgdg.list
 
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends postgresql-${PGVERSION}-wal2json \
