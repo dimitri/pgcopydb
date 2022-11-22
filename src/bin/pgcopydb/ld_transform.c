@@ -337,7 +337,6 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 	 * internal representation structure.
 	 */
 	int currentTxIndex = 0;
-	LogicalTransaction *previousTx = NULL;
 	LogicalTransaction *currentTx = &(txns.array[currentTxIndex]);
 
 	for (int i = 0; i < content.count; i++)
@@ -365,11 +364,17 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 
 		json_value_free(json);
 
+		log_trace("stream_transform_file[%2d]: %c %3d %X/%X [%2d]: %X/%X",
+				  i,
+				  metadata->action,
+				  metadata->xid,
+				  LSN_FORMAT_ARGS(metadata->lsn),
+				  currentTxIndex,
+				  LSN_FORMAT_ARGS(currentTx->beginLSN));
+
 		/* it is time to close the current transaction and prepare a new one? */
 		if (metadata->action == STREAM_ACTION_COMMIT)
 		{
-			currentTx->nextlsn = metadata->nextlsn;
-
 			++txns.count;
 			++currentTxIndex;
 
@@ -382,20 +387,17 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 				return false;
 			}
 
-			previousTx = currentTx;
 			currentTx = &(txns.array[currentTxIndex]);
 		}
+	}
 
-		/* do we have to hack the nextlsn of the previous transaction? */
-		else if (metadata->action == STREAM_ACTION_SWITCH)
-		{
-			log_debug("WAL switch, commit message nextlsn was %X/%X, "
-					  "now set to %X/%X",
-					  LSN_FORMAT_ARGS(previousTx->nextlsn),
-					  LSN_FORMAT_ARGS(metadata->nextlsn));
-
-			previousTx->nextlsn = metadata->nextlsn;
-		}
+	/*
+	 * We might have a last pending transaction with a COMMIT message to be
+	 * found in a a later file.
+	 */
+	if (currentTx->count > 0)
+	{
+		++txns.count;
 	}
 
 	/* free dynamic memory that's not needed anymore */
@@ -481,7 +483,8 @@ parseMessage(LogicalTransaction *txn,
 	 * Check that XID make sense, except for SWITCH messages, which don't have
 	 * XID information, only have LSN information.
 	 */
-	if (metadata->action != STREAM_ACTION_SWITCH)
+	if (metadata->action != STREAM_ACTION_SWITCH &&
+		metadata->action != STREAM_ACTION_KEEPALIVE)
 	{
 		if (txn->xid > 0 && txn->xid != metadata->xid)
 		{
@@ -505,7 +508,9 @@ parseMessage(LogicalTransaction *txn,
 	if (metadata->action == STREAM_ACTION_TRUNCATE ||
 		metadata->action == STREAM_ACTION_INSERT ||
 		metadata->action == STREAM_ACTION_UPDATE ||
-		metadata->action == STREAM_ACTION_DELETE)
+		metadata->action == STREAM_ACTION_DELETE ||
+		metadata->action == STREAM_ACTION_SWITCH ||
+		metadata->action == STREAM_ACTION_KEEPALIVE)
 	{
 		stmt = (LogicalTransactionStatement *)
 			   malloc(sizeof(LogicalTransactionStatement));
@@ -518,15 +523,20 @@ parseMessage(LogicalTransaction *txn,
 
 		stmt->action = metadata->action;
 
-		schema = (char *) json_object_get_string(jsobj, "schema");
-		table = (char *) json_object_get_string(jsobj, "table");
-
-		if (schema == NULL || table == NULL)
+		/* most actions share a need for "schema" and "table" properties */
+		if (metadata->action != STREAM_ACTION_SWITCH &&
+			metadata->action != STREAM_ACTION_KEEPALIVE)
 		{
-			log_error("Failed to parse truncate message missing "
-					  "schema or table property: %s",
-					  message);
-			return false;
+			schema = (char *) json_object_get_string(jsobj, "schema");
+			table = (char *) json_object_get_string(jsobj, "table");
+
+			if (schema == NULL || table == NULL)
+			{
+				log_error("Failed to parse truncate message missing "
+						  "schema or table property: %s",
+						  message);
+				return false;
+			}
 		}
 	}
 
@@ -538,6 +548,13 @@ parseMessage(LogicalTransaction *txn,
 			txn->beginLSN = metadata->lsn;
 			strlcpy(txn->timestamp, metadata->timestamp, sizeof(txn->timestamp));
 			txn->first = NULL;
+
+			if (metadata->lsn == InvalidXLogRecPtr ||
+				IS_EMPTY_STRING_BUFFER(txn->timestamp))
+			{
+				log_fatal("Failed to parse BEGIN message: %s", message);
+				return false;
+			}
 
 			break;
 		}
@@ -551,7 +568,25 @@ parseMessage(LogicalTransaction *txn,
 
 		case STREAM_ACTION_SWITCH:
 		{
-			/* nothing to retrieve here, the metadata is all we need */
+			stmt->action = metadata->action;
+			stmt->stmt.switchwal.lsn = metadata->lsn;
+
+			(void) streamLogicalTransactionAppendStatement(txn, stmt);
+
+			break;
+		}
+
+		case STREAM_ACTION_KEEPALIVE:
+		{
+			stmt->action = metadata->action;
+			stmt->stmt.keepalive.lsn = metadata->lsn;
+
+			strlcpy(stmt->stmt.keepalive.timestamp,
+					metadata->timestamp,
+					sizeof(stmt->stmt.keepalive.timestamp));
+
+			(void) streamLogicalTransactionAppendStatement(txn, stmt);
+
 			break;
 		}
 
@@ -748,6 +783,8 @@ streamLogicalTransactionAppendStatement(LogicalTransaction *txn,
 		stmt->next = NULL;
 		txn->last = stmt;
 	}
+
+	++txn->count;
 
 	return true;
 }
@@ -978,14 +1015,16 @@ FreeLogicalMessageTupleArray(LogicalMessageTupleArray *tupleArray)
 bool
 stream_write_transaction(FILE *out, LogicalTransaction *tx)
 {
-	fformat(out,
-			"%s{\"xid\":%lld,\"lsn\":\"%X/%X\","
-			"\"nextlsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
-			OUTPUT_BEGIN,
-			(long long) tx->xid,
-			LSN_FORMAT_ARGS(tx->beginLSN),
-			LSN_FORMAT_ARGS(tx->nextlsn),
-			tx->timestamp);
+	/*
+	 * SWITCH WAL commands might appear eigher in the middle of a transaction
+	 * or in between two transactions, depending on when the LSN WAL file
+	 * switch happens on the source server.
+	 *
+	 * When the SWITCH WAL happens in between transactions, our internal
+	 * representation makes it look like a transaction with a single SWITCH
+	 * statement, and in that case we don't want to output BEGIN and COMMIT
+	 * statements at all.
+	 */
 
 	LogicalTransactionStatement *currentStmt = tx->first;
 
@@ -993,6 +1032,42 @@ stream_write_transaction(FILE *out, LogicalTransaction *tx)
 	{
 		switch (currentStmt->action)
 		{
+			case STREAM_ACTION_BEGIN:
+			{
+				if (!stream_write_begin(out, tx))
+				{
+					return false;
+				}
+				break;
+			}
+
+			case STREAM_ACTION_COMMIT:
+			{
+				if (!stream_write_commit(out, tx))
+				{
+					return false;
+				}
+				break;
+			}
+
+			case STREAM_ACTION_SWITCH:
+			{
+				if (!stream_write_switchwal(out, &(currentStmt->stmt.switchwal)))
+				{
+					return false;
+				}
+				break;
+			}
+
+			case STREAM_ACTION_KEEPALIVE:
+			{
+				if (!stream_write_keepalive(out, &(currentStmt->stmt.keepalive)))
+				{
+					return false;
+				}
+				break;
+			}
+
 			case STREAM_ACTION_INSERT:
 			{
 				if (!stream_write_insert(out, &(currentStmt->stmt.insert)))
@@ -1038,14 +1113,72 @@ stream_write_transaction(FILE *out, LogicalTransaction *tx)
 		}
 	}
 
+	return true;
+}
+
+
+/*
+ * stream_write_switchwal writes a SWITCH statement to the already open out
+ * stream.
+ */
+bool
+stream_write_begin(FILE *out, LogicalTransaction *tx)
+{
 	fformat(out,
-			"%s{\"xid\": %lld,\"lsn\":\"%X/%X\","
-			"\"nextlsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
+			"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
+			OUTPUT_BEGIN,
+			(long long) tx->xid,
+			LSN_FORMAT_ARGS(tx->beginLSN),
+			tx->timestamp);
+
+	return true;
+}
+
+
+/*
+ * stream_write_switchwal writes a SWITCH statement to the already open out
+ * stream.
+ */
+bool
+stream_write_commit(FILE *out, LogicalTransaction *tx)
+{
+	fformat(out,
+			"%s{\"xid\": %lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
 			OUTPUT_COMMIT,
 			(long long) tx->xid,
 			LSN_FORMAT_ARGS(tx->commitLSN),
-			LSN_FORMAT_ARGS(tx->nextlsn),
 			tx->timestamp);
+
+	return true;
+}
+
+
+/*
+ * stream_write_switchwal writes a SWITCH statement to the already open out
+ * stream.
+ */
+bool
+stream_write_switchwal(FILE *out, LogicalMessageSwitchWAL *switchwal)
+{
+	fformat(out, "%s{\"lsn\":\"%X/%X\"}\n",
+			OUTPUT_SWITCHWAL,
+			LSN_FORMAT_ARGS(switchwal->lsn));
+
+	return true;
+}
+
+
+/*
+ * stream_write_keepalive writes a KEEPALIVE statement to the already open out
+ * stream.
+ */
+bool
+stream_write_keepalive(FILE *out, LogicalMessageKeepalive *keepalive)
+{
+	fformat(out, "%s{\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
+			OUTPUT_KEEPALIVE,
+			LSN_FORMAT_ARGS(keepalive->lsn),
+			keepalive->timestamp);
 
 	return true;
 }

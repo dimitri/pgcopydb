@@ -146,6 +146,7 @@ startLogicalStreaming(StreamSpecs *specs)
 	stream.flushFunction = &streamFlush;
 	stream.closeFunction = &streamClose;
 	stream.feedbackFunction = &streamFeedback;
+	stream.keepaliveFunction = &streamKeepalive;
 
 	/*
 	 * Read possibly already existing file to initialize the start LSN from a
@@ -328,7 +329,7 @@ streamCheckResumePosition(StreamSpecs *specs)
 		LogicalMessageMetadata *latest =
 			&(latestStreamedContent.messages[latestStreamedContent.count - 1]);
 
-		specs->startpos = latest->nextlsn;
+		specs->startpos = latest->lsn;
 
 		log_info("Resuming streaming at LSN %X/%X "
 				 "from last message read in JSON file \"%s\", line %d",
@@ -466,11 +467,10 @@ streamWrite(LogicalStreamContext *context)
 		context->tracking->written_lsn = context->cur_record_lsn;
 	}
 
-	log_debug("Received action %c for XID %u in LSN %X/%X, Next LSN %X/%X",
+	log_debug("Received action %c for XID %u in LSN %X/%X",
 			  metadata->action,
 			  metadata->xid,
-			  LSN_FORMAT_ARGS(metadata->lsn),
-			  LSN_FORMAT_ARGS(metadata->nextlsn));
+			  LSN_FORMAT_ARGS(metadata->lsn));
 
 	return true;
 }
@@ -514,22 +514,16 @@ streamRotateFile(LogicalStreamContext *context)
 		bool time_to_abort = false;
 
 		/*
-		 * Here we might have an early WAL file rotation, either because of
-		 * archive_timeout or a call to pg_switch_wal() for instance. In case
-		 * the current message nextlsn doesn't belong to the new file we're
-		 * about to create, add an extra empty transaction with the expected
-		 * nextlsn.
+		 * Add an extra empty transaction with the first lsn of the next file
+		 * to allow for the transform and apply process to follow along.
 		 */
-		if (privateContext->metadata.nextlsn < context->cur_record_lsn)
-		{
-			fformat(privateContext->jsonFile,
-					"{\"action\":\"X\",\"lsn\":\"%X/%X\",\"nextlsn\":\"%X/%X\"}\n",
-					LSN_FORMAT_ARGS(privateContext->metadata.nextlsn),
-					LSN_FORMAT_ARGS(context->cur_record_lsn));
+		fformat(privateContext->jsonFile,
+				"{\"action\":\"X\",\"lsn\":\"%X/%X\"}\n",
+				LSN_FORMAT_ARGS(context->cur_record_lsn));
 
-			log_debug("Inserted action SWITCH for nextlsn %X/%X",
-					  LSN_FORMAT_ARGS(context->cur_record_lsn));
-		}
+		log_debug("Inserted action SWITCH for lsn %X/%X in \"%s\"",
+				  LSN_FORMAT_ARGS(context->cur_record_lsn),
+				  privateContext->walFileName);
 
 		if (!streamCloseFile(context, time_to_abort))
 		{
@@ -710,6 +704,11 @@ streamFlush(LogicalStreamContext *context)
 		return true;
 	}
 
+	log_debug("streamFlush: %X/%X %X/%X",
+			  LSN_FORMAT_ARGS(context->tracking->written_lsn),
+			  LSN_FORMAT_ARGS(context->cur_record_lsn));
+
+	/* if needed, flush our current file now (fsync) */
 	if (context->tracking->flushed_lsn < context->tracking->written_lsn)
 	{
 		int fd = fileno(privateContext->jsonFile);
@@ -726,6 +725,79 @@ streamFlush(LogicalStreamContext *context)
 		log_debug("Flushed up to %X/%X in file \"%s\"",
 				  LSN_FORMAT_ARGS(context->tracking->flushed_lsn),
 				  privateContext->walFileName);
+	}
+
+	return true;
+}
+
+
+/*
+ * streamKeepalive is a callback function for our LogicalStreamClient.
+ *
+ * This function is called when receiving a logical decoding keepalive packet.
+ */
+bool
+streamKeepalive(LogicalStreamContext *context)
+{
+	StreamContext *privateContext = (StreamContext *) context->private;
+
+	/* we might have to rotate to the next on-disk file */
+	if (!streamRotateFile(context))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* register progress made through receiving keepalive messages */
+	if (privateContext->jsonFile != NULL)
+	{
+		/* Postgres Epoch is 2000-01-01, Unix Epoch usually is 1970-01-01 */
+		char *pgepoch_str = "2000-01-01";
+		struct tm pgepoch = { 0 };
+
+		if (strptime(pgepoch_str, "%Y-%m-%d", &pgepoch) == NULL)
+		{
+			log_error("Failed to parse Postgres epoch \"%s\": %m", pgepoch_str);
+			return false;
+		}
+
+		time_t e = mktime(&pgepoch);
+
+		if (e == (time_t) -1)
+		{
+			log_error("Failed to compute Postgres epoch: %m");
+			return false;
+		}
+
+		/*
+		 * Postgres Timestamps are stored as int64 values with units of
+		 * microseconds. time_t are the number of seconds since the Epoch.
+		 */
+		time_t t = ((time_t) (context->now / 1000000)) + e;
+
+		struct tm lt = { 0 };
+
+		if (localtime_r(&t, &lt) == NULL)
+		{
+			log_error("Failed to format Keepalive timestamp: %m");
+			return false;
+		}
+
+		char now[BUFSIZE] = { 0 };
+
+		strftime(now, sizeof(now), "%Y-%m-%d %H:%M:%S%z", &lt);
+
+		fformat(privateContext->jsonFile,
+				"{\"action\":\"K\",\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
+				LSN_FORMAT_ARGS(context->cur_record_lsn),
+				now);
+
+		log_debug("Inserted action KEEPALIVE for lsn %X/%X @%s",
+				  LSN_FORMAT_ARGS(context->cur_record_lsn),
+				  now);
+
+		/* update the LSN tracking that's reported in the feedback */
+		context->tracking->written_lsn = context->cur_record_lsn;
 	}
 
 	return true;
@@ -864,7 +936,7 @@ parseMessageMetadata(LogicalMessageMetadata *metadata,
 			return false;
 		}
 
-		/* message entries {action: "M"} do not have xid, lsn, nextlsn fields */
+		/* message entries {action: "M"} do not have xid, lsn fields */
 		if (metadata->action == STREAM_ACTION_MESSAGE)
 		{
 			log_debug("Skipping message: %s", buffer);
@@ -872,7 +944,8 @@ parseMessageMetadata(LogicalMessageMetadata *metadata,
 		}
 	}
 
-	if (metadata->action != STREAM_ACTION_SWITCH)
+	if (metadata->action != STREAM_ACTION_SWITCH &&
+		metadata->action != STREAM_ACTION_KEEPALIVE)
 	{
 		double xid = json_object_get_number(jsobj, "xid");
 		metadata->xid = (uint32_t) xid;
@@ -890,17 +963,6 @@ parseMessageMetadata(LogicalMessageMetadata *metadata,
 	{
 		log_error("Failed to parse LSN \"%s\"", lsn);
 		return false;
-	}
-
-	char *nextlsn = (char *) json_object_get_string(jsobj, "nextlsn");
-
-	if (nextlsn != NULL)
-	{
-		if (!parseLSN(nextlsn, &(metadata->nextlsn)))
-		{
-			log_error("Failed to parse Next LSN \"%s\"", nextlsn);
-			return false;
-		}
 	}
 
 	char *timestamp = (char *) json_object_get_string(jsobj, "timestamp");
@@ -1159,6 +1221,11 @@ StreamActionFromChar(char action)
 		case 'X':
 		{
 			return STREAM_ACTION_SWITCH;
+		}
+
+		case 'K':
+		{
+			return STREAM_ACTION_KEEPALIVE;
 		}
 
 		default:

@@ -16,6 +16,8 @@
 
 #define OUTPUT_BEGIN "BEGIN; -- "
 #define OUTPUT_COMMIT "COMMIT; -- "
+#define OUTPUT_SWITCHWAL "-- SWITCH WAL "
+#define OUTPUT_KEEPALIVE "-- KEEPALIVE "
 
 typedef enum
 {
@@ -27,7 +29,8 @@ typedef enum
 	STREAM_ACTION_DELETE = 'D',
 	STREAM_ACTION_TRUNCATE = 'T',
 	STREAM_ACTION_MESSAGE = 'M',
-	STREAM_ACTION_SWITCH = 'X'
+	STREAM_ACTION_SWITCH = 'X',
+	STREAM_ACTION_KEEPALIVE = 'K'
 } StreamAction;
 
 typedef struct StreamCounters
@@ -49,7 +52,6 @@ typedef struct LogicalMessageMetadata
 	StreamAction action;
 	uint32_t xid;
 	uint64_t lsn;
-	uint64_t nextlsn;
 	char timestamp[PG_MAX_TIMESTAMP];
 } LogicalMessageMetadata;
 
@@ -108,9 +110,7 @@ typedef struct StreamApplyContext
 	IdentifySystem system;      /* information about source database */
 	uint32_t WalSegSz;          /* information about source database */
 
-	uint64_t lsn;               /* read from SQL file COMMIT comments */
-	uint64_t nextlsn;           /* read from SQL file COMMIT comments */
-	uint64_t previousLSN;       /* target database progress */
+	uint64_t previousLSN;       /* register COMMIT LSN progress */
 
 	bool apply;                 /* from the pgcopydb sentinel */
 	uint64_t startpos;          /* from the pgcopydb sentinel */
@@ -191,6 +191,17 @@ typedef struct LogicalMessageTruncate
 	char relname[NAMEDATALEN];
 } LogicalMessageTruncate;
 
+typedef struct LogicalMessageSwitchWAL
+{
+	uint64_t lsn;
+} LogicalMessageSwitchWAL;
+
+typedef struct LogicalMessageKeepalive
+{
+	uint64_t lsn;
+	char timestamp[PG_MAX_TIMESTAMP];
+} LogicalMessageKeepalive;
+
 
 /*
  * The JSON-lines logical decoding stream is then parsed into transactions that
@@ -206,6 +217,8 @@ typedef struct LogicalTransactionStatement
 		LogicalMessageUpdate update;
 		LogicalMessageDelete delete;
 		LogicalMessageTruncate truncate;
+		LogicalMessageSwitchWAL switchwal;
+		LogicalMessageKeepalive keepalive;
 	} stmt;
 
 	struct LogicalTransactionStatement *prev; /* double linked-list */
@@ -218,7 +231,6 @@ typedef struct LogicalTransaction
 	uint32_t xid;
 	uint64_t beginLSN;
 	uint64_t commitLSN;
-	uint64_t nextlsn;
 	char timestamp[PG_MAX_TIMESTAMP];
 
 	uint32_t count;                     /* number of statements */
@@ -279,6 +291,7 @@ bool streamCheckResumePosition(StreamSpecs *specs);
 
 bool streamWrite(LogicalStreamContext *context);
 bool streamFlush(LogicalStreamContext *context);
+bool streamKeepalive(LogicalStreamContext *context);
 bool streamClose(LogicalStreamContext *context);
 bool streamFeedback(LogicalStreamContext *context);
 
@@ -332,6 +345,10 @@ bool stream_compute_pathnames(LogicalStreamContext *context, uint64_t lsn);
 
 bool stream_transform_file(char *jsonfilename, char *sqlfilename);
 bool stream_write_transaction(FILE *out, LogicalTransaction *tx);
+bool stream_write_begin(FILE *out, LogicalTransaction *tx);
+bool stream_write_commit(FILE *out, LogicalTransaction *tx);
+bool stream_write_switchwal(FILE *out, LogicalMessageSwitchWAL *switchwal);
+bool stream_write_keepalive(FILE *out, LogicalMessageKeepalive *keepalive);
 bool stream_write_insert(FILE *out, LogicalMessageInsert *insert);
 bool stream_write_truncate(FILE *out, LogicalMessageTruncate *truncate);
 bool stream_write_update(FILE *out, LogicalMessageUpdate *update);

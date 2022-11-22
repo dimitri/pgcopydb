@@ -138,13 +138,13 @@ stream_apply_catchup(StreamSpecs *specs)
 		 */
 		if (!context.reachedEndPos &&
 			context.endpos != InvalidXLogRecPtr &&
-			context.endpos <= context.nextlsn)
+			context.endpos <= context.previousLSN)
 		{
 			context.reachedEndPos = true;
 
 			log_info("Applied reached end position %X/%X at %X/%X",
 					 LSN_FORMAT_ARGS(context.endpos),
-					 LSN_FORMAT_ARGS(context.nextlsn));
+					 LSN_FORMAT_ARGS(context.previousLSN));
 		}
 
 		if (context.reachedEndPos)
@@ -161,10 +161,9 @@ stream_apply_catchup(StreamSpecs *specs)
 
 		if (strcmp(context.sqlFileName, currentSQLFileName) == 0)
 		{
-			log_debug("Reached end of file \"%s\", "
-					  "and nextlsn %X/%X still belongs to the same file",
+			log_debug("Reached end of file \"%s\" at %X/%X.",
 					  currentSQLFileName,
-					  LSN_FORMAT_ARGS(context.nextlsn));
+					  LSN_FORMAT_ARGS(context.previousLSN));
 
 			/*
 			 * Sleep for a while (10s typically) then try again, new data might
@@ -327,6 +326,30 @@ stream_apply_file(StreamApplyContext *context)
 
 		switch (action)
 		{
+			case STREAM_ACTION_SWITCH:
+			{
+				/*
+				 * The SWITCH WAL command should always be the last line of the
+				 * file...
+				 */
+				if (i != (content.count - 1))
+				{
+					log_error("SWITCH command found in line %d, "
+							  "before last line %d",
+							  i + 1,
+							  content.count);
+					return false;
+				}
+
+				log_debug("apply: SWITCH from %X/%X to %X/%X",
+						  LSN_FORMAT_ARGS(context->previousLSN),
+						  LSN_FORMAT_ARGS(metadata.lsn));
+
+				context->previousLSN = metadata.lsn;
+
+				break;
+			}
+
 			case STREAM_ACTION_BEGIN:
 			{
 				/* did we reach the starting LSN positions now? */
@@ -336,44 +359,32 @@ stream_apply_file(StreamApplyContext *context)
 						context->previousLSN < metadata.lsn;
 				}
 
-				log_debug("BEGIN %lld LSN %X/%X @%s, "
-						  "Previous LSN %X/%X, Next LSN %X/%X %s",
+				log_debug("BEGIN %lld LSN %X/%X @%s, previous LSN %X/%X %s",
 						  (long long) metadata.xid,
 						  LSN_FORMAT_ARGS(metadata.lsn),
 						  metadata.timestamp,
 						  LSN_FORMAT_ARGS(context->previousLSN),
-						  LSN_FORMAT_ARGS(metadata.nextlsn),
 						  reachedStartingPosition ? "" : "[skipping]");
 
-				context->nextlsn = metadata.nextlsn;
+				if (metadata.lsn == InvalidXLogRecPtr ||
+					IS_EMPTY_STRING_BUFFER(metadata.timestamp))
+				{
+					log_fatal("Failed to parse BEGIN message: %s", sql);
+					return false;
+				}
 
 				/*
-				 * Check if we reached the endpos LSN already. This is known to
-				 * be the case in the following two cases:
-				 *
-				 *  1. the current record LSN is equal or past the target endpos
-				 *
-				 *  2. we didn't reach starting replay position yet, and
-				 *     nextlsn is equal or past the target endpos: this happens
-				 *     when we did reach the endpos on a previous apply round.
+				 * Check if we reached the endpos LSN already.
 				 */
-				if (context->endpos != InvalidXLogRecPtr)
+				if (context->endpos != InvalidXLogRecPtr &&
+					context->endpos <= metadata.lsn)
 				{
-					context->reachedEndPos =
-						context->endpos <= metadata.lsn ||
+					context->reachedEndPos = true;
 
-						(!reachedStartingPosition &&
-						 context->endpos <= metadata.nextlsn);
-
-					if (context->reachedEndPos)
-					{
-						log_info("Apply reached end position %X/%X at %X/%X: "
-								 "next LSN is %X/%X",
-								 LSN_FORMAT_ARGS(context->endpos),
-								 LSN_FORMAT_ARGS(metadata.lsn),
-								 LSN_FORMAT_ARGS(metadata.nextlsn));
-						break;
-					}
+					log_info("Apply reached end position %X/%X at %X/%X.",
+							 LSN_FORMAT_ARGS(context->endpos),
+							 LSN_FORMAT_ARGS(metadata.lsn));
+					break;
 				}
 
 				/* actually skip this one if we didn't reach start pos yet */
@@ -415,10 +426,9 @@ stream_apply_file(StreamApplyContext *context)
 					continue;
 				}
 
-				log_debug("COMMIT %lld LSN %X/%X next LSN %X/%X",
+				log_debug("COMMIT %lld LSN %X/%X",
 						  (long long) metadata.xid,
-						  LSN_FORMAT_ARGS(metadata.lsn),
-						  LSN_FORMAT_ARGS(metadata.nextlsn));
+						  LSN_FORMAT_ARGS(metadata.lsn));
 
 
 				/* calling pgsql_commit() would finish the connection, avoid */
@@ -428,23 +438,120 @@ stream_apply_file(StreamApplyContext *context)
 					return false;
 				}
 
-				context->nextlsn = metadata.nextlsn;
 				context->previousLSN = metadata.lsn;
 
 				/*
 				 * At COMMIT time we might have reached the endpos: we know
-				 * that already when endpos <= nextlsn. It's important to check
+				 * that already when endpos <= lsn. It's important to check
 				 * that at COMMIT record time, because that record might be the
 				 * last entry of the file we're applying.
 				 */
 				if (context->endpos != InvalidXLogRecPtr &&
-					context->endpos <= context->nextlsn)
+					context->endpos <= context->previousLSN)
 				{
 					context->reachedEndPos = true;
 
 					log_info("Applied reached end position %X/%X at %X/%X",
 							 LSN_FORMAT_ARGS(context->endpos),
-							 LSN_FORMAT_ARGS(context->nextlsn));
+							 LSN_FORMAT_ARGS(context->previousLSN));
+					break;
+				}
+
+				break;
+			}
+
+			/*
+			 * A KEEPALIVE message is replayed as its own transaction where the
+			 * only thgin we do is call into the replication origin tracking
+			 * API to advance our position on the target database.
+			 */
+			case STREAM_ACTION_KEEPALIVE:
+			{
+				/* did we reach the starting LSN positions now? */
+				if (!reachedStartingPosition)
+				{
+					reachedStartingPosition =
+						context->previousLSN < metadata.lsn;
+				}
+
+				log_debug("KEEPALIVE LSN %X/%X @%s, previous LSN %X/%X %s",
+						  LSN_FORMAT_ARGS(metadata.lsn),
+						  metadata.timestamp,
+						  LSN_FORMAT_ARGS(context->previousLSN),
+						  reachedStartingPosition ? "" : "[skipping]");
+
+				if (metadata.lsn == InvalidXLogRecPtr ||
+					IS_EMPTY_STRING_BUFFER(metadata.timestamp))
+				{
+					log_fatal("Failed to parse KEEPALIVE message: %s", sql);
+					return false;
+				}
+
+				/*
+				 * Check if we reached the endpos LSN already. If the keepalive
+				 * message is the endpos, still apply it: its only purpose is
+				 * to maintain our replication origin tracking on the target
+				 * database.
+				 */
+				if (context->endpos != InvalidXLogRecPtr &&
+					context->endpos < metadata.lsn)
+				{
+					context->reachedEndPos = true;
+
+					log_info("Apply reached end position %X/%X at %X/%X.",
+							 LSN_FORMAT_ARGS(context->endpos),
+							 LSN_FORMAT_ARGS(metadata.lsn));
+					break;
+				}
+
+				/* actually skip this one if we didn't reach start pos yet */
+				if (!reachedStartingPosition)
+				{
+					continue;
+				}
+
+				if (!pgsql_begin(pgsql))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+
+				char lsn[PG_LSN_MAXLENGTH] = { 0 };
+
+				sformat(lsn, sizeof(lsn), "%X/%X",
+						LSN_FORMAT_ARGS(metadata.lsn));
+
+				if (!pgsql_replication_origin_xact_setup(pgsql,
+														 lsn,
+														 metadata.timestamp))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+
+				/* calling pgsql_commit() would finish the connection, avoid */
+				if (!pgsql_execute(pgsql, "COMMIT"))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+
+				context->previousLSN = metadata.lsn;
+
+				/*
+				 * At COMMIT time we might have reached the endpos: we know
+				 * that already when endpos <= lsn. It's important to check
+				 * that at COMMIT record time, because that record might be the
+				 * last entry of the file we're applying.
+				 */
+				if (context->endpos != InvalidXLogRecPtr &&
+					context->endpos <= context->previousLSN)
+				{
+					context->reachedEndPos = true;
+
+					log_info("Applied reached end position %X/%X at %X/%X",
+							 LSN_FORMAT_ARGS(context->endpos),
+							 LSN_FORMAT_ARGS(context->previousLSN));
 					break;
 				}
 
@@ -578,12 +685,6 @@ setupReplicationOrigin(StreamApplyContext *context,
 		return false;
 	}
 
-	/*
-	 * At init time, we trick nextlsn to open the sql filename that matches
-	 * with our previousLSN from progress tracking.
-	 */
-	context->nextlsn = context->previousLSN;
-
 	if (!computeSQLFileName(context))
 	{
 		/* errors have already been logged */
@@ -616,13 +717,17 @@ computeSQLFileName(StreamApplyContext *context)
 {
 	XLogSegNo segno;
 
-	XLByteToSeg(context->nextlsn, segno, context->WalSegSz);
+	XLByteToSeg(context->previousLSN, segno, context->WalSegSz);
 	XLogFileName(context->wal, context->system.timeline, segno, context->WalSegSz);
 
 	sformat(context->sqlFileName, sizeof(context->sqlFileName),
 			"%s/%s.sql",
 			context->paths.dir,
 			context->wal);
+
+	log_debug("computeSQLFileName: %X/%X \"%s\"",
+			  LSN_FORMAT_ARGS(context->previousLSN),
+			  context->sqlFileName);
 
 	return true;
 }
@@ -645,17 +750,29 @@ parseSQLAction(const char *query, LogicalMessageMetadata *metadata)
 	char *message = NULL;
 	char *begin = strstr(query, OUTPUT_BEGIN);
 	char *commit = strstr(query, OUTPUT_COMMIT);
+	char *switchwal = strstr(query, OUTPUT_SWITCHWAL);
+	char *keepalive = strstr(query, OUTPUT_KEEPALIVE);
 
 	/* do we have a BEGIN or a COMMIT message to parse metadata of? */
-	if (begin != NULL)
+	if (query == begin)
 	{
 		action = STREAM_ACTION_BEGIN;
 		message = begin + strlen(OUTPUT_BEGIN);
 	}
-	else if (commit != NULL)
+	else if (query == commit)
 	{
 		action = STREAM_ACTION_COMMIT;
 		message = commit + strlen(OUTPUT_BEGIN);
+	}
+	else if (query == switchwal)
+	{
+		action = STREAM_ACTION_SWITCH;
+		message = switchwal + strlen(OUTPUT_SWITCHWAL);
+	}
+	else if (query == keepalive)
+	{
+		action = STREAM_ACTION_KEEPALIVE;
+		message = keepalive + strlen(OUTPUT_KEEPALIVE);
 	}
 
 	if (message != NULL)

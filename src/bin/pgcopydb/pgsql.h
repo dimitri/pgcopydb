@@ -397,6 +397,7 @@ typedef struct LogicalStreamClient
 	LogicalStreamReceiver flushFunction;
 	LogicalStreamReceiver closeFunction;
 	LogicalStreamReceiver feedbackFunction;
+	LogicalStreamReceiver keepaliveFunction;
 
 	int fsync_interval;
 	int standby_message_timeout;
