@@ -936,7 +936,7 @@ parseMessageMetadata(LogicalMessageMetadata *metadata,
 			return false;
 		}
 
-		/* message entries {action: "M"} do not have xid, lsn, nextlsn fields */
+		/* message entries {action: "M"} do not have xid, lsn fields */
 		if (metadata->action == STREAM_ACTION_MESSAGE)
 		{
 			log_debug("Skipping message: %s", buffer);

@@ -359,15 +359,15 @@ stream_apply_file(StreamApplyContext *context)
 						context->previousLSN < metadata.lsn;
 				}
 
-				log_warn("BEGIN %lld LSN %X/%X @%s, previous LSN %X/%X %s",
-						 (long long) metadata.xid,
-						 LSN_FORMAT_ARGS(metadata.lsn),
-						 metadata.timestamp,
-						 LSN_FORMAT_ARGS(context->previousLSN),
-						 reachedStartingPosition ? "" : "[skipping]");
+				log_debug("BEGIN %lld LSN %X/%X @%s, previous LSN %X/%X %s",
+						  (long long) metadata.xid,
+						  LSN_FORMAT_ARGS(metadata.lsn),
+						  metadata.timestamp,
+						  LSN_FORMAT_ARGS(context->previousLSN),
+						  reachedStartingPosition ? "" : "[skipping]");
 
 				if (metadata.lsn == InvalidXLogRecPtr ||
-					strcmp("", metadata.timestamp) == 0)
+					IS_EMPTY_STRING_BUFFER(metadata.timestamp))
 				{
 					log_fatal("Failed to parse BEGIN message: %s", sql);
 					return false;
@@ -474,7 +474,7 @@ stream_apply_file(StreamApplyContext *context)
 						context->previousLSN < metadata.lsn;
 				}
 
-				log_trace("KEEPALIVE LSN %X/%X @%s, previous LSN %X/%X %s",
+				log_debug("KEEPALIVE LSN %X/%X @%s, previous LSN %X/%X %s",
 						  LSN_FORMAT_ARGS(metadata.lsn),
 						  metadata.timestamp,
 						  LSN_FORMAT_ARGS(context->previousLSN),
