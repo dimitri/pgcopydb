@@ -527,12 +527,12 @@ parseMessage(LogicalTransaction *txn,
 		if (metadata->action != STREAM_ACTION_SWITCH &&
 			metadata->action != STREAM_ACTION_KEEPALIVE)
 		{
-			schema = (char *) json_object_get_string(jsobj, "schema");
-			table = (char *) json_object_get_string(jsobj, "table");
+			schema = (char *) json_object_dotget_string(jsobj, "message.schema");
+			table = (char *) json_object_dotget_string(jsobj, "message.table");
 
 			if (schema == NULL || table == NULL)
 			{
-				log_error("Failed to parse truncate message missing "
+				log_error("Failed to parse truncated message missing "
 						  "schema or table property: %s",
 						  message);
 				return false;
@@ -603,7 +603,8 @@ parseMessage(LogicalTransaction *txn,
 
 		case STREAM_ACTION_INSERT:
 		{
-			JSON_Array *jscols = json_object_get_array(jsobj, "columns");
+			JSON_Array *jscols =
+				json_object_dotget_array(jsobj, "message.columns");
 
 			stmt->action = metadata->action;
 
@@ -658,7 +659,8 @@ parseMessage(LogicalTransaction *txn,
 			}
 
 			LogicalMessageTuple *old = &(stmt->stmt.update.old.array[0]);
-			JSON_Array *jsids = json_object_get_array(jsobj, "identity");
+			JSON_Array *jsids =
+				json_object_dotget_array(jsobj, "message.identity");
 
 			if (!SetColumnNamesAndValues(old, message, jsids))
 			{
@@ -669,7 +671,8 @@ parseMessage(LogicalTransaction *txn,
 			}
 
 			LogicalMessageTuple *new = &(stmt->stmt.update.new.array[0]);
-			JSON_Array *jscols = json_object_get_array(jsobj, "columns");
+			JSON_Array *jscols =
+				json_object_dotget_array(jsobj, "message.columns");
 
 			if (!SetColumnNamesAndValues(new, message, jscols))
 			{
@@ -701,7 +704,8 @@ parseMessage(LogicalTransaction *txn,
 			}
 
 			LogicalMessageTuple *old = &(stmt->stmt.update.old.array[0]);
-			JSON_Array *jsids = json_object_get_array(jsobj, "identity");
+			JSON_Array *jsids =
+				json_object_dotget_array(jsobj, "message.identity");
 
 			if (!SetColumnNamesAndValues(old, message, jsids))
 			{

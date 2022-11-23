@@ -123,9 +123,9 @@ startLogicalStreaming(StreamSpecs *specs)
 		.keywords = {
 			"format-version",
 			"include-xids",
-			"include-lsn",
+			"include-schemas",
 			"include-transaction",
-			"include-timestamp",
+			"include-types",
 			"filter-tables"
 		},
 		.values = {
@@ -133,7 +133,7 @@ startLogicalStreaming(StreamSpecs *specs)
 			"true",
 			"true",
 			"true",
-			"true",
+			"false",
 			"pgcopydb.*"
 		}
 	};
@@ -376,6 +376,7 @@ bool
 streamWrite(LogicalStreamContext *context)
 {
 	StreamContext *privateContext = (StreamContext *) context->private;
+	LogicalMessageMetadata *metadata = &(privateContext->metadata);
 
 	/* we might have to rotate to the next on-disk file */
 	if (!streamRotateFile(context))
@@ -384,15 +385,79 @@ streamWrite(LogicalStreamContext *context)
 		return false;
 	}
 
-	LogicalMessageMetadata *metadata = &(privateContext->metadata);
-	JSON_Value *json = json_parse_string(context->buffer);
-
-	/* ensure we have a new all-zero metadata structure for the new message */
-	(void) memset(metadata, 0, sizeof(LogicalMessageMetadata));
-
-	if (!parseMessageMetadata(metadata, context->buffer, json, false))
+	if (!prepareMessageMetadataFromContext(context))
 	{
-		/* errors have already been logged */
+		log_error("Failed to prepare Logical Message Metadata from context, "
+				  "see above for details");
+		return false;
+	}
+
+	(void) updateStreamCounters(privateContext, metadata);
+
+	/*
+	 * Write the logical decoding message to disk, appending to the already
+	 * opened file we track in the privateContext.
+	 */
+	if (privateContext->jsonFile == NULL)
+	{
+		log_error("Failed to write Logical Message: jsonFile is NULL");
+		return false;
+	}
+
+	/* first write our own metadata, formatted in JSON */
+	int ret =
+		fformat(privateContext->jsonFile,
+				"{\"action\":\"%c\","
+				"\"xid\":\"%lld\","
+				"\"lsn\":\"%X/%X\","
+				"\"timestamp\":\"%s\","
+				"\"message\":",
+				metadata->action,
+				(long long) metadata->xid,
+				LSN_FORMAT_ARGS(metadata->lsn),
+				metadata->timestamp);
+
+	if (ret == -1)
+	{
+		log_error("Failed to write message metadata for action %d at LSN %X/%X "
+				  "to file \"%s\": %m",
+				  metadata->action,
+				  LSN_FORMAT_ARGS(metadata->lsn),
+				  privateContext->walFileName);
+		return false;
+	}
+
+	/* then add the logical output plugin data, inside our own JSON format */
+	long bytes_left = strlen(context->buffer);
+	long bytes_written = 0;
+
+	while (bytes_left > 0)
+	{
+		int ret;
+
+		ret = fwrite(context->buffer + bytes_written,
+					 sizeof(char),
+					 bytes_left,
+					 privateContext->jsonFile);
+
+		if (ret < 0)
+		{
+			log_error("Failed to write %ld bytes to file \"%s\": %m",
+					  bytes_left,
+					  privateContext->walFileName);
+			return false;
+		}
+
+		/* Write was successful, advance our position */
+		bytes_written += ret;
+		bytes_left -= ret;
+	}
+
+	if (fwrite("}\n", sizeof(char), 2, privateContext->jsonFile) != 2)
+	{
+		log_error("Failed to write 2 bytes to file \"%s\": %m",
+				  privateContext->walFileName);
+
 		if (privateContext->jsonFile != NULL)
 		{
 			if (fclose(privateContext->jsonFile) != 0)
@@ -404,68 +469,11 @@ streamWrite(LogicalStreamContext *context)
 			/* reset the jsonFile FILE * pointer to NULL, it's closed now */
 			privateContext->jsonFile = NULL;
 		}
-
-		json_value_free(json);
 		return false;
 	}
 
-	json_value_free(json);
-
-	(void) updateStreamCounters(privateContext, metadata);
-
-	/*
-	 * Write the logical decoding message to disk, appending to the already
-	 * opened file we track in the privateContext.
-	 */
-	if (privateContext->jsonFile != NULL)
-	{
-		long bytes_left = strlen(context->buffer);
-		long bytes_written = 0;
-
-		while (bytes_left > 0)
-		{
-			int ret;
-
-			ret = fwrite(context->buffer + bytes_written,
-						 sizeof(char),
-						 bytes_left,
-						 privateContext->jsonFile);
-
-			if (ret < 0)
-			{
-				log_error("Failed to write %ld bytes to file \"%s\": %m",
-						  bytes_left,
-						  privateContext->walFileName);
-				return false;
-			}
-
-			/* Write was successful, advance our position */
-			bytes_written += ret;
-			bytes_left -= ret;
-		}
-
-		if (fwrite("\n", sizeof(char), 1, privateContext->jsonFile) != 1)
-		{
-			log_error("Failed to write 1 byte to file \"%s\": %m",
-					  privateContext->walFileName);
-
-			if (privateContext->jsonFile != NULL)
-			{
-				if (fclose(privateContext->jsonFile) != 0)
-				{
-					log_error("Failed to close file \"%s\": %m",
-							  privateContext->walFileName);
-				}
-
-				/* reset the jsonFile FILE * pointer to NULL, it's closed now */
-				privateContext->jsonFile = NULL;
-			}
-			return false;
-		}
-
-		/* update the LSN tracking that's reported in the feedback */
-		context->tracking->written_lsn = context->cur_record_lsn;
-	}
+	/* update the LSN tracking that's reported in the feedback */
+	context->tracking->written_lsn = context->cur_record_lsn;
 
 	log_debug("Received action %c for XID %u in LSN %X/%X",
 			  metadata->action,
@@ -751,50 +759,26 @@ streamKeepalive(LogicalStreamContext *context)
 	/* register progress made through receiving keepalive messages */
 	if (privateContext->jsonFile != NULL)
 	{
-		/* Postgres Epoch is 2000-01-01, Unix Epoch usually is 1970-01-01 */
-		char *pgepoch_str = "2000-01-01";
-		struct tm pgepoch = { 0 };
+		char sendTimeStr[BUFSIZE] = { 0 };
 
-		if (strptime(pgepoch_str, "%Y-%m-%d", &pgepoch) == NULL)
+		/* add the server sendTime to the LogicalMessageMetadata */
+		if (!pgsql_timestamptz_to_string(context->sendTime,
+										 sendTimeStr,
+										 sizeof(sendTimeStr)))
 		{
-			log_error("Failed to parse Postgres epoch \"%s\": %m", pgepoch_str);
+			log_error("Failed to format server send time %lld to time string",
+					  (long long) context->sendTime);
 			return false;
 		}
-
-		time_t e = mktime(&pgepoch);
-
-		if (e == (time_t) -1)
-		{
-			log_error("Failed to compute Postgres epoch: %m");
-			return false;
-		}
-
-		/*
-		 * Postgres Timestamps are stored as int64 values with units of
-		 * microseconds. time_t are the number of seconds since the Epoch.
-		 */
-		time_t t = ((time_t) (context->now / 1000000)) + e;
-
-		struct tm lt = { 0 };
-
-		if (localtime_r(&t, &lt) == NULL)
-		{
-			log_error("Failed to format Keepalive timestamp: %m");
-			return false;
-		}
-
-		char now[BUFSIZE] = { 0 };
-
-		strftime(now, sizeof(now), "%Y-%m-%d %H:%M:%S%z", &lt);
 
 		fformat(privateContext->jsonFile,
 				"{\"action\":\"K\",\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
 				LSN_FORMAT_ARGS(context->cur_record_lsn),
-				now);
+				sendTimeStr);
 
 		log_debug("Inserted action KEEPALIVE for lsn %X/%X @%s",
 				  LSN_FORMAT_ARGS(context->cur_record_lsn),
-				  now);
+				  sendTimeStr);
 
 		/* update the LSN tracking that's reported in the feedback */
 		context->tracking->written_lsn = context->cur_record_lsn;
@@ -898,6 +882,64 @@ streamFeedback(LogicalStreamContext *context)
 
 
 /*
+ * prepareMessageMetadataFromContext prepares the Logical Message Metadata from
+ * the fields grabbbed in the logical streaming protocol.
+ *
+ * See XLogData (B) protocol message description at:
+ *
+ * https://www.postgresql.org/docs/current/protocol-replication.html
+ */
+bool
+prepareMessageMetadataFromContext(LogicalStreamContext *context)
+{
+	StreamContext *privateContext = (StreamContext *) context->private;
+	LogicalMessageMetadata *metadata = &(privateContext->metadata);
+
+	/* ensure we have a new all-zero metadata structure for the new message */
+	(void) memset(metadata, 0, sizeof(LogicalMessageMetadata));
+
+	/* add the server start LSN to the LogicalMessageMetadata */
+	metadata->lsn = context->cur_record_lsn;
+
+	/* add the server sendTime to the LogicalMessageMetadata */
+	if (!pgsql_timestamptz_to_string(context->sendTime,
+									 metadata->timestamp,
+									 sizeof(metadata->timestamp)))
+	{
+		log_error("Failed to format server send time %lld to time string",
+				  (long long) context->sendTime);
+		return false;
+	}
+
+	/* now parse the output_plugin buffer itself (wal2json) */
+	JSON_Value *json = json_parse_string(context->buffer);
+
+	if (!parseMessageMetadata(metadata, context->buffer, json, false))
+	{
+		/* errors have already been logged */
+		if (privateContext->jsonFile != NULL)
+		{
+			if (fclose(privateContext->jsonFile) != 0)
+			{
+				log_error("Failed to close file \"%s\": %m",
+						  privateContext->walFileName);
+			}
+
+			/* reset the jsonFile FILE * pointer to NULL, it's closed now */
+			privateContext->jsonFile = NULL;
+		}
+
+		json_value_free(json);
+		return false;
+	}
+
+	json_value_free(json);
+
+	return true;
+}
+
+
+/*
  * parseMessageMetadata parses just the metadata of the JSON replication
  * message we got from wal2json.
  */
@@ -953,16 +995,13 @@ parseMessageMetadata(LogicalMessageMetadata *metadata,
 
 	char *lsn = (char *) json_object_get_string(jsobj, "lsn");
 
-	if (lsn == NULL)
+	if (lsn != NULL)
 	{
-		log_error("Failed to parse JSON message LSN: \"%s\"", buffer);
-		return false;
-	}
-
-	if (!parseLSN(lsn, &(metadata->lsn)))
-	{
-		log_error("Failed to parse LSN \"%s\"", lsn);
-		return false;
+		if (!parseLSN(lsn, &(metadata->lsn)))
+		{
+			log_error("Failed to parse LSN \"%s\"", lsn);
+			return false;
+		}
 	}
 
 	char *timestamp = (char *) json_object_get_string(jsobj, "timestamp");

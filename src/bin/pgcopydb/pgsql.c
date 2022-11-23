@@ -2995,6 +2995,64 @@ pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 
 
 /*
+ * Convert a Postgres TimestampTz value to an ISO date time string.
+ */
+bool
+pgsql_timestamptz_to_string(TimestampTz ts, char *str, size_t size)
+{
+	/* Postgres Epoch is 2000-01-01, Unix Epoch usually is 1970-01-01 */
+	static time_t pgepoch = 0;
+
+	if (pgepoch == 0)
+	{
+		char *pgepoch_str = "2000-01-01";
+		struct tm pgepochtm = { 0 };
+
+		if (strptime(pgepoch_str, "%Y-%m-%d", &pgepochtm) == NULL)
+		{
+			log_error("Failed to parse Postgres epoch \"%s\": %m", pgepoch_str);
+			return false;
+		}
+
+		pgepoch = mktime(&pgepochtm);
+
+		if (pgepoch == (time_t) -1)
+		{
+			log_error("Failed to compute Postgres epoch: %m");
+			return false;
+		}
+
+		log_trace("pgsql_timestamptz_to_string: pgepoch == %lld",
+				  (long long) pgepoch);
+	}
+
+	/*
+	 * Postgres Timestamps are stored as int64 values with units of
+	 * microseconds. time_t are the number of seconds since the Epoch.
+	 */
+	time_t ts_secs = (time_t) (ts / 1000000);
+	uint64_t ts_us = ts - (((uint64_t) ts_secs) * 1000000);
+
+	time_t t = ts_secs + pgepoch;
+	struct tm lt = { 0 };
+
+	if (localtime_r(&t, &lt) == NULL)
+	{
+		log_error("Failed to format timestamptz value %lld: %m", (long long) ts);
+		return false;
+	}
+
+	char tmpl[BUFSIZE] = { 0 };
+	strftime(tmpl, sizeof(tmpl), "%Y-%m-%d %H:%M:%S.%%d%z", &lt);
+
+	/* add our microseconds back to the formatted string */
+	sformat(str, size, tmpl, (long long) ts_us);
+
+	return true;
+}
+
+
+/*
  * Send the START_REPLICATION logical replication command.
  */
 bool
@@ -3302,6 +3360,9 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 
 			pos += 8;           /* read walEnd */
 
+			/* Extract server's system clock at the time of transmission */
+			context->sendTime = fe_recvint64(&copybuf[pos]);
+
 			pos += 8;           /* skip sendTime */
 
 			if (r < pos + 1)
@@ -3378,6 +3439,9 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 
 		/* Extract WAL location for this block */
 		cur_record_lsn = fe_recvint64(&copybuf[1]);
+
+		/* Extract server's system clock at the time of transmission */
+		context->sendTime = fe_recvint64(&copybuf[1 + 8 + 8]);
 
 		if (client->endpos != InvalidXLogRecPtr &&
 			cur_record_lsn > client->endpos)

@@ -300,6 +300,8 @@ bool streamCloseFile(LogicalStreamContext *context, bool time_to_abort);
 
 bool streamWaitForSubprocess(LogicalStreamContext *context);
 
+bool prepareMessageMetadataFromContext(LogicalStreamContext *context);
+
 bool parseMessageMetadata(LogicalMessageMetadata *metadata,
 						  const char *buffer,
 						  JSON_Value *json,
