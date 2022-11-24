@@ -309,6 +309,26 @@ cli_copydb_getenv(CopyDBOptions *options)
 		}
 	}
 
+	/* check --plugin environment variable */
+	if (env_exists(PGCOPYDB_OUTPUT_PLUGIN))
+	{
+		if (!get_env_copy(PGCOPYDB_OUTPUT_PLUGIN,
+						  options->plugin,
+						  sizeof(options->plugin)))
+		{
+			/* errors have already been logged */
+			++errors;
+		}
+
+		if (OutputPluginFromString(options->plugin) == STREAM_PLUGIN_UNKNOWN)
+		{
+			log_fatal("Unknown replication plugin \"%s\", please use either "
+					  "test_decoding (the default) or wal2json",
+					  options->plugin);
+			++errors;
+		}
+	}
+
 	/* when --drop-if-exists has not been used, check PGCOPYDB_DROP_IF_EXISTS */
 	if (!options->restoreOptions.dropIfExists)
 	{
@@ -499,6 +519,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "not-consistent", no_argument, NULL, 'C' },
 		{ "snapshot", required_argument, NULL, 'N' },
 		{ "follow", no_argument, NULL, 'f' },
+		{ "plugin", required_argument, NULL, 'p' },
 		{ "slot-name", required_argument, NULL, 's' },
 		{ "origin", required_argument, NULL, 'o' },
 		{ "create-slot", no_argument, NULL, 't' },
@@ -526,12 +547,8 @@ cli_copy_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	/* install default slotname and origin */
-	strlcpy(options.slotName, REPLICATION_SLOT_NAME, sizeof(options.slotName));
-	strlcpy(options.origin, REPLICATION_ORIGIN, sizeof(options.origin));
-
 	while ((c = getopt_long(argc, argv,
-							"S:T:D:J:I:L:cOBrRCN:xXCtfo:s:E:F:Vvdzqh",
+							"S:T:D:J:I:L:cOBrRCN:xXCtfo:p:s:E:F:Vvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -708,6 +725,13 @@ cli_copy_db_getopts(int argc, char **argv)
 				break;
 			}
 
+			case 'p':
+			{
+				strlcpy(options.plugin, optarg, NAMEDATALEN);
+				log_trace("--plugin %s", options.plugin);
+				break;
+			}
+
 			case 'o':
 			{
 				strlcpy(options.origin, optarg, NAMEDATALEN);
@@ -830,6 +854,39 @@ cli_copy_db_getopts(int argc, char **argv)
 	{
 		log_fatal("Option --resume requires option --not-consistent");
 		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	/* when --slot-name is not used, use the default slot name "pgcopydb" */
+	if (IS_EMPTY_STRING_BUFFER(options.slotName))
+	{
+		strlcpy(options.slotName,
+				REPLICATION_SLOT_NAME,
+				sizeof(options.slotName));
+	}
+
+	/* when --origin is not used, use the default slot name "pgcopydb" */
+	if (IS_EMPTY_STRING_BUFFER(options.origin))
+	{
+		strlcpy(options.origin, REPLICATION_ORIGIN, sizeof(options.origin));
+		log_info("Using default origin node name \"%s\"", options.origin);
+	}
+
+	/* when --origin is not used, use the default output plugin */
+	if (IS_EMPTY_STRING_BUFFER(options.plugin))
+	{
+		log_info("Using default logical replication output plugin \"%s\"",
+				 REPLICATION_PLUGIN);
+		strlcpy(options.plugin, REPLICATION_PLUGIN, sizeof(options.plugin));
+	}
+	else
+	{
+		if (OutputPluginFromString(options.plugin) == STREAM_PLUGIN_UNKNOWN)
+		{
+			log_fatal("Unknown replication plugin \"%s\", please use either "
+					  "test_decoding (the default) or wal2json",
+					  options.plugin);
+			++errors;
+		}
 	}
 
 	if (errors > 0)

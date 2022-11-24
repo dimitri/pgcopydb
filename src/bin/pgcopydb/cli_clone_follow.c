@@ -120,6 +120,7 @@ cli_clone(int argc, char **argv)
 							   &(copySpecs.cfPaths.cdc),
 							   copySpecs.source_pguri,
 							   copySpecs.target_pguri,
+							   copyDBoptions.plugin,
 							   copyDBoptions.slotName,
 							   copyDBoptions.origin,
 							   copyDBoptions.endpos,
@@ -162,6 +163,7 @@ cli_clone(int argc, char **argv)
 		{
 			if (!copydb_create_logical_replication_slot(&copySpecs,
 														streamSpecs.logrep_pguri,
+														streamSpecs.plugin,
 														streamSpecs.slotName))
 			{
 				/* errors have already been logged */
@@ -220,6 +222,7 @@ cli_clone(int argc, char **argv)
 		 * on the target database.
 		 */
 		if (!stream_setup_databases(&setupSpecs,
+									streamSpecs.plugin,
 									streamSpecs.slotName,
 									streamSpecs.origin))
 		{
@@ -352,6 +355,7 @@ cli_follow(int argc, char **argv)
 						   &(copySpecs.cfPaths.cdc),
 						   copySpecs.source_pguri,
 						   copySpecs.target_pguri,
+						   copyDBoptions.plugin,
 						   copyDBoptions.slotName,
 						   copyDBoptions.origin,
 						   copyDBoptions.endpos,
@@ -365,7 +369,10 @@ cli_follow(int argc, char **argv)
 	 * First create the replication slot on the source database, and the origin
 	 * (replication progress tracking) on the target database.
 	 */
-	if (!stream_setup_databases(&copySpecs, specs.slotName, specs.origin))
+	if (!stream_setup_databases(&copySpecs,
+								specs.plugin,
+								specs.slotName,
+								specs.origin))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

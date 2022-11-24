@@ -21,6 +21,9 @@ filtering: build
 cdc: build
 	$(MAKE) -C $@
 
+cdc-test-decoding: build
+	$(MAKE) -C $@
+
 follow: build
 	$(MAKE) -C $@
 

@@ -28,6 +28,7 @@ jobs:
           - follow
           - follow-9.6
           - extensions
+          - cdc-test-decoding
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
