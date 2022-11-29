@@ -586,28 +586,7 @@ parseMessage(LogicalTransaction *txn,
 				case JSONString:
 				{
 					plugin = STREAM_PLUGIN_TEST_DECODING;
-					break;
-				}
 
-				case JSONObject:
-				{
-					plugin = STREAM_PLUGIN_WAL2JSON;
-					break;
-				}
-
-				default:
-				{
-					log_error("Failed to parse JSON message with "
-							  "unknown JSON type %d",
-							  jsmesgtype);
-					return false;
-				}
-			}
-
-			switch (plugin)
-			{
-				case STREAM_PLUGIN_TEST_DECODING:
-				{
 					if (!parseTestDecodingMessage(stmt, metadata, message, json))
 					{
 						log_error("Failed to parse test_decoding message, "
@@ -618,8 +597,10 @@ parseMessage(LogicalTransaction *txn,
 					break;
 				}
 
-				case STREAM_PLUGIN_WAL2JSON:
+				case JSONObject:
 				{
+					plugin = STREAM_PLUGIN_WAL2JSON;
+
 					if (!parseWal2jsonMessage(stmt, metadata, message, json))
 					{
 						log_error("Failed to parse wal2json message, "
@@ -632,8 +613,9 @@ parseMessage(LogicalTransaction *txn,
 
 				default:
 				{
-					log_error("BUG in parseMessage: unknown plugin %d",
-							  plugin);
+					log_error("Failed to parse JSON message with "
+							  "unknown JSON type %d",
+							  jsmesgtype);
 					return false;
 				}
 			}
@@ -1261,7 +1243,14 @@ stream_write_value(FILE *out, LogicalMessageValue *value)
 
 			case TEXTOID:
 			{
-				fformat(out, "'%s'", value->val.str);
+				if (value->isQuoted)
+				{
+					fformat(out, "%s", value->val.str);
+				}
+				else
+				{
+					fformat(out, "'%s'", value->val.str);
+				}
 				break;
 			}
 

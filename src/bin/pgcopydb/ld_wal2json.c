@@ -398,6 +398,7 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple,
 				valueColumn->oid = TEXTOID;
 				valueColumn->val.str = strdup(x);
 				valueColumn->isNull = false;
+				valueColumn->isQuoted = false;
 				break;
 			}
 

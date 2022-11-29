@@ -130,6 +130,7 @@ typedef struct LogicalMessageValue
 {
 	int oid;                    /* BOOLOID, INT8OID, FLOAT8OID, TEXTOID */
 	bool isNull;
+	bool isQuoted;
 
 	union value
 	{
