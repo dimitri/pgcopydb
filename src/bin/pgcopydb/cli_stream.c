@@ -51,6 +51,7 @@ static CommandLine stream_setup_command =
 		"  --resume         Allow resuming operations after a failure\n"
 		"  --not-consistent Allow taking a new snapshot on the source database\n"
 		"  --snapshot       Use snapshot obtained with pg_export_snapshot\n"
+		"  --plugin         Output plugin to use (test_decoding, wal2json)\n" \
 		"  --slot-name      Stream changes recorded by this slot\n"
 		"  --origin         Name of the Postgres replication origin\n",
 		cli_stream_getopts,

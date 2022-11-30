@@ -43,6 +43,7 @@
 	"  --not-consistent           Allow taking a new snapshot on the source database\n" \
 	"  --snapshot                 Use snapshot obtained with pg_export_snapshot\n" \
 	"  --follow                   Implement logical decoding to replay changes\n" \
+	"  --plugin                   Output plugin to use (test_decoding, wal2json)\n" \
 	"  --slot-name                Use this Postgres replication slot name\n" \
 	"  --create-slot              Create the replication slot\n" \
 	"  --origin                   Use this Postgres replication origin node name\n" \
@@ -80,6 +81,7 @@ CommandLine follow_command =
 		"  --resume              Allow resuming operations after a failure\n"
 		"  --not-consistent      Allow taking a new snapshot on the source database\n"
 		"  --snapshot            Use snapshot obtained with pg_export_snapshot\n"
+		"  --plugin              Output plugin to use (test_decoding, wal2json)\n" \
 		"  --slot-name           Use this Postgres replication slot name\n"
 		"  --create-slot         Create the replication slot\n"
 		"  --origin              Use this Postgres replication origin node name\n"

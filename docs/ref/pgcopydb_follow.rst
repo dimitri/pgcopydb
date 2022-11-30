@@ -2,17 +2,18 @@ pgcopydb follow
 ===============
 
 The command ``pgcopydb follow`` replays the database changes registered at
-the source database with the logical decoding pluing `wal2json`__ into the
-target database.
+the source database with the logical decoding plugin of your choice, either
+the default `test_decoding`__ or `wal2json`__, into the target database.
 
+__ https://www.postgresql.org/docs/current/test-decoding.html
 __ https://github.com/eulerto/wal2json/
 
 
 .. important::
 
-   While the ``pgcopydb follow`` is a full client for the logical decoding
-   plugin wal2json, the general use case involves using ``pgcopydb clone
-   --follow`` as documented in :ref:`change_data_capture`.
+   While the ``pgcopydb follow`` is a full client for logical decoding, the
+   general use case involves using ``pgcopydb clone --follow`` as documented
+   in :ref:`change_data_capture`.
 
 When using Logical Decoding with pgcopydb or another tool, consider making
 sure you're familiar with the `Logical Replication Restrictions`__ that
@@ -64,6 +65,7 @@ pgcopydb follow
      --resume              Allow resuming operations after a failure
      --not-consistent      Allow taking a new snapshot on the source database
      --snapshot            Use snapshot obtained with pg_export_snapshot
+     --plugin              Output plugin to use (test_decoding, wal2json)
      --slot-name           Use this Postgres replication slot name
      --create-slot         Create the replication slot
      --origin              Use this Postgres replication origin node name
@@ -189,9 +191,9 @@ local JSON and SQL files. Those files are placed in the XDG_DATA_HOME
 location, which could be a mount point for an infinite Blob Storage area.
 
 The ``pgcopydb follow`` command is a convenience command that's available as
-a logical decoding client for the wal2json plugin, and it shares the same
-implementation as the ``pgcopydb clone --follow`` command. As a result, the
-pre-fetching strategy is also relevant to the ``pgcopydb follow`` command.
+a logical decoding client, and it shares the same implementation as the
+``pgcopydb clone --follow`` command. As a result, the pre-fetching strategy
+is also relevant to the ``pgcopydb follow`` command.
 
 The sentinel table, or the Remote Control
 -----------------------------------------
@@ -390,16 +392,24 @@ The following options are available to ``pgcopydb follow``:
   ``pg_export_snapshot()`` it is possible for pgcopydb to re-use an already
   exported snapshot.
 
+--plugin
+
+  Logical decoding output plugin to use. The default is `test_decoding`__
+  which ships with Postgres core itself, so is probably already available on
+  your source server.
+
+  It is possible to use `wal2json`__ instead. The support for wal2json is
+  mostly historical in pgcopydb, it should not make a user visible
+  difference whether you use the default test_decoding or wal2json.
+
+  __ https://www.postgresql.org/docs/current/test-decoding.html
+  __ https://github.com/eulerto/wal2json/
+
 --slot-name
 
-  Logical replication slot to use. At the moment pgcopydb doesn't know how
-  to create the logical replication slot itself. The slot should be created
-  within the same transaction snapshot as the initial data copy.
-
-  Must be using the `wal2json`__ output plugin, available with
-  format-version 2.
-
-  __ https://github.com/eulerto/wal2json/
+  Logical decoding slot name to use. Defaults to ``pgcopydb``. which is
+  unfortunate when your use-case involves migrating more than one database
+  from the source server.
 
 --create-slot
 
@@ -407,7 +417,7 @@ The following options are available to ``pgcopydb follow``:
 
 --endpos
 
-  Logical replication target LSN to use. Automatically stop replication and
+  Logical decoding target LSN to use. Automatically stop replication and
   exit with normal exit status 0 when receiving reaches the specified LSN.
   If there's a record with LSN exactly equal to lsn, the record will be
   output.
@@ -490,11 +500,8 @@ XDG_DATA_HOME
       a default equal to $HOME/.local/share should be used.*
 
   When using Change Data Capture (through ``--follow`` option and Postgres
-  logical decoding with `wal2json`__) then pgcopydb pre-fetches changes in
-  JSON files and transform them into SQL files to apply to the target
-  database.
-
-  __ https://github.com/eulerto/wal2json/
+  logical decoding) then pgcopydb pre-fetches changes in JSON files and
+  transform them into SQL files to apply to the target database.
 
   These files are stored at the following location, tried in this order:
 

@@ -51,6 +51,7 @@ static CommandLine create_repl_slot_command =
 		"  --source         Postgres URI to the source database\n"
 		"  --dir            Work directory to use\n"
 		"  --snapshot       Use snapshot obtained with pg_export_snapshot\n"
+		"  --plugin         Output plugin to use (test_decoding, wal2json)\n" \
 		"  --slot-name      Use this Postgres replication slot name\n",
 		cli_create_slot_getopts,
 		cli_create_slot);

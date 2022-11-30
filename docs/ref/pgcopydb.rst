@@ -31,11 +31,13 @@ database from a source instance to a target instance. Both the Postgres
 instances must be available for the entire duration of the command.
 
 The pgcopydb command also implements a full `Logical Decoding`__ client for
-the `wal2json`__ logical decoding plugin, allowing Change Data Capture to
-replay data changes (DML) happening on the source database after the base
-copy snapshot.
+Postgres, allowing Change Data Capture to replay data changes (DML)
+happening on the source database after the base copy snapshot. The pgcopydb
+logical decoding client code is compatible with both `test_decoding`__ and
+`wal2json`__ output plugins, and defaults to using test_decoding.
 
 __ https://www.postgresql.org/docs/current/logicaldecoding.html
+__ https://www.postgresql.org/docs/current/test-decoding.html
 __ https://github.com/eulerto/wal2json/
 
 pgcopydb help

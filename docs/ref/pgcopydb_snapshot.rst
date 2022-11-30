@@ -41,45 +41,6 @@ drop`` subcommands:
   ``${TMPDIR}/pgcopydb`` when the environment variable is set, or
   then to ``/tmp/pgcopydb``.
 
---snapshot
-
-  Instead of exporting its own snapshot by calling the PostgreSQL function
-  ``pg_export_snapshot()`` it is possible for pgcopydb to re-use an already
-  exported snapshot.
-
---slot-name
-
-  Logical replication slot name to use, default to ``pgcopydb``. The slot
-  should be created within the same transaction snapshot as the initial data
-  copy.
-
-  Must be using the `wal2json`__ output plugin, available with
-  format-version 2.
-
-  __ https://github.com/eulerto/wal2json/
-
---origin
-
-  Logical replication target system needs to track the transactions that
-  have been applied already, so that in case we get disconnected or need to
-  resume operations we can skip already replayed transaction.
-
-  Postgres uses a notion of an origin node name as documented in
-  `Replication Progress Tracking`__. This option allows to pick your own
-  node name and defaults to "pgcopydb". Picking a different name is useful
-  in some advanced scenarios like migrating several sources in the same
-  target, where each source should have their own unique origin node name.
-
-  __ https://www.postgresql.org/docs/current/replication-origins.html
-
---startpos
-
-  Logical replication target system registers progress by assigning a
-  current LSN to the ``--origin`` node name. When creating an origin on the
-  target database system, it is required to provide the current LSN from the
-  source database system, in order to properly bootstrap pgcopydb logical
-  decoding.
-
 --verbose
 
   Increase current verbosity. The default level of verbosity is INFO. In

@@ -44,6 +44,7 @@ Postgres instance to the target Postgres instance.
      --not-consistent           Allow taking a new snapshot on the source database
      --snapshot                 Use snapshot obtained with pg_export_snapshot
      --follow                   Implement logical decoding to replay changes
+     --plugin                   Output plugin to use (test_decoding, wal2json)
      --slot-name                Use this Postgres replication slot name
      --create-slot              Create the replication slot
      --origin                   Use this Postgres replication origin node name
@@ -550,16 +551,24 @@ The following options are available to ``pgcopydb clone``:
   (the LSN endpos) while the command is running with the command
   :ref:`pgcopydb_stream_sentinel_set_endpos`.
 
+--plugin
+
+  Logical decoding output plugin to use. The default is `test_decoding`__
+  which ships with Postgres core itself, so is probably already available on
+  your source server.
+
+  It is possible to use `wal2json`__ instead. The support for wal2json is
+  mostly historical in pgcopydb, it should not make a user visible
+  difference whether you use the default test_decoding or wal2json.
+
+  __ https://www.postgresql.org/docs/current/test-decoding.html
+  __ https://github.com/eulerto/wal2json/
+
 --slot-name
 
-  Logical replication slot to use. At the moment pgcopydb doesn't know how
-  to create the logical replication slot itself. The slot should be created
-  within the same transaction snapshot as the initial data copy.
-
-  Must be using the `wal2json`__ output plugin, available with
-  format-version 2.
-
-  __ https://github.com/eulerto/wal2json/
+  Logical decoding slot name to use. Defaults to ``pgcopydb``. which is
+  unfortunate when your use-case involves migrating more than one database
+  from the source server.
 
 --create-slot
 
