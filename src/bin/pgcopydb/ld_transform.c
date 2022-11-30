@@ -479,7 +479,7 @@ parseMessage(LogicalTransaction *txn,
 	if (metadata->action != STREAM_ACTION_SWITCH &&
 		metadata->action != STREAM_ACTION_KEEPALIVE)
 	{
-		if (txn->xid > 0 && txn->xid != metadata->xid)
+		if (txn->xid > 0 && metadata->xid > 0 && txn->xid != metadata->xid)
 		{
 			log_debug("%s", message);
 			log_error("BUG: logical message xid is %lld, which is different "
@@ -567,8 +567,6 @@ parseMessage(LogicalTransaction *txn,
 		/* now handle DML messages from the output plugin */
 		default:
 		{
-			StreamOutputPlugin plugin = STREAM_PLUGIN_UNKNOWN;
-
 			/*
 			 * When using test_decoding, we append the received message as a
 			 * JSON string in the "message" object key. When using wal2json, we
@@ -585,8 +583,6 @@ parseMessage(LogicalTransaction *txn,
 			{
 				case JSONString:
 				{
-					plugin = STREAM_PLUGIN_TEST_DECODING;
-
 					if (!parseTestDecodingMessage(stmt, metadata, message, json))
 					{
 						log_error("Failed to parse test_decoding message, "
@@ -599,8 +595,6 @@ parseMessage(LogicalTransaction *txn,
 
 				case JSONObject:
 				{
-					plugin = STREAM_PLUGIN_WAL2JSON;
-
 					if (!parseWal2jsonMessage(stmt, metadata, message, json))
 					{
 						log_error("Failed to parse wal2json message, "
@@ -934,7 +928,7 @@ bool
 stream_write_commit(FILE *out, LogicalTransaction *txn)
 {
 	fformat(out,
-			"%s{\"xid\": %lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
+			"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
 			OUTPUT_COMMIT,
 			(long long) txn->xid,
 			LSN_FORMAT_ARGS(txn->commitLSN),
