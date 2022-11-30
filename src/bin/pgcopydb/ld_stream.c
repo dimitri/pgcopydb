@@ -986,39 +986,77 @@ parseMessageMetadata(LogicalMessageMetadata *metadata,
 		}
 	}
 
-	if (metadata->action != STREAM_ACTION_SWITCH &&
-		metadata->action != STREAM_ACTION_KEEPALIVE)
+	if (json_object_has_value_of_type(jsobj, "xid", JSONString))
+	{
+		const char *xid = json_object_get_string(jsobj, "xid");
+
+		if (!stringToUInt32(xid, &(metadata->xid)))
+		{
+			log_error("Failed to parse XID \"%s\" in message: %s", xid, buffer);
+			return false;
+		}
+	}
+	else if (json_object_has_value_of_type(jsobj, "xid", JSONNumber))
 	{
 		double xid = json_object_get_number(jsobj, "xid");
 		metadata->xid = (uint32_t) xid;
 	}
-
-	char *lsn = (char *) json_object_get_string(jsobj, "lsn");
-
-	if (lsn != NULL)
+	else
 	{
-		if (!parseLSN(lsn, &(metadata->lsn)))
+		if (!skipAction &&
+			(metadata->action == STREAM_ACTION_BEGIN ||
+			 metadata->action == STREAM_ACTION_COMMIT))
 		{
-			log_error("Failed to parse LSN \"%s\"", lsn);
+			log_error("Failed to parse XID for action %c in JSON message: %s",
+					  metadata->action,
+					  buffer);
 			return false;
 		}
 	}
 
-	char *timestamp = (char *) json_object_get_string(jsobj, "timestamp");
-
-	if (timestamp != NULL)
+	if (json_object_has_value(jsobj, "lsn"))
 	{
-		size_t n = sizeof(metadata->timestamp);
+		char *lsn = (char *) json_object_get_string(jsobj, "lsn");
 
-		if (strlcpy(metadata->timestamp, timestamp, n) >= n)
+		if (lsn != NULL)
 		{
-			log_error("Failed to parse JSON message timestamp value \"%s\" "
-					  "which is %lu bytes long, pgcopydb only support timestamps "
-					  "up to %lu bytes",
-					  timestamp,
-					  strlen(timestamp),
-					  sizeof(metadata->timestamp));
-			return false;
+			if (!parseLSN(lsn, &(metadata->lsn)))
+			{
+				log_error("Failed to parse LSN \"%s\"", lsn);
+				return false;
+			}
+		}
+	}
+
+	if (!skipAction &&
+		metadata->lsn == InvalidXLogRecPtr &&
+		(metadata->action == STREAM_ACTION_BEGIN ||
+		 metadata->action == STREAM_ACTION_COMMIT))
+	{
+		log_error("Failed to parse LSN for action %c in message: %s",
+				  metadata->action,
+				  buffer);
+		return false;
+	}
+
+	if (json_object_has_value(jsobj, "timestamp"))
+	{
+		char *timestamp = (char *) json_object_get_string(jsobj, "timestamp");
+
+		if (timestamp != NULL)
+		{
+			size_t n = sizeof(metadata->timestamp);
+
+			if (strlcpy(metadata->timestamp, timestamp, n) >= n)
+			{
+				log_error("Failed to parse JSON message timestamp value \"%s\" "
+						  "which is %lu bytes long, "
+						  "pgcopydb only support timestamps up to %lu bytes",
+						  timestamp,
+						  strlen(timestamp),
+						  sizeof(metadata->timestamp));
+				return false;
+			}
 		}
 	}
 

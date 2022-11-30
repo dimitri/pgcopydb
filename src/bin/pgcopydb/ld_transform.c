@@ -344,7 +344,7 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 		char *message = content.lines[i];
 		LogicalMessageMetadata *metadata = &(content.messages[i]);
 
-		log_trace("stream_transform_file[%d]: %s", i, message);
+		log_trace("stream_transform_file[%2d]: %s", i, message);
 
 		JSON_Value *json = json_parse_string(message);
 
@@ -364,12 +364,13 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 
 		json_value_free(json);
 
-		log_trace("stream_transform_file[%2d]: %c %3d %X/%X [%2d]: %X/%X",
+		log_trace("stream_transform_file[%2d]: %c %3d %X/%X [%2d]: %3d %X/%X",
 				  i,
 				  metadata->action,
 				  metadata->xid,
 				  LSN_FORMAT_ARGS(metadata->lsn),
 				  currentTxIndex,
+				  currentTx->xid,
 				  LSN_FORMAT_ARGS(currentTx->beginLSN));
 
 		/* it is time to close the current transaction and prepare a new one? */
@@ -1017,7 +1018,7 @@ FreeLogicalMessageTupleArray(LogicalMessageTupleArray *tupleArray)
  * the already open out stream.
  */
 bool
-stream_write_transaction(FILE *out, LogicalTransaction *tx)
+stream_write_transaction(FILE *out, LogicalTransaction *txn)
 {
 	/*
 	 * SWITCH WAL commands might appear eigher in the middle of a transaction
@@ -1029,31 +1030,18 @@ stream_write_transaction(FILE *out, LogicalTransaction *tx)
 	 * statement, and in that case we don't want to output BEGIN and COMMIT
 	 * statements at all.
 	 */
+	if (txn->count == 0)
+	{
+		return true;
+	}
 
-	LogicalTransactionStatement *currentStmt = tx->first;
+	bool sentBEGIN = false;
+	LogicalTransactionStatement *currentStmt = txn->first;
 
 	for (; currentStmt != NULL; currentStmt = currentStmt->next)
 	{
 		switch (currentStmt->action)
 		{
-			case STREAM_ACTION_BEGIN:
-			{
-				if (!stream_write_begin(out, tx))
-				{
-					return false;
-				}
-				break;
-			}
-
-			case STREAM_ACTION_COMMIT:
-			{
-				if (!stream_write_commit(out, tx))
-				{
-					return false;
-				}
-				break;
-			}
-
 			case STREAM_ACTION_SWITCH:
 			{
 				if (!stream_write_switchwal(out, &(currentStmt->stmt.switchwal)))
@@ -1074,15 +1062,34 @@ stream_write_transaction(FILE *out, LogicalTransaction *tx)
 
 			case STREAM_ACTION_INSERT:
 			{
+				if (!sentBEGIN)
+				{
+					if (!stream_write_begin(out, txn))
+					{
+						return false;
+					}
+					sentBEGIN = true;
+				}
+
 				if (!stream_write_insert(out, &(currentStmt->stmt.insert)))
 				{
 					return false;
 				}
+
 				break;
 			}
 
 			case STREAM_ACTION_UPDATE:
 			{
+				if (!sentBEGIN)
+				{
+					if (!stream_write_begin(out, txn))
+					{
+						return false;
+					}
+					sentBEGIN = true;
+				}
+
 				if (!stream_write_update(out, &(currentStmt->stmt.update)))
 				{
 					return false;
@@ -1092,6 +1099,15 @@ stream_write_transaction(FILE *out, LogicalTransaction *tx)
 
 			case STREAM_ACTION_DELETE:
 			{
+				if (!sentBEGIN)
+				{
+					if (!stream_write_begin(out, txn))
+					{
+						return false;
+					}
+					sentBEGIN = true;
+				}
+
 				if (!stream_write_delete(out, &(currentStmt->stmt.delete)))
 				{
 					return false;
@@ -1101,6 +1117,15 @@ stream_write_transaction(FILE *out, LogicalTransaction *tx)
 
 			case STREAM_ACTION_TRUNCATE:
 			{
+				if (!sentBEGIN)
+				{
+					if (!stream_write_begin(out, txn))
+					{
+						return false;
+					}
+					sentBEGIN = true;
+				}
+
 				if (!stream_write_truncate(out, &(currentStmt->stmt.truncate)))
 				{
 					return false;
@@ -1117,6 +1142,14 @@ stream_write_transaction(FILE *out, LogicalTransaction *tx)
 		}
 	}
 
+	if (sentBEGIN)
+	{
+		if (!stream_write_commit(out, txn))
+		{
+			return false;
+		}
+	}
+
 	return true;
 }
 
@@ -1126,14 +1159,14 @@ stream_write_transaction(FILE *out, LogicalTransaction *tx)
  * stream.
  */
 bool
-stream_write_begin(FILE *out, LogicalTransaction *tx)
+stream_write_begin(FILE *out, LogicalTransaction *txn)
 {
 	fformat(out,
 			"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
 			OUTPUT_BEGIN,
-			(long long) tx->xid,
-			LSN_FORMAT_ARGS(tx->beginLSN),
-			tx->timestamp);
+			(long long) txn->xid,
+			LSN_FORMAT_ARGS(txn->beginLSN),
+			txn->timestamp);
 
 	return true;
 }
@@ -1144,14 +1177,14 @@ stream_write_begin(FILE *out, LogicalTransaction *tx)
  * stream.
  */
 bool
-stream_write_commit(FILE *out, LogicalTransaction *tx)
+stream_write_commit(FILE *out, LogicalTransaction *txn)
 {
 	fformat(out,
 			"%s{\"xid\": %lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
 			OUTPUT_COMMIT,
-			(long long) tx->xid,
-			LSN_FORMAT_ARGS(tx->commitLSN),
-			tx->timestamp);
+			(long long) txn->xid,
+			LSN_FORMAT_ARGS(txn->commitLSN),
+			txn->timestamp);
 
 	return true;
 }
