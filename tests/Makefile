@@ -18,13 +18,13 @@ unit: build
 filtering: build
 	$(MAKE) -C $@
 
-cdc: build
+cdc-wal2json: build
 	$(MAKE) -C $@
 
 cdc-test-decoding: build
 	$(MAKE) -C $@
 
-follow: build
+follow-wal2json: build
 	$(MAKE) -C $@
 
 follow-9.6: build

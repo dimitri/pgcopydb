@@ -121,7 +121,7 @@ stream_init_specs(StreamSpecs *specs,
 		return false;
 	}
 
-	log_info("stream_init_specs: %s(%d)", plugin, specs->pluginOptions.count);
+	log_trace("stream_init_specs: %s(%d)", plugin, specs->pluginOptions.count);
 
 	return true;
 }

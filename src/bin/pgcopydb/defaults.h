@@ -54,7 +54,7 @@
 
 /* default replication slot and origin for logical replication */
 #define REPLICATION_ORIGIN "pgcopydb"
-#define REPLICATION_PLUGIN "wal2json"
+#define REPLICATION_PLUGIN "test_decoding"
 #define REPLICATION_SLOT_NAME "pgcopydb"
 
 #define CATCHINGUP_SLEEP_MS 10 * 1000 /* 10s */

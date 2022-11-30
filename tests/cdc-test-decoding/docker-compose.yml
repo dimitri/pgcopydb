@@ -1,9 +1,7 @@
 version: "3.9"  # optional since v1.27.0
 services:
   source:
-    build:
-      context: .
-      dockerfile: Dockerfile.pg
+    image: postgres:13-bullseye
     expose:
       - 5432
     environment:
@@ -37,7 +35,6 @@ services:
       PGCOPYDB_TARGET_PGURI: postgres://postgres:h4ckm3@target/postgres
       PGCOPYDB_TABLE_JOBS: 4
       PGCOPYDB_INDEX_JOBS: 2
-      PGCOPYDB_OUTPUT_PLUGIN: test_decoding
     depends_on:
       - source
       - target
