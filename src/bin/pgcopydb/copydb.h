@@ -295,6 +295,7 @@ bool copydb_close_snapshot(CopyDataSpec *copySpecs);
 
 bool copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 											const char *logrep_pguri,
+											StreamOutputPlugin plugin,
 											const char *slotName);
 
 /* extensions.c */

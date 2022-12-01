@@ -320,6 +320,7 @@ copydb_prepare_snapshot(CopyDataSpec *copySpecs)
 bool
 copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 									   const char *logrep_pguri,
+									   StreamOutputPlugin plugin,
 									   const char *slotName)
 {
 	TransactionSnapshot *sourceSnapshot = &(copySpecs->sourceSnapshot);
@@ -342,6 +343,7 @@ copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 
 	if (!pgsql_init_stream(stream,
 						   logrep_pguri,
+						   plugin,
 						   slotName,
 						   InvalidXLogRecPtr,
 						   InvalidXLogRecPtr))
@@ -375,9 +377,10 @@ copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 		return false;
 	}
 
-	log_info("Created logical replication slot \"%s\" at %X/%X "
-			 "and exported snapshot %s",
+	log_info("Created logical replication slot \"%s\" with plugin \"%s\" "
+			 "at %X/%X and exported snapshot %s",
 			 slotName,
+			 OutputPluginToString(plugin),
 			 LSN_FORMAT_ARGS(lsn),
 			 sourceSnapshot->snapshot);
 

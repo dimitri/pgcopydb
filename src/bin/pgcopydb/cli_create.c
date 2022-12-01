@@ -51,6 +51,7 @@ static CommandLine create_repl_slot_command =
 		"  --source         Postgres URI to the source database\n"
 		"  --dir            Work directory to use\n"
 		"  --snapshot       Use snapshot obtained with pg_export_snapshot\n"
+		"  --plugin         Output plugin to use (test_decoding, wal2json)\n" \
 		"  --slot-name      Use this Postgres replication slot name\n",
 		cli_create_slot_getopts,
 		cli_create_slot);
@@ -352,6 +353,7 @@ cli_create_slot_getopts(int argc, char **argv)
 	static struct option long_options[] = {
 		{ "source", required_argument, NULL, 'S' },
 		{ "dir", required_argument, NULL, 'D' },
+		{ "plugin", required_argument, NULL, 'p' },
 		{ "slot-name", required_argument, NULL, 's' },
 		{ "snapshot", required_argument, NULL, 'N' },
 		{ "version", no_argument, NULL, 'V' },
@@ -375,7 +377,7 @@ cli_create_slot_getopts(int argc, char **argv)
 	/* pretend that --resume was used */
 	options.resume = true;
 
-	while ((c = getopt_long(argc, argv, "S:T:D:Vvdzqh",
+	while ((c = getopt_long(argc, argv, "S:T:D:p:s:Vvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -404,6 +406,13 @@ cli_create_slot_getopts(int argc, char **argv)
 			{
 				strlcpy(options.slotName, optarg, NAMEDATALEN);
 				log_trace("--slot-name %s", options.slotName);
+				break;
+			}
+
+			case 'p':
+			{
+				strlcpy(options.plugin, optarg, NAMEDATALEN);
+				log_trace("--plugin %s", options.plugin);
 				break;
 			}
 
@@ -500,9 +509,24 @@ cli_create_slot_getopts(int argc, char **argv)
 	/* when --slot-name is not used, use the default slot name "pgcopydb" */
 	if (IS_EMPTY_STRING_BUFFER(options.slotName))
 	{
-		strlcpy(options.slotName,
-				REPLICATION_SLOT_NAME,
-				sizeof(options.slotName));
+		strlcpy(options.slotName, REPLICATION_SLOT_NAME, sizeof(options.slotName));
+		log_info("Using default slot name \"%s\"", options.slotName);
+	}
+
+	if (IS_EMPTY_STRING_BUFFER(options.plugin))
+	{
+		strlcpy(options.plugin, REPLICATION_PLUGIN, sizeof(options.plugin));
+		log_info("Using default output plugin \"%s\"", options.plugin);
+	}
+	else
+	{
+		if (OutputPluginFromString(options.plugin) == STREAM_PLUGIN_UNKNOWN)
+		{
+			log_fatal("Unknown replication plugin \"%s\", please use either "
+					  "test_decoding (the default) or wal2json",
+					  options.plugin);
+			++errors;
+		}
 	}
 
 	if (!cli_copydb_is_consistent(&options))
@@ -571,7 +595,10 @@ cli_create_slot(int argc, char **argv)
 
 	uint64_t lsn = 0;
 
-	if (!stream_create_repl_slot(&copySpecs, createSlotOptions.slotName, &lsn))
+	if (!stream_create_repl_slot(&copySpecs,
+								 OutputPluginFromString(createSlotOptions.plugin),
+								 createSlotOptions.slotName,
+								 &lsn))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);

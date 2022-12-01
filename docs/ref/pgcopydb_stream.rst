@@ -91,11 +91,13 @@ pgcopydb stream setup
 pgcopydb stream setup - Setup source and target systems for logical decoding
 
 The command ``pgcopydb stream setup`` connects to the source database and
-creates a replication slot using the logical decoding plugin `wal2json`__,
-then creates a ``pgcopydb.sentinel`` table, and then connects to the target
-database and creates a replication origin positioned at the LSN position of
-the just created replication slot.
+creates a replication slot using the given logical decoding output plugin
+(either `test_decoding`__ or `wal2json`__), then creates a
+``pgcopydb.sentinel`` table, and then connects to the target database and
+creates a replication origin positioned at the LSN position of the just
+created replication slot.
 
+__ https://www.postgresql.org/docs/current/test-decoding.html
 __ https://github.com/eulerto/wal2json/
 
 
@@ -111,6 +113,7 @@ __ https://github.com/eulerto/wal2json/
      --resume         Allow resuming operations after a failure
      --not-consistent Allow taking a new snapshot on the source database
      --snapshot       Use snapshot obtained with pg_export_snapshot
+     --plugin         Output plugin to use (test_decoding, wal2json)
      --slot-name      Stream changes recorded by this slot
      --origin         Name of the Postgres replication origin
 
@@ -148,10 +151,7 @@ pgcopydb stream prefetch
 pgcopydb stream prefetch - Stream JSON changes from the source database and transform them to SQL
 
 The command ``pgcopydb stream prefetch`` connects to the source database
-using the logical replication protocl and the given replication slot, that
-should be created with the logical decoding plugin `wal2json`__.
-
-__ https://github.com/eulerto/wal2json/
+using the logical replication protocl and the given replication slot.
 
 The prefetch command receives the changes from the source database in a
 streaming fashion, and writes them in a series of JSON files named the same
@@ -219,6 +219,7 @@ plugin ``wal2json``.
      --source         Postgres URI to the source database
      --dir            Work directory to use
      --snapshot       Use snapshot obtained with pg_export_snapshot
+     --plugin         Output plugin to use (test_decoding, wal2json)
      --slot-name      Use this Postgres replication slot name
 
 .. _pgcopydb_stream_create_origin:
@@ -402,10 +403,7 @@ pgcopydb stream receive
 pgcopydb stream receive - Stream changes from the source database
 
 The command ``pgcopydb stream receive`` connects to the source database
-using the logical replication protocl and the given replication slot, that
-should be created with the logical decoding plugin `wal2json`__.
-
-__ https://github.com/eulerto/wal2json/
+using the logical replication protocl and the given replication slot.
 
 The receive command receives the changes from the source database in a
 streaming fashion, and writes them in a series of JSON files named the same
@@ -522,16 +520,22 @@ The following options are available to ``pgcopydb stream`` sub-commands:
   To be able to resume a streaming operation in a consistent way, all that's
   required is re-using the same replication slot as in previous run(s).
 
+--plugin
+
+  Logical decoding output plugin to use. The default is `test_decoding`__
+  which ships with Postgres core itself, so is probably already available on
+  your source server.
+
+  It is possible to use `wal2json`__ instead. The support for wal2json is
+  mostly historical in pgcopydb, it should not make a user visible
+  difference whether you use the default test_decoding or wal2json.
+
+  __ https://www.postgresql.org/docs/current/test-decoding.html
+  __ https://github.com/eulerto/wal2json/
+
 --slot-name
 
-  Logical replication slot to use. At the moment pgcopydb doesn't know how
-  to create the logical replication slot itself. The slot should be created
-  within the same transaction snapshot as the initial data copy.
-
-  Must be using the `wal2json`__ output plugin, available with
-  format-version 2.
-
-  __ https://github.com/eulerto/wal2json/
+  Logical decoding slot name to use.
 
 --endpos
 

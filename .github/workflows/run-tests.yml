@@ -24,10 +24,11 @@ jobs:
           - unit
           - blobs
           - filtering
-          - cdc
-          - follow
-          - follow-9.6
           - extensions
+          - cdc-test-decoding
+          - cdc-wal2json
+          - follow-wal2json
+          - follow-9.6
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3

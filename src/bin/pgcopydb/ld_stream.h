@@ -53,6 +53,7 @@ typedef struct LogicalMessageMetadata
 	uint32_t xid;
 	uint64_t lsn;
 	char timestamp[PG_MAX_TIMESTAMP];
+	bool filterOut;
 } LogicalMessageMetadata;
 
 
@@ -81,6 +82,7 @@ typedef struct StreamContext
 	uint64_t endpos;
 	bool apply;
 
+	char *jsonBuffer;           /* malloc'ed area */
 	LogicalMessageMetadata metadata;
 
 	Queue transformQueue;
@@ -128,6 +130,7 @@ typedef struct LogicalMessageValue
 {
 	int oid;                    /* BOOLOID, INT8OID, FLOAT8OID, TEXTOID */
 	bool isNull;
+	bool isQuoted;
 
 	union value
 	{
@@ -253,6 +256,9 @@ typedef struct StreamSpecs
 	char logrep_pguri[MAXCONNINFO];
 	char target_pguri[MAXCONNINFO];
 
+	StreamOutputPlugin plugin;
+	KeyVal pluginOptions;
+
 	char slotName[NAMEDATALEN];
 	char origin[NAMEDATALEN];
 
@@ -274,10 +280,12 @@ typedef struct StreamContent
 	LogicalMessageMetadata *messages; /* malloc'ed area */
 } StreamContent;
 
+
 bool stream_init_specs(StreamSpecs *specs,
 					   CDCPaths *paths,
 					   char *source_pguri,
 					   char *target_pguri,
+					   char *plugin,
 					   char *slotName,
 					   char *origin,
 					   uint64_t endpos,
@@ -301,6 +309,9 @@ bool streamCloseFile(LogicalStreamContext *context, bool time_to_abort);
 bool streamWaitForSubprocess(LogicalStreamContext *context);
 
 bool prepareMessageMetadataFromContext(LogicalStreamContext *context);
+bool prepareMessageJSONbuffer(LogicalStreamContext *context);
+
+bool parseMessageActionAndXid(LogicalStreamContext *context);
 
 bool parseMessageMetadata(LogicalMessageMetadata *metadata,
 						  const char *buffer,
@@ -313,6 +324,7 @@ bool stream_read_latest(StreamSpecs *specs, StreamContent *content);
 bool buildReplicationURI(const char *pguri, char *repl_pguri);
 
 bool stream_setup_databases(CopyDataSpec *copySpecs,
+							StreamOutputPlugin plugin,
 							char *slotName,
 							char *origin);
 
@@ -321,7 +333,9 @@ bool stream_cleanup_databases(CopyDataSpec *copySpecs,
 							  char *origin);
 
 bool stream_create_repl_slot(CopyDataSpec *copySpecs,
-							 char *slotName, uint64_t *lsn);
+							 StreamOutputPlugin plugin,
+							 char *slotName,
+							 uint64_t *lsn);
 
 bool stream_create_origin(CopyDataSpec *copySpecs,
 						  char *nodeName, uint64_t startpos);
@@ -357,13 +371,36 @@ bool stream_write_update(FILE *out, LogicalMessageUpdate *update);
 bool stream_write_delete(FILE * out, LogicalMessageDelete *delete);
 bool stream_write_value(FILE *out, LogicalMessageValue *value);
 
-void FreeLogicalTransaction(LogicalTransaction *tx);
-void FreeLogicalMessageTupleArray(LogicalMessageTupleArray *tupleArray);
-
 bool parseMessage(LogicalTransaction *txn,
 				  LogicalMessageMetadata *metadata,
 				  char *message,
 				  JSON_Value *json);
+
+bool streamLogicalTransactionAppendStatement(LogicalTransaction *txn,
+											 LogicalTransactionStatement *stmt);
+
+void FreeLogicalTransaction(LogicalTransaction *tx);
+void FreeLogicalMessageTupleArray(LogicalMessageTupleArray *tupleArray);
+
+/* ld_test_decoding.c */
+bool prepareTestDecodingMessage(LogicalStreamContext *context);
+
+bool parseTestDecodingMessageActionAndXid(LogicalStreamContext *context);
+
+bool parseTestDecodingMessage(LogicalTransactionStatement *stmt,
+							  LogicalMessageMetadata *metadata,
+							  char *message,
+							  JSON_Value *json);
+
+/* ld_wal2json.c */
+bool prepareWal2jsonMessage(LogicalStreamContext *context);
+
+bool parseWal2jsonMessageActionAndXid(LogicalStreamContext *context);
+
+bool parseWal2jsonMessage(LogicalTransactionStatement *stmt,
+						  LogicalMessageMetadata *metadata,
+						  char *message,
+						  JSON_Value *json);
 
 /* ld_apply.c */
 bool stream_apply_catchup(StreamSpecs *specs);

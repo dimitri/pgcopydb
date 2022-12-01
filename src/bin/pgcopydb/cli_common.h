@@ -50,6 +50,7 @@ typedef struct CopyDBOptions
 	uint64_t startpos;
 
 	char filterFileName[MAXPGPATH];
+	char plugin[NAMEDATALEN];
 	char slotName[MAXPGPATH];
 } CopyDBOptions;
 

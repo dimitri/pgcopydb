@@ -2815,6 +2815,7 @@ parseBlobMetadataArray(void *ctx, PGresult *result)
 bool
 pgsql_init_stream(LogicalStreamClient *client,
 				  const char *pguri,
+				  StreamOutputPlugin plugin,
 				  const char *slotName,
 				  XLogRecPtr startpos,
 				  XLogRecPtr endpos)
@@ -2829,6 +2830,8 @@ pgsql_init_stream(LogicalStreamClient *client,
 
 	/* we're going to send several replication commands */
 	pgsql->connectionStatementType = PGSQL_CONNECTION_MULTI_STATEMENT;
+
+	client->plugin = plugin;
 
 	strlcpy(client->slotName, slotName, sizeof(client->slotName));
 
@@ -2847,6 +2850,59 @@ pgsql_init_stream(LogicalStreamClient *client,
 	client->feedback.applied_lsn = InvalidXLogRecPtr;
 
 	return true;
+}
+
+
+/*
+ * OutputPluginFromString returns an enum value from its string representation.
+ */
+StreamOutputPlugin
+OutputPluginFromString(char *plugin)
+{
+	if (strcmp(plugin, "test_decoding") == 0)
+	{
+		return STREAM_PLUGIN_TEST_DECODING;
+	}
+	else if (strcmp(plugin, "wal2json") == 0)
+	{
+		return STREAM_PLUGIN_WAL2JSON;
+	}
+
+	return STREAM_PLUGIN_UNKNOWN;
+}
+
+
+/*
+ * OutputPluginToString converts a StreamOutputPlugin enum to string.
+ */
+char *
+OutputPluginToString(StreamOutputPlugin plugin)
+{
+	switch (plugin)
+	{
+		case STREAM_PLUGIN_UNKNOWN:
+		{
+			return "unknon output plugin";
+		}
+
+		case STREAM_PLUGIN_TEST_DECODING:
+		{
+			return "test_decoding";
+		}
+
+		case STREAM_PLUGIN_WAL2JSON:
+		{
+			return "wal2json";
+		}
+
+		default:
+		{
+			log_error("Unknown logical decoding output plugin %d", plugin);
+			return NULL;
+		}
+	}
+
+	return NULL;
 }
 
 
@@ -2876,7 +2932,7 @@ pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 	sformat(query, sizeof(query),
 			"CREATE_REPLICATION_SLOT \"%s\" LOGICAL \"%s\"",
 			client->slotName,
-			REPLICATION_PLUGIN);
+			OutputPluginToString(client->plugin));
 
 	if (!pgsql_open_connection(pgsql))
 	{
@@ -2967,7 +3023,7 @@ pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 	{
 		log_error("Logical replication command CREATE_REPLICATION_SLOT "
 				  "returned output_plugin is NULL, expected \"%s\"",
-				  REPLICATION_PLUGIN);
+				  OutputPluginToString(client->plugin));
 		pgsql_finish(pgsql);
 		return false;
 	}
@@ -2975,19 +3031,21 @@ pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 	{
 		value = PQgetvalue(result, 0, 3);
 
-		if (strcmp(value, REPLICATION_PLUGIN) != 0)
+		if (OutputPluginFromString(value) != client->plugin)
 		{
 			log_error("Logical replication command CREATE_REPLICATION_SLOT "
 					  "returned output_plugin \"%s\", expected \"%s\"",
 					  value,
-					  REPLICATION_PLUGIN);
+					  OutputPluginToString(client->plugin));
 			pgsql_finish(pgsql);
 			return false;
 		}
 	}
 
-	log_notice("Created logical replication slot \"%s\" at %X/%X",
+	log_notice("Created logical replication slot \"%s\" with plugin \"%s\" "
+			   "at %X/%X",
 			   client->slotName,
+			   OutputPluginToString(client->plugin),
 			   LSN_FORMAT_ARGS(*lsn));
 
 	return true;
@@ -3121,6 +3179,8 @@ pgsql_start_replication(LogicalStreamClient *client)
 		return false;
 	}
 
+	log_debug("%s", query->data);
+
 	PGresult *res = PQexec(pgsql->connection, query->data);
 
 	if (PQresultStatus(res) != PGRES_COPY_BOTH)
@@ -3163,9 +3223,12 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 	client->last_status = -1;
 	client->current.written_lsn = InvalidXLogRecPtr;
 
+	context->plugin = client->plugin;
+
 	context->timeline = client->system.timeline;
 	context->WalSegSz = client->WalSegSz;
 	context->tracking = &(client->current);
+
 
 	while (!time_to_abort)
 	{
@@ -4129,7 +4192,7 @@ pgsql_replication_slot_exists(PGSQL *pgsql, const char *slotName,
 bool
 pgsql_create_replication_slot(PGSQL *pgsql,
 							  const char *slotName,
-							  const char *plugin,
+							  StreamOutputPlugin plugin,
 							  uint64_t *lsn)
 {
 	ReplicationSlotContext context = { 0 };
@@ -4143,12 +4206,14 @@ pgsql_create_replication_slot(PGSQL *pgsql,
 		"SELECT slot_name, lsn "
 		"  FROM pg_create_logical_replication_slot($1, $2)";
 
+	char *pluginStr = OutputPluginToString(plugin);
+
 	int paramCount = 2;
 	const Oid paramTypes[2] = { TEXTOID, TEXTOID };
-	const char *paramValues[2] = { slotName, plugin };
+	const char *paramValues[2] = { slotName, pluginStr };
 
 	log_debug("Creating logical replication slot \"%s\" with plugin \"%s\"",
-			  slotName, plugin);
+			  slotName, pluginStr);
 
 	if (!pgsql_execute_with_params(pgsql, sql,
 								   paramCount, paramTypes, paramValues,
@@ -4162,7 +4227,7 @@ pgsql_create_replication_slot(PGSQL *pgsql,
 	{
 		log_error("Failed to create the logical replication slot \"%s\" with "
 				  "plugin \"%s\"",
-				  slotName, plugin);
+				  slotName, pluginStr);
 		return false;
 	}
 

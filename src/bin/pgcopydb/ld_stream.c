@@ -45,6 +45,7 @@ stream_init_specs(StreamSpecs *specs,
 				  CDCPaths *paths,
 				  char *source_pguri,
 				  char *target_pguri,
+				  char *plugin,
 				  char *slotName,
 				  char *origin,
 				  uint64_t endpos,
@@ -54,6 +55,60 @@ stream_init_specs(StreamSpecs *specs,
 	specs->mode = mode;
 	specs->paths = *paths;
 	specs->endpos = endpos;
+
+	specs->plugin = OutputPluginFromString(plugin);
+
+	switch (specs->plugin)
+	{
+		case STREAM_PLUGIN_TEST_DECODING:
+		{
+			KeyVal options = {
+				.count = 1,
+				.keywords = {
+					"include-xids"
+				},
+				.values = {
+					"true"
+				}
+			};
+
+			specs->pluginOptions = options;
+			break;
+		}
+
+		case STREAM_PLUGIN_WAL2JSON:
+		{
+			KeyVal options = {
+				.count = 6,
+				.keywords = {
+					"format-version",
+					"include-xids",
+					"include-schemas",
+					"include-transaction",
+					"include-types",
+					"filter-tables"
+				},
+				.values = {
+					"2",
+					"true",
+					"true",
+					"true",
+					"false",
+					"pgcopydb.*"
+				}
+			};
+
+			specs->pluginOptions = options;
+
+			break;
+		}
+
+		default:
+		{
+			log_error("Unknown logical decoding output plugin \"%s\"", plugin);
+			return false;
+		}
+	}
 
 	strlcpy(specs->source_pguri, source_pguri, MAXCONNINFO);
 	strlcpy(specs->target_pguri, target_pguri, MAXCONNINFO);
@@ -65,6 +120,8 @@ stream_init_specs(StreamSpecs *specs,
 		/* errors have already been logged */
 		return false;
 	}
+
+	log_trace("stream_init_specs: %s(%d)", plugin, specs->pluginOptions.count);
 
 	return true;
 }
@@ -117,31 +174,10 @@ stream_close_context(StreamContext *privateContext)
 bool
 startLogicalStreaming(StreamSpecs *specs)
 {
-	/* wal2json options we want to use for the plugin */
-	KeyVal options = {
-		.count = 6,
-		.keywords = {
-			"format-version",
-			"include-xids",
-			"include-schemas",
-			"include-transaction",
-			"include-types",
-			"filter-tables"
-		},
-		.values = {
-			"2",
-			"true",
-			"true",
-			"true",
-			"false",
-			"pgcopydb.*"
-		}
-	};
-
 	/* prepare the stream options */
 	LogicalStreamClient stream = { 0 };
 
-	stream.pluginOptions = options;
+	stream.pluginOptions = specs->pluginOptions;
 	stream.writeFunction = &streamWrite;
 	stream.flushFunction = &streamFlush;
 	stream.closeFunction = &streamClose;
@@ -185,6 +221,7 @@ startLogicalStreaming(StreamSpecs *specs)
 	{
 		if (!pgsql_init_stream(&stream,
 							   specs->logrep_pguri,
+							   specs->plugin,
 							   specs->slotName,
 							   specs->startpos,
 							   specs->endpos))
@@ -193,6 +230,10 @@ startLogicalStreaming(StreamSpecs *specs)
 			(void) stream_close_context(&privateContext);
 			return false;
 		}
+
+		log_info("startLogicalStreaming: %s (%d)",
+				 OutputPluginToString(specs->plugin),
+				 specs->pluginOptions.count);
 
 		if (!pgsql_start_replication(&stream))
 		{
@@ -392,7 +433,11 @@ streamWrite(LogicalStreamContext *context)
 		return false;
 	}
 
-	(void) updateStreamCounters(privateContext, metadata);
+	if (metadata->filterOut)
+	{
+		log_trace("Ignoring message: %s", context->buffer);
+		return true;
+	}
 
 	/*
 	 * Write the logical decoding message to disk, appending to the already
@@ -428,14 +473,14 @@ streamWrite(LogicalStreamContext *context)
 	}
 
 	/* then add the logical output plugin data, inside our own JSON format */
-	long bytes_left = strlen(context->buffer);
+	long bytes_left = strlen(privateContext->jsonBuffer);
 	long bytes_written = 0;
 
 	while (bytes_left > 0)
 	{
 		int ret;
 
-		ret = fwrite(context->buffer + bytes_written,
+		ret = fwrite(privateContext->jsonBuffer + bytes_written,
 					 sizeof(char),
 					 bytes_left,
 					 privateContext->jsonFile);
@@ -472,13 +517,32 @@ streamWrite(LogicalStreamContext *context)
 		return false;
 	}
 
+	/*
+	 * If the buffer was allocated anew in prepareMessageJSONbuffer, now is
+	 * time to free that extra memory. Otherwise context->buffer has been
+	 * reused and lower-level functions in pgsql.c handles the memory.
+	 */
+	if (privateContext->jsonBuffer != context->buffer)
+	{
+		free(privateContext->jsonBuffer);
+	}
+
 	/* update the LSN tracking that's reported in the feedback */
 	context->tracking->written_lsn = context->cur_record_lsn;
 
-	log_debug("Received action %c for XID %u in LSN %X/%X",
-			  metadata->action,
-			  metadata->xid,
-			  LSN_FORMAT_ARGS(metadata->lsn));
+	if (metadata->xid > 0)
+	{
+		log_debug("Received action %c for XID %u at LSN %X/%X",
+				  metadata->action,
+				  metadata->xid,
+				  LSN_FORMAT_ARGS(metadata->lsn));
+	}
+	else
+	{
+		log_debug("Received action %c at LSN %X/%X",
+				  metadata->action,
+				  LSN_FORMAT_ARGS(metadata->lsn));
+	}
 
 	return true;
 }
@@ -911,31 +975,98 @@ prepareMessageMetadataFromContext(LogicalStreamContext *context)
 		return false;
 	}
 
-	/* now parse the output_plugin buffer itself (wal2json) */
-	JSON_Value *json = json_parse_string(context->buffer);
-
-	if (!parseMessageMetadata(metadata, context->buffer, json, false))
+	/* now parse metadata found in the output_plugin data buffer itself */
+	if (!parseMessageActionAndXid(context))
 	{
-		/* errors have already been logged */
-		if (privateContext->jsonFile != NULL)
-		{
-			if (fclose(privateContext->jsonFile) != 0)
-			{
-				log_error("Failed to close file \"%s\": %m",
-						  privateContext->walFileName);
-			}
-
-			/* reset the jsonFile FILE * pointer to NULL, it's closed now */
-			privateContext->jsonFile = NULL;
-		}
-
-		json_value_free(json);
+		log_error("Failed to parse header from logical decoding message: %s",
+				  context->buffer);
 		return false;
 	}
 
-	json_value_free(json);
+	/* in case of filtering, early exit */
+	if (metadata->filterOut)
+	{
+		return true;
+	}
+
+	if (!prepareMessageJSONbuffer(context))
+	{
+		log_error("Failed to prepare a JSON buffer from "
+				  "logical decoding context buffer: %s, "
+				  "see above for details",
+				  context->buffer);
+		return false;
+	}
+
+	(void) updateStreamCounters(privateContext, metadata);
 
 	return true;
+}
+
+
+/*
+ * parseMessageXid retrieves the XID from the logical replication message found
+ * in the buffer. It might be a buffer formatted by any supported output
+ * plugin, at the moment either wal2json or test_decoding.
+ *
+ * Not all messages are supposed to have the XID information.
+ */
+bool
+parseMessageActionAndXid(LogicalStreamContext *context)
+{
+	switch (context->plugin)
+	{
+		case STREAM_PLUGIN_TEST_DECODING:
+		{
+			return parseTestDecodingMessageActionAndXid(context);
+		}
+
+		case STREAM_PLUGIN_WAL2JSON:
+		{
+			return parseWal2jsonMessageActionAndXid(context);
+		}
+
+		default:
+		{
+			log_error("BUG in parseMessageActionAndXid: unknown plugin %d",
+					  context->plugin);
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * prepareMessageJSONbuffer prepares a buffer in the JSON format from the raw
+ * message sent by the logical decoding buffer.
+ */
+bool
+prepareMessageJSONbuffer(LogicalStreamContext *context)
+{
+	switch (context->plugin)
+	{
+		case STREAM_PLUGIN_TEST_DECODING:
+		{
+			return prepareTestDecodingMessage(context);
+		}
+
+		case STREAM_PLUGIN_WAL2JSON:
+		{
+			return prepareWal2jsonMessage(context);
+		}
+
+		default:
+		{
+			log_error("BUG in prepareMessageJSONbuffer: unknown plugin %d",
+					  context->plugin);
+			return NULL;
+		}
+	}
+
+	/* keep compiler happy */
+	return NULL;
 }
 
 
@@ -1367,11 +1498,12 @@ streamWaitForSubprocess(LogicalStreamContext *context)
  * slot, a sentinel table, and the target database with a replication origin.
  */
 bool
-stream_setup_databases(CopyDataSpec *copySpecs, char *slotName, char *origin)
+stream_setup_databases(CopyDataSpec *copySpecs,
+					   StreamOutputPlugin plugin, char *slotName, char *origin)
 {
 	uint64_t lsn = 0;
 
-	if (!stream_create_repl_slot(copySpecs, slotName, &lsn))
+	if (!stream_create_repl_slot(copySpecs, plugin, slotName, &lsn))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1459,7 +1591,10 @@ stream_cleanup_databases(CopyDataSpec *copySpecs, char *slotName, char *origin)
  * stream_create_repl_slot creates a replication slot on the source database.
  */
 bool
-stream_create_repl_slot(CopyDataSpec *copySpecs, char *slotName, uint64_t *lsn)
+stream_create_repl_slot(CopyDataSpec *copySpecs,
+						StreamOutputPlugin plugin,
+						char *slotName,
+						uint64_t *lsn)
 {
 	PGSQL *pgsql = &(copySpecs->sourceSnapshot.pgsql);
 
@@ -1585,10 +1720,7 @@ stream_create_repl_slot(CopyDataSpec *copySpecs, char *slotName, uint64_t *lsn)
 	}
 	else
 	{
-		if (!pgsql_create_replication_slot(pgsql,
-										   slotName,
-										   REPLICATION_PLUGIN,
-										   lsn))
+		if (!pgsql_create_replication_slot(pgsql, slotName, plugin, lsn))
 		{
 			/* errors have already been logged */
 			return false;
@@ -1603,7 +1735,7 @@ stream_create_repl_slot(CopyDataSpec *copySpecs, char *slotName, uint64_t *lsn)
 		log_info("Created logical replication slot \"%s\" with plugin \"%s\" "
 				 "at LSN %X/%X",
 				 slotName,
-				 REPLICATION_PLUGIN,
+				 OutputPluginToString(plugin),
 				 LSN_FORMAT_ARGS(*lsn));
 	}
 

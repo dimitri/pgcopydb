@@ -32,15 +32,6 @@
 #include "summary.h"
 
 
-static bool SetColumnNamesAndValues(LogicalMessageTuple *tuple,
-									const char *message,
-									JSON_Array *jscols);
-
-static bool streamLogicalTransactionAppendStatement(LogicalTransaction *txn,
-													LogicalTransactionStatement *stmt
-													);
-
-
 /*
  * stream_transform_start_worker creates a sub-process that transform JSON
  * files into SQL files as needed, consuming requests from a queue.
@@ -447,8 +438,9 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 
 
 /*
- * parseMessage parses a JSON message as emitted by wal2json into our own
- * internal representation, that can be later output as SQL text.
+ * parseMessage parses a JSON message as emitted by the logical decoding output
+ * plugin (either test_decoding or wal2json) into our own internal
+ * representation, that can be later output as SQL text.
  */
 bool
 parseMessage(LogicalTransaction *txn,
@@ -487,7 +479,7 @@ parseMessage(LogicalTransaction *txn,
 	if (metadata->action != STREAM_ACTION_SWITCH &&
 		metadata->action != STREAM_ACTION_KEEPALIVE)
 	{
-		if (txn->xid > 0 && txn->xid != metadata->xid)
+		if (txn->xid > 0 && metadata->xid > 0 && txn->xid != metadata->xid)
 		{
 			log_debug("%s", message);
 			log_error("BUG: logical message xid is %lld, which is different "
@@ -499,19 +491,14 @@ parseMessage(LogicalTransaction *txn,
 		}
 	}
 
-	/* common entries for supported statements */
+	/*
+	 * All messages except for BEGIN/COMMIT need a LogicalTransactionStatement
+	 * to represent them within the current transaction.
+	 */
 	LogicalTransactionStatement *stmt = NULL;
 
-	JSON_Object *jsobj = json_value_get_object(json);
-	char *schema = NULL;
-	char *table = NULL;
-
-	if (metadata->action == STREAM_ACTION_TRUNCATE ||
-		metadata->action == STREAM_ACTION_INSERT ||
-		metadata->action == STREAM_ACTION_UPDATE ||
-		metadata->action == STREAM_ACTION_DELETE ||
-		metadata->action == STREAM_ACTION_SWITCH ||
-		metadata->action == STREAM_ACTION_KEEPALIVE)
+	if (metadata->action != STREAM_ACTION_BEGIN &&
+		metadata->action != STREAM_ACTION_COMMIT)
 	{
 		stmt = (LogicalTransactionStatement *)
 			   malloc(sizeof(LogicalTransactionStatement));
@@ -523,26 +510,11 @@ parseMessage(LogicalTransaction *txn,
 		}
 
 		stmt->action = metadata->action;
-
-		/* most actions share a need for "schema" and "table" properties */
-		if (metadata->action != STREAM_ACTION_SWITCH &&
-			metadata->action != STREAM_ACTION_KEEPALIVE)
-		{
-			schema = (char *) json_object_dotget_string(jsobj, "message.schema");
-			table = (char *) json_object_dotget_string(jsobj, "message.table");
-
-			if (schema == NULL || table == NULL)
-			{
-				log_error("Failed to parse truncated message missing "
-						  "schema or table property: %s",
-						  message);
-				return false;
-			}
-		}
 	}
 
 	switch (metadata->action)
 	{
+		/* begin messages only use pgcopydb internal metadata */
 		case STREAM_ACTION_BEGIN:
 		{
 			txn->xid = metadata->xid;
@@ -560,6 +532,7 @@ parseMessage(LogicalTransaction *txn,
 			break;
 		}
 
+		/* commit messages only use pgcopydb internal metadata */
 		case STREAM_ACTION_COMMIT:
 		{
 			txn->commitLSN = metadata->lsn;
@@ -567,9 +540,9 @@ parseMessage(LogicalTransaction *txn,
 			break;
 		}
 
+		/* switch wal messages are pgcopydb internal messages */
 		case STREAM_ACTION_SWITCH:
 		{
-			stmt->action = metadata->action;
 			stmt->stmt.switchwal.lsn = metadata->lsn;
 
 			(void) streamLogicalTransactionAppendStatement(txn, stmt);
@@ -577,9 +550,9 @@ parseMessage(LogicalTransaction *txn,
 			break;
 		}
 
+		/* keepalive messages are pgcopydb internal messages */
 		case STREAM_ACTION_KEEPALIVE:
 		{
-			stmt->action = metadata->action;
 			stmt->stmt.keepalive.lsn = metadata->lsn;
 
 			strlcpy(stmt->stmt.keepalive.timestamp,
@@ -591,144 +564,62 @@ parseMessage(LogicalTransaction *txn,
 			break;
 		}
 
-		case STREAM_ACTION_TRUNCATE:
-		{
-			stmt->action = metadata->action;
-			strlcpy(stmt->stmt.truncate.nspname, schema, NAMEDATALEN);
-			strlcpy(stmt->stmt.truncate.relname, table, NAMEDATALEN);
-
-			(void) streamLogicalTransactionAppendStatement(txn, stmt);
-
-			break;
-		}
-
-		case STREAM_ACTION_INSERT:
-		{
-			JSON_Array *jscols =
-				json_object_dotget_array(jsobj, "message.columns");
-
-			stmt->action = metadata->action;
-
-			strlcpy(stmt->stmt.insert.nspname, schema, NAMEDATALEN);
-			strlcpy(stmt->stmt.insert.relname, table, NAMEDATALEN);
-
-			stmt->stmt.insert.new.count = 1;
-			stmt->stmt.insert.new.array =
-				(LogicalMessageTuple *) calloc(1, sizeof(LogicalMessageTuple));
-
-			if (stmt->stmt.insert.new.array == NULL)
-			{
-				log_error(ALLOCATION_FAILED_ERROR);
-				return false;
-			}
-
-			LogicalMessageTuple *tuple = &(stmt->stmt.insert.new.array[0]);
-
-			if (!SetColumnNamesAndValues(tuple, message, jscols))
-			{
-				log_error("Failed to parse INSERT columns for logical "
-						  "message %s",
-						  message);
-				return false;
-			}
-
-			(void) streamLogicalTransactionAppendStatement(txn, stmt);
-
-			break;
-		}
-
-		case STREAM_ACTION_UPDATE:
-		{
-			stmt->action = metadata->action;
-			strlcpy(stmt->stmt.insert.nspname, schema, NAMEDATALEN);
-			strlcpy(stmt->stmt.insert.relname, table, NAMEDATALEN);
-
-			stmt->stmt.update.old.count = 1;
-			stmt->stmt.update.new.count = 1;
-
-			stmt->stmt.update.old.array =
-				(LogicalMessageTuple *) calloc(1, sizeof(LogicalMessageTuple));
-
-			stmt->stmt.update.new.array =
-				(LogicalMessageTuple *) calloc(1, sizeof(LogicalMessageTuple));
-
-			if (stmt->stmt.update.old.array == NULL ||
-				stmt->stmt.update.new.array == NULL)
-			{
-				log_error(ALLOCATION_FAILED_ERROR);
-				return false;
-			}
-
-			LogicalMessageTuple *old = &(stmt->stmt.update.old.array[0]);
-			JSON_Array *jsids =
-				json_object_dotget_array(jsobj, "message.identity");
-
-			if (!SetColumnNamesAndValues(old, message, jsids))
-			{
-				log_error("Failed to parse UPDATE identity (old) for logical "
-						  "message %s",
-						  message);
-				return false;
-			}
-
-			LogicalMessageTuple *new = &(stmt->stmt.update.new.array[0]);
-			JSON_Array *jscols =
-				json_object_dotget_array(jsobj, "message.columns");
-
-			if (!SetColumnNamesAndValues(new, message, jscols))
-			{
-				log_error("Failed to parse UPDATE columns (new) for logical "
-						  "message %s",
-						  message);
-				return false;
-			}
-
-			(void) streamLogicalTransactionAppendStatement(txn, stmt);
-
-			break;
-		}
-
-		case STREAM_ACTION_DELETE:
-		{
-			stmt->action = metadata->action;
-			strlcpy(stmt->stmt.insert.nspname, schema, NAMEDATALEN);
-			strlcpy(stmt->stmt.insert.relname, table, NAMEDATALEN);
-
-			stmt->stmt.delete.old.count = 1;
-			stmt->stmt.delete.old.array =
-				(LogicalMessageTuple *) calloc(1, sizeof(LogicalMessageTuple));
-
-			if (stmt->stmt.update.old.array == NULL)
-			{
-				log_error(ALLOCATION_FAILED_ERROR);
-				return false;
-			}
-
-			LogicalMessageTuple *old = &(stmt->stmt.update.old.array[0]);
-			JSON_Array *jsids =
-				json_object_dotget_array(jsobj, "message.identity");
-
-			if (!SetColumnNamesAndValues(old, message, jsids))
-			{
-				log_error("Failed to parse DELETE identity (old) for logical "
-						  "message %s",
-						  message);
-				return false;
-			}
-
-			(void) streamLogicalTransactionAppendStatement(txn, stmt);
-
-			break;
-		}
-
+		/* now handle DML messages from the output plugin */
 		default:
 		{
-			log_error("Unknown message action %d", metadata->action);
-			return false;
+			/*
+			 * When using test_decoding, we append the received message as a
+			 * JSON string in the "message" object key. When using wal2json, we
+			 * use the raw JSON message as a json object in the "message"
+			 * object key.
+			 */
+			JSON_Value_Type jsmesgtype =
+				json_value_get_type(
+					json_object_get_value(
+						json_value_get_object(json),
+						"message"));
+
+			switch (jsmesgtype)
+			{
+				case JSONString:
+				{
+					if (!parseTestDecodingMessage(stmt, metadata, message, json))
+					{
+						log_error("Failed to parse test_decoding message, "
+								  "see above for details");
+						return false;
+					}
+
+					break;
+				}
+
+				case JSONObject:
+				{
+					if (!parseWal2jsonMessage(stmt, metadata, message, json))
+					{
+						log_error("Failed to parse wal2json message, "
+								  "see above for details");
+						return false;
+					}
+
+					break;
+				}
+
+				default:
+				{
+					log_error("Failed to parse JSON message with "
+							  "unknown JSON type %d",
+							  jsmesgtype);
+					return false;
+				}
+			}
+
+			(void) streamLogicalTransactionAppendStatement(txn, stmt);
+
+			break;
 		}
 	}
 
-	/* keep compiler happy */
 	return true;
 }
 
@@ -749,7 +640,7 @@ parseMessage(LogicalTransaction *txn,
  * TODO: at the moment we don't pack several statements that look alike into
  * the same one.
  */
-static bool
+bool
 streamLogicalTransactionAppendStatement(LogicalTransaction *txn,
 										LogicalTransactionStatement *stmt)
 {
@@ -790,149 +681,6 @@ streamLogicalTransactionAppendStatement(LogicalTransaction *txn,
 	}
 
 	++txn->count;
-
-	return true;
-}
-
-
-/*
- * SetColumnNames parses the "columns" (or "identity") JSON object from a
- * wal2json logical replication message and fills-in our internal
- * representation for a tuple.
- */
-static bool
-SetColumnNamesAndValues(LogicalMessageTuple *tuple,
-						const char *message,
-						JSON_Array *jscols)
-{
-	int count = json_array_get_count(jscols);
-
-	tuple->cols = count;
-	tuple->columns = (char **) calloc(count, sizeof(char *));
-
-	if (tuple->columns == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	/*
-	 * Allocate the tuple values, an array of VALUES, as in SQL.
-	 *
-	 * TODO: actually support multi-values clauses (single column names array,
-	 * multiple VALUES matching the same metadata definition). At the moment
-	 * it's always a single VALUES entry: VALUES(a, b, c).
-	 *
-	 * The goal is to be able to represent VALUES(a1, b1, c1), (a2, b2, c2).
-	 */
-	LogicalMessageValuesArray *valuesArray = &(tuple->values);
-
-	valuesArray->count = 1;
-	valuesArray->array =
-		(LogicalMessageValues *) calloc(1, sizeof(LogicalMessageValues));
-
-	if (valuesArray->array == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	/* allocate one VALUES entry */
-	LogicalMessageValues *values = &(tuple->values.array[0]);
-	values->cols = count;
-	values->array =
-		(LogicalMessageValue *) calloc(count, sizeof(LogicalMessageValue));
-
-	if (values->array == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	/*
-	 * Now that our memory areas are allocated and initialized to zeroes, fill
-	 * them in with the values from the JSON message.
-	 */
-	for (int i = 0; i < tuple->cols; i++)
-	{
-		LogicalMessageValue *valueColumn = &(values->array[i]);
-
-		JSON_Object *jscol = json_array_get_object(jscols, i);
-		const char *colname = json_object_get_string(jscol, "name");
-
-		if (jscol == NULL || colname == NULL)
-		{
-			log_debug("cols[%d]: count = %d, jscols %p, "
-					  "json_array_get_count(jscols) == %lld",
-					  i,
-					  count,
-					  jscols,
-					  (long long) json_array_get_count(jscols));
-
-			log_error("Failed to parse JSON columns array");
-			return false;
-		}
-
-		tuple->columns[i] = strndup(colname, NAMEDATALEN);
-
-		if (tuple->columns[i] == NULL)
-		{
-			log_error(ALLOCATION_FAILED_ERROR);
-			return false;
-		}
-
-		JSON_Value *jsval = json_object_get_value(jscol, "value");
-
-		switch (json_value_get_type(jsval))
-		{
-			case JSONNull:
-			{
-				/* default to TEXTOID to send NULLs over the wire */
-				valueColumn->oid = TEXTOID;
-				valueColumn->isNull = true;
-				break;
-			}
-
-			case JSONBoolean:
-			{
-				bool x = json_value_get_boolean(jsval);
-
-				valueColumn->oid = BOOLOID;
-				valueColumn->val.boolean = x;
-				valueColumn->isNull = false;
-				break;
-			}
-
-			case JSONNumber:
-			{
-				double x = json_value_get_number(jsval);
-
-				valueColumn->oid = FLOAT8OID;
-				valueColumn->val.float8 = x;
-				valueColumn->isNull = false;
-				break;
-			}
-
-			case JSONString:
-			{
-				const char *x = json_value_get_string(jsval);
-
-				valueColumn->oid = TEXTOID;
-				valueColumn->val.str = strdup(x);
-				valueColumn->isNull = false;
-				break;
-			}
-
-			default:
-			{
-				log_error("Failed to parse column \"%s\" "
-						  "JSON type for \"value\": %s",
-						  colname,
-						  message);
-				return false;
-			}
-		}
-	}
 
 	return true;
 }
@@ -1180,7 +928,7 @@ bool
 stream_write_commit(FILE *out, LogicalTransaction *txn)
 {
 	fformat(out,
-			"%s{\"xid\": %lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
+			"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
 			OUTPUT_COMMIT,
 			(long long) txn->xid,
 			LSN_FORMAT_ARGS(txn->commitLSN),
@@ -1489,7 +1237,14 @@ stream_write_value(FILE *out, LogicalMessageValue *value)
 
 			case TEXTOID:
 			{
-				fformat(out, "'%s'", value->val.str);
+				if (value->isQuoted)
+				{
+					fformat(out, "%s", value->val.str);
+				}
+				else
+				{
+					fformat(out, "'%s'", value->val.str);
+				}
 				break;
 			}
 

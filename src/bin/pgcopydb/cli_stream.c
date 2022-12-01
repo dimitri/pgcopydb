@@ -51,6 +51,7 @@ static CommandLine stream_setup_command =
 		"  --resume         Allow resuming operations after a failure\n"
 		"  --not-consistent Allow taking a new snapshot on the source database\n"
 		"  --snapshot       Use snapshot obtained with pg_export_snapshot\n"
+		"  --plugin         Output plugin to use (test_decoding, wal2json)\n" \
 		"  --slot-name      Stream changes recorded by this slot\n"
 		"  --origin         Name of the Postgres replication origin\n",
 		cli_stream_getopts,
@@ -182,6 +183,7 @@ cli_stream_getopts(int argc, char **argv)
 		{ "source", required_argument, NULL, 'S' },
 		{ "target", required_argument, NULL, 'T' },
 		{ "dir", required_argument, NULL, 'D' },
+		{ "plugin", required_argument, NULL, 'p' },
 		{ "slot-name", required_argument, NULL, 's' },
 		{ "snapshot", required_argument, NULL, 'N' },
 		{ "origin", required_argument, NULL, 'o' },
@@ -207,7 +209,7 @@ cli_stream_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:j:s:o:t:PVvdzqh",
+	while ((c = getopt_long(argc, argv, "S:T:j:p:s:o:t:PVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -249,6 +251,13 @@ cli_stream_getopts(int argc, char **argv)
 			{
 				strlcpy(options.slotName, optarg, NAMEDATALEN);
 				log_trace("--slot-name %s", options.slotName);
+				break;
+			}
+
+			case 'p':
+			{
+				strlcpy(options.plugin, optarg, NAMEDATALEN);
+				log_trace("--plugin %s", options.plugin);
 				break;
 			}
 
@@ -409,6 +418,22 @@ cli_stream_getopts(int argc, char **argv)
 		log_info("Using default origin node name \"%s\"", options.origin);
 	}
 
+	if (IS_EMPTY_STRING_BUFFER(options.plugin))
+	{
+		strlcpy(options.plugin, REPLICATION_PLUGIN, sizeof(options.plugin));
+		log_info("Using default output plugin \"%s\"", options.plugin);
+	}
+	else
+	{
+		if (OutputPluginFromString(options.plugin) == STREAM_PLUGIN_UNKNOWN)
+		{
+			log_fatal("Unknown replication plugin \"%s\", please use either "
+					  "test_decoding (the default) or wal2json",
+					  options.plugin);
+			++errors;
+		}
+	}
+
 	if (errors > 0)
 	{
 		exit(EXIT_CODE_BAD_ARGS);
@@ -517,6 +542,7 @@ cli_stream_setup(int argc, char **argv)
 	}
 
 	if (!stream_setup_databases(&copySpecs,
+								OutputPluginFromString(streamDBoptions.plugin),
 								streamDBoptions.slotName,
 								streamDBoptions.origin))
 	{
@@ -648,6 +674,7 @@ cli_stream_catchup(int argc, char **argv)
 						   &(copySpecs.cfPaths.cdc),
 						   copySpecs.source_pguri,
 						   copySpecs.target_pguri,
+						   streamDBoptions.plugin,
 						   streamDBoptions.slotName,
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
@@ -834,6 +861,7 @@ stream_start_in_mode(LogicalStreamMode mode)
 						   &(copySpecs.cfPaths.cdc),
 						   copySpecs.source_pguri,
 						   copySpecs.target_pguri,
+						   streamDBoptions.plugin,
 						   streamDBoptions.slotName,
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,

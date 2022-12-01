@@ -43,6 +43,7 @@
 	"  --not-consistent           Allow taking a new snapshot on the source database\n" \
 	"  --snapshot                 Use snapshot obtained with pg_export_snapshot\n" \
 	"  --follow                   Implement logical decoding to replay changes\n" \
+	"  --plugin                   Output plugin to use (test_decoding, wal2json)\n" \
 	"  --slot-name                Use this Postgres replication slot name\n" \
 	"  --create-slot              Create the replication slot\n" \
 	"  --origin                   Use this Postgres replication origin node name\n" \
@@ -80,6 +81,7 @@ CommandLine follow_command =
 		"  --resume              Allow resuming operations after a failure\n"
 		"  --not-consistent      Allow taking a new snapshot on the source database\n"
 		"  --snapshot            Use snapshot obtained with pg_export_snapshot\n"
+		"  --plugin              Output plugin to use (test_decoding, wal2json)\n" \
 		"  --slot-name           Use this Postgres replication slot name\n"
 		"  --create-slot         Create the replication slot\n"
 		"  --origin              Use this Postgres replication origin node name\n"
@@ -120,6 +122,7 @@ cli_clone(int argc, char **argv)
 							   &(copySpecs.cfPaths.cdc),
 							   copySpecs.source_pguri,
 							   copySpecs.target_pguri,
+							   copyDBoptions.plugin,
 							   copyDBoptions.slotName,
 							   copyDBoptions.origin,
 							   copyDBoptions.endpos,
@@ -162,6 +165,7 @@ cli_clone(int argc, char **argv)
 		{
 			if (!copydb_create_logical_replication_slot(&copySpecs,
 														streamSpecs.logrep_pguri,
+														streamSpecs.plugin,
 														streamSpecs.slotName))
 			{
 				/* errors have already been logged */
@@ -220,6 +224,7 @@ cli_clone(int argc, char **argv)
 		 * on the target database.
 		 */
 		if (!stream_setup_databases(&setupSpecs,
+									streamSpecs.plugin,
 									streamSpecs.slotName,
 									streamSpecs.origin))
 		{
@@ -352,6 +357,7 @@ cli_follow(int argc, char **argv)
 						   &(copySpecs.cfPaths.cdc),
 						   copySpecs.source_pguri,
 						   copySpecs.target_pguri,
+						   copyDBoptions.plugin,
 						   copyDBoptions.slotName,
 						   copyDBoptions.origin,
 						   copyDBoptions.endpos,
@@ -365,7 +371,10 @@ cli_follow(int argc, char **argv)
 	 * First create the replication slot on the source database, and the origin
 	 * (replication progress tracking) on the target database.
 	 */
-	if (!stream_setup_databases(&copySpecs, specs.slotName, specs.origin))
+	if (!stream_setup_databases(&copySpecs,
+								specs.plugin,
+								specs.slotName,
+								specs.origin))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

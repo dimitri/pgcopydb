@@ -347,6 +347,13 @@ bool parseTimeLineHistory(const char *filename, const char *content,
 /*
  * Logical Decoding support.
  */
+typedef enum
+{
+	STREAM_PLUGIN_UNKNOWN = 0,
+	STREAM_PLUGIN_TEST_DECODING,
+	STREAM_PLUGIN_WAL2JSON
+} StreamOutputPlugin;
+
 typedef struct LogicalTrackLSN
 {
 	XLogRecPtr written_lsn;
@@ -362,14 +369,16 @@ typedef struct LogicalStreamContext
 	XLogRecPtr cur_record_lsn;
 	int timeline;
 	uint32_t WalSegSz;
-	const char *buffer;
+
+	const char *buffer;         /* expose internal buffer */
+	StreamOutputPlugin plugin;
 
 	TimestampTz now;
 	TimestampTz lastFeedbackSync;
 	TimestampTz sendTime;
 	XLogRecPtr endpos;          /* might be update at runtime */
 
-	LogicalTrackLSN *tracking;
+	LogicalTrackLSN *tracking;  /* expose LogicalStreamClient.current */
 } LogicalStreamContext;
 
 
@@ -381,7 +390,10 @@ typedef struct LogicalStreamClient
 	IdentifySystem system;
 
 	char slotName[NAMEDATALEN];
+
+	StreamOutputPlugin plugin;
 	KeyVal pluginOptions;
+
 	uint32_t WalSegSz;
 
 	XLogRecPtr startpos;
@@ -407,9 +419,14 @@ typedef struct LogicalStreamClient
 
 bool pgsql_init_stream(LogicalStreamClient *client,
 					   const char *pguri,
+					   StreamOutputPlugin plugin,
 					   const char *slotName,
 					   XLogRecPtr startpos,
 					   XLogRecPtr endpos);
+
+StreamOutputPlugin OutputPluginFromString(char *plugin);
+char * OutputPluginToString(StreamOutputPlugin plugin);
+
 
 bool pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 										   uint64_t *lsn,
@@ -450,7 +467,7 @@ bool pgsql_replication_slot_exists(PGSQL *pgsql,
 
 bool pgsql_create_replication_slot(PGSQL *pgsql,
 								   const char *slotName,
-								   const char *plugin,
+								   StreamOutputPlugin plugin,
 								   uint64_t *lsn);
 
 bool pgsql_drop_replication_slot(PGSQL *pgsql, const char *slotName);
