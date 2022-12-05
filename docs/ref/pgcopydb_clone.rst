@@ -38,6 +38,7 @@ Postgres instance to the target Postgres instance.
      --no-comments              Do not output commands to restore comments
      --skip-large-objects       Skip copying large objects (blobs)
      --skip-extensions          Skip restoring extensions
+     --skip-collations          Skip restoring collations
      --filters <filename>       Use the filters defined in <filename>
      --restart                  Allow restarting when temp files exist already
      --resume                   Allow resuming operations after a failure
@@ -471,6 +472,19 @@ The following options are available to ``pgcopydb clone``:
   Because creating extensions require superuser, this allows a multi-steps
   approach where extensions are dealt with superuser privileges, and then
   the rest of the pgcopydb operations are done without superuser privileges.
+
+--skip-collations
+
+  Skip copying collations from the source database to the target database.
+
+  In some scenarios the list of collations provided by the Operating System
+  on the source and target system might be different, and a mapping then
+  needs to be manually installed before calling pgcopydb.
+
+  Then this option allows pgcopydb to skip over collations and assume all
+  the needed collations have been deployed on the target database already.
+
+  See also :ref:`pgcopydb_list_collations`.
 
 --filters <filename>
 

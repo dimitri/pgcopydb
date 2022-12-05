@@ -137,6 +137,7 @@ typedef enum
 	OBJECT_KIND_UNKNOWN = 0,
 	OBJECT_KIND_SCHEMA,
 	OBJECT_KIND_EXTENSION,
+	OBJECT_KIND_COLLATION,
 	OBJECT_KIND_TABLE,
 	OBJECT_KIND_INDEX,
 	OBJECT_KIND_CONSTRAINT,
@@ -153,6 +154,7 @@ typedef struct SourceFilterItem
 	/* it's going to be only one of those, depending on the object kind */
 	SourceSchema schema;
 	SourceExtension extension;
+	SourceCollation collation;
 	SourceTable table;
 	SourceSequence sequence;
 	SourceIndex index;
@@ -186,6 +188,7 @@ typedef struct CopyDataSpec
 	bool roles;
 	bool skipLargeObjects;
 	bool skipExtensions;
+	bool skipCollations;
 
 	bool restart;
 	bool resume;
@@ -208,6 +211,7 @@ typedef struct CopyDataSpec
 
 	DumpPaths dumpPaths;
 	SourceExtensionArray extensionArray;
+	SourceCollationArray collationArray;
 	SourceTableArray sourceTableArray;
 	SourceIndexArray sourceIndexArray;
 	CopyTableDataSpecsArray tableSpecsArray;
@@ -264,6 +268,7 @@ bool copydb_init_specs(CopyDataSpec *specs,
 					   bool roles,
 					   bool skipLargeObjects,
 					   bool skipExtensions,
+					   bool skipCollations,
 					   bool restart,
 					   bool resume,
 					   bool consistent);

@@ -67,6 +67,21 @@ typedef struct SourceExtensionArray
 } SourceExtensionArray;
 
 
+typedef struct SourceCollation
+{
+	uint32_t oid;
+	char collname[NAMEDATALEN];
+	char desc[BUFSIZE];
+	char restoreListName[RESTORE_LIST_NAMEDATALEN];
+} SourceCollation;
+
+typedef struct SourceCollationArray
+{
+	int count;
+	SourceCollation *array;         /* malloc'ed area */
+} SourceCollationArray;
+
+
 /*
  * SourceTable caches the information we need about all the ordinary tables
  * found in the source database.
@@ -212,6 +227,8 @@ typedef struct SourceDependArray
 bool schema_list_ext_schemas(PGSQL *pgsql, SourceSchemaArray *array);
 
 bool schema_list_extensions(PGSQL *pgsql, SourceExtensionArray *extArray);
+
+bool schema_list_collations(PGSQL *pgsql, SourceCollationArray *array);
 
 bool schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
 										SourceFilters *filters,

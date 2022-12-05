@@ -512,6 +512,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "skip-blobs", no_argument, NULL, 'B' },
 		{ "skip-large-objects", no_argument, NULL, 'B' },
 		{ "skip-extensions", no_argument, NULL, 'e' },
+		{ "skip-collations", no_argument, NULL, 'l' },
 		{ "filter", required_argument, NULL, 'F' },
 		{ "filters", required_argument, NULL, 'F' },
 		{ "restart", no_argument, NULL, 'r' },
@@ -548,7 +549,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	}
 
 	while ((c = getopt_long(argc, argv,
-							"S:T:D:J:I:L:cOBrRCN:xXCtfo:p:s:E:F:Vvdzqh",
+							"S:T:D:J:I:L:cOBelrRCN:xXCtfo:p:s:E:F:Vvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -677,6 +678,13 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				options.skipExtensions = true;
 				log_trace("--skip-extensions");
+				break;
+			}
+
+			case 'l':
+			{
+				options.skipCollations = true;
+				log_trace("--skip-collations");
 				break;
 			}
 
@@ -990,6 +998,7 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 						   copyDBoptions.roles,
 						   copyDBoptions.skipLargeObjects,
 						   copyDBoptions.skipExtensions,
+						   copyDBoptions.skipCollations,
 						   copyDBoptions.restart,
 						   copyDBoptions.resume,
 						   !copyDBoptions.notConsistent))
