@@ -45,6 +45,15 @@ typedef struct SourceExtensionArrayContext
 	bool parsedOk;
 } SourceExtensionArrayContext;
 
+
+/* Context used when fetching collation definitions */
+typedef struct SourceCollationArrayContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	SourceCollationArray *collationArray;
+	bool parsedOk;
+} SourceCollationArrayContext;
+
 /* Context used when fetching all the table definitions */
 typedef struct SourceTableArrayContext
 {
@@ -97,6 +106,8 @@ static bool parseCurrentExtension(PGresult *result,
 static bool parseCurrentExtensionConfig(PGresult *result,
 										int rowNumber,
 										SourceExtensionConfig *extConfig);
+
+static void getCollationList(void *ctx, PGresult *result);
 
 static void getTableArray(void *ctx, PGresult *result);
 
@@ -220,6 +231,90 @@ schema_list_ext_schemas(PGSQL *pgsql, SourceSchemaArray *array)
 	if (!parseContext.parsedOk)
 	{
 		log_error("Failed to list schemas that extensions depend on");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * schema_list_collations grabs the list of collations used in the given
+ * database connection. Collations listed may be used in the database
+ * definition itself, in a column in any table in that database, or in an index
+ * definition.
+ */
+bool
+schema_list_collations(PGSQL *pgsql, SourceCollationArray *array)
+{
+	SourceCollationArrayContext parseContext = { { 0 }, array, false };
+
+	char *sql =
+		"with indcols as "
+		" ( "
+		"   select indexrelid, n, colloid "
+		"     from pg_index i "
+		"     join pg_class c on c.oid = i.indexrelid "
+		"     join pg_namespace n on n.oid = c.relnamespace, "
+		"          unnest(indcollation) with ordinality as t (colloid, n) "
+		"    where n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+		" ) "
+		"select colloid, collname, "
+		"       pg_describe_object('pg_class'::regclass, indexrelid, 0), "
+		"       format('%s %s %s', "
+		"              regexp_replace(n.nspname, '[\n\r]', ' '), "
+		"              regexp_replace(c.collname, '[\n\r]', ' '), "
+		"              regexp_replace(auth.rolname, '[\n\r]', ' ')) "
+		"  from indcols "
+		"       join pg_collation c on c.oid = colloid "
+		"       join pg_roles auth ON auth.oid = c.collowner "
+		"       join pg_namespace n on n.oid = c.collnamespace "
+		" where colloid <> 0 "
+		"   and collname <> 'default' "
+
+		"union "
+
+		"select c.oid as colloid, c.collname, "
+		"       format('database %s', d.datname) as desc, "
+		"       format('%s %s %s', "
+		"              regexp_replace(n.nspname, '[\n\r]', ' '), "
+		"              regexp_replace(c.collname, '[\n\r]', ' '), "
+		"              regexp_replace(auth.rolname, '[\n\r]', ' ')) "
+		"  from pg_database d "
+		"       join pg_collation c on c.collname = d.datcollate "
+		"       join pg_roles auth ON auth.oid = c.collowner "
+		"       join pg_namespace n on n.oid = c.collnamespace "
+		" where d.datname = current_database() "
+
+		"union "
+
+		"select coll.oid as colloid, coll.collname, "
+		"       pg_describe_object('pg_class'::regclass, attrelid, attnum), "
+		"       format('%s %s %s', "
+		"              regexp_replace(cn.nspname, '[\n\r]', ' '), "
+		"              regexp_replace(coll.collname, '[\n\r]', ' '), "
+		"              regexp_replace(auth.rolname, '[\n\r]', ' ')) "
+		"  from pg_attribute a "
+		"       join pg_class c on c.oid = a.attrelid "
+		"       join pg_namespace n on n.oid = c.relnamespace "
+		"       join pg_collation coll on coll.oid = attcollation "
+		"       join pg_roles auth ON auth.oid = coll.collowner "
+		"       join pg_namespace cn on n.oid = coll.collnamespace "
+		" where collname <> 'default' "
+		"   and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+		"order by colloid";
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   0, NULL, NULL,
+								   &parseContext, &getCollationList))
+	{
+		log_error("Failed to list non-default collations in use in database");
+		return false;
+	}
+
+	if (!parseContext.parsedOk)
+	{
+		log_error("Failed to list non-default collations in use in database");
 		return false;
 	}
 
@@ -3102,6 +3197,104 @@ parseCurrentExtensionConfig(PGresult *result,
 	}
 
 	return errors == 0;
+}
+
+
+/*
+ * getCollationList loops over the SQL result for the collation array query and
+ * allocates an array of schemas then populates it with the query result.
+ */
+static void
+getCollationList(void *ctx, PGresult *result)
+{
+	SourceCollationArrayContext *context = (SourceCollationArrayContext *) ctx;
+	int nTuples = PQntuples(result);
+
+	log_debug("getCollationList: %d", nTuples);
+
+	if (PQnfields(result) != 4)
+	{
+		log_error("Query returned %d columns, expected 4", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	/* we're not supposed to re-cycle arrays here */
+	if (context->collationArray->array != NULL)
+	{
+		/* issue a warning but let's try anyway */
+		log_warn("BUG? context's array is not null in getCollationList");
+
+		free(context->collationArray->array);
+		context->collationArray->array = NULL;
+	}
+
+	context->collationArray->count = nTuples;
+	context->collationArray->array =
+		(SourceCollation *) calloc(nTuples, sizeof(SourceCollation));
+
+	if (context->collationArray->array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return;
+	}
+
+	int errors = 0;
+
+	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
+	{
+		SourceCollation *collation = &(context->collationArray->array[rowNumber]);
+
+		/* 1. oid */
+		char *value = PQgetvalue(result, rowNumber, 0);
+
+		if (!stringToUInt32(value, &(collation->oid)) || collation->oid == 0)
+		{
+			log_error("Invalid OID \"%s\"", value);
+			++errors;
+		}
+
+		/* 2. collname */
+		value = PQgetvalue(result, rowNumber, 1);
+		int length = strlcpy(collation->collname, value, NAMEDATALEN);
+
+		if (length >= NAMEDATALEN)
+		{
+			log_error("Collation name \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (NAMEDATALEN - 1)",
+					  value, length, NAMEDATALEN - 1);
+			++errors;
+		}
+
+		/* 3. desc */
+		value = PQgetvalue(result, rowNumber, 2);
+		length = strlcpy(collation->desc, value, BUFSIZE);
+
+		if (length >= BUFSIZE)
+		{
+			log_error("Collation desc \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (BUFSIZE - 1)",
+					  value, length, BUFSIZE - 1);
+			++errors;
+		}
+
+		/* 4. restoreListName */
+		value = PQgetvalue(result, rowNumber, 3);
+		length =
+			strlcpy(collation->restoreListName,
+					value,
+					RESTORE_LIST_NAMEDATALEN);
+
+		if (length >= RESTORE_LIST_NAMEDATALEN)
+		{
+			log_error("Collation restore list name \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (RESTORE_LIST_NAMEDATALEN - 1)",
+					  value, length, RESTORE_LIST_NAMEDATALEN - 1);
+			++errors;
+		}
+	}
+
+	context->parsedOk = errors == 0;
 }
 
 

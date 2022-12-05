@@ -364,6 +364,7 @@ cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 						   false, /* roles */
 						   false, /* skipLargeObjects */
 						   false, /* skipExtensions */
+						   false, /* skipCollations */
 						   dumpDBoptions->restart,
 						   dumpDBoptions->resume,
 						   !dumpDBoptions->notConsistent))

@@ -362,6 +362,7 @@ cli_sentinel_create(int argc, char **argv)
 						   false, /* roles */
 						   false, /* skipLargeObjects */
 						   false, /* skipExtensions */
+						   false, /* skipCollations */
 						   sentinelDBoptions.restart,
 						   sentinelDBoptions.resume,
 						   !sentinelDBoptions.notConsistent))

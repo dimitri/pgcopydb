@@ -16,10 +16,21 @@ set -e
 #
 pgcopydb list extensions --source "${PGCOPYDB_SOURCE_PGURI}"
 
-psql -q -d "${PGCOPYDB_SOURCE_PGURI}" -1 -f ./setup/setup.sql
+psql -a -d "${PGCOPYDB_SOURCE_PGURI}" -1 -f ./setup/setup.sql
+
+# create the target needed collation manually for the test
+psql -a -d "${PGCOPYDB_TARGET_PGURI}" -1 <<EOF
+create collation if not exists mycol
+ (
+   locale = 'fr-FR-x-icu',
+   provider = 'icu'
+ );
+EOF
+
+pgcopydb list collations --source "${PGCOPYDB_SOURCE_PGURI}"
 
 # pgcopydb fork uses the environment variables
-pgcopydb fork
+pgcopydb fork --skip-collations --debug
 
 # now compare the output of running the SQL command with what's expected
 # as we're not root when running tests, can't write in /usr/src

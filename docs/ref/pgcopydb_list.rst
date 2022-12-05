@@ -11,6 +11,7 @@ This command prefixes the following sub-commands:
 
   pgcopydb list
     extensions   List all the source extensions to copy
+    collations   List all the source collations to copy
     tables       List all the source tables to copy data from
     table-parts  List a source table copy partitions
     sequences    List all the source sequences to copy data from
@@ -37,6 +38,27 @@ extensions to COPY to the target database.
    usage: pgcopydb list extensions  --source ...
 
      --source            Postgres URI to the source database
+
+.. _pgcopydb_list_collations:
+
+pgcopydb list collations
+------------------------
+
+pgcopydb list collations - List all the source collations to copy
+
+The command ``pgcopydb list collations`` connects to the source database and
+executes a SQL query using the Postgres catalogs to get a list of all the
+collations to COPY to the target database.
+
+::
+
+   pgcopydb list collations: List all the source collations to copy
+   usage: pgcopydb list collations  --source ...
+
+     --source            Postgres URI to the source database
+
+The SQL query that is used lists the database collation, and then any
+non-default collation that's used in a user column or a user index.
 
 .. _pgcopydb_list_tables:
 

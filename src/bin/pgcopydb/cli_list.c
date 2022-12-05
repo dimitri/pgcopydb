@@ -27,6 +27,7 @@ ListDBOptions listDBoptions = { 0 };
 
 static int cli_list_db_getopts(int argc, char **argv);
 static void cli_list_extensions(int argc, char **argv);
+static void cli_list_collations(int argc, char **argv);
 static void cli_list_tables(int argc, char **argv);
 static void cli_list_table_parts(int argc, char **argv);
 static void cli_list_sequences(int argc, char **argv);
@@ -43,6 +44,15 @@ static CommandLine list_extensions_command =
 		"  --source            Postgres URI to the source database\n",
 		cli_list_db_getopts,
 		cli_list_extensions);
+
+static CommandLine list_collations_command =
+	make_command(
+		"collations",
+		"List all the source collations to copy",
+		" --source ... ",
+		"  --source            Postgres URI to the source database\n",
+		cli_list_db_getopts,
+		cli_list_collations);
 
 static CommandLine list_tables_command =
 	make_command(
@@ -131,6 +141,7 @@ static CommandLine list_progress_command =
 
 static CommandLine *list_subcommands[] = {
 	&list_extensions_command,
+	&list_collations_command,
 	&list_tables_command,
 	&list_table_parts_command,
 	&list_sequences_command,
@@ -489,6 +500,53 @@ cli_list_extensions(int argc, char **argv)
 				ext->extnamespace,
 				ext->config.count,
 				config);
+	}
+
+	fformat(stdout, "\n");
+}
+
+
+/*
+ * cli_list_collations implements the command: pgcopydb list collations
+ */
+static void
+cli_list_collations(int argc, char **argv)
+{
+	PGSQL pgsql = { 0 };
+	SourceCollationArray collationArray = { 0, NULL };
+
+	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	if (!schema_list_collations(&pgsql, &collationArray))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_info("Fetched information for %d collations", collationArray.count);
+
+	fformat(stdout, "%10s | %20s | %20s \n",
+			"OID",
+			"Name",
+			"Object name");
+
+	fformat(stdout, "%10s-+-%20s-+-%20s\n",
+			"----------",
+			"--------------------",
+			"--------------------");
+
+	for (int i = 0; i < collationArray.count; i++)
+	{
+		SourceCollation *coll = &(collationArray.array[i]);
+
+		fformat(stdout, "%10u | %20s | %20s \n",
+				coll->oid,
+				coll->collname,
+				coll->desc);
 	}
 
 	fformat(stdout, "\n");
@@ -1143,6 +1201,7 @@ cli_list_schema(int argc, char **argv)
 						   false, /* roles */
 						   false, /* skipLargeObjects */
 						   false, /* skipExtensions */
+						   false, /* skipCollations */
 						   false, /* restart */
 						   true,  /* resume */
 						   false)) /* consistent */
@@ -1246,6 +1305,7 @@ cli_list_progress(int argc, char **argv)
 						   false, /* roles */
 						   false, /* skipLargeObjects */
 						   false, /* skipExtensions */
+						   false, /* skipCollations */
 						   false, /* restart */
 						   true,  /* resume */
 						   false)) /* consistent */

@@ -78,6 +78,20 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 		log_info("Fetched information for %d extensions", extensionArray->count);
 	}
 
+	/* now, are we skipping collations? */
+	if (specs->skipCollations)
+	{
+		SourceCollationArray *collationArray = &(specs->collationArray);
+
+		if (!schema_list_collations(src, collationArray))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		log_info("Fetched information for %d collations", collationArray->count);
+	}
+
 	/* now fetch the list of tables from the source database */
 	bool createdTableSizeTable = false;
 
@@ -570,6 +584,50 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		}
 	}
 
+	if (specs->skipCollations)
+	{
+		/*
+		 * Add all the listed collations OIDs so as to skip them later.
+		 */
+		for (int i = 0; i < specs->collationArray.count; i++)
+		{
+			SourceCollation *coll = &(specs->collationArray.array[i]);
+			SourceFilterItem *item = malloc(sizeof(SourceFilterItem));
+
+			if (item == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			item->oid = coll->oid;
+			item->kind = OBJECT_KIND_COLLATION;
+			item->collation = *coll;
+
+			strlcpy(item->restoreListName,
+					coll->restoreListName,
+					RESTORE_LIST_NAMEDATALEN);
+
+			/*
+			 * schema_list_collations might return same collation several
+			 * times, so we need to be careful here when adding entries to the
+			 * hash table.
+			 */
+			uint32_t oid = item->oid;
+			SourceFilterItem *found = { 0 };
+
+			HASH_FIND(hOid, hOid, &oid, sizeof(uint32_t), found);
+
+			if (found == NULL)
+			{
+				HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), item);
+
+				size_t len = strlen(item->restoreListName);
+				HASH_ADD(hName, hName, restoreListName, len, item);
+			}
+		}
+	}
+
 	/*
 	 * Take the complement of the filtering, to list the OIDs of objects that
 	 * we do not process.
@@ -580,7 +638,7 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 
 	if (filters->type == SOURCE_FILTER_TYPE_NONE)
 	{
-		if (specs->skipExtensions)
+		if (specs->skipExtensions || specs->skipCollations)
 		{
 			/* publish our hash tables to the main CopyDataSpec instance */
 			specs->hOid = hOid;
@@ -781,6 +839,11 @@ copydb_ObjectKindToString(ObjectKind kind)
 		case OBJECT_KIND_EXTENSION:
 		{
 			return "extension";
+		}
+
+		case OBJECT_KIND_COLLATION:
+		{
+			return "collation";
 		}
 
 		case OBJECT_KIND_TABLE:
