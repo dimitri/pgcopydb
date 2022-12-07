@@ -515,7 +515,7 @@ copydb_rmdir_or_mkdir(const char *dir, bool removeDir)
 
 		if (pg_mkdir_p((char *) dir, 0700) == -1)
 		{
-			log_fatal("Failed to create directory \"%s\"", dir);
+			log_fatal("Failed to create directory \"%s\": %m", dir);
 			return false;
 		}
 	}
