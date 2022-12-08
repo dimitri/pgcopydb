@@ -1,7 +1,7 @@
 # Copyright (c) 2021 The PostgreSQL Global Development Group.
 # Licensed under the PostgreSQL License.
 
-all: pagila pagila-multi-steps blobs unit filtering cdc follow extensions ;
+all: pagila pagila-multi-steps blobs unit filtering cdc follow extensions cdc-endpos-between-transaction;
 
 pagila: build
 	$(MAKE) -C $@
@@ -22,6 +22,9 @@ cdc-wal2json: build
 	$(MAKE) -C $@
 
 cdc-test-decoding: build
+	$(MAKE) -C $@
+
+cdc-endpos-between-transaction: build
 	$(MAKE) -C $@
 
 follow-wal2json: build
