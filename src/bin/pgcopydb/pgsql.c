@@ -3454,6 +3454,7 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 			}
 
 			/* call the keepaliveFunction callback now, ignore errors */
+			context->cur_record_lsn = walEnd;
 			context->now = client->now;
 
 			(void) (*client->keepaliveFunction)(context);
