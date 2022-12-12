@@ -399,7 +399,7 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 	{
 		++txns.count;
 	}
-	else if (currentTx->count > 0)
+	else if (currentTx->count > 0 && metadata->action != STREAM_ACTION_COMMIT)
 	{
 		/* replace the currentTx content with a single keepalive message */
 		(void) FreeLogicalTransaction(currentTx);
