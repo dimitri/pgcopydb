@@ -401,9 +401,13 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 	}
 	else if (currentTx->count > 0)
 	{
-		LogicalTransactionStatement *stmt = (LogicalTransactionStatement *)
-											calloc(1,
-												   sizeof(LogicalTransactionStatement));
+		/* replace the currentTx content with a single keepalive message */
+		(void) FreeLogicalTransaction(currentTx);
+
+		LogicalTransactionStatement *stmt =
+			(LogicalTransactionStatement *)
+			calloc(1,
+				   sizeof(LogicalTransactionStatement));
 
 		if (stmt == NULL)
 		{
@@ -419,14 +423,6 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 				sizeof(stmt->stmt.keepalive.timestamp));
 
 		(void) streamLogicalTransactionAppendStatement(currentTx, stmt);
-
-		/* replace the currentTx content with a single keepalive message */
-		FreeLogicalTransaction(currentTx);
-		currentTx->first = stmt;
-		currentTx->last = stmt;
-
-		stmt->prev = NULL;
-		stmt->next = NULL;
 
 		++txns.count;
 	}
@@ -764,6 +760,8 @@ FreeLogicalTransaction(LogicalTransaction *tx)
 			}
 		}
 	}
+
+	tx->first = NULL;
 }
 
 
