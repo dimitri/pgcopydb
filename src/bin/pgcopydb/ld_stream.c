@@ -231,9 +231,9 @@ startLogicalStreaming(StreamSpecs *specs)
 			return false;
 		}
 
-		log_info("startLogicalStreaming: %s (%d)",
-				 OutputPluginToString(specs->plugin),
-				 specs->pluginOptions.count);
+		log_debug("startLogicalStreaming: %s (%d)",
+				  OutputPluginToString(specs->plugin),
+				  specs->pluginOptions.count);
 
 		if (!pgsql_start_replication(&stream))
 		{
@@ -565,6 +565,12 @@ streamRotateFile(LogicalStreamContext *context)
 	char wal[MAXPGPATH] = { 0 };
 	char walFileName[MAXPGPATH] = { 0 };
 
+	/* skip LSN 0/0 at the start of streaming */
+	if (context->cur_record_lsn == InvalidXLogRecPtr)
+	{
+		return true;
+	}
+
 	/* compute the WAL filename that would host the current LSN */
 	XLByteToSeg(context->cur_record_lsn, segno, context->WalSegSz);
 	XLogFileName(wal, context->timeline, segno, context->WalSegSz);
@@ -812,6 +818,12 @@ bool
 streamKeepalive(LogicalStreamContext *context)
 {
 	StreamContext *privateContext = (StreamContext *) context->private;
+
+	/* skip LSN 0/0 at the start of streaming */
+	if (context->cur_record_lsn == InvalidXLogRecPtr)
+	{
+		return true;
+	}
 
 	/* we might have to rotate to the next on-disk file */
 	if (!streamRotateFile(context))

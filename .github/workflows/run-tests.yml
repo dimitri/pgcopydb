@@ -26,6 +26,7 @@ jobs:
           - filtering
           - extensions
           - cdc-test-decoding
+          - cdc-endpos-between-transaction
           - cdc-wal2json
           - follow-wal2json
           - follow-9.6

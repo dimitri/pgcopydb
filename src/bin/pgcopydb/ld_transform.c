@@ -330,10 +330,13 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 	int currentTxIndex = 0;
 	LogicalTransaction *currentTx = &(txns.array[currentTxIndex]);
 
+	/* we might need to access to the last message metadata after the loop */
+	LogicalMessageMetadata *metadata = NULL;
+
 	for (int i = 0; i < content.count; i++)
 	{
 		char *message = content.lines[i];
-		LogicalMessageMetadata *metadata = &(content.messages[i]);
+		metadata = &(content.messages[i]);
 
 		log_trace("stream_transform_file[%2d]: %s", i, message);
 
@@ -385,10 +388,42 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 
 	/*
 	 * We might have a last pending transaction with a COMMIT message to be
-	 * found in a a later file.
+	 * found in a a later file. In that case though, the last message read was
+	 * a WAL SWITCH message.
+	 *
+	 * It might happen that --endpos has been set to an LSN found in the middle
+	 * of a transaction, in that case we ignore the transaction and insert a
+	 * KEEPALIVE message with the LSN we have reached.
 	 */
-	if (currentTx->count > 0)
+	if (currentTx->count > 0 && metadata->action == STREAM_ACTION_SWITCH)
 	{
+		++txns.count;
+	}
+	else if (currentTx->count > 0 && metadata->action != STREAM_ACTION_COMMIT)
+	{
+		/* replace the currentTx content with a single keepalive message */
+		(void) FreeLogicalTransaction(currentTx);
+
+		LogicalTransactionStatement *stmt =
+			(LogicalTransactionStatement *)
+			calloc(1,
+				   sizeof(LogicalTransactionStatement));
+
+		if (stmt == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		stmt->action = STREAM_ACTION_KEEPALIVE;
+		stmt->stmt.keepalive.lsn = metadata->lsn;
+
+		strlcpy(stmt->stmt.keepalive.timestamp,
+				metadata->timestamp,
+				sizeof(stmt->stmt.keepalive.timestamp));
+
+		(void) streamLogicalTransactionAppendStatement(currentTx, stmt);
+
 		++txns.count;
 	}
 
@@ -501,7 +536,7 @@ parseMessage(LogicalTransaction *txn,
 		metadata->action != STREAM_ACTION_COMMIT)
 	{
 		stmt = (LogicalTransactionStatement *)
-			   malloc(sizeof(LogicalTransactionStatement));
+			   calloc(1, sizeof(LogicalTransactionStatement));
 
 		if (stmt == NULL)
 		{
@@ -725,6 +760,8 @@ FreeLogicalTransaction(LogicalTransaction *tx)
 			}
 		}
 	}
+
+	tx->first = NULL;
 }
 
 
