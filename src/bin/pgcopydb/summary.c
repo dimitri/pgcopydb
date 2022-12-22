@@ -260,8 +260,8 @@ create_table_index_file(SourceTable *table, char *filename)
 	{
 		SourceIndex *index = indexListEntry->index;
 
-		appendPQExpBuffer(content, "%d\n", index->indexOid);
-		appendPQExpBuffer(content, "%d\n", index->constraintOid);
+		appendPQExpBuffer(content, "%u\n", index->indexOid);
+		appendPQExpBuffer(content, "%u\n", index->constraintOid);
 	}
 
 	/* memory allocation could have failed while building string */
