@@ -2636,7 +2636,7 @@ schema_list_partitions(PGSQL *pgsql, SourceTable *table, uint64_t partSize)
 		"           x as a, "
 		"           coalesce((lead(x, 1) over(order by n)) - 1, max) as b "
 		"      from t, "
-		"           generate_series(min, max, ((max-min+1)/parts)::integer + 1) "
+		"           generate_series(min, max, ((max-min+1)/parts)::bigint + 1) "
 		"           with ordinality as s(x, n) "
 		"  ) "
 		" "
