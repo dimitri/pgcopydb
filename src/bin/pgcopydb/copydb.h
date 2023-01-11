@@ -245,6 +245,7 @@ bool copydb_init_workdir(CopyDataSpec *copySpecs,
 						 char *dir,
 						 bool restart,
 						 bool resume,
+						 bool createWorkDir,
 						 bool auxilliary);
 
 bool copydb_prepare_filepaths(CopyFilePaths *cfPaths,

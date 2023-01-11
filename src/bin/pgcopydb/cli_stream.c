@@ -507,11 +507,13 @@ cli_stream_setup(int argc, char **argv)
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
 	bool auxilliary = false;
+	bool createWorkDir = true;
 
 	if (!copydb_init_workdir(&copySpecs,
 							 NULL,
 							 streamDBoptions.restart,
 							 streamDBoptions.resume,
+							 createWorkDir,
 							 auxilliary))
 	{
 		/* errors have already been logged */
@@ -573,11 +575,13 @@ cli_stream_cleanup(int argc, char **argv)
 	bool resume = true;         /* pretend --resume has been used */
 	bool restart = false;       /* pretend --restart has NOT been used */
 	bool auxilliary = false;
+	bool createWorkDir = false;
 
 	if (!copydb_init_workdir(&copySpecs,
 							 NULL,
 							 restart,
 							 resume,
+							 createWorkDir,
 							 auxilliary))
 	{
 		/* errors have already been logged */
@@ -636,11 +640,13 @@ cli_stream_catchup(int argc, char **argv)
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
 	bool auxilliary = false;
+	bool createWorkDir = false;
 
 	if (!copydb_init_workdir(&copySpecs,
 							 NULL,
 							 streamDBoptions.restart,
 							 streamDBoptions.resume,
+							 createWorkDir,
 							 auxilliary))
 	{
 		/* errors have already been logged */
@@ -746,11 +752,15 @@ cli_stream_apply(int argc, char **argv)
 
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
+	bool auxilliary = false;
+	bool createWorkDir = false;
+
 	if (!copydb_init_workdir(&copySpecs,
 							 NULL,
 							 streamDBoptions.restart,
 							 streamDBoptions.resume,
-							 false))
+							 createWorkDir,
+							 auxilliary))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -826,11 +836,15 @@ stream_start_in_mode(LogicalStreamMode mode)
 
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
+	bool auxilliary = false;
+	bool createWorkDir = false;
+
 	if (!copydb_init_workdir(&copySpecs,
 							 NULL,
 							 streamDBoptions.restart,
 							 streamDBoptions.resume,
-							 false))
+							 createWorkDir,
+							 auxilliary))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

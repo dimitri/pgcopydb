@@ -277,11 +277,13 @@ cli_create_snapshot(int argc, char **argv)
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
 	bool auxilliary = true;
+	bool createWorkDir = true;
 
 	if (!copydb_init_workdir(&copySpecs,
 							 NULL,
 							 createSNoptions.restart,
 							 createSNoptions.resume,
+							 createWorkDir,
 							 auxilliary))
 	{
 		/* errors have already been logged */
@@ -560,11 +562,13 @@ cli_create_slot(int argc, char **argv)
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
 	bool auxilliary = false;
+	bool createWorkDir = false;
 
 	if (!copydb_init_workdir(&copySpecs,
 							 NULL,
 							 createSlotOptions.restart,
 							 createSlotOptions.resume,
+							 createWorkDir,
 							 auxilliary))
 	{
 		/* errors have already been logged */
@@ -619,11 +623,13 @@ cli_drop_slot(int argc, char **argv)
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
 	bool auxilliary = false;
+	bool createWorkDir = false;
 
 	if (!copydb_init_workdir(&copySpecs,
 							 NULL,
 							 createSlotOptions.restart,
 							 createSlotOptions.resume,
+							 createWorkDir,
 							 auxilliary))
 	{
 		/* errors have already been logged */
@@ -878,11 +884,13 @@ cli_create_origin(int argc, char **argv)
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
 	bool auxilliary = false;
+	bool createWorkDir = false;
 
 	if (!copydb_init_workdir(&copySpecs,
 							 NULL,
 							 createOriginOptions.restart,
 							 createOriginOptions.resume,
+							 createWorkDir,
 							 auxilliary))
 	{
 		/* errors have already been logged */
@@ -934,11 +942,13 @@ cli_drop_origin(int argc, char **argv)
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
 	bool auxilliary = false;
+	bool createWorkDir = false;
 
 	if (!copydb_init_workdir(&copySpecs,
 							 NULL,
 							 createOriginOptions.restart,
 							 createOriginOptions.resume,
+							 createWorkDir,
 							 auxilliary))
 	{
 		/* errors have already been logged */

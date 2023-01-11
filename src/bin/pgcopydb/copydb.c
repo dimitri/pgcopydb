@@ -71,6 +71,7 @@ copydb_init_workdir(CopyDataSpec *copySpecs,
 					char *dir,
 					bool restart,
 					bool resume,
+					bool createWorkDir,
 					bool auxilliary)
 {
 	CopyFilePaths *cfPaths = &(copySpecs->cfPaths);
@@ -111,11 +112,11 @@ copydb_init_workdir(CopyDataSpec *copySpecs,
 	}
 
 	/*
-	 * An auxilliary process piggy-backs on the work directory that has been
+	 * Some inspection commands piggy-back on the work directory that has been
 	 * created by the main pgcopydb command, so it expects the work directory
 	 * to have been created already.
 	 */
-	if (auxilliary && !directory_exists(cfPaths->topdir))
+	if (!createWorkDir && !directory_exists(cfPaths->topdir))
 	{
 		log_fatal("Work directory \"%s\" does not exists", cfPaths->topdir);
 		return false;

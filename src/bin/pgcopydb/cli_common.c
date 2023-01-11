@@ -973,12 +973,14 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 		? NULL
 		: copyDBoptions.dir;
 
+	bool createWorkDir = true;
 	bool auxilliary = false;
 
 	if (!copydb_init_workdir(copySpecs,
 							 dir,
 							 copyDBoptions.restart,
 							 copyDBoptions.resume,
+							 createWorkDir,
 							 auxilliary))
 	{
 		/* errors have already been logged */

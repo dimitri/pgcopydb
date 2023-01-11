@@ -1175,11 +1175,13 @@ cli_list_schema(int argc, char **argv)
 	 * process being active.
 	 */
 	bool auxilliary = true;
+	bool createWorkDir = true;
 
 	if (!copydb_init_workdir(&copySpecs,
 							 NULL,
 							 false, /* restart */
 							 true, /* resume */
+							 createWorkDir,
 							 auxilliary))
 	{
 		/* errors have already been logged */
@@ -1279,11 +1281,13 @@ cli_list_progress(int argc, char **argv)
 	 * process being active.
 	 */
 	bool auxilliary = true;
+	bool createWorkDir = false;
 
 	if (!copydb_init_workdir(&copySpecs,
 							 dir,
 							 false, /* restart */
 							 true, /* resume */
+							 createWorkDir,
 							 auxilliary))
 	{
 		/* errors have already been logged */
