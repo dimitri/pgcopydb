@@ -1941,13 +1941,16 @@ pg_copy_send_query(PGSQL *pgsql,
 static void
 pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context)
 {
-	char *sqlstate = PQresultErrorField(res, PG_DIAG_SQLSTATE);
 	char *message = PQerrorMessage(pgsql->connection);
 	char *errorLines[BUFSIZE] = { 0 };
 	int lineCount = splitLines(message, errorLines, BUFSIZE);
 	int lineNumber = 0;
 
-	strlcpy(pgsql->sqlstate, sqlstate, sizeof(pgsql->sqlstate));
+	if (res != NULL)
+	{
+		char *sqlstate = PQresultErrorField(res, PG_DIAG_SQLSTATE);
+		strlcpy(pgsql->sqlstate, sqlstate, sizeof(pgsql->sqlstate));
+	}
 
 	char *prefix =
 		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
@@ -1958,9 +1961,9 @@ pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context)
 	 */
 	for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
 	{
-		if (lineNumber == 0)
+		if (lineNumber == 0 && res != NULL)
 		{
-			log_error("%s [%s] %s", prefix, sqlstate, errorLines[lineNumber]);
+			log_error("%s [%s] %s", prefix, pgsql->sqlstate, errorLines[lineNumber]);
 		}
 		else
 		{
