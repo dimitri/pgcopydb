@@ -1,3 +1,4 @@
+{"action":"K","lsn":"0/22E1E18","timestamp":"2022-11-24 17:42:06.381610+0000"}
 {"action":"B","xid":"489","lsn":"0/22E1E18","timestamp":"2022-11-24 17:42:06.382610+0000","message":"BEGIN 489"}
 {"action":"C","xid":"489","lsn":"0/22E4840","timestamp":"2022-11-24 17:42:06.382905+0000","message":"COMMIT 489"}
 {"action":"B","xid":"490","lsn":"0/22E48B0","timestamp":"2022-11-24 17:42:06.383183+0000","message":"BEGIN 490"}
