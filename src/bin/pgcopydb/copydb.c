@@ -709,14 +709,8 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 		.cfPaths = &(specs->cfPaths),
 		.pgPaths = &(specs->pgPaths),
 
-		.source_pguri = { 0 },
-		.target_pguri = { 0 },
-		.sourceSnapshot = {
-			.pgsql = { 0 },
-			.pguri = { 0 },
-			.connectionType = specs->sourceSnapshot.connectionType,
-			.snapshot = { 0 }
-		},
+		.source_pguri = &(specs->source_pguri),
+		.target_pguri = &(specs->target_pguri),
 
 		.section = specs->section,
 		.resume = specs->resume,
@@ -730,17 +724,6 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 
 		.indexSemaphore = &(specs->indexSemaphore)
 	};
-
-	/* initialize the connection strings */
-	strlcpy(tmpTableSpecs.source_pguri, specs->source_pguri, MAXCONNINFO);
-	strlcpy(tmpTableSpecs.target_pguri, specs->target_pguri, MAXCONNINFO);
-
-	/* initialize the sourceSnapshot buffers */
-	if (!copydb_copy_snapshot(specs, &(tmpTableSpecs.sourceSnapshot)))
-	{
-		/* errors have already been logged */
-		return false;
-	}
 
 	/* copy the structure as a whole memory area to the target place */
 	*tableSpecs = tmpTableSpecs;
@@ -910,8 +893,8 @@ copydb_fatal_exit()
 bool
 copydb_wait_for_subprocesses()
 {
-	bool allReturnCodeAreZero = true;
 
+	bool allReturnCodeAreZero = true;
 	log_debug("Waiting for sub-processes to finish");
 
 	for (;;)
