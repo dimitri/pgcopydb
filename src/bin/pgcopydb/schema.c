@@ -666,7 +666,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		"               from pg_index x"
 		"               join pg_class i on i.oid = x.indexrelid"
-		"               join pg_attribute a on a.attrelid = c.oid and attnum = 1"
+		"               join pg_attribute a "
+		"                 on a.attrelid = c.oid and attnum = indkey[0]"
 
 		"              where x.indrelid = c.oid"
 		"                and (indisprimary or indisunique)"
@@ -727,7 +728,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		"               from pg_index x"
 		"               join pg_class i on i.oid = x.indexrelid"
-		"               join pg_attribute a on a.attrelid = c.oid and attnum = 1"
+		"               join pg_attribute a "
+		"                 on a.attrelid = c.oid and attnum = indkey[0]"
 
 		"              where x.indrelid = c.oid"
 		"                and (indisprimary or indisunique)"
@@ -794,7 +796,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		"               from pg_index x"
 		"               join pg_class i on i.oid = x.indexrelid"
-		"               join pg_attribute a on a.attrelid = c.oid and attnum = 1"
+		"               join pg_attribute a "
+		"                 on a.attrelid = c.oid and attnum = indkey[0]"
 
 		"              where x.indrelid = c.oid"
 		"                and (indisprimary or indisunique)"
@@ -857,7 +860,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		"               from pg_index x"
 		"               join pg_class i on i.oid = x.indexrelid"
-		"               join pg_attribute a on a.attrelid = c.oid and attnum = 1"
+		"               join pg_attribute a "
+		"                 on a.attrelid = c.oid and attnum = indkey[0]"
 
 		"              where x.indrelid = c.oid"
 		"                and (indisprimary or indisunique)"
@@ -922,7 +926,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		"               from pg_index x"
 		"               join pg_class i on i.oid = x.indexrelid"
-		"               join pg_attribute a on a.attrelid = c.oid and attnum = 1"
+		"               join pg_attribute a "
+		"                 on a.attrelid = c.oid and attnum = indkey[0]"
 
 		"              where x.indrelid = c.oid"
 		"                and (indisprimary or indisunique)"
