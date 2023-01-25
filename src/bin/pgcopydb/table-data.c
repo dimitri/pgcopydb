@@ -381,9 +381,6 @@ copydb_process_table_data_worker(CopyDataSpec *specs)
 		/* initialize our TableDataProcess entry now */
 		CopyTableDataSpec *tableSpecs = &(tableSpecsArray->array[tableIndex]);
 
-		/* reuse the same connection to the source database */
-		tableSpecs->sourceSnapshot = specs->sourceSnapshot;
-
 		if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
 		{
 			int signal = get_current_signal(SIGTERM);
@@ -803,7 +800,7 @@ copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 	}
 
 	/* we want to set transaction snapshot to the main one on the source */
-	PGSQL *src = &(tableSpecs->sourceSnapshot.pgsql);
+	PGSQL *src = &(specs->sourceSnapshot.pgsql);
 	PGSQL dst = { 0 };
 
 	CopyTableSummary *summary = tableSpecs->summary;

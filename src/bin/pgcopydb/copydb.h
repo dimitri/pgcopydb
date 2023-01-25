@@ -90,10 +90,8 @@ typedef struct CopyTableDataSpec
 	CopyFilePaths *cfPaths;
 	PostgresPaths *pgPaths;
 
-	char source_pguri[MAXCONNINFO];
-	char target_pguri[MAXCONNINFO];
-
-	TransactionSnapshot sourceSnapshot;
+	char *source_pguri;
+	char *target_pguri;
 
 	CopyDataSection section;
 	bool resume;
