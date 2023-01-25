@@ -1,3 +1,4 @@
+{"action":"K","lsn":"0/22E1EB0","timestamp":"2022-11-23 13:43:44.314034+0000"}
 {"action":"B","xid":"489","lsn":"0/22E1EB0","timestamp":"2022-11-23 13:43:44.329082+0000","message":{"action":"B","xid":489}}
 {"action":"C","xid":"489","lsn":"0/22E48D8","timestamp":"2022-11-23 13:43:44.329356+0000","message":{"action":"C","xid":489}}
 {"action":"B","xid":"490","lsn":"0/22E4948","timestamp":"2022-11-23 13:43:44.329575+0000","message":{"action":"B","xid":490}}
