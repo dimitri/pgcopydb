@@ -2029,11 +2029,15 @@ stream_read_context(CDCPaths *paths,
 	 */
 	ConnectionRetryPolicy retryPolicy = { 0 };
 
+	int maxT = 10;              /* 10s */
+	int maxSleepTime = 1000;    /* 1s */
+	int baseSleepTime = 100;    /* 100ms */
+
 	(void) pgsql_set_retry_policy(&retryPolicy,
-								  CATCHINGUP_SLEEP_MS,
+								  maxT,
 								  -1, /* unbounded number of attempts */
-								  CATCHINGUP_SLEEP_MS / 1000,
-								  CATCHINGUP_SLEEP_MS / 1000);
+								  maxSleepTime,
+								  baseSleepTime);
 
 	while (!pgsql_retry_policy_expired(&retryPolicy))
 	{
