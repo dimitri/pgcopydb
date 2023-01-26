@@ -893,7 +893,6 @@ copydb_fatal_exit()
 bool
 copydb_wait_for_subprocesses()
 {
-
 	bool allReturnCodeAreZero = true;
 	log_debug("Waiting for sub-processes to finish");
 

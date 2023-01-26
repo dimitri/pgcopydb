@@ -187,7 +187,8 @@ copydb_target_drop_tables(CopyDataSpec *specs)
 
 	SourceTableArray *tableArray = &(specs->sourceTableArray);
 
-	if (tableArray->count == 0) {
+	if (tableArray->count == 0)
+	{
 		log_info("No tables to migrate, skipping drop tables on the target database");
 		return true;
 	}
@@ -196,14 +197,12 @@ copydb_target_drop_tables(CopyDataSpec *specs)
 
 	appendPQExpBuffer(query, "DROP TABLE IF EXISTS");
 
-
-
 	for (int tableIndex = 0; tableIndex < tableArray->count; tableIndex++)
 	{
 		SourceTable *source = &(tableArray->array[tableIndex]);
 
 		appendPQExpBuffer(query, "%s \"%s\".\"%s\"",
-						  tableIndex == 0 ? " " : ", ",
+						  tableIndex == 0 ? " " : ",",
 						  source->nspname,
 						  source->relname);
 	}
