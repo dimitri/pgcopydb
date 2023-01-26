@@ -709,8 +709,8 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 		.cfPaths = &(specs->cfPaths),
 		.pgPaths = &(specs->pgPaths),
 
-		.source_pguri = &(specs->source_pguri),
-		.target_pguri = &(specs->target_pguri),
+		.source_pguri = (char *) &(specs->source_pguri),
+		.target_pguri = (char *) &(specs->target_pguri),
 
 		.section = specs->section,
 		.resume = specs->resume,
