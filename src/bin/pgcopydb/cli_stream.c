@@ -64,7 +64,6 @@ static CommandLine stream_cleanup_command =
 		"",
 		"  --source         Postgres URI to the source database\n"
 		"  --target         Postgres URI to the target database\n"
-		"  --dir            Work directory to use\n"
 		"  --restart        Allow restarting when temp files exist already\n"
 		"  --resume         Allow resuming operations after a failure\n"
 		"  --not-consistent Allow taking a new snapshot on the source database\n"
@@ -510,7 +509,7 @@ cli_stream_setup(int argc, char **argv)
 	bool createWorkDir = true;
 
 	if (!copydb_init_workdir(&copySpecs,
-							 NULL,
+							 streamDBoptions.dir,
 							 streamDBoptions.restart,
 							 streamDBoptions.resume,
 							 createWorkDir,
@@ -574,19 +573,6 @@ cli_stream_cleanup(int argc, char **argv)
 
 	bool resume = true;         /* pretend --resume has been used */
 	bool restart = false;       /* pretend --restart has NOT been used */
-	bool auxilliary = false;
-	bool createWorkDir = false;
-
-	if (!copydb_init_workdir(&copySpecs,
-							 NULL,
-							 restart,
-							 resume,
-							 createWorkDir,
-							 auxilliary))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
 
 	RestoreOptions restoreOptions = { 0 };
 
@@ -643,7 +629,7 @@ cli_stream_catchup(int argc, char **argv)
 	bool createWorkDir = false;
 
 	if (!copydb_init_workdir(&copySpecs,
-							 NULL,
+							 streamDBoptions.dir,
 							 streamDBoptions.restart,
 							 streamDBoptions.resume,
 							 createWorkDir,
@@ -756,7 +742,7 @@ cli_stream_apply(int argc, char **argv)
 	bool createWorkDir = false;
 
 	if (!copydb_init_workdir(&copySpecs,
-							 NULL,
+							 streamDBoptions.dir,
 							 streamDBoptions.restart,
 							 streamDBoptions.resume,
 							 createWorkDir,
@@ -840,7 +826,7 @@ stream_start_in_mode(LogicalStreamMode mode)
 	bool createWorkDir = false;
 
 	if (!copydb_init_workdir(&copySpecs,
-							 NULL,
+							 streamDBoptions.dir,
 							 streamDBoptions.restart,
 							 streamDBoptions.resume,
 							 createWorkDir,
