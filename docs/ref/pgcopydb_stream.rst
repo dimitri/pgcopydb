@@ -135,7 +135,6 @@ step.
 
      --source         Postgres URI to the source database
      --target         Postgres URI to the target database
-     --dir            Work directory to use
      --restart        Allow restarting when temp files exist already
      --resume         Allow resuming operations after a failure
      --not-consistent Allow taking a new snapshot on the source database
@@ -217,7 +216,6 @@ plugin ``wal2json``.
    usage: pgcopydb create slot
 
      --source         Postgres URI to the source database
-     --dir            Work directory to use
      --snapshot       Use snapshot obtained with pg_export_snapshot
      --plugin         Output plugin to use (test_decoding, wal2json)
      --slot-name      Use this Postgres replication slot name
@@ -239,7 +237,6 @@ The starting LSN position ``--startpos`` is required.
    usage: pgcopydb stream create origin
 
      --target         Postgres URI to the target database
-     --dir            Work directory to use
      --origin         Use this Postgres origin name
      --start-pos      LSN position from where to start applying changes
 
@@ -260,7 +257,6 @@ name (that defaults to ``pgcopydb``).
    usage: pgcopydb stream drop slot
 
      --source         Postgres URI to the source database
-     --dir            Work directory to use
      --slot-name      Use this Postgres replication slot name
 
 .. _pgcopydb_stream_drop_origin:
@@ -279,7 +275,6 @@ given name (that defaults to ``pgcopydb``).
    usage: pgcopydb stream drop origin
 
      --target         Postgres URI to the target database
-     --dir            Work directory to use
      --origin         Use this Postgres origin name
 
 

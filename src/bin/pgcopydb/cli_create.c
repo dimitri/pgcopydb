@@ -49,7 +49,6 @@ static CommandLine create_repl_slot_command =
 		"Create a replication slot in the source database",
 		" --source ... ",
 		"  --source         Postgres URI to the source database\n"
-		"  --dir            Work directory to use\n"
 		"  --snapshot       Use snapshot obtained with pg_export_snapshot\n"
 		"  --plugin         Output plugin to use (test_decoding, wal2json)\n" \
 		"  --slot-name      Use this Postgres replication slot name\n",
@@ -62,7 +61,6 @@ static CommandLine create_origin_command =
 		"Create a replication origin in the target database",
 		" --target ... ",
 		"  --target         Postgres URI to the target database\n"
-		"  --dir            Work directory to use\n"
 		"  --origin         Use this Postgres origin name\n"
 		"  --start-pos      LSN position from where to start applying changes\n",
 		cli_create_origin_getopts,
@@ -86,7 +84,6 @@ static CommandLine drop_repl_slot_command =
 		"Drop a replication slot in the source database",
 		" --source ... ",
 		"  --source         Postgres URI to the source database\n"
-		"  --dir            Work directory to use\n"
 		"  --slot-name      Use this Postgres replication slot name\n",
 		cli_create_slot_getopts,
 		cli_drop_slot);
@@ -97,7 +94,6 @@ static CommandLine drop_origin_command =
 		"Drop a replication origin in the target database",
 		" --target ... ",
 		"  --target         Postgres URI to the target database\n"
-		"  --dir            Work directory to use\n"
 		"  --origin         Use this Postgres origin name\n",
 		cli_create_origin_getopts,
 		cli_drop_origin);
@@ -280,7 +276,7 @@ cli_create_snapshot(int argc, char **argv)
 	bool createWorkDir = true;
 
 	if (!copydb_init_workdir(&copySpecs,
-							 NULL,
+							 createSNoptions.dir,
 							 createSNoptions.restart,
 							 createSNoptions.resume,
 							 createWorkDir,
@@ -561,20 +557,6 @@ cli_create_slot(int argc, char **argv)
 
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
-	bool auxilliary = false;
-	bool createWorkDir = false;
-
-	if (!copydb_init_workdir(&copySpecs,
-							 NULL,
-							 createSlotOptions.restart,
-							 createSlotOptions.resume,
-							 createWorkDir,
-							 auxilliary))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
 	RestoreOptions restoreOptions = { 0 };
 
 	if (!copydb_init_specs(&copySpecs,
@@ -619,22 +601,6 @@ static void
 cli_drop_slot(int argc, char **argv)
 {
 	CopyDataSpec copySpecs = { 0 };
-
-	(void) find_pg_commands(&(copySpecs.pgPaths));
-
-	bool auxilliary = false;
-	bool createWorkDir = false;
-
-	if (!copydb_init_workdir(&copySpecs,
-							 NULL,
-							 createSlotOptions.restart,
-							 createSlotOptions.resume,
-							 createWorkDir,
-							 auxilliary))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
 
 	RestoreOptions restoreOptions = { 0 };
 
@@ -883,20 +849,6 @@ cli_create_origin(int argc, char **argv)
 
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
-	bool auxilliary = false;
-	bool createWorkDir = false;
-
-	if (!copydb_init_workdir(&copySpecs,
-							 NULL,
-							 createOriginOptions.restart,
-							 createOriginOptions.resume,
-							 createWorkDir,
-							 auxilliary))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
 	RestoreOptions restoreOptions = { 0 };
 
 	if (!copydb_init_specs(&copySpecs,
@@ -940,20 +892,6 @@ cli_drop_origin(int argc, char **argv)
 	CopyDataSpec copySpecs = { 0 };
 
 	(void) find_pg_commands(&(copySpecs.pgPaths));
-
-	bool auxilliary = false;
-	bool createWorkDir = false;
-
-	if (!copydb_init_workdir(&copySpecs,
-							 NULL,
-							 createOriginOptions.restart,
-							 createOriginOptions.resume,
-							 createWorkDir,
-							 auxilliary))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
 
 	RestoreOptions restoreOptions = { 0 };
 

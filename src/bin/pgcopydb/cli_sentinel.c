@@ -335,20 +335,6 @@ cli_sentinel_create(int argc, char **argv)
 
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
-	bool auxilliary = false;
-	bool createWorkDir = false;
-
-	if (!copydb_init_workdir(&copySpecs,
-							 NULL,
-							 sentinelDBoptions.restart,
-							 sentinelDBoptions.resume,
-							 createWorkDir,
-							 auxilliary))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
 	RestoreOptions restoreOptions = { 0 };
 
 	if (!copydb_init_specs(&copySpecs,
