@@ -1,0 +1,8 @@
+       OID |                 Name |          Object name
+-----------+----------------------+---------------------
+     12329 |           en_US.utf8 |    database postgres
+     16418 |                mycol | column f1 of table mycoltab
+     16418 |                mycol | column f1 of table mycoltab
+     16418 |                mycol | column f1 of table mycoltab
+     16418 |                mycol | column f1 of table mycoltab
+     16418 |                mycol | column f1 of table mycoltab

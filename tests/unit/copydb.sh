@@ -27,8 +27,6 @@ create collation if not exists mycol
  );
 EOF
 
-pgcopydb list collations --source "${PGCOPYDB_SOURCE_PGURI}"
-
 # pgcopydb fork uses the environment variables
 pgcopydb fork --skip-collations --debug
 
@@ -48,4 +46,17 @@ do
     psql -d "${PGCOPYDB_TARGET_PGURI}" ${pgopts} --file ./sql/$t.sql &> $r
     test -f $e || cat $r
     diff $e $r || exit 1
+done
+
+
+for f in ./script/*.sh
+do
+    t=`basename $f .sh`
+    r=/tmp/results/${t}.out
+    e=./expected/${t}.out
+    bash $f > $r
+    test -f $e || cat $r
+    # exclude logs, whitespaces and blank lines
+    DIFFOPTS='-B -w -I INFO -I WARN'
+    diff ${DIFFOPTS} $e $r || exit 1
 done

@@ -2628,22 +2628,31 @@ schema_list_partitions(PGSQL *pgsql, SourceTable *table, uint64_t partSize)
 
 	char *sqlTemplate =
 		" with "
-		" t(min, max, parts) as "
+		" key_bounds (min, max) as "
 		" ( "
-		"   select min(\"%s\"), max(\"%s\"), "
-		"          ceil(pg_table_size('%s.%s')::float / $1) "
-		"     from \"%s\".\"%s\""
-		"  ), "
-		"  ranges(n, parts, a, b) as "
-		"  ( "
-		"    select n, "
-		"           parts, "
-		"           x as a, "
-		"           coalesce((lead(x, 1) over(order by n)) - 1, max) as b "
-		"      from t, "
-		"           generate_series(min, max, ((max-min+1)/parts)::bigint + 1) "
-		"           with ordinality as s(x, n) "
-		"  ) "
+		"   select min(\"%s\"), max(\"%s\") "
+		"     from \"%s\".\"%s\" "
+		" ), "
+		" t (parts) as "
+		" ( "
+		"   select ceil(bytes::float / $1) as parts "
+		"     from pgcopydb.table_size "
+		"     where oid = $2 "
+		"	union all "
+		"	select 1 as parts "
+		"	order by parts desc "
+		"	limit 1 "
+		" ), "
+		" ranges(n, parts, a, b) as "
+		" ( "
+		"   select n, "
+		"          parts, "
+		"          x as a, "
+		"          coalesce((lead(x, 1) over(order by n)) - 1, max) as b "
+		"     from key_bounds, t, "
+		"          generate_series(min, max, ((max-min+1)/parts)::bigint + 1) "
+		"          with ordinality as s(x, n) "
+		" ) "
 		" "
 		"  select n, parts, a, b, b-a+1 as count "
 		"    from ranges "
@@ -2656,11 +2665,12 @@ schema_list_partitions(PGSQL *pgsql, SourceTable *table, uint64_t partSize)
 			table->nspname, table->relname,
 			table->nspname, table->relname);
 
-	int paramCount = 1;
-	Oid paramTypes[1] = { INT8OID };
-	const char *paramValues[1];
+	int paramCount = 2;
+	Oid paramTypes[2] = { INT8OID, OIDOID };
+	const char *paramValues[2];
 
 	paramValues[0] = intToString(partSize).strValue;
+	paramValues[1] = intToString(table->oid).strValue;
 
 	if (!pgsql_execute_with_params(pgsql, sql,
 								   paramCount, paramTypes, paramValues,
