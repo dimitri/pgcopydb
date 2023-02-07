@@ -6,6 +6,8 @@
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <sys/select.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -30,6 +32,11 @@
 #include "signals.h"
 #include "string_utils.h"
 #include "summary.h"
+
+
+static bool stream_transform_message(char *message,
+									 LogicalTransaction *currentTx,
+									 bool *commit);
 
 
 /*
@@ -254,6 +261,225 @@ stream_transform_send_stop(Queue *queue)
 	{
 		/* errors have already been logged */
 		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * stream_transform_stream transforms a JSON formatted input stream (read line
+ * by line) as received from the wal2json logical decoding plugin into an SQL
+ * stream ready for applying to the target database.
+ */
+bool
+stream_transform_stream(FILE *in, FILE *out)
+{
+	log_notice("Transforming a JSON input stream into an SQL output stream");
+
+	/* count lines and transactions */
+	uint64_t lineno = 0;
+	uint64_t currentTxIndex = 0;
+
+	LogicalTransaction emptyTx = { 0 };
+	LogicalTransaction currentTx = { 0 };
+
+	int countFdsReadyToRead, nfds; /* see man select(2) */
+	fd_set readFileDescriptorSet;
+
+	int fd = fileno(in);
+	nfds = fd + 1;
+
+	bool doneReading = false;
+
+	while (!doneReading)
+	{
+		struct timeval timeout = { 0, 100 * 1000 }; /* 100 ms */
+
+		/*
+		 * When asked_to_stop || asked_to_stop_fast still continue reading
+		 * through EOF on the input stream, then quit normally.
+		 */
+		if (asked_to_quit)
+		{
+			return false;
+		}
+
+		FD_ZERO(&readFileDescriptorSet);
+		FD_SET(fd, &readFileDescriptorSet);
+
+		countFdsReadyToRead =
+			select(nfds, &readFileDescriptorSet, NULL, NULL, &timeout);
+
+		if (countFdsReadyToRead == -1)
+		{
+			if (errno == EINTR || errno == EAGAIN)
+			{
+				continue;
+			}
+			else
+			{
+				log_error("Failed to select on file descriptor %d: %m", fd);
+				return false;
+			}
+		}
+
+		if (countFdsReadyToRead == 0)
+		{
+			continue;
+		}
+
+		/*
+		 * data is expected to be written one line at a time, if any data is
+		 * available per select(2) call, then we should be able to read an
+		 * entire line now.
+		 */
+		if (FD_ISSET(fd, &readFileDescriptorSet))
+		{
+			log_debug("Transform process reading from input stream %d", fd);
+
+			/*
+			 * Allocate a 128 MB string to receive data from the input stream.
+			 *
+			 * TODO: That's a large allocation but should allow us to accept
+			 * logical decoding traffic. The general case would be to loop over
+			 * memory chunks and then split and re-join chunks into JSON lines,
+			 * or use a streaming JSON parsing API.
+			 */
+			size_t s = 128 * 1024 * 1024;
+			char *buf = calloc(s + 1, sizeof(char));
+			size_t bytes = read(fd, buf, s);
+
+			if (bytes == -1)
+			{
+				log_error("Failed to read from input stream: %m");
+				free(buf);
+				return false;
+			}
+			else if (bytes == 0)
+			{
+				free(buf);
+				doneReading = true;
+				continue;
+			}
+			else if (bytes == s)
+			{
+				char bytesPretty[BUFSIZE] = { 0 };
+
+				(void) pretty_print_bytes(bytesPretty, BUFSIZE, bytes);
+
+				log_error("Failed to read from input stream, message is larger "
+						  "than pgcopydb limit: %s",
+						  bytesPretty);
+				return false;
+			}
+
+			log_debug("stream_transform_stream read %lld bytes from input",
+					  (long long) bytes);
+
+			char *lines[BUFSIZE] = { 0 };
+			int lineCount = splitLines(buf, lines, BUFSIZE);
+
+			log_debug("stream_transform_stream read %d lines", lineCount);
+
+			for (int i = 0; i < lineCount; i++)
+			{
+				char *message = lines[i];
+
+				/* we count stream input lines as if reading from a file */
+				++lineno;
+
+				log_debug("stream_transform_stream[%d/%lld]: %s",
+						  i, (long long) lineno, message);
+
+				bool commit = false;
+
+				if (!stream_transform_message(message, &currentTx, &commit))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+
+				/*
+				 * Is it time to close the current transaction and prepare a new
+				 * one?
+				 */
+				if (commit)
+				{
+					log_debug("Transforming transaction xid %d with %d statements",
+							  currentTx.xid,
+							  currentTx.count);
+
+					/* now write the transaction out */
+					if (!stream_write_transaction(out, &currentTx))
+					{
+						/* errors have already been logged */
+						return false;
+					}
+
+					(void) FreeLogicalTransaction(&currentTx);
+
+					/* then prepare a new one, reusing the same memory area */
+					currentTx = emptyTx;
+					++currentTxIndex;
+				}
+			}
+
+			free(buf);
+		}
+
+		doneReading = feof(in) != 0;
+	}
+
+	log_notice("Transformed %lld messages and %lld transactions",
+			   (long long) lineno,
+			   (long long) currentTxIndex + 1);
+
+	return true;
+}
+
+
+/*
+ * stream_transform_message transforms a single JSON message from our streaming
+ * output into a SQL statement, and appends it to the given opened transaction.
+ */
+static bool
+stream_transform_message(char *message,
+						 LogicalTransaction *currentTx,
+						 bool *commit)
+{
+	LogicalMessageMetadata metadata = { 0 };
+
+	log_debug("stream_transform_stream: %s", message);
+
+	JSON_Value *json = json_parse_string(message);
+
+	if (!parseMessageMetadata(&metadata, message, json, false))
+	{
+		/* errors have already been logged */
+		json_value_free(json);
+		return false;
+	}
+
+	if (!parseMessage(currentTx, &metadata, message, json))
+	{
+		log_error("Failed to parse JSON message: %s", message);
+		json_value_free(json);
+		return false;
+	}
+
+	json_value_free(json);
+
+	log_trace("stream_transform_stream: %c %3d %X/%X: %3d %X/%X",
+			  metadata.action,
+			  metadata.xid,
+			  LSN_FORMAT_ARGS(metadata.lsn),
+			  currentTx->xid,
+			  LSN_FORMAT_ARGS(currentTx->beginLSN));
+
+	if (metadata.action == STREAM_ACTION_COMMIT)
+	{
+		*commit = true;
 	}
 
 	return true;
@@ -952,6 +1178,13 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 	{
 		if (!stream_write_commit(out, txn))
 		{
+			return false;
+		}
+
+		/* flush out stream at transaction boundaries */
+		if (fflush(out) != 0)
+		{
+			log_error("Failed to flush stream output: %m");
 			return false;
 		}
 	}

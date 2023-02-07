@@ -44,6 +44,9 @@ typedef struct CopyDBOptions
 	char snapshot[BUFSIZE];
 	char origin[BUFSIZE];
 
+	bool stdin;
+	bool stdout;
+
 	bool follow;
 	bool createSlot;
 	bool currentpos;

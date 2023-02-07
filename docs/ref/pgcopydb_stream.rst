@@ -39,6 +39,7 @@ This command prefixes the following sub-commands:
     cleanup    cleanup source and target systems for logical decoding
     prefetch   Stream JSON changes from the source database and transform them to SQL
     catchup    Apply prefetched changes from SQL files to the target database
+    replay     Replay changes from the source to the target database, live
   + create     Create resources needed for pgcopydb
   + drop       Drop resources needed for pgcopydb
   + sentinel   Maintain a sentinel table on the source database
@@ -196,8 +197,42 @@ applies changes from the SQL files that have been prepared with the
      --resume         Allow resuming operations after a failure
      --not-consistent Allow taking a new snapshot on the source database
      --slot-name      Stream changes recorded by this slot
-     --endpos         LSN position where to stop receiving changes  --origin         Name of the Postgres replication origin
+     --endpos         LSN position where to stop receiving changes
+	 --origin         Name of the Postgres replication origin
 
+.. _pgcopydb_stream_replay:
+
+pgcopydb stream replay
+----------------------
+
+pgcopydb stream replay - Replay changes from the source to the target database, live
+
+The command ``pgcopydb stream replay`` connects to the source database and
+streams changes using the logical decoding protocol, and internally streams
+those changes to a transform process and then a replay process, which
+connects to the target database and applies SQL changes.
+
+::
+
+   pgcopydb stream replay: Replay changes from the source to the target database, live
+   usage: pgcopydb stream replay
+
+     --source         Postgres URI to the source database
+     --target         Postgres URI to the target database
+     --dir            Work directory to use
+     --restart        Allow restarting when temp files exist already
+     --resume         Allow resuming operations after a failure
+     --not-consistent Allow taking a new snapshot on the source database
+     --slot-name      Stream changes recorded by this slot
+     --endpos         LSN position where to stop receiving changes
+     --origin         Name of the Postgres replication origin
+
+
+This command is equivalent to running the following script::
+
+  pgcopydb stream receive --to-stdout
+  | pgcopydb stream transform - -
+  | pgcopydb stream apply -
 
 .. _pgcopydb_stream_create_slot:
 
@@ -411,6 +446,7 @@ as their origin WAL filename (with the ``.json`` extension).
 
      --source         Postgres URI to the source database
      --dir            Work directory to use
+     --to-stdout      Stream logical decoding messages to stdout
      --restart        Allow restarting when temp files exist already
      --resume         Allow resuming operations after a failure
      --not-consistent Allow taking a new snapshot on the source database
@@ -440,6 +476,10 @@ per line.
      --resume         Allow resuming operations after a failure
      --not-consistent Allow taking a new snapshot on the source database
 
+The command supports using ``-`` as the filename for either the JSON input
+or the SQL output, or both. In that case reading from standard input and/or
+writing to standard output is implemented, in a streaming fashion. A classic
+use case is to use Unix Pipes, see :ref:`pgcopydb_stream_replay` too.
 
 pgcopydb stream apply
 ---------------------
@@ -465,6 +505,8 @@ __ https://www.postgresql.org/docs/current/replication-origins.html
      --not-consistent Allow taking a new snapshot on the source database
      --origin         Name of the Postgres replication origin
 
+This command supports using ``-`` as the filename to read from, and in that
+case reads from the standard input in a streaming fashion instead.
 
 Options
 -------
