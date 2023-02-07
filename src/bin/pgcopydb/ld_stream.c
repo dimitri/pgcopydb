@@ -468,7 +468,7 @@ streamWrite(LogicalStreamContext *context)
 				  "to file \"%s\": %m",
 				  metadata->action,
 				  LSN_FORMAT_ARGS(metadata->lsn),
-				  privateContext->walFileName);
+				  privateContext->partialFileName);
 		return false;
 	}
 
@@ -489,7 +489,7 @@ streamWrite(LogicalStreamContext *context)
 		{
 			log_error("Failed to write %ld bytes to file \"%s\": %m",
 					  bytes_left,
-					  privateContext->walFileName);
+					  privateContext->partialFileName);
 			return false;
 		}
 
@@ -501,14 +501,14 @@ streamWrite(LogicalStreamContext *context)
 	if (fwrite("}\n", sizeof(char), 2, privateContext->jsonFile) != 2)
 	{
 		log_error("Failed to write 2 bytes to file \"%s\": %m",
-				  privateContext->walFileName);
+				  privateContext->partialFileName);
 
 		if (privateContext->jsonFile != NULL)
 		{
 			if (fclose(privateContext->jsonFile) != 0)
 			{
 				log_error("Failed to close file \"%s\": %m",
-						  privateContext->walFileName);
+						  privateContext->partialFileName);
 			}
 
 			/* reset the jsonFile FILE * pointer to NULL, it's closed now */
@@ -564,6 +564,7 @@ streamRotateFile(LogicalStreamContext *context)
 	XLogSegNo segno;
 	char wal[MAXPGPATH] = { 0 };
 	char walFileName[MAXPGPATH] = { 0 };
+	char partialFileName[MAXPGPATH] = { 0 };
 
 	/* skip LSN 0/0 at the start of streaming */
 	if (context->cur_record_lsn == InvalidXLogRecPtr)
@@ -579,6 +580,10 @@ streamRotateFile(LogicalStreamContext *context)
 			privateContext->paths.dir,
 			wal);
 
+	sformat(partialFileName, sizeof(partialFileName), "%s/%s.json.partial",
+			privateContext->paths.dir,
+			wal);
+
 	/* in most cases, the file name is still the same */
 	if (strcmp(privateContext->walFileName, walFileName) == 0)
 	{
@@ -586,7 +591,7 @@ streamRotateFile(LogicalStreamContext *context)
 	}
 
 	/* if we had a WAL file opened, close it now */
-	if (!IS_EMPTY_STRING_BUFFER(privateContext->walFileName) &&
+	if (!IS_EMPTY_STRING_BUFFER(privateContext->partialFileName) &&
 		privateContext->jsonFile != NULL)
 	{
 		bool time_to_abort = false;
@@ -601,7 +606,7 @@ streamRotateFile(LogicalStreamContext *context)
 
 		log_debug("Inserted action SWITCH for lsn %X/%X in \"%s\"",
 				  LSN_FORMAT_ARGS(context->cur_record_lsn),
-				  privateContext->walFileName);
+				  privateContext->partialFileName);
 
 		if (!streamCloseFile(context, time_to_abort))
 		{
@@ -610,8 +615,9 @@ streamRotateFile(LogicalStreamContext *context)
 		}
 	}
 
-	log_info("Now streaming changes to \"%s\"", walFileName);
+	log_info("Now streaming changes to \"%s\"", partialFileName);
 	strlcpy(privateContext->walFileName, walFileName, MAXPGPATH);
+	strlcpy(privateContext->partialFileName, partialFileName, MAXPGPATH);
 
 	/* when dealing with a new JSON name, also prepare the SQL name */
 	sformat(privateContext->sqlFileName, sizeof(privateContext->sqlFileName),
@@ -625,16 +631,39 @@ streamRotateFile(LogicalStreamContext *context)
 	/*
 	 * When the target file already exists, open it in append mode.
 	 */
-	int flags = file_exists(walFileName) ? FOPEN_FLAGS_A : FOPEN_FLAGS_W;
+	if (file_exists(walFileName))
+	{
+		if (!unlink_file(partialFileName))
+		{
+			log_error("Failed to unlink stale partial file \"%s\", "
+					  "see above for details",
+					  partialFileName);
+			return false;
+		}
 
-	privateContext->jsonFile =
-		fopen_with_umask(walFileName, "ab", flags, 0644);
+		if (!duplicate_file(walFileName, partialFileName))
+		{
+			log_error("Failed to duplicate pre-existing file \"%s\" into "
+					  "current partial file \"%s\", see above for details",
+					  walFileName,
+					  partialFileName);
+			return false;
+		}
+
+		privateContext->jsonFile =
+			fopen_with_umask(partialFileName, "ab", FOPEN_FLAGS_A, 0644);
+	}
+	else
+	{
+		privateContext->jsonFile =
+			fopen_with_umask(partialFileName, "ab", FOPEN_FLAGS_W, 0644);
+	}
 
 	if (privateContext->jsonFile == NULL)
 	{
 		/* errors have already been logged */
 		log_error("Failed to open file \"%s\": %m",
-				  privateContext->walFileName);
+				  privateContext->partialFileName);
 		return false;
 	}
 
@@ -646,20 +675,21 @@ streamRotateFile(LogicalStreamContext *context)
 
 	sformat(latest, sizeof(latest), "%s/latest", privateContext->paths.dir);
 
-	if (file_exists(latest))
-	{
-		if (!unlink_file(latest))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-	}
-
-	if (!create_symbolic_link(privateContext->walFileName, latest))
+	if (!unlink_file(latest))
 	{
 		/* errors have already been logged */
 		return false;
 	}
+
+	if (!create_symbolic_link(privateContext->partialFileName, latest))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_debug("streamRotateFile: symlink \"%s\" -> \"%s\"",
+			  latest,
+			  privateContext->partialFileName);
 
 	return true;
 }
@@ -684,17 +714,33 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 	 */
 	if (privateContext->jsonFile != NULL)
 	{
-		log_debug("Closing file \"%s\"", privateContext->walFileName);
+		log_debug("Closing file \"%s\"", privateContext->partialFileName);
 
 		if (fclose(privateContext->jsonFile) != 0)
 		{
 			log_error("Failed to close file \"%s\": %m",
-					  privateContext->walFileName);
+					  privateContext->partialFileName);
 			return false;
 		}
 
 		/* reset the jsonFile FILE * pointer to NULL, it's closed now */
 		privateContext->jsonFile = NULL;
+
+		/* rename the .json.partial file to .json only */
+		log_debug("streamCloseFile: mv \"%s\" \"%s\"",
+				  privateContext->partialFileName,
+				  privateContext->walFileName);
+
+		if (rename(privateContext->partialFileName,
+				   privateContext->walFileName) != 0)
+		{
+			log_error("Failed to rename \"%s\" to \"%s\": %m",
+					  privateContext->partialFileName,
+					  privateContext->walFileName);
+			return false;
+		}
+
+		log_info("Closed file \"%s\"", privateContext->walFileName);
 	}
 
 	/* in prefetch mode, kick-in a transform process */
@@ -794,7 +840,7 @@ streamFlush(LogicalStreamContext *context)
 		if (fsync(fd) != 0)
 		{
 			log_error("Failed to fsync file \"%s\": %m",
-					  privateContext->walFileName);
+					  privateContext->partialFileName);
 			return false;
 		}
 
@@ -802,7 +848,7 @@ streamFlush(LogicalStreamContext *context)
 
 		log_debug("Flushed up to %X/%X in file \"%s\"",
 				  LSN_FORMAT_ARGS(context->tracking->flushed_lsn),
-				  privateContext->walFileName);
+				  privateContext->partialFileName);
 	}
 
 	return true;

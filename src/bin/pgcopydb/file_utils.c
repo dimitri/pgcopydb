@@ -513,7 +513,9 @@ create_symbolic_link(char *sourcePath, char *targetPath)
 {
 	if (symlink(sourcePath, targetPath) != 0)
 	{
-		log_error("Failed to create symbolic link to \"%s\": %m", targetPath);
+		log_error("Failed to create symbolic link \"%s\" -> \"%s\": %m",
+				  targetPath,
+				  sourcePath);
 		return false;
 	}
 	return true;
