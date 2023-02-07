@@ -1167,8 +1167,8 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 						  const Oid *paramTypes, const char **paramValues,
 						  void *context, ParsePostgresResultCB *parseFun)
 {
-	char debugParameters[BUFSIZE] = { 0 };
 	PGresult *result = NULL;
+	PQExpBuffer debugParameters = createPQExpBuffer();
 
 	PGconn *connection = pgsql_open_connection(pgsql);
 
@@ -1185,34 +1185,35 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 	if (paramCount > 0)
 	{
 		int paramIndex = 0;
-		int remainingBytes = BUFSIZE;
-		char *writePointer = (char *) debugParameters;
 
 		for (paramIndex = 0; paramIndex < paramCount; paramIndex++)
 		{
-			int bytesWritten = 0;
 			const char *value = paramValues[paramIndex];
 
 			if (paramIndex > 0)
 			{
-				bytesWritten = sformat(writePointer, remainingBytes, ", ");
-				remainingBytes -= bytesWritten;
-				writePointer += bytesWritten;
+				appendPQExpBuffer(debugParameters, ", ");
 			}
 
 			if (value == NULL)
 			{
-				bytesWritten = sformat(writePointer, remainingBytes, "NULL");
+				appendPQExpBuffer(debugParameters, "NULL");
 			}
 			else
 			{
-				bytesWritten =
-					sformat(writePointer, remainingBytes, "'%s'", value);
+				appendPQExpBuffer(debugParameters, "'%s'", value);
 			}
-			remainingBytes -= bytesWritten;
-			writePointer += bytesWritten;
 		}
-		log_debug("%s", debugParameters);
+
+		if (PQExpBufferBroken(debugParameters))
+		{
+			log_error("Failed to create log message for SQL query parameters: "
+					  "out of memory");
+			destroyPQExpBuffer(debugParameters);
+			return false;
+		}
+
+		log_debug("%s", debugParameters->data);
 	}
 
 	if (paramCount == 0)
@@ -1246,7 +1247,9 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 		}
 
 		log_error("SQL query: %s", sql);
-		log_error("SQL params: %s", debugParameters);
+		log_error("SQL params: %s", debugParameters->data);
+
+		destroyPQExpBuffer(debugParameters);
 
 		/* now stash away the SQL STATE if any */
 		if (context && sqlstate)
@@ -1282,6 +1285,8 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 	{
 		(*parseFun)(context, result);
 	}
+
+	destroyPQExpBuffer(debugParameters);
 
 	PQclear(result);
 	clear_results(pgsql);
