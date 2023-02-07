@@ -5,7 +5,7 @@ opened on pgcopydb we might want to add testing that covers just the failing
 bits.
 
 This testing directory is meant to allow for covering those extra regression
-testing / unit testing. At the moment there are two modes of operations:
+testing / unit testing. At the moment there are three modes of operations:
 
   1. the pgcopydb command is expected to return a zero return code (unix
      command success)
