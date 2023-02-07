@@ -5,6 +5,7 @@ WORKDIR /usr/src/pgcopydb
 COPY ./copydb.sh copydb.sh
 COPY ./setup ./test/setup
 COPY ./sql ./test/sql
+COPY ./script ./test/script
 COPY ./expected ./test/expected
 
 USER docker

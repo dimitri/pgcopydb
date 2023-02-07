@@ -33,6 +33,7 @@
 #define INT4OID 23
 #define INT8OID 20
 #define TEXTOID 25
+#define OIDOID 26
 #define LSNOID 3220
 #define TIMESTAMPTZOID 1184
 
