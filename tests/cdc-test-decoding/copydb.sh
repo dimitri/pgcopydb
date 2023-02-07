@@ -64,7 +64,7 @@ pgcopydb stream prefetch --resume --endpos "${lsn}" -vv
 # now transform the JSON file into SQL
 SQLFILENAME=`basename ${WALFILE} .json`.sql
 
-pgcopydb stream transform -vv ${SHAREDIR}/${WALFILE} /tmp/${SQLFILENAME}
+pgcopydb stream transform --debug ${SHAREDIR}/${WALFILE} /tmp/${SQLFILENAME}
 
 # we should get the same result as `pgcopydb stream prefetch`
 diff ${SHAREDIR}/${SQLFILE} /tmp/${SQLFILENAME}

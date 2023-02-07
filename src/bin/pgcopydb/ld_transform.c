@@ -437,14 +437,24 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 	 * Now that we have read and parsed the JSON file into our internal
 	 * structure that represents SQL transactions with statements, output the
 	 * content in the SQL format.
+	 *
+	 * The output is written to a temp/partial file which is renamed after
+	 * close, so that another tool that would want to read the file won't read
+	 * partial JSON messages in there.
 	 */
-	FILE *sql = fopen_with_umask(sqlfilename, "w", FOPEN_FLAGS_W, 0644);
+	char tempfilename[MAXPGPATH] = { 0 };
+
+	sformat(tempfilename, sizeof(tempfilename), "%s.partial", sqlfilename);
+
+	FILE *sql = fopen_with_umask(tempfilename, "w", FOPEN_FLAGS_W, 0644);
 
 	if (sql == NULL)
 	{
 		log_error("Failed to create and open file \"%s\"", sqlfilename);
 		return false;
 	}
+
+	log_debug("stream_transform_file writing to \"%s\"", tempfilename);
 
 	for (int i = 0; i < txns.count; i++)
 	{
@@ -462,6 +472,17 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 	if (fclose(sql) == EOF)
 	{
 		log_error("Failed to write file \"%s\"", sqlfilename);
+		return false;
+	}
+
+	log_debug("stream_transform_file: mv \"%s\" \"%s\"",
+			  tempfilename, sqlfilename);
+
+	if (rename(tempfilename, sqlfilename) != 0)
+	{
+		log_error("Failed to move \"%s\" to \"%s\": %m",
+				  tempfilename,
+				  sqlfilename);
 		return false;
 	}
 
