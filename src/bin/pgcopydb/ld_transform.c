@@ -267,6 +267,14 @@ stream_transform_send_stop(Queue *queue)
 }
 
 
+typedef struct TransformStreamCtx
+{
+	uint64_t currentTxIndex;
+	LogicalTransaction currentTx;
+	FILE *out;
+} TransformStreamCtx;
+
+
 /*
  * stream_transform_stream transforms a JSON formatted input stream (read line
  * by line) as received from the wal2json logical decoding plugin into an SQL
@@ -277,163 +285,80 @@ stream_transform_stream(FILE *in, FILE *out)
 {
 	log_notice("Transforming a JSON input stream into an SQL output stream");
 
-	/* count lines and transactions */
-	uint64_t lineno = 0;
-	uint64_t currentTxIndex = 0;
+	TransformStreamCtx ctx = {
+		.currentTxIndex = 0,
+		.currentTx = { 0 },
+		.out = out
+	};
 
-	LogicalTransaction emptyTx = { 0 };
-	LogicalTransaction currentTx = { 0 };
+	ReadFromStreamContext context = {
+		.callback = stream_transform_line,
+		.ctx = &ctx
+	};
 
-	int countFdsReadyToRead, nfds; /* see man select(2) */
-	fd_set readFileDescriptorSet;
-
-	int fd = fileno(in);
-	nfds = fd + 1;
-
-	bool doneReading = false;
-
-	while (!doneReading)
+	if (!read_from_stream(in, &context))
 	{
-		struct timeval timeout = { 0, 100 * 1000 }; /* 100 ms */
-
-		/*
-		 * When asked_to_stop || asked_to_stop_fast still continue reading
-		 * through EOF on the input stream, then quit normally.
-		 */
-		if (asked_to_quit)
-		{
-			return false;
-		}
-
-		FD_ZERO(&readFileDescriptorSet);
-		FD_SET(fd, &readFileDescriptorSet);
-
-		countFdsReadyToRead =
-			select(nfds, &readFileDescriptorSet, NULL, NULL, &timeout);
-
-		if (countFdsReadyToRead == -1)
-		{
-			if (errno == EINTR || errno == EAGAIN)
-			{
-				continue;
-			}
-			else
-			{
-				log_error("Failed to select on file descriptor %d: %m", fd);
-				return false;
-			}
-		}
-
-		if (countFdsReadyToRead == 0)
-		{
-			continue;
-		}
-
-		/*
-		 * data is expected to be written one line at a time, if any data is
-		 * available per select(2) call, then we should be able to read an
-		 * entire line now.
-		 */
-		if (FD_ISSET(fd, &readFileDescriptorSet))
-		{
-			log_debug("Transform process reading from input stream %d", fd);
-
-			/*
-			 * Allocate a 128 MB string to receive data from the input stream.
-			 *
-			 * TODO: That's a large allocation but should allow us to accept
-			 * logical decoding traffic. The general case would be to loop over
-			 * memory chunks and then split and re-join chunks into JSON lines,
-			 * or use a streaming JSON parsing API.
-			 */
-			size_t s = 128 * 1024 * 1024;
-			char *buf = calloc(s + 1, sizeof(char));
-			size_t bytes = read(fd, buf, s);
-
-			if (bytes == -1)
-			{
-				log_error("Failed to read from input stream: %m");
-				free(buf);
-				return false;
-			}
-			else if (bytes == 0)
-			{
-				free(buf);
-				doneReading = true;
-				continue;
-			}
-			else if (bytes == s)
-			{
-				char bytesPretty[BUFSIZE] = { 0 };
-
-				(void) pretty_print_bytes(bytesPretty, BUFSIZE, bytes);
-
-				log_error("Failed to read from input stream, message is larger "
-						  "than pgcopydb limit: %s",
-						  bytesPretty);
-				return false;
-			}
-
-			log_debug("stream_transform_stream read %lld bytes from input",
-					  (long long) bytes);
-
-			char *lines[BUFSIZE] = { 0 };
-			int lineCount = splitLines(buf, lines, BUFSIZE);
-
-			log_debug("stream_transform_stream read %d lines", lineCount);
-
-			for (int i = 0; i < lineCount; i++)
-			{
-				char *message = lines[i];
-
-				/* we count stream input lines as if reading from a file */
-				++lineno;
-
-				log_debug("stream_transform_stream[%d/%lld]: %s",
-						  i, (long long) lineno, message);
-
-				bool commit = false;
-
-				if (!stream_transform_message(message, &currentTx, &commit))
-				{
-					/* errors have already been logged */
-					return false;
-				}
-
-				/*
-				 * Is it time to close the current transaction and prepare a new
-				 * one?
-				 */
-				if (commit)
-				{
-					log_debug("Transforming transaction xid %d with %d statements",
-							  currentTx.xid,
-							  currentTx.count);
-
-					/* now write the transaction out */
-					if (!stream_write_transaction(out, &currentTx))
-					{
-						/* errors have already been logged */
-						return false;
-					}
-
-					(void) FreeLogicalTransaction(&currentTx);
-
-					/* then prepare a new one, reusing the same memory area */
-					currentTx = emptyTx;
-					++currentTxIndex;
-				}
-			}
-
-			free(buf);
-		}
-
-		doneReading = feof(in) != 0;
+		log_error("Failed to transform JSON messages from input stream, "
+				  "see above for details");
+		return false;
 	}
 
 	log_notice("Transformed %lld messages and %lld transactions",
-			   (long long) lineno,
-			   (long long) currentTxIndex + 1);
+			   (long long) context.lineno,
+			   (long long) ctx.currentTxIndex + 1);
+
+	return true;
+}
+
+
+/*
+ * stream_transform_line is a callback function for the ReadFromStreamContext
+ * and read_from_stream infrastructure. It's called on each line read from a
+ * stream such as a unix pipe.
+ */
+bool
+stream_transform_line(void *ctx, const char *line, bool *stop)
+{
+	TransformStreamCtx *transformCtx = (TransformStreamCtx *) ctx;
+	LogicalTransaction *currentTx = &(transformCtx->currentTx);
+
+	static uint64_t lineno = 0;
+
+	log_debug("stream_transform_line[%lld]: %s", (long long) ++lineno, line);
+
+	bool commit = false;
+
+	if (!stream_transform_message((char *) line, currentTx, &commit))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * Is it time to close the current transaction and prepare a new
+	 * one?
+	 */
+	if (commit)
+	{
+		log_debug("Transforming transaction xid %d with %d statements",
+				  currentTx->xid,
+				  currentTx->count);
+
+		/* now write the transaction out */
+		if (!stream_write_transaction(transformCtx->out, currentTx))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		(void) FreeLogicalTransaction(currentTx);
+
+		/* then prepare a new one, reusing the same memory area */
+		LogicalTransaction emptyTx = { 0 };
+
+		*currentTx = emptyTx;
+		++(transformCtx->currentTxIndex);
+	}
 
 	return true;
 }

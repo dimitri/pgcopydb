@@ -51,6 +51,12 @@ stream_replay(StreamSpecs *specs)
 }
 
 
+typedef struct ReplayStreamCtx
+{
+	StreamApplyContext applyContext;
+} ReplayStreamCtx;
+
+
 /*
  * stream_apply_replay implements "live replay" of the changes from the source
  * database directly to the target database.
@@ -58,7 +64,8 @@ stream_replay(StreamSpecs *specs)
 bool
 stream_apply_replay(StreamSpecs *specs)
 {
-	StreamApplyContext context = { 0 };
+	ReplayStreamCtx ctx = { 0 };
+	StreamApplyContext *context = &(ctx.applyContext);
 
 	if (specs->mode == STREAM_MODE_REPLAY)
 	{
@@ -75,228 +82,138 @@ stream_apply_replay(StreamSpecs *specs)
 
 	/*
 	 * Even though we're using the "live streaming" mode here, ensure that
-	 * we're good to: the pgcyopdb sentinel table is expected to have allowed
-	 * applying changes.
+	 * we're good to go: the pgcyopdb sentinel table is expected to have
+	 * allowed applying changes.
 	 */
-	if (!stream_apply_wait_for_sentinel(specs, &context))
+	if (!stream_apply_wait_for_sentinel(specs, context))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
 	if (!stream_read_context(&(specs->paths),
-							 &(context.system),
-							 &(context.WalSegSz)))
+							 &(context->system),
+							 &(context->WalSegSz)))
 	{
 		log_error("Failed to read the streaming context information "
 				  "from the source database, see above for details");
 		return false;
 	}
 
-	log_debug("Source database wal_segment_size is %u", context.WalSegSz);
-	log_debug("Source database timeline is %d", context.system.timeline);
+	log_debug("Source database wal_segment_size is %u", context->WalSegSz);
+	log_debug("Source database timeline is %d", context->system.timeline);
 
-	if (!setupReplicationOrigin(&context,
+	if (!setupReplicationOrigin(context,
 								&(specs->paths),
 								specs->source_pguri,
 								specs->target_pguri,
 								specs->origin,
 								specs->endpos,
-								context.apply))
+								context->apply))
 	{
 		log_error("Failed to setup replication origin on the target database");
 		return false;
 	}
 
 	log_info("Replaying changes from LSN %X/%X",
-			 LSN_FORMAT_ARGS(context.previousLSN));
+			 LSN_FORMAT_ARGS(context->previousLSN));
 
-	if (context.endpos != InvalidXLogRecPtr)
+	if (context->endpos != InvalidXLogRecPtr)
 	{
 		log_info("Stopping at endpos LSN %X/%X",
-				 LSN_FORMAT_ARGS(context.endpos));
+				 LSN_FORMAT_ARGS(context->endpos));
 	}
 
-	/* count lines */
-	uint64_t lineno = 0;
+	ReadFromStreamContext readerContext = {
+		.callback = stream_replay_line,
+		.ctx = &ctx
+	};
 
-	int countFdsReadyToRead, nfds; /* see man select(2) */
-	fd_set readFileDescriptorSet;
-
-	int fd = fileno(stdin);
-	nfds = fd + 1;
-
-	bool doneReading = false;
-
-	while (!doneReading)
+	if (!read_from_stream(stdin, &readerContext))
 	{
-		struct timeval timeout = { 0, 100 * 1000 }; /* 100 ms */
-
-		/*
-		 * When asked_to_stop || asked_to_stop_fast still continue reading
-		 * through EOF on the input stream, then quit normally.
-		 */
-		if (asked_to_quit)
-		{
-			return false;
-		}
-
-		FD_ZERO(&readFileDescriptorSet);
-		FD_SET(fd, &readFileDescriptorSet);
-
-		countFdsReadyToRead =
-			select(nfds, &readFileDescriptorSet, NULL, NULL, &timeout);
-
-		if (countFdsReadyToRead == -1)
-		{
-			if (errno == EINTR || errno == EAGAIN)
-			{
-				continue;
-			}
-			else
-			{
-				log_error("Failed to select on file descriptor %d: %m", fd);
-				return false;
-			}
-		}
-
-		if (countFdsReadyToRead == 0)
-		{
-			continue;
-		}
-
-		/*
-		 * data is expected to be written one line at a time, if any data is
-		 * available per select(2) call, then we should be able to read an
-		 * entire line now.
-		 */
-		if (FD_ISSET(fd, &readFileDescriptorSet))
-		{
-			log_debug("Replay process reading from input stream %d", fd);
-
-			/*
-			 * Allocate a 128 MB string to receive data from the input stream.
-			 *
-			 * TODO: That's a large allocation but should allow us to accept
-			 * logical decoding traffic. The general case would be to loop over
-			 * memory chunks and then split and re-join chunks into JSON lines,
-			 * or use a streaming JSON parsing API.
-			 */
-			size_t s = 128 * 1024 * 1024;
-			char *buf = calloc(s + 1, sizeof(char));
-			size_t bytes = read(fd, buf, s);
-
-			if (bytes == -1)
-			{
-				log_error("Failed to read from input stream: %m");
-				free(buf);
-				return false;
-			}
-			else if (bytes == 0)
-			{
-				free(buf);
-				doneReading = true;
-				continue;
-			}
-			else if (bytes == s)
-			{
-				char bytesPretty[BUFSIZE] = { 0 };
-
-				(void) pretty_print_bytes(bytesPretty, BUFSIZE, bytes);
-
-				log_error("Failed to read from input stream, message is larger "
-						  "than pgcopydb limit: %s",
-						  bytesPretty);
-				return false;
-			}
-
-			log_debug("stream_apply_replay read %lld bytes from input",
-					  (long long) bytes);
-
-			char *lines[BUFSIZE] = { 0 };
-			int lineCount = splitLines(buf, lines, BUFSIZE);
-
-			log_debug("stream_apply_replay read %d lines", lineCount);
-
-			for (int i = 0; i < lineCount; i++)
-			{
-				if (asked_to_quit)
-				{
-					free(buf);
-					return false;
-				}
-
-				const char *sql = lines[i];
-
-				/* we count stream input lines as if reading from a file */
-				++lineno;
-
-				LogicalMessageMetadata metadata = { 0 };
-
-				if (!parseSQLAction(sql, &metadata))
-				{
-					/* errors have already been logged */
-					free(buf);
-					return false;
-				}
-
-				if (!stream_apply_sql(&context, &metadata, sql))
-				{
-					/* errors have already been logged */
-					free(buf);
-					return false;
-				}
-
-				/* update progres on source database when needed */
-				switch (metadata.action)
-				{
-					case STREAM_ACTION_COMMIT:
-					case STREAM_ACTION_SWITCH:
-					case STREAM_ACTION_KEEPALIVE:
-					{
-						(void) stream_apply_sync_sentinel(&context);
-						break;
-					}
-
-					default:
-					{
-						/* skip BEGIN and DML commands here */
-						break;
-					}
-				}
-
-				/*
-				 * When syncing with the pgcopydb sentinel we might receive a
-				 * new endpos, and it might mean we're done already.
-				 */
-				if (!context.reachedEndPos &&
-					context.endpos != InvalidXLogRecPtr &&
-					context.endpos <= context.previousLSN)
-				{
-					context.reachedEndPos = true;
-
-					log_info("Applied reached end position %X/%X at %X/%X",
-							 LSN_FORMAT_ARGS(context.endpos),
-							 LSN_FORMAT_ARGS(context.previousLSN));
-				}
-
-				if (context.reachedEndPos)
-				{
-					/* information has already been logged */
-					break;
-				}
-			}
-
-			free(buf);
-		}
-
-		doneReading = feof(stdin) != 0;
+		log_error("Failed to transform JSON messages from input stream, "
+				  "see above for details");
+		return false;
 	}
 
 	/* we might still have to disconnect now */
-	(void) pgsql_finish(&(context.pgsql));
+	(void) pgsql_finish(&(context->pgsql));
 
-	log_notice("Replayed %lld messages", (long long) lineno);
+	log_notice("Replayed %lld messages", (long long) readerContext.lineno);
+
+	return true;
+}
+
+
+/*
+ * stream_replay_line is a callback function for the ReadFromStreamContext and
+ * read_from_stream infrastructure. It's called on each line read from a stream
+ * such as a unix pipe.
+ */
+bool
+stream_replay_line(void *ctx, const char *line, bool *stop)
+{
+	ReplayStreamCtx *replayCtx = (ReplayStreamCtx *) ctx;
+	StreamApplyContext *context = &(replayCtx->applyContext);
+
+	LogicalMessageMetadata metadata = { 0 };
+
+	if (!parseSQLAction((char *) line, &metadata))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!stream_apply_sql(context, &metadata, line))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* update progres on source database when needed */
+	switch (metadata.action)
+	{
+		/* these actions are good points when to report progress */
+		case STREAM_ACTION_COMMIT:
+		case STREAM_ACTION_KEEPALIVE:
+		{
+			(void) stream_apply_sync_sentinel(context);
+			break;
+		}
+
+		/* skip reporting progress in other cases */
+		case STREAM_ACTION_BEGIN:
+		case STREAM_ACTION_INSERT:
+		case STREAM_ACTION_UPDATE:
+		case STREAM_ACTION_DELETE:
+		case STREAM_ACTION_TRUNCATE:
+		case STREAM_ACTION_MESSAGE:
+		case STREAM_ACTION_SWITCH:
+		default:
+		{
+			break;
+		}
+	}
+
+	/*
+	 * When syncing with the pgcopydb sentinel we might receive a
+	 * new endpos, and it might mean we're done already.
+	 */
+	if (!context->reachedEndPos &&
+		context->endpos != InvalidXLogRecPtr &&
+		context->endpos <= context->previousLSN)
+	{
+		context->reachedEndPos = true;
+
+		log_info("Applied reached end position %X/%X at %X/%X",
+				 LSN_FORMAT_ARGS(context->endpos),
+				 LSN_FORMAT_ARGS(context->previousLSN));
+	}
+
+	if (context->reachedEndPos)
+	{
+		*stop = true;
+	}
 
 	return true;
 }

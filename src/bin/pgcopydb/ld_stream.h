@@ -374,6 +374,7 @@ bool stream_transform_send_stop(Queue *queue);
 bool stream_compute_pathnames(LogicalStreamContext *context, uint64_t lsn);
 
 bool stream_transform_stream(FILE * in, FILE *out);
+bool stream_transform_line(void *ctx, const char *line, bool *stop);
 bool stream_transform_file(char *jsonfilename, char *sqlfilename);
 bool stream_write_transaction(FILE *out, LogicalTransaction *tx);
 bool stream_write_begin(FILE *out, LogicalTransaction *tx);
@@ -418,7 +419,6 @@ bool parseWal2jsonMessage(LogicalTransactionStatement *stmt,
 						  JSON_Value *json);
 
 /* ld_apply.c */
-bool stream_apply_replay(StreamSpecs *specs);
 bool stream_apply_catchup(StreamSpecs *specs);
 
 bool stream_apply_wait_for_sentinel(StreamSpecs *specs,
@@ -446,6 +446,8 @@ bool parseSQLAction(const char *query, LogicalMessageMetadata *metadata);
 
 /* ld_replay */
 bool stream_replay(StreamSpecs *specs);
+bool stream_apply_replay(StreamSpecs *specs);
+bool stream_replay_line(void *ctx, const char *line, bool *stop);
 
 /* follow.c */
 bool follow_start_prefetch(StreamSpecs *specs, pid_t *pid);
