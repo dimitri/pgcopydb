@@ -695,6 +695,7 @@ setupReplicationOrigin(StreamApplyContext *context,
 	/* we're going to send several replication origin commands */
 	pgsql->connectionStatementType = PGSQL_CONNECTION_MULTI_STATEMENT;
 
+
 	uint32_t oid = 0;
 
 	if (!pgsql_replication_origin_oid(pgsql, nodeName, &oid))
@@ -723,10 +724,13 @@ setupReplicationOrigin(StreamApplyContext *context,
 		return false;
 	}
 
-	if (!computeSQLFileName(context))
+	if (IS_EMPTY_STRING_BUFFER(context->sqlFileName))
 	{
-		/* errors have already been logged */
-		return false;
+		if (!computeSQLFileName(context))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	/* compute the WAL filename that would host the previous LSN */
@@ -754,6 +758,14 @@ bool
 computeSQLFileName(StreamApplyContext *context)
 {
 	XLogSegNo segno;
+
+	if (context->WalSegSz == 0)
+	{
+		log_error("Failed to compute the SQL filename for LSN %X/%X "
+				  "without context->wal_segment_size",
+				  LSN_FORMAT_ARGS(context->previousLSN));
+		return false;
+	}
 
 	XLByteToSeg(context->previousLSN, segno, context->WalSegSz);
 	XLogFileName(context->wal, context->system.timeline, segno, context->WalSegSz);

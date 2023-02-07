@@ -996,6 +996,8 @@ cli_stream_apply(int argc, char **argv)
 		/* prepare the replication origin tracking */
 		StreamApplyContext context = { 0 };
 
+		strlcpy(context.sqlFileName, sqlfilename, sizeof(context.sqlFileName));
+
 		if (!setupReplicationOrigin(&context,
 									&(copySpecs.cfPaths.cdc),
 									streamDBoptions.source_pguri,
@@ -1008,17 +1010,11 @@ cli_stream_apply(int argc, char **argv)
 			exit(EXIT_CODE_TARGET);
 		}
 
-		strlcpy(context.sqlFileName, sqlfilename, sizeof(context.sqlFileName));
-
 		if (!stream_apply_file(&context))
 		{
 			/* errors have already been logged */
-			pgsql_finish(&(context.pgsql));
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
-
-		/* we might still have a connection opened */
-		pgsql_finish(&(context.pgsql));
 	}
 }
 

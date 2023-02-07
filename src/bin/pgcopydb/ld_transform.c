@@ -637,7 +637,8 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 		return false;
 	}
 
-	log_info("Transformed JSON messages into SQL file \"%s\"",
+	log_info("Transformed %d JSON messages into SQL file \"%s\"",
+			 content.count,
 			 sqlfilename);
 
 	return true;

@@ -711,6 +711,11 @@ streamRotateFile(LogicalStreamContext *context)
 		privateContext->jsonFile =
 			fopen_with_umask(partialFileName, "ab", FOPEN_FLAGS_A, 0644);
 	}
+	else if (file_exists(partialFileName))
+	{
+		privateContext->jsonFile =
+			fopen_with_umask(partialFileName, "ab", FOPEN_FLAGS_A, 0644);
+	}
 	else
 	{
 		privateContext->jsonFile =
