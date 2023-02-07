@@ -90,6 +90,7 @@ typedef struct StreamContext
 	uint32_t timeline;
 
 	uint64_t firstLSN;
+	char partialFileName[MAXPGPATH];
 	char walFileName[MAXPGPATH];
 	char sqlFileName[MAXPGPATH];
 	FILE *jsonFile;
