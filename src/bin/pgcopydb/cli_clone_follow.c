@@ -381,33 +381,7 @@ cli_follow(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	/*
-	 * Now remove the possibly still existing stream context files from
-	 * previous round of operations (--resume, etc). We want to make sure that
-	 * the catchup process reads the files created on this connection.
-	 */
-	if (!stream_cleanup_context(&specs))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	pid_t prefetch = -1;
-	pid_t catchup = -1;
-
-	if (!follow_start_prefetch(&specs, &prefetch))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
-	}
-
-	if (!follow_start_catchup(&specs, &catchup))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_TARGET);
-	}
-
-	if (!follow_wait_subprocesses(&specs, prefetch, catchup))
+	if (!followDB(&copySpecs, &specs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
