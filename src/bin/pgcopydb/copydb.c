@@ -69,47 +69,22 @@ GUC serverSetttings[] = {
 bool
 copydb_init_workdir(CopyDataSpec *copySpecs,
 					char *dir,
+					bool service,
+					char *serviceName,
 					bool restart,
 					bool resume,
-					bool createWorkDir,
-					bool auxilliary)
+					bool createWorkDir)
 {
 	CopyFilePaths *cfPaths = &(copySpecs->cfPaths);
 	DirectoryState *dirState = &(copySpecs->dirState);
 
-	pid_t pid = getpid();
-
-	if (!copydb_prepare_filepaths(cfPaths, dir, auxilliary))
+	if (!copydb_prepare_filepaths(cfPaths, dir, serviceName))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
 	log_notice("Using work dir \"%s\"", cfPaths->topdir);
-
-	/* check to see if there is already another pgcopydb running */
-	if (directory_exists(cfPaths->topdir))
-	{
-		pid_t onFilePid = 0;
-
-		if (file_exists(cfPaths->pidfile))
-		{
-			/*
-			 * Only implement the "happy path": read_pidfile removes the file
-			 * when if fails to read it, or when the pid contained in there in
-			 * a stale pid (doesn't belong to any currently running process).
-			 */
-			if (read_pidfile(cfPaths->pidfile, &onFilePid))
-			{
-				log_fatal("Working directory \"%s\" already exists and "
-						  "contains a pidfile for process %d, "
-						  "which is currently running",
-						  cfPaths->topdir,
-						  onFilePid);
-				return false;
-			}
-		}
-	}
 
 	/*
 	 * Some inspection commands piggy-back on the work directory that has been
@@ -191,10 +166,14 @@ copydb_init_workdir(CopyDataSpec *copySpecs,
 		return false;
 	}
 
-	/* now populate our pidfile */
-	if (!create_pidfile(cfPaths->pidfile, pid))
+	/* protect against running multiple "service" commands concurrently */
+	if (service)
 	{
-		return false;
+		if (!copydb_acquire_pidfile(cfPaths, serviceName))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	/* and now for the other sub-directories */
@@ -212,6 +191,97 @@ copydb_init_workdir(CopyDataSpec *copySpecs,
 		if (!copydb_rmdir_or_mkdir(dirs[i], removeDir))
 		{
 			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * copydb_acquire_pidfile deals with creating the pidfile for the current
+ * service, which is the "main" pgcopydb service unless serviceName is not
+ * NULL.
+ */
+bool
+copydb_acquire_pidfile(CopyFilePaths *cfPaths, char *serviceName)
+{
+	if (!directory_exists(cfPaths->topdir))
+	{
+		log_fatal("Work directory \"%s\" does not exists", cfPaths->topdir);
+		return false;
+	}
+
+	pid_t pid = getpid();
+
+	/*
+	 * The "snapshot" service is special, it's an auxilliary service that's
+	 * allowed to run concurrently to the "main" pgcopydb service. As a result
+	 * when running the "snapshot" service we don't create the main pidfile at
+	 * all.
+	 */
+	if (!streq("snapshot", serviceName))
+	{
+		pid_t onFilePid = 0;
+
+		if (file_exists(cfPaths->pidfile))
+		{
+			/*
+			 * Only implement the "happy path": read_pidfile removes the file
+			 * when if fails to read it, or when the pid contained in there in
+			 * a stale pid (doesn't belong to any currently running process).
+			 */
+			if (read_pidfile(cfPaths->pidfile, &onFilePid))
+			{
+				log_fatal("Working directory \"%s\" already exists and "
+						  "contains a pidfile for process %d, "
+						  "which is currently running",
+						  cfPaths->topdir,
+						  onFilePid);
+				return false;
+			}
+		}
+
+		/* now populate our pidfile */
+		if (!create_pidfile(cfPaths->pidfile, pid))
+		{
+			return false;
+		}
+	}
+
+	/*
+	 * Some pgcopydb commands run an independant service with their own
+	 * pidfile. Such commands are for instance:
+	 *
+	 *  pgcopydb stream receive
+	 *  pgcopydb stream tranform
+	 *  pgcopydb stream apply
+	 *
+	 * Those commands can run all together at the same time, but can't run
+	 * in parallel to the "main" command with the main pidfile as above.
+	 */
+	if (serviceName != NULL)
+	{
+		pid_t onFileSPid = 0;
+
+		if (file_exists(cfPaths->spidfile))
+		{
+			if (read_pidfile(cfPaths->spidfile, &onFileSPid))
+			{
+				log_fatal("Working directory \"%s\" already exists and "
+						  "contains a pidfile for service \"%s\" with "
+						  "process %d, which is currently running",
+						  cfPaths->topdir,
+						  serviceName,
+						  onFileSPid);
+				return false;
+			}
+		}
+
+		/* now populate our pidfile */
+		if (!create_pidfile(cfPaths->spidfile, pid))
+		{
 			return false;
 		}
 	}
@@ -336,7 +406,9 @@ copydb_inspect_workdir(CopyFilePaths *cfPaths, DirectoryState *dirState)
  * for top-level operations.
  */
 bool
-copydb_prepare_filepaths(CopyFilePaths *cfPaths, const char *dir, bool auxilliary)
+copydb_prepare_filepaths(CopyFilePaths *cfPaths,
+						 const char *dir,
+						 const char *serviceName)
 {
 	char topdir[MAXPGPATH] = { 0 };
 
@@ -363,15 +435,14 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths, const char *dir, bool auxilliar
 	/* first copy the top directory */
 	strlcpy(cfPaths->topdir, topdir, sizeof(cfPaths->topdir));
 
-	/* auxilliary processes use a different pidfile */
-	if (auxilliary)
+	/* some processes use an additional per-service pidfile */
+	if (serviceName != NULL)
 	{
-		sformat(cfPaths->pidfile, MAXPGPATH, "%s/pgcopydb.aux.pid", cfPaths->topdir);
+		sformat(cfPaths->spidfile, MAXPGPATH, "%s/pgcopydb.%s.pid",
+				cfPaths->topdir,
+				serviceName);
 	}
-	else
-	{
-		sformat(cfPaths->pidfile, MAXPGPATH, "%s/pgcopydb.pid", cfPaths->topdir);
-	}
+	sformat(cfPaths->pidfile, MAXPGPATH, "%s/pgcopydb.pid", cfPaths->topdir);
 
 	/* now that we have our topdir, prepare all the others from there */
 	sformat(cfPaths->snfile, MAXPGPATH, "%s/snapshot", cfPaths->topdir);

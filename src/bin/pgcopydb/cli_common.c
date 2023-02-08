@@ -974,14 +974,25 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 		: copyDBoptions.dir;
 
 	bool createWorkDir = true;
-	bool auxilliary = false;
+	bool service = true;
+	char *serviceName = NULL;   /* this is the "main" service */
+
+	/*
+	 * Commands that won't set a work directory certainly are not running a
+	 * service, they won't even have a pidfile.
+	 */
+	if (dir == NULL)
+	{
+		service = false;
+	}
 
 	if (!copydb_init_workdir(copySpecs,
 							 dir,
+							 service,
+							 serviceName,
 							 copyDBoptions.restart,
 							 copyDBoptions.resume,
-							 createWorkDir,
-							 auxilliary))
+							 createWorkDir))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

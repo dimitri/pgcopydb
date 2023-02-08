@@ -505,15 +505,15 @@ cli_stream_setup(int argc, char **argv)
 
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
-	bool auxilliary = false;
 	bool createWorkDir = true;
 
 	if (!copydb_init_workdir(&copySpecs,
 							 streamDBoptions.dir,
+							 false, /* service */
+							 NULL,  /* serviceName */
 							 streamDBoptions.restart,
 							 streamDBoptions.resume,
-							 createWorkDir,
-							 auxilliary))
+							 createWorkDir))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -625,15 +625,21 @@ cli_stream_catchup(int argc, char **argv)
 
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
-	bool auxilliary = false;
+	/*
+	 * Both the catchup and the replay command starts the "apply" service, so
+	 * that they conflict with each other.
+	 */
 	bool createWorkDir = false;
+	bool service = true;
+	char *serviceName = "apply";
 
 	if (!copydb_init_workdir(&copySpecs,
 							 streamDBoptions.dir,
+							 service,
+							 serviceName,
 							 streamDBoptions.restart,
 							 streamDBoptions.resume,
-							 createWorkDir,
-							 auxilliary))
+							 createWorkDir))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -738,15 +744,15 @@ cli_stream_apply(int argc, char **argv)
 
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
-	bool auxilliary = false;
 	bool createWorkDir = false;
 
 	if (!copydb_init_workdir(&copySpecs,
 							 streamDBoptions.dir,
+							 false, /* false */
+							 NULL,  /* serviceName */
 							 streamDBoptions.restart,
 							 streamDBoptions.resume,
-							 createWorkDir,
-							 auxilliary))
+							 createWorkDir))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -822,15 +828,21 @@ stream_start_in_mode(LogicalStreamMode mode)
 
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
-	bool auxilliary = false;
+	/*
+	 * Both the receive and the prefetch command starts the "receive" service,
+	 * so that they conflict with each other.
+	 */
 	bool createWorkDir = false;
+	bool service = true;
+	char *serviceName = "receive";
 
 	if (!copydb_init_workdir(&copySpecs,
 							 streamDBoptions.dir,
+							 service,
+							 serviceName,
 							 streamDBoptions.restart,
 							 streamDBoptions.resume,
-							 createWorkDir,
-							 auxilliary))
+							 createWorkDir))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

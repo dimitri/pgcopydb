@@ -339,15 +339,15 @@ cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 		? NULL
 		: dumpDBoptions->dir;
 
-	bool auxilliary = false;
 	bool createWorkDir = true;
 
 	if (!copydb_init_workdir(&copySpecs,
 							 dir,
+							 false, /* service */
+							 NULL,  /* serviceName */
 							 dumpDBoptions->restart,
 							 dumpDBoptions->resume,
-							 createWorkDir,
-							 auxilliary))
+							 createWorkDir))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
