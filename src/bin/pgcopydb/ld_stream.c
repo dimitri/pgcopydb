@@ -245,11 +245,40 @@ startLogicalStreaming(StreamSpecs *specs)
 
 	context.private = (void *) &(privateContext);
 
-	if (!stream_transform_start_worker(&context))
+	switch (specs->mode)
 	{
-		/* errors have already been logged */
-		return false;
+		case STREAM_MODE_PREFETCH:
+		{
+			if (!stream_transform_start_worker(&context))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+			break;
+		}
+
+		case STREAM_MODE_RECEIVE:
+		{
+			if (specs->stdout)
+			{
+				/* switch stdout from block buffered to line buffered mode */
+				if (setvbuf(stdout, NULL, _IOLBF, 0) != 0)
+				{
+					log_error("Failed to set stdout to line buffered mode: %m");
+					return false;
+				}
+			}
+			break;
+		}
+
+		/* nothing to do in other modes */
+		default:
+		{
+			break;
+		}
 	}
+
+	log_info("Connecting to logical decoding replication stream");
 
 	/*
 	 * In case of being disconnected or other transient errors, reconnect and

@@ -283,7 +283,7 @@ typedef struct TransformStreamCtx
 bool
 stream_transform_stream(FILE *in, FILE *out)
 {
-	log_notice("Transforming a JSON input stream into an SQL output stream");
+	log_info("Starting the transform service");
 
 	TransformStreamCtx ctx = {
 		.currentTxIndex = 0,
@@ -324,7 +324,7 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
 
 	static uint64_t lineno = 0;
 
-	log_debug("stream_transform_line[%lld]: %s", (long long) ++lineno, line);
+	log_trace("stream_transform_line[%lld]: %s", (long long) ++lineno, line);
 
 	bool commit = false;
 
@@ -374,9 +374,6 @@ stream_transform_message(char *message,
 						 bool *commit)
 {
 	LogicalMessageMetadata metadata = { 0 };
-
-	log_debug("stream_transform_stream: %s", message);
-
 	JSON_Value *json = json_parse_string(message);
 
 	if (!parseMessageMetadata(&metadata, message, json, false))

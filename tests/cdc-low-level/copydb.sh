@@ -2,6 +2,7 @@
 
 set -x
 set -e
+set -o pipefail
 
 # This script expects the following environment variables to be set:
 #
@@ -92,9 +93,9 @@ lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_lsn()'`
 
 # and "live replay" the changes captured in our replication slot
 # avoiding pidfile clashes between three concurrent processes
-pgcopydb stream receive --resume --endpos "${lsn}" --to-stdout \
- | pgcopydb stream transform --endpos "${lsn}" - -             \
- | pgcopydb stream apply --resume --endpos "${lsn}" -
+pgcopydb stream receive --debug --resume --endpos "${lsn}" --to-stdout \
+ | pgcopydb stream transform --debug --endpos "${lsn}" - -             \
+ | pgcopydb stream apply --debug --resume --endpos "${lsn}" -
 
 # cleanup
 pgcopydb stream cleanup

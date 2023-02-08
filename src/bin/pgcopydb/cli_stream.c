@@ -867,7 +867,16 @@ cli_stream_transform(int argc, char **argv)
 		FILE *in = stdin;
 		FILE *out = stdout;
 
-		if (!streq(sqlfilename, "-"))
+		if (streq(sqlfilename, "-"))
+		{
+			/* switch out stream from block buffered to line buffered mode */
+			if (setvbuf(out, NULL, _IOLBF, 0) != 0)
+			{
+				log_error("Failed to set stdout to line buffered mode: %m");
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+		}
+		else
 		{
 			out = fopen_with_umask(sqlfilename, "w", FOPEN_FLAGS_W, 0644);
 

@@ -441,6 +441,10 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 			 * logical decoding traffic. The general case would be to loop over
 			 * memory chunks and then split and re-join chunks into JSON lines,
 			 * or use a streaming JSON parsing API.
+			 *
+			 * Also, because we switch the output stream of producing processes
+			 * to line buffered, this only should become a problem when a
+			 * single JSON message is more than the 128 MB we allocate here.
 			 */
 			size_t s = 128 * 1024 * 1024;
 			char *buf = calloc(s + 1, sizeof(char));
@@ -473,13 +477,13 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 				return false;
 			}
 
-			log_debug("stream_transform_stream read %lld bytes from input",
+			log_trace("read_from_stream read %lld bytes from input",
 					  (long long) bytes);
 
 			char *lines[BUFSIZE] = { 0 };
 			int lineCount = splitLines(buf, lines, BUFSIZE);
 
-			log_debug("read_from_stream: read %d lines", lineCount);
+			log_trace("read_from_stream: read %d lines", lineCount);
 
 			for (int i = 0; i < lineCount; i++)
 			{

@@ -115,13 +115,16 @@ stream_apply_replay(StreamSpecs *specs)
 		return false;
 	}
 
-	log_info("Replaying changes from LSN %X/%X",
-			 LSN_FORMAT_ARGS(context->previousLSN));
-
 	if (context->endpos != InvalidXLogRecPtr)
 	{
-		log_info("Stopping at endpos LSN %X/%X",
+		log_info("Replaying changes from LSN %X/%X up to endpos LSN %X/%X",
+				 LSN_FORMAT_ARGS(context->previousLSN),
 				 LSN_FORMAT_ARGS(context->endpos));
+	}
+	else
+	{
+		log_info("Replaying changes from LSN %X/%X",
+				 LSN_FORMAT_ARGS(context->previousLSN));
 	}
 
 	ReadFromStreamContext readerContext = {
