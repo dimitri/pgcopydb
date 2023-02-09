@@ -51,6 +51,9 @@ extern CommandLine drop_commands;
 /* cli_dump.h */
 extern CommandLine dump_commands;
 
+/* cli_ping.h */
+extern CommandLine ping_command;
+
 /* cli_restore.h */
 extern CommandLine restore_commands;
 
