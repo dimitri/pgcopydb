@@ -241,14 +241,18 @@ void cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section);
 
 bool copydb_init_workdir(CopyDataSpec *copySpecs,
 						 char *dir,
+						 bool service,
+						 char *serviceName,
 						 bool restart,
 						 bool resume,
-						 bool createWorkDir,
-						 bool auxilliary);
+						 bool createWorkDir);
+
+bool copydb_acquire_pidfile(CopyFilePaths *cfPaths, char *serviceName);
 
 bool copydb_prepare_filepaths(CopyFilePaths *cfPaths,
 							  const char *topdir,
-							  bool auxilliary);
+							  const char *serviceName);
+
 bool copydb_inspect_workdir(CopyFilePaths *cfPaths, DirectoryState *dirState);
 
 bool copydb_rmdir_or_mkdir(const char *dir, bool removeDir);

@@ -1174,15 +1174,15 @@ cli_list_schema(int argc, char **argv)
 	 * Assume --resume so that we can run the command alongside the main
 	 * process being active.
 	 */
-	bool auxilliary = true;
 	bool createWorkDir = true;
 
 	if (!copydb_init_workdir(&copySpecs,
 							 NULL,
+							 false, /* service */
+							 NULL,  /* serviceName */
 							 false, /* restart */
 							 true, /* resume */
-							 createWorkDir,
-							 auxilliary))
+							 createWorkDir))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -1280,15 +1280,15 @@ cli_list_progress(int argc, char **argv)
 	 * Assume --resume so that we can run the command alongside the main
 	 * process being active.
 	 */
-	bool auxilliary = true;
 	bool createWorkDir = false;
 
 	if (!copydb_init_workdir(&copySpecs,
 							 dir,
+							 false, /* service */
+							 NULL,  /* serviceName */
 							 false, /* restart */
 							 true, /* resume */
-							 createWorkDir,
-							 auxilliary))
+							 createWorkDir))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

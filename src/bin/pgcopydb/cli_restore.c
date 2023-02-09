@@ -540,15 +540,15 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 		? NULL
 		: restoreDBoptions.dir;
 
-	bool auxilliary = false;
 	bool createWorkDir = true;
 
 	if (!copydb_init_workdir(copySpecs,
 							 dir,
+							 false, /* service */
+							 NULL,  /* serviceName */
 							 restoreDBoptions.restart,
 							 restoreDBoptions.resume,
-							 createWorkDir,
-							 auxilliary))
+							 createWorkDir))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

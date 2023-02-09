@@ -272,15 +272,17 @@ cli_create_snapshot(int argc, char **argv)
 
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
-	bool auxilliary = true;
 	bool createWorkDir = true;
+	bool service = true;
+	char *serviceName = "snapshot";
 
 	if (!copydb_init_workdir(&copySpecs,
 							 createSNoptions.dir,
+							 service,
+							 serviceName,
 							 createSNoptions.restart,
 							 createSNoptions.resume,
-							 createWorkDir,
-							 auxilliary))
+							 createWorkDir))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

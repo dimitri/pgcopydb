@@ -30,11 +30,11 @@ EOF
 # we need to export a snapshot, and keep it while the indivual steps are
 # running, one at a time
 
-coproc ( pgcopydb snapshot -vv )
+coproc ( pgcopydb snapshot --debug )
 
 sleep 1
 
-pgcopydb dump schema --resume -vv
+pgcopydb dump schema --resume --debug
 pgcopydb restore pre-data --resume
 
 pgcopydb copy table-data --resume
