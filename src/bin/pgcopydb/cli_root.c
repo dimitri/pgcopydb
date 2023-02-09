@@ -32,6 +32,7 @@ CommandLine *root_subcommands_with_debug[] = {
 	&restore_commands,
 	&list_commands,
 	&stream_commands,
+	&ping_command,
 	&help,
 	&version,
 	NULL
@@ -57,6 +58,7 @@ CommandLine *root_subcommands[] = {
 	&restore_commands,
 	&list_commands,
 	&stream_commands,
+	&ping_command,
 	&help,
 	&version,
 	NULL

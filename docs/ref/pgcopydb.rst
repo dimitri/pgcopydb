@@ -155,3 +155,31 @@ In JSON:
 The details about the Postgres version applies to the version that's been
 used to build pgcopydb from sources, so that's the version of the client
 library ``libpq`` really.
+
+
+pgcopydb ping
+-------------
+
+The ``pgcopydb ping`` command attempts to connect to both the source and the
+target Postgres databases, concurrently.
+
+::
+
+   pgcopydb ping: Copy the roles from the source instance to the target instance
+   usage: pgcopydb ping  --source ... --target ...
+
+     --source              Postgres URI to the source database
+     --target              Postgres URI to the target database
+
+An example output looks like the following:
+
+::
+
+   $ pgcopydb ping
+   18:04:48 84679 INFO   Running pgcopydb version 0.10.31.g7e5fbb8.dirty from "/Users/dim/dev/PostgreSQL/pgcopydb/src/bin/pgcopydb/pgcopydb"
+   18:04:48 84683 INFO   Successfully could connect to target database at "postgres://@:/plop?"
+   18:04:48 84682 INFO   Successfully could connect t source database at "postgres://@:/pagila?"
+
+This command implements a retry policy (named *Decorrelated Jitter*) and can
+be used in automation to make sure that the databases are ready to accept
+connections.
