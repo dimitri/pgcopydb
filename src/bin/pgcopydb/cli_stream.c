@@ -757,15 +757,21 @@ cli_stream_replay(int argc, char **argv)
 
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
-	bool auxilliary = false;
+	/*
+	 * Both the receive and the prefetch command starts the "receive" service,
+	 * so that they conflict with each other.
+	 */
 	bool createWorkDir = false;
+	bool service = true;
+	char *serviceName = "receive";
 
 	if (!copydb_init_workdir(&copySpecs,
 							 NULL,
+							 service,
+							 serviceName,
 							 streamDBoptions.restart,
 							 streamDBoptions.resume,
-							 createWorkDir,
-							 auxilliary))
+							 createWorkDir))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
