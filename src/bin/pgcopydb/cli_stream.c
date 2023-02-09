@@ -28,14 +28,17 @@
 CopyDBOptions streamDBoptions = { 0 };
 
 static int cli_stream_getopts(int argc, char **argv);
+
 static void cli_stream_receive(int argc, char **argv);
 static void cli_stream_transform(int argc, char **argv);
 static void cli_stream_apply(int argc, char **argv);
 
 static void cli_stream_setup(int argc, char **argv);
 static void cli_stream_cleanup(int argc, char **argv);
+
 static void cli_stream_prefetch(int argc, char **argv);
 static void cli_stream_catchup(int argc, char **argv);
+static void cli_stream_replay(int argc, char **argv);
 
 static void stream_start_in_mode(LogicalStreamMode mode);
 
@@ -100,10 +103,27 @@ static CommandLine stream_catchup_command =
 		"  --resume         Allow resuming operations after a failure\n"
 		"  --not-consistent Allow taking a new snapshot on the source database\n"
 		"  --slot-name      Stream changes recorded by this slot\n"
-		"  --endpos         LSN position where to stop receiving changes"
+		"  --endpos         LSN position where to stop receiving changes\n"
 		"  --origin         Name of the Postgres replication origin\n",
 		cli_stream_getopts,
 		cli_stream_catchup);
+
+static CommandLine stream_replay_command =
+	make_command(
+		"replay",
+		"Replay changes from the source to the target database, live",
+		"",
+		"  --source         Postgres URI to the source database\n"
+		"  --target         Postgres URI to the target database\n"
+		"  --dir            Work directory to use\n"
+		"  --restart        Allow restarting when temp files exist already\n"
+		"  --resume         Allow resuming operations after a failure\n"
+		"  --not-consistent Allow taking a new snapshot on the source database\n"
+		"  --slot-name      Stream changes recorded by this slot\n"
+		"  --endpos         LSN position where to stop receiving changes\n"
+		"  --origin         Name of the Postgres replication origin\n",
+		cli_stream_getopts,
+		cli_stream_replay);
 
 static CommandLine stream_receive_command =
 	make_command(
@@ -112,6 +132,7 @@ static CommandLine stream_receive_command =
 		"",
 		"  --source         Postgres URI to the source database\n"
 		"  --dir            Work directory to use\n"
+		"  --to-stdout      Stream logical decoding messages to stdout\n"
 		"  --restart        Allow restarting when temp files exist already\n"
 		"  --resume         Allow resuming operations after a failure\n"
 		"  --not-consistent Allow taking a new snapshot on the source database\n"
@@ -153,6 +174,7 @@ static CommandLine *stream_subcommands[] = {
 	&stream_cleanup_command,
 	&stream_prefetch_command,
 	&stream_catchup_command,
+	&stream_replay_command,
 	&create_commands,
 	&drop_commands,
 	&sentinel_commands,
@@ -190,6 +212,8 @@ cli_stream_getopts(int argc, char **argv)
 		{ "restart", no_argument, NULL, 'r' },
 		{ "resume", no_argument, NULL, 'R' },
 		{ "not-consistent", no_argument, NULL, 'C' },
+		{ "to-stdout", no_argument, NULL, 'O' },
+		{ "from-stdin", no_argument, NULL, 'I' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "debug", no_argument, NULL, 'd' },
@@ -309,6 +333,20 @@ cli_stream_getopts(int argc, char **argv)
 				{
 					log_fatal("Options --resume and --restart are not compatible");
 				}
+				break;
+			}
+
+			case 'O':
+			{
+				options.stdout = true;
+				log_trace("--to-stdout");
+				break;
+			}
+
+			case 'I':
+			{
+				options.stdin = true;
+				log_trace("--from-stdin");
 				break;
 			}
 
@@ -679,7 +717,9 @@ cli_stream_catchup(int argc, char **argv)
 						   streamDBoptions.slotName,
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
-						   STREAM_MODE_APPLY))
+						   STREAM_MODE_CATCHUP,
+						   streamDBoptions.stdin,
+						   streamDBoptions.stdout))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -691,6 +731,106 @@ cli_stream_catchup(int argc, char **argv)
 	 * the wal_segment_size.
 	 */
 	if (!stream_apply_catchup(&specs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_TARGET);
+	}
+}
+
+
+/*
+ * cli_stream_replay streams the DML changes from logical decoding on the
+ * source database, stores them in JSON files locally, transforms them in SQL
+ * statements to disk, and replays the SQL statements on the target database,
+ * keeping track and updating the replication origin.
+ */
+static void
+cli_stream_replay(int argc, char **argv)
+{
+	CopyDataSpec copySpecs = { 0 };
+
+	if (argc > 0)
+	{
+		commandline_help(stderr);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	(void) find_pg_commands(&(copySpecs.pgPaths));
+
+	/*
+	 * Both the receive and the prefetch command starts the "receive" service,
+	 * so that they conflict with each other.
+	 */
+	bool createWorkDir = false;
+	bool service = true;
+	char *serviceName = "receive";
+
+	if (!copydb_init_workdir(&copySpecs,
+							 NULL,
+							 service,
+							 serviceName,
+							 streamDBoptions.restart,
+							 streamDBoptions.resume,
+							 createWorkDir))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	RestoreOptions restoreOptions = { 0 };
+
+	if (!copydb_init_specs(&copySpecs,
+						   streamDBoptions.source_pguri,
+						   streamDBoptions.target_pguri,
+						   1,   /* tableJobs */
+						   1,   /* indexJobs */
+						   0,   /* skip threshold */
+						   "",  /* skip threshold pretty printed */
+						   DATA_SECTION_ALL,
+						   streamDBoptions.snapshot,
+						   restoreOptions,
+						   false, /* roles */
+						   false, /* skipLargeObjects */
+						   false, /* skipExtensions */
+						   false, /* skipCollations */
+						   streamDBoptions.restart,
+						   streamDBoptions.resume,
+						   !streamDBoptions.notConsistent))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	StreamSpecs specs = { 0 };
+
+	if (!stream_init_specs(&specs,
+						   &(copySpecs.cfPaths.cdc),
+						   copySpecs.source_pguri,
+						   copySpecs.target_pguri,
+						   streamDBoptions.plugin,
+						   streamDBoptions.slotName,
+						   streamDBoptions.origin,
+						   streamDBoptions.endpos,
+						   STREAM_MODE_REPLAY,
+						   streamDBoptions.stdin,
+						   streamDBoptions.stdout))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/*
+	 * Now remove the possibly still existing stream context files from
+	 * previous round of operations (--resume, etc). We want to make sure that
+	 * the catchup process reads the files created on this connection.
+	 */
+	if (!stream_cleanup_context(&specs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!stream_replay(&specs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);
@@ -717,7 +857,55 @@ cli_stream_transform(int argc, char **argv)
 	char *jsonfilename = argv[0];
 	char *sqlfilename = argv[1];
 
-	if (!stream_transform_file(jsonfilename, sqlfilename))
+	/*
+	 * Do we use the file API, or the stream API?
+	 *
+	 * The filename arguments can be set to - to mean stdin and stdout
+	 * respectively, and in that case we use the streaming API so that we're
+	 * compatible with Unix pipes.
+	 *
+	 * When the input is a stream, even if the output is a file, we still use
+	 * the streaming API, we just open the output stream here before calling
+	 * into the stream API.
+	 */
+	if (streq(jsonfilename, "-"))
+	{
+		FILE *in = stdin;
+		FILE *out = stdout;
+
+		if (streq(sqlfilename, "-"))
+		{
+			/* switch out stream from block buffered to line buffered mode */
+			if (setvbuf(out, NULL, _IOLBF, 0) != 0)
+			{
+				log_error("Failed to set stdout to line buffered mode: %m");
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+		}
+		else
+		{
+			out = fopen_with_umask(sqlfilename, "w", FOPEN_FLAGS_W, 0644);
+
+			if (out == NULL)
+			{
+				log_fatal("Failed to create and open file \"%s\"", sqlfilename);
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+		}
+
+		if (!stream_transform_stream(in, out))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		if (fclose(out) != 0)
+		{
+			log_error("Failed to close file \"%s\": %m", sqlfilename);
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+	}
+	else if (!stream_transform_file(jsonfilename, sqlfilename))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -782,38 +970,67 @@ cli_stream_apply(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	/* prepare the replication origin tracking */
-	StreamApplyContext context = { 0 };
-
-	if (!setupReplicationOrigin(&context,
-								&(copySpecs.cfPaths.cdc),
-								streamDBoptions.source_pguri,
-								streamDBoptions.target_pguri,
-								streamDBoptions.origin,
-								streamDBoptions.endpos,
-								true))
-	{
-		log_error("Failed to setup replication origin on the target database");
-		exit(EXIT_CODE_TARGET);
-	}
-
 	/*
 	 * Force the SQL filename to the given argument, bypassing filename
 	 * computations based on origin tracking. Already known-applied
 	 * transactions are still skipped.
+	 *
+	 * The filename arguments can be set to - to mean stdin, and in that case
+	 * we use the streaming API so that we're compatible with Unix pipes.
 	 */
 	char *sqlfilename = argv[0];
 
-	strlcpy(context.sqlFileName, sqlfilename, sizeof(context.sqlFileName));
-
-	if (!stream_apply_file(&context))
+	if (streq(sqlfilename, "-"))
 	{
-		/* errors have already been logged */
-		pgsql_finish(&(context.pgsql));
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
+		StreamSpecs specs = { 0 };
 
-	pgsql_finish(&(context.pgsql));
+		if (!stream_init_specs(&specs,
+							   &(copySpecs.cfPaths.cdc),
+							   copySpecs.source_pguri,
+							   copySpecs.target_pguri,
+							   streamDBoptions.plugin,
+							   streamDBoptions.slotName,
+							   streamDBoptions.origin,
+							   streamDBoptions.endpos,
+							   STREAM_MODE_CATCHUP,
+							   true, /* streamDBoptions.stdin */
+							   false /* streamDBoptions.stdout */))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		if (!stream_apply_replay(&specs))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+	}
+	else
+	{
+		/* prepare the replication origin tracking */
+		StreamApplyContext context = { 0 };
+
+		strlcpy(context.sqlFileName, sqlfilename, sizeof(context.sqlFileName));
+
+		if (!setupReplicationOrigin(&context,
+									&(copySpecs.cfPaths.cdc),
+									streamDBoptions.source_pguri,
+									streamDBoptions.target_pguri,
+									streamDBoptions.origin,
+									streamDBoptions.endpos,
+									true))
+		{
+			log_error("Failed to setup replication origin on the target database");
+			exit(EXIT_CODE_TARGET);
+		}
+
+		if (!stream_apply_file(&context))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+	}
 }
 
 
@@ -882,7 +1099,9 @@ stream_start_in_mode(LogicalStreamMode mode)
 						   streamDBoptions.slotName,
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
-						   mode))
+						   mode,
+						   streamDBoptions.stdin,
+						   streamDBoptions.stdout))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

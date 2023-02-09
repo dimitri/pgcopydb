@@ -49,10 +49,15 @@ stream_init_specs(StreamSpecs *specs,
 				  char *slotName,
 				  char *origin,
 				  uint64_t endpos,
-				  LogicalStreamMode mode)
+				  LogicalStreamMode mode,
+				  bool stdin,
+				  bool stdout)
 {
 	/* just copy into StreamSpecs what's been initialized in copySpecs */
 	specs->mode = mode;
+	specs->stdin = stdin;
+	specs->stdout = stdout;
+
 	specs->paths = *paths;
 	specs->endpos = endpos;
 
@@ -123,6 +128,38 @@ stream_init_specs(StreamSpecs *specs,
 
 	log_trace("stream_init_specs: %s(%d)", plugin, specs->pluginOptions.count);
 
+
+	/*
+	 * Now create the unix pipes needed for inter-process communication (data
+	 * flow) when needed. We override command line arguments for --to-stdout
+	 * and --from-stdin when stream mode is set to STREAM_MODE_REPLAY.
+	 */
+	if (specs->mode == STREAM_MODE_REPLAY)
+	{
+		specs->stdin = true;
+		specs->stdout = true;
+	}
+
+	/* specs->stdout is used for the receive-transform pipe */
+	if (specs->stdout)
+	{
+		if (pipe(specs->pipe_rt) != 0)
+		{
+			log_fatal("Failed to create a pipe for streaming: %m");
+			return false;
+		}
+	}
+
+	/* specs->stdin is used for the transform-apply pipe */
+	if (specs->stdin)
+	{
+		if (pipe(specs->pipe_ta) != 0)
+		{
+			log_fatal("Failed to create a pipe for streaming: %m");
+			return false;
+		}
+	}
+
 	return true;
 }
 
@@ -134,6 +171,9 @@ bool
 stream_init_context(StreamContext *privateContext, StreamSpecs *specs)
 {
 	privateContext->mode = specs->mode;
+	privateContext->stdin = specs->stdin;
+	privateContext->stdout = specs->stdout;
+
 	privateContext->paths = specs->paths;
 	privateContext->startpos = specs->startpos;
 
@@ -205,11 +245,40 @@ startLogicalStreaming(StreamSpecs *specs)
 
 	context.private = (void *) &(privateContext);
 
-	if (!stream_transform_start_worker(&context))
+	switch (specs->mode)
 	{
-		/* errors have already been logged */
-		return false;
+		case STREAM_MODE_PREFETCH:
+		{
+			if (!stream_transform_start_worker(&context))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+			break;
+		}
+
+		case STREAM_MODE_RECEIVE:
+		{
+			if (specs->stdout)
+			{
+				/* switch stdout from block buffered to line buffered mode */
+				if (setvbuf(stdout, NULL, _IOLBF, 0) != 0)
+				{
+					log_error("Failed to set stdout to line buffered mode: %m");
+					return false;
+				}
+			}
+			break;
+		}
+
+		/* nothing to do in other modes */
+		default:
+		{
+			break;
+		}
 	}
+
+	log_info("Connecting to logical decoding replication stream");
 
 	/*
 	 * In case of being disconnected or other transient errors, reconnect and
@@ -449,38 +518,45 @@ streamWrite(LogicalStreamContext *context)
 		return false;
 	}
 
-	/* first write our own metadata, formatted in JSON */
-	int ret =
-		fformat(privateContext->jsonFile,
-				"{\"action\":\"%c\","
-				"\"xid\":\"%lld\","
-				"\"lsn\":\"%X/%X\","
-				"\"timestamp\":\"%s\","
-				"\"message\":",
-				metadata->action,
-				(long long) metadata->xid,
-				LSN_FORMAT_ARGS(metadata->lsn),
-				metadata->timestamp);
+	/* prepare a in-memory buffer with the whole data formatted in JSON */
+	PQExpBuffer buffer = createPQExpBuffer();
 
-	if (ret == -1)
+	if (buffer == NULL)
 	{
-		log_error("Failed to write message metadata for action %d at LSN %X/%X "
-				  "to file \"%s\": %m",
-				  metadata->action,
-				  LSN_FORMAT_ARGS(metadata->lsn),
-				  privateContext->partialFileName);
+		log_fatal("Failed to allocate memory to prepare JSON message");
+		return false;
+	}
+
+	appendPQExpBuffer(buffer,
+					  "{\"action\":\"%c\","
+					  "\"xid\":\"%lld\","
+					  "\"lsn\":\"%X/%X\","
+					  "\"timestamp\":\"%s\","
+					  "\"message\":",
+					  metadata->action,
+					  (long long) metadata->xid,
+					  LSN_FORMAT_ARGS(metadata->lsn),
+					  metadata->timestamp);
+
+	appendPQExpBuffer(buffer, "%s}\n", privateContext->jsonBuffer);
+
+	/* memory allocation could have failed while building string */
+	if (PQExpBufferBroken(buffer))
+	{
+		log_error("Failed to prepare JSON message: out of memory");
+		destroyPQExpBuffer(buffer);
 		return false;
 	}
 
 	/* then add the logical output plugin data, inside our own JSON format */
-	long bytes_left = strlen(privateContext->jsonBuffer);
+	long bytes_left = buffer->len;
 	long bytes_written = 0;
 
 	while (bytes_left > 0)
 	{
 		int ret;
 
-		ret = fwrite(privateContext->jsonBuffer + bytes_written,
+		ret = fwrite(buffer->data + bytes_written,
 					 sizeof(char),
 					 bytes_left,
 					 privateContext->jsonFile);
@@ -498,24 +574,35 @@ streamWrite(LogicalStreamContext *context)
 		bytes_left -= ret;
 	}
 
-	if (fwrite("}\n", sizeof(char), 2, privateContext->jsonFile) != 2)
+	/*
+	 * Now if specs->stdout is true we want to also write all the same things
+	 * again to stdout this time. We don't expect buffered IO to stdout, so we
+	 * don't loop and retry short writes there.
+	 */
+	if (privateContext->stdout)
 	{
-		log_error("Failed to write 2 bytes to file \"%s\": %m",
-				  privateContext->partialFileName);
+		int ret = fwrite(buffer->data, sizeof(char), buffer->len, stdout);
 
-		if (privateContext->jsonFile != NULL)
+		if (ret != buffer->len)
 		{
-			if (fclose(privateContext->jsonFile) != 0)
-			{
-				log_error("Failed to close file \"%s\": %m",
-						  privateContext->partialFileName);
-			}
-
-			/* reset the jsonFile FILE * pointer to NULL, it's closed now */
-			privateContext->jsonFile = NULL;
+			log_error("Failed to write JSON message (%ld bytes) to stdout: %m",
+					  buffer->len);
+			log_debug("JSON message: %s", buffer->data);
+			return false;
 		}
-		return false;
+
+		/* flush stdout at transaction boundaries */
+		if (metadata->action == STREAM_ACTION_COMMIT)
+		{
+			if (fflush(stdout) != 0)
+			{
+				log_error("Failed to flush standard output: %m");
+				return false;
+			}
+		}
 	}
+
+	destroyPQExpBuffer(buffer);
 
 	/*
 	 * If the buffer was allocated anew in prepareMessageJSONbuffer, now is
@@ -650,6 +737,11 @@ streamRotateFile(LogicalStreamContext *context)
 			return false;
 		}
 
+		privateContext->jsonFile =
+			fopen_with_umask(partialFileName, "ab", FOPEN_FLAGS_A, 0644);
+	}
+	else if (file_exists(partialFileName))
+	{
 		privateContext->jsonFile =
 			fopen_with_umask(partialFileName, "ab", FOPEN_FLAGS_A, 0644);
 	}

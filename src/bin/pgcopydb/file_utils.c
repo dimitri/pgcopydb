@@ -20,6 +20,8 @@
 #include "env_utils.h"
 #include "file_utils.h"
 #include "log.h"
+#include "signals.h"
+#include "string_utils.h"
 
 static bool read_file_internal(FILE *fileStream,
 							   const char *filePath,
@@ -366,6 +368,157 @@ read_file_internal(FILE *fileStream,
 
 	data[*fileSize] = '\0';
 	*contents = data;
+
+	return true;
+}
+
+
+/*
+ * read_from_stream reads lines from an input stream, such as a Unix Pipe, and
+ * for each line read calls the provided context->callback function with its
+ * own private context as an argument.
+ */
+bool
+read_from_stream(FILE *stream, ReadFromStreamContext *context)
+{
+	int countFdsReadyToRead, nfds; /* see man select(2) */
+	fd_set readFileDescriptorSet;
+
+	context->fd = fileno(stream);
+	nfds = context->fd + 1;
+
+	bool doneReading = false;
+
+	while (!doneReading)
+	{
+		struct timeval timeout = { 0, 100 * 1000 }; /* 100 ms */
+
+		/*
+		 * When asked_to_stop || asked_to_stop_fast still continue reading
+		 * through EOF on the input stream, then quit normally.
+		 */
+		if (asked_to_quit)
+		{
+			return false;
+		}
+
+		FD_ZERO(&readFileDescriptorSet);
+		FD_SET(context->fd, &readFileDescriptorSet);
+
+		countFdsReadyToRead =
+			select(nfds, &readFileDescriptorSet, NULL, NULL, &timeout);
+
+		if (countFdsReadyToRead == -1)
+		{
+			if (errno == EINTR || errno == EAGAIN)
+			{
+				continue;
+			}
+			else
+			{
+				log_error("Failed to select on file descriptor %d: %m",
+						  context->fd);
+				return false;
+			}
+		}
+
+		if (countFdsReadyToRead == 0)
+		{
+			continue;
+		}
+
+		/*
+		 * data is expected to be written one line at a time, if any data is
+		 * available per select(2) call, then we should be able to read an
+		 * entire line now.
+		 */
+		if (FD_ISSET(context->fd, &readFileDescriptorSet))
+		{
+			/*
+			 * Allocate a 128 MB string to receive data from the input stream.
+			 *
+			 * TODO: That's a large allocation but should allow us to accept
+			 * logical decoding traffic. The general case would be to loop over
+			 * memory chunks and then split and re-join chunks into JSON lines,
+			 * or use a streaming JSON parsing API.
+			 *
+			 * Also, because we switch the output stream of producing processes
+			 * to line buffered, this only should become a problem when a
+			 * single JSON message is more than the 128 MB we allocate here.
+			 */
+			size_t s = 128 * 1024 * 1024;
+			char *buf = calloc(s + 1, sizeof(char));
+			size_t bytes = read(context->fd, buf, s);
+
+			if (bytes == -1)
+			{
+				log_error("Failed to read from input stream: %m");
+				free(buf);
+				return false;
+			}
+			else if (bytes == 0)
+			{
+				free(buf);
+				doneReading = true;
+				continue;
+			}
+			else if (bytes == s)
+			{
+				char bytesPretty[BUFSIZE] = { 0 };
+				char limitPretty[BUFSIZE] = { 0 };
+
+				(void) pretty_print_bytes(bytesPretty, BUFSIZE, bytes);
+				(void) pretty_print_bytes(limitPretty, BUFSIZE, s);
+
+				log_error("Failed to read from input stream, message is larger "
+						  "than pgcopydb limit (%s): %s",
+						  limitPretty,
+						  bytesPretty);
+				return false;
+			}
+
+			log_trace("read_from_stream read %lld bytes from input",
+					  (long long) bytes);
+
+			char *lines[BUFSIZE] = { 0 };
+			int lineCount = splitLines(buf, lines, BUFSIZE);
+
+			log_trace("read_from_stream: read %d lines", lineCount);
+
+			for (int i = 0; i < lineCount; i++)
+			{
+				char *line = lines[i];
+
+				if (asked_to_quit)
+				{
+					free(buf);
+					return false;
+				}
+
+				/* we count stream input lines as if reading from a file */
+				++context->lineno;
+
+				/* call the used provided function */
+				bool stop;
+
+				if (!(*context->callback)(context->ctx, line, &stop))
+				{
+					free(buf);
+					return false;
+				}
+
+				if (stop)
+				{
+					doneReading = true;
+				}
+			}
+
+			free(buf);
+		}
+
+		/* doneReading might have been set from the user callback already */
+		doneReading = doneReading || feof(stream) != 0;
+	}
 
 	return true;
 }

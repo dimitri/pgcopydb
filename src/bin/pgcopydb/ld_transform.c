@@ -6,6 +6,8 @@
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <sys/select.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -30,6 +32,11 @@
 #include "signals.h"
 #include "string_utils.h"
 #include "summary.h"
+
+
+static bool stream_transform_message(char *message,
+									 LogicalTransaction *currentTx,
+									 bool *commit);
 
 
 /*
@@ -254,6 +261,147 @@ stream_transform_send_stop(Queue *queue)
 	{
 		/* errors have already been logged */
 		return false;
+	}
+
+	return true;
+}
+
+
+typedef struct TransformStreamCtx
+{
+	uint64_t currentTxIndex;
+	LogicalTransaction currentTx;
+	FILE *out;
+} TransformStreamCtx;
+
+
+/*
+ * stream_transform_stream transforms a JSON formatted input stream (read line
+ * by line) as received from the wal2json logical decoding plugin into an SQL
+ * stream ready for applying to the target database.
+ */
+bool
+stream_transform_stream(FILE *in, FILE *out)
+{
+	log_info("Starting the transform service");
+
+	TransformStreamCtx ctx = {
+		.currentTxIndex = 0,
+		.currentTx = { 0 },
+		.out = out
+	};
+
+	ReadFromStreamContext context = {
+		.callback = stream_transform_line,
+		.ctx = &ctx
+	};
+
+	if (!read_from_stream(in, &context))
+	{
+		log_error("Failed to transform JSON messages from input stream, "
+				  "see above for details");
+		return false;
+	}
+
+	log_notice("Transformed %lld messages and %lld transactions",
+			   (long long) context.lineno,
+			   (long long) ctx.currentTxIndex + 1);
+
+	return true;
+}
+
+
+/*
+ * stream_transform_line is a callback function for the ReadFromStreamContext
+ * and read_from_stream infrastructure. It's called on each line read from a
+ * stream such as a unix pipe.
+ */
+bool
+stream_transform_line(void *ctx, const char *line, bool *stop)
+{
+	TransformStreamCtx *transformCtx = (TransformStreamCtx *) ctx;
+	LogicalTransaction *currentTx = &(transformCtx->currentTx);
+
+	static uint64_t lineno = 0;
+
+	log_trace("stream_transform_line[%lld]: %s", (long long) ++lineno, line);
+
+	bool commit = false;
+
+	if (!stream_transform_message((char *) line, currentTx, &commit))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * Is it time to close the current transaction and prepare a new
+	 * one?
+	 */
+	if (commit)
+	{
+		log_debug("Transforming transaction xid %d with %d statements",
+				  currentTx->xid,
+				  currentTx->count);
+
+		/* now write the transaction out */
+		if (!stream_write_transaction(transformCtx->out, currentTx))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		(void) FreeLogicalTransaction(currentTx);
+
+		/* then prepare a new one, reusing the same memory area */
+		LogicalTransaction emptyTx = { 0 };
+
+		*currentTx = emptyTx;
+		++(transformCtx->currentTxIndex);
+	}
+
+	return true;
+}
+
+
+/*
+ * stream_transform_message transforms a single JSON message from our streaming
+ * output into a SQL statement, and appends it to the given opened transaction.
+ */
+static bool
+stream_transform_message(char *message,
+						 LogicalTransaction *currentTx,
+						 bool *commit)
+{
+	LogicalMessageMetadata metadata = { 0 };
+	JSON_Value *json = json_parse_string(message);
+
+	if (!parseMessageMetadata(&metadata, message, json, false))
+	{
+		/* errors have already been logged */
+		json_value_free(json);
+		return false;
+	}
+
+	if (!parseMessage(currentTx, &metadata, message, json))
+	{
+		log_error("Failed to parse JSON message: %s", message);
+		json_value_free(json);
+		return false;
+	}
+
+	json_value_free(json);
+
+	log_trace("stream_transform_stream: %c %3d %X/%X: %3d %X/%X",
+			  metadata.action,
+			  metadata.xid,
+			  LSN_FORMAT_ARGS(metadata.lsn),
+			  currentTx->xid,
+			  LSN_FORMAT_ARGS(currentTx->beginLSN));
+
+	if (metadata.action == STREAM_ACTION_COMMIT)
+	{
+		*commit = true;
 	}
 
 	return true;
@@ -486,7 +634,8 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 		return false;
 	}
 
-	log_info("Transformed JSON messages into SQL file \"%s\"",
+	log_info("Transformed %d JSON messages into SQL file \"%s\"",
+			 content.count,
 			 sqlfilename);
 
 	return true;
@@ -952,6 +1101,13 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 	{
 		if (!stream_write_commit(out, txn))
 		{
+			return false;
+		}
+
+		/* flush out stream at transaction boundaries */
+		if (fflush(out) != 0)
+		{
+			log_error("Failed to flush stream output: %m");
 			return false;
 		}
 	}

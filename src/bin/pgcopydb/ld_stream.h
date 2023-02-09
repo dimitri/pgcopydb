@@ -60,14 +60,14 @@ typedef struct LogicalMessageMetadata
 /*
  * The detailed behavior of the LogicalStreamClient is implemented in the
  * callback functions writeFunction, flushFunction, and closeFunction.
- *
  */
 typedef enum
 {
 	STREAM_MODE_UNKNOW = 0,
 	STREAM_MODE_RECEIVE,        /* pgcopydb receive */
 	STREAM_MODE_PREFETCH,       /* pgcopydb fetch */
-	STREAM_MODE_APPLY           /* pgcopydb replay */
+	STREAM_MODE_CATCHUP,        /* pgcopydb catchup */
+	STREAM_MODE_REPLAY          /* pgcopydb replay */
 } LogicalStreamMode;
 
 
@@ -81,6 +81,9 @@ typedef struct StreamContext
 	uint64_t startpos;
 	uint64_t endpos;
 	bool apply;
+
+	bool stdin;
+	bool stdout;
 
 	char *jsonBuffer;           /* malloc'ed area */
 	LogicalMessageMetadata metadata;
@@ -119,6 +122,7 @@ typedef struct StreamApplyContext
 	uint64_t startpos;          /* from the pgcopydb sentinel */
 	uint64_t endpos;            /* finish applying when endpos is reached */
 
+	bool reachedStartPos;
 	bool reachedEndPos;
 
 	char wal[MAXPGPATH];
@@ -270,6 +274,13 @@ typedef struct StreamSpecs
 
 	bool restart;
 	bool resume;
+
+	bool stdin;                 /* read from stdin */
+	bool stdout;                /* (also) write to stdout */
+
+	/* STREAM_MODE_REPLAY (and other operations) requires two unix pipes */
+	int pipe_rt[2];     /* receive-transform pipe */
+	int pipe_ta[2];     /* transform-apply pipe */
 } StreamSpecs;
 
 typedef struct StreamContent
@@ -290,7 +301,9 @@ bool stream_init_specs(StreamSpecs *specs,
 					   char *slotName,
 					   char *origin,
 					   uint64_t endpos,
-					   LogicalStreamMode mode);
+					   LogicalStreamMode mode,
+					   bool stdin,
+					   bool stdout);
 
 bool stream_init_context(StreamContext *privateContext, StreamSpecs *specs);
 bool stream_close_context(StreamContext *privateContext);
@@ -360,6 +373,8 @@ bool stream_transform_add_file(Queue *queue, uint64_t firstLSN);
 bool stream_transform_send_stop(Queue *queue);
 bool stream_compute_pathnames(LogicalStreamContext *context, uint64_t lsn);
 
+bool stream_transform_stream(FILE * in, FILE *out);
+bool stream_transform_line(void *ctx, const char *line, bool *stop);
 bool stream_transform_file(char *jsonfilename, char *sqlfilename);
 bool stream_write_transaction(FILE *out, LogicalTransaction *tx);
 bool stream_write_begin(FILE *out, LogicalTransaction *tx);
@@ -413,6 +428,10 @@ bool stream_apply_sync_sentinel(StreamApplyContext *context);
 
 bool stream_apply_file(StreamApplyContext *context);
 
+bool stream_apply_sql(StreamApplyContext *context,
+					  LogicalMessageMetadata *metadata,
+					  const char *sql);
+
 bool setupReplicationOrigin(StreamApplyContext *context,
 							CDCPaths *paths,
 							char *source_pguri,
@@ -423,8 +442,12 @@ bool setupReplicationOrigin(StreamApplyContext *context,
 
 bool computeSQLFileName(StreamApplyContext *context);
 
-StreamAction parseSQLAction(const char *query, LogicalMessageMetadata *metadata);
+bool parseSQLAction(const char *query, LogicalMessageMetadata *metadata);
 
+/* ld_replay */
+bool stream_replay(StreamSpecs *specs);
+bool stream_apply_replay(StreamSpecs *specs);
+bool stream_replay_line(void *ctx, const char *line, bool *stop);
 
 /* follow.c */
 bool follow_start_prefetch(StreamSpecs *specs, pid_t *pid);

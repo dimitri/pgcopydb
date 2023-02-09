@@ -30,6 +30,7 @@ jobs:
           - cdc-wal2json
           - follow-wal2json
           - follow-9.6
+          - cdc-low-level
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
