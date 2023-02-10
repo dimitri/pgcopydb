@@ -74,9 +74,9 @@ stream_apply_replay(StreamSpecs *specs)
 		return false;
 	}
 
-	if (!specs->stdin)
+	if (!specs->stdIn)
 	{
-		log_error("BUG: stream_apply_replay requires specs->stdin");
+		log_error("BUG: stream_apply_replay requires specs->stdIn");
 		return false;
 	}
 

@@ -82,8 +82,8 @@ typedef struct StreamContext
 	uint64_t endpos;
 	bool apply;
 
-	bool stdin;
-	bool stdout;
+	bool stdIn;
+	bool stdOut;
 
 	char *jsonBuffer;           /* malloc'ed area */
 	LogicalMessageMetadata metadata;
@@ -275,8 +275,8 @@ typedef struct StreamSpecs
 	bool restart;
 	bool resume;
 
-	bool stdin;                 /* read from stdin */
-	bool stdout;                /* (also) write to stdout */
+	bool stdIn;                 /* read from stdin */
+	bool stdOut;                /* (also) write to stdout */
 
 	/* STREAM_MODE_REPLAY (and other operations) requires two unix pipes */
 	int pipe_rt[2];     /* receive-transform pipe */
@@ -302,8 +302,8 @@ bool stream_init_specs(StreamSpecs *specs,
 					   char *origin,
 					   uint64_t endpos,
 					   LogicalStreamMode mode,
-					   bool stdin,
-					   bool stdout);
+					   bool stdIn,
+					   bool stdOut);
 
 bool stream_init_context(StreamContext *privateContext, StreamSpecs *specs);
 bool stream_close_context(StreamContext *privateContext);

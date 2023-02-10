@@ -338,14 +338,14 @@ cli_stream_getopts(int argc, char **argv)
 
 			case 'O':
 			{
-				options.stdout = true;
+				options.stdOut = true;
 				log_trace("--to-stdout");
 				break;
 			}
 
 			case 'I':
 			{
-				options.stdin = true;
+				options.stdIn = true;
 				log_trace("--from-stdin");
 				break;
 			}
@@ -718,8 +718,8 @@ cli_stream_catchup(int argc, char **argv)
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
-						   streamDBoptions.stdin,
-						   streamDBoptions.stdout))
+						   streamDBoptions.stdIn,
+						   streamDBoptions.stdOut))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -812,8 +812,8 @@ cli_stream_replay(int argc, char **argv)
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   STREAM_MODE_REPLAY,
-						   streamDBoptions.stdin,
-						   streamDBoptions.stdout))
+						   streamDBoptions.stdIn,
+						   streamDBoptions.stdOut))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -993,8 +993,8 @@ cli_stream_apply(int argc, char **argv)
 							   streamDBoptions.origin,
 							   streamDBoptions.endpos,
 							   STREAM_MODE_CATCHUP,
-							   true, /* streamDBoptions.stdin */
-							   false /* streamDBoptions.stdout */))
+							   true, /* streamDBoptions.stdIn */
+							   false /* streamDBoptions.stdOut */))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);
@@ -1100,8 +1100,8 @@ stream_start_in_mode(LogicalStreamMode mode)
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   mode,
-						   streamDBoptions.stdin,
-						   streamDBoptions.stdout))
+						   streamDBoptions.stdIn,
+						   streamDBoptions.stdOut))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
