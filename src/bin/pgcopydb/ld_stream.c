@@ -55,8 +55,8 @@ stream_init_specs(StreamSpecs *specs,
 {
 	/* just copy into StreamSpecs what's been initialized in copySpecs */
 	specs->mode = mode;
-	specs->stdin = stdin;
-	specs->stdout = stdout;
+	specs->stdIn = stdin;
+	specs->stdOut = stdout;
 
 	specs->paths = *paths;
 	specs->endpos = endpos;
@@ -136,12 +136,12 @@ stream_init_specs(StreamSpecs *specs,
 	 */
 	if (specs->mode == STREAM_MODE_REPLAY)
 	{
-		specs->stdin = true;
-		specs->stdout = true;
+		specs->stdIn = true;
+		specs->stdOut = true;
 	}
 
-	/* specs->stdout is used for the receive-transform pipe */
-	if (specs->stdout)
+	/* specs->stdOut is used for the receive-transform pipe */
+	if (specs->stdOut)
 	{
 		if (pipe(specs->pipe_rt) != 0)
 		{
@@ -150,8 +150,8 @@ stream_init_specs(StreamSpecs *specs,
 		}
 	}
 
-	/* specs->stdin is used for the transform-apply pipe */
-	if (specs->stdin)
+	/* specs->stdIn is used for the transform-apply pipe */
+	if (specs->stdIn)
 	{
 		if (pipe(specs->pipe_ta) != 0)
 		{
@@ -171,8 +171,8 @@ bool
 stream_init_context(StreamContext *privateContext, StreamSpecs *specs)
 {
 	privateContext->mode = specs->mode;
-	privateContext->stdin = specs->stdin;
-	privateContext->stdout = specs->stdout;
+	privateContext->stdIn = specs->stdIn;
+	privateContext->stdOut = specs->stdOut;
 
 	privateContext->paths = specs->paths;
 	privateContext->startpos = specs->startpos;
@@ -259,7 +259,7 @@ startLogicalStreaming(StreamSpecs *specs)
 
 		case STREAM_MODE_RECEIVE:
 		{
-			if (specs->stdout)
+			if (specs->stdOut)
 			{
 				/* switch stdout from block buffered to line buffered mode */
 				if (setvbuf(stdout, NULL, _IOLBF, 0) != 0)
@@ -575,11 +575,11 @@ streamWrite(LogicalStreamContext *context)
 	}
 
 	/*
-	 * Now if specs->stdout is true we want to also write all the same things
+	 * Now if specs->stdOut is true we want to also write all the same things
 	 * again to stdout this time. We don't expect buffered IO to stdout, so we
 	 * don't loop and retry short writes there.
 	 */
-	if (privateContext->stdout)
+	if (privateContext->stdOut)
 	{
 		int ret = fwrite(buffer->data, sizeof(char), buffer->len, stdout);
 

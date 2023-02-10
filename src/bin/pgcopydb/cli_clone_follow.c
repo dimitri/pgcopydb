@@ -128,8 +128,8 @@ cli_clone(int argc, char **argv)
 							   copyDBoptions.origin,
 							   copyDBoptions.endpos,
 							   STREAM_MODE_PREFETCH,
-							   copyDBoptions.stdin,
-							   copyDBoptions.stdout))
+							   copyDBoptions.stdIn,
+							   copyDBoptions.stdOut))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);
@@ -365,8 +365,8 @@ cli_follow(int argc, char **argv)
 						   copyDBoptions.origin,
 						   copyDBoptions.endpos,
 						   STREAM_MODE_PREFETCH,
-						   copyDBoptions.stdin,
-						   copyDBoptions.stdout))
+						   copyDBoptions.stdIn,
+						   copyDBoptions.stdOut))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
