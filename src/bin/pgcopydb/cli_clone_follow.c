@@ -653,6 +653,7 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	}
 
 	pid_t prefetch = -1;
+	pid_t transform = -1;
 	pid_t catchup = -1;
 
 	if (!follow_start_prefetch(streamSpecs, &prefetch))
@@ -661,9 +662,12 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		return false;
 	}
 
-	/*
-	 * Second, start the catchup process.
-	 */
+	if (!follow_start_transform(streamSpecs, &transform))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (!follow_start_catchup(streamSpecs, &catchup))
 	{
 		/* errors have already been logged */
@@ -676,7 +680,7 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	 * This happens when the sentinel endpos is set, typically using the
 	 * command: pgcopydb stream sentinel set endpos --current.
 	 */
-	if (!follow_wait_subprocesses(streamSpecs, prefetch, catchup))
+	if (!follow_wait_subprocesses(streamSpecs, prefetch, transform, catchup))
 	{
 		/* errors have already been logged */
 		return false;

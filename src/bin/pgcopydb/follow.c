@@ -31,27 +31,83 @@ follow_start_prefetch(StreamSpecs *specs, pid_t *pid)
 		case -1:
 		{
 			log_error("Failed to fork a subprocess to prefetch changes: %m");
-			return -1;
+			return false;
 		}
 
 		case 0:
 		{
 			/* child process runs the command */
 			log_debug("Starting the prefetch sub-process");
-			if (!startLogicalStreaming(specs))
+
+			bool success = startLogicalStreaming(specs);
+
+			if (specs->mode == STREAM_MODE_PREFETCH)
 			{
-				/* errors have already been logged */
-				exit(EXIT_CODE_SOURCE);
+				if (!queue_unlink(&(specs->transformQueue)))
+				{
+					/* errors have already been logged */
+					log_warn("HINT: use ipcrm -q %d to remove the queue",
+							 specs->transformQueue.qId);
+					exit(EXIT_CODE_INTERNAL_ERROR);
+				}
 			}
 
-			/* and we're done */
-			exit(EXIT_CODE_QUIT);
+			exit(success ? EXIT_CODE_QUIT : EXIT_CODE_SOURCE);
 		}
 
 		default:
 		{
 			*pid = fpid;
 			return true;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * follow_start_transform creates a sub-process that transform JSON files into
+ * SQL files as needed, consuming requests from a queue.
+ */
+bool
+follow_start_transform(StreamSpecs *specs, pid_t *pid)
+{
+	/*
+	 * Flush stdio channels just before fork, to avoid double-output
+	 * problems.
+	 */
+	fflush(stdout);
+	fflush(stderr);
+
+	int fpid = fork();
+
+	switch (fpid)
+	{
+		case -1:
+		{
+			log_error("Failed to fork a subprocess to transform changes to SQL: %m");
+			return false;
+		}
+
+		case 0:
+		{
+			/* child process runs the command */
+			log_debug("Starting the transform sub-process");
+			if (!stream_transform_worker(specs))
+			{
+				/* errors have already been logged */
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			exit(EXIT_CODE_QUIT);
+		}
+
+		default:
+		{
+			/* fork succeeded, in parent */
+			*pid = fpid;
+			break;
 		}
 	}
 
@@ -74,7 +130,7 @@ follow_start_catchup(StreamSpecs *specs, pid_t *pid)
 		case -1:
 		{
 			log_error("Failed to fork a subprocess to prefetch changes: %m");
-			return -1;
+			return false;
 		}
 
 		case 0:
@@ -106,14 +162,20 @@ follow_start_catchup(StreamSpecs *specs, pid_t *pid)
  * follow_wait_subprocesses waits until both sub-processes are finished.
  */
 bool
-follow_wait_subprocesses(StreamSpecs *specs, pid_t prefetch, pid_t catchup)
+follow_wait_subprocesses(StreamSpecs *specs,
+						 pid_t prefetch, pid_t transform, pid_t catchup)
 {
-	bool prefetchExited = false;
-	bool catchupExited = false;
+	/*
+	 * We might have started only a subset of these 3 processes, and in that
+	 * case processes that have not been started are assigned a pid of -1.
+	 */
+	bool prefetchExited = prefetch == -1;
+	bool transformExited = transform == -1;
+	bool catchupExited = catchup == -1;
 
 	bool success = true;
 
-	while (!prefetchExited || !catchupExited)
+	while (!prefetchExited || !transformExited || !catchupExited)
 	{
 		if (!prefetchExited)
 		{
@@ -130,6 +192,27 @@ follow_wait_subprocesses(StreamSpecs *specs, pid_t prefetch, pid_t catchup)
 				log_level(returnCode == 0 ? LOG_INFO : LOG_ERROR,
 						  "Prefetch process %d has terminated [%d]",
 						  prefetch,
+						  returnCode);
+			}
+
+			success = success || returnCode == 0;
+		}
+
+		if (!transformExited)
+		{
+			int returnCode = -1;
+
+			if (!follow_wait_pid(transform, &transformExited, &returnCode))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			if (transformExited)
+			{
+				log_level(returnCode == 0 ? LOG_INFO : LOG_ERROR,
+						  "Transform process %d has terminated [%d]",
+						  transform,
 						  returnCode);
 			}
 
