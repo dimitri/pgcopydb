@@ -88,7 +88,7 @@ typedef struct StreamContext
 	char *jsonBuffer;           /* malloc'ed area */
 	LogicalMessageMetadata metadata;
 
-	Queue transformQueue;
+	Queue *transformQueue;
 	uint32_t WalSegSz;
 	uint32_t timeline;
 
@@ -97,8 +97,6 @@ typedef struct StreamContext
 	char walFileName[MAXPGPATH];
 	char sqlFileName[MAXPGPATH];
 	FILE *jsonFile;
-
-	pid_t subprocess;
 
 	StreamCounters counters;
 } StreamContext;
@@ -275,6 +273,9 @@ typedef struct StreamSpecs
 	bool restart;
 	bool resume;
 
+	/* receive push json filenames to a queue for transform */
+	Queue transformQueue;
+
 	bool stdIn;                 /* read from stdin */
 	bool stdOut;                /* (also) write to stdout */
 
@@ -306,7 +307,6 @@ bool stream_init_specs(StreamSpecs *specs,
 					   bool stdOut);
 
 bool stream_init_context(StreamContext *privateContext, StreamSpecs *specs);
-bool stream_close_context(StreamContext *privateContext);
 
 bool startLogicalStreaming(StreamSpecs *specs);
 bool streamCheckResumePosition(StreamSpecs *specs);
@@ -367,14 +367,22 @@ bool stream_read_context(CDCPaths *paths,
 StreamAction StreamActionFromChar(char action);
 
 /* ld_transform.c */
-bool stream_transform_start_worker(LogicalStreamContext *context);
-bool stream_transform_worker(LogicalStreamContext *context);
+bool stream_transform_worker(StreamSpecs *specs);
 bool stream_transform_add_file(Queue *queue, uint64_t firstLSN);
 bool stream_transform_send_stop(Queue *queue);
-bool stream_compute_pathnames(LogicalStreamContext *context, uint64_t lsn);
+
+bool stream_compute_pathnames(uint32_t WalSegSz,
+							  uint32_t timeline,
+							  uint64_t lsn,
+							  char *dir,
+							  char *walFileName,
+							  char *sqlFileName);
 
 bool stream_transform_stream(FILE * in, FILE *out);
 bool stream_transform_line(void *ctx, const char *line, bool *stop);
+bool stream_transform_message(char *message,
+							  LogicalTransaction *currentTx,
+							  bool *commit);
 bool stream_transform_file(char *jsonfilename, char *sqlfilename);
 bool stream_write_transaction(FILE *out, LogicalTransaction *tx);
 bool stream_write_begin(FILE *out, LogicalTransaction *tx);
@@ -450,9 +458,20 @@ bool stream_apply_replay(StreamSpecs *specs);
 bool stream_replay_line(void *ctx, const char *line, bool *stop);
 
 /* follow.c */
+bool followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
+
 bool follow_start_prefetch(StreamSpecs *specs, pid_t *pid);
+bool follow_start_transform(StreamSpecs *specs, pid_t *pid);
 bool follow_start_catchup(StreamSpecs *specs, pid_t *pid);
-bool follow_wait_subprocesses(StreamSpecs *specs, pid_t prefetch, pid_t catchup);
+
+bool follow_wait_subprocesses(pid_t prefetch,
+							  pid_t transform,
+							  pid_t catchup);
+
+bool follow_terminate_subprocesses(pid_t prefetch,
+								   pid_t transform,
+								   pid_t catchup);
+
 bool follow_wait_pid(pid_t subprocess, bool *exited, int *returnCode);
 
 #endif /* LD_STREAM_H */

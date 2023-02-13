@@ -34,61 +34,6 @@
 #include "summary.h"
 
 
-static bool stream_transform_message(char *message,
-									 LogicalTransaction *currentTx,
-									 bool *commit);
-
-
-/*
- * stream_transform_start_worker creates a sub-process that transform JSON
- * files into SQL files as needed, consuming requests from a queue.
- */
-bool
-stream_transform_start_worker(LogicalStreamContext *context)
-{
-	StreamContext *privateContext = (StreamContext *) context->private;
-
-	/*
-	 * Flush stdio channels just before fork, to avoid double-output
-	 * problems.
-	 */
-	fflush(stdout);
-	fflush(stderr);
-
-	int fpid = fork();
-
-	switch (fpid)
-	{
-		case -1:
-		{
-			log_error("Failed to fork a stream transform worker process: %m");
-			return false;
-		}
-
-		case 0:
-		{
-			/* child process runs the command */
-			if (!stream_transform_worker(context))
-			{
-				/* errors have already been logged */
-				exit(EXIT_CODE_INTERNAL_ERROR);
-			}
-
-			exit(EXIT_CODE_QUIT);
-		}
-
-		default:
-		{
-			/* fork succeeded, in parent */
-			privateContext->subprocess = fpid;
-			break;
-		}
-	}
-
-	return true;
-}
-
-
 /*
  * stream_transform_worker is a worker process that loops over messages
  * received from a queue, each message contains the WAL.json and the WAL.sql
@@ -96,14 +41,30 @@ stream_transform_start_worker(LogicalStreamContext *context)
  * into the WAL.sql file.
  */
 bool
-stream_transform_worker(LogicalStreamContext *context)
+stream_transform_worker(StreamSpecs *specs)
 {
-	StreamContext *privateContext = (StreamContext *) context->private;
+	log_notice("Started Stream Transform worker %d [%d]", getpid(), getppid());
+
+	/*
+	 * The timeline and wal segment size are determined when connecting to the
+	 * source database, and stored to local files at that time. When the Stream
+	 * Transform Worker process is created, that information is read from our
+	 * local files.
+	 */
+	uint32_t WalSegSz;
+	IdentifySystem system = { 0 };
+
+	if (!stream_read_context(&(specs->paths), &system, &WalSegSz))
+	{
+		log_error("Failed to read the streaming context information "
+				  "from the source database, see above for details");
+		return false;
+	}
+
+	Queue *transformQueue = &(specs->transformQueue);
 
 	int errors = 0;
 	bool stop = false;
-
-	log_notice("Started Stream Transform worker %d [%d]", getpid(), getppid());
 
 	while (!stop)
 	{
@@ -114,7 +75,7 @@ stream_transform_worker(LogicalStreamContext *context)
 			return false;
 		}
 
-		if (!queue_receive(&(privateContext->transformQueue), &mesg))
+		if (!queue_receive(transformQueue, &mesg))
 		{
 			/* errors have already been logged */
 			break;
@@ -134,15 +95,22 @@ stream_transform_worker(LogicalStreamContext *context)
 				log_debug("stream_transform_worker received transform %X/%X",
 						  LSN_FORMAT_ARGS(mesg.data.lsn));
 
-				if (!stream_compute_pathnames(context, mesg.data.lsn))
+				char walFileName[MAXPGPATH] = { 0 };
+				char sqlFileName[MAXPGPATH] = { 0 };
+
+				if (!stream_compute_pathnames(WalSegSz,
+											  system.timeline,
+											  mesg.data.lsn,
+											  specs->paths.dir,
+											  walFileName,
+											  sqlFileName))
 				{
 					/* errors have already been logged, break from the loop */
 					++errors;
 					break;
 				}
 
-				if (!stream_transform_file(privateContext->walFileName,
-										   privateContext->sqlFileName))
+				if (!stream_transform_file(walFileName, sqlFileName))
 				{
 					/* errors have already been logged, break from the loop */
 					++errors;
@@ -153,9 +121,10 @@ stream_transform_worker(LogicalStreamContext *context)
 
 			default:
 			{
-				log_error("Received unknown message type %ld on vacuum queue %d",
+				log_error("Received unknown message type %ld on %s queue %d",
 						  mesg.type,
-						  privateContext->transformQueue.qId);
+						  transformQueue->name,
+						  transformQueue->qId);
 				break;
 			}
 		}
@@ -171,51 +140,24 @@ stream_transform_worker(LogicalStreamContext *context)
  * we need to find the name of.
  */
 bool
-stream_compute_pathnames(LogicalStreamContext *context, uint64_t lsn)
+stream_compute_pathnames(uint32_t WalSegSz,
+						 uint32_t timeline,
+						 uint64_t lsn,
+						 char *dir,
+						 char *walFileName,
+						 char *sqlFileName)
 {
-	StreamContext *privateContext = (StreamContext *) context->private;
-
 	char wal[MAXPGPATH] = { 0 };
-
-	/*
-	 * The timeline and wal segment size are determined when connecting to the
-	 * source database, and stored to local files at that time. When the Stream
-	 * Transform Worker process is created, we don't have that information yet,
-	 * so the first time we process an LSN from the queue we go and fetch the
-	 * information from our local files.
-	 */
-	if (context->timeline == 0)
-	{
-		uint32_t WalSegSz;
-		IdentifySystem system = { 0 };
-
-		if (!stream_read_context(&(privateContext->paths), &system, &WalSegSz))
-		{
-			log_error("Failed to read the streaming context information "
-					  "from the source database, see above for details");
-			return false;
-		}
-
-		context->timeline = system.timeline;
-		context->WalSegSz = WalSegSz;
-	}
 
 	/* compute the WAL filename that would host the current LSN */
 	XLogSegNo segno;
-	XLByteToSeg(lsn, segno, context->WalSegSz);
-	XLogFileName(wal, context->timeline, segno, context->WalSegSz);
+	XLByteToSeg(lsn, segno, WalSegSz);
+	XLogFileName(wal, timeline, segno, WalSegSz);
 
-	sformat(privateContext->walFileName,
-			sizeof(privateContext->walFileName),
-			"%s/%s.json",
-			privateContext->paths.dir,
-			wal);
+	log_debug("stream_compute_pathnames: %X/%X: %s", LSN_FORMAT_ARGS(lsn), wal);
 
-	sformat(privateContext->sqlFileName,
-			sizeof(privateContext->sqlFileName),
-			"%s/%s.sql",
-			privateContext->paths.dir,
-			wal);
+	sformat(walFileName, MAXPGPATH, "%s/%s.json", dir, wal);
+	sformat(sqlFileName, MAXPGPATH, "%s/%s.sql", dir, wal);
 
 	return true;
 }
@@ -368,7 +310,7 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
  * stream_transform_message transforms a single JSON message from our streaming
  * output into a SQL statement, and appends it to the given opened transaction.
  */
-static bool
+bool
 stream_transform_message(char *message,
 						 LogicalTransaction *currentTx,
 						 bool *commit)

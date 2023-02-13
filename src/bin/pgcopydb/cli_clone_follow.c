@@ -68,6 +68,16 @@ CommandLine fork_command =
 		cli_copy_db_getopts,
 		cli_clone);
 
+/* pgcopydb copy db is an alias for pgcopydb clone */
+CommandLine copy__db_command =
+	make_command(
+		"copy-db",
+		"Clone an entire database from source to target",
+		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
+		PGCOPYDB_CLONE_GETOPTS_HELP,
+		cli_copy_db_getopts,
+		cli_clone);
+
 
 CommandLine follow_command =
 	make_command(
@@ -100,7 +110,6 @@ static bool start_follow_process(CopyDataSpec *copySpecs,
 static bool cli_clone_follow_wait_subprocess(const char *name, pid_t pid);
 
 static bool cloneDB(CopyDataSpec *copySpecs);
-static bool followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
 
 
 /*
@@ -127,7 +136,7 @@ cli_clone(int argc, char **argv)
 							   copyDBoptions.slotName,
 							   copyDBoptions.origin,
 							   copyDBoptions.endpos,
-							   STREAM_MODE_PREFETCH,
+							   STREAM_MODE_CATCHUP,
 							   copyDBoptions.stdIn,
 							   copyDBoptions.stdOut))
 		{
@@ -337,6 +346,9 @@ cli_clone(int argc, char **argv)
 		}
 	}
 
+	/* make sure all sub-processes are now finished */
+	success = success && copydb_wait_for_subprocesses();
+
 	if (!success)
 	{
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -364,7 +376,7 @@ cli_follow(int argc, char **argv)
 						   copyDBoptions.slotName,
 						   copyDBoptions.origin,
 						   copyDBoptions.endpos,
-						   STREAM_MODE_PREFETCH,
+						   STREAM_MODE_CATCHUP,
 						   copyDBoptions.stdIn,
 						   copyDBoptions.stdOut))
 	{
@@ -414,7 +426,7 @@ start_clone_process(CopyDataSpec *copySpecs, pid_t *pid)
 		case 0:
 		{
 			/* child process runs the command */
-			log_debug("Starting the clone sub-process");
+			log_notice("Starting the clone sub-process");
 
 			if (!cloneDB(copySpecs))
 			{
@@ -608,7 +620,7 @@ start_follow_process(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs,
 		case 0:
 		{
 			/* child process runs the command */
-			log_debug("Starting the follow sub-process");
+			log_notice("Starting the follow sub-process");
 
 			if (!followDB(copySpecs, streamSpecs))
 			{
@@ -625,61 +637,6 @@ start_follow_process(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs,
 			*pid = fpid;
 			return true;
 		}
-	}
-
-	return true;
-}
-
-
-/*
- * followDB implements a logical decoding client for streaming changes from the
- * source database into the target database. The stream_setup_databases() must
- * have been called already so that the replication slot using wal2json is
- * ready, the pgcopydb.sentinel table exists, and the target database
- * replication origin has been created too.
- */
-static bool
-followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
-{
-	/*
-	 * Remove the possibly still existing stream context files from
-	 * previous round of operations (--resume, etc). We want to make sure
-	 * that the catchup process reads the files created on this connection.
-	 */
-	if (!stream_cleanup_context(streamSpecs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	pid_t prefetch = -1;
-	pid_t catchup = -1;
-
-	if (!follow_start_prefetch(streamSpecs, &prefetch))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/*
-	 * Second, start the catchup process.
-	 */
-	if (!follow_start_catchup(streamSpecs, &catchup))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/*
-	 * Finally wait until the process are finished.
-	 *
-	 * This happens when the sentinel endpos is set, typically using the
-	 * command: pgcopydb stream sentinel set endpos --current.
-	 */
-	if (!follow_wait_subprocesses(streamSpecs, prefetch, catchup))
-	{
-		/* errors have already been logged */
-		return false;
 	}
 
 	return true;

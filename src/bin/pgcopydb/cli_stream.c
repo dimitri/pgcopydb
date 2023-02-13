@@ -1107,9 +1107,33 @@ stream_start_in_mode(LogicalStreamMode mode)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (!startLogicalStreaming(&specs))
+	switch (specs.mode)
 	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
+		case STREAM_MODE_RECEIVE:
+		{
+			if (!startLogicalStreaming(&specs))
+			{
+				/* errors have already been logged */
+				exit(EXIT_CODE_SOURCE);
+			}
+			break;
+		}
+
+		case STREAM_MODE_PREFETCH:
+		{
+			if (!followDB(&copySpecs, &specs))
+			{
+				/* errors have already been logged */
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+			break;
+		}
+
+		default:
+		{
+			log_fatal("BUG: stream_start_in_mode called in mode %d", mode);
+			exit(EXIT_CODE_INTERNAL_ERROR);
+			break;
+		}
 	}
 }

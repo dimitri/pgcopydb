@@ -22,8 +22,9 @@
  * queue_create creates a new message queue.
  */
 bool
-queue_create(Queue *queue)
+queue_create(Queue *queue, char *name)
 {
+	queue->name = name;
 	queue->owner = getpid();
 	queue->qId = msgget(IPC_PRIVATE, 0600);
 
@@ -33,7 +34,7 @@ queue_create(Queue *queue)
 		return false;
 	}
 
-	log_trace("Created message queue %d", queue->qId);
+	log_notice("Created message %s queue %d", queue->name, queue->qId);
 
 	return true;
 }
@@ -45,11 +46,13 @@ queue_create(Queue *queue)
 bool
 queue_unlink(Queue *queue)
 {
-	log_trace("iprm -q %d", queue->qId);
+	log_notice("iprm -q %d (%s)", queue->qId, queue->name);
 
 	if (msgctl(queue->qId, IPC_RMID, NULL) != 0)
 	{
-		log_error("Failed to delete message queue %d: %m", queue->qId);
+		log_error("Failed to delete message %s queue %d: %m",
+				  queue->name,
+				  queue->qId);
 		return false;
 	}
 
@@ -86,8 +89,9 @@ queue_send(Queue *queue, QMessage *msg)
 
 	if (errStatus < 0)
 	{
-		log_error("Failed to send a message to queue %d "
+		log_error("Failed to send a message to %s queue (%d) "
 				  "with type %ld: %m",
+				  queue->name,
 				  queue->qId,
 				  msg->type);
 		return false;
@@ -126,7 +130,9 @@ queue_receive(Queue *queue, QMessage *msg)
 
 	if (errStatus < 0)
 	{
-		log_error("Failed to receive a message from queue %d: %m", queue->qId);
+		log_error("Failed to receive a message from %s queue (%d): %m",
+				  queue->name,
+				  queue->qId);
 		return false;
 	}
 

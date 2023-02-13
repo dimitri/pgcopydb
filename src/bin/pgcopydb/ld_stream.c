@@ -129,15 +129,44 @@ stream_init_specs(StreamSpecs *specs,
 	log_trace("stream_init_specs: %s(%d)", plugin, specs->pluginOptions.count);
 
 
-	/*
-	 * Now create the unix pipes needed for inter-process communication (data
-	 * flow) when needed. We override command line arguments for --to-stdout
-	 * and --from-stdin when stream mode is set to STREAM_MODE_REPLAY.
-	 */
-	if (specs->mode == STREAM_MODE_REPLAY)
+	switch (specs->mode)
 	{
-		specs->stdIn = true;
-		specs->stdOut = true;
+		/*
+		 * Create the message queue needed to communicate JSON files to
+		 * transform to SQL files on prefetch/catchup mode. See the supervisor
+		 * process implemented in function followDB() for the clean-up code
+		 * that unlinks the message queue.
+		 */
+		case STREAM_MODE_PREFETCH:
+		case STREAM_MODE_CATCHUP:
+		{
+			if (!queue_create(&(specs->transformQueue), "transform"))
+			{
+				log_error("Failed to create the transform queue");
+				return false;
+			}
+			break;
+		}
+
+		/*
+		 * Create the unix pipes needed for inter-process communication (data
+		 * flow) in replay mode. We override command line arguments for
+		 * --to-stdout and --from-stdin when stream mode is set to
+		 * STREAM_MODE_REPLAY.
+		 */
+		case STREAM_MODE_REPLAY:
+		{
+			specs->stdIn = true;
+			specs->stdOut = true;
+			break;
+		}
+
+		/* other stream modes don't need special treatment here */
+		default:
+		{
+			/* pass */
+			break;
+		}
 	}
 
 	/* specs->stdOut is used for the receive-transform pipe */
@@ -174,34 +203,14 @@ stream_init_context(StreamContext *privateContext, StreamSpecs *specs)
 	privateContext->stdIn = specs->stdIn;
 	privateContext->stdOut = specs->stdOut;
 
+	privateContext->transformQueue = &(specs->transformQueue);
+
 	privateContext->paths = specs->paths;
 	privateContext->startpos = specs->startpos;
 
 	strlcpy(privateContext->source_pguri,
 			specs->source_pguri,
 			sizeof(privateContext->source_pguri));
-
-	if (!queue_create(&(privateContext->transformQueue)))
-	{
-		log_error("Failed to create the Stream Transform process queue");
-		return false;
-	}
-
-	return true;
-}
-
-
-/*
- * stream_close_specs unlinks the stream context queue.
- */
-bool
-stream_close_context(StreamContext *privateContext)
-{
-	if (!queue_unlink(&(privateContext->transformQueue)))
-	{
-		log_warn("Failed to remove the Transform Queue, see above for details");
-		return false;
-	}
 
 	return true;
 }
@@ -245,36 +254,13 @@ startLogicalStreaming(StreamSpecs *specs)
 
 	context.private = (void *) &(privateContext);
 
-	switch (specs->mode)
+	if (specs->mode == STREAM_MODE_RECEIVE && specs->stdOut)
 	{
-		case STREAM_MODE_PREFETCH:
+		/* switch stdout from block buffered to line buffered mode */
+		if (setvbuf(stdout, NULL, _IOLBF, 0) != 0)
 		{
-			if (!stream_transform_start_worker(&context))
-			{
-				/* errors have already been logged */
-				return false;
-			}
-			break;
-		}
-
-		case STREAM_MODE_RECEIVE:
-		{
-			if (specs->stdOut)
-			{
-				/* switch stdout from block buffered to line buffered mode */
-				if (setvbuf(stdout, NULL, _IOLBF, 0) != 0)
-				{
-					log_error("Failed to set stdout to line buffered mode: %m");
-					return false;
-				}
-			}
-			break;
-		}
-
-		/* nothing to do in other modes */
-		default:
-		{
-			break;
+			log_error("Failed to set stdout to line buffered mode: %m");
+			return false;
 		}
 	}
 
@@ -296,7 +282,6 @@ startLogicalStreaming(StreamSpecs *specs)
 							   specs->endpos))
 		{
 			/* errors have already been logged */
-			(void) stream_close_context(&privateContext);
 			return false;
 		}
 
@@ -307,7 +292,6 @@ startLogicalStreaming(StreamSpecs *specs)
 		if (!pgsql_start_replication(&stream))
 		{
 			/* errors have already been logged */
-			(void) stream_close_context(&privateContext);
 			return false;
 		}
 
@@ -315,7 +299,6 @@ startLogicalStreaming(StreamSpecs *specs)
 		if (!stream_write_context(specs, &stream))
 		{
 			/* errors have already been logged */
-			(void) stream_close_context(&privateContext);
 			return false;
 		}
 
@@ -349,12 +332,6 @@ startLogicalStreaming(StreamSpecs *specs)
 
 		/* sleep for one entire second before retrying */
 		(void) pg_usleep(1 * 1000 * 1000);
-	}
-
-	if (!stream_close_context(&privateContext))
-	{
-		/* errors have already been logged */
-		return false;
 	}
 
 	return true;
@@ -845,18 +822,14 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 		}
 
 		case STREAM_MODE_PREFETCH:
+		case STREAM_MODE_CATCHUP:
 		{
 			/*
 			 * Now is the time to transform the JSON file into SQL.
-			 *
-			 * The transformation of the file uses enough CPU that we'd prefer
-			 * to start it in a subprocess.
 			 */
-			Queue *transformQueue = &(privateContext->transformQueue);
-
 			if (privateContext->firstLSN != InvalidXLogRecPtr)
 			{
-				if (!stream_transform_add_file(transformQueue,
+				if (!stream_transform_add_file(privateContext->transformQueue,
 											   privateContext->firstLSN))
 				{
 					/* errors have already been logged */
@@ -874,13 +847,7 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 			 */
 			if (time_to_abort)
 			{
-				if (!stream_transform_send_stop(transformQueue))
-				{
-					/* errors have already been logged */
-					return false;
-				}
-
-				if (!streamWaitForSubprocess(context))
+				if (!stream_transform_send_stop(privateContext->transformQueue))
 				{
 					/* errors have already been logged */
 					return false;
@@ -1595,51 +1562,6 @@ StreamActionFromChar(char action)
 
 	/* keep compiler happy */
 	return STREAM_ACTION_UNKNOWN;
-}
-
-
-/*
- * streamWaitForSubprocess calls waitpid() and blocks until the current
- * subprocess is reported terminated by the Operating System.
- */
-bool
-streamWaitForSubprocess(LogicalStreamContext *context)
-{
-	StreamContext *privateContext = (StreamContext *) context->private;
-
-	/* if a subprocess had been started before, wait until it's done. */
-	if (privateContext->subprocess <= 0)
-	{
-		return true;
-	}
-	int status = 0;
-
-	if (waitpid(privateContext->subprocess, &status, 0) == -1)
-	{
-		log_error("Failed to wait for pid %d: %m",
-				  privateContext->subprocess);
-		return false;
-	}
-
-	int returnCode = WEXITSTATUS(status);
-
-	if (returnCode != 0)
-	{
-		log_error("Stream Transform Worker %d exited with code %d, "
-				  "see above for details",
-				  privateContext->subprocess,
-				  returnCode);
-	}
-	else
-	{
-		log_debug("Transform subprocess %d exited successfully [%d]",
-				  privateContext->subprocess,
-				  returnCode);
-	}
-
-	privateContext->subprocess = 0;
-
-	return returnCode == 0;
 }
 
 
