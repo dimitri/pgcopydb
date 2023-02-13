@@ -812,28 +812,17 @@ cli_stream_replay(int argc, char **argv)
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   STREAM_MODE_REPLAY,
-						   streamDBoptions.stdIn,
-						   streamDBoptions.stdOut))
+						   true,  /* stdin */
+						   true)) /* stdout */
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	/*
-	 * Now remove the possibly still existing stream context files from
-	 * previous round of operations (--resume, etc). We want to make sure that
-	 * the catchup process reads the files created on this connection.
-	 */
-	if (!stream_cleanup_context(&specs))
+	if (!followDB(&copySpecs, &specs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	if (!stream_replay(&specs))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_TARGET);
 	}
 }
 
@@ -873,16 +862,7 @@ cli_stream_transform(int argc, char **argv)
 		FILE *in = stdin;
 		FILE *out = stdout;
 
-		if (streq(sqlfilename, "-"))
-		{
-			/* switch out stream from block buffered to line buffered mode */
-			if (setvbuf(out, NULL, _IOLBF, 0) != 0)
-			{
-				log_error("Failed to set stdout to line buffered mode: %m");
-				exit(EXIT_CODE_INTERNAL_ERROR);
-			}
-		}
-		else
+		if (!streq(sqlfilename, "-"))
 		{
 			out = fopen_with_umask(sqlfilename, "w", FOPEN_FLAGS_W, 0644);
 
@@ -1000,6 +980,8 @@ cli_stream_apply(int argc, char **argv)
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 
+		specs.in = stdin;
+
 		if (!stream_apply_replay(&specs))
 		{
 			/* errors have already been logged */
@@ -1111,6 +1093,8 @@ stream_start_in_mode(LogicalStreamMode mode)
 	{
 		case STREAM_MODE_RECEIVE:
 		{
+			specs.out = stdout;
+
 			if (!startLogicalStreaming(&specs))
 			{
 				/* errors have already been logged */

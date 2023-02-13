@@ -238,6 +238,13 @@ stream_transform_stream(FILE *in, FILE *out)
 		.ctx = &ctx
 	};
 
+	/* switch out stream from block buffered to line buffered mode */
+	if (setvbuf(out, NULL, _IOLBF, 0) != 0)
+	{
+		log_error("Failed to set stdout to line buffered mode: %m");
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
 	if (!read_from_stream(in, &context))
 	{
 		log_error("Failed to transform JSON messages from input stream, "

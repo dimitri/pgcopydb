@@ -85,6 +85,9 @@ typedef struct StreamContext
 	bool stdIn;
 	bool stdOut;
 
+	FILE *in;
+	FILE *out;
+
 	char *jsonBuffer;           /* malloc'ed area */
 	LogicalMessageMetadata metadata;
 
@@ -276,12 +279,16 @@ typedef struct StreamSpecs
 	/* receive push json filenames to a queue for transform */
 	Queue transformQueue;
 
-	bool stdIn;                 /* read from stdin */
-	bool stdOut;                /* (also) write to stdout */
+	bool stdIn;                 /* read from stdin? */
+	bool stdOut;                /* (also) write to stdout? */
 
 	/* STREAM_MODE_REPLAY (and other operations) requires two unix pipes */
 	int pipe_rt[2];     /* receive-transform pipe */
 	int pipe_ta[2];     /* transform-apply pipe */
+
+	/* The previous pipe ends are connected to in/out for the sub-processes */
+	FILE *in;
+	FILE *out;
 } StreamSpecs;
 
 typedef struct StreamContent

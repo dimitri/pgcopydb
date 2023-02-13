@@ -45,6 +45,32 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		return false;
 	}
 
+	/*
+	 * Prepare the sub-process communication mechanisms, when needed:
+	 *
+	 *   - pgcopydb stream receive --to-stdout
+	 *   - pgcopydb stream transform - -
+	 *   - pgcopydb stream apply -
+	 *   - pgcopydb stream replay
+	 */
+	if (streamSpecs->stdOut)
+	{
+		if (pipe(streamSpecs->pipe_rt) != 0)
+		{
+			log_fatal("Failed to create a pipe for streaming: %m");
+			return false;
+		}
+	}
+
+	if (streamSpecs->stdIn)
+	{
+		if (pipe(streamSpecs->pipe_ta) != 0)
+		{
+			log_fatal("Failed to create a pipe for streaming: %m");
+			return false;
+		}
+	}
+
 	pid_t prefetch = -1;
 	pid_t transform = -1;
 	pid_t catchup = -1;
@@ -111,7 +137,7 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	 */
 	if (!follow_wait_subprocesses(prefetch, transform, catchup))
 	{
-		log_error("Failed to wait for follow sub-processes, "
+		log_error("Some sub-process exited in error, "
 				  "see above for details");
 		return false;
 	}
@@ -182,6 +208,9 @@ follow_start_prefetch(StreamSpecs *specs, pid_t *pid)
 			/* child process runs the command */
 			log_notice("Starting the prefetch sub-process");
 
+			/* arrange to write to the receive-transform pipe */
+			specs->out = fdopen(specs->pipe_rt[1], "a");
+
 			if (!startLogicalStreaming(specs))
 			{
 				/* errors have already been logged */
@@ -230,10 +259,41 @@ follow_start_transform(StreamSpecs *specs, pid_t *pid)
 		{
 			/* child process runs the command */
 			log_notice("Starting the transform sub-process");
-			if (!stream_transform_worker(specs))
+
+			/*
+			 * In replay mode, the JSON messages are read from stdin, which we
+			 * now setup to be a pipe between prefetch and transform processes;
+			 * and the SQL commands are written to stdout which we setup to be
+			 * a pipe between the transform and apply processes.
+			 */
+			if (specs->mode == STREAM_MODE_REPLAY)
 			{
-				/* errors have already been logged */
-				exit(EXIT_CODE_INTERNAL_ERROR);
+				/*
+				 * Arrange to read from receive-transform pipe and write to the
+				 * transform-apply pipe.
+				 */
+				specs->in = fdopen(specs->pipe_rt[0], "r");
+				specs->out = fdopen(specs->pipe_ta[1], "a");
+
+				if (!stream_transform_stream(specs->in, specs->out))
+				{
+					/* errors have already been logged */
+					exit(EXIT_CODE_INTERNAL_ERROR);
+				}
+			}
+			else
+			{
+				/*
+				 * In other modes of operations (RECEIVE, CATCHUP) we start a
+				 * transform worker process that reads LSN positions from an
+				 * internal message queue and batch processes one file at a
+				 * time.
+				 */
+				if (!stream_transform_worker(specs))
+				{
+					/* errors have already been logged */
+					exit(EXIT_CODE_INTERNAL_ERROR);
+				}
 			}
 
 			exit(EXIT_CODE_QUIT);
@@ -273,10 +333,34 @@ follow_start_catchup(StreamSpecs *specs, pid_t *pid)
 		{
 			/* child process runs the command */
 			log_notice("Starting the catchup sub-process");
-			if (!stream_apply_catchup(specs))
+
+			/*
+			 * In replay mode, the SQL command are read from stdin.
+			 */
+			if (specs->mode == STREAM_MODE_REPLAY)
 			{
-				/* errors have already been logged */
-				exit(EXIT_CODE_TARGET);
+				/* arrange to read from the transform-apply pipe */
+				specs->in = fdopen(specs->pipe_ta[0], "r");
+
+				if (!stream_apply_replay(specs))
+				{
+					/* errors have already been logged */
+					exit(EXIT_CODE_INTERNAL_ERROR);
+				}
+			}
+			else
+			{
+				/*
+				 * In other modes of operations (CATCHUP, really, here), we
+				 * start the file based catchup mechanism, which follows the
+				 * current LSN on the target database origin tracking system to
+				 * open the right SQL file and apply statements from there.
+				 */
+				if (!stream_apply_catchup(specs))
+				{
+					/* errors have already been logged */
+					exit(EXIT_CODE_TARGET);
+				}
 			}
 
 			/* and we're done */
@@ -336,6 +420,12 @@ follow_wait_subprocesses(pid_t prefetch, pid_t transform, pid_t catchup)
 	/* now the main loop, that waits until all given processes have exited */
 	while (stillRunning > 0)
 	{
+		if (asked_to_quit)
+		{
+			log_debug("follow_wait_subprocesses was asked to quit");
+			return false;
+		}
+
 		for (int i = 0; i < count; i++)
 		{
 			if (processArray[i].pid <= 0 || processArray[i].exited)
@@ -364,6 +454,13 @@ follow_wait_subprocesses(pid_t prefetch, pid_t transform, pid_t catchup)
 			}
 
 			success = success || processArray[i].returnCode == 0;
+
+			/* if one process fails, early exit the other ones */
+			if (processArray[i].returnCode != 0)
+			{
+				follow_terminate_subprocesses(prefetch, transform, catchup);
+				return false;
+			}
 		}
 
 		/* avoid busy looping, wait for 150ms before checking again */

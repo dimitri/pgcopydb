@@ -93,5 +93,15 @@ pgcopydb stream receive --debug --resume --endpos "${lsn}" --to-stdout \
  | pgcopydb stream transform --debug --endpos "${lsn}" - -             \
  | pgcopydb stream apply --debug --resume --endpos "${lsn}" -
 
+#
+# now the same thing, this time using the stream replay command
+#
+psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
+
+# grab the current LSN, it's going to be our streaming end position
+lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_lsn()'`
+
+pgcopydb stream replay --debug --resume --endpos "${lsn}"
+
 # cleanup
 pgcopydb stream cleanup
