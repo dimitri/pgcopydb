@@ -121,8 +121,9 @@ stream_transform_worker(StreamSpecs *specs)
 
 			default:
 			{
-				log_error("Received unknown message type %ld on vacuum queue %d",
+				log_error("Received unknown message type %ld on %s queue %d",
 						  mesg.type,
+						  transformQueue->name,
 						  transformQueue->qId);
 				break;
 			}

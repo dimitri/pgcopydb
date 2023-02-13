@@ -1121,23 +1121,7 @@ stream_start_in_mode(LogicalStreamMode mode)
 
 		case STREAM_MODE_PREFETCH:
 		{
-			pid_t prefetch = -1;
-			pid_t transform = -1;
-
-			if (!follow_start_prefetch(&specs, &prefetch))
-			{
-				/* errors have already been logged */
-				exit(EXIT_CODE_INTERNAL_ERROR);
-			}
-
-			if (!follow_start_transform(&specs, &transform))
-			{
-				/* errors have already been logged */
-				(void) copydb_wait_for_subprocesses();
-				exit(EXIT_CODE_INTERNAL_ERROR);
-			}
-
-			if (!follow_wait_subprocesses(&specs, prefetch, transform, -1))
+			if (!followDB(&copySpecs, &specs))
 			{
 				/* errors have already been logged */
 				exit(EXIT_CODE_INTERNAL_ERROR);

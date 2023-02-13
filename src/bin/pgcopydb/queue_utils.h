@@ -16,6 +16,7 @@
 
 typedef struct Queue
 {
+	char *name;
 	int qId;
 	pid_t owner;
 } Queue;
@@ -45,7 +46,7 @@ typedef struct QMessage
 	} data;
 } QMessage;
 
-bool queue_create(Queue *queue);
+bool queue_create(Queue *queue, char *name);
 bool queue_unlink(Queue *queue);
 
 bool queue_send(Queue *queue, QMessage *msg);

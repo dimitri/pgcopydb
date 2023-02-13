@@ -31,7 +31,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: shubhamtemp
     environment:
       PGSSLMODE: "require"
       PGCOPYDB_SOURCE_PGURI: postgres://postgres:h4ckm3@source/postgres

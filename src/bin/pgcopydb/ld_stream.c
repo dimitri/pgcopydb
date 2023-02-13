@@ -129,28 +129,44 @@ stream_init_specs(StreamSpecs *specs,
 	log_trace("stream_init_specs: %s(%d)", plugin, specs->pluginOptions.count);
 
 
-	/*
-	 * Now create the message queue needed to communicate JSON files to
-	 * transform to SQL files on prefetch mode.
-	 */
-	if (specs->mode == STREAM_MODE_PREFETCH)
+	switch (specs->mode)
 	{
-		if (!queue_create(&(specs->transformQueue)))
+		/*
+		 * Create the message queue needed to communicate JSON files to
+		 * transform to SQL files on prefetch/catchup mode. See the supervisor
+		 * process implemented in function followDB() for the clean-up code
+		 * that unlinks the message queue.
+		 */
+		case STREAM_MODE_PREFETCH:
+		case STREAM_MODE_CATCHUP:
 		{
-			log_error("Failed to create the transform process queue");
-			return false;
+			if (!queue_create(&(specs->transformQueue), "transform"))
+			{
+				log_error("Failed to create the transform queue");
+				return false;
+			}
+			break;
 		}
-	}
 
-	/*
-	 * Now create the unix pipes needed for inter-process communication (data
-	 * flow) when needed. We override command line arguments for --to-stdout
-	 * and --from-stdin when stream mode is set to STREAM_MODE_REPLAY.
-	 */
-	if (specs->mode == STREAM_MODE_REPLAY)
-	{
-		specs->stdIn = true;
-		specs->stdOut = true;
+		/*
+		 * Create the unix pipes needed for inter-process communication (data
+		 * flow) in replay mode. We override command line arguments for
+		 * --to-stdout and --from-stdin when stream mode is set to
+		 * STREAM_MODE_REPLAY.
+		 */
+		case STREAM_MODE_REPLAY:
+		{
+			specs->stdIn = true;
+			specs->stdOut = true;
+			break;
+		}
+
+		/* other stream modes don't need special treatment here */
+		default:
+		{
+			/* pass */
+			break;
+		}
 	}
 
 	/* specs->stdOut is used for the receive-transform pipe */
@@ -806,6 +822,7 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 		}
 
 		case STREAM_MODE_PREFETCH:
+		case STREAM_MODE_CATCHUP:
 		{
 			/*
 			 * Now is the time to transform the JSON file into SQL.
@@ -2098,16 +2115,6 @@ stream_read_context(CDCPaths *paths,
 		log_debug("stream_read_context: waiting for context files "
 				  "to have been created, retrying in %dms",
 				  sleepTimeMs);
-
-		log_debug("%s: %s",
-				  paths->walsegsizefile,
-				  file_exists(paths->walsegsizefile) ? "ok" : "ko");
-		log_debug("%s: %s",
-				  paths->tlifile,
-				  file_exists(paths->tlifile) ? "ok" : "ko");
-		log_debug("%s: %s",
-				  paths->tlihistfile,
-				  file_exists(paths->tlihistfile) ? "ok" : "ko");
 
 		/* we have milliseconds, pg_usleep() wants microseconds */
 		(void) pg_usleep(sleepTimeMs * 1000);

@@ -740,14 +740,14 @@ copydb_init_specs(CopyDataSpec *specs,
 		specs->section == DATA_SECTION_TABLE_DATA)
 	{
 		/* create the VACUUM process queue */
-		if (!queue_create(&(specs->vacuumQueue)))
+		if (!queue_create(&(specs->vacuumQueue), "vacuum"))
 		{
 			log_error("Failed to create the VACUUM process queue");
 			return false;
 		}
 
 		/* create the CREATE INDEX process queue */
-		if (!queue_create(&(specs->indexQueue)))
+		if (!queue_create(&(specs->indexQueue), "create index"))
 		{
 			log_error("Failed to create the INDEX process queue");
 			return false;
