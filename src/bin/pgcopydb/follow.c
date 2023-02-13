@@ -87,7 +87,18 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	{
 		if (!follow_start_catchup(streamSpecs, &catchup))
 		{
-			/* errors have already been logged */
+			log_error("Failed to start the catchup process");
+
+			/*
+			 * When we fail to start the transform process, we stop the
+			 * prefetch process immediately and exit with error.
+			 */
+			if (!follow_terminate_subprocesses(prefetch, transform, catchup))
+			{
+				return false;
+			}
+
+			/* and return false anyways, we failed to start the process here */
 			return false;
 		}
 	}
