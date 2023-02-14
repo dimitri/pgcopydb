@@ -225,7 +225,7 @@ typedef struct TransformStreamCtx
 bool
 stream_transform_stream(FILE *in, FILE *out)
 {
-	log_info("Starting the transform service");
+	log_notice("Starting the transform service");
 
 	TransformStreamCtx ctx = {
 		.currentTxIndex = 0,

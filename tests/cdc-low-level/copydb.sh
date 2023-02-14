@@ -96,12 +96,21 @@ pgcopydb stream receive --debug --resume --endpos "${lsn}" --to-stdout \
 #
 # now the same thing, this time using the stream replay command
 #
-psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
+# we do the same thing twice to verify that our client-side LSN tracking is
+# done properly and allows resuming operations after reaching endpos.
+#
+for i in `seq 2`
+do
+    psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 
-# grab the current LSN, it's going to be our streaming end position
-lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_lsn()'`
+    # grab the current LSN, it's going to be our streaming end position
+    lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_lsn()'`
 
-pgcopydb stream replay --debug --resume --endpos "${lsn}"
+    pgcopydb stream replay --verbose --resume --endpos "${lsn}"
+done
+
+# and check that the last time there nothing more to do
+pgcopydb stream replay --resume --endpos "${lsn}"
 
 # cleanup
 pgcopydb stream cleanup

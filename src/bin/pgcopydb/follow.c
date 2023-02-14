@@ -28,6 +28,8 @@
 bool
 followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 {
+	int errors = 0;
+
 	/*
 	 * Remove the possibly still existing stream context files from
 	 * previous round of operations (--resume, etc). We want to make sure
@@ -71,9 +73,26 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		}
 	}
 
-	pid_t prefetch = -1;
-	pid_t transform = -1;
-	pid_t catchup = -1;
+	bool replayMode = streamSpecs->mode == STREAM_MODE_REPLAY;
+
+	FollowSubProcess prefetch = {
+		.name = replayMode ? "receive" : "prefetch",
+		.command = &follow_start_prefetch,
+		.pid = -1
+	};
+
+	FollowSubProcess transform = {
+		.name = "transform",
+		.command = &follow_start_transform,
+		.pid = -1
+	};
+
+	FollowSubProcess catchup = {
+		.name = replayMode ? "replay" : "catchup",
+		.command = &follow_start_catchup,
+		.pid = -1
+	};
+
 
 	/*
 	 * When set to prefetch changes, we always also run the transform process
@@ -82,26 +101,17 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	 */
 	if (streamSpecs->mode >= STREAM_MODE_PREFETCH)
 	{
-		if (!follow_start_prefetch(streamSpecs, &prefetch))
+		if (!follow_start_subprocess(streamSpecs, &prefetch))
 		{
-			/* errors have already been logged */
+			log_error("Failed to start the %s process", prefetch.name);
 			return false;
 		}
 
-		if (!follow_start_transform(streamSpecs, &transform))
+		if (!follow_start_subprocess(streamSpecs, &transform))
 		{
 			log_error("Failed to start the transform process");
 
-			/*
-			 * When we fail to start the transform process, we stop the
-			 * prefetch process immediately and exit with error.
-			 */
-			if (!follow_terminate_subprocesses(prefetch, transform, catchup))
-			{
-				return false;
-			}
-
-			/* and return false anyways, we failed to start the process here */
+			(void) follow_exit_early(&prefetch, &transform, &catchup);
 			return false;
 		}
 	}
@@ -111,20 +121,11 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	 */
 	if (streamSpecs->mode >= STREAM_MODE_CATCHUP)
 	{
-		if (!follow_start_catchup(streamSpecs, &catchup))
+		if (!follow_start_subprocess(streamSpecs, &catchup))
 		{
-			log_error("Failed to start the catchup process");
+			log_error("Failed to start the %s process", catchup.name);
 
-			/*
-			 * When we fail to start the transform process, we stop the
-			 * prefetch process immediately and exit with error.
-			 */
-			if (!follow_terminate_subprocesses(prefetch, transform, catchup))
-			{
-				return false;
-			}
-
-			/* and return false anyways, we failed to start the process here */
+			(void) follow_exit_early(&prefetch, &transform, &catchup);
 			return false;
 		}
 	}
@@ -135,12 +136,20 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	 * This happens when the sentinel endpos is set, typically using the
 	 * command: pgcopydb stream sentinel set endpos --current.
 	 */
-	if (!follow_wait_subprocesses(prefetch, transform, catchup))
+	if (follow_wait_subprocesses(&prefetch, &transform, &catchup))
 	{
-		log_error("Some sub-process exited in error, "
-				  "see above for details");
-		return false;
+		log_info("Subprocesses for %s, %s, and %s have now all exited",
+				 prefetch.name,
+				 transform.name,
+				 catchup.name);
 	}
+	else
+	{
+		++errors;
+		log_error("Some sub-process exited with errors, "
+				  "see above for details");
+	}
+
 
 	/*
 	 * Once the sub-processes have exited, it's time to clean-up the shared
@@ -181,7 +190,7 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		}
 	}
 
-	return true;
+	return errors == 0;
 }
 
 
@@ -190,44 +199,12 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
  * source database into local files.
  */
 bool
-follow_start_prefetch(StreamSpecs *specs, pid_t *pid)
+follow_start_prefetch(StreamSpecs *specs)
 {
-	/* now we can fork a sub-process to transform the current file */
-	pid_t fpid = fork();
+	/* arrange to write to the receive-transform pipe */
+	specs->out = fdopen(specs->pipe_rt[1], "a");
 
-	switch (fpid)
-	{
-		case -1:
-		{
-			log_error("Failed to fork a subprocess to prefetch changes: %m");
-			return false;
-		}
-
-		case 0:
-		{
-			/* child process runs the command */
-			log_notice("Starting the prefetch sub-process");
-
-			/* arrange to write to the receive-transform pipe */
-			specs->out = fdopen(specs->pipe_rt[1], "a");
-
-			if (!startLogicalStreaming(specs))
-			{
-				/* errors have already been logged */
-				exit(EXIT_CODE_SOURCE);
-			}
-
-			exit(EXIT_CODE_QUIT);
-		}
-
-		default:
-		{
-			*pid = fpid;
-			return true;
-		}
-	}
-
-	return true;
+	return startLogicalStreaming(specs);
 }
 
 
@@ -236,75 +213,34 @@ follow_start_prefetch(StreamSpecs *specs, pid_t *pid)
  * SQL files as needed, consuming requests from a queue.
  */
 bool
-follow_start_transform(StreamSpecs *specs, pid_t *pid)
+follow_start_transform(StreamSpecs *specs)
 {
 	/*
-	 * Flush stdio channels just before fork, to avoid double-output
-	 * problems.
+	 * In replay mode, the JSON messages are read from stdin, which we
+	 * now setup to be a pipe between prefetch and transform processes;
+	 * and the SQL commands are written to stdout which we setup to be
+	 * a pipe between the transform and apply processes.
 	 */
-	fflush(stdout);
-	fflush(stderr);
-
-	int fpid = fork();
-
-	switch (fpid)
+	if (specs->mode == STREAM_MODE_REPLAY)
 	{
-		case -1:
-		{
-			log_error("Failed to fork a subprocess to transform changes to SQL: %m");
-			return false;
-		}
+		/*
+		 * Arrange to read from receive-transform pipe and write to the
+		 * transform-apply pipe.
+		 */
+		specs->in = fdopen(specs->pipe_rt[0], "r");
+		specs->out = fdopen(specs->pipe_ta[1], "a");
 
-		case 0:
-		{
-			/* child process runs the command */
-			log_notice("Starting the transform sub-process");
-
-			/*
-			 * In replay mode, the JSON messages are read from stdin, which we
-			 * now setup to be a pipe between prefetch and transform processes;
-			 * and the SQL commands are written to stdout which we setup to be
-			 * a pipe between the transform and apply processes.
-			 */
-			if (specs->mode == STREAM_MODE_REPLAY)
-			{
-				/*
-				 * Arrange to read from receive-transform pipe and write to the
-				 * transform-apply pipe.
-				 */
-				specs->in = fdopen(specs->pipe_rt[0], "r");
-				specs->out = fdopen(specs->pipe_ta[1], "a");
-
-				if (!stream_transform_stream(specs->in, specs->out))
-				{
-					/* errors have already been logged */
-					exit(EXIT_CODE_INTERNAL_ERROR);
-				}
-			}
-			else
-			{
-				/*
-				 * In other modes of operations (RECEIVE, CATCHUP) we start a
-				 * transform worker process that reads LSN positions from an
-				 * internal message queue and batch processes one file at a
-				 * time.
-				 */
-				if (!stream_transform_worker(specs))
-				{
-					/* errors have already been logged */
-					exit(EXIT_CODE_INTERNAL_ERROR);
-				}
-			}
-
-			exit(EXIT_CODE_QUIT);
-		}
-
-		default:
-		{
-			/* fork succeeded, in parent */
-			*pid = fpid;
-			break;
-		}
+		return stream_transform_stream(specs->in, specs->out);
+	}
+	else
+	{
+		/*
+		 * In other modes of operations (RECEIVE, CATCHUP) we start a
+		 * transform worker process that reads LSN positions from an
+		 * internal message queue and batch processes one file at a
+		 * time.
+		 */
+		return stream_transform_worker(specs);
 	}
 
 	return true;
@@ -316,8 +252,46 @@ follow_start_transform(StreamSpecs *specs, pid_t *pid)
  * files that have been prepared by the prefetch process.
  */
 bool
-follow_start_catchup(StreamSpecs *specs, pid_t *pid)
+follow_start_catchup(StreamSpecs *specs)
 {
+	/*
+	 * In replay mode, the SQL command are read from stdin.
+	 */
+	if (specs->mode == STREAM_MODE_REPLAY)
+	{
+		/* arrange to read from the transform-apply pipe */
+		specs->in = fdopen(specs->pipe_ta[0], "r");
+
+		return stream_apply_replay(specs);
+	}
+	else
+	{
+		/*
+		 * In other modes of operations (CATCHUP, really, here), we
+		 * start the file based catchup mechanism, which follows the
+		 * current LSN on the target database origin tracking system to
+		 * open the right SQL file and apply statements from there.
+		 */
+		return stream_apply_catchup(specs);
+	}
+
+	return true;
+}
+
+
+/*
+ * follow_start_subprocess forks a subprocess and calls the given function.
+ */
+bool
+follow_start_subprocess(StreamSpecs *specs, FollowSubProcess *subprocess)
+{
+	/*
+	 * Flush stdio channels just before fork, to avoid double-output
+	 * problems.
+	 */
+	fflush(stdout);
+	fflush(stderr);
+
 	/* now we can fork a sub-process to transform the current file */
 	pid_t fpid = fork();
 
@@ -325,51 +299,27 @@ follow_start_catchup(StreamSpecs *specs, pid_t *pid)
 	{
 		case -1:
 		{
-			log_error("Failed to fork a subprocess to prefetch changes: %m");
+			log_error("Failed to fork %s subprocess: %m", subprocess->name);
 			return false;
 		}
 
 		case 0:
 		{
 			/* child process runs the command */
-			log_notice("Starting the catchup sub-process");
+			log_notice("Starting the %s sub-process", subprocess->name);
 
-			/*
-			 * In replay mode, the SQL command are read from stdin.
-			 */
-			if (specs->mode == STREAM_MODE_REPLAY)
+			if (!(subprocess->command)(specs))
 			{
-				/* arrange to read from the transform-apply pipe */
-				specs->in = fdopen(specs->pipe_ta[0], "r");
-
-				if (!stream_apply_replay(specs))
-				{
-					/* errors have already been logged */
-					exit(EXIT_CODE_INTERNAL_ERROR);
-				}
-			}
-			else
-			{
-				/*
-				 * In other modes of operations (CATCHUP, really, here), we
-				 * start the file based catchup mechanism, which follows the
-				 * current LSN on the target database origin tracking system to
-				 * open the right SQL file and apply statements from there.
-				 */
-				if (!stream_apply_catchup(specs))
-				{
-					/* errors have already been logged */
-					exit(EXIT_CODE_TARGET);
-				}
+				/* errors have already been logged */
+				exit(EXIT_CODE_INTERNAL_ERROR);
 			}
 
-			/* and we're done */
 			exit(EXIT_CODE_QUIT);
 		}
 
 		default:
 		{
-			*pid = fpid;
+			subprocess->pid = fpid;
 			return true;
 		}
 	}
@@ -378,30 +328,40 @@ follow_start_catchup(StreamSpecs *specs, pid_t *pid)
 }
 
 
-struct subprocess
+/*
+ * follow_exit_early exits early, typically used when a process fails to start
+ * and other processes where started already.
+ */
+void
+follow_exit_early(FollowSubProcess *prefetch,
+				  FollowSubProcess *transform,
+				  FollowSubProcess *catchup)
 {
-	char *name;
-	pid_t pid;
-	bool exited;
-	int returnCode;
-};
+	log_debug("follow_exit_early");
+
+	if (!follow_terminate_subprocesses(prefetch, transform, catchup))
+	{
+		log_error("Failed to terminate other subprocesses, "
+				  "see above for details");
+	}
+
+	if (!follow_wait_subprocesses(prefetch, transform, catchup))
+	{
+		log_error("Some sub-process exited in error, "
+				  "see above for details");
+	}
+}
 
 
 /*
  * follow_wait_subprocesses waits until both sub-processes are finished.
  */
 bool
-follow_wait_subprocesses(pid_t prefetch, pid_t transform, pid_t catchup)
+follow_wait_subprocesses(FollowSubProcess *prefetch,
+						 FollowSubProcess *transform,
+						 FollowSubProcess *catchup)
 {
-	/*
-	 * We might have started only a subset of these 3 processes, and in that
-	 * case processes that have not been started are assigned a pid of -1.
-	 */
-	struct subprocess processArray[] = {
-		{ "prefetch", prefetch, prefetch == -1, 0 },
-		{ "transform", transform, transform == -1, 0 },
-		{ "catchup", catchup, catchup == -1, 0 }
-	};
+	FollowSubProcess *processArray[] = { prefetch, transform, catchup };
 
 	int count = sizeof(processArray) / sizeof(processArray[0]);
 
@@ -411,7 +371,7 @@ follow_wait_subprocesses(pid_t prefetch, pid_t transform, pid_t catchup)
 	/* only count sub-processes for which we have a positive pid */
 	for (int i = 0; i < count; i++)
 	{
-		if (processArray[i].pid < 0)
+		if (processArray[i]->pid < 0)
 		{
 			--stillRunning;
 		}
@@ -422,44 +382,65 @@ follow_wait_subprocesses(pid_t prefetch, pid_t transform, pid_t catchup)
 	{
 		if (asked_to_quit)
 		{
-			log_debug("follow_wait_subprocesses was asked to quit");
-			return false;
+			if (!follow_terminate_subprocesses(prefetch, transform, catchup))
+			{
+				log_error("Failed to terminate other subprocesses, "
+						  "see above for details");
+				return false;
+			}
+
+			return true;
 		}
 
 		for (int i = 0; i < count; i++)
 		{
-			if (processArray[i].pid <= 0 || processArray[i].exited)
+			if (processArray[i]->pid <= 0 || processArray[i]->exited)
 			{
 				continue;
 			}
 
 			/* follow_wait_pid is non-blocking: uses WNOHANG */
-			if (!follow_wait_pid(processArray[i].pid,
-								 &(processArray[i].exited),
-								 &(processArray[i].returnCode)))
+			if (!follow_wait_pid(processArray[i]->pid,
+								 &(processArray[i]->exited),
+								 &(processArray[i]->returnCode)))
 			{
 				/* errors have already been logged */
 				return false;
 			}
 
-			if (processArray[i].exited)
+			if (processArray[i]->exited)
 			{
 				--stillRunning;
 
-				log_level(processArray[i].returnCode == 0 ? LOG_INFO : LOG_ERROR,
-						  "%s process %d has terminated [%d]",
-						  processArray[i].name,
-						  processArray[i].pid,
-						  processArray[i].returnCode);
-			}
+				int logLevel = LOG_NOTICE;
+				char details[BUFSIZE] = { 0 };
 
-			success = success || processArray[i].returnCode == 0;
+				if (processArray[i]->returnCode == 0)
+				{
+					sformat(details, sizeof(details), "successfully");
+				}
+				else
+				{
+					logLevel = LOG_ERROR;
+					sformat(details, sizeof(details), "with error code %d",
+							processArray[i]->returnCode);
+				}
 
-			/* if one process fails, early exit the other ones */
-			if (processArray[i].returnCode != 0)
-			{
-				follow_terminate_subprocesses(prefetch, transform, catchup);
-				return false;
+				log_level(logLevel,
+						  "Subprocess %s with pid %d has exited %s",
+						  processArray[i]->name,
+						  processArray[i]->pid,
+						  details);
+
+				/* if one process exits, early exit the other ones too */
+				if (!follow_terminate_subprocesses(prefetch, transform, catchup))
+				{
+					log_error("Failed to terminate other subprocesses, "
+							  "see above for details");
+					return false;
+				}
+
+				success = success && processArray[i]->returnCode == 0;
 			}
 		}
 
@@ -467,7 +448,7 @@ follow_wait_subprocesses(pid_t prefetch, pid_t transform, pid_t catchup)
 		pg_usleep(150 * 1000);
 	}
 
-	return true;
+	return success;
 }
 
 
@@ -476,40 +457,41 @@ follow_wait_subprocesses(pid_t prefetch, pid_t transform, pid_t catchup)
  * to signal the other ones to quit early.
  */
 bool
-follow_terminate_subprocesses(pid_t prefetch, pid_t transform, pid_t catchup)
+follow_terminate_subprocesses(FollowSubProcess *prefetch,
+							  FollowSubProcess *transform,
+							  FollowSubProcess *catchup)
 {
-	struct subprocess processArray[] = {
-		{ "prefetch", prefetch, prefetch == -1, 0 },
-		{ "transform", transform, transform == -1, 0 },
-		{ "catchup", catchup, catchup == -1, 0 }
-	};
+	FollowSubProcess *processArray[] = { prefetch, transform, catchup };
 
 	int count = sizeof(processArray) / sizeof(processArray[0]);
 
-	/* first, signal the processes to exit as soon as possible */
+	/* signal the processes to exit as soon as possible */
 	for (int i = 0; i < count; i++)
 	{
-		if (processArray[i].pid <= 0 || processArray[i].exited)
+		if (processArray[i]->pid <= 0 || processArray[i]->exited)
 		{
 			continue;
 		}
 
-		if (kill(processArray[i].pid, SIGQUIT) != 0)
+		log_debug("kill -QUIT %d (%s)",
+				  processArray[i]->pid,
+				  processArray[i]->name);
+
+		if (kill(processArray[i]->pid, SIGQUIT) != 0)
 		{
 			/* process might have exited on its own already */
 			if (errno != ESRCH)
 			{
 				log_error("Failed to signal %s process %d: %m",
-						  processArray[i].name,
-						  processArray[i].pid);
+						  processArray[i]->name,
+						  processArray[i]->pid);
 
 				return false;
 			}
 		}
 	}
 
-	/* second, collect the processes exit statuses */
-	return follow_wait_subprocesses(prefetch, transform, catchup);
+	return true;
 }
 
 

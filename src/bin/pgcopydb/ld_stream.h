@@ -465,19 +465,36 @@ bool stream_apply_replay(StreamSpecs *specs);
 bool stream_replay_line(void *ctx, const char *line, bool *stop);
 
 /* follow.c */
+typedef bool (*FollowSubCommand) (StreamSpecs *specs);
+
+typedef struct FollowSubProcess
+{
+	char *name;
+	FollowSubCommand command;
+	pid_t pid;
+	bool exited;
+	int returnCode;
+} FollowSubProcess;
+
 bool followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
 
-bool follow_start_prefetch(StreamSpecs *specs, pid_t *pid);
-bool follow_start_transform(StreamSpecs *specs, pid_t *pid);
-bool follow_start_catchup(StreamSpecs *specs, pid_t *pid);
+bool follow_start_subprocess(StreamSpecs *specs, FollowSubProcess *subprocess);
 
-bool follow_wait_subprocesses(pid_t prefetch,
-							  pid_t transform,
-							  pid_t catchup);
+bool follow_start_prefetch(StreamSpecs *specs);
+bool follow_start_transform(StreamSpecs *specs);
+bool follow_start_catchup(StreamSpecs *specs);
 
-bool follow_terminate_subprocesses(pid_t prefetch,
-								   pid_t transform,
-								   pid_t catchup);
+void follow_exit_early(FollowSubProcess *prefetch,
+					   FollowSubProcess *transform,
+					   FollowSubProcess *catchup);
+
+bool follow_wait_subprocesses(FollowSubProcess *prefetch,
+							  FollowSubProcess *transform,
+							  FollowSubProcess *catchup);
+
+bool follow_terminate_subprocesses(FollowSubProcess *prefetch,
+								   FollowSubProcess *transform,
+								   FollowSubProcess *catchup);
 
 bool follow_wait_pid(pid_t subprocess, bool *exited, int *returnCode);
 
