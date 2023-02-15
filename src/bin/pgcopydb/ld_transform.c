@@ -225,7 +225,7 @@ typedef struct TransformStreamCtx
 bool
 stream_transform_stream(FILE *in, FILE *out)
 {
-	log_info("Starting the transform service");
+	log_notice("Starting the transform service");
 
 	TransformStreamCtx ctx = {
 		.currentTxIndex = 0,
@@ -237,6 +237,13 @@ stream_transform_stream(FILE *in, FILE *out)
 		.callback = stream_transform_line,
 		.ctx = &ctx
 	};
+
+	/* switch out stream from block buffered to line buffered mode */
+	if (setvbuf(out, NULL, _IOLBF, 0) != 0)
+	{
+		log_error("Failed to set stdout to line buffered mode: %m");
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
 
 	if (!read_from_stream(in, &context))
 	{

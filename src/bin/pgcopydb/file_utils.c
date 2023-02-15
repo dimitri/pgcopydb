@@ -397,9 +397,10 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 		 * When asked_to_stop || asked_to_stop_fast still continue reading
 		 * through EOF on the input stream, then quit normally.
 		 */
-		if (asked_to_quit)
+		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
-			return false;
+			log_info("read_from_stream was asked to stop or quit");
+			return true;
 		}
 
 		FD_ZERO(&readFileDescriptorSet);
@@ -489,10 +490,11 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 			{
 				char *line = lines[i];
 
-				if (asked_to_quit)
+				/* on normal interrupt, finish processing the received buffer */
+				if (asked_to_stop_fast || asked_to_quit)
 				{
 					free(buf);
-					return false;
+					return true;
 				}
 
 				/* we count stream input lines as if reading from a file */

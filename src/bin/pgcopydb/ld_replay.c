@@ -24,33 +24,6 @@
 #include "string_utils.h"
 
 
-/*
- * stream_replay sets 3 sub-processes up to implement "live replay" of the
- * changes from the source database directly to the target database.
- *
- * The process is split three-ways and sub-processes then communicate data
- * using a unix pipe mechanism, as if running the following synthetic command
- * line:
- *
- *    pgcopydb stream receive --to-stdout
- *  | pgcopydb stream transform - -
- *  | pgcopydb stream apply --from-stdin
- *
- */
-bool
-stream_replay(StreamSpecs *specs)
-{
-	if (specs->mode != STREAM_MODE_REPLAY)
-	{
-		log_fatal("BUG: stream_replay called with specs->mode %d", specs->mode);
-		return false;
-	}
-
-	log_error("pgcopydb stream replay is not implemented yet");
-	return false;
-}
-
-
 typedef struct ReplayStreamCtx
 {
 	StreamApplyContext applyContext;
@@ -66,13 +39,6 @@ stream_apply_replay(StreamSpecs *specs)
 {
 	ReplayStreamCtx ctx = { 0 };
 	StreamApplyContext *context = &(ctx.applyContext);
-
-	if (specs->mode == STREAM_MODE_REPLAY)
-	{
-		log_error("BUG: stream_apply_replay called with specs->mode %d",
-				  specs->mode);
-		return false;
-	}
 
 	if (!specs->stdIn)
 	{
@@ -132,7 +98,7 @@ stream_apply_replay(StreamSpecs *specs)
 		.ctx = &ctx
 	};
 
-	if (!read_from_stream(stdin, &readerContext))
+	if (!read_from_stream(specs->in, &readerContext))
 	{
 		log_error("Failed to transform JSON messages from input stream, "
 				  "see above for details");

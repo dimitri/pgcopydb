@@ -169,26 +169,6 @@ stream_init_specs(StreamSpecs *specs,
 		}
 	}
 
-	/* specs->stdOut is used for the receive-transform pipe */
-	if (specs->stdOut)
-	{
-		if (pipe(specs->pipe_rt) != 0)
-		{
-			log_fatal("Failed to create a pipe for streaming: %m");
-			return false;
-		}
-	}
-
-	/* specs->stdIn is used for the transform-apply pipe */
-	if (specs->stdIn)
-	{
-		if (pipe(specs->pipe_ta) != 0)
-		{
-			log_fatal("Failed to create a pipe for streaming: %m");
-			return false;
-		}
-	}
-
 	return true;
 }
 
@@ -202,6 +182,9 @@ stream_init_context(StreamContext *privateContext, StreamSpecs *specs)
 	privateContext->mode = specs->mode;
 	privateContext->stdIn = specs->stdIn;
 	privateContext->stdOut = specs->stdOut;
+
+	privateContext->in = specs->in;
+	privateContext->out = specs->out;
 
 	privateContext->transformQueue = &(specs->transformQueue);
 
@@ -254,10 +237,10 @@ startLogicalStreaming(StreamSpecs *specs)
 
 	context.private = (void *) &(privateContext);
 
-	if (specs->mode == STREAM_MODE_RECEIVE && specs->stdOut)
+	if (specs->stdOut)
 	{
 		/* switch stdout from block buffered to line buffered mode */
-		if (setvbuf(stdout, NULL, _IOLBF, 0) != 0)
+		if (setvbuf(specs->out, NULL, _IOLBF, 0) != 0)
 		{
 			log_error("Failed to set stdout to line buffered mode: %m");
 			return false;
@@ -558,7 +541,8 @@ streamWrite(LogicalStreamContext *context)
 	 */
 	if (privateContext->stdOut)
 	{
-		int ret = fwrite(buffer->data, sizeof(char), buffer->len, stdout);
+		int ret =
+			fwrite(buffer->data, sizeof(char), buffer->len, privateContext->out);
 
 		if (ret != buffer->len)
 		{
@@ -571,7 +555,7 @@ streamWrite(LogicalStreamContext *context)
 		/* flush stdout at transaction boundaries */
 		if (metadata->action == STREAM_ACTION_COMMIT)
 		{
-			if (fflush(stdout) != 0)
+			if (fflush(privateContext->out) != 0)
 			{
 				log_error("Failed to flush standard output: %m");
 				return false;
@@ -854,6 +838,12 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 				}
 			}
 
+			break;
+		}
+
+		case STREAM_MODE_REPLAY:
+		{
+			/* nothing else to do in that streaming mode */
 			break;
 		}
 
