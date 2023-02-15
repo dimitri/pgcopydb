@@ -101,6 +101,8 @@ CommandLine follow_command =
 		cli_follow);
 
 
+static void clone_and_follow(CopyDataSpec *copySpecs);
+
 static bool start_clone_process(CopyDataSpec *copySpecs, pid_t *pid);
 
 static bool start_follow_process(CopyDataSpec *copySpecs,
@@ -119,130 +121,104 @@ void
 cli_clone(int argc, char **argv)
 {
 	CopyDataSpec copySpecs = { 0 };
-	StreamSpecs streamSpecs = { 0 };
 
 	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_ALL);
 
 	/* at the moment this is not covered by cli_copy_prepare_specs() */
 	copySpecs.follow = copyDBoptions.follow;
 
+	/*
+	 * When pgcopydb clone --follow is used, we call the clone_and_follow()
+	 * function which does it all, and just quit.
+	 */
 	if (copySpecs.follow)
 	{
-		if (!stream_init_specs(&streamSpecs,
-							   &(copySpecs.cfPaths.cdc),
-							   copySpecs.source_pguri,
-							   copySpecs.target_pguri,
-							   copyDBoptions.plugin,
-							   copyDBoptions.slotName,
-							   copyDBoptions.origin,
-							   copyDBoptions.endpos,
-							   STREAM_MODE_CATCHUP,
-							   copyDBoptions.stdIn,
-							   copyDBoptions.stdOut))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
+		(void) clone_and_follow(&copySpecs);
+		exit(EXIT_CODE_QUIT);
 	}
 
 	/*
-	 * First, we need to open a snapshot that we're going to re-use in all our
-	 * connections to the source database. When the --snapshot option has been
-	 * used, instead of exporting a new snapshot, we can just re-use it.
+	 * From now on, we know the --follow option has not been used, it's all
+	 * about doing a bare clone operation.
 	 *
-	 * When using PostgreSQL 9.6 logical decoding, we need to create our
-	 * replication slot and fetch the snapshot from that logical replication
-	 * command, it's the only way.
+	 * First, make sure to export a snapshot.
 	 */
-	bool snapshotExported = false;
-
-	if (copySpecs.follow)
-	{
-		TransactionSnapshot *snapshot = &(copySpecs.sourceSnapshot);
-		PGSQL *pgsql = &(snapshot->pgsql);
-
-		if (!pgsql_init(pgsql, copySpecs.source_pguri, PGSQL_CONN_SOURCE))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_SOURCE);
-		}
-
-		if (!pgsql_server_version(pgsql))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_SOURCE);
-		}
-
-		if (pgsql->pgversion_num < 100000)
-		{
-			if (!copydb_create_logical_replication_slot(&copySpecs,
-														streamSpecs.logrep_pguri,
-														streamSpecs.plugin,
-														streamSpecs.slotName))
-			{
-				/* errors have already been logged */
-				exit(EXIT_CODE_SOURCE);
-			}
-
-			snapshotExported = true;
-		}
-	}
-
-	/*
-	 * Make sure to export a snapshot if that's not been done just above.
-	 */
-	if (!snapshotExported && !copydb_prepare_snapshot(&copySpecs))
+	if (!copydb_prepare_snapshot(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	/* just keep track, even though we're not going to use this anymore */
-	snapshotExported = true;
+	pid_t clonePID = -1;
+
+	if (!start_clone_process(&copySpecs, &clonePID))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/* wait until the clone process is finished */
+	bool success = cli_clone_follow_wait_subprocess("clone", clonePID);
+
+	/* close our top-level copy db connection and snapshot */
+	if (!copydb_close_snapshot(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	/* make sure all sub-processes are now finished */
+	success = success && copydb_wait_for_subprocesses();
+
+	if (!success)
+	{
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+}
+
+
+/*
+ * clone_and_follow implements the command: pgcopydb clone --follow
+ */
+static void
+clone_and_follow(CopyDataSpec *copySpecs)
+{
+	StreamSpecs streamSpecs = { 0 };
+
+	if (!stream_init_specs(&streamSpecs,
+						   &(copySpecs->cfPaths.cdc),
+						   copySpecs->source_pguri,
+						   copySpecs->target_pguri,
+						   copyDBoptions.plugin,
+						   copyDBoptions.slotName,
+						   copyDBoptions.origin,
+						   copyDBoptions.endpos,
+						   STREAM_MODE_CATCHUP,
+						   copyDBoptions.stdIn,
+						   copyDBoptions.stdOut))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/*
+	 * First create/export a snapshot for the whole clone --follow operations.
+	 */
+	if (!follow_export_snapshot(copySpecs, &streamSpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
 
 	/*
 	 * When --follow has been used, we start two subprocess (clone, follow).
 	 * Before doing that though, we want to make sure it was possible to setup
-	 * the source and target database for Change Data Capture: the wal2json
-	 * logical decoding plugin must be available on the source Postgres
-	 * instance, etc.
+	 * the source and target database for Change Data Capture.
 	 */
-	if (copySpecs.follow)
+	if (!follow_setup_databases(copySpecs, &streamSpecs))
 	{
-		/*
-		 * We want to make sure to use a private PGSQL client connection
-		 * instance when connecting to the source database now, as the main
-		 * connection is currently active holding a snapshot for the whole
-		 * process.
-		 */
-		CopyDataSpec setupSpecs = { 0 };
-		TransactionSnapshot snapshot = { 0 };
-
-		/* copy our structure wholesale */
-		setupSpecs = copySpecs;
-
-		/* ensure we use a new snapshot and connection in setupSpecs */
-		if (!copydb_copy_snapshot(&copySpecs, &snapshot))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
-
-		setupSpecs.sourceSnapshot = snapshot;
-
-		/*
-		 * Now create the replication slot and the pgcopydb sentinel table on
-		 * the source database, and the origin (replication progress tracking)
-		 * on the target database.
-		 */
-		if (!stream_setup_databases(&setupSpecs,
-									streamSpecs.plugin,
-									streamSpecs.slotName,
-									streamSpecs.origin))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	/*
@@ -252,19 +228,16 @@ cli_clone(int argc, char **argv)
 	pid_t clonePID = -1;
 	pid_t followPID = -1;
 
-	if (!start_clone_process(&copySpecs, &clonePID))
+	if (!start_clone_process(copySpecs, &clonePID))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (copySpecs.follow)
+	if (!start_follow_process(copySpecs, &streamSpecs, &followPID))
 	{
-		if (!start_follow_process(&copySpecs, &streamSpecs, &followPID))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	/* wait until the clone process is finished */
@@ -272,7 +245,7 @@ cli_clone(int argc, char **argv)
 		cli_clone_follow_wait_subprocess("clone", clonePID);
 
 	/* close our top-level copy db connection and snapshot */
-	if (!copydb_close_snapshot(&copySpecs))
+	if (!copydb_close_snapshot(copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);
@@ -298,52 +271,26 @@ cli_clone(int argc, char **argv)
 	}
 
 	/* now wait until the follow process is finished */
-	if (copySpecs.follow)
+	success = success &&
+			  cli_clone_follow_wait_subprocess("follow", followPID);
+
+	/*
+	 * Now is a good time to reset the sequences on the target database to
+	 * match the state they are in at the moment on the source database.
+	 * Postgres logical decoding lacks support for syncing sequences.
+	 *
+	 * This step is implement as if running the following command:
+	 *
+	 *   $ pgcopydb copy sequences --resume --not-consistent
+	 *
+	 * The whole idea is to fetch the "new" current values of the
+	 * sequences, not the ones that were current when the main snapshot was
+	 * exported.
+	 */
+	if (!follow_reset_sequences(copySpecs, &streamSpecs))
 	{
-		success = success &&
-				  cli_clone_follow_wait_subprocess("follow", followPID);
-
-		/*
-		 * Now is a good time to reset the sequences on the target database to
-		 * match the state they are in at the moment on the source database.
-		 * Postgres logical decoding lacks support for syncing sequences.
-		 *
-		 * This step is implement as if running the following command:
-		 *
-		 *   $ pgcopydb copy sequences --resume --not-consistent
-		 *
-		 * The whole idea is to fetch the "new" current values of the
-		 * sequences, not the ones that were current when the main snapshot was
-		 * exported.
-		 */
-		CopyDataSpec seqSpecs = { 0 };
-
-		/* copy our structure wholesale */
-		seqSpecs = copySpecs;
-
-		/* then force some options such as --resume --not-consistent */
-		seqSpecs.restart = false;
-		seqSpecs.resume = true;
-		seqSpecs.consistent = false;
-		seqSpecs.section = DATA_SECTION_SET_SEQUENCES;
-
-		/* we don't want to re-use any snapshot */
-		TransactionSnapshot snapshot = { 0 };
-
-		seqSpecs.sourceSnapshot = snapshot;
-
-		/* fetch schema information from source catalogs, including filtering */
-		if (!copydb_fetch_schema_and_prepare_specs(&seqSpecs))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_TARGET);
-		}
-
-		if (!copydb_copy_all_sequences(&seqSpecs))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
+		/* errors have already been logged */
+		exit(EXIT_CODE_TARGET);
 	}
 
 	/* make sure all sub-processes are now finished */

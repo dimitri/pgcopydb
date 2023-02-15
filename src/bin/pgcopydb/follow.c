@@ -18,6 +18,153 @@
 
 
 /*
+ * follow_export_snapshot opens a snapshot that we're going to re-use in all
+ * our connections to the source database. When the --snapshot option has been
+ * used, instead of exporting a new snapshot, we can just re-use it.
+ */
+bool
+follow_export_snapshot(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
+{
+	TransactionSnapshot *snapshot = &(copySpecs->sourceSnapshot);
+	PGSQL *pgsql = &(snapshot->pgsql);
+
+	if (!pgsql_init(pgsql, copySpecs->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_server_version(pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * When using PostgreSQL 9.6 logical decoding, we need to create our
+	 * replication slot and fetch the snapshot from that logical replication
+	 * command, it's the only way.
+	 */
+	if (pgsql->pgversion_num < 100000)
+	{
+		if (!copydb_create_logical_replication_slot(copySpecs,
+													streamSpecs->logrep_pguri,
+													streamSpecs->plugin,
+													streamSpecs->slotName))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+	else
+	{
+		if (!copydb_prepare_snapshot(copySpecs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * follow_setup_databases ensures that both source and target databases are
+ * setup for logical decoding operations (replication slot, replication origin
+ * tracking, pgcopydb.sentinel table).
+ */
+bool
+follow_setup_databases(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
+{
+	/*
+	 * We want to make sure to use a private PGSQL client connection
+	 * instance when connecting to the source database now, as the main
+	 * connection is currently active holding a snapshot for the whole
+	 * process.
+	 */
+	CopyDataSpec setupSpecs = { 0 };
+	TransactionSnapshot snapshot = { 0 };
+
+	/* copy our structure wholesale */
+	setupSpecs = *copySpecs;
+
+	/* ensure we use a new snapshot and connection in setupSpecs */
+	if (!copydb_copy_snapshot(copySpecs, &snapshot))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	setupSpecs.sourceSnapshot = snapshot;
+
+	/*
+	 * Now create the replication slot and the pgcopydb sentinel table on
+	 * the source database, and the origin (replication progress tracking)
+	 * on the target database.
+	 */
+	if (!stream_setup_databases(&setupSpecs,
+								streamSpecs->plugin,
+								streamSpecs->slotName,
+								streamSpecs->origin))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * follow_reset_sequences resets the sequences on the target database to match
+ * the source database at this very moment (not in any pre-established
+ * snapshot). Postgres logical decoding lacks support for syncing sequences.
+ *
+ * This step is implement as if running the following command:
+ *
+ *   $ pgcopydb copy sequences --resume --not-consistent
+ *
+ * The whole idea is to fetch the "new" current values of the sequences, not
+ * the ones that were current when the main snapshot was exported.
+ */
+bool
+follow_reset_sequences(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
+{
+	CopyDataSpec seqSpecs = { 0 };
+
+	/* copy our structure wholesale */
+	seqSpecs = *copySpecs;
+
+	/* then force some options such as --resume --not-consistent */
+	seqSpecs.restart = false;
+	seqSpecs.resume = true;
+	seqSpecs.consistent = false;
+	seqSpecs.section = DATA_SECTION_SET_SEQUENCES;
+
+	/* we don't want to re-use any snapshot */
+	TransactionSnapshot snapshot = { 0 };
+
+	seqSpecs.sourceSnapshot = snapshot;
+
+	/* fetch schema information from source catalogs, including filtering */
+	if (!copydb_fetch_schema_and_prepare_specs(&seqSpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!copydb_copy_all_sequences(&seqSpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * followDB implements a logical decoding client for streaming changes from the
  * source database into the target database.
  *
