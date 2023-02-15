@@ -201,8 +201,11 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 bool
 follow_start_prefetch(StreamSpecs *specs)
 {
-	/* arrange to write to the receive-transform pipe */
-	specs->out = fdopen(specs->pipe_rt[1], "a");
+	if (specs->mode == STREAM_MODE_REPLAY)
+	{
+		/* arrange to write to the receive-transform pipe */
+		specs->out = fdopen(specs->pipe_rt[1], "a");
+	}
 
 	return startLogicalStreaming(specs);
 }
@@ -388,8 +391,6 @@ follow_wait_subprocesses(FollowSubProcess *prefetch,
 						  "see above for details");
 				return false;
 			}
-
-			return true;
 		}
 
 		for (int i = 0; i < count; i++)
