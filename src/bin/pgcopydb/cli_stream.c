@@ -819,6 +819,17 @@ cli_stream_replay(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	/*
+	 * Remove the possibly still existing stream context files from
+	 * previous round of operations (--resume, etc). We want to make sure
+	 * that the catchup process reads the files created on this connection.
+	 */
+	if (!stream_cleanup_context(&specs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
 	if (!followDB(&copySpecs, &specs))
 	{
 		/* errors have already been logged */
@@ -835,12 +846,78 @@ cli_stream_replay(int argc, char **argv)
 static void
 cli_stream_transform(int argc, char **argv)
 {
+	CopyDataSpec copySpecs = { 0 };
+
 	if (argc != 2)
 	{
 		log_fatal("Please provide a filename argument");
 		commandline_help(stderr);
 
 		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	(void) find_pg_commands(&(copySpecs.pgPaths));
+
+	/*
+	 * Both the catchup and the replay command starts the "apply" service, so
+	 * that they conflict with each other.
+	 */
+	bool createWorkDir = false;
+	bool service = true;
+	char *serviceName = "apply";
+
+	if (!copydb_init_workdir(&copySpecs,
+							 streamDBoptions.dir,
+							 service,
+							 serviceName,
+							 streamDBoptions.restart,
+							 streamDBoptions.resume,
+							 createWorkDir))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	RestoreOptions restoreOptions = { 0 };
+
+	if (!copydb_init_specs(&copySpecs,
+						   streamDBoptions.source_pguri,
+						   streamDBoptions.target_pguri,
+						   1,   /* tableJobs */
+						   1,   /* indexJobs */
+						   0,   /* skip threshold */
+						   "",  /* skip threshold pretty printed */
+						   DATA_SECTION_NONE,
+						   streamDBoptions.snapshot,
+						   restoreOptions,
+						   false, /* roles */
+						   false, /* skipLargeObjects */
+						   false, /* skipExtensions */
+						   false, /* skipCollations */
+						   streamDBoptions.restart,
+						   streamDBoptions.resume,
+						   !streamDBoptions.notConsistent))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	StreamSpecs specs = { 0 };
+
+	if (!stream_init_specs(&specs,
+						   &(copySpecs.cfPaths.cdc),
+						   copySpecs.source_pguri,
+						   copySpecs.target_pguri,
+						   streamDBoptions.plugin,
+						   streamDBoptions.slotName,
+						   streamDBoptions.origin,
+						   streamDBoptions.endpos,
+						   STREAM_MODE_CATCHUP,
+						   streamDBoptions.stdIn,
+						   streamDBoptions.stdOut))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	char *jsonfilename = argv[0];
@@ -859,27 +936,25 @@ cli_stream_transform(int argc, char **argv)
 	 */
 	if (streq(jsonfilename, "-"))
 	{
-		FILE *in = stdin;
-		FILE *out = stdout;
+		specs.in = stdin;
+		specs.out = stdout;
 
 		if (!streq(sqlfilename, "-"))
 		{
-			out = fopen_with_umask(sqlfilename, "w", FOPEN_FLAGS_W, 0644);
-
-			if (out == NULL)
-			{
-				log_fatal("Failed to create and open file \"%s\"", sqlfilename);
-				exit(EXIT_CODE_INTERNAL_ERROR);
-			}
+			log_fatal("JSON filename is - (stdin), "
+					  "SQL filename should be - (stdout)");
+			log_fatal("When streaming from stdin, out filename is computed "
+					  "automatically from the current LSN.");
+			exit(EXIT_CODE_BAD_ARGS);
 		}
 
-		if (!stream_transform_stream(in, out))
+		if (!stream_transform_stream(&specs))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 
-		if (fclose(out) != 0)
+		if (fclose(specs.out) != 0)
 		{
 			log_error("Failed to close file \"%s\": %m", sqlfilename);
 			exit(EXIT_CODE_INTERNAL_ERROR);
@@ -1105,6 +1180,18 @@ stream_start_in_mode(LogicalStreamMode mode)
 
 		case STREAM_MODE_PREFETCH:
 		{
+			/*
+			 * Remove the possibly still existing stream context files from
+			 * previous round of operations (--resume, etc). We want to make
+			 * sure that the catchup process reads the files created on this
+			 * connection.
+			 */
+			if (!stream_cleanup_context(&specs))
+			{
+				/* errors have already been logged */
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
 			if (!followDB(&copySpecs, &specs))
 			{
 				/* errors have already been logged */

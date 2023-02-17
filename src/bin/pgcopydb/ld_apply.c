@@ -41,14 +41,11 @@ stream_apply_catchup(StreamSpecs *specs)
 {
 	StreamApplyContext context = { 0 };
 
-	/* in prefetch mode, wait until the sentinel enables the apply process */
-	if (specs->mode == STREAM_MODE_PREFETCH)
+	/* wait until the sentinel enables the apply process */
+	if (!stream_apply_wait_for_sentinel(specs, &context))
 	{
-		if (!stream_apply_wait_for_sentinel(specs, &context))
-		{
-			/* errors have already been logged */
-			return false;
-		}
+		/* errors have already been logged */
+		return false;
 	}
 
 	if (!stream_read_context(&(specs->paths),
@@ -103,17 +100,16 @@ stream_apply_catchup(StreamSpecs *specs)
 
 		/*
 		 * It might be the expected file doesn't exist already, in that case
-		 * continue looping until the concurrent prefetch mechanism has created
-		 * it.
+		 * exit successfully so that the main process may switch from catchup
+		 * mode to replay mode.
 		 */
 		if (!file_exists(context.sqlFileName))
 		{
-			log_debug("File \"%s\" does not exists yet, retrying in %dms",
-					  context.sqlFileName,
-					  CATCHINGUP_SLEEP_MS);
+			log_info("File \"%s\" does not exists yet, exit",
+					 context.sqlFileName);
 
-			pg_usleep(CATCHINGUP_SLEEP_MS * 1000);
-			continue;
+			(void) pgsql_finish(&(context.pgsql));
+			return true;
 		}
 
 		/*
@@ -122,6 +118,7 @@ stream_apply_catchup(StreamSpecs *specs)
 		if (!stream_apply_file(&context))
 		{
 			/* errors have already been logged */
+			(void) pgsql_finish(&(context.pgsql));
 			return false;
 		}
 
@@ -156,20 +153,23 @@ stream_apply_catchup(StreamSpecs *specs)
 		if (!computeSQLFileName(&context))
 		{
 			/* errors have already been logged */
+			(void) pgsql_finish(&(context.pgsql));
 			return false;
 		}
 
+		/*
+		 * If we reached the end of the file and the current LSN still belongs
+		 * to the same file (a SWITCH did not occur), then we exit so that the
+		 * calling process may switch from catchup mode to live replay mode.
+		 */
 		if (strcmp(context.sqlFileName, currentSQLFileName) == 0)
 		{
-			log_debug("Reached end of file \"%s\" at %X/%X.",
-					  currentSQLFileName,
-					  LSN_FORMAT_ARGS(context.previousLSN));
+			log_info("Reached end of file \"%s\" at %X/%X.",
+					 currentSQLFileName,
+					 LSN_FORMAT_ARGS(context.previousLSN));
 
-			/*
-			 * Sleep for a while (10s typically) then try again, new data might
-			 * have been appended to the same file again.
-			 */
-			pg_usleep(CATCHINGUP_SLEEP_MS * 1000);
+			(void) pgsql_finish(&(context.pgsql));
+			return true;
 		}
 	}
 
@@ -243,7 +243,11 @@ stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
 		pg_usleep(CATCHINGUP_SLEEP_MS * 1000);
 	}
 
-	log_info("The pgcopydb sentinel has enabled applying changes");
+	/* when apply was already set on first loop, don't even mention it */
+	if (!firstLoop)
+	{
+		log_info("The pgcopydb sentinel has enabled applying changes");
+	}
 
 	return true;
 }

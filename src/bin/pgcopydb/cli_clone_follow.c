@@ -344,6 +344,17 @@ cli_follow(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	/*
+	 * Remove the possibly still existing stream context files from
+	 * previous round of operations (--resume, etc). We want to make sure
+	 * that the catchup process reads the files created on this connection.
+	 */
+	if (!stream_cleanup_context(&specs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
 	if (!followDB(&copySpecs, &specs))
 	{
 		/* errors have already been logged */
@@ -569,10 +580,116 @@ start_follow_process(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs,
 			/* child process runs the command */
 			log_notice("Starting the follow sub-process");
 
-			if (!followDB(copySpecs, streamSpecs))
+			/*
+			 * Remove the possibly still existing stream context files from
+			 * previous round of operations (--resume, etc). We want to make
+			 * sure that the catchup process reads the files created on this
+			 * connection.
+			 */
+			if (!stream_cleanup_context(streamSpecs))
 			{
 				/* errors have already been logged */
 				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			/*
+			 * In case of successful exit from the follow sub-processes, we
+			 * switch back and forth between CATCHUP and REPLAY modes and
+			 * continue replaying changes. In case of error, we stop.
+			 */
+			LogicalStreamMode modeArray[] = {
+				STREAM_MODE_CATCHUP,
+				STREAM_MODE_REPLAY
+			};
+
+			int count = sizeof(modeArray) / sizeof(modeArray[0]);
+
+			uint64_t loop = 0;
+			LogicalStreamMode currentMode = modeArray[0];
+
+			while (true)
+			{
+				if (!followDB(copySpecs, streamSpecs))
+				{
+					/* errors have already been logged */
+					exit(EXIT_CODE_INTERNAL_ERROR);
+				}
+
+				char *pguri = (char *) copySpecs->source_pguri;
+				PGSQL pgsql = { 0 };
+				CopyDBSentinel sentinel = { 0 };
+
+				if (!pgsql_init(&pgsql, pguri, PGSQL_CONN_SOURCE))
+				{
+					/* errors have already been logged */
+					exit(EXIT_CODE_SOURCE);
+				}
+
+				if (!pgsql_get_sentinel(&pgsql, &sentinel))
+				{
+					/* errors have already been logged */
+					exit(EXIT_CODE_SOURCE);
+				}
+
+				if (sentinel.endpos != InvalidXLogRecPtr &&
+					sentinel.endpos <= sentinel.replay_lsn)
+				{
+					log_info("Reached endpos %X/%X at %X/%X",
+							 LSN_FORMAT_ARGS(sentinel.endpos),
+							 LSN_FORMAT_ARGS(sentinel.replay_lsn));
+
+					exit(EXIT_CODE_SOURCE);
+				}
+
+				log_info("Sentinel replay_lsn is %X/%X, endpos is %X/%X",
+						 LSN_FORMAT_ARGS(sentinel.replay_lsn),
+						 LSN_FORMAT_ARGS(sentinel.endpos));
+
+				/* switch to the next mode, increment loop counter */
+				currentMode = modeArray[++loop % count];
+
+				/* and re-init our streamSpecs for the new mode */
+				if (!stream_init_for_mode(streamSpecs, currentMode))
+				{
+					/* errors have already been logged */
+					exit(EXIT_CODE_INTERNAL_ERROR);
+				}
+
+				/*
+				 * Whatever the current/previous mode was, we need to
+				 * ensure to catch-up with files on-disk before switching
+				 * to another mode of operations.
+				 */
+				log_info("Catching-up from existing on-disk files");
+
+				if (!stream_apply_catchup(streamSpecs))
+				{
+					/* errors have already been logged */
+					exit(EXIT_CODE_TARGET);
+				}
+
+				if (!pgsql_get_sentinel(&pgsql, &sentinel))
+				{
+					/* errors have already been logged */
+					exit(EXIT_CODE_SOURCE);
+				}
+
+				if (sentinel.endpos != InvalidXLogRecPtr &&
+					sentinel.endpos <= sentinel.replay_lsn)
+				{
+					log_info("Reached endpos %X/%X at %X/%X",
+							 LSN_FORMAT_ARGS(sentinel.endpos),
+							 LSN_FORMAT_ARGS(sentinel.replay_lsn));
+
+					exit(EXIT_CODE_SOURCE);
+				}
+
+				log_info("Sentinel replay_lsn is %X/%X, endpos is %X/%X",
+						 LSN_FORMAT_ARGS(sentinel.replay_lsn),
+						 LSN_FORMAT_ARGS(sentinel.endpos));
+
+				log_info("Restarting logical decoding follower in %s mode",
+						 LogicalStreamModeToString(currentMode));
 			}
 
 			/* and we're done */

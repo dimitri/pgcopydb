@@ -177,17 +177,6 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 {
 	int errors = 0;
 
-	/*
-	 * Remove the possibly still existing stream context files from
-	 * previous round of operations (--resume, etc). We want to make sure
-	 * that the catchup process reads the files created on this connection.
-	 */
-	if (!stream_cleanup_context(streamSpecs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	if (streamSpecs->mode < STREAM_MODE_PREFETCH)
 	{
 		log_error("BUG: followDB with stream mode %d", streamSpecs->mode);
@@ -354,7 +343,14 @@ follow_start_prefetch(StreamSpecs *specs)
 		specs->out = fdopen(specs->pipe_rt[1], "a");
 	}
 
-	return startLogicalStreaming(specs);
+	bool success = startLogicalStreaming(specs);
+
+	if (fclose(specs->out) != 0)
+	{
+		log_error("Failed to close file streaming output stream: %m");
+	}
+
+	return success;
 }
 
 
@@ -380,7 +376,19 @@ follow_start_transform(StreamSpecs *specs)
 		specs->in = fdopen(specs->pipe_rt[0], "r");
 		specs->out = fdopen(specs->pipe_ta[1], "a");
 
-		return stream_transform_stream(specs->in, specs->out);
+		bool success = stream_transform_stream(specs);
+
+		if (fclose(specs->in) != 0)
+		{
+			log_error("Failed to close file streaming output stream: %m");
+		}
+
+		if (fclose(specs->out) != 0)
+		{
+			log_error("Failed to close file streaming output stream: %m");
+		}
+
+		return success;
 	}
 	else
 	{
@@ -412,7 +420,14 @@ follow_start_catchup(StreamSpecs *specs)
 		/* arrange to read from the transform-apply pipe */
 		specs->in = fdopen(specs->pipe_ta[0], "r");
 
-		return stream_apply_replay(specs);
+		bool success = stream_apply_replay(specs);
+
+		if (fclose(specs->in) != 0)
+		{
+			log_error("Failed to close file streaming output stream: %m");
+		}
+
+		return success;
 	}
 	else
 	{
@@ -560,7 +575,7 @@ follow_wait_subprocesses(FollowSubProcess *prefetch,
 			{
 				--stillRunning;
 
-				int logLevel = LOG_NOTICE;
+				int logLevel = LOG_INFO;
 				char details[BUFSIZE] = { 0 };
 
 				if (processArray[i]->returnCode == 0)
@@ -580,7 +595,6 @@ follow_wait_subprocesses(FollowSubProcess *prefetch,
 						  processArray[i]->pid,
 						  details);
 
-				/* if one process exits, early exit the other ones too */
 				if (!follow_terminate_subprocesses(prefetch, transform, catchup))
 				{
 					log_error("Failed to terminate other subprocesses, "
@@ -610,10 +624,9 @@ follow_terminate_subprocesses(FollowSubProcess *prefetch,
 							  FollowSubProcess *catchup)
 {
 	FollowSubProcess *processArray[] = { prefetch, transform, catchup };
-
 	int count = sizeof(processArray) / sizeof(processArray[0]);
 
-	/* signal the processes to exit as soon as possible */
+	/* signal the processes to exit */
 	for (int i = 0; i < count; i++)
 	{
 		if (processArray[i]->pid <= 0 || processArray[i]->exited)
@@ -621,11 +634,11 @@ follow_terminate_subprocesses(FollowSubProcess *prefetch,
 			continue;
 		}
 
-		log_debug("kill -QUIT %d (%s)",
-				  processArray[i]->pid,
-				  processArray[i]->name);
+		log_notice("kill -TERM %d (%s)",
+				   processArray[i]->pid,
+				   processArray[i]->name);
 
-		if (kill(processArray[i]->pid, SIGQUIT) != 0)
+		if (kill(processArray[i]->pid, SIGTERM) != 0)
 		{
 			/* process might have exited on its own already */
 			if (errno != ESRCH)

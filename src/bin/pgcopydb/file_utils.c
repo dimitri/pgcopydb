@@ -393,16 +393,6 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 	{
 		struct timeval timeout = { 0, 100 * 1000 }; /* 100 ms */
 
-		/*
-		 * When asked_to_stop || asked_to_stop_fast still continue reading
-		 * through EOF on the input stream, then quit normally.
-		 */
-		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
-		{
-			log_info("read_from_stream was asked to stop or quit");
-			return true;
-		}
-
 		FD_ZERO(&readFileDescriptorSet);
 		FD_SET(context->fd, &readFileDescriptorSet);
 
@@ -423,8 +413,20 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 			}
 		}
 
+		/*
+		 * When asked_to_stop || asked_to_stop_fast still continue reading
+		 * through EOF on the input stream, then quit normally. Here when
+		 * select(2) reports that there is no data to read, it's a good time to
+		 * quit.
+		 */
 		if (countFdsReadyToRead == 0)
 		{
+			if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+			{
+				log_info("read_from_stream was asked to stop or quit");
+				return true;
+			}
+
 			continue;
 		}
 
@@ -488,14 +490,11 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 
 			for (int i = 0; i < lineCount; i++)
 			{
+				/*
+				 * Now might look like a good time to check for interrupts...
+				 * That said we want to finish processing the current buffer.
+				 */
 				char *line = lines[i];
-
-				/* on normal interrupt, finish processing the received buffer */
-				if (asked_to_stop_fast || asked_to_quit)
-				{
-					free(buf);
-					return true;
-				}
 
 				/* we count stream input lines as if reading from a file */
 				++context->lineno;

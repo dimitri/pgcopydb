@@ -128,7 +128,6 @@ stream_init_specs(StreamSpecs *specs,
 
 	log_trace("stream_init_specs: %s(%d)", plugin, specs->pluginOptions.count);
 
-
 	switch (specs->mode)
 	{
 		/*
@@ -170,6 +169,85 @@ stream_init_specs(StreamSpecs *specs,
 	}
 
 	return true;
+}
+
+
+/*
+ * stream_init_for_mode initializes StreamSpecs bits that relate to the
+ * streaming mode choosen, allowing to switch back and forth between CATCHUP
+ * and REPLAY modes.
+ */
+bool
+stream_init_for_mode(StreamSpecs *specs, LogicalStreamMode mode)
+{
+	if (specs->mode == STREAM_MODE_CATCHUP && mode == STREAM_MODE_REPLAY)
+	{
+		specs->stdIn = true;
+		specs->stdOut = true;
+	}
+	else if (specs->mode == STREAM_MODE_REPLAY && mode == STREAM_MODE_CATCHUP)
+	{
+		if (!queue_create(&(specs->transformQueue), "transform"))
+		{
+			log_error("Failed to create the transform queue");
+			return false;
+		}
+	}
+	else
+	{
+		log_error("BUG: stream_init_for_mode(%d, %d)", specs->mode, mode);
+		return false;
+	}
+
+	/* the re-init for the new mode has been done now, register that */
+	specs->mode = mode;
+
+	return true;
+}
+
+
+/*
+ * LogicalStreamModeToString returns a string representation for the mode.
+ */
+char *
+LogicalStreamModeToString(LogicalStreamMode mode)
+{
+	switch (mode)
+	{
+		case STREAM_MODE_UNKNOW:
+		{
+			return "unknown stream mode";
+		}
+
+		case STREAM_MODE_RECEIVE:
+		{
+			return "receive";
+		}
+
+		case STREAM_MODE_PREFETCH:
+		{
+			return "prefetch";
+		}
+
+		case STREAM_MODE_CATCHUP:
+		{
+			return "catchup";
+		}
+
+		case STREAM_MODE_REPLAY:
+		{
+			return "replay";
+		}
+
+		default:
+		{
+			log_error("BUG: LogicalStreamModeToString(%d)", mode);
+			return "unknown stream mode";
+		}
+	}
+
+	/* keep compiler happy */
+	return "unknown stream mode";
 }
 
 
@@ -314,7 +392,10 @@ startLogicalStreaming(StreamSpecs *specs)
 		}
 
 		/* sleep for one entire second before retrying */
-		(void) pg_usleep(1 * 1000 * 1000);
+		if (retry)
+		{
+			(void) pg_usleep(1 * 1000 * 1000);
+		}
 	}
 
 	return true;

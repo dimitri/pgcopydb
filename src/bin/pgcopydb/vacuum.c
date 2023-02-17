@@ -190,7 +190,7 @@ vacuum_analyze_table_by_oid(CopyDataSpec *specs, uint32_t oid)
 			table.nspname,
 			table.relname);
 
-	log_info("%s;", vacuum);
+	log_notice("%s;", vacuum);
 
 	if (!pgsql_execute(&dst, vacuum))
 	{

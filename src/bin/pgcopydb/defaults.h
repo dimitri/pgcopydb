@@ -57,7 +57,7 @@
 #define REPLICATION_PLUGIN "test_decoding"
 #define REPLICATION_SLOT_NAME "pgcopydb"
 
-#define CATCHINGUP_SLEEP_MS 10 * 1000 /* 10s */
+#define CATCHINGUP_SLEEP_MS 1 * 1000 /* 10s */
 
 /* internal default for allocating strings  */
 #define BUFSIZE 1024

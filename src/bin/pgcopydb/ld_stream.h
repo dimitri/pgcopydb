@@ -100,6 +100,7 @@ typedef struct StreamContext
 	char walFileName[MAXPGPATH];
 	char sqlFileName[MAXPGPATH];
 	FILE *jsonFile;
+	FILE *sqlFile;
 
 	StreamCounters counters;
 } StreamContext;
@@ -348,6 +349,10 @@ bool stream_init_specs(StreamSpecs *specs,
 					   bool stdIn,
 					   bool stdOut);
 
+bool stream_init_for_mode(StreamSpecs *specs, LogicalStreamMode mode);
+
+char * LogicalStreamModeToString(LogicalStreamMode mode);
+
 bool stream_init_context(StreamContext *privateContext, StreamSpecs *specs);
 
 bool startLogicalStreaming(StreamSpecs *specs);
@@ -420,11 +425,16 @@ bool stream_compute_pathnames(uint32_t WalSegSz,
 							  char *walFileName,
 							  char *sqlFileName);
 
-bool stream_transform_stream(FILE * in, FILE *out);
+bool stream_transform_stream(StreamSpecs *specs);
 bool stream_transform_line(void *ctx, const char *line, bool *stop);
+
 bool stream_transform_message(char *message,
-							  LogicalMessage *currentMsg,
-							  bool *commit);
+							  LogicalMessageMetadata *metadata,
+							  LogicalMessage *currentMsg);
+
+bool stream_transform_rotate(StreamContext *privateContext,
+							 LogicalMessageMetadata *metadata);
+
 bool stream_transform_file(char *jsonfilename, char *sqlfilename);
 bool stream_write_message(FILE *out, LogicalMessage *msg);
 bool stream_write_transaction(FILE *out, LogicalTransaction *tx);

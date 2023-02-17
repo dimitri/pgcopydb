@@ -524,8 +524,8 @@ copydb_table_is_being_processed(CopyDataSpec *specs,
 {
 	if (specs->dirState.tableCopyIsDone)
 	{
-		log_info("Skipping table %s, already done on a previous run",
-				 tableSpecs->qname);
+		log_notice("Skipping table %s, already done on a previous run",
+				   tableSpecs->qname);
 
 		*isDone = true;
 		*isBeingProcessed = false;
@@ -863,7 +863,7 @@ copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 	}
 
 	/* Now copy the data from source to target */
-	log_info("%s", summary->command);
+	log_notice("%s", summary->command);
 
 	/* COPY FROM tablename, or maybe COPY FROM (SELECT ... WHERE ...) */
 	char *copySource = tableSpecs->qname;
