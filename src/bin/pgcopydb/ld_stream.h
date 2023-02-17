@@ -254,6 +254,41 @@ typedef struct LogicalTransactionArray
 } LogicalTransactionArray;
 
 
+/*
+ * The logical decoding client produces messages that can be either:
+ *
+ *  - part of a transaction (BEGIN/COMMIT, then INSERT/UPDATE/DELETE/TRUNCATE)
+ *  - a keepalive message
+ *  - a pgcopydb constructed SWITCH WAL message
+ *
+ * The keepalive and switch wal messages could also appear within a
+ * transaction.
+ */
+typedef struct LogicalMessage
+{
+	bool isTransaction;
+	StreamAction action;
+
+	union command
+	{
+		LogicalTransaction tx;
+		LogicalMessageSwitchWAL switchwal;
+		LogicalMessageKeepalive keepalive;
+	} command;
+} LogicalMessage;
+
+
+typedef struct LogicalMessageArray
+{
+	int count;
+	LogicalMessage *array; /* malloc'ed area */
+} LogicalMessageArray;
+
+
+/*
+ * StreamSpecs is the streaming specifications used by the client-side of the
+ * logical decoding implementation, where we keep track of progress etc.
+ */
 typedef struct StreamSpecs
 {
 	CDCPaths paths;
@@ -388,9 +423,10 @@ bool stream_compute_pathnames(uint32_t WalSegSz,
 bool stream_transform_stream(FILE * in, FILE *out);
 bool stream_transform_line(void *ctx, const char *line, bool *stop);
 bool stream_transform_message(char *message,
-							  LogicalTransaction *currentTx,
+							  LogicalMessage *currentMsg,
 							  bool *commit);
 bool stream_transform_file(char *jsonfilename, char *sqlfilename);
+bool stream_write_message(FILE *out, LogicalMessage *msg);
 bool stream_write_transaction(FILE *out, LogicalTransaction *tx);
 bool stream_write_begin(FILE *out, LogicalTransaction *tx);
 bool stream_write_commit(FILE *out, LogicalTransaction *tx);
@@ -402,7 +438,7 @@ bool stream_write_update(FILE *out, LogicalMessageUpdate *update);
 bool stream_write_delete(FILE * out, LogicalMessageDelete *delete);
 bool stream_write_value(FILE *out, LogicalMessageValue *value);
 
-bool parseMessage(LogicalTransaction *txn,
+bool parseMessage(LogicalMessage *mesg,
 				  LogicalMessageMetadata *metadata,
 				  char *message,
 				  JSON_Value *json);
@@ -410,6 +446,7 @@ bool parseMessage(LogicalTransaction *txn,
 bool streamLogicalTransactionAppendStatement(LogicalTransaction *txn,
 											 LogicalTransactionStatement *stmt);
 
+void FreeLogicalMessage(LogicalMessage *msg);
 void FreeLogicalTransaction(LogicalTransaction *tx);
 void FreeLogicalMessageTupleArray(LogicalMessageTupleArray *tupleArray);
 
