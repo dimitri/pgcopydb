@@ -211,8 +211,8 @@ stream_transform_send_stop(Queue *queue)
 
 typedef struct TransformStreamCtx
 {
-	uint64_t currentTxIndex;
-	LogicalTransaction currentTx;
+	uint64_t currentMsgIndex;
+	LogicalMessage currentMsg;
 	FILE *out;
 } TransformStreamCtx;
 
@@ -228,8 +228,8 @@ stream_transform_stream(FILE *in, FILE *out)
 	log_notice("Starting the transform service");
 
 	TransformStreamCtx ctx = {
-		.currentTxIndex = 0,
-		.currentTx = { 0 },
+		.currentMsgIndex = 0,
+		.currentMsg = { 0 },
 		.out = out
 	};
 
@@ -254,7 +254,7 @@ stream_transform_stream(FILE *in, FILE *out)
 
 	log_notice("Transformed %lld messages and %lld transactions",
 			   (long long) context.lineno,
-			   (long long) ctx.currentTxIndex + 1);
+			   (long long) ctx.currentMsgIndex + 1);
 
 	return true;
 }
@@ -269,7 +269,7 @@ bool
 stream_transform_line(void *ctx, const char *line, bool *stop)
 {
 	TransformStreamCtx *transformCtx = (TransformStreamCtx *) ctx;
-	LogicalTransaction *currentTx = &(transformCtx->currentTx);
+	LogicalMessage *currentMsg = &(transformCtx->currentMsg);
 
 	static uint64_t lineno = 0;
 
@@ -277,36 +277,34 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
 
 	bool commit = false;
 
-	if (!stream_transform_message((char *) line, currentTx, &commit))
+	if (!stream_transform_message((char *) line, currentMsg, &commit))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
 	/*
-	 * Is it time to close the current transaction and prepare a new
-	 * one?
+	 * Prepare a new message when we just read the COMMIT message of an
+	 * opened transaction, closing it, or when we just read a standalone
+	 * non-transactional message (such as a KEEPALIVE or a SWITCH WAL
+	 * message).
 	 */
-	if (commit)
+	if (!currentMsg->isTransaction || commit)
 	{
-		log_debug("Transforming transaction xid %d with %d statements",
-				  currentTx->xid,
-				  currentTx->count);
-
-		/* now write the transaction out */
-		if (!stream_write_transaction(transformCtx->out, currentTx))
+		/* now write the message out */
+		if (!stream_write_message(transformCtx->out, currentMsg))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 
-		(void) FreeLogicalTransaction(currentTx);
+		(void) FreeLogicalMessage(currentMsg);
 
 		/* then prepare a new one, reusing the same memory area */
-		LogicalTransaction emptyTx = { 0 };
+		LogicalMessage empty = { 0 };
 
-		*currentTx = emptyTx;
-		++(transformCtx->currentTxIndex);
+		*currentMsg = empty;
+		++(transformCtx->currentMsgIndex);
 	}
 
 	return true;
@@ -319,7 +317,7 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
  */
 bool
 stream_transform_message(char *message,
-						 LogicalTransaction *currentTx,
+						 LogicalMessage *currentMsg,
 						 bool *commit)
 {
 	LogicalMessageMetadata metadata = { 0 };
@@ -332,7 +330,7 @@ stream_transform_message(char *message,
 		return false;
 	}
 
-	if (!parseMessage(currentTx, &metadata, message, json))
+	if (!parseMessage(currentMsg, &metadata, message, json))
 	{
 		log_error("Failed to parse JSON message: %s", message);
 		json_value_free(json);
@@ -340,13 +338,6 @@ stream_transform_message(char *message,
 	}
 
 	json_value_free(json);
-
-	log_trace("stream_transform_stream: %c %3d %X/%X: %3d %X/%X",
-			  metadata.action,
-			  metadata.xid,
-			  LSN_FORMAT_ARGS(metadata.lsn),
-			  currentTx->xid,
-			  LSN_FORMAT_ARGS(currentTx->beginLSN));
 
 	if (metadata.action == STREAM_ACTION_COMMIT)
 	{
@@ -404,16 +395,16 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 		return false;
 	}
 
-	/* {action: B} {action: C} {action: X} */
-	int maxTxnsCount = (content.count / 2) + 1;
-	LogicalTransactionArray txns = { 0 };
+	/* {action: B} {action: C} {action: K} {action: X} */
+	int maxMesgCount = content.count;
+	LogicalMessageArray mesgs = { 0 };
 
 	/* the actual count is maintained in the for loop below */
-	txns.count = 0;
-	txns.array =
-		(LogicalTransaction *) calloc(maxTxnsCount, sizeof(LogicalTransaction));
+	mesgs.count = 0;
+	mesgs.array =
+		(LogicalMessage *) calloc(maxMesgCount, sizeof(LogicalMessage));
 
-	if (txns.array == NULL)
+	if (mesgs.array == NULL)
 	{
 		log_error(ALLOCATION_FAILED_ERROR);
 		return false;
@@ -421,11 +412,11 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 
 	/*
 	 * Read the JSON-lines file that we received from streaming logical
-	 * decoding messages with wal2json, and parse the JSON messages into our
-	 * internal representation structure.
+	 * decoding messages, and parse the JSON messages into our internal
+	 * representation structure.
 	 */
-	int currentTxIndex = 0;
-	LogicalTransaction *currentTx = &(txns.array[currentTxIndex]);
+	int currentMsgIndex = 0;
+	LogicalMessage *currentMsg = &(mesgs.array[currentMsgIndex]);
 
 	/* we might need to access to the last message metadata after the loop */
 	LogicalMessageMetadata *metadata = NULL;
@@ -446,7 +437,7 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 			return false;
 		}
 
-		if (!parseMessage(currentTx, metadata, message, json))
+		if (!parseMessage(currentMsg, metadata, message, json))
 		{
 			log_error("Failed to parse JSON message: %s", message);
 			json_value_free(json);
@@ -455,31 +446,28 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 
 		json_value_free(json);
 
-		log_trace("stream_transform_file[%2d]: %c %3d %X/%X [%2d]: %3d %X/%X",
-				  i,
-				  metadata->action,
-				  metadata->xid,
-				  LSN_FORMAT_ARGS(metadata->lsn),
-				  currentTxIndex,
-				  currentTx->xid,
-				  LSN_FORMAT_ARGS(currentTx->beginLSN));
-
-		/* it is time to close the current transaction and prepare a new one? */
-		if (metadata->action == STREAM_ACTION_COMMIT)
+		/*
+		 * Prepare a new message when we just read the COMMIT message of an
+		 * opened transaction, closing it, or when we just read a standalone
+		 * non-transactional message (such as a KEEPALIVE or a SWITCH WAL
+		 * message).
+		 */
+		if (!currentMsg->isTransaction ||
+			metadata->action == STREAM_ACTION_COMMIT)
 		{
-			++txns.count;
-			++currentTxIndex;
+			++mesgs.count;
+			++currentMsgIndex;
 
-			if ((maxTxnsCount - 1) < currentTxIndex)
+			if ((maxMesgCount - 1) < currentMsgIndex)
 			{
-				log_error("Parsing transaction %d, which is more than the "
-						  "maximum allocated transaction count %d",
-						  currentTxIndex + 1,
-						  maxTxnsCount);
+				log_error("Parsing message %d, which is more than the "
+						  "maximum allocated message count %d",
+						  currentMsgIndex + 1,
+						  maxMesgCount);
 				return false;
 			}
 
-			currentTx = &(txns.array[currentTxIndex]);
+			currentMsg = &(mesgs.array[currentMsgIndex]);
 		}
 	}
 
@@ -492,12 +480,15 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 	 * of a transaction, in that case we ignore the transaction and insert a
 	 * KEEPALIVE message with the LSN we have reached.
 	 */
-	if (currentTx->count > 0 && metadata->action == STREAM_ACTION_SWITCH)
+	if (currentMsg->isTransaction && metadata->action == STREAM_ACTION_SWITCH)
 	{
-		++txns.count;
+		++mesgs.count;
 	}
-	else if (currentTx->count > 0 && metadata->action != STREAM_ACTION_COMMIT)
+	else if (currentMsg->isTransaction &&
+			 metadata->action != STREAM_ACTION_COMMIT)
 	{
+		LogicalTransaction *currentTx = &(currentMsg->command.tx);
+
 		/* replace the currentTx content with a single keepalive message */
 		(void) FreeLogicalTransaction(currentTx);
 
@@ -521,14 +512,14 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 
 		(void) streamLogicalTransactionAppendStatement(currentTx, stmt);
 
-		++txns.count;
+		++mesgs.count;
 	}
 
 	/* free dynamic memory that's not needed anymore */
 	free(content.lines);
 	free(content.messages);
 
-	log_debug("stream_transform_file read %d transactions", txns.count);
+	log_debug("stream_transform_file read %d messages", mesgs.count);
 
 	/*
 	 * Now that we have read and parsed the JSON file into our internal
@@ -553,18 +544,21 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 
 	log_debug("stream_transform_file writing to \"%s\"", tempfilename);
 
-	for (int i = 0; i < txns.count; i++)
+	for (int i = 0; i < mesgs.count; i++)
 	{
-		LogicalTransaction *currentTx = &(txns.array[i]);
+		LogicalMessage *currentMsg = &(mesgs.array[i]);
 
-		if (!stream_write_transaction(sql, currentTx))
+		if (!stream_write_message(sql, currentMsg))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 
-		(void) FreeLogicalTransaction(currentTx);
+		(void) FreeLogicalMessage(currentMsg);
 	}
+
+	/* free the LogicalMessage array memory area */
+	free(mesgs.array);
 
 	if (fclose(sql) == EOF)
 	{
@@ -597,14 +591,14 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
  * representation, that can be later output as SQL text.
  */
 bool
-parseMessage(LogicalTransaction *txn,
+parseMessage(LogicalMessage *mesg,
 			 LogicalMessageMetadata *metadata,
 			 char *message,
 			 JSON_Value *json)
 {
-	if (txn == NULL)
+	if (mesg == NULL)
 	{
-		log_error("BUG: parseMessage called with a NULL LogicalTransaction");
+		log_error("BUG: parseMessage called with a NULL LogicalMessage");
 		return false;
 	}
 
@@ -626,21 +620,40 @@ parseMessage(LogicalTransaction *txn,
 		return false;
 	}
 
+	LogicalTransaction *txn = NULL;
+
+	if (mesg->isTransaction)
+	{
+		txn = &(mesg->command.tx);
+	}
+
 	/*
 	 * Check that XID make sense, except for SWITCH messages, which don't have
 	 * XID information, only have LSN information.
 	 */
-	if (metadata->action != STREAM_ACTION_SWITCH &&
-		metadata->action != STREAM_ACTION_KEEPALIVE)
+	if (metadata->action == STREAM_ACTION_INSERT ||
+		metadata->action == STREAM_ACTION_UPDATE ||
+		metadata->action == STREAM_ACTION_DELETE ||
+		metadata->action == STREAM_ACTION_TRUNCATE)
 	{
-		if (txn->xid > 0 && metadata->xid > 0 && txn->xid != metadata->xid)
+		if (mesg->isTransaction)
+		{
+			if (txn->xid > 0 && metadata->xid > 0 && txn->xid != metadata->xid)
+			{
+				log_debug("%s", message);
+				log_error("BUG: logical message xid is %lld, which is different "
+						  "from the current transaction xid %lld",
+						  (long long) metadata->xid,
+						  (long long) txn->xid);
+
+				return false;
+			}
+		}
+		else
 		{
 			log_debug("%s", message);
-			log_error("BUG: logical message xid is %lld, which is different "
-					  "from the current transaction xid %lld",
-					  (long long) metadata->xid,
-					  (long long) txn->xid);
-
+			log_error("BUG: logical message %c received with !isTransaction",
+					  metadata->action);
 			return false;
 		}
 	}
@@ -671,6 +684,18 @@ parseMessage(LogicalTransaction *txn,
 		/* begin messages only use pgcopydb internal metadata */
 		case STREAM_ACTION_BEGIN:
 		{
+			if (mesg->isTransaction)
+			{
+				log_error("Failed to parse BEGIN: "
+						  "transaction already in progress");
+				return false;
+			}
+
+			mesg->isTransaction = true;
+			mesg->action = metadata->action;
+
+			txn = &(mesg->command.tx);
+
 			txn->xid = metadata->xid;
 			txn->beginLSN = metadata->lsn;
 			strlcpy(txn->timestamp, metadata->timestamp, sizeof(txn->timestamp));
@@ -689,6 +714,12 @@ parseMessage(LogicalTransaction *txn,
 		/* commit messages only use pgcopydb internal metadata */
 		case STREAM_ACTION_COMMIT:
 		{
+			if (!mesg->isTransaction)
+			{
+				log_error("Failed to parse COMMIT: no transaction in progress");
+				return false;
+			}
+
 			txn->commitLSN = metadata->lsn;
 
 			break;
@@ -699,7 +730,17 @@ parseMessage(LogicalTransaction *txn,
 		{
 			stmt->stmt.switchwal.lsn = metadata->lsn;
 
-			(void) streamLogicalTransactionAppendStatement(txn, stmt);
+			if (mesg->isTransaction)
+			{
+				(void) streamLogicalTransactionAppendStatement(txn, stmt);
+			}
+			else
+			{
+				/* copy the stmt over, then free the extra allocated memory */
+				mesg->action = metadata->action;
+				mesg->command.switchwal = stmt->stmt.switchwal;
+				free(stmt);
+			}
 
 			break;
 		}
@@ -713,7 +754,17 @@ parseMessage(LogicalTransaction *txn,
 					metadata->timestamp,
 					sizeof(stmt->stmt.keepalive.timestamp));
 
-			(void) streamLogicalTransactionAppendStatement(txn, stmt);
+			if (mesg->isTransaction)
+			{
+				(void) streamLogicalTransactionAppendStatement(txn, stmt);
+			}
+			else
+			{
+				/* copy the stmt over, then free the extra allocated memory */
+				mesg->action = metadata->action;
+				mesg->command.keepalive = stmt->stmt.keepalive;
+				free(stmt);
+			}
 
 			break;
 		}
@@ -721,6 +772,13 @@ parseMessage(LogicalTransaction *txn,
 		/* now handle DML messages from the output plugin */
 		default:
 		{
+			if (!mesg->isTransaction)
+			{
+				log_error("Failed to parse action %c: no transaction in progress",
+						  metadata->action);
+				return false;
+			}
+
 			/*
 			 * When using test_decoding, we append the received message as a
 			 * JSON string in the "message" object key. When using wal2json, we
@@ -841,6 +899,19 @@ streamLogicalTransactionAppendStatement(LogicalTransaction *txn,
 
 
 /*
+ * FreeLogicalMessage frees the malloc'ated memory areas of a LogicalMessage.
+ */
+void
+FreeLogicalMessage(LogicalMessage *msg)
+{
+	if (msg->isTransaction)
+	{
+		FreeLogicalTransaction(&(msg->command.tx));
+	}
+}
+
+
+/*
  * FreeLogicalTransaction frees the malloc'ated memory areas of a
  * LogicalTransaction.
  */
@@ -849,7 +920,7 @@ FreeLogicalTransaction(LogicalTransaction *tx)
 {
 	LogicalTransactionStatement *currentStmt = tx->first;
 
-	for (; currentStmt != NULL; currentStmt = currentStmt->next)
+	for (; currentStmt != NULL;)
 	{
 		switch (currentStmt->action)
 		{
@@ -878,6 +949,11 @@ FreeLogicalTransaction(LogicalTransaction *tx)
 				break;
 			}
 		}
+
+		LogicalTransactionStatement *stmt = currentStmt;
+		currentStmt = currentStmt->next;
+
+		free(stmt);
 	}
 
 	tx->first = NULL;
@@ -914,6 +990,52 @@ FreeLogicalMessageTupleArray(LogicalMessageTupleArray *tupleArray)
 			free(stmt->values.array);
 		}
 	}
+}
+
+
+/*
+ * stream_write_message writes the LogicalMessage statement(s) as SQL to the
+ * already open out stream.
+ */
+bool
+stream_write_message(FILE *out, LogicalMessage *msg)
+{
+	if (msg->isTransaction)
+	{
+		return stream_write_transaction(out, &(msg->command.tx));
+	}
+	else
+	{
+		switch (msg->action)
+		{
+			case STREAM_ACTION_SWITCH:
+			{
+				if (!stream_write_switchwal(out, &(msg->command.switchwal)))
+				{
+					return false;
+				}
+				break;
+			}
+
+			case STREAM_ACTION_KEEPALIVE:
+			{
+				if (!stream_write_keepalive(out, &(msg->command.keepalive)))
+				{
+					return false;
+				}
+				break;
+			}
+
+			default:
+			{
+				log_error("BUG: Failed to write SQL for LogicalMessage action %d",
+						  msg->action);
+				return false;
+			}
+		}
+	}
+
+	return true;
 }
 
 
