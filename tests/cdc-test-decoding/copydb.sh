@@ -69,6 +69,9 @@ DIFFOPTS='-I BEGIN -I COMMIT -I KEEPALIVE -I SWITCH'
 
 diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} ${SHAREDIR}/${SQLFILENAME}
 
+# now allow for replaying/catching-up changes
+pgcopydb stream sentinel set apply
+
 # now apply the SQL file to the target database
 pgcopydb stream catchup --resume --endpos "${lsn}" -vv
 
