@@ -856,22 +856,30 @@ cli_stream_transform(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
+	char *jsonfilename = argv[0];
+	char *sqlfilename = argv[1];
+
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
 	/*
-	 * Both the catchup and the replay command starts the "apply" service, so
-	 * that they conflict with each other.
+	 * The command `pgcopydb stream transform` can be used with filenames, in
+	 * which case it is not a service, or with the JSON file connected to the
+	 * stdin stream (using '-' as the jsonfilename), in which case the command
+	 * is a service.
+	 *
+	 * Finally, always assume --resume has been used so that we can re-use an
+	 * existing work directory when it exists.
 	 */
 	bool createWorkDir = false;
-	bool service = true;
-	char *serviceName = "apply";
+	bool service = streq(jsonfilename, "-");
+	char *serviceName = "transform";
 
 	if (!copydb_init_workdir(&copySpecs,
 							 streamDBoptions.dir,
 							 service,
 							 serviceName,
 							 streamDBoptions.restart,
-							 streamDBoptions.resume,
+							 true, /* streamDBoptions.resume */
 							 createWorkDir))
 	{
 		/* errors have already been logged */
@@ -919,9 +927,6 @@ cli_stream_transform(int argc, char **argv)
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
-
-	char *jsonfilename = argv[0];
-	char *sqlfilename = argv[1];
 
 	/*
 	 * Do we use the file API, or the stream API?
@@ -987,14 +992,30 @@ cli_stream_apply(int argc, char **argv)
 
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
+	char *sqlfilename = argv[0];
+
+	/*
+	 * The command `pgcopydb stream apply` can be used with a filename, in
+	 * which case it is not a service, or with the SQL file connected to the
+	 * stdin stream (using '-' as the filename), in which case the command is a
+	 * service.
+	 *
+	 * Then, both the catchup and the replay command starts the "apply"
+	 * service, so that they conflict with each other.
+	 *
+	 * Finally, always assume --resume has been used so that we can re-use an
+	 * existing work directory when it exists.
+	 */
 	bool createWorkDir = false;
+	bool service = streq(sqlfilename, "-");
+	char *serviceName = "apply";
 
 	if (!copydb_init_workdir(&copySpecs,
 							 streamDBoptions.dir,
-							 false, /* false */
-							 NULL,  /* serviceName */
+							 service,
+							 serviceName,
 							 streamDBoptions.restart,
-							 streamDBoptions.resume,
+							 true, /* streamDBoptions.resume */
 							 createWorkDir))
 	{
 		/* errors have already been logged */
@@ -1033,8 +1054,6 @@ cli_stream_apply(int argc, char **argv)
 	 * The filename arguments can be set to - to mean stdin, and in that case
 	 * we use the streaming API so that we're compatible with Unix pipes.
 	 */
-	char *sqlfilename = argv[0];
-
 	if (streq(sqlfilename, "-"))
 	{
 		StreamSpecs specs = { 0 };
