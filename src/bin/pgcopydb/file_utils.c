@@ -391,6 +391,13 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 
 	while (!doneReading)
 	{
+		/* feof returns non-zero when the end-of-file indicator is set */
+		if (feof(stream) != 0)
+		{
+			log_debug("read_from_stream: stream closed");
+			break;
+		}
+
 		struct timeval timeout = { 0, 100 * 1000 }; /* 100 ms */
 
 		FD_ZERO(&readFileDescriptorSet);
@@ -403,6 +410,11 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 		{
 			if (errno == EINTR || errno == EAGAIN)
 			{
+				if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+				{
+					doneReading = true;
+				}
+
 				continue;
 			}
 			else
@@ -423,8 +435,8 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 		{
 			if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 			{
+				doneReading = true;
 				log_info("read_from_stream was asked to stop or quit");
-				return true;
 			}
 
 			continue;
@@ -463,6 +475,7 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 			{
 				free(buf);
 				doneReading = true;
+				log_info("read_from_stream: read 0 bytes");
 				continue;
 			}
 			else if (bytes == s)
@@ -477,6 +490,8 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 						  "than pgcopydb limit (%s): %s",
 						  limitPretty,
 						  bytesPretty);
+
+				free(buf);
 				return false;
 			}
 
@@ -500,7 +515,7 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 				++context->lineno;
 
 				/* call the used provided function */
-				bool stop;
+				bool stop = false;
 
 				if (!(*context->callback)(context->ctx, line, &stop))
 				{
@@ -511,6 +526,7 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 				if (stop)
 				{
 					doneReading = true;
+					break;
 				}
 			}
 
@@ -858,6 +874,21 @@ unlink_file(const char *filename)
 	}
 
 	return true;
+}
+
+
+/*
+ * close_fd_or_exit calls close(2) on given file descriptor, and exits if that
+ * failed.
+ */
+void
+close_fd_or_exit(int fd)
+{
+	if (close(fd) != 0)
+	{
+		log_fatal("Failed to close fd %d: %m", fd);
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
 }
 
 

@@ -209,26 +209,9 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		}
 	}
 
-	bool replayMode = streamSpecs->mode == STREAM_MODE_REPLAY;
-
-	FollowSubProcess prefetch = {
-		.name = replayMode ? "receive" : "prefetch",
-		.command = &follow_start_prefetch,
-		.pid = -1
-	};
-
-	FollowSubProcess transform = {
-		.name = "transform",
-		.command = &follow_start_transform,
-		.pid = -1
-	};
-
-	FollowSubProcess catchup = {
-		.name = replayMode ? "replay" : "catchup",
-		.command = &follow_start_catchup,
-		.pid = -1
-	};
-
+	FollowSubProcess *prefetch = &(streamSpecs->prefetch);
+	FollowSubProcess *transform = &(streamSpecs->transform);
+	FollowSubProcess *catchup = &(streamSpecs->catchup);
 
 	/*
 	 * When set to prefetch changes, we always also run the transform process
@@ -237,17 +220,17 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	 */
 	if (streamSpecs->mode >= STREAM_MODE_PREFETCH)
 	{
-		if (!follow_start_subprocess(streamSpecs, &prefetch))
+		if (!follow_start_subprocess(streamSpecs, prefetch))
 		{
-			log_error("Failed to start the %s process", prefetch.name);
+			log_error("Failed to start the %s process", prefetch->name);
 			return false;
 		}
 
-		if (!follow_start_subprocess(streamSpecs, &transform))
+		if (!follow_start_subprocess(streamSpecs, transform))
 		{
 			log_error("Failed to start the transform process");
 
-			(void) follow_exit_early(&prefetch, &transform, &catchup);
+			(void) follow_exit_early(streamSpecs);
 			return false;
 		}
 	}
@@ -257,11 +240,11 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	 */
 	if (streamSpecs->mode >= STREAM_MODE_CATCHUP)
 	{
-		if (!follow_start_subprocess(streamSpecs, &catchup))
+		if (!follow_start_subprocess(streamSpecs, catchup))
 		{
-			log_error("Failed to start the %s process", catchup.name);
+			log_error("Failed to start the %s process", catchup->name);
 
-			(void) follow_exit_early(&prefetch, &transform, &catchup);
+			(void) follow_exit_early(streamSpecs);
 			return false;
 		}
 	}
@@ -272,12 +255,12 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	 * This happens when the sentinel endpos is set, typically using the
 	 * command: pgcopydb stream sentinel set endpos --current.
 	 */
-	if (follow_wait_subprocesses(&prefetch, &transform, &catchup))
+	if (follow_wait_subprocesses(streamSpecs))
 	{
 		log_info("Subprocesses for %s, %s, and %s have now all exited",
-				 prefetch.name,
-				 transform.name,
-				 catchup.name);
+				 prefetch->name,
+				 transform->name,
+				 catchup->name);
 	}
 	else
 	{
@@ -341,14 +324,16 @@ follow_start_prefetch(StreamSpecs *specs)
 	{
 		/* arrange to write to the receive-transform pipe */
 		specs->out = fdopen(specs->pipe_rt[1], "a");
+
+		/* close pipe ends we're not using */
+		close_fd_or_exit(specs->pipe_rt[0]);
+		close_fd_or_exit(specs->pipe_ta[0]);
+		close_fd_or_exit(specs->pipe_ta[1]);
 	}
 
 	bool success = startLogicalStreaming(specs);
 
-	if (fclose(specs->out) != 0)
-	{
-		log_error("Failed to close file streaming output stream: %m");
-	}
+	close_fd_or_exit(specs->pipe_rt[1]);
 
 	return success;
 }
@@ -376,17 +361,14 @@ follow_start_transform(StreamSpecs *specs)
 		specs->in = fdopen(specs->pipe_rt[0], "r");
 		specs->out = fdopen(specs->pipe_ta[1], "a");
 
+		/* close pipe ends we're not using */
+		close_fd_or_exit(specs->pipe_rt[1]);
+		close_fd_or_exit(specs->pipe_ta[0]);
+
 		bool success = stream_transform_stream(specs);
 
-		if (fclose(specs->in) != 0)
-		{
-			log_error("Failed to close file streaming output stream: %m");
-		}
-
-		if (fclose(specs->out) != 0)
-		{
-			log_error("Failed to close file streaming output stream: %m");
-		}
+		close_fd_or_exit(specs->pipe_rt[0]);
+		close_fd_or_exit(specs->pipe_ta[1]);
 
 		return success;
 	}
@@ -420,12 +402,14 @@ follow_start_catchup(StreamSpecs *specs)
 		/* arrange to read from the transform-apply pipe */
 		specs->in = fdopen(specs->pipe_ta[0], "r");
 
+		/* close pipe ends we're not using */
+		close_fd_or_exit(specs->pipe_rt[0]);
+		close_fd_or_exit(specs->pipe_rt[1]);
+		close_fd_or_exit(specs->pipe_ta[1]);
+
 		bool success = stream_apply_replay(specs);
 
-		if (fclose(specs->in) != 0)
-		{
-			log_error("Failed to close file streaming output stream: %m");
-		}
+		close_fd_or_exit(specs->pipe_ta[0]);
 
 		return success;
 	}
@@ -498,19 +482,17 @@ follow_start_subprocess(StreamSpecs *specs, FollowSubProcess *subprocess)
  * and other processes where started already.
  */
 void
-follow_exit_early(FollowSubProcess *prefetch,
-				  FollowSubProcess *transform,
-				  FollowSubProcess *catchup)
+follow_exit_early(StreamSpecs *specs)
 {
 	log_debug("follow_exit_early");
 
-	if (!follow_terminate_subprocesses(prefetch, transform, catchup))
+	if (!follow_terminate_subprocesses(specs))
 	{
 		log_error("Failed to terminate other subprocesses, "
 				  "see above for details");
 	}
 
-	if (!follow_wait_subprocesses(prefetch, transform, catchup))
+	if (!follow_wait_subprocesses(specs))
 	{
 		log_error("Some sub-process exited in error, "
 				  "see above for details");
@@ -522,11 +504,13 @@ follow_exit_early(FollowSubProcess *prefetch,
  * follow_wait_subprocesses waits until both sub-processes are finished.
  */
 bool
-follow_wait_subprocesses(FollowSubProcess *prefetch,
-						 FollowSubProcess *transform,
-						 FollowSubProcess *catchup)
+follow_wait_subprocesses(StreamSpecs *specs)
 {
-	FollowSubProcess *processArray[] = { prefetch, transform, catchup };
+	FollowSubProcess *processArray[] = {
+		&(specs->prefetch),
+		&(specs->transform),
+		&(specs->catchup)
+	};
 
 	int count = sizeof(processArray) / sizeof(processArray[0]);
 
@@ -547,7 +531,7 @@ follow_wait_subprocesses(FollowSubProcess *prefetch,
 	{
 		if (asked_to_quit)
 		{
-			if (!follow_terminate_subprocesses(prefetch, transform, catchup))
+			if (!follow_terminate_subprocesses(specs))
 			{
 				log_error("Failed to terminate other subprocesses, "
 						  "see above for details");
@@ -559,6 +543,7 @@ follow_wait_subprocesses(FollowSubProcess *prefetch,
 		{
 			if (processArray[i]->pid <= 0 || processArray[i]->exited)
 			{
+				--stillRunning;
 				continue;
 			}
 
@@ -595,11 +580,27 @@ follow_wait_subprocesses(FollowSubProcess *prefetch,
 						  processArray[i]->pid,
 						  details);
 
-				if (!follow_terminate_subprocesses(prefetch, transform, catchup))
+				/*
+				 * When one sub-process has exited abnormally, we terminate all
+				 * the other sub-processes to handle the problem at the caller.
+				 *
+				 * When a sub-process exits with a successful returnCode, it
+				 * might be because it has reached specs->endpos already: in
+				 * that case let the other processes reach it too.
+				 *
+				 * Otherwise there is no reason for the other processes to
+				 * stop, and we're missing one: terminate every one and handle
+				 * at the caller.
+				 */
+				if (processArray[i]->returnCode != 0 ||
+					specs->endpos == InvalidXLogRecPtr)
 				{
-					log_error("Failed to terminate other subprocesses, "
-							  "see above for details");
-					return false;
+					if (!follow_terminate_subprocesses(specs))
+					{
+						log_error("Failed to terminate other subprocesses, "
+								  "see above for details");
+						return false;
+					}
 				}
 
 				success = success && processArray[i]->returnCode == 0;
@@ -619,11 +620,13 @@ follow_wait_subprocesses(FollowSubProcess *prefetch,
  * to signal the other ones to quit early.
  */
 bool
-follow_terminate_subprocesses(FollowSubProcess *prefetch,
-							  FollowSubProcess *transform,
-							  FollowSubProcess *catchup)
+follow_terminate_subprocesses(StreamSpecs *specs)
 {
-	FollowSubProcess *processArray[] = { prefetch, transform, catchup };
+	FollowSubProcess *processArray[] = {
+		&(specs->prefetch),
+		&(specs->transform),
+		&(specs->catchup)
+	};
 	int count = sizeof(processArray) / sizeof(processArray[0]);
 
 	/* signal the processes to exit */
@@ -663,6 +666,13 @@ bool
 follow_wait_pid(pid_t subprocess, bool *exited, int *returnCode)
 {
 	int status = 0;
+
+	if (subprocess <= 0)
+	{
+		log_error("BUG: follow_wait_pid called with subprocess %d", subprocess);
+		return false;
+	}
+
 	int pid = waitpid(subprocess, &status, WNOHANG);
 
 	switch (pid)

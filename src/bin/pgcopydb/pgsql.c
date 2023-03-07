@@ -1213,7 +1213,7 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 			return false;
 		}
 
-		log_debug("%s", debugParameters->data);
+		log_notice("%s", debugParameters->data);
 	}
 
 	if (paramCount == 0)

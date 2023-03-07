@@ -72,14 +72,25 @@ stream_apply_catchup(StreamSpecs *specs)
 		return false;
 	}
 
-	log_info("Catching up from LSN %X/%X in \"%s\"",
-			 LSN_FORMAT_ARGS(context.previousLSN),
-			 context.sqlFileName);
-
 	if (context.endpos != InvalidXLogRecPtr)
 	{
-		log_info("Stopping at endpos LSN %X/%X",
+		if (context.endpos <= context.previousLSN)
+		{
+			log_info("Current endpos %X/%X was previously reached at %X/%X",
+					 LSN_FORMAT_ARGS(context.endpos),
+					 LSN_FORMAT_ARGS(context.previousLSN));
+
+			return true;
+		}
+
+		log_info("Catching-up with changes from LSN %X/%X up to endpos LSN %X/%X",
+				 LSN_FORMAT_ARGS(context.previousLSN),
 				 LSN_FORMAT_ARGS(context.endpos));
+	}
+	else
+	{
+		log_info("Catching-up with changes from LSN %X/%X",
+				 LSN_FORMAT_ARGS(context.previousLSN));
 	}
 
 	/*
@@ -228,6 +239,8 @@ stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
 			context->startpos = sentinel.startpos;
 			context->endpos = sentinel.endpos;
 			context->apply = sentinel.apply;
+
+			context->previousLSN = sentinel.replay_lsn;
 
 			break;
 		}
@@ -495,7 +508,7 @@ stream_apply_sql(StreamApplyContext *context,
 			{
 				context->reachedEndPos = true;
 
-				log_info("Applied reached end position %X/%X at %X/%X",
+				log_info("Apply reached end position %X/%X at %X/%X",
 						 LSN_FORMAT_ARGS(context->endpos),
 						 LSN_FORMAT_ARGS(context->previousLSN));
 				break;
@@ -593,7 +606,7 @@ stream_apply_sql(StreamApplyContext *context,
 			{
 				context->reachedEndPos = true;
 
-				log_info("Applied reached end position %X/%X at %X/%X",
+				log_info("Apply reached end position %X/%X at %X/%X",
 						 LSN_FORMAT_ARGS(context->endpos),
 						 LSN_FORMAT_ARGS(context->previousLSN));
 				break;
@@ -674,10 +687,10 @@ setupReplicationOrigin(StreamApplyContext *context,
 	 */
 	if (endpos != InvalidXLogRecPtr)
 	{
-		if (context->endpos != InvalidXLogRecPtr)
+		if (context->endpos != InvalidXLogRecPtr && context->endpos != endpos)
 		{
 			log_warn("Option --endpos %X/%X is used, "
-					 "even when the pgcopydb sentinel endpos is set to %X/%X",
+					 "even when the pgcopydb sentinel endpos was set to %X/%X",
 					 LSN_FORMAT_ARGS(endpos),
 					 LSN_FORMAT_ARGS(context->endpos));
 		}

@@ -564,6 +564,63 @@ static bool
 start_follow_process(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs,
 					 pid_t *pid)
 {
+	/*
+	 * Before starting the receive, transform, and apply sub-processes, we need
+	 * to set the sentinel endpos to the command line --endpos option, when
+	 * given.
+	 */
+	PGSQL pgsql = { 0 };
+
+	if (!pgsql_init(&pgsql, streamSpecs->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_begin(&pgsql))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	if (streamSpecs->endpos != InvalidXLogRecPtr)
+	{
+		if (!pgsql_update_sentinel_endpos(&pgsql, false, streamSpecs->endpos))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	/*
+	 * Now fetch the current values from the pgcopydb.sentinel. It might have
+	 * been updated from a previous run of the command, and we might have
+	 * nothing to catch-up to when e.g. the endpos was reached already.
+	 */
+	CopyDBSentinel sentinel = { 0 };
+
+	if (!pgsql_get_sentinel(&pgsql, &sentinel))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_commit(&pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (sentinel.endpos != InvalidXLogRecPtr &&
+		sentinel.endpos <= sentinel.replay_lsn)
+	{
+		log_info("Current endpos %X/%X was previously reached at %X/%X",
+				 LSN_FORMAT_ARGS(sentinel.endpos),
+				 LSN_FORMAT_ARGS(sentinel.replay_lsn));
+
+		return true;
+	}
+
 	/* now we can fork a sub-process to transform the current file */
 	pid_t fpid = fork();
 

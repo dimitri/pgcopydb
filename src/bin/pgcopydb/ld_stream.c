@@ -128,6 +128,23 @@ stream_init_specs(StreamSpecs *specs,
 
 	log_trace("stream_init_specs: %s(%d)", plugin, specs->pluginOptions.count);
 
+	/*
+	 * Now prepare for the follow mode sub-process management.
+	 */
+	bool replayMode = specs->mode == STREAM_MODE_REPLAY;
+
+	specs->prefetch.name = replayMode ? "receive" : "prefetch";
+	specs->prefetch.command = &follow_start_prefetch;
+	specs->prefetch.pid = -1;
+
+	specs->transform.name = "transform";
+	specs->transform.command = &follow_start_transform;
+	specs->transform.pid = -1;
+
+	specs->catchup.name = replayMode ? "replay" : "catchup";
+	specs->catchup.command = &follow_start_catchup;
+	specs->catchup.pid = -1;
+
 	switch (specs->mode)
 	{
 		/*
@@ -257,6 +274,9 @@ LogicalStreamModeToString(LogicalStreamMode mode)
 bool
 stream_init_context(StreamContext *privateContext, StreamSpecs *specs)
 {
+	privateContext->endpos = specs->endpos;
+	privateContext->startpos = specs->startpos;
+
 	privateContext->mode = specs->mode;
 	privateContext->stdIn = specs->stdIn;
 	privateContext->stdOut = specs->stdOut;

@@ -51,8 +51,6 @@ typedef struct TransformStreamCtx
 bool
 stream_transform_stream(StreamSpecs *specs)
 {
-	log_notice("Starting the transform service");
-
 	StreamContext *privateContext =
 		(StreamContext *) calloc(1, sizeof(StreamContext));
 
@@ -192,6 +190,16 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
 
 		*currentMsg = empty;
 		++(transformCtx->currentMsgIndex);
+	}
+
+	if (privateContext->endpos != InvalidXLogRecPtr &&
+		privateContext->endpos <= metadata->lsn)
+	{
+		*stop = true;
+
+		log_info("Transform reached end position %X/%X at %X/%X",
+				 LSN_FORMAT_ARGS(privateContext->endpos),
+				 LSN_FORMAT_ARGS(metadata->lsn));
 	}
 
 	return true;
