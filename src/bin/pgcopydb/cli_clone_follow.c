@@ -568,44 +568,14 @@ start_follow_process(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs,
 	 * Before starting the receive, transform, and apply sub-processes, we need
 	 * to set the sentinel endpos to the command line --endpos option, when
 	 * given.
-	 */
-	PGSQL pgsql = { 0 };
-
-	if (!pgsql_init(&pgsql, streamSpecs->source_pguri, PGSQL_CONN_SOURCE))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!pgsql_begin(&pgsql))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
-	}
-
-	if (streamSpecs->endpos != InvalidXLogRecPtr)
-	{
-		if (!pgsql_update_sentinel_endpos(&pgsql, false, streamSpecs->endpos))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-	}
-
-	/*
-	 * Now fetch the current values from the pgcopydb.sentinel. It might have
+	 *
+	 * Also fetch the current values from the pgcopydb.sentinel. It might have
 	 * been updated from a previous run of the command, and we might have
 	 * nothing to catch-up to when e.g. the endpos was reached already.
 	 */
 	CopyDBSentinel sentinel = { 0 };
 
-	if (!pgsql_get_sentinel(&pgsql, &sentinel))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!pgsql_commit(&pgsql))
+	if (!follow_init_sentinel(streamSpecs, &sentinel))
 	{
 		/* errors have already been logged */
 		return false;
@@ -637,116 +607,10 @@ start_follow_process(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs,
 			/* child process runs the command */
 			log_notice("Starting the follow sub-process");
 
-			/*
-			 * Remove the possibly still existing stream context files from
-			 * previous round of operations (--resume, etc). We want to make
-			 * sure that the catchup process reads the files created on this
-			 * connection.
-			 */
-			if (!stream_cleanup_context(streamSpecs))
+			if (!follow_main_loop(copySpecs, streamSpecs))
 			{
 				/* errors have already been logged */
 				exit(EXIT_CODE_INTERNAL_ERROR);
-			}
-
-			/*
-			 * In case of successful exit from the follow sub-processes, we
-			 * switch back and forth between CATCHUP and REPLAY modes and
-			 * continue replaying changes. In case of error, we stop.
-			 */
-			LogicalStreamMode modeArray[] = {
-				STREAM_MODE_CATCHUP,
-				STREAM_MODE_REPLAY
-			};
-
-			int count = sizeof(modeArray) / sizeof(modeArray[0]);
-
-			uint64_t loop = 0;
-			LogicalStreamMode currentMode = modeArray[0];
-
-			while (true)
-			{
-				if (!followDB(copySpecs, streamSpecs))
-				{
-					/* errors have already been logged */
-					exit(EXIT_CODE_INTERNAL_ERROR);
-				}
-
-				char *pguri = (char *) copySpecs->source_pguri;
-				PGSQL pgsql = { 0 };
-				CopyDBSentinel sentinel = { 0 };
-
-				if (!pgsql_init(&pgsql, pguri, PGSQL_CONN_SOURCE))
-				{
-					/* errors have already been logged */
-					exit(EXIT_CODE_SOURCE);
-				}
-
-				if (!pgsql_get_sentinel(&pgsql, &sentinel))
-				{
-					/* errors have already been logged */
-					exit(EXIT_CODE_SOURCE);
-				}
-
-				if (sentinel.endpos != InvalidXLogRecPtr &&
-					sentinel.endpos <= sentinel.replay_lsn)
-				{
-					log_info("Reached endpos %X/%X at %X/%X",
-							 LSN_FORMAT_ARGS(sentinel.endpos),
-							 LSN_FORMAT_ARGS(sentinel.replay_lsn));
-
-					exit(EXIT_CODE_SOURCE);
-				}
-
-				log_info("Sentinel replay_lsn is %X/%X, endpos is %X/%X",
-						 LSN_FORMAT_ARGS(sentinel.replay_lsn),
-						 LSN_FORMAT_ARGS(sentinel.endpos));
-
-				/* switch to the next mode, increment loop counter */
-				currentMode = modeArray[++loop % count];
-
-				/* and re-init our streamSpecs for the new mode */
-				if (!stream_init_for_mode(streamSpecs, currentMode))
-				{
-					/* errors have already been logged */
-					exit(EXIT_CODE_INTERNAL_ERROR);
-				}
-
-				/*
-				 * Whatever the current/previous mode was, we need to
-				 * ensure to catch-up with files on-disk before switching
-				 * to another mode of operations.
-				 */
-				log_info("Catching-up from existing on-disk files");
-
-				if (!stream_apply_catchup(streamSpecs))
-				{
-					/* errors have already been logged */
-					exit(EXIT_CODE_TARGET);
-				}
-
-				if (!pgsql_get_sentinel(&pgsql, &sentinel))
-				{
-					/* errors have already been logged */
-					exit(EXIT_CODE_SOURCE);
-				}
-
-				if (sentinel.endpos != InvalidXLogRecPtr &&
-					sentinel.endpos <= sentinel.replay_lsn)
-				{
-					log_info("Reached endpos %X/%X at %X/%X",
-							 LSN_FORMAT_ARGS(sentinel.endpos),
-							 LSN_FORMAT_ARGS(sentinel.replay_lsn));
-
-					exit(EXIT_CODE_SOURCE);
-				}
-
-				log_info("Sentinel replay_lsn is %X/%X, endpos is %X/%X",
-						 LSN_FORMAT_ARGS(sentinel.replay_lsn),
-						 LSN_FORMAT_ARGS(sentinel.endpos));
-
-				log_info("Restarting logical decoding follower in %s mode",
-						 LogicalStreamModeToString(currentMode));
 			}
 
 			/* and we're done */

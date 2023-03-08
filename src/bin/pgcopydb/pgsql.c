@@ -3745,13 +3745,16 @@ pgsqlSendFeedback(LogicalStreamClient *client,
 			context->endpos != client->endpos)
 		{
 			client->endpos = context->endpos;
+			log_notice("endpos is now set to %X/%X",
+					   LSN_FORMAT_ARGS(client->endpos));
 		}
 	}
 
 	if (client->current.written_lsn != InvalidXLogRecPtr ||
 		client->current.flushed_lsn != InvalidXLogRecPtr)
 	{
-		log_info("Report write_lsn %X/%X, flush_lsn %X/%X, replay_lsn %X/%X",
+		/* use same terms as in pg_stat_replication view */
+		log_info("Reported write_lsn %X/%X, flush_lsn %X/%X, replay_lsn %X/%X",
 				 LSN_FORMAT_ARGS(client->current.written_lsn),
 				 LSN_FORMAT_ARGS(client->current.flushed_lsn),
 				 LSN_FORMAT_ARGS(client->current.applied_lsn));

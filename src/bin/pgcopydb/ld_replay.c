@@ -177,13 +177,14 @@ stream_replay_line(void *ctx, const char *line, bool *stop)
 	 * When syncing with the pgcopydb sentinel we might receive a
 	 * new endpos, and it might mean we're done already.
 	 */
-	if (context->endpos != InvalidXLogRecPtr &&
-		context->endpos <= context->previousLSN)
+	if (context->reachedEndPos ||
+		(context->endpos != InvalidXLogRecPtr &&
+		 context->endpos <= context->previousLSN))
 	{
 		*stop = true;
 		context->reachedEndPos = true;
 
-		log_info("Applied reached end position %X/%X at %X/%X",
+		log_info("Replay reached end position %X/%X at %X/%X",
 				 LSN_FORMAT_ARGS(context->endpos),
 				 LSN_FORMAT_ARGS(context->previousLSN));
 	}

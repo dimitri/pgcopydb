@@ -150,7 +150,7 @@ stream_apply_catchup(StreamSpecs *specs)
 		{
 			context.reachedEndPos = true;
 
-			log_info("Applied reached end position %X/%X at %X/%X",
+			log_info("Apply reached end position %X/%X at %X/%X",
 					 LSN_FORMAT_ARGS(context.endpos),
 					 LSN_FORMAT_ARGS(context.previousLSN));
 		}
@@ -398,7 +398,7 @@ stream_apply_sql(StreamApplyContext *context,
 	{
 		case STREAM_ACTION_SWITCH:
 		{
-			log_debug("apply: SWITCH from %X/%X to %X/%X",
+			log_debug("SWITCH from %X/%X to %X/%X",
 					  LSN_FORMAT_ARGS(context->previousLSN),
 					  LSN_FORMAT_ARGS(metadata->lsn));
 
@@ -437,10 +437,6 @@ stream_apply_sql(StreamApplyContext *context,
 				context->endpos <= metadata->lsn)
 			{
 				context->reachedEndPos = true;
-
-				log_info("Apply reached end position %X/%X at %X/%X.",
-						 LSN_FORMAT_ARGS(context->endpos),
-						 LSN_FORMAT_ARGS(metadata->lsn));
 				break;
 			}
 
@@ -508,9 +504,9 @@ stream_apply_sql(StreamApplyContext *context,
 			{
 				context->reachedEndPos = true;
 
-				log_info("Apply reached end position %X/%X at %X/%X",
-						 LSN_FORMAT_ARGS(context->endpos),
-						 LSN_FORMAT_ARGS(context->previousLSN));
+				log_notice("Apply reached end position %X/%X at %X/%X",
+						   LSN_FORMAT_ARGS(context->endpos),
+						   LSN_FORMAT_ARGS(context->previousLSN));
 				break;
 			}
 
@@ -554,15 +550,17 @@ stream_apply_sql(StreamApplyContext *context,
 				context->endpos < metadata->lsn)
 			{
 				context->reachedEndPos = true;
-
-				log_info("Apply reached end position %X/%X at %X/%X.",
-						 LSN_FORMAT_ARGS(context->endpos),
-						 LSN_FORMAT_ARGS(metadata->lsn));
 				break;
 			}
 
 			/* actually skip this one if we didn't reach start pos yet */
 			if (!context->reachedStartPos)
+			{
+				return true;
+			}
+
+			/* skip KEEPALIVE message that won't make progress */
+			if (metadata->lsn == context->previousLSN)
 			{
 				return true;
 			}
@@ -606,9 +604,9 @@ stream_apply_sql(StreamApplyContext *context,
 			{
 				context->reachedEndPos = true;
 
-				log_info("Apply reached end position %X/%X at %X/%X",
-						 LSN_FORMAT_ARGS(context->endpos),
-						 LSN_FORMAT_ARGS(context->previousLSN));
+				log_notice("Apply reached end position %X/%X at %X/%X",
+						   LSN_FORMAT_ARGS(context->endpos),
+						   LSN_FORMAT_ARGS(context->previousLSN));
 				break;
 			}
 

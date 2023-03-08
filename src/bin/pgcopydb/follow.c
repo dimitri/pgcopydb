@@ -165,6 +165,203 @@ follow_reset_sequences(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 
 
 /*
+ * follow_init_sentinel sets the sentinel endpos to the command line --endpos
+ * option, when given.
+ */
+bool
+follow_init_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel)
+{
+	PGSQL pgsql = { 0 };
+
+	if (!pgsql_init(&pgsql, specs->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_begin(&pgsql))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	if (specs->endpos != InvalidXLogRecPtr)
+	{
+		if (!pgsql_update_sentinel_endpos(&pgsql, false, specs->endpos))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	if (!pgsql_get_sentinel(&pgsql, sentinel))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_commit(&pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * follow_get_sentinel refreshes the given CopyDBSentinel with the current
+ * values from the pgcopydb.sentinel table on the source database.
+ */
+bool
+follow_get_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel)
+{
+	PGSQL pgsql = { 0 };
+
+	if (!pgsql_init(&pgsql, specs->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_get_sentinel(&pgsql, sentinel))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* the endpos might have changed on the sentinel table */
+	if (sentinel->endpos != InvalidXLogRecPtr &&
+		sentinel->endpos != specs->endpos)
+	{
+		specs->endpos = sentinel->endpos;
+
+		log_info("Current sentinel replay_lsn is %X/%X, "
+				 "endpos has now been set to %X/%X",
+				 LSN_FORMAT_ARGS(sentinel->replay_lsn),
+				 LSN_FORMAT_ARGS(sentinel->endpos));
+	}
+	else if (sentinel->endpos != InvalidXLogRecPtr)
+	{
+		log_info("Current sentinel replay_lsn is %X/%X, endpos is %X/%X",
+				 LSN_FORMAT_ARGS(sentinel->replay_lsn),
+				 LSN_FORMAT_ARGS(sentinel->endpos));
+	}
+	else
+	{
+		log_info("Current sentinel replay_lsn is %X/%X",
+				 LSN_FORMAT_ARGS(sentinel->replay_lsn));
+	}
+
+	return true;
+}
+
+
+/*
+ * follow_main_loop Implements the main loop for the follow sub-process
+ * management. It loops between two modes of operations:
+ *
+ *  1. prefetch + catchup
+ *  2. live replay using Unix pipes between sub-processes
+ *
+ * When the catchup process needs to read a file on-disk that does not exist
+ * yet, it quits with EXIT_CODE_QUIT (success) and the loop terminate the other
+ * subprocesses and switch to the live replay mode of operations.
+ *
+ * When a sub-process ends abnormally then the main process terminates the
+ * sibling worker processes and restart in the other mode.
+ *
+ * Each time we switch from a mode of operations to another, a catchup from
+ * disk is done to ensure we don't miss applying what has already been
+ * received.
+ */
+bool
+follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
+{
+	/*
+	 * Remove the possibly still existing stream context files from
+	 * previous round of operations (--resume, etc). We want to make
+	 * sure that the catchup process reads the files created on this
+	 * connection.
+	 */
+	if (!stream_cleanup_context(streamSpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * In case of successful exit from the follow sub-processes, we
+	 * switch back and forth between CATCHUP and REPLAY modes and
+	 * continue replaying changes. In case of error, we stop.
+	 */
+	LogicalStreamMode modeArray[] = {
+		STREAM_MODE_CATCHUP,
+		STREAM_MODE_REPLAY
+	};
+
+	int count = sizeof(modeArray) / sizeof(modeArray[0]);
+
+	uint64_t loop = 0;
+	LogicalStreamMode currentMode = modeArray[0];
+
+	while (true)
+	{
+		if (!followDB(copySpecs, streamSpecs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		CopyDBSentinel sentinel = { 0 };
+
+		if (!follow_get_sentinel(streamSpecs, &sentinel))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (sentinel.endpos != InvalidXLogRecPtr &&
+			sentinel.endpos <= sentinel.replay_lsn)
+		{
+			/* follow_get_sentinel logs replay_lsn and endpos already */
+			log_info("Stopping follow mode.");
+			return true;
+		}
+
+		/* switch to the next mode, increment loop counter */
+		currentMode = modeArray[++loop % count];
+
+		/* and re-init our streamSpecs for the new mode */
+		if (!stream_init_for_mode(streamSpecs, currentMode))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		/*
+		 * Whatever the current/previous mode was, we need to
+		 * ensure to catch-up with files on-disk before switching
+		 * to another mode of operations.
+		 */
+		log_info("Catching-up from existing on-disk files");
+
+		if (!stream_apply_catchup(streamSpecs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		log_info("Restarting logical decoding follower in %s mode",
+				 LogicalStreamModeToString(currentMode));
+	}
+
+	return true;
+}
+
+
+/*
  * followDB implements a logical decoding client for streaming changes from the
  * source database into the target database.
  *
@@ -434,6 +631,10 @@ follow_start_catchup(StreamSpecs *specs)
 bool
 follow_start_subprocess(StreamSpecs *specs, FollowSubProcess *subprocess)
 {
+	/* make sure to re-init the structure dynamic fields */
+	subprocess->pid = -1;
+	subprocess->exited = false;
+
 	/*
 	 * Flush stdio channels just before fork, to avoid double-output
 	 * problems.
@@ -517,15 +718,6 @@ follow_wait_subprocesses(StreamSpecs *specs)
 	bool success = true;
 	int stillRunning = count;
 
-	/* only count sub-processes for which we have a positive pid */
-	for (int i = 0; i < count; i++)
-	{
-		if (processArray[i]->pid < 0)
-		{
-			--stillRunning;
-		}
-	}
-
 	/* now the main loop, that waits until all given processes have exited */
 	while (stillRunning > 0)
 	{
@@ -539,8 +731,12 @@ follow_wait_subprocesses(StreamSpecs *specs)
 			}
 		}
 
+		/* re-init stillRunning at each iteration */
+		stillRunning = count;
+
 		for (int i = 0; i < count; i++)
 		{
+			/* skip already exited sub-processes, and not started ones too */
 			if (processArray[i]->pid <= 0 || processArray[i]->exited)
 			{
 				--stillRunning;
@@ -560,7 +756,7 @@ follow_wait_subprocesses(StreamSpecs *specs)
 			{
 				--stillRunning;
 
-				int logLevel = LOG_INFO;
+				int logLevel = LOG_NOTICE;
 				char details[BUFSIZE] = { 0 };
 
 				if (processArray[i]->returnCode == 0)
@@ -707,6 +903,12 @@ follow_wait_pid(pid_t subprocess, bool *exited, int *returnCode)
 		default:
 		{
 			/* sub-process has finished now */
+			if (pid != subprocess)
+			{
+				log_error("BUG: waitpid on %d returned %d", subprocess, pid);
+				return false;
+			}
+
 			*exited = true;
 			*returnCode = WEXITSTATUS(status);
 

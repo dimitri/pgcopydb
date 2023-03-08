@@ -133,17 +133,27 @@ stream_init_specs(StreamSpecs *specs,
 	 */
 	bool replayMode = specs->mode == STREAM_MODE_REPLAY;
 
-	specs->prefetch.name = replayMode ? "receive" : "prefetch";
-	specs->prefetch.command = &follow_start_prefetch;
-	specs->prefetch.pid = -1;
+	FollowSubProcess prefetch = {
+		.name = replayMode ? "receive" : "prefetch",
+		.command = &follow_start_prefetch,
+		.pid = -1
+	};
 
-	specs->transform.name = "transform";
-	specs->transform.command = &follow_start_transform;
-	specs->transform.pid = -1;
+	FollowSubProcess transform = {
+		.name = "transform",
+		.command = &follow_start_transform,
+		.pid = -1
+	};
 
-	specs->catchup.name = replayMode ? "replay" : "catchup";
-	specs->catchup.command = &follow_start_catchup;
-	specs->catchup.pid = -1;
+	FollowSubProcess catchup = {
+		.name = replayMode ? "replay" : "catchup",
+		.command = &follow_start_catchup,
+		.pid = -1
+	};
+
+	specs->prefetch = prefetch;
+	specs->transform = transform;
+	specs->catchup = catchup;
 
 	switch (specs->mode)
 	{
@@ -345,7 +355,7 @@ startLogicalStreaming(StreamSpecs *specs)
 		}
 	}
 
-	log_info("Connecting to logical decoding replication stream");
+	log_notice("Connecting to logical decoding replication stream");
 
 	/*
 	 * In case of being disconnected or other transient errors, reconnect and
@@ -650,6 +660,9 @@ streamWrite(LogicalStreamContext *context)
 			log_error("Failed to write JSON message (%ld bytes) to stdout: %m",
 					  buffer->len);
 			log_debug("JSON message: %s", buffer->data);
+
+			destroyPQExpBuffer(buffer);
+
 			return false;
 		}
 
@@ -745,13 +758,17 @@ streamRotateFile(LogicalStreamContext *context)
 	{
 		bool time_to_abort = false;
 
+		char buffer[BUFSIZE] = { 0 };
+
 		/*
 		 * Add an extra empty transaction with the first lsn of the next file
 		 * to allow for the transform and apply process to follow along.
 		 */
-		fformat(privateContext->jsonFile,
-				"{\"action\":\"X\",\"lsn\":\"%X/%X\"}\n",
-				LSN_FORMAT_ARGS(context->cur_record_lsn));
+		long buflen = sformat(buffer, sizeof(buffer),
+							  "{\"action\":\"X\",\"lsn\":\"%X/%X\"}\n",
+							  LSN_FORMAT_ARGS(context->cur_record_lsn));
+
+		fformat(privateContext->jsonFile, "%s", buffer);
 
 		log_debug("Inserted action SWITCH for lsn %X/%X in \"%s\"",
 				  LSN_FORMAT_ARGS(context->cur_record_lsn),
@@ -762,9 +779,27 @@ streamRotateFile(LogicalStreamContext *context)
 			/* errors have already been logged */
 			return false;
 		}
+
+		/*
+		 * When streaming to a Unix pipe don't forget to also stream the SWITCH
+		 * WAL message there, so that the transform process forwards it.
+		 */
+		if (privateContext->stdOut)
+		{
+			int ret =
+				fwrite(buffer, sizeof(char), buflen, privateContext->out);
+
+			if (ret != buflen)
+			{
+				log_error("Failed to write JSON message (%ld bytes) to stdout: %m",
+						  buflen);
+				log_debug("JSON message: %s", buffer);
+				return false;
+			}
+		}
 	}
 
-	log_info("Now streaming changes to \"%s\"", partialFileName);
+	log_notice("Now streaming changes to \"%s\"", partialFileName);
 	strlcpy(privateContext->walFileName, walFileName, MAXPGPATH);
 	strlcpy(privateContext->partialFileName, partialFileName, MAXPGPATH);
 
@@ -894,7 +929,7 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 			return false;
 		}
 
-		log_info("Closed file \"%s\"", privateContext->walFileName);
+		log_notice("Closed file \"%s\"", privateContext->walFileName);
 	}
 
 	/* in prefetch mode, kick-in a transform process */
@@ -1043,10 +1078,17 @@ streamKeepalive(LogicalStreamContext *context)
 			return false;
 		}
 
-		fformat(privateContext->jsonFile,
+		char buffer[BUFSIZE] = { 0 };
+
+		long buflen =
+			sformat(
+				buffer,
+				sizeof(buffer),
 				"{\"action\":\"K\",\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
 				LSN_FORMAT_ARGS(context->cur_record_lsn),
 				sendTimeStr);
+
+		fformat(privateContext->jsonFile, "%s", buffer);
 
 		log_debug("Inserted action KEEPALIVE for lsn %X/%X @%s",
 				  LSN_FORMAT_ARGS(context->cur_record_lsn),
@@ -1054,6 +1096,24 @@ streamKeepalive(LogicalStreamContext *context)
 
 		/* update the LSN tracking that's reported in the feedback */
 		context->tracking->written_lsn = context->cur_record_lsn;
+
+		/*
+		 * When streaming to a Unix pipe don't forget to also stream the
+		 * KEEPALIVE message there, so that the transform process forwards it.
+		 */
+		if (privateContext->stdOut)
+		{
+			int ret =
+				fwrite(buffer, sizeof(char), buflen, privateContext->out);
+
+			if (ret != buflen)
+			{
+				log_error("Failed to write JSON message (%ld bytes) to stdout: %m",
+						  buflen);
+				log_debug("JSON message: %s", buffer);
+				return false;
+			}
+		}
 	}
 
 	return true;
@@ -1100,7 +1160,7 @@ streamFeedback(LogicalStreamContext *context)
 {
 	StreamContext *privateContext = (StreamContext *) context->private;
 
-	int feedbackInterval = 10 * 1000; /* a minute */
+	int feedbackInterval = 1 * 1000; /* 1s */
 
 	if (!feTimestampDifferenceExceeds(context->lastFeedbackSync,
 									  context->now,
@@ -1136,7 +1196,7 @@ streamFeedback(LogicalStreamContext *context)
 	privateContext->endpos = sentinel.endpos;
 	privateContext->startpos = sentinel.startpos;
 
-	context->endpos = privateContext->endpos;
+	context->endpos = sentinel.endpos;
 	context->tracking->applied_lsn = sentinel.replay_lsn;
 
 	context->lastFeedbackSync = context->now;

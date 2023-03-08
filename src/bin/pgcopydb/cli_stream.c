@@ -830,6 +830,33 @@ cli_stream_replay(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	/*
+	 * Before starting the receive, transform, and apply sub-processes, we need
+	 * to set the sentinel endpos to the command line --endpos option, when
+	 * given.
+	 *
+	 * Also fetch the current values from the pgcopydb.sentinel. It might have
+	 * been updated from a previous run of the command, and we might have
+	 * nothing to catch-up to when e.g. the endpos was reached already.
+	 */
+	CopyDBSentinel sentinel = { 0 };
+
+	if (!follow_init_sentinel(&specs, &sentinel))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (sentinel.endpos != InvalidXLogRecPtr &&
+		sentinel.endpos <= sentinel.replay_lsn)
+	{
+		log_info("Current endpos %X/%X was previously reached at %X/%X",
+				 LSN_FORMAT_ARGS(sentinel.endpos),
+				 LSN_FORMAT_ARGS(sentinel.replay_lsn));
+
+		exit(EXIT_CODE_QUIT);
+	}
+
 	if (!followDB(&copySpecs, &specs))
 	{
 		/* errors have already been logged */

@@ -118,7 +118,7 @@ stream_transform_stream(StreamSpecs *specs)
 		/* reset the jsonFile FILE * pointer to NULL, it's closed now */
 		privateContext->sqlFile = NULL;
 
-		log_info("Closed file \"%s\"", privateContext->sqlFileName);
+		log_notice("Closed file \"%s\"", privateContext->sqlFileName);
 	}
 
 	log_notice("Transformed %lld messages and %lld transactions",
@@ -291,10 +291,10 @@ stream_transform_rotate(StreamContext *privateContext,
 		/* reset the jsonFile FILE * pointer to NULL, it's closed now */
 		privateContext->sqlFile = NULL;
 
-		log_info("Closed file \"%s\"", privateContext->sqlFileName);
+		log_notice("Closed file \"%s\"", privateContext->sqlFileName);
 	}
 
-	log_info("Now transforming changes to \"%s\"", sqlFileName);
+	log_notice("Now transforming changes to \"%s\"", sqlFileName);
 	strlcpy(privateContext->walFileName, jsonFileName, MAXPGPATH);
 	strlcpy(privateContext->sqlFileName, sqlFileName, MAXPGPATH);
 

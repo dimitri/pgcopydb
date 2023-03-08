@@ -475,7 +475,6 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 			{
 				free(buf);
 				doneReading = true;
-				log_info("read_from_stream: read 0 bytes");
 				continue;
 			}
 			else if (bytes == s)

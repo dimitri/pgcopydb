@@ -539,6 +539,10 @@ bool follow_export_snapshot(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
 bool follow_setup_databases(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
 bool follow_reset_sequences(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
 
+bool follow_init_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel);
+bool follow_get_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel);
+bool follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
+
 bool followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
 
 bool follow_start_subprocess(StreamSpecs *specs, FollowSubProcess *subprocess);
