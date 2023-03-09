@@ -83,6 +83,15 @@ stream_apply_replay(StreamSpecs *specs)
 
 	if (context->endpos != InvalidXLogRecPtr)
 	{
+		if (context->endpos <= context->previousLSN)
+		{
+			log_info("Current endpos %X/%X was previously reached at %X/%X",
+					 LSN_FORMAT_ARGS(context->endpos),
+					 LSN_FORMAT_ARGS(context->previousLSN));
+
+			return true;
+		}
+
 		log_info("Replaying changes from LSN %X/%X up to endpos LSN %X/%X",
 				 LSN_FORMAT_ARGS(context->previousLSN),
 				 LSN_FORMAT_ARGS(context->endpos));
@@ -168,20 +177,16 @@ stream_replay_line(void *ctx, const char *line, bool *stop)
 	 * When syncing with the pgcopydb sentinel we might receive a
 	 * new endpos, and it might mean we're done already.
 	 */
-	if (!context->reachedEndPos &&
-		context->endpos != InvalidXLogRecPtr &&
-		context->endpos <= context->previousLSN)
-	{
-		context->reachedEndPos = true;
-
-		log_info("Applied reached end position %X/%X at %X/%X",
-				 LSN_FORMAT_ARGS(context->endpos),
-				 LSN_FORMAT_ARGS(context->previousLSN));
-	}
-
-	if (context->reachedEndPos)
+	if (context->reachedEndPos ||
+		(context->endpos != InvalidXLogRecPtr &&
+		 context->endpos <= context->previousLSN))
 	{
 		*stop = true;
+		context->reachedEndPos = true;
+
+		log_info("Replay reached end position %X/%X at %X/%X",
+				 LSN_FORMAT_ARGS(context->endpos),
+				 LSN_FORMAT_ARGS(context->previousLSN));
 	}
 
 	return true;

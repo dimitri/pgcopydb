@@ -100,6 +100,7 @@ typedef struct StreamContext
 	char walFileName[MAXPGPATH];
 	char sqlFileName[MAXPGPATH];
 	FILE *jsonFile;
+	FILE *sqlFile;
 
 	StreamCounters counters;
 } StreamContext;
@@ -122,6 +123,7 @@ typedef struct StreamApplyContext
 	bool apply;                 /* from the pgcopydb sentinel */
 	uint64_t startpos;          /* from the pgcopydb sentinel */
 	uint64_t endpos;            /* finish applying when endpos is reached */
+	uint64_t replay_lsn;        /* from the pgcopydb sentinel */
 
 	bool reachedStartPos;
 	bool reachedEndPos;
@@ -286,10 +288,27 @@ typedef struct LogicalMessageArray
 
 
 /*
+ * SubProcess management utils.
+ */
+typedef struct StreamSpecs StreamSpecs;
+
+typedef bool (*FollowSubCommand) (StreamSpecs *specs);
+
+typedef struct FollowSubProcess
+{
+	char *name;
+	FollowSubCommand command;
+	pid_t pid;
+	bool exited;
+	int returnCode;
+} FollowSubProcess;
+
+
+/*
  * StreamSpecs is the streaming specifications used by the client-side of the
  * logical decoding implementation, where we keep track of progress etc.
  */
-typedef struct StreamSpecs
+struct StreamSpecs
 {
 	CDCPaths paths;
 
@@ -311,6 +330,11 @@ typedef struct StreamSpecs
 	bool restart;
 	bool resume;
 
+	/* subprocess management */
+	FollowSubProcess prefetch;
+	FollowSubProcess transform;
+	FollowSubProcess catchup;
+
 	/* receive push json filenames to a queue for transform */
 	Queue transformQueue;
 
@@ -324,7 +348,7 @@ typedef struct StreamSpecs
 	/* The previous pipe ends are connected to in/out for the sub-processes */
 	FILE *in;
 	FILE *out;
-} StreamSpecs;
+};
 
 typedef struct StreamContent
 {
@@ -347,6 +371,10 @@ bool stream_init_specs(StreamSpecs *specs,
 					   LogicalStreamMode mode,
 					   bool stdIn,
 					   bool stdOut);
+
+bool stream_init_for_mode(StreamSpecs *specs, LogicalStreamMode mode);
+
+char * LogicalStreamModeToString(LogicalStreamMode mode);
 
 bool stream_init_context(StreamContext *privateContext, StreamSpecs *specs);
 
@@ -420,11 +448,16 @@ bool stream_compute_pathnames(uint32_t WalSegSz,
 							  char *walFileName,
 							  char *sqlFileName);
 
-bool stream_transform_stream(FILE * in, FILE *out);
+bool stream_transform_stream(StreamSpecs *specs);
 bool stream_transform_line(void *ctx, const char *line, bool *stop);
+
 bool stream_transform_message(char *message,
-							  LogicalMessage *currentMsg,
-							  bool *commit);
+							  LogicalMessageMetadata *metadata,
+							  LogicalMessage *currentMsg);
+
+bool stream_transform_rotate(StreamContext *privateContext,
+							 LogicalMessageMetadata *metadata);
+
 bool stream_transform_file(char *jsonfilename, char *sqlfilename);
 bool stream_write_message(FILE *out, LogicalMessage *msg);
 bool stream_write_transaction(FILE *out, LogicalTransaction *tx);
@@ -502,20 +535,13 @@ bool stream_apply_replay(StreamSpecs *specs);
 bool stream_replay_line(void *ctx, const char *line, bool *stop);
 
 /* follow.c */
-typedef bool (*FollowSubCommand) (StreamSpecs *specs);
-
-typedef struct FollowSubProcess
-{
-	char *name;
-	FollowSubCommand command;
-	pid_t pid;
-	bool exited;
-	int returnCode;
-} FollowSubProcess;
-
 bool follow_export_snapshot(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
 bool follow_setup_databases(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
 bool follow_reset_sequences(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
+
+bool follow_init_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel);
+bool follow_get_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel);
+bool follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
 
 bool followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
 
@@ -525,17 +551,9 @@ bool follow_start_prefetch(StreamSpecs *specs);
 bool follow_start_transform(StreamSpecs *specs);
 bool follow_start_catchup(StreamSpecs *specs);
 
-void follow_exit_early(FollowSubProcess *prefetch,
-					   FollowSubProcess *transform,
-					   FollowSubProcess *catchup);
-
-bool follow_wait_subprocesses(FollowSubProcess *prefetch,
-							  FollowSubProcess *transform,
-							  FollowSubProcess *catchup);
-
-bool follow_terminate_subprocesses(FollowSubProcess *prefetch,
-								   FollowSubProcess *transform,
-								   FollowSubProcess *catchup);
+void follow_exit_early(StreamSpecs *specs);
+bool follow_wait_subprocesses(StreamSpecs *specs);
+bool follow_terminate_subprocesses(StreamSpecs *specs);
 
 bool follow_wait_pid(pid_t subprocess, bool *exited, int *returnCode);
 

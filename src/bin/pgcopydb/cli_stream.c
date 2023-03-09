@@ -819,6 +819,44 @@ cli_stream_replay(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	/*
+	 * Remove the possibly still existing stream context files from
+	 * previous round of operations (--resume, etc). We want to make sure
+	 * that the catchup process reads the files created on this connection.
+	 */
+	if (!stream_cleanup_context(&specs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/*
+	 * Before starting the receive, transform, and apply sub-processes, we need
+	 * to set the sentinel endpos to the command line --endpos option, when
+	 * given.
+	 *
+	 * Also fetch the current values from the pgcopydb.sentinel. It might have
+	 * been updated from a previous run of the command, and we might have
+	 * nothing to catch-up to when e.g. the endpos was reached already.
+	 */
+	CopyDBSentinel sentinel = { 0 };
+
+	if (!follow_init_sentinel(&specs, &sentinel))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (sentinel.endpos != InvalidXLogRecPtr &&
+		sentinel.endpos <= sentinel.replay_lsn)
+	{
+		log_info("Current endpos %X/%X was previously reached at %X/%X",
+				 LSN_FORMAT_ARGS(sentinel.endpos),
+				 LSN_FORMAT_ARGS(sentinel.replay_lsn));
+
+		exit(EXIT_CODE_QUIT);
+	}
+
 	if (!followDB(&copySpecs, &specs))
 	{
 		/* errors have already been logged */
@@ -835,6 +873,8 @@ cli_stream_replay(int argc, char **argv)
 static void
 cli_stream_transform(int argc, char **argv)
 {
+	CopyDataSpec copySpecs = { 0 };
+
 	if (argc != 2)
 	{
 		log_fatal("Please provide a filename argument");
@@ -845,6 +885,75 @@ cli_stream_transform(int argc, char **argv)
 
 	char *jsonfilename = argv[0];
 	char *sqlfilename = argv[1];
+
+	(void) find_pg_commands(&(copySpecs.pgPaths));
+
+	/*
+	 * The command `pgcopydb stream transform` can be used with filenames, in
+	 * which case it is not a service, or with the JSON file connected to the
+	 * stdin stream (using '-' as the jsonfilename), in which case the command
+	 * is a service.
+	 *
+	 * Finally, always assume --resume has been used so that we can re-use an
+	 * existing work directory when it exists.
+	 */
+	bool createWorkDir = false;
+	bool service = streq(jsonfilename, "-");
+	char *serviceName = "transform";
+
+	if (!copydb_init_workdir(&copySpecs,
+							 streamDBoptions.dir,
+							 service,
+							 serviceName,
+							 streamDBoptions.restart,
+							 true, /* streamDBoptions.resume */
+							 createWorkDir))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	RestoreOptions restoreOptions = { 0 };
+
+	if (!copydb_init_specs(&copySpecs,
+						   streamDBoptions.source_pguri,
+						   streamDBoptions.target_pguri,
+						   1,   /* tableJobs */
+						   1,   /* indexJobs */
+						   0,   /* skip threshold */
+						   "",  /* skip threshold pretty printed */
+						   DATA_SECTION_NONE,
+						   streamDBoptions.snapshot,
+						   restoreOptions,
+						   false, /* roles */
+						   false, /* skipLargeObjects */
+						   false, /* skipExtensions */
+						   false, /* skipCollations */
+						   streamDBoptions.restart,
+						   streamDBoptions.resume,
+						   !streamDBoptions.notConsistent))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	StreamSpecs specs = { 0 };
+
+	if (!stream_init_specs(&specs,
+						   &(copySpecs.cfPaths.cdc),
+						   copySpecs.source_pguri,
+						   copySpecs.target_pguri,
+						   streamDBoptions.plugin,
+						   streamDBoptions.slotName,
+						   streamDBoptions.origin,
+						   streamDBoptions.endpos,
+						   STREAM_MODE_CATCHUP,
+						   streamDBoptions.stdIn,
+						   streamDBoptions.stdOut))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
 
 	/*
 	 * Do we use the file API, or the stream API?
@@ -859,27 +968,25 @@ cli_stream_transform(int argc, char **argv)
 	 */
 	if (streq(jsonfilename, "-"))
 	{
-		FILE *in = stdin;
-		FILE *out = stdout;
+		specs.in = stdin;
+		specs.out = stdout;
 
 		if (!streq(sqlfilename, "-"))
 		{
-			out = fopen_with_umask(sqlfilename, "w", FOPEN_FLAGS_W, 0644);
-
-			if (out == NULL)
-			{
-				log_fatal("Failed to create and open file \"%s\"", sqlfilename);
-				exit(EXIT_CODE_INTERNAL_ERROR);
-			}
+			log_fatal("JSON filename is - (stdin), "
+					  "SQL filename should be - (stdout)");
+			log_fatal("When streaming from stdin, out filename is computed "
+					  "automatically from the current LSN.");
+			exit(EXIT_CODE_BAD_ARGS);
 		}
 
-		if (!stream_transform_stream(in, out))
+		if (!stream_transform_stream(&specs))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 
-		if (fclose(out) != 0)
+		if (fclose(specs.out) != 0)
 		{
 			log_error("Failed to close file \"%s\": %m", sqlfilename);
 			exit(EXIT_CODE_INTERNAL_ERROR);
@@ -912,14 +1019,30 @@ cli_stream_apply(int argc, char **argv)
 
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
+	char *sqlfilename = argv[0];
+
+	/*
+	 * The command `pgcopydb stream apply` can be used with a filename, in
+	 * which case it is not a service, or with the SQL file connected to the
+	 * stdin stream (using '-' as the filename), in which case the command is a
+	 * service.
+	 *
+	 * Then, both the catchup and the replay command starts the "apply"
+	 * service, so that they conflict with each other.
+	 *
+	 * Finally, always assume --resume has been used so that we can re-use an
+	 * existing work directory when it exists.
+	 */
 	bool createWorkDir = false;
+	bool service = streq(sqlfilename, "-");
+	char *serviceName = "apply";
 
 	if (!copydb_init_workdir(&copySpecs,
 							 streamDBoptions.dir,
-							 false, /* false */
-							 NULL,  /* serviceName */
+							 service,
+							 serviceName,
 							 streamDBoptions.restart,
-							 streamDBoptions.resume,
+							 true, /* streamDBoptions.resume */
 							 createWorkDir))
 	{
 		/* errors have already been logged */
@@ -958,8 +1081,6 @@ cli_stream_apply(int argc, char **argv)
 	 * The filename arguments can be set to - to mean stdin, and in that case
 	 * we use the streaming API so that we're compatible with Unix pipes.
 	 */
-	char *sqlfilename = argv[0];
-
 	if (streq(sqlfilename, "-"))
 	{
 		StreamSpecs specs = { 0 };
@@ -1105,6 +1226,18 @@ stream_start_in_mode(LogicalStreamMode mode)
 
 		case STREAM_MODE_PREFETCH:
 		{
+			/*
+			 * Remove the possibly still existing stream context files from
+			 * previous round of operations (--resume, etc). We want to make
+			 * sure that the catchup process reads the files created on this
+			 * connection.
+			 */
+			if (!stream_cleanup_context(&specs))
+			{
+				/* errors have already been logged */
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
 			if (!followDB(&copySpecs, &specs))
 			{
 				/* errors have already been logged */

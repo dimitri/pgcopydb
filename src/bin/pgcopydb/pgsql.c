@@ -1213,7 +1213,7 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 			return false;
 		}
 
-		log_debug("%s", debugParameters->data);
+		log_notice("%s", debugParameters->data);
 	}
 
 	if (paramCount == 0)
@@ -3697,17 +3697,6 @@ pgsqlSendFeedback(LogicalStreamClient *client,
 {
 	PGconn *conn = client->pgsql.connection;
 
-	/* call the callback function from the streaming client first */
-	if ((*client->feedbackFunction)(context))
-	{
-		/* we might have a new endpos from the client callback */
-		if (context->endpos != InvalidXLogRecPtr &&
-			context->endpos != client->endpos)
-		{
-			client->endpos = context->endpos;
-		}
-	}
-
 	char replybuf[1 + 8 + 8 + 8 + 8 + 1];
 	int len = 0;
 
@@ -3721,15 +3710,6 @@ pgsqlSendFeedback(LogicalStreamClient *client,
 		client->feedback.flushed_lsn == client->current.flushed_lsn)
 	{
 		return true;
-	}
-
-	if (client->current.written_lsn != InvalidXLogRecPtr ||
-		client->current.flushed_lsn != InvalidXLogRecPtr)
-	{
-		log_info("Report write_lsn %X/%X, flush_lsn %X/%X, replay_lsn %X/%X",
-				 LSN_FORMAT_ARGS(client->current.written_lsn),
-				 LSN_FORMAT_ARGS(client->current.flushed_lsn),
-				 LSN_FORMAT_ARGS(client->current.applied_lsn));
 	}
 
 	replybuf[len] = 'r';
@@ -3755,6 +3735,29 @@ pgsqlSendFeedback(LogicalStreamClient *client,
 		log_error("could not send feedback packet: %s",
 				  PQerrorMessage(conn));
 		return false;
+	}
+
+	/* call the callback function from the streaming client first */
+	if ((*client->feedbackFunction)(context))
+	{
+		/* we might have a new endpos from the client callback */
+		if (context->endpos != InvalidXLogRecPtr &&
+			context->endpos != client->endpos)
+		{
+			client->endpos = context->endpos;
+			log_notice("endpos is now set to %X/%X",
+					   LSN_FORMAT_ARGS(client->endpos));
+		}
+	}
+
+	if (client->current.written_lsn != InvalidXLogRecPtr ||
+		client->current.flushed_lsn != InvalidXLogRecPtr)
+	{
+		/* use same terms as in pg_stat_replication view */
+		log_info("Reported write_lsn %X/%X, flush_lsn %X/%X, replay_lsn %X/%X",
+				 LSN_FORMAT_ARGS(client->current.written_lsn),
+				 LSN_FORMAT_ARGS(client->current.flushed_lsn),
+				 LSN_FORMAT_ARGS(client->current.applied_lsn));
 	}
 
 	return true;
@@ -3798,7 +3801,12 @@ prepareToTerminate(LogicalStreamClient *client, bool keepalive, XLogRecPtr lsn)
 	(void) PQputCopyEnd(conn, NULL);
 	(void) PQflush(conn);
 
-	if (keepalive)
+	if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+	{
+		log_debug("received signal to stop streaming, currently at %X/%X",
+				  LSN_FORMAT_ARGS(client->current.written_lsn));
+	}
+	else if (keepalive)
 	{
 		log_debug("end position %X/%X reached by keepalive",
 				  LSN_FORMAT_ARGS(client->endpos));
@@ -4533,7 +4541,7 @@ pgsql_sync_sentinel_recv(PGSQL *pgsql,
 
 	char *sql =
 		"update pgcopydb.sentinel "
-		"set write_lsn = $1, flush_lsn = $2 "
+		"set startpos = $1, write_lsn = $1, flush_lsn = $2 "
 		"returning startpos, endpos, apply, write_lsn, flush_lsn, replay_lsn";
 
 	char writeLSN[PG_LSN_MAXLENGTH] = { 0 };

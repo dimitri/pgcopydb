@@ -128,6 +128,32 @@ stream_init_specs(StreamSpecs *specs,
 
 	log_trace("stream_init_specs: %s(%d)", plugin, specs->pluginOptions.count);
 
+	/*
+	 * Now prepare for the follow mode sub-process management.
+	 */
+	bool replayMode = specs->mode == STREAM_MODE_REPLAY;
+
+	FollowSubProcess prefetch = {
+		.name = replayMode ? "receive" : "prefetch",
+		.command = &follow_start_prefetch,
+		.pid = -1
+	};
+
+	FollowSubProcess transform = {
+		.name = "transform",
+		.command = &follow_start_transform,
+		.pid = -1
+	};
+
+	FollowSubProcess catchup = {
+		.name = replayMode ? "replay" : "catchup",
+		.command = &follow_start_catchup,
+		.pid = -1
+	};
+
+	specs->prefetch = prefetch;
+	specs->transform = transform;
+	specs->catchup = catchup;
 
 	switch (specs->mode)
 	{
@@ -174,11 +200,93 @@ stream_init_specs(StreamSpecs *specs,
 
 
 /*
+ * stream_init_for_mode initializes StreamSpecs bits that relate to the
+ * streaming mode choosen, allowing to switch back and forth between CATCHUP
+ * and REPLAY modes.
+ */
+bool
+stream_init_for_mode(StreamSpecs *specs, LogicalStreamMode mode)
+{
+	if (specs->mode == STREAM_MODE_CATCHUP && mode == STREAM_MODE_REPLAY)
+	{
+		specs->stdIn = true;
+		specs->stdOut = true;
+	}
+	else if (specs->mode == STREAM_MODE_REPLAY && mode == STREAM_MODE_CATCHUP)
+	{
+		if (!queue_create(&(specs->transformQueue), "transform"))
+		{
+			log_error("Failed to create the transform queue");
+			return false;
+		}
+	}
+	else
+	{
+		log_error("BUG: stream_init_for_mode(%d, %d)", specs->mode, mode);
+		return false;
+	}
+
+	/* the re-init for the new mode has been done now, register that */
+	specs->mode = mode;
+
+	return true;
+}
+
+
+/*
+ * LogicalStreamModeToString returns a string representation for the mode.
+ */
+char *
+LogicalStreamModeToString(LogicalStreamMode mode)
+{
+	switch (mode)
+	{
+		case STREAM_MODE_UNKNOW:
+		{
+			return "unknown stream mode";
+		}
+
+		case STREAM_MODE_RECEIVE:
+		{
+			return "receive";
+		}
+
+		case STREAM_MODE_PREFETCH:
+		{
+			return "prefetch";
+		}
+
+		case STREAM_MODE_CATCHUP:
+		{
+			return "catchup";
+		}
+
+		case STREAM_MODE_REPLAY:
+		{
+			return "replay";
+		}
+
+		default:
+		{
+			log_error("BUG: LogicalStreamModeToString(%d)", mode);
+			return "unknown stream mode";
+		}
+	}
+
+	/* keep compiler happy */
+	return "unknown stream mode";
+}
+
+
+/*
  * stream_init_context initializes a LogicalStreamContext.
  */
 bool
 stream_init_context(StreamContext *privateContext, StreamSpecs *specs)
 {
+	privateContext->endpos = specs->endpos;
+	privateContext->startpos = specs->startpos;
+
 	privateContext->mode = specs->mode;
 	privateContext->stdIn = specs->stdIn;
 	privateContext->stdOut = specs->stdOut;
@@ -247,7 +355,7 @@ startLogicalStreaming(StreamSpecs *specs)
 		}
 	}
 
-	log_info("Connecting to logical decoding replication stream");
+	log_notice("Connecting to logical decoding replication stream");
 
 	/*
 	 * In case of being disconnected or other transient errors, reconnect and
@@ -314,7 +422,10 @@ startLogicalStreaming(StreamSpecs *specs)
 		}
 
 		/* sleep for one entire second before retrying */
-		(void) pg_usleep(1 * 1000 * 1000);
+		if (retry)
+		{
+			(void) pg_usleep(1 * 1000 * 1000);
+		}
 	}
 
 	return true;
@@ -549,6 +660,9 @@ streamWrite(LogicalStreamContext *context)
 			log_error("Failed to write JSON message (%ld bytes) to stdout: %m",
 					  buffer->len);
 			log_debug("JSON message: %s", buffer->data);
+
+			destroyPQExpBuffer(buffer);
+
 			return false;
 		}
 
@@ -644,13 +758,17 @@ streamRotateFile(LogicalStreamContext *context)
 	{
 		bool time_to_abort = false;
 
+		char buffer[BUFSIZE] = { 0 };
+
 		/*
 		 * Add an extra empty transaction with the first lsn of the next file
 		 * to allow for the transform and apply process to follow along.
 		 */
-		fformat(privateContext->jsonFile,
-				"{\"action\":\"X\",\"lsn\":\"%X/%X\"}\n",
-				LSN_FORMAT_ARGS(context->cur_record_lsn));
+		long buflen = sformat(buffer, sizeof(buffer),
+							  "{\"action\":\"X\",\"lsn\":\"%X/%X\"}\n",
+							  LSN_FORMAT_ARGS(context->cur_record_lsn));
+
+		fformat(privateContext->jsonFile, "%s", buffer);
 
 		log_debug("Inserted action SWITCH for lsn %X/%X in \"%s\"",
 				  LSN_FORMAT_ARGS(context->cur_record_lsn),
@@ -661,9 +779,27 @@ streamRotateFile(LogicalStreamContext *context)
 			/* errors have already been logged */
 			return false;
 		}
+
+		/*
+		 * When streaming to a Unix pipe don't forget to also stream the SWITCH
+		 * WAL message there, so that the transform process forwards it.
+		 */
+		if (privateContext->stdOut)
+		{
+			int ret =
+				fwrite(buffer, sizeof(char), buflen, privateContext->out);
+
+			if (ret != buflen)
+			{
+				log_error("Failed to write JSON message (%ld bytes) to stdout: %m",
+						  buflen);
+				log_debug("JSON message: %s", buffer);
+				return false;
+			}
+		}
 	}
 
-	log_info("Now streaming changes to \"%s\"", partialFileName);
+	log_notice("Now streaming changes to \"%s\"", partialFileName);
 	strlcpy(privateContext->walFileName, walFileName, MAXPGPATH);
 	strlcpy(privateContext->partialFileName, partialFileName, MAXPGPATH);
 
@@ -793,7 +929,7 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 			return false;
 		}
 
-		log_info("Closed file \"%s\"", privateContext->walFileName);
+		log_notice("Closed file \"%s\"", privateContext->walFileName);
 	}
 
 	/* in prefetch mode, kick-in a transform process */
@@ -942,10 +1078,17 @@ streamKeepalive(LogicalStreamContext *context)
 			return false;
 		}
 
-		fformat(privateContext->jsonFile,
+		char buffer[BUFSIZE] = { 0 };
+
+		long buflen =
+			sformat(
+				buffer,
+				sizeof(buffer),
 				"{\"action\":\"K\",\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
 				LSN_FORMAT_ARGS(context->cur_record_lsn),
 				sendTimeStr);
+
+		fformat(privateContext->jsonFile, "%s", buffer);
 
 		log_debug("Inserted action KEEPALIVE for lsn %X/%X @%s",
 				  LSN_FORMAT_ARGS(context->cur_record_lsn),
@@ -953,6 +1096,24 @@ streamKeepalive(LogicalStreamContext *context)
 
 		/* update the LSN tracking that's reported in the feedback */
 		context->tracking->written_lsn = context->cur_record_lsn;
+
+		/*
+		 * When streaming to a Unix pipe don't forget to also stream the
+		 * KEEPALIVE message there, so that the transform process forwards it.
+		 */
+		if (privateContext->stdOut)
+		{
+			int ret =
+				fwrite(buffer, sizeof(char), buflen, privateContext->out);
+
+			if (ret != buflen)
+			{
+				log_error("Failed to write JSON message (%ld bytes) to stdout: %m",
+						  buflen);
+				log_debug("JSON message: %s", buffer);
+				return false;
+			}
+		}
 	}
 
 	return true;
@@ -999,7 +1160,7 @@ streamFeedback(LogicalStreamContext *context)
 {
 	StreamContext *privateContext = (StreamContext *) context->private;
 
-	int feedbackInterval = 10 * 1000; /* a minute */
+	int feedbackInterval = 1 * 1000; /* 1s */
 
 	if (!feTimestampDifferenceExceeds(context->lastFeedbackSync,
 									  context->now,
@@ -1035,7 +1196,7 @@ streamFeedback(LogicalStreamContext *context)
 	privateContext->endpos = sentinel.endpos;
 	privateContext->startpos = sentinel.startpos;
 
-	context->endpos = privateContext->endpos;
+	context->endpos = sentinel.endpos;
 	context->tracking->applied_lsn = sentinel.replay_lsn;
 
 	context->lastFeedbackSync = context->now;

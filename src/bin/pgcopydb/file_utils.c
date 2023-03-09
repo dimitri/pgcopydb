@@ -391,17 +391,14 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 
 	while (!doneReading)
 	{
-		struct timeval timeout = { 0, 100 * 1000 }; /* 100 ms */
-
-		/*
-		 * When asked_to_stop || asked_to_stop_fast still continue reading
-		 * through EOF on the input stream, then quit normally.
-		 */
-		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		/* feof returns non-zero when the end-of-file indicator is set */
+		if (feof(stream) != 0)
 		{
-			log_info("read_from_stream was asked to stop or quit");
-			return true;
+			log_debug("read_from_stream: stream closed");
+			break;
 		}
+
+		struct timeval timeout = { 0, 100 * 1000 }; /* 100 ms */
 
 		FD_ZERO(&readFileDescriptorSet);
 		FD_SET(context->fd, &readFileDescriptorSet);
@@ -413,6 +410,11 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 		{
 			if (errno == EINTR || errno == EAGAIN)
 			{
+				if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+				{
+					doneReading = true;
+				}
+
 				continue;
 			}
 			else
@@ -423,8 +425,20 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 			}
 		}
 
+		/*
+		 * When asked_to_stop || asked_to_stop_fast still continue reading
+		 * through EOF on the input stream, then quit normally. Here when
+		 * select(2) reports that there is no data to read, it's a good time to
+		 * quit.
+		 */
 		if (countFdsReadyToRead == 0)
 		{
+			if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+			{
+				doneReading = true;
+				log_info("read_from_stream was asked to stop or quit");
+			}
+
 			continue;
 		}
 
@@ -475,6 +489,8 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 						  "than pgcopydb limit (%s): %s",
 						  limitPretty,
 						  bytesPretty);
+
+				free(buf);
 				return false;
 			}
 
@@ -488,20 +504,17 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 
 			for (int i = 0; i < lineCount; i++)
 			{
+				/*
+				 * Now might look like a good time to check for interrupts...
+				 * That said we want to finish processing the current buffer.
+				 */
 				char *line = lines[i];
-
-				/* on normal interrupt, finish processing the received buffer */
-				if (asked_to_stop_fast || asked_to_quit)
-				{
-					free(buf);
-					return true;
-				}
 
 				/* we count stream input lines as if reading from a file */
 				++context->lineno;
 
 				/* call the used provided function */
-				bool stop;
+				bool stop = false;
 
 				if (!(*context->callback)(context->ctx, line, &stop))
 				{
@@ -512,6 +525,7 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 				if (stop)
 				{
 					doneReading = true;
+					break;
 				}
 			}
 
@@ -859,6 +873,21 @@ unlink_file(const char *filename)
 	}
 
 	return true;
+}
+
+
+/*
+ * close_fd_or_exit calls close(2) on given file descriptor, and exits if that
+ * failed.
+ */
+void
+close_fd_or_exit(int fd)
+{
+	if (close(fd) != 0)
+	{
+		log_fatal("Failed to close fd %d: %m", fd);
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
 }
 
 

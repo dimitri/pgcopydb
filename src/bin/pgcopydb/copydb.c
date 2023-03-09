@@ -216,71 +216,73 @@ copydb_acquire_pidfile(CopyFilePaths *cfPaths, char *serviceName)
 	pid_t pid = getpid();
 
 	/*
+	 * Only create the main pidfile when we're not running an auxilliary
+	 * service.
+	 */
+	if (serviceName == NULL)
+	{
+		if (!copydb_create_pidfile(cfPaths->pidfile, pid, true))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		return true;
+	}
+
+	/*
 	 * The "snapshot" service is special, it's an auxilliary service that's
-	 * allowed to run concurrently to the "main" pgcopydb service. As a result
-	 * when running the "snapshot" service we don't create the main pidfile at
-	 * all.
+	 * allowed to run concurrently to the "main" pgcopydb service.
 	 */
 	if (!streq("snapshot", serviceName))
 	{
-		pid_t onFilePid = 0;
-
-		if (file_exists(cfPaths->pidfile))
+		if (!copydb_create_pidfile(cfPaths->pidfile, pid, false))
 		{
-			/*
-			 * Only implement the "happy path": read_pidfile removes the file
-			 * when if fails to read it, or when the pid contained in there in
-			 * a stale pid (doesn't belong to any currently running process).
-			 */
-			if (read_pidfile(cfPaths->pidfile, &onFilePid))
-			{
-				log_fatal("Working directory \"%s\" already exists and "
-						  "contains a pidfile for process %d, "
-						  "which is currently running",
-						  cfPaths->topdir,
-						  onFilePid);
-				return false;
-			}
-		}
-
-		/* now populate our pidfile */
-		if (!create_pidfile(cfPaths->pidfile, pid))
-		{
+			/* errors have already been logged */
 			return false;
 		}
 	}
 
 	/*
-	 * Some pgcopydb commands run an independant service with their own
-	 * pidfile. Such commands are for instance:
-	 *
-	 *  pgcopydb stream receive
-	 *  pgcopydb stream tranform
-	 *  pgcopydb stream apply
-	 *
-	 * Those commands can run all together at the same time, but can't run
-	 * in parallel to the "main" command with the main pidfile as above.
+	 * When running an auxilliary service, we create its own pidfile and also
+	 * check that the same service isn't already running.
 	 */
-	if (serviceName != NULL)
+	if (!copydb_create_pidfile(cfPaths->spidfile, pid, true))
 	{
-		pid_t onFileSPid = 0;
+		/* errors have already been logged */
+		return false;
+	}
 
-		if (file_exists(cfPaths->spidfile))
+	return true;
+}
+
+
+/*
+ * copydb_create_pidfile creates a pidfile of the given name and updates the
+ * given pid. It fails if the pidfile already exists and belongs to a currently
+ * running process, acting like a lockfile then.
+ */
+bool
+copydb_create_pidfile(const char *pidfile, pid_t pid, bool createPidFile)
+{
+	if (file_exists(pidfile))
+	{
+		pid_t onFilePid = 0;
+
+		if (read_pidfile(pidfile, &onFilePid))
 		{
-			if (read_pidfile(cfPaths->spidfile, &onFileSPid))
-			{
-				log_fatal("Working directory \"%s\" already exists and "
-						  "contains a pidfile for service \"%s\" with "
-						  "process %d, which is currently running",
-						  cfPaths->topdir,
-						  serviceName,
-						  onFileSPid);
-				return false;
-			}
+			log_fatal("Pidfile \"%s\" already exists with process %d, "
+					  "which is currently running",
+					  pidfile,
+					  onFilePid);
+			return false;
 		}
+	}
 
-		/* now populate our pidfile */
-		if (!create_pidfile(cfPaths->spidfile, pid))
+	/* now populate our pidfile */
+	if (createPidFile)
+	{
+		if (!create_pidfile(pidfile, pid))
 		{
 			return false;
 		}

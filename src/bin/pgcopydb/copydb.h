@@ -248,6 +248,7 @@ bool copydb_init_workdir(CopyDataSpec *copySpecs,
 						 bool createWorkDir);
 
 bool copydb_acquire_pidfile(CopyFilePaths *cfPaths, char *serviceName);
+bool copydb_create_pidfile(const char *pidfile, pid_t pid, bool createPidFile);
 
 bool copydb_prepare_filepaths(CopyFilePaths *cfPaths,
 							  const char *topdir,

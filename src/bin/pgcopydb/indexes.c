@@ -723,7 +723,7 @@ copydb_create_index(const char *pguri,
 		}
 	}
 
-	log_info("%s", summary->command);
+	log_notice("%s", summary->command);
 
 	if (!pgsql_init(&dst, (char *) pguri, PGSQL_CONN_TARGET))
 	{
@@ -1123,8 +1123,8 @@ copydb_create_constraints(CopyDataSpec *specs, SourceTable *table)
 			if (strcmp(index->constraintName, dstIndex->constraintName) == 0)
 			{
 				foundConstraintOnTarget = true;
-				log_info("Found constraint \"%s\" on target, skipping",
-						 index->constraintName);
+				log_notice("Found constraint \"%s\" on target, skipping",
+						   index->constraintName);
 				break;
 			}
 		}
@@ -1140,7 +1140,7 @@ copydb_create_constraints(CopyDataSpec *specs, SourceTable *table)
 
 		if (!foundConstraintOnTarget)
 		{
-			log_info("%s", summary.command);
+			log_notice("%s", summary.command);
 
 			/*
 			 * Constraints are built by the CREATE INDEX worker process that is

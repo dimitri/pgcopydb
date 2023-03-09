@@ -34,6 +34,284 @@
 #include "summary.h"
 
 
+typedef struct TransformStreamCtx
+{
+	StreamContext *context;
+	uint64_t currentMsgIndex;
+	LogicalMessage currentMsg;
+	LogicalMessageMetadata metadata;
+} TransformStreamCtx;
+
+
+/*
+ * stream_transform_stream transforms a JSON formatted input stream (read line
+ * by line) as received from the wal2json logical decoding plugin into an SQL
+ * stream ready for applying to the target database.
+ */
+bool
+stream_transform_stream(StreamSpecs *specs)
+{
+	StreamContext *privateContext =
+		(StreamContext *) calloc(1, sizeof(StreamContext));
+
+	if (!stream_init_context(privateContext, specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* we need timeline and wal_segment_size to compute WAL filenames */
+	uint32_t WalSegSz;
+	IdentifySystem system = { 0 };
+
+	if (!stream_read_context(&(specs->paths),
+							 &system,
+							 &WalSegSz))
+	{
+		log_error("Failed to read the streaming context information "
+				  "from the source database, see above for details");
+		return false;
+	}
+
+	privateContext->WalSegSz = WalSegSz;
+	privateContext->timeline = system.timeline;
+
+	log_debug("Source database wal_segment_size is %u", WalSegSz);
+	log_debug("Source database timeline is %d", privateContext->timeline);
+
+	TransformStreamCtx ctx = {
+		.context = privateContext,
+		.currentMsgIndex = 0,
+		.currentMsg = { 0 },
+		.metadata = { 0 }
+	};
+
+	ReadFromStreamContext context = {
+		.callback = stream_transform_line,
+		.ctx = &ctx
+	};
+
+	/* switch out stream from block buffered to line buffered mode */
+	if (setvbuf(privateContext->out, NULL, _IOLBF, 0) != 0)
+	{
+		log_error("Failed to set stdout to line buffered mode: %m");
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!read_from_stream(privateContext->in, &context))
+	{
+		log_error("Failed to transform JSON messages from input stream, "
+				  "see above for details");
+		return false;
+	}
+
+	/* we might have stopped reading mid-file, let's close it. */
+	if (privateContext->sqlFile != NULL)
+	{
+		if (fclose(privateContext->sqlFile) != 0)
+		{
+			log_error("Failed to close file \"%s\": %m",
+					  privateContext->sqlFileName);
+			return false;
+		}
+
+		/* reset the jsonFile FILE * pointer to NULL, it's closed now */
+		privateContext->sqlFile = NULL;
+
+		log_notice("Closed file \"%s\"", privateContext->sqlFileName);
+	}
+
+	log_notice("Transformed %lld messages and %lld transactions",
+			   (long long) context.lineno,
+			   (long long) ctx.currentMsgIndex + 1);
+
+	return true;
+}
+
+
+/*
+ * stream_transform_line is a callback function for the ReadFromStreamContext
+ * and read_from_stream infrastructure. It's called on each line read from a
+ * stream such as a unix pipe.
+ */
+bool
+stream_transform_line(void *ctx, const char *line, bool *stop)
+{
+	TransformStreamCtx *transformCtx = (TransformStreamCtx *) ctx;
+	StreamContext *privateContext = transformCtx->context;
+	LogicalMessage *currentMsg = &(transformCtx->currentMsg);
+	LogicalMessageMetadata *metadata = &(transformCtx->metadata);
+
+	static uint64_t lineno = 0;
+
+	log_trace("stream_transform_line[%lld]: %s", (long long) ++lineno, line);
+
+	/* clean-up from whatever was read previously */
+	LogicalMessageMetadata empty = { 0 };
+	*metadata = empty;
+
+	if (!stream_transform_message((char *) line, metadata, currentMsg))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!stream_transform_rotate(privateContext, metadata))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * Is it time to close the current message and prepare a new one?
+	 */
+	if (metadata->action == STREAM_ACTION_COMMIT ||
+		metadata->action == STREAM_ACTION_KEEPALIVE ||
+		metadata->action == STREAM_ACTION_SWITCH)
+	{
+		/* now write the transaction out */
+		if (!stream_write_message(privateContext->out, currentMsg))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		/* now write the transaction out also to file on-disk */
+		if (!stream_write_message(privateContext->sqlFile, currentMsg))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		(void) FreeLogicalMessage(currentMsg);
+
+		/* then prepare a new one, reusing the same memory area */
+		LogicalMessage empty = { 0 };
+
+		*currentMsg = empty;
+		++(transformCtx->currentMsgIndex);
+	}
+
+	if (privateContext->endpos != InvalidXLogRecPtr &&
+		privateContext->endpos <= metadata->lsn)
+	{
+		*stop = true;
+
+		log_info("Transform reached end position %X/%X at %X/%X",
+				 LSN_FORMAT_ARGS(privateContext->endpos),
+				 LSN_FORMAT_ARGS(metadata->lsn));
+	}
+
+	return true;
+}
+
+
+/*
+ * stream_transform_message transforms a single JSON message from our streaming
+ * output into a SQL statement, and appends it to the given opened transaction.
+ */
+bool
+stream_transform_message(char *message,
+						 LogicalMessageMetadata *metadata,
+						 LogicalMessage *currentMsg)
+{
+	JSON_Value *json = json_parse_string(message);
+
+	if (!parseMessageMetadata(metadata, message, json, false))
+	{
+		/* errors have already been logged */
+		json_value_free(json);
+		return false;
+	}
+
+	if (!parseMessage(currentMsg, metadata, message, json))
+	{
+		log_error("Failed to parse JSON message: %s", message);
+		json_value_free(json);
+		return false;
+	}
+
+	json_value_free(json);
+
+	return true;
+}
+
+
+/*
+ * stream_transform_rotate prepares the output file where we store the SQL
+ * commands on-disk, which is important for restartability of the process.
+ */
+bool
+stream_transform_rotate(StreamContext *privateContext,
+						LogicalMessageMetadata *metadata)
+{
+	/*
+	 * When streaming from stdin to stdout (or other streams), we also maintain
+	 * our SQL file on-disk using the WAL file naming strategy from Postgres,
+	 * allowing the whole logical decoding follower client to restart.
+	 */
+	char jsonFileName[MAXPGPATH] = { 0 };
+	char sqlFileName[MAXPGPATH] = { 0 };
+
+	if (!stream_compute_pathnames(privateContext->WalSegSz,
+								  privateContext->timeline,
+								  metadata->lsn,
+								  privateContext->paths.dir,
+								  jsonFileName,
+								  sqlFileName))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* in most cases, the file name is still the same */
+	if (streq(privateContext->sqlFileName, sqlFileName))
+	{
+		if (privateContext->sqlFile == NULL)
+		{
+			log_fatal("BUG: privateContext->sqlFile == NULL");
+			return false;
+		}
+		return true;
+	}
+
+	/* if we had a SQL file opened, close it now */
+	if (!IS_EMPTY_STRING_BUFFER(privateContext->sqlFileName) &&
+		privateContext->sqlFile != NULL)
+	{
+		log_debug("Closing file \"%s\"", privateContext->sqlFileName);
+
+		if (fclose(privateContext->sqlFile) != 0)
+		{
+			log_error("Failed to close file \"%s\": %m",
+					  privateContext->sqlFileName);
+			return false;
+		}
+
+		/* reset the jsonFile FILE * pointer to NULL, it's closed now */
+		privateContext->sqlFile = NULL;
+
+		log_notice("Closed file \"%s\"", privateContext->sqlFileName);
+	}
+
+	log_notice("Now transforming changes to \"%s\"", sqlFileName);
+	strlcpy(privateContext->walFileName, jsonFileName, MAXPGPATH);
+	strlcpy(privateContext->sqlFileName, sqlFileName, MAXPGPATH);
+
+	privateContext->sqlFile =
+		fopen_with_umask(sqlFileName, "ab", FOPEN_FLAGS_A, 0644);
+
+	if (privateContext->sqlFile == NULL)
+	{
+		/* errors have already been logged */
+		log_error("Failed to open file \"%s\": %m", sqlFileName);
+		return false;
+	}
+
+	return true;
+}
+
+
 /*
  * stream_transform_worker is a worker process that loops over messages
  * received from a queue, each message contains the WAL.json and the WAL.sql
@@ -70,15 +348,16 @@ stream_transform_worker(StreamSpecs *specs)
 	{
 		QMessage mesg = { 0 };
 
-		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
-		{
-			return false;
-		}
-
 		if (!queue_receive(transformQueue, &mesg))
 		{
 			/* errors have already been logged */
 			break;
+		}
+
+		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		{
+			log_debug("stream_transform_worker was asked to stop");
+			return true;
 		}
 
 		switch (mesg.type)
@@ -154,7 +433,7 @@ stream_compute_pathnames(uint32_t WalSegSz,
 	XLByteToSeg(lsn, segno, WalSegSz);
 	XLogFileName(wal, timeline, segno, WalSegSz);
 
-	log_debug("stream_compute_pathnames: %X/%X: %s", LSN_FORMAT_ARGS(lsn), wal);
+	log_trace("stream_compute_pathnames: %X/%X: %s", LSN_FORMAT_ARGS(lsn), wal);
 
 	sformat(walFileName, MAXPGPATH, "%s/%s.json", dir, wal);
 	sformat(sqlFileName, MAXPGPATH, "%s/%s.sql", dir, wal);
@@ -203,145 +482,6 @@ stream_transform_send_stop(Queue *queue)
 	{
 		/* errors have already been logged */
 		return false;
-	}
-
-	return true;
-}
-
-
-typedef struct TransformStreamCtx
-{
-	uint64_t currentMsgIndex;
-	LogicalMessage currentMsg;
-	FILE *out;
-} TransformStreamCtx;
-
-
-/*
- * stream_transform_stream transforms a JSON formatted input stream (read line
- * by line) as received from the wal2json logical decoding plugin into an SQL
- * stream ready for applying to the target database.
- */
-bool
-stream_transform_stream(FILE *in, FILE *out)
-{
-	log_notice("Starting the transform service");
-
-	TransformStreamCtx ctx = {
-		.currentMsgIndex = 0,
-		.currentMsg = { 0 },
-		.out = out
-	};
-
-	ReadFromStreamContext context = {
-		.callback = stream_transform_line,
-		.ctx = &ctx
-	};
-
-	/* switch out stream from block buffered to line buffered mode */
-	if (setvbuf(out, NULL, _IOLBF, 0) != 0)
-	{
-		log_error("Failed to set stdout to line buffered mode: %m");
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	if (!read_from_stream(in, &context))
-	{
-		log_error("Failed to transform JSON messages from input stream, "
-				  "see above for details");
-		return false;
-	}
-
-	log_notice("Transformed %lld messages and %lld transactions",
-			   (long long) context.lineno,
-			   (long long) ctx.currentMsgIndex + 1);
-
-	return true;
-}
-
-
-/*
- * stream_transform_line is a callback function for the ReadFromStreamContext
- * and read_from_stream infrastructure. It's called on each line read from a
- * stream such as a unix pipe.
- */
-bool
-stream_transform_line(void *ctx, const char *line, bool *stop)
-{
-	TransformStreamCtx *transformCtx = (TransformStreamCtx *) ctx;
-	LogicalMessage *currentMsg = &(transformCtx->currentMsg);
-
-	static uint64_t lineno = 0;
-
-	log_trace("stream_transform_line[%lld]: %s", (long long) ++lineno, line);
-
-	bool commit = false;
-
-	if (!stream_transform_message((char *) line, currentMsg, &commit))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/*
-	 * Prepare a new message when we just read the COMMIT message of an
-	 * opened transaction, closing it, or when we just read a standalone
-	 * non-transactional message (such as a KEEPALIVE or a SWITCH WAL
-	 * message).
-	 */
-	if (!currentMsg->isTransaction || commit)
-	{
-		/* now write the message out */
-		if (!stream_write_message(transformCtx->out, currentMsg))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		(void) FreeLogicalMessage(currentMsg);
-
-		/* then prepare a new one, reusing the same memory area */
-		LogicalMessage empty = { 0 };
-
-		*currentMsg = empty;
-		++(transformCtx->currentMsgIndex);
-	}
-
-	return true;
-}
-
-
-/*
- * stream_transform_message transforms a single JSON message from our streaming
- * output into a SQL statement, and appends it to the given opened transaction.
- */
-bool
-stream_transform_message(char *message,
-						 LogicalMessage *currentMsg,
-						 bool *commit)
-{
-	LogicalMessageMetadata metadata = { 0 };
-	JSON_Value *json = json_parse_string(message);
-
-	if (!parseMessageMetadata(&metadata, message, json, false))
-	{
-		/* errors have already been logged */
-		json_value_free(json);
-		return false;
-	}
-
-	if (!parseMessage(currentMsg, &metadata, message, json))
-	{
-		log_error("Failed to parse JSON message: %s", message);
-		json_value_free(json);
-		return false;
-	}
-
-	json_value_free(json);
-
-	if (metadata.action == STREAM_ACTION_COMMIT)
-	{
-		*commit = true;
 	}
 
 	return true;
