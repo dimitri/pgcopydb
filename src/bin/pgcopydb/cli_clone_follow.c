@@ -345,17 +345,33 @@ cli_follow(int argc, char **argv)
 	}
 
 	/*
-	 * Remove the possibly still existing stream context files from
-	 * previous round of operations (--resume, etc). We want to make sure
-	 * that the catchup process reads the files created on this connection.
+	 * Before starting the receive, transform, and apply sub-processes, we need
+	 * to set the sentinel endpos to the command line --endpos option, when
+	 * given.
+	 *
+	 * Also fetch the current values from the pgcopydb.sentinel. It might have
+	 * been updated from a previous run of the command, and we might have
+	 * nothing to catch-up to when e.g. the endpos was reached already.
 	 */
-	if (!stream_cleanup_context(&specs))
+	CopyDBSentinel sentinel = { 0 };
+
+	if (!follow_init_sentinel(&specs, &sentinel))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (!followDB(&copySpecs, &specs))
+	if (sentinel.endpos != InvalidXLogRecPtr &&
+		sentinel.endpos <= sentinel.replay_lsn)
+	{
+		log_info("Current endpos %X/%X was previously reached at %X/%X",
+				 LSN_FORMAT_ARGS(sentinel.endpos),
+				 LSN_FORMAT_ARGS(sentinel.replay_lsn));
+
+		exit(EXIT_CODE_QUIT);
+	}
+
+	if (!follow_main_loop(&copySpecs, &specs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

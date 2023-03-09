@@ -259,7 +259,7 @@ follow_get_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel)
 
 
 /*
- * follow_main_loop Implements the main loop for the follow sub-process
+ * follow_main_loop implements the main loop for the follow sub-process
  * management. It loops between two modes of operations:
  *
  *  1. prefetch + catchup
