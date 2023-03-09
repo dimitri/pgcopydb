@@ -74,34 +74,43 @@ pgcopydb follow
 Description
 -----------
 
-This command runs two concurrent subprocesses.
+This command runs three concurrent subprocesses in two possible modes of
+operation:
 
-  1. The first one pre-fetches the changes from the source database using
-     the Postgres Logical Decoding protocol and save the JSON messages in
-     local JSON files.
+ * The first mode of operation is named *prefetch and catchup* where the
+   changes from the source database are stored in intermediate JSON and SQL
+   files to be later replayed one file at a time in the catchup process.
 
-     The logical decoding plugin `wal2json`__ must be available on the
-     source database system.
+ * The second mode of operation is named *live replay* where the changes
+   from the source database are streamed from the receiver process to the
+   transform process using a Unix pipe, and then with the same mechanism
+   from the transform process to the replay process.
 
-     __ https://github.com/eulerto/wal2json/
+Only one mode of operation may be active at any given time, and pgcopydb
+automatically switches from one mode to the other one, in a loop.
 
-     Each time a JSON file is closed, an auxilliary process is started to
-     transform the JSON file into a matching SQL file. This processing is
-     done in the background, and the main receiver process only waits for
-     the transformation process to be finished when there is a new JSON file
-     to transform.
+The follow command always starts using the *prefetch and catchup* mode, and
+as soon as the catchup process can't find the next SQL file to replay then
+it exits, triggering the switch to the *live replay* mode. Before entering
+the new mode, to make sure to replay all the changes that have been
+received, pgcopydb implements an extra catchup phase without concurrent
+activity.
 
-     In other words, only one such transform process can be started in the
-     background, and the process is blocking when a second one could get
-     started.
+Prefetch and Catchup
+^^^^^^^^^^^^^^^^^^^^
 
-     The design model here is based on the assumption that receiving the
-     next set of JSON messages that fills-up a whole JSON file is going to
-     take more time than transforming the JSON file into an SQL file. When
-     that assumption proves wrong, consider opening an issue on the github
-     project for pgcopydb.
+In the *prefetch and catchup* mode of operations, the three processes are
+implementing the following approach:
 
-  2. The second process catches-up with changes happening on the source
+  1. The first process pre-fetches the changes from the source database
+     using the Postgres Logical Decoding protocol and save the JSON messages
+     in local JSON files.
+
+  2. The second process transforms the JSON files into SQL. A Unix system V
+     message queue is used to communicate LSN positions from the prefetch
+     process to the transform process.
+
+  3. The third process catches-up with changes happening on the source
      database by applying the SQL files to the target database system.
 
      The Postgres API for `Replication Progress Tracking`__ is used in that
@@ -109,6 +118,40 @@ This command runs two concurrent subprocesses.
      resume.
 
      __ https://www.postgresql.org/docs/current//replication-origins.html
+
+Live Replay
+^^^^^^^^^^^
+
+In the *live replay* mode of operations, the three processes are
+implementing the following approach:
+
+  1. The first process receives the changes from the source database using
+     the Postgres Logical Decoding protocol and save the JSON messages in
+     local JSON files.
+
+     Additionnaly, the JSON changes are written to a Unix pipe shared with
+     the transform process.
+
+  2. The second process transforms the JSON lines into SQL. A Unix pipe is
+     used to stream the JSON lines from the receive process to the transform
+     process.
+
+     The transform process in that mode still writes the changes to SQL
+     files, so that it's still possible to catchup with received changes if
+     the apply process is interrupted.
+
+  3. The third process replays the changes happening on the source database
+     by applying the SQL commands to the target database system. The SQL
+     commands are read from the Unix pipe shared with the transform process.
+
+     The Postgres API for `Replication Progress Tracking`__ is used in that
+     process so that we can skip already applied transactions at restart or
+     resume.
+
+     __ https://www.postgresql.org/docs/current//replication-origins.html
+
+Remote control of the follow command
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It is possible to start the ``pgcopydb follow`` command and then later,
 while it's still running, set the LSN for the end position with the same
