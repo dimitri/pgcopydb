@@ -33,6 +33,7 @@ Postgres instance to the target Postgres instance.
      --split-tables-larger-than Same-table concurrency size threshold
      --drop-if-exists           On the target database, clean-up from a previous run first
      --roles                    Also copy roles found on source to target
+     --no-role-passwords        Do not dump passwords for roles
      --no-owner                 Do not set ownership of objects to match the original database
      --no-acl                   Prevent restoration of access privileges (grant/revoke commands).
      --no-comments              Do not output commands to restore comments
@@ -189,6 +190,11 @@ non-exclusive list:
     file can then be used to restore roles including their passwords.
 
     __ https://www.postgresql.org/docs/current/catalog-pg-authid.html
+
+    It is possible to implement a pgcopydb migration that skips the
+    passwords entirely when using the option ``--no-role-passwords``. In
+    that case though authentication might fail until passwords have been
+    setup again correctly.
 
   - Most of the available Postgres extensions, at least when being written
     in C, are then only allowed to be created by roles with superuser
@@ -443,6 +449,15 @@ The following options are available to ``pgcopydb clone``:
   result, this operation requires the superuser privileges.
 
   See also :ref:`pgcopydb_copy_roles`.
+
+--no-role-passwords
+
+  Do not dump passwords for roles. When restored, roles will have a null
+  password, and password authentication will always fail until the password
+  is set. Since password values aren't needed when this option is specified,
+  the role information is read from the catalog view pg_roles instead of
+  pg_authid. Therefore, this option also helps if access to pg_authid is
+  restricted by some security policy.
 
 --no-owner
 

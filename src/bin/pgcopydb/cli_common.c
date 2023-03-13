@@ -506,6 +506,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "split-at", required_argument, NULL, 'L' },
 		{ "drop-if-exists", no_argument, NULL, 'c' }, /* pg_restore -c */
 		{ "roles", no_argument, NULL, 'A' },          /* pg_dumpall --roles-only */
+		{ "no-role-passwords", no_argument, NULL, 'P' },
 		{ "no-owner", no_argument, NULL, 'O' },       /* pg_restore -O */
 		{ "no-comments", no_argument, NULL, 'X' },
 		{ "no-acl", no_argument, NULL, 'x' }, /* pg_restore -x */
@@ -643,6 +644,13 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				options.roles = true;
 				log_trace("--roles");
+				break;
+			}
+
+			case 'P':
+			{
+				options.noRolesPasswords = true;
+				log_trace("--no-role-passwords");
 				break;
 			}
 
@@ -1012,6 +1020,7 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 						   copyDBoptions.skipLargeObjects,
 						   copyDBoptions.skipExtensions,
 						   copyDBoptions.skipCollations,
+						   copyDBoptions.noRolesPasswords,
 						   copyDBoptions.restart,
 						   copyDBoptions.resume,
 						   !copyDBoptions.notConsistent))

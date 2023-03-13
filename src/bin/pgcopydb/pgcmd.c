@@ -435,7 +435,8 @@ pg_dump_db(PostgresPaths *pgPaths,
 bool
 pg_dumpall_roles(PostgresPaths *pgPaths,
 				 const char *pguri,
-				 const char *filename)
+				 const char *filename,
+				 bool noRolesPasswords)
 {
 	char *args[16];
 	int argsIndex = 0;
@@ -474,6 +475,11 @@ pg_dumpall_roles(PostgresPaths *pgPaths,
 
 	args[argsIndex++] = "--dbname";
 	args[argsIndex++] = (char *) safeURI.pguri;
+
+	if (noRolesPasswords)
+	{
+		args[argsIndex++] = "--no-role-passwords";
+	}
 
 	args[argsIndex] = NULL;
 
@@ -691,9 +697,10 @@ bool
 pg_copy_roles(PostgresPaths *pgPaths,
 			  const char *source_pguri,
 			  const char *target_pguri,
-			  const char *filename)
+			  const char *filename,
+			  bool noRolesPasswords)
 {
-	if (!pg_dumpall_roles(pgPaths, source_pguri, filename))
+	if (!pg_dumpall_roles(pgPaths, source_pguri, filename, noRolesPasswords))
 	{
 		/* errors have already been logged */
 		return false;

@@ -32,6 +32,7 @@
 	"  --split-tables-larger-than Same-table concurrency size threshold\n" \
 	"  --drop-if-exists           On the target database, clean-up from a previous run first\n" \
 	"  --roles                    Also copy roles found on source to target\n" \
+	"  --no-role-passwords        Do not dump passwords for roles\n" \
 	"  --no-owner                 Do not set ownership of objects to match the original database\n" \
 	"  --no-acl                   Prevent restoration of access privileges (grant/revoke commands).\n" \
 	"  --no-comments              Do not output commands to restore comments\n" \
@@ -448,7 +449,8 @@ cloneDB(CopyDataSpec *copySpecs)
 		if (!pg_copy_roles(&(copySpecs->pgPaths),
 						   copySpecs->source_pguri,
 						   copySpecs->target_pguri,
-						   copySpecs->dumpPaths.rolesFilename))
+						   copySpecs->dumpPaths.rolesFilename,
+						   copySpecs->noRolesPasswords))
 		{
 			/* errors have already been logged */
 			return false;

@@ -88,7 +88,8 @@ bool pg_dump_db(PostgresPaths *pgPaths,
 
 bool pg_dumpall_roles(PostgresPaths *pgPaths,
 					  const char *pguri,
-					  const char *filename);
+					  const char *filename,
+					  bool noRolesPasswords);
 
 bool pg_restore_roles(PostgresPaths *pgPaths,
 					  const char *pguri,
@@ -97,7 +98,8 @@ bool pg_restore_roles(PostgresPaths *pgPaths,
 bool pg_copy_roles(PostgresPaths *pgPaths,
 				   const char *source_pguri,
 				   const char *target_pguri,
-				   const char *filename);
+				   const char *filename,
+				   bool noRolesPasswords);
 
 bool pg_restore_db(PostgresPaths *pgPaths,
 				   const char *pguri,
