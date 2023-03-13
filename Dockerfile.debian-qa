@@ -1,8 +1,8 @@
 FROM debian:sid
 
-ENV TAR v0.10.tar.gz
-ENV ORIG pgcopydb_0.10.orig.tar.gz
-ENV WORKDIR /usr/src/pgcopydb-0.10
+ENV TAR v0.11.tar.gz
+ENV ORIG pgcopydb_0.11.orig.tar.gz
+ENV WORKDIR /usr/src/pgcopydb-0.11
 ENV ARCHIVE https://github.com/dimitri/pgcopydb/archive/refs/tags/
 ENV RELEASE ${ARCHIVE}${TAR}
 
