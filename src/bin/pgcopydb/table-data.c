@@ -877,12 +877,16 @@ copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 	int maxAttempts = 5;        /* allow 5 attempts total, 4 retries */
 
 	bool retry = true;
+	bool success = false;
 
-	while (retry)
+	while (!success && retry)
 	{
 		++attempts;
 
-		if (pg_copy(src, &dst, copySource, tableSpecs->qname, truncate))
+		/* ignore previous attempts, we need only one success here */
+		success = pg_copy(src, &dst, copySource, tableSpecs->qname, truncate);
+
+		if (success)
 		{
 			/* success, get out of the retry loop */
 			if (attempts > 1)
@@ -930,5 +934,5 @@ copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 		}
 	}
 
-	return true;
+	return success;
 }

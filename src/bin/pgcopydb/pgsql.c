@@ -1314,7 +1314,9 @@ is_response_ok(PGresult *result)
 
 
 /*
- * is_connection_error returns true if the PGSQL sqlstate belongs to
+ * is_connection_error returns true if we have a client-side connection error
+ * or a server-side reported connection issue, wherein the PGSQL sqlstate
+ * belongs to:
  *
  *   Class 08 — Connection Exception.
  *
@@ -1331,7 +1333,8 @@ is_response_ok(PGresult *result)
 bool
 pgsql_state_is_connection_error(PGSQL *pgsql)
 {
-	return pgsql->sqlstate[0] == '0' && pgsql->sqlstate[1] == '8';
+	return PQstatus(pgsql->connection) == CONNECTION_BAD ||
+		   (pgsql->sqlstate[0] == '0' && pgsql->sqlstate[1] == '8');
 }
 
 
@@ -1736,15 +1739,19 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 
 			if (PQresultStatus(res) != PGRES_COMMAND_OK)
 			{
+				failedOnDst = true;
 				pgcopy_log_error(dst, res, "Failed to copy data to target");
 			}
 		}
 
 		clear_results(dst);
 
-		if (!pgsql_commit(dst))
+		if (!failedOnDst)
 		{
-			failedOnDst = true;
+			if (!pgsql_commit(dst))
+			{
+				failedOnDst = true;
+			}
 		}
 	}
 
