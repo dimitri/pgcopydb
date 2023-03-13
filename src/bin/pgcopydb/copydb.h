@@ -187,6 +187,7 @@ typedef struct CopyDataSpec
 	bool skipLargeObjects;
 	bool skipExtensions;
 	bool skipCollations;
+	bool noRolesPasswords;
 
 	bool restart;
 	bool resume;
@@ -273,6 +274,7 @@ bool copydb_init_specs(CopyDataSpec *specs,
 					   bool skipLargeObjects,
 					   bool skipExtensions,
 					   bool skipCollations,
+					   bool noRolesPasswords,
 					   bool restart,
 					   bool resume,
 					   bool consistent);

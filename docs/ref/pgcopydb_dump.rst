@@ -92,13 +92,19 @@ SQL definitions of the roles found on the source Postgres instance.
    pgcopydb dump roles: Dump source database roles as custome file in work directory
    usage: pgcopydb dump roles  --source <URI>
 
-     --source          Postgres URI to the source database
-     --target          Directory where to save the dump files
-     --dir             Work directory to use
+     --source            Postgres URI to the source database
+     --target            Directory where to save the dump files
+     --dir               Work directory to use
+     --no-role-passwords Do not dump passwords for roles
 
 The ``pg_dumpall --roles-only`` is used to fetch the list of roles from the
 source database, and this command includes support for passwords. As a
 result, this operation requires the superuser privileges.
+
+It is possible to use the option ``--no-role-passwords`` to operate without
+superuser privileges. In that case though, the passwords are not part of the
+dump and authentication might fail until passwords have been setup properly.
+
 
 Description
 -----------
@@ -143,6 +149,16 @@ The following options are available to ``pgcopydb dump schema``:
   location given by this option, or defaults to
   ``${TMPDIR}/pgcopydb`` when the environment variable is set, or
   then to ``/tmp/pgcopydb``.
+
+
+--no-role-passwords
+
+  Do not dump passwords for roles. When restored, roles will have a null
+  password, and password authentication will always fail until the password
+  is set. Since password values aren't needed when this option is specified,
+  the role information is read from the catalog view pg_roles instead of
+  pg_authid. Therefore, this option also helps if access to pg_authid is
+  restricted by some security policy.
 
 --snapshot
 

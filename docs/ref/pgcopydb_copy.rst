@@ -82,6 +82,7 @@ The command ``pgcopydb copy roles`` implements both
      --source              Postgres URI to the source database
      --target              Postgres URI to the target database
      --dir                 Work directory to use
+     --no-role-passwords   Do not dump passwords for roles
 
 .. note::
 
@@ -387,6 +388,15 @@ The following options are available to ``pgcopydb copy`` sub-commands:
   location given by this option, or defaults to
   ``${TMPDIR}/pgcopydb`` when the environment variable is set, or
   then to ``/tmp/pgcopydb``.
+
+--no-role-passwords
+
+  Do not dump passwords for roles. When restored, roles will have a null
+  password, and password authentication will always fail until the password
+  is set. Since password values aren't needed when this option is specified,
+  the role information is read from the catalog view pg_roles instead of
+  pg_authid. Therefore, this option also helps if access to pg_authid is
+  restricted by some security policy.
 
 --table-jobs
 

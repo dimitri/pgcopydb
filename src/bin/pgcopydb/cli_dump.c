@@ -71,9 +71,10 @@ static CommandLine dump_roles_command =
 		"roles",
 		"Dump source database roles as custome file in work directory",
 		" --source <URI>",
-		"  --source          Postgres URI to the source database\n"
-		"  --target          Directory where to save the dump files\n"
-		"  --dir             Work directory to use\n",
+		"  --source            Postgres URI to the source database\n"
+		"  --target            Directory where to save the dump files\n"
+		"  --dir               Work directory to use\n"
+		"  --no-role-passwords Do not dump passwords for roles\n",
 		cli_dump_schema_getopts,
 		cli_dump_roles);
 
@@ -105,6 +106,7 @@ cli_dump_schema_getopts(int argc, char **argv)
 		{ "source", required_argument, NULL, 'S' },
 		{ "target", required_argument, NULL, 'T' },
 		{ "dir", required_argument, NULL, 'D' },
+		{ "no-role-passwords", no_argument, NULL, 'P' },
 		{ "restart", no_argument, NULL, 'r' },
 		{ "resume", no_argument, NULL, 'R' },
 		{ "not-consistent", no_argument, NULL, 'C' },
@@ -127,7 +129,7 @@ cli_dump_schema_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:Vvdzqh",
+	while ((c = getopt_long(argc, argv, "S:T:D:PrRCNVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -162,6 +164,13 @@ cli_dump_schema_getopts(int argc, char **argv)
 			{
 				strlcpy(options.dir, optarg, MAXPGPATH);
 				log_trace("--dir %s", options.dir);
+				break;
+			}
+
+			case 'P':
+			{
+				options.noRolesPasswords = true;
+				log_trace("--no-role-passwords");
 				break;
 			}
 
@@ -247,6 +256,7 @@ cli_dump_schema_getopts(int argc, char **argv)
 			}
 
 			case 'h':
+			case '?':
 			{
 				commandline_help(stderr);
 				exit(EXIT_CODE_QUIT);
@@ -369,6 +379,7 @@ cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 						   false, /* skipLargeObjects */
 						   false, /* skipExtensions */
 						   false, /* skipCollations */
+						   dumpDBoptions->noRolesPasswords,
 						   dumpDBoptions->restart,
 						   dumpDBoptions->resume,
 						   !dumpDBoptions->notConsistent))
@@ -413,7 +424,8 @@ cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 	{
 		if (!pg_dumpall_roles(&(copySpecs.pgPaths),
 							  copySpecs.source_pguri,
-							  copySpecs.dumpPaths.rolesFilename))
+							  copySpecs.dumpPaths.rolesFilename,
+							  copySpecs.noRolesPasswords))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);

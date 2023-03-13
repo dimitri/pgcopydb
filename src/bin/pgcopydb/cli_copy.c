@@ -76,7 +76,8 @@ static CommandLine copy_roles_command =
 		" --source ... --target ... ",
 		"  --source              Postgres URI to the source database\n"
 		"  --target              Postgres URI to the target database\n"
-		"  --dir                 Work directory to use\n",
+		"  --dir                 Work directory to use\n"
+		"  --no-role-passwords   Do not dump passwords for roles\n",
 		cli_copy_db_getopts,
 		cli_copy_roles);
 
@@ -637,7 +638,8 @@ cli_copy_roles(int argc, char **argv)
 	if (!pg_copy_roles(&(copySpecs.pgPaths),
 					   copySpecs.source_pguri,
 					   copySpecs.target_pguri,
-					   copySpecs.dumpPaths.rolesFilename))
+					   copySpecs.dumpPaths.rolesFilename,
+					   copySpecs.noRolesPasswords))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);
