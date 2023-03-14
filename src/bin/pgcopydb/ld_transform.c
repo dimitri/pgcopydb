@@ -166,8 +166,7 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
 	 * Is it time to close the current message and prepare a new one?
 	 */
 	if (metadata->action == STREAM_ACTION_COMMIT ||
-		metadata->action == STREAM_ACTION_KEEPALIVE ||
-		metadata->action == STREAM_ACTION_SWITCH)
+		metadata->action == STREAM_ACTION_KEEPALIVE)
 	{
 		/* now write the transaction out */
 		if (!stream_write_message(privateContext->out, currentMsg))
