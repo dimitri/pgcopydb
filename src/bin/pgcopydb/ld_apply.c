@@ -354,7 +354,9 @@ stream_apply_file(StreamApplyContext *context)
 		if (metadata.action == STREAM_ACTION_SWITCH &&
 			i != (content.count - 1))
 		{
-			log_error("SWITCH command found in line %d, before last line %d",
+			log_error("SWITCH command for LSN %X/%X found in line %d, "
+					  "before last line %d",
+					  LSN_FORMAT_ARGS(metadata.lsn),
 					  i + 1,
 					  content.count);
 

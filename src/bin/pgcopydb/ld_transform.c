@@ -156,18 +156,29 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
 		return false;
 	}
 
-	if (!stream_transform_rotate(privateContext, metadata))
+	if (privateContext->sqlFile == NULL)
 	{
-		/* errors have already been logged */
-		return false;
+		if (!stream_transform_rotate(privateContext, metadata))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	/*
 	 * Is it time to close the current message and prepare a new one?
 	 */
 	if (metadata->action == STREAM_ACTION_COMMIT ||
-		metadata->action == STREAM_ACTION_KEEPALIVE)
+		metadata->action == STREAM_ACTION_KEEPALIVE ||
+		metadata->action == STREAM_ACTION_SWITCH)
 	{
+		if (metadata->action == STREAM_ACTION_COMMIT)
+		{
+			/* now write the COMMIT message even when txn is continued */
+			LogicalTransaction *txn = &(currentMsg->command.tx);
+			txn->commit = true;
+		}
+
 		/* now write the transaction out */
 		if (!stream_write_message(privateContext->out, currentMsg))
 		{
@@ -184,11 +195,65 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
 
 		(void) FreeLogicalMessage(currentMsg);
 
-		/* then prepare a new one, reusing the same memory area */
-		LogicalMessage empty = { 0 };
+		if (metadata->action == STREAM_ACTION_COMMIT)
+		{
+			/* then prepare a new one, reusing the same memory area */
+			LogicalMessage empty = { 0 };
 
-		*currentMsg = empty;
-		++(transformCtx->currentMsgIndex);
+			*currentMsg = empty;
+			++(transformCtx->currentMsgIndex);
+		}
+		else if (currentMsg->isTransaction)
+		{
+			/*
+			 * A SWITCH WAL or a KEEPALIVE message happened in the middle of a
+			 * transaction: we need to mark the new transaction as a continued
+			 * part of the previous one.
+			 */
+			log_warn("stream_transform_line: continued transaction at %c: %X/%X",
+					 metadata->action,
+					 LSN_FORMAT_ARGS(metadata->lsn));
+
+			LogicalMessage new = { 0 };
+
+			new.isTransaction = true;
+			new.action = STREAM_ACTION_BEGIN;
+
+			LogicalTransactionStatement *stmt = (LogicalTransactionStatement *)
+												calloc(1,
+													   sizeof(LogicalTransactionStatement));
+
+			if (stmt == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			stmt->action = STREAM_ACTION_BEGIN;
+
+			LogicalTransaction *old = &(currentMsg->command.tx);
+			LogicalTransaction *txn = &(new.command.tx);
+
+			txn->continued = true;
+
+			txn->xid = old->xid;
+			txn->beginLSN = old->beginLSN;
+			strlcpy(txn->timestamp, old->timestamp, sizeof(txn->timestamp));
+
+			txn->first = NULL;
+
+			*currentMsg = new;
+		}
+	}
+
+	/* rotate the SQL file when receiving a SWITCH WAL message */
+	if (metadata->action == STREAM_ACTION_SWITCH)
+	{
+		if (!stream_transform_rotate(privateContext, metadata))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	if (privateContext->endpos != InvalidXLogRecPtr &&
@@ -272,6 +337,15 @@ stream_transform_rotate(StreamContext *privateContext,
 			return false;
 		}
 		return true;
+	}
+
+	/* we might be opening the file for the first time, that's not a switch */
+	if (privateContext->sqlFile != NULL &&
+		metadata->action != STREAM_ACTION_SWITCH)
+	{
+		log_error("stream_transform_rotate: BUG, rotation asked on action %c",
+				  metadata->action);
+		return false;
 	}
 
 	/* if we had a SQL file opened, close it now */
@@ -1227,7 +1301,7 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 
 			case STREAM_ACTION_INSERT:
 			{
-				if (!sentBEGIN)
+				if (!sentBEGIN || txn->continued)
 				{
 					if (!stream_write_begin(out, txn))
 					{
@@ -1246,7 +1320,7 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 
 			case STREAM_ACTION_UPDATE:
 			{
-				if (!sentBEGIN)
+				if (!sentBEGIN || txn->continued)
 				{
 					if (!stream_write_begin(out, txn))
 					{
@@ -1264,7 +1338,7 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 
 			case STREAM_ACTION_DELETE:
 			{
-				if (!sentBEGIN)
+				if (!sentBEGIN || txn->continued)
 				{
 					if (!stream_write_begin(out, txn))
 					{
@@ -1282,7 +1356,7 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 
 			case STREAM_ACTION_TRUNCATE:
 			{
-				if (!sentBEGIN)
+				if (!sentBEGIN || txn->continued)
 				{
 					if (!stream_write_begin(out, txn))
 					{
@@ -1307,7 +1381,7 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 		}
 	}
 
-	if (sentBEGIN)
+	if (sentBEGIN || txn->commit)
 	{
 		if (!stream_write_commit(out, txn))
 		{
@@ -1333,14 +1407,15 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 bool
 stream_write_begin(FILE *out, LogicalTransaction *txn)
 {
-	fformat(out,
-			"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
-			OUTPUT_BEGIN,
-			(long long) txn->xid,
-			LSN_FORMAT_ARGS(txn->beginLSN),
-			txn->timestamp);
+	int ret =
+		fformat(out,
+				"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
+				OUTPUT_BEGIN,
+				(long long) txn->xid,
+				LSN_FORMAT_ARGS(txn->beginLSN),
+				txn->timestamp);
 
-	return true;
+	return ret != -1;
 }
 
 
@@ -1351,14 +1426,15 @@ stream_write_begin(FILE *out, LogicalTransaction *txn)
 bool
 stream_write_commit(FILE *out, LogicalTransaction *txn)
 {
-	fformat(out,
-			"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
-			OUTPUT_COMMIT,
-			(long long) txn->xid,
-			LSN_FORMAT_ARGS(txn->commitLSN),
-			txn->timestamp);
+	int ret =
+		fformat(out,
+				"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
+				OUTPUT_COMMIT,
+				(long long) txn->xid,
+				LSN_FORMAT_ARGS(txn->commitLSN),
+				txn->timestamp);
 
-	return true;
+	return ret != -1;
 }
 
 
@@ -1369,11 +1445,12 @@ stream_write_commit(FILE *out, LogicalTransaction *txn)
 bool
 stream_write_switchwal(FILE *out, LogicalMessageSwitchWAL *switchwal)
 {
-	fformat(out, "%s{\"lsn\":\"%X/%X\"}\n",
-			OUTPUT_SWITCHWAL,
-			LSN_FORMAT_ARGS(switchwal->lsn));
+	int ret =
+		fformat(out, "%s{\"lsn\":\"%X/%X\"}\n",
+				OUTPUT_SWITCHWAL,
+				LSN_FORMAT_ARGS(switchwal->lsn));
 
-	return true;
+	return ret != -1;
 }
 
 
@@ -1384,12 +1461,13 @@ stream_write_switchwal(FILE *out, LogicalMessageSwitchWAL *switchwal)
 bool
 stream_write_keepalive(FILE *out, LogicalMessageKeepalive *keepalive)
 {
-	fformat(out, "%s{\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
-			OUTPUT_KEEPALIVE,
-			LSN_FORMAT_ARGS(keepalive->lsn),
-			keepalive->timestamp);
+	int ret =
+		fformat(out, "%s{\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
+				OUTPUT_KEEPALIVE,
+				LSN_FORMAT_ARGS(keepalive->lsn),
+				keepalive->timestamp);
 
-	return true;
+	return ret != -1;
 }
 
 
@@ -1397,6 +1475,10 @@ stream_write_keepalive(FILE *out, LogicalMessageKeepalive *keepalive)
  * stream_write_insert writes an INSERT statement to the already open out
  * stream.
  */
+#define FFORMAT(str, fmt, ...) \
+	{ if (fformat(str, fmt, __VA_ARGS__) == -1) { return false; } \
+	}
+
 bool
 stream_write_insert(FILE *out, LogicalMessageInsert *insert)
 {
@@ -1405,32 +1487,32 @@ stream_write_insert(FILE *out, LogicalMessageInsert *insert)
 	{
 		LogicalMessageTuple *stmt = &(insert->new.array[s]);
 
-		fformat(out, "INSERT INTO \"%s\".\"%s\" ",
+		FFORMAT(out, "INSERT INTO \"%s\".\"%s\" ",
 				insert->nspname,
 				insert->relname);
 
 		/* loop over column names and add them to the out stream */
-		fformat(out, "(");
+		FFORMAT(out, "%s", "(");
 		for (int c = 0; c < stmt->cols; c++)
 		{
-			fformat(out, "%s\"%s\"", c > 0 ? ", " : "", stmt->columns[c]);
+			FFORMAT(out, "%s\"%s\"", c > 0 ? ", " : "", stmt->columns[c]);
 		}
-		fformat(out, ")");
+		FFORMAT(out, "%s", ")");
 
 		/* now loop over VALUES rows */
-		fformat(out, " VALUES ");
+		FFORMAT(out, "%s", " VALUES ");
 
 		for (int r = 0; r < stmt->values.count; r++)
 		{
 			LogicalMessageValues *values = &(stmt->values.array[r]);
 
 			/* now loop over column values for this VALUES row */
-			fformat(out, "%s(", r > 0 ? ", " : "");
+			FFORMAT(out, "%s(", r > 0 ? ", " : "");
 			for (int v = 0; v < values->cols; v++)
 			{
 				LogicalMessageValue *value = &(values->array[v]);
 
-				fformat(out, "%s", v > 0 ? ", " : "");
+				FFORMAT(out, "%s", v > 0 ? ", " : "");
 
 				if (!stream_write_value(out, value))
 				{
@@ -1439,10 +1521,10 @@ stream_write_insert(FILE *out, LogicalMessageInsert *insert)
 				}
 			}
 
-			fformat(out, ")");
+			FFORMAT(out, "%s", ")");
 		}
 
-		fformat(out, ";\n");
+		FFORMAT(out, "%s", ";\n");
 	}
 
 	return true;
@@ -1471,7 +1553,7 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 		LogicalMessageTuple *old = &(update->old.array[s]);
 		LogicalMessageTuple *new = &(update->new.array[s]);
 
-		fformat(out, "UPDATE \"%s\".\"%s\" ", update->nspname, update->relname);
+		FFORMAT(out, "UPDATE \"%s\".\"%s\" ", update->nspname, update->relname);
 
 		if (old->values.count != new->values.count ||
 			old->values.count != 1 ||
@@ -1484,7 +1566,7 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 			return false;
 		}
 
-		fformat(out, "SET ");
+		FFORMAT(out, "%s", "SET ");
 
 		for (int r = 0; r < new->values.count; r++)
 		{
@@ -1504,8 +1586,8 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 					return false;
 				}
 
-				fformat(out, "%s", v > 0 ? ", " : "");
-				fformat(out, "\"%s\" = ", new->columns[v]);
+				FFORMAT(out, "%s", v > 0 ? ", " : "");
+				FFORMAT(out, "\"%s\" = ", new->columns[v]);
 
 				if (!stream_write_value(out, value))
 				{
@@ -1515,7 +1597,7 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 			}
 		}
 
-		fformat(out, " WHERE ");
+		FFORMAT(out, "%s", " WHERE ");
 
 		for (int r = 0; r < old->values.count; r++)
 		{
@@ -1535,8 +1617,8 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 					return false;
 				}
 
-				fformat(out, "%s", v > 0 ? " and " : "");
-				fformat(out, "\"%s\" = ", old->columns[v]);
+				FFORMAT(out, "%s", v > 0 ? " and " : "");
+				FFORMAT(out, "\"%s\" = ", old->columns[v]);
 
 				if (!stream_write_value(out, value))
 				{
@@ -1546,7 +1628,7 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 			}
 		}
 
-		fformat(out, ";\n");
+		FFORMAT(out, "%s", ";\n");
 	}
 
 	return true;
@@ -1565,12 +1647,12 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 	{
 		LogicalMessageTuple *old = &(delete->old.array[s]);
 
-		fformat(out,
+		FFORMAT(out,
 				"DELETE FROM \"%s\".\"%s\"",
 				delete->nspname,
 				delete->relname);
 
-		fformat(out, " WHERE ");
+		FFORMAT(out, "%s", " WHERE ");
 
 		for (int r = 0; r < old->values.count; r++)
 		{
@@ -1590,8 +1672,8 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 					return false;
 				}
 
-				fformat(out, "%s", v > 0 ? " and " : "");
-				fformat(out, "\"%s\" = ", old->columns[v]);
+				FFORMAT(out, "%s", v > 0 ? " and " : "");
+				FFORMAT(out, "\"%s\" = ", old->columns[v]);
 
 				if (!stream_write_value(out, value))
 				{
@@ -1601,7 +1683,7 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 			}
 		}
 
-		fformat(out, ";\n");
+		FFORMAT(out, "%s", ";\n");
 	}
 
 	return true;

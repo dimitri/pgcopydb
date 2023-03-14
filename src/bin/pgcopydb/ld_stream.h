@@ -243,6 +243,8 @@ typedef struct LogicalTransaction
 	uint64_t beginLSN;
 	uint64_t commitLSN;
 	char timestamp[PG_MAX_TIMESTAMP];
+	bool continued;
+	bool commit;
 
 	uint32_t count;                     /* number of statements */
 	LogicalTransactionStatement *first;
