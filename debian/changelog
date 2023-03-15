@@ -2,7 +2,7 @@ pgcopydb (0.11-1) unstable; urgency=medium
 
   * Official 0.11 release of pgcopydb
 
- -- Dimitri Fontaine <dim@tapoueh.org>  Mon, 13 Mar 2023 18:01:16 +0100
+ -- Dimitri Fontaine <dim@tapoueh.org>  Wed, 15 Mar 2023 13:42:58 +0100
 
 pgcopydb (0.10-1) unstable; urgency=medium
 

@@ -1,4 +1,4 @@
-### pgcopydb v0.11 (March 14, 2023) ###
+### pgcopydb v0.11 (March 15, 2023) ###
 
 This release introduces support for the Postgres code logical decoding
 plugin test_decoding in addition to wal2json, and also introduces the fully
