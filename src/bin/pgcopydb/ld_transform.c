@@ -210,18 +210,20 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
 			 * transaction: we need to mark the new transaction as a continued
 			 * part of the previous one.
 			 */
-			log_warn("stream_transform_line: continued transaction at %c: %X/%X",
-					 metadata->action,
-					 LSN_FORMAT_ARGS(metadata->lsn));
+			log_debug("stream_transform_line: continued transaction at %c: %X/%X",
+					  metadata->action,
+					  LSN_FORMAT_ARGS(metadata->lsn));
 
 			LogicalMessage new = { 0 };
 
 			new.isTransaction = true;
 			new.action = STREAM_ACTION_BEGIN;
 
-			LogicalTransactionStatement *stmt = (LogicalTransactionStatement *)
-												calloc(1,
-													   sizeof(LogicalTransactionStatement));
+			LogicalTransactionStatement *stmt = NULL;
+
+			stmt = (LogicalTransactionStatement *)
+				   calloc(1,
+						  sizeof(LogicalTransactionStatement));
 
 			if (stmt == NULL)
 			{
@@ -650,6 +652,43 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 			return false;
 		}
 
+		/*
+		 * Our SQL file might begin with DML messages, in that case it's a
+		 * transaction that continues over a file boundary.
+		 */
+		if (i == 0 &&
+			(metadata->action == STREAM_ACTION_COMMIT ||
+			 metadata->action == STREAM_ACTION_INSERT ||
+			 metadata->action == STREAM_ACTION_UPDATE ||
+			 metadata->action == STREAM_ACTION_DELETE ||
+			 metadata->action == STREAM_ACTION_TRUNCATE))
+		{
+			LogicalMessage new = { 0 };
+
+			new.isTransaction = true;
+			new.action = STREAM_ACTION_BEGIN;
+
+			LogicalTransactionStatement *stmt = NULL;
+
+			stmt = (LogicalTransactionStatement *)
+				   calloc(1,
+						  sizeof(LogicalTransactionStatement));
+
+			if (stmt == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			stmt->action = STREAM_ACTION_BEGIN;
+
+			LogicalTransaction *txn = &(new.command.tx);
+			txn->continued = true;
+			txn->first = NULL;
+
+			*currentMsg = new;
+		}
+
 		if (!parseMessage(currentMsg, metadata, message, json))
 		{
 			log_error("Failed to parse JSON message: %s", message);
@@ -934,6 +973,7 @@ parseMessage(LogicalMessage *mesg,
 			}
 
 			txn->commitLSN = metadata->lsn;
+			txn->commit = true;
 
 			break;
 		}
@@ -1275,6 +1315,8 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 	}
 
 	bool sentBEGIN = false;
+	bool splitTx = false;
+
 	LogicalTransactionStatement *currentStmt = txn->first;
 
 	for (; currentStmt != NULL; currentStmt = currentStmt->next)
@@ -1283,6 +1325,11 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 		{
 			case STREAM_ACTION_SWITCH:
 			{
+				if (sentBEGIN)
+				{
+					splitTx = true;
+				}
+
 				if (!stream_write_switchwal(out, &(currentStmt->stmt.switchwal)))
 				{
 					return false;
@@ -1301,7 +1348,7 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 
 			case STREAM_ACTION_INSERT:
 			{
-				if (!sentBEGIN || txn->continued)
+				if (!sentBEGIN && !txn->continued)
 				{
 					if (!stream_write_begin(out, txn))
 					{
@@ -1320,7 +1367,7 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 
 			case STREAM_ACTION_UPDATE:
 			{
-				if (!sentBEGIN || txn->continued)
+				if (!sentBEGIN && !txn->continued)
 				{
 					if (!stream_write_begin(out, txn))
 					{
@@ -1338,7 +1385,7 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 
 			case STREAM_ACTION_DELETE:
 			{
-				if (!sentBEGIN || txn->continued)
+				if (!sentBEGIN && !txn->continued)
 				{
 					if (!stream_write_begin(out, txn))
 					{
@@ -1356,7 +1403,7 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 
 			case STREAM_ACTION_TRUNCATE:
 			{
-				if (!sentBEGIN || txn->continued)
+				if (!sentBEGIN && !txn->continued)
 				{
 					if (!stream_write_begin(out, txn))
 					{
@@ -1381,7 +1428,7 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 		}
 	}
 
-	if (sentBEGIN || txn->commit)
+	if ((sentBEGIN && !splitTx) || txn->commit)
 	{
 		if (!stream_write_commit(out, txn))
 		{
