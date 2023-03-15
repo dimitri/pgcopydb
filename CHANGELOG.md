@@ -1,3 +1,59 @@
+### pgcopydb v0.11 (March 15, 2023) ###
+
+This release introduces support for the Postgres code logical decoding
+plugin test_decoding in addition to wal2json, and also introduces the fully
+automated switch from prefetch and catchup replication to live streaming.
+
+More features are added such as support for skipping collations, support for
+skipping role passwords, a feature to cache the `pg_table_size()` results
+and avoid re-computing it again when doing more than one migration with
+pgcopydb, and the new `pgcopydb ping` command.
+
+This release also contains the usual amount of bug fixes and improvements,
+code refactoring, etc.
+
+### Added
+* Automatically switch from prefetch/catchup to live replay mode. (#199)
+* Implement pgcopydb stream replay. (#196)
+* Implement support for --no-role-passwords. (#205)
+* Implement "live" streaming of changes from source to target. (#185)
+* Implement new command: pgcopydb ping (#191)
+* Support unlogged tables for data copy (#183)
+* Implement --skip-collations. (#160)
+* Implement support for logical decoding plugin test_decoding. (#156)
+* Implement pgcopydb list tables --drop-cache. (#150)
+* Implement an option to cache pg_table_size() results. (#146)
+
+### Changed
+* Refactor our internal representation for Logical Messages. (#198)
+* Refactor our clone --follow implementation. (#197)
+* Refactor the transform process management. (#194)
+* When streaming into a JSON file, write to a partial file first. (#187)
+* When transforming into a SQL file, write to a partial file first. (#186)
+* Arrange to use Logical Replication protocol metadata. (#155)
+* Refrain from using wal2json computed column "nextlsn". (#151)
+
+### Fixed
+* Fix internal return value that prevented error handling. (#204)
+* Avoid using stdin/stdout/stderr as variable names (#193)
+* Refactor debugParameters string building to use PQExpBuffer. (#190)
+* Fix same-table-copy query to use cached pgcopydb.table_size. (#184)
+* Fix stream_read_context retry loop. (#181)
+* Fix `dir` of stream cleanup and do cleanup for other commands. (#178)
+* Fix huge memory allocations copydb_prepare_table_specs. (#175)
+* Fix the SQL query that retrieves the column name for partitioning. (#176)
+* Fix `lsn` for KEEPALIVE action. (#164)
+* Blind fix attempt for a reported segfault. (#173)
+* Error out early when work dir does not exists and is expected to. (#171)
+* Trivial: Write index OIDs as unsigned integers correctly to the summary file & fix partitioning for tables with bigint primary keys with values gre>
+* Fix transform process to handle endpos in between transactions. (#166)
+* One of our syscalls (to mkdir) failed to include the OS error message. (#162)
+* Fix migration failure of an empty database with --drop-if-exists. (#152)
+* Adding dir option pgcopydb list progress command (#148)
+
+### Packaging fixes
+* Fix debian B-D in our debian build Dockerfiles. (#145)
+
 ### pgcopydb v0.10 (November 3, 2022) ###
 
 Bug fix release, with added compatibility to Postgres 9.5, 9.6 and 10.
