@@ -353,6 +353,21 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 			return false;
 		}
 
+		/* we could have reached endpos in this step: */
+		if (!follow_get_sentinel(streamSpecs, &sentinel))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (sentinel.endpos != InvalidXLogRecPtr &&
+			sentinel.endpos <= sentinel.replay_lsn)
+		{
+			/* follow_get_sentinel logs replay_lsn and endpos already */
+			log_info("Stopping follow mode.");
+			return true;
+		}
+
 		log_info("Restarting logical decoding follower in %s mode",
 				 LogicalStreamModeToString(currentMode));
 	}

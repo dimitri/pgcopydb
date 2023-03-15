@@ -3244,6 +3244,7 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 	context->WalSegSz = client->WalSegSz;
 	context->tracking = &(client->current);
 
+	client->now = feGetCurrentTimestamp();
 
 	while (!time_to_abort)
 	{
@@ -3466,14 +3467,17 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 			}
 
 			/* call the keepaliveFunction callback now, ignore errors */
-			context->cur_record_lsn = walEnd;
-			context->now = client->now;
+			if (replyRequested)
+			{
+				context->cur_record_lsn = walEnd;
+				context->now = client->now;
 
-			(void) (*client->keepaliveFunction)(context);
+				(void) (*client->keepaliveFunction)(context);
 
-			/* the keepalive function may advance written_lsn, update */
-			client->startpos = client->current.written_lsn;
-			client->feedback.written_lsn = client->current.written_lsn;
+				/* the keepalive function may advance written_lsn, update */
+				client->startpos = client->current.written_lsn;
+				client->feedback.written_lsn = client->current.written_lsn;
+			}
 
 			/* Send a reply, if necessary */
 			if (replyRequested || endposReached)
