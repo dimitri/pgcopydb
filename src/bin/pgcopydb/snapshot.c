@@ -246,6 +246,15 @@ copydb_close_snapshot(CopyDataSpec *copySpecs)
 
 	copySpecs->sourceSnapshot.state = SNAPSHOT_STATE_CLOSED;
 
+	if (snapshot->state == SNAPSHOT_STATE_EXPORTED)
+	{
+		if (!unlink_file(copySpecs->cfPaths.snfile))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
 	return true;
 }
 

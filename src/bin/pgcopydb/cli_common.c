@@ -427,6 +427,10 @@ cli_copydb_is_consistent(CopyDBOptions *options)
 	if (IS_EMPTY_STRING_BUFFER(options->snapshot))
 	{
 		strlcpy(options->snapshot, snLines[0], sizeof(options->snapshot));
+
+		log_notice("Re-using snapshot '%s' found at \"%s\"",
+				   options->snapshot,
+				   cfPaths.snfile);
 	}
 	else if (strcmp(snLines[0], options->snapshot) != 0)
 	{
