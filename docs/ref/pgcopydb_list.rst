@@ -78,15 +78,15 @@ tables to COPY the data from.
 
      --source            Postgres URI to the source database
      --filter <filename> Use the filters defined in <filename>
-     --cache             Cache table size in relation pgcopydb.table_size
-     --drop-cache        Drop relation pgcopydb.table_size
+     --cache             Cache table size in relation pgcopydb.pgcopydb_table_size
+     --drop-cache        Drop relation pgcopydb.pgcopydb_table_size
      --list-skipped      List only tables that are setup to be skipped
      --without-pkey      List only tables that have no primary key
 
 The ``--cache`` option allows caching the `pg_table_size()`__ result in the
-newly created table ``pgcopydb.table_size``. This is only useful in Postgres
-deployments where this computation is quite slow, and when the pgcopydb
-operation is going to be run multiple times.
+newly created table ``pgcopydb.pgcopydb_table_size``. This is only useful in
+Postgres deployments where this computation is quite slow, and when the
+pgcopydb operation is going to be run multiple times.
 
 __ https://www.postgresql.org/docs/15/functions-admin.html#FUNCTIONS-ADMIN-DBSIZE
 

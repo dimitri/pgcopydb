@@ -251,11 +251,26 @@ void fetchedRows(void *ctx, PGresult *result);
 bool pgsql_begin(PGSQL *pgsql);
 bool pgsql_commit(PGSQL *pgsql);
 bool pgsql_rollback(PGSQL *pgsql);
+
 bool pgsql_server_version(PGSQL *pgsql);
+
 bool pgsql_set_transaction(PGSQL *pgsql,
-						   IsolationLevel level, bool readOnly, bool deferrable);
+						   IsolationLevel level,
+						   bool readOnly,
+						   bool deferrable);
+
+bool pgsql_is_in_recovery(PGSQL *pgsql, bool *is_in_recovery);
+
+bool pgsql_has_database_privilege(PGSQL *pgsql, const char *privilege,
+								  bool *granted);
+
+bool pgsql_get_search_path(PGSQL *pgsql, char *search_path, size_t size);
+bool pgsql_set_search_path(PGSQL *pgsql, char *search_path, bool local);
+bool pgsql_prepend_search_path(PGSQL *pgsql, const char *namespace);
+
 bool pgsql_export_snapshot(PGSQL *pgsql, char *snapshot, size_t size);
 bool pgsql_set_snapshot(PGSQL *pgsql, char *snapshot);
+
 bool pgsql_execute(PGSQL *pgsql, const char *sql);
 bool pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 							   const Oid *paramTypes, const char **paramValues,
