@@ -264,6 +264,11 @@ bool pgsql_is_in_recovery(PGSQL *pgsql, bool *is_in_recovery);
 bool pgsql_has_database_privilege(PGSQL *pgsql, const char *privilege,
 								  bool *granted);
 
+bool pgsql_has_sequence_privilege(PGSQL *pgsql,
+								  const char *seqname,
+								  const char *privilege,
+								  bool *granted);
+
 bool pgsql_get_search_path(PGSQL *pgsql, char *search_path, size_t size);
 bool pgsql_set_search_path(PGSQL *pgsql, char *search_path, bool local);
 bool pgsql_prepend_search_path(PGSQL *pgsql, const char *namespace);

@@ -50,6 +50,40 @@ copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql)
 				seq->nspname,
 				seq->relname);
 
+		/*
+		 * In case of "permission denied" for SELECT on the sequence object, we
+		 * would then have a broken transaction and all the rest of the loop
+		 * would get the following:
+		 *
+		 * ERROR: current transaction is aborted, commands ignored
+		 * until end of transaction block
+		 *
+		 * To avoid that, for each sequence we first see if we're granted the
+		 * SELECT privilege.
+		 */
+		bool granted = false;
+		char lname[BUFSIZE] = { 0 };
+
+		sformat(lname, sizeof(lname), "%s.%s",
+				seq->nspname,
+				seq->relname);
+
+		if (!pgsql_has_sequence_privilege(pgsql, lname, "select", &granted))
+		{
+			/* errors have been logged */
+			++errors;
+			break;
+		}
+
+		if (!granted)
+		{
+			log_error("Failed to SELECT values for sequence %s: "
+					  "permission denied",
+					  qname);
+			++errors;
+			continue;
+		}
+
 		if (!schema_get_sequence_value(pgsql, seq))
 		{
 			/* just skip this one */

@@ -1160,6 +1160,44 @@ pgsql_has_database_privilege(PGSQL *pgsql, const char *privilege, bool *granted)
 
 
 /*
+ * pgsql_has_sequence_privilege calls has_sequence_privilege() and copies the
+ * result in the granted boolean pointer given.
+ */
+bool
+pgsql_has_sequence_privilege(PGSQL *pgsql,
+							 const char *seqname,
+							 const char *privilege,
+							 bool *granted)
+{
+	SingleValueResultContext parseContext = { { 0 }, PGSQL_RESULT_BOOL, false };
+
+	char *sql = "select has_sequence_privilege($1, $2);";
+
+	int paramCount = 2;
+	Oid paramTypes[2] = { TEXTOID, TEXTOID };
+	const char *paramValues[2] = { seqname, privilege };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   &parseContext, &parseSingleValueResult))
+	{
+		log_error("Failed to query privileges for sequence \"%s\"", seqname);
+		return false;
+	}
+
+	if (!parseContext.parsedOk)
+	{
+		log_error("Failed to query privileges for sequence \"%s\"", seqname);
+		return false;
+	}
+
+	*granted = parseContext.boolVal;
+
+	return true;
+}
+
+
+/*
  * pgsql_get_search_path runs the query "show search_path" and copies the
  * result in the given pre-allocated string buffer.
  */
