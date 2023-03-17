@@ -47,7 +47,7 @@ drop schema if exists pgcopydb;
 
 create schema pgcopydb;
 
-create table pgcopydb.table_size (
+create table pgcopydb.pgcopydb_table_size (
     oid oid unique,
     bytes bigint
 );
@@ -63,7 +63,7 @@ with cache_table_size as ((
         select
             'table_2'::regclass::oid,
             51200))
-insert into pgcopydb.table_size (oid, bytes)
+insert into pgcopydb.pgcopydb_table_size (oid, bytes)
 select
     *
 from

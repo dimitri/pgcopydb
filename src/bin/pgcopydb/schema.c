@@ -147,6 +147,31 @@ struct FilteringQueries
 
 
 /*
+ * schema_query_privileges queries the given database connection to figure out
+ * if we can create a schema, and if we can create temporary objects.
+ */
+bool
+schema_query_privileges(PGSQL *pgsql,
+						bool *hasDBCreatePrivilage,
+						bool *hasDBTempPrivilege)
+{
+	if (!pgsql_has_database_privilege(pgsql, "create", hasDBCreatePrivilage))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_has_database_privilege(pgsql, "temp", hasDBTempPrivilege))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * schema_list_extensions grabs the list of extensions from the given source
  * Postgres instance and allocates a SourceExtension array with the result of
  * the query.
@@ -329,8 +354,6 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_NONE,
 
-		"create table if not exists pgcopydb.table_size as "
-
 		"  select c.oid, pg_table_size(c.oid) as bytes "
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
@@ -351,8 +374,6 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 
 	{
 		SOURCE_FILTER_TYPE_INCL,
-
-		"create table if not exists pgcopydb.table_size as "
 
 		"  select c.oid, pg_table_size(c.oid) as bytes "
 		"    from pg_catalog.pg_class c"
@@ -379,8 +400,6 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 
 	{
 		SOURCE_FILTER_TYPE_EXCL,
-
-		"create table if not exists pgcopydb.table_size as "
 
 		"  select c.oid, pg_table_size(c.oid) as bytes "
 		"    from pg_catalog.pg_class c"
@@ -422,8 +441,6 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_LIST_NOT_INCL,
 
-		"create table if not exists pgcopydb.table_size as "
-
 		"  select c.oid, pg_table_size(c.oid) as bytes "
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
@@ -452,8 +469,6 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 
 	{
 		SOURCE_FILTER_TYPE_LIST_EXCL,
-
-		"create table if not exists pgcopydb.table_size as "
 
 		"  select c.oid, pg_table_size(c.oid) as bytes "
 		"    from pg_catalog.pg_class c"
@@ -486,14 +501,16 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 
 
 /*
- * schema_prepare_pgcopydb_table_size creates a table named pgcopydb.table_size
+ * schema_prepare_pgcopydb_table_size creates a table named pgcopydb_table_size
  * on the given connection (typically, the source database). The creation is
  * skipped if the table already exists.
  */
 bool
 schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
 								   SourceFilters *filters,
-								   bool force,
+								   bool hasDBCreatePrivilege,
+								   bool cache,
+								   bool dropCache,
 								   bool *createdTableSizeTable)
 {
 	log_trace("schema_prepare_pgcopydb_table_size");
@@ -530,103 +547,117 @@ schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
 		}
 	}
 
-	log_debug("listSourceTablesSQL[%s]", filterTypeToString(filters->type));
-
-	char *createSchema = "create schema if not exists pgcopydb";
-
-	if (!pgsql_execute(pgsql, createSchema))
+	if ((cache || dropCache) && !hasDBCreatePrivilege)
 	{
-		log_error("Failed to compute table size, see above for details");
+		log_fatal("Connecting with a role that does not have CREATE privileges "
+				  "on the source database prevents pg_table_size() caching");
 		return false;
 	}
 
 	/*
-	 * When the force option has been used, we DROP TABLE IF EXISTS and then
-	 * create it again (cache invalidation).
+	 * See if a pgcopydb.pgcopydb_table_size table already exists.
 	 */
-	bool createTable = false;
+	bool exists = false;
 
-	if (force)
+	if (dropCache)
 	{
 		if (!schema_drop_pgcopydb_table_size(pgsql))
 		{
 			/* errors have already been logged */
 			return false;
 		}
-
-		createTable = true;
 	}
 	else
 	{
-		char *existsQuery =
-			"select 1 "
-			"  from pg_class c "
-			"       join pg_namespace n on n.oid = c.relnamespace "
-			" where n.nspname = 'pgcopydb' and c.relname = 'table_size'";
-
-		SingleValueResultContext context = { { 0 }, PGSQL_RESULT_INT, false };
-
-		if (!pgsql_execute_with_params(pgsql, existsQuery, 0, NULL, NULL,
-									   &context, &fetchedRows))
+		if (!pgsql_table_exists(pgsql, "pgcopydb", "pgcopydb_table_size", &exists))
 		{
-			log_error("Failed to check if \"pgcopydb\".\"table_size\" exists");
-			log_error("Failed to compute table size, see above for details");
+			/* errors have already been logged */
 			return false;
 		}
 
-		if (!context.parsedOk)
+		if (exists)
 		{
-			log_error("Failed to check if \"pgcopydb\".\"table_size\" exists");
-			log_error("Failed to compute table size, see above for details");
-			return false;
+			log_notice("Table pgcopydb.pgcopydb_table_size already exists, "
+					   "re-using it");
+			return true;
 		}
-
-		/* if the exists query returns no rows, create pgcopydb.table_size */
-		createTable = context.intVal == 0;
-
-		log_trace("schema_prepare_pgcopydb_table_size: %d %s",
-				  context.intVal,
-				  createTable ? "create" : "skip");
 	}
 
-	if (createTable || force)
+	/*
+	 * Now the table does not exists, and we have to decide if we want to make
+	 * it a persitent table in the possibly new schema "pgcopydb" (cache ==
+	 * true), or a temporary table (cache == false).
+	 */
+	if (cache)
 	{
-		char *sql = listSourceTableSizeSQL[filters->type].sql;
+		char *createSchema = "create schema if not exists pgcopydb";
 
-		if (!pgsql_execute(pgsql, sql))
+		if (!pgsql_execute(pgsql, createSchema))
 		{
 			log_error("Failed to compute table size, see above for details");
 			return false;
 		}
+	}
 
-		char *createIndex = "create index on pgcopydb.table_size(oid)";
+	char *tablename = "pgcopydb_table_size";
+	char sql[BUFSIZE] = { 0 };
+	int len = 0;
 
-		if (!pgsql_execute(pgsql, createIndex))
-		{
-			log_error("Failed to compute table size, see above for details");
-			return false;
-		}
-
-		*createdTableSizeTable = true;
+	if (cache)
+	{
+		len =
+			sformat(sql, sizeof(sql),
+					"create table if not exists pgcopydb.%s as %s",
+					tablename,
+					listSourceTableSizeSQL[filters->type].sql);
 	}
 	else
 	{
-		*createdTableSizeTable = false;
-
-		log_debug("Table pgcopydb.table_size already exists, re-using it");
+		len =
+			sformat(sql, sizeof(sql),
+					"create temp table %s  on commit drop as %s",
+					tablename,
+					listSourceTableSizeSQL[filters->type].sql);
 	}
+
+	if (sizeof(sql) <= len)
+	{
+		log_error("Failed to prepare create pgcopydb_table_size query "
+				  "buffer: %lld bytes are needed, we allocated %lld only",
+				  (long long) len,
+				  (long long) sizeof(sql));
+		return false;
+	}
+
+	if (!pgsql_execute(pgsql, sql))
+	{
+		log_error("Failed to compute table size, see above for details");
+		return false;
+	}
+
+	char *createIndex = "create index on pgcopydb_table_size(oid)";
+
+	if (!pgsql_execute(pgsql, createIndex))
+	{
+		log_error("Failed to compute table size, see above for details");
+		return false;
+	}
+
+	/* we only consider that we created the cache when cache is true */
+	*createdTableSizeTable = cache;
 
 	return true;
 }
 
 
 /*
- * schema_drop_pgcopydb_table_size drops the pgcopydb.table_size table.
+ * schema_drop_pgcopydb_table_size drops the pgcopydb.pgcopydb_table_size
+ * table.
  */
 bool
 schema_drop_pgcopydb_table_size(PGSQL *pgsql)
 {
-	char *sql = "drop table if exists pgcopydb.table_size cascade";
+	char *sql = "drop table if exists pgcopydb.pgcopydb_table_size cascade";
 
 	if (!pgsql_execute(pgsql, sql))
 	{
@@ -658,7 +689,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
 		"         join pg_roles auth ON auth.oid = c.relowner"
-		"         left join pgcopydb.table_size ts on ts.oid = c.oid"
+		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* find a copy partition key candidate */
 		"         left join lateral ("
@@ -715,7 +746,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 		"         join pg_roles auth ON auth.oid = c.relowner"
-		"         left join pgcopydb.table_size ts on ts.oid = c.oid"
+		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* include-only-table */
 		"         join pg_temp.filter_include_only_table inc "
@@ -774,7 +805,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 		"         join pg_roles auth ON auth.oid = c.relowner"
-		"         left join pgcopydb.table_size ts on ts.oid = c.oid"
+		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -847,7 +878,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 		"         join pg_roles auth ON auth.oid = c.relowner"
-		"         left join pgcopydb.table_size ts on ts.oid = c.oid"
+		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* include-only-table */
 		"    left join pg_temp.filter_include_only_table inc "
@@ -909,7 +940,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 		"         join pg_roles auth ON auth.oid = c.relowner"
-		"         left join pgcopydb.table_size ts on ts.oid = c.oid"
+		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -1049,7 +1080,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
 		"         join pg_roles auth ON auth.oid = r.relowner"
-		"         left join pgcopydb.table_size ts on ts.oid = r.oid"
+		"         left join pgcopydb_table_size ts on ts.oid = r.oid"
 
 		"   where r.relkind = 'r' and r.relpersistence in ('p', 'u')  "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
@@ -1090,7 +1121,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
 		"         join pg_roles auth ON auth.oid = r.relowner"
-		"         left join pgcopydb.table_size ts on ts.oid = r.oid"
+		"         left join pgcopydb_table_size ts on ts.oid = r.oid"
 
 		/* include-only-table */
 		"         join pg_temp.filter_include_only_table inc "
@@ -1136,7 +1167,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
 		"         join pg_roles auth ON auth.oid = r.relowner"
-		"         left join pgcopydb.table_size ts on ts.oid = r.oid"
+		"         left join pgcopydb_table_size ts on ts.oid = r.oid"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -1196,7 +1227,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
 		"         join pg_roles auth ON auth.oid = r.relowner"
-		"         left join pgcopydb.table_size ts on ts.oid = r.oid"
+		"         left join pgcopydb_table_size ts on ts.oid = r.oid"
 
 		/* include-only-table */
 		"    left join pg_temp.filter_include_only_table inc "
@@ -1245,7 +1276,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
 		"         join pg_roles auth ON auth.oid = r.relowner"
-		"         left join pgcopydb.table_size ts on ts.oid = r.oid"
+		"         left join pgcopydb_table_size ts on ts.oid = r.oid"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -2636,7 +2667,7 @@ schema_list_partitions(PGSQL *pgsql, SourceTable *table, uint64_t partSize)
 		" t (parts) as "
 		" ( "
 		"   select ceil(bytes::float / $1) as parts "
-		"     from pgcopydb.table_size "
+		"     from pgcopydb_table_size "
 		"     where oid = $2 "
 		"	union all "
 		"	select 1 as parts "

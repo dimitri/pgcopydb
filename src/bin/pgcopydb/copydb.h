@@ -209,6 +209,11 @@ typedef struct CopyDataSpec
 	Queue indexQueue;
 
 	DumpPaths dumpPaths;
+
+	/* results from calling has_database_privilege() on the source */
+	bool hasDBCreatePrivilege;
+	bool hasDBTempPrivilege;
+
 	SourceExtensionArray extensionArray;
 	SourceCollationArray collationArray;
 	SourceTableArray sourceTableArray;

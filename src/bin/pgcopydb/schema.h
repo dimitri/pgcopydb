@@ -224,6 +224,11 @@ typedef struct SourceDependArray
 	SourceDepend *array;         /* malloc'ed area */
 } SourceDependArray;
 
+
+bool schema_query_privileges(PGSQL *pgsql,
+							 bool *hasDBCreatePrivilage,
+							 bool *hasDBTempPrivilege);
+
 bool schema_list_ext_schemas(PGSQL *pgsql, SourceSchemaArray *array);
 
 bool schema_list_extensions(PGSQL *pgsql, SourceExtensionArray *extArray);
@@ -232,7 +237,9 @@ bool schema_list_collations(PGSQL *pgsql, SourceCollationArray *array);
 
 bool schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
 										SourceFilters *filters,
-										bool force,
+										bool hasDBCreatePrivilege,
+										bool cache,
+										bool dropCache,
 										bool *createdTableSizeTable);
 
 bool schema_drop_pgcopydb_table_size(PGSQL *pgsql);

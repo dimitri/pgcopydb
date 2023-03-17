@@ -63,6 +63,53 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 		}
 	}
 
+	/* check if we're connected to a standby server, which we don't support */
+	bool pg_is_in_recovery = false;
+
+	if (!pgsql_is_in_recovery(src, &pg_is_in_recovery))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (pg_is_in_recovery)
+	{
+		log_fatal("Connected to a standby server where pg_is_in_recovery(): "
+				  "pgcopydb does not support operating on standby server "
+				  "at this point, as it needs to create temp tables");
+		return false;
+	}
+
+	/* check if we have needed privileges here */
+	if (!schema_query_privileges(src,
+								 &(specs->hasDBCreatePrivilege),
+								 &(specs->hasDBTempPrivilege)))
+	{
+		log_error("Failed to query database privileges, see above for details");
+		return false;
+	}
+
+	if (!specs->hasDBTempPrivilege)
+	{
+		log_fatal("Connecting with a role that does not have TEMP privileges "
+				  "on the current database on the source server");
+		return false;
+	}
+
+	if (specs->hasDBCreatePrivilege)
+	{
+		if (!pgsql_prepend_search_path(src, "pgcopydb"))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+	else
+	{
+		log_warn("Connecting with a role that does not have CREATE privileges "
+				 "on the source database discards pg_table_size() caching");
+	}
+
 	/* first, are we doing extensions? */
 	if (specs->section == DATA_SECTION_ALL ||
 		specs->section == DATA_SECTION_EXTENSION)
@@ -108,7 +155,9 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 		 */
 		if (!schema_prepare_pgcopydb_table_size(src,
 												&(specs->filters),
-												false, /* force */
+												specs->hasDBCreatePrivilege,
+												false, /* cache */
+												false, /* dropCache */
 												&createdTableSizeTable))
 		{
 			/* errors have already been logged */
