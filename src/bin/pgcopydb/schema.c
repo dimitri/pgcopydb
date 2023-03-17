@@ -547,10 +547,6 @@ schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
 		}
 	}
 
-	log_debug("listSourceTablesSQL[%s]", filterTypeToString(filters->type));
-
-	bool createTable = false;
-
 	if ((cache || dropCache) && !hasDBCreatePrivilege)
 	{
 		log_fatal("Connecting with a role that does not have CREATE privileges "
@@ -558,6 +554,40 @@ schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
 		return false;
 	}
 
+	/*
+	 * See if a pgcopydb.pgcopydb_table_size table already exists.
+	 */
+	bool exists = false;
+
+	if (dropCache)
+	{
+		if (!schema_drop_pgcopydb_table_size(pgsql))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+	else
+	{
+		if (!pgsql_table_exists(pgsql, "pgcopydb", "pgcopydb_table_size", &exists))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (exists)
+		{
+			log_notice("Table pgcopydb.pgcopydb_table_size already exists, "
+					   "re-using it");
+			return true;
+		}
+	}
+
+	/*
+	 * Now the table does not exists, and we have to decide if we want to make
+	 * it a persitent table in the possibly new schema "pgcopydb" (cache ==
+	 * true), or a temporary table (cache == false).
+	 */
 	if (cache)
 	{
 		char *createSchema = "create schema if not exists pgcopydb";
@@ -566,70 +596,6 @@ schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
 		{
 			log_error("Failed to compute table size, see above for details");
 			return false;
-		}
-
-		/*
-		 * When the dropCache option has been used, we DROP TABLE IF EXISTS and
-		 * then create it again (cache invalidation).
-		 */
-		if (dropCache)
-		{
-			if (!schema_drop_pgcopydb_table_size(pgsql))
-			{
-				/* errors have already been logged */
-				return false;
-			}
-
-			createTable = true;
-		}
-		else
-		{
-			char *existsQuery =
-				"select 1 "
-				"  from pg_class c "
-				"       join pg_namespace n on n.oid = c.relnamespace "
-				" where n.nspname = 'pgcopydb' "
-				"   and c.relname = 'pgcopydb_table_size'";
-
-			SingleValueResultContext context = { { 0 }, PGSQL_RESULT_INT, false };
-
-			if (!pgsql_execute_with_params(pgsql, existsQuery, 0, NULL, NULL,
-										   &context, &fetchedRows))
-			{
-				log_error("Failed to check if "
-						  "\"pgcopydb\".\"pgcopydd_table_size\" exists");
-				log_error("Failed to compute table size, "
-						  "see above for details");
-				return false;
-			}
-
-			if (!context.parsedOk)
-			{
-				log_error("Failed to check if "
-						  " \"pgcopydb\".\"pgcopydb_table_size\" exists");
-				log_error("Failed to compute table size, "
-						  "see above for details");
-				return false;
-			}
-
-			/*
-			 * If the exists query returns no rows, create our table:
-			 *  pgcopydb.pgcopydb_table_size
-			 */
-			createTable = context.intVal == 0;
-
-			log_trace("schema_prepare_pgcopydb_table_size: %d %s",
-					  context.intVal,
-					  createTable ? "create" : "skip");
-
-			if (!createTable)
-			{
-				*createdTableSizeTable = false;
-
-				log_notice("Table pgcopydb_table_size already exists, re-using it");
-
-				return true;
-			}
 		}
 	}
 

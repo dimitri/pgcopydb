@@ -489,6 +489,11 @@ bool pgsql_drop_replication_slot(PGSQL *pgsql, const char *slotName);
 
 bool pgsql_role_exists(PGSQL *pgsql, const char *roleName, bool *exists);
 
+bool pgsql_table_exists(PGSQL *pgsql,
+						const char *relname,
+						const char *nspname,
+						bool *exists);
+
 
 /*
  * pgcopydb sentinel is a table that's created on the source database and

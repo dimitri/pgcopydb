@@ -4480,6 +4480,53 @@ parseReplicationSlot(void *ctx, PGresult *result)
 
 
 /*
+ * pgsql_table_exists checks that a role with the given table exists on the
+ * Postgres server.
+ */
+bool
+pgsql_table_exists(PGSQL *pgsql,
+				   const char *nspname,
+				   const char *relname,
+				   bool *exists)
+{
+	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_INT, false };
+
+	char *existsQuery =
+		"select 1 "
+		"  from pg_class c "
+		"       join pg_namespace n on n.oid = c.relnamespace "
+		" where n.nspname = $1 "
+		"   and c.relname = $2";
+
+	int paramCount = 2;
+	const Oid paramTypes[2] = { TEXTOID, TEXTOID };
+	const char *paramValues[2] = { nspname, relname };
+
+	if (!pgsql_execute_with_params(pgsql, existsQuery,
+								   paramCount, paramTypes, paramValues,
+								   &context, &fetchedRows))
+	{
+		log_error("Failed to check if \"%s\".\"%s\" exists", nspname, relname);
+		return false;
+	}
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to check if \"%s\".\"%s\" exists", nspname, relname);
+		return false;
+	}
+
+	/*
+	 * If the exists query returns no rows, create our table:
+	 *  pgcopydb.pgcopydb_table_size
+	 */
+	*exists = context.intVal == 1;
+
+	return true;
+}
+
+
+/*
  * pgsql_role_exists checks that a role with the given roleName exists on the
  * Postgres server.
  */

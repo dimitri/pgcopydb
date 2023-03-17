@@ -667,6 +667,12 @@ cli_list_tables(int argc, char **argv)
 		}
 	}
 
+	if (!pgsql_commit(&pgsql))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
 	/* compute total bytes and total reltuples, pretty print them */
 	uint64_t totalBytes = 0;
 	uint64_t totalTuples = 0;
@@ -720,12 +726,6 @@ cli_list_tables(int argc, char **argv)
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 	}
-
-	if (!pgsql_commit(&pgsql))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
-	}
 }
 
 
@@ -764,6 +764,12 @@ cli_list_table_parts(int argc, char **argv)
 		exit(EXIT_CODE_SOURCE);
 	}
 
+	if (!pgsql_begin(&pgsql))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
 	/*
 	 * Build a filter that includes only the given target table, our command
 	 * line is built to work on a single table at a time (--schema-name default
@@ -784,6 +790,27 @@ cli_list_table_parts(int argc, char **argv)
 			.array = tableFilter
 		}
 	};
+
+	/* just don't query for privileges, assume read-only */
+	bool hasDBCreatePrivilege = false;
+	bool createdTableSizeTable = false;
+
+	if (!pgsql_prepend_search_path(&pgsql, "pgcopydb"))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	if (!schema_prepare_pgcopydb_table_size(&pgsql,
+											&filter,
+											hasDBCreatePrivilege,
+											false, /* cache */
+											false, /* dropCache */
+											&createdTableSizeTable))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
 
 	SourceTableArray tableArray = { 0 };
 
@@ -820,6 +847,12 @@ cli_list_table_parts(int argc, char **argv)
 								listDBoptions.splitTablesLargerThan))
 	{
 		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!pgsql_commit(&pgsql))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
 	}
 
 	if (table->partsArray.count <= 1)
