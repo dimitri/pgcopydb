@@ -1,6 +1,6 @@
 BEGIN; -- {"xid":491,"lsn":"0/244B928","timestamp":"2023-03-14 15:22:22.746872+0000"}
-INSERT INTO "public"."rental" ("rental_id", "rental_date", "inventory_id", "customer_id", "return_date", "staff_id", "last_update") VALUES (16050 , '2022-06-01 00:00:00+00' , 371 , 291 , NULL, 1 , '2022-06-01 00:00:00+00');
-INSERT INTO "public"."payment_p2022_06" ("payment_id", "customer_id", "staff_id", "rental_id", "amount", "payment_date") VALUES (32099 , 291 , 1 , 16050 , 5.99 , '2022-06-01 00:00:00+00');
+INSERT INTO "public"."rental" ("rental_id", "rental_date", "inventory_id", "customer_id", "return_date", "staff_id", "last_update") overriding system value VALUES (16050 , '2022-06-01 00:00:00+00' , 371 , 291 , NULL, 1 , '2022-06-01 00:00:00+00');
+INSERT INTO "public"."payment_p2022_06" ("payment_id", "customer_id", "staff_id", "rental_id", "amount", "payment_date") overriding system value VALUES (32099 , 291 , 1 , 16050 , 5.99 , '2022-06-01 00:00:00+00');
 COMMIT; -- {"xid":491,"lsn":"0/244BD90","timestamp":"2023-03-14 15:22:22.746872+0000"}
 BEGIN; -- {"xid":492,"lsn":"0/244BD90","timestamp":"2023-03-14 15:22:22.747880+0000"}
 UPDATE "public"."payment_p2022_02" SET "payment_id" = 23757 , "customer_id" = 116 , "staff_id" = 2 , "rental_id" = 14763 , "amount" = 11.95 , "payment_date" = '2022-02-11 03:52:25.634006+00' WHERE "payment_id" = 23757  and "customer_id" = 116  and "staff_id" = 2  and "rental_id" = 14763  and "amount" = 11.99  and "payment_date" = '2022-02-11 03:52:25.634006+00' ;
