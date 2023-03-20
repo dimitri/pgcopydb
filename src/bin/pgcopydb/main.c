@@ -43,6 +43,15 @@ static void log_semaphore_unlink_atexit(void);
 int
 main(int argc, char **argv)
 {
+	/*
+	 * Create a new process group and set current process as its leader.  This
+	 * allows the process group to be easily controlled, without affecting any
+	 * wrapper processes around the pgcopydb command. No errors are defined for
+	 * setpgrp and it has no effect when the calling process is a session
+	 * leader.
+	 */
+	setpgrp();
+
 	CommandLine command = root;
 
 	/* allows changing process title in ps/top/ptree etc */
