@@ -61,8 +61,8 @@ static CommandLine list_tables_command =
 		" --source ... ",
 		"  --source            Postgres URI to the source database\n"
 		"  --filter <filename> Use the filters defined in <filename>\n"
-		"  --cache             Cache table size in relation pgcopydb.table_size\n"
-		"  --drop-cache        Drop relation pgcopydb.table_size\n"
+		"  --cache             Cache table size in relation pgcopydb.pgcopydb_table_size\n"
+		"  --drop-cache        Drop relation pgcopydb.pgcopydb_table_size\n"
 		"  --list-skipped      List only tables that are setup to be skipped\n"
 		"  --without-pkey      List only tables that have no primary key\n",
 		cli_list_db_getopts,
@@ -597,7 +597,7 @@ cli_list_tables(int argc, char **argv)
 
 	if (listDBoptions.dropCache)
 	{
-		log_info("Dropping cache table pgcopydb.table_size");
+		log_info("Dropping cache table pgcopydb.pgcopydb_table_size");
 		if (!schema_drop_pgcopydb_table_size(&pgsql))
 		{
 			exit(EXIT_CODE_SOURCE);
@@ -612,11 +612,32 @@ cli_list_tables(int argc, char **argv)
 		exit(EXIT_CODE_SOURCE);
 	}
 
+	bool hasDBCreatePrivilege;
+	bool hasDBTempPrivilege;
+
+	/* check if we have needed privileges here */
+	if (!schema_query_privileges(&pgsql,
+								 &hasDBCreatePrivilege,
+								 &hasDBTempPrivilege))
+	{
+		log_error("Failed to query database privileges, see above for details");
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	if (!pgsql_prepend_search_path(&pgsql, "pgcopydb"))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
 	bool createdTableSizeTable = false;
+	bool dropCache = listDBoptions.cache;
 
 	if (!schema_prepare_pgcopydb_table_size(&pgsql,
 											&filters,
-											listDBoptions.cache, /* force */
+											hasDBCreatePrivilege,
+											listDBoptions.cache,
+											dropCache,
 											&createdTableSizeTable))
 	{
 		/* errors have already been logged */
@@ -644,6 +665,12 @@ cli_list_tables(int argc, char **argv)
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
+	}
+
+	if (!pgsql_commit(&pgsql))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
 	}
 
 	/* compute total bytes and total reltuples, pretty print them */
@@ -699,12 +726,6 @@ cli_list_tables(int argc, char **argv)
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 	}
-
-	if (!pgsql_commit(&pgsql))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
-	}
 }
 
 
@@ -743,6 +764,12 @@ cli_list_table_parts(int argc, char **argv)
 		exit(EXIT_CODE_SOURCE);
 	}
 
+	if (!pgsql_begin(&pgsql))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
 	/*
 	 * Build a filter that includes only the given target table, our command
 	 * line is built to work on a single table at a time (--schema-name default
@@ -763,6 +790,27 @@ cli_list_table_parts(int argc, char **argv)
 			.array = tableFilter
 		}
 	};
+
+	/* just don't query for privileges, assume read-only */
+	bool hasDBCreatePrivilege = false;
+	bool createdTableSizeTable = false;
+
+	if (!pgsql_prepend_search_path(&pgsql, "pgcopydb"))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	if (!schema_prepare_pgcopydb_table_size(&pgsql,
+											&filter,
+											hasDBCreatePrivilege,
+											false, /* cache */
+											false, /* dropCache */
+											&createdTableSizeTable))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
 
 	SourceTableArray tableArray = { 0 };
 
@@ -799,6 +847,12 @@ cli_list_table_parts(int argc, char **argv)
 								listDBoptions.splitTablesLargerThan))
 	{
 		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!pgsql_commit(&pgsql))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
 	}
 
 	if (table->partsArray.count <= 1)

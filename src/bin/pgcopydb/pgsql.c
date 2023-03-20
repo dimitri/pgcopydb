@@ -1095,6 +1095,195 @@ pgsql_set_transaction(PGSQL *pgsql,
 
 
 /*
+ * pgsql_is_in_recovery connects to PostgreSQL and sets the is_in_recovery
+ * boolean to the result of the SELECT pg_is_in_recovery() query. It returns
+ * false when something went wrong doing that.
+ */
+bool
+pgsql_is_in_recovery(PGSQL *pgsql, bool *is_in_recovery)
+{
+	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_BOOL, false };
+	char *sql = "SELECT pg_is_in_recovery()";
+
+	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+								   &context, &parseSingleValueResult))
+	{
+		/* errors have been logged already */
+		return false;
+	}
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to get result from pg_is_in_recovery()");
+		return false;
+	}
+
+	*is_in_recovery = context.boolVal;
+
+	return true;
+}
+
+
+/*
+ * pgsql_has_database_privilege calls has_database_privilege() and copies the
+ * result in the granted boolean pointer given.
+ */
+bool
+pgsql_has_database_privilege(PGSQL *pgsql, const char *privilege, bool *granted)
+{
+	SingleValueResultContext parseContext = { { 0 }, PGSQL_RESULT_BOOL, false };
+
+	char *sql = "select has_database_privilege(current_database(), $1);";
+
+	int paramCount = 1;
+	Oid paramTypes[1] = { TEXTOID };
+	const char *paramValues[1] = { privilege };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   &parseContext, &parseSingleValueResult))
+	{
+		log_error("Failed to query database privileges");
+		return false;
+	}
+
+	if (!parseContext.parsedOk)
+	{
+		log_error("Failed to query database privileges");
+		return false;
+	}
+
+	*granted = parseContext.boolVal;
+
+	return true;
+}
+
+
+/*
+ * pgsql_has_sequence_privilege calls has_sequence_privilege() and copies the
+ * result in the granted boolean pointer given.
+ */
+bool
+pgsql_has_sequence_privilege(PGSQL *pgsql,
+							 const char *seqname,
+							 const char *privilege,
+							 bool *granted)
+{
+	SingleValueResultContext parseContext = { { 0 }, PGSQL_RESULT_BOOL, false };
+
+	char *sql = "select has_sequence_privilege($1, $2);";
+
+	int paramCount = 2;
+	Oid paramTypes[2] = { TEXTOID, TEXTOID };
+	const char *paramValues[2] = { seqname, privilege };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   &parseContext, &parseSingleValueResult))
+	{
+		log_error("Failed to query privileges for sequence \"%s\"", seqname);
+		return false;
+	}
+
+	if (!parseContext.parsedOk)
+	{
+		log_error("Failed to query privileges for sequence \"%s\"", seqname);
+		return false;
+	}
+
+	*granted = parseContext.boolVal;
+
+	return true;
+}
+
+
+/*
+ * pgsql_get_search_path runs the query "show search_path" and copies the
+ * result in the given pre-allocated string buffer.
+ */
+bool
+pgsql_get_search_path(PGSQL *pgsql, char *search_path, size_t size)
+{
+	char *sql = "select current_setting('search_path')";
+
+	SingleValueResultContext parseContext = { { 0 }, PGSQL_RESULT_STRING, false };
+
+	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+								   &parseContext, &parseSingleValueResult))
+	{
+		log_error("Failed to get current search_path");
+		return false;
+	}
+
+	if (!parseContext.parsedOk)
+	{
+		log_error("Failed to get current search_path");
+		return false;
+	}
+
+	strlcpy(search_path, parseContext.strVal, size);
+
+	return true;
+}
+
+
+/*
+ * pgsql_set_search_path runs the query "set [ local ] search_path ..."
+ */
+bool
+pgsql_set_search_path(PGSQL *pgsql, char *search_path, bool local)
+{
+	char sql[BUFSIZE] = { 0 };
+
+	sformat(sql, sizeof(sql), "set %s search_path to %s",
+			local ? "local" : "", search_path);
+
+	if (!pgsql_execute(pgsql, sql))
+	{
+		log_error("Failed to set current search_path to: %s", search_path);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * pgsql_prepend_search_path prepends Postgres search path with the given
+ * namespace, only for the current transaction, using SET LOCAL.
+ */
+bool
+pgsql_prepend_search_path(PGSQL *pgsql, const char *namespace)
+{
+	char search_path[BUFSIZE] = { 0 };
+
+	if (!pgsql_get_search_path(pgsql, search_path, sizeof(search_path)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (IS_EMPTY_STRING_BUFFER(search_path))
+	{
+		return pgsql_set_search_path(pgsql, (char *) namespace, true);
+	}
+	else
+	{
+		char new_search_path[BUFSIZE] = { 0 };
+
+		sformat(new_search_path, sizeof(new_search_path),
+				"%s, %s",
+				namespace,
+				search_path);
+
+		return pgsql_set_search_path(pgsql, new_search_path, true);
+	}
+
+	return false;
+}
+
+
+/*
  * pgsql_export_snapshot calls pg_export_snapshot() and copies the text into
  * the given string buffer, that must have been allocated by the caller.
  */
@@ -2053,13 +2242,15 @@ pgsql_get_sequence(PGSQL *pgsql, const char *nspname, const char *relname,
 	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
 								   &context, &getSequenceValue))
 	{
-		log_error("Failed to retrieve current state from the monitor");
+		log_error("Failed to retrieve metadata for sequence \"%s\".\"%s\"",
+				  nspname, relname);
 		return false;
 	}
 
 	if (!context.parsedOk)
 	{
-		log_error("Failed to parse current state from the monitor");
+		log_error("Failed to retrieve metadata for sequence \"%s\".\"%s\"",
+				  nspname, relname);
 		return false;
 	}
 
@@ -4323,6 +4514,53 @@ parseReplicationSlot(void *ctx, PGresult *result)
 	}
 
 	context->parsedOK = true;
+}
+
+
+/*
+ * pgsql_table_exists checks that a role with the given table exists on the
+ * Postgres server.
+ */
+bool
+pgsql_table_exists(PGSQL *pgsql,
+				   const char *nspname,
+				   const char *relname,
+				   bool *exists)
+{
+	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_INT, false };
+
+	char *existsQuery =
+		"select 1 "
+		"  from pg_class c "
+		"       join pg_namespace n on n.oid = c.relnamespace "
+		" where n.nspname = $1 "
+		"   and c.relname = $2";
+
+	int paramCount = 2;
+	const Oid paramTypes[2] = { TEXTOID, TEXTOID };
+	const char *paramValues[2] = { nspname, relname };
+
+	if (!pgsql_execute_with_params(pgsql, existsQuery,
+								   paramCount, paramTypes, paramValues,
+								   &context, &fetchedRows))
+	{
+		log_error("Failed to check if \"%s\".\"%s\" exists", nspname, relname);
+		return false;
+	}
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to check if \"%s\".\"%s\" exists", nspname, relname);
+		return false;
+	}
+
+	/*
+	 * If the exists query returns no rows, create our table:
+	 *  pgcopydb.pgcopydb_table_size
+	 */
+	*exists = context.intVal == 1;
+
+	return true;
 }
 
 
