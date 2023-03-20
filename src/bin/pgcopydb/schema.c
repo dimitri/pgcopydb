@@ -324,7 +324,7 @@ schema_list_collations(PGSQL *pgsql, SourceCollationArray *array)
 		"       join pg_namespace n on n.oid = c.relnamespace "
 		"       join pg_collation coll on coll.oid = attcollation "
 		"       join pg_roles auth ON auth.oid = coll.collowner "
-		"       join pg_namespace cn on n.oid = coll.collnamespace "
+		"       join pg_namespace cn on cn.oid = coll.collnamespace "
 		" where collname <> 'default' "
 		"   and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"order by colloid";
