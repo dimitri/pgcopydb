@@ -1546,6 +1546,8 @@ stream_write_insert(FILE *out, LogicalMessageInsert *insert)
 		}
 		FFORMAT(out, "%s", ")");
 
+		FFORMAT(out, "%s", " overriding system value ");
+
 		/* now loop over VALUES rows */
 		FFORMAT(out, "%s", " VALUES ");
 
