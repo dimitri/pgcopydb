@@ -34,7 +34,9 @@ queue_create(Queue *queue, char *name)
 		return false;
 	}
 
-	log_notice("Created message %s queue %d", queue->name, queue->qId);
+	log_notice("Created message %s queue %d (cleanup with ipcrm -q)",
+			   queue->name,
+			   queue->qId);
 
 	return true;
 }

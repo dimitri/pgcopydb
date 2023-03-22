@@ -183,7 +183,26 @@ set_logger()
 	 * Log messages go to stderr. We use colours when stderr is being shown
 	 * directly to the user to make it easier to spot warnings and errors.
 	 */
-	log_use_colors(isatty(fileno(stderr)));
+	bool interactive = isatty(fileno(stderr));
+
+	log_use_colors(interactive);
+	log_show_file_line(!interactive);
+
+	char *log_time_format_default =
+		interactive ? LOG_TFORMAT_SHORT : LOG_TFORMAT_LONG;
+
+	char log_time_format[128] = { 0 };
+
+	if (!get_env_copy_with_fallback(PGCOPYDB_LOG_TIME_FORMAT,
+									log_time_format,
+									sizeof(log_time_format),
+									log_time_format_default))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_set_tformat(log_time_format);
 
 	/* initialize the semaphore used for locking log output */
 	if (!semaphore_init(&log_semaphore))

@@ -412,9 +412,9 @@ pgsql_finish(PGSQL *pgsql)
 					sizeof(scrubbedConnectionString));
 		}
 
-		log_debug("Disconnecting from [%s] \"%s\"",
-				  ConnectionTypeToString(pgsql->connectionType),
-				  scrubbedConnectionString);
+		log_sql("Disconnecting from [%s] \"%s\"",
+				ConnectionTypeToString(pgsql->connectionType),
+				scrubbedConnectionString);
 		PQfinish(pgsql->connection);
 		pgsql->connection = NULL;
 
@@ -493,9 +493,9 @@ pgsql_open_connection(PGSQL *pgsql)
 	(void) parse_and_scrub_connection_string(pgsql->connectionString,
 											 scrubbedConnectionString);
 
-	log_debug("Connecting to [%s] \"%s\"",
-			  ConnectionTypeToString(pgsql->connectionType),
-			  scrubbedConnectionString);
+	log_sql("Connecting to [%s] \"%s\"",
+			ConnectionTypeToString(pgsql->connectionType),
+			scrubbedConnectionString);
 
 	/* use our own application_name, unless the environment already is set */
 	if (!env_exists("PGAPPNAME"))
@@ -636,10 +636,10 @@ pgsql_retry_open_connection(PGSQL *pgsql)
 		/* we have milliseconds, pg_usleep() wants microseconds */
 		(void) pg_usleep(sleep * 1000);
 
-		log_debug("PQping(%s): slept %d ms on attempt %d",
-				  scrubbedConnectionString,
-				  pgsql->retryPolicy.sleepTime,
-				  pgsql->retryPolicy.attempts);
+		log_sql("PQping(%s): slept %d ms on attempt %d",
+				scrubbedConnectionString,
+				pgsql->retryPolicy.sleepTime,
+				pgsql->retryPolicy.attempts);
 
 		switch (PQping(pgsql->connectionString))
 		{
@@ -650,8 +650,8 @@ pgsql_retry_open_connection(PGSQL *pgsql)
 			 */
 			case PQPING_OK:
 			{
-				log_debug("PQping OK after %d attempts",
-						  pgsql->retryPolicy.attempts);
+				log_sql("PQping OK after %d attempts",
+						pgsql->retryPolicy.attempts);
 
 				/*
 				 * Ping is now ok, and connection is still NULL because the
@@ -699,9 +699,9 @@ pgsql_retry_open_connection(PGSQL *pgsql)
 						 * otherwise accept that this may happen as a transient
 						 * state.
 						 */
-						(void) log_connection_error(pgsql->connection, LOG_DEBUG);
+						(void) log_connection_error(pgsql->connection, LOG_SQL);
 
-						log_debug("Failed to connect after successful ping");
+						log_sql("Failed to connect after successful ping");
 					}
 				}
 				break;
@@ -791,9 +791,9 @@ pgsql_retry_open_connection(PGSQL *pgsql)
 			case PQPING_NO_ATTEMPT:
 			{
 				lastWarningMessage = PQPING_NO_ATTEMPT;
-				log_debug("Failed to ping server \"%s\" because of "
-						  "client-side problems (no attempt were made)",
-						  scrubbedConnectionString);
+				log_sql("Failed to ping server \"%s\" because of "
+						"client-side problems (no attempt were made)",
+						scrubbedConnectionString);
 				break;
 			}
 		}
@@ -838,7 +838,7 @@ pgAutoCtlDefaultNoticeProcessor(void *arg, const char *message)
 
 /*
  * pgAutoCtlDebugNoticeProcessor is our PostgreSQL libpq Notice Processing to
- * use when wanting to send NOTICE, WARNING, HINT as log_debug messages.
+ * use when wanting to send NOTICE, WARNING, HINT as log_sql messages.
  */
 void
 pgAutoCtlDebugNoticeProcessor(void *arg, const char *message)
@@ -850,7 +850,7 @@ pgAutoCtlDebugNoticeProcessor(void *arg, const char *message)
 
 	for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
 	{
-		log_debug("%s", lines[lineNumber]);
+		log_sql("%s", lines[lineNumber]);
 	}
 
 	free(m);
@@ -1369,7 +1369,7 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 	char *endpoint =
 		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
 
-	log_notice("[%s] %s;", endpoint, sql);
+	log_sql("[%s] %s;", endpoint, sql);
 
 	if (paramCount > 0)
 	{
@@ -1402,7 +1402,7 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 			return false;
 		}
 
-		log_notice("%s", debugParameters->data);
+		log_sql("%s", debugParameters->data);
 	}
 
 	if (paramCount == 0)
@@ -1965,7 +1965,7 @@ pg_copy_from_stdin(PGSQL *pgsql, const char *qname)
 	char *endpoint =
 		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
 
-	log_debug("[%s] %s;", endpoint, sql);
+	log_sql("[%s] %s;", endpoint, sql);
 
 	PGresult *res = PQexec(pgsql->connection, sql);
 
@@ -2118,7 +2118,7 @@ pg_copy_send_query(PGSQL *pgsql,
 		return false;
 	}
 
-	log_notice("%s;", sql);
+	log_sql("%s;", sql);
 
 	PGresult *res = PQexec(pgsql->connection, sql);
 
@@ -2374,10 +2374,10 @@ pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system)
 	PQclear(result);
 	clear_results(pgsql);
 
-	log_debug("IDENTIFY_SYSTEM: timeline %d, xlogpos %s, systemid %" PRIu64,
-			  system->timeline,
-			  system->xlogpos,
-			  system->identifier);
+	log_sql("IDENTIFY_SYSTEM: timeline %d, xlogpos %s, systemid %" PRIu64,
+			system->timeline,
+			system->xlogpos,
+			system->identifier);
 
 	if (!isContext.parsedOk)
 	{
@@ -2430,11 +2430,11 @@ pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system)
 		TimeLineHistoryEntry *current =
 			&(system->timelines.history[system->timelines.count - 1]);
 
-		log_debug("TIMELINE_HISTORY: \"%s\", timeline %d started at %X/%X",
-				  hContext.filename,
-				  current->tli,
-				  (uint32_t) (current->begin >> 32),
-				  (uint32_t) current->begin);
+		log_sql("TIMELINE_HISTORY: \"%s\", timeline %d started at %X/%X",
+				hContext.filename,
+				current->tli,
+				(uint32_t) (current->begin >> 32),
+				(uint32_t) current->begin);
 	}
 
 	if (connIsOurs)
@@ -2464,7 +2464,7 @@ parseIdentifySystemResult(void *ctx, PGresult *result)
 
 	if (PQntuples(result) == 0)
 	{
-		log_debug("parseIdentifySystem: query returned no rows");
+		log_sql("parseIdentifySystem: query returned no rows");
 		context->parsedOk = false;
 		return;
 	}
@@ -2526,7 +2526,7 @@ parseTimelineHistoryResult(void *ctx, PGresult *result)
 
 	if (PQntuples(result) == 0)
 	{
-		log_debug("parseTimelineHistory: query returned no rows");
+		log_sql("parseTimelineHistory: query returned no rows");
 		context->parsedOk = false;
 		return;
 	}
@@ -3327,9 +3327,9 @@ pgsql_start_replication(LogicalStreamClient *client)
 	/*
 	 * Start the replication, build the START_REPLICATION query.
 	 */
-	log_debug("starting log streaming at %X/%X (slot %s)",
-			  LSN_FORMAT_ARGS(client->startpos),
-			  client->slotName);
+	log_sql("starting log streaming at %X/%X (slot %s)",
+			LSN_FORMAT_ARGS(client->startpos),
+			client->slotName);
 
 	/* Initiate the replication stream at specified location */
 	PQExpBuffer query = createPQExpBuffer();
@@ -3385,7 +3385,7 @@ pgsql_start_replication(LogicalStreamClient *client)
 		return false;
 	}
 
-	log_debug("%s", query->data);
+	log_sql("%s", query->data);
 
 	PGresult *res = PQexec(pgsql->connection, query->data);
 
@@ -3400,7 +3400,7 @@ pgsql_start_replication(LogicalStreamClient *client)
 		return false;
 	}
 
-	log_debug("streaming initiated");
+	log_sql("streaming initiated");
 
 	destroyPQExpBuffer(query);
 
@@ -4100,7 +4100,7 @@ RetrieveWalSegSize(LogicalStreamClient *client)
 		return false;
 	}
 
-	log_debug("RetrieveWalSegSize: %d", client->WalSegSz);
+	log_sql("RetrieveWalSegSize: %d", client->WalSegSz);
 
 	return true;
 }
@@ -4431,8 +4431,8 @@ pgsql_create_replication_slot(PGSQL *pgsql,
 	const Oid paramTypes[2] = { TEXTOID, TEXTOID };
 	const char *paramValues[2] = { slotName, pluginStr };
 
-	log_debug("Creating logical replication slot \"%s\" with plugin \"%s\"",
-			  slotName, pluginStr);
+	log_sql("Creating logical replication slot \"%s\" with plugin \"%s\"",
+			slotName, pluginStr);
 
 	if (!pgsql_execute_with_params(pgsql, sql,
 								   paramCount, paramTypes, paramValues,

@@ -134,7 +134,7 @@ semaphore_create(Semaphore *semaphore)
 	}
 
 	/* to see this log line, change the default log level in set_logger() */
-	log_trace("Created semaphore %d", semaphore->semId);
+	log_notice("Created semaphore %d (cleanup with ipcrm -s)", semaphore->semId);
 
 	/* by default the Semaphore struct is initialized to { 0 }, fix it */
 	semaphore->initValue = semaphore->initValue == 0 ? 1 : semaphore->initValue;
