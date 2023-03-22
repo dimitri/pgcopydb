@@ -37,13 +37,16 @@ static struct {
   FILE *fp;
   int level;
   int quiet;
+  int showLineNumber;
   int useColors;
-} L;
+  char tformat[128];
+} L = { 0 };
 
 
 static const char *level_names[] = {
 	"TRACE",
 	"DEBUG",
+	"SQL",
 	"NOTICE",
 	"INFO",
 	"WARN",
@@ -54,6 +57,7 @@ static const char *level_names[] = {
 static const char *level_colors[] = {
   "\x1b[90m",					/* TRACE:  bright black (light gray) */
   "\x1b[34m",					/* DEBUG:  blue */
+  "\x1b[30m",					/* SQL:    black */
   "\x1b[36m",					/* NOTICE: cyan */
   "\x1b[32m",					/* INFO:   green */
   "\x1b[33m",					/* WARN:   yellow */
@@ -109,10 +113,21 @@ void log_use_colors(int enable) {
   L.useColors = enable ? 1 : 0;
 }
 
+
+void log_show_file_line(int enable) {
+  L.showLineNumber = enable ? 1 : 0;
+}
+
+
+void log_set_tformat(const char *tformat) {
+  strlcpy(L.tformat, tformat, sizeof(L.tformat));
+}
+
+
 void log_log(int level, const char *file, int line, const char *fmt, ...)
 {
-	time_t t;
-	struct tm *lt;
+  time_t t;
+  struct tm *lt;
 
   if (level < L.level) {
     return;
@@ -121,6 +136,12 @@ void log_log(int level, const char *file, int line, const char *fmt, ...)
   if (fmt == NULL)
   {
 	  return;
+  }
+
+  /* initialize L.tformat with default value, if necessary */
+  if (L.tformat[0] == '\0')
+  {
+	  strlcpy(L.tformat, LOG_TFORMAT_LONG, sizeof(L.tformat));
   }
 
   /* Acquire lock */
@@ -133,10 +154,10 @@ void log_log(int level, const char *file, int line, const char *fmt, ...)
   /* Log to stderr */
   if (!L.quiet) {
     va_list args;
-    char buf[16];
-	int showLineNumber = L.level <= 1;
+    char buf[128] = { 0 };
+	int showLineNumber = L.showLineNumber || L.level <= 1;
 
-    buf[strftime(buf, sizeof(buf), "%H:%M:%S", lt)] = '\0';
+    buf[strftime(buf, sizeof(buf), L.tformat, lt)] = '\0';
 
 	if (L.useColors)
 	{
@@ -153,7 +174,7 @@ void log_log(int level, const char *file, int line, const char *fmt, ...)
 	}
 	else
 	{
-		pg_fprintf(stderr, "%s %d %-5s ", buf, getpid(), level_names[level]);
+		pg_fprintf(stderr, "%s %d %-6s ", buf, getpid(), level_names[level]);
 
 		if (showLineNumber)
 		{
@@ -171,9 +192,14 @@ void log_log(int level, const char *file, int line, const char *fmt, ...)
   if (L.fp) {
     va_list args;
     char buf[32];
-    buf[strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", lt)] = '\0';
-    pg_fprintf(L.fp, "%s %d %-5s %s:%d: ",
+
+	/* always use the long time format when writting to file */
+    buf[strftime(buf, sizeof(buf), LOG_TFORMAT_LONG, lt)] = '\0';
+
+	/* always add all the details when writting to file */
+    pg_fprintf(L.fp, "%s %d %-6s %s:%d: ",
 			   buf, getpid(), level_names[level], file, line);
+
     va_start(args, fmt);
     pg_vfprintf(L.fp, fmt, args);
     va_end(args);
