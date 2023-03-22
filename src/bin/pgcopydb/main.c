@@ -13,6 +13,7 @@
 #endif
 
 #include "cli_root.h"
+#include "copydb.h"
 #include "defaults.h"
 #include "env_utils.h"
 #include "file_utils.h"
@@ -32,9 +33,10 @@ size_t last_status_len;         /* use to minimize length of clobber */
 
 Semaphore log_semaphore = { 0 }; /* allows inter-process locking */
 
+SysVResArray system_res_array = { 0 };
 
 static void set_logger(void);
-static void log_semaphore_unlink_atexit(void);
+static void unlink_system_res_atexit(void);
 
 
 /*
@@ -70,8 +72,8 @@ main(int argc, char **argv)
 	pg_logging_init(argv[0]);
 	#endif
 
-	/* register our logging clean-up atexit */
-	atexit(log_semaphore_unlink_atexit);
+	/* register our System V resources clean-up atexit */
+	atexit(unlink_system_res_atexit);
 
 	/*
 	 * When PGCOPYDB_DEBUG is set in the environment, provide the user
@@ -217,10 +219,12 @@ set_logger()
 
 
 /*
- * log_semaphore_unlink_atexit calls semaphore_unlink() atexit.
+ * unlink_system_res_atexit cleans-up System V resources that have been
+ * registered in the global array during run-time. It is registered as an
+ * atexit(3) facility.
  */
 static void
-log_semaphore_unlink_atexit(void)
+unlink_system_res_atexit(void)
 {
-	(void) semaphore_finish(&log_semaphore);
+	(void) copydb_cleanup_sysv_resources(&system_res_array);
 }
