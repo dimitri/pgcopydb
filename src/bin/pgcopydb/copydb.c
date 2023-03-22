@@ -1027,3 +1027,181 @@ copydb_wait_for_subprocesses()
 
 	return allReturnCodeAreZero;
 }
+
+
+/*
+ * copydb_register_sysv_semaphore registers a semaphore to our internal array
+ * of System V resources for cleanup at exit.
+ */
+bool
+copydb_register_sysv_semaphore(SysVResArray *array, Semaphore *semaphore)
+{
+	if (SYSV_RES_MAX_COUNT <= array->count)
+	{
+		log_fatal("Failed to register semaphore %d: "
+				  "resource array counts %d items already",
+				  semaphore->semId,
+				  array->count);
+		return false;
+	}
+
+	log_trace("copydb_register_sysv_semaphore[%d]: %d",
+			  array->count,
+			  semaphore->semId);
+
+	array->array[array->count].kind = SYSV_SEMAPHORE;
+	array->array[array->count].res.semaphore = semaphore;
+
+	++(array->count);
+
+	return true;
+}
+
+
+/*
+ * copydb_unregister_sysv_queue marks the given queue as unlinked already.
+ */
+bool
+copydb_unlink_sysv_semaphore(SysVResArray *array, Semaphore *semaphore)
+{
+	for (int i = 0; i < array->count; i++)
+	{
+		SysVRes *res = &(array->array[i]);
+
+		if (res->kind == SYSV_SEMAPHORE &&
+			res->res.semaphore->semId == semaphore->semId)
+		{
+			res->unlinked = true;
+			return true;
+		}
+	}
+
+	log_error("BUG: copydb_unlink_sysv_semaphore failed to find semaphore %d",
+			  semaphore->semId);
+
+	return false;
+}
+
+
+/*
+ * copydb_register_sysv_queue registers a semaphore to our internal array of
+ * System V resources for cleanup at exit.
+ */
+bool
+copydb_register_sysv_queue(SysVResArray *array, Queue *queue)
+{
+	if (SYSV_RES_MAX_COUNT <= array->count)
+	{
+		log_fatal("Failed to register semaphore %d: "
+				  "resource array counts %d items already",
+				  queue->qId,
+				  array->count);
+		return false;
+	}
+
+	log_trace("copydb_register_sysv_queue[%d]: %d",
+			  array->count,
+			  queue->qId);
+
+	array->array[array->count].kind = SYSV_QUEUE;
+	array->array[array->count].res.queue = queue;
+
+	++(array->count);
+
+	return true;
+}
+
+
+/*
+ * copydb_unregister_sysv_queue marks the given queue as unlinked already.
+ */
+bool
+copydb_unlink_sysv_queue(SysVResArray *array, Queue *queue)
+{
+	for (int i = 0; i < array->count; i++)
+	{
+		SysVRes *res = &(array->array[i]);
+
+		if (res->kind == SYSV_QUEUE && res->res.queue->qId == queue->qId)
+		{
+			res->unlinked = true;
+			return true;
+		}
+	}
+
+	log_error("BUG: copydb_unlink_sysv_queue failed to find queue %d",
+			  queue->qId);
+
+	return false;
+}
+
+
+/*
+ * copydb_cleanup_sysv_resources unlinks semaphores and queues that have been
+ * registered in the given array.
+ */
+bool
+copydb_cleanup_sysv_resources(SysVResArray *array)
+{
+	pid_t pid = getpid();
+
+	/*
+	 * Clean-up resources in the reverse order of their registering.
+	 *
+	 * This is particulary important for the logging semaphore, which is the
+	 * first resource that's registered in that array, and that we need until
+	 * the very end.
+	 */
+	for (int i = array->count - 1; 0 <= i; i--)
+	{
+		SysVRes *res = &(array->array[i]);
+
+		/* skip already unlinked System V resources */
+		if (res->unlinked)
+		{
+			continue;
+		}
+
+		switch (res->kind)
+		{
+			case SYSV_QUEUE:
+			{
+				Queue *queue = res->res.queue;
+
+				if (queue->owner == pid)
+				{
+					if (!queue_unlink(queue))
+					{
+						/* errors have already been logged */
+						return false;
+					}
+				}
+
+				break;
+			}
+
+			case SYSV_SEMAPHORE:
+			{
+				Semaphore *semaphore = res->res.semaphore;
+
+				if (!semaphore_finish(semaphore))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+
+				break;
+			}
+
+			default:
+			{
+				log_error("BUG: Failed to clean-up System V resource "
+						  " of unknown type: %d",
+						  res->kind);
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
