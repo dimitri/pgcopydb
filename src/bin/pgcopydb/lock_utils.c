@@ -11,6 +11,7 @@
 #include <sys/sem.h>
 #include <unistd.h>
 
+#include "copydb.h"
 #include "defaults.h"
 #include "file_utils.h"
 #include "env_utils.h"
@@ -134,7 +135,7 @@ semaphore_create(Semaphore *semaphore)
 	}
 
 	/* to see this log line, change the default log level in set_logger() */
-	log_trace("Created semaphore %d", semaphore->semId);
+	log_debug("Created semaphore %d (cleanup with ipcrm -s)", semaphore->semId);
 
 	/* by default the Semaphore struct is initialized to { 0 }, fix it */
 	semaphore->initValue = semaphore->initValue == 0 ? 1 : semaphore->initValue;
@@ -145,6 +146,13 @@ semaphore_create(Semaphore *semaphore)
 		/* the semaphore_log_lock_function has not been set yet */
 		log_fatal("Failed to set semaphore %d/%d to value %d : %m\n",
 				  semaphore->semId, 0, semun.val);
+		return false;
+	}
+
+	/* register the semaphore to the System V resources clean-up array */
+	if (!copydb_register_sysv_semaphore(&system_res_array, semaphore))
+	{
+		/* errors have already been logged */
 		return false;
 	}
 
@@ -183,7 +191,7 @@ semaphore_open(Semaphore *semaphore)
 	}
 
 	/* to see this log line, change the default log level in set_logger() */
-	log_trace("Using semaphore %d", semaphore->semId);
+	log_debug("Using semaphore %d", semaphore->semId);
 
 	/* we have the semaphore identifier, no need to call semget(2), done */
 	return true;
@@ -200,11 +208,18 @@ semaphore_unlink(Semaphore *semaphore)
 
 	semun.val = 0;              /* unused, but keep compiler quiet */
 
-	log_trace("ipcrm -s %d\n", semaphore->semId);
+	log_debug("ipcrm -s %d", semaphore->semId);
 
 	if (semctl(semaphore->semId, 0, IPC_RMID, semun) < 0)
 	{
 		fformat(stderr, "Failed to remove semaphore %d: %m", semaphore->semId);
+		return false;
+	}
+
+	/* mark the queue as unlinekd to the System V resources clean-up array */
+	if (!copydb_unlink_sysv_semaphore(&system_res_array, semaphore))
+	{
+		/* errors have already been logged */
 		return false;
 	}
 

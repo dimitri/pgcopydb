@@ -62,10 +62,7 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 		const char *signalStr = signal_to_string(signal);
 
 		log_warn("Received signal %s, terminating", signalStr);
-
-		/* ensure we return false, signaling something unexpected happened */
-		++errors;
-		goto terminate;
+		return false;
 	}
 
 	/* Now write that we successfully finished copying all indexes */
@@ -73,40 +70,6 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 	{
 		log_warn("Failed to write the tracking file \%s\"",
 				 specs->cfPaths.done.indexes);
-	}
-
-terminate:
-
-	/*
-	 * Now that all the sub-processes are done, we can also unlink the table
-	 * and index concurrency semaphore, and the vacuum and create index queues.
-	 */
-	if (!semaphore_finish(&(specs->tableSemaphore)))
-	{
-		log_warn("Failed to remove table concurrency semaphore %d, "
-				 "see above for details",
-				 specs->tableSemaphore.semId);
-	}
-
-	if (!semaphore_finish(&(specs->indexSemaphore)))
-	{
-		log_warn("Failed to remove index concurrency semaphore %d, "
-				 "see above for details",
-				 specs->indexSemaphore.semId);
-	}
-
-	if (!queue_unlink(&(specs->vacuumQueue)))
-	{
-		log_warn("Failed to remove VACUUM process queue %d, "
-				 "see above for details",
-				 specs->vacuumQueue.qId);
-	}
-
-	if (!queue_unlink(&(specs->indexQueue)))
-	{
-		log_warn("Failed to remove CREATE INDEX process queue %d, "
-				 "see above for details",
-				 specs->indexQueue.qId);
 	}
 
 	return errors == 0;

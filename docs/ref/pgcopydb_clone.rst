@@ -633,11 +633,11 @@ The following options are available to ``pgcopydb clone``:
 
   __ https://www.postgresql.org/docs/current/replication-origins.html
 
---verbose
+--verbose, --notice
 
   Increase current verbosity. The default level of verbosity is INFO. In
   ascending order pgcopydb knows about the following verbosity levels:
-  FATAL, ERROR, WARN, INFO, NOTICE, DEBUG, TRACE.
+  FATAL, ERROR, WARN, INFO, NOTICE, SQL, DEBUG, TRACE.
 
 --debug
 
@@ -699,6 +699,17 @@ TMPDIR
 
   The pgcopydb command creates all its work files and directories in
   ``${TMPDIR}/pgcopydb``, and defaults to ``/tmp/pgcopydb``.
+
+PGCOPYDB_LOG_TIME_FORMAT
+
+  The logs time format defaults to ``%H:%M:%S`` when pgcopydb is used on an
+  interactive terminal, and to ``%Y-%m-%d %H:%M:%S`` otherwise. This
+  environment variable can be set to any format string other than the
+  defaults.
+
+  See documentation for strftime(3) for details about the format string. See
+  documentation for isatty(3) for details about detecting if pgcopydb is run
+  in an interactive terminal.
 
 XDG_DATA_HOME
 

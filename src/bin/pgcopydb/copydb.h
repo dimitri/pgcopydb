@@ -15,6 +15,40 @@
 #include "schema.h"
 #include "summary.h"
 
+
+/*
+ * pgcopydb creates System V OS level objects such as message queues and
+ * semaphores, and those have to be cleaned-up "manually".
+ */
+#define SYSV_RES_MAX_COUNT 16
+
+typedef enum
+{
+	SYSV_UNKNOWN = 0,
+	SYSV_QUEUE,
+	SYSV_SEMAPHORE
+} SysVKind;
+
+typedef struct SysVRes
+{
+	SysVKind kind;
+	bool unlinked;
+
+	union res
+	{
+		Queue *queue;
+		Semaphore *semaphore;
+	} res;
+} SysVRes;
+
+typedef struct SysVResArray
+{
+	int count;
+	SysVRes array[SYSV_RES_MAX_COUNT];
+} SysVResArray;
+
+extern SysVResArray system_res_array;
+
 /*
  * pgcopydb uses Postgres facility to export snapshot and re-use them in other
  * transactions to use a consistent view of the data on the source database.
@@ -302,6 +336,15 @@ bool copydb_export_snapshot(TransactionSnapshot *snapshot);
 
 bool copydb_fatal_exit(void);
 bool copydb_wait_for_subprocesses(void);
+
+bool copydb_register_sysv_semaphore(SysVResArray *array, Semaphore *semaphore);
+bool copydb_register_sysv_queue(SysVResArray *array, Queue *queue);
+
+bool copydb_unlink_sysv_semaphore(SysVResArray *array, Semaphore *semaphore);
+bool copydb_unlink_sysv_queue(SysVResArray *array, Queue *queue);
+
+bool copydb_cleanup_sysv_resources(SysVResArray *array);
+
 
 /* snapshot.c */
 bool copydb_copy_snapshot(CopyDataSpec *specs, TransactionSnapshot *snapshot);

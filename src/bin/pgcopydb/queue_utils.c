@@ -12,6 +12,7 @@
 #include <sys/msg.h>
 #include <unistd.h>
 
+#include "copydb.h"
 #include "defaults.h"
 #include "log.h"
 #include "queue_utils.h"
@@ -34,7 +35,16 @@ queue_create(Queue *queue, char *name)
 		return false;
 	}
 
-	log_notice("Created message %s queue %d", queue->name, queue->qId);
+	/* register the queue to the System V resources clean-up array */
+	if (!copydb_register_sysv_queue(&system_res_array, queue))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_debug("Created message %s queue %d (cleanup with ipcrm -q)",
+			  queue->name,
+			  queue->qId);
 
 	return true;
 }
@@ -46,13 +56,20 @@ queue_create(Queue *queue, char *name)
 bool
 queue_unlink(Queue *queue)
 {
-	log_notice("iprm -q %d (%s)", queue->qId, queue->name);
+	log_debug("iprm -q %d (%s)", queue->qId, queue->name);
 
 	if (msgctl(queue->qId, IPC_RMID, NULL) != 0)
 	{
-		log_error("Failed to delete message %s queue %d: %m",
+		log_error("Failed to delete %s message queue %d: %m",
 				  queue->name,
 				  queue->qId);
+		return false;
+	}
+
+	/* mark the queue as unlinekd to the System V resources clean-up array */
+	if (!copydb_unlink_sysv_queue(&system_res_array, queue))
+	{
+		/* errors have already been logged */
 		return false;
 	}
 
