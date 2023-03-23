@@ -22,6 +22,7 @@
 #include "pgcmd.h"
 #include "signals.h"
 #include "string_utils.h"
+#include "filtering.h"
 
 #define RUN_PROGRAM_IMPLEMENTATION
 #include "runprogram.h"
@@ -339,9 +340,11 @@ pg_dump_db(PostgresPaths *pgPaths,
 		   const char *pguri,
 		   const char *snapshot,
 		   const char *section,
-		   const char *filename)
+		   const char *filename,
+		   const SourceFilterSchemaList *includeSchemaList,
+		   const SourceFilterSchemaList *excludeSchemaList)
 {
-	char *args[16];
+	char *args[PG_CMD_MAX_ARG];
 	int argsIndex = 0;
 
 	char command[BUFSIZE] = { 0 };
@@ -377,6 +380,40 @@ pg_dump_db(PostgresPaths *pgPaths,
 	{
 		args[argsIndex++] = "--snapshot";
 		args[argsIndex++] = (char *) snapshot;
+	}
+
+	if (includeSchemaList->count > 0)
+	{
+		log_notice("Dumping with inclusion filters...");
+
+		for (int i = 0; i < includeSchemaList->count; i++)
+		{
+			if (argsIndex > PG_CMD_MAX_ARG - 9)
+			{
+				log_error("Too many schema filters specified to run pg_dump. Optimize filters or use multiple steps.");
+				return false;
+			}
+
+			args[argsIndex++] = "-n";
+			args[argsIndex++] = includeSchemaList->array[i].nspname;
+		}
+	}
+
+	if (excludeSchemaList->count > 0)
+	{
+		log_notice("Dumping with exclusion filters...");
+
+		for (int i = 0; i < excludeSchemaList->count; i++)
+		{
+			if (argsIndex > PG_CMD_MAX_ARG - 9)
+			{
+				log_error("Too many schema filters specified to run pg_dump. Optimize filters or use multiple steps.");
+				return false;
+			}
+
+			args[argsIndex++] = "-N";
+			args[argsIndex++] = excludeSchemaList->array[i].nspname;
+		}
 	}
 
 	args[argsIndex++] = "--section";
@@ -725,9 +762,11 @@ pg_restore_db(PostgresPaths *pgPaths,
 			  const char *pguri,
 			  const char *dumpFilename,
 			  const char *listFilename,
-			  RestoreOptions options)
+			  RestoreOptions options,
+		      const SourceFilterSchemaList *includeSchemaList,
+		      const SourceFilterSchemaList *excludeSchemaList)
 {
-	char *args[16];
+	char *args[PG_CMD_MAX_ARG];
 	int argsIndex = 0;
 
 	char command[BUFSIZE] = { 0 };
@@ -787,6 +826,43 @@ pg_restore_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = "--use-list";
 		args[argsIndex++] = (char *) listFilename;
 	}
+
+	if (includeSchemaList->count > 0)
+	{
+		log_notice("Restoring with inclusion filters...");
+
+		for (int i = 0; i < includeSchemaList->count; i++)
+		{
+			if (argsIndex > PG_CMD_MAX_ARG - 9)
+			{
+				log_error("Too many schema filters specified to run pg_restore. Optimize filters or use multiple steps.");
+				return false;
+			}
+
+			args[argsIndex++] = "-n";
+			args[argsIndex++] = includeSchemaList->array[i].nspname;
+		}
+	}
+
+	if (excludeSchemaList->count > 0)
+	{
+		log_notice("Restoring with exclusion filters...");
+
+		for (int i = 0; i < excludeSchemaList->count; i++)
+		{
+			if (argsIndex > PG_CMD_MAX_ARG - 9)
+			{
+				log_error("Too many schema filters specified to run pg_restore. Optimize filters or use multiple steps.");
+				return false;
+			}
+
+			args[argsIndex++] = "-N";
+			args[argsIndex++] = excludeSchemaList->array[i].nspname;
+		}
+	}
+
+	/* verbose output */
+	//args[argsIndex++] = "--verbose";
 
 	args[argsIndex++] = (char *) dumpFilename;
 
@@ -858,7 +934,13 @@ pg_restore_list(PostgresPaths *pgPaths, const char *filename,
 		return false;
 	}
 
-	if (!parse_archive_list(prog.stdOut, archive))
+	/* 	weird compiler bug in Ubuntu 22.4
+		"if (!parse_archive_list(...))" crashes, while the same in 2 separate
+		steps, doesn't, some code optimization breaks here, not too important.
+	*/
+	bool parsed = parse_archive_list(prog.stdOut, archive);
+
+	if (!parsed)
 	{
 		/* errors have already been logged */
 		free_program(&prog);

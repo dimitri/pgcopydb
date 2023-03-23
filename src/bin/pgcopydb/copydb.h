@@ -165,7 +165,7 @@ typedef struct SourceFilterItem
 } SourceFilterItem;
 
 
-/* all that's needed to start a TABLE DATA copy for a whole database */
+/* all that's needed to start a TABLE DATA copy for a whole database, or a subset of schemas */
 typedef struct CopyDataSpec
 {
 	CopyFilePaths cfPaths;
@@ -384,6 +384,8 @@ bool copydb_prepare_create_constraint_command(SourceIndex *index,
 											  size_t size);
 
 bool copydb_create_constraints(CopyDataSpec *spec, SourceTable *table);
+
+bool copydb_target_create_snpname(CopyDataSpec *specs);
 
 /* dump_restore.c */
 bool copydb_dump_source_schema(CopyDataSpec *specs,

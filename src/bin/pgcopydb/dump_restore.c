@@ -61,7 +61,9 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 							 specs->source_pguri,
 							 snapshot,
 							 "pre-data",
-							 specs->dumpPaths.preFilename))
+							 specs->dumpPaths.preFilename,
+							 &(specs->filters.includeOnlySchemaList),
+							 &(specs->filters.excludeSchemaList)))
 		{
 			/* errors have already been logged */
 			return false;
@@ -70,7 +72,7 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 		/* now write the doneFile to keep track */
 		if (!write_file("", 0, specs->cfPaths.done.preDataDump))
 		{
-			log_error("Failed to write the tracking file \%s\"",
+			log_error("Failed to write the tracking file \"%s\"",
 					  specs->cfPaths.done.preDataDump);
 			return false;
 		}
@@ -90,7 +92,9 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 							 specs->source_pguri,
 							 snapshot,
 							 "post-data",
-							 specs->dumpPaths.postFilename))
+							 specs->dumpPaths.postFilename,
+							 &(specs->filters.includeOnlySchemaList),
+							 &(specs->filters.excludeSchemaList)))
 		{
 			/* errors have already been logged */
 			return false;
@@ -99,7 +103,7 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 		/* now write the doneFile to keep track */
 		if (!write_file("", 0, specs->cfPaths.done.postDataDump))
 		{
-			log_error("Failed to write the tracking file \%s\"",
+			log_error("Failed to write the tracking file \"%s\"",
 					  specs->cfPaths.done.postDataDump);
 			return false;
 		}
@@ -153,11 +157,26 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 		}
 	}
 
+	/* if restoring specific schemas as specified in the inclusion filter
+		make sure they exist in the target database, if not create them.
+	 */
+	 if (specs->filters.includeOnlySchemaList.count > 0)
+	 {
+		if (!copydb_target_create_snpname(specs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	 }
+
+
 	if (!pg_restore_db(&(specs->pgPaths),
 					   specs->target_pguri,
 					   specs->dumpPaths.preFilename,
 					   specs->dumpPaths.preListFilename,
-					   specs->restoreOptions))
+					   specs->restoreOptions,
+					   &(specs->filters.includeOnlySchemaList),
+					   &(specs->filters.excludeSchemaList)))
 	{
 		/* errors have already been logged */
 		return false;
@@ -166,7 +185,7 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 	/* now write the doneFile to keep track */
 	if (!write_file("", 0, specs->cfPaths.done.preDataRestore))
 	{
-		log_error("Failed to write the tracking file \%s\"",
+		log_error("Failed to write the tracking file \"%s\"",
 				  specs->cfPaths.done.preDataRestore);
 		return false;
 	}
@@ -270,7 +289,9 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 					   specs->target_pguri,
 					   specs->dumpPaths.postFilename,
 					   specs->dumpPaths.postListFilename,
-					   specs->restoreOptions))
+					   specs->restoreOptions,
+					   &(specs->filters.includeOnlySchemaList),
+					   &(specs->filters.excludeSchemaList)))
 	{
 		/* errors have already been logged */
 		return false;
@@ -279,7 +300,7 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 	/* now write the doneFile to keep track */
 	if (!write_file("", 0, specs->cfPaths.done.postDataRestore))
 	{
-		log_error("Failed to write the tracking file \%s\"",
+		log_error("Failed to write the tracking file \"%s\"",
 				  specs->cfPaths.done.postDataRestore);
 		return false;
 	}
@@ -411,6 +432,52 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 	}
 
 	destroyPQExpBuffer(listContents);
+
+	return true;
+}
+
+
+/*
+ * copydb_target_prepare_snpname prepares and executes a SQL query that creates
+ * target schema by means of a CREATE IF NOT EXISTS ... statement that
+ * includes all inclusion schemas.
+ */
+bool
+copydb_target_create_snpname(CopyDataSpec *specs)
+{
+	log_info("Creating schemas specified in inclusion filter...");
+
+	PQExpBuffer query = createPQExpBuffer();
+	for (int i = 0; i < specs->filters.includeOnlySchemaList.count; i++)
+	{
+		appendPQExpBuffer(query, "CREATE SCHEMA IF NOT EXISTS \"%s\"",
+						  specs->filters.includeOnlySchemaList.array[i].nspname);
+	}
+
+	/* memory allocation could have failed while building string */
+	if (PQExpBufferBroken(query))
+	{
+		log_error("Failed to create CREATE SCHEMA IF NOT EXISTS query: out of memory");
+		destroyPQExpBuffer(query);
+		return false;
+	}
+
+	PGSQL dst = { 0 };
+
+	if (!pgsql_init(&dst, specs->target_pguri, PGSQL_CONN_TARGET))
+	{
+		/* errors have already been logged */
+		destroyPQExpBuffer(query);
+		return false;
+	}
+
+	if (!pgsql_execute(&dst, query->data))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	destroyPQExpBuffer(query);
 
 	return true;
 }

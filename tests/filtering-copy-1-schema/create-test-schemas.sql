@@ -1,0 +1,42 @@
+-- schema 1 ---
+CREATE SCHEMA IF NOT EXISTS px101d;
+
+CREATE TABLE IF NOT EXISTS px101d.table1(id INT NOT NULL PRIMARY KEY, gauge_value INT, value_time TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP);
+TRUNCATE px101d.table1;
+INSERT INTO px101d.table1(id, gauge_value)
+SELECT s, random()*100 FROM generate_series(1, 1000, 1) AS s;
+
+
+CREATE TABLE IF NOT EXISTS px101d.table2(id INT NOT NULL PRIMARY KEY, gauge_value INT, value_time TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP);
+TRUNCATE px101d.table2;
+INSERT INTO px101d.table2(id, gauge_value)
+SELECT s, random()*100 FROM generate_series(1, 1000, 1) AS s;
+
+
+-- schema 2 ---
+CREATE SCHEMA IF NOT EXISTS px102d;
+
+CREATE TABLE IF NOT EXISTS px102d.table1(id INT NOT NULL PRIMARY KEY, gauge_value INT, value_time TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP);
+TRUNCATE px102d.table1;
+INSERT INTO px102d.table1(id, gauge_value)
+SELECT s, random()*100 FROM generate_series(1, 1000, 1) AS s;
+
+
+CREATE TABLE IF NOT EXISTS px102d.table2(id INT NOT NULL PRIMARY KEY, gauge_value INT, value_time TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP);
+TRUNCATE px102d.table2;
+INSERT INTO px102d.table2(id, gauge_value)
+SELECT s, random()*100 FROM generate_series(1, 1000, 1) AS s;
+
+-- schema 3 ---
+CREATE SCHEMA IF NOT EXISTS px103d;
+
+CREATE TABLE IF NOT EXISTS px103d.table1(id INT NOT NULL PRIMARY KEY, gauge_value INT, value_time TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP);
+TRUNCATE px103d.table1;
+INSERT INTO px103d.table1(id, gauge_value)
+SELECT s, random()*100 FROM generate_series(1, 1000, 1) AS s;
+
+
+CREATE TABLE IF NOT EXISTS px103d.table2(id INT NOT NULL PRIMARY KEY, gauge_value INT, value_time TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP);
+TRUNCATE px103d.table2;
+INSERT INTO px103d.table2(id, gauge_value)
+SELECT s, random()*100 FROM generate_series(1, 1000, 1) AS s;

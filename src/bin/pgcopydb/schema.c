@@ -24,6 +24,7 @@
 
 static bool prepareFilters(PGSQL *pgsql, SourceFilters *filters);
 static bool prepareFilterCopyExcludeSchema(PGSQL *pgsql, SourceFilters *filters);
+static bool prepareFilterCopyIncludeSchema(PGSQL *pgsql, SourceFilters *filters);
 static bool prepareFilterCopyTableList(PGSQL *pgsql,
 									   SourceFilterTableList *tableList,
 									   const char *temp_table_name);
@@ -379,13 +380,18 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
 
+		/* include-only-schema */
+		"         left join pg_temp.filter_include_only_schema fn "
+		"                on n.nspname = fn.nspname "
+
 		/* include-only-table */
-		"         join pg_temp.filter_include_only_table inc "
-		"           on n.nspname = inc.nspname "
-		"          and c.relname = inc.relname "
+		"         left join pg_temp.filter_include_only_table ft "
+		"                on n.nspname = ft.nspname "
+		"               and c.relname = ft.relname "
 
 		"   where relkind = 'r' and c.relpersistence in ('p', 'u') "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+		"     and (fn.nspname is not null or ft.relname is not null)"
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -445,16 +451,21 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
 
+		/* include-only-schema */
+		"    left join pg_temp.filter_include_only_schema fn "
+		"           on n.nspname = fn.nspname "
+
 		/* include-only-table */
-		"    left join pg_temp.filter_include_only_table inc "
-		"           on n.nspname = inc.nspname "
-		"          and c.relname = inc.relname "
+		"    left join pg_temp.filter_include_only_table ft "
+		"           on n.nspname = ft.nspname "
+		"          and c.relname = ft.relname "
 
 		"   where relkind in ('r', 'p') and c.relpersistence in ('p', 'u') "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 
 		/* WHERE clause for exclusion filters */
-		"     and inc.nspname is null "
+		"     and ft.nspname is null "
+		"	  and fn.nspname is null "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -748,10 +759,14 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         join pg_roles auth ON auth.oid = c.relowner"
 		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
+		/* include-only-schema */
+		"         left join pg_temp.filter_include_only_schema fn "
+		"                on n.nspname = fn.nspname "
+
 		/* include-only-table */
-		"         join pg_temp.filter_include_only_table inc "
-		"           on n.nspname = inc.nspname "
-		"          and c.relname = inc.relname "
+		"         left join pg_temp.filter_include_only_table ft "
+		"                on n.nspname = ft.nspname "
+		"               and c.relname = ft.relname "
 
 		/* find a copy partition key candidate */
 		"         left join lateral ("
@@ -775,6 +790,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"   where relkind = 'r' and c.relpersistence in ('p', 'u') "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and n.nspname !~ 'pgcopydb' "
+		"     and (fn.nspname is not null or ft.relname is not null)"
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -880,10 +896,14 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         join pg_roles auth ON auth.oid = c.relowner"
 		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
+		/* include-only-schema */
+		"    left join pg_temp.filter_include_only_schema fn "
+		"           on n.nspname = fn.nspname "
+
 		/* include-only-table */
-		"    left join pg_temp.filter_include_only_table inc "
-		"           on n.nspname = inc.nspname "
-		"          and c.relname = inc.relname "
+		"    left join pg_temp.filter_include_only_table ft "
+		"           on n.nspname = ft.nspname "
+		"          and c.relname = ft.relname "
 
 		/* find a copy partition key candidate */
 		"         left join lateral ("
@@ -909,7 +929,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"     and n.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
-		"     and inc.nspname is null "
+		"     and ft.nspname is null "
+		"     and fn.nspname is null "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -1123,13 +1144,18 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         join pg_roles auth ON auth.oid = r.relowner"
 		"         left join pgcopydb_table_size ts on ts.oid = r.oid"
 
+		/* include-only-schema */
+		"         left join pg_temp.filter_include_only_schema fn "
+		"                on n.nspname = fn.nspname "
+
 		/* include-only-table */
-		"         join pg_temp.filter_include_only_table inc "
-		"           on n.nspname = inc.nspname "
-		"          and r.relname = inc.relname "
+		"         left join pg_temp.filter_include_only_table ft "
+		"                on n.nspname = ft.nspname "
+		"               and r.relname = ft.relname "
 
 		"   where r.relkind = 'r' and r.relpersistence in ('p', 'u') "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+		"     and (fn.nspname is not null or ft.relname is not null)"
 		"     and not exists "
 		"         ( "
 		"           select c.oid "
@@ -1229,10 +1255,14 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         join pg_roles auth ON auth.oid = r.relowner"
 		"         left join pgcopydb_table_size ts on ts.oid = r.oid"
 
+		/* include-only-schema */
+		"    left join pg_temp.filter_include_only_schema fn "
+		"           on n.nspname = fn.nspname "
+
 		/* include-only-table */
-		"    left join pg_temp.filter_include_only_table inc "
-		"           on n.nspname = inc.nspname "
-		"          and r.relname = inc.relname "
+		"    left join pg_temp.filter_include_only_table ft "
+		"           on n.nspname = ft.nspname "
+		"          and r.relname = ft.relname "
 
 		"   where r.relkind = 'r' and r.relpersistence in ('p', 'u')  "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
@@ -1245,7 +1275,8 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         ) "
 
 		/* WHERE clause for exclusion filters */
-		"     and inc.nspname is null "
+		"     and ft.nspname is null "
+		"     and fn.nspname is null "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -1444,18 +1475,25 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"           on at.attrelid = a.adrelid "
 		"          and at.attnum = a.adnum "
 
-		/* include-only-table */
+		/* include-only-schema and include-only-table */
 		"         join pg_class r on r.oid = a.adrelid "
 		"         join pg_namespace rn on rn.oid = r.relnamespace "
 
-		"         join pg_temp.filter_include_only_table inc "
-		"           on rn.nspname = inc.nspname "
-		"          and r.relname = inc.relname "
+
+		/* include-only-schema */
+		"         left join pg_temp.filter_include_only_schema fn "
+		"                on rn.nspname = fn.nspname "
+
+		/* include-only-table */
+		"         left join pg_temp.filter_include_only_table ft "
+		"                on rn.nspname = ft.nspname "
+		"               and r.relname = ft.relname "
 
 		"  where s.relkind = 'S' "
-		"    and d.classid = 'pg_attrdef'::regclass "
-		"    and d.refclassid = 'pg_class'::regclass "
+		"     and d.classid = 'pg_attrdef'::regclass "
+		"     and d.refclassid = 'pg_class'::regclass "
 		"     and sn.nspname !~ 'pgcopydb' "
+		"     and (fn.nspname is not null or ft.relname is not null)"
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -1568,13 +1606,17 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"           on at.attrelid = a.adrelid "
 		"          and at.attnum = a.adnum "
 
-		/* include-only-table */
 		"         join pg_class r on r.oid = a.adrelid "
 		"         join pg_namespace rn on rn.oid = r.relnamespace "
 
-		"    left join pg_temp.filter_include_only_table inc "
-		"           on rn.nspname = inc.nspname "
-		"          and r.relname = inc.relname "
+		/* include-only-schema */
+		"    left join pg_temp.filter_include_only_schema fn "
+		"           on rn.nspname = fn.nspname "
+
+		/* include-only-table */
+		"    left join pg_temp.filter_include_only_table ft "
+		"           on rn.nspname = ft.nspname "
+		"          and r.relname = ft.relname "
 
 		"  where s.relkind = 'S' "
 		"    and d.classid = 'pg_attrdef'::regclass "
@@ -1582,7 +1624,8 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"    and sn.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
-		"     and inc.relname is null "
+		"     and ft.nspname is null "
+		"     and fn.nspname is null "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -1871,14 +1914,19 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"                and d.deptype = 'i'"
 		"          left join pg_constraint c ON c.oid = d.refobjid"
 
+		/* include-only-schema */
+		"         left join pg_temp.filter_include_only_schema fn "
+		"                on rn.nspname = fn.nspname "
+
 		/* include-only-table */
-		"         join pg_temp.filter_include_only_table inc "
-		"           on rn.nspname = inc.nspname "
-		"          and r.relname = inc.relname "
+		"         left join pg_temp.filter_include_only_table ft "
+		"                on rn.nspname = ft.nspname "
+		"               and r.relname = ft.relname "
 
 		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
 		"      and n.nspname !~ 'pgcopydb' "
+		"      and (fn.nspname is not null or ft.relname is not null)"
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -1995,17 +2043,22 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"                and d.deptype = 'i'"
 		"          left join pg_constraint c ON c.oid = d.refobjid"
 
+		/* include-only-schema */
+		"    left join pg_temp.filter_include_only_schema fn "
+		"           on rn.nspname = fn.nspname "
+
 		/* include-only-table */
-		"    left join pg_temp.filter_include_only_table inc "
-		"           on rn.nspname = inc.nspname "
-		"          and r.relname = inc.relname "
+		"    left join pg_temp.filter_include_only_table ft "
+		"           on rn.nspname = ft.nspname "
+		"          and r.relname = ft.relname "
 
 		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
 		"      and n.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
-		"     and inc.relname is null "
+		"     and ft.nspname is null "
+		"     and fn.nspname is null "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -2126,7 +2179,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"      and n.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
-		"     and ft.relname is null "
+		"     and fn.nspname is null "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -2335,16 +2388,21 @@ struct FilteringQueries listSourceDependSQL[] = {
 		"         deptype, type, identity "
 		"    FROM unconcat "
 
-		/* include-only-table */
+		/* include-only-schema and include-only-table */
 		"         join pg_class c "
 		"           on unconcat.refclassid = 'pg_class'::regclass "
 		"          and unconcat.refobjid = c.oid "
 
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 
-		"         join pg_temp.filter_include_only_table inc "
-		"           on n.nspname = inc.nspname "
-		"          and c.relname = inc.relname "
+		/* include-only-schema */
+		"         left join pg_temp.filter_include_only_schema fn "
+		"                on n.nspname = fn.nspname "
+
+		/* include-only-table */
+		"         left join pg_temp.filter_include_only_table ft "
+		"                on n.nspname = ft.nspname "
+		"               and c.relname = ft.relname "
 
 		"         , pg_identify_object(classid, objid, objsubid) "
 
@@ -2352,6 +2410,7 @@ struct FilteringQueries listSourceDependSQL[] = {
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
 		"      and n.nspname !~ 'pgcopydb' "
 		"      and type not in ('toast table column', 'default value') "
+		"      and (fn.nspname is not null or ft.relname is not null)"
 
 		/* remove duplicates due to multiple refobjsubid / objsubid */
 		"GROUP BY n.nspname, c.relname, "
@@ -2465,10 +2524,14 @@ struct FilteringQueries listSourceDependSQL[] = {
 
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 
+		/* include-only-schema */
+		"    left join pg_temp.filter_include_only_schema fn "
+		"           on n.nspname = fn.nspname "
+
 		/* include-only-table */
-		"    left join pg_temp.filter_include_only_table inc "
-		"           on n.nspname = inc.nspname "
-		"          and c.relname = inc.relname "
+		"    left join pg_temp.filter_include_only_table ft "
+		"           on n.nspname = ft.nspname "
+		"          and c.relname = ft.relname "
 
 		"         , pg_identify_object(classid, objid, objsubid) "
 
@@ -2478,7 +2541,8 @@ struct FilteringQueries listSourceDependSQL[] = {
 		"      and type not in ('toast table column', 'default value') "
 
 		/* WHERE clause for exclusion filters */
-		"     and inc.nspname is null "
+		"     and ft.nspname is null "
+		"     and fn.nspname is null "
 
 		/* remove duplicates due to multiple refobjsubid / objsubid */
 		"GROUP BY n.nspname, c.relname, "
@@ -2759,6 +2823,7 @@ prepareFilters(PGSQL *pgsql, SourceFilters *filters)
 	 */
 	char *tempTables[] = {
 		"create temp table filter_exclude_schema(nspname name)",
+		"create temp table filter_include_only_schema(nspname name)",
 		"create temp table filter_include_only_table(nspname name, relname name)",
 		"create temp table filter_exclude_table(nspname name, relname name)",
 		"create temp table filter_exclude_table_data(nspname name, relname name)",
@@ -2779,6 +2844,12 @@ prepareFilters(PGSQL *pgsql, SourceFilters *filters)
 	 * Now, fill-in the temp tables with the data that we have.
 	 */
 	if (!prepareFilterCopyExcludeSchema(pgsql, filters))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!prepareFilterCopyIncludeSchema(pgsql, filters))
 	{
 		/* errors have already been logged */
 		return false;
@@ -2851,6 +2922,44 @@ prepareFilterCopyExcludeSchema(PGSQL *pgsql, SourceFilters *filters)
 
 	return true;
 }
+
+
+/*
+ * prepareFilterCopyIncludeSchema sends a COPY from STDIN query and then
+ * uploads the local filters that we have in the pg_temp.filter_include_only_schema
+ * table.
+ */
+static bool
+prepareFilterCopyIncludeSchema(PGSQL *pgsql, SourceFilters *filters)
+{
+	char *qname = "\"pg_temp\".\"filter_include_only_schema\"";
+
+	if (!pg_copy_from_stdin(pgsql, qname))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
+	{
+		char *nspname = filters->includeOnlySchemaList.array[i].nspname;
+
+		if (!pg_copy_row_from_stdin(pgsql, "s", nspname))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	if (!pg_copy_end(pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
 
 
 /*
@@ -3516,7 +3625,7 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	/* 9. partkey */
 	if (PQgetisnull(result, rowNumber, 8))
 	{
-		log_debug("Table \"%s\".\"%s\" with oid %u has not part key column",
+		log_debug("Table \"%s\".\"%s\" with oid %u has no partition key column",
 				  table->nspname,
 				  table->relname,
 				  table->oid);

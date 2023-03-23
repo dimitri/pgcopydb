@@ -5,6 +5,7 @@
 
 #include <getopt.h>
 #include <unistd.h>
+#include <errno.h>
 
 #include "postgres.h"
 
@@ -31,7 +32,7 @@ size_t ps_buffer_size;          /* space determined at run time */
 size_t last_status_len;         /* use to minimize length of clobber */
 
 Semaphore log_semaphore = { 0 }; /* allows inter-process locking */
-
+FILE *log_fp = NULL;            /* file handle for optional log file */
 
 static void set_logger(void);
 static void log_semaphore_unlink_atexit(void);
@@ -194,6 +195,27 @@ set_logger()
 	/* set our logging facility to use our semaphore as a lock mechanism */
 	(void) log_set_udata(&log_semaphore);
 	(void) log_set_lock(&semaphore_log_lock_function);
+
+	/* duplicate output to log file if PGCOPYDB_LOG env var is set.
+	 * Warning: if the value is incorrect, it may cause segfault.
+	*/
+	if (env_exists("PGCOPYDB_LOG"))
+	{
+		char env_log_file[BUFSIZE] = { 0 };
+
+		if (get_env_copy("PGCOPYDB_LOG", env_log_file, BUFSIZE) > 0)
+		{
+			if (log_fp = fopen(env_log_file, "w"))
+			{
+				log_set_fp(log_fp);
+			}
+			else
+			{
+				log_error("Failed to open log file for writing %s. Error reason: %s", env_log_file, strerror(errno));
+				exit(EXIT_CODE_BAD_ARGS);
+			}
+		}
+	}
 }
 
 
@@ -204,4 +226,12 @@ static void
 log_semaphore_unlink_atexit(void)
 {
 	(void) semaphore_finish(&log_semaphore);
+
+	/* if logging to file is enabled, close log file */
+	if (log_fp != NULL)
+	{
+		log_set_fp(NULL);
+		fclose(log_fp);
+	}
+
 }

@@ -16,8 +16,11 @@
 #include "defaults.h"
 #include "file_utils.h"
 #include "pgsql.h"
+#include "filtering.h"
+
 
 #define PG_VERSION_STRING_MAX 12
+#define PG_CMD_MAX_ARG 256
 
 typedef struct PostgresPaths
 {
@@ -84,7 +87,9 @@ bool pg_dump_db(PostgresPaths *pgPaths,
 				const char *pguri,
 				const char *snapshot,
 				const char *section,
-				const char *filename);
+				const char *filename,
+				const SourceFilterSchemaList *includeSchemaList,
+				const SourceFilterSchemaList *excludeSchemaList);
 
 bool pg_dumpall_roles(PostgresPaths *pgPaths,
 					  const char *pguri,
@@ -105,7 +110,9 @@ bool pg_restore_db(PostgresPaths *pgPaths,
 				   const char *pguri,
 				   const char *dumpFilename,
 				   const char *listFilename,
-				   RestoreOptions options);
+				   RestoreOptions options,
+				   const SourceFilterSchemaList *includeSchemaList,
+				   const SourceFilterSchemaList *excludeSchemaList);
 
 bool pg_restore_list(PostgresPaths *pgPaths, const char *filename,
 					 ArchiveContentArray *archive);

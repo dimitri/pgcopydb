@@ -46,10 +46,13 @@ pgcopydb sub-commands. Check out
 ```
 $ pgcopydb help
   pgcopydb
-    clone     Clone an entire database from source to target
-    fork      Clone an entire database from source to target
+    clone     Clone an entire database from source to target, schema and table
+              filters may apply (see Filters for more info)
+    fork      Clone an entire database from source to target, schema and table
+              filters may apply (see Filters for more info)
     follow    Replay changes from the source database to the target database
-    copy-db   Clone an entire database from source to target
+    copy-db   Clone an entire database from source to target, schema and table
+              filters may apply (see Filters for more info)
     snapshot  Create and exports a snapshot on the source database
   + copy      Implement the data section of the database copy
   + dump      Dump database objects from a Postgres instance
@@ -61,10 +64,11 @@ $ pgcopydb help
     version   print pgcopydb version
 
   pgcopydb copy
-    db           Copy an entire database from source to target
+    db           Copy an entire database from source to target, schema and table
+                 filters may apply (see Filters for more info)
     roles        Copy the roles from the source instance to the target instance
     extensions   Copy the extensions from the source instance to the target instance
-    schema       Copy the database schema from source to target
+    schema       Copy the database schema definition from source to target
     data         Copy the data section from source to target
     table-data   Copy the data from all tables in database from source to target
     blobs        Copy the blob data from ther source database to the target
@@ -73,7 +77,7 @@ $ pgcopydb help
     constraints  Create all the constraints found in the source database in the target
 
   pgcopydb dump
-    schema     Dump source database schema as custom files in work directory
+    schema     Dump source database schema definition as custom files in work directory
     pre-data   Dump source database pre-data schema as custom files in work directory
     post-data  Dump source database post-data schema as custom files in work directory
     roles      Dump source database roles as custome file in work directory
@@ -187,7 +191,7 @@ an overall summary that looks like the following:
 
 Several distributions are available for pgcopydb:
 
-  1. Install from either debian sid or testing (see [debian package for
+  1. Install from either debian sid or testing, see [debian package for
      pgcopydb](https://packages.debian.org/search?keywords=pgcopydb), or
      from [apt.postgresql.org](https://wiki.postgresql.org/wiki/Apt)
      packages by following the linked documentation and then:
@@ -321,6 +325,28 @@ following example taken from the logs of actually running `pgcopydb`:
 This trick is worth a lot of performance gains on its own, as has been
 discovered and experienced and appreciated by
 [pgloader](https://github.com/dimitri/pgloader) users already.
+
+## Filters
+Filtering allows to skip some object definitions and data when copying from the source to the target database.
+The pgcopydb commands accepts the option --filter (or --filters) which expects an existing filename as the option argument.
+The given filename is read in the INI file format, but only uses sections and option keys. Option values are not used.
+Filtering supports two kinds of filters - exclusion and inclusion-only filters. Their complete description and examples
+can be found in pgcopydb documentation.
+
+The following filter types can be used for exclusions:
+exclude-schema
+exclude-index
+exclude-table-data
+exclude-table
+
+The following filter types can be used for inclusions only:
+include-only-schema
+include-only-table
+
+Multiple filters can be specified in the same filter file, yet not all combinations of filters are compatible and can be used
+together. For example, using include-only-schema together with exclude-table is fine, but using exclude-schema together with
+include-only-schema is not.
+
 
 ## Dependencies
 

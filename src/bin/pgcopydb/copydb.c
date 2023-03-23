@@ -650,6 +650,7 @@ copydb_init_specs(CopyDataSpec *specs,
 			.snapshot = { 0 }
 		},
 
+		.filters = specs->filters,
 		.section = section,
 		.restoreOptions = restoreOptions,
 		.roles = roles,

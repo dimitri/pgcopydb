@@ -145,15 +145,17 @@ parse_filters(const char *filename, SourceFilters *filters)
 	{
 		char name[NAMEDATALEN];
 		SourceFilterTableList *list;
+		int filter_type;
 	};
 
 	struct section sections[] = {
-		{ "exclude-schema", NULL },
-		{ "exclude-table", &(filters->excludeTableList) },
-		{ "exclude-table-data", &(filters->excludeTableDataList) },
-		{ "exclude-index", &(filters->excludeIndexList) },
-		{ "include-only-table", &(filters->includeOnlyTableList) },
-		{ "", NULL },
+		{ "exclude-schema", NULL,  SOURCE_FILTER_EXCLUDE_SCHEMA },
+		{ "exclude-table", &(filters->excludeTableList),  SOURCE_FILTER_EXCLUDE_TABLE },
+		{ "exclude-table-data", &(filters->excludeTableDataList), SOURCE_FILTER_EXCLUDE_TABLE_DATA },
+		{ "exclude-index", &(filters->excludeIndexList), SOURCE_FILTER_TYPE_LIST_EXCL_INDEX },
+		{ "include-only-table", &(filters->includeOnlyTableList), SOURCE_FILTER_INCLUDE_ONLY_TABLE },
+		{ "include-only-schema", NULL, SOURCE_FILTER_INCLUDE_ONLY_SCHEMA },
+		{ "", NULL, SOURCE_FILTER_TYPE_NONE },
 	};
 
 	for (int i = 0; sections[i].name[0] != '\0'; i++)
@@ -186,7 +188,7 @@ parse_filters(const char *filename, SourceFilters *filters)
 		/*
 		 * The index in the sections table is a SourceFilterSection enum value.
 		 */
-		switch (i)
+		switch (sections[i].filter_type)
 		{
 			case SOURCE_FILTER_EXCLUDE_SCHEMA:
 			{
@@ -206,6 +208,28 @@ parse_filters(const char *filename, SourceFilters *filters)
 					strlcpy(schema->nspname, optionName, sizeof(schema->nspname));
 
 					log_debug("excluding schema \"%s\"", schema->nspname);
+				}
+				break;
+			}
+
+			case SOURCE_FILTER_INCLUDE_ONLY_SCHEMA:
+			{
+				filters->includeOnlySchemaList.count = optionCount;
+				filters->includeOnlySchemaList.array = (SourceFilterSchema *)
+												   malloc(optionCount *
+														  sizeof(SourceFilterSchema));
+
+				for (int o = 0; o < optionCount; o++)
+				{
+					SourceFilterSchema *schema =
+						&(filters->includeOnlySchemaList.array[o]);
+
+					const char *optionName =
+						ini_property_name(ini, sectionIndex, o);
+
+					strlcpy(schema->nspname, optionName, sizeof(schema->nspname));
+
+					log_debug("including schema \"%s\"", schema->nspname);
 				}
 				break;
 			}
@@ -259,27 +283,37 @@ parse_filters(const char *filename, SourceFilters *filters)
 	 * Now implement some checks: we can't implement both include-only-table
 	 * and any other filtering rule, which are exclusion rules. Otherwise it's
 	 * unclear what to do with tables that are not excluded and not included
-	 * either.
+	 * either. Similarly we can't implement both include-only-schema
+	 * and any other filtering rule, which are exclusion rules.
 	 */
-	if (filters->includeOnlyTableList.count > 0 &&
+	if (
+		(filters->includeOnlyTableList.count > 0 ||
+		 filters->includeOnlySchemaList.count > 0)
+		 &&
 		(filters->excludeTableList.count > 0 ||
-		 filters->excludeSchemaList.count > 0))
+		 filters->excludeSchemaList.count > 0)
+	)
 	{
 		log_error("Filtering setup in \"%s\" contains "
-				  "%d entries in \"%s\" section and %d entries in \"%s\" "
-				  "sections, please use only one of those.",
+				  "%d entries in \"%s\" section and "
+				  "%d entries in \"%s\" section and "
+				  "as well as "
+				  "%d entries in \"%s\" section and "
+				  "%d entries in \"%s\" section. "
+				  "Cannot mix include-only with exclude filters. Please specify unambiguous inclusion or exclusion filters.",
 				  filename,
-				  filters->includeOnlyTableList.count,
-				  "include-only-table",
-				  filters->excludeTableList.count,
-				  "exclude-table");
+				  filters->includeOnlyTableList.count, "include-only-table",
+				  filters->includeOnlySchemaList.count, "include-only-schema",
+				  filters->excludeTableList.count, "exclude-table",
+				  filters->excludeSchemaList.count, "exclude-schema");
 		return false;
 	}
 
 	/*
 	 * Now assign a proper type to the source filter.
 	 */
-	if (filters->includeOnlyTableList.count > 0)
+	if (filters->includeOnlyTableList.count > 0 ||
+		filters->includeOnlySchemaList.count > 0)
 	{
 		filters->type = SOURCE_FILTER_TYPE_INCL;
 	}
@@ -293,9 +327,9 @@ parse_filters(const char *filename, SourceFilters *filters)
 	{
 		/*
 		 * If we reach this part of the code, it means we didn't include-only
-		 * tables nor exclude any table (exclude-schema, exclude-table,
-		 * exclude-table-data have not been used in the filtering setup), still
-		 * the exclude-index clause has been used.
+		 * tables nor include-only schema nor exclude any table (exclude-schema,
+		 * exclude-table, exclude-table-data have not been used in the filtering
+		 * setup), still the exclude-index clause has been used.
 		 */
 		filters->type = SOURCE_FILTER_TYPE_EXCL_INDEX;
 	}
@@ -398,4 +432,42 @@ parse_filter_quoted_table_name(SourceFilterTable *table, const char *qname)
 	}
 
 	return true;
+}
+
+
+
+/*
+ * schemaFiltersJoin concatenates elements of a filter array to
+ * a single string (for use with pg_dump and pg_restore)
+ */
+char *
+schemaFiltersJoin(char *dest, size_t dest_size, SourceFilterSchemaList *list, char *separator)
+{
+    size_t separator_size = strlen(separator);
+    char *target = dest;              		 /* start of buffer, where to copy to */
+	char *target_end = dest + dest_size;	 /* end of buffer, cant go beyond that */
+    *target = '\0';
+	size_t nspname_size = 0;
+
+    for (size_t i = 0; i < list->count; i++)
+	{
+		nspname_size = strlen(list->array[i].nspname);
+
+        if (i > 0) /* first element or not? */
+		{
+			if (target_end <= (target + separator_size + nspname_size)) /* no more space */
+				return dest;
+			/* add separator */
+            strcat(target, separator);
+            target += separator_size;
+        }
+		else if (target_end <= (target + nspname_size)) /* no more space */
+			return dest;
+
+		/* add element */
+        strcat(target, list->array[i].nspname);
+        target += nspname_size;   /* move pointer to the end of string */
+    };
+
+    return dest;
 }

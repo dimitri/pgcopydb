@@ -20,7 +20,8 @@ typedef enum
 	SOURCE_FILTER_EXCLUDE_TABLE,
 	SOURCE_FILTER_EXCLUDE_TABLE_DATA,
 	SOURCE_FILTER_EXCLUDE_INDEX,
-	SOURCE_FILTER_INCLUDE_ONLY_TABLE
+	SOURCE_FILTER_INCLUDE_ONLY_TABLE,
+	SOURCE_FILTER_INCLUDE_ONLY_SCHEMA
 } SourceFilterSection;
 
 typedef struct SourceFilterSchema
@@ -85,6 +86,7 @@ typedef struct SourceFilters
 {
 	bool prepared;
 	SourceFilterType type;
+	SourceFilterSchemaList includeOnlySchemaList;
 	SourceFilterSchemaList excludeSchemaList;
 	SourceFilterTableList includeOnlyTableList;
 	SourceFilterTableList excludeTableList;
@@ -95,5 +97,6 @@ typedef struct SourceFilters
 char * filterTypeToString(SourceFilterType type);
 SourceFilterType filterTypeComplement(SourceFilterType type);
 bool parse_filters(const char *filebname, SourceFilters *filters);
+char * schemaFiltersJoin(char *dest, size_t dest_size, SourceFilterSchemaList *filters, char *separator);
 
 #endif  /* FILTERING_H */
