@@ -575,6 +575,7 @@ cli_stream_setup(int argc, char **argv)
 						   false, /* skipExtensions */
 						   false, /* skipCollations */
 						   false, /* noRolesPasswords */
+						   false, /* failFast */
 						   streamDBoptions.restart,
 						   streamDBoptions.resume,
 						   !streamDBoptions.notConsistent))
@@ -631,6 +632,7 @@ cli_stream_cleanup(int argc, char **argv)
 						   false, /* skipExtensions */
 						   false, /* skipCollations */
 						   false, /* noRolesPasswords */
+						   false, /* failFast */
 						   restart,
 						   resume,
 						   !streamDBoptions.notConsistent))
@@ -703,6 +705,7 @@ cli_stream_catchup(int argc, char **argv)
 						   false, /* skipExtensions */
 						   false, /* skipCollations */
 						   false, /* noRolesPasswords */
+						   false, /* failFast */
 						   streamDBoptions.restart,
 						   streamDBoptions.resume,
 						   !streamDBoptions.notConsistent))
@@ -798,6 +801,7 @@ cli_stream_replay(int argc, char **argv)
 						   false, /* skipExtensions */
 						   false, /* skipCollations */
 						   false, /* noRolesPasswords */
+						   false, /* failFast */
 						   streamDBoptions.restart,
 						   streamDBoptions.resume,
 						   !streamDBoptions.notConsistent))
@@ -935,6 +939,7 @@ cli_stream_transform(int argc, char **argv)
 						   false, /* skipExtensions */
 						   false, /* skipCollations */
 						   false, /* noRolesPasswords */
+						   false, /* failFast */
 						   streamDBoptions.restart,
 						   streamDBoptions.resume,
 						   !streamDBoptions.notConsistent))
@@ -1072,6 +1077,7 @@ cli_stream_apply(int argc, char **argv)
 						   false, /* skipExtensions */
 						   false, /* skipCollations */
 						   false, /* noRolesPasswords */
+						   false, /* failFast */
 						   streamDBoptions.restart,
 						   streamDBoptions.resume,
 						   !streamDBoptions.notConsistent))
@@ -1192,6 +1198,7 @@ stream_start_in_mode(LogicalStreamMode mode)
 						   false, /* skipExtensions */
 						   false, /* skipCollations */
 						   false, /* noRolesPasswords */
+						   false, /* failFast */
 						   streamDBoptions.restart,
 						   streamDBoptions.resume,
 						   !streamDBoptions.notConsistent))

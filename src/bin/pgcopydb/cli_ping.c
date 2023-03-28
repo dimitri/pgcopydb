@@ -279,7 +279,13 @@ cli_ping(int argc, char **argv)
 		}
 	}
 
-	if (!copydb_wait_for_subprocesses())
+	/*
+	 * In case of error in one sub-process, we still want the other to fully
+	 * try.
+	 */
+	bool failFast = false;
+
+	if (!copydb_wait_for_subprocesses(failFast))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

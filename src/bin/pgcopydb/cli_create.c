@@ -306,6 +306,7 @@ cli_create_snapshot(int argc, char **argv)
 						   false, /* skipExtensions */
 						   false, /* skipCollations */
 						   false, /* noRolesPasswords */
+						   false, /* failFast */
 						   createSNoptions.restart,
 						   createSNoptions.resume,
 						   !createSNoptions.notConsistent))
@@ -579,6 +580,7 @@ cli_create_slot(int argc, char **argv)
 						   false, /* skipExtensions */
 						   false, /* skipCollations */
 						   false, /* noRolesPasswords */
+						   false, /* failFast */
 						   createSlotOptions.restart,
 						   createSlotOptions.resume,
 						   !createSlotOptions.notConsistent))
@@ -625,6 +627,7 @@ cli_drop_slot(int argc, char **argv)
 						   false, /* skipExtensions */
 						   false, /* skipCollations */
 						   false, /* noRolesPasswords */
+						   false, /* failFast */
 						   createSlotOptions.restart,
 						   createSlotOptions.resume,
 						   !createSlotOptions.notConsistent))
@@ -874,6 +877,7 @@ cli_create_origin(int argc, char **argv)
 						   false, /* skipExtensions */
 						   false, /* skipCollations */
 						   false, /* noRolesPasswords */
+						   false, /* failFast */
 						   createOriginOptions.restart,
 						   createOriginOptions.resume,
 						   !createOriginOptions.notConsistent))
@@ -919,6 +923,7 @@ cli_drop_origin(int argc, char **argv)
 						   false, /* skipExtensions */
 						   false, /* skipCollations */
 						   false, /* noRolesPasswords */
+						   false, /* failFast */
 						   createOriginOptions.restart,
 						   createOriginOptions.resume,
 						   !createOriginOptions.notConsistent))

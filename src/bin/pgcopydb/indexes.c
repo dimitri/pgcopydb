@@ -114,6 +114,11 @@ copydb_index_worker(CopyDataSpec *specs)
 			{
 				if (!copydb_create_index_by_oid(specs, mesg.data.oid))
 				{
+					if (specs->failFast)
+					{
+						return false;
+					}
+
 					++errors;
 				}
 				break;
@@ -199,7 +204,6 @@ copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid)
 	bool ifNotExists =
 		specs->resume || specs->section == DATA_SECTION_INDEXES;
 
-	/* child process runs the command */
 	if (!copydb_create_index(specs->target_pguri,
 							 index,
 							 &indexPaths,
@@ -262,7 +266,7 @@ copydb_table_indexes_are_done(CopyDataSpec *specs,
 	(void) semaphore_lock(&(specs->indexSemaphore));
 
 	/*
-	 * The table-data process creates an empty idxListFile, and is function
+	 * The table-data process creates an empty idxListFile, and this function
 	 * creates a file with proper content while in the critical section.
 	 *
 	 * As a result, if the file exists and is empty, then another process was
@@ -551,7 +555,7 @@ copydb_start_index_processes(CopyDataSpec *specs,
 		}
 	}
 
-	bool success = copydb_wait_for_subprocesses();
+	bool success = copydb_wait_for_subprocesses(specs->failFast);
 
 	/* and write that we successfully finished copying all tables */
 	if (!write_file("", 0, specs->cfPaths.done.indexes))
@@ -606,6 +610,11 @@ copydb_start_index_process(CopyDataSpec *specs,
 								 ifNotExists))
 		{
 			/* errors have already been logged */
+			if (specs->failFast)
+			{
+				return false;
+			}
+
 			++errors;
 			continue;
 		}

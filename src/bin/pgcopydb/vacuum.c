@@ -112,6 +112,11 @@ vacuum_worker(CopyDataSpec *specs)
 				/* ignore errors */
 				if (!vacuum_analyze_table_by_oid(specs, mesg.data.oid))
 				{
+					if (specs->failFast)
+					{
+						return false;
+					}
+
 					++errors;
 				}
 				break;

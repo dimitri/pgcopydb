@@ -38,6 +38,7 @@ typedef struct CopyDBOptions
 	bool skipExtensions;
 	bool skipCollations;
 	bool noRolesPasswords;
+	bool failFast;
 
 	bool restart;
 	bool resume;

@@ -572,6 +572,7 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 						   restoreDBoptions.skipExtensions,
 						   restoreDBoptions.skipCollations,
 						   false, /* noRolesPasswords */
+						   false, /* failFast */
 						   restoreDBoptions.restart,
 						   restoreDBoptions.resume,
 						   !restoreDBoptions.notConsistent))

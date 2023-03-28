@@ -1260,6 +1260,7 @@ cli_list_schema(int argc, char **argv)
 						   false, /* skipExtensions */
 						   false, /* skipCollations */
 						   false, /* noRolesPasswords */
+						   false, /* failFast */
 						   false, /* restart */
 						   true,  /* resume */
 						   false)) /* consistent */
@@ -1367,6 +1368,7 @@ cli_list_progress(int argc, char **argv)
 						   false, /* skipExtensions */
 						   false, /* skipCollations */
 						   false, /* noRolesPasswords */
+						   false, /* failFast */
 						   false, /* restart */
 						   true,  /* resume */
 						   false)) /* consistent */

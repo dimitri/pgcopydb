@@ -41,6 +41,7 @@ Postgres instance to the target Postgres instance.
      --skip-extensions          Skip restoring extensions
      --skip-collations          Skip restoring collations
      --filters <filename>       Use the filters defined in <filename>
+     --fail-fast                Abort early in case of error
      --restart                  Allow restarting when temp files exist already
      --resume                   Allow resuming operations after a failure
      --not-consistent           Allow taking a new snapshot on the source database
@@ -507,6 +508,11 @@ The following options are available to ``pgcopydb clone``:
   See :ref:`filtering` for details about the expected file format and the
   filtering options available.
 
+--fail-fast
+
+  Abort early in case of error by sending the TERM signal to all the
+  processes in the pgcopydb process group.
+
 --restart
 
   When running the pgcopydb command again, if the work directory already
@@ -690,6 +696,18 @@ PGCOPYDB_DROP_IF_EXISTS
    When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
    then pgcopydb uses the pg_restore options ``--clean --if-exists`` when
    creating the schema on the target Postgres instance.
+
+   When ``--drop-if-exists`` is ommitted from the command line then this
+   environment variable is used.
+
+PGCOPYDB_FAIL_FAST
+
+   When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
+   then pgcopydb sends the TERM signal to all the processes in its process
+   group as soon as one process terminates with a non-zero return code.
+
+   When ``--fail-fast`` is ommitted from the command line then this
+   environment variable is used.
 
 PGCOPYDB_SNAPSHOT
 

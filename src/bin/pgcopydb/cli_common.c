@@ -318,6 +318,29 @@ cli_copydb_getenv(CopyDBOptions *options)
 		}
 	}
 
+	/* when --fail-fast has not been userd, check PGCOPYDB_FAIL_FAST */
+	if (!options->failFast)
+	{
+		if (env_exists(PGCOPYDB_FAIL_FAST))
+		{
+			char FAIL_FAST[BUFSIZE] = { 0 };
+
+			if (!get_env_copy(PGCOPYDB_FAIL_FAST, FAIL_FAST, sizeof(FAIL_FAST)))
+			{
+				/* errors have already been logged */
+				++errors;
+			}
+			else if (!parse_bool(FAIL_FAST, &(options->failFast)))
+			{
+				log_error("Failed to parse environment variable \"%s\" "
+						  "value \"%s\", expected a boolean (on/off)",
+						  PGCOPYDB_FAIL_FAST,
+						  FAIL_FAST);
+				++errors;
+			}
+		}
+	}
+
 	return errors == 0;
 }
 
@@ -483,6 +506,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "skip-collations", no_argument, NULL, 'l' },
 		{ "filter", required_argument, NULL, 'F' },
 		{ "filters", required_argument, NULL, 'F' },
+		{ "fail-fast", required_argument, NULL, 'i' },
 		{ "restart", no_argument, NULL, 'r' },
 		{ "resume", no_argument, NULL, 'R' },
 		{ "not-consistent", no_argument, NULL, 'C' },
@@ -518,7 +542,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	}
 
 	while ((c = getopt_long(argc, argv,
-							"S:T:D:J:I:L:cOBelrRCN:xXCtfo:p:s:E:F:Vvdzqh",
+							"S:T:D:J:I:L:cOBelirRCN:xXCtfo:p:s:E:F:Vvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -661,6 +685,13 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				options.skipCollations = true;
 				log_trace("--skip-collations");
+				break;
+			}
+
+			case 'i':
+			{
+				options.failFast = true;
+				log_trace("--fail-fast");
 				break;
 			}
 
@@ -989,6 +1020,7 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 						   copyDBoptions.skipExtensions,
 						   copyDBoptions.skipCollations,
 						   copyDBoptions.noRolesPasswords,
+						   copyDBoptions.failFast,
 						   copyDBoptions.restart,
 						   copyDBoptions.resume,
 						   !copyDBoptions.notConsistent))
