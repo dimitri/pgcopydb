@@ -160,44 +160,6 @@ cli_pprint_json(JSON_Value *js)
 
 
 /*
- * logLevelToString returns the string to use to enable the same logLevel in a
- * sub-process.
- *
- * enum { LOG_TRACE, LOG_DEBUG, LOG_INFO, LOG_WARN, LOG_ERROR, LOG_FATAL };
- */
-char *
-logLevelToString(int logLevel)
-{
-	switch (logLevel)
-	{
-		case LOG_TRACE:
-		{
-			return "-vvv";
-		}
-
-		case LOG_DEBUG:
-		{
-			return "-vv";
-		}
-
-		case LOG_WARN:
-		case LOG_INFO:
-		{
-			return "-v";
-		}
-
-		case LOG_ERROR:
-		case LOG_FATAL:
-		{
-			return "-q";
-		}
-	}
-
-	return "";
-}
-
-
-/*
  * cli_copydb_getenv reads from the environment variables and fills-in the
  * command line options.
  */
