@@ -1017,14 +1017,14 @@ copydb_wait_for_subprocesses(bool failFast)
 
 				if (returnCode == 0)
 				{
-					log_debug("Sub-processes %d exited with code %d",
+					log_debug("Sub-process %d exited with code %d",
 							  pid, returnCode);
 				}
 				else
 				{
 					allReturnCodeAreZero = false;
 
-					log_error("Sub-processes %d exited with code %d",
+					log_error("Sub-process %d exited with code %d",
 							  pid, returnCode);
 
 					if (failFast)

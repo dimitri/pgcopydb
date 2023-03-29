@@ -130,7 +130,7 @@ queue_receive(Queue *queue, QMessage *msg)
 	do {
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
-			return true;
+			return false;
 		}
 
 		if (firstLoop)

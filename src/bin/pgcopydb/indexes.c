@@ -81,24 +81,27 @@ copydb_start_index_workers(CopyDataSpec *specs)
 bool
 copydb_index_worker(CopyDataSpec *specs)
 {
+	pid_t pid = getpid();
+
+	log_notice("Started CREATE INDEX worker %d [%d]", pid, getppid());
+
 	int errors = 0;
 	bool stop = false;
-
-	log_notice("Started CREATE INDEX worker %d [%d]", getpid(), getppid());
 
 	while (!stop)
 	{
 		QMessage mesg = { 0 };
 
-		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
-		{
-			return false;
-		}
-
 		if (!queue_receive(&(specs->indexQueue), &mesg))
 		{
 			/* errors have already been logged */
 			break;
+		}
+
+		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		{
+			log_error("CREATE INDEX worker has been interrupted");
+			return false;
 		}
 
 		switch (mesg.type)
@@ -116,6 +119,9 @@ copydb_index_worker(CopyDataSpec *specs)
 				{
 					if (specs->failFast)
 					{
+						log_error("Failed to create index with oid %u, "
+								  "see above for details",
+								  mesg.data.oid);
 						return false;
 					}
 
@@ -134,7 +140,17 @@ copydb_index_worker(CopyDataSpec *specs)
 		}
 	}
 
-	return stop == true && errors == 0;
+	bool success = (stop == true && errors == 0);
+
+	if (errors > 0)
+	{
+		log_error("CREATE INDEX worker %d encountered %d errors, "
+				  "see above for details",
+				  pid,
+				  errors);
+	}
+
+	return success;
 }
 
 
