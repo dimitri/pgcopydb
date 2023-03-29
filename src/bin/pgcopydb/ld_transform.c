@@ -422,17 +422,23 @@ stream_transform_worker(StreamSpecs *specs)
 	while (!stop)
 	{
 		QMessage mesg = { 0 };
-
-		if (!queue_receive(transformQueue, &mesg))
-		{
-			/* errors have already been logged */
-			break;
-		}
+		bool recv_ok = queue_receive(transformQueue, &mesg);
 
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
+			/*
+			 * It's part of the supervision protocol to return true here, so
+			 * that the follow sub-processes supervisor can then switch from
+			 * catchup mode to replay mode.
+			 */
 			log_debug("stream_transform_worker was asked to stop");
 			return true;
+		}
+
+		if (!recv_ok)
+		{
+			/* errors have already been logged */
+			return false;
 		}
 
 		switch (mesg.type)
@@ -479,12 +485,22 @@ stream_transform_worker(StreamSpecs *specs)
 						  mesg.type,
 						  transformQueue->name,
 						  transformQueue->qId);
+				++errors;
 				break;
 			}
 		}
 	}
 
-	return stop == true && errors == 0;
+	bool success = (stop == true && errors == 0);
+
+	if (errors > 0)
+	{
+		log_error("Stream transform worker encountered %d errors, "
+				  "see above for details",
+				  errors);
+	}
+
+	return success;
 }
 
 

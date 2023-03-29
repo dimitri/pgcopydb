@@ -91,16 +91,17 @@ copydb_index_worker(CopyDataSpec *specs)
 	while (!stop)
 	{
 		QMessage mesg = { 0 };
-
-		if (!queue_receive(&(specs->indexQueue), &mesg))
-		{
-			/* errors have already been logged */
-			break;
-		}
+		bool recv_ok = queue_receive(&(specs->indexQueue), &mesg);
 
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
 			log_error("CREATE INDEX worker has been interrupted");
+			return false;
+		}
+
+		if (!recv_ok)
+		{
+			/* errors have already been logged */
 			return false;
 		}
 

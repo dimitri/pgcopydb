@@ -66,7 +66,7 @@ queue_unlink(Queue *queue)
 		return false;
 	}
 
-	/* mark the queue as unlinekd to the System V resources clean-up array */
+	/* mark the queue as unlinked to the System V resources clean-up array */
 	if (!copydb_unlink_sysv_queue(&system_res_array, queue))
 	{
 		/* errors have already been logged */

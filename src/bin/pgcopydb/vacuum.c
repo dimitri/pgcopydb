@@ -88,16 +88,17 @@ vacuum_worker(CopyDataSpec *specs)
 	while (!stop)
 	{
 		QMessage mesg = { 0 };
-
-		if (!queue_receive(&(specs->vacuumQueue), &mesg))
-		{
-			/* errors have already been logged */
-			break;
-		}
+		bool recv_ok = queue_receive(&(specs->vacuumQueue), &mesg);
 
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
 			log_error("VACUUM worker has been interrupted");
+			return false;
+		}
+
+		if (!recv_ok)
+		{
+			/* errors have already been logged */
 			return false;
 		}
 
