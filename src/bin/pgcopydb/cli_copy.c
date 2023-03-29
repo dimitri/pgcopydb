@@ -46,6 +46,7 @@ static CommandLine copy_db_command =
 		"  --no-comments         Do not output commands to restore comments\n"
 		"  --skip-large-objects  Skip copying large objects (blobs)\n"
 		"  --filters <filename>  Use the filters defined in <filename>\n"
+		"  --fail-fast           Abort early in case of error\n"
 		"  --restart             Allow restarting when temp files exist already\n"
 		"  --resume              Allow resuming operations after a failure\n"
 		"  --not-consistent      Allow taking a new snapshot on the source database\n"

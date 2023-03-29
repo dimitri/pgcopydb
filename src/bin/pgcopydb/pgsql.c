@@ -960,6 +960,103 @@ pgsql_commit(PGSQL *pgsql)
 }
 
 
+/*
+ * pgsql_savepoint issues a SAVEPOINT command in the previously established
+ * connection.
+ */
+bool
+pgsql_savepoint(PGSQL *pgsql, char *name)
+{
+	if (pgsql->connectionStatementType != PGSQL_CONNECTION_MULTI_STATEMENT ||
+		pgsql->connection == NULL)
+	{
+		log_error("BUG: call to pgsql_savepoint() without holding an open "
+				  "multi statement connection");
+		if (pgsql->connection)
+		{
+			pgsql_finish(pgsql);
+		}
+		return false;
+	}
+
+	char sql[BUFSIZE] = { 0 };
+
+	sformat(sql, sizeof(sql), "savepoint %s", name);
+
+	if (!pgsql_execute(pgsql, sql))
+	{
+		pgsql_finish(pgsql);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * pgsql_rollback_to_savepoint issues the command ROLLBACK TO SAVEPOINT.
+ */
+bool
+pgsql_rollback_to_savepoint(PGSQL *pgsql, char *name)
+{
+	if (pgsql->connectionStatementType != PGSQL_CONNECTION_MULTI_STATEMENT ||
+		pgsql->connection == NULL)
+	{
+		log_error("BUG: call to pgsql_rollback_to_savepoint() "
+				  "without holding an open multi statement connection");
+		if (pgsql->connection)
+		{
+			pgsql_finish(pgsql);
+		}
+		return false;
+	}
+
+	char sql[BUFSIZE] = { 0 };
+
+	sformat(sql, sizeof(sql), "rollback to savepoint %s", name);
+
+	if (!pgsql_execute(pgsql, sql))
+	{
+		pgsql_finish(pgsql);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * pgsql_release_savepoint issues the command RELEASE SAVEPOINT.
+ */
+bool
+pgsql_release_savepoint(PGSQL *pgsql, char *name)
+{
+	if (pgsql->connectionStatementType != PGSQL_CONNECTION_MULTI_STATEMENT ||
+		pgsql->connection == NULL)
+	{
+		log_error("BUG: call to pgsql_release_savepoint() without holding an open "
+				  "multi statement connection");
+		if (pgsql->connection)
+		{
+			pgsql_finish(pgsql);
+		}
+		return false;
+	}
+
+	char sql[BUFSIZE] = { 0 };
+
+	sformat(sql, sizeof(sql), "release savepoint %s", name);
+
+	if (!pgsql_execute(pgsql, sql))
+	{
+		pgsql_finish(pgsql);
+		return false;
+	}
+
+	return true;
+}
+
+
 typedef struct PgVersionContext
 {
 	char sqlstate[SQLSTATE_LENGTH];

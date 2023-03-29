@@ -158,7 +158,7 @@ copydb_process_table_data(CopyDataSpec *specs)
 		++errors;
 	}
 
-	if (!copydb_wait_for_subprocesses())
+	if (!copydb_wait_for_subprocesses(specs->failFast))
 	{
 		log_error("Some sub-processes have exited with error status, "
 				  "see above for details");
@@ -265,7 +265,7 @@ copydb_process_table_data_with_workers(CopyDataSpec *specs)
 			}
 
 			/* the COPY supervisor waits for the COPY workers */
-			if (!copydb_wait_for_subprocesses())
+			if (!copydb_wait_for_subprocesses(specs->failFast))
 			{
 				log_error("Some COPY worker process(es) have exited with error, "
 						  "see above for details");
@@ -394,12 +394,21 @@ copydb_process_table_data_worker(CopyDataSpec *specs)
 			 * until all the sub-processes are finished, but we don't go and
 			 * signal them to stop immediately). We'd better continue with as
 			 * many processes as --table-jobs was given.
+			 *
+			 * When --fail-fast has been used though, we signal the other
+			 * processes in the process group to terminate and we'd rather
+			 * break out from the loop.
 			 */
 			if (!copydb_copy_table(specs, tableSpecs))
 			{
 				/* errors have already been logged */
 				copySucceeded = false;
 				++errors;
+
+				if (specs->failFast)
+				{
+					return false;
+				}
 			}
 		}
 
@@ -450,6 +459,11 @@ copydb_process_table_data_worker(CopyDataSpec *specs)
 						 tableSpecs->qname);
 				log_warn("Consider `pgcopydb copy indexes` to try again");
 				++errors;
+
+				if (specs->failFast)
+				{
+					return false;
+				}
 			}
 
 			if (!vacuum_add_table(specs, tableSpecs))
@@ -458,6 +472,11 @@ copydb_process_table_data_worker(CopyDataSpec *specs)
 						 tableSpecs->qname,
 						 tableSpecs->sourceTable->oid);
 				++errors;
+
+				if (specs->failFast)
+				{
+					return false;
+				}
 			}
 		}
 	}

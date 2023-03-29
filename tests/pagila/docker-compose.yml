@@ -35,6 +35,7 @@ services:
       PGCOPYDB_TABLE_JOBS: 4
       PGCOPYDB_INDEX_JOBS: 4
       PGCOPYDB_SPLIT_TABLES_LARGER_THAN: 200kB
+      PGCOPYDB_FAIL_FAST: "true"
     depends_on:
       - source
       - target

@@ -380,6 +380,7 @@ cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 						   false, /* skipLargeObjects */
 						   false, /* skipExtensions */
 						   false, /* skipCollations */
+						   false, /* failFast */
 						   dumpDBoptions->noRolesPasswords,
 						   dumpDBoptions->restart,
 						   dumpDBoptions->resume,

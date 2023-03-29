@@ -81,24 +81,28 @@ copydb_start_index_workers(CopyDataSpec *specs)
 bool
 copydb_index_worker(CopyDataSpec *specs)
 {
+	pid_t pid = getpid();
+
+	log_notice("Started CREATE INDEX worker %d [%d]", pid, getppid());
+
 	int errors = 0;
 	bool stop = false;
-
-	log_notice("Started CREATE INDEX worker %d [%d]", getpid(), getppid());
 
 	while (!stop)
 	{
 		QMessage mesg = { 0 };
+		bool recv_ok = queue_receive(&(specs->indexQueue), &mesg);
 
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
+			log_error("CREATE INDEX worker has been interrupted");
 			return false;
 		}
 
-		if (!queue_receive(&(specs->indexQueue), &mesg))
+		if (!recv_ok)
 		{
 			/* errors have already been logged */
-			break;
+			return false;
 		}
 
 		switch (mesg.type)
@@ -114,6 +118,14 @@ copydb_index_worker(CopyDataSpec *specs)
 			{
 				if (!copydb_create_index_by_oid(specs, mesg.data.oid))
 				{
+					if (specs->failFast)
+					{
+						log_error("Failed to create index with oid %u, "
+								  "see above for details",
+								  mesg.data.oid);
+						return false;
+					}
+
 					++errors;
 				}
 				break;
@@ -129,7 +141,17 @@ copydb_index_worker(CopyDataSpec *specs)
 		}
 	}
 
-	return stop == true && errors == 0;
+	bool success = (stop == true && errors == 0);
+
+	if (errors > 0)
+	{
+		log_error("CREATE INDEX worker %d encountered %d errors, "
+				  "see above for details",
+				  pid,
+				  errors);
+	}
+
+	return success;
 }
 
 
@@ -199,7 +221,6 @@ copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid)
 	bool ifNotExists =
 		specs->resume || specs->section == DATA_SECTION_INDEXES;
 
-	/* child process runs the command */
 	if (!copydb_create_index(specs->target_pguri,
 							 index,
 							 &indexPaths,
@@ -262,7 +283,7 @@ copydb_table_indexes_are_done(CopyDataSpec *specs,
 	(void) semaphore_lock(&(specs->indexSemaphore));
 
 	/*
-	 * The table-data process creates an empty idxListFile, and is function
+	 * The table-data process creates an empty idxListFile, and this function
 	 * creates a file with proper content while in the critical section.
 	 *
 	 * As a result, if the file exists and is empty, then another process was
@@ -551,7 +572,7 @@ copydb_start_index_processes(CopyDataSpec *specs,
 		}
 	}
 
-	bool success = copydb_wait_for_subprocesses();
+	bool success = copydb_wait_for_subprocesses(specs->failFast);
 
 	/* and write that we successfully finished copying all tables */
 	if (!write_file("", 0, specs->cfPaths.done.indexes))
@@ -606,6 +627,11 @@ copydb_start_index_process(CopyDataSpec *specs,
 								 ifNotExists))
 		{
 			/* errors have already been logged */
+			if (specs->failFast)
+			{
+				return false;
+			}
+
 			++errors;
 			continue;
 		}

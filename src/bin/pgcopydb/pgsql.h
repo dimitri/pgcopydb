@@ -251,6 +251,9 @@ void fetchedRows(void *ctx, PGresult *result);
 bool pgsql_begin(PGSQL *pgsql);
 bool pgsql_commit(PGSQL *pgsql);
 bool pgsql_rollback(PGSQL *pgsql);
+bool pgsql_savepoint(PGSQL *pgsql, char *name);
+bool pgsql_release_savepoint(PGSQL *pgsql, char *name);
+bool pgsql_rollback_to_savepoint(PGSQL *pgsql, char *name);
 
 bool pgsql_server_version(PGSQL *pgsql);
 

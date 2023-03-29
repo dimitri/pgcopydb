@@ -77,25 +77,29 @@ vacuum_start_workers(CopyDataSpec *specs)
 bool
 vacuum_worker(CopyDataSpec *specs)
 {
+	pid_t pid = getpid();
+
+	log_notice("Started VACUUM worker %d [%d]", pid, getppid());
+	log_trace("vacuum_worker: \"%s\"", specs->cfPaths.tbldir);
+
 	int errors = 0;
 	bool stop = false;
-
-	log_notice("Started VACUUM worker %d [%d]", getpid(), getppid());
-	log_trace("vacuum_worker: \"%s\"", specs->cfPaths.tbldir);
 
 	while (!stop)
 	{
 		QMessage mesg = { 0 };
+		bool recv_ok = queue_receive(&(specs->vacuumQueue), &mesg);
 
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
+			log_error("VACUUM worker has been interrupted");
 			return false;
 		}
 
-		if (!queue_receive(&(specs->vacuumQueue), &mesg))
+		if (!recv_ok)
 		{
 			/* errors have already been logged */
-			break;
+			return false;
 		}
 
 		switch (mesg.type)
@@ -109,9 +113,16 @@ vacuum_worker(CopyDataSpec *specs)
 
 			case QMSG_TYPE_TABLEOID:
 			{
-				/* ignore errors */
 				if (!vacuum_analyze_table_by_oid(specs, mesg.data.oid))
 				{
+					if (specs->failFast)
+					{
+						log_error("Failed to vacuum table with oid %u, "
+								  "see above for details",
+								  mesg.data.oid);
+						return false;
+					}
+
 					++errors;
 				}
 				break;
@@ -127,7 +138,17 @@ vacuum_worker(CopyDataSpec *specs)
 		}
 	}
 
-	return stop == true && errors == 0;
+	bool success = (stop == true && errors == 0);
+
+	if (errors > 0)
+	{
+		log_error("VACUUM worker %d encountered %d errors, "
+				  "see above for details",
+				  pid,
+				  errors);
+	}
+
+	return success;
 }
 
 

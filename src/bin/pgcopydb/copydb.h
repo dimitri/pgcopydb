@@ -226,6 +226,7 @@ typedef struct CopyDataSpec
 	bool restart;
 	bool resume;
 	bool consistent;
+	bool failFast;
 
 	bool follow;                /* pgcopydb fork --follow */
 
@@ -314,6 +315,7 @@ bool copydb_init_specs(CopyDataSpec *specs,
 					   bool skipExtensions,
 					   bool skipCollations,
 					   bool noRolesPasswords,
+					   bool failFast,
 					   bool restart,
 					   bool resume,
 					   bool consistent);
@@ -335,7 +337,7 @@ bool copydb_init_tablepaths_for_part(CopyFilePaths *cfPaths,
 bool copydb_export_snapshot(TransactionSnapshot *snapshot);
 
 bool copydb_fatal_exit(void);
-bool copydb_wait_for_subprocesses(void);
+bool copydb_wait_for_subprocesses(bool failFast);
 
 bool copydb_register_sysv_semaphore(SysVResArray *array, Semaphore *semaphore);
 bool copydb_register_sysv_queue(SysVResArray *array, Queue *queue);

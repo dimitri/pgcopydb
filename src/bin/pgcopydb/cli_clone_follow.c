@@ -40,6 +40,7 @@
 	"  --skip-extensions          Skip restoring extensions\n" \
 	"  --skip-collations          Skip restoring collations\n" \
 	"  --filters <filename>       Use the filters defined in <filename>\n" \
+	"  --fail-fast                Abort early in case of error\n" \
 	"  --restart                  Allow restarting when temp files exist already\n" \
 	"  --resume                   Allow resuming operations after a failure\n" \
 	"  --not-consistent           Allow taking a new snapshot on the source database\n" \
@@ -169,7 +170,7 @@ cli_clone(int argc, char **argv)
 	}
 
 	/* make sure all sub-processes are now finished */
-	success = success && copydb_wait_for_subprocesses();
+	success = success && copydb_wait_for_subprocesses(copySpecs.failFast);
 
 	if (!success)
 	{
@@ -295,7 +296,7 @@ clone_and_follow(CopyDataSpec *copySpecs)
 	}
 
 	/* make sure all sub-processes are now finished */
-	success = success && copydb_wait_for_subprocesses();
+	success = success && copydb_wait_for_subprocesses(copySpecs->failFast);
 
 	if (!success)
 	{

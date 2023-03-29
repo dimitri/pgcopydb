@@ -66,7 +66,7 @@ queue_unlink(Queue *queue)
 		return false;
 	}
 
-	/* mark the queue as unlinekd to the System V resources clean-up array */
+	/* mark the queue as unlinked to the System V resources clean-up array */
 	if (!copydb_unlink_sysv_queue(&system_res_array, queue))
 	{
 		/* errors have already been logged */
@@ -130,7 +130,7 @@ queue_receive(Queue *queue, QMessage *msg)
 	do {
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
-			return true;
+			return false;
 		}
 
 		if (firstLoop)

@@ -631,6 +631,7 @@ copydb_init_specs(CopyDataSpec *specs,
 				  bool skipExtensions,
 				  bool skipCollations,
 				  bool noRolesPasswords,
+				  bool failFast,
 				  bool restart,
 				  bool resume,
 				  bool consistent)
@@ -657,6 +658,7 @@ copydb_init_specs(CopyDataSpec *specs,
 		.skipExtensions = skipExtensions,
 		.skipCollations = skipCollations,
 		.noRolesPasswords = noRolesPasswords,
+		.failFast = failFast,
 
 		.restart = restart,
 		.resume = resume,
@@ -956,7 +958,13 @@ copydb_fatal_exit()
 		return false;
 	}
 
-	return copydb_wait_for_subprocesses();
+	/*
+	 * Now wait until all the sub-processes have exited, and refrain from
+	 * calling copydb_fatal_exit() recursively when a process exits with a
+	 * non-zero return code.
+	 */
+	bool failFast = false;
+	return copydb_wait_for_subprocesses(failFast);
 }
 
 
@@ -966,7 +974,7 @@ copydb_fatal_exit()
  * returns true only when all the subprocesses have returned zero (success).
  */
 bool
-copydb_wait_for_subprocesses()
+copydb_wait_for_subprocesses(bool failFast)
 {
 	bool allReturnCodeAreZero = true;
 	log_debug("Waiting for sub-processes to finish");
@@ -997,7 +1005,7 @@ copydb_wait_for_subprocesses()
 			{
 				/*
 				 * We're using WNOHANG, 0 means there are no stopped or exited
-				 * children sleep for awhile and ask again later.
+				 * children. Sleep for awhile and ask again later.
 				 */
 				pg_usleep(100 * 1000); /* 100 ms */
 				break;
@@ -1009,15 +1017,22 @@ copydb_wait_for_subprocesses()
 
 				if (returnCode == 0)
 				{
-					log_debug("Sub-processes %d exited with code %d",
+					log_debug("Sub-process %d exited with code %d",
 							  pid, returnCode);
 				}
 				else
 				{
 					allReturnCodeAreZero = false;
 
-					log_error("Sub-processes %d exited with code %d",
+					log_error("Sub-process %d exited with code %d",
 							  pid, returnCode);
+
+					if (failFast)
+					{
+						log_error("Signaling other processes to terminate "
+								  "(see --fail-fast)");
+						(void) copydb_fatal_exit();
+					}
 				}
 
 				break;
