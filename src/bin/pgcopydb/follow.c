@@ -481,46 +481,6 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 				  "see above for details");
 	}
 
-
-	/*
-	 * Once the sub-processes have exited, it's time to clean-up the shared
-	 * resources used for communication purposes.
-	 */
-	switch (streamSpecs->mode)
-	{
-		case STREAM_MODE_PREFETCH:
-		case STREAM_MODE_CATCHUP:
-		{
-			/*
-			 * Clean-up the message queue used to communicate between prefetch
-			 * and catch-up sub-processes.
-			 */
-			if (!queue_unlink(&(streamSpecs->transformQueue)))
-			{
-				/* errors have already been logged */
-				log_warn("HINT: use ipcrm -q %d to remove the queue",
-						 streamSpecs->transformQueue.qId);
-				return false;
-			}
-			break;
-		}
-
-		case STREAM_MODE_REPLAY:
-		{
-			/* no cleanup to do here */
-			break;
-		}
-
-		case STREAM_MODE_UNKNOW:
-		case STREAM_MODE_RECEIVE:
-		default:
-		{
-			log_error("BUG: followDB cleanup section reached in mode %d",
-					  streamSpecs->mode);
-			return false;
-		}
-	}
-
 	return errors == 0;
 }
 
