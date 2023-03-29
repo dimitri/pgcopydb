@@ -657,8 +657,6 @@ copydb_create_index(const char *pguri,
 					bool constraint,
 					bool ifNotExists)
 {
-	PGSQL dst = { 0 };
-
 	bool isDone = false;
 	bool isBeingProcessed = false;
 
@@ -673,6 +671,7 @@ copydb_create_index(const char *pguri,
 	summary->index = index;
 
 	bool isConstraintIndex = index->constraintOid != 0;
+	bool skipCreateIndex = false;
 
 	/*
 	 * When asked to create the constraint and there is no constraint attached
@@ -697,14 +696,14 @@ copydb_create_index(const char *pguri,
 	 */
 	else if (isConstraintIndex && !index->isPrimary && !index->isUnique)
 	{
-		log_warn("Skipping concurrent build of index "
-				 "\"%s\" for constraint %s on \"%s\".\"%s\", "
-				 "it is not a UNIQUE or a PRIMARY constraint",
-				 index->indexRelname,
-				 index->constraintDef,
-				 index->tableNamespace,
-				 index->tableRelname);
-		return true;
+		skipCreateIndex = true;
+		log_notice("Skipping concurrent build of index "
+				   "\"%s\" for constraint %s on \"%s\".\"%s\", "
+				   "it is not a UNIQUE or a PRIMARY constraint",
+				   index->indexRelname,
+				   index->constraintDef,
+				   index->tableNamespace,
+				   index->tableRelname);
 	}
 
 	if (!copydb_index_is_being_processed(index,
@@ -749,28 +748,33 @@ copydb_create_index(const char *pguri,
 		}
 	}
 
-	log_notice("%s", summary->command);
-
-	if (!pgsql_init(&dst, (char *) pguri, PGSQL_CONN_TARGET))
+	if (!skipCreateIndex)
 	{
-		return false;
-	}
+		PGSQL dst = { 0 };
 
-	/* also set our GUC values for the target connection */
-	if (!pgsql_set_gucs(&dst, dstSettings))
-	{
-		log_fatal("Failed to set our GUC settings on the target connection, "
-				  "see above for details");
-		return false;
-	}
+		log_notice("%s", summary->command);
 
-	if (!pgsql_execute(&dst, summary->command))
-	{
-		/* errors have already been logged */
-		return false;
-	}
+		if (!pgsql_init(&dst, (char *) pguri, PGSQL_CONN_TARGET))
+		{
+			return false;
+		}
 
-	(void) pgsql_finish(&dst);
+		/* also set our GUC values for the target connection */
+		if (!pgsql_set_gucs(&dst, dstSettings))
+		{
+			log_fatal("Failed to set our GUC settings on the target connection, "
+					  "see above for details");
+			return false;
+		}
+
+		if (!pgsql_execute(&dst, summary->command))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		(void) pgsql_finish(&dst);
+	}
 
 	if (!copydb_mark_index_as_done(index,
 								   indexPaths,
