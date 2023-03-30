@@ -180,6 +180,8 @@ typedef struct PGSQL
 	int notificationGroupId;
 	int64_t notificationNodeId;
 	bool notificationReceived;
+
+	bool logSQL;
 } PGSQL;
 
 
