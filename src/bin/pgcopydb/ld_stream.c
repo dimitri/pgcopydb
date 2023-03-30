@@ -694,14 +694,14 @@ streamWrite(LogicalStreamContext *context)
 
 	if (metadata->xid > 0)
 	{
-		log_debug("Received action %c for XID %u at LSN %X/%X",
+		log_trace("Received action %c for XID %u at LSN %X/%X",
 				  metadata->action,
 				  metadata->xid,
 				  LSN_FORMAT_ARGS(metadata->lsn));
 	}
 	else
 	{
-		log_debug("Received action %c at LSN %X/%X",
+		log_trace("Received action %c at LSN %X/%X",
 				  metadata->action,
 				  LSN_FORMAT_ARGS(metadata->lsn));
 	}
@@ -1090,7 +1090,7 @@ streamKeepalive(LogicalStreamContext *context)
 
 		fformat(privateContext->jsonFile, "%s", buffer);
 
-		log_debug("Inserted action KEEPALIVE for lsn %X/%X @%s",
+		log_trace("Inserted action KEEPALIVE for lsn %X/%X @%s",
 				  LSN_FORMAT_ARGS(context->cur_record_lsn),
 				  sendTimeStr);
 
@@ -1604,7 +1604,7 @@ updateStreamCounters(StreamContext *context, LogicalMessageMetadata *metadata)
 
 		default:
 		{
-			log_debug("Skipping counters for message action \"%c\"",
+			log_trace("Skipping counters for message action \"%c\"",
 					  metadata->action);
 			break;
 		}

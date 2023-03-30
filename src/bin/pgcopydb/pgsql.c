@@ -39,6 +39,10 @@ static bool is_response_ok(PGresult *result);
 static bool clear_results(PGSQL *pgsql);
 static void pgsql_handle_notifications(PGSQL *pgsql);
 
+static bool build_parameters_list(PQExpBuffer buffer,
+								  int paramCount,
+								  const char **paramValues);
+
 static void parseIdentifySystemResult(void *ctx, PGresult *result);
 static void parseTimelineHistoryResult(void *ctx, PGresult *result);
 
@@ -173,6 +177,10 @@ pgsql_init(PGSQL *pgsql, char *url, ConnectionType connectionType)
 	{
 		return false;
 	}
+
+	/* by default we log all the SQL queries and their parameters */
+	pgsql->logSQL = true;
+
 	return true;
 }
 
@@ -412,9 +420,13 @@ pgsql_finish(PGSQL *pgsql)
 					sizeof(scrubbedConnectionString));
 		}
 
-		log_sql("Disconnecting from [%s] \"%s\"",
-				ConnectionTypeToString(pgsql->connectionType),
-				scrubbedConnectionString);
+		if (pgsql->logSQL)
+		{
+			log_sql("Disconnecting from [%s] \"%s\"",
+					ConnectionTypeToString(pgsql->connectionType),
+					scrubbedConnectionString);
+		}
+
 		PQfinish(pgsql->connection);
 		pgsql->connection = NULL;
 
@@ -493,9 +505,12 @@ pgsql_open_connection(PGSQL *pgsql)
 	(void) parse_and_scrub_connection_string(pgsql->connectionString,
 											 scrubbedConnectionString);
 
-	log_sql("Connecting to [%s] \"%s\"",
-			ConnectionTypeToString(pgsql->connectionType),
-			scrubbedConnectionString);
+	if (pgsql->logSQL)
+	{
+		log_sql("Connecting to [%s] \"%s\"",
+				ConnectionTypeToString(pgsql->connectionType),
+				scrubbedConnectionString);
+	}
 
 	/* use our own application_name, unless the environment already is set */
 	if (!env_exists("PGAPPNAME"))
@@ -618,7 +633,7 @@ pgsql_retry_open_connection(PGSQL *pgsql)
 
 			log_error("Failed to connect to \"%s\" "
 					  "after %d attempts in %d ms, "
-					  "pg_autoctl stops retrying now",
+					  "pgcopydb stops retrying now",
 					  scrubbedConnectionString,
 					  pgsql->retryPolicy.attempts,
 					  (int) INSTR_TIME_GET_MILLISEC(duration));
@@ -1442,11 +1457,17 @@ pgsql_execute(PGSQL *pgsql, const char *sql)
 
 
 /*
- * pgsql_execute_with_params opens a connection, runs a given SQL command,
- * and closes the connection again.
+ * pgsql_execute_with_params implements running a SQL query using the libpq
+ * API. This API requires very careful handling of responses and return values,
+ * so we have a single implementation of that client-side parts of the Postgres
+ * protocol.
  *
- * We avoid persisting connection across multiple commands to simplify error
- * handling.
+ * Also to avoid connection leaks we automatically open and clone connection at
+ * query time, unless when the connection type is
+ * PGSQL_CONNECTION_MULTI_STATEMENT. See pgsql_begin() above for details.
+ *
+ * Finally, in some cases we want to avoid logging queries entirely: we might
+ * be handling customer data so privacy rules apply.
  */
 bool
 pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
@@ -1454,7 +1475,7 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 						  void *context, ParsePostgresResultCB *parseFun)
 {
 	PGresult *result = NULL;
-	PQExpBuffer debugParameters = createPQExpBuffer();
+	PQExpBuffer debugParameters = NULL;
 
 	PGconn *connection = pgsql_open_connection(pgsql);
 
@@ -1466,40 +1487,23 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 	char *endpoint =
 		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
 
-	log_sql("[%s] %s;", endpoint, sql);
-
-	if (paramCount > 0)
+	if (pgsql->logSQL)
 	{
-		int paramIndex = 0;
+		debugParameters = createPQExpBuffer();
 
-		for (paramIndex = 0; paramIndex < paramCount; paramIndex++)
+		if (!build_parameters_list(debugParameters, paramCount, paramValues))
 		{
-			const char *value = paramValues[paramIndex];
-
-			if (paramIndex > 0)
-			{
-				appendPQExpBuffer(debugParameters, ", ");
-			}
-
-			if (value == NULL)
-			{
-				appendPQExpBuffer(debugParameters, "NULL");
-			}
-			else
-			{
-				appendPQExpBuffer(debugParameters, "'%s'", value);
-			}
-		}
-
-		if (PQExpBufferBroken(debugParameters))
-		{
-			log_error("Failed to create log message for SQL query parameters: "
-					  "out of memory");
+			/* errors have already been logged */
 			destroyPQExpBuffer(debugParameters);
 			return false;
 		}
 
-		log_sql("%s", debugParameters->data);
+		log_sql("[%s] %s;", endpoint, sql);
+
+		if (paramCount > 0)
+		{
+			log_sql("%s", debugParameters->data);
+		}
 	}
 
 	if (paramCount == 0)
@@ -1532,8 +1536,11 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 			log_error("[%s] %s", endpoint, errorLines[lineNumber]);
 		}
 
-		log_error("SQL query: %s", sql);
-		log_error("SQL params: %s", debugParameters->data);
+		if (pgsql->logSQL)
+		{
+			log_error("SQL query: %s", sql);
+			log_error("SQL params: %s", debugParameters->data);
+		}
 
 		destroyPQExpBuffer(debugParameters);
 
@@ -1579,6 +1586,56 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 	if (pgsql->connectionStatementType == PGSQL_CONNECTION_SINGLE_STATEMENT)
 	{
 		(void) pgsql_finish(pgsql);
+	}
+
+	return true;
+}
+
+
+/*
+ * build_parameters_list builds a string representation of the SQL query
+ * parameter list given.
+ */
+static bool
+build_parameters_list(PQExpBuffer buffer,
+					  int paramCount, const char **paramValues)
+{
+	if (buffer == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	if (paramCount > 0)
+	{
+		int paramIndex = 0;
+
+		for (paramIndex = 0; paramIndex < paramCount; paramIndex++)
+		{
+			const char *value = paramValues[paramIndex];
+
+			if (paramIndex > 0)
+			{
+				appendPQExpBuffer(buffer, ", ");
+			}
+
+			if (value == NULL)
+			{
+				appendPQExpBuffer(buffer, "NULL");
+			}
+			else
+			{
+				appendPQExpBuffer(buffer, "'%s'", value);
+			}
+		}
+
+		if (PQExpBufferBroken(buffer))
+		{
+			log_error("Failed to create log message for SQL query parameters: "
+					  "out of memory");
+			destroyPQExpBuffer(buffer);
+			return false;
+		}
 	}
 
 	return true;

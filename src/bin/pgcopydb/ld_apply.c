@@ -209,6 +209,9 @@ stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
 		return false;
 	}
 
+	/* skip logging the sentinel queries, we log_debug the values fetched */
+	src.logSQL = false;
+
 	while (!sentinel.apply)
 	{
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
@@ -282,6 +285,9 @@ stream_apply_sync_sentinel(StreamApplyContext *context)
 		/* errors have already been logged */
 		return false;
 	}
+
+	/* limit the amount of logging of the apply process */
+	src.logSQL = false;
 
 	if (!pgsql_sync_sentinel_apply(&src, context->previousLSN, &sentinel))
 	{
@@ -418,7 +424,7 @@ stream_apply_sql(StreamApplyContext *context,
 					context->previousLSN < metadata->lsn;
 			}
 
-			log_debug("BEGIN %lld LSN %X/%X @%s, previous LSN %X/%X %s",
+			log_trace("BEGIN %lld LSN %X/%X @%s, previous LSN %X/%X %s",
 					  (long long) metadata->xid,
 					  LSN_FORMAT_ARGS(metadata->lsn),
 					  metadata->timestamp,
@@ -481,7 +487,7 @@ stream_apply_sql(StreamApplyContext *context,
 				return true;
 			}
 
-			log_debug("COMMIT %lld LSN %X/%X",
+			log_trace("COMMIT %lld LSN %X/%X",
 					  (long long) metadata->xid,
 					  LSN_FORMAT_ARGS(metadata->lsn));
 
@@ -529,7 +535,7 @@ stream_apply_sql(StreamApplyContext *context,
 					context->previousLSN < metadata->lsn;
 			}
 
-			log_debug("KEEPALIVE LSN %X/%X @%s, previous LSN %X/%X %s",
+			log_trace("KEEPALIVE LSN %X/%X @%s, previous LSN %X/%X %s",
 					  LSN_FORMAT_ARGS(metadata->lsn),
 					  metadata->timestamp,
 					  LSN_FORMAT_ARGS(context->previousLSN),
@@ -712,6 +718,8 @@ setupReplicationOrigin(StreamApplyContext *context,
 	/* we're going to send several replication origin commands */
 	pgsql->connectionStatementType = PGSQL_CONNECTION_MULTI_STATEMENT;
 
+	/* we also want to skip logging any SQL query that we apply */
+	pgsql->logSQL = false;
 
 	uint32_t oid = 0;
 
