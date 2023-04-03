@@ -318,7 +318,7 @@ cli_copydb_getenv(CopyDBOptions *options)
 		}
 	}
 
-	/* when --fail-fast has not been userd, check PGCOPYDB_FAIL_FAST */
+	/* when --fail-fast has not been used, check PGCOPYDB_FAIL_FAST */
 	if (!options->failFast)
 	{
 		if (env_exists(PGCOPYDB_FAIL_FAST))
@@ -336,6 +336,31 @@ cli_copydb_getenv(CopyDBOptions *options)
 						  "value \"%s\", expected a boolean (on/off)",
 						  PGCOPYDB_FAIL_FAST,
 						  FAIL_FAST);
+				++errors;
+			}
+		}
+	}
+
+	/* when --fail-fast has not been used, check PGCOPYDB_FAIL_FAST */
+	if (!options->skipVacuum)
+	{
+		if (env_exists(PGCOPYDB_SKIP_VACUUM))
+		{
+			char SKIP_VACUUM[BUFSIZE] = { 0 };
+
+			if (!get_env_copy(PGCOPYDB_SKIP_VACUUM,
+							  SKIP_VACUUM,
+							  sizeof(SKIP_VACUUM)))
+			{
+				/* errors have already been logged */
+				++errors;
+			}
+			else if (!parse_bool(SKIP_VACUUM, &(options->skipVacuum)))
+			{
+				log_error("Failed to parse environment variable \"%s\" "
+						  "value \"%s\", expected a boolean (on/off)",
+						  PGCOPYDB_SKIP_VACUUM,
+						  SKIP_VACUUM);
 				++errors;
 			}
 		}
@@ -504,6 +529,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "skip-large-objects", no_argument, NULL, 'B' },
 		{ "skip-extensions", no_argument, NULL, 'e' },
 		{ "skip-collations", no_argument, NULL, 'l' },
+		{ "skip-vacuum", no_argument, NULL, 'U' },
 		{ "filter", required_argument, NULL, 'F' },
 		{ "filters", required_argument, NULL, 'F' },
 		{ "fail-fast", required_argument, NULL, 'i' },
@@ -685,6 +711,13 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				options.skipCollations = true;
 				log_trace("--skip-collations");
+				break;
+			}
+
+			case 'U':
+			{
+				options.skipVacuum = true;
+				log_trace("--skip-vacuum");
 				break;
 			}
 

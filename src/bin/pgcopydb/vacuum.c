@@ -23,6 +23,12 @@
 bool
 vacuum_start_workers(CopyDataSpec *specs)
 {
+	if (specs->skipVacuum)
+	{
+		log_info("STEP 8: skipping VACUUM jobs per --skip-vacuum");
+		return true;
+	}
+
 	log_info("STEP 8: starting %d VACUUM processes", specs->vacuumJobs);
 	log_trace("vacuum_start_workers: \"%s\"", specs->cfPaths.tbldir);
 
@@ -256,6 +262,11 @@ vacuum_add_table(CopyDataSpec *specs, uint32_t oid)
 bool
 vacuum_send_stop(CopyDataSpec *specs)
 {
+	if (specs->skipVacuum)
+	{
+		return true;
+	}
+
 	for (int i = 0; i < specs->vacuumJobs; i++)
 	{
 		QMessage stop = { .type = QMSG_TYPE_STOP, .data.oid = 0 };
