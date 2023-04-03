@@ -426,8 +426,6 @@ copydb_process_table_data_worker(CopyDataSpec *specs)
 		 * 2. Send the indexes and constraints attached to this table to the
 		 *    index job queue.
 		 *
-		 * 3. Send the table to the VACUUM ANALYZE job queue.
-		 *
 		 * If a partial COPY is happening, check that all the other parts are
 		 * done. This check should be done in the critical section too. Only
 		 * one process can see all parts as done already, and that's the one
@@ -458,19 +456,6 @@ copydb_process_table_data_worker(CopyDataSpec *specs)
 						 "see above for details",
 						 tableSpecs->qname);
 				log_warn("Consider `pgcopydb copy indexes` to try again");
-				++errors;
-
-				if (specs->failFast)
-				{
-					return false;
-				}
-			}
-
-			if (!vacuum_add_table(specs, tableSpecs))
-			{
-				log_warn("Failed to queue VACUUM ANALYZE %s [%u]",
-						 tableSpecs->qname,
-						 tableSpecs->sourceTable->oid);
 				++errors;
 
 				if (specs->failFast)

@@ -253,11 +253,27 @@ copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid)
 
 	if (builtAllIndexes && !constraintsAreBeingBuilt)
 	{
+		/*
+		 * Once the indexes are built, it's time to:
+		 *
+		 *  1. build the constraints, some of them on-top of the indexes
+		 *  2. send the table to the VACUUM ANALYZE job queue.
+		 */
+
 		if (!copydb_create_constraints(specs, table))
 		{
 			log_error("Failed to create constraints for table \"%s\".\"%s\"",
 					  table->nspname,
 					  table->relname);
+			return false;
+		}
+
+		if (!vacuum_add_table(specs, table->oid))
+		{
+			log_error("Failed to queue VACUUM ANALYZE \"%s\".\"%s\" [%u]",
+					  table->nspname,
+					  table->relname,
+					  table->oid);
 			return false;
 		}
 	}

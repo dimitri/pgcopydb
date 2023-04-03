@@ -230,11 +230,11 @@ vacuum_analyze_table_by_oid(CopyDataSpec *specs, uint32_t oid)
  * given table.
  */
 bool
-vacuum_add_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
+vacuum_add_table(CopyDataSpec *specs, uint32_t oid)
 {
 	QMessage mesg = {
 		.type = QMSG_TYPE_TABLEOID,
-		.data.oid = tableSpecs->sourceTable->oid
+		.data.oid = oid
 	};
 
 	if (!queue_send(&(specs->vacuumQueue), &mesg))
