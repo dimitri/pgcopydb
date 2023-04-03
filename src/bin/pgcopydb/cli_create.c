@@ -289,27 +289,7 @@ cli_create_snapshot(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	RestoreOptions restoreOptions = { 0 };
-
-	if (!copydb_init_specs(&copySpecs,
-						   createSNoptions.source_pguri,
-						   createSNoptions.target_pguri,
-						   1,   /* tableJobs */
-						   1,   /* indexJobs */
-						   0,   /* skip threshold */
-						   "",  /* skip threshold pretty printed */
-						   DATA_SECTION_ALL,
-						   createSNoptions.snapshot,
-						   restoreOptions,
-						   false, /* roles */
-						   false, /* skipLargeObjects */
-						   false, /* skipExtensions */
-						   false, /* skipCollations */
-						   false, /* noRolesPasswords */
-						   false, /* failFast */
-						   createSNoptions.restart,
-						   createSNoptions.resume,
-						   !createSNoptions.notConsistent))
+	if (!copydb_init_specs(&copySpecs, &createSNoptions, DATA_SECTION_ALL))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -563,27 +543,7 @@ cli_create_slot(int argc, char **argv)
 
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
-	RestoreOptions restoreOptions = { 0 };
-
-	if (!copydb_init_specs(&copySpecs,
-						   createSlotOptions.source_pguri,
-						   createSlotOptions.target_pguri,
-						   1,   /* tableJobs */
-						   1,   /* indexJobs */
-						   0,   /* skip threshold */
-						   "",  /* skip threshold pretty printed */
-						   DATA_SECTION_ALL,
-						   createSlotOptions.snapshot,
-						   restoreOptions,
-						   false, /* roles */
-						   false, /* skipLargeObjects */
-						   false, /* skipExtensions */
-						   false, /* skipCollations */
-						   false, /* noRolesPasswords */
-						   false, /* failFast */
-						   createSlotOptions.restart,
-						   createSlotOptions.resume,
-						   !createSlotOptions.notConsistent))
+	if (!copydb_init_specs(&copySpecs, &createSlotOptions, DATA_SECTION_ALL))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -610,27 +570,7 @@ cli_drop_slot(int argc, char **argv)
 {
 	CopyDataSpec copySpecs = { 0 };
 
-	RestoreOptions restoreOptions = { 0 };
-
-	if (!copydb_init_specs(&copySpecs,
-						   createSlotOptions.source_pguri,
-						   createSlotOptions.target_pguri,
-						   1,   /* tableJobs */
-						   1,   /* indexJobs */
-						   0,   /* skip threshold */
-						   "",  /* skip threshold pretty printed */
-						   DATA_SECTION_ALL,
-						   createSlotOptions.snapshot,
-						   restoreOptions,
-						   false, /* roles */
-						   false, /* skipLargeObjects */
-						   false, /* skipExtensions */
-						   false, /* skipCollations */
-						   false, /* noRolesPasswords */
-						   false, /* failFast */
-						   createSlotOptions.restart,
-						   createSlotOptions.resume,
-						   !createSlotOptions.notConsistent))
+	if (!copydb_init_specs(&copySpecs, &createSlotOptions, DATA_SECTION_ALL))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -860,27 +800,7 @@ cli_create_origin(int argc, char **argv)
 
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
-	RestoreOptions restoreOptions = { 0 };
-
-	if (!copydb_init_specs(&copySpecs,
-						   createOriginOptions.source_pguri,
-						   createOriginOptions.target_pguri,
-						   1,   /* tableJobs */
-						   1,   /* indexJobs */
-						   0,   /* skip threshold */
-						   "",  /* skip threshold pretty printed */
-						   DATA_SECTION_ALL,
-						   createOriginOptions.snapshot,
-						   restoreOptions,
-						   false, /* roles */
-						   false, /* skipLargeObjects */
-						   false, /* skipExtensions */
-						   false, /* skipCollations */
-						   false, /* noRolesPasswords */
-						   false, /* failFast */
-						   createOriginOptions.restart,
-						   createOriginOptions.resume,
-						   !createOriginOptions.notConsistent))
+	if (!copydb_init_specs(&copySpecs, &createOriginOptions, DATA_SECTION_ALL))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -906,27 +826,7 @@ cli_drop_origin(int argc, char **argv)
 
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
-	RestoreOptions restoreOptions = { 0 };
-
-	if (!copydb_init_specs(&copySpecs,
-						   createOriginOptions.source_pguri,
-						   createOriginOptions.target_pguri,
-						   1,   /* tableJobs */
-						   1,   /* indexJobs */
-						   0,   /* skip threshold */
-						   "",  /* skip threshold pretty printed */
-						   DATA_SECTION_ALL,
-						   createOriginOptions.snapshot,
-						   restoreOptions,
-						   false, /* roles */
-						   false, /* skipLargeObjects */
-						   false, /* skipExtensions */
-						   false, /* skipCollations */
-						   false, /* noRolesPasswords */
-						   false, /* failFast */
-						   createOriginOptions.restart,
-						   createOriginOptions.resume,
-						   !createOriginOptions.notConsistent))
+	if (!copydb_init_specs(&copySpecs, &createOriginOptions, DATA_SECTION_ALL))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

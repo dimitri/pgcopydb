@@ -1005,25 +1005,7 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (!copydb_init_specs(copySpecs,
-						   copyDBoptions.source_pguri,
-						   copyDBoptions.target_pguri,
-						   copyDBoptions.tableJobs,
-						   copyDBoptions.indexJobs,
-						   copyDBoptions.splitTablesLargerThan,
-						   copyDBoptions.splitTablesLargerThanPretty,
-						   section,
-						   copyDBoptions.snapshot,
-						   copyDBoptions.restoreOptions,
-						   copyDBoptions.roles,
-						   copyDBoptions.skipLargeObjects,
-						   copyDBoptions.skipExtensions,
-						   copyDBoptions.skipCollations,
-						   copyDBoptions.noRolesPasswords,
-						   copyDBoptions.failFast,
-						   copyDBoptions.restart,
-						   copyDBoptions.resume,
-						   !copyDBoptions.notConsistent))
+	if (!copydb_init_specs(copySpecs, &copyDBoptions, section))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

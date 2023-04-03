@@ -36,6 +36,9 @@ static void cli_list_depends(int argc, char **argv);
 static void cli_list_schema(int argc, char **argv);
 static void cli_list_progress(int argc, char **argv);
 
+static bool copydb_init_specs_from_listdboptions(CopyDBOptions *options,
+												 ListDBOptions *listDBoptions);
+
 static CommandLine list_extensions_command =
 	make_command(
 		"extensions",
@@ -1243,27 +1246,15 @@ cli_list_schema(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	RestoreOptions restoreOptions = { 0 };
+	CopyDBOptions options = { 0 };
 
-	if (!copydb_init_specs(&copySpecs,
-						   listDBoptions.source_pguri,
-						   "",  /* target_pguri */
-						   1,   /* tableJobs */
-						   1,   /* indexJobs */
-						   listDBoptions.splitTablesLargerThan,
-						   listDBoptions.splitTablesLargerThanPretty,
-						   DATA_SECTION_ALL,
-						   "",  /* snapshot */
-						   restoreOptions,
-						   false, /* roles */
-						   false, /* skipLargeObjects */
-						   false, /* skipExtensions */
-						   false, /* skipCollations */
-						   false, /* noRolesPasswords */
-						   false, /* failFast */
-						   false, /* restart */
-						   true,  /* resume */
-						   false)) /* consistent */
+	if (!copydb_init_specs_from_listdboptions(&options, &listDBoptions))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	if (!copydb_init_specs(&copySpecs, &options, DATA_SECTION_ALL))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -1351,27 +1342,15 @@ cli_list_progress(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	RestoreOptions restoreOptions = { 0 };
+	CopyDBOptions options = { 0 };
 
-	if (!copydb_init_specs(&copySpecs,
-						   listDBoptions.source_pguri,
-						   "",  /* target_pguri */
-						   1,   /* tableJobs */
-						   1,   /* indexJobs */
-						   listDBoptions.splitTablesLargerThan,
-						   listDBoptions.splitTablesLargerThanPretty,
-						   DATA_SECTION_ALL,
-						   "",  /* snapshot */
-						   restoreOptions,
-						   false, /* roles */
-						   false, /* skipLargeObjects */
-						   false, /* skipExtensions */
-						   false, /* skipCollations */
-						   false, /* noRolesPasswords */
-						   false, /* failFast */
-						   false, /* restart */
-						   true,  /* resume */
-						   false)) /* consistent */
+	if (!copydb_init_specs_from_listdboptions(&options, &listDBoptions))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	if (!copydb_init_specs(&copySpecs, &options, DATA_SECTION_ALL))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -1434,4 +1413,28 @@ cli_list_progress(int argc, char **argv)
 				progress.indexInProgress.count,
 				progress.indexDoneCount);
 	}
+}
+
+
+/*
+ * copydb_init_specs_from_listdboptions initializes a CopyDBOptions structure
+ * from a listDBoptions structure.
+ */
+static bool
+copydb_init_specs_from_listdboptions(CopyDBOptions *options,
+									 ListDBOptions *listDBoptions)
+{
+	strlcpy(options->dir, listDBoptions->dir, MAXPGPATH);
+	strlcpy(options->source_pguri, listDBoptions->source_pguri, MAXCONNINFO);
+
+	options->splitTablesLargerThan = listDBoptions->splitTablesLargerThan;
+
+	strlcpy(options->splitTablesLargerThanPretty,
+			listDBoptions->splitTablesLargerThanPretty,
+			sizeof(options->splitTablesLargerThanPretty));
+
+	/* pretend like --resume was used in every `pgcopydb list ...` commands */
+	options->resume = true;
+
+	return true;
 }
