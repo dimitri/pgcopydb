@@ -491,7 +491,7 @@ bool copydb_copy_blobs(CopyDataSpec *specs);
 bool vacuum_start_workers(CopyDataSpec *specs);
 bool vacuum_worker(CopyDataSpec *specs);
 bool vacuum_analyze_table_by_oid(CopyDataSpec *specs, uint32_t oid);
-bool vacuum_add_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs);
+bool vacuum_add_table(CopyDataSpec *specs, uint32_t oid);
 bool vacuum_send_stop(CopyDataSpec *specs);
 
 /* summary.c */
