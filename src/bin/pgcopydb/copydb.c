@@ -617,24 +617,8 @@ copydb_rmdir_or_mkdir(const char *dir, bool removeDir)
  */
 bool
 copydb_init_specs(CopyDataSpec *specs,
-				  char *source_pguri,
-				  char *target_pguri,
-				  int tableJobs,
-				  int indexJobs,
-				  uint64_t splitTablesLargerThan,
-				  char *splitTablesLargerThanPretty,
-				  CopyDataSection section,
-				  char *snapshot,
-				  RestoreOptions restoreOptions,
-				  bool roles,
-				  bool skipLargeObjects,
-				  bool skipExtensions,
-				  bool skipCollations,
-				  bool noRolesPasswords,
-				  bool failFast,
-				  bool restart,
-				  bool resume,
-				  bool consistent)
+				  CopyDBOptions *options,
+				  CopyDataSection section)
 {
 	/* fill-in a structure with the help of the C compiler */
 	CopyDataSpec tmpCopySpecs = {
@@ -652,25 +636,25 @@ copydb_init_specs(CopyDataSpec *specs,
 		},
 
 		.section = section,
-		.restoreOptions = restoreOptions,
-		.roles = roles,
-		.skipLargeObjects = skipLargeObjects,
-		.skipExtensions = skipExtensions,
-		.skipCollations = skipCollations,
-		.noRolesPasswords = noRolesPasswords,
-		.failFast = failFast,
+		.restoreOptions = options->restoreOptions,
+		.roles = options->roles,
+		.skipLargeObjects = options->skipLargeObjects,
+		.skipExtensions = options->skipExtensions,
+		.skipCollations = options->skipCollations,
+		.noRolesPasswords = options->noRolesPasswords,
+		.failFast = options->failFast,
 
-		.restart = restart,
-		.resume = resume,
-		.consistent = consistent,
+		.restart = options->restart,
+		.resume = options->resume,
+		.consistent = !options->notConsistent,
 
-		.tableJobs = tableJobs,
-		.indexJobs = indexJobs,
+		.tableJobs = options->tableJobs,
+		.indexJobs = options->indexJobs,
 
 		/* at the moment we don't have --vacuumJobs separately */
-		.vacuumJobs = tableJobs,
+		.vacuumJobs = options->tableJobs,
 
-		.splitTablesLargerThan = splitTablesLargerThan,
+		.splitTablesLargerThan = options->splitTablesLargerThan,
 
 		.tableSemaphore = { 0 },
 		.indexSemaphore = { 0 },
@@ -688,26 +672,31 @@ copydb_init_specs(CopyDataSpec *specs,
 	};
 
 	/* initialize the connection strings */
-	if (source_pguri != NULL)
+	if (!IS_EMPTY_STRING_BUFFER(options->source_pguri))
 	{
-		strlcpy(tmpCopySpecs.source_pguri, source_pguri, MAXCONNINFO);
-		strlcpy(tmpCopySpecs.sourceSnapshot.pguri, source_pguri, MAXCONNINFO);
+		strlcpy(tmpCopySpecs.source_pguri,
+				options->source_pguri,
+				MAXCONNINFO);
+
+		strlcpy(tmpCopySpecs.sourceSnapshot.pguri,
+				options->source_pguri,
+				MAXCONNINFO);
 	}
 
-	if (target_pguri != NULL)
+	if (!IS_EMPTY_STRING_BUFFER(options->target_pguri))
 	{
-		strlcpy(tmpCopySpecs.target_pguri, target_pguri, MAXCONNINFO);
+		strlcpy(tmpCopySpecs.target_pguri, options->target_pguri, MAXCONNINFO);
 	}
 
-	if (snapshot != NULL && !IS_EMPTY_STRING_BUFFER(snapshot))
+	if (!IS_EMPTY_STRING_BUFFER(options->snapshot))
 	{
 		strlcpy(tmpCopySpecs.sourceSnapshot.snapshot,
-				snapshot,
+				options->snapshot,
 				sizeof(tmpCopySpecs.sourceSnapshot.snapshot));
 	}
 
 	strlcpy(tmpCopySpecs.splitTablesLargerThanPretty,
-			splitTablesLargerThanPretty,
+			options->splitTablesLargerThanPretty,
 			sizeof(tmpCopySpecs.splitTablesLargerThanPretty));
 
 	/* copy the structure as a whole memory area to the target place */
@@ -727,7 +716,7 @@ copydb_init_specs(CopyDataSpec *specs,
 	{
 		log_error("Failed to create the table concurrency semaphore "
 				  "to orchestrate %d TABLE DATA COPY jobs",
-				  tableJobs);
+				  options->tableJobs);
 		return false;
 	}
 
@@ -738,7 +727,7 @@ copydb_init_specs(CopyDataSpec *specs,
 	{
 		log_error("Failed to create the index concurrency semaphore "
 				  "to orchestrate %d CREATE INDEX jobs",
-				  indexJobs);
+				  options->indexJobs);
 		return false;
 	}
 

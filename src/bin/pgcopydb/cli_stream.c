@@ -558,27 +558,7 @@ cli_stream_setup(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	RestoreOptions restoreOptions = { 0 };
-
-	if (!copydb_init_specs(&copySpecs,
-						   streamDBoptions.source_pguri,
-						   streamDBoptions.target_pguri,
-						   1,   /* tableJobs */
-						   1,   /* indexJobs */
-						   0,   /* skip threshold */
-						   "",  /* skip threshold pretty printed */
-						   DATA_SECTION_NONE,
-						   streamDBoptions.snapshot,
-						   restoreOptions,
-						   false, /* roles */
-						   false, /* skipLargeObjects */
-						   false, /* skipExtensions */
-						   false, /* skipCollations */
-						   false, /* noRolesPasswords */
-						   false, /* failFast */
-						   streamDBoptions.restart,
-						   streamDBoptions.resume,
-						   !streamDBoptions.notConsistent))
+	if (!copydb_init_specs(&copySpecs, &streamDBoptions, DATA_SECTION_NONE))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -612,34 +592,14 @@ cli_stream_cleanup(int argc, char **argv)
 
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
-	bool resume = true;         /* pretend --resume has been used */
-	bool restart = false;       /* pretend --restart has NOT been used */
-
-	RestoreOptions restoreOptions = { 0 };
-
-	if (!copydb_init_specs(&copySpecs,
-						   streamDBoptions.source_pguri,
-						   streamDBoptions.target_pguri,
-						   1,   /* tableJobs */
-						   1,   /* indexJobs */
-						   0,   /* skip threshold */
-						   "",  /* skip threshold pretty printed */
-						   DATA_SECTION_NONE,
-						   streamDBoptions.snapshot,
-						   restoreOptions,
-						   false, /* roles */
-						   false, /* skipLargeObjects */
-						   false, /* skipExtensions */
-						   false, /* skipCollations */
-						   false, /* noRolesPasswords */
-						   false, /* failFast */
-						   restart,
-						   resume,
-						   !streamDBoptions.notConsistent))
+	if (!copydb_init_specs(&copySpecs, &streamDBoptions, DATA_SECTION_NONE))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
+
+	copySpecs.resume = true;    /* pretend --resume has been used */
+	copySpecs.restart = false;  /* pretend --restart has NOT been used */
 
 	if (!stream_cleanup_databases(&copySpecs,
 								  streamDBoptions.slotName,
@@ -688,27 +648,7 @@ cli_stream_catchup(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	RestoreOptions restoreOptions = { 0 };
-
-	if (!copydb_init_specs(&copySpecs,
-						   streamDBoptions.source_pguri,
-						   streamDBoptions.target_pguri,
-						   1,   /* tableJobs */
-						   1,   /* indexJobs */
-						   0,   /* skip threshold */
-						   "",  /* skip threshold pretty printed */
-						   DATA_SECTION_NONE,
-						   streamDBoptions.snapshot,
-						   restoreOptions,
-						   false, /* roles */
-						   false, /* skipLargeObjects */
-						   false, /* skipExtensions */
-						   false, /* skipCollations */
-						   false, /* noRolesPasswords */
-						   false, /* failFast */
-						   streamDBoptions.restart,
-						   streamDBoptions.resume,
-						   !streamDBoptions.notConsistent))
+	if (!copydb_init_specs(&copySpecs, &streamDBoptions, DATA_SECTION_NONE))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -784,27 +724,7 @@ cli_stream_replay(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	RestoreOptions restoreOptions = { 0 };
-
-	if (!copydb_init_specs(&copySpecs,
-						   streamDBoptions.source_pguri,
-						   streamDBoptions.target_pguri,
-						   1,   /* tableJobs */
-						   1,   /* indexJobs */
-						   0,   /* skip threshold */
-						   "",  /* skip threshold pretty printed */
-						   DATA_SECTION_NONE,
-						   streamDBoptions.snapshot,
-						   restoreOptions,
-						   false, /* roles */
-						   false, /* skipLargeObjects */
-						   false, /* skipExtensions */
-						   false, /* skipCollations */
-						   false, /* noRolesPasswords */
-						   false, /* failFast */
-						   streamDBoptions.restart,
-						   streamDBoptions.resume,
-						   !streamDBoptions.notConsistent))
+	if (!copydb_init_specs(&copySpecs, &streamDBoptions, DATA_SECTION_NONE))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -922,27 +842,7 @@ cli_stream_transform(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	RestoreOptions restoreOptions = { 0 };
-
-	if (!copydb_init_specs(&copySpecs,
-						   streamDBoptions.source_pguri,
-						   streamDBoptions.target_pguri,
-						   1,   /* tableJobs */
-						   1,   /* indexJobs */
-						   0,   /* skip threshold */
-						   "",  /* skip threshold pretty printed */
-						   DATA_SECTION_NONE,
-						   streamDBoptions.snapshot,
-						   restoreOptions,
-						   false, /* roles */
-						   false, /* skipLargeObjects */
-						   false, /* skipExtensions */
-						   false, /* skipCollations */
-						   false, /* noRolesPasswords */
-						   false, /* failFast */
-						   streamDBoptions.restart,
-						   streamDBoptions.resume,
-						   !streamDBoptions.notConsistent))
+	if (!copydb_init_specs(&copySpecs, &streamDBoptions, DATA_SECTION_NONE))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -1060,27 +960,7 @@ cli_stream_apply(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	RestoreOptions restoreOptions = { 0 };
-
-	if (!copydb_init_specs(&copySpecs,
-						   streamDBoptions.source_pguri,
-						   streamDBoptions.target_pguri,
-						   1,   /* tableJobs */
-						   1,   /* indexJobs */
-						   0,   /* skip threshold */
-						   "",  /* skip threshold pretty printed */
-						   DATA_SECTION_NONE,
-						   streamDBoptions.snapshot,
-						   restoreOptions,
-						   false, /* roles */
-						   false, /* skipLargeObjects */
-						   false, /* skipExtensions */
-						   false, /* skipCollations */
-						   false, /* noRolesPasswords */
-						   false, /* failFast */
-						   streamDBoptions.restart,
-						   streamDBoptions.resume,
-						   !streamDBoptions.notConsistent))
+	if (!copydb_init_specs(&copySpecs, &streamDBoptions, DATA_SECTION_NONE))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -1181,27 +1061,7 @@ stream_start_in_mode(LogicalStreamMode mode)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	RestoreOptions restoreOptions = { 0 };
-
-	if (!copydb_init_specs(&copySpecs,
-						   streamDBoptions.source_pguri,
-						   streamDBoptions.target_pguri,
-						   1,   /* tableJobs */
-						   1,   /* indexJobs */
-						   0,   /* skip threshold */
-						   "",  /* skip threshold pretty printed */
-						   DATA_SECTION_NONE,
-						   streamDBoptions.snapshot,
-						   restoreOptions,
-						   false, /* roles */
-						   false, /* skipLargeObjects */
-						   false, /* skipExtensions */
-						   false, /* skipCollations */
-						   false, /* noRolesPasswords */
-						   false, /* failFast */
-						   streamDBoptions.restart,
-						   streamDBoptions.resume,
-						   !streamDBoptions.notConsistent))
+	if (!copydb_init_specs(&copySpecs, &streamDBoptions, DATA_SECTION_NONE))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

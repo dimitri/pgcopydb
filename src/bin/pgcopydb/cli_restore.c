@@ -557,25 +557,7 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 
 	log_info("Restoring database from existing files at \"%s\"", cfPaths->topdir);
 
-	if (!copydb_init_specs(copySpecs,
-						   restoreDBoptions.source_pguri,
-						   restoreDBoptions.target_pguri,
-						   1,    /* table jobs */
-						   1,    /* index jobs */
-						   0,   /* skip threshold */
-						   "",  /* skip threshold pretty printed */
-						   DATA_SECTION_NONE,
-						   restoreDBoptions.snapshot,
-						   restoreDBoptions.restoreOptions,
-						   false, /* roles */
-						   false, /* skipLargeObjects */
-						   restoreDBoptions.skipExtensions,
-						   restoreDBoptions.skipCollations,
-						   false, /* noRolesPasswords */
-						   false, /* failFast */
-						   restoreDBoptions.restart,
-						   restoreDBoptions.resume,
-						   !restoreDBoptions.notConsistent))
+	if (!copydb_init_specs(copySpecs, &restoreDBoptions, DATA_SECTION_NONE))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

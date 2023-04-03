@@ -364,27 +364,7 @@ cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	RestoreOptions restoreOptions = { 0 };
-
-	if (!copydb_init_specs(&copySpecs,
-						   dumpDBoptions->source_pguri,
-						   NULL, /* target_pguri */
-						   1,    /* table jobs */
-						   1,    /* index jobs */
-						   0,   /* skip threshold */
-						   "",  /* skip threshold pretty printed */
-						   DATA_SECTION_NONE,
-						   dumpDBoptions->snapshot,
-						   restoreOptions,
-						   false, /* roles */
-						   false, /* skipLargeObjects */
-						   false, /* skipExtensions */
-						   false, /* skipCollations */
-						   false, /* failFast */
-						   dumpDBoptions->noRolesPasswords,
-						   dumpDBoptions->restart,
-						   dumpDBoptions->resume,
-						   !dumpDBoptions->notConsistent))
+	if (!copydb_init_specs(&copySpecs, dumpDBoptions, DATA_SECTION_NONE))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

@@ -6,6 +6,7 @@
 #ifndef COPYDB_H
 #define COPYDB_H
 
+#include "cli_common.h"
 #include "copydb_paths.h"
 #include "filtering.h"
 #include "lock_utils.h"
@@ -301,24 +302,8 @@ bool copydb_rmdir_or_mkdir(const char *dir, bool removeDir);
 bool copydb_prepare_dump_paths(CopyFilePaths *cfPaths, DumpPaths *dumpPaths);
 
 bool copydb_init_specs(CopyDataSpec *specs,
-					   char *source_pguri,
-					   char *target_pguri,
-					   int tableJobs,
-					   int indexJobs,
-					   uint64_t splitTablesLargerThan,
-					   char *splitTablesLargerThanPretty,
-					   CopyDataSection section,
-					   char *snapshot,
-					   RestoreOptions restoreOptions,
-					   bool roles,
-					   bool skipLargeObjects,
-					   bool skipExtensions,
-					   bool skipCollations,
-					   bool noRolesPasswords,
-					   bool failFast,
-					   bool restart,
-					   bool resume,
-					   bool consistent);
+					   CopyDBOptions *options,
+					   CopyDataSection section);
 
 bool copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 							 CopyDataSpec *specs,
