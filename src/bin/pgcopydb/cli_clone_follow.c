@@ -39,6 +39,7 @@
 	"  --skip-large-objects       Skip copying large objects (blobs)\n" \
 	"  --skip-extensions          Skip restoring extensions\n" \
 	"  --skip-collations          Skip restoring collations\n" \
+	"  --skip-vacuum              Skip running VACUUM ANALYZE\n" \
 	"  --filters <filename>       Use the filters defined in <filename>\n" \
 	"  --fail-fast                Abort early in case of error\n" \
 	"  --restart                  Allow restarting when temp files exist already\n" \

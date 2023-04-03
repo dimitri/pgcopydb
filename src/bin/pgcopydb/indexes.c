@@ -268,13 +268,16 @@ copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid)
 			return false;
 		}
 
-		if (!vacuum_add_table(specs, table->oid))
+		if (!specs->skipVacuum)
 		{
-			log_error("Failed to queue VACUUM ANALYZE \"%s\".\"%s\" [%u]",
-					  table->nspname,
-					  table->relname,
-					  table->oid);
-			return false;
+			if (!vacuum_add_table(specs, table->oid))
+			{
+				log_error("Failed to queue VACUUM ANALYZE \"%s\".\"%s\" [%u]",
+						  table->nspname,
+						  table->relname,
+						  table->oid);
+				return false;
+			}
 		}
 	}
 

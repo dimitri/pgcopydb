@@ -40,6 +40,7 @@ Postgres instance to the target Postgres instance.
      --skip-large-objects       Skip copying large objects (blobs)
      --skip-extensions          Skip restoring extensions
      --skip-collations          Skip restoring collations
+     --skip-vacuum              Skip running VACUUM ANALYZE
      --filters <filename>       Use the filters defined in <filename>
      --fail-fast                Abort early in case of error
      --restart                  Allow restarting when temp files exist already
@@ -502,6 +503,11 @@ The following options are available to ``pgcopydb clone``:
 
   See also :ref:`pgcopydb_list_collations`.
 
+--skip-vacuum
+
+  Skip running VACUUM ANALYZE on the target database once a table has been
+  copied, its indexes have been created, and constraints installed.
+
 --filters <filename>
 
   This option allows to exclude table and indexes from the copy operations.
@@ -708,6 +714,12 @@ PGCOPYDB_FAIL_FAST
 
    When ``--fail-fast`` is ommitted from the command line then this
    environment variable is used.
+
+PGCOPYDB_SKIP_VACUUM
+
+   When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
+   then pgcopydb skips the VACUUM ANALYZE jobs entirely, same as when using
+   the ``--skip-vacuum`` option.
 
 PGCOPYDB_SNAPSHOT
 
