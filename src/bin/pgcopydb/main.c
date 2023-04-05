@@ -255,11 +255,11 @@ set_logger()
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 
-		logfp = fopen(log_filename, "w");
+		logfp = fopen(log_filename, "w"); /* IGNORE-BANNED */
 
 		if (logfp == NULL)
 		{
-			fprintf(stderr,
+			fformat(stderr,
 					"Failed to open log file \"%s\": %m\n",
 					log_filename);
 			exit(EXIT_CODE_INTERNAL_ERROR);
@@ -293,7 +293,7 @@ unlink_system_res_atexit(void)
 	{
 		if (fclose(logfp) != 0)
 		{
-			fprintf(stderr, "Failed to close log file: %m\n");
+			fformat(stderr, "Failed to close log file: %m\n");
 		}
 	}
 
