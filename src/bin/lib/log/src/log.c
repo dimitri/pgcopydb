@@ -27,9 +27,16 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "parson.h"
 #include "snprintf.h"
 
 #include "log.h"
+
+typedef enum
+{
+	LOG_FORMAT_TEXT = 0,
+	LOG_FORMAT_JSON
+} logFormat;
 
 static struct {
   void *udata;
@@ -39,6 +46,8 @@ static struct {
   int quiet;
   int showLineNumber;
   int useColors;
+  logFormat errFmt;
+  logFormat fpFmt;
   char tformat[128];
 } L = { 0 };
 
@@ -114,6 +123,16 @@ void log_use_colors(int enable) {
 }
 
 
+void log_use_json(int enable) {
+  L.errFmt = enable ? LOG_FORMAT_JSON : LOG_FORMAT_TEXT;
+}
+
+
+void log_use_json_file(int enable) {
+  L.fpFmt = enable ? LOG_FORMAT_JSON : LOG_FORMAT_TEXT;
+}
+
+
 void log_show_file_line(int enable) {
   L.showLineNumber = enable ? 1 : 0;
 }
@@ -151,60 +170,123 @@ void log_log(int level, const char *file, int line, const char *fmt, ...)
   t = time(NULL);
   lt = localtime(&t);
 
+  char *json_string = NULL;
+
+  /* Prepare JSON format if needed */
+  if ((!L.quiet && L.errFmt == LOG_FORMAT_JSON) ||
+	  (L.fp && L.fpFmt == LOG_FORMAT_JSON))
+  {
+	  JSON_Value *js = json_value_init_object();
+	  JSON_Object *jsobj = json_value_get_object(js);
+
+	  char buf[32] = { 0 };
+
+	  /* always use the long time format when preparing JSON */
+	  buf[strftime(buf, sizeof(buf), LOG_TFORMAT_LONG, lt)] = '\0';
+
+	  json_object_set_string(jsobj, "ts", buf);
+	  json_object_set_number(jsobj, "pid", getpid());
+	  json_object_set_number(jsobj, "lnum", level);
+	  json_object_set_string(jsobj, "level", level_names[level]);
+	  json_object_set_string(jsobj, "file", file);
+	  json_object_set_number(jsobj, "line", line);
+
+	  char log[LOG_BUFSIZE] = { 0 };
+	  va_list args;
+
+	  va_start(args, fmt);
+	  pg_vsprintf(log, fmt, args);
+	  va_end(args);
+
+	  json_object_set_string(jsobj, "log", log);
+
+	  json_string = json_serialize_to_string(js);
+	  json_value_free(js);
+  }
+
+  /* max source filename is 20 chars long, max file lines is < 10000 (5) */
+  int showLineNumber = L.showLineNumber || L.level <= 1;
+  char fileLine[25] = { 0 };
+
+  if (showLineNumber || (L.fp && L.fpFmt == LOG_FORMAT_TEXT))
+  {
+	  pg_snprintf(fileLine, sizeof(fileLine), "%s:%d", file, line);
+  }
+
   /* Log to stderr */
-  if (!L.quiet) {
-    va_list args;
-    char buf[128] = { 0 };
-	int showLineNumber = L.showLineNumber || L.level <= 1;
-
-    buf[strftime(buf, sizeof(buf), L.tformat, lt)] = '\0';
-
-	if (L.useColors)
+  if (!L.quiet)
+  {
+	if (L.errFmt == LOG_FORMAT_JSON)
 	{
-		pg_fprintf(stderr, "%s %d %s%-6s\x1b[0m ",
-				   buf,
-				   getpid(),
-				   level_colors[level],
-				   level_names[level]);
-
-		if (showLineNumber)
-		{
-			pg_fprintf(stderr, "\x1b[90m%s:%d:\x1b[0m ", file, line);
-		}
+		pg_fprintf(stderr, "%s\n", json_string);
 	}
-	else
+	else if (L.errFmt == LOG_FORMAT_TEXT)
 	{
-		pg_fprintf(stderr, "%s %d %-6s ", buf, getpid(), level_names[level]);
+		char buf[128] = { 0 };
 
-		if (showLineNumber)
+		buf[strftime(buf, sizeof(buf), L.tformat, lt)] = '\0';
+
+		if (L.useColors)
 		{
-			pg_fprintf(stderr, "%s:%d ", file, line);
-		}
-	}
+			pg_fprintf(stderr, "%s %d %s%-6s\x1b[0m ",
+					   buf,
+					   getpid(),
+					   level_colors[level],
+					   level_names[level]);
 
-    va_start(args, fmt);
-    pg_vfprintf(stderr, fmt, args);
-    va_end(args);
-    pg_fprintf(stderr, "\n");
+			if (showLineNumber)
+			{
+				pg_fprintf(stderr, "\x1b[90m%-25s\x1b[0m ", fileLine);
+			}
+		}
+		else
+		{
+			pg_fprintf(stderr, "%s %d %-6s ", buf, getpid(), level_names[level]);
+
+			if (showLineNumber)
+			{
+				pg_fprintf(stderr, "%-25s ", fileLine);
+			}
+		}
+
+		/* print the fmt, ... parts to the log stream now */
+		va_list args;
+
+		va_start(args, fmt);
+		pg_vfprintf(stderr, fmt, args);
+		va_end(args);
+		pg_fprintf(stderr, "\n");
+	}
   }
 
   /* Log to file */
-  if (L.fp) {
-    va_list args;
-    char buf[32];
+  if (L.fp)
+  {
+	  if (L.fpFmt == LOG_FORMAT_JSON)
+	  {
+		pg_fprintf(L.fp, "%s\n", json_string);
+	  }
+	  else if (L.fpFmt == LOG_FORMAT_TEXT)
+	  {
+		  va_list args;
+		  char buf[32];
 
-	/* always use the long time format when writting to file */
-    buf[strftime(buf, sizeof(buf), LOG_TFORMAT_LONG, lt)] = '\0';
+		  /* always use the long time format when writting to file */
+		  buf[strftime(buf, sizeof(buf), LOG_TFORMAT_LONG, lt)] = '\0';
 
-	/* always add all the details when writting to file */
-    pg_fprintf(L.fp, "%s %d %-6s %s:%d: ",
-			   buf, getpid(), level_names[level], file, line);
+		  /* always add all the details when writting to file */
+		  pg_fprintf(L.fp, "%s %d %s %s ",
+					 buf, getpid(), level_names[level], fileLine);
 
-    va_start(args, fmt);
-    pg_vfprintf(L.fp, fmt, args);
-    va_end(args);
-    pg_fprintf(L.fp, "\n");
+		  va_start(args, fmt);
+		  pg_vfprintf(L.fp, fmt, args);
+		  va_end(args);
+		  pg_fprintf(L.fp, "\n");
+	  }
   }
+
+  /* time to free memory allocations */
+  json_free_serialized_string(json_string);
 
   /* Release lock */
   unlock();

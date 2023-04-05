@@ -11,10 +11,13 @@
 #include <stdio.h>
 #include <stdarg.h>
 
-#define LOG_VERSION "0.1.2"
+#define LOG_VERSION "0.1.3"
 
 #define LOG_TFORMAT_LONG "%Y-%m-%d %H:%M:%S"
 #define LOG_TFORMAT_SHORT "%H:%M:%S"
+
+/* used for JSON logs format "log" message */
+#define LOG_BUFSIZE 2048
 
 typedef void (*log_LockFn)(void *udata, int lock);
 
@@ -47,6 +50,8 @@ void log_set_level(int level);
 int log_get_level(void);
 void log_set_quiet(int enable);
 void log_use_colors(int enable);
+void log_use_json(int enable);
+void log_use_json_file(int enable);
 void log_show_file_line(int enable);
 void log_set_tformat(const char *tformat);
 

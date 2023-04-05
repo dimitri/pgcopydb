@@ -31,6 +31,7 @@ char *ps_buffer;                /* will point to argv area */
 size_t ps_buffer_size;          /* space determined at run time */
 size_t last_status_len;         /* use to minimize length of clobber */
 
+FILE *logfp = NULL;
 Semaphore log_semaphore = { 0 }; /* allows inter-process locking */
 
 SysVResArray system_res_array = { 0 };
@@ -190,9 +191,47 @@ set_logger()
 	log_use_colors(interactive);
 	log_show_file_line(!interactive);
 
-	char *log_time_format_default =
-		interactive ? LOG_TFORMAT_SHORT : LOG_TFORMAT_LONG;
+	bool logJSON = false;
+	bool logJSONFile = false;
+	char log_json[128] = { 0 };
 
+	if (!get_env_copy_with_fallback(PGCOPYDB_LOG_JSON,
+									log_json, sizeof(log_json), "false"))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!parse_bool(log_json, &logJSON))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!get_env_copy_with_fallback(PGCOPYDB_LOG_JSON_FILE,
+									log_json, sizeof(log_json), "false"))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!parse_bool(log_json, &logJSONFile))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_use_json(logJSON);
+
+	char *log_time_format_default = LOG_TFORMAT_SHORT;
+
+	/* when logging in JSON, even when interactive, prefer long format */
+	if (logJSON || !interactive)
+	{
+		log_time_format_default = LOG_TFORMAT_LONG;
+	}
+
+	/* in all cases, if PGCOPYDB_LOG_TIME_FORMAT is defined, use that */
 	char log_time_format[128] = { 0 };
 
 	if (!get_env_copy_with_fallback(PGCOPYDB_LOG_TIME_FORMAT,
@@ -205,6 +244,30 @@ set_logger()
 	}
 
 	log_set_tformat(log_time_format);
+
+	if (env_exists(PGCOPYDB_LOG_FILENAME))
+	{
+		char log_filename[MAXPGPATH] = { 0 };
+
+		if (!get_env_copy(PGCOPYDB_LOG_FILENAME, log_filename, MAXPGPATH))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		logfp = fopen(log_filename, "w"); /* IGNORE-BANNED */
+
+		if (logfp == NULL)
+		{
+			fformat(stderr,
+					"Failed to open log file \"%s\": %m\n",
+					log_filename);
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		log_set_fp(logfp);
+		log_use_json_file(logJSONFile);
+	}
 
 	/* initialize the semaphore used for locking log output */
 	if (!semaphore_init(&log_semaphore))
@@ -226,5 +289,13 @@ set_logger()
 static void
 unlink_system_res_atexit(void)
 {
+	if (logfp != NULL)
+	{
+		if (fclose(logfp) != 0)
+		{
+			fformat(stderr, "Failed to close log file: %m\n");
+		}
+	}
+
 	(void) copydb_cleanup_sysv_resources(&system_res_array);
 }
