@@ -741,6 +741,38 @@ PGCOPYDB_LOG_TIME_FORMAT
   documentation for isatty(3) for details about detecting if pgcopydb is run
   in an interactive terminal.
 
+PGCOPYDB_LOG_JSON
+
+   When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
+   then pgcopydb formats its logs using JSON.
+
+   ::
+
+      {
+        "ts": "2023-04-05 11:38:39",
+        "pid": 62676,
+        "lnum": 4,
+        "level": "INFO",
+        "file": "main.c",
+        "line": 165,
+        "log": "Running pgcopydb version 0.11.16.g267770d.dirty from \"/Users/dim/dev/PostgreSQL/pgcopydb/src/bin/pgcopydb/pgcopydb\""
+      }
+
+PGCOPYDB_LOG_FILENAME
+
+   When set to a filename (in a directory that must exists already) then
+   pgcopydb writes its logs output to that filename in addition to the logs
+   on the standard error output stream.
+
+   If the file already exists, its content is overwritten. In other words
+   the previous content would be lost when running the same command twice.
+
+PGCOPYDB_LOG_JSON_FILE
+
+   When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
+   then pgcopydb formats its logs using JSON when writing to
+   PGCOPYDB_LOG_FILENAME.
+
 XDG_DATA_HOME
 
   The standard `XDG Base Directory Specification`__ defines several
