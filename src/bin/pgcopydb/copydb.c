@@ -456,6 +456,9 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths,
 	/* prepare also the name of the schema file (JSON) */
 	sformat(cfPaths->schemafile, MAXPGPATH, "%s/schema.json", cfPaths->topdir);
 
+	/* prepare also the name of the summary file (JSON) */
+	sformat(cfPaths->summaryfile, MAXPGPATH, "%s/summary.json", cfPaths->topdir);
+
 	/* now prepare the done files */
 	struct pair
 	{

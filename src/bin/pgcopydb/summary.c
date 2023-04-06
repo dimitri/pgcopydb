@@ -314,14 +314,12 @@ read_table_index_file(SourceIndexArray *indexArray, char *filename)
 	 * We expect to have alternate lines with first indexOid and then
 	 * constraintOid (which could be zero). No comments, etc.
 	 */
-	indexArray->count = lineCount / 2;
+	indexArray->count = 0;
 	indexArray->array = (SourceIndex *) calloc(lineCount, sizeof(SourceIndex));
-
-	int pos = 0;
 
 	for (int i = 0; i < lineCount; i++)
 	{
-		SourceIndex *index = &(indexArray->array[pos]);
+		SourceIndex *index = &(indexArray->array[indexArray->count]);
 
 		uint32_t *target =
 			i % 2 == 0 ? &(index->indexOid) : &(index->constraintOid);
@@ -339,7 +337,7 @@ read_table_index_file(SourceIndexArray *indexArray, char *filename)
 		/* one index entry (indexOid, constraintOid) spans two lines */
 		if (i % 2 == 1)
 		{
-			pos++;
+			++(indexArray->count);
 		}
 	}
 
@@ -715,6 +713,7 @@ summary_prepare_toplevel_durations(Summary *summary)
 	IntervalToString(durationMs, timings->dumpSchemaMs, INTSTRING_MAX_DIGITS);
 
 	timings->schemaDurationMs = durationMs;
+	timings->dumpSchemaDurationMs = durationMs;
 
 	/* compute schema fetch duration, part of schemaDurationMs */
 	duration = timings->beforePrepareSchema;
@@ -724,6 +723,7 @@ summary_prepare_toplevel_durations(Summary *summary)
 	IntervalToString(durationMs, timings->fetchSchemaMs, INTSTRING_MAX_DIGITS);
 
 	timings->schemaDurationMs += durationMs;
+	timings->fetchSchemaDurationMs = durationMs;
 
 	/* compute prepare schema duration, part of schemaDurationMs */
 	duration = timings->afterPrepareSchema;
@@ -733,6 +733,7 @@ summary_prepare_toplevel_durations(Summary *summary)
 	IntervalToString(durationMs, timings->prepareSchemaMs, INTSTRING_MAX_DIGITS);
 
 	timings->schemaDurationMs += durationMs;
+	timings->prepareSchemaDurationMs = durationMs;
 
 	/* compute data + index duration, between prepare schema and finalize */
 	duration = timings->beforeFinalizeSchema;
@@ -751,6 +752,7 @@ summary_prepare_toplevel_durations(Summary *summary)
 	IntervalToString(durationMs, timings->finalizeSchemaMs, INTSTRING_MAX_DIGITS);
 
 	timings->schemaDurationMs += durationMs;
+	timings->finalizeSchemaDurationMs = durationMs;
 
 	/* compute total duration, wall clock elapsed time */
 	duration = timings->endTime;
@@ -776,7 +778,7 @@ summary_prepare_toplevel_durations(Summary *summary)
  * print_toplevel_summary prints a summary of the top-level timings.
  */
 void
-print_toplevel_summary(Summary *summary, int tableJobs, int indexJobs)
+print_toplevel_summary(Summary *summary)
 {
 	char *d10s = "----------";
 	char *d12s = "------------";
@@ -803,8 +805,8 @@ print_toplevel_summary(Summary *summary, int tableJobs, int indexJobs)
 
 	char concurrency[BUFSIZE] = { 0 };
 	sformat(concurrency, sizeof(concurrency), "%d + %d",
-			tableJobs,
-			tableJobs + indexJobs);
+			summary->tableJobs,
+			summary->tableJobs + summary->indexJobs);
 
 	fformat(stdout, " %50s   %10s  %10s  %12s\n",
 			"COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)", "both",
@@ -814,7 +816,7 @@ print_toplevel_summary(Summary *summary, int tableJobs, int indexJobs)
 	fformat(stdout, " %50s   %10s  %10s  %12d\n",
 			"COPY (cumulative)", "both",
 			summary->timings.totalTableMs,
-			tableJobs);
+			summary->tableJobs);
 
 	fformat(stdout, " %50s   %10s  %10s  %12d\n",
 			"Large Objects (cumulative)", "both",
@@ -824,7 +826,7 @@ print_toplevel_summary(Summary *summary, int tableJobs, int indexJobs)
 	fformat(stdout, " %50s   %10s  %10s  %12d\n",
 			"CREATE INDEX, CONSTRAINTS (cumulative)", "target",
 			summary->timings.totalIndexMs,
-			indexJobs);
+			summary->indexJobs);
 
 	fformat(stdout, " %50s   %10s  %10s  %12d\n", "Finalize Schema", "target",
 			summary->timings.finalizeSchemaMs, 1);
@@ -874,7 +876,7 @@ print_summary_table(SummaryTable *summary)
 		SummaryTableEntry *entry = &(summary->array[i]);
 
 		fformat(stdout, "%*s | %*s | %*s | %*s | %*s | %*s\n",
-				headers->maxOidSize, entry->oid,
+				headers->maxOidSize, entry->oidStr,
 				headers->maxNspnameSize, entry->nspname,
 				headers->maxRelnameSize, entry->relname,
 				headers->maxTableMsSize, entry->tableMs,
@@ -883,6 +885,216 @@ print_summary_table(SummaryTable *summary)
 	}
 
 	fformat(stdout, "\n");
+}
+
+
+/*
+ * print_summary_as_json writes the current summary of operations (with
+ * timings) to given filename, as a structured JSON document.
+ */
+void
+print_summary_as_json(Summary *summary, const char *filename)
+{
+	JSON_Value *js = json_value_init_object();
+	JSON_Object *jsobj = json_value_get_object(js);
+
+	json_object_dotset_number(jsobj, "setup.table-jobs", summary->tableJobs);
+	json_object_dotset_number(jsobj, "setup.index-jobs", summary->indexJobs);
+
+	TopLevelTimings *timings = &(summary->timings);
+
+	JSON_Value *jsSteps = json_value_init_array();
+	JSON_Array *jsStepArray = json_value_get_array(jsSteps);
+
+	JSON_Value *jsDumpSchema = json_value_init_object();
+	JSON_Object *jsDSObj = json_value_get_object(jsDumpSchema);
+
+	json_object_set_string(jsDSObj, "label", "dump schema");
+	json_object_set_string(jsDSObj, "conn", "source");
+	json_object_set_number(jsDSObj, "duration",
+						   timings->dumpSchemaDurationMs);
+	json_object_set_number(jsDSObj, "concurrency", 1);
+
+	json_array_append_value(jsStepArray, jsDumpSchema);
+
+	JSON_Value *jsCatalog = json_value_init_object();
+	JSON_Object *jsCatObj = json_value_get_object(jsCatalog);
+
+	json_object_set_string(jsCatObj, "label", "Catalog Queries");
+	json_object_set_string(jsCatObj, "conn", "source");
+	json_object_set_number(jsCatObj, "duration",
+						   timings->fetchSchemaDurationMs);
+	json_object_set_number(jsCatObj, "concurrency", 1);
+
+	json_array_append_value(jsStepArray, jsCatalog);
+
+	JSON_Value *jsPrep = json_value_init_object();
+	JSON_Object *jsPrepObj = json_value_get_object(jsPrep);
+
+	json_object_set_string(jsPrepObj, "label", "Prepare Schema");
+	json_object_set_string(jsPrepObj, "conn", "target");
+	json_object_set_number(jsPrepObj, "duration",
+						   timings->prepareSchemaDurationMs);
+	json_object_set_number(jsPrepObj, "concurrency", 1);
+
+	json_array_append_value(jsStepArray, jsPrep);
+
+	JSON_Value *jsDB = json_value_init_object();
+	JSON_Object *jsDBObj = json_value_get_object(jsDB);
+
+	json_object_set_string(jsDBObj, "label",
+						   "COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)");
+	json_object_set_string(jsDBObj, "conn", "both");
+	json_object_set_number(jsDBObj, "duration",
+						   timings->dataAndIndexesDurationMs);
+	json_object_set_number(jsDBObj, "concurrency",
+						   summary->tableJobs + summary->indexJobs);
+
+	json_array_append_value(jsStepArray, jsDB);
+
+	JSON_Value *jsCopy = json_value_init_object();
+	JSON_Object *jsCopyObj = json_value_get_object(jsCopy);
+
+	json_object_set_string(jsCopyObj, "label", "COPY (cumulative)");
+	json_object_set_string(jsCopyObj, "conn", "both");
+	json_object_set_number(jsCopyObj, "duration", timings->tableDurationMs);
+	json_object_set_number(jsCopyObj, "concurrency", summary->tableJobs);
+
+	json_array_append_value(jsStepArray, jsCopy);
+
+	JSON_Value *jsBlob = json_value_init_object();
+	JSON_Object *jsBlobObj = json_value_get_object(jsBlob);
+
+	json_object_set_string(jsBlobObj, "label", "Large Objects (cumulative)");
+	json_object_set_string(jsBlobObj, "conn", "both");
+	json_object_set_number(jsBlobObj, "duration", timings->blobDurationMs);
+	json_object_set_number(jsBlobObj, "concurrency", 1);
+
+	json_array_append_value(jsStepArray, jsBlob);
+
+	JSON_Value *jsIndex = json_value_init_object();
+	JSON_Object *jsIndexObj = json_value_get_object(jsIndex);
+
+	json_object_set_string(jsIndexObj, "label",
+						   "CREATE INDEX, CONSTRAINTS (cumulative)");
+	json_object_set_string(jsIndexObj, "conn", "target");
+	json_object_set_number(jsIndexObj, "duration", timings->indexDurationMs);
+	json_object_set_number(jsIndexObj, "concurrency", summary->indexJobs);
+
+	json_array_append_value(jsStepArray, jsIndex);
+
+	JSON_Value *jsFin = json_value_init_object();
+	JSON_Object *jsFinObj = json_value_get_object(jsFin);
+
+	json_object_set_string(jsFinObj, "label", "Finalize Schema");
+	json_object_set_string(jsFinObj, "conn", "target");
+	json_object_set_number(jsFinObj, "duration", timings->finalizeSchemaDurationMs);
+	json_object_set_number(jsFinObj, "concurrency", 1);
+
+	json_array_append_value(jsStepArray, jsFin);
+
+	JSON_Value *jsTotal = json_value_init_object();
+	JSON_Object *jsTotalObj = json_value_get_object(jsTotal);
+
+	json_object_set_string(jsTotalObj, "label", "Total Wall Clock Duration");
+	json_object_set_string(jsTotalObj, "conn", "both");
+	json_object_set_number(jsTotalObj, "duration", timings->totalDurationMs);
+
+	json_object_set_number(jsTotalObj,
+						   "concurrency",
+						   summary->tableJobs + summary->indexJobs);
+
+	json_array_append_value(jsStepArray, jsTotal);
+
+	json_object_set_value(jsobj, "steps", jsSteps);
+
+	SummaryTable *summaryTable = &(summary->table);
+
+	JSON_Value *jsTables = json_value_init_array();
+	JSON_Array *jsTableArray = json_value_get_array(jsTables);
+
+	for (int i = 0; i < summaryTable->count; i++)
+	{
+		SummaryTableEntry *entry = &(summaryTable->array[i]);
+
+		JSON_Value *jsTable = json_value_init_object();
+		JSON_Object *jsTableObj = json_value_get_object(jsTable);
+
+		json_object_set_number(jsTableObj, "oid", entry->oid);
+		json_object_set_string(jsTableObj, "schema", entry->nspname);
+		json_object_set_string(jsTableObj, "name", entry->relname);
+
+		json_object_dotset_number(jsTableObj,
+								  "duration", entry->durationTableMs);
+
+		json_object_dotset_number(jsTableObj,
+								  "index.count", entry->indexArray.count);
+		json_object_dotset_number(jsTableObj,
+								  "index.duration", entry->durationIndexMs);
+
+		JSON_Value *jsIndexes = json_value_init_array();
+		JSON_Array *jsIndexArray = json_value_get_array(jsIndexes);
+
+		for (int j = 0; j < entry->indexArray.count; j++)
+		{
+			SummaryIndexEntry *indexEntry = &(entry->indexArray.array[j]);
+
+			JSON_Value *jsIndex = json_value_init_object();
+			JSON_Object *jsIndexObj = json_value_get_object(jsIndex);
+
+			json_object_set_number(jsIndexObj, "oid", indexEntry->oid);
+			json_object_set_string(jsIndexObj, "schema", indexEntry->nspname);
+			json_object_set_string(jsIndexObj, "name", indexEntry->relname);
+			json_object_set_string(jsIndexObj, "sql", indexEntry->sql);
+			json_object_dotset_number(jsIndexObj, "ms", indexEntry->durationMs);
+
+			json_array_append_value(jsIndexArray, jsIndex);
+		}
+
+		/* add the index array to the current table */
+		json_object_set_value(jsTableObj, "indexes", jsIndexes);
+
+		JSON_Value *jsConstraints = json_value_init_array();
+		JSON_Array *jsConstraintArray = json_value_get_array(jsConstraints);
+
+		for (int j = 0; j < entry->constraintArray.count; j++)
+		{
+			SummaryIndexEntry *cEntry = &(entry->constraintArray.array[j]);
+
+			JSON_Value *jsConstraint = json_value_init_object();
+			JSON_Object *jsConstraintObj = json_value_get_object(jsConstraint);
+
+			json_object_set_number(jsConstraintObj, "oid", cEntry->oid);
+			json_object_set_string(jsConstraintObj, "schema", cEntry->nspname);
+			json_object_set_string(jsConstraintObj, "name", cEntry->relname);
+			json_object_set_string(jsConstraintObj, "sql", cEntry->sql);
+			json_object_dotset_number(jsConstraintObj, "ms", cEntry->durationMs);
+
+			json_array_append_value(jsConstraintArray, jsConstraint);
+		}
+
+		/* add the constraint array to the current table */
+		json_object_set_value(jsTableObj, "constraints", jsConstraints);
+
+		/* append the current table to the table array */
+		json_array_append_value(jsTableArray, jsTable);
+	}
+
+	/* add the table array to the main JSON top-level dict */
+	json_object_set_value(jsobj, "tables", jsTables);
+
+	char *serialized_string = json_serialize_to_string_pretty(js);
+	size_t len = strlen(serialized_string);
+
+	log_notice("Storing migration summary in JSON file \"%s\"", filename);
+
+	if (!write_file(serialized_string, len, filename))
+	{
+		log_error("Failed to write summary JSON file, see above for details");
+	}
+
+	json_free_serialized_string(serialized_string);
+	json_value_free(js);
 }
 
 
@@ -910,7 +1122,7 @@ prepare_summary_table_headers(SummaryTable *summary)
 		int len = 0;
 		SummaryTableEntry *entry = &(summary->array[i]);
 
-		len = strlen(entry->oid);
+		len = strlen(entry->oidStr);
 
 		if (headers->maxOidSize < len)
 		{
@@ -997,12 +1209,18 @@ print_summary(Summary *summary, CopyDataSpec *specs)
 {
 	SummaryTable *summaryTable = &(summary->table);
 
+	summary->tableJobs = specs->tableJobs;
+	summary->indexJobs = specs->indexJobs;
+
 	/* first, we have to scan the available data from memory and files */
 	if (!prepare_summary_table(summary, specs))
 	{
 		log_error("Failed to prepare the summary table");
 		return false;
 	}
+
+	/* print the summary.json file */
+	(void) print_summary_as_json(summary, specs->cfPaths.summaryfile);
 
 	/* then we can prepare the headers and print the table */
 	if (specs->section == DATA_SECTION_TABLE_DATA ||
@@ -1014,7 +1232,7 @@ print_summary(Summary *summary, CopyDataSpec *specs)
 
 	/* and then finally prepare the top-level counters and print them */
 	(void) summary_prepare_toplevel_durations(summary);
-	(void) print_toplevel_summary(summary, specs->tableJobs, specs->indexJobs);
+	(void) print_toplevel_summary(summary);
 
 	return true;
 }
@@ -1053,7 +1271,8 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 		/* prepare some of the information we already have */
 		IntString oidString = intToString(table->oid);
 
-		strlcpy(entry->oid, oidString.strValue, sizeof(entry->oid));
+		entry->oid = table->oid;
+		strlcpy(entry->oidStr, oidString.strValue, sizeof(entry->oidStr));
 		strlcpy(entry->nspname, table->nspname, sizeof(entry->nspname));
 		strlcpy(entry->relname, table->relname, sizeof(entry->relname));
 
@@ -1066,6 +1285,7 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 			return false;
 		}
 
+		entry->durationTableMs = tableSummary.durationMs;
 		timings->tableDurationMs += tableSummary.durationMs;
 
 		(void) IntervalToString(tableSummary.durationMs,
@@ -1091,6 +1311,17 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 				return false;
 			}
 
+			/* prepare for as many constraints as indexes */
+			entry->indexArray.count = 0;
+			entry->indexArray.array =
+				(SummaryIndexEntry *) calloc(indexArray.count,
+											 sizeof(SummaryIndexEntry));
+
+			entry->constraintArray.count = 0;
+			entry->constraintArray.array =
+				(SummaryIndexEntry *) calloc(indexArray.count,
+											 sizeof(SummaryIndexEntry));
+
 			/* for reach index, read the index summary */
 			for (int i = 0; i < indexArray.count; i++)
 			{
@@ -1108,33 +1339,43 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 				/* when a table has no indexes, the file doesn't exists */
 				if (file_exists(indexPaths.doneFile))
 				{
-					CopyIndexSummary indexSummary = { .index = index };
+					SummaryIndexEntry *indexEntry =
+						&(entry->indexArray.array[(entry->indexArray.count)++]);
 
-					if (!read_index_summary(&indexSummary, indexPaths.doneFile))
+					if (!summary_read_index_donefile(index,
+													 indexPaths.doneFile,
+													 false, /* constraint */
+													 indexEntry))
 					{
 						/* errors have already been logged */
 						return false;
 					}
 
 					/* accumulate total duration of creating all the indexes */
-					timings->indexDurationMs += indexSummary.durationMs;
-					indexingDurationMs += indexSummary.durationMs;
+					timings->indexDurationMs += indexEntry->durationMs;
+					indexingDurationMs += indexEntry->durationMs;
 				}
 
 				if (file_exists(indexPaths.constraintDoneFile))
 				{
-					CopyIndexSummary indexSummary = { .index = index };
+					SummaryIndexArray *constraintArray =
+						&(entry->constraintArray);
 
-					if (!read_index_summary(&indexSummary,
-											indexPaths.constraintDoneFile))
+					SummaryIndexEntry *indexEntry =
+						&(constraintArray->array[(constraintArray->count)++]);
+
+					if (!summary_read_index_donefile(index,
+													 indexPaths.constraintDoneFile,
+													 true, /* constraint */
+													 indexEntry))
 					{
 						/* errors have already been logged */
 						return false;
 					}
 
 					/* accumulate total duration of creating all the indexes */
-					timings->indexDurationMs += indexSummary.durationMs;
-					indexingDurationMs += indexSummary.durationMs;
+					timings->indexDurationMs += indexEntry->durationMs;
+					indexingDurationMs += indexEntry->durationMs;
 				}
 			}
 		}
@@ -1148,6 +1389,8 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 		(void) IntervalToString(indexingDurationMs,
 								entry->indexMs,
 								sizeof(entry->indexMs));
+
+		entry->durationIndexMs = indexingDurationMs;
 	}
 
 	/*
@@ -1169,6 +1412,63 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 								timings->blobsMs,
 								sizeof(timings->blobsMs));
 	}
+
+	return true;
+}
+
+
+/*
+ * summary_read_index_donefile reads a donefile for an index and populates the
+ * information found in the SummaryIndexEntry structure.
+ */
+bool
+summary_read_index_donefile(SourceIndex *index,
+							const char *filename,
+							bool constraint,
+							SummaryIndexEntry *indexEntry)
+{
+	CopyIndexSummary indexSummary = { .index = index };
+
+	if (!read_index_summary(&indexSummary, filename))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (constraint)
+	{
+		indexEntry->oid = indexSummary.index->constraintOid;
+
+		IntString oidString = intToString(indexSummary.index->constraintOid);
+		strlcpy(indexEntry->oidStr,
+				oidString.strValue,
+				sizeof(indexEntry->oidStr));
+	}
+	else
+	{
+		indexEntry->oid = indexSummary.index->indexOid;
+
+		IntString oidString = intToString(indexSummary.index->indexOid);
+		strlcpy(indexEntry->oidStr,
+				oidString.strValue,
+				sizeof(indexEntry->oidStr));
+	}
+
+	strlcpy(indexEntry->nspname,
+			indexSummary.index->indexNamespace,
+			sizeof(indexEntry->nspname));
+
+	strlcpy(indexEntry->relname,
+			indexSummary.index->indexRelname,
+			sizeof(indexEntry->relname));
+
+	strlcpy(indexEntry->sql, indexSummary.command, sizeof(indexEntry->sql));
+
+	indexEntry->durationMs = indexSummary.durationMs;
+
+	(void) IntervalToString(indexSummary.durationMs,
+							indexEntry->indexMs,
+							sizeof(indexEntry->indexMs));
 
 	return true;
 }

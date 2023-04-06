@@ -136,6 +136,7 @@ static CommandLine list_progress_command =
 		"List the progress",
 		" --source ... ",
 		"  --source  Postgres URI to the source database\n"
+		"  --summary List the summary, requires --json\n"
 		"  --json    Format the output using JSON\n"
 		"  --dir     Work directory to use\n",
 		cli_list_db_getopts,
@@ -183,6 +184,7 @@ cli_list_db_getopts(int argc, char **argv)
 		{ "split-at", required_argument, NULL, 'L' },
 		{ "cache", no_argument, NULL, 'c' },
 		{ "drop-cache", no_argument, NULL, 'C' },
+		{ "summary", no_argument, NULL, 'y' },
 		{ "json", no_argument, NULL, 'J' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "debug", no_argument, NULL, 'd' },
@@ -305,6 +307,13 @@ cli_list_db_getopts(int argc, char **argv)
 
 				options.dropCache = true;
 				log_trace("--drop-cache");
+				break;
+			}
+
+			case 'y':
+			{
+				options.summary = true;
+				log_trace("--summary");
 				break;
 			}
 
@@ -1360,6 +1369,43 @@ cli_list_progress(int argc, char **argv)
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (listDBoptions.summary)
+	{
+		if (outputJSON)
+		{
+			const char *filename = copySpecs.cfPaths.summaryfile;
+
+			if (!file_exists(filename))
+			{
+				log_fatal("Summary JSON file \"%s\" does not exists", filename);
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			char *fileContents = NULL;
+			long fileSize = 0L;
+
+			if (!read_file(filename, &fileContents, &fileSize))
+			{
+				/* errors have already been logged */
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			fformat(stdout, "%s\n", fileContents);
+
+			exit(EXIT_CODE_QUIT);
+		}
+		else
+		{
+			/*
+			 * TODO: parse the JSON summary file, prepare our internal data
+			 * structure with the information found, including pretty printed
+			 * strings for durations etc, and then call print_summary().
+			 */
+			log_fatal("Failed to display summary, please use --json");
+			exit(EXIT_CODE_BAD_ARGS);
+		}
 	}
 
 	if (!copydb_parse_schema_json_file(&copySpecs))
