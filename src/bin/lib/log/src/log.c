@@ -184,12 +184,17 @@ void log_log(int level, const char *file, int line, const char *fmt, ...)
 	  /* always use the long time format when preparing JSON */
 	  buf[strftime(buf, sizeof(buf), LOG_TFORMAT_LONG, lt)] = '\0';
 
-	  json_object_set_string(jsobj, "ts", buf);
+	  /*
+	   * See Postgres docs for key names
+	   *
+	   * https://www.postgresql.org/docs/current/runtime-config-logging.html#RUNTIME-CONFIG-LOGGING-JSONLOG
+	   */
+	  json_object_set_string(jsobj, "timestamp", buf);
 	  json_object_set_number(jsobj, "pid", getpid());
-	  json_object_set_number(jsobj, "lnum", level);
-	  json_object_set_string(jsobj, "level", level_names[level]);
-	  json_object_set_string(jsobj, "file", file);
-	  json_object_set_number(jsobj, "line", line);
+	  json_object_set_number(jsobj, "error_level", level);
+	  json_object_set_string(jsobj, "error_severity", level_names[level]);
+	  json_object_set_string(jsobj, "file_name", file);
+	  json_object_set_number(jsobj, "file_line_num", line);
 
 	  char log[LOG_BUFSIZE] = { 0 };
 	  va_list args;
@@ -198,7 +203,7 @@ void log_log(int level, const char *file, int line, const char *fmt, ...)
 	  pg_vsprintf(log, fmt, args);
 	  va_end(args);
 
-	  json_object_set_string(jsobj, "log", log);
+	  json_object_set_string(jsobj, "message", log);
 
 	  json_string = json_serialize_to_string(js);
 	  json_value_free(js);
