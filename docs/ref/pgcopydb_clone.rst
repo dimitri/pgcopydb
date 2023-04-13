@@ -749,13 +749,13 @@ PGCOPYDB_LOG_JSON
    ::
 
       {
-        "ts": "2023-04-05 11:38:39",
-        "pid": 62676,
-        "lnum": 4,
-        "level": "INFO",
-        "file": "main.c",
-        "line": 165,
-        "log": "Running pgcopydb version 0.11.16.g267770d.dirty from \"/Users/dim/dev/PostgreSQL/pgcopydb/src/bin/pgcopydb/pgcopydb\""
+        "timestamp": "2023-04-13 16:53:14",
+        "pid": 87956,
+        "error_level": 4,
+        "error_severity": "INFO",
+        "file_name": "main.c",
+        "file_line_num": 165,
+        "message": "Running pgcopydb version 0.11.19.g2290494.dirty from \"/Users/dim/dev/PostgreSQL/pgcopydb/src/bin/pgcopydb/pgcopydb\""
       }
 
 PGCOPYDB_LOG_FILENAME
