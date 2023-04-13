@@ -1673,11 +1673,15 @@ is_response_ok(PGresult *result)
  * 08007	transaction_resolution_unknown
  * 08P01	protocol_violation
  */
+#define SQLSTATE_IS_CONNECTION_EXCEPTION(pgsql) \
+	(pgsql->sqlstate[0] == '0' && pgsql->sqlstate[1] == '8')
+
 bool
 pgsql_state_is_connection_error(PGSQL *pgsql)
 {
-	return PQstatus(pgsql->connection) == CONNECTION_BAD ||
-		   (pgsql->sqlstate[0] == '0' && pgsql->sqlstate[1] == '8');
+	return pgsql->connection != NULL &&
+		   (PQstatus(pgsql->connection) == CONNECTION_BAD ||
+			SQLSTATE_IS_CONNECTION_EXCEPTION(pgsql));
 }
 
 
