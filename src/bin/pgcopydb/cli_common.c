@@ -532,7 +532,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "skip-vacuum", no_argument, NULL, 'U' },
 		{ "filter", required_argument, NULL, 'F' },
 		{ "filters", required_argument, NULL, 'F' },
-		{ "fail-fast", required_argument, NULL, 'i' },
+		{ "fail-fast", no_argument, NULL, 'i' },
 		{ "restart", no_argument, NULL, 'r' },
 		{ "resume", no_argument, NULL, 'R' },
 		{ "not-consistent", no_argument, NULL, 'C' },
@@ -568,7 +568,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	}
 
 	while ((c = getopt_long(argc, argv,
-							"S:T:D:J:I:L:cOBelirRCN:xXCtfo:p:s:E:F:Vvdzqh",
+							"S:T:D:J:I:L:cOBelirRCN:xXCtfo:p:s:E:F:iVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
