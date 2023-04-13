@@ -143,6 +143,7 @@ typedef struct SourceTableArray
 typedef struct SourceSequence
 {
 	uint32_t oid;
+	uint32_t attroid;           /* pg_attrdef default value OID */
 	char nspname[NAMEDATALEN];
 	char relname[NAMEDATALEN];
 	int64_t lastValue;
