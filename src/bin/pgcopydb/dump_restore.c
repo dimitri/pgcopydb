@@ -61,6 +61,7 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 							 specs->source_pguri,
 							 snapshot,
 							 "pre-data",
+							 &(specs->filters),
 							 specs->dumpPaths.preFilename))
 		{
 			/* errors have already been logged */
@@ -90,6 +91,7 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 							 specs->source_pguri,
 							 snapshot,
 							 "post-data",
+							 &(specs->filters),
 							 specs->dumpPaths.postFilename))
 		{
 			/* errors have already been logged */
@@ -155,6 +157,7 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 
 	if (!pg_restore_db(&(specs->pgPaths),
 					   specs->target_pguri,
+					   &(specs->filters),
 					   specs->dumpPaths.preFilename,
 					   specs->dumpPaths.preListFilename,
 					   specs->restoreOptions))
@@ -268,6 +271,7 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 
 	if (!pg_restore_db(&(specs->pgPaths),
 					   specs->target_pguri,
+					   &(specs->filters),
 					   specs->dumpPaths.postFilename,
 					   specs->dumpPaths.postListFilename,
 					   specs->restoreOptions))

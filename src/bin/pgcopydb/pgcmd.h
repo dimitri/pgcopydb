@@ -15,6 +15,7 @@
 
 #include "defaults.h"
 #include "file_utils.h"
+#include "filtering.h"
 #include "pgsql.h"
 
 #define PG_VERSION_STRING_MAX 12
@@ -84,6 +85,7 @@ bool pg_dump_db(PostgresPaths *pgPaths,
 				const char *pguri,
 				const char *snapshot,
 				const char *section,
+				SourceFilters *filters,
 				const char *filename);
 
 bool pg_dumpall_roles(PostgresPaths *pgPaths,
@@ -103,6 +105,7 @@ bool pg_copy_roles(PostgresPaths *pgPaths,
 
 bool pg_restore_db(PostgresPaths *pgPaths,
 				   const char *pguri,
+				   SourceFilters *filters,
 				   const char *dumpFilename,
 				   const char *listFilename,
 				   RestoreOptions options);

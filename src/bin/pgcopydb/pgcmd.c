@@ -17,6 +17,7 @@
 #include "defaults.h"
 #include "env_utils.h"
 #include "file_utils.h"
+#include "filtering.h"
 #include "log.h"
 #include "parsing_utils.h"
 #include "pgcmd.h"
@@ -339,9 +340,10 @@ pg_dump_db(PostgresPaths *pgPaths,
 		   const char *pguri,
 		   const char *snapshot,
 		   const char *section,
+		   SourceFilters *filters,
 		   const char *filename)
 {
-	char *args[16];
+	char *args[128];
 	int argsIndex = 0;
 
 	char command[BUFSIZE] = { 0 };
@@ -381,6 +383,26 @@ pg_dump_db(PostgresPaths *pgPaths,
 
 	args[argsIndex++] = "--section";
 	args[argsIndex++] = (char *) section;
+
+	/* we use 10 other args array items beside schema filtering */
+	if (128 < (filters->excludeSchemaList.count + 10))
+	{
+		log_fatal("Failed to pg_dump section %s when using %d exclude-schema "
+				  "filters, only %d filters are supported by pgcopydb",
+				  section,
+				  filters->excludeSchemaList.count,
+				  128 - 10);
+		return false;
+	}
+
+	for (int i = 0; i < filters->excludeSchemaList.count; i++)
+	{
+		char *nspname = filters->excludeSchemaList.array[i].nspname;
+
+		args[argsIndex++] = "--exclude-schema";
+		args[argsIndex++] = nspname;
+	}
+
 	args[argsIndex++] = "--file";
 	args[argsIndex++] = (char *) filename;
 	args[argsIndex++] = (char *) safeURI.pguri;
@@ -723,11 +745,12 @@ pg_copy_roles(PostgresPaths *pgPaths,
 bool
 pg_restore_db(PostgresPaths *pgPaths,
 			  const char *pguri,
+			  SourceFilters *filters,
 			  const char *dumpFilename,
 			  const char *listFilename,
 			  RestoreOptions options)
 {
-	char *args[16];
+	char *args[128];
 	int argsIndex = 0;
 
 	char command[BUFSIZE] = { 0 };
@@ -780,6 +803,24 @@ pg_restore_db(PostgresPaths *pgPaths,
 	if (options.noACL)
 	{
 		args[argsIndex++] = "--no-acl";
+	}
+
+	/* we use 15 other args array items beside schema filtering */
+	if (128 < (filters->excludeSchemaList.count + 15))
+	{
+		log_fatal("Failed to pg_restore using %d exclude-schema "
+				  "filters, only %d filters are supported by pgcopydb",
+				  filters->excludeSchemaList.count,
+				  128 - 15);
+		return false;
+	}
+
+	for (int i = 0; i < filters->excludeSchemaList.count; i++)
+	{
+		char *nspname = filters->excludeSchemaList.array[i].nspname;
+
+		args[argsIndex++] = "--exclude-schema";
+		args[argsIndex++] = nspname;
 	}
 
 	if (listFilename != NULL)
