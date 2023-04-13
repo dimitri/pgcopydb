@@ -164,6 +164,11 @@ typedef struct CopyTableDataSpecsArray
  * the following pg_restore --list example output:
  *
  *   3310; 0 0 INDEX ATTACH public payment_p2020_06_customer_id_idx postgres
+ *
+ * The OBJECT_KIND_DEFAULT goes with the pg_attribute catalog OID where
+ * Postgres keeps a sequence default value call to nextval():
+ *
+ *   3291; 2604 497539 DEFAULT bar id dim
  */
 typedef enum
 {
@@ -174,7 +179,8 @@ typedef enum
 	OBJECT_KIND_TABLE,
 	OBJECT_KIND_INDEX,
 	OBJECT_KIND_CONSTRAINT,
-	OBJECT_KIND_SEQUENCE
+	OBJECT_KIND_SEQUENCE,
+	OBJECT_KIND_DEFAULT
 } ObjectKind;
 
 

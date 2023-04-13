@@ -828,6 +828,28 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 
 		size_t len = strlen(seq->restoreListName);
 		HASH_ADD(hName, hName, restoreListName, len, item);
+
+		/* also add pg_attribute.oid when it's not null -- non-zero */
+		if (seq->attroid > 0)
+		{
+			SourceFilterItem *item = malloc(sizeof(SourceFilterItem));
+
+			if (item == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			item->oid = seq->attroid;
+			item->kind = OBJECT_KIND_DEFAULT;
+			item->sequence = *seq;
+
+			strlcpy(item->restoreListName,
+					seq->restoreListName,
+					RESTORE_LIST_NAMEDATALEN);
+
+			HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), item);
+		}
 	}
 
 	/* finally table dependencies */
@@ -911,7 +933,14 @@ copydb_ObjectKindToString(ObjectKind kind)
 		}
 
 		case OBJECT_KIND_SEQUENCE:
+		{
 			return "sequence";
+		}
+
+		case OBJECT_KIND_DEFAULT:
+		{
+			return "default";
+		}
 	}
 
 	return "unknown";

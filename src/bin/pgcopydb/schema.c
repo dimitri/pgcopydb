@@ -1393,7 +1393,8 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
 		"                regexp_replace(c.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"                regexp_replace(auth.rolname, '[\n\r]', ' ')), "
+		"         NULL as attroid "
 
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
@@ -1419,246 +1420,378 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_INCL,
 
-		"  select s.oid as seqoid, "
-		"         sn.nspname, "
-		"         s.relname, "
-		"         format('%s %s %s', "
-		"                regexp_replace(sn.nspname, '[\n\r]', ' '), "
-		"                regexp_replace(s.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"with "
+		" seqs(seqoid, nspname, relname, restore_list_name) as "
+		" ( "
+		"    select s.oid as seqoid, "
+		"           sn.nspname, "
+		"           s.relname, "
+		"           format('%s %s %s', "
+		"                  regexp_replace(sn.nspname, '[\n\r]', ' '), "
+		"                  regexp_replace(s.relname, '[\n\r]', ' '), "
+		"                  regexp_replace(auth.rolname, '[\n\r]', ' ')) "
+		"      from pg_class s "
+		"           join pg_namespace sn on sn.oid = s.relnamespace "
+		"           join pg_roles auth ON auth.oid = s.relowner "
 
-		/*
-		 * we don't need dependent table name and column name:
-		 *
-		 * "         a.adrelid as reloid, "
-		 * "         a.adrelid::regclass as relname, "
-		 * "         at.attname as colname "
-		 */
-
-		"    from pg_class s "
-		"         join pg_namespace sn on sn.oid = s.relnamespace "
-		"         join pg_roles auth ON auth.oid = s.relowner"
-		"         join pg_depend d on d.refobjid = s.oid "
-		"         join pg_attrdef a on d.objid = a.oid "
-		"         join pg_attribute at "
-		"           on at.attrelid = a.adrelid "
-		"          and at.attnum = a.adnum "
-
-		/* include-only-table */
-		"         join pg_class r on r.oid = a.adrelid "
-		"         join pg_namespace rn on rn.oid = r.relnamespace "
-
-		"         join pg_temp.filter_include_only_table inc "
-		"           on rn.nspname = inc.nspname "
-		"          and r.relname = inc.relname "
-
-		"  where s.relkind = 'S' "
-		"    and d.classid = 'pg_attrdef'::regclass "
-		"    and d.refclassid = 'pg_class'::regclass "
-		"     and sn.nspname !~ 'pgcopydb' "
+		"     where s.relkind = 'S' "
+		"       and sn.nspname !~ 'pgcopydb' "
 
 		/* avoid pg_class entries which belong to extensions */
-		"     and not exists "
-		"       ( "
-		"         select 1 "
-		"           from pg_depend d "
-		"          where d.classid = 'pg_class'::regclass "
-		"            and d.objid = s.oid "
-		"            and d.deptype = 'e' "
-		"       ) "
 
-		"order by sn.nspname, s.relname"
+		"       and not exists "
+		"         ( "
+		"           select 1 "
+		"             from pg_depend d "
+		"            where d.classid = 'pg_class'::regclass "
+		"              and d.objid = s.oid "
+		"              and d.deptype = 'e' "
+		"         ) "
+		"    ) "
+
+		/*
+		 * pg_depend link between sequence and table is AUTO except for
+		 * identity sequences where it's INTERNAL.
+		 */
+		"    select s.seqoid, s.nspname, s.relname, s.restore_list_name, "
+		"           NULL as attroid "
+		"      from seqs as s "
+
+		"       join pg_depend d on d.objid = s.seqoid "
+		"        and d.classid = 'pg_class'::regclass "
+		"        and d.refclassid = 'pg_class'::regclass "
+		"        and d.deptype in ('i', 'a') "
+
+		"       join pg_class r on r.oid = d.refobjid "
+		"       join pg_namespace rn on rn.oid = r.relnamespace "
+
+		/* include-only-table */
+		"       join pg_temp.filter_include_only_table inc "
+		"         on rn.nspname = inc.nspname "
+		"        and r.relname = inc.relname "
+
+		"  union all "
+
+		/*
+		 * pg_depend link between sequence and pg_attrdef is still used for
+		 * serial columns and the like (default value uses nextval).
+		 */
+		"    select s.seqoid, s.nspname, s.relname, s.restore_list_name, "
+		"           a.oid as attroid "
+		"      from seqs as s "
+
+		"       join pg_depend d on d.refobjid = s.seqoid "
+		"        and d.refclassid = 'pg_class'::regclass "
+		"        and d.classid = 'pg_attrdef'::regclass "
+		"       join pg_attrdef a on a.oid = d.objid "
+		"       join pg_attribute at "
+		"         on at.attrelid = a.adrelid "
+		"        and at.attnum = a.adnum "
+
+		"       join pg_class r on r.oid = at.attrelid "
+		"       join pg_namespace rn on rn.oid = r.relnamespace "
+
+		/* include-only-table */
+		"       join pg_temp.filter_include_only_table inc "
+		"         on rn.nspname = inc.nspname "
+		"        and r.relname = inc.relname "
+
+		"   order by nspname, relname"
 	},
 
 	{
 		SOURCE_FILTER_TYPE_EXCL,
 
+		"with "
+		" seqs(seqoid, nspname, relname, restore_list_name) as "
+		" ( "
+		"    select s.oid as seqoid, "
+		"           sn.nspname, "
+		"           s.relname, "
+		"           format('%s %s %s', "
+		"                  regexp_replace(sn.nspname, '[\n\r]', ' '), "
+		"                  regexp_replace(s.relname, '[\n\r]', ' '), "
+		"                  regexp_replace(auth.rolname, '[\n\r]', ' ')) "
+		"      from pg_class s "
+		"           join pg_namespace sn on sn.oid = s.relnamespace "
+		"           join pg_roles auth ON auth.oid = s.relowner "
 
-		"  select s.oid as seqoid, "
-		"         sn.nspname, "
-		"         s.relname, "
-		"         format('%s %s %s', "
-		"                regexp_replace(sn.nspname, '[\n\r]', ' '), "
-		"                regexp_replace(s.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
-
-		/*
-		 * we don't need dependent table name and column name:
-		 *
-		 * "         a.adrelid as reloid, "
-		 * "         a.adrelid::regclass as relname, "
-		 * "         at.attname as colname "
-		 */
-
-		"    from pg_class s "
-		"         join pg_namespace sn on sn.oid = s.relnamespace "
-		"         join pg_roles auth ON auth.oid = s.relowner"
-		"         join pg_depend d on d.refobjid = s.oid "
-		"         join pg_attrdef a on d.objid = a.oid "
-		"         join pg_attribute at "
-		"           on at.attrelid = a.adrelid "
-		"          and at.attnum = a.adnum "
-
-		/* filters are edited in terms of the main relation pg_class entry */
-		"         join pg_class r on r.oid = a.adrelid "
-		"         join pg_namespace rn on rn.oid = r.relnamespace "
-
-		/* exclude-schema */
-		"         left join pg_temp.filter_exclude_schema fn "
-		"                on rn.nspname = fn.nspname "
-
-		/* exclude-table */
-		"         left join pg_temp.filter_exclude_table ft "
-		"                on rn.nspname = ft.nspname "
-		"               and r.relname = ft.relname "
-
-		/* exclude-table-data */
-		"         left join pg_temp.filter_exclude_table_data ftd "
-		"                on rn.nspname = ftd.nspname "
-		"               and r.relname = ftd.relname "
-
-		"  where s.relkind = 'S' "
-		"    and d.classid = 'pg_attrdef'::regclass "
-		"    and d.refclassid = 'pg_class'::regclass "
-		"    and sn.nspname !~ 'pgcopydb' "
-
-		/* WHERE clause for exclusion filters */
-		"     and fn.nspname is null "
-		"     and ft.relname is null "
-		"     and ftd.relname is null "
+		"     where s.relkind = 'S' "
+		"       and sn.nspname !~ 'pgcopydb' "
 
 		/* avoid pg_class entries which belong to extensions */
-		"     and not exists "
-		"       ( "
-		"         select 1 "
-		"           from pg_depend d "
-		"          where d.classid = 'pg_class'::regclass "
-		"            and d.objid = s.oid "
-		"            and d.deptype = 'e' "
-		"       ) "
 
-		"order by sn.nspname, s.relname"
+		"       and not exists "
+		"         ( "
+		"           select 1 "
+		"             from pg_depend d "
+		"            where d.classid = 'pg_class'::regclass "
+		"              and d.objid = s.oid "
+		"              and d.deptype = 'e' "
+		"         ) "
+		"    ) "
+
+		/*
+		 * pg_depend link between sequence and table is AUTO except for
+		 * identity sequences where it's INTERNAL.
+		 */
+		"    select s.seqoid, s.nspname, s.relname, s.restore_list_name, "
+		"           NULL as attroid "
+		"      from seqs as s "
+
+		"      join pg_depend d on d.objid = s.seqoid "
+		"       and d.classid = 'pg_class'::regclass "
+		"       and d.refclassid = 'pg_class'::regclass "
+		"       and d.deptype in ('i', 'a') "
+
+		"      join pg_class r on r.oid = d.refobjid "
+		"      join pg_namespace rn on rn.oid = r.relnamespace "
+
+		/* exclude-schema */
+		"      left join pg_temp.filter_exclude_schema fn "
+		"             on rn.nspname = fn.nspname "
+
+		/* exclude-table */
+		"      left join pg_temp.filter_exclude_table ft "
+		"             on rn.nspname = ft.nspname "
+		"            and r.relname = ft.relname "
+
+		/* exclude-table-data */
+		"      left join pg_temp.filter_exclude_table_data ftd "
+		"             on rn.nspname = ftd.nspname "
+		"            and r.relname = ftd.relname "
+
+		/* WHERE clause for exclusion filters */
+		"     where fn.nspname is null "
+		"       and ft.relname is null "
+		"       and ftd.relname is null "
+
+		"  union all "
+
+		/*
+		 * pg_depend link between sequence and pg_attrdef is still used for
+		 * serial columns and the like (default value uses nextval).
+		 */
+		"    select s.seqoid, s.nspname, s.relname, s.restore_list_name, "
+		"           a.oid as attroid "
+		"      from seqs as s "
+
+		"      join pg_depend d on d.refobjid = s.seqoid "
+		"       and d.refclassid = 'pg_class'::regclass "
+		"       and d.classid = 'pg_attrdef'::regclass "
+		"      join pg_attrdef a on a.oid = d.objid "
+		"      join pg_attribute at "
+		"        on at.attrelid = a.adrelid "
+		"       and at.attnum = a.adnum "
+
+		"      join pg_class r on r.oid = at.attrelid "
+		"      join pg_namespace rn on rn.oid = r.relnamespace "
+
+		/* exclude-schema */
+		"      left join pg_temp.filter_exclude_schema fn "
+		"             on rn.nspname = fn.nspname "
+
+		/* exclude-table */
+		"      left join pg_temp.filter_exclude_table ft "
+		"             on rn.nspname = ft.nspname "
+		"            and r.relname = ft.relname "
+
+		/* exclude-table-data */
+		"      left join pg_temp.filter_exclude_table_data ftd "
+		"             on rn.nspname = ftd.nspname "
+		"            and r.relname = ftd.relname "
+
+		/* WHERE clause for exclusion filters */
+		"     where fn.nspname is null "
+		"       and ft.relname is null "
+		"       and ftd.relname is null "
+
+		"   order by nspname, relname"
 	},
 
 	{
 		SOURCE_FILTER_TYPE_LIST_NOT_INCL,
 
-		"  select s.oid as seqoid, "
-		"         sn.nspname, "
-		"         s.relname, "
-		"         format('%s %s %s', "
-		"                regexp_replace(sn.nspname, '[\n\r]', ' '), "
-		"                regexp_replace(s.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"with "
+		" seqs(seqoid, nspname, relname, restore_list_name) as "
+		" ( "
+		"    select s.oid as seqoid, "
+		"           sn.nspname, "
+		"           s.relname, "
+		"           format('%s %s %s', "
+		"                  regexp_replace(sn.nspname, '[\n\r]', ' '), "
+		"                  regexp_replace(s.relname, '[\n\r]', ' '), "
+		"                  regexp_replace(auth.rolname, '[\n\r]', ' ')) "
+		"      from pg_class s "
+		"           join pg_namespace sn on sn.oid = s.relnamespace "
+		"           join pg_roles auth ON auth.oid = s.relowner "
 
-		/*
-		 * we don't need dependent table name and column name:
-		 *
-		 * "         a.adrelid as reloid, "
-		 * "         a.adrelid::regclass as relname, "
-		 * "         at.attname as colname "
-		 */
-
-		"    from pg_class s "
-		"         join pg_namespace sn on sn.oid = s.relnamespace "
-		"         join pg_roles auth ON auth.oid = s.relowner"
-		"         join pg_depend d on d.refobjid = s.oid "
-		"         join pg_attrdef a on d.objid = a.oid "
-		"         join pg_attribute at "
-		"           on at.attrelid = a.adrelid "
-		"          and at.attnum = a.adnum "
-
-		/* include-only-table */
-		"         join pg_class r on r.oid = a.adrelid "
-		"         join pg_namespace rn on rn.oid = r.relnamespace "
-
-		"    left join pg_temp.filter_include_only_table inc "
-		"           on rn.nspname = inc.nspname "
-		"          and r.relname = inc.relname "
-
-		"  where s.relkind = 'S' "
-		"    and d.classid = 'pg_attrdef'::regclass "
-		"    and d.refclassid = 'pg_class'::regclass "
-		"    and sn.nspname !~ 'pgcopydb' "
-
-		/* WHERE clause for exclusion filters */
-		"     and inc.relname is null "
+		"     where s.relkind = 'S' "
+		"       and sn.nspname !~ 'pgcopydb' "
 
 		/* avoid pg_class entries which belong to extensions */
-		"     and not exists "
-		"       ( "
-		"         select 1 "
-		"           from pg_depend d "
-		"          where d.classid = 'pg_class'::regclass "
-		"            and d.objid = s.oid "
-		"            and d.deptype = 'e' "
-		"       ) "
 
-		"order by sn.nspname, s.relname"
+		"       and not exists "
+		"         ( "
+		"           select 1 "
+		"             from pg_depend d "
+		"            where d.classid = 'pg_class'::regclass "
+		"              and d.objid = s.oid "
+		"              and d.deptype = 'e' "
+		"         ) "
+		"    ) "
+
+		/*
+		 * pg_depend link between sequence and table is AUTO except for
+		 * identity sequences where it's INTERNAL.
+		 */
+		"    select s.seqoid, s.nspname, s.relname, s.restore_list_name, "
+		"           NULL as attroid "
+		"      from seqs as s "
+
+		"       join pg_depend d on d.objid = s.seqoid "
+		"        and d.classid = 'pg_class'::regclass "
+		"        and d.refclassid = 'pg_class'::regclass "
+		"        and d.deptype in ('i', 'a') "
+
+		"       join pg_class r on r.oid = d.refobjid "
+		"       join pg_namespace rn on rn.oid = r.relnamespace "
+
+		/* include-only-table */
+		"       left join pg_temp.filter_include_only_table inc "
+		"              on rn.nspname = inc.nspname "
+		"             and r.relname = inc.relname "
+
+		"      where inc.relname is null "
+
+		"  union all "
+
+		/*
+		 * pg_depend link between sequence and pg_attrdef is still used for
+		 * serial columns and the like (default value uses nextval).
+		 */
+		"    select s.seqoid, s.nspname, s.relname, s.restore_list_name, "
+		"           a.oid as attroid "
+		"      from seqs as s "
+
+		"       join pg_depend d on d.refobjid = s.seqoid "
+		"        and d.refclassid = 'pg_class'::regclass "
+		"        and d.classid = 'pg_attrdef'::regclass "
+		"       join pg_attrdef a on a.oid = d.objid "
+		"       join pg_attribute at "
+		"         on at.attrelid = a.adrelid "
+		"        and at.attnum = a.adnum "
+
+		"       join pg_class r on r.oid = at.attrelid "
+		"       join pg_namespace rn on rn.oid = r.relnamespace "
+
+		/* include-only-table */
+		"       left join pg_temp.filter_include_only_table inc "
+		"              on rn.nspname = inc.nspname "
+		"             and r.relname = inc.relname "
+
+		"      where inc.relname is null "
+
+		"   order by nspname, relname"
 	},
 
 	{
 		SOURCE_FILTER_TYPE_LIST_EXCL,
 
+		"with "
+		" seqs(seqoid, nspname, relname, restore_list_name) as "
+		" ( "
+		"    select s.oid as seqoid, "
+		"           sn.nspname, "
+		"           s.relname, "
+		"           format('%s %s %s', "
+		"                  regexp_replace(sn.nspname, '[\n\r]', ' '), "
+		"                  regexp_replace(s.relname, '[\n\r]', ' '), "
+		"                  regexp_replace(auth.rolname, '[\n\r]', ' ')) "
+		"      from pg_class s "
+		"           join pg_namespace sn on sn.oid = s.relnamespace "
+		"           join pg_roles auth ON auth.oid = s.relowner "
 
-		"  select s.oid as seqoid, "
-		"         sn.nspname, "
-		"         s.relname, "
-		"         format('%s %s %s', "
-		"                regexp_replace(sn.nspname, '[\n\r]', ' '), "
-		"                regexp_replace(s.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"     where s.relkind = 'S' "
+		"       and sn.nspname !~ 'pgcopydb' "
+
+		/* avoid pg_class entries which belong to extensions */
+
+		"       and not exists "
+		"         ( "
+		"           select 1 "
+		"             from pg_depend d "
+		"            where d.classid = 'pg_class'::regclass "
+		"              and d.objid = s.oid "
+		"              and d.deptype = 'e' "
+		"         ) "
+		"    ) "
 
 		/*
-		 * we don't need dependent table name and column name:
-		 *
-		 * "         a.adrelid as reloid, "
-		 * "         a.adrelid::regclass as relname, "
-		 * "         at.attname as colname "
+		 * pg_depend link between sequence and table is AUTO except for
+		 * identity sequences where it's INTERNAL.
 		 */
+		"    select s.seqoid, s.nspname, s.relname, s.restore_list_name, "
+		"           NULL as attroid "
+		"      from seqs as s "
 
-		"    from pg_class s "
-		"         join pg_namespace sn on sn.oid = s.relnamespace "
-		"         join pg_roles auth ON auth.oid = s.relowner"
-		"         join pg_depend d on d.refobjid = s.oid "
-		"         join pg_attrdef a on d.objid = a.oid "
-		"         join pg_attribute at "
-		"           on at.attrelid = a.adrelid "
-		"          and at.attnum = a.adnum "
+		"      join pg_depend d on d.objid = s.seqoid "
+		"       and d.classid = 'pg_class'::regclass "
+		"       and d.refclassid = 'pg_class'::regclass "
+		"       and d.deptype in ('i', 'a') "
 
-		/* filters are edited in terms of the main relation pg_class entry */
-		"         join pg_class r on r.oid = a.adrelid "
-		"         join pg_namespace rn on rn.oid = r.relnamespace "
+		"      join pg_class r on r.oid = d.refobjid "
+		"      join pg_namespace rn on rn.oid = r.relnamespace "
 
 		/* exclude-schema */
-		"         left join pg_temp.filter_exclude_schema fn "
-		"                on rn.nspname = fn.nspname "
+		"      left join pg_temp.filter_exclude_schema fn "
+		"             on rn.nspname = fn.nspname "
 
 		/* exclude-table */
-		"         left join pg_temp.filter_exclude_table ft "
-		"                on rn.nspname = ft.nspname "
-		"               and r.relname = ft.relname "
+		"      left join pg_temp.filter_exclude_table ft "
+		"             on rn.nspname = ft.nspname "
+		"            and r.relname = ft.relname "
 
-		"  where s.relkind = 'S' "
-		"    and d.classid = 'pg_attrdef'::regclass "
-		"    and d.refclassid = 'pg_class'::regclass "
-		"    and sn.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
 		"     and (   fn.nspname is not null "
 		"          or ft.relname is not null) "
 
-		/* avoid pg_class entries which belong to extensions */
-		"     and not exists "
-		"       ( "
-		"         select 1 "
-		"           from pg_depend d "
-		"          where d.classid = 'pg_class'::regclass "
-		"            and d.objid = s.oid "
-		"            and d.deptype = 'e' "
-		"       ) "
+		"  union all "
 
-		"order by sn.nspname, s.relname"
+		/*
+		 * pg_depend link between sequence and pg_attrdef is still used for
+		 * serial columns and the like (default value uses nextval).
+		 */
+		"    select s.seqoid, s.nspname, s.relname, s.restore_list_name, "
+		"           a.oid as attroid "
+		"      from seqs as s "
+
+		"      join pg_depend d on d.refobjid = s.seqoid "
+		"       and d.refclassid = 'pg_class'::regclass "
+		"       and d.classid = 'pg_attrdef'::regclass "
+		"      join pg_attrdef a on a.oid = d.objid "
+		"      join pg_attribute at "
+		"        on at.attrelid = a.adrelid "
+		"       and at.attnum = a.adnum "
+
+		"      join pg_class r on r.oid = at.attrelid "
+		"      join pg_namespace rn on rn.oid = r.relnamespace "
+
+		/* exclude-schema */
+		"      left join pg_temp.filter_exclude_schema fn "
+		"             on rn.nspname = fn.nspname "
+
+		/* exclude-table */
+		"      left join pg_temp.filter_exclude_table ft "
+		"             on rn.nspname = ft.nspname "
+		"            and r.relname = ft.relname "
+
+		/* WHERE clause for exclusion filters */
+		"     and (   fn.nspname is not null "
+		"          or ft.relname is not null) "
+
+		"   order by nspname, relname"
 	},
 };
 
@@ -2877,6 +3010,8 @@ prepareFilterCopyTableList(PGSQL *pgsql,
 		char *nspname = tableList->array[i].nspname;
 		char *relname = tableList->array[i].relname;
 
+		log_trace("%s\t%s", nspname, relname);
+
 		if (!pg_copy_row_from_stdin(pgsql, "ss", nspname, relname))
 		{
 			/* errors have already been logged */
@@ -3553,9 +3688,9 @@ getSequenceArray(void *ctx, PGresult *result)
 
 	log_debug("getSequenceArray: %d", nTuples);
 
-	if (PQnfields(result) != 4)
+	if (PQnfields(result) != 5)
 	{
-		log_error("Query returned %d columns, expected 4", PQnfields(result));
+		log_error("Query returned %d columns, expected 5", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -3642,7 +3777,7 @@ parseCurrentSourceSequence(PGresult *result, int rowNumber, SourceSequence *seq)
 		++errors;
 	}
 
-	/* 7. indexRestoreListName */
+	/* 4. restoreListName */
 	value = PQgetvalue(result, rowNumber, 3);
 	length = strlcpy(seq->restoreListName, value, RESTORE_LIST_NAMEDATALEN);
 
@@ -3652,6 +3787,22 @@ parseCurrentSourceSequence(PGresult *result, int rowNumber, SourceSequence *seq)
 				  "the maximum expected is %d (RESTORE_LIST_NAMEDATALEN - 1)",
 				  value, length, RESTORE_LIST_NAMEDATALEN - 1);
 		++errors;
+	}
+
+	/* 5. attroid */
+	if (PQgetisnull(result, rowNumber, 4))
+	{
+		seq->attroid = 0;
+	}
+	else
+	{
+		value = PQgetvalue(result, rowNumber, 4);
+
+		if (!stringToUInt32(value, &(seq->attroid)) || seq->attroid == 0)
+		{
+			log_error("Invalid pg_attribute OID \"%s\"", value);
+			++errors;
+		}
 	}
 
 	return errors == 0;
