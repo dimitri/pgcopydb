@@ -1116,8 +1116,8 @@ cli_list_indexes(int argc, char **argv)
 						index->indexNamespace,
 						index->indexRelname,
 						index->constraintName,
-						index->constraintDef,
-						index->indexDef);
+						NULL_AS_EMPTY_STRING(index->constraintDef),
+						NULL_AS_EMPTY_STRING(index->indexDef));
 			}
 			else
 			{
@@ -1131,7 +1131,7 @@ cli_list_indexes(int argc, char **argv)
 						index->indexNamespace,
 						"",
 						index->constraintName,
-						index->constraintDef,
+						NULL_AS_EMPTY_STRING(index->constraintDef),
 						"");
 			}
 		}
@@ -1143,8 +1143,8 @@ cli_list_indexes(int argc, char **argv)
 					index->indexNamespace,
 					index->indexRelname,
 					index->constraintName,
-					index->constraintDef,
-					index->indexDef);
+					NULL_AS_EMPTY_STRING(index->constraintDef),
+					NULL_AS_EMPTY_STRING(index->indexDef));
 		}
 	}
 

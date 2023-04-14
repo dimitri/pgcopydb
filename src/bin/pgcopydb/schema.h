@@ -71,7 +71,7 @@ typedef struct SourceCollation
 {
 	uint32_t oid;
 	char collname[NAMEDATALEN];
-	char desc[BUFSIZE];
+	char *desc;                 /* malloc'ed area */
 	char restoreListName[RESTORE_LIST_NAMEDATALEN];
 } SourceCollation;
 
@@ -173,11 +173,11 @@ typedef struct SourceIndex
 	char tableRelname[NAMEDATALEN];
 	bool isPrimary;
 	bool isUnique;
-	char indexColumns[BUFSIZE];
-	char indexDef[BUFSIZE];
+	char *indexColumns;         /* malloc'ed area */
+	char *indexDef;             /* malloc'ed area */
 	uint32_t constraintOid;
 	char constraintName[NAMEDATALEN];
-	char constraintDef[BUFSIZE];
+	char *constraintDef;        /* malloc'ed area */
 	char indexRestoreListName[RESTORE_LIST_NAMEDATALEN];
 	char constraintRestoreListName[RESTORE_LIST_NAMEDATALEN];
 
