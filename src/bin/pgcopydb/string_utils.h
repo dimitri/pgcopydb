@@ -9,6 +9,8 @@
 
 #define IS_EMPTY_STRING_BUFFER(strbuf) (strbuf[0] == '\0')
 
+#define NULL_AS_EMPTY_STRING(str) (str == NULL ? "" : str)
+
 #define streq(a, b) (a != NULL && b != NULL && strcmp(a, b) == 0)
 
 #define strneq(x, y) \

@@ -610,8 +610,30 @@ copydb_parse_schema_json_file(CopyDataSpec *copySpecs)
 
 		strlcpy(index->indexNamespace, schema, sizeof(index->indexNamespace));
 		strlcpy(index->indexRelname, name, sizeof(index->indexRelname));
-		strlcpy(index->indexColumns, cols, sizeof(index->indexColumns));
-		strlcpy(index->indexDef, def, sizeof(index->indexDef));
+
+		int lenCols = strlen(cols) + 1;
+
+		index->indexColumns = (char *) calloc(lenCols, sizeof(char));
+
+		if (index->indexColumns == NULL)
+		{
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		strlcpy(index->indexColumns, cols, lenCols);
+
+		int lenDef = strlen(def) + 1;
+
+		index->indexDef = (char *) calloc(lenDef, sizeof(char));
+
+		if (index->indexDef == NULL)
+		{
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		strlcpy(index->indexDef, def, lenDef);
 
 		strlcpy(index->indexRestoreListName,
 				listName,
@@ -641,7 +663,17 @@ copydb_parse_schema_json_file(CopyDataSpec *copySpecs)
 												"constraint.restore-list-name");
 
 			strlcpy(index->constraintName, name, sizeof(index->constraintName));
-			strlcpy(index->constraintDef, def, sizeof(index->constraintDef));
+
+			int len = strlen(def) + 1;
+			index->constraintDef = (char *) calloc(len, sizeof(char));
+
+			if (index->constraintDef == NULL)
+			{
+				log_fatal(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			strlcpy(index->constraintDef, def, len);
 
 			if (listName != NULL)
 			{

@@ -3449,15 +3449,16 @@ getCollationList(void *ctx, PGresult *result)
 
 		/* 3. desc */
 		value = PQgetvalue(result, rowNumber, 2);
-		length = strlcpy(collation->desc, value, BUFSIZE);
+		length = strlen(value) + 1;
+		collation->desc = (char *) calloc(length, sizeof(char));
 
-		if (length >= BUFSIZE)
+		if (collation->desc == NULL)
 		{
-			log_error("Collation desc \"%s\" is %d bytes long, "
-					  "the maximum expected is %d (BUFSIZE - 1)",
-					  value, length, BUFSIZE - 1);
-			++errors;
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return;
 		}
+
+		strlcpy(collation->desc, value, length);
 
 		/* 4. restoreListName */
 		value = PQgetvalue(result, rowNumber, 3);
@@ -3969,27 +3970,29 @@ parseCurrentSourceIndex(PGresult *result, int rowNumber, SourceIndex *index)
 
 	/* 9. cols */
 	value = PQgetvalue(result, rowNumber, 8);
-	length = strlcpy(index->indexColumns, value, BUFSIZE);
+	length = strlen(value) + 1;
+	index->indexColumns = (char *) calloc(length, sizeof(char));
 
-	if (length >= BUFSIZE)
+	if (index->indexColumns == NULL)
 	{
-		log_error("Index name \"%s\" is %d bytes long, "
-				  "the maximum expected is %d (BUFSIZE - 1)",
-				  value, length, BUFSIZE - 1);
-		++errors;
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return false;
 	}
+
+	strlcpy(index->indexColumns, value, length);
 
 	/* 10. pg_get_indexdef() */
 	value = PQgetvalue(result, rowNumber, 9);
-	length = strlcpy(index->indexDef, value, BUFSIZE);
+	length = strlen(value) + 1;
+	index->indexDef = (char *) calloc(length, sizeof(char));
 
-	if (length >= BUFSIZE)
+	if (index->indexDef == NULL)
 	{
-		log_error("Index name \"%s\" is %d bytes long, "
-				  "the maximum expected is %d (BUFSIZE - 1)",
-				  value, length, BUFSIZE - 1);
-		++errors;
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return false;
 	}
+
+	strlcpy(index->indexDef, value, length);
 
 	/* 11. c.oid */
 	if (PQgetisnull(result, rowNumber, 10))
@@ -4027,15 +4030,16 @@ parseCurrentSourceIndex(PGresult *result, int rowNumber, SourceIndex *index)
 	if (!PQgetisnull(result, rowNumber, 12))
 	{
 		value = PQgetvalue(result, rowNumber, 12);
-		length = strlcpy(index->constraintDef, value, BUFSIZE);
+		length = strlen(value) + 1;
+		index->constraintDef = (char *) calloc(length, sizeof(char));
 
-		if (length >= BUFSIZE)
+		if (index->constraintDef == NULL)
 		{
-			log_error("Index name \"%s\" is %d bytes long, "
-					  "the maximum expected is %d (BUFSIZE - 1)",
-					  value, length, BUFSIZE - 1);
-			++errors;
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return false;
 		}
+
+		strlcpy(index->constraintDef, value, length);
 	}
 
 	/* 14. indexRestoreListName */
