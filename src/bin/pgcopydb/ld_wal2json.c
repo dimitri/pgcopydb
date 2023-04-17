@@ -394,11 +394,41 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple,
 			case JSONString:
 			{
 				const char *x = json_value_get_string(jsval);
+				const char *t = json_object_get_string(jscol, "type");
 
-				valueColumn->oid = TEXTOID;
-				valueColumn->val.str = strdup(x);
-				valueColumn->isNull = false;
-				valueColumn->isQuoted = false;
+				if (json_object_has_value(jscol, "type") && streq(t, "bytea"))
+				{
+					/*
+					 * wal2json has the following processing of bytea values:
+					 *
+					 * string is "\x54617069727573", start after \x
+					 *
+					 * so we put back the \x prefix here.
+					 */
+					int slen = strlen(x);
+					int blen = slen + 3;
+
+					valueColumn->oid = BYTEAOID;
+					valueColumn->val.str = (char *) calloc(blen, sizeof(char));
+
+					if (valueColumn->val.str == NULL)
+					{
+						log_error(ALLOCATION_FAILED_ERROR);
+						return false;
+					}
+
+					sformat(valueColumn->val.str, blen, "\\x%s", x);
+
+					valueColumn->isNull = false;
+					valueColumn->isQuoted = false;
+				}
+				else
+				{
+					valueColumn->oid = TEXTOID;
+					valueColumn->val.str = strdup(x);
+					valueColumn->isNull = false;
+					valueColumn->isQuoted = false;
+				}
 				break;
 			}
 
