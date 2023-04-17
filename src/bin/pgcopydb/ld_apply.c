@@ -66,7 +66,8 @@ stream_apply_catchup(StreamSpecs *specs)
 								specs->target_pguri,
 								specs->origin,
 								specs->endpos,
-								context.apply))
+								context.apply,
+								specs->logSQL))
 	{
 		log_error("Failed to setup replication origin on the target database");
 		return false;
@@ -210,7 +211,7 @@ stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
 	}
 
 	/* skip logging the sentinel queries, we log_debug the values fetched */
-	src.logSQL = false;
+	src.logSQL = context->logSQL;
 
 	while (!sentinel.apply)
 	{
@@ -287,7 +288,7 @@ stream_apply_sync_sentinel(StreamApplyContext *context)
 	}
 
 	/* limit the amount of logging of the apply process */
-	src.logSQL = false;
+	src.logSQL = context->logSQL;
 
 	if (!pgsql_sync_sentinel_apply(&src, context->previousLSN, &sentinel))
 	{
@@ -677,7 +678,8 @@ setupReplicationOrigin(StreamApplyContext *context,
 					   char *target_pguri,
 					   char *origin,
 					   uint64_t endpos,
-					   bool apply)
+					   bool apply,
+					   bool logSQL)
 {
 	PGSQL *pgsql = &(context->pgsql);
 	char *nodeName = context->origin;
@@ -718,8 +720,8 @@ setupReplicationOrigin(StreamApplyContext *context,
 	/* we're going to send several replication origin commands */
 	pgsql->connectionStatementType = PGSQL_CONNECTION_MULTI_STATEMENT;
 
-	/* we also want to skip logging any SQL query that we apply */
-	pgsql->logSQL = false;
+	/* we also might want to skip logging any SQL query that we apply */
+	pgsql->logSQL = logSQL;
 
 	uint32_t oid = 0;
 

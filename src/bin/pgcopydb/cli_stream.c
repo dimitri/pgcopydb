@@ -660,6 +660,13 @@ cli_stream_catchup(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	/*
+	 * Refrain from logging SQL statements in the apply module, because they
+	 * contain user data. That said, when --trace has been used, bypass that
+	 * privacy feature.
+	 */
+	bool logSQL = log_get_level() <= LOG_TRACE;
+
 	StreamSpecs specs = { 0 };
 
 	if (!stream_init_specs(&specs,
@@ -672,7 +679,8 @@ cli_stream_catchup(int argc, char **argv)
 						   streamDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
 						   streamDBoptions.stdIn,
-						   streamDBoptions.stdOut))
+						   streamDBoptions.stdOut,
+						   logSQL))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -736,6 +744,13 @@ cli_stream_replay(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	/*
+	 * Refrain from logging SQL statements in the apply module, because they
+	 * contain user data. That said, when --trace has been used, bypass that
+	 * privacy feature.
+	 */
+	bool logSQL = log_get_level() <= LOG_TRACE;
+
 	StreamSpecs specs = { 0 };
 
 	if (!stream_init_specs(&specs,
@@ -748,7 +763,8 @@ cli_stream_replay(int argc, char **argv)
 						   streamDBoptions.endpos,
 						   STREAM_MODE_REPLAY,
 						   true,  /* stdin */
-						   true)) /* stdout */
+						   true, /* stdout */
+						   logSQL))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -854,6 +870,13 @@ cli_stream_transform(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	/*
+	 * Refrain from logging SQL statements in the apply module, because they
+	 * contain user data. That said, when --trace has been used, bypass that
+	 * privacy feature.
+	 */
+	bool logSQL = log_get_level() <= LOG_TRACE;
+
 	StreamSpecs specs = { 0 };
 
 	if (!stream_init_specs(&specs,
@@ -866,7 +889,8 @@ cli_stream_transform(int argc, char **argv)
 						   streamDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
 						   streamDBoptions.stdIn,
-						   streamDBoptions.stdOut))
+						   streamDBoptions.stdOut,
+						   logSQL))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -973,6 +997,13 @@ cli_stream_apply(int argc, char **argv)
 	}
 
 	/*
+	 * Refrain from logging SQL statements in the apply module, because they
+	 * contain user data. That said, when --trace has been used, bypass that
+	 * privacy feature.
+	 */
+	bool logSQL = log_get_level() <= LOG_TRACE;
+
+	/*
 	 * Force the SQL filename to the given argument, bypassing filename
 	 * computations based on origin tracking. Already known-applied
 	 * transactions are still skipped.
@@ -994,7 +1025,8 @@ cli_stream_apply(int argc, char **argv)
 							   streamDBoptions.endpos,
 							   STREAM_MODE_CATCHUP,
 							   true, /* streamDBoptions.stdIn */
-							   false /* streamDBoptions.stdOut */))
+							   false, /* streamDBoptions.stdOut */
+							   logSQL))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);
@@ -1021,7 +1053,8 @@ cli_stream_apply(int argc, char **argv)
 									streamDBoptions.target_pguri,
 									streamDBoptions.origin,
 									streamDBoptions.endpos,
-									true))
+									true,
+									logSQL))
 		{
 			log_error("Failed to setup replication origin on the target database");
 			exit(EXIT_CODE_TARGET);
@@ -1073,6 +1106,13 @@ stream_start_in_mode(LogicalStreamMode mode)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	/*
+	 * Refrain from logging SQL statements in the apply module, because they
+	 * contain user data. That said, when --trace has been used, bypass that
+	 * privacy feature.
+	 */
+	bool logSQL = log_get_level() <= LOG_TRACE;
+
 	StreamSpecs specs = { 0 };
 
 	if (!stream_init_specs(&specs,
@@ -1085,7 +1125,8 @@ stream_start_in_mode(LogicalStreamMode mode)
 						   streamDBoptions.endpos,
 						   mode,
 						   streamDBoptions.stdIn,
-						   streamDBoptions.stdOut))
+						   streamDBoptions.stdOut,
+						   logSQL))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

@@ -75,7 +75,8 @@ stream_apply_replay(StreamSpecs *specs)
 								specs->target_pguri,
 								specs->origin,
 								specs->endpos,
-								context->apply))
+								context->apply,
+								specs->logSQL))
 	{
 		log_error("Failed to setup replication origin on the target database");
 		return false;
