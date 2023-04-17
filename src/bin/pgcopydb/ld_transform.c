@@ -1316,20 +1316,33 @@ bool
 stream_write_transaction(FILE *out, LogicalTransaction *txn)
 {
 	/*
-	 * SWITCH WAL commands might appear eigher in the middle of a transaction
-	 * or in between two transactions, depending on when the LSN WAL file
-	 * switch happens on the source server.
-	 *
-	 * When the SWITCH WAL happens in between transactions, our internal
-	 * representation makes it look like a transaction with a single SWITCH
-	 * statement, and in that case we don't want to output BEGIN and COMMIT
-	 * statements at all.
+	 * Logical decoding also outputs empty transactions that act here kind of
+	 * like a keepalive stream. These transactions might represent activity in
+	 * other databases or background activity in the source Postgres instance
+	 * where the LSN is moving forward. We want to replay them.
 	 */
 	if (txn->count == 0)
 	{
+		if (!stream_write_begin(out, txn))
+		{
+			return false;
+		}
+
+		if (!stream_write_commit(out, txn))
+		{
+			return false;
+		}
+
 		return true;
 	}
 
+	/*
+	 * Now we deal with non-empty transactions.
+	 *
+	 * SWITCH WAL commands might appear eigher in the middle of a transaction
+	 * or in between two transactions, depending on when the LSN WAL file
+	 * switch happens on the source server.
+	 */
 	bool sentBEGIN = false;
 	bool splitTx = false;
 
@@ -1444,6 +1457,16 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 		}
 	}
 
+	/*
+	 * Some transactions might be spanning over multiple WAL.{json,sql} files,
+	 * because it just happened at the boundary LSN. In that case we don't want
+	 * to send the COMMIT message yet.
+	 *
+	 * Continued transaction are then represented using several instances of
+	 * our LogicalTransaction data structure, and the last one of the series
+	 * then have the txn->commit metadata forcibly set to true: here we also
+	 * need to obey that.
+	 */
 	if ((sentBEGIN && !splitTx) || txn->commit)
 	{
 		if (!stream_write_commit(out, txn))
