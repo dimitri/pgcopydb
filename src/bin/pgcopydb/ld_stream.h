@@ -128,6 +128,8 @@ typedef struct StreamApplyContext
 	bool reachedStartPos;
 	bool reachedEndPos;
 
+	bool logSQL;
+
 	char wal[MAXPGPATH];
 	char sqlFileName[MAXPGPATH];
 } StreamApplyContext;
@@ -331,6 +333,7 @@ struct StreamSpecs
 
 	bool restart;
 	bool resume;
+	bool logSQL;
 
 	/* subprocess management */
 	FollowSubProcess prefetch;
@@ -372,7 +375,8 @@ bool stream_init_specs(StreamSpecs *specs,
 					   uint64_t endpos,
 					   LogicalStreamMode mode,
 					   bool stdIn,
-					   bool stdOut);
+					   bool stdOut,
+					   bool logSQL);
 
 bool stream_init_for_mode(StreamSpecs *specs, LogicalStreamMode mode);
 
@@ -525,7 +529,8 @@ bool setupReplicationOrigin(StreamApplyContext *context,
 							char *target_pguri,
 							char *origin,
 							uint64_t endpos,
-							bool apply);
+							bool apply,
+							bool logSQL);
 
 bool computeSQLFileName(StreamApplyContext *context);
 

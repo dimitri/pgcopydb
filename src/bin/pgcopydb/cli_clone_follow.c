@@ -188,6 +188,13 @@ clone_and_follow(CopyDataSpec *copySpecs)
 {
 	StreamSpecs streamSpecs = { 0 };
 
+	/*
+	 * Refrain from logging SQL statements in the apply module, because they
+	 * contain user data. That said, when --trace has been used, bypass that
+	 * privacy feature.
+	 */
+	bool logSQL = log_get_level() <= LOG_TRACE;
+
 	if (!stream_init_specs(&streamSpecs,
 						   &(copySpecs->cfPaths.cdc),
 						   copySpecs->source_pguri,
@@ -198,7 +205,8 @@ clone_and_follow(CopyDataSpec *copySpecs)
 						   copyDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
 						   copyDBoptions.stdIn,
-						   copyDBoptions.stdOut))
+						   copyDBoptions.stdOut,
+						   logSQL))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -316,6 +324,13 @@ cli_follow(int argc, char **argv)
 
 	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_ALL);
 
+	/*
+	 * Refrain from logging SQL statements in the apply module, because they
+	 * contain user data. That said, when --trace has been used, bypass that
+	 * privacy feature.
+	 */
+	bool logSQL = log_get_level() <= LOG_TRACE;
+
 	StreamSpecs specs = { 0 };
 
 	if (!stream_init_specs(&specs,
@@ -328,7 +343,8 @@ cli_follow(int argc, char **argv)
 						   copyDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
 						   copyDBoptions.stdIn,
-						   copyDBoptions.stdOut))
+						   copyDBoptions.stdOut,
+						   logSQL))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

@@ -51,12 +51,14 @@ stream_init_specs(StreamSpecs *specs,
 				  uint64_t endpos,
 				  LogicalStreamMode mode,
 				  bool stdin,
-				  bool stdout)
+				  bool stdout,
+				  bool logSQL)
 {
 	/* just copy into StreamSpecs what's been initialized in copySpecs */
 	specs->mode = mode;
 	specs->stdIn = stdin;
 	specs->stdOut = stdout;
+	specs->logSQL = logSQL;
 
 	specs->paths = *paths;
 	specs->endpos = endpos;
