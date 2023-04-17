@@ -1250,7 +1250,7 @@ FreeLogicalMessageTupleArray(LogicalMessageTupleArray *tupleArray)
 			{
 				LogicalMessageValue *value = &(values->array[v]);
 
-				if (value->oid == TEXTOID)
+				if (value->oid == TEXTOID || value->oid == BYTEAOID)
 				{
 					free(value->val.str);
 				}
@@ -1845,6 +1845,7 @@ stream_write_value(FILE *out, LogicalMessageValue *value)
 			}
 
 			case TEXTOID:
+			case BYTEAOID:
 			{
 				if (value->isQuoted)
 				{

@@ -100,7 +100,7 @@ stream_init_specs(StreamSpecs *specs,
 					"true",
 					"true",
 					"true",
-					"false",
+					"true",
 					"pgcopydb.*"
 				}
 			};
