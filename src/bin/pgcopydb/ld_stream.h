@@ -49,11 +49,13 @@ typedef struct StreamCounters
 
 typedef struct LogicalMessageMetadata
 {
+	uint64_t recvTime;         /* time(NULL) at message receive time */
 	StreamAction action;
 	uint32_t xid;
 	uint64_t lsn;
 	char timestamp[PG_MAX_TIMESTAMP];
 	bool filterOut;
+	bool skipping;
 } LogicalMessageMetadata;
 
 
@@ -90,6 +92,9 @@ typedef struct StreamContext
 
 	char *jsonBuffer;           /* malloc'ed area */
 	LogicalMessageMetadata metadata;
+	LogicalMessageMetadata previous;
+
+	uint64_t lastWrite;
 
 	Queue *transformQueue;
 	uint32_t WalSegSz;
@@ -408,8 +413,12 @@ bool parseMessageMetadata(LogicalMessageMetadata *metadata,
 						  JSON_Value *json,
 						  bool skipAction);
 
+bool stream_write_json(LogicalStreamContext *context, bool previous);
+
 bool stream_read_file(StreamContent *content);
 bool stream_read_latest(StreamSpecs *specs, StreamContent *content);
+bool stream_update_latest_symlink(StreamContext *privateContext,
+								  const char *filename);
 
 bool buildReplicationURI(const char *pguri, char *repl_pguri);
 
