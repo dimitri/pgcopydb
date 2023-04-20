@@ -50,12 +50,19 @@ typedef struct StreamCounters
 typedef struct LogicalMessageMetadata
 {
 	uint64_t recvTime;         /* time(NULL) at message receive time */
+
+	/* from parsing the message itself */
 	StreamAction action;
 	uint32_t xid;
 	uint64_t lsn;
 	char timestamp[PG_MAX_TIMESTAMP];
+
+	/* our own internal decision making */
 	bool filterOut;
 	bool skipping;
+
+	/* the raw message in our internal JSON format */
+	char *jsonBuffer;           /* malloc'ed area */
 } LogicalMessageMetadata;
 
 
@@ -90,7 +97,6 @@ typedef struct StreamContext
 	FILE *in;
 	FILE *out;
 
-	char *jsonBuffer;           /* malloc'ed area */
 	LogicalMessageMetadata metadata;
 	LogicalMessageMetadata previous;
 

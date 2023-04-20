@@ -47,7 +47,7 @@ prepareWal2jsonMessage(LogicalStreamContext *context)
 {
 	StreamContext *privateContext = (StreamContext *) context->private;
 
-	privateContext->jsonBuffer = (char *) context->buffer;
+	privateContext->metadata.jsonBuffer = strdup(context->buffer);
 
 	return true;
 }

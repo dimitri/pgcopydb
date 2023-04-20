@@ -575,7 +575,7 @@ streamWrite(LogicalStreamContext *context)
 
 	if (metadata->filterOut)
 	{
-		log_trace("Ignoring message: %s", context->buffer);
+		/* message has already been logged */
 		return true;
 	}
 
@@ -662,7 +662,7 @@ stream_write_json(LogicalStreamContext *context, bool previous)
 					  LSN_FORMAT_ARGS(metadata->lsn),
 					  metadata->timestamp);
 
-	appendPQExpBuffer(buffer, "%s}\n", privateContext->jsonBuffer);
+	appendPQExpBuffer(buffer, "%s}\n", metadata->jsonBuffer);
 
 	/* memory allocation could have failed while building string */
 	if (PQExpBufferBroken(buffer))
@@ -734,16 +734,7 @@ stream_write_json(LogicalStreamContext *context, bool previous)
 	}
 
 	destroyPQExpBuffer(buffer);
-
-	/*
-	 * If the buffer was allocated anew in prepareMessageJSONbuffer, now is
-	 * time to free that extra memory. Otherwise context->buffer has been
-	 * reused and lower-level functions in pgsql.c handles the memory.
-	 */
-	if (privateContext->jsonBuffer != context->buffer)
-	{
-		free(privateContext->jsonBuffer);
-	}
+	free(metadata->jsonBuffer);
 
 	return true;
 }

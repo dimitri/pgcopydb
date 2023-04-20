@@ -88,9 +88,9 @@ prepareTestDecodingMessage(LogicalStreamContext *context)
 		json_serialize_to_string(
 			json_object_get_value(jsobj, "message"));
 
-	privateContext->jsonBuffer = strdup(jsonstr);
+	privateContext->metadata.jsonBuffer = strdup(jsonstr);
 
-	if (privateContext->jsonBuffer == NULL)
+	if (privateContext->metadata.jsonBuffer == NULL)
 	{
 		log_error(ALLOCATION_FAILED_ERROR);
 		return false;
