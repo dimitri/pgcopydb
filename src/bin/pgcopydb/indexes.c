@@ -748,8 +748,7 @@ copydb_create_index(const char *pguri,
 	if (constraint)
 	{
 		if (!copydb_prepare_create_constraint_command(index,
-													  summary->command,
-													  sizeof(summary->command)))
+													  &(summary->command)))
 		{
 			/* errors have already been logged */
 			return false;
@@ -759,8 +758,7 @@ copydb_create_index(const char *pguri,
 	{
 		if (!copydb_prepare_create_index_command(index,
 												 ifNotExists,
-												 summary->command,
-												 sizeof(summary->command)))
+												 &(summary->command)))
 		{
 			/* errors have already been logged */
 			return false;
@@ -984,9 +982,10 @@ copydb_mark_index_as_done(SourceIndex *index,
 bool
 copydb_prepare_create_index_command(SourceIndex *index,
 									bool ifNotExists,
-									char *command,
-									size_t size)
+									char **command)
 {
+	PQExpBuffer cmd = createPQExpBuffer();
+
 	/* prepare the create index command, maybe adding IF NOT EXISTS */
 	if (ifNotExists)
 	{
@@ -995,13 +994,15 @@ copydb_prepare_create_index_command(SourceIndex *index,
 
 		if (strncmp(index->indexDef, "CREATE INDEX ", ci_len) == 0)
 		{
-			sformat(command, size, "CREATE INDEX IF NOT EXISTS %s;",
-					index->indexDef + ci_len);
+			appendPQExpBuffer(cmd,
+							  "CREATE INDEX IF NOT EXISTS %s;",
+							  index->indexDef + ci_len);
 		}
 		else if (strncmp(index->indexDef, "CREATE UNIQUE INDEX ", cu_len) == 0)
 		{
-			sformat(command, size, "CREATE UNIQUE INDEX IF NOT EXISTS %s;",
-					index->indexDef + cu_len);
+			appendPQExpBuffer(cmd,
+							  "CREATE UNIQUE INDEX IF NOT EXISTS %s;",
+							  index->indexDef + cu_len);
 		}
 		else
 		{
@@ -1015,8 +1016,20 @@ copydb_prepare_create_index_command(SourceIndex *index,
 		 * Just use the pg_get_indexdef() command, with an added semi-colon for
 		 * logging clarity.
 		 */
-		sformat(command, size, "%s;", index->indexDef);
+		appendPQExpBuffer(cmd, "%s;", index->indexDef);
 	}
+
+	if (PQExpBufferBroken(cmd))
+	{
+		log_error("Failed to create query for CREATE INDEX \"%s\": out of memory",
+				  index->indexRelname);
+		destroyPQExpBuffer(cmd);
+		return false;
+	}
+
+	*command = strdup(cmd->data);
+
+	destroyPQExpBuffer(cmd);
 
 	return true;
 }
@@ -1027,34 +1040,46 @@ copydb_prepare_create_index_command(SourceIndex *index,
  * create the given constraint on-top of an already existing Index.
  */
 bool
-copydb_prepare_create_constraint_command(SourceIndex *index,
-										 char *command,
-										 size_t size)
+copydb_prepare_create_constraint_command(SourceIndex *index, char **command)
 {
+	PQExpBuffer cmd = createPQExpBuffer();
+
 	if (index->isPrimary || index->isUnique)
 	{
 		char *constraintType = index->isPrimary ? "PRIMARY KEY" : "UNIQUE";
 
-		sformat(command, size,
-				"ALTER TABLE \"%s\".\"%s\" "
-				"ADD CONSTRAINT \"%s\" %s "
-				"USING INDEX \"%s\";",
-				index->tableNamespace,
-				index->tableRelname,
-				index->constraintName,
-				constraintType,
-				index->indexRelname);
+		appendPQExpBuffer(cmd,
+						  "ALTER TABLE \"%s\".\"%s\" "
+						  "ADD CONSTRAINT \"%s\" %s "
+						  "USING INDEX \"%s\";",
+						  index->tableNamespace,
+						  index->tableRelname,
+						  index->constraintName,
+						  constraintType,
+						  index->indexRelname);
 	}
 	else
 	{
-		sformat(command, size,
-				"ALTER TABLE \"%s\".\"%s\" "
-				"ADD CONSTRAINT \"%s\" %s ",
-				index->tableNamespace,
-				index->tableRelname,
-				index->constraintName,
-				index->constraintDef);
+		appendPQExpBuffer(cmd,
+						  "ALTER TABLE \"%s\".\"%s\" "
+						  "ADD CONSTRAINT \"%s\" %s ",
+						  index->tableNamespace,
+						  index->tableRelname,
+						  index->constraintName,
+						  index->constraintDef);
 	}
+
+	if (PQExpBufferBroken(cmd))
+	{
+		log_error("Failed to create query for CONSTRAINT \"%s\": out of memory",
+				  index->constraintName);
+		destroyPQExpBuffer(cmd);
+		return false;
+	}
+
+	*command = strdup(cmd->data);
+
+	destroyPQExpBuffer(cmd);
 
 	return true;
 }
@@ -1149,7 +1174,7 @@ copydb_create_constraints(CopyDataSpec *specs, SourceTable *table)
 		CopyIndexSummary summary = {
 			.pid = getpid(),
 			.index = index,
-			.command = { 0 }
+			.command = NULL
 		};
 
 		/* we only install constraints in this part of the code */
@@ -1178,9 +1203,7 @@ copydb_create_constraints(CopyDataSpec *specs, SourceTable *table)
 			}
 		}
 
-		if (!copydb_prepare_create_constraint_command(index,
-													  summary.command,
-													  sizeof(summary.command)))
+		if (!copydb_prepare_create_constraint_command(index, &(summary.command)))
 		{
 			log_warn("Failed to prepare SQL command to create constraint \"%s\"",
 					 index->constraintName);

@@ -413,12 +413,10 @@ bool copydb_mark_index_as_done(SourceIndex *index,
 
 bool copydb_prepare_create_index_command(SourceIndex *index,
 										 bool ifNotExists,
-										 char *command,
-										 size_t size);
+										 char **command);
 
 bool copydb_prepare_create_constraint_command(SourceIndex *index,
-											  char *command,
-											  size_t size);
+											  char **command);
 
 bool copydb_create_constraints(CopyDataSpec *spec, SourceTable *table);
 
