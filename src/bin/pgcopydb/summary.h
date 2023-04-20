@@ -32,7 +32,7 @@ typedef struct CopyTableSummary
 	uint64_t durationMs;        /* instr_time duration in milliseconds */
 	instr_time startTimeInstr;  /* internal instr_time tracker */
 	instr_time durationInstr;   /* internal instr_time tracker */
-	char command[BUFSIZE];      /* SQL command */
+	char *command;              /* malloc'ed area */
 } CopyTableSummary;
 
 
@@ -47,7 +47,7 @@ typedef struct CopyIndexSummary
 	uint64_t durationMs;        /* instr_time duration in milliseconds */
 	instr_time startTimeInstr;  /* internal instr_time tracker */
 	instr_time durationInstr;   /* internal instr_time tracker */
-	char command[BUFSIZE];      /* SQL command */
+	char *command;              /* malloc'ed area */
 } CopyIndexSummary;
 
 
@@ -92,7 +92,7 @@ typedef struct SummaryIndexEntry
 	char oidStr[INTSTRING_MAX_DIGITS];
 	char nspname[NAMEDATALEN];
 	char relname[NAMEDATALEN];
-	char sql[BUFSIZE];
+	char *sql;                  /* malloc'ed area */
 	char indexMs[INTERVAL_MAXLEN];
 	uint64_t durationMs;
 } SummaryIndexEntry;

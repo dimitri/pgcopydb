@@ -182,7 +182,18 @@ read_table_summary(CopyTableSummary *summary, const char *filename)
 	}
 
 	/* last summary line in the file is the SQL command */
-	strlcpy(summary->command, fileLines[7], sizeof(summary->command));
+	char *sql = fileLines[7];
+	int len = strlen(sql) + 1;
+
+	summary->command = (char *) calloc(len, sizeof(char));
+
+	if (summary->command == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	strlcpy(summary->command, sql, len);
 
 	/* we can't provide instr_time readers */
 	summary->startTimeInstr = (instr_time) {
@@ -455,7 +466,16 @@ read_index_summary(CopyIndexSummary *summary, const char *filename)
 	}
 
 	/* last summary line in the file is the SQL command */
-	strlcpy(summary->command, fileLines[7], sizeof(summary->command));
+	char *sql = fileLines[7];
+	int len = strlen(sql) + 1;
+
+	summary->command = (char *) calloc(len, sizeof(char));
+
+	if (summary->command == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
 
 	/* we can't provide instr_time readers */
 	summary->startTimeInstr = (instr_time) {
@@ -1462,7 +1482,7 @@ summary_read_index_donefile(SourceIndex *index,
 			indexSummary.index->indexRelname,
 			sizeof(indexEntry->relname));
 
-	strlcpy(indexEntry->sql, indexSummary.command, sizeof(indexEntry->sql));
+	indexEntry->sql = strdup(indexSummary.command);
 
 	indexEntry->durationMs = indexSummary.durationMs;
 
