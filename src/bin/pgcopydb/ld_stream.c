@@ -305,6 +305,11 @@ stream_init_context(StreamContext *privateContext, StreamSpecs *specs)
 			specs->source_pguri,
 			sizeof(privateContext->source_pguri));
 
+	privateContext->metadata.action = STREAM_ACTION_UNKNOWN;
+	privateContext->previous.action = STREAM_ACTION_UNKNOWN;
+
+	privateContext->lastWrite = 0;
+
 	return true;
 }
 
@@ -561,13 +566,6 @@ streamWrite(LogicalStreamContext *context)
 	StreamContext *privateContext = (StreamContext *) context->private;
 	LogicalMessageMetadata *metadata = &(privateContext->metadata);
 
-	/* we might have to rotate to the next on-disk file */
-	if (!streamRotateFile(context))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	if (!prepareMessageMetadataFromContext(context))
 	{
 		log_error("Failed to prepare Logical Message Metadata from context, "
@@ -577,8 +575,61 @@ streamWrite(LogicalStreamContext *context)
 
 	if (metadata->filterOut)
 	{
-		log_trace("Ignoring message: %s", context->buffer);
+		/* message has already been logged */
 		return true;
+	}
+
+	/* update the LSN tracking that's reported in the feedback */
+	context->tracking->written_lsn = context->cur_record_lsn;
+
+	/* write the actual JSON message to file, unless instructed not to */
+	if (!metadata->skipping)
+	{
+		bool previous = false;
+
+		if (!stream_write_json(context, previous))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		/* update internal transaction counters */
+		(void) updateStreamCounters(privateContext, metadata);
+	}
+
+	if (metadata->xid > 0)
+	{
+		log_debug("Received action %c for XID %u at LSN %X/%X",
+				  metadata->action,
+				  metadata->xid,
+				  LSN_FORMAT_ARGS(metadata->lsn));
+	}
+	else
+	{
+		log_debug("Received action %c at LSN %X/%X",
+				  metadata->action,
+				  LSN_FORMAT_ARGS(metadata->lsn));
+	}
+
+	return true;
+}
+
+
+/*
+ * stream_write_json writes the current (or previous) Logical Message to disk.
+ */
+bool
+stream_write_json(LogicalStreamContext *context, bool previous)
+{
+	StreamContext *privateContext = (StreamContext *) context->private;
+	LogicalMessageMetadata *metadata =
+		previous ? &(privateContext->previous) : &(privateContext->metadata);
+
+	/* we might have to rotate to the next on-disk file */
+	if (!streamRotateFile(context))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	/*
@@ -611,7 +662,7 @@ streamWrite(LogicalStreamContext *context)
 					  LSN_FORMAT_ARGS(metadata->lsn),
 					  metadata->timestamp);
 
-	appendPQExpBuffer(buffer, "%s}\n", privateContext->jsonBuffer);
+	appendPQExpBuffer(buffer, "%s}\n", metadata->jsonBuffer);
 
 	/* memory allocation could have failed while building string */
 	if (PQExpBufferBroken(buffer))
@@ -647,6 +698,9 @@ streamWrite(LogicalStreamContext *context)
 		bytes_left -= ret;
 	}
 
+	/* time to update our lastWrite mark */
+	privateContext->lastWrite = time(NULL);
+
 	/*
 	 * Now if specs->stdOut is true we want to also write all the same things
 	 * again to stdout this time. We don't expect buffered IO to stdout, so we
@@ -680,33 +734,7 @@ streamWrite(LogicalStreamContext *context)
 	}
 
 	destroyPQExpBuffer(buffer);
-
-	/*
-	 * If the buffer was allocated anew in prepareMessageJSONbuffer, now is
-	 * time to free that extra memory. Otherwise context->buffer has been
-	 * reused and lower-level functions in pgsql.c handles the memory.
-	 */
-	if (privateContext->jsonBuffer != context->buffer)
-	{
-		free(privateContext->jsonBuffer);
-	}
-
-	/* update the LSN tracking that's reported in the feedback */
-	context->tracking->written_lsn = context->cur_record_lsn;
-
-	if (metadata->xid > 0)
-	{
-		log_trace("Received action %c for XID %u at LSN %X/%X",
-				  metadata->action,
-				  metadata->xid,
-				  LSN_FORMAT_ARGS(metadata->lsn));
-	}
-	else
-	{
-		log_trace("Received action %c at LSN %X/%X",
-				  metadata->action,
-				  LSN_FORMAT_ARGS(metadata->lsn));
-	}
+	free(metadata->jsonBuffer);
 
 	return true;
 }
@@ -749,7 +777,7 @@ streamRotateFile(LogicalStreamContext *context)
 			wal);
 
 	/* in most cases, the file name is still the same */
-	if (strcmp(privateContext->walFileName, walFileName) == 0)
+	if (streq(privateContext->walFileName, walFileName))
 	{
 		return true;
 	}
@@ -772,9 +800,9 @@ streamRotateFile(LogicalStreamContext *context)
 
 		fformat(privateContext->jsonFile, "%s", buffer);
 
-		log_debug("Inserted action SWITCH for lsn %X/%X in \"%s\"",
-				  LSN_FORMAT_ARGS(context->cur_record_lsn),
-				  privateContext->partialFileName);
+		log_notice("Inserted action SWITCH for lsn %X/%X in \"%s\"",
+				   LSN_FORMAT_ARGS(context->cur_record_lsn),
+				   privateContext->partialFileName);
 
 		if (!streamCloseFile(context, time_to_abort))
 		{
@@ -801,7 +829,6 @@ streamRotateFile(LogicalStreamContext *context)
 		}
 	}
 
-	log_notice("Now streaming changes to \"%s\"", partialFileName);
 	strlcpy(privateContext->walFileName, walFileName, MAXPGPATH);
 	strlcpy(privateContext->partialFileName, partialFileName, MAXPGPATH);
 
@@ -858,29 +885,20 @@ streamRotateFile(LogicalStreamContext *context)
 		return false;
 	}
 
+	log_notice("Now streaming changes to \"%s\"", partialFileName);
+
 	/*
 	 * Also maintain the "latest" symbolic link to the latest file where
 	 * we've been streaming changes in.
 	 */
-	char latest[MAXPGPATH] = { 0 };
-
-	sformat(latest, sizeof(latest), "%s/latest", privateContext->paths.dir);
-
-	if (!unlink_file(latest))
+	if (!stream_update_latest_symlink(privateContext,
+									  privateContext->partialFileName))
 	{
-		/* errors have already been logged */
+		log_error("Failed to update latest symlink to \"%s\", "
+				  "see above for details",
+				  privateContext->partialFileName);
 		return false;
 	}
-
-	if (!create_symbolic_link(privateContext->partialFileName, latest))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	log_debug("streamRotateFile: symlink \"%s\" -> \"%s\"",
-			  latest,
-			  privateContext->partialFileName);
 
 	return true;
 }
@@ -927,6 +945,16 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 		{
 			log_error("Failed to rename \"%s\" to \"%s\": %m",
 					  privateContext->partialFileName,
+					  privateContext->walFileName);
+			return false;
+		}
+
+		/* and also update the "latest" symlink, we need it for --resume */
+		if (!stream_update_latest_symlink(privateContext,
+										  privateContext->walFileName))
+		{
+			log_error("Failed to update latest symlink to \"%s\", "
+					  "see above for details",
 					  privateContext->walFileName);
 			return false;
 		}
@@ -1022,6 +1050,18 @@ streamFlush(LogicalStreamContext *context)
 	/* if needed, flush our current file now (fsync) */
 	if (context->tracking->flushed_lsn < context->tracking->written_lsn)
 	{
+		/*
+		 * When it's time to flush, inject a KEEPALIVE message to make sure we
+		 * mark the progress made in terms of LSN. Since we skip empty
+		 * transactions, we might be missing the last progress at endpos time
+		 * without this.
+		 */
+		if (!streamKeepalive(context))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
 		int fd = fileno(privateContext->jsonFile);
 
 		if (fsync(fd) != 0)
@@ -1098,6 +1138,9 @@ streamKeepalive(LogicalStreamContext *context)
 
 		/* update the LSN tracking that's reported in the feedback */
 		context->tracking->written_lsn = context->cur_record_lsn;
+
+		/* time to update our lastWrite mark */
+		privateContext->lastWrite = time(NULL);
 
 		/*
 		 * When streaming to a Unix pipe don't forget to also stream the
@@ -1227,7 +1270,9 @@ bool
 prepareMessageMetadataFromContext(LogicalStreamContext *context)
 {
 	StreamContext *privateContext = (StreamContext *) context->private;
+
 	LogicalMessageMetadata *metadata = &(privateContext->metadata);
+	LogicalMessageMetadata *previous = &(privateContext->previous);
 
 	/* ensure we have a new all-zero metadata structure for the new message */
 	(void) memset(metadata, 0, sizeof(LogicalMessageMetadata));
@@ -1268,7 +1313,69 @@ prepareMessageMetadataFromContext(LogicalStreamContext *context)
 		return false;
 	}
 
-	(void) updateStreamCounters(privateContext, metadata);
+	/*
+	 * Skip empty transactions, except every once in a while in order to
+	 * continue tracking LSN progress in our replay system.
+	 */
+	uint64_t now = time(NULL);
+	uint64_t elapsed = now - privateContext->lastWrite;
+
+	metadata->recvTime = now;
+
+	/* BEGIN message: always wait to see if next message is a COMMIT */
+	if (metadata->action == STREAM_ACTION_BEGIN)
+	{
+		metadata->skipping = true;
+	}
+
+	/* COMMIT message and previous one is a BEGIN */
+	else if (previous->action == STREAM_ACTION_BEGIN &&
+			 metadata->action == STREAM_ACTION_COMMIT)
+	{
+		metadata->skipping = true;
+
+		/* add a synthetic KEEPALIVE message once in a while */
+		if (STREAM_EMPTY_TX_TIMEOUT <= elapsed)
+		{
+			if (!streamKeepalive(context))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+		}
+	}
+
+	/*
+	 * NOT a COMMIT message and previous one is a BEGIN
+	 *
+	 * It probably means the transaction is an INSERT/UPDATE/DELETE/TRUNCATE or
+	 * maybe even a SWITCH or something. In any case we want to now write the
+	 * previous BEGIN message out in the JSON stream.
+	 */
+	else if (previous->action == STREAM_ACTION_BEGIN &&
+			 metadata->action != STREAM_ACTION_COMMIT)
+	{
+		previous->skipping = false;
+		metadata->skipping = false;
+
+		bool previous = true;
+
+		if (!stream_write_json(context, previous))
+		{
+			/* errors have been logged */
+			return false;
+		}
+	}
+
+	/*
+	 * Any other case: current message is not a BEGIN, previous message is not
+	 * a BEGIN either.
+	 *
+	 * We don't need to keep track of the previous message anymore, and we need
+	 * to prepare for the next iteration by copying the current message
+	 * wholesale into the previous location.
+	 */
+	*previous = *metadata;
 
 	return true;
 }
@@ -1554,6 +1661,38 @@ stream_read_latest(StreamSpecs *specs, StreamContent *content)
 	log_info("Resuming streaming from latest file \"%s\"", content->filename);
 
 	return stream_read_file(content);
+}
+
+
+/*
+ * stream_update_latest_symlink updates the latest symbolic link to the given
+ * filename, that must already exists on the file system.
+ */
+bool
+stream_update_latest_symlink(StreamContext *privateContext,
+							 const char *filename)
+{
+	char latest[MAXPGPATH] = { 0 };
+
+	sformat(latest, sizeof(latest), "%s/latest", privateContext->paths.dir);
+
+	if (!unlink_file(latest))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!create_symbolic_link((char *) filename, latest))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_debug("stream_update_latest_symlink: \"%s\" -> \"%s\"",
+			  latest,
+			  privateContext->partialFileName);
+
+	return true;
 }
 
 

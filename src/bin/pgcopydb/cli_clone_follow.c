@@ -281,9 +281,12 @@ clone_and_follow(CopyDataSpec *copySpecs)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	/* now wait until the follow process is finished */
-	success = success &&
-			  cli_clone_follow_wait_subprocess("follow", followPID);
+	/* now wait until the follow process is finished, if it's been started */
+	if (followPID != -1)
+	{
+		success = success &&
+				  cli_clone_follow_wait_subprocess("follow", followPID);
+	}
 
 	/*
 	 * Now is a good time to reset the sequences on the target database to
@@ -673,6 +676,12 @@ cli_clone_follow_wait_subprocess(const char *name, pid_t pid)
 {
 	bool exited = false;
 	int returnCode = -1;
+
+	if (pid < 0)
+	{
+		log_error("BUG: cli_clone_follow_wait_subprocess(%s, %d)", name, pid);
+		return false;
+	}
 
 	while (!exited)
 	{

@@ -35,6 +35,9 @@ set_signal_handlers(bool exitOnQuit)
 	pqsignal(SIGINT, catch_int);
 	pqsignal(SIGTERM, catch_term);
 
+	/* ignore SIGPIPE so that EPIPE is returned instead */
+	pqsignal(SIGPIPE, SIG_IGN);
+
 	if (exitOnQuit)
 	{
 		pqsignal(SIGQUIT, catch_quit_and_exit);
