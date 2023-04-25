@@ -591,15 +591,31 @@ copydb_table_is_being_processed(CopyDataSpec *specs,
 
 	if (IS_EMPTY_STRING_BUFFER(tableSpecs->part.copyQuery))
 	{
-		sformat(summary->command, sizeof(summary->command),
-				"COPY %s",
-				tableSpecs->qname);
+		/* "COPY " is 5 bytes, then 1 for \0 */
+		int len = strlen(tableSpecs->qname) + 5 + 1;
+		summary->command = (char *) calloc(len, sizeof(char));
+
+		if (summary->command == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		sformat(summary->command, len, "COPY %s", tableSpecs->qname);
 	}
 	else
 	{
-		sformat(summary->command, sizeof(summary->command),
-				"COPY %s",
-				tableSpecs->part.copyQuery);
+		/* "COPY " is 5 bytes, then 1 for \0 */
+		int len = strlen(tableSpecs->part.copyQuery) + 5 + 1;
+		summary->command = (char *) calloc(len, sizeof(char));
+
+		if (summary->command == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		sformat(summary->command, len, "COPY %s", tableSpecs->part.copyQuery);
 	}
 
 	if (!open_table_summary(summary, tableSpecs->tablePaths.lockFile))
