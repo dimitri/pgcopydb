@@ -31,25 +31,35 @@ static void prepareLineSeparator(char dashes[], int size);
 bool
 write_table_summary(CopyTableSummary *summary, char *filename)
 {
-	char contents[BUFSIZE] = { 0 };
+	PQExpBuffer contents = createPQExpBuffer();
 
-	sformat(contents, BUFSIZE,
-			"%d\n%u\n%s\n%s\n%lld\n%lld\n%lld\n%s\n",
-			summary->pid,
-			summary->table->oid,
-			summary->table->nspname,
-			summary->table->relname,
-			(long long) summary->startTime,
-			(long long) summary->doneTime,
-			(long long) summary->durationMs,
-			summary->command);
+	appendPQExpBuffer(contents,
+					  "%d\n%u\n%s\n%s\n%lld\n%lld\n%lld\n%s\n",
+					  summary->pid,
+					  summary->table->oid,
+					  summary->table->nspname,
+					  summary->table->relname,
+					  (long long) summary->startTime,
+					  (long long) summary->doneTime,
+					  (long long) summary->durationMs,
+					  summary->command);
 
-	/* write the summary to the doneFile */
-	if (!write_file(contents, strlen(contents), filename))
+	if (PQExpBufferBroken(contents))
 	{
-		log_error("Failed to write table summary file \"%s\"", filename);
+		log_error("Failed to create file \"%s\": out of memory", filename);
+		destroyPQExpBuffer(contents);
 		return false;
 	}
+
+	/* write the summary to the doneFile */
+	if (!write_file(contents->data, contents->len, filename))
+	{
+		log_error("Failed to write table summary file \"%s\"", filename);
+		destroyPQExpBuffer(contents);
+		return false;
+	}
+
+	destroyPQExpBuffer(contents);
 
 	return true;
 }
@@ -364,7 +374,7 @@ read_table_index_file(SourceIndexArray *indexArray, char *filename)
 bool
 write_index_summary(CopyIndexSummary *summary, char *filename, bool constraint)
 {
-	char contents[BUFSIZE] = { 0 };
+	PQExpBuffer contents = createPQExpBuffer();
 
 	uint32_t oid =
 		constraint
@@ -376,19 +386,34 @@ write_index_summary(CopyIndexSummary *summary, char *filename, bool constraint)
 		? summary->index->constraintName
 		: summary->index->indexRelname;
 
-	sformat(contents, BUFSIZE,
-			"%d\n%u\n%s\n%s\n%lld\n%lld\n%lld\n%s\n",
-			summary->pid,
-			oid,
-			summary->index->indexNamespace,
-			name,
-			(long long) summary->startTime,
-			(long long) summary->doneTime,
-			(long long) summary->durationMs,
-			summary->command);
+	appendPQExpBuffer(contents,
+					  "%d\n%u\n%s\n%s\n%lld\n%lld\n%lld\n%s\n",
+					  summary->pid,
+					  oid,
+					  summary->index->indexNamespace,
+					  name,
+					  (long long) summary->startTime,
+					  (long long) summary->doneTime,
+					  (long long) summary->durationMs,
+					  summary->command);
+
+	/* memory allocation could have failed while building string */
+	if (PQExpBufferBroken(contents))
+	{
+		log_error("Failed to create file \"%s\": out of memory", filename);
+		destroyPQExpBuffer(contents);
+		return false;
+	}
 
 	/* write the summary to the doneFile */
-	return write_file(contents, strlen(contents), filename);
+	if (!write_file(contents->data, contents->len, filename))
+	{
+		log_error("Failed to write file \"%s\"", filename);
+		destroyPQExpBuffer(contents);
+		return false;
+	}
+
+	return true;
 }
 
 
