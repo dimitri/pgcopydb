@@ -121,7 +121,14 @@ typedef struct StreamApplyContext
 {
 	CDCPaths paths;
 
+	/* target connection */
 	PGSQL pgsql;
+
+	/* source connection to publish sentinel updates */
+	PGSQL src;
+	bool sentinelQueryInProgress;
+	uint64_t sentinelSyncTime;
+
 	char source_pguri[MAXCONNINFO];
 	char target_pguri[MAXCONNINFO];
 	char origin[BUFSIZE];
@@ -531,6 +538,8 @@ bool stream_apply_wait_for_sentinel(StreamSpecs *specs,
 									StreamApplyContext *context);
 
 bool stream_apply_sync_sentinel(StreamApplyContext *context);
+bool stream_apply_send_sync_sentinel(StreamApplyContext *context);
+bool stream_apply_fetch_sync_sentinel(StreamApplyContext *context);
 
 bool stream_apply_file(StreamApplyContext *context);
 

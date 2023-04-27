@@ -35,6 +35,13 @@ static void log_connection_error(PGconn *connection, int logLevel);
 static void pgAutoCtlDefaultNoticeProcessor(void *arg, const char *message);
 static PGconn * pgsql_open_connection(PGSQL *pgsql);
 static bool pgsql_retry_open_connection(PGSQL *pgsql);
+
+static bool pgsql_send_with_params(PGSQL *pgsql, const char *sql, int paramCount,
+								   const Oid *paramTypes, const char **paramValues);
+
+static bool pgsql_fetch_results(PGSQL *pgsql, bool *done,
+								void *context, ParsePostgresResultCB *parseFun);
+
 static bool is_response_ok(PGresult *result);
 static bool clear_results(PGSQL *pgsql);
 static void pgsql_handle_notifications(PGSQL *pgsql);
@@ -1586,6 +1593,229 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 	if (pgsql->connectionStatementType == PGSQL_CONNECTION_SINGLE_STATEMENT)
 	{
 		(void) pgsql_finish(pgsql);
+	}
+
+	return true;
+}
+
+
+/*
+ * pgsql_send_with_params implements sending a SQL query using the libpq async
+ * API. Use pgsql_fetch_results to see if results are available are fetch them.
+ */
+static bool
+pgsql_send_with_params(PGSQL *pgsql, const char *sql, int paramCount,
+					   const Oid *paramTypes, const char **paramValues)
+{
+	PQExpBuffer debugParameters = NULL;
+
+	/* we can't close the connection before we have fetched the result */
+	if (pgsql->connectionStatementType != PGSQL_CONNECTION_MULTI_STATEMENT)
+	{
+		log_error("BUG: pgsql_send_with_params called in SINGLE statement mode");
+		return false;
+	}
+
+	PGconn *connection = pgsql_open_connection(pgsql);
+
+	if (connection == NULL)
+	{
+		return false;
+	}
+
+	char *endpoint =
+		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
+
+	if (pgsql->logSQL)
+	{
+		debugParameters = createPQExpBuffer();
+
+		if (!build_parameters_list(debugParameters, paramCount, paramValues))
+		{
+			/* errors have already been logged */
+			destroyPQExpBuffer(debugParameters);
+			return false;
+		}
+
+		log_sql("[%s] %s;", endpoint, sql);
+
+		if (paramCount > 0)
+		{
+			log_sql("%s", debugParameters->data);
+		}
+	}
+
+	int result;
+
+	if (paramCount == 0)
+	{
+		result = PQsendQuery(connection, sql);
+	}
+	else
+	{
+		result = PQsendQueryParams(connection, sql,
+								   paramCount, paramTypes, paramValues,
+								   NULL, NULL, 0);
+	}
+
+	if (result == 0)
+	{
+		char *message = PQerrorMessage(connection);
+		char *errorLines[BUFSIZE];
+		int lineCount = splitLines(message, errorLines, BUFSIZE);
+		int lineNumber = 0;
+
+		/*
+		 * PostgreSQL Error message might contain several lines. Log each of
+		 * them as a separate ERROR line here.
+		 */
+		for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
+		{
+			log_error("[%s] %s", endpoint, errorLines[lineNumber]);
+		}
+
+		if (pgsql->logSQL)
+		{
+			log_error("SQL query: %s", sql);
+			log_error("SQL params: %s", debugParameters->data);
+		}
+
+		destroyPQExpBuffer(debugParameters);
+
+		clear_results(pgsql);
+
+		return false;
+	}
+
+	destroyPQExpBuffer(debugParameters);
+
+	return true;
+}
+
+
+/*
+ * pgsql_fetch_results is used to fetch the results of a SQL query that was
+ * sent using the libpq async protocol with the pgsql_send_with_params
+ * function.
+ *
+ * When the result is ready, the parseFun is called to parse the results as
+ * when using pgsql_execute_with_params.
+ */
+static bool
+pgsql_fetch_results(PGSQL *pgsql, bool *done,
+					void *context, ParsePostgresResultCB *parseFun)
+{
+	int r;
+	PGconn *conn = pgsql->connection;
+
+	*done = false;
+
+	if (PQsocket(conn) < 0)
+	{
+		(void) pgsql_stream_log_error(pgsql, NULL, "invalid socket");
+
+		clear_results(pgsql);
+		pgsql_finish(pgsql);
+
+		return false;
+	}
+
+	fd_set input_mask;
+	struct timeval timeout;
+	struct timeval *timeoutptr = NULL;
+
+	/* sleep for 1ms to wait for input on the Postgres socket */
+	timeout.tv_sec = 0;
+	timeout.tv_usec = 1000;
+	timeoutptr = &timeout;
+
+	FD_ZERO(&input_mask);
+	FD_SET(PQsocket(conn), &input_mask);
+
+	r = select(PQsocket(conn) + 1, &input_mask, NULL, NULL, timeoutptr);
+
+	if (r == 0 || (r < 0 && errno == EINTR))
+	{
+		/* got a timeout or signal. The caller will get back later. */
+		return true;
+	}
+	else if (r < 0)
+	{
+		(void) pgsql_stream_log_error(pgsql, NULL, "select failed: %m");
+
+		clear_results(pgsql);
+		pgsql_finish(pgsql);
+
+		return false;
+	}
+
+	/* Else there is actually data on the socket */
+	if (PQconsumeInput(conn) == 0)
+	{
+		(void) pgsql_stream_log_error(
+			pgsql,
+			NULL,
+			"Failed to get async query results");
+		return false;
+	}
+
+	/* Only collect the result when we know the server is ready for it */
+	if (PQisBusy(conn) == 0)
+	{
+		PGresult *result = PQgetResult(conn);
+
+		if (!is_response_ok(result))
+		{
+			char *sqlstate = PQresultErrorField(result, PG_DIAG_SQLSTATE);
+			char *message = PQerrorMessage(conn);
+
+			char *endpoint =
+				pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
+
+			strlcpy(pgsql->sqlstate, sqlstate, sizeof(pgsql->sqlstate));
+
+			/*
+			 * PostgreSQL Error message might contain several lines. Log each of
+			 * them as a separate ERROR line here.
+			 */
+			char *errorLines[BUFSIZE];
+			int lineCount = splitLines(message, errorLines, BUFSIZE);
+
+			for (int lineNumber = 0; lineNumber < lineCount; lineNumber++)
+			{
+				log_error("[%s] %s", endpoint, errorLines[lineNumber]);
+			}
+
+			/* now stash away the SQL STATE if any */
+			if (context && sqlstate)
+			{
+				AbstractResultContext *ctx = (AbstractResultContext *) context;
+
+				strlcpy(ctx->sqlstate, sqlstate, SQLSTATE_LENGTH);
+			}
+
+			/* if we get a connection exception, track that */
+			if (sqlstate &&
+				strncmp(sqlstate, STR_ERRCODE_CLASS_CONNECTION_EXCEPTION, 2) == 0)
+			{
+				pgsql->status = PG_CONNECTION_BAD;
+			}
+
+			PQclear(result);
+			clear_results(pgsql);
+
+			return false;
+		}
+
+		if (parseFun != NULL)
+		{
+			(*parseFun)(context, result);
+
+			*done = true;
+		}
+
+		PQclear(result);
+		clear_results(pgsql);
 	}
 
 	return true;
@@ -5032,6 +5262,81 @@ pgsql_sync_sentinel_apply(PGSQL *pgsql,
 	sentinel->write_lsn = context.write_lsn;
 	sentinel->flush_lsn = context.flush_lsn;
 	sentinel->replay_lsn = context.replay_lsn;
+
+	return true;
+}
+
+
+/*
+ * pgsql_send_sync_sentinel_apply sends a query to update the current sentinel
+ * values for replay_lsn, and uses libpq async API to do that. Use the
+ * associated function pgsql_fetch_sync_sentinel_apply to make sure the query
+ * has been sent and fetch the current value for endpos and apply.
+ */
+bool
+pgsql_send_sync_sentinel_apply(PGSQL *pgsql, uint64_t replay_lsn)
+{
+	char *sql =
+		"update pgcopydb.sentinel "
+		"set replay_lsn = $1 "
+		"returning startpos, endpos, apply, write_lsn, flush_lsn, replay_lsn";
+
+	char replayLSN[PG_LSN_MAXLENGTH] = { 0 };
+
+	sformat(replayLSN, sizeof(replayLSN), "%X/%X", LSN_FORMAT_ARGS(replay_lsn));
+
+	int paramCount = 1;
+	Oid paramTypes[1] = { LSNOID };
+	const char *paramValues[1] = { replayLSN };
+
+	if (!pgsql_send_with_params(pgsql, sql, paramCount, paramTypes, paramValues))
+	{
+		log_error("Failed to send pgcopydb.sentinel sync query");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * pgsql_fetch_sync_sentinel_apply checks to see if results are available for
+ * the pgsql_send_sync_sentinel_apply query that has been sent for async
+ * processing on the server, and updates the given sentinel when the result is
+ * ready.
+ */
+bool
+pgsql_fetch_sync_sentinel_apply(PGSQL *pgsql,
+								bool *retry,
+								CopyDBSentinel *sentinel)
+{
+	bool done = false;
+	SentinelContext context = { 0 };
+
+	if (!pgsql_fetch_results(pgsql, &done, &context, &parseSentinel))
+	{
+		log_error("Failed to fetch sync sentinel results");
+		return false;
+	}
+
+	if (done)
+	{
+		*retry = false;
+
+		sentinel->apply = context.apply;
+		sentinel->startpos = context.startpos;
+		sentinel->endpos = context.endpos;
+
+		sentinel->write_lsn = context.write_lsn;
+		sentinel->flush_lsn = context.flush_lsn;
+		sentinel->replay_lsn = context.replay_lsn;
+
+		return true;
+	}
+	else
+	{
+		*retry = true;
+	}
 
 	return true;
 }

@@ -156,7 +156,30 @@ stream_replay_line(void *ctx, const char *line, bool *stop)
 		case STREAM_ACTION_COMMIT:
 		case STREAM_ACTION_KEEPALIVE:
 		{
-			(void) stream_apply_sync_sentinel(context);
+			uint64_t now = time(NULL);
+
+			if (context->sentinelQueryInProgress)
+			{
+				if (!stream_apply_fetch_sync_sentinel(context))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+			}
+
+			/* rate limit to 1 update per second */
+			else if (1 < (now - context->sentinelSyncTime))
+			{
+				/* we're going to keep the connection around */
+				context->src.connectionStatementType =
+					PGSQL_CONNECTION_MULTI_STATEMENT;
+
+				if (!stream_apply_send_sync_sentinel(context))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+			}
 			break;
 		}
 

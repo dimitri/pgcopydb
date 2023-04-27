@@ -535,4 +535,10 @@ bool pgsql_sync_sentinel_apply(PGSQL *pgsql,
 							   uint64_t replay_lsn,
 							   CopyDBSentinel *sentinel);
 
+bool pgsql_send_sync_sentinel_apply(PGSQL *pgsql, uint64_t replay_lsn);
+bool pgsql_fetch_sync_sentinel_apply(PGSQL *pgsql,
+									 bool *retry,
+									 CopyDBSentinel *sentinel);
+
+
 #endif /* PGSQL_H */

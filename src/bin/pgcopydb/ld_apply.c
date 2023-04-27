@@ -304,6 +304,83 @@ stream_apply_sync_sentinel(StreamApplyContext *context)
 
 
 /*
+ * stream_apply_send_sync_sentinel sends a query to sync with the pgcopydb
+ * sentinel table using the libpq async API. Use the associated function
+ * stream_apply_fetch_sync_sentinel to check for availability of the result and
+ * fetch it when it's available.
+ */
+bool
+stream_apply_send_sync_sentinel(StreamApplyContext *context)
+{
+	PGSQL *src = &(context->src);
+
+	if (src->connectionStatementType != PGSQL_CONNECTION_MULTI_STATEMENT)
+	{
+		log_error("BUG: stream_apply_send_sync_sentinel called "
+				  "in SINGLE statement mode");
+		return false;
+	}
+
+	if (context->sentinelQueryInProgress)
+	{
+		log_error("BUG: stream_apply_send_sync_sentinel already in progress");
+		return false;
+	}
+
+	if (!pgsql_init(src, context->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* limit the amount of logging of the apply process */
+	src->logSQL = true;
+
+	if (!pgsql_send_sync_sentinel_apply(src, context->previousLSN))
+	{
+		log_error("Failed to sync progress with the pgcopydb sentinel");
+		return false;
+	}
+
+	context->sentinelSyncTime = time(NULL);
+	context->sentinelQueryInProgress = true;
+
+	return true;
+}
+
+
+/*
+ * stream_apply_fetch_sync_sentinel checks to see if the result of the
+ * pgcopydb sentinel sync query is available and fetches it then.
+ */
+bool
+stream_apply_fetch_sync_sentinel(StreamApplyContext *context)
+{
+	PGSQL *src = &(context->src);
+
+	bool retry;
+	CopyDBSentinel sentinel = { 0 };
+
+	if (!pgsql_fetch_sync_sentinel_apply(src, &retry, &sentinel))
+	{
+		log_error("Failed to fetch sentinel update query results");
+		return false;
+	}
+
+	if (!retry)
+	{
+		context->sentinelQueryInProgress = false;
+
+		context->apply = sentinel.apply;
+		context->endpos = sentinel.endpos;
+		context->startpos = sentinel.startpos;
+	}
+
+	return true;
+}
+
+
+/*
  * stream_apply_file connects to the target database system and applies the
  * given SQL file as prepared by the stream_transform_file function.
  */
