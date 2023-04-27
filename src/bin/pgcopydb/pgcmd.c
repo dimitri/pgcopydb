@@ -1001,9 +1001,18 @@ struct StringWithLength pgRestoreDescriptionArray[] = {
 bool
 parse_archive_list(char *list, ArchiveContentArray *contents)
 {
-	/* only parse the first 128 * 1024 lines */
-	char *lines[128 * BUFSIZE];
-	int lineCount = splitLines(list, lines, 128 * BUFSIZE);
+	int lineCount = countLines(list);
+	char **lines = (char **) calloc(lineCount, sizeof(char *));
+	int splitCount = splitLines(list, lines, lineCount);
+
+	if (splitCount != lineCount)
+	{
+		log_error("BUG: parse_archive_list counted %d lines "
+				  "and got %d after split",
+				  lineCount,
+				  splitCount);
+		return false;
+	}
 
 	/* the pg_restore --list preamble is 15 lines long */
 	int objectCount = lineCount - 15;
