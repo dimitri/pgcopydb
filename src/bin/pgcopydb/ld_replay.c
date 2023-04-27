@@ -118,7 +118,17 @@ stream_apply_replay(StreamSpecs *specs)
 	/* we might still have to disconnect now */
 	(void) pgsql_finish(&(context->pgsql));
 
-	log_notice("Replayed %lld messages", (long long) readerContext.lineno);
+	/* make sure to send a last round of sentinel update before exit */
+	if (!stream_apply_sync_sentinel(context))
+	{
+		log_error("Failed to update pgcopydb.sentinel replay_lsn to %X/%X",
+				  LSN_FORMAT_ARGS(context->replay_lsn));
+		return false;
+	}
+
+	log_notice("Replayed %lld messages up to replay_lsn %X/%X",
+			   (long long) readerContext.lineno,
+			   LSN_FORMAT_ARGS(context->replay_lsn));
 
 	return true;
 }
