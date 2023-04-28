@@ -438,6 +438,9 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths,
 	/* first copy the top directory */
 	strlcpy(cfPaths->topdir, topdir, sizeof(cfPaths->topdir));
 
+	/* prepare the path to the config.ini file */
+	sformat(cfPaths->conffile, MAXPGPATH, "%s/config.ini", cfPaths->topdir);
+
 	/* some processes use an additional per-service pidfile */
 	if (serviceName != NULL)
 	{
