@@ -10,6 +10,7 @@ This command prefixes the following sub-commands:
 ::
 
   pgcopydb list
+    databases    List databases
     extensions   List all the source extensions to copy
     collations   List all the source collations to copy
     tables       List all the source tables to copy data from
@@ -20,6 +21,24 @@ This command prefixes the following sub-commands:
     schema       List the schema to migrate, formatted in JSON
     progress     List the progress
 
+
+.. _pgcopydb_list_databases:
+
+pgcopydb list databases
+-----------------------
+
+pgcopydb list databases - List databases
+
+The command ``pgcopydb list databases`` connects to the source database and
+executes a SQL query using the Postgres catalogs to get a list of all the
+databases there.
+
+::
+
+   pgcopydb list databases: List databases
+   usage: pgcopydb list databases  --source ...
+
+     --source            Postgres URI to the source database
 
 .. _pgcopydb_list_extensions:
 

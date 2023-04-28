@@ -29,6 +29,14 @@ static bool prepareFilterCopyTableList(PGSQL *pgsql,
 									   const char *temp_table_name);
 
 
+/* Context used when fetching catalog definitions */
+typedef struct SourceCatalogArrayContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	SourceCatalogArray *catalogArray;
+	bool parsedOk;
+} SourceCatalogArrayContext;
+
 /* Context used when fetching schema definitions */
 typedef struct SourceSchemaArrayContext
 {
@@ -95,6 +103,8 @@ typedef struct SourcePartitionContext
 } SourcePartitionContext;
 
 static void getSchemaList(void *ctx, PGresult *result);
+
+static void getCatalogList(void *ctx, PGresult *result);
 
 static void getExtensionList(void *ctx, PGresult *result);
 
@@ -164,6 +174,41 @@ schema_query_privileges(PGSQL *pgsql,
 	if (!pgsql_has_database_privilege(pgsql, "temp", hasDBTempPrivilege))
 	{
 		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * schema_list_catalogs grabs the list of databases (catalogs) from the given
+ * source Postgres instance and allocates a SourceCatalog array with the result
+ * of the query.
+ */
+bool
+schema_list_catalogs(PGSQL *pgsql, SourceCatalogArray *catArray)
+{
+	SourceCatalogArrayContext parseContext = { { 0 }, catArray, false };
+
+	char *sql =
+		"select d.oid, datname, pg_database_size(d.oid) as bytes, "
+		"       pg_size_pretty(pg_database_size(d.oid)) "
+		"  from pg_database d "
+		" where datname not in ('template0', 'template1') "
+		"order by datname";
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   0, NULL, NULL,
+								   &parseContext, &getCatalogList))
+	{
+		log_error("Failed to list catalogs");
+		return false;
+	}
+
+	if (!parseContext.parsedOk)
+	{
+		log_error("Failed to list catalogs");
 		return false;
 	}
 
@@ -3104,6 +3149,110 @@ getSchemaList(void *ctx, PGresult *result)
 			log_error("Table restore list name \"%s\" is %d bytes long, "
 					  "the maximum expected is %d (RESTORE_LIST_NAMEDATALEN - 1)",
 					  value, length, RESTORE_LIST_NAMEDATALEN - 1);
+			++errors;
+		}
+	}
+
+	context->parsedOk = errors == 0;
+}
+
+
+/*
+ * getCatalogList loops over the SQL result for the catalog array query and
+ * allocates an array of catalogs then populates it with the query result.
+ */
+static void
+getCatalogList(void *ctx, PGresult *result)
+{
+	SourceCatalogArrayContext *context = (SourceCatalogArrayContext *) ctx;
+	int nTuples = PQntuples(result);
+
+	log_debug("getCatalogList: %d", nTuples);
+
+	if (PQnfields(result) != 4)
+	{
+		log_error("Query returned %d columns, expected 4", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	/* we're not supposed to re-cycle arrays here */
+	if (context->catalogArray->array != NULL)
+	{
+		/* issue a warning but let's try anyway */
+		log_warn("BUG? context's array is not null in getCatalogList");
+
+		free(context->catalogArray->array);
+		context->catalogArray->array = NULL;
+	}
+
+	context->catalogArray->count = nTuples;
+	context->catalogArray->array =
+		(SourceCatalog *) calloc(nTuples, sizeof(SourceCatalog));
+
+	if (context->catalogArray->array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return;
+	}
+
+	int errors = 0;
+
+	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
+	{
+		SourceCatalog *catalog = &(context->catalogArray->array[rowNumber]);
+
+		/* 1. oid */
+		char *value = PQgetvalue(result, rowNumber, 0);
+
+		if (!stringToUInt32(value, &(catalog->oid)) || catalog->oid == 0)
+		{
+			log_error("Invalid OID \"%s\"", value);
+			++errors;
+		}
+
+		/* 2. datname */
+		value = PQgetvalue(result, rowNumber, 1);
+		int length = strlcpy(catalog->datname, value, NAMEDATALEN);
+
+		if (length >= NAMEDATALEN)
+		{
+			log_error("Catalog name \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (NAMEDATALEN - 1)",
+					  value, length, NAMEDATALEN - 1);
+			++errors;
+		}
+
+		/* 3. bytes */
+		value = PQgetvalue(result, rowNumber, 2);
+		if (PQgetisnull(result, rowNumber, 2))
+		{
+			/*
+			 * It may happen that pg_table_size() returns NULL (when failing to
+			 * open the given relation).
+			 */
+			catalog->bytes = 0;
+		}
+		else
+		{
+			value = PQgetvalue(result, rowNumber, 2);
+
+			if (!stringToInt64(value, &(catalog->bytes)))
+			{
+				log_error("Invalid pg_database_size: \"%s\"", value);
+				++errors;
+			}
+		}
+
+		/* 4. pg_size_pretty */
+		value = PQgetvalue(result, rowNumber, 3);
+		length = strlcpy(catalog->bytesPretty, value, NAMEDATALEN);
+
+		if (length >= NAMEDATALEN)
+		{
+			log_error("Pretty printed byte size \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (NAMEDATALEN - 1)",
+					  value, length, NAMEDATALEN - 1);
 			++errors;
 		}
 	}
