@@ -26,6 +26,7 @@
 ListDBOptions listDBoptions = { 0 };
 
 static int cli_list_db_getopts(int argc, char **argv);
+static void cli_list_catalogs(int argc, char **argv);
 static void cli_list_extensions(int argc, char **argv);
 static void cli_list_collations(int argc, char **argv);
 static void cli_list_tables(int argc, char **argv);
@@ -38,6 +39,15 @@ static void cli_list_progress(int argc, char **argv);
 
 static bool copydb_init_specs_from_listdboptions(CopyDBOptions *options,
 												 ListDBOptions *listDBoptions);
+
+static CommandLine list_catalogs_command =
+	make_command(
+		"databases",
+		"List databases",
+		" --source ... ",
+		"  --source            Postgres URI to the source database\n",
+		cli_list_db_getopts,
+		cli_list_catalogs);
 
 static CommandLine list_extensions_command =
 	make_command(
@@ -144,6 +154,7 @@ static CommandLine list_progress_command =
 
 
 static CommandLine *list_subcommands[] = {
+	&list_catalogs_command,
 	&list_extensions_command,
 	&list_collations_command,
 	&list_tables_command,
@@ -458,6 +469,53 @@ cli_list_db_getopts(int argc, char **argv)
 	listDBoptions = options;
 
 	return optind;
+}
+
+
+/*
+ * cli_list_catalogs implements the command: pgcopydb list catalogs
+ */
+static void
+cli_list_catalogs(int argc, char **argv)
+{
+	PGSQL pgsql = { 0 };
+	SourceCatalogArray catalogArray = { 0, NULL };
+
+	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	if (!schema_list_catalogs(&pgsql, &catalogArray))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_info("Fetched information for %d catalogs", catalogArray.count);
+
+	fformat(stdout, "%10s | %20s | %20s\n",
+			"OID",
+			"Database Name",
+			"On-disk size");
+
+	fformat(stdout, "%10s-+-%20s-+-%20s\n",
+			"----------",
+			"--------------------",
+			"--------------------");
+
+	for (int i = 0; i < catalogArray.count; i++)
+	{
+		SourceCatalog *cat = &(catalogArray.array[i]);
+
+		fformat(stdout, "%10u | %20s | %20s\n",
+				cat->oid,
+				cat->datname,
+				cat->bytesPretty);
+	}
+
+	fformat(stdout, "\n");
 }
 
 

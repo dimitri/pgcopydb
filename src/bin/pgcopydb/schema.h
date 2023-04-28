@@ -16,6 +16,26 @@
 /* the pg_restore -l output uses "schema name owner" */
 #define RESTORE_LIST_NAMEDATALEN (3 * NAMEDATALEN + 3)
 
+/*
+ * In the SQL standard we have "catalogs", which are then Postgres databases.
+ * Much the same confusion as with namespace vs schema.
+ */
+typedef struct SourceCatalog
+{
+	uint32_t oid;
+	char datname[NAMEDATALEN];
+	int64_t bytes;
+	char bytesPretty[NAMEDATALEN]; /* pg_size_pretty */
+}
+SourceCatalog;
+
+typedef struct SourceCatalogArray
+{
+	int count;
+	SourceCatalog *array;
+} SourceCatalogArray;
+
+
 typedef struct SourceSchema
 {
 	uint32_t oid;
@@ -229,6 +249,8 @@ typedef struct SourceDependArray
 bool schema_query_privileges(PGSQL *pgsql,
 							 bool *hasDBCreatePrivilage,
 							 bool *hasDBTempPrivilege);
+
+bool schema_list_catalogs(PGSQL *pgsql, SourceCatalogArray *catArray);
 
 bool schema_list_ext_schemas(PGSQL *pgsql, SourceSchemaArray *array);
 
