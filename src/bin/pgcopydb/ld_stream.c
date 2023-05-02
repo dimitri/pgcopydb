@@ -410,9 +410,9 @@ startLogicalStreaming(StreamSpecs *specs)
 
 		if (cleanExit)
 		{
-			log_info("Streaming is now finished after processing %lld message%s",
-					 (long long) privateContext.counters.total,
-					 privateContext.counters.total > 0 ? "s" : "");
+			log_info("Streamed up to write_lsn %X/%X, flush_lsn %X/%X, stopping",
+					 LSN_FORMAT_ARGS(context.tracking->written_lsn),
+					 LSN_FORMAT_ARGS(context.tracking->flushed_lsn));
 		}
 		else if (!(asked_to_stop || asked_to_stop_fast || asked_to_quit))
 		{
