@@ -16,18 +16,6 @@
 #include "log.h"
 #include "parsing_utils.h"
 
-#define OPTION_PGCOPYDB_DIR(config) \
-	make_strbuf_option("pgcopydb", "dir", "dir", true, MAXCONNINFO, \
-					   config->dir)
-
-#define OPTION_PGCOPYDB_SOURCE(config) \
-	make_strbuf_option("pgcopydb", "source", "source", true, MAXCONNINFO, \
-					   config->source_pguri)
-
-#define OPTION_PGCOPYDB_TARGET(config) \
-	make_strbuf_option("pgcopydb", "target", "source", true, MAXCONNINFO, \
-					   config->target_pguri)
-
 #define OPTION_PGCOPYDB_TABLE_JOBS(config) \
 	make_int_option_default("pgcopydb", "table-jobs", "table-jobs", \
 							true, &(config->tableJobs), \
@@ -40,9 +28,6 @@
 
 #define SET_INI_OPTIONS_ARRAY(config) \
 	{ \
-		OPTION_PGCOPYDB_DIR(config), \
-		OPTION_PGCOPYDB_SOURCE(config), \
-		OPTION_PGCOPYDB_TARGET(config), \
 		OPTION_PGCOPYDB_TABLE_JOBS(config), \
 		OPTION_PGCOPYDB_INDEX_JOBS(config), \
 		INI_OPTION_LAST \

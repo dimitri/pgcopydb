@@ -1156,8 +1156,6 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	strlcpy(copyDBoptions.dir, copySpecs->cfPaths.topdir, MAXPGPATH);
-
 	(void) config_init(&copyDBoptions);
 
 	if (!config_write_file(&copyDBoptions, copySpecs->cfPaths.conffile))

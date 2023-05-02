@@ -46,6 +46,9 @@ extern CommandLine copy_commands;
 /* cli_snapshot.c */
 extern CommandLine create_snapshot_command;
 
+/* cli_config.c */
+extern CommandLine config_commands;
+
 /* cli_dump.h */
 extern CommandLine dump_commands;
 
