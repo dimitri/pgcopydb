@@ -103,6 +103,19 @@ stream_apply_replay(StreamSpecs *specs)
 				 LSN_FORMAT_ARGS(context->previousLSN));
 	}
 
+	/*
+	 * The stream_replay_line read_from_stream callback is going to send async
+	 * queries to the source server to maintain the sentinel tables. Initialize
+	 * our connection info now.
+	 */
+	PGSQL *src = &(context->src);
+
+	if (!pgsql_init(src, context->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	ReadFromStreamContext readerContext = {
 		.callback = stream_replay_line,
 		.ctx = &ctx
@@ -113,6 +126,22 @@ stream_apply_replay(StreamSpecs *specs)
 		log_error("Failed to transform JSON messages from input stream, "
 				  "see above for details");
 		return false;
+	}
+
+	/*
+	 * When we are done reading our input stream and applying changes, we might
+	 * still have a sentinel query in flight. Make sure to terminate it now.
+	 */
+	while (context->sentinelQueryInProgress)
+	{
+		if (!stream_apply_fetch_sync_sentinel(context))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		/* sleep 100ms between retries */
+		pg_usleep(100 * 1000);
 	}
 
 	/* we might still have to disconnect now */
@@ -126,9 +155,18 @@ stream_apply_replay(StreamSpecs *specs)
 		return false;
 	}
 
-	log_notice("Replayed %lld messages up to replay_lsn %X/%X",
-			   (long long) readerContext.lineno,
-			   LSN_FORMAT_ARGS(context->replay_lsn));
+	if (context->endpos != InvalidXLogRecPtr &&
+		context->endpos <= context->replay_lsn)
+	{
+		log_info("Replayed reached endpos %X/%X at replay_lsn %X/%X, stopping",
+				 LSN_FORMAT_ARGS(context->endpos),
+				 LSN_FORMAT_ARGS(context->replay_lsn));
+	}
+	else
+	{
+		log_info("Replayed up to replay_lsn %X/%X, stopping",
+				 LSN_FORMAT_ARGS(context->replay_lsn));
+	}
 
 	return true;
 }
@@ -180,10 +218,6 @@ stream_replay_line(void *ctx, const char *line, bool *stop)
 			/* rate limit to 1 update per second */
 			else if (1 < (now - context->sentinelSyncTime))
 			{
-				/* we're going to keep the connection around */
-				context->src.connectionStatementType =
-					PGSQL_CONNECTION_MULTI_STATEMENT;
-
 				if (!stream_apply_send_sync_sentinel(context))
 				{
 					/* errors have already been logged */

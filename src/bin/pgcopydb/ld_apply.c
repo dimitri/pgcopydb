@@ -314,24 +314,14 @@ stream_apply_send_sync_sentinel(StreamApplyContext *context)
 {
 	PGSQL *src = &(context->src);
 
-	if (src->connectionStatementType != PGSQL_CONNECTION_MULTI_STATEMENT)
-	{
-		log_error("BUG: stream_apply_send_sync_sentinel called "
-				  "in SINGLE statement mode");
-		return false;
-	}
-
 	if (context->sentinelQueryInProgress)
 	{
 		log_error("BUG: stream_apply_send_sync_sentinel already in progress");
 		return false;
 	}
 
-	if (!pgsql_init(src, context->source_pguri, PGSQL_CONN_SOURCE))
-	{
-		/* errors have already been logged */
-		return false;
-	}
+	/* we're going to keep the connection around */
+	context->src.connectionStatementType = PGSQL_CONNECTION_MULTI_STATEMENT;
 
 	/* limit the amount of logging of the apply process */
 	src->logSQL = true;
@@ -371,9 +361,13 @@ stream_apply_fetch_sync_sentinel(StreamApplyContext *context)
 	{
 		context->sentinelQueryInProgress = false;
 
+		/* also disconnect between async queries */
+		(void) pgsql_finish(&(context->src));
+
 		context->apply = sentinel.apply;
 		context->endpos = sentinel.endpos;
 		context->startpos = sentinel.startpos;
+		context->replay_lsn = sentinel.replay_lsn;
 	}
 
 	return true;
