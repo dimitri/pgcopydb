@@ -268,3 +268,30 @@ signal_to_string(int signal)
 			return "unknown signal";
 	}
 }
+
+
+/*
+ * signal_forward_to_pgroup forwards given signal to our process group.
+ */
+bool
+signal_process_group(int sig)
+{
+	pid_t pid = getpid();
+	pid_t pgrp = getpgid(pid);
+
+	if (pgrp == -1)
+	{
+		/* continue looping anyway, ignore SIGHUP this time */
+		log_error("Failed to retrieve process group: %m");
+		log_error("Failed to process SIGHUP, see above for details");
+		return false;
+	}
+
+	if (killpg(pgrp, SIGHUP) != 0)
+	{
+		log_error("Failed to send SIGHUP signal to process group: %m");
+		return false;
+	}
+
+	return true;
+}

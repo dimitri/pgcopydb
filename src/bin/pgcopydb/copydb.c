@@ -968,7 +968,7 @@ copydb_fatal_exit()
 	 * non-zero return code.
 	 */
 	bool failFast = false;
-	return copydb_wait_for_subprocesses(failFast);
+	return copydb_wait_for_subprocesses(failFast, NULL);
 }
 
 
@@ -978,17 +978,29 @@ copydb_fatal_exit()
  * returns true only when all the subprocesses have returned zero (success).
  */
 bool
-copydb_wait_for_subprocesses(bool failFast)
+copydb_wait_for_subprocesses(bool failFast, OnReloadHook *onReloadHook)
 {
 	bool allReturnCodeAreZero = true;
 	log_debug("Waiting for sub-processes to finish");
 
 	for (;;)
 	{
-		int status;
-
 		/* ignore errors */
+		int status;
 		pid_t pid = waitpid(-1, &status, WNOHANG);
+
+		if (asked_to_reload)
+		{
+			log_warn("SIGHUP!");
+
+			/* call the reload hook when defined */
+			if (onReloadHook != NULL)
+			{
+				(void) (onReloadHook->fun)(onReloadHook->specs);
+			}
+
+			asked_to_reload = 0;
+		}
 
 		switch (pid)
 		{

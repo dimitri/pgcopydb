@@ -32,4 +32,6 @@ int get_current_signal(int defaultSignal);
 int pick_stronger_signal(int sig1, int sig2);
 char * signal_to_string(int signal);
 
+bool signal_process_group(int sig);
+
 #endif /* SIGNALS_H */

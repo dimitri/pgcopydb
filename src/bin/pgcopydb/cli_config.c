@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <signal.h>
 
 #include "cli_common.h"
 #include "cli_root.h"
@@ -15,6 +16,7 @@
 #include "commandline.h"
 #include "env_utils.h"
 #include "log.h"
+#include "pidfile.h"
 #include "parsing_utils.h"
 #include "string_utils.h"
 
@@ -368,14 +370,40 @@ cli_config_set(int argc, char **argv)
 		}
 
 		/* now read the value from just written file */
-		if (config_get_setting(&config, cfname, argv[0], value, BUFSIZE))
-		{
-			fformat(stdout, "%s\n", value);
-		}
-		else
+		if (!config_get_setting(&config, cfname, argv[0], value, BUFSIZE))
 		{
 			log_error("Failed to lookup option %s", argv[0]);
 			exit(EXIT_CODE_BAD_ARGS);
 		}
+
+		/* now signal the pgcopydb process to reload config (SIGHUP) */
+		if (file_exists(copySpecs.cfPaths.pidfile))
+		{
+			pid_t pid;
+
+			log_debug("Reading pidfile \"%s\"", copySpecs.cfPaths.pidfile);
+
+			if (!read_pidfile(copySpecs.cfPaths.pidfile, &pid))
+			{
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			log_notice("Signaling process %d with SIGHUP", pid);
+
+			if (kill(pid, SIGHUP) != 0)
+			{
+				log_error("Failed to send SIGHUP signal to process %d: %m", pid);
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+		}
+		else
+		{
+			log_error("Failed to send SIGHUP: pidfile does not exists: \"%s\"",
+					  copySpecs.cfPaths.pidfile);
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		/* finally output the value we just set and signaled */
+		fformat(stdout, "%s\n", value);
 	}
 }

@@ -53,7 +53,11 @@ main(int argc, char **argv)
 	 * setpgrp and it has no effect when the calling process is a session
 	 * leader.
 	 */
-	setpgrp();
+	if (setpgid(0, 0) != 0)
+	{
+		log_fatal("Failed to set process group: %m");
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
 
 	CommandLine command = root;
 

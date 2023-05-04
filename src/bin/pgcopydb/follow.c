@@ -736,6 +736,12 @@ follow_wait_subprocesses(StreamSpecs *specs)
 			}
 		}
 
+		if (asked_to_reload)
+		{
+			log_warn("SIGHUP!");
+			asked_to_reload = 0;
+		}
+
 		/* re-init stillRunning at each iteration */
 		stillRunning = count;
 
