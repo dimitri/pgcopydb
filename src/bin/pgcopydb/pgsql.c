@@ -4204,6 +4204,9 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 	clear_results(pgsql);
 	pgsql_finish(pgsql);
 
+	/* unset the signals which have been processed correctly now */
+	(void) unset_signal_flags();
+
 	/* call the closeFunction callback now */
 	if (!(*client->closeFunction)(context))
 	{

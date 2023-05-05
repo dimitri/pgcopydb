@@ -26,6 +26,7 @@ void catch_int(int sig);
 void catch_term(int sig);
 void catch_quit(int sig);
 void catch_quit_and_exit(int sig);
+void unset_signal_flags(void);
 
 int get_current_signal(int defaultSignal);
 int pick_stronger_signal(int sig1, int sig2);

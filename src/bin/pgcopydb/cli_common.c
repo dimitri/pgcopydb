@@ -894,6 +894,13 @@ cli_copy_db_getopts(int argc, char **argv)
 				exit(EXIT_CODE_QUIT);
 				break;
 			}
+
+			case '?':
+			{
+				commandline_help(stderr);
+				exit(EXIT_CODE_BAD_ARGS);
+				break;
+			}
 		}
 	}
 
