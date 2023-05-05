@@ -338,6 +338,9 @@ struct StreamSpecs
 	char logrep_pguri[MAXCONNINFO];
 	char target_pguri[MAXCONNINFO];
 
+	uint32_t WalSegSz;
+	IdentifySystem system;
+
 	StreamOutputPlugin plugin;
 	KeyVal pluginOptions;
 
@@ -466,6 +469,7 @@ StreamAction StreamActionFromChar(char action);
 
 /* ld_transform.c */
 bool stream_transform_worker(StreamSpecs *specs);
+bool stream_transform_from_queue(StreamSpecs *specs);
 bool stream_transform_add_file(Queue *queue, uint64_t firstLSN);
 bool stream_transform_send_stop(Queue *queue);
 
@@ -487,6 +491,8 @@ bool stream_transform_rotate(StreamContext *privateContext,
 							 LogicalMessageMetadata *metadata);
 
 bool stream_transform_file(char *jsonfilename, char *sqlfilename);
+bool stream_transform_file_at_lsn(StreamSpecs *specs, uint64_t lsn);
+
 bool stream_write_message(FILE *out, LogicalMessage *msg);
 bool stream_write_transaction(FILE *out, LogicalTransaction *tx);
 bool stream_write_begin(FILE *out, LogicalTransaction *tx);
@@ -575,6 +581,9 @@ bool follow_get_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel);
 bool follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
 
 bool followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
+
+bool follow_reached_endpos(StreamSpecs *streamSpecs, bool *done);
+bool follow_prepare_mode_switch(StreamSpecs *streamSpecs);
 
 bool follow_start_subprocess(StreamSpecs *specs, FollowSubProcess *subprocess);
 

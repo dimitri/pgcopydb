@@ -216,11 +216,8 @@ stream_init_for_mode(StreamSpecs *specs, LogicalStreamMode mode)
 	}
 	else if (specs->mode == STREAM_MODE_REPLAY && mode == STREAM_MODE_CATCHUP)
 	{
-		if (!queue_create(&(specs->transformQueue), "transform"))
-		{
-			log_error("Failed to create the transform queue");
-			return false;
-		}
+		/* we keep the transform queue around */
+		(void) 0;
 	}
 	else
 	{
@@ -982,7 +979,8 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 				if (!stream_transform_add_file(privateContext->transformQueue,
 											   privateContext->firstLSN))
 				{
-					/* errors have already been logged */
+					log_error("Failed to add LSN %X/%X to the transform queue",
+							  LSN_FORMAT_ARGS(privateContext->firstLSN));
 					return false;
 				}
 			}
@@ -999,7 +997,7 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 			{
 				if (!stream_transform_send_stop(privateContext->transformQueue))
 				{
-					/* errors have already been logged */
+					log_error("Failed to send STOP to the transform queue");
 					return false;
 				}
 			}
@@ -2301,8 +2299,11 @@ bool
 stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream)
 {
 	IdentifySystem *system = &(stream->system);
-
 	char wal_segment_size[BUFSIZE] = { 0 };
+
+	/* also cache the system and WalSegSz in the StreamSpecs */
+	specs->system = stream->system;
+	specs->WalSegSz = stream->WalSegSz;
 
 	int bytes =
 		sformat(wal_segment_size, sizeof(wal_segment_size), "%lld",

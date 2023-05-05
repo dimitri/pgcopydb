@@ -61,23 +61,23 @@ stream_transform_stream(StreamSpecs *specs)
 	}
 
 	/* we need timeline and wal_segment_size to compute WAL filenames */
-	uint32_t WalSegSz;
-	IdentifySystem system = { 0 };
-
-	if (!stream_read_context(&(specs->paths),
-							 &system,
-							 &WalSegSz))
+	if (specs->system.timeline == 0)
 	{
-		log_error("Failed to read the streaming context information "
-				  "from the source database, see above for details");
-		return false;
+		if (!stream_read_context(&(specs->paths),
+								 &(specs->system),
+								 &(specs->WalSegSz)))
+		{
+			log_error("Failed to read the streaming context information "
+					  "from the source database, see above for details");
+			return false;
+		}
 	}
 
-	privateContext->WalSegSz = WalSegSz;
-	privateContext->timeline = system.timeline;
+	privateContext->WalSegSz = specs->WalSegSz;
+	privateContext->timeline = specs->system.timeline;
 
-	log_debug("Source database wal_segment_size is %u", WalSegSz);
-	log_debug("Source database timeline is %d", privateContext->timeline);
+	log_debug("Source database wal_segment_size is %u", specs->WalSegSz);
+	log_debug("Source database timeline is %d", specs->system.timeline);
 
 	TransformStreamCtx ctx = {
 		.context = privateContext,
@@ -404,16 +404,25 @@ stream_transform_worker(StreamSpecs *specs)
 	 * Transform Worker process is created, that information is read from our
 	 * local files.
 	 */
-	uint32_t WalSegSz;
-	IdentifySystem system = { 0 };
-
-	if (!stream_read_context(&(specs->paths), &system, &WalSegSz))
+	if (!stream_read_context(&(specs->paths), &(specs->system), &(specs->WalSegSz)))
 	{
 		log_error("Failed to read the streaming context information "
 				  "from the source database, see above for details");
 		return false;
 	}
 
+	return stream_transform_from_queue(specs);
+}
+
+
+/*
+ * stream_transform_from_queue loops over messages from a System V queue, each
+ * message contains the WAL.json and the WAL.sql file names. When receiving
+ * such a message, the WAL.json file is transformed into the WAL.sql file.
+ */
+bool
+stream_transform_from_queue(StreamSpecs *specs)
+{
 	Queue *transformQueue = &(specs->transformQueue);
 
 	int errors = 0;
@@ -431,7 +440,7 @@ stream_transform_worker(StreamSpecs *specs)
 			 * that the follow sub-processes supervisor can then switch from
 			 * catchup mode to replay mode.
 			 */
-			log_debug("stream_transform_worker was asked to stop");
+			log_debug("stream_transform_from_queue was asked to stop");
 			return true;
 		}
 
@@ -446,36 +455,22 @@ stream_transform_worker(StreamSpecs *specs)
 			case QMSG_TYPE_STOP:
 			{
 				stop = true;
-				log_debug("Stop message received by stream transform worker");
+				log_debug("stream_transform_from_queue: STOP");
 				break;
 			}
 
 			case QMSG_TYPE_STREAM_TRANSFORM:
 			{
-				log_debug("stream_transform_worker received transform %X/%X",
+				log_debug("stream_transform_from_queue: %X/%X",
 						  LSN_FORMAT_ARGS(mesg.data.lsn));
 
-				char walFileName[MAXPGPATH] = { 0 };
-				char sqlFileName[MAXPGPATH] = { 0 };
-
-				if (!stream_compute_pathnames(WalSegSz,
-											  system.timeline,
-											  mesg.data.lsn,
-											  specs->paths.dir,
-											  walFileName,
-											  sqlFileName))
+				if (!stream_transform_file_at_lsn(specs, mesg.data.lsn))
 				{
 					/* errors have already been logged, break from the loop */
 					++errors;
 					break;
 				}
 
-				if (!stream_transform_file(walFileName, sqlFileName))
-				{
-					/* errors have already been logged, break from the loop */
-					++errors;
-					break;
-				}
 				break;
 			}
 
@@ -501,6 +496,37 @@ stream_transform_worker(StreamSpecs *specs)
 	}
 
 	return success;
+}
+
+
+/*
+ * stream_transform_file_at_lsn computes the JSON and SQL filenames at given
+ * LSN position in the WAL, and transform the JSON file into an SQL file.
+ */
+bool
+stream_transform_file_at_lsn(StreamSpecs *specs, uint64_t lsn)
+{
+	char walFileName[MAXPGPATH] = { 0 };
+	char sqlFileName[MAXPGPATH] = { 0 };
+
+	if (!stream_compute_pathnames(specs->WalSegSz,
+								  specs->system.timeline,
+								  lsn,
+								  specs->paths.dir,
+								  walFileName,
+								  sqlFileName))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!stream_transform_file(walFileName, sqlFileName))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
 }
 
 

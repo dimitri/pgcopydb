@@ -57,14 +57,20 @@ stream_apply_replay(StreamSpecs *specs)
 		return false;
 	}
 
-	if (!stream_read_context(&(specs->paths),
-							 &(context->system),
-							 &(context->WalSegSz)))
+	if (specs->system.timeline == 0)
 	{
-		log_error("Failed to read the streaming context information "
-				  "from the source database, see above for details");
-		return false;
+		if (!stream_read_context(&(specs->paths),
+								 &(specs->system),
+								 &(specs->WalSegSz)))
+		{
+			log_error("Failed to read the streaming context information "
+					  "from the source database, see above for details");
+			return false;
+		}
 	}
+
+	context->system = specs->system;
+	context->WalSegSz = specs->WalSegSz;
 
 	log_debug("Source database wal_segment_size is %u", context->WalSegSz);
 	log_debug("Source database timeline is %d", context->system.timeline);

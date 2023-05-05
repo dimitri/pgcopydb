@@ -314,19 +314,16 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 			return false;
 		}
 
-		CopyDBSentinel sentinel = { 0 };
+		bool done = false;
 
-		if (!follow_get_sentinel(streamSpecs, &sentinel))
+		if (!follow_reached_endpos(streamSpecs, &done))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 
-		if (sentinel.endpos != InvalidXLogRecPtr &&
-			sentinel.endpos <= sentinel.replay_lsn)
+		if (done)
 		{
-			/* follow_get_sentinel logs replay_lsn and endpos already */
-			log_info("Stopping follow mode.");
 			return true;
 		}
 
@@ -345,31 +342,95 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		 * ensure to catch-up with files on-disk before switching
 		 * to another mode of operations.
 		 */
-		log_info("Catching-up from existing on-disk files");
-
-		if (!stream_apply_catchup(streamSpecs))
+		if (!follow_prepare_mode_switch(streamSpecs))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 
 		/* we could have reached endpos in this step: */
-		if (!follow_get_sentinel(streamSpecs, &sentinel))
+		if (!follow_reached_endpos(streamSpecs, &done))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 
-		if (sentinel.endpos != InvalidXLogRecPtr &&
-			sentinel.endpos <= sentinel.replay_lsn)
+		if (done)
 		{
-			/* follow_get_sentinel logs replay_lsn and endpos already */
-			log_info("Stopping follow mode.");
 			return true;
 		}
 
 		log_info("Restarting logical decoding follower in %s mode",
 				 LogicalStreamModeToString(currentMode));
+	}
+
+	return true;
+}
+
+
+/*
+ * follow_reached_endpos sets done to true when endpos has been reached.
+ */
+bool
+follow_reached_endpos(StreamSpecs *streamSpecs, bool *done)
+{
+	CopyDBSentinel sentinel = { 0 };
+
+	if (!follow_get_sentinel(streamSpecs, &sentinel))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (sentinel.endpos != InvalidXLogRecPtr &&
+		sentinel.endpos <= sentinel.replay_lsn)
+	{
+		/* follow_get_sentinel logs replay_lsn and endpos already */
+		*done = true;
+
+		log_info("Current endpos %X/%X has been reached at %X/%X",
+				 LSN_FORMAT_ARGS(sentinel.endpos),
+				 LSN_FORMAT_ARGS(sentinel.replay_lsn));
+	}
+
+	return true;
+}
+
+
+/*
+ * follow_prepare_mode_switch prepares for the next mode of operation. We need
+ * to make sure that all that was streamed in our JSON file has been
+ * transformed and replayed from file before changing our mode of operations.
+ */
+bool
+follow_prepare_mode_switch(StreamSpecs *streamSpecs)
+{
+	log_info("Catching-up from existing on-disk files");
+
+	if (streamSpecs->system.timeline == 0)
+	{
+		if (!stream_read_context(&(streamSpecs->paths),
+								 &(streamSpecs->system),
+								 &(streamSpecs->WalSegSz)))
+		{
+			log_error("Failed to read the streaming context information "
+					  "from the source database, see above for details");
+			return false;
+		}
+	}
+
+	/* first empty the transform queue, where a STOP message has been sent */
+	if (!stream_transform_from_queue(streamSpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* then catch-up with what's been stream and transformed already */
+	if (!stream_apply_catchup(streamSpecs))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	return true;
