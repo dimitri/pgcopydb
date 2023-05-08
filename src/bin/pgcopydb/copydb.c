@@ -38,6 +38,7 @@ GUC srcSettings95[] = {
 GUC srcSettings[] = {
 	COMMON_GUC_SETTINGS
 	{ "idle_in_transaction_session_timeout", "0" },
+	{ "extra_float_digits", "3" },
 	{ NULL, NULL },
 };
 
