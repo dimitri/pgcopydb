@@ -503,29 +503,6 @@ cli_create_slot_getopts(int argc, char **argv)
 		++errors;
 	}
 
-	/* when --slot-name is not used, use the default slot name "pgcopydb" */
-	if (IS_EMPTY_STRING_BUFFER(options.slotName))
-	{
-		strlcpy(options.slotName, REPLICATION_SLOT_NAME, sizeof(options.slotName));
-		log_info("Using default slot name \"%s\"", options.slotName);
-	}
-
-	if (IS_EMPTY_STRING_BUFFER(options.plugin))
-	{
-		strlcpy(options.plugin, REPLICATION_PLUGIN, sizeof(options.plugin));
-		log_info("Using default output plugin \"%s\"", options.plugin);
-	}
-	else
-	{
-		if (OutputPluginFromString(options.plugin) == STREAM_PLUGIN_UNKNOWN)
-		{
-			log_fatal("Unknown replication plugin \"%s\", please use either "
-					  "test_decoding (the default) or wal2json",
-					  options.plugin);
-			++errors;
-		}
-	}
-
 	if (!cli_copydb_is_consistent(&options))
 	{
 		log_fatal("Option --resume requires option --not-consistent");
@@ -775,12 +752,6 @@ cli_create_origin_getopts(int argc, char **argv)
 	{
 		log_fatal("Option --target is mandatory");
 		++errors;
-	}
-
-	/* when --origin is not used, use the default slot name "pgcopydb" */
-	if (IS_EMPTY_STRING_BUFFER(options.origin))
-	{
-		strlcpy(options.origin, REPLICATION_ORIGIN, sizeof(options.origin));
 	}
 
 	if (!cli_copydb_is_consistent(&options))

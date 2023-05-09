@@ -314,6 +314,10 @@ copydb_prepare_snapshot(CopyDataSpec *copySpecs)
 		return false;
 	}
 
+	log_notice("Wrote snapshot \"%s\" to file \"%s\"",
+			   sourceSnapshot->snapshot,
+			   copySpecs->cfPaths.snfile);
+
 	return true;
 }
 
@@ -383,6 +387,25 @@ copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 	{
 		log_fatal("Failed to create the snapshot file \"%s\"",
 				  copySpecs->cfPaths.snfile);
+		return false;
+	}
+
+	/* store the replication slot-name and plugin in a file, same reasons */
+	if (!write_file((char *) slotName, strlen(slotName),
+					copySpecs->cfPaths.cdc.slotnamefile))
+	{
+		log_fatal("Failed to create the slot-name file \"%s\"",
+				  copySpecs->cfPaths.cdc.slotnamefile);
+		return false;
+	}
+
+	const char *pluginStr = OutputPluginToString(plugin);
+
+	if (!write_file((char *) pluginStr, strlen(pluginStr),
+					copySpecs->cfPaths.cdc.pluginfile))
+	{
+		log_fatal("Failed to create the plugin file \"%s\"",
+				  copySpecs->cfPaths.cdc.pluginfile);
 		return false;
 	}
 

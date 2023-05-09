@@ -2094,6 +2094,25 @@ stream_create_repl_slot(CopyDataSpec *copySpecs,
 			return false;
 		}
 
+		/* store the replication slot-name and plugin in a file */
+		if (!write_file((char *) slotName, strlen(slotName),
+						copySpecs->cfPaths.cdc.slotnamefile))
+		{
+			log_fatal("Failed to create the slot-name file \"%s\"",
+					  copySpecs->cfPaths.cdc.slotnamefile);
+			return false;
+		}
+
+		const char *pluginStr = OutputPluginToString(plugin);
+
+		if (!write_file((char *) pluginStr, strlen(pluginStr),
+						copySpecs->cfPaths.cdc.pluginfile))
+		{
+			log_fatal("Failed to create the plugin file \"%s\"",
+					  copySpecs->cfPaths.cdc.pluginfile);
+			return false;
+		}
+
 		log_info("Created logical replication slot \"%s\" with plugin \"%s\" "
 				 "at LSN %X/%X",
 				 slotName,
