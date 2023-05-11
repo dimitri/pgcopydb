@@ -27,7 +27,7 @@ done
 # allow replaying changes now that pgcopydb follow command is running
 pgcopydb stream sentinel set apply
 
-# then insert another batch
+# then insert another batch of 10 rows (21..30)
 psql -v a=21 -v b=30 -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 
 # grab the current LSN, it's going to be our streaming end position

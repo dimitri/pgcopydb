@@ -17,7 +17,7 @@ pgcopydb ping
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/ddl.sql
 psql -d ${PGCOPYDB_TARGET_PGURI} -f /usr/src/pgcopydb/ddl.sql
 
-# insert a first batch of 1000 rows
+# insert a first batch of 10 rows (1..10)
 psql -v a=1 -v b=10 -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 
 # grab a snapshot on the source database
@@ -31,7 +31,7 @@ cat /var/lib/postgres/.local/share/pgcopydb/slot
 # copy the data
 pgcopydb copy table-data
 
-# insert another batch of 1000 rows
+# insert another batch of 10 rows (11..20)
 psql -v a=11 -v b=20 -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 
 # start following and applying changes from source to target
