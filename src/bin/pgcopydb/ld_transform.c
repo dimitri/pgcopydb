@@ -652,8 +652,16 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 		return false;
 	}
 
-	/* {action: B} {action: C} {action: K} {action: X} */
-	int maxMesgCount = content.count;
+	/*
+	 * Message are like:
+	 *
+	 * {action: B} {action: C} {action: K} {action: X}
+	 *
+	 * And when we read a COMMIT message (or KEEPALIVE or SWITCH) we prepare
+	 * for the next message already, which means we need one more entry in the
+	 * array than the number of lines read in the JSON file.
+	 */
+	int maxMesgCount = content.count + 1;
 	LogicalMessageArray mesgs = { 0 };
 
 	/* the actual count is maintained in the for loop below */
