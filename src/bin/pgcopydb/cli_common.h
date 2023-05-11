@@ -14,6 +14,7 @@
 #include <getopt.h>
 #include <stdbool.h>
 
+#include "copydb_paths.h"
 #include "defaults.h"
 #include "parson.h"
 #include "pgcmd.h"
@@ -44,6 +45,8 @@ typedef struct CopyDBOptions
 	bool restart;
 	bool resume;
 	bool notConsistent;
+
+	ReplicationSlot slot;
 	char snapshot[BUFSIZE];
 	char origin[BUFSIZE];
 
@@ -57,8 +60,6 @@ typedef struct CopyDBOptions
 	uint64_t startpos;
 
 	char filterFileName[MAXPGPATH];
-	char plugin[NAMEDATALEN];
-	char slotName[MAXPGPATH];
 } CopyDBOptions;
 
 extern bool outputJSON;
@@ -74,6 +75,12 @@ char * logLevelToString(int logLevel);
 
 bool cli_copydb_getenv(CopyDBOptions *options);
 bool cli_copydb_is_consistent(CopyDBOptions *options);
+bool cli_read_previous_options(CopyDBOptions *options, CopyFilePaths *cfPaths);
+
+bool cli_read_one_line(const char *filename,
+					   const char *name,
+					   char *target,
+					   size_t size);
 
 int cli_copy_db_getopts(int argc, char **argv);
 

@@ -275,19 +275,21 @@ cli_copydb_getenv(CopyDBOptions *options)
 	/* check --plugin environment variable */
 	if (env_exists(PGCOPYDB_OUTPUT_PLUGIN))
 	{
-		if (!get_env_copy(PGCOPYDB_OUTPUT_PLUGIN,
-						  options->plugin,
-						  sizeof(options->plugin)))
+		char plugin[BUFSIZE] = { 0 };
+
+		if (!get_env_copy(PGCOPYDB_OUTPUT_PLUGIN, plugin, BUFSIZE))
 		{
 			/* errors have already been logged */
 			++errors;
 		}
 
-		if (OutputPluginFromString(options->plugin) == STREAM_PLUGIN_UNKNOWN)
+		options->slot.plugin = OutputPluginFromString(plugin);
+
+		if (options->slot.plugin == STREAM_PLUGIN_UNKNOWN)
 		{
 			log_fatal("Unknown replication plugin \"%s\", please use either "
 					  "test_decoding (the default) or wal2json",
-					  options->plugin);
+					  OutputPluginToString(options->slot.plugin));
 			++errors;
 		}
 	}
@@ -377,6 +379,24 @@ cli_copydb_getenv(CopyDBOptions *options)
 bool
 cli_copydb_is_consistent(CopyDBOptions *options)
 {
+	CopyFilePaths cfPaths = { 0 };
+	char *dir = IS_EMPTY_STRING_BUFFER(options->dir) ? NULL : options->dir;
+
+	if (!copydb_prepare_filepaths(&cfPaths, dir, false))
+	{
+		return false;
+	}
+
+	/*
+	 * Read the snapshot, origin, plugin, and slot-name files from the previous
+	 * command or run, unless --restart is explicitely provided.
+	 */
+	if (!cli_read_previous_options(options, &cfPaths))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	/* when --resume is not used, we're good */
 	if (!options->resume)
 	{
@@ -389,112 +409,228 @@ cli_copydb_is_consistent(CopyDBOptions *options)
 		return true;
 	}
 
-	/* okay, a --snapshot is required, is it the same as the previous run? */
-	CopyFilePaths cfPaths = { 0 };
-
-	char *dir =
-		IS_EMPTY_STRING_BUFFER(options->dir) ? NULL : options->dir;
-
-	if (!copydb_prepare_filepaths(&cfPaths, dir, false))
-	{
-		return false;
-	}
-
 	/*
-	 * If the snapshot file does not exists, then it might be that a snapshot
-	 * has been created by another script/tool, and pgcopydb is now asked to
-	 * re-use that external snapshot. Just get along with it, and let Postgres
-	 * check for the snapshot at SET TRANSACTION SNAPSHOT time.
+	 * Here --resume is used and we're expected to be consisten with the
+	 * previous pgcopydb run/attempt/command. That requires re-using a
+	 * snapshot.
 	 */
-	if (!file_exists(cfPaths.snfile))
-	{
-		if (IS_EMPTY_STRING_BUFFER(options->snapshot))
-		{
-			/* --resume without --snapshot requires --not-consistent */
-			return false;
-		}
-		return true;
-	}
-
-	char *previous_snapshot = NULL;
-	long size = 0L;
-
-	if (!read_file(cfPaths.snfile, &previous_snapshot, &size))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/* make sure to use only the first line of the file, without \n */
-	char *snLines[BUFSIZE] = { 0 };
-	int lineCount = splitLines(previous_snapshot, snLines, BUFSIZE);
-
-	if (lineCount != 1 && IS_EMPTY_STRING_BUFFER(options->snapshot))
-	{
-		/* --resume without snapshot requires --not-consistent */
-		return false;
-	}
-
 	if (IS_EMPTY_STRING_BUFFER(options->snapshot))
 	{
-		strlcpy(options->snapshot, snLines[0], sizeof(options->snapshot));
-
-		log_notice("Re-using snapshot '%s' found at \"%s\"",
-				   options->snapshot,
-				   cfPaths.snfile);
-	}
-	else if (strcmp(snLines[0], options->snapshot) != 0)
-	{
-		log_error("Failed to ensure a consistent snapshot to resume operations");
-		log_error("Previous run was done with snapshot \"%s\" and current run "
-				  "is using --resume --snapshot \"%s\"",
-				  snLines[0],
-				  options->snapshot);
-
-		free(previous_snapshot);
+		/* --resume without --snapshot requires --not-consistent */
+		log_error("Options --snapshot is mandatory unless using --not-consistent");
 		return false;
 	}
 
-	free(previous_snapshot);
+	return true;
+}
 
-	/*
-	 * Check that the --origin option is still the same as in the previous run
-	 * when we're using --resume, otherwise error out. If --not-consistent is
-	 * used, then we allow using a new origin node name.
-	 *
-	 * If the origin file does not exists, then we don't have to check about
-	 * re-using the same origin node name as in the previous run.
-	 */
-	if (!file_exists(cfPaths.cdc.originfile))
+
+/*
+ * cli_read_previous_options reads the options that have been set on a previous
+ * command such as pgcopydb snapshot or pgcopydb stream setup.
+ */
+bool
+cli_read_previous_options(CopyDBOptions *options, CopyFilePaths *cfPaths)
+{
+	struct optFromFile
 	{
-		return true;
+		char *filename;
+		char *optname;
+		char *varname;
+		char *def;
+		char *target;
+		size_t size;
+	}
+	opts[] =
+	{
+		{
+			cfPaths->snfile,
+			"--snapshot",
+			"snapshot",
+			NULL,
+			options->snapshot,
+			sizeof(options->snapshot)
+		},
+		{
+			cfPaths->cdc.originfile,
+			"--origin",
+			"origin",
+			REPLICATION_ORIGIN,
+			options->origin,
+			sizeof(options->origin)
+		}
+	};
+
+	int count = sizeof(opts) / sizeof(opts[0]);
+
+	for (int i = 0; i < count; i++)
+	{
+		/* bypass non-existing files, just use the command line options then */
+		if (options->restart || !file_exists(opts[i].filename))
+		{
+			/* install default value if needed */
+			if (opts[i].def != NULL && IS_EMPTY_STRING_BUFFER(opts[i].target))
+			{
+				strlcpy(opts[i].target, opts[i].def, opts[i].size);
+			}
+
+			continue;
+		}
+
+		/* allocate an intermediate value to read from file */
+		char *val = (char *) calloc(opts[i].size, sizeof(char));
+
+		if (!cli_read_one_line(opts[i].filename,
+							   opts[i].varname,
+							   val,
+							   opts[i].size))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		/* if the command line --option has not been used, use val */
+		if (IS_EMPTY_STRING_BUFFER(opts[i].target))
+		{
+			strlcpy(opts[i].target, val, opts[i].size);
+
+			log_notice("Re-using %s '%s' found at \"%s\"",
+					   opts[i].optname,
+					   opts[i].target,
+					   opts[i].filename);
+		}
+
+		/*
+		 * Otherwise make sure on-file and command line use the same value,
+		 * unless --not-consistent is used, which allows for using new ones.
+		 */
+		else if (!options->notConsistent && !streq(opts[i].target, val))
+		{
+			log_error("Failed to ensure consistency of %s", opts[i].optname);
+			log_error("Previous run was done with %s \"%s\" and current run "
+					  "is using %s \"%s\"",
+					  opts[i].varname,
+					  val,
+					  opts[i].optname,
+					  opts[i].target);
+			return false;
+		}
 	}
 
-	char *previous_origin = NULL;
+	/*
+	 * Now read the replication slot file, which includes information for both
+	 * --slot-name and --plugin option, and more.
+	 */
+	if (options->restart || !file_exists(cfPaths->cdc.slotfile))
+	{
+		/*
+		 * Only install a default value for the --plugin option when it wasn't
+		 * previously set from an environment variable or another way.
+		 */
+		if (IS_EMPTY_STRING_BUFFER(options->slot.slotName))
+		{
+			strlcpy(options->slot.slotName, REPLICATION_SLOT_NAME,
+					sizeof(options->slot.slotName));
+		}
 
-	if (!read_file(cfPaths.cdc.originfile, &previous_origin, &size))
+		if (options->slot.plugin == STREAM_PLUGIN_UNKNOWN)
+		{
+			options->slot.plugin = OutputPluginFromString(REPLICATION_PLUGIN);
+		}
+	}
+	else
+	{
+		ReplicationSlot onFileSlot = { 0 };
+
+		if (!snapshot_read_slot(cfPaths->cdc.slotfile, &onFileSlot))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!IS_EMPTY_STRING_BUFFER(options->slot.slotName) &&
+			!streq(options->slot.slotName, onFileSlot.slotName))
+		{
+			log_error("Failed to ensure consistency of --slot-name");
+			log_error("Previous run was done with slot-name \"%s\" and "
+					  "current run is using --slot-name \"%s\"",
+					  onFileSlot.slotName,
+					  options->slot.slotName);
+			return false;
+		}
+
+		if (options->slot.plugin != STREAM_PLUGIN_UNKNOWN &&
+			options->slot.plugin != onFileSlot.plugin)
+		{
+			log_error("Failed to ensure consistency of --plugin");
+			log_error("Previous run was done with plugin \"%s\" and "
+					  "current run is using --plugin \"%s\"",
+					  OutputPluginToString(onFileSlot.plugin),
+					  OutputPluginToString(options->slot.plugin));
+			return false;
+		}
+
+		/* copy the onFileSlot over to our options, wholesale */
+		options->slot = onFileSlot;
+	}
+
+	if (options->slot.plugin == STREAM_PLUGIN_UNKNOWN)
+	{
+		log_fatal("Unknown replication plugin \"%s\", please use either "
+				  "test_decoding (the default) or wal2json",
+				  OutputPluginToString(options->slot.plugin));
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * cli_read_one_line reads a file with a single line and place the contents of
+ * that line into the given string buffer.
+ */
+bool
+cli_read_one_line(const char *filename,
+				  const char *name,
+				  char *target,
+				  size_t size)
+{
+	char *contents = NULL;
+	long fileSize = 0L;
+
+	if (!read_file(filename, &contents, &fileSize))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
 	/* make sure to use only the first line of the file, without \n */
-	char *originLines[BUFSIZE] = { 0 };
-	lineCount = splitLines(previous_origin, originLines, BUFSIZE);
+	char *lines[BUFSIZE] = { 0 };
+	int lineCount = splitLines(contents, lines, BUFSIZE);
 
-	if (lineCount != 1 || strcmp(originLines[0], options->origin) != 0)
+	if (lineCount != 1)
 	{
-		log_error("Failed to ensure a consistent origin to resume operations");
-		log_error("Previous run was done with origin \"%s\" and current run "
-				  "is using --resume --origin \"%s\"",
-				  originLines[0],
-				  options->origin);
-
-		free(previous_origin);
+		log_error("Failed to parse %s file \"%s\"", name, filename);
+		free(contents);
 		return false;
 	}
 
-	free(previous_origin);
+	if (size < (strlen(lines[0]) + 1))
+	{
+		log_error("Failed to parse %s \"%s\" with %lld bytes, "
+				  "pgcopydb supports only snapshot references up to %lld bytes",
+				  name,
+				  lines[0],
+				  (long long) strlen(lines[0]) + 1,
+				  (long long) size);
+		free(contents);
+		return false;
+	}
+
+	/* publish the one line to the snapshot variable */
+	strlcpy(target, lines[0], size);
+	free(contents);
 
 	return true;
 }
@@ -768,15 +904,16 @@ cli_copy_db_getopts(int argc, char **argv)
 
 			case 's':
 			{
-				strlcpy(options.slotName, optarg, NAMEDATALEN);
-				log_trace("--slot-name %s", options.slotName);
+				strlcpy(options.slot.slotName, optarg, NAMEDATALEN);
+				log_trace("--slot-name %s", options.slot.slotName);
 				break;
 			}
 
 			case 'p':
 			{
-				strlcpy(options.plugin, optarg, NAMEDATALEN);
-				log_trace("--plugin %s", options.plugin);
+				options.slot.plugin = OutputPluginFromString(optarg);
+				log_trace("--plugin %s",
+						  OutputPluginToString(options.slot.plugin));
 				break;
 			}
 
@@ -806,7 +943,7 @@ cli_copy_db_getopts(int argc, char **argv)
 				if (!parseLSN(optarg, &(options.endpos)))
 				{
 					log_fatal("Failed to parse endpos LSN: \"%s\"", optarg);
-					exit(EXIT_CODE_BAD_ARGS);
+					++errors;
 				}
 
 				log_trace("--endpos %X/%X",
@@ -915,39 +1052,6 @@ cli_copy_db_getopts(int argc, char **argv)
 	{
 		log_fatal("Option --resume requires option --not-consistent");
 		exit(EXIT_CODE_BAD_ARGS);
-	}
-
-	/* when --slot-name is not used, use the default slot name "pgcopydb" */
-	if (IS_EMPTY_STRING_BUFFER(options.slotName))
-	{
-		strlcpy(options.slotName,
-				REPLICATION_SLOT_NAME,
-				sizeof(options.slotName));
-	}
-
-	/* when --origin is not used, use the default slot name "pgcopydb" */
-	if (IS_EMPTY_STRING_BUFFER(options.origin))
-	{
-		strlcpy(options.origin, REPLICATION_ORIGIN, sizeof(options.origin));
-		log_info("Using default origin node name \"%s\"", options.origin);
-	}
-
-	/* when --origin is not used, use the default output plugin */
-	if (IS_EMPTY_STRING_BUFFER(options.plugin))
-	{
-		log_info("Using default logical replication output plugin \"%s\"",
-				 REPLICATION_PLUGIN);
-		strlcpy(options.plugin, REPLICATION_PLUGIN, sizeof(options.plugin));
-	}
-	else
-	{
-		if (OutputPluginFromString(options.plugin) == STREAM_PLUGIN_UNKNOWN)
-		{
-			log_fatal("Unknown replication plugin \"%s\", please use either "
-					  "test_decoding (the default) or wal2json",
-					  options.plugin);
-			++errors;
-		}
 	}
 
 	if (errors > 0)

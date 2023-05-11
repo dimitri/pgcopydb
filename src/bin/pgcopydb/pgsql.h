@@ -452,11 +452,16 @@ bool pgsql_init_stream(LogicalStreamClient *client,
 StreamOutputPlugin OutputPluginFromString(char *plugin);
 char * OutputPluginToString(StreamOutputPlugin plugin);
 
+typedef struct ReplicationSlot
+{
+	char slotName[BUFSIZE];
+	uint64_t lsn;
+	char snapshot[BUFSIZE];
+	StreamOutputPlugin plugin;
+} ReplicationSlot;
 
 bool pgsql_create_logical_replication_slot(LogicalStreamClient *client,
-										   uint64_t *lsn,
-										   char *snapshot,
-										   size_t size);
+										   ReplicationSlot *slot);
 
 bool pgsql_timestamptz_to_string(TimestampTz ts, char *str, size_t size);
 

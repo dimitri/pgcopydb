@@ -45,8 +45,7 @@ stream_init_specs(StreamSpecs *specs,
 				  CDCPaths *paths,
 				  char *source_pguri,
 				  char *target_pguri,
-				  char *plugin,
-				  char *slotName,
+				  ReplicationSlot *slot,
 				  char *origin,
 				  uint64_t endpos,
 				  LogicalStreamMode mode,
@@ -63,9 +62,14 @@ stream_init_specs(StreamSpecs *specs,
 	specs->paths = *paths;
 	specs->endpos = endpos;
 
-	specs->plugin = OutputPluginFromString(plugin);
+	/*
+	 * Copy the given ReplicationSlot: it comes from command line parsing, or
+	 * from a previous command that created it and saved information to file.
+	 * Such a sprevious command could be: pgcopydb snapshot --follow.
+	 */
+	specs->slot = *slot;
 
-	switch (specs->plugin)
+	switch (specs->slot.plugin)
 	{
 		case STREAM_PLUGIN_TEST_DECODING:
 		{
@@ -112,14 +116,14 @@ stream_init_specs(StreamSpecs *specs,
 
 		default:
 		{
-			log_error("Unknown logical decoding output plugin \"%s\"", plugin);
+			log_error("Unknown logical decoding output plugin \"%s\"",
+					  OutputPluginToString(slot->plugin));
 			return false;
 		}
 	}
 
 	strlcpy(specs->source_pguri, source_pguri, MAXCONNINFO);
 	strlcpy(specs->target_pguri, target_pguri, MAXCONNINFO);
-	strlcpy(specs->slotName, slotName, sizeof(specs->slotName));
 	strlcpy(specs->origin, origin, sizeof(specs->origin));
 
 	if (!buildReplicationURI(specs->source_pguri, specs->logrep_pguri))
@@ -128,7 +132,9 @@ stream_init_specs(StreamSpecs *specs,
 		return false;
 	}
 
-	log_trace("stream_init_specs: %s(%d)", plugin, specs->pluginOptions.count);
+	log_trace("stream_init_specs: %s(%d)",
+			  OutputPluginToString(slot->plugin),
+			  specs->pluginOptions.count);
 
 	/*
 	 * Now prepare for the follow mode sub-process management.
@@ -371,8 +377,8 @@ startLogicalStreaming(StreamSpecs *specs)
 	{
 		if (!pgsql_init_stream(&stream,
 							   specs->logrep_pguri,
-							   specs->plugin,
-							   specs->slotName,
+							   specs->slot.plugin,
+							   specs->slot.slotName,
 							   specs->startpos,
 							   specs->endpos))
 		{
@@ -381,7 +387,7 @@ startLogicalStreaming(StreamSpecs *specs)
 		}
 
 		log_debug("startLogicalStreaming: %s (%d)",
-				  OutputPluginToString(specs->plugin),
+				  OutputPluginToString(specs->slot.plugin),
 				  specs->pluginOptions.count);
 
 		if (!pgsql_start_replication(&stream))
@@ -506,7 +512,7 @@ streamCheckResumePosition(StreamSpecs *specs)
 			log_info("Resuming streaming at LSN %X/%X "
 					 "from replication slot \"%s\"",
 					 LSN_FORMAT_ARGS(specs->startpos),
-					 specs->slotName);
+					 specs->slot.slotName);
 		}
 	}
 	else
@@ -526,7 +532,7 @@ streamCheckResumePosition(StreamSpecs *specs)
 	bool flush = false;
 	uint64_t lsn = 0;
 
-	if (!pgsql_replication_slot_exists(&src, specs->slotName, &flush, &lsn))
+	if (!pgsql_replication_slot_exists(&src, specs->slot.slotName, &flush, &lsn))
 	{
 		/* errors have already been logged */
 	}
@@ -1856,28 +1862,21 @@ StreamActionFromChar(char action)
 
 
 /*
- * stream_setup_source_database sets up the source database with a replication
- * slot, a sentinel table, and the target database with a replication origin.
+ * stream_setup_source_database sets up the source database with a sentinel
+ * table, and the target database with a replication origin.
  */
 bool
-stream_setup_databases(CopyDataSpec *copySpecs,
-					   StreamOutputPlugin plugin, char *slotName, char *origin)
+stream_setup_databases(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 {
-	uint64_t lsn = 0;
+	ReplicationSlot *slot = &(streamSpecs->slot);
 
-	if (!stream_create_repl_slot(copySpecs, plugin, slotName, &lsn))
+	if (!stream_create_sentinel(copySpecs, slot->lsn, InvalidXLogRecPtr))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	if (!stream_create_sentinel(copySpecs, lsn, InvalidXLogRecPtr))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!stream_create_origin(copySpecs, origin, lsn))
+	if (!stream_create_origin(copySpecs, streamSpecs->origin, slot->lsn))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1943,162 +1942,6 @@ stream_cleanup_databases(CopyDataSpec *copySpecs, char *slotName, char *origin)
 	{
 		log_error("Failed to drop replication origin \"%s\"", origin);
 		return false;
-	}
-
-	return true;
-}
-
-
-/*
- * stream_create_repl_slot creates a replication slot on the source database.
- */
-bool
-stream_create_repl_slot(CopyDataSpec *copySpecs,
-						StreamOutputPlugin plugin,
-						char *slotName,
-						uint64_t *lsn)
-{
-	PGSQL *pgsql = &(copySpecs->sourceSnapshot.pgsql);
-
-	/*
-	 * When using Postgres 9.6, we're using the logical decoding replication
-	 * protocol command CREATE_REPLICATION_SLOT to both create the replication
-	 * and also export a snapshot.
-	 */
-	if (copySpecs->sourceSnapshot.exportedCreateSlotSnapshot)
-	{
-		bool slotExists = false;
-
-		if (!pgsql_init(pgsql, copySpecs->source_pguri, PGSQL_CONN_SOURCE))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		if (!pgsql_begin(pgsql))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		if (!pgsql_server_version(pgsql))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		log_info("Postgres server version %s (%d)",
-				 pgsql->pgversion, pgsql->pgversion_num);
-
-		if (!pgsql_replication_slot_exists(pgsql, slotName, &slotExists, lsn))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		if (!pgsql_commit(pgsql))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		if (!slotExists)
-		{
-			log_error("Logical replication slot \"%s\" does not exist, "
-					  "it is expected to have been created by the replication "
-					  "command CREATE_REPLICATION_SLOT when using Postgres %s",
-					  slotName,
-					  copySpecs->sourceSnapshot.stream.pgsql.pgversion);
-			return false;
-		}
-
-		return true;
-	}
-
-	/*
-	 * When --snapshot has been used, open a transaction using that snapshot.
-	 */
-	if (!IS_EMPTY_STRING_BUFFER(copySpecs->sourceSnapshot.snapshot))
-	{
-		if (!copydb_set_snapshot(copySpecs))
-		{
-			/* errors have already been logged */
-			log_fatal("Failed to use given --snapshot \"%s\"",
-					  copySpecs->sourceSnapshot.snapshot);
-			return false;
-		}
-	}
-	else
-	{
-		if (!pgsql_init(pgsql, copySpecs->source_pguri, PGSQL_CONN_SOURCE))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		if (!pgsql_begin(pgsql))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-	}
-
-	/*
-	 * The pgsql_create_replication_slot SQL query text depends on the source
-	 * Postgres version, because the "lsn" column used to be named
-	 * "xlog_position" in 9.6. Make sure to retrieve the source server version
-	 * now.
-	 */
-	if (!pgsql_server_version(pgsql))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	bool slotExists = false;
-
-	if (!pgsql_replication_slot_exists(pgsql, slotName, &slotExists, lsn))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (slotExists)
-	{
-		if (!copySpecs->resume)
-		{
-			log_error("Failed to create replication slot \"%s\": already exists",
-					  slotName);
-			pgsql_rollback(pgsql);
-			return false;
-		}
-
-		log_info("Logical replication slot \"%s\" already exists at LSN %X/%X",
-				 slotName,
-				 LSN_FORMAT_ARGS(*lsn));
-
-		pgsql_commit(pgsql);
-		return true;
-	}
-	else
-	{
-		if (!pgsql_create_replication_slot(pgsql, slotName, plugin, lsn))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		if (!pgsql_commit(pgsql))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		log_info("Created logical replication slot \"%s\" with plugin \"%s\" "
-				 "at LSN %X/%X",
-				 slotName,
-				 OutputPluginToString(plugin),
-				 LSN_FORMAT_ARGS(*lsn));
 	}
 
 	return true;

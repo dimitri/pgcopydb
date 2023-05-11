@@ -199,8 +199,7 @@ clone_and_follow(CopyDataSpec *copySpecs)
 						   &(copySpecs->cfPaths.cdc),
 						   copySpecs->source_pguri,
 						   copySpecs->target_pguri,
-						   copyDBoptions.plugin,
-						   copyDBoptions.slotName,
+						   &(copyDBoptions.slot),
 						   copyDBoptions.origin,
 						   copyDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
@@ -340,8 +339,7 @@ cli_follow(int argc, char **argv)
 						   &(copySpecs.cfPaths.cdc),
 						   copySpecs.source_pguri,
 						   copySpecs.target_pguri,
-						   copyDBoptions.plugin,
-						   copyDBoptions.slotName,
+						   &(copyDBoptions.slot),
 						   copyDBoptions.origin,
 						   copyDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
@@ -354,13 +352,19 @@ cli_follow(int argc, char **argv)
 	}
 
 	/*
+	 * First create/export a snapshot for the whole clone --follow operations.
+	 */
+	if (!follow_export_snapshot(&copySpecs, &specs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	/*
 	 * First create the replication slot on the source database, and the origin
 	 * (replication progress tracking) on the target database.
 	 */
-	if (!stream_setup_databases(&copySpecs,
-								specs.plugin,
-								specs.slotName,
-								specs.origin))
+	if (!follow_setup_databases(&copySpecs, &specs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

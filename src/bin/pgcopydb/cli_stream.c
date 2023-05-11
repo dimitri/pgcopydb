@@ -175,8 +175,6 @@ static CommandLine *stream_subcommands[] = {
 	&stream_prefetch_command,
 	&stream_catchup_command,
 	&stream_replay_command,
-	&create_commands,
-	&drop_commands,
 	&sentinel_commands,
 	&stream_receive_command,
 	&stream_transform_command,
@@ -197,8 +195,8 @@ static int
 cli_stream_getopts(int argc, char **argv)
 {
 	CopyDBOptions options = { 0 };
-	int c, option_index = 0;
-	int errors = 0, verboseCount = 0;
+	int c, option_index = 0, errors = 0;
+	int verboseCount = 0;
 
 	static struct option long_options[] = {
 		{ "source", required_argument, NULL, 'S' },
@@ -244,7 +242,7 @@ cli_stream_getopts(int argc, char **argv)
 				{
 					log_fatal("Failed to parse --source connection string, "
 							  "see above for details.");
-					exit(EXIT_CODE_BAD_ARGS);
+					++errors;
 				}
 				strlcpy(options.source_pguri, optarg, MAXCONNINFO);
 				log_trace("--source %s", options.source_pguri);
@@ -273,15 +271,16 @@ cli_stream_getopts(int argc, char **argv)
 
 			case 's':
 			{
-				strlcpy(options.slotName, optarg, NAMEDATALEN);
-				log_trace("--slot-name %s", options.slotName);
+				strlcpy(options.slot.slotName, optarg, NAMEDATALEN);
+				log_trace("--slot-name %s", options.slot.slotName);
 				break;
 			}
 
 			case 'p':
 			{
-				strlcpy(options.plugin, optarg, NAMEDATALEN);
-				log_trace("--plugin %s", options.plugin);
+				options.slot.plugin = OutputPluginFromString(optarg);
+				log_trace("--plugin %s",
+						  OutputPluginToString(options.slot.plugin));
 				break;
 			}
 
@@ -304,7 +303,7 @@ cli_stream_getopts(int argc, char **argv)
 				if (!parseLSN(optarg, &(options.endpos)))
 				{
 					log_fatal("Failed to parse endpos LSN: \"%s\"", optarg);
-					exit(EXIT_CODE_BAD_ARGS);
+					++errors;
 				}
 
 				log_trace("--endpos %X/%X",
@@ -423,20 +422,12 @@ cli_stream_getopts(int argc, char **argv)
 				exit(EXIT_CODE_QUIT);
 				break;
 			}
-		}
-	}
 
-	/* stream commands support the source URI environment variable */
-	if (IS_EMPTY_STRING_BUFFER(options.source_pguri))
-	{
-		if (env_exists(PGCOPYDB_SOURCE_PGURI))
-		{
-			if (!get_env_copy(PGCOPYDB_SOURCE_PGURI,
-							  options.source_pguri,
-							  sizeof(options.source_pguri)))
+			case '?':
 			{
-				/* errors have already been logged */
-				++errors;
+				commandline_help(stderr);
+				exit(EXIT_CODE_BAD_ARGS);
+				break;
 			}
 		}
 	}
@@ -448,38 +439,15 @@ cli_stream_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	/* when --slot-name is not used, use the default slot name "pgcopydb" */
-	if (IS_EMPTY_STRING_BUFFER(options.slotName))
+	if (!cli_copydb_is_consistent(&options))
 	{
-		strlcpy(options.slotName,
-				REPLICATION_SLOT_NAME,
-				sizeof(options.slotName));
-	}
-
-	if (IS_EMPTY_STRING_BUFFER(options.origin))
-	{
-		strlcpy(options.origin, REPLICATION_ORIGIN, sizeof(options.origin));
-		log_info("Using default origin node name \"%s\"", options.origin);
-	}
-
-	if (IS_EMPTY_STRING_BUFFER(options.plugin))
-	{
-		strlcpy(options.plugin, REPLICATION_PLUGIN, sizeof(options.plugin));
-		log_info("Using default output plugin \"%s\"", options.plugin);
-	}
-	else
-	{
-		if (OutputPluginFromString(options.plugin) == STREAM_PLUGIN_UNKNOWN)
-		{
-			log_fatal("Unknown replication plugin \"%s\", please use either "
-					  "test_decoding (the default) or wal2json",
-					  options.plugin);
-			++errors;
-		}
+		log_fatal("Option --resume requires option --not-consistent");
+		exit(EXIT_CODE_BAD_ARGS);
 	}
 
 	if (errors > 0)
 	{
+		commandline_help(stderr);
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
@@ -570,10 +538,32 @@ cli_stream_setup(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (!stream_setup_databases(&copySpecs,
-								OutputPluginFromString(streamDBoptions.plugin),
-								streamDBoptions.slotName,
-								streamDBoptions.origin))
+	/*
+	 * Refrain from logging SQL statements in the apply module, because they
+	 * contain user data. That said, when --trace has been used, bypass that
+	 * privacy feature.
+	 */
+	bool logSQL = log_get_level() <= LOG_TRACE;
+
+	StreamSpecs specs = { 0 };
+
+	if (!stream_init_specs(&specs,
+						   &(copySpecs.cfPaths.cdc),
+						   copySpecs.source_pguri,
+						   copySpecs.target_pguri,
+						   &(streamDBoptions.slot),
+						   streamDBoptions.origin,
+						   streamDBoptions.endpos,
+						   STREAM_MODE_CATCHUP,
+						   streamDBoptions.stdIn,
+						   streamDBoptions.stdOut,
+						   logSQL))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!stream_setup_databases(&copySpecs, &specs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -608,7 +598,7 @@ cli_stream_cleanup(int argc, char **argv)
 	copySpecs.restart = false;  /* pretend --restart has NOT been used */
 
 	if (!stream_cleanup_databases(&copySpecs,
-								  streamDBoptions.slotName,
+								  streamDBoptions.slot.slotName,
 								  streamDBoptions.origin))
 	{
 		/* errors have already been logged */
@@ -673,8 +663,7 @@ cli_stream_catchup(int argc, char **argv)
 						   &(copySpecs.cfPaths.cdc),
 						   copySpecs.source_pguri,
 						   copySpecs.target_pguri,
-						   streamDBoptions.plugin,
-						   streamDBoptions.slotName,
+						   &(streamDBoptions.slot),
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
@@ -757,8 +746,7 @@ cli_stream_replay(int argc, char **argv)
 						   &(copySpecs.cfPaths.cdc),
 						   copySpecs.source_pguri,
 						   copySpecs.target_pguri,
-						   streamDBoptions.plugin,
-						   streamDBoptions.slotName,
+						   &(streamDBoptions.slot),
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   STREAM_MODE_REPLAY,
@@ -883,8 +871,7 @@ cli_stream_transform(int argc, char **argv)
 						   &(copySpecs.cfPaths.cdc),
 						   copySpecs.source_pguri,
 						   copySpecs.target_pguri,
-						   streamDBoptions.plugin,
-						   streamDBoptions.slotName,
+						   &(streamDBoptions.slot),
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
@@ -1019,8 +1006,7 @@ cli_stream_apply(int argc, char **argv)
 							   &(copySpecs.cfPaths.cdc),
 							   copySpecs.source_pguri,
 							   copySpecs.target_pguri,
-							   streamDBoptions.plugin,
-							   streamDBoptions.slotName,
+							   &(streamDBoptions.slot),
 							   streamDBoptions.origin,
 							   streamDBoptions.endpos,
 							   STREAM_MODE_CATCHUP,
@@ -1119,8 +1105,7 @@ stream_start_in_mode(LogicalStreamMode mode)
 						   &(copySpecs.cfPaths.cdc),
 						   copySpecs.source_pguri,
 						   copySpecs.target_pguri,
-						   streamDBoptions.plugin,
-						   streamDBoptions.slotName,
+						   &(streamDBoptions.slot),
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   mode,
