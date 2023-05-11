@@ -1881,8 +1881,18 @@ is_response_ok(PGresult *result)
 {
 	ExecStatusType resultStatus = PQresultStatus(result);
 
-	return resultStatus == PGRES_SINGLE_TUPLE || resultStatus == PGRES_TUPLES_OK ||
-		   resultStatus == PGRES_COMMAND_OK;
+	bool ok =
+		resultStatus == PGRES_SINGLE_TUPLE ||
+		resultStatus == PGRES_TUPLES_OK ||
+		resultStatus == PGRES_COPY_BOTH ||
+		resultStatus == PGRES_COMMAND_OK;
+
+	if (!ok)
+	{
+		log_error("Postgres result status is %s", PQresStatus(resultStatus));
+	}
+
+	return ok;
 }
 
 
@@ -1957,11 +1967,9 @@ clear_results(PGSQL *pgsql)
 			char *errorLines[BUFSIZE] = { 0 };
 			int lineCount = splitLines(pqmessage, errorLines, BUFSIZE);
 
-			log_error("Failure from Postgres:");
-
 			for (int lineNumber = 0; lineNumber < lineCount; lineNumber++)
 			{
-				log_error("%s", errorLines[lineNumber]);
+				log_error("[Postgres] %s", errorLines[lineNumber]);
 			}
 
 			PQclear(result);
