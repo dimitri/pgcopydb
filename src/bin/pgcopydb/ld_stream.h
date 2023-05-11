@@ -341,10 +341,9 @@ struct StreamSpecs
 	uint32_t WalSegSz;
 	IdentifySystem system;
 
-	StreamOutputPlugin plugin;
+	ReplicationSlot slot;
 	KeyVal pluginOptions;
 
-	char slotName[NAMEDATALEN];
 	char origin[NAMEDATALEN];
 
 	uint64_t startpos;
@@ -390,8 +389,7 @@ bool stream_init_specs(StreamSpecs *specs,
 					   CDCPaths *paths,
 					   char *source_pguri,
 					   char *target_pguri,
-					   char *plugin,
-					   char *slotName,
+					   ReplicationSlot *slot,
 					   char *origin,
 					   uint64_t endpos,
 					   LogicalStreamMode mode,
@@ -438,19 +436,11 @@ bool stream_update_latest_symlink(StreamContext *privateContext,
 
 bool buildReplicationURI(const char *pguri, char *repl_pguri);
 
-bool stream_setup_databases(CopyDataSpec *copySpecs,
-							StreamOutputPlugin plugin,
-							char *slotName,
-							char *origin);
+bool stream_setup_databases(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
 
 bool stream_cleanup_databases(CopyDataSpec *copySpecs,
 							  char *slotName,
 							  char *origin);
-
-bool stream_create_repl_slot(CopyDataSpec *copySpecs,
-							 StreamOutputPlugin plugin,
-							 char *slotName,
-							 uint64_t *lsn);
 
 bool stream_create_origin(CopyDataSpec *copySpecs,
 						  char *nodeName, uint64_t startpos);

@@ -275,19 +275,21 @@ cli_copydb_getenv(CopyDBOptions *options)
 	/* check --plugin environment variable */
 	if (env_exists(PGCOPYDB_OUTPUT_PLUGIN))
 	{
-		if (!get_env_copy(PGCOPYDB_OUTPUT_PLUGIN,
-						  options->plugin,
-						  sizeof(options->plugin)))
+		char plugin[BUFSIZE] = { 0 };
+
+		if (!get_env_copy(PGCOPYDB_OUTPUT_PLUGIN, plugin, BUFSIZE))
 		{
 			/* errors have already been logged */
 			++errors;
 		}
 
-		if (OutputPluginFromString(options->plugin) == STREAM_PLUGIN_UNKNOWN)
+		options->slot.plugin = OutputPluginFromString(plugin);
+
+		if (options->slot.plugin == STREAM_PLUGIN_UNKNOWN)
 		{
 			log_fatal("Unknown replication plugin \"%s\", please use either "
 					  "test_decoding (the default) or wal2json",
-					  options->plugin);
+					  OutputPluginToString(options->slot.plugin));
 			++errors;
 		}
 	}
@@ -456,23 +458,7 @@ cli_read_previous_options(CopyDBOptions *options, CopyFilePaths *cfPaths)
 			REPLICATION_ORIGIN,
 			options->origin,
 			sizeof(options->origin)
-		},
-		{
-			cfPaths->cdc.pluginfile,
-			"--plugin",
-			"plugin",
-			REPLICATION_PLUGIN,
-			options->plugin,
-			sizeof(options->plugin)
-		},
-		{
-			cfPaths->cdc.slotnamefile,
-			"--slot-name",
-			"slotname",
-			REPLICATION_SLOT_NAME,
-			options->slotName,
-			sizeof(options->slotName)
-		},
+		}
 	};
 
 	int count = sizeof(opts) / sizeof(opts[0]);
@@ -531,11 +517,59 @@ cli_read_previous_options(CopyDBOptions *options, CopyFilePaths *cfPaths)
 		}
 	}
 
-	if (OutputPluginFromString(options->plugin) == STREAM_PLUGIN_UNKNOWN)
+	/*
+	 * Now read the replication slot file, which includes information for both
+	 * --slot-name and --plugin option, and more.
+	 */
+	if (options->restart || !file_exists(cfPaths->cdc.slotfile))
+	{
+		/* install default values */
+		strlcpy(options->slot.slotName, REPLICATION_SLOT_NAME,
+				sizeof(options->slot.slotName));
+
+		options->slot.plugin = OutputPluginFromString(REPLICATION_PLUGIN);
+	}
+	else
+	{
+		ReplicationSlot onFileSlot = { 0 };
+
+		if (!snapshot_read_slot(cfPaths->cdc.slotfile, &onFileSlot))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!IS_EMPTY_STRING_BUFFER(options->slot.slotName) &&
+			!streq(options->slot.slotName, onFileSlot.slotName))
+		{
+			log_error("Failed to ensure consistency of slot-name");
+			log_error("Previous run was done with slot-name \"%s\" and "
+					  "current run is using --slot-name \"%s\"",
+					  onFileSlot.slotName,
+					  options->slot.slotName);
+			return false;
+		}
+
+		if (options->slot.plugin != STREAM_PLUGIN_UNKNOWN &&
+			options->slot.plugin != onFileSlot.plugin)
+		{
+			log_error("Failed to ensure consistency of plugin");
+			log_error("Previous run was done with plugin \"%s\" and "
+					  "current run is using --plugin \"%s\"",
+					  OutputPluginToString(onFileSlot.plugin),
+					  OutputPluginToString(options->slot.plugin));
+			return false;
+		}
+
+		/* copy the onFileSlot over to our options, wholesale */
+		options->slot = onFileSlot;
+	}
+
+	if (options->slot.plugin == STREAM_PLUGIN_UNKNOWN)
 	{
 		log_fatal("Unknown replication plugin \"%s\", please use either "
 				  "test_decoding (the default) or wal2json",
-				  options->plugin);
+				  OutputPluginToString(options->slot.plugin));
 		return false;
 	}
 
@@ -861,15 +895,16 @@ cli_copy_db_getopts(int argc, char **argv)
 
 			case 's':
 			{
-				strlcpy(options.slotName, optarg, NAMEDATALEN);
-				log_trace("--slot-name %s", options.slotName);
+				strlcpy(options.slot.slotName, optarg, NAMEDATALEN);
+				log_trace("--slot-name %s", options.slot.slotName);
 				break;
 			}
 
 			case 'p':
 			{
-				strlcpy(options.plugin, optarg, NAMEDATALEN);
-				log_trace("--plugin %s", options.plugin);
+				options.slot.plugin = OutputPluginFromString(optarg);
+				log_trace("--plugin %s",
+						  OutputPluginToString(options.slot.plugin));
 				break;
 			}
 
@@ -899,7 +934,7 @@ cli_copy_db_getopts(int argc, char **argv)
 				if (!parseLSN(optarg, &(options.endpos)))
 				{
 					log_fatal("Failed to parse endpos LSN: \"%s\"", optarg);
-					exit(EXIT_CODE_BAD_ARGS);
+					++errors;
 				}
 
 				log_trace("--endpos %X/%X",

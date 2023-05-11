@@ -45,6 +45,8 @@ typedef struct CopyDBOptions
 	bool restart;
 	bool resume;
 	bool notConsistent;
+
+	ReplicationSlot slot;
 	char snapshot[BUFSIZE];
 	char origin[BUFSIZE];
 
@@ -58,8 +60,6 @@ typedef struct CopyDBOptions
 	uint64_t startpos;
 
 	char filterFileName[MAXPGPATH];
-	char plugin[NAMEDATALEN];
-	char slotName[MAXPGPATH];
 } CopyDBOptions;
 
 extern bool outputJSON;

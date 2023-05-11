@@ -25,44 +25,16 @@
 bool
 follow_export_snapshot(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 {
-	TransactionSnapshot *snapshot = &(copySpecs->sourceSnapshot);
-	PGSQL *pgsql = &(snapshot->pgsql);
-
-	if (!pgsql_init(pgsql, copySpecs->source_pguri, PGSQL_CONN_SOURCE))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!pgsql_server_version(pgsql))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	/*
-	 * When using PostgreSQL 9.6 logical decoding, we need to create our
-	 * replication slot and fetch the snapshot from that logical replication
-	 * command, it's the only way.
+	 * When using logical decoding, we need to create our replication slot and
+	 * fetch the snapshot from that logical replication command.
 	 */
-	if (pgsql->pgversion_num < 100000)
+	if (!copydb_create_logical_replication_slot(copySpecs,
+												streamSpecs->logrep_pguri,
+												&(streamSpecs->slot)))
 	{
-		if (!copydb_create_logical_replication_slot(copySpecs,
-													streamSpecs->logrep_pguri,
-													streamSpecs->plugin,
-													streamSpecs->slotName))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-	}
-	else
-	{
-		if (!copydb_prepare_snapshot(copySpecs))
-		{
-			/* errors have already been logged */
-			return false;
-		}
+		/* errors have already been logged */
+		return false;
 	}
 
 	return true;
@@ -103,10 +75,7 @@ follow_setup_databases(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	 * the source database, and the origin (replication progress tracking)
 	 * on the target database.
 	 */
-	if (!stream_setup_databases(&setupSpecs,
-								streamSpecs->plugin,
-								streamSpecs->slotName,
-								streamSpecs->origin))
+	if (!stream_setup_databases(&setupSpecs, streamSpecs))
 	{
 		/* errors have already been logged */
 		return false;

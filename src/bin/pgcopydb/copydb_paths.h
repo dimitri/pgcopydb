@@ -49,8 +49,7 @@ typedef struct CDCPaths
 {
 	char dir[MAXPGPATH];              /* /tmp/pgcopydb/cdc */
 	char originfile[MAXPGPATH];       /* /tmp/pgcopydb/cdc/origin */
-	char pluginfile[MAXPGPATH];       /* /tmp/pgcopydb/cdc/plugin */
-	char slotnamefile[MAXPGPATH];     /* /tmp/pgcopydb/cdc/slotname */
+	char slotfile[MAXPGPATH];         /* /tmp/pgcopydb/cdc/slot */
 	char walsegsizefile[MAXPGPATH];   /* /tmp/pgcopydb/cdc/wal_segment_size */
 	char tlifile[MAXPGPATH];          /* /tmp/pgcopydb/cdc/tli */
 	char tlihistfile[MAXPGPATH];      /* /tmp/pgcopydb/cdc/tli.history */
