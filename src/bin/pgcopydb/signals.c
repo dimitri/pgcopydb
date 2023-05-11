@@ -195,6 +195,20 @@ get_current_signal(int defaultSignal)
 
 
 /*
+ * unset_signal_flags assigns 0 to all our control flags. Use to avoid
+ * re-processing an exit flag that is currently being processed already.
+ */
+void
+unset_signal_flags()
+{
+	asked_to_stop = 0;
+	asked_to_stop_fast = 0;
+	asked_to_quit = 0;
+	asked_to_reload = 0;
+}
+
+
+/*
  * pick_stronger_signal returns the "stronger" signal among the two given
  * arguments.
  *

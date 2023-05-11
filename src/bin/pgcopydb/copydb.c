@@ -37,6 +37,7 @@ GUC srcSettings95[] = {
 
 GUC srcSettings[] = {
 	COMMON_GUC_SETTINGS
+	{ "extra_float_digits", "3" },
 	{ "idle_in_transaction_session_timeout", "0" },
 	{ NULL, NULL },
 };
@@ -530,6 +531,10 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths,
 	/* now prepare the originfile and timelinehistfile path */
 	sformat(cfPaths->cdc.originfile, MAXPGPATH,
 			"%s/origin",
+			cfPaths->cdc.dir);
+
+	sformat(cfPaths->cdc.slotfile, MAXPGPATH,
+			"%s/slot",
 			cfPaths->cdc.dir);
 
 	sformat(cfPaths->cdc.tlihistfile, MAXPGPATH,

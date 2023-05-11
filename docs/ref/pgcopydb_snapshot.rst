@@ -17,6 +17,9 @@ expect to find it.
 
      --source         Postgres URI to the source database
      --dir            Work directory to use
+     --follow         Implement logical decoding to replay changes
+     --plugin         Output plugin to use (test_decoding, wal2json)
+     --slot-name      Use this Postgres replication slot name
 
 Options
 -------
@@ -40,6 +43,33 @@ drop`` subcommands:
   location given by this option, or defaults to
   ``${TMPDIR}/pgcopydb`` when the environment variable is set, or
   then to ``/tmp/pgcopydb``.
+
+--follow
+
+  When the ``--follow`` option is used then pgcopydb implements Change Data
+  Capture as detailed in the manual page for :ref:`pgcopydb_follow` in
+  parallel to the main copy database steps.
+
+  The replication slot is created using the Postgres replication protocol
+  command CREATE_REPLICATION_SLOT, which then exports the snapshot being
+  used in that command.
+
+--plugin
+
+  Logical decoding output plugin to use. The default is `test_decoding`__
+  which ships with Postgres core itself, so is probably already available on
+  your source server.
+
+  It is possible to use `wal2json`__ instead. The support for wal2json is
+  mostly historical in pgcopydb, it should not make a user visible
+  difference whether you use the default test_decoding or wal2json.
+
+  __ https://www.postgresql.org/docs/current/test-decoding.html
+  __ https://github.com/eulerto/wal2json/
+
+--slot-name
+
+  Logical decoding slot name to use.
 
 --verbose
 

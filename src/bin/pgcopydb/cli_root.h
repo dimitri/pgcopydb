@@ -43,10 +43,8 @@ extern CommandLine fork_command;
 extern CommandLine follow_command;
 extern CommandLine copy_commands;
 
-/* cli_create.c */
+/* cli_snapshot.c */
 extern CommandLine create_snapshot_command;
-extern CommandLine create_commands;
-extern CommandLine drop_commands;
 
 /* cli_dump.h */
 extern CommandLine dump_commands;

@@ -1881,8 +1881,18 @@ is_response_ok(PGresult *result)
 {
 	ExecStatusType resultStatus = PQresultStatus(result);
 
-	return resultStatus == PGRES_SINGLE_TUPLE || resultStatus == PGRES_TUPLES_OK ||
-		   resultStatus == PGRES_COMMAND_OK;
+	bool ok =
+		resultStatus == PGRES_SINGLE_TUPLE ||
+		resultStatus == PGRES_TUPLES_OK ||
+		resultStatus == PGRES_COPY_BOTH ||
+		resultStatus == PGRES_COMMAND_OK;
+
+	if (!ok)
+	{
+		log_error("Postgres result status is %s", PQresStatus(resultStatus));
+	}
+
+	return ok;
 }
 
 
@@ -1957,11 +1967,9 @@ clear_results(PGSQL *pgsql)
 			char *errorLines[BUFSIZE] = { 0 };
 			int lineCount = splitLines(pqmessage, errorLines, BUFSIZE);
 
-			log_error("Failure from Postgres:");
-
 			for (int lineNumber = 0; lineNumber < lineCount; lineNumber++)
 			{
-				log_error("%s", errorLines[lineNumber]);
+				log_error("[Postgres] %s", errorLines[lineNumber]);
 			}
 
 			PQclear(result);
@@ -3514,9 +3522,7 @@ OutputPluginToString(StreamOutputPlugin plugin)
  */
 bool
 pgsql_create_logical_replication_slot(LogicalStreamClient *client,
-									  uint64_t *lsn,
-									  char *snapshot,
-									  size_t size)
+									  ReplicationSlot *slot)
 {
 	PGSQL *pgsql = &(client->pgsql);
 
@@ -3578,10 +3584,12 @@ pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 		return false;
 	}
 
+	strlcpy(value, slot->slotName, sizeof(slot->slotName));
+
 	/* 2. consistent_point */
 	value = PQgetvalue(result, 0, 1);
 
-	if (!parseLSN(value, lsn))
+	if (!parseLSN(value, &(slot->lsn)))
 	{
 		log_error("Failed to parse consistent_point LSN \"%s\" returned by "
 				  " logical replication command CREATE_REPLICATION_SLOT",
@@ -3601,12 +3609,12 @@ pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 	else
 	{
 		value = PQgetvalue(result, 0, 2);
-		int length = strlcpy(snapshot, value, BUFSIZE);
+		int length = strlcpy(slot->snapshot, value, sizeof(slot->snapshot));
 
-		if (length >= size)
+		if (length >= sizeof(slot->snapshot))
 		{
 			log_error("Snapshot \"%s\" is %d bytes long, the maximum is %ld",
-					  value, length, size - 1);
+					  value, length, sizeof(slot->snapshot) - 1);
 			pgsql_finish(pgsql);
 			return false;
 		}
@@ -3634,13 +3642,16 @@ pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 			pgsql_finish(pgsql);
 			return false;
 		}
+
+		slot->plugin = client->plugin;
 	}
 
-	log_notice("Created logical replication slot \"%s\" with plugin \"%s\" "
-			   "at %X/%X",
-			   client->slotName,
-			   OutputPluginToString(client->plugin),
-			   LSN_FORMAT_ARGS(*lsn));
+	log_info("Created logical replication slot \"%s\" with plugin \"%s\" "
+			 "at %X/%X and exported snapshot %s",
+			 slot->slotName,
+			 OutputPluginToString(slot->plugin),
+			 LSN_FORMAT_ARGS(slot->lsn),
+			 slot->snapshot);
 
 	return true;
 }
@@ -4203,6 +4214,9 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 
 	clear_results(pgsql);
 	pgsql_finish(pgsql);
+
+	/* unset the signals which have been processed correctly now */
+	(void) unset_signal_flags();
 
 	/* call the closeFunction callback now */
 	if (!(*client->closeFunction)(context))

@@ -39,6 +39,9 @@ follow-9.6: build
 extensions: build
 	$(MAKE) -C $@
 
+follow-data-only: build
+	$(MAKE) -C $@
+
 build:
 	docker build -t pagila -f Dockerfile.pagila .
 

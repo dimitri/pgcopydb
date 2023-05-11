@@ -23,10 +23,18 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/ddl.sql
 
 # create the replication slot that captures all the changes
 # PGCOPYDB_OUTPUT_PLUGIN is set to test_decoding in docker-compose.yml
+coproc ( pgcopydb snapshot --follow )
+
+sleep 1
+
+# now setup the replication origin (target) and the pgcopydb.sentinel (source)
 pgcopydb stream setup
 
 # pgcopydb copy db uses the environment variables
 pgcopydb copy-db
+
+kill -TERM ${COPROC_PID}
+wait ${COPROC_PID}
 
 # now that the copying is done, inject some SQL DML changes to the source
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql

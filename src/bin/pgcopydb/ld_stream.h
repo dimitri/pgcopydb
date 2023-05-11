@@ -338,10 +338,12 @@ struct StreamSpecs
 	char logrep_pguri[MAXCONNINFO];
 	char target_pguri[MAXCONNINFO];
 
-	StreamOutputPlugin plugin;
+	uint32_t WalSegSz;
+	IdentifySystem system;
+
+	ReplicationSlot slot;
 	KeyVal pluginOptions;
 
-	char slotName[NAMEDATALEN];
 	char origin[NAMEDATALEN];
 
 	uint64_t startpos;
@@ -387,8 +389,7 @@ bool stream_init_specs(StreamSpecs *specs,
 					   CDCPaths *paths,
 					   char *source_pguri,
 					   char *target_pguri,
-					   char *plugin,
-					   char *slotName,
+					   ReplicationSlot *slot,
 					   char *origin,
 					   uint64_t endpos,
 					   LogicalStreamMode mode,
@@ -435,19 +436,11 @@ bool stream_update_latest_symlink(StreamContext *privateContext,
 
 bool buildReplicationURI(const char *pguri, char *repl_pguri);
 
-bool stream_setup_databases(CopyDataSpec *copySpecs,
-							StreamOutputPlugin plugin,
-							char *slotName,
-							char *origin);
+bool stream_setup_databases(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
 
 bool stream_cleanup_databases(CopyDataSpec *copySpecs,
 							  char *slotName,
 							  char *origin);
-
-bool stream_create_repl_slot(CopyDataSpec *copySpecs,
-							 StreamOutputPlugin plugin,
-							 char *slotName,
-							 uint64_t *lsn);
 
 bool stream_create_origin(CopyDataSpec *copySpecs,
 						  char *nodeName, uint64_t startpos);
@@ -466,6 +459,7 @@ StreamAction StreamActionFromChar(char action);
 
 /* ld_transform.c */
 bool stream_transform_worker(StreamSpecs *specs);
+bool stream_transform_from_queue(StreamSpecs *specs);
 bool stream_transform_add_file(Queue *queue, uint64_t firstLSN);
 bool stream_transform_send_stop(Queue *queue);
 
@@ -487,6 +481,8 @@ bool stream_transform_rotate(StreamContext *privateContext,
 							 LogicalMessageMetadata *metadata);
 
 bool stream_transform_file(char *jsonfilename, char *sqlfilename);
+bool stream_transform_file_at_lsn(StreamSpecs *specs, uint64_t lsn);
+
 bool stream_write_message(FILE *out, LogicalMessage *msg);
 bool stream_write_transaction(FILE *out, LogicalTransaction *tx);
 bool stream_write_begin(FILE *out, LogicalTransaction *tx);
@@ -575,6 +571,9 @@ bool follow_get_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel);
 bool follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
 
 bool followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
+
+bool follow_reached_endpos(StreamSpecs *streamSpecs, bool *done);
+bool follow_prepare_mode_switch(StreamSpecs *streamSpecs);
 
 bool follow_start_subprocess(StreamSpecs *specs, FollowSubProcess *subprocess);
 
