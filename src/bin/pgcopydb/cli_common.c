@@ -506,7 +506,7 @@ cli_read_previous_options(CopyDBOptions *options, CopyFilePaths *cfPaths)
 		 */
 		else if (!options->notConsistent && !streq(opts[i].target, val))
 		{
-			log_error("Failed to ensure consistency of %s", opts[i].varname);
+			log_error("Failed to ensure consistency of %s", opts[i].optname);
 			log_error("Previous run was done with %s \"%s\" and current run "
 					  "is using %s \"%s\"",
 					  opts[i].varname,
@@ -523,11 +523,20 @@ cli_read_previous_options(CopyDBOptions *options, CopyFilePaths *cfPaths)
 	 */
 	if (options->restart || !file_exists(cfPaths->cdc.slotfile))
 	{
-		/* install default values */
-		strlcpy(options->slot.slotName, REPLICATION_SLOT_NAME,
-				sizeof(options->slot.slotName));
+		/*
+		 * Only install a default value for the --plugin option when it wasn't
+		 * previously set from an environment variable or another way.
+		 */
+		if (IS_EMPTY_STRING_BUFFER(options->slot.slotName))
+		{
+			strlcpy(options->slot.slotName, REPLICATION_SLOT_NAME,
+					sizeof(options->slot.slotName));
+		}
 
-		options->slot.plugin = OutputPluginFromString(REPLICATION_PLUGIN);
+		if (options->slot.plugin == STREAM_PLUGIN_UNKNOWN)
+		{
+			options->slot.plugin = OutputPluginFromString(REPLICATION_PLUGIN);
+		}
 	}
 	else
 	{
@@ -542,7 +551,7 @@ cli_read_previous_options(CopyDBOptions *options, CopyFilePaths *cfPaths)
 		if (!IS_EMPTY_STRING_BUFFER(options->slot.slotName) &&
 			!streq(options->slot.slotName, onFileSlot.slotName))
 		{
-			log_error("Failed to ensure consistency of slot-name");
+			log_error("Failed to ensure consistency of --slot-name");
 			log_error("Previous run was done with slot-name \"%s\" and "
 					  "current run is using --slot-name \"%s\"",
 					  onFileSlot.slotName,
@@ -553,7 +562,7 @@ cli_read_previous_options(CopyDBOptions *options, CopyFilePaths *cfPaths)
 		if (options->slot.plugin != STREAM_PLUGIN_UNKNOWN &&
 			options->slot.plugin != onFileSlot.plugin)
 		{
-			log_error("Failed to ensure consistency of plugin");
+			log_error("Failed to ensure consistency of --plugin");
 			log_error("Previous run was done with plugin \"%s\" and "
 					  "current run is using --plugin \"%s\"",
 					  OutputPluginToString(onFileSlot.plugin),

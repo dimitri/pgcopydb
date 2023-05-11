@@ -22,6 +22,8 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/ddl.sql
 # create the replication slot that captures all the changes
 coproc ( pgcopydb snapshot --follow )
 
+sleep 1
+
 # now setup the replication origin (target) and the pgcopydb.sentinel (source)
 pgcopydb stream setup
 

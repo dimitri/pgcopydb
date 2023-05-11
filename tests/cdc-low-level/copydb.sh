@@ -25,6 +25,8 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/ddl.sql
 # PGCOPYDB_OUTPUT_PLUGIN is set to test_decoding in docker-compose.yml
 coproc ( pgcopydb snapshot --follow )
 
+sleep 1
+
 # now setup the replication origin (target) and the pgcopydb.sentinel (source)
 pgcopydb stream setup
 

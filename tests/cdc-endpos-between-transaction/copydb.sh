@@ -9,6 +9,9 @@ set -e
 #  - PGCOPYDB_TARGET_PGURI
 #  - PGCOPYDB_TABLE_JOBS
 #  - PGCOPYDB_INDEX_JOBS
+#  - PGCOPYDB_OUTPUT_PLUGIN
+
+env | grep ^PGCOPYDB
 
 # make sure source and target databases are ready
 pgcopydb ping
@@ -23,7 +26,9 @@ slot=pgcopydb
 
 # create the replication slot that captures all the changes
 # PGCOPYDB_OUTPUT_PLUGIN is set to wal2json in docker-compose.yml
-coproc ( pgcopydb snapshot --follow --slot-name ${slot} --plugin wal2json )
+coproc ( pgcopydb snapshot --follow --slot-name ${slot} )
+
+sleep 1
 
 # now setup the replication origin (target) and the pgcopydb.sentinel (source)
 pgcopydb stream setup
