@@ -17,6 +17,7 @@
 #include "cli_common.h"
 #include "cli_root.h"
 #include "commandline.h"
+#include "config.h"
 #include "copydb.h"
 #include "env_utils.h"
 #include "file_utils.h"
@@ -1150,6 +1151,14 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 							 copyDBoptions.restart,
 							 copyDBoptions.resume,
 							 createWorkDir))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	(void) config_init(&copyDBoptions);
+
+	if (!config_write_file(&copyDBoptions, copySpecs->cfPaths.conffile))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

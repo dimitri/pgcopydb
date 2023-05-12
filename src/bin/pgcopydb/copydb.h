@@ -281,6 +281,15 @@ typedef enum
 } PostgresDumpSection;
 
 
+/* on-reload hooks */
+typedef void (*reloadHook) (CopyDataSpec *specs);
+
+typedef struct OnReloadHook
+{
+	CopyDataSpec *specs;
+	reloadHook fun;
+} OnReloadHook;
+
 extern GUC srcSettings95[];
 extern GUC srcSettings[];
 extern GUC dstSettings[];
@@ -329,7 +338,7 @@ bool copydb_init_tablepaths_for_part(CopyFilePaths *cfPaths,
 bool copydb_export_snapshot(TransactionSnapshot *snapshot);
 
 bool copydb_fatal_exit(void);
-bool copydb_wait_for_subprocesses(bool failFast);
+bool copydb_wait_for_subprocesses(bool failFast, OnReloadHook *onReloadHook);
 
 bool copydb_register_sysv_semaphore(SysVResArray *array, Semaphore *semaphore);
 bool copydb_register_sysv_queue(SysVResArray *array, Queue *queue);

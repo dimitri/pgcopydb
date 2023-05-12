@@ -285,7 +285,7 @@ cli_ping(int argc, char **argv)
 	 */
 	bool failFast = false;
 
-	if (!copydb_wait_for_subprocesses(failFast))
+	if (!copydb_wait_for_subprocesses(failFast, NULL))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

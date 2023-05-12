@@ -59,6 +59,7 @@ typedef struct CDCPaths
 typedef struct CopyFilePaths
 {
 	char topdir[MAXPGPATH];           /* /tmp/pgcopydb */
+	char conffile[MAXPGPATH];         /* /tmp/pgcopydb/config.ini */
 	char pidfile[MAXPGPATH];          /* /tmp/pgcopydb/pgcopydb.pid */
 	char spidfile[MAXPGPATH];         /* /tmp/pgcopydb/pgcopydb.service.pid */
 	char snfile[MAXPGPATH];           /* /tmp/pgcopydb/snapshot */

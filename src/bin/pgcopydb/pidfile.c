@@ -39,8 +39,7 @@ create_pidfile(const char *pidfile, pid_t pid)
 {
 	PQExpBuffer content = createPQExpBuffer();
 
-
-	log_trace("create_pidfile(%d): \"%s\"", pid, pidfile);
+	log_notice("Creating pidfile for %d at \"%s\"", pid, pidfile);
 
 	if (content == NULL)
 	{

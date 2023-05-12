@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -20,6 +21,7 @@
 #include "parsing_utils.h"
 #include "pgsql.h"
 #include "progress.h"
+#include "signals.h"
 #include "string_utils.h"
 #include "summary.h"
 
@@ -171,7 +173,7 @@ cli_clone(int argc, char **argv)
 	}
 
 	/* make sure all sub-processes are now finished */
-	success = success && copydb_wait_for_subprocesses(copySpecs.failFast);
+	success = success && copydb_wait_for_subprocesses(copySpecs.failFast, NULL);
 
 	if (!success)
 	{
@@ -307,7 +309,7 @@ clone_and_follow(CopyDataSpec *copySpecs)
 	}
 
 	/* make sure all sub-processes are now finished */
-	success = success && copydb_wait_for_subprocesses(copySpecs->failFast);
+	success = success && copydb_wait_for_subprocesses(copySpecs->failFast, NULL);
 
 	if (!success)
 	{
@@ -672,8 +674,8 @@ start_follow_process(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs,
 
 
 /*
- * cli_clone_follow_wait_subprocesses waits until both sub-processes are
- * finished.
+ * cli_clone_follow_wait_subprocesses waits until given sub-processes has
+ * terminated, and return success when its return code was zero.
  */
 static bool
 cli_clone_follow_wait_subprocess(const char *name, pid_t pid)
@@ -689,6 +691,21 @@ cli_clone_follow_wait_subprocess(const char *name, pid_t pid)
 
 	while (!exited)
 	{
+		if (asked_to_reload)
+		{
+			log_warn("SIGHUP!");
+
+			/*
+			 * Forward the signal to all the sub-processes.
+			 *
+			 * Ignore errors and continue looping anyway, it just means we
+			 * failed to answer to the SIGHUP signal this once time.
+			 */
+			(void) signal_process_group(SIGHUP);
+
+			asked_to_reload = 0;
+		}
+
 		if (!follow_wait_pid(pid, &exited, &returnCode))
 		{
 			/* errors have already been logged */

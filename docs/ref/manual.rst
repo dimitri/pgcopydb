@@ -20,3 +20,4 @@ their own manual page.
    pgcopydb_list
    pgcopydb_stream
    pgcopydb_config
+   pgcopydb_filtering

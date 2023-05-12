@@ -9,6 +9,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "config.h"
 #include "copydb.h"
 #include "env_utils.h"
 #include "lock_utils.h"
@@ -18,6 +19,10 @@
 #include "signals.h"
 #include "string_utils.h"
 #include "summary.h"
+
+
+static void onReloadFun(CopyDataSpec *specs);
+static void copydb_start_copy_workers(CopyDataSpec *specs, int count);
 
 
 /*
@@ -158,7 +163,7 @@ copydb_process_table_data(CopyDataSpec *specs)
 		++errors;
 	}
 
-	if (!copydb_wait_for_subprocesses(specs->failFast))
+	if (!copydb_wait_for_subprocesses(specs->failFast, NULL))
 	{
 		log_error("Some sub-processes have exited with error status, "
 				  "see above for details");
@@ -211,44 +216,7 @@ copydb_process_table_data_with_workers(CopyDataSpec *specs)
 			/* child process runs the command */
 			log_notice("Started COPY supervisor %d [%d]", getpid(), getppid());
 
-			for (int i = 0; i < specs->tableJobs; i++)
-			{
-				/*
-				 * Flush stdio channels just before fork, to avoid
-				 * double-output problems.
-				 */
-				fflush(stdout);
-				fflush(stderr);
-
-				int fpid = fork();
-
-				switch (fpid)
-				{
-					case -1:
-					{
-						log_error("Failed to fork a COPY worker process: %m");
-						exit(EXIT_CODE_INTERNAL_ERROR);
-					}
-
-					case 0:
-					{
-						/* child process runs the command */
-						if (!copydb_process_table_data_worker(specs))
-						{
-							/* errors have already been logged */
-							exit(EXIT_CODE_INTERNAL_ERROR);
-						}
-
-						exit(EXIT_CODE_QUIT);
-					}
-
-					default:
-					{
-						/* fork succeeded, in parent */
-						break;
-					}
-				}
-			}
+			(void) copydb_start_copy_workers(specs, specs->tableJobs);
 
 			/* now COPY the extension configuration tables, while waiting */
 			int errors = 0;
@@ -264,8 +232,13 @@ copydb_process_table_data_with_workers(CopyDataSpec *specs)
 				}
 			}
 
+			OnReloadHook onReload = {
+				.specs = specs,
+				.fun = &onReloadFun
+			};
+
 			/* the COPY supervisor waits for the COPY workers */
-			if (!copydb_wait_for_subprocesses(specs->failFast))
+			if (!copydb_wait_for_subprocesses(specs->failFast, &onReload))
 			{
 				log_error("Some COPY worker process(es) have exited with error, "
 						  "see above for details");
@@ -329,6 +302,8 @@ copydb_process_table_data_worker(CopyDataSpec *specs)
 	int copies = 0;
 
 	log_notice("Started COPY worker %d [%d]", getpid(), getppid());
+
+	sleep(123);
 
 	CopyTableDataSpecsArray *tableSpecsArray = &(specs->tableSpecsArray);
 
@@ -918,4 +893,105 @@ copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 	}
 
 	return success;
+}
+
+
+/*
+ * onReloadFun is the copydb_process_table_data_worker reload hook that's
+ * called when receiving SIGHUP. Its job is to reload the configuration from
+ * file and see if tableJobs has changed, and if it has, start new
+ * sub-processes has needed.
+ */
+static void
+onReloadFun(CopyDataSpec *specs)
+{
+	const char *cfname = specs->cfPaths.conffile;
+
+	if (!file_exists(cfname))
+	{
+		log_warn("Received SIGHUP but \"%s\" does not exists", cfname);
+		return;
+	}
+
+	CopyDBOptions config = { 0 };
+
+	if (!config_read_file(&config, cfname))
+	{
+		log_error("Failed to reload configuration from \"%s\" upon SIGHUP",
+				  cfname);
+		return;
+	}
+
+	if (specs->tableJobs == config.tableJobs)
+	{
+		log_notice("On SIGHUP tableJobs is still %d", specs->tableJobs);
+		return;
+	}
+	else if (specs->tableJobs < config.tableJobs)
+	{
+		int count = config.tableJobs - specs->tableJobs;
+
+		log_info("Starting %d new COPY workers on SIGHUP", count);
+
+		specs->tableJobs = config.tableJobs;
+
+		(void) copydb_start_copy_workers(specs, count);
+
+		return;
+	}
+	else
+	{
+		log_error("On SIGHUP new tableJobs is setup to %d, was %d before: "
+				  "reducing the count of running tableJobs is not supported",
+				  config.tableJobs,
+				  specs->tableJobs);
+		return;
+	}
+}
+
+
+/*
+ * copydb_start_copy_workers starts new COUNT COPY worker processes.
+ */
+static void
+copydb_start_copy_workers(CopyDataSpec *specs, int count)
+{
+	for (int i = 0; i < count; i++)
+	{
+		/*
+		 * Flush stdio channels just before fork, to avoid
+		 * double-output problems.
+		 */
+		fflush(stdout);
+		fflush(stderr);
+
+		int fpid = fork();
+
+		switch (fpid)
+		{
+			case -1:
+			{
+				log_error("Failed to fork a COPY worker process: %m");
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			case 0:
+			{
+				/* child process runs the command */
+				if (!copydb_process_table_data_worker(specs))
+				{
+					/* errors have already been logged */
+					exit(EXIT_CODE_INTERNAL_ERROR);
+				}
+
+				exit(EXIT_CODE_QUIT);
+			}
+
+			default:
+			{
+				/* fork succeeded, in parent */
+				break;
+			}
+		}
+	}
 }

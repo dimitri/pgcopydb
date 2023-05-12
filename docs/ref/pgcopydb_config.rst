@@ -1,125 +1,117 @@
-.. _config:
+.. _pgcopydb_config:
 
-pgcopydb configuration
-======================
+pgcopydb config
+===============
 
-Manual page for the configuration of pgcopydb. The ``pgcopydb`` command
-accepts sub-commands and command line options, see the manual for those
-commands for details. The only setup that ``pgcopydb`` commands accept is
-the filtering.
+pgcopydb config - Get and Set configuration options for pgcopydb
 
-.. _filtering:
+This command prefixes the following sub-commands:
 
-Filtering
----------
+::
 
-Filtering allows to skip some object definitions and data when copying from
-the source to the target database. The pgcopydb commands that accept the
-option ``--filter`` (or ``--filters``) expect an existing filename as the
-option argument. The given filename is read in the INI file format, but only
-uses sections and option keys. Option values are not used.
+    pgcopydb config
+      get  Get configuration option value
+      set  Set configuration option value
 
-Here is an inclusion based filter configuration example:
 
-.. code-block:: ini
-  :linenos:
+The ``pgcopydb config`` commands are used to review or edit configuration
+options for a currently running pgcopydb process. At start time, the
+``pgcopydb clone`` command (and ``pgcopydb copy`` sub-commands) create a
+configuration file with the pgcopydb.index-jobs and pgcopydb.table-jobs
+settings that are used. It is possible to review those while the command is
+running, and also to edit them using ``pgcopydb config set``.
 
-  [include-only-table]
-  public.allcols
-  public.csv
-  public.serial
-  public.xzero
+The new value for the settings is only allowed to be greater than the
+current value, that is to say, pgcopydb knows how to create new
+sub-processes while running, but will not kill already running processes.
 
-  [exclude-index]
-  public.foo_gin_tsvector
+.. _pgcopydb_config_get:
 
-  [exclude-table-data]
-  public.csv
+pgcopydb config get
+--------------------
 
-Here is an exclusion based filter configuration example:
+pgcopydb config get - Get configuration option value
 
-.. code-block:: ini
-  :linenos:
+The command ``pgcopydb config get`` finds the configuration file created by
+a previous pgcopydb command, possibly still running, and displays its
+contents.
 
-  [exclude-schema]
-  foo
-  bar
-  expected
+::
 
-  [exclude-table]
-  "schema"."name"
-  schema.othername
-  err.errors
-  public.serial
+   pgcopydb config get: Get configuration option value
+   usage: pgcopydb config get [ option-name ]
 
-  [exclude-index]
-  schema.indexname
+     --json    Format the output using JSON
 
-  [exclude-table-data]
-  public.bar
-  nsitra.test1
+.. _pgcopydb_config_set:
 
-Filtering can be done with pgcopydb by using the following rules, which are
-also the name of the sections of the INI file.
+pgcopydb config set
+--------------------
 
-include-only-tables
-^^^^^^^^^^^^^^^^^^^
+pgcopydb config set - Set configuration option value
 
-This section allows listing the exclusive list of the source tables to copy
-to the target database. No other table will be processed by pgcopydb.
+The command ``pgcopydb config set`` finds the configuration file created by
+a previous pgcopydb command, possibly still running, and edits the given
+setting to the new value.
 
-Each line in that section should be a schema-qualified table name. `Postgres
-identifier quoting rules`__ can be used to avoid ambiguity.
+::
 
-__ https://www.postgresql.org/docs/current/sql-syntax-lexical.html#SQL-SYNTAX-IDENTIFIERS
+   pgcopydb config set: Set configuration option value
+   usage: pgcopydb config set option-name value
 
-When the section ``include-only-tables`` is used in the filtering
-configuration then the sections ``exclude-schema`` and ``exclude-table`` are
-disallowed. We would not know how to handle tables that exist on the source
-database and are not part of any filter.
 
-exclude-schema
-^^^^^^^^^^^^^^
+Options
+-------
 
-This section allows adding schemas (Postgres namespaces) to the exclusion
-filters. All the tables that belong to any listed schema in this section are
-going to be ignored by the pgcopydb command.
+--dir
 
-This section is not allowed when the section ``include-only-tables`` is
-used.
+  During its normal operations pgcopydb creates a lot of temporary files to
+  track sub-processes progress. Temporary files are created in the directory
+  location given by this option, or defaults to
+  ``${TMPDIR}/pgcopydb`` when the environment variable is set, or
+  then to ``/tmp/pgcopydb``.
 
-exclude-table
-^^^^^^^^^^^^^
+--json
 
-This section allows to add a list of qualified table names to the exclusion
-filters. All the tables that are listed in the ``exclude-table`` section are
-going to be ignored by the pgcopydb command.
+  The output of the command is formatted in JSON, when supported. Ignored
+  otherwise.
 
-This section is not allowed when the section ``include-only-tables`` is
-used.
+--verbose, --notice
 
-exclude-index
-^^^^^^^^^^^^^
+  Increase current verbosity. The default level of verbosity is INFO. In
+  ascending order pgcopydb knows about the following verbosity levels:
+  FATAL, ERROR, WARN, INFO, NOTICE, DEBUG, TRACE.
 
-This section allows to add a list of qualified index names to the exclusion
-filters. It is then possible for pgcopydb to operate on a table and skip a
-single index definition that belong to a table that is still processed.
+--debug
 
-exclude-table-data
-^^^^^^^^^^^^^^^^^^
+  Set current verbosity to DEBUG level.
 
-This section allows to skip copying the data from a list of qualified table
-names. The schema, index, constraints, etc of the table are still copied
-over.
+--trace
 
-Reviewing and Debugging the filters
------------------------------------
+  Set current verbosity to TRACE level.
 
-Filtering a ``pg_restore`` archive file is done through rewriting the
-archive catalog obtained with ``pg_restore --list``. That's a little hackish
-at times, and we also have to deal with dependencies in pgcopydb itself.
+--quiet
 
-The following commands can be used to explore a set of filtering rules:
+  Set current verbosity to ERROR level.
 
-  - :ref:`pgcopydb_list_depends`
-  - :ref:`pgcopydb_restore_parse_list`
+
+Examples
+--------
+
+::
+
+   $ pgcopydb config get --json
+   13:23:11 3342 INFO   Running pgcopydb version 0.11.37.g119d619.dirty from "/Applications/Postgres.app/Contents/Versions/12/bin/pgcopydb"
+   13:23:11 3342 INFO   A previous run has run through completion
+   {
+       "pgcopydb": {
+           "table-jobs": 4,
+           "index-jobs": 8
+       }
+   }
+
+
+::
+
+   $ pgcopydb config set --quiet pgcopydb.index-jobs 4
+   4

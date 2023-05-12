@@ -591,7 +591,7 @@ copydb_start_index_processes(CopyDataSpec *specs,
 		}
 	}
 
-	bool success = copydb_wait_for_subprocesses(specs->failFast);
+	bool success = copydb_wait_for_subprocesses(specs->failFast, NULL);
 
 	/* and write that we successfully finished copying all tables */
 	if (!write_file("", 0, specs->cfPaths.done.indexes))
