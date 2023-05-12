@@ -274,6 +274,7 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 
 	uint64_t loop = 0;
 	LogicalStreamMode currentMode = modeArray[0];
+	LogicalStreamMode previousMode = STREAM_MODE_UNKNOW;
 
 	while (true)
 	{
@@ -297,6 +298,7 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		}
 
 		/* switch to the next mode, increment loop counter */
+		previousMode = currentMode;
 		currentMode = modeArray[++loop % count];
 
 		/* and re-init our streamSpecs for the new mode */
@@ -311,7 +313,7 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		 * ensure to catch-up with files on-disk before switching
 		 * to another mode of operations.
 		 */
-		if (!follow_prepare_mode_switch(streamSpecs))
+		if (!follow_prepare_mode_switch(streamSpecs, previousMode))
 		{
 			/* errors have already been logged */
 			return false;
@@ -372,7 +374,7 @@ follow_reached_endpos(StreamSpecs *streamSpecs, bool *done)
  * transformed and replayed from file before changing our mode of operations.
  */
 bool
-follow_prepare_mode_switch(StreamSpecs *streamSpecs)
+follow_prepare_mode_switch(StreamSpecs *streamSpecs, LogicalStreamMode previousMode)
 {
 	log_info("Catching-up from existing on-disk files");
 
@@ -388,11 +390,17 @@ follow_prepare_mode_switch(StreamSpecs *streamSpecs)
 		}
 	}
 
-	/* first empty the transform queue, where a STOP message has been sent */
-	if (!stream_transform_from_queue(streamSpecs))
+	/*
+	 * If the previous mode was catch-up, then before proceeding, we need to
+	 * empty the transform queue where the STOP message was sent.
+	 */
+	if (previousMode == STREAM_MODE_CATCHUP)
 	{
-		/* errors have already been logged */
-		return false;
+		if (!stream_transform_from_queue(streamSpecs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	/* then catch-up with what's been stream and transformed already */
