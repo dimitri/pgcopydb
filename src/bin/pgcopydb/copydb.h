@@ -116,7 +116,6 @@ typedef struct CopyTableDataPartSpec
 	int64_t max;                /*   AND partKey  < max */
 
 	char partKey[NAMEDATALEN];
-	char copyQuery[BUFSIZE];    /* COPY (...) TO STDOUT */
 } CopyTableDataPartSpec;
 
 
@@ -474,6 +473,10 @@ bool copydb_table_parts_are_all_done(CopyDataSpec *specs,
 									 CopyTableDataSpec *tableSpecs,
 									 bool *allPartsDone,
 									 bool *isBeingProcessed);
+
+bool copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
+							   PQExpBuffer query,
+							   bool source);
 
 /* blobs.c */
 bool copydb_start_blob_process(CopyDataSpec *specs);

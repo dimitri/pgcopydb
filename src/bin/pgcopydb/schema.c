@@ -9,6 +9,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "parson.h"
+
 #include "defaults.h"
 #include "env_utils.h"
 #include "file_utils.h"
@@ -124,6 +126,8 @@ static void getTableArray(void *ctx, PGresult *result);
 static bool parseCurrentSourceTable(PGresult *result,
 									int rowNumber,
 									SourceTable *table);
+
+static bool parseAttributesArray(SourceTable *table, JSON_Value *json);
 
 static void getSequenceArray(void *ctx, PGresult *result);
 
@@ -729,11 +733,29 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
 		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')), "
-		"         pkeys.attname as partkey"
+		"         pkeys.attname as partkey, "
+		"         attrs.js as attributes "
 
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
 		"         join pg_roles auth ON auth.oid = c.relowner"
+		"         join lateral ( "
+		"               with atts as "
+		"               ("
+		"                  select attnum, atttypid, attname, "
+		"                         i.indrelid is not null as attisprimary "
+		"                    from pg_attribute a "
+		"                         left join pg_index i "
+		"                                on i.indrelid = a.attrelid "
+		"                               and a.attnum = ANY(i.indkey) "
+		"                               and i.indisprimary "
+		"                   where a.attrelid = c.oid "
+		"                     and a.attnum > 0 "
+		"                order by attnum "
+		"               ) "
+		"               select json_agg(row_to_json(atts)) as js "
+		"                from atts "
+		"              ) as attrs on true"
 		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* find a copy partition key candidate */
@@ -786,11 +808,29 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
 		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')), "
-		"         pkeys.attname as partkey"
+		"         pkeys.attname as partkey, "
+		"         attrs.js as attributes "
 
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 		"         join pg_roles auth ON auth.oid = c.relowner"
+		"         join lateral ( "
+		"               with atts as "
+		"               ("
+		"                  select attnum, atttypid, attname, "
+		"                         i.indrelid is not null as attisprimary "
+		"                    from pg_attribute a "
+		"                         left join pg_index i "
+		"                                on i.indrelid = a.attrelid "
+		"                               and a.attnum = ANY(i.indkey) "
+		"                               and i.indisprimary "
+		"                   where a.attrelid = c.oid "
+		"                     and a.attnum > 0 "
+		"                order by attnum "
+		"               ) "
+		"               select json_agg(row_to_json(atts)) as js "
+		"                from atts "
+		"              ) as attrs on true"
 		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* include-only-table */
@@ -845,11 +885,29 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
 		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')), "
-		"         pkeys.attname as partkey"
+		"         pkeys.attname as partkey, "
+		"         attrs.js as attributes "
 
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 		"         join pg_roles auth ON auth.oid = c.relowner"
+		"         join lateral ( "
+		"               with atts as "
+		"               ("
+		"                  select attnum, atttypid, attname, "
+		"                         i.indrelid is not null as attisprimary "
+		"                    from pg_attribute a "
+		"                         left join pg_index i "
+		"                                on i.indrelid = a.attrelid "
+		"                               and a.attnum = ANY(i.indkey) "
+		"                               and i.indisprimary "
+		"                   where a.attrelid = c.oid "
+		"                     and a.attnum > 0 "
+		"                order by attnum "
+		"               ) "
+		"               select json_agg(row_to_json(atts)) as js "
+		"                from atts "
+		"              ) as attrs on true"
 		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* exclude-schema */
@@ -918,11 +976,29 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
 		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')), "
-		"         pkeys.attname as partkey"
+		"         pkeys.attname as partkey, "
+		"         attrs.js as attributes "
 
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 		"         join pg_roles auth ON auth.oid = c.relowner"
+		"         join lateral ( "
+		"               with atts as "
+		"               ("
+		"                  select attnum, atttypid, attname, "
+		"                         i.indrelid is not null as attisprimary "
+		"                    from pg_attribute a "
+		"                         left join pg_index i "
+		"                                on i.indrelid = a.attrelid "
+		"                               and a.attnum = ANY(i.indkey) "
+		"                               and i.indisprimary "
+		"                   where a.attrelid = c.oid "
+		"                     and a.attnum > 0 "
+		"                order by attnum "
+		"               ) "
+		"               select json_agg(row_to_json(atts)) as js "
+		"                from atts "
+		"              ) as attrs on true"
 		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* include-only-table */
@@ -980,11 +1056,29 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
 		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')), "
-		"         pkeys.attname as partkey"
+		"         pkeys.attname as partkey, "
+		"         attrs.js as attributes "
 
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 		"         join pg_roles auth ON auth.oid = c.relowner"
+		"         join lateral ( "
+		"               with atts as "
+		"               ("
+		"                  select attnum, atttypid, attname, "
+		"                         i.indrelid is not null as attisprimary "
+		"                    from pg_attribute a "
+		"                         left join pg_index i "
+		"                                on i.indrelid = a.attrelid "
+		"                               and a.attnum = ANY(i.indkey) "
+		"                               and i.indisprimary "
+		"                   where a.attrelid = c.oid "
+		"                     and a.attnum > 0 "
+		"                order by attnum "
+		"               ) "
+		"               select json_agg(row_to_json(atts)) as js "
+		"                from atts "
+		"              ) as attrs on true"
 		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* exclude-schema */
@@ -1120,7 +1214,8 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
 		"                regexp_replace(r.relname, '[\\n\\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')),"
-		"         NULL as partkey"
+		"         NULL as partkey,"
+		"         NULL as attributes"
 
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
@@ -1161,7 +1256,8 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
 		"                regexp_replace(r.relname, '[\\n\\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')),"
-		"         NULL as partkey"
+		"         NULL as partkey,"
+		"         NULL as attributes"
 
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
@@ -1207,7 +1303,8 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
 		"                regexp_replace(r.relname, '[\\n\\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')),"
-		"         NULL as partkey"
+		"         NULL as partkey,"
+		"         NULL as attributes"
 
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
@@ -1267,7 +1364,8 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
 		"                regexp_replace(r.relname, '[\\n\\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')),"
-		"         NULL as partkey"
+		"         NULL as partkey,"
+		"         NULL as attributes"
 
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
@@ -1316,7 +1414,8 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
 		"                regexp_replace(r.relname, '[\\n\\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')),"
-		"         NULL as partkey"
+		"         NULL as partkey,"
+		"         NULL as attributes"
 
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
@@ -3641,9 +3740,9 @@ getTableArray(void *ctx, PGresult *result)
 
 	log_debug("getTableArray: %d", nTuples);
 
-	if (PQnfields(result) != 9)
+	if (PQnfields(result) != 10)
 	{
-		log_error("Query returned %d columns, expected 9", PQnfields(result));
+		log_error("Query returned %d columns, expected 10", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -3820,9 +3919,78 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		}
 	}
 
+	/* 10. attributes */
+	if (PQgetisnull(result, rowNumber, 9))
+	{
+		/* the query didn't care to add the attributes, skip parsing them */
+		table->attributes.count = 0;
+	}
+	else
+	{
+		value = PQgetvalue(result, rowNumber, 9);
+
+		JSON_Value *json = json_parse_string(value);
+
+		if (!parseAttributesArray(table, json))
+		{
+			log_error("Failed to parse table \"%s\".\"%s\" attribute array: %s",
+					  table->nspname,
+					  table->relname,
+					  value);
+			++errors;
+		}
+
+		json_value_free(json);
+	}
+
 	log_trace("parseCurrentSourceTable: %s.%s", table->nspname, table->relname);
 
 	return errors == 0;
+}
+
+
+/*
+ * parseAttributesArray parses a JSON representation of table list of
+ * attributes and allocates the table's attribute array.
+ */
+static bool
+parseAttributesArray(SourceTable *table, JSON_Value *json)
+{
+	if (json == NULL || json_type(json) != JSONArray)
+	{
+		return false;
+	}
+
+	JSON_Array *jsAttsArray = json_array(json);
+
+	int count = json_array_get_count(jsAttsArray);
+
+	table->attributes.count = count;
+	table->attributes.array =
+		(SourceTableAttribute *) calloc(count, sizeof(SourceTableAttribute));
+
+	if (table->attributes.array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	for (int i = 0; i < count; i++)
+	{
+		SourceTableAttribute *attr = &(table->attributes.array[i]);
+		JSON_Object *jsAttr = json_array_get_object(jsAttsArray, i);
+
+		attr->attnum = json_object_get_number(jsAttr, "attnum");
+		attr->atttypid = json_object_get_number(jsAttr, "atttypid");
+
+		strlcpy(attr->attname,
+				json_object_get_string(jsAttr, "attname"),
+				sizeof(attr->attname));
+
+		attr->attisprimary = json_object_get_boolean(jsAttr, "attisprimary");
+	}
+
+	return true;
 }
 
 
