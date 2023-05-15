@@ -573,7 +573,7 @@ bool follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
 bool followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
 
 bool follow_reached_endpos(StreamSpecs *streamSpecs, bool *done);
-bool follow_prepare_mode_switch(StreamSpecs *streamSpecs);
+bool follow_prepare_mode_switch(StreamSpecs *streamSpecs, LogicalStreamMode previousMode);
 
 bool follow_start_subprocess(StreamSpecs *specs, FollowSubProcess *subprocess);
 
