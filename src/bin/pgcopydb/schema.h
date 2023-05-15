@@ -125,6 +125,20 @@ typedef struct SourceTablePartsArray
 } SourceTablePartsArray;
 
 
+typedef struct SourceTableAttribute
+{
+	int attnum;
+	uint32_t atttypid;
+	char attname[NAMEDATALEN];
+	bool attisprimary;
+} SourceTableAttribute;
+
+typedef struct SourceTableAttributeArray
+{
+	int count;
+	SourceTableAttribute *array; /* malloc'ed area */
+} SourceTableAttributeArray;
+
 /* forward declaration */
 struct SourceIndexList;
 
@@ -141,6 +155,8 @@ typedef struct SourceTable
 	char restoreListName[RESTORE_LIST_NAMEDATALEN];
 	char partKey[NAMEDATALEN];
 	SourceTablePartsArray partsArray;
+
+	SourceTableAttributeArray attributes;
 
 	struct SourceIndexList *firstIndex;
 	struct SourceIndexList *lastIndex;

@@ -826,21 +826,6 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 
 		strlcpy(tableSpecs->part.partKey, source->partKey, NAMEDATALEN);
 
-		/*
-		 * Prepare the COPY command.
-		 *
-		 * The way schema_list_partitions prepares the boundaries is non
-		 * overlapping, so we can use the BETWEEN operator to select our source
-		 * rows in the COPY sub-query.
-		 */
-		sformat(tableSpecs->part.copyQuery, sizeof(tableSpecs->part.copyQuery),
-				"(SELECT * FROM %s"
-				" WHERE \"%s\" BETWEEN %lld AND %lld)",
-				tableSpecs->qname,
-				tableSpecs->part.partKey,
-				(long long) tableSpecs->part.min,
-				(long long) tableSpecs->part.max);
-
 		/* now compute the table-specific paths we are using in copydb */
 		if (!copydb_init_tablepaths_for_part(tableSpecs->cfPaths,
 											 &(tableSpecs->tablePaths),
