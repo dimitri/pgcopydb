@@ -33,6 +33,7 @@ static void cli_list_tables(int argc, char **argv);
 static void cli_list_table_parts(int argc, char **argv);
 static void cli_list_sequences(int argc, char **argv);
 static void cli_list_indexes(int argc, char **argv);
+static void cli_list_fkeys(int argc, char **argv);
 static void cli_list_depends(int argc, char **argv);
 static void cli_list_schema(int argc, char **argv);
 static void cli_list_progress(int argc, char **argv);
@@ -117,6 +118,17 @@ static CommandLine list_indexes_command =
 		cli_list_db_getopts,
 		cli_list_indexes);
 
+static CommandLine list_fkeys_command =
+	make_command(
+		"foreign-keys",
+		"List all the foreign keys to create again after copying the data",
+		" --source ... [ --schema-name [ --table-name ] ]",
+		"  --source            Postgres URI to the source database\n"
+		"  --filter <filename> Use the filters defined in <filename>\n"
+		"  --list-skipped      List only tables that are setup to be skipped\n",
+		cli_list_db_getopts,
+		cli_list_fkeys);
+
 static CommandLine list_depends_command =
 	make_command(
 		"depends",
@@ -161,6 +173,7 @@ static CommandLine *list_subcommands[] = {
 	&list_table_parts_command,
 	&list_sequences_command,
 	&list_indexes_command,
+	&list_fkeys_command,
 	&list_depends_command,
 	&list_schema_command,
 	&list_progress_command,
@@ -1204,6 +1217,94 @@ cli_list_indexes(int argc, char **argv)
 					NULL_AS_EMPTY_STRING(index->constraintDef),
 					NULL_AS_EMPTY_STRING(index->indexDef));
 		}
+	}
+
+	fformat(stdout, "\n");
+}
+
+
+/*
+ * cli_list_fkeys implements the command: pgcopydb list foreign-keys
+ */
+static void
+cli_list_fkeys(int argc, char **argv)
+{
+	PGSQL pgsql = { 0 };
+	SourceFKeysArray fkeysArray = { 0, NULL };
+
+	char scrubbedSourceURI[MAXCONNINFO] = { 0 };
+
+	(void) parse_and_scrub_connection_string(listDBoptions.source_pguri,
+											 scrubbedSourceURI);
+
+	log_info("Listing fkeyes in \"%s\"", scrubbedSourceURI);
+
+	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	log_info("Fetching all foreign-keys in source database");
+
+	SourceFilters filters = { 0 };
+
+	if (!IS_EMPTY_STRING_BUFFER(listDBoptions.filterFileName))
+	{
+		if (!parse_filters(listDBoptions.filterFileName, &filters))
+		{
+			log_error("Failed to parse filters in file \"%s\"",
+					  listDBoptions.filterFileName);
+			exit(EXIT_CODE_BAD_ARGS);
+		}
+
+		if (listDBoptions.listSkipped)
+		{
+			if (filters.type != SOURCE_FILTER_TYPE_NONE)
+			{
+				filters.type = filterTypeComplement(filters.type);
+
+				if (filters.type == SOURCE_FILTER_TYPE_NONE)
+				{
+					log_error("BUG: can't list skipped fkeyes "
+							  " from filtering type %d",
+							  filters.type);
+					exit(EXIT_CODE_INTERNAL_ERROR);
+				}
+			}
+		}
+	}
+
+	if (!schema_list_fkeys(&pgsql, &filters, &fkeysArray))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_info("Fetched information for %d fkeys", fkeysArray.count);
+
+	fformat(stdout, "%8s | %35s | %10s | %20s | %10s | %20s\n",
+			"OID", "Name", "Schema", "Table name", "Schema", "Table name");
+
+	fformat(stdout, "%8s-+-%35s-+-%10s-+-%20s-+-%10s-+-%20s\n",
+			"--------",
+			"-----------------------------------",
+			"----------",
+			"--------------------",
+			"----------",
+			"--------------------");
+
+	for (int i = 0; i < fkeysArray.count; i++)
+	{
+		SourceFKey *fkey = &(fkeysArray.array[i]);
+
+		fformat(stdout, "%8d | %35s | %10s | %20s | %10s | %20s\n",
+				fkey->oid,
+				fkey->conname,
+				fkey->rnspname,
+				fkey->rrelname,
+				fkey->fnspname,
+				fkey->frelname);
 	}
 
 	fformat(stdout, "\n");

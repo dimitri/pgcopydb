@@ -88,6 +88,14 @@ typedef struct SourceIndexArrayContext
 	bool parsedOk;
 } SourceIndexArrayContext;
 
+/* Context used when fetching all the table foreign keys */
+typedef struct SourceFKeysArrayContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	SourceFKeysArray *fkeysArray;
+	bool parsedOk;
+} SourceFKeysArrayContext;
+
 /* Context used when fetching all the table dependencies */
 typedef struct SourceDependArrayContext
 {
@@ -140,6 +148,12 @@ static void getIndexArray(void *ctx, PGresult *result);
 static bool parseCurrentSourceIndex(PGresult *result,
 									int rowNumber,
 									SourceIndex *index);
+
+static void getFkeysArray(void *ctx, PGresult *result);
+
+static bool parseCurrentSourceFKeys(PGresult *result,
+									int rowNumber,
+									SourceFKey *fkey);
 
 static void getDependArray(void *ctx, PGresult *result);
 
@@ -2598,6 +2612,104 @@ schema_list_table_indexes(PGSQL *pgsql,
 /*
  * For code simplicity the index array is also the SourceFilterType enum value.
  */
+struct FilteringQueries listSourceFKeysSQL[] = {
+	{
+		SOURCE_FILTER_TYPE_NONE,
+
+		"  select r.oid, r.conname, "
+		"         nf.nspname, cf.relname, "
+		"         nr.nspname, cr.relname, "
+		"         pg_catalog.pg_get_constraintdef(r.oid, true) as condef "
+
+		"    from pg_catalog.pg_constraint r "
+		"         join pg_catalog.pg_class cr ON cr.oid = r.conrelid "
+		"         join pg_catalog.pg_class cf ON cf.oid = r.confrelid "
+		"         join pg_catalog.pg_namespace nr ON nr.oid = cr.relnamespace "
+		"         join pg_catalog.pg_namespace nf ON nf.oid = cf.relnamespace "
+
+		"   where r.contype = 'f'"
+		"     and cf.relkind = 'r' and cf.relpersistence in ('p', 'u') "
+		"     and nf.nspname !~ '^pg_' and nf.nspname <> 'information_schema'"
+		"     and nf.nspname !~ 'pgcopydb' "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = cf.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+		" order by nf.nspname, cf.relname"
+	},
+
+	{
+		SOURCE_FILTER_TYPE_INCL, ""
+	},
+
+	{
+		SOURCE_FILTER_TYPE_EXCL, ""
+	},
+
+	{
+		SOURCE_FILTER_TYPE_LIST_NOT_INCL, ""
+	},
+
+	{
+		SOURCE_FILTER_TYPE_LIST_EXCL, ""
+	}
+};
+
+
+/*
+ * schema_list_fkeys grabs the list of foreign key constraints pointing to
+ * selected tables and allocates a SourceFKeysArray with the result of the
+ * query.
+ */
+bool
+schema_list_fkeys(PGSQL *pgsql,
+				  SourceFilters *filters,
+				  SourceFKeysArray *fkeysArray)
+{
+	SourceFKeysArrayContext context = { { 0 }, fkeysArray, false };
+
+	log_trace("schema_list_fkeys");
+
+	if (filters->type != SOURCE_FILTER_TYPE_NONE)
+	{
+		if (!prepareFilters(pgsql, filters))
+		{
+			log_error("Failed to prepare pgcopydb filters, "
+					  "see above for details");
+			return false;
+		}
+	}
+
+	log_debug("listSourceFKeysSQL[%s]", filterTypeToString(filters->type));
+
+	char *sql = listSourceFKeysSQL[filters->type].sql;
+
+	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+								   &context, &getFkeysArray))
+	{
+		log_error("Failed to list table dependencies");
+		return false;
+	}
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to list table dependencies");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * For code simplicity the index array is also the SourceFilterType enum value.
+ */
 struct FilteringQueries listSourceDependSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_NONE, ""
@@ -2883,7 +2995,7 @@ schema_list_pg_depend(PGSQL *pgsql,
 		/* SOURCE_FILTER_TYPE_EXCL_INDEX etc */
 		default:
 		{
-			log_error("BUG: schema_list_ordinary_tables called with "
+			log_error("BUG: schema_list_pg_depend called with "
 					  "filtering type %d",
 					  filters->type);
 			return false;
@@ -4684,6 +4796,164 @@ parseCurrentPartition(PGresult *result, int rowNumber, SourceTableParts *parts)
 	{
 		log_error("Invalid part count \"%s\"", value);
 		++errors;
+	}
+
+	return errors == 0;
+}
+
+
+/*
+ * getFKeysArray loops over the SQL result for the table foreign keys array
+ * query and allocates an array of tables then populates it with the query
+ * result.
+ */
+static void
+getFkeysArray(void *ctx, PGresult *result)
+{
+	SourceFKeysArrayContext *context = (SourceFKeysArrayContext *) ctx;
+	int nTuples = PQntuples(result);
+
+	log_debug("getFKeysArray: %d", nTuples);
+
+	if (PQnfields(result) != 7)
+	{
+		log_error("Query returned %d columns, expected 7", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	/* we're not supposed to re-cycle arrays here */
+	if (context->fkeysArray->array != NULL)
+	{
+		/* issue a warning but let's try anyway */
+		log_warn("BUG? context's array is not null in getFKeysArray");
+
+		free(context->fkeysArray->array);
+		context->fkeysArray->array = NULL;
+	}
+
+	context->fkeysArray->count = nTuples;
+	context->fkeysArray->array =
+		(SourceFKey *) calloc(nTuples, sizeof(SourceFKey));
+
+	if (context->fkeysArray->array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return;
+	}
+
+	bool parsedOk = true;
+
+	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
+	{
+		SourceFKey *fkey = &(context->fkeysArray->array[rowNumber]);
+
+		parsedOk = parsedOk &&
+				   parseCurrentSourceFKeys(result, rowNumber, fkey);
+	}
+
+	if (!parsedOk)
+	{
+		free(context->fkeysArray->array);
+		context->fkeysArray->array = NULL;
+	}
+
+	context->parsedOk = parsedOk;
+}
+
+
+/*
+ * parseCurrentSourceFKeys parses a single row of the table listing query
+ * result.
+ */
+static bool
+parseCurrentSourceFKeys(PGresult *result, int rowNumber, SourceFKey *fkey)
+{
+	int errors = 0;
+
+	/* 1. oid */
+	char *value = PQgetvalue(result, rowNumber, 0);
+
+	if (!stringToUInt32(value, &(fkey->oid)) || fkey->oid == 0)
+	{
+		log_error("Invalid OID \"%s\"", value);
+		++errors;
+	}
+
+	/* 2. conname */
+	value = PQgetvalue(result, rowNumber, 1);
+	int length = strlcpy(fkey->conname, value, NAMEDATALEN);
+
+	if (length >= NAMEDATALEN)
+	{
+		log_error("Fkey name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (NAMEDATALEN - 1)",
+				  value, length, NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* 3. r.nspname */
+	value = PQgetvalue(result, rowNumber, 2);
+	length = strlcpy(fkey->rnspname, value, NAMEDATALEN);
+
+	if (length >= NAMEDATALEN)
+	{
+		log_error("Schema name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (NAMEDATALEN - 1)",
+				  value, length, NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* 4. r.relname */
+	value = PQgetvalue(result, rowNumber, 3);
+	length = strlcpy(fkey->rrelname, value, NAMEDATALEN);
+
+	if (length >= NAMEDATALEN)
+	{
+		log_error("Foreign key table name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (NAMEDATALEN - 1)",
+				  value, length, NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* 5. f.nspname */
+	value = PQgetvalue(result, rowNumber, 4);
+	length = strlcpy(fkey->fnspname, value, NAMEDATALEN);
+
+	if (length >= NAMEDATALEN)
+	{
+		log_error("Schema name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (NAMEDATALEN - 1)",
+				  value, length, NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* 6. f.relname */
+	value = PQgetvalue(result, rowNumber, 5);
+	length = strlcpy(fkey->frelname, value, NAMEDATALEN);
+
+	if (length >= NAMEDATALEN)
+	{
+		log_error("Foreign key table name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (NAMEDATALEN - 1)",
+				  value, length, NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* 7. pg_get_constraintdef */
+	if (!PQgetisnull(result, rowNumber, 6))
+	{
+		value = PQgetvalue(result, rowNumber, 6);
+		length = strlen(value) + 1;
+		fkey->constraintDef = (char *) calloc(length, sizeof(char));
+
+		if (fkey->constraintDef == NULL)
+		{
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		strlcpy(fkey->constraintDef, value, length);
 	}
 
 	return errors == 0;

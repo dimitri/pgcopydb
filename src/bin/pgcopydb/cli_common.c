@@ -668,6 +668,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "skip-vacuum", no_argument, NULL, 'U' },
 		{ "filter", required_argument, NULL, 'F' },
 		{ "filters", required_argument, NULL, 'F' },
+		{ "ddl-dir", required_argument, NULL, 'y' },
 		{ "fail-fast", no_argument, NULL, 'i' },
 		{ "restart", no_argument, NULL, 'r' },
 		{ "resume", no_argument, NULL, 'R' },
@@ -704,7 +705,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	}
 
 	while ((c = getopt_long(argc, argv,
-							"S:T:D:J:I:L:cOBelirRCN:xXCtfo:p:s:E:F:iVvdzqh",
+							"S:T:D:J:I:L:cOBelirRCN:xXCtfo:p:s:E:F:y:iVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -963,6 +964,13 @@ cli_copy_db_getopts(int argc, char **argv)
 							  options.filterFileName);
 					++errors;
 				}
+				break;
+			}
+
+			case 'y':
+			{
+				strlcpy(options.ddldir, optarg, MAXPGPATH);
+				log_trace("--dir %s", options.ddldir);
 				break;
 			}
 

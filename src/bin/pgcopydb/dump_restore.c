@@ -418,3 +418,120 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 
 	return true;
 }
+
+
+/*
+ * copydb_write_restore_ddl_list writes into given filename a --use-list file
+ * for pg_restore that contains a single line only, the one that matches with
+ * the given OID.
+ */
+bool
+copydb_write_restore_ddl_list(const char *filename,
+							  ArchiveContentArray *preList,
+							  uint32_t oid)
+{
+	/* prepare a list file with just that SQL object OID */
+	PQExpBuffer listContents = createPQExpBuffer();
+
+	for (int i = 0; i < preList->count; i++)
+	{
+		uint32_t curoid = preList->array[i].objectOid;
+
+		if (curoid == oid)
+		{
+			appendPQExpBuffer(listContents, "%d; %u %u %s %s\n",
+							  preList->array[i].dumpId,
+							  preList->array[i].catalogOid,
+							  preList->array[i].objectOid,
+							  preList->array[i].desc,
+							  preList->array[i].restoreListName);
+
+			break;
+		}
+	}
+
+	/* memory allocation could have failed while building string */
+	if (PQExpBufferBroken(listContents))
+	{
+		log_error("Failed to create pg_restore list file: out of memory");
+		destroyPQExpBuffer(listContents);
+		return false;
+	}
+
+	if (!write_file(listContents->data, listContents->len, filename))
+	{
+		/* errors have already been logged */
+		destroyPQExpBuffer(listContents);
+		return false;
+	}
+
+	destroyPQExpBuffer(listContents);
+
+	return true;
+}
+
+
+/*
+ * copydb_export_ddl exports the DDL needed to create the object again by using
+ * pg_restore --use-list option.
+ */
+bool
+copydb_export_ddl(CopyDataSpec *specs,
+				  ArchiveContentArray *list,
+				  uint32_t oid,
+				  const char *regclass,
+				  const char *symlink)
+{
+	/* prepare target DDL filename */
+	char ddlFilename[MAXPGPATH] = { 0 };
+
+	sformat(ddlFilename, MAXPGPATH, "%s/%u.sql", specs->cfPaths.ddldir, oid);
+
+	if (file_exists(ddlFilename))
+	{
+		return true;
+	}
+
+	log_info("Exporting DDL for %s %u in \"%s\"", regclass, oid, ddlFilename);
+
+	/* prepare a list file with just that SQL object OID */
+	char tmpListFilename[MAXPGPATH] = { 0 };
+
+	sformat(tmpListFilename, MAXPGPATH, "%s/temp.list", specs->cfPaths.ddldir);
+
+	if (!copydb_write_restore_ddl_list(tmpListFilename, list, oid))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pg_restore_ddl(&(specs->pgPaths),
+						ddlFilename,
+						list->filename,
+						tmpListFilename))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (symlink != NULL)
+	{
+		char basename[MAXPGPATH] = { 0 };
+
+		sformat(basename, sizeof(basename), "%u.sql", oid);
+
+		if (!unlink_file(symlink))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!create_symbolic_link(basename, (char *) symlink))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	return true;
+}

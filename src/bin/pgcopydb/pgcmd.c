@@ -876,6 +876,73 @@ pg_restore_db(PostgresPaths *pgPaths,
 
 
 /*
+ * Call pg_restore from the filename and restores it to the target SQL filename.
+ */
+bool
+pg_restore_ddl(PostgresPaths *pgPaths,
+			   const char *ddlfilename,
+			   const char *dumpFilename,
+			   const char *listFilename)
+{
+	char *args[128];
+	int argsIndex = 0;
+
+	char command[BUFSIZE] = { 0 };
+
+	args[argsIndex++] = (char *) pgPaths->pg_restore;
+
+	args[argsIndex++] = "--file";
+	args[argsIndex++] = (char *) ddlfilename;
+
+	args[argsIndex++] = "--no-owner";
+	args[argsIndex++] = "--no-comments";
+	args[argsIndex++] = "--no-acl";
+	args[argsIndex++] = "--schema-only";
+
+	args[argsIndex++] = "--use-list";
+	args[argsIndex++] = (char *) listFilename;
+
+	args[argsIndex++] = (char *) dumpFilename;
+
+	args[argsIndex] = NULL;
+
+	/*
+	 * We do not want to call setsid() when running pg_dump.
+	 */
+	Program program = { 0 };
+
+	(void) initialize_program(&program, args, false);
+	program.processBuffer = &processBufferCallback;
+
+	/* log the exact command line we're using */
+	int commandSize = snprintf_program_command_line(&program, command, BUFSIZE);
+
+	if (commandSize >= BUFSIZE)
+	{
+		/* we only display the first BUFSIZE bytes of the real command */
+		log_notice("%s...", command);
+	}
+	else
+	{
+		log_notice("%s", command);
+	}
+
+	(void) execute_subprogram(&program);
+
+	if (program.returnCode != 0)
+	{
+		log_error("Failed to run pg_restore: exit code %d", program.returnCode);
+		free_program(&program);
+
+		return false;
+	}
+
+	free_program(&program);
+	return true;
+}
+
+
+/*
  * pg_restore_list runs the command pg_restore -f- -l on the given custom
  * format dump file and returns an array of pg_dump archive objects.
  */
@@ -883,6 +950,8 @@ bool
 pg_restore_list(PostgresPaths *pgPaths, const char *filename,
 				ArchiveContentArray *archive)
 {
+	strlcpy(archive->filename, filename, sizeof(archive->filename));
+
 	Program prog =
 		run_program(pgPaths->pg_restore, "-f-", "-l", filename, NULL);
 

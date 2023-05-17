@@ -434,6 +434,16 @@ bool copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
 
 bool copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section);
 
+bool copydb_write_restore_ddl_list(const char *filename,
+								   ArchiveContentArray *preList,
+								   uint32_t oid);
+
+bool copydb_export_ddl(CopyDataSpec *specs,
+					   ArchiveContentArray *list,
+					   uint32_t oid,
+					   const char *regclass,
+					   const char *symlink);
+
 /* sequences.c */
 bool copydb_copy_all_sequences(CopyDataSpec *specs);
 bool copydb_start_seq_process(CopyDataSpec *specs);
