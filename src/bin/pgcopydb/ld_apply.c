@@ -496,26 +496,43 @@ stream_apply_sql(StreamApplyContext *context,
 
 		case STREAM_ACTION_BEGIN:
 		{
-			/* did we reach the starting LSN positions now? */
-			if (!context->reachedStartPos)
-			{
-				context->reachedStartPos =
-					context->previousLSN < metadata->lsn;
-			}
-
-			log_trace("BEGIN %lld LSN %X/%X @%s, previous LSN %X/%X %s",
-					  (long long) metadata->xid,
-					  LSN_FORMAT_ARGS(metadata->lsn),
-					  metadata->timestamp,
-					  LSN_FORMAT_ARGS(context->previousLSN),
-					  context->reachedStartPos ? "" : "[skipping]");
-
 			if (metadata->lsn == InvalidXLogRecPtr ||
+				metadata->txnCommitLSN == InvalidXLogRecPtr ||
 				IS_EMPTY_STRING_BUFFER(metadata->timestamp))
 			{
 				log_fatal("Failed to parse BEGIN message: %s", sql);
 				return false;
 			}
+
+			/* did we reach the starting LSN positions now? */
+			if (!context->reachedStartPos)
+			{
+				/*
+				 * compare previousLSN with COMMIT LSN to safely include
+				 * complete transactions while skipping already applied changes.
+				 *
+				 * this is particularly useful at the beginnig where BEGIN LSN
+				 * of some transactions could be less than `consistent_point`,
+				 * but COMMIT LSN of those transactions is guaranteed to be
+				 * greater.
+				 *
+				 * in case of interruption and this is the first transaction to
+				 * be applied, previousLSN should be equal to the last
+				 * transaction's COMMIT LSN or the LSN of non-transaction
+				 * action. Therefore, this condition will still hold true.
+				 */
+
+				context->reachedStartPos =
+					context->previousLSN < metadata->txnCommitLSN;
+			}
+
+			log_trace("BEGIN %lld LSN %X/%X @%s, previous LSN %X/%X, COMMIT LSN %X/%X %s",
+					  (long long) metadata->xid,
+					  LSN_FORMAT_ARGS(metadata->lsn),
+					  metadata->timestamp,
+					  LSN_FORMAT_ARGS(context->previousLSN),
+					  LSN_FORMAT_ARGS(metadata->txnCommitLSN),
+					  context->reachedStartPos ? "" : "[skipping]");
 
 			/*
 			 * Check if we reached the endpos LSN already.
@@ -543,6 +560,20 @@ stream_apply_sql(StreamApplyContext *context,
 				return false;
 			}
 
+			break;
+		}
+
+		case STREAM_ACTION_COMMIT:
+		{
+			if (!context->reachedStartPos)
+			{
+				return true;
+			}
+
+			/*
+			 * update replication progress with metadata->lsn, that is,
+			 * transaction COMMIT LSN
+			 */
 			char lsn[PG_LSN_MAXLENGTH] = { 0 };
 
 			sformat(lsn, sizeof(lsn), "%X/%X",
@@ -554,16 +585,6 @@ stream_apply_sql(StreamApplyContext *context,
 			{
 				/* errors have already been logged */
 				return false;
-			}
-
-			break;
-		}
-
-		case STREAM_ACTION_COMMIT:
-		{
-			if (!context->reachedStartPos)
-			{
-				return true;
 			}
 
 			log_trace("COMMIT %lld LSN %X/%X",
@@ -917,7 +938,7 @@ parseSQLAction(const char *query, LogicalMessageMetadata *metadata)
 	else if (query == commit)
 	{
 		metadata->action = STREAM_ACTION_COMMIT;
-		message = commit + strlen(OUTPUT_BEGIN);
+		message = commit + strlen(OUTPUT_COMMIT);
 	}
 	else if (query == switchwal)
 	{

@@ -1521,19 +1521,19 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 
 
 /*
- * stream_write_switchwal writes a SWITCH statement to the already open out
- * stream.
+ * stream_write_begin writes a BEGIN statement to the already open out stream.
  */
 bool
 stream_write_begin(FILE *out, LogicalTransaction *txn)
 {
 	int ret =
 		fformat(out,
-				"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
+				"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\",\"commit_lsn\":\"%X/%X\"}\n",
 				OUTPUT_BEGIN,
 				(long long) txn->xid,
 				LSN_FORMAT_ARGS(txn->beginLSN),
-				txn->timestamp);
+				txn->timestamp,
+				LSN_FORMAT_ARGS(txn->commitLSN));
 
 	return ret != -1;
 }
