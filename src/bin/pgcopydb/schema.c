@@ -2641,23 +2641,176 @@ struct FilteringQueries listSourceFKeysSQL[] = {
 		"            and d.objid = cf.oid "
 		"            and d.deptype = 'e' "
 		"       ) "
+
 		" order by nf.nspname, cf.relname"
 	},
 
 	{
-		SOURCE_FILTER_TYPE_INCL, ""
+		SOURCE_FILTER_TYPE_INCL,
+
+		"  select r.oid, r.conname, "
+		"         nf.nspname, cf.relname, "
+		"         nr.nspname, cr.relname, "
+		"         pg_catalog.pg_get_constraintdef(r.oid, true) as condef "
+
+		"    from pg_catalog.pg_constraint r "
+		"         join pg_catalog.pg_class cr ON cr.oid = r.conrelid "
+		"         join pg_catalog.pg_class cf ON cf.oid = r.confrelid "
+		"         join pg_catalog.pg_namespace nr ON nr.oid = cr.relnamespace "
+		"         join pg_catalog.pg_namespace nf ON nf.oid = cf.relnamespace "
+
+		/* include-only-table */
+		"       join pg_temp.filter_include_only_table inc "
+		"         on nf.nspname = inc.nspname "
+		"        and cf.relname = inc.relname "
+
+		"   where r.contype = 'f'"
+		"     and cf.relkind = 'r' and cf.relpersistence in ('p', 'u') "
+		"     and nf.nspname !~ '^pg_' and nf.nspname <> 'information_schema'"
+		"     and nf.nspname !~ 'pgcopydb' "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = cf.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+
+		" order by nf.nspname, cf.relname"
 	},
 
 	{
-		SOURCE_FILTER_TYPE_EXCL, ""
+		SOURCE_FILTER_TYPE_EXCL,
+
+		"  select r.oid, r.conname, "
+		"         nf.nspname, cf.relname, "
+		"         nr.nspname, cr.relname, "
+		"         pg_catalog.pg_get_constraintdef(r.oid, true) as condef "
+
+		"    from pg_catalog.pg_constraint r "
+		"         join pg_catalog.pg_class cr ON cr.oid = r.conrelid "
+		"         join pg_catalog.pg_class cf ON cf.oid = r.confrelid "
+		"         join pg_catalog.pg_namespace nr ON nr.oid = cr.relnamespace "
+		"         join pg_catalog.pg_namespace nf ON nf.oid = cf.relnamespace "
+
+		/* exclude-schema */
+		"      left join pg_temp.filter_exclude_schema fn "
+		"             on nf.nspname = fn.nspname "
+
+		/* exclude-table */
+		"      left join pg_temp.filter_exclude_table ft "
+		"             on nf.nspname = ft.nspname "
+		"            and cf.relname = ft.relname "
+
+		/* exclude-table-data */
+		"      left join pg_temp.filter_exclude_table_data ftd "
+		"             on nf.nspname = ftd.nspname "
+		"            and cf.relname = ftd.relname "
+
+		"   where r.contype = 'f'"
+		"     and cf.relkind = 'r' and cf.relpersistence in ('p', 'u') "
+		"     and nf.nspname !~ '^pg_' and nf.nspname <> 'information_schema'"
+		"     and nf.nspname !~ 'pgcopydb' "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = cf.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+
+		" order by nf.nspname, cf.relname"
 	},
 
 	{
-		SOURCE_FILTER_TYPE_LIST_NOT_INCL, ""
+		SOURCE_FILTER_TYPE_LIST_NOT_INCL,
+
+		"  select r.oid, r.conname, "
+		"         nf.nspname, cf.relname, "
+		"         nr.nspname, cr.relname, "
+		"         pg_catalog.pg_get_constraintdef(r.oid, true) as condef "
+
+		"    from pg_catalog.pg_constraint r "
+		"         join pg_catalog.pg_class cr ON cr.oid = r.conrelid "
+		"         join pg_catalog.pg_class cf ON cf.oid = r.confrelid "
+		"         join pg_catalog.pg_namespace nr ON nr.oid = cr.relnamespace "
+		"         join pg_catalog.pg_namespace nf ON nf.oid = cf.relnamespace "
+
+		/* include-only-table */
+		"    left join pg_temp.filter_include_only_table inc "
+		"           on nf.nspname = inc.nspname "
+		"          and cf.relname = inc.relname "
+
+		"   where r.contype = 'f'"
+		"     and cf.relkind = 'r' and cf.relpersistence in ('p', 'u') "
+		"     and nf.nspname !~ '^pg_' and nf.nspname <> 'information_schema'"
+		"     and nf.nspname !~ 'pgcopydb' "
+
+		/* WHERE clause for exclusion filters */
+		"     and inc.nspname is null "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = cf.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+
+		" order by nf.nspname, cf.relname"
 	},
 
 	{
-		SOURCE_FILTER_TYPE_LIST_EXCL, ""
+		SOURCE_FILTER_TYPE_LIST_EXCL,
+
+		"  select r.oid, r.conname, "
+		"         nf.nspname, cf.relname, "
+		"         nr.nspname, cr.relname, "
+		"         pg_catalog.pg_get_constraintdef(r.oid, true) as condef "
+
+		"    from pg_catalog.pg_constraint r "
+		"         join pg_catalog.pg_class cr ON cr.oid = r.conrelid "
+		"         join pg_catalog.pg_class cf ON cf.oid = r.confrelid "
+		"         join pg_catalog.pg_namespace nr ON nr.oid = cr.relnamespace "
+		"         join pg_catalog.pg_namespace nf ON nf.oid = cf.relnamespace "
+
+		/* exclude-schema */
+		"         left join pg_temp.filter_exclude_schema fn "
+		"                on nf.nspname = fn.nspname "
+
+		/* exclude-table */
+		"         left join pg_temp.filter_exclude_table ft "
+		"                on nf.nspname = ft.nspname "
+		"               and cf.relname = ft.relname "
+
+		"   where r.contype = 'f'"
+		"     and cf.relkind = 'r' and cf.relpersistence in ('p', 'u') "
+		"     and nf.nspname !~ '^pg_' and nf.nspname <> 'information_schema'"
+		"     and nf.nspname !~ 'pgcopydb' "
+
+		/* WHERE clause for exclusion filters */
+		"     and (   fn.nspname is not null "
+		"          or ft.relname is not null ) "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = cf.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+
+		" order by nf.nspname, cf.relname"
 	}
 };
 

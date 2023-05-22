@@ -442,7 +442,7 @@ bool copydb_export_ddl(CopyDataSpec *specs,
 					   ArchiveContentArray *list,
 					   uint32_t oid,
 					   const char *regclass,
-					   const char *symlink);
+					   const char *name);
 
 /* sequences.c */
 bool copydb_copy_all_sequences(CopyDataSpec *specs);

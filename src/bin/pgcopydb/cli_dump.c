@@ -667,14 +667,13 @@ cli_dump_sql_files(int argc, char **argv)
 		SourceTable *table = &(tableArray->array[i]);
 		uint32_t oid = table->oid;
 
-		char symlink[MAXPGPATH] = { 0 };
+		char name[MAXPGPATH] = { 0 };
 
-		sformat(symlink, sizeof(symlink), "%s/%s.%s.sql",
-				copySpecs.cfPaths.ddldir,
+		sformat(name, sizeof(name), "%s.%s",
 				table->nspname,
 				table->relname);
 
-		if (!copydb_export_ddl(&copySpecs, &preList, oid, "table", symlink))
+		if (!copydb_export_ddl(&copySpecs, &preList, oid, "table", name))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);
@@ -690,14 +689,13 @@ cli_dump_sql_files(int argc, char **argv)
 		SourceIndex *index = &(indexArray->array[i]);
 		uint32_t oid = index->indexOid;
 
-		char symlink[MAXPGPATH] = { 0 };
+		char name[MAXPGPATH] = { 0 };
 
-		sformat(symlink, sizeof(symlink), "%s/%s.%s.sql",
-				copySpecs.cfPaths.ddldir,
+		sformat(name, sizeof(name), "%s.%s",
 				index->indexNamespace,
 				index->indexRelname);
 
-		if (!copydb_export_ddl(&copySpecs, &postList, oid, "index", symlink))
+		if (!copydb_export_ddl(&copySpecs, &postList, oid, "index", name))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);
@@ -708,10 +706,9 @@ cli_dump_sql_files(int argc, char **argv)
 		{
 			uint32_t oid = index->constraintOid;
 
-			char symlink[MAXPGPATH] = { 0 };
+			char name[MAXPGPATH] = { 0 };
 
-			sformat(symlink, sizeof(symlink), "%s/%s.%s.sql",
-					copySpecs.cfPaths.ddldir,
+			sformat(name, sizeof(name), "%s.%s",
 					index->indexNamespace,
 					index->constraintName);
 
@@ -719,11 +716,33 @@ cli_dump_sql_files(int argc, char **argv)
 								   &postList,
 								   oid,
 								   "constraint",
-								   symlink))
+								   name))
 			{
 				/* errors have already been logged */
 				exit(EXIT_CODE_INTERNAL_ERROR);
 			}
 		}
 	}
+
+	/*
+	 * Now extract the DDL of the foreign-keys that point to the previously
+	 * listed tables.
+	 */
+	for (int i = 0; i < fkeysArray->count; i++)
+	{
+		SourceFKey *fkey = &(fkeysArray->array[i]);
+		uint32_t oid = fkey->oid;
+
+		char name[MAXPGPATH] = { 0 };
+		sformat(name, sizeof(name), "%s", fkey->conname);
+
+		if (!copydb_export_ddl(&copySpecs, &postList, oid, "forign key", name))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+	}
+
+	log_info("Extracted DDL for selected SQL objects at \"%s\"",
+			 copySpecs.cfPaths.ddldir);
 }

@@ -480,9 +480,10 @@ copydb_export_ddl(CopyDataSpec *specs,
 				  ArchiveContentArray *list,
 				  uint32_t oid,
 				  const char *regclass,
-				  const char *symlink)
+				  const char *name)
 {
 	/* prepare target DDL filename */
+	char symlink[MAXPGPATH] = { 0 };
 	char ddlFilename[MAXPGPATH] = { 0 };
 
 	sformat(ddlFilename, MAXPGPATH, "%s/%u.sql", specs->cfPaths.ddldir, oid);
@@ -492,7 +493,15 @@ copydb_export_ddl(CopyDataSpec *specs,
 		return true;
 	}
 
-	log_info("Exporting DDL for %s %u in \"%s\"", regclass, oid, ddlFilename);
+	sformat(symlink, sizeof(symlink), "%s/%s.sql",
+			specs->cfPaths.ddldir,
+			name);
+
+	log_info("Extracting DDL for %s %s (%u) in \"%s\"",
+			 regclass,
+			 name,
+			 oid,
+			 symlink);
 
 	/* prepare a list file with just that SQL object OID */
 	char tmpListFilename[MAXPGPATH] = { 0 };
@@ -514,23 +523,26 @@ copydb_export_ddl(CopyDataSpec *specs,
 		return false;
 	}
 
-	if (symlink != NULL)
+	char basename[MAXPGPATH] = { 0 };
+
+	sformat(basename, sizeof(basename), "%u.sql", oid);
+
+	if (!unlink_file(symlink))
 	{
-		char basename[MAXPGPATH] = { 0 };
+		/* errors have already been logged */
+		return false;
+	}
 
-		sformat(basename, sizeof(basename), "%u.sql", oid);
+	if (!create_symbolic_link(basename, (char *) symlink))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
-		if (!unlink_file(symlink))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		if (!create_symbolic_link(basename, (char *) symlink))
-		{
-			/* errors have already been logged */
-			return false;
-		}
+	/* cleanup: remove our temp file */
+	if (!unlink_file(tmpListFilename))
+	{
+		return false;
 	}
 
 	return true;
