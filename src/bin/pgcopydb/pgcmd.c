@@ -1088,7 +1088,7 @@ parse_archive_list(char *list, ArchiveContentArray *contents)
 
 	contents->count = 0;
 	contents->array =
-		(ArchiveContentItem *) malloc(objectCount * sizeof(ArchiveContentItem));
+		(ArchiveContentItem *) calloc(objectCount, sizeof(ArchiveContentItem));
 
 	for (int lineNumber = 0; lineNumber < lineCount; lineNumber++)
 	{

@@ -615,6 +615,7 @@ cli_dump_sql_files(int argc, char **argv)
 
 	SourceTableArray *tableArray = &(copySpecs.sourceTableArray);
 	SourceIndexArray *indexArray = &(copySpecs.sourceIndexArray);
+	SourceSequenceArray *sequenceArray = &(copySpecs.sequenceArray);
 
 	SourceFKeysArray fkeysArrayData = { 0, NULL };
 	SourceFKeysArray *fkeysArray = &fkeysArrayData;
@@ -626,6 +627,14 @@ cli_dump_sql_files(int argc, char **argv)
 	}
 
 	log_info("Fetched information for %d tables", tableArray->count);
+
+	if (!schema_list_sequences(pgsql, filters, sequenceArray))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_info("Fetched information for %d sequences", sequenceArray->count);
 
 	if (!schema_list_all_indexes(pgsql, filters, indexArray))
 	{
@@ -674,6 +683,27 @@ cli_dump_sql_files(int argc, char **argv)
 				table->relname);
 
 		if (!copydb_export_ddl(&copySpecs, &preList, oid, "table", name))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+	}
+
+	/*
+	 * Now the sequences that those tables depend-on for their default values.
+	 */
+	for (int i = 0; i < sequenceArray->count; i++)
+	{
+		SourceSequence *seq = &(sequenceArray->array[i]);
+		uint32_t oid = seq->oid;
+
+		char name[MAXPGPATH] = { 0 };
+
+		sformat(name, sizeof(name), "%s.%s",
+				seq->nspname,
+				seq->relname);
+
+		if (!copydb_export_ddl(&copySpecs, &preList, oid, "sequence", name))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);

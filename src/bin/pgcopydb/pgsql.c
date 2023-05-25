@@ -1600,6 +1600,45 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 
 
 /*
+ * pgsql_send_and_fetch sends the given SQL query buffer to the target database
+ * and consumes all the results. The SQL query buffer may then contain multiple
+ * SQL statements.
+ */
+bool
+pgsql_send_and_fetch(PGSQL *pgsql, const char *sql)
+{
+	/* the send and fetch mechanics require multi-statement mode */
+	pgsql->connectionStatementType = PGSQL_CONNECTION_MULTI_STATEMENT;
+
+	if (!pgsql_send_with_params(pgsql, sql, 0, NULL, NULL))
+	{
+		/* errors have already been logged */
+		(void) pgsql_finish(pgsql);
+		return false;
+	}
+
+	bool done = false;
+
+	while (!done)
+	{
+		if (!pgsql_fetch_results(pgsql, &done, NULL, NULL))
+		{
+			/* errors have already been logged */
+			(void) pgsql_finish(pgsql);
+			return false;
+		}
+
+		/* avoid buzy looping */
+		pg_usleep(10 * 1000);   /* 10 ms */
+	}
+
+	/* now disconnect */
+	(void) pgsql_finish(pgsql);
+	return true;
+}
+
+
+/*
  * pgsql_send_with_params implements sending a SQL query using the libpq async
  * API. Use pgsql_fetch_results to see if results are available are fetch them.
  */
@@ -1810,9 +1849,9 @@ pgsql_fetch_results(PGSQL *pgsql, bool *done,
 		if (parseFun != NULL)
 		{
 			(*parseFun)(context, result);
-
-			*done = true;
 		}
+
+		*done = true;
 
 		PQclear(result);
 		clear_results(pgsql);

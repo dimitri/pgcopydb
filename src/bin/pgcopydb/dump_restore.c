@@ -155,12 +155,41 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 		}
 	}
 
+	/*
+	 * First apply the custom DDL files. The pg_restore contents might have
+	 * dependencies to the custom objects, such as a view definition using a
+	 * table that now has custom DDL.
+	 */
+	for (int i = 0; i < specs->customDDLOidArray.count; i++)
+	{
+		uint32_t oid = specs->customDDLOidArray.array[i];
+
+		if (!copydb_apply_custom_ddl(specs, oid))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	/*
+	 * When applying custom DDL we can't use --clean --if-exists anymore:
+	 * that's because we have to apply the custom SQL first, and we don't want
+	 * to clean the objects we just created.
+	 */
+	RestoreOptions options = specs->restoreOptions;
+
+	if (specs->customDDLOidArray.count > 0)
+	{
+		options.dropIfExists = false;
+	}
+
+	/* now call into pg_restore --use-list */
 	if (!pg_restore_db(&(specs->pgPaths),
 					   specs->target_pguri,
 					   &(specs->filters),
 					   specs->dumpPaths.preFilename,
 					   specs->dumpPaths.preListFilename,
-					   specs->restoreOptions))
+					   options))
 	{
 		/* errors have already been logged */
 		return false;
@@ -362,6 +391,14 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 		return false;
 	}
 
+	/* prepare our customDDLOidArray when --ddl-dir has been used */
+	if (!IS_EMPTY_STRING_BUFFER(specs->cfPaths.ddldir))
+	{
+		specs->customDDLOidArray.count = 0;
+		specs->customDDLOidArray.array =
+			(uint32_t *) calloc(contents.count, sizeof(uint32_t));
+	}
+
 	/* for each object in the list, comment when we already processed it */
 	for (int i = 0; i < contents.count; i++)
 	{
@@ -369,7 +406,21 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 		char *name = contents.array[i].restoreListName;
 		char *prefix = "";
 
-		if (copydb_objectid_has_been_processed_already(specs, oid))
+		if (copydb_objectid_has_custom_ddl(specs, oid))
+		{
+			prefix = ";";
+
+			log_notice("Skipping custom DDL dumpId %d: %s %u %s",
+					   contents.array[i].dumpId,
+					   contents.array[i].desc,
+					   contents.array[i].objectOid,
+					   contents.array[i].restoreListName);
+
+			/* now also add the oid to our CustomOidArray */
+			specs->customDDLOidArray.array
+			[specs->customDDLOidArray.count++] = oid;
+		}
+		else if (copydb_objectid_has_been_processed_already(specs, oid))
 		{
 			prefix = ";";
 
@@ -497,7 +548,7 @@ copydb_export_ddl(CopyDataSpec *specs,
 			specs->cfPaths.ddldir,
 			name);
 
-	log_info("Extracting DDL for %s %s (%u) in \"%s\"",
+	log_info("Extracting DDL for %s %s (oid %u) in \"%s\"",
 			 regclass,
 			 name,
 			 oid,
@@ -545,5 +596,66 @@ copydb_export_ddl(CopyDataSpec *specs,
 		return false;
 	}
 
+	return true;
+}
+
+
+/*
+ * copydb_objectid_has_custom_ddl returns true when a --ddl-dir oid.sql file
+ * could be found on-disk for the given target object OID.
+ */
+bool
+copydb_objectid_has_custom_ddl(CopyDataSpec *specs, uint32_t oid)
+{
+	char ddlFilename[MAXPGPATH] = { 0 };
+
+	sformat(ddlFilename, MAXPGPATH, "%s/%u.sql", specs->cfPaths.ddldir, oid);
+
+	return file_exists(ddlFilename);
+}
+
+
+/*
+ * copydb_apply_custom_ddl runs the SQL commands found in the SQL file that has
+ * the custom DDL commands for the given OID.
+ */
+bool
+copydb_apply_custom_ddl(CopyDataSpec *specs, uint32_t oid)
+{
+	char ddlFilename[MAXPGPATH] = { 0 };
+
+	sformat(ddlFilename, MAXPGPATH, "%s/%u.sql", specs->cfPaths.ddldir, oid);
+
+	log_notice("Applying custom DDL from \"%s\"", ddlFilename);
+
+	char *contents = NULL;
+	long size = 0L;
+
+	if (!read_file(ddlFilename, &contents, &size))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	PGSQL dst = { 0 };
+
+	if (!pgsql_init(&dst, specs->target_pguri, PGSQL_CONN_TARGET))
+	{
+		/* errors have already been logged */
+		free(contents);
+		return false;
+	}
+
+	if (!pgsql_send_and_fetch(&dst, contents))
+	{
+		log_error("Failed to apply custom DDL from \"%s\", "
+				  "see above for details",
+				  ddlFilename);
+
+		free(contents);
+		return false;
+	}
+
+	free(contents);
 	return true;
 }
