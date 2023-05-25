@@ -20,10 +20,21 @@ psql -d ${PGCOPYDB_TARGET_PGURI} -f /usr/src/pgcopydb/ddl.sql
 # insert a first batch of 10 rows (1..10)
 psql -v a=1 -v b=10 -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 
+# take a snapshot with concurrent activity happening it would be hard to sync
+# concurrent activity in the inject service, so use a job instead
+bash ./run-background-traffic.sh &
+BACKGROUND_TRAFFIC_PID=$!
+
+# wait for few seconds to allow snapshot to happen in between the traffic
+sleep 2
+
 # grab a snapshot on the source database
 coproc ( pgcopydb snapshot --follow --plugin wal2json --notice )
 
-sleep 1
+sleep 2
+
+# stop the background traffic
+kill -TERM ${BACKGROUND_TRAFFIC_PID}
 
 # check the replication slot file contents
 cat /var/lib/postgres/.local/share/pgcopydb/slot

@@ -1540,6 +1540,20 @@ parseMessageMetadata(LogicalMessageMetadata *metadata,
 		}
 	}
 
+	if (json_object_has_value(jsobj, "commit_lsn"))
+	{
+		char *txnCommitLSN = (char *) json_object_get_string(jsobj, "commit_lsn");
+
+		if (txnCommitLSN != NULL)
+		{
+			if (!parseLSN(txnCommitLSN, &(metadata->txnCommitLSN)))
+			{
+				log_error("Failed to parse LSN \"%s\"", txnCommitLSN);
+				return false;
+			}
+		}
+	}
+
 	if (!skipAction &&
 		metadata->lsn == InvalidXLogRecPtr &&
 		(metadata->action == STREAM_ACTION_BEGIN ||

@@ -55,6 +55,7 @@ typedef struct LogicalMessageMetadata
 	StreamAction action;
 	uint32_t xid;
 	uint64_t lsn;
+	uint64_t txnCommitLSN;		/* COMMIT LSN of the transaction */
 	char timestamp[PG_MAX_TIMESTAMP];
 
 	/* our own internal decision making */
