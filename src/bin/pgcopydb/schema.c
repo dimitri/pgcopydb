@@ -3177,6 +3177,322 @@ schema_list_pg_depend(PGSQL *pgsql,
 
 
 /*
+ * For code simplicity the index array is also the SourceFilterType enum value.
+ */
+struct FilteringQueries listSourceRevDependSQL[] = {
+	{
+		SOURCE_FILTER_TYPE_NONE, ""
+	},
+
+	{
+		SOURCE_FILTER_TYPE_INCL,
+
+		PG_DEPEND_SQL
+		"  SELECT n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, "
+		"         deptype, type, identity "
+		"    FROM unconcat "
+
+		/* include-only-table */
+		"         join pg_class c "
+		"           on unconcat.classid = 'pg_class'::regclass "
+		"          and unconcat.objid = c.oid "
+
+		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
+
+		"         join pg_temp.filter_include_only_table inc "
+		"           on n.nspname = inc.nspname "
+		"          and c.relname = inc.relname "
+
+		"         , pg_identify_object(classid, objid, objsubid) "
+
+		"   WHERE NOT (refclassid = classid AND refobjid = objid) "
+		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
+		"      and type not in ('toast table column', 'default value') "
+
+		/* remove duplicates due to multiple refobjsubid / objsubid */
+		"GROUP BY n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, deptype, type, identity"
+	},
+
+	{
+		SOURCE_FILTER_TYPE_EXCL,
+
+		PG_DEPEND_SQL
+		"  SELECT n.nspname, relname, "
+		"         refclassid, refobjid, classid, objid, "
+		"         deptype, type, identity "
+
+		"    FROM pg_namespace n "
+
+		/* exclude-schema */
+		"         join pg_temp.filter_exclude_schema fn "
+		"           on n.nspname = fn.nspname "
+
+		"         left join unconcat "
+		"           on unconcat.classid = 'pg_namespace'::regclass "
+		"          and unconcat.objid = n.oid "
+
+		"         left join pg_class c "
+		"           on unconcat.refclassid = 'pg_class'::regclass "
+		"          and unconcat.refobjid = c.oid "
+
+		"         , pg_identify_object(classid, objid, objsubid) "
+
+		/* remove duplicates due to multiple refobjsubid / objsubid */
+		"GROUP BY n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, deptype, type, identity"
+
+		" UNION ALL "
+		" ( "
+		"  SELECT n.nspname, null as relname, "
+		"         null as refclassid, null as refobjid, "
+		"         'pg_namespace'::regclass::oid as classid, n.oid as objid, "
+		"         null as deptype, type, identity "
+
+		"    FROM pg_namespace n "
+
+		/* exclude-schema */
+		"         join pg_temp.filter_exclude_schema fn "
+		"           on n.nspname = fn.nspname "
+
+		"         , pg_identify_object('pg_namespace'::regclass, n.oid, 0) "
+		" ) "
+
+		" UNION ALL "
+		" ( "
+
+		"  SELECT cn.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, "
+		"         deptype, type, identity "
+		"    FROM unconcat "
+
+		"         left join pg_class c "
+		"           on unconcat.classid = 'pg_class'::regclass "
+		"          and unconcat.objid = c.oid "
+
+		"         left join pg_catalog.pg_namespace cn "
+		"           on c.relnamespace = cn.oid "
+
+		/* exclude-schema */
+		"         left join pg_temp.filter_exclude_schema fn "
+		"                on cn.nspname = fn.nspname "
+
+		/* exclude-table */
+		"         left join pg_temp.filter_exclude_table ft "
+		"                on cn.nspname = ft.nspname "
+		"               and c.relname = ft.relname "
+
+		/* exclude-table-data */
+		"         left join pg_temp.filter_exclude_table_data ftd "
+		"                on cn.nspname = ftd.nspname "
+		"               and c.relname = ftd.relname "
+
+		"         , pg_identify_object(classid, objid, objsubid) "
+
+		"   WHERE NOT (refclassid = classid AND refobjid = objid) "
+		"      and cn.nspname !~ '^pg_' and cn.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
+		"      and type not in ('toast table column', 'default value') "
+
+		/* WHERE clause for exclusion filters */
+		"     and fn.nspname is null "
+		"     and ft.relname is null "
+		"     and ftd.relname is null "
+
+		/* remove duplicates due to multiple refobjsubid / objsubid */
+		"GROUP BY cn.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, deptype, type, identity"
+
+		" ) "
+	},
+
+	{
+		SOURCE_FILTER_TYPE_LIST_NOT_INCL,
+
+		PG_DEPEND_SQL
+		"  SELECT n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, "
+		"         deptype, type, identity "
+		"    FROM unconcat "
+
+		"         join pg_class c "
+		"           on unconcat.classid = 'pg_class'::regclass "
+		"          and unconcat.objid = c.oid "
+
+		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
+
+		/* include-only-table */
+		"    left join pg_temp.filter_include_only_table inc "
+		"           on n.nspname = inc.nspname "
+		"          and c.relname = inc.relname "
+
+		"         , pg_identify_object(classid, objid, objsubid) "
+
+		"   WHERE NOT (refclassid = classid AND refobjid = objid) "
+		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
+		"      and type not in ('toast table column', 'default value') "
+
+		/* WHERE clause for exclusion filters */
+		"     and inc.nspname is null "
+
+		/* remove duplicates due to multiple refobjsubid / objsubid */
+		"GROUP BY n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, deptype, type, identity"
+	},
+
+	{
+		SOURCE_FILTER_TYPE_LIST_EXCL,
+
+		PG_DEPEND_SQL
+		"  SELECT n.nspname, relname, "
+		"         refclassid, refobjid, classid, objid, "
+		"         deptype, type, identity "
+
+		"    FROM pg_namespace n "
+
+		/* exclude-schema */
+		"         join pg_temp.filter_exclude_schema fn "
+		"           on n.nspname = fn.nspname "
+
+		"         left join unconcat "
+		"           on unconcat.classid = 'pg_namespace'::regclass "
+		"          and unconcat.objid = n.oid "
+
+		"         left join pg_class c "
+		"           on unconcat.refclassid = 'pg_class'::regclass "
+		"          and unconcat.refobjid = c.oid "
+
+		"         , pg_identify_object(classid, objid, objsubid) "
+
+		/* remove duplicates due to multiple refobjsubid / objsubid */
+		"GROUP BY n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, deptype, type, identity"
+
+		" UNION ALL "
+		" ( "
+		"  SELECT n.nspname, null as relname, "
+		"         null as refclassid, null as refobjid, "
+		"         'pg_namespace'::regclass::oid as classid, n.oid as objid, "
+		"         null as deptype, type, identity "
+
+		"    FROM pg_namespace n "
+
+		/* exclude-schema */
+		"         join pg_temp.filter_exclude_schema fn "
+		"           on n.nspname = fn.nspname "
+
+		"         , pg_identify_object('pg_namespace'::regclass, n.oid, 0) "
+		" ) "
+
+		" UNION ALL "
+		" ( "
+
+		"  SELECT n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, "
+		"         deptype, type, identity "
+		"    FROM unconcat "
+
+		"         join pg_class c "
+		"           on unconcat.classid = 'pg_class'::regclass "
+		"          and unconcat.objid = c.oid "
+
+		"         join pg_catalog.pg_namespace n "
+		"           on c.relnamespace = n.oid "
+
+		/* exclude-schema */
+		"         left join pg_temp.filter_exclude_schema fn "
+		"                on n.nspname = fn.nspname "
+
+		/* exclude-table */
+		"         left join pg_temp.filter_exclude_table ft "
+		"                on n.nspname = ft.nspname "
+		"               and c.relname = ft.relname "
+
+		"         , pg_identify_object(classid, objid, objsubid) "
+
+		"   WHERE NOT (refclassid = classid AND refobjid = objid) "
+		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
+		"      and type not in ('toast table column', 'default value') "
+
+		/* WHERE clause for exclusion filters */
+		"     and (   fn.nspname is not null "
+		"          or ft.relname is not null ) "
+
+		/* remove duplicates due to multiple refobjsubid / objsubid */
+		"GROUP BY n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, deptype, type, identity"
+
+		" ) "
+	}
+};
+
+
+/*
+ * schema_list_pg_depend recursively walks the pg_catalog.pg_depend view and
+ * builds the list of objects that depend on tables that are filtered-out from
+ * our operations.
+ */
+bool
+schema_list_pg_reverse_depend(PGSQL *pgsql,
+							  SourceFilters *filters,
+							  SourceDependArray *dependArray)
+{
+	SourceDependArrayContext context = { { 0 }, dependArray, false };
+
+	log_trace("schema_list_pg_reverse_depend");
+
+	switch (filters->type)
+	{
+		case SOURCE_FILTER_TYPE_INCL:
+		case SOURCE_FILTER_TYPE_EXCL:
+		case SOURCE_FILTER_TYPE_LIST_NOT_INCL:
+		case SOURCE_FILTER_TYPE_LIST_EXCL:
+		{
+			if (!prepareFilters(pgsql, filters))
+			{
+				log_error("Failed to prepare pgcopydb filters, "
+						  "see above for details");
+				return false;
+			}
+			break;
+		}
+
+		/* SOURCE_FILTER_TYPE_EXCL_INDEX etc */
+		default:
+		{
+			log_error("BUG: schema_list_pg_depend called with "
+					  "filtering type %d",
+					  filters->type);
+			return false;
+		}
+	}
+
+	log_debug("listSourceRevDependSQL[%s]", filterTypeToString(filters->type));
+
+	char *sql = listSourceRevDependSQL[filters->type].sql;
+
+	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+								   &context, &getDependArray))
+	{
+		log_error("Failed to list table reverse dependencies");
+		return false;
+	}
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to list table reverse dependencies");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * schema_list_partitions prepares the list of partitions that we can drive
  * from our parameters: table size, --split-tables-larger-than.
  */

@@ -137,6 +137,7 @@ static CommandLine list_depends_command =
 		"  --source            Postgres URI to the source database\n"
 		"  --schema-name       Name of the schema where to find the table\n"
 		"  --table-name        Name of the target table\n"
+		"  --reverse           List reverse dependencies\n"
 		"  --filter <filename> Use the filters defined in <filename>\n"
 		"  --list-skipped      List only tables that are setup to be skipped\n",
 		cli_list_db_getopts,
@@ -200,6 +201,7 @@ cli_list_db_getopts(int argc, char **argv)
 		{ "dir", required_argument, NULL, 'D' },
 		{ "schema-name", required_argument, NULL, 's' },
 		{ "table-name", required_argument, NULL, 't' },
+		{ "reverse", no_argument, NULL, 'R' },
 		{ "filter", required_argument, NULL, 'F' },
 		{ "filters", required_argument, NULL, 'F' },
 		{ "list-skipped", no_argument, NULL, 'x' },
@@ -222,7 +224,7 @@ cli_list_db_getopts(int argc, char **argv)
 
 	optind = 0;
 
-	while ((c = getopt_long(argc, argv, "S:T:D:j:s:t:PL:cCJVvdzqh",
+	while ((c = getopt_long(argc, argv, "S:D:s:t:RF:xPL:cCyJVdzvqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -272,6 +274,13 @@ cli_list_db_getopts(int argc, char **argv)
 							  options.filterFileName);
 					++errors;
 				}
+				break;
+			}
+
+			case 'R':
+			{
+				options.reverse = true;
+				log_trace("--reverse");
 				break;
 			}
 
@@ -411,6 +420,13 @@ cli_list_db_getopts(int argc, char **argv)
 			{
 				commandline_help(stderr);
 				exit(EXIT_CODE_QUIT);
+				break;
+			}
+
+			case '?':
+			{
+				commandline_help(stderr);
+				exit(EXIT_CODE_BAD_ARGS);
 				break;
 			}
 
@@ -1358,10 +1374,21 @@ cli_list_depends(int argc, char **argv)
 		exit(EXIT_CODE_SOURCE);
 	}
 
-	if (!schema_list_pg_depend(&pgsql, &filters, &dependArray))
+	if (listDBoptions.reverse)
 	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
+		if (!schema_list_pg_reverse_depend(&pgsql, &filters, &dependArray))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+	}
+	else
+	{
+		if (!schema_list_pg_depend(&pgsql, &filters, &dependArray))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
 	}
 
 	log_info("Fetched information for %d dependencies", dependArray.count);

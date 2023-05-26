@@ -334,4 +334,8 @@ bool schema_list_pg_depend(PGSQL *pgsql,
 						   SourceFilters *filters,
 						   SourceDependArray *dependArray);
 
+bool schema_list_pg_reverse_depend(PGSQL *pgsql,
+								   SourceFilters *filters,
+								   SourceDependArray *dependArray);
+
 #endif /* SCHEMA_H */
