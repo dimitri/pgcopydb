@@ -313,7 +313,7 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		 * ensure to catch-up with files on-disk before switching
 		 * to another mode of operations.
 		 */
-		if (!follow_prepare_mode_switch(streamSpecs, previousMode))
+		if (!follow_prepare_mode_switch(streamSpecs, previousMode, currentMode))
 		{
 			/* errors have already been logged */
 			return false;
@@ -374,7 +374,9 @@ follow_reached_endpos(StreamSpecs *streamSpecs, bool *done)
  * transformed and replayed from file before changing our mode of operations.
  */
 bool
-follow_prepare_mode_switch(StreamSpecs *streamSpecs, LogicalStreamMode previousMode)
+follow_prepare_mode_switch(StreamSpecs *streamSpecs,
+						   LogicalStreamMode previousMode,
+						   LogicalStreamMode currentMode)
 {
 	log_info("Catching-up from existing on-disk files");
 
@@ -391,15 +393,31 @@ follow_prepare_mode_switch(StreamSpecs *streamSpecs, LogicalStreamMode previousM
 	}
 
 	/*
-	 * If the previous mode was catch-up, then before proceeding, we need to
-	 * empty the transform queue where the STOP message was sent.
+	 * If the previous mode was catch-up, then before proceeding, we might need
+	 * to empty the transform queue where the STOP message was sent.
 	 */
 	if (previousMode == STREAM_MODE_CATCHUP)
 	{
-		if (!stream_transform_from_queue(streamSpecs))
+		Queue *transformQueue = &(streamSpecs->transformQueue);
+		QueueStats qStats = { 0 };
+
+		if (!queue_stats(transformQueue, &qStats))
 		{
-			/* errors have already been logged */
+			log_error("Failed to get the transform queue stats, "
+					  "see above for details");
 			return false;
+		}
+
+		if (qStats.msg_qnum > 0)
+		{
+			log_notice("Processing %lld messages from the transform queue",
+					   (long long) qStats.msg_qnum);
+
+			if (!stream_transform_from_queue(streamSpecs))
+			{
+				/* errors have already been logged */
+				return false;
+			}
 		}
 	}
 
