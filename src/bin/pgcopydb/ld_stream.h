@@ -55,7 +55,7 @@ typedef struct LogicalMessageMetadata
 	StreamAction action;
 	uint32_t xid;
 	uint64_t lsn;
-	uint64_t txnCommitLSN;		/* COMMIT LSN of the transaction */
+	uint64_t txnCommitLSN;      /* COMMIT LSN of the transaction */
 	char timestamp[PG_MAX_TIMESTAMP];
 
 	/* our own internal decision making */
@@ -574,7 +574,9 @@ bool follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
 bool followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
 
 bool follow_reached_endpos(StreamSpecs *streamSpecs, bool *done);
-bool follow_prepare_mode_switch(StreamSpecs *streamSpecs, LogicalStreamMode previousMode);
+bool follow_prepare_mode_switch(StreamSpecs *streamSpecs,
+								LogicalStreamMode previousMode,
+								LogicalStreamMode currentMode);
 
 bool follow_start_subprocess(StreamSpecs *specs, FollowSubProcess *subprocess);
 
