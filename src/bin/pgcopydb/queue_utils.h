@@ -52,4 +52,15 @@ bool queue_unlink(Queue *queue);
 bool queue_send(Queue *queue, QMessage *msg);
 bool queue_receive(Queue *queue, QMessage *msg);
 
+/* see struct msqid_ds in msgctl(2) */
+typedef struct QueueStats
+{
+	uint64_t msg_cbytes;    /* number of bytes in use on the queue */
+	uint64_t msg_qnum;      /* number of msgs in the queue */
+	pid_t msg_lspid;        /* pid of last msgsnd() */
+	pid_t msg_lrpid;        /* pid of last msgrcv() */
+} QueueStats;
+
+bool queue_stats(Queue *queue, QueueStats *stats);
+
 #endif /* QUEUE_UTILS_H */
