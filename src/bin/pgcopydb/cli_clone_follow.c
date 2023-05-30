@@ -543,10 +543,7 @@ cloneDB(CopyDataSpec *copySpecs)
 
 	(void) summary_set_current_time(timings, TIMING_STEP_AFTER_PREPARE_SCHEMA);
 
-	log_info("STEP 4: copy data from source to target in %d sub-processes",
-			 copySpecs->tableJobs);
-
-	/* STEPs 5, 6, 7, 8, and 9 are printed when starting the sub-processes */
+	/* STEPs 4, 5, 6, 7, 8, and 9 are printed when starting the sub-processes */
 
 	if (!copydb_copy_all_table_data(copySpecs))
 	{

@@ -14,6 +14,63 @@
 #include "schema.h"
 #include "signals.h"
 
+
+/*
+ * copydb_start_extension_process an auxilliary process that copies the
+ * extension configuration table data from the source database into the target
+ * database.
+ */
+bool
+copydb_start_extension_data_process(CopyDataSpec *specs)
+{
+	if (specs->skipExtensions)
+	{
+		return true;
+	}
+
+	/*
+	 * Flush stdio channels just before fork, to avoid double-output problems.
+	 */
+	fflush(stdout);
+	fflush(stderr);
+
+	int fpid = fork();
+
+	switch (fpid)
+	{
+		case -1:
+		{
+			log_error("Failed to fork a worker process: %m");
+			return false;
+		}
+
+		case 0:
+		{
+			/* child process runs the command */
+			bool createExtensions = false;
+
+			if (!copydb_copy_extensions(specs, createExtensions))
+			{
+				log_error("Failed to copy extensions configuration tables, "
+						  "see above for details");
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			exit(EXIT_CODE_QUIT);
+		}
+
+		default:
+		{
+			/* fork succeeded, in parent */
+			break;
+		}
+	}
+
+	/* now we're done, and we want async behavior, do not wait */
+	return true;
+}
+
+
 /*
  * copydb_copy_extensions copies extensions from the source instance into the
  * target instance.

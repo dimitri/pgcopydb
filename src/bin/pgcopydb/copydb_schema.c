@@ -434,7 +434,7 @@ copydb_prepare_index_specs(CopyDataSpec *specs, PGSQL *pgsql)
 		{
 			SourceIndex *index = &(indexArray->array[i]);
 
-			/* add the current table to the index Hash-by-OID */
+			/* add the current index to the index Hash-by-OID */
 			HASH_ADD(hh, sourceIndexHashByOid, indexOid, sizeof(uint32_t), index);
 
 			/* find the index table, update its index list */

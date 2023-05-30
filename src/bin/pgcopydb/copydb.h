@@ -247,8 +247,9 @@ typedef struct CopyDataSpec
 	Semaphore tableSemaphore;
 	Semaphore indexSemaphore;
 
-	Queue vacuumQueue;
+	Queue copyQueue;
 	Queue indexQueue;
+	Queue vacuumQueue;
 
 	DumpPaths dumpPaths;
 
@@ -353,6 +354,7 @@ bool snapshot_write_slot(const char *filename, ReplicationSlot *slot);
 bool snapshot_read_slot(const char *filename, ReplicationSlot *slot);
 
 /* extensions.c */
+bool copydb_start_extension_data_process(CopyDataSpec *specs);
 bool copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions);
 
 /* indexes.c */
@@ -453,18 +455,26 @@ char * copydb_ObjectKindToString(ObjectKind kind);
 
 /* table-data.c */
 bool copydb_copy_all_table_data(CopyDataSpec *specs);
-
 bool copydb_process_table_data(CopyDataSpec *specs);
+
+bool copydb_start_copy_supervisor(CopyDataSpec *specs);
+bool copydb_copy_supervisor(CopyDataSpec *specs);
+bool copydb_start_table_data_workers(CopyDataSpec *specs);
+bool copydb_table_data_worker(CopyDataSpec *specs);
+
+bool copydb_add_copy(CopyDataSpec *specs, uint32_t oid, uint32_t part);
+bool copydb_copy_data_by_oid(CopyDataSpec *specs, uint32_t oid, uint32_t part);
+
 bool copydb_process_table_data_worker(CopyDataSpec *specs);
 
 bool copydb_process_table_data_with_workers(CopyDataSpec *specs);
 
 bool copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs);
 
-bool copydb_table_is_being_processed(CopyDataSpec *specs,
-									 CopyTableDataSpec *tableSpecs,
-									 bool *isDone,
-									 bool *isBeingProcessed);
+
+bool copydb_table_create_lockfile(CopyDataSpec *specs,
+								  CopyTableDataSpec *tableSpecs,
+								  bool *isDone);
 
 bool copydb_mark_table_as_done(CopyDataSpec *specs,
 							   CopyTableDataSpec *tableSpecs);
