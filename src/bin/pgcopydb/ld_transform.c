@@ -219,20 +219,6 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
 			new.isTransaction = true;
 			new.action = STREAM_ACTION_BEGIN;
 
-			LogicalTransactionStatement *stmt = NULL;
-
-			stmt = (LogicalTransactionStatement *)
-				   calloc(1,
-						  sizeof(LogicalTransactionStatement));
-
-			if (stmt == NULL)
-			{
-				log_error(ALLOCATION_FAILED_ERROR);
-				return false;
-			}
-
-			stmt->action = STREAM_ACTION_BEGIN;
-
 			LogicalTransaction *old = &(currentMsg->command.tx);
 			LogicalTransaction *txn = &(new.command.tx);
 
@@ -718,22 +704,9 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 			new.isTransaction = true;
 			new.action = STREAM_ACTION_BEGIN;
 
-			LogicalTransactionStatement *stmt = NULL;
-
-			stmt = (LogicalTransactionStatement *)
-				   calloc(1,
-						  sizeof(LogicalTransactionStatement));
-
-			if (stmt == NULL)
-			{
-				log_error(ALLOCATION_FAILED_ERROR);
-				return false;
-			}
-
-			stmt->action = STREAM_ACTION_BEGIN;
-
 			LogicalTransaction *txn = &(new.command.tx);
 			txn->continued = true;
+			txn->xid = metadata->xid;
 			txn->first = NULL;
 
 			*currentMsg = new;
@@ -1000,6 +973,8 @@ parseMessage(LogicalMessage *mesg,
 
 			txn->xid = metadata->xid;
 			txn->beginLSN = metadata->lsn;
+
+			/* this should be overwritten in COMMIT action as that's what we need for origin */
 			strlcpy(txn->timestamp, metadata->timestamp, sizeof(txn->timestamp));
 			txn->first = NULL;
 
@@ -1022,6 +997,8 @@ parseMessage(LogicalMessage *mesg,
 				return false;
 			}
 
+			/* update the timestamp for tracking in replication origin */
+			strlcpy(txn->timestamp, metadata->timestamp, sizeof(txn->timestamp));
 			txn->commitLSN = metadata->lsn;
 			txn->commit = true;
 
@@ -1355,7 +1332,7 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 	 * other databases or background activity in the source Postgres instance
 	 * where the LSN is moving forward. We want to replay them.
 	 */
-	if (txn->count == 0)
+	if (!txn->continued && txn->count == 0)
 	{
 		if (!stream_write_begin(out, txn))
 		{

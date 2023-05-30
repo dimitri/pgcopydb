@@ -150,3 +150,28 @@ queue_receive(Queue *queue, QMessage *msg)
 
 	return true;
 }
+
+
+/*
+ * queue_stats retrieves statistics from the queue.
+ */
+bool
+queue_stats(Queue *queue, QueueStats *stats)
+{
+	struct msqid_ds ds = { 0 };
+
+	if (msgctl(queue->qId, IPC_STAT, &ds) != 0)
+	{
+		log_error("Failed to get stats for %s message queue %d: %m",
+				  queue->name,
+				  queue->qId);
+		return false;
+	}
+
+	stats->msg_cbytes = ds.msg_cbytes;
+	stats->msg_qnum = ds.msg_qnum;
+	stats->msg_lspid = ds.msg_lspid;
+	stats->msg_lrpid = ds.msg_lrpid;
+
+	return true;
+}
