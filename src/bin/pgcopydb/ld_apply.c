@@ -414,8 +414,6 @@ stream_apply_file(StreamApplyContext *context)
 			  content.count,
 			  content.filename);
 
-	context->reachedStartPos = false;
-
 	/* replay the SQL commands from the SQL file */
 	for (int i = 0; i < content.count && !context->reachedEndPos; i++)
 	{
@@ -806,6 +804,9 @@ setupReplicationOrigin(StreamApplyContext *context,
 
 	context->paths = *paths;
 	context->apply = apply;
+
+	context->reachedStartPos = false;
+
 	strlcpy(context->source_pguri, source_pguri, sizeof(context->source_pguri));
 	strlcpy(context->target_pguri, target_pguri, sizeof(context->target_pguri));
 	strlcpy(context->origin, origin, sizeof(context->origin));
