@@ -1332,7 +1332,7 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 	 * other databases or background activity in the source Postgres instance
 	 * where the LSN is moving forward. We want to replay them.
 	 */
-	if (txn->count == 0)
+	if (!txn->continued && txn->count == 0)
 	{
 		if (!stream_write_begin(out, txn))
 		{
