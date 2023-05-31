@@ -101,6 +101,8 @@ typedef struct StreamContext
 	LogicalMessageMetadata metadata;
 	LogicalMessageMetadata previous;
 
+	uint64_t maxWrittenLSN;     /* max LSN written so far to the JSON files */
+
 	uint64_t lastWrite;
 
 	Queue *transformQueue;
