@@ -920,7 +920,7 @@ cli_stream_transform(int argc, char **argv)
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 	}
-	else if (!stream_transform_file(jsonfilename, sqlfilename))
+	else if (!stream_transform_file(jsonfilename, sqlfilename, specs.paths.dir))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

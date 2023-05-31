@@ -20,8 +20,8 @@ psql -d ${PGCOPYDB_TARGET_PGURI} -f /usr/src/pgcopydb/ddl.sql
 # insert a first batch of 10 rows (1..10)
 psql -v a=1 -v b=10 -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 
-# take a snapshot with concurrent activity happening it would be hard to sync
-# concurrent activity in the inject service, so use a job instead
+# take a snapshot with concurrent activity happening. As it would be hard to
+# sync concurrent activity in the inject service, so use a job instead
 bash ./run-background-traffic.sh &
 BACKGROUND_TRAFFIC_PID=$!
 
@@ -35,6 +35,10 @@ sleep 2
 
 # stop the background traffic
 kill -TERM ${BACKGROUND_TRAFFIC_PID}
+
+# run a transaction that spans multiple wal files. Again, we are doing this here
+# instead of inject service to ensure this data is captured during prefetch
+psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/multi-wal-txn.sql
 
 # check the replication slot file contents
 cat /var/lib/postgres/.local/share/pgcopydb/slot

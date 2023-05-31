@@ -495,11 +495,38 @@ stream_apply_sql(StreamApplyContext *context,
 		case STREAM_ACTION_BEGIN:
 		{
 			if (metadata->lsn == InvalidXLogRecPtr ||
-				metadata->txnCommitLSN == InvalidXLogRecPtr ||
 				IS_EMPTY_STRING_BUFFER(metadata->timestamp))
 			{
 				log_fatal("Failed to parse BEGIN message: %s", sql);
 				return false;
+			}
+
+			/* if txnCommitLSN is invalid, then fetch it from txn metadata file */
+			if (metadata->txnCommitLSN == InvalidXLogRecPtr)
+			{
+				char txnfilename[MAXPGPATH] = { 0 };
+
+				if (!computeTxnMetadataFilename(metadata->xid,
+												context->paths.dir,
+												txnfilename))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+
+				log_debug("stream_apply_sql: BEGIN message without a commit LSN, "
+						  "fetching commit LSN from transaction metadata file \"%s\"",
+						  txnfilename);
+
+				LogicalMessageMetadata txnMetadata = { .xid = metadata->xid };
+
+				if (!parseTxnMetadataFile(txnfilename, &txnMetadata))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+
+				metadata->txnCommitLSN = txnMetadata.txnCommitLSN;
 			}
 
 			/* did we reach the starting LSN positions now? */
@@ -986,6 +1013,94 @@ parseSQLAction(const char *query, LogicalMessageMetadata *metadata)
 	if (metadata->action == STREAM_ACTION_UNKNOWN)
 	{
 		log_error("Failed to parse action from query: %s", query);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * parseTxnMetadataFile returns the transaction metadata content for the given
+ * metadata filename.
+ */
+bool
+parseTxnMetadataFile(const char *filename, LogicalMessageMetadata *metadata)
+{
+	/* store xid as it will be overwritten while parsing metadata */
+	uint32_t xid = metadata->xid;
+
+	if (xid == 0)
+	{
+		log_error("BUG: parseTxnMetadataFile is called with "
+				  "transaction xid: %lld", (long long) xid);
+		return false;
+	}
+
+	/*
+	 * Read the transaction metadata file created by the transform process for
+	 * transactions spanning multiple WAL files. The metadata json file is
+	 * generated upon encountering the COMMIT statement, but it may take some
+	 * time to become available for transformation. Therefore, we retry here.
+	 */
+
+	ConnectionRetryPolicy retryPolicy = { 0 };
+
+	int maxT = 900;             /* 15 mins */
+	int maxSleepTime = 3000;    /* 2s */
+	int baseSleepTime = 100;    /* 100ms */
+
+	(void) pgsql_set_retry_policy(&retryPolicy,
+								  maxT,
+								  -1, /* unbounded number of attempts */
+								  maxSleepTime,
+								  baseSleepTime);
+
+	while (!pgsql_retry_policy_expired(&retryPolicy))
+	{
+		if (file_exists(filename))
+		{
+			break;
+		}
+
+		int sleepTimeMs =
+			pgsql_compute_connection_retry_sleep_time(&retryPolicy);
+
+		log_debug("parseTxnMetadataFile: waiting for transaction metadata "
+				  "file %s to be created, retrying in %dms",
+				  filename, sleepTimeMs);
+
+		/* we have milliseconds, pg_usleep() wants microseconds */
+		(void) pg_usleep(sleepTimeMs * 1000);
+	}
+
+	char *txnMetadataContent = NULL;
+	long size = 0L;
+
+	/* we don't want to retry anymore, error out if files still don't exist */
+	if (!read_file(filename, &txnMetadataContent, &size))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	JSON_Value *json = json_parse_string(txnMetadataContent);
+
+	if (!parseMessageMetadata(metadata, txnMetadataContent, json, true))
+	{
+		/* errors have already been logged */
+		json_value_free(json);
+		return false;
+	}
+
+	json_value_free(json);
+
+	if (metadata->txnCommitLSN == InvalidXLogRecPtr ||
+		metadata->xid != xid ||
+		IS_EMPTY_STRING_BUFFER(metadata->timestamp))
+	{
+		log_error("Failed to parse metadata for transaction metadata file "
+				  "%s: %s", filename, txnMetadataContent);
 		return false;
 	}
 
