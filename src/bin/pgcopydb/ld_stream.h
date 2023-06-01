@@ -103,7 +103,7 @@ typedef struct StreamContext
 
 	uint64_t maxWrittenLSN;     /* max LSN written so far to the JSON files */
 
-	uint64_t lastWrite;
+	uint64_t lastWriteTime;
 
 	Queue *transformQueue;
 	uint32_t WalSegSz;

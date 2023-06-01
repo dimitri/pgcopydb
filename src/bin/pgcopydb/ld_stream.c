@@ -311,7 +311,7 @@ stream_init_context(StreamContext *privateContext, StreamSpecs *specs)
 	privateContext->metadata.action = STREAM_ACTION_UNKNOWN;
 	privateContext->previous.action = STREAM_ACTION_UNKNOWN;
 
-	privateContext->lastWrite = 0;
+	privateContext->lastWriteTime = 0;
 
 	/*
 	 * Initializing maxWrittenLSN as startpos at the beginning of migration or
@@ -720,8 +720,8 @@ stream_write_json(LogicalStreamContext *context, bool previous)
 		bytes_left -= ret;
 	}
 
-	/* time to update our lastWrite mark */
-	privateContext->lastWrite = time(NULL);
+	/* time to update our lastWriteTime mark */
+	privateContext->lastWriteTime = time(NULL);
 
 	/* update the tracking for maximum LSN of messages written to disk so far */
 	if (privateContext->maxWrittenLSN < metadata->lsn)
@@ -1242,8 +1242,8 @@ streamKeepalive(LogicalStreamContext *context)
 		/* update the LSN tracking that's reported in the feedback */
 		context->tracking->written_lsn = context->cur_record_lsn;
 
-		/* time to update our lastWrite mark */
-		privateContext->lastWrite = time(NULL);
+		/* time to update our lastWriteTime mark */
+		privateContext->lastWriteTime = time(NULL);
 
 		/* update the tracking for maximum LSN of messages written to disk so far */
 		if (privateContext->maxWrittenLSN < context->cur_record_lsn)
@@ -1427,7 +1427,7 @@ prepareMessageMetadataFromContext(LogicalStreamContext *context)
 	 * continue tracking LSN progress in our replay system.
 	 */
 	uint64_t now = time(NULL);
-	uint64_t elapsed = now - privateContext->lastWrite;
+	uint64_t elapsed = now - privateContext->lastWriteTime;
 
 	metadata->recvTime = now;
 
