@@ -30,9 +30,10 @@ typedef struct Queue
 typedef enum
 {
 	QMSG_TYPE_UNKNOWN = 0,
-	QMSG_TYPE_TABLEOID,
-	QMSG_TYPE_INDEXOID,
-	QMSG_TYPE_STREAM_TRANSFORM,
+	QMSG_TYPE_TABLEOID,         /* table oid */
+	QMSG_TYPE_TABLEPOID,        /* table oid, table partition number */
+	QMSG_TYPE_INDEXOID,         /* index oid */
+	QMSG_TYPE_STREAM_TRANSFORM, /* lsn position for transform process */
 	QMSG_TYPE_STOP
 } QMessageType;
 
@@ -43,6 +44,13 @@ typedef struct QMessage
 	{
 		uint32_t oid;
 		uint64_t lsn;
+
+		/* table parts (support for COPY partitionning) */
+		struct tp
+		{
+			uint32_t oid;
+			uint32_t part;
+		} tp;
 	} data;
 } QMessage;
 
