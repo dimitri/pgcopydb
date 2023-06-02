@@ -852,7 +852,6 @@ void
 print_summary_as_json(Summary *summary, const char *filename)
 {
 	log_notice("Storing migration summary in JSON file \"%s\"", filename);
-	log_warn("Storing migration summary in JSON file \"%s\"", filename);
 
 	JSON_Value *js = json_value_init_object();
 	JSON_Object *jsobj = json_value_get_object(js);
@@ -967,8 +966,6 @@ print_summary_as_json(Summary *summary, const char *filename)
 
 	json_object_set_value(jsobj, "steps", jsSteps);
 
-	log_warn("print_summary_as_json: steps");
-
 	SummaryTable *summaryTable = &(summary->table);
 
 	JSON_Value *jsTables = json_value_init_array();
@@ -980,9 +977,6 @@ print_summary_as_json(Summary *summary, const char *filename)
 
 		JSON_Value *jsTable = json_value_init_object();
 		JSON_Object *jsTableObj = json_value_get_object(jsTable);
-
-		log_warn("print_summary_as_json: table %s [%u] %d/%d",
-				 entry->relname, entry->oid, i, summaryTable->count);
 
 		json_object_set_number(jsTableObj, "oid", entry->oid);
 		json_object_set_string(jsTableObj, "schema", entry->nspname);
@@ -1006,8 +1000,6 @@ print_summary_as_json(Summary *summary, const char *filename)
 			JSON_Value *jsIndex = json_value_init_object();
 			JSON_Object *jsIndexObj = json_value_get_object(jsIndex);
 
-			log_warn("print_summary_as_json: index %s", indexEntry->relname);
-
 			json_object_set_number(jsIndexObj, "oid", indexEntry->oid);
 			json_object_set_string(jsIndexObj, "schema", indexEntry->nspname);
 			json_object_set_string(jsIndexObj, "name", indexEntry->relname);
@@ -1030,8 +1022,6 @@ print_summary_as_json(Summary *summary, const char *filename)
 			JSON_Value *jsConstraint = json_value_init_object();
 			JSON_Object *jsConstraintObj = json_value_get_object(jsConstraint);
 
-			log_warn("print_summary_as_json: constraint %s", cEntry->relname);
-
 			json_object_set_number(jsConstraintObj, "oid", cEntry->oid);
 			json_object_set_string(jsConstraintObj, "schema", cEntry->nspname);
 			json_object_set_string(jsConstraintObj, "name", cEntry->relname);
@@ -1046,8 +1036,6 @@ print_summary_as_json(Summary *summary, const char *filename)
 
 		/* append the current table to the table array */
 		json_array_append_value(jsTableArray, jsTable);
-
-		log_warn("print_summary_as_json: %s done", entry->relname);
 	}
 
 	/* add the table array to the main JSON top-level dict */
@@ -1177,8 +1165,6 @@ print_summary(Summary *summary, CopyDataSpec *specs)
 {
 	SummaryTable *summaryTable = &(summary->table);
 
-	log_warn("print_summary");
-
 	summary->tableJobs = specs->tableJobs;
 	summary->indexJobs = specs->indexJobs;
 
@@ -1189,20 +1175,14 @@ print_summary(Summary *summary, CopyDataSpec *specs)
 		return false;
 	}
 
-	log_warn("print_summary json 1");
-
 	/* print the summary.json file */
 	(void) print_summary_as_json(summary, specs->cfPaths.summaryfile);
-
-	log_warn("print_summary json 2");
 
 	/* then we can prepare the headers and print the table */
 	if (specs->section == DATA_SECTION_TABLE_DATA ||
 		specs->section == DATA_SECTION_ALL)
 	{
-		log_warn("prepare_summary_table_headers");
 		(void) prepare_summary_table_headers(summaryTable);
-		log_warn("print_summary_table");
 		(void) print_summary_table(summaryTable);
 	}
 

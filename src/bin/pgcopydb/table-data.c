@@ -267,8 +267,6 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 	{
 		QMessage stop = { .type = QMSG_TYPE_STOP };
 
-		log_warn("Send STOP message to COPY queue %d", specs->copyQueue.qId);
-
 		if (!queue_send(&(specs->copyQueue), &stop))
 		{
 			/* errors have already been logged */
@@ -279,16 +277,12 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 	/*
 	 * Now just wait for the table-data COPY processes to be done.
 	 */
-	log_warn("COPY supervisor waits for children");
-
 	if (!copydb_wait_for_subprocesses(specs->failFast))
 	{
 		log_error("Some COPY worker process(es) have exited with error, "
 				  "see above for details");
 		return false;
 	}
-
-	log_warn("COPY supervisor children have now all exited");
 
 	/* write that we successfully finished copying all tables */
 	if (!write_file("", 0, specs->cfPaths.done.tables))
@@ -475,8 +469,6 @@ copydb_table_data_worker(CopyDataSpec *specs)
 				  pid,
 				  errors);
 	}
-
-	log_warn("Exiting table data COPY worker %d: %s", pid, success ? "ok" : "ko");
 
 	return success;
 }

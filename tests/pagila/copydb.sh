@@ -36,5 +36,3 @@ psql -o /tmp/s.out -d ${PAGILA_SOURCE_PGURI} -1 -f /tmp/pagila-schema.sql
 psql -o /tmp/d.out -d ${PAGILA_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
 
 pgcopydb clone --source ${PAGILA_SOURCE_PGURI} --target ${PAGILA_TARGET_PGURI}
-
-echo $?
