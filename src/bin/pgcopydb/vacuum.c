@@ -169,8 +169,6 @@ vacuum_analyze_table_by_oid(CopyDataSpec *specs, uint32_t oid)
 	CopyFilePaths *cfPaths = &(specs->cfPaths);
 	TableFilePaths tablePaths = { 0 };
 
-	log_trace("vacuum_analyze_table_by_oid: \"%s\"", specs->cfPaths.tbldir);
-
 	if (!copydb_init_tablepaths(cfPaths, &tablePaths, oid))
 	{
 		log_error("Failed to prepare pathnames for table %u", oid);
@@ -196,7 +194,8 @@ vacuum_analyze_table_by_oid(CopyDataSpec *specs, uint32_t oid)
 
 	if (!read_table_summary(&tableSummary, tablePaths.doneFile))
 	{
-		/* errors have already been logged */
+		log_error("Failed to read table summary file: \"%s\"",
+				  tablePaths.doneFile);
 		return false;
 	}
 
@@ -242,6 +241,8 @@ vacuum_add_table(CopyDataSpec *specs, uint32_t oid)
 		.type = QMSG_TYPE_TABLEOID,
 		.data.oid = oid
 	};
+
+	log_debug("vacuum_add_table: %u", oid);
 
 	if (!queue_send(&(specs->vacuumQueue), &mesg))
 	{

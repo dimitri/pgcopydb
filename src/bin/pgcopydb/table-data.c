@@ -593,7 +593,33 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, uint32_t oid, uint32_t part)
 		}
 		else if (allPartsDone && !indexesAreBeingProcessed)
 		{
-			if (!copydb_add_table_indexes(specs, &tableSpecs))
+			/*
+			 * The VACUUM command takes a conflicting lock with the CREATE
+			 * INDEX and ALTER TABLE commands used for indexes and constraints,
+			 * and as a result we send a table to the vacuum queue only after
+			 * its indexes have all been built.
+			 *
+			 * When a table has no indexes though, we never reach the code that
+			 * checks if all the indexes have been built already. In that case,
+			 * just add the table to the vacuum queue already.
+			 */
+			if (tableSpecs.sourceTable->firstIndex == NULL)
+			{
+				if (!specs->skipVacuum)
+				{
+					SourceTable *sourceTable = tableSpecs.sourceTable;
+
+					if (!vacuum_add_table(specs, sourceTable->oid))
+					{
+						log_error("Failed to queue VACUUM ANALYZE \"%s\".\"%s\" [%u]",
+								  sourceTable->nspname,
+								  sourceTable->relname,
+								  sourceTable->oid);
+						return false;
+					}
+				}
+			}
+			else if (!copydb_add_table_indexes(specs, &tableSpecs))
 			{
 				log_error("Failed to add the indexes for %s, "
 						  "see above for details",
