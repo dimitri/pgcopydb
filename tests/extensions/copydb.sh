@@ -30,7 +30,6 @@ EOF
 # create extensions on the source pagila database (needs superuser)
 psql -a -1 ${PGCOPYDB_SOURCE_PGURI_SU} <<EOF
 create extension postgis cascade;
-create extension postgis_topology cascade;
 EOF
 
 # the partman extension needs to be installed as the pagila role
@@ -51,6 +50,8 @@ coproc ( pgcopydb snapshot --debug )
 sleep 1
 
 # copy the extensions separately, needs superuser (both on source and target)
+pgcopydb list extensions
+
 pgcopydb copy extensions \
          --source ${PGCOPYDB_SOURCE_PGURI_SU} \
          --target ${PGCOPYDB_TARGET_PGURI_SU}
