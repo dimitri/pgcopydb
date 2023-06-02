@@ -31,35 +31,32 @@ static void prepareLineSeparator(char dashes[], int size);
 bool
 write_table_summary(CopyTableSummary *summary, char *filename)
 {
-	PQExpBuffer contents = createPQExpBuffer();
+	JSON_Value *js = json_value_init_object();
+	JSON_Object *jsObj = json_value_get_object(js);
 
-	appendPQExpBuffer(contents,
-					  "%d\n%u\n%s\n%s\n%lld\n%lld\n%lld\n%s\n",
-					  summary->pid,
-					  summary->table->oid,
-					  summary->table->nspname,
-					  summary->table->relname,
-					  (long long) summary->startTime,
-					  (long long) summary->doneTime,
-					  (long long) summary->durationMs,
-					  summary->command);
+	json_object_set_number(jsObj, "pid", summary->pid);
+	json_object_dotset_number(jsObj, "table.oid", summary->table->oid);
+	json_object_dotset_string(jsObj, "table.nspname", summary->table->nspname);
+	json_object_dotset_string(jsObj, "table.relname", summary->table->relname);
+	json_object_set_number(jsObj, "start-time-epoch", summary->startTime);
+	json_object_set_number(jsObj, "done-time-epoch", summary->doneTime);
+	json_object_set_number(jsObj, "duration", summary->durationMs);
+	json_object_set_string(jsObj, "command", summary->command);
 
-	if (PQExpBufferBroken(contents))
-	{
-		log_error("Failed to create file \"%s\": out of memory", filename);
-		destroyPQExpBuffer(contents);
-		return false;
-	}
+	char *serialized_string = json_serialize_to_string_pretty(js);
+	size_t len = strlen(serialized_string);
 
 	/* write the summary to the doneFile */
-	if (!write_file(contents->data, contents->len, filename))
+	bool success = write_file(serialized_string, len, filename);
+
+	json_free_serialized_string(serialized_string);
+	json_value_free(js);
+
+	if (!success)
 	{
 		log_error("Failed to write table summary file \"%s\"", filename);
-		destroyPQExpBuffer(contents);
 		return false;
 	}
-
-	destroyPQExpBuffer(contents);
 
 	return true;
 }
@@ -124,86 +121,38 @@ prepare_table_summary_as_json(CopyTableSummary *summary,
 bool
 read_table_summary(CopyTableSummary *summary, const char *filename)
 {
-	char *fileContents = NULL;
-	long fileSize = 0L;
+	JSON_Value *json = json_parse_file(filename);
 
-	if (!read_file(filename, &fileContents, &fileSize))
+	if (json == NULL)
 	{
-		/* errors have already been logged */
+		log_error("Failed to parse summary file \"%s\"", filename);
 		return false;
 	}
 
-	char *fileLines[BUFSIZE] = { 0 };
-	int lineCount = splitLines(fileContents, fileLines, BUFSIZE);
+	JSON_Object *jsObj = json_value_get_object(json);
 
-	if (lineCount < COPY_TABLE_SUMMARY_LINES)
-	{
-		log_error("Failed to parse summary file \"%s\" which contains only "
-				  "%d lines, at least %d lines are expected",
-				  filename,
-				  lineCount,
-				  COPY_TABLE_SUMMARY_LINES);
+	summary->pid = json_object_get_number(jsObj, "pid");
 
-		free(fileContents);
+	summary->table->oid = json_object_dotget_number(jsObj, "table.oid");
 
-		return false;
-	}
+	char *schema = (char *) json_object_dotget_string(jsObj, "table.nspname");
+	char *name = (char *) json_object_dotget_string(jsObj, "table.relname");
 
-	if (!stringToInt(fileLines[0], &(summary->pid)))
-	{
-		/* errors have already been logged */
-		return false;
-	}
+	strlcpy(summary->table->nspname, schema, sizeof(summary->table->nspname));
+	strlcpy(summary->table->relname, name, sizeof(summary->table->relname));
 
-	/* better not point to NULL */
-	SourceTable *table = summary->table;
+	summary->startTime = json_object_get_number(jsObj, "start-time-epoch");
+	summary->doneTime = json_object_get_number(jsObj, "done-time-epoch");
+	summary->durationMs = json_object_get_number(jsObj, "duration");
 
-	if (table == NULL)
-	{
-		log_error("BUG: read_table_summary summary->table is NULL");
-		return false;
-	}
-
-	if (!stringToUInt32(fileLines[1], &(table->oid)))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	strlcpy(table->nspname, fileLines[2], sizeof(table->nspname));
-	strlcpy(table->relname, fileLines[3], sizeof(table->relname));
-
-	if (!stringToUInt64(fileLines[4], &(summary->startTime)))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!stringToUInt64(fileLines[5], &(summary->doneTime)))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!stringToUInt64(fileLines[6], &(summary->durationMs)))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/* last summary line in the file is the SQL command */
-	char *sql = fileLines[7];
-	int len = strlen(sql) + 1;
-
-	summary->command = (char *) calloc(len, sizeof(char));
+	summary->command = strdup(json_object_get_string(jsObj, "command"));
 
 	if (summary->command == NULL)
 	{
 		log_error(ALLOCATION_FAILED_ERROR);
+		json_value_free(json);
 		return false;
 	}
-
-	strlcpy(summary->command, sql, len);
 
 	/* we can't provide instr_time readers */
 	summary->startTimeInstr = (instr_time) {
@@ -213,6 +162,7 @@ read_table_summary(CopyTableSummary *summary, const char *filename)
 		0
 	};
 
+	json_value_free(json);
 	return true;
 }
 
@@ -374,7 +324,8 @@ read_table_index_file(SourceIndexArray *indexArray, char *filename)
 bool
 write_index_summary(CopyIndexSummary *summary, char *filename, bool constraint)
 {
-	PQExpBuffer contents = createPQExpBuffer();
+	JSON_Value *js = json_value_init_object();
+	JSON_Object *jsObj = json_value_get_object(js);
 
 	uint32_t oid =
 		constraint
@@ -386,30 +337,30 @@ write_index_summary(CopyIndexSummary *summary, char *filename, bool constraint)
 		? summary->index->constraintName
 		: summary->index->indexRelname;
 
-	appendPQExpBuffer(contents,
-					  "%d\n%u\n%s\n%s\n%lld\n%lld\n%lld\n%s\n",
-					  summary->pid,
-					  oid,
-					  summary->index->indexNamespace,
-					  name,
-					  (long long) summary->startTime,
-					  (long long) summary->doneTime,
-					  (long long) summary->durationMs,
-					  summary->command);
+	json_object_set_number(jsObj, "pid", summary->pid);
 
-	/* memory allocation could have failed while building string */
-	if (PQExpBufferBroken(contents))
-	{
-		log_error("Failed to create file \"%s\": out of memory", filename);
-		destroyPQExpBuffer(contents);
-		return false;
-	}
+	json_object_dotset_number(jsObj, "index.oid", oid);
+	json_object_dotset_string(jsObj, "index.nspname",
+							  summary->index->indexNamespace);
+	json_object_dotset_string(jsObj, "index.relname", name);
+
+	json_object_set_number(jsObj, "start-time-epoch", summary->startTime);
+	json_object_set_number(jsObj, "done-time-epoch", summary->doneTime);
+	json_object_set_number(jsObj, "duration", summary->durationMs);
+	json_object_set_string(jsObj, "command", summary->command);
+
+	char *serialized_string = json_serialize_to_string_pretty(js);
+	size_t len = strlen(serialized_string);
 
 	/* write the summary to the doneFile */
-	if (!write_file(contents->data, contents->len, filename))
+	bool success = write_file(serialized_string, len, filename);
+
+	json_free_serialized_string(serialized_string);
+	json_value_free(js);
+
+	if (!success)
 	{
-		log_error("Failed to write file \"%s\"", filename);
-		destroyPQExpBuffer(contents);
+		log_error("Failed to write table summary file \"%s\"", filename);
 		return false;
 	}
 
@@ -423,82 +374,41 @@ write_index_summary(CopyIndexSummary *summary, char *filename, bool constraint)
 bool
 read_index_summary(CopyIndexSummary *summary, const char *filename)
 {
-	char *fileContents = NULL;
-	long fileSize = 0L;
+	JSON_Value *json = json_parse_file(filename);
 
-	if (!read_file(filename, &fileContents, &fileSize))
+	if (json == NULL)
 	{
-		/* errors have already been logged */
+		log_error("Failed to parse summary file \"%s\"", filename);
 		return false;
 	}
 
-	char *fileLines[BUFSIZE] = { 0 };
-	int lineCount = splitLines(fileContents, fileLines, BUFSIZE);
+	JSON_Object *jsObj = json_value_get_object(json);
 
-	if (lineCount < COPY_TABLE_SUMMARY_LINES)
-	{
-		log_error("Failed to parse summary file \"%s\" which contains only "
-				  "%d lines, at least %d lines are expected",
-				  filename,
-				  lineCount,
-				  COPY_TABLE_SUMMARY_LINES);
+	summary->pid = json_object_get_number(jsObj, "pid");
 
-		free(fileContents);
+	summary->index->indexOid = json_object_dotget_number(jsObj, "index.oid");
 
-		return false;
-	}
+	char *schema = (char *) json_object_dotget_string(jsObj, "index.nspname");
+	char *name = (char *) json_object_dotget_string(jsObj, "index.relname");
 
-	if (!stringToInt(fileLines[0], &(summary->pid)))
-	{
-		/* errors have already been logged */
-		return false;
-	}
+	strlcpy(summary->index->indexNamespace,
+			schema,
+			sizeof(summary->index->indexNamespace));
 
-	/* better not point to NULL */
-	SourceIndex *index = summary->index;
+	strlcpy(summary->index->indexRelname,
+			name,
+			sizeof(summary->index->indexRelname));
 
-	if (index == NULL)
-	{
-		log_error("BUG: read_index_summary summary->index is NULL");
-		return false;
-	}
+	summary->startTime = json_object_get_number(jsObj, "start-time-epoch");
+	summary->doneTime = json_object_get_number(jsObj, "done-time-epoch");
+	summary->durationMs = json_object_get_number(jsObj, "duration");
 
-	if (!stringToUInt32(fileLines[1], &(index->indexOid)))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	strlcpy(index->indexNamespace, fileLines[2], sizeof(index->indexNamespace));
-	strlcpy(index->indexRelname, fileLines[3], sizeof(index->indexRelname));
-
-	if (!stringToUInt64(fileLines[4], &(summary->startTime)))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!stringToUInt64(fileLines[5], &(summary->doneTime)))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!stringToUInt64(fileLines[6], &(summary->durationMs)))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/* last summary line in the file is the SQL command */
-	char *sql = fileLines[7];
-	int len = strlen(sql) + 1;
-
-	summary->command = (char *) calloc(len, sizeof(char));
+	summary->command = strdup(json_object_get_string(jsObj, "command"));
 
 	if (summary->command == NULL)
 	{
 		log_error(ALLOCATION_FAILED_ERROR);
+		json_value_free(json);
 		return false;
 	}
 
@@ -510,6 +420,7 @@ read_index_summary(CopyIndexSummary *summary, const char *filename)
 		0
 	};
 
+	json_value_free(json);
 	return true;
 }
 
@@ -940,6 +851,8 @@ print_summary_table(SummaryTable *summary)
 void
 print_summary_as_json(Summary *summary, const char *filename)
 {
+	log_notice("Storing migration summary in JSON file \"%s\"", filename);
+
 	JSON_Value *js = json_value_init_object();
 	JSON_Object *jsobj = json_value_get_object(js);
 
@@ -1130,8 +1043,6 @@ print_summary_as_json(Summary *summary, const char *filename)
 
 	char *serialized_string = json_serialize_to_string_pretty(js);
 	size_t len = strlen(serialized_string);
-
-	log_notice("Storing migration summary in JSON file \"%s\"", filename);
 
 	if (!write_file(serialized_string, len, filename))
 	{
@@ -1326,7 +1237,8 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 
 		if (!read_table_summary(&tableSummary, tableSpecs->tablePaths.doneFile))
 		{
-			/* errors have already been logged */
+			log_error("Failed to read table summary \"%s\"",
+					  tableSpecs->tablePaths.doneFile);
 			return false;
 		}
 
@@ -1352,7 +1264,8 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 			if (!read_table_index_file(&indexArray,
 									   tableSpecs->tablePaths.idxListFile))
 			{
-				/* errors have already been logged */
+				log_error("Failed to read table index file \"%s\"",
+						  tableSpecs->tablePaths.idxListFile);
 				return false;
 			}
 
@@ -1392,7 +1305,8 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 													 false, /* constraint */
 													 indexEntry))
 					{
-						/* errors have already been logged */
+						log_error("Failed to read index done file \"%s\"",
+								  indexPaths.doneFile);
 						return false;
 					}
 
@@ -1414,7 +1328,8 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 													 true, /* constraint */
 													 indexEntry))
 					{
-						/* errors have already been logged */
+						log_error("Failed to read index done file \"%s\"",
+								  indexPaths.constraintDoneFile);
 						return false;
 					}
 
@@ -1447,7 +1362,8 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 
 		if (!read_blobs_summary(&blobsSummary, specs->cfPaths.done.blobs))
 		{
-			/* errors have already been logged */
+			log_error("Failed to read blog summary file \"%s\"",
+					  specs->cfPaths.done.blobs);
 			return false;
 		}
 

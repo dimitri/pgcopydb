@@ -25,7 +25,7 @@ create collation if not exists mycol
 EOF
 
 # pgcopydb fork uses the environment variables
-pgcopydb fork --skip-collations --debug
+pgcopydb fork --skip-collations --fail-fast --notice
 
 # now compare the output of running the SQL command with what's expected
 # as we're not root when running tests, can't write in /usr/src

@@ -267,8 +267,6 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 	{
 		QMessage stop = { .type = QMSG_TYPE_STOP };
 
-		log_warn("Send STOP message to COPY queue %d", specs->copyQueue.qId);
-
 		if (!queue_send(&(specs->copyQueue), &stop))
 		{
 			/* errors have already been logged */
@@ -279,16 +277,12 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 	/*
 	 * Now just wait for the table-data COPY processes to be done.
 	 */
-	log_warn("COPY supervisor waits for children");
-
 	if (!copydb_wait_for_subprocesses(specs->failFast))
 	{
 		log_error("Some COPY worker process(es) have exited with error, "
 				  "see above for details");
 		return false;
 	}
-
-	log_warn("COPY supervisor children have now all exited");
 
 	/* write that we successfully finished copying all tables */
 	if (!write_file("", 0, specs->cfPaths.done.tables))
@@ -476,8 +470,6 @@ copydb_table_data_worker(CopyDataSpec *specs)
 				  errors);
 	}
 
-	log_warn("Exiting table data COPY worker %d: %s", pid, success ? "ok" : "ko");
-
 	return success;
 }
 
@@ -593,7 +585,33 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, uint32_t oid, uint32_t part)
 		}
 		else if (allPartsDone && !indexesAreBeingProcessed)
 		{
-			if (!copydb_add_table_indexes(specs, &tableSpecs))
+			/*
+			 * The VACUUM command takes a conflicting lock with the CREATE
+			 * INDEX and ALTER TABLE commands used for indexes and constraints,
+			 * and as a result we send a table to the vacuum queue only after
+			 * its indexes have all been built.
+			 *
+			 * When a table has no indexes though, we never reach the code that
+			 * checks if all the indexes have been built already. In that case,
+			 * just add the table to the vacuum queue already.
+			 */
+			if (tableSpecs.sourceTable->firstIndex == NULL)
+			{
+				if (!specs->skipVacuum)
+				{
+					SourceTable *sourceTable = tableSpecs.sourceTable;
+
+					if (!vacuum_add_table(specs, sourceTable->oid))
+					{
+						log_error("Failed to queue VACUUM ANALYZE \"%s\".\"%s\" [%u]",
+								  sourceTable->nspname,
+								  sourceTable->relname,
+								  sourceTable->oid);
+						return false;
+					}
+				}
+			}
+			else if (!copydb_add_table_indexes(specs, &tableSpecs))
 			{
 				log_error("Failed to add the indexes for %s, "
 						  "see above for details",

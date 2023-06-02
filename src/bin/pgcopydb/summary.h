@@ -184,7 +184,6 @@ typedef struct Summary
 	int indexJobs;
 } Summary;
 
-
 bool write_table_summary(CopyTableSummary *summary, char *filename);
 bool read_table_summary(CopyTableSummary *summary, const char *filename);
 bool open_table_summary(CopyTableSummary *summary, char *filename);
