@@ -288,6 +288,12 @@ read_table_index_file(SourceIndexArray *indexArray, char *filename)
 	indexArray->count = 0;
 	indexArray->array = (SourceIndex *) calloc(lineCount, sizeof(SourceIndex));
 
+	if (indexArray->array == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
 	for (int i = 0; i < lineCount; i++)
 	{
 		SourceIndex *index = &(indexArray->array[indexArray->count]);
@@ -809,6 +815,11 @@ print_summary_table(SummaryTable *summary)
 {
 	SummaryTableHeaders *headers = &(summary->headers);
 
+	if (summary->count == 0)
+	{
+		return;
+	}
+
 	fformat(stdout, "\n");
 
 	fformat(stdout, "%*s | %*s | %*s | %*s | %*s | %*s\n",
@@ -1254,6 +1265,13 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 
 		SourceIndexArray indexArray = { 0 };
 
+		/* make sure to always initialize this memory area */
+		entry->indexArray.count = 0;
+		entry->indexArray.array = NULL;
+
+		entry->constraintArray.count = 0;
+		entry->constraintArray.array = NULL;
+
 		/*
 		 * When the table COPY processing was split into several processes,
 		 * ensure we only read the index list once: only one of those COPY
@@ -1270,15 +1288,20 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 			}
 
 			/* prepare for as many constraints as indexes */
-			entry->indexArray.count = 0;
 			entry->indexArray.array =
 				(SummaryIndexEntry *) calloc(indexArray.count,
 											 sizeof(SummaryIndexEntry));
 
-			entry->constraintArray.count = 0;
 			entry->constraintArray.array =
 				(SummaryIndexEntry *) calloc(indexArray.count,
 											 sizeof(SummaryIndexEntry));
+
+			if (entry->indexArray.array == NULL ||
+				entry->constraintArray.array == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
 
 			/* for reach index, read the index summary */
 			for (int i = 0; i < indexArray.count; i++)

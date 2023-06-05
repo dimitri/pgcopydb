@@ -544,7 +544,6 @@ cloneDB(CopyDataSpec *copySpecs)
 	(void) summary_set_current_time(timings, TIMING_STEP_AFTER_PREPARE_SCHEMA);
 
 	/* STEPs 4, 5, 6, 7, 8, and 9 are printed when starting the sub-processes */
-
 	if (!copydb_copy_all_table_data(copySpecs))
 	{
 		/* errors have already been logged */
