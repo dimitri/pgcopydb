@@ -93,16 +93,6 @@ copydb_process_table_data(CopyDataSpec *specs)
 	log_trace("copydb_process_table_data: \"%s\"", specs->cfPaths.tbldir);
 
 	/*
-	 * First start the COPY data workers with their supervisor and IPC
-	 * infrastructure (queues).
-	 */
-	if (!copydb_start_copy_supervisor(specs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/*
 	 * Take care of extensions configuration table in an auxilliary process.
 	 */
 	if (!copydb_start_extension_data_process(specs))
@@ -112,29 +102,56 @@ copydb_process_table_data(CopyDataSpec *specs)
 	}
 
 	/*
+	 * When we have fetch information for zero table then specs->tableJobs is
+	 * zero too and we won't send any STOP message in the index and vacuum
+	 * queues.
+	 *
+	 * That
+	 */
+	if (specs->tableJobs > 0)
+	{
+		/*
+		 * First start the COPY data workers with their supervisor and IPC
+		 * infrastructure (queues).
+		 */
+		if (!copydb_start_copy_supervisor(specs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		/*
+		 * Start as many index worker process as --index-jobs
+		 */
+		if (!copydb_start_index_workers(specs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		/*
+		 * Now create as many VACUUM ANALYZE sub-processes as needed, per
+		 * --table-jobs. Could be exposed separately as --vacuumJobs too, but
+		 * that's not been done at this time.
+		 */
+		if (!vacuum_start_workers(specs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+	else
+	{
+		log_info("STEP 4: skipping COPY, no table selected");
+		log_info("STEP 6: skipping CREATE INDEX, no table selected");
+		log_info("STEP 7: skipping contraints, no table selected");
+		log_info("STEP 8: skipping VACUUM, no table selected");
+	}
+
+	/*
 	 * Are blobs table data? well pg_dump --section sayth yes.
 	 */
 	if (!copydb_start_blob_process(specs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/*
-	 * Start as many index worker process as --index-jobs
-	 */
-	if (!copydb_start_index_workers(specs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/*
-	 * Now create as many VACUUM ANALYZE sub-processes as needed, per
-	 * --table-jobs. Could be exposed separately as --vacuumJobs too, but
-	 * that's not been done at this time.
-	 */
-	if (!vacuum_start_workers(specs))
 	{
 		/* errors have already been logged */
 		return false;
@@ -398,10 +415,7 @@ copydb_table_data_worker(CopyDataSpec *specs)
 		return false;
 	}
 
-	int errors = 0;
-	bool stop = false;
-
-	while (!stop)
+	while (true)
 	{
 		QMessage mesg = { 0 };
 		bool recv_ok = queue_receive(&(specs->copyQueue), &mesg);
@@ -409,22 +423,22 @@ copydb_table_data_worker(CopyDataSpec *specs)
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
 			log_error("COPY worker has been interrupted");
-			return false;
+			break;
 		}
 
 		if (!recv_ok)
 		{
 			/* errors have already been logged */
-			return false;
+			break;
 		}
 
 		switch (mesg.type)
 		{
 			case QMSG_TYPE_STOP:
 			{
-				stop = true;
 				log_debug("Stop message received by COPY worker");
-				break;
+				(void) copydb_close_snapshot(specs);
+				return true;
 			}
 
 			case QMSG_TYPE_TABLEPOID:
@@ -433,16 +447,11 @@ copydb_table_data_worker(CopyDataSpec *specs)
 											 mesg.data.tp.oid,
 											 mesg.data.tp.part))
 				{
-					if (specs->failFast)
-					{
-						log_error("Failed to copy data for table with oid %u "
-								  "and part number %u, see above for details",
-								  mesg.data.tp.oid,
-								  mesg.data.tp.part);
-						return false;
-					}
-
-					++errors;
+					log_error("Failed to copy data for table with oid %u "
+							  "and part number %u, see above for details",
+							  mesg.data.tp.oid,
+							  mesg.data.tp.part);
+					return false;
 				}
 				break;
 			}
@@ -460,17 +469,7 @@ copydb_table_data_worker(CopyDataSpec *specs)
 	/* terminate our connection to the source database now */
 	(void) copydb_close_snapshot(specs);
 
-	bool success = (stop == true && errors == 0);
-
-	if (errors > 0)
-	{
-		log_error("COPY worker %d encountered %d errors, "
-				  "see above for details",
-				  pid,
-				  errors);
-	}
-
-	return success;
+	return false;
 }
 
 
@@ -616,11 +615,7 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, uint32_t oid, uint32_t part)
 				log_error("Failed to add the indexes for %s, "
 						  "see above for details",
 						  tableSpecs.qname);
-
-				if (specs->failFast)
-				{
-					return false;
-				}
+				return false;
 			}
 		}
 	}
