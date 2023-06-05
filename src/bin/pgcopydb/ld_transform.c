@@ -172,10 +172,11 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
 		metadata->action == STREAM_ACTION_KEEPALIVE ||
 		metadata->action == STREAM_ACTION_SWITCH)
 	{
+		LogicalTransaction *txn = &(currentMsg->command.tx);
+
 		if (metadata->action == STREAM_ACTION_COMMIT)
 		{
 			/* now write the COMMIT message even when txn is continued */
-			LogicalTransaction *txn = &(currentMsg->command.tx);
 			txn->commit = true;
 		}
 
@@ -191,6 +192,18 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
 		{
 			/* errors have already been logged */
 			return false;
+		}
+
+		/*
+		 * If we're in a continued transaction, it means that the earlier write
+		 * of this txn's BEGIN statement didn't have the COMMIT LSN. Therefore,
+		 * we need to maintain that LSN as a separate metadata file. This is
+		 * necessary because the COMMIT LSN is required later in the apply
+		 * process.
+		 */
+		if (txn->continued && txn->commit)
+		{
+			writeTxnMetadataFile(txn, privateContext->paths.dir);
 		}
 
 		(void) FreeLogicalMessage(currentMsg);
@@ -506,7 +519,7 @@ stream_transform_file_at_lsn(StreamSpecs *specs, uint64_t lsn)
 		return false;
 	}
 
-	if (!stream_transform_file(walFileName, sqlFileName))
+	if (!stream_transform_file(walFileName, sqlFileName, specs->paths.dir))
 	{
 		/* errors have already been logged */
 		return false;
@@ -597,7 +610,7 @@ stream_transform_send_stop(Queue *queue)
  * target database.
  */
 bool
-stream_transform_file(char *jsonfilename, char *sqlfilename)
+stream_transform_file(char *jsonfilename, char *sqlfilename, char *dir)
 {
 	StreamContent content = { 0 };
 	long size = 0L;
@@ -827,6 +840,20 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 		{
 			/* errors have already been logged */
 			return false;
+		}
+
+		LogicalTransaction *txn = &(currentMsg->command.tx);
+
+		/*
+		 * If we're in a continued transaction, it means that the earlier write
+		 * of this txn's BEGIN statement didn't have the COMMIT LSN. Therefore,
+		 * we need to maintain that LSN as a separate metadata file. This is
+		 * necessary because the COMMIT LSN is required later in the apply
+		 * process.
+		 */
+		if (txn->continued && txn->commit)
+		{
+			writeTxnMetadataFile(txn, dir);
 		}
 
 		(void) FreeLogicalMessage(currentMsg);
@@ -1503,21 +1530,37 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 bool
 stream_write_begin(FILE *out, LogicalTransaction *txn)
 {
-	int ret =
-		fformat(out,
-				"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\",\"commit_lsn\":\"%X/%X\"}\n",
-				OUTPUT_BEGIN,
-				(long long) txn->xid,
-				LSN_FORMAT_ARGS(txn->beginLSN),
-				txn->timestamp,
-				LSN_FORMAT_ARGS(txn->commitLSN));
+	int ret;
+
+	/* include commit_lsn only if the transaction has commitLSN */
+	if (txn->commitLSN != InvalidXLogRecPtr)
+	{
+		ret =
+			fformat(out,
+					"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\",\"commit_lsn\":\"%X/%X\"}\n",
+					OUTPUT_BEGIN,
+					(long long) txn->xid,
+					LSN_FORMAT_ARGS(txn->beginLSN),
+					txn->timestamp,
+					LSN_FORMAT_ARGS(txn->commitLSN));
+	}
+	else
+	{
+		ret =
+			fformat(out,
+					"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
+					OUTPUT_BEGIN,
+					(long long) txn->xid,
+					LSN_FORMAT_ARGS(txn->beginLSN),
+					txn->timestamp);
+	}
 
 	return ret != -1;
 }
 
 
 /*
- * stream_write_switchwal writes a SWITCH statement to the already open out
+ * stream_write_commit writes a COMMIT statement to the already open out
  * stream.
  */
 bool
@@ -1876,6 +1919,72 @@ stream_write_value(FILE *out, LogicalMessageValue *value)
 				return false;
 			}
 		}
+	}
+
+	return true;
+}
+
+
+/*
+ *  computeTxnMetadataFilename computes the file path for transaction metadata
+ *  based on its transaction id
+ */
+bool
+computeTxnMetadataFilename(uint32_t xid, const char *dir, char *filename)
+{
+	if (dir == NULL)
+	{
+		log_error("BUG: computeTxnMetadataFilename is called with "
+				  "directory: NULL");
+		return false;
+	}
+
+	if (xid == 0)
+	{
+		log_error("BUG: computeTxnMetadataFilename is called with "
+				  "transaction xid: %lld", (long long) xid);
+		return false;
+	}
+
+	sformat(filename, MAXPGPATH, "%s/%lld.json", dir, (long long) xid);
+
+	return true;
+}
+
+
+/*
+ * writeTxnMetadataFile writes the transaction metadata to a file in the given
+ * directory
+ */
+bool
+writeTxnMetadataFile(LogicalTransaction *txn, const char *dir)
+{
+	char txnfilename[MAXPGPATH] = { 0 };
+
+	if (!computeTxnMetadataFilename(txn->xid, dir, txnfilename))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_debug("stream_write_commit_metadata_file: writing transaction "
+			  "metadata file \"%s\" with commit lsn %X/%X",
+			  txnfilename,
+			  LSN_FORMAT_ARGS(txn->commitLSN));
+
+	char contents[BUFSIZE] = { 0 };
+
+	sformat(contents, BUFSIZE,
+			"{\"xid\":%lld,\"commit_lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
+			(long long) txn->xid,
+			LSN_FORMAT_ARGS(txn->commitLSN),
+			txn->timestamp);
+
+	/* write the metadata to txnfilename */
+	if (!write_file(contents, strlen(contents), txnfilename))
+	{
+		log_error("Failed to write file \"%s\"", txnfilename);
+		return false;
 	}
 
 	return true;

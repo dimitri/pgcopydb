@@ -311,7 +311,26 @@ stream_init_context(StreamContext *privateContext, StreamSpecs *specs)
 	privateContext->metadata.action = STREAM_ACTION_UNKNOWN;
 	privateContext->previous.action = STREAM_ACTION_UNKNOWN;
 
-	privateContext->lastWrite = 0;
+	privateContext->lastWriteTime = 0;
+
+	/*
+	 * Initializing maxWrittenLSN as startpos at the beginning of migration or
+	 * when resuming from interruption where it will be equal to
+	 * consistent_point or LSN of last message in latest.json respectively.
+	 *
+	 * maxWrittenLSN helps in ensuring that we don't write to a previous JSON
+	 * file during streaming. Even though we haven't written anything before the
+	 * beginning of migration, initializing with startpos serves as sensible
+	 * boundary. This is because apply process starts applying changes from the
+	 * SQL file with name computed from startpos.
+	 *
+	 * This initialization is particularly useful during the beginning of
+	 * migration, where some messages may have LSNs less than the
+	 * consistent_point. These messages may be located in a previous WAL file
+	 * compared to the startpos, and we ensure that we start writing to a file
+	 * of startpos.
+	 */
+	privateContext->maxWrittenLSN = specs->startpos;
 
 	return true;
 }
@@ -701,8 +720,14 @@ stream_write_json(LogicalStreamContext *context, bool previous)
 		bytes_left -= ret;
 	}
 
-	/* time to update our lastWrite mark */
-	privateContext->lastWrite = time(NULL);
+	/* time to update our lastWriteTime mark */
+	privateContext->lastWriteTime = time(NULL);
+
+	/* update the tracking for maximum LSN of messages written to disk so far */
+	if (privateContext->maxWrittenLSN < metadata->lsn)
+	{
+		privateContext->maxWrittenLSN = metadata->lsn;
+	}
 
 	/*
 	 * Now if specs->stdOut is true we want to also write all the same things
@@ -767,8 +792,82 @@ streamRotateFile(LogicalStreamContext *context)
 		return true;
 	}
 
-	/* compute the WAL filename that would host the current LSN */
-	XLByteToSeg(context->cur_record_lsn, segno, context->WalSegSz);
+	/*
+	 * Determine the LSN to calculate walFileName in which to write the current
+	 * message.
+	 *
+	 * This walFileName calculation later ensures safe transaction formation in
+	 * the transform/apply process by always appending messages here to the
+	 * latest file and preventing rotation to earlier files.
+	 *
+	 * In most cases, jsonFileLSN should be the same as cur_record_lsn. However,
+	 * occasionally, current messages may have LSNs lower than the previous
+	 * ones. This can occur due to concurrent transactions with interleaved
+	 * LSNs. Since the logical decoding protocol sends the complete transaction
+	 * at commit time, the LSNs for messages within one transaction could be
+	 * lower than those of the previously streamed transactions. In such cases,
+	 * we use maximum LSN of the messages written so far to the disk in order to
+	 * write to the current file.
+	 *
+	 * Here is a oversimplified visualization of three concurrent transactions.
+	 * In this scenario, we receive complete transactions in the order txn-1 ->
+	 * txn-3 -> txn-2, based on their COMMIT order. When we start with
+	 * maxWrittenLSN as LSN AB..00, the first message of txn-1 (A9..01) and the
+	 * remaining messages for this transaction will be written to AB.json file.
+	 * As we continue, the maxWrittenLSN becomes AB..01, so the next transaction
+	 * (txn-3) has its first message with LSN AA..02, which is less than
+	 * maxWrittenLSN, so we continue writing to AB..01. This process continues
+	 * for txn-2 and subsequent txns.
+	 *
+	 *      +----------+----------+----------+
+	 *      |  txn-1   |  txn-2   | txn-3    |
+	 *   |  +--------------------------------+
+	 *   |  | B A9..01 |          |          |
+	 *   |  |          | B A9..02 |          |
+	 *   |  |          |          |          |
+	 *   |  | ---SWITCH WAL from A9 to AA--- |
+	 *   |  |          |          |          |
+	 *   |  | I AA..01 |          |          |
+	 *   |  |          |          | B AA..02 |
+	 *   |  |          |          | I AA..03 |
+	 * TIME |          | I AA..04 |          |
+	 *   |  |          |          +          |
+	 *   |  | ---SWITCH WAL from AA to AB--- |
+	 *   |  |          |          |          |
+	 *   |  | I AB..00 |          |          |
+	 *   |  | C AB..01 |          |          |
+	 *   v  |          |          | C AB..02 |
+	 *      |          | I AB..03 |          |
+	 *      |          | C AB..04 |          |
+	 *      +----------+----------+----------+
+	 */
+	uint64_t jsonFileLSN;
+
+	/*
+	 * jsonFileLSN is greater of the max LSN of messages written so far and the
+	 * current record.
+	 */
+	if (privateContext->maxWrittenLSN != InvalidXLogRecPtr)
+	{
+		/* cur_record_lsn leads to current file, skipping rotation, or to a new file */
+		if (privateContext->maxWrittenLSN <= context->cur_record_lsn)
+		{
+			jsonFileLSN = context->cur_record_lsn;
+		}
+
+		/* maxWrittenLSN always points to the current file and skips rotation */
+		else
+		{
+			jsonFileLSN = privateContext->maxWrittenLSN;
+		}
+	}
+	else
+	{
+		jsonFileLSN = context->cur_record_lsn;
+	}
+
+	/* compute the WAL filename that would host the current message */
+	XLByteToSeg(jsonFileLSN, segno, context->WalSegSz);
 	XLogFileName(wal, context->timeline, segno, context->WalSegSz);
 
 	sformat(walFileName, sizeof(walFileName), "%s/%s.json",
@@ -799,12 +898,12 @@ streamRotateFile(LogicalStreamContext *context)
 		 */
 		long buflen = sformat(buffer, sizeof(buffer),
 							  "{\"action\":\"X\",\"lsn\":\"%X/%X\"}\n",
-							  LSN_FORMAT_ARGS(context->cur_record_lsn));
+							  LSN_FORMAT_ARGS(jsonFileLSN));
 
 		fformat(privateContext->jsonFile, "%s", buffer);
 
 		log_notice("Inserted action SWITCH for lsn %X/%X in \"%s\"",
-				   LSN_FORMAT_ARGS(context->cur_record_lsn),
+				   LSN_FORMAT_ARGS(jsonFileLSN),
 				   privateContext->partialFileName);
 
 		if (!streamCloseFile(context, time_to_abort))
@@ -841,8 +940,8 @@ streamRotateFile(LogicalStreamContext *context)
 			privateContext->paths.dir,
 			wal);
 
-	/* the context->cur_record_lsn is the firstLSN for this file */
-	privateContext->firstLSN = context->cur_record_lsn;
+	/* the jsonFileLSN is the firstLSN for this file */
+	privateContext->firstLSN = jsonFileLSN;
 
 	/*
 	 * When the target file already exists, open it in append mode.
@@ -1143,8 +1242,14 @@ streamKeepalive(LogicalStreamContext *context)
 		/* update the LSN tracking that's reported in the feedback */
 		context->tracking->written_lsn = context->cur_record_lsn;
 
-		/* time to update our lastWrite mark */
-		privateContext->lastWrite = time(NULL);
+		/* time to update our lastWriteTime mark */
+		privateContext->lastWriteTime = time(NULL);
+
+		/* update the tracking for maximum LSN of messages written to disk so far */
+		if (privateContext->maxWrittenLSN < context->cur_record_lsn)
+		{
+			privateContext->maxWrittenLSN = context->cur_record_lsn;
+		}
 
 		/*
 		 * When streaming to a Unix pipe don't forget to also stream the
@@ -1322,7 +1427,7 @@ prepareMessageMetadataFromContext(LogicalStreamContext *context)
 	 * continue tracking LSN progress in our replay system.
 	 */
 	uint64_t now = time(NULL);
-	uint64_t elapsed = now - privateContext->lastWrite;
+	uint64_t elapsed = now - privateContext->lastWriteTime;
 
 	metadata->recvTime = now;
 
