@@ -76,7 +76,14 @@ cli_ping_getopts(int argc, char **argv)
 							  "see above for details.");
 					++errors;
 				}
-				strlcpy(options.source_pguri, optarg, MAXCONNINFO);
+
+				size_t len = strlen(optarg) + 1;
+				options.source_pguri = (char *) calloc(len, sizeof(char));
+				if (options.source_pguri  == NULL) {
+					log_error(ALLOCATION_FAILED_ERROR);
+					break;
+				}
+				strlcpy(options.source_pguri, optarg, len);
 				log_trace("--source %s", options.source_pguri);
 				break;
 			}
@@ -89,7 +96,13 @@ cli_ping_getopts(int argc, char **argv)
 							  "see above for details.");
 					++errors;
 				}
-				strlcpy(options.target_pguri, optarg, MAXCONNINFO);
+				size_t len = strlen(optarg) + 1;
+				options.target_pguri = (char *) calloc(len, sizeof(char));
+				if (options.target_pguri  == NULL) {
+					log_error(ALLOCATION_FAILED_ERROR);
+					break;
+				}
+				strlcpy(options.target_pguri, optarg, len);
 				log_trace("--target %s", options.target_pguri);
 				break;
 			}

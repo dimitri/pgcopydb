@@ -24,8 +24,8 @@ typedef struct CopyDBOptions
 {
 	char dir[MAXPGPATH];
 
-	char source_pguri[MAXCONNINFO];
-	char target_pguri[MAXCONNINFO];
+	char *source_pguri;
+	char *target_pguri;
 
 	int tableJobs;
 	int indexJobs;

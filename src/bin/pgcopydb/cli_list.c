@@ -208,6 +208,12 @@ cli_list_db_getopts(int argc, char **argv)
 	};
 
 	optind = 0;
+	/* read values from the environment */
+	if (!cli_copydb_getenv(&options))
+	{
+		log_fatal("Failed to read default values from the environment");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
 
 	while ((c = getopt_long(argc, argv, "S:T:D:j:s:t:PL:cCJVvdzqh",
 							long_options, &option_index)) != -1)
@@ -222,7 +228,13 @@ cli_list_db_getopts(int argc, char **argv)
 							  "see above for details.");
 					exit(EXIT_CODE_BAD_ARGS);
 				}
-				strlcpy(options.source_pguri, optarg, MAXCONNINFO);
+				size_t len = strlen(optarg) + 1;
+				options.source_pguri = (char *) calloc(len, sizeof(char));
+				if (options.source_pguri  == NULL) {
+					log_error(ALLOCATION_FAILED_ERROR);
+					break;
+				}
+				strlcpy(options.source_pguri, optarg, len);
 				log_trace("--source %s", options.source_pguri);
 				break;
 			}
@@ -403,21 +415,6 @@ cli_list_db_getopts(int argc, char **argv)
 
 			default:
 			{
-				++errors;
-			}
-		}
-	}
-
-	/* list commands support the source URI environment variable */
-	if (IS_EMPTY_STRING_BUFFER(options.source_pguri))
-	{
-		if (env_exists(PGCOPYDB_SOURCE_PGURI))
-		{
-			if (!get_env_copy(PGCOPYDB_SOURCE_PGURI,
-							  options.source_pguri,
-							  sizeof(options.source_pguri)))
-			{
-				/* errors have already been logged */
 				++errors;
 			}
 		}
@@ -1328,6 +1325,12 @@ cli_list_schema(int argc, char **argv)
 		/* errors have already been logged */
 		exit(EXIT_CODE_BAD_ARGS);
 	}
+	/* allocating it to the length of listDBoptions.source_pguri as ListDBOptions does not have target_pguri */
+	options.target_pguri = calloc(strlen(listDBoptions.source_pguri)+1, sizeof(char));
+	if(options.target_pguri == NULL){
+		log_error(ALLOCATION_FAILED_ERROR);
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
 
 	if (!copydb_init_specs(&copySpecs, &options, DATA_SECTION_ALL))
 	{
@@ -1537,7 +1540,12 @@ copydb_init_specs_from_listdboptions(CopyDBOptions *options,
 									 ListDBOptions *listDBoptions)
 {
 	strlcpy(options->dir, listDBoptions->dir, MAXPGPATH);
-	strlcpy(options->source_pguri, listDBoptions->source_pguri, MAXCONNINFO);
+	options->source_pguri = calloc(strlen(listDBoptions->source_pguri)+1, sizeof(char));
+	if(options->source_pguri == NULL){
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+	strlcpy(options->source_pguri, listDBoptions->source_pguri, strlen(listDBoptions->source_pguri)+1);
 
 	options->splitTablesLargerThan = listDBoptions->splitTablesLargerThan;
 

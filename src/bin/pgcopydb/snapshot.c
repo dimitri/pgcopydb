@@ -30,7 +30,14 @@ copydb_copy_snapshot(CopyDataSpec *specs, TransactionSnapshot *snapshot)
 	/* remember if the replication slot has been created already */
 	snapshot->exportedCreateSlotSnapshot = source->exportedCreateSlotSnapshot;
 
-	strlcpy(snapshot->pguri, source->pguri, sizeof(snapshot->pguri));
+	size_t len = strlen(source->pguri) + 1;
+	snapshot->pguri = (char *) calloc(len, sizeof(char));
+	if (snapshot->pguri  == NULL) {
+		// Log or handle the error when memory allocation fails
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+	strlcpy(snapshot->pguri, source->pguri, len);
 	strlcpy(snapshot->snapshot, source->snapshot, sizeof(snapshot->snapshot));
 
 	return true;
@@ -230,7 +237,7 @@ copydb_close_snapshot(CopyDataSpec *copySpecs)
 			/* only COMMIT sql snapshot kinds, no need for logical rep ones */
 			if (!pgsql_commit(pgsql))
 			{
-				char pguri[MAXCONNINFO] = { 0 };
+				char *pguri = (char *) calloc(strlen(snapshot->pguri)+1, sizeof(char));
 
 				(void) parse_and_scrub_connection_string(snapshot->pguri, pguri);
 
