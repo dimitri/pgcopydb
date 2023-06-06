@@ -357,6 +357,12 @@ bool snapshot_read_slot(const char *filename, ReplicationSlot *slot);
 bool copydb_start_extension_data_process(CopyDataSpec *specs);
 bool copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions);
 
+bool copydb_prepare_extensions_restore(CopyDataSpec *copySpecs);
+bool copydb_finalize_extensions_restore(CopyDataSpec *copySpecs);
+
+bool timescaledb_pre_restore(CopyDataSpec *copySpecs);
+bool timescaledb_post_restore(CopyDataSpec *copySpecs);
+
 /* indexes.c */
 
 bool copydb_start_index_workers(CopyDataSpec *specs);

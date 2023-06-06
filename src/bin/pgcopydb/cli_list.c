@@ -559,16 +559,23 @@ cli_list_extensions(int argc, char **argv)
 	for (int i = 0; i < extensionArray.count; i++)
 	{
 		SourceExtension *ext = &(extensionArray.array[i]);
-
-		char config[BUFSIZE] = { 0 };
+		PQExpBuffer config = createPQExpBuffer();
 
 		for (int c = 0; c < ext->config.count; c++)
 		{
-			sformat(config, sizeof(config), "%s%s\"%s\".\"%s\"",
-					config,
-					c == 0 ? "" : ",",
-					ext->config.array[c].nspname,
-					ext->config.array[c].relname);
+			appendPQExpBuffer(config, "%s\"%s\".\"%s\"",
+							  c == 0 ? "" : ",",
+							  ext->config.array[c].nspname,
+							  ext->config.array[c].relname);
+		}
+
+		if (PQExpBufferBroken(config))
+		{
+			log_error("Failed to create extension configuration list for "
+					  "\"%s\": out of memory",
+					  ext->extname);
+			destroyPQExpBuffer(config);
+			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 
 		fformat(stdout, "%10u | %20s | %20s | %10d | %s\n",
@@ -576,7 +583,9 @@ cli_list_extensions(int argc, char **argv)
 				ext->extname,
 				ext->extnamespace,
 				ext->config.count,
-				config);
+				config->data);
+
+		destroyPQExpBuffer(config);
 	}
 
 	fformat(stdout, "\n");

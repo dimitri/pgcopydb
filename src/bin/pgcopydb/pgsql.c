@@ -1546,7 +1546,11 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 		if (pgsql->logSQL)
 		{
 			log_error("SQL query: %s", sql);
-			log_error("SQL params: %s", debugParameters->data);
+
+			if (paramCount > 0)
+			{
+				log_error("SQL params: %s", debugParameters->data);
+			}
 		}
 
 		destroyPQExpBuffer(debugParameters);
