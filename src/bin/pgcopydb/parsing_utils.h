@@ -81,7 +81,7 @@ typedef struct URIParams
 typedef struct SafeURI
 {
 	char pguri[MAXCONNINFO];
-	char password[MAXCONNINFO];
+	char *password;
 	URIParams uriParams;
 } SafeURI;
 

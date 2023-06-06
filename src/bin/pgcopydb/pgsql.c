@@ -174,11 +174,17 @@ pgsql_init(PGSQL *pgsql, char *url, ConnectionType connectionType)
 
 	/* set our default retry policy for interactive commands */
 	(void) pgsql_set_interactive_retry_policy(&(pgsql->retryPolicy));
-
 	if (validate_connection_string(url))
 	{
 		/* size of url has already been validated. */
-		strlcpy(pgsql->connectionString, url, MAXCONNINFO);
+		size_t len = strlen(url) + 1;
+		pgsql->connectionString = (char *) calloc(len, sizeof(char));
+		if (pgsql->connectionString == NULL) {
+			// Log or handle the error when memory allocation fails
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+		strlcpy(pgsql->connectionString, url, len);
 	}
 	else
 	{
@@ -2025,80 +2031,6 @@ pgsql_handle_notifications(PGSQL *pgsql)
 
 
 /*
- * hostname_from_uri parses a PostgreSQL connection string URI and returns
- * whether the URL was successfully parsed.
- */
-bool
-hostname_from_uri(const char *pguri,
-				  char *hostname, int maxHostLength, int *port)
-{
-	int found = 0;
-	char *errmsg;
-	PQconninfoOption *conninfo, *option;
-
-	conninfo = PQconninfoParse(pguri, &errmsg);
-	if (conninfo == NULL)
-	{
-		log_error("Failed to parse pguri \"%s\": %s", pguri, errmsg);
-		PQfreemem(errmsg);
-		return false;
-	}
-
-	for (option = conninfo; option->keyword != NULL; option++)
-	{
-		if (strcmp(option->keyword, "host") == 0 ||
-			strcmp(option->keyword, "hostaddr") == 0)
-		{
-			if (option->val)
-			{
-				int hostNameLength = strlcpy(hostname, option->val, maxHostLength);
-
-				if (hostNameLength >= maxHostLength)
-				{
-					log_error(
-						"The URL \"%s\" contains a hostname of %d characters, "
-						"the maximum supported by pg_autoctl is %d characters",
-						option->val, hostNameLength, maxHostLength);
-					PQconninfoFree(conninfo);
-					return false;
-				}
-
-				++found;
-			}
-		}
-
-		if (strcmp(option->keyword, "port") == 0)
-		{
-			if (option->val)
-			{
-				/* we expect a single port number in a monitor's URI */
-				if (!stringToInt(option->val, port))
-				{
-					log_error("Failed to parse port number : %s", option->val);
-
-					PQconninfoFree(conninfo);
-					return false;
-				}
-				++found;
-			}
-			else
-			{
-				*port = POSTGRES_PORT;
-			}
-		}
-
-		if (found == 2)
-		{
-			break;
-		}
-	}
-	PQconninfoFree(conninfo);
-
-	return true;
-}
-
-
-/*
  * validate_connection_string takes a connection string and parses it with
  * libpq, varifying that it's well formed and usable.
  */
@@ -2106,15 +2038,6 @@ bool
 validate_connection_string(const char *connectionString)
 {
 	char *errorMessage = NULL;
-
-	int length = strlen(connectionString);
-	if (length >= MAXCONNINFO)
-	{
-		log_error("Connection string \"%s\" is %d "
-				  "characters, the maximum supported by pg_autoctl is %d",
-				  connectionString, length, MAXCONNINFO);
-		return false;
-	}
 
 	PQconninfoOption *connInfo = PQconninfoParse(connectionString, &errorMessage);
 	if (connInfo == NULL)

@@ -940,7 +940,7 @@ extract_connection_string_password(const char *pguri, SafeURI *safeURI)
 		{
 			if (option->val != NULL)
 			{
-				strlcpy(safeURI->password, option->val, MAXCONNINFO);
+				strlcpy(safeURI->password, option->val, strlen(pguri)+1);
 			}
 			continue;
 		}
