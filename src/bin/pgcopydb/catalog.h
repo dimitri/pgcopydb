@@ -510,6 +510,8 @@ bool catalog_iter_s_extension(DatabaseCatalog *catalog,
 							  void *context,
 							  SourceExtensionIterFun *callback);
 
+bool catalog_iter_s_extension_checker(DatabaseCatalog *catalog);							  
+
 typedef struct SourceExtensionIterator
 {
 	DatabaseCatalog *catalog;

@@ -215,6 +215,7 @@ typedef struct CopyDataSpec
 	SourceFilters filters;
 
 	ExtensionReqs *extRequirements;
+	//SourceExtensionArray extensionArray;
 
 	ConnStrings connStrings;
 	TransactionSnapshot sourceSnapshot;
@@ -261,6 +262,7 @@ typedef struct CopyDataSpec
 
 	/* results from calling has_database_privilege() on the source */
 	bool hasDBCreatePrivilege;
+
 	bool hasDBTempPrivilege;
 
 	Catalogs catalogs;
@@ -343,6 +345,13 @@ bool copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions);
 
 bool copydb_parse_extensions_requirements(CopyDataSpec *copySpecs,
 										  char *filename);
+bool copydb_prepare_extensions_restore(CopyDataSpec *copySpecs);
+bool copydb_finalize_extensions_restore(CopyDataSpec *copySpecs);
+
+bool timescaledb_pre_restore(CopyDataSpec *copySpecs);
+bool timescaledb_post_restore(CopyDataSpec *copySpecs);
+
+/* indexes.c */
 
 /* indexes.c */
 bool copydb_start_index_supervisor(CopyDataSpec *specs);

@@ -1,0 +1,80 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "(gdb) Attach",
+            "type": "cppdbg",
+            "request": "attach",
+            "program": "${workspaceFolder}/src/bin/pgcopydb/pgcopydb",
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description":  "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            "name": "(gdb) Launch",
+            "type": "cppdbg",
+           
+            "request": "launch",
+            "program": "${workspaceFolder}/src/bin/pgcopydb/pgcopydb",
+            "args": [
+                "clone", "--table-jobs","4","--index-jobs","1","--drop-if-exists","--trace","--no-owner", "--split-tables-larger-than", "21474836480", "--skip-extensions"
+            ],
+            // "args": [
+            //     "list", "table-parts", "--schema-name" , "public", "--table-name", "table_ctid_candidate_skip", "--split-tables-larger-than", "21474836480", "--skip-split-by-ctid"
+            // ],
+            "stopAtEntry": true,
+            "cwd": "${fileDirname}",
+            "environment": [
+                {
+                    "name": "PGCOPYDB_SOURCE_PGURI",
+                    "value": "postgres://postgres:password%40123@localhost:5432/airquality"
+                },
+                {
+                    "name": "PGCOPYDB_TARGET_PGURI",
+                    "value": "postgres://postgres:password%40123@localhost:5434/target"
+                },
+                {
+                    "name": "TMPDIR",
+                    "value": "/tmp/pgcopydb"
+                },
+            ],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                // {
+                //  "description": "In this mode GDB will be attached to both processes after a call to fork() or vfork().",
+                //  "text": "-gdb-set detach-on-fork off",
+                //  "ignoreFailures": true
+                // },
+                // {
+                //  "description": "The new process is debugged after a fork. The parent process runs unimpeded.",
+                //  "text": "-gdb-set follow-fork-mode child",
+                //  "ignoreFailures": true
+                // }
+            ]
+        }
+    ]
+}
