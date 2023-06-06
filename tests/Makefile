@@ -53,6 +53,9 @@ follow-data-only: build
 
 endpos-in-multi-wal-txn: build
 	$(MAKE) -C $@
+	
+timescaledb: build
+	$(MAKE) -C $@
 
 build:
 	docker build $(BUILD_ARGS) -t pagila -f Dockerfile.pagila .

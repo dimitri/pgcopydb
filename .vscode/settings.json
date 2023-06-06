@@ -1,0 +1,18 @@
+{
+    "files.associations": {
+        "array": "c",
+        "string": "c",
+        "string_view": "c",
+        "typeinfo": "c",
+        "cli_common.h": "c",
+        "commandline.h": "c",
+        "cli_root.h": "c",
+        "*.tcc": "c",
+        "algorithm": "c",
+        "random": "c",
+        "limits": "c",
+        "numeric": "c",
+        "bit": "c",
+        "functional": "c"
+    }
+}

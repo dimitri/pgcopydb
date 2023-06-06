@@ -189,6 +189,16 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 	}
 
 	/*
+	 * Some extensions such as timescaledb need a pre restore step.
+	 */
+	if (!copydb_prepare_extensions_restore(specs))
+	{
+		log_error("Failed to call pg_restore preparation steps for extensions, "
+				  "see above for details");
+		return false;
+	}
+
+	/*
 	 * pg_restore --clean --if-exists gets easily confused when dealing with
 	 * partial schema information, such as when using only section=pre-data, or
 	 * when using the --use-list option as we do here.
@@ -560,12 +570,23 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 		/* errors have already been logged */
 		return false;
 	}
+	/*
+	 * Some extensions such as timescaledb need a post restore step.
+	 */
+	if (!copydb_finalize_extensions_restore(specs))
+	{
+		log_error("Failed to call pg_restore preparation steps for extensions, "
+				  "see above for details");
+		return false;
+	}
 
 	if (!summary_stop_timing(sourceDB, TIMING_SECTION_FINALIZE_SCHEMA))
 	{
 		/* errors have already been logged */
 		return false;
 	}
+
+
 
 	return true;
 }
