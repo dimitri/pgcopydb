@@ -309,6 +309,12 @@ cli_restore_schema_getopts(int argc, char **argv)
 
 					case 2:
 					{
+						log_set_level(LOG_SQL);
+						break;
+					}
+
+					case 3:
+					{
 						log_set_level(LOG_DEBUG);
 						break;
 					}
@@ -324,14 +330,14 @@ cli_restore_schema_getopts(int argc, char **argv)
 
 			case 'd':
 			{
-				verboseCount = 2;
+				verboseCount = 3;
 				log_set_level(LOG_DEBUG);
 				break;
 			}
 
 			case 'z':
 			{
-				verboseCount = 3;
+				verboseCount = 4;
 				log_set_level(LOG_TRACE);
 				break;
 			}
@@ -557,24 +563,7 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 
 	log_info("Restoring database from existing files at \"%s\"", cfPaths->topdir);
 
-	if (!copydb_init_specs(copySpecs,
-						   restoreDBoptions.source_pguri,
-						   restoreDBoptions.target_pguri,
-						   1,    /* table jobs */
-						   1,    /* index jobs */
-						   0,   /* skip threshold */
-						   "",  /* skip threshold pretty printed */
-						   DATA_SECTION_NONE,
-						   restoreDBoptions.snapshot,
-						   restoreDBoptions.restoreOptions,
-						   false, /* roles */
-						   false, /* skipLargeObjects */
-						   restoreDBoptions.skipExtensions,
-						   restoreDBoptions.skipCollations,
-						   false, /* noRolesPasswords */
-						   restoreDBoptions.restart,
-						   restoreDBoptions.resume,
-						   !restoreDBoptions.notConsistent))
+	if (!copydb_init_specs(copySpecs, &restoreDBoptions, DATA_SECTION_NONE))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

@@ -29,6 +29,7 @@
  * OID values from PostgreSQL src/include/catalog/pg_type.h
  */
 #define BOOLOID 16
+#define BYTEAOID 17
 #define NAMEOID 19
 #define INT4OID 23
 #define INT8OID 20

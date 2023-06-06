@@ -25,44 +25,16 @@
 bool
 follow_export_snapshot(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 {
-	TransactionSnapshot *snapshot = &(copySpecs->sourceSnapshot);
-	PGSQL *pgsql = &(snapshot->pgsql);
-
-	if (!pgsql_init(pgsql, copySpecs->source_pguri, PGSQL_CONN_SOURCE))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!pgsql_server_version(pgsql))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	/*
-	 * When using PostgreSQL 9.6 logical decoding, we need to create our
-	 * replication slot and fetch the snapshot from that logical replication
-	 * command, it's the only way.
+	 * When using logical decoding, we need to create our replication slot and
+	 * fetch the snapshot from that logical replication command.
 	 */
-	if (pgsql->pgversion_num < 100000)
+	if (!copydb_create_logical_replication_slot(copySpecs,
+												streamSpecs->logrep_pguri,
+												&(streamSpecs->slot)))
 	{
-		if (!copydb_create_logical_replication_slot(copySpecs,
-													streamSpecs->logrep_pguri,
-													streamSpecs->plugin,
-													streamSpecs->slotName))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-	}
-	else
-	{
-		if (!copydb_prepare_snapshot(copySpecs))
-		{
-			/* errors have already been logged */
-			return false;
-		}
+		/* errors have already been logged */
+		return false;
 	}
 
 	return true;
@@ -103,10 +75,7 @@ follow_setup_databases(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	 * the source database, and the origin (replication progress tracking)
 	 * on the target database.
 	 */
-	if (!stream_setup_databases(&setupSpecs,
-								streamSpecs->plugin,
-								streamSpecs->slotName,
-								streamSpecs->origin))
+	if (!stream_setup_databases(&setupSpecs, streamSpecs))
 	{
 		/* errors have already been logged */
 		return false;
@@ -305,6 +274,7 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 
 	uint64_t loop = 0;
 	LogicalStreamMode currentMode = modeArray[0];
+	LogicalStreamMode previousMode = STREAM_MODE_UNKNOW;
 
 	while (true)
 	{
@@ -314,23 +284,21 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 			return false;
 		}
 
-		CopyDBSentinel sentinel = { 0 };
+		bool done = false;
 
-		if (!follow_get_sentinel(streamSpecs, &sentinel))
+		if (!follow_reached_endpos(streamSpecs, &done))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 
-		if (sentinel.endpos != InvalidXLogRecPtr &&
-			sentinel.endpos <= sentinel.replay_lsn)
+		if (done)
 		{
-			/* follow_get_sentinel logs replay_lsn and endpos already */
-			log_info("Stopping follow mode.");
 			return true;
 		}
 
 		/* switch to the next mode, increment loop counter */
+		previousMode = currentMode;
 		currentMode = modeArray[++loop % count];
 
 		/* and re-init our streamSpecs for the new mode */
@@ -345,31 +313,101 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		 * ensure to catch-up with files on-disk before switching
 		 * to another mode of operations.
 		 */
-		log_info("Catching-up from existing on-disk files");
-
-		if (!stream_apply_catchup(streamSpecs))
+		if (!follow_prepare_mode_switch(streamSpecs, previousMode))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 
 		/* we could have reached endpos in this step: */
-		if (!follow_get_sentinel(streamSpecs, &sentinel))
+		if (!follow_reached_endpos(streamSpecs, &done))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 
-		if (sentinel.endpos != InvalidXLogRecPtr &&
-			sentinel.endpos <= sentinel.replay_lsn)
+		if (done)
 		{
-			/* follow_get_sentinel logs replay_lsn and endpos already */
-			log_info("Stopping follow mode.");
 			return true;
 		}
 
 		log_info("Restarting logical decoding follower in %s mode",
 				 LogicalStreamModeToString(currentMode));
+	}
+
+	return true;
+}
+
+
+/*
+ * follow_reached_endpos sets done to true when endpos has been reached.
+ */
+bool
+follow_reached_endpos(StreamSpecs *streamSpecs, bool *done)
+{
+	CopyDBSentinel sentinel = { 0 };
+
+	if (!follow_get_sentinel(streamSpecs, &sentinel))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (sentinel.endpos != InvalidXLogRecPtr &&
+		sentinel.endpos <= sentinel.replay_lsn)
+	{
+		/* follow_get_sentinel logs replay_lsn and endpos already */
+		*done = true;
+
+		log_info("Current endpos %X/%X has been reached at %X/%X",
+				 LSN_FORMAT_ARGS(sentinel.endpos),
+				 LSN_FORMAT_ARGS(sentinel.replay_lsn));
+	}
+
+	return true;
+}
+
+
+/*
+ * follow_prepare_mode_switch prepares for the next mode of operation. We need
+ * to make sure that all that was streamed in our JSON file has been
+ * transformed and replayed from file before changing our mode of operations.
+ */
+bool
+follow_prepare_mode_switch(StreamSpecs *streamSpecs, LogicalStreamMode previousMode)
+{
+	log_info("Catching-up from existing on-disk files");
+
+	if (streamSpecs->system.timeline == 0)
+	{
+		if (!stream_read_context(&(streamSpecs->paths),
+								 &(streamSpecs->system),
+								 &(streamSpecs->WalSegSz)))
+		{
+			log_error("Failed to read the streaming context information "
+					  "from the source database, see above for details");
+			return false;
+		}
+	}
+
+	/*
+	 * If the previous mode was catch-up, then before proceeding, we need to
+	 * empty the transform queue where the STOP message was sent.
+	 */
+	if (previousMode == STREAM_MODE_CATCHUP)
+	{
+		if (!stream_transform_from_queue(streamSpecs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	/* then catch-up with what's been stream and transformed already */
+	if (!stream_apply_catchup(streamSpecs))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	return true;
@@ -479,46 +517,6 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		++errors;
 		log_error("Some sub-process exited with errors, "
 				  "see above for details");
-	}
-
-
-	/*
-	 * Once the sub-processes have exited, it's time to clean-up the shared
-	 * resources used for communication purposes.
-	 */
-	switch (streamSpecs->mode)
-	{
-		case STREAM_MODE_PREFETCH:
-		case STREAM_MODE_CATCHUP:
-		{
-			/*
-			 * Clean-up the message queue used to communicate between prefetch
-			 * and catch-up sub-processes.
-			 */
-			if (!queue_unlink(&(streamSpecs->transformQueue)))
-			{
-				/* errors have already been logged */
-				log_warn("HINT: use ipcrm -q %d to remove the queue",
-						 streamSpecs->transformQueue.qId);
-				return false;
-			}
-			break;
-		}
-
-		case STREAM_MODE_REPLAY:
-		{
-			/* no cleanup to do here */
-			break;
-		}
-
-		case STREAM_MODE_UNKNOW:
-		case STREAM_MODE_RECEIVE:
-		default:
-		{
-			log_error("BUG: followDB cleanup section reached in mode %d",
-					  streamSpecs->mode);
-			return false;
-		}
 	}
 
 	return errors == 0;

@@ -37,6 +37,7 @@ GUC srcSettings95[] = {
 
 GUC srcSettings[] = {
 	COMMON_GUC_SETTINGS
+	{ "extra_float_digits", "3" },
 	{ "idle_in_transaction_session_timeout", "0" },
 	{ NULL, NULL },
 };
@@ -456,6 +457,9 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths,
 	/* prepare also the name of the schema file (JSON) */
 	sformat(cfPaths->schemafile, MAXPGPATH, "%s/schema.json", cfPaths->topdir);
 
+	/* prepare also the name of the summary file (JSON) */
+	sformat(cfPaths->summaryfile, MAXPGPATH, "%s/summary.json", cfPaths->topdir);
+
 	/* now prepare the done files */
 	struct pair
 	{
@@ -527,6 +531,10 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths,
 	/* now prepare the originfile and timelinehistfile path */
 	sformat(cfPaths->cdc.originfile, MAXPGPATH,
 			"%s/origin",
+			cfPaths->cdc.dir);
+
+	sformat(cfPaths->cdc.slotfile, MAXPGPATH,
+			"%s/slot",
 			cfPaths->cdc.dir);
 
 	sformat(cfPaths->cdc.tlihistfile, MAXPGPATH,
@@ -617,23 +625,8 @@ copydb_rmdir_or_mkdir(const char *dir, bool removeDir)
  */
 bool
 copydb_init_specs(CopyDataSpec *specs,
-				  char *source_pguri,
-				  char *target_pguri,
-				  int tableJobs,
-				  int indexJobs,
-				  uint64_t splitTablesLargerThan,
-				  char *splitTablesLargerThanPretty,
-				  CopyDataSection section,
-				  char *snapshot,
-				  RestoreOptions restoreOptions,
-				  bool roles,
-				  bool skipLargeObjects,
-				  bool skipExtensions,
-				  bool skipCollations,
-				  bool noRolesPasswords,
-				  bool restart,
-				  bool resume,
-				  bool consistent)
+				  CopyDBOptions *options,
+				  CopyDataSection section)
 {
 	/* fill-in a structure with the help of the C compiler */
 	CopyDataSpec tmpCopySpecs = {
@@ -652,24 +645,26 @@ copydb_init_specs(CopyDataSpec *specs,
 
 		.filters = specs->filters,
 		.section = section,
-		.restoreOptions = restoreOptions,
-		.roles = roles,
-		.skipLargeObjects = skipLargeObjects,
-		.skipExtensions = skipExtensions,
-		.skipCollations = skipCollations,
-		.noRolesPasswords = noRolesPasswords,
+		.restoreOptions = options->restoreOptions,
+		.roles = options->roles,
+		.skipLargeObjects = options->skipLargeObjects,
+		.skipExtensions = options->skipExtensions,
+		.skipCollations = options->skipCollations,
+		.skipVacuum = options->skipVacuum,
+		.noRolesPasswords = options->noRolesPasswords,
+		.failFast = options->failFast,
 
-		.restart = restart,
-		.resume = resume,
-		.consistent = consistent,
+		.restart = options->restart,
+		.resume = options->resume,
+		.consistent = !options->notConsistent,
 
-		.tableJobs = tableJobs,
-		.indexJobs = indexJobs,
+		.tableJobs = options->tableJobs,
+		.indexJobs = options->indexJobs,
 
 		/* at the moment we don't have --vacuumJobs separately */
-		.vacuumJobs = tableJobs,
+		.vacuumJobs = options->tableJobs,
 
-		.splitTablesLargerThan = splitTablesLargerThan,
+		.splitTablesLargerThan = options->splitTablesLargerThan,
 
 		.tableSemaphore = { 0 },
 		.indexSemaphore = { 0 },
@@ -687,26 +682,31 @@ copydb_init_specs(CopyDataSpec *specs,
 	};
 
 	/* initialize the connection strings */
-	if (source_pguri != NULL)
+	if (!IS_EMPTY_STRING_BUFFER(options->source_pguri))
 	{
-		strlcpy(tmpCopySpecs.source_pguri, source_pguri, MAXCONNINFO);
-		strlcpy(tmpCopySpecs.sourceSnapshot.pguri, source_pguri, MAXCONNINFO);
+		strlcpy(tmpCopySpecs.source_pguri,
+				options->source_pguri,
+				MAXCONNINFO);
+
+		strlcpy(tmpCopySpecs.sourceSnapshot.pguri,
+				options->source_pguri,
+				MAXCONNINFO);
 	}
 
-	if (target_pguri != NULL)
+	if (!IS_EMPTY_STRING_BUFFER(options->target_pguri))
 	{
-		strlcpy(tmpCopySpecs.target_pguri, target_pguri, MAXCONNINFO);
+		strlcpy(tmpCopySpecs.target_pguri, options->target_pguri, MAXCONNINFO);
 	}
 
-	if (snapshot != NULL && !IS_EMPTY_STRING_BUFFER(snapshot))
+	if (!IS_EMPTY_STRING_BUFFER(options->snapshot))
 	{
 		strlcpy(tmpCopySpecs.sourceSnapshot.snapshot,
-				snapshot,
+				options->snapshot,
 				sizeof(tmpCopySpecs.sourceSnapshot.snapshot));
 	}
 
 	strlcpy(tmpCopySpecs.splitTablesLargerThanPretty,
-			splitTablesLargerThanPretty,
+			options->splitTablesLargerThanPretty,
 			sizeof(tmpCopySpecs.splitTablesLargerThanPretty));
 
 	/* copy the structure as a whole memory area to the target place */
@@ -726,7 +726,7 @@ copydb_init_specs(CopyDataSpec *specs,
 	{
 		log_error("Failed to create the table concurrency semaphore "
 				  "to orchestrate %d TABLE DATA COPY jobs",
-				  tableJobs);
+				  options->tableJobs);
 		return false;
 	}
 
@@ -737,7 +737,7 @@ copydb_init_specs(CopyDataSpec *specs,
 	{
 		log_error("Failed to create the index concurrency semaphore "
 				  "to orchestrate %d CREATE INDEX jobs",
-				  indexJobs);
+				  options->indexJobs);
 		return false;
 	}
 
@@ -745,10 +745,13 @@ copydb_init_specs(CopyDataSpec *specs,
 		specs->section == DATA_SECTION_TABLE_DATA)
 	{
 		/* create the VACUUM process queue */
-		if (!queue_create(&(specs->vacuumQueue), "vacuum"))
+		if (!specs->skipVacuum)
 		{
-			log_error("Failed to create the VACUUM process queue");
-			return false;
+			if (!queue_create(&(specs->vacuumQueue), "vacuum"))
+			{
+				log_error("Failed to create the VACUUM process queue");
+				return false;
+			}
 		}
 
 		/* create the CREATE INDEX process queue */
@@ -823,21 +826,6 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 		tableSpecs->part = part;
 
 		strlcpy(tableSpecs->part.partKey, source->partKey, NAMEDATALEN);
-
-		/*
-		 * Prepare the COPY command.
-		 *
-		 * The way schema_list_partitions prepares the boundaries is non
-		 * overlapping, so we can use the BETWEEN operator to select our source
-		 * rows in the COPY sub-query.
-		 */
-		sformat(tableSpecs->part.copyQuery, sizeof(tableSpecs->part.copyQuery),
-				"(SELECT * FROM %s"
-				" WHERE \"%s\" BETWEEN %lld AND %lld)",
-				tableSpecs->qname,
-				tableSpecs->part.partKey,
-				(long long) tableSpecs->part.min,
-				(long long) tableSpecs->part.max);
 
 		/* now compute the table-specific paths we are using in copydb */
 		if (!copydb_init_tablepaths_for_part(tableSpecs->cfPaths,
@@ -957,7 +945,13 @@ copydb_fatal_exit()
 		return false;
 	}
 
-	return copydb_wait_for_subprocesses();
+	/*
+	 * Now wait until all the sub-processes have exited, and refrain from
+	 * calling copydb_fatal_exit() recursively when a process exits with a
+	 * non-zero return code.
+	 */
+	bool failFast = false;
+	return copydb_wait_for_subprocesses(failFast);
 }
 
 
@@ -967,7 +961,7 @@ copydb_fatal_exit()
  * returns true only when all the subprocesses have returned zero (success).
  */
 bool
-copydb_wait_for_subprocesses()
+copydb_wait_for_subprocesses(bool failFast)
 {
 	bool allReturnCodeAreZero = true;
 	log_debug("Waiting for sub-processes to finish");
@@ -998,7 +992,7 @@ copydb_wait_for_subprocesses()
 			{
 				/*
 				 * We're using WNOHANG, 0 means there are no stopped or exited
-				 * children sleep for awhile and ask again later.
+				 * children. Sleep for awhile and ask again later.
 				 */
 				pg_usleep(100 * 1000); /* 100 ms */
 				break;
@@ -1010,15 +1004,22 @@ copydb_wait_for_subprocesses()
 
 				if (returnCode == 0)
 				{
-					log_debug("Sub-processes %d exited with code %d",
+					log_debug("Sub-process %d exited with code %d",
 							  pid, returnCode);
 				}
 				else
 				{
 					allReturnCodeAreZero = false;
 
-					log_error("Sub-processes %d exited with code %d",
+					log_error("Sub-process %d exited with code %d",
 							  pid, returnCode);
+
+					if (failFast)
+					{
+						log_error("Signaling other processes to terminate "
+								  "(see --fail-fast)");
+						(void) copydb_fatal_exit();
+					}
 				}
 
 				break;

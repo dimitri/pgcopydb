@@ -81,24 +81,28 @@ copydb_start_index_workers(CopyDataSpec *specs)
 bool
 copydb_index_worker(CopyDataSpec *specs)
 {
+	pid_t pid = getpid();
+
+	log_notice("Started CREATE INDEX worker %d [%d]", pid, getppid());
+
 	int errors = 0;
 	bool stop = false;
-
-	log_notice("Started CREATE INDEX worker %d [%d]", getpid(), getppid());
 
 	while (!stop)
 	{
 		QMessage mesg = { 0 };
+		bool recv_ok = queue_receive(&(specs->indexQueue), &mesg);
 
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
+			log_error("CREATE INDEX worker has been interrupted");
 			return false;
 		}
 
-		if (!queue_receive(&(specs->indexQueue), &mesg))
+		if (!recv_ok)
 		{
 			/* errors have already been logged */
-			break;
+			return false;
 		}
 
 		switch (mesg.type)
@@ -114,6 +118,14 @@ copydb_index_worker(CopyDataSpec *specs)
 			{
 				if (!copydb_create_index_by_oid(specs, mesg.data.oid))
 				{
+					if (specs->failFast)
+					{
+						log_error("Failed to create index with oid %u, "
+								  "see above for details",
+								  mesg.data.oid);
+						return false;
+					}
+
 					++errors;
 				}
 				break;
@@ -129,7 +141,17 @@ copydb_index_worker(CopyDataSpec *specs)
 		}
 	}
 
-	return stop == true && errors == 0;
+	bool success = (stop == true && errors == 0);
+
+	if (errors > 0)
+	{
+		log_error("CREATE INDEX worker %d encountered %d errors, "
+				  "see above for details",
+				  pid,
+				  errors);
+	}
+
+	return success;
 }
 
 
@@ -199,7 +221,6 @@ copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid)
 	bool ifNotExists =
 		specs->resume || specs->section == DATA_SECTION_INDEXES;
 
-	/* child process runs the command */
 	if (!copydb_create_index(specs->target_pguri,
 							 index,
 							 &indexPaths,
@@ -232,12 +253,31 @@ copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid)
 
 	if (builtAllIndexes && !constraintsAreBeingBuilt)
 	{
+		/*
+		 * Once the indexes are built, it's time to:
+		 *
+		 *  1. build the constraints, some of them on-top of the indexes
+		 *  2. send the table to the VACUUM ANALYZE job queue.
+		 */
+
 		if (!copydb_create_constraints(specs, table))
 		{
 			log_error("Failed to create constraints for table \"%s\".\"%s\"",
 					  table->nspname,
 					  table->relname);
 			return false;
+		}
+
+		if (!specs->skipVacuum)
+		{
+			if (!vacuum_add_table(specs, table->oid))
+			{
+				log_error("Failed to queue VACUUM ANALYZE \"%s\".\"%s\" [%u]",
+						  table->nspname,
+						  table->relname,
+						  table->oid);
+				return false;
+			}
 		}
 	}
 
@@ -262,7 +302,7 @@ copydb_table_indexes_are_done(CopyDataSpec *specs,
 	(void) semaphore_lock(&(specs->indexSemaphore));
 
 	/*
-	 * The table-data process creates an empty idxListFile, and is function
+	 * The table-data process creates an empty idxListFile, and this function
 	 * creates a file with proper content while in the critical section.
 	 *
 	 * As a result, if the file exists and is empty, then another process was
@@ -551,7 +591,7 @@ copydb_start_index_processes(CopyDataSpec *specs,
 		}
 	}
 
-	bool success = copydb_wait_for_subprocesses();
+	bool success = copydb_wait_for_subprocesses(specs->failFast);
 
 	/* and write that we successfully finished copying all tables */
 	if (!write_file("", 0, specs->cfPaths.done.indexes))
@@ -606,6 +646,11 @@ copydb_start_index_process(CopyDataSpec *specs,
 								 ifNotExists))
 		{
 			/* errors have already been logged */
+			if (specs->failFast)
+			{
+				return false;
+			}
+
 			++errors;
 			continue;
 		}
@@ -631,8 +676,6 @@ copydb_create_index(const char *pguri,
 					bool constraint,
 					bool ifNotExists)
 {
-	PGSQL dst = { 0 };
-
 	bool isDone = false;
 	bool isBeingProcessed = false;
 
@@ -647,6 +690,7 @@ copydb_create_index(const char *pguri,
 	summary->index = index;
 
 	bool isConstraintIndex = index->constraintOid != 0;
+	bool skipCreateIndex = false;
 
 	/*
 	 * When asked to create the constraint and there is no constraint attached
@@ -671,14 +715,14 @@ copydb_create_index(const char *pguri,
 	 */
 	else if (isConstraintIndex && !index->isPrimary && !index->isUnique)
 	{
-		log_warn("Skipping concurrent build of index "
-				 "\"%s\" for constraint %s on \"%s\".\"%s\", "
-				 "it is not a UNIQUE or a PRIMARY constraint",
-				 index->indexRelname,
-				 index->constraintDef,
-				 index->tableNamespace,
-				 index->tableRelname);
-		return true;
+		skipCreateIndex = true;
+		log_notice("Skipping concurrent build of index "
+				   "\"%s\" for constraint %s on \"%s\".\"%s\", "
+				   "it is not a UNIQUE or a PRIMARY constraint",
+				   index->indexRelname,
+				   index->constraintDef,
+				   index->tableNamespace,
+				   index->tableRelname);
 	}
 
 	if (!copydb_index_is_being_processed(index,
@@ -704,8 +748,7 @@ copydb_create_index(const char *pguri,
 	if (constraint)
 	{
 		if (!copydb_prepare_create_constraint_command(index,
-													  summary->command,
-													  sizeof(summary->command)))
+													  &(summary->command)))
 		{
 			/* errors have already been logged */
 			return false;
@@ -715,36 +758,40 @@ copydb_create_index(const char *pguri,
 	{
 		if (!copydb_prepare_create_index_command(index,
 												 ifNotExists,
-												 summary->command,
-												 sizeof(summary->command)))
+												 &(summary->command)))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 	}
 
-	log_notice("%s", summary->command);
-
-	if (!pgsql_init(&dst, (char *) pguri, PGSQL_CONN_TARGET))
+	if (!skipCreateIndex)
 	{
-		return false;
-	}
+		PGSQL dst = { 0 };
 
-	/* also set our GUC values for the target connection */
-	if (!pgsql_set_gucs(&dst, dstSettings))
-	{
-		log_fatal("Failed to set our GUC settings on the target connection, "
-				  "see above for details");
-		return false;
-	}
+		log_notice("%s", summary->command);
 
-	if (!pgsql_execute(&dst, summary->command))
-	{
-		/* errors have already been logged */
-		return false;
-	}
+		if (!pgsql_init(&dst, (char *) pguri, PGSQL_CONN_TARGET))
+		{
+			return false;
+		}
 
-	(void) pgsql_finish(&dst);
+		/* also set our GUC values for the target connection */
+		if (!pgsql_set_gucs(&dst, dstSettings))
+		{
+			log_fatal("Failed to set our GUC settings on the target connection, "
+					  "see above for details");
+			return false;
+		}
+
+		if (!pgsql_execute(&dst, summary->command))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		(void) pgsql_finish(&dst);
+	}
 
 	if (!copydb_mark_index_as_done(index,
 								   indexPaths,
@@ -935,9 +982,10 @@ copydb_mark_index_as_done(SourceIndex *index,
 bool
 copydb_prepare_create_index_command(SourceIndex *index,
 									bool ifNotExists,
-									char *command,
-									size_t size)
+									char **command)
 {
+	PQExpBuffer cmd = createPQExpBuffer();
+
 	/* prepare the create index command, maybe adding IF NOT EXISTS */
 	if (ifNotExists)
 	{
@@ -946,13 +994,15 @@ copydb_prepare_create_index_command(SourceIndex *index,
 
 		if (strncmp(index->indexDef, "CREATE INDEX ", ci_len) == 0)
 		{
-			sformat(command, size, "CREATE INDEX IF NOT EXISTS %s;",
-					index->indexDef + ci_len);
+			appendPQExpBuffer(cmd,
+							  "CREATE INDEX IF NOT EXISTS %s;",
+							  index->indexDef + ci_len);
 		}
 		else if (strncmp(index->indexDef, "CREATE UNIQUE INDEX ", cu_len) == 0)
 		{
-			sformat(command, size, "CREATE UNIQUE INDEX IF NOT EXISTS %s;",
-					index->indexDef + cu_len);
+			appendPQExpBuffer(cmd,
+							  "CREATE UNIQUE INDEX IF NOT EXISTS %s;",
+							  index->indexDef + cu_len);
 		}
 		else
 		{
@@ -966,8 +1016,20 @@ copydb_prepare_create_index_command(SourceIndex *index,
 		 * Just use the pg_get_indexdef() command, with an added semi-colon for
 		 * logging clarity.
 		 */
-		sformat(command, size, "%s;", index->indexDef);
+		appendPQExpBuffer(cmd, "%s;", index->indexDef);
 	}
+
+	if (PQExpBufferBroken(cmd))
+	{
+		log_error("Failed to create query for CREATE INDEX \"%s\": out of memory",
+				  index->indexRelname);
+		destroyPQExpBuffer(cmd);
+		return false;
+	}
+
+	*command = strdup(cmd->data);
+
+	destroyPQExpBuffer(cmd);
 
 	return true;
 }
@@ -978,34 +1040,46 @@ copydb_prepare_create_index_command(SourceIndex *index,
  * create the given constraint on-top of an already existing Index.
  */
 bool
-copydb_prepare_create_constraint_command(SourceIndex *index,
-										 char *command,
-										 size_t size)
+copydb_prepare_create_constraint_command(SourceIndex *index, char **command)
 {
+	PQExpBuffer cmd = createPQExpBuffer();
+
 	if (index->isPrimary || index->isUnique)
 	{
 		char *constraintType = index->isPrimary ? "PRIMARY KEY" : "UNIQUE";
 
-		sformat(command, size,
-				"ALTER TABLE \"%s\".\"%s\" "
-				"ADD CONSTRAINT \"%s\" %s "
-				"USING INDEX \"%s\";",
-				index->tableNamespace,
-				index->tableRelname,
-				index->constraintName,
-				constraintType,
-				index->indexRelname);
+		appendPQExpBuffer(cmd,
+						  "ALTER TABLE \"%s\".\"%s\" "
+						  "ADD CONSTRAINT \"%s\" %s "
+						  "USING INDEX \"%s\";",
+						  index->tableNamespace,
+						  index->tableRelname,
+						  index->constraintName,
+						  constraintType,
+						  index->indexRelname);
 	}
 	else
 	{
-		sformat(command, size,
-				"ALTER TABLE \"%s\".\"%s\" "
-				"ADD CONSTRAINT \"%s\" %s ",
-				index->tableNamespace,
-				index->tableRelname,
-				index->constraintName,
-				index->constraintDef);
+		appendPQExpBuffer(cmd,
+						  "ALTER TABLE \"%s\".\"%s\" "
+						  "ADD CONSTRAINT \"%s\" %s ",
+						  index->tableNamespace,
+						  index->tableRelname,
+						  index->constraintName,
+						  index->constraintDef);
 	}
+
+	if (PQExpBufferBroken(cmd))
+	{
+		log_error("Failed to create query for CONSTRAINT \"%s\": out of memory",
+				  index->constraintName);
+		destroyPQExpBuffer(cmd);
+		return false;
+	}
+
+	*command = strdup(cmd->data);
+
+	destroyPQExpBuffer(cmd);
 
 	return true;
 }
@@ -1100,7 +1174,7 @@ copydb_create_constraints(CopyDataSpec *specs, SourceTable *table)
 		CopyIndexSummary summary = {
 			.pid = getpid(),
 			.index = index,
-			.command = { 0 }
+			.command = NULL
 		};
 
 		/* we only install constraints in this part of the code */
@@ -1129,9 +1203,7 @@ copydb_create_constraints(CopyDataSpec *specs, SourceTable *table)
 			}
 		}
 
-		if (!copydb_prepare_create_constraint_command(index,
-													  summary.command,
-													  sizeof(summary.command)))
+		if (!copydb_prepare_create_constraint_command(index, &(summary.command)))
 		{
 			log_warn("Failed to prepare SQL command to create constraint \"%s\"",
 					 index->constraintName);

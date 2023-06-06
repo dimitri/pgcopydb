@@ -35,9 +35,20 @@ static void log_connection_error(PGconn *connection, int logLevel);
 static void pgAutoCtlDefaultNoticeProcessor(void *arg, const char *message);
 static PGconn * pgsql_open_connection(PGSQL *pgsql);
 static bool pgsql_retry_open_connection(PGSQL *pgsql);
+
+static bool pgsql_send_with_params(PGSQL *pgsql, const char *sql, int paramCount,
+								   const Oid *paramTypes, const char **paramValues);
+
+static bool pgsql_fetch_results(PGSQL *pgsql, bool *done,
+								void *context, ParsePostgresResultCB *parseFun);
+
 static bool is_response_ok(PGresult *result);
 static bool clear_results(PGSQL *pgsql);
 static void pgsql_handle_notifications(PGSQL *pgsql);
+
+static bool build_parameters_list(PQExpBuffer buffer,
+								  int paramCount,
+								  const char **paramValues);
 
 static void parseIdentifySystemResult(void *ctx, PGresult *result);
 static void parseTimelineHistoryResult(void *ctx, PGresult *result);
@@ -173,6 +184,10 @@ pgsql_init(PGSQL *pgsql, char *url, ConnectionType connectionType)
 	{
 		return false;
 	}
+
+	/* by default we log all the SQL queries and their parameters */
+	pgsql->logSQL = true;
+
 	return true;
 }
 
@@ -412,9 +427,13 @@ pgsql_finish(PGSQL *pgsql)
 					sizeof(scrubbedConnectionString));
 		}
 
-		log_sql("Disconnecting from [%s] \"%s\"",
-				ConnectionTypeToString(pgsql->connectionType),
-				scrubbedConnectionString);
+		if (pgsql->logSQL)
+		{
+			log_sql("Disconnecting from [%s] \"%s\"",
+					ConnectionTypeToString(pgsql->connectionType),
+					scrubbedConnectionString);
+		}
+
 		PQfinish(pgsql->connection);
 		pgsql->connection = NULL;
 
@@ -493,9 +512,12 @@ pgsql_open_connection(PGSQL *pgsql)
 	(void) parse_and_scrub_connection_string(pgsql->connectionString,
 											 scrubbedConnectionString);
 
-	log_sql("Connecting to [%s] \"%s\"",
-			ConnectionTypeToString(pgsql->connectionType),
-			scrubbedConnectionString);
+	if (pgsql->logSQL)
+	{
+		log_sql("Connecting to [%s] \"%s\"",
+				ConnectionTypeToString(pgsql->connectionType),
+				scrubbedConnectionString);
+	}
 
 	/* use our own application_name, unless the environment already is set */
 	if (!env_exists("PGAPPNAME"))
@@ -618,7 +640,7 @@ pgsql_retry_open_connection(PGSQL *pgsql)
 
 			log_error("Failed to connect to \"%s\" "
 					  "after %d attempts in %d ms, "
-					  "pg_autoctl stops retrying now",
+					  "pgcopydb stops retrying now",
 					  scrubbedConnectionString,
 					  pgsql->retryPolicy.attempts,
 					  (int) INSTR_TIME_GET_MILLISEC(duration));
@@ -957,6 +979,103 @@ pgsql_commit(PGSQL *pgsql)
 	}
 
 	return result;
+}
+
+
+/*
+ * pgsql_savepoint issues a SAVEPOINT command in the previously established
+ * connection.
+ */
+bool
+pgsql_savepoint(PGSQL *pgsql, char *name)
+{
+	if (pgsql->connectionStatementType != PGSQL_CONNECTION_MULTI_STATEMENT ||
+		pgsql->connection == NULL)
+	{
+		log_error("BUG: call to pgsql_savepoint() without holding an open "
+				  "multi statement connection");
+		if (pgsql->connection)
+		{
+			pgsql_finish(pgsql);
+		}
+		return false;
+	}
+
+	char sql[BUFSIZE] = { 0 };
+
+	sformat(sql, sizeof(sql), "savepoint %s", name);
+
+	if (!pgsql_execute(pgsql, sql))
+	{
+		pgsql_finish(pgsql);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * pgsql_rollback_to_savepoint issues the command ROLLBACK TO SAVEPOINT.
+ */
+bool
+pgsql_rollback_to_savepoint(PGSQL *pgsql, char *name)
+{
+	if (pgsql->connectionStatementType != PGSQL_CONNECTION_MULTI_STATEMENT ||
+		pgsql->connection == NULL)
+	{
+		log_error("BUG: call to pgsql_rollback_to_savepoint() "
+				  "without holding an open multi statement connection");
+		if (pgsql->connection)
+		{
+			pgsql_finish(pgsql);
+		}
+		return false;
+	}
+
+	char sql[BUFSIZE] = { 0 };
+
+	sformat(sql, sizeof(sql), "rollback to savepoint %s", name);
+
+	if (!pgsql_execute(pgsql, sql))
+	{
+		pgsql_finish(pgsql);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * pgsql_release_savepoint issues the command RELEASE SAVEPOINT.
+ */
+bool
+pgsql_release_savepoint(PGSQL *pgsql, char *name)
+{
+	if (pgsql->connectionStatementType != PGSQL_CONNECTION_MULTI_STATEMENT ||
+		pgsql->connection == NULL)
+	{
+		log_error("BUG: call to pgsql_release_savepoint() without holding an open "
+				  "multi statement connection");
+		if (pgsql->connection)
+		{
+			pgsql_finish(pgsql);
+		}
+		return false;
+	}
+
+	char sql[BUFSIZE] = { 0 };
+
+	sformat(sql, sizeof(sql), "release savepoint %s", name);
+
+	if (!pgsql_execute(pgsql, sql))
+	{
+		pgsql_finish(pgsql);
+		return false;
+	}
+
+	return true;
 }
 
 
@@ -1345,11 +1464,17 @@ pgsql_execute(PGSQL *pgsql, const char *sql)
 
 
 /*
- * pgsql_execute_with_params opens a connection, runs a given SQL command,
- * and closes the connection again.
+ * pgsql_execute_with_params implements running a SQL query using the libpq
+ * API. This API requires very careful handling of responses and return values,
+ * so we have a single implementation of that client-side parts of the Postgres
+ * protocol.
  *
- * We avoid persisting connection across multiple commands to simplify error
- * handling.
+ * Also to avoid connection leaks we automatically open and clone connection at
+ * query time, unless when the connection type is
+ * PGSQL_CONNECTION_MULTI_STATEMENT. See pgsql_begin() above for details.
+ *
+ * Finally, in some cases we want to avoid logging queries entirely: we might
+ * be handling customer data so privacy rules apply.
  */
 bool
 pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
@@ -1357,7 +1482,7 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 						  void *context, ParsePostgresResultCB *parseFun)
 {
 	PGresult *result = NULL;
-	PQExpBuffer debugParameters = createPQExpBuffer();
+	PQExpBuffer debugParameters = NULL;
 
 	PGconn *connection = pgsql_open_connection(pgsql);
 
@@ -1369,40 +1494,23 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 	char *endpoint =
 		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
 
-	log_sql("[%s] %s;", endpoint, sql);
-
-	if (paramCount > 0)
+	if (pgsql->logSQL)
 	{
-		int paramIndex = 0;
+		debugParameters = createPQExpBuffer();
 
-		for (paramIndex = 0; paramIndex < paramCount; paramIndex++)
+		if (!build_parameters_list(debugParameters, paramCount, paramValues))
 		{
-			const char *value = paramValues[paramIndex];
-
-			if (paramIndex > 0)
-			{
-				appendPQExpBuffer(debugParameters, ", ");
-			}
-
-			if (value == NULL)
-			{
-				appendPQExpBuffer(debugParameters, "NULL");
-			}
-			else
-			{
-				appendPQExpBuffer(debugParameters, "'%s'", value);
-			}
-		}
-
-		if (PQExpBufferBroken(debugParameters))
-		{
-			log_error("Failed to create log message for SQL query parameters: "
-					  "out of memory");
+			/* errors have already been logged */
 			destroyPQExpBuffer(debugParameters);
 			return false;
 		}
 
-		log_sql("%s", debugParameters->data);
+		log_sql("[%s] %s;", endpoint, sql);
+
+		if (paramCount > 0)
+		{
+			log_sql("%s", debugParameters->data);
+		}
 	}
 
 	if (paramCount == 0)
@@ -1435,8 +1543,11 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 			log_error("[%s] %s", endpoint, errorLines[lineNumber]);
 		}
 
-		log_error("SQL query: %s", sql);
-		log_error("SQL params: %s", debugParameters->data);
+		if (pgsql->logSQL)
+		{
+			log_error("SQL query: %s", sql);
+			log_error("SQL params: %s", debugParameters->data);
+		}
 
 		destroyPQExpBuffer(debugParameters);
 
@@ -1489,6 +1600,279 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 
 
 /*
+ * pgsql_send_with_params implements sending a SQL query using the libpq async
+ * API. Use pgsql_fetch_results to see if results are available are fetch them.
+ */
+static bool
+pgsql_send_with_params(PGSQL *pgsql, const char *sql, int paramCount,
+					   const Oid *paramTypes, const char **paramValues)
+{
+	PQExpBuffer debugParameters = NULL;
+
+	/* we can't close the connection before we have fetched the result */
+	if (pgsql->connectionStatementType != PGSQL_CONNECTION_MULTI_STATEMENT)
+	{
+		log_error("BUG: pgsql_send_with_params called in SINGLE statement mode");
+		return false;
+	}
+
+	PGconn *connection = pgsql_open_connection(pgsql);
+
+	if (connection == NULL)
+	{
+		return false;
+	}
+
+	char *endpoint =
+		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
+
+	if (pgsql->logSQL)
+	{
+		debugParameters = createPQExpBuffer();
+
+		if (!build_parameters_list(debugParameters, paramCount, paramValues))
+		{
+			/* errors have already been logged */
+			destroyPQExpBuffer(debugParameters);
+			return false;
+		}
+
+		log_sql("[%s] %s;", endpoint, sql);
+
+		if (paramCount > 0)
+		{
+			log_sql("%s", debugParameters->data);
+		}
+	}
+
+	int result;
+
+	if (paramCount == 0)
+	{
+		result = PQsendQuery(connection, sql);
+	}
+	else
+	{
+		result = PQsendQueryParams(connection, sql,
+								   paramCount, paramTypes, paramValues,
+								   NULL, NULL, 0);
+	}
+
+	if (result == 0)
+	{
+		char *message = PQerrorMessage(connection);
+		char *errorLines[BUFSIZE];
+		int lineCount = splitLines(message, errorLines, BUFSIZE);
+		int lineNumber = 0;
+
+		/*
+		 * PostgreSQL Error message might contain several lines. Log each of
+		 * them as a separate ERROR line here.
+		 */
+		for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
+		{
+			log_error("[%s] %s", endpoint, errorLines[lineNumber]);
+		}
+
+		if (pgsql->logSQL)
+		{
+			log_error("SQL query: %s", sql);
+			log_error("SQL params: %s", debugParameters->data);
+		}
+
+		destroyPQExpBuffer(debugParameters);
+
+		clear_results(pgsql);
+
+		return false;
+	}
+
+	destroyPQExpBuffer(debugParameters);
+
+	return true;
+}
+
+
+/*
+ * pgsql_fetch_results is used to fetch the results of a SQL query that was
+ * sent using the libpq async protocol with the pgsql_send_with_params
+ * function.
+ *
+ * When the result is ready, the parseFun is called to parse the results as
+ * when using pgsql_execute_with_params.
+ */
+static bool
+pgsql_fetch_results(PGSQL *pgsql, bool *done,
+					void *context, ParsePostgresResultCB *parseFun)
+{
+	int r;
+	PGconn *conn = pgsql->connection;
+
+	*done = false;
+
+	if (PQsocket(conn) < 0)
+	{
+		(void) pgsql_stream_log_error(pgsql, NULL, "invalid socket");
+
+		clear_results(pgsql);
+		pgsql_finish(pgsql);
+
+		return false;
+	}
+
+	fd_set input_mask;
+	struct timeval timeout;
+	struct timeval *timeoutptr = NULL;
+
+	/* sleep for 1ms to wait for input on the Postgres socket */
+	timeout.tv_sec = 0;
+	timeout.tv_usec = 1000;
+	timeoutptr = &timeout;
+
+	FD_ZERO(&input_mask);
+	FD_SET(PQsocket(conn), &input_mask);
+
+	r = select(PQsocket(conn) + 1, &input_mask, NULL, NULL, timeoutptr);
+
+	if (r == 0 || (r < 0 && errno == EINTR))
+	{
+		/* got a timeout or signal. The caller will get back later. */
+		return true;
+	}
+	else if (r < 0)
+	{
+		(void) pgsql_stream_log_error(pgsql, NULL, "select failed: %m");
+
+		clear_results(pgsql);
+		pgsql_finish(pgsql);
+
+		return false;
+	}
+
+	/* Else there is actually data on the socket */
+	if (PQconsumeInput(conn) == 0)
+	{
+		(void) pgsql_stream_log_error(
+			pgsql,
+			NULL,
+			"Failed to get async query results");
+		return false;
+	}
+
+	/* Only collect the result when we know the server is ready for it */
+	if (PQisBusy(conn) == 0)
+	{
+		PGresult *result = PQgetResult(conn);
+
+		if (!is_response_ok(result))
+		{
+			char *sqlstate = PQresultErrorField(result, PG_DIAG_SQLSTATE);
+			char *message = PQerrorMessage(conn);
+
+			char *endpoint =
+				pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
+
+			strlcpy(pgsql->sqlstate, sqlstate, sizeof(pgsql->sqlstate));
+
+			/*
+			 * PostgreSQL Error message might contain several lines. Log each of
+			 * them as a separate ERROR line here.
+			 */
+			char *errorLines[BUFSIZE];
+			int lineCount = splitLines(message, errorLines, BUFSIZE);
+
+			for (int lineNumber = 0; lineNumber < lineCount; lineNumber++)
+			{
+				log_error("[%s] %s", endpoint, errorLines[lineNumber]);
+			}
+
+			/* now stash away the SQL STATE if any */
+			if (context && sqlstate)
+			{
+				AbstractResultContext *ctx = (AbstractResultContext *) context;
+
+				strlcpy(ctx->sqlstate, sqlstate, SQLSTATE_LENGTH);
+			}
+
+			/* if we get a connection exception, track that */
+			if (sqlstate &&
+				strncmp(sqlstate, STR_ERRCODE_CLASS_CONNECTION_EXCEPTION, 2) == 0)
+			{
+				pgsql->status = PG_CONNECTION_BAD;
+			}
+
+			PQclear(result);
+			clear_results(pgsql);
+
+			return false;
+		}
+
+		if (parseFun != NULL)
+		{
+			(*parseFun)(context, result);
+
+			*done = true;
+		}
+
+		PQclear(result);
+		clear_results(pgsql);
+	}
+
+	return true;
+}
+
+
+/*
+ * build_parameters_list builds a string representation of the SQL query
+ * parameter list given.
+ */
+static bool
+build_parameters_list(PQExpBuffer buffer,
+					  int paramCount, const char **paramValues)
+{
+	if (buffer == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	if (paramCount > 0)
+	{
+		int paramIndex = 0;
+
+		for (paramIndex = 0; paramIndex < paramCount; paramIndex++)
+		{
+			const char *value = paramValues[paramIndex];
+
+			if (paramIndex > 0)
+			{
+				appendPQExpBuffer(buffer, ", ");
+			}
+
+			if (value == NULL)
+			{
+				appendPQExpBuffer(buffer, "NULL");
+			}
+			else
+			{
+				appendPQExpBuffer(buffer, "'%s'", value);
+			}
+		}
+
+		if (PQExpBufferBroken(buffer))
+		{
+			log_error("Failed to create log message for SQL query parameters: "
+					  "out of memory");
+			destroyPQExpBuffer(buffer);
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
  * is_response_ok returns whether the query result is a correct response
  * (not an error or failure).
  */
@@ -1497,8 +1881,18 @@ is_response_ok(PGresult *result)
 {
 	ExecStatusType resultStatus = PQresultStatus(result);
 
-	return resultStatus == PGRES_SINGLE_TUPLE || resultStatus == PGRES_TUPLES_OK ||
-		   resultStatus == PGRES_COMMAND_OK;
+	bool ok =
+		resultStatus == PGRES_SINGLE_TUPLE ||
+		resultStatus == PGRES_TUPLES_OK ||
+		resultStatus == PGRES_COPY_BOTH ||
+		resultStatus == PGRES_COMMAND_OK;
+
+	if (!ok)
+	{
+		log_error("Postgres result status is %s", PQresStatus(resultStatus));
+	}
+
+	return ok;
 }
 
 
@@ -1519,11 +1913,15 @@ is_response_ok(PGresult *result)
  * 08007	transaction_resolution_unknown
  * 08P01	protocol_violation
  */
+#define SQLSTATE_IS_CONNECTION_EXCEPTION(pgsql) \
+	(pgsql->sqlstate[0] == '0' && pgsql->sqlstate[1] == '8')
+
 bool
 pgsql_state_is_connection_error(PGSQL *pgsql)
 {
-	return PQstatus(pgsql->connection) == CONNECTION_BAD ||
-		   (pgsql->sqlstate[0] == '0' && pgsql->sqlstate[1] == '8');
+	return pgsql->connection != NULL &&
+		   (PQstatus(pgsql->connection) == CONNECTION_BAD ||
+			SQLSTATE_IS_CONNECTION_EXCEPTION(pgsql));
 }
 
 
@@ -1569,11 +1967,9 @@ clear_results(PGSQL *pgsql)
 			char *errorLines[BUFSIZE] = { 0 };
 			int lineCount = splitLines(pqmessage, errorLines, BUFSIZE);
 
-			log_error("Failure from Postgres:");
-
 			for (int lineNumber = 0; lineNumber < lineCount; lineNumber++)
 			{
-				log_error("%s", errorLines[lineNumber]);
+				log_error("[Postgres] %s", errorLines[lineNumber]);
 			}
 
 			PQclear(result);
@@ -3126,9 +3522,7 @@ OutputPluginToString(StreamOutputPlugin plugin)
  */
 bool
 pgsql_create_logical_replication_slot(LogicalStreamClient *client,
-									  uint64_t *lsn,
-									  char *snapshot,
-									  size_t size)
+									  ReplicationSlot *slot)
 {
 	PGSQL *pgsql = &(client->pgsql);
 
@@ -3190,10 +3584,12 @@ pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 		return false;
 	}
 
+	strlcpy(value, slot->slotName, sizeof(slot->slotName));
+
 	/* 2. consistent_point */
 	value = PQgetvalue(result, 0, 1);
 
-	if (!parseLSN(value, lsn))
+	if (!parseLSN(value, &(slot->lsn)))
 	{
 		log_error("Failed to parse consistent_point LSN \"%s\" returned by "
 				  " logical replication command CREATE_REPLICATION_SLOT",
@@ -3213,12 +3609,12 @@ pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 	else
 	{
 		value = PQgetvalue(result, 0, 2);
-		int length = strlcpy(snapshot, value, BUFSIZE);
+		int length = strlcpy(slot->snapshot, value, sizeof(slot->snapshot));
 
-		if (length >= size)
+		if (length >= sizeof(slot->snapshot))
 		{
 			log_error("Snapshot \"%s\" is %d bytes long, the maximum is %ld",
-					  value, length, size - 1);
+					  value, length, sizeof(slot->snapshot) - 1);
 			pgsql_finish(pgsql);
 			return false;
 		}
@@ -3246,13 +3642,16 @@ pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 			pgsql_finish(pgsql);
 			return false;
 		}
+
+		slot->plugin = client->plugin;
 	}
 
-	log_notice("Created logical replication slot \"%s\" with plugin \"%s\" "
-			   "at %X/%X",
-			   client->slotName,
-			   OutputPluginToString(client->plugin),
-			   LSN_FORMAT_ARGS(*lsn));
+	log_info("Created logical replication slot \"%s\" with plugin \"%s\" "
+			 "at %X/%X and exported snapshot %s",
+			 slot->slotName,
+			 OutputPluginToString(slot->plugin),
+			 LSN_FORMAT_ARGS(slot->lsn),
+			 slot->snapshot);
 
 	return true;
 }
@@ -3815,6 +4214,9 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 
 	clear_results(pgsql);
 	pgsql_finish(pgsql);
+
+	/* unset the signals which have been processed correctly now */
+	(void) unset_signal_flags();
 
 	/* call the closeFunction callback now */
 	if (!(*client->closeFunction)(context))
@@ -4874,6 +5276,81 @@ pgsql_sync_sentinel_apply(PGSQL *pgsql,
 	sentinel->write_lsn = context.write_lsn;
 	sentinel->flush_lsn = context.flush_lsn;
 	sentinel->replay_lsn = context.replay_lsn;
+
+	return true;
+}
+
+
+/*
+ * pgsql_send_sync_sentinel_apply sends a query to update the current sentinel
+ * values for replay_lsn, and uses libpq async API to do that. Use the
+ * associated function pgsql_fetch_sync_sentinel_apply to make sure the query
+ * has been sent and fetch the current value for endpos and apply.
+ */
+bool
+pgsql_send_sync_sentinel_apply(PGSQL *pgsql, uint64_t replay_lsn)
+{
+	char *sql =
+		"update pgcopydb.sentinel "
+		"set replay_lsn = $1 "
+		"returning startpos, endpos, apply, write_lsn, flush_lsn, replay_lsn";
+
+	char replayLSN[PG_LSN_MAXLENGTH] = { 0 };
+
+	sformat(replayLSN, sizeof(replayLSN), "%X/%X", LSN_FORMAT_ARGS(replay_lsn));
+
+	int paramCount = 1;
+	Oid paramTypes[1] = { LSNOID };
+	const char *paramValues[1] = { replayLSN };
+
+	if (!pgsql_send_with_params(pgsql, sql, paramCount, paramTypes, paramValues))
+	{
+		log_error("Failed to send pgcopydb.sentinel sync query");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * pgsql_fetch_sync_sentinel_apply checks to see if results are available for
+ * the pgsql_send_sync_sentinel_apply query that has been sent for async
+ * processing on the server, and updates the given sentinel when the result is
+ * ready.
+ */
+bool
+pgsql_fetch_sync_sentinel_apply(PGSQL *pgsql,
+								bool *retry,
+								CopyDBSentinel *sentinel)
+{
+	bool done = false;
+	SentinelContext context = { 0 };
+
+	if (!pgsql_fetch_results(pgsql, &done, &context, &parseSentinel))
+	{
+		log_error("Failed to fetch sync sentinel results");
+		return false;
+	}
+
+	if (done)
+	{
+		*retry = false;
+
+		sentinel->apply = context.apply;
+		sentinel->startpos = context.startpos;
+		sentinel->endpos = context.endpos;
+
+		sentinel->write_lsn = context.write_lsn;
+		sentinel->flush_lsn = context.flush_lsn;
+		sentinel->replay_lsn = context.replay_lsn;
+
+		return true;
+	}
+	else
+	{
+		*retry = true;
+	}
 
 	return true;
 }

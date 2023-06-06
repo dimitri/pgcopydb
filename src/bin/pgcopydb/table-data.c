@@ -9,6 +9,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "postgres_fe.h"
+#include "libpq-fe.h"
+#include "pqexpbuffer.h"
+
 #include "copydb.h"
 #include "env_utils.h"
 #include "lock_utils.h"
@@ -158,7 +162,7 @@ copydb_process_table_data(CopyDataSpec *specs)
 		++errors;
 	}
 
-	if (!copydb_wait_for_subprocesses())
+	if (!copydb_wait_for_subprocesses(specs->failFast))
 	{
 		log_error("Some sub-processes have exited with error status, "
 				  "see above for details");
@@ -265,7 +269,7 @@ copydb_process_table_data_with_workers(CopyDataSpec *specs)
 			}
 
 			/* the COPY supervisor waits for the COPY workers */
-			if (!copydb_wait_for_subprocesses())
+			if (!copydb_wait_for_subprocesses(specs->failFast))
 			{
 				log_error("Some COPY worker process(es) have exited with error, "
 						  "see above for details");
@@ -394,12 +398,21 @@ copydb_process_table_data_worker(CopyDataSpec *specs)
 			 * until all the sub-processes are finished, but we don't go and
 			 * signal them to stop immediately). We'd better continue with as
 			 * many processes as --table-jobs was given.
+			 *
+			 * When --fail-fast has been used though, we signal the other
+			 * processes in the process group to terminate and we'd rather
+			 * break out from the loop.
 			 */
 			if (!copydb_copy_table(specs, tableSpecs))
 			{
 				/* errors have already been logged */
 				copySucceeded = false;
 				++errors;
+
+				if (specs->failFast)
+				{
+					return false;
+				}
 			}
 		}
 
@@ -416,8 +429,6 @@ copydb_process_table_data_worker(CopyDataSpec *specs)
 		/*
 		 * 2. Send the indexes and constraints attached to this table to the
 		 *    index job queue.
-		 *
-		 * 3. Send the table to the VACUUM ANALYZE job queue.
 		 *
 		 * If a partial COPY is happening, check that all the other parts are
 		 * done. This check should be done in the critical section too. Only
@@ -450,14 +461,11 @@ copydb_process_table_data_worker(CopyDataSpec *specs)
 						 tableSpecs->qname);
 				log_warn("Consider `pgcopydb copy indexes` to try again");
 				++errors;
-			}
 
-			if (!vacuum_add_table(specs, tableSpecs))
-			{
-				log_warn("Failed to queue VACUUM ANALYZE %s [%u]",
-						 tableSpecs->qname,
-						 tableSpecs->sourceTable->oid);
-				++errors;
+				if (specs->failFast)
+				{
+					return false;
+				}
 			}
 		}
 	}
@@ -585,18 +593,31 @@ copydb_table_is_being_processed(CopyDataSpec *specs,
 	summary->pid = getpid();
 	summary->table = tableSpecs->sourceTable;
 
-	if (IS_EMPTY_STRING_BUFFER(tableSpecs->part.copyQuery))
+	PQExpBuffer copyDst = createPQExpBuffer();
+
+	if (copyDst == NULL)
 	{
-		sformat(summary->command, sizeof(summary->command),
-				"COPY %s",
-				tableSpecs->qname);
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
 	}
-	else
+
+	if (!copydb_prepare_copy_query(tableSpecs, copyDst, false))
 	{
-		sformat(summary->command, sizeof(summary->command),
-				"COPY %s",
-				tableSpecs->part.copyQuery);
+		/* errors have already been logged */
+		return false;
 	}
+
+	/* "COPY " is 5 bytes, then 1 for \0 */
+	int len = copyDst->len + 5 + 1;
+	summary->command = (char *) calloc(len, sizeof(char));
+
+	if (summary->command == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	sformat(summary->command, len, "COPY %s", copyDst->data);
 
 	if (!open_table_summary(summary, tableSpecs->tablePaths.lockFile))
 	{
@@ -825,15 +846,34 @@ copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 		truncate = false;
 	}
 
+	truncate = false;
+
 	/* Now copy the data from source to target */
 	log_notice("%s", summary->command);
 
 	/* COPY FROM tablename, or maybe COPY FROM (SELECT ... WHERE ...) */
-	char *copySource = tableSpecs->qname;
+	PQExpBuffer copySrc = createPQExpBuffer();
+	PQExpBuffer copyDst = createPQExpBuffer();
 
-	if (tableSpecs->part.partCount > 1)
+	if (copySrc == NULL || copyDst == NULL)
 	{
-		copySource = tableSpecs->part.copyQuery;
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	if (!copydb_prepare_copy_query(tableSpecs, copySrc, true))
+	{
+		/* errors have already been logged */
+		destroyPQExpBuffer(copySrc);
+		return false;
+	}
+
+	if (!copydb_prepare_copy_query(tableSpecs, copyDst, false))
+	{
+		/* errors have already been logged */
+		destroyPQExpBuffer(copySrc);
+		destroyPQExpBuffer(copyDst);
+		return false;
 	}
 
 	int attempts = 0;
@@ -847,7 +887,7 @@ copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 		++attempts;
 
 		/* ignore previous attempts, we need only one success here */
-		success = pg_copy(src, &dst, copySource, tableSpecs->qname, truncate);
+		success = pg_copy(src, &dst, copySrc->data, copyDst->data, truncate);
 
 		if (success)
 		{
@@ -897,5 +937,93 @@ copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 		}
 	}
 
+	destroyPQExpBuffer(copySrc);
+	destroyPQExpBuffer(copyDst);
+
 	return success;
+}
+
+
+/*
+ * copydb_prepare_copy_query prepares a COPY query using the list of attribute
+ * names from the SourceTable instance.
+ */
+bool
+copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
+						  PQExpBuffer query,
+						  bool source)
+{
+	SourceTable *table = tableSpecs->sourceTable;
+
+	if (source)
+	{
+		/*
+		 * Always use a sub-query as the copy source, that's easier to hack
+		 * around if comes a time when sophistication is required.
+		 */
+		appendPQExpBufferStr(query, "(SELECT ");
+
+		for (int i = 0; i < table->attributes.count; i++)
+		{
+			char *attname = table->attributes.array[i].attname;
+
+			if (i > 0)
+			{
+				appendPQExpBufferStr(query, ", ");
+			}
+
+			appendPQExpBuffer(query, "\"%s\"", attname);
+		}
+
+		appendPQExpBuffer(query, " FROM %s ", tableSpecs->qname);
+
+		/*
+		 * On a source COPY query we might want to add filtering.
+		 */
+		if (tableSpecs->part.partCount > 1)
+		{
+			/*
+			 * The way schema_list_partitions prepares the boundaries is non
+			 * overlapping, so we can use the BETWEEN operator to select our source
+			 * rows in the COPY sub-query.
+			 */
+			appendPQExpBuffer(query,
+							  " WHERE \"%s\" BETWEEN %lld AND %lld ",
+							  tableSpecs->part.partKey,
+							  (long long) tableSpecs->part.min,
+							  (long long) tableSpecs->part.max);
+		}
+
+		appendPQExpBufferStr(query, ")");
+	}
+	else
+	{
+		/*
+		 * For the destination query, use the table(...) syntax.
+		 */
+		appendPQExpBuffer(query, "%s(", tableSpecs->qname);
+
+		for (int i = 0; i < table->attributes.count; i++)
+		{
+			char *attname = table->attributes.array[i].attname;
+
+			if (i > 0)
+			{
+				appendPQExpBufferStr(query, ", ");
+			}
+
+			appendPQExpBuffer(query, "\"%s\"", attname);
+		}
+
+		appendPQExpBufferStr(query, ")");
+	}
+
+	if (PQExpBufferBroken(query))
+	{
+		log_error("Failed to create COPY query for %s: out of memory",
+				  tableSpecs->qname);
+		return false;
+	}
+
+	return true;
 }

@@ -9,6 +9,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "parson.h"
+
 #include "defaults.h"
 #include "env_utils.h"
 #include "file_utils.h"
@@ -29,6 +31,14 @@ static bool prepareFilterCopyTableList(PGSQL *pgsql,
 									   SourceFilterTableList *tableList,
 									   const char *temp_table_name);
 
+
+/* Context used when fetching catalog definitions */
+typedef struct SourceCatalogArrayContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	SourceCatalogArray *catalogArray;
+	bool parsedOk;
+} SourceCatalogArrayContext;
 
 /* Context used when fetching schema definitions */
 typedef struct SourceSchemaArrayContext
@@ -97,6 +107,8 @@ typedef struct SourcePartitionContext
 
 static void getSchemaList(void *ctx, PGresult *result);
 
+static void getCatalogList(void *ctx, PGresult *result);
+
 static void getExtensionList(void *ctx, PGresult *result);
 
 static bool parseCurrentExtension(PGresult *result,
@@ -115,6 +127,8 @@ static void getTableArray(void *ctx, PGresult *result);
 static bool parseCurrentSourceTable(PGresult *result,
 									int rowNumber,
 									SourceTable *table);
+
+static bool parseAttributesArray(SourceTable *table, JSON_Value *json);
 
 static void getSequenceArray(void *ctx, PGresult *result);
 
@@ -165,6 +179,41 @@ schema_query_privileges(PGSQL *pgsql,
 	if (!pgsql_has_database_privilege(pgsql, "temp", hasDBTempPrivilege))
 	{
 		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * schema_list_catalogs grabs the list of databases (catalogs) from the given
+ * source Postgres instance and allocates a SourceCatalog array with the result
+ * of the query.
+ */
+bool
+schema_list_catalogs(PGSQL *pgsql, SourceCatalogArray *catArray)
+{
+	SourceCatalogArrayContext parseContext = { { 0 }, catArray, false };
+
+	char *sql =
+		"select d.oid, datname, pg_database_size(d.oid) as bytes, "
+		"       pg_size_pretty(pg_database_size(d.oid)) "
+		"  from pg_database d "
+		" where datname not in ('template0', 'template1') "
+		"order by datname";
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   0, NULL, NULL,
+								   &parseContext, &getCatalogList))
+	{
+		log_error("Failed to list catalogs");
+		return false;
+	}
+
+	if (!parseContext.parsedOk)
+	{
+		log_error("Failed to list catalogs");
 		return false;
 	}
 
@@ -236,8 +285,8 @@ schema_list_ext_schemas(PGSQL *pgsql, SourceSchemaArray *array)
 	char *sql =
 		"select n.oid, n.nspname, "
 		"       format('- %s %s', "
-		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' ')) "
+		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')) "
 		"  from pg_namespace n "
 		"       join pg_roles auth ON auth.oid = n.nspowner "
 		"       join pg_depend d "
@@ -288,9 +337,9 @@ schema_list_collations(PGSQL *pgsql, SourceCollationArray *array)
 		"select colloid, collname, "
 		"       pg_describe_object('pg_class'::regclass, indexrelid, 0), "
 		"       format('%s %s %s', "
-		"              regexp_replace(n.nspname, '[\n\r]', ' '), "
-		"              regexp_replace(c.collname, '[\n\r]', ' '), "
-		"              regexp_replace(auth.rolname, '[\n\r]', ' ')) "
+		"              regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"              regexp_replace(c.collname, '[\\n\\r]', ' '), "
+		"              regexp_replace(auth.rolname, '[\\n\\r]', ' ')) "
 		"  from indcols "
 		"       join pg_collation c on c.oid = colloid "
 		"       join pg_roles auth ON auth.oid = c.collowner "
@@ -303,9 +352,9 @@ schema_list_collations(PGSQL *pgsql, SourceCollationArray *array)
 		"select c.oid as colloid, c.collname, "
 		"       format('database %s', d.datname) as desc, "
 		"       format('%s %s %s', "
-		"              regexp_replace(n.nspname, '[\n\r]', ' '), "
-		"              regexp_replace(c.collname, '[\n\r]', ' '), "
-		"              regexp_replace(auth.rolname, '[\n\r]', ' ')) "
+		"              regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"              regexp_replace(c.collname, '[\\n\\r]', ' '), "
+		"              regexp_replace(auth.rolname, '[\\n\\r]', ' ')) "
 		"  from pg_database d "
 		"       join pg_collation c on c.collname = d.datcollate "
 		"       join pg_roles auth ON auth.oid = c.collowner "
@@ -317,9 +366,9 @@ schema_list_collations(PGSQL *pgsql, SourceCollationArray *array)
 		"select coll.oid as colloid, coll.collname, "
 		"       pg_describe_object('pg_class'::regclass, attrelid, attnum), "
 		"       format('%s %s %s', "
-		"              regexp_replace(cn.nspname, '[\n\r]', ' '), "
-		"              regexp_replace(coll.collname, '[\n\r]', ' '), "
-		"              regexp_replace(auth.rolname, '[\n\r]', ' ')) "
+		"              regexp_replace(cn.nspname, '[\\n\\r]', ' '), "
+		"              regexp_replace(coll.collname, '[\\n\\r]', ' '), "
+		"              regexp_replace(auth.rolname, '[\\n\\r]', ' ')) "
 		"  from pg_attribute a "
 		"       join pg_class c on c.oid = a.attrelid "
 		"       join pg_namespace n on n.oid = c.relnamespace "
@@ -692,14 +741,32 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
-		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
-		"                regexp_replace(c.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' ')), "
-		"         pkeys.attname as partkey"
+		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')), "
+		"         pkeys.attname as partkey, "
+		"         attrs.js as attributes "
 
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
 		"         join pg_roles auth ON auth.oid = c.relowner"
+		"         join lateral ( "
+		"               with atts as "
+		"               ("
+		"                  select attnum, atttypid, attname, "
+		"                         i.indrelid is not null as attisprimary "
+		"                    from pg_attribute a "
+		"                         left join pg_index i "
+		"                                on i.indrelid = a.attrelid "
+		"                               and a.attnum = ANY(i.indkey) "
+		"                               and i.indisprimary "
+		"                   where a.attrelid = c.oid and not a.attisdropped "
+		"                     and a.attnum > 0 "
+		"                order by attnum "
+		"               ) "
+		"               select json_agg(row_to_json(atts)) as js "
+		"                from atts "
+		"              ) as attrs on true"
 		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* find a copy partition key candidate */
@@ -749,14 +816,32 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                 where n.nspname = ftd.nspname "
 		"                   and c.relname = ftd.relname) as excludedata,"
 		"         format('%s %s %s', "
-		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
-		"                regexp_replace(c.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' ')), "
-		"         pkeys.attname as partkey"
+		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')), "
+		"         pkeys.attname as partkey, "
+		"         attrs.js as attributes "
 
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 		"         join pg_roles auth ON auth.oid = c.relowner"
+		"         join lateral ( "
+		"               with atts as "
+		"               ("
+		"                  select attnum, atttypid, attname, "
+		"                         i.indrelid is not null as attisprimary "
+		"                    from pg_attribute a "
+		"                         left join pg_index i "
+		"                                on i.indrelid = a.attrelid "
+		"                               and a.attnum = ANY(i.indkey) "
+		"                               and i.indisprimary "
+		"                   where a.attrelid = c.oid and not a.attisdropped "
+		"                     and a.attnum > 0 "
+		"                order by attnum "
+		"               ) "
+		"               select json_agg(row_to_json(atts)) as js "
+		"                from atts "
+		"              ) as attrs on true"
 		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* include-only-schema */
@@ -813,14 +898,32 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         pg_size_pretty(ts.bytes), "
 		"         ftd.relname is not null as excludedata, "
 		"         format('%s %s %s', "
-		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
-		"                regexp_replace(c.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' ')), "
-		"         pkeys.attname as partkey"
+		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')), "
+		"         pkeys.attname as partkey, "
+		"         attrs.js as attributes "
 
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 		"         join pg_roles auth ON auth.oid = c.relowner"
+		"         join lateral ( "
+		"               with atts as "
+		"               ("
+		"                  select attnum, atttypid, attname, "
+		"                         i.indrelid is not null as attisprimary "
+		"                    from pg_attribute a "
+		"                         left join pg_index i "
+		"                                on i.indrelid = a.attrelid "
+		"                               and a.attnum = ANY(i.indkey) "
+		"                               and i.indisprimary "
+		"                   where a.attrelid = c.oid and not a.attisdropped "
+		"                     and a.attnum > 0 "
+		"                order by attnum "
+		"               ) "
+		"               select json_agg(row_to_json(atts)) as js "
+		"                from atts "
+		"              ) as attrs on true"
 		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* exclude-schema */
@@ -886,14 +989,32 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
-		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
-		"                regexp_replace(c.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' ')), "
-		"         pkeys.attname as partkey"
+		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')), "
+		"         pkeys.attname as partkey, "
+		"         attrs.js as attributes "
 
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 		"         join pg_roles auth ON auth.oid = c.relowner"
+		"         join lateral ( "
+		"               with atts as "
+		"               ("
+		"                  select attnum, atttypid, attname, "
+		"                         i.indrelid is not null as attisprimary "
+		"                    from pg_attribute a "
+		"                         left join pg_index i "
+		"                                on i.indrelid = a.attrelid "
+		"                               and a.attnum = ANY(i.indkey) "
+		"                               and i.indisprimary "
+		"                   where a.attrelid = c.oid and not a.attisdropped "
+		"                     and a.attnum > 0 "
+		"                order by attnum "
+		"               ) "
+		"               select json_agg(row_to_json(atts)) as js "
+		"                from atts "
+		"              ) as attrs on true"
 		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* include-only-schema */
@@ -953,14 +1074,32 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
-		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
-		"                regexp_replace(c.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' ')), "
-		"         pkeys.attname as partkey"
+		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')), "
+		"         pkeys.attname as partkey, "
+		"         attrs.js as attributes "
 
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 		"         join pg_roles auth ON auth.oid = c.relowner"
+		"         join lateral ( "
+		"               with atts as "
+		"               ("
+		"                  select attnum, atttypid, attname, "
+		"                         i.indrelid is not null as attisprimary "
+		"                    from pg_attribute a "
+		"                         left join pg_index i "
+		"                                on i.indrelid = a.attrelid "
+		"                               and a.attnum = ANY(i.indkey) "
+		"                               and i.indisprimary "
+		"                   where a.attrelid = c.oid and not a.attisdropped "
+		"                     and a.attnum > 0 "
+		"                order by attnum "
+		"               ) "
+		"               select json_agg(row_to_json(atts)) as js "
+		"                from atts "
+		"              ) as attrs on true"
 		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* exclude-schema */
@@ -1093,10 +1232,11 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
-		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
-		"                regexp_replace(r.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' ')),"
-		"         NULL as partkey"
+		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"                regexp_replace(r.relname, '[\\n\\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')),"
+		"         NULL as partkey,"
+		"         NULL as attributes"
 
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
@@ -1134,10 +1274,11 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
-		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
-		"                regexp_replace(r.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' ')),"
-		"         NULL as partkey"
+		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"                regexp_replace(r.relname, '[\\n\\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')),"
+		"         NULL as partkey,"
+		"         NULL as attributes"
 
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
@@ -1185,10 +1326,11 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         pg_size_pretty(ts.bytes), "
 		"         ftd.relname is not null as excludedata, "
 		"         format('%s %s %s', "
-		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
-		"                regexp_replace(r.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' ')),"
-		"         NULL as partkey"
+		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"                regexp_replace(r.relname, '[\\n\\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')),"
+		"         NULL as partkey,"
+		"         NULL as attributes"
 
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
@@ -1245,10 +1387,11 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
-		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
-		"                regexp_replace(r.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' ')),"
-		"         NULL as partkey"
+		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"                regexp_replace(r.relname, '[\\n\\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')),"
+		"         NULL as partkey,"
+		"         NULL as attributes"
 
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
@@ -1299,10 +1442,11 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
-		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
-		"                regexp_replace(r.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' ')),"
-		"         NULL as partkey"
+		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"                regexp_replace(r.relname, '[\\n\\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')),"
+		"         NULL as partkey,"
+		"         NULL as attributes"
 
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
@@ -1422,9 +1566,10 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 
 		"  select c.oid, n.nspname, c.relname, "
 		"         format('%s %s %s', "
-		"                regexp_replace(n.nspname, '[\n\r]', ' '), "
-		"                regexp_replace(c.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')), "
+		"         NULL as attroid "
 
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
@@ -1450,258 +1595,405 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_INCL,
 
-		"  select s.oid as seqoid, "
-		"         sn.nspname, "
-		"         s.relname, "
-		"         format('%s %s %s', "
-		"                regexp_replace(sn.nspname, '[\n\r]', ' '), "
-		"                regexp_replace(s.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"with "
+		" seqs(seqoid, nspname, relname, restore_list_name) as "
+		" ( "
+		"    select s.oid as seqoid, "
+		"           sn.nspname, "
+		"           s.relname, "
+		"           format('%s %s %s', "
+		"                  regexp_replace(sn.nspname, '[\\n\\r]', ' '), "
+		"                  regexp_replace(s.relname, '[\\n\\r]', ' '), "
+		"                  regexp_replace(auth.rolname, '[\\n\\r]', ' ')) "
+		"      from pg_class s "
+		"           join pg_namespace sn on sn.oid = s.relnamespace "
+		"           join pg_roles auth ON auth.oid = s.relowner "
+
+		"     where s.relkind = 'S' "
+		"       and sn.nspname !~ 'pgcopydb' "
+
+		/* avoid pg_class entries which belong to extensions */
+
+		"       and not exists "
+		"         ( "
+		"           select 1 "
+		"             from pg_depend d "
+		"            where d.classid = 'pg_class'::regclass "
+		"              and d.objid = s.oid "
+		"              and d.deptype = 'e' "
+		"         ) "
+		"    ) "
 
 		/*
-		 * we don't need dependent table name and column name:
-		 *
-		 * "         a.adrelid as reloid, "
-		 * "         a.adrelid::regclass as relname, "
-		 * "         at.attname as colname "
+		 * pg_depend link between sequence and table is AUTO except for
+		 * identity sequences where it's INTERNAL.
 		 */
+		"    select s.seqoid, s.nspname, s.relname, s.restore_list_name, "
+		"           NULL as attroid "
+		"      from seqs as s "
 
-		"    from pg_class s "
-		"         join pg_namespace sn on sn.oid = s.relnamespace "
-		"         join pg_roles auth ON auth.oid = s.relowner"
-		"         join pg_depend d on d.refobjid = s.oid "
-		"         join pg_attrdef a on d.objid = a.oid "
-		"         join pg_attribute at "
-		"           on at.attrelid = a.adrelid "
-		"          and at.attnum = a.adnum "
+		"       join pg_depend d on d.objid = s.seqoid "
+		"        and d.classid = 'pg_class'::regclass "
+		"        and d.refclassid = 'pg_class'::regclass "
+		"        and d.deptype in ('i', 'a') "
 
-		/* include-only-schema and include-only-table */
-		"         join pg_class r on r.oid = a.adrelid "
-		"         join pg_namespace rn on rn.oid = r.relnamespace "
+		"       join pg_class r on r.oid = d.refobjid "
+		"       join pg_namespace rn on rn.oid = r.relnamespace "
+
+		/* include-only-schema */
+		"       left join pg_temp.filter_include_only_schema fn "
+		"         on rn.nspname = fn.nspname "
+
+		/* include-only-table */
+		"       left join pg_temp.filter_include_only_table ft "
+		"         on rn.nspname = ft.nspname "
+		"        and r.relname = ft.relname "
+		
+		"  where (fn.nspname is not null or ft.relname is not null)"
+
+
+		"  union all "
+
+		/*
+		 * pg_depend link between sequence and pg_attrdef is still used for
+		 * serial columns and the like (default value uses nextval).
+		 */
+		"    select s.seqoid, s.nspname, s.relname, s.restore_list_name, "
+		"           a.oid as attroid "
+		"      from seqs as s "
+
+		"       join pg_depend d on d.refobjid = s.seqoid "
+		"        and d.refclassid = 'pg_class'::regclass "
+		"        and d.classid = 'pg_attrdef'::regclass "
+		"       join pg_attrdef a on a.oid = d.objid "
+		"       join pg_attribute at "
+		"         on at.attrelid = a.adrelid "
+		"        and at.attnum = a.adnum "
+
+		"       join pg_class r on r.oid = at.attrelid "
+		"       join pg_namespace rn on rn.oid = r.relnamespace "
 
 
 		/* include-only-schema */
-		"         left join pg_temp.filter_include_only_schema fn "
-		"                on rn.nspname = fn.nspname "
+		"       left join pg_temp.filter_include_only_schema fn "
+		"         on rn.nspname = fn.nspname "
 
 		/* include-only-table */
-		"         left join pg_temp.filter_include_only_table ft "
-		"                on rn.nspname = ft.nspname "
-		"               and r.relname = ft.relname "
+		"       left join pg_temp.filter_include_only_table ft "
+		"         on rn.nspname = ft.nspname "
+		"        and r.relname = ft.relname "
+		
+		"  where (fn.nspname is not null or ft.relname is not null)"
 
-		"  where s.relkind = 'S' "
-		"     and d.classid = 'pg_attrdef'::regclass "
-		"     and d.refclassid = 'pg_class'::regclass "
-		"     and sn.nspname !~ 'pgcopydb' "
-		"     and (fn.nspname is not null or ft.relname is not null)"
-
-		/* avoid pg_class entries which belong to extensions */
-		"     and not exists "
-		"       ( "
-		"         select 1 "
-		"           from pg_depend d "
-		"          where d.classid = 'pg_class'::regclass "
-		"            and d.objid = s.oid "
-		"            and d.deptype = 'e' "
-		"       ) "
-
-		"order by sn.nspname, s.relname"
+		"order by s.nspname, s.relname"
 	},
 
 	{
 		SOURCE_FILTER_TYPE_EXCL,
 
+		"with "
+		" seqs(seqoid, nspname, relname, restore_list_name) as "
+		" ( "
+		"    select s.oid as seqoid, "
+		"           sn.nspname, "
+		"           s.relname, "
+		"           format('%s %s %s', "
+		"                  regexp_replace(sn.nspname, '[\\n\\r]', ' '), "
+		"                  regexp_replace(s.relname, '[\\n\\r]', ' '), "
+		"                  regexp_replace(auth.rolname, '[\\n\\r]', ' ')) "
+		"      from pg_class s "
+		"           join pg_namespace sn on sn.oid = s.relnamespace "
+		"           join pg_roles auth ON auth.oid = s.relowner "
 
-		"  select s.oid as seqoid, "
-		"         sn.nspname, "
-		"         s.relname, "
-		"         format('%s %s %s', "
-		"                regexp_replace(sn.nspname, '[\n\r]', ' '), "
-		"                regexp_replace(s.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
-
-		/*
-		 * we don't need dependent table name and column name:
-		 *
-		 * "         a.adrelid as reloid, "
-		 * "         a.adrelid::regclass as relname, "
-		 * "         at.attname as colname "
-		 */
-
-		"    from pg_class s "
-		"         join pg_namespace sn on sn.oid = s.relnamespace "
-		"         join pg_roles auth ON auth.oid = s.relowner"
-		"         join pg_depend d on d.refobjid = s.oid "
-		"         join pg_attrdef a on d.objid = a.oid "
-		"         join pg_attribute at "
-		"           on at.attrelid = a.adrelid "
-		"          and at.attnum = a.adnum "
-
-		/* filters are edited in terms of the main relation pg_class entry */
-		"         join pg_class r on r.oid = a.adrelid "
-		"         join pg_namespace rn on rn.oid = r.relnamespace "
-
-		/* exclude-schema */
-		"         left join pg_temp.filter_exclude_schema fn "
-		"                on rn.nspname = fn.nspname "
-
-		/* exclude-table */
-		"         left join pg_temp.filter_exclude_table ft "
-		"                on rn.nspname = ft.nspname "
-		"               and r.relname = ft.relname "
-
-		/* exclude-table-data */
-		"         left join pg_temp.filter_exclude_table_data ftd "
-		"                on rn.nspname = ftd.nspname "
-		"               and r.relname = ftd.relname "
-
-		"  where s.relkind = 'S' "
-		"    and d.classid = 'pg_attrdef'::regclass "
-		"    and d.refclassid = 'pg_class'::regclass "
-		"    and sn.nspname !~ 'pgcopydb' "
-
-		/* WHERE clause for exclusion filters */
-		"     and fn.nspname is null "
-		"     and ft.relname is null "
-		"     and ftd.relname is null "
+		"     where s.relkind = 'S' "
+		"       and sn.nspname !~ 'pgcopydb' "
 
 		/* avoid pg_class entries which belong to extensions */
-		"     and not exists "
-		"       ( "
-		"         select 1 "
-		"           from pg_depend d "
-		"          where d.classid = 'pg_class'::regclass "
-		"            and d.objid = s.oid "
-		"            and d.deptype = 'e' "
-		"       ) "
 
-		"order by sn.nspname, s.relname"
+		"       and not exists "
+		"         ( "
+		"           select 1 "
+		"             from pg_depend d "
+		"            where d.classid = 'pg_class'::regclass "
+		"              and d.objid = s.oid "
+		"              and d.deptype = 'e' "
+		"         ) "
+		"    ) "
+
+		/*
+		 * pg_depend link between sequence and table is AUTO except for
+		 * identity sequences where it's INTERNAL.
+		 */
+		"    select s.seqoid, s.nspname, s.relname, s.restore_list_name, "
+		"           NULL as attroid "
+		"      from seqs as s "
+
+		"      join pg_depend d on d.objid = s.seqoid "
+		"       and d.classid = 'pg_class'::regclass "
+		"       and d.refclassid = 'pg_class'::regclass "
+		"       and d.deptype in ('i', 'a') "
+
+		"      join pg_class r on r.oid = d.refobjid "
+		"      join pg_namespace rn on rn.oid = r.relnamespace "
+
+		/* exclude-schema */
+		"      left join pg_temp.filter_exclude_schema fn "
+		"             on rn.nspname = fn.nspname "
+
+		/* exclude-table */
+		"      left join pg_temp.filter_exclude_table ft "
+		"             on rn.nspname = ft.nspname "
+		"            and r.relname = ft.relname "
+
+		/* exclude-table-data */
+		"      left join pg_temp.filter_exclude_table_data ftd "
+		"             on rn.nspname = ftd.nspname "
+		"            and r.relname = ftd.relname "
+
+		/* WHERE clause for exclusion filters */
+		"     where fn.nspname is null "
+		"       and ft.relname is null "
+		"       and ftd.relname is null "
+
+		"  union all "
+
+		/*
+		 * pg_depend link between sequence and pg_attrdef is still used for
+		 * serial columns and the like (default value uses nextval).
+		 */
+		"    select s.seqoid, s.nspname, s.relname, s.restore_list_name, "
+		"           a.oid as attroid "
+		"      from seqs as s "
+
+		"      join pg_depend d on d.refobjid = s.seqoid "
+		"       and d.refclassid = 'pg_class'::regclass "
+		"       and d.classid = 'pg_attrdef'::regclass "
+		"      join pg_attrdef a on a.oid = d.objid "
+		"      join pg_attribute at "
+		"        on at.attrelid = a.adrelid "
+		"       and at.attnum = a.adnum "
+
+		"      join pg_class r on r.oid = at.attrelid "
+		"      join pg_namespace rn on rn.oid = r.relnamespace "
+
+		/* exclude-schema */
+		"      left join pg_temp.filter_exclude_schema fn "
+		"             on rn.nspname = fn.nspname "
+
+		/* exclude-table */
+		"      left join pg_temp.filter_exclude_table ft "
+		"             on rn.nspname = ft.nspname "
+		"            and r.relname = ft.relname "
+
+		/* exclude-table-data */
+		"      left join pg_temp.filter_exclude_table_data ftd "
+		"             on rn.nspname = ftd.nspname "
+		"            and r.relname = ftd.relname "
+
+		/* WHERE clause for exclusion filters */
+		"     where fn.nspname is null "
+		"       and ft.relname is null "
+		"       and ftd.relname is null "
+
+		"  order by s.nspname, s.relname"
 	},
 
 	{
 		SOURCE_FILTER_TYPE_LIST_NOT_INCL,
 
-		"  select s.oid as seqoid, "
-		"         sn.nspname, "
-		"         s.relname, "
-		"         format('%s %s %s', "
-		"                regexp_replace(sn.nspname, '[\n\r]', ' '), "
-		"                regexp_replace(s.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"with "
+		" seqs(seqoid, nspname, relname, restore_list_name) as "
+		" ( "
+		"    select s.oid as seqoid, "
+		"           sn.nspname, "
+		"           s.relname, "
+		"           format('%s %s %s', "
+		"                  regexp_replace(sn.nspname, '[\\n\\r]', ' '), "
+		"                  regexp_replace(s.relname, '[\\n\\r]', ' '), "
+		"                  regexp_replace(auth.rolname, '[\\n\\r]', ' ')) "
+		"      from pg_class s "
+		"           join pg_namespace sn on sn.oid = s.relnamespace "
+		"           join pg_roles auth ON auth.oid = s.relowner "
+
+		"     where s.relkind = 'S' "
+		"       and sn.nspname !~ 'pgcopydb' "
+
+		/* avoid pg_class entries which belong to extensions */
+
+		"       and not exists "
+		"         ( "
+		"           select 1 "
+		"             from pg_depend d "
+		"            where d.classid = 'pg_class'::regclass "
+		"              and d.objid = s.oid "
+		"              and d.deptype = 'e' "
+		"         ) "
+		"    ) "
 
 		/*
-		 * we don't need dependent table name and column name:
-		 *
-		 * "         a.adrelid as reloid, "
-		 * "         a.adrelid::regclass as relname, "
-		 * "         at.attname as colname "
+		 * pg_depend link between sequence and table is AUTO except for
+		 * identity sequences where it's INTERNAL.
 		 */
+		"    select s.seqoid, s.nspname, s.relname, s.restore_list_name, "
+		"           NULL as attroid "
+		"      from seqs as s "
 
-		"    from pg_class s "
-		"         join pg_namespace sn on sn.oid = s.relnamespace "
-		"         join pg_roles auth ON auth.oid = s.relowner"
-		"         join pg_depend d on d.refobjid = s.oid "
-		"         join pg_attrdef a on d.objid = a.oid "
-		"         join pg_attribute at "
-		"           on at.attrelid = a.adrelid "
-		"          and at.attnum = a.adnum "
+		"       join pg_depend d on d.objid = s.seqoid "
+		"        and d.classid = 'pg_class'::regclass "
+		"        and d.refclassid = 'pg_class'::regclass "
+		"        and d.deptype in ('i', 'a') "
 
-		"         join pg_class r on r.oid = a.adrelid "
-		"         join pg_namespace rn on rn.oid = r.relnamespace "
+		"       join pg_class r on r.oid = d.refobjid "
+		"       join pg_namespace rn on rn.oid = r.relnamespace "
 
 		/* include-only-schema */
 		"    left join pg_temp.filter_include_only_schema fn "
-		"           on rn.nspname = fn.nspname "
+		"      on rn.nspname = fn.nspname "
 
 		/* include-only-table */
 		"    left join pg_temp.filter_include_only_table ft "
-		"           on rn.nspname = ft.nspname "
-		"          and r.relname = ft.relname "
+		"      on rn.nspname = ft.nspname "
+		"     and r.relname = ft.relname "
 
-		"  where s.relkind = 'S' "
-		"    and d.classid = 'pg_attrdef'::regclass "
-		"    and d.refclassid = 'pg_class'::regclass "
-		"    and sn.nspname !~ 'pgcopydb' "
-
-		/* WHERE clause for exclusion filters */
-		"     and ft.nspname is null "
+		"    where ft.nspname is null "
 		"     and fn.nspname is null "
 
-		/* avoid pg_class entries which belong to extensions */
-		"     and not exists "
-		"       ( "
-		"         select 1 "
-		"           from pg_depend d "
-		"          where d.classid = 'pg_class'::regclass "
-		"            and d.objid = s.oid "
-		"            and d.deptype = 'e' "
-		"       ) "
+		"  union all "
 
-		"order by sn.nspname, s.relname"
+		/*
+		 * pg_depend link between sequence and pg_attrdef is still used for
+		 * serial columns and the like (default value uses nextval).
+		 */
+		"    select s.seqoid, s.nspname, s.relname, s.restore_list_name, "
+		"           a.oid as attroid "
+		"      from seqs as s "
+
+		"       join pg_depend d on d.refobjid = s.seqoid "
+		"        and d.refclassid = 'pg_class'::regclass "
+		"        and d.classid = 'pg_attrdef'::regclass "
+		"       join pg_attrdef a on a.oid = d.objid "
+		"       join pg_attribute at "
+		"         on at.attrelid = a.adrelid "
+		"        and at.attnum = a.adnum "
+
+		"       join pg_class r on r.oid = at.attrelid "
+		"       join pg_namespace rn on rn.oid = r.relnamespace "
+
+		/* include-only-schema */
+		"    left join pg_temp.filter_include_only_schema fn "
+		"      on rn.nspname = fn.nspname "
+
+		/* include-only-table */
+		"    left join pg_temp.filter_include_only_table ft "
+		"      on rn.nspname = ft.nspname "
+		"     and r.relname = ft.relname "
+
+		"    where ft.nspname is null "
+		"     and fn.nspname is null "
+
+
+		"  order by s.nspname, s.relname"
 	},
 
 	{
 		SOURCE_FILTER_TYPE_LIST_EXCL,
 
+		"with "
+		" seqs(seqoid, nspname, relname, restore_list_name) as "
+		" ( "
+		"    select s.oid as seqoid, "
+		"           sn.nspname, "
+		"           s.relname, "
+		"           format('%s %s %s', "
+		"                  regexp_replace(sn.nspname, '[\\n\\r]', ' '), "
+		"                  regexp_replace(s.relname, '[\\n\\r]', ' '), "
+		"                  regexp_replace(auth.rolname, '[\\n\\r]', ' ')) "
+		"      from pg_class s "
+		"           join pg_namespace sn on sn.oid = s.relnamespace "
+		"           join pg_roles auth ON auth.oid = s.relowner "
 
-		"  select s.oid as seqoid, "
-		"         sn.nspname, "
-		"         s.relname, "
-		"         format('%s %s %s', "
-		"                regexp_replace(sn.nspname, '[\n\r]', ' '), "
-		"                regexp_replace(s.relname, '[\n\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"     where s.relkind = 'S' "
+		"       and sn.nspname !~ 'pgcopydb' "
+
+		/* avoid pg_class entries which belong to extensions */
+
+		"       and not exists "
+		"         ( "
+		"           select 1 "
+		"             from pg_depend d "
+		"            where d.classid = 'pg_class'::regclass "
+		"              and d.objid = s.oid "
+		"              and d.deptype = 'e' "
+		"         ) "
+		"    ) "
 
 		/*
-		 * we don't need dependent table name and column name:
-		 *
-		 * "         a.adrelid as reloid, "
-		 * "         a.adrelid::regclass as relname, "
-		 * "         at.attname as colname "
+		 * pg_depend link between sequence and table is AUTO except for
+		 * identity sequences where it's INTERNAL.
 		 */
+		"    select s.seqoid, s.nspname, s.relname, s.restore_list_name, "
+		"           NULL as attroid "
+		"      from seqs as s "
 
-		"    from pg_class s "
-		"         join pg_namespace sn on sn.oid = s.relnamespace "
-		"         join pg_roles auth ON auth.oid = s.relowner"
-		"         join pg_depend d on d.refobjid = s.oid "
-		"         join pg_attrdef a on d.objid = a.oid "
-		"         join pg_attribute at "
-		"           on at.attrelid = a.adrelid "
-		"          and at.attnum = a.adnum "
+		"      join pg_depend d on d.objid = s.seqoid "
+		"       and d.classid = 'pg_class'::regclass "
+		"       and d.refclassid = 'pg_class'::regclass "
+		"       and d.deptype in ('i', 'a') "
 
-		/* filters are edited in terms of the main relation pg_class entry */
-		"         join pg_class r on r.oid = a.adrelid "
-		"         join pg_namespace rn on rn.oid = r.relnamespace "
+		"      join pg_class r on r.oid = d.refobjid "
+		"      join pg_namespace rn on rn.oid = r.relnamespace "
 
 		/* exclude-schema */
-		"         left join pg_temp.filter_exclude_schema fn "
-		"                on rn.nspname = fn.nspname "
+		"      left join pg_temp.filter_exclude_schema fn "
+		"        on rn.nspname = fn.nspname "
 
 		/* exclude-table */
-		"         left join pg_temp.filter_exclude_table ft "
-		"                on rn.nspname = ft.nspname "
-		"               and r.relname = ft.relname "
+		"      left join pg_temp.filter_exclude_table ft "
+		"        on rn.nspname = ft.nspname "
+		"       and r.relname = ft.relname "
 
-		"  where s.relkind = 'S' "
-		"    and d.classid = 'pg_attrdef'::regclass "
-		"    and d.refclassid = 'pg_class'::regclass "
-		"    and sn.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
 		"     and (   fn.nspname is not null "
 		"          or ft.relname is not null) "
 
-		/* avoid pg_class entries which belong to extensions */
-		"     and not exists "
-		"       ( "
-		"         select 1 "
-		"           from pg_depend d "
-		"          where d.classid = 'pg_class'::regclass "
-		"            and d.objid = s.oid "
-		"            and d.deptype = 'e' "
-		"       ) "
+		"  union all "
 
-		"order by sn.nspname, s.relname"
+		/*
+		 * pg_depend link between sequence and pg_attrdef is still used for
+		 * serial columns and the like (default value uses nextval).
+		 */
+		"    select s.seqoid, s.nspname, s.relname, s.restore_list_name, "
+		"           a.oid as attroid "
+		"      from seqs as s "
+
+		"      join pg_depend d on d.refobjid = s.seqoid "
+		"       and d.refclassid = 'pg_class'::regclass "
+		"       and d.classid = 'pg_attrdef'::regclass "
+		"      join pg_attrdef a on a.oid = d.objid "
+		"      join pg_attribute at "
+		"        on at.attrelid = a.adrelid "
+		"       and at.attnum = a.adnum "
+
+		"      join pg_class r on r.oid = at.attrelid "
+		"      join pg_namespace rn on rn.oid = r.relnamespace "
+
+
+		/* exclude-schema */
+		"      left join pg_temp.filter_exclude_schema fn "
+		"        on rn.nspname = fn.nspname "
+
+		/* exclude-table */
+		"      left join pg_temp.filter_exclude_table ft "
+		"        on rn.nspname = ft.nspname "
+		"       and r.relname = ft.relname "
+
+
+		/* WHERE clause for exclusion filters */
+		"     and (   fn.nspname is not null "
+		"          or ft.relname is not null) "
+
+		"   order by s.nspname, s.relname"
 	},
 };
 
@@ -1847,9 +2139,9 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          c.conname,"
 		"          pg_get_constraintdef(c.oid),"
 		"          format('%s %s %s', "
-		"                 regexp_replace(n.nspname, '[\n\r]', ' '), "
-		"                 regexp_replace(i.relname, '[\n\r]', ' '), "
-		"                 regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"                 regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"                 regexp_replace(i.relname, '[\\n\\r]', ' '), "
+		"                 regexp_replace(auth.rolname, '[\\n\\r]', ' '))"
 
 		"     from pg_index x"
 		"          join pg_class i ON i.oid = x.indexrelid"
@@ -1898,9 +2190,9 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          c.conname,"
 		"          pg_get_constraintdef(c.oid),"
 		"          format('%s %s %s', "
-		"                 regexp_replace(n.nspname, '[\n\r]', ' '), "
-		"                 regexp_replace(i.relname, '[\n\r]', ' '), "
-		"                 regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"                 regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"                 regexp_replace(i.relname, '[\\n\\r]', ' '), "
+		"                 regexp_replace(auth.rolname, '[\\n\\r]', ' '))"
 		"     from pg_index x"
 		"          join pg_class i ON i.oid = x.indexrelid"
 		"          join pg_class r ON r.oid = x.indrelid"
@@ -1958,9 +2250,9 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          c.conname,"
 		"          pg_get_constraintdef(c.oid),"
 		"          format('%s %s %s', "
-		"                 regexp_replace(n.nspname, '[\n\r]', ' '), "
-		"                 regexp_replace(i.relname, '[\n\r]', ' '), "
-		"                 regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"                 regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"                 regexp_replace(i.relname, '[\\n\\r]', ' '), "
+		"                 regexp_replace(auth.rolname, '[\\n\\r]', ' '))"
 		"     from pg_index x"
 		"          join pg_class i ON i.oid = x.indexrelid"
 		"          join pg_class r ON r.oid = x.indrelid"
@@ -2027,9 +2319,9 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          c.conname,"
 		"          pg_get_constraintdef(c.oid),"
 		"          format('%s %s %s', "
-		"                 regexp_replace(n.nspname, '[\n\r]', ' '), "
-		"                 regexp_replace(i.relname, '[\n\r]', ' '), "
-		"                 regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"                 regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"                 regexp_replace(i.relname, '[\\n\\r]', ' '), "
+		"                 regexp_replace(auth.rolname, '[\\n\\r]', ' '))"
 		"     from pg_index x"
 		"          join pg_class i ON i.oid = x.indexrelid"
 		"          join pg_class r ON r.oid = x.indrelid"
@@ -2090,9 +2382,9 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          c.conname,"
 		"          pg_get_constraintdef(c.oid),"
 		"          format('%s %s %s', "
-		"                 regexp_replace(n.nspname, '[\n\r]', ' '), "
-		"                 regexp_replace(i.relname, '[\n\r]', ' '), "
-		"                 regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"                 regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"                 regexp_replace(i.relname, '[\\n\\r]', ' '), "
+		"                 regexp_replace(auth.rolname, '[\\n\\r]', ' '))"
 		"     from pg_index x"
 		"          join pg_class i ON i.oid = x.indexrelid"
 		"          join pg_class r ON r.oid = x.indrelid"
@@ -2153,9 +2445,9 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          c.conname,"
 		"          pg_get_constraintdef(c.oid),"
 		"          format('%s %s %s', "
-		"                 regexp_replace(n.nspname, '[\n\r]', ' '), "
-		"                 regexp_replace(i.relname, '[\n\r]', ' '), "
-		"                 regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"                 regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"                 regexp_replace(i.relname, '[\\n\\r]', ' '), "
+		"                 regexp_replace(auth.rolname, '[\\n\\r]', ' '))"
 		"     from pg_index x"
 		"          join pg_class i ON i.oid = x.indexrelid"
 		"          join pg_class r ON r.oid = x.indrelid"
@@ -2211,9 +2503,9 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          c.conname,"
 		"          pg_get_constraintdef(c.oid),"
 		"          format('%s %s %s', "
-		"                 regexp_replace(n.nspname, '[\n\r]', ' '), "
-		"                 regexp_replace(i.relname, '[\n\r]', ' '), "
-		"                 regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"                 regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"                 regexp_replace(i.relname, '[\\n\\r]', ' '), "
+		"                 regexp_replace(auth.rolname, '[\\n\\r]', ' '))"
 		"     from pg_index x"
 		"          join pg_class i ON i.oid = x.indexrelid"
 		"          join pg_class r ON r.oid = x.indrelid"
@@ -2324,9 +2616,9 @@ schema_list_table_indexes(PGSQL *pgsql,
 		"          c.conname,"
 		"          pg_get_constraintdef(c.oid),"
 		"          format('%s %s %s', "
-		"                 regexp_replace(n.nspname, '[\n\r]', ' '), "
-		"                 regexp_replace(i.relname, '[\n\r]', ' '), "
-		"                 regexp_replace(auth.rolname, '[\n\r]', ' '))"
+		"                 regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"                 regexp_replace(i.relname, '[\\n\\r]', ' '), "
+		"                 regexp_replace(auth.rolname, '[\\n\\r]', ' '))"
 		"     from pg_index x"
 		"          join pg_class i ON i.oid = x.indexrelid"
 		"          join pg_class r ON r.oid = x.indrelid"
@@ -2986,6 +3278,8 @@ prepareFilterCopyTableList(PGSQL *pgsql,
 		char *nspname = tableList->array[i].nspname;
 		char *relname = tableList->array[i].relname;
 
+		log_trace("%s\t%s", nspname, relname);
+
 		if (!pg_copy_row_from_stdin(pgsql, "ss", nspname, relname))
 		{
 			/* errors have already been logged */
@@ -3078,6 +3372,110 @@ getSchemaList(void *ctx, PGresult *result)
 			log_error("Table restore list name \"%s\" is %d bytes long, "
 					  "the maximum expected is %d (RESTORE_LIST_NAMEDATALEN - 1)",
 					  value, length, RESTORE_LIST_NAMEDATALEN - 1);
+			++errors;
+		}
+	}
+
+	context->parsedOk = errors == 0;
+}
+
+
+/*
+ * getCatalogList loops over the SQL result for the catalog array query and
+ * allocates an array of catalogs then populates it with the query result.
+ */
+static void
+getCatalogList(void *ctx, PGresult *result)
+{
+	SourceCatalogArrayContext *context = (SourceCatalogArrayContext *) ctx;
+	int nTuples = PQntuples(result);
+
+	log_debug("getCatalogList: %d", nTuples);
+
+	if (PQnfields(result) != 4)
+	{
+		log_error("Query returned %d columns, expected 4", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	/* we're not supposed to re-cycle arrays here */
+	if (context->catalogArray->array != NULL)
+	{
+		/* issue a warning but let's try anyway */
+		log_warn("BUG? context's array is not null in getCatalogList");
+
+		free(context->catalogArray->array);
+		context->catalogArray->array = NULL;
+	}
+
+	context->catalogArray->count = nTuples;
+	context->catalogArray->array =
+		(SourceCatalog *) calloc(nTuples, sizeof(SourceCatalog));
+
+	if (context->catalogArray->array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return;
+	}
+
+	int errors = 0;
+
+	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
+	{
+		SourceCatalog *catalog = &(context->catalogArray->array[rowNumber]);
+
+		/* 1. oid */
+		char *value = PQgetvalue(result, rowNumber, 0);
+
+		if (!stringToUInt32(value, &(catalog->oid)) || catalog->oid == 0)
+		{
+			log_error("Invalid OID \"%s\"", value);
+			++errors;
+		}
+
+		/* 2. datname */
+		value = PQgetvalue(result, rowNumber, 1);
+		int length = strlcpy(catalog->datname, value, NAMEDATALEN);
+
+		if (length >= NAMEDATALEN)
+		{
+			log_error("Catalog name \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (NAMEDATALEN - 1)",
+					  value, length, NAMEDATALEN - 1);
+			++errors;
+		}
+
+		/* 3. bytes */
+		value = PQgetvalue(result, rowNumber, 2);
+		if (PQgetisnull(result, rowNumber, 2))
+		{
+			/*
+			 * It may happen that pg_table_size() returns NULL (when failing to
+			 * open the given relation).
+			 */
+			catalog->bytes = 0;
+		}
+		else
+		{
+			value = PQgetvalue(result, rowNumber, 2);
+
+			if (!stringToInt64(value, &(catalog->bytes)))
+			{
+				log_error("Invalid pg_database_size: \"%s\"", value);
+				++errors;
+			}
+		}
+
+		/* 4. pg_size_pretty */
+		value = PQgetvalue(result, rowNumber, 3);
+		length = strlcpy(catalog->bytesPretty, value, NAMEDATALEN);
+
+		if (length >= NAMEDATALEN)
+		{
+			log_error("Pretty printed byte size \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (NAMEDATALEN - 1)",
+					  value, length, NAMEDATALEN - 1);
 			++errors;
 		}
 	}
@@ -3423,15 +3821,16 @@ getCollationList(void *ctx, PGresult *result)
 
 		/* 3. desc */
 		value = PQgetvalue(result, rowNumber, 2);
-		length = strlcpy(collation->desc, value, BUFSIZE);
+		length = strlen(value) + 1;
+		collation->desc = (char *) calloc(length, sizeof(char));
 
-		if (length >= BUFSIZE)
+		if (collation->desc == NULL)
 		{
-			log_error("Collation desc \"%s\" is %d bytes long, "
-					  "the maximum expected is %d (BUFSIZE - 1)",
-					  value, length, BUFSIZE - 1);
-			++errors;
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return;
 		}
+
+		strlcpy(collation->desc, value, length);
 
 		/* 4. restoreListName */
 		value = PQgetvalue(result, rowNumber, 3);
@@ -3465,9 +3864,9 @@ getTableArray(void *ctx, PGresult *result)
 
 	log_debug("getTableArray: %d", nTuples);
 
-	if (PQnfields(result) != 9)
+	if (PQnfields(result) != 10)
 	{
-		log_error("Query returned %d columns, expected 9", PQnfields(result));
+		log_error("Query returned %d columns, expected 10", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -3644,9 +4043,78 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		}
 	}
 
+	/* 10. attributes */
+	if (PQgetisnull(result, rowNumber, 9))
+	{
+		/* the query didn't care to add the attributes, skip parsing them */
+		table->attributes.count = 0;
+	}
+	else
+	{
+		value = PQgetvalue(result, rowNumber, 9);
+
+		JSON_Value *json = json_parse_string(value);
+
+		if (!parseAttributesArray(table, json))
+		{
+			log_error("Failed to parse table \"%s\".\"%s\" attribute array: %s",
+					  table->nspname,
+					  table->relname,
+					  value);
+			++errors;
+		}
+
+		json_value_free(json);
+	}
+
 	log_trace("parseCurrentSourceTable: %s.%s", table->nspname, table->relname);
 
 	return errors == 0;
+}
+
+
+/*
+ * parseAttributesArray parses a JSON representation of table list of
+ * attributes and allocates the table's attribute array.
+ */
+static bool
+parseAttributesArray(SourceTable *table, JSON_Value *json)
+{
+	if (json == NULL || json_type(json) != JSONArray)
+	{
+		return false;
+	}
+
+	JSON_Array *jsAttsArray = json_array(json);
+
+	int count = json_array_get_count(jsAttsArray);
+
+	table->attributes.count = count;
+	table->attributes.array =
+		(SourceTableAttribute *) calloc(count, sizeof(SourceTableAttribute));
+
+	if (table->attributes.array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	for (int i = 0; i < count; i++)
+	{
+		SourceTableAttribute *attr = &(table->attributes.array[i]);
+		JSON_Object *jsAttr = json_array_get_object(jsAttsArray, i);
+
+		attr->attnum = json_object_get_number(jsAttr, "attnum");
+		attr->atttypid = json_object_get_number(jsAttr, "atttypid");
+
+		strlcpy(attr->attname,
+				json_object_get_string(jsAttr, "attname"),
+				sizeof(attr->attname));
+
+		attr->attisprimary = json_object_get_boolean(jsAttr, "attisprimary");
+	}
+
+	return true;
 }
 
 
@@ -3662,9 +4130,9 @@ getSequenceArray(void *ctx, PGresult *result)
 
 	log_debug("getSequenceArray: %d", nTuples);
 
-	if (PQnfields(result) != 4)
+	if (PQnfields(result) != 5)
 	{
-		log_error("Query returned %d columns, expected 4", PQnfields(result));
+		log_error("Query returned %d columns, expected 5", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -3751,7 +4219,7 @@ parseCurrentSourceSequence(PGresult *result, int rowNumber, SourceSequence *seq)
 		++errors;
 	}
 
-	/* 7. indexRestoreListName */
+	/* 4. restoreListName */
 	value = PQgetvalue(result, rowNumber, 3);
 	length = strlcpy(seq->restoreListName, value, RESTORE_LIST_NAMEDATALEN);
 
@@ -3761,6 +4229,22 @@ parseCurrentSourceSequence(PGresult *result, int rowNumber, SourceSequence *seq)
 				  "the maximum expected is %d (RESTORE_LIST_NAMEDATALEN - 1)",
 				  value, length, RESTORE_LIST_NAMEDATALEN - 1);
 		++errors;
+	}
+
+	/* 5. attroid */
+	if (PQgetisnull(result, rowNumber, 4))
+	{
+		seq->attroid = 0;
+	}
+	else
+	{
+		value = PQgetvalue(result, rowNumber, 4);
+
+		if (!stringToUInt32(value, &(seq->attroid)) || seq->attroid == 0)
+		{
+			log_error("Invalid pg_attribute OID \"%s\"", value);
+			++errors;
+		}
 	}
 
 	return errors == 0;
@@ -3927,27 +4411,29 @@ parseCurrentSourceIndex(PGresult *result, int rowNumber, SourceIndex *index)
 
 	/* 9. cols */
 	value = PQgetvalue(result, rowNumber, 8);
-	length = strlcpy(index->indexColumns, value, BUFSIZE);
+	length = strlen(value) + 1;
+	index->indexColumns = (char *) calloc(length, sizeof(char));
 
-	if (length >= BUFSIZE)
+	if (index->indexColumns == NULL)
 	{
-		log_error("Index name \"%s\" is %d bytes long, "
-				  "the maximum expected is %d (BUFSIZE - 1)",
-				  value, length, BUFSIZE - 1);
-		++errors;
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return false;
 	}
+
+	strlcpy(index->indexColumns, value, length);
 
 	/* 10. pg_get_indexdef() */
 	value = PQgetvalue(result, rowNumber, 9);
-	length = strlcpy(index->indexDef, value, BUFSIZE);
+	length = strlen(value) + 1;
+	index->indexDef = (char *) calloc(length, sizeof(char));
 
-	if (length >= BUFSIZE)
+	if (index->indexDef == NULL)
 	{
-		log_error("Index name \"%s\" is %d bytes long, "
-				  "the maximum expected is %d (BUFSIZE - 1)",
-				  value, length, BUFSIZE - 1);
-		++errors;
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return false;
 	}
+
+	strlcpy(index->indexDef, value, length);
 
 	/* 11. c.oid */
 	if (PQgetisnull(result, rowNumber, 10))
@@ -3985,15 +4471,16 @@ parseCurrentSourceIndex(PGresult *result, int rowNumber, SourceIndex *index)
 	if (!PQgetisnull(result, rowNumber, 12))
 	{
 		value = PQgetvalue(result, rowNumber, 12);
-		length = strlcpy(index->constraintDef, value, BUFSIZE);
+		length = strlen(value) + 1;
+		index->constraintDef = (char *) calloc(length, sizeof(char));
 
-		if (length >= BUFSIZE)
+		if (index->constraintDef == NULL)
 		{
-			log_error("Index name \"%s\" is %d bytes long, "
-					  "the maximum expected is %d (BUFSIZE - 1)",
-					  value, length, BUFSIZE - 1);
-			++errors;
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return false;
 		}
+
+		strlcpy(index->constraintDef, value, length);
 	}
 
 	/* 14. indexRestoreListName */

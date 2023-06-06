@@ -6,6 +6,7 @@
 #ifndef COPYDB_H
 #define COPYDB_H
 
+#include "cli_common.h"
 #include "copydb_paths.h"
 #include "filtering.h"
 #include "lock_utils.h"
@@ -115,7 +116,6 @@ typedef struct CopyTableDataPartSpec
 	int64_t max;                /*   AND partKey  < max */
 
 	char partKey[NAMEDATALEN];
-	char copyQuery[BUFSIZE];    /* COPY (...) TO STDOUT */
 } CopyTableDataPartSpec;
 
 
@@ -163,6 +163,11 @@ typedef struct CopyTableDataSpecsArray
  * the following pg_restore --list example output:
  *
  *   3310; 0 0 INDEX ATTACH public payment_p2020_06_customer_id_idx postgres
+ *
+ * The OBJECT_KIND_DEFAULT goes with the pg_attribute catalog OID where
+ * Postgres keeps a sequence default value call to nextval():
+ *
+ *   3291; 2604 497539 DEFAULT bar id dim
  */
 typedef enum
 {
@@ -173,7 +178,8 @@ typedef enum
 	OBJECT_KIND_TABLE,
 	OBJECT_KIND_INDEX,
 	OBJECT_KIND_CONSTRAINT,
-	OBJECT_KIND_SEQUENCE
+	OBJECT_KIND_SEQUENCE,
+	OBJECT_KIND_DEFAULT
 } ObjectKind;
 
 
@@ -221,11 +227,13 @@ typedef struct CopyDataSpec
 	bool skipLargeObjects;
 	bool skipExtensions;
 	bool skipCollations;
+	bool skipVacuum;
 	bool noRolesPasswords;
 
 	bool restart;
 	bool resume;
 	bool consistent;
+	bool failFast;
 
 	bool follow;                /* pgcopydb fork --follow */
 
@@ -300,23 +308,8 @@ bool copydb_rmdir_or_mkdir(const char *dir, bool removeDir);
 bool copydb_prepare_dump_paths(CopyFilePaths *cfPaths, DumpPaths *dumpPaths);
 
 bool copydb_init_specs(CopyDataSpec *specs,
-					   char *source_pguri,
-					   char *target_pguri,
-					   int tableJobs,
-					   int indexJobs,
-					   uint64_t splitTablesLargerThan,
-					   char *splitTablesLargerThanPretty,
-					   CopyDataSection section,
-					   char *snapshot,
-					   RestoreOptions restoreOptions,
-					   bool roles,
-					   bool skipLargeObjects,
-					   bool skipExtensions,
-					   bool skipCollations,
-					   bool noRolesPasswords,
-					   bool restart,
-					   bool resume,
-					   bool consistent);
+					   CopyDBOptions *options,
+					   CopyDataSection section);
 
 bool copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 							 CopyDataSpec *specs,
@@ -335,7 +328,7 @@ bool copydb_init_tablepaths_for_part(CopyFilePaths *cfPaths,
 bool copydb_export_snapshot(TransactionSnapshot *snapshot);
 
 bool copydb_fatal_exit(void);
-bool copydb_wait_for_subprocesses(void);
+bool copydb_wait_for_subprocesses(bool failFast);
 
 bool copydb_register_sysv_semaphore(SysVResArray *array, Semaphore *semaphore);
 bool copydb_register_sysv_queue(SysVResArray *array, Queue *queue);
@@ -354,8 +347,10 @@ bool copydb_close_snapshot(CopyDataSpec *copySpecs);
 
 bool copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 											const char *logrep_pguri,
-											StreamOutputPlugin plugin,
-											const char *slotName);
+											ReplicationSlot *slot);
+
+bool snapshot_write_slot(const char *filename, ReplicationSlot *slot);
+bool snapshot_read_slot(const char *filename, ReplicationSlot *slot);
 
 /* extensions.c */
 bool copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions);
@@ -419,12 +414,10 @@ bool copydb_mark_index_as_done(SourceIndex *index,
 
 bool copydb_prepare_create_index_command(SourceIndex *index,
 										 bool ifNotExists,
-										 char *command,
-										 size_t size);
+										 char **command);
 
 bool copydb_prepare_create_constraint_command(SourceIndex *index,
-											  char *command,
-											  size_t size);
+											  char **command);
 
 bool copydb_create_constraints(CopyDataSpec *spec, SourceTable *table);
 
@@ -483,6 +476,10 @@ bool copydb_table_parts_are_all_done(CopyDataSpec *specs,
 									 bool *allPartsDone,
 									 bool *isBeingProcessed);
 
+bool copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
+							   PQExpBuffer query,
+							   bool source);
+
 /* blobs.c */
 bool copydb_start_blob_process(CopyDataSpec *specs);
 bool copydb_copy_blobs(CopyDataSpec *specs);
@@ -491,7 +488,7 @@ bool copydb_copy_blobs(CopyDataSpec *specs);
 bool vacuum_start_workers(CopyDataSpec *specs);
 bool vacuum_worker(CopyDataSpec *specs);
 bool vacuum_analyze_table_by_oid(CopyDataSpec *specs, uint32_t oid);
-bool vacuum_add_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs);
+bool vacuum_add_table(CopyDataSpec *specs, uint32_t oid);
 bool vacuum_send_stop(CopyDataSpec *specs);
 
 /* summary.c */

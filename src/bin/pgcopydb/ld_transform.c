@@ -61,23 +61,23 @@ stream_transform_stream(StreamSpecs *specs)
 	}
 
 	/* we need timeline and wal_segment_size to compute WAL filenames */
-	uint32_t WalSegSz;
-	IdentifySystem system = { 0 };
-
-	if (!stream_read_context(&(specs->paths),
-							 &system,
-							 &WalSegSz))
+	if (specs->system.timeline == 0)
 	{
-		log_error("Failed to read the streaming context information "
-				  "from the source database, see above for details");
-		return false;
+		if (!stream_read_context(&(specs->paths),
+								 &(specs->system),
+								 &(specs->WalSegSz)))
+		{
+			log_error("Failed to read the streaming context information "
+					  "from the source database, see above for details");
+			return false;
+		}
 	}
 
-	privateContext->WalSegSz = WalSegSz;
-	privateContext->timeline = system.timeline;
+	privateContext->WalSegSz = specs->WalSegSz;
+	privateContext->timeline = specs->system.timeline;
 
-	log_debug("Source database wal_segment_size is %u", WalSegSz);
-	log_debug("Source database timeline is %d", privateContext->timeline);
+	log_debug("Source database wal_segment_size is %u", specs->WalSegSz);
+	log_debug("Source database timeline is %d", specs->system.timeline);
 
 	TransformStreamCtx ctx = {
 		.context = privateContext,
@@ -404,16 +404,25 @@ stream_transform_worker(StreamSpecs *specs)
 	 * Transform Worker process is created, that information is read from our
 	 * local files.
 	 */
-	uint32_t WalSegSz;
-	IdentifySystem system = { 0 };
-
-	if (!stream_read_context(&(specs->paths), &system, &WalSegSz))
+	if (!stream_read_context(&(specs->paths), &(specs->system), &(specs->WalSegSz)))
 	{
 		log_error("Failed to read the streaming context information "
 				  "from the source database, see above for details");
 		return false;
 	}
 
+	return stream_transform_from_queue(specs);
+}
+
+
+/*
+ * stream_transform_from_queue loops over messages from a System V queue, each
+ * message contains the WAL.json and the WAL.sql file names. When receiving
+ * such a message, the WAL.json file is transformed into the WAL.sql file.
+ */
+bool
+stream_transform_from_queue(StreamSpecs *specs)
+{
 	Queue *transformQueue = &(specs->transformQueue);
 
 	int errors = 0;
@@ -422,17 +431,23 @@ stream_transform_worker(StreamSpecs *specs)
 	while (!stop)
 	{
 		QMessage mesg = { 0 };
-
-		if (!queue_receive(transformQueue, &mesg))
-		{
-			/* errors have already been logged */
-			break;
-		}
+		bool recv_ok = queue_receive(transformQueue, &mesg);
 
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
-			log_debug("stream_transform_worker was asked to stop");
+			/*
+			 * It's part of the supervision protocol to return true here, so
+			 * that the follow sub-processes supervisor can then switch from
+			 * catchup mode to replay mode.
+			 */
+			log_debug("stream_transform_from_queue was asked to stop");
 			return true;
+		}
+
+		if (!recv_ok)
+		{
+			/* errors have already been logged */
+			return false;
 		}
 
 		switch (mesg.type)
@@ -440,36 +455,22 @@ stream_transform_worker(StreamSpecs *specs)
 			case QMSG_TYPE_STOP:
 			{
 				stop = true;
-				log_debug("Stop message received by stream transform worker");
+				log_debug("stream_transform_from_queue: STOP");
 				break;
 			}
 
 			case QMSG_TYPE_STREAM_TRANSFORM:
 			{
-				log_debug("stream_transform_worker received transform %X/%X",
+				log_debug("stream_transform_from_queue: %X/%X",
 						  LSN_FORMAT_ARGS(mesg.data.lsn));
 
-				char walFileName[MAXPGPATH] = { 0 };
-				char sqlFileName[MAXPGPATH] = { 0 };
-
-				if (!stream_compute_pathnames(WalSegSz,
-											  system.timeline,
-											  mesg.data.lsn,
-											  specs->paths.dir,
-											  walFileName,
-											  sqlFileName))
+				if (!stream_transform_file_at_lsn(specs, mesg.data.lsn))
 				{
 					/* errors have already been logged, break from the loop */
 					++errors;
 					break;
 				}
 
-				if (!stream_transform_file(walFileName, sqlFileName))
-				{
-					/* errors have already been logged, break from the loop */
-					++errors;
-					break;
-				}
 				break;
 			}
 
@@ -479,12 +480,53 @@ stream_transform_worker(StreamSpecs *specs)
 						  mesg.type,
 						  transformQueue->name,
 						  transformQueue->qId);
+				++errors;
 				break;
 			}
 		}
 	}
 
-	return stop == true && errors == 0;
+	bool success = (stop == true && errors == 0);
+
+	if (errors > 0)
+	{
+		log_error("Stream transform worker encountered %d errors, "
+				  "see above for details",
+				  errors);
+	}
+
+	return success;
+}
+
+
+/*
+ * stream_transform_file_at_lsn computes the JSON and SQL filenames at given
+ * LSN position in the WAL, and transform the JSON file into an SQL file.
+ */
+bool
+stream_transform_file_at_lsn(StreamSpecs *specs, uint64_t lsn)
+{
+	char walFileName[MAXPGPATH] = { 0 };
+	char sqlFileName[MAXPGPATH] = { 0 };
+
+	if (!stream_compute_pathnames(specs->WalSegSz,
+								  specs->system.timeline,
+								  lsn,
+								  specs->paths.dir,
+								  walFileName,
+								  sqlFileName))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!stream_transform_file(walFileName, sqlFileName))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
 }
 
 
@@ -610,8 +652,16 @@ stream_transform_file(char *jsonfilename, char *sqlfilename)
 		return false;
 	}
 
-	/* {action: B} {action: C} {action: K} {action: X} */
-	int maxMesgCount = content.count;
+	/*
+	 * Message are like:
+	 *
+	 * {action: B} {action: C} {action: K} {action: X}
+	 *
+	 * And when we read a COMMIT message (or KEEPALIVE or SWITCH) we prepare
+	 * for the next message already, which means we need one more entry in the
+	 * array than the number of lines read in the JSON file.
+	 */
+	int maxMesgCount = content.count + 1;
 	LogicalMessageArray mesgs = { 0 };
 
 	/* the actual count is maintained in the for loop below */
@@ -1234,7 +1284,7 @@ FreeLogicalMessageTupleArray(LogicalMessageTupleArray *tupleArray)
 			{
 				LogicalMessageValue *value = &(values->array[v]);
 
-				if (value->oid == TEXTOID)
+				if (value->oid == TEXTOID || value->oid == BYTEAOID)
 				{
 					free(value->val.str);
 				}
@@ -1300,20 +1350,33 @@ bool
 stream_write_transaction(FILE *out, LogicalTransaction *txn)
 {
 	/*
-	 * SWITCH WAL commands might appear eigher in the middle of a transaction
-	 * or in between two transactions, depending on when the LSN WAL file
-	 * switch happens on the source server.
-	 *
-	 * When the SWITCH WAL happens in between transactions, our internal
-	 * representation makes it look like a transaction with a single SWITCH
-	 * statement, and in that case we don't want to output BEGIN and COMMIT
-	 * statements at all.
+	 * Logical decoding also outputs empty transactions that act here kind of
+	 * like a keepalive stream. These transactions might represent activity in
+	 * other databases or background activity in the source Postgres instance
+	 * where the LSN is moving forward. We want to replay them.
 	 */
 	if (txn->count == 0)
 	{
+		if (!stream_write_begin(out, txn))
+		{
+			return false;
+		}
+
+		if (!stream_write_commit(out, txn))
+		{
+			return false;
+		}
+
 		return true;
 	}
 
+	/*
+	 * Now we deal with non-empty transactions.
+	 *
+	 * SWITCH WAL commands might appear eigher in the middle of a transaction
+	 * or in between two transactions, depending on when the LSN WAL file
+	 * switch happens on the source server.
+	 */
 	bool sentBEGIN = false;
 	bool splitTx = false;
 
@@ -1428,6 +1491,16 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 		}
 	}
 
+	/*
+	 * Some transactions might be spanning over multiple WAL.{json,sql} files,
+	 * because it just happened at the boundary LSN. In that case we don't want
+	 * to send the COMMIT message yet.
+	 *
+	 * Continued transaction are then represented using several instances of
+	 * our LogicalTransaction data structure, and the last one of the series
+	 * then have the txn->commit metadata forcibly set to true: here we also
+	 * need to obey that.
+	 */
 	if ((sentBEGIN && !splitTx) || txn->commit)
 	{
 		if (!stream_write_commit(out, txn))
@@ -1448,19 +1521,19 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 
 
 /*
- * stream_write_switchwal writes a SWITCH statement to the already open out
- * stream.
+ * stream_write_begin writes a BEGIN statement to the already open out stream.
  */
 bool
 stream_write_begin(FILE *out, LogicalTransaction *txn)
 {
 	int ret =
 		fformat(out,
-				"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
+				"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\",\"commit_lsn\":\"%X/%X\"}\n",
 				OUTPUT_BEGIN,
 				(long long) txn->xid,
 				LSN_FORMAT_ARGS(txn->beginLSN),
-				txn->timestamp);
+				txn->timestamp,
+				LSN_FORMAT_ARGS(txn->commitLSN));
 
 	return ret != -1;
 }
@@ -1806,6 +1879,7 @@ stream_write_value(FILE *out, LogicalMessageValue *value)
 			}
 
 			case TEXTOID:
+			case BYTEAOID:
 			{
 				if (value->isQuoted)
 				{

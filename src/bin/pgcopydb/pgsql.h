@@ -180,6 +180,8 @@ typedef struct PGSQL
 	int notificationGroupId;
 	int64_t notificationNodeId;
 	bool notificationReceived;
+
+	bool logSQL;
 } PGSQL;
 
 
@@ -251,6 +253,9 @@ void fetchedRows(void *ctx, PGresult *result);
 bool pgsql_begin(PGSQL *pgsql);
 bool pgsql_commit(PGSQL *pgsql);
 bool pgsql_rollback(PGSQL *pgsql);
+bool pgsql_savepoint(PGSQL *pgsql, char *name);
+bool pgsql_release_savepoint(PGSQL *pgsql, char *name);
+bool pgsql_rollback_to_savepoint(PGSQL *pgsql, char *name);
 
 bool pgsql_server_version(PGSQL *pgsql);
 
@@ -447,11 +452,16 @@ bool pgsql_init_stream(LogicalStreamClient *client,
 StreamOutputPlugin OutputPluginFromString(char *plugin);
 char * OutputPluginToString(StreamOutputPlugin plugin);
 
+typedef struct ReplicationSlot
+{
+	char slotName[BUFSIZE];
+	uint64_t lsn;
+	char snapshot[BUFSIZE];
+	StreamOutputPlugin plugin;
+} ReplicationSlot;
 
 bool pgsql_create_logical_replication_slot(LogicalStreamClient *client,
-										   uint64_t *lsn,
-										   char *snapshot,
-										   size_t size);
+										   ReplicationSlot *slot);
 
 bool pgsql_timestamptz_to_string(TimestampTz ts, char *str, size_t size);
 
@@ -529,5 +539,11 @@ bool pgsql_sync_sentinel_recv(PGSQL *pgsql,
 bool pgsql_sync_sentinel_apply(PGSQL *pgsql,
 							   uint64_t replay_lsn,
 							   CopyDBSentinel *sentinel);
+
+bool pgsql_send_sync_sentinel_apply(PGSQL *pgsql, uint64_t replay_lsn);
+bool pgsql_fetch_sync_sentinel_apply(PGSQL *pgsql,
+									 bool *retry,
+									 CopyDBSentinel *sentinel);
+
 
 #endif /* PGSQL_H */

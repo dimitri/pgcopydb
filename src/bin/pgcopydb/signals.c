@@ -35,6 +35,9 @@ set_signal_handlers(bool exitOnQuit)
 	pqsignal(SIGINT, catch_int);
 	pqsignal(SIGTERM, catch_term);
 
+	/* ignore SIGPIPE so that EPIPE is returned instead */
+	pqsignal(SIGPIPE, SIG_IGN);
+
 	if (exitOnQuit)
 	{
 		pqsignal(SIGQUIT, catch_quit_and_exit);
@@ -188,6 +191,20 @@ get_current_signal(int defaultSignal)
 
 	/* no termination signal to process at this time, return the default */
 	return defaultSignal;
+}
+
+
+/*
+ * unset_signal_flags assigns 0 to all our control flags. Use to avoid
+ * re-processing an exit flag that is currently being processed already.
+ */
+void
+unset_signal_flags()
+{
+	asked_to_stop = 0;
+	asked_to_stop_fast = 0;
+	asked_to_quit = 0;
+	asked_to_reload = 0;
 }
 
 

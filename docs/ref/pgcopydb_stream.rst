@@ -40,8 +40,6 @@ This command prefixes the following sub-commands:
     prefetch   Stream JSON changes from the source database and transform them to SQL
     catchup    Apply prefetched changes from SQL files to the target database
     replay     Replay changes from the source to the target database, live
-  + create     Create resources needed for pgcopydb
-  + drop       Drop resources needed for pgcopydb
   + sentinel   Maintain a sentinel table on the source database
     receive    Stream changes from the source database
     transform  Transform changes from the source database into SQL commands
@@ -92,15 +90,11 @@ pgcopydb stream setup
 pgcopydb stream setup - Setup source and target systems for logical decoding
 
 The command ``pgcopydb stream setup`` connects to the source database and
-creates a replication slot using the given logical decoding output plugin
-(either `test_decoding`__ or `wal2json`__), then creates a
-``pgcopydb.sentinel`` table, and then connects to the target database and
-creates a replication origin positioned at the LSN position of the just
-created replication slot.
-
-__ https://www.postgresql.org/docs/current/test-decoding.html
-__ https://github.com/eulerto/wal2json/
-
+creates creates a ``pgcopydb.sentinel`` table, and then connects to the
+target database and creates a replication origin positioned at the LSN
+position of the logical decoding replication slot that must have been
+created already. See :ref:`pgcopydb_snapshot` to create the replication slot
+and export a snapshot.
 
 ::
 
@@ -233,85 +227,6 @@ This command is equivalent to running the following script::
   pgcopydb stream receive --to-stdout
   | pgcopydb stream transform - -
   | pgcopydb stream apply -
-
-.. _pgcopydb_stream_create_slot:
-
-pgcopydb stream create slot
----------------------------
-
-pgcopydb stream create slot - Create a replication slot in the source database
-
-The command ``pgcopydb stream create slot`` connects to the source database
-and executes a SQL query to create a logical replication slot using the
-plugin ``wal2json``.
-
-::
-
-   pgcopydb create slot: Create a replication slot in the source database
-   usage: pgcopydb create slot
-
-     --source         Postgres URI to the source database
-     --snapshot       Use snapshot obtained with pg_export_snapshot
-     --plugin         Output plugin to use (test_decoding, wal2json)
-     --slot-name      Use this Postgres replication slot name
-
-.. _pgcopydb_stream_create_origin:
-
-pgcopydb stream create origin
------------------------------
-
-pgcopydb stream create origin - Create a replication origin in the target database
-
-The command ``pgcopydb stream create origin`` connects to the target
-database and executes a SQL query to create a logical replication origin.
-The starting LSN position ``--startpos`` is required.
-
-::
-
-   pgcopydb stream create origin: Create a replication origin in the target database
-   usage: pgcopydb stream create origin
-
-     --target         Postgres URI to the target database
-     --origin         Use this Postgres origin name
-     --start-pos      LSN position from where to start applying changes
-
-.. _pgcopydb_stream_drop_slot:
-
-pgcopydb stream drop slot
--------------------------
-
-pgcopydb stream drop slot - Drop a replication slot in the source database
-
-The command ``pgcopydb stream drop slot`` connects to the source database
-and executes a SQL query to drop the logical replication slot with the given
-name (that defaults to ``pgcopydb``).
-
-::
-
-   pgcopydb stream drop slot: Drop a replication slot in the source database
-   usage: pgcopydb stream drop slot
-
-     --source         Postgres URI to the source database
-     --slot-name      Use this Postgres replication slot name
-
-.. _pgcopydb_stream_drop_origin:
-
-pgcopydb stream drop origin
----------------------------
-
-pgcopydb stream drop origin - Drop a replication origin in the target database
-
-The command ``pgcopydb stream drop origin`` connects to the target database
-and executes a SQL query to drop the logical replication origin with the
-given name (that defaults to ``pgcopydb``).
-
-::
-
-   usage: pgcopydb stream drop origin
-
-     --target         Postgres URI to the target database
-     --origin         Use this Postgres origin name
-
 
 .. _pgcopydb_stream_sentinel_create:
 

@@ -15,6 +15,7 @@
 
 #include "defaults.h"
 #include "file_utils.h"
+#include "filtering.h"
 #include "pgsql.h"
 #include "filtering.h"
 
@@ -108,6 +109,7 @@ bool pg_copy_roles(PostgresPaths *pgPaths,
 
 bool pg_restore_db(PostgresPaths *pgPaths,
 				   const char *pguri,
+				   SourceFilters *filters,
 				   const char *dumpFilename,
 				   const char *listFilename,
 				   RestoreOptions options,

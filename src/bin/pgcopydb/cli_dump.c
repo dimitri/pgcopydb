@@ -223,6 +223,12 @@ cli_dump_schema_getopts(int argc, char **argv)
 
 					case 2:
 					{
+						log_set_level(LOG_SQL);
+						break;
+					}
+
+					case 3:
+					{
 						log_set_level(LOG_DEBUG);
 						break;
 					}
@@ -238,14 +244,14 @@ cli_dump_schema_getopts(int argc, char **argv)
 
 			case 'd':
 			{
-				verboseCount = 2;
+				verboseCount = 3;
 				log_set_level(LOG_DEBUG);
 				break;
 			}
 
 			case 'z':
 			{
-				verboseCount = 3;
+				verboseCount = 4;
 				log_set_level(LOG_TRACE);
 				break;
 			}
@@ -364,26 +370,7 @@ cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	RestoreOptions restoreOptions = { 0 };
-
-	if (!copydb_init_specs(&copySpecs,
-						   dumpDBoptions->source_pguri,
-						   NULL, /* target_pguri */
-						   1,    /* table jobs */
-						   1,    /* index jobs */
-						   0,   /* skip threshold */
-						   "",  /* skip threshold pretty printed */
-						   DATA_SECTION_NONE,
-						   dumpDBoptions->snapshot,
-						   restoreOptions,
-						   false, /* roles */
-						   false, /* skipLargeObjects */
-						   false, /* skipExtensions */
-						   false, /* skipCollations */
-						   dumpDBoptions->noRolesPasswords,
-						   dumpDBoptions->restart,
-						   dumpDBoptions->resume,
-						   !dumpDBoptions->notConsistent))
+	if (!copydb_init_specs(&copySpecs, dumpDBoptions, DATA_SECTION_NONE))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

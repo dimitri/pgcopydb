@@ -49,11 +49,21 @@ typedef struct StreamCounters
 
 typedef struct LogicalMessageMetadata
 {
+	uint64_t recvTime;         /* time(NULL) at message receive time */
+
+	/* from parsing the message itself */
 	StreamAction action;
 	uint32_t xid;
 	uint64_t lsn;
+	uint64_t txnCommitLSN;		/* COMMIT LSN of the transaction */
 	char timestamp[PG_MAX_TIMESTAMP];
+
+	/* our own internal decision making */
 	bool filterOut;
+	bool skipping;
+
+	/* the raw message in our internal JSON format */
+	char *jsonBuffer;           /* malloc'ed area */
 } LogicalMessageMetadata;
 
 
@@ -88,8 +98,10 @@ typedef struct StreamContext
 	FILE *in;
 	FILE *out;
 
-	char *jsonBuffer;           /* malloc'ed area */
 	LogicalMessageMetadata metadata;
+	LogicalMessageMetadata previous;
+
+	uint64_t lastWrite;
 
 	Queue *transformQueue;
 	uint32_t WalSegSz;
@@ -110,7 +122,14 @@ typedef struct StreamApplyContext
 {
 	CDCPaths paths;
 
+	/* target connection */
 	PGSQL pgsql;
+
+	/* source connection to publish sentinel updates */
+	PGSQL src;
+	bool sentinelQueryInProgress;
+	uint64_t sentinelSyncTime;
+
 	char source_pguri[MAXCONNINFO];
 	char target_pguri[MAXCONNINFO];
 	char origin[BUFSIZE];
@@ -127,6 +146,8 @@ typedef struct StreamApplyContext
 
 	bool reachedStartPos;
 	bool reachedEndPos;
+
+	bool logSQL;
 
 	char wal[MAXPGPATH];
 	char sqlFileName[MAXPGPATH];
@@ -318,10 +339,12 @@ struct StreamSpecs
 	char logrep_pguri[MAXCONNINFO];
 	char target_pguri[MAXCONNINFO];
 
-	StreamOutputPlugin plugin;
+	uint32_t WalSegSz;
+	IdentifySystem system;
+
+	ReplicationSlot slot;
 	KeyVal pluginOptions;
 
-	char slotName[NAMEDATALEN];
 	char origin[NAMEDATALEN];
 
 	uint64_t startpos;
@@ -331,6 +354,7 @@ struct StreamSpecs
 
 	bool restart;
 	bool resume;
+	bool logSQL;
 
 	/* subprocess management */
 	FollowSubProcess prefetch;
@@ -366,13 +390,13 @@ bool stream_init_specs(StreamSpecs *specs,
 					   CDCPaths *paths,
 					   char *source_pguri,
 					   char *target_pguri,
-					   char *plugin,
-					   char *slotName,
+					   ReplicationSlot *slot,
 					   char *origin,
 					   uint64_t endpos,
 					   LogicalStreamMode mode,
 					   bool stdIn,
-					   bool stdOut);
+					   bool stdOut,
+					   bool logSQL);
 
 bool stream_init_for_mode(StreamSpecs *specs, LogicalStreamMode mode);
 
@@ -404,24 +428,20 @@ bool parseMessageMetadata(LogicalMessageMetadata *metadata,
 						  JSON_Value *json,
 						  bool skipAction);
 
+bool stream_write_json(LogicalStreamContext *context, bool previous);
+
 bool stream_read_file(StreamContent *content);
 bool stream_read_latest(StreamSpecs *specs, StreamContent *content);
+bool stream_update_latest_symlink(StreamContext *privateContext,
+								  const char *filename);
 
 bool buildReplicationURI(const char *pguri, char *repl_pguri);
 
-bool stream_setup_databases(CopyDataSpec *copySpecs,
-							StreamOutputPlugin plugin,
-							char *slotName,
-							char *origin);
+bool stream_setup_databases(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
 
 bool stream_cleanup_databases(CopyDataSpec *copySpecs,
 							  char *slotName,
 							  char *origin);
-
-bool stream_create_repl_slot(CopyDataSpec *copySpecs,
-							 StreamOutputPlugin plugin,
-							 char *slotName,
-							 uint64_t *lsn);
 
 bool stream_create_origin(CopyDataSpec *copySpecs,
 						  char *nodeName, uint64_t startpos);
@@ -440,6 +460,7 @@ StreamAction StreamActionFromChar(char action);
 
 /* ld_transform.c */
 bool stream_transform_worker(StreamSpecs *specs);
+bool stream_transform_from_queue(StreamSpecs *specs);
 bool stream_transform_add_file(Queue *queue, uint64_t firstLSN);
 bool stream_transform_send_stop(Queue *queue);
 
@@ -461,6 +482,8 @@ bool stream_transform_rotate(StreamContext *privateContext,
 							 LogicalMessageMetadata *metadata);
 
 bool stream_transform_file(char *jsonfilename, char *sqlfilename);
+bool stream_transform_file_at_lsn(StreamSpecs *specs, uint64_t lsn);
+
 bool stream_write_message(FILE *out, LogicalMessage *msg);
 bool stream_write_transaction(FILE *out, LogicalTransaction *tx);
 bool stream_write_begin(FILE *out, LogicalTransaction *tx);
@@ -512,6 +535,8 @@ bool stream_apply_wait_for_sentinel(StreamSpecs *specs,
 									StreamApplyContext *context);
 
 bool stream_apply_sync_sentinel(StreamApplyContext *context);
+bool stream_apply_send_sync_sentinel(StreamApplyContext *context);
+bool stream_apply_fetch_sync_sentinel(StreamApplyContext *context);
 
 bool stream_apply_file(StreamApplyContext *context);
 
@@ -525,7 +550,8 @@ bool setupReplicationOrigin(StreamApplyContext *context,
 							char *target_pguri,
 							char *origin,
 							uint64_t endpos,
-							bool apply);
+							bool apply,
+							bool logSQL);
 
 bool computeSQLFileName(StreamApplyContext *context);
 
@@ -546,6 +572,9 @@ bool follow_get_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel);
 bool follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
 
 bool followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
+
+bool follow_reached_endpos(StreamSpecs *streamSpecs, bool *done);
+bool follow_prepare_mode_switch(StreamSpecs *streamSpecs, LogicalStreamMode previousMode);
 
 bool follow_start_subprocess(StreamSpecs *specs, FollowSubProcess *subprocess);
 

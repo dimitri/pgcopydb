@@ -172,6 +172,7 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 
 	if (!pg_restore_db(&(specs->pgPaths),
 					   specs->target_pguri,
+					   &(specs->filters),
 					   specs->dumpPaths.preFilename,
 					   specs->dumpPaths.preListFilename,
 					   specs->restoreOptions,
@@ -287,6 +288,7 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 
 	if (!pg_restore_db(&(specs->pgPaths),
 					   specs->target_pguri,
+					   &(specs->filters),
 					   specs->dumpPaths.postFilename,
 					   specs->dumpPaths.postListFilename,
 					   specs->restoreOptions,

@@ -40,7 +40,9 @@ Postgres instance to the target Postgres instance.
      --skip-large-objects       Skip copying large objects (blobs)
      --skip-extensions          Skip restoring extensions
      --skip-collations          Skip restoring collations
+     --skip-vacuum              Skip running VACUUM ANALYZE
      --filters <filename>       Use the filters defined in <filename>
+     --fail-fast                Abort early in case of error
      --restart                  Allow restarting when temp files exist already
      --resume                   Allow resuming operations after a failure
      --not-consistent           Allow taking a new snapshot on the source database
@@ -501,11 +503,21 @@ The following options are available to ``pgcopydb clone``:
 
   See also :ref:`pgcopydb_list_collations`.
 
+--skip-vacuum
+
+  Skip running VACUUM ANALYZE on the target database once a table has been
+  copied, its indexes have been created, and constraints installed.
+
 --filters <filename>
 
   This option allows to exclude table and indexes from the copy operations.
   See :ref:`filtering` for details about the expected file format and the
   filtering options available.
+
+--fail-fast
+
+  Abort early in case of error by sending the TERM signal to all the
+  processes in the pgcopydb process group.
 
 --restart
 
@@ -691,6 +703,24 @@ PGCOPYDB_DROP_IF_EXISTS
    then pgcopydb uses the pg_restore options ``--clean --if-exists`` when
    creating the schema on the target Postgres instance.
 
+   When ``--drop-if-exists`` is ommitted from the command line then this
+   environment variable is used.
+
+PGCOPYDB_FAIL_FAST
+
+   When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
+   then pgcopydb sends the TERM signal to all the processes in its process
+   group as soon as one process terminates with a non-zero return code.
+
+   When ``--fail-fast`` is ommitted from the command line then this
+   environment variable is used.
+
+PGCOPYDB_SKIP_VACUUM
+
+   When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
+   then pgcopydb skips the VACUUM ANALYZE jobs entirely, same as when using
+   the ``--skip-vacuum`` option.
+
 PGCOPYDB_SNAPSHOT
 
   Postgres snapshot identifier to re-use, see also ``--snapshot``.
@@ -710,6 +740,38 @@ PGCOPYDB_LOG_TIME_FORMAT
   See documentation for strftime(3) for details about the format string. See
   documentation for isatty(3) for details about detecting if pgcopydb is run
   in an interactive terminal.
+
+PGCOPYDB_LOG_JSON
+
+   When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
+   then pgcopydb formats its logs using JSON.
+
+   ::
+
+      {
+        "timestamp": "2023-04-13 16:53:14",
+        "pid": 87956,
+        "error_level": 4,
+        "error_severity": "INFO",
+        "file_name": "main.c",
+        "file_line_num": 165,
+        "message": "Running pgcopydb version 0.11.19.g2290494.dirty from \"/Users/dim/dev/PostgreSQL/pgcopydb/src/bin/pgcopydb/pgcopydb\""
+      }
+
+PGCOPYDB_LOG_FILENAME
+
+   When set to a filename (in a directory that must exists already) then
+   pgcopydb writes its logs output to that filename in addition to the logs
+   on the standard error output stream.
+
+   If the file already exists, its content is overwritten. In other words
+   the previous content would be lost when running the same command twice.
+
+PGCOPYDB_LOG_JSON_FILE
+
+   When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
+   then pgcopydb formats its logs using JSON when writing to
+   PGCOPYDB_LOG_FILENAME.
 
 XDG_DATA_HOME
 

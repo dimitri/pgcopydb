@@ -48,14 +48,20 @@ stream_apply_catchup(StreamSpecs *specs)
 		return false;
 	}
 
-	if (!stream_read_context(&(specs->paths),
-							 &(context.system),
-							 &(context.WalSegSz)))
+	if (specs->system.timeline == 0)
 	{
-		log_error("Failed to read the streaming context information "
-				  "from the source database, see above for details");
-		return false;
+		if (!stream_read_context(&(specs->paths),
+								 &(specs->system),
+								 &(specs->WalSegSz)))
+		{
+			log_error("Failed to read the streaming context information "
+					  "from the source database, see above for details");
+			return false;
+		}
 	}
+
+	context.system = specs->system;
+	context.WalSegSz = specs->WalSegSz;
 
 	log_debug("Source database wal_segment_size is %u", context.WalSegSz);
 	log_debug("Source database timeline is %d", context.system.timeline);
@@ -66,7 +72,8 @@ stream_apply_catchup(StreamSpecs *specs)
 								specs->target_pguri,
 								specs->origin,
 								specs->endpos,
-								context.apply))
+								context.apply,
+								specs->logSQL))
 	{
 		log_error("Failed to setup replication origin on the target database");
 		return false;
@@ -209,6 +216,9 @@ stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
 		return false;
 	}
 
+	/* skip logging the sentinel queries, we log_debug the values fetched */
+	src.logSQL = context->logSQL;
+
 	while (!sentinel.apply)
 	{
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
@@ -283,6 +293,9 @@ stream_apply_sync_sentinel(StreamApplyContext *context)
 		return false;
 	}
 
+	/* limit the amount of logging of the apply process */
+	src.logSQL = context->logSQL;
+
 	if (!pgsql_sync_sentinel_apply(&src, context->previousLSN, &sentinel))
 	{
 		log_warn("Failed to sync progress with the pgcopydb sentinel");
@@ -291,6 +304,77 @@ stream_apply_sync_sentinel(StreamApplyContext *context)
 	context->apply = sentinel.apply;
 	context->endpos = sentinel.endpos;
 	context->startpos = sentinel.startpos;
+
+	return true;
+}
+
+
+/*
+ * stream_apply_send_sync_sentinel sends a query to sync with the pgcopydb
+ * sentinel table using the libpq async API. Use the associated function
+ * stream_apply_fetch_sync_sentinel to check for availability of the result and
+ * fetch it when it's available.
+ */
+bool
+stream_apply_send_sync_sentinel(StreamApplyContext *context)
+{
+	PGSQL *src = &(context->src);
+
+	if (context->sentinelQueryInProgress)
+	{
+		log_error("BUG: stream_apply_send_sync_sentinel already in progress");
+		return false;
+	}
+
+	/* we're going to keep the connection around */
+	context->src.connectionStatementType = PGSQL_CONNECTION_MULTI_STATEMENT;
+
+	/* limit the amount of logging of the apply process */
+	src->logSQL = true;
+
+	if (!pgsql_send_sync_sentinel_apply(src, context->previousLSN))
+	{
+		log_error("Failed to sync progress with the pgcopydb sentinel");
+		return false;
+	}
+
+	context->sentinelSyncTime = time(NULL);
+	context->sentinelQueryInProgress = true;
+
+	return true;
+}
+
+
+/*
+ * stream_apply_fetch_sync_sentinel checks to see if the result of the
+ * pgcopydb sentinel sync query is available and fetches it then.
+ */
+bool
+stream_apply_fetch_sync_sentinel(StreamApplyContext *context)
+{
+	PGSQL *src = &(context->src);
+
+	bool retry;
+	CopyDBSentinel sentinel = { 0 };
+
+	if (!pgsql_fetch_sync_sentinel_apply(src, &retry, &sentinel))
+	{
+		log_error("Failed to fetch sentinel update query results");
+		return false;
+	}
+
+	if (!retry)
+	{
+		context->sentinelQueryInProgress = false;
+
+		/* also disconnect between async queries */
+		(void) pgsql_finish(&(context->src));
+
+		context->apply = sentinel.apply;
+		context->endpos = sentinel.endpos;
+		context->startpos = sentinel.startpos;
+		context->replay_lsn = sentinel.replay_lsn;
+	}
 
 	return true;
 }
@@ -354,9 +438,10 @@ stream_apply_file(StreamApplyContext *context)
 		if (metadata.action == STREAM_ACTION_SWITCH &&
 			i != (content.count - 1))
 		{
-			log_error("SWITCH command for LSN %X/%X found in line %d, "
+			log_error("SWITCH command for LSN %X/%X found in \"%s\" line %d, "
 					  "before last line %d",
 					  LSN_FORMAT_ARGS(metadata.lsn),
+					  content.filename,
 					  i + 1,
 					  content.count);
 
@@ -411,26 +496,43 @@ stream_apply_sql(StreamApplyContext *context,
 
 		case STREAM_ACTION_BEGIN:
 		{
-			/* did we reach the starting LSN positions now? */
-			if (!context->reachedStartPos)
-			{
-				context->reachedStartPos =
-					context->previousLSN < metadata->lsn;
-			}
-
-			log_debug("BEGIN %lld LSN %X/%X @%s, previous LSN %X/%X %s",
-					  (long long) metadata->xid,
-					  LSN_FORMAT_ARGS(metadata->lsn),
-					  metadata->timestamp,
-					  LSN_FORMAT_ARGS(context->previousLSN),
-					  context->reachedStartPos ? "" : "[skipping]");
-
 			if (metadata->lsn == InvalidXLogRecPtr ||
+				metadata->txnCommitLSN == InvalidXLogRecPtr ||
 				IS_EMPTY_STRING_BUFFER(metadata->timestamp))
 			{
 				log_fatal("Failed to parse BEGIN message: %s", sql);
 				return false;
 			}
+
+			/* did we reach the starting LSN positions now? */
+			if (!context->reachedStartPos)
+			{
+				/*
+				 * compare previousLSN with COMMIT LSN to safely include
+				 * complete transactions while skipping already applied changes.
+				 *
+				 * this is particularly useful at the beginnig where BEGIN LSN
+				 * of some transactions could be less than `consistent_point`,
+				 * but COMMIT LSN of those transactions is guaranteed to be
+				 * greater.
+				 *
+				 * in case of interruption and this is the first transaction to
+				 * be applied, previousLSN should be equal to the last
+				 * transaction's COMMIT LSN or the LSN of non-transaction
+				 * action. Therefore, this condition will still hold true.
+				 */
+
+				context->reachedStartPos =
+					context->previousLSN < metadata->txnCommitLSN;
+			}
+
+			log_trace("BEGIN %lld LSN %X/%X @%s, previous LSN %X/%X, COMMIT LSN %X/%X %s",
+					  (long long) metadata->xid,
+					  LSN_FORMAT_ARGS(metadata->lsn),
+					  metadata->timestamp,
+					  LSN_FORMAT_ARGS(context->previousLSN),
+					  LSN_FORMAT_ARGS(metadata->txnCommitLSN),
+					  context->reachedStartPos ? "" : "[skipping]");
 
 			/*
 			 * Check if we reached the endpos LSN already.
@@ -458,6 +560,20 @@ stream_apply_sql(StreamApplyContext *context,
 				return false;
 			}
 
+			break;
+		}
+
+		case STREAM_ACTION_COMMIT:
+		{
+			if (!context->reachedStartPos)
+			{
+				return true;
+			}
+
+			/*
+			 * update replication progress with metadata->lsn, that is,
+			 * transaction COMMIT LSN
+			 */
 			char lsn[PG_LSN_MAXLENGTH] = { 0 };
 
 			sformat(lsn, sizeof(lsn), "%X/%X",
@@ -471,17 +587,7 @@ stream_apply_sql(StreamApplyContext *context,
 				return false;
 			}
 
-			break;
-		}
-
-		case STREAM_ACTION_COMMIT:
-		{
-			if (!context->reachedStartPos)
-			{
-				return true;
-			}
-
-			log_debug("COMMIT %lld LSN %X/%X",
+			log_trace("COMMIT %lld LSN %X/%X",
 					  (long long) metadata->xid,
 					  LSN_FORMAT_ARGS(metadata->lsn));
 
@@ -529,7 +635,7 @@ stream_apply_sql(StreamApplyContext *context,
 					context->previousLSN < metadata->lsn;
 			}
 
-			log_debug("KEEPALIVE LSN %X/%X @%s, previous LSN %X/%X %s",
+			log_trace("KEEPALIVE LSN %X/%X @%s, previous LSN %X/%X %s",
 					  LSN_FORMAT_ARGS(metadata->lsn),
 					  metadata->timestamp,
 					  LSN_FORMAT_ARGS(context->previousLSN),
@@ -671,7 +777,8 @@ setupReplicationOrigin(StreamApplyContext *context,
 					   char *target_pguri,
 					   char *origin,
 					   uint64_t endpos,
-					   bool apply)
+					   bool apply,
+					   bool logSQL)
 {
 	PGSQL *pgsql = &(context->pgsql);
 	char *nodeName = context->origin;
@@ -712,6 +819,8 @@ setupReplicationOrigin(StreamApplyContext *context,
 	/* we're going to send several replication origin commands */
 	pgsql->connectionStatementType = PGSQL_CONNECTION_MULTI_STATEMENT;
 
+	/* we also might want to skip logging any SQL query that we apply */
+	pgsql->logSQL = logSQL;
 
 	uint32_t oid = 0;
 
@@ -829,7 +938,7 @@ parseSQLAction(const char *query, LogicalMessageMetadata *metadata)
 	else if (query == commit)
 	{
 		metadata->action = STREAM_ACTION_COMMIT;
-		message = commit + strlen(OUTPUT_BEGIN);
+		message = commit + strlen(OUTPUT_COMMIT);
 	}
 	else if (query == switchwal)
 	{

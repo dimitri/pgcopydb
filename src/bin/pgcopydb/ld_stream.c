@@ -45,25 +45,31 @@ stream_init_specs(StreamSpecs *specs,
 				  CDCPaths *paths,
 				  char *source_pguri,
 				  char *target_pguri,
-				  char *plugin,
-				  char *slotName,
+				  ReplicationSlot *slot,
 				  char *origin,
 				  uint64_t endpos,
 				  LogicalStreamMode mode,
 				  bool stdin,
-				  bool stdout)
+				  bool stdout,
+				  bool logSQL)
 {
 	/* just copy into StreamSpecs what's been initialized in copySpecs */
 	specs->mode = mode;
 	specs->stdIn = stdin;
 	specs->stdOut = stdout;
+	specs->logSQL = logSQL;
 
 	specs->paths = *paths;
 	specs->endpos = endpos;
 
-	specs->plugin = OutputPluginFromString(plugin);
+	/*
+	 * Copy the given ReplicationSlot: it comes from command line parsing, or
+	 * from a previous command that created it and saved information to file.
+	 * Such a sprevious command could be: pgcopydb snapshot --follow.
+	 */
+	specs->slot = *slot;
 
-	switch (specs->plugin)
+	switch (specs->slot.plugin)
 	{
 		case STREAM_PLUGIN_TEST_DECODING:
 		{
@@ -98,7 +104,7 @@ stream_init_specs(StreamSpecs *specs,
 					"true",
 					"true",
 					"true",
-					"false",
+					"true",
 					"pgcopydb.*"
 				}
 			};
@@ -110,14 +116,14 @@ stream_init_specs(StreamSpecs *specs,
 
 		default:
 		{
-			log_error("Unknown logical decoding output plugin \"%s\"", plugin);
+			log_error("Unknown logical decoding output plugin \"%s\"",
+					  OutputPluginToString(slot->plugin));
 			return false;
 		}
 	}
 
 	strlcpy(specs->source_pguri, source_pguri, MAXCONNINFO);
 	strlcpy(specs->target_pguri, target_pguri, MAXCONNINFO);
-	strlcpy(specs->slotName, slotName, sizeof(specs->slotName));
 	strlcpy(specs->origin, origin, sizeof(specs->origin));
 
 	if (!buildReplicationURI(specs->source_pguri, specs->logrep_pguri))
@@ -126,7 +132,9 @@ stream_init_specs(StreamSpecs *specs,
 		return false;
 	}
 
-	log_trace("stream_init_specs: %s(%d)", plugin, specs->pluginOptions.count);
+	log_trace("stream_init_specs: %s(%d)",
+			  OutputPluginToString(slot->plugin),
+			  specs->pluginOptions.count);
 
 	/*
 	 * Now prepare for the follow mode sub-process management.
@@ -214,11 +222,8 @@ stream_init_for_mode(StreamSpecs *specs, LogicalStreamMode mode)
 	}
 	else if (specs->mode == STREAM_MODE_REPLAY && mode == STREAM_MODE_CATCHUP)
 	{
-		if (!queue_create(&(specs->transformQueue), "transform"))
-		{
-			log_error("Failed to create the transform queue");
-			return false;
-		}
+		/* we keep the transform queue around */
+		(void) 0;
 	}
 	else
 	{
@@ -303,6 +308,11 @@ stream_init_context(StreamContext *privateContext, StreamSpecs *specs)
 			specs->source_pguri,
 			sizeof(privateContext->source_pguri));
 
+	privateContext->metadata.action = STREAM_ACTION_UNKNOWN;
+	privateContext->previous.action = STREAM_ACTION_UNKNOWN;
+
+	privateContext->lastWrite = 0;
+
 	return true;
 }
 
@@ -367,8 +377,8 @@ startLogicalStreaming(StreamSpecs *specs)
 	{
 		if (!pgsql_init_stream(&stream,
 							   specs->logrep_pguri,
-							   specs->plugin,
-							   specs->slotName,
+							   specs->slot.plugin,
+							   specs->slot.slotName,
 							   specs->startpos,
 							   specs->endpos))
 		{
@@ -377,7 +387,7 @@ startLogicalStreaming(StreamSpecs *specs)
 		}
 
 		log_debug("startLogicalStreaming: %s (%d)",
-				  OutputPluginToString(specs->plugin),
+				  OutputPluginToString(specs->slot.plugin),
 				  specs->pluginOptions.count);
 
 		if (!pgsql_start_replication(&stream))
@@ -403,9 +413,9 @@ startLogicalStreaming(StreamSpecs *specs)
 
 		if (cleanExit)
 		{
-			log_info("Streaming is now finished after processing %lld message%s",
-					 (long long) privateContext.counters.total,
-					 privateContext.counters.total > 0 ? "s" : "");
+			log_info("Streamed up to write_lsn %X/%X, flush_lsn %X/%X, stopping",
+					 LSN_FORMAT_ARGS(context.tracking->written_lsn),
+					 LSN_FORMAT_ARGS(context.tracking->flushed_lsn));
 		}
 		else if (!(asked_to_stop || asked_to_stop_fast || asked_to_quit))
 		{
@@ -502,7 +512,7 @@ streamCheckResumePosition(StreamSpecs *specs)
 			log_info("Resuming streaming at LSN %X/%X "
 					 "from replication slot \"%s\"",
 					 LSN_FORMAT_ARGS(specs->startpos),
-					 specs->slotName);
+					 specs->slot.slotName);
 		}
 	}
 	else
@@ -522,7 +532,7 @@ streamCheckResumePosition(StreamSpecs *specs)
 	bool flush = false;
 	uint64_t lsn = 0;
 
-	if (!pgsql_replication_slot_exists(&src, specs->slotName, &flush, &lsn))
+	if (!pgsql_replication_slot_exists(&src, specs->slot.slotName, &flush, &lsn))
 	{
 		/* errors have already been logged */
 	}
@@ -559,13 +569,6 @@ streamWrite(LogicalStreamContext *context)
 	StreamContext *privateContext = (StreamContext *) context->private;
 	LogicalMessageMetadata *metadata = &(privateContext->metadata);
 
-	/* we might have to rotate to the next on-disk file */
-	if (!streamRotateFile(context))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	if (!prepareMessageMetadataFromContext(context))
 	{
 		log_error("Failed to prepare Logical Message Metadata from context, "
@@ -575,8 +578,61 @@ streamWrite(LogicalStreamContext *context)
 
 	if (metadata->filterOut)
 	{
-		log_trace("Ignoring message: %s", context->buffer);
+		/* message has already been logged */
 		return true;
+	}
+
+	/* update the LSN tracking that's reported in the feedback */
+	context->tracking->written_lsn = context->cur_record_lsn;
+
+	/* write the actual JSON message to file, unless instructed not to */
+	if (!metadata->skipping)
+	{
+		bool previous = false;
+
+		if (!stream_write_json(context, previous))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		/* update internal transaction counters */
+		(void) updateStreamCounters(privateContext, metadata);
+	}
+
+	if (metadata->xid > 0)
+	{
+		log_debug("Received action %c for XID %u at LSN %X/%X",
+				  metadata->action,
+				  metadata->xid,
+				  LSN_FORMAT_ARGS(metadata->lsn));
+	}
+	else
+	{
+		log_debug("Received action %c at LSN %X/%X",
+				  metadata->action,
+				  LSN_FORMAT_ARGS(metadata->lsn));
+	}
+
+	return true;
+}
+
+
+/*
+ * stream_write_json writes the current (or previous) Logical Message to disk.
+ */
+bool
+stream_write_json(LogicalStreamContext *context, bool previous)
+{
+	StreamContext *privateContext = (StreamContext *) context->private;
+	LogicalMessageMetadata *metadata =
+		previous ? &(privateContext->previous) : &(privateContext->metadata);
+
+	/* we might have to rotate to the next on-disk file */
+	if (!streamRotateFile(context))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	/*
@@ -609,7 +665,7 @@ streamWrite(LogicalStreamContext *context)
 					  LSN_FORMAT_ARGS(metadata->lsn),
 					  metadata->timestamp);
 
-	appendPQExpBuffer(buffer, "%s}\n", privateContext->jsonBuffer);
+	appendPQExpBuffer(buffer, "%s}\n", metadata->jsonBuffer);
 
 	/* memory allocation could have failed while building string */
 	if (PQExpBufferBroken(buffer))
@@ -645,6 +701,9 @@ streamWrite(LogicalStreamContext *context)
 		bytes_left -= ret;
 	}
 
+	/* time to update our lastWrite mark */
+	privateContext->lastWrite = time(NULL);
+
 	/*
 	 * Now if specs->stdOut is true we want to also write all the same things
 	 * again to stdout this time. We don't expect buffered IO to stdout, so we
@@ -678,33 +737,7 @@ streamWrite(LogicalStreamContext *context)
 	}
 
 	destroyPQExpBuffer(buffer);
-
-	/*
-	 * If the buffer was allocated anew in prepareMessageJSONbuffer, now is
-	 * time to free that extra memory. Otherwise context->buffer has been
-	 * reused and lower-level functions in pgsql.c handles the memory.
-	 */
-	if (privateContext->jsonBuffer != context->buffer)
-	{
-		free(privateContext->jsonBuffer);
-	}
-
-	/* update the LSN tracking that's reported in the feedback */
-	context->tracking->written_lsn = context->cur_record_lsn;
-
-	if (metadata->xid > 0)
-	{
-		log_debug("Received action %c for XID %u at LSN %X/%X",
-				  metadata->action,
-				  metadata->xid,
-				  LSN_FORMAT_ARGS(metadata->lsn));
-	}
-	else
-	{
-		log_debug("Received action %c at LSN %X/%X",
-				  metadata->action,
-				  LSN_FORMAT_ARGS(metadata->lsn));
-	}
+	free(metadata->jsonBuffer);
 
 	return true;
 }
@@ -747,7 +780,7 @@ streamRotateFile(LogicalStreamContext *context)
 			wal);
 
 	/* in most cases, the file name is still the same */
-	if (strcmp(privateContext->walFileName, walFileName) == 0)
+	if (streq(privateContext->walFileName, walFileName))
 	{
 		return true;
 	}
@@ -770,9 +803,9 @@ streamRotateFile(LogicalStreamContext *context)
 
 		fformat(privateContext->jsonFile, "%s", buffer);
 
-		log_debug("Inserted action SWITCH for lsn %X/%X in \"%s\"",
-				  LSN_FORMAT_ARGS(context->cur_record_lsn),
-				  privateContext->partialFileName);
+		log_notice("Inserted action SWITCH for lsn %X/%X in \"%s\"",
+				   LSN_FORMAT_ARGS(context->cur_record_lsn),
+				   privateContext->partialFileName);
 
 		if (!streamCloseFile(context, time_to_abort))
 		{
@@ -799,7 +832,6 @@ streamRotateFile(LogicalStreamContext *context)
 		}
 	}
 
-	log_notice("Now streaming changes to \"%s\"", partialFileName);
 	strlcpy(privateContext->walFileName, walFileName, MAXPGPATH);
 	strlcpy(privateContext->partialFileName, partialFileName, MAXPGPATH);
 
@@ -856,29 +888,20 @@ streamRotateFile(LogicalStreamContext *context)
 		return false;
 	}
 
+	log_notice("Now streaming changes to \"%s\"", partialFileName);
+
 	/*
 	 * Also maintain the "latest" symbolic link to the latest file where
 	 * we've been streaming changes in.
 	 */
-	char latest[MAXPGPATH] = { 0 };
-
-	sformat(latest, sizeof(latest), "%s/latest", privateContext->paths.dir);
-
-	if (!unlink_file(latest))
+	if (!stream_update_latest_symlink(privateContext,
+									  privateContext->partialFileName))
 	{
-		/* errors have already been logged */
+		log_error("Failed to update latest symlink to \"%s\", "
+				  "see above for details",
+				  privateContext->partialFileName);
 		return false;
 	}
-
-	if (!create_symbolic_link(privateContext->partialFileName, latest))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	log_debug("streamRotateFile: symlink \"%s\" -> \"%s\"",
-			  latest,
-			  privateContext->partialFileName);
 
 	return true;
 }
@@ -929,6 +952,16 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 			return false;
 		}
 
+		/* and also update the "latest" symlink, we need it for --resume */
+		if (!stream_update_latest_symlink(privateContext,
+										  privateContext->walFileName))
+		{
+			log_error("Failed to update latest symlink to \"%s\", "
+					  "see above for details",
+					  privateContext->walFileName);
+			return false;
+		}
+
 		log_notice("Closed file \"%s\"", privateContext->walFileName);
 	}
 
@@ -952,7 +985,8 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 				if (!stream_transform_add_file(privateContext->transformQueue,
 											   privateContext->firstLSN))
 				{
-					/* errors have already been logged */
+					log_error("Failed to add LSN %X/%X to the transform queue",
+							  LSN_FORMAT_ARGS(privateContext->firstLSN));
 					return false;
 				}
 			}
@@ -969,7 +1003,7 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 			{
 				if (!stream_transform_send_stop(privateContext->transformQueue))
 				{
-					/* errors have already been logged */
+					log_error("Failed to send STOP to the transform queue");
 					return false;
 				}
 			}
@@ -1020,6 +1054,18 @@ streamFlush(LogicalStreamContext *context)
 	/* if needed, flush our current file now (fsync) */
 	if (context->tracking->flushed_lsn < context->tracking->written_lsn)
 	{
+		/*
+		 * When it's time to flush, inject a KEEPALIVE message to make sure we
+		 * mark the progress made in terms of LSN. Since we skip empty
+		 * transactions, we might be missing the last progress at endpos time
+		 * without this.
+		 */
+		if (!streamKeepalive(context))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
 		int fd = fileno(privateContext->jsonFile);
 
 		if (fsync(fd) != 0)
@@ -1090,12 +1136,15 @@ streamKeepalive(LogicalStreamContext *context)
 
 		fformat(privateContext->jsonFile, "%s", buffer);
 
-		log_debug("Inserted action KEEPALIVE for lsn %X/%X @%s",
+		log_trace("Inserted action KEEPALIVE for lsn %X/%X @%s",
 				  LSN_FORMAT_ARGS(context->cur_record_lsn),
 				  sendTimeStr);
 
 		/* update the LSN tracking that's reported in the feedback */
 		context->tracking->written_lsn = context->cur_record_lsn;
+
+		/* time to update our lastWrite mark */
+		privateContext->lastWrite = time(NULL);
 
 		/*
 		 * When streaming to a Unix pipe don't forget to also stream the
@@ -1225,7 +1274,9 @@ bool
 prepareMessageMetadataFromContext(LogicalStreamContext *context)
 {
 	StreamContext *privateContext = (StreamContext *) context->private;
+
 	LogicalMessageMetadata *metadata = &(privateContext->metadata);
+	LogicalMessageMetadata *previous = &(privateContext->previous);
 
 	/* ensure we have a new all-zero metadata structure for the new message */
 	(void) memset(metadata, 0, sizeof(LogicalMessageMetadata));
@@ -1266,7 +1317,69 @@ prepareMessageMetadataFromContext(LogicalStreamContext *context)
 		return false;
 	}
 
-	(void) updateStreamCounters(privateContext, metadata);
+	/*
+	 * Skip empty transactions, except every once in a while in order to
+	 * continue tracking LSN progress in our replay system.
+	 */
+	uint64_t now = time(NULL);
+	uint64_t elapsed = now - privateContext->lastWrite;
+
+	metadata->recvTime = now;
+
+	/* BEGIN message: always wait to see if next message is a COMMIT */
+	if (metadata->action == STREAM_ACTION_BEGIN)
+	{
+		metadata->skipping = true;
+	}
+
+	/* COMMIT message and previous one is a BEGIN */
+	else if (previous->action == STREAM_ACTION_BEGIN &&
+			 metadata->action == STREAM_ACTION_COMMIT)
+	{
+		metadata->skipping = true;
+
+		/* add a synthetic KEEPALIVE message once in a while */
+		if (STREAM_EMPTY_TX_TIMEOUT <= elapsed)
+		{
+			if (!streamKeepalive(context))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+		}
+	}
+
+	/*
+	 * NOT a COMMIT message and previous one is a BEGIN
+	 *
+	 * It probably means the transaction is an INSERT/UPDATE/DELETE/TRUNCATE or
+	 * maybe even a SWITCH or something. In any case we want to now write the
+	 * previous BEGIN message out in the JSON stream.
+	 */
+	else if (previous->action == STREAM_ACTION_BEGIN &&
+			 metadata->action != STREAM_ACTION_COMMIT)
+	{
+		previous->skipping = false;
+		metadata->skipping = false;
+
+		bool previous = true;
+
+		if (!stream_write_json(context, previous))
+		{
+			/* errors have been logged */
+			return false;
+		}
+	}
+
+	/*
+	 * Any other case: current message is not a BEGIN, previous message is not
+	 * a BEGIN either.
+	 *
+	 * We don't need to keep track of the previous message anymore, and we need
+	 * to prepare for the next iteration by copying the current message
+	 * wholesale into the previous location.
+	 */
+	*previous = *metadata;
 
 	return true;
 }
@@ -1427,6 +1540,20 @@ parseMessageMetadata(LogicalMessageMetadata *metadata,
 		}
 	}
 
+	if (json_object_has_value(jsobj, "commit_lsn"))
+	{
+		char *txnCommitLSN = (char *) json_object_get_string(jsobj, "commit_lsn");
+
+		if (txnCommitLSN != NULL)
+		{
+			if (!parseLSN(txnCommitLSN, &(metadata->txnCommitLSN)))
+			{
+				log_error("Failed to parse LSN \"%s\"", txnCommitLSN);
+				return false;
+			}
+		}
+	}
+
 	if (!skipAction &&
 		metadata->lsn == InvalidXLogRecPtr &&
 		(metadata->action == STREAM_ACTION_BEGIN ||
@@ -1556,6 +1683,38 @@ stream_read_latest(StreamSpecs *specs, StreamContent *content)
 
 
 /*
+ * stream_update_latest_symlink updates the latest symbolic link to the given
+ * filename, that must already exists on the file system.
+ */
+bool
+stream_update_latest_symlink(StreamContext *privateContext,
+							 const char *filename)
+{
+	char latest[MAXPGPATH] = { 0 };
+
+	sformat(latest, sizeof(latest), "%s/latest", privateContext->paths.dir);
+
+	if (!unlink_file(latest))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!create_symbolic_link((char *) filename, latest))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_debug("stream_update_latest_symlink: \"%s\" -> \"%s\"",
+			  latest,
+			  privateContext->partialFileName);
+
+	return true;
+}
+
+
+/*
  * updateStreamCounters increment the counter that matches the received
  * message.
  */
@@ -1604,7 +1763,7 @@ updateStreamCounters(StreamContext *context, LogicalMessageMetadata *metadata)
 
 		default:
 		{
-			log_debug("Skipping counters for message action \"%c\"",
+			log_trace("Skipping counters for message action \"%c\"",
 					  metadata->action);
 			break;
 		}
@@ -1717,28 +1876,21 @@ StreamActionFromChar(char action)
 
 
 /*
- * stream_setup_source_database sets up the source database with a replication
- * slot, a sentinel table, and the target database with a replication origin.
+ * stream_setup_source_database sets up the source database with a sentinel
+ * table, and the target database with a replication origin.
  */
 bool
-stream_setup_databases(CopyDataSpec *copySpecs,
-					   StreamOutputPlugin plugin, char *slotName, char *origin)
+stream_setup_databases(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 {
-	uint64_t lsn = 0;
+	ReplicationSlot *slot = &(streamSpecs->slot);
 
-	if (!stream_create_repl_slot(copySpecs, plugin, slotName, &lsn))
+	if (!stream_create_sentinel(copySpecs, slot->lsn, InvalidXLogRecPtr))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	if (!stream_create_sentinel(copySpecs, lsn, InvalidXLogRecPtr))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!stream_create_origin(copySpecs, origin, lsn))
+	if (!stream_create_origin(copySpecs, streamSpecs->origin, slot->lsn))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1804,162 +1956,6 @@ stream_cleanup_databases(CopyDataSpec *copySpecs, char *slotName, char *origin)
 	{
 		log_error("Failed to drop replication origin \"%s\"", origin);
 		return false;
-	}
-
-	return true;
-}
-
-
-/*
- * stream_create_repl_slot creates a replication slot on the source database.
- */
-bool
-stream_create_repl_slot(CopyDataSpec *copySpecs,
-						StreamOutputPlugin plugin,
-						char *slotName,
-						uint64_t *lsn)
-{
-	PGSQL *pgsql = &(copySpecs->sourceSnapshot.pgsql);
-
-	/*
-	 * When using Postgres 9.6, we're using the logical decoding replication
-	 * protocol command CREATE_REPLICATION_SLOT to both create the replication
-	 * and also export a snapshot.
-	 */
-	if (copySpecs->sourceSnapshot.exportedCreateSlotSnapshot)
-	{
-		bool slotExists = false;
-
-		if (!pgsql_init(pgsql, copySpecs->source_pguri, PGSQL_CONN_SOURCE))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		if (!pgsql_begin(pgsql))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		if (!pgsql_server_version(pgsql))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		log_info("Postgres server version %s (%d)",
-				 pgsql->pgversion, pgsql->pgversion_num);
-
-		if (!pgsql_replication_slot_exists(pgsql, slotName, &slotExists, lsn))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		if (!pgsql_commit(pgsql))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		if (!slotExists)
-		{
-			log_error("Logical replication slot \"%s\" does not exist, "
-					  "it is expected to have been created by the replication "
-					  "command CREATE_REPLICATION_SLOT when using Postgres %s",
-					  slotName,
-					  copySpecs->sourceSnapshot.stream.pgsql.pgversion);
-			return false;
-		}
-
-		return true;
-	}
-
-	/*
-	 * When --snapshot has been used, open a transaction using that snapshot.
-	 */
-	if (!IS_EMPTY_STRING_BUFFER(copySpecs->sourceSnapshot.snapshot))
-	{
-		if (!copydb_set_snapshot(copySpecs))
-		{
-			/* errors have already been logged */
-			log_fatal("Failed to use given --snapshot \"%s\"",
-					  copySpecs->sourceSnapshot.snapshot);
-			return false;
-		}
-	}
-	else
-	{
-		if (!pgsql_init(pgsql, copySpecs->source_pguri, PGSQL_CONN_SOURCE))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		if (!pgsql_begin(pgsql))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-	}
-
-	/*
-	 * The pgsql_create_replication_slot SQL query text depends on the source
-	 * Postgres version, because the "lsn" column used to be named
-	 * "xlog_position" in 9.6. Make sure to retrieve the source server version
-	 * now.
-	 */
-	if (!pgsql_server_version(pgsql))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	bool slotExists = false;
-
-	if (!pgsql_replication_slot_exists(pgsql, slotName, &slotExists, lsn))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (slotExists)
-	{
-		if (!copySpecs->resume)
-		{
-			log_error("Failed to create replication slot \"%s\": already exists",
-					  slotName);
-			pgsql_rollback(pgsql);
-			return false;
-		}
-
-		log_info("Logical replication slot \"%s\" already exists at LSN %X/%X",
-				 slotName,
-				 LSN_FORMAT_ARGS(*lsn));
-
-		pgsql_commit(pgsql);
-		return true;
-	}
-	else
-	{
-		if (!pgsql_create_replication_slot(pgsql, slotName, plugin, lsn))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		if (!pgsql_commit(pgsql))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		log_info("Created logical replication slot \"%s\" with plugin \"%s\" "
-				 "at LSN %X/%X",
-				 slotName,
-				 OutputPluginToString(plugin),
-				 LSN_FORMAT_ARGS(*lsn));
 	}
 
 	return true;
@@ -2160,8 +2156,11 @@ bool
 stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream)
 {
 	IdentifySystem *system = &(stream->system);
-
 	char wal_segment_size[BUFSIZE] = { 0 };
+
+	/* also cache the system and WalSegSz in the StreamSpecs */
+	specs->system = stream->system;
+	specs->WalSegSz = stream->WalSegSz;
 
 	int bytes =
 		sformat(wal_segment_size, sizeof(wal_segment_size), "%lld",

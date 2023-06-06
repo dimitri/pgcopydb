@@ -314,6 +314,10 @@ copydb_prepare_snapshot(CopyDataSpec *copySpecs)
 		return false;
 	}
 
+	log_notice("Wrote snapshot \"%s\" to file \"%s\"",
+			   sourceSnapshot->snapshot,
+			   copySpecs->cfPaths.snfile);
+
 	return true;
 }
 
@@ -322,27 +326,41 @@ copydb_prepare_snapshot(CopyDataSpec *copySpecs)
  * copydb_create_logical_replication_slot uses Postgres logical replication
  * protocol command CREATE_REPLICATION_SLOT to create a replication slot on the
  * source database, and exports a snapshot while doing so.
- *
- * This is a Postgres 9.6 compatibility function, because in Postgres 9.6
- * creating a logical replication slot always exports a new snapshot.
  */
 bool
 copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 									   const char *logrep_pguri,
-									   StreamOutputPlugin plugin,
-									   const char *slotName)
+									   ReplicationSlot *slot)
 {
 	TransactionSnapshot *sourceSnapshot = &(copySpecs->sourceSnapshot);
 
 	/*
-	 * We can't re-use --snapshot here, sorry.
+	 * Now is the time to check if a previous command such as
+	 *
+	 *   pgcopydb snapshot --follow --plugin ... --slot-name ...
+	 *
+	 * did create the replication slot for us while exporting the snapshot. we
+	 * can then re-use the replication slot and the exported snapshot here.
+	 *
+	 * On the other hand, if a snapshot was exported without the --follow
+	 * option then we can't re-use that snapshot.
 	 */
-	if (!IS_EMPTY_STRING_BUFFER(sourceSnapshot->snapshot))
+	if (slot->lsn != InvalidXLogRecPtr &&
+		!IS_EMPTY_STRING_BUFFER(slot->snapshot))
 	{
-		log_fatal("Failed to use provided --snapshot. "
-				  "The source Postgres server is running version %s, "
-				  "where it's not possible to use both --follow and --snapshot",
-				  sourceSnapshot->pgsql.pgversion);
+		log_info("Re-using replication slot \"%s\" "
+				 "created at %X/%X with snapshot \"%s\"",
+				 slot->slotName,
+				 LSN_FORMAT_ARGS(slot->lsn),
+				 slot->snapshot);
+		return true;
+	}
+	else if (!IS_EMPTY_STRING_BUFFER(sourceSnapshot->snapshot))
+	{
+		log_fatal("Failed to use --snapshot \"%s\" which was not created by "
+				  "the replication protocol command CREATE_REPLICATION_SLOT",
+				  sourceSnapshot->snapshot);
+		log_info("Consider using pgcopydb snapshot --follow");
 		return false;
 	}
 
@@ -352,8 +370,8 @@ copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 
 	if (!pgsql_init_stream(stream,
 						   logrep_pguri,
-						   plugin,
-						   slotName,
+						   slot->plugin,
+						   slot->slotName,
 						   InvalidXLogRecPtr,
 						   InvalidXLogRecPtr))
 	{
@@ -361,17 +379,17 @@ copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 		return false;
 	}
 
-	uint64_t lsn = 0;
-
-	if (!pgsql_create_logical_replication_slot(stream,
-											   &lsn,
-											   sourceSnapshot->snapshot,
-											   sizeof(sourceSnapshot->snapshot)))
+	if (!pgsql_create_logical_replication_slot(stream, slot))
 	{
 		log_error("Failed to create a logical replication slot "
 				  "and export a snapshot, see above for details");
 		return false;
 	}
+
+	/* expose the replication slot snapshot as the main transaction snapshot */
+	strlcpy(sourceSnapshot->snapshot,
+			slot->snapshot,
+			sizeof(sourceSnapshot->snapshot));
 
 	sourceSnapshot->state = SNAPSHOT_STATE_EXPORTED;
 	sourceSnapshot->exportedCreateSlotSnapshot = true;
@@ -386,12 +404,140 @@ copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 		return false;
 	}
 
-	log_info("Created logical replication slot \"%s\" with plugin \"%s\" "
-			 "at %X/%X and exported snapshot %s",
-			 slotName,
-			 OutputPluginToString(plugin),
-			 LSN_FORMAT_ARGS(lsn),
-			 sourceSnapshot->snapshot);
+	/* store the replication slot information in a file, same reasons */
+	if (!snapshot_write_slot(copySpecs->cfPaths.cdc.slotfile, slot))
+	{
+		log_fatal("Failed to create the slot file \"%s\"",
+				  copySpecs->cfPaths.cdc.slotfile);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * snapshot_write_slot writes a replication slot information to file.
+ */
+bool
+snapshot_write_slot(const char *filename, ReplicationSlot *slot)
+{
+	PQExpBuffer contents = createPQExpBuffer();
+
+	appendPQExpBuffer(contents, "%s\n", slot->slotName);
+	appendPQExpBuffer(contents, "%X/%X\n", LSN_FORMAT_ARGS(slot->lsn));
+	appendPQExpBuffer(contents, "%s\n", slot->snapshot);
+	appendPQExpBuffer(contents, "%s\n", OutputPluginToString(slot->plugin));
+
+	if (PQExpBufferBroken(contents))
+	{
+		log_error("Failed to allocate memory");
+		destroyPQExpBuffer(contents);
+		return false;
+	}
+
+	if (!write_file(contents->data, contents->len, filename))
+	{
+		log_fatal("Failed to create slot file \"%s\"", filename);
+
+		destroyPQExpBuffer(contents);
+		return false;
+	}
+
+	destroyPQExpBuffer(contents);
+	return true;
+}
+
+
+/*
+ * snapshot_read_slot reads a replication slot information from file.
+ */
+bool
+snapshot_read_slot(const char *filename, ReplicationSlot *slot)
+{
+	char *contents = NULL;
+	long fileSize = 0L;
+
+	log_trace("snapshot_read_slot: %s", filename);
+
+	if (!read_file(filename, &contents, &fileSize))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* make sure to use only the first line of the file, without \n */
+	char *lines[BUFSIZE] = { 0 };
+	int lineCount = splitLines(contents, lines, BUFSIZE);
+
+	if (lineCount != 4)
+	{
+		log_error("Failed to parse replication slot file \"%s\"", filename);
+		free(contents);
+		return false;
+	}
+
+	/* 1. slotName */
+	int length = strlcpy(slot->slotName, lines[0], sizeof(slot->slotName));
+
+	if (length >= sizeof(slot->slotName))
+	{
+		log_error("Failed to read replication slot name \"%s\" from file \"%s\", "
+				  "length is %lld bytes which exceeds maximum %lld bytes",
+				  lines[0],
+				  filename,
+				  (long long) strlen(lines[0]),
+				  (long long) sizeof(slot->slotName));
+		free(contents);
+		return false;
+	}
+
+	/* 2. LSN (consistent_point) */
+	if (!parseLSN(lines[1], &(slot->lsn)))
+	{
+		log_error("Failed to parse LSN \"%s\" from file \"%s\"",
+				  lines[1],
+				  filename);
+		free(contents);
+		return false;
+	}
+
+	/* 3. snapshot */
+	length = strlcpy(slot->snapshot, lines[2], sizeof(slot->snapshot));
+
+	if (length >= sizeof(slot->snapshot))
+	{
+		log_error("Failed to read replication snapshot \"%s\" from file \"%s\", "
+				  "length is %lld bytes which exceeds maximum %lld bytes",
+				  lines[2],
+				  filename,
+				  (long long) strlen(lines[2]),
+				  (long long) sizeof(slot->snapshot));
+		free(contents);
+		return false;
+	}
+
+	/* 4. plugin */
+	slot->plugin = OutputPluginFromString(lines[3]);
+
+	if (slot->plugin == STREAM_PLUGIN_UNKNOWN)
+	{
+		log_error("Failed to read plugin \"%s\" from file \"%s\"",
+				  lines[3],
+				  filename);
+		free(contents);
+		return false;
+	}
+
+	free(contents);
+
+	log_notice("Read replication slot file \"%s\" with snapshot \"%s\", "
+			   "slot \"%s\", lsn %X/%X, and plugin \"%s\"",
+			   filename,
+			   slot->snapshot,
+			   slot->slotName,
+			   LSN_FORMAT_ARGS(slot->lsn),
+			   OutputPluginToString(slot->plugin));
 
 	return true;
 }

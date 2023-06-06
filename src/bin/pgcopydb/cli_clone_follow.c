@@ -39,7 +39,9 @@
 	"  --skip-large-objects       Skip copying large objects (blobs)\n" \
 	"  --skip-extensions          Skip restoring extensions\n" \
 	"  --skip-collations          Skip restoring collations\n" \
+	"  --skip-vacuum              Skip running VACUUM ANALYZE\n" \
 	"  --filters <filename>       Use the filters defined in <filename>\n" \
+	"  --fail-fast                Abort early in case of error\n" \
 	"  --restart                  Allow restarting when temp files exist already\n" \
 	"  --resume                   Allow resuming operations after a failure\n" \
 	"  --not-consistent           Allow taking a new snapshot on the source database\n" \
@@ -169,7 +171,7 @@ cli_clone(int argc, char **argv)
 	}
 
 	/* make sure all sub-processes are now finished */
-	success = success && copydb_wait_for_subprocesses();
+	success = success && copydb_wait_for_subprocesses(copySpecs.failFast);
 
 	if (!success)
 	{
@@ -186,17 +188,24 @@ clone_and_follow(CopyDataSpec *copySpecs)
 {
 	StreamSpecs streamSpecs = { 0 };
 
+	/*
+	 * Refrain from logging SQL statements in the apply module, because they
+	 * contain user data. That said, when --trace has been used, bypass that
+	 * privacy feature.
+	 */
+	bool logSQL = log_get_level() <= LOG_TRACE;
+
 	if (!stream_init_specs(&streamSpecs,
 						   &(copySpecs->cfPaths.cdc),
 						   copySpecs->source_pguri,
 						   copySpecs->target_pguri,
-						   copyDBoptions.plugin,
-						   copyDBoptions.slotName,
+						   &(copyDBoptions.slot),
 						   copyDBoptions.origin,
 						   copyDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
 						   copyDBoptions.stdIn,
-						   copyDBoptions.stdOut))
+						   copyDBoptions.stdOut,
+						   logSQL))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -271,9 +280,12 @@ clone_and_follow(CopyDataSpec *copySpecs)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	/* now wait until the follow process is finished */
-	success = success &&
-			  cli_clone_follow_wait_subprocess("follow", followPID);
+	/* now wait until the follow process is finished, if it's been started */
+	if (followPID != -1)
+	{
+		success = success &&
+				  cli_clone_follow_wait_subprocess("follow", followPID);
+	}
 
 	/*
 	 * Now is a good time to reset the sequences on the target database to
@@ -295,7 +307,7 @@ clone_and_follow(CopyDataSpec *copySpecs)
 	}
 
 	/* make sure all sub-processes are now finished */
-	success = success && copydb_wait_for_subprocesses();
+	success = success && copydb_wait_for_subprocesses(copySpecs->failFast);
 
 	if (!success)
 	{
@@ -314,32 +326,45 @@ cli_follow(int argc, char **argv)
 
 	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_ALL);
 
+	/*
+	 * Refrain from logging SQL statements in the apply module, because they
+	 * contain user data. That said, when --trace has been used, bypass that
+	 * privacy feature.
+	 */
+	bool logSQL = log_get_level() <= LOG_TRACE;
+
 	StreamSpecs specs = { 0 };
 
 	if (!stream_init_specs(&specs,
 						   &(copySpecs.cfPaths.cdc),
 						   copySpecs.source_pguri,
 						   copySpecs.target_pguri,
-						   copyDBoptions.plugin,
-						   copyDBoptions.slotName,
+						   &(copyDBoptions.slot),
 						   copyDBoptions.origin,
 						   copyDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
 						   copyDBoptions.stdIn,
-						   copyDBoptions.stdOut))
+						   copyDBoptions.stdOut,
+						   logSQL))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	/*
+	 * First create/export a snapshot for the whole clone --follow operations.
+	 */
+	if (!follow_export_snapshot(&copySpecs, &specs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	/*
 	 * First create the replication slot on the source database, and the origin
 	 * (replication progress tracking) on the target database.
 	 */
-	if (!stream_setup_databases(&copySpecs,
-								specs.plugin,
-								specs.slotName,
-								specs.origin))
+	if (!follow_setup_databases(&copySpecs, &specs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -655,6 +680,12 @@ cli_clone_follow_wait_subprocess(const char *name, pid_t pid)
 {
 	bool exited = false;
 	int returnCode = -1;
+
+	if (pid < 0)
+	{
+		log_error("BUG: cli_clone_follow_wait_subprocess(%s, %d)", name, pid);
+		return false;
+	}
 
 	while (!exited)
 	{

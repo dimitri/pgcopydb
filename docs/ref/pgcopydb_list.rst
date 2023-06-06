@@ -10,6 +10,7 @@ This command prefixes the following sub-commands:
 ::
 
   pgcopydb list
+    databases    List databases
     extensions   List all the source extensions to copy
     collations   List all the source collations to copy
     tables       List all the source tables to copy data from
@@ -20,6 +21,24 @@ This command prefixes the following sub-commands:
     schema       List the schema to migrate, formatted in JSON
     progress     List the progress
 
+
+.. _pgcopydb_list_databases:
+
+pgcopydb list databases
+-----------------------
+
+pgcopydb list databases - List databases
+
+The command ``pgcopydb list databases`` connects to the source database and
+executes a SQL query using the Postgres catalogs to get a list of all the
+databases there.
+
+::
+
+   pgcopydb list databases: List databases
+   usage: pgcopydb list databases  --source ...
+
+     --source            Postgres URI to the source database
 
 .. _pgcopydb_list_extensions:
 
@@ -219,7 +238,9 @@ list of all the tables and indexes that are currently being processed.
     usage: pgcopydb list progress  --source ...
 
       --source  Postgres URI to the source database
+      --summary List the summary, requires --json
       --json    Format the output using JSON
+      --dir     Work directory to use
 
 
 Options
@@ -261,6 +282,15 @@ The following options are available to ``pgcopydb dump schema``:
   Instead of listing objects that are selected for copy by the filters
   installed with the ``--filter`` option, list the objects that are going to
   be skipped when using the filters.
+
+--summary
+
+  Instead of listing current progress when the command is still running,
+  instead list the summary with timing details for each step and for all
+  tables, indexes, and constraints.
+
+  This options requires the ``--json`` option too: at the moment only this
+  output format is supported.
 
 --json
 

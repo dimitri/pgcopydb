@@ -200,12 +200,36 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 				seq->nspname,
 				seq->relname);
 
+		if (!pgsql_savepoint(&dst, "sequences"))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
 		if (!schema_set_sequence_value(&dst, seq))
 		{
-			/* just skip this one */
-			log_warn("Failed to set sequence values for %s", qname);
+			log_error("Failed to set sequence values for %s", qname);
+
+			if (specs->failFast)
+			{
+				(void) pgsql_commit(&dst);
+				return false;
+			}
+
+			if (!pgsql_rollback_to_savepoint(&dst, "sequences"))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
 			++errors;
 			continue;
+		}
+
+		if (!pgsql_release_savepoint(&dst, "sequences"))
+		{
+			/* errors have already been logged */
+			return false;
 		}
 	}
 

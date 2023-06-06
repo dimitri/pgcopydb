@@ -16,6 +16,26 @@
 /* the pg_restore -l output uses "schema name owner" */
 #define RESTORE_LIST_NAMEDATALEN (3 * NAMEDATALEN + 3)
 
+/*
+ * In the SQL standard we have "catalogs", which are then Postgres databases.
+ * Much the same confusion as with namespace vs schema.
+ */
+typedef struct SourceCatalog
+{
+	uint32_t oid;
+	char datname[NAMEDATALEN];
+	int64_t bytes;
+	char bytesPretty[NAMEDATALEN]; /* pg_size_pretty */
+}
+SourceCatalog;
+
+typedef struct SourceCatalogArray
+{
+	int count;
+	SourceCatalog *array;
+} SourceCatalogArray;
+
+
 typedef struct SourceSchema
 {
 	uint32_t oid;
@@ -71,7 +91,7 @@ typedef struct SourceCollation
 {
 	uint32_t oid;
 	char collname[NAMEDATALEN];
-	char desc[BUFSIZE];
+	char *desc;                 /* malloc'ed area */
 	char restoreListName[RESTORE_LIST_NAMEDATALEN];
 } SourceCollation;
 
@@ -105,6 +125,20 @@ typedef struct SourceTablePartsArray
 } SourceTablePartsArray;
 
 
+typedef struct SourceTableAttribute
+{
+	int attnum;
+	uint32_t atttypid;
+	char attname[NAMEDATALEN];
+	bool attisprimary;
+} SourceTableAttribute;
+
+typedef struct SourceTableAttributeArray
+{
+	int count;
+	SourceTableAttribute *array; /* malloc'ed area */
+} SourceTableAttributeArray;
+
 /* forward declaration */
 struct SourceIndexList;
 
@@ -121,6 +155,8 @@ typedef struct SourceTable
 	char restoreListName[RESTORE_LIST_NAMEDATALEN];
 	char partKey[NAMEDATALEN];
 	SourceTablePartsArray partsArray;
+
+	SourceTableAttributeArray attributes;
 
 	struct SourceIndexList *firstIndex;
 	struct SourceIndexList *lastIndex;
@@ -143,6 +179,7 @@ typedef struct SourceTableArray
 typedef struct SourceSequence
 {
 	uint32_t oid;
+	uint32_t attroid;           /* pg_attrdef default value OID */
 	char nspname[NAMEDATALEN];
 	char relname[NAMEDATALEN];
 	int64_t lastValue;
@@ -172,11 +209,11 @@ typedef struct SourceIndex
 	char tableRelname[NAMEDATALEN];
 	bool isPrimary;
 	bool isUnique;
-	char indexColumns[BUFSIZE];
-	char indexDef[BUFSIZE];
+	char *indexColumns;         /* malloc'ed area */
+	char *indexDef;             /* malloc'ed area */
 	uint32_t constraintOid;
 	char constraintName[NAMEDATALEN];
-	char constraintDef[BUFSIZE];
+	char *constraintDef;        /* malloc'ed area */
 	char indexRestoreListName[RESTORE_LIST_NAMEDATALEN];
 	char constraintRestoreListName[RESTORE_LIST_NAMEDATALEN];
 
@@ -228,6 +265,8 @@ typedef struct SourceDependArray
 bool schema_query_privileges(PGSQL *pgsql,
 							 bool *hasDBCreatePrivilage,
 							 bool *hasDBTempPrivilege);
+
+bool schema_list_catalogs(PGSQL *pgsql, SourceCatalogArray *catArray);
 
 bool schema_list_ext_schemas(PGSQL *pgsql, SourceSchemaArray *array);
 

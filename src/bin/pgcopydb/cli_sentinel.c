@@ -238,6 +238,12 @@ cli_sentinel_getopts(int argc, char **argv)
 
 					case 2:
 					{
+						log_set_level(LOG_SQL);
+						break;
+					}
+
+					case 3:
+					{
 						log_set_level(LOG_DEBUG);
 						break;
 					}
@@ -253,14 +259,14 @@ cli_sentinel_getopts(int argc, char **argv)
 
 			case 'd':
 			{
-				verboseCount = 2;
+				verboseCount = 3;
 				log_set_level(LOG_DEBUG);
 				break;
 			}
 
 			case 'z':
 			{
-				verboseCount = 3;
+				verboseCount = 4;
 				log_set_level(LOG_TRACE);
 				break;
 			}
@@ -336,26 +342,7 @@ cli_sentinel_create(int argc, char **argv)
 
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
-	RestoreOptions restoreOptions = { 0 };
-
-	if (!copydb_init_specs(&copySpecs,
-						   sentinelDBoptions.source_pguri,
-						   sentinelDBoptions.target_pguri,
-						   1,   /* tableJobs */
-						   1,   /* indexJobs */
-						   0,   /* skip threshold */
-						   "",  /* skip threshold pretty printed */
-						   DATA_SECTION_ALL,
-						   sentinelDBoptions.snapshot,
-						   restoreOptions,
-						   false, /* roles */
-						   false, /* skipLargeObjects */
-						   false, /* skipExtensions */
-						   false, /* skipCollations */
-						   false, /* noRolesPasswords */
-						   sentinelDBoptions.restart,
-						   sentinelDBoptions.resume,
-						   !sentinelDBoptions.notConsistent))
+	if (!copydb_init_specs(&copySpecs, &sentinelDBoptions, DATA_SECTION_ALL))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
