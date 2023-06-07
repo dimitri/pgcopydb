@@ -383,18 +383,29 @@ pg_dump_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = (char *) snapshot;
 	}
 
+	/* we use up to PG_DUMP_CMD_RESERVED_ARG other args array items beside schema filtering */
+
+	int total_filter_args = 2 * (includeSchemaList->count + excludeSchemaList->count);
+	if ((argsIndex  + total_filter_args) > (PG_CMD_MAX_ARG - PG_DUMP_CMD_RESERVED_ARG))
+	{
+		log_fatal("Too many include or exclude schema filters specified, "
+				"only %d filters are supported by pgcopydb. "
+				"Optimize filters or use multiple steps.",
+				PG_CMD_MAX_ARG - PG_DUMP_CMD_RESERVED_ARG);
+		return false;
+	}
+
+
 	if (includeSchemaList->count > 0)
 	{
 		log_notice("Dumping with inclusion filters...");
 
 		for (int i = 0; i < includeSchemaList->count; i++)
 		{
-			if (argsIndex > PG_CMD_MAX_ARG - 9)
-			{
-				log_error("Too many schema filters specified to run pg_dump. Optimize filters or use multiple steps.");
-				return false;
-			}
-
+			/*
+			* Using -n instead of --include-schema to shorten potentially long command line in
+			* case of many filters
+			*/
 			args[argsIndex++] = "-n";
 			args[argsIndex++] = includeSchemaList->array[i].nspname;
 		}
@@ -406,12 +417,10 @@ pg_dump_db(PostgresPaths *pgPaths,
 
 		for (int i = 0; i < excludeSchemaList->count; i++)
 		{
-			if (argsIndex > PG_CMD_MAX_ARG - 9)
-			{
-				log_error("Too many schema filters specified to run pg_dump. Optimize filters or use multiple steps.");
-				return false;
-			}
-
+			/*
+			* Using -N instead of --exclude-schema to shorten potentially long command line in
+			* case of many filters
+			*/
 			args[argsIndex++] = "-N";
 			args[argsIndex++] = excludeSchemaList->array[i].nspname;
 		}
@@ -419,25 +428,6 @@ pg_dump_db(PostgresPaths *pgPaths,
 
 	args[argsIndex++] = "--section";
 	args[argsIndex++] = (char *) section;
-
-	/* we use 10 other args array items beside schema filtering */
-	if (128 < (filters->excludeSchemaList.count + 10))
-	{
-		log_fatal("Failed to pg_dump section %s when using %d exclude-schema "
-				  "filters, only %d filters are supported by pgcopydb",
-				  section,
-				  filters->excludeSchemaList.count,
-				  128 - 10);
-		return false;
-	}
-
-	for (int i = 0; i < filters->excludeSchemaList.count; i++)
-	{
-		char *nspname = filters->excludeSchemaList.array[i].nspname;
-
-		args[argsIndex++] = "--exclude-schema";
-		args[argsIndex++] = nspname;
-	}
 
 	args[argsIndex++] = "--file";
 	args[argsIndex++] = (char *) filename;
@@ -844,27 +834,14 @@ pg_restore_db(PostgresPaths *pgPaths,
 	}
 
 	/* we use 15 other args array items beside schema filtering */
-	if (128 < (filters->excludeSchemaList.count + 15))
+	int total_filter_args = 2 * (includeSchemaList->count + excludeSchemaList->count);
+	if ((argsIndex  + total_filter_args) > (PG_CMD_MAX_ARG - PG_RESTORE_CMD_RESERVED_ARG))
 	{
-		log_fatal("Failed to pg_restore using %d exclude-schema "
-				  "filters, only %d filters are supported by pgcopydb",
-				  filters->excludeSchemaList.count,
-				  128 - 15);
+		log_fatal("Too many include or exclude schema filters specified, "
+				"only %d filters are supported by pgcopydb. "
+				"Optimize filters or use multiple steps.",
+				PG_CMD_MAX_ARG - PG_RESTORE_CMD_RESERVED_ARG);
 		return false;
-	}
-
-	for (int i = 0; i < filters->excludeSchemaList.count; i++)
-	{
-		char *nspname = filters->excludeSchemaList.array[i].nspname;
-
-		args[argsIndex++] = "--exclude-schema";
-		args[argsIndex++] = nspname;
-	}
-
-	if (listFilename != NULL)
-	{
-		args[argsIndex++] = "--use-list";
-		args[argsIndex++] = (char *) listFilename;
 	}
 
 	if (includeSchemaList->count > 0)
@@ -873,12 +850,10 @@ pg_restore_db(PostgresPaths *pgPaths,
 
 		for (int i = 0; i < includeSchemaList->count; i++)
 		{
-			if (argsIndex > PG_CMD_MAX_ARG - 9)
-			{
-				log_error("Too many schema filters specified to run pg_restore. Optimize filters or use multiple steps.");
-				return false;
-			}
-
+			/*
+			* Using -n instead of --include-schema to shorten potentially long command line in
+			* case of many filters
+			*/
 			args[argsIndex++] = "-n";
 			args[argsIndex++] = includeSchemaList->array[i].nspname;
 		}
@@ -890,15 +865,19 @@ pg_restore_db(PostgresPaths *pgPaths,
 
 		for (int i = 0; i < excludeSchemaList->count; i++)
 		{
-			if (argsIndex > PG_CMD_MAX_ARG - 9)
-			{
-				log_error("Too many schema filters specified to run pg_restore. Optimize filters or use multiple steps.");
-				return false;
-			}
-
+			/*
+			* Using -N instead of --exclude-schema to shorten potentially long command line in
+			* case of many filters
+			*/
 			args[argsIndex++] = "-N";
 			args[argsIndex++] = excludeSchemaList->array[i].nspname;
 		}
+	}
+
+	if (listFilename != NULL)
+	{
+		args[argsIndex++] = "--use-list";
+		args[argsIndex++] = (char *) listFilename;
 	}
 
 	/* verbose output */

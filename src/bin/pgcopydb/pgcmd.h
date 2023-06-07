@@ -22,6 +22,8 @@
 
 #define PG_VERSION_STRING_MAX 12
 #define PG_CMD_MAX_ARG 256
+#define PG_DUMP_CMD_RESERVED_ARG 10
+#define PG_RESTORE_CMD_RESERVED_ARG 15
 
 typedef struct PostgresPaths
 {

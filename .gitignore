@@ -41,3 +41,5 @@ lib*.pc
 /env/
 /GIT-VERSION-FILE
 /version
+/tests/schema-filter
+.vscode/

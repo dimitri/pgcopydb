@@ -1622,13 +1622,13 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"              and d.objid = s.oid "
 		"              and d.deptype = 'e' "
 		"         ) "
-		"    ) "
+		" ) "
 
 		/*
 		 * pg_depend link between sequence and table is AUTO except for
 		 * identity sequences where it's INTERNAL.
 		 */
-		"    select s.seqoid, s.nspname, s.relname, s.restore_list_name, "
+		"  select s.seqoid, s.nspname, s.relname, s.restore_list_name, "
 		"           NULL as attroid "
 		"      from seqs as s "
 
@@ -1648,8 +1648,8 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"       left join pg_temp.filter_include_only_table ft "
 		"         on rn.nspname = ft.nspname "
 		"        and r.relname = ft.relname "
-		
-		"  where (fn.nspname is not null or ft.relname is not null)"
+
+		"     where (fn.nspname is not null or ft.relname is not null)"
 
 
 		"  union all "
@@ -1682,10 +1682,10 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"       left join pg_temp.filter_include_only_table ft "
 		"         on rn.nspname = ft.nspname "
 		"        and r.relname = ft.relname "
-		
-		"  where (fn.nspname is not null or ft.relname is not null)"
 
-		"order by s.nspname, s.relname"
+		"     where (fn.nspname is not null or ft.relname is not null)"
+
+		"order by nspname, relname"
 	},
 
 	{
@@ -1718,7 +1718,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"              and d.objid = s.oid "
 		"              and d.deptype = 'e' "
 		"         ) "
-		"    ) "
+		" ) "
 
 		/*
 		 * pg_depend link between sequence and table is AUTO except for
@@ -1738,17 +1738,17 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 
 		/* exclude-schema */
 		"      left join pg_temp.filter_exclude_schema fn "
-		"             on rn.nspname = fn.nspname "
+		"        on rn.nspname = fn.nspname "
 
 		/* exclude-table */
 		"      left join pg_temp.filter_exclude_table ft "
-		"             on rn.nspname = ft.nspname "
-		"            and r.relname = ft.relname "
+		"        on rn.nspname = ft.nspname "
+		"       and r.relname = ft.relname "
 
 		/* exclude-table-data */
 		"      left join pg_temp.filter_exclude_table_data ftd "
-		"             on rn.nspname = ftd.nspname "
-		"            and r.relname = ftd.relname "
+		"        on rn.nspname = ftd.nspname "
+		"       and r.relname = ftd.relname "
 
 		/* WHERE clause for exclusion filters */
 		"     where fn.nspname is null "
@@ -1778,24 +1778,24 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 
 		/* exclude-schema */
 		"      left join pg_temp.filter_exclude_schema fn "
-		"             on rn.nspname = fn.nspname "
+		"        on rn.nspname = fn.nspname "
 
 		/* exclude-table */
 		"      left join pg_temp.filter_exclude_table ft "
-		"             on rn.nspname = ft.nspname "
-		"            and r.relname = ft.relname "
+		"        on rn.nspname = ft.nspname "
+		"       and r.relname = ft.relname "
 
 		/* exclude-table-data */
 		"      left join pg_temp.filter_exclude_table_data ftd "
-		"             on rn.nspname = ftd.nspname "
-		"            and r.relname = ftd.relname "
+		"        on rn.nspname = ftd.nspname "
+		"       and r.relname = ftd.relname "
 
 		/* WHERE clause for exclusion filters */
 		"     where fn.nspname is null "
 		"       and ft.relname is null "
 		"       and ftd.relname is null "
 
-		"  order by s.nspname, s.relname"
+		"  order by nspname, relname"
 	},
 
 	{
@@ -1828,7 +1828,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"              and d.objid = s.oid "
 		"              and d.deptype = 'e' "
 		"         ) "
-		"    ) "
+		" ) "
 
 		/*
 		 * pg_depend link between sequence and table is AUTO except for
@@ -1847,8 +1847,8 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"       join pg_namespace rn on rn.oid = r.relnamespace "
 
 		/* include-only-schema */
-		"    left join pg_temp.filter_include_only_schema fn "
-		"      on rn.nspname = fn.nspname "
+		"       left join pg_temp.filter_include_only_schema fn "
+		"         on rn.nspname = fn.nspname "
 
 		/* include-only-table */
 		"    left join pg_temp.filter_include_only_table ft "
@@ -1892,7 +1892,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"     and fn.nspname is null "
 
 
-		"  order by s.nspname, s.relname"
+		"  order by nspname, relname"
 	},
 
 	{
@@ -1925,7 +1925,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"              and d.objid = s.oid "
 		"              and d.deptype = 'e' "
 		"         ) "
-		"    ) "
+		" ) "
 
 		/*
 		 * pg_depend link between sequence and table is AUTO except for
@@ -1993,7 +1993,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"     and (   fn.nspname is not null "
 		"          or ft.relname is not null) "
 
-		"   order by s.nspname, s.relname"
+		"  order by nspname, relname"
 	},
 };
 
