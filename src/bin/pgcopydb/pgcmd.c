@@ -369,7 +369,7 @@ pg_dump_db(PostgresPaths *pgPaths,
 	if (!IS_EMPTY_STRING_BUFFER(safeURI.password))
 	{
 		if (pgpassword_found_in_env &&
-			!get_env_copy("PGPASSWORD", PGPASSWORD, strlen(pguri)+1))
+			!get_env_dup("PGPASSWORD", PGPASSWORD, NULL))
 		{
 			/* errors have already been logged */
 			return false;
@@ -492,7 +492,7 @@ pg_dumpall_roles(PostgresPaths *pgPaths,
 	if (!IS_EMPTY_STRING_BUFFER(safeURI.password))
 	{
 		if (pgpassword_found_in_env &&
-			!get_env_copy("PGPASSWORD", PGPASSWORD, len))
+			!get_env_dup("PGPASSWORD", PGPASSWORD, NULL))
 		{
 			/* errors have already been logged */
 			return false;
@@ -788,7 +788,7 @@ pg_restore_db(PostgresPaths *pgPaths,
 	if (!IS_EMPTY_STRING_BUFFER(safeURI.password))
 	{
 		if (pgpassword_found_in_env &&
-			!get_env_copy("PGPASSWORD", PGPASSWORD, strlen(pguri)+1))
+			!get_env_dup("PGPASSWORD", PGPASSWORD, NULL))
 		{
 			/* errors have already been logged */
 			return false;

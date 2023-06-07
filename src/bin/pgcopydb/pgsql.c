@@ -177,14 +177,7 @@ pgsql_init(PGSQL *pgsql, char *url, ConnectionType connectionType)
 	if (validate_connection_string(url))
 	{
 		/* size of url has already been validated. */
-		size_t len = strlen(url) + 1;
-		pgsql->connectionString = (char *) calloc(len, sizeof(char));
-		if (pgsql->connectionString == NULL) {
-			// Log or handle the error when memory allocation fails
-			log_error(ALLOCATION_FAILED_ERROR);
-			return false;
-		}
-		strlcpy(pgsql->connectionString, url, len);
+		pgsql->connectionString = url;
 	}
 	else
 	{

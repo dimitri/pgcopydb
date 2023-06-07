@@ -117,13 +117,13 @@ get_env_copy_with_fallback(const char *name, char *result, int maxLength,
 }
 
 /*
- * get_env_copy_dynamic copies the environment variable with "name" into
- * the result buffer. It returns false when it fails. If the environment
+ * get_env_dup copies the environment variable with "name" into
+ * the result buffer using strdup. It returns false when it fails. If the environment
  * variable is not set the fallback string will be written in the buffer.
  * Except when fallback is NULL, in that case an error is returned.
  */
 bool
-get_env_copy_dynamic(const char *name, char **result, const char *fallback)
+get_env_dup(const char *name, char **result, const char *fallback)
 {
 	if (name == NULL || strlen(name) == 0)
 	{
@@ -148,16 +148,7 @@ get_env_copy_dynamic(const char *name, char **result, const char *fallback)
 			return false;
 		}
 	}
-
-	size_t len = strlen(envvalue) + 1;
-    *result = (char *) calloc(len, sizeof(char));
-    if (*result == NULL) {
-        // Log or handle the error when memory allocation fails
-		log_error(ALLOCATION_FAILED_ERROR);
-        return false;
-    }
-
-	strlcpy(*result, envvalue, len);
+	*result = strdup(envvalue);
 
 	return true;
 }

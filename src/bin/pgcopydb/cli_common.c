@@ -171,7 +171,7 @@ cli_copydb_getenv(CopyDBOptions *options)
 	/* now some of the options can be also set from the environment */
 	if (env_exists(PGCOPYDB_SOURCE_PGURI))
 	{
-		if (!get_env_copy_dynamic(PGCOPYDB_SOURCE_PGURI,
+		if (!get_env_dup(PGCOPYDB_SOURCE_PGURI,
 						  &(options->source_pguri),
 						  NULL))
 		{
@@ -182,7 +182,7 @@ cli_copydb_getenv(CopyDBOptions *options)
 
 	if (env_exists(PGCOPYDB_TARGET_PGURI))
 	{
-		if (!get_env_copy_dynamic(PGCOPYDB_TARGET_PGURI,
+		if (!get_env_dup(PGCOPYDB_TARGET_PGURI,
 						  &(options->target_pguri),
 						  NULL))
 		{
@@ -717,13 +717,7 @@ cli_copy_db_getopts(int argc, char **argv)
 							  "see above for details.");
 					++errors;
 				}
-				size_t len = strlen(optarg) + 1;
-				options.source_pguri = (char *) calloc(len, sizeof(char));
-				if (options.source_pguri  == NULL) {
-					log_error(ALLOCATION_FAILED_ERROR);
-					break;
-				}
-				strlcpy(options.source_pguri, optarg, len);
+				options.source_pguri = strdup(optarg);
 				log_trace("--source %s", options.source_pguri);
 				break;
 			}
@@ -736,13 +730,7 @@ cli_copy_db_getopts(int argc, char **argv)
 							  "see above for details.");
 					++errors;
 				}
-				size_t len = strlen(optarg) + 1;
-				options.target_pguri = (char *) calloc(len, sizeof(char));
-				if (options.target_pguri  == NULL) {
-					log_error(ALLOCATION_FAILED_ERROR);
-					break;
-				}
-				strlcpy(options.target_pguri, optarg, len);
+				options.target_pguri = strdup(optarg);
 				log_trace("--target %s", options.target_pguri);
 				break;
 			}

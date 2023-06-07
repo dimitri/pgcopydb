@@ -187,13 +187,7 @@ cli_restore_schema_getopts(int argc, char **argv)
 							  "see above for details.");
 					exit(EXIT_CODE_BAD_ARGS);
 				}
-				size_t len = strlen(optarg) + 1;
-				options.source_pguri = (char *) calloc(len, sizeof(char));
-				if (options.source_pguri  == NULL) {
-					log_error(ALLOCATION_FAILED_ERROR);
-					break;
-				}
-				strlcpy(options.source_pguri, optarg, len);
+				options.source_pguri = strdup(optarg);
 				log_trace("--source %s", options.source_pguri);
 				break;
 			}
@@ -206,13 +200,7 @@ cli_restore_schema_getopts(int argc, char **argv)
 							  "see above for details.");
 					exit(EXIT_CODE_BAD_ARGS);
 				}
-				size_t len = strlen(optarg) + 1;
-				options.target_pguri = (char *) calloc(len, sizeof(char));
-				if (options.target_pguri  == NULL) {
-					log_error(ALLOCATION_FAILED_ERROR);
-					break;
-				}
-				strlcpy(options.target_pguri, optarg, len);
+				options.target_pguri = strdup(optarg);
 				log_trace("--target %s", options.target_pguri);
 				break;
 			}
