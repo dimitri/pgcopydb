@@ -32,6 +32,12 @@
 #include "summary.h"
 
 
+GUC applySettings[] = {
+	COMMON_GUC_SETTINGS,
+	{ "session_replication_role", "'replica'" },
+	{ NULL, NULL },
+};
+
 /*
  * stream_apply_catchup catches up with SQL files that have been prepared by
  * either the `pgcopydb stream prefetch` command.
@@ -582,6 +588,13 @@ stream_apply_sql(StreamApplyContext *context,
 			if (!pgsql_begin(pgsql))
 			{
 				/* errors have already been logged */
+				return false;
+			}
+
+			if (!pgsql_set_gucs(pgsql, applySettings))
+			{
+				log_error("Failed to set the apply GUC settings, "
+						  "see above for details");
 				return false;
 			}
 
