@@ -29,15 +29,7 @@ copydb_copy_snapshot(CopyDataSpec *specs, TransactionSnapshot *snapshot)
 
 	/* remember if the replication slot has been created already */
 	snapshot->exportedCreateSlotSnapshot = source->exportedCreateSlotSnapshot;
-
-	size_t len = strlen(source->pguri) + 1;
-	snapshot->pguri = (char *) calloc(len, sizeof(char));
-	if (snapshot->pguri  == NULL) {
-		// Log or handle the error when memory allocation fails
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-	strlcpy(snapshot->pguri, source->pguri, len);
+	snapshot->pguri = strdup(source->pguri);
 	strlcpy(snapshot->snapshot, source->snapshot, sizeof(snapshot->snapshot));
 
 	return true;

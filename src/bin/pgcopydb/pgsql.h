@@ -167,7 +167,7 @@ typedef struct PGSQL
 {
 	ConnectionType connectionType;
 	ConnectionStatementType connectionStatementType;
-	char *connectionString;
+	char *connectionString;		/* malloc'ed area */
 	PGconn *connection;
 	ConnectionRetryPolicy retryPolicy;
 	PGConnStatus status;

@@ -220,8 +220,8 @@ typedef struct CopyDataSpec
 	SourceFilterItem *hOid;     /* hash table of objects, by Oid */
 	SourceFilterItem *hName;    /* hash table of objects, by pg_restore name */
 
-	char *source_pguri;
-	char *target_pguri;
+	char *source_pguri; 	    /* malloc'ed area */
+	char *target_pguri;         /* malloc'ed area */
 
 	TransactionSnapshot sourceSnapshot;
 
