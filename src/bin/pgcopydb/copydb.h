@@ -76,7 +76,7 @@ typedef struct TransactionSnapshot
 	TransactionSnapshotKind kind;
 	TransactionSnapshotState state;
 
-	char *pguri;
+	char *pguri;  	/* malloc'ed area */
 	PGSQL pgsql;
 
 	bool exportedCreateSlotSnapshot;

@@ -353,7 +353,8 @@ pg_dump_db(PostgresPaths *pgPaths,
 	size_t len = strlen(pguri) + 1;
 	char *PGPASSWORD = (char *) calloc(len, sizeof(char));
 	safeURI.password = (char *) calloc(len, sizeof(char));
-	if (PGPASSWORD  == NULL || safeURI.password  == NULL) {
+	if (PGPASSWORD  == NULL || safeURI.password  == NULL)
+	{
 		log_error(ALLOCATION_FAILED_ERROR);
 		return false;
 	}
@@ -475,7 +476,8 @@ pg_dumpall_roles(PostgresPaths *pgPaths,
 	size_t len = strlen(pguri) + 1;
 	char *PGPASSWORD = (char *) calloc(len, sizeof(char));
 	safeURI.password = (char *) calloc(len, sizeof(char));
-	if (PGPASSWORD  == NULL || safeURI.password  == NULL) {
+	if (PGPASSWORD  == NULL || safeURI.password  == NULL)
+	{
 		log_error(ALLOCATION_FAILED_ERROR);
 		return false;
 	}
@@ -771,7 +773,8 @@ pg_restore_db(PostgresPaths *pgPaths,
 	size_t len = strlen(pguri) + 1;
 	char *PGPASSWORD = (char *) calloc(len, sizeof(char));
 	safeURI.password = (char *) calloc(len, sizeof(char));
-	if (PGPASSWORD  == NULL || safeURI.password  == NULL) {
+	if (PGPASSWORD  == NULL || safeURI.password  == NULL)
+	{
 		log_error(ALLOCATION_FAILED_ERROR);
 		return false;
 	}
