@@ -59,11 +59,10 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 		}
 		else if (!pg_dump_db(&(specs->pgPaths),
 							 specs->source_pguri,
+							 &(specs->filters),
 							 snapshot,
 							 "pre-data",
-							 specs->dumpPaths.preFilename,
-							 &(specs->filters.includeOnlySchemaList),
-							 &(specs->filters.excludeSchemaList)))
+							 specs->dumpPaths.preFilename))
 		{
 			/* errors have already been logged */
 			return false;
@@ -90,11 +89,10 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 		}
 		else if (!pg_dump_db(&(specs->pgPaths),
 							 specs->source_pguri,
+							 &(specs->filters),
 							 snapshot,
 							 "post-data",
-							 specs->dumpPaths.postFilename,
-							 &(specs->filters.includeOnlySchemaList),
-							 &(specs->filters.excludeSchemaList)))
+							 specs->dumpPaths.postFilename))
 		{
 			/* errors have already been logged */
 			return false;
@@ -157,8 +155,10 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 		}
 	}
 
-	/* if restoring specific schemas as specified in the inclusion filter
-		make sure they exist in the target database, if not create them.
+	/*
+	 * if restoring specific schemas as specified in the inclusion filter,
+	 * make sure they exist in the target database, if not create them.
+	 * This helps with table inclusion filters when copying to new schema.
 	 */
 	 if (specs->filters.includeOnlySchemaList.count > 0)
 	 {
@@ -175,9 +175,7 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 					   &(specs->filters),
 					   specs->dumpPaths.preFilename,
 					   specs->dumpPaths.preListFilename,
-					   specs->restoreOptions,
-					   &(specs->filters.includeOnlySchemaList),
-					   &(specs->filters.excludeSchemaList)))
+					   specs->restoreOptions))
 	{
 		/* errors have already been logged */
 		return false;
@@ -291,9 +289,7 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 					   &(specs->filters),
 					   specs->dumpPaths.postFilename,
 					   specs->dumpPaths.postListFilename,
-					   specs->restoreOptions,
-					   &(specs->filters.includeOnlySchemaList),
-					   &(specs->filters.excludeSchemaList)))
+					   specs->restoreOptions))
 	{
 		/* errors have already been logged */
 		return false;

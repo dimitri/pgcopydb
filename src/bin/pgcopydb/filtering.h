@@ -97,6 +97,5 @@ typedef struct SourceFilters
 char * filterTypeToString(SourceFilterType type);
 SourceFilterType filterTypeComplement(SourceFilterType type);
 bool parse_filters(const char *filebname, SourceFilters *filters);
-char * schemaFiltersJoin(char *dest, size_t dest_size, SourceFilterSchemaList *filters, char *separator);
 
 #endif  /* FILTERING_H */

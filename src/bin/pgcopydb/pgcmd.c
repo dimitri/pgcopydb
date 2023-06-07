@@ -339,11 +339,10 @@ set_psql_from_pg_config(PostgresPaths *pgPaths)
 bool
 pg_dump_db(PostgresPaths *pgPaths,
 		   const char *pguri,
+		   SourceFilters *filters,
 		   const char *snapshot,
 		   const char *section,
-		   const char *filename,
-		   const SourceFilterSchemaList *includeSchemaList,
-		   const SourceFilterSchemaList *excludeSchemaList)
+		   const char *filename)
 {
 	char *args[PG_CMD_MAX_ARG];
 	int argsIndex = 0;
@@ -385,7 +384,7 @@ pg_dump_db(PostgresPaths *pgPaths,
 
 	/* we use up to PG_DUMP_CMD_RESERVED_ARG other args array items beside schema filtering */
 
-	int total_filter_args = 2 * (includeSchemaList->count + excludeSchemaList->count);
+	int total_filter_args = 2 * ((filters->includeOnlySchemaList.count) + (filters->excludeSchemaList.count));
 	if ((argsIndex  + total_filter_args) > (PG_CMD_MAX_ARG - PG_DUMP_CMD_RESERVED_ARG))
 	{
 		log_fatal("Too many include or exclude schema filters specified, "
@@ -396,33 +395,33 @@ pg_dump_db(PostgresPaths *pgPaths,
 	}
 
 
-	if (includeSchemaList->count > 0)
+	if (filters->includeOnlySchemaList.count > 0)
 	{
 		log_notice("Dumping with inclusion filters...");
 
-		for (int i = 0; i < includeSchemaList->count; i++)
+		for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
 		{
 			/*
 			* Using -n instead of --include-schema to shorten potentially long command line in
 			* case of many filters
 			*/
 			args[argsIndex++] = "-n";
-			args[argsIndex++] = includeSchemaList->array[i].nspname;
+			args[argsIndex++] = filters->includeOnlySchemaList.array[i].nspname;
 		}
 	}
 
-	if (excludeSchemaList->count > 0)
+	if (filters->excludeSchemaList.count > 0)
 	{
 		log_notice("Dumping with exclusion filters...");
 
-		for (int i = 0; i < excludeSchemaList->count; i++)
+		for (int i = 0; i < filters->excludeSchemaList.count; i++)
 		{
 			/*
 			* Using -N instead of --exclude-schema to shorten potentially long command line in
 			* case of many filters
 			*/
 			args[argsIndex++] = "-N";
-			args[argsIndex++] = excludeSchemaList->array[i].nspname;
+			args[argsIndex++] = filters->excludeSchemaList.array[i].nspname;
 		}
 	}
 
@@ -774,9 +773,7 @@ pg_restore_db(PostgresPaths *pgPaths,
 			  SourceFilters *filters,
 			  const char *dumpFilename,
 			  const char *listFilename,
-			  RestoreOptions options,
-		      const SourceFilterSchemaList *includeSchemaList,
-		      const SourceFilterSchemaList *excludeSchemaList)
+			  RestoreOptions options)
 {
 	char *args[PG_CMD_MAX_ARG];
 	int argsIndex = 0;
@@ -834,7 +831,7 @@ pg_restore_db(PostgresPaths *pgPaths,
 	}
 
 	/* we use 15 other args array items beside schema filtering */
-	int total_filter_args = 2 * (includeSchemaList->count + excludeSchemaList->count);
+	int total_filter_args = 2 * ((filters->includeOnlySchemaList.count) + (filters->excludeSchemaList.count));
 	if ((argsIndex  + total_filter_args) > (PG_CMD_MAX_ARG - PG_RESTORE_CMD_RESERVED_ARG))
 	{
 		log_fatal("Too many include or exclude schema filters specified, "
@@ -844,33 +841,33 @@ pg_restore_db(PostgresPaths *pgPaths,
 		return false;
 	}
 
-	if (includeSchemaList->count > 0)
+	if (filters->includeOnlySchemaList.count > 0)
 	{
 		log_notice("Restoring with inclusion filters...");
 
-		for (int i = 0; i < includeSchemaList->count; i++)
+		for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
 		{
 			/*
 			* Using -n instead of --include-schema to shorten potentially long command line in
 			* case of many filters
 			*/
 			args[argsIndex++] = "-n";
-			args[argsIndex++] = includeSchemaList->array[i].nspname;
+			args[argsIndex++] = filters->includeOnlySchemaList.array[i].nspname;
 		}
 	}
 
-	if (excludeSchemaList->count > 0)
+	if (filters->excludeSchemaList.count > 0)
 	{
 		log_notice("Restoring with exclusion filters...");
 
-		for (int i = 0; i < excludeSchemaList->count; i++)
+		for (int i = 0; i < filters->excludeSchemaList.count; i++)
 		{
 			/*
 			* Using -N instead of --exclude-schema to shorten potentially long command line in
 			* case of many filters
 			*/
 			args[argsIndex++] = "-N";
-			args[argsIndex++] = excludeSchemaList->array[i].nspname;
+			args[argsIndex++] = filters->excludeSchemaList.array[i].nspname;
 		}
 	}
 
@@ -879,9 +876,6 @@ pg_restore_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = "--use-list";
 		args[argsIndex++] = (char *) listFilename;
 	}
-
-	/* verbose output */
-	//args[argsIndex++] = "--verbose";
 
 	args[argsIndex++] = (char *) dumpFilename;
 

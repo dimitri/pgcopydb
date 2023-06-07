@@ -88,11 +88,10 @@ bool set_psql_from_pg_config(PostgresPaths *pgPaths);
 
 bool pg_dump_db(PostgresPaths *pgPaths,
 				const char *pguri,
+				SourceFilters *filters,
 				const char *snapshot,
 				const char *section,
-				const char *filename,
-				const SourceFilterSchemaList *includeSchemaList,
-				const SourceFilterSchemaList *excludeSchemaList);
+				const char *filename);
 
 bool pg_dumpall_roles(PostgresPaths *pgPaths,
 					  const char *pguri,
@@ -114,9 +113,7 @@ bool pg_restore_db(PostgresPaths *pgPaths,
 				   SourceFilters *filters,
 				   const char *dumpFilename,
 				   const char *listFilename,
-				   RestoreOptions options,
-				   const SourceFilterSchemaList *includeSchemaList,
-				   const SourceFilterSchemaList *excludeSchemaList);
+				   RestoreOptions options);
 
 bool pg_restore_list(PostgresPaths *pgPaths, const char *filename,
 					 ArchiveContentArray *archive);
