@@ -1321,7 +1321,8 @@ cli_list_schema(int argc, char **argv)
 	}
 	/* allocating it to the length of listDBoptions.source_pguri as ListDBOptions does not have target_pguri */
 	options.target_pguri = calloc(strlen(listDBoptions.source_pguri)+1, sizeof(char));
-	if(options.target_pguri == NULL){
+	if(options.target_pguri == NULL)
+	{
 		log_error(ALLOCATION_FAILED_ERROR);
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
