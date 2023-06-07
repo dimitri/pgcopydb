@@ -421,7 +421,7 @@ bool copydb_prepare_create_constraint_command(SourceIndex *index,
 
 bool copydb_create_constraints(CopyDataSpec *spec, SourceTable *table);
 
-bool copydb_target_create_snpname(CopyDataSpec *specs);
+bool copydb_target_prepare_namespaces(CopyDataSpec *specs);
 
 /* dump_restore.c */
 bool copydb_dump_source_schema(CopyDataSpec *specs,

@@ -290,7 +290,7 @@ set_logger()
 
 		if (get_env_copy("PGCOPYDB_LOG", env_log_file, BUFSIZE) > 0)
 		{
-			if (log_fp = fopen(env_log_file, "w"))
+			if ((log_fp = fopen(env_log_file, "w"))) /* extra parenthesis around assignment to avoid compiler warnings */
 			{
 				log_set_fp(log_fp);
 			}

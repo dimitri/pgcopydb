@@ -162,7 +162,7 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 	 */
 	 if (specs->filters.includeOnlySchemaList.count > 0)
 	 {
-		if (!copydb_target_create_snpname(specs))
+		if (!copydb_target_prepare_namespaces(specs))
 		{
 			/* errors have already been logged */
 			return false;
@@ -440,19 +440,19 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 
 
 /*
- * copydb_target_prepare_snpname prepares and executes a SQL query that creates
+ * copydb_target_prepare_namespaces prepares and executes a SQL query that creates
  * target schema by means of a CREATE IF NOT EXISTS ... statement that
  * includes all inclusion schemas.
  */
 bool
-copydb_target_create_snpname(CopyDataSpec *specs)
+copydb_target_prepare_namespaces(CopyDataSpec *specs)
 {
 	log_info("Creating schemas specified in inclusion filter...");
 
 	PQExpBuffer query = createPQExpBuffer();
 	for (int i = 0; i < specs->filters.includeOnlySchemaList.count; i++)
 	{
-		appendPQExpBuffer(query, "CREATE SCHEMA IF NOT EXISTS \"%s\"",
+		appendPQExpBuffer(query, "CREATE SCHEMA IF NOT EXISTS \"%s\";",
 						  specs->filters.includeOnlySchemaList.array[i].nspname);
 	}
 
