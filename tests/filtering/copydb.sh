@@ -45,7 +45,7 @@ find .
 
 pgopts="--single-transaction --no-psqlrc --expanded"
 
-for f in ./sql/3-*.sql
+for f in ./sql/*.sql
 do
     t=`basename $f .sql`
     r=/tmp/results/${t}.out
