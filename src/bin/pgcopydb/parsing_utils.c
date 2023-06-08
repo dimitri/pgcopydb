@@ -941,6 +941,11 @@ extract_connection_string_password(const char *pguri, SafeURI *safeURI)
 			if (option->val != NULL)
 			{
 				safeURI->password = strdup(option->val);
+				if (safeURI->password == NULL)
+				{
+					log_error(ALLOCATION_FAILED_ERROR);
+					return false;
+				}
 			}
 			continue;
 		}

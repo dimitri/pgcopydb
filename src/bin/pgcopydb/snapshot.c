@@ -229,7 +229,7 @@ copydb_close_snapshot(CopyDataSpec *copySpecs)
 			/* only COMMIT sql snapshot kinds, no need for logical rep ones */
 			if (!pgsql_commit(pgsql))
 			{
-				char *pguri = (char *) calloc(strlen(snapshot->pguri)+1, sizeof(char));
+				char *pguri = (char *) calloc(strlen(snapshot->pguri) + 1, sizeof(char));
 
 				(void) parse_and_scrub_connection_string(snapshot->pguri, pguri);
 

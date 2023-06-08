@@ -633,12 +633,12 @@ copydb_init_specs(CopyDataSpec *specs,
 		.cfPaths = specs->cfPaths,
 		.pgPaths = specs->pgPaths,
 
-		.source_pguri = !IS_EMPTY_STRING_BUFFER(options->source_pguri) ? options->source_pguri : NULL,
-		.target_pguri = !IS_EMPTY_STRING_BUFFER(options->target_pguri) ? options->target_pguri : NULL,
+		.source_pguri = options->source_pguri,
+		.target_pguri = options->target_pguri,
 
 		.sourceSnapshot = {
 			.pgsql = { 0 },
-			.pguri = !IS_EMPTY_STRING_BUFFER(options->source_pguri) ? options->source_pguri : NULL,
+			.pguri = options->source_pguri,
 			.connectionType = PGSQL_CONN_SOURCE,
 			.snapshot = { 0 }
 		},
@@ -679,8 +679,10 @@ copydb_init_specs(CopyDataSpec *specs,
 
 		.sourceTableHashByOid = NULL
 	};
-	if(tmpCopySpecs.source_pguri == NULL || tmpCopySpecs.target_pguri == NULL || tmpCopySpecs.sourceSnapshot.pguri == NULL)
+	if (tmpCopySpecs.source_pguri == NULL || tmpCopySpecs.target_pguri == NULL ||
+		tmpCopySpecs.sourceSnapshot.pguri == NULL)
 	{
+		log_error(ALLOCATION_FAILED_ERROR);
 		return false;
 	}
 
@@ -775,8 +777,8 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 		.cfPaths = &(specs->cfPaths),
 		.pgPaths = &(specs->pgPaths),
 
-		.source_pguri = !IS_EMPTY_STRING_BUFFER(specs->source_pguri) ? specs->source_pguri : NULL,
-		.target_pguri = !IS_EMPTY_STRING_BUFFER(specs->target_pguri) ? specs->target_pguri : NULL,
+		.source_pguri = specs->source_pguri,
+		.target_pguri = specs->target_pguri,
 
 		.section = specs->section,
 		.resume = specs->resume,
@@ -791,8 +793,9 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 		.indexSemaphore = &(specs->indexSemaphore)
 	};
 
-	if(tmpTableSpecs.source_pguri == NULL || tmpTableSpecs.target_pguri == NULL)
+	if (tmpTableSpecs.source_pguri == NULL || tmpTableSpecs.target_pguri == NULL)
 	{
+		log_error(ALLOCATION_FAILED_ERROR);
 		return false;
 	}
 
