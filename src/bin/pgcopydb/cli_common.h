@@ -24,7 +24,7 @@ typedef struct CopyDBOptions
 {
 	char dir[MAXPGPATH];
 
-	char *source_pguri;		/* malloc'ed area */
+	char *source_pguri;     /* malloc'ed area */
 	char *target_pguri;     /* malloc'ed area */
 
 	int tableJobs;

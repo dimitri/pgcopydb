@@ -116,6 +116,7 @@ get_env_copy_with_fallback(const char *name, char *result, int maxLength,
 	return true;
 }
 
+
 /*
  * get_env_dup copies the environment variable with "name" into
  * the result buffer using strdup. It returns false when it fails. If the environment
@@ -149,10 +150,14 @@ get_env_dup(const char *name, char **result, const char *fallback)
 		}
 	}
 	*result = strdup(envvalue);
+	if (*result == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
 
 	return true;
 }
-
 
 
 /*
