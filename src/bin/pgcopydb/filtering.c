@@ -260,10 +260,13 @@ parse_filters(const char *filename, SourceFilters *filters)
 	 * and any other filtering rule, which are exclusion rules. Otherwise it's
 	 * unclear what to do with tables that are not excluded and not included
 	 * either.
+	 *
+	 * Using both exclude-schema and include-only-table sections is allowed,
+	 * the user needs to pay attention not to exclude schemas of tables that
+	 * are then to be included only.
 	 */
 	if (filters->includeOnlyTableList.count > 0 &&
-		(filters->excludeTableList.count > 0 ||
-		 filters->excludeSchemaList.count > 0))
+		filters->excludeTableList.count > 0)
 	{
 		log_error("Filtering setup in \"%s\" contains "
 				  "%d entries in \"%s\" section and %d entries in \"%s\" "
@@ -274,6 +277,20 @@ parse_filters(const char *filename, SourceFilters *filters)
 				  filters->excludeTableList.count,
 				  "exclude-table");
 		return false;
+	}
+
+	if (filters->includeOnlyTableList.count > 0 &&
+		filters->excludeSchemaList.count > 0)
+	{
+		log_warn("Filtering setup in \"%s\" contains %d entries "
+				 "in \"%s\" section and %d entries in \"%s\" section, "
+				 "please make sure not to filter-out schema of "
+				 "tables you want to include",
+				 filename,
+				 filters->includeOnlyTableList.count,
+				 "include-only-table",
+				 filters->excludeSchemaList.count,
+				 "exclude-schema");
 	}
 
 	/*

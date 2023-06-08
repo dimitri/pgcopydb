@@ -15,9 +15,27 @@ pgcopydb ping
 
 psql -o /tmp/s.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-schema.sql
 psql -o /tmp/d.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
+psql -o /tmp/e.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pgcopydb/extra.sql
 
-# pgcopydb clone uses the environment variables
-pgcopydb clone --filters /usr/src/pgcopydb/include.ini
+# list the exclude filters now, and the computed dependencies
+cat /usr/src/pgcopydb/exclude.ini
+
+# list the dependencies of objects that are selected by the filters
+pgcopydb list depends --filters /usr/src/pgcopydb/exclude.ini
+
+# list the dependencies of objects that are NOT selected by the filters
+pgcopydb list depends --filters /usr/src/pgcopydb/exclude.ini --list-skipped
+
+# list the sequences that are selected
+pgcopydb list sequences --filters /usr/src/pgcopydb/exclude.ini
+
+# list the sequences that are NOT selected
+pgcopydb list sequences --filters /usr/src/pgcopydb/exclude.ini --list-skipped
+
+pgcopydb clone --filters /usr/src/pgcopydb/exclude.ini
+
+# now another migration with the "include-only" parts of the data
+pgcopydb clone --filters /usr/src/pgcopydb/include.ini --restart
 
 # now compare the output of running the SQL command with what's expected
 # as we're not root when running tests, can't write in /usr/src

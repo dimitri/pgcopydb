@@ -1028,20 +1028,22 @@ cli_list_sequences(int argc, char **argv)
 
 	log_info("Fetched information for %d sequences", sequenceArray.count);
 
-	fformat(stdout, "%8s | %20s | %30s\n",
-			"OID", "Schema Name", "Sequence Name");
+	fformat(stdout, "%8s | %20s | %30s | %10s \n",
+			"OID", "Schema Name", "Sequence Name", "attroid");
 
-	fformat(stdout, "%8s-+-%20s-+-%30s\n",
+	fformat(stdout, "%8s-+-%20s-+-%30s-+-%10s\n",
 			"--------",
 			"--------------------",
-			"------------------------------");
+			"------------------------------",
+			"----------");
 
 	for (int i = 0; i < sequenceArray.count; i++)
 	{
-		fformat(stdout, "%8d | %20s | %30s\n",
+		fformat(stdout, "%8d | %20s | %30s | %10d\n",
 				sequenceArray.array[i].oid,
 				sequenceArray.array[i].nspname,
-				sequenceArray.array[i].relname);
+				sequenceArray.array[i].relname,
+				sequenceArray.array[i].attroid);
 	}
 
 	fformat(stdout, "\n");
@@ -1243,7 +1245,7 @@ cli_list_depends(int argc, char **argv)
 
 			if (filters.type == SOURCE_FILTER_TYPE_NONE)
 			{
-				log_error("BUG: can't list skipped sequences "
+				log_error("BUG: can't list skipped dependencies "
 						  " from filtering type %d",
 						  filters.type);
 				exit(EXIT_CODE_INTERNAL_ERROR);
