@@ -305,6 +305,29 @@ copydb_table_array_as_json(SourceTableArray *tableArray,
 
 		json_object_set_string(jsTableObj, "part-key", table->partKey);
 
+		/* now add table attributes (columns) */
+		SourceTableAttributeArray *attributes = &(table->attributes);
+
+		JSON_Value *jsAttrs = json_value_init_array();
+		JSON_Array *jsAttrArray = json_value_get_array(jsAttrs);
+
+		for (int attrIndex = 0; attrIndex < attributes->count; attrIndex++)
+		{
+			SourceTableAttribute *attr = &(attributes->array[attrIndex]);
+
+			JSON_Value *jsAttr = json_value_init_object();
+			JSON_Object *jsAttrObj = json_value_get_object(jsAttr);
+
+			json_object_set_number(jsAttrObj, "attnum", attr->attnum);
+			json_object_set_number(jsAttrObj, "atttypid", attr->atttypid);
+			json_object_set_string(jsAttrObj, "attname", attr->attname);
+			json_object_set_boolean(jsAttrObj, "attisprimary", attr->attisprimary);
+
+			json_array_append_value(jsAttrArray, jsAttr);
+		}
+
+		json_object_set_value(jsTableObj, "cols", jsAttrs);
+
 		/* if we have COPY partitioning, create an array of parts */
 		JSON_Value *jsParts = json_value_init_array();
 		JSON_Array *jsPartArray = json_value_get_array(jsParts);
@@ -550,6 +573,39 @@ copydb_parse_schema_json_file(CopyDataSpec *copySpecs)
 
 		strlcpy(table->partKey, partKey, sizeof(table->partKey));
 
+		if (json_object_has_value(jsTable, "cols"))
+		{
+			JSON_Array *jsAttrsArray = json_object_get_array(jsTable, "cols");
+			int attrsCount = json_array_get_count(jsAttrsArray);
+
+			table->attributes.count = attrsCount;
+			table->attributes.array =
+				(SourceTableAttribute *)
+				calloc(attrsCount, sizeof(SourceTableAttribute));
+
+			if (table->attributes.array == NULL)
+			{
+				log_fatal(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			for (int i = 0; i < attrsCount; i++)
+			{
+				SourceTableAttribute *attr = &(table->attributes.array[i]);
+				JSON_Object *jsAttr = json_array_get_object(jsAttrsArray, i);
+
+				attr->attnum = json_object_get_number(jsAttr, "attnum");
+				attr->atttypid = json_object_get_number(jsAttr, "atttypid");
+
+				strlcpy(attr->attname,
+						json_object_get_string(jsAttr, "attname"),
+						sizeof(attr->attname));
+
+				attr->attisprimary =
+					json_object_get_boolean(jsAttr, "attisprimary");
+			}
+		}
+
 		if (json_object_has_value(jsTable, "parts"))
 		{
 			JSON_Array *jsPartsArray = json_object_get_array(jsTable, "parts");
@@ -558,6 +614,12 @@ copydb_parse_schema_json_file(CopyDataSpec *copySpecs)
 			table->partsArray.count = partsCount;
 			table->partsArray.array =
 				(SourceTableParts *) calloc(partsCount, sizeof(SourceTableParts));
+
+			if (table->partsArray.array == NULL)
+			{
+				log_fatal(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
 
 			for (int i = 0; i < partsCount; i++)
 			{
@@ -717,10 +779,22 @@ copydb_update_progress(CopyDataSpec *copySpecs, CopyProgress *progress)
 	progress->tableInProgress.array =
 		(SourceTable *) calloc(copySpecs->tableJobs, sizeof(SourceTable));
 
+	if (progress->tableInProgress.array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
 	progress->tableSummaryArray.count = 0;
 	progress->tableSummaryArray.array =
 		(CopyTableSummary *) calloc(copySpecs->tableJobs,
 									sizeof(CopyTableSummary));
+
+	if (progress->tableSummaryArray.array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
 
 	SourceTableArray *tableInProgress = &(progress->tableInProgress);
 	CopyTableSummaryArray *summaryArray = &(progress->tableSummaryArray);
@@ -831,11 +905,22 @@ copydb_update_progress(CopyDataSpec *copySpecs, CopyProgress *progress)
 	progress->indexInProgress.array =
 		(SourceIndex *) calloc(copySpecs->indexJobs, sizeof(SourceIndex));
 
+	if (progress->indexInProgress.array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
 	progress->indexSummaryArray.count = 0;
 	progress->indexSummaryArray.array =
 		(CopyIndexSummary *) calloc(copySpecs->indexJobs,
 									sizeof(CopyIndexSummary));
 
+	if (progress->indexSummaryArray.array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
 
 	SourceIndexArray *indexInProgress = &(progress->indexInProgress);
 	CopyIndexSummaryArray *summaryArrayIdx = &(progress->indexSummaryArray);
