@@ -172,8 +172,7 @@ cli_copydb_getenv(CopyDBOptions *options)
 	if (env_exists(PGCOPYDB_SOURCE_PGURI))
 	{
 		if (!get_env_dup(PGCOPYDB_SOURCE_PGURI,
-						 &(options->source_pguri),
-						 NULL))
+						 &(options->source_pguri)))
 		{
 			/* errors have already been logged */
 			++errors;
@@ -183,8 +182,7 @@ cli_copydb_getenv(CopyDBOptions *options)
 	if (env_exists(PGCOPYDB_TARGET_PGURI))
 	{
 		if (!get_env_dup(PGCOPYDB_TARGET_PGURI,
-						 &(options->target_pguri),
-						 NULL))
+						 &(options->target_pguri)))
 		{
 			/* errors have already been logged */
 			++errors;
@@ -717,7 +715,7 @@ cli_copy_db_getopts(int argc, char **argv)
 							  "see above for details.");
 					++errors;
 				}
-				options.source_pguri = strdup(optarg);
+				options.source_pguri = pg_strdup(optarg);
 				log_trace("--source %s", options.source_pguri);
 				break;
 			}
@@ -730,7 +728,7 @@ cli_copy_db_getopts(int argc, char **argv)
 							  "see above for details.");
 					++errors;
 				}
-				options.target_pguri = strdup(optarg);
+				options.target_pguri = pg_strdup(optarg);
 				log_trace("--target %s", options.target_pguri);
 				break;
 			}

@@ -670,13 +670,6 @@ copydb_init_specs(CopyDataSpec *specs,
 		.catalog = { 0 },
 		.tableSpecsArray = { 0, NULL }
 	};
-	if (tmpCopySpecs.source_pguri == NULL || tmpCopySpecs.target_pguri == NULL ||
-		tmpCopySpecs.sourceSnapshot.pguri == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
 
 	if (!IS_EMPTY_STRING_BUFFER(options->snapshot))
 	{
@@ -783,12 +776,6 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 
 		.indexSemaphore = &(specs->indexSemaphore)
 	};
-
-	if (tmpTableSpecs.source_pguri == NULL || tmpTableSpecs.target_pguri == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
 
 	/* copy the structure as a whole memory area to the target place */
 	*tableSpecs = tmpTableSpecs;

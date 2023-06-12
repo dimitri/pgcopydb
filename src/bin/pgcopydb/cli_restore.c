@@ -187,7 +187,7 @@ cli_restore_schema_getopts(int argc, char **argv)
 							  "see above for details.");
 					exit(EXIT_CODE_BAD_ARGS);
 				}
-				options.source_pguri = strdup(optarg);
+				options.source_pguri = pg_strdup(optarg);
 				log_trace("--source %s", options.source_pguri);
 				break;
 			}
@@ -200,7 +200,7 @@ cli_restore_schema_getopts(int argc, char **argv)
 							  "see above for details.");
 					exit(EXIT_CODE_BAD_ARGS);
 				}
-				options.target_pguri = strdup(optarg);
+				options.target_pguri = pg_strdup(optarg);
 				log_trace("--target %s", options.target_pguri);
 				break;
 			}
