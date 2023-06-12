@@ -350,9 +350,7 @@ pg_dump_db(PostgresPaths *pgPaths,
 
 	SafeURI safeURI = { 0 };
 	bool pgpassword_found_in_env = env_exists("PGPASSWORD");
-	size_t len = strlen(pguri) + 1;
-	char *PGPASSWORD = (char *) calloc(len, sizeof(char));
-	safeURI.password = (char *) calloc(len, sizeof(char));
+	char *PGPASSWORD = NULL;
 	if (!extract_connection_string_password(pguri, &safeURI))
 	{
 		/* errors have already been logged */
@@ -365,7 +363,7 @@ pg_dump_db(PostgresPaths *pgPaths,
 	if (!IS_EMPTY_STRING_BUFFER(safeURI.password))
 	{
 		if (pgpassword_found_in_env &&
-			!get_env_dup("PGPASSWORD", PGPASSWORD, NULL))
+			!get_env_dup("PGPASSWORD", &(PGPASSWORD)))
 		{
 			/* errors have already been logged */
 			return false;
@@ -468,9 +466,7 @@ pg_dumpall_roles(PostgresPaths *pgPaths,
 
 	SafeURI safeURI = { 0 };
 	bool pgpassword_found_in_env = env_exists("PGPASSWORD");
-	size_t len = strlen(pguri) + 1;
-	char *PGPASSWORD = (char *) calloc(len, sizeof(char));
-	safeURI.password = (char *) calloc(len, sizeof(char));
+	char *PGPASSWORD = NULL;
 
 	if (!extract_connection_string_password(pguri, &safeURI))
 	{
@@ -484,7 +480,7 @@ pg_dumpall_roles(PostgresPaths *pgPaths,
 	if (!IS_EMPTY_STRING_BUFFER(safeURI.password))
 	{
 		if (pgpassword_found_in_env &&
-			!get_env_dup("PGPASSWORD", PGPASSWORD, NULL))
+			!get_env_dup("PGPASSWORD", &(PGPASSWORD)))
 		{
 			/* errors have already been logged */
 			return false;
@@ -760,9 +756,7 @@ pg_restore_db(PostgresPaths *pgPaths,
 
 	SafeURI safeURI = { 0 };
 	bool pgpassword_found_in_env = env_exists("PGPASSWORD");
-	size_t len = strlen(pguri) + 1;
-	char *PGPASSWORD = (char *) calloc(len, sizeof(char));
-	safeURI.password = (char *) calloc(len, sizeof(char));
+	char *PGPASSWORD = NULL;
 
 	if (!extract_connection_string_password(pguri, &safeURI))
 	{
@@ -776,7 +770,7 @@ pg_restore_db(PostgresPaths *pgPaths,
 	if (!IS_EMPTY_STRING_BUFFER(safeURI.password))
 	{
 		if (pgpassword_found_in_env &&
-			!get_env_dup("PGPASSWORD", PGPASSWORD, NULL))
+			!get_env_dup("PGPASSWORD", &(PGPASSWORD)))
 		{
 			/* errors have already been logged */
 			return false;

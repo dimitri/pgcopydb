@@ -229,7 +229,7 @@ cli_list_db_getopts(int argc, char **argv)
 							  "see above for details.");
 					exit(EXIT_CODE_BAD_ARGS);
 				}
-				options.source_pguri = strdup(optarg);
+				options.source_pguri = pg_strdup(optarg);
 				log_trace("--source %s", options.source_pguri);
 				break;
 			}
@@ -1317,14 +1317,6 @@ cli_list_schema(int argc, char **argv)
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_BAD_ARGS);
-	}
-
-	/* allocating it to the length of listDBoptions.source_pguri as ListDBOptions does not have target_pguri */
-	options.target_pguri = calloc(strlen(listDBoptions.source_pguri) + 1, sizeof(char));
-	if (options.target_pguri == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	if (!copydb_init_specs(&copySpecs, &options, DATA_SECTION_ALL))

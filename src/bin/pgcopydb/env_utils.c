@@ -118,13 +118,13 @@ get_env_copy_with_fallback(const char *name, char *result, int maxLength,
 
 
 /*
- * get_env_dup copies the environment variable with "name" into
+ * get_env_dup_with_fallback copies the environment variable with "name" into
  * the result buffer using strdup. It returns false when it fails. If the environment
  * variable is not set the fallback string will be written in the buffer.
  * Except when fallback is NULL, in that case an error is returned.
  */
 bool
-get_env_dup(const char *name, char **result, const char *fallback)
+get_env_dup_with_fallback(const char *name, char **result, const char *fallback)
 {
 	if (name == NULL || strlen(name) == 0)
 	{
@@ -157,6 +157,18 @@ get_env_dup(const char *name, char **result, const char *fallback)
 	}
 
 	return true;
+}
+
+
+/*
+ * get_env_dup copies the environmennt variable with "name" into the result
+ * buffer using strdup. It returns false when it fails. The environment variable not
+ * existing is also considered a failure.
+ */
+bool
+get_env_dup(const char *name, char **result)
+{
+	return get_env_dup_with_fallback(name, result, NULL);
 }
 
 

@@ -76,7 +76,7 @@ cli_ping_getopts(int argc, char **argv)
 							  "see above for details.");
 					++errors;
 				}
-				options.source_pguri = strdup(optarg);
+				options.source_pguri = pg_strdup(optarg);
 				log_trace("--source %s", options.source_pguri);
 				break;
 			}
@@ -89,7 +89,7 @@ cli_ping_getopts(int argc, char **argv)
 							  "see above for details.");
 					++errors;
 				}
-				options.target_pguri = strdup(optarg);
+				options.target_pguri = pg_strdup(optarg);
 				log_trace("--target %s", options.target_pguri);
 				break;
 			}
