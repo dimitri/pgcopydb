@@ -235,6 +235,23 @@ typedef struct SourceIndexList
 } SourceIndexList;
 
 
+typedef struct SourceFKey
+{
+	uint32_t oid;
+	char conname[NAMEDATALEN];
+	char rnspname[NAMEDATALEN];
+	char rrelname[NAMEDATALEN];
+	char fnspname[NAMEDATALEN];
+	char frelname[NAMEDATALEN];
+	char *constraintDef;        /* malloc'ed area */
+} SourceFKey;
+
+typedef struct SourceFKeysArray
+{
+	int count;
+	SourceFKey *array;          /* malloc'ed area */
+} SourceFKeysArray;
+
 /*
  * SourceDepend caches the information about the dependency graph of
  * filtered-out objects. When filtering-out a table, we want to also filter-out
@@ -309,8 +326,16 @@ bool schema_list_table_indexes(PGSQL *pgsql,
 							   const char *tableName,
 							   SourceIndexArray *indexArray);
 
+bool schema_list_fkeys(PGSQL *pgsql,
+					   SourceFilters *filters,
+					   SourceFKeysArray *fkeysArray);
+
 bool schema_list_pg_depend(PGSQL *pgsql,
 						   SourceFilters *filters,
 						   SourceDependArray *dependArray);
+
+bool schema_list_pg_reverse_depend(PGSQL *pgsql,
+								   SourceFilters *filters,
+								   SourceDependArray *dependArray);
 
 #endif /* SCHEMA_H */

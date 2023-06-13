@@ -286,6 +286,8 @@ bool pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 							   const Oid *paramTypes, const char **paramValues,
 							   void *parseContext, ParsePostgresResultCB *parseFun);
 
+bool pgsql_send_and_fetch(PGSQL *pgsql, const char *sql);
+
 void pgAutoCtlDebugNoticeProcessor(void *arg, const char *message);
 
 bool hostname_from_uri(const char *pguri,

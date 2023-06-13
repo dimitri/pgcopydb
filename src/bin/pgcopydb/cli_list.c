@@ -33,6 +33,7 @@ static void cli_list_tables(int argc, char **argv);
 static void cli_list_table_parts(int argc, char **argv);
 static void cli_list_sequences(int argc, char **argv);
 static void cli_list_indexes(int argc, char **argv);
+static void cli_list_fkeys(int argc, char **argv);
 static void cli_list_depends(int argc, char **argv);
 static void cli_list_schema(int argc, char **argv);
 static void cli_list_progress(int argc, char **argv);
@@ -117,6 +118,17 @@ static CommandLine list_indexes_command =
 		cli_list_db_getopts,
 		cli_list_indexes);
 
+static CommandLine list_fkeys_command =
+	make_command(
+		"foreign-keys",
+		"List all the foreign keys to create again after copying the data",
+		" --source ... [ --schema-name [ --table-name ] ]",
+		"  --source            Postgres URI to the source database\n"
+		"  --filter <filename> Use the filters defined in <filename>\n"
+		"  --list-skipped      List only tables that are setup to be skipped\n",
+		cli_list_db_getopts,
+		cli_list_fkeys);
+
 static CommandLine list_depends_command =
 	make_command(
 		"depends",
@@ -125,6 +137,7 @@ static CommandLine list_depends_command =
 		"  --source            Postgres URI to the source database\n"
 		"  --schema-name       Name of the schema where to find the table\n"
 		"  --table-name        Name of the target table\n"
+		"  --reverse           List reverse dependencies\n"
 		"  --filter <filename> Use the filters defined in <filename>\n"
 		"  --list-skipped      List only tables that are setup to be skipped\n",
 		cli_list_db_getopts,
@@ -161,6 +174,7 @@ static CommandLine *list_subcommands[] = {
 	&list_table_parts_command,
 	&list_sequences_command,
 	&list_indexes_command,
+	&list_fkeys_command,
 	&list_depends_command,
 	&list_schema_command,
 	&list_progress_command,
@@ -187,6 +201,7 @@ cli_list_db_getopts(int argc, char **argv)
 		{ "dir", required_argument, NULL, 'D' },
 		{ "schema-name", required_argument, NULL, 's' },
 		{ "table-name", required_argument, NULL, 't' },
+		{ "reverse", no_argument, NULL, 'R' },
 		{ "filter", required_argument, NULL, 'F' },
 		{ "filters", required_argument, NULL, 'F' },
 		{ "list-skipped", no_argument, NULL, 'x' },
@@ -209,7 +224,7 @@ cli_list_db_getopts(int argc, char **argv)
 
 	optind = 0;
 
-	while ((c = getopt_long(argc, argv, "S:T:D:j:s:t:PL:cCJVvdzqh",
+	while ((c = getopt_long(argc, argv, "S:D:s:t:RF:xPL:cCyJVdzvqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -259,6 +274,13 @@ cli_list_db_getopts(int argc, char **argv)
 							  options.filterFileName);
 					++errors;
 				}
+				break;
+			}
+
+			case 'R':
+			{
+				options.reverse = true;
+				log_trace("--reverse");
 				break;
 			}
 
@@ -398,6 +420,13 @@ cli_list_db_getopts(int argc, char **argv)
 			{
 				commandline_help(stderr);
 				exit(EXIT_CODE_QUIT);
+				break;
+			}
+
+			case '?':
+			{
+				commandline_help(stderr);
+				exit(EXIT_CODE_BAD_ARGS);
 				break;
 			}
 
@@ -1213,6 +1242,94 @@ cli_list_indexes(int argc, char **argv)
 
 
 /*
+ * cli_list_fkeys implements the command: pgcopydb list foreign-keys
+ */
+static void
+cli_list_fkeys(int argc, char **argv)
+{
+	PGSQL pgsql = { 0 };
+	SourceFKeysArray fkeysArray = { 0, NULL };
+
+	char scrubbedSourceURI[MAXCONNINFO] = { 0 };
+
+	(void) parse_and_scrub_connection_string(listDBoptions.source_pguri,
+											 scrubbedSourceURI);
+
+	log_info("Listing fkeyes in \"%s\"", scrubbedSourceURI);
+
+	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	log_info("Fetching all foreign-keys in source database");
+
+	SourceFilters filters = { 0 };
+
+	if (!IS_EMPTY_STRING_BUFFER(listDBoptions.filterFileName))
+	{
+		if (!parse_filters(listDBoptions.filterFileName, &filters))
+		{
+			log_error("Failed to parse filters in file \"%s\"",
+					  listDBoptions.filterFileName);
+			exit(EXIT_CODE_BAD_ARGS);
+		}
+
+		if (listDBoptions.listSkipped)
+		{
+			if (filters.type != SOURCE_FILTER_TYPE_NONE)
+			{
+				filters.type = filterTypeComplement(filters.type);
+
+				if (filters.type == SOURCE_FILTER_TYPE_NONE)
+				{
+					log_error("BUG: can't list skipped fkeyes "
+							  " from filtering type %d",
+							  filters.type);
+					exit(EXIT_CODE_INTERNAL_ERROR);
+				}
+			}
+		}
+	}
+
+	if (!schema_list_fkeys(&pgsql, &filters, &fkeysArray))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_info("Fetched information for %d fkeys", fkeysArray.count);
+
+	fformat(stdout, "%8s | %35s | %10s | %20s | %10s | %20s\n",
+			"OID", "Name", "Schema", "Table name", "Schema", "Table name");
+
+	fformat(stdout, "%8s-+-%35s-+-%10s-+-%20s-+-%10s-+-%20s\n",
+			"--------",
+			"-----------------------------------",
+			"----------",
+			"--------------------",
+			"----------",
+			"--------------------");
+
+	for (int i = 0; i < fkeysArray.count; i++)
+	{
+		SourceFKey *fkey = &(fkeysArray.array[i]);
+
+		fformat(stdout, "%8d | %35s | %10s | %20s | %10s | %20s\n",
+				fkey->oid,
+				fkey->conname,
+				fkey->rnspname,
+				fkey->rrelname,
+				fkey->fnspname,
+				fkey->frelname);
+	}
+
+	fformat(stdout, "\n");
+}
+
+
+/*
  * cli_list_indexes implements the command: pgcopydb list depends
  */
 static void
@@ -1259,10 +1376,21 @@ cli_list_depends(int argc, char **argv)
 		exit(EXIT_CODE_SOURCE);
 	}
 
-	if (!schema_list_pg_depend(&pgsql, &filters, &dependArray))
+	if (listDBoptions.reverse)
 	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
+		if (!schema_list_pg_reverse_depend(&pgsql, &filters, &dependArray))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+	}
+	else
+	{
+		if (!schema_list_pg_depend(&pgsql, &filters, &dependArray))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
 	}
 
 	log_info("Fetched information for %d dependencies", dependArray.count);

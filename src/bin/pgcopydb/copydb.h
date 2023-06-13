@@ -159,6 +159,13 @@ typedef struct CopyTableDataSpecsArray
 } CopyTableDataSpecsArray;
 
 
+typedef struct OidArray
+{
+	int count;
+	uint32_t *array;            /* malloc'ed area */
+} OidArray;
+
+
 /*
  * Build a hash-table of all the SQL level objects that we filter-out when
  * applying our filtering rules. We need to find those objects again when
@@ -270,6 +277,9 @@ typedef struct CopyDataSpec
 
 	SourceTable *sourceTableHashByOid;
 	SourceIndex *sourceIndexHashByOid;
+
+	/* store --ddl-dir oids */
+	OidArray customDDLOidArray;
 } CopyDataSpec;
 
 
@@ -439,6 +449,20 @@ bool copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
 												uint32_t oid);
 
 bool copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section);
+
+bool copydb_write_restore_ddl_list(const char *filename,
+								   ArchiveContentArray *preList,
+								   uint32_t oid);
+
+bool copydb_export_ddl(CopyDataSpec *specs,
+					   ArchiveContentArray *list,
+					   uint32_t oid,
+					   const char *regclass,
+					   const char *name);
+
+bool copydb_objectid_has_custom_ddl(CopyDataSpec *specs, uint32_t oid);
+
+bool copydb_apply_custom_ddl(CopyDataSpec *specs, uint32_t oid);
 
 /* sequences.c */
 bool copydb_copy_all_sequences(CopyDataSpec *specs);

@@ -88,6 +88,14 @@ typedef struct SourceIndexArrayContext
 	bool parsedOk;
 } SourceIndexArrayContext;
 
+/* Context used when fetching all the table foreign keys */
+typedef struct SourceFKeysArrayContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	SourceFKeysArray *fkeysArray;
+	bool parsedOk;
+} SourceFKeysArrayContext;
+
 /* Context used when fetching all the table dependencies */
 typedef struct SourceDependArrayContext
 {
@@ -140,6 +148,12 @@ static void getIndexArray(void *ctx, PGresult *result);
 static bool parseCurrentSourceIndex(PGresult *result,
 									int rowNumber,
 									SourceIndex *index);
+
+static void getFkeysArray(void *ctx, PGresult *result);
+
+static bool parseCurrentSourceFKeys(PGresult *result,
+									int rowNumber,
+									SourceFKey *fkey);
 
 static void getDependArray(void *ctx, PGresult *result);
 
@@ -2603,6 +2617,257 @@ schema_list_table_indexes(PGSQL *pgsql,
 /*
  * For code simplicity the index array is also the SourceFilterType enum value.
  */
+struct FilteringQueries listSourceFKeysSQL[] = {
+	{
+		SOURCE_FILTER_TYPE_NONE,
+
+		"  select r.oid, r.conname, "
+		"         nf.nspname, cf.relname, "
+		"         nr.nspname, cr.relname, "
+		"         pg_catalog.pg_get_constraintdef(r.oid, true) as condef "
+
+		"    from pg_catalog.pg_constraint r "
+		"         join pg_catalog.pg_class cr ON cr.oid = r.conrelid "
+		"         join pg_catalog.pg_class cf ON cf.oid = r.confrelid "
+		"         join pg_catalog.pg_namespace nr ON nr.oid = cr.relnamespace "
+		"         join pg_catalog.pg_namespace nf ON nf.oid = cf.relnamespace "
+
+		"   where r.contype = 'f'"
+		"     and cf.relkind = 'r' and cf.relpersistence in ('p', 'u') "
+		"     and nf.nspname !~ '^pg_' and nf.nspname <> 'information_schema'"
+		"     and nf.nspname !~ 'pgcopydb' "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = cf.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+
+		" order by nf.nspname, cf.relname"
+	},
+
+	{
+		SOURCE_FILTER_TYPE_INCL,
+
+		"  select r.oid, r.conname, "
+		"         nf.nspname, cf.relname, "
+		"         nr.nspname, cr.relname, "
+		"         pg_catalog.pg_get_constraintdef(r.oid, true) as condef "
+
+		"    from pg_catalog.pg_constraint r "
+		"         join pg_catalog.pg_class cr ON cr.oid = r.conrelid "
+		"         join pg_catalog.pg_class cf ON cf.oid = r.confrelid "
+		"         join pg_catalog.pg_namespace nr ON nr.oid = cr.relnamespace "
+		"         join pg_catalog.pg_namespace nf ON nf.oid = cf.relnamespace "
+
+		/* include-only-table */
+		"       join pg_temp.filter_include_only_table inc "
+		"         on nf.nspname = inc.nspname "
+		"        and cf.relname = inc.relname "
+
+		"   where r.contype = 'f'"
+		"     and cf.relkind = 'r' and cf.relpersistence in ('p', 'u') "
+		"     and nf.nspname !~ '^pg_' and nf.nspname <> 'information_schema'"
+		"     and nf.nspname !~ 'pgcopydb' "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = cf.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+
+		" order by nf.nspname, cf.relname"
+	},
+
+	{
+		SOURCE_FILTER_TYPE_EXCL,
+
+		"  select r.oid, r.conname, "
+		"         nf.nspname, cf.relname, "
+		"         nr.nspname, cr.relname, "
+		"         pg_catalog.pg_get_constraintdef(r.oid, true) as condef "
+
+		"    from pg_catalog.pg_constraint r "
+		"         join pg_catalog.pg_class cr ON cr.oid = r.conrelid "
+		"         join pg_catalog.pg_class cf ON cf.oid = r.confrelid "
+		"         join pg_catalog.pg_namespace nr ON nr.oid = cr.relnamespace "
+		"         join pg_catalog.pg_namespace nf ON nf.oid = cf.relnamespace "
+
+		/* exclude-schema */
+		"      left join pg_temp.filter_exclude_schema fn "
+		"             on nf.nspname = fn.nspname "
+
+		/* exclude-table */
+		"      left join pg_temp.filter_exclude_table ft "
+		"             on nf.nspname = ft.nspname "
+		"            and cf.relname = ft.relname "
+
+		/* exclude-table-data */
+		"      left join pg_temp.filter_exclude_table_data ftd "
+		"             on nf.nspname = ftd.nspname "
+		"            and cf.relname = ftd.relname "
+
+		"   where r.contype = 'f'"
+		"     and cf.relkind = 'r' and cf.relpersistence in ('p', 'u') "
+		"     and nf.nspname !~ '^pg_' and nf.nspname <> 'information_schema'"
+		"     and nf.nspname !~ 'pgcopydb' "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = cf.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+
+		" order by nf.nspname, cf.relname"
+	},
+
+	{
+		SOURCE_FILTER_TYPE_LIST_NOT_INCL,
+
+		"  select r.oid, r.conname, "
+		"         nf.nspname, cf.relname, "
+		"         nr.nspname, cr.relname, "
+		"         pg_catalog.pg_get_constraintdef(r.oid, true) as condef "
+
+		"    from pg_catalog.pg_constraint r "
+		"         join pg_catalog.pg_class cr ON cr.oid = r.conrelid "
+		"         join pg_catalog.pg_class cf ON cf.oid = r.confrelid "
+		"         join pg_catalog.pg_namespace nr ON nr.oid = cr.relnamespace "
+		"         join pg_catalog.pg_namespace nf ON nf.oid = cf.relnamespace "
+
+		/* include-only-table */
+		"    left join pg_temp.filter_include_only_table inc "
+		"           on nf.nspname = inc.nspname "
+		"          and cf.relname = inc.relname "
+
+		"   where r.contype = 'f'"
+		"     and cf.relkind = 'r' and cf.relpersistence in ('p', 'u') "
+		"     and nf.nspname !~ '^pg_' and nf.nspname <> 'information_schema'"
+		"     and nf.nspname !~ 'pgcopydb' "
+
+		/* WHERE clause for exclusion filters */
+		"     and inc.nspname is null "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = cf.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+
+		" order by nf.nspname, cf.relname"
+	},
+
+	{
+		SOURCE_FILTER_TYPE_LIST_EXCL,
+
+		"  select r.oid, r.conname, "
+		"         nf.nspname, cf.relname, "
+		"         nr.nspname, cr.relname, "
+		"         pg_catalog.pg_get_constraintdef(r.oid, true) as condef "
+
+		"    from pg_catalog.pg_constraint r "
+		"         join pg_catalog.pg_class cr ON cr.oid = r.conrelid "
+		"         join pg_catalog.pg_class cf ON cf.oid = r.confrelid "
+		"         join pg_catalog.pg_namespace nr ON nr.oid = cr.relnamespace "
+		"         join pg_catalog.pg_namespace nf ON nf.oid = cf.relnamespace "
+
+		/* exclude-schema */
+		"         left join pg_temp.filter_exclude_schema fn "
+		"                on nf.nspname = fn.nspname "
+
+		/* exclude-table */
+		"         left join pg_temp.filter_exclude_table ft "
+		"                on nf.nspname = ft.nspname "
+		"               and cf.relname = ft.relname "
+
+		"   where r.contype = 'f'"
+		"     and cf.relkind = 'r' and cf.relpersistence in ('p', 'u') "
+		"     and nf.nspname !~ '^pg_' and nf.nspname <> 'information_schema'"
+		"     and nf.nspname !~ 'pgcopydb' "
+
+		/* WHERE clause for exclusion filters */
+		"     and (   fn.nspname is not null "
+		"          or ft.relname is not null ) "
+
+		/* avoid pg_class entries which belong to extensions */
+		"     and not exists "
+		"       ( "
+		"         select 1 "
+		"           from pg_depend d "
+		"          where d.classid = 'pg_class'::regclass "
+		"            and d.objid = cf.oid "
+		"            and d.deptype = 'e' "
+		"       ) "
+
+		" order by nf.nspname, cf.relname"
+	}
+};
+
+
+/*
+ * schema_list_fkeys grabs the list of foreign key constraints pointing to
+ * selected tables and allocates a SourceFKeysArray with the result of the
+ * query.
+ */
+bool
+schema_list_fkeys(PGSQL *pgsql,
+				  SourceFilters *filters,
+				  SourceFKeysArray *fkeysArray)
+{
+	SourceFKeysArrayContext context = { { 0 }, fkeysArray, false };
+
+	log_trace("schema_list_fkeys");
+
+	if (filters->type != SOURCE_FILTER_TYPE_NONE)
+	{
+		if (!prepareFilters(pgsql, filters))
+		{
+			log_error("Failed to prepare pgcopydb filters, "
+					  "see above for details");
+			return false;
+		}
+	}
+
+	log_debug("listSourceFKeysSQL[%s]", filterTypeToString(filters->type));
+
+	char *sql = listSourceFKeysSQL[filters->type].sql;
+
+	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+								   &context, &getFkeysArray))
+	{
+		log_error("Failed to list table dependencies");
+		return false;
+	}
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to list table dependencies");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * For code simplicity the index array is also the SourceFilterType enum value.
+ */
 struct FilteringQueries listSourceDependSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_NONE, ""
@@ -2792,7 +3057,7 @@ schema_list_pg_depend(PGSQL *pgsql,
 		/* SOURCE_FILTER_TYPE_EXCL_INDEX etc */
 		default:
 		{
-			log_error("BUG: schema_list_ordinary_tables called with "
+			log_error("BUG: schema_list_pg_depend called with "
 					  "filtering type %d",
 					  filters->type);
 			return false;
@@ -2813,6 +3078,322 @@ schema_list_pg_depend(PGSQL *pgsql,
 	if (!context.parsedOk)
 	{
 		log_error("Failed to list table dependencies");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * For code simplicity the index array is also the SourceFilterType enum value.
+ */
+struct FilteringQueries listSourceRevDependSQL[] = {
+	{
+		SOURCE_FILTER_TYPE_NONE, ""
+	},
+
+	{
+		SOURCE_FILTER_TYPE_INCL,
+
+		PG_DEPEND_SQL
+		"  SELECT n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, "
+		"         deptype, type, identity "
+		"    FROM unconcat "
+
+		/* include-only-table */
+		"         join pg_class c "
+		"           on unconcat.classid = 'pg_class'::regclass "
+		"          and unconcat.objid = c.oid "
+
+		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
+
+		"         join pg_temp.filter_include_only_table inc "
+		"           on n.nspname = inc.nspname "
+		"          and c.relname = inc.relname "
+
+		"         , pg_identify_object(classid, objid, objsubid) "
+
+		"   WHERE NOT (refclassid = classid AND refobjid = objid) "
+		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
+		"      and type not in ('toast table column', 'default value') "
+
+		/* remove duplicates due to multiple refobjsubid / objsubid */
+		"GROUP BY n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, deptype, type, identity"
+	},
+
+	{
+		SOURCE_FILTER_TYPE_EXCL,
+
+		PG_DEPEND_SQL
+		"  SELECT n.nspname, relname, "
+		"         refclassid, refobjid, classid, objid, "
+		"         deptype, type, identity "
+
+		"    FROM pg_namespace n "
+
+		/* exclude-schema */
+		"         join pg_temp.filter_exclude_schema fn "
+		"           on n.nspname = fn.nspname "
+
+		"         left join unconcat "
+		"           on unconcat.classid = 'pg_namespace'::regclass "
+		"          and unconcat.objid = n.oid "
+
+		"         left join pg_class c "
+		"           on unconcat.refclassid = 'pg_class'::regclass "
+		"          and unconcat.refobjid = c.oid "
+
+		"         , pg_identify_object(classid, objid, objsubid) "
+
+		/* remove duplicates due to multiple refobjsubid / objsubid */
+		"GROUP BY n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, deptype, type, identity"
+
+		" UNION ALL "
+		" ( "
+		"  SELECT n.nspname, null as relname, "
+		"         null as refclassid, null as refobjid, "
+		"         'pg_namespace'::regclass::oid as classid, n.oid as objid, "
+		"         null as deptype, type, identity "
+
+		"    FROM pg_namespace n "
+
+		/* exclude-schema */
+		"         join pg_temp.filter_exclude_schema fn "
+		"           on n.nspname = fn.nspname "
+
+		"         , pg_identify_object('pg_namespace'::regclass, n.oid, 0) "
+		" ) "
+
+		" UNION ALL "
+		" ( "
+
+		"  SELECT cn.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, "
+		"         deptype, type, identity "
+		"    FROM unconcat "
+
+		"         left join pg_class c "
+		"           on unconcat.classid = 'pg_class'::regclass "
+		"          and unconcat.objid = c.oid "
+
+		"         left join pg_catalog.pg_namespace cn "
+		"           on c.relnamespace = cn.oid "
+
+		/* exclude-schema */
+		"         left join pg_temp.filter_exclude_schema fn "
+		"                on cn.nspname = fn.nspname "
+
+		/* exclude-table */
+		"         left join pg_temp.filter_exclude_table ft "
+		"                on cn.nspname = ft.nspname "
+		"               and c.relname = ft.relname "
+
+		/* exclude-table-data */
+		"         left join pg_temp.filter_exclude_table_data ftd "
+		"                on cn.nspname = ftd.nspname "
+		"               and c.relname = ftd.relname "
+
+		"         , pg_identify_object(classid, objid, objsubid) "
+
+		"   WHERE NOT (refclassid = classid AND refobjid = objid) "
+		"      and cn.nspname !~ '^pg_' and cn.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
+		"      and type not in ('toast table column', 'default value') "
+
+		/* WHERE clause for exclusion filters */
+		"     and fn.nspname is null "
+		"     and ft.relname is null "
+		"     and ftd.relname is null "
+
+		/* remove duplicates due to multiple refobjsubid / objsubid */
+		"GROUP BY cn.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, deptype, type, identity"
+
+		" ) "
+	},
+
+	{
+		SOURCE_FILTER_TYPE_LIST_NOT_INCL,
+
+		PG_DEPEND_SQL
+		"  SELECT n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, "
+		"         deptype, type, identity "
+		"    FROM unconcat "
+
+		"         join pg_class c "
+		"           on unconcat.classid = 'pg_class'::regclass "
+		"          and unconcat.objid = c.oid "
+
+		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
+
+		/* include-only-table */
+		"    left join pg_temp.filter_include_only_table inc "
+		"           on n.nspname = inc.nspname "
+		"          and c.relname = inc.relname "
+
+		"         , pg_identify_object(classid, objid, objsubid) "
+
+		"   WHERE NOT (refclassid = classid AND refobjid = objid) "
+		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
+		"      and type not in ('toast table column', 'default value') "
+
+		/* WHERE clause for exclusion filters */
+		"     and inc.nspname is null "
+
+		/* remove duplicates due to multiple refobjsubid / objsubid */
+		"GROUP BY n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, deptype, type, identity"
+	},
+
+	{
+		SOURCE_FILTER_TYPE_LIST_EXCL,
+
+		PG_DEPEND_SQL
+		"  SELECT n.nspname, relname, "
+		"         refclassid, refobjid, classid, objid, "
+		"         deptype, type, identity "
+
+		"    FROM pg_namespace n "
+
+		/* exclude-schema */
+		"         join pg_temp.filter_exclude_schema fn "
+		"           on n.nspname = fn.nspname "
+
+		"         left join unconcat "
+		"           on unconcat.classid = 'pg_namespace'::regclass "
+		"          and unconcat.objid = n.oid "
+
+		"         left join pg_class c "
+		"           on unconcat.refclassid = 'pg_class'::regclass "
+		"          and unconcat.refobjid = c.oid "
+
+		"         , pg_identify_object(classid, objid, objsubid) "
+
+		/* remove duplicates due to multiple refobjsubid / objsubid */
+		"GROUP BY n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, deptype, type, identity"
+
+		" UNION ALL "
+		" ( "
+		"  SELECT n.nspname, null as relname, "
+		"         null as refclassid, null as refobjid, "
+		"         'pg_namespace'::regclass::oid as classid, n.oid as objid, "
+		"         null as deptype, type, identity "
+
+		"    FROM pg_namespace n "
+
+		/* exclude-schema */
+		"         join pg_temp.filter_exclude_schema fn "
+		"           on n.nspname = fn.nspname "
+
+		"         , pg_identify_object('pg_namespace'::regclass, n.oid, 0) "
+		" ) "
+
+		" UNION ALL "
+		" ( "
+
+		"  SELECT n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, "
+		"         deptype, type, identity "
+		"    FROM unconcat "
+
+		"         join pg_class c "
+		"           on unconcat.classid = 'pg_class'::regclass "
+		"          and unconcat.objid = c.oid "
+
+		"         join pg_catalog.pg_namespace n "
+		"           on c.relnamespace = n.oid "
+
+		/* exclude-schema */
+		"         left join pg_temp.filter_exclude_schema fn "
+		"                on n.nspname = fn.nspname "
+
+		/* exclude-table */
+		"         left join pg_temp.filter_exclude_table ft "
+		"                on n.nspname = ft.nspname "
+		"               and c.relname = ft.relname "
+
+		"         , pg_identify_object(classid, objid, objsubid) "
+
+		"   WHERE NOT (refclassid = classid AND refobjid = objid) "
+		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
+		"      and n.nspname !~ 'pgcopydb' "
+		"      and type not in ('toast table column', 'default value') "
+
+		/* WHERE clause for exclusion filters */
+		"     and (   fn.nspname is not null "
+		"          or ft.relname is not null ) "
+
+		/* remove duplicates due to multiple refobjsubid / objsubid */
+		"GROUP BY n.nspname, c.relname, "
+		"         refclassid, refobjid, classid, objid, deptype, type, identity"
+
+		" ) "
+	}
+};
+
+
+/*
+ * schema_list_pg_depend recursively walks the pg_catalog.pg_depend view and
+ * builds the list of objects that depend on tables that are filtered-out from
+ * our operations.
+ */
+bool
+schema_list_pg_reverse_depend(PGSQL *pgsql,
+							  SourceFilters *filters,
+							  SourceDependArray *dependArray)
+{
+	SourceDependArrayContext context = { { 0 }, dependArray, false };
+
+	log_trace("schema_list_pg_reverse_depend");
+
+	switch (filters->type)
+	{
+		case SOURCE_FILTER_TYPE_INCL:
+		case SOURCE_FILTER_TYPE_EXCL:
+		case SOURCE_FILTER_TYPE_LIST_NOT_INCL:
+		case SOURCE_FILTER_TYPE_LIST_EXCL:
+		{
+			if (!prepareFilters(pgsql, filters))
+			{
+				log_error("Failed to prepare pgcopydb filters, "
+						  "see above for details");
+				return false;
+			}
+			break;
+		}
+
+		/* SOURCE_FILTER_TYPE_EXCL_INDEX etc */
+		default:
+		{
+			log_error("BUG: schema_list_pg_depend called with "
+					  "filtering type %d",
+					  filters->type);
+			return false;
+		}
+	}
+
+	log_debug("listSourceRevDependSQL[%s]", filterTypeToString(filters->type));
+
+	char *sql = listSourceRevDependSQL[filters->type].sql;
+
+	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+								   &context, &getDependArray))
+	{
+		log_error("Failed to list table reverse dependencies");
+		return false;
+	}
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to list table reverse dependencies");
 		return false;
 	}
 
@@ -4593,6 +5174,164 @@ parseCurrentPartition(PGresult *result, int rowNumber, SourceTableParts *parts)
 	{
 		log_error("Invalid part count \"%s\"", value);
 		++errors;
+	}
+
+	return errors == 0;
+}
+
+
+/*
+ * getFKeysArray loops over the SQL result for the table foreign keys array
+ * query and allocates an array of tables then populates it with the query
+ * result.
+ */
+static void
+getFkeysArray(void *ctx, PGresult *result)
+{
+	SourceFKeysArrayContext *context = (SourceFKeysArrayContext *) ctx;
+	int nTuples = PQntuples(result);
+
+	log_debug("getFKeysArray: %d", nTuples);
+
+	if (PQnfields(result) != 7)
+	{
+		log_error("Query returned %d columns, expected 7", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	/* we're not supposed to re-cycle arrays here */
+	if (context->fkeysArray->array != NULL)
+	{
+		/* issue a warning but let's try anyway */
+		log_warn("BUG? context's array is not null in getFKeysArray");
+
+		free(context->fkeysArray->array);
+		context->fkeysArray->array = NULL;
+	}
+
+	context->fkeysArray->count = nTuples;
+	context->fkeysArray->array =
+		(SourceFKey *) calloc(nTuples, sizeof(SourceFKey));
+
+	if (context->fkeysArray->array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return;
+	}
+
+	bool parsedOk = true;
+
+	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
+	{
+		SourceFKey *fkey = &(context->fkeysArray->array[rowNumber]);
+
+		parsedOk = parsedOk &&
+				   parseCurrentSourceFKeys(result, rowNumber, fkey);
+	}
+
+	if (!parsedOk)
+	{
+		free(context->fkeysArray->array);
+		context->fkeysArray->array = NULL;
+	}
+
+	context->parsedOk = parsedOk;
+}
+
+
+/*
+ * parseCurrentSourceFKeys parses a single row of the table listing query
+ * result.
+ */
+static bool
+parseCurrentSourceFKeys(PGresult *result, int rowNumber, SourceFKey *fkey)
+{
+	int errors = 0;
+
+	/* 1. oid */
+	char *value = PQgetvalue(result, rowNumber, 0);
+
+	if (!stringToUInt32(value, &(fkey->oid)) || fkey->oid == 0)
+	{
+		log_error("Invalid OID \"%s\"", value);
+		++errors;
+	}
+
+	/* 2. conname */
+	value = PQgetvalue(result, rowNumber, 1);
+	int length = strlcpy(fkey->conname, value, NAMEDATALEN);
+
+	if (length >= NAMEDATALEN)
+	{
+		log_error("Fkey name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (NAMEDATALEN - 1)",
+				  value, length, NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* 3. r.nspname */
+	value = PQgetvalue(result, rowNumber, 2);
+	length = strlcpy(fkey->rnspname, value, NAMEDATALEN);
+
+	if (length >= NAMEDATALEN)
+	{
+		log_error("Schema name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (NAMEDATALEN - 1)",
+				  value, length, NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* 4. r.relname */
+	value = PQgetvalue(result, rowNumber, 3);
+	length = strlcpy(fkey->rrelname, value, NAMEDATALEN);
+
+	if (length >= NAMEDATALEN)
+	{
+		log_error("Foreign key table name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (NAMEDATALEN - 1)",
+				  value, length, NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* 5. f.nspname */
+	value = PQgetvalue(result, rowNumber, 4);
+	length = strlcpy(fkey->fnspname, value, NAMEDATALEN);
+
+	if (length >= NAMEDATALEN)
+	{
+		log_error("Schema name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (NAMEDATALEN - 1)",
+				  value, length, NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* 6. f.relname */
+	value = PQgetvalue(result, rowNumber, 5);
+	length = strlcpy(fkey->frelname, value, NAMEDATALEN);
+
+	if (length >= NAMEDATALEN)
+	{
+		log_error("Foreign key table name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (NAMEDATALEN - 1)",
+				  value, length, NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* 7. pg_get_constraintdef */
+	if (!PQgetisnull(result, rowNumber, 6))
+	{
+		value = PQgetvalue(result, rowNumber, 6);
+		length = strlen(value) + 1;
+		fkey->constraintDef = (char *) calloc(length, sizeof(char));
+
+		if (fkey->constraintDef == NULL)
+		{
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		strlcpy(fkey->constraintDef, value, length);
 	}
 
 	return errors == 0;

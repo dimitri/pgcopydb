@@ -61,6 +61,7 @@ typedef struct ArchiveContentItem
 typedef struct ArchiveContentArray
 {
 	int count;
+	char filename[MAXPGPATH];
 	ArchiveContentItem *array;  /* malloc'ed area */
 } ArchiveContentArray;
 
@@ -109,6 +110,12 @@ bool pg_restore_db(PostgresPaths *pgPaths,
 				   const char *dumpFilename,
 				   const char *listFilename,
 				   RestoreOptions options);
+
+bool pg_restore_ddl(PostgresPaths *pgPaths,
+					const char *ddlfilename,
+					const char *dumpFilename,
+					const char *listFilename);
+
 
 bool pg_restore_list(PostgresPaths *pgPaths, const char *filename,
 					 ArchiveContentArray *archive);

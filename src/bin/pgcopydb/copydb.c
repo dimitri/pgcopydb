@@ -176,6 +176,7 @@ copydb_init_workdir(CopyDataSpec *copySpecs,
 	/* and now for the other sub-directories */
 	const char *dirs[] = {
 		cfPaths->schemadir,
+		cfPaths->ddldir,
 		cfPaths->rundir,
 		cfPaths->tbldir,
 		cfPaths->idxdir,
@@ -456,6 +457,10 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths,
 	/* prepare also the name of the summary file (JSON) */
 	sformat(cfPaths->summaryfile, MAXPGPATH, "%s/summary.json", cfPaths->topdir);
 
+	/* DDL extract directory, and COPY queries directory */
+	sformat(cfPaths->ddldir, MAXPGPATH, "%s/%s", cfPaths->schemadir, "ddl");
+	sformat(cfPaths->copyfiledir, MAXPGPATH, "%s/%s", cfPaths->schemadir, "copy");
+
 	/* now prepare the done files */
 	struct pair
 	{
@@ -675,6 +680,14 @@ copydb_init_specs(CopyDataSpec *specs,
 
 		.sourceTableHashByOid = NULL
 	};
+
+	/* copy over --ddl-dir (export directory) if is has been provided */
+	if (!IS_EMPTY_STRING_BUFFER(options->ddldir))
+	{
+		strlcpy(tmpCopySpecs.cfPaths.ddldir,
+				options->ddldir,
+				sizeof(tmpCopySpecs.cfPaths.ddldir));
+	}
 
 	/* initialize the connection strings */
 	if (!IS_EMPTY_STRING_BUFFER(options->source_pguri))

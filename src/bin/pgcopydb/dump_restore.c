@@ -155,12 +155,41 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 		}
 	}
 
+	/*
+	 * First apply the custom DDL files. The pg_restore contents might have
+	 * dependencies to the custom objects, such as a view definition using a
+	 * table that now has custom DDL.
+	 */
+	for (int i = 0; i < specs->customDDLOidArray.count; i++)
+	{
+		uint32_t oid = specs->customDDLOidArray.array[i];
+
+		if (!copydb_apply_custom_ddl(specs, oid))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	/*
+	 * When applying custom DDL we can't use --clean --if-exists anymore:
+	 * that's because we have to apply the custom SQL first, and we don't want
+	 * to clean the objects we just created.
+	 */
+	RestoreOptions options = specs->restoreOptions;
+
+	if (specs->customDDLOidArray.count > 0)
+	{
+		options.dropIfExists = false;
+	}
+
+	/* now call into pg_restore --use-list */
 	if (!pg_restore_db(&(specs->pgPaths),
 					   specs->target_pguri,
 					   &(specs->filters),
 					   specs->dumpPaths.preFilename,
 					   specs->dumpPaths.preListFilename,
-					   specs->restoreOptions))
+					   options))
 	{
 		/* errors have already been logged */
 		return false;
@@ -362,6 +391,14 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 		return false;
 	}
 
+	/* prepare our customDDLOidArray when --ddl-dir has been used */
+	if (!IS_EMPTY_STRING_BUFFER(specs->cfPaths.ddldir))
+	{
+		specs->customDDLOidArray.count = 0;
+		specs->customDDLOidArray.array =
+			(uint32_t *) calloc(contents.count, sizeof(uint32_t));
+	}
+
 	/* for each object in the list, comment when we already processed it */
 	for (int i = 0; i < contents.count; i++)
 	{
@@ -369,7 +406,21 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 		char *name = contents.array[i].restoreListName;
 		char *prefix = "";
 
-		if (copydb_objectid_has_been_processed_already(specs, oid))
+		if (copydb_objectid_has_custom_ddl(specs, oid))
+		{
+			prefix = ";";
+
+			log_notice("Skipping custom DDL dumpId %d: %s %u %s",
+					   contents.array[i].dumpId,
+					   contents.array[i].desc,
+					   contents.array[i].objectOid,
+					   contents.array[i].restoreListName);
+
+			/* now also add the oid to our CustomOidArray */
+			specs->customDDLOidArray.array
+			[specs->customDDLOidArray.count++] = oid;
+		}
+		else if (copydb_objectid_has_been_processed_already(specs, oid))
 		{
 			prefix = ";";
 
@@ -416,5 +467,195 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 
 	destroyPQExpBuffer(listContents);
 
+	return true;
+}
+
+
+/*
+ * copydb_write_restore_ddl_list writes into given filename a --use-list file
+ * for pg_restore that contains a single line only, the one that matches with
+ * the given OID.
+ */
+bool
+copydb_write_restore_ddl_list(const char *filename,
+							  ArchiveContentArray *preList,
+							  uint32_t oid)
+{
+	/* prepare a list file with just that SQL object OID */
+	PQExpBuffer listContents = createPQExpBuffer();
+
+	for (int i = 0; i < preList->count; i++)
+	{
+		uint32_t curoid = preList->array[i].objectOid;
+
+		if (curoid == oid)
+		{
+			appendPQExpBuffer(listContents, "%d; %u %u %s %s\n",
+							  preList->array[i].dumpId,
+							  preList->array[i].catalogOid,
+							  preList->array[i].objectOid,
+							  preList->array[i].desc,
+							  preList->array[i].restoreListName);
+
+			break;
+		}
+	}
+
+	/* memory allocation could have failed while building string */
+	if (PQExpBufferBroken(listContents))
+	{
+		log_error("Failed to create pg_restore list file: out of memory");
+		destroyPQExpBuffer(listContents);
+		return false;
+	}
+
+	if (!write_file(listContents->data, listContents->len, filename))
+	{
+		/* errors have already been logged */
+		destroyPQExpBuffer(listContents);
+		return false;
+	}
+
+	destroyPQExpBuffer(listContents);
+
+	return true;
+}
+
+
+/*
+ * copydb_export_ddl exports the DDL needed to create the object again by using
+ * pg_restore --use-list option.
+ */
+bool
+copydb_export_ddl(CopyDataSpec *specs,
+				  ArchiveContentArray *list,
+				  uint32_t oid,
+				  const char *regclass,
+				  const char *name)
+{
+	/* prepare target DDL filename */
+	char symlink[MAXPGPATH] = { 0 };
+	char ddlFilename[MAXPGPATH] = { 0 };
+
+	sformat(ddlFilename, MAXPGPATH, "%s/%u.sql", specs->cfPaths.ddldir, oid);
+
+	if (file_exists(ddlFilename))
+	{
+		return true;
+	}
+
+	sformat(symlink, sizeof(symlink), "%s/%s.sql",
+			specs->cfPaths.ddldir,
+			name);
+
+	log_info("Extracting DDL for %s %s (oid %u) in \"%s\"",
+			 regclass,
+			 name,
+			 oid,
+			 symlink);
+
+	/* prepare a list file with just that SQL object OID */
+	char tmpListFilename[MAXPGPATH] = { 0 };
+
+	sformat(tmpListFilename, MAXPGPATH, "%s/temp.list", specs->cfPaths.ddldir);
+
+	if (!copydb_write_restore_ddl_list(tmpListFilename, list, oid))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pg_restore_ddl(&(specs->pgPaths),
+						ddlFilename,
+						list->filename,
+						tmpListFilename))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	char basename[MAXPGPATH] = { 0 };
+
+	sformat(basename, sizeof(basename), "%u.sql", oid);
+
+	if (!unlink_file(symlink))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!create_symbolic_link(basename, (char *) symlink))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* cleanup: remove our temp file */
+	if (!unlink_file(tmpListFilename))
+	{
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * copydb_objectid_has_custom_ddl returns true when a --ddl-dir oid.sql file
+ * could be found on-disk for the given target object OID.
+ */
+bool
+copydb_objectid_has_custom_ddl(CopyDataSpec *specs, uint32_t oid)
+{
+	char ddlFilename[MAXPGPATH] = { 0 };
+
+	sformat(ddlFilename, MAXPGPATH, "%s/%u.sql", specs->cfPaths.ddldir, oid);
+
+	return file_exists(ddlFilename);
+}
+
+
+/*
+ * copydb_apply_custom_ddl runs the SQL commands found in the SQL file that has
+ * the custom DDL commands for the given OID.
+ */
+bool
+copydb_apply_custom_ddl(CopyDataSpec *specs, uint32_t oid)
+{
+	char ddlFilename[MAXPGPATH] = { 0 };
+
+	sformat(ddlFilename, MAXPGPATH, "%s/%u.sql", specs->cfPaths.ddldir, oid);
+
+	log_notice("Applying custom DDL from \"%s\"", ddlFilename);
+
+	char *contents = NULL;
+	long size = 0L;
+
+	if (!read_file(ddlFilename, &contents, &size))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	PGSQL dst = { 0 };
+
+	if (!pgsql_init(&dst, specs->target_pguri, PGSQL_CONN_TARGET))
+	{
+		/* errors have already been logged */
+		free(contents);
+		return false;
+	}
+
+	if (!pgsql_send_and_fetch(&dst, contents))
+	{
+		log_error("Failed to apply custom DDL from \"%s\", "
+				  "see above for details",
+				  ddlFilename);
+
+		free(contents);
+		return false;
+	}
+
+	free(contents);
 	return true;
 }
