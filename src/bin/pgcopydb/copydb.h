@@ -17,6 +17,10 @@
 #include "summary.h"
 
 
+#define COMMON_GUC_SETTINGS \
+	{ "client_encoding", "'UTF-8'" }, \
+	{ "tcp_keepalives_idle", "'60s'" }
+
 /*
  * pgcopydb creates System V OS level objects such as message queues and
  * semaphores, and those have to be cleaned-up "manually".
