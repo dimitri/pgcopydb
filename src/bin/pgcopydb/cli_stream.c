@@ -555,6 +555,7 @@ cli_stream_setup(int argc, char **argv)
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
+						   &(copySpecs.catalog),
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL))
@@ -667,6 +668,7 @@ cli_stream_catchup(int argc, char **argv)
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
+						   &(copySpecs.catalog),
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL))
@@ -750,6 +752,7 @@ cli_stream_replay(int argc, char **argv)
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   STREAM_MODE_REPLAY,
+						   &(copySpecs.catalog),
 						   true,  /* stdin */
 						   true, /* stdout */
 						   logSQL))
@@ -875,6 +878,7 @@ cli_stream_transform(int argc, char **argv)
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
+						   &(copySpecs.catalog),
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL))
@@ -920,7 +924,7 @@ cli_stream_transform(int argc, char **argv)
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 	}
-	else if (!stream_transform_file(jsonfilename, sqlfilename, specs.paths.dir))
+	else if (!stream_transform_file(&specs, jsonfilename, sqlfilename))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -1010,6 +1014,7 @@ cli_stream_apply(int argc, char **argv)
 							   streamDBoptions.origin,
 							   streamDBoptions.endpos,
 							   STREAM_MODE_CATCHUP,
+							   &(copySpecs.catalog),
 							   true, /* streamDBoptions.stdIn */
 							   false, /* streamDBoptions.stdOut */
 							   logSQL))
@@ -1109,6 +1114,7 @@ stream_start_in_mode(LogicalStreamMode mode)
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   mode,
+						   &(copySpecs.catalog),
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL))

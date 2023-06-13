@@ -110,11 +110,13 @@ parseWal2jsonMessageActionAndXid(LogicalStreamContext *context)
  * OUTPUT: pgcopydb LogicalTransactionStatement structure
  */
 bool
-parseWal2jsonMessage(LogicalTransactionStatement *stmt,
-					 LogicalMessageMetadata *metadata,
+parseWal2jsonMessage(StreamContext *privateContext,
 					 char *message,
 					 JSON_Value *json)
 {
+	LogicalTransactionStatement *stmt = privateContext->stmt;
+	LogicalMessageMetadata *metadata = &(privateContext->metadata);
+
 	/* most actions share a need for "schema" and "table" properties */
 	JSON_Object *jsobj = json_value_get_object(json);
 

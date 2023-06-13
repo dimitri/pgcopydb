@@ -28,7 +28,7 @@
 bool
 copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql)
 {
-	SourceSequenceArray *sequenceArray = &(specs->sequenceArray);
+	SourceSequenceArray *sequenceArray = &(specs->catalog.sequenceArray);
 
 	if (!schema_list_sequences(pgsql, &(specs->filters), sequenceArray))
 	{
@@ -188,7 +188,7 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 
 	int errors = 0;
 
-	SourceSequenceArray *sequenceArray = &(specs->sequenceArray);
+	SourceSequenceArray *sequenceArray = &(specs->catalog.sequenceArray);
 
 	for (int seqIndex = 0; seqIndex < sequenceArray->count; seqIndex++)
 	{

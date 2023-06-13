@@ -188,7 +188,7 @@ copydb_target_drop_tables(CopyDataSpec *specs)
 {
 	log_info("Drop tables on the target database, per --drop-if-exists");
 
-	SourceTableArray *tableArray = &(specs->sourceTableArray);
+	SourceTableArray *tableArray = &(specs->catalog.sourceTableArray);
 
 	if (tableArray->count == 0)
 	{

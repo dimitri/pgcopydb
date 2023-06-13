@@ -200,11 +200,15 @@ parseTestDecodingMessageActionAndXid(LogicalStreamContext *context)
  * OUTPUT: pgcopydb LogicalTransactionStatement structure
  */
 bool
-parseTestDecodingMessage(LogicalTransactionStatement *stmt,
-						 LogicalMessageMetadata *metadata,
+parseTestDecodingMessage(StreamContext *privateContext,
 						 char *message,
 						 JSON_Value *json)
 {
+	LogicalTransactionStatement *stmt = privateContext->stmt;
+	LogicalMessageMetadata *metadata = &(privateContext->metadata);
+
+	/* SourceCatalog *catalog = privateContext->catalog; */
+
 	JSON_Object *jsobj = json_value_get_object(json);
 	TestDecodingHeader header = { 0 };
 
