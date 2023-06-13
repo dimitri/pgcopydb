@@ -563,7 +563,8 @@ bool setupReplicationOrigin(StreamApplyContext *context,
 bool computeSQLFileName(StreamApplyContext *context);
 
 bool parseSQLAction(const char *query, LogicalMessageMetadata *metadata);
-
+bool readTxnCommitLSN(StreamApplyContext *context,
+					  LogicalMessageMetadata *metadata);
 bool parseTxnMetadataFile(const char *filename, LogicalMessageMetadata *metadata);
 
 /* ld_replay */

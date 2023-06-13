@@ -507,34 +507,6 @@ stream_apply_sql(StreamApplyContext *context,
 				return false;
 			}
 
-			/* if txnCommitLSN is invalid, then fetch it from txn metadata file */
-			if (metadata->txnCommitLSN == InvalidXLogRecPtr)
-			{
-				char txnfilename[MAXPGPATH] = { 0 };
-
-				if (!computeTxnMetadataFilename(metadata->xid,
-												context->paths.dir,
-												txnfilename))
-				{
-					/* errors have already been logged */
-					return false;
-				}
-
-				log_debug("stream_apply_sql: BEGIN message without a commit LSN, "
-						  "fetching commit LSN from transaction metadata file \"%s\"",
-						  txnfilename);
-
-				LogicalMessageMetadata txnMetadata = { .xid = metadata->xid };
-
-				if (!parseTxnMetadataFile(txnfilename, &txnMetadata))
-				{
-					/* errors have already been logged */
-					return false;
-				}
-
-				metadata->txnCommitLSN = txnMetadata.txnCommitLSN;
-			}
-
 			/* did we reach the starting LSN positions now? */
 			if (!context->reachedStartPos)
 			{
@@ -552,6 +524,12 @@ stream_apply_sql(StreamApplyContext *context,
 				 * transaction's COMMIT LSN or the LSN of non-transaction
 				 * action. Therefore, this condition will still hold true.
 				 */
+
+				if (!readTxnCommitLSN(context, metadata))
+				{
+					/* errors have already been logged */
+					return false;
+				}
 
 				context->reachedStartPos =
 					context->previousLSN < metadata->txnCommitLSN;
@@ -1028,6 +1006,48 @@ parseSQLAction(const char *query, LogicalMessageMetadata *metadata)
 		log_error("Failed to parse action from query: %s", query);
 		return false;
 	}
+
+	return true;
+}
+
+
+/*
+ * readTxnCommitLSN ensures metadata has transaction COMMIT LSN by fetching it
+ * from metadata file if it is not present
+ */
+bool
+readTxnCommitLSN(StreamApplyContext *context,
+				 LogicalMessageMetadata *metadata)
+{
+	/* if txnCommitLSN is invalid, then fetch it from txn metadata file */
+	if (metadata->txnCommitLSN != InvalidXLogRecPtr)
+	{
+		return true;
+	}
+
+	char txnfilename[MAXPGPATH] = { 0 };
+
+	if (!computeTxnMetadataFilename(metadata->xid,
+									context->paths.dir,
+									txnfilename))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_debug("stream_apply_sql: BEGIN message without a commit LSN, "
+			  "fetching commit LSN from transaction metadata file \"%s\"",
+			  txnfilename);
+
+	LogicalMessageMetadata txnMetadata = { .xid = metadata->xid };
+
+	if (!parseTxnMetadataFile(txnfilename, &txnMetadata))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	metadata->txnCommitLSN = txnMetadata.txnCommitLSN;
 
 	return true;
 }
