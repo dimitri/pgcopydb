@@ -781,6 +781,15 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 					  "see above for details");
 			return false;
 		}
+
+		if (privateContext->endpos != InvalidXLogRecPtr &&
+			privateContext->endpos <= metadata->lsn)
+		{
+			log_info("Transform reached end position %X/%X at %X/%X",
+					 LSN_FORMAT_ARGS(privateContext->endpos),
+					 LSN_FORMAT_ARGS(metadata->lsn));
+			break;
+		}
 	}
 
 	if (fclose(privateContext->sqlFile) == EOF)
