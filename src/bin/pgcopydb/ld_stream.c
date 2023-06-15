@@ -291,6 +291,7 @@ stream_init_context(StreamContext *privateContext, StreamSpecs *specs)
 {
 	privateContext->endpos = specs->endpos;
 	privateContext->startpos = specs->startpos;
+	privateContext->startposComputedFromJSON = specs->startposComputedFromJSON;
 
 	privateContext->mode = specs->mode;
 	privateContext->stdIn = specs->stdIn;
@@ -557,6 +558,7 @@ streamCheckResumePosition(StreamSpecs *specs)
 			&(latestStreamedContent.messages[latestStreamedContent.count - 1]);
 
 		specs->startpos = latest->lsn;
+		specs->startposComputedFromJSON = true;
 
 		log_info("Resuming streaming at LSN %X/%X "
 				 "from last message read in JSON file \"%s\", line %d",
@@ -1484,10 +1486,11 @@ prepareMessageMetadataFromContext(LogicalStreamContext *context)
 	}
 
 	/*
-	 * When resuming streaming, transactions are sent in full even if we wrote
-	 * and flushed a transaction partially in a previous command.
+	 * When streaming is resumed, transactions are sent in full even if we
+	 * wrote and flushed a transaction partially in a previous command.
 	 */
-	if (metadata->lsn <= privateContext->startpos)
+	if (privateContext->startposComputedFromJSON &&
+		metadata->lsn <= privateContext->startpos)
 	{
 		metadata->filterOut = true;
 		log_trace("Skipping write for action %c for XID %u at LSN %X/%X: "
