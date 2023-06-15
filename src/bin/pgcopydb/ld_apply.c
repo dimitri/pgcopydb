@@ -576,6 +576,8 @@ stream_apply_sql(StreamApplyContext *context,
 				return false;
 			}
 
+			context->transactionInProgress = true;
+
 			break;
 		}
 
@@ -615,6 +617,7 @@ stream_apply_sql(StreamApplyContext *context,
 				return false;
 			}
 
+			context->transactionInProgress = false;
 			context->previousLSN = metadata->lsn;
 
 			/*
@@ -637,6 +640,49 @@ stream_apply_sql(StreamApplyContext *context,
 			break;
 		}
 
+		case STREAM_ACTION_ENDPOS:
+		{
+			if (!context->reachedStartPos)
+			{
+				return true;
+			}
+
+			log_debug("ENDPOS %X/%X found at %X/%X",
+					  LSN_FORMAT_ARGS(metadata->lsn),
+					  LSN_FORMAT_ARGS(context->previousLSN));
+
+			context->previousLSN = metadata->lsn;
+
+			/*
+			 * It could be the current endpos, or the endpos of a previous
+			 * run.
+			 */
+			if (context->endpos != InvalidXLogRecPtr &&
+				context->endpos <= context->previousLSN)
+			{
+				context->reachedEndPos = true;
+
+				log_notice("Apply reached end position %X/%X at %X/%X",
+						   LSN_FORMAT_ARGS(context->endpos),
+						   LSN_FORMAT_ARGS(context->previousLSN));
+
+				if (context->transactionInProgress)
+				{
+					if (!pgsql_execute(pgsql, "ROLLBACK"))
+					{
+						/* errors have already been logged */
+						return false;
+					}
+
+					context->transactionInProgress = false;
+				}
+
+				break;
+			}
+
+			break;
+		}
+
 		/*
 		 * A KEEPALIVE message is replayed as its own transaction where the
 		 * only thgin we do is call into the replication origin tracking
@@ -649,6 +695,12 @@ stream_apply_sql(StreamApplyContext *context,
 			{
 				context->reachedStartPos =
 					context->previousLSN < metadata->lsn;
+			}
+
+			/* in a transaction only the COMMIT LSN is tracked */
+			if (context->transactionInProgress)
+			{
+				return true;
 			}
 
 			log_trace("KEEPALIVE LSN %X/%X @%s, previous LSN %X/%X %s",
@@ -947,6 +999,7 @@ parseSQLAction(const char *query, LogicalMessageMetadata *metadata)
 	char *commit = strstr(query, OUTPUT_COMMIT);
 	char *switchwal = strstr(query, OUTPUT_SWITCHWAL);
 	char *keepalive = strstr(query, OUTPUT_KEEPALIVE);
+	char *endpos = strstr(query, OUTPUT_ENDPOS);
 
 	/* do we have a BEGIN or a COMMIT message to parse metadata of? */
 	if (query == begin)
@@ -968,6 +1021,11 @@ parseSQLAction(const char *query, LogicalMessageMetadata *metadata)
 	{
 		metadata->action = STREAM_ACTION_KEEPALIVE;
 		message = keepalive + strlen(OUTPUT_KEEPALIVE);
+	}
+	else if (query == endpos)
+	{
+		metadata->action = STREAM_ACTION_ENDPOS;
+		message = endpos + strlen(OUTPUT_ENDPOS);
 	}
 
 	if (message != NULL)

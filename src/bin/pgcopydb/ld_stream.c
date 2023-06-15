@@ -291,6 +291,7 @@ stream_init_context(StreamContext *privateContext, StreamSpecs *specs)
 {
 	privateContext->endpos = specs->endpos;
 	privateContext->startpos = specs->startpos;
+	privateContext->startposComputedFromJSON = specs->startposComputedFromJSON;
 
 	privateContext->mode = specs->mode;
 	privateContext->stdIn = specs->stdIn;
@@ -509,12 +510,29 @@ streamCheckResumePosition(StreamSpecs *specs)
 	if (specs->endpos == InvalidXLogRecPtr)
 	{
 		specs->endpos = sentinel.endpos;
-
-		if (specs->endpos != InvalidXLogRecPtr)
+	}
+	else
+	{
+		if (sentinel.endpos != InvalidXLogRecPtr &&
+			sentinel.endpos != specs->endpos)
 		{
-			log_info("Streaming is setup to end at LSN %X/%X",
+			log_warn("Sentinel endpos was %X/%X and is now updated to "
+					 "--endpos option %X/%X",
+					 LSN_FORMAT_ARGS(sentinel.endpos),
 					 LSN_FORMAT_ARGS(specs->endpos));
 		}
+
+		if (!pgsql_update_sentinel_endpos(&src, false, specs->endpos))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	if (specs->endpos != InvalidXLogRecPtr)
+	{
+		log_info("Streaming is setup to end at LSN %X/%X",
+				 LSN_FORMAT_ARGS(specs->endpos));
 	}
 
 	if (latestStreamedContent.count == 0)
@@ -540,6 +558,7 @@ streamCheckResumePosition(StreamSpecs *specs)
 			&(latestStreamedContent.messages[latestStreamedContent.count - 1]);
 
 		specs->startpos = latest->lsn;
+		specs->startposComputedFromJSON = true;
 
 		log_info("Resuming streaming at LSN %X/%X "
 				 "from last message read in JSON file \"%s\", line %d",
@@ -554,6 +573,7 @@ streamCheckResumePosition(StreamSpecs *specs)
 	if (!pgsql_replication_slot_exists(&src, specs->slot.slotName, &flush, &lsn))
 	{
 		/* errors have already been logged */
+		return false;
 	}
 
 	/*
@@ -769,6 +789,85 @@ stream_write_json(LogicalStreamContext *context, bool previous)
 
 
 /*
+ * stream_write_internal_message outputs an internal message for pgcopydb
+ * operations into our current stream output(s).
+ */
+bool
+stream_write_internal_message(LogicalStreamContext *context,
+							  InternalMessage *message)
+{
+	StreamContext *privateContext = (StreamContext *) context->private;
+
+	long buflen = 0;
+	char buffer[BUFSIZE] = { 0 };
+
+	/* not all internal message require a timestamp field */
+	if (message->time > 0)
+	{
+		/* add the server sendTime to the LogicalMessageMetadata */
+		if (!pgsql_timestamptz_to_string(message->time,
+										 message->timeStr,
+										 sizeof(message->timeStr)))
+		{
+			log_error("Failed to format server send time %lld to time string",
+					  (long long) message->time);
+			return false;
+		}
+
+		char *fmt =
+			"{\"action\":\"%c\",\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n";
+
+		buflen = sformat(buffer, sizeof(buffer), fmt,
+						 message->action,
+						 LSN_FORMAT_ARGS(message->lsn),
+						 message->timeStr);
+	}
+	else
+	{
+		buflen = sformat(buffer, sizeof(buffer),
+						 "{\"action\":\"%c\",\"lsn\":\"%X/%X\"}\n",
+						 message->action,
+						 LSN_FORMAT_ARGS(message->lsn));
+	}
+
+	if (fformat(privateContext->jsonFile, "%s", buffer) == -1)
+	{
+		log_error("Failed to write internal message: %s", buffer);
+		return false;
+	}
+
+	/* skip NOTICE logs for KEEPALIVE messages */
+	if (message->action != STREAM_ACTION_KEEPALIVE)
+	{
+		log_notice("Inserted action %s for lsn %X/%X in \"%s\"",
+				   StreamActionToString(message->action),
+				   LSN_FORMAT_ARGS(message->lsn),
+				   privateContext->partialFileName);
+	}
+
+	/*
+	 * When streaming to a Unix pipe don't forget to also stream the SWITCH
+	 * WAL message there, so that the transform process forwards it.
+	 */
+	if (privateContext->stdOut)
+	{
+		int ret =
+			fwrite(buffer, sizeof(char), buflen, privateContext->out);
+
+		if (ret != buflen)
+		{
+			log_error("Failed to write JSON message (%ld bytes) to stdout: %m",
+					  buflen);
+			log_debug("JSON message: %s", buffer);
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
  * streamRotate decides if the received message should be appended to the
  * already opened file or to a new file, and then opens that file and takes
  * care of preparing the new file descriptor.
@@ -890,44 +989,21 @@ streamRotateFile(LogicalStreamContext *context)
 	{
 		bool time_to_abort = false;
 
-		char buffer[BUFSIZE] = { 0 };
+		InternalMessage switchwal = {
+			.action = STREAM_ACTION_SWITCH,
+			.lsn = jsonFileLSN
+		};
 
-		/*
-		 * Add an extra empty transaction with the first lsn of the next file
-		 * to allow for the transform and apply process to follow along.
-		 */
-		long buflen = sformat(buffer, sizeof(buffer),
-							  "{\"action\":\"X\",\"lsn\":\"%X/%X\"}\n",
-							  LSN_FORMAT_ARGS(jsonFileLSN));
-
-		fformat(privateContext->jsonFile, "%s", buffer);
-
-		log_notice("Inserted action SWITCH for lsn %X/%X in \"%s\"",
-				   LSN_FORMAT_ARGS(jsonFileLSN),
-				   privateContext->partialFileName);
-
-		if (!streamCloseFile(context, time_to_abort))
+		if (!stream_write_internal_message(context, &switchwal))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 
-		/*
-		 * When streaming to a Unix pipe don't forget to also stream the SWITCH
-		 * WAL message there, so that the transform process forwards it.
-		 */
-		if (privateContext->stdOut)
+		if (!streamCloseFile(context, time_to_abort))
 		{
-			int ret =
-				fwrite(buffer, sizeof(char), buflen, privateContext->out);
-
-			if (ret != buflen)
-			{
-				log_error("Failed to write JSON message (%ld bytes) to stdout: %m",
-						  buflen);
-				log_debug("JSON message: %s", buffer);
-				return false;
-			}
+			/* errors have already been logged */
+			return false;
 		}
 	}
 
@@ -1015,6 +1091,32 @@ bool
 streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 {
 	StreamContext *privateContext = (StreamContext *) context->private;
+
+	/*
+	 * Before closing the JSON file, when we have reached endpos add a pgcopydb
+	 * 'E' message to signal transform and replay processes to skip replaying
+	 * the possibly opened transaction for now.
+	 *
+	 * Note that as the user can edit the endpos and restart pgcopydb, we neex
+	 * to be able to stop replay because of endpos and still skip replaying a
+	 * partial transaction.
+	 */
+	if (time_to_abort &&
+		privateContext->jsonFile != NULL &&
+		privateContext->endpos != InvalidXLogRecPtr &&
+		privateContext->endpos <= context->cur_record_lsn)
+	{
+		InternalMessage endpos = {
+			.action = STREAM_ACTION_ENDPOS,
+			.lsn = context->cur_record_lsn
+		};
+
+		if (!stream_write_internal_message(context, &endpos))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
 
 	/*
 	 * If we have a JSON file currently opened, then close it.
@@ -1211,33 +1313,21 @@ streamKeepalive(LogicalStreamContext *context)
 	/* register progress made through receiving keepalive messages */
 	if (privateContext->jsonFile != NULL)
 	{
-		char sendTimeStr[BUFSIZE] = { 0 };
+		InternalMessage keepalive = {
+			.action = STREAM_ACTION_KEEPALIVE,
+			.lsn = context->cur_record_lsn,
+			.time = context->sendTime
+		};
 
-		/* add the server sendTime to the LogicalMessageMetadata */
-		if (!pgsql_timestamptz_to_string(context->sendTime,
-										 sendTimeStr,
-										 sizeof(sendTimeStr)))
+		if (!stream_write_internal_message(context, &keepalive))
 		{
-			log_error("Failed to format server send time %lld to time string",
-					  (long long) context->sendTime);
+			/* errors have already been logged */
 			return false;
 		}
 
-		char buffer[BUFSIZE] = { 0 };
-
-		long buflen =
-			sformat(
-				buffer,
-				sizeof(buffer),
-				"{\"action\":\"K\",\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
-				LSN_FORMAT_ARGS(context->cur_record_lsn),
-				sendTimeStr);
-
-		fformat(privateContext->jsonFile, "%s", buffer);
-
 		log_trace("Inserted action KEEPALIVE for lsn %X/%X @%s",
-				  LSN_FORMAT_ARGS(context->cur_record_lsn),
-				  sendTimeStr);
+				  LSN_FORMAT_ARGS(keepalive.lsn),
+				  keepalive.timeStr);
 
 		/* update the LSN tracking that's reported in the feedback */
 		context->tracking->written_lsn = context->cur_record_lsn;
@@ -1249,24 +1339,6 @@ streamKeepalive(LogicalStreamContext *context)
 		if (privateContext->maxWrittenLSN < context->cur_record_lsn)
 		{
 			privateContext->maxWrittenLSN = context->cur_record_lsn;
-		}
-
-		/*
-		 * When streaming to a Unix pipe don't forget to also stream the
-		 * KEEPALIVE message there, so that the transform process forwards it.
-		 */
-		if (privateContext->stdOut)
-		{
-			int ret =
-				fwrite(buffer, sizeof(char), buflen, privateContext->out);
-
-			if (ret != buflen)
-			{
-				log_error("Failed to write JSON message (%ld bytes) to stdout: %m",
-						  buflen);
-				log_debug("JSON message: %s", buffer);
-				return false;
-			}
 		}
 	}
 
@@ -1410,6 +1482,26 @@ prepareMessageMetadataFromContext(LogicalStreamContext *context)
 	/* in case of filtering, early exit */
 	if (metadata->filterOut)
 	{
+		return true;
+	}
+
+	/*
+	 * When streaming is resumed, transactions are sent in full even if we
+	 * wrote and flushed a transaction partially in a previous command.
+	 */
+	if (privateContext->startposComputedFromJSON &&
+		metadata->lsn <= privateContext->startpos)
+	{
+		metadata->filterOut = true;
+		log_trace("Skipping write for action %c for XID %u at LSN %X/%X: "
+				  "startpos %X/%X not been reached",
+				  metadata->action,
+				  metadata->xid,
+				  LSN_FORMAT_ARGS(metadata->lsn),
+				  LSN_FORMAT_ARGS(privateContext->startpos));
+
+		*previous = *metadata;
+
 		return true;
 	}
 
@@ -1968,6 +2060,11 @@ StreamActionFromChar(char action)
 			return STREAM_ACTION_KEEPALIVE;
 		}
 
+		case 'E':
+		{
+			return STREAM_ACTION_ENDPOS;
+		}
+
 		default:
 		{
 			log_error("Failed to parse JSON message action: \"%c\"", action);
@@ -1977,6 +2074,81 @@ StreamActionFromChar(char action)
 
 	/* keep compiler happy */
 	return STREAM_ACTION_UNKNOWN;
+}
+
+
+/*
+ * StreamActionToString returns a text representation of the action.
+ */
+char *
+StreamActionToString(StreamAction action)
+{
+	switch (action)
+	{
+		case STREAM_ACTION_UNKNOWN:
+		{
+			return "unknown";
+		}
+
+		case STREAM_ACTION_BEGIN:
+		{
+			return "BEGIN";
+		}
+
+		case STREAM_ACTION_COMMIT:
+		{
+			return "COMMIT";
+		}
+
+		case STREAM_ACTION_INSERT:
+		{
+			return "INSERT";
+		}
+
+		case STREAM_ACTION_UPDATE:
+		{
+			return "UPDATE";
+		}
+
+		case STREAM_ACTION_DELETE:
+		{
+			return "DELETE";
+		}
+
+		case STREAM_ACTION_TRUNCATE:
+		{
+			return "TRUNCATE";
+		}
+
+		case STREAM_ACTION_MESSAGE:
+		{
+			return "MESSAGE";
+		}
+
+		case STREAM_ACTION_SWITCH:
+		{
+			return "SWITCH";
+		}
+
+		case STREAM_ACTION_KEEPALIVE:
+		{
+			return "KEEPALIVE";
+		}
+
+		case STREAM_ACTION_ENDPOS:
+		{
+			return "ENDPOS";
+		}
+
+		default:
+		{
+			log_error("Failed to parse message action: \"%c\"", action);
+			return "unknown";
+		}
+	}
+
+	/* keep compiler happy */
+	return "unknown";
 }
 
 

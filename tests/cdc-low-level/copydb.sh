@@ -72,7 +72,7 @@ SQLFILENAME=`basename ${WALFILE} .json`.sql
 pgcopydb stream transform --debug ${SHAREDIR}/${WALFILE} /tmp/${SQLFILENAME}
 
 # we should also get the same result as expected (discarding LSN numbers)
-DIFFOPTS='-I BEGIN -I COMMIT -I KEEPALIVE -I SWITCH'
+DIFFOPTS='-I BEGIN -I COMMIT -I KEEPALIVE -I SWITCH -I ENDPOS'
 
 diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} /tmp/${SQLFILENAME}
 

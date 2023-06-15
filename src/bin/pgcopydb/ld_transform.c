@@ -737,8 +737,8 @@ stream_transform_file(char *jsonfilename, char *sqlfilename, char *dir)
 		/*
 		 * Prepare a new message when we just read the COMMIT message of an
 		 * opened transaction, closing it, or when we just read a standalone
-		 * non-transactional message (such as a KEEPALIVE or a SWITCH WAL
-		 * message).
+		 * non-transactional message (such as a KEEPALIVE or a SWITCH WAL or an
+		 * ENDPOS message).
 		 */
 		if (!currentMsg->isTransaction ||
 			metadata->action == STREAM_ACTION_COMMIT)
@@ -761,45 +761,14 @@ stream_transform_file(char *jsonfilename, char *sqlfilename, char *dir)
 
 	/*
 	 * We might have a last pending transaction with a COMMIT message to be
-	 * found in a a later file. In that case though, the last message read was
-	 * a WAL SWITCH message.
+	 * found in a a later file, or a last transaction that's cut by reaching an
+	 * endpos LSN that's between the BEGIN and the COMMIT lsn positions.
 	 *
-	 * It might happen that --endpos has been set to an LSN found in the middle
-	 * of a transaction, in that case we ignore the transaction and insert a
-	 * KEEPALIVE message with the LSN we have reached.
+	 * In any case if we have a partial transaction pending we have to
+	 * transform it too.
 	 */
-	if (currentMsg->isTransaction && metadata->action == STREAM_ACTION_SWITCH)
+	if (currentMsg->isTransaction && currentMsg->command.tx.count > 0)
 	{
-		++mesgs.count;
-	}
-	else if (currentMsg->isTransaction &&
-			 metadata->action != STREAM_ACTION_COMMIT)
-	{
-		LogicalTransaction *currentTx = &(currentMsg->command.tx);
-
-		/* replace the currentTx content with a single keepalive message */
-		(void) FreeLogicalTransaction(currentTx);
-
-		LogicalTransactionStatement *stmt =
-			(LogicalTransactionStatement *)
-			calloc(1,
-				   sizeof(LogicalTransactionStatement));
-
-		if (stmt == NULL)
-		{
-			log_error(ALLOCATION_FAILED_ERROR);
-			return false;
-		}
-
-		stmt->action = STREAM_ACTION_KEEPALIVE;
-		stmt->stmt.keepalive.lsn = metadata->lsn;
-
-		strlcpy(stmt->stmt.keepalive.timestamp,
-				metadata->timestamp,
-				sizeof(stmt->stmt.keepalive.timestamp));
-
-		(void) streamLogicalTransactionAppendStatement(currentTx, stmt);
-
 		++mesgs.count;
 	}
 
@@ -1001,7 +970,10 @@ parseMessage(LogicalMessage *mesg,
 			txn->xid = metadata->xid;
 			txn->beginLSN = metadata->lsn;
 
-			/* this should be overwritten in COMMIT action as that's what we need for origin */
+			/*
+			 * This should be overwritten in COMMIT action as that's what we
+			 * need for replication origin tracking.
+			 */
 			strlcpy(txn->timestamp, metadata->timestamp, sizeof(txn->timestamp));
 			txn->first = NULL;
 
@@ -1070,6 +1042,25 @@ parseMessage(LogicalMessage *mesg,
 				/* copy the stmt over, then free the extra allocated memory */
 				mesg->action = metadata->action;
 				mesg->command.keepalive = stmt->stmt.keepalive;
+				free(stmt);
+			}
+
+			break;
+		}
+
+		case STREAM_ACTION_ENDPOS:
+		{
+			stmt->stmt.endpos.lsn = metadata->lsn;
+
+			if (mesg->isTransaction)
+			{
+				(void) streamLogicalTransactionAppendStatement(txn, stmt);
+			}
+			else
+			{
+				/* copy the stmt over, then free the extra allocated memory */
+				mesg->action = metadata->action;
+				mesg->command.endpos = stmt->stmt.endpos;
 				free(stmt);
 			}
 
@@ -1333,6 +1324,15 @@ stream_write_message(FILE *out, LogicalMessage *msg)
 				break;
 			}
 
+			case STREAM_ACTION_ENDPOS:
+			{
+				if (!stream_write_endpos(out, &(msg->command.endpos)))
+				{
+					return false;
+				}
+				break;
+			}
+
 			default:
 			{
 				log_error("BUG: Failed to write SQL for LogicalMessage action %d",
@@ -1383,6 +1383,7 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 	 */
 	bool sentBEGIN = false;
 	bool splitTx = false;
+	bool endpos = false;
 
 	LogicalTransactionStatement *currentStmt = txn->first;
 
@@ -1410,6 +1411,22 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 				{
 					return false;
 				}
+				break;
+			}
+
+			case STREAM_ACTION_ENDPOS:
+			{
+				if (!stream_write_endpos(out, &(currentStmt->stmt.endpos)))
+				{
+					return false;
+				}
+
+				/*
+				 * When transforming an ENDPOS message that is the last JSON
+				 * message we have as input, make sure we don't write the
+				 * COMMIT message for the current transaction.
+				 */
+				endpos = currentStmt->next == NULL;
 				break;
 			}
 
@@ -1505,19 +1522,19 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 	 * then have the txn->commit metadata forcibly set to true: here we also
 	 * need to obey that.
 	 */
-	if ((sentBEGIN && !splitTx) || txn->commit)
+	if ((sentBEGIN && !splitTx && !endpos) || txn->commit)
 	{
 		if (!stream_write_commit(out, txn))
 		{
 			return false;
 		}
+	}
 
-		/* flush out stream at transaction boundaries */
-		if (fflush(out) != 0)
-		{
-			log_error("Failed to flush stream output: %m");
-			return false;
-		}
+	/* flush out stream at transaction boundaries */
+	if (fflush(out) != 0)
+	{
+		log_error("Failed to flush stream output: %m");
+		return false;
 	}
 
 	return true;
@@ -1606,6 +1623,22 @@ stream_write_keepalive(FILE *out, LogicalMessageKeepalive *keepalive)
 				OUTPUT_KEEPALIVE,
 				LSN_FORMAT_ARGS(keepalive->lsn),
 				keepalive->timestamp);
+
+	return ret != -1;
+}
+
+
+/*
+ * stream_write_endpos writes a SWITCH statement to the already open out
+ * stream.
+ */
+bool
+stream_write_endpos(FILE *out, LogicalMessageEndpos *endpos)
+{
+	int ret =
+		fformat(out, "%s{\"lsn\":\"%X/%X\"}\n",
+				OUTPUT_ENDPOS,
+				LSN_FORMAT_ARGS(endpos->lsn));
 
 	return ret != -1;
 }

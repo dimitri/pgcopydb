@@ -18,6 +18,7 @@
 #define OUTPUT_COMMIT "COMMIT; -- "
 #define OUTPUT_SWITCHWAL "-- SWITCH WAL "
 #define OUTPUT_KEEPALIVE "-- KEEPALIVE "
+#define OUTPUT_ENDPOS "-- ENDPOS "
 
 typedef enum
 {
@@ -30,8 +31,17 @@ typedef enum
 	STREAM_ACTION_TRUNCATE = 'T',
 	STREAM_ACTION_MESSAGE = 'M',
 	STREAM_ACTION_SWITCH = 'X',
-	STREAM_ACTION_KEEPALIVE = 'K'
+	STREAM_ACTION_KEEPALIVE = 'K',
+	STREAM_ACTION_ENDPOS = 'E'
 } StreamAction;
+
+typedef struct InternalMessage
+{
+	StreamAction action;
+	uint64_t lsn;
+	uint64_t time;
+	char timeStr[BUFSIZE];
+} InternalMessage;
 
 typedef struct StreamCounters
 {
@@ -90,6 +100,8 @@ typedef struct StreamContext
 
 	uint64_t startpos;
 	uint64_t endpos;
+
+	bool startposComputedFromJSON;
 	bool apply;
 
 	bool stdIn;
@@ -148,6 +160,7 @@ typedef struct StreamApplyContext
 
 	bool reachedStartPos;
 	bool reachedEndPos;
+	bool transactionInProgress;
 
 	bool logSQL;
 
@@ -236,6 +249,10 @@ typedef struct LogicalMessageKeepalive
 	char timestamp[PG_MAX_TIMESTAMP];
 } LogicalMessageKeepalive;
 
+typedef struct LogicalMessageEndpos
+{
+	uint64_t lsn;
+} LogicalMessageEndpos;
 
 /*
  * The JSON-lines logical decoding stream is then parsed into transactions that
@@ -253,6 +270,7 @@ typedef struct LogicalTransactionStatement
 		LogicalMessageTruncate truncate;
 		LogicalMessageSwitchWAL switchwal;
 		LogicalMessageKeepalive keepalive;
+		LogicalMessageEndpos endpos;
 	} stmt;
 
 	struct LogicalTransactionStatement *prev; /* double linked-list */
@@ -301,6 +319,7 @@ typedef struct LogicalMessage
 		LogicalTransaction tx;
 		LogicalMessageSwitchWAL switchwal;
 		LogicalMessageKeepalive keepalive;
+		LogicalMessageEndpos endpos;
 	} command;
 } LogicalMessage;
 
@@ -351,6 +370,8 @@ struct StreamSpecs
 
 	uint64_t startpos;
 	uint64_t endpos;
+
+	bool startposComputedFromJSON;
 
 	LogicalStreamMode mode;
 
@@ -432,6 +453,9 @@ bool parseMessageMetadata(LogicalMessageMetadata *metadata,
 
 bool stream_write_json(LogicalStreamContext *context, bool previous);
 
+bool stream_write_internal_message(LogicalStreamContext *context,
+								   InternalMessage *message);
+
 bool stream_read_file(StreamContent *content);
 bool stream_read_latest(StreamSpecs *specs, StreamContent *content);
 bool stream_update_latest_symlink(StreamContext *privateContext,
@@ -459,6 +483,7 @@ bool stream_read_context(CDCPaths *paths,
 						 uint32_t *WalSegSz);
 
 StreamAction StreamActionFromChar(char action);
+char * StreamActionToString(StreamAction action);
 
 /* ld_transform.c */
 bool stream_transform_worker(StreamSpecs *specs);
@@ -488,10 +513,14 @@ bool stream_transform_file_at_lsn(StreamSpecs *specs, uint64_t lsn);
 
 bool stream_write_message(FILE *out, LogicalMessage *msg);
 bool stream_write_transaction(FILE *out, LogicalTransaction *tx);
-bool stream_write_begin(FILE *out, LogicalTransaction *tx);
-bool stream_write_commit(FILE *out, LogicalTransaction *tx);
+
 bool stream_write_switchwal(FILE *out, LogicalMessageSwitchWAL *switchwal);
 bool stream_write_keepalive(FILE *out, LogicalMessageKeepalive *keepalive);
+bool stream_write_endpos(FILE *out, LogicalMessageEndpos *endpos);
+
+bool stream_write_begin(FILE *out, LogicalTransaction *tx);
+bool stream_write_commit(FILE *out, LogicalTransaction *tx);
+
 bool stream_write_insert(FILE *out, LogicalMessageInsert *insert);
 bool stream_write_truncate(FILE *out, LogicalMessageTruncate *truncate);
 bool stream_write_update(FILE *out, LogicalMessageUpdate *update);

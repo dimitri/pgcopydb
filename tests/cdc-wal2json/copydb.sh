@@ -72,7 +72,7 @@ pgcopydb stream transform -vv ${SHAREDIR}/${WALFILE} /tmp/${SQLFILENAME}
 diff ${SHAREDIR}/${SQLFILE} /tmp/${SQLFILENAME}
 
 # we should also get the same result as expected (discarding LSN numbers)
-DIFFOPTS='-I BEGIN -I COMMIT -I KEEPALIVE -I SWITCH'
+DIFFOPTS='-I BEGIN -I COMMIT -I KEEPALIVE -I SWITCH -I ENDPOS'
 
 diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} ${SHAREDIR}/${SQLFILENAME}
 
