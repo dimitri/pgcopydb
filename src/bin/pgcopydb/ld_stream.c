@@ -1483,6 +1483,25 @@ prepareMessageMetadataFromContext(LogicalStreamContext *context)
 		return true;
 	}
 
+	/*
+	 * When resuming streaming, transactions are sent in full even if we wrote
+	 * and flushed a transaction partially in a previous command.
+	 */
+	if (metadata->lsn <= privateContext->startpos)
+	{
+		metadata->filterOut = true;
+		log_trace("Skipping write for action %c for XID %u at LSN %X/%X: "
+				  "startpos %X/%X not been reached",
+				  metadata->action,
+				  metadata->xid,
+				  LSN_FORMAT_ARGS(metadata->lsn),
+				  LSN_FORMAT_ARGS(privateContext->startpos));
+
+		*previous = *metadata;
+
+		return true;
+	}
+
 	if (!prepareMessageJSONbuffer(context))
 	{
 		log_error("Failed to prepare a JSON buffer from "

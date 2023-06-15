@@ -93,7 +93,17 @@ diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} ${SHAREDIR}/${SQLFILENAME}
 pgcopydb stream sentinel set apply
 
 # now apply the SQL file to the target database shouldn't take more than 2s
-timeout 5s pgcopydb stream catchup --resume --endpos "${lsn}" -vv
+timeout 5s pgcopydb stream catchup --resume --endpos "${lsn}" --trace
+
+# adjust the endpos LSN to the current position in the WAL
+pgcopydb stream sentinel set endpos --current
+
+# and replay the available changes, including the transaction in dml2.sql now
+pgcopydb follow --resume
+
+# now check that all the new rows made it
+sql="select count(*) from category"
+test 26 -eq `psql -AtqX -d ${PGCOPYDB_SOURCE_PGURI} -c "${sql}"`
 
 # cleanup
 pgcopydb stream cleanup

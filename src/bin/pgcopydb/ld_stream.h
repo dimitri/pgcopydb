@@ -158,6 +158,7 @@ typedef struct StreamApplyContext
 
 	bool reachedStartPos;
 	bool reachedEndPos;
+	bool transactionInProgress;
 
 	bool logSQL;
 

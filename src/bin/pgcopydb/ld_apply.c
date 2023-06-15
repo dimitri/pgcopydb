@@ -576,6 +576,8 @@ stream_apply_sql(StreamApplyContext *context,
 				return false;
 			}
 
+			context->transactionInProgress = true;
+
 			break;
 		}
 
@@ -615,6 +617,7 @@ stream_apply_sql(StreamApplyContext *context,
 				return false;
 			}
 
+			context->transactionInProgress = false;
 			context->previousLSN = metadata->lsn;
 
 			/*
@@ -639,6 +642,11 @@ stream_apply_sql(StreamApplyContext *context,
 
 		case STREAM_ACTION_ENDPOS:
 		{
+			if (!context->reachedStartPos)
+			{
+				return true;
+			}
+
 			log_debug("ENDPOS %X/%X found at %X/%X",
 					  LSN_FORMAT_ARGS(metadata->lsn),
 					  LSN_FORMAT_ARGS(context->previousLSN));
@@ -657,18 +665,19 @@ stream_apply_sql(StreamApplyContext *context,
 				log_notice("Apply reached end position %X/%X at %X/%X",
 						   LSN_FORMAT_ARGS(context->endpos),
 						   LSN_FORMAT_ARGS(context->previousLSN));
+
+				if (context->transactionInProgress)
+				{
+					if (!pgsql_execute(pgsql, "ROLLBACK"))
+					{
+						/* errors have already been logged */
+						return false;
+					}
+
+					context->transactionInProgress = false;
+				}
+
 				break;
-			}
-
-			if (!context->reachedStartPos)
-			{
-				return true;
-			}
-
-			if (!pgsql_execute(pgsql, "ROLLBACK"))
-			{
-				/* errors have already been logged */
-				return false;
 			}
 
 			break;
@@ -686,6 +695,12 @@ stream_apply_sql(StreamApplyContext *context,
 			{
 				context->reachedStartPos =
 					context->previousLSN < metadata->lsn;
+			}
+
+			/* in a transaction only the COMMIT LSN is tracked */
+			if (context->transactionInProgress)
+			{
+				return true;
 			}
 
 			log_trace("KEEPALIVE LSN %X/%X @%s, previous LSN %X/%X %s",

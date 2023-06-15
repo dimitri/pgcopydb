@@ -970,7 +970,10 @@ parseMessage(LogicalMessage *mesg,
 			txn->xid = metadata->xid;
 			txn->beginLSN = metadata->lsn;
 
-			/* this should be overwritten in COMMIT action as that's what we need for origin */
+			/*
+			 * This should be overwritten in COMMIT action as that's what we
+			 * need for replication origin tracking.
+			 */
 			strlcpy(txn->timestamp, metadata->timestamp, sizeof(txn->timestamp));
 			txn->first = NULL;
 
