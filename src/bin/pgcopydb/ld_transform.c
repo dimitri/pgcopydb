@@ -217,7 +217,8 @@ stream_transform_write_message(StreamContext *privateContext,
 	 */
 	if (metadata->action == STREAM_ACTION_COMMIT ||
 		metadata->action == STREAM_ACTION_KEEPALIVE ||
-		metadata->action == STREAM_ACTION_SWITCH)
+		metadata->action == STREAM_ACTION_SWITCH ||
+		metadata->action == STREAM_ACTION_ENDPOS)
 	{
 		LogicalTransaction *txn = &(currentMsg->command.tx);
 
@@ -269,9 +270,9 @@ stream_transform_write_message(StreamContext *privateContext,
 		else if (currentMsg->isTransaction)
 		{
 			/*
-			 * A SWITCH WAL or a KEEPALIVE message happened in the middle of a
-			 * transaction: we need to mark the new transaction as a continued
-			 * part of the previous one.
+			 * A SWITCH WAL or a KEEPALIVE or an ENDPOS message happened in the
+			 * middle of a transaction: we need to mark the new transaction as
+			 * a continued part of the previous one.
 			 */
 			log_debug("stream_transform_line: continued transaction at %c: %X/%X",
 					  metadata->action,
@@ -780,15 +781,6 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 			log_error("Failed to transform and flush the current message, "
 					  "see above for details");
 			return false;
-		}
-
-		if (privateContext->endpos != InvalidXLogRecPtr &&
-			privateContext->endpos <= metadata->lsn)
-		{
-			log_info("Transform reached end position %X/%X at %X/%X",
-					 LSN_FORMAT_ARGS(privateContext->endpos),
-					 LSN_FORMAT_ARGS(metadata->lsn));
-			break;
 		}
 	}
 
@@ -1347,7 +1339,6 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 	 */
 	bool sentBEGIN = false;
 	bool splitTx = false;
-	bool endpos = false;
 
 	LogicalTransactionStatement *currentStmt = txn->first;
 
@@ -1371,6 +1362,11 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 
 			case STREAM_ACTION_KEEPALIVE:
 			{
+				if (sentBEGIN)
+				{
+					splitTx = true;
+				}
+
 				if (!stream_write_keepalive(out, &(currentStmt->stmt.keepalive)))
 				{
 					return false;
@@ -1380,17 +1376,15 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 
 			case STREAM_ACTION_ENDPOS:
 			{
+				if (sentBEGIN)
+				{
+					splitTx = true;
+				}
+
 				if (!stream_write_endpos(out, &(currentStmt->stmt.endpos)))
 				{
 					return false;
 				}
-
-				/*
-				 * When transforming an ENDPOS message that is the last JSON
-				 * message we have as input, make sure we don't write the
-				 * COMMIT message for the current transaction.
-				 */
-				endpos = currentStmt->next == NULL;
 				break;
 			}
 
@@ -1486,7 +1480,7 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 	 * then have the txn->commit metadata forcibly set to true: here we also
 	 * need to obey that.
 	 */
-	if ((sentBEGIN && !splitTx && !endpos) || txn->commit)
+	if ((sentBEGIN && !splitTx) || txn->commit)
 	{
 		if (!stream_write_commit(out, txn))
 		{
