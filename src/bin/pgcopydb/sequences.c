@@ -174,7 +174,7 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 
 	PGSQL dst = { 0 };
 
-	if (!pgsql_init(&dst, specs->target_pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
 	{
 		/* errors have already been logged */
 		return false;

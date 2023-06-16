@@ -83,7 +83,7 @@ copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions)
 
 	SourceExtensionArray *extensionArray = &(copySpecs->catalog.extensionArray);
 
-	if (!pgsql_init(&dst, copySpecs->target_pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&dst, copySpecs->connStrings.target_pguri, PGSQL_CONN_TARGET))
 	{
 		/* errors have already been logged */
 		return false;

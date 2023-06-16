@@ -202,7 +202,7 @@ vacuum_analyze_table_by_oid(CopyDataSpec *specs, uint32_t oid)
 	PGSQL dst = { 0 };
 
 	/* initialize our connection to the target database */
-	if (!pgsql_init(&dst, specs->target_pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
 	{
 		/* errors have already been logged */
 		return false;

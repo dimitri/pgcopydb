@@ -167,7 +167,10 @@ typedef struct PGSQL
 {
 	ConnectionType connectionType;
 	ConnectionStatementType connectionStatementType;
+
 	char *connectionString;
+	SafeURI safeURI;
+
 	PGconn *connection;
 	ConnectionRetryPolicy retryPolicy;
 	PGConnStatus status;

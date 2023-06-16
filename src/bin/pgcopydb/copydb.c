@@ -629,12 +629,12 @@ copydb_init_specs(CopyDataSpec *specs,
 		.cfPaths = specs->cfPaths,
 		.pgPaths = specs->pgPaths,
 
-		.source_pguri = options->source_pguri,
-		.target_pguri = options->target_pguri,
+		.connStrings = options->connStrings,
 
 		.sourceSnapshot = {
 			.pgsql = { 0 },
-			.pguri = options->source_pguri,
+			.pguri = options->connStrings.source_pguri,
+			.safeURI = options->connStrings.safeSourcePGURI,
 			.connectionType = PGSQL_CONN_SOURCE,
 			.snapshot = { 0 }
 		},
@@ -757,8 +757,7 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 		.cfPaths = &(specs->cfPaths),
 		.pgPaths = &(specs->pgPaths),
 
-		.source_pguri = specs->source_pguri,
-		.target_pguri = specs->target_pguri,
+		.connStrings = &(specs->connStrings),
 
 		.section = specs->section,
 		.resume = specs->resume,

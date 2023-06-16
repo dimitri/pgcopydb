@@ -637,8 +637,7 @@ cli_copy_roles(int argc, char **argv)
 	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_SCHEMA);
 
 	if (!pg_copy_roles(&(copySpecs.pgPaths),
-					   copySpecs.source_pguri,
-					   copySpecs.target_pguri,
+					   &(copySpecs.connStrings),
 					   copySpecs.dumpPaths.rolesFilename,
 					   copySpecs.noRolesPasswords))
 	{

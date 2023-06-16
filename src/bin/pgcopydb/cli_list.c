@@ -182,7 +182,7 @@ cli_list_getenv(ListDBOptions *options)
 {
 	int errors = 0;
 
-	if (!cli_copydb_getenv_source_pguri(options->source_pguri))
+	if (!cli_copydb_getenv_source_pguri(&(options->connStrings.source_pguri)))
 	{
 		/* errors have already been logged */
 		++errors;
@@ -255,8 +255,8 @@ cli_list_db_getopts(int argc, char **argv)
 							  "see above for details.");
 					exit(EXIT_CODE_BAD_ARGS);
 				}
-				options.source_pguri = pg_strdup(optarg);
-				log_trace("--source %s", options.source_pguri);
+				options.connStrings.source_pguri = pg_strdup(optarg);
+				log_trace("--source %s", options.connStrings.source_pguri);
 				break;
 			}
 
@@ -441,10 +441,17 @@ cli_list_db_getopts(int argc, char **argv)
 		}
 	}
 
-	if (IS_EMPTY_STRING_BUFFER(options.source_pguri))
+	if (IS_EMPTY_STRING_BUFFER(options.connStrings.source_pguri))
 	{
 		log_fatal("Option --source is mandatory");
 		++errors;
+	}
+
+	/* prepare safe versions of the connection strings (without password) */
+	if (!cli_prepare_pguris(&(options.connStrings)))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	if (options.listSkipped && IS_EMPTY_STRING_BUFFER(options.filterFileName))
@@ -474,7 +481,9 @@ cli_list_databases(int argc, char **argv)
 	PGSQL pgsql = { 0 };
 	SourceDatabaseArray databaseArray = { 0, NULL };
 
-	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
+	ConnStrings *dsn = &(listDBoptions.connStrings);
+
+	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);
@@ -521,7 +530,9 @@ cli_list_extensions(int argc, char **argv)
 	PGSQL pgsql = { 0 };
 	SourceExtensionArray extensionArray = { 0, NULL };
 
-	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
+	ConnStrings *dsn = &(listDBoptions.connStrings);
+
+	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);
@@ -585,7 +596,9 @@ cli_list_collations(int argc, char **argv)
 	PGSQL pgsql = { 0 };
 	SourceCollationArray collationArray = { 0, NULL };
 
-	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
+	ConnStrings *dsn = &(listDBoptions.connStrings);
+
+	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);
@@ -659,7 +672,9 @@ cli_list_tables(int argc, char **argv)
 		}
 	}
 
-	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
+	ConnStrings *dsn = &(listDBoptions.connStrings);
+
+	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);
@@ -806,7 +821,6 @@ static void
 cli_list_table_parts(int argc, char **argv)
 {
 	PGSQL pgsql = { 0 };
-	char scrubbedSourceURI[MAXCONNINFO] = { 0 };
 
 	if (IS_EMPTY_STRING_BUFFER(listDBoptions.table_name))
 	{
@@ -820,15 +834,14 @@ cli_list_table_parts(int argc, char **argv)
 		strlcpy(listDBoptions.schema_name, "public", NAMEDATALEN);
 	}
 
-	(void) parse_and_scrub_connection_string(listDBoptions.source_pguri,
-											 scrubbedSourceURI);
+	ConnStrings *dsn = &(listDBoptions.connStrings);
 
 	log_info("Listing COPY partitions for table \"%s\".\"%s\" in \"%s\"",
 			 listDBoptions.schema_name,
 			 listDBoptions.table_name,
-			 scrubbedSourceURI);
+			 dsn->safeSourcePGURI.pguri);
 
-	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
+	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);
@@ -1007,7 +1020,9 @@ cli_list_sequences(int argc, char **argv)
 		}
 	}
 
-	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
+	ConnStrings *dsn = &(listDBoptions.connStrings);
+
+	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);
@@ -1052,14 +1067,11 @@ cli_list_indexes(int argc, char **argv)
 	PGSQL pgsql = { 0 };
 	SourceIndexArray indexArray = { 0, NULL };
 
-	char scrubbedSourceURI[MAXCONNINFO] = { 0 };
+	ConnStrings *dsn = &(listDBoptions.connStrings);
 
-	(void) parse_and_scrub_connection_string(listDBoptions.source_pguri,
-											 scrubbedSourceURI);
+	log_info("Listing indexes in \"%s\"", dsn->safeSourcePGURI.pguri);
 
-	log_info("Listing indexes in \"%s\"", scrubbedSourceURI);
-
-	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
+	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);
@@ -1246,7 +1258,9 @@ cli_list_depends(int argc, char **argv)
 		}
 	}
 
-	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
+	ConnStrings *dsn = &(listDBoptions.connStrings);
+
+	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);
@@ -1339,12 +1353,9 @@ cli_list_schema(int argc, char **argv)
 		}
 	}
 
-	char scrubbedSourceURI[MAXCONNINFO] = { 0 };
+	ConnStrings *dsn = &(listDBoptions.connStrings);
 
-	(void) parse_and_scrub_connection_string(copySpecs.source_pguri,
-											 scrubbedSourceURI);
-
-	log_info("Fetching schema from \"%s\"", scrubbedSourceURI);
+	log_info("Fetching schema from \"%s\"", dsn->safeSourcePGURI.pguri);
 	log_info("Dumping schema into JSON file \"%s\"",
 			 copySpecs.cfPaths.schemafile);
 
@@ -1530,7 +1541,7 @@ copydb_init_specs_from_listdboptions(CopyDBOptions *options,
 									 ListDBOptions *listDBoptions)
 {
 	strlcpy(options->dir, listDBoptions->dir, MAXPGPATH);
-	options->source_pguri = listDBoptions->source_pguri;
+	options->connStrings = listDBoptions->connStrings;
 	options->splitTablesLargerThan = listDBoptions->splitTablesLargerThan;
 
 	/* pretend like --resume was used in every `pgcopydb list ...` commands */

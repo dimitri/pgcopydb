@@ -278,9 +278,7 @@ struct StreamSpecs
 {
 	CDCPaths paths;
 
-	char source_pguri[MAXCONNINFO];
-	char logrep_pguri[MAXCONNINFO];
-	char target_pguri[MAXCONNINFO];
+	ConnStrings *connStrings;
 
 	uint32_t WalSegSz;
 	IdentifySystem system;
@@ -330,7 +328,7 @@ typedef struct StreamContext
 	CDCPaths paths;
 	LogicalStreamMode mode;
 
-	char source_pguri[MAXCONNINFO];
+	ConnStrings *connStrings;
 
 	uint64_t startpos;
 	uint64_t endpos;
@@ -383,8 +381,7 @@ typedef struct StreamApplyContext
 	bool sentinelQueryInProgress;
 	uint64_t sentinelSyncTime;
 
-	char source_pguri[MAXCONNINFO];
-	char target_pguri[MAXCONNINFO];
+	ConnStrings *connStrings;
 	char origin[BUFSIZE];
 
 	IdentifySystem system;      /* information about source database */
@@ -419,8 +416,7 @@ typedef struct StreamContent
 
 bool stream_init_specs(StreamSpecs *specs,
 					   CDCPaths *paths,
-					   char *source_pguri,
-					   char *target_pguri,
+					   ConnStrings *connStrings,
 					   ReplicationSlot *slot,
 					   char *origin,
 					   uint64_t endpos,
@@ -470,7 +466,7 @@ bool stream_read_latest(StreamSpecs *specs, StreamContent *content);
 bool stream_update_latest_symlink(StreamContext *privateContext,
 								  const char *filename);
 
-bool buildReplicationURI(const char *pguri, char *repl_pguri);
+bool buildReplicationURI(const char *pguri, char **repl_pguri);
 
 bool stream_setup_databases(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
 
@@ -590,8 +586,7 @@ bool stream_apply_sql(StreamApplyContext *context,
 
 bool setupReplicationOrigin(StreamApplyContext *context,
 							CDCPaths *paths,
-							char *source_pguri,
-							char *target_pguri,
+							ConnStrings *connStrings,
 							char *origin,
 							uint64_t endpos,
 							bool apply,

@@ -17,6 +17,7 @@
 #include "copydb_paths.h"
 #include "defaults.h"
 #include "parson.h"
+#include "parsing_utils.h"
 #include "pgcmd.h"
 #include "pgsql.h"
 
@@ -31,8 +32,7 @@ typedef struct CopyDBOptions
 {
 	char dir[MAXPGPATH];
 
-	char *source_pguri;     /* malloc'ed area */
-	char *target_pguri;     /* malloc'ed area */
+	ConnStrings connStrings;
 
 	int tableJobs;
 	int indexJobs;
@@ -80,7 +80,7 @@ void cli_print_version(int argc, char **argv);
 void cli_pprint_json(JSON_Value *js);
 char * logLevelToString(int logLevel);
 
-bool cli_copydb_getenv_source_pguri(char *pguri);
+bool cli_copydb_getenv_source_pguri(char **pguri);
 bool cli_copydb_getenv_split(SplitTableLargerThan *splitTablesLargerThan);
 
 bool cli_copydb_getenv(CopyDBOptions *options);
@@ -98,5 +98,7 @@ bool cli_parse_bytes_pretty(const char *byteString,
 							uint64_t *bytes,
 							char *bytesPretty,
 							size_t bytesPrettySize);
+
+bool cli_prepare_pguris(ConnStrings *connStrings);
 
 #endif  /* CLI_COMMON_H */

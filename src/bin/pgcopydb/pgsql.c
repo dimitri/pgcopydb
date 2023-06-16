@@ -183,6 +183,9 @@ pgsql_init(PGSQL *pgsql, char *url, ConnectionType connectionType)
 		return false;
 	}
 
+	/* also keep around a print-safe version of the URL */
+	(void) parse_and_scrub_connection_string(url, &(pgsql->safeURI));
+
 	/* by default we log all the SQL queries and their parameters */
 	pgsql->logSQL = true;
 
@@ -413,23 +416,11 @@ pgsql_finish(PGSQL *pgsql)
 {
 	if (pgsql->connection != NULL)
 	{
-		char scrubbedConnectionString[MAXCONNINFO] = { 0 };
-
-		if (!parse_and_scrub_connection_string(pgsql->connectionString,
-											   scrubbedConnectionString))
-		{
-			log_debug("Failed to scrub password from connection string");
-
-			strlcpy(scrubbedConnectionString,
-					pgsql->connectionString,
-					sizeof(scrubbedConnectionString));
-		}
-
 		if (pgsql->logSQL)
 		{
 			log_sql("Disconnecting from [%s] \"%s\"",
 					ConnectionTypeToString(pgsql->connectionType),
-					scrubbedConnectionString);
+					pgsql->safeURI.pguri);
 		}
 
 		PQfinish(pgsql->connection);
@@ -438,6 +429,9 @@ pgsql_finish(PGSQL *pgsql)
 		/* cache invalidation for pgversion */
 		pgsql->pgversion[0] = '\0';
 		pgsql->pgversion_num = 0;
+
+		/* we don't need the print-safe URL anymore */
+		freeSafeURI(&(pgsql->safeURI));
 
 		/*
 		 * When we fail to connect, on the way out we call pgsql_finish to
@@ -505,16 +499,11 @@ pgsql_open_connection(PGSQL *pgsql)
 		return pgsql->connection;
 	}
 
-	char scrubbedConnectionString[MAXCONNINFO] = { 0 };
-
-	(void) parse_and_scrub_connection_string(pgsql->connectionString,
-											 scrubbedConnectionString);
-
 	if (pgsql->logSQL)
 	{
 		log_sql("Connecting to [%s] \"%s\"",
 				ConnectionTypeToString(pgsql->connectionType),
-				scrubbedConnectionString);
+				pgsql->safeURI.pguri);
 	}
 
 	/* use our own application_name, unless the environment already is set */
@@ -606,13 +595,8 @@ pgsql_retry_open_connection(PGSQL *pgsql)
 
 	INSTR_TIME_SET_ZERO(lastWarningTime);
 
-	char scrubbedConnectionString[MAXCONNINFO] = { 0 };
-
-	(void) parse_and_scrub_connection_string(pgsql->connectionString,
-											 scrubbedConnectionString);
-
 	log_warn("Failed to connect to \"%s\", retrying until "
-			 "the server is ready", scrubbedConnectionString);
+			 "the server is ready", pgsql->safeURI.pguri);
 
 	/* should not happen */
 	if (pgsql->retryPolicy.maxR == 0)
@@ -639,7 +623,7 @@ pgsql_retry_open_connection(PGSQL *pgsql)
 			log_error("Failed to connect to \"%s\" "
 					  "after %d attempts in %d ms, "
 					  "pgcopydb stops retrying now",
-					  scrubbedConnectionString,
+					  pgsql->safeURI.pguri,
 					  pgsql->retryPolicy.attempts,
 					  (int) INSTR_TIME_GET_MILLISEC(duration));
 
@@ -657,7 +641,7 @@ pgsql_retry_open_connection(PGSQL *pgsql)
 		(void) pg_usleep(sleep * 1000);
 
 		log_sql("PQping(%s): slept %d ms on attempt %d",
-				scrubbedConnectionString,
+				pgsql->safeURI.pguri,
 				pgsql->retryPolicy.sleepTime,
 				pgsql->retryPolicy.attempts);
 
@@ -697,7 +681,7 @@ pgsql_retry_open_connection(PGSQL *pgsql)
 
 					log_info("Successfully connected to \"%s\" "
 							 "after %d attempts in %d ms.",
-							 scrubbedConnectionString,
+							 pgsql->safeURI.pguri,
 							 pgsql->retryPolicy.attempts,
 							 (int) INSTR_TIME_GET_MILLISEC(duration));
 				}
@@ -750,7 +734,7 @@ pgsql_retry_open_connection(PGSQL *pgsql)
 						"The server at \"%s\" is running but is in a state "
 						"that disallows connections (startup, shutdown, or "
 						"crash recovery).",
-						scrubbedConnectionString);
+						pgsql->safeURI.pguri);
 				}
 
 				break;
@@ -793,7 +777,7 @@ pgsql_retry_open_connection(PGSQL *pgsql)
 						"number), or that there is a network connectivity "
 						"problem (for example, a firewall blocking the "
 						"connection request).",
-						scrubbedConnectionString,
+						pgsql->safeURI.pguri,
 						pgsql->retryPolicy.attempts,
 						(int) INSTR_TIME_GET_MILLISEC(durationSinceStart));
 				}
@@ -813,7 +797,7 @@ pgsql_retry_open_connection(PGSQL *pgsql)
 				lastWarningMessage = PQPING_NO_ATTEMPT;
 				log_sql("Failed to ping server \"%s\" because of "
 						"client-side problems (no attempt were made)",
-						scrubbedConnectionString);
+						pgsql->safeURI.pguri);
 				break;
 			}
 		}

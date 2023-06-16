@@ -58,7 +58,7 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 					 specs->cfPaths.done.preDataDump);
 		}
 		else if (!pg_dump_db(&(specs->pgPaths),
-							 specs->source_pguri,
+							 &(specs->connStrings),
 							 snapshot,
 							 "pre-data",
 							 &(specs->filters),
@@ -88,7 +88,7 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 					 specs->cfPaths.done.postDataDump);
 		}
 		else if (!pg_dump_db(&(specs->pgPaths),
-							 specs->source_pguri,
+							 &(specs->connStrings),
 							 snapshot,
 							 "post-data",
 							 &(specs->filters),
@@ -156,7 +156,7 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 	}
 
 	if (!pg_restore_db(&(specs->pgPaths),
-					   specs->target_pguri,
+					   &(specs->connStrings),
 					   &(specs->filters),
 					   specs->dumpPaths.preFilename,
 					   specs->dumpPaths.preListFilename,
@@ -222,7 +222,7 @@ copydb_target_drop_tables(CopyDataSpec *specs)
 
 	PGSQL dst = { 0 };
 
-	if (!pgsql_init(&dst, specs->target_pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
 	{
 		/* errors have already been logged */
 		destroyPQExpBuffer(query);
@@ -270,7 +270,7 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 	}
 
 	if (!pg_restore_db(&(specs->pgPaths),
-					   specs->target_pguri,
+					   &(specs->connStrings),
 					   &(specs->filters),
 					   specs->dumpPaths.postFilename,
 					   specs->dumpPaths.postListFilename,

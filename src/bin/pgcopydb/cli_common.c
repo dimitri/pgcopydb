@@ -164,11 +164,11 @@ cli_pprint_json(JSON_Value *js)
  * variable and duplicates its value at the given place.
  */
 bool
-cli_copydb_getenv_source_pguri(char *pguri)
+cli_copydb_getenv_source_pguri(char **pguri)
 {
 	if (env_exists(PGCOPYDB_SOURCE_PGURI))
 	{
-		if (!get_env_dup(PGCOPYDB_SOURCE_PGURI, &pguri))
+		if (!get_env_dup(PGCOPYDB_SOURCE_PGURI, pguri))
 		{
 			/* errors have already been logged */
 			return false;
@@ -224,7 +224,7 @@ cli_copydb_getenv(CopyDBOptions *options)
 {
 	int errors = 0;
 
-	if (!cli_copydb_getenv_source_pguri(options->source_pguri))
+	if (!cli_copydb_getenv_source_pguri(&(options->connStrings.source_pguri)))
 	{
 		/* errors have already been logged */
 		++errors;
@@ -233,7 +233,7 @@ cli_copydb_getenv(CopyDBOptions *options)
 	if (env_exists(PGCOPYDB_TARGET_PGURI))
 	{
 		if (!get_env_dup(PGCOPYDB_TARGET_PGURI,
-						 &(options->target_pguri)))
+						 &(options->connStrings.target_pguri)))
 		{
 			/* errors have already been logged */
 			++errors;
@@ -747,8 +747,8 @@ cli_copy_db_getopts(int argc, char **argv)
 							  "see above for details.");
 					++errors;
 				}
-				options.source_pguri = pg_strdup(optarg);
-				log_trace("--source %s", options.source_pguri);
+				options.connStrings.source_pguri = pg_strdup(optarg);
+				log_trace("--source %s", options.connStrings.source_pguri);
 				break;
 			}
 
@@ -760,8 +760,8 @@ cli_copy_db_getopts(int argc, char **argv)
 							  "see above for details.");
 					++errors;
 				}
-				options.target_pguri = pg_strdup(optarg);
-				log_trace("--target %s", options.target_pguri);
+				options.connStrings.target_pguri = pg_strdup(optarg);
+				log_trace("--target %s", options.connStrings.target_pguri);
 				break;
 			}
 
@@ -1071,11 +1071,17 @@ cli_copy_db_getopts(int argc, char **argv)
 		}
 	}
 
-	if (IS_EMPTY_STRING_BUFFER(options.source_pguri) ||
-		IS_EMPTY_STRING_BUFFER(options.target_pguri))
+	if (options.connStrings.source_pguri == NULL ||
+		options.connStrings.target_pguri == NULL)
 	{
 		log_fatal("Options --source and --target are mandatory");
 		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	if (!cli_prepare_pguris(&(options.connStrings)))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	if (!cli_copydb_is_consistent(&options))
@@ -1125,6 +1131,38 @@ cli_parse_bytes_pretty(const char *byteString,
 
 
 /*
+ * copydb_prepare_pguris prepares version of Postgres connections strings to
+ * source and target without security sensible information (password is
+ * removed).
+ */
+bool
+cli_prepare_pguris(ConnStrings *connStrings)
+{
+	int errors = 0;
+
+	char *spguri = connStrings->source_pguri;
+	char *tpguri = connStrings->target_pguri;
+
+	SafeURI *safeSourcePGURI = &(connStrings->safeSourcePGURI);
+	SafeURI *safeTargetPGURI = &(connStrings->safeTargetPGURI);
+
+	if (!parse_and_scrub_connection_string(spguri, safeSourcePGURI))
+	{
+		log_error("Failed to parse source connection string: \"%s\"", spguri);
+		++errors;
+	}
+
+	if (!parse_and_scrub_connection_string(tpguri, safeTargetPGURI))
+	{
+		log_error("Failed to parse target connection string: \"%s\"", tpguri);
+		++errors;
+	}
+
+	return errors == 0;
+}
+
+
+/*
  * cli_copy_prepare_specs initializes our internal data structure that are used
  * to drive the operations.
  */
@@ -1133,17 +1171,11 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 {
 	PostgresPaths *pgPaths = &(copySpecs->pgPaths);
 
-	char scrubbedSourceURI[MAXCONNINFO] = { 0 };
-	char scrubbedTargetURI[MAXCONNINFO] = { 0 };
+	char *safeSourceURI = copyDBoptions.connStrings.safeSourcePGURI.pguri;
+	char *safeTargetURI = copyDBoptions.connStrings.safeTargetPGURI.pguri;
 
-	(void) parse_and_scrub_connection_string(copyDBoptions.source_pguri,
-											 scrubbedSourceURI);
-
-	(void) parse_and_scrub_connection_string(copyDBoptions.target_pguri,
-											 scrubbedTargetURI);
-
-	log_info("[SOURCE] Copying database from \"%s\"", scrubbedSourceURI);
-	log_info("[TARGET] Copying database into \"%s\"", scrubbedTargetURI);
+	log_info("[SOURCE] Copying database from \"%s\"", safeSourceURI);
+	log_info("[TARGET] Copying database into \"%s\"", safeTargetURI);
 
 	(void) find_pg_commands(pgPaths);
 

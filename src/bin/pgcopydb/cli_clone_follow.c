@@ -197,8 +197,7 @@ clone_and_follow(CopyDataSpec *copySpecs)
 
 	if (!stream_init_specs(&streamSpecs,
 						   &(copySpecs->cfPaths.cdc),
-						   copySpecs->source_pguri,
-						   copySpecs->target_pguri,
+						   &(copySpecs->connStrings),
 						   &(copyDBoptions.slot),
 						   copyDBoptions.origin,
 						   copyDBoptions.endpos,
@@ -338,8 +337,7 @@ cli_follow(int argc, char **argv)
 
 	if (!stream_init_specs(&specs,
 						   &(copySpecs.cfPaths.cdc),
-						   copySpecs.source_pguri,
-						   copySpecs.target_pguri,
+						   &(copySpecs.connStrings),
 						   &(copyDBoptions.slot),
 						   copyDBoptions.origin,
 						   copyDBoptions.endpos,
@@ -474,8 +472,7 @@ cloneDB(CopyDataSpec *copySpecs)
 		log_info("STEP 0: copy the source database roles");
 
 		if (!pg_copy_roles(&(copySpecs->pgPaths),
-						   copySpecs->source_pguri,
-						   copySpecs->target_pguri,
+						   &(copySpecs->connStrings),
 						   copySpecs->dumpPaths.rolesFilename,
 						   copySpecs->noRolesPasswords))
 		{
@@ -575,7 +572,9 @@ cloneDB(CopyDataSpec *copySpecs)
 
 		log_info("Updating the pgcopydb.sentinel to enable applying changes");
 
-		if (!pgsql_init(&pgsql, copySpecs->source_pguri, PGSQL_CONN_SOURCE))
+		if (!pgsql_init(&pgsql,
+						copySpecs->connStrings.source_pguri,
+						PGSQL_CONN_SOURCE))
 		{
 			/* errors have already been logged */
 			return false;
