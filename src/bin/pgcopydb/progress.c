@@ -165,7 +165,7 @@ copydb_setup_as_json(CopyDataSpec *copySpecs,
 
 	json_object_set_number(jsSetupObj,
 						   "split-tables-larger-than",
-						   (double) copySpecs->splitTablesLargerThan);
+						   (double) copySpecs->splitTablesLargerThan.bytes);
 
 	/* attach the JSON array to the main JSON object under the provided key */
 	json_object_set_value(jsobj, key, jsSetup);

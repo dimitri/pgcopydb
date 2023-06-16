@@ -678,10 +678,6 @@ copydb_init_specs(CopyDataSpec *specs,
 				sizeof(tmpCopySpecs.sourceSnapshot.snapshot));
 	}
 
-	strlcpy(tmpCopySpecs.splitTablesLargerThanPretty,
-			options->splitTablesLargerThanPretty,
-			sizeof(tmpCopySpecs.splitTablesLargerThanPretty));
-
 	/* copy the structure as a whole memory area to the target place */
 	*specs = tmpCopySpecs;
 

@@ -172,6 +172,32 @@ CommandLine list_commands =
 					 "List database objects from a Postgres instance",
 					 NULL, NULL, NULL, list_subcommands);
 
+
+/*
+ * cli_list_getenv reads from the environment variables and fills-in the
+ * command line options.
+ */
+static int
+cli_list_getenv(ListDBOptions *options)
+{
+	int errors = 0;
+
+	if (!cli_copydb_getenv_source_pguri(options->source_pguri))
+	{
+		/* errors have already been logged */
+		++errors;
+	}
+
+	if (!cli_copydb_getenv_split(&(options->splitTablesLargerThan)))
+	{
+		/* errors have already been logged */
+		++errors;
+	}
+
+	return errors == 0;
+}
+
+
 /*
  * cli_list_db_getopts parses the CLI options for the `list db` command.
  */
@@ -210,7 +236,7 @@ cli_list_db_getopts(int argc, char **argv)
 	optind = 0;
 
 	/* read values from the environment */
-	if (!cli_copydb_getenv(&options))
+	if (!cli_list_getenv(&options))
 	{
 		log_fatal("Failed to read default values from the environment");
 		exit(EXIT_CODE_BAD_ARGS);
@@ -287,9 +313,9 @@ cli_list_db_getopts(int argc, char **argv)
 			{
 				if (!cli_parse_bytes_pretty(
 						optarg,
-						&options.splitTablesLargerThan,
-						(char *) &options.splitTablesLargerThanPretty,
-						sizeof(options.splitTablesLargerThanPretty)))
+						&(options.splitTablesLargerThan.bytes),
+						(char *) &(options.splitTablesLargerThan.bytesPretty),
+						sizeof(options.splitTablesLargerThan.bytesPretty)))
 				{
 					log_fatal("Failed to parse --split-tables-larger-than: \"%s\"",
 							  optarg);
@@ -297,8 +323,8 @@ cli_list_db_getopts(int argc, char **argv)
 				}
 
 				log_trace("--split-tables-larger-than %s (%lld)",
-						  options.splitTablesLargerThanPretty,
-						  (long long) options.splitTablesLargerThan);
+						  options.splitTablesLargerThan.bytesPretty,
+						  (long long) options.splitTablesLargerThan.bytes);
 				break;
 			}
 
@@ -425,31 +451,6 @@ cli_list_db_getopts(int argc, char **argv)
 	{
 		log_fatal("Option --list-skipped requires using option --filters");
 		++errors;
-	}
-
-	if (env_exists(PGCOPYDB_SPLIT_TABLES_LARGER_THAN))
-	{
-		char bytes[BUFSIZE] = { 0 };
-
-		if (get_env_copy(PGCOPYDB_SPLIT_TABLES_LARGER_THAN, bytes, sizeof(bytes)))
-		{
-			if (!cli_parse_bytes_pretty(
-					bytes,
-					&options.splitTablesLargerThan,
-					(char *) &options.splitTablesLargerThanPretty,
-					sizeof(options.splitTablesLargerThanPretty)))
-			{
-				log_fatal("Failed to parse PGCOPYDB_SPLIT_TABLES_LARGER_THAN: "
-						  " \"%s\"",
-						  bytes);
-				++errors;
-			}
-		}
-		else
-		{
-			/* errors have already been logged */
-			++errors;
-		}
 	}
 
 	if (errors > 0)
@@ -913,7 +914,7 @@ cli_list_table_parts(int argc, char **argv)
 	}
 
 	if (!schema_list_partitions(&pgsql, table,
-								listDBoptions.splitTablesLargerThan))
+								listDBoptions.splitTablesLargerThan.bytes))
 	{
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
@@ -1531,10 +1532,6 @@ copydb_init_specs_from_listdboptions(CopyDBOptions *options,
 	strlcpy(options->dir, listDBoptions->dir, MAXPGPATH);
 	options->source_pguri = listDBoptions->source_pguri;
 	options->splitTablesLargerThan = listDBoptions->splitTablesLargerThan;
-
-	strlcpy(options->splitTablesLargerThanPretty,
-			listDBoptions->splitTablesLargerThanPretty,
-			sizeof(options->splitTablesLargerThanPretty));
 
 	/* pretend like --resume was used in every `pgcopydb list ...` commands */
 	options->resume = true;

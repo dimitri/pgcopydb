@@ -245,8 +245,7 @@ typedef struct CopyDataSpec
 	int indexJobs;
 	int vacuumJobs;
 
-	uint64_t splitTablesLargerThan;
-	char splitTablesLargerThanPretty[NAMEDATALEN];
+	SplitTableLargerThan splitTablesLargerThan;
 
 	Semaphore tableSemaphore;
 	Semaphore indexSemaphore;

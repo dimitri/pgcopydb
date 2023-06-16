@@ -160,6 +160,62 @@ cli_pprint_json(JSON_Value *js)
 
 
 /*
+ * cli_copydb_getenv_source_pguri reads the PGCOPYDB_SOURCE_PGURI environment
+ * variable and duplicates its value at the given place.
+ */
+bool
+cli_copydb_getenv_source_pguri(char *pguri)
+{
+	if (env_exists(PGCOPYDB_SOURCE_PGURI))
+	{
+		if (!get_env_dup(PGCOPYDB_SOURCE_PGURI, &pguri))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * cli_copydb_getenv_split reads the PGCOPYDB_SPLIT_TABLES_LARGER_THAN
+ * environment variable and fills in the given SplitTableLargerThan instance.
+ */
+bool
+cli_copydb_getenv_split(SplitTableLargerThan *splitTablesLargerThan)
+{
+	if (env_exists(PGCOPYDB_SPLIT_TABLES_LARGER_THAN))
+	{
+		char bytes[BUFSIZE] = { 0 };
+
+		if (get_env_copy(PGCOPYDB_SPLIT_TABLES_LARGER_THAN, bytes, sizeof(bytes)))
+		{
+			if (!cli_parse_bytes_pretty(
+					bytes,
+					&(splitTablesLargerThan->bytes),
+					(char *) &(splitTablesLargerThan->bytesPretty),
+					sizeof(splitTablesLargerThan->bytesPretty)))
+			{
+				log_fatal("Failed to parse PGCOPYDB_SPLIT_TABLES_LARGER_THAN: "
+						  " \"%s\"",
+						  bytes);
+				return false;
+			}
+		}
+		else
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
  * cli_copydb_getenv reads from the environment variables and fills-in the
  * command line options.
  */
@@ -168,15 +224,10 @@ cli_copydb_getenv(CopyDBOptions *options)
 {
 	int errors = 0;
 
-	/* now some of the options can be also set from the environment */
-	if (env_exists(PGCOPYDB_SOURCE_PGURI))
+	if (!cli_copydb_getenv_source_pguri(options->source_pguri))
 	{
-		if (!get_env_dup(PGCOPYDB_SOURCE_PGURI,
-						 &(options->source_pguri)))
-		{
-			/* errors have already been logged */
-			++errors;
-		}
+		/* errors have already been logged */
+		++errors;
 	}
 
 	if (env_exists(PGCOPYDB_TARGET_PGURI))
@@ -233,29 +284,10 @@ cli_copydb_getenv(CopyDBOptions *options)
 		}
 	}
 
-	if (env_exists(PGCOPYDB_SPLIT_TABLES_LARGER_THAN))
+	if (!cli_copydb_getenv_split(&(options->splitTablesLargerThan)))
 	{
-		char bytes[BUFSIZE] = { 0 };
-
-		if (get_env_copy(PGCOPYDB_SPLIT_TABLES_LARGER_THAN, bytes, sizeof(bytes)))
-		{
-			if (!cli_parse_bytes_pretty(
-					bytes,
-					&options->splitTablesLargerThan,
-					(char *) &options->splitTablesLargerThanPretty,
-					sizeof(options->splitTablesLargerThanPretty)))
-			{
-				log_fatal("Failed to parse PGCOPYDB_SPLIT_TABLES_LARGER_THAN: "
-						  " \"%s\"",
-						  bytes);
-				++errors;
-			}
-		}
-		else
-		{
-			/* errors have already been logged */
-			++errors;
-		}
+		/* errors have already been logged */
+		++errors;
 	}
 
 	/* when --snapshot has not been used, check PGCOPYDB_SNAPSHOT */
@@ -692,7 +724,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	/* install default values */
 	options.tableJobs = DEFAULT_TABLE_JOBS;
 	options.indexJobs = DEFAULT_INDEX_JOBS;
-	options.splitTablesLargerThan = DEFAULT_SPLIT_TABLES_LARGER_THAN;
+	options.splitTablesLargerThan.bytes = DEFAULT_SPLIT_TABLES_LARGER_THAN;
 
 	/* read values from the environment */
 	if (!cli_copydb_getenv(&options))
@@ -770,9 +802,9 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				if (!cli_parse_bytes_pretty(
 						optarg,
-						&options.splitTablesLargerThan,
-						(char *) &options.splitTablesLargerThanPretty,
-						sizeof(options.splitTablesLargerThanPretty)))
+						&(options.splitTablesLargerThan.bytes),
+						(char *) &(options.splitTablesLargerThan.bytesPretty),
+						sizeof(options.splitTablesLargerThan.bytesPretty)))
 				{
 					log_fatal("Failed to parse --split-tables-larger-than: \"%s\"",
 							  optarg);
@@ -780,8 +812,8 @@ cli_copy_db_getopts(int argc, char **argv)
 				}
 
 				log_trace("--split-tables-larger-than %s (%lld)",
-						  options.splitTablesLargerThanPretty,
-						  (long long) options.splitTablesLargerThan);
+						  options.splitTablesLargerThan.bytesPretty,
+						  (long long) options.splitTablesLargerThan.bytes);
 				break;
 			}
 

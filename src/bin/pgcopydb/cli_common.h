@@ -20,6 +20,13 @@
 #include "pgcmd.h"
 #include "pgsql.h"
 
+typedef struct SplitTableLargerThan
+{
+	uint64_t bytes;
+	char bytesPretty[NAMEDATALEN];
+} SplitTableLargerThan;
+
+
 typedef struct CopyDBOptions
 {
 	char dir[MAXPGPATH];
@@ -29,8 +36,8 @@ typedef struct CopyDBOptions
 
 	int tableJobs;
 	int indexJobs;
-	uint64_t splitTablesLargerThan;
-	char splitTablesLargerThanPretty[NAMEDATALEN];
+
+	SplitTableLargerThan splitTablesLargerThan;
 
 	RestoreOptions restoreOptions;
 
@@ -72,6 +79,9 @@ void cli_print_version(int argc, char **argv);
 
 void cli_pprint_json(JSON_Value *js);
 char * logLevelToString(int logLevel);
+
+bool cli_copydb_getenv_source_pguri(char *pguri);
+bool cli_copydb_getenv_split(SplitTableLargerThan *splitTablesLargerThan);
 
 bool cli_copydb_getenv(CopyDBOptions *options);
 bool cli_copydb_is_consistent(CopyDBOptions *options);

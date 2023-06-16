@@ -30,8 +30,7 @@ typedef struct ListDBOptions
 	bool dropCache;
 	bool summary;
 
-	uint64_t splitTablesLargerThan;
-	char splitTablesLargerThanPretty[NAMEDATALEN];
+	SplitTableLargerThan splitTablesLargerThan;
 } ListDBOptions;
 
 
