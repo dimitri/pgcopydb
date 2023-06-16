@@ -38,8 +38,6 @@ typedef struct TransformStreamCtx
 {
 	StreamContext *context;
 	uint64_t currentMsgIndex;
-	LogicalMessage currentMsg;
-	LogicalMessageMetadata metadata;
 } TransformStreamCtx;
 
 
@@ -53,6 +51,12 @@ stream_transform_stream(StreamSpecs *specs)
 {
 	StreamContext *privateContext =
 		(StreamContext *) calloc(1, sizeof(StreamContext));
+
+	if (privateContext == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
 
 	if (!stream_init_context(privateContext, specs))
 	{
@@ -81,9 +85,7 @@ stream_transform_stream(StreamSpecs *specs)
 
 	TransformStreamCtx ctx = {
 		.context = privateContext,
-		.currentMsgIndex = 0,
-		.currentMsg = { 0 },
-		.metadata = { 0 }
+		.currentMsgIndex = 0
 	};
 
 	ReadFromStreamContext context = {
@@ -139,8 +141,7 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
 {
 	TransformStreamCtx *transformCtx = (TransformStreamCtx *) ctx;
 	StreamContext *privateContext = transformCtx->context;
-	LogicalMessage *currentMsg = &(transformCtx->currentMsg);
-	LogicalMessageMetadata *metadata = &(transformCtx->metadata);
+	LogicalMessageMetadata *metadata = &(privateContext->metadata);
 
 	static uint64_t lineno = 0;
 
@@ -150,7 +151,7 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
 	LogicalMessageMetadata empty = { 0 };
 	*metadata = empty;
 
-	if (!stream_transform_message((char *) line, metadata, currentMsg))
+	if (!stream_transform_message(privateContext, (char *) line))
 	{
 		/* errors have already been logged */
 		return false;
@@ -158,7 +159,7 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
 
 	if (privateContext->sqlFile == NULL)
 	{
-		if (!stream_transform_rotate(privateContext, metadata))
+		if (!stream_transform_rotate(privateContext))
 		{
 			/* errors have already been logged */
 			return false;
@@ -168,9 +169,56 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
 	/*
 	 * Is it time to close the current message and prepare a new one?
 	 */
+	if (!stream_transform_write_message(privateContext,
+										&(transformCtx->currentMsgIndex)))
+	{
+		log_error("Failed to transform and flush the current message, "
+				  "see above for details");
+		return false;
+	}
+
+	/* rotate the SQL file when receiving a SWITCH WAL message */
+	if (metadata->action == STREAM_ACTION_SWITCH)
+	{
+		if (!stream_transform_rotate(privateContext))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	if (privateContext->endpos != InvalidXLogRecPtr &&
+		privateContext->endpos <= metadata->lsn)
+	{
+		*stop = true;
+
+		log_info("Transform reached end position %X/%X at %X/%X",
+				 LSN_FORMAT_ARGS(privateContext->endpos),
+				 LSN_FORMAT_ARGS(metadata->lsn));
+	}
+
+	return true;
+}
+
+
+/*
+ * stream_transform_write_message checks if we need to flush-out the current
+ * message down to file, and maybe also stdout (Unix PIPE).
+ */
+bool
+stream_transform_write_message(StreamContext *privateContext,
+							   uint64_t *currentMsgIndex)
+{
+	LogicalMessage *currentMsg = &(privateContext->currentMsg);
+	LogicalMessageMetadata *metadata = &(privateContext->metadata);
+
+	/*
+	 * Is it time to close the current message and prepare a new one?
+	 */
 	if (metadata->action == STREAM_ACTION_COMMIT ||
 		metadata->action == STREAM_ACTION_KEEPALIVE ||
-		metadata->action == STREAM_ACTION_SWITCH)
+		metadata->action == STREAM_ACTION_SWITCH ||
+		metadata->action == STREAM_ACTION_ENDPOS)
 	{
 		LogicalTransaction *txn = &(currentMsg->command.tx);
 
@@ -181,10 +229,13 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
 		}
 
 		/* now write the transaction out */
-		if (!stream_write_message(privateContext->out, currentMsg))
+		if (privateContext->out != NULL)
 		{
-			/* errors have already been logged */
-			return false;
+			if (!stream_write_message(privateContext->out, currentMsg))
+			{
+				/* errors have already been logged */
+				return false;
+			}
 		}
 
 		/* now write the transaction out also to file on-disk */
@@ -214,14 +265,14 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
 			LogicalMessage empty = { 0 };
 
 			*currentMsg = empty;
-			++(transformCtx->currentMsgIndex);
+			++(*currentMsgIndex);
 		}
 		else if (currentMsg->isTransaction)
 		{
 			/*
-			 * A SWITCH WAL or a KEEPALIVE message happened in the middle of a
-			 * transaction: we need to mark the new transaction as a continued
-			 * part of the previous one.
+			 * A SWITCH WAL or a KEEPALIVE or an ENDPOS message happened in the
+			 * middle of a transaction: we need to mark the new transaction as
+			 * a continued part of the previous one.
 			 */
 			log_debug("stream_transform_line: continued transaction at %c: %X/%X",
 					  metadata->action,
@@ -247,26 +298,6 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
 		}
 	}
 
-	/* rotate the SQL file when receiving a SWITCH WAL message */
-	if (metadata->action == STREAM_ACTION_SWITCH)
-	{
-		if (!stream_transform_rotate(privateContext, metadata))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-	}
-
-	if (privateContext->endpos != InvalidXLogRecPtr &&
-		privateContext->endpos <= metadata->lsn)
-	{
-		*stop = true;
-
-		log_info("Transform reached end position %X/%X at %X/%X",
-				 LSN_FORMAT_ARGS(privateContext->endpos),
-				 LSN_FORMAT_ARGS(metadata->lsn));
-	}
-
 	return true;
 }
 
@@ -276,10 +307,10 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
  * output into a SQL statement, and appends it to the given opened transaction.
  */
 bool
-stream_transform_message(char *message,
-						 LogicalMessageMetadata *metadata,
-						 LogicalMessage *currentMsg)
+stream_transform_message(StreamContext *privateContext, char *message)
 {
+	LogicalMessageMetadata *metadata = &(privateContext->metadata);
+
 	JSON_Value *json = json_parse_string(message);
 
 	if (!parseMessageMetadata(metadata, message, json, false))
@@ -289,7 +320,7 @@ stream_transform_message(char *message,
 		return false;
 	}
 
-	if (!parseMessage(currentMsg, metadata, message, json))
+	if (!parseMessage(privateContext, message, json))
 	{
 		log_error("Failed to parse JSON message: %s", message);
 		json_value_free(json);
@@ -307,9 +338,10 @@ stream_transform_message(char *message,
  * commands on-disk, which is important for restartability of the process.
  */
 bool
-stream_transform_rotate(StreamContext *privateContext,
-						LogicalMessageMetadata *metadata)
+stream_transform_rotate(StreamContext *privateContext)
 {
+	LogicalMessageMetadata *metadata = &(privateContext->metadata);
+
 	/*
 	 * When streaming from stdin to stdout (or other streams), we also maintain
 	 * our SQL file on-disk using the WAL file naming strategy from Postgres,
@@ -519,7 +551,7 @@ stream_transform_file_at_lsn(StreamSpecs *specs, uint64_t lsn)
 		return false;
 	}
 
-	if (!stream_transform_file(walFileName, sqlFileName, specs->paths.dir))
+	if (!stream_transform_file(specs, walFileName, sqlFileName))
 	{
 		/* errors have already been logged */
 		return false;
@@ -610,7 +642,7 @@ stream_transform_send_stop(Queue *queue)
  * target database.
  */
 bool
-stream_transform_file(char *jsonfilename, char *sqlfilename, char *dir)
+stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 {
 	StreamContent content = { 0 };
 	long size = 0L;
@@ -641,54 +673,58 @@ stream_transform_file(char *jsonfilename, char *sqlfilename, char *dir)
 			  content.count,
 			  content.filename);
 
-	content.messages =
-		(LogicalMessageMetadata *) calloc(content.count,
-										  sizeof(LogicalMessageMetadata));
-
-	if (content.messages == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	/*
-	 * Message are like:
-	 *
-	 * {action: B} {action: C} {action: K} {action: X}
-	 *
-	 * And when we read a COMMIT message (or KEEPALIVE or SWITCH) we prepare
-	 * for the next message already, which means we need one more entry in the
-	 * array than the number of lines read in the JSON file.
-	 */
-	int maxMesgCount = content.count + 1;
-	LogicalMessageArray mesgs = { 0 };
-
-	/* the actual count is maintained in the for loop below */
-	mesgs.count = 0;
-	mesgs.array =
-		(LogicalMessage *) calloc(maxMesgCount, sizeof(LogicalMessage));
-
-	if (mesgs.array == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
 	/*
 	 * Read the JSON-lines file that we received from streaming logical
 	 * decoding messages, and parse the JSON messages into our internal
 	 * representation structure.
 	 */
-	int currentMsgIndex = 0;
-	LogicalMessage *currentMsg = &(mesgs.array[currentMsgIndex]);
+	StreamContext *privateContext =
+		(StreamContext *) calloc(1, sizeof(StreamContext));
+
+	if (privateContext == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	if (!stream_init_context(privateContext, specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * The output is written to a temp/partial file which is renamed after
+	 * close, so that another tool that would want to read the file won't read
+	 * partial JSON messages in there.
+	 */
+	char tempfilename[MAXPGPATH] = { 0 };
+
+	sformat(tempfilename, sizeof(tempfilename), "%s.partial", sqlfilename);
+
+	privateContext->sqlFile =
+		fopen_with_umask(tempfilename, "w", FOPEN_FLAGS_W, 0644);
+
+	if (privateContext->sqlFile == NULL)
+	{
+		log_error("Failed to create and open file \"%s\"", tempfilename);
+		return false;
+	}
+
+	log_debug("stream_transform_file writing to \"%s\"", tempfilename);
+
+	uint64_t currentMsgIndex = 0;
 
 	/* we might need to access to the last message metadata after the loop */
-	LogicalMessageMetadata *metadata = NULL;
+	LogicalMessage *currentMsg = &(privateContext->currentMsg);
+	LogicalMessageMetadata *metadata = &(privateContext->metadata);
 
 	for (int i = 0; i < content.count; i++)
 	{
 		char *message = content.lines[i];
-		metadata = &(content.messages[i]);
+
+		LogicalMessageMetadata empty = { 0 };
+		*metadata = empty;
 
 		log_trace("stream_transform_file[%2d]: %s", i, message);
 
@@ -725,7 +761,7 @@ stream_transform_file(char *jsonfilename, char *sqlfilename, char *dir)
 			*currentMsg = new;
 		}
 
-		if (!parseMessage(currentMsg, metadata, message, json))
+		if (!parseMessage(privateContext, message, json))
 		{
 			log_error("Failed to parse JSON message: %s", message);
 			json_value_free(json);
@@ -740,100 +776,17 @@ stream_transform_file(char *jsonfilename, char *sqlfilename, char *dir)
 		 * non-transactional message (such as a KEEPALIVE or a SWITCH WAL or an
 		 * ENDPOS message).
 		 */
-		if (!currentMsg->isTransaction ||
-			metadata->action == STREAM_ACTION_COMMIT)
+		if (!stream_transform_write_message(privateContext, &currentMsgIndex))
 		{
-			++mesgs.count;
-			++currentMsgIndex;
-
-			if ((maxMesgCount - 1) < currentMsgIndex)
-			{
-				log_error("Parsing message %d, which is more than the "
-						  "maximum allocated message count %d",
-						  currentMsgIndex + 1,
-						  maxMesgCount);
-				return false;
-			}
-
-			currentMsg = &(mesgs.array[currentMsgIndex]);
-		}
-	}
-
-	/*
-	 * We might have a last pending transaction with a COMMIT message to be
-	 * found in a a later file, or a last transaction that's cut by reaching an
-	 * endpos LSN that's between the BEGIN and the COMMIT lsn positions.
-	 *
-	 * In any case if we have a partial transaction pending we have to
-	 * transform it too.
-	 */
-	if (currentMsg->isTransaction && currentMsg->command.tx.count > 0)
-	{
-		++mesgs.count;
-	}
-
-	/* free dynamic memory that's not needed anymore */
-	free(content.lines);
-	free(content.messages);
-
-	log_debug("stream_transform_file read %d messages", mesgs.count);
-
-	/*
-	 * Now that we have read and parsed the JSON file into our internal
-	 * structure that represents SQL transactions with statements, output the
-	 * content in the SQL format.
-	 *
-	 * The output is written to a temp/partial file which is renamed after
-	 * close, so that another tool that would want to read the file won't read
-	 * partial JSON messages in there.
-	 */
-	char tempfilename[MAXPGPATH] = { 0 };
-
-	sformat(tempfilename, sizeof(tempfilename), "%s.partial", sqlfilename);
-
-	FILE *sql = fopen_with_umask(tempfilename, "w", FOPEN_FLAGS_W, 0644);
-
-	if (sql == NULL)
-	{
-		log_error("Failed to create and open file \"%s\"", sqlfilename);
-		return false;
-	}
-
-	log_debug("stream_transform_file writing to \"%s\"", tempfilename);
-
-	for (int i = 0; i < mesgs.count; i++)
-	{
-		LogicalMessage *currentMsg = &(mesgs.array[i]);
-
-		if (!stream_write_message(sql, currentMsg))
-		{
-			/* errors have already been logged */
+			log_error("Failed to transform and flush the current message, "
+					  "see above for details");
 			return false;
 		}
-
-		LogicalTransaction *txn = &(currentMsg->command.tx);
-
-		/*
-		 * If we're in a continued transaction, it means that the earlier write
-		 * of this txn's BEGIN statement didn't have the COMMIT LSN. Therefore,
-		 * we need to maintain that LSN as a separate metadata file. This is
-		 * necessary because the COMMIT LSN is required later in the apply
-		 * process.
-		 */
-		if (txn->continued && txn->commit)
-		{
-			writeTxnMetadataFile(txn, dir);
-		}
-
-		(void) FreeLogicalMessage(currentMsg);
 	}
 
-	/* free the LogicalMessage array memory area */
-	free(mesgs.array);
-
-	if (fclose(sql) == EOF)
+	if (fclose(privateContext->sqlFile) == EOF)
 	{
-		log_error("Failed to write file \"%s\"", sqlfilename);
+		log_error("Failed to write file \"%s\"", tempfilename);
 		return false;
 	}
 
@@ -862,11 +815,11 @@ stream_transform_file(char *jsonfilename, char *sqlfilename, char *dir)
  * representation, that can be later output as SQL text.
  */
 bool
-parseMessage(LogicalMessage *mesg,
-			 LogicalMessageMetadata *metadata,
-			 char *message,
-			 JSON_Value *json)
+parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 {
+	LogicalMessage *mesg = &(privateContext->currentMsg);
+	LogicalMessageMetadata *metadata = &(privateContext->metadata);
+
 	if (mesg == NULL)
 	{
 		log_error("BUG: parseMessage called with a NULL LogicalMessage");
@@ -948,6 +901,9 @@ parseMessage(LogicalMessage *mesg,
 		}
 
 		stmt->action = metadata->action;
+
+		/* publish the statement in the privateContext */
+		privateContext->stmt = stmt;
 	}
 
 	switch (metadata->action)
@@ -971,8 +927,8 @@ parseMessage(LogicalMessage *mesg,
 			txn->beginLSN = metadata->lsn;
 
 			/*
-			 * This should be overwritten in COMMIT action as that's what we
-			 * need for replication origin tracking.
+			 * The timestamp is overwritten at COMMIT as that's what we need
+			 * for replication origin tracking.
 			 */
 			strlcpy(txn->timestamp, metadata->timestamp, sizeof(txn->timestamp));
 			txn->first = NULL;
@@ -1093,7 +1049,7 @@ parseMessage(LogicalMessage *mesg,
 			{
 				case JSONString:
 				{
-					if (!parseTestDecodingMessage(stmt, metadata, message, json))
+					if (!parseTestDecodingMessage(privateContext, message, json))
 					{
 						log_error("Failed to parse test_decoding message, "
 								  "see above for details");
@@ -1105,7 +1061,7 @@ parseMessage(LogicalMessage *mesg,
 
 				case JSONObject:
 				{
-					if (!parseWal2jsonMessage(stmt, metadata, message, json))
+					if (!parseWal2jsonMessage(privateContext, message, json))
 					{
 						log_error("Failed to parse wal2json message, "
 								  "see above for details");
@@ -1383,7 +1339,6 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 	 */
 	bool sentBEGIN = false;
 	bool splitTx = false;
-	bool endpos = false;
 
 	LogicalTransactionStatement *currentStmt = txn->first;
 
@@ -1407,6 +1362,11 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 
 			case STREAM_ACTION_KEEPALIVE:
 			{
+				if (sentBEGIN)
+				{
+					splitTx = true;
+				}
+
 				if (!stream_write_keepalive(out, &(currentStmt->stmt.keepalive)))
 				{
 					return false;
@@ -1416,17 +1376,15 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 
 			case STREAM_ACTION_ENDPOS:
 			{
+				if (sentBEGIN)
+				{
+					splitTx = true;
+				}
+
 				if (!stream_write_endpos(out, &(currentStmt->stmt.endpos)))
 				{
 					return false;
 				}
-
-				/*
-				 * When transforming an ENDPOS message that is the last JSON
-				 * message we have as input, make sure we don't write the
-				 * COMMIT message for the current transaction.
-				 */
-				endpos = currentStmt->next == NULL;
 				break;
 			}
 
@@ -1522,7 +1480,7 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 	 * then have the txn->commit metadata forcibly set to true: here we also
 	 * need to obey that.
 	 */
-	if ((sentBEGIN && !splitTx && !endpos) || txn->commit)
+	if ((sentBEGIN && !splitTx) || txn->commit)
 	{
 		if (!stream_write_commit(out, txn))
 		{

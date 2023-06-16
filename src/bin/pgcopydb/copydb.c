@@ -667,13 +667,8 @@ copydb_init_specs(CopyDataSpec *specs,
 		.vacuumQueue = { 0 },
 		.indexQueue = { 0 },
 
-		.extensionArray = { 0, NULL },
-		.sourceTableArray = { 0, NULL },
-		.sourceIndexArray = { 0, NULL },
-		.sequenceArray = { 0, NULL },
-		.tableSpecsArray = { 0, NULL },
-
-		.sourceTableHashByOid = NULL
+		.catalog = { 0 },
+		.tableSpecsArray = { 0, NULL }
 	};
 
 	/* initialize the connection strings */

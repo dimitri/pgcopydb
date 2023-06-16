@@ -20,20 +20,20 @@
  * In the SQL standard we have "catalogs", which are then Postgres databases.
  * Much the same confusion as with namespace vs schema.
  */
-typedef struct SourceCatalog
+typedef struct SourceDatabase
 {
 	uint32_t oid;
 	char datname[NAMEDATALEN];
 	int64_t bytes;
 	char bytesPretty[NAMEDATALEN]; /* pg_size_pretty */
 }
-SourceCatalog;
+SourceDatabase;
 
-typedef struct SourceCatalogArray
+typedef struct SourceDatabaseArray
 {
 	int count;
-	SourceCatalog *array;
-} SourceCatalogArray;
+	SourceDatabase *array;
+} SourceDatabaseArray;
 
 
 typedef struct SourceSchema
@@ -261,12 +261,28 @@ typedef struct SourceDependArray
 	SourceDepend *array;         /* malloc'ed area */
 } SourceDependArray;
 
+/*
+ * SourceCatalog regroups all the information we fetch from a Postgres
+ * instance.
+ */
+typedef struct SourceCatalog
+{
+	SourceExtensionArray extensionArray;
+	SourceCollationArray collationArray;
+	SourceTableArray sourceTableArray;
+	SourceIndexArray sourceIndexArray;
+	SourceSequenceArray sequenceArray;
+
+	SourceTable *sourceTableHashByOid;
+	SourceIndex *sourceIndexHashByOid;
+} SourceCatalog;
+
 
 bool schema_query_privileges(PGSQL *pgsql,
 							 bool *hasDBCreatePrivilage,
 							 bool *hasDBTempPrivilege);
 
-bool schema_list_catalogs(PGSQL *pgsql, SourceCatalogArray *catArray);
+bool schema_list_databases(PGSQL *pgsql, SourceDatabaseArray *catArray);
 
 bool schema_list_ext_schemas(PGSQL *pgsql, SourceSchemaArray *array);
 

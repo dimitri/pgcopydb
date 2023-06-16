@@ -53,7 +53,7 @@ psql -t -d ${PGCOPYDB_SOURCE_PGURI} \
 lsn=`jq -r 'select((.columns // empty) | .[] | ((.name == "category_id") and (.value == 1008))) | .lsn' ${SLOT_PEEK_FILE}`
 
 # and prefetch the changes captured in our replication slot
-pgcopydb stream prefetch --resume --endpos "${lsn}" -vv
+pgcopydb stream prefetch --resume --endpos "${lsn}" --notice
 
 SHAREDIR=/var/lib/postgres/.local/share/pgcopydb
 WALFILE=000000010000000000000002.json
@@ -74,12 +74,12 @@ diff ${expected} ${result} || cat ${SHAREDIR}/${WALFILE}
 diff ${expected} ${result}
 
 # now prefetch the changes again, which should be a noop
-pgcopydb stream prefetch --resume --endpos "${lsn}" -vv
+pgcopydb stream prefetch --resume --endpos "${lsn}" --trace
 
 # now transform the JSON file into SQL
 SQLFILENAME=`basename ${WALFILE} .json`.sql
 
-pgcopydb stream transform -vv ${SHAREDIR}/${WALFILE} /tmp/${SQLFILENAME}
+pgcopydb stream transform --trace ${SHAREDIR}/${WALFILE} /tmp/${SQLFILENAME}
 
 # we should get the same result as `pgcopydb stream prefetch`
 diff ${SHAREDIR}/${SQLFILE} /tmp/${SQLFILENAME}

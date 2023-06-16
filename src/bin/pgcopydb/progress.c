@@ -70,7 +70,7 @@ copydb_prepare_schema_json_file(CopyDataSpec *copySpecs)
 	}
 
 	/* array of tables */
-	SourceTableArray *tableArray = &(copySpecs->sourceTableArray);
+	SourceTableArray *tableArray = &(copySpecs->catalog.sourceTableArray);
 
 	log_trace("copydb_prepare_schema_json_file: %d tables", tableArray->count);
 
@@ -81,7 +81,7 @@ copydb_prepare_schema_json_file(CopyDataSpec *copySpecs)
 	}
 
 	/* array of indexes */
-	SourceIndexArray *indexArray = &(copySpecs->sourceIndexArray);
+	SourceIndexArray *indexArray = &(copySpecs->catalog.sourceIndexArray);
 
 	log_trace("copydb_prepare_schema_json_file: %d indexes", indexArray->count);
 
@@ -92,7 +92,7 @@ copydb_prepare_schema_json_file(CopyDataSpec *copySpecs)
 	}
 
 	/* array of sequences */
-	SourceSequenceArray *sequenceArray = &(copySpecs->sequenceArray);
+	SourceSequenceArray *sequenceArray = &(copySpecs->catalog.sequenceArray);
 
 	log_trace("copydb_prepare_schema_json_file: %d sequences",
 			  sequenceArray->count);
@@ -124,7 +124,7 @@ copydb_prepare_schema_json_file(CopyDataSpec *copySpecs)
 
 
 /*
- * copydb_filtering_as_json prepares the filtering setup of the CopyDataSpecs
+ * copydb_setup_as_json prepares the filtering setup of the CopyDataSpecs
  * as a JSON object within the given JSON_Value.
  */
 static bool
@@ -530,11 +530,11 @@ copydb_parse_schema_json_file(CopyDataSpec *copySpecs)
 
 	log_debug("copydb_parse_schema_json_file: parsing %d tables", tableCount);
 
-	copySpecs->sourceTableArray.count = tableCount;
-	copySpecs->sourceTableArray.array =
+	copySpecs->catalog.sourceTableArray.count = tableCount;
+	copySpecs->catalog.sourceTableArray.array =
 		(SourceTable *) calloc(tableCount, sizeof(SourceTable));
 
-	if (copySpecs->sourceTableArray.array == NULL)
+	if (copySpecs->catalog.sourceTableArray.array == NULL)
 	{
 		log_fatal(ALLOCATION_FAILED_ERROR);
 		return false;
@@ -542,7 +542,7 @@ copydb_parse_schema_json_file(CopyDataSpec *copySpecs)
 
 	for (int tableIndex = 0; tableIndex < tableCount; tableIndex++)
 	{
-		SourceTable *table = &(copySpecs->sourceTableArray.array[tableIndex]);
+		SourceTable *table = &(copySpecs->catalog.sourceTableArray.array[tableIndex]);
 		JSON_Object *jsTable = json_array_get_object(jsTableArray, tableIndex);
 
 		table->oid = json_object_get_number(jsTable, "oid");
@@ -646,11 +646,11 @@ copydb_parse_schema_json_file(CopyDataSpec *copySpecs)
 
 	log_debug("copydb_parse_schema_json_file: parsing %d indexes", indexCount);
 
-	copySpecs->sourceIndexArray.count = indexCount;
-	copySpecs->sourceIndexArray.array =
+	copySpecs->catalog.sourceIndexArray.count = indexCount;
+	copySpecs->catalog.sourceIndexArray.array =
 		(SourceIndex *) calloc(indexCount, sizeof(SourceIndex));
 
-	if (copySpecs->sourceIndexArray.array == NULL)
+	if (copySpecs->catalog.sourceIndexArray.array == NULL)
 	{
 		log_fatal(ALLOCATION_FAILED_ERROR);
 		return false;
@@ -658,7 +658,7 @@ copydb_parse_schema_json_file(CopyDataSpec *copySpecs)
 
 	for (int i = 0; i < indexCount; i++)
 	{
-		SourceIndex *index = &(copySpecs->sourceIndexArray.array[i]);
+		SourceIndex *index = &(copySpecs->catalog.sourceIndexArray.array[i]);
 		JSON_Object *jsIndex = json_array_get_object(jsIndexArray, i);
 
 		index->indexOid = json_object_get_number(jsIndex, "oid");
@@ -761,8 +761,8 @@ copydb_parse_schema_json_file(CopyDataSpec *copySpecs)
 bool
 copydb_update_progress(CopyDataSpec *copySpecs, CopyProgress *progress)
 {
-	SourceTableArray *tableArray = &(copySpecs->sourceTableArray);
-	SourceIndexArray *indexArray = &(copySpecs->sourceIndexArray);
+	SourceTableArray *tableArray = &(copySpecs->catalog.sourceTableArray);
+	SourceIndexArray *indexArray = &(copySpecs->catalog.sourceIndexArray);
 
 	progress->tableCount = tableArray->count;
 	progress->indexCount = indexArray->count;

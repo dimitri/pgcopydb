@@ -114,7 +114,7 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 	if (specs->section == DATA_SECTION_ALL ||
 		specs->section == DATA_SECTION_EXTENSION)
 	{
-		SourceExtensionArray *extensionArray = &(specs->extensionArray);
+		SourceExtensionArray *extensionArray = &(specs->catalog.extensionArray);
 
 		if (!schema_list_extensions(src, extensionArray))
 		{
@@ -128,7 +128,7 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 	/* now, are we skipping collations? */
 	if (specs->skipCollations)
 	{
-		SourceCollationArray *collationArray = &(specs->collationArray);
+		SourceCollationArray *collationArray = &(specs->catalog.collationArray);
 
 		if (!schema_list_collations(src, collationArray))
 		{
@@ -232,7 +232,7 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 bool
 copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 {
-	SourceTableArray *tableArray = &(specs->sourceTableArray);
+	SourceTableArray *tableArray = &(specs->catalog.sourceTableArray);
 	CopyTableDataSpecsArray *tableSpecsArray = &(specs->tableSpecsArray);
 
 	/*
@@ -322,7 +322,7 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 	}
 
 	/* now attach the final hash table head to the specs */
-	specs->sourceTableHashByOid = sourceTableHashByOid;
+	specs->catalog.sourceTableHashByOid = sourceTableHashByOid;
 
 	/* only use as many processes as required */
 	if (copySpecsCount < specs->tableJobs)
@@ -411,7 +411,7 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 bool
 copydb_prepare_index_specs(CopyDataSpec *specs, PGSQL *pgsql)
 {
-	SourceIndexArray *indexArray = &(specs->sourceIndexArray);
+	SourceIndexArray *indexArray = &(specs->catalog.sourceIndexArray);
 
 	if (!schema_list_all_indexes(pgsql, &(specs->filters), indexArray))
 	{
@@ -429,7 +429,9 @@ copydb_prepare_index_specs(CopyDataSpec *specs, PGSQL *pgsql)
 	{
 		/* now build the index hash-table */
 		SourceIndex *sourceIndexHashByOid = NULL;
-		SourceIndexArray *indexArray = &(specs->sourceIndexArray);
+		SourceIndexArray *indexArray = &(specs->catalog.sourceIndexArray);
+
+		SourceTable *sourceTableHashByOid = specs->catalog.sourceTableHashByOid;
 
 		for (int i = 0; i < indexArray->count; i++)
 		{
@@ -442,7 +444,7 @@ copydb_prepare_index_specs(CopyDataSpec *specs, PGSQL *pgsql)
 			uint32_t oid = index->tableOid;
 			SourceTable *table = NULL;
 
-			HASH_FIND(hh, specs->sourceTableHashByOid, &oid, sizeof(oid), table);
+			HASH_FIND(hh, sourceTableHashByOid, &oid, sizeof(oid), table);
 
 			if (table == NULL)
 			{
@@ -497,7 +499,7 @@ copydb_prepare_index_specs(CopyDataSpec *specs, PGSQL *pgsql)
 		}
 
 		/* now attach the final hash table head to the specs */
-		specs->sourceIndexHashByOid = sourceIndexHashByOid;
+		specs->catalog.sourceIndexHashByOid = sourceIndexHashByOid;
 	}
 
 	return true;
@@ -606,9 +608,9 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		 * pg_restore archive catalog, as we either filter all of the
 		 * extensions or none of them.
 		 */
-		for (int i = 0; i < specs->extensionArray.count; i++)
+		for (int i = 0; i < specs->catalog.extensionArray.count; i++)
 		{
-			SourceExtension *ext = &(specs->extensionArray.array[i]);
+			SourceExtension *ext = &(specs->catalog.extensionArray.array[i]);
 
 			SourceFilterItem *item = malloc(sizeof(SourceFilterItem));
 
@@ -639,9 +641,9 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		/*
 		 * Add all the listed collations OIDs so as to skip them later.
 		 */
-		for (int i = 0; i < specs->collationArray.count; i++)
+		for (int i = 0; i < specs->catalog.collationArray.count; i++)
 		{
-			SourceCollation *coll = &(specs->collationArray.array[i]);
+			SourceCollation *coll = &(specs->catalog.collationArray.array[i]);
 			SourceFilterItem *item = malloc(sizeof(SourceFilterItem));
 
 			if (item == NULL)

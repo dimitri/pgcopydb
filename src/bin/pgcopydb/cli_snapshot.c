@@ -291,6 +291,7 @@ cli_create_snapshot(int argc, char **argv)
 							   createSNoptions.origin,
 							   createSNoptions.endpos,
 							   STREAM_MODE_CATCHUP,
+							   &(copySpecs.catalog),
 							   createSNoptions.stdIn,
 							   createSNoptions.stdOut,
 							   logSQL))

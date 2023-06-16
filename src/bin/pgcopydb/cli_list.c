@@ -26,7 +26,7 @@
 ListDBOptions listDBoptions = { 0 };
 
 static int cli_list_db_getopts(int argc, char **argv);
-static void cli_list_catalogs(int argc, char **argv);
+static void cli_list_databases(int argc, char **argv);
 static void cli_list_extensions(int argc, char **argv);
 static void cli_list_collations(int argc, char **argv);
 static void cli_list_tables(int argc, char **argv);
@@ -47,7 +47,7 @@ static CommandLine list_catalogs_command =
 		" --source ... ",
 		"  --source            Postgres URI to the source database\n",
 		cli_list_db_getopts,
-		cli_list_catalogs);
+		cli_list_databases);
 
 static CommandLine list_extensions_command =
 	make_command(
@@ -473,13 +473,13 @@ cli_list_db_getopts(int argc, char **argv)
 
 
 /*
- * cli_list_catalogs implements the command: pgcopydb list catalogs
+ * cli_list_databases implements the command: pgcopydb list databases
  */
 static void
-cli_list_catalogs(int argc, char **argv)
+cli_list_databases(int argc, char **argv)
 {
 	PGSQL pgsql = { 0 };
-	SourceCatalogArray catalogArray = { 0, NULL };
+	SourceDatabaseArray databaseArray = { 0, NULL };
 
 	if (!pgsql_init(&pgsql, listDBoptions.source_pguri, PGSQL_CONN_SOURCE))
 	{
@@ -487,13 +487,13 @@ cli_list_catalogs(int argc, char **argv)
 		exit(EXIT_CODE_SOURCE);
 	}
 
-	if (!schema_list_catalogs(&pgsql, &catalogArray))
+	if (!schema_list_databases(&pgsql, &databaseArray))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	log_info("Fetched information for %d catalogs", catalogArray.count);
+	log_info("Fetched information for %d databases", databaseArray.count);
 
 	fformat(stdout, "%10s | %20s | %20s\n",
 			"OID",
@@ -505,9 +505,9 @@ cli_list_catalogs(int argc, char **argv)
 			"--------------------",
 			"--------------------");
 
-	for (int i = 0; i < catalogArray.count; i++)
+	for (int i = 0; i < databaseArray.count; i++)
 	{
-		SourceCatalog *cat = &(catalogArray.array[i]);
+		SourceDatabase *cat = &(databaseArray.array[i]);
 
 		fformat(stdout, "%10u | %20s | %20s\n",
 				cat->oid,

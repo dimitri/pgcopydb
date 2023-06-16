@@ -169,7 +169,7 @@ copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid)
 
 	log_trace("copydb_create_index_by_oid: %u", indexOid);
 
-	HASH_FIND(hh, specs->sourceIndexHashByOid, &oid, sizeof(oid), index);
+	HASH_FIND(hh, specs->catalog.sourceIndexHashByOid, &oid, sizeof(oid), index);
 
 	if (index == NULL)
 	{
@@ -186,7 +186,7 @@ copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid)
 	}
 
 	oid = index->tableOid;
-	HASH_FIND(hh, specs->sourceTableHashByOid, &oid, sizeof(oid), table);
+	HASH_FIND(hh, specs->catalog.sourceTableHashByOid, &oid, sizeof(oid), table);
 
 	if (table == NULL)
 	{
@@ -511,7 +511,7 @@ copydb_copy_all_indexes(CopyDataSpec *specs)
 		return true;
 	}
 
-	SourceIndexArray *indexArray = &(specs->sourceIndexArray);
+	SourceIndexArray *indexArray = &(specs->catalog.sourceIndexArray);
 	IndexFilePathsArray indexPathsArray = { 0, NULL };
 
 	/* build the index file paths we need for the upcoming operations */

@@ -485,7 +485,7 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, uint32_t oid, uint32_t part)
 	log_trace("copydb_copy_data_by_oid: %u [%d]", oid, part);
 
 	uint32_t toid = oid;
-	HASH_FIND(hh, specs->sourceTableHashByOid, &toid, sizeof(toid), table);
+	HASH_FIND(hh, specs->catalog.sourceTableHashByOid, &toid, sizeof(toid), table);
 
 	if (table == NULL)
 	{

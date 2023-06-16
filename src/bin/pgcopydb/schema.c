@@ -31,13 +31,13 @@ static bool prepareFilterCopyTableList(PGSQL *pgsql,
 									   const char *temp_table_name);
 
 
-/* Context used when fetching catalog definitions */
-typedef struct SourceCatalogArrayContext
+/* Context used when fetching database definitions */
+typedef struct SourceDatabaseArrayContext
 {
 	char sqlstate[SQLSTATE_LENGTH];
-	SourceCatalogArray *catalogArray;
+	SourceDatabaseArray *databaseArray;
 	bool parsedOk;
-} SourceCatalogArrayContext;
+} SourceDatabaseArrayContext;
 
 /* Context used when fetching schema definitions */
 typedef struct SourceSchemaArrayContext
@@ -106,7 +106,7 @@ typedef struct SourcePartitionContext
 
 static void getSchemaList(void *ctx, PGresult *result);
 
-static void getCatalogList(void *ctx, PGresult *result);
+static void getDatabaseList(void *ctx, PGresult *result);
 
 static void getExtensionList(void *ctx, PGresult *result);
 
@@ -186,14 +186,14 @@ schema_query_privileges(PGSQL *pgsql,
 
 
 /*
- * schema_list_catalogs grabs the list of databases (catalogs) from the given
- * source Postgres instance and allocates a SourceCatalog array with the result
- * of the query.
+ * schema_list_databases grabs the list of databases from the given source
+ * Postgres instance and allocates a SourceDatabase array with the result of
+ * the query.
  */
 bool
-schema_list_catalogs(PGSQL *pgsql, SourceCatalogArray *catArray)
+schema_list_databases(PGSQL *pgsql, SourceDatabaseArray *catArray)
 {
-	SourceCatalogArrayContext parseContext = { { 0 }, catArray, false };
+	SourceDatabaseArrayContext parseContext = { { 0 }, catArray, false };
 
 	char *sql =
 		"select d.oid, datname, pg_database_size(d.oid) as bytes, "
@@ -204,15 +204,15 @@ schema_list_catalogs(PGSQL *pgsql, SourceCatalogArray *catArray)
 
 	if (!pgsql_execute_with_params(pgsql, sql,
 								   0, NULL, NULL,
-								   &parseContext, &getCatalogList))
+								   &parseContext, &getDatabaseList))
 	{
-		log_error("Failed to list catalogs");
+		log_error("Failed to list databases");
 		return false;
 	}
 
 	if (!parseContext.parsedOk)
 	{
-		log_error("Failed to list catalogs");
+		log_error("Failed to list databases");
 		return false;
 	}
 
@@ -3166,16 +3166,16 @@ getSchemaList(void *ctx, PGresult *result)
 
 
 /*
- * getCatalogList loops over the SQL result for the catalog array query and
- * allocates an array of catalogs then populates it with the query result.
+ * getDatabaseList loops over the SQL result for the database array query and
+ * allocates an array of databases then populates it with the query result.
  */
 static void
-getCatalogList(void *ctx, PGresult *result)
+getDatabaseList(void *ctx, PGresult *result)
 {
-	SourceCatalogArrayContext *context = (SourceCatalogArrayContext *) ctx;
+	SourceDatabaseArrayContext *context = (SourceDatabaseArrayContext *) ctx;
 	int nTuples = PQntuples(result);
 
-	log_debug("getCatalogList: %d", nTuples);
+	log_debug("getDatabaseList: %d", nTuples);
 
 	if (PQnfields(result) != 4)
 	{
@@ -3185,20 +3185,20 @@ getCatalogList(void *ctx, PGresult *result)
 	}
 
 	/* we're not supposed to re-cycle arrays here */
-	if (context->catalogArray->array != NULL)
+	if (context->databaseArray->array != NULL)
 	{
 		/* issue a warning but let's try anyway */
-		log_warn("BUG? context's array is not null in getCatalogList");
+		log_warn("BUG? context's array is not null in getDatabaseList");
 
-		free(context->catalogArray->array);
-		context->catalogArray->array = NULL;
+		free(context->databaseArray->array);
+		context->databaseArray->array = NULL;
 	}
 
-	context->catalogArray->count = nTuples;
-	context->catalogArray->array =
-		(SourceCatalog *) calloc(nTuples, sizeof(SourceCatalog));
+	context->databaseArray->count = nTuples;
+	context->databaseArray->array =
+		(SourceDatabase *) calloc(nTuples, sizeof(SourceDatabase));
 
-	if (context->catalogArray->array == NULL)
+	if (context->databaseArray->array == NULL)
 	{
 		log_fatal(ALLOCATION_FAILED_ERROR);
 		return;
@@ -3208,12 +3208,12 @@ getCatalogList(void *ctx, PGresult *result)
 
 	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
 	{
-		SourceCatalog *catalog = &(context->catalogArray->array[rowNumber]);
+		SourceDatabase *database = &(context->databaseArray->array[rowNumber]);
 
 		/* 1. oid */
 		char *value = PQgetvalue(result, rowNumber, 0);
 
-		if (!stringToUInt32(value, &(catalog->oid)) || catalog->oid == 0)
+		if (!stringToUInt32(value, &(database->oid)) || database->oid == 0)
 		{
 			log_error("Invalid OID \"%s\"", value);
 			++errors;
@@ -3221,11 +3221,11 @@ getCatalogList(void *ctx, PGresult *result)
 
 		/* 2. datname */
 		value = PQgetvalue(result, rowNumber, 1);
-		int length = strlcpy(catalog->datname, value, NAMEDATALEN);
+		int length = strlcpy(database->datname, value, NAMEDATALEN);
 
 		if (length >= NAMEDATALEN)
 		{
-			log_error("Catalog name \"%s\" is %d bytes long, "
+			log_error("Database name \"%s\" is %d bytes long, "
 					  "the maximum expected is %d (NAMEDATALEN - 1)",
 					  value, length, NAMEDATALEN - 1);
 			++errors;
@@ -3239,13 +3239,13 @@ getCatalogList(void *ctx, PGresult *result)
 			 * It may happen that pg_table_size() returns NULL (when failing to
 			 * open the given relation).
 			 */
-			catalog->bytes = 0;
+			database->bytes = 0;
 		}
 		else
 		{
 			value = PQgetvalue(result, rowNumber, 2);
 
-			if (!stringToInt64(value, &(catalog->bytes)))
+			if (!stringToInt64(value, &(database->bytes)))
 			{
 				log_error("Invalid pg_database_size: \"%s\"", value);
 				++errors;
@@ -3254,7 +3254,7 @@ getCatalogList(void *ctx, PGresult *result)
 
 		/* 4. pg_size_pretty */
 		value = PQgetvalue(result, rowNumber, 3);
-		length = strlcpy(catalog->bytesPretty, value, NAMEDATALEN);
+		length = strlcpy(database->bytesPretty, value, NAMEDATALEN);
 
 		if (length >= NAMEDATALEN)
 		{

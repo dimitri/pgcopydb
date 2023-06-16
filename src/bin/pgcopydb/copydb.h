@@ -261,15 +261,8 @@ typedef struct CopyDataSpec
 	bool hasDBCreatePrivilege;
 	bool hasDBTempPrivilege;
 
-	SourceExtensionArray extensionArray;
-	SourceCollationArray collationArray;
-	SourceTableArray sourceTableArray;
-	SourceIndexArray sourceIndexArray;
+	SourceCatalog catalog;
 	CopyTableDataSpecsArray tableSpecsArray;
-	SourceSequenceArray sequenceArray;
-
-	SourceTable *sourceTableHashByOid;
-	SourceIndex *sourceIndexHashByOid;
 } CopyDataSpec;
 
 
