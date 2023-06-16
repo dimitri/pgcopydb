@@ -273,7 +273,6 @@ typedef struct SourceCatalog
 	SourceIndexArray sourceIndexArray;
 	SourceSequenceArray sequenceArray;
 
-
 	SourceTable *sourceTableHashByOid;
 	SourceIndex *sourceIndexHashByOid;
 } SourceCatalog;

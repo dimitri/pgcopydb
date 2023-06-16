@@ -667,7 +667,8 @@ copydb_init_specs(CopyDataSpec *specs,
 		.vacuumQueue = { 0 },
 		.indexQueue = { 0 },
 
-		.catalog = { 0 }
+		.catalog = { 0 },
+		.tableSpecsArray = { 0, NULL }
 	};
 
 	/* initialize the connection strings */
