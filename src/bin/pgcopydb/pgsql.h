@@ -291,9 +291,6 @@ bool pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 
 void pgAutoCtlDebugNoticeProcessor(void *arg, const char *message);
 
-bool hostname_from_uri(const char *pguri,
-					   char *hostname, int maxHostLength, int *port);
-
 bool validate_connection_string(const char *connectionString);
 
 bool pgsql_truncate(PGSQL *pgsql, const char *qname);
