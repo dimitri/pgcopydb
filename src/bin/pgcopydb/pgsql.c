@@ -2538,6 +2538,9 @@ pgsql_get_sequence(PGSQL *pgsql, const char *nspname, const char *relname,
 			escapedNspname,
 			escapedRelname);
 
+	PQfreemem(escapedNspname);
+	PQfreemem(escapedRelname);
+
 	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
 								   &context, &getSequenceValue))
 	{
