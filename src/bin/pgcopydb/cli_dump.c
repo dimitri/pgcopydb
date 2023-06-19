@@ -143,8 +143,8 @@ cli_dump_schema_getopts(int argc, char **argv)
 							  "see above for details.");
 					exit(EXIT_CODE_BAD_ARGS);
 				}
-				strlcpy(options.source_pguri, optarg, MAXCONNINFO);
-				log_trace("--source %s", options.source_pguri);
+				options.connStrings.source_pguri = pg_strdup(optarg);
+				log_trace("--source %s", options.connStrings.source_pguri);
 				break;
 			}
 
@@ -156,8 +156,8 @@ cli_dump_schema_getopts(int argc, char **argv)
 							  "see above for details.");
 					exit(EXIT_CODE_BAD_ARGS);
 				}
-				strlcpy(options.target_pguri, optarg, MAXCONNINFO);
-				log_trace("--target %s", options.target_pguri);
+				options.connStrings.target_pguri = pg_strdup(optarg);
+				log_trace("--target %s", options.connStrings.target_pguri);
 				break;
 			}
 
@@ -272,7 +272,7 @@ cli_dump_schema_getopts(int argc, char **argv)
 		}
 	}
 
-	if (IS_EMPTY_STRING_BUFFER(options.source_pguri))
+	if (options.connStrings.source_pguri == NULL)
 	{
 		log_fatal("Option --source is mandatory");
 		++errors;
@@ -376,12 +376,15 @@ cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	char scrubbedSourceURI[MAXCONNINFO] = { 0 };
+	ConnStrings *dsn = &(copySpecs.connStrings);
 
-	(void) parse_and_scrub_connection_string(copySpecs.source_pguri,
-											 scrubbedSourceURI);
+	if (!cli_prepare_pguris(dsn))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
 
-	log_info("Dumping database from \"%s\"", scrubbedSourceURI);
+	log_info("Dumping database from \"%s\"", dsn->safeSourcePGURI.pguri);
 	log_info("Dumping database into directory \"%s\"", cfPaths->topdir);
 
 	if (section == PG_DUMP_SECTION_ROLES)
@@ -411,7 +414,7 @@ cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 	if (section == PG_DUMP_SECTION_ROLES)
 	{
 		if (!pg_dumpall_roles(&(copySpecs.pgPaths),
-							  copySpecs.source_pguri,
+							  &(copySpecs.connStrings),
 							  copySpecs.dumpPaths.rolesFilename,
 							  copySpecs.noRolesPasswords))
 		{

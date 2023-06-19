@@ -160,6 +160,62 @@ cli_pprint_json(JSON_Value *js)
 
 
 /*
+ * cli_copydb_getenv_source_pguri reads the PGCOPYDB_SOURCE_PGURI environment
+ * variable and duplicates its value at the given place.
+ */
+bool
+cli_copydb_getenv_source_pguri(char **pguri)
+{
+	if (env_exists(PGCOPYDB_SOURCE_PGURI))
+	{
+		if (!get_env_dup(PGCOPYDB_SOURCE_PGURI, pguri))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * cli_copydb_getenv_split reads the PGCOPYDB_SPLIT_TABLES_LARGER_THAN
+ * environment variable and fills in the given SplitTableLargerThan instance.
+ */
+bool
+cli_copydb_getenv_split(SplitTableLargerThan *splitTablesLargerThan)
+{
+	if (env_exists(PGCOPYDB_SPLIT_TABLES_LARGER_THAN))
+	{
+		char bytes[BUFSIZE] = { 0 };
+
+		if (get_env_copy(PGCOPYDB_SPLIT_TABLES_LARGER_THAN, bytes, sizeof(bytes)))
+		{
+			if (!cli_parse_bytes_pretty(
+					bytes,
+					&(splitTablesLargerThan->bytes),
+					(char *) &(splitTablesLargerThan->bytesPretty),
+					sizeof(splitTablesLargerThan->bytesPretty)))
+			{
+				log_fatal("Failed to parse PGCOPYDB_SPLIT_TABLES_LARGER_THAN: "
+						  " \"%s\"",
+						  bytes);
+				return false;
+			}
+		}
+		else
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
  * cli_copydb_getenv reads from the environment variables and fills-in the
  * command line options.
  */
@@ -168,23 +224,16 @@ cli_copydb_getenv(CopyDBOptions *options)
 {
 	int errors = 0;
 
-	/* now some of the options can be also set from the environment */
-	if (env_exists(PGCOPYDB_SOURCE_PGURI))
+	if (!cli_copydb_getenv_source_pguri(&(options->connStrings.source_pguri)))
 	{
-		if (!get_env_copy(PGCOPYDB_SOURCE_PGURI,
-						  options->source_pguri,
-						  sizeof(options->source_pguri)))
-		{
-			/* errors have already been logged */
-			++errors;
-		}
+		/* errors have already been logged */
+		++errors;
 	}
 
 	if (env_exists(PGCOPYDB_TARGET_PGURI))
 	{
-		if (!get_env_copy(PGCOPYDB_TARGET_PGURI,
-						  options->target_pguri,
-						  sizeof(options->target_pguri)))
+		if (!get_env_dup(PGCOPYDB_TARGET_PGURI,
+						 &(options->connStrings.target_pguri)))
 		{
 			/* errors have already been logged */
 			++errors;
@@ -235,29 +284,10 @@ cli_copydb_getenv(CopyDBOptions *options)
 		}
 	}
 
-	if (env_exists(PGCOPYDB_SPLIT_TABLES_LARGER_THAN))
+	if (!cli_copydb_getenv_split(&(options->splitTablesLargerThan)))
 	{
-		char bytes[BUFSIZE] = { 0 };
-
-		if (get_env_copy(PGCOPYDB_SPLIT_TABLES_LARGER_THAN, bytes, sizeof(bytes)))
-		{
-			if (!cli_parse_bytes_pretty(
-					bytes,
-					&options->splitTablesLargerThan,
-					(char *) &options->splitTablesLargerThanPretty,
-					sizeof(options->splitTablesLargerThanPretty)))
-			{
-				log_fatal("Failed to parse PGCOPYDB_SPLIT_TABLES_LARGER_THAN: "
-						  " \"%s\"",
-						  bytes);
-				++errors;
-			}
-		}
-		else
-		{
-			/* errors have already been logged */
-			++errors;
-		}
+		/* errors have already been logged */
+		++errors;
 	}
 
 	/* when --snapshot has not been used, check PGCOPYDB_SNAPSHOT */
@@ -694,7 +724,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	/* install default values */
 	options.tableJobs = DEFAULT_TABLE_JOBS;
 	options.indexJobs = DEFAULT_INDEX_JOBS;
-	options.splitTablesLargerThan = DEFAULT_SPLIT_TABLES_LARGER_THAN;
+	options.splitTablesLargerThan.bytes = DEFAULT_SPLIT_TABLES_LARGER_THAN;
 
 	/* read values from the environment */
 	if (!cli_copydb_getenv(&options))
@@ -717,8 +747,8 @@ cli_copy_db_getopts(int argc, char **argv)
 							  "see above for details.");
 					++errors;
 				}
-				strlcpy(options.source_pguri, optarg, MAXCONNINFO);
-				log_trace("--source %s", options.source_pguri);
+				options.connStrings.source_pguri = pg_strdup(optarg);
+				log_trace("--source %s", options.connStrings.source_pguri);
 				break;
 			}
 
@@ -730,8 +760,8 @@ cli_copy_db_getopts(int argc, char **argv)
 							  "see above for details.");
 					++errors;
 				}
-				strlcpy(options.target_pguri, optarg, MAXCONNINFO);
-				log_trace("--target %s", options.target_pguri);
+				options.connStrings.target_pguri = pg_strdup(optarg);
+				log_trace("--target %s", options.connStrings.target_pguri);
 				break;
 			}
 
@@ -772,9 +802,9 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				if (!cli_parse_bytes_pretty(
 						optarg,
-						&options.splitTablesLargerThan,
-						(char *) &options.splitTablesLargerThanPretty,
-						sizeof(options.splitTablesLargerThanPretty)))
+						&(options.splitTablesLargerThan.bytes),
+						(char *) &(options.splitTablesLargerThan.bytesPretty),
+						sizeof(options.splitTablesLargerThan.bytesPretty)))
 				{
 					log_fatal("Failed to parse --split-tables-larger-than: \"%s\"",
 							  optarg);
@@ -782,8 +812,8 @@ cli_copy_db_getopts(int argc, char **argv)
 				}
 
 				log_trace("--split-tables-larger-than %s (%lld)",
-						  options.splitTablesLargerThanPretty,
-						  (long long) options.splitTablesLargerThan);
+						  options.splitTablesLargerThan.bytesPretty,
+						  (long long) options.splitTablesLargerThan.bytes);
 				break;
 			}
 
@@ -1041,11 +1071,17 @@ cli_copy_db_getopts(int argc, char **argv)
 		}
 	}
 
-	if (IS_EMPTY_STRING_BUFFER(options.source_pguri) ||
-		IS_EMPTY_STRING_BUFFER(options.target_pguri))
+	if (options.connStrings.source_pguri == NULL ||
+		options.connStrings.target_pguri == NULL)
 	{
 		log_fatal("Options --source and --target are mandatory");
 		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	if (!cli_prepare_pguris(&(options.connStrings)))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	if (!cli_copydb_is_consistent(&options))
@@ -1095,6 +1131,38 @@ cli_parse_bytes_pretty(const char *byteString,
 
 
 /*
+ * copydb_prepare_pguris prepares version of Postgres connections strings to
+ * source and target without security sensible information (password is
+ * removed).
+ */
+bool
+cli_prepare_pguris(ConnStrings *connStrings)
+{
+	int errors = 0;
+
+	char *spguri = connStrings->source_pguri;
+	char *tpguri = connStrings->target_pguri;
+
+	SafeURI *safeSourcePGURI = &(connStrings->safeSourcePGURI);
+	SafeURI *safeTargetPGURI = &(connStrings->safeTargetPGURI);
+
+	if (!parse_and_scrub_connection_string(spguri, safeSourcePGURI))
+	{
+		log_error("Failed to parse source connection string: \"%s\"", spguri);
+		++errors;
+	}
+
+	if (!parse_and_scrub_connection_string(tpguri, safeTargetPGURI))
+	{
+		log_error("Failed to parse target connection string: \"%s\"", tpguri);
+		++errors;
+	}
+
+	return errors == 0;
+}
+
+
+/*
  * cli_copy_prepare_specs initializes our internal data structure that are used
  * to drive the operations.
  */
@@ -1103,17 +1171,11 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 {
 	PostgresPaths *pgPaths = &(copySpecs->pgPaths);
 
-	char scrubbedSourceURI[MAXCONNINFO] = { 0 };
-	char scrubbedTargetURI[MAXCONNINFO] = { 0 };
+	char *safeSourceURI = copyDBoptions.connStrings.safeSourcePGURI.pguri;
+	char *safeTargetURI = copyDBoptions.connStrings.safeTargetPGURI.pguri;
 
-	(void) parse_and_scrub_connection_string(copyDBoptions.source_pguri,
-											 scrubbedSourceURI);
-
-	(void) parse_and_scrub_connection_string(copyDBoptions.target_pguri,
-											 scrubbedTargetURI);
-
-	log_info("[SOURCE] Copying database from \"%s\"", scrubbedSourceURI);
-	log_info("[TARGET] Copying database into \"%s\"", scrubbedTargetURI);
+	log_info("[SOURCE] Copying database from \"%s\"", safeSourceURI);
+	log_info("[TARGET] Copying database into \"%s\"", safeTargetURI);
 
 	(void) find_pg_commands(pgPaths);
 

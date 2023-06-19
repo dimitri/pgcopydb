@@ -629,12 +629,12 @@ copydb_init_specs(CopyDataSpec *specs,
 		.cfPaths = specs->cfPaths,
 		.pgPaths = specs->pgPaths,
 
-		.source_pguri = { 0 },
-		.target_pguri = { 0 },
+		.connStrings = options->connStrings,
 
 		.sourceSnapshot = {
 			.pgsql = { 0 },
-			.pguri = { 0 },
+			.pguri = options->connStrings.source_pguri,
+			.safeURI = options->connStrings.safeSourcePGURI,
 			.connectionType = PGSQL_CONN_SOURCE,
 			.snapshot = { 0 }
 		},
@@ -671,33 +671,12 @@ copydb_init_specs(CopyDataSpec *specs,
 		.tableSpecsArray = { 0, NULL }
 	};
 
-	/* initialize the connection strings */
-	if (!IS_EMPTY_STRING_BUFFER(options->source_pguri))
-	{
-		strlcpy(tmpCopySpecs.source_pguri,
-				options->source_pguri,
-				MAXCONNINFO);
-
-		strlcpy(tmpCopySpecs.sourceSnapshot.pguri,
-				options->source_pguri,
-				MAXCONNINFO);
-	}
-
-	if (!IS_EMPTY_STRING_BUFFER(options->target_pguri))
-	{
-		strlcpy(tmpCopySpecs.target_pguri, options->target_pguri, MAXCONNINFO);
-	}
-
 	if (!IS_EMPTY_STRING_BUFFER(options->snapshot))
 	{
 		strlcpy(tmpCopySpecs.sourceSnapshot.snapshot,
 				options->snapshot,
 				sizeof(tmpCopySpecs.sourceSnapshot.snapshot));
 	}
-
-	strlcpy(tmpCopySpecs.splitTablesLargerThanPretty,
-			options->splitTablesLargerThanPretty,
-			sizeof(tmpCopySpecs.splitTablesLargerThanPretty));
 
 	/* copy the structure as a whole memory area to the target place */
 	*specs = tmpCopySpecs;
@@ -778,8 +757,7 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 		.cfPaths = &(specs->cfPaths),
 		.pgPaths = &(specs->pgPaths),
 
-		.source_pguri = (char *) &(specs->source_pguri),
-		.target_pguri = (char *) &(specs->target_pguri),
+		.connStrings = &(specs->connStrings),
 
 		.section = specs->section,
 		.resume = specs->resume,

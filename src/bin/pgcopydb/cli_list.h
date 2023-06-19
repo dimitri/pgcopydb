@@ -19,7 +19,8 @@ typedef struct ListDBOptions
 {
 	char dir[MAXPGPATH];
 
-	char source_pguri[MAXCONNINFO];
+	ConnStrings connStrings;
+
 	char schema_name[NAMEDATALEN];
 	char table_name[NAMEDATALEN];
 	char filterFileName[MAXPGPATH];
@@ -30,8 +31,7 @@ typedef struct ListDBOptions
 	bool dropCache;
 	bool summary;
 
-	uint64_t splitTablesLargerThan;
-	char splitTablesLargerThanPretty[NAMEDATALEN];
+	SplitTableLargerThan splitTablesLargerThan;
 } ListDBOptions;
 
 

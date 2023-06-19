@@ -55,7 +55,6 @@ cli_ping_getopts(int argc, char **argv)
 	};
 	optind = 0;
 
-
 	/* read values from the environment */
 	if (!cli_copydb_getenv(&options))
 	{
@@ -76,8 +75,8 @@ cli_ping_getopts(int argc, char **argv)
 							  "see above for details.");
 					++errors;
 				}
-				strlcpy(options.source_pguri, optarg, MAXCONNINFO);
-				log_trace("--source %s", options.source_pguri);
+				options.connStrings.source_pguri = pg_strdup(optarg);
+				log_trace("--source %s", options.connStrings.source_pguri);
 				break;
 			}
 
@@ -89,8 +88,8 @@ cli_ping_getopts(int argc, char **argv)
 							  "see above for details.");
 					++errors;
 				}
-				strlcpy(options.target_pguri, optarg, MAXCONNINFO);
-				log_trace("--target %s", options.target_pguri);
+				options.connStrings.target_pguri = pg_strdup(optarg);
+				log_trace("--target %s", options.connStrings.target_pguri);
 				break;
 			}
 
@@ -156,11 +155,18 @@ cli_ping_getopts(int argc, char **argv)
 		}
 	}
 
-	if (IS_EMPTY_STRING_BUFFER(options.source_pguri) ||
-		IS_EMPTY_STRING_BUFFER(options.target_pguri))
+	if (options.connStrings.source_pguri == NULL ||
+		options.connStrings.target_pguri == NULL)
 	{
 		log_fatal("Options --source and --target are mandatory");
 		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	/* prepare safe versions of the connection strings (without password) */
+	if (!cli_prepare_pguris(&(options.connStrings)))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	/* publish our option parsing in the global variable */
@@ -177,14 +183,11 @@ static void
 cli_ping(int argc, char **argv)
 {
 	int errors = 0;
-	char scrubbedSourceURI[MAXCONNINFO] = { 0 };
-	char scrubbedTargetURI[MAXCONNINFO] = { 0 };
 
-	char *source = copyDBoptions.source_pguri;
-	char *target = copyDBoptions.target_pguri;
+	ConnStrings *dsn = &(copyDBoptions.connStrings);
 
-	(void) parse_and_scrub_connection_string(source, scrubbedSourceURI);
-	(void) parse_and_scrub_connection_string(target, scrubbedTargetURI);
+	char *source = dsn->source_pguri;
+	char *target = dsn->target_pguri;
 
 	/* ping both source and target databases concurrently */
 	pid_t sPid = fork();
@@ -217,8 +220,8 @@ cli_ping(int argc, char **argv)
 				exit(EXIT_CODE_TARGET);
 			}
 
-			log_info("Successfully could connect t source database at \"%s\"",
-					 scrubbedSourceURI);
+			log_info("Successfully could connect to source database at \"%s\"",
+					 dsn->safeSourcePGURI.pguri);
 
 			pgsql_finish(&src);
 
@@ -264,7 +267,7 @@ cli_ping(int argc, char **argv)
 			}
 
 			log_info("Successfully could connect to target database at \"%s\"",
-					 scrubbedTargetURI);
+					 dsn->safeTargetPGURI.pguri);
 
 			pgsql_finish(&dst);
 

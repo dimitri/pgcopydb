@@ -16,6 +16,7 @@
 #include "defaults.h"
 #include "file_utils.h"
 #include "filtering.h"
+#include "parsing_utils.h"
 #include "pgsql.h"
 
 #define PG_VERSION_STRING_MAX 12
@@ -82,14 +83,14 @@ bool set_psql_from_config_bindir(PostgresPaths *pgPaths, const char *pg_config);
 bool set_psql_from_pg_config(PostgresPaths *pgPaths);
 
 bool pg_dump_db(PostgresPaths *pgPaths,
-				const char *pguri,
+				ConnStrings *connStrings,
 				const char *snapshot,
 				const char *section,
 				SourceFilters *filters,
 				const char *filename);
 
 bool pg_dumpall_roles(PostgresPaths *pgPaths,
-					  const char *pguri,
+					  ConnStrings *connStrings,
 					  const char *filename,
 					  bool noRolesPasswords);
 
@@ -98,13 +99,12 @@ bool pg_restore_roles(PostgresPaths *pgPaths,
 					  const char *filename);
 
 bool pg_copy_roles(PostgresPaths *pgPaths,
-				   const char *source_pguri,
-				   const char *target_pguri,
+				   ConnStrings *connStrings,
 				   const char *filename,
 				   bool noRolesPasswords);
 
 bool pg_restore_db(PostgresPaths *pgPaths,
-				   const char *pguri,
+				   ConnStrings *connStrings,
 				   SourceFilters *filters,
 				   const char *dumpFilename,
 				   const char *listFilename,

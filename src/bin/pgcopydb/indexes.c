@@ -221,7 +221,7 @@ copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid)
 	bool ifNotExists =
 		specs->resume || specs->section == DATA_SECTION_INDEXES;
 
-	if (!copydb_create_index(specs->target_pguri,
+	if (!copydb_create_index(specs->connStrings.target_pguri,
 							 index,
 							 &indexPaths,
 							 &(specs->indexSemaphore),
@@ -638,7 +638,7 @@ copydb_start_index_process(CopyDataSpec *specs,
 
 		bool ifNotExists = true;
 
-		if (!copydb_create_index(specs->target_pguri,
+		if (!copydb_create_index(specs->connStrings.target_pguri,
 								 index,
 								 indexPaths,
 								 &(specs->indexSemaphore),
@@ -1094,7 +1094,7 @@ copydb_create_constraints(CopyDataSpec *specs, SourceTable *table)
 {
 	int errors = 0;
 
-	const char *pguri = specs->target_pguri;
+	const char *pguri = specs->connStrings.target_pguri;
 	PGSQL dst = { 0 };
 
 	if (!pgsql_init(&dst, (char *) pguri, PGSQL_CONN_TARGET))

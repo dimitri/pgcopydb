@@ -129,7 +129,7 @@ copydb_copy_blobs(CopyDataSpec *specs)
 		 * established snapshot to set nor a connection to piggyback onto, so
 		 * we have to initialize our client connection now.
 		 */
-		if (!pgsql_init(&pgsql, specs->source_pguri, PGSQL_CONN_SOURCE))
+		if (!pgsql_init(&pgsql, specs->connStrings.source_pguri, PGSQL_CONN_SOURCE))
 		{
 			/* errors have already been logged */
 			return false;
@@ -144,7 +144,7 @@ copydb_copy_blobs(CopyDataSpec *specs)
 		}
 	}
 
-	if (!pgsql_init(&dst, specs->target_pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
 	{
 		/* errors have already been logged */
 		return false;

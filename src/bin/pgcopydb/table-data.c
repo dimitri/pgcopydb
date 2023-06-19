@@ -910,7 +910,7 @@ copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 	CopyTableSummary *summary = tableSpecs->summary;
 
 	/* initialize our connection to the target database */
-	if (!pgsql_init(&dst, tableSpecs->target_pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&dst, tableSpecs->connStrings->target_pguri, PGSQL_CONN_TARGET))
 	{
 		/* errors have already been logged */
 		return false;

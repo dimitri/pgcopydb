@@ -337,7 +337,7 @@ set_psql_from_pg_config(PostgresPaths *pgPaths)
  */
 bool
 pg_dump_db(PostgresPaths *pgPaths,
-		   const char *pguri,
+		   ConnStrings *connStrings,
 		   const char *snapshot,
 		   const char *section,
 		   SourceFilters *filters,
@@ -348,28 +348,20 @@ pg_dump_db(PostgresPaths *pgPaths,
 
 	char command[BUFSIZE] = { 0 };
 
-	SafeURI safeURI = { 0 };
+	char *PGPASSWORD = NULL;
 	bool pgpassword_found_in_env = env_exists("PGPASSWORD");
-	char PGPASSWORD[MAXCONNINFO] = { 0 };
-
-	if (!extract_connection_string_password(pguri, &safeURI))
-	{
-		/* errors have already been logged */
-		return false;
-	}
 
 	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
 
 	/* override PGPASSWORD environment variable if the pguri contains one */
-	if (!IS_EMPTY_STRING_BUFFER(safeURI.password))
+	if (connStrings->safeSourcePGURI.password != NULL)
 	{
-		if (pgpassword_found_in_env &&
-			!get_env_copy("PGPASSWORD", PGPASSWORD, MAXCONNINFO))
+		if (pgpassword_found_in_env && !get_env_dup("PGPASSWORD", &PGPASSWORD))
 		{
 			/* errors have already been logged */
 			return false;
 		}
-		setenv("PGPASSWORD", safeURI.password, 1);
+		setenv("PGPASSWORD", connStrings->safeSourcePGURI.password, 1);
 	}
 
 	args[argsIndex++] = (char *) pgPaths->pg_dump;
@@ -405,7 +397,7 @@ pg_dump_db(PostgresPaths *pgPaths,
 
 	args[argsIndex++] = "--file";
 	args[argsIndex++] = (char *) filename;
-	args[argsIndex++] = (char *) safeURI.pguri;
+	args[argsIndex++] = (char *) connStrings->safeSourcePGURI.pguri;
 
 	args[argsIndex] = NULL;
 
@@ -433,7 +425,8 @@ pg_dump_db(PostgresPaths *pgPaths,
 	(void) execute_subprogram(&program);
 
 	/* make sure to reset the environment PGPASSWORD if we edited it */
-	if (pgpassword_found_in_env && !IS_EMPTY_STRING_BUFFER(safeURI.password))
+	if (pgpassword_found_in_env &&
+		connStrings->safeSourcePGURI.password != NULL)
 	{
 		setenv("PGPASSWORD", PGPASSWORD, 1);
 	}
@@ -456,7 +449,7 @@ pg_dump_db(PostgresPaths *pgPaths,
  */
 bool
 pg_dumpall_roles(PostgresPaths *pgPaths,
-				 const char *pguri,
+				 ConnStrings *connStrings,
 				 const char *filename,
 				 bool noRolesPasswords)
 {
@@ -465,28 +458,20 @@ pg_dumpall_roles(PostgresPaths *pgPaths,
 
 	char command[BUFSIZE] = { 0 };
 
-	SafeURI safeURI = { 0 };
+	char *PGPASSWORD = NULL;
 	bool pgpassword_found_in_env = env_exists("PGPASSWORD");
-	char PGPASSWORD[MAXCONNINFO] = { 0 };
-
-	if (!extract_connection_string_password(pguri, &safeURI))
-	{
-		/* errors have already been logged */
-		return false;
-	}
 
 	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
 
 	/* override PGPASSWORD environment variable if the pguri contains one */
-	if (!IS_EMPTY_STRING_BUFFER(safeURI.password))
+	if (connStrings->safeSourcePGURI.password != NULL)
 	{
-		if (pgpassword_found_in_env &&
-			!get_env_copy("PGPASSWORD", PGPASSWORD, MAXCONNINFO))
+		if (pgpassword_found_in_env && !get_env_dup("PGPASSWORD", &PGPASSWORD))
 		{
 			/* errors have already been logged */
 			return false;
 		}
-		setenv("PGPASSWORD", safeURI.password, 1);
+		setenv("PGPASSWORD", connStrings->safeSourcePGURI.password, 1);
 	}
 
 	args[argsIndex++] = (char *) pgPaths->pg_dumpall;
@@ -496,7 +481,7 @@ pg_dumpall_roles(PostgresPaths *pgPaths,
 	args[argsIndex++] = (char *) filename;
 
 	args[argsIndex++] = "--dbname";
-	args[argsIndex++] = (char *) safeURI.pguri;
+	args[argsIndex++] = (char *) connStrings->safeSourcePGURI.pguri;
 
 	if (noRolesPasswords)
 	{
@@ -529,7 +514,8 @@ pg_dumpall_roles(PostgresPaths *pgPaths,
 	(void) execute_subprogram(&program);
 
 	/* make sure to reset the environment PGPASSWORD if we edited it */
-	if (pgpassword_found_in_env && !IS_EMPTY_STRING_BUFFER(safeURI.password))
+	if (pgpassword_found_in_env &&
+		connStrings->safeSourcePGURI.password != NULL)
 	{
 		setenv("PGPASSWORD", PGPASSWORD, 1);
 	}
@@ -717,18 +703,17 @@ pg_restore_roles(PostgresPaths *pgPaths,
  */
 bool
 pg_copy_roles(PostgresPaths *pgPaths,
-			  const char *source_pguri,
-			  const char *target_pguri,
+			  ConnStrings *connStrings,
 			  const char *filename,
 			  bool noRolesPasswords)
 {
-	if (!pg_dumpall_roles(pgPaths, source_pguri, filename, noRolesPasswords))
+	if (!pg_dumpall_roles(pgPaths, connStrings, filename, noRolesPasswords))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	if (!pg_restore_roles(pgPaths, target_pguri, filename))
+	if (!pg_restore_roles(pgPaths, connStrings->target_pguri, filename))
 	{
 		/* errors have already been logged */
 		return false;
@@ -744,7 +729,7 @@ pg_copy_roles(PostgresPaths *pgPaths,
  */
 bool
 pg_restore_db(PostgresPaths *pgPaths,
-			  const char *pguri,
+			  ConnStrings *connStrings,
 			  SourceFilters *filters,
 			  const char *dumpFilename,
 			  const char *listFilename,
@@ -755,33 +740,25 @@ pg_restore_db(PostgresPaths *pgPaths,
 
 	char command[BUFSIZE] = { 0 };
 
-	SafeURI safeURI = { 0 };
+	char *PGPASSWORD = NULL;
 	bool pgpassword_found_in_env = env_exists("PGPASSWORD");
-	char PGPASSWORD[MAXCONNINFO] = { 0 };
-
-	if (!extract_connection_string_password(pguri, &safeURI))
-	{
-		/* errors have already been logged */
-		return false;
-	}
 
 	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
 
 	/* override PGPASSWORD environment variable if the pguri contains one */
-	if (!IS_EMPTY_STRING_BUFFER(safeURI.password))
+	if (connStrings->safeSourcePGURI.password != NULL)
 	{
-		if (pgpassword_found_in_env &&
-			!get_env_copy("PGPASSWORD", PGPASSWORD, MAXCONNINFO))
+		if (pgpassword_found_in_env && !get_env_dup("PGPASSWORD", &PGPASSWORD))
 		{
 			/* errors have already been logged */
 			return false;
 		}
-		setenv("PGPASSWORD", safeURI.password, 1);
+		setenv("PGPASSWORD", connStrings->safeTargetPGURI.password, 1);
 	}
 
 	args[argsIndex++] = (char *) pgPaths->pg_restore;
 	args[argsIndex++] = "--dbname";
-	args[argsIndex++] = (char *) safeURI.pguri;
+	args[argsIndex++] = (char *) connStrings->safeTargetPGURI.pguri;
 	args[argsIndex++] = "--single-transaction";
 
 	if (options.dropIfExists)
@@ -857,7 +834,8 @@ pg_restore_db(PostgresPaths *pgPaths,
 	(void) execute_subprogram(&program);
 
 	/* make sure to reset the environment PGPASSWORD if we edited it */
-	if (pgpassword_found_in_env && !IS_EMPTY_STRING_BUFFER(safeURI.password))
+	if (pgpassword_found_in_env &&
+		connStrings->safeSourcePGURI.password != NULL)
 	{
 		setenv("PGPASSWORD", PGPASSWORD, 1);
 	}

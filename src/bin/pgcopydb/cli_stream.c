@@ -244,8 +244,8 @@ cli_stream_getopts(int argc, char **argv)
 							  "see above for details.");
 					++errors;
 				}
-				strlcpy(options.source_pguri, optarg, MAXCONNINFO);
-				log_trace("--source %s", options.source_pguri);
+				strlcpy(options.connStrings.source_pguri, optarg, MAXCONNINFO);
+				log_trace("--source %s", options.connStrings.source_pguri);
 				break;
 			}
 
@@ -257,8 +257,8 @@ cli_stream_getopts(int argc, char **argv)
 							  "see above for details.");
 					++errors;
 				}
-				strlcpy(options.target_pguri, optarg, MAXCONNINFO);
-				log_trace("--target %s", options.target_pguri);
+				strlcpy(options.connStrings.target_pguri, optarg, MAXCONNINFO);
+				log_trace("--target %s", options.connStrings.target_pguri);
 				break;
 			}
 
@@ -432,11 +432,18 @@ cli_stream_getopts(int argc, char **argv)
 		}
 	}
 
-	if (IS_EMPTY_STRING_BUFFER(options.source_pguri) ||
-		IS_EMPTY_STRING_BUFFER(options.target_pguri))
+	if (options.connStrings.source_pguri == NULL ||
+		options.connStrings.target_pguri == NULL)
 	{
 		log_fatal("Options --source and --target are mandatory");
 		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	/* prepare safe versions of the connection strings (without password) */
+	if (!cli_prepare_pguris(&(options.connStrings)))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	if (!cli_copydb_is_consistent(&options))
@@ -549,8 +556,7 @@ cli_stream_setup(int argc, char **argv)
 
 	if (!stream_init_specs(&specs,
 						   &(copySpecs.cfPaths.cdc),
-						   copySpecs.source_pguri,
-						   copySpecs.target_pguri,
+						   &(copySpecs.connStrings),
 						   &(streamDBoptions.slot),
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
@@ -662,8 +668,7 @@ cli_stream_catchup(int argc, char **argv)
 
 	if (!stream_init_specs(&specs,
 						   &(copySpecs.cfPaths.cdc),
-						   copySpecs.source_pguri,
-						   copySpecs.target_pguri,
+						   &(copySpecs.connStrings),
 						   &(streamDBoptions.slot),
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
@@ -746,8 +751,7 @@ cli_stream_replay(int argc, char **argv)
 
 	if (!stream_init_specs(&specs,
 						   &(copySpecs.cfPaths.cdc),
-						   copySpecs.source_pguri,
-						   copySpecs.target_pguri,
+						   &(copySpecs.connStrings),
 						   &(streamDBoptions.slot),
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
@@ -872,8 +876,7 @@ cli_stream_transform(int argc, char **argv)
 
 	if (!stream_init_specs(&specs,
 						   &(copySpecs.cfPaths.cdc),
-						   copySpecs.source_pguri,
-						   copySpecs.target_pguri,
+						   &(copySpecs.connStrings),
 						   &(streamDBoptions.slot),
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
@@ -1008,8 +1011,7 @@ cli_stream_apply(int argc, char **argv)
 
 		if (!stream_init_specs(&specs,
 							   &(copySpecs.cfPaths.cdc),
-							   copySpecs.source_pguri,
-							   copySpecs.target_pguri,
+							   &(copySpecs.connStrings),
 							   &(streamDBoptions.slot),
 							   streamDBoptions.origin,
 							   streamDBoptions.endpos,
@@ -1040,8 +1042,7 @@ cli_stream_apply(int argc, char **argv)
 
 		if (!setupReplicationOrigin(&context,
 									&(copySpecs.cfPaths.cdc),
-									streamDBoptions.source_pguri,
-									streamDBoptions.target_pguri,
+									&(streamDBoptions.connStrings),
 									streamDBoptions.origin,
 									streamDBoptions.endpos,
 									true,
@@ -1108,8 +1109,7 @@ stream_start_in_mode(LogicalStreamMode mode)
 
 	if (!stream_init_specs(&specs,
 						   &(copySpecs.cfPaths.cdc),
-						   copySpecs.source_pguri,
-						   copySpecs.target_pguri,
+						   &(copySpecs.connStrings),
 						   &(streamDBoptions.slot),
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,

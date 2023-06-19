@@ -43,8 +43,7 @@ static bool updateStreamCounters(StreamContext *context,
 bool
 stream_init_specs(StreamSpecs *specs,
 				  CDCPaths *paths,
-				  char *source_pguri,
-				  char *target_pguri,
+				  ConnStrings *connStrings,
 				  ReplicationSlot *slot,
 				  char *origin,
 				  uint64_t endpos,
@@ -125,11 +124,12 @@ stream_init_specs(StreamSpecs *specs,
 		}
 	}
 
-	strlcpy(specs->source_pguri, source_pguri, MAXCONNINFO);
-	strlcpy(specs->target_pguri, target_pguri, MAXCONNINFO);
 	strlcpy(specs->origin, origin, sizeof(specs->origin));
 
-	if (!buildReplicationURI(specs->source_pguri, specs->logrep_pguri))
+	specs->connStrings = connStrings;
+
+	if (!buildReplicationURI(specs->connStrings->source_pguri,
+							 &(specs->connStrings->logrep_pguri)))
 	{
 		/* errors have already been logged */
 		return false;
@@ -308,9 +308,7 @@ stream_init_context(StreamContext *privateContext, StreamSpecs *specs)
 	privateContext->paths = specs->paths;
 	privateContext->startpos = specs->startpos;
 
-	strlcpy(privateContext->source_pguri,
-			specs->source_pguri,
-			sizeof(privateContext->source_pguri));
+	privateContext->connStrings = specs->connStrings;
 
 	privateContext->metadata.action = STREAM_ACTION_UNKNOWN;
 	privateContext->previous.action = STREAM_ACTION_UNKNOWN;
@@ -402,7 +400,7 @@ startLogicalStreaming(StreamSpecs *specs)
 	while (retry)
 	{
 		if (!pgsql_init_stream(&stream,
-							   specs->logrep_pguri,
+							   specs->connStrings->logrep_pguri,
 							   specs->slot.plugin,
 							   specs->slot.slotName,
 							   specs->startpos,
@@ -499,7 +497,7 @@ streamCheckResumePosition(StreamSpecs *specs)
 	 */
 	PGSQL src = { 0 };
 
-	if (!pgsql_init(&src, specs->source_pguri, PGSQL_CONN_SOURCE))
+	if (!pgsql_init(&src, specs->connStrings->source_pguri, PGSQL_CONN_SOURCE))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1402,8 +1400,9 @@ streamFeedback(LogicalStreamContext *context)
 	}
 
 	PGSQL src = { 0 };
+	char *pguri = privateContext->connStrings->source_pguri;
 
-	if (!pgsql_init(&src, privateContext->source_pguri, PGSQL_CONN_SOURCE))
+	if (!pgsql_init(&src, pguri, PGSQL_CONN_SOURCE))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1981,7 +1980,7 @@ updateStreamCounters(StreamContext *context, LogicalMessageMetadata *metadata)
  * replication=database from the connection string that's passed as input.
  */
 bool
-buildReplicationURI(const char *pguri, char *repl_pguri)
+buildReplicationURI(const char *pguri, char **repl_pguri)
 {
 	URIParams params = { 0 };
 	bool checkForCompleteURI = false;
@@ -2005,9 +2004,11 @@ buildReplicationURI(const char *pguri, char *repl_pguri)
 	if (!buildPostgresURIfromPieces(&params, repl_pguri))
 	{
 		log_error("Failed to produce the replication connection string");
+		freeURIParams(&params);
 		return false;
 	}
 
+	freeURIParams(&params);
 	return true;
 }
 
@@ -2196,7 +2197,7 @@ stream_cleanup_databases(CopyDataSpec *copySpecs, char *slotName, char *origin)
 	/*
 	 * Cleanup the source database (replication slot, pgcopydb sentinel).
 	 */
-	if (!pgsql_init(&src, copySpecs->source_pguri, PGSQL_CONN_SOURCE))
+	if (!pgsql_init(&src, copySpecs->connStrings.source_pguri, PGSQL_CONN_SOURCE))
 	{
 		/* errors have already been logged */
 		return false;
@@ -2229,7 +2230,7 @@ stream_cleanup_databases(CopyDataSpec *copySpecs, char *slotName, char *origin)
 	/*
 	 * Now cleanup the target database (replication origin).
 	 */
-	if (!pgsql_init(&dst, copySpecs->target_pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&dst, copySpecs->connStrings.target_pguri, PGSQL_CONN_TARGET))
 	{
 		/* errors have already been logged */
 		return false;
@@ -2253,7 +2254,7 @@ stream_create_origin(CopyDataSpec *copySpecs, char *nodeName, uint64_t startpos)
 {
 	PGSQL dst = { 0 };
 
-	if (!pgsql_init(&dst, copySpecs->target_pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&dst, copySpecs->connStrings.target_pguri, PGSQL_CONN_TARGET))
 	{
 		/* errors have already been logged */
 		return false;
@@ -2367,7 +2368,7 @@ stream_create_sentinel(CopyDataSpec *copySpecs,
 
 	PGSQL *pgsql = &(copySpecs->sourceSnapshot.pgsql);
 
-	if (!pgsql_init(pgsql, copySpecs->source_pguri, PGSQL_CONN_SOURCE))
+	if (!pgsql_init(pgsql, copySpecs->connStrings.source_pguri, PGSQL_CONN_SOURCE))
 	{
 		/* errors have already been logged */
 		return false;

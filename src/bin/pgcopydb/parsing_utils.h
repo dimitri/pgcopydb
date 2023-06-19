@@ -54,8 +54,8 @@ bool parse_pretty_printed_bytes(const char *value, uint64_t *result);
 typedef struct KeyVal
 {
 	int count;
-	char keywords[64][MAXCONNINFO];
-	char values[64][MAXCONNINFO];
+	char *keywords[64];
+	char *values[64];
 } KeyVal;
 
 
@@ -70,32 +70,46 @@ typedef struct KeyVal
  */
 typedef struct URIParams
 {
-	char username[MAXCONNINFO];
-	char hostname[MAXCONNINFO];
-	char port[MAXCONNINFO];
-	char dbname[MAXCONNINFO];
+	char *username;
+	char *hostname;
+	char *port;
+	char *dbname;
 	KeyVal parameters;
 } URIParams;
 
 
 typedef struct SafeURI
 {
-	char pguri[MAXCONNINFO];
-	char password[MAXCONNINFO];
+	char *pguri;                /* malloc'ed area */
+	char *password;             /* malloc'ed area */
 	URIParams uriParams;
 } SafeURI;
+
+
+typedef struct ConnStrings
+{
+	char *source_pguri;         /* malloc'ed area */
+	char *target_pguri;         /* malloc'ed area */
+	char *logrep_pguri;         /* malloc'ed area */
+
+	SafeURI safeSourcePGURI;
+	SafeURI safeTargetPGURI;
+} ConnStrings;
+
 
 bool parse_pguri_info_key_vals(const char *pguri,
 							   KeyVal *overrides,
 							   URIParams *uriParameters,
 							   bool checkForCompleteURI);
 
-bool buildPostgresURIfromPieces(URIParams *uriParams, char *pguri);
+bool buildPostgresURIfromPieces(URIParams *uriParams, char **pguri);
 
-bool escapeWithPercentEncoding(const char *str, char *dst);
+bool escapeWithPercentEncoding(const char *str, char **dst);
 
-bool parse_and_scrub_connection_string(const char *pguri, char *scrubbedPguri);
+bool parse_and_scrub_connection_string(const char *pguri, SafeURI *safeURI);
 
-bool extract_connection_string_password(const char *pguri, SafeURI *safeURI);
+void freeSafeURI(SafeURI *safeURI);
+void freeURIParams(URIParams *params);
+void freeKeyVal(KeyVal *parameters);
 
 #endif /* PARSING_UTILS_H */

@@ -84,8 +84,8 @@ cli_create_snapshot_getopts(int argc, char **argv)
 							  "see above for details.");
 					exit(EXIT_CODE_BAD_ARGS);
 				}
-				strlcpy(options.source_pguri, optarg, MAXCONNINFO);
-				log_trace("--source %s", options.source_pguri);
+				options.connStrings.source_pguri = pg_strdup(optarg);
+				log_trace("--source %s", options.connStrings.source_pguri);
 				break;
 			}
 
@@ -186,10 +186,17 @@ cli_create_snapshot_getopts(int argc, char **argv)
 		}
 	}
 
-	if (IS_EMPTY_STRING_BUFFER(options.source_pguri))
+	if (options.connStrings.source_pguri == NULL)
 	{
 		log_fatal("Option --source is mandatory");
 		++errors;
+	}
+
+	/* prepare safe versions of the connection strings (without password) */
+	if (!cli_prepare_pguris(&(options.connStrings)))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	if (!cli_copydb_is_consistent(&options))
@@ -285,8 +292,7 @@ cli_create_snapshot(int argc, char **argv)
 
 		if (!stream_init_specs(&streamSpecs,
 							   &(copySpecs.cfPaths.cdc),
-							   copySpecs.source_pguri,
-							   copySpecs.target_pguri,
+							   &(copySpecs.connStrings),
 							   &(createSNoptions.slot),
 							   createSNoptions.origin,
 							   createSNoptions.endpos,
@@ -300,8 +306,10 @@ cli_create_snapshot(int argc, char **argv)
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 
+		char *logrep_pguri = streamSpecs.connStrings->logrep_pguri;
+
 		if (!copydb_create_logical_replication_slot(&copySpecs,
-													streamSpecs.logrep_pguri,
+													logrep_pguri,
 													&(streamSpecs.slot)))
 		{
 			/* errors have already been logged */

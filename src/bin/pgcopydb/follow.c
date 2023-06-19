@@ -29,8 +29,10 @@ follow_export_snapshot(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	 * When using logical decoding, we need to create our replication slot and
 	 * fetch the snapshot from that logical replication command.
 	 */
+	char *logrep_pguri = streamSpecs->connStrings->logrep_pguri;
+
 	if (!copydb_create_logical_replication_slot(copySpecs,
-												streamSpecs->logrep_pguri,
+												logrep_pguri,
 												&(streamSpecs->slot)))
 	{
 		/* errors have already been logged */
@@ -105,6 +107,8 @@ follow_reset_sequences(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	/* copy our structure wholesale */
 	seqSpecs = *copySpecs;
 
+	log_info("follow_reset_sequences: %s", seqSpecs.connStrings.source_pguri);
+
 	/* then force some options such as --resume --not-consistent */
 	seqSpecs.restart = false;
 	seqSpecs.resume = true;
@@ -142,7 +146,7 @@ follow_init_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel)
 {
 	PGSQL pgsql = { 0 };
 
-	if (!pgsql_init(&pgsql, specs->source_pguri, PGSQL_CONN_SOURCE))
+	if (!pgsql_init(&pgsql, specs->connStrings->source_pguri, PGSQL_CONN_SOURCE))
 	{
 		/* errors have already been logged */
 		return false;
@@ -188,7 +192,7 @@ follow_get_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel)
 {
 	PGSQL pgsql = { 0 };
 
-	if (!pgsql_init(&pgsql, specs->source_pguri, PGSQL_CONN_SOURCE))
+	if (!pgsql_init(&pgsql, specs->connStrings->source_pguri, PGSQL_CONN_SOURCE))
 	{
 		/* errors have already been logged */
 		return false;

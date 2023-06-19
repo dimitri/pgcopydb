@@ -48,7 +48,7 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 	else
 	{
 		log_debug("--not-consistent, create a fresh connection");
-		if (!pgsql_init(&pgsql, specs->source_pguri, PGSQL_CONN_SOURCE))
+		if (!pgsql_init(&pgsql, specs->connStrings.source_pguri, PGSQL_CONN_SOURCE))
 		{
 			/* errors have already been logged */
 			return false;
@@ -248,10 +248,10 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 
 	int copySpecsCount = 0;
 
-	if (specs->splitTablesLargerThan > 0)
+	if (specs->splitTablesLargerThan.bytes > 0)
 	{
 		log_info("Splitting source candidate tables larger than %s",
-				 specs->splitTablesLargerThanPretty);
+				 specs->splitTablesLargerThan.bytesPretty);
 	}
 
 	/* prepare a SourceTable hash table, indexed by Oid */
@@ -268,8 +268,8 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 		/* add the current table to the Hash-by-OID */
 		HASH_ADD(hh, sourceTableHashByOid, oid, sizeof(uint32_t), source);
 
-		if (specs->splitTablesLargerThan > 0 &&
-			specs->splitTablesLargerThan <= source->bytes)
+		if (specs->splitTablesLargerThan.bytes > 0 &&
+			specs->splitTablesLargerThan.bytes <= source->bytes)
 		{
 			if (IS_EMPTY_STRING_BUFFER(source->partKey))
 			{
@@ -280,7 +280,7 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 						 source->nspname,
 						 source->relname,
 						 source->bytesPretty,
-						 specs->splitTablesLargerThanPretty);
+						 specs->splitTablesLargerThan.bytesPretty);
 
 				log_warn("Skipping same-table concurrency for table \"%s\".\"%s\"",
 						 source->nspname,
@@ -292,7 +292,7 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 
 			if (!schema_list_partitions(pgsql,
 										source,
-										specs->splitTablesLargerThan))
+										specs->splitTablesLargerThan.bytes))
 			{
 				/* errors have already been logged */
 				return false;

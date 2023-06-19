@@ -17,20 +17,27 @@
 #include "copydb_paths.h"
 #include "defaults.h"
 #include "parson.h"
+#include "parsing_utils.h"
 #include "pgcmd.h"
 #include "pgsql.h"
+
+typedef struct SplitTableLargerThan
+{
+	uint64_t bytes;
+	char bytesPretty[NAMEDATALEN];
+} SplitTableLargerThan;
+
 
 typedef struct CopyDBOptions
 {
 	char dir[MAXPGPATH];
 
-	char source_pguri[MAXCONNINFO];
-	char target_pguri[MAXCONNINFO];
+	ConnStrings connStrings;
 
 	int tableJobs;
 	int indexJobs;
-	uint64_t splitTablesLargerThan;
-	char splitTablesLargerThanPretty[NAMEDATALEN];
+
+	SplitTableLargerThan splitTablesLargerThan;
 
 	RestoreOptions restoreOptions;
 
@@ -73,6 +80,9 @@ void cli_print_version(int argc, char **argv);
 void cli_pprint_json(JSON_Value *js);
 char * logLevelToString(int logLevel);
 
+bool cli_copydb_getenv_source_pguri(char **pguri);
+bool cli_copydb_getenv_split(SplitTableLargerThan *splitTablesLargerThan);
+
 bool cli_copydb_getenv(CopyDBOptions *options);
 bool cli_copydb_is_consistent(CopyDBOptions *options);
 bool cli_read_previous_options(CopyDBOptions *options, CopyFilePaths *cfPaths);
@@ -88,5 +98,7 @@ bool cli_parse_bytes_pretty(const char *byteString,
 							uint64_t *bytes,
 							char *bytesPretty,
 							size_t bytesPrettySize);
+
+bool cli_prepare_pguris(ConnStrings *connStrings);
 
 #endif  /* CLI_COMMON_H */

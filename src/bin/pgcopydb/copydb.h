@@ -80,7 +80,9 @@ typedef struct TransactionSnapshot
 	TransactionSnapshotKind kind;
 	TransactionSnapshotState state;
 
-	char pguri[MAXCONNINFO];
+	char *pguri;    /* malloc'ed area */
+	SafeURI safeURI;
+
 	PGSQL pgsql;
 
 	bool exportedCreateSlotSnapshot;
@@ -128,8 +130,7 @@ typedef struct CopyTableDataSpec
 	CopyFilePaths *cfPaths;
 	PostgresPaths *pgPaths;
 
-	char *source_pguri;
-	char *target_pguri;
+	ConnStrings *connStrings;
 
 	CopyDataSection section;
 	bool resume;
@@ -220,9 +221,7 @@ typedef struct CopyDataSpec
 	SourceFilterItem *hOid;     /* hash table of objects, by Oid */
 	SourceFilterItem *hName;    /* hash table of objects, by pg_restore name */
 
-	char source_pguri[MAXCONNINFO];
-	char target_pguri[MAXCONNINFO];
-
+	ConnStrings connStrings;
 	TransactionSnapshot sourceSnapshot;
 
 	CopyDataSection section;
@@ -245,8 +244,7 @@ typedef struct CopyDataSpec
 	int indexJobs;
 	int vacuumJobs;
 
-	uint64_t splitTablesLargerThan;
-	char splitTablesLargerThanPretty[NAMEDATALEN];
+	SplitTableLargerThan splitTablesLargerThan;
 
 	Semaphore tableSemaphore;
 	Semaphore indexSemaphore;

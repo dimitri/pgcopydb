@@ -187,8 +187,8 @@ cli_restore_schema_getopts(int argc, char **argv)
 							  "see above for details.");
 					exit(EXIT_CODE_BAD_ARGS);
 				}
-				strlcpy(options.source_pguri, optarg, MAXCONNINFO);
-				log_trace("--source %s", options.source_pguri);
+				options.connStrings.source_pguri = pg_strdup(optarg);
+				log_trace("--source %s", options.connStrings.source_pguri);
 				break;
 			}
 
@@ -200,8 +200,8 @@ cli_restore_schema_getopts(int argc, char **argv)
 							  "see above for details.");
 					exit(EXIT_CODE_BAD_ARGS);
 				}
-				strlcpy(options.target_pguri, optarg, MAXCONNINFO);
-				log_trace("--target %s", options.target_pguri);
+				options.connStrings.target_pguri = pg_strdup(optarg);
+				log_trace("--target %s", options.connStrings.target_pguri);
 				break;
 			}
 
@@ -357,7 +357,7 @@ cli_restore_schema_getopts(int argc, char **argv)
 		}
 	}
 
-	if (IS_EMPTY_STRING_BUFFER(options.target_pguri))
+	if (options.connStrings.target_pguri == NULL)
 	{
 		log_fatal("Option --target is mandatory");
 		++errors;
@@ -367,6 +367,13 @@ cli_restore_schema_getopts(int argc, char **argv)
 	{
 		log_fatal("Option --resume requires option --not-consistent");
 		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	/* prepare safe versions of the connection strings (without password) */
+	if (!cli_prepare_pguris(&(options.connStrings)))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	if (errors > 0)
@@ -452,7 +459,7 @@ cli_restore_roles(int argc, char **argv)
 	(void) cli_restore_prepare_specs(&copySpecs);
 
 	if (!pg_restore_roles(&(copySpecs.pgPaths),
-						  copySpecs.target_pguri,
+						  copySpecs.connStrings.target_pguri,
 						  copySpecs.dumpPaths.rolesFilename))
 	{
 		/* errors have already been logged */
@@ -528,17 +535,12 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 	CopyFilePaths *cfPaths = &(copySpecs->cfPaths);
 	PostgresPaths *pgPaths = &(copySpecs->pgPaths);
 
-	char scrubbedSourceURI[MAXCONNINFO] = { 0 };
-	char scrubbedTargetURI[MAXCONNINFO] = { 0 };
+	ConnStrings *dsn = &(copySpecs->connStrings);
+	char *source = dsn->safeSourcePGURI.pguri;
+	char *target = dsn->safeTargetPGURI.pguri;
 
-	(void) parse_and_scrub_connection_string(restoreDBoptions.source_pguri,
-											 scrubbedSourceURI);
-
-	(void) parse_and_scrub_connection_string(restoreDBoptions.target_pguri,
-											 scrubbedTargetURI);
-
-	log_info("[SOURCE] Restoring database from \"%s\"", scrubbedSourceURI);
-	log_info("[TARGET] Restoring database into \"%s\"", scrubbedTargetURI);
+	log_info("[SOURCE] Restoring database from \"%s\"", source);
+	log_info("[TARGET] Restoring database into \"%s\"", target);
 
 	(void) find_pg_commands(pgPaths);
 

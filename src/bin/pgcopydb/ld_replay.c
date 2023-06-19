@@ -77,8 +77,7 @@ stream_apply_replay(StreamSpecs *specs)
 
 	if (!setupReplicationOrigin(context,
 								&(specs->paths),
-								specs->source_pguri,
-								specs->target_pguri,
+								specs->connStrings,
 								specs->origin,
 								specs->endpos,
 								context->apply,
@@ -116,7 +115,7 @@ stream_apply_replay(StreamSpecs *specs)
 	 */
 	PGSQL *src = &(context->src);
 
-	if (!pgsql_init(src, context->source_pguri, PGSQL_CONN_SOURCE))
+	if (!pgsql_init(src, context->connStrings->source_pguri, PGSQL_CONN_SOURCE))
 	{
 		/* errors have already been logged */
 		return false;

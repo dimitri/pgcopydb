@@ -143,17 +143,12 @@ copydb_setup_as_json(CopyDataSpec *copySpecs,
 	}
 
 	/* source and target URIs, without passwords */
-	char scrubbedSourceURI[MAXCONNINFO] = { 0 };
-	char scrubbedTargetURI[MAXCONNINFO] = { 0 };
+	ConnStrings *dsn = &(copySpecs->connStrings);
+	char *source = dsn->safeSourcePGURI.pguri;
+	char *target = dsn->safeTargetPGURI.pguri;
 
-	(void) parse_and_scrub_connection_string(copySpecs->source_pguri,
-											 scrubbedSourceURI);
-
-	(void) parse_and_scrub_connection_string(copySpecs->target_pguri,
-											 scrubbedTargetURI);
-
-	json_object_set_string(jsSetupObj, "source_pguri", scrubbedSourceURI);
-	json_object_set_string(jsSetupObj, "target_pguri", scrubbedTargetURI);
+	json_object_set_string(jsSetupObj, "source_pguri", source);
+	json_object_set_string(jsSetupObj, "target_pguri", target);
 
 	json_object_set_number(jsSetupObj,
 						   "table-jobs",
@@ -165,7 +160,7 @@ copydb_setup_as_json(CopyDataSpec *copySpecs,
 
 	json_object_set_number(jsSetupObj,
 						   "split-tables-larger-than",
-						   (double) copySpecs->splitTablesLargerThan);
+						   (double) copySpecs->splitTablesLargerThan.bytes);
 
 	/* attach the JSON array to the main JSON object under the provided key */
 	json_object_set_value(jsobj, key, jsSetup);

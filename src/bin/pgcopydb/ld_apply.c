@@ -74,8 +74,7 @@ stream_apply_catchup(StreamSpecs *specs)
 
 	if (!setupReplicationOrigin(&context,
 								&(specs->paths),
-								specs->source_pguri,
-								specs->target_pguri,
+								specs->connStrings,
 								specs->origin,
 								specs->endpos,
 								context.apply,
@@ -216,7 +215,7 @@ stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
 	bool firstLoop = true;
 	CopyDBSentinel sentinel = { 0 };
 
-	if (!pgsql_init(&src, specs->source_pguri, PGSQL_CONN_SOURCE))
+	if (!pgsql_init(&src, specs->connStrings->source_pguri, PGSQL_CONN_SOURCE))
 	{
 		/* errors have already been logged */
 		return false;
@@ -293,7 +292,7 @@ stream_apply_sync_sentinel(StreamApplyContext *context)
 	PGSQL src = { 0 };
 	CopyDBSentinel sentinel = { 0 };
 
-	if (!pgsql_init(&src, context->source_pguri, PGSQL_CONN_SOURCE))
+	if (!pgsql_init(&src, context->connStrings->source_pguri, PGSQL_CONN_SOURCE))
 	{
 		/* errors have already been logged */
 		return false;
@@ -841,8 +840,7 @@ stream_apply_sql(StreamApplyContext *context,
 bool
 setupReplicationOrigin(StreamApplyContext *context,
 					   CDCPaths *paths,
-					   char *source_pguri,
-					   char *target_pguri,
+					   ConnStrings *connStrings,
 					   char *origin,
 					   uint64_t endpos,
 					   bool apply,
@@ -877,11 +875,11 @@ setupReplicationOrigin(StreamApplyContext *context,
 
 	context->reachedStartPos = false;
 
-	strlcpy(context->source_pguri, source_pguri, sizeof(context->source_pguri));
-	strlcpy(context->target_pguri, target_pguri, sizeof(context->target_pguri));
+	context->connStrings = connStrings;
+
 	strlcpy(context->origin, origin, sizeof(context->origin));
 
-	if (!pgsql_init(pgsql, context->target_pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(pgsql, context->connStrings->target_pguri, PGSQL_CONN_TARGET))
 	{
 		/* errors have already been logged */
 		return false;

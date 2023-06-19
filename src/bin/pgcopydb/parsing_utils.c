@@ -586,33 +586,31 @@ parse_pguri_info_key_vals(const char *pguri,
 			strcmp(option->keyword, "hostaddr") == 0)
 		{
 			foundHost = true;
-			strlcpy(uriParameters->hostname, option->val, MAXCONNINFO);
+			uriParameters->hostname = strdup(option->val);
 		}
 		else if (strcmp(option->keyword, "port") == 0)
 		{
 			foundPort = true;
-			strlcpy(uriParameters->port, option->val, MAXCONNINFO);
+			uriParameters->port = strdup(option->val);
 		}
 		else if (strcmp(option->keyword, "user") == 0)
 		{
 			foundUser = true;
-			strlcpy(uriParameters->username, option->val, MAXCONNINFO);
+			uriParameters->username = strdup(option->val);
 		}
 		else if (strcmp(option->keyword, "dbname") == 0)
 		{
 			foundDBName = true;
-			strlcpy(uriParameters->dbname, option->val, MAXCONNINFO);
+			uriParameters->dbname = strdup(option->val);
 		}
 		else if (!IS_EMPTY_STRING_BUFFER(value))
 		{
 			/* make a copy in our key/val arrays */
-			strlcpy(uriParameters->parameters.keywords[paramIndex],
-					option->keyword,
-					MAXCONNINFO);
+			uriParameters->parameters.keywords[paramIndex] =
+				strdup(option->keyword);
 
-			strlcpy(uriParameters->parameters.values[paramIndex],
-					value,
-					MAXCONNINFO);
+			uriParameters->parameters.values[paramIndex] =
+				strdup(value);
 
 			++uriParameters->parameters.count;
 			++paramIndex;
@@ -658,59 +656,66 @@ parse_pguri_info_key_vals(const char *pguri,
 
 /*
  * buildPostgresURIfromPieces builds a Postgres connection string from keywords
- * and values, in a user friendly way. The pguri parameter should point to a
- * memory area that has been allocated by the caller and has at least
- * MAXCONNINFO bytes.
+ * and values, in a user friendly way.
  */
 bool
-buildPostgresURIfromPieces(URIParams *uriParams, char *pguri)
+buildPostgresURIfromPieces(URIParams *uriParams, char **pguri)
 {
+	PQExpBuffer uri = createPQExpBuffer();
+
 	int index = 0;
 
-	char escapedUsername[MAXCONNINFO] = { 0 };
-	char escapedHostname[MAXCONNINFO] = { 0 };
-	char escapedDBName[MAXCONNINFO] = { 0 };
+	/* prepare the mandatory part of the Postgres URI */
+	appendPQExpBufferStr(uri, "postgres://");
 
-	/*
-	 * We want to escape uriParams username, hostname, and dbname, in exactly
-	 * the same way, and also wish to report which URI parameter we failed to
-	 * escape in case of errors, and we also want to avoid copy pasting the
-	 * same code 3 times in a row.
-	 *
-	 * We would rather loop over an array where we would have the parameter
-	 * name (keyword), and a pointer to the value to escape, and a pointer to
-	 * where to store the escaped string bytes then.
-	 */
-	struct namedPair
+	if (uriParams->username)
 	{
-		char *name;
-		char *raw;
-		char *escaped;
-	};
+		char *escaped = NULL;
 
-	struct namedPair args[] = {
-		{ "username", uriParams->username, escapedUsername },
-		{ "hostname", uriParams->hostname, escapedHostname },
-		{ "dbname", uriParams->dbname, escapedDBName },
-		{ NULL, NULL, NULL }
-	};
-
-	for (int i = 0; args[i].name != NULL; i++)
-	{
-		if (!escapeWithPercentEncoding(args[i].raw, args[i].escaped))
+		if (!escapeWithPercentEncoding(uriParams->username, &escaped))
 		{
-			log_error("Failed to percent-escape URI %s", args[i].name);
+			log_error("Failed to percent-escape URI username \"%s\"",
+					  uriParams->username);
 			return false;
 		}
+		appendPQExpBuffer(uri, "%s@", escaped);
+		free(escaped);
 	}
 
-	/* prepare the mandatory part of the Postgres URI */
-	sformat(pguri, MAXCONNINFO,
-			"postgres://%s@%s:%s/%s?",
-			escapedUsername,
-			escapedHostname,
-			uriParams->port,
-			escapedDBName);
+	if (uriParams->hostname)
+	{
+		char *escaped = NULL;
+
+		if (!escapeWithPercentEncoding(uriParams->hostname, &escaped))
+		{
+			log_error("Failed to percent-escape URI hostname \"%s\"",
+					  uriParams->hostname);
+			return false;
+		}
+		appendPQExpBuffer(uri, "%s", escaped);
+		free(escaped);
+	}
+
+	if (uriParams->port)
+	{
+		appendPQExpBuffer(uri, ":%s", uriParams->port);
+	}
+
+	appendPQExpBufferStr(uri, "/");
+
+	if (uriParams->dbname)
+	{
+		char *escaped = NULL;
+
+		if (!escapeWithPercentEncoding(uriParams->dbname, &escaped))
+		{
+			log_error("Failed to percent-escape URI dbname \"%s\"",
+					  uriParams->dbname);
+			return false;
+		}
+		appendPQExpBuffer(uri, "%s", escaped);
+		free(escaped);
+	}
 
 	/* now add optional parameters to the Postgres URI */
 	for (index = 0; index < uriParams->parameters.count; index++)
@@ -718,16 +723,19 @@ buildPostgresURIfromPieces(URIParams *uriParams, char *pguri)
 		char *keyword = uriParams->parameters.keywords[index];
 		char *value = uriParams->parameters.values[index];
 
-		char escapedValue[MAXCONNINFO] = { 0 };
-
 		/* if we have password="****" then just keep that */
 		if (streq(keyword, "password") && streq(value, PASSWORD_MASK))
 		{
-			strlcpy(escapedValue, value, sizeof(escapedValue));
+			appendPQExpBuffer(uri, "%s%s=%s",
+							  index == 0 ? "?" : "&",
+							  keyword,
+							  value);
 		}
-		else
+		else if (value != NULL)
 		{
-			if (!escapeWithPercentEncoding(value, escapedValue))
+			char *escapedValue = NULL;
+
+			if (!escapeWithPercentEncoding(value, &escapedValue))
 			{
 				if (streq(keyword, "password"))
 				{
@@ -742,23 +750,76 @@ buildPostgresURIfromPieces(URIParams *uriParams, char *pguri)
 				}
 				return false;
 			}
-		}
 
-		if (index == 0)
-		{
-			sformat(pguri, MAXCONNINFO,
-					"%s%s=%s",
-					pguri, keyword, escapedValue);
+			appendPQExpBuffer(uri, "%s%s=%s",
+							  index == 0 ? "?" : "&",
+							  keyword,
+							  escapedValue);
+
+			free(escapedValue);
 		}
 		else
 		{
-			sformat(pguri, MAXCONNINFO,
-					"%s&%s=%s",
-					pguri, keyword, escapedValue);
+			log_warn("buildPostgresURIfromPieces: %s is NULL", keyword);
 		}
 	}
 
+	if (PQExpBufferBroken(uri))
+	{
+		log_error("Failed to build Postgres URI: out of memory");
+		destroyPQExpBuffer(uri);
+		return false;
+	}
+
+	*pguri = strdup(uri->data);
+	destroyPQExpBuffer(uri);
+
+	log_trace("buildPostgresURIfromPieces: %s", *pguri);
+
 	return true;
+}
+
+
+/*
+ * charNeedsPercentEncoding returns true when a character needs special
+ * encoding for percent-encoding. See escapeWithPercentEncoding() for
+ * references.
+ */
+static inline bool
+charNeedsPercentEncoding(char c)
+{
+	return !(isalpha(c) ||
+			 isdigit(c) ||
+			 c == '-' ||
+			 c == '.' ||
+			 c == '_' ||
+			 c == '~');
+}
+
+
+/*
+ * computePercentEncodedSize returns how many bytes are necessary to hold a
+ * percent-encoded version of the given string.
+ */
+static inline size_t
+computePercentEncodedSize(const char *str)
+{
+	/* prepare room for the terminal char '\0' */
+	size_t size = 1;
+
+	for (int i = 0; str[i] != '\0'; i++)
+	{
+		if (charNeedsPercentEncoding(str[i]))
+		{
+			size += 3;
+		}
+		else
+		{
+			++size;
+		}
+	}
+
+	return size;
 }
 
 
@@ -771,22 +832,34 @@ buildPostgresURIfromPieces(URIParams *uriParams, char *pguri)
  * See https://datatracker.ietf.org/doc/html/rfc3986#section-2.1
  */
 bool
-escapeWithPercentEncoding(const char *str, char *dst)
+escapeWithPercentEncoding(const char *str, char **dst)
 {
-	const char empty[MAXCONNINFO] = { 0 };
 	const char *hex = "0123456789abcdef";
 
-	if (str == NULL || IS_EMPTY_STRING_BUFFER(str))
+	if (str == NULL)
 	{
-		strlcpy(dst, empty, MAXCONNINFO);
+		log_error("BUG: escapeWithPercentEncoding called with str == NULL");
+		return false;
+	}
 
-		return true;
+	if (dst == NULL)
+	{
+		log_error("BUG: escapeWithPercentEncoding called with dst == NULL");
+		return false;
+	}
+
+	size_t size = computePercentEncodedSize(str);
+	char *escaped = (char *) calloc(size, sizeof(char));
+
+	if (escaped == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
 	}
 
 	int pos = 0;
-	int len = strlen(str);
 
-	for (int i = 0; i < len; i++)
+	for (int i = 0; str[i] != '\0'; i++)
 	{
 		/*
 		 * 2.3 Unreserved Characters
@@ -795,20 +868,18 @@ escapeWithPercentEncoding(const char *str, char *dst)
 		 *
 		 *       unreserved  = ALPHA / DIGIT / "-" / "." / "_" / "~"
 		 */
-		if (isalpha(str[i]) || isdigit(str[i]) ||
-			str[i] == '-' ||
-			str[i] == '.' ||
-			str[i] == '_' ||
-			str[i] == '~')
+		if (!charNeedsPercentEncoding(str[i]))
 		{
-			if (MAXCONNINFO <= (pos + 1))
+			if (size <= (pos + 1))
 			{
 				/* we really do not expect that to ever happen */
 				log_error("BUG: percent-encoded Postgres URI does not fit "
-						  "in MAXCONNINFO (%d) bytes", MAXCONNINFO);
+						  "in the computed size: %lld bytes",
+						  (long long) size);
 				return false;
 			}
-			dst[pos++] = str[i];
+
+			escaped[pos++] = str[i];
 		}
 
 		/*
@@ -820,19 +891,22 @@ escapeWithPercentEncoding(const char *str, char *dst)
 		 */
 		else
 		{
-			if (MAXCONNINFO <= (pos + 3))
+			if (size <= (pos + 3))
 			{
 				/* we really do not expect that to ever happen */
 				log_error("BUG: percent-encoded Postgres URI does not fit "
-						  "in MAXCONNINFO (%d) bytes", MAXCONNINFO);
+						  "in the computed size: %lld bytes",
+						  (long long) size);
 				return false;
 			}
 
-			dst[pos++] = '%';
-			dst[pos++] = hex[str[i] >> 4];
-			dst[pos++] = hex[str[i] & 15];
+			escaped[pos++] = '%';
+			escaped[pos++] = hex[str[i] >> 4];
+			escaped[pos++] = hex[str[i] & 15];
 		}
 	}
+
+	*dst = escaped;
 
 	return true;
 }
@@ -884,10 +958,16 @@ uri_contains_password(const char *pguri)
  * allocated by the caller and has at least MAXCONNINFO bytes.
  */
 bool
-parse_and_scrub_connection_string(const char *pguri, char *scrubbedPguri)
+parse_and_scrub_connection_string(const char *pguri, SafeURI *safeURI)
 {
-	URIParams uriParams = { 0 };
+	URIParams *uriParams = &(safeURI->uriParams);
 	KeyVal overrides = { 0 };
+
+	if (pguri == NULL)
+	{
+		safeURI->pguri = NULL;
+		return true;
+	}
 
 	if (uri_contains_password(pguri))
 	{
@@ -902,70 +982,85 @@ parse_and_scrub_connection_string(const char *pguri, char *scrubbedPguri)
 
 	if (!parse_pguri_info_key_vals(pguri,
 								   &overrides,
-								   &uriParams,
-								   checkForCompleteURI))
-	{
-		return false;
-	}
-
-	buildPostgresURIfromPieces(&uriParams, scrubbedPguri);
-
-	return true;
-}
-
-
-/*
- * extract_connection_string_password parses the given connection string and if
- * it contains a password, then extracts it into the SafeURI structure and
- * provide a pguri without password instead.
- */
-bool
-extract_connection_string_password(const char *pguri, SafeURI *safeURI)
-{
-	char *errmsg;
-	PQconninfoOption *conninfo, *option;
-
-	conninfo = PQconninfoParse(pguri, &errmsg);
-	if (conninfo == NULL)
-	{
-		log_error("Failed to parse pguri: %s", errmsg);
-
-		PQfreemem(errmsg);
-		return false;
-	}
-
-	for (option = conninfo; option->keyword != NULL; option++)
-	{
-		if (streq(option->keyword, "password"))
-		{
-			if (option->val != NULL)
-			{
-				strlcpy(safeURI->password, option->val, MAXCONNINFO);
-			}
-			continue;
-		}
-	}
-
-	PQconninfoFree(conninfo);
-
-	URIParams *uriParams = &(safeURI->uriParams);
-	KeyVal overrides = {
-		.count = 1,
-		.keywords = { "password" },
-		.values = { "" }
-	};
-
-	bool checkForCompleteURI = false;
-
-	if (!parse_pguri_info_key_vals(pguri,
-								   &overrides,
 								   uriParams,
 								   checkForCompleteURI))
 	{
 		return false;
 	}
 
-	buildPostgresURIfromPieces(uriParams, safeURI->pguri);
+	buildPostgresURIfromPieces(uriParams, &(safeURI->pguri));
+
+	/* also extract the password in case it's needed */
+	for (int i = 0; i < uriParams->parameters.count; i++)
+	{
+		if (streq(uriParams->parameters.keywords[i], "password"))
+		{
+			if (uriParams->parameters.values[i] != NULL)
+			{
+				safeURI->password = strdup(uriParams->parameters.values[i]);
+
+				if (safeURI->password == NULL)
+				{
+					log_error(ALLOCATION_FAILED_ERROR);
+					return false;
+				}
+			}
+			break;
+		}
+	}
 
 	return true;
+}
+
+
+/*
+ * freeSafeURI frees the dynamic memory allocated for handling the safe URI.
+ */
+void
+freeSafeURI(SafeURI *safeURI)
+{
+	free(safeURI->pguri);
+	free(safeURI->password);
+	freeURIParams(&(safeURI->uriParams));
+
+	safeURI->pguri = NULL;
+	safeURI->password = NULL;
+}
+
+
+/*
+ * freeURIParams frees the dynamic memory allocated for handling URI params.
+ */
+void
+freeURIParams(URIParams *params)
+{
+	free(params->username);
+	free(params->hostname);
+	free(params->port);
+	free(params->dbname);
+	freeKeyVal(&(params->parameters));
+
+	params->username = NULL;
+	params->hostname = NULL;
+	params->port = NULL;
+	params->dbname = NULL;
+}
+
+
+/*
+ * freeKeyVal frees the dynamic memory allocated for handling KeyVal parameters
+ */
+void
+freeKeyVal(KeyVal *parameters)
+{
+	for (int i = 0; i < parameters->count; i++)
+	{
+		free(parameters->keywords[i]);
+		free(parameters->values[i]);
+
+		parameters->keywords[i] = NULL;
+		parameters->values[i] = NULL;
+	}
+
+	parameters->count = 0;
 }

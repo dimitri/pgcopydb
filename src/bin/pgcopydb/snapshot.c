@@ -29,8 +29,7 @@ copydb_copy_snapshot(CopyDataSpec *specs, TransactionSnapshot *snapshot)
 
 	/* remember if the replication slot has been created already */
 	snapshot->exportedCreateSlotSnapshot = source->exportedCreateSlotSnapshot;
-
-	strlcpy(snapshot->pguri, source->pguri, sizeof(snapshot->pguri));
+	snapshot->pguri = strdup(source->pguri);
 	strlcpy(snapshot->snapshot, source->snapshot, sizeof(snapshot->snapshot));
 
 	return true;
@@ -230,13 +229,9 @@ copydb_close_snapshot(CopyDataSpec *copySpecs)
 			/* only COMMIT sql snapshot kinds, no need for logical rep ones */
 			if (!pgsql_commit(pgsql))
 			{
-				char pguri[MAXCONNINFO] = { 0 };
-
-				(void) parse_and_scrub_connection_string(snapshot->pguri, pguri);
-
 				log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
 						  snapshot->snapshot,
-						  pguri);
+						  snapshot->safeURI.pguri);
 				return false;
 			}
 		}
