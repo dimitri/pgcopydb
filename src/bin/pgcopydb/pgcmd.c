@@ -356,8 +356,7 @@ pg_dump_db(PostgresPaths *pgPaths,
 	/* override PGPASSWORD environment variable if the pguri contains one */
 	if (connStrings->safeSourcePGURI.password != NULL)
 	{
-		if (pgpassword_found_in_env &&
-			!get_env_dup("PGPASSWORD", &(PGPASSWORD)))
+		if (pgpassword_found_in_env && !get_env_dup("PGPASSWORD", &PGPASSWORD))
 		{
 			/* errors have already been logged */
 			return false;
@@ -467,8 +466,7 @@ pg_dumpall_roles(PostgresPaths *pgPaths,
 	/* override PGPASSWORD environment variable if the pguri contains one */
 	if (connStrings->safeSourcePGURI.password != NULL)
 	{
-		if (pgpassword_found_in_env &&
-			!get_env_dup("PGPASSWORD", &(PGPASSWORD)))
+		if (pgpassword_found_in_env && !get_env_dup("PGPASSWORD", &PGPASSWORD))
 		{
 			/* errors have already been logged */
 			return false;
@@ -750,8 +748,7 @@ pg_restore_db(PostgresPaths *pgPaths,
 	/* override PGPASSWORD environment variable if the pguri contains one */
 	if (connStrings->safeSourcePGURI.password != NULL)
 	{
-		if (pgpassword_found_in_env &&
-			!get_env_dup("PGPASSWORD", &(PGPASSWORD)))
+		if (pgpassword_found_in_env && !get_env_dup("PGPASSWORD", &PGPASSWORD))
 		{
 			/* errors have already been logged */
 			return false;

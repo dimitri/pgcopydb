@@ -441,7 +441,7 @@ cli_list_db_getopts(int argc, char **argv)
 		}
 	}
 
-	if (IS_EMPTY_STRING_BUFFER(options.connStrings.source_pguri))
+	if (options.connStrings.source_pguri == NULL)
 	{
 		log_fatal("Option --source is mandatory");
 		++errors;
