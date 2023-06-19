@@ -183,9 +183,6 @@ pgsql_init(PGSQL *pgsql, char *url, ConnectionType connectionType)
 		return false;
 	}
 
-	/* also keep around a print-safe version of the URL */
-	(void) parse_and_scrub_connection_string(url, &(pgsql->safeURI));
-
 	/* by default we log all the SQL queries and their parameters */
 	pgsql->logSQL = true;
 
@@ -501,6 +498,13 @@ pgsql_open_connection(PGSQL *pgsql)
 
 	if (pgsql->logSQL)
 	{
+		/* also keep around a print-safe version of the URL */
+		if (pgsql->safeURI.pguri == NULL)
+		{
+			(void) parse_and_scrub_connection_string(pgsql->connectionString,
+													 &(pgsql->safeURI));
+		}
+
 		log_sql("Connecting to [%s] \"%s\"",
 				ConnectionTypeToString(pgsql->connectionType),
 				pgsql->safeURI.pguri);
