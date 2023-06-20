@@ -723,15 +723,7 @@ buildPostgresURIfromPieces(URIParams *uriParams, char **pguri)
 		char *keyword = uriParams->parameters.keywords[index];
 		char *value = uriParams->parameters.values[index];
 
-		/* if we have password="****" then just keep that */
-		if (streq(keyword, "password") && streq(value, PASSWORD_MASK))
-		{
-			appendPQExpBuffer(uri, "%s%s=%s",
-							  index == 0 ? "?" : "&",
-							  keyword,
-							  value);
-		}
-		else if (value != NULL)
+		if (value != NULL && !streq(value, ""))
 		{
 			char *escapedValue = NULL;
 
@@ -918,7 +910,7 @@ escapeWithPercentEncoding(const char *str, char **dst)
  * keyword is present in the connection string.
  */
 static bool
-uri_contains_password(const char *pguri)
+uri_grab_password(const char *pguri, SafeURI *safeURI)
 {
 	char *errmsg;
 	PQconninfoOption *conninfo, *option;
@@ -937,17 +929,25 @@ uri_contains_password(const char *pguri)
 	 */
 	for (option = conninfo; option->keyword != NULL; option++)
 	{
-		if (strcmp(option->keyword, "password") == 0 &&
+		if (streq(option->keyword, "password") &&
 			option->val != NULL &&
 			!IS_EMPTY_STRING_BUFFER(option->val))
 		{
-			PQconninfoFree(conninfo);
-			return true;
+			safeURI->password = strdup(option->val);
+
+			if (safeURI->password == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			/* found the password field, break out of the loop */
+			break;
 		}
 	}
 
 	PQconninfoFree(conninfo);
-	return false;
+	return true;
 }
 
 
@@ -961,7 +961,12 @@ bool
 parse_and_scrub_connection_string(const char *pguri, SafeURI *safeURI)
 {
 	URIParams *uriParams = &(safeURI->uriParams);
-	KeyVal overrides = { 0 };
+
+	KeyVal overrides = {
+		.count = 1,
+		.keywords = { "password" },
+		.values = { "" }
+	};
 
 	if (pguri == NULL)
 	{
@@ -969,13 +974,10 @@ parse_and_scrub_connection_string(const char *pguri, SafeURI *safeURI)
 		return true;
 	}
 
-	if (uri_contains_password(pguri))
+	if (!uri_grab_password(pguri, safeURI))
 	{
-		overrides = (KeyVal) {
-			.count = 1,
-			.keywords = { "password" },
-			.values = { PASSWORD_MASK }
-		};
+		/* errors have already been logged */
+		return false;
 	}
 
 	bool checkForCompleteURI = false;
@@ -988,26 +990,8 @@ parse_and_scrub_connection_string(const char *pguri, SafeURI *safeURI)
 		return false;
 	}
 
+	/* build the safe connection string with the overriden password */
 	buildPostgresURIfromPieces(uriParams, &(safeURI->pguri));
-
-	/* also extract the password in case it's needed */
-	for (int i = 0; i < uriParams->parameters.count; i++)
-	{
-		if (streq(uriParams->parameters.keywords[i], "password"))
-		{
-			if (uriParams->parameters.values[i] != NULL)
-			{
-				safeURI->password = strdup(uriParams->parameters.values[i]);
-
-				if (safeURI->password == NULL)
-				{
-					log_error(ALLOCATION_FAILED_ERROR);
-					return false;
-				}
-			}
-			break;
-		}
-	}
 
 	return true;
 }
