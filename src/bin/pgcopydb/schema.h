@@ -145,6 +145,9 @@ struct SourceIndexList;
 typedef struct SourceTable
 {
 	uint32_t oid;
+
+	/* "nspname"."relname" : 4 quotes, 1 dot, 1 \0 */
+	char qname[NAMEDATALEN * 2 + 5 + 1];
 	char nspname[NAMEDATALEN];
 	char relname[NAMEDATALEN];
 	int64_t reltuples;
@@ -162,6 +165,7 @@ typedef struct SourceTable
 	struct SourceIndexList *lastIndex;
 
 	UT_hash_handle hh;          /* makes this structure hashable */
+	UT_hash_handle hhQName;     /* makes this structure hashable */
 } SourceTable;
 
 
@@ -274,6 +278,7 @@ typedef struct SourceCatalog
 	SourceSequenceArray sequenceArray;
 
 	SourceTable *sourceTableHashByOid;
+	SourceTable *sourceTableHashByQName;
 	SourceIndex *sourceIndexHashByOid;
 } SourceCatalog;
 

@@ -48,3 +48,14 @@ begin;
 update public.payment set amount = 11.99 where amount = 11.95;
 
 commit;
+
+
+--
+-- run an update statement that doesn't output old-key: and new-key: when
+-- using test_decoding
+--
+begin;
+
+update public.staff set store_id = store_id where staff_id = 1;
+
+commit;

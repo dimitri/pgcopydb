@@ -775,12 +775,6 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 	/* copy the structure as a whole memory area to the target place */
 	*tableSpecs = tmpTableSpecs;
 
-	/* compute the table fully qualified name */
-	sformat(tableSpecs->qname, sizeof(tableSpecs->qname),
-			"\"%s\".\"%s\"",
-			tableSpecs->sourceTable->nspname,
-			tableSpecs->sourceTable->relname);
-
 	/* This CopyTableDataSpec might be for a partial COPY */
 	if (source->partsArray.count >= 1)
 	{
@@ -803,7 +797,7 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 		{
 			log_error("Failed to prepare pathnames for partition %d of table %s",
 					  partNumber,
-					  tableSpecs->qname);
+					  tableSpecs->sourceTable->qname);
 			return false;
 		}
 

@@ -1223,26 +1223,37 @@ FreeLogicalMessageTupleArray(LogicalMessageTupleArray *tupleArray)
 {
 	for (int s = 0; s < tupleArray->count; s++)
 	{
-		LogicalMessageTuple *stmt = &(tupleArray->array[s]);
+		LogicalMessageTuple *tuple = &(tupleArray->array[s]);
 
-		free(stmt->columns);
+		(void) FreeLogicalMessageTuple(tuple);
+	}
+}
 
-		for (int r = 0; r < stmt->values.count; r++)
+
+/*
+ * FreeLogicalMessageTuple frees the malloc'ated memory areas of a
+ * LogicalMessageTuple.
+ */
+void
+FreeLogicalMessageTuple(LogicalMessageTuple *tuple)
+{
+	free(tuple->columns);
+
+	for (int r = 0; r < tuple->values.count; r++)
+	{
+		LogicalMessageValues *values = &(tuple->values.array[r]);
+
+		for (int v = 0; v < values->cols; v++)
 		{
-			LogicalMessageValues *values = &(stmt->values.array[r]);
+			LogicalMessageValue *value = &(values->array[v]);
 
-			for (int v = 0; v < values->cols; v++)
+			if (value->val.str != NULL)
 			{
-				LogicalMessageValue *value = &(values->array[v]);
-
-				if (value->oid == TEXTOID || value->oid == BYTEAOID)
-				{
-					free(value->val.str);
-				}
+				free(value->val.str);
 			}
-
-			free(stmt->values.array);
 		}
+
+		free(tuple->values.array);
 	}
 }
 

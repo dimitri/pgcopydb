@@ -383,7 +383,7 @@ copydb_add_table_indexes(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 				  index->indexNamespace,
 				  index->indexRelname,
 				  mesg.data.oid,
-				  tableSpecs->qname,
+				  tableSpecs->sourceTable->qname,
 				  tableSpecs->sourceTable->oid);
 
 		if (!queue_send(&(specs->indexQueue), &mesg))
