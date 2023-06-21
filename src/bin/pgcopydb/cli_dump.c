@@ -399,7 +399,7 @@ cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 				 pgPaths->pg_version,
 				 pgPaths->pg_dumpall);
 	}
-
+	log_info("---------------------reached here------------------------------");
 	/*
 	 * First, we need to open a snapshot that we're going to re-use in all our
 	 * connections to the source database. When the --snapshot option has been

@@ -40,7 +40,7 @@ export PGCOPYDB_SNAPSHOT="${sn}"
 # with a PGCOPYDB_SNAPSHOT in the environment, no need for --resume etc.
 echo snapshot ${PGCOPYDB_SNAPSHOT}
 
-pgcopydb dump schema --snapshot "${sn}"
+pgcopydb dump schema --snapshot "${sn}" -vvv
 pgcopydb restore pre-data --resume
 
 # pgcopydb restore pre-data have created the large objects already
