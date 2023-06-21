@@ -1785,9 +1785,12 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 		{
 			LogicalMessageValues *values = &(new->values.array[r]);
 
+			bool first = true;
+
 			/* now loop over column values for this VALUES row */
 			for (int v = 0; v < values->cols; v++)
 			{
+				const char *colname = new->columns[v];
 				LogicalMessageValue *value = &(values->array[v]);
 
 				if (new->cols <= v)
@@ -1799,13 +1802,44 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 					return false;
 				}
 
-				FFORMAT(out, "%s", v > 0 ? ", " : "");
-				FFORMAT(out, "\"%s\" = ", new->columns[v]);
+				/*
+				 * Avoid SET "id" = 1 WHERE "id" = 1 ; so for that we lookup
+				 * for a column with the same name in the old parts, and with
+				 * the same value too.
+				 */
+				bool skip = false;
 
-				if (!stream_write_value(out, value))
+				for (int oc = 0; oc < old->cols; oc++)
 				{
-					/* errors have already been logged */
-					return false;
+					if (streq(old->columns[oc], colname))
+					{
+						/* only works because old->values.count == 1 */
+						LogicalMessageValue *oldValue =
+							&(old->values.array[0].array[v]);
+
+						if (LogicalMessageValueEq(oldValue, value))
+						{
+							skip = true;
+							break;
+						}
+					}
+				}
+
+				if (!skip)
+				{
+					FFORMAT(out, "%s", first ? "" : ", ");
+					FFORMAT(out, "\"%s\" = ", colname);
+
+					if (first)
+					{
+						first = false;
+					}
+
+					if (!stream_write_value(out, value))
+					{
+						/* errors have already been logged */
+						return false;
+					}
 				}
 			}
 		}
@@ -1938,7 +1972,7 @@ stream_write_value(FILE *out, LogicalMessageValue *value)
 		{
 			case BOOLOID:
 			{
-				fformat(out, "'%s' ", value->val.boolean ? "t" : "f");
+				fformat(out, "'%s'", value->val.boolean ? "t" : "f");
 				break;
 			}
 
@@ -1978,6 +2012,65 @@ stream_write_value(FILE *out, LogicalMessageValue *value)
 	}
 
 	return true;
+}
+
+
+/*
+ * LogicalMessageValueEq compares two LogicalMessageValue instances and return
+ * true when they represent the same value. NULL are considered Equal, like in
+ * the SQL operator IS NOT DISTINCT FROM.
+ */
+bool
+LogicalMessageValueEq(LogicalMessageValue *a, LogicalMessageValue *b)
+{
+	if (a->oid != b->oid)
+	{
+		return false;
+	}
+
+	if (a->isNull != b->isNull)
+	{
+		return false;
+	}
+
+	if (a->isNull && b->isNull)
+	{
+		return true;
+	}
+
+	switch (a->oid)
+	{
+		case BOOLOID:
+		{
+			return a->val.boolean == b->val.boolean;
+		}
+
+		case INT8OID:
+		{
+			return a->val.int8 == a->val.int8;
+		}
+
+		case FLOAT8OID:
+		{
+			return a->val.float8 == b->val.float8;
+		}
+
+		case TEXTOID:
+		case BYTEAOID:
+		{
+			return a->isQuoted == b->isQuoted &&
+				   streq(a->val.str, b->val.str);
+		}
+
+		default:
+		{
+			log_error("BUG: LogicalMessageValueEq a.oid == %d", a->oid);
+			return false;
+		}
+	}
+
+	/* makes compiler happy */
+	return false;
 }
 
 
