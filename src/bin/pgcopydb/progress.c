@@ -287,6 +287,7 @@ copydb_table_array_as_json(SourceTableArray *tableArray,
 		json_object_set_number(jsTableObj, "oid", (double) table->oid);
 		json_object_set_string(jsTableObj, "schema", table->nspname);
 		json_object_set_string(jsTableObj, "name", table->relname);
+		json_object_set_string(jsTableObj, "qname", table->qname);
 
 		json_object_set_number(jsTableObj, "reltuples", (double) table->reltuples);
 		json_object_set_number(jsTableObj, "bytes", (double) table->bytes);
@@ -494,8 +495,8 @@ copydb_seq_array_as_json(SourceSequenceArray *sequenceArray,
 bool
 copydb_parse_schema_json_file(CopyDataSpec *copySpecs)
 {
-	log_debug("copydb_parse_schema_json_file: \"%s\"",
-			  copySpecs->cfPaths.schemafile);
+	log_notice("Reading catalogs from file \"%s\"",
+			   copySpecs->cfPaths.schemafile);
 
 	if (!file_exists(copySpecs->cfPaths.schemafile))
 	{
@@ -535,6 +536,10 @@ copydb_parse_schema_json_file(CopyDataSpec *copySpecs)
 		return false;
 	}
 
+	/* prepare the SourceTable hash tables */
+	SourceTable *sourceTableHashByOid = NULL;
+	SourceTable *sourceTableHashByQName = NULL;
+
 	for (int tableIndex = 0; tableIndex < tableCount; tableIndex++)
 	{
 		SourceTable *table = &(copySpecs->catalog.sourceTableArray.array[tableIndex]);
@@ -544,6 +549,7 @@ copydb_parse_schema_json_file(CopyDataSpec *copySpecs)
 
 		char *schema = (char *) json_object_get_string(jsTable, "schema");
 		char *name = (char *) json_object_get_string(jsTable, "name");
+		char *qname = (char *) json_object_get_string(jsTable, "qname");
 
 		char *bytesPretty =
 			(char *) json_object_get_string(jsTable, "bytes-pretty");
@@ -555,6 +561,14 @@ copydb_parse_schema_json_file(CopyDataSpec *copySpecs)
 
 		strlcpy(table->nspname, schema, sizeof(table->nspname));
 		strlcpy(table->relname, name, sizeof(table->relname));
+		strlcpy(table->qname, qname, sizeof(table->qname));
+
+		/* add the current table to the Hash-by-OID */
+		HASH_ADD(hh, sourceTableHashByOid, oid, sizeof(uint32_t), table);
+
+		/* also add the current table to the Hash-by-QName */
+		size_t len = strlen(table->qname);
+		HASH_ADD(hhQName, sourceTableHashByQName, qname, len, table);
 
 		table->reltuples = json_object_get_number(jsTable, "reltuples");
 		table->bytes = json_object_get_number(jsTable, "bytes");
@@ -635,6 +649,10 @@ copydb_parse_schema_json_file(CopyDataSpec *copySpecs)
 		}
 	}
 
+	/* now attach the final hash table head to the specs */
+	copySpecs->catalog.sourceTableHashByOid = sourceTableHashByOid;
+	copySpecs->catalog.sourceTableHashByQName = sourceTableHashByQName;
+
 	/* index section */
 	JSON_Array *jsIndexArray = json_object_get_array(jsObj, "indexes");
 	int indexCount = json_array_get_count(jsIndexArray);
@@ -651,12 +669,18 @@ copydb_parse_schema_json_file(CopyDataSpec *copySpecs)
 		return false;
 	}
 
+	/* also build the index hash-table */
+	SourceIndex *sourceIndexHashByOid = copySpecs->catalog.sourceIndexHashByOid;
+
 	for (int i = 0; i < indexCount; i++)
 	{
 		SourceIndex *index = &(copySpecs->catalog.sourceIndexArray.array[i]);
 		JSON_Object *jsIndex = json_array_get_object(jsIndexArray, i);
 
 		index->indexOid = json_object_get_number(jsIndex, "oid");
+
+		/* add the current index to the index Hash-by-OID */
+		HASH_ADD(hh, sourceIndexHashByOid, indexOid, sizeof(uint32_t), index);
 
 		char *schema = (char *) json_object_get_string(jsIndex, "schema");
 		char *name = (char *) json_object_get_string(jsIndex, "name");
@@ -744,6 +768,9 @@ copydb_parse_schema_json_file(CopyDataSpec *copySpecs)
 			index->constraintOid = 0;
 		}
 	}
+
+	/* now attach the final hash table head to the specs */
+	copySpecs->catalog.sourceIndexHashByOid = sourceIndexHashByOid;
 
 	return true;
 }

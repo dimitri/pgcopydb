@@ -43,6 +43,14 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 	if (specs->consistent)
 	{
 		log_debug("re-use snapshot \"%s\"", specs->sourceSnapshot.snapshot);
+
+		if (IS_EMPTY_STRING_BUFFER(specs->sourceSnapshot.snapshot))
+		{
+			log_error("Trying to re-use snapshot \"%s\"",
+					  specs->sourceSnapshot.snapshot);
+			return false;
+		}
+
 		src = &(specs->sourceSnapshot.pgsql);
 	}
 	else
@@ -254,8 +262,9 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 				 specs->splitTablesLargerThan.bytesPretty);
 	}
 
-	/* prepare a SourceTable hash table, indexed by Oid */
+	/* prepare a SourceTable hash table, indexed by Oid, and qualified name */
 	SourceTable *sourceTableHashByOid = NULL;
+	SourceTable *sourceTableHashByQName = NULL;
 
 	/*
 	 * Source table might be split in several concurrent COPY processes. In
@@ -267,6 +276,10 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 
 		/* add the current table to the Hash-by-OID */
 		HASH_ADD(hh, sourceTableHashByOid, oid, sizeof(uint32_t), source);
+
+		/* also add the current table to the Hash-by-QName */
+		size_t len = strlen(source->qname);
+		HASH_ADD(hhQName, sourceTableHashByQName, qname, len, source);
 
 		if (specs->splitTablesLargerThan.bytes > 0 &&
 			specs->splitTablesLargerThan.bytes <= source->bytes)
@@ -323,6 +336,7 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 
 	/* now attach the final hash table head to the specs */
 	specs->catalog.sourceTableHashByOid = sourceTableHashByOid;
+	specs->catalog.sourceTableHashByQName = sourceTableHashByQName;
 
 	/* only use as many processes as required */
 	if (copySpecsCount < specs->tableJobs)

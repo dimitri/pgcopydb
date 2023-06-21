@@ -34,6 +34,8 @@
 
 typedef struct TestDecodingHeader
 {
+	const char *message;
+	char qname[NAMEDATALEN * 2 + 5 + 1];
 	char nspname[NAMEDATALEN];
 	char relname[NAMEDATALEN];
 	StreamAction action;
@@ -57,17 +59,28 @@ typedef struct TestDecodingColumns
 static bool parseTestDecodingMessageHeader(TestDecodingHeader *header,
 										   const char *message);
 
+static bool parseTestDecodingInsertMessage(StreamContext *privateContext,
+										   TestDecodingHeader *header);
+
+static bool parseTestDecodingUpdateMessage(StreamContext *privateContext,
+										   TestDecodingHeader *header);
+
+static bool parseTestDecodingDeleteMessage(StreamContext *privateContext,
+										   TestDecodingHeader *header);
+
 static bool SetColumnNamesAndValues(LogicalMessageTuple *tuple,
-									TestDecodingHeader *header,
-									const char *message);
+									TestDecodingHeader *header);
 
 static bool parseNextColumn(TestDecodingColumns *cols,
-							TestDecodingHeader *header,
-							const char *message);
+							TestDecodingHeader *header);
 
 static bool listToTuple(LogicalMessageTuple *tuple,
 						TestDecodingColumns *cols,
 						int count);
+
+static bool prepareUpdateTuppleArrays(StreamContext *privateContext,
+									  TestDecodingHeader *header);
+
 
 /*
  * prepareWal2jsonMessage prepares our internal JSON entry from a test_decoding
@@ -207,8 +220,6 @@ parseTestDecodingMessage(StreamContext *privateContext,
 	LogicalTransactionStatement *stmt = privateContext->stmt;
 	LogicalMessageMetadata *metadata = &(privateContext->metadata);
 
-	/* SourceCatalog *catalog = privateContext->catalog; */
-
 	JSON_Object *jsobj = json_value_get_object(json);
 	TestDecodingHeader header = { 0 };
 
@@ -243,28 +254,10 @@ parseTestDecodingMessage(StreamContext *privateContext,
 
 		case STREAM_ACTION_INSERT:
 		{
-			strlcpy(stmt->stmt.insert.nspname, header.nspname, NAMEDATALEN);
-			strlcpy(stmt->stmt.insert.relname, header.relname, NAMEDATALEN);
-
-			stmt->stmt.insert.new.count = 1;
-			stmt->stmt.insert.new.array =
-				(LogicalMessageTuple *) calloc(1, sizeof(LogicalMessageTuple));
-
-			if (stmt->stmt.insert.new.array == NULL)
+			if (!parseTestDecodingInsertMessage(privateContext, &header))
 			{
-				log_error(ALLOCATION_FAILED_ERROR);
-				return false;
-			}
-
-			header.pos = header.offset;
-
-			LogicalMessageTuple *tuple = &(stmt->stmt.insert.new.array[0]);
-
-			if (!SetColumnNamesAndValues(tuple, &header, td_message))
-			{
-				log_error("Failed to parse INSERT columns for logical "
-						  "message %s",
-						  message);
+				log_error("Failed to parse test_decoding INSERT message: %s",
+						  header.message);
 				return false;
 			}
 
@@ -273,96 +266,21 @@ parseTestDecodingMessage(StreamContext *privateContext,
 
 		case STREAM_ACTION_UPDATE:
 		{
-			strlcpy(stmt->stmt.update.nspname, header.nspname, NAMEDATALEN);
-			strlcpy(stmt->stmt.update.relname, header.relname, NAMEDATALEN);
-
-			stmt->stmt.update.old.count = 1;
-			stmt->stmt.update.new.count = 1;
-
-			stmt->stmt.update.old.array =
-				(LogicalMessageTuple *) calloc(1, sizeof(LogicalMessageTuple));
-
-			stmt->stmt.update.new.array =
-				(LogicalMessageTuple *) calloc(1, sizeof(LogicalMessageTuple));
-
-			if (stmt->stmt.update.old.array == NULL ||
-				stmt->stmt.update.new.array == NULL)
+			if (!parseTestDecodingUpdateMessage(privateContext, &header))
 			{
-				log_error(ALLOCATION_FAILED_ERROR);
+				log_error("Failed to parse test_decoding UPDATE message: %s",
+						  header.message);
 				return false;
 			}
-
-			/*
-			 * test_decoding UPDATE message starts with old-key: entries.
-			 */
-			if (!TD_FOUND_OLD_KEY(td_message + header.offset))
-			{
-				log_error("Failed to find old-key in UPDATE message: %s",
-						  td_message);
-				return false;
-			}
-
-			header.pos = header.offset + TD_OLD_KEY_LEN;
-
-			LogicalMessageTuple *old = &(stmt->stmt.update.old.array[0]);
-
-			if (!SetColumnNamesAndValues(old, &header, td_message))
-			{
-				log_error("Failed to parse UPDATE old-key columns for logical "
-						  "message %s",
-						  td_message);
-				return false;
-			}
-
-			/*
-			 * test_decoding UPDATE message then has "new-tuple: " entries.
-			 */
-			if (!TD_FOUND_NEW_TUPLE(td_message + header.pos))
-			{
-				log_error("Failed to find new-tuple in UPDATE message: %s",
-						  td_message);
-				return false;
-			}
-
-			header.pos = header.pos + TD_NEW_TUPLE_LEN;
-
-			LogicalMessageTuple *new = &(stmt->stmt.update.new.array[0]);
-
-			if (!SetColumnNamesAndValues(new, &header, td_message))
-			{
-				log_error("Failed to parse UPDATE new-tuple columns for logical "
-						  "message %s",
-						  td_message);
-				return false;
-			}
-
 			break;
 		}
 
 		case STREAM_ACTION_DELETE:
 		{
-			strlcpy(stmt->stmt.delete.nspname, header.nspname, NAMEDATALEN);
-			strlcpy(stmt->stmt.delete.relname, header.relname, NAMEDATALEN);
-
-			stmt->stmt.delete.old.count = 1;
-			stmt->stmt.delete.old.array =
-				(LogicalMessageTuple *) calloc(1, sizeof(LogicalMessageTuple));
-
-			if (stmt->stmt.update.old.array == NULL)
+			if (!parseTestDecodingDeleteMessage(privateContext, &header))
 			{
-				log_error(ALLOCATION_FAILED_ERROR);
-				return false;
-			}
-
-			header.pos = header.offset;
-
-			LogicalMessageTuple *tuple = &(stmt->stmt.delete.old.array[0]);
-
-			if (!SetColumnNamesAndValues(tuple, &header, td_message))
-			{
-				log_error("Failed to parse DELETE columns for logical "
-						  "message %s",
-						  td_message);
+				log_error("Failed to parse test_decoding DELETE message: %s",
+						  header.message);
 				return false;
 			}
 
@@ -389,6 +307,8 @@ parseTestDecodingMessage(StreamContext *privateContext,
 static bool
 parseTestDecodingMessageHeader(TestDecodingHeader *header, const char *message)
 {
+	header->message = message;
+
 	/*
 	 * Parse the test_decoding message "header" only at the moment:
 	 *
@@ -419,6 +339,10 @@ parseTestDecodingMessageHeader(TestDecodingHeader *header, const char *message)
 	/* grab the table schema.name */
 	strlcpy(header->nspname, idp, dot - idp + 1);
 	strlcpy(header->relname, dot + 1, sep - dot);
+
+	sformat(header->qname, sizeof(header->qname), "\"%s\".\"%s\"",
+			header->nspname,
+			header->relname);
 
 	/* now grab the action */
 	char action[BUFSIZE] = { 0 };
@@ -454,18 +378,188 @@ parseTestDecodingMessageHeader(TestDecodingHeader *header, const char *message)
 
 
 /*
+ * parseTestDecodingInsertMessage is called to parse an INSERT message from the
+ * test_decoding logical decoding plugin.
+ */
+static bool
+parseTestDecodingInsertMessage(StreamContext *privateContext,
+							   TestDecodingHeader *header)
+{
+	LogicalTransactionStatement *stmt = privateContext->stmt;
+
+	strlcpy(stmt->stmt.insert.nspname, header->nspname, NAMEDATALEN);
+	strlcpy(stmt->stmt.insert.relname, header->relname, NAMEDATALEN);
+
+	stmt->stmt.insert.new.count = 1;
+	stmt->stmt.insert.new.array =
+		(LogicalMessageTuple *) calloc(1, sizeof(LogicalMessageTuple));
+
+	if (stmt->stmt.insert.new.array == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	header->pos = header->offset;
+
+	LogicalMessageTuple *tuple = &(stmt->stmt.insert.new.array[0]);
+
+	if (!SetColumnNamesAndValues(tuple, header))
+	{
+		log_error("Failed to parse INSERT columns for logical "
+				  "message %s",
+				  header->message);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * parseTestDecodingUpdateMessage is called to parse an UPDATE message from the
+ * test_decoding logical decoding plugin.
+ */
+static bool
+parseTestDecodingUpdateMessage(StreamContext *privateContext,
+							   TestDecodingHeader *header)
+{
+	LogicalTransactionStatement *stmt = privateContext->stmt;
+
+	strlcpy(stmt->stmt.update.nspname, header->nspname, NAMEDATALEN);
+	strlcpy(stmt->stmt.update.relname, header->relname, NAMEDATALEN);
+
+	stmt->stmt.update.old.count = 1;
+	stmt->stmt.update.new.count = 1;
+
+	stmt->stmt.update.old.array =
+		(LogicalMessageTuple *) calloc(1, sizeof(LogicalMessageTuple));
+
+	stmt->stmt.update.new.array =
+		(LogicalMessageTuple *) calloc(1, sizeof(LogicalMessageTuple));
+
+	if (stmt->stmt.update.old.array == NULL ||
+		stmt->stmt.update.new.array == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	/*
+	 * test_decoding UPDATE message may starts with old-key: entries.
+	 */
+	if (TD_FOUND_OLD_KEY(header->message + header->offset))
+	{
+		header->pos = header->offset + TD_OLD_KEY_LEN;
+
+		LogicalMessageTuple *old = &(stmt->stmt.update.old.array[0]);
+
+		if (!SetColumnNamesAndValues(old, header))
+		{
+			log_error("Failed to parse UPDATE old-key columns for logical "
+					  "message %s",
+					  header->message);
+			return false;
+		}
+
+		/*
+		 * test_decoding UPDATE message then has "new-tuple: " entries.
+		 */
+		if (!TD_FOUND_NEW_TUPLE(header->message + header->pos))
+		{
+			log_error("Failed to find new-tuple in UPDATE message: %s",
+					  header->message);
+			return false;
+		}
+
+		header->pos = header->pos + TD_NEW_TUPLE_LEN;
+
+		LogicalMessageTuple *new = &(stmt->stmt.update.new.array[0]);
+
+		if (!SetColumnNamesAndValues(new, header))
+		{
+			log_error("Failed to parse UPDATE new-tuple columns for logical "
+					  "message %s",
+					  header->message);
+			return false;
+		}
+	}
+	else
+	{
+		/*
+		 * Here we have an update message without old-key: entries.
+		 *
+		 * We have to look-up the table by nspname.relname in our internal
+		 * catalogs, and then figure out which columns in the UPDATE message
+		 * are a pkey column (WHERE clause) and which are not (SET clause).
+		 */
+		header->pos = header->offset;
+
+		if (!prepareUpdateTuppleArrays(privateContext, header))
+		{
+			log_error("Failed to parse UPDATE new-tuple columns for logical "
+					  "message %s",
+					  header->message);
+			return false;
+		}
+
+		return true;
+	}
+
+	return true;
+}
+
+
+/*
+ * parseTestDecodingDeleteMessage is called to parse an DELETE message from the
+ * test_decoding logical decoding plugin.
+ */
+static bool
+parseTestDecodingDeleteMessage(StreamContext *privateContext,
+							   TestDecodingHeader *header)
+{
+	LogicalTransactionStatement *stmt = privateContext->stmt;
+
+	strlcpy(stmt->stmt.delete.nspname, header->nspname, NAMEDATALEN);
+	strlcpy(stmt->stmt.delete.relname, header->relname, NAMEDATALEN);
+
+	stmt->stmt.delete.old.count = 1;
+	stmt->stmt.delete.old.array =
+		(LogicalMessageTuple *) calloc(1, sizeof(LogicalMessageTuple));
+
+	if (stmt->stmt.update.old.array == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	header->pos = header->offset;
+
+	LogicalMessageTuple *tuple = &(stmt->stmt.delete.old.array[0]);
+
+	if (!SetColumnNamesAndValues(tuple, header))
+	{
+		log_error("Failed to parse DELETE columns for logical "
+				  "message %s",
+				  header->message);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * SetColumnNames parses the "columns" (or "identity") JSON object from a
  * wal2json logical replication message and fills-in our internal
  * representation for a tuple.
  */
 static bool
-SetColumnNamesAndValues(LogicalMessageTuple *tuple,
-						TestDecodingHeader *header,
-						const char *message)
+SetColumnNamesAndValues(LogicalMessageTuple *tuple, TestDecodingHeader *header)
 {
 	log_trace("SetColumnNamesAndValues: %c %s",
 			  header->action,
-			  message + header->pos);
+			  header->message + header->pos);
 
 	TestDecodingColumns *cols =
 		(TestDecodingColumns *) calloc(1, sizeof(TestDecodingColumns));
@@ -483,7 +577,7 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple,
 
 	while (!header->eom)
 	{
-		if (!parseNextColumn(cur, header, message))
+		if (!parseNextColumn(cur, header))
 		{
 			/* errors have already been logged */
 			return false;
@@ -557,10 +651,9 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple,
  */
 static bool
 parseNextColumn(TestDecodingColumns *cols,
-				TestDecodingHeader *header,
-				const char *message)
+				TestDecodingHeader *header)
 {
-	char *ptr = (char *) (message + header->pos);
+	char *ptr = (char *) (header->message + header->pos);
 
 	if (ptr == NULL || *ptr == '\0')
 	{
@@ -584,7 +677,7 @@ parseNextColumn(TestDecodingColumns *cols,
 		log_error("Failed to parse test_decoding column name and "
 				  "type at offset %d in message:", header->pos);
 
-		log_error("%s", message);
+		log_error("%s", header->message);
 		log_error("%*s", header->pos, "^");
 
 		return false;
@@ -597,7 +690,7 @@ parseNextColumn(TestDecodingColumns *cols,
 
 	/* skip the typename and the closing ] and the following : */
 	ptr = typB + 1 + 1;
-	header->pos = ptr - message;
+	header->pos = ptr - header->message;
 
 	/*
 	 * Parse standard-conforming string.
@@ -627,7 +720,7 @@ parseNextColumn(TestDecodingColumns *cols,
 					  "for column \"%.*s\" in message: %s",
 					  cols->colnameLen,
 					  cols->colnameStart,
-					  message);
+					  header->message);
 			return false;
 		}
 
@@ -639,7 +732,7 @@ parseNextColumn(TestDecodingColumns *cols,
 
 		/* advance the ptr to past the value, skip the next space */
 		ptr = cur;
-		header->pos = ptr - message + 1;
+		header->pos = ptr - header->message + 1;
 
 		log_trace("parseNextColumn: quoted value: %.*s %s",
 				  cols->valueLen,
@@ -667,7 +760,7 @@ parseNextColumn(TestDecodingColumns *cols,
 
 		/* advance to past the value, skip the next space */
 		ptr = end + 1;
-		header->pos = ptr - message;
+		header->pos = ptr - header->message;
 
 		log_trace("parseNextColumn: bit string value: %.*s",
 				  cols->valueLen,
@@ -684,7 +777,7 @@ parseNextColumn(TestDecodingColumns *cols,
 
 		if (spc != NULL)
 		{
-			header->pos = spc - message + 1;
+			header->pos = spc - header->message + 1;
 			cols->valueLen = spc - ptr + 1;
 		}
 		else
@@ -692,12 +785,12 @@ parseNextColumn(TestDecodingColumns *cols,
 			/* last column */
 			header->eom = true;
 
-			header->pos = strlen(message) - 1;
+			header->pos = strlen(header->message) - 1;
 			cols->valueLen = strlen(cols->valueStart);
 		}
 
 		/* advance to past the value, skip the next space */
-		ptr = (char *) (message + header->pos + 1);
+		ptr = (char *) (header->message + header->pos + 1);
 
 		log_trace("parseNextColumn: raw value: %.*s",
 				  cols->valueLen,
@@ -720,47 +813,13 @@ parseNextColumn(TestDecodingColumns *cols,
 static bool
 listToTuple(LogicalMessageTuple *tuple, TestDecodingColumns *cols, int count)
 {
-	tuple->cols = count;
-	tuple->columns = (char **) calloc(count, sizeof(char *));
-
-	if (tuple->columns == NULL)
+	if (!AllocateLogicalMessageTuple(tuple, count))
 	{
-		log_error(ALLOCATION_FAILED_ERROR);
+		/* errors have already been logged */
 		return false;
 	}
 
-	/*
-	 * Allocate the tuple values, an array of VALUES, as in SQL.
-	 *
-	 * TODO: actually support multi-values clauses (single column names array,
-	 * multiple VALUES matching the same metadata definition). At the moment
-	 * it's always a single VALUES entry: VALUES(a, b, c).
-	 *
-	 * The goal is to be able to represent VALUES(a1, b1, c1), (a2, b2, c2).
-	 */
-	LogicalMessageValuesArray *valuesArray = &(tuple->values);
-
-	valuesArray->count = 1;
-	valuesArray->array =
-		(LogicalMessageValues *) calloc(1, sizeof(LogicalMessageValues));
-
-	if (valuesArray->array == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	/* allocate one VALUES entry */
 	LogicalMessageValues *values = &(tuple->values.array[0]);
-	values->cols = count;
-	values->array =
-		(LogicalMessageValue *) calloc(count, sizeof(LogicalMessageValue));
-
-	if (values->array == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
 
 	/*
 	 * Now that our memory areas are allocated and initialized to zeroes, fill
@@ -783,21 +842,187 @@ listToTuple(LogicalMessageTuple *tuple, TestDecodingColumns *cols, int count)
 			return false;
 		}
 
-		valueColumn->val.str = strndup(cur->valueStart, cur->valueLen);
-		valueColumn->isQuoted = true;
-
-		if (valueColumn->val.str == NULL)
-		{
-			log_error(ALLOCATION_FAILED_ERROR);
-			return false;
-		}
-
 		/* strlen("null") == 4 */
 		if (strncmp(cur->valueStart, "null", 4) == 0)
 		{
 			valueColumn->isNull = true;
 		}
+		else
+		{
+			valueColumn->val.str = strndup(cur->valueStart, cur->valueLen);
+			valueColumn->isQuoted = true;
+
+			if (valueColumn->val.str == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+		}
 	}
+
+	return true;
+}
+
+
+/*
+ * prepareUpdateTuppleArrays prepares an UPDATE message Tuple Arrays when we
+ * parse an UPDATE message that does not have old-key: and new-key: elements.
+ * We then need to look-up our catalogs to see which columns are part of the
+ * identity (WHERE clause) and which columns should be in the SET clause.
+ */
+static bool
+prepareUpdateTuppleArrays(StreamContext *privateContext,
+						  TestDecodingHeader *header)
+{
+	LogicalTransactionStatement *stmt = privateContext->stmt;
+
+	/*
+	 * First parse all the columns of the UPDATE message in a single
+	 * LogicalMessageTuple. Then we can lookup for column attributes.
+	 */
+	LogicalMessageTuple *cols =
+		(LogicalMessageTuple *) calloc(1, sizeof(LogicalMessageTuple));
+
+	if (!SetColumnNamesAndValues(cols, header))
+	{
+		log_error("Failed to parse UPDATE columns for logical message %s",
+				  header->message);
+		return false;
+	}
+
+	/*
+	 * Now lookup our internal catalogs to find out for every column if it is
+	 * part of the pkey definition (WHERE clause) or not (SET clause).
+	 */
+	SourceCatalog *catalog = privateContext->catalog;
+	SourceTable *sourceTableHashByQName = catalog->sourceTableHashByQName;
+
+	SourceTable *table = NULL;
+
+	char *qname = header->qname;
+	size_t len = strlen(qname);
+
+	HASH_FIND(hhQName, sourceTableHashByQName, qname, len, table);
+
+	if (table == NULL)
+	{
+		log_error("Failed to parse decoding message for UPDATE on "
+				  "table %s which is not in our catalogs",
+				  qname);
+		return false;
+	}
+
+	SourceTableAttributeArray *attributes = &(table->attributes);
+
+	int columnCount = cols->values.array[0].cols;
+	bool *pkeyArray = (bool *) calloc(columnCount, sizeof(bool));
+
+	int oldCount = 0;
+	int newCount = 0;
+
+	for (int c = 0; c < columnCount; c++)
+	{
+		const char *colname = cols->columns[c];
+
+		bool found = false;
+
+		/* loop over table attributes to find current column name */
+		for (int i = 0; i < attributes->count; i++)
+		{
+			if (streq(attributes->array[i].attname, colname))
+			{
+				pkeyArray[c] = attributes->array[i].attisprimary;
+				found = true;
+				break;
+			}
+		}
+
+		if (!found)
+		{
+			log_error("Failed to parse decoding message for UPDATE on "
+					  "table %s: column %s not found",
+					  table->qname,
+					  colname);
+			return false;
+		}
+
+		if (pkeyArray[c])
+		{
+			++oldCount;
+		}
+		else
+		{
+			++newCount;
+		}
+	}
+
+	if (oldCount == 0)
+	{
+		log_error("Failed to parse decoding message for UPDATE on "
+				  "table %s: WHERE clause columns not found",
+				  table->qname);
+		return false;
+	}
+
+	if (newCount == 0)
+	{
+		log_error("Failed to parse decoding message for UPDATE on "
+				  "table %s: SET clause columns not found",
+				  table->qname);
+		return false;
+	}
+
+	/*
+	 * Now that we know for each key if it's a pkey (identity, WHERE
+	 * clause, old-key) or a new value (columns, SET clause), dispatch the
+	 * columns accordingly.
+	 */
+	LogicalMessageTuple *old = &(stmt->stmt.update.old.array[0]);
+	LogicalMessageTuple *new = &(stmt->stmt.update.new.array[0]);
+
+	if (!AllocateLogicalMessageTuple(old, oldCount) ||
+		!AllocateLogicalMessageTuple(new, newCount))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	int oldPos = 0;
+	int newPos = 0;
+
+	for (int c = 0; c < columnCount; c++)
+	{
+		const char *colname = cols->columns[c];
+
+		/* we lack multi-values support at the moment, so... */
+		if (cols->values.count != 1)
+		{
+			log_error("BUG in prepareUpdateTuppleArrays: cols->values.count"
+					  "is %d",
+					  cols->values.count);
+			return false;
+		}
+
+		if (pkeyArray[c])
+		{
+			old->columns[oldPos] = strdup(colname);
+			old->values.array[0].array[oldPos] = cols->values.array[0].array[c];
+
+			++oldPos;
+		}
+		else
+		{
+			new->columns[newPos] = strdup(colname);
+			new->values.array[0].array[newPos] = cols->values.array[0].array[c];
+
+			++newPos;
+		}
+
+		/* avoid double-free now */
+		cols->values.array[0].array[c].val.str = NULL;
+	}
+
+	(void) FreeLogicalMessageTuple(cols);
 
 	return true;
 }

@@ -135,7 +135,6 @@ typedef struct CopyTableDataSpec
 	CopyDataSection section;
 	bool resume;
 
-	char qname[NAMEDATALEN * 2 + 1];
 	SourceTable *sourceTable;
 	CopyTableSummary *summary;
 	SourceIndexArray *indexArray;

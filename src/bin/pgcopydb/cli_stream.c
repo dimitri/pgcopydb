@@ -21,6 +21,7 @@
 #include "log.h"
 #include "pgcmd.h"
 #include "pgsql.h"
+#include "progress.h"
 #include "schema.h"
 #include "signals.h"
 #include "string_utils.h"
@@ -866,6 +867,15 @@ cli_stream_transform(int argc, char **argv)
 	}
 
 	/*
+	 * Read the catalogs from the source table from on-file disk.
+	 */
+	if (!copydb_parse_schema_json_file(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/*
 	 * Refrain from logging SQL statements in the apply module, because they
 	 * contain user data. That said, when --trace has been used, bypass that
 	 * privacy feature.
@@ -1093,6 +1103,15 @@ stream_start_in_mode(LogicalStreamMode mode)
 	}
 
 	if (!copydb_init_specs(&copySpecs, &streamDBoptions, DATA_SECTION_NONE))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/*
+	 * Read the catalogs from the source table from on-file disk.
+	 */
+	if (!copydb_parse_schema_json_file(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

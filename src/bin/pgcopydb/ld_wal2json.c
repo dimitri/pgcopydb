@@ -287,47 +287,13 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple,
 {
 	int count = json_array_get_count(jscols);
 
-	tuple->cols = count;
-	tuple->columns = (char **) calloc(count, sizeof(char *));
-
-	if (tuple->columns == NULL)
+	if (!AllocateLogicalMessageTuple(tuple, count))
 	{
-		log_error(ALLOCATION_FAILED_ERROR);
+		/* errors have already been logged */
 		return false;
 	}
 
-	/*
-	 * Allocate the tuple values, an array of VALUES, as in SQL.
-	 *
-	 * TODO: actually support multi-values clauses (single column names array,
-	 * multiple VALUES matching the same metadata definition). At the moment
-	 * it's always a single VALUES entry: VALUES(a, b, c).
-	 *
-	 * The goal is to be able to represent VALUES(a1, b1, c1), (a2, b2, c2).
-	 */
-	LogicalMessageValuesArray *valuesArray = &(tuple->values);
-
-	valuesArray->count = 1;
-	valuesArray->array =
-		(LogicalMessageValues *) calloc(1, sizeof(LogicalMessageValues));
-
-	if (valuesArray->array == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	/* allocate one VALUES entry */
 	LogicalMessageValues *values = &(tuple->values.array[0]);
-	values->cols = count;
-	values->array =
-		(LogicalMessageValue *) calloc(count, sizeof(LogicalMessageValue));
-
-	if (values->array == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
 
 	/*
 	 * Now that our memory areas are allocated and initialized to zeroes, fill
@@ -411,6 +377,9 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple,
 					int blen = slen + 3;
 
 					valueColumn->oid = BYTEAOID;
+					valueColumn->isNull = false;
+					valueColumn->isQuoted = false;
+
 					valueColumn->val.str = (char *) calloc(blen, sizeof(char));
 
 					if (valueColumn->val.str == NULL)
@@ -420,16 +389,20 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple,
 					}
 
 					sformat(valueColumn->val.str, blen, "\\x%s", x);
-
-					valueColumn->isNull = false;
-					valueColumn->isQuoted = false;
 				}
 				else
 				{
 					valueColumn->oid = TEXTOID;
-					valueColumn->val.str = strdup(x);
 					valueColumn->isNull = false;
 					valueColumn->isQuoted = false;
+
+					valueColumn->val.str = strdup(x);
+
+					if (valueColumn->val.str == NULL)
+					{
+						log_error(ALLOCATION_FAILED_ERROR);
+						return false;
+					}
 				}
 				break;
 			}

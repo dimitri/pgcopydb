@@ -3738,6 +3738,22 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		++errors;
 	}
 
+	/* compute the qualified name from the nspname and relname */
+	length = sformat(table->qname, sizeof(table->qname), "\"%s\".\"%s\"",
+					 table->nspname,
+					 table->relname);
+
+	if (length >= sizeof(table->qname))
+	{
+		log_error("Qualified table name \"%s\".\"%s\" is %d bytes long, "
+				  "the maximum expected is %lld (NAMEDATALEN * 2 + 5)",
+				  table->nspname,
+				  table->relname,
+				  length,
+				  (long long) sizeof(table->qname) - 1);
+		++errors;
+	}
+
 	/* 4. c.reltuples::bigint */
 	if (PQgetisnull(result, rowNumber, 3))
 	{

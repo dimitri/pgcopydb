@@ -533,7 +533,7 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, uint32_t oid, uint32_t part)
 	if (isDone)
 	{
 		log_info("Skipping table %s (%u), already done on a previous run",
-				 tableSpecs.qname,
+				 tableSpecs.sourceTable->qname,
 				 tableSpecs.sourceTable->oid);
 		return true;
 	}
@@ -614,7 +614,7 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, uint32_t oid, uint32_t part)
 			{
 				log_error("Failed to add the indexes for %s, "
 						  "see above for details",
-						  tableSpecs.qname);
+						  tableSpecs.sourceTable->qname);
 				return false;
 			}
 		}
@@ -637,7 +637,7 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 	if (specs->dirState.tableCopyIsDone)
 	{
 		log_notice("Skipping table %s, already done on a previous run",
-				   tableSpecs->qname);
+				   tableSpecs->sourceTable->qname);
 
 		*isDone = true;
 		return true;
@@ -687,7 +687,7 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 
 			log_error("Failed to start table-data COPY worker for table %s (%u), "
 					  "lock file \"%s\" is owned by running process %d",
-					  tableSpecs->qname,
+					  tableSpecs->sourceTable->qname,
 					  tableSpecs->sourceTable->oid,
 					  tableSpecs->tablePaths.lockFile,
 					  tableSummary.pid);
@@ -700,7 +700,7 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 					   "and processing table %s",
 					   tableSummary.pid,
 					   tableSpecs->tablePaths.lockFile,
-					   tableSpecs->qname);
+					   tableSpecs->sourceTable->qname);
 
 			/* stale pid, remove the old lockFile now, then process the table */
 			if (!unlink_file(tableSpecs->tablePaths.lockFile))
@@ -728,7 +728,7 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 	summary->table = tableSpecs->sourceTable;
 
 	/* "COPY " is 5 bytes, then 1 for \0 */
-	int len = strlen(tableSpecs->qname) + 5 + 1;
+	int len = strlen(tableSpecs->sourceTable->qname) + 5 + 1;
 	summary->command = (char *) calloc(len, sizeof(char));
 
 	if (summary->command == NULL)
@@ -737,12 +737,12 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 		return false;
 	}
 
-	sformat(summary->command, len, "COPY %s", tableSpecs->qname);
+	sformat(summary->command, len, "COPY %s", tableSpecs->sourceTable->qname);
 
 	if (!open_table_summary(summary, tableSpecs->tablePaths.lockFile))
 	{
 		log_info("Failed to create the lock file for table %s at \"%s\"",
-				 tableSpecs->qname,
+				 tableSpecs->sourceTable->qname,
 				 tableSpecs->tablePaths.lockFile);
 
 		/* end of the critical section */
@@ -792,7 +792,7 @@ copydb_mark_table_as_done(CopyDataSpec *specs,
 	}
 
 	log_debug("Wrote summary for table %s at \"%s\"",
-			  tableSpecs->qname,
+			  tableSpecs->sourceTable->qname,
 			  tableSpecs->tablePaths.doneFile);
 
 	/* end of the critical section */
@@ -944,7 +944,7 @@ copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 		/* if the truncate done file already exists, it's been done already */
 		if (!file_exists(tableSpecs->tablePaths.truncateDoneFile))
 		{
-			if (!pgsql_truncate(&dst, tableSpecs->qname))
+			if (!pgsql_truncate(&dst, tableSpecs->sourceTable->qname))
 			{
 				/* errors have already been logged */
 				(void) semaphore_unlock(&(specs->tableSemaphore));
@@ -1015,7 +1015,7 @@ copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 			if (attempts > 1)
 			{
 				log_info("Table %s COPY succeeded after %d attempts",
-						 tableSpecs->qname,
+						 tableSpecs->sourceTable->qname,
 						 attempts);
 			}
 			break;
@@ -1033,14 +1033,14 @@ copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 		{
 			log_error("Failed to copy table %s even after %d attempts, "
 					  "see above for details",
-					  tableSpecs->qname,
+					  tableSpecs->sourceTable->qname,
 					  attempts);
 		}
 		else if (retry)
 		{
 			log_info("Failed to copy table %s (connection exception), "
 					 "retrying in %dms (attempt %d)",
-					 tableSpecs->qname,
+					 tableSpecs->sourceTable->qname,
 					 POSTGRES_PING_RETRY_CAP_SLEEP_TIME,
 					 attempts);
 		}
@@ -1095,7 +1095,7 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 			appendPQExpBuffer(query, "\"%s\"", attname);
 		}
 
-		appendPQExpBuffer(query, " FROM %s ", tableSpecs->qname);
+		appendPQExpBuffer(query, " FROM %s ", tableSpecs->sourceTable->qname);
 
 		/*
 		 * On a source COPY query we might want to add filtering.
@@ -1121,7 +1121,7 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 		/*
 		 * For the destination query, use the table(...) syntax.
 		 */
-		appendPQExpBuffer(query, "%s(", tableSpecs->qname);
+		appendPQExpBuffer(query, "%s(", tableSpecs->sourceTable->qname);
 
 		for (int i = 0; i < table->attributes.count; i++)
 		{
@@ -1141,7 +1141,7 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 	if (PQExpBufferBroken(query))
 	{
 		log_error("Failed to create COPY query for %s: out of memory",
-				  tableSpecs->qname);
+				  tableSpecs->sourceTable->qname);
 		return false;
 	}
 

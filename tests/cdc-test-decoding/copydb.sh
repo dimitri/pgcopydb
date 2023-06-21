@@ -41,7 +41,7 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_lsn()'`
 
 # and prefetch the changes captured in our replication slot
-pgcopydb stream prefetch --resume --endpos "${lsn}" -vv
+pgcopydb stream prefetch --resume --endpos "${lsn}" --debug
 
 SHAREDIR=/var/lib/postgres/.local/share/pgcopydb
 WALFILE=000000010000000000000002.json
@@ -58,11 +58,11 @@ jq "${JQSCRIPT}" /usr/src/pgcopydb/${WALFILE} > ${expected}
 jq "${JQSCRIPT}" ${SHAREDIR}/${WALFILE} > ${result}
 
 # first command to provide debug information, second to stop when returns non-zero
-diff ${expected} ${result} || cat ${SHAREDIR}/${WALFILE}
-diff ${expected} ${result}
+diff -I 'last_update' ${expected} ${result} || cat ${SHAREDIR}/${WALFILE}
+diff -I 'last_update' ${expected} ${result}
 
 # now prefetch the changes again, which should be a noop
-pgcopydb stream prefetch --resume --endpos "${lsn}" -vv
+pgcopydb stream prefetch --resume --endpos "${lsn}" --notice
 
 # now transform the JSON file into SQL
 SQLFILENAME=`basename ${WALFILE} .json`.sql
@@ -73,7 +73,7 @@ pgcopydb stream transform --debug ${SHAREDIR}/${WALFILE} /tmp/${SQLFILENAME}
 diff ${SHAREDIR}/${SQLFILE} /tmp/${SQLFILENAME}
 
 # we should also get the same result as expected (discarding LSN numbers)
-DIFFOPTS='-I BEGIN -I COMMIT -I KEEPALIVE -I SWITCH -I ENDPOS'
+DIFFOPTS='-I BEGIN -I COMMIT -I KEEPALIVE -I SWITCH -I ENDPOS -I last_update'
 
 diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} ${SHAREDIR}/${SQLFILENAME}
 
