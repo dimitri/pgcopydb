@@ -1247,7 +1247,8 @@ FreeLogicalMessageTuple(LogicalMessageTuple *tuple)
 		{
 			LogicalMessageValue *value = &(values->array[v]);
 
-			if (value->val.str != NULL)
+			if ((value->oid == TEXTOID || value->oid == BYTEAOID) &&
+				!value->isNull)
 			{
 				free(value->val.str);
 			}
@@ -1255,6 +1256,59 @@ FreeLogicalMessageTuple(LogicalMessageTuple *tuple)
 
 		free(tuple->values.array);
 	}
+}
+
+
+/*
+ * allocateLogicalMessageTuple allocates memory for count columns (and values)
+ * for the given LogicalMessageTuple.
+ */
+bool
+AllocateLogicalMessageTuple(LogicalMessageTuple *tuple, int count)
+{
+	tuple->cols = count;
+	tuple->columns = (char **) calloc(count, sizeof(char *));
+
+	if (tuple->columns == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	/*
+	 * Allocate the tuple values, an array of VALUES, as in SQL.
+	 *
+	 * TODO: actually support multi-values clauses (single column names array,
+	 * multiple VALUES matching the same metadata definition). At the moment
+	 * it's always a single VALUES entry: VALUES(a, b, c).
+	 *
+	 * The goal is to be able to represent VALUES(a1, b1, c1), (a2, b2, c2).
+	 */
+	LogicalMessageValuesArray *valuesArray = &(tuple->values);
+
+	valuesArray->count = 1;
+	valuesArray->array =
+		(LogicalMessageValues *) calloc(1, sizeof(LogicalMessageValues));
+
+	if (valuesArray->array == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	/* allocate one VALUES entry */
+	LogicalMessageValues *values = &(tuple->values.array[0]);
+	values->cols = count;
+	values->array =
+		(LogicalMessageValue *) calloc(count, sizeof(LogicalMessageValue));
+
+	if (values->array == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	return true;
 }
 
 

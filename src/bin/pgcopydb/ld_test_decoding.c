@@ -81,8 +81,6 @@ static bool listToTuple(LogicalMessageTuple *tuple,
 static bool prepareUpdateTuppleArrays(StreamContext *privateContext,
 									  TestDecodingHeader *header);
 
-static bool allocateLogicalMessageTuple(LogicalMessageTuple *tuple, int count);
-
 
 /*
  * prepareWal2jsonMessage prepares our internal JSON entry from a test_decoding
@@ -815,7 +813,7 @@ parseNextColumn(TestDecodingColumns *cols,
 static bool
 listToTuple(LogicalMessageTuple *tuple, TestDecodingColumns *cols, int count)
 {
-	if (!allocateLogicalMessageTuple(tuple, count))
+	if (!AllocateLogicalMessageTuple(tuple, count))
 	{
 		/* errors have already been logged */
 		return false;
@@ -844,19 +842,21 @@ listToTuple(LogicalMessageTuple *tuple, TestDecodingColumns *cols, int count)
 			return false;
 		}
 
-		valueColumn->val.str = strndup(cur->valueStart, cur->valueLen);
-		valueColumn->isQuoted = true;
-
-		if (valueColumn->val.str == NULL)
-		{
-			log_error(ALLOCATION_FAILED_ERROR);
-			return false;
-		}
-
 		/* strlen("null") == 4 */
 		if (strncmp(cur->valueStart, "null", 4) == 0)
 		{
 			valueColumn->isNull = true;
+		}
+		else
+		{
+			valueColumn->val.str = strndup(cur->valueStart, cur->valueLen);
+			valueColumn->isQuoted = true;
+
+			if (valueColumn->val.str == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
 		}
 	}
 
@@ -980,8 +980,8 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 	LogicalMessageTuple *old = &(stmt->stmt.update.old.array[0]);
 	LogicalMessageTuple *new = &(stmt->stmt.update.new.array[0]);
 
-	if (!allocateLogicalMessageTuple(old, oldCount) ||
-		!allocateLogicalMessageTuple(new, newCount))
+	if (!AllocateLogicalMessageTuple(old, oldCount) ||
+		!AllocateLogicalMessageTuple(new, newCount))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1023,59 +1023,6 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 	}
 
 	(void) FreeLogicalMessageTuple(cols);
-
-	return true;
-}
-
-
-/*
- * allocateLogicalMessageTuple allocates memory for count columns (and values)
- * for the given LogicalMessageTuple.
- */
-static bool
-allocateLogicalMessageTuple(LogicalMessageTuple *tuple, int count)
-{
-	tuple->cols = count;
-	tuple->columns = (char **) calloc(count, sizeof(char *));
-
-	if (tuple->columns == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	/*
-	 * Allocate the tuple values, an array of VALUES, as in SQL.
-	 *
-	 * TODO: actually support multi-values clauses (single column names array,
-	 * multiple VALUES matching the same metadata definition). At the moment
-	 * it's always a single VALUES entry: VALUES(a, b, c).
-	 *
-	 * The goal is to be able to represent VALUES(a1, b1, c1), (a2, b2, c2).
-	 */
-	LogicalMessageValuesArray *valuesArray = &(tuple->values);
-
-	valuesArray->count = 1;
-	valuesArray->array =
-		(LogicalMessageValues *) calloc(1, sizeof(LogicalMessageValues));
-
-	if (valuesArray->array == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	/* allocate one VALUES entry */
-	LogicalMessageValues *values = &(tuple->values.array[0]);
-	values->cols = count;
-	values->array =
-		(LogicalMessageValue *) calloc(count, sizeof(LogicalMessageValue));
-
-	if (values->array == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
 
 	return true;
 }
