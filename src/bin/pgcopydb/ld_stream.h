@@ -456,6 +456,8 @@ bool parseMessageMetadata(LogicalMessageMetadata *metadata,
 						  JSON_Value *json,
 						  bool skipAction);
 
+bool LogicalMessageValueEq(LogicalMessageValue *a, LogicalMessageValue *b);
+
 bool stream_write_json(LogicalStreamContext *context, bool previous);
 
 bool stream_write_internal_message(LogicalStreamContext *context,
