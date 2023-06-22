@@ -42,6 +42,9 @@ extensions: build
 follow-data-only: build
 	$(MAKE) -C $@
 
+timescaledb: build
+	$(MAKE) -C $@
+
 build:
 	docker build -t pagila -f Dockerfile.pagila .
 
