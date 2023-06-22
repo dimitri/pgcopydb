@@ -537,6 +537,7 @@ bool stream_write_truncate(FILE *out, LogicalMessageTruncate *truncate);
 bool stream_write_update(FILE *out, LogicalMessageUpdate *update);
 bool stream_write_delete(FILE * out, LogicalMessageDelete *delete);
 bool stream_write_value(FILE *out, LogicalMessageValue *value);
+bool stream_write_sql_escape_string_constant(FILE *out, const char *str);
 
 bool parseMessage(StreamContext *privateContext, char *message, JSON_Value *json);
 

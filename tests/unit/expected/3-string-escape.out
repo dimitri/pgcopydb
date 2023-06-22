@@ -1,0 +1,12 @@
+-[ RECORD 1 ]
+id | 1
+f1 | aaa  +
+   | aaa
+-[ RECORD 2 ]
+id | 2
+f1 | bbb\r+
+   | bbb
+-[ RECORD 3 ]
+id | 3
+f1 | ccc
+
