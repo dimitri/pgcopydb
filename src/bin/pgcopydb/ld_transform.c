@@ -1988,8 +1988,21 @@ stream_write_value(FILE *out, LogicalMessageValue *value)
 				break;
 			}
 
-			case TEXTOID:
 			case BYTEAOID:
+			{
+				if (value->isQuoted)
+				{
+					fformat(out, "%s", value->val.str);
+				}
+				else
+				{
+					fformat(out, "'%s'", value->val.str);
+				}
+
+				break;
+			}
+
+			case TEXTOID:
 			{
 				if (value->isQuoted)
 				{
@@ -2093,7 +2106,7 @@ LogicalMessageValueEq(LogicalMessageValue *a, LogicalMessageValue *b)
 
 		case INT8OID:
 		{
-			return a->val.int8 == a->val.int8;
+			return a->val.int8 == b->val.int8;
 		}
 
 		case FLOAT8OID:
