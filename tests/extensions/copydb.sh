@@ -29,7 +29,10 @@ EOF
 
 # create extensions on the source pagila database (needs superuser)
 psql -a -1 ${PGCOPYDB_SOURCE_PGURI_SU} <<EOF
+create extension intarray cascade;
 create extension postgis cascade;
+create extension postgis_tiger_geocoder cascade;
+create extension pg_partman cascade;
 EOF
 
 # the partman extension needs to be installed as the pagila role

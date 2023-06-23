@@ -668,8 +668,8 @@ summary_prepare_toplevel_durations(Summary *summary)
 	uint64_t durationMs;
 
 	/* compute schema dump duration, part of schemaDurationMs */
-	duration = timings->beforeSchemaFetch;
-	INSTR_TIME_SUBTRACT(duration, timings->beforeSchemaDump);
+	duration = timings->beforeSchemaDump;
+	INSTR_TIME_SUBTRACT(duration, timings->beforeSchemaFetch);
 	durationMs = INSTR_TIME_MS(duration);
 
 	IntervalToString(durationMs, timings->dumpSchemaMs, INTSTRING_MAX_DIGITS);
@@ -679,7 +679,7 @@ summary_prepare_toplevel_durations(Summary *summary)
 
 	/* compute schema fetch duration, part of schemaDurationMs */
 	duration = timings->beforePrepareSchema;
-	INSTR_TIME_SUBTRACT(duration, timings->beforeSchemaFetch);
+	INSTR_TIME_SUBTRACT(duration, timings->beforeSchemaDump);
 	durationMs = INSTR_TIME_MS(duration);
 
 	IntervalToString(durationMs, timings->fetchSchemaMs, INTSTRING_MAX_DIGITS);

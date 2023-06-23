@@ -39,6 +39,11 @@
 #define TIMESTAMPTZOID 1184
 
 /*
+ * Catalog OID values from PostgreSQL src/include/catalog/pg_namespace.h
+ */
+#define PG_NAMESPACE_OID 2615
+
+/*
  * Error codes that we use internally.
  */
 #define STR_ERRCODE_DUPLICATE_OBJECT "42710"

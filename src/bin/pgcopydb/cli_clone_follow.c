@@ -483,18 +483,6 @@ cloneDB(CopyDataSpec *copySpecs)
 		}
 	}
 
-	log_info("STEP 1: dump the source database schema (pre/post data)");
-
-	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_SCHEMA_DUMP);
-
-	if (!copydb_dump_source_schema(copySpecs,
-								   copySpecs->sourceSnapshot.snapshot,
-								   PG_DUMP_SECTION_SCHEMA))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	/* make sure that we have our own process local connection */
 	TransactionSnapshot snapshot = { 0 };
 
@@ -514,8 +502,7 @@ cloneDB(CopyDataSpec *copySpecs)
 	}
 
 	/* fetch schema information from source catalogs, including filtering */
-
-	log_info("STEP 2: fetch source database tables, indexes, and sequences");
+	log_info("STEP 1: fetch source database tables, indexes, and sequences");
 
 	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_SCHEMA_FETCH);
 
@@ -532,9 +519,21 @@ cloneDB(CopyDataSpec *copySpecs)
 		return false;
 	}
 
-	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_PREPARE_SCHEMA);
+	log_info("STEP 2: dump the source database schema (pre/post data)");
+
+	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_SCHEMA_DUMP);
+
+	if (!copydb_dump_source_schema(copySpecs,
+								   copySpecs->sourceSnapshot.snapshot,
+								   PG_DUMP_SECTION_SCHEMA))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	log_info("STEP 3: restore the pre-data section to the target database");
+
+	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_PREPARE_SCHEMA);
 
 	if (!copydb_target_prepare_schema(copySpecs))
 	{

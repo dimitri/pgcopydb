@@ -369,13 +369,6 @@ cli_restore_schema_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	/* prepare safe versions of the connection strings (without password) */
-	if (!cli_prepare_pguris(&(options.connStrings)))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
 	if (errors > 0)
 	{
 		exit(EXIT_CODE_BAD_ARGS);
@@ -535,13 +528,6 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 	CopyFilePaths *cfPaths = &(copySpecs->cfPaths);
 	PostgresPaths *pgPaths = &(copySpecs->pgPaths);
 
-	ConnStrings *dsn = &(copySpecs->connStrings);
-	char *source = dsn->safeSourcePGURI.pguri;
-	char *target = dsn->safeTargetPGURI.pguri;
-
-	log_info("[SOURCE] Restoring database from \"%s\"", source);
-	log_info("[TARGET] Restoring database into \"%s\"", target);
-
 	(void) find_pg_commands(pgPaths);
 
 	char *dir =
@@ -586,4 +572,15 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 	log_info("Using pg_restore for Postgres \"%s\" at \"%s\"",
 			 pgPaths->pg_version,
 			 pgPaths->pg_restore);
+
+	ConnStrings *dsn = &(copySpecs->connStrings);
+
+	if (!cli_prepare_pguris(dsn))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	char *target = dsn->safeTargetPGURI.pguri;
+	log_info("[TARGET] Restoring database into \"%s\"", target);
 }
