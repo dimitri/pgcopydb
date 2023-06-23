@@ -146,7 +146,9 @@ cli_clone(int argc, char **argv)
 	 *
 	 * First, make sure to export a snapshot.
 	 */
-	if (!copydb_prepare_snapshot(&copySpecs))
+	bool exportSnapshot = copydb_should_export_snapshot(&copySpecs);
+
+	if (exportSnapshot && !copydb_prepare_snapshot(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -164,16 +166,16 @@ cli_clone(int argc, char **argv)
 	bool success = cli_clone_follow_wait_subprocess("clone", clonePID);
 
 	/* close our top-level copy db connection and snapshot */
-	if (!copydb_close_snapshot(&copySpecs))
+	if (exportSnapshot && !copydb_close_snapshot(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);
 	}
 
 	/* make sure all sub-processes are now finished */
-	success = success && copydb_wait_for_subprocesses(copySpecs.failFast);
+	bool allExitsAreZero = copydb_wait_for_subprocesses(copySpecs.failFast);
 
-	if (!success)
+	if (!success || !allExitsAreZero)
 	{
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}

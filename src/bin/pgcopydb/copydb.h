@@ -337,6 +337,7 @@ bool copydb_cleanup_sysv_resources(SysVResArray *array);
 /* snapshot.c */
 bool copydb_copy_snapshot(CopyDataSpec *specs, TransactionSnapshot *snapshot);
 bool copydb_prepare_snapshot(CopyDataSpec *copySpecs);
+bool copydb_should_export_snapshot(CopyDataSpec *copySpecs);
 bool copydb_set_snapshot(CopyDataSpec *copySpecs);
 bool copydb_close_snapshot(CopyDataSpec *copySpecs);
 

@@ -1513,18 +1513,22 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 	if (!is_response_ok(result))
 	{
 		char *sqlstate = PQresultErrorField(result, PG_DIAG_SQLSTATE);
-		char *message = PQerrorMessage(connection);
-		char *errorLines[BUFSIZE];
-		int lineCount = splitLines(message, errorLines, BUFSIZE);
-		int lineNumber = 0;
 
-		strlcpy(pgsql->sqlstate, sqlstate, sizeof(pgsql->sqlstate));
+		if (sqlstate)
+		{
+			strlcpy(pgsql->sqlstate, sqlstate, sizeof(pgsql->sqlstate));
+		}
 
 		/*
 		 * PostgreSQL Error message might contain several lines. Log each of
 		 * them as a separate ERROR line here.
 		 */
-		for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
+		char *message = PQerrorMessage(connection);
+
+		char *errorLines[BUFSIZE] = { 0 };
+		int lineCount = splitLines(message, errorLines, BUFSIZE);
+
+		for (int lineNumber = 0; lineNumber < lineCount; lineNumber++)
 		{
 			log_error("[%s] %s", endpoint, errorLines[lineNumber]);
 		}
@@ -1532,10 +1536,14 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 		if (pgsql->logSQL)
 		{
 			log_error("SQL query: %s", sql);
-			log_error("SQL params: %s", debugParameters->data);
-		}
 
-		destroyPQExpBuffer(debugParameters);
+			if (paramCount > 0)
+			{
+				log_error("SQL params: %s", debugParameters->data);
+			}
+
+			destroyPQExpBuffer(debugParameters);
+		}
 
 		/* now stash away the SQL STATE if any */
 		if (context && sqlstate)
