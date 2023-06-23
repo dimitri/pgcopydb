@@ -318,6 +318,31 @@ copydb_prepare_snapshot(CopyDataSpec *copySpecs)
 
 
 /*
+ * copydb_should_export_snapshot returns true when a snapshot should be
+ * exported to be able to implement the command.
+ */
+bool
+copydb_should_export_snapshot(CopyDataSpec *copySpecs)
+{
+	/* when --not-consistent is used, we have nothing to do here */
+	if (!copySpecs->consistent)
+	{
+		copySpecs->sourceSnapshot.state = SNAPSHOT_STATE_SKIPPED;
+		log_debug("copydb_prepare_snapshot: --not-consistent, skipping");
+		return false;
+	}
+
+	/*
+	 * When the --snapshot option has been used, instead of exporting a new
+	 * snapshot, we can just re-use it.
+	 */
+	TransactionSnapshot *sourceSnapshot = &(copySpecs->sourceSnapshot);
+
+	return IS_EMPTY_STRING_BUFFER(sourceSnapshot->snapshot);
+}
+
+
+/*
  * copydb_create_logical_replication_slot uses Postgres logical replication
  * protocol command CREATE_REPLICATION_SLOT to create a replication slot on the
  * source database, and exports a snapshot while doing so.
