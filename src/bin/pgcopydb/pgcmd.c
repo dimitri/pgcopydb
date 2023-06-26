@@ -378,20 +378,18 @@ pg_dump_db(PostgresPaths *pgPaths,
 	args[argsIndex++] = "--section";
 	args[argsIndex++] = (char *) section;
 
-	/* check that we still have room for --exclude-schema arguments */
-	if ((128 - argsIndex) < (filters->excludeSchemaList.count * 2))
-	{
-		log_fatal("Failed to pg_dump section %s when using %d exclude-schema "
-				  "filters, only %d filters are supported by pgcopydb",
-				  section,
-				  filters->excludeSchemaList.count,
-				  (128 - argsIndex) / 2);
-		return false;
-	}
-
 	for (int i = 0; i < filters->excludeSchemaList.count; i++)
 	{
 		char *nspname = filters->excludeSchemaList.array[i].nspname;
+
+		/* check that we still have room for --exclude-schema args */
+		if (128 < (argsIndex + 2))
+		{
+			log_error("Failed to call pg_dump, too many schema are excluded: "
+					  "argsIndex %d > %d",
+					  argsIndex + 2, 128);
+			return false;
+		}
 
 		args[argsIndex++] = "--exclude-schema";
 		args[argsIndex++] = nspname;
@@ -406,10 +404,13 @@ pg_dump_db(PostgresPaths *pgPaths,
 
 			if (!streq(nspname, "public") && !streq(nspname, "pg_catalog"))
 			{
+				/* check that we still have room for --exclude-schema args */
 				if (128 < (argsIndex + 2))
 				{
-					log_error("Failed to pg_dump section %s, argsIndex %d > %d",
-							  section, argsIndex + 2, 128);
+					log_error("Failed to call pg_dump, "
+							  "too many schema are excluded: "
+							  "argsIndex %d > %d",
+							  argsIndex + 2, 128);
 					return false;
 				}
 
@@ -806,19 +807,18 @@ pg_restore_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = "--no-acl";
 	}
 
-	/* we use 15 other args array items beside schema filtering */
-	if (128 < (filters->excludeSchemaList.count + 15))
-	{
-		log_fatal("Failed to pg_restore using %d exclude-schema "
-				  "filters, only %d filters are supported by pgcopydb",
-				  filters->excludeSchemaList.count,
-				  128 - 15);
-		return false;
-	}
-
 	for (int i = 0; i < filters->excludeSchemaList.count; i++)
 	{
 		char *nspname = filters->excludeSchemaList.array[i].nspname;
+
+		/* check that we still have room for --exclude-schema args */
+		if (128 < (argsIndex + 2))
+		{
+			log_error("Failed to call pg_restore, too many schema are excluded: "
+					  "argsIndex %d > %d",
+					  argsIndex + 2, 128);
+			return false;
+		}
 
 		args[argsIndex++] = "--exclude-schema";
 		args[argsIndex++] = nspname;

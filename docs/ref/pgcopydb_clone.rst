@@ -94,16 +94,16 @@ Base copy, or the clone operation
 
 The ``pgcopydb clone`` command implements the following steps:
 
-  1. ``pgcopydb`` calls into ``pg_dump`` to produce the ``pre-data`` section
-     and the ``post-data`` sections of the dump using Postgres custom
-     format.
-
-  2. ``pgcopydb`` gets the list of ordinary and partitioned tables from a
+  1. ``pgcopydb`` gets the list of ordinary and partitioned tables from a
      catalog query on the source database, and also the list of indexes, and
      the list of sequences with their current values.
 
      When filtering is used, the list of objects OIDs that are meant to be
      filtered out is built during this step.
+
+  2. ``pgcopydb`` calls into ``pg_dump`` to produce the ``pre-data`` section
+     and the ``post-data`` sections of the dump using Postgres custom
+     format.
 
   3. The ``pre-data`` section of the dump is restored on the target database
      using the ``pg_restore`` command, creating all the Postgres objects
