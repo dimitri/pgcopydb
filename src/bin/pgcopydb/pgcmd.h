@@ -18,6 +18,7 @@
 #include "filtering.h"
 #include "parsing_utils.h"
 #include "pgsql.h"
+#include "schema.h"
 
 #define PG_VERSION_STRING_MAX 12
 
@@ -87,6 +88,7 @@ bool pg_dump_db(PostgresPaths *pgPaths,
 				const char *snapshot,
 				const char *section,
 				SourceFilters *filters,
+				SourceExtensionArray *extensionArray,
 				const char *filename);
 
 bool pg_dumpall_roles(PostgresPaths *pgPaths,

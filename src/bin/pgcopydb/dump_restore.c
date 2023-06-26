@@ -47,6 +47,13 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 						  const char *snapshot,
 						  PostgresDumpSection section)
 {
+	SourceExtensionArray *extensionArray = NULL;
+
+	if (specs->skipExtensions)
+	{
+		extensionArray = &(specs->catalog.extensionArray);
+	}
+
 	if (section == PG_DUMP_SECTION_SCHEMA ||
 		section == PG_DUMP_SECTION_PRE_DATA ||
 		section == PG_DUMP_SECTION_ALL)
@@ -62,6 +69,7 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 							 snapshot,
 							 "pre-data",
 							 &(specs->filters),
+							 extensionArray,
 							 specs->dumpPaths.preFilename))
 		{
 			/* errors have already been logged */
@@ -92,6 +100,7 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 							 snapshot,
 							 "post-data",
 							 &(specs->filters),
+							 extensionArray,
 							 specs->dumpPaths.postFilename))
 		{
 			/* errors have already been logged */
@@ -358,7 +367,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 	if (listContents == NULL)
 	{
 		log_error(ALLOCATION_FAILED_ERROR);
-		free(listContents);
+		destroyPQExpBuffer(listContents);
 		return false;
 	}
 
@@ -366,8 +375,31 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 	for (int i = 0; i < contents.count; i++)
 	{
 		uint32_t oid = contents.array[i].objectOid;
+		uint32_t catOid = contents.array[i].catalogOid;
 		char *name = contents.array[i].restoreListName;
 		char *prefix = "";
+
+		if (catOid == PG_NAMESPACE_OID)
+		{
+			bool exists = false;
+
+			if (!copydb_schema_already_exists(specs, name, &exists))
+			{
+				log_error("Failed to check if restore name \"%s\" "
+						  "already exists",
+						  name);
+				return false;
+			}
+
+			if (exists)
+			{
+				prefix = ";";
+
+				log_notice("Skipping already existing schema %u: %s",
+						   contents.array[i].objectOid,
+						   contents.array[i].restoreListName);
+			}
+		}
 
 		if (copydb_objectid_has_been_processed_already(specs, oid))
 		{

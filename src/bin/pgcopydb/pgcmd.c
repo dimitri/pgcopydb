@@ -21,6 +21,7 @@
 #include "log.h"
 #include "parsing_utils.h"
 #include "pgcmd.h"
+#include "schema.h"
 #include "signals.h"
 #include "string_utils.h"
 
@@ -341,6 +342,7 @@ pg_dump_db(PostgresPaths *pgPaths,
 		   const char *snapshot,
 		   const char *section,
 		   SourceFilters *filters,
+		   SourceExtensionArray *extensionArray,
 		   const char *filename)
 {
 	char *args[128];
@@ -376,23 +378,46 @@ pg_dump_db(PostgresPaths *pgPaths,
 	args[argsIndex++] = "--section";
 	args[argsIndex++] = (char *) section;
 
-	/* we use 10 other args array items beside schema filtering */
-	if (128 < (filters->excludeSchemaList.count + 10))
-	{
-		log_fatal("Failed to pg_dump section %s when using %d exclude-schema "
-				  "filters, only %d filters are supported by pgcopydb",
-				  section,
-				  filters->excludeSchemaList.count,
-				  128 - 10);
-		return false;
-	}
-
 	for (int i = 0; i < filters->excludeSchemaList.count; i++)
 	{
 		char *nspname = filters->excludeSchemaList.array[i].nspname;
 
+		/* check that we still have room for --exclude-schema args */
+		if (128 < (argsIndex + 2))
+		{
+			log_error("Failed to call pg_dump, too many schema are excluded: "
+					  "argsIndex %d > %d",
+					  argsIndex + 2, 128);
+			return false;
+		}
+
 		args[argsIndex++] = "--exclude-schema";
 		args[argsIndex++] = nspname;
+	}
+
+	/* now --exclude-schema for extension's own schemas */
+	if (extensionArray != NULL)
+	{
+		for (int i = 0; i < extensionArray->count; i++)
+		{
+			char *nspname = extensionArray->array[i].extnamespace;
+
+			if (!streq(nspname, "public") && !streq(nspname, "pg_catalog"))
+			{
+				/* check that we still have room for --exclude-schema args */
+				if (128 < (argsIndex + 2))
+				{
+					log_error("Failed to call pg_dump, "
+							  "too many schema are excluded: "
+							  "argsIndex %d > %d",
+							  argsIndex + 2, 128);
+					return false;
+				}
+
+				args[argsIndex++] = "--exclude-schema";
+				args[argsIndex++] = nspname;
+			}
+		}
 	}
 
 	args[argsIndex++] = "--file";
@@ -782,19 +807,18 @@ pg_restore_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = "--no-acl";
 	}
 
-	/* we use 15 other args array items beside schema filtering */
-	if (128 < (filters->excludeSchemaList.count + 15))
-	{
-		log_fatal("Failed to pg_restore using %d exclude-schema "
-				  "filters, only %d filters are supported by pgcopydb",
-				  filters->excludeSchemaList.count,
-				  128 - 15);
-		return false;
-	}
-
 	for (int i = 0; i < filters->excludeSchemaList.count; i++)
 	{
 		char *nspname = filters->excludeSchemaList.array[i].nspname;
+
+		/* check that we still have room for --exclude-schema args */
+		if (128 < (argsIndex + 2))
+		{
+			log_error("Failed to call pg_restore, too many schema are excluded: "
+					  "argsIndex %d > %d",
+					  argsIndex + 2, 128);
+			return false;
+		}
 
 		args[argsIndex++] = "--exclude-schema";
 		args[argsIndex++] = nspname;

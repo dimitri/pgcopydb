@@ -41,6 +41,8 @@ typedef struct SourceSchema
 	uint32_t oid;
 	char nspname[NAMEDATALEN];
 	char restoreListName[RESTORE_LIST_NAMEDATALEN];
+
+	UT_hash_handle hh;          /* makes this structure hashable */
 } SourceSchema;
 
 typedef struct SourceSchemaArray
@@ -283,11 +285,20 @@ typedef struct SourceCatalog
 } SourceCatalog;
 
 
+typedef struct TargetCatalog
+{
+	SourceSchemaArray schemaArray;
+	SourceSchema *schemaHashByName;
+} TargetCatalog;
+
+
 bool schema_query_privileges(PGSQL *pgsql,
 							 bool *hasDBCreatePrivilage,
 							 bool *hasDBTempPrivilege);
 
 bool schema_list_databases(PGSQL *pgsql, SourceDatabaseArray *catArray);
+
+bool schema_list_schemas(PGSQL *pgsql, SourceSchemaArray *array);
 
 bool schema_list_ext_schemas(PGSQL *pgsql, SourceSchemaArray *array);
 

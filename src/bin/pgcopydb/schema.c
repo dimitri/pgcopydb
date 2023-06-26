@@ -221,6 +221,43 @@ schema_list_databases(PGSQL *pgsql, SourceDatabaseArray *catArray)
 
 
 /*
+ * schema_list_schemas grabs the list of schema from the given Postgres
+ * instance and allocates a SourceSchemaArray array with the result of the
+ * query.
+ */
+bool
+schema_list_schemas(PGSQL *pgsql, SourceSchemaArray *array)
+{
+	SourceSchemaArrayContext parseContext = { { 0 }, array, false };
+
+	char *sql =
+		"select n.oid, n.nspname, "
+		"       format('- %s %s', "
+		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')) "
+		"  from pg_namespace n "
+		"       join pg_roles auth ON auth.oid = n.nspowner "
+		" where nspname <> 'public' and nspname !~ '^pg_'";
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   0, NULL, NULL,
+								   &parseContext, &getSchemaList))
+	{
+		log_error("Failed to list schemas that extensions depend on");
+		return false;
+	}
+
+	if (!parseContext.parsedOk)
+	{
+		log_error("Failed to list schemas that extensions depend on");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * schema_list_extensions grabs the list of extensions from the given source
  * Postgres instance and allocates a SourceExtension array with the result of
  * the query.
@@ -272,9 +309,9 @@ schema_list_extensions(PGSQL *pgsql, SourceExtensionArray *extArray)
 
 
 /*
- * schema_list_extensions grabs the list of extensions from the given source
- * Postgres instance and allocates a SourceExtension array with the result of
- * the query.
+ * schema_list_ext_schemas grabs the list of schema that extensions depend on
+ * from the given source Postgres instance and allocates a SourceSchemaArray
+ * array with the result of the query.
  */
 bool
 schema_list_ext_schemas(PGSQL *pgsql, SourceSchemaArray *array)

@@ -228,6 +228,15 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 		}
 	}
 
+	/*
+	 * Now also fetch the list of schemas from the target database.
+	 */
+	if (!copydb_prepare_target_catalog(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	return true;
 }
 
@@ -961,4 +970,89 @@ copydb_ObjectKindToString(ObjectKind kind)
 	}
 
 	return "unknown";
+}
+
+
+/*
+ * copydb_prepare_target_catalog connects to the target database and fetches
+ * pieces of the catalogs that we need, such as the list of the already
+ * existing schemas.
+ */
+bool
+copydb_prepare_target_catalog(CopyDataSpec *specs)
+{
+	PGSQL dst = { 0 };
+
+	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	SourceSchema *schemaHashByName = NULL;
+	SourceSchemaArray *schemaArray = &(specs->targetCatalog.schemaArray);
+
+	if (!schema_list_schemas(&dst, schemaArray))
+	{
+		log_error("Failed to list schemas on the target database");
+		return false;
+	}
+
+	for (int i = 0; i < schemaArray->count; i++)
+	{
+		SourceSchema *schema = &(schemaArray->array[i]);
+		size_t len = strlen(schema->nspname);
+
+		HASH_ADD(hh, schemaHashByName, nspname, len, schema);
+	}
+
+	specs->targetCatalog.schemaHashByName = schemaHashByName;
+
+	return true;
+}
+
+
+/*
+ * copydb_schema_already_exists checks if the given SCHEMA name extracted from
+ * a pg_dump Archive matches an existing schema name on the target database.
+ */
+bool
+copydb_schema_already_exists(CopyDataSpec *specs,
+							 const char *restoreListName,
+							 bool *exists)
+{
+	SourceSchema *schemaHashByName = specs->targetCatalog.schemaHashByName;
+
+	if (strncmp(restoreListName, "- ", 2) != 0)
+	{
+		log_error("Failed to parse restore list name \"%s\"", restoreListName);
+		return false;
+	}
+
+	char *name = strdup(restoreListName + 2);
+
+	if (name == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	char *spc = strchr(name, ' ');
+
+	if (spc == NULL)
+	{
+		log_error("Failed to parse restore list name \"%s\"", restoreListName);
+		return false;
+	}
+
+	*spc = '\0';
+
+	SourceSchema *schema = NULL;
+	size_t len = strlen(name);
+
+	HASH_FIND(hh, schemaHashByName, name, len, schema);
+
+	*exists = schema != NULL;
+
+	return true;
 }

@@ -259,6 +259,7 @@ typedef struct CopyDataSpec
 	bool hasDBTempPrivilege;
 
 	SourceCatalog catalog;
+	TargetCatalog targetCatalog;
 	CopyTableDataSpecsArray tableSpecsArray;
 } CopyDataSpec;
 
@@ -447,6 +448,11 @@ bool copydb_prepare_index_specs(CopyDataSpec *specs, PGSQL *pgsql);
 bool copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql);
 
 char * copydb_ObjectKindToString(ObjectKind kind);
+
+bool copydb_prepare_target_catalog(CopyDataSpec *specs);
+bool copydb_schema_already_exists(CopyDataSpec *specs,
+								  const char *restoreListName,
+								  bool *exists);
 
 /* table-data.c */
 bool copydb_copy_all_table_data(CopyDataSpec *specs);
