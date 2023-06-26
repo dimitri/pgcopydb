@@ -4256,6 +4256,8 @@ pgsqlSendFeedback(LogicalStreamClient *client,
 	}
 
 	/* call the callback function from the streaming client first */
+	context->forceFeedback = force;
+
 	if ((*client->feedbackFunction)(context))
 	{
 		/* we might have a new endpos from the client callback */

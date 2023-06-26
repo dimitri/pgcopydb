@@ -83,6 +83,13 @@ stream_transform_stream(StreamSpecs *specs)
 	log_debug("Source database wal_segment_size is %u", specs->WalSegSz);
 	log_debug("Source database timeline is %d", specs->system.timeline);
 
+	if (!stream_transform_resume(privateContext))
+	{
+		log_error("Failed to resume streaming from %X/%X",
+				  LSN_FORMAT_ARGS(privateContext->startpos));
+		return false;
+	}
+
 	TransformStreamCtx ctx = {
 		.context = privateContext,
 		.currentMsgIndex = 0
@@ -126,6 +133,38 @@ stream_transform_stream(StreamSpecs *specs)
 	log_notice("Transformed %lld messages and %lld transactions",
 			   (long long) context.lineno,
 			   (long long) ctx.currentMsgIndex + 1);
+
+	return true;
+}
+
+
+/*
+ * stream_transform_resume allows resuming operation when a SQL file is already
+ * existing on-disk.
+ *
+ * TODO: add support for resuming from an LSN that is found in the middle of a
+ * transaction.
+ */
+bool
+stream_transform_resume(StreamContext *privateContext)
+{
+	char jsonFileName[MAXPGPATH] = { 0 };
+	char sqlFileName[MAXPGPATH] = { 0 };
+
+	if (!stream_compute_pathnames(privateContext->WalSegSz,
+								  privateContext->timeline,
+								  privateContext->startpos,
+								  privateContext->paths.dir,
+								  jsonFileName,
+								  sqlFileName))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_notice("Transforming from %X/%X in \"%s\"",
+			   LSN_FORMAT_ARGS(privateContext->startpos),
+			   sqlFileName);
 
 	return true;
 }
