@@ -35,6 +35,8 @@ GUC srcSettings[] = {
 	COMMON_GUC_SETTINGS,
 	{ "extra_float_digits", "3" },
 	{ "idle_in_transaction_session_timeout", "0" },
+	{ "statement_timeout", "0" },
+	{ "lock_timeout", "0" },
 	{ NULL, NULL },
 };
 
@@ -43,6 +45,8 @@ GUC dstSettings[] = {
 	COMMON_GUC_SETTINGS,
 	{ "maintenance_work_mem", "'1 GB'" },
 	{ "synchronous_commit", "'off'" },
+	{ "statement_timeout", "0" },
+	{ "lock_timeout", "0" },
 	{ NULL, NULL },
 };
 
