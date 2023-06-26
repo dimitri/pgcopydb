@@ -2055,6 +2055,7 @@ stream_write_sql_escape_string_constant(FILE *out, const char *str)
 			case '\n':
 			case '\r':
 			case '\t':
+			case '\\':
 			{
 				fformat(out, "\\%c", str[i]);
 				break;
