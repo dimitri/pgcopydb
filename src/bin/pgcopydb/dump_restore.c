@@ -367,7 +367,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 	if (listContents == NULL)
 	{
 		log_error(ALLOCATION_FAILED_ERROR);
-		free(listContents);
+		destroyPQExpBuffer(listContents);
 		return false;
 	}
 
@@ -385,7 +385,9 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 
 			if (!copydb_schema_already_exists(specs, name, &exists))
 			{
-				/* errors have already been logged */
+				log_error("Failed to check if restore name \"%s\" "
+						  "already exists",
+						  name);
 				return false;
 			}
 

@@ -1052,5 +1052,7 @@ copydb_schema_already_exists(CopyDataSpec *specs,
 
 	HASH_FIND(hh, schemaHashByName, name, len, schema);
 
-	return schema != NULL;
+	*exists = schema != NULL;
+
+	return true;
 }
