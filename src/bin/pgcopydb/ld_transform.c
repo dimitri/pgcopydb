@@ -2106,12 +2106,37 @@ stream_write_sql_escape_string_constant(FILE *out, const char *str)
 	{
 		switch (str[i])
 		{
-			case '\'':
 			case '\b':
+			{
+				fformat(out, "\\b");
+				break;
+			}
+
 			case '\f':
+			{
+				fformat(out, "\\f");
+				break;
+			}
+
 			case '\n':
+			{
+				fformat(out, "\\n");
+				break;
+			}
+
 			case '\r':
+			{
+				fformat(out, "\\r");
+				break;
+			}
+
 			case '\t':
+			{
+				fformat(out, "\\t");
+				break;
+			}
+
+			case '\'':
 			case '\\':
 			{
 				fformat(out, "\\%c", str[i]);
