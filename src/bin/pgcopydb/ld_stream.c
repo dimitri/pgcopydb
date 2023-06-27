@@ -1050,6 +1050,9 @@ streamRotateFile(LogicalStreamContext *context)
 	}
 	else if (file_exists(partialFileName))
 	{
+		/* previous run might have been interrupted before rename */
+		log_notice("Found pre-existing partial file \"%s\"", partialFileName);
+
 		privateContext->jsonFile =
 			fopen_with_umask(partialFileName, "ab", FOPEN_FLAGS_A, 0644);
 	}
