@@ -766,8 +766,6 @@ buildPostgresURIfromPieces(URIParams *uriParams, char **pguri)
 	*pguri = strdup(uri->data);
 	destroyPQExpBuffer(uri);
 
-	log_trace("buildPostgresURIfromPieces: %s", *pguri);
-
 	return true;
 }
 

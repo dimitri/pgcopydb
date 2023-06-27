@@ -83,7 +83,7 @@ stream_transform_stream(StreamSpecs *specs)
 	log_debug("Source database wal_segment_size is %u", specs->WalSegSz);
 	log_debug("Source database timeline is %d", specs->system.timeline);
 
-	if (!stream_transform_resume(privateContext))
+	if (!stream_transform_resume(specs, privateContext))
 	{
 		log_error("Failed to resume streaming from %X/%X",
 				  LSN_FORMAT_ARGS(privateContext->startpos));
@@ -141,12 +141,9 @@ stream_transform_stream(StreamSpecs *specs)
 /*
  * stream_transform_resume allows resuming operation when a SQL file is already
  * existing on-disk.
- *
- * TODO: add support for resuming from an LSN that is found in the middle of a
- * transaction.
  */
 bool
-stream_transform_resume(StreamContext *privateContext)
+stream_transform_resume(StreamSpecs *specs, StreamContext *privateContext)
 {
 	char jsonFileName[MAXPGPATH] = { 0 };
 	char sqlFileName[MAXPGPATH] = { 0 };
@@ -165,6 +162,21 @@ stream_transform_resume(StreamContext *privateContext)
 	log_notice("Transforming from %X/%X in \"%s\"",
 			   LSN_FORMAT_ARGS(privateContext->startpos),
 			   sqlFileName);
+
+	/*
+	 * If the target SQL file already exists on-disk, make sure to read the
+	 * JSON file again now. The previous round of streaming might have stopped
+	 * at an endpos that fits in the middle of a transaction.
+	 */
+	if (file_exists(sqlFileName))
+	{
+		if (!stream_transform_file(specs, jsonFileName, sqlFileName))
+		{
+			log_error("Failed to resume transforming from existing file \"%s\"",
+					  sqlFileName);
+			return false;
+		}
+	}
 
 	return true;
 }
@@ -253,88 +265,94 @@ stream_transform_write_message(StreamContext *privateContext,
 
 	/*
 	 * Is it time to close the current message and prepare a new one?
+	 *
+	 * If not, just skip writing the current message/transaction to the SQL
+	 * file, we need a full transaction in-memory to be able to do that. Or at
+	 * least a partial transaction within known boundaries.
 	 */
-	if (metadata->action == STREAM_ACTION_COMMIT ||
-		metadata->action == STREAM_ACTION_KEEPALIVE ||
-		metadata->action == STREAM_ACTION_SWITCH ||
-		metadata->action == STREAM_ACTION_ENDPOS)
+	if (metadata->action != STREAM_ACTION_COMMIT &&
+		metadata->action != STREAM_ACTION_KEEPALIVE &&
+		metadata->action != STREAM_ACTION_SWITCH &&
+		metadata->action != STREAM_ACTION_ENDPOS)
 	{
-		LogicalTransaction *txn = &(currentMsg->command.tx);
+		return true;
+	}
 
-		if (metadata->action == STREAM_ACTION_COMMIT)
-		{
-			/* now write the COMMIT message even when txn is continued */
-			txn->commit = true;
-		}
+	LogicalTransaction *txn = &(currentMsg->command.tx);
 
-		/* now write the transaction out */
-		if (privateContext->out != NULL)
-		{
-			if (!stream_write_message(privateContext->out, currentMsg))
-			{
-				/* errors have already been logged */
-				return false;
-			}
-		}
+	if (metadata->action == STREAM_ACTION_COMMIT)
+	{
+		/* now write the COMMIT message even when txn is continued */
+		txn->commit = true;
+	}
 
-		/* now write the transaction out also to file on-disk */
-		if (!stream_write_message(privateContext->sqlFile, currentMsg))
+	/* now write the transaction out */
+	if (privateContext->out != NULL)
+	{
+		if (!stream_write_message(privateContext->out, currentMsg))
 		{
 			/* errors have already been logged */
 			return false;
 		}
+	}
 
+	/* now write the transaction out also to file on-disk */
+	if (!stream_write_message(privateContext->sqlFile, currentMsg))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * If we're in a continued transaction, it means that the earlier write
+	 * of this txn's BEGIN statement didn't have the COMMIT LSN. Therefore,
+	 * we need to maintain that LSN as a separate metadata file. This is
+	 * necessary because the COMMIT LSN is required later in the apply
+	 * process.
+	 */
+	if (txn->continued && txn->commit)
+	{
+		writeTxnMetadataFile(txn, privateContext->paths.dir);
+	}
+
+	(void) FreeLogicalMessage(currentMsg);
+
+	if (metadata->action == STREAM_ACTION_COMMIT)
+	{
+		/* then prepare a new one, reusing the same memory area */
+		LogicalMessage empty = { 0 };
+
+		*currentMsg = empty;
+		++(*currentMsgIndex);
+	}
+	else if (currentMsg->isTransaction)
+	{
 		/*
-		 * If we're in a continued transaction, it means that the earlier write
-		 * of this txn's BEGIN statement didn't have the COMMIT LSN. Therefore,
-		 * we need to maintain that LSN as a separate metadata file. This is
-		 * necessary because the COMMIT LSN is required later in the apply
-		 * process.
+		 * A SWITCH WAL or a KEEPALIVE or an ENDPOS message happened in the
+		 * middle of a transaction: we need to mark the new transaction as
+		 * a continued part of the previous one.
 		 */
-		if (txn->continued && txn->commit)
-		{
-			writeTxnMetadataFile(txn, privateContext->paths.dir);
-		}
+		log_debug("stream_transform_line: continued transaction at %c: %X/%X",
+				  metadata->action,
+				  LSN_FORMAT_ARGS(metadata->lsn));
 
-		(void) FreeLogicalMessage(currentMsg);
+		LogicalMessage new = { 0 };
 
-		if (metadata->action == STREAM_ACTION_COMMIT)
-		{
-			/* then prepare a new one, reusing the same memory area */
-			LogicalMessage empty = { 0 };
+		new.isTransaction = true;
+		new.action = STREAM_ACTION_BEGIN;
 
-			*currentMsg = empty;
-			++(*currentMsgIndex);
-		}
-		else if (currentMsg->isTransaction)
-		{
-			/*
-			 * A SWITCH WAL or a KEEPALIVE or an ENDPOS message happened in the
-			 * middle of a transaction: we need to mark the new transaction as
-			 * a continued part of the previous one.
-			 */
-			log_debug("stream_transform_line: continued transaction at %c: %X/%X",
-					  metadata->action,
-					  LSN_FORMAT_ARGS(metadata->lsn));
+		LogicalTransaction *old = &(currentMsg->command.tx);
+		LogicalTransaction *txn = &(new.command.tx);
 
-			LogicalMessage new = { 0 };
+		txn->continued = true;
 
-			new.isTransaction = true;
-			new.action = STREAM_ACTION_BEGIN;
+		txn->xid = old->xid;
+		txn->beginLSN = old->beginLSN;
+		strlcpy(txn->timestamp, old->timestamp, sizeof(txn->timestamp));
 
-			LogicalTransaction *old = &(currentMsg->command.tx);
-			LogicalTransaction *txn = &(new.command.tx);
+		txn->first = NULL;
 
-			txn->continued = true;
-
-			txn->xid = old->xid;
-			txn->beginLSN = old->beginLSN;
-			strlcpy(txn->timestamp, old->timestamp, sizeof(txn->timestamp));
-
-			txn->first = NULL;
-
-			*currentMsg = new;
-		}
+		*currentMsg = new;
 	}
 
 	return true;
@@ -746,7 +764,7 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 
 	if (privateContext->sqlFile == NULL)
 	{
-		log_error("Failed to create and open file \"%s\"", tempfilename);
+		log_error("Failed to open file \"%s\"", tempfilename);
 		return false;
 	}
 
