@@ -204,6 +204,9 @@ follow_get_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel)
 		return false;
 	}
 
+	/* always accept the startpos and apply values from the sentinel */
+	specs->startpos = sentinel->startpos;
+
 	/* the endpos might have changed on the sentinel table */
 	if (sentinel->endpos != InvalidXLogRecPtr &&
 		sentinel->endpos != specs->endpos)

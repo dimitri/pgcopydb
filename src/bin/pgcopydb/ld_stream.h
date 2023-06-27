@@ -506,6 +506,7 @@ bool stream_compute_pathnames(uint32_t WalSegSz,
 							  char *sqlFileName);
 
 bool stream_transform_stream(StreamSpecs *specs);
+bool stream_transform_resume(StreamContext *privateContext);
 bool stream_transform_line(void *ctx, const char *line, bool *stop);
 
 bool stream_transform_write_message(StreamContext *privateContext,

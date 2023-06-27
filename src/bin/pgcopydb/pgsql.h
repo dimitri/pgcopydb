@@ -399,6 +399,8 @@ typedef struct LogicalStreamContext
 	const char *buffer;         /* expose internal buffer */
 	StreamOutputPlugin plugin;
 
+	bool forceFeedback;
+
 	TimestampTz now;
 	TimestampTz lastFeedbackSync;
 	TimestampTz sendTime;

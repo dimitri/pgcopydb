@@ -3357,12 +3357,12 @@ pgsql_init_stream(LogicalStreamClient *client,
 	client->fsync_interval = 10 * 1000;          /* 10 sec = default */
 	client->standby_message_timeout = 10 * 1000; /* 10 sec = default */
 
-	client->current.written_lsn = InvalidXLogRecPtr;
-	client->current.flushed_lsn = InvalidXLogRecPtr;
+	client->current.written_lsn = startpos;
+	client->current.flushed_lsn = startpos;
 	client->current.applied_lsn = InvalidXLogRecPtr;
 
-	client->feedback.written_lsn = InvalidXLogRecPtr;
-	client->feedback.flushed_lsn = InvalidXLogRecPtr;
+	client->feedback.written_lsn = startpos;
+	client->feedback.flushed_lsn = startpos;
 	client->feedback.applied_lsn = InvalidXLogRecPtr;
 
 	return true;
@@ -3740,7 +3740,6 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 
 	client->last_fsync = -1;
 	client->last_status = -1;
-	client->current.written_lsn = InvalidXLogRecPtr;
 
 	context->plugin = client->plugin;
 
@@ -4256,6 +4255,8 @@ pgsqlSendFeedback(LogicalStreamClient *client,
 	}
 
 	/* call the callback function from the streaming client first */
+	context->forceFeedback = force;
+
 	if ((*client->feedbackFunction)(context))
 	{
 		/* we might have a new endpos from the client callback */

@@ -1392,11 +1392,14 @@ streamFeedback(LogicalStreamContext *context)
 
 	int feedbackInterval = 1 * 1000; /* 1s */
 
-	if (!feTimestampDifferenceExceeds(context->lastFeedbackSync,
-									  context->now,
-									  feedbackInterval))
+	if (!context->forceFeedback)
 	{
-		return true;
+		if (!feTimestampDifferenceExceeds(context->lastFeedbackSync,
+										  context->now,
+										  feedbackInterval))
+		{
+			return true;
+		}
 	}
 
 	PGSQL src = { 0 };
@@ -1433,11 +1436,12 @@ streamFeedback(LogicalStreamContext *context)
 	context->lastFeedbackSync = context->now;
 
 	log_debug("streamFeedback: written %X/%X flushed %X/%X applied %X/%X "
-			  " endpos %X/%X apply %s",
+			  " startpos %X/%X endpos %X/%X apply %s",
 			  LSN_FORMAT_ARGS(context->tracking->written_lsn),
 			  LSN_FORMAT_ARGS(context->tracking->flushed_lsn),
 			  LSN_FORMAT_ARGS(context->tracking->applied_lsn),
-			  LSN_FORMAT_ARGS(context->endpos),
+			  LSN_FORMAT_ARGS(privateContext->startpos),
+			  LSN_FORMAT_ARGS(privateContext->endpos),
 			  privateContext->apply ? "enabled" : "disabled");
 
 	return true;
