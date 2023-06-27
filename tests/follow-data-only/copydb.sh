@@ -50,7 +50,7 @@ pgcopydb copy table-data
 psql -v a=11 -v b=20 -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 
 # start following and applying changes from source to target
-pgcopydb follow --notice
+pgcopydb follow --verbose
 
 # the follow command ends when reaching endpos, set in inject.sh
 pgcopydb stream cleanup
@@ -59,7 +59,13 @@ kill -TERM ${COPROC_PID}
 wait ${COPROC_PID}
 
 # check how many rows we have on source and target
-sql="select count(*), sum(some_field) from table_a"
+sql="select count(*), sum(f1) from table_a"
+psql -d ${PGCOPYDB_SOURCE_PGURI} -c "${sql}" > /tmp/s.out
+psql -d ${PGCOPYDB_TARGET_PGURI} -c "${sql}" > /tmp/t.out
+
+diff /tmp/s.out /tmp/t.out
+
+sql="select f1, f2 from table_a where f2 is not null order by f1"
 psql -d ${PGCOPYDB_SOURCE_PGURI} -c "${sql}" > /tmp/s.out
 psql -d ${PGCOPYDB_TARGET_PGURI} -c "${sql}" > /tmp/t.out
 
