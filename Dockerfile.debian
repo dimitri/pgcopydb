@@ -29,6 +29,7 @@ RUN apt-get update \
 WORKDIR /usr/src/pgcopydb
 
 COPY ./Makefile ./
+COPY ./GIT-VERSION-GEN ./
 COPY ./README.md ./
 COPY ./CHANGELOG.md ./
 COPY ./LICENSE ./
