@@ -18,12 +18,12 @@
 # -- Project information -----------------------------------------------------
 
 project = 'pgcopydb'
-copyright = '2022, Dimitri Fontaine'
+copyright = '2022-2023, Dimitri Fontaine'
 author = 'Dimitri Fontaine'
 
 # The full version, including alpha/beta/rc tags
-version = '0.11'
-release = '0.11'
+version = '0.12'
+release = '0.12'
 
 
 # -- General configuration ---------------------------------------------------

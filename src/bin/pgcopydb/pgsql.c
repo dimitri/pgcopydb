@@ -2429,15 +2429,15 @@ pg_copy_send_query(PGSQL *pgsql,
 
 	PGresult *res = PQexec(pgsql->connection, sql);
 
-	free(sql);
-
 	if (PQresultStatus(res) != status)
 	{
 		pgcopy_log_error(pgsql, res, sql);
+		free(sql);
 
 		return false;
 	}
 
+	free(sql);
 	return true;
 }
 
