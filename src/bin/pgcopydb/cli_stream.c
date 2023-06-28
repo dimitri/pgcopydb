@@ -602,8 +602,23 @@ cli_stream_cleanup(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	copySpecs.resume = true;    /* pretend --resume has been used */
-	copySpecs.restart = false;  /* pretend --restart has NOT been used */
+	bool resume = true;    /* pretend --resume has been used */
+	bool restart = false;  /* pretend --restart has NOT been used */
+
+	bool createWorkDir = false;
+	bool service = false;
+
+	if (!copydb_init_workdir(&copySpecs,
+							 NULL,
+							 service,
+							 NULL,
+							 restart,
+							 resume,
+							 createWorkDir))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
 
 	if (!stream_cleanup_databases(&copySpecs,
 								  streamDBoptions.slot.slotName,

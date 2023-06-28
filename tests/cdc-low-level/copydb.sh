@@ -121,4 +121,4 @@ done
 pgcopydb stream replay --resume --endpos "${lsn}"
 
 # cleanup
-pgcopydb stream cleanup
+pgcopydb stream cleanup --verbose

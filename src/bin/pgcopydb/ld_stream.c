@@ -2222,6 +2222,8 @@ stream_cleanup_databases(CopyDataSpec *copySpecs, char *slotName, char *origin)
 		return false;
 	}
 
+	log_info("Removing schema pgcopydb and its objects");
+
 	if (!pgsql_execute(&src, "drop schema if exists pgcopydb cascade"))
 	{
 		/* errors have already been logged */
@@ -2231,6 +2233,28 @@ stream_cleanup_databases(CopyDataSpec *copySpecs, char *slotName, char *origin)
 	if (!pgsql_commit(&src))
 	{
 		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * When we have dropped the replication slot, we can remove the slot file
+	 * on-disk and also the snapshot file.
+	 */
+	log_notice("Removing slot file \"%s\"", copySpecs->cfPaths.cdc.slotfile);
+
+	if (!unlink_file(copySpecs->cfPaths.cdc.slotfile))
+	{
+		log_error("Failed to unlink the slot file \"%s\"",
+				  copySpecs->cfPaths.cdc.slotfile);
+		return false;
+	}
+
+	log_notice("Removing snapshot file \"%s\"", copySpecs->cfPaths.snfile);
+
+	if (!unlink_file(copySpecs->cfPaths.snfile))
+	{
+		log_error("Failed to unlink the snapshot file \"%s\"",
+				  copySpecs->cfPaths.snfile);
 		return false;
 	}
 
