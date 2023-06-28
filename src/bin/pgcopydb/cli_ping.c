@@ -212,7 +212,17 @@ cli_ping(int argc, char **argv)
 				exit(EXIT_CODE_SOURCE);
 			}
 
-			if (!pgsql_set_gucs(&src, srcSettings))
+			/* also set our GUC values for the source connection */
+			if (!pgsql_server_version(&src))
+			{
+				/* errors have already been logged */
+				exit(EXIT_CODE_SOURCE);
+			}
+
+			GUC *settings =
+				src.pgversion_num < 90600 ? srcSettings95 : srcSettings;
+
+			if (!pgsql_set_gucs(&src, settings))
 			{
 				log_fatal("Failed to set our GUC settings on the target connection, "
 						  "see above for details");
