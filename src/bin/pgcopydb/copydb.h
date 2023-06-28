@@ -19,7 +19,9 @@
 
 #define COMMON_GUC_SETTINGS \
 	{ "client_encoding", "'UTF-8'" }, \
-	{ "tcp_keepalives_idle", "'60s'" }
+	{ "tcp_keepalives_idle", "'60s'" }, \
+	{ "extra_float_digits", "3" }, \
+	{ "statement_timeout", "0" }
 
 /*
  * pgcopydb creates System V OS level objects such as message queues and

@@ -155,8 +155,9 @@ typedef enum
 /*
  * That's "x.yy.zz" or "xx.zz" or maybe a debian style version string such as:
  *  "13.8 (Debian 13.8-1.pgdg110+1)"
+ *  "16beta1 (Debian 16~beta1-2.pgdg+~20230605.2256.g3f1aaaa)"
  */
-#define PG_VERSION_STRING_MAX_LENGTH 45
+#define PG_VERSION_STRING_MAX_LENGTH 128
 
 /* notification processing */
 typedef bool (*ProcessNotificationFunction)(int notificationGroupId,
