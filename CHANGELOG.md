@@ -1,3 +1,90 @@
+### pgcopydb v0.12 (June 28, 2023) ###
+
+This is a bugfix release with a strong focus on our logical decoding client.
+The support for test_decoding UPDATE messages is improved, and a lot of bugs
+related to how we split JSON messages in separate files (same as Postgres
+WAL naming) have now been found and fixed.
+
+An important fix has been implemented with respect to how Postgres snapshots
+and logical decoding works. The replication command CREATE_REPLICATION_SLOT
+is able to export a snapshot but can not import one, which means that
+`pgcopydb snapshot` now has a new `--follow` command which creates a
+replication slot and exports a snapshot to re-use in the rest of the
+commands.
+
+### Added
+* Add table column list to schema.json. (#315)
+* Improve parsing of UPDATE messages from test_decoding. (#329)
+* Implement pgcopydb list databases. (#270)
+* Implement pgcopydb list progress --summary --json. (#235)
+* Implement the feature to log to file, with support for JSON. (#234)
+* Introduce new option --skip-vacuum. (#230)
+* Implement a --fail-fast option. (#222)
+
+### Changed
+* Set statement_timeout and lock_timeout to 0. (#344)
+* Have --skip-extensions also skip pre-existing schemas on the target. (#341)
+* Quote sequence names when checking for privileges. (#326)
+* Use dynamic memory for connection strings handling. (#323)
+* Introduce a new pgcopydb internal message: ENDPOS. (#321)
+* Remove dead code (hostname_from_uri). (#325)
+* Remove unnecessary reading for commit_lsn after reaching startpos. (#318)
+* Switch from semaphores to message queue to share workload. (#305)
+* Use JSON format for work-directory summary files. (#300)
+* At follow mode switch, skip empty transform queues. (#301)
+* When using --trace then enforce logging of the apply SQL statements. (#252)
+* Use dynamic memory for variable length schema parts. (#249)
+* Refrain from logging user data. (#227)
+* Improve logs. (#215)
+* Use OVERRIDING SYSTEM VALUE in INSERT statements in follow mode. (#214)
+* Create new process group for pgcopydb initialization. (#211)
+* Check that we have sequence privileges before selecting metadata. (#212)
+* Only create pgcopydb schema and table_size table when --cache is used. (#210)
+* Switch docs PDF building to xelatex engine. (#209)
+
+### Fixed
+* Fix pgcopydb stream cleanup. (#351)
+* Fix transform escape rules for SQL escape syntax, again. (#349)
+* Fix resuming the transform process. (#348)
+* Ensure startpos is updated when closing stream. (#345)
+* Skip importing snapshot we won't use, fix pgsql error handling. (#340)
+* Fix transform to SQL to escape string values. (#337)
+* Fix transforming UPDATE messages WHERE/SET clauses. (#333)
+* Fix schema queries for exclusion filters. (#314)
+* When applying CDC (logical replication), set role to replica. (#308)
+* Add unit testing coverage for "generated as identity" columns. (#309)
+* Fix file rotation issue during streaming. (#298)
+* Fix apply when file starts with non-begin/keepalive statements. (#304)
+* transform: Fix transformation to empty txn when first line is COMMIT. (#303)
+* Fix empty xid and timestamp for continued txn COMMIT messages. (#302)
+* Fix missing data of txns whose BEGIN LSN is less than consistent_point. (#295)
+* Filter out dropped columns (#294)
+* Use column names in COPY statements. (#290)
+* Fix how snapshot are exported when using CDC. (#279)
+* Refrain from early exits on signals when sending messages to queues. (#285)
+* Fix pgsql is_response_ok to accept also PGRES_COPY_BOTH. (#284)
+* Fix off-by-one in size of transform messages array. (#283)
+* Fix double precision out of range during COPY. (#281)
+* Fix the transition between replay operating modes. (#277)
+* Review and fix connection management for sentinel async updates. (#273)
+* Update pgcopydb sentinel's replay_lsn asynchronously. (#267)
+* Count pg_restore --list lines and dimension our array accordingly. (#268)
+* Fix a typo in docs (#261)
+* Assorted streaming fixes, including skipping of empty transactions. (#257)
+* Fix wal2json bytea values. (#253)
+* Transform empty transactions from the JSON to the SQL files. (#251)
+* Fix special characters in SQL queries. (#248)
+* Fix exclude-schema filtering to apply to pg_dump and pg_restore. (#247)
+* Fix Postgres catalog queries that implement sequences filtering. (#246)
+* Fix pgsql_state_is_connection_error. (#244)
+* Fix parsing --fail-fast option, which requires no argument. (#243)
+* Fix command line option log level increments (--verbose --notice). (#233)
+* Fix when we VACUUM ANALYZE. (#228)
+* Fix how we skip concurrent build of certain indexes. (#223)
+* Ensure clean-up of System V resources. (#216)
+* Fix the `pgcopydb list collations` SQL query. (#213)
+
+
 ### pgcopydb v0.11 (March 15, 2023) ###
 
 This release introduces support for the Postgres code logical decoding

@@ -19,7 +19,23 @@ RPM packages
 ------------
 
 The Postgres community repository for RPM packages is `yum.postgresql.org`__
-and does not include binary packages for pgcopydb at this time.
+and includes binary packages for pgcopydb. The way packages are built for
+RPM based systems means that the user needs to choose which version of
+Postgres pgcopydb was built with. In practice this doesn't have much
+importance, because ``libpq`` is meant to be compatible with many different
+Postgres server versions.
+
+After following the instructions for installing the repository, in this
+example in a Docker image for Rocky Linux (``docker run --rm -it
+rockylinux:9``), then we get the following::
+
+   # dnf search pgcopydb
+   ...
+   pgcopydb_11.x86_64 : Automate pg_dump | pg_restore between two running Postgres servers
+   pgcopydb_12.x86_64 : Automate pg_dump | pg_restore between two running Postgres servers
+   pgcopydb_13.x86_64 : Automate pg_dump | pg_restore between two running Postgres servers
+   pgcopydb_14.x86_64 : Automate pg_dump | pg_restore between two running Postgres servers
+   pgcopydb_15.x86_64 : Automate pg_dump | pg_restore between two running Postgres servers
 
 __ https://yum.postgresql.org
 
@@ -36,7 +52,7 @@ stable.
 
 To use this docker image::
 
-  $ docker run --rm -it dimitri/pgcopydb:v0.11 pgcopydb --version
+  $ docker run --rm -it dimitri/pgcopydb:v0.12 pgcopydb --version
 
 __ https://hub.docker.com/r/dimitri/pgcopydb#!
 

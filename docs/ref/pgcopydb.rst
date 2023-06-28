@@ -89,6 +89,7 @@ The ``pgcopydb help`` command lists all the supported sub-commands:
       parse-list  Parse pg_restore --list output from custom file
 
     pgcopydb list
+      databases    List databases
       extensions   List all the source extensions to copy
       collations   List all the source collations to copy
       tables       List all the source tables to copy data from
@@ -105,20 +106,10 @@ The ``pgcopydb help`` command lists all the supported sub-commands:
       prefetch   Stream JSON changes from the source database and transform them to SQL
       catchup    Apply prefetched changes from SQL files to the target database
       replay     Replay changes from the source to the target database, live
-    + create     Create resources needed for pgcopydb
-    + drop       Drop resources needed for pgcopydb
     + sentinel   Maintain a sentinel table on the source database
       receive    Stream changes from the source database
       transform  Transform changes from the source database into SQL commands
       apply      Apply changes from the source database into the target database
-
-    pgcopydb stream create
-      slot    Create a replication slot in the source database
-      origin  Create a replication origin in the target database
-
-    pgcopydb stream drop
-      slot    Drop a replication slot in the source database
-      origin  Drop a replication origin in the target database
 
     pgcopydb stream sentinel
       create  Create the sentinel table on the source database
