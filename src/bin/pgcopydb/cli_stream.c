@@ -915,6 +915,12 @@ cli_stream_transform(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	if (!stream_init_context(&specs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
 	/*
 	 * Do we use the file API, or the stream API?
 	 *

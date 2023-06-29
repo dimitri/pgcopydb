@@ -254,6 +254,105 @@ typedef enum
 
 
 /*
+ * StreamContext allows tracking the progress of the ld_stream module and is
+ * shared also with the ld_transform module, which has its own instance of a
+ * StreamContext to track its own progress.
+ */
+typedef struct StreamContext
+{
+	CDCPaths paths;
+	LogicalStreamMode mode;
+
+	ConnStrings *connStrings;
+
+	uint64_t startpos;
+	uint64_t endpos;
+
+	bool startposComputedFromJSON;
+	bool apply;
+
+	bool stdIn;
+	bool stdOut;
+
+	FILE *in;
+	FILE *out;
+
+	LogicalMessage currentMsg;
+	LogicalMessageMetadata metadata;
+	LogicalMessageMetadata previous;
+	LogicalTransactionStatement *stmt;
+
+	uint64_t maxWrittenLSN;     /* max LSN written so far to the JSON files */
+
+	uint64_t lastWriteTime;
+
+	/* transform needs some catalog lookups (pkey, type oid) */
+	SourceCatalog *catalog;
+
+	Queue *transformQueue;
+	uint32_t WalSegSz;
+	uint32_t timeline;
+
+	uint64_t firstLSN;
+	char partialFileName[MAXPGPATH];
+	char walFileName[MAXPGPATH];
+	char sqlFileName[MAXPGPATH];
+	FILE *jsonFile;
+	FILE *sqlFile;
+
+	StreamCounters counters;
+} StreamContext;
+
+
+/*
+ * StreamApplyContext allows tracking the apply progress.
+ */
+typedef struct StreamApplyContext
+{
+	CDCPaths paths;
+
+	/* target connection */
+	PGSQL pgsql;
+
+	/* source connection to publish sentinel updates */
+	PGSQL src;
+	bool sentinelQueryInProgress;
+	uint64_t sentinelSyncTime;
+
+	ConnStrings *connStrings;
+	char origin[BUFSIZE];
+
+	IdentifySystem system;      /* information about source database */
+	uint32_t WalSegSz;          /* information about source database */
+
+	uint64_t previousLSN;       /* register COMMIT LSN progress */
+
+	bool apply;                 /* from the pgcopydb sentinel */
+	uint64_t startpos;          /* from the pgcopydb sentinel */
+	uint64_t endpos;            /* finish applying when endpos is reached */
+	uint64_t replay_lsn;        /* from the pgcopydb sentinel */
+
+	bool reachedStartPos;
+	bool reachedEndPos;
+	bool transactionInProgress;
+	bool logSQL;
+
+	char wal[MAXPGPATH];
+	char sqlFileName[MAXPGPATH];
+} StreamApplyContext;
+
+
+typedef struct StreamContent
+{
+	char filename[MAXPGPATH];
+	int count;
+	char *buffer;
+	char **lines;                     /* malloc'ed area */
+	LogicalMessageMetadata *messages; /* malloc'ed area */
+} StreamContent;
+
+
+/*
  * SubProcess management utils.
  */
 typedef struct StreamSpecs StreamSpecs;
@@ -310,6 +409,9 @@ struct StreamSpecs
 	/* receive push json filenames to a queue for transform */
 	Queue transformQueue;
 
+	/* ld_stream and ld_transform needs their own StreamContext instance */
+	StreamContext private;
+
 	bool stdIn;                 /* read from stdin? */
 	bool stdOut;                /* (also) write to stdout? */
 
@@ -321,97 +423,6 @@ struct StreamSpecs
 	FILE *in;
 	FILE *out;
 };
-
-
-typedef struct StreamContext
-{
-	CDCPaths paths;
-	LogicalStreamMode mode;
-
-	ConnStrings *connStrings;
-
-	uint64_t startpos;
-	uint64_t endpos;
-
-	bool startposComputedFromJSON;
-	bool apply;
-
-	bool stdIn;
-	bool stdOut;
-
-	FILE *in;
-	FILE *out;
-
-	LogicalMessage currentMsg;
-	LogicalMessageMetadata metadata;
-	LogicalMessageMetadata previous;
-	LogicalTransactionStatement *stmt;
-
-	uint64_t maxWrittenLSN;     /* max LSN written so far to the JSON files */
-
-	uint64_t lastWriteTime;
-
-	/* transform needs some catalog lookups (pkey, type oid) */
-	SourceCatalog *catalog;
-
-	Queue *transformQueue;
-	uint32_t WalSegSz;
-	uint32_t timeline;
-
-	uint64_t firstLSN;
-	char partialFileName[MAXPGPATH];
-	char walFileName[MAXPGPATH];
-	char sqlFileName[MAXPGPATH];
-	FILE *jsonFile;
-	FILE *sqlFile;
-
-	StreamCounters counters;
-} StreamContext;
-
-
-typedef struct StreamApplyContext
-{
-	CDCPaths paths;
-
-	/* target connection */
-	PGSQL pgsql;
-
-	/* source connection to publish sentinel updates */
-	PGSQL src;
-	bool sentinelQueryInProgress;
-	uint64_t sentinelSyncTime;
-
-	ConnStrings *connStrings;
-	char origin[BUFSIZE];
-
-	IdentifySystem system;      /* information about source database */
-	uint32_t WalSegSz;          /* information about source database */
-
-	uint64_t previousLSN;       /* register COMMIT LSN progress */
-
-	bool apply;                 /* from the pgcopydb sentinel */
-	uint64_t startpos;          /* from the pgcopydb sentinel */
-	uint64_t endpos;            /* finish applying when endpos is reached */
-	uint64_t replay_lsn;        /* from the pgcopydb sentinel */
-
-	bool reachedStartPos;
-	bool reachedEndPos;
-	bool transactionInProgress;
-	bool logSQL;
-
-	char wal[MAXPGPATH];
-	char sqlFileName[MAXPGPATH];
-} StreamApplyContext;
-
-
-typedef struct StreamContent
-{
-	char filename[MAXPGPATH];
-	int count;
-	char *buffer;
-	char **lines;                     /* malloc'ed area */
-	LogicalMessageMetadata *messages; /* malloc'ed area */
-} StreamContent;
 
 
 bool stream_init_specs(StreamSpecs *specs,
@@ -430,7 +441,7 @@ bool stream_init_for_mode(StreamSpecs *specs, LogicalStreamMode mode);
 
 char * LogicalStreamModeToString(LogicalStreamMode mode);
 
-bool stream_init_context(StreamContext *privateContext, StreamSpecs *specs);
+bool stream_init_context(StreamSpecs *specs);
 
 bool startLogicalStreaming(StreamSpecs *specs);
 bool streamCheckResumePosition(StreamSpecs *specs);
@@ -506,7 +517,7 @@ bool stream_compute_pathnames(uint32_t WalSegSz,
 							  char *sqlFileName);
 
 bool stream_transform_stream(StreamSpecs *specs);
-bool stream_transform_resume(StreamSpecs *specs, StreamContext *privateContext);
+bool stream_transform_resume(StreamSpecs *specs);
 bool stream_transform_line(void *ctx, const char *line, bool *stop);
 
 bool stream_transform_write_message(StreamContext *privateContext,

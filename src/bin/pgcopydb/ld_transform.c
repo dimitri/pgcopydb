@@ -49,16 +49,9 @@ typedef struct TransformStreamCtx
 bool
 stream_transform_stream(StreamSpecs *specs)
 {
-	StreamContext *privateContext =
-		(StreamContext *) calloc(1, sizeof(StreamContext));
+	StreamContext *privateContext = &(specs->private);
 
-	if (privateContext == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	if (!stream_init_context(privateContext, specs))
+	if (!stream_init_context(specs))
 	{
 		/* errors have already been logged */
 		return false;
@@ -83,7 +76,7 @@ stream_transform_stream(StreamSpecs *specs)
 	log_debug("Source database wal_segment_size is %u", specs->WalSegSz);
 	log_debug("Source database timeline is %d", specs->system.timeline);
 
-	if (!stream_transform_resume(specs, privateContext))
+	if (!stream_transform_resume(specs))
 	{
 		log_error("Failed to resume streaming from %X/%X",
 				  LSN_FORMAT_ARGS(privateContext->startpos));
@@ -143,8 +136,10 @@ stream_transform_stream(StreamSpecs *specs)
  * existing on-disk.
  */
 bool
-stream_transform_resume(StreamSpecs *specs, StreamContext *privateContext)
+stream_transform_resume(StreamSpecs *specs)
 {
+	StreamContext *privateContext = &(specs->private);
+
 	char jsonFileName[MAXPGPATH] = { 0 };
 	char sqlFileName[MAXPGPATH] = { 0 };
 
@@ -516,6 +511,12 @@ stream_transform_from_queue(StreamSpecs *specs)
 	int errors = 0;
 	bool stop = false;
 
+	if (!stream_init_context(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	while (!stop)
 	{
 		QMessage mesg = { 0 };
@@ -701,6 +702,7 @@ stream_transform_send_stop(Queue *queue)
 bool
 stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 {
+	StreamContext *privateContext = &(specs->private);
 	StreamContent content = { 0 };
 	long size = 0L;
 
@@ -710,6 +712,11 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 
 	strlcpy(content.filename, jsonfilename, sizeof(content.filename));
 
+	/*
+	 * Read the JSON-lines file that we received from streaming logical
+	 * decoding messages, and parse the JSON messages into our internal
+	 * representation structure.
+	 */
 	if (!read_file(content.filename, &(content.buffer), &size))
 	{
 		/* errors have already been logged */
@@ -729,26 +736,6 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 	log_debug("stream_transform_file: read %d lines from \"%s\"",
 			  content.count,
 			  content.filename);
-
-	/*
-	 * Read the JSON-lines file that we received from streaming logical
-	 * decoding messages, and parse the JSON messages into our internal
-	 * representation structure.
-	 */
-	StreamContext *privateContext =
-		(StreamContext *) calloc(1, sizeof(StreamContext));
-
-	if (privateContext == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	if (!stream_init_context(privateContext, specs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
 
 	/*
 	 * The output is written to a temp/partial file which is renamed after
