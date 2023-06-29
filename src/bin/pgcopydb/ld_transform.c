@@ -117,7 +117,7 @@ stream_transform_stream(StreamSpecs *specs)
 			return false;
 		}
 
-		/* reset the jsonFile FILE * pointer to NULL, it's closed now */
+		/* reset the sqlFile FILE * pointer to NULL, it's closed now */
 		privateContext->sqlFile = NULL;
 
 		log_notice("Closed file \"%s\"", privateContext->sqlFileName);
@@ -833,6 +833,9 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 		log_error("Failed to write file \"%s\"", tempfilename);
 		return false;
 	}
+
+	/* reset the sqlFile FILE * pointer to NULL, it's closed now */
+	privateContext->sqlFile = NULL;
 
 	log_debug("stream_transform_file: mv \"%s\" \"%s\"",
 			  tempfilename, sqlfilename);
