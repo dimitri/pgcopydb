@@ -49,16 +49,9 @@ typedef struct TransformStreamCtx
 bool
 stream_transform_stream(StreamSpecs *specs)
 {
-	StreamContext *privateContext =
-		(StreamContext *) calloc(1, sizeof(StreamContext));
+	StreamContext *privateContext = &(specs->private);
 
-	if (privateContext == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	if (!stream_init_context(privateContext, specs))
+	if (!stream_init_context(specs))
 	{
 		/* errors have already been logged */
 		return false;
@@ -83,7 +76,7 @@ stream_transform_stream(StreamSpecs *specs)
 	log_debug("Source database wal_segment_size is %u", specs->WalSegSz);
 	log_debug("Source database timeline is %d", specs->system.timeline);
 
-	if (!stream_transform_resume(specs, privateContext))
+	if (!stream_transform_resume(specs))
 	{
 		log_error("Failed to resume streaming from %X/%X",
 				  LSN_FORMAT_ARGS(privateContext->startpos));
@@ -124,7 +117,7 @@ stream_transform_stream(StreamSpecs *specs)
 			return false;
 		}
 
-		/* reset the jsonFile FILE * pointer to NULL, it's closed now */
+		/* reset the sqlFile FILE * pointer to NULL, it's closed now */
 		privateContext->sqlFile = NULL;
 
 		log_notice("Closed file \"%s\"", privateContext->sqlFileName);
@@ -143,8 +136,10 @@ stream_transform_stream(StreamSpecs *specs)
  * existing on-disk.
  */
 bool
-stream_transform_resume(StreamSpecs *specs, StreamContext *privateContext)
+stream_transform_resume(StreamSpecs *specs)
 {
+	StreamContext *privateContext = &(specs->private);
+
 	char jsonFileName[MAXPGPATH] = { 0 };
 	char sqlFileName[MAXPGPATH] = { 0 };
 
@@ -516,6 +511,12 @@ stream_transform_from_queue(StreamSpecs *specs)
 	int errors = 0;
 	bool stop = false;
 
+	if (!stream_init_context(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	while (!stop)
 	{
 		QMessage mesg = { 0 };
@@ -701,6 +702,7 @@ stream_transform_send_stop(Queue *queue)
 bool
 stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 {
+	StreamContext *privateContext = &(specs->private);
 	StreamContent content = { 0 };
 	long size = 0L;
 
@@ -710,6 +712,11 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 
 	strlcpy(content.filename, jsonfilename, sizeof(content.filename));
 
+	/*
+	 * Read the JSON-lines file that we received from streaming logical
+	 * decoding messages, and parse the JSON messages into our internal
+	 * representation structure.
+	 */
 	if (!read_file(content.filename, &(content.buffer), &size))
 	{
 		/* errors have already been logged */
@@ -729,26 +736,6 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 	log_debug("stream_transform_file: read %d lines from \"%s\"",
 			  content.count,
 			  content.filename);
-
-	/*
-	 * Read the JSON-lines file that we received from streaming logical
-	 * decoding messages, and parse the JSON messages into our internal
-	 * representation structure.
-	 */
-	StreamContext *privateContext =
-		(StreamContext *) calloc(1, sizeof(StreamContext));
-
-	if (privateContext == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	if (!stream_init_context(privateContext, specs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
 
 	/*
 	 * The output is written to a temp/partial file which is renamed after
@@ -846,6 +833,9 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 		log_error("Failed to write file \"%s\"", tempfilename);
 		return false;
 	}
+
+	/* reset the sqlFile FILE * pointer to NULL, it's closed now */
+	privateContext->sqlFile = NULL;
 
 	log_debug("stream_transform_file: mv \"%s\" \"%s\"",
 			  tempfilename, sqlfilename);
@@ -1621,38 +1611,41 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 }
 
 
+#define FFORMAT(stream, fmt, ...) \
+	{ if (fformat(stream, fmt, __VA_ARGS__) == -1) { \
+		  log_error("Failed to write to stream: %m"); \
+		  return false; } \
+	}
+
 /*
  * stream_write_begin writes a BEGIN statement to the already open out stream.
  */
 bool
 stream_write_begin(FILE *out, LogicalTransaction *txn)
 {
-	int ret;
-
 	/* include commit_lsn only if the transaction has commitLSN */
 	if (txn->commitLSN != InvalidXLogRecPtr)
 	{
-		ret =
-			fformat(out,
-					"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\",\"commit_lsn\":\"%X/%X\"}\n",
-					OUTPUT_BEGIN,
-					(long long) txn->xid,
-					LSN_FORMAT_ARGS(txn->beginLSN),
-					txn->timestamp,
-					LSN_FORMAT_ARGS(txn->commitLSN));
+		FFORMAT(out,
+				"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\",\"commit_lsn\":\"%X/%X\"}\n",
+				OUTPUT_BEGIN,
+				(long long) txn->xid,
+				LSN_FORMAT_ARGS(txn->beginLSN),
+				txn->timestamp,
+				LSN_FORMAT_ARGS(txn->commitLSN));
 	}
 	else
 	{
-		ret =
-			fformat(out,
-					"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
-					OUTPUT_BEGIN,
-					(long long) txn->xid,
-					LSN_FORMAT_ARGS(txn->beginLSN),
-					txn->timestamp);
+		FFORMAT(out,
+				"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
+				OUTPUT_BEGIN,
+				(long long) txn->xid,
+				LSN_FORMAT_ARGS(txn->beginLSN),
+				txn->timestamp);
 	}
 
-	return ret != -1;
+	/* keep compiler happy */
+	return true;
 }
 
 
@@ -1663,15 +1656,14 @@ stream_write_begin(FILE *out, LogicalTransaction *txn)
 bool
 stream_write_commit(FILE *out, LogicalTransaction *txn)
 {
-	int ret =
-		fformat(out,
-				"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
-				OUTPUT_COMMIT,
-				(long long) txn->xid,
-				LSN_FORMAT_ARGS(txn->commitLSN),
-				txn->timestamp);
+	FFORMAT(out,
+			"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
+			OUTPUT_COMMIT,
+			(long long) txn->xid,
+			LSN_FORMAT_ARGS(txn->commitLSN),
+			txn->timestamp);
 
-	return ret != -1;
+	return true;
 }
 
 
@@ -1682,12 +1674,11 @@ stream_write_commit(FILE *out, LogicalTransaction *txn)
 bool
 stream_write_switchwal(FILE *out, LogicalMessageSwitchWAL *switchwal)
 {
-	int ret =
-		fformat(out, "%s{\"lsn\":\"%X/%X\"}\n",
-				OUTPUT_SWITCHWAL,
-				LSN_FORMAT_ARGS(switchwal->lsn));
+	FFORMAT(out, "%s{\"lsn\":\"%X/%X\"}\n",
+			OUTPUT_SWITCHWAL,
+			LSN_FORMAT_ARGS(switchwal->lsn));
 
-	return ret != -1;
+	return true;
 }
 
 
@@ -1698,13 +1689,12 @@ stream_write_switchwal(FILE *out, LogicalMessageSwitchWAL *switchwal)
 bool
 stream_write_keepalive(FILE *out, LogicalMessageKeepalive *keepalive)
 {
-	int ret =
-		fformat(out, "%s{\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
-				OUTPUT_KEEPALIVE,
-				LSN_FORMAT_ARGS(keepalive->lsn),
-				keepalive->timestamp);
+	FFORMAT(out, "%s{\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
+			OUTPUT_KEEPALIVE,
+			LSN_FORMAT_ARGS(keepalive->lsn),
+			keepalive->timestamp);
 
-	return ret != -1;
+	return true;
 }
 
 
@@ -1715,12 +1705,11 @@ stream_write_keepalive(FILE *out, LogicalMessageKeepalive *keepalive)
 bool
 stream_write_endpos(FILE *out, LogicalMessageEndpos *endpos)
 {
-	int ret =
-		fformat(out, "%s{\"lsn\":\"%X/%X\"}\n",
-				OUTPUT_ENDPOS,
-				LSN_FORMAT_ARGS(endpos->lsn));
+	FFORMAT(out, "%s{\"lsn\":\"%X/%X\"}\n",
+			OUTPUT_ENDPOS,
+			LSN_FORMAT_ARGS(endpos->lsn));
 
-	return ret != -1;
+	return true;
 }
 
 
@@ -1728,10 +1717,6 @@ stream_write_endpos(FILE *out, LogicalMessageEndpos *endpos)
  * stream_write_insert writes an INSERT statement to the already open out
  * stream.
  */
-#define FFORMAT(str, fmt, ...) \
-	{ if (fformat(str, fmt, __VA_ARGS__) == -1) { return false; } \
-	}
-
 bool
 stream_write_insert(FILE *out, LogicalMessageInsert *insert)
 {
@@ -2001,7 +1986,7 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 bool
 stream_write_truncate(FILE *out, LogicalMessageTruncate *truncate)
 {
-	fformat(out, "TRUNCATE ONLY %s.%s\n", truncate->nspname, truncate->relname);
+	FFORMAT(out, "TRUNCATE ONLY %s.%s\n", truncate->nspname, truncate->relname);
 
 	return true;
 }
@@ -2021,7 +2006,7 @@ stream_write_value(FILE *out, LogicalMessageValue *value)
 
 	if (value->isNull)
 	{
-		fformat(out, "NULL");
+		FFORMAT(out, "%s", "NULL");
 	}
 	else
 	{
@@ -2029,19 +2014,19 @@ stream_write_value(FILE *out, LogicalMessageValue *value)
 		{
 			case BOOLOID:
 			{
-				fformat(out, "'%s'", value->val.boolean ? "t" : "f");
+				FFORMAT(out, "'%s'", value->val.boolean ? "t" : "f");
 				break;
 			}
 
 			case INT8OID:
 			{
-				fformat(out, "%lld", (long long) value->val.int8);
+				FFORMAT(out, "%lld", (long long) value->val.int8);
 				break;
 			}
 
 			case FLOAT8OID:
 			{
-				fformat(out, "%g", value->val.float8);
+				FFORMAT(out, "%g", value->val.float8);
 				break;
 			}
 
@@ -2049,11 +2034,11 @@ stream_write_value(FILE *out, LogicalMessageValue *value)
 			{
 				if (value->isQuoted)
 				{
-					fformat(out, "%s", value->val.str);
+					FFORMAT(out, "%s", value->val.str);
 				}
 				else
 				{
-					fformat(out, "'%s'", value->val.str);
+					FFORMAT(out, "'%s'", value->val.str);
 				}
 
 				break;
@@ -2063,7 +2048,7 @@ stream_write_value(FILE *out, LogicalMessageValue *value)
 			{
 				if (value->isQuoted)
 				{
-					fformat(out, "%s", value->val.str);
+					FFORMAT(out, "%s", value->val.str);
 				}
 				else
 				{
@@ -2100,7 +2085,7 @@ stream_write_value(FILE *out, LogicalMessageValue *value)
 bool
 stream_write_sql_escape_string_constant(FILE *out, const char *str)
 {
-	fformat(out, "E'");
+	FFORMAT(out, "%s", "E'");
 
 	for (int i = 0; str[i] != '\0'; i++)
 	{
@@ -2108,50 +2093,50 @@ stream_write_sql_escape_string_constant(FILE *out, const char *str)
 		{
 			case '\b':
 			{
-				fformat(out, "\\b");
+				FFORMAT(out, "%s", "\\b");
 				break;
 			}
 
 			case '\f':
 			{
-				fformat(out, "\\f");
+				FFORMAT(out, "%s", "\\f");
 				break;
 			}
 
 			case '\n':
 			{
-				fformat(out, "\\n");
+				FFORMAT(out, "%s", "\\n");
 				break;
 			}
 
 			case '\r':
 			{
-				fformat(out, "\\r");
+				FFORMAT(out, "%s", "\\r");
 				break;
 			}
 
 			case '\t':
 			{
-				fformat(out, "\\t");
+				FFORMAT(out, "%s", "\\t");
 				break;
 			}
 
 			case '\'':
 			case '\\':
 			{
-				fformat(out, "\\%c", str[i]);
+				FFORMAT(out, "\\%c", str[i]);
 				break;
 			}
 
 			default:
 			{
-				fformat(out, "%c", str[i]);
+				FFORMAT(out, "%c", str[i]);
 				break;
 			}
 		}
 	}
 
-	fformat(out, "'");
+	FFORMAT(out, "%s", "'");
 
 	return true;
 }

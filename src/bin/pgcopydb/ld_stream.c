@@ -290,8 +290,10 @@ LogicalStreamModeToString(LogicalStreamMode mode)
  * stream_init_context initializes a LogicalStreamContext.
  */
 bool
-stream_init_context(StreamContext *privateContext, StreamSpecs *specs)
+stream_init_context(StreamSpecs *specs)
 {
+	StreamContext *privateContext = &(specs->private);
+
 	privateContext->endpos = specs->endpos;
 	privateContext->startpos = specs->startpos;
 	privateContext->startposComputedFromJSON = specs->startposComputedFromJSON;
@@ -369,15 +371,15 @@ startLogicalStreaming(StreamSpecs *specs)
 	}
 
 	LogicalStreamContext context = { 0 };
-	StreamContext privateContext = { 0 };
 
-	if (!stream_init_context(&privateContext, specs))
+	if (!stream_init_context(specs))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	context.private = (void *) &(privateContext);
+	StreamContext *privateContext = &(specs->private);
+	context.private = (void *) privateContext;
 
 	if (specs->stdOut)
 	{
@@ -451,8 +453,8 @@ startLogicalStreaming(StreamSpecs *specs)
 			log_warn("Streaming got interrupted at %X/%X "
 					 "after processing %lld message%s",
 					 LSN_FORMAT_ARGS(context.tracking->written_lsn),
-					 (long long) privateContext.counters.total,
-					 privateContext.counters.total > 0 ? "s" : "");
+					 (long long) privateContext->counters.total,
+					 privateContext->counters.total > 0 ? "s" : "");
 		}
 
 		/* sleep for one entire second before retrying */
