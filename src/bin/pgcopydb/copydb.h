@@ -230,6 +230,7 @@ typedef struct CopyDataSpec
 	bool roles;
 	bool skipLargeObjects;
 	bool skipExtensions;
+	bool skipCommentOnExtension;
 	bool skipCollations;
 	bool skipVacuum;
 	bool noRolesPasswords;

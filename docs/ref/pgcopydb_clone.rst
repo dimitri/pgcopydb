@@ -39,6 +39,7 @@ Postgres instance to the target Postgres instance.
      --no-comments              Do not output commands to restore comments
      --skip-large-objects       Skip copying large objects (blobs)
      --skip-extensions          Skip restoring extensions
+     --skip-ext-comments        Skip restoring COMMENT ON EXTENSION
      --skip-collations          Skip restoring collations
      --skip-vacuum              Skip running VACUUM ANALYZE
      --filters <filename>       Use the filters defined in <filename>
@@ -489,6 +490,11 @@ The following options are available to ``pgcopydb clone``:
   Because creating extensions require superuser, this allows a multi-steps
   approach where extensions are dealt with superuser privileges, and then
   the rest of the pgcopydb operations are done without superuser privileges.
+
+--skip-ext-comments
+
+  Skip copying COMMENT ON EXTENSION commands. This is implicit when using
+  --skip-extensions.
 
 --skip-collations
 

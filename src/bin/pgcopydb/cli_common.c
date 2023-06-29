@@ -694,6 +694,8 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "skip-blobs", no_argument, NULL, 'B' },
 		{ "skip-large-objects", no_argument, NULL, 'B' },
 		{ "skip-extensions", no_argument, NULL, 'e' },
+		{ "skip-ext-comment", no_argument, NULL, 'M' },
+		{ "skip-ext-comments", no_argument, NULL, 'M' },
 		{ "skip-collations", no_argument, NULL, 'l' },
 		{ "skip-vacuum", no_argument, NULL, 'U' },
 		{ "filter", required_argument, NULL, 'F' },
@@ -734,7 +736,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	}
 
 	while ((c = getopt_long(argc, argv,
-							"S:T:D:J:I:L:cOBelirRCN:xXCtfo:p:s:E:F:iVvdzqh",
+							"S:T:D:J:I:L:cOBemlirRCN:xXCtfo:p:s:E:F:iVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -869,6 +871,13 @@ cli_copy_db_getopts(int argc, char **argv)
 			case 'e':
 			{
 				options.skipExtensions = true;
+				log_trace("--skip-extensions");
+				break;
+			}
+
+			case 'M':
+			{
+				options.skipCommentOnExtension = true;
 				log_trace("--skip-extensions");
 				break;
 			}

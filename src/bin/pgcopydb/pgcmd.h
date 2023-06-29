@@ -33,6 +33,22 @@ typedef struct PostgresPaths
 } PostgresPaths;
 
 
+typedef enum
+{
+	ARCHIVE_TAG_KIND_UNKNOWN = 0,
+	ARCHIVE_TAG_KIND_ACL,
+	ARCHIVE_TAG_KIND_COMMENT
+} ArchiveCompositeTagKind;
+
+
+typedef enum
+{
+	ARCHIVE_TAG_TYPE_UNKNOWN = 0,
+	ARCHIVE_TAG_TYPE_SCHEMA,
+	ARCHIVE_TAG_TYPE_EXTENSION,
+	ARCHIVE_TAG_TYPE_OTHER
+} ArchiveCompositeTagType;
+
 /*
  * The Postgres pg_restore tool allows listing the contents of an archive. The
  * archive content is formatted the following way:
@@ -57,6 +73,10 @@ typedef struct ArchiveContentItem
 	uint32_t objectOid;
 	char desc[BUFSIZE];
 	char restoreListName[BUFSIZE];
+
+	bool isCompositeTag;
+	ArchiveCompositeTagKind tagKind;
+	ArchiveCompositeTagType tagType;
 } ArchiveContentItem;
 
 

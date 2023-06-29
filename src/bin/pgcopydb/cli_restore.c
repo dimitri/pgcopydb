@@ -107,6 +107,7 @@ static CommandLine restore_schema_parse_list_command =
 		"  --dir                Work directory to use\n"
 		"  --filters <filename> Use the filters defined in <filename>\n"
 		"  --skip-extensions    Skip restoring extensions\n"
+		"  --skip-ext-comments  Skip restoring COMMENT ON EXTENSION\n"
 		"  --restart            Allow restarting when temp files exist already\n"
 		"  --resume             Allow resuming operations after a failure\n"
 		"  --not-consistent     Allow taking a new snapshot on the source database\n",
@@ -151,6 +152,8 @@ cli_restore_schema_getopts(int argc, char **argv)
 		{ "filter", required_argument, NULL, 'F' },
 		{ "filters", required_argument, NULL, 'F' },
 		{ "skip-extensions", no_argument, NULL, 'e' },
+		{ "skip-ext-comment", no_argument, NULL, 'E' },
+		{ "skip-ext-comments", no_argument, NULL, 'E' },
 		{ "restart", no_argument, NULL, 'r' },
 		{ "resume", no_argument, NULL, 'R' },
 		{ "not-consistent", no_argument, NULL, 'C' },
@@ -174,7 +177,7 @@ cli_restore_schema_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:cOxXVvdzqh",
+	while ((c = getopt_long(argc, argv, "S:T:D:s:cOxXFeErRCNVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -243,6 +246,13 @@ cli_restore_schema_getopts(int argc, char **argv)
 			case 'e':
 			{
 				options.skipExtensions = true;
+				log_trace("--skip-extensions");
+				break;
+			}
+
+			case 'E':
+			{
+				options.skipCommentOnExtension = true;
 				log_trace("--skip-extensions");
 				break;
 			}

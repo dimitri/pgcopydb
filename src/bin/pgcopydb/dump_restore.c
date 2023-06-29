@@ -374,12 +374,28 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 	/* for each object in the list, comment when we already processed it */
 	for (int i = 0; i < contents.count; i++)
 	{
-		uint32_t oid = contents.array[i].objectOid;
-		uint32_t catOid = contents.array[i].catalogOid;
-		char *name = contents.array[i].restoreListName;
-		char *prefix = "";
+		ArchiveContentItem *item = &(contents.array[i]);
+		uint32_t oid = item->objectOid;
+		uint32_t catOid = item->catalogOid;
+		char *name = item->restoreListName;
 
-		if (catOid == PG_NAMESPACE_OID)
+		bool skip = false;
+
+		/*
+		 * Skip COMMENT ON EXTENSION when either of the option
+		 * --skip-extensions or --skip-ext-comment has been used.
+		 */
+		if ((specs->skipExtensions ||
+			 specs->skipCommentOnExtension) &&
+			item->isCompositeTag &&
+			item->tagKind == ARCHIVE_TAG_KIND_COMMENT &&
+			item->tagType == ARCHIVE_TAG_TYPE_EXTENSION)
+		{
+			skip = true;
+			log_notice("Skipping COMMENT ON EXTENSION \"%s\"", name);
+		}
+
+		if (!skip && catOid == PG_NAMESPACE_OID)
 		{
 			bool exists = false;
 
@@ -393,7 +409,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 
 			if (exists)
 			{
-				prefix = ";";
+				skip = true;
 
 				log_notice("Skipping already existing schema %u: %s",
 						   contents.array[i].objectOid,
@@ -401,9 +417,9 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 			}
 		}
 
-		if (copydb_objectid_has_been_processed_already(specs, oid))
+		if (!skip && copydb_objectid_has_been_processed_already(specs, oid))
 		{
-			prefix = ";";
+			skip = true;
 
 			log_notice("Skipping already processed dumpId %d: %s %u %s",
 					   contents.array[i].dumpId,
@@ -411,9 +427,10 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 					   contents.array[i].objectOid,
 					   contents.array[i].restoreListName);
 		}
-		else if (copydb_objectid_is_filtered_out(specs, oid, name))
+
+		if (!skip && copydb_objectid_is_filtered_out(specs, oid, name))
 		{
-			prefix = ";";
+			skip = true;
 
 			log_notice("Skipping filtered-out dumpId %d: %s %u %s",
 					   contents.array[i].dumpId,
@@ -423,7 +440,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 		}
 
 		appendPQExpBuffer(listContents, "%s%d; %u %u %s %s\n",
-						  prefix,
+						  skip ? ";" : "",
 						  contents.array[i].dumpId,
 						  contents.array[i].catalogOid,
 						  contents.array[i].objectOid,
