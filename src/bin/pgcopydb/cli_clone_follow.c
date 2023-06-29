@@ -38,6 +38,7 @@
 	"  --no-comments              Do not output commands to restore comments\n" \
 	"  --skip-large-objects       Skip copying large objects (blobs)\n" \
 	"  --skip-extensions          Skip restoring extensions\n" \
+	"  --skip-ext-comments        Skip restoring COMMENT ON EXTENSION\n" \
 	"  --skip-collations          Skip restoring collations\n" \
 	"  --skip-vacuum              Skip running VACUUM ANALYZE\n" \
 	"  --filters <filename>       Use the filters defined in <filename>\n" \

@@ -1102,6 +1102,8 @@ parse_archive_list(char *list, ArchiveContentArray *contents)
 				if (strcmp(pgRestoreDescriptionArray[i].str, "ACL") == 0 ||
 					strcmp(pgRestoreDescriptionArray[i].str, "COMMENT") == 0)
 				{
+					item->isCompositeTag = true;
+
 					/* ignore errors */
 					if (!parse_archive_acl_or_comment(ptr, item))
 					{
@@ -1166,11 +1168,15 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 	{
 		ptr += aclPrefixLen;
 		strlcpy(item->desc, "ACL", sizeof(item->desc));
+
+		item->tagKind = ARCHIVE_TAG_KIND_ACL;
 	}
 	else if (strncmp(ptr, commentPrefix, commentPrefixLen) == 0)
 	{
 		ptr += commentPrefixLen;
 		strlcpy(item->desc, "COMMENT", sizeof(item->desc));
+
+		item->tagKind = ARCHIVE_TAG_KIND_COMMENT;
 	}
 	else
 	{
@@ -1215,6 +1221,8 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 		sformat(item->restoreListName, sizeof(item->restoreListName),
 				"- %s",
 				nsp_rol_name);
+
+		item->tagType = ARCHIVE_TAG_TYPE_SCHEMA;
 	}
 	else if (strncmp(ptr, EXTENSION, EXTENSION_LEN) == 0)
 	{
@@ -1231,6 +1239,8 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 		sformat(item->restoreListName, sizeof(item->restoreListName),
 				"%s",
 				extname);
+
+		item->tagType = ARCHIVE_TAG_TYPE_EXTENSION;
 	}
 	else
 	{
@@ -1240,6 +1250,9 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 		log_debug("Failed to parse %s for %s: not supported yet",
 				  item->desc,
 				  ptr);
+
+		item->tagType = ARCHIVE_TAG_TYPE_OTHER;
+
 		return false;
 	}
 

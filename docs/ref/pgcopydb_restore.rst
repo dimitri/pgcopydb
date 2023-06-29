@@ -159,6 +159,7 @@ with a semi-colon character (`;`).
      --dir                Work directory to use
      --filters <filename> Use the filters defined in <filename>
      --skip-extensions    Skip restoring extensions
+     --skip-ext-comments  Skip restoring COMMENT ON EXTENSION
      --restart            Allow restarting when temp files exist already
      --resume             Allow resuming operations after a failure
      --not-consistent     Allow taking a new snapshot on the source database
@@ -247,6 +248,11 @@ The following options are available to ``pgcopydb restore schema``:
   Because creating extensions require superuser, this allows a multi-steps
   approach where extensions are dealt with superuser privileges, and then
   the rest of the pgcopydb operations are done without superuser privileges.
+
+--skip-ext-comments
+
+  Skip copying COMMENT ON EXTENSION commands. This is implicit when using
+  --skip-extensions.
 
 --restart
 
