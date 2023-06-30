@@ -38,6 +38,7 @@ GUC applySettings[] = {
 	{ NULL, NULL },
 };
 
+
 /*
  * stream_apply_catchup catches up with SQL files that have been prepared by
  * either the `pgcopydb stream prefetch` command.
@@ -47,62 +48,16 @@ stream_apply_catchup(StreamSpecs *specs)
 {
 	StreamApplyContext context = { 0 };
 
-	/* wait until the sentinel enables the apply process */
-	if (!stream_apply_wait_for_sentinel(specs, &context))
+	if (!stream_apply_setup(specs, &context))
+	{
+		log_error("Failed to setup for catchup, see above for details");
+		return false;
+	}
+
+	if (!context.apply)
 	{
 		/* errors have already been logged */
-		return false;
-	}
-
-	if (specs->system.timeline == 0)
-	{
-		if (!stream_read_context(&(specs->paths),
-								 &(specs->system),
-								 &(specs->WalSegSz)))
-		{
-			log_error("Failed to read the streaming context information "
-					  "from the source database, see above for details");
-			return false;
-		}
-	}
-
-	context.system = specs->system;
-	context.WalSegSz = specs->WalSegSz;
-
-	log_debug("Source database wal_segment_size is %u", context.WalSegSz);
-	log_debug("Source database timeline is %d", context.system.timeline);
-
-	if (!setupReplicationOrigin(&context,
-								&(specs->paths),
-								specs->connStrings,
-								specs->origin,
-								specs->endpos,
-								context.apply,
-								specs->logSQL))
-	{
-		log_error("Failed to setup replication origin on the target database");
-		return false;
-	}
-
-	if (context.endpos != InvalidXLogRecPtr)
-	{
-		if (context.endpos <= context.previousLSN)
-		{
-			log_info("Current endpos %X/%X was previously reached at %X/%X",
-					 LSN_FORMAT_ARGS(context.endpos),
-					 LSN_FORMAT_ARGS(context.previousLSN));
-
-			return true;
-		}
-
-		log_info("Catching-up with changes from LSN %X/%X up to endpos LSN %X/%X",
-				 LSN_FORMAT_ARGS(context.previousLSN),
-				 LSN_FORMAT_ARGS(context.endpos));
-	}
-	else
-	{
-		log_info("Catching-up with changes from LSN %X/%X",
-				 LSN_FORMAT_ARGS(context.previousLSN));
+		return true;
 	}
 
 	/*
@@ -204,6 +159,87 @@ stream_apply_catchup(StreamSpecs *specs)
 
 
 /*
+ * stream_apply_setup does the required setup for then starting to catchup or
+ * to replay changes from the SQL input (files or Unix PIPE) to the target
+ * database.
+ */
+bool
+stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
+{
+	/* wait until the sentinel enables the apply process */
+	if (!stream_apply_wait_for_sentinel(specs, context))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!context->apply)
+	{
+		log_error("Apply mode is still disabled, quitting now");
+		return true;
+	}
+
+	if (specs->system.timeline == 0)
+	{
+		if (!stream_read_context(&(specs->paths),
+								 &(specs->system),
+								 &(specs->WalSegSz)))
+		{
+			log_error("Failed to read the streaming context information "
+					  "from the source database, see above for details");
+			return false;
+		}
+	}
+
+	context->system = specs->system;
+	context->WalSegSz = specs->WalSegSz;
+
+	log_debug("Source database wal_segment_size is %u", context->WalSegSz);
+	log_debug("Source database timeline is %d", context->system.timeline);
+
+	if (!setupReplicationOrigin(context,
+								&(specs->paths),
+								specs->connStrings,
+								specs->origin,
+								specs->endpos,
+								context->apply,
+								specs->logSQL))
+	{
+		log_error("Failed to setup replication origin on the target database");
+		return false;
+	}
+
+	char *process =
+		specs->mode == STREAM_MODE_CATCHUP ? "Catchup-up with" : "Replaying";
+
+	if (context->endpos != InvalidXLogRecPtr)
+	{
+		if (context->endpos <= context->previousLSN)
+		{
+			log_info("Current endpos %X/%X was previously reached at %X/%X",
+					 LSN_FORMAT_ARGS(context->endpos),
+					 LSN_FORMAT_ARGS(context->previousLSN));
+
+			return true;
+		}
+
+		log_info("%s changes from LSN %X/%X up to endpos LSN %X/%X",
+				 process,
+				 LSN_FORMAT_ARGS(context->previousLSN),
+				 LSN_FORMAT_ARGS(context->endpos));
+	}
+	else
+	{
+		log_info("%s changes from LSN %X/%X",
+				 process,
+				 LSN_FORMAT_ARGS(context->previousLSN));
+	}
+
+	return true;
+}
+
+
+/*
  * stream_apply_wait_for_sentinel fetches the current pgcopydb sentinel values
  * on the source database: the catchup processing only gets to start when the
  * sentinel "apply" column has been set to true.
@@ -224,14 +260,17 @@ stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
 	/* skip logging the sentinel queries, we log_debug the values fetched */
 	src.logSQL = context->logSQL;
 
-	while (!sentinel.apply)
+	/* make sure context->apply is false before entering the loop */
+	context->apply = false;
+
+	while (!context->apply)
 	{
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
 			log_info("Apply process received a shutdown signal "
 					 "while waiting for apply mode, "
 					 "quitting now");
-			return false;
+			return true;
 		}
 
 		/* this reconnects on each loop iteration, every 10s by default */
@@ -244,19 +283,20 @@ stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
 			continue;
 		}
 
+		/* always update our context from the sentinel values */
+		context->startpos = sentinel.startpos;
+		context->endpos = sentinel.endpos;
+		context->apply = sentinel.apply;
+
+		context->previousLSN = sentinel.replay_lsn;
+
 		log_debug("startpos %X/%X endpos %X/%X apply %s",
-				  LSN_FORMAT_ARGS(sentinel.startpos),
-				  LSN_FORMAT_ARGS(sentinel.endpos),
-				  sentinel.apply ? "enabled" : "disabled");
+				  LSN_FORMAT_ARGS(context->startpos),
+				  LSN_FORMAT_ARGS(context->endpos),
+				  context->apply ? "enabled" : "disabled");
 
-		if (sentinel.apply)
+		if (context->apply)
 		{
-			context->startpos = sentinel.startpos;
-			context->endpos = sentinel.endpos;
-			context->apply = sentinel.apply;
-
-			context->previousLSN = sentinel.replay_lsn;
-
 			break;
 		}
 
