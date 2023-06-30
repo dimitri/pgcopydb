@@ -572,6 +572,12 @@ follow_start_prefetch(StreamSpecs *specs)
 		close_fd_or_exit(specs->pipe_ta[1]);
 	}
 
+	if (!stream_cleanup_context(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	bool success = startLogicalStreaming(specs);
 
 	close_fd_or_exit(specs->pipe_rt[1]);

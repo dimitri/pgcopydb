@@ -296,6 +296,7 @@ stream_init_context(StreamSpecs *specs)
 
 	privateContext->endpos = specs->endpos;
 	privateContext->startpos = specs->startpos;
+	privateContext->startposActionFromJSON = specs->startposActionFromJSON;
 	privateContext->startposComputedFromJSON = specs->startposComputedFromJSON;
 
 	privateContext->mode = specs->mode;
@@ -560,17 +561,23 @@ streamCheckResumePosition(StreamSpecs *specs)
 	}
 	else
 	{
+		/* lines are counted starting at zero */
+		int lastLineNb = latestStreamedContent.count - 1;
 		LogicalMessageMetadata *latest =
-			&(latestStreamedContent.messages[latestStreamedContent.count - 1]);
+			&(latestStreamedContent.messages[lastLineNb]);
 
 		specs->startpos = latest->lsn;
 		specs->startposComputedFromJSON = true;
+		specs->startposActionFromJSON = latest->action;
 
 		log_info("Resuming streaming at LSN %X/%X "
 				 "from last message read in JSON file \"%s\", line %d",
 				 LSN_FORMAT_ARGS(specs->startpos),
 				 latestStreamedContent.filename,
 				 latestStreamedContent.count - 1);
+
+		char *latestMessage = latestStreamedContent.lines[lastLineNb];
+		log_trace("Last message read was: %s", latestMessage);
 	}
 
 	bool flush = false;
@@ -1502,12 +1509,19 @@ prepareMessageMetadataFromContext(LogicalStreamContext *context)
 	/*
 	 * When streaming is resumed, transactions are sent in full even if we
 	 * wrote and flushed a transaction partially in a previous command.
+	 *
+	 * Also the same LSN might be assigned to a BEGIN message, a COMMIT
+	 * message, and a KEEPALIVE message. Avoid skipping what looks like the
+	 * same message as the latest flushed in our JSON file when it's actually a
+	 * new message.
 	 */
 	if (privateContext->startposComputedFromJSON &&
-		metadata->lsn <= privateContext->startpos)
+		(metadata->lsn < privateContext->startpos ||
+		 (metadata->lsn == privateContext->startpos &&
+		  metadata->action == privateContext->startposActionFromJSON)))
 	{
 		metadata->filterOut = true;
-		log_trace("Skipping write for action %c for XID %u at LSN %X/%X: "
+		log_debug("Skipping write for action %c for XID %u at LSN %X/%X: "
 				  "startpos %X/%X not been reached",
 				  metadata->action,
 				  metadata->xid,
