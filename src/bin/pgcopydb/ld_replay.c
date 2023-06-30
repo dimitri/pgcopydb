@@ -46,66 +46,16 @@ stream_apply_replay(StreamSpecs *specs)
 		return false;
 	}
 
-	/*
-	 * Even though we're using the "live streaming" mode here, ensure that
-	 * we're good to go: the pgcyopdb sentinel table is expected to have
-	 * allowed applying changes.
-	 */
-	if (!stream_apply_wait_for_sentinel(specs, context))
+	if (!stream_apply_setup(specs, context))
+	{
+		log_error("Failed to setup for catchup, see above for details");
+		return false;
+	}
+
+	if (!context->apply)
 	{
 		/* errors have already been logged */
-		return false;
-	}
-
-	if (specs->system.timeline == 0)
-	{
-		if (!stream_read_context(&(specs->paths),
-								 &(specs->system),
-								 &(specs->WalSegSz)))
-		{
-			log_error("Failed to read the streaming context information "
-					  "from the source database, see above for details");
-			return false;
-		}
-	}
-
-	context->system = specs->system;
-	context->WalSegSz = specs->WalSegSz;
-
-	log_debug("Source database wal_segment_size is %u", context->WalSegSz);
-	log_debug("Source database timeline is %d", context->system.timeline);
-
-	if (!setupReplicationOrigin(context,
-								&(specs->paths),
-								specs->connStrings,
-								specs->origin,
-								specs->endpos,
-								context->apply,
-								specs->logSQL))
-	{
-		log_error("Failed to setup replication origin on the target database");
-		return false;
-	}
-
-	if (context->endpos != InvalidXLogRecPtr)
-	{
-		if (context->endpos <= context->previousLSN)
-		{
-			log_info("Current endpos %X/%X was previously reached at %X/%X",
-					 LSN_FORMAT_ARGS(context->endpos),
-					 LSN_FORMAT_ARGS(context->previousLSN));
-
-			return true;
-		}
-
-		log_info("Replaying changes from LSN %X/%X up to endpos LSN %X/%X",
-				 LSN_FORMAT_ARGS(context->previousLSN),
-				 LSN_FORMAT_ARGS(context->endpos));
-	}
-	else
-	{
-		log_info("Replaying changes from LSN %X/%X",
-				 LSN_FORMAT_ARGS(context->previousLSN));
+		return true;
 	}
 
 	/*

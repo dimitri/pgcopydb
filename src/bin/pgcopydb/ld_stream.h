@@ -588,6 +588,8 @@ bool parseWal2jsonMessage(StreamContext *privateContext,
 /* ld_apply.c */
 bool stream_apply_catchup(StreamSpecs *specs);
 
+bool stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context);
+
 bool stream_apply_wait_for_sentinel(StreamSpecs *specs,
 									StreamApplyContext *context);
 

@@ -291,6 +291,12 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 			return false;
 		}
 
+		if (asked_to_quit)
+		{
+			log_error("Main follow process received SIGQUIT, exiting");
+			return false;
+		}
+
 		bool done = false;
 
 		if (!follow_reached_endpos(streamSpecs, &done))
