@@ -563,21 +563,50 @@ streamCheckResumePosition(StreamSpecs *specs)
 	{
 		/* lines are counted starting at zero */
 		int lastLineNb = latestStreamedContent.count - 1;
-		LogicalMessageMetadata *latest =
-			&(latestStreamedContent.messages[lastLineNb]);
+
+		LogicalMessageMetadata *messages = latestStreamedContent.messages;
+		LogicalMessageMetadata *latest = &(messages[lastLineNb]);
+
+		/*
+		 * We could have several messages following each-other with the same
+		 * LSN, typically a sequence like:
+		 *
+		 *  {"action":"I","xid":"492","lsn":"0/244BEE0", ...}
+		 *  {"action":"K","lsn":"0/244BEE0", ...}
+		 *  {"action":"E","lsn":"0/244BEE0"}
+		 *
+		 * In that case we want to remember the latest message action as being
+		 * INSERT rather than ENDPOS.
+		 */
+		int lineNb = lastLineNb;
+
+		for (; lineNb > 0; lineNb--)
+		{
+			LogicalMessageMetadata *previous = &(messages[lineNb]);
+
+			if (previous->lsn == latest->lsn)
+			{
+				latest = previous;
+			}
+			else
+			{
+				break;
+			}
+		}
 
 		specs->startpos = latest->lsn;
 		specs->startposComputedFromJSON = true;
 		specs->startposActionFromJSON = latest->action;
 
 		log_info("Resuming streaming at LSN %X/%X "
-				 "from last message read in JSON file \"%s\", line %d",
+				 "from first message with that LSN read in JSON file \"%s\", "
+				 "line %d",
 				 LSN_FORMAT_ARGS(specs->startpos),
 				 latestStreamedContent.filename,
-				 latestStreamedContent.count - 1);
+				 lineNb);
 
-		char *latestMessage = latestStreamedContent.lines[lastLineNb];
-		log_trace("Last message read was: %s", latestMessage);
+		char *latestMessage = latestStreamedContent.lines[lineNb];
+		log_fatal("Last message read was: %s", latestMessage);
 	}
 
 	bool flush = false;
