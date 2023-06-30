@@ -159,11 +159,13 @@ stream_transform_resume(StreamSpecs *specs)
 			   sqlFileName);
 
 	/*
-	 * If the target SQL file already exists on-disk, make sure to read the
-	 * JSON file again now. The previous round of streaming might have stopped
-	 * at an endpos that fits in the middle of a transaction.
+	 * If the JSON file already exists on-disk, make sure to read it file again
+	 * now. The previous round of streaming might have stopped at an endpos
+	 * that fits in the middle of a transaction.
+	 *
+	 * We can think about this as "cache invalidation" of the SQL file on-disk.
 	 */
-	if (file_exists(sqlFileName))
+	if (file_exists(jsonFileName))
 	{
 		if (!stream_transform_file(specs, jsonFileName, sqlFileName))
 		{
