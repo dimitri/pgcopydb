@@ -606,7 +606,7 @@ streamCheckResumePosition(StreamSpecs *specs)
 				 lineNb);
 
 		char *latestMessage = latestStreamedContent.lines[lineNb];
-		log_fatal("Last message read was: %s", latestMessage);
+		log_notice("Resume replication from latest message: %s", latestMessage);
 	}
 
 	bool flush = false;
