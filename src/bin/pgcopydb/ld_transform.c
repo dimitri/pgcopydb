@@ -765,6 +765,9 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 	LogicalMessage *currentMsg = &(privateContext->currentMsg);
 	LogicalMessageMetadata *metadata = &(privateContext->metadata);
 
+	/* we skip KEEPALIVE message in the beginning of the file */
+	bool firstMessage = true;
+
 	for (int i = 0; i < content.count; i++)
 	{
 		char *message = content.lines[i];
@@ -787,7 +790,7 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 		 * Our SQL file might begin with DML messages, in that case it's a
 		 * transaction that continues over a file boundary.
 		 */
-		if (i == 0 &&
+		if (firstMessage &&
 			(metadata->action == STREAM_ACTION_COMMIT ||
 			 metadata->action == STREAM_ACTION_INSERT ||
 			 metadata->action == STREAM_ACTION_UPDATE ||
@@ -827,6 +830,15 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 			log_error("Failed to transform and flush the current message, "
 					  "see above for details");
 			return false;
+		}
+
+		/*
+		 * skip KEEPALIVE messages at beginning of files in our continued
+		 * transaction logic
+		 */
+		if (firstMessage && metadata->action != STREAM_ACTION_KEEPALIVE)
+		{
+			firstMessage = false;
 		}
 	}
 

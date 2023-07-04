@@ -296,6 +296,7 @@ stream_init_context(StreamSpecs *specs)
 
 	privateContext->endpos = specs->endpos;
 	privateContext->startpos = specs->startpos;
+	privateContext->startposActionFromJSON = specs->startposActionFromJSON;
 	privateContext->startposComputedFromJSON = specs->startposComputedFromJSON;
 
 	privateContext->mode = specs->mode;
@@ -560,17 +561,52 @@ streamCheckResumePosition(StreamSpecs *specs)
 	}
 	else
 	{
-		LogicalMessageMetadata *latest =
-			&(latestStreamedContent.messages[latestStreamedContent.count - 1]);
+		/* lines are counted starting at zero */
+		int lastLineNb = latestStreamedContent.count - 1;
+
+		LogicalMessageMetadata *messages = latestStreamedContent.messages;
+		LogicalMessageMetadata *latest = &(messages[lastLineNb]);
+
+		/*
+		 * We could have several messages following each-other with the same
+		 * LSN, typically a sequence like:
+		 *
+		 *  {"action":"I","xid":"492","lsn":"0/244BEE0", ...}
+		 *  {"action":"K","lsn":"0/244BEE0", ...}
+		 *  {"action":"E","lsn":"0/244BEE0"}
+		 *
+		 * In that case we want to remember the latest message action as being
+		 * INSERT rather than ENDPOS.
+		 */
+		int lineNb = lastLineNb;
+
+		for (; lineNb > 0; lineNb--)
+		{
+			LogicalMessageMetadata *previous = &(messages[lineNb]);
+
+			if (previous->lsn == latest->lsn)
+			{
+				latest = previous;
+			}
+			else
+			{
+				break;
+			}
+		}
 
 		specs->startpos = latest->lsn;
 		specs->startposComputedFromJSON = true;
+		specs->startposActionFromJSON = latest->action;
 
 		log_info("Resuming streaming at LSN %X/%X "
-				 "from last message read in JSON file \"%s\", line %d",
+				 "from first message with that LSN read in JSON file \"%s\", "
+				 "line %d",
 				 LSN_FORMAT_ARGS(specs->startpos),
 				 latestStreamedContent.filename,
-				 latestStreamedContent.count - 1);
+				 lineNb);
+
+		char *latestMessage = latestStreamedContent.lines[lineNb];
+		log_notice("Resume replication from latest message: %s", latestMessage);
 	}
 
 	bool flush = false;
@@ -1502,12 +1538,19 @@ prepareMessageMetadataFromContext(LogicalStreamContext *context)
 	/*
 	 * When streaming is resumed, transactions are sent in full even if we
 	 * wrote and flushed a transaction partially in a previous command.
+	 *
+	 * Also the same LSN might be assigned to a BEGIN message, a COMMIT
+	 * message, and a KEEPALIVE message. Avoid skipping what looks like the
+	 * same message as the latest flushed in our JSON file when it's actually a
+	 * new message.
 	 */
 	if (privateContext->startposComputedFromJSON &&
-		metadata->lsn <= privateContext->startpos)
+		(metadata->lsn < privateContext->startpos ||
+		 (metadata->lsn == privateContext->startpos &&
+		  metadata->action == privateContext->startposActionFromJSON)))
 	{
 		metadata->filterOut = true;
-		log_trace("Skipping write for action %c for XID %u at LSN %X/%X: "
+		log_debug("Skipping write for action %c for XID %u at LSN %X/%X: "
 				  "startpos %X/%X not been reached",
 				  metadata->action,
 				  metadata->xid,

@@ -267,9 +267,10 @@ typedef struct StreamContext
 
 	uint64_t startpos;
 	uint64_t endpos;
+	bool apply;
 
 	bool startposComputedFromJSON;
-	bool apply;
+	StreamAction startposActionFromJSON;
 
 	bool stdIn;
 	bool stdOut;
@@ -391,6 +392,7 @@ struct StreamSpecs
 	uint64_t endpos;
 
 	bool startposComputedFromJSON;
+	StreamAction startposActionFromJSON;
 
 	LogicalStreamMode mode;
 
