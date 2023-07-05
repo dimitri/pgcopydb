@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <math.h>
 #include <sys/select.h>
 #include <sys/time.h>
 #include <sys/wait.h>
@@ -2040,7 +2041,14 @@ stream_write_value(FILE *out, LogicalMessageValue *value)
 
 			case FLOAT8OID:
 			{
-				FFORMAT(out, "%g", value->val.float8);
+				if (fmod(value->val.float8, 1) == 0.0)
+				{
+					FFORMAT(out, "%lld", (long long) value->val.float8);
+				}
+				else
+				{
+					FFORMAT(out, "%f", value->val.float8);
+				}
 				break;
 			}
 
