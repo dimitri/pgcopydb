@@ -2040,7 +2040,7 @@ stream_write_value(FILE *out, LogicalMessageValue *value)
 
 			case FLOAT8OID:
 			{
-				FFORMAT(out, "%g", value->val.float8);
+				FFORMAT(out, "%f", value->val.float8);
 				break;
 			}
 
