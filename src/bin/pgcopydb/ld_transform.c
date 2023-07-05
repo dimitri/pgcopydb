@@ -377,7 +377,9 @@ stream_transform_message(StreamContext *privateContext, char *message)
 
 	if (!parseMessage(privateContext, message, json))
 	{
-		log_error("Failed to parse JSON message: %s", message);
+		log_error("Failed to parse JSON message: %.1024s%s",
+				  message,
+				  strlen(message) > 1024 ? "..." : "");
 		json_value_free(json);
 		return false;
 	}
@@ -937,7 +939,7 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 		}
 		else
 		{
-			log_debug("%s", message);
+			log_debug("%.1024s", message);
 			log_error("BUG: logical message %c received with !isTransaction",
 					  metadata->action);
 			return false;
