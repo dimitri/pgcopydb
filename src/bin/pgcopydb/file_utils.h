@@ -58,6 +58,7 @@ bool move_file(char *sourcePath, char *destinationPath);
 bool duplicate_file(char *sourcePath, char *destinationPath);
 bool create_symbolic_link(char *sourcePath, char *targetPath);
 
+bool write_to_stream(FILE *stream, const char *buffer, size_t size);
 bool read_from_stream(FILE *stream, ReadFromStreamContext *context);
 
 void path_in_same_directory(const char *basePath,

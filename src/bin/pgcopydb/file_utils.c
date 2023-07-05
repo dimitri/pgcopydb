@@ -374,6 +374,41 @@ read_file_internal(FILE *fileStream,
 
 
 /*
+ * write_to_stream writes given buffer of given size to the given stream. It
+ * loops around calling write(2) if necessary: not all the bytes of the buffer
+ * might be sent in a single call.
+ */
+bool
+write_to_stream(FILE *stream, const char *buffer, size_t size)
+{
+	long bytes_left = size;
+	long bytes_written = 0;
+
+	while (bytes_left > 0)
+	{
+		int ret;
+
+		ret = fwrite(buffer + bytes_written,
+					 sizeof(char),
+					 bytes_left,
+					 stream);
+
+		if (ret < 0)
+		{
+			log_error("Failed to write %ld bytes: %m", bytes_left);
+			return false;
+		}
+
+		/* Write was successful, advance our position */
+		bytes_written += ret;
+		bytes_left -= ret;
+	}
+
+	return true;
+}
+
+
+/*
  * read_from_stream reads lines from an input stream, such as a Unix Pipe, and
  * for each line read calls the provided context->callback function with its
  * own private context as an argument.

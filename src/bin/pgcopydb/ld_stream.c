@@ -757,29 +757,12 @@ stream_write_json(LogicalStreamContext *context, bool previous)
 	}
 
 	/* then add the logical output plugin data, inside our own JSON format */
-	long bytes_left = buffer->len;
-	long bytes_written = 0;
-
-	while (bytes_left > 0)
+	if (!write_to_stream(privateContext->jsonFile, buffer->data, buffer->len))
 	{
-		int ret;
-
-		ret = fwrite(buffer->data + bytes_written,
-					 sizeof(char),
-					 bytes_left,
-					 privateContext->jsonFile);
-
-		if (ret < 0)
-		{
-			log_error("Failed to write %ld bytes to file \"%s\": %m",
-					  bytes_left,
-					  privateContext->partialFileName);
-			return false;
-		}
-
-		/* Write was successful, advance our position */
-		bytes_written += ret;
-		bytes_left -= ret;
+		log_error("Failed to write to file \"%s\": see above for details",
+				  privateContext->partialFileName);
+		destroyPQExpBuffer(buffer);
+		return false;
 	}
 
 	/* time to update our lastWriteTime mark */
@@ -798,17 +781,13 @@ stream_write_json(LogicalStreamContext *context, bool previous)
 	 */
 	if (privateContext->stdOut)
 	{
-		int ret =
-			fwrite(buffer->data, sizeof(char), buffer->len, privateContext->out);
-
-		if (ret != buffer->len)
+		if (!write_to_stream(privateContext->out, buffer->data, buffer->len))
 		{
-			log_error("Failed to write JSON message (%ld bytes) to stdout: %m",
-					  buffer->len);
+			log_error("Failed to write JSON message to stdout: "
+					  "see above for details");
 			log_debug("JSON message: %s", buffer->data);
 
 			destroyPQExpBuffer(buffer);
-
 			return false;
 		}
 
@@ -818,6 +797,7 @@ stream_write_json(LogicalStreamContext *context, bool previous)
 			if (fflush(privateContext->out) != 0)
 			{
 				log_error("Failed to flush standard output: %m");
+				destroyPQExpBuffer(buffer);
 				return false;
 			}
 		}
@@ -872,9 +852,11 @@ stream_write_internal_message(LogicalStreamContext *context,
 						 LSN_FORMAT_ARGS(message->lsn));
 	}
 
-	if (fformat(privateContext->jsonFile, "%s", buffer) == -1)
+	if (!write_to_stream(privateContext->jsonFile, buffer, buflen))
 	{
-		log_error("Failed to write internal message: %s", buffer);
+		log_error("Failed to write internal message: %.1024s%s",
+				  buffer,
+				  buflen > 1024 ? "..." : "");
 		return false;
 	}
 
@@ -893,14 +875,13 @@ stream_write_internal_message(LogicalStreamContext *context,
 	 */
 	if (privateContext->stdOut)
 	{
-		int ret =
-			fwrite(buffer, sizeof(char), buflen, privateContext->out);
-
-		if (ret != buflen)
+		if (!write_to_stream(privateContext->out, buffer, buflen))
 		{
 			log_error("Failed to write JSON message (%ld bytes) to stdout: %m",
 					  buflen);
-			log_debug("JSON message: %s", buffer);
+			log_debug("JSON message: %.1024s%s",
+					  buffer,
+					  buflen > 1024 ? "..." : "");
 			return false;
 		}
 	}
