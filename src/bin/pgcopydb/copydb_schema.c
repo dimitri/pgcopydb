@@ -983,6 +983,12 @@ copydb_prepare_target_catalog(CopyDataSpec *specs)
 {
 	PGSQL dst = { 0 };
 
+	if (specs->connStrings.target_pguri == NULL)
+	{
+		log_notice("Skipping target catalog preparation");
+		return true;
+	}
+
 	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_SOURCE))
 	{
 		/* errors have already been logged */

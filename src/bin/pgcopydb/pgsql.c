@@ -2607,15 +2607,14 @@ getSequenceValue(void *ctx, PGresult *result)
 	}
 
 	/* 2. is_called */
-	value = PQgetvalue(result, 0, 1);
-
-	if (value == NULL || ((*value != 't') && (*value != 'f')))
+	if (PQgetisnull(result, 0, 1))
 	{
-		log_error("Invalid is_called value \"%s\"", value);
+		log_error("Invalid sequence is_called value: NULL");
 		++errors;
 	}
 	else
 	{
+		value = PQgetvalue(result, 0, 1);
 		context->isCalled = (*value) == 't';
 	}
 
