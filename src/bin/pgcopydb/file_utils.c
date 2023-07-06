@@ -500,7 +500,8 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 				availableBytes = 128 * 1024;
 			}
 
-			char *buf = calloc(availableBytes, sizeof(char));
+			/* add 1 byte for the terminating \0 */
+			char *buf = calloc(availableBytes + 1, sizeof(char));
 			size_t bytes = read(context->fd, buf, availableBytes);
 
 			if (bytes == -1)
@@ -515,6 +516,9 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 				doneReading = true;
 				continue;
 			}
+
+			/* ensure properly terminated C-string now */
+			buf[bytes] = '\0';
 
 			/* if the buffer doesn't terminate with \n it's a partial read */
 			bool partialRead = buf[bytes - 1] != '\n';
