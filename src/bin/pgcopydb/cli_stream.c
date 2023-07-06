@@ -245,7 +245,7 @@ cli_stream_getopts(int argc, char **argv)
 							  "see above for details.");
 					++errors;
 				}
-				strlcpy(options.connStrings.source_pguri, optarg, MAXCONNINFO);
+				options.connStrings.source_pguri = pg_strdup(optarg);
 				log_trace("--source %s", options.connStrings.source_pguri);
 				break;
 			}
@@ -258,7 +258,7 @@ cli_stream_getopts(int argc, char **argv)
 							  "see above for details.");
 					++errors;
 				}
-				strlcpy(options.connStrings.target_pguri, optarg, MAXCONNINFO);
+				options.connStrings.target_pguri = pg_strdup(optarg);
 				log_trace("--target %s", options.connStrings.target_pguri);
 				break;
 			}
