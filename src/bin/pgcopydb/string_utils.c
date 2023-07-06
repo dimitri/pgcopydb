@@ -518,7 +518,8 @@ countLines(char *buffer)
 
 		if (newLinePtr == NULL)
 		{
-			if (strlen(currentLine) > 0)
+			/* strlen(currentLine) > 0 */
+			if (*currentLine != '\0')
 			{
 				++lineNumber;
 			}
@@ -561,7 +562,8 @@ splitLines(char *buffer, char **linesArray, int size)
 
 		if (newLinePtr == NULL)
 		{
-			if (strlen(currentLine) > 0)
+			/* strlen(currentLine) > 0 */
+			if (*currentLine != '\0')
 			{
 				linesArray[lineNumber++] = currentLine;
 			}

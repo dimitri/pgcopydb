@@ -27,8 +27,14 @@ done
 # allow replaying changes now that pgcopydb follow command is running
 pgcopydb stream sentinel set apply
 
+# allow the catchup phase to finish, ensure the following data is streamed
+sleep 2
+
 # then insert another batch of 10 rows (21..30)
 psql -v a=21 -v b=30 -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
+
+# also insert data that won't fit in a single Unix PIPE buffer
+psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml-bufsize.sql
 
 # grab the current LSN, it's going to be our streaming end position
 lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_flush_lsn()'`

@@ -4,6 +4,7 @@
  */
 
 #include <limits.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -12,7 +13,7 @@
 #endif
 
 #include "postgres_fe.h"
-
+#include "pqexpbuffer.h"
 #include "snprintf.h"
 
 #include "cli_root.h"
@@ -424,6 +425,9 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 
 	bool doneReading = false;
 
+	uint64_t multiPartCount = 0;
+	PQExpBuffer multiPartBuffer = NULL;
+
 	while (!doneReading)
 	{
 		/* feof returns non-zero when the end-of-file indicator is set */
@@ -485,20 +489,20 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 		if (FD_ISSET(context->fd, &readFileDescriptorSet))
 		{
 			/*
-			 * Allocate a 128 MB string to receive data from the input stream.
-			 *
-			 * TODO: That's a large allocation but should allow us to accept
-			 * logical decoding traffic. The general case would be to loop over
-			 * memory chunks and then split and re-join chunks into JSON lines,
-			 * or use a streaming JSON parsing API.
-			 *
-			 * Also, because we switch the output stream of producing processes
-			 * to line buffered, this only should become a problem when a
-			 * single JSON message is more than the 128 MB we allocate here.
+			 * Typical Unix PIPE buffer size is 64kB. Make sure it fits in our
+			 * buffer.
 			 */
-			size_t s = 128 * 1024 * 1024;
-			char *buf = calloc(s + 1, sizeof(char));
-			size_t bytes = read(context->fd, buf, s);
+			size_t availableBytes = 0;
+
+			if (ioctl(context->fd, FIONREAD, &availableBytes) == -1)
+			{
+				log_debug("Failed to request current PIPE buffer size: %m");
+				availableBytes = 128 * 1024;
+			}
+
+			/* add 1 byte for the terminating \0 */
+			char *buf = calloc(availableBytes + 1, sizeof(char));
+			size_t bytes = read(context->fd, buf, availableBytes);
 
 			if (bytes == -1)
 			{
@@ -512,30 +516,21 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 				doneReading = true;
 				continue;
 			}
-			else if (bytes == s)
-			{
-				char bytesPretty[BUFSIZE] = { 0 };
-				char limitPretty[BUFSIZE] = { 0 };
 
-				(void) pretty_print_bytes(bytesPretty, BUFSIZE, bytes);
-				(void) pretty_print_bytes(limitPretty, BUFSIZE, s);
+			/* ensure properly terminated C-string now */
+			buf[bytes] = '\0';
 
-				log_error("Failed to read from input stream, message is larger "
-						  "than pgcopydb limit (%s): %s",
-						  limitPretty,
-						  bytesPretty);
-
-				free(buf);
-				return false;
-			}
-
-			log_trace("read_from_stream read %lld bytes from input",
-					  (long long) bytes);
+			/* if the buffer doesn't terminate with \n it's a partial read */
+			bool partialRead = buf[bytes - 1] != '\n';
 
 			char *lines[BUFSIZE] = { 0 };
 			int lineCount = splitLines(buf, lines, BUFSIZE);
 
-			log_trace("read_from_stream: read %d lines", lineCount);
+			log_trace("read_from_stream read %6zu bytes in %d lines %s[%lld]",
+					  bytes,
+					  lineCount,
+					  partialRead ? "partial" : "",
+					  (long long) multiPartCount);
 
 			for (int i = 0; i < lineCount; i++)
 			{
@@ -545,22 +540,125 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 				 */
 				char *line = lines[i];
 
-				/* we count stream input lines as if reading from a file */
-				++context->lineno;
+				/*
+				 * Take care of partial reads:
+				 *
+				 * - when we're reading the first partial buffer of a series
+				 *   (partialRead is true, multiPartCount is still zero) append
+				 *   only the last line received to the multiPartBuffer.
+				 *
+				 * - when we're reading a middle part partial buffer then
+				 *   multiPartCount is non-zero and lineCount is 1 and i == 0.
+				 *
+				 * - when we're reading the last partial buffer of a series
+				 *   (partialRead is false or lineCount > 1, multiPartCount is
+				 *   non-zero) append only the first line received to the
+				 *   multiPartBuffer.
+				 *
+				 * - we could also receive the last part of a multiPartBuffer
+				 *   and the first part of the next multiPartBuffer in the
+				 *   same read() call, hence the previous para condition:
+				 *
+				 *   multiPartCount > 0 && (!partialRead || lineCount > 1)
+				 */
+				bool firstLine = i == 0;
+				bool lastLine = (i == (lineCount - 1));
+				bool callUserCallback = true;
+				bool appendToCurrentBuffer = false;
 
-				/* call the used provided function */
-				bool stop = false;
-
-				if (!(*context->callback)(context->ctx, line, &stop))
+				/* first part of a multi-part buffer (last line read) */
+				if (partialRead && multiPartCount == 0 && lastLine)
 				{
-					free(buf);
-					return false;
+					multiPartBuffer = createPQExpBuffer();
+					callUserCallback = false;
+					appendToCurrentBuffer = true;
 				}
 
-				if (stop)
+				/* middle part of a multi-part buffer */
+				else if (partialRead && multiPartCount > 0 && lineCount == 1)
 				{
-					doneReading = true;
-					break;
+					if (multiPartBuffer == NULL)
+					{
+						log_error("BUG: multiPartBuffer is NULL, "
+								  "multiPartCount == %lld, "
+								  "line == %d, lineCount == 1",
+								  (long long) multiPartCount, i);
+						return false;
+					}
+					callUserCallback = false;
+					appendToCurrentBuffer = true;
+				}
+
+				/* last part of a multi-part buffer */
+				else if (multiPartCount > 0 && firstLine)
+				{
+					callUserCallback = true;
+					appendToCurrentBuffer = true;
+				}
+
+				/*
+				 * If needed append to the current buffer, which has
+				 * already been created even when multiPartCount is zero.
+				 */
+				if (appendToCurrentBuffer)
+				{
+					if (multiPartBuffer == NULL)
+					{
+						log_error("BUG: appendToCurrentBuffer is true, "
+								  "multiPartBuffer is NULL");
+						return false;
+					}
+
+					++multiPartCount;
+					appendPQExpBufferStr(multiPartBuffer, line);
+
+					if (PQExpBufferBroken(multiPartBuffer))
+					{
+						log_error("Failed to read multi-part message: "
+								  "out of memory");
+						destroyPQExpBuffer(multiPartBuffer);
+						return false;
+					}
+				}
+
+				/*
+				 * Unless still reading a multi-part message, call user-defined
+				 * callback function.
+				 */
+				if (callUserCallback)
+				{
+					/* replace the line pointer for multi-parts messages */
+					if (multiPartCount > 0)
+					{
+						line = multiPartBuffer->data;
+					}
+
+					/* we count stream input lines as if reading from a file */
+					++context->lineno;
+
+					/* call the user-provided function */
+					bool stop = false;
+
+					if (!(*context->callback)(context->ctx, line, &stop))
+					{
+						free(buf);
+						destroyPQExpBuffer(multiPartBuffer);
+						return false;
+					}
+
+					/* reset multiPartBuffer and count after callback */
+					if (multiPartCount > 0)
+					{
+						destroyPQExpBuffer(multiPartBuffer);
+						multiPartCount = 0;
+						multiPartBuffer = NULL;
+					}
+
+					if (stop)
+					{
+						doneReading = true;
+						break;
+					}
 				}
 			}
 

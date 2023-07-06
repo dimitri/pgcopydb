@@ -9,6 +9,7 @@ RUN apt-get update \
 WORKDIR /usr/src/pgcopydb
 COPY ./inject.sh inject.sh
 COPY ./dml.sql dml.sql
+COPY ./dml-bufsize.sql dml-bufsize.sql
 
 USER docker
 CMD /usr/src/pgcopydb/inject.sh
