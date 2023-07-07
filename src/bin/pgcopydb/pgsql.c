@@ -5106,7 +5106,7 @@ pgsql_sync_sentinel_recv(PGSQL *pgsql,
 
 	char *sql =
 		"update pgcopydb.sentinel "
-		"set startpos = $1, write_lsn = $1, flush_lsn = $2 "
+		"set startpos = $2, write_lsn = $1, flush_lsn = $2 "
 		"returning startpos, endpos, apply, write_lsn, flush_lsn, replay_lsn";
 
 	char writeLSN[PG_LSN_MAXLENGTH] = { 0 };
