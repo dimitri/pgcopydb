@@ -172,7 +172,7 @@ cli_sentinel_getopts(int argc, char **argv)
 							  "see above for details.");
 					exit(EXIT_CODE_BAD_ARGS);
 				}
-				strlcpy(options.connStrings.source_pguri, optarg, MAXCONNINFO);
+				options.connStrings.source_pguri = pg_strdup(optarg);
 				log_trace("--source %s", options.connStrings.source_pguri);
 				break;
 			}
