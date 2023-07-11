@@ -55,6 +55,13 @@ typedef struct SourceExtensionArrayContext
 	bool parsedOk;
 } SourceExtensionArrayContext;
 
+/* Context used when fetching extension versions as a json array */
+typedef struct ExtensionsVersionsArrayContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	ExtensionsVersionsArray *evArray;
+	bool parsedOk;
+} ExtensionsVersionsArrayContext;
 
 /* Context used when fetching collation definitions */
 typedef struct SourceCollationArrayContext
@@ -118,6 +125,8 @@ static bool parseCurrentExtension(PGresult *result,
 static bool parseCurrentExtensionConfig(PGresult *result,
 										int rowNumber,
 										SourceExtensionConfig *extConfig);
+
+static void getExtensionsVersions(void *ctx, PGresult *result);
 
 static void getCollationList(void *ctx, PGresult *result);
 
@@ -342,6 +351,64 @@ schema_list_ext_schemas(PGSQL *pgsql, SourceSchemaArray *array)
 	if (!parseContext.parsedOk)
 	{
 		log_error("Failed to list schemas that extensions depend on");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * schema_list_ext_versions lists available extensions versions.
+ */
+bool
+schema_list_ext_versions(PGSQL *pgsql, ExtensionsVersionsArray *array)
+{
+	ExtensionsVersionsArrayContext parseContext = { { 0 }, array, false };
+
+	char *sql =
+		"select e.name, e.default_version, e.installed_version, "
+		"       u.versions "
+
+		"from pg_available_extensions e "
+		"     left join lateral "
+		"     ( "
+		"       with updates as "
+		"       ( "
+		"         select source, "
+		"                array_length(regexp_split_to_array(path, '--'), 1) as steps "
+		"           from pg_extension_update_paths(e.name) "
+		"          where (   target = e.default_version "
+		"                 or source = e.default_version) "
+		"           and source not in ('unpackaged', 'ANY') "
+		"           and path is not null "
+
+		"     union all "
+
+		"        select e.default_version, 0"
+
+		"      order by steps, source desc "
+		"       ) "
+		"       select coalesce(jsonb_agg(source), "
+		"                       jsonb_build_array(e.default_version)) "
+		"       from updates "
+		"     ) "
+		"     as u(versions) on true "
+
+		"group by e.name, e.default_version, e.installed_version, u.versions "
+		"order by e.name";
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   0, NULL, NULL,
+								   &parseContext, &getExtensionsVersions))
+	{
+		log_error("Failed to list available extensions versions");
+		return false;
+	}
+
+	if (!parseContext.parsedOk)
+	{
+		log_error("Failed to list available extensions versions");
 		return false;
 	}
 
@@ -3572,6 +3639,109 @@ parseCurrentExtensionConfig(PGresult *result,
 	}
 
 	return errors == 0;
+}
+
+
+/*
+ * getExtensionsVersions loops over the SQL result for the available extension
+ * versions list.
+ */
+static void
+getExtensionsVersions(void *ctx, PGresult *result)
+{
+	ExtensionsVersionsArrayContext *context =
+		(ExtensionsVersionsArrayContext *) ctx;
+
+	int nTuples = PQntuples(result);
+
+	log_debug("getExtensionsVersions: %d", nTuples);
+
+	if (PQnfields(result) != 4)
+	{
+		log_error("Query returned %d columns, expected 4", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	/* we're not supposed to re-cycle arrays here */
+	if (context->evArray->array != NULL)
+	{
+		/* issue a warning but let's try anyway */
+		log_warn("BUG? context's array is not null in getExtensionsVersions");
+
+		free(context->evArray->array);
+		context->evArray->array = NULL;
+	}
+
+	context->evArray->count = nTuples;
+	context->evArray->array =
+		(ExtensionsVersions *) calloc(nTuples, sizeof(ExtensionsVersions));
+
+	if (context->evArray->array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return;
+	}
+
+	int errors = 0;
+
+	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
+	{
+		ExtensionsVersions *ev = &(context->evArray->array[rowNumber]);
+
+		/* 1. name */
+		char *value = PQgetvalue(result, rowNumber, 0);
+		int length = strlcpy(ev->name, value, NAMEDATALEN);
+
+		if (length >= NAMEDATALEN)
+		{
+			log_error("Extension name \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (NAMEDATALEN - 1)",
+					  value, length, NAMEDATALEN - 1);
+			++errors;
+		}
+
+		/* 2. defaultVersion */
+		value = PQgetvalue(result, rowNumber, 1);
+		length = strlcpy(ev->defaultVersion, value, NAMEDATALEN);
+
+		if (length >= NAMEDATALEN)
+		{
+			log_error("Extension version \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (NAMEDATALEN - 1)",
+					  value, length, NAMEDATALEN - 1);
+			++errors;
+		}
+
+		/* 3. installedVersion */
+		value = PQgetvalue(result, rowNumber, 2);
+		length = strlcpy(ev->installedVersion, value, NAMEDATALEN);
+
+		if (length >= NAMEDATALEN)
+		{
+			log_error("Extension version \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (NAMEDATALEN - 1)",
+					  value, length, NAMEDATALEN - 1);
+			++errors;
+		}
+
+		/* 4. versions JSON array */
+		if (!PQgetisnull(result, rowNumber, 3))
+		{
+			value = PQgetvalue(result, rowNumber, 3);
+			ev->json = json_parse_string(value);
+
+			if (ev->json == NULL || json_type(ev->json) != JSONArray)
+			{
+				log_error("Failed to parse extension \"%s\" available versions "
+						  "JSON array: %s",
+						  ev->name, value);
+				++errors;
+			}
+		}
+	}
+
+	context->parsedOk = errors == 0;
 }
 
 

@@ -8,6 +8,7 @@
 
 #include <stdbool.h>
 
+#include "parson.h"
 #include "uthash.h"
 
 #include "filtering.h"
@@ -88,6 +89,20 @@ typedef struct SourceExtensionArray
 	SourceExtension *array;         /* malloc'ed area */
 } SourceExtensionArray;
 
+
+typedef struct ExtensionsVersions
+{
+	char name[NAMEDATALEN];
+	char defaultVersion[BUFSIZE];
+	char installedVersion[BUFSIZE];
+	JSON_Value *json;           /* malloc'ed area */
+} ExtensionsVersions;
+
+typedef struct ExtensionsVersionsArray
+{
+	int count;
+	ExtensionsVersions *array;  /* malloc'ed area */
+} ExtensionsVersionsArray;
 
 typedef struct SourceCollation
 {
@@ -303,6 +318,8 @@ bool schema_list_schemas(PGSQL *pgsql, SourceSchemaArray *array);
 bool schema_list_ext_schemas(PGSQL *pgsql, SourceSchemaArray *array);
 
 bool schema_list_extensions(PGSQL *pgsql, SourceExtensionArray *extArray);
+
+bool schema_list_ext_versions(PGSQL *pgsql, ExtensionsVersionsArray *array);
 
 bool schema_list_collations(PGSQL *pgsql, SourceCollationArray *array);
 

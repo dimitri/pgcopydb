@@ -28,6 +28,8 @@ ListDBOptions listDBoptions = { 0 };
 static int cli_list_db_getopts(int argc, char **argv);
 static void cli_list_databases(int argc, char **argv);
 static void cli_list_extensions(int argc, char **argv);
+static void cli_list_extension_versions(int argc, char **argv);
+static void cli_list_extension_requirements(int argc, char **argv);
 static void cli_list_collations(int argc, char **argv);
 static void cli_list_tables(int argc, char **argv);
 static void cli_list_table_parts(int argc, char **argv);
@@ -54,7 +56,10 @@ static CommandLine list_extensions_command =
 		"extensions",
 		"List all the source extensions to copy",
 		" --source ... ",
-		"  --source            Postgres URI to the source database\n",
+		"  --source               Postgres URI to the source database\n"
+		"  --json                 Format the output using JSON\n"
+		"  --available-extensions List available extension versions\n"
+		"  --requirements         List extensions requirements\n",
 		cli_list_db_getopts,
 		cli_list_extensions);
 
@@ -222,6 +227,8 @@ cli_list_db_getopts(int argc, char **argv)
 		{ "cache", no_argument, NULL, 'c' },
 		{ "drop-cache", no_argument, NULL, 'C' },
 		{ "summary", no_argument, NULL, 'y' },
+		{ "available-versions", no_argument, NULL, 'a' },
+		{ "requirements", no_argument, NULL, 'r' },
 		{ "json", no_argument, NULL, 'J' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "debug", no_argument, NULL, 'd' },
@@ -358,6 +365,20 @@ cli_list_db_getopts(int argc, char **argv)
 			{
 				options.summary = true;
 				log_trace("--summary");
+				break;
+			}
+
+			case 'a':
+			{
+				options.availableVersions = true;
+				log_trace("--available-versions");
+				break;
+			}
+
+			case 'r':
+			{
+				options.requirements = true;
+				log_trace("--requirements");
 				break;
 			}
 
@@ -527,6 +548,20 @@ cli_list_databases(int argc, char **argv)
 static void
 cli_list_extensions(int argc, char **argv)
 {
+	/* --available-versions is implemented as its own command */
+	if (listDBoptions.availableVersions)
+	{
+		(void) cli_list_extension_versions(argc, argv);
+		exit(EXIT_CODE_QUIT);
+	}
+
+	/* --requirements is implemented as its own command */
+	if (listDBoptions.requirements)
+	{
+		(void) cli_list_extension_requirements(argc, argv);
+		exit(EXIT_CODE_QUIT);
+	}
+
 	PGSQL pgsql = { 0 };
 	SourceExtensionArray extensionArray = { 0, NULL };
 
@@ -546,44 +581,251 @@ cli_list_extensions(int argc, char **argv)
 
 	log_info("Fetched information for %d extensions", extensionArray.count);
 
-	fformat(stdout, "%10s | %20s | %20s | %10s | %s\n",
-			"OID",
-			"Name",
-			"Schema",
-			"Count",
-			"Config");
-
-	fformat(stdout, "%10s-+-%20s-+-%20s-+-%10s-+-%10s\n",
-			"----------",
-			"--------------------",
-			"--------------------",
-			"----------",
-			"----------");
-
-	for (int i = 0; i < extensionArray.count; i++)
+	if (outputJSON)
 	{
-		SourceExtension *ext = &(extensionArray.array[i]);
+		JSON_Value *js = json_value_init_array();
+		JSON_Array *jsArray = json_value_get_array(js);
 
-		char config[BUFSIZE] = { 0 };
-
-		for (int c = 0; c < ext->config.count; c++)
+		for (int i = 0; i < extensionArray.count; i++)
 		{
-			sformat(config, sizeof(config), "%s%s\"%s\".\"%s\"",
-					config,
-					c == 0 ? "" : ",",
-					ext->config.array[c].nspname,
-					ext->config.array[c].relname);
+			SourceExtension *ext = &(extensionArray.array[i]);
+
+			JSON_Value *jsExt = json_value_init_object();
+			JSON_Object *jsObj = json_value_get_object(jsExt);
+
+			json_object_set_number(jsObj, "oid", ext->oid);
+			json_object_set_string(jsObj, "name", ext->extname);
+			json_object_set_string(jsObj, "schema", ext->extnamespace);
+
+			JSON_Value *jsConfig = json_value_init_array();
+			JSON_Array *jsConfigArray = json_value_get_array(jsConfig);
+
+			for (int c = 0; c < ext->config.count; c++)
+			{
+				JSON_Value *jsConf = json_value_init_object();
+				JSON_Object *jsConfObj = json_value_get_object(jsConf);
+
+				json_object_set_string(jsConfObj,
+									   "schema", ext->config.array[c].nspname);
+
+				json_object_set_string(jsConfObj,
+									   "name", ext->config.array[c].relname);
+
+				json_array_append_value(jsConfigArray, jsConf);
+			}
+
+			json_object_set_value(jsObj, "config", jsConfig);
+
+			json_array_append_value(jsArray, jsExt);
 		}
 
-		fformat(stdout, "%10u | %20s | %20s | %10d | %s\n",
-				ext->oid,
-				ext->extname,
-				ext->extnamespace,
-				ext->config.count,
-				config);
+		char *serialized_string = json_serialize_to_string_pretty(js);
+
+		fformat(stdout, "%s\n", serialized_string);
+
+		json_free_serialized_string(serialized_string);
+		json_value_free(js);
+	}
+	else
+	{
+		fformat(stdout, "%10s | %20s | %20s | %10s | %s\n",
+				"OID",
+				"Name",
+				"Schema",
+				"Count",
+				"Config");
+
+		fformat(stdout, "%10s-+-%20s-+-%20s-+-%10s-+-%10s\n",
+				"----------",
+				"--------------------",
+				"--------------------",
+				"----------",
+				"----------");
+
+		for (int i = 0; i < extensionArray.count; i++)
+		{
+			SourceExtension *ext = &(extensionArray.array[i]);
+
+			char config[BUFSIZE] = { 0 };
+
+			for (int c = 0; c < ext->config.count; c++)
+			{
+				sformat(config, sizeof(config), "%s%s\"%s\".\"%s\"",
+						config,
+						c == 0 ? "" : ",",
+						ext->config.array[c].nspname,
+						ext->config.array[c].relname);
+			}
+
+			fformat(stdout, "%10u | %20s | %20s | %10d | %s\n",
+					ext->oid,
+					ext->extname,
+					ext->extnamespace,
+					ext->config.count,
+					config);
+		}
+
+		fformat(stdout, "\n");
+	}
+}
+
+
+/*
+ * cli_list_extension_versions implements the command:
+ *
+ *   pgcopydb list extensions --available-versions
+ */
+static void
+cli_list_extension_versions(int argc, char **argv)
+{
+	PGSQL pgsql = { 0 };
+	ExtensionsVersionsArray evArray = { 0, NULL };
+
+	ConnStrings *dsn = &(listDBoptions.connStrings);
+
+	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
 	}
 
-	fformat(stdout, "\n");
+	if (!schema_list_ext_versions(&pgsql, &evArray))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_info("Fetched information for %d extensions", evArray.count);
+
+	if (outputJSON)
+	{
+		JSON_Value *js = json_value_init_array();
+		JSON_Array *jsArray = json_value_get_array(js);
+
+		for (int i = 0; i < evArray.count; i++)
+		{
+			ExtensionsVersions *ev = &(evArray.array[i]);
+
+			JSON_Value *jsExtVersion = json_value_init_object();
+			JSON_Object *jsEVObj = json_value_get_object(jsExtVersion);
+
+			json_object_set_string(jsEVObj, "name", ev->name);
+			json_object_set_value(jsEVObj, "versions", ev->json);
+
+			/* add the JSON object to the array */
+			json_array_append_value(jsArray, jsExtVersion);
+		}
+
+		char *serialized_string = json_serialize_to_string_pretty(js);
+
+		fformat(stdout, "%s\n", serialized_string);
+
+		json_free_serialized_string(serialized_string);
+		json_value_free(js);
+	}
+	else
+	{
+		fformat(stdout, "%20s | %20s | %s\n",
+				"Name",
+				"Default",
+				"Available");
+
+		fformat(stdout, "%20s-+-%20s-+-%20s\n",
+				"--------------------",
+				"--------------------",
+				"--------------------");
+
+		for (int i = 0; i < evArray.count; i++)
+		{
+			ExtensionsVersions *ev = &(evArray.array[i]);
+
+			char *strArray = json_serialize_to_string(ev->json);
+
+			fformat(stdout, "%20s | %20s | %s\n",
+					ev->name,
+					ev->defaultVersion,
+					strArray);
+
+			json_free_serialized_string(strArray);
+		}
+
+		fformat(stdout, "\n");
+	}
+}
+
+
+/*
+ * cli_list_extension_requirements implements the command:
+ *
+ *   pgcopydb list extensions --requirements --json
+ */
+static void
+cli_list_extension_requirements(int argc, char **argv)
+{
+	PGSQL pgsql = { 0 };
+	ExtensionsVersionsArray evArray = { 0, NULL };
+
+	ConnStrings *dsn = &(listDBoptions.connStrings);
+
+	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	if (!schema_list_ext_versions(&pgsql, &evArray))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_info("Fetched information for %d extensions", evArray.count);
+
+	if (outputJSON)
+	{
+		JSON_Value *js = json_value_init_array();
+		JSON_Array *jsArray = json_value_get_array(js);
+
+		for (int i = 0; i < evArray.count; i++)
+		{
+			ExtensionsVersions *ev = &(evArray.array[i]);
+
+			JSON_Value *jsExtVersion = json_value_init_object();
+			JSON_Object *jsEVObj = json_value_get_object(jsExtVersion);
+
+			json_object_set_string(jsEVObj, "name", ev->name);
+			json_object_set_string(jsEVObj, "version", ev->defaultVersion);
+
+			/* add the JSON object to the array */
+			json_array_append_value(jsArray, jsExtVersion);
+		}
+
+		char *serialized_string = json_serialize_to_string_pretty(js);
+
+		fformat(stdout, "%s\n", serialized_string);
+
+		json_free_serialized_string(serialized_string);
+		json_value_free(js);
+	}
+	else
+	{
+		fformat(stdout, "%30s | %s\n", "Name", "Version");
+
+		fformat(stdout, "%30s-+-%20s\n",
+				"------------------------------",
+				"--------------------");
+
+		for (int i = 0; i < evArray.count; i++)
+		{
+			ExtensionsVersions *ev = &(evArray.array[i]);
+
+			fformat(stdout, "%30s | %s\n",
+					ev->name,
+					ev->defaultVersion);
+		}
+
+		fformat(stdout, "\n");
+	}
 }
 
 
