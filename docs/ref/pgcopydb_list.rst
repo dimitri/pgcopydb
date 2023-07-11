@@ -56,7 +56,16 @@ extensions to COPY to the target database.
    pgcopydb list extensions: List all the source extensions to copy
    usage: pgcopydb list extensions  --source ...
 
-     --source            Postgres URI to the source database
+     --source               Postgres URI to the source database
+     --json                 Format the output using JSON
+     --available-extensions List available extension versions
+     --requirements         List extensions requirements
+
+The command ``pgcopydb list extensions --available-extensions`` is typically
+used with the target database. If you're using the connection string
+environment variables, that looks like the following::
+
+  $ pgcopydb list extensions --available-extensions --source ${PGCOPYDB_TARGET_PGURI}
 
 .. _pgcopydb_list_collations:
 

@@ -30,6 +30,8 @@ typedef struct ListDBOptions
 	bool cache;
 	bool dropCache;
 	bool summary;
+	bool availableVersions;
+	bool requirements;
 
 	SplitTableLargerThan splitTablesLargerThan;
 } ListDBOptions;
