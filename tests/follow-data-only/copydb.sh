@@ -29,7 +29,7 @@ BACKGROUND_TRAFFIC_PID=$!
 sleep 2
 
 # grab a snapshot on the source database
-coproc ( pgcopydb snapshot --follow --plugin wal2json --notice )
+coproc ( pgcopydb snapshot --follow --plugin test_decoding --notice )
 
 sleep 2
 

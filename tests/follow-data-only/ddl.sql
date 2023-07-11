@@ -6,5 +6,6 @@
 begin;
 
 CREATE TABLE table_a (id serial PRIMARY KEY, f1 int4, f2 text);
+CREATE TABLE table_b (id serial PRIMARY KEY, f1 int4, f2 text[]);
 
 commit;

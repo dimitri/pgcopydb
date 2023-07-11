@@ -47,6 +47,7 @@ typedef struct TestDecodingHeader
 
 typedef struct TestDecodingColumns
 {
+	uint32_t oid;
 	char *colnameStart;
 	int colnameLen;
 	char *valueStart;
@@ -672,6 +673,18 @@ parseNextColumn(TestDecodingColumns *cols,
 	char *typA = strchr(ptr, '[');
 	char *typB = typA != NULL ? strchr(typA, ']') : NULL;
 
+	/*
+	 * Postgres array data types are spelled like: "text[]". In test_decoding
+	 * we might then see data types like in the following example:
+	 *
+	 *   f2[text[]]:'{incididunt,ut,labore,et,dolore,magna}'
+	 */
+	if (typB != NULL && *typB != '\0' && *(typB - 1) == '[' && *(typB + 1) == ']')
+	{
+		/* skip [], go to the next one in "[text[]]" */
+		++typB;
+	}
+
 	if (typA == NULL || typB == NULL)
 	{
 		log_error("Failed to parse test_decoding column name and "
@@ -683,10 +696,29 @@ parseNextColumn(TestDecodingColumns *cols,
 		return false;
 	}
 
+	/*
+	 * At the moment we specialize our processing only for text strings, which
+	 * we receive single-quoted and following C-Style Escapes, but without the
+	 * E prefix.
+	 */
+	char *typStart = typA + 1;
+	int typLen = (int) ((typB - typA) - 1);
+	char typname[NAMEDATALEN] = { 0 };
+
+	sformat(typname, sizeof(typname), "%.*s", typLen, typStart);
+
+	if (streq(typname, "text"))
+	{
+		cols->oid = TEXTOID;
+	}
+
 	cols->colnameStart = ptr;
 	cols->colnameLen = typA - ptr;
 
-	log_trace("parseNextColumn: %.*s", cols->colnameLen, cols->colnameStart);
+	log_trace("parseNextColumn[%s]: %.*s",
+			  typname,
+			  cols->colnameLen,
+			  cols->colnameStart);
 
 	/* skip the typename and the closing ] and the following : */
 	ptr = typB + 1 + 1;
@@ -846,6 +878,42 @@ listToTuple(LogicalMessageTuple *tuple, TestDecodingColumns *cols, int count)
 		if (strncmp(cur->valueStart, "null", 4) == 0)
 		{
 			valueColumn->isNull = true;
+		}
+		else if (cur->oid == TEXTOID)
+		{
+			/*
+			 * Internally store the string non-quoted, so that the ld_transform
+			 * module has a chance of preparing the quoted string with C-Style
+			 * escapes correctly.
+			 *
+			 * The test-decoding module escapes the single-quotes the standard
+			 * way by doubling them. Unescape the single-quotes here.
+			 */
+			valueColumn->isQuoted = false;
+
+			int len = cur->valueLen - 2;
+			valueColumn->val.str = (char *) calloc(len, sizeof(char));
+
+			if (valueColumn->val.str == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			/* skip the opening single-quote, the closing one, and \0 */
+			for (int i = 1, j = 0; i < (cur->valueLen - 2); i++)
+			{
+				char *ptr = cur->valueStart + i;
+				char *nxt = cur->valueStart + i + 1;
+
+				/* unescape the single-quotes */
+				if (*ptr == '\'' && *nxt == '\'')
+				{
+					continue;
+				}
+
+				valueColumn->val.str[j++] = *ptr;
+			}
 		}
 		else
 		{
