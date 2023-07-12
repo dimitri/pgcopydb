@@ -6,3 +6,4 @@
 \ir 6-multiline-table-name.sql
 \ir 7-identity.sql
 \ir 8-string-escape.sql
+\ir 9-table-with-zero-cols.sql

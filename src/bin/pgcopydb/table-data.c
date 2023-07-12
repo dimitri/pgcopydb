@@ -1121,13 +1121,17 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 		/*
 		 * For the destination query, use the table(...) syntax.
 		 */
-		appendPQExpBuffer(query, "%s(", tableSpecs->sourceTable->qname);
+		appendPQExpBuffer(query, "%s", tableSpecs->sourceTable->qname);
 
 		for (int i = 0; i < table->attributes.count; i++)
 		{
 			char *attname = table->attributes.array[i].attname;
 
-			if (i > 0)
+			if (i == 0)
+			{
+				appendPQExpBufferStr(query, "(");
+			}
+			else
 			{
 				appendPQExpBufferStr(query, ", ");
 			}
@@ -1135,7 +1139,10 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 			appendPQExpBuffer(query, "\"%s\"", attname);
 		}
 
-		appendPQExpBufferStr(query, ")");
+		if (table->attributes.count > 0)
+		{
+			appendPQExpBufferStr(query, ")");
+		}
 	}
 
 	if (PQExpBufferBroken(query))
