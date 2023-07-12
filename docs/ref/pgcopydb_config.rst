@@ -62,8 +62,8 @@ Here is an exclusion based filter configuration example:
 Filtering can be done with pgcopydb by using the following rules, which are
 also the name of the sections of the INI file.
 
-include-only-tables
-^^^^^^^^^^^^^^^^^^^
+include-only-table
+^^^^^^^^^^^^^^^^^^
 
 This section allows listing the exclusive list of the source tables to copy
 to the target database. No other table will be processed by pgcopydb.
@@ -73,7 +73,7 @@ identifier quoting rules`__ can be used to avoid ambiguity.
 
 __ https://www.postgresql.org/docs/current/sql-syntax-lexical.html#SQL-SYNTAX-IDENTIFIERS
 
-When the section ``include-only-tables`` is used in the filtering
+When the section ``include-only-table`` is used in the filtering
 configuration then the sections ``exclude-schema`` and ``exclude-table`` are
 disallowed. We would not know how to handle tables that exist on the source
 database and are not part of any filter.
@@ -85,7 +85,7 @@ This section allows adding schemas (Postgres namespaces) to the exclusion
 filters. All the tables that belong to any listed schema in this section are
 going to be ignored by the pgcopydb command.
 
-This section is not allowed when the section ``include-only-tables`` is
+This section is not allowed when the section ``include-only-table`` is
 used.
 
 exclude-table
@@ -95,7 +95,7 @@ This section allows to add a list of qualified table names to the exclusion
 filters. All the tables that are listed in the ``exclude-table`` section are
 going to be ignored by the pgcopydb command.
 
-This section is not allowed when the section ``include-only-tables`` is
+This section is not allowed when the section ``include-only-table`` is
 used.
 
 exclude-index
