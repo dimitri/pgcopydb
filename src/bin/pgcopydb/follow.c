@@ -107,8 +107,6 @@ follow_reset_sequences(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	/* copy our structure wholesale */
 	seqSpecs = *copySpecs;
 
-	log_info("follow_reset_sequences: %s", seqSpecs.connStrings.source_pguri);
-
 	/* then force some options such as --resume --not-consistent */
 	seqSpecs.restart = false;
 	seqSpecs.resume = true;
@@ -337,6 +335,12 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		{
 			/* errors have already been logged */
 			return false;
+		}
+
+		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		{
+			log_warn("Main follow process was asked to terminate, exiting");
+			return true;
 		}
 
 		if (done)

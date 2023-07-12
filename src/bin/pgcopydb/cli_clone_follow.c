@@ -215,6 +215,23 @@ clone_and_follow(CopyDataSpec *copySpecs)
 	}
 
 	/*
+	 * When using pgcopydb clone --follow --restart we first cleanup the
+	 * previous setup, and that includes dropping the replication slot.
+	 */
+	if (copySpecs->restart)
+	{
+		log_info("Clean-up replication setup, per --restart");
+
+		if (!stream_cleanup_databases(copySpecs,
+									  copyDBoptions.slot.slotName,
+									  copyDBoptions.origin))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+	}
+
+	/*
 	 * First create/export a snapshot for the whole clone --follow operations.
 	 */
 	if (!follow_export_snapshot(copySpecs, &streamSpecs))

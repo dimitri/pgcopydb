@@ -175,7 +175,7 @@ stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
 
 	if (!context->apply)
 	{
-		log_error("Apply mode is still disabled, quitting now");
+		log_notice("Apply mode is still disabled, quitting now");
 		return true;
 	}
 
