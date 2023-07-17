@@ -1491,11 +1491,14 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 			return false;
 		}
 
-		log_sql("[%s] %s;", endpoint, sql);
+		log_sql("[%s %d] %s;", endpoint, PQbackendPID(connection), sql);
 
 		if (paramCount > 0)
 		{
-			log_sql("%s", debugParameters->data);
+			log_sql("[%s %d] %s",
+					endpoint,
+					PQbackendPID(connection),
+					debugParameters->data);
 		}
 	}
 
@@ -1530,16 +1533,25 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 
 		for (int lineNumber = 0; lineNumber < lineCount; lineNumber++)
 		{
-			log_error("[%s] %s", endpoint, errorLines[lineNumber]);
+			log_error("[%s %d] %s",
+					  endpoint,
+					  PQbackendPID(connection),
+					  errorLines[lineNumber]);
 		}
 
 		if (pgsql->logSQL)
 		{
-			log_error("SQL query: %s", sql);
+			log_error("[%s %d] SQL query: %s",
+					  endpoint,
+					  PQbackendPID(connection),
+					  sql);
 
 			if (paramCount > 0)
 			{
-				log_error("SQL params: %s", debugParameters->data);
+				log_error("[%s %d] SQL params: %s",
+						  endpoint,
+						  PQbackendPID(connection),
+						  debugParameters->data);
 			}
 
 			destroyPQExpBuffer(debugParameters);
@@ -1655,7 +1667,7 @@ pgsql_send_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 	if (result == 0)
 	{
 		char *message = PQerrorMessage(connection);
-		char *errorLines[BUFSIZE];
+		char *errorLines[BUFSIZE] = { 0 };
 		int lineCount = splitLines(message, errorLines, BUFSIZE);
 		int lineNumber = 0;
 
@@ -1772,7 +1784,7 @@ pgsql_fetch_results(PGSQL *pgsql, bool *done,
 			 * PostgreSQL Error message might contain several lines. Log each of
 			 * them as a separate ERROR line here.
 			 */
-			char *errorLines[BUFSIZE];
+			char *errorLines[BUFSIZE] = { 0 };
 			int lineCount = splitLines(message, errorLines, BUFSIZE);
 
 			for (int lineNumber = 0; lineNumber < lineCount; lineNumber++)
@@ -1883,7 +1895,7 @@ is_response_ok(PGresult *result)
 
 	if (!ok)
 	{
-		log_error("Postgres result status is %s", PQresStatus(resultStatus));
+		log_debug("Postgres result status is %s", PQresStatus(resultStatus));
 	}
 
 	return ok;
@@ -2460,7 +2472,7 @@ pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context)
 		strlcpy(pgsql->sqlstate, sqlstate, sizeof(pgsql->sqlstate));
 	}
 
-	char *prefix =
+	char *endpoint =
 		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
 
 	/*
@@ -2471,15 +2483,25 @@ pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context)
 	{
 		if (lineNumber == 0 && res != NULL)
 		{
-			log_error("%s [%s] %s", prefix, pgsql->sqlstate, errorLines[lineNumber]);
+			log_error("[%s %d] [%s] %s",
+					  endpoint,
+					  PQbackendPID(pgsql->connection),
+					  pgsql->sqlstate,
+					  errorLines[lineNumber]);
 		}
 		else
 		{
-			log_error("%s %s", prefix, errorLines[lineNumber]);
+			log_error("[%s %d] %s",
+					  endpoint,
+					  PQbackendPID(pgsql->connection),
+					  errorLines[lineNumber]);
 		}
 	}
 
-	log_error("%s Context: %s", prefix, context);
+	log_error("[%s %d] Context: %s",
+			  endpoint,
+			  PQbackendPID(pgsql->connection),
+			  context);
 
 	if (res != NULL)
 	{
