@@ -409,13 +409,17 @@ read_index_summary(CopyIndexSummary *summary, const char *filename)
 	summary->doneTime = json_object_get_number(jsObj, "done-time-epoch");
 	summary->durationMs = json_object_get_number(jsObj, "duration");
 
-	summary->command = strdup(json_object_get_string(jsObj, "command"));
-
-	if (summary->command == NULL)
+	if (json_object_has_value_of_type(jsObj, "command", JSONString))
 	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		json_value_free(json);
-		return false;
+		const char *command = json_object_get_string(jsObj, "command");
+		summary->command = strdup(command);
+
+		if (summary->command == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			json_value_free(json);
+			return false;
+		}
 	}
 
 	/* we can't provide instr_time readers */
