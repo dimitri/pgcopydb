@@ -297,7 +297,6 @@ stream_init_context(StreamSpecs *specs)
 	privateContext->endpos = specs->endpos;
 	privateContext->startpos = specs->startpos;
 	privateContext->startposActionFromJSON = specs->startposActionFromJSON;
-	privateContext->startposComputedFromJSON = specs->startposComputedFromJSON;
 
 	privateContext->mode = specs->mode;
 	privateContext->stdIn = specs->stdIn;
@@ -317,6 +316,29 @@ stream_init_context(StreamSpecs *specs)
 	privateContext->previous.action = STREAM_ACTION_UNKNOWN;
 
 	privateContext->lastWriteTime = 0;
+
+	/*
+	 * When streaming is resumed, transactions are sent in full even if we wrote
+	 * and flushed a transactions partially in previous command. This implies
+	 * that, if the last message is B/I/U/D/T, the streaming resumes from the
+	 * same transaction and there's a need to skip some messages.
+	 *
+	 * However, note that if the last message is COMMIT, the streaming will
+	 * resume from the next transaction.
+	 */
+	if (specs->startposComputedFromJSON &&
+		(specs->startposActionFromJSON == STREAM_ACTION_BEGIN ||
+		 specs->startposActionFromJSON == STREAM_ACTION_INSERT ||
+		 specs->startposActionFromJSON == STREAM_ACTION_UPDATE ||
+		 specs->startposActionFromJSON == STREAM_ACTION_DELETE ||
+		 specs->startposActionFromJSON == STREAM_ACTION_TRUNCATE))
+	{
+		privateContext->reachedStartPos = false;
+	}
+	else
+	{
+		privateContext->reachedStartPos = true;
+	}
 
 	/*
 	 * Initializing maxWrittenLSN as startpos at the beginning of migration or
@@ -1517,20 +1539,27 @@ prepareMessageMetadataFromContext(LogicalStreamContext *context)
 	}
 
 	/*
-	 * When streaming is resumed, transactions are sent in full even if we
-	 * wrote and flushed a transaction partially in a previous command.
-	 *
-	 * Also the same LSN might be assigned to a BEGIN message, a COMMIT
-	 * message, and a KEEPALIVE message. Avoid skipping what looks like the
-	 * same message as the latest flushed in our JSON file when it's actually a
-	 * new message.
+	 * When streaming resumed for a partially applied txn, have we reached a
+	 * message that wasn't flushed in the previous command?
 	 */
-	if (privateContext->startposComputedFromJSON &&
-		(metadata->lsn < privateContext->startpos ||
-		 (metadata->lsn == privateContext->startpos &&
-		  metadata->action == privateContext->startposActionFromJSON)))
+	if (!privateContext->reachedStartPos)
+	{
+		/*
+		 * Also the same LSN might be assigned to a BEGIN message, a COMMIT
+		 * message, and a KEEPALIVE message. Avoid skipping what looks like the
+		 * same message as the latest flushed in our JSON file when it's
+		 * actually a new message.
+		 */
+		privateContext->reachedStartPos =
+			privateContext->startpos < metadata->lsn ||
+			(privateContext->startpos == metadata->lsn &&
+			 metadata->action != privateContext->startposActionFromJSON);
+	}
+
+	if (!privateContext->reachedStartPos)
 	{
 		metadata->filterOut = true;
+
 		log_debug("Skipping write for action %c for XID %u at LSN %X/%X: "
 				  "startpos %X/%X not been reached",
 				  metadata->action,
