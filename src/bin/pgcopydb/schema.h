@@ -239,6 +239,8 @@ typedef struct SourceIndex
 	char *indexColumns;         /* malloc'ed area */
 	char *indexDef;             /* malloc'ed area */
 	uint32_t constraintOid;
+	bool condeferrable;
+	bool condeferred;
 	char constraintName[NAMEDATALEN];
 	char *constraintDef;        /* malloc'ed area */
 	char indexRestoreListName[RESTORE_LIST_NAMEDATALEN];

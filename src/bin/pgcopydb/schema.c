@@ -2197,6 +2197,8 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          ) as cols,"
 		"          pg_get_indexdef(indexrelid),"
 		"          c.oid,"
+		"          c.condeferrable,"
+		"          c.condeferred,"
 		"          c.conname,"
 		"          pg_get_constraintdef(c.oid),"
 		"          format('%s %s %s', "
@@ -2248,6 +2250,8 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          ) as cols,"
 		"          pg_get_indexdef(indexrelid),"
 		"          c.oid,"
+		"          c.condeferrable,"
+		"          c.condeferred,"
 		"          c.conname,"
 		"          pg_get_constraintdef(c.oid),"
 		"          format('%s %s %s', "
@@ -2303,6 +2307,8 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          ) as cols,"
 		"          pg_get_indexdef(indexrelid),"
 		"          c.oid,"
+		"          c.condeferrable,"
+		"          c.condeferred,"
 		"          c.conname,"
 		"          pg_get_constraintdef(c.oid),"
 		"          format('%s %s %s', "
@@ -2372,6 +2378,8 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          ) as cols,"
 		"          pg_get_indexdef(indexrelid),"
 		"          c.oid,"
+		"          c.condeferrable,"
+		"          c.condeferred,"
 		"          c.conname,"
 		"          pg_get_constraintdef(c.oid),"
 		"          format('%s %s %s', "
@@ -2430,6 +2438,8 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          ) as cols,"
 		"          pg_get_indexdef(indexrelid),"
 		"          c.oid,"
+		"          c.condeferrable,"
+		"          c.condeferred,"
 		"          c.conname,"
 		"          pg_get_constraintdef(c.oid),"
 		"          format('%s %s %s', "
@@ -2493,6 +2503,8 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          ) as cols,"
 		"          pg_get_indexdef(indexrelid),"
 		"          c.oid,"
+		"          c.condeferrable,"
+		"          c.condeferred,"
 		"          c.conname,"
 		"          pg_get_constraintdef(c.oid),"
 		"          format('%s %s %s', "
@@ -2551,6 +2563,8 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          ) as cols,"
 		"          pg_get_indexdef(indexrelid),"
 		"          c.oid,"
+		"          c.condeferrable,"
+		"          c.condeferred,"
 		"          c.conname,"
 		"          pg_get_constraintdef(c.oid),"
 		"          format('%s %s %s', "
@@ -2664,6 +2678,8 @@ schema_list_table_indexes(PGSQL *pgsql,
 		"          ) as cols,"
 		"          pg_get_indexdef(indexrelid),"
 		"          c.oid,"
+		"          c.condeferrable,"
+		"          c.condeferred,"
 		"          c.conname,"
 		"          pg_get_constraintdef(c.oid),"
 		"          format('%s %s %s', "
@@ -4313,9 +4329,9 @@ getIndexArray(void *ctx, PGresult *result)
 
 	log_debug("getIndexArray: %d", nTuples);
 
-	if (PQnfields(result) != 14)
+	if (PQnfields(result) != 16)
 	{
-		log_error("Query returned %d columns, expected 14", PQnfields(result));
+		log_error("Query returned %d columns, expected 16", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -4502,10 +4518,40 @@ parseCurrentSourceIndex(PGresult *result, int rowNumber, SourceIndex *index)
 		}
 	}
 
-	/* 12. conname */
+	/* 12. c.condeferrable */
 	if (!PQgetisnull(result, rowNumber, 11))
 	{
 		value = PQgetvalue(result, rowNumber, 11);
+		if (value == NULL || ((*value != 't') && (*value != 'f')))
+		{
+			log_error("Invalid condeferrable value \"%s\"", value);
+			++errors;
+		}
+		else
+		{
+			index->condeferrable = (*value) == 't';
+		}
+	}
+
+	/* 13. c.condeferred */
+	if (!PQgetisnull(result, rowNumber, 12))
+	{
+		value = PQgetvalue(result, rowNumber, 12);
+		if (value == NULL || ((*value != 't') && (*value != 'f')))
+		{
+			log_error("Invalid condeferred value \"%s\"", value);
+			++errors;
+		}
+		else
+		{
+			index->condeferred = (*value) == 't';
+		}
+	}
+
+	/* 14. conname */
+	if (!PQgetisnull(result, rowNumber, 13))
+	{
+		value = PQgetvalue(result, rowNumber, 13);
 		length = strlcpy(index->constraintName, value, NAMEDATALEN);
 
 		if (length >= NAMEDATALEN)
@@ -4517,10 +4563,10 @@ parseCurrentSourceIndex(PGresult *result, int rowNumber, SourceIndex *index)
 		}
 	}
 
-	/* 13. pg_get_constraintdef */
-	if (!PQgetisnull(result, rowNumber, 12))
+	/* 15. pg_get_constraintdef */
+	if (!PQgetisnull(result, rowNumber, 14))
 	{
-		value = PQgetvalue(result, rowNumber, 12);
+		value = PQgetvalue(result, rowNumber, 14);
 		length = strlen(value) + 1;
 		index->constraintDef = (char *) calloc(length, sizeof(char));
 
@@ -4533,8 +4579,8 @@ parseCurrentSourceIndex(PGresult *result, int rowNumber, SourceIndex *index)
 		strlcpy(index->constraintDef, value, length);
 	}
 
-	/* 14. indexRestoreListName */
-	value = PQgetvalue(result, rowNumber, 13);
+	/* 16. indexRestoreListName */
+	value = PQgetvalue(result, rowNumber, 15);
 	length =
 		strlcpy(index->indexRestoreListName, value, RESTORE_LIST_NAMEDATALEN);
 

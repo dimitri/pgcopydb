@@ -1051,7 +1051,7 @@ copydb_prepare_create_constraint_command(SourceIndex *index, char **command)
 		appendPQExpBuffer(cmd,
 						  "ALTER TABLE \"%s\".\"%s\" "
 						  "ADD CONSTRAINT \"%s\" %s "
-						  "USING INDEX \"%s\";",
+						  "USING INDEX \"%s\"",
 						  index->tableNamespace,
 						  index->tableRelname,
 						  index->constraintName,
@@ -1067,6 +1067,16 @@ copydb_prepare_create_constraint_command(SourceIndex *index, char **command)
 						  index->tableRelname,
 						  index->constraintName,
 						  index->constraintDef);
+	}
+
+	if (index->condeferrable)
+	{
+		appendPQExpBufferStr(cmd, " DEFERRABLE");
+
+		if (index->condeferred)
+		{
+			appendPQExpBufferStr(cmd, " INITIALLY DEFERRED");
+		}
 	}
 
 	if (PQExpBufferBroken(cmd))
