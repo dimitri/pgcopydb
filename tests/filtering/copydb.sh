@@ -37,6 +37,10 @@ pgcopydb clone --filters /usr/src/pgcopydb/exclude.ini
 # now another migration with the "include-only" parts of the data
 pgcopydb clone --filters /usr/src/pgcopydb/include.ini --restart
 
+# print out the definition of the copy.foo table
+psql -d ${PGCOPYDB_SOURCE_PGURI} -c '\d app|copy.foo'
+psql -d ${PGCOPYDB_TARGET_PGURI} -c '\d app|copy.foo'
+
 # now compare the output of running the SQL command with what's expected
 # as we're not root when running tests, can't write in /usr/src
 mkdir -p /tmp/results
@@ -52,5 +56,6 @@ do
     e=./expected/${t}.out
     psql -d "${PGCOPYDB_TARGET_PGURI}" ${pgopts} --file ./sql/$t.sql &> $r
     test -f $e || cat $r
+    diff $e $r || cat $r
     diff $e $r || exit 1
 done

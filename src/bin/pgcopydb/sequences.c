@@ -36,6 +36,8 @@ copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql)
 		return false;
 	}
 
+	SourceSequence *sourceSeqHashByOid = NULL;
+
 	log_info("Fetching information for %d sequences", sequenceArray->count);
 
 	int errors = 0;
@@ -44,9 +46,10 @@ copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql)
 	{
 		SourceSequence *seq = &(sequenceArray->array[seqIndex]);
 
-		char qname[BUFSIZE] = { 0 };
+		/* add the current sequence to the sequence Hash-by-OID */
+		HASH_ADD(hh, sourceSeqHashByOid, oid, sizeof(uint32_t), seq);
 
-		sformat(qname, sizeof(qname), "\"%s\".\"%s\"",
+		sformat(seq->qname, sizeof(seq->qname), "\"%s\".\"%s\"",
 				seq->nspname,
 				seq->relname);
 
@@ -63,7 +66,7 @@ copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql)
 		 */
 		bool granted = false;
 
-		if (!pgsql_has_sequence_privilege(pgsql, qname, "select", &granted))
+		if (!pgsql_has_sequence_privilege(pgsql, seq->qname, "select", &granted))
 		{
 			/* errors have been logged */
 			++errors;
@@ -74,7 +77,7 @@ copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql)
 		{
 			log_error("Failed to SELECT values for sequence %s: "
 					  "permission denied",
-					  qname);
+					  seq->qname);
 			++errors;
 			continue;
 		}
@@ -82,11 +85,14 @@ copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql)
 		if (!schema_get_sequence_value(pgsql, seq))
 		{
 			/* just skip this one */
-			log_warn("Failed to get sequence values for %s", qname);
+			log_warn("Failed to get sequence values for %s", seq->qname);
 			++errors;
 			continue;
 		}
 	}
+
+	/* now attach the final hash table head to the specs */
+	specs->catalog.sourceSeqHashByOid = sourceSeqHashByOid;
 
 	return errors == 0;
 }

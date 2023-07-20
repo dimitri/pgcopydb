@@ -41,3 +41,13 @@ create index if not exists tbl2_tbl1_id_idx on foo.tbl2(tbl1_id);
 -- And another schema that we exclude wholesale.
 --
 create schema bar;
+
+
+--
+-- See https://github.com/dimitri/pgcopydb/issues/390
+--
+create schema app;
+create schema copy;
+
+create table app.foo(id bigserial, f1 text);
+create table copy.foo(like app.foo including all);
