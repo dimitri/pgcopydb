@@ -1,5 +1,9 @@
 -[ RECORD 1 ]---
 nspname | public
 -[ RECORD 2 ]---
+nspname | app
+-[ RECORD 3 ]---
+nspname | copy
+-[ RECORD 4 ]---
 nspname | foo
 

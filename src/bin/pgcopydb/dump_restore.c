@@ -428,13 +428,29 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 					   contents.array[i].restoreListName);
 		}
 
+		/*
+		 * For SEQUENCE catalog entries, we want to limit the scope of the hash
+		 * table search to the OID, and bypass searching by restore name. We
+		 * only use the restore name for the SEQUENCE OWNED BY statements.
+		 *
+		 * This also allows complex filtering of sequences that are owned by
+		 * table a and used as a default value in table b, where table a has
+		 * been filtered-out from pgcopydb scope of operations, but not table
+		 * b.
+		 */
+		if (streq(item->desc, "SEQUENCE"))
+		{
+			name = NULL;
+		}
+
 		if (!skip && copydb_objectid_is_filtered_out(specs, oid, name))
 		{
 			skip = true;
 
-			log_notice("Skipping filtered-out dumpId %d: %s %u %s",
+			log_notice("Skipping filtered-out dumpId %d: %s %u %u %s",
 					   contents.array[i].dumpId,
 					   contents.array[i].desc,
+					   contents.array[i].catalogOid,
 					   contents.array[i].objectOid,
 					   contents.array[i].restoreListName);
 		}

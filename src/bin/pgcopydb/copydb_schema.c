@@ -850,31 +850,83 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 				seq->restoreListName,
 				RESTORE_LIST_NAMEDATALEN);
 
-		HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), item);
+		/*
+		 * Filtering-out sequences work with the following 3 Archive Catalog
+		 * entry kinds:
+		 *
+		 *  - SEQUENCE, matched by sequence oid
+		 *  - SEQUENCE OWNED BY, matched by sequence restore name
+		 *  - DEFAULT, matched by attribute oid
+		 *
+		 * In some cases we want to create the sequence, but we might want to
+		 * skip the SEQUENCE OWNED BY statement, because we didn't actually
+		 * create the owner table.
+		 *
+		 * In those cases we will find the sequence both in the catalogs of
+		 * objects we want to migrate, and also in the list of objects we want
+		 * to skip. The catalog entry typically has seq->ownedby !=
+		 * seq->attrelid, where the ownedby table is skipped from the migration
+		 * because of the filtering.
+		 */
+		SourceSequence *sourceSeqHashByOid = specs->catalog.sourceSeqHashByOid;
 
-		size_t len = strlen(seq->restoreListName);
-		HASH_ADD(hName, hName, restoreListName, len, item);
+		uint32_t sOid = seq->oid;
+		SourceSequence *sequence = NULL;
 
-		/* also add pg_attribute.oid when it's not null -- non-zero */
+		HASH_FIND(hh, sourceSeqHashByOid, &sOid, sizeof(sOid), sequence);
+
+		/*
+		 * When we find the sequence in our catalog selection, then we still
+		 * create it and refrain to add the sequence oid to our hash table
+		 * here.
+		 */
+		if (sequence == NULL)
+		{
+			HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), item);
+		}
+
+		/* find if the SEQUENCE OWNED BY table is in our catalog selection */
+		SourceTable *sourceTableHashByOid = specs->catalog.sourceTableHashByOid;
+
+		uint32_t tOid = seq->ownedby;
+		SourceTable *table = NULL;
+
+		HASH_FIND(hh, sourceTableHashByOid, &tOid, sizeof(tOid), table);
+
+		/*
+		 * Only filter-out the SEQUENCE OWNED BY when our catalog selection
+		 * does not contain the target table.
+		 */
+		if (table == NULL)
+		{
+			size_t len = strlen(seq->restoreListName);
+			HASH_ADD(hName, hName, restoreListName, len, item);
+		}
+
+		/*
+		 * Also add pg_attribute.oid when it's not null (non-zero here). This
+		 * takes care of the DEFAULT entries in the pg_dump Archive Catalog,
+		 * and these entries target the attroid directly.
+		 */
 		if (seq->attroid > 0)
 		{
-			SourceFilterItem *item = malloc(sizeof(SourceFilterItem));
+			SourceFilterItem *attrItem = malloc(sizeof(SourceFilterItem));
 
-			if (item == NULL)
+			if (attrItem == NULL)
 			{
 				log_error(ALLOCATION_FAILED_ERROR);
 				return false;
 			}
 
-			item->oid = seq->attroid;
-			item->kind = OBJECT_KIND_DEFAULT;
-			item->sequence = *seq;
+			attrItem->oid = seq->attroid;
+			attrItem->kind = OBJECT_KIND_DEFAULT;
+			attrItem->sequence = *seq;
 
-			strlcpy(item->restoreListName,
+			strlcpy(attrItem->restoreListName,
 					seq->restoreListName,
 					RESTORE_LIST_NAMEDATALEN);
 
-			HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), item);
+			HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), attrItem);
 		}
 	}
 
@@ -882,6 +934,23 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 	for (int i = 0; i < dependArray.count; i++)
 	{
 		SourceDepend *depend = &(dependArray.array[i]);
+
+		/*
+		 * In some cases with sequences we might want to skip adding a
+		 * dependency in our hash table here. See the previous discussion for
+		 * details.
+		 */
+		SourceSequence *sourceSeqHashByOid = specs->catalog.sourceSeqHashByOid;
+
+		uint32_t sOid = depend->objid;
+		SourceSequence *sequence = NULL;
+
+		HASH_FIND(hh, sourceSeqHashByOid, &sOid, sizeof(sOid), sequence);
+
+		if (sequence != NULL)
+		{
+			continue;
+		}
 
 		SourceFilterItem *item = malloc(sizeof(SourceFilterItem));
 

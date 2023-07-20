@@ -1278,21 +1278,26 @@ cli_list_sequences(int argc, char **argv)
 
 	log_info("Fetched information for %d sequences", sequenceArray.count);
 
-	fformat(stdout, "%8s | %20s | %30s | %10s \n",
-			"OID", "Schema Name", "Sequence Name", "attroid");
+	fformat(stdout, "%8s | %20s | %30s | %10s | %10s | %10s \n",
+			"OID", "Schema Name", "Sequence Name",
+			"Owned By", "attrelid", "attroid");
 
-	fformat(stdout, "%8s-+-%20s-+-%30s-+-%10s\n",
+	fformat(stdout, "%8s-+-%20s-+-%30s-+-%10s-+-%10s-+-%10s\n",
 			"--------",
 			"--------------------",
 			"------------------------------",
+			"----------",
+			"----------",
 			"----------");
 
 	for (int i = 0; i < sequenceArray.count; i++)
 	{
-		fformat(stdout, "%8d | %20s | %30s | %10d\n",
+		fformat(stdout, "%8d | %20s | %30s | %10d | %10d | %10d\n",
 				sequenceArray.array[i].oid,
 				sequenceArray.array[i].nspname,
 				sequenceArray.array[i].relname,
+				sequenceArray.array[i].ownedby,
+				sequenceArray.array[i].attrelid,
 				sequenceArray.array[i].attroid);
 	}
 
