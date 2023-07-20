@@ -1155,8 +1155,9 @@ pgsql_server_version(PGSQL *pgsql)
 	char *endpoint =
 		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
 
-	log_notice("[%s] Postgres version %s (%d)",
+	log_notice("[%s %d] Postgres version %s (%d)",
 			   endpoint,
+			   PQbackendPID(pgsql->connection),
 			   pgsql->pgversion,
 			   pgsql->pgversion_num);
 
@@ -2284,7 +2285,7 @@ pg_copy_from_stdin(PGSQL *pgsql, const char *qname)
 	char *endpoint =
 		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
 
-	log_sql("[%s] %s;", endpoint, sql);
+	log_sql("[%s %d] %s;", endpoint, PQbackendPID(pgsql->connection), sql);
 
 	PGresult *res = PQexec(pgsql->connection, sql);
 
