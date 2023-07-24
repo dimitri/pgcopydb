@@ -79,7 +79,7 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 		/* now write the doneFile to keep track */
 		if (!write_file("", 0, specs->cfPaths.done.preDataDump))
 		{
-			log_error("Failed to write the tracking file \%s\"",
+			log_error("Failed to write the tracking file \"%s\"",
 					  specs->cfPaths.done.preDataDump);
 			return false;
 		}
@@ -110,7 +110,7 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 		/* now write the doneFile to keep track */
 		if (!write_file("", 0, specs->cfPaths.done.postDataDump))
 		{
-			log_error("Failed to write the tracking file \%s\"",
+			log_error("Failed to write the tracking file \"%s\"",
 					  specs->cfPaths.done.postDataDump);
 			return false;
 		}
@@ -178,7 +178,7 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 	/* now write the doneFile to keep track */
 	if (!write_file("", 0, specs->cfPaths.done.preDataRestore))
 	{
-		log_error("Failed to write the tracking file \%s\"",
+		log_error("Failed to write the tracking file \"%s\"",
 				  specs->cfPaths.done.preDataRestore);
 		return false;
 	}
@@ -292,7 +292,7 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 	/* now write the doneFile to keep track */
 	if (!write_file("", 0, specs->cfPaths.done.postDataRestore))
 	{
-		log_error("Failed to write the tracking file \%s\"",
+		log_error("Failed to write the tracking file \"%s\"",
 				  specs->cfPaths.done.postDataRestore);
 		return false;
 	}
