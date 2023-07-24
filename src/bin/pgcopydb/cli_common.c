@@ -700,6 +700,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "skip-vacuum", no_argument, NULL, 'U' },
 		{ "filter", required_argument, NULL, 'F' },
 		{ "filters", required_argument, NULL, 'F' },
+		{ "requirements", required_argument, NULL, 'Q' },
 		{ "fail-fast", no_argument, NULL, 'i' },
 		{ "restart", no_argument, NULL, 'r' },
 		{ "resume", no_argument, NULL, 'R' },
@@ -736,7 +737,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	}
 
 	while ((c = getopt_long(argc, argv,
-							"S:T:D:J:I:L:cOBemlirRCN:xXCtfo:p:s:E:F:iVvdzqh",
+							"S:T:D:J:I:L:cOBemlirRCN:xXCtfo:p:s:E:F:Q:iVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -879,6 +880,20 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				options.skipCommentOnExtension = true;
 				log_trace("--skip-extensions");
+				break;
+			}
+
+			case 'Q':
+			{
+				strlcpy(options.requirementsFileName, optarg, MAXPGPATH);
+				log_trace("--requirements \"%s\"", options.requirementsFileName);
+
+				if (!file_exists(options.requirementsFileName))
+				{
+					log_error("Extensions requirements file \"%s\" does not exists",
+							  options.requirementsFileName);
+					++errors;
+				}
 				break;
 			}
 
@@ -1240,6 +1255,18 @@ cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section)
 		{
 			log_error("Failed to parse filters in file \"%s\"",
 					  copyDBoptions.filterFileName);
+			exit(EXIT_CODE_BAD_ARGS);
+		}
+	}
+
+	if (!IS_EMPTY_STRING_BUFFER(copyDBoptions.requirementsFileName))
+	{
+		char *filename = copyDBoptions.requirementsFileName;
+
+		if (!copydb_parse_extensions_requirements(copySpecs, filename))
+		{
+			log_error("Failed to parse extension requirements JSON file \"%s\"",
+					  filename);
 			exit(EXIT_CODE_BAD_ARGS);
 		}
 	}

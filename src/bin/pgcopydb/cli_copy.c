@@ -89,7 +89,8 @@ static CommandLine copy_extensions_command =
 		" --source ... --target ... ",
 		"  --source              Postgres URI to the source database\n"
 		"  --target              Postgres URI to the target database\n"
-		"  --dir                 Work directory to use\n",
+		"  --dir                 Work directory to use\n"
+		"  --requirements        List extensions requirements\n",
 		cli_copy_db_getopts,
 		cli_copy_extensions);
 

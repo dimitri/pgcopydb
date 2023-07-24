@@ -42,6 +42,7 @@ Postgres instance to the target Postgres instance.
      --skip-ext-comments        Skip restoring COMMENT ON EXTENSION
      --skip-collations          Skip restoring collations
      --skip-vacuum              Skip running VACUUM ANALYZE
+     --requirements <filename>  List extensions requirements
      --filters <filename>       Use the filters defined in <filename>
      --fail-fast                Abort early in case of error
      --restart                  Allow restarting when temp files exist already
@@ -495,6 +496,21 @@ The following options are available to ``pgcopydb clone``:
 
   Skip copying COMMENT ON EXTENSION commands. This is implicit when using
   --skip-extensions.
+
+--requirements <filename>
+
+  This option allows to specify which version of an extension to install on
+  the target database. The given filename is expected to be a JSON file, and
+  the JSON contents must be an array of objects with the keys ``"name"`` and
+  ``"version"``.
+
+  The command ``pgcopydb list extension --requirements --json`` produces
+  such a JSON file and can be used on the target database instance to get
+  started.
+
+  See also the command ``pgcopydb list extension --available-versions``.
+
+  See also :ref:`pgcopydb_list_extensions`.
 
 --skip-collations
 

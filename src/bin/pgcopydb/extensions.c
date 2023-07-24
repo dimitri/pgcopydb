@@ -81,6 +81,7 @@ copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions)
 	int errors = 0;
 	PGSQL dst = { 0 };
 
+	ExtensionReqs *reqs = copySpecs->extRequirements;
 	SourceExtensionArray *extensionArray = &(copySpecs->catalog.extensionArray);
 
 	if (!pgsql_init(&dst, copySpecs->connStrings.target_pguri, PGSQL_CONN_TARGET))
@@ -95,19 +96,40 @@ copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions)
 
 		if (createExtensions)
 		{
-			char sql[BUFSIZE] = { 0 };
+			PQExpBuffer sql = createPQExpBuffer();
 
-			sformat(sql, sizeof(sql),
-					"create extension if not exists \"%s\" cascade",
-					ext->extname);
+			char *extname = ext->extname;
+			ExtensionReqs *req = NULL;
+
+			HASH_FIND(hh, reqs, extname, strlen(extname), req);
+
+			appendPQExpBuffer(sql,
+							  "create extension if not exists \"%s\" cascade",
+							  ext->extname);
+
+			if (req != NULL)
+			{
+				appendPQExpBuffer(sql, " version \"%s\"", req->version);
+
+				log_notice("%s", sql->data);
+			}
+
+			if (PQExpBufferBroken(sql))
+			{
+				log_error("Failed to build CREATE EXTENSION sql buffer: "
+						  "Out of Memory");
+				(void) destroyPQExpBuffer(sql);
+			}
 
 			log_info("Creating extension \"%s\"", ext->extname);
 
-			if (!pgsql_execute(&dst, sql))
+			if (!pgsql_execute(&dst, sql->data))
 			{
 				log_error("Failed to create extension \"%s\"", ext->extname);
 				++errors;
 			}
+
+			(void) destroyPQExpBuffer(sql);
 		}
 
 		/* do we have to take care of extensions config table? */
@@ -157,4 +179,62 @@ copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions)
 	(void) pgsql_finish(&dst);
 
 	return errors == 0;
+}
+
+
+/*
+ * copydb_parse_extensions_requirements parses the requirements.json file that
+ * is provided to either
+ *
+ *   $ pgcopydb copy extensions --requirements req.json
+ *   $ pgcopydb clone ... --requirements req.json
+ *
+ * A sample file can be obtained via the command:
+ *
+ *   $ pgcopydb list extensions --requirements --json
+ */
+bool
+copydb_parse_extensions_requirements(CopyDataSpec *copySpecs, char *filename)
+{
+	JSON_Value *json = json_parse_file(filename);
+	JSON_Value *schema =
+		json_parse_string("[{\"name\":\"foo\",\"version\":\"1.2.3\"}]");
+
+	if (json_validate(schema, json) != JSONSuccess)
+	{
+		log_error("Failed to parse extensions requirements JSON file \"%s\"",
+				  filename);
+		return false;
+	}
+
+	json_value_free(schema);
+
+	JSON_Array *jsReqArray = json_value_get_array(json);
+	size_t count = json_array_get_count(jsReqArray);
+
+	ExtensionReqs *reqs = NULL;
+
+	for (int i = 0; i < count; i++)
+	{
+		ExtensionReqs *req = (ExtensionReqs *) calloc(1, sizeof(ExtensionReqs));
+
+		if (req == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		JSON_Object *jsObj = json_array_get_object(jsReqArray, i);
+		const char *name = json_object_get_string(jsObj, "name");
+		const char *version = json_object_get_string(jsObj, "version");
+
+		size_t len = strlcpy(req->extname, name, sizeof(req->extname));
+		strlcpy(req->version, version, sizeof(req->version));
+
+		HASH_ADD(hh, reqs, extname, len, req);
+	}
+
+	copySpecs->extRequirements = reqs;
+
+	return true;
 }

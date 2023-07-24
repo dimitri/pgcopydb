@@ -56,10 +56,10 @@ static CommandLine list_extensions_command =
 		"extensions",
 		"List all the source extensions to copy",
 		" --source ... ",
-		"  --source               Postgres URI to the source database\n"
-		"  --json                 Format the output using JSON\n"
-		"  --available-extensions List available extension versions\n"
-		"  --requirements         List extensions requirements\n",
+		"  --source              Postgres URI to the source database\n"
+		"  --json                Format the output using JSON\n"
+		"  --available-versions  List available extension versions\n"
+		"  --requirements        List extensions requirements\n",
 		cli_list_db_getopts,
 		cli_list_extensions);
 

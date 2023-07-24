@@ -60,9 +60,21 @@ sleep 1
 # copy the extensions separately, needs superuser (both on source and target)
 pgcopydb list extensions
 
+# now get the extension versions requirements from the target server
+e=/tmp/extensions.json
+r=/tmp/requirements.json
+
+pgcopydb list extensions --source ${PGCOPYDB_TARGET_PGURI} --requirements --json > ${e}
+
+jq 'map(select(.name == "postgis" or .name == "address_standardizer" or .name == "address_standardizer_data_us" or .name == "postgis_tiger_geocoder" or .name == "postgis_topology"))' < ${e} > ${r}
+
+cat ${r}
+
 pgcopydb copy extensions \
          --source ${PGCOPYDB_SOURCE_PGURI_SU} \
-         --target ${PGCOPYDB_TARGET_PGURI_SU}
+         --target ${PGCOPYDB_TARGET_PGURI_SU} \
+         --requirements ${r} \
+         --notice
 
 # now clone without superuser privileges (using role pagila on source and target)
 pgcopydb clone --skip-extensions

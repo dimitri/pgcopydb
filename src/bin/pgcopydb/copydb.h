@@ -211,6 +211,18 @@ typedef struct SourceFilterItem
 } SourceFilterItem;
 
 
+/*
+ * Extensions versions to install on the target can be specified by the user.
+ */
+typedef struct ExtensionReqs
+{
+	char extname[NAMEDATALEN];
+	char version[BUFSIZE];
+
+	UT_hash_handle hh;          /* makes this structure hashable */
+} ExtensionReqs;
+
+
 /* all that's needed to start a TABLE DATA copy for a whole database */
 typedef struct CopyDataSpec
 {
@@ -221,6 +233,8 @@ typedef struct CopyDataSpec
 	SourceFilters filters;
 	SourceFilterItem *hOid;     /* hash table of objects, by Oid */
 	SourceFilterItem *hName;    /* hash table of objects, by pg_restore name */
+
+	ExtensionReqs *extRequirements;
 
 	ConnStrings connStrings;
 	TransactionSnapshot sourceSnapshot;
@@ -355,6 +369,9 @@ bool snapshot_read_slot(const char *filename, ReplicationSlot *slot);
 /* extensions.c */
 bool copydb_start_extension_data_process(CopyDataSpec *specs);
 bool copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions);
+
+bool copydb_parse_extensions_requirements(CopyDataSpec *copySpecs,
+										  char *filename);
 
 /* indexes.c */
 
