@@ -41,6 +41,7 @@
 	"  --skip-ext-comments        Skip restoring COMMENT ON EXTENSION\n" \
 	"  --skip-collations          Skip restoring collations\n" \
 	"  --skip-vacuum              Skip running VACUUM ANALYZE\n" \
+	"  --requirements <filename>  List extensions requirements\n" \
 	"  --filters <filename>       Use the filters defined in <filename>\n" \
 	"  --fail-fast                Abort early in case of error\n" \
 	"  --restart                  Allow restarting when temp files exist already\n" \

@@ -68,6 +68,7 @@ typedef struct CopyDBOptions
 	uint64_t startpos;
 
 	char filterFileName[MAXPGPATH];
+	char requirementsFileName[MAXPGPATH];
 } CopyDBOptions;
 
 extern bool outputJSON;
