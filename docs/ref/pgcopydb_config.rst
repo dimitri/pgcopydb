@@ -88,6 +88,18 @@ going to be ignored by the pgcopydb command.
 This section is not allowed when the section ``include-only-table`` is
 used.
 
+include-only-schema
+^^^^^^^^^^^^^^^^^^^
+
+This section allows editing schema (Postgres namespaces) to the exclusion
+filters by listing the schema that are not going to be excluded. This is a
+syntaxic sugar facility that helps with entering a long list of schemas to
+exclude when a single schema is to be selected.
+
+Despite the name, this section is an exclusion filter.
+
+This section is not allowed when the section ``exclude-schema`` is used.
+
 exclude-table
 ^^^^^^^^^^^^^
 

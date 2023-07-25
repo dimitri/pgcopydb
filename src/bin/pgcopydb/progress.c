@@ -195,6 +195,22 @@ copydb_filtering_as_json(CopyDataSpec *copySpecs,
 						   "type",
 						   filterTypeToString(filters->type));
 
+	/* include-only-schema */
+	if (filters->includeOnlySchemaList.count > 0)
+	{
+		JSON_Value *jsSchema = json_value_init_array();
+		JSON_Array *jsSchemaArray = json_value_get_array(jsSchema);
+
+		for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
+		{
+			char *nspname = filters->includeOnlySchemaList.array[i].nspname;
+
+			json_array_append_string(jsSchemaArray, nspname);
+		}
+
+		json_object_set_value(jsFilterObj, "include-only-schema", jsSchema);
+	}
+
 	/* exclude-schema */
 	if (filters->excludeSchemaList.count > 0)
 	{

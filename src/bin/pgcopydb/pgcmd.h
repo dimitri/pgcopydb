@@ -20,6 +20,7 @@
 #include "pgsql.h"
 #include "schema.h"
 
+#define PG_CMD_MAX_ARG 128
 #define PG_VERSION_STRING_MAX 12
 
 typedef struct PostgresPaths

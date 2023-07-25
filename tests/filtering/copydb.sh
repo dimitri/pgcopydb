@@ -20,16 +20,16 @@ psql -o /tmp/e.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pgcopydb/extra.sql
 # list the exclude filters now, and the computed dependencies
 cat /usr/src/pgcopydb/exclude.ini
 
-# list the dependencies of objects that are selected by the filters
-pgcopydb list depends --filters /usr/src/pgcopydb/exclude.ini
+# list the tables that are (not) selected by the filters
+pgcopydb list tables --filters /usr/src/pgcopydb/exclude.ini
+pgcopydb list tables --filters /usr/src/pgcopydb/exclude.ini --list-skipped
 
-# list the dependencies of objects that are NOT selected by the filters
+# list the dependencies of objects that are (not) selected by the filters
+pgcopydb list depends --filters /usr/src/pgcopydb/exclude.ini
 pgcopydb list depends --filters /usr/src/pgcopydb/exclude.ini --list-skipped
 
-# list the sequences that are selected
+# list the sequences that are (not) selected by the filters
 pgcopydb list sequences --filters /usr/src/pgcopydb/exclude.ini
-
-# list the sequences that are NOT selected
 pgcopydb list sequences --filters /usr/src/pgcopydb/exclude.ini --list-skipped
 
 pgcopydb clone --filters /usr/src/pgcopydb/exclude.ini

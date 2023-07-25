@@ -345,7 +345,7 @@ pg_dump_db(PostgresPaths *pgPaths,
 		   SourceExtensionArray *extensionArray,
 		   const char *filename)
 {
-	char *args[128];
+	char *args[PG_CMD_MAX_ARG];
 	int argsIndex = 0;
 
 	char command[BUFSIZE] = { 0 };
@@ -378,16 +378,36 @@ pg_dump_db(PostgresPaths *pgPaths,
 	args[argsIndex++] = "--section";
 	args[argsIndex++] = (char *) section;
 
+	/* apply [include-only-schema] filtering */
+	for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
+	{
+		char *nspname = filters->includeOnlySchemaList.array[i].nspname;
+
+		/* check that we still have room for --includeOnly-schema args */
+		if (PG_CMD_MAX_ARG < (argsIndex + 2))
+		{
+			log_error("Failed to call pg_dump, too many include-only-schema entries: "
+					  "argsIndex %d > %d",
+					  argsIndex + 2, PG_CMD_MAX_ARG);
+			return false;
+		}
+
+		args[argsIndex++] = "--schema";
+		args[argsIndex++] = nspname;
+	}
+
+	/* apply [exclude-schema] filtering */
 	for (int i = 0; i < filters->excludeSchemaList.count; i++)
 	{
 		char *nspname = filters->excludeSchemaList.array[i].nspname;
 
 		/* check that we still have room for --exclude-schema args */
-		if (128 < (argsIndex + 2))
+		if (PG_CMD_MAX_ARG < (argsIndex + 2))
 		{
-			log_error("Failed to call pg_dump, too many schema are excluded: "
+			log_error("Failed to call pg_dump, too many exclude-schema entries: "
 					  "argsIndex %d > %d",
-					  argsIndex + 2, 128);
+					  argsIndex + 2,
+					  PG_CMD_MAX_ARG);
 			return false;
 		}
 
@@ -405,12 +425,13 @@ pg_dump_db(PostgresPaths *pgPaths,
 			if (!streq(nspname, "public") && !streq(nspname, "pg_catalog"))
 			{
 				/* check that we still have room for --exclude-schema args */
-				if (128 < (argsIndex + 2))
+				if (PG_CMD_MAX_ARG < (argsIndex + 2))
 				{
 					log_error("Failed to call pg_dump, "
 							  "too many schema are excluded: "
 							  "argsIndex %d > %d",
-							  argsIndex + 2, 128);
+							  argsIndex + 2,
+							  PG_CMD_MAX_ARG);
 					return false;
 				}
 
@@ -760,7 +781,7 @@ pg_restore_db(PostgresPaths *pgPaths,
 			  const char *listFilename,
 			  RestoreOptions options)
 {
-	char *args[128];
+	char *args[PG_CMD_MAX_ARG];
 	int argsIndex = 0;
 
 	char command[BUFSIZE] = { 0 };
@@ -807,16 +828,36 @@ pg_restore_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = "--no-acl";
 	}
 
+	/* apply [include-only-schema] filtering */
+	for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
+	{
+		char *nspname = filters->includeOnlySchemaList.array[i].nspname;
+
+		/* check that we still have room for --includeOnly-schema args */
+		if (PG_CMD_MAX_ARG < (argsIndex + 2))
+		{
+			log_error("Failed to call pg_dump, too many include-only-schema entries: "
+					  "argsIndex %d > %d",
+					  argsIndex + 2, PG_CMD_MAX_ARG);
+			return false;
+		}
+
+		args[argsIndex++] = "--schema";
+		args[argsIndex++] = nspname;
+	}
+
+	/* apply [exclude-schema] filtering */
 	for (int i = 0; i < filters->excludeSchemaList.count; i++)
 	{
 		char *nspname = filters->excludeSchemaList.array[i].nspname;
 
 		/* check that we still have room for --exclude-schema args */
-		if (128 < (argsIndex + 2))
+		if (PG_CMD_MAX_ARG < (argsIndex + 2))
 		{
-			log_error("Failed to call pg_restore, too many schema are excluded: "
+			log_error("Failed to call pg_restore, too many exclude-schema entries: "
 					  "argsIndex %d > %d",
-					  argsIndex + 2, 128);
+					  argsIndex + 2,
+					  PG_CMD_MAX_ARG);
 			return false;
 		}
 
