@@ -16,7 +16,9 @@
 
 typedef enum
 {
-	SOURCE_FILTER_EXCLUDE_SCHEMA = 0,
+	SOURCE_FILTER_UNKNOWN = 0,
+	SOURCE_FILTER_INCLUDE_ONLY_SCHEMA,
+	SOURCE_FILTER_EXCLUDE_SCHEMA,
 	SOURCE_FILTER_EXCLUDE_TABLE,
 	SOURCE_FILTER_EXCLUDE_TABLE_DATA,
 	SOURCE_FILTER_EXCLUDE_INDEX,
@@ -85,6 +87,7 @@ typedef struct SourceFilters
 {
 	bool prepared;
 	SourceFilterType type;
+	SourceFilterSchemaList includeOnlySchemaList;
 	SourceFilterSchemaList excludeSchemaList;
 	SourceFilterTableList includeOnlyTableList;
 	SourceFilterTableList excludeTableList;

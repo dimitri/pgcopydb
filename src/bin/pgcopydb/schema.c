@@ -28,7 +28,13 @@
 
 
 static bool prepareFilters(PGSQL *pgsql, SourceFilters *filters);
-static bool prepareFilterCopyExcludeSchema(PGSQL *pgsql, SourceFilters *filters);
+
+static bool prepareFilterCopyIncludeOnlySchema(PGSQL *pgsql,
+											   SourceFilters *filters);
+
+static bool prepareFilterCopyExcludeSchema(PGSQL *pgsql,
+										   SourceFilters *filters);
+
 static bool prepareFilterCopyTableList(PGSQL *pgsql,
 									   SourceFilterTableList *tableList,
 									   const char *temp_table_name);
@@ -3074,6 +3080,7 @@ prepareFilters(PGSQL *pgsql, SourceFilters *filters)
 	 */
 	char *tempTables[] = {
 		"create temp table filter_exclude_schema(nspname name)",
+		"create temp table filter_include_only_schema(nspname name)",
 		"create temp table filter_include_only_table(nspname name, relname name)",
 		"create temp table filter_exclude_table(nspname name, relname name)",
 		"create temp table filter_exclude_table_data(nspname name, relname name)",
@@ -3093,6 +3100,12 @@ prepareFilters(PGSQL *pgsql, SourceFilters *filters)
 	/*
 	 * Now, fill-in the temp tables with the data that we have.
 	 */
+	if (!prepareFilterCopyIncludeOnlySchema(pgsql, filters))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (!prepareFilterCopyExcludeSchema(pgsql, filters))
 	{
 		/* errors have already been logged */
@@ -3103,9 +3116,9 @@ prepareFilters(PGSQL *pgsql, SourceFilters *filters)
 	{
 		char *name;
 		SourceFilterTableList *list;
-	};
-
-	struct name_list_pair nameListPair[] = {
+	}
+	nameListPair[] =
+	{
 		{ "filter_include_only_table", &(filters->includeOnlyTableList) },
 		{ "filter_exclude_table", &(filters->excludeTableList) },
 		{ "filter_exclude_table_data", &(filters->excludeTableDataList) },
@@ -3139,6 +3152,11 @@ prepareFilters(PGSQL *pgsql, SourceFilters *filters)
 static bool
 prepareFilterCopyExcludeSchema(PGSQL *pgsql, SourceFilters *filters)
 {
+	if (filters->excludeSchemaList.count == 0)
+	{
+		return true;
+	}
+
 	char *qname = "\"pg_temp\".\"filter_exclude_schema\"";
 
 	if (!pg_copy_from_stdin(pgsql, qname))
@@ -3161,6 +3179,66 @@ prepareFilterCopyExcludeSchema(PGSQL *pgsql, SourceFilters *filters)
 	if (!pg_copy_end(pgsql))
 	{
 		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * prepareFilterCopyIncludeOnlySchema sends a COPY from STDIN query and then
+ * uploads the local filters that we have in the
+ * pg_temp.filter_include_only_schema table.
+ *
+ * Then it prepares the pg_temp.filter_exclude_schema table with all the schema
+ * names found in pg_namespace that are not in the include-only-schema list.
+ */
+static bool
+prepareFilterCopyIncludeOnlySchema(PGSQL *pgsql, SourceFilters *filters)
+{
+	if (filters->includeOnlySchemaList.count == 0)
+	{
+		return true;
+	}
+
+	char *qname = "\"pg_temp\".\"filter_include_only_schema\"";
+
+	if (!pg_copy_from_stdin(pgsql, qname))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
+	{
+		char *nspname = filters->includeOnlySchemaList.array[i].nspname;
+
+		if (!pg_copy_row_from_stdin(pgsql, "s", nspname))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	if (!pg_copy_end(pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	char *sql =
+		"insert into \"pg_temp\".\"filter_exclude_schema\" "
+		"     select n.nspname "
+		"       from pg_namespace n "
+		"  left join \"pg_temp\".\"filter_include_only_schema\" inc "
+		"         on n.nspname = inc.nspname "
+		"      where inc.nspname is null ";
+
+	if (!pgsql_execute(pgsql, sql))
+	{
+		log_error("Failed to prepare include-only-schema filters, "
+				  "see above for details");
 		return false;
 	}
 
