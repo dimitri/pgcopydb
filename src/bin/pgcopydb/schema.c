@@ -756,40 +756,39 @@ schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
 	}
 
 	char *tablename = "pgcopydb_table_size";
-	char sql[BUFSIZE] = { 0 };
-	int len = 0;
+	PQExpBuffer sql = createPQExpBuffer();
 
 	if (cache)
 	{
-		len =
-			sformat(sql, sizeof(sql),
-					"create table if not exists pgcopydb.%s as %s",
-					tablename,
-					listSourceTableSizeSQL[filters->type].sql);
+		appendPQExpBuffer(sql,
+						  "create table if not exists pgcopydb.%s as %s",
+						  tablename,
+						  listSourceTableSizeSQL[filters->type].sql);
 	}
 	else
 	{
-		len =
-			sformat(sql, sizeof(sql),
-					"create temp table %s  on commit drop as %s",
-					tablename,
-					listSourceTableSizeSQL[filters->type].sql);
+		appendPQExpBuffer(sql,
+						  "create temp table %s  on commit drop as %s",
+						  tablename,
+						  listSourceTableSizeSQL[filters->type].sql);
 	}
 
-	if (sizeof(sql) <= len)
+	if (PQExpBufferBroken(sql))
 	{
 		log_error("Failed to prepare create pgcopydb_table_size query "
-				  "buffer: %lld bytes are needed, we allocated %lld only",
-				  (long long) len,
-				  (long long) sizeof(sql));
+				  "buffer: Out of Memory");
+		(void) destroyPQExpBuffer(sql);
 		return false;
 	}
 
-	if (!pgsql_execute(pgsql, sql))
+	if (!pgsql_execute(pgsql, sql->data))
 	{
 		log_error("Failed to compute table size, see above for details");
+		(void) destroyPQExpBuffer(sql);
 		return false;
 	}
+
+	(void) destroyPQExpBuffer(sql);
 
 	char *createIndex = "create index on pgcopydb_table_size(oid)";
 
