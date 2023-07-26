@@ -181,6 +181,7 @@ copydb_init_workdir(CopyDataSpec *copySpecs,
 		cfPaths->tbldir,
 		cfPaths->idxdir,
 		cfPaths->cdc.dir,
+		cfPaths->compare.dir,
 		NULL
 	};
 
@@ -545,6 +546,28 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths,
 	sformat(cfPaths->cdc.walsegsizefile, MAXPGPATH,
 			"%s/wal_segment_size",
 			cfPaths->cdc.dir);
+
+	/*
+	 * Now prepare the "compare" files we need to compare schema and data
+	 * between the source and target instance.
+	 */
+	sformat(cfPaths->compare.dir, MAXPGPATH, "%s/compare", cfPaths->topdir);
+
+	sformat(cfPaths->compare.sschemafile, MAXPGPATH,
+			"%s/source-schema.json",
+			cfPaths->compare.dir);
+
+	sformat(cfPaths->compare.tschemafile, MAXPGPATH,
+			"%s/target-schema.json",
+			cfPaths->compare.dir);
+
+	sformat(cfPaths->compare.sdatafile, MAXPGPATH,
+			"%s/source-data.json",
+			cfPaths->compare.dir);
+
+	sformat(cfPaths->compare.tdatafile, MAXPGPATH,
+			"%s/target-data.json",
+			cfPaths->compare.dir);
 
 	return true;
 }

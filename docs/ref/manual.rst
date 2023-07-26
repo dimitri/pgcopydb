@@ -14,6 +14,7 @@ their own manual page.
    pgcopydb_clone
    pgcopydb_follow
    pgcopydb_snapshot
+   pgcopydb_compare
    pgcopydb_copy
    pgcopydb_dump
    pgcopydb_restore

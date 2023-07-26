@@ -55,6 +55,17 @@ typedef struct CDCPaths
 	char tlihistfile[MAXPGPATH];      /* /tmp/pgcopydb/cdc/tli.history */
 } CDCPaths;
 
+
+/* Compare Paths */
+typedef struct ComparePaths
+{
+	char dir[MAXPGPATH];          /* /tmp/pgcopydb/compare */
+	char sschemafile[MAXPGPATH]; /* /tmp/pgcopydb/compare/source-schema.json */
+	char tschemafile[MAXPGPATH];  /* /tmp/pgcopydb/compare/target-schema.json */
+	char sdatafile[MAXPGPATH];    /* /tmp/pgcopydb/compare/source-data.json */
+	char tdatafile[MAXPGPATH];    /* /tmp/pgcopydb/compare/target-data.json */
+} ComparePaths;
+
 /* maintain all the internal paths we need in one place */
 typedef struct CopyFilePaths
 {
@@ -71,6 +82,7 @@ typedef struct CopyFilePaths
 
 	CDCPaths cdc;
 	CopyDoneFilePaths done;
+	ComparePaths compare;
 } CopyFilePaths;
 
 

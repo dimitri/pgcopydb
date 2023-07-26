@@ -46,22 +46,25 @@ extern CommandLine copy_commands;
 /* cli_snapshot.c */
 extern CommandLine create_snapshot_command;
 
-/* cli_dump.h */
+/* cli_dump.c */
 extern CommandLine dump_commands;
 
-/* cli_ping.h */
+/* cli_ping.c */
 extern CommandLine ping_command;
 
-/* cli_restore.h */
+/* cli_restore.c */
 extern CommandLine restore_commands;
 
-/* cli_list.h */
+/* cli_list.c */
 extern CommandLine list_commands;
 
-/* cli_stream.h */
+/* cli_stream.c */
 extern CommandLine stream_commands;
 
-/* cli_sentinel.h */
+/* cli_sentinel.c */
 extern CommandLine sentinel_commands;
+
+/* cli_compare.c */
+extern CommandLine compare_commands;
 
 #endif  /* CLI_ROOT_H */
