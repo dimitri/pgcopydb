@@ -120,6 +120,7 @@ typedef struct SourcePartitionContext
 	bool parsedOk;
 } SourcePartitionContext;
 
+
 static void getSchemaList(void *ctx, PGresult *result);
 
 static void getDatabaseList(void *ctx, PGresult *result);
@@ -170,6 +171,8 @@ static void getPartitionList(void *ctx, PGresult *result);
 static bool parseCurrentPartition(PGresult *result,
 								  int rowNumber,
 								  SourceTableParts *parts);
+
+static void getTableChecksum(void *ctx, PGresult *result);
 
 struct FilteringQueries
 {
@@ -2238,7 +2241,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"            and d.deptype = 'e' "
 		"       ) "
 
-		" order by n.nspname, r.relname"
+		" order by n.nspname, r.relname, i.relname"
 	},
 
 	{
@@ -2295,7 +2298,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"            and d.deptype = 'e' "
 		"       ) "
 
-		" order by n.nspname, r.relname"
+		" order by n.nspname, r.relname, i.relname"
 	},
 
 	{
@@ -2366,7 +2369,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"            and d.deptype = 'e' "
 		"       ) "
 
-		" order by n.nspname, r.relname"
+		" order by n.nspname, r.relname, i.relname"
 	},
 
 	{
@@ -2426,7 +2429,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"            and d.deptype = 'e' "
 		"       ) "
 
-		" order by n.nspname, r.relname"
+		" order by n.nspname, r.relname, i.relname"
 	},
 
 	{
@@ -2491,7 +2494,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"            and d.deptype = 'e' "
 		"       ) "
 
-		" order by n.nspname, r.relname"
+		" order by n.nspname, r.relname, i.relname"
 	},
 
 	{
@@ -2551,7 +2554,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"            and d.deptype = 'e' "
 		"       ) "
 
-		" order by n.nspname, r.relname"
+		" order by n.nspname, r.relname, i.relname"
 	},
 
 	{
@@ -2608,7 +2611,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"            and d.deptype = 'e' "
 		"       ) "
 
-		" order by n.nspname, r.relname"
+		" order by n.nspname, r.relname, i.relname"
 	}
 };
 
@@ -2707,7 +2710,7 @@ schema_list_table_indexes(PGSQL *pgsql,
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
 		"      and n.nspname !~ 'pgcopydb' "
 		"      and rn.nspname = $1 and r.relname = $2"
-		" order by n.nspname, r.relname";
+		" order by n.nspname, r.relname, i.relname";
 
 	int paramCount = 2;
 	Oid paramTypes[2] = { TEXTOID, TEXTOID };
@@ -3038,6 +3041,88 @@ schema_list_partitions(PGSQL *pgsql, SourceTable *table, uint64_t partSize)
 		log_error("Failed to list table COPY partition list");
 		return false;
 	}
+
+	return true;
+}
+
+
+/*
+ * schema_checksum_table runs a SQL query that computes the number of rows of a
+ * table and also a checksum for all the rows contents.
+ */
+bool
+schema_checksum_table(PGSQL *pgsql, SourceTable *table)
+{
+	SourcePartitionContext parseContext = { { 0 }, table, false };
+
+	if (table->attributes.count == 0)
+	{
+		char sql[BUFSIZE] = { 0 };
+
+		sformat(sql, sizeof(sql),
+				"select count(1) as cnt, 0 as chksum from only %s",
+				table->qname);
+
+		if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+									   &parseContext, &getTableChecksum))
+		{
+			log_error("Failed to compute checksum for table %s", table->qname);
+			return false;
+		}
+
+		return true;
+	}
+
+	/* first prepare the column list */
+	PQExpBuffer attrList = createPQExpBuffer();
+
+	appendPQExpBuffer(attrList, "(");
+
+	for (int c = 0; c < table->attributes.count; c++)
+	{
+		char *srcAttName = table->attributes.array[c].attname;
+
+		appendPQExpBuffer(attrList, "%s%s",
+						  c > 0 ? ", " : "",
+						  srcAttName);
+	}
+
+	appendPQExpBuffer(attrList, ")");
+
+	if (PQExpBufferBroken(attrList))
+	{
+		(void) destroyPQExpBuffer(attrList);
+		log_error("Failed to build attribute list: Out of Memory");
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/* now prepare the actual query */
+	PQExpBuffer sql = createPQExpBuffer();
+
+	appendPQExpBuffer(sql,
+					  "select count(1) as cnt, "
+					  "       sum(hashtext(%s::text)::bigint) as chksum "
+					  "  from only %s",
+					  attrList->data,
+					  table->qname);
+
+	if (PQExpBufferBroken(sql))
+	{
+		(void) destroyPQExpBuffer(attrList);
+		(void) destroyPQExpBuffer(sql);
+		log_error("Failed to build attribute list: Out of Memory");
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!pgsql_execute_with_params(pgsql, sql->data, 0, NULL, NULL,
+								   &parseContext, &getTableChecksum))
+	{
+		log_error("Failed to compute checksum for table %s", table->qname);
+		(void) destroyPQExpBuffer(sql);
+		return false;
+	}
+
+	(void) destroyPQExpBuffer(sql);
 
 	return true;
 }
@@ -4984,4 +5069,52 @@ parseCurrentPartition(PGresult *result, int rowNumber, SourceTableParts *parts)
 	}
 
 	return errors == 0;
+}
+
+
+/*
+ * getTableChecksum assigns the rowcount and checksum fields of a table from
+ * the result of an SQL query.
+ */
+static void
+getTableChecksum(void *ctx, PGresult *result)
+{
+	SourcePartitionContext *context = (SourcePartitionContext *) ctx;
+	int nTuples = PQntuples(result);
+	int errors = 0;
+
+	if (nTuples != 1)
+	{
+		log_error("Query returned %d columns, expected 1", nTuples);
+		context->parsedOk = false;
+		return;
+	}
+
+	if (PQnfields(result) != 2)
+	{
+		log_error("Query returned %d columns, expected 2", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	SourceTable *table = context->table;
+
+	/* 1. count */
+	char *value = PQgetvalue(result, 0, 0);
+
+	if (!stringToUInt64(value, &(table->rowcount)))
+	{
+		log_error("Invalid row count value: \"%s\"", value);
+		++errors;
+	}
+
+	value = PQgetvalue(result, 0, 1);
+
+	if (!stringToUInt64(value, &(table->checksum)))
+	{
+		log_error("Invalid checksum value: \"%s\"", value);
+		++errors;
+	}
+
+	context->parsedOk = errors == 0;
 }

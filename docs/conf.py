@@ -114,6 +114,13 @@ man_pages = [
         1,
     ),
     (
+        "ref/pgcopydb_compare",
+        "pgcopydb compare",
+        "pgcopydb compare",
+        [author],
+        1,
+    ),
+    (
         "ref/pgcopydb_copy",
         "pgcopydb copy",
         "pgcopydb copy",

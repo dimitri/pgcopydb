@@ -43,3 +43,11 @@ psql -o /tmp/d.out -d ${PAGILA_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.s
 pgcopydb clone --skip-ext-comments       \
          --source ${PAGILA_SOURCE_PGURI} \
          --target ${PAGILA_TARGET_PGURI}
+
+pgcopydb compare schema \
+         --source ${PAGILA_SOURCE_PGURI} \
+         --target ${PAGILA_TARGET_PGURI}
+
+pgcopydb compare data \
+         --source ${PAGILA_SOURCE_PGURI} \
+         --target ${PAGILA_TARGET_PGURI}

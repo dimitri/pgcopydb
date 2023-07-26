@@ -172,6 +172,9 @@ typedef struct SourceTable
 	char bytesPretty[NAMEDATALEN]; /* pg_size_pretty */
 	bool excludeData;
 
+	uint64_t rowcount;
+	uint64_t checksum;
+
 	char restoreListName[RESTORE_LIST_NAMEDATALEN];
 	char partKey[NAMEDATALEN];
 	SourceTablePartsArray partsArray;
@@ -213,6 +216,7 @@ typedef struct SourceSequence
 	char restoreListName[RESTORE_LIST_NAMEDATALEN];
 
 	UT_hash_handle hh;          /* makes this structure hashable */
+	UT_hash_handle hhQName;     /* makes this structure hashable */
 } SourceSequence;
 
 
@@ -306,6 +310,7 @@ typedef struct SourceCatalog
 	SourceTable *sourceTableHashByQName;
 	SourceIndex *sourceIndexHashByOid;
 	SourceSequence *sourceSeqHashByOid;
+	SourceSequence *sourceSeqHashByQname;
 } SourceCatalog;
 
 
@@ -370,5 +375,7 @@ bool schema_list_table_indexes(PGSQL *pgsql,
 bool schema_list_pg_depend(PGSQL *pgsql,
 						   SourceFilters *filters,
 						   SourceDependArray *dependArray);
+
+bool schema_checksum_table(PGSQL *pgsql, SourceTable *table);
 
 #endif /* SCHEMA_H */
