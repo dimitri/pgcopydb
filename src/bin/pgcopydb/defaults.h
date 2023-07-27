@@ -9,7 +9,7 @@
 #include "git-version.h"
 
 /* additional version information for printing version on CLI */
-#define PGCOPYDB_VERSION "0.12"
+#define PGCOPYDB_VERSION "0.13"
 
 #ifdef GIT_VERSION
 #define VERSION_STRING GIT_VERSION
