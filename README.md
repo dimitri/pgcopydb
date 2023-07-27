@@ -51,6 +51,7 @@ $ pgcopydb help
     follow    Replay changes from the source database to the target database
     copy-db   Clone an entire database from source to target
     snapshot  Create and exports a snapshot on the source database
+  + compare   Compare source and target databases
   + copy      Implement the data section of the database copy
   + dump      Dump database objects from a Postgres instance
   + restore   Restore database objects into a Postgres instance
@@ -59,6 +60,10 @@ $ pgcopydb help
     ping      Copy the roles from the source instance to the target instance
     help      print help message
     version   print pgcopydb version
+
+  pgcopydb compare
+    schema  Compare source and target schema
+    data    Compare source and target data
 
   pgcopydb copy
     db           Copy an entire database from source to target

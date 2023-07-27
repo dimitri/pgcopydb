@@ -1,3 +1,42 @@
+### pgcopydb v0.13 (July 27, 2023) ###
+
+This is a bugfix release that still manages to include some new features.
+
+### Added
+* pgcopydb compare schema|data (#404)
+* Implement the new filter "include-only-schema". (#403)
+* Implement extension requirements support. (#400)
+* Add facilities to list extension versions. (#378)
+* Implement --skip-extension-comments. (#356)
+
+### Changed
+* Add Postgres backend PID to more statements. (#396)
+* Add Postgres backend PID to our SQL (error) logs. (#393)
+* Only update sentinel.startpos up to flush_lsn. (#372)
+* Review double-precision format string from %g to %f. (#368)
+
+### Fix
+* Fix schema_prepare_pgcopydb_table_size to use dynamic memory. (#402)
+* Fix log message typos (missing quotes in \"%s\"). (#401)
+* Fix support for DEFERRABLE and INITIALLY DEFERRED constraints. (#398)
+* Fix sequences dependencies tracking. (#397)
+* Fix issue with resuming streaming of interleaved transactions. (#394)
+* Attempt to fix a segfault. (#391)
+* Fix a typo in the filtering docs: include-only-table. (#389)
+* Fix a couple bugs in pgcopydb clone --follow. (#386)
+* Fix our COPY statements for tables with zero column. (#385)
+* Assorted fixes for the test_decoding parser. (#380)
+* The cli_stream module didn't get the pg_strdup() memo for DSNs. (#379)
+* The cli_stream module didn't get the pg_strdup() memo for DSNs. (#371)
+* Implement multi-parts read from Unix PIPE. (#370)
+* Fix NULL connection string in: pgcopydb list schema. (#369)
+* Refactor how ld_stream writes to PIPE stdout. (#367)
+* Fix skipping streaming messages when resuming from latest JSON file. (#359)
+* Fix stream_apply_wait_for_sentinel() return value when interrupted. (#358)
+* Fix stream_transform_resume() cache invalidation of the SQL file. (#357)
+* Fix stream_transform_resume to share context with stream_transform_file. (#355)
+* Fix our PG_VERSION_STRING_MAX_LENGTH to host more. (#353)
+
 ### pgcopydb v0.12 (June 28, 2023) ###
 
 This is a bugfix release with a strong focus on our logical decoding client.
