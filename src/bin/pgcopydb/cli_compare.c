@@ -734,8 +734,8 @@ cli_compare_data(int argc, char **argv)
 
 		fformat(stdout, "%30s | %20lld | %20llx \n",
 				source->qname,
-				source->rowcount,
-				source->checksum);
+				(long long unsigned int) source->rowcount,
+				(long long unsigned int) source->checksum);
 	}
 
 	fformat(stdout, "\n");
