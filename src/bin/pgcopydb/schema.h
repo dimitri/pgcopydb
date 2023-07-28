@@ -159,6 +159,9 @@ typedef struct SourceTableAttributeArray
 /* forward declaration */
 struct SourceIndexList;
 
+/* checksum is formatted as uuid */
+#define CHECKSUMLEN 36
+
 typedef struct SourceTable
 {
 	uint32_t oid;
@@ -173,7 +176,7 @@ typedef struct SourceTable
 	bool excludeData;
 
 	uint64_t rowcount;
-	uint64_t checksum;
+	char checksum[CHECKSUMLEN];
 
 	char restoreListName[RESTORE_LIST_NAMEDATALEN];
 	char partKey[NAMEDATALEN];

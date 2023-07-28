@@ -48,7 +48,8 @@ static CommandLine compare_data_command =
 		" --source ... ",
 		"  --source         Postgres URI to the source database\n"
 		"  --target         Postgres URI to the target database\n"
-		"  --dir            Work directory to use\n",
+		"  --dir            Work directory to use\n"
+		"  --json           Format the output using JSON\n",
 		cli_compare_getopts,
 		cli_compare_data);
 
@@ -77,6 +78,7 @@ cli_compare_getopts(int argc, char **argv)
 		{ "source", required_argument, NULL, 'S' },
 		{ "target", required_argument, NULL, 'T' },
 		{ "dir", required_argument, NULL, 'D' },
+		{ "json", no_argument, NULL, 'J' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "notice", no_argument, NULL, 'v' },
@@ -131,6 +133,13 @@ cli_compare_getopts(int argc, char **argv)
 			{
 				strlcpy(options.dir, optarg, MAXPGPATH);
 				log_trace("--dir %s", options.dir);
+				break;
+			}
+
+			case 'J':
+			{
+				outputJSON = true;
+				log_trace("--json");
 				break;
 			}
 
@@ -198,6 +207,12 @@ cli_compare_getopts(int argc, char **argv)
 				commandline_help(stderr);
 				exit(EXIT_CODE_QUIT);
 				break;
+			}
+
+			case '?':
+			default:
+			{
+				++errors;
 			}
 		}
 	}
@@ -626,7 +641,7 @@ cli_compare_data(int argc, char **argv)
 	PGSQL dst = { 0 };
 	char *dstURI = copySpecs.connStrings.target_pguri;
 
-	if (!pgsql_init(&dst, dstURI, PGSQL_CONN_SOURCE))
+	if (!pgsql_init(&dst, dstURI, PGSQL_CONN_TARGET))
 	{
 		/* errors have already been logged */
 		(void) pgsql_finish(&src);
@@ -642,11 +657,12 @@ cli_compare_data(int argc, char **argv)
 
 	uint64_t diffCount = 0;
 
+	SourceTableArray *tableArray = &(sourceSpecs.catalog.sourceTableArray);
 	SourceTable *targetTableHash = targetSpecs.catalog.sourceTableHashByQName;
 
-	for (int i = 0; i < sourceSpecs.catalog.sourceTableArray.count; i++)
+	for (int i = 0; i < tableArray->count; i++)
 	{
-		SourceTable *source = &(sourceSpecs.catalog.sourceTableArray.array[i]);
+		SourceTable *source = &(tableArray->array[i]);
 		SourceTable *target = NULL;
 
 		char *qname = source->qname;
@@ -687,19 +703,19 @@ cli_compare_data(int argc, char **argv)
 					  (long long) target->rowcount);
 		}
 
-		if (source->checksum != target->checksum)
+		if (!streq(source->checksum, target->checksum))
 		{
 			++diffCount;
-			log_error("Table %s has checksum %lld on source, %lld on target",
+			log_error("Table %s has checksum %s on source, %s on target",
 					  qname,
-					  (long long) source->checksum,
-					  (long long) target->checksum);
+					  source->checksum,
+					  target->checksum);
 		}
 
-		log_notice("%s: %lld rows, checksum %lld",
+		log_notice("%s: %lld rows, checksum %s",
 				   qname,
 				   (long long) source->rowcount,
-				   (long long) source->checksum);
+				   source->checksum);
 	}
 
 	if (!pgsql_commit(&src))
@@ -720,25 +736,90 @@ cli_compare_data(int argc, char **argv)
 		log_info("pgcopydb data inspection is successful");
 	}
 
-	fformat(stdout, "%30s | %20s | %20s \n",
-			"Table Name", "Row Count", "Checksum");
-
-	fformat(stdout, "%30s-+-%20s-+-%20s \n",
-			"------------------------------",
-			"--------------------",
-			"--------------------");
-
-	for (int i = 0; i < sourceSpecs.catalog.sourceTableArray.count; i++)
+	if (outputJSON)
 	{
-		SourceTable *source = &(sourceSpecs.catalog.sourceTableArray.array[i]);
+		JSON_Value *js = json_value_init_array();
+		JSON_Array *jsArray = json_value_get_array(js);
 
-		fformat(stdout, "%30s | %20lld | %20llx \n",
-				source->qname,
-				(long long unsigned int) source->rowcount,
-				(long long unsigned int) source->checksum);
+		for (int i = 0; i < tableArray->count; i++)
+		{
+			SourceTable *source = &(tableArray->array[i]);
+			SourceTable *target = NULL;
+
+			char *qname = source->qname;
+			size_t len = strlen(qname);
+
+			HASH_FIND(hhQName, targetTableHash, qname, len, target);
+
+			if (target == NULL)
+			{
+				log_error("Failed to find table %s in target database",
+						  qname);
+				continue;
+			}
+
+			JSON_Value *jsComp = json_value_init_object();
+			JSON_Object *jsObj = json_value_get_object(jsComp);
+
+			json_object_dotset_number(jsObj, "source.oid", source->oid);
+			json_object_dotset_string(jsObj, "source.schema", source->nspname);
+			json_object_dotset_string(jsObj, "source.name", source->relname);
+			json_object_dotset_number(jsObj, "source.rowcount", source->rowcount);
+			json_object_dotset_string(jsObj, "source.checksum", source->checksum);
+
+			json_object_dotset_number(jsObj, "target.oid", target->oid);
+			json_object_dotset_string(jsObj, "target.schema", target->nspname);
+			json_object_dotset_string(jsObj, "target.name", target->relname);
+			json_object_dotset_number(jsObj, "target.rowcount", target->rowcount);
+			json_object_dotset_string(jsObj, "target.checksum", target->checksum);
+
+			json_array_append_value(jsArray, jsComp);
+		}
+
+		char *serialized_string = json_serialize_to_string_pretty(js);
+
+		fformat(stdout, "%s\n", serialized_string);
+
+		json_free_serialized_string(serialized_string);
+		json_value_free(js);
 	}
+	else
+	{
+		fformat(stdout, "%30s | %s | %36s | %36s \n",
+				"Table Name", "!", "Source Checksum", "Target Checksum");
 
-	fformat(stdout, "\n");
+		fformat(stdout, "%30s-+-%s-+-%36s-+-%36s \n",
+				"------------------------------",
+				"-",
+				"------------------------------------",
+				"------------------------------------");
+
+		for (int i = 0; i < tableArray->count; i++)
+		{
+			SourceTable *source = &(tableArray->array[i]);
+			SourceTable *target = NULL;
+
+			char *qname = source->qname;
+			size_t len = strlen(qname);
+
+			HASH_FIND(hhQName, targetTableHash, qname, len, target);
+
+			if (target == NULL)
+			{
+				log_error("Failed to find table %s in target database",
+						  qname);
+				continue;
+			}
+
+			fformat(stdout, "%30s | %s | %36s | %36s \n",
+					source->qname,
+					streq(source->checksum, target->checksum) ? " " : "!",
+					source->checksum,
+					target->checksum);
+		}
+
+		fformat(stdout, "\n");
+	}
 }
 
 

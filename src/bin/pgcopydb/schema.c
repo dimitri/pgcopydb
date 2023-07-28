@@ -3099,10 +3099,23 @@ schema_checksum_table(PGSQL *pgsql, SourceTable *table)
 	/* now prepare the actual query */
 	PQExpBuffer sql = createPQExpBuffer();
 
+	/*
+	 * Compute the hashtext of every single row in the table, and aggregate the
+	 * results as a sum of bigint numbers. Because the sum of bigint could
+	 * overflow to numeric, the aggregated sum is then hashed into an MD5
+	 * value: bigint is 64 bits, MD5 is 128 bits.
+	 *
+	 * Also, to lower the chances of a collision, include the row count in the
+	 * computation of the MD5 by appending it to the input string of the MD5
+	 * function.
+	 */
 	appendPQExpBuffer(sql,
 					  "select count(1) as cnt, "
-					  "       sum(hashtext(%s::text)::bigint) as chksum "
-					  "  from only %s",
+					  "md5(format('%%s-%%s', "
+					  "      sum(hashtext(%s::text)::bigint),"
+					  "      count(1))"
+					  ")::uuid as chksum "
+					  "from only %s",
 					  attrList->data,
 					  table->qname);
 
@@ -5109,12 +5122,7 @@ getTableChecksum(void *ctx, PGresult *result)
 	}
 
 	value = PQgetvalue(result, 0, 1);
-
-	if (!stringToUInt64(value, &(table->checksum)))
-	{
-		log_error("Invalid checksum value: \"%s\"", value);
-		++errors;
-	}
+	strlcpy(table->checksum, value, CHECKSUMLEN);
 
 	context->parsedOk = errors == 0;
 }
