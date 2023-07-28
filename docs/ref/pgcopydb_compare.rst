@@ -61,9 +61,25 @@ of tables, indexes, constraints and sequences there.
 Then it uses a SQL query with the following template to compute the row
 count and a checksum for each table::
 
-  select count(1) as cnt,
-         sum(hashtext(_COLS_::text)::bigint) as chksum
-     from only _TABLE_
+    /*
+     * Compute the hashtext of every single row in the table, and aggregate the
+     * results as a sum of bigint numbers. Because the sum of bigint could
+     * overflow to numeric, the aggregated sum is then hashed into an MD5
+     * value: bigint is 64 bits, MD5 is 128 bits.
+     *
+     * Also, to lower the chances of a collision, include the row count in the
+     * computation of the MD5 by appending it to the input string of the MD5
+     * function.
+     */
+    select count(1) as cnt,
+           md5(
+             format(
+               '%%s-%%s',
+               sum(hashtext(__COLS__::text)::bigint),
+               count(1)
+             )
+           )::uuid as chksum
+    from only __TABLE__
 
 Running such a query on a large table can take a lot of time.
 
@@ -75,6 +91,7 @@ Running such a query on a large table can take a lot of time.
      --source         Postgres URI to the source database
      --target         Postgres URI to the target database
      --dir            Work directory to use
+     --json           Format the output using JSON
 
 
 Options
@@ -103,6 +120,11 @@ drop`` subcommands:
   location given by this option, or defaults to
   ``${TMPDIR}/pgcopydb`` when the environment variable is set, or
   then to ``/tmp/pgcopydb``.
+
+--json
+
+  The output of the command is formatted in JSON, when supported. Ignored
+  otherwise.
 
 --verbose
 
@@ -143,112 +165,114 @@ Comparing pgcopydb limited understanding of the schema:
 ::
 
    $ pgcopydb compare schema --notice
-   15:08:47 24072 INFO   Running pgcopydb version 0.12.28.g34343c8.dirty from "/Users/dim/dev/PostgreSQL/pgcopydb/src/bin/pgcopydb/pgcopydb"
-   15:08:47 24072 NOTICE Using work dir "/var/folders/d7/zzxmgs9s16gdxxcm0hs0sssw0000gn/T//pgcopydb"
-   15:08:47 24072 NOTICE Work directory "/var/folders/d7/zzxmgs9s16gdxxcm0hs0sssw0000gn/T//pgcopydb" already exists
-   15:08:47 24072 INFO   A previous run has run through completion
-   15:08:47 24072 INFO   SOURCE: Connecting to "postgres:///pagila"
-   15:08:47 24072 INFO   Fetched information for 1 extensions
-   15:08:47 24072 INFO   Fetched information for 25 tables, with an estimated total of 5179  tuples and 190 MB
-   15:08:48 24072 INFO   Fetched information for 49 indexes
-   15:08:48 24072 INFO   Fetching information for 16 sequences
-   15:08:48 24072 NOTICE Skipping target catalog preparation
-   15:08:48 24072 NOTICE Storing migration schema in JSON file "/var/folders/d7/zzxmgs9s16gdxxcm0hs0sssw0000gn/T//pgcopydb/compare/source-schema.json"
-   15:08:48 24072 INFO   TARGET: Connecting to "postgres:///plop"
-   15:08:48 24072 INFO   Fetched information for 6 extensions
-   15:08:48 24072 INFO   Fetched information for 25 tables, with an estimated total of 5219  tuples and 190 MB
-   15:08:48 24072 INFO   Fetched information for 49 indexes
-   15:08:48 24072 INFO   Fetching information for 16 sequences
-   15:08:48 24072 NOTICE Skipping target catalog preparation
-   15:08:48 24072 NOTICE Storing migration schema in JSON file "/var/folders/d7/zzxmgs9s16gdxxcm0hs0sssw0000gn/T//pgcopydb/compare/target-schema.json"
-   15:08:48 24072 INFO   [SOURCE] table: 25 index: 49 sequence: 16
-   15:08:48 24072 INFO   [TARGET] table: 25 index: 49 sequence: 16
-   15:08:48 24072 NOTICE Matched table "public"."test": 1 columns ok, 0 indexes ok
-   15:08:48 24072 NOTICE Matched table "public"."rental": 7 columns ok, 3 indexes ok
-   15:08:48 24072 NOTICE Matched table "public"."film": 14 columns ok, 5 indexes ok
-   15:08:48 24072 NOTICE Matched table "public"."film_actor": 3 columns ok, 2 indexes ok
-   15:08:48 24072 NOTICE Matched table "public"."inventory": 4 columns ok, 2 indexes ok
-   15:08:48 24072 NOTICE Matched table "public"."payment_p2022_03": 6 columns ok, 3 indexes ok
-   15:08:48 24072 NOTICE Matched table "public"."payment_p2022_05": 6 columns ok, 3 indexes ok
-   15:08:48 24072 NOTICE Matched table "public"."payment_p2022_06": 6 columns ok, 3 indexes ok
-   15:08:48 24072 NOTICE Matched table "public"."payment_p2022_04": 6 columns ok, 3 indexes ok
-   15:08:48 24072 NOTICE Matched table "public"."payment_p2022_02": 6 columns ok, 3 indexes ok
-   15:08:48 24072 NOTICE Matched table "public"."payment_p2022_07": 6 columns ok, 0 indexes ok
-   15:08:48 24072 NOTICE Matched table "public"."customer": 10 columns ok, 4 indexes ok
-   15:08:48 24072 NOTICE Matched table "public"."address": 8 columns ok, 2 indexes ok
-   15:08:48 24072 NOTICE Matched table "public"."city": 4 columns ok, 2 indexes ok
-   15:08:48 24072 NOTICE Matched table "public"."film_category": 3 columns ok, 1 indexes ok
-   15:08:48 24072 NOTICE Matched table "public"."payment_p2022_01": 6 columns ok, 3 indexes ok
-   15:08:48 24072 NOTICE Matched table "public"."actor": 4 columns ok, 2 indexes ok
-   15:08:48 24072 NOTICE Matched table "public"."bar": 2 columns ok, 1 indexes ok
-   15:08:48 24072 NOTICE Matched table "public"."bin": 2 columns ok, 0 indexes ok
-   15:08:48 24072 NOTICE Matched table "public"."category": 3 columns ok, 1 indexes ok
-   15:08:48 24072 NOTICE Matched table "public"."country": 3 columns ok, 1 indexes ok
-   15:08:48 24072 NOTICE Matched table "public"."foo": 2 columns ok, 1 indexes ok
-   15:08:48 24072 NOTICE Matched table "public"."staff": 11 columns ok, 1 indexes ok
-   15:08:48 24072 NOTICE Matched table "public"."language": 3 columns ok, 1 indexes ok
-   15:08:48 24072 NOTICE Matched table "public"."store": 4 columns ok, 2 indexes ok
-   15:08:48 24072 NOTICE Matched sequence "public"."actor_actor_id_seq" (last value 200)
-   15:08:48 24072 NOTICE Matched sequence "public"."address_address_id_seq" (last value 605)
-   15:08:48 24072 NOTICE Matched sequence "public"."bar_id_seq" (last value 1)
-   15:08:48 24072 NOTICE Matched sequence "public"."bin_id_seq" (last value 17)
-   15:08:48 24072 NOTICE Matched sequence "public"."category_category_id_seq" (last value 16)
-   15:08:48 24072 NOTICE Matched sequence "public"."city_city_id_seq" (last value 600)
-   15:08:48 24072 NOTICE Matched sequence "public"."country_country_id_seq" (last value 109)
-   15:08:48 24072 NOTICE Matched sequence "public"."customer_customer_id_seq" (last value 599)
-   15:08:48 24072 NOTICE Matched sequence "public"."film_film_id_seq" (last value 1000)
-   15:08:48 24072 NOTICE Matched sequence "public"."foo_id_seq" (last value 1)
-   15:08:48 24072 NOTICE Matched sequence "public"."inventory_inventory_id_seq" (last value 4581)
-   15:08:48 24072 NOTICE Matched sequence "public"."language_language_id_seq" (last value 6)
-   15:08:48 24072 NOTICE Matched sequence "public"."payment_payment_id_seq" (last value 32102)
-   15:08:48 24072 NOTICE Matched sequence "public"."rental_rental_id_seq" (last value 16053)
-   15:08:48 24072 NOTICE Matched sequence "public"."staff_staff_id_seq" (last value 2)
-   15:08:48 24072 NOTICE Matched sequence "public"."store_store_id_seq" (last value 2)
-   15:08:48 24072 INFO   pgcopydb schema inspection is successful
+   INFO   Running pgcopydb version 0.12.28.g34343c8.dirty from "/Users/dim/dev/PostgreSQL/pgcopydb/src/bin/pgcopydb/pgcopydb"
+   NOTICE Using work dir "/var/folders/d7/zzxmgs9s16gdxxcm0hs0sssw0000gn/T//pgcopydb"
+   NOTICE Work directory "/var/folders/d7/zzxmgs9s16gdxxcm0hs0sssw0000gn/T//pgcopydb" already exists
+   INFO   A previous run has run through completion
+   INFO   SOURCE: Connecting to "postgres:///pagila"
+   INFO   Fetched information for 1 extensions
+   INFO   Fetched information for 25 tables, with an estimated total of 5179  tuples and 190 MB
+   INFO   Fetched information for 49 indexes
+   INFO   Fetching information for 16 sequences
+   NOTICE Skipping target catalog preparation
+   NOTICE Storing migration schema in JSON file "/var/folders/d7/zzxmgs9s16gdxxcm0hs0sssw0000gn/T//pgcopydb/compare/source-schema.json"
+   INFO   TARGET: Connecting to "postgres:///plop"
+   INFO   Fetched information for 6 extensions
+   INFO   Fetched information for 25 tables, with an estimated total of 5219  tuples and 190 MB
+   INFO   Fetched information for 49 indexes
+   INFO   Fetching information for 16 sequences
+   NOTICE Skipping target catalog preparation
+   NOTICE Storing migration schema in JSON file "/var/folders/d7/zzxmgs9s16gdxxcm0hs0sssw0000gn/T//pgcopydb/compare/target-schema.json"
+   INFO   [SOURCE] table: 25 index: 49 sequence: 16
+   INFO   [TARGET] table: 25 index: 49 sequence: 16
+   NOTICE Matched table "public"."test": 1 columns ok, 0 indexes ok
+   NOTICE Matched table "public"."rental": 7 columns ok, 3 indexes ok
+   NOTICE Matched table "public"."film": 14 columns ok, 5 indexes ok
+   NOTICE Matched table "public"."film_actor": 3 columns ok, 2 indexes ok
+   NOTICE Matched table "public"."inventory": 4 columns ok, 2 indexes ok
+   NOTICE Matched table "public"."payment_p2022_03": 6 columns ok, 3 indexes ok
+   NOTICE Matched table "public"."payment_p2022_05": 6 columns ok, 3 indexes ok
+   NOTICE Matched table "public"."payment_p2022_06": 6 columns ok, 3 indexes ok
+   NOTICE Matched table "public"."payment_p2022_04": 6 columns ok, 3 indexes ok
+   NOTICE Matched table "public"."payment_p2022_02": 6 columns ok, 3 indexes ok
+   NOTICE Matched table "public"."payment_p2022_07": 6 columns ok, 0 indexes ok
+   NOTICE Matched table "public"."customer": 10 columns ok, 4 indexes ok
+   NOTICE Matched table "public"."address": 8 columns ok, 2 indexes ok
+   NOTICE Matched table "public"."city": 4 columns ok, 2 indexes ok
+   NOTICE Matched table "public"."film_category": 3 columns ok, 1 indexes ok
+   NOTICE Matched table "public"."payment_p2022_01": 6 columns ok, 3 indexes ok
+   NOTICE Matched table "public"."actor": 4 columns ok, 2 indexes ok
+   NOTICE Matched table "public"."bar": 2 columns ok, 1 indexes ok
+   NOTICE Matched table "public"."bin": 2 columns ok, 0 indexes ok
+   NOTICE Matched table "public"."category": 3 columns ok, 1 indexes ok
+   NOTICE Matched table "public"."country": 3 columns ok, 1 indexes ok
+   NOTICE Matched table "public"."foo": 2 columns ok, 1 indexes ok
+   NOTICE Matched table "public"."staff": 11 columns ok, 1 indexes ok
+   NOTICE Matched table "public"."language": 3 columns ok, 1 indexes ok
+   NOTICE Matched table "public"."store": 4 columns ok, 2 indexes ok
+   NOTICE Matched sequence "public"."actor_actor_id_seq" (last value 200)
+   NOTICE Matched sequence "public"."address_address_id_seq" (last value 605)
+   NOTICE Matched sequence "public"."bar_id_seq" (last value 1)
+   NOTICE Matched sequence "public"."bin_id_seq" (last value 17)
+   NOTICE Matched sequence "public"."category_category_id_seq" (last value 16)
+   NOTICE Matched sequence "public"."city_city_id_seq" (last value 600)
+   NOTICE Matched sequence "public"."country_country_id_seq" (last value 109)
+   NOTICE Matched sequence "public"."customer_customer_id_seq" (last value 599)
+   NOTICE Matched sequence "public"."film_film_id_seq" (last value 1000)
+   NOTICE Matched sequence "public"."foo_id_seq" (last value 1)
+   NOTICE Matched sequence "public"."inventory_inventory_id_seq" (last value 4581)
+   NOTICE Matched sequence "public"."language_language_id_seq" (last value 6)
+   NOTICE Matched sequence "public"."payment_payment_id_seq" (last value 32102)
+   NOTICE Matched sequence "public"."rental_rental_id_seq" (last value 16053)
+   NOTICE Matched sequence "public"."staff_staff_id_seq" (last value 2)
+   NOTICE Matched sequence "public"."store_store_id_seq" (last value 2)
+   INFO   pgcopydb schema inspection is successful
 
 Comparing data:
 
 ::
 
    $ pgcopydb compare data
-   15:09:31 24090 INFO   Running pgcopydb version 0.12.28.g34343c8.dirty from "/Users/dim/dev/PostgreSQL/pgcopydb/src/bin/pgcopydb/pgcopydb"
-   15:09:31 24090 INFO   A previous run has run through completion
-   15:09:31 24090 INFO   SOURCE: Connecting to "postgres:///pagila"
-   15:09:31 24090 INFO   Fetched information for 1 extensions
-   15:09:31 24090 INFO   Fetched information for 25 tables, with an estimated total of 5179  tuples and 190 MB
-   15:09:31 24090 INFO   Fetched information for 49 indexes
-   15:09:31 24090 INFO   Fetching information for 16 sequences
-   15:09:31 24090 INFO   TARGET: Connecting to "postgres:///plop"
-   15:09:31 24090 INFO   Fetched information for 6 extensions
-   15:09:31 24090 INFO   Fetched information for 25 tables, with an estimated total of 5219  tuples and 190 MB
-   15:09:31 24090 INFO   Fetched information for 49 indexes
-   15:09:31 24090 INFO   Fetching information for 16 sequences
-   15:09:31 24090 INFO   Comparing data for 25 tables
-   15:09:34 24090 INFO   pgcopydb data inspection is successful
-                       Table Name |            Row Count |             Checksum
-   -------------------------------+----------------------+---------------------
-                  "public"."test" |              5173525 |     fffffe0eda6e8ed6
-                "public"."rental" |                16044 |            a9e94a0fd
-                  "public"."film" |                 1000 |            6c09234f3
-            "public"."film_actor" |                 5462 |            62de3e446
-             "public"."inventory" |                 4581 |            b8cd676ea
-      "public"."payment_p2022_03" |                 2713 |              83be351
-      "public"."payment_p2022_05" |                 2677 |           1f7db109e6
-      "public"."payment_p2022_06" |                 2654 |           136e71d157
-      "public"."payment_p2022_04" |                 2547 |     ffffffee3cc184de
-      "public"."payment_p2022_02" |                 2401 |            46630a420
-      "public"."payment_p2022_07" |                 2334 |            41ab5db80
-              "public"."customer" |                  599 |     fffffffd9f34bcc0
-               "public"."address" |                  603 |     fffffffe2feecfad
-                  "public"."city" |                  600 |            408b30b2b
-         "public"."film_category" |                 1000 |     fffffff7416d4e14
-      "public"."payment_p2022_01" |                  723 |     fffffffb62e13a74
-                 "public"."actor" |                  200 |             59093ce3
-                   "public"."bar" |                    1 |             4b05576b
-                   "public"."bin" |                   17 |     ffffffff8f6be7b1
-              "public"."category" |                   16 |     fffffffd669034f7
-               "public"."country" |                  109 |     fffffffd359c2b94
-                   "public"."foo" |                    2 |             6bc8e3ff
-                 "public"."staff" |                    2 |     ffffffff97467951
-              "public"."language" |                    6 |            1922751a8
-                 "public"."store" |                    2 |             441cc744
+   INFO   A previous run has run through completion
+   INFO   SOURCE: Connecting to "postgres:///pagila"
+   INFO   Fetched information for 1 extensions
+   INFO   Fetched information for 25 tables, with an estimated total of 5179  tuples and 190 MB
+   INFO   Fetched information for 49 indexes
+   INFO   Fetching information for 16 sequences
+   INFO   TARGET: Connecting to "postgres:///plop"
+   INFO   Fetched information for 6 extensions
+   INFO   Fetched information for 25 tables, with an estimated total of 5219  tuples and 190 MB
+   INFO   Fetched information for 49 indexes
+   INFO   Fetching information for 16 sequences
+   INFO   Comparing data for 25 tables
+   ERROR  Table "public"."test" has 5173526 rows on source, 5173525 rows on target
+   ERROR  Table "public"."test" has checksum be66f291-2774-9365-400c-1ccd5160bdf on source, 8be89afa-bceb-f501-dc7b-0538dc17fa3 on target
+   ERROR  Table "public"."foo" has 3 rows on source, 2 rows on target
+   ERROR  Table "public"."foo" has checksum a244eba3-376b-75e6-6720-e853b485ef6 on source, 594ae64d-2216-f687-2f11-45cbd9c7153 on target
+                       Table Name | ! |                      Source Checksum |                      Target Checksum
+   -------------------------------+---+--------------------------------------+-------------------------------------
+                  "public"."test" | ! |  be66f291-2774-9365-400c-1ccd5160bdf |  8be89afa-bceb-f501-dc7b-0538dc17fa3
+                "public"."rental" |   |  e7dfabf3-baa8-473a-8fd3-76d59e56467 |  e7dfabf3-baa8-473a-8fd3-76d59e56467
+                  "public"."film" |   |  c5058d1e-aaf4-f058-6f1e-76d5db63da9 |  c5058d1e-aaf4-f058-6f1e-76d5db63da9
+            "public"."film_actor" |   |  7534654a-0bcd-cb27-1a2e-ccd524899a9 |  7534654a-0bcd-cb27-1a2e-ccd524899a9
+             "public"."inventory" |   |  72f9afd8-0064-3642-acd7-9ee1f444efe |  72f9afd8-0064-3642-acd7-9ee1f444efe
+      "public"."payment_p2022_03" |   |  dc73311a-2ea2-e933-da80-123b44d06b9 |  dc73311a-2ea2-e933-da80-123b44d06b9
+      "public"."payment_p2022_05" |   |  e788bf50-9809-9896-8110-91816edcc04 |  e788bf50-9809-9896-8110-91816edcc04
+      "public"."payment_p2022_06" |   |  5f650b4c-d491-37ac-6d91-dc2ae484600 |  5f650b4c-d491-37ac-6d91-dc2ae484600
+      "public"."payment_p2022_04" |   |  02beb400-1b82-c9ba-8fe9-690eca2e635 |  02beb400-1b82-c9ba-8fe9-690eca2e635
+      "public"."payment_p2022_02" |   |  97154691-488e-9a36-9a4b-4da7b62dbc0 |  97154691-488e-9a36-9a4b-4da7b62dbc0
+      "public"."payment_p2022_07" |   |  c6fdf7ef-4382-b301-41c3-1d190149dc5 |  c6fdf7ef-4382-b301-41c3-1d190149dc5
+              "public"."customer" |   |  11973c6a-6df3-c502-5495-64f42e0386c |  11973c6a-6df3-c502-5495-64f42e0386c
+               "public"."address" |   |  8c701dbf-c1ba-f386-a9ae-c3f6e478ba7 |  8c701dbf-c1ba-f386-a9ae-c3f6e478ba7
+                  "public"."city" |   |  f23ad758-f94a-a8fd-8c3f-25fedcadb06 |  f23ad758-f94a-a8fd-8c3f-25fedcadb06
+         "public"."film_category" |   |  4b04cfee-e1bc-718d-d890-afdcd6729ce |  4b04cfee-e1bc-718d-d890-afdcd6729ce
+      "public"."payment_p2022_01" |   |  fde341ed-0f3f-23bd-dedd-4e92c5a8e55 |  fde341ed-0f3f-23bd-dedd-4e92c5a8e55
+                 "public"."actor" |   |  b5ea389d-140f-10b4-07b9-a80d634d86b |  b5ea389d-140f-10b4-07b9-a80d634d86b
+                   "public"."bar" |   |  a7cae1c8-ed66-63ba-1b93-7ba7570ef63 |  a7cae1c8-ed66-63ba-1b93-7ba7570ef63
+                   "public"."bin" |   |  6832546a-333b-3bdb-fdf2-325cc7a028a |  6832546a-333b-3bdb-fdf2-325cc7a028a
+              "public"."category" |   |  082f9cf9-92ab-6d6c-c74a-feb577611cc |  082f9cf9-92ab-6d6c-c74a-feb577611cc
+               "public"."country" |   |  a3a0dd4f-68e0-4ca5-33d2-05c9fd60c34 |  a3a0dd4f-68e0-4ca5-33d2-05c9fd60c34
+                   "public"."foo" | ! |  a244eba3-376b-75e6-6720-e853b485ef6 |  594ae64d-2216-f687-2f11-45cbd9c7153
+                 "public"."staff" |   |  3eb5f007-7160-81ba-5aa5-973de3f5c3d |  3eb5f007-7160-81ba-5aa5-973de3f5c3d
+              "public"."language" |   |  58aa8132-11ae-f3bc-fa82-c773bba2032 |  58aa8132-11ae-f3bc-fa82-c773bba2032
+                 "public"."store" |   |  d8477e63-0661-90a4-03fa-fcc26a95865 |  d8477e63-0661-90a4-03fa-fcc26a95865
