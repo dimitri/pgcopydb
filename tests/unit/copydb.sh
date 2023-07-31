@@ -55,5 +55,6 @@ do
     test -f $e || cat $r
     # exclude logs, whitespaces and blank lines
     DIFFOPTS='-B -w -I INFO -I WARN'
+    diff ${DIFFOPTS} $e $r || cat $r
     diff ${DIFFOPTS} $e $r || exit 1
 done
