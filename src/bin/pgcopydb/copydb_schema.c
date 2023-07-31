@@ -293,7 +293,8 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 		if (specs->splitTablesLargerThan.bytes > 0 &&
 			specs->splitTablesLargerThan.bytes <= source->bytes)
 		{
-			if (IS_EMPTY_STRING_BUFFER(source->partKey))
+			if (IS_EMPTY_STRING_BUFFER(source->partKey) &&
+				streq(source->amname, "heap"))
 			{
 				log_info("Table %s is %s large "
 						 "which is larger than --split-tables-larger-than %s, "
@@ -304,6 +305,21 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 						 specs->splitTablesLargerThan.bytesPretty);
 
 				strlcpy(source->partKey, "ctid", sizeof(source->partKey));
+			}
+			else if (!streq(source->amname, "heap"))
+			{
+				log_info("Table %s is %s large "
+						 "which is larger than --split-tables-larger-than %s, "
+						 "does not have a unique column of type integer, "
+						 "and uses table access method \"%s\": "
+						 "same table concurrency is not enabled",
+						 source->qname,
+						 source->bytesPretty,
+						 specs->splitTablesLargerThan.bytesPretty,
+						 source->amname);
+
+				++copySpecsCount;
+				continue;
 			}
 
 			if (!schema_list_partitions(pgsql,

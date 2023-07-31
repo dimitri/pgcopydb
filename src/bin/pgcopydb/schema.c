@@ -848,7 +848,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_NONE,
 
-		"  select c.oid, n.nspname, c.relname, c.relpages, c.reltuples::bigint, "
+		"  select c.oid, n.nspname, c.relname, pg_am.amname, "
+		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
@@ -861,6 +862,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
+		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
 		"         join pg_roles auth ON auth.oid = c.relowner"
 		"         join lateral ( "
 		"               with atts as "
@@ -920,7 +922,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_INCL,
 
-		"  select c.oid, n.nspname, c.relname, c.relpages, c.reltuples::bigint, "
+		"  select c.oid, n.nspname, c.relname, pg_am.amname, "
+		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
 		"         exists(select 1 "
@@ -936,6 +939,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
+		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
 		"         join pg_roles auth ON auth.oid = c.relowner"
 		"         join lateral ( "
 		"               with atts as "
@@ -1000,8 +1004,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_EXCL,
 
-		"  select c.oid, n.nspname, c.relname, c.relpages, c.reltuples::bigint, "
-		"         ts.bytes as bytes, "
+		"  select c.oid, n.nspname, c.relname, pg_am.amname, "
+		"         c.relpages, c.reltuples::bigint, "
 		"         pg_size_pretty(ts.bytes), "
 		"         ftd.relname is not null as excludedata, "
 		"         format('%s %s %s', "
@@ -1013,6 +1017,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
+		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
 		"         join pg_roles auth ON auth.oid = c.relowner"
 		"         join lateral ( "
 		"               with atts as "
@@ -1091,7 +1096,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_LIST_NOT_INCL,
 
-		"  select c.oid, n.nspname, c.relname, c.relpages, c.reltuples::bigint, "
+		"  select c.oid, n.nspname, c.relname, pg_am.amname, "
+		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
@@ -1104,6 +1110,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
+		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
 		"         join pg_roles auth ON auth.oid = c.relowner"
 		"         join lateral ( "
 		"               with atts as "
@@ -1171,7 +1178,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_LIST_EXCL,
 
-		"  select c.oid, n.nspname, c.relname, c.relpages, c.reltuples::bigint, "
+		"  select c.oid, n.nspname, c.relname, pg_am.amname, "
+		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
@@ -1184,6 +1192,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		"    from pg_catalog.pg_class c "
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
+		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
 		"         join pg_roles auth ON auth.oid = c.relowner"
 		"         join lateral ( "
 		"               with atts as "
@@ -1329,7 +1338,8 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_NONE,
 
-		"  select r.oid, n.nspname, r.relname, c.relpages, r.reltuples::bigint, "
+		"  select c.oid, n.nspname, c.relname, pg_am.amname, "
+		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
@@ -1342,6 +1352,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
+		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
 		"         join pg_roles auth ON auth.oid = r.relowner"
 		"         left join pgcopydb_table_size ts on ts.oid = r.oid"
 
@@ -1371,7 +1382,8 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_INCL,
 
-		"  select r.oid, n.nspname, r.relname, c.relpages, r.reltuples::bigint, "
+		"  select c.oid, n.nspname, c.relname, pg_am.amname, "
+		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
@@ -1384,6 +1396,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
+		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
 		"         join pg_roles auth ON auth.oid = r.relowner"
 		"         left join pgcopydb_table_size ts on ts.oid = r.oid"
 
@@ -1418,7 +1431,8 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_EXCL,
 
-		"  select r.oid, n.nspname, r.relname, c.relpages, r.reltuples::bigint, "
+		"  select c.oid, n.nspname, c.relname, pg_am.amname, "
+		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
 		"         ftd.relname is not null as excludedata, "
@@ -1431,6 +1445,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
+		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
 		"         join pg_roles auth ON auth.oid = r.relowner"
 		"         left join pgcopydb_table_size ts on ts.oid = r.oid"
 
@@ -1479,7 +1494,8 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_LIST_NOT_INCL,
 
-		"  select r.oid, n.nspname, r.relname, c.relpages, r.reltuples::bigint, "
+		"  select c.oid, n.nspname, c.relname, pg_am.amname, "
+		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
@@ -1492,6 +1508,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
+		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
 		"         join pg_roles auth ON auth.oid = r.relowner"
 		"         left join pgcopydb_table_size ts on ts.oid = r.oid"
 
@@ -1529,7 +1546,8 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_LIST_EXCL,
 
-		"  select r.oid, n.nspname, r.relname, c.relpages, r.reltuples::bigint, "
+		"  select c.oid, n.nspname, c.relname, pg_am.amname, "
+		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
@@ -1542,6 +1560,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 
 		"    from pg_class r "
 		"         join pg_namespace n ON n.oid = r.relnamespace "
+		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
 		"         join pg_roles auth ON auth.oid = r.relowner"
 		"         left join pgcopydb_table_size ts on ts.oid = r.oid"
 
@@ -4144,9 +4163,9 @@ getTableArray(void *ctx, PGresult *result)
 
 	log_debug("getTableArray: %d", nTuples);
 
-	if (PQnfields(result) != 11)
+	if (PQnfields(result) != 12)
 	{
-		log_error("Query returned %d columns, expected 11", PQnfields(result));
+		log_error("Query returned %d columns, expected 12", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -4200,8 +4219,21 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 {
 	int errors = 0;
 
-	/* 1. c.oid */
-	char *value = PQgetvalue(result, rowNumber, 0);
+	int fnoid = PQfnumber(result, "oid");
+	int fnnspname = PQfnumber(result, "nspname");
+	int fnrelname = PQfnumber(result, "relname");
+	int fnamname = PQfnumber(result, "amname");
+	int fnrelpages = PQfnumber(result, "relpages");
+	int fnreltuples = PQfnumber(result, "reltuples");
+	int fnbytes = PQfnumber(result, "bytes");
+	int fnbytespretty = PQfnumber(result, "pg_size_pretty");
+	int fnexcldata = PQfnumber(result, "excludedata");
+	int fnrestorelistname = PQfnumber(result, "format");
+	int fnpartkey = PQfnumber(result, "partkey");
+	int fnattrs = PQfnumber(result, "attributes");
+
+	/* c.oid */
+	char *value = PQgetvalue(result, rowNumber, fnoid);
 
 	if (!stringToUInt32(value, &(table->oid)) || table->oid == 0)
 	{
@@ -4209,8 +4241,8 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		++errors;
 	}
 
-	/* 2. n.nspname */
-	value = PQgetvalue(result, rowNumber, 1);
+	/* n.nspname */
+	value = PQgetvalue(result, rowNumber, fnnspname);
 	int length = strlcpy(table->nspname, value, NAMEDATALEN);
 
 	if (length >= NAMEDATALEN)
@@ -4221,8 +4253,8 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		++errors;
 	}
 
-	/* 3. c.relname */
-	value = PQgetvalue(result, rowNumber, 2);
+	/* c.relname */
+	value = PQgetvalue(result, rowNumber, fnrelname);
 	length = strlcpy(table->relname, value, NAMEDATALEN);
 
 	if (length >= NAMEDATALEN)
@@ -4249,8 +4281,28 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		++errors;
 	}
 
-	/* 4. c.relpages */
-	if (PQgetisnull(result, rowNumber, 3))
+	/* pgam_amname */
+	if (PQgetisnull(result, rowNumber, fnamname))
+	{
+		/* table started having an amname in Postgres 12 */
+		strlcpy(table->amname, "heap", NAMEDATALEN);
+	}
+	else
+	{
+		value = PQgetvalue(result, rowNumber, fnamname);
+		length = strlcpy(table->amname, value, NAMEDATALEN);
+
+		if (length >= NAMEDATALEN)
+		{
+			log_error("Access Method name \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (NAMEDATALEN - 1)",
+					  value, length, NAMEDATALEN - 1);
+			++errors;
+		}
+	}
+
+	/* c.relpages */
+	if (PQgetisnull(result, rowNumber, fnrelpages))
 	{
 		/*
 		 * reltuples is NULL when table has never been ANALYZEd, just count
@@ -4260,7 +4312,7 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	}
 	else
 	{
-		value = PQgetvalue(result, rowNumber, 3);
+		value = PQgetvalue(result, rowNumber, fnrelpages);
 
 		if (!stringToInt64(value, &(table->relpages)))
 		{
@@ -4269,8 +4321,8 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		}
 	}
 
-	/* 5. c.reltuples::bigint */
-	if (PQgetisnull(result, rowNumber, 4))
+	/* c.reltuples::bigint */
+	if (PQgetisnull(result, rowNumber, fnreltuples))
 	{
 		/*
 		 * reltuples is NULL when table has never been ANALYZEd, just count
@@ -4280,7 +4332,7 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	}
 	else
 	{
-		value = PQgetvalue(result, rowNumber, 4);
+		value = PQgetvalue(result, rowNumber, fnreltuples);
 
 		if (!stringToInt64(value, &(table->reltuples)))
 		{
@@ -4289,8 +4341,8 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		}
 	}
 
-	/* 6. pg_table_size(c.oid) as bytes */
-	if (PQgetisnull(result, rowNumber, 5))
+	/* pg_table_size(c.oid) as bytes */
+	if (PQgetisnull(result, rowNumber, fnbytes))
 	{
 		/*
 		 * It may happen that pg_table_size() returns NULL (when failing to
@@ -4300,7 +4352,7 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	}
 	else
 	{
-		value = PQgetvalue(result, rowNumber, 5);
+		value = PQgetvalue(result, rowNumber, fnbytes);
 
 		if (!stringToInt64(value, &(table->bytes)))
 		{
@@ -4309,8 +4361,8 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		}
 	}
 
-	/* 7. pg_size_pretty(c.oid) */
-	value = PQgetvalue(result, rowNumber, 6);
+	/* pg_size_pretty(c.oid) */
+	value = PQgetvalue(result, rowNumber, fnbytespretty);
 	length = strlcpy(table->bytesPretty, value, NAMEDATALEN);
 
 	if (length >= NAMEDATALEN)
@@ -4321,12 +4373,12 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		++errors;
 	}
 
-	/* 8. excludeData */
-	value = PQgetvalue(result, rowNumber, 7);
+	/* excludeData */
+	value = PQgetvalue(result, rowNumber, fnexcldata);
 	table->excludeData = (*value) == 't';
 
-	/* 9. restoreListName */
-	value = PQgetvalue(result, rowNumber, 8);
+	/* restoreListName */
+	value = PQgetvalue(result, rowNumber, fnrestorelistname);
 	length = strlcpy(table->restoreListName, value, RESTORE_LIST_NAMEDATALEN);
 
 	if (length >= RESTORE_LIST_NAMEDATALEN)
@@ -4337,8 +4389,8 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		++errors;
 	}
 
-	/* 10. partkey */
-	if (PQgetisnull(result, rowNumber, 9))
+	/* partkey */
+	if (PQgetisnull(result, rowNumber, fnpartkey))
 	{
 		log_debug("Table \"%s\".\"%s\" with oid %u has not part key column",
 				  table->nspname,
@@ -4347,7 +4399,7 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	}
 	else
 	{
-		value = PQgetvalue(result, rowNumber, 9);
+		value = PQgetvalue(result, rowNumber, fnpartkey);
 		length = strlcpy(table->partKey, value, NAMEDATALEN);
 
 		if (length >= NAMEDATALEN)
@@ -4359,15 +4411,15 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		}
 	}
 
-	/* 11. attributes */
-	if (PQgetisnull(result, rowNumber, 10))
+	/* attributes */
+	if (PQgetisnull(result, rowNumber, fnattrs))
 	{
 		/* the query didn't care to add the attributes, skip parsing them */
 		table->attributes.count = 0;
 	}
 	else
 	{
-		value = PQgetvalue(result, rowNumber, 10);
+		value = PQgetvalue(result, rowNumber, fnattrs);
 
 		JSON_Value *json = json_parse_string(value);
 
