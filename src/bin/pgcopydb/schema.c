@@ -848,7 +848,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_NONE,
 
-		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
+		"  select c.oid, n.nspname, c.relname, c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
@@ -920,7 +920,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_INCL,
 
-		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
+		"  select c.oid, n.nspname, c.relname, c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
 		"         exists(select 1 "
@@ -1000,7 +1000,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_EXCL,
 
-		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
+		"  select c.oid, n.nspname, c.relname, c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
 		"         ftd.relname is not null as excludedata, "
@@ -1091,7 +1091,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_LIST_NOT_INCL,
 
-		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
+		"  select c.oid, n.nspname, c.relname, c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
@@ -1171,7 +1171,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_LIST_EXCL,
 
-		"  select c.oid, n.nspname, c.relname, c.reltuples::bigint, "
+		"  select c.oid, n.nspname, c.relname, c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
@@ -1329,7 +1329,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_NONE,
 
-		"  select r.oid, n.nspname, r.relname, r.reltuples::bigint, "
+		"  select r.oid, n.nspname, r.relname, c.relpages, r.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
@@ -1371,7 +1371,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_INCL,
 
-		"  select r.oid, n.nspname, r.relname, r.reltuples::bigint, "
+		"  select r.oid, n.nspname, r.relname, c.relpages, r.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
@@ -1418,7 +1418,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_EXCL,
 
-		"  select r.oid, n.nspname, r.relname, r.reltuples::bigint, "
+		"  select r.oid, n.nspname, r.relname, c.relpages, r.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
 		"         ftd.relname is not null as excludedata, "
@@ -1479,7 +1479,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_LIST_NOT_INCL,
 
-		"  select r.oid, n.nspname, r.relname, r.reltuples::bigint, "
+		"  select r.oid, n.nspname, r.relname, c.relpages, r.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
@@ -1529,7 +1529,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_LIST_EXCL,
 
-		"  select r.oid, n.nspname, r.relname, r.reltuples::bigint, "
+		"  select r.oid, n.nspname, r.relname, c.relpages, r.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
@@ -2987,46 +2987,100 @@ schema_list_partitions(PGSQL *pgsql, SourceTable *table, uint64_t partSize)
 		return true;
 	}
 
+	PQExpBuffer sql = createPQExpBuffer();
+
 	SourcePartitionContext parseContext = { { 0 }, table, false };
 
-	char *sqlTemplate =
-		" with "
-		" key_bounds (min, max) as "
-		" ( "
-		"   select min(\"%s\"), max(\"%s\") "
-		"     from \"%s\".\"%s\" "
-		" ), "
-		" t (parts) as "
-		" ( "
-		"   select ceil(bytes::float / $1) as parts "
-		"     from pgcopydb_table_size "
-		"     where oid = $2 "
-		"	union all "
-		"	select 1 as parts "
-		"	order by parts desc "
-		"	limit 1 "
-		" ), "
-		" ranges(n, parts, a, b) as "
-		" ( "
-		"   select n, "
-		"          parts, "
-		"          x as a, "
-		"          coalesce((lead(x, 1) over(order by n)) - 1, max) as b "
-		"     from key_bounds, t, "
-		"          generate_series(min, max, ((max-min+1)/parts)::bigint + 1) "
-		"          with ordinality as s(x, n) "
-		" ) "
-		" "
-		"  select n, parts, a, b, b-a+1 as count "
-		"    from ranges "
-		"order by n";
+	if (streq(table->partKey, "ctid"))
+	{
+		char *sqlTemplate =
+			" with "
+			" relpage_bounds (min, max) as "
+			" ( "
+			"   select 0, relpages "
+			"     from pg_class "
+			"    where pg_class.oid = '\"%s\".\"%s\"'::regclass "
+			" ), "
+			" t (parts) as "
+			" ( "
+			"   select ceil(bytes::float / $1) as parts "
+			"     from pgcopydb_table_size "
+			"     where oid = $2 "
+			"	union all "
+			"	select 1 as parts "
+			"	order by parts desc "
+			"	limit 1 "
+			" ), "
+			" ranges(n, parts, a, b) as "
+			" ( "
+			"   select n, "
+			"          parts + 1, "
+			"          x as a, "
+			"          coalesce((lead(x, 1) over(order by n)) - 1, max) as b "
+			"     from relpage_bounds, t, "
+			"          generate_series(min, max, ((max-min+1)/parts)::bigint + 1) "
+			"          with ordinality as s(x, n) "
+			"   union all "
+			"   select parts + 1, "
+			"          parts + 1, "
+			"          max, "
+			"          NULL "
+			"     from relpage_bounds, t "
+			" ) "
+			" "
+			"  select n, parts, a, b, b-a+1 as pages "
+			"    from ranges "
+			"order by n";
 
-	char sql[BUFSIZE] = { 0 };
+		appendPQExpBuffer(sql, sqlTemplate, table->nspname, table->relname);
+	}
+	else
+	{
+		char *sqlTemplate =
+			" with "
+			" key_bounds (min, max) as "
+			" ( "
+			"   select min(\"%s\"), max(\"%s\") "
+			"     from \"%s\".\"%s\" "
+			" ), "
+			" t (parts) as "
+			" ( "
+			"   select ceil(bytes::float / $1) as parts "
+			"     from pgcopydb_table_size "
+			"     where oid = $2 "
+			"	union all "
+			"	select 1 as parts "
+			"	order by parts desc "
+			"	limit 1 "
+			" ), "
+			" ranges(n, parts, a, b) as "
+			" ( "
+			"   select n, "
+			"          parts, "
+			"          x as a, "
+			"          coalesce((lead(x, 1) over(order by n)) - 1, max) as b "
+			"     from key_bounds, t, "
+			"          generate_series(min, max, ((max-min+1)/parts)::bigint + 1) "
+			"          with ordinality as s(x, n) "
+			" ) "
+			" "
+			"  select n, parts, a, b, b-a+1 as count "
+			"    from ranges "
+			"order by n";
 
-	sformat(sql, sizeof(sql), sqlTemplate,
-			table->partKey, table->partKey,
-			table->nspname, table->relname,
-			table->nspname, table->relname);
+		appendPQExpBuffer(sql, sqlTemplate,
+						  table->partKey, table->partKey,
+						  table->nspname, table->relname,
+						  table->nspname, table->relname);
+	}
+
+	if (PQExpBufferBroken(sql))
+	{
+		(void) destroyPQExpBuffer(sql);
+		log_error("Failed to prepare partition query for table %s: out of memory",
+				  table->qname);
+		return false;
+	}
 
 	int paramCount = 2;
 	Oid paramTypes[2] = { INT8OID, OIDOID };
@@ -3035,14 +3089,17 @@ schema_list_partitions(PGSQL *pgsql, SourceTable *table, uint64_t partSize)
 	paramValues[0] = intToString(partSize).strValue;
 	paramValues[1] = intToString(table->oid).strValue;
 
-	if (!pgsql_execute_with_params(pgsql, sql,
+	if (!pgsql_execute_with_params(pgsql, sql->data,
 								   paramCount, paramTypes, paramValues,
 								   &parseContext, &getPartitionList))
 	{
+		(void) destroyPQExpBuffer(sql);
 		log_error("Failed to compute partition list for table \"%s\".\"%s\"",
 				  table->nspname, table->relname);
 		return false;
 	}
+
+	(void) destroyPQExpBuffer(sql);
 
 	if (!parseContext.parsedOk)
 	{
@@ -3730,7 +3787,7 @@ getExtensionList(void *ctx, PGresult *result)
 
 
 /*
- * parseCurrentSourceTable parses a single row of the extension listing query
+ * parseCurrentExtension parses a single row of the extension listing query
  * result.
  */
 static bool
@@ -4087,9 +4144,9 @@ getTableArray(void *ctx, PGresult *result)
 
 	log_debug("getTableArray: %d", nTuples);
 
-	if (PQnfields(result) != 10)
+	if (PQnfields(result) != 11)
 	{
-		log_error("Query returned %d columns, expected 10", PQnfields(result));
+		log_error("Query returned %d columns, expected 11", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -4192,8 +4249,28 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		++errors;
 	}
 
-	/* 4. c.reltuples::bigint */
+	/* 4. c.relpages */
 	if (PQgetisnull(result, rowNumber, 3))
+	{
+		/*
+		 * reltuples is NULL when table has never been ANALYZEd, just count
+		 * zero then.
+		 */
+		table->relpages = 0;
+	}
+	else
+	{
+		value = PQgetvalue(result, rowNumber, 3);
+
+		if (!stringToInt64(value, &(table->relpages)))
+		{
+			log_error("Invalid relpages \"%s\"", value);
+			++errors;
+		}
+	}
+
+	/* 5. c.reltuples::bigint */
+	if (PQgetisnull(result, rowNumber, 4))
 	{
 		/*
 		 * reltuples is NULL when table has never been ANALYZEd, just count
@@ -4203,7 +4280,7 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	}
 	else
 	{
-		value = PQgetvalue(result, rowNumber, 3);
+		value = PQgetvalue(result, rowNumber, 4);
 
 		if (!stringToInt64(value, &(table->reltuples)))
 		{
@@ -4212,8 +4289,8 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		}
 	}
 
-	/* 5. pg_table_size(c.oid) as bytes */
-	if (PQgetisnull(result, rowNumber, 4))
+	/* 6. pg_table_size(c.oid) as bytes */
+	if (PQgetisnull(result, rowNumber, 5))
 	{
 		/*
 		 * It may happen that pg_table_size() returns NULL (when failing to
@@ -4223,7 +4300,7 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	}
 	else
 	{
-		value = PQgetvalue(result, rowNumber, 4);
+		value = PQgetvalue(result, rowNumber, 5);
 
 		if (!stringToInt64(value, &(table->bytes)))
 		{
@@ -4232,8 +4309,8 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		}
 	}
 
-	/* 6. pg_size_pretty(c.oid) */
-	value = PQgetvalue(result, rowNumber, 5);
+	/* 7. pg_size_pretty(c.oid) */
+	value = PQgetvalue(result, rowNumber, 6);
 	length = strlcpy(table->bytesPretty, value, NAMEDATALEN);
 
 	if (length >= NAMEDATALEN)
@@ -4244,12 +4321,12 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		++errors;
 	}
 
-	/* 7. excludeData */
-	value = PQgetvalue(result, rowNumber, 6);
+	/* 8. excludeData */
+	value = PQgetvalue(result, rowNumber, 7);
 	table->excludeData = (*value) == 't';
 
-	/* 8. restoreListName */
-	value = PQgetvalue(result, rowNumber, 7);
+	/* 9. restoreListName */
+	value = PQgetvalue(result, rowNumber, 8);
 	length = strlcpy(table->restoreListName, value, RESTORE_LIST_NAMEDATALEN);
 
 	if (length >= RESTORE_LIST_NAMEDATALEN)
@@ -4260,8 +4337,8 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		++errors;
 	}
 
-	/* 9. partkey */
-	if (PQgetisnull(result, rowNumber, 8))
+	/* 10. partkey */
+	if (PQgetisnull(result, rowNumber, 9))
 	{
 		log_debug("Table \"%s\".\"%s\" with oid %u has not part key column",
 				  table->nspname,
@@ -4270,7 +4347,7 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	}
 	else
 	{
-		value = PQgetvalue(result, rowNumber, 8);
+		value = PQgetvalue(result, rowNumber, 9);
 		length = strlcpy(table->partKey, value, NAMEDATALEN);
 
 		if (length >= NAMEDATALEN)
@@ -4282,15 +4359,15 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		}
 	}
 
-	/* 10. attributes */
-	if (PQgetisnull(result, rowNumber, 9))
+	/* 11. attributes */
+	if (PQgetisnull(result, rowNumber, 10))
 	{
 		/* the query didn't care to add the attributes, skip parsing them */
 		table->attributes.count = 0;
 	}
 	else
 	{
-		value = PQgetvalue(result, rowNumber, 9);
+		value = PQgetvalue(result, rowNumber, 10);
 
 		JSON_Value *json = json_parse_string(value);
 
@@ -4417,7 +4494,7 @@ getSequenceArray(void *ctx, PGresult *result)
 
 
 /*
- * parseCurrentSourceSequence parses a single row of the table listing query
+ * parseCurrentSourceSequence parses a single row of the sequence listing query
  * result.
  */
 static bool
@@ -4523,7 +4600,7 @@ parseCurrentSourceSequence(PGresult *result, int rowNumber, SourceSequence *seq)
 
 
 /*
- * getTableArray loops over the SQL result for the tables array query and
+ * getIndexArray loops over the SQL result for the index array query and
  * allocates an array of tables then populates it with the query result.
  */
 static void
@@ -4582,8 +4659,8 @@ getIndexArray(void *ctx, PGresult *result)
 
 
 /*
- * getTableArray loops over the SQL result for the tables array query and
- * allocates an array of tables then populates it with the query result.
+ * parseCurrentSourceIndex parses a single row of the index listing query
+ * result.
  */
 static bool
 parseCurrentSourceIndex(PGresult *result, int rowNumber, SourceIndex *index)
@@ -4862,7 +4939,7 @@ getDependArray(void *ctx, PGresult *result)
 
 
 /*
- * parseCurrentSourceDepend parses a single row of the table listing query
+ * parseCurrentSourceDepend parses a single row of the dependency listing query
  * result.
  */
 static bool
@@ -5094,21 +5171,35 @@ parseCurrentPartition(PGresult *result, int rowNumber, SourceTableParts *parts)
 	}
 
 	/* 4. max */
-	value = PQgetvalue(result, rowNumber, 3);
-
-	if (!stringToInt64(value, &(parts->max)))
+	if (PQgetisnull(result, rowNumber, 3))
 	{
-		log_error("Invalid part max \"%s\"", value);
-		++errors;
+		parts->max = -1;
+	}
+	else
+	{
+		value = PQgetvalue(result, rowNumber, 3);
+
+		if (!stringToInt64(value, &(parts->max)))
+		{
+			log_error("Invalid part max \"%s\"", value);
+			++errors;
+		}
 	}
 
 	/* 5. count */
-	value = PQgetvalue(result, rowNumber, 4);
-
-	if (!stringToInt64(value, &(parts->count)))
+	if (PQgetisnull(result, rowNumber, 4))
 	{
-		log_error("Invalid part count \"%s\"", value);
-		++errors;
+		parts->count = -1;
+	}
+	else
+	{
+		value = PQgetvalue(result, rowNumber, 4);
+
+		if (!stringToInt64(value, &(parts->count)))
+		{
+			log_error("Invalid part count \"%s\"", value);
+			++errors;
+		}
 	}
 
 	return errors == 0;

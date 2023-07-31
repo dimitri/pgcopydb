@@ -295,21 +295,15 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 		{
 			if (IS_EMPTY_STRING_BUFFER(source->partKey))
 			{
-				log_info("Table \"%s\".\"%s\" is %s large, "
+				log_info("Table %s is %s large "
 						 "which is larger than --split-tables-larger-than %s, "
-						 "but does not have a unique column of type integer "
-						 "(int2/int4/int8).",
-						 source->nspname,
-						 source->relname,
+						 "and does not have a unique column of type integer: "
+						 "splitting by CTID",
+						 source->qname,
 						 source->bytesPretty,
 						 specs->splitTablesLargerThan.bytesPretty);
 
-				log_warn("Skipping same-table concurrency for table \"%s\".\"%s\"",
-						 source->nspname,
-						 source->relname);
-
-				++copySpecsCount;
-				continue;
+				strlcpy(source->partKey, "ctid", sizeof(source->partKey));
 			}
 
 			if (!schema_list_partitions(pgsql,

@@ -1107,11 +1107,32 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 			 * overlapping, so we can use the BETWEEN operator to select our source
 			 * rows in the COPY sub-query.
 			 */
-			appendPQExpBuffer(query,
-							  " WHERE \"%s\" BETWEEN %lld AND %lld ",
-							  tableSpecs->part.partKey,
-							  (long long) tableSpecs->part.min,
-							  (long long) tableSpecs->part.max);
+			if (streq(tableSpecs->part.partKey, "ctid"))
+			{
+				if (tableSpecs->part.max == -1)
+				{
+					/* the last part for ctid splits covers "extra" relpages */
+					appendPQExpBuffer(query,
+									  " WHERE ctid >= '(%lld,0)'::tid",
+									  (long long) tableSpecs->part.min + 1);
+				}
+				else
+				{
+					appendPQExpBuffer(query,
+									  " WHERE ctid >= '(%lld,0)'::tid"
+									  " and ctid < '(%lld,0)'::tid",
+									  (long long) tableSpecs->part.min,
+									  (long long) tableSpecs->part.max + 1);
+				}
+			}
+			else
+			{
+				appendPQExpBuffer(query,
+								  " WHERE \"%s\" BETWEEN %lld AND %lld ",
+								  tableSpecs->part.partKey,
+								  (long long) tableSpecs->part.min,
+								  (long long) tableSpecs->part.max);
+			}
 		}
 
 		appendPQExpBufferStr(query, ")");
