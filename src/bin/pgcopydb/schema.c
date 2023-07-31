@@ -1006,6 +1006,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 		"  select c.oid, n.nspname, c.relname, pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
+		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
 		"         ftd.relname is not null as excludedata, "
 		"         format('%s %s %s', "
