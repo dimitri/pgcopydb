@@ -29,6 +29,7 @@
 	"  --dir                      Work directory to use\n" \
 	"  --table-jobs               Number of concurrent COPY jobs to run\n" \
 	"  --index-jobs               Number of concurrent CREATE INDEX jobs to run\n" \
+	"  --large-objects-jobs       Number of concurrent Large Objects jobs to run\n" \
 	"  --split-tables-larger-than Same-table concurrency size threshold\n" \
 	"  --drop-if-exists           On the target database, clean-up from a previous run first\n" \
 	"  --roles                    Also copy roles found on source to target\n" \

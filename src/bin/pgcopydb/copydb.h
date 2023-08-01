@@ -259,6 +259,7 @@ typedef struct CopyDataSpec
 	int tableJobs;
 	int indexJobs;
 	int vacuumJobs;
+	int lObjectJobs;
 
 	SplitTableLargerThan splitTablesLargerThan;
 
@@ -268,6 +269,7 @@ typedef struct CopyDataSpec
 	Queue copyQueue;
 	Queue indexQueue;
 	Queue vacuumQueue;
+	Queue loQueue;
 
 	DumpPaths dumpPaths;
 
@@ -511,7 +513,13 @@ bool copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 
 /* blobs.c */
 bool copydb_start_blob_process(CopyDataSpec *specs);
-bool copydb_copy_blobs(CopyDataSpec *specs);
+
+bool copydb_start_blob_workers(CopyDataSpec *specs);
+bool copydb_blob_worker(CopyDataSpec *specs);
+bool copydb_queue_largeobject_metadata(CopyDataSpec *specs, uint64_t *count);
+bool copydb_copy_blob_by_oid(CopyDataSpec *specs, uint32_t oid);
+bool copydb_add_blob(CopyDataSpec *specs, uint32_t oid);
+bool copydb_send_lo_stop(CopyDataSpec *specs);
 
 /* vacuum.c */
 bool vacuum_start_workers(CopyDataSpec *specs);

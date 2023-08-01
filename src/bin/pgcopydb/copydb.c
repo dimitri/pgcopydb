@@ -680,6 +680,7 @@ copydb_init_specs(CopyDataSpec *specs,
 
 		.tableJobs = options->tableJobs,
 		.indexJobs = options->indexJobs,
+		.lObjectJobs = options->lObjectJobs,
 
 		/* at the moment we don't have --vacuumJobs separately */
 		.vacuumJobs = options->tableJobs,

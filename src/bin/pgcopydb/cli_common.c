@@ -284,6 +284,28 @@ cli_copydb_getenv(CopyDBOptions *options)
 		}
 	}
 
+	if (env_exists(PGCOPYDB_LARGE_OBJECTS_JOBS))
+	{
+		char jobs[BUFSIZE] = { 0 };
+
+		if (get_env_copy(PGCOPYDB_LARGE_OBJECTS_JOBS, jobs, sizeof(jobs)))
+		{
+			if (!stringToInt(jobs, &options->lObjectJobs) ||
+				options->lObjectJobs < 1 ||
+				options->lObjectJobs > 128)
+			{
+				log_fatal("Failed to parse PGCOPYDB_LARGE_OBJECTS_JOBS: \"%s\"",
+						  jobs);
+				++errors;
+			}
+		}
+		else
+		{
+			/* errors have already been logged */
+			++errors;
+		}
+	}
+
 	if (!cli_copydb_getenv_split(&(options->splitTablesLargerThan)))
 	{
 		/* errors have already been logged */
@@ -683,6 +705,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "jobs", required_argument, NULL, 'J' },
 		{ "table-jobs", required_argument, NULL, 'J' },
 		{ "index-jobs", required_argument, NULL, 'I' },
+		{ "large-objects-jobs", required_argument, NULL, 'b' },
 		{ "split-tables-larger-than", required_argument, NULL, 'L' },
 		{ "split-at", required_argument, NULL, 'L' },
 		{ "drop-if-exists", no_argument, NULL, 'c' }, /* pg_restore -c */
@@ -727,6 +750,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	/* install default values */
 	options.tableJobs = DEFAULT_TABLE_JOBS;
 	options.indexJobs = DEFAULT_INDEX_JOBS;
+	options.lObjectJobs = DEFAULT_LARGE_OBJECTS_JOBS;
 	options.splitTablesLargerThan.bytes = DEFAULT_SPLIT_TABLES_LARGER_THAN;
 
 	/* read values from the environment */
@@ -737,7 +761,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	}
 
 	while ((c = getopt_long(argc, argv,
-							"S:T:D:J:I:L:cOBemlirRCN:xXCtfo:p:s:E:F:Q:iVvdzqh",
+							"S:T:D:J:I:b:L:cOBemlirRCN:xXCtfo:p:s:E:F:Q:iVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -798,6 +822,20 @@ cli_copy_db_getopts(int argc, char **argv)
 					++errors;
 				}
 				log_trace("--jobs %d", options.indexJobs);
+				break;
+			}
+
+			case 'b':
+			{
+				if (!stringToInt(optarg, &options.lObjectJobs) ||
+					options.lObjectJobs < 1 ||
+					options.lObjectJobs > 128)
+				{
+					log_fatal("Failed to parse --large-objects-jobs count: \"%s\"",
+							  optarg);
+					++errors;
+				}
+				log_trace("--large-objects-jobs %d", options.lObjectJobs);
 				break;
 			}
 

@@ -30,6 +30,7 @@ Postgres instance to the target Postgres instance.
      --dir                      Work directory to use
      --table-jobs               Number of concurrent COPY jobs to run
      --index-jobs               Number of concurrent CREATE INDEX jobs to run
+     --large-objects-jobs       Number of concurrent Large Objects jobs to run
      --split-tables-larger-than Same-table concurrency size threshold
      --drop-if-exists           On the target database, clean-up from a previous run first
      --roles                    Also copy roles found on source to target
@@ -422,6 +423,10 @@ The following options are available to ``pgcopydb clone``:
   Postgres target system, minus some cores that are going to be used for
   handling the COPY operations.
 
+--large-object-jobs
+
+  How many worker processes to start to copy Large Objects concurrently.
+
 --split-tables-larger-than
 
    Allow :ref:`same_table_concurrency` when processing the source database.
@@ -708,6 +713,12 @@ PGCOPYDB_INDEX_JOBS
 
    Number of concurrent jobs allowed to run CREATE INDEX operations in
    parallel. When ``--index-jobs`` is ommitted from the command line, then
+   this environment variable is used.
+
+PGCOPYDB_LARGE_OBJECTS_JOBS
+
+   Number of concurrent jobs allowed to copy Large Objects data in parallel.
+   When ``--large-objects-jobs`` is ommitted from the command line, then
    this environment variable is used.
 
 PGCOPYDB_SPLIT_TABLES_LARGER_THAN

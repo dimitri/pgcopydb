@@ -243,14 +243,15 @@ have already been taken care of, because of the behaviour of
    pgcopydb copy blobs: Copy the blob data from ther source database to the target
    usage: pgcopydb copy blobs  --source ... --target ...
 
-     --source          Postgres URI to the source database
-     --target          Postgres URI to the target database
-     --dir             Work directory to use
-     --restart         Allow restarting when temp files exist already
-     --resume          Allow resuming operations after a failure
-     --not-consistent  Allow taking a new snapshot on the source database
-     --snapshot        Use snapshot obtained with pg_export_snapshot
-     --drop-if-exists  On the target database, drop and create large objects
+     --source             Postgres URI to the source database
+     --target             Postgres URI to the target database
+     --dir                Work directory to use
+     --large-objects-jobs Number of concurrent Large Objects jobs to run
+     --drop-if-exists     On the target database, drop and create large objects
+     --restart            Allow restarting when temp files exist already
+     --resume             Allow resuming operations after a failure
+     --not-consistent     Allow taking a new snapshot on the source database
+     --snapshot           Use snapshot obtained with pg_export_snapshot
 
 .. _pgcopydb_copy_sequences:
 
@@ -414,6 +415,10 @@ The following options are available to ``pgcopydb copy`` sub-commands:
   Postgres target system, minus some cores that are going to be used for
   handling the COPY operations.
 
+--large-object-jobs
+
+  How many worker processes to start to copy Large Objects concurrently.
+
 --split-tables-larger-than
 
    Allow :ref:`same_table_concurrency` when processing the source database.
@@ -525,6 +530,12 @@ PGCOPYDB_INDEX_JOBS
 
    Number of concurrent jobs allowed to run CREATE INDEX operations in
    parallel. When ``--index-jobs`` is ommitted from the command line, then
+   this environment variable is used.
+
+PGCOPYDB_LARGE_OBJECTS_JOBS
+
+   Number of concurrent jobs allowed to copy Large Objects data in parallel.
+   When ``--large-objects-jobs`` is ommitted from the command line, then
    this environment variable is used.
 
 PGCOPYDB_SPLIT_TABLES_LARGER_THAN

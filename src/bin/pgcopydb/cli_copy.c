@@ -139,14 +139,15 @@ static CommandLine copy_blobs_command =
 		"blobs",
 		"Copy the blob data from ther source database to the target",
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
-		"  --source          Postgres URI to the source database\n"
-		"  --target          Postgres URI to the target database\n"
-		"  --dir             Work directory to use\n"
-		"  --drop-if-exists  On the target database, drop and create large objects\n"
-		"  --restart         Allow restarting when temp files exist already\n"
-		"  --resume          Allow resuming operations after a failure\n"
-		"  --not-consistent  Allow taking a new snapshot on the source database\n"
-		"  --snapshot        Use snapshot obtained with pg_export_snapshot\n",
+		"  --source             Postgres URI to the source database\n"
+		"  --target             Postgres URI to the target database\n"
+		"  --dir                Work directory to use\n"
+		"  --large-objects-jobs Number of concurrent Large Objects jobs to run\n"
+		"  --drop-if-exists     On the target database, drop and create large objects\n"
+		"  --restart            Allow restarting when temp files exist already\n"
+		"  --resume             Allow resuming operations after a failure\n"
+		"  --not-consistent     Allow taking a new snapshot on the source database\n"
+		"  --snapshot           Use snapshot obtained with pg_export_snapshot\n",
 		cli_copy_db_getopts,
 		cli_copy_blobs);
 
@@ -589,6 +590,9 @@ cli_copy_blobs(int argc, char **argv)
 
 	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_BLOBS);
 
+	/* ensure defaults */
+	copySpecs.skipLargeObjects = false;
+
 	Summary summary = { 0 };
 	TopLevelTimings *timings = &(summary.timings);
 
@@ -607,7 +611,13 @@ cli_copy_blobs(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (!copydb_copy_blobs(&copySpecs))
+	if (!copydb_start_blob_process(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!copydb_wait_for_subprocesses(copySpecs.failFast))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

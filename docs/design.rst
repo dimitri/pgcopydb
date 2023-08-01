@@ -67,7 +67,15 @@ The process tree then looks like the following:
 
        #. pgcopydb copy worker
 
-     * pgcopydb blob worker
+     * pgcopydb blob metadata worker (``--large-objects-jobs 4``)
+
+       #. pgcopydb blob worker
+
+       #. pgcopydb blob worker
+
+       #. pgcopydb blob worker
+
+       #. pgcopydb blob worker
 
      1. pgcopydb index/constraints worker (``--index-jobs 4``)
 
@@ -96,22 +104,23 @@ The process tree then looks like the following:
      * pgcopydb stream catchup
 
 We see that when using ``pgcopydb clone --follow --table-jobs 4 --index-jobs
-4`` then pgcopydb creates 20 sub-processes, including one transient
-sub-process each time a JSON file is to be converted to a SQL file for
-replay.
+4 --large-objects-jobs`` then pgcopydb creates 24 sub-processes, including
+one transient sub-process each time a JSON file is to be converted to a SQL
+file for replay.
 
-The 20 total is counted from:
+The 24 total is counted from:
 
  - 1 clone worker + 1 copy supervisor + 4 copy workers + 1 blob worker + 4
-   index workers + 4 vacuum workers + 1 sequence reset worker
+   blob data workers + 4 index workers + 4 vacuum workers + 1 sequence reset
+   worker
 
-   that's 1 + 1 + 4 + 1 + 4 + 4 + 1 = 16
+   that's 1 + 1 + 4 + 1 + 4 + 4 + 4 + 1 = 20
 
  - 1 follow worker + 1 stream receive + 1 stream transform + 1 stream catchup
 
    that's 1 + 1 + 1 + 1 = 4
 
- - that's 16 + 4 = 20 total
+ - that's 20 + 4 = 24 total
 
 Here is a description of the process tree:
 
@@ -120,7 +129,9 @@ Here is a description of the process tree:
    option (or the environment variable ``PGCOPYDB_TABLE_JOBS``).
 
  * A single sub-process is created by pgcopydb to copy the Postgres Large
-   Objects (BLOBs) found on the source database to the target database.
+   Objects (BLOBs) metadata found on the source database to the target
+   database, and as many as ``--large-objects-jobs`` processes are started
+   to copy the large object data.
 
  * To drive the index and constraint build on the target database, pgcopydb
    creates as many sub-processes as specified by the ``--index-jobs``
