@@ -56,8 +56,10 @@ typedef struct CopyIndexSummary
 typedef struct CopyBlobsSummary
 {
 	pid_t pid;
-	uint32_t count;
+	uint64_t count;
 	uint64_t durationMs;
+	uint64_t startTime;
+	uint64_t doneTime;
 } CopyBlobsSummary;
 
 
@@ -182,6 +184,7 @@ typedef struct Summary
 	SummaryTable table;
 	int tableJobs;
 	int indexJobs;
+	int lObjectJobs;
 } Summary;
 
 bool write_table_summary(CopyTableSummary *summary, char *filename);

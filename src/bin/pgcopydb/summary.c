@@ -525,16 +525,43 @@ finish_index_summary(CopyIndexSummary *summary, char *filename, bool constraint)
 bool
 write_blobs_summary(CopyBlobsSummary *summary, char *filename)
 {
-	char contents[BUFSIZE] = { 0 };
+	JSON_Value *js = json_value_init_object();
+	JSON_Object *jsObj = json_value_get_object(js);
 
-	sformat(contents, sizeof(contents), "%d\n%lld\n%lld\n",
-			summary->pid,
-			(long long) summary->count,
-			(long long) summary->durationMs);
+	json_object_set_number(jsObj, "pid", (double) summary->pid);
+	json_object_set_number(jsObj, "count", (double) summary->count);
+	json_object_set_number(jsObj, "duration", summary->durationMs);
+	json_object_set_number(jsObj, "start-time-epoch", summary->startTime);
+	json_object_set_number(jsObj, "done-time-epoch", summary->doneTime);
 
-	if (!write_file(contents, strlen(contents), filename))
+	/* pretty print start time */
+	time_t secs = summary->startTime;
+	struct tm ts = { 0 };
+	char startTimeStr[BUFSIZE] = { 0 };
+
+	if (localtime_r(&secs, &ts) == NULL)
 	{
-		log_warn("Failed to write the tracking file \%s\"", filename);
+		log_error("Failed to convert seconds %lld to local time: %m",
+				  (long long) secs);
+		return false;
+	}
+
+	strftime(startTimeStr, sizeof(startTimeStr), "%Y-%m-%d %H:%M:%S %Z", &ts);
+
+	json_object_set_string(jsObj, "start-time-string", startTimeStr);
+
+	char *serialized_string = json_serialize_to_string_pretty(js);
+	size_t len = strlen(serialized_string);
+
+	/* write the summary to the doneFile */
+	bool success = write_file(serialized_string, len, filename);
+
+	json_free_serialized_string(serialized_string);
+	json_value_free(js);
+
+	if (!success)
+	{
+		log_error("Failed to write table summary file \"%s\"", filename);
 		return false;
 	}
 
@@ -548,49 +575,23 @@ write_blobs_summary(CopyBlobsSummary *summary, char *filename)
 bool
 read_blobs_summary(CopyBlobsSummary *summary, char *filename)
 {
-	char *fileContents = NULL;
-	long fileSize = 0L;
+	JSON_Value *json = json_parse_file(filename);
 
-	if (!read_file(filename, &fileContents, &fileSize))
+	if (json == NULL)
 	{
-		/* errors have already been logged */
+		log_error("Failed to parse summary file \"%s\"", filename);
 		return false;
 	}
 
-	char *fileLines[BUFSIZE] = { 0 };
-	int lineCount = splitLines(fileContents, fileLines, BUFSIZE);
+	JSON_Object *jsObj = json_value_get_object(json);
 
-	if (lineCount < COPY_BLOBS_SUMMARY_LINES)
-	{
-		log_error("Failed to parse summary file \"%s\" which contains only "
-				  "%d lines, at least %d lines are expected",
-				  filename,
-				  lineCount,
-				  COPY_BLOBS_SUMMARY_LINES);
+	summary->pid = json_object_get_number(jsObj, "pid");
+	summary->count = json_object_get_number(jsObj, "count");
+	summary->durationMs = json_object_get_number(jsObj, "duration");
+	summary->startTime = json_object_get_number(jsObj, "start-time-epoch");
+	summary->doneTime = json_object_get_number(jsObj, "done-time-epoch");
 
-		free(fileContents);
-
-		return false;
-	}
-
-	if (!stringToInt(fileLines[0], &(summary->pid)))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!stringToUInt32(fileLines[1], &(summary->count)))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!stringToUInt64(fileLines[2], &(summary->durationMs)))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
+	json_value_free(json);
 	return true;
 }
 
@@ -787,7 +788,7 @@ print_toplevel_summary(Summary *summary)
 	fformat(stdout, " %50s   %10s  %10s  %12d\n",
 			"Large Objects (cumulative)", "both",
 			summary->timings.blobsMs,
-			1);
+			summary->lObjectJobs);
 
 	fformat(stdout, " %50s   %10s  %10s  %12d\n",
 			"CREATE INDEX, CONSTRAINTS (cumulative)", "target",
@@ -941,7 +942,7 @@ print_summary_as_json(Summary *summary, const char *filename)
 	json_object_set_string(jsBlobObj, "label", "Large Objects (cumulative)");
 	json_object_set_string(jsBlobObj, "conn", "both");
 	json_object_set_number(jsBlobObj, "duration", timings->blobDurationMs);
-	json_object_set_number(jsBlobObj, "concurrency", 1);
+	json_object_set_number(jsBlobObj, "concurrency", summary->lObjectJobs);
 
 	json_array_append_value(jsStepArray, jsBlob);
 
@@ -1182,6 +1183,7 @@ print_summary(Summary *summary, CopyDataSpec *specs)
 
 	summary->tableJobs = specs->tableJobs;
 	summary->indexJobs = specs->indexJobs;
+	summary->lObjectJobs = specs->lObjectJobs;
 
 	/* first, we have to scan the available data from memory and files */
 	if (!prepare_summary_table(summary, specs))

@@ -516,11 +516,10 @@ bool copydb_start_blob_process(CopyDataSpec *specs);
 
 bool copydb_start_blob_workers(CopyDataSpec *specs);
 bool copydb_blob_worker(CopyDataSpec *specs);
-bool copydb_queue_largeobject_metadata(CopyDataSpec *specs);
+bool copydb_queue_largeobject_metadata(CopyDataSpec *specs, uint64_t *count);
 bool copydb_copy_blob_by_oid(CopyDataSpec *specs, uint32_t oid);
 bool copydb_add_blob(CopyDataSpec *specs, uint32_t oid);
 bool copydb_send_lo_stop(CopyDataSpec *specs);
-bool copydb_queue_largeobject_metadata(CopyDataSpec *specs);
 
 /* vacuum.c */
 bool vacuum_start_workers(CopyDataSpec *specs);

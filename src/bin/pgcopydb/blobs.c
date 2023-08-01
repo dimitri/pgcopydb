@@ -72,6 +72,15 @@ copydb_start_blob_process(CopyDataSpec *specs)
 		case 0:
 		{
 			/* child process runs the command */
+			CopyBlobsSummary summary = {
+				.pid = getpid(),
+				.count = 0,
+				.startTime = time(NULL)
+			};
+
+			instr_time startTime;
+			INSTR_TIME_SET_CURRENT(startTime);
+
 			if (!copydb_start_blob_workers(specs))
 			{
 				/* errors have already been logged */
@@ -79,7 +88,9 @@ copydb_start_blob_process(CopyDataSpec *specs)
 			}
 
 			/* now append BLOB OIDs to the queue */
-			if (!copydb_queue_largeobject_metadata(specs))
+			uint64_t count = 0;
+
+			if (!copydb_queue_largeobject_metadata(specs, &count))
 			{
 				log_error("Failed to add large object metadata to the queue");
 				exit(EXIT_CODE_INTERNAL_ERROR);
@@ -96,6 +107,18 @@ copydb_start_blob_process(CopyDataSpec *specs)
 				/* errors have already been logged */
 				exit(EXIT_CODE_INTERNAL_ERROR);
 			}
+
+			instr_time duration;
+
+			INSTR_TIME_SET_CURRENT(duration);
+			INSTR_TIME_SUBTRACT(duration, startTime);
+
+			/* and write that we successfully finished copying all blobs */
+			summary.doneTime = time(NULL);
+			summary.durationMs = INSTR_TIME_GET_MILLISEC(duration);
+
+			/* ignore errors on the blob file summary */
+			(void) write_blobs_summary(&summary, specs->cfPaths.done.blobs);
 
 			exit(EXIT_CODE_QUIT);
 		}
@@ -363,7 +386,7 @@ copydb_send_lo_stop(CopyDataSpec *specs)
  * copydb_fetch_largeobject_metadata fetches large object metadata.
  */
 bool
-copydb_queue_largeobject_metadata(CopyDataSpec *specs)
+copydb_queue_largeobject_metadata(CopyDataSpec *specs, uint64_t *count)
 {
 	PGSQL *src = &(specs->sourceSnapshot.pgsql);
 
@@ -391,7 +414,7 @@ copydb_queue_largeobject_metadata(CopyDataSpec *specs)
 		return false;
 	}
 
-	uint32_t totalCount = 0;
+	*count = 0;
 
 	/* break out of the loop when FETCH returns 0 rows */
 	for (;;)
@@ -417,7 +440,7 @@ copydb_queue_largeobject_metadata(CopyDataSpec *specs)
 
 		log_debug("Queuing %d large objects", context.array.count);
 
-		totalCount += context.array.count;
+		*count += context.array.count;
 
 		for (int i = 0; i < context.array.count; i++)
 		{
@@ -440,7 +463,7 @@ copydb_queue_largeobject_metadata(CopyDataSpec *specs)
 		return false;
 	}
 
-	log_info("Added %lld large objects to the queue", (long long) totalCount);
+	log_info("Added %lld large objects to the queue", (long long) *count);
 
 	return true;
 }
