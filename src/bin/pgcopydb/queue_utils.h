@@ -34,6 +34,7 @@ typedef enum
 	QMSG_TYPE_TABLEPOID,        /* table oid, table partition number */
 	QMSG_TYPE_INDEXOID,         /* index oid */
 	QMSG_TYPE_STREAM_TRANSFORM, /* lsn position for transform process */
+	QMSG_TYPE_BLOBOID,          /* large object oid */
 	QMSG_TYPE_STOP
 } QMessageType;
 

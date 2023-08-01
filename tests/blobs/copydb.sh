@@ -46,7 +46,7 @@ pgcopydb restore pre-data --resume
 # pgcopydb restore pre-data have created the large objects already
 psql -d ${PGCOPYDB_TARGET_PGURI} -1 -c 'table pg_largeobject_metadata'
 
-pgcopydb copy blobs --resume
+pgcopydb copy blobs --large-objects-jobs 2 --resume
 
 pgcopydb restore post-data --resume
 

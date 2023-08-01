@@ -36,6 +36,7 @@ typedef struct CopyDBOptions
 
 	int tableJobs;
 	int indexJobs;
+	int lObjectJobs;
 
 	SplitTableLargerThan splitTablesLargerThan;
 

@@ -46,7 +46,7 @@
 /*
  * Chunk size for reading and writting large objects
  */
-#define LOBBUFSIZE 16384
+#define LOBBUFSIZE 16 * 1024 * 1024 /* 16 MB */
 
 
 /*
@@ -235,7 +235,6 @@ typedef struct GUC
 	char *value;
 } GUC;
 
-
 bool pgsql_init(PGSQL *pgsql, char *url, ConnectionType connectionType);
 
 void pgsql_set_retry_policy(ConnectionRetryPolicy *retryPolicy,
@@ -309,8 +308,10 @@ bool pgsql_get_sequence(PGSQL *pgsql, const char *nspname, const char *relname,
 
 bool pgsql_set_gucs(PGSQL *pgsql, GUC *settings);
 
-bool pg_copy_large_objects(PGSQL *src, PGSQL *dst,
-						   bool dropIfExists, uint32_t *count);
+bool pg_copy_large_object(PGSQL *src,
+						  PGSQL *dst,
+						  bool dropIfExists,
+						  uint32_t oid);
 
 /*
  * Maximum length of serialized pg_lsn value
