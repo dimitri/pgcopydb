@@ -34,6 +34,10 @@ pgcopydb list sequences --filters /usr/src/pgcopydb/exclude.ini --list-skipped
 
 pgcopydb clone --filters /usr/src/pgcopydb/exclude.ini
 
+# list the tables that are (not) selected by the filters
+pgcopydb list tables --filters /usr/src/pgcopydb/include.ini
+pgcopydb list tables --filters /usr/src/pgcopydb/include.ini --list-skipped
+
 # now another migration with the "include-only" parts of the data
 pgcopydb clone --filters /usr/src/pgcopydb/include.ini --restart
 

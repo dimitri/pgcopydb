@@ -828,23 +828,14 @@ pg_restore_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = "--no-acl";
 	}
 
-	/* apply [include-only-schema] filtering */
-	for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
-	{
-		char *nspname = filters->includeOnlySchemaList.array[i].nspname;
-
-		/* check that we still have room for --includeOnly-schema args */
-		if (PG_CMD_MAX_ARG < (argsIndex + 2))
-		{
-			log_error("Failed to call pg_dump, too many include-only-schema entries: "
-					  "argsIndex %d > %d",
-					  argsIndex + 2, PG_CMD_MAX_ARG);
-			return false;
-		}
-
-		args[argsIndex++] = "--schema";
-		args[argsIndex++] = nspname;
-	}
+	/*
+	 * Do not apply [include-only-schema] filtering.
+	 *
+	 * When using pg_restore --schema foo then pg_restore only restores objects
+	 * that are in the named schema, which does not include the schema itself.
+	 * We want to include the CREATE SCHEMA statement in the pg_restore
+	 * activity here, which means we can't use pg_restore --schema.
+	 */
 
 	/* apply [exclude-schema] filtering */
 	for (int i = 0; i < filters->excludeSchemaList.count; i++)
@@ -854,8 +845,8 @@ pg_restore_db(PostgresPaths *pgPaths,
 		/* check that we still have room for --exclude-schema args */
 		if (PG_CMD_MAX_ARG < (argsIndex + 2))
 		{
-			log_error("Failed to call pg_restore, too many exclude-schema entries: "
-					  "argsIndex %d > %d",
+			log_error("Failed to call pg_restore, too many exclude-schema "
+					  "entries: argsIndex %d > %d",
 					  argsIndex + 2,
 					  PG_CMD_MAX_ARG);
 			return false;
