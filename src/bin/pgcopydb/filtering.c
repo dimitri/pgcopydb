@@ -419,26 +419,26 @@ parse_filter_quoted_table_name(SourceFilterTable *table, const char *qname)
 
 	if (qname[0] == '"' && *(dot - 1) != '"')
 	{
-		char str[BUFSIZE] = { 0 };
-
-		strlcpy(str, qname, Min(dot - qname, sizeof(str)));
-
-		log_error("Failed to parse quoted relation name: %s", str);
+		log_error("Failed to parse quoted relation name: \"%s\"", qname);
 		return false;
 	}
 
 	char *nspnameStart = qname[0] == '"' ? (char *) qname + 1 : (char *) qname;
 	char *nspnameEnd = *(dot - 1) == '"' ? dot - 1 : dot;
-	size_t nsplen = nspnameEnd - nspnameStart + 1;
 
-	if (strlcpy(table->nspname, nspnameStart, nsplen) >= sizeof(table->nspname))
+	/* skip last character of the range, either a closing quote or the dot */
+	int nsplen = nspnameEnd - nspnameStart;
+
+	size_t nspbytes =
+		sformat(table->nspname, sizeof(table->nspname), "%.*s",
+				nsplen,
+				nspnameStart);
+
+	if (nspbytes >= sizeof(table->nspname))
 	{
-		char str[BUFSIZE] = { 0 };
-		strlcpy(str, nspnameStart, Min(nsplen, sizeof(str)));
-
-		log_error("Failed to parse schema name \"%s\" (%lu bytes long), "
+		log_error("Failed to parse schema name \"%s\" (%d bytes long), "
 				  "pgcopydb and Postgres only support names up to %lu bytes",
-				  str,
+				  table->nspname,
 				  nsplen,
 				  sizeof(table->nspname));
 		return false;
@@ -456,23 +456,24 @@ parse_filter_quoted_table_name(SourceFilterTable *table, const char *qname)
 
 	if (ptr[0] == '"' && *(end - 1) != '"')
 	{
-		char str[BUFSIZE] = { 0 };
-
-		strlcpy(str, ptr, Min(end - ptr, sizeof(str)));
-
-		log_error("Failed to parse quoted relation name: %s", str);
+		log_error("Failed to parse quoted relation name: \"%s\"", ptr);
 		return false;
 	}
 
 	char *relnameStart = ptr[0] == '"' ? ptr + 1 : ptr;
 	char *relnameEnd = *(end - 1) == '"' ? end - 1 : end;
-	size_t rellen = relnameEnd - relnameStart + 1;
+	int rellen = relnameEnd - relnameStart + 1;
 
-	if (strlcpy(table->relname, relnameStart, rellen) >= sizeof(table->relname))
+	size_t relbytes =
+		sformat(table->relname, sizeof(table->relname), "%.*s",
+				rellen,
+				relnameStart);
+
+	if (relbytes >= sizeof(table->relname))
 	{
-		log_error("Failed to parse relation name \"%s\" (%lu bytes long), "
+		log_error("Failed to parse relation name \"%s\" (%d bytes long), "
 				  "pgcopydb and Postgres only support names up to %lu bytes",
-				  ptr,
+				  table->relname,
 				  rellen,
 				  sizeof(table->relname));
 		return false;

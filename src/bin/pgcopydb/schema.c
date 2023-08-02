@@ -258,7 +258,7 @@ schema_list_schemas(PGSQL *pgsql, SourceSchemaArray *array)
 		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')) "
 		"  from pg_namespace n "
 		"       join pg_roles auth ON auth.oid = n.nspowner "
-		" where nspname <> 'public' and nspname !~ '^pg_'";
+		" where nspname <> 'information_schema' and nspname !~ '^pg_'";
 
 	if (!pgsql_execute_with_params(pgsql, sql,
 								   0, NULL, NULL,
@@ -3312,6 +3312,8 @@ prepareFilterCopyIncludeOnlySchema(PGSQL *pgsql, SourceFilters *filters)
 	{
 		char *nspname = filters->includeOnlySchemaList.array[i].nspname;
 
+		log_trace("prepareFilterCopyIncludeOnlySchema: \"%s\"", nspname);
+
 		if (!pg_copy_row_from_stdin(pgsql, "s", nspname))
 		{
 			/* errors have already been logged */
@@ -3368,7 +3370,7 @@ prepareFilterCopyTableList(PGSQL *pgsql,
 		char *nspname = tableList->array[i].nspname;
 		char *relname = tableList->array[i].relname;
 
-		log_trace("%s\t%s", nspname, relname);
+		log_trace("\"%s\"\t\"%s\"", nspname, relname);
 
 		if (!pg_copy_row_from_stdin(pgsql, "ss", nspname, relname))
 		{
@@ -3447,7 +3449,7 @@ getSchemaList(void *ctx, PGresult *result)
 
 		if (length >= NAMEDATALEN)
 		{
-			log_error("Extension name \"%s\" is %d bytes long, "
+			log_error("Schema name \"%s\" is %d bytes long, "
 					  "the maximum expected is %d (NAMEDATALEN - 1)",
 					  value, length, NAMEDATALEN - 1);
 			++errors;
@@ -3459,11 +3461,16 @@ getSchemaList(void *ctx, PGresult *result)
 
 		if (length >= RESTORE_LIST_NAMEDATALEN)
 		{
-			log_error("Table restore list name \"%s\" is %d bytes long, "
+			log_error("Schema restore list name \"%s\" is %d bytes long, "
 					  "the maximum expected is %d (RESTORE_LIST_NAMEDATALEN - 1)",
 					  value, length, RESTORE_LIST_NAMEDATALEN - 1);
 			++errors;
 		}
+
+		log_trace("getSchemaList: %u \"%s\" %s",
+				  schema->oid,
+				  schema->nspname,
+				  schema->restoreListName);
 	}
 
 	context->parsedOk = errors == 0;

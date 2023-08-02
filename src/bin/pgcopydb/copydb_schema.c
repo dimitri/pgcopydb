@@ -1058,7 +1058,7 @@ copydb_prepare_target_catalog(CopyDataSpec *specs)
 		return true;
 	}
 
-	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_SOURCE))
+	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1104,28 +1104,33 @@ copydb_schema_already_exists(CopyDataSpec *specs,
 		return false;
 	}
 
-	char *name = strdup(restoreListName + 2);
+	const char *start = restoreListName + 2;
+	char *end = strchr(start, ' ');
 
-	if (name == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	char *spc = strchr(name, ' ');
-
-	if (spc == NULL)
+	if (end == NULL)
 	{
 		log_error("Failed to parse restore list name \"%s\"", restoreListName);
 		return false;
 	}
 
-	*spc = '\0';
+	/* skip the end space itself pointed */
+	int len = end - start;
+	char nspname[NAMEDATALEN] = { 0 };
+	size_t bytes = sformat(nspname, sizeof(nspname), "%.*s", len, start);
+
+	if (bytes >= sizeof(nspname))
+	{
+		log_error("Failed to parse schema name \"%s\" (%d bytes long), "
+				  "pgcopydb and Postgres only support names up to %lu bytes",
+				  nspname,
+				  len,
+				  sizeof(nspname));
+		return false;
+	}
 
 	SourceSchema *schema = NULL;
-	size_t len = strlen(name);
 
-	HASH_FIND(hh, schemaHashByName, name, len, schema);
+	HASH_FIND(hh, schemaHashByName, nspname, len, schema);
 
 	*exists = schema != NULL;
 

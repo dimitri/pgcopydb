@@ -1,9 +1,11 @@
--[ RECORD 1 ]---
-nspname | public
--[ RECORD 2 ]---
+-[ RECORD 1 ]-----------------
 nspname | app
--[ RECORD 3 ]---
+-[ RECORD 2 ]-----------------
 nspname | copy
--[ RECORD 4 ]---
+-[ RECORD 3 ]-----------------
 nspname | foo
+-[ RECORD 4 ]-----------------
+nspname | public
+-[ RECORD 5 ]-----------------
+nspname | schema_name_20_chars
 

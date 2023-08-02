@@ -411,7 +411,9 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 			{
 				skip = true;
 
-				log_notice("Skipping already existing schema %u: %s",
+				log_notice("Skipping already existing dumpId %d: %s %u %s",
+						   contents.array[i].dumpId,
+						   contents.array[i].desc,
 						   contents.array[i].objectOid,
 						   contents.array[i].restoreListName);
 			}

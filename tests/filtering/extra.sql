@@ -51,3 +51,14 @@ create schema copy;
 
 create table app.foo(id bigserial, f1 text);
 create table copy.foo(like app.foo including all);
+
+
+--
+-- See https://github.com/dimitri/pgcopydb/issues/413
+--
+create schema schema_name_20_chars;
+
+create table schema_name_20_chars.very______long______table______name_______50_chars
+ (
+   id serial
+ );
