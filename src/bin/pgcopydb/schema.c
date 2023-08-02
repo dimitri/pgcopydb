@@ -120,6 +120,14 @@ typedef struct SourcePartitionContext
 	bool parsedOk;
 } SourcePartitionContext;
 
+/* Context used when fetching a table's rowcount and checksum */
+typedef struct ChecksumContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	TableChecksum *sum;
+	bool parsedOk;
+} ChecksumContext;
+
 
 static void getSchemaList(void *ctx, PGresult *result);
 
@@ -3051,10 +3059,8 @@ schema_list_partitions(PGSQL *pgsql, SourceTable *table, uint64_t partSize)
  * table and also a checksum for all the rows contents.
  */
 bool
-schema_checksum_table(PGSQL *pgsql, SourceTable *table)
+schema_send_table_checksum(PGSQL *pgsql, SourceTable *table)
 {
-	SourcePartitionContext parseContext = { { 0 }, table, false };
-
 	if (table->attributes.count == 0)
 	{
 		char sql[BUFSIZE] = { 0 };
@@ -3063,8 +3069,7 @@ schema_checksum_table(PGSQL *pgsql, SourceTable *table)
 				"select count(1) as cnt, 0 as chksum from only %s",
 				table->qname);
 
-		if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
-									   &parseContext, &getTableChecksum))
+		if (!pgsql_send_with_params(pgsql, sql, 0, NULL, NULL))
 		{
 			log_error("Failed to compute checksum for table %s", table->qname);
 			return false;
@@ -3127,8 +3132,7 @@ schema_checksum_table(PGSQL *pgsql, SourceTable *table)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (!pgsql_execute_with_params(pgsql, sql->data, 0, NULL, NULL,
-								   &parseContext, &getTableChecksum))
+	if (!pgsql_send_with_params(pgsql, sql->data, 0, NULL, NULL))
 	{
 		log_error("Failed to compute checksum for table %s", table->qname);
 		(void) destroyPQExpBuffer(sql);
@@ -3136,6 +3140,25 @@ schema_checksum_table(PGSQL *pgsql, SourceTable *table)
 	}
 
 	(void) destroyPQExpBuffer(sql);
+
+	return true;
+}
+
+
+/*
+ * schema_fetch_table_checksum fetches the results from the
+ * schema_send_table_checksum async query.
+ */
+bool
+schema_fetch_table_checksum(PGSQL *pgsql, TableChecksum *sum, bool *done)
+{
+	ChecksumContext parseContext = { { 0 }, sum, false };
+
+	if (!pgsql_fetch_results(pgsql, done, &parseContext, &getTableChecksum))
+	{
+		log_error("Failed to fetch table checksum results");
+		return false;
+	}
 
 	return true;
 }
@@ -5099,7 +5122,8 @@ parseCurrentPartition(PGresult *result, int rowNumber, SourceTableParts *parts)
 static void
 getTableChecksum(void *ctx, PGresult *result)
 {
-	SourcePartitionContext *context = (SourcePartitionContext *) ctx;
+	ChecksumContext *context = (ChecksumContext *) ctx;
+
 	int nTuples = PQntuples(result);
 	int errors = 0;
 
@@ -5117,19 +5141,19 @@ getTableChecksum(void *ctx, PGresult *result)
 		return;
 	}
 
-	SourceTable *table = context->table;
+	TableChecksum *sum = context->sum;
 
 	/* 1. count */
 	char *value = PQgetvalue(result, 0, 0);
 
-	if (!stringToUInt64(value, &(table->rowcount)))
+	if (!stringToUInt64(value, &(sum->rowcount)))
 	{
 		log_error("Invalid row count value: \"%s\"", value);
 		++errors;
 	}
 
 	value = PQgetvalue(result, 0, 1);
-	strlcpy(table->checksum, value, CHECKSUMLEN);
+	strlcpy(sum->checksum, value, CHECKSUMLEN);
 
 	context->parsedOk = errors == 0;
 }

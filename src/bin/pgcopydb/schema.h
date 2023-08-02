@@ -162,6 +162,12 @@ struct SourceIndexList;
 /* checksum is formatted as uuid */
 #define CHECKSUMLEN 36
 
+typedef struct TableChecksum
+{
+	uint64_t rowcount;
+	char checksum[CHECKSUMLEN];
+} TableChecksum;
+
 typedef struct SourceTable
 {
 	uint32_t oid;
@@ -175,8 +181,8 @@ typedef struct SourceTable
 	char bytesPretty[NAMEDATALEN]; /* pg_size_pretty */
 	bool excludeData;
 
-	uint64_t rowcount;
-	char checksum[CHECKSUMLEN];
+	TableChecksum sourceChecksum;
+	TableChecksum targetChecksum;
 
 	char restoreListName[RESTORE_LIST_NAMEDATALEN];
 	char partKey[NAMEDATALEN];
@@ -379,6 +385,7 @@ bool schema_list_pg_depend(PGSQL *pgsql,
 						   SourceFilters *filters,
 						   SourceDependArray *dependArray);
 
-bool schema_checksum_table(PGSQL *pgsql, SourceTable *table);
+bool schema_send_table_checksum(PGSQL *pgsql, SourceTable *table);
+bool schema_fetch_table_checksum(PGSQL *pgsql, TableChecksum *sum, bool *done);
 
 #endif /* SCHEMA_H */
