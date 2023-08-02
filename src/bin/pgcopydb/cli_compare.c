@@ -604,24 +604,27 @@ cli_compare_data(int argc, char **argv)
 	}
 
 	/*
-	 * Now prepare two specifications with only the source uri.
-	 *
-	 * We don't free() any memory here as the two CopyDataSpecs copies are
-	 * going to share pointers to memory allocated in the main copySpecs
-	 * instance.
+	 * Retrieve catalogs from the source database, the target is supposed to
+	 * have the same objects.
 	 */
-	CopyDataSpec sourceSpecs = { 0 };
-	CopyDataSpec targetSpecs = { 0 };
+	ConnStrings *dsn = &(copySpecs.connStrings);
 
-	if (!cli_compare_fetch_schemas(&copySpecs, &sourceSpecs, &targetSpecs))
+	log_info("SOURCE: Connecting to \"%s\"", dsn->safeSourcePGURI.pguri);
+
+	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
 	{
-		log_fatal("Failed to fetch source and target schemas, "
-				  "see above for details");
-		exit(EXIT_CODE_INTERNAL_ERROR);
+		log_fatal("Failed to retrieve source database schema, "
+				  "see above for details.");
+		exit(EXIT_CODE_SOURCE);
 	}
 
-	log_info("Comparing data for %d tables",
-			 sourceSpecs.catalog.sourceTableArray.count);
+	if (!copydb_prepare_schema_json_file(&copySpecs))
+	{
+		log_fatal("Failed to store the source database schema to file \"%s\", "
+				  "see above for details",
+				  copySpecs.cfPaths.schemafile);
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
 
 	PGSQL src = { 0 };
 	char *srcURI = copySpecs.connStrings.source_pguri;
@@ -657,28 +660,20 @@ cli_compare_data(int argc, char **argv)
 
 	uint64_t diffCount = 0;
 
-	SourceTableArray *tableArray = &(sourceSpecs.catalog.sourceTableArray);
-	SourceTable *targetTableHash = targetSpecs.catalog.sourceTableHashByQName;
+	SourceTableArray *tableArray = &(copySpecs.catalog.sourceTableArray);
 
 	for (int i = 0; i < tableArray->count; i++)
 	{
 		SourceTable *source = &(tableArray->array[i]);
-		SourceTable *target = NULL;
 
-		char *qname = source->qname;
-		size_t len = strlen(qname);
+		TableChecksum *srcChk = &(source->sourceChecksum);
+		TableChecksum *dstChk = &(source->targetChecksum);
 
-		HASH_FIND(hhQName, targetTableHash, qname, len, target);
-
-		if (target == NULL)
-		{
-			++diffCount;
-			log_error("Failed to find table %s in target database",
-					  qname);
-			continue;
-		}
-
-		if (!schema_checksum_table(&src, source))
+		/*
+		 * First, send both the queries to the source and target databases,
+		 * async.
+		 */
+		if (!schema_send_table_checksum(&src, source))
 		{
 			/* errors have already been logged */
 			(void) pgsql_finish(&src);
@@ -686,7 +681,7 @@ cli_compare_data(int argc, char **argv)
 			exit(EXIT_CODE_SOURCE);
 		}
 
-		if (!schema_checksum_table(&dst, target))
+		if (!schema_send_table_checksum(&dst, source))
 		{
 			/* errors have already been logged */
 			(void) pgsql_finish(&src);
@@ -694,28 +689,63 @@ cli_compare_data(int argc, char **argv)
 			exit(EXIT_CODE_TARGET);
 		}
 
-		if (source->rowcount != target->rowcount)
+		/*
+		 * Second, fetch the results from both the connections.
+		 */
+		bool srcDone = false;
+		bool dstDone = false;
+
+		do {
+			if (!srcDone)
+			{
+				if (!schema_fetch_table_checksum(&src, srcChk, &srcDone))
+				{
+					/* errors have already been logged */
+					(void) pgsql_finish(&src);
+					(void) pgsql_finish(&dst);
+					exit(EXIT_CODE_SOURCE);
+				}
+			}
+
+			if (!dstDone)
+			{
+				if (!schema_fetch_table_checksum(&dst, dstChk, &dstDone))
+				{
+					/* errors have already been logged */
+					(void) pgsql_finish(&src);
+					(void) pgsql_finish(&dst);
+					exit(EXIT_CODE_TARGET);
+				}
+			}
+
+			if (!srcDone || !dstDone)
+			{
+				pg_usleep(10 * 1000); /* 10 ms */
+			}
+		} while (!srcDone || !dstDone);
+
+		if (srcChk->rowcount != dstChk->rowcount)
 		{
 			++diffCount;
 			log_error("Table %s has %lld rows on source, %lld rows on target",
-					  qname,
-					  (long long) source->rowcount,
-					  (long long) target->rowcount);
+					  source->qname,
+					  (long long) srcChk->rowcount,
+					  (long long) dstChk->rowcount);
 		}
 
-		if (!streq(source->checksum, target->checksum))
+		if (!streq(srcChk->checksum, dstChk->checksum))
 		{
 			++diffCount;
 			log_error("Table %s has checksum %s on source, %s on target",
-					  qname,
-					  source->checksum,
-					  target->checksum);
+					  source->qname,
+					  srcChk->checksum,
+					  dstChk->checksum);
 		}
 
 		log_notice("%s: %lld rows, checksum %s",
-				   qname,
-				   (long long) source->rowcount,
-				   source->checksum);
+				   source->qname,
+				   (long long) srcChk->rowcount,
+				   srcChk->checksum);
 	}
 
 	if (!pgsql_commit(&src))
@@ -744,34 +774,28 @@ cli_compare_data(int argc, char **argv)
 		for (int i = 0; i < tableArray->count; i++)
 		{
 			SourceTable *source = &(tableArray->array[i]);
-			SourceTable *target = NULL;
-
-			char *qname = source->qname;
-			size_t len = strlen(qname);
-
-			HASH_FIND(hhQName, targetTableHash, qname, len, target);
-
-			if (target == NULL)
-			{
-				log_error("Failed to find table %s in target database",
-						  qname);
-				continue;
-			}
 
 			JSON_Value *jsComp = json_value_init_object();
 			JSON_Object *jsObj = json_value_get_object(jsComp);
 
-			json_object_dotset_number(jsObj, "source.oid", source->oid);
-			json_object_dotset_string(jsObj, "source.schema", source->nspname);
-			json_object_dotset_string(jsObj, "source.name", source->relname);
-			json_object_dotset_number(jsObj, "source.rowcount", source->rowcount);
-			json_object_dotset_string(jsObj, "source.checksum", source->checksum);
+			json_object_dotset_string(jsObj, "schema", source->nspname);
+			json_object_dotset_string(jsObj, "name", source->relname);
 
-			json_object_dotset_number(jsObj, "target.oid", target->oid);
-			json_object_dotset_string(jsObj, "target.schema", target->nspname);
-			json_object_dotset_string(jsObj, "target.name", target->relname);
-			json_object_dotset_number(jsObj, "target.rowcount", target->rowcount);
-			json_object_dotset_string(jsObj, "target.checksum", target->checksum);
+			json_object_dotset_number(jsObj,
+									  "source.rowcount",
+									  source->sourceChecksum.rowcount);
+
+			json_object_dotset_string(jsObj,
+									  "source.checksum",
+									  source->sourceChecksum.checksum);
+
+			json_object_dotset_number(jsObj,
+									  "target.rowcount",
+									  source->targetChecksum.rowcount);
+
+			json_object_dotset_string(jsObj,
+									  "target.checksum",
+									  source->targetChecksum.checksum);
 
 			json_array_append_value(jsArray, jsComp);
 		}
@@ -797,25 +821,15 @@ cli_compare_data(int argc, char **argv)
 		for (int i = 0; i < tableArray->count; i++)
 		{
 			SourceTable *source = &(tableArray->array[i]);
-			SourceTable *target = NULL;
 
-			char *qname = source->qname;
-			size_t len = strlen(qname);
-
-			HASH_FIND(hhQName, targetTableHash, qname, len, target);
-
-			if (target == NULL)
-			{
-				log_error("Failed to find table %s in target database",
-						  qname);
-				continue;
-			}
+			TableChecksum *srcChk = &(source->sourceChecksum);
+			TableChecksum *dstChk = &(source->targetChecksum);
 
 			fformat(stdout, "%30s | %s | %36s | %36s \n",
 					source->qname,
-					streq(source->checksum, target->checksum) ? " " : "!",
-					source->checksum,
-					target->checksum);
+					streq(srcChk->checksum, dstChk->checksum) ? " " : "!",
+					srcChk->checksum,
+					dstChk->checksum);
 		}
 
 		fformat(stdout, "\n");

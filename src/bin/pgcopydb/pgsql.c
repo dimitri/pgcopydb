@@ -36,12 +36,6 @@ static void pgAutoCtlDefaultNoticeProcessor(void *arg, const char *message);
 static PGconn * pgsql_open_connection(PGSQL *pgsql);
 static bool pgsql_retry_open_connection(PGSQL *pgsql);
 
-static bool pgsql_send_with_params(PGSQL *pgsql, const char *sql, int paramCount,
-								   const Oid *paramTypes, const char **paramValues);
-
-static bool pgsql_fetch_results(PGSQL *pgsql, bool *done,
-								void *context, ParsePostgresResultCB *parseFun);
-
 static bool is_response_ok(PGresult *result);
 static bool clear_results(PGSQL *pgsql);
 static void pgsql_handle_notifications(PGSQL *pgsql);
@@ -1610,7 +1604,7 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
  * pgsql_send_with_params implements sending a SQL query using the libpq async
  * API. Use pgsql_fetch_results to see if results are available are fetch them.
  */
-static bool
+bool
 pgsql_send_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 					   const Oid *paramTypes, const char **paramValues)
 {
@@ -1708,7 +1702,7 @@ pgsql_send_with_params(PGSQL *pgsql, const char *sql, int paramCount,
  * When the result is ready, the parseFun is called to parse the results as
  * when using pgsql_execute_with_params.
  */
-static bool
+bool
 pgsql_fetch_results(PGSQL *pgsql, bool *done,
 					void *context, ParsePostgresResultCB *parseFun)
 {
