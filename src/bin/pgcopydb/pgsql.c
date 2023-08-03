@@ -1638,7 +1638,7 @@ pgsql_send_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 			return false;
 		}
 
-		log_sql("[%s] %s;", endpoint, sql);
+		log_sql("[%s %d] %s;", endpoint, PQbackendPID(pgsql->connection), sql);
 
 		if (paramCount > 0)
 		{
@@ -1672,7 +1672,10 @@ pgsql_send_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 		 */
 		for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
 		{
-			log_error("[%s] %s", endpoint, errorLines[lineNumber]);
+			log_error("[%s %d] %s",
+					  endpoint,
+					  PQbackendPID(pgsql->connection),
+					  errorLines[lineNumber]);
 		}
 
 		if (pgsql->logSQL)
