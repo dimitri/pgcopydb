@@ -107,6 +107,8 @@ typedef struct TableFilePaths
 	char doneFile[MAXPGPATH];    /* table done file (summary) */
 	char idxListFile[MAXPGPATH]; /* index oids list file */
 
+	char chksumFile[MAXPGPATH]; /* table checksum file */
+
 	char truncateDoneFile[MAXPGPATH];    /* table truncate done file */
 } TableFilePaths;
 

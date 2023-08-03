@@ -74,6 +74,8 @@ cli_compare_getopts(int argc, char **argv)
 		{ "source", required_argument, NULL, 'S' },
 		{ "target", required_argument, NULL, 'T' },
 		{ "dir", required_argument, NULL, 'D' },
+		{ "jobs", required_argument, NULL, 'j' },
+		{ "table-jobs", required_argument, NULL, 'j' },
 		{ "json", no_argument, NULL, 'J' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
@@ -87,6 +89,12 @@ cli_compare_getopts(int argc, char **argv)
 
 	optind = 0;
 
+	/* install default values */
+	options.tableJobs = DEFAULT_TABLE_JOBS;
+	options.indexJobs = DEFAULT_INDEX_JOBS;
+	options.lObjectJobs = DEFAULT_LARGE_OBJECTS_JOBS;
+	options.splitTablesLargerThan.bytes = DEFAULT_SPLIT_TABLES_LARGER_THAN;
+
 	/* read values from the environment */
 	if (!cli_copydb_getenv(&options))
 	{
@@ -94,7 +102,7 @@ cli_compare_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:D:Vvdzqh",
+	while ((c = getopt_long(argc, argv, "S:T:D:j:Vvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -129,6 +137,19 @@ cli_compare_getopts(int argc, char **argv)
 			{
 				strlcpy(options.dir, optarg, MAXPGPATH);
 				log_trace("--dir %s", options.dir);
+				break;
+			}
+
+			case 'j':
+			{
+				if (!stringToInt(optarg, &options.tableJobs) ||
+					options.tableJobs < 1 ||
+					options.tableJobs > 128)
+				{
+					log_fatal("Failed to parse --jobs count: \"%s\"", optarg);
+					++errors;
+				}
+				log_trace("--table-jobs %d", options.tableJobs);
 				break;
 			}
 

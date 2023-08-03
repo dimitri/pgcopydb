@@ -889,6 +889,10 @@ copydb_init_tablepaths(CopyFilePaths *cfPaths,
 			cfPaths->tbldir,
 			oid);
 
+	sformat(tablePaths->chksumFile, MAXPGPATH, "%s/%u.sum.json",
+			cfPaths->tbldir,
+			oid);
+
 	return true;
 }
 
