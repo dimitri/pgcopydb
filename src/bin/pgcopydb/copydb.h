@@ -532,4 +532,15 @@ bool vacuum_send_stop(CopyDataSpec *specs);
 bool prepare_summary_table(Summary *summary, CopyDataSpec *specs);
 bool print_summary(Summary *summary, CopyDataSpec *specs);
 
+/* compare.c */
+bool compare_schemas(CopyDataSpec *copySpecs);
+bool compare_data(CopyDataSpec *copySpecs);
+
+bool compare_table(PGSQL *src, PGSQL *dst, SourceTable *source, int *diffCount);
+
+bool compare_fetch_schemas(CopyDataSpec *copySpecs,
+						   CopyDataSpec *sourceSpecs,
+						   CopyDataSpec *targetSpecs);
+
+
 #endif  /* COPYDB_H */

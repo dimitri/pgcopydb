@@ -374,6 +374,29 @@ copydb_table_array_as_json(SourceTableArray *tableArray,
 			json_object_set_value(jsTableObj, "parts", jsParts);
 		}
 
+		/* append source and target checksums if we have them */
+		if (table->sourceChecksum.rowcount > 0)
+		{
+			json_object_dotset_number(jsTableObj,
+									  "check.source.rowcount",
+									  table->sourceChecksum.rowcount);
+
+			json_object_dotset_string(jsTableObj,
+									  "check.source.checksum",
+									  table->sourceChecksum.checksum);
+		}
+
+		if (table->targetChecksum.rowcount > 0)
+		{
+			json_object_dotset_number(jsTableObj,
+									  "check.target.rowcount",
+									  table->targetChecksum.rowcount);
+
+			json_object_dotset_string(jsTableObj,
+									  "check.target.checksum",
+									  table->targetChecksum.checksum);
+		}
+
 		json_array_append_value(jsTableArray, jsTable);
 	}
 
