@@ -831,6 +831,113 @@ stream_apply_sql(StreamApplyContext *context,
 		case STREAM_ACTION_INSERT:
 		case STREAM_ACTION_UPDATE:
 		case STREAM_ACTION_DELETE:
+		{
+			if (!context->reachedStartPos)
+			{
+				return true;
+			}
+
+			uint32_t hash = metadata->hash;
+			PreparedStmt *stmtHashTable = context->preparedStmt;
+			PreparedStmt *stmt = NULL;
+
+			HASH_FIND(hh, stmtHashTable, &hash, sizeof(hash), stmt);
+
+			if (stmt == NULL)
+			{
+				char name[NAMEDATALEN] = { 0 };
+				sformat(name, sizeof(name), "%x", metadata->hash);
+
+				if (!pgsql_prepare(pgsql, name, metadata->stmt, 0, NULL))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+
+				PreparedStmt *stmt =
+					(PreparedStmt *) calloc(1, sizeof(PreparedStmt));
+
+				stmt->hash = hash;
+				stmt->prepared = true;
+
+				HASH_ADD(hh, stmtHashTable, hash, sizeof(hash), stmt);
+
+				/* HASH_ADD can change the pointer in place, update */
+				context->preparedStmt = stmtHashTable;
+			}
+
+			break;
+		}
+
+		case STREAM_ACTION_EXECUTE:
+		{
+			if (!context->reachedStartPos)
+			{
+				return true;
+			}
+
+			uint32_t hash = metadata->hash;
+			PreparedStmt *stmtHashTable = context->preparedStmt;
+			PreparedStmt *stmt = NULL;
+
+			HASH_FIND(hh, stmtHashTable, &hash, sizeof(hash), stmt);
+
+			if (stmt == NULL)
+			{
+				log_warn("BUG: Failed to find statement %x in stmtHashTable",
+						 hash);
+			}
+
+			char name[NAMEDATALEN] = { 0 };
+			sformat(name, sizeof(name), "%x", metadata->hash);
+
+			log_debug("stream_apply_sql EXECUTE %s %s", name, metadata->jsonBuffer);
+
+			JSON_Value *js = json_parse_string(metadata->jsonBuffer);
+
+			if (json_value_get_type(js) != JSONArray)
+			{
+				log_error("Failed to parse EXECUTE array: %s",
+						  metadata->jsonBuffer);
+				return false;
+			}
+
+			JSON_Array *jsArray = json_value_get_array(js);
+
+			int count = json_array_get_count(jsArray);
+			const char **paramValues =
+				(const char **) calloc(count, sizeof(char *));
+
+			if (paramValues == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			for (int i = 0; i < count; i++)
+			{
+				const char *value = json_array_get_string(jsArray, i);
+				paramValues[i] = value;
+
+				log_debug("stream_apply_sql EXECUTE ARRAY[%d]: %p %s %p %s",
+						  i, value, value, paramValues[i], paramValues[i]);
+			}
+
+			if (!pgsql_execute_prepared(pgsql, name,
+										count, paramValues,
+										NULL, NULL))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			free(paramValues);
+			free(metadata->jsonBuffer);
+			json_value_free(js);
+
+			break;
+		}
+
 		case STREAM_ACTION_TRUNCATE:
 		{
 			if (!context->reachedStartPos)
@@ -1078,23 +1185,99 @@ parseSQLAction(const char *query, LogicalMessageMetadata *metadata)
 		}
 
 		json_value_free(json);
+
+		return true;
 	}
 
-	if (strstr(query, "INSERT INTO") != NULL)
-	{
-		metadata->action = STREAM_ACTION_INSERT;
-	}
-	else if (strstr(query, "UPDATE ") != NULL)
-	{
-		metadata->action = STREAM_ACTION_UPDATE;
-	}
-	else if (strstr(query, "DELETE FROM ") != NULL)
-	{
-		metadata->action = STREAM_ACTION_DELETE;
-	}
-	else if (strstr(query, "TRUNCATE ") != NULL)
+	/*
+	 * So the SQL Action is a DML (or a TRUNCATE).
+	 */
+	size_t tLen = sizeof(TRUNCATE) - 1;
+	size_t pLen = sizeof(PREPARE) - 1;
+	size_t eLen = sizeof(EXECUTE) - 1;
+
+	if (strncmp(query, TRUNCATE, tLen) == 0)
 	{
 		metadata->action = STREAM_ACTION_TRUNCATE;
+	}
+	else if (strncmp(query, PREPARE, pLen) == 0)
+	{
+		uint32_t hash = 0;
+
+		if (sscanf(query + pLen, "%x", &hash) != 1)
+		{
+			log_error("Failed to parse PREPARE statement name: %s", query);
+			return false;
+		}
+
+		metadata->hash = hash;
+
+		char *spc = strchr(query + pLen, ' ');
+
+		if (spc == NULL)
+		{
+			log_error("Failed to parse PREPARE statement: %s", query);
+			return false;
+		}
+
+		size_t iLen = sizeof(INSERT) - 1;
+		size_t uLen = sizeof(UPDATE) - 1;
+		size_t dLen = sizeof(DELETE) - 1;
+
+		if (strncmp(spc + 1, INSERT, iLen) == 0)
+		{
+			/* skip ' AS ' and point to INSERT */
+			metadata->stmt = spc + 1 + 3;
+			metadata->action = STREAM_ACTION_INSERT;
+		}
+		else if (strncmp(spc + 1, UPDATE, uLen) == 0)
+		{
+			/* skip ' AS ' and point to UPDATE */
+			metadata->stmt = spc + 1 + 3;
+			metadata->action = STREAM_ACTION_UPDATE;
+		}
+		else if (strncmp(spc + 1, DELETE, dLen) == 0)
+		{
+			/* skip ' AS ' and point to DELETE */
+			metadata->stmt = spc + 1 + 3;
+			metadata->action = STREAM_ACTION_DELETE;
+		}
+	}
+	else if (strncmp(query, EXECUTE, eLen) == 0)
+	{
+		uint32_t hash = 0;
+
+		metadata->action = STREAM_ACTION_EXECUTE;
+
+		if (sscanf(query + eLen, "%x", &hash) != 1)
+		{
+			log_error("Failed to parse EXECUTE statement name: %s", query);
+			return false;
+		}
+
+		metadata->hash = hash;
+
+		char *json = strchr(query + eLen, '[');
+
+		if (json == NULL)
+		{
+			log_error("Failed to parse EXECUTE statement: %s", query);
+			return false;
+		}
+
+		/* chomp ; at the end of the query string */
+		int len = strlen(json) - 1;
+		size_t bytes = len + 1;
+
+		metadata->jsonBuffer = (char *) calloc(bytes, sizeof(char));
+
+		if (metadata->jsonBuffer == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		sformat(metadata->jsonBuffer, bytes, "%.*s", len, json);
 	}
 
 	if (metadata->action == STREAM_ACTION_UNKNOWN)

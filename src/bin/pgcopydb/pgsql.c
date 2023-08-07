@@ -1827,6 +1827,236 @@ pgsql_fetch_results(PGSQL *pgsql, bool *done,
 
 
 /*
+ * pgsql_prepare implements server-side prepared statements by using the
+ * Postgres protocol prepare/bind/execute messages. Use with
+ * pgsql_execute_prepared().
+ */
+bool
+pgsql_prepare(PGSQL *pgsql, const char *name, const char *sql,
+			  int paramCount, const Oid *paramTypes)
+{
+	PGconn *connection = pgsql_open_connection(pgsql);
+
+	if (connection == NULL)
+	{
+		return false;
+	}
+
+	char *endpoint =
+		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
+
+	if (pgsql->logSQL)
+	{
+		log_sql("[%s %d] PREPARE %s AS %s;",
+				endpoint, PQbackendPID(connection), name, sql);
+	}
+
+	PGresult *result = PQprepare(connection, name, sql, paramCount, paramTypes);
+
+	if (!is_response_ok(result))
+	{
+		char *sqlstate = PQresultErrorField(result, PG_DIAG_SQLSTATE);
+
+		if (sqlstate)
+		{
+			strlcpy(pgsql->sqlstate, sqlstate, sizeof(pgsql->sqlstate));
+		}
+
+		/*
+		 * PostgreSQL Error message might contain several lines. Log each of
+		 * them as a separate ERROR line here.
+		 */
+		char *message = PQerrorMessage(connection);
+
+		char *errorLines[BUFSIZE] = { 0 };
+		int lineCount = splitLines(message, errorLines, BUFSIZE);
+
+		for (int lineNumber = 0; lineNumber < lineCount; lineNumber++)
+		{
+			log_error("[%s %d] %s",
+					  endpoint,
+					  PQbackendPID(connection),
+					  errorLines[lineNumber]);
+		}
+
+		if (pgsql->logSQL)
+		{
+			log_error("[%s %d] SQL query: %s",
+					  endpoint,
+					  PQbackendPID(connection),
+					  sql);
+		}
+
+		/* if we get a connection exception, track that */
+		if (sqlstate &&
+			strncmp(sqlstate, STR_ERRCODE_CLASS_CONNECTION_EXCEPTION, 2) == 0)
+		{
+			pgsql->status = PG_CONNECTION_BAD;
+		}
+
+		PQclear(result);
+		clear_results(pgsql);
+
+		/*
+		 * Multi statements might want to ROLLBACK and hold to the open
+		 * connection for a retry step.
+		 */
+		if (pgsql->connectionStatementType == PGSQL_CONNECTION_SINGLE_STATEMENT)
+		{
+			(void) pgsql_finish(pgsql);
+		}
+
+		return false;
+	}
+
+	PQclear(result);
+	clear_results(pgsql);
+	if (pgsql->connectionStatementType == PGSQL_CONNECTION_SINGLE_STATEMENT)
+	{
+		(void) pgsql_finish(pgsql);
+	}
+
+	return true;
+}
+
+
+/*
+ * pgsql_prepare implements server-side prepared statements by using the
+ * Postgres protocol prepare/bind/execute messages. Use with
+ * pgsql_prepare().
+ */
+bool
+pgsql_execute_prepared(PGSQL *pgsql, const char *name,
+					   int paramCount, const char **paramValues,
+					   void *context, ParsePostgresResultCB *parseFun)
+{
+	PQExpBuffer debugParameters = NULL;
+
+	PGconn *connection = pgsql_open_connection(pgsql);
+
+	if (connection == NULL)
+	{
+		return false;
+	}
+
+	char *endpoint =
+		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
+
+	if (pgsql->logSQL)
+	{
+		debugParameters = createPQExpBuffer();
+
+		if (!build_parameters_list(debugParameters, paramCount, paramValues))
+		{
+			/* errors have already been logged */
+			destroyPQExpBuffer(debugParameters);
+			return false;
+		}
+
+		log_sql("[%s %d] EXECUTE %s;",
+				endpoint, PQbackendPID(connection), name);
+
+		if (paramCount > 0)
+		{
+			log_sql("[%s %d] %s",
+					endpoint,
+					PQbackendPID(connection),
+					debugParameters->data);
+		}
+	}
+
+	PGresult *result = PQexecPrepared(connection, name,
+									  paramCount, paramValues,
+									  NULL, NULL, 0);
+
+	if (!is_response_ok(result))
+	{
+		char *sqlstate = PQresultErrorField(result, PG_DIAG_SQLSTATE);
+
+		if (sqlstate)
+		{
+			strlcpy(pgsql->sqlstate, sqlstate, sizeof(pgsql->sqlstate));
+		}
+
+		/*
+		 * PostgreSQL Error message might contain several lines. Log each of
+		 * them as a separate ERROR line here.
+		 */
+		char *message = PQerrorMessage(connection);
+
+		char *errorLines[BUFSIZE] = { 0 };
+		int lineCount = splitLines(message, errorLines, BUFSIZE);
+
+		for (int lineNumber = 0; lineNumber < lineCount; lineNumber++)
+		{
+			log_error("[%s %d] %s",
+					  endpoint,
+					  PQbackendPID(connection),
+					  errorLines[lineNumber]);
+		}
+
+		if (pgsql->logSQL)
+		{
+			if (paramCount > 0)
+			{
+				log_error("[%s %d] SQL params: %s",
+						  endpoint,
+						  PQbackendPID(connection),
+						  debugParameters->data);
+			}
+
+			destroyPQExpBuffer(debugParameters);
+		}
+
+		/* now stash away the SQL STATE if any */
+		if (context && sqlstate)
+		{
+			AbstractResultContext *ctx = (AbstractResultContext *) context;
+
+			strlcpy(ctx->sqlstate, sqlstate, SQLSTATE_LENGTH);
+		}
+
+		/* if we get a connection exception, track that */
+		if (sqlstate &&
+			strncmp(sqlstate, STR_ERRCODE_CLASS_CONNECTION_EXCEPTION, 2) == 0)
+		{
+			pgsql->status = PG_CONNECTION_BAD;
+		}
+
+		PQclear(result);
+		clear_results(pgsql);
+
+		/*
+		 * Multi statements might want to ROLLBACK and hold to the open
+		 * connection for a retry step.
+		 */
+		if (pgsql->connectionStatementType == PGSQL_CONNECTION_SINGLE_STATEMENT)
+		{
+			(void) pgsql_finish(pgsql);
+		}
+
+		return false;
+	}
+
+	if (parseFun != NULL)
+	{
+		(*parseFun)(context, result);
+	}
+
+	destroyPQExpBuffer(debugParameters);
+
+	PQclear(result);
+	clear_results(pgsql);
+	if (pgsql->connectionStatementType == PGSQL_CONNECTION_SINGLE_STATEMENT)
+	{
+		(void) pgsql_finish(pgsql);
+	}
+
+	return true;
+}
+
+
+/*
  * build_parameters_list builds a string representation of the SQL query
  * parameter list given.
  */

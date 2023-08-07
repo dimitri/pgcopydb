@@ -295,6 +295,13 @@ bool pgsql_send_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 bool pgsql_fetch_results(PGSQL *pgsql, bool *done,
 						 void *context, ParsePostgresResultCB *parseFun);
 
+bool pgsql_prepare(PGSQL *pgsql, const char *name, const char *sql,
+				   int paramCount, const Oid *paramTypes);
+
+bool pgsql_execute_prepared(PGSQL *pgsql, const char *name,
+							int paramCount, const char **paramValues,
+							void *context, ParsePostgresResultCB *parseFun);
+
 void pgAutoCtlDebugNoticeProcessor(void *arg, const char *message);
 
 bool validate_connection_string(const char *connectionString);
