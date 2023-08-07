@@ -891,8 +891,6 @@ stream_apply_sql(StreamApplyContext *context,
 			char name[NAMEDATALEN] = { 0 };
 			sformat(name, sizeof(name), "%x", metadata->hash);
 
-			log_debug("stream_apply_sql EXECUTE %s %s", name, metadata->jsonBuffer);
-
 			JSON_Value *js = json_parse_string(metadata->jsonBuffer);
 
 			if (json_value_get_type(js) != JSONArray)
@@ -918,9 +916,6 @@ stream_apply_sql(StreamApplyContext *context,
 			{
 				const char *value = json_array_get_string(jsArray, i);
 				paramValues[i] = value;
-
-				log_debug("stream_apply_sql EXECUTE ARRAY[%d]: %p %s %p %s",
-						  i, value, value, paramValues[i], paramValues[i]);
 			}
 
 			if (!pgsql_execute_prepared(pgsql, name,
@@ -1202,16 +1197,6 @@ parseSQLAction(const char *query, LogicalMessageMetadata *metadata)
 	}
 	else if (strncmp(query, PREPARE, pLen) == 0)
 	{
-		uint32_t hash = 0;
-
-		if (sscanf(query + pLen, "%x", &hash) != 1)
-		{
-			log_error("Failed to parse PREPARE statement name: %s", query);
-			return false;
-		}
-
-		metadata->hash = hash;
-
 		char *spc = strchr(query + pLen, ' ');
 
 		if (spc == NULL)
@@ -1219,6 +1204,22 @@ parseSQLAction(const char *query, LogicalMessageMetadata *metadata)
 			log_error("Failed to parse PREPARE statement: %s", query);
 			return false;
 		}
+
+		/* make a copy of just the hexadecimal string */
+		int len = spc - (query + pLen);
+		char str[BUFSIZE] = { 0 };
+
+		sformat(str, sizeof(str), "%.*s", len, query + pLen);
+
+		uint32_t hash = 0;
+
+		if (!hexStringToUInt32(str, &hash))
+		{
+			log_error("Failed to parse PREPARE statement name: %s", query);
+			return false;
+		}
+
+		metadata->hash = hash;
 
 		size_t iLen = sizeof(INSERT) - 1;
 		size_t uLen = sizeof(UPDATE) - 1;
@@ -1245,17 +1246,7 @@ parseSQLAction(const char *query, LogicalMessageMetadata *metadata)
 	}
 	else if (strncmp(query, EXECUTE, eLen) == 0)
 	{
-		uint32_t hash = 0;
-
 		metadata->action = STREAM_ACTION_EXECUTE;
-
-		if (sscanf(query + eLen, "%x", &hash) != 1)
-		{
-			log_error("Failed to parse EXECUTE statement name: %s", query);
-			return false;
-		}
-
-		metadata->hash = hash;
 
 		char *json = strchr(query + eLen, '[');
 
@@ -1265,8 +1256,24 @@ parseSQLAction(const char *query, LogicalMessageMetadata *metadata)
 			return false;
 		}
 
+		/* make a copy of just the hexadecimal string */
+		int len = json - (query + eLen);
+		char str[BUFSIZE] = { 0 };
+
+		sformat(str, sizeof(str), "%.*s", len, query + pLen);
+
+		uint32_t hash = 0;
+
+		if (!hexStringToUInt32(str, &hash))
+		{
+			log_error("Failed to parse EXECUTE statement name: %s", query);
+			return false;
+		}
+
+		metadata->hash = hash;
+
 		/* chomp ; at the end of the query string */
-		int len = strlen(json) - 1;
+		len = strlen(json) - 1;
 		size_t bytes = len + 1;
 
 		metadata->jsonBuffer = (char *) calloc(bytes, sizeof(char));

@@ -446,6 +446,51 @@ stringToDouble(const char *str, double *number)
 
 
 /*
+ * converts given hexadecimal string to 32 bit unsigned int value.
+ * returns 0 upon failure and sets error flag
+ */
+bool
+hexStringToUInt32(const char *str, uint32_t *number)
+{
+	char *endptr;
+
+	if (str == NULL)
+	{
+		return false;
+	}
+
+	if (number == NULL)
+	{
+		return false;
+	}
+
+	errno = 0;
+	unsigned long long n = strtoull(str, &endptr, 16);
+
+	if (str == endptr)
+	{
+		return false;
+	}
+	else if (errno != 0)
+	{
+		return false;
+	}
+	else if (*endptr != '\0')
+	{
+		return false;
+	}
+	else if (n > UINT32_MAX)
+	{
+		return false;
+	}
+
+	*number = n;
+
+	return true;
+}
+
+
+/*
  * IntervalToString prepares a string buffer to represent a given interval
  * value given as a double precision float number.
  */
