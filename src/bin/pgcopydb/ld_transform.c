@@ -2094,96 +2094,6 @@ stream_write_truncate(FILE *out, LogicalMessageTruncate *truncate)
 
 
 /*
- * stream_write_value writes the given LogicalMessageValue to the out stream.
- */
-bool
-stream_write_value(FILE *out, LogicalMessageValue *value)
-{
-	if (value == NULL)
-	{
-		log_error("BUG: stream_write_value value is NULL");
-		return false;
-	}
-
-	if (value->isNull)
-	{
-		FFORMAT(out, "%s", "NULL");
-	}
-	else
-	{
-		switch (value->oid)
-		{
-			case BOOLOID:
-			{
-				FFORMAT(out, "'%s'", value->val.boolean ? "t" : "f");
-				break;
-			}
-
-			case INT8OID:
-			{
-				FFORMAT(out, "%lld", (long long) value->val.int8);
-				break;
-			}
-
-			case FLOAT8OID:
-			{
-				if (fmod(value->val.float8, 1) == 0.0)
-				{
-					FFORMAT(out, "%lld", (long long) value->val.float8);
-				}
-				else
-				{
-					FFORMAT(out, "%f", value->val.float8);
-				}
-				break;
-			}
-
-			case BYTEAOID:
-			{
-				if (value->isQuoted)
-				{
-					FFORMAT(out, "%s", value->val.str);
-				}
-				else
-				{
-					FFORMAT(out, "'%s'", value->val.str);
-				}
-
-				break;
-			}
-
-			case TEXTOID:
-			{
-				if (value->isQuoted)
-				{
-					FFORMAT(out, "%s", value->val.str);
-				}
-				else
-				{
-					const char *str = value->val.str;
-					if (!stream_write_sql_escape_string_constant(out, str))
-					{
-						log_error("Failed to write escaped string: E'%s'", str);
-						return false;
-					}
-				}
-				break;
-			}
-
-			default:
-			{
-				log_error("BUG: stream_write_insert value with oid %d",
-						  value->oid);
-				return false;
-			}
-		}
-	}
-
-	return true;
-}
-
-
-/*
  * stream_values_as_json_array fills-in a JSON array with the string
  * representation of the given values.
  */
@@ -2243,7 +2153,6 @@ stream_add_value_in_json_array(LogicalMessageValue *value, JSON_Array *jsArray)
 			case TEXTOID:
 			case BYTEAOID:
 			{
-				/* TODO: unquote? */
 				json_array_append_string(jsArray, value->val.str);
 				break;
 			}

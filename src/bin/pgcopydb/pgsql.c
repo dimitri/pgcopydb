@@ -40,6 +40,12 @@ static bool is_response_ok(PGresult *result);
 static bool clear_results(PGSQL *pgsql);
 static void pgsql_handle_notifications(PGSQL *pgsql);
 
+static void pgsql_execute_log_error(PGSQL *pgsql,
+									PGresult *result,
+									const char *sql,
+									PQExpBuffer debugParameters,
+									void *context);
+
 static bool build_parameters_list(PQExpBuffer buffer,
 								  int paramCount,
 								  const char **paramValues);
@@ -1510,65 +1516,8 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 
 	if (!is_response_ok(result))
 	{
-		char *sqlstate = PQresultErrorField(result, PG_DIAG_SQLSTATE);
-
-		if (sqlstate)
-		{
-			strlcpy(pgsql->sqlstate, sqlstate, sizeof(pgsql->sqlstate));
-		}
-
-		/*
-		 * PostgreSQL Error message might contain several lines. Log each of
-		 * them as a separate ERROR line here.
-		 */
-		char *message = PQerrorMessage(connection);
-
-		char *errorLines[BUFSIZE] = { 0 };
-		int lineCount = splitLines(message, errorLines, BUFSIZE);
-
-		for (int lineNumber = 0; lineNumber < lineCount; lineNumber++)
-		{
-			log_error("[%s %d] %s",
-					  endpoint,
-					  PQbackendPID(connection),
-					  errorLines[lineNumber]);
-		}
-
-		if (pgsql->logSQL)
-		{
-			log_error("[%s %d] SQL query: %s",
-					  endpoint,
-					  PQbackendPID(connection),
-					  sql);
-
-			if (paramCount > 0)
-			{
-				log_error("[%s %d] SQL params: %s",
-						  endpoint,
-						  PQbackendPID(connection),
-						  debugParameters->data);
-			}
-
-			destroyPQExpBuffer(debugParameters);
-		}
-
-		/* now stash away the SQL STATE if any */
-		if (context && sqlstate)
-		{
-			AbstractResultContext *ctx = (AbstractResultContext *) context;
-
-			strlcpy(ctx->sqlstate, sqlstate, SQLSTATE_LENGTH);
-		}
-
-		/* if we get a connection exception, track that */
-		if (sqlstate &&
-			strncmp(sqlstate, STR_ERRCODE_CLASS_CONNECTION_EXCEPTION, 2) == 0)
-		{
-			pgsql->status = PG_CONNECTION_BAD;
-		}
-
-		PQclear(result);
-		clear_results(pgsql);
+		pgsql_execute_log_error(pgsql, result, sql, debugParameters, context);
+		destroyPQExpBuffer(debugParameters);
 
 		/*
 		 * Multi statements might want to ROLLBACK and hold to the open
@@ -1770,44 +1719,7 @@ pgsql_fetch_results(PGSQL *pgsql, bool *done,
 
 		if (!is_response_ok(result))
 		{
-			char *sqlstate = PQresultErrorField(result, PG_DIAG_SQLSTATE);
-			char *message = PQerrorMessage(conn);
-
-			char *endpoint =
-				pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
-
-			strlcpy(pgsql->sqlstate, sqlstate, sizeof(pgsql->sqlstate));
-
-			/*
-			 * PostgreSQL Error message might contain several lines. Log each of
-			 * them as a separate ERROR line here.
-			 */
-			char *errorLines[BUFSIZE] = { 0 };
-			int lineCount = splitLines(message, errorLines, BUFSIZE);
-
-			for (int lineNumber = 0; lineNumber < lineCount; lineNumber++)
-			{
-				log_error("[%s] %s", endpoint, errorLines[lineNumber]);
-			}
-
-			/* now stash away the SQL STATE if any */
-			if (context && sqlstate)
-			{
-				AbstractResultContext *ctx = (AbstractResultContext *) context;
-
-				strlcpy(ctx->sqlstate, sqlstate, SQLSTATE_LENGTH);
-			}
-
-			/* if we get a connection exception, track that */
-			if (sqlstate &&
-				strncmp(sqlstate, STR_ERRCODE_CLASS_CONNECTION_EXCEPTION, 2) == 0)
-			{
-				pgsql->status = PG_CONNECTION_BAD;
-			}
-
-			PQclear(result);
-			clear_results(pgsql);
-
+			pgsql_execute_log_error(pgsql, result, NULL, NULL, context);
 			return false;
 		}
 
@@ -1855,47 +1767,7 @@ pgsql_prepare(PGSQL *pgsql, const char *name, const char *sql,
 
 	if (!is_response_ok(result))
 	{
-		char *sqlstate = PQresultErrorField(result, PG_DIAG_SQLSTATE);
-
-		if (sqlstate)
-		{
-			strlcpy(pgsql->sqlstate, sqlstate, sizeof(pgsql->sqlstate));
-		}
-
-		/*
-		 * PostgreSQL Error message might contain several lines. Log each of
-		 * them as a separate ERROR line here.
-		 */
-		char *message = PQerrorMessage(connection);
-
-		char *errorLines[BUFSIZE] = { 0 };
-		int lineCount = splitLines(message, errorLines, BUFSIZE);
-
-		for (int lineNumber = 0; lineNumber < lineCount; lineNumber++)
-		{
-			log_error("[%s %d] %s",
-					  endpoint,
-					  PQbackendPID(connection),
-					  errorLines[lineNumber]);
-		}
-
-		if (pgsql->logSQL)
-		{
-			log_error("[%s %d] SQL query: %s",
-					  endpoint,
-					  PQbackendPID(connection),
-					  sql);
-		}
-
-		/* if we get a connection exception, track that */
-		if (sqlstate &&
-			strncmp(sqlstate, STR_ERRCODE_CLASS_CONNECTION_EXCEPTION, 2) == 0)
-		{
-			pgsql->status = PG_CONNECTION_BAD;
-		}
-
-		PQclear(result);
-		clear_results(pgsql);
+		pgsql_execute_log_error(pgsql, result, sql, NULL, NULL);
 
 		/*
 		 * Multi statements might want to ROLLBACK and hold to the open
@@ -1971,60 +1843,11 @@ pgsql_execute_prepared(PGSQL *pgsql, const char *name,
 
 	if (!is_response_ok(result))
 	{
-		char *sqlstate = PQresultErrorField(result, PG_DIAG_SQLSTATE);
+		char sql[BUFSIZE] = { 0 };
+		sformat(sql, sizeof(sql), "EXECUTE %s;", name);
 
-		if (sqlstate)
-		{
-			strlcpy(pgsql->sqlstate, sqlstate, sizeof(pgsql->sqlstate));
-		}
-
-		/*
-		 * PostgreSQL Error message might contain several lines. Log each of
-		 * them as a separate ERROR line here.
-		 */
-		char *message = PQerrorMessage(connection);
-
-		char *errorLines[BUFSIZE] = { 0 };
-		int lineCount = splitLines(message, errorLines, BUFSIZE);
-
-		for (int lineNumber = 0; lineNumber < lineCount; lineNumber++)
-		{
-			log_error("[%s %d] %s",
-					  endpoint,
-					  PQbackendPID(connection),
-					  errorLines[lineNumber]);
-		}
-
-		if (pgsql->logSQL)
-		{
-			if (paramCount > 0)
-			{
-				log_error("[%s %d] SQL params: %s",
-						  endpoint,
-						  PQbackendPID(connection),
-						  debugParameters->data);
-			}
-
-			destroyPQExpBuffer(debugParameters);
-		}
-
-		/* now stash away the SQL STATE if any */
-		if (context && sqlstate)
-		{
-			AbstractResultContext *ctx = (AbstractResultContext *) context;
-
-			strlcpy(ctx->sqlstate, sqlstate, SQLSTATE_LENGTH);
-		}
-
-		/* if we get a connection exception, track that */
-		if (sqlstate &&
-			strncmp(sqlstate, STR_ERRCODE_CLASS_CONNECTION_EXCEPTION, 2) == 0)
-		{
-			pgsql->status = PG_CONNECTION_BAD;
-		}
-
-		PQclear(result);
-		clear_results(pgsql);
+		pgsql_execute_log_error(pgsql, result, sql, debugParameters, context);
+		destroyPQExpBuffer(debugParameters);
 
 		/*
 		 * Multi statements might want to ROLLBACK and hold to the open
@@ -2053,6 +1876,83 @@ pgsql_execute_prepared(PGSQL *pgsql, const char *name,
 	}
 
 	return true;
+}
+
+
+/*
+ * pgsql_execute_log_error logs an error when !is_response_ok(result).
+ */
+static void
+pgsql_execute_log_error(PGSQL *pgsql,
+						PGresult *result,
+						const char *sql,
+						PQExpBuffer debugParameters,
+						void *context)
+{
+	char *sqlstate = PQresultErrorField(result, PG_DIAG_SQLSTATE);
+
+	if (sqlstate)
+	{
+		strlcpy(pgsql->sqlstate, sqlstate, sizeof(pgsql->sqlstate));
+	}
+
+	char *endpoint =
+		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
+
+	/*
+	 * PostgreSQL Error message might contain several lines. Log each of
+	 * them as a separate ERROR line here.
+	 */
+	char *message = PQerrorMessage(pgsql->connection);
+
+	char *errorLines[BUFSIZE] = { 0 };
+	int lineCount = splitLines(message, errorLines, BUFSIZE);
+
+	for (int lineNumber = 0; lineNumber < lineCount; lineNumber++)
+	{
+		log_error("[%s %d] %s",
+				  endpoint,
+				  PQbackendPID(pgsql->connection),
+				  errorLines[lineNumber]);
+	}
+
+	if (pgsql->logSQL)
+	{
+		/* when using send/fetch async queries, fetch doesn't have the sql */
+		if (sql != NULL)
+		{
+			log_error("[%s %d] SQL query: %s",
+					  endpoint,
+					  PQbackendPID(pgsql->connection),
+					  sql);
+		}
+
+		if (debugParameters != NULL)
+		{
+			log_error("[%s %d] SQL params: %s",
+					  endpoint,
+					  PQbackendPID(pgsql->connection),
+					  debugParameters->data);
+		}
+	}
+
+	/* now stash away the SQL STATE if any */
+	if (context && sqlstate)
+	{
+		AbstractResultContext *ctx = (AbstractResultContext *) context;
+
+		strlcpy(ctx->sqlstate, sqlstate, SQLSTATE_LENGTH);
+	}
+
+	/* if we get a connection exception, track that */
+	if (sqlstate &&
+		strncmp(sqlstate, STR_ERRCODE_CLASS_CONNECTION_EXCEPTION, 2) == 0)
+	{
+		pgsql->status = PG_CONNECTION_BAD;
+	}
+
+	PQclear(result);
+	clear_results(pgsql);
 }
 
 
