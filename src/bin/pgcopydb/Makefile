@@ -62,6 +62,8 @@ endif
 
 override CFLAGS := $(DEFAULT_CFLAGS) $(CFLAGS)
 
+JENKINS_CFLAGS = $(CFAGS) -Wno-implicit-fallthrough -Wno-format
+
 LIBS  = -L $(shell $(PG_CONFIG) --pkglibdir)
 LIBS += -L $(shell $(PG_CONFIG) --libdir)
 LIBS += $(shell $(PG_CONFIG) --ldflags)
@@ -102,7 +104,7 @@ lib-parson.o: $(PARSON_SRC)
 	$(CC) $(CFLAGS) -c -MMD -MP -MF$(DEPDIR)/$(*F).Po -MT$@ -o $@ ${SRC_DIR}../lib/parson/parson.c
 
 lib-lookup3.o: $(JENKINS_SRC)
-	$(CC) $(CFLAGS) -c -MMD -MP -MF$(DEPDIR)/$(*F).Po -MT$@ -o $@ ${SRC_DIR}../lib/jenkins/lookup3.c
+	$(CC) $(JENKINS_CFLAGS) -c -MMD -MP -MF$(DEPDIR)/$(*F).Po -MT$@ -o $@ ${SRC_DIR}../lib/jenkins/lookup3.c
 
 VERSION-FILE: git-version.h ;
 
