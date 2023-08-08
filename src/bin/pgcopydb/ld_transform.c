@@ -17,6 +17,7 @@
 #include "access/xlog_internal.h"
 #include "access/xlogdefs.h"
 
+#include "lookup3.h"
 #include "parson.h"
 
 #include "cli_common.h"
@@ -1742,17 +1743,29 @@ stream_write_insert(FILE *out, LogicalMessageInsert *insert)
 	{
 		LogicalMessageTuple *stmt = &(insert->new.array[s]);
 
-		FFORMAT(out, "INSERT INTO \"%s\".\"%s\" ",
-				insert->nspname,
-				insert->relname);
+		PQExpBuffer buf = createPQExpBuffer();
+
+		JSON_Value *js = json_value_init_array();
+		JSON_Array *jsArray = json_value_get_array(js);
+
+		/*
+		 * First, the PREPARE part.
+		 */
+		appendPQExpBuffer(buf, "INSERT INTO \"%s\".\"%s\" ",
+						  insert->nspname,
+						  insert->relname);
 
 		/* loop over column names and add them to the out stream */
-		FFORMAT(out, "%s", "(");
+		appendPQExpBuffer(buf, "%s", "(");
+
 		for (int c = 0; c < stmt->cols; c++)
 		{
-			FFORMAT(out, "%s\"%s\"", c > 0 ? ", " : "", stmt->columns[c]);
+			appendPQExpBuffer(buf, "%s\"%s\"",
+							  c > 0 ? ", " : "",
+							  stmt->columns[c]);
 		}
-		FFORMAT(out, "%s", ")");
+
+		appendPQExpBuffer(buf, "%s", ")");
 
 		/*
 		 * See https://www.postgresql.org/docs/current/sql-insert.html
@@ -1769,34 +1782,54 @@ stream_write_insert(FILE *out, LogicalMessageInsert *insert)
 		 * VALUE is the normal behavior and specifying it does nothing, but
 		 * PostgreSQL allows it as an extension.)
 		 */
-		FFORMAT(out, "%s", " overriding system value ");
+		appendPQExpBufferStr(buf, " overriding system value VALUES ");
 
-		/* now loop over VALUES rows */
-		FFORMAT(out, "%s", "VALUES ");
+		int pos = 0;
 
 		for (int r = 0; r < stmt->values.count; r++)
 		{
 			LogicalMessageValues *values = &(stmt->values.array[r]);
 
 			/* now loop over column values for this VALUES row */
-			FFORMAT(out, "%s(", r > 0 ? ", " : "");
+			appendPQExpBuffer(buf, "%s(", r > 0 ? ", " : "");
+
 			for (int v = 0; v < values->cols; v++)
 			{
 				LogicalMessageValue *value = &(values->array[v]);
 
-				FFORMAT(out, "%s", v > 0 ? ", " : "");
+				appendPQExpBuffer(buf, "%s$%d",
+								  v > 0 ? ", " : "",
+								  ++pos);
 
-				if (!stream_write_value(out, value))
+				if (!stream_add_value_in_json_array(value, jsArray))
 				{
 					/* errors have already been logged */
 					return false;
 				}
 			}
 
-			FFORMAT(out, "%s", ")");
+			appendPQExpBufferStr(buf, ")");
 		}
 
-		FFORMAT(out, "%s", ";\n");
+		if (PQExpBufferBroken(buf))
+		{
+			log_error("Failed to transform INSERT statement: Out of Memory");
+			return false;
+		}
+
+		uint32_t hash = hashlittle(buf->data, buf->len, 5381);
+
+		FFORMAT(out, "PREPARE %x AS %s;\n", hash, buf->data);
+
+		/*
+		 * Second, the EXECUTE part.
+		 */
+		char *serialized_string = json_serialize_to_string(js);
+
+		FFORMAT(out, "EXECUTE %x%s;\n", hash, serialized_string);
+
+		json_free_serialized_string(serialized_string);
+		json_value_free(js);
 	}
 
 	return true;
@@ -1825,8 +1858,6 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 		LogicalMessageTuple *old = &(update->old.array[s]);
 		LogicalMessageTuple *new = &(update->new.array[s]);
 
-		FFORMAT(out, "UPDATE \"%s\".\"%s\" ", update->nspname, update->relname);
-
 		if (old->values.count != new->values.count ||
 			old->values.count != 1 ||
 			new->values.count != 1)
@@ -1838,7 +1869,18 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 			return false;
 		}
 
-		FFORMAT(out, "%s", "SET ");
+		PQExpBuffer buf = createPQExpBuffer();
+
+		JSON_Value *js = json_value_init_array();
+		JSON_Array *jsArray = json_value_get_array(js);
+
+		/*
+		 * First, the PREPARE part.
+		 */
+		appendPQExpBuffer(buf, "UPDATE \"%s\".\"%s\" SET ",
+						  update->nspname,
+						  update->relname);
+		int pos = 0;
 
 		for (int r = 0; r < new->values.count; r++)
 		{
@@ -1886,24 +1928,26 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 
 				if (!skip)
 				{
-					FFORMAT(out, "%s", first ? "" : ", ");
-					FFORMAT(out, "\"%s\" = ", colname);
+					appendPQExpBuffer(buf, "%s\"%s\" = $%d",
+									  first ? "" : ", ",
+									  colname,
+									  ++pos);
+
+					if (!stream_add_value_in_json_array(value, jsArray))
+					{
+						/* errors have already been logged */
+						return false;
+					}
 
 					if (first)
 					{
 						first = false;
 					}
-
-					if (!stream_write_value(out, value))
-					{
-						/* errors have already been logged */
-						return false;
-					}
 				}
 			}
 		}
 
-		FFORMAT(out, "%s", " WHERE ");
+		appendPQExpBufferStr(buf, " WHERE ");
 
 		for (int r = 0; r < old->values.count; r++)
 		{
@@ -1923,10 +1967,12 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 					return false;
 				}
 
-				FFORMAT(out, "%s", v > 0 ? " and " : "");
-				FFORMAT(out, "\"%s\" = ", old->columns[v]);
+				appendPQExpBuffer(buf, "%s\"%s\" = $%d",
+								  v > 0 ? " and " : "",
+								  old->columns[v],
+								  ++pos);
 
-				if (!stream_write_value(out, value))
+				if (!stream_add_value_in_json_array(value, jsArray))
 				{
 					/* errors have already been logged */
 					return false;
@@ -1934,7 +1980,25 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 			}
 		}
 
-		FFORMAT(out, "%s", ";\n");
+		if (PQExpBufferBroken(buf))
+		{
+			log_error("Failed to transform INSERT statement: Out of Memory");
+			return false;
+		}
+
+		uint32_t hash = hashlittle(buf->data, buf->len, 5381);
+
+		FFORMAT(out, "PREPARE %x AS %s;\n", hash, buf->data);
+
+		/*
+		 * Second, the EXECUTE part.
+		 */
+		char *serialized_string = json_serialize_to_string(js);
+
+		FFORMAT(out, "EXECUTE %x%s;\n", hash, serialized_string);
+
+		json_free_serialized_string(serialized_string);
+		json_value_free(js);
 	}
 
 	return true;
@@ -1953,12 +2017,18 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 	{
 		LogicalMessageTuple *old = &(delete->old.array[s]);
 
-		FFORMAT(out,
-				"DELETE FROM \"%s\".\"%s\"",
-				delete->nspname,
-				delete->relname);
+		PQExpBuffer buf = createPQExpBuffer();
+		JSON_Value *js = json_value_init_array();
+		JSON_Array *jsArray = json_value_get_array(js);
 
-		FFORMAT(out, "%s", " WHERE ");
+		/*
+		 * First, the PREPARE part.
+		 */
+		appendPQExpBuffer(buf, "DELETE FROM \"%s\".\"%s\" WHERE ",
+						  delete->nspname,
+						  delete->relname);
+
+		int pos = 0;
 
 		for (int r = 0; r < old->values.count; r++)
 		{
@@ -1978,10 +2048,12 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 					return false;
 				}
 
-				FFORMAT(out, "%s", v > 0 ? " and " : "");
-				FFORMAT(out, "\"%s\" = ", old->columns[v]);
+				appendPQExpBuffer(buf, "%s\"%s\" = $%d",
+								  v > 0 ? " and " : "",
+								  old->columns[v],
+								  ++pos);
 
-				if (!stream_write_value(out, value))
+				if (!stream_add_value_in_json_array(value, jsArray))
 				{
 					/* errors have already been logged */
 					return false;
@@ -1989,7 +2061,19 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 			}
 		}
 
-		FFORMAT(out, "%s", ";\n");
+		uint32_t hash = hashlittle(buf->data, buf->len, 5381);
+
+		FFORMAT(out, "PREPARE %x AS %s;\n", hash, buf->data);
+
+		/*
+		 * Second, the EXECUTE part.
+		 */
+		char *serialized_string = json_serialize_to_string(js);
+
+		FFORMAT(out, "EXECUTE %x%s;\n", hash, serialized_string);
+
+		json_free_serialized_string(serialized_string);
+		json_value_free(js);
 	}
 
 	return true;
@@ -2010,20 +2094,21 @@ stream_write_truncate(FILE *out, LogicalMessageTruncate *truncate)
 
 
 /*
- * stream_write_value writes the given LogicalMessageValue to the out stream.
+ * stream_values_as_json_array fills-in a JSON array with the string
+ * representation of the given values.
  */
 bool
-stream_write_value(FILE *out, LogicalMessageValue *value)
+stream_add_value_in_json_array(LogicalMessageValue *value, JSON_Array *jsArray)
 {
 	if (value == NULL)
 	{
-		log_error("BUG: stream_write_value value is NULL");
+		log_error("BUG: stream_values_as_json_array value is NULL");
 		return false;
 	}
 
 	if (value->isNull)
 	{
-		FFORMAT(out, "%s", "NULL");
+		json_array_append_null(jsArray);
 	}
 	else
 	{
@@ -2031,64 +2116,50 @@ stream_write_value(FILE *out, LogicalMessageValue *value)
 		{
 			case BOOLOID:
 			{
-				FFORMAT(out, "'%s'", value->val.boolean ? "t" : "f");
+				char *string = value->val.boolean ? "t" : "f";
+				json_array_append_string(jsArray, string);
 				break;
 			}
 
 			case INT8OID:
 			{
-				FFORMAT(out, "%lld", (long long) value->val.int8);
+				char string[BUFSIZE] = { 0 };
+
+				sformat(string, sizeof(string), "%lld",
+						(long long) value->val.int8);
+
+				json_array_append_string(jsArray, string);
 				break;
 			}
 
 			case FLOAT8OID:
 			{
+				char string[BUFSIZE] = { 0 };
+
 				if (fmod(value->val.float8, 1) == 0.0)
 				{
-					FFORMAT(out, "%lld", (long long) value->val.float8);
+					sformat(string, sizeof(string), "%lld",
+							(long long) value->val.float8);
 				}
 				else
 				{
-					FFORMAT(out, "%f", value->val.float8);
-				}
-				break;
-			}
-
-			case BYTEAOID:
-			{
-				if (value->isQuoted)
-				{
-					FFORMAT(out, "%s", value->val.str);
-				}
-				else
-				{
-					FFORMAT(out, "'%s'", value->val.str);
+					sformat(string, sizeof(string), "%f", value->val.float8);
 				}
 
+				json_array_append_string(jsArray, string);
 				break;
 			}
 
 			case TEXTOID:
+			case BYTEAOID:
 			{
-				if (value->isQuoted)
-				{
-					FFORMAT(out, "%s", value->val.str);
-				}
-				else
-				{
-					const char *str = value->val.str;
-					if (!stream_write_sql_escape_string_constant(out, str))
-					{
-						log_error("Failed to write escaped string: E'%s'", str);
-						return false;
-					}
-				}
+				json_array_append_string(jsArray, value->val.str);
 				break;
 			}
 
 			default:
 			{
-				log_error("BUG: stream_write_insert value with oid %d",
+				log_error("BUG: stream_values_as_json_array value with oid %d",
 						  value->oid);
 				return false;
 			}

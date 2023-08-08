@@ -25,4 +25,5 @@ src/bin/lib/libs/** -citus-style
 src/bin/lib/pg/** -citus-style
 src/bin/lib/subcommands.c/** -citus-style
 src/bin/lib/uthash/** -citus-style
+src/bin/lib/jenkins/** -citus-style
 src/bin/pgcopydb/pg_utils.c -citus-style

@@ -39,6 +39,9 @@ bool stringToInt32(const char *str, int32_t *number);
 bool stringToUInt32(const char *str, uint32_t *number);
 
 bool stringToDouble(const char *str, double *number);
+
+bool hexStringToUInt32(const char *str, uint32_t *number);
+
 bool IntervalToString(uint64_t millisecs, char *buffer, size_t size);
 
 int countLines(char *buffer);

@@ -20,6 +20,14 @@
 #define OUTPUT_KEEPALIVE "-- KEEPALIVE "
 #define OUTPUT_ENDPOS "-- ENDPOS "
 
+#define PREPARE "PREPARE "
+#define EXECUTE "EXECUTE "
+#define TRUNCATE "TRUNCATE "
+
+#define INSERT "AS INSERT INTO "
+#define UPDATE "AS UPDATE "
+#define DELETE "AS DELETE "
+
 typedef enum
 {
 	STREAM_ACTION_UNKNOWN = 0,
@@ -28,6 +36,7 @@ typedef enum
 	STREAM_ACTION_INSERT = 'I',
 	STREAM_ACTION_UPDATE = 'U',
 	STREAM_ACTION_DELETE = 'D',
+	STREAM_ACTION_EXECUTE = 'x',
 	STREAM_ACTION_TRUNCATE = 'T',
 	STREAM_ACTION_MESSAGE = 'M',
 	STREAM_ACTION_SWITCH = 'X',
@@ -63,6 +72,7 @@ typedef struct LogicalMessageMetadata
 
 	/* from parsing the message itself */
 	StreamAction action;
+	uint32_t hash;              /* PREPARE/EXECUTE statement name is a hash */
 	uint32_t xid;
 	uint64_t lsn;
 	uint64_t txnCommitLSN;      /* COMMIT LSN of the transaction */
@@ -71,6 +81,9 @@ typedef struct LogicalMessageMetadata
 	/* our own internal decision making */
 	bool filterOut;
 	bool skipping;
+
+	/* the statement part of a PREPARE dseadbeef AS ... */
+	char *stmt;
 
 	/* the raw message in our internal JSON format */
 	char *jsonBuffer;           /* malloc'ed area */
@@ -306,6 +319,19 @@ typedef struct StreamContext
 
 
 /*
+ * Keep track of the statements that have already been prepared in this
+ * session.
+ */
+typedef struct PreparedStmt
+{
+	uint32_t hash;
+	bool prepared;
+
+	UT_hash_handle hh;          /* makes this structure hashable */
+} PreparedStmt;
+
+
+/*
  * StreamApplyContext allows tracking the apply progress.
  */
 typedef struct StreamApplyContext
@@ -340,6 +366,8 @@ typedef struct StreamApplyContext
 
 	char wal[MAXPGPATH];
 	char sqlFileName[MAXPGPATH];
+
+	PreparedStmt *preparedStmt;
 } StreamApplyContext;
 
 
@@ -550,8 +578,11 @@ bool stream_write_insert(FILE *out, LogicalMessageInsert *insert);
 bool stream_write_truncate(FILE *out, LogicalMessageTruncate *truncate);
 bool stream_write_update(FILE *out, LogicalMessageUpdate *update);
 bool stream_write_delete(FILE * out, LogicalMessageDelete *delete);
-bool stream_write_value(FILE *out, LogicalMessageValue *value);
 bool stream_write_sql_escape_string_constant(FILE *out, const char *str);
+
+bool stream_add_value_in_json_array(LogicalMessageValue *value,
+									JSON_Array *jsArray);
+
 
 bool parseMessage(StreamContext *privateContext, char *message, JSON_Value *json);
 

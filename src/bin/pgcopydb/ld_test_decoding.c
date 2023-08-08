@@ -759,8 +759,9 @@ parseNextColumn(TestDecodingColumns *cols,
 		/* now skip closing single quote */
 		++cur;
 
-		cols->valueStart = ptr;
-		cols->valueLen = cur - ptr + 1;
+		/* do not capture the quotes */
+		cols->valueStart = ptr + 1;
+		cols->valueLen = (cur - 1) - (ptr + 1);
 
 		/* advance the ptr to past the value, skip the next space */
 		ptr = cur;
@@ -787,8 +788,9 @@ parseNextColumn(TestDecodingColumns *cols,
 			return false;
 		}
 
+		/* do not capture the quotes */
 		cols->valueStart = start;
-		cols->valueLen = end - start + 1;
+		cols->valueLen = end - start;
 
 		/* advance to past the value, skip the next space */
 		ptr = end + 1;
@@ -810,7 +812,7 @@ parseNextColumn(TestDecodingColumns *cols,
 		if (spc != NULL)
 		{
 			header->pos = spc - header->message + 1;
-			cols->valueLen = spc - ptr + 1;
+			cols->valueLen = spc - ptr;
 		}
 		else
 		{
@@ -891,7 +893,7 @@ listToTuple(LogicalMessageTuple *tuple, TestDecodingColumns *cols, int count)
 			 */
 			valueColumn->isQuoted = false;
 
-			int len = cur->valueLen - 2;
+			int len = cur->valueLen;
 			valueColumn->val.str = (char *) calloc(len, sizeof(char));
 
 			if (valueColumn->val.str == NULL)
@@ -900,8 +902,8 @@ listToTuple(LogicalMessageTuple *tuple, TestDecodingColumns *cols, int count)
 				return false;
 			}
 
-			/* skip the opening single-quote, the closing one, and \0 */
-			for (int i = 1, j = 0; i < (cur->valueLen - 2); i++)
+			/* copy the string contents without the surrounding quotes */
+			for (int i = 0, j = 0; i < cur->valueLen; i++)
 			{
 				char *ptr = cur->valueStart + i;
 				char *nxt = cur->valueStart + i + 1;
