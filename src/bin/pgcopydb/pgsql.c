@@ -1483,6 +1483,8 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 
 	if (pgsql->logSQL)
 	{
+		log_sql("[%s %d] %s;", endpoint, PQbackendPID(connection), sql);
+
 		debugParameters = createPQExpBuffer();
 
 		if (!build_parameters_list(debugParameters, paramCount, paramValues))
@@ -1491,8 +1493,6 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 			destroyPQExpBuffer(debugParameters);
 			return false;
 		}
-
-		log_sql("[%s %d] %s;", endpoint, PQbackendPID(connection), sql);
 
 		if (paramCount > 0)
 		{

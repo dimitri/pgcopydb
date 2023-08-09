@@ -475,7 +475,7 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 			if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 			{
 				doneReading = true;
-				log_info("read_from_stream was asked to stop or quit");
+				log_notice("read_from_stream was asked to stop or quit");
 			}
 
 			continue;

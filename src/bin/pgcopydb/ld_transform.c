@@ -478,8 +478,6 @@ stream_transform_rotate(StreamContext *privateContext)
 bool
 stream_transform_worker(StreamSpecs *specs)
 {
-	log_notice("Started Stream Transform worker %d [%d]", getpid(), getppid());
-
 	/*
 	 * The timeline and wal segment size are determined when connecting to the
 	 * source database, and stored to local files at that time. When the Stream
@@ -488,6 +486,12 @@ stream_transform_worker(StreamSpecs *specs)
 	 */
 	if (!stream_read_context(&(specs->paths), &(specs->system), &(specs->WalSegSz)))
 	{
+		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		{
+			log_debug("Stream Transform Worker startup was interrupted");
+			return true;
+		}
+
 		log_error("Failed to read the streaming context information "
 				  "from the source database, see above for details");
 		return false;
