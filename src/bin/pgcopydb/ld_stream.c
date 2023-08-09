@@ -2589,6 +2589,9 @@ stream_read_context(CDCPaths *paths,
 					uint32_t *WalSegSz)
 {
 	char *wal_segment_size = NULL;
+	char *tli = NULL;
+	char *history = NULL;
+
 	long size = 0L;
 
 	/*
@@ -2600,7 +2603,7 @@ stream_read_context(CDCPaths *paths,
 	ConnectionRetryPolicy retryPolicy = { 0 };
 
 	int maxT = 10;              /* 10s */
-	int maxSleepTime = 1000;    /* 1s */
+	int maxSleepTime = 1500;    /* 1.5s */
 	int baseSleepTime = 100;    /* 100ms */
 
 	(void) pgsql_set_retry_policy(&retryPolicy,
@@ -2611,12 +2614,35 @@ stream_read_context(CDCPaths *paths,
 
 	while (!pgsql_retry_policy_expired(&retryPolicy))
 	{
+		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		{
+			return false;
+		}
+
 		if (file_exists(paths->walsegsizefile) &&
 			file_exists(paths->tlifile) &&
 			file_exists(paths->tlihistfile))
 		{
-			/* success: break out of the retry loop */
-			break;
+			/*
+			 * File did exist, but might have been deleted now (race condition
+			 * at prefetch and transform processes start-up).
+			 */
+			bool success = true;
+
+			success = success &&
+					  read_file(paths->walsegsizefile, &wal_segment_size, &size);
+
+			success = success &&
+					  read_file(paths->tlifile, &tli, &size);
+
+			success = success &&
+					  read_file(paths->tlihistfile, &history, &size);
+
+			if (success)
+			{
+				/* success: break out of the retry loop */
+				break;
+			}
 		}
 
 		int sleepTimeMs =
@@ -2630,46 +2656,48 @@ stream_read_context(CDCPaths *paths,
 		(void) pg_usleep(sleepTimeMs * 1000);
 	}
 
-	/* we don't want to retry anymore, error out if files still don't exist */
-	if (!read_file(paths->walsegsizefile, &wal_segment_size, &size))
+	/* did retry policy expire before the files are created? */
+	if (!(file_exists(paths->walsegsizefile) &&
+		  file_exists(paths->tlifile) &&
+		  file_exists(paths->tlihistfile)))
 	{
-		/* errors have already been logged */
+		log_error("Failed to read stream context file: retry policy expired");
 		return false;
 	}
 
+	/*
+	 * Now that we could read the file contents, parse it.
+	 */
 	if (!stringToUInt(wal_segment_size, WalSegSz))
 	{
 		/* errors have already been logged */
-		return false;
-	}
-
-	char *tli;
-
-	if (!read_file(paths->tlifile, &tli, &size))
-	{
-		/* errors have already been logged */
+		free(wal_segment_size);
+		free(tli);
+		free(history);
 		return false;
 	}
 
 	if (!stringToUInt(tli, &(system->timeline)))
 	{
 		/* errors have already been logged */
-		return false;
-	}
-
-	char *history = NULL;
-
-	if (!read_file(paths->tlihistfile, &history, &size))
-	{
-		/* errors have already been logged */
+		free(wal_segment_size);
+		free(tli);
+		free(history);
 		return false;
 	}
 
 	if (!parseTimeLineHistory(paths->tlihistfile, history, system))
 	{
 		/* errors have already been logged */
+		free(wal_segment_size);
+		free(tli);
+		free(history);
 		return false;
 	}
+
+	free(wal_segment_size);
+	free(tli);
+	free(history);
 
 	return true;
 }
