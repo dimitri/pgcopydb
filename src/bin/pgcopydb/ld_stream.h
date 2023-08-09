@@ -332,6 +332,19 @@ typedef struct PreparedStmt
 
 
 /*
+ * As we're using synchronous_commit = off to speed-up things on the apply
+ * side, we need to track durability in the client-side.
+ */
+typedef struct LSNTracking
+{
+	uint64_t sourceLSN;         /* source system: replication origin */
+	uint64_t insertLSN;         /* target pgsql_current_wal_insert_lsn() */
+
+	/* that's a linked list */
+	struct LSNTracking *previous;
+} LSNTracking;
+
+/*
  * StreamApplyContext allows tracking the apply progress.
  */
 typedef struct StreamApplyContext
@@ -353,6 +366,8 @@ typedef struct StreamApplyContext
 	uint32_t WalSegSz;          /* information about source database */
 
 	uint64_t previousLSN;       /* register COMMIT LSN progress */
+
+	LSNTracking *lsnTrackingList;
 
 	bool apply;                 /* from the pgcopydb sentinel */
 	uint64_t startpos;          /* from the pgcopydb sentinel */
@@ -638,13 +653,13 @@ bool stream_apply_sql(StreamApplyContext *context,
 					  LogicalMessageMetadata *metadata,
 					  const char *sql);
 
-bool setupReplicationOrigin(StreamApplyContext *context,
-							CDCPaths *paths,
-							ConnStrings *connStrings,
-							char *origin,
-							uint64_t endpos,
-							bool apply,
-							bool logSQL);
+bool stream_apply_init_context(StreamApplyContext *context,
+							   CDCPaths *paths,
+							   ConnStrings *connStrings,
+							   char *origin,
+							   uint64_t endpos);
+
+bool setupReplicationOrigin(StreamApplyContext *context, bool logSQL);
 
 bool computeSQLFileName(StreamApplyContext *context);
 
@@ -652,6 +667,15 @@ bool parseSQLAction(const char *query, LogicalMessageMetadata *metadata);
 bool readTxnCommitLSN(StreamApplyContext *context,
 					  LogicalMessageMetadata *metadata);
 bool parseTxnMetadataFile(const char *filename, LogicalMessageMetadata *metadata);
+
+bool stream_apply_track_insert_lsn(StreamApplyContext *context,
+								   uint64_t sourceLSN);
+
+bool stream_apply_find_durable_lsn(StreamApplyContext *context,
+								   uint64_t *durableLSN);
+
+bool stream_apply_write_lsn_tracking(StreamApplyContext *context);
+bool stream_apply_read_lsn_tracking(StreamApplyContext *context);
 
 /* ld_replay */
 bool stream_replay(StreamSpecs *specs);

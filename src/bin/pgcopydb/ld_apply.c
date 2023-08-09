@@ -31,9 +31,16 @@
 #include "string_utils.h"
 #include "summary.h"
 
+GUC applySettingsSync[] = {
+	COMMON_GUC_SETTINGS,
+	{ "synchronous_commit", "on" },
+	{ "session_replication_role", "'replica'" },
+	{ NULL, NULL },
+};
 
 GUC applySettings[] = {
 	COMMON_GUC_SETTINGS,
+	{ "synchronous_commit", "off" },
 	{ "session_replication_role", "'replica'" },
 	{ NULL, NULL },
 };
@@ -128,6 +135,10 @@ stream_apply_catchup(StreamSpecs *specs)
 			break;
 		}
 
+		log_info("Apply reached %X/%X in \"%s\"",
+				 LSN_FORMAT_ARGS(context.previousLSN),
+				 currentSQLFileName);
+
 		if (!computeSQLFileName(&context))
 		{
 			/* errors have already been logged */
@@ -135,25 +146,34 @@ stream_apply_catchup(StreamSpecs *specs)
 			return false;
 		}
 
+		log_info("Apply new filename: \"%s\"", context.sqlFileName);
+
 		/*
 		 * If we reached the end of the file and the current LSN still belongs
 		 * to the same file (a SWITCH did not occur), then we exit so that the
 		 * calling process may switch from catchup mode to live replay mode.
 		 */
-		if (strcmp(context.sqlFileName, currentSQLFileName) == 0)
+		if (streq(context.sqlFileName, currentSQLFileName))
 		{
 			log_info("Reached end of file \"%s\" at %X/%X.",
 					 currentSQLFileName,
 					 LSN_FORMAT_ARGS(context.previousLSN));
 
+			/* make sure we close the connection on the way out */
 			(void) pgsql_finish(&(context.pgsql));
 			return true;
 		}
 	}
 
-	/* we might still have to disconnect now */
-	(void) pgsql_finish(&(context.pgsql));
+	if (!stream_apply_sync_sentinel(&context))
+	{
+		log_error("Failed to sync replay_lsn %X/%X",
+				  LSN_FORMAT_ARGS(context.previousLSN));
+		return false;
+	}
 
+	/* make sure we close the connection on the way out */
+	(void) pgsql_finish(&(context.pgsql));
 	return true;
 }
 
@@ -166,6 +186,24 @@ stream_apply_catchup(StreamSpecs *specs)
 bool
 stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
 {
+	/* init our context */
+	if (!stream_apply_init_context(context,
+								   &(specs->paths),
+								   specs->connStrings,
+								   specs->origin,
+								   specs->endpos))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* read-in the previous lsn tracking file, if it exists */
+	if (!stream_apply_read_lsn_tracking(context))
+	{
+		log_error("Failed to read LSN tracking file");
+		return false;
+	}
+
 	/* wait until the sentinel enables the apply process */
 	if (!stream_apply_wait_for_sentinel(specs, context))
 	{
@@ -197,13 +235,10 @@ stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
 	log_debug("Source database wal_segment_size is %u", context->WalSegSz);
 	log_debug("Source database timeline is %d", context->system.timeline);
 
-	if (!setupReplicationOrigin(context,
-								&(specs->paths),
-								specs->connStrings,
-								specs->origin,
-								specs->endpos,
-								context->apply,
-								specs->logSQL))
+	/*
+	 * Use the replication origin for our setup (context->previousLSN).
+	 */
+	if (!setupReplicationOrigin(context, specs->logSQL))
 	{
 		log_error("Failed to setup replication origin on the target database");
 		return false;
@@ -288,7 +323,13 @@ stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
 		context->endpos = sentinel.endpos;
 		context->apply = sentinel.apply;
 
-		context->previousLSN = sentinel.replay_lsn;
+		/* TODO: find more about this */
+		/* context->previousLSN = sentinel.replay_lsn; */
+
+		log_debug("stream_apply_wait_for_sentinel: "
+				  "previous lsn %X/%X, replay_lsn %X/%X",
+				  LSN_FORMAT_ARGS(context->previousLSN),
+				  LSN_FORMAT_ARGS(sentinel.replay_lsn));
 
 		log_debug("startpos %X/%X endpos %X/%X apply %s",
 				  LSN_FORMAT_ARGS(context->startpos),
@@ -332,6 +373,13 @@ stream_apply_sync_sentinel(StreamApplyContext *context)
 	PGSQL src = { 0 };
 	CopyDBSentinel sentinel = { 0 };
 
+	/* now is a good time to write the LSN tracking to disk */
+	if (!stream_apply_write_lsn_tracking(context))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (!pgsql_init(&src, context->connStrings->source_pguri, PGSQL_CONN_SOURCE))
 	{
 		/* errors have already been logged */
@@ -341,9 +389,29 @@ stream_apply_sync_sentinel(StreamApplyContext *context)
 	/* limit the amount of logging of the apply process */
 	src.logSQL = context->logSQL;
 
-	if (!pgsql_sync_sentinel_apply(&src, context->previousLSN, &sentinel))
+	uint64_t durableLSN = InvalidXLogRecPtr;
+
+	/*
+	 * If we know we reached endpos, then publish that as the replay_lsn.
+	 */
+	if (context->reachedEndPos)
+	{
+		durableLSN = context->previousLSN;
+	}
+	else
+	{
+		if (!stream_apply_find_durable_lsn(context, &durableLSN))
+		{
+			log_debug("Skipping sentinel replay_lsn: "
+					  "failed to find a durable LSN matching current flushLSN");
+			return true;
+		}
+	}
+
+	if (!pgsql_sync_sentinel_apply(&src, durableLSN, &sentinel))
 	{
 		log_warn("Failed to sync progress with the pgcopydb sentinel");
+		return false;
 	}
 
 	context->apply = sentinel.apply;
@@ -377,7 +445,16 @@ stream_apply_send_sync_sentinel(StreamApplyContext *context)
 	/* limit the amount of logging of the apply process */
 	src->logSQL = true;
 
-	if (!pgsql_send_sync_sentinel_apply(src, context->previousLSN))
+	uint64_t durableLSN = InvalidXLogRecPtr;
+
+	if (!stream_apply_find_durable_lsn(context, &durableLSN))
+	{
+		log_debug("Skipping sentinel replay_lsn update, "
+				  "failed to find a durable LSN matching current flushLSN");
+		return true;
+	}
+
+	if (!pgsql_send_sync_sentinel_apply(src, durableLSN))
 	{
 		log_error("Failed to sync progress with the pgcopydb sentinel");
 		return false;
@@ -496,7 +573,10 @@ stream_apply_file(StreamApplyContext *context)
 
 		if (!stream_apply_sql(context, &metadata, sql))
 		{
-			/* errors have already been logged */
+			log_error("Failed to apply SQL from file \"%s\", "
+					  "see above for details",
+					  content.filename);
+
 			free(content.buffer);
 			free(content.lines);
 
@@ -574,7 +654,7 @@ stream_apply_sql(StreamApplyContext *context,
 					context->previousLSN < metadata->txnCommitLSN;
 			}
 
-			log_trace("BEGIN %lld LSN %X/%X @%s, previous LSN %X/%X, COMMIT LSN %X/%X %s",
+			log_debug("BEGIN %lld LSN %X/%X @%s, previous LSN %X/%X, COMMIT LSN %X/%X %s",
 					  (long long) metadata->xid,
 					  LSN_FORMAT_ARGS(metadata->lsn),
 					  metadata->timestamp,
@@ -608,7 +688,29 @@ stream_apply_sql(StreamApplyContext *context,
 				return false;
 			}
 
-			if (!pgsql_set_gucs(pgsql, applySettings))
+			/*
+			 * If this transaction is going to reach the endpos, then we're
+			 * happy to wait until it's been sync'ed on-disk by Postgres on the
+			 * target.
+			 *
+			 * In other words, use synchronous_commit = on.
+			 */
+			bool commitLSNreachesEndPos =
+				context->endpos != InvalidXLogRecPtr &&
+				context->endpos <= metadata->txnCommitLSN;
+
+			GUC *settings =
+				commitLSNreachesEndPos ? applySettingsSync : applySettings;
+
+			if (commitLSNreachesEndPos)
+			{
+				log_notice("BEGIN transaction with COMMIT LSN %X/%X which is "
+						   "reaching endpos %X/%X, synchronous_commit is on",
+						   LSN_FORMAT_ARGS(metadata->txnCommitLSN),
+						   LSN_FORMAT_ARGS(context->endpos));
+			}
+
+			if (!pgsql_set_gucs(pgsql, settings))
 			{
 				log_error("Failed to set the apply GUC settings, "
 						  "see above for details");
@@ -674,6 +776,13 @@ stream_apply_sql(StreamApplyContext *context,
 						   LSN_FORMAT_ARGS(context->endpos),
 						   LSN_FORMAT_ARGS(context->previousLSN));
 				break;
+			}
+
+			if (!stream_apply_track_insert_lsn(context, metadata->lsn))
+			{
+				log_error("Failed to track target LSN position, "
+						  "see above for details");
+				return false;
 			}
 
 			break;
@@ -977,49 +1086,13 @@ stream_apply_sql(StreamApplyContext *context,
  * previous LSN position it was at.
  *
  * Also setupReplicationOrigin calls pg_replication_origin_setup() in the
- * current connection, that is set to be
+ * current connection.
  */
 bool
-setupReplicationOrigin(StreamApplyContext *context,
-					   CDCPaths *paths,
-					   ConnStrings *connStrings,
-					   char *origin,
-					   uint64_t endpos,
-					   bool apply,
-					   bool logSQL)
+setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
 {
 	PGSQL *pgsql = &(context->pgsql);
 	char *nodeName = context->origin;
-
-	/*
-	 * We have to consider both the --endpos command line option and the
-	 * pgcopydb sentinel endpos value. Typically the sentinel is updated after
-	 * the fact, but we still give precedence to --endpos.
-	 *
-	 * The endpos parameter here comes from the --endpos command line option,
-	 * the context->endpos might have been set by calling
-	 * stream_apply_wait_for_sentinel() earlier (when in STREAM_MODE_PREFETCH).
-	 */
-	if (endpos != InvalidXLogRecPtr)
-	{
-		if (context->endpos != InvalidXLogRecPtr && context->endpos != endpos)
-		{
-			log_warn("Option --endpos %X/%X is used, "
-					 "even when the pgcopydb sentinel endpos was set to %X/%X",
-					 LSN_FORMAT_ARGS(endpos),
-					 LSN_FORMAT_ARGS(context->endpos));
-		}
-		context->endpos = endpos;
-	}
-
-	context->paths = *paths;
-	context->apply = apply;
-
-	context->reachedStartPos = false;
-
-	context->connStrings = connStrings;
-
-	strlcpy(context->origin, origin, sizeof(context->origin));
 
 	if (!pgsql_init(pgsql, context->connStrings->target_pguri, PGSQL_CONN_TARGET))
 	{
@@ -1072,7 +1145,7 @@ setupReplicationOrigin(StreamApplyContext *context,
 
 	/* compute the WAL filename that would host the previous LSN */
 	log_debug("setupReplicationOrigin: replication origin \"%s\" "
-			  "found at %X/%X, expected in file \"%s\"",
+			  "found at %X/%X, expected at \"%s\"",
 			  nodeName,
 			  LSN_FORMAT_ARGS(context->previousLSN),
 			  context->sqlFileName);
@@ -1082,6 +1155,49 @@ setupReplicationOrigin(StreamApplyContext *context,
 		/* errors have already been logged */
 		return false;
 	}
+
+	return true;
+}
+
+
+/*
+ * stream_apply_init_context initializes our context from pieces.
+ */
+bool
+stream_apply_init_context(StreamApplyContext *context,
+						  CDCPaths *paths,
+						  ConnStrings *connStrings,
+						  char *origin,
+						  uint64_t endpos)
+{
+	context->paths = *paths;
+
+	/*
+	 * We have to consider both the --endpos command line option and the
+	 * pgcopydb sentinel endpos value. Typically the sentinel is updated after
+	 * the fact, but we still give precedence to --endpos.
+	 *
+	 * The endpos parameter here comes from the --endpos command line option,
+	 * the context->endpos might have been set by calling
+	 * stream_apply_wait_for_sentinel() earlier (when in STREAM_MODE_PREFETCH).
+	 */
+	if (endpos != InvalidXLogRecPtr)
+	{
+		if (context->endpos != InvalidXLogRecPtr && context->endpos != endpos)
+		{
+			log_warn("Option --endpos %X/%X is used, "
+					 "even when the pgcopydb sentinel endpos was set to %X/%X",
+					 LSN_FORMAT_ARGS(endpos),
+					 LSN_FORMAT_ARGS(context->endpos));
+		}
+		context->endpos = endpos;
+	}
+
+	context->reachedStartPos = false;
+
+	context->connStrings = connStrings;
+
+	strlcpy(context->origin, origin, sizeof(context->origin));
 
 	return true;
 }
@@ -1422,6 +1538,232 @@ parseTxnMetadataFile(const char *filename, LogicalMessageMetadata *metadata)
 				  "%s: %s", filename, txnMetadataContent);
 		return false;
 	}
+
+	return true;
+}
+
+
+/*
+ * stream_apply_track_insert_lsn tracks the current pg_current_wal_insert_lsn()
+ * location on the target system right after a COMMIT; of a transaction that
+ * was assigned sourceLSN on the source system.
+ */
+bool
+stream_apply_track_insert_lsn(StreamApplyContext *context, uint64_t sourceLSN)
+{
+	LSNTracking *lsn_tracking = (LSNTracking *) calloc(1, sizeof(LSNTracking));
+
+	if (lsn_tracking == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	lsn_tracking->sourceLSN = sourceLSN;
+
+	if (!pgsql_current_wal_insert_lsn(&(context->pgsql),
+									  &(lsn_tracking->insertLSN)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_debug("stream_apply_track_insert_lsn: %X/%X :: %X/%X",
+			  LSN_FORMAT_ARGS(sourceLSN),
+			  LSN_FORMAT_ARGS(lsn_tracking->insertLSN));
+
+	/* update the linked list */
+	lsn_tracking->previous = context->lsnTrackingList;
+	context->lsnTrackingList = lsn_tracking;
+
+	return true;
+}
+
+
+/*
+ * stream_apply_find_durable_lsn fetches the LSN for the current durable
+ * location on the target system, and finds the greatest sourceLSN with an
+ * associated insertLSN that's before the current (durable) write location.
+ */
+bool
+stream_apply_find_durable_lsn(StreamApplyContext *context, uint64_t *durableLSN)
+{
+	PGSQL *pgsql = &(context->pgsql);
+
+	uint64_t flushLSN = InvalidXLogRecPtr;
+
+	if (!pgsql_current_wal_flush_lsn(pgsql, &flushLSN))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	bool found = false;
+	LSNTracking *current = context->lsnTrackingList;
+
+	for (; current != NULL; current = current->previous)
+	{
+		if (current->insertLSN <= flushLSN)
+		{
+			found = true;
+			*durableLSN = current->sourceLSN;
+			break;
+		}
+	}
+
+	if (!found)
+	{
+		*durableLSN = InvalidXLogRecPtr;
+
+		log_debug("Failed to find a durable source LSN for target LSN %X/%X",
+				  LSN_FORMAT_ARGS(flushLSN));
+
+		return false;
+	}
+
+	log_debug("stream_apply_find_durable_lsn(%X/%X): %X/%X :: %X/%X",
+			  LSN_FORMAT_ARGS(flushLSN),
+			  LSN_FORMAT_ARGS(current->sourceLSN),
+			  LSN_FORMAT_ARGS(current->insertLSN));
+
+	/* clean-up the lsn tracking list */
+	LSNTracking *tail = current->previous;
+	current->previous = NULL;
+
+	while (tail != NULL)
+	{
+		LSNTracking *previous = tail->previous;
+		free(tail);
+		tail = previous;
+	}
+
+	return true;
+}
+
+
+/*
+ * stream_apply_write_lsn_tracking writes the context->LSNTracking linked-list
+ * as a JSON array on-disk.
+ */
+bool
+stream_apply_write_lsn_tracking(StreamApplyContext *context)
+{
+	const char *filename = context->paths.lsntrackingfile;
+	LSNTracking *current = context->lsnTrackingList;
+
+	JSON_Value *js = json_value_init_array();
+	JSON_Array *jsArray = json_value_get_array(js);
+
+	for (; current != NULL; current = current->previous)
+	{
+		JSON_Value *jsObj = json_value_init_object();
+		JSON_Object *jsLSNObj = json_value_get_object(jsObj);
+
+		char sourceLSN[PG_LSN_MAXLENGTH] = { 0 };
+		char insertLSN[PG_LSN_MAXLENGTH] = { 0 };
+
+		sformat(sourceLSN, sizeof(sourceLSN), "%X/%X",
+				LSN_FORMAT_ARGS(current->sourceLSN));
+
+		sformat(insertLSN, sizeof(insertLSN), "%X/%X",
+				LSN_FORMAT_ARGS(current->insertLSN));
+
+		json_object_set_string(jsLSNObj, "source", sourceLSN);
+		json_object_set_string(jsLSNObj, "insert", insertLSN);
+
+		json_array_append_value(jsArray, jsObj);
+	}
+
+	char *serialized_string = json_serialize_to_string(js);
+	size_t len = strlen(serialized_string);
+
+	if (!write_file(serialized_string, len, filename))
+	{
+		log_error("Failed to write LSN tracking to file \"%s\"", filename);
+		return false;
+	}
+
+	json_free_serialized_string(serialized_string);
+	json_value_free(js);
+
+	return true;
+}
+
+
+/*
+ * stream_apply_read_lsn_tracking reads the context->LSNTracking linked-list
+ * from a JSON array on-disk.
+ */
+bool
+stream_apply_read_lsn_tracking(StreamApplyContext *context)
+{
+	const char *filename = context->paths.lsntrackingfile;
+	LSNTracking *current = context->lsnTrackingList;
+
+	if (current != NULL)
+	{
+		log_error("BUG: stream_apply_read_lsn_tracking current is not NULL");
+		return false;
+	}
+
+	/* it's okay if the file does not exists, just skip the operation */
+	if (!file_exists(filename))
+	{
+		log_debug("Failed to parse JSON file \"%s\": file does not exists",
+				  filename);
+		return true;
+	}
+
+	JSON_Value *json = json_parse_file(filename);
+
+	if (json == NULL)
+	{
+		log_error("Failed to parse JSON file \"%s\"", filename);
+		return false;
+	}
+
+	JSON_Array *jsArray = json_value_get_array(json);
+	int count = json_array_get_count(jsArray);
+
+	for (int i = 0; i < count; i++)
+	{
+		LSNTracking *lsn_tracking =
+			(LSNTracking *) calloc(1, sizeof(LSNTracking));
+
+		if (lsn_tracking == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+
+			(void) json_value_free(json);
+			return false;
+		}
+
+		JSON_Object *jsObj = json_array_get_object(jsArray, i);
+		const char *source = json_object_get_string(jsObj, "source");
+		const char *insert = json_object_get_string(jsObj, "insert");
+
+		if (!parseLSN(source, &(lsn_tracking->sourceLSN)))
+		{
+			log_error("Failed to parse source LSN \"%s\"", source);
+
+			(void) json_value_free(json);
+			return false;
+		}
+
+		if (!parseLSN(insert, &(lsn_tracking->insertLSN)))
+		{
+			log_error("Failed to parse insert LSN \"%s\"", insert);
+
+			(void) json_value_free(json);
+			return false;
+		}
+
+		/* update the linked list */
+		lsn_tracking->previous = context->lsnTrackingList;
+		context->lsnTrackingList = lsn_tracking;
+	}
+
+	(void) json_value_free(json);
 
 	return true;
 }

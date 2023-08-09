@@ -1069,15 +1069,20 @@ cli_stream_apply(int argc, char **argv)
 		/* prepare the replication origin tracking */
 		StreamApplyContext context = { 0 };
 
+		if (!stream_apply_init_context(&context,
+									   &(copySpecs.cfPaths.cdc),
+									   &(streamDBoptions.connStrings),
+									   streamDBoptions.origin,
+									   streamDBoptions.endpos))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_TARGET);
+		}
+
+		context.apply = true;
 		strlcpy(context.sqlFileName, sqlfilename, sizeof(context.sqlFileName));
 
-		if (!setupReplicationOrigin(&context,
-									&(copySpecs.cfPaths.cdc),
-									&(streamDBoptions.connStrings),
-									streamDBoptions.origin,
-									streamDBoptions.endpos,
-									true,
-									logSQL))
+		if (!setupReplicationOrigin(&context, logSQL))
 		{
 			log_error("Failed to setup replication origin on the target database");
 			exit(EXIT_CODE_TARGET);

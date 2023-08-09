@@ -4950,6 +4950,88 @@ pgsql_role_exists(PGSQL *pgsql, const char *roleName, bool *exists)
 
 
 /*
+ * pgsql_current_wal_flush_lsn calls pg_current_wal_flush_lsn().
+ */
+bool
+pgsql_current_wal_flush_lsn(PGSQL *pgsql, uint64_t *lsn)
+{
+	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_STRING, false };
+
+	const char *sql = "select pg_current_wal_flush_lsn()";
+
+	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+								   &context, &parseSingleValueResult))
+	{
+		log_error("Failed to call pg_current_wal_flush_lsn()");
+		return false;
+	}
+
+	if (context.isNull)
+	{
+		/* when we get a NULL, return 0/0 instead */
+		*lsn = InvalidXLogRecPtr;
+	}
+	else
+	{
+		if (!parseLSN(context.strVal, lsn))
+		{
+			log_error("Failed to parse LSN \"%s\" returned from "
+					  "pg_current_wal_flush_lsn()",
+					  context.strVal);
+			free(context.strVal);
+
+			return false;
+		}
+
+		free(context.strVal);
+	}
+
+	return true;
+}
+
+
+/*
+ * pgsql_current_wal_insert_lsn calls pg_current_wal_insert_lsn().
+ */
+bool
+pgsql_current_wal_insert_lsn(PGSQL *pgsql, uint64_t *lsn)
+{
+	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_STRING, false };
+
+	const char *sql = "select pg_current_wal_insert_lsn()";
+
+	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+								   &context, &parseSingleValueResult))
+	{
+		log_error("Failed to call pg_current_wal_insert_lsn()");
+		return false;
+	}
+
+	if (context.isNull)
+	{
+		/* when we get a NULL, return 0/0 instead */
+		*lsn = InvalidXLogRecPtr;
+	}
+	else
+	{
+		if (!parseLSN(context.strVal, lsn))
+		{
+			log_error("Failed to parse LSN \"%s\" returned from "
+					  "pg_current_wal_insert_lsn()",
+					  context.strVal);
+			free(context.strVal);
+
+			return false;
+		}
+
+		free(context.strVal);
+	}
+
+	return true;
+}
+
+
+/*
  * pgsql_update_sentinel_startpos updates our pgcopydb sentinel table start pos.
  */
 bool
@@ -5121,6 +5203,9 @@ pgsql_get_sentinel(PGSQL *pgsql, CopyDBSentinel *sentinel)
 	sentinel->write_lsn = context.write_lsn;
 	sentinel->flush_lsn = context.flush_lsn;
 	sentinel->replay_lsn = context.replay_lsn;
+
+	log_debug("pgsql_get_sentinel: replay_lsn %X/%X",
+			  LSN_FORMAT_ARGS(sentinel->replay_lsn));
 
 	return true;
 }
