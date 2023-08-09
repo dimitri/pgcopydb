@@ -153,7 +153,7 @@ follow_init_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel)
 	if (!pgsql_begin(&pgsql))
 	{
 		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
+		return false;
 	}
 
 	if (specs->endpos != InvalidXLogRecPtr)
