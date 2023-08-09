@@ -3098,7 +3098,7 @@ schema_send_table_checksum(PGSQL *pgsql, SourceTable *table)
 	{
 		(void) destroyPQExpBuffer(attrList);
 		log_error("Failed to build attribute list: Out of Memory");
-		exit(EXIT_CODE_INTERNAL_ERROR);
+		return false;
 	}
 
 	/* now prepare the actual query */
@@ -3129,7 +3129,7 @@ schema_send_table_checksum(PGSQL *pgsql, SourceTable *table)
 		(void) destroyPQExpBuffer(attrList);
 		(void) destroyPQExpBuffer(sql);
 		log_error("Failed to build attribute list: Out of Memory");
-		exit(EXIT_CODE_INTERNAL_ERROR);
+		return false;
 	}
 
 	if (!pgsql_send_with_params(pgsql, sql->data, 0, NULL, NULL))
