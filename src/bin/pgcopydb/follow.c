@@ -222,7 +222,7 @@ follow_get_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel)
 				 LSN_FORMAT_ARGS(sentinel->replay_lsn),
 				 LSN_FORMAT_ARGS(sentinel->endpos));
 	}
-	else
+	else if (sentinel->replay_lsn != InvalidXLogRecPtr)
 	{
 		log_info("Current sentinel replay_lsn is %X/%X",
 				 LSN_FORMAT_ARGS(sentinel->replay_lsn));
@@ -285,7 +285,8 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	{
 		if (!followDB(copySpecs, streamSpecs))
 		{
-			/* errors have already been logged */
+			log_error("Failed to follow changes from source, "
+					  "see above for details");
 			return false;
 		}
 
@@ -305,6 +306,11 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 
 		if (done)
 		{
+			log_info("Follow mode is now done, "
+					 "reached replay_lsn %X/%X with endpos %X/%X",
+					 LSN_FORMAT_ARGS(streamSpecs->sentinel.endpos),
+					 LSN_FORMAT_ARGS(streamSpecs->sentinel.replay_lsn));
+
 			return true;
 		}
 
@@ -345,6 +351,11 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 
 		if (done)
 		{
+			log_info("Follow mode is now done, "
+					 "reached replay_lsn %X/%X with endpos %X/%X",
+					 LSN_FORMAT_ARGS(streamSpecs->sentinel.endpos),
+					 LSN_FORMAT_ARGS(streamSpecs->sentinel.replay_lsn));
+
 			return true;
 		}
 
@@ -352,6 +363,8 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 				 LogicalStreamModeToString(currentMode));
 	}
 
+	/* keep compiler happy */
+	log_warn("BUG: follow_main_loop reached out of loop");
 	return true;
 }
 
@@ -362,23 +375,23 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 bool
 follow_reached_endpos(StreamSpecs *streamSpecs, bool *done)
 {
-	CopyDBSentinel sentinel = { 0 };
+	CopyDBSentinel *sentinel = &(streamSpecs->sentinel);
 
-	if (!follow_get_sentinel(streamSpecs, &sentinel))
+	if (!follow_get_sentinel(streamSpecs, sentinel))
 	{
-		/* errors have already been logged */
+		log_error("Failed to get sentinel values");
 		return false;
 	}
 
-	if (sentinel.endpos != InvalidXLogRecPtr &&
-		sentinel.endpos <= sentinel.replay_lsn)
+	if (sentinel->endpos != InvalidXLogRecPtr &&
+		sentinel->endpos <= sentinel->replay_lsn)
 	{
 		/* follow_get_sentinel logs replay_lsn and endpos already */
 		*done = true;
 
 		log_info("Current endpos %X/%X has been reached at %X/%X",
-				 LSN_FORMAT_ARGS(sentinel.endpos),
-				 LSN_FORMAT_ARGS(sentinel.replay_lsn));
+				 LSN_FORMAT_ARGS(sentinel->endpos),
+				 LSN_FORMAT_ARGS(sentinel->replay_lsn));
 	}
 
 	return true;
@@ -432,7 +445,8 @@ follow_prepare_mode_switch(StreamSpecs *streamSpecs,
 
 			if (!stream_transform_from_queue(streamSpecs))
 			{
-				/* errors have already been logged */
+				log_error("Failed to process messages from the transform queue, "
+						  "see above for details");
 				return false;
 			}
 		}
@@ -441,7 +455,8 @@ follow_prepare_mode_switch(StreamSpecs *streamSpecs,
 	/* then catch-up with what's been stream and transformed already */
 	if (!stream_apply_catchup(streamSpecs))
 	{
-		/* errors have already been logged */
+		log_error("Failed to catchup with on-disk files, "
+				  "see above for details");
 		return false;
 	}
 
@@ -465,6 +480,19 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	if (streamSpecs->mode < STREAM_MODE_PREFETCH)
 	{
 		log_error("BUG: followDB with stream mode %d", streamSpecs->mode);
+		return false;
+	}
+
+	/*
+	 * Before starting sub-processes, clean-up intermediate files from previous
+	 * round. Here that's the stream context with WAL segment size and timeline
+	 * history, which are fetched from the source server to compute WAL file
+	 * names. The current timeline can only change at a server restart or a
+	 * failover, both with trigger a reconnect.
+	 */
+	if (!stream_cleanup_context(streamSpecs))
+	{
+		/* errors have already been logged */
 		return false;
 	}
 
@@ -568,25 +596,35 @@ follow_start_prefetch(StreamSpecs *specs)
 	if (specs->mode == STREAM_MODE_REPLAY)
 	{
 		/* arrange to write to the receive-transform pipe */
+		specs->stdOut = true;
 		specs->out = fdopen(specs->pipe_rt[1], "a");
 
 		/* close pipe ends we're not using */
 		close_fd_or_exit(specs->pipe_rt[0]);
 		close_fd_or_exit(specs->pipe_ta[0]);
 		close_fd_or_exit(specs->pipe_ta[1]);
-	}
 
-	if (!stream_cleanup_context(specs))
+		/* switch out stream from block buffered to line buffered mode */
+		if (setvbuf(specs->out, NULL, _IOLBF, 0) != 0)
+		{
+			log_error("Failed to set out stream to line buffered mode: %m");
+			return false;
+		}
+
+		bool success = startLogicalStreaming(specs);
+
+		close_fd_or_exit(specs->pipe_rt[1]);
+
+		return success;
+	}
+	else
 	{
-		/* errors have already been logged */
-		return false;
+		specs->stdOut = false;
+
+		return startLogicalStreaming(specs);
 	}
 
-	bool success = startLogicalStreaming(specs);
-
-	close_fd_or_exit(specs->pipe_rt[1]);
-
-	return success;
+	return true;
 }
 
 
@@ -609,12 +647,22 @@ follow_start_transform(StreamSpecs *specs)
 		 * Arrange to read from receive-transform pipe and write to the
 		 * transform-apply pipe.
 		 */
+		specs->stdIn = true;
+		specs->stdOut = true;
+
 		specs->in = fdopen(specs->pipe_rt[0], "r");
 		specs->out = fdopen(specs->pipe_ta[1], "a");
 
 		/* close pipe ends we're not using */
 		close_fd_or_exit(specs->pipe_rt[1]);
 		close_fd_or_exit(specs->pipe_ta[0]);
+
+		/* switch out stream from block buffered to line buffered mode */
+		if (setvbuf(specs->out, NULL, _IOLBF, 0) != 0)
+		{
+			log_error("Failed to set out stream to line buffered mode: %m");
+			return false;
+		}
 
 		bool success = stream_transform_stream(specs);
 
@@ -631,6 +679,9 @@ follow_start_transform(StreamSpecs *specs)
 		 * internal message queue and batch processes one file at a
 		 * time.
 		 */
+		specs->stdIn = false;
+		specs->stdOut = false;
+
 		return stream_transform_worker(specs);
 	}
 
@@ -651,6 +702,7 @@ follow_start_catchup(StreamSpecs *specs)
 	if (specs->mode == STREAM_MODE_REPLAY)
 	{
 		/* arrange to read from the transform-apply pipe */
+		specs->stdIn = true;
 		specs->in = fdopen(specs->pipe_ta[0], "r");
 
 		/* close pipe ends we're not using */
@@ -672,6 +724,8 @@ follow_start_catchup(StreamSpecs *specs)
 		 * current LSN on the target database origin tracking system to
 		 * open the right SQL file and apply statements from there.
 		 */
+		specs->stdIn = false;
+
 		return stream_apply_catchup(specs);
 	}
 
@@ -800,7 +854,8 @@ follow_wait_subprocesses(StreamSpecs *specs)
 			/* follow_wait_pid is non-blocking: uses WNOHANG */
 			if (!follow_wait_pid(processArray[i]->pid,
 								 &(processArray[i]->exited),
-								 &(processArray[i]->returnCode)))
+								 &(processArray[i]->returnCode),
+								 &(processArray[i]->sig)))
 			{
 				/* errors have already been logged */
 				return false;
@@ -815,13 +870,33 @@ follow_wait_subprocesses(StreamSpecs *specs)
 
 				if (processArray[i]->returnCode == 0)
 				{
-					sformat(details, sizeof(details), "successfully");
+					if (processArray[i]->sig == 0)
+					{
+						sformat(details, sizeof(details), "successfully");
+					}
+					else
+					{
+						sformat(details, sizeof(details),
+								"successfully after signal %s",
+								signal_to_string(processArray[i]->sig));
+					}
 				}
 				else
 				{
 					logLevel = LOG_ERROR;
-					sformat(details, sizeof(details), "with error code %d",
-							processArray[i]->returnCode);
+
+					if (processArray[i]->sig == 0)
+					{
+						sformat(details, sizeof(details), "with error code %d",
+								processArray[i]->returnCode);
+					}
+					else
+					{
+						sformat(details, sizeof(details),
+								"with error code %d and signal %s",
+								processArray[i]->returnCode,
+								signal_to_string(processArray[i]->sig));
+					}
 				}
 
 				log_level(logLevel,
@@ -913,7 +988,7 @@ follow_terminate_subprocesses(StreamSpecs *specs)
  * follow_wait_pid waits for a given known sub-process.
  */
 bool
-follow_wait_pid(pid_t subprocess, bool *exited, int *returnCode)
+follow_wait_pid(pid_t subprocess, bool *exited, int *returnCode, int *sig)
 {
 	int status = 0;
 
@@ -932,7 +1007,9 @@ follow_wait_pid(pid_t subprocess, bool *exited, int *returnCode)
 			if (errno == ECHILD)
 			{
 				/* no more childrens */
+				*sig = 0;
 				*exited = true;
+				*returnCode = -1;
 				return true;
 			}
 			else
@@ -950,7 +1027,9 @@ follow_wait_pid(pid_t subprocess, bool *exited, int *returnCode)
 			 * We're using WNOHANG, 0 means there are no stopped or
 			 * exited children, it's all good.
 			 */
+			*sig = 0;
 			*exited = false;
+			*returnCode = -1;
 			break;
 		}
 
@@ -963,8 +1042,14 @@ follow_wait_pid(pid_t subprocess, bool *exited, int *returnCode)
 				return false;
 			}
 
+			*sig = 0;
 			*exited = true;
 			*returnCode = WEXITSTATUS(status);
+
+			if (WIFSIGNALED(status))
+			{
+				*sig = WTERMSIG(status);
+			}
 
 			break;
 		}

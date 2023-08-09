@@ -165,6 +165,7 @@ void
 catch_quit_and_exit(int sig)
 {
 	/* default signal handler disposition is to core dump, we don't */
+	log_warn("SIGQUIT");
 	exit(EXIT_CODE_QUIT);
 }
 
@@ -265,6 +266,8 @@ signal_to_string(int signal)
 		}
 
 		default:
-			return "unknown signal";
+		{
+			return strsignal(signal);
+		}
 	}
 }
