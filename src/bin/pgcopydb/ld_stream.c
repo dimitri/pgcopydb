@@ -404,16 +404,6 @@ startLogicalStreaming(StreamSpecs *specs)
 	StreamContext *privateContext = &(specs->private);
 	context.private = (void *) privateContext;
 
-	if (specs->stdOut)
-	{
-		/* switch stdout from block buffered to line buffered mode */
-		if (setvbuf(specs->out, NULL, _IOLBF, 0) != 0)
-		{
-			log_error("Failed to set stdout to line buffered mode: %m");
-			return false;
-		}
-	}
-
 	log_notice("Connecting to logical decoding replication stream");
 
 	/*
@@ -2474,7 +2464,7 @@ stream_create_sentinel(CopyDataSpec *copySpecs,
 		if (!pgsql_execute(pgsql, sql[i]))
 		{
 			/* errors have already been logged */
-			exit(EXIT_CODE_SOURCE);
+			return false;
 		}
 	}
 

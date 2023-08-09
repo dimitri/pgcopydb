@@ -395,6 +395,7 @@ typedef struct FollowSubProcess
 	pid_t pid;
 	bool exited;
 	int returnCode;
+	int sig;
 } FollowSubProcess;
 
 
@@ -418,6 +419,7 @@ struct StreamSpecs
 
 	uint64_t startpos;
 	uint64_t endpos;
+	CopyDBSentinel sentinel;
 
 	bool startposComputedFromJSON;
 	StreamAction startposActionFromJSON;
@@ -682,6 +684,6 @@ void follow_exit_early(StreamSpecs *specs);
 bool follow_wait_subprocesses(StreamSpecs *specs);
 bool follow_terminate_subprocesses(StreamSpecs *specs);
 
-bool follow_wait_pid(pid_t subprocess, bool *exited, int *returnCode);
+bool follow_wait_pid(pid_t subprocess, bool *exited, int *returnCode, int *sig);
 
 #endif /* LD_STREAM_H */
