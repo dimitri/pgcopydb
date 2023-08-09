@@ -322,10 +322,13 @@ clone_and_follow(CopyDataSpec *copySpecs)
 	 * sequences, not the ones that were current when the main snapshot was
 	 * exported.
 	 */
-	if (!follow_reset_sequences(copySpecs, &streamSpecs))
+	if (success)
 	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_TARGET);
+		if (!follow_reset_sequences(copySpecs, &streamSpecs))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_TARGET);
+		}
 	}
 
 	/* make sure all sub-processes are now finished */
