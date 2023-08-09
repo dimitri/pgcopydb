@@ -53,6 +53,7 @@ typedef struct CDCPaths
 	char walsegsizefile[MAXPGPATH];   /* /tmp/pgcopydb/cdc/wal_segment_size */
 	char tlifile[MAXPGPATH];          /* /tmp/pgcopydb/cdc/tli */
 	char tlihistfile[MAXPGPATH];      /* /tmp/pgcopydb/cdc/tli.history */
+	char lsntrackingfile[MAXPGPATH];  /* /tmp/pgcopydb/cdc/lsn.json */
 } CDCPaths;
 
 

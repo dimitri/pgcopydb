@@ -527,6 +527,8 @@ bool pgsql_table_exists(PGSQL *pgsql,
 						const char *nspname,
 						bool *exists);
 
+bool pgsql_current_wal_flush_lsn(PGSQL *pgsql, uint64_t *lsn);
+bool pgsql_current_wal_insert_lsn(PGSQL *pgsql, uint64_t *lsn);
 
 /*
  * pgcopydb sentinel is a table that's created on the source database and

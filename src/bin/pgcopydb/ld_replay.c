@@ -48,7 +48,7 @@ stream_apply_replay(StreamSpecs *specs)
 
 	if (!stream_apply_setup(specs, context))
 	{
-		log_error("Failed to setup for catchup, see above for details");
+		log_error("Failed to setup for replay, see above for details");
 		return false;
 	}
 
@@ -99,9 +99,6 @@ stream_apply_replay(StreamSpecs *specs)
 		pg_usleep(100 * 1000);
 	}
 
-	/* we might still have to disconnect now */
-	(void) pgsql_finish(&(context->pgsql));
-
 	/* make sure to send a last round of sentinel update before exit */
 	if (!stream_apply_sync_sentinel(context))
 	{
@@ -109,6 +106,9 @@ stream_apply_replay(StreamSpecs *specs)
 				  LSN_FORMAT_ARGS(context->replay_lsn));
 		return false;
 	}
+
+	/* we might still have to disconnect now */
+	(void) pgsql_finish(&(context->pgsql));
 
 	if (context->endpos != InvalidXLogRecPtr &&
 		context->endpos <= context->replay_lsn)
