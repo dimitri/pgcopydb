@@ -263,6 +263,25 @@ partitionned (on the fly) and split between processes:
     given row is selected only once overall to avoid introducing duplicates
     on the target database.
 
+    When a table is missing such a primary key column of an integer data
+    type, pgcopydb then automatically resorts to using CTID based
+    comparisons. See `Postgres documentation section about System Columns`__
+    for more information about Postgres CTIDs.
+
+    __ https://www.postgresql.org/docs/current/ddl-system-columns.html
+
+    The COPY processes then use the SELECT queries like in the following
+    example:
+
+    ::
+
+       COPY (SELECT * FROM source.table WHERE ctid >= '(0,0)'::tid and ctid < '(5925,0)'::tid)
+       COPY (SELECT * FROM source.table WHERE ctid >= '(5925,0)'::tid and ctid < '(11850,0)'::tid)
+       COPY (SELECT * FROM source.table WHERE ctid >= '(11850,0)'::tid and ctid < '(17775,0)'::tid)
+       COPY (SELECT * FROM source.table WHERE ctid >= '(17775,0)'::tid and ctid < '(23698,0)'::tid)
+       COPY (SELECT * FROM source.table WHERE ctid >= '(23698,0)'::tid)
+
+
   - To decide if a table COPY processing should be split, the command line
     option ``split-tables-larger-than`` is used, or the environment variable
     ``PGCOPYDB_SPLIT_TABLES_LARGER_THAN``.

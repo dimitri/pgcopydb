@@ -1160,12 +1160,15 @@ cli_list_table_parts(int argc, char **argv)
 
 	if (IS_EMPTY_STRING_BUFFER(table->partKey))
 	{
-		log_info("Table \"%s\".\"%s\" (%s) will not be split: "
-				 "table lacks a unique integer column (int2/int4/int8).",
-				 table->nspname,
-				 table->relname,
-				 table->bytesPretty);
-		exit(EXIT_CODE_QUIT);
+		log_info("Table %s is %s large "
+				 "which is larger than --split-tables-larger-than %s, "
+				 "and does not have a unique column of type integer: "
+				 "splitting by CTID",
+				 table->qname,
+				 table->bytesPretty,
+				 listDBoptions.splitTablesLargerThan.bytesPretty);
+
+		strlcpy(table->partKey, "ctid", sizeof(table->partKey));
 	}
 
 	if (!schema_list_partitions(&pgsql, table,
@@ -1194,30 +1197,63 @@ cli_list_table_parts(int argc, char **argv)
 			 table->relname,
 			 table->partsArray.count);
 
-	fformat(stdout, "%10s | %10s | %10s | %10s\n",
+	fformat(stdout, "%12s | %12s | %12s | %12s\n",
 			"Part", "Min", "Max", "Count");
 
-	fformat(stdout, "%10s-+-%10s-+-%10s-+-%10s\n",
-			"----------",
-			"----------",
-			"----------",
-			"----------");
+	fformat(stdout, "%12s-+-%12s-+-%12s-+-%12s\n",
+			"------------",
+			"------------",
+			"------------",
+			"------------");
 
-	for (int i = 0; i < table->partsArray.count; i++)
+	if (streq(table->partKey, "ctid"))
 	{
-		SourceTableParts *part = &(table->partsArray.array[i]);
+		for (int i = 0; i < table->partsArray.count; i++)
+		{
+			SourceTableParts *part = &(table->partsArray.array[i]);
 
-		char partNC[BUFSIZE] = { 0 };
+			char partNC[BUFSIZE] = { 0 };
+			char partMin[BUFSIZE] = { 0 };
+			char partMax[BUFSIZE] = { 0 };
 
-		sformat(partNC, sizeof(partNC), "%d/%d",
-				part->partNumber,
-				part->partCount);
+			sformat(partNC, sizeof(partNC), "%d/%d",
+					part->partNumber,
+					part->partCount);
 
-		fformat(stdout, "%10s | %10lld | %10lld | %10lld\n",
-				partNC,
-				(long long) part->min,
-				(long long) part->max,
-				(long long) part->count);
+			sformat(partMin, BUFSIZE, "(%lld,0)", (long long) part->min);
+			sformat(partMax, BUFSIZE, "(%lld,0)", (long long) part->max);
+
+			if (i < table->partsArray.count - 1)
+			{
+				fformat(stdout, "%12s | %12s | %12s | %12lld\n",
+						partNC, partMin, partMax, (long long) part->count);
+			}
+			else
+			{
+				/* last row, max and count are NULL */
+				fformat(stdout, "%12s | %12s | %12s | %12s\n",
+						partNC, partMin, "-", "-");
+			}
+		}
+	}
+	else
+	{
+		for (int i = 0; i < table->partsArray.count; i++)
+		{
+			SourceTableParts *part = &(table->partsArray.array[i]);
+
+			char partNC[BUFSIZE] = { 0 };
+
+			sformat(partNC, sizeof(partNC), "%d/%d",
+					part->partNumber,
+					part->partCount);
+
+			fformat(stdout, "%12s | %12lld | %12lld | %12lld\n",
+					partNC,
+					(long long) part->min,
+					(long long) part->max,
+					(long long) part->count);
+		}
 	}
 
 	fformat(stdout, "\n");

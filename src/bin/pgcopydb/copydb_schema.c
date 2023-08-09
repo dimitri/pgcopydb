@@ -293,20 +293,30 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 		if (specs->splitTablesLargerThan.bytes > 0 &&
 			specs->splitTablesLargerThan.bytes <= source->bytes)
 		{
-			if (IS_EMPTY_STRING_BUFFER(source->partKey))
+			if (IS_EMPTY_STRING_BUFFER(source->partKey) &&
+				streq(source->amname, "heap"))
 			{
-				log_info("Table \"%s\".\"%s\" is %s large, "
+				log_info("Table %s is %s large "
 						 "which is larger than --split-tables-larger-than %s, "
-						 "but does not have a unique column of type integer "
-						 "(int2/int4/int8).",
-						 source->nspname,
-						 source->relname,
+						 "and does not have a unique column of type integer: "
+						 "splitting by CTID",
+						 source->qname,
 						 source->bytesPretty,
 						 specs->splitTablesLargerThan.bytesPretty);
 
-				log_warn("Skipping same-table concurrency for table \"%s\".\"%s\"",
-						 source->nspname,
-						 source->relname);
+				strlcpy(source->partKey, "ctid", sizeof(source->partKey));
+			}
+			else if (!streq(source->amname, "heap"))
+			{
+				log_info("Table %s is %s large "
+						 "which is larger than --split-tables-larger-than %s, "
+						 "does not have a unique column of type integer, "
+						 "and uses table access method \"%s\": "
+						 "same table concurrency is not enabled",
+						 source->qname,
+						 source->bytesPretty,
+						 specs->splitTablesLargerThan.bytesPretty,
+						 source->amname);
 
 				++copySpecsCount;
 				continue;
