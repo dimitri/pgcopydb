@@ -1801,6 +1801,7 @@ stream_write_insert(FILE *out, LogicalMessageInsert *insert)
 				if (!stream_add_value_in_json_array(value, jsArray))
 				{
 					/* errors have already been logged */
+					destroyPQExpBuffer(buf);
 					return false;
 				}
 			}
@@ -1811,12 +1812,15 @@ stream_write_insert(FILE *out, LogicalMessageInsert *insert)
 		if (PQExpBufferBroken(buf))
 		{
 			log_error("Failed to transform INSERT statement: Out of Memory");
+			destroyPQExpBuffer(buf);
 			return false;
 		}
 
 		uint32_t hash = hashlittle(buf->data, buf->len, 5381);
 
 		FFORMAT(out, "PREPARE %x AS %s;\n", hash, buf->data);
+
+		destroyPQExpBuffer(buf);
 
 		/*
 		 * Second, the EXECUTE part.
@@ -1897,6 +1901,7 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 							  "VALUES (%d) than COLUMNS (%d)",
 							  values->cols,
 							  new->cols);
+					destroyPQExpBuffer(buf);
 					return false;
 				}
 
@@ -1933,6 +1938,7 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 					if (!stream_add_value_in_json_array(value, jsArray))
 					{
 						/* errors have already been logged */
+						destroyPQExpBuffer(buf);
 						return false;
 					}
 
@@ -1961,6 +1967,7 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 							  "VALUES (%d) than COLUMNS (%d)",
 							  values->cols,
 							  old->cols);
+					destroyPQExpBuffer(buf);
 					return false;
 				}
 
@@ -1972,6 +1979,7 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 				if (!stream_add_value_in_json_array(value, jsArray))
 				{
 					/* errors have already been logged */
+					destroyPQExpBuffer(buf);
 					return false;
 				}
 			}
@@ -1980,12 +1988,15 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 		if (PQExpBufferBroken(buf))
 		{
 			log_error("Failed to transform INSERT statement: Out of Memory");
+			destroyPQExpBuffer(buf);
 			return false;
 		}
 
 		uint32_t hash = hashlittle(buf->data, buf->len, 5381);
 
 		FFORMAT(out, "PREPARE %x AS %s;\n", hash, buf->data);
+
+		destroyPQExpBuffer(buf);
 
 		/*
 		 * Second, the EXECUTE part.
@@ -2042,6 +2053,7 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 							  "VALUES (%d) than COLUMNS (%d)",
 							  values->cols,
 							  old->cols);
+					destroyPQExpBuffer(buf);
 					return false;
 				}
 
@@ -2053,6 +2065,7 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 				if (!stream_add_value_in_json_array(value, jsArray))
 				{
 					/* errors have already been logged */
+					destroyPQExpBuffer(buf);
 					return false;
 				}
 			}
@@ -2061,6 +2074,8 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 		uint32_t hash = hashlittle(buf->data, buf->len, 5381);
 
 		FFORMAT(out, "PREPARE %x AS %s;\n", hash, buf->data);
+
+		destroyPQExpBuffer(buf);
 
 		/*
 		 * Second, the EXECUTE part.

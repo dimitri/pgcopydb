@@ -3715,6 +3715,7 @@ pgsql_start_replication(LogicalStreamClient *client)
 	if (!pgsql_open_connection(pgsql))
 	{
 		/* errors have already been logged */
+		destroyPQExpBuffer(query);
 		return false;
 	}
 
@@ -3722,12 +3723,14 @@ pgsql_start_replication(LogicalStreamClient *client)
 	if (!pgsql_identify_system(pgsql, &(client->system)))
 	{
 		/* errors have already been logged */
+		destroyPQExpBuffer(query);
 		return false;
 	}
 
 	/* determine remote server's xlog segment size */
 	if (!RetrieveWalSegSize(client))
 	{
+		destroyPQExpBuffer(query);
 		return false;
 	}
 
