@@ -2662,42 +2662,13 @@ pgsql_get_sequence(PGSQL *pgsql, const char *nspname, const char *relname,
 				   int64_t *lastValue,
 				   bool *isCalled)
 {
+	char sql[BUFSIZE] = { 0 };
 	SourceSequenceContext context = { 0 };
 
-	char *escapedNspname, *escapedRelname;
-
-	char sql[BUFSIZE] = { 0 };
-
-	PGconn *connection = pgsql->connection;
-
-	/* escape identifiers */
-	escapedNspname = PQescapeIdentifier(connection, nspname, strlen(nspname));
-	if (escapedNspname == NULL)
-	{
-		log_error("Failed to get values from sequence \"%s\".\"%s\": %s",
-				  nspname,
-				  relname,
-				  PQerrorMessage(connection));
-		return false;
-	}
-
-	escapedRelname = PQescapeIdentifier(connection, relname, strlen(relname));
-	if (escapedRelname == NULL)
-	{
-		log_error("Failed to get values from sequence \"%s\".\"%s\": %s",
-				  nspname,
-				  relname,
-				  PQerrorMessage(connection));
-		PQfreemem(escapedNspname);
-		return false;
-	}
-
+	/* identifiers have already been escaped thanks to format('%I', ...) */
 	sformat(sql, sizeof(sql), "select last_value, is_called from %s.%s",
-			escapedNspname,
-			escapedRelname);
-
-	PQfreemem(escapedNspname);
-	PQfreemem(escapedRelname);
+			nspname,
+			relname);
 
 	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
 								   &context, &getSequenceValue))

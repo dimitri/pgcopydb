@@ -212,7 +212,7 @@ vacuum_analyze_table_by_oid(CopyDataSpec *specs, uint32_t oid)
 	char vacuum[BUFSIZE] = { 0 };
 
 	sformat(vacuum, sizeof(vacuum),
-			"VACUUM ANALYZE \"%s\".\"%s\"",
+			"VACUUM ANALYZE %s.%s",
 			table.nspname,
 			table.relname);
 
