@@ -771,6 +771,14 @@ copydb_create_index(const char *pguri,
 
 	if (!skipCreateIndex)
 	{
+		char psTitle[BUFSIZE] = { 0 };
+
+		sformat(psTitle, sizeof(psTitle), "pgcopydb: create index %s.%s",
+				index->indexNamespace,
+				index->indexRelname);
+
+		(void) set_ps_title(psTitle);
+
 		PGSQL dst = { 0 };
 
 		log_notice("%s", summary->command);

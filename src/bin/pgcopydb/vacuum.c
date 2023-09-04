@@ -218,6 +218,11 @@ vacuum_analyze_table_by_oid(CopyDataSpec *specs, uint32_t oid)
 			table.nspname,
 			table.relname);
 
+	/* also set the process title for this specific table */
+	char psTitle[BUFSIZE] = { 0 };
+	sformat(psTitle, sizeof(psTitle), "pgcopydb: %s", vacuum);
+	(void) set_ps_title(psTitle);
+
 	log_notice("%s;", vacuum);
 
 	if (!pgsql_execute(&dst, vacuum))

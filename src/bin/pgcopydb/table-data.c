@@ -523,6 +523,22 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, uint32_t oid, uint32_t part)
 			  table->relname,
 			  part);
 
+	char psTitle[BUFSIZE] = { 0 };
+
+	if (table->partsArray.count > 0)
+	{
+		sformat(psTitle, sizeof(psTitle), "pgcopydb: copy %s [%d/%d]",
+				table->qname,
+				part + 1,
+				table->partsArray.count);
+	}
+	else
+	{
+		sformat(psTitle, sizeof(psTitle), "pgcopydb: copy %s", table->qname);
+	}
+
+	(void) set_ps_title(psTitle);
+
 	/*
 	 * Skip tables that have been entirely done already on a previous run.
 	 */
