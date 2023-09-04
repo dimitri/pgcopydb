@@ -59,3 +59,12 @@ begin;
 update public.staff set store_id = store_id where staff_id = 1;
 
 commit;
+
+--
+-- insert a new line in our table with double-quote in its name
+--
+begin;
+
+insert into public."""dqname""" default values;
+
+commit;

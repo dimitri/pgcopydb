@@ -341,7 +341,7 @@ parseTestDecodingMessageHeader(TestDecodingHeader *header, const char *message)
 	strlcpy(header->nspname, idp, dot - idp + 1);
 	strlcpy(header->relname, dot + 1, sep - dot);
 
-	sformat(header->qname, sizeof(header->qname), "\"%s\".\"%s\"",
+	sformat(header->qname, sizeof(header->qname), "%s.%s",
 			header->nspname,
 			header->relname);
 

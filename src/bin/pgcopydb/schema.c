@@ -2146,13 +2146,14 @@ schema_list_sequences(PGSQL *pgsql,
 	if (filters->type == SOURCE_FILTER_TYPE_LIST_EXCL)
 	{
 		buffer = createPQExpBuffer();
+
 		char *exclude = sql;
 		char *keep = listSourceSequencesSQL[SOURCE_FILTER_TYPE_EXCL].sql;
 
 		char *sqlTmpl =
 			"select seqoid, "
-			"       format('%I', sn.nspname) as nspname, "
-			"       format('%I', s.relname) as relname, "
+			"       format('%%I', nspname) as nspname, "
+			"       format('%%I', relname) as relname, "
 			"       restore_list_name, "
 			"       ownedby, attrelid, attroid "
 			"  from (%s) as exclude "
@@ -2221,7 +2222,7 @@ bool
 schema_set_sequence_value(PGSQL *pgsql, SourceSequence *seq)
 {
 	SingleValueResultContext parseContext = { { 0 }, PGSQL_RESULT_BIGINT, false };
-	char *sql = "select pg_catalog.setval(format('%I.%I', $1, $2), $3, $4)";
+	char *sql = "select pg_catalog.setval(format('%s.%s', $1, $2), $3, $4)";
 
 	int paramCount = 4;
 	Oid paramTypes[4] = { TEXTOID, TEXTOID, INT8OID, BOOLOID };

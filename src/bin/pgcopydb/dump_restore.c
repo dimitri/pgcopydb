@@ -213,7 +213,7 @@ copydb_target_drop_tables(CopyDataSpec *specs)
 	{
 		SourceTable *source = &(tableArray->array[tableIndex]);
 
-		appendPQExpBuffer(query, "%s \"%s\".\"%s\"",
+		appendPQExpBuffer(query, "%s %s.%s",
 						  tableIndex == 0 ? " " : ",",
 						  source->nspname,
 						  source->relname);
