@@ -201,6 +201,8 @@ compare_start_workers(CopyDataSpec *copySpecs, Queue *queue)
 			case 0:
 			{
 				/* child process runs the command */
+				(void) set_ps_title("pgcopydb: compare worker");
+
 				if (!compare_data_worker(copySpecs, queue))
 				{
 					/* errors have already been logged */

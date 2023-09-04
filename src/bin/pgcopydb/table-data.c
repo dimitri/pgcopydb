@@ -211,6 +211,8 @@ copydb_start_copy_supervisor(CopyDataSpec *specs)
 		case 0:
 		{
 			/* child process runs the command */
+			(void) set_ps_title("pgcopydb: copy supervisor");
+
 			if (!copydb_copy_supervisor(specs))
 			{
 				log_error("Failed to copy table data, see above for details");
@@ -375,6 +377,8 @@ copydb_start_table_data_workers(CopyDataSpec *specs)
 			case 0:
 			{
 				/* child process runs the command */
+				(void) set_ps_title("pgcopydb: copy worker");
+
 				if (!copydb_table_data_worker(specs))
 				{
 					/* errors have already been logged */

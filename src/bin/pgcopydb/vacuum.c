@@ -54,6 +54,8 @@ vacuum_start_workers(CopyDataSpec *specs)
 			case 0:
 			{
 				/* child process runs the command */
+				(void) set_ps_title("pgcopydb: vacuum worker");
+
 				if (!vacuum_worker(specs))
 				{
 					/* errors have already been logged */

@@ -127,6 +127,8 @@ copydb_start_seq_process(CopyDataSpec *specs)
 		case 0:
 		{
 			/* child process runs the command */
+			(void) set_ps_title("pgcopydb: copy sequences");
+
 			if (!copydb_copy_all_sequences(specs))
 			{
 				/* errors have already been logged */
