@@ -47,6 +47,8 @@ copydb_start_extension_data_process(CopyDataSpec *specs)
 		case 0:
 		{
 			/* child process runs the command */
+			(void) set_ps_title("pgcopydb: extension data");
+
 			bool createExtensions = false;
 
 			if (!copydb_copy_extensions(specs, createExtensions))

@@ -72,6 +72,8 @@ copydb_start_blob_process(CopyDataSpec *specs)
 		case 0:
 		{
 			/* child process runs the command */
+			(void) set_ps_title("pgcopydb: copy blobs");
+
 			CopyBlobsSummary summary = {
 				.pid = getpid(),
 				.count = 0,
@@ -171,6 +173,8 @@ copydb_start_blob_workers(CopyDataSpec *specs)
 			case 0:
 			{
 				/* child process runs the command */
+				(void) set_ps_title("pgcopydb: blobs worker");
+
 				if (!copydb_blob_worker(specs))
 				{
 					/* errors have already been logged */

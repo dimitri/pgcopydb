@@ -52,6 +52,8 @@ copydb_start_index_workers(CopyDataSpec *specs)
 			case 0:
 			{
 				/* child process runs the command */
+				(void) set_ps_title("pgcopydb: create index worker");
+
 				if (!copydb_index_worker(specs))
 				{
 					/* errors have already been logged */
@@ -572,6 +574,8 @@ copydb_start_index_processes(CopyDataSpec *specs,
 			case 0:
 			{
 				/* child process runs the command */
+				(void) set_ps_title("pgcopydb: create index worker");
+
 				if (!copydb_start_index_process(specs,
 												indexArray,
 												indexPathsArray))
@@ -767,6 +771,14 @@ copydb_create_index(const char *pguri,
 
 	if (!skipCreateIndex)
 	{
+		char psTitle[BUFSIZE] = { 0 };
+
+		sformat(psTitle, sizeof(psTitle), "pgcopydb: create index %s.%s",
+				index->indexNamespace,
+				index->indexRelname);
+
+		(void) set_ps_title(psTitle);
+
 		PGSQL dst = { 0 };
 
 		log_notice("%s", summary->command);

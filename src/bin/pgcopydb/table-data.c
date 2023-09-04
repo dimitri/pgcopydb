@@ -211,6 +211,8 @@ copydb_start_copy_supervisor(CopyDataSpec *specs)
 		case 0:
 		{
 			/* child process runs the command */
+			(void) set_ps_title("pgcopydb: copy supervisor");
+
 			if (!copydb_copy_supervisor(specs))
 			{
 				log_error("Failed to copy table data, see above for details");
@@ -375,6 +377,8 @@ copydb_start_table_data_workers(CopyDataSpec *specs)
 			case 0:
 			{
 				/* child process runs the command */
+				(void) set_ps_title("pgcopydb: copy worker");
+
 				if (!copydb_table_data_worker(specs))
 				{
 					/* errors have already been logged */
@@ -518,6 +522,22 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, uint32_t oid, uint32_t part)
 			  table->nspname,
 			  table->relname,
 			  part);
+
+	char psTitle[BUFSIZE] = { 0 };
+
+	if (table->partsArray.count > 0)
+	{
+		sformat(psTitle, sizeof(psTitle), "pgcopydb: copy %s [%d/%d]",
+				table->qname,
+				part + 1,
+				table->partsArray.count);
+	}
+	else
+	{
+		sformat(psTitle, sizeof(psTitle), "pgcopydb: copy %s", table->qname);
+	}
+
+	(void) set_ps_title(psTitle);
 
 	/*
 	 * Skip tables that have been entirely done already on a previous run.

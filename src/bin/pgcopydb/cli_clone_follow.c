@@ -451,6 +451,8 @@ start_clone_process(CopyDataSpec *copySpecs, pid_t *pid)
 		case 0:
 		{
 			/* child process runs the command */
+			(void) set_ps_title("pgcopydb: clone");
+
 			log_notice("Starting the clone sub-process");
 
 			if (!cloneDB(copySpecs))
@@ -669,6 +671,7 @@ start_follow_process(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs,
 		case 0:
 		{
 			/* child process runs the command */
+			(void) set_ps_title("pgcopydb: follow");
 			log_notice("Starting the follow sub-process");
 
 			if (!follow_main_loop(copySpecs, streamSpecs))

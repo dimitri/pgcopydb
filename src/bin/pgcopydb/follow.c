@@ -764,6 +764,13 @@ follow_start_subprocess(StreamSpecs *specs, FollowSubProcess *subprocess)
 		case 0:
 		{
 			/* child process runs the command */
+			char psTitle[BUFSIZE] = { 0 };
+
+			sformat(psTitle, sizeof(psTitle), "pgcopydb: follow %s",
+					subprocess->name);
+
+			(void) set_ps_title(psTitle);
+
 			log_notice("Starting the %s sub-process", subprocess->name);
 
 			if (!(subprocess->command)(specs))
