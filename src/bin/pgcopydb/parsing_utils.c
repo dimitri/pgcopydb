@@ -711,6 +711,7 @@ buildPostgresURIfromPieces(URIParams *uriParams, char **pguri)
 		{
 			log_error("Failed to percent-escape URI dbname \"%s\"",
 					  uriParams->dbname);
+			destroyPQExpBuffer(uri);
 			return false;
 		}
 		appendPQExpBuffer(uri, "%s", escaped);

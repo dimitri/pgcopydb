@@ -733,6 +733,8 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 	if (content.lines == NULL)
 	{
 		log_error(ALLOCATION_FAILED_ERROR);
+		free(content.buffer);
+		free(content.lines);
 		return false;
 	}
 
@@ -755,6 +757,8 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 	if (privateContext->sqlFile == NULL)
 	{
 		log_error("Failed to open file \"%s\"", tempfilename);
+		free(content.buffer);
+		free(content.lines);
 		return false;
 	}
 
@@ -784,6 +788,8 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 		{
 			/* errors have already been logged */
 			json_value_free(json);
+			free(content.buffer);
+			free(content.lines);
 			return false;
 		}
 
@@ -815,6 +821,8 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 		{
 			log_error("Failed to parse JSON message: %s", message);
 			json_value_free(json);
+			free(content.buffer);
+			free(content.lines);
 			return false;
 		}
 
@@ -830,6 +838,8 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 		{
 			log_error("Failed to transform and flush the current message, "
 					  "see above for details");
+			free(content.buffer);
+			free(content.lines);
 			return false;
 		}
 
@@ -846,6 +856,8 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 	if (fclose(privateContext->sqlFile) == EOF)
 	{
 		log_error("Failed to write file \"%s\"", tempfilename);
+		free(content.buffer);
+		free(content.lines);
 		return false;
 	}
 
@@ -860,12 +872,17 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 		log_error("Failed to move \"%s\" to \"%s\": %m",
 				  tempfilename,
 				  sqlfilename);
+		free(content.buffer);
+		free(content.lines);
 		return false;
 	}
 
 	log_info("Transformed %d JSON messages into SQL file \"%s\"",
 			 content.count,
 			 sqlfilename);
+
+	free(content.buffer);
+	free(content.lines);
 
 	return true;
 }
@@ -1289,6 +1306,8 @@ FreeLogicalMessageTupleArray(LogicalMessageTupleArray *tupleArray)
 
 		(void) FreeLogicalMessageTuple(tuple);
 	}
+
+	free(tupleArray->array);
 }
 
 
@@ -1299,6 +1318,10 @@ FreeLogicalMessageTupleArray(LogicalMessageTupleArray *tupleArray)
 void
 FreeLogicalMessageTuple(LogicalMessageTuple *tuple)
 {
+	for (int i = 0; i < tuple->cols; i++  )
+	{
+		free(tuple->columns[i]);
+	}
 	free(tuple->columns);
 
 	for (int r = 0; r < tuple->values.count; r++)
@@ -1316,8 +1339,10 @@ FreeLogicalMessageTuple(LogicalMessageTuple *tuple)
 			}
 		}
 
-		free(tuple->values.array);
+		free(values->array);
 	}
+
+	free(tuple->values.array);
 }
 
 
@@ -1801,6 +1826,7 @@ stream_write_insert(FILE *out, LogicalMessageInsert *insert)
 				if (!stream_add_value_in_json_array(value, jsArray))
 				{
 					/* errors have already been logged */
+					destroyPQExpBuffer(buf);
 					return false;
 				}
 			}
@@ -1811,12 +1837,15 @@ stream_write_insert(FILE *out, LogicalMessageInsert *insert)
 		if (PQExpBufferBroken(buf))
 		{
 			log_error("Failed to transform INSERT statement: Out of Memory");
+			destroyPQExpBuffer(buf);
 			return false;
 		}
 
 		uint32_t hash = hashlittle(buf->data, buf->len, 5381);
 
 		FFORMAT(out, "PREPARE %x AS %s;\n", hash, buf->data);
+
+		destroyPQExpBuffer(buf);
 
 		/*
 		 * Second, the EXECUTE part.
@@ -1897,6 +1926,7 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 							  "VALUES (%d) than COLUMNS (%d)",
 							  values->cols,
 							  new->cols);
+					destroyPQExpBuffer(buf);
 					return false;
 				}
 
@@ -1933,6 +1963,7 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 					if (!stream_add_value_in_json_array(value, jsArray))
 					{
 						/* errors have already been logged */
+						destroyPQExpBuffer(buf);
 						return false;
 					}
 
@@ -1961,6 +1992,7 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 							  "VALUES (%d) than COLUMNS (%d)",
 							  values->cols,
 							  old->cols);
+					destroyPQExpBuffer(buf);
 					return false;
 				}
 
@@ -1972,6 +2004,7 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 				if (!stream_add_value_in_json_array(value, jsArray))
 				{
 					/* errors have already been logged */
+					destroyPQExpBuffer(buf);
 					return false;
 				}
 			}
@@ -1980,12 +2013,15 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 		if (PQExpBufferBroken(buf))
 		{
 			log_error("Failed to transform INSERT statement: Out of Memory");
+			destroyPQExpBuffer(buf);
 			return false;
 		}
 
 		uint32_t hash = hashlittle(buf->data, buf->len, 5381);
 
 		FFORMAT(out, "PREPARE %x AS %s;\n", hash, buf->data);
+
+		destroyPQExpBuffer(buf);
 
 		/*
 		 * Second, the EXECUTE part.
@@ -2042,6 +2078,7 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 							  "VALUES (%d) than COLUMNS (%d)",
 							  values->cols,
 							  old->cols);
+					destroyPQExpBuffer(buf);
 					return false;
 				}
 
@@ -2053,6 +2090,7 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 				if (!stream_add_value_in_json_array(value, jsArray))
 				{
 					/* errors have already been logged */
+					destroyPQExpBuffer(buf);
 					return false;
 				}
 			}
@@ -2061,6 +2099,8 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 		uint32_t hash = hashlittle(buf->data, buf->len, 5381);
 
 		FFORMAT(out, "PREPARE %x AS %s;\n", hash, buf->data);
+
+		destroyPQExpBuffer(buf);
 
 		/*
 		 * Second, the EXECUTE part.

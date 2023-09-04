@@ -1007,6 +1007,7 @@ copydb_prepare_create_index_command(SourceIndex *index,
 		else
 		{
 			log_error("Failed to parse \"%s\"", index->indexDef);
+			destroyPQExpBuffer(cmd);
 			return false;
 		}
 	}

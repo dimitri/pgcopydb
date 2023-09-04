@@ -3201,9 +3201,10 @@ schema_send_table_checksum(PGSQL *pgsql, SourceTable *table)
 					  attrList->data,
 					  table->qname);
 
+	(void) destroyPQExpBuffer(attrList);
+
 	if (PQExpBufferBroken(sql))
 	{
-		(void) destroyPQExpBuffer(attrList);
 		(void) destroyPQExpBuffer(sql);
 		log_error("Failed to build attribute list: Out of Memory");
 		return false;

@@ -250,6 +250,8 @@ create_table_index_file(SourceTable *table, char *filename)
 		return false;
 	}
 
+	destroyPQExpBuffer(content);
+
 	return true;
 }
 
