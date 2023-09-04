@@ -148,7 +148,7 @@ copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions)
 				/* apply extcondition to the source table */
 				char qname[NAMEDATALEN * 2 + 5] = { 0 };
 
-				sformat(qname, sizeof(qname), "\"%s\".\"%s\"",
+				sformat(qname, sizeof(qname), "%s.%s",
 						config->nspname,
 						config->relname);
 

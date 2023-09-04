@@ -309,7 +309,9 @@ schema_list_extensions(PGSQL *pgsql, SourceExtensionArray *extArray)
 		"  select e.oid, extname, extnamespace::regnamespace, extrelocatable, "
 		"         array_length(e.extconfig, 1) as count, "
 		"         extconfig.n, "
-		"         extconfig.extconfig, n.nspname, c.relname, "
+		"         extconfig.extconfig, "
+		"         format('%I', n.nspname) as nspname, "
+		"         format('%I', c.relname) as relname, "
 		"         extcondition[extconfig.n] "
 		"    from pg_extension e, "
 		"         unnest(extconfig) with ordinality as extconfig(extconfig, n) "
@@ -848,7 +850,10 @@ struct FilteringQueries listSourceTablesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_NONE,
 
-		"  select c.oid, n.nspname, c.relname, pg_am.amname, "
+		"  select c.oid, "
+		"         format('%I', n.nspname) as nspname, "
+		"         format('%I', c.relname) as relname, "
+		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
@@ -922,7 +927,10 @@ struct FilteringQueries listSourceTablesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_INCL,
 
-		"  select c.oid, n.nspname, c.relname, pg_am.amname, "
+		"  select c.oid, "
+		"         format('%I', n.nspname) as nspname, "
+		"         format('%I', c.relname) as relname, "
+		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
@@ -1004,7 +1012,10 @@ struct FilteringQueries listSourceTablesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_EXCL,
 
-		"  select c.oid, n.nspname, c.relname, pg_am.amname, "
+		"  select c.oid, "
+		"         format('%I', n.nspname) as nspname, "
+		"         format('%I', c.relname) as relname, "
+		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
@@ -1097,7 +1108,10 @@ struct FilteringQueries listSourceTablesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_LIST_NOT_INCL,
 
-		"  select c.oid, n.nspname, c.relname, pg_am.amname, "
+		"  select c.oid, "
+		"         format('%I', n.nspname) as nspname, "
+		"         format('%I', c.relname) as relname, "
+		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
@@ -1179,7 +1193,10 @@ struct FilteringQueries listSourceTablesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_LIST_EXCL,
 
-		"  select c.oid, n.nspname, c.relname, pg_am.amname, "
+		"  select c.oid, "
+		"         format('%I', n.nspname) as nspname, "
+		"         format('%I', c.relname) as relname, "
+		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
@@ -1339,7 +1356,10 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_NONE,
 
-		"  select c.oid, n.nspname, c.relname, pg_am.amname, "
+		"  select c.oid, "
+		"         format('%I', n.nspname) as nspname, "
+		"         format('%I', c.relname) as relname, "
+		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
@@ -1383,7 +1403,10 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_INCL,
 
-		"  select c.oid, n.nspname, c.relname, pg_am.amname, "
+		"  select c.oid, "
+		"         format('%I', n.nspname) as nspname, "
+		"         format('%I', c.relname) as relname, "
+		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
@@ -1432,7 +1455,10 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_EXCL,
 
-		"  select c.oid, n.nspname, c.relname, pg_am.amname, "
+		"  select c.oid, "
+		"         format('%I', n.nspname) as nspname, "
+		"         format('%I', c.relname) as relname, "
+		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
@@ -1495,7 +1521,10 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_LIST_NOT_INCL,
 
-		"  select c.oid, n.nspname, c.relname, pg_am.amname, "
+		"  select c.oid, "
+		"         format('%I', n.nspname) as nspname, "
+		"         format('%I', c.relname) as relname, "
+		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
@@ -1547,7 +1576,10 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_LIST_EXCL,
 
-		"  select c.oid, n.nspname, c.relname, pg_am.amname, "
+		"  select c.oid, "
+		"         format('%I', n.nspname) as nspname, "
+		"         format('%I', c.relname) as relname, "
+		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
 		"         pg_size_pretty(ts.bytes), "
@@ -1676,7 +1708,9 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_NONE,
 
-		"  select c.oid, n.nspname, c.relname, "
+		"  select c.oid, "
+		"         format('%I', n.nspname) as nspname, "
+		"         format('%I', c.relname) as relname, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
 		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
@@ -1713,8 +1747,8 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		" seqs(seqoid, nspname, relname, restore_list_name) as "
 		" ( "
 		"    select s.oid as seqoid, "
-		"           sn.nspname, "
-		"           s.relname, "
+		"           format('%I', sn.nspname) as nspname, "
+		"           format('%I', s.relname) as relname, "
 		"           format('%s %s %s', "
 		"                  regexp_replace(sn.nspname, '[\\n\\r]', ' '), "
 		"                  regexp_replace(s.relname, '[\\n\\r]', ' '), "
@@ -1792,8 +1826,8 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		" seqs(seqoid, nspname, relname, restore_list_name) as "
 		" ( "
 		"    select s.oid as seqoid, "
-		"           sn.nspname, "
-		"           s.relname, "
+		"           format('%I', sn.nspname) as nspname, "
+		"           format('%I', s.relname) as relname, "
 		"           format('%s %s %s', "
 		"                  regexp_replace(sn.nspname, '[\\n\\r]', ' '), "
 		"                  regexp_replace(s.relname, '[\\n\\r]', ' '), "
@@ -1895,8 +1929,8 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		" seqs(seqoid, nspname, relname, restore_list_name) as "
 		" ( "
 		"    select s.oid as seqoid, "
-		"           sn.nspname, "
-		"           s.relname, "
+		"           format('%I', sn.nspname) as nspname, "
+		"           format('%I', s.relname) as relname, "
 		"           format('%s %s %s', "
 		"                  regexp_replace(sn.nspname, '[\\n\\r]', ' '), "
 		"                  regexp_replace(s.relname, '[\\n\\r]', ' '), "
@@ -1974,8 +2008,8 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		" seqs(seqoid, nspname, relname, restore_list_name) as "
 		" ( "
 		"    select s.oid as seqoid, "
-		"           sn.nspname, "
-		"           s.relname, "
+		"           format('%I', sn.nspname) as nspname, "
+		"           format('%I', s.relname) as relname, "
 		"           format('%s %s %s', "
 		"                  regexp_replace(sn.nspname, '[\\n\\r]', ' '), "
 		"                  regexp_replace(s.relname, '[\\n\\r]', ' '), "
@@ -2116,7 +2150,10 @@ schema_list_sequences(PGSQL *pgsql,
 		char *keep = listSourceSequencesSQL[SOURCE_FILTER_TYPE_EXCL].sql;
 
 		char *sqlTmpl =
-			"select seqoid, nspname, relname, restore_list_name, "
+			"select seqoid, "
+			"       format('%I', sn.nspname) as nspname, "
+			"       format('%I', s.relname) as relname, "
+			"       restore_list_name, "
 			"       ownedby, attrelid, attroid "
 			"  from (%s) as exclude "
 			" where not exists "
@@ -4268,7 +4305,7 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	}
 
 	/* compute the qualified name from the nspname and relname */
-	length = sformat(table->qname, sizeof(table->qname), "\"%s\".\"%s\"",
+	length = sformat(table->qname, sizeof(table->qname), "%s.%s",
 					 table->nspname,
 					 table->relname);
 
