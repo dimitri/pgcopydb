@@ -496,15 +496,15 @@ pgsql_open_connection(PGSQL *pgsql)
 		return pgsql->connection;
 	}
 
+	/* compute the URL without the password, we set it separately */
+	if (pgsql->safeURI.pguri == NULL)
+	{
+		(void) parse_and_scrub_connection_string(pgsql->connectionString,
+												 &(pgsql->safeURI));
+	}
+
 	if (pgsql->logSQL)
 	{
-		/* also keep around a print-safe version of the URL */
-		if (pgsql->safeURI.pguri == NULL)
-		{
-			(void) parse_and_scrub_connection_string(pgsql->connectionString,
-													 &(pgsql->safeURI));
-		}
-
 		log_sql("Connecting to [%s] \"%s\"",
 				ConnectionTypeToString(pgsql->connectionType),
 				pgsql->safeURI.pguri);
