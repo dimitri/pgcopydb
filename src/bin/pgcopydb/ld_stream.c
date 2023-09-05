@@ -2038,9 +2038,19 @@ buildReplicationURI(const char *pguri, char **repl_pguri)
 	bool checkForCompleteURI = false;
 
 	KeyVal replicationParams = {
-		.count = 1,
-		.keywords = { "replication" },
-		.values = { "database" }
+		.count = 4,
+		.keywords = {
+			"replication",
+			"tcp_keepalives_idle",
+			"tcp_keepalives_interval",
+			"tcp_keepalives_count"
+		},
+		.values = {
+			"database",
+			"'10s'",
+			"'10s'",
+			"60"
+		}
 	};
 
 	/* if replication is already found, we override it to value "1" */
