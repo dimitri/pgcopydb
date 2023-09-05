@@ -1276,11 +1276,21 @@ set_ps_title(const char *title)
 		return;
 	}
 
-	int n = sformat(ps_buffer, ps_buffer_size, "%s", title);
-
 	/* pad our process title string */
-	for (size_t i = n; i < ps_buffer_size; i++)
+	int n = strlen(title);
+
+	for (size_t i = 0; i < ps_buffer_size; i++)
 	{
-		*(ps_buffer + i) = '\0';
+		if (i < n)
+		{
+			*(ps_buffer + i) = title[i];
+		}
+		else
+		{
+			*(ps_buffer + i) = '\0';
+		}
 	}
+
+	/* make sure we have an \0 at the end of the ps_buffer */
+	*(ps_buffer + ps_buffer_size - 1) = '\0';
 }
