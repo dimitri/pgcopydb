@@ -61,6 +61,27 @@ GUC serverSetttings[] = {
 
 
 /*
+ * These parameters are added to the connection strings, unless the user has
+ * added them, allowing user-defined values to be taken into account.
+ */
+KeyVal connStringDefaults = {
+	.count = 4,
+	.keywords = {
+		"keepalives",
+		"keepalives_idle",
+		"keepalives_interval",
+		"keepalives_count"
+	},
+	.values = {
+		"1",
+		"10",
+		"10",
+		"60"
+	}
+};
+
+
+/*
  * copydb_init_tempdir initialises the file paths that are going to be used to
  * store temporary information while the pgcopydb process is running.
  */

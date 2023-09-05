@@ -18,6 +18,7 @@
 #include "libpq-fe.h"
 #include "pqexpbuffer.h"
 
+#include "copydb.h"
 #include "defaults.h"
 #include "log.h"
 #include "parsing_utils.h"
@@ -528,6 +529,7 @@ parse_pretty_printed_bytes(const char *value, uint64_t *result)
  */
 bool
 parse_pguri_info_key_vals(const char *pguri,
+						  KeyVal *defaults,
 						  KeyVal *overrides,
 						  URIParams *uriParameters,
 						  bool checkForCompleteURI)
@@ -553,7 +555,6 @@ parse_pguri_info_key_vals(const char *pguri,
 	for (option = conninfo; option->keyword != NULL; option++)
 	{
 		char *value = NULL;
-		int ovIndex = 0;
 
 		/*
 		 * If the keyword is in our overrides array, use the value from the
@@ -561,18 +562,18 @@ parse_pguri_info_key_vals(const char *pguri,
 		 * something very small, like 3 (typically: sslmode, sslrootcert,
 		 * sslcrl).
 		 */
-		for (ovIndex = 0; ovIndex < overrides->count; ovIndex++)
+		for (int ovIndex = 0; ovIndex < overrides->count; ovIndex++)
 		{
-			if (strcmp(overrides->keywords[ovIndex], option->keyword) == 0)
+			if (streq(overrides->keywords[ovIndex], option->keyword))
 			{
 				value = overrides->values[ovIndex];
 			}
 		}
 
-		/* not found in the override, keep the original, or skip */
+		/* now either take the given value or maybe skip the keyword */
 		if (value == NULL)
 		{
-			if (option->val == NULL || strcmp(option->val, "") == 0)
+			if (option->val == NULL || streq(option->val, ""))
 			{
 				continue;
 			}
@@ -603,7 +604,7 @@ parse_pguri_info_key_vals(const char *pguri,
 			foundDBName = true;
 			uriParameters->dbname = strdup(option->val);
 		}
-		else if (!IS_EMPTY_STRING_BUFFER(value))
+		else if (value != NULL && !streq(value, ""))
 		{
 			/* make a copy in our key/val arrays */
 			uriParameters->parameters.keywords[paramIndex] =
@@ -611,6 +612,37 @@ parse_pguri_info_key_vals(const char *pguri,
 
 			uriParameters->parameters.values[paramIndex] =
 				strdup(value);
+
+			++uriParameters->parameters.count;
+			++paramIndex;
+		}
+	}
+
+	/*
+	 * Now add-in the default values that we have, unless they have been
+	 * provided in the previous round.
+	 */
+	for (int defIndex = 0; defIndex < defaults->count; defIndex++)
+	{
+		char *keyword = defaults->keywords[defIndex];
+		char *value = defaults->values[defIndex];
+
+		bool found = false;
+
+		for (option = conninfo; option->keyword != NULL; option++)
+		{
+			if (streq(keyword, option->keyword))
+			{
+				found = option->val != NULL && !streq(option->val, "");
+				break;
+			}
+		}
+
+		if (!found)
+		{
+			/* make a copy in our key/val arrays */
+			uriParameters->parameters.keywords[paramIndex] = strdup(keyword);
+			uriParameters->parameters.values[paramIndex] = strdup(value);
 
 			++uriParameters->parameters.count;
 			++paramIndex;
@@ -962,19 +994,9 @@ parse_and_scrub_connection_string(const char *pguri, SafeURI *safeURI)
 	URIParams *uriParams = &(safeURI->uriParams);
 
 	KeyVal overrides = {
-		.count = 4,
-		.keywords = {
-			"password",
-			"tcp_keepalives_idle",
-			"tcp_keepalives_interval",
-			"tcp_keepalives_count",
-		},
-		.values = {
-			"",
-			"'10s'",
-			"'10s'",
-			"60",
-		}
+		.count = 1,
+		.keywords = { "password" },
+		.values = { "" }
 	};
 
 	if (pguri == NULL)
@@ -992,6 +1014,7 @@ parse_and_scrub_connection_string(const char *pguri, SafeURI *safeURI)
 	bool checkForCompleteURI = false;
 
 	if (!parse_pguri_info_key_vals(pguri,
+								   &connStringDefaults,
 								   &overrides,
 								   uriParams,
 								   checkForCompleteURI))

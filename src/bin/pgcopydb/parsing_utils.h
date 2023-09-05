@@ -98,6 +98,7 @@ typedef struct ConnStrings
 
 
 bool parse_pguri_info_key_vals(const char *pguri,
+							   KeyVal *defaults,
 							   KeyVal *overrides,
 							   URIParams *uriParameters,
 							   bool checkForCompleteURI);

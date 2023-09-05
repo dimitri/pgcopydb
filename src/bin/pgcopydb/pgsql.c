@@ -496,15 +496,15 @@ pgsql_open_connection(PGSQL *pgsql)
 		return pgsql->connection;
 	}
 
+	/* compute the URL without the password, we set it separately */
+	if (pgsql->safeURI.pguri == NULL)
+	{
+		(void) parse_and_scrub_connection_string(pgsql->connectionString,
+												 &(pgsql->safeURI));
+	}
+
 	if (pgsql->logSQL)
 	{
-		/* also keep around a print-safe version of the URL */
-		if (pgsql->safeURI.pguri == NULL)
-		{
-			(void) parse_and_scrub_connection_string(pgsql->connectionString,
-													 &(pgsql->safeURI));
-		}
-
 		log_sql("Connecting to [%s] \"%s\"",
 				ConnectionTypeToString(pgsql->connectionType),
 				pgsql->safeURI.pguri);
@@ -516,6 +516,12 @@ pgsql_open_connection(PGSQL *pgsql)
 		setenv("PGAPPNAME", PGCOPYDB_PGAPPNAME, 1);
 	}
 
+	/* use the parsed password, unless the environment already is set */
+	if (!env_exists("PGPASSWORD") && pgsql->safeURI.password != NULL)
+	{
+		setenv("PGPASSWORD", pgsql->safeURI.password, 1);
+	}
+
 	/* we implement our own retry strategy */
 	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
 
@@ -524,7 +530,7 @@ pgsql_open_connection(PGSQL *pgsql)
 	INSTR_TIME_SET_ZERO(pgsql->retryPolicy.connectTime);
 
 	/* Make a connection to the database */
-	pgsql->connection = PQconnectdb(pgsql->connectionString);
+	pgsql->connection = PQconnectdb(pgsql->safeURI.pguri);
 
 	/* Check to see that the backend connection was successfully made */
 	if (PQstatus(pgsql->connection) != CONNECTION_OK)
@@ -544,7 +550,7 @@ pgsql_open_connection(PGSQL *pgsql)
 			log_error("Failed to connect to %s database at \"%s\", "
 					  "see above for details",
 					  ConnectionTypeToString(pgsql->connectionType),
-					  pgsql->connectionString);
+					  pgsql->safeURI.pguri);
 
 			pgsql->status = PG_CONNECTION_BAD;
 
@@ -621,8 +627,6 @@ pgsql_retry_open_connection(PGSQL *pgsql)
 			INSTR_TIME_SUBTRACT(duration, pgsql->retryPolicy.startTime);
 
 			(void) log_connection_error(pgsql->connection, LOG_ERROR);
-			pgsql->status = PG_CONNECTION_BAD;
-			pgsql_finish(pgsql);
 
 			log_error("Failed to connect to \"%s\" "
 					  "after %d attempts in %d ms, "
@@ -630,6 +634,9 @@ pgsql_retry_open_connection(PGSQL *pgsql)
 					  pgsql->safeURI.pguri,
 					  pgsql->retryPolicy.attempts,
 					  (int) INSTR_TIME_GET_MILLISEC(duration));
+
+			pgsql->status = PG_CONNECTION_BAD;
+			pgsql_finish(pgsql);
 
 			return false;
 		}
