@@ -17,13 +17,21 @@
 #include "summary.h"
 
 
+/*
+ * These GUC settings are set with the SET command, and are meant to be
+ * controled by pgcopydb without a way for the user to override them.
+ */
 #define COMMON_GUC_SETTINGS \
 	{ "client_encoding", "'UTF-8'" }, \
-	{ "tcp_keepalives_idle", "'10s'" }, \
-	{ "tcp_keepalives_interval", "'10s'" }, \
-	{ "tcp_keepalives_count", "60" }, \
 	{ "extra_float_digits", "3" }, \
 	{ "statement_timeout", "0" }
+
+/*
+ * These parameters are added to the connection strings, unless the user has
+ * added them, allowing user-defined values to be taken into account.
+ */
+extern KeyVal connStringDefaults;
+
 
 /*
  * pgcopydb creates System V OS level objects such as message queues and
