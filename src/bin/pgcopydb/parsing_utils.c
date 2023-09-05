@@ -962,9 +962,19 @@ parse_and_scrub_connection_string(const char *pguri, SafeURI *safeURI)
 	URIParams *uriParams = &(safeURI->uriParams);
 
 	KeyVal overrides = {
-		.count = 1,
-		.keywords = { "password" },
-		.values = { "" }
+		.count = 4,
+		.keywords = {
+			"password",
+			"tcp_keepalives_idle",
+			"tcp_keepalives_interval",
+			"tcp_keepalives_count",
+		},
+		.values = {
+			"",
+			"'10s'",
+			"'10s'",
+			"60",
+		}
 	};
 
 	if (pguri == NULL)
