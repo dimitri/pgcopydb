@@ -383,6 +383,8 @@ typedef struct StreamApplyContext
 	char sqlFileName[MAXPGPATH];
 
 	PreparedStmt *preparedStmt;
+
+	uint32_t currentCopyHash;
 } StreamApplyContext;
 
 

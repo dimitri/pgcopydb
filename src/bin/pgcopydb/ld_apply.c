@@ -729,6 +729,13 @@ stream_apply_sql(StreamApplyContext *context,
 				return true;
 			}
 
+			/* end ongoing COPY operation */
+			if (context->currentCopyHash != 0)
+			{
+				pg_copy_end(pgsql);
+				context->currentCopyHash = 0;
+			}
+
 			/*
 			 * update replication progress with metadata->lsn, that is,
 			 * transaction COMMIT LSN
@@ -845,6 +852,13 @@ stream_apply_sql(StreamApplyContext *context,
 					context->previousLSN < metadata->lsn;
 			}
 
+			/* end ongoing COPY operation */
+			if (context->currentCopyHash != 0)
+			{
+				pg_copy_end(pgsql);
+				context->currentCopyHash = 0;
+			}
+
 			/* in a transaction only the COMMIT LSN is tracked */
 			if (context->transactionInProgress)
 			{
@@ -938,12 +952,54 @@ stream_apply_sql(StreamApplyContext *context,
 		}
 
 		case STREAM_ACTION_INSERT:
+		{
+			if (!context->reachedStartPos)
+			{
+				return true;
+			}
+
+			if (context->currentCopyHash == metadata->hash)
+			{
+				return true;
+			}
+			else if (context->currentCopyHash != 0)
+			{
+				/*
+				 * INSERT for a different table, end ongoing COPY and start
+				 * new one.
+				 */
+				pg_copy_end(pgsql);
+				context->currentCopyHash = 0;
+			}
+
+			/* Convert INSERT statement to COPY statement */
+			size_t prefix = sizeof("INSERT INTO");
+			char *stmt = metadata->stmt + prefix;
+			char *end = strstr(stmt, "overriding system value VALUES (");
+			*end = '\0';
+
+			if (!pg_copy_from_stdin(pgsql, stmt))
+			{
+				log_warn("BUG: Failed to begin COPY");
+				return false;
+			}
+			context->currentCopyHash = metadata->hash;
+			break;
+		}
+
 		case STREAM_ACTION_UPDATE:
 		case STREAM_ACTION_DELETE:
 		{
 			if (!context->reachedStartPos)
 			{
 				return true;
+			}
+
+			/* end ongoing COPY operation */
+			if (context->currentCopyHash != 0)
+			{
+				pg_copy_end(pgsql);
+				context->currentCopyHash = 0;
 			}
 
 			uint32_t hash = metadata->hash;
@@ -986,19 +1042,21 @@ stream_apply_sql(StreamApplyContext *context,
 			}
 
 			uint32_t hash = metadata->hash;
-			PreparedStmt *stmtHashTable = context->preparedStmt;
-			PreparedStmt *stmt = NULL;
-
-			HASH_FIND(hh, stmtHashTable, &hash, sizeof(hash), stmt);
-
-			if (stmt == NULL)
+			bool isCopyOperation = context->currentCopyHash == hash &&
+								   context->currentCopyHash != 0;
+			if (!isCopyOperation)
 			{
-				log_warn("BUG: Failed to find statement %x in stmtHashTable",
-						 hash);
-			}
+				PreparedStmt *stmtHashTable = context->preparedStmt;
+				PreparedStmt *stmt = NULL;
 
-			char name[NAMEDATALEN] = { 0 };
-			sformat(name, sizeof(name), "%x", metadata->hash);
+				HASH_FIND(hh, stmtHashTable, &hash, sizeof(hash), stmt);
+
+				if (stmt == NULL)
+				{
+					log_warn("BUG: Failed to find statement %x in stmtHashTable",
+							 hash);
+				}
+			}
 
 			JSON_Value *js = json_parse_string(metadata->jsonBuffer);
 
@@ -1024,15 +1082,35 @@ stream_apply_sql(StreamApplyContext *context,
 			for (int i = 0; i < count; i++)
 			{
 				const char *value = json_array_get_string(jsArray, i);
+
+				/* NULL values should be encoded as \\N for COPY */
+				if (value == NULL && isCopyOperation)
+				{
+					value = "\\N";
+				}
 				paramValues[i] = value;
 			}
 
-			if (!pgsql_execute_prepared(pgsql, name,
-										count, paramValues,
-										NULL, NULL))
+			if (isCopyOperation)
 			{
-				/* errors have already been logged */
-				return false;
+				if (!pg_copy_put_row(pgsql, paramValues, count))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+			}
+			else
+			{
+				char name[NAMEDATALEN] = { 0 };
+				sformat(name, sizeof(name), "%x", metadata->hash);
+
+				if (!pgsql_execute_prepared(pgsql, name,
+											count, paramValues,
+											NULL, NULL))
+				{
+					/* errors have already been logged */
+					return false;
+				}
 			}
 
 			free(paramValues);
@@ -1047,6 +1125,13 @@ stream_apply_sql(StreamApplyContext *context,
 			if (!context->reachedStartPos)
 			{
 				return true;
+			}
+
+			/* end ongoing COPY operation */
+			if (context->currentCopyHash != 0)
+			{
+				pg_copy_end(pgsql);
+				context->currentCopyHash = 0;
 			}
 
 			/* chomp the final semi-colon that we added */

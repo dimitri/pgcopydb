@@ -2435,6 +2435,50 @@ pg_copy_from_stdin(PGSQL *pgsql, const char *qname)
 
 
 /*
+ * pg_copy_put_row streams a row of data at a time into the already
+ * opened COPY protocol stream. Only default text mode is supported.
+ */
+bool
+pg_copy_put_row(PGSQL *pgsql, const char **array, size_t len)
+{
+	for (int i = 0; i < len; i++)
+	{
+		if (i > 0)
+		{
+			if (PQputCopyData(pgsql->connection, "\t", 1) == -1)
+			{
+				pgcopy_log_error(pgsql, NULL, "Failed to copy row from stdin");
+				pgsql_finish(pgsql);
+
+				return false;
+			}
+		}
+
+		const char *str = array[i];
+		int len = strlen(str);
+
+		if (PQputCopyData(pgsql->connection, str, len) == -1)
+		{
+			pgcopy_log_error(pgsql, NULL, "Failed to copy row from stdin");
+			pgsql_finish(pgsql);
+
+			return false;
+		}
+	}
+
+	if (PQputCopyData(pgsql->connection, "\n", 1) == -1)
+	{
+		pgcopy_log_error(pgsql, NULL, "Failed to copy row from stdin");
+		pgsql_finish(pgsql);
+
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * pg_copy_row_from_stdin streams a row of data at a time into the already
  * opened COPY protocol stream. Only default text mode is supported.
  *
