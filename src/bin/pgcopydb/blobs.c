@@ -47,12 +47,6 @@ copydb_start_blob_process(CopyDataSpec *specs)
 		return true;
 	}
 
-	if (!queue_create(&(specs->loQueue), "blob"))
-	{
-		log_error("Failed to create the Large Objects process queue");
-		return false;
-	}
-
 	/*
 	 * Flush stdio channels just before fork, to avoid double-output problems.
 	 */
@@ -65,62 +59,20 @@ copydb_start_blob_process(CopyDataSpec *specs)
 	{
 		case -1:
 		{
-			log_error("Failed to fork large objects process: %m");
+			log_error("Failed to fork large objects supervisor process: %m");
 			return false;
 		}
 
 		case 0:
 		{
 			/* child process runs the command */
-			(void) set_ps_title("pgcopydb: copy blobs");
+			(void) set_ps_title("pgcopydb: copy large objects supervisor");
 
-			CopyBlobsSummary summary = {
-				.pid = getpid(),
-				.count = 0,
-				.startTime = time(NULL)
-			};
-
-			instr_time startTime;
-			INSTR_TIME_SET_CURRENT(startTime);
-
-			if (!copydb_start_blob_workers(specs))
+			if (!copydb_blob_supervisor(specs))
 			{
-				/* errors have already been logged */
+				log_error("Failed to copy large objects, see above for details");
 				exit(EXIT_CODE_INTERNAL_ERROR);
 			}
-
-			/* now append BLOB OIDs to the queue */
-			uint64_t count = 0;
-
-			if (!copydb_queue_largeobject_metadata(specs, &count))
-			{
-				log_error("Failed to add large object metadata to the queue");
-				exit(EXIT_CODE_INTERNAL_ERROR);
-			}
-
-			if (!copydb_send_lo_stop(specs))
-			{
-				/* errors have already been logged */
-				exit(EXIT_CODE_INTERNAL_ERROR);
-			}
-
-			if (!copydb_wait_for_subprocesses(specs->failFast))
-			{
-				/* errors have already been logged */
-				exit(EXIT_CODE_INTERNAL_ERROR);
-			}
-
-			instr_time duration;
-
-			INSTR_TIME_SET_CURRENT(duration);
-			INSTR_TIME_SUBTRACT(duration, startTime);
-
-			/* and write that we successfully finished copying all blobs */
-			summary.doneTime = time(NULL);
-			summary.durationMs = INSTR_TIME_GET_MILLISEC(duration);
-
-			/* ignore errors on the blob file summary */
-			(void) write_blobs_summary(&summary, specs->cfPaths.done.blobs);
 
 			exit(EXIT_CODE_QUIT);
 		}
@@ -133,6 +85,91 @@ copydb_start_blob_process(CopyDataSpec *specs)
 	}
 
 	/* now we're done, and we want async behavior, do not wait */
+	return true;
+}
+
+
+/*
+ * copydb_blob_supervisor creates the lqQueue then starts --large-objects-jobs
+ * workers to process blob oids from the queue.
+ */
+bool
+copydb_blob_supervisor(CopyDataSpec *specs)
+{
+	pid_t pid = getpid();
+
+	log_notice("Started Large Objects supervisor %d [%d]", pid, getppid());
+
+	if (!queue_create(&(specs->loQueue), "blob"))
+	{
+		log_error("Failed to create the Large Objects process queue");
+		return false;
+	}
+
+	CopyBlobsSummary summary = {
+		.pid = getpid(),
+		.count = 0,
+		.startTime = time(NULL)
+	};
+
+	instr_time startTime;
+	INSTR_TIME_SET_CURRENT(startTime);
+
+	if (!copydb_start_blob_workers(specs))
+	{
+		log_error("Failed to start large objects workers, "
+				  "see above for details");
+
+		/* send TERM signal to all the process in our process group */
+		if (!kill(0, SIGTERM))
+		{
+			log_error("Failed to send TERM signal our process group");
+			return false;
+		}
+
+		/* and wait for all the sub-processes to terminate */
+		if (!copydb_wait_for_subprocesses(specs->failFast))
+		{
+			log_error("Some sub-processes have exited with error status, "
+					  "see above for details");
+		}
+
+		return false;
+	}
+
+	/* now append BLOB OIDs to the queue */
+	uint64_t count = 0;
+
+	if (!copydb_queue_largeobject_metadata(specs, &count))
+	{
+		log_error("Failed to add large object metadata to the queue");
+		return false;
+	}
+
+	if (!copydb_send_lo_stop(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!copydb_wait_for_subprocesses(specs->failFast))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	instr_time duration;
+
+	INSTR_TIME_SET_CURRENT(duration);
+	INSTR_TIME_SUBTRACT(duration, startTime);
+
+	/* and write that we successfully finished copying all blobs */
+	summary.doneTime = time(NULL);
+	summary.durationMs = INSTR_TIME_GET_MILLISEC(duration);
+
+	/* ignore errors on the blob file summary */
+	(void) write_blobs_summary(&summary, specs->cfPaths.done.blobs);
+
 	return true;
 }
 

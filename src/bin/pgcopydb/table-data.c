@@ -117,16 +117,16 @@ copydb_process_table_data(CopyDataSpec *specs)
 		if (!copydb_start_copy_supervisor(specs))
 		{
 			/* errors have already been logged */
-			return false;
+			++errors;
 		}
 
 		/*
 		 * Start as many index worker process as --index-jobs
 		 */
-		if (!copydb_start_index_workers(specs))
+		if (errors == 0 && !copydb_start_index_workers(specs))
 		{
 			/* errors have already been logged */
-			return false;
+			++errors;
 		}
 
 		/*
@@ -134,10 +134,10 @@ copydb_process_table_data(CopyDataSpec *specs)
 		 * --table-jobs. Could be exposed separately as --vacuumJobs too, but
 		 * that's not been done at this time.
 		 */
-		if (!vacuum_start_workers(specs))
+		if (errors == 0 && !vacuum_start_workers(specs))
 		{
 			/* errors have already been logged */
-			return false;
+			++errors;
 		}
 	}
 	else
@@ -151,19 +151,35 @@ copydb_process_table_data(CopyDataSpec *specs)
 	/*
 	 * Are blobs table data? well pg_dump --section sayth yes.
 	 */
-	if (!copydb_start_blob_process(specs))
+	if (errors == 0 && !copydb_start_blob_process(specs))
 	{
 		/* errors have already been logged */
-		return false;
+		++errors;
 	}
 
 	/*
 	 * Start an auxilliary process to reset sequences on the target database.
 	 */
-	if (!copydb_start_seq_process(specs))
+	if (errors == 0 && !copydb_start_seq_process(specs))
 	{
 		/* errors have already been logged */
-		return false;
+		++errors;
+	}
+
+	/* when errors happened, signal all processes to terminate now */
+	if (errors > 0)
+	{
+		log_error("Failed to start some worker processes, "
+				  "see above for details");
+
+		/* send TERM signal to all the process in our process group */
+		if (!kill(0, SIGTERM))
+		{
+			log_error("Failed to send TERM signal our process group");
+
+			/* refrain from early return here, we want to waitpid() */
+			++errors;
+		}
 	}
 
 	if (!copydb_wait_for_subprocesses(specs->failFast))
@@ -204,7 +220,7 @@ copydb_start_copy_supervisor(CopyDataSpec *specs)
 	{
 		case -1:
 		{
-			log_error("Failed to fork a worker process: %m");
+			log_error("Failed to fork copy supervisor process: %m");
 			return false;
 		}
 
@@ -235,7 +251,7 @@ copydb_start_copy_supervisor(CopyDataSpec *specs)
 
 
 /*
- * copydb_start_copy_supervisor creates the copyQueue and if needed the
+ * copydb_copy_supervisor creates the copyQueue and if needed the
  * copyDoneQueue too, then starts --table-jobs COPY table data workers to
  * process table oids from the queue.
  */
@@ -257,7 +273,23 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 	 */
 	if (!copydb_start_table_data_workers(specs))
 	{
-		/* errors have already been logged */
+		log_error("Failed to start table data COPY workers, "
+				  "see above for details");
+
+		/* send TERM signal to all the process in our process group */
+		if (!kill(0, SIGTERM))
+		{
+			log_error("Failed to send TERM signal our process group");
+			return false;
+		}
+
+		/* and wait for all the sub-processes to terminate */
+		if (!copydb_wait_for_subprocesses(specs->failFast))
+		{
+			log_error("Some sub-processes have exited with error status, "
+					  "see above for details");
+		}
+
 		return false;
 	}
 
@@ -371,7 +403,7 @@ copydb_start_table_data_workers(CopyDataSpec *specs)
 			case -1:
 			{
 				log_error("Failed to fork a COPY worker process: %m");
-				exit(EXIT_CODE_INTERNAL_ERROR);
+				return false;
 			}
 
 			case 0:

@@ -47,7 +47,7 @@ vacuum_start_workers(CopyDataSpec *specs)
 		{
 			case -1:
 			{
-				log_error("Failed to fork a worker process: %m");
+				log_error("Failed to fork a vacuum worker process: %m");
 				return false;
 			}
 
