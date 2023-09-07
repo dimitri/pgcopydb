@@ -524,6 +524,7 @@ bool copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 /* blobs.c */
 bool copydb_start_blob_process(CopyDataSpec *specs);
 
+bool copydb_blob_supervisor(CopyDataSpec *specs);
 bool copydb_start_blob_workers(CopyDataSpec *specs);
 bool copydb_blob_worker(CopyDataSpec *specs);
 bool copydb_queue_largeobject_metadata(CopyDataSpec *specs, uint64_t *count);
