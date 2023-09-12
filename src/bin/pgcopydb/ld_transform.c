@@ -42,6 +42,10 @@ typedef struct TransformStreamCtx
 	uint64_t currentMsgIndex;
 } TransformStreamCtx;
 
+static bool canCoalesceLogicalTransactionStatement(LogicalTransaction *txn,
+												   LogicalTransactionStatement *new);
+static bool coalesceLogicalTransactionStatement(LogicalTransaction *txn,
+												LogicalTransactionStatement *new);
 
 /*
  * stream_transform_stream transforms a JSON formatted input stream (read line
@@ -1159,9 +1163,145 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 				}
 			}
 
-			(void) streamLogicalTransactionAppendStatement(txn, stmt);
+			{
+				(void) streamLogicalTransactionAppendStatement(txn, stmt);
+			}
 
 			break;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * coalesceLogicalTransactionStatement appends a new entry to an existing tuple
+ * array created during the last INSERT statement in a logical transaction.
+ *
+ * This functionality enables the generation of multi-values INSERT or COPY
+ * commands, enhancing efficiency.
+ *
+ * Important: Before invoking this function, ensure that validation is performed
+ * using canCoalesceLogicalTransactionStatement.
+ */
+static bool
+coalesceLogicalTransactionStatement(LogicalTransaction *txn,
+									LogicalTransactionStatement *new)
+{
+	LogicalTransactionStatement *last = txn->last;
+
+	LogicalMessageValuesArray *lastValuesArray = &(last->stmt.insert.new.array->values);
+	LogicalMessageValuesArray *newValuesArray = &(new->stmt.insert.new.array->values);
+
+	int capacity = lastValuesArray->capacity;
+	LogicalMessageValues *array = lastValuesArray->array;
+
+	/*
+	 * Check if the current LogicalMessageValues array has enough space to hold
+	 * the values from the new statement. If not, resize the lastValuesArray
+	 * using realloc.
+	 */
+	if (capacity < (lastValuesArray->count + 1))
+	{
+		/*
+		 * Additionally, we allocate more space than currently needed to avoid
+		 * repeated reallocation on every new value append. This trade-off
+		 * increases memory usage slightly but reduces the reallocation overhead
+		 * and potential heap memory fragmentation.
+		 */
+		capacity *= 2;
+		array = (LogicalMessageValues *) realloc(array, sizeof(LogicalMessageValues) *
+												 capacity);
+		if (array == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		lastValuesArray->array = array;
+		lastValuesArray->capacity = capacity;
+	}
+
+	/*
+	 * Move the new value from the 'newValuesArray' to the 'lastValuesArray' of
+	 * the existing statement. Additionally, set the count of the 'newValuesArray'
+	 * to 0 to prevent it from being deallocated by FreeLogicalMessageTupleArray,
+	 * as it has been moved to the 'lastValuesArray'.
+	 */
+	lastValuesArray->array[lastValuesArray->count++] = newValuesArray->array[0];
+	newValuesArray->count = 0;
+
+	/* Deallocate the tuple and the new statement */
+	FreeLogicalMessageTupleArray(&(new->stmt.insert.new));
+	free(new);
+
+	return true;
+}
+
+
+/*
+ * canCoalesceLogicalTransactionStatement checks the new statement is
+ * same as the last statement in the txn by comparing the relation name,
+ * column count and column names.
+ *
+ * This acts as a validation function for coalesceLogicalTransactionStatement.
+ */
+static bool
+canCoalesceLogicalTransactionStatement(LogicalTransaction *txn,
+									   LogicalTransactionStatement *new)
+{
+	LogicalTransactionStatement *last = txn->last;
+
+	/* TODO: Support UPDATE and DELETE */
+	if (last->action != STREAM_ACTION_INSERT || new->action != STREAM_ACTION_INSERT)
+	{
+		return false;
+	}
+
+	LogicalMessageInsert *lastInsert = &last->stmt.insert;
+	LogicalMessageInsert *newInsert = &new->stmt.insert;
+
+	/* Last and current statements must target same relation */
+	if (!streq(lastInsert->nspname, newInsert->nspname) || !streq(lastInsert->relname,
+																  newInsert->relname))
+	{
+		return false;
+	}
+
+	LogicalMessageTuple *lastInsertColumns = lastInsert->new.array;
+	LogicalMessageTuple *newInsertColumns = newInsert->new.array;
+
+	/* Last and current statements must have same number of columns */
+	if (lastInsertColumns->cols != newInsertColumns->cols)
+	{
+		return false;
+	}
+
+	LogicalMessageValuesArray *lastValuesArray = &(lastInsert->new.array->values);
+
+	/*
+	 * Check if adding the new statement would exceed libpq's limit on the total
+	 * number of parameters allowed in a single PQsendPrepare call.
+	 * If it would exceed the limit, return false to indicate that coalescing
+	 * should not be performed.
+	 *
+	 * TODO: This parameter limit check is not applicable for COPY operations.
+	 * It should be removed once we switch to using COPY.
+	 */
+	if (((lastValuesArray->count + 1) * lastInsertColumns->cols) >
+		PQ_QUERY_PARAM_MAX_LIMIT)
+	{
+		return false;
+	}
+
+
+	/* Last and current statements cols must have same name and order */
+	for (int i = 0; i < lastInsertColumns->cols; i++)
+	{
+		if (!streq(lastInsertColumns->columns[i], newInsertColumns->columns[i]))
+		{
+			return false;
 		}
 	}
 
@@ -1181,9 +1321,6 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
  *     already existing tuple array created on the previous statement
  *
  * This allows to then generate multi-values insert commands, for instance.
- *
- * TODO: at the moment we don't pack several statements that look alike into
- * the same one.
  */
 bool
 streamLogicalTransactionAppendStatement(LogicalTransaction *txn,
@@ -1213,18 +1350,25 @@ streamLogicalTransactionAppendStatement(LogicalTransaction *txn,
 	}
 	else
 	{
-		if (txn->last != NULL)
+		if (canCoalesceLogicalTransactionStatement(txn, stmt))
+		{
+			if (!coalesceLogicalTransactionStatement(txn, stmt))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+		}
+		else
 		{
 			/* update the current last entry of the linked-list */
 			txn->last->next = stmt;
+
+			/* the new statement now becomes the last entry of the linked-list */
+			stmt->prev = txn->last;
+			stmt->next = NULL;
+			txn->last = stmt;
 		}
-
-		/* the new statement now becomes the last entry of the linked-list */
-		stmt->prev = txn->last;
-		stmt->next = NULL;
-		txn->last = stmt;
 	}
-
 	++txn->count;
 
 	return true;
@@ -1365,15 +1509,17 @@ AllocateLogicalMessageTuple(LogicalMessageTuple *tuple, int count)
 	/*
 	 * Allocate the tuple values, an array of VALUES, as in SQL.
 	 *
-	 * TODO: actually support multi-values clauses (single column names array,
-	 * multiple VALUES matching the same metadata definition). At the moment
-	 * it's always a single VALUES entry: VALUES(a, b, c).
+	 * It actually supports multi-values clauses (single column names array,
+	 * multiple VALUES matching the same metadata definition).
 	 *
 	 * The goal is to be able to represent VALUES(a1, b1, c1), (a2, b2, c2).
+	 *
+	 * Refer coalesceLogicalTransactionStatement for more details.
 	 */
 	LogicalMessageValuesArray *valuesArray = &(tuple->values);
 
 	valuesArray->count = 1;
+	valuesArray->capacity = 1;
 	valuesArray->array =
 		(LogicalMessageValues *) calloc(1, sizeof(LogicalMessageValues));
 

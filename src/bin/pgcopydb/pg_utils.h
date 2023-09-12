@@ -62,6 +62,12 @@
 #endif
 #define LSN_FORMAT_ARGS(lsn) ((uint32) ((lsn) >> 32)), ((uint32) (lsn))
 
+/*
+ *  PQ_QUERY_PARAM_MAX_LIMIT is not available in PostgreSQL < 14.
+ */
+#ifndef PQ_QUERY_PARAM_MAX_LIMIT
+#define PQ_QUERY_PARAM_MAX_LIMIT 65535
+#endif
 
 /*
  * pg_stat_replication.sync_state is one if:

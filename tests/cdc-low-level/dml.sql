@@ -4,25 +4,24 @@
 --- This file implements DML changes in the pagila database.
 
 \set customerid1 291
-\set customerid2 292
+\set customerid2 293
 
 \set staffid1 1
 \set staffid2 2
 
 \set inventoryid1 371
-\set inventoryid2 1097
+\set inventoryid2 373
 
 begin;
 
-with r as
- (
-   insert into rental(rental_date, inventory_id, customer_id, staff_id, last_update)
-        select '2022-06-01', :inventoryid1, :customerid1, :staffid1, '2022-06-01'
-     returning rental_id, customer_id, staff_id
- )
- insert into payment(customer_id, staff_id, rental_id, amount, payment_date)
-      select customer_id, staff_id, rental_id, 5.99, '2022-06-01'
-        from r;
+insert into rental(rental_date, inventory_id, customer_id, staff_id, last_update)
+    values
+    ('2022-06-01', :inventoryid1, :customerid1, :staffid1, '2022-06-01'),
+    ('2022-06-01', :inventoryid2, :customerid2, :staffid2, '2022-06-01');
+
+insert into payment(customer_id, staff_id, rental_id, amount, payment_date)
+  select customer_id, staff_id, rental_id, 5.99, rental_date
+    from rental where rental_date='2022-06-01';
 
 commit;
 
