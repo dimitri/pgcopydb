@@ -862,7 +862,9 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
 		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')), "
-		"         pkeys.attname as partkey, "
+		"         case when pkeys.attname is not null "
+		"              then format('%I', pkeys.attname) "
+		"               end as partkey, "
 		"         attrs.js as attributes "
 
 		"    from pg_catalog.pg_class c"
@@ -872,7 +874,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         join lateral ( "
 		"               with atts as "
 		"               ("
-		"                  select attnum, atttypid::integer, attname, "
+		"                  select attnum, atttypid::integer, "
+		"                         format('%I', attname) as attname, "
 		"                         i.indrelid is not null as attisprimary "
 		"                    from pg_attribute a "
 		"                         left join pg_index i "
@@ -942,7 +945,9 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
 		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')), "
-		"         pkeys.attname as partkey, "
+		"         case when pkeys.attname is not null "
+		"              then format('%I', pkeys.attname) "
+		"               end as partkey, "
 		"         attrs.js as attributes "
 
 		"    from pg_catalog.pg_class c "
@@ -952,7 +957,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         join lateral ( "
 		"               with atts as "
 		"               ("
-		"                  select attnum, atttypid::integer, attname, "
+		"                  select attnum, atttypid::integer, "
+		"                         format('%I', attname) as attname, "
 		"                         i.indrelid is not null as attisprimary "
 		"                    from pg_attribute a "
 		"                         left join pg_index i "
@@ -1024,7 +1030,9 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
 		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')), "
-		"         pkeys.attname as partkey, "
+		"         case when pkeys.attname is not null "
+		"              then format('%I', pkeys.attname) "
+		"               end as partkey, "
 		"         attrs.js as attributes "
 
 		"    from pg_catalog.pg_class c "
@@ -1034,7 +1042,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         join lateral ( "
 		"               with atts as "
 		"               ("
-		"                  select attnum, atttypid::integer, attname, "
+		"                  select attnum, atttypid::integer, "
+		"                         format('%I', attname) as attname, "
 		"                         i.indrelid is not null as attisprimary "
 		"                    from pg_attribute a "
 		"                         left join pg_index i "
@@ -1120,7 +1129,9 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
 		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')), "
-		"         pkeys.attname as partkey, "
+		"         case when pkeys.attname is not null "
+		"              then format('%I', pkeys.attname) "
+		"               end as partkey, "
 		"         attrs.js as attributes "
 
 		"    from pg_catalog.pg_class c "
@@ -1130,7 +1141,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         join lateral ( "
 		"               with atts as "
 		"               ("
-		"                  select attnum, atttypid::integer, attname, "
+		"                  select attnum, atttypid::integer, "
+		"                         format('%I', attname) as attname, "
 		"                         i.indrelid is not null as attisprimary "
 		"                    from pg_attribute a "
 		"                         left join pg_index i "
@@ -1205,7 +1217,9 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
 		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')), "
-		"         pkeys.attname as partkey, "
+		"         case when pkeys.attname is not null "
+		"              then format('%I', pkeys.attname) "
+		"               end as partkey, "
 		"         attrs.js as attributes "
 
 		"    from pg_catalog.pg_class c "
@@ -1215,7 +1229,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         join lateral ( "
 		"               with atts as "
 		"               ("
-		"                  select attnum, atttypid::integer, attname, "
+		"                  select attnum, atttypid::integer, "
+		"                         format('%I', attname) as attname, "
 		"                         i.indrelid is not null as attisprimary "
 		"                    from pg_attribute a "
 		"                         left join pg_index i "
@@ -2222,30 +2237,29 @@ bool
 schema_set_sequence_value(PGSQL *pgsql, SourceSequence *seq)
 {
 	SingleValueResultContext parseContext = { { 0 }, PGSQL_RESULT_BIGINT, false };
-	char *sql = "select pg_catalog.setval(format('%s.%s', $1, $2), $3, $4)";
+	char *sql = "select pg_catalog.setval($1::regclass, $2, $3)";
 
-	int paramCount = 4;
-	Oid paramTypes[4] = { TEXTOID, TEXTOID, INT8OID, BOOLOID };
-	const char *paramValues[4];
+	int paramCount = 3;
+	Oid paramTypes[3] = { TEXTOID, INT8OID, BOOLOID };
+	const char *paramValues[3];
 
-	paramValues[0] = seq->nspname;
-	paramValues[1] = seq->relname;
-	paramValues[2] = intToString(seq->lastValue).strValue;
-	paramValues[3] = seq->isCalled ? "true" : "false";
+	paramValues[0] = seq->qname;
+	paramValues[1] = intToString(seq->lastValue).strValue;
+	paramValues[2] = seq->isCalled ? "true" : "false";
 
 	if (!pgsql_execute_with_params(pgsql, sql,
 								   paramCount, paramTypes, paramValues,
 								   &parseContext, &parseSingleValueResult))
 	{
-		log_error("Failed to set sequence \"%s\".\"%s\" last value to %lld",
-				  seq->nspname, seq->relname, (long long) seq->lastValue);
+		log_error("Failed to set sequence %s last value to %lld",
+				  seq->qname, (long long) seq->lastValue);
 		return false;
 	}
 
 	if (!parseContext.parsedOk)
 	{
-		log_error("Failed to set sequence \"%s\".\"%s\" last value to %lld",
-				  seq->nspname, seq->relname, (long long) seq->lastValue);
+		log_error("Failed to set sequence %s last value to %lld",
+				  seq->qname, (long long) seq->lastValue);
 		return false;
 	}
 
@@ -2260,11 +2274,15 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_NONE,
 
-		"   select i.oid, n.nspname, i.relname,"
-		"          r.oid, rn.nspname, r.relname,"
+		"   select i.oid, "
+		"          format('%I', n.nspname) as inspname, "
+		"          format('%I', i.relname) as irelname,"
+		"          r.oid, "
+		"          format('%I', rn.nspname) as rnspname, "
+		"          format('%I', r.relname) as rrelname, "
 		"          indisprimary,"
 		"          indisunique,"
-		"          (select string_agg(attname, ',')"
+		"          (select string_agg(format('%I', attname), ',')"
 		"             from pg_attribute"
 		"            where attrelid = r.oid"
 		"              and array[attnum::integer] <@ indkey::integer[]"
@@ -2273,7 +2291,9 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          c.oid,"
 		"          c.condeferrable,"
 		"          c.condeferred,"
-		"          c.conname,"
+		"          case when conname is not null "
+		"               then format('%I', c.conname) "
+		"           end as conname,"
 		"          pg_get_constraintdef(c.oid),"
 		"          format('%s %s %s', "
 		"                 regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -2313,11 +2333,15 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_INCL,
 
-		"   select i.oid, n.nspname, i.relname,"
-		"          r.oid, rn.nspname, r.relname,"
+		"   select i.oid, "
+		"          format('%I', n.nspname) as inspname, "
+		"          format('%I', i.relname) as irelname,"
+		"          r.oid, "
+		"          format('%I', rn.nspname) as rnspname, "
+		"          format('%I', r.relname) as rrelname, "
 		"          indisprimary,"
 		"          indisunique,"
-		"          (select string_agg(attname, ',')"
+		"          (select string_agg(format('%I', attname), ',')"
 		"             from pg_attribute"
 		"            where attrelid = r.oid"
 		"              and array[attnum::integer] <@ indkey::integer[]"
@@ -2326,7 +2350,9 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          c.oid,"
 		"          c.condeferrable,"
 		"          c.condeferred,"
-		"          c.conname,"
+		"          case when conname is not null "
+		"               then format('%I', c.conname) "
+		"           end as conname,"
 		"          pg_get_constraintdef(c.oid),"
 		"          format('%s %s %s', "
 		"                 regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -2370,11 +2396,15 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_EXCL,
 
-		"   select i.oid, n.nspname, i.relname,"
-		"          r.oid, rn.nspname, r.relname,"
+		"   select i.oid, "
+		"          format('%I', n.nspname) as inspname, "
+		"          format('%I', i.relname) as irelname,"
+		"          r.oid, "
+		"          format('%I', rn.nspname) as rnspname, "
+		"          format('%I', r.relname) as rrelname, "
 		"          indisprimary,"
 		"          indisunique,"
-		"          (select string_agg(attname, ',')"
+		"          (select string_agg(format('%I', attname), ',')"
 		"             from pg_attribute"
 		"            where attrelid = r.oid"
 		"              and array[attnum::integer] <@ indkey::integer[]"
@@ -2383,7 +2413,9 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          c.oid,"
 		"          c.condeferrable,"
 		"          c.condeferred,"
-		"          c.conname,"
+		"          case when conname is not null "
+		"               then format('%I', c.conname) "
+		"           end as conname,"
 		"          pg_get_constraintdef(c.oid),"
 		"          format('%s %s %s', "
 		"                 regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -2441,11 +2473,15 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_LIST_NOT_INCL,
 
-		"   select i.oid, n.nspname, i.relname,"
-		"          r.oid, rn.nspname, r.relname,"
+		"   select i.oid, "
+		"          format('%I', n.nspname) as inspname, "
+		"          format('%I', i.relname) as irelname,"
+		"          r.oid, "
+		"          format('%I', rn.nspname) as rnspname, "
+		"          format('%I', r.relname) as rrelname, "
 		"          indisprimary,"
 		"          indisunique,"
-		"          (select string_agg(attname, ',')"
+		"          (select string_agg(format('%I', attname), ',')"
 		"             from pg_attribute"
 		"            where attrelid = r.oid"
 		"              and array[attnum::integer] <@ indkey::integer[]"
@@ -2454,7 +2490,9 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          c.oid,"
 		"          c.condeferrable,"
 		"          c.condeferred,"
-		"          c.conname,"
+		"          case when conname is not null "
+		"               then format('%I', c.conname) "
+		"           end as conname,"
 		"          pg_get_constraintdef(c.oid),"
 		"          format('%s %s %s', "
 		"                 regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -2501,11 +2539,15 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_LIST_EXCL,
 
-		"   select i.oid, n.nspname, i.relname,"
-		"          r.oid, rn.nspname, r.relname,"
+		"   select i.oid, "
+		"          format('%I', n.nspname) as inspname, "
+		"          format('%I', i.relname) as irelname,"
+		"          r.oid, "
+		"          format('%I', rn.nspname) as rnspname, "
+		"          format('%I', r.relname) as rrelname, "
 		"          indisprimary,"
 		"          indisunique,"
-		"          (select string_agg(attname, ',')"
+		"          (select string_agg(format('%I', attname), ',')"
 		"             from pg_attribute"
 		"            where attrelid = r.oid"
 		"              and array[attnum::integer] <@ indkey::integer[]"
@@ -2514,7 +2556,9 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          c.oid,"
 		"          c.condeferrable,"
 		"          c.condeferred,"
-		"          c.conname,"
+		"          case when conname is not null "
+		"               then format('%I', c.conname) "
+		"           end as conname,"
 		"          pg_get_constraintdef(c.oid),"
 		"          format('%s %s %s', "
 		"                 regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -2566,11 +2610,15 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_EXCL_INDEX,
 
-		"   select i.oid, n.nspname, i.relname,"
-		"          r.oid, rn.nspname, r.relname,"
+		"   select i.oid, "
+		"          format('%I', n.nspname) as inspname, "
+		"          format('%I', i.relname) as irelname,"
+		"          r.oid, "
+		"          format('%I', rn.nspname) as rnspname, "
+		"          format('%I', r.relname) as rrelname, "
 		"          indisprimary,"
 		"          indisunique,"
-		"          (select string_agg(attname, ',')"
+		"          (select string_agg(format('%I', attname), ',')"
 		"             from pg_attribute"
 		"            where attrelid = r.oid"
 		"              and array[attnum::integer] <@ indkey::integer[]"
@@ -2579,7 +2627,9 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          c.oid,"
 		"          c.condeferrable,"
 		"          c.condeferred,"
-		"          c.conname,"
+		"          case when conname is not null "
+		"               then format('%I', c.conname) "
+		"           end as conname,"
 		"          pg_get_constraintdef(c.oid),"
 		"          format('%s %s %s', "
 		"                 regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -2626,11 +2676,15 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_LIST_EXCL_INDEX,
 
-		"   select i.oid, n.nspname, i.relname,"
-		"          r.oid, rn.nspname, r.relname,"
+		"   select i.oid, "
+		"          format('%I', n.nspname) as inspname, "
+		"          format('%I', i.relname) as irelname,"
+		"          r.oid, "
+		"          format('%I', rn.nspname) as rnspname, "
+		"          format('%I', r.relname) as rrelname, "
 		"          indisprimary,"
 		"          indisunique,"
-		"          (select string_agg(attname, ',')"
+		"          (select string_agg(format('%I', attname), ',')"
 		"             from pg_attribute"
 		"            where attrelid = r.oid"
 		"              and array[attnum::integer] <@ indkey::integer[]"
@@ -2639,7 +2693,9 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          c.oid,"
 		"          c.condeferrable,"
 		"          c.condeferred,"
-		"          c.conname,"
+		"          case when conname is not null "
+		"               then format('%I', c.conname) "
+		"           end as conname,"
 		"          pg_get_constraintdef(c.oid),"
 		"          format('%s %s %s', "
 		"                 regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -2741,11 +2797,15 @@ schema_list_table_indexes(PGSQL *pgsql,
 	SourceIndexArrayContext context = { { 0 }, indexArray, false };
 
 	char *sql =
-		"   select i.oid, n.nspname, i.relname,"
-		"          r.oid, rn.nspname, r.relname,"
+		"   select i.oid, "
+		"          format('%I', n.nspname) as inspname, "
+		"          format('%I', i.relname) as irelname,"
+		"          r.oid, "
+		"          format('%I', rn.nspname) as rnspname, "
+		"          format('%I', r.relname) as rrelname, "
 		"          indisprimary,"
 		"          indisunique,"
-		"          (select string_agg(attname, ',')"
+		"          (select string_agg(format('%I', attname), ',')"
 		"             from pg_attribute"
 		"            where attrelid = r.oid"
 		"              and array[attnum::integer] <@ indkey::integer[]"
@@ -2754,7 +2814,9 @@ schema_list_table_indexes(PGSQL *pgsql,
 		"          c.oid,"
 		"          c.condeferrable,"
 		"          c.condeferred,"
-		"          c.conname,"
+		"          case when conname is not null "
+		"               then format('%I', c.conname) "
+		"           end as conname,"
 		"          pg_get_constraintdef(c.oid),"
 		"          format('%s %s %s', "
 		"                 regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -3057,7 +3119,7 @@ schema_list_partitions(PGSQL *pgsql, SourceTable *table, uint64_t partSize)
 			" ( "
 			"   select 0, relpages "
 			"     from pg_class "
-			"    where pg_class.oid = '\"%s\".\"%s\"'::regclass "
+			"    where pg_class.oid = '%s'::regclass "
 			" ), "
 			" t (parts) as "
 			" ( "
@@ -3090,7 +3152,7 @@ schema_list_partitions(PGSQL *pgsql, SourceTable *table, uint64_t partSize)
 			"    from ranges "
 			"order by n";
 
-		appendPQExpBuffer(sql, sqlTemplate, table->nspname, table->relname);
+		appendPQExpBuffer(sql, sqlTemplate, table->qname);
 	}
 	else
 	{
@@ -3098,8 +3160,8 @@ schema_list_partitions(PGSQL *pgsql, SourceTable *table, uint64_t partSize)
 			" with "
 			" key_bounds (min, max) as "
 			" ( "
-			"   select min(\"%s\"), max(\"%s\") "
-			"     from \"%s\".\"%s\" "
+			"   select min(%s), max(%s) "
+			"     from %s "
 			" ), "
 			" t (parts) as "
 			" ( "
@@ -3127,9 +3189,7 @@ schema_list_partitions(PGSQL *pgsql, SourceTable *table, uint64_t partSize)
 			"order by n";
 
 		appendPQExpBuffer(sql, sqlTemplate,
-						  table->partKey, table->partKey,
-						  table->nspname, table->relname,
-						  table->nspname, table->relname);
+						  table->partKey, table->partKey, table->qname);
 	}
 
 	if (PQExpBufferBroken(sql))
@@ -3152,8 +3212,8 @@ schema_list_partitions(PGSQL *pgsql, SourceTable *table, uint64_t partSize)
 								   &parseContext, &getPartitionList))
 	{
 		(void) destroyPQExpBuffer(sql);
-		log_error("Failed to compute partition list for table \"%s\".\"%s\"",
-				  table->nspname, table->relname);
+		log_error("Failed to compute partition list for table %s",
+				  table->qname);
 		return false;
 	}
 
@@ -4432,9 +4492,8 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	/* partkey */
 	if (PQgetisnull(result, rowNumber, fnpartkey))
 	{
-		log_debug("Table \"%s\".\"%s\" with oid %u has not part key column",
-				  table->nspname,
-				  table->relname,
+		log_debug("Table %s with oid %u has not part key column",
+				  table->qname,
 				  table->oid);
 	}
 	else
@@ -4444,7 +4503,7 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 
 		if (length >= NAMEDATALEN)
 		{
-			log_error("Partition key column name \"%s\" is %d bytes long, "
+			log_error("Partition key column name %s is %d bytes long, "
 					  "the maximum expected is %d (NAMEDATALEN - 1)",
 					  value, length, NAMEDATALEN - 1);
 			++errors;
@@ -4465,9 +4524,8 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 
 		if (!parseAttributesArray(table, json))
 		{
-			log_error("Failed to parse table \"%s\".\"%s\" attribute array: %s",
-					  table->nspname,
-					  table->relname,
+			log_error("Failed to parse table %s attribute array: %s",
+					  table->qname,
 					  value);
 			++errors;
 		}
@@ -4624,6 +4682,22 @@ parseCurrentSourceSequence(PGresult *result, int rowNumber, SourceSequence *seq)
 		log_error("Sequence name \"%s\" is %d bytes long, "
 				  "the maximum expected is %d (NAMEDATALEN - 1)",
 				  value, length, NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* compute the qualified name from the nspname and relname */
+	length = sformat(seq->qname, sizeof(seq->qname), "%s.%s",
+					 seq->nspname,
+					 seq->relname);
+
+	if (length >= sizeof(seq->qname))
+	{
+		log_error("Qualified seq name \"%s\".\"%s\" is %d bytes long, "
+				  "the maximum expected is %lld (NAMEDATALEN * 2 + 5)",
+				  seq->nspname,
+				  seq->relname,
+				  length,
+				  (long long) sizeof(seq->qname) - 1);
 		++errors;
 	}
 
@@ -4792,6 +4866,22 @@ parseCurrentSourceIndex(PGresult *result, int rowNumber, SourceIndex *index)
 		++errors;
 	}
 
+	/* compute the qualified name from the nspname and relname */
+	length = sformat(index->indexQname, sizeof(index->indexQname), "%s.%s",
+					 index->indexNamespace,
+					 index->indexRelname);
+
+	if (length >= sizeof(index->tableQname))
+	{
+		log_error("Qualified index name \"%s\".\"%s\" is %d bytes long, "
+				  "the maximum expected is %lld (NAMEDATALEN * 2 + 5)",
+				  index->indexNamespace,
+				  index->indexRelname,
+				  length,
+				  (long long) sizeof(index->tableQname) - 1);
+		++errors;
+	}
+
 	/* 4. r.oid */
 	value = PQgetvalue(result, rowNumber, 3);
 
@@ -4822,6 +4912,22 @@ parseCurrentSourceIndex(PGresult *result, int rowNumber, SourceIndex *index)
 		log_error("Index name \"%s\" is %d bytes long, "
 				  "the maximum expected is %d (NAMEDATALEN - 1)",
 				  value, length, NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* compute the qualified name from the nspname and relname */
+	length = sformat(index->tableQname, sizeof(index->tableQname), "%s.%s",
+					 index->tableNamespace,
+					 index->tableRelname);
+
+	if (length >= sizeof(index->tableQname))
+	{
+		log_error("Qualified table name \"%s\".\"%s\" is %d bytes long, "
+				  "the maximum expected is %lld (NAMEDATALEN * 2 + 5)",
+				  index->tableNamespace,
+				  index->tableRelname,
+				  length,
+				  (long long) sizeof(index->tableQname) - 1);
 		++errors;
 	}
 

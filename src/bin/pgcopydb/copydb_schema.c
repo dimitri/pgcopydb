@@ -332,10 +332,9 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 
 			if (source->partsArray.count > 1)
 			{
-				log_info("Table \"%s\".\"%s\" is %s large, "
-						 "%d COPY processes will be used, partitining on \"%s\".",
-						 source->nspname,
-						 source->relname,
+				log_info("Table %s is %s large, "
+						 "%d COPY processes will be used, partitioning on %s.",
+						 source->qname,
 						 source->bytesPretty,
 						 source->partsArray.count,
 						 source->partKey);
@@ -481,11 +480,10 @@ copydb_prepare_index_specs(CopyDataSpec *specs, PGSQL *pgsql)
 
 			if (table == NULL)
 			{
-				log_error("Failed to find table %u (\"%s\".\"%s\") "
+				log_error("Failed to find table %u (%s) "
 						  " in sourceTableHashByOid",
 						  oid,
-						  indexArray->array[i].tableNamespace,
-						  indexArray->array[i].tableRelname);
+						  indexArray->array[i].tableQname);
 				return false;
 			}
 

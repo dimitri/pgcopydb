@@ -429,6 +429,7 @@ copydb_index_array_as_json(SourceIndexArray *indexArray,
 		json_object_set_number(jsIndexObj, "oid", (double) index->indexOid);
 		json_object_set_string(jsIndexObj, "schema", index->indexNamespace);
 		json_object_set_string(jsIndexObj, "name", index->indexRelname);
+		json_object_set_string(jsIndexObj, "qname", index->indexQname);
 
 		json_object_set_boolean(jsIndexObj, "isPrimary", index->isPrimary);
 		json_object_set_boolean(jsIndexObj, "isUnique", index->isUnique);
@@ -447,6 +448,7 @@ copydb_index_array_as_json(SourceIndexArray *indexArray,
 		json_object_set_number(jsTableObj, "oid", (double) index->tableOid);
 		json_object_set_string(jsTableObj, "schema", index->tableNamespace);
 		json_object_set_string(jsTableObj, "name", index->tableRelname);
+		json_object_set_string(jsTableObj, "qname", index->tableQname);
 
 		json_object_set_value(jsIndexObj, "table", jsTable);
 
@@ -508,6 +510,7 @@ copydb_seq_array_as_json(SourceSequenceArray *sequenceArray,
 		json_object_set_number(jsSeqObj, "oid", (double) seq->oid);
 		json_object_set_string(jsSeqObj, "schema", seq->nspname);
 		json_object_set_string(jsSeqObj, "name", seq->relname);
+		json_object_set_string(jsSeqObj, "qname", seq->qname);
 
 		json_object_set_number(jsSeqObj, "last-value", (double) seq->lastValue);
 		json_object_set_boolean(jsSeqObj, "is-called", (double) seq->isCalled);
@@ -723,6 +726,7 @@ copydb_parse_schema_json_file(CopyDataSpec *copySpecs)
 
 		char *schema = (char *) json_object_get_string(jsIndex, "schema");
 		char *name = (char *) json_object_get_string(jsIndex, "name");
+		char *qname = (char *) json_object_get_string(jsIndex, "qname");
 		char *cols = (char *) json_object_get_string(jsIndex, "columns");
 		char *def = (char *) json_object_get_string(jsIndex, "sql");
 		char *listName =
@@ -730,6 +734,7 @@ copydb_parse_schema_json_file(CopyDataSpec *copySpecs)
 
 		strlcpy(index->indexNamespace, schema, sizeof(index->indexNamespace));
 		strlcpy(index->indexRelname, name, sizeof(index->indexRelname));
+		strlcpy(index->indexQname, qname, sizeof(index->indexQname));
 
 		int lenCols = strlen(cols) + 1;
 
@@ -766,9 +771,11 @@ copydb_parse_schema_json_file(CopyDataSpec *copySpecs)
 
 		schema = (char *) json_object_dotget_string(jsIndex, "table.schema");
 		name = (char *) json_object_dotget_string(jsIndex, "table.name");
+		qname = (char *) json_object_dotget_string(jsIndex, "table.qname");
 
 		strlcpy(index->tableNamespace, schema, sizeof(index->tableNamespace));
 		strlcpy(index->tableRelname, name, sizeof(index->tableRelname));
+		strlcpy(index->tableQname, name, sizeof(index->tableQname));
 
 		if (json_object_has_value(jsIndex, "constraint"))
 		{

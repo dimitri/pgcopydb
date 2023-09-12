@@ -245,20 +245,26 @@ typedef struct SourceSequenceArray
 typedef struct SourceIndex
 {
 	uint32_t indexOid;
+	char indexQname[NAMEDATALEN * 2 + 5 + 1];
 	char indexNamespace[NAMEDATALEN];
 	char indexRelname[NAMEDATALEN];
+
 	uint32_t tableOid;
+	char tableQname[NAMEDATALEN * 2 + 5 + 1];
 	char tableNamespace[NAMEDATALEN];
 	char tableRelname[NAMEDATALEN];
+
 	bool isPrimary;
 	bool isUnique;
 	char *indexColumns;         /* malloc'ed area */
 	char *indexDef;             /* malloc'ed area */
+
 	uint32_t constraintOid;
 	bool condeferrable;
 	bool condeferred;
 	char constraintName[NAMEDATALEN];
 	char *constraintDef;        /* malloc'ed area */
+
 	char indexRestoreListName[RESTORE_LIST_NAMEDATALEN];
 	char constraintRestoreListName[RESTORE_LIST_NAMEDATALEN];
 
