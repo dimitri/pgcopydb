@@ -49,10 +49,6 @@ copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql)
 		/* add the current sequence to the sequence Hash-by-OID */
 		HASH_ADD(hh, sourceSeqHashByOid, oid, sizeof(uint32_t), seq);
 
-		sformat(seq->qname, sizeof(seq->qname), "%s.%s",
-				seq->nspname,
-				seq->relname);
-
 		/*
 		 * In case of "permission denied" for SELECT on the sequence object, we
 		 * would then have a broken transaction and all the rest of the loop

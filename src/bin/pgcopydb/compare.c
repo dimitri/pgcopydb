@@ -617,10 +617,9 @@ compare_schemas(CopyDataSpec *copySpecs)
 			if (targetIndexList == NULL)
 			{
 				++diffCount;
-				log_error("Table %s is missing index \"%s\".\"%s\" on target",
+				log_error("Table %s is missing index %s on target",
 						  qname,
-						  sourceIndex->indexNamespace,
-						  sourceIndex->indexRelname);
+						  sourceIndex->indexQname);
 
 				continue;
 			}
@@ -631,43 +630,35 @@ compare_schemas(CopyDataSpec *copySpecs)
 				!streq(sourceIndex->indexRelname, targetIndex->indexRelname))
 			{
 				++diffCount;
-				log_error("Table %s index mismatch: \"%s\".\"%s\" on source, "
-						  "\"%s\".\"%s\" on target",
+				log_error("Table %s index mismatch: %s on source, %s on target",
 						  qname,
-						  sourceIndex->indexNamespace,
-						  sourceIndex->indexRelname,
-						  targetIndex->indexNamespace,
-						  targetIndex->indexRelname);
+						  sourceIndex->indexQname,
+						  targetIndex->indexQname);
 			}
 
 			if (!streq(sourceIndex->indexDef, targetIndex->indexDef))
 			{
 				++diffCount;
-				log_error("Table %s index \"%s\".\"%s\" mismatch "
-						  "on index definition",
+				log_error("Table %s index %s mismatch on index definition",
 						  qname,
-						  sourceIndex->indexNamespace,
-						  sourceIndex->indexRelname);
+						  sourceIndex->indexQname);
 
-				log_info("Source index \"%s\".\"%s\": %s",
-						 sourceIndex->indexNamespace,
-						 sourceIndex->indexRelname,
+				log_info("Source index %s: %s",
+						 sourceIndex->indexQname,
 						 sourceIndex->indexDef);
 
-				log_info("Target index \"%s\".\"%s\": %s",
-						 targetIndex->indexNamespace,
-						 targetIndex->indexRelname,
+				log_info("Target index %s: %s",
+						 targetIndex->indexQname,
 						 targetIndex->indexDef);
 			}
 
 			if (sourceIndex->isPrimary != targetIndex->isPrimary)
 			{
 				++diffCount;
-				log_error("Table %s index \"%s\".\"%s\" is %s on source "
+				log_error("Table %s index %s is %s on source "
 						  "and %s on target",
 						  qname,
-						  sourceIndex->indexNamespace,
-						  sourceIndex->indexRelname,
+						  sourceIndex->indexQname,
 						  sourceIndex->isPrimary ? "primary" : "not primary",
 						  targetIndex->isPrimary ? "primary" : "not primary");
 			}
@@ -675,11 +666,10 @@ compare_schemas(CopyDataSpec *copySpecs)
 			if (sourceIndex->isUnique != targetIndex->isUnique)
 			{
 				++diffCount;
-				log_error("Table %s index \"%s\".\"%s\" is %s on source "
+				log_error("Table %s index %s is %s on source "
 						  "and %s on target",
 						  qname,
-						  sourceIndex->indexNamespace,
-						  sourceIndex->indexRelname,
+						  sourceIndex->indexQname,
 						  sourceIndex->isUnique ? "unique" : "not unique",
 						  targetIndex->isUnique ? "unique" : "not unique");
 			}
@@ -687,12 +677,11 @@ compare_schemas(CopyDataSpec *copySpecs)
 			if (!streq(sourceIndex->constraintName, targetIndex->constraintName))
 			{
 				++diffCount;
-				log_error("Table %s index \"%s\".\"%s\" is supporting "
-						  " constraint named \"%s\" on source "
-						  "and \"%s\" on target",
+				log_error("Table %s index %s is supporting "
+						  " constraint named %s on source "
+						  "and %s on target",
 						  qname,
-						  sourceIndex->indexNamespace,
-						  sourceIndex->indexRelname,
+						  sourceIndex->indexQname,
 						  sourceIndex->constraintName,
 						  targetIndex->constraintName);
 			}
@@ -702,22 +691,19 @@ compare_schemas(CopyDataSpec *copySpecs)
 				 !streq(sourceIndex->constraintDef, targetIndex->constraintDef)))
 			{
 				++diffCount;
-				log_error("Table %s index \"%s\".\"%s\" constraint \"%s\" "
+				log_error("Table %s index %s constraint %s "
 						  "definition mismatch.",
 						  qname,
-						  sourceIndex->indexNamespace,
-						  sourceIndex->indexRelname,
+						  sourceIndex->indexQname,
 						  sourceIndex->constraintName);
 
-				log_info("Source index \"%s\".\"%s\" constraint \"%s\": %s",
-						 sourceIndex->indexNamespace,
-						 sourceIndex->indexRelname,
+				log_info("Source index %s constraint %s: %s",
+						 sourceIndex->indexQname,
 						 sourceIndex->constraintName,
 						 sourceIndex->constraintDef);
 
-				log_info("Target index \"%s\".\"%s\" constraint \"%s\": %s",
-						 targetIndex->indexNamespace,
-						 targetIndex->indexRelname,
+				log_info("Target index %s constraint %s: %s",
+						 targetIndex->indexQname,
 						 targetIndex->constraintName,
 						 targetIndex->constraintDef);
 			}

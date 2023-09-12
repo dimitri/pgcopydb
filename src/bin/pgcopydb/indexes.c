@@ -192,11 +192,10 @@ copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid)
 
 	if (table == NULL)
 	{
-		log_error("Failed to find table %u (\"%s\".\"%s\") "
+		log_error("Failed to find table %u (%s) "
 				  " in sourceTableHashByOid",
 				  oid,
-				  index->tableNamespace,
-				  index->tableRelname);
+				  index->tableQname);
 		return false;
 	}
 
@@ -208,12 +207,10 @@ copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid)
 		return false;
 	}
 
-	log_trace("copydb_create_index_by_oid: %u \"%s.%s\" on \"%s\".\"%s\"",
+	log_trace("copydb_create_index_by_oid: %u %s on %s",
 			  indexOid,
-			  index->indexNamespace,
-			  index->indexRelname,
-			  table->nspname,
-			  table->relname);
+			  index->indexQname,
+			  table->qname);
 
 	/*
 	 * Add IF NOT EXISTS clause when the --resume option has been used, or when
@@ -264,9 +261,8 @@ copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid)
 
 		if (!copydb_create_constraints(specs, table))
 		{
-			log_error("Failed to create constraints for table \"%s\".\"%s\"",
-					  table->nspname,
-					  table->relname);
+			log_error("Failed to create constraints for table %s",
+					  table->qname);
 			return false;
 		}
 
@@ -274,9 +270,8 @@ copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid)
 		{
 			if (!vacuum_add_table(specs, table->oid))
 			{
-				log_error("Failed to queue VACUUM ANALYZE \"%s\".\"%s\" [%u]",
-						  table->nspname,
-						  table->relname,
+				log_error("Failed to queue VACUUM ANALYZE %s [%u]",
+						  table->qname,
 						  table->oid);
 				return false;
 			}
@@ -346,9 +341,8 @@ copydb_table_indexes_are_done(CopyDataSpec *specs,
 		if (!create_table_index_file(table, tablePaths->idxListFile))
 		{
 			/* this only means summary is missing some indexing information */
-			log_warn("Failed to create table \"%s\".\"%s\" index list file \"%s\"",
-					 table->nspname,
-					 table->relname,
+			log_warn("Failed to create table %s index list file \"%s\"",
+					 table->qname,
 					 tablePaths->idxListFile);
 		}
 	}
@@ -381,9 +375,8 @@ copydb_add_table_indexes(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 			.data.oid = index->indexOid
 		};
 
-		log_trace("Queueing index \"%s\".\"%s\" [%u] for table %s [%u]",
-				  index->indexNamespace,
-				  index->indexRelname,
+		log_trace("Queueing index %s [%u] for table %s [%u]",
+				  index->indexQname,
 				  mesg.data.oid,
 				  tableSpecs->sourceTable->qname,
 				  tableSpecs->sourceTable->oid);
@@ -721,12 +714,11 @@ copydb_create_index(const char *pguri,
 	{
 		skipCreateIndex = true;
 		log_notice("Skipping concurrent build of index "
-				   "\"%s\" for constraint %s on \"%s\".\"%s\", "
+				   "%s for constraint %s on %s, "
 				   "it is not a UNIQUE or a PRIMARY constraint",
-				   index->indexRelname,
+				   index->indexQname,
 				   index->constraintDef,
-				   index->tableNamespace,
-				   index->tableRelname);
+				   index->tableQname);
 	}
 
 	if (!copydb_index_is_being_processed(index,
@@ -1062,11 +1054,10 @@ copydb_prepare_create_constraint_command(SourceIndex *index, char **command)
 		char *constraintType = index->isPrimary ? "PRIMARY KEY" : "UNIQUE";
 
 		appendPQExpBuffer(cmd,
-						  "ALTER TABLE \"%s\".\"%s\" "
-						  "ADD CONSTRAINT \"%s\" %s "
-						  "USING INDEX \"%s\"",
-						  index->tableNamespace,
-						  index->tableRelname,
+						  "ALTER TABLE %s "
+						  "ADD CONSTRAINT %s %s "
+						  "USING INDEX %s",
+						  index->tableQname,
 						  index->constraintName,
 						  constraintType,
 						  index->indexRelname);
@@ -1074,10 +1065,9 @@ copydb_prepare_create_constraint_command(SourceIndex *index, char **command)
 	else
 	{
 		appendPQExpBuffer(cmd,
-						  "ALTER TABLE \"%s\".\"%s\" "
-						  "ADD CONSTRAINT \"%s\" %s ",
-						  index->tableNamespace,
-						  index->tableRelname,
+						  "ALTER TABLE %s "
+						  "ADD CONSTRAINT %s %s ",
+						  index->tableQname,
 						  index->constraintName,
 						  index->constraintDef);
 	}
@@ -1167,10 +1157,9 @@ copydb_create_constraints(CopyDataSpec *specs, SourceTable *table)
 			specs->section == DATA_SECTION_ALL ? LOG_NOTICE : LOG_INFO;
 
 		log_level(logLevel,
-				  "Found %d indexes on target database for table \"%s\".\"%s\"",
+				  "Found %d indexes on target database for table %s",
 				  dstIndexArray.count,
-				  table->nspname,
-				  table->relname);
+				  table->qname);
 	}
 
 	SourceIndexList *indexListEntry = table->firstIndex;

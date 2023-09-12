@@ -1185,16 +1185,14 @@ cli_list_table_parts(int argc, char **argv)
 
 	if (table->partsArray.count <= 1)
 	{
-		log_info("Table \"%s\".\"%s\" (%s) will not be split",
-				 table->nspname,
-				 table->relname,
+		log_info("Table %s (%s) will not be split",
+				 table->qname,
 				 table->bytesPretty);
 		exit(EXIT_CODE_QUIT);
 	}
 
-	log_info("Table \"%s\".\"%s\" COPY will be split %d-ways",
-			 table->nspname,
-			 table->relname,
+	log_info("Table %s COPY will be split %d-ways",
+			 table->qname,
 			 table->partsArray.count);
 
 	fformat(stdout, "%12s | %12s | %12s | %12s\n",

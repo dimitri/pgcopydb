@@ -531,11 +531,10 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, uint32_t oid, uint32_t part)
 
 	if (table->partsArray.count < part)
 	{
-		log_error("Failed to find part %d for table \"%s\".\"%s\" (%u), "
+		log_error("Failed to find part %d for table %s (%u), "
 				  "which has only %d parts",
 				  part,
-				  table->nspname,
-				  table->relname,
+				  table->qname,
 				  table->oid,
 				  table->partsArray.count);
 		return false;
@@ -549,10 +548,9 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, uint32_t oid, uint32_t part)
 		return false;
 	}
 
-	log_trace("copydb_copy_data_by_oid: %u \"%s.%s\", part %d",
+	log_trace("copydb_copy_data_by_oid: %u %s, part %d",
 			  oid,
-			  table->nspname,
-			  table->relname,
+			  table->qname,
 			  part);
 
 	char psTitle[BUFSIZE] = { 0 };
@@ -654,9 +652,8 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, uint32_t oid, uint32_t part)
 
 					if (!vacuum_add_table(specs, sourceTable->oid))
 					{
-						log_error("Failed to queue VACUUM ANALYZE \"%s\".\"%s\" [%u]",
-								  sourceTable->nspname,
-								  sourceTable->relname,
+						log_error("Failed to queue VACUUM ANALYZE %s [%u]",
+								  sourceTable->qname,
 								  sourceTable->oid);
 						return false;
 					}
@@ -1144,7 +1141,7 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 				appendPQExpBufferStr(query, ", ");
 			}
 
-			appendPQExpBuffer(query, "\"%s\"", attname);
+			appendPQExpBuffer(query, "%s", attname);
 		}
 
 		appendPQExpBuffer(query, " FROM %s ", tableSpecs->sourceTable->qname);
@@ -1180,7 +1177,7 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 			else
 			{
 				appendPQExpBuffer(query,
-								  " WHERE \"%s\" BETWEEN %lld AND %lld ",
+								  " WHERE %s BETWEEN %lld AND %lld ",
 								  tableSpecs->part.partKey,
 								  (long long) tableSpecs->part.min,
 								  (long long) tableSpecs->part.max);
@@ -1209,7 +1206,7 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 				appendPQExpBufferStr(query, ", ");
 			}
 
-			appendPQExpBuffer(query, "\"%s\"", attname);
+			appendPQExpBuffer(query, "%s", attname);
 		}
 
 		if (table->attributes.count > 0)
