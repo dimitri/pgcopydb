@@ -614,14 +614,20 @@ copydb_prepare_dump_paths(CopyFilePaths *cfPaths, DumpPaths *dumpPaths)
 	sformat(dumpPaths->preFilename, MAXPGPATH, "%s/%s",
 			cfPaths->schemadir, "pre.dump");
 
+	sformat(dumpPaths->preListOutFilename, MAXPGPATH, "%s/%s",
+			cfPaths->schemadir, "pre-out.list");
+
+	sformat(dumpPaths->preListFilename, MAXPGPATH, "%s/%s",
+			cfPaths->schemadir, "pre-filtered.list");
+
 	sformat(dumpPaths->postFilename, MAXPGPATH, "%s/%s",
 			cfPaths->schemadir, "post.dump");
 
-	sformat(dumpPaths->preListFilename, MAXPGPATH, "%s/%s",
-			cfPaths->schemadir, "pre.list");
+	sformat(dumpPaths->postListOutFilename, MAXPGPATH, "%s/%s",
+			cfPaths->schemadir, "post-out.list");
 
 	sformat(dumpPaths->postListFilename, MAXPGPATH, "%s/%s",
-			cfPaths->schemadir, "post.list");
+			cfPaths->schemadir, "post-filtered.list");
 
 	return true;
 }

@@ -133,10 +133,12 @@ bool pg_restore_db(PostgresPaths *pgPaths,
 				   const char *listFilename,
 				   RestoreOptions options);
 
-bool pg_restore_list(PostgresPaths *pgPaths, const char *filename,
+bool pg_restore_list(PostgresPaths *pgPaths,
+					 const char *restoreFilename,
+					 const char *listFilename,
 					 ArchiveContentArray *archive);
 
-bool parse_archive_list(char *list, ArchiveContentArray *archive);
+bool parse_archive_list(const char *filename, ArchiveContentArray *archive);
 
 bool parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item);
 

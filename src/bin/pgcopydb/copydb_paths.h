@@ -94,10 +94,12 @@ typedef struct DumpPaths
 	char extnspFilename[MAXPGPATH];  /* pg_dump --schema-only -n ... */
 
 	char preFilename[MAXPGPATH];     /* pg_dump --section=pre-data */
-	char preListFilename[MAXPGPATH]; /* pg_restore --list */
+	char preListOutFilename[MAXPGPATH]; /* pg_restore --list */
+	char preListFilename[MAXPGPATH]; /* pg_restore --use-list */
 
 	char postFilename[MAXPGPATH];     /* pg_dump --section=post-data */
-	char postListFilename[MAXPGPATH]; /* pg_restore --list */
+	char postListOutFilename[MAXPGPATH]; /* pg_restore --list */
+	char postListFilename[MAXPGPATH];    /* pg_restore --use-list */
 } DumpPaths;
 
 
