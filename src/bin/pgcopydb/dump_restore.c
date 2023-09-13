@@ -312,6 +312,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 {
 	char *dumpFilename = NULL;
 	char *listFilename = NULL;
+	char *listOutFilename = NULL;
 
 	switch (section)
 	{
@@ -319,6 +320,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 		{
 			dumpFilename = specs->dumpPaths.preFilename;
 			listFilename = specs->dumpPaths.preListFilename;
+			listOutFilename = specs->dumpPaths.preListOutFilename;
 			break;
 		}
 
@@ -326,6 +328,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 		{
 			dumpFilename = specs->dumpPaths.postFilename;
 			listFilename = specs->dumpPaths.postListFilename;
+			listOutFilename = specs->dumpPaths.postListOutFilename;
 			break;
 		}
 
@@ -350,13 +353,16 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 	 *
 	 * Here's how to filter out some objects with pg_restore:
 	 *
-	 *   1. pg_restore -f- --list post.dump > post.list
+	 *   1. pg_restore -f out.list --list post.dump
 	 *   2. edit post.list to comment out lines
-	 *   3. pg_restore --use-list post.list post.dump
+	 *   3. pg_restore --use-list filtered.list post.dump
 	 */
 	ArchiveContentArray contents = { 0 };
 
-	if (!pg_restore_list(&(specs->pgPaths), dumpFilename, &contents))
+	if (!pg_restore_list(&(specs->pgPaths),
+						 dumpFilename,
+						 listOutFilename,
+						 &contents))
 	{
 		/* errors have already been logged */
 		return false;
@@ -475,6 +481,8 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 		destroyPQExpBuffer(listContents);
 		return false;
 	}
+
+	log_notice("Write filtered pg_restore list file at \"%s\"", listFilename);
 
 	if (!write_file(listContents->data, listContents->len, listFilename))
 	{

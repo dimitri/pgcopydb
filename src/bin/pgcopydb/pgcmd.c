@@ -914,33 +914,56 @@ pg_restore_db(PostgresPaths *pgPaths,
  * format dump file and returns an array of pg_dump archive objects.
  */
 bool
-pg_restore_list(PostgresPaths *pgPaths, const char *filename,
+pg_restore_list(PostgresPaths *pgPaths,
+				const char *restoreFilename,
+				const char *listFilename,
 				ArchiveContentArray *archive)
 {
-	Program prog =
-		run_program(pgPaths->pg_restore, "-f-", "-l", filename, NULL);
+	char *args[PG_CMD_MAX_ARG];
+	int argsIndex = 0;
 
+	args[argsIndex++] = (char *) pgPaths->pg_restore;
+
+	args[argsIndex++] = "-f";
+	args[argsIndex++] = (char *) listFilename;
+
+	args[argsIndex++] = "-l";
+	args[argsIndex++] = (char *) restoreFilename;
+
+	args[argsIndex] = NULL;
+
+	/*
+	 * We do not want to call setsid() when running pg_dump.
+	 */
+	Program program = { 0 };
+
+	(void) initialize_program(&program, args, false);
+	program.processBuffer = &processBufferCallback;
+
+	/* log the exact command line we're using */
 	char command[BUFSIZE] = { 0 };
-	(void) snprintf_program_command_line(&prog, command, BUFSIZE);
+	(void) snprintf_program_command_line(&program, command, BUFSIZE);
 
 	log_notice("%s", command);
 
-	if (prog.returnCode != 0)
+	(void) execute_subprogram(&program);
+
+	if (program.returnCode != 0)
 	{
-		log_error("Failed to run pg_restore: exit code %d", prog.returnCode);
-		free_program(&prog);
+		log_error("Failed to run pg_restore: exit code %d", program.returnCode);
+		free_program(&program);
 
 		return false;
 	}
 
-	if (!parse_archive_list(prog.stdOut, archive))
+	if (!parse_archive_list(listFilename, archive))
 	{
 		/* errors have already been logged */
-		free_program(&prog);
+		free_program(&program);
 		return false;
 	}
 
-	free_program(&prog);
+	free_program(&program);
 	return true;
 }
 
@@ -1033,11 +1056,20 @@ struct StringWithLength pgRestoreDescriptionArray[] = {
 
 
 bool
-parse_archive_list(char *list, ArchiveContentArray *contents)
+parse_archive_list(const char *filename, ArchiveContentArray *contents)
 {
-	int lineCount = countLines(list);
+	char *buffer = NULL;
+	long fileSize = 0L;
+
+	if (!read_file(filename, &buffer, &fileSize))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	int lineCount = countLines(buffer);
 	char **lines = (char **) calloc(lineCount, sizeof(char *));
-	int splitCount = splitLines(list, lines, lineCount);
+	int splitCount = splitLines(buffer, lines, lineCount);
 
 	if (splitCount != lineCount)
 	{
