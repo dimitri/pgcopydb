@@ -101,7 +101,7 @@ static CommandLine restore_schema_parse_list_command =
 	make_command(
 		"parse-list",
 		"Parse pg_restore --list output from custom file",
-		" --dir <dir> [ --source <URI> ] --target <URI> ",
+		" [ <pre.list> ] ",
 		"  --source             Postgres URI to the source database\n"
 		"  --target             Postgres URI to the target database\n"
 		"  --dir                Work directory to use\n"
@@ -477,6 +477,38 @@ cli_restore_roles(int argc, char **argv)
 static void
 cli_restore_schema_parse_list(int argc, char **argv)
 {
+	if (argc == 1)
+	{
+		char *filename = argv[0];
+
+		log_info("Parsing Archive Content pre.list file: \"%s\"", filename);
+
+		ArchiveContentArray contents = { 0 };
+
+		if (!parse_archive_list(filename, &contents))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		log_notice("Read %d archive items in \"%s\"", contents.count, filename);
+
+		for (int i = 0; i < contents.count; i++)
+		{
+			ArchiveContentItem *item = &(contents.array[i]);
+
+			fformat(stdout,
+					"%d; %u %u %s %s\n",
+					item->dumpId,
+					item->catalogOid,
+					item->objectOid,
+					item->desc,
+					item->restoreListName);
+		}
+
+		exit(EXIT_CODE_QUIT);
+	}
+
 	CopyDataSpec copySpecs = { 0 };
 
 	(void) cli_restore_prepare_specs(&copySpecs);
