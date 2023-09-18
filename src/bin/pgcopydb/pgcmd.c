@@ -3,6 +3,7 @@
  *   API for running PostgreSQL commands such as pg_dump and pg_restore.
  */
 
+#include <ctype.h>
 #include <dirent.h>
 #include <inttypes.h>
 #include <stdlib.h>
@@ -982,79 +983,85 @@ pg_restore_list(PostgresPaths *pgPaths,
  *
  */
 
-struct StringWithLength
+struct ArchiveItemDescMapping
 {
+	ArchiveItemDesc desc;
 	int len;
 	char str[BUFSIZE];
 };
 
-#define INSERT_STRING_WITH_LENGTH(s) { strlen(s), s }
+/* remember to skip the \0 at the end of the static string here */
+#define INSERT_MAPPING(d, s) { d, sizeof(s) - 1, s }
 
 /*
  * List manually processed from describeDumpableObject in
  * postgres/src/bin/pg_dump/pg_dump_sort.c
  */
-struct StringWithLength pgRestoreDescriptionArray[] = {
-	INSERT_STRING_WITH_LENGTH("ACCESS METHOD"),
-	INSERT_STRING_WITH_LENGTH("ACL"),
-	INSERT_STRING_WITH_LENGTH("AGGREGATE"),
-	INSERT_STRING_WITH_LENGTH("ATTRDEF"),
-	INSERT_STRING_WITH_LENGTH("BLOB DATA"),
-	INSERT_STRING_WITH_LENGTH("BLOB"),
-	INSERT_STRING_WITH_LENGTH("CAST"),
-	INSERT_STRING_WITH_LENGTH("COLLATION"),
-	INSERT_STRING_WITH_LENGTH("COMMENT"),
-	INSERT_STRING_WITH_LENGTH("CONSTRAINT"),
-	INSERT_STRING_WITH_LENGTH("CONVERSION"),
-	INSERT_STRING_WITH_LENGTH("DEFAULT ACL"),
-	INSERT_STRING_WITH_LENGTH("DEFAULT"),
-	INSERT_STRING_WITH_LENGTH("DOMAIN"),
-	INSERT_STRING_WITH_LENGTH("DUMMY TYPE"),
-	INSERT_STRING_WITH_LENGTH("EVENT TRIGGER"),
-	INSERT_STRING_WITH_LENGTH("EXTENSION"),
-	INSERT_STRING_WITH_LENGTH("FK CONSTRAINT"),
-	INSERT_STRING_WITH_LENGTH("FOREIGN DATA WRAPPER"),
-	INSERT_STRING_WITH_LENGTH("FOREIGN SERVER"),
-	INSERT_STRING_WITH_LENGTH("FOREIGN TABLE"),
-	INSERT_STRING_WITH_LENGTH("FUNCTION"),
-	INSERT_STRING_WITH_LENGTH("INDEX ATTACH"),
-	INSERT_STRING_WITH_LENGTH("INDEX"),
-	INSERT_STRING_WITH_LENGTH("MATERIALIZED VIEW"),
-	INSERT_STRING_WITH_LENGTH("OPERATOR CLASS"),
-	INSERT_STRING_WITH_LENGTH("OPERATOR FAMILY"),
-	INSERT_STRING_WITH_LENGTH("OPERATOR"),
-	INSERT_STRING_WITH_LENGTH("POLICY"),
-	INSERT_STRING_WITH_LENGTH("PROCEDURAL LANGUAGE"),
-	INSERT_STRING_WITH_LENGTH("PROCEDURE"),
-	INSERT_STRING_WITH_LENGTH("PUBLICATION TABLES IN SCHEMA"),
-	INSERT_STRING_WITH_LENGTH("PUBLICATION TABLE"),
-	INSERT_STRING_WITH_LENGTH("PUBLICATION"),
-	INSERT_STRING_WITH_LENGTH("REFRESH MATERIALIZED VIEW"),
-	INSERT_STRING_WITH_LENGTH("RULE"),
-	INSERT_STRING_WITH_LENGTH("SCHEMA"),
-	INSERT_STRING_WITH_LENGTH("SEQUENCE OWNED BY"),
-	INSERT_STRING_WITH_LENGTH("SEQUENCE SET"),
-	INSERT_STRING_WITH_LENGTH("SEQUENCE"),
-	INSERT_STRING_WITH_LENGTH("SERVER"),
-	INSERT_STRING_WITH_LENGTH("SHELL TYPE"),
-	INSERT_STRING_WITH_LENGTH("STATISTICS"),
-	INSERT_STRING_WITH_LENGTH("SUBSCRIPTION"),
-	INSERT_STRING_WITH_LENGTH("TABLE ATTACH"),
-	INSERT_STRING_WITH_LENGTH("TABLE DATA"),
-	INSERT_STRING_WITH_LENGTH("TABLE"),
-	INSERT_STRING_WITH_LENGTH("TEXT SEARCH CONFIGURATION"),
-	INSERT_STRING_WITH_LENGTH("TEXT SEARCH DICTIONARY"),
-	INSERT_STRING_WITH_LENGTH("TEXT SEARCH PARSER"),
-	INSERT_STRING_WITH_LENGTH("TEXT SEARCH TEMPLATE"),
-	INSERT_STRING_WITH_LENGTH("TRANSFORM"),
-	INSERT_STRING_WITH_LENGTH("TRIGGER"),
-	INSERT_STRING_WITH_LENGTH("TYPE"),
-	INSERT_STRING_WITH_LENGTH("USER MAPPING"),
-	INSERT_STRING_WITH_LENGTH("VIEW"),
-	{ 0, "" }
+struct ArchiveItemDescMapping pgRestoreDescriptionArray[] = {
+	INSERT_MAPPING(ARCHIVE_TAG_ACCESS_METHOD, "ACCESS METHOD"),
+	INSERT_MAPPING(ARCHIVE_TAG_ACL, "ACL"),
+	INSERT_MAPPING(ARCHIVE_TAG_AGGREGATE, "AGGREGATE"),
+	INSERT_MAPPING(ARCHIVE_TAG_ATTRDEF, "ATTRDEF"),
+	INSERT_MAPPING(ARCHIVE_TAG_BLOB_DATA, "BLOB DATA"),
+	INSERT_MAPPING(ARCHIVE_TAG_BLOB, "BLOB"),
+	INSERT_MAPPING(ARCHIVE_TAG_CAST, "CAST"),
+	INSERT_MAPPING(ARCHIVE_TAG_COLLATION, "COLLATION"),
+	INSERT_MAPPING(ARCHIVE_TAG_COMMENT, "COMMENT"),
+	INSERT_MAPPING(ARCHIVE_TAG_CONSTRAINT, "CONSTRAINT"),
+	INSERT_MAPPING(ARCHIVE_TAG_CONVERSION, "CONVERSION"),
+	INSERT_MAPPING(ARCHIVE_TAG_DEFAULT_ACL, "DEFAULT ACL"),
+	INSERT_MAPPING(ARCHIVE_TAG_DEFAULT, "DEFAULT"),
+	INSERT_MAPPING(ARCHIVE_TAG_DOMAIN, "DOMAIN"),
+	INSERT_MAPPING(ARCHIVE_TAG_DUMMY_TYPE, "DUMMY TYPE"),
+	INSERT_MAPPING(ARCHIVE_TAG_EVENT_TRIGGER, "EVENT TRIGGER"),
+	INSERT_MAPPING(ARCHIVE_TAG_EXTENSION, "EXTENSION"),
+	INSERT_MAPPING(ARCHIVE_TAG_FK_CONSTRAINT, "FK CONSTRAINT"),
+	INSERT_MAPPING(ARCHIVE_TAG_FOREIGN_DATA_WRAPPER, "FOREIGN DATA WRAPPER"),
+	INSERT_MAPPING(ARCHIVE_TAG_FOREIGN_SERVER, "FOREIGN SERVER"),
+	INSERT_MAPPING(ARCHIVE_TAG_FOREIGN_TABLE, "FOREIGN TABLE"),
+	INSERT_MAPPING(ARCHIVE_TAG_FUNCTION, "FUNCTION"),
+	INSERT_MAPPING(ARCHIVE_TAG_INDEX_ATTACH, "INDEX ATTACH"),
+	INSERT_MAPPING(ARCHIVE_TAG_INDEX, "INDEX"),
+	INSERT_MAPPING(ARCHIVE_TAG_MATERIALIZED_VIEW, "MATERIALIZED VIEW"),
+	INSERT_MAPPING(ARCHIVE_TAG_OPERATOR_CLASS, "OPERATOR CLASS"),
+	INSERT_MAPPING(ARCHIVE_TAG_OPERATOR_FAMILY, "OPERATOR FAMILY"),
+	INSERT_MAPPING(ARCHIVE_TAG_OPERATOR, "OPERATOR"),
+	INSERT_MAPPING(ARCHIVE_TAG_POLICY, "POLICY"),
+	INSERT_MAPPING(ARCHIVE_TAG_PROCEDURAL_LANGUAGE, "PROCEDURAL LANGUAGE"),
+	INSERT_MAPPING(ARCHIVE_TAG_PROCEDURE, "PROCEDURE"),
+	INSERT_MAPPING(ARCHIVE_TAG_PUBLICATION_TABLES_IN_SCHEMA,
+				   "PUBLICATION TABLES IN SCHEMA"),
+	INSERT_MAPPING(ARCHIVE_TAG_PUBLICATION_TABLE, "PUBLICATION TABLE"),
+	INSERT_MAPPING(ARCHIVE_TAG_PUBLICATION, "PUBLICATION"),
+	INSERT_MAPPING(ARCHIVE_TAG_REFRESH_MATERIALIZED_VIEW, "REFRESH MATERIALIZED VIEW"),
+	INSERT_MAPPING(ARCHIVE_TAG_RULE, "RULE"),
+	INSERT_MAPPING(ARCHIVE_TAG_SCHEMA, "SCHEMA"),
+	INSERT_MAPPING(ARCHIVE_TAG_SEQUENCE_OWNED_BY, "SEQUENCE OWNED BY"),
+	INSERT_MAPPING(ARCHIVE_TAG_SEQUENCE_SET, "SEQUENCE SET"),
+	INSERT_MAPPING(ARCHIVE_TAG_SEQUENCE, "SEQUENCE"),
+	INSERT_MAPPING(ARCHIVE_TAG_SERVER, "SERVER"),
+	INSERT_MAPPING(ARCHIVE_TAG_SHELL_TYPE, "SHELL TYPE"),
+	INSERT_MAPPING(ARCHIVE_TAG_STATISTICS, "STATISTICS"),
+	INSERT_MAPPING(ARCHIVE_TAG_SUBSCRIPTION, "SUBSCRIPTION"),
+	INSERT_MAPPING(ARCHIVE_TAG_TABLE_ATTACH, "TABLE ATTACH"),
+	INSERT_MAPPING(ARCHIVE_TAG_TABLE_DATA, "TABLE DATA"),
+	INSERT_MAPPING(ARCHIVE_TAG_TABLE, "TABLE"),
+	INSERT_MAPPING(ARCHIVE_TAG_TEXT_SEARCH_CONFIGURATION, "TEXT SEARCH CONFIGURATION"),
+	INSERT_MAPPING(ARCHIVE_TAG_TEXT_SEARCH_DICTIONARY, "TEXT SEARCH DICTIONARY"),
+	INSERT_MAPPING(ARCHIVE_TAG_TEXT_SEARCH_PARSER, "TEXT SEARCH PARSER"),
+	INSERT_MAPPING(ARCHIVE_TAG_TEXT_SEARCH_TEMPLATE, "TEXT SEARCH TEMPLATE"),
+	INSERT_MAPPING(ARCHIVE_TAG_TRANSFORM, "TRANSFORM"),
+	INSERT_MAPPING(ARCHIVE_TAG_TRIGGER, "TRIGGER"),
+	INSERT_MAPPING(ARCHIVE_TAG_TYPE, "TYPE"),
+	INSERT_MAPPING(ARCHIVE_TAG_USER_MAPPING, "USER MAPPING"),
+	INSERT_MAPPING(ARCHIVE_TAG_VIEW, "VIEW"),
+	{ ARCHIVE_TAG_UNKNOWN, 0, "" }
 };
 
 
+/*
+ * parse_archive_list implementation follows, see above for details/comments.
+ */
 bool
 parse_archive_list(const char *filename, ArchiveContentArray *contents)
 {
@@ -1080,122 +1087,278 @@ parse_archive_list(const char *filename, ArchiveContentArray *contents)
 		return false;
 	}
 
-	/* the pg_restore --list preamble is 15 lines long */
-	int objectCount = lineCount - 15;
-
 	contents->count = 0;
 	contents->array =
-		(ArchiveContentItem *) malloc(objectCount * sizeof(ArchiveContentItem));
+		(ArchiveContentItem *) calloc(lineCount, sizeof(ArchiveContentItem));
 
 	for (int lineNumber = 0; lineNumber < lineCount; lineNumber++)
 	{
 		ArchiveContentItem *item = &(contents->array[contents->count]);
 
-		char *ptr = lines[lineNumber];
-		char *sep = strchr(ptr, ';');
+		char *line = lines[lineNumber];
 
-		/* skip lines that start with a separator */
-		if (sep == NULL || sep == ptr)
+		/* skip empty lines and lines that start with a semi-colon (comment) */
+		if (line == NULL || *line == '\0' || *line == ';')
 		{
 			continue;
 		}
 
-		/* parse the archive dumpId before the separator */
-		*sep = '\0';
-
-		if (!stringToInt(ptr, &(item->dumpId)))
+		if (!parse_archive_list_entry(item, line))
 		{
-			log_error("Failed to parse dumpId \"%s\" from pg_restore --list",
-					  ptr);
+			log_error("Failed to parse line %d of \"%s\", "
+					  "see above for details",
+					  lineNumber,
+					  filename);
 			return false;
 		}
 
-		/* skip "; " */
-		ptr = sep + 2;
-		sep = strchr(ptr, ' ');
+		/* use same format as file input */
+		log_trace("parse_archive_list: %u; %u %u %s %s",
+				  item->dumpId,
+				  item->catalogOid,
+				  item->objectOid,
+				  item->description,
+				  item->restoreListName);
 
-		if (sep == NULL)
+		if (item->desc == ARCHIVE_TAG_UNKNOWN ||
+			IS_EMPTY_STRING_BUFFER(item->description))
 		{
-			log_error("Failed to parse pg_restore --list output");
-			return false;
-		}
-
-		*sep = '\0';
-
-		if (!stringToUInt32(ptr, &(item->catalogOid)))
-		{
-			log_error("Failed to parse catalog OID \"%s\" from pg_restore --list",
-					  ptr);
-			return false;
-		}
-
-		/* skip " " */
-		ptr = sep + 1;
-		sep = strchr(ptr, ' ');
-
-		if (sep == NULL)
-		{
-			log_error("Failed to parse pg_restore --list output");
-			return false;
-		}
-
-		*sep = '\0';
-
-		if (!stringToUInt32(ptr, &(item->objectOid)))
-		{
-			log_error("Failed to parse OID \"%s\" from pg_restore --list",
-					  ptr);
-			return false;
-		}
-
-		/* skip " " */
-		ptr = sep + 1;
-
-		for (int i = 0; pgRestoreDescriptionArray[i].len != 0; i++)
-		{
-			if (strncmp(ptr,
-						pgRestoreDescriptionArray[i].str,
-						pgRestoreDescriptionArray[i].len) == 0)
-			{
-				/*
-				 * Some pg_restore archive catalog TOC entries have a quite a
-				 * special restoreListName, that needs some tweaking to be able
-				 * to match it to the normal one we have in our hash tables.
-				 *
-				 */
-				if (strcmp(pgRestoreDescriptionArray[i].str, "ACL") == 0 ||
-					strcmp(pgRestoreDescriptionArray[i].str, "COMMENT") == 0)
-				{
-					item->isCompositeTag = true;
-
-					/* ignore errors */
-					if (!parse_archive_acl_or_comment(ptr, item))
-					{
-						log_debug("Failed to parse ACL or COMMENT: %s", ptr);
-					}
-				}
-				else
-				{
-					strlcpy(item->desc,
-							pgRestoreDescriptionArray[i].str,
-							sizeof(item->desc));
-
-					strlcpy(item->restoreListName,
-							ptr + pgRestoreDescriptionArray[i].len + 1,
-							sizeof(item->restoreListName));
-				}
-				break;
-			}
-		}
-
-		if (IS_EMPTY_STRING_BUFFER(item->desc))
-		{
-			log_warn("Failed to parse desc \"%s\"", ptr);
+			log_warn("Failed to parse desc \"%s\"", line);
 		}
 
 		++contents->count;
 	}
 
+	return true;
+}
+
+
+/*
+ * parse_archive_list_entry parses a pg_restore archive TOC line such as the
+ * following:
+ *
+ * 20; 2615 680978 SCHEMA - pgcopydb dim
+ * 662; 1247 466596 DOMAIN public bıgınt postgres
+ * 665; 1247 466598 TYPE public mpaa_rating postgres
+ *
+ * parse_archive_list_entry does not deal with empty lines or commented lines.
+ */
+bool
+parse_archive_list_entry(ArchiveContentItem *item, const char *line)
+{
+	ArchiveToken token = { .ptr = (char *) line };
+
+	/* 1. archive item dumpId */
+	if (!tokenize_archive_list_entry(&token) ||
+		token.type != ARCHIVE_TOKEN_OID)
+	{
+		log_error("Failed to parse Archive TOC dumpId in: %s", line);
+		return false;
+	}
+
+	item->dumpId = token.oid;
+
+	/* 2. semicolon then space */
+	if (!tokenize_archive_list_entry(&token) ||
+		token.type != ARCHIVE_TOKEN_SEMICOLON)
+	{
+		log_error("Failed to parse Archive TOC: %s", line);
+		return false;
+	}
+
+	if (!tokenize_archive_list_entry(&token) ||
+		token.type != ARCHIVE_TOKEN_SPACE)
+	{
+		log_error("Failed to parse Archive TOC: %s", line);
+		return false;
+	}
+
+	/* 3. catalogOid */
+	if (!tokenize_archive_list_entry(&token) ||
+		token.type != ARCHIVE_TOKEN_OID)
+	{
+		log_error("Failed to parse Archive TOC catalogOid in: %s", line);
+		return false;
+	}
+
+	item->catalogOid = token.oid;
+
+	/* 4. space */
+	if (!tokenize_archive_list_entry(&token) ||
+		token.type != ARCHIVE_TOKEN_SPACE)
+	{
+		log_error("Failed to parse Archive TOC: %s", line);
+		return false;
+	}
+
+	/* 5. objectOid */
+	if (!tokenize_archive_list_entry(&token) ||
+		token.type != ARCHIVE_TOKEN_OID)
+	{
+		log_error("Failed to parse Archive TOC objectOid in: %s", line);
+		return false;
+	}
+
+	item->objectOid = token.oid;
+
+	/* 6. space */
+	if (!tokenize_archive_list_entry(&token) ||
+		token.type != ARCHIVE_TOKEN_SPACE)
+	{
+		log_error("Failed to parse Archive TOC: %s", line);
+		return false;
+	}
+
+	/* 7. desc */
+	char *start = token.ptr;
+
+	if (!tokenize_archive_list_entry(&token) ||
+		token.type != ARCHIVE_TOKEN_DESC)
+	{
+		log_error("Failed to parse Archive TOC: %s", line);
+		return false;
+	}
+
+	item->desc = token.desc;
+	item->description = (char *) calloc(token.ptr - start + 1, sizeof(char));
+
+	if (item->description == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	strlcpy(item->description, start, token.ptr - start + 1);
+
+	/* 8. space */
+	if (!tokenize_archive_list_entry(&token) ||
+		token.type != ARCHIVE_TOKEN_SPACE)
+	{
+		log_error("Failed to parse Archive TOC: %s", line);
+		return false;
+	}
+
+	/*
+	 * 9. ACL and COMMENT tags are "composite"
+	 *
+	 * 4837; 0 0 ACL - SCHEMA public postgres
+	 * 4838; 0 0 COMMENT - SCHEMA topology dim
+	 * 4839; 0 0 COMMENT - EXTENSION intarray
+	 * 4840; 0 0 COMMENT - EXTENSION postgis
+	 */
+	if (item->desc == ARCHIVE_TAG_ACL ||
+		item->desc == ARCHIVE_TAG_COMMENT)
+	{
+		item->isCompositeTag = true;
+
+		if (!parse_archive_acl_or_comment(token.ptr, item))
+		{
+			log_debug("Failed to parse ACL or COMMENT: %s", token.ptr);
+		}
+	}
+	else
+	{
+		/* 10. restore list name */
+		size_t len = strlen(token.ptr) + 1;
+		item->restoreListName = (char *) calloc(len, sizeof(char));
+		strlcpy(item->restoreListName, token.ptr, len);
+	}
+
+	return true;
+}
+
+
+/*
+ * tokenize_archive_list_entry returns tokens from pg_restore catalog list
+ * lines.
+ */
+bool
+tokenize_archive_list_entry(ArchiveToken *token)
+{
+	char *line = token->ptr;
+
+	if (line == NULL)
+	{
+		log_error("BUG: tokenize_archive_list_entry called with NULL line");
+		return false;
+	}
+
+	if (*line == '\0')
+	{
+		token->type = ARCHIVE_TOKEN_EOL;
+		return true;
+	}
+
+	if (*line == ';')
+	{
+		token->type = ARCHIVE_TOKEN_SEMICOLON;
+		token->ptr = (char *) line + 1;
+
+		return true;
+	}
+
+	if (*line == ' ')
+	{
+		char *ptr = line;
+
+		/* advance ptr as long as *ptr is a space */
+		for (; ptr != NULL && *ptr == ' '; ptr++)
+		{ }
+
+		token->type = ARCHIVE_TOKEN_SPACE;
+		token->ptr = ptr;
+
+		return true;
+	}
+
+	if (isdigit(*line))
+	{
+		char *ptr = line;
+
+		/* advance ptr as long as *ptr is a digit */
+		for (; ptr != NULL && isdigit(*ptr); ptr++)
+		{ }
+
+		if (ptr == NULL)
+		{
+			log_error("Failed to tokenize Archive Item line: %s", line);
+			return false;
+		}
+
+		int len = ptr - line + 1;
+		size_t size = len + 1;
+		char *buf = (char *) calloc(size, sizeof(char));
+		strlcpy(buf, line, len);
+
+		if (!stringToUInt32(buf, &(token->oid)))
+		{
+			log_error("Failed to parse OID \"%s\" from pg_restore --list",
+					  buf);
+			return false;
+		}
+
+		token->type = ARCHIVE_TOKEN_OID;
+		token->ptr = ptr;
+
+		return true;
+	}
+
+	/* is it an Archive Description then? */
+	for (int i = 0; pgRestoreDescriptionArray[i].len != 0; i++)
+	{
+		if (strncmp(line,
+					pgRestoreDescriptionArray[i].str,
+					pgRestoreDescriptionArray[i].len) == 0)
+		{
+			token->type = ARCHIVE_TOKEN_DESC;
+			token->desc = pgRestoreDescriptionArray[i].desc;
+			token->ptr = (char *) line + pgRestoreDescriptionArray[i].len;
+
+			return true;
+		}
+	}
+
+	token->type = ARCHIVE_TOKEN_UNKNOWN;
 	return true;
 }
 
@@ -1223,22 +1386,22 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 
 	/* skip "ACL " or "COMMENT " */
 	char *aclPrefix = "ACL ";
-	size_t aclPrefixLen = strlen(aclPrefix);
+	size_t aclPrefixLen = sizeof(aclPrefix);
 
 	char *commentPrefix = "COMMENT ";
-	size_t commentPrefixLen = strlen(commentPrefix);
+	size_t commentPrefixLen = sizeof(commentPrefix);
 
 	if (strncmp(ptr, aclPrefix, aclPrefixLen) == 0)
 	{
 		ptr += aclPrefixLen;
-		strlcpy(item->desc, "ACL", sizeof(item->desc));
+		strlcpy(item->description, "ACL", sizeof(item->description));
 
 		item->tagKind = ARCHIVE_TAG_KIND_ACL;
 	}
 	else if (strncmp(ptr, commentPrefix, commentPrefixLen) == 0)
 	{
 		ptr += commentPrefixLen;
-		strlcpy(item->desc, "COMMENT", sizeof(item->desc));
+		strlcpy(item->description, "COMMENT", sizeof(item->description));
 
 		item->tagKind = ARCHIVE_TAG_KIND_COMMENT;
 	}
@@ -1272,10 +1435,10 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 	}
 
 	char *SCHEMA = "SCHEMA ";
-	size_t SCHEMA_LEN = strlen(SCHEMA);
+	size_t SCHEMA_LEN = sizeof(SCHEMA);
 
 	char *EXTENSION = "EXTENSION ";
-	size_t EXTENSION_LEN = strlen(EXTENSION);
+	size_t EXTENSION_LEN = sizeof(EXTENSION);
 
 	if (strncmp(ptr, SCHEMA, SCHEMA_LEN) == 0)
 	{
@@ -1312,7 +1475,7 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 		*sep = '\0';
 
 		log_debug("Failed to parse %s for %s: not supported yet",
-				  item->desc,
+				  item->description,
 				  ptr);
 
 		item->tagType = ARCHIVE_TAG_TYPE_OTHER;
@@ -1321,7 +1484,7 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 	}
 
 	log_trace("parse_archive_acl_or_comment: %s [%s]",
-			  item->desc,
+			  item->description,
 			  item->restoreListName);
 
 	return true;
