@@ -1251,10 +1251,18 @@ parse_archive_list_entry(ArchiveContentItem *item, const char *line)
 	{
 		item->isCompositeTag = true;
 
-		if (!parse_archive_acl_or_comment(token.ptr, item))
+		/* backwards compatibility */
+		if (item->desc == ARCHIVE_TAG_ACL)
 		{
-			log_debug("Failed to parse ACL or COMMENT: %s", token.ptr);
+			item->tagKind = ARCHIVE_TAG_KIND_ACL;
 		}
+		else if (item->desc == ARCHIVE_TAG_COMMENT)
+		{
+			item->tagKind = ARCHIVE_TAG_KIND_COMMENT;
+		}
+
+		/* ignore errors, that's stuff we don't support yet (no need to) */
+		(void) parse_archive_acl_or_comment(token.ptr, item);
 	}
 	else
 	{
@@ -1292,6 +1300,14 @@ tokenize_archive_list_entry(ArchiveToken *token)
 	if (*line == ';')
 	{
 		token->type = ARCHIVE_TOKEN_SEMICOLON;
+		token->ptr = (char *) line + 1;
+
+		return true;
+	}
+
+	if (*line == '-')
+	{
+		token->type = ARCHIVE_TOKEN_DASH;
 		token->ptr = (char *) line + 1;
 
 		return true;
@@ -1375,106 +1391,98 @@ tokenize_archive_list_entry(ArchiveToken *token)
  * Here the - is for the namespace, which doesn't apply, and then the TAG is
  * composite: TYPE name; where it usually is just the object name.
  *
- * The ptr argument is positioned at the start of either ACL or COMMENT.
+ * The ptr argument is positioned after the space following either the ACL or
+ * COMMENT tag.
  */
 bool
 parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 {
-	log_trace("parse_archive_acl_or_comment: %s", ptr);
+	log_trace("parse_archive_acl_or_comment: \"%s\"", ptr);
 
-	char *desc = ptr;
-
-	/* skip "ACL " or "COMMENT " */
-	char *aclPrefix = "ACL ";
-	size_t aclPrefixLen = sizeof(aclPrefix);
-
-	char *commentPrefix = "COMMENT ";
-	size_t commentPrefixLen = sizeof(commentPrefix);
-
-	if (strncmp(ptr, aclPrefix, aclPrefixLen) == 0)
-	{
-		ptr += aclPrefixLen;
-		strlcpy(item->description, "ACL", sizeof(item->description));
-
-		item->tagKind = ARCHIVE_TAG_KIND_ACL;
-	}
-	else if (strncmp(ptr, commentPrefix, commentPrefixLen) == 0)
-	{
-		ptr += commentPrefixLen;
-		strlcpy(item->description, "COMMENT", sizeof(item->description));
-
-		item->tagKind = ARCHIVE_TAG_KIND_COMMENT;
-	}
-	else
-	{
-		log_warn("Failed to parse desc \"%s\" for ACL or COMMENT", desc);
-		return false;
-	}
+	ArchiveToken token = { .ptr = ptr };
 
 	/*
 	 * At the moment we only support filtering ACLs and COMMENTS for SCHEMA and
 	 * EXTENSION objects, see --skip-extensions. So first, we skil the
 	 * namespace, which in our case would always be a dash.
 	 */
+	ArchiveTokenType list[] = {
+		ARCHIVE_TOKEN_DASH,
+		ARCHIVE_TOKEN_SPACE
+	};
 
-	char nspname[NAMEDATALEN];
+	int count = sizeof(list) / sizeof(list[0]);
 
-	char *space = strchr(ptr, ' ');
-
-	if (space != NULL)
+	for (int i = 0; i < count; i++)
 	{
-		*space = '\0';
-		strlcpy(nspname, ptr, sizeof(nspname));
-
-		ptr = space + 1;
+		if (!tokenize_archive_list_entry(&token) || token.type != list[i])
+		{
+			log_trace("Unsupported ACL or COMMENT (namespace is not -): \"%s\"",
+					  ptr);
+			return false;
+		}
 	}
-	else
+
+	/*
+	 * Now parse the composite item description tag.
+	 */
+	if (!tokenize_archive_list_entry(&token) ||
+		token.type != ARCHIVE_TOKEN_DESC)
 	{
-		log_warn("Failed to parse desc \"%s\" for ACL or COMMENT", desc);
+		log_error("Failed to parse Archive TOC comment or acl: %s", ptr);
 		return false;
 	}
 
-	char *SCHEMA = "SCHEMA ";
-	size_t SCHEMA_LEN = sizeof(SCHEMA);
-
-	char *EXTENSION = "EXTENSION ";
-	size_t EXTENSION_LEN = sizeof(EXTENSION);
-
-	if (strncmp(ptr, SCHEMA, SCHEMA_LEN) == 0)
+	if (token.desc == ARCHIVE_TAG_SCHEMA)
 	{
+		/* skip the space after the SCHEMA tag */
+		char *nsp_rol_name = token.ptr + 1;
+		int len = strlen(nsp_rol_name);
+		int bytes = len + 1;
+
+		item->restoreListName = (char *) calloc(bytes, sizeof(char));
+
+		if (item->restoreListName == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
 		/* a schema pg_restore list name is "- nspname rolname" */
-		char *nsp_rol_name = ptr + SCHEMA_LEN;
-
-		sformat(item->restoreListName, sizeof(item->restoreListName),
-				"- %s",
-				nsp_rol_name);
-
+		sformat(item->restoreListName, bytes, "- %s", nsp_rol_name);
 		item->tagType = ARCHIVE_TAG_TYPE_SCHEMA;
 	}
-	else if (strncmp(ptr, EXTENSION, EXTENSION_LEN) == 0)
+	else if (token.desc == ARCHIVE_TAG_EXTENSION)
 	{
 		/*
+		 * skip the space after the SCHEMA tag: use token.ptr + 1
+		 *
 		 * The extension name is following by a space, even though there is no
 		 * owner to follow that space. We don't want that space at the end of
 		 * the extension's name.
 		 */
-		char *extname = ptr + EXTENSION_LEN;
+		char *extname = token.ptr + 1;
 		char *space = strchr(extname, ' ');
 		*space = '\0';
 
-		/* an extension's pg_restore list name is just its name */
-		sformat(item->restoreListName, sizeof(item->restoreListName),
-				"%s",
-				extname);
+		int len = strlen(extname);
+		int bytes = len + 1;
 
+		item->restoreListName = (char *) calloc(bytes, sizeof(char));
+
+		if (item->restoreListName == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		/* an extension's pg_restore list name is just its name */
+		sformat(item->restoreListName, bytes, "%s", extname);
 		item->tagType = ARCHIVE_TAG_TYPE_EXTENSION;
 	}
 	else
 	{
-		char *sep = strchr(ptr, ' ');
-		*sep = '\0';
-
-		log_debug("Failed to parse %s for %s: not supported yet",
+		log_debug("Failed to parse %s \"%s\": not supported yet",
 				  item->description,
 				  ptr);
 
