@@ -365,6 +365,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 						 &contents))
 	{
 		/* errors have already been logged */
+		FreeArchiveContentArray(&contents);
 		return false;
 	}
 
@@ -479,6 +480,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 	{
 		log_error("Failed to create pg_restore list file: out of memory");
 		destroyPQExpBuffer(listContents);
+		FreeArchiveContentArray(&contents);
 		return false;
 	}
 
@@ -488,10 +490,12 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 	{
 		/* errors have already been logged */
 		destroyPQExpBuffer(listContents);
+		FreeArchiveContentArray(&contents);
 		return false;
 	}
 
 	destroyPQExpBuffer(listContents);
+	FreeArchiveContentArray(&contents);
 
 	return true;
 }

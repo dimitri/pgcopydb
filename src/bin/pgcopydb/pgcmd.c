@@ -1497,3 +1497,27 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 
 	return true;
 }
+
+
+/*
+ * FreeArchiveContentArray frees the memory allocated in the given
+ * ArchiveContentArray.
+ */
+bool
+FreeArchiveContentArray(ArchiveContentArray *contents)
+{
+	for (int i = 0; i < contents->count; i++)
+	{
+		ArchiveContentItem *item = &(contents->array[i]);
+
+		free(item->description);
+		free(item->restoreListName);
+	}
+
+	free(contents->array);
+
+	contents->count = 0;
+	contents->array = NULL;
+
+	return true;
+}
