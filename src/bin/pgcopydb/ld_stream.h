@@ -115,6 +115,7 @@ typedef struct LogicalMessageValues
 typedef struct LogicalMessageValuesArray
 {
 	int count;
+	int capacity;
 	LogicalMessageValues *array; /* malloc'ed area */
 } LogicalMessageValuesArray;
 
