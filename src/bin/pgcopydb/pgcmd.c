@@ -1463,7 +1463,12 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 		 */
 		char *extname = token.ptr + 1;
 		char *space = strchr(extname, ' ');
-		*space = '\0';
+
+		/* if the file has been pre-processed and trailing spaces removed... */
+		if (space != NULL)
+		{
+			*space = '\0';
+		}
 
 		int len = strlen(extname);
 		int bytes = len + 1;
