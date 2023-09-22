@@ -23,7 +23,7 @@ int cli_ping_getopts(int argc, char **argv);
 CommandLine ping_command =
 	make_command(
 		"ping",
-		"Copy the roles from the source instance to the target instance",
+		"Attempt to connect to the source and target instances",
 		" --source ... --target ... ",
 		"  --source              Postgres URI to the source database\n"
 		"  --target              Postgres URI to the target database\n",

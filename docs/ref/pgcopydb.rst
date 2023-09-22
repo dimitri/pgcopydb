@@ -59,7 +59,7 @@ The ``pgcopydb help`` command lists all the supported sub-commands:
     + restore   Restore database objects into a Postgres instance
     + list      List database objects from a Postgres instance
     + stream    Stream changes from the source database
-      ping      Copy the roles from the source instance to the target instance
+      ping      Attempt to connect to the source and target instances
       help      print help message
       version   print pgcopydb version
 
@@ -163,7 +163,7 @@ target Postgres databases, concurrently.
 
 ::
 
-   pgcopydb ping: Copy the roles from the source instance to the target instance
+   pgcopydb ping: Attempt to connect to the source and target instances
    usage: pgcopydb ping  --source ... --target ...
 
      --source              Postgres URI to the source database

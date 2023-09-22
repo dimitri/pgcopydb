@@ -57,7 +57,7 @@ $ pgcopydb help
   + restore   Restore database objects into a Postgres instance
   + list      List database objects from a Postgres instance
   + stream    Stream changes from the source database
-    ping      Copy the roles from the source instance to the target instance
+    ping      Attempt to connect to the source and target instances
     help      print help message
     version   print pgcopydb version
 
