@@ -219,7 +219,7 @@ copydb_target_drop_tables(CopyDataSpec *specs)
 						  source->relname);
 	}
 
-	appendPQExpBuffer(query, "CASCADE");
+	appendPQExpBuffer(query, " CASCADE");
 
 	/* memory allocation could have failed while building string */
 	if (PQExpBufferBroken(query))
