@@ -17,6 +17,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        PGVERSION:
+          - 16
         TEST:
           - ci
           - pagila

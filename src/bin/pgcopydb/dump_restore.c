@@ -365,6 +365,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 						 &contents))
 	{
 		/* errors have already been logged */
+		FreeArchiveContentArray(&contents);
 		return false;
 	}
 
@@ -421,7 +422,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 
 				log_notice("Skipping already existing dumpId %d: %s %u %s",
 						   contents.array[i].dumpId,
-						   contents.array[i].desc,
+						   contents.array[i].description,
 						   contents.array[i].objectOid,
 						   contents.array[i].restoreListName);
 			}
@@ -433,7 +434,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 
 			log_notice("Skipping already processed dumpId %d: %s %u %s",
 					   contents.array[i].dumpId,
-					   contents.array[i].desc,
+					   contents.array[i].description,
 					   contents.array[i].objectOid,
 					   contents.array[i].restoreListName);
 		}
@@ -448,7 +449,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 		 * been filtered-out from pgcopydb scope of operations, but not table
 		 * b.
 		 */
-		if (streq(item->desc, "SEQUENCE"))
+		if (item->desc == ARCHIVE_TAG_SEQUENCE)
 		{
 			name = NULL;
 		}
@@ -459,7 +460,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 
 			log_notice("Skipping filtered-out dumpId %d: %s %u %u %s",
 					   contents.array[i].dumpId,
-					   contents.array[i].desc,
+					   contents.array[i].description,
 					   contents.array[i].catalogOid,
 					   contents.array[i].objectOid,
 					   contents.array[i].restoreListName);
@@ -470,7 +471,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 						  contents.array[i].dumpId,
 						  contents.array[i].catalogOid,
 						  contents.array[i].objectOid,
-						  contents.array[i].desc,
+						  contents.array[i].description,
 						  contents.array[i].restoreListName);
 	}
 
@@ -479,6 +480,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 	{
 		log_error("Failed to create pg_restore list file: out of memory");
 		destroyPQExpBuffer(listContents);
+		FreeArchiveContentArray(&contents);
 		return false;
 	}
 
@@ -488,10 +490,12 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 	{
 		/* errors have already been logged */
 		destroyPQExpBuffer(listContents);
+		FreeArchiveContentArray(&contents);
 		return false;
 	}
 
 	destroyPQExpBuffer(listContents);
+	FreeArchiveContentArray(&contents);
 
 	return true;
 }

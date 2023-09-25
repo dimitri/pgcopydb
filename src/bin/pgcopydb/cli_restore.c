@@ -502,9 +502,11 @@ cli_restore_schema_parse_list(int argc, char **argv)
 					item->dumpId,
 					item->catalogOid,
 					item->objectOid,
-					item->desc,
-					item->restoreListName);
+					item->description ? item->description : "",
+					item->restoreListName ? item->restoreListName : "");
 		}
+
+		FreeArchiveContentArray(&contents);
 
 		exit(EXIT_CODE_QUIT);
 	}

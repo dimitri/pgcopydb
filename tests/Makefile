@@ -1,6 +1,9 @@
 # Copyright (c) 2021 The PostgreSQL Global Development Group.
 # Licensed under the PostgreSQL License.
 
+PGVERSION ?= 16
+BUILD_ARGS = --build-arg PGVERSION=$(PGVERSION)
+
 all: pagila pagila-multi-steps blobs unit filtering cdc follow extensions cdc-endpos-between-transaction;
 
 pagila: build
@@ -43,7 +46,7 @@ follow-data-only: build
 	$(MAKE) -C $@
 
 build:
-	docker build -t pagila -f Dockerfile.pagila .
+	docker build $(BUILD_ARGS) -t pagila -f Dockerfile.pagila .
 
 .PHONY: all build
 .PHONY: pagila pagila-multi-steps blobs unit filtering extensions

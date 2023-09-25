@@ -230,7 +230,9 @@ cli_ping(int argc, char **argv)
 				exit(EXIT_CODE_TARGET);
 			}
 
-			log_info("Successfully could connect to source database at \"%s\"",
+			log_info("Successfully could connect to source database Postgres %s "
+					 "at \"%s\"",
+					 src.pgversion,
 					 dsn->safeSourcePGURI.pguri);
 
 			pgsql_finish(&src);
@@ -268,6 +270,12 @@ cli_ping(int argc, char **argv)
 				exit(EXIT_CODE_TARGET);
 			}
 
+			if (!pgsql_server_version(&dst))
+			{
+				/* errors have already been logged */
+				exit(EXIT_CODE_TARGET);
+			}
+
 			if (!pgsql_set_gucs(&dst, dstSettings))
 			{
 				log_fatal("Failed to set our GUC settings on the target connection, "
@@ -276,7 +284,9 @@ cli_ping(int argc, char **argv)
 				exit(EXIT_CODE_TARGET);
 			}
 
-			log_info("Successfully could connect to target database at \"%s\"",
+			log_info("Successfully could connect to target database Postgres %s "
+					 "at \"%s\"",
+					 dst.pgversion,
 					 dsn->safeTargetPGURI.pguri);
 
 			pgsql_finish(&dst);
