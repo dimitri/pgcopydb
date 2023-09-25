@@ -1,8 +1,13 @@
+ARG PGVERSION=16
+
 FROM debian:bullseye-slim
+
+ARG PGVERSION
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
+	gnupg \
     openssl \
 	sudo \
     tmux \
@@ -11,10 +16,19 @@ RUN apt-get update \
     psutils \
     libpq5 \
     postgresql-client-common \
-    postgresql-client-13 \
     curl \
 	git \
     jq \
+	&& rm -rf /var/lib/apt/lists/*
+
+RUN curl https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
+RUN echo "deb http://apt.postgresql.org/pub/repos/apt bullseye-pgdg main ${PGVERSION}" > /etc/apt/sources.list.d/pgdg.list
+
+# bypass initdb of a "main" cluster
+RUN echo 'create_main_cluster = false' | sudo tee -a /etc/postgresql-common/createcluster.conf
+RUN apt-get update \
+	&& DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+     postgresql-${PGVERSION} \
 	&& rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src/
