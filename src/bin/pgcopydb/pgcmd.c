@@ -1438,7 +1438,9 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 		/* skip the space after the SCHEMA tag */
 		char *nsp_rol_name = token.ptr + 1;
 		int len = strlen(nsp_rol_name);
-		int bytes = len + 1;
+
+		/* add 2 bytes for the prefix: "- " */
+		int bytes = len + 1 + 2;
 
 		item->restoreListName = (char *) calloc(bytes, sizeof(char));
 
