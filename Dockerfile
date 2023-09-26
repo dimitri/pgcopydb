@@ -1,74 +1,78 @@
-#
+# syntax=docker/dockerfile:latest
 # Define a base image with all our build dependencies.
-#
-FROM debian:bullseye-slim as build
+FROM --platform=${TARGETPLATFORM} debian:11-slim as build
 
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
+# multi-arch
+ARG TARGETPLATFORM
+ARG TARGETOS
+ARG TARGETARCH
+
+RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
+  && apt install -qqy --no-install-recommends \
+    libncurses-dev \
+    libxml2-dev \
+    sudo \
+    valgrind \
     build-essential \
+    libedit-dev \
     libicu-dev \
     libkrb5-dev \
-    libssl-dev \
-    libedit-dev \
-    libreadline-dev \
-    libpam-dev \
-    zlib1g-dev \
     liblz4-dev \
-	libxml2-dev \
-    libxslt1-dev \
-    libselinux1-dev \
-	libncurses-dev \
     libncurses6 \
+    libpam-dev \
+    libpq-dev \
+    libpq5 \
+    libreadline-dev \
+    libselinux1-dev \
+    libssl-dev \
+    libxslt1-dev \
+    lsof \
     make \
     openssl \
-	sudo \
+    postgresql-client-common \
+    postgresql-common \
+    postgresql-server-dev-all \
+    psutils \
     tmux \
     watch \
-    lsof \
-    psutils \
-	valgrind \
-    postgresql-common \
-    libpq5 \
-    libpq-dev \
-    postgresql-server-dev-all \
-    postgresql-common \
-    postgresql-client-common \
-	&& rm -rf /var/lib/apt/lists/*
-
-RUN adduser --disabled-password --gecos '' docker
-RUN adduser docker sudo
+    zlib1g-dev
 
 WORKDIR /usr/src/pgcopydb
 
-COPY Makefile ./
-COPY GIT-VERSION-GEN ./
-COPY version ./
-COPY ./src/ ./src
+COPY ./GIT-VERSION-GEN .
+COPY ./Makefile .
+COPY ./src .
 
-RUN make -s clean && make -s -j8 install
+RUN make -s clean && make -s -j$(nproc) install
 
-#
 # Now the "run" image, as small as possible
-#
-FROM debian:bullseye-slim as run
+FROM --platform=${TARGETPLATFORM} debian:11-slim as run
 
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
+# multi-arch
+ARG TARGETPLATFORM
+ARG TARGETOS
+ARG TARGETARCH
+
+RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
+  && apt install -qqy --no-install-suggests --no-install-recommends \
+    sudo \
     ca-certificates \
-    openssl \
-	sudo \
-    tmux \
-    watch \
-    lsof \
-    psutils \
     libpq5 \
+    lsof \
+    openssl \
+    postgresql-client \
     postgresql-client-common \
-    postgresql-client-13 \
-	&& rm -rf /var/lib/apt/lists/*
+    psutils \
+    && apt clean \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN adduser --disabled-password --gecos '' --home /var/lib/postgres docker
-RUN adduser docker sudo
+RUN adduser --disabled-password --gecos '' --home /var/lib/postgres docker \
+    && adduser docker sudo
 
-COPY --from=build /usr/lib/postgresql/13/bin/pgcopydb /usr/local/bin
+COPY --from=build --chmod=755 /usr/lib/postgresql/13/bin/pgcopydb /usr/local/bin
 
 USER docker
+
+ENTRYPOINT []
+CMD []
+HEALTHCHECK NONE
