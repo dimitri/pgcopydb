@@ -39,9 +39,7 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
 
 WORKDIR /usr/src/pgcopydb
 
-COPY ./GIT-VERSION-GEN .
-COPY ./Makefile .
-COPY ./src .
+COPY . .
 
 RUN make -s clean && make -s -j$(nproc) install
 
@@ -52,6 +50,15 @@ FROM --platform=${TARGETPLATFORM} debian:11-slim as run
 ARG TARGETPLATFORM
 ARG TARGETOS
 ARG TARGETARCH
+
+ENV DEBIAN_FRONTEND=noninteractive \
+  TZ=Europe/Paris \
+  LC_ALL=en_US.UTF-8 \
+  LANG=en_US.UTF-8 \
+  LANGUAGE=en_US.UTF-8
+
+# used to configure Github Packages
+LABEL org.opencontainers.image.source https://github.com/dimitri/pgcopydb
 
 RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
   && apt install -qqy --no-install-suggests --no-install-recommends \
