@@ -21,3 +21,14 @@ CREATE TABLE IF NOT EXISTS public."""dqname"""
 );
 
 commit;
+
+
+begin;
+
+CREATE TABLE IF NOT EXISTS public.identifer_as_column
+(
+    time bigserial
+);
+alter table public.identifer_as_column replica identity full;
+
+commit;
