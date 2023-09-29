@@ -68,3 +68,16 @@ begin;
 insert into public."""dqname""" default values;
 
 commit;
+
+--
+-- insert, update, delete our table which has identifer as column name
+--
+begin;
+
+insert into public.identifer_as_column default values;
+
+update public.identifer_as_column set "time" = 1 where "time" = 0;
+
+delete from public.identifer_as_column where "time" = 1;
+
+commit;
