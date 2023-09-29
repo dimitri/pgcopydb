@@ -2291,7 +2291,21 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 
 	for (;;)
 	{
-		int bufsize = PQgetCopyData(srcConn, &copybuf, 0);
+		/* handle signals */
+		if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
+		{
+			log_debug("COPY was asked to stop");
+
+			if (srcConnIsOurs)
+			{
+				pgsql_finish(src);
+			}
+			(void) pgsql_finish(dst);
+
+			return false;
+		}
+
+		int bufsize = PQgetCopyData(srcConn, &copybuf, 1);
 
 		/*
 		 * A result of -2 indicates that an error occurred.
@@ -2329,6 +2343,62 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 			}
 
 			/* make sure to pass through and send this last COPY buffer */
+		}
+
+		/*
+		 * In async mode, and no data available.
+		 */
+		else if (bufsize == 0)
+		{
+			fd_set input_mask;
+			int sock = PQsocket(srcConn);
+
+			if (sock < 0)
+			{
+				failedOnSrc = true;
+
+				pgcopy_log_error(src, NULL, "invalid socket");
+				break;
+			}
+
+			struct timeval timeout;
+			struct timeval *timeoutptr = NULL;
+
+			/* sleep for 10ms to wait for input on the Postgres socket */
+			timeout.tv_sec = 0;
+			timeout.tv_usec = 10000;
+			timeoutptr = &timeout;
+
+			FD_ZERO(&input_mask);
+			FD_SET(sock, &input_mask);
+
+			int r = select(sock + 1, &input_mask, NULL, NULL, timeoutptr);
+
+			if (r == 0 || (r < 0 && errno == EINTR))
+			{
+				/*
+				 * Got a timeout or signal. Continue the loop and either
+				 * deliver a status packet to the server or just go back into
+				 * blocking.
+				 */
+				continue;
+			}
+			else if (r < 0)
+			{
+				failedOnSrc = true;
+
+				pgcopy_log_error(src, NULL, "select failed: %m");
+				break;
+			}
+
+			/* there is actually data on the socket */
+			if (PQconsumeInput(srcConn) == 0)
+			{
+				failedOnSrc = true;
+
+				pgcopy_log_error(src, NULL, "could not receive data");
+				break;
+			}
 		}
 
 		/*
