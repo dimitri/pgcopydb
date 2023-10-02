@@ -492,6 +492,7 @@ bool copydb_process_table_data(CopyDataSpec *specs);
 
 bool copydb_start_copy_supervisor(CopyDataSpec *specs);
 bool copydb_copy_supervisor(CopyDataSpec *specs);
+bool copydb_copy_supervisor_send_stop(CopyDataSpec *specs);
 bool copydb_start_table_data_workers(CopyDataSpec *specs);
 bool copydb_table_data_worker(CopyDataSpec *specs);
 
