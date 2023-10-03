@@ -58,8 +58,8 @@ $ pgcopydb help
   + list      List database objects from a Postgres instance
   + stream    Stream changes from the source database
     ping      Attempt to connect to the source and target instances
-    help      print help message
-    version   print pgcopydb version
+    help      Print help message
+    version   Print pgcopydb version
 
   pgcopydb compare
     schema  Compare source and target schema
@@ -104,7 +104,7 @@ $ pgcopydb help
 
   pgcopydb stream
     setup      Setup source and target systems for logical decoding
-    cleanup    cleanup source and target systems for logical decoding
+    cleanup    Cleanup source and target systems for logical decoding
     prefetch   Stream JSON changes from the source database and transform them to SQL
     catchup    Apply prefetched changes from SQL files to the target database
     replay     Replay changes from the source to the target database, live
