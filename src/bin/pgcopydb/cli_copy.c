@@ -137,7 +137,7 @@ static CommandLine copy_table_data_command =
 static CommandLine copy_blobs_command =
 	make_command(
 		"blobs",
-		"Copy the blob data from ther source database to the target",
+		"Copy the blob data from the source database to the target",
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
 		"  --source             Postgres URI to the source database\n"
 		"  --target             Postgres URI to the target database\n"
