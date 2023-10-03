@@ -50,7 +50,7 @@ $ pgcopydb help
     fork      Clone an entire database from source to target
     follow    Replay changes from the source database to the target database
     copy-db   Clone an entire database from source to target
-    snapshot  Create and exports a snapshot on the source database
+    snapshot  Create and export a snapshot on the source database
   + compare   Compare source and target databases
   + copy      Implement the data section of the database copy
   + dump      Dump database objects from a Postgres instance
