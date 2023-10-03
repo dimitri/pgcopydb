@@ -269,7 +269,7 @@ cli_list_db_getopts(int argc, char **argv)
 
 			case 's':
 			{
-				strlcpy(options.schema_name, optarg, NAMEDATALEN);
+				strlcpy(options.schema_name, optarg, PG_NAMEDATALEN);
 				log_trace("--schema %s", options.schema_name);
 				break;
 			}
@@ -283,7 +283,7 @@ cli_list_db_getopts(int argc, char **argv)
 
 			case 't':
 			{
-				strlcpy(options.table_name, optarg, NAMEDATALEN);
+				strlcpy(options.table_name, optarg, PG_NAMEDATALEN);
 				log_trace("--table %s", options.table_name);
 				break;
 			}
@@ -1073,7 +1073,7 @@ cli_list_table_parts(int argc, char **argv)
 
 	if (IS_EMPTY_STRING_BUFFER(listDBoptions.schema_name))
 	{
-		strlcpy(listDBoptions.schema_name, "public", NAMEDATALEN);
+		strlcpy(listDBoptions.schema_name, "public", PG_NAMEDATALEN);
 	}
 
 	ConnStrings *dsn = &(listDBoptions.connStrings);
@@ -1103,8 +1103,8 @@ cli_list_table_parts(int argc, char **argv)
 	SourceFilterTable *tableFilter =
 		(SourceFilterTable *) malloc(1 * sizeof(SourceFilterTable));
 
-	strlcpy(tableFilter[0].nspname, listDBoptions.schema_name, NAMEDATALEN);
-	strlcpy(tableFilter[0].relname, listDBoptions.table_name, NAMEDATALEN);
+	strlcpy(tableFilter[0].nspname, listDBoptions.schema_name, PG_NAMEDATALEN);
+	strlcpy(tableFilter[0].relname, listDBoptions.table_name, PG_NAMEDATALEN);
 
 	SourceFilters filter =
 	{

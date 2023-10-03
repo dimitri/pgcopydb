@@ -133,7 +133,7 @@ typedef struct CopyTableDataPartSpec
 	int64_t min;                /* WHERE partKey >= min */
 	int64_t max;                /*   AND partKey  < max */
 
-	char partKey[NAMEDATALEN];
+	char partKey[PG_NAMEDATALEN];
 } CopyTableDataPartSpec;
 
 
@@ -226,7 +226,7 @@ typedef struct SourceFilterItem
  */
 typedef struct ExtensionReqs
 {
-	char extname[NAMEDATALEN];
+	char extname[PG_NAMEDATALEN];
 	char version[BUFSIZE];
 
 	UT_hash_handle hh;          /* makes this structure hashable */

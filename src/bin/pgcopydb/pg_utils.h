@@ -26,6 +26,20 @@
 
 
 /*
+ * We use format('%I') to grab identifier names, so we need to account for the
+ * quotes around the names (2 more bytes) and also the quotes within the names
+ * are going to be doubled, in the worst case that's twice the size + 2.
+ */
+#define PG_NAMEDATALEN (NAMEDATALEN * 2 + 2)
+
+/* the pg_restore -l output uses "schema name owner" */
+#define RESTORE_LIST_NAMEDATALEN (3 * PG_NAMEDATALEN + 3)
+
+/* Fully Qualified Postgres name: "nspname"."relname" */
+#define PG_NAMEDATALEN_FQ (PG_NAMEDATALEN * 2 + 1)
+
+
+/*
  * OID values from PostgreSQL src/include/catalog/pg_type.h
  */
 #define BOOLOID 16

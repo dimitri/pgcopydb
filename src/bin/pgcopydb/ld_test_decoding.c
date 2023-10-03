@@ -35,9 +35,9 @@
 typedef struct TestDecodingHeader
 {
 	const char *message;
-	char qname[NAMEDATALEN * 2 + 5 + 1];
-	char nspname[NAMEDATALEN];
-	char relname[NAMEDATALEN];
+	char qname[PG_NAMEDATALEN_FQ];
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
 	StreamAction action;
 	int offset;                 /* end of metadata section */
 	int pos;
@@ -247,8 +247,8 @@ parseTestDecodingMessage(StreamContext *privateContext,
 
 		case STREAM_ACTION_TRUNCATE:
 		{
-			strlcpy(stmt->stmt.truncate.nspname, header.nspname, NAMEDATALEN);
-			strlcpy(stmt->stmt.truncate.relname, header.relname, NAMEDATALEN);
+			strlcpy(stmt->stmt.truncate.nspname, header.nspname, PG_NAMEDATALEN);
+			strlcpy(stmt->stmt.truncate.relname, header.relname, PG_NAMEDATALEN);
 
 			break;
 		}
@@ -388,8 +388,8 @@ parseTestDecodingInsertMessage(StreamContext *privateContext,
 {
 	LogicalTransactionStatement *stmt = privateContext->stmt;
 
-	strlcpy(stmt->stmt.insert.nspname, header->nspname, NAMEDATALEN);
-	strlcpy(stmt->stmt.insert.relname, header->relname, NAMEDATALEN);
+	strlcpy(stmt->stmt.insert.nspname, header->nspname, PG_NAMEDATALEN);
+	strlcpy(stmt->stmt.insert.relname, header->relname, PG_NAMEDATALEN);
 
 	stmt->stmt.insert.new.count = 1;
 	stmt->stmt.insert.new.array =
@@ -427,8 +427,8 @@ parseTestDecodingUpdateMessage(StreamContext *privateContext,
 {
 	LogicalTransactionStatement *stmt = privateContext->stmt;
 
-	strlcpy(stmt->stmt.update.nspname, header->nspname, NAMEDATALEN);
-	strlcpy(stmt->stmt.update.relname, header->relname, NAMEDATALEN);
+	strlcpy(stmt->stmt.update.nspname, header->nspname, PG_NAMEDATALEN);
+	strlcpy(stmt->stmt.update.relname, header->relname, PG_NAMEDATALEN);
 
 	stmt->stmt.update.old.count = 1;
 	stmt->stmt.update.new.count = 1;
@@ -521,8 +521,8 @@ parseTestDecodingDeleteMessage(StreamContext *privateContext,
 {
 	LogicalTransactionStatement *stmt = privateContext->stmt;
 
-	strlcpy(stmt->stmt.delete.nspname, header->nspname, NAMEDATALEN);
-	strlcpy(stmt->stmt.delete.relname, header->relname, NAMEDATALEN);
+	strlcpy(stmt->stmt.delete.nspname, header->nspname, PG_NAMEDATALEN);
+	strlcpy(stmt->stmt.delete.relname, header->relname, PG_NAMEDATALEN);
 
 	stmt->stmt.delete.old.count = 1;
 	stmt->stmt.delete.old.array =
@@ -703,7 +703,7 @@ parseNextColumn(TestDecodingColumns *cols,
 	 */
 	char *typStart = typA + 1;
 	int typLen = (int) ((typB - typA) - 1);
-	char typname[NAMEDATALEN] = { 0 };
+	char typname[PG_NAMEDATALEN] = { 0 };
 
 	sformat(typname, sizeof(typname), "%.*s", typLen, typStart);
 
