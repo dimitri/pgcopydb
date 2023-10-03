@@ -13,9 +13,7 @@
 
 #include "filtering.h"
 #include "pgsql.h"
-
-/* the pg_restore -l output uses "schema name owner" */
-#define RESTORE_LIST_NAMEDATALEN (3 * NAMEDATALEN + 3)
+#include "pg_utils.h"
 
 /*
  * In the SQL standard we have "catalogs", which are then Postgres databases.
@@ -24,9 +22,9 @@
 typedef struct SourceDatabase
 {
 	uint32_t oid;
-	char datname[NAMEDATALEN];
+	char datname[PG_NAMEDATALEN];
 	int64_t bytes;
-	char bytesPretty[NAMEDATALEN]; /* pg_size_pretty */
+	char bytesPretty[PG_NAMEDATALEN]; /* pg_size_pretty */
 }
 SourceDatabase;
 
@@ -40,7 +38,7 @@ typedef struct SourceDatabaseArray
 typedef struct SourceSchema
 {
 	uint32_t oid;
-	char nspname[NAMEDATALEN];
+	char nspname[PG_NAMEDATALEN];
 	char restoreListName[RESTORE_LIST_NAMEDATALEN];
 
 	UT_hash_handle hh;          /* makes this structure hashable */
@@ -60,8 +58,8 @@ typedef struct SourceSchemaArray
 typedef struct SourceExtensionConfig
 {
 	uint32_t oid;               /* pg_class.oid */
-	char nspname[NAMEDATALEN];
-	char relname[NAMEDATALEN];
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
 	char *condition;            /* strdup from PQresult: malloc'ed area */
 } SourceExtensionConfig;
 
@@ -76,8 +74,8 @@ typedef struct SourceExtensionConfigArray
 typedef struct SourceExtension
 {
 	uint32_t oid;
-	char extname[NAMEDATALEN];
-	char extnamespace[NAMEDATALEN];
+	char extname[PG_NAMEDATALEN];
+	char extnamespace[PG_NAMEDATALEN];
 	bool extrelocatable;
 	SourceExtensionConfigArray config;
 } SourceExtension;
@@ -92,7 +90,7 @@ typedef struct SourceExtensionArray
 
 typedef struct ExtensionsVersions
 {
-	char name[NAMEDATALEN];
+	char name[PG_NAMEDATALEN];
 	char defaultVersion[BUFSIZE];
 	char installedVersion[BUFSIZE];
 	JSON_Value *json;           /* malloc'ed area */
@@ -107,7 +105,7 @@ typedef struct ExtensionsVersionsArray
 typedef struct SourceCollation
 {
 	uint32_t oid;
-	char collname[NAMEDATALEN];
+	char collname[PG_NAMEDATALEN];
 	char *desc;                 /* malloc'ed area */
 	char restoreListName[RESTORE_LIST_NAMEDATALEN];
 } SourceCollation;
@@ -146,7 +144,7 @@ typedef struct SourceTableAttribute
 {
 	int attnum;
 	uint32_t atttypid;
-	char attname[NAMEDATALEN];
+	char attname[PG_NAMEDATALEN];
 	bool attisprimary;
 } SourceTableAttribute;
 
@@ -172,23 +170,22 @@ typedef struct SourceTable
 {
 	uint32_t oid;
 
-	/* "nspname"."relname" : 4 quotes, 1 dot, 1 \0 */
-	char qname[NAMEDATALEN * 2 + 5 + 1];
-	char nspname[NAMEDATALEN];
-	char relname[NAMEDATALEN];
-	char amname[NAMEDATALEN];
+	char qname[PG_NAMEDATALEN_FQ];
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
+	char amname[PG_NAMEDATALEN];
 
 	int64_t relpages;
 	int64_t reltuples;
 	int64_t bytes;
-	char bytesPretty[NAMEDATALEN]; /* pg_size_pretty */
+	char bytesPretty[PG_NAMEDATALEN]; /* pg_size_pretty */
 	bool excludeData;
 
 	TableChecksum sourceChecksum;
 	TableChecksum targetChecksum;
 
 	char restoreListName[RESTORE_LIST_NAMEDATALEN];
-	char partKey[NAMEDATALEN];
+	char partKey[PG_NAMEDATALEN];
 	SourceTablePartsArray partsArray;
 
 	SourceTableAttributeArray attributes;
@@ -219,9 +216,9 @@ typedef struct SourceSequence
 	uint32_t attrelid;          /* pg_class oid of table using as DEFAULT */
 	uint32_t attroid;           /* pg_attrdef DEFAULT value OID */
 
-	char qname[NAMEDATALEN * 2 + 5 + 1];
-	char nspname[NAMEDATALEN];
-	char relname[NAMEDATALEN];
+	char qname[PG_NAMEDATALEN_FQ];
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
 	int64_t lastValue;
 	bool isCalled;
 
@@ -245,14 +242,14 @@ typedef struct SourceSequenceArray
 typedef struct SourceIndex
 {
 	uint32_t indexOid;
-	char indexQname[NAMEDATALEN * 2 + 5 + 1];
-	char indexNamespace[NAMEDATALEN];
-	char indexRelname[NAMEDATALEN];
+	char indexQname[PG_NAMEDATALEN_FQ];
+	char indexNamespace[PG_NAMEDATALEN];
+	char indexRelname[PG_NAMEDATALEN];
 
 	uint32_t tableOid;
-	char tableQname[NAMEDATALEN * 2 + 5 + 1];
-	char tableNamespace[NAMEDATALEN];
-	char tableRelname[NAMEDATALEN];
+	char tableQname[PG_NAMEDATALEN_FQ];
+	char tableNamespace[PG_NAMEDATALEN];
+	char tableRelname[PG_NAMEDATALEN];
 
 	bool isPrimary;
 	bool isUnique;
@@ -262,7 +259,7 @@ typedef struct SourceIndex
 	uint32_t constraintOid;
 	bool condeferrable;
 	bool condeferred;
-	char constraintName[NAMEDATALEN];
+	char constraintName[PG_NAMEDATALEN];
 	char *constraintDef;        /* malloc'ed area */
 
 	char indexRestoreListName[RESTORE_LIST_NAMEDATALEN];
@@ -294,8 +291,8 @@ typedef struct SourceIndexList
  */
 typedef struct SourceDepend
 {
-	char nspname[NAMEDATALEN];
-	char relname[NAMEDATALEN];
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
 	uint32_t refclassid;
 	uint32_t refobjid;
 	uint32_t classid;

@@ -13,6 +13,7 @@
 #include "copydb.h"
 #include "queue_utils.h"
 #include "pgsql.h"
+#include "schema.h"
 
 #define OUTPUT_BEGIN "BEGIN; -- "
 #define OUTPUT_COMMIT "COMMIT; -- "
@@ -134,30 +135,30 @@ typedef struct LogicalMessageTupleArray
 
 typedef struct LogicalMessageInsert
 {
-	char nspname[NAMEDATALEN];
-	char relname[NAMEDATALEN];
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
 	LogicalMessageTupleArray new;   /* {"columns": ...} */
 } LogicalMessageInsert;
 
 typedef struct LogicalMessageUpdate
 {
-	char nspname[NAMEDATALEN];
-	char relname[NAMEDATALEN];
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
 	LogicalMessageTupleArray old;   /* {"identity": ...} */
 	LogicalMessageTupleArray new;   /* {"columns": ...} */
 } LogicalMessageUpdate;
 
 typedef struct LogicalMessageDelete
 {
-	char nspname[NAMEDATALEN];
-	char relname[NAMEDATALEN];
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
 	LogicalMessageTupleArray old;   /* {"identity": ...} */
 } LogicalMessageDelete;
 
 typedef struct LogicalMessageTruncate
 {
-	char nspname[NAMEDATALEN];
-	char relname[NAMEDATALEN];
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
 } LogicalMessageTruncate;
 
 typedef struct LogicalMessageSwitchWAL

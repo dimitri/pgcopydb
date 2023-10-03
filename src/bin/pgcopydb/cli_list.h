@@ -14,6 +14,7 @@
 #include "cli_common.h"
 #include "cli_root.h"
 #include "pgsql.h"
+#include "schema.h"
 
 typedef struct ListDBOptions
 {
@@ -21,8 +22,8 @@ typedef struct ListDBOptions
 
 	ConnStrings connStrings;
 
-	char schema_name[NAMEDATALEN];
-	char table_name[NAMEDATALEN];
+	char schema_name[PG_NAMEDATALEN];
+	char table_name[PG_NAMEDATALEN];
 	char filterFileName[MAXPGPATH];
 
 	bool listSkipped;

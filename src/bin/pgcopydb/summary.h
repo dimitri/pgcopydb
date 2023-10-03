@@ -92,8 +92,8 @@ typedef struct SummaryIndexEntry
 {
 	uint32_t oid;
 	char oidStr[INTSTRING_MAX_DIGITS];
-	char nspname[NAMEDATALEN];
-	char relname[NAMEDATALEN];
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
 	char *sql;                  /* malloc'ed area */
 	char indexMs[INTERVAL_MAXLEN];
 	uint64_t durationMs;
@@ -109,8 +109,8 @@ typedef struct SummaryTableEntry
 {
 	uint32_t oid;
 	char oidStr[INTSTRING_MAX_DIGITS];
-	char nspname[NAMEDATALEN];
-	char relname[NAMEDATALEN];
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
 	char tableMs[INTERVAL_MAXLEN];
 	char indexCount[INTSTRING_MAX_DIGITS];
 	char indexMs[INTERVAL_MAXLEN];

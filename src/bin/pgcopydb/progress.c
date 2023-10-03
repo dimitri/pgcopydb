@@ -230,7 +230,7 @@ copydb_filtering_as_json(CopyDataSpec *copySpecs,
 	/* exclude table lists */
 	struct section
 	{
-		char name[NAMEDATALEN];
+		char name[PG_NAMEDATALEN];
 		SourceFilterTableList *list;
 	};
 
