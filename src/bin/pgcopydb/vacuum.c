@@ -123,15 +123,16 @@ vacuum_worker(CopyDataSpec *specs)
 			{
 				if (!vacuum_analyze_table_by_oid(specs, mesg.data.oid))
 				{
+					++errors;
+
+					log_error("Failed to vacuum table with oid %u, "
+							  "see above for details",
+							  mesg.data.oid);
+
 					if (specs->failFast)
 					{
-						log_error("Failed to vacuum table with oid %u, "
-								  "see above for details",
-								  mesg.data.oid);
 						return false;
 					}
-
-					++errors;
 				}
 				break;
 			}
@@ -227,7 +228,7 @@ vacuum_analyze_table_by_oid(CopyDataSpec *specs, uint32_t oid)
 
 	if (!pgsql_execute(&dst, vacuum))
 	{
-		/* errors have already been logged */
+		log_error("Failed to run command, see above for details: %s", vacuum);
 		return false;
 	}
 
