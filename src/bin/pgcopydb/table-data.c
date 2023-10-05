@@ -273,22 +273,10 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 	 */
 	if (!copydb_start_table_data_workers(specs))
 	{
-		log_error("Failed to start table data COPY workers, "
+		log_fatal("Failed to start table data COPY workers, "
 				  "see above for details");
 
-		/* send TERM signal to all the process in our process group */
-		if (!kill(0, SIGTERM))
-		{
-			log_error("Failed to send TERM signal our process group");
-			return false;
-		}
-
-		/* and wait for all the sub-processes to terminate */
-		if (!copydb_wait_for_subprocesses(specs->failFast))
-		{
-			log_error("Some sub-processes have exited with error status, "
-					  "see above for details");
-		}
+		(void) copydb_fatal_exit();
 
 		return false;
 	}
@@ -307,6 +295,8 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 		if (!copydb_add_copy(specs, table->oid, tableSpecs->part.partNumber))
 		{
 			/* errors have already been logged */
+			(void) copydb_fatal_exit();
+
 			return false;
 		}
 	}
@@ -314,15 +304,14 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 	/*
 	 * Add the STOP messages to the queue now, one STOP message per worker.
 	 */
-	for (int i = 0; i < specs->tableJobs; i++)
+	if (!copydb_copy_supervisor_send_stop(specs))
 	{
-		QMessage stop = { .type = QMSG_TYPE_STOP };
+		log_fatal("Failed to send STOP messages to the COPY queue");
 
-		if (!queue_send(&(specs->copyQueue), &stop))
-		{
-			/* errors have already been logged */
-			return false;
-		}
+		/* we still need to make sure the COPY processes terminate */
+		(void) copydb_fatal_exit();
+
+		return false;
 	}
 
 	/*
@@ -332,6 +321,14 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 	{
 		log_error("Some COPY worker process(es) have exited with error, "
 				  "see above for details");
+
+		/* make sure vacuum and create index processes see a STOP message */
+		if (!vacuum_send_stop(specs) ||
+			!copydb_index_workers_send_stop(specs))
+		{
+			(void) copydb_fatal_exit();
+		}
+
 		return false;
 	}
 
@@ -352,7 +349,42 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 	success = success && vacuum_send_stop(specs);
 	success = success && copydb_index_workers_send_stop(specs);
 
-	return success;
+	if (!success)
+	{
+		/*
+		 * The other subprocesses need to see a STOP message to stop their
+		 * processing. Failing to send the STOP messages means that the main
+		 * pgcopydb never finishes, and we want to ensure the command
+		 * terminates.
+		 */
+		(void) copydb_fatal_exit();
+
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * copydb_copy_supervisor_send_stop sends the STOP messages to the copy queue,
+ * one STOP message per worker.
+ */
+bool
+copydb_copy_supervisor_send_stop(CopyDataSpec *specs)
+{
+	for (int i = 0; i < specs->tableJobs; i++)
+	{
+		QMessage stop = { .type = QMSG_TYPE_STOP };
+
+		if (!queue_send(&(specs->copyQueue), &stop))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	return true;
 }
 
 
@@ -440,6 +472,7 @@ copydb_start_table_data_workers(CopyDataSpec *specs)
 bool
 copydb_table_data_worker(CopyDataSpec *specs)
 {
+	uint64_t errors = 0;
 	pid_t pid = getpid();
 
 	log_notice("Started table data COPY worker %d [%d]", pid, getppid());
@@ -487,7 +520,22 @@ copydb_table_data_worker(CopyDataSpec *specs)
 							  "and part number %u, see above for details",
 							  mesg.data.tp.oid,
 							  mesg.data.tp.part);
-					return false;
+
+					++errors;
+
+					if (specs->failFast)
+					{
+						return false;
+					}
+
+					/* clean-up our target connection state for next table */
+					(void) copydb_close_snapshot(specs);
+
+					if (!copydb_set_snapshot(specs))
+					{
+						/* errors have already been logged */
+						return false;
+					}
 				}
 				break;
 			}
@@ -505,7 +553,7 @@ copydb_table_data_worker(CopyDataSpec *specs)
 	/* terminate our connection to the source database now */
 	(void) copydb_close_snapshot(specs);
 
-	return false;
+	return errors == 0;
 }
 
 
