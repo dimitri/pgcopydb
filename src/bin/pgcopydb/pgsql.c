@@ -1745,6 +1745,17 @@ pgsql_fetch_results(PGSQL *pgsql, bool *done,
 	{
 		PGresult *result = NULL;
 
+		/*
+		 * When we got clearance that libpq did fetch the Postgres query result
+		 * in its internal buffers, we process the result without checking for
+		 * interrupts.
+		 *
+		 * The reason is that pgcopydb relies internally on signaling sibling
+		 * processes to terminate at several places, including logical
+		 * replication client and operating mode management. It's better for
+		 * the code that we process the already available query result now and
+		 * let the callers check for interrupts (asked_to_stop and friends).
+		 */
 		while ((result = PQgetResult(conn)) != NULL)
 		{
 			/* remember to check PQnotifies after each PQgetResult or PQexec */
@@ -1753,12 +1764,6 @@ pgsql_fetch_results(PGSQL *pgsql, bool *done,
 			if (!is_response_ok(result))
 			{
 				pgsql_execute_log_error(pgsql, result, NULL, NULL, context);
-				return false;
-			}
-
-			if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
-			{
-				log_error("PQgetResult got interrupted");
 				return false;
 			}
 
