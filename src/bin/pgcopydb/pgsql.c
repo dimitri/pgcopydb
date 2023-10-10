@@ -1525,15 +1525,11 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 	bool done = false;
 	int errors = 0;
 
-	uint64_t count = 0;
-
 	while (!done)
 	{
-		++count;
-
 		if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
 		{
-			log_debug("pgsql_execute_with_params was interrupted");
+			log_error("Postgres query was interrupted: %s", sql);
 
 			destroyPQExpBuffer(debugParameters);
 			(void) pgsql_finish(pgsql);
@@ -1541,6 +1537,7 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 			return false;
 		}
 
+		/* this uses select() with a timeout: we're not busy looping */
 		if (!pgsql_fetch_results(pgsql, &done, context, parseFun))
 		{
 			++errors;
@@ -1750,14 +1747,18 @@ pgsql_fetch_results(PGSQL *pgsql, bool *done,
 
 		while ((result = PQgetResult(conn)) != NULL)
 		{
-			log_debug("result %p", result);
-
 			/* remember to check PQnotifies after each PQgetResult or PQexec */
 			(void) pgsql_handle_notifications(pgsql);
 
 			if (!is_response_ok(result))
 			{
 				pgsql_execute_log_error(pgsql, result, NULL, NULL, context);
+				return false;
+			}
+
+			if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
+			{
+				log_error("PQgetResult got interrupted");
 				return false;
 			}
 
