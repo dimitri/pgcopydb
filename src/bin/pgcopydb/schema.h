@@ -35,6 +35,22 @@ typedef struct SourceDatabaseArray
 } SourceDatabaseArray;
 
 
+typedef struct SourceRole
+{
+	uint32_t oid;
+	char rolname[PG_NAMEDATALEN];
+
+	UT_hash_handle hh;          /* makes this structure hashable */
+} SourceRole;
+
+
+typedef struct SourceRoleArray
+{
+	int count;
+	SourceRole *array;          /* malloc'ed area */
+} SourceRoleArray;
+
+
 typedef struct SourceSchema
 {
 	uint32_t oid;
@@ -309,12 +325,38 @@ typedef struct SourceDependArray
 	SourceDepend *array;         /* malloc'ed area */
 } SourceDependArray;
 
+
+/*
+ * SourceProperty caches data found in Postgres catalog pg_db_role_setting,
+ * allowing to support ALTER DATABASE SET and ALTER ROLE IN DATABASE
+ * properties.
+ *
+ * The setconfig format ("name=value") from the catalogs needs specific parsing
+ * and re-writting in order to create the SQL statement needed to re-install
+ * the properties, this is done when applying the properties, the same way as
+ * pg_dump.
+ */
+typedef struct SourceProperty
+{
+	bool roleInDatabase;
+	char rolname[PG_NAMEDATALEN];
+	char datname[PG_NAMEDATALEN];
+	char *setconfig;            /* malloc'ed area */
+} SourceProperty;
+
+typedef struct SourcePropertiesArray
+{
+	int count;
+	SourceProperty *array;      /* malloc'ed area */
+} SourcePropertiesArray;
+
 /*
  * SourceCatalog regroups all the information we fetch from a Postgres
  * instance.
  */
 typedef struct SourceCatalog
 {
+	SourcePropertiesArray gucsArray;
 	SourceExtensionArray extensionArray;
 	SourceCollationArray collationArray;
 	SourceTableArray sourceTableArray;
@@ -331,7 +373,10 @@ typedef struct SourceCatalog
 
 typedef struct TargetCatalog
 {
+	SourceRoleArray rolesArray;
 	SourceSchemaArray schemaArray;
+
+	SourceRole *rolesHashByName;
 	SourceSchema *schemaHashByName;
 } TargetCatalog;
 
@@ -342,7 +387,12 @@ bool schema_query_privileges(PGSQL *pgsql,
 
 bool schema_list_databases(PGSQL *pgsql, SourceDatabaseArray *catArray);
 
+bool schema_list_database_properties(PGSQL *pgsql,
+									 SourcePropertiesArray *gucsArray);
+
 bool schema_list_schemas(PGSQL *pgsql, SourceSchemaArray *array);
+
+bool schema_list_roles(PGSQL *pgsql, SourceRoleArray *rolesArray);
 
 bool schema_list_ext_schemas(PGSQL *pgsql, SourceSchemaArray *array);
 

@@ -118,7 +118,17 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 				 "on the source database discards pg_table_size() caching");
 	}
 
-	/* first, are we doing extensions? */
+	/*
+	 * Grab the source database properties to be able to install them again on
+	 * the target, using ALTER DATABASE SET or ALTER USER IN DATABASE SET.
+	 */
+	if (!schema_list_database_properties(src, &(specs->catalog.gucsArray)))
+	{
+		log_error("Failed to fetch database properties, see above for details");
+		return false;
+	}
+
+	/* now, are we doing extensions? */
 	if (specs->section == DATA_SECTION_ALL ||
 		specs->section == DATA_SECTION_EXTENSION)
 	{
@@ -229,7 +239,9 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 	}
 
 	/*
-	 * Now also fetch the list of schemas from the target database.
+	 * Now fetch the list of schemas and roles found in the target database.
+	 * The information is needed to fetch related database properties
+	 * (settings) when set to a specific role within that database.
 	 */
 	if (!copydb_prepare_target_catalog(specs))
 	{
@@ -1072,6 +1084,18 @@ copydb_prepare_target_catalog(CopyDataSpec *specs)
 		return false;
 	}
 
+	if (!pgsql_begin(&dst))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * First, get a list of the schema that already exist on the target system.
+	 * Some extensions scripts create schema in a way that does not register a
+	 * dependency between the extension and the schema (using a DO $$ ... $$
+	 * block for instance), and there is no CREATE SCHEMA IF NOT EXISTS.
+	 */
 	SourceSchema *schemaHashByName = NULL;
 	SourceSchemaArray *schemaArray = &(specs->targetCatalog.schemaArray);
 
@@ -1090,6 +1114,39 @@ copydb_prepare_target_catalog(CopyDataSpec *specs)
 	}
 
 	specs->targetCatalog.schemaHashByName = schemaHashByName;
+
+	/*
+	 * Now fetch a list of roles that exist on the target system, so that we
+	 * may copy the database properties including specific to roles when they
+	 * exist on the target system:
+	 *
+	 *  ALTER DATABASE foo SET name = value;
+	 *  ALTER ROLE bob IN DATABASE foo SET name = value;
+	 */
+	SourceRole *rolesHashByName = NULL;
+	SourceRoleArray *rolesArray = &(specs->targetCatalog.rolesArray);
+
+	if (!schema_list_roles(&dst, rolesArray))
+	{
+		log_error("Failed to list roles on the target database");
+		return false;
+	}
+
+	for (int i = 0; i < rolesArray->count; i++)
+	{
+		SourceRole *role = &(rolesArray->array[i]);
+		size_t len = strlen(role->rolname);
+
+		HASH_ADD(hh, rolesHashByName, rolname, len, role);
+	}
+
+	specs->targetCatalog.rolesHashByName = rolesHashByName;
+
+	if (!pgsql_commit(&dst))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	return true;
 }

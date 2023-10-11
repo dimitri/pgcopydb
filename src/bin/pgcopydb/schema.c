@@ -56,6 +56,22 @@ typedef struct SourceSchemaArrayContext
 	bool parsedOk;
 } SourceSchemaArrayContext;
 
+/* Context used when fetching role definitions */
+typedef struct SourceRoleArrayContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	SourceRoleArray *rolesArray;
+	bool parsedOk;
+} SourceRoleArrayContext;
+
+/* Context used when fetching database properties */
+typedef struct SourcePropertiesArrayContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	SourcePropertiesArray *gucsArray;
+	bool parsedOk;
+} SourcePropertiesArrayContext;
+
 /* Context used when fetching all the extension definitions */
 typedef struct SourceExtensionArrayContext
 {
@@ -131,7 +147,11 @@ typedef struct ChecksumContext
 
 static void getSchemaList(void *ctx, PGresult *result);
 
+static void getRoleList(void *ctx, PGresult *result);
+
 static void getDatabaseList(void *ctx, PGresult *result);
+
+static void getDatabaseProperties(void *ctx, PGresult *result);
 
 static void getExtensionList(void *ctx, PGresult *result);
 
@@ -250,6 +270,50 @@ schema_list_databases(PGSQL *pgsql, SourceDatabaseArray *catArray)
 
 
 /*
+ * schema_list_database_properties grabs the list of GUC settings attached to a
+ * given database with either ALTER DATABASE SET or ALTER ROLE IN DATABASE SET
+ * commands.
+ */
+bool
+schema_list_database_properties(PGSQL *pgsql, SourcePropertiesArray *gucsArray)
+{
+	SourcePropertiesArrayContext parseContext = { { 0 }, gucsArray, false };
+
+	char *sql =
+		"select d.datname, NULL as rolname, "
+		"       unnest(rs.setconfig) as setconfig "
+		"  from pg_db_role_setting rs "
+		"       join pg_database d on d.oid = rs.setdatabase "
+		" where d.datname = current_database() "
+		"   and setrole = 0 "
+
+		"union all "
+
+		"select d.datname, format('%I', rolname) as rolname, "
+		"       unnest(rs.setconfig)  as setconfig "
+		"  from pg_db_role_setting rs "
+		"       join pg_database d on d.oid = rs.setdatabase "
+		"       join pg_roles r on r.oid = rs.setrole "
+		" where d.datname = current_database()";
+
+	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+								   &parseContext, &getDatabaseProperties))
+	{
+		log_error("Failed to list databases properties");
+		return false;
+	}
+
+	if (!parseContext.parsedOk)
+	{
+		log_error("Failed to list databases properties");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * schema_list_schemas grabs the list of schema from the given Postgres
  * instance and allocates a SourceSchemaArray array with the result of the
  * query.
@@ -279,6 +343,37 @@ schema_list_schemas(PGSQL *pgsql, SourceSchemaArray *array)
 	if (!parseContext.parsedOk)
 	{
 		log_error("Failed to list schemas that extensions depend on");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * schema_list_roles grabs the list of role from the given Postgres
+ * instance and allocates a SourceRoleArray array with the result of the
+ * query.
+ */
+bool
+schema_list_roles(PGSQL *pgsql, SourceRoleArray *rolesArray)
+{
+	SourceRoleArrayContext parseContext = { { 0 }, rolesArray, false };
+
+	char *sql =
+		"select oid, format('%I', rolname) as rolname from pg_roles";
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   0, NULL, NULL,
+								   &parseContext, &getRoleList))
+	{
+		log_error("Failed to list roles");
+		return false;
+	}
+
+	if (!parseContext.parsedOk)
+	{
+		log_error("Failed to list roles");
 		return false;
 	}
 
@@ -3677,6 +3772,79 @@ getSchemaList(void *ctx, PGresult *result)
 
 
 /*
+ * getRoleList loops over the SQL result for the role array query and
+ * allocates an array of roles then populates it with the query result.
+ */
+static void
+getRoleList(void *ctx, PGresult *result)
+{
+	SourceRoleArrayContext *context = (SourceRoleArrayContext *) ctx;
+	int nTuples = PQntuples(result);
+
+	log_debug("getRoleList: %d", nTuples);
+
+	if (PQnfields(result) != 2)
+	{
+		log_error("Query returned %d columns, expected 2", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	/* we're not supposed to re-cycle arrays here */
+	if (context->rolesArray->array != NULL)
+	{
+		/* issue a warning but let's try anyway */
+		log_warn("BUG? context's array is not null in getRoleList");
+
+		free(context->rolesArray->array);
+		context->rolesArray->array = NULL;
+	}
+
+	context->rolesArray->count = nTuples;
+	context->rolesArray->array =
+		(SourceRole *) calloc(nTuples, sizeof(SourceRole));
+
+	if (context->rolesArray->array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return;
+	}
+
+	int errors = 0;
+
+	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
+	{
+		SourceRole *role = &(context->rolesArray->array[rowNumber]);
+
+		/* 1. oid */
+		char *value = PQgetvalue(result, rowNumber, 0);
+
+		if (!stringToUInt32(value, &(role->oid)) || role->oid == 0)
+		{
+			log_error("Invalid OID \"%s\"", value);
+			++errors;
+		}
+
+		/* 2. rolname */
+		value = PQgetvalue(result, rowNumber, 1);
+		int length = strlcpy(role->rolname, value, PG_NAMEDATALEN);
+
+		if (length >= PG_NAMEDATALEN)
+		{
+			log_error("Role name \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+					  value, length, PG_NAMEDATALEN - 1);
+			++errors;
+		}
+
+		log_trace("getRoleList: %u %s", role->oid, role->rolname);
+	}
+
+	context->parsedOk = errors == 0;
+}
+
+
+/*
  * getDatabaseList loops over the SQL result for the database array query and
  * allocates an array of databases then populates it with the query result.
  */
@@ -3774,6 +3942,105 @@ getDatabaseList(void *ctx, PGresult *result)
 					  value, length, PG_NAMEDATALEN - 1);
 			++errors;
 		}
+	}
+
+	context->parsedOk = errors == 0;
+}
+
+
+/*
+ * getDatabaseList loops over the SQL result for the database properties array
+ * query and allocates an array of GUC settings then populates it with the
+ * query result.
+ */
+static void
+getDatabaseProperties(void *ctx, PGresult *result)
+{
+	SourcePropertiesArrayContext *context = (SourcePropertiesArrayContext *) ctx;
+	int nTuples = PQntuples(result);
+
+	log_debug("getDatabaseProperties: %d", nTuples);
+
+	if (PQnfields(result) != 3)
+	{
+		log_error("Query returned %d columns, expected 3", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	/* we're not supposed to re-cycle arrays here */
+	if (context->gucsArray->array != NULL)
+	{
+		/* issue a warning but let's try anyway */
+		log_warn("BUG? context's array is not null in getDatabaseProperties");
+
+		free(context->gucsArray->array);
+		context->gucsArray->array = NULL;
+	}
+
+	context->gucsArray->count = nTuples;
+	context->gucsArray->array =
+		(SourceProperty *) calloc(nTuples, sizeof(SourceProperty));
+
+	if (context->gucsArray->array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return;
+	}
+
+	int errors = 0;
+
+	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
+	{
+		SourceProperty *property = &(context->gucsArray->array[rowNumber]);
+
+		/* 1. datname */
+		char *value = PQgetvalue(result, rowNumber, 0);
+		int length = strlcpy(property->datname, value, PG_NAMEDATALEN);
+
+		if (length >= PG_NAMEDATALEN)
+		{
+			log_error("Properties role name \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+					  value, length, PG_NAMEDATALEN - 1);
+			++errors;
+		}
+
+		/* 2. rolname */
+		if (PQgetisnull(result, rowNumber, 1))
+		{
+			property->roleInDatabase = false;
+		}
+		else
+		{
+			property->roleInDatabase = true;
+
+			value = PQgetvalue(result, rowNumber, 1);
+			int length = strlcpy(property->rolname, value, PG_NAMEDATALEN);
+
+			if (length >= PG_NAMEDATALEN)
+			{
+				log_error("Properties role name \"%s\" is %d bytes long, "
+						  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+						  value, length, PG_NAMEDATALEN - 1);
+				++errors;
+			}
+		}
+
+		/* 3. setconfig */
+		value = PQgetvalue(result, rowNumber, 2);
+		int len = strlen(value);
+		int bytes = len + 1;
+
+		property->setconfig = (char *) calloc(bytes, sizeof(char));
+
+		if (property->setconfig == NULL)
+		{
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return;
+		}
+
+		strlcpy(property->setconfig, value, bytes);
 	}
 
 	context->parsedOk = errors == 0;

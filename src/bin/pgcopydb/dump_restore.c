@@ -9,6 +9,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "postgres_fe.h"
+#include "pqexpbuffer.h"
+#include "dumputils.h"
+
 #include "copydb.h"
 #include "env_utils.h"
 #include "lock_utils.h"
@@ -140,6 +144,19 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 		return true;
 	}
 
+	/*
+	 * First restore the database properties (ALTER DATABASE SET).
+	 */
+	if (!copydb_copy_database_properties(specs))
+	{
+		log_error("Failed to restore the database properties, "
+				  "see above for details");
+		return false;
+	}
+
+	/*
+	 * Now prepare the pg_restore --use-list file.
+	 */
 	if (!copydb_write_restore_list(specs, PG_DUMP_SECTION_PRE_DATA))
 	{
 		log_error("Failed to prepare the pg_restore --use-list catalogs, "
@@ -188,6 +205,121 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 
 
 /*
+ * copydb_copy_database_properties uses ALTER DATABASE SET commands to set the
+ * properties on the target database to look the same way as on the source
+ * database.
+ */
+bool
+copydb_copy_database_properties(CopyDataSpec *specs)
+{
+	PGSQL dst = { 0 };
+
+	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_begin(&dst))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	PGconn *conn = dst.connection;
+	SourceRole *rolesHashByName = specs->targetCatalog.rolesHashByName;
+
+	if (specs->catalog.gucsArray.count > 0)
+	{
+		for (int i = 0; i < specs->catalog.gucsArray.count; i++)
+		{
+			SourceProperty *property = &(specs->catalog.gucsArray.array[i]);
+
+			/*
+			 * ALTER ROLE rolname IN DATABASE datname SET ...
+			 */
+			if (property->roleInDatabase)
+			{
+				char *rolname = property->rolname;
+				int len = strlen(rolname);
+
+				SourceRole *role = NULL;
+
+				HASH_FIND(hh, rolesHashByName, rolname, len, role);
+
+				if (role != NULL)
+				{
+					PQExpBuffer command = createPQExpBuffer();
+
+					makeAlterConfigCommand(conn, property->setconfig,
+										   "ROLE", property->rolname,
+										   "DATABASE", property->datname,
+										   command);
+
+					/* chomp the \n */
+					if (command->data[command->len - 1] == '\n')
+					{
+						command->data[command->len - 1] = '\0';
+					}
+
+					log_info("%s", command->data);
+
+					if (!pgsql_execute(&dst, command->data))
+					{
+						/* errors have already been logged */
+						return false;
+					}
+
+					destroyPQExpBuffer(command);
+				}
+				else
+				{
+					log_warn("Skipping database properties for role %s which "
+							 "does not exists on the target database",
+							 rolname);
+				}
+			}
+
+			/*
+			 * ALTER DATABASE datname SET ...
+			 */
+			else
+			{
+				PQExpBuffer command = createPQExpBuffer();
+
+				makeAlterConfigCommand(conn, property->setconfig,
+									   "DATABASE", property->datname, NULL, NULL,
+									   command);
+
+				if (command->data[command->len - 1] == '\n')
+				{
+					command->data[command->len - 1] = '\0';
+				}
+
+				log_info("%s", command->data);
+
+				if (!pgsql_execute(&dst, command->data))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+
+				destroyPQExpBuffer(command);
+			}
+		}
+	}
+
+	if (!pgsql_commit(&dst))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * copydb_target_drop_tables prepares and executes a SQL query that prepares
  * our target database by means of a DROP IF EXISTS ... CASCADE statement that
  * includes all our target tables.
@@ -207,7 +339,7 @@ copydb_target_drop_tables(CopyDataSpec *specs)
 
 	PQExpBuffer query = createPQExpBuffer();
 
-	appendPQExpBuffer(query, "DROP TABLE IF EXISTS");
+	appendPQExpBufferStr(query, "DROP TABLE IF EXISTS");
 
 	for (int tableIndex = 0; tableIndex < tableArray->count; tableIndex++)
 	{
@@ -219,7 +351,7 @@ copydb_target_drop_tables(CopyDataSpec *specs)
 						  source->relname);
 	}
 
-	appendPQExpBuffer(query, " CASCADE");
+	appendPQExpBufferStr(query, " CASCADE");
 
 	/* memory allocation could have failed while building string */
 	if (PQExpBufferBroken(query))
