@@ -32,17 +32,9 @@ jobs:
       id-token: write
 
     steps:
-      - name: Checkout repository (main)
-        if: github.event_name != 'pull_request'
+      - name: Checkout repository
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0 # all history for all branches and tags
-
-      - name: Checkout repository (PR)
-        if: github.event_name == 'pull_request'
-        uses: actions/checkout@v3
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0 # all history for all branches and tags
 
       - name: Set Version String From .git
