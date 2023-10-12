@@ -133,8 +133,8 @@ of pgcopydb used, and can do that in the JSON format when using the
 ::
 
    $ pgcopydb version
-   pgcopydb version 0.13.31.g17a317d
-   compiled with PostgreSQL 15.1 on x86_64-pc-linux-gnu, compiled by gcc (Debian 8.3.0-6) 8.3.0, 64-bit
+   pgcopydb version 0.13.1.g868ad77
+   compiled with PostgreSQL 13.11 (Debian 13.11-0+deb11u1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 10.2.1-6) 10.2.1 20210110, 64-bit
    compatible with Postgres 10, 11, 12, 13, 14, and 15
 
 In JSON:
@@ -143,11 +143,11 @@ In JSON:
 
    $ pgcopydb version --json
    {
-       "pgcopydb": "0.13.31.g17a317d",
-       "pg_major": "15",
-       "pg_version": "15.1",
-       "pg_version_str": "PostgreSQL 15.1 on x86_64-pc-linux-gnu, compiled by gcc (Debian 8.3.0-6) 8.3.0, 64-bit",
-       "pg_version_num": 150001
+       "pgcopydb": "0.13.1.g868ad77",
+       "pg_major": "13",
+       "pg_version": "13.11 (Debian 13.11-0+deb11u1)",
+       "pg_version_str": "PostgreSQL 13.11 (Debian 13.11-0+deb11u1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 10.2.1-6) 10.2.1 20210110, 64-bit",
+       "pg_version_num": 130011
    }
 
 The details about the Postgres version applies to the version that's been
