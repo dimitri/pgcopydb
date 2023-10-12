@@ -24,8 +24,8 @@
 #define COMMON_GUC_SETTINGS \
 	{ "client_encoding", "'UTF-8'" }, \
 	{ "extra_float_digits", "3" }, \
-	{ "statement_timeout", "0" }
-
+	{ "statement_timeout", "0" }, \
+	{ "default_transaction_read_only", "off" }
 /*
  * These parameters are added to the connection strings, unless the user has
  * added them, allowing user-defined values to be taken into account.
