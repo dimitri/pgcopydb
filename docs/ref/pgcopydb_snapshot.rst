@@ -3,7 +3,7 @@
 pgcopydb snapshot
 =================
 
-pgcopydb snapshot - Create and exports a snapshot on the source database
+pgcopydb snapshot - Create and export a snapshot on the source database
 
 The command ``pgcopydb snapshot`` connects to the source database and
 executes a SQL query to export a snapshot. The obtained snapshot is both
@@ -12,7 +12,7 @@ expect to find it.
 
 ::
 
-   pgcopydb snapshot: Create and exports a snapshot on the source database
+   pgcopydb snapshot: Create and export a snapshot on the source database
    usage: pgcopydb snapshot  --source ...
 
      --source         Postgres URI to the source database

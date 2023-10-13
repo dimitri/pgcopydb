@@ -50,7 +50,7 @@ $ pgcopydb help
     fork      Clone an entire database from source to target
     follow    Replay changes from the source database to the target database
     copy-db   Clone an entire database from source to target
-    snapshot  Create and exports a snapshot on the source database
+    snapshot  Create and export a snapshot on the source database
   + compare   Compare source and target databases
   + copy      Implement the data section of the database copy
   + dump      Dump database objects from a Postgres instance
@@ -58,8 +58,8 @@ $ pgcopydb help
   + list      List database objects from a Postgres instance
   + stream    Stream changes from the source database
     ping      Attempt to connect to the source and target instances
-    help      print help message
-    version   print pgcopydb version
+    help      Print help message
+    version   Print pgcopydb version
 
   pgcopydb compare
     schema  Compare source and target schema
@@ -72,7 +72,7 @@ $ pgcopydb help
     schema       Copy the database schema from source to target
     data         Copy the data section from source to target
     table-data   Copy the data from all tables in database from source to target
-    blobs        Copy the blob data from ther source database to the target
+    blobs        Copy the blob data from the source database to the target
     sequences    Copy the current value from all sequences in database from source to target
     indexes      Create all the indexes found in the source database in the target
     constraints  Create all the constraints found in the source database in the target
@@ -104,7 +104,7 @@ $ pgcopydb help
 
   pgcopydb stream
     setup      Setup source and target systems for logical decoding
-    cleanup    cleanup source and target systems for logical decoding
+    cleanup    Cleanup source and target systems for logical decoding
     prefetch   Stream JSON changes from the source database and transform them to SQL
     catchup    Apply prefetched changes from SQL files to the target database
     replay     Replay changes from the source to the target database, live
@@ -203,7 +203,7 @@ Several distributions are available for pgcopydb:
      version currently in debian stable.
 
 	 ```
-	 $ docker run --rm -it dimitri/pgcopydb:v0.11 pgcopydb --version
+	 $ docker run --rm -it dimitri/pgcopydb:v0.13 pgcopydb --version
 	 ```
 
 	 Or you can use the CI/CD integration that publishes packages from the
