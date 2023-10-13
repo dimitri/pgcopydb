@@ -523,8 +523,9 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 			/* if the buffer doesn't terminate with \n it's a partial read */
 			bool partialRead = buf[bytes - 1] != '\n';
 
-			char *lines[BUFSIZE] = { 0 };
-			int lineCount = splitLines(buf, lines, BUFSIZE);
+			int count = countLines(buf);
+			char **lines = (char **) calloc(count, sizeof(char *));
+			int lineCount = splitLines(buf, lines, count);
 
 			log_trace("read_from_stream read %6zu bytes in %d lines %s[%lld]",
 					  bytes,
@@ -662,6 +663,7 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 				}
 			}
 
+			free(lines);
 			free(buf);
 		}
 
