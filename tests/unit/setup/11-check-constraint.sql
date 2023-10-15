@@ -4,7 +4,7 @@ CREATE TABLE public.employees (
 );
 
 --
--- See https://github.com/dimitri/pgcopydb/issues/430
+-- See https://github.com/dimitri/pgcopydb/issues/498
 --
 -- Migration fails when handling CHECK CONSTRAINT
 --
