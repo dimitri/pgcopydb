@@ -1023,6 +1023,7 @@ struct ArchiveItemDescMapping pgRestoreDescriptionArray[] = {
 	INSERT_MAPPING(ARCHIVE_TAG_FUNCTION, "FUNCTION"),
 	INSERT_MAPPING(ARCHIVE_TAG_INDEX_ATTACH, "INDEX ATTACH"),
 	INSERT_MAPPING(ARCHIVE_TAG_INDEX, "INDEX"),
+	INSERT_MAPPING(ARCHIVE_TAG_LANGUAGE, "LANGUAGE"),
 	INSERT_MAPPING(ARCHIVE_TAG_MATERIALIZED_VIEW, "MATERIALIZED VIEW"),
 	INSERT_MAPPING(ARCHIVE_TAG_OPERATOR_CLASS, "OPERATOR CLASS"),
 	INSERT_MAPPING(ARCHIVE_TAG_OPERATOR_FAMILY, "OPERATOR FAMILY"),
@@ -1404,7 +1405,7 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 
 	/*
 	 * At the moment we only support filtering ACLs and COMMENTS for SCHEMA and
-	 * EXTENSION objects, see --skip-extensions. So first, we skil the
+	 * EXTENSION objects, see --skip-extensions. So first, we skip the
 	 * namespace, which in our case would always be a dash.
 	 */
 	ArchiveTokenType list[] = {
