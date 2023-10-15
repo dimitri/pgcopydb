@@ -230,7 +230,7 @@ avoiding disks entirely.
 pgcopydb copy blobs
 -------------------
 
-pgcopydb copy blobs - Copy the blob data from ther source database to the target
+pgcopydb copy blobs - Copy the blob data from the source database to the target
 
 The command ``pgcopydb copy blobs`` fetches list of large objects (aka
 blobs) from the source database and copies their data parts to the target
@@ -240,7 +240,7 @@ have already been taken care of, because of the behaviour of
 
 ::
 
-   pgcopydb copy blobs: Copy the blob data from ther source database to the target
+   pgcopydb copy blobs: Copy the blob data from the source database to the target
    usage: pgcopydb copy blobs  --source ... --target ...
 
      --source             Postgres URI to the source database

@@ -53,7 +53,7 @@ sub-processes that each handle a part of the work.
 
 The process tree then looks like the following:
 
- * pgcopydb clone --follow --table-jobs 4 --index-jobs 4
+ * pgcopydb clone --follow --table-jobs 4 --index-jobs 4 --large-objects-jobs 4
 
    * pgcopydb clone worker
 
@@ -69,13 +69,13 @@ The process tree then looks like the following:
 
      * pgcopydb blob metadata worker (``--large-objects-jobs 4``)
 
-       #. pgcopydb blob worker
+       #. pgcopydb blob data worker
 
-       #. pgcopydb blob worker
+       #. pgcopydb blob data worker
 
-       #. pgcopydb blob worker
+       #. pgcopydb blob data worker
 
-       #. pgcopydb blob worker
+       #. pgcopydb blob data worker
 
      1. pgcopydb index/constraints worker (``--index-jobs 4``)
 
@@ -104,14 +104,14 @@ The process tree then looks like the following:
      * pgcopydb stream catchup
 
 We see that when using ``pgcopydb clone --follow --table-jobs 4 --index-jobs
-4 --large-objects-jobs`` then pgcopydb creates 24 sub-processes, including
+4 --large-objects-jobs 4`` then pgcopydb creates 24 sub-processes, including
 one transient sub-process each time a JSON file is to be converted to a SQL
 file for replay.
 
 The 24 total is counted from:
 
- - 1 clone worker + 1 copy supervisor + 4 copy workers + 1 blob worker + 4
-   blob data workers + 4 index workers + 4 vacuum workers + 1 sequence reset
+ - 1 clone worker + 1 copy supervisor + 4 copy workers + 1 blob metadata worker
+   + 4 blob data workers + 4 index workers + 4 vacuum workers + 1 sequence reset
    worker
 
    that's 1 + 1 + 4 + 1 + 4 + 4 + 4 + 1 = 20
