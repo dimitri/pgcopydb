@@ -408,7 +408,7 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 	{
 		log_error("Failed to prepare the pg_restore --use-list catalogs, "
 				  "see above for details");
-		return true;
+		return false;
 	}
 
 	if (!pg_restore_db(&(specs->pgPaths),

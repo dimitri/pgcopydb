@@ -8,3 +8,4 @@
 \ir 8-string-escape.sql
 \ir 9-table-with-zero-cols.sql
 \ir 10-search-path-index-enum.sql
+\ir 11-check-constraint.sql

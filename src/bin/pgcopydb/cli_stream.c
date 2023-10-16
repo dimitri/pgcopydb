@@ -609,7 +609,7 @@ cli_stream_cleanup(int argc, char **argv)
 	bool service = false;
 
 	if (!copydb_init_workdir(&copySpecs,
-							 NULL,
+							 streamDBoptions.dir,
 							 service,
 							 NULL,
 							 restart,
