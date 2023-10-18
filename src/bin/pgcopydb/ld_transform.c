@@ -82,6 +82,11 @@ stream_transform_stream(StreamSpecs *specs)
 	log_debug("Source database wal_segment_size is %u", specs->WalSegSz);
 	log_debug("Source database timeline is %d", specs->system.timeline);
 
+	/*
+	 * Resume operations by reading the current transform target file, if it
+	 * already exists, and make sure to grab the current sentinel endpos LSN
+	 * when it has been set.
+	 */
 	if (!stream_transform_resume(specs))
 	{
 		log_error("Failed to resume streaming from %X/%X",
@@ -89,6 +94,22 @@ stream_transform_stream(StreamSpecs *specs)
 		return false;
 	}
 
+	LogicalMessageMetadata *metadata = &(privateContext->metadata);
+
+	if (privateContext->endpos != InvalidXLogRecPtr &&
+		privateContext->endpos <= metadata->lsn)
+	{
+		log_info("Transform reached end position %X/%X at %X/%X",
+				 LSN_FORMAT_ARGS(privateContext->endpos),
+				 LSN_FORMAT_ARGS(metadata->lsn));
+		return true;
+	}
+
+	/*
+	 * Now read from the input PIPE and parse lines, writing SQL to disk at
+	 * transaction boundaries. The read_from_stream() function finishes upon
+	 * PIPE being closed on the writing side.
+	 */
 	TransformStreamCtx ctx = {
 		.context = privateContext,
 		.currentMsgIndex = 0
@@ -172,6 +193,33 @@ stream_transform_resume(StreamSpecs *specs)
 					  sqlFileName);
 			return false;
 		}
+	}
+
+	/*
+	 * Now grab the current sentinel values, specifically the current endpos.
+	 */
+	PGSQL src = { 0 };
+
+	if (!pgsql_init(&src, specs->connStrings->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	CopyDBSentinel sentinel = { 0 };
+
+	if (!pgsql_get_sentinel(&src, &sentinel))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (sentinel.endpos != InvalidXLogRecPtr)
+	{
+		privateContext->endpos = sentinel.endpos;
+
+		log_debug("Transform process is setup to end at LSN %X/%X",
+				  LSN_FORMAT_ARGS(privateContext->endpos));
 	}
 
 	return true;

@@ -452,9 +452,11 @@ startLogicalStreaming(StreamSpecs *specs)
 
 		if (cleanExit)
 		{
-			log_info("Streamed up to write_lsn %X/%X, flush_lsn %X/%X, stopping",
+			log_info("Streamed up to write_lsn %X/%X, flush_lsn %X/%X, stopping: "
+					 "endpos is %X/%X",
 					 LSN_FORMAT_ARGS(context.tracking->written_lsn),
-					 LSN_FORMAT_ARGS(context.tracking->flushed_lsn));
+					 LSN_FORMAT_ARGS(context.tracking->flushed_lsn),
+					 LSN_FORMAT_ARGS(context.endpos));
 		}
 		else if (!(asked_to_stop || asked_to_stop_fast || asked_to_quit))
 		{

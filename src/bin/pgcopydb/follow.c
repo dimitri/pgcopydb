@@ -615,13 +615,19 @@ follow_start_prefetch(StreamSpecs *specs)
 
 		close_fd_or_exit(specs->pipe_rt[1]);
 
+		log_info("Prefetch process has terminated");
+
 		return success;
 	}
 	else
 	{
 		specs->stdOut = false;
 
-		return startLogicalStreaming(specs);
+		bool success = startLogicalStreaming(specs);
+
+		log_info("Prefetch process has terminated");
+
+		return success;
 	}
 
 	return true;
