@@ -304,10 +304,26 @@ stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
 			continue;
 		}
 
-		/* always update our context from the sentinel values */
+		/*
+		 * Now grab the current sentinel values.
+		 *
+		 * The pgcopydb sentinel table contains an endpos. The --endpos command
+		 * line option (found in specs->endpos) prevails, but when it's not
+		 * been used, we have a look at the sentinel value.
+		 */
 		context->startpos = sentinel.startpos;
-		context->endpos = sentinel.endpos;
 		context->apply = sentinel.apply;
+
+		if (specs->endpos == InvalidXLogRecPtr)
+		{
+			context->endpos = sentinel.endpos;
+		}
+		else
+		{
+			log_warn("Sentinel endpos is %X/%X, overriden by --endpos %X/%X",
+					 LSN_FORMAT_ARGS(sentinel.endpos),
+					 LSN_FORMAT_ARGS(specs->endpos));
+		}
 
 		/* TODO: find more about this */
 		if (context->previousLSN == InvalidXLogRecPtr)
@@ -393,7 +409,7 @@ stream_apply_sync_sentinel(StreamApplyContext *context, bool findDurableLSN)
 	{
 		if (!stream_apply_find_durable_lsn(context, &durableLSN))
 		{
-			log_warn("Skipping sentinel replay_lsn udpate: "
+			log_warn("Skipping sentinel replay_lsn update: "
 					 "failed to find a durable LSN matching current flushLSN");
 			return true;
 		}
@@ -402,7 +418,7 @@ stream_apply_sync_sentinel(StreamApplyContext *context, bool findDurableLSN)
 	if (!pgsql_sync_sentinel_apply(&src, durableLSN, &sentinel))
 	{
 		log_warn("Failed to sync progress with the pgcopydb sentinel");
-		return false;
+		return true;
 	}
 
 	context->apply = sentinel.apply;
@@ -447,8 +463,8 @@ stream_apply_send_sync_sentinel(StreamApplyContext *context)
 
 	if (!pgsql_send_sync_sentinel_apply(src, durableLSN))
 	{
-		log_error("Failed to sync progress with the pgcopydb sentinel");
-		return false;
+		log_warn("Failed to sync progress with the pgcopydb sentinel");
+		return true;
 	}
 
 	context->sentinelSyncTime = time(NULL);
@@ -1177,6 +1193,11 @@ setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
 		return false;
 	}
 
+	/*
+	 * The context->previousLSN may have been initialized already from the
+	 * sentinel, when restarting a follow operation. For more details see
+	 * function stream_apply_wait_for_sentinel().
+	 */
 	if (context->previousLSN == InvalidXLogRecPtr)
 	{
 		log_info("Setting up previous LSN from "

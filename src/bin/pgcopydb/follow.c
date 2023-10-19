@@ -596,7 +596,9 @@ follow_start_prefetch(StreamSpecs *specs)
 	if (specs->mode == STREAM_MODE_REPLAY)
 	{
 		/* arrange to write to the receive-transform pipe */
+		specs->stdIn = false;
 		specs->stdOut = true;
+
 		specs->out = fdopen(specs->pipe_rt[1], "a");
 
 		/* close pipe ends we're not using */
@@ -621,6 +623,7 @@ follow_start_prefetch(StreamSpecs *specs)
 	}
 	else
 	{
+		specs->stdIn = false;
 		specs->stdOut = false;
 
 		bool success = startLogicalStreaming(specs);
@@ -709,6 +712,8 @@ follow_start_catchup(StreamSpecs *specs)
 	{
 		/* arrange to read from the transform-apply pipe */
 		specs->stdIn = true;
+		specs->stdOut = false;
+
 		specs->in = fdopen(specs->pipe_ta[0], "r");
 
 		/* close pipe ends we're not using */
@@ -731,6 +736,7 @@ follow_start_catchup(StreamSpecs *specs)
 		 * open the right SQL file and apply statements from there.
 		 */
 		specs->stdIn = false;
+		specs->stdOut = false;
 
 		return stream_apply_catchup(specs);
 	}

@@ -287,6 +287,46 @@ LogicalStreamModeToString(LogicalStreamMode mode)
 
 
 /*
+ * stream_check_in_out checks that the stdIn and stdOut file descriptors are
+ * still valid: EBADF could happen when a PIPE is Broken for lack of a
+ * reader/writer process.
+ */
+bool
+stream_check_in_out(StreamSpecs *specs)
+{
+	if (specs->stdIn)
+	{
+		char buf[0];
+
+		if (read(fileno(specs->in), buf, 0) != 0)
+		{
+			log_error("Failed to read from input PIPE: %m");
+			return false;
+		}
+	}
+
+	if (specs->stdOut)
+	{
+		char buf[0];
+
+		if (fwrite(buf, sizeof(char), 0, specs->in) != 0)
+		{
+			log_error("Failed to write to output PIPE: %m");
+			return false;
+		}
+
+		if (fflush(specs->out) != 0)
+		{
+			log_error("Failed to flush output PIPE: %m");
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
  * stream_init_context initializes a LogicalStreamContext.
  */
 bool
@@ -299,11 +339,6 @@ stream_init_context(StreamSpecs *specs)
 	privateContext->startposActionFromJSON = specs->startposActionFromJSON;
 
 	privateContext->mode = specs->mode;
-	privateContext->stdIn = specs->stdIn;
-	privateContext->stdOut = specs->stdOut;
-
-	privateContext->in = specs->in;
-	privateContext->out = specs->out;
 
 	privateContext->transformQueue = &(specs->transformQueue);
 
@@ -312,10 +347,21 @@ stream_init_context(StreamSpecs *specs)
 
 	privateContext->connStrings = specs->connStrings;
 
-	privateContext->metadata.action = STREAM_ACTION_UNKNOWN;
-	privateContext->previous.action = STREAM_ACTION_UNKNOWN;
+	/*
+	 * When using PIPEs for inter-process communication, makes sure the PIPEs
+	 * are ready for us to use and not broken, as in EBADF.
+	 */
+	privateContext->stdIn = specs->stdIn;
+	privateContext->stdOut = specs->stdOut;
 
-	privateContext->lastWriteTime = 0;
+	privateContext->in = specs->in;
+	privateContext->out = specs->out;
+
+	if (!stream_check_in_out(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	/*
 	 * When streaming is resumed, transactions are sent in full even if we wrote
@@ -326,6 +372,11 @@ stream_init_context(StreamSpecs *specs)
 	 * However, note that if the last message is COMMIT, the streaming will
 	 * resume from the next transaction.
 	 */
+	privateContext->metadata.action = STREAM_ACTION_UNKNOWN;
+	privateContext->previous.action = STREAM_ACTION_UNKNOWN;
+
+	privateContext->lastWriteTime = 0;
+
 	if (specs->startposComputedFromJSON &&
 		(specs->startposActionFromJSON == STREAM_ACTION_BEGIN ||
 		 specs->startposActionFromJSON == STREAM_ACTION_INSERT ||
@@ -411,9 +462,23 @@ startLogicalStreaming(StreamSpecs *specs)
 	 * continue streaming.
 	 */
 	bool retry = true;
+	uint64_t retries = 0;
+	uint64_t waterMarkLSN = InvalidXLogRecPtr;
 
 	while (retry)
 	{
+		if (!stream_check_in_out(specs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		{
+			log_error("Streaming process has been signaled to stop");
+			return false;
+		}
+
 		if (!pgsql_init_stream(&stream,
 							   specs->connStrings->logrep_pguri,
 							   specs->slot.plugin,
@@ -458,7 +523,16 @@ startLogicalStreaming(StreamSpecs *specs)
 					 LSN_FORMAT_ARGS(context.tracking->flushed_lsn),
 					 LSN_FORMAT_ARGS(context.endpos));
 		}
-		else if (!(asked_to_stop || asked_to_stop_fast || asked_to_quit))
+		else if (retries > 0 &&
+				 context.tracking->written_lsn == waterMarkLSN)
+		{
+			log_warn("Streaming got interrupted at %X/%X, and did not make "
+					 "any progress from previous attempt, stopping now",
+					 LSN_FORMAT_ARGS(context.tracking->written_lsn));
+
+			return false;
+		}
+		else if (retry)
 		{
 			log_warn("Streaming got interrupted at %X/%X, reconnecting in 1s",
 					 LSN_FORMAT_ARGS(context.tracking->written_lsn));
@@ -475,7 +549,10 @@ startLogicalStreaming(StreamSpecs *specs)
 		/* sleep for one entire second before retrying */
 		if (retry)
 		{
-			(void) pg_usleep(1 * 1000 * 1000);
+			++retries;
+			waterMarkLSN = context.tracking->written_lsn;
+
+			(void) pg_usleep(1 * 1000 * 1000); /* 1s */
 		}
 	}
 

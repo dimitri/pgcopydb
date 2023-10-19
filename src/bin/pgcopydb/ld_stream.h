@@ -491,6 +491,7 @@ bool stream_init_for_mode(StreamSpecs *specs, LogicalStreamMode mode);
 
 char * LogicalStreamModeToString(LogicalStreamMode mode);
 
+bool stream_check_in_out(StreamSpecs *specs);
 bool stream_init_context(StreamSpecs *specs);
 
 bool startLogicalStreaming(StreamSpecs *specs);

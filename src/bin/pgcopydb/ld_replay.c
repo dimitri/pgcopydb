@@ -71,25 +71,14 @@ stream_apply_replay(StreamSpecs *specs)
 		return false;
 	}
 
-	/*
-	 * Also grab the current endpos, before reading from the PIPE, so that we
-	 * can skip reading entirely if we are already past it.
-	 */
-	CopyDBSentinel sentinel = { 0 };
-
-	if (!pgsql_get_sentinel(src, &sentinel))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (sentinel.endpos != InvalidXLogRecPtr)
-	{
-		context->endpos = sentinel.endpos;
-	}
-
-	/* check for reaching endpos  */
+	/* check for having reached endpos in a previous run already */
 	(void) stream_replay_reached_endpos(specs, context, false);
+
+	if (context->reachedEndPos)
+	{
+		/* reaching endpos has already been logged */
+		return true;
+	}
 
 	/*
 	 * Setup our PIPE reading callback function and read from the PIPE.
@@ -135,7 +124,7 @@ stream_apply_replay(StreamSpecs *specs)
 	/* we might still have to disconnect now */
 	(void) pgsql_finish(&(context->pgsql));
 
-	/* check for reaching endpos  */
+	/* check for reaching endpos */
 	(void) stream_replay_reached_endpos(specs, context, true);
 
 	return true;

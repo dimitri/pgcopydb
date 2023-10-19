@@ -57,31 +57,6 @@ stream_transform_stream(StreamSpecs *specs)
 {
 	StreamContext *privateContext = &(specs->private);
 
-	if (!stream_init_context(specs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/* we need timeline and wal_segment_size to compute WAL filenames */
-	if (specs->system.timeline == 0)
-	{
-		if (!stream_read_context(&(specs->paths),
-								 &(specs->system),
-								 &(specs->WalSegSz)))
-		{
-			log_error("Failed to read the streaming context information "
-					  "from the source database, see above for details");
-			return false;
-		}
-	}
-
-	privateContext->WalSegSz = specs->WalSegSz;
-	privateContext->timeline = specs->system.timeline;
-
-	log_debug("Source database wal_segment_size is %u", specs->WalSegSz);
-	log_debug("Source database timeline is %d", specs->system.timeline);
-
 	/*
 	 * Resume operations by reading the current transform target file, if it
 	 * already exists, and make sure to grab the current sentinel endpos LSN
@@ -160,6 +135,88 @@ stream_transform_resume(StreamSpecs *specs)
 {
 	StreamContext *privateContext = &(specs->private);
 
+	/*
+	 * Now grab the current sentinel values, specifically the current endpos.
+	 *
+	 * The pgcopydb sentinel table also contains an endpos. The --endpos
+	 * command line option (found in specs->endpos) prevails, but when it's not
+	 * been used, we have a look at the sentinel value.
+	 */
+	PGSQL src = { 0 };
+
+	if (!pgsql_init(&src, specs->connStrings->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	CopyDBSentinel sentinel = { 0 };
+
+	if (!pgsql_get_sentinel(&src, &sentinel))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (specs->endpos == InvalidXLogRecPtr)
+	{
+		specs->endpos = sentinel.endpos;
+	}
+	else
+	{
+		log_warn("Sentinel endpos is %X/%X, overriden by --endpos %X/%X",
+				 LSN_FORMAT_ARGS(sentinel.endpos),
+				 LSN_FORMAT_ARGS(specs->endpos));
+	}
+
+	if (specs->endpos != InvalidXLogRecPtr)
+	{
+		log_info("Transform process is setup to end at LSN %X/%X",
+				 LSN_FORMAT_ARGS(specs->endpos));
+	}
+
+	/* if we have a startpos, that's better than using 0/0 at init time */
+	if (specs->startpos == InvalidXLogRecPtr)
+	{
+		if (sentinel.startpos != InvalidXLogRecPtr)
+		{
+			specs->startpos = sentinel.startpos;
+
+			log_info("Resuming streaming at LSN %X/%X "
+					 "from replication slot \"%s\"",
+					 LSN_FORMAT_ARGS(specs->startpos),
+					 specs->slot.slotName);
+		}
+	}
+
+	/*
+	 * Initialize our private context from the updated specs.
+	 */
+	if (!stream_init_context(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* we need timeline and wal_segment_size to compute WAL filenames */
+	if (specs->system.timeline == 0)
+	{
+		if (!stream_read_context(&(specs->paths),
+								 &(specs->system),
+								 &(specs->WalSegSz)))
+		{
+			log_error("Failed to read the streaming context information "
+					  "from the source database, see above for details");
+			return false;
+		}
+	}
+
+	privateContext->WalSegSz = specs->WalSegSz;
+	privateContext->timeline = specs->system.timeline;
+
+	log_debug("Source database wal_segment_size is %u", specs->WalSegSz);
+	log_debug("Source database timeline is %d", specs->system.timeline);
+
 	char jsonFileName[MAXPGPATH] = { 0 };
 	char sqlFileName[MAXPGPATH] = { 0 };
 
@@ -193,33 +250,6 @@ stream_transform_resume(StreamSpecs *specs)
 					  sqlFileName);
 			return false;
 		}
-	}
-
-	/*
-	 * Now grab the current sentinel values, specifically the current endpos.
-	 */
-	PGSQL src = { 0 };
-
-	if (!pgsql_init(&src, specs->connStrings->source_pguri, PGSQL_CONN_SOURCE))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	CopyDBSentinel sentinel = { 0 };
-
-	if (!pgsql_get_sentinel(&src, &sentinel))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (sentinel.endpos != InvalidXLogRecPtr)
-	{
-		privateContext->endpos = sentinel.endpos;
-
-		log_debug("Transform process is setup to end at LSN %X/%X",
-				  LSN_FORMAT_ARGS(privateContext->endpos));
 	}
 
 	return true;
