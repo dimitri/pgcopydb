@@ -318,13 +318,6 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		previousMode = currentMode;
 		currentMode = modeArray[++loop % count];
 
-		/* and re-init our streamSpecs for the new mode */
-		if (!stream_init_for_mode(streamSpecs, currentMode))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
 		/*
 		 * Whatever the current/previous mode was, we need to
 		 * ensure to catch-up with files on-disk before switching
@@ -361,6 +354,13 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 
 		log_info("Restarting logical decoding follower in %s mode",
 				 LogicalStreamModeToString(currentMode));
+
+		/* and re-init our streamSpecs for the new mode */
+		if (!stream_init_for_mode(streamSpecs, currentMode))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	/* keep compiler happy */
@@ -443,22 +443,50 @@ follow_prepare_mode_switch(StreamSpecs *streamSpecs,
 			log_notice("Processing %lld messages from the transform queue",
 					   (long long) qStats.msg_qnum);
 
-			if (!stream_transform_from_queue(streamSpecs))
+			FollowSubProcess *transform = &(streamSpecs->transform);
+
+			if (!follow_start_subprocess(streamSpecs, transform))
 			{
-				log_error("Failed to process messages from the transform queue, "
-						  "see above for details");
+				log_error("Failed to start the transform process");
+				return false;
+			}
+
+			if (!follow_wait_subprocesses(streamSpecs))
+			{
+				log_error("Failed to transform %lld messages from the queue, "
+						  "see above for details",
+						  (long long) qStats.msg_qnum);
 				return false;
 			}
 		}
 	}
 
-	/* then catch-up with what's been stream and transformed already */
-	if (!stream_apply_catchup(streamSpecs))
+	/*
+	 * Then catch-up with what's been stream and transformed already, which
+	 * means replaying the files that have already been prepared on-disk.
+	 */
+	LogicalStreamMode mode = streamSpecs->mode;
+	streamSpecs->mode = STREAM_MODE_CATCHUP;
+
+	FollowSubProcess *catchup = &(streamSpecs->catchup);
+
+	if (!follow_start_subprocess(streamSpecs, catchup))
 	{
+		streamSpecs->mode = mode;
+		log_error("Failed to start the %s process", catchup->name);
+		return false;
+	}
+
+	if (!follow_wait_subprocesses(streamSpecs))
+	{
+		streamSpecs->mode = mode;
 		log_error("Failed to catchup with on-disk files, "
 				  "see above for details");
 		return false;
 	}
+
+	/* re-install the streamSpecs->mode as it was before getting there */
+	streamSpecs->mode = mode;
 
 	return true;
 }

@@ -225,8 +225,10 @@ stream_init_for_mode(StreamSpecs *specs, LogicalStreamMode mode)
 	}
 	else if (specs->mode == STREAM_MODE_REPLAY && mode == STREAM_MODE_CATCHUP)
 	{
+		specs->stdIn = false;
+		specs->stdOut = false;
+
 		/* we keep the transform queue around */
-		(void) 0;
 	}
 	else
 	{
