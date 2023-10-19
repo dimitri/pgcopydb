@@ -572,6 +572,10 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths,
 			"%s/lsn.json",
 			cfPaths->cdc.dir);
 
+	sformat(cfPaths->cdc.txnlatestfile, MAXPGPATH,
+			"%s/txn.latest.sql",
+			cfPaths->cdc.dir);
+
 	/*
 	 * Now prepare the "compare" files we need to compare schema and data
 	 * between the source and target instance.

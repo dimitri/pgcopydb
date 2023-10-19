@@ -27,8 +27,17 @@
 typedef struct ReplayStreamCtx
 {
 	StreamApplyContext applyContext;
+
+	bool isTxnBuffering;
+	bool skipTxnBuffering;
+
+	FILE *txnBuffer;
+
+	char currentTxnFileName[MAXPGPATH];
 } ReplayStreamCtx;
 
+static bool streamReplayLineIntoBuffer(void *ctx, const char *line, bool *stop);
+static bool streamBufferedXID(ReplayStreamCtx *replayCtx);
 
 /*
  * stream_apply_replay implements "live replay" of the changes from the source
@@ -84,7 +93,7 @@ stream_apply_replay(StreamSpecs *specs)
 	 * Setup our PIPE reading callback function and read from the PIPE.
 	 */
 	ReadFromStreamContext readerContext = {
-		.callback = stream_replay_line,
+		.callback = streamReplayLineIntoBuffer,
 		.ctx = &ctx
 	};
 
@@ -174,7 +183,6 @@ stream_replay_line(void *ctx, const char *line, bool *stop)
 	StreamApplyContext *context = &(replayCtx->applyContext);
 
 	LogicalMessageMetadata metadata = { 0 };
-
 	if (!parseSQLAction((char *) line, &metadata))
 	{
 		/* errors have already been logged */
@@ -245,6 +253,303 @@ stream_replay_line(void *ctx, const char *line, bool *stop)
 		log_info("Replay reached end position %X/%X at %X/%X",
 				 LSN_FORMAT_ARGS(context->endpos),
 				 LSN_FORMAT_ARGS(context->previousLSN));
+	}
+
+	return true;
+}
+
+
+/*
+ * streamBufferedXID reads a transaction buffer file and streams it into the
+ * target database.
+ */
+static bool
+streamBufferedXID(ReplayStreamCtx *replayCtx)
+{
+	/* Open replaybuffer in read-only mode to use it as input stream */
+	FILE *txnBufferForRead = fopen_read_only(replayCtx->currentTxnFileName);
+
+	if (txnBufferForRead == NULL)
+	{
+		log_error("Failed to open transaction buffer file \"%s\" in "
+				  "readonly mode: %m",
+				  replayCtx->currentTxnFileName);
+		return false;
+	}
+
+	ReadFromStreamContext readerContext = {
+		.callback = stream_replay_line,
+		.ctx = replayCtx
+	};
+
+	if (!read_from_stream(txnBufferForRead, &readerContext))
+	{
+		log_error("Failed to read from replay buffer, "
+				  "see above for details");
+		return false;
+	}
+
+	fclose(txnBufferForRead);
+
+	return true;
+}
+
+
+/* streamReplayLineIntoBuffer is a callback function for the ReadFromStreamContext
+ * and read_from_stream infrastructure. It's called on each line read from a
+ * stream such as a unix pipe and buffers the line into a file when we encounter
+ * a COMMIT without a valid txnCommitLSN.
+ *
+ * This ensures that the apply process doesn't block the generation of the
+ * transaction metadata file created by the transform process on arrival of
+ * a COMMIT message.
+ */
+static bool
+streamReplayLineIntoBuffer(void *ctx, const char *line, bool *stop)
+{
+	ReplayStreamCtx *replayCtx = (ReplayStreamCtx *) ctx;
+	StreamApplyContext *context = &(replayCtx->applyContext);
+
+	LogicalMessageMetadata metadata = { 0 };
+
+	if (!parseSQLAction((char *) line, &metadata))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* We don't use this metadata in this function */
+	free(metadata.jsonBuffer);
+
+
+	if (metadata.action == STREAM_ACTION_BEGIN)
+	{
+		/*
+		 * Enable transaction buffering only when the BEGIN doesn't have
+		 * valid commit LSN, otherwise we can skip buffering and stream
+		 * the transaction directly.
+		 */
+		replayCtx->skipTxnBuffering = metadata.txnCommitLSN != InvalidXLogRecPtr;
+		if (replayCtx->skipTxnBuffering)
+		{
+			return stream_replay_line(ctx, line, stop);
+		}
+
+		if (replayCtx->isTxnBuffering)
+		{
+			/*
+			 * When the follow switches from prefetch to replay mode, we
+			 * call stream_transform_stream which might stream the partially
+			 * written transaction created during the prefetch mode.
+			 *
+			 * For example, lets consider the partially written C.sql file,
+			 *
+			 * BEGIN -- {"xid": 1000, "commitLSN": "0/1234"};
+			 * INSERT INTO C VALUES (1);
+			 * INSERT INTO C VALUES (2);
+			 * KEEPALIVE;
+			 *
+			 * After switching to the replay mode, logical decoding will resume
+			 * from consistent point which again starts with a valid transcation
+			 * block.
+			 *
+			 * Lets assume the following contents streamed from the transform
+			 * to catchup process in UNIX PIPE after switching to replay mode,
+			 *
+			 * BEGIN -- {"xid": 999, "commitLSN": "0/1230"};
+			 * INSERT INTO A VALUES (1);
+			 * INSERT INTO A VALUES (2);
+			 * COMMIT -- {"xid": 999, "lsn": "0/1230"};
+			 * BEGIN -- {"xid": 1000, "commitLSN": "0/1234"};
+			 * INSERT INTO C VALUES (1);
+			 * INSERT INTO C VALUES (2);
+			 * COMMIT -- {"xid": 1000, "lsn": "0/1234"};
+			 *
+			 * Contents of C.sql will be streamed by stream_transform_stream
+			 * and followed by the contents from UNIX PIPE. Since both of the
+			 * contents are streamed one after the other, the second block
+			 * contains the full content of previously written
+			 * transaction. So, we can skip previous transaction buffer and
+			 * start buffering from the current transaction.
+			 */
+			log_debug("Received %s when transaction is already "
+					  "in buffering mode, ignoring.", line);
+			fclose(replayCtx->txnBuffer);
+
+			/* Remove symlink to the replay buffer */
+			(void) unlink_file(context->paths.txnlatestfile);
+		}
+
+		sformat(replayCtx->currentTxnFileName, MAXPGPATH, "%s/%d.sql",
+				context->paths.dir, metadata.xid);
+
+		/*
+		 * Open current transaction file in w+ mode to truncate if the file
+		 * already exists.
+		 */
+		replayCtx->txnBuffer = fopen_with_umask(replayCtx->currentTxnFileName,
+												"w+",
+												O_RDWR | O_TRUNC | O_CREAT,
+												0644);
+		if (replayCtx->txnBuffer == NULL)
+		{
+			log_error("Failed to open transaction buffer file \"%s\": %m",
+					  replayCtx->currentTxnFileName);
+			return false;
+		}
+
+		/* Create as a symlink to the current transcation file */
+		if (!create_symbolic_link(replayCtx->currentTxnFileName,
+								  context->paths.txnlatestfile))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		fformat(replayCtx->txnBuffer, "%s\n", line);
+
+		replayCtx->isTxnBuffering = true;
+	}
+	else if (metadata.action == STREAM_ACTION_COMMIT)
+	{
+		if (replayCtx->skipTxnBuffering)
+		{
+			return stream_replay_line(ctx, line, stop);
+		}
+
+		if (!replayCtx->isTxnBuffering)
+		{
+			/*
+			 * When the follow switches from prefetch to replay mode, we
+			 * call stream_transform_stream which might stream the partially
+			 * written transaction created during the prefetch mode.
+			 *
+			 * For example, lets consider the partially written C.sql file,
+			 *
+			 * COMMIT -- {"xid": 999, "lsn": "0/1230"};
+			 * BEGIN -- {"xid": 1000, "commitLSN": "0/1234"};
+			 * INSERT INTO C VALUES (1);
+			 * INSERT INTO C VALUES (2);
+			 * KEEPALIVE;
+			 *
+			 * After switching to the replay mode, logical decoding will resume
+			 * from consistent point which again starts with a valid transcation
+			 * block.
+			 *
+			 * Lets assume the following contents streamed from the transform
+			 * to catchup process in UNIX PIPE after switching to replay mode,
+			 *
+			 * BEGIN -- {"xid": 999, "commitLSN": "0/1230"};
+			 * INSERT INTO A VALUES (1);
+			 * INSERT INTO A VALUES (2);
+			 * COMMIT -- {"xid": 999, "lsn": "0/1230"};
+			 * BEGIN -- {"xid": 1000, "commitLSN": "0/1234"};
+			 * INSERT INTO C VALUES (1);
+			 * INSERT INTO C VALUES (2);
+			 * COMMIT -- {"xid": 1000, "lsn": "0/1234"};
+			 *
+			 * Contents of C.sql will be streamed by stream_transform_stream
+			 * and followed by the contents from UNIX PIPE. Since both of the
+			 * contents are streamed one after the other, the second block
+			 * contains the full content of previously written
+			 * transaction. So, we can skip previous transaction buffer and
+			 * start buffering from the current transaction.
+			 */
+			log_debug("Received %s when transaction is not "
+					  "in buffering mode, ignoring.", line);
+			return true;
+		}
+
+		fformat(replayCtx->txnBuffer, "%s\n", line);
+
+		/* Close replaybuffer to mark it as complete */
+		fclose(replayCtx->txnBuffer);
+
+		/* Stream the transaction buffer into the target database */
+		if (!streamBufferedXID(replayCtx))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		replayCtx->isTxnBuffering = false;
+
+		/* Remove the symlink to the replay buffer */
+		(void) unlink_file(context->paths.txnlatestfile);
+
+		/* Early exit if we reached the end position */
+		*stop = context->reachedEndPos;
+
+		replayCtx->txnBuffer = NULL;
+	}
+	else
+	{
+		if (replayCtx->skipTxnBuffering)
+		{
+			return stream_replay_line(ctx, line, stop);
+		}
+
+		if (replayCtx->isTxnBuffering)
+		{
+			/*
+			 * We are in a transaction block, buffer all the messages
+			 * including KEEPALIVE, SWITCHWAL and ENPOS.
+			 */
+			fformat(replayCtx->txnBuffer, "%s\n", line);
+		}
+		else if (metadata.action == STREAM_ACTION_KEEPALIVE ||
+				 metadata.action == STREAM_ACTION_SWITCH ||
+				 metadata.action == STREAM_ACTION_ENDPOS)
+		{
+			/*
+			 * We allow KEEPALIVE, SWITCHWAL and ENPOS messages in a
+			 * non-transactional context. In that case, call stream_replay_line
+			 * directly without buffering the message.
+			 */
+			return stream_replay_line(ctx, line, stop);
+		}
+		else
+		{
+			/*
+			 * When the follow switches from prefetch to replay mode, we
+			 * call stream_transform_stream which might stream the partially
+			 * written transaction created during the prefetch mode.
+			 *
+			 * For example, lets consider the partially written C.sql file,
+			 *
+			 * INSERT INTO A VALUES (2);
+			 * COMMIT -- {"xid": 999, "lsn": "0/1230"};
+			 * BEGIN -- {"xid": 1000, "commitLSN": "0/1234"};
+			 * INSERT INTO C VALUES (1);
+			 * INSERT INTO C VALUES (2);
+			 * KEEPALIVE;
+			 *
+			 * After switching to the replay mode, logical decoding will resume
+			 * from consistent point which again starts with a valid transcation
+			 * block.
+			 *
+			 * Lets assume the following contents streamed from the transform
+			 * to catchup process in UNIX PIPE after switching to replay mode,
+			 *
+			 * BEGIN -- {"xid": 999, "commitLSN": "0/1230"};
+			 * INSERT INTO A VALUES (1);
+			 * INSERT INTO A VALUES (2);
+			 * COMMIT -- {"xid": 999, "lsn": "0/1230"};
+			 * BEGIN -- {"xid": 1000, "commitLSN": "0/1234"};
+			 * INSERT INTO C VALUES (1);
+			 * INSERT INTO C VALUES (2);
+			 * COMMIT -- {"xid": 1000, "lsn": "0/1234"};
+			 *
+			 * Contents of C.sql will be streamed by stream_transform_stream
+			 * and followed by the contents from UNIX PIPE. Since both of the
+			 * contents are streamed one after the other, the second block
+			 * contains the full content of previously written
+			 * transaction. So, we can skip previous transaction buffer and
+			 * start buffering from the current transaction.
+			 */
+			log_debug("Received %s when transaction is not "
+					  "in buffering mode", line);
+		}
 	}
 
 	return true;
