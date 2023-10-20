@@ -29,6 +29,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    cap_add:
+      - SYS_ADMIN
+      - SYS_PTRACE
     environment:
       PGSSLMODE: "require"
       PGCOPYDB_SOURCE_PGURI: postgres://postgres:h4ckm3@source/postgres

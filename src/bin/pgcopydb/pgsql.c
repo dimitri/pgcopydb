@@ -2123,30 +2123,35 @@ clear_results(PGSQL *pgsql)
 {
 	PGconn *connection = pgsql->connection;
 
-	/*
-	 * Per Postgres documentation: You should, however, remember to check
-	 * PQnotifies after each PQgetResult or PQexec, to see if any
-	 * notifications came in during the processing of the command.
-	 *
-	 * Before calling clear_results(), we called PQexecParams().
-	 */
-	(void) pgsql_handle_notifications(pgsql);
+	if (PQstatus(connection) == CONNECTION_BAD)
+	{
+		pgsql_finish(pgsql);
+		return false;
+	}
 
 	while (true)
 	{
-		PGresult *result = PQgetResult(connection);
+		if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
+		{
+			pgsql_finish(pgsql);
+			return false;
+		}
 
 		/*
 		 * Per Postgres documentation: You should, however, remember to check
 		 * PQnotifies after each PQgetResult or PQexec, to see if any
 		 * notifications came in during the processing of the command.
 		 *
-		 * Here, we just called PQgetResult().
+		 * Before calling clear_results(), we called PQgetResult().
 		 */
 		(void) pgsql_handle_notifications(pgsql);
 
+		PGresult *result = PQgetResult(connection);
+
 		if (result == NULL)
 		{
+			/* one last time */
+			(void) pgsql_handle_notifications(pgsql);
 			break;
 		}
 
@@ -2188,15 +2193,23 @@ pgsql_handle_notifications(PGSQL *pgsql)
 	PGconn *connection = pgsql->connection;
 	PGnotify *notify;
 
-	if (pgsql->notificationProcessFunction == NULL)
+	if (PQconsumeInput(connection) == 0)
 	{
+		char *message = PQerrorMessage(pgsql->connection);
+		log_error("Failed to process Postgres notifications: %s", message);
 		return;
 	}
 
-	PQconsumeInput(connection);
+	/* consume all notifications, even when there is no function registered */
 	while ((notify = PQnotifies(connection)) != NULL)
 	{
 		log_trace("pgsql_handle_notifications: \"%s\"", notify->extra);
+
+		if (pgsql->notificationProcessFunction == NULL)
+		{
+			PQfreemem(notify);
+			continue;
+		}
 
 		if ((*pgsql->notificationProcessFunction)(pgsql->notificationGroupId,
 												  pgsql->notificationNodeId,
@@ -2208,7 +2221,6 @@ pgsql_handle_notifications(PGSQL *pgsql)
 		}
 
 		PQfreemem(notify);
-		PQconsumeInput(connection);
 	}
 }
 
@@ -3865,7 +3877,7 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 	PGSQL *pgsql = &(client->pgsql);
 	PGconn *conn = client->pgsql.connection;
 
-	PGresult *res;
+	PGresult *res = NULL;
 	char *copybuf = NULL;
 
 	bool time_to_abort = false;
@@ -4279,7 +4291,8 @@ error:
 		copybuf = NULL;
 	}
 
-	clear_results(pgsql);
+	/* do not attempt to clear_results() on protocol failure */
+	PQclear(res);
 	pgsql_finish(pgsql);
 
 	return false;

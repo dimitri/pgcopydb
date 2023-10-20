@@ -108,13 +108,6 @@ stream_apply_catchup(StreamSpecs *specs)
 		}
 
 		/*
-		 * Each time we are done applying a file, we update our progress and
-		 * fetch new values from the pgcopydb sentinel. Errors are warning
-		 * here, we'll update next time.
-		 */
-		(void) stream_apply_sync_sentinel(&context);
-
-		/*
 		 * When syncing with the pgcopydb sentinel we might receive a new
 		 * endpos, and it might mean we're done already.
 		 */
@@ -146,8 +139,6 @@ stream_apply_catchup(StreamSpecs *specs)
 			return false;
 		}
 
-		log_info("Apply new filename: \"%s\"", context.sqlFileName);
-
 		/*
 		 * If we reached the end of the file and the current LSN still belongs
 		 * to the same file (a SWITCH did not occur), then we exit so that the
@@ -163,13 +154,8 @@ stream_apply_catchup(StreamSpecs *specs)
 			(void) pgsql_finish(&(context.pgsql));
 			return true;
 		}
-	}
 
-	if (!stream_apply_sync_sentinel(&context))
-	{
-		log_error("Failed to sync replay_lsn %X/%X",
-				  LSN_FORMAT_ARGS(context.previousLSN));
-		return false;
+		log_notice("Apply new filename: \"%s\"", context.sqlFileName);
 	}
 
 	/* make sure we close the connection on the way out */
@@ -318,18 +304,39 @@ stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
 			continue;
 		}
 
-		/* always update our context from the sentinel values */
+		/*
+		 * Now grab the current sentinel values.
+		 *
+		 * The pgcopydb sentinel table contains an endpos. The --endpos command
+		 * line option (found in specs->endpos) prevails, but when it's not
+		 * been used, we have a look at the sentinel value.
+		 */
 		context->startpos = sentinel.startpos;
-		context->endpos = sentinel.endpos;
 		context->apply = sentinel.apply;
 
-		/* TODO: find more about this */
-		/* context->previousLSN = sentinel.replay_lsn; */
+		if (specs->endpos == InvalidXLogRecPtr)
+		{
+			context->endpos = sentinel.endpos;
+		}
+		else
+		{
+			log_warn("Sentinel endpos is %X/%X, overriden by --endpos %X/%X",
+					 LSN_FORMAT_ARGS(sentinel.endpos),
+					 LSN_FORMAT_ARGS(specs->endpos));
+		}
 
-		log_debug("stream_apply_wait_for_sentinel: "
-				  "previous lsn %X/%X, replay_lsn %X/%X",
-				  LSN_FORMAT_ARGS(context->previousLSN),
-				  LSN_FORMAT_ARGS(sentinel.replay_lsn));
+		/* TODO: find more about this */
+		if (context->previousLSN == InvalidXLogRecPtr)
+		{
+			context->previousLSN = sentinel.replay_lsn;
+		}
+		else
+		{
+			log_warn("stream_apply_wait_for_sentinel: "
+					 "previous lsn %X/%X, replay_lsn %X/%X",
+					 LSN_FORMAT_ARGS(context->previousLSN),
+					 LSN_FORMAT_ARGS(sentinel.replay_lsn));
+		}
 
 		log_debug("startpos %X/%X endpos %X/%X apply %s",
 				  LSN_FORMAT_ARGS(context->startpos),
@@ -368,7 +375,7 @@ stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
  * values.
  */
 bool
-stream_apply_sync_sentinel(StreamApplyContext *context)
+stream_apply_sync_sentinel(StreamApplyContext *context, bool findDurableLSN)
 {
 	PGSQL src = { 0 };
 	CopyDBSentinel sentinel = { 0 };
@@ -394,7 +401,7 @@ stream_apply_sync_sentinel(StreamApplyContext *context)
 	/*
 	 * If we know we reached endpos, then publish that as the replay_lsn.
 	 */
-	if (context->reachedEndPos)
+	if (context->reachedEndPos || !findDurableLSN)
 	{
 		durableLSN = context->previousLSN;
 	}
@@ -402,8 +409,8 @@ stream_apply_sync_sentinel(StreamApplyContext *context)
 	{
 		if (!stream_apply_find_durable_lsn(context, &durableLSN))
 		{
-			log_debug("Skipping sentinel replay_lsn: "
-					  "failed to find a durable LSN matching current flushLSN");
+			log_warn("Skipping sentinel replay_lsn update: "
+					 "failed to find a durable LSN matching current flushLSN");
 			return true;
 		}
 	}
@@ -411,7 +418,7 @@ stream_apply_sync_sentinel(StreamApplyContext *context)
 	if (!pgsql_sync_sentinel_apply(&src, durableLSN, &sentinel))
 	{
 		log_warn("Failed to sync progress with the pgcopydb sentinel");
-		return false;
+		return true;
 	}
 
 	context->apply = sentinel.apply;
@@ -456,8 +463,8 @@ stream_apply_send_sync_sentinel(StreamApplyContext *context)
 
 	if (!pgsql_send_sync_sentinel_apply(src, durableLSN))
 	{
-		log_error("Failed to sync progress with the pgcopydb sentinel");
-		return false;
+		log_warn("Failed to sync progress with the pgcopydb sentinel");
+		return true;
 	}
 
 	context->sentinelSyncTime = time(NULL);
@@ -536,14 +543,19 @@ stream_apply_file(StreamApplyContext *context)
 			  content.count,
 			  content.filename);
 
-	/* replay the SQL commands from the SQL file */
+	LogicalMessageMetadata *mArray =
+		(LogicalMessageMetadata *) calloc(content.count,
+										  sizeof(LogicalMessageMetadata));
+
+	LogicalMessageMetadata *lastCommit = NULL;
+
+	/* parse the SQL commands metadata from the SQL file */
 	for (int i = 0; i < content.count && !context->reachedEndPos; i++)
 	{
 		const char *sql = content.lines[i];
+		LogicalMessageMetadata *metadata = &(mArray[i]);
 
-		LogicalMessageMetadata metadata = { 0 };
-
-		if (!parseSQLAction(sql, &metadata))
+		if (!parseSQLAction(sql, metadata))
 		{
 			/* errors have already been logged */
 			free(content.buffer);
@@ -555,12 +567,12 @@ stream_apply_file(StreamApplyContext *context)
 		/*
 		 * The SWITCH WAL command should always be the last line of the file.
 		 */
-		if (metadata.action == STREAM_ACTION_SWITCH &&
+		if (metadata->action == STREAM_ACTION_SWITCH &&
 			i != (content.count - 1))
 		{
 			log_error("SWITCH command for LSN %X/%X found in \"%s\" line %d, "
 					  "before last line %d",
-					  LSN_FORMAT_ARGS(metadata.lsn),
+					  LSN_FORMAT_ARGS(metadata->lsn),
 					  content.filename,
 					  i + 1,
 					  content.count);
@@ -571,7 +583,22 @@ stream_apply_file(StreamApplyContext *context)
 			return false;
 		}
 
-		if (!stream_apply_sql(context, &metadata, sql))
+		if (metadata->action == STREAM_ACTION_COMMIT)
+		{
+			lastCommit = metadata;
+		}
+	}
+
+	/* replay the SQL commands from the SQL file */
+	for (int i = 0; i < content.count && !context->reachedEndPos; i++)
+	{
+		const char *sql = content.lines[i];
+		LogicalMessageMetadata *metadata = &(mArray[i]);
+
+		/* last commit of a file requires synchronous_commit on */
+		context->reachedEOF = metadata == lastCommit;
+
+		if (!stream_apply_sql(context, metadata, sql))
 		{
 			log_error("Failed to apply SQL from file \"%s\", "
 					  "see above for details",
@@ -587,6 +614,20 @@ stream_apply_file(StreamApplyContext *context)
 	/* free dynamic memory that's not needed anymore */
 	free(content.buffer);
 	free(content.lines);
+
+	/*
+	 * Each time we are done applying a file, we update our progress and
+	 * fetch new values from the pgcopydb sentinel. Errors are warning
+	 * here, we'll update next time.
+	 */
+	bool findDurableLSN = false;
+
+	if (!stream_apply_sync_sentinel(context, findDurableLSN))
+	{
+		log_error("Failed to sync replay_lsn %X/%X",
+				  LSN_FORMAT_ARGS(context->previousLSN));
+		return false;
+	}
 
 	return true;
 }
@@ -669,7 +710,12 @@ stream_apply_sql(StreamApplyContext *context,
 				context->endpos <= metadata->lsn)
 			{
 				context->reachedEndPos = true;
-				break;
+
+				log_notice("Apply reached end position %X/%X at BEGIN %X/%X",
+						   LSN_FORMAT_ARGS(context->endpos),
+						   LSN_FORMAT_ARGS(metadata->lsn));
+
+				return true;
 			}
 
 			/* actually skip this one if we didn't reach start pos yet */
@@ -700,7 +746,9 @@ stream_apply_sql(StreamApplyContext *context,
 				context->endpos <= metadata->txnCommitLSN;
 
 			GUC *settings =
-				commitLSNreachesEndPos ? applySettingsSync : applySettings;
+				commitLSNreachesEndPos || context->reachedEOF
+				? applySettingsSync
+				: applySettings;
 
 			if (commitLSNreachesEndPos)
 			{
@@ -772,10 +820,10 @@ stream_apply_sql(StreamApplyContext *context,
 			{
 				context->reachedEndPos = true;
 
-				log_notice("Apply reached end position %X/%X at %X/%X",
+				log_notice("Apply reached end position %X/%X at COMMIT %X/%X",
 						   LSN_FORMAT_ARGS(context->endpos),
 						   LSN_FORMAT_ARGS(context->previousLSN));
-				break;
+				return true;
 			}
 
 			if (!stream_apply_track_insert_lsn(context, metadata->lsn))
@@ -810,7 +858,7 @@ stream_apply_sql(StreamApplyContext *context,
 			{
 				context->reachedEndPos = true;
 
-				log_notice("Apply reached end position %X/%X at %X/%X",
+				log_notice("Apply reached end position %X/%X at ENDPOS %X/%X",
 						   LSN_FORMAT_ARGS(context->endpos),
 						   LSN_FORMAT_ARGS(context->previousLSN));
 
@@ -825,7 +873,7 @@ stream_apply_sql(StreamApplyContext *context,
 					context->transactionInProgress = false;
 				}
 
-				break;
+				return true;
 			}
 
 			break;
@@ -874,7 +922,13 @@ stream_apply_sql(StreamApplyContext *context,
 				context->endpos < metadata->lsn)
 			{
 				context->reachedEndPos = true;
-				break;
+				context->previousLSN = metadata->lsn;
+
+				log_notice("Apply reached end position %X/%X at KEEPALIVE %X/%X",
+						   LSN_FORMAT_ARGS(context->endpos),
+						   LSN_FORMAT_ARGS(context->previousLSN));
+
+				return true;
 			}
 
 			/* actually skip this one if we didn't reach start pos yet */
@@ -928,7 +982,7 @@ stream_apply_sql(StreamApplyContext *context,
 			{
 				context->reachedEndPos = true;
 
-				log_notice("Apply reached end position %X/%X at %X/%X",
+				log_notice("Apply reached end position %X/%X at KEEPALIVE %X/%X",
 						   LSN_FORMAT_ARGS(context->endpos),
 						   LSN_FORMAT_ARGS(context->previousLSN));
 				break;
@@ -1125,13 +1179,44 @@ setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
 		return false;
 	}
 
-	if (!pgsql_replication_origin_progress(pgsql,
-										   nodeName,
-										   true,
-										   &(context->previousLSN)))
+	/*
+	 * Fetch the replication origin LSN tracking, which is maintained in a
+	 * transactional fashion with the SQL that's been replayed. It's the
+	 * authoritative value for progress at reconnect, given that we use
+	 * synchronous_commit off.
+	 */
+	uint64_t originLSN = InvalidXLogRecPtr;
+
+	if (!pgsql_replication_origin_progress(pgsql, nodeName, true, &originLSN))
 	{
 		/* errors have already been logged */
 		return false;
+	}
+
+	/*
+	 * The context->previousLSN may have been initialized already from the
+	 * sentinel, when restarting a follow operation. For more details see
+	 * function stream_apply_wait_for_sentinel().
+	 */
+	if (context->previousLSN == InvalidXLogRecPtr)
+	{
+		log_info("Setting up previous LSN from "
+				 "replication origin \"%s\" progress at %X/%X",
+				 nodeName,
+				 LSN_FORMAT_ARGS(originLSN));
+
+		context->previousLSN = originLSN;
+	}
+	else if (context->previousLSN != originLSN)
+	{
+		log_info("Setting up previous LSN from "
+				 "replication origin \"%s\" progress at %X/%X, "
+				 "overriding previous value %X/%X",
+				 nodeName,
+				 LSN_FORMAT_ARGS(originLSN),
+				 LSN_FORMAT_ARGS(context->previousLSN));
+
+		context->previousLSN = originLSN;
 	}
 
 	if (IS_EMPTY_STRING_BUFFER(context->sqlFileName))
@@ -1194,6 +1279,7 @@ stream_apply_init_context(StreamApplyContext *context,
 	}
 
 	context->reachedStartPos = false;
+	context->reachedEOF = false;
 
 	context->connStrings = connStrings;
 
@@ -1709,8 +1795,8 @@ stream_apply_read_lsn_tracking(StreamApplyContext *context)
 	/* it's okay if the file does not exists, just skip the operation */
 	if (!file_exists(filename))
 	{
-		log_debug("Failed to parse JSON file \"%s\": file does not exists",
-				  filename);
+		log_warn("Failed to parse JSON file \"%s\": file does not exists",
+				 filename);
 		return true;
 	}
 

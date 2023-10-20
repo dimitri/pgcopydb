@@ -71,6 +71,18 @@ stream_apply_replay(StreamSpecs *specs)
 		return false;
 	}
 
+	/* check for having reached endpos in a previous run already */
+	(void) stream_replay_reached_endpos(specs, context, false);
+
+	if (context->reachedEndPos)
+	{
+		/* reaching endpos has already been logged */
+		return true;
+	}
+
+	/*
+	 * Setup our PIPE reading callback function and read from the PIPE.
+	 */
 	ReadFromStreamContext readerContext = {
 		.callback = stream_replay_line,
 		.ctx = &ctx
@@ -100,7 +112,9 @@ stream_apply_replay(StreamSpecs *specs)
 	}
 
 	/* make sure to send a last round of sentinel update before exit */
-	if (!stream_apply_sync_sentinel(context))
+	bool findDurableLSN = true;
+
+	if (!stream_apply_sync_sentinel(context, findDurableLSN))
 	{
 		log_error("Failed to update pgcopydb.sentinel replay_lsn to %X/%X",
 				  LSN_FORMAT_ARGS(context->replay_lsn));
@@ -110,17 +124,38 @@ stream_apply_replay(StreamSpecs *specs)
 	/* we might still have to disconnect now */
 	(void) pgsql_finish(&(context->pgsql));
 
+	/* check for reaching endpos */
+	(void) stream_replay_reached_endpos(specs, context, true);
+
+	return true;
+}
+
+
+/*
+ * stream_replay_reached_endpos checks current replay_lsn with sentinel endpos.
+ */
+bool
+stream_replay_reached_endpos(StreamSpecs *specs,
+							 StreamApplyContext *context,
+							 bool stop)
+{
 	if (context->endpos != InvalidXLogRecPtr &&
 		context->endpos <= context->replay_lsn)
 	{
+		context->reachedEndPos = true;
+
 		log_info("Replayed reached endpos %X/%X at replay_lsn %X/%X, stopping",
 				 LSN_FORMAT_ARGS(context->endpos),
 				 LSN_FORMAT_ARGS(context->replay_lsn));
 	}
-	else
+	else if (stop && context->replay_lsn != InvalidXLogRecPtr)
 	{
 		log_info("Replayed up to replay_lsn %X/%X, stopping",
 				 LSN_FORMAT_ARGS(context->replay_lsn));
+	}
+	else if (stop)
+	{
+		log_notice("Replay process stopping");
 	}
 
 	return true;

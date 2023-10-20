@@ -13,7 +13,10 @@ RUN apt-get update \
     tmux \
     watch \
     lsof \
-    psutils \
+	psmisc \
+    htop \
+	strace \
+	gdb \
     libpq5 \
     postgresql-client-common \
     curl \
@@ -34,8 +37,10 @@ RUN apt-get update \
 WORKDIR /usr/src/
 RUN git clone --depth 1 https://github.com/devrimgunduz/pagila.git
 
-RUN adduser --disabled-password --gecos '' --home /var/lib/postgres docker
-RUN adduser docker sudo
+#RUN adduser --disabled-password --gecos '' --home /var/lib/postgres docker
+#RUN adduser docker sudo
+RUN useradd -rm -d /var/lib/postgres -s /bin/bash -g postgres -G sudo docker
+RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 
 COPY --from=pgcopydb /usr/local/bin/pgcopydb /usr/local/bin
 COPY .psqlrc /var/lib/postgres

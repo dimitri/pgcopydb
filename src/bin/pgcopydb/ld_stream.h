@@ -378,6 +378,7 @@ typedef struct StreamApplyContext
 
 	bool reachedStartPos;
 	bool reachedEndPos;
+	bool reachedEOF;
 	bool transactionInProgress;
 	bool logSQL;
 
@@ -490,6 +491,7 @@ bool stream_init_for_mode(StreamSpecs *specs, LogicalStreamMode mode);
 
 char * LogicalStreamModeToString(LogicalStreamMode mode);
 
+bool stream_check_in_out(StreamSpecs *specs);
 bool stream_init_context(StreamSpecs *specs);
 
 bool startLogicalStreaming(StreamSpecs *specs);
@@ -645,7 +647,9 @@ bool stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context);
 bool stream_apply_wait_for_sentinel(StreamSpecs *specs,
 									StreamApplyContext *context);
 
-bool stream_apply_sync_sentinel(StreamApplyContext *context);
+bool stream_apply_sync_sentinel(StreamApplyContext *context,
+								bool findDurableLSN);
+
 bool stream_apply_send_sync_sentinel(StreamApplyContext *context);
 bool stream_apply_fetch_sync_sentinel(StreamApplyContext *context);
 
@@ -683,6 +687,9 @@ bool stream_apply_read_lsn_tracking(StreamApplyContext *context);
 bool stream_replay(StreamSpecs *specs);
 bool stream_apply_replay(StreamSpecs *specs);
 bool stream_replay_line(void *ctx, const char *line, bool *stop);
+bool stream_replay_reached_endpos(StreamSpecs *specs,
+								  StreamApplyContext *context,
+								  bool stop);
 
 /* follow.c */
 bool follow_export_snapshot(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
