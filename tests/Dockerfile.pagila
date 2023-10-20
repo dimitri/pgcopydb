@@ -13,7 +13,8 @@ RUN apt-get update \
     tmux \
     watch \
     lsof \
-	psutils \
+	psmisc \
+    htop \
 	strace \
 	gdb \
     libpq5 \

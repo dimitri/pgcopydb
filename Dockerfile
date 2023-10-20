@@ -25,7 +25,7 @@ RUN apt-get update \
     tmux \
     watch \
     lsof \
-	psutils \
+	psmisc \
 	gdb \
     strace \
 	valgrind \
@@ -62,7 +62,7 @@ RUN apt-get update \
     tmux \
     watch \
     lsof \
-	psutils \
+	psmisc \
     libpq5 \
     postgresql-client-common \
     postgresql-client-13 \
