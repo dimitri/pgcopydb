@@ -635,13 +635,13 @@ splitLines(char *buffer, char **linesArray, int size)
  * when running a pg_basebackup command.
  */
 void
-processBufferCallback(const char *buffer, bool error)
+processBufferCallback(const char *buffer, bool error, bool warning)
 {
 	char *outLines[BUFSIZE] = { 0 };
 	int lineCount = splitLines((char *) buffer, outLines, BUFSIZE);
 	int lineNumber = 0;
 
-	int logLevel = error ? LOG_ERROR : LOG_INFO;
+	int logLevel = warning ? LOG_WARN : (error ? LOG_ERROR : LOG_INFO);
 
 	for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
 	{

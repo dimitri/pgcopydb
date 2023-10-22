@@ -1080,3 +1080,12 @@ freeKeyVal(KeyVal *parameters)
 
 	parameters->count = 0;
 }
+
+/*
+ * returns true, if the string contains "warning"
+ */
+bool
+isWarning(const char* str)
+{
+	return strstr(str, "warning") != NULL;
+}

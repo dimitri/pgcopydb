@@ -113,4 +113,6 @@ void freeSafeURI(SafeURI *safeURI);
 void freeURIParams(URIParams *params);
 void freeKeyVal(KeyVal *parameters);
 
+bool isWarning(const char *str);
+
 #endif /* PARSING_UTILS_H */

@@ -46,7 +46,7 @@ bool IntervalToString(uint64_t millisecs, char *buffer, size_t size);
 
 int countLines(char *buffer);
 int splitLines(char *buffer, char **linesArray, int size);
-void processBufferCallback(const char *buffer, bool error);
+void processBufferCallback(const char *buffer, bool error, bool warning);
 
 void pretty_print_bytes(char *buffer, size_t size, uint64_t bytes);
 void pretty_print_count(char *buffer, size_t size, uint64_t count);
