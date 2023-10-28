@@ -1171,6 +1171,7 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 						  bool source)
 {
 	SourceTable *table = tableSpecs->sourceTable;
+	bool isFirst = true;
 
 	if (source)
 	{
@@ -1182,11 +1183,20 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 
 		for (int i = 0; i < table->attributes.count; i++)
 		{
+			/* Generated columns cannot be used in COPY */
+			if (table->attributes.array[i].attisgenerated)
+			{
+				continue;
+			}
+
 			char *attname = table->attributes.array[i].attname;
 
-			if (i > 0)
+			if (!isFirst)
 			{
 				appendPQExpBufferStr(query, ", ");
+			}
+			else {
+				isFirst = false;
 			}
 
 			appendPQExpBuffer(query, "%s", attname);
@@ -1242,12 +1252,19 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 		appendPQExpBuffer(query, "%s", tableSpecs->sourceTable->qname);
 
 		for (int i = 0; i < table->attributes.count; i++)
-		{
+		{			
+			/* Generated columns cannot be used in COPY */
+			if (table->attributes.array[i].attisgenerated)
+			{
+				continue;
+			}
+
 			char *attname = table->attributes.array[i].attname;
 
-			if (i == 0)
+			if (isFirst)
 			{
 				appendPQExpBufferStr(query, "(");
+				isFirst = false;
 			}
 			else
 			{

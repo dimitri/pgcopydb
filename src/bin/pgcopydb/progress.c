@@ -334,6 +334,7 @@ copydb_table_array_as_json(SourceTableArray *tableArray,
 			json_object_set_number(jsAttrObj, "atttypid", attr->atttypid);
 			json_object_set_string(jsAttrObj, "attname", attr->attname);
 			json_object_set_boolean(jsAttrObj, "attisprimary", attr->attisprimary);
+			json_object_set_boolean(jsAttrObj, "attisgenerated", attr->attisgenerated);
 
 			json_array_append_value(jsAttrArray, jsAttr);
 		}
@@ -654,6 +655,9 @@ copydb_parse_schema_json_file(CopyDataSpec *copySpecs)
 
 				attr->attisprimary =
 					json_object_get_boolean(jsAttr, "attisprimary");
+
+				attr->attisgenerated =
+					json_object_get_boolean(jsAttr, "attisgenerated");
 			}
 		}
 

@@ -971,7 +971,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"               ("
 		"                  select attnum, atttypid::integer, "
 		"                         format('%I', attname) as attname, "
-		"                         i.indrelid is not null as attisprimary "
+		"                         i.indrelid is not null as attisprimary, "
+		"						  length(attgenerated) > 0 as attisgenerated "
 		"                    from pg_attribute a "
 		"                         left join pg_index i "
 		"                                on i.indrelid = a.attrelid "
@@ -1055,6 +1056,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                  select attnum, atttypid::integer, "
 		"                         format('%I', attname) as attname, "
 		"                         i.indrelid is not null as attisprimary "
+		"						  length(attgenerated) > 0 as attisgenerated "
 		"                    from pg_attribute a "
 		"                         left join pg_index i "
 		"                                on i.indrelid = a.attrelid "
@@ -1140,6 +1142,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                  select attnum, atttypid::integer, "
 		"                         format('%I', attname) as attname, "
 		"                         i.indrelid is not null as attisprimary "
+		"						  length(attgenerated) > 0 as attisgenerated "
 		"                    from pg_attribute a "
 		"                         left join pg_index i "
 		"                                on i.indrelid = a.attrelid "
@@ -1239,6 +1242,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                  select attnum, atttypid::integer, "
 		"                         format('%I', attname) as attname, "
 		"                         i.indrelid is not null as attisprimary "
+		"						  length(attgenerated) > 0 as attisgenerated "
 		"                    from pg_attribute a "
 		"                         left join pg_index i "
 		"                                on i.indrelid = a.attrelid "
@@ -1327,6 +1331,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                  select attnum, atttypid::integer, "
 		"                         format('%I', attname) as attname, "
 		"                         i.indrelid is not null as attisprimary "
+		"						  length(attgenerated) > 0 as attisgenerated "
 		"                    from pg_attribute a "
 		"                         left join pg_index i "
 		"                                on i.indrelid = a.attrelid "
@@ -4845,6 +4850,7 @@ parseAttributesArray(SourceTable *table, JSON_Value *json)
 				sizeof(attr->attname));
 
 		attr->attisprimary = json_object_get_boolean(jsAttr, "attisprimary");
+		attr->attisgenerated = json_object_get_boolean(jsAttr, "attisgenerated");
 	}
 
 	return true;
