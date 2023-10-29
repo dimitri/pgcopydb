@@ -17,6 +17,7 @@
 #include "defaults.h"
 #include "file_utils.h"
 #include "log.h"
+#include "parsing_utils.h"
 #include "string_utils.h"
 
 /*
@@ -628,30 +629,29 @@ splitLines(char *buffer, char **linesArray, int size)
 	return lineNumber;
 }
 
-
 /*
  * processBufferCallback is a function callback to use with the subcommands.c
  * library when we want to output a command's output as it's running, such as
  * when running a pg_basebackup command.
  */
 void
-processBufferCallback(const char *buffer, bool error, bool warning)
+processBufferCallback(const char *buffer, bool error)
 {
 	char *outLines[BUFSIZE] = { 0 };
 	int lineCount = splitLines((char *) buffer, outLines, BUFSIZE);
 	int lineNumber = 0;
-
-	int logLevel = warning ? LOG_WARN : (error ? LOG_ERROR : LOG_INFO);
+	const char *warningPattern = "^(pg_dump: warning:|pg_restore: warning:)";
 
 	for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
 	{
 		if (strneq(outLines[lineNumber], ""))
-		{
+		{	
+			char *match = regexp_first_match(outLines[lineNumber], warningPattern);
+			int logLevel = match != NULL ? LOG_WARN : (error ? LOG_ERROR : LOG_INFO);
 			log_level(logLevel, "%s", outLines[lineNumber]);
 		}
 	}
 }
-
 
 /*
  * pretty_print_bytes pretty prints bytes in a human readable form. Given

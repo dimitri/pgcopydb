@@ -42,7 +42,7 @@ typedef struct
 	bool tty;					/* do we share our tty? */
 
 	/* register a function to process output as it appears */
-	void (*processBuffer)(const char *buffer, bool error, bool warning);
+	void (*processBuffer)(const char *buffer, bool error);
 
 	int stdOutFd;               /* redirect stdout to file descriptor */
 	int stdErrFd;               /* redirect stderr to file descriptor */
@@ -645,7 +645,7 @@ read_into_buf(Program *prog, int filedes, PQExpBuffer buffer, bool error)
 
 		if (prog->processBuffer)
 		{
-			(*prog->processBuffer)(temp_buffer, error, isWarning(temp_buffer));
+			(*prog->processBuffer)(temp_buffer, error);
 		}
 	}
 	return bytes;
