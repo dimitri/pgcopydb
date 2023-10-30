@@ -1,8 +1,8 @@
 /*
  SPDX-License-Identifier: MIT
 
- Parson 1.2.1 ( http://kgabis.github.com/parson/ )
- Copyright (c) 2012 - 2021 Krzysztof Gabis
+ Parson 1.5.2 (https://github.com/kgabis/parson)
+ Copyright (c) 2012 - 2023 Krzysztof Gabis
 
  Permission is hereby granted, free of charge, to any person obtaining a copy
  of this software and associated documentation files (the "Software"), to deal
@@ -30,12 +30,15 @@
 extern "C"
 {
 #endif
+#if 0
+} /* unconfuse xcode */
+#endif
 
 #define PARSON_VERSION_MAJOR 1
-#define PARSON_VERSION_MINOR 2
-#define PARSON_VERSION_PATCH 1
+#define PARSON_VERSION_MINOR 5
+#define PARSON_VERSION_PATCH 2
 
-#define PARSON_VERSION_STRING "1.2.1"
+#define PARSON_VERSION_STRING "1.5.2"
 
 #include <stddef.h>   /* size_t */
 
@@ -64,6 +67,12 @@ typedef int JSON_Status;
 typedef void * (*JSON_Malloc_Function)(size_t);
 typedef void   (*JSON_Free_Function)(void *);
 
+/* A function used for serializing numbers (see json_set_number_serialization_function).
+   If 'buf' is null then it should return number of bytes that would've been written 
+   (but not more than PARSON_NUM_BUF_SIZE).
+*/
+typedef int (*JSON_Number_Serialization_Function)(double num, char *buf);
+
 /* Call only once, before calling any other function from parson API. If not called, malloc and free
    from stdlib will be used for all allocations */
 void json_set_allocation_functions(JSON_Malloc_Function malloc_fun, JSON_Free_Function free_fun);
@@ -71,6 +80,15 @@ void json_set_allocation_functions(JSON_Malloc_Function malloc_fun, JSON_Free_Fu
 /* Sets if slashes should be escaped or not when serializing JSON. By default slashes are escaped.
  This function sets a global setting and is not thread safe. */
 void json_set_escape_slashes(int escape_slashes);
+
+/* Sets float format used for serialization of numbers.
+   Make sure it can't serialize to a string longer than PARSON_NUM_BUF_SIZE.
+   If format is null then the default format is used. */
+void json_set_float_serialization_format(const char *format);
+
+/* Sets a function that will be used for serialization of numbers.
+   If function is null then the default serialization function is used. */
+void json_set_number_serialization_function(JSON_Number_Serialization_Function fun);
 
 /* Parses first JSON value in a file, returns NULL in case of error */
 JSON_Value * json_parse_file(const char *filename);
