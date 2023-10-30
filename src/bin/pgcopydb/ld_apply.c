@@ -826,6 +826,10 @@ stream_apply_sql(StreamApplyContext *context,
 				return true;
 			}
 
+			/*
+			 * An idle source producing only KEEPALIVE should move the
+			 * replay_lsn forward.
+			 */
 			if (!stream_apply_track_insert_lsn(context, metadata->lsn))
 			{
 				log_error("Failed to track target LSN position, "
@@ -986,6 +990,13 @@ stream_apply_sql(StreamApplyContext *context,
 						   LSN_FORMAT_ARGS(context->endpos),
 						   LSN_FORMAT_ARGS(context->previousLSN));
 				break;
+			}
+
+			if (!stream_apply_track_insert_lsn(context, metadata->lsn))
+			{
+				log_error("Failed to track target LSN position, "
+						  "see above for details");
+				return false;
 			}
 
 			break;
