@@ -449,8 +449,13 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 		{
 			if (errno == EINTR || errno == EAGAIN)
 			{
-				if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+				if (asked_to_quit)
 				{
+					/*
+					 * When asked_to_stop || asked_to_stop_fast still continue
+					 * reading through EOF on the input stream, then quit
+					 * normally. Here when
+					 */
 					doneReading = true;
 				}
 
@@ -472,7 +477,7 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 		 */
 		if (countFdsReadyToRead == 0)
 		{
-			if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+			if (asked_to_quit)
 			{
 				doneReading = true;
 				log_notice("read_from_stream was asked to stop or quit");
