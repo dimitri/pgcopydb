@@ -894,7 +894,7 @@ listToTuple(LogicalMessageTuple *tuple, TestDecodingColumns *cols, int count)
 			valueColumn->isQuoted = false;
 
 			int len = cur->valueLen;
-			valueColumn->val.str = (char *) calloc(len, sizeof(char));
+			valueColumn->val.str = (char *) calloc(len + 1, sizeof(char));
 
 			if (valueColumn->val.str == NULL)
 			{
