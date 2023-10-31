@@ -33,7 +33,8 @@ static CommandLine compare_schema_command =
 		" --source ... ",
 		"  --source         Postgres URI to the source database\n"
 		"  --target         Postgres URI to the target database\n"
-		"  --dir            Work directory to use\n",
+		"  --dir            Work directory to use\n"
+		"  --snapshot       Use snapshot obtained with pg_export_snapshot on the source database\n",
 		cli_compare_getopts,
 		cli_compare_schema);
 
@@ -45,7 +46,8 @@ static CommandLine compare_data_command =
 		"  --source         Postgres URI to the source database\n"
 		"  --target         Postgres URI to the target database\n"
 		"  --dir            Work directory to use\n"
-		"  --json           Format the output using JSON\n",
+		"  --json           Format the output using JSON\n"
+		"  --snapshot       Use snapshot obtained with pg_export_snapshot on the source database\n",
 		cli_compare_getopts,
 		cli_compare_data);
 
@@ -77,6 +79,7 @@ cli_compare_getopts(int argc, char **argv)
 		{ "jobs", required_argument, NULL, 'j' },
 		{ "table-jobs", required_argument, NULL, 'j' },
 		{ "json", no_argument, NULL, 'J' },
+		{ "snapshot", required_argument, NULL, 'N' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "notice", no_argument, NULL, 'v' },
@@ -199,6 +202,13 @@ cli_compare_getopts(int argc, char **argv)
 				break;
 			}
 
+			case 'N':
+			{
+				strlcpy(options.snapshot, optarg, sizeof(options.snapshot));
+				log_trace("--snapshot %s", options.snapshot);
+				break;
+			}
+
 			case 'd':
 			{
 				verboseCount = 3;
@@ -279,9 +289,10 @@ cli_compare_schema(int argc, char **argv)
 	bool service = true;
 	char *serviceName = "snapshot";
 
-	/* pretend that --resume --not-consistent have been used */
+	/* pretend that --resume has been used */
 	compareOptions.resume = true;
-	compareOptions.notConsistent = true;
+	/* pretend that --not-consistent has been used (unless a snapshot is used) */
+	compareOptions.notConsistent = IS_EMPTY_STRING_BUFFER(compareOptions.snapshot);
 
 	if (!copydb_init_workdir(&copySpecs,
 							 dir,
@@ -301,10 +312,22 @@ cli_compare_schema(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	if (!IS_EMPTY_STRING_BUFFER(compareOptions.snapshot) && !copydb_set_snapshot(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
 	if (!compare_schemas(&copySpecs))
 	{
 		log_fatal("Comparing the schemas failed, see above for details");
 		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!IS_EMPTY_STRING_BUFFER(compareOptions.snapshot))
+	{
+		/* close our snapshot: commit transaction and finish connection */
+		(void) copydb_close_snapshot(&copySpecs);
 	}
 }
 
@@ -328,9 +351,10 @@ cli_compare_data(int argc, char **argv)
 	bool service = true;
 	char *serviceName = "snapshot";
 
-	/* pretend that --resume --not-consistent have been used */
+	/* pretend that --resume has been used */
 	compareOptions.resume = true;
-	compareOptions.notConsistent = true;
+	/* pretend that --not-consistent has been used (unless a snapshot is used) */
+	compareOptions.notConsistent = IS_EMPTY_STRING_BUFFER(compareOptions.snapshot);
 
 	if (!copydb_init_workdir(&copySpecs,
 							 dir,
@@ -350,6 +374,12 @@ cli_compare_data(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	if (!IS_EMPTY_STRING_BUFFER(compareOptions.snapshot) && !copydb_set_snapshot(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
 	if (!compare_data(&copySpecs))
 	{
 		log_fatal("Failed to compute checksums, see above for details");
@@ -357,6 +387,12 @@ cli_compare_data(int argc, char **argv)
 	}
 
 	SourceTableArray *tableArray = &(copySpecs.catalog.sourceTableArray);
+
+	if (!IS_EMPTY_STRING_BUFFER(compareOptions.snapshot))
+	{
+		/* close our snapshot: commit transaction and finish connection */
+		(void) copydb_close_snapshot(&copySpecs);
+	}
 
 	if (outputJSON)
 	{
