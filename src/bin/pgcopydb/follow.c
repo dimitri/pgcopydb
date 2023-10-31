@@ -14,6 +14,7 @@
 #include "cli_root.h"
 #include "ld_stream.h"
 #include "log.h"
+#include "progress.h"
 #include "signals.h"
 
 
@@ -260,6 +261,15 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	 * connection.
 	 */
 	if (!stream_cleanup_context(streamSpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * Read the catalogs from the source table from on-file disk.
+	 */
+	if (!copydb_parse_schema_json_file(copySpecs))
 	{
 		/* errors have already been logged */
 		return false;
