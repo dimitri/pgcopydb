@@ -267,9 +267,10 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	}
 
 	/*
-	 * Read the catalogs from the source table from on-file disk.
+	 * Read the catalogs from the source table from on-file disk if
+	 * the schema dump has been done already.
 	 */
-	if (!copydb_parse_schema_json_file(copySpecs))
+	if (copySpecs->dirState.schemaDumpIsDone && !copydb_parse_schema_json_file(copySpecs))
 	{
 		/* errors have already been logged */
 		return false;
