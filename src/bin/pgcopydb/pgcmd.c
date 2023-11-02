@@ -793,7 +793,7 @@ pg_restore_db(PostgresPaths *pgPaths,
 	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
 
 	/* override PGPASSWORD environment variable if the pguri contains one */
-	if (connStrings->safeSourcePGURI.password != NULL)
+	if (connStrings->safeTargetPGURI.password != NULL)
 	{
 		if (pgpassword_found_in_env && !get_env_dup("PGPASSWORD", &PGPASSWORD))
 		{
@@ -892,7 +892,7 @@ pg_restore_db(PostgresPaths *pgPaths,
 
 	/* make sure to reset the environment PGPASSWORD if we edited it */
 	if (pgpassword_found_in_env &&
-		connStrings->safeSourcePGURI.password != NULL)
+		connStrings->safeTargetPGURI.password != NULL)
 	{
 		setenv("PGPASSWORD", PGPASSWORD, 1);
 	}

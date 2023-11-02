@@ -58,9 +58,6 @@
 
 #define POSTGRES_PORT 5432
 
-/* masqurade  passwords with that value in logs */
-#define PASSWORD_MASK "****"
-
 /* default replication slot and origin for logical replication */
 #define REPLICATION_ORIGIN "pgcopydb"
 #define REPLICATION_PLUGIN "test_decoding"
