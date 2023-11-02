@@ -516,19 +516,6 @@ pgsql_open_connection(PGSQL *pgsql)
 		setenv("PGAPPNAME", PGCOPYDB_PGAPPNAME, 1);
 	}
 
-	char *PGPASSWORD = NULL;
-	bool pgpassword_found_in_env = env_exists("PGPASSWORD");
-
-	/* override PGPASSWORD environment variable if the pguri contains one */
-	if (pgsql->safeURI.password != NULL)
-	{
-		if (pgpassword_found_in_env)
-		{
-			get_env_dup("PGPASSWORD", &PGPASSWORD);
-		}
-		setenv("PGPASSWORD", pgsql->safeURI.password, 1);
-	}
-
 	/* we implement our own retry strategy */
 	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
 
@@ -537,13 +524,7 @@ pgsql_open_connection(PGSQL *pgsql)
 	INSTR_TIME_SET_ZERO(pgsql->retryPolicy.connectTime);
 
 	/* Make a connection to the database */
-	pgsql->connection = PQconnectdb(pgsql->safeURI.pguri);
-
-	/* make sure to reset the environment PGPASSWORD if we edited it */
-	if (pgpassword_found_in_env && pgsql->safeURI.password != NULL)
-	{
-		setenv("PGPASSWORD", PGPASSWORD, 1);
-	}
+	pgsql->connection = PQconnectdb(pgsql->connectionString);
 
 	/* Check to see that the backend connection was successfully made */
 	if (PQstatus(pgsql->connection) != CONNECTION_OK)

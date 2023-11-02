@@ -936,9 +936,9 @@ escapeWithPercentEncoding(const char *str, char **dst)
 
 
 /*
- * uri_contains_password takes a Postgres connection string and checks to see
- * if it contains a parameter called password. Returns true if a password
- * keyword is present in the connection string.
+ * uri_grab_password takes a Postgres connection string and checks to see
+ * if it contains a parameter called password and if so stores a copy of it
+ * in safeURI->password.
  */
 static bool
 uri_grab_password(const char *pguri, SafeURI *safeURI)
@@ -984,8 +984,8 @@ uri_grab_password(const char *pguri, SafeURI *safeURI)
 
 /*
  * parse_and_scrub_connection_string takes a Postgres connection string and
- * populates scrubbedPguri with the password replaced with **** for logging.
- * The scrubbedPguri parameter should point to a memory area that has been
+ * populates safeURI without the password for logging purposes.
+ * The safeURI parameter should point to a memory area that has been
  * allocated by the caller and has at least MAXCONNINFO bytes.
  */
 bool
