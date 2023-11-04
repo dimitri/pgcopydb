@@ -1183,13 +1183,15 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 
 		for (int i = 0; i < table->attributes.count; i++)
 		{
+			SourceTableAttribute *attribute = &(table->attributes.array[i]);
+			char *attname = attribute->attname;
+
 			/* Generated columns cannot be used in COPY */
-			if (table->attributes.array[i].attisgenerated)
+			if (attribute->attisgenerated)
 			{
+				log_info("Skipping %s in COPY as it is a generated column", attname);
 				continue;
 			}
-
-			char *attname = table->attributes.array[i].attname;
 
 			if (!isFirst)
 			{
@@ -1253,13 +1255,15 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 
 		for (int i = 0; i < table->attributes.count; i++)
 		{			
+			SourceTableAttribute *attribute = &(table->attributes.array[i]);
+			char *attname = attribute->attname;
+
 			/* Generated columns cannot be used in COPY */
-			if (table->attributes.array[i].attisgenerated)
+			if (attribute->attisgenerated)
 			{
+				log_info("Skipping %s in COPY as it is a generated column", attname);
 				continue;
 			}
-
-			char *attname = table->attributes.array[i].attname;
 
 			if (isFirst)
 			{
