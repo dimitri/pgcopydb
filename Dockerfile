@@ -70,6 +70,7 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
     watch \
     psmisc \
     openssl \
+    postgresql-common \
     postgresql-client \
     postgresql-client-common \
     && apt clean \
