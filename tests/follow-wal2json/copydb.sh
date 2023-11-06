@@ -18,9 +18,10 @@ psql -o /tmp/d.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data
 
 # alter the pagila schema to allow capturing DDLs without pkey
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/ddl.sql
+psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/extras.sql
 
 # pgcopydb copy db uses the environment variables
-pgcopydb copy-db --follow --plugin wal2json
+pgcopydb copy-db --follow --plugin wal2json --notice
 
 # cleanup
 pgcopydb stream sentinel get
