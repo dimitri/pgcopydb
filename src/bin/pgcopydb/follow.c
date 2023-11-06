@@ -187,7 +187,7 @@ follow_init_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel)
  * values from the pgcopydb.sentinel table on the source database.
  */
 bool
-follow_get_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel)
+follow_get_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel, bool verbose)
 {
 	PGSQL pgsql = { 0 };
 
@@ -217,16 +217,19 @@ follow_get_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel)
 				 LSN_FORMAT_ARGS(sentinel->replay_lsn),
 				 LSN_FORMAT_ARGS(sentinel->endpos));
 	}
-	else if (sentinel->endpos != InvalidXLogRecPtr)
+	else if (verbose)
 	{
-		log_info("Current sentinel replay_lsn is %X/%X, endpos is %X/%X",
-				 LSN_FORMAT_ARGS(sentinel->replay_lsn),
-				 LSN_FORMAT_ARGS(sentinel->endpos));
-	}
-	else if (sentinel->replay_lsn != InvalidXLogRecPtr)
-	{
-		log_info("Current sentinel replay_lsn is %X/%X",
-				 LSN_FORMAT_ARGS(sentinel->replay_lsn));
+		if (sentinel->endpos != InvalidXLogRecPtr)
+		{
+			log_info("Current sentinel replay_lsn is %X/%X, endpos is %X/%X",
+					 LSN_FORMAT_ARGS(sentinel->replay_lsn),
+					 LSN_FORMAT_ARGS(sentinel->endpos));
+		}
+		else if (sentinel->replay_lsn != InvalidXLogRecPtr)
+		{
+			log_info("Current sentinel replay_lsn is %X/%X",
+					 LSN_FORMAT_ARGS(sentinel->replay_lsn));
+		}
 	}
 
 	return true;
@@ -386,9 +389,10 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 bool
 follow_reached_endpos(StreamSpecs *streamSpecs, bool *done)
 {
+	bool verbose = true;
 	CopyDBSentinel *sentinel = &(streamSpecs->sentinel);
 
-	if (!follow_get_sentinel(streamSpecs, sentinel))
+	if (!follow_get_sentinel(streamSpecs, sentinel, verbose))
 	{
 		log_error("Failed to get sentinel values");
 		return false;
@@ -978,6 +982,26 @@ follow_wait_subprocesses(StreamSpecs *specs)
 				if (processArray[i]->returnCode != 0 ||
 					specs->endpos == InvalidXLogRecPtr)
 				{
+					char endposStatus[BUFSIZE] = { 0 };
+
+					if (specs->endpos == InvalidXLogRecPtr)
+					{
+						sformat(endposStatus, sizeof(endposStatus), "unset");
+					}
+					else
+					{
+						sformat(endposStatus, sizeof(endposStatus),
+								"set to %X/%X",
+								LSN_FORMAT_ARGS(specs->endpos));
+					}
+
+					log_notice("Process %s has exited with return code %d, "
+							   "and endpos is %s: "
+							   "terminating other processes",
+							   processArray[i]->name,
+							   processArray[i]->returnCode,
+							   endposStatus);
+
 					if (!follow_terminate_subprocesses(specs))
 					{
 						log_error("Failed to terminate other subprocesses, "
@@ -988,6 +1012,13 @@ follow_wait_subprocesses(StreamSpecs *specs)
 
 				success = success && processArray[i]->returnCode == 0;
 			}
+		}
+
+		/* update current sentinel values (endpos) */
+		if (!follow_get_sentinel(specs, &(specs->sentinel), false))
+		{
+			/* ignore errors here, supervisor can't quit before sub-processes */
+			log_warn("Failed to get sentinel values");
 		}
 
 		/* avoid busy looping, wait for 150ms before checking again */

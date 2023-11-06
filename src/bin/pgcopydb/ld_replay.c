@@ -217,6 +217,36 @@ stream_replay_line(void *ctx, const char *line, bool *stop)
 			break;
 		}
 
+		case STREAM_ACTION_ENDPOS:
+		{
+			PGSQL src = { 0 };
+			char *dsn = context->connStrings->source_pguri;
+
+			if (!pgsql_init(&src, dsn, PGSQL_CONN_SOURCE))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			CopyDBSentinel sentinel = { 0 };
+
+			if (!pgsql_get_sentinel(&src, &sentinel))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			if (sentinel.endpos <= metadata.lsn)
+			{
+				*stop = true;
+				context->reachedEndPos = true;
+
+				log_info("Replay reached ENDPOS %X/%X",
+						 LSN_FORMAT_ARGS(metadata.lsn));
+			}
+			break;
+		}
+
 		/* skip reporting progress in other cases */
 		case STREAM_ACTION_BEGIN:
 		case STREAM_ACTION_INSERT:
