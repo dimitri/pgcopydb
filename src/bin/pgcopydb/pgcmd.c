@@ -15,6 +15,7 @@
 #include "postgres_fe.h"
 #include "pqexpbuffer.h"
 
+#include "cli_root.h"
 #include "defaults.h"
 #include "env_utils.h"
 #include "file_utils.h"
@@ -354,7 +355,10 @@ pg_dump_db(PostgresPaths *pgPaths,
 	char *PGPASSWORD = NULL;
 	bool pgpassword_found_in_env = env_exists("PGPASSWORD");
 
-	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+	if (!env_exists("PGCONNECT_TIMEOUT"))
+	{
+		setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+	}
 
 	/* override PGPASSWORD environment variable if the pguri contains one */
 	if (connStrings->safeSourcePGURI.password != NULL)
@@ -508,7 +512,10 @@ pg_dumpall_roles(PostgresPaths *pgPaths,
 	char *PGPASSWORD = NULL;
 	bool pgpassword_found_in_env = env_exists("PGPASSWORD");
 
-	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+	if (!env_exists("PGCONNECT_TIMEOUT"))
+	{
+		setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+	}
 
 	/* override PGPASSWORD environment variable if the pguri contains one */
 	if (connStrings->safeSourcePGURI.password != NULL)
@@ -592,7 +599,10 @@ pg_restore_roles(PostgresPaths *pgPaths,
 	char *content = NULL;
 	long size = 0L;
 
-	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+	if (!env_exists("PGCONNECT_TIMEOUT"))
+	{
+		setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+	}
 
 	/*
 	 * Rather than using psql --single-transaction --file filename, we read the
@@ -790,7 +800,10 @@ pg_restore_db(PostgresPaths *pgPaths,
 	char *PGPASSWORD = NULL;
 	bool pgpassword_found_in_env = env_exists("PGPASSWORD");
 
-	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+	if (!env_exists("PGCONNECT_TIMEOUT"))
+	{
+		setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+	}
 
 	/* override PGPASSWORD environment variable if the pguri contains one */
 	if (connStrings->safeTargetPGURI.password != NULL)
