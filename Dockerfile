@@ -56,18 +56,13 @@ ARG TARGETPLATFORM
 ARG TARGETOS
 ARG TARGETARCH
 
-ENV DEBIAN_FRONTEND=noninteractive \
-  TZ=Europe/Paris \
-  LC_ALL=en_US.UTF-8 \
-  LANG=en_US.UTF-8 \
-  LANGUAGE=en_US.UTF-8
-
 # used to configure Github Packages
 LABEL org.opencontainers.image.source https://github.com/dimitri/pgcopydb
 
 RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
   && apt install -qqy --no-install-suggests --no-install-recommends \
     sudo \
+	locales \
     ca-certificates \
     libpq5 \
     lsof \
@@ -77,12 +72,11 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
     openssl \
     postgresql-client \
     postgresql-client-common \
-    psutils \
     && apt clean \
     && rm -rf /var/lib/apt/lists/*
 
-RUN adduser --disabled-password --gecos '' --home /var/lib/postgres docker \
-    && adduser docker sudo
+RUN useradd -rm -d /var/lib/postgres -s /bin/bash -g postgres -G sudo docker
+RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 
 COPY --from=build --chmod=755 /usr/lib/postgresql/13/bin/pgcopydb /usr/local/bin
 
