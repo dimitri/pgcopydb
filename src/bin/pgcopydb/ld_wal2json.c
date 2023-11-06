@@ -148,8 +148,8 @@ parseWal2jsonMessage(StreamContext *privateContext,
 
 		case STREAM_ACTION_TRUNCATE:
 		{
-			strlcpy(stmt->stmt.truncate.nspname, schema, NAMEDATALEN);
-			strlcpy(stmt->stmt.truncate.relname, table, NAMEDATALEN);
+			strlcpy(stmt->stmt.truncate.nspname, schema, PG_NAMEDATALEN);
+			strlcpy(stmt->stmt.truncate.relname, table, PG_NAMEDATALEN);
 
 			break;
 		}
@@ -159,8 +159,8 @@ parseWal2jsonMessage(StreamContext *privateContext,
 			JSON_Array *jscols =
 				json_object_dotget_array(jsobj, "message.columns");
 
-			strlcpy(stmt->stmt.insert.nspname, schema, NAMEDATALEN);
-			strlcpy(stmt->stmt.insert.relname, table, NAMEDATALEN);
+			strlcpy(stmt->stmt.insert.nspname, schema, PG_NAMEDATALEN);
+			strlcpy(stmt->stmt.insert.relname, table, PG_NAMEDATALEN);
 
 			stmt->stmt.insert.new.count = 1;
 			stmt->stmt.insert.new.array =
@@ -187,8 +187,8 @@ parseWal2jsonMessage(StreamContext *privateContext,
 
 		case STREAM_ACTION_UPDATE:
 		{
-			strlcpy(stmt->stmt.update.nspname, schema, NAMEDATALEN);
-			strlcpy(stmt->stmt.update.relname, table, NAMEDATALEN);
+			strlcpy(stmt->stmt.update.nspname, schema, PG_NAMEDATALEN);
+			strlcpy(stmt->stmt.update.relname, table, PG_NAMEDATALEN);
 
 			stmt->stmt.update.old.count = 1;
 			stmt->stmt.update.new.count = 1;
@@ -235,8 +235,8 @@ parseWal2jsonMessage(StreamContext *privateContext,
 
 		case STREAM_ACTION_DELETE:
 		{
-			strlcpy(stmt->stmt.delete.nspname, schema, NAMEDATALEN);
-			strlcpy(stmt->stmt.delete.relname, table, NAMEDATALEN);
+			strlcpy(stmt->stmt.delete.nspname, schema, PG_NAMEDATALEN);
+			strlcpy(stmt->stmt.delete.relname, table, PG_NAMEDATALEN);
 
 			stmt->stmt.delete.old.count = 1;
 			stmt->stmt.delete.old.array =
@@ -319,7 +319,7 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple,
 			return false;
 		}
 
-		tuple->columns[i] = strndup(colname, NAMEDATALEN);
+		tuple->columns[i] = strndup(colname, PG_NAMEDATALEN);
 
 		if (tuple->columns[i] == NULL)
 		{

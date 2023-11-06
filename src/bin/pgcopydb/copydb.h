@@ -24,8 +24,8 @@
 #define COMMON_GUC_SETTINGS \
 	{ "client_encoding", "'UTF-8'" }, \
 	{ "extra_float_digits", "3" }, \
-	{ "statement_timeout", "0" }
-
+	{ "statement_timeout", "0" }, \
+	{ "default_transaction_read_only", "off" }
 /*
  * These parameters are added to the connection strings, unless the user has
  * added them, allowing user-defined values to be taken into account.
@@ -133,7 +133,7 @@ typedef struct CopyTableDataPartSpec
 	int64_t min;                /* WHERE partKey >= min */
 	int64_t max;                /*   AND partKey  < max */
 
-	char partKey[NAMEDATALEN];
+	char partKey[PG_NAMEDATALEN];
 } CopyTableDataPartSpec;
 
 
@@ -226,7 +226,7 @@ typedef struct SourceFilterItem
  */
 typedef struct ExtensionReqs
 {
-	char extname[NAMEDATALEN];
+	char extname[PG_NAMEDATALEN];
 	char version[BUFSIZE];
 
 	UT_hash_handle hh;          /* makes this structure hashable */
@@ -456,6 +456,7 @@ bool copydb_dump_source_schema(CopyDataSpec *specs,
 							   const char *snapshot,
 							   PostgresDumpSection section);
 bool copydb_target_prepare_schema(CopyDataSpec *specs);
+bool copydb_copy_database_properties(CopyDataSpec *specs);
 bool copydb_target_drop_tables(CopyDataSpec *specs);
 bool copydb_target_finalize_schema(CopyDataSpec *specs);
 
@@ -492,6 +493,7 @@ bool copydb_process_table_data(CopyDataSpec *specs);
 
 bool copydb_start_copy_supervisor(CopyDataSpec *specs);
 bool copydb_copy_supervisor(CopyDataSpec *specs);
+bool copydb_copy_supervisor_send_stop(CopyDataSpec *specs);
 bool copydb_start_table_data_workers(CopyDataSpec *specs);
 bool copydb_table_data_worker(CopyDataSpec *specs);
 

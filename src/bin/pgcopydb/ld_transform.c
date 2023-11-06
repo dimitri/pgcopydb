@@ -57,31 +57,11 @@ stream_transform_stream(StreamSpecs *specs)
 {
 	StreamContext *privateContext = &(specs->private);
 
-	if (!stream_init_context(specs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/* we need timeline and wal_segment_size to compute WAL filenames */
-	if (specs->system.timeline == 0)
-	{
-		if (!stream_read_context(&(specs->paths),
-								 &(specs->system),
-								 &(specs->WalSegSz)))
-		{
-			log_error("Failed to read the streaming context information "
-					  "from the source database, see above for details");
-			return false;
-		}
-	}
-
-	privateContext->WalSegSz = specs->WalSegSz;
-	privateContext->timeline = specs->system.timeline;
-
-	log_debug("Source database wal_segment_size is %u", specs->WalSegSz);
-	log_debug("Source database timeline is %d", specs->system.timeline);
-
+	/*
+	 * Resume operations by reading the current transform target file, if it
+	 * already exists, and make sure to grab the current sentinel endpos LSN
+	 * when it has been set.
+	 */
 	if (!stream_transform_resume(specs))
 	{
 		log_error("Failed to resume streaming from %X/%X",
@@ -89,6 +69,22 @@ stream_transform_stream(StreamSpecs *specs)
 		return false;
 	}
 
+	LogicalMessageMetadata *metadata = &(privateContext->metadata);
+
+	if (privateContext->endpos != InvalidXLogRecPtr &&
+		privateContext->endpos <= metadata->lsn)
+	{
+		log_info("Transform reached end position %X/%X at %X/%X",
+				 LSN_FORMAT_ARGS(privateContext->endpos),
+				 LSN_FORMAT_ARGS(metadata->lsn));
+		return true;
+	}
+
+	/*
+	 * Now read from the input PIPE and parse lines, writing SQL to disk at
+	 * transaction boundaries. The read_from_stream() function finishes upon
+	 * PIPE being closed on the writing side.
+	 */
 	TransformStreamCtx ctx = {
 		.context = privateContext,
 		.currentMsgIndex = 0
@@ -138,6 +134,88 @@ bool
 stream_transform_resume(StreamSpecs *specs)
 {
 	StreamContext *privateContext = &(specs->private);
+
+	/*
+	 * Now grab the current sentinel values, specifically the current endpos.
+	 *
+	 * The pgcopydb sentinel table also contains an endpos. The --endpos
+	 * command line option (found in specs->endpos) prevails, but when it's not
+	 * been used, we have a look at the sentinel value.
+	 */
+	PGSQL src = { 0 };
+
+	if (!pgsql_init(&src, specs->connStrings->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	CopyDBSentinel sentinel = { 0 };
+
+	if (!pgsql_get_sentinel(&src, &sentinel))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (specs->endpos == InvalidXLogRecPtr)
+	{
+		specs->endpos = sentinel.endpos;
+	}
+	else
+	{
+		log_warn("Sentinel endpos is %X/%X, overriden by --endpos %X/%X",
+				 LSN_FORMAT_ARGS(sentinel.endpos),
+				 LSN_FORMAT_ARGS(specs->endpos));
+	}
+
+	if (specs->endpos != InvalidXLogRecPtr)
+	{
+		log_info("Transform process is setup to end at LSN %X/%X",
+				 LSN_FORMAT_ARGS(specs->endpos));
+	}
+
+	/* if we have a startpos, that's better than using 0/0 at init time */
+	if (specs->startpos == InvalidXLogRecPtr)
+	{
+		if (sentinel.startpos != InvalidXLogRecPtr)
+		{
+			specs->startpos = sentinel.startpos;
+
+			log_info("Resuming streaming at LSN %X/%X "
+					 "from replication slot \"%s\"",
+					 LSN_FORMAT_ARGS(specs->startpos),
+					 specs->slot.slotName);
+		}
+	}
+
+	/*
+	 * Initialize our private context from the updated specs.
+	 */
+	if (!stream_init_context(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* we need timeline and wal_segment_size to compute WAL filenames */
+	if (specs->system.timeline == 0)
+	{
+		if (!stream_read_context(&(specs->paths),
+								 &(specs->system),
+								 &(specs->WalSegSz)))
+		{
+			log_error("Failed to read the streaming context information "
+					  "from the source database, see above for details");
+			return false;
+		}
+	}
+
+	privateContext->WalSegSz = specs->WalSegSz;
+	privateContext->timeline = specs->system.timeline;
+
+	log_debug("Source database wal_segment_size is %u", specs->WalSegSz);
+	log_debug("Source database timeline is %d", specs->system.timeline);
 
 	char jsonFileName[MAXPGPATH] = { 0 };
 	char sqlFileName[MAXPGPATH] = { 0 };
@@ -233,6 +311,34 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
 			return false;
 		}
 	}
+	/* at ENDPOS check that it's the current sentinel value and exit */
+	else if (metadata->action == STREAM_ACTION_ENDPOS)
+	{
+		PGSQL src = { 0 };
+		char *dsn = privateContext->connStrings->source_pguri;
+
+		if (!pgsql_init(&src, dsn, PGSQL_CONN_SOURCE))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		CopyDBSentinel sentinel = { 0 };
+
+		if (!pgsql_get_sentinel(&src, &sentinel))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (sentinel.endpos <= metadata->lsn)
+		{
+			*stop = true;
+
+			log_info("Transform process reached ENDPOS %X/%X",
+					 LSN_FORMAT_ARGS(metadata->lsn));
+		}
+	}
 
 	if (privateContext->endpos != InvalidXLogRecPtr &&
 		privateContext->endpos <= metadata->lsn)
@@ -297,18 +403,6 @@ stream_transform_write_message(StreamContext *privateContext,
 	{
 		/* errors have already been logged */
 		return false;
-	}
-
-	/*
-	 * If we're in a continued transaction, it means that the earlier write
-	 * of this txn's BEGIN statement didn't have the COMMIT LSN. Therefore,
-	 * we need to maintain that LSN as a separate metadata file. This is
-	 * necessary because the COMMIT LSN is required later in the apply
-	 * process.
-	 */
-	if (txn->continued && txn->commit)
-	{
-		writeTxnMetadataFile(txn, privateContext->paths.dir);
 	}
 
 	(void) FreeLogicalMessage(currentMsg);
@@ -1163,9 +1257,7 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 				}
 			}
 
-			{
-				(void) streamLogicalTransactionAppendStatement(txn, stmt);
-			}
+			(void) streamLogicalTransactionAppendStatement(txn, stmt);
 
 			break;
 		}
@@ -1191,8 +1283,11 @@ coalesceLogicalTransactionStatement(LogicalTransaction *txn,
 {
 	LogicalTransactionStatement *last = txn->last;
 
-	LogicalMessageValuesArray *lastValuesArray = &(last->stmt.insert.new.array->values);
-	LogicalMessageValuesArray *newValuesArray = &(new->stmt.insert.new.array->values);
+	LogicalMessageValuesArray *lastValuesArray =
+		&(last->stmt.insert.new.array->values);
+
+	LogicalMessageValuesArray *newValuesArray =
+		&(new->stmt.insert.new.array->values);
 
 	int capacity = lastValuesArray->capacity;
 	LogicalMessageValues *array = lastValuesArray->array;
@@ -1211,8 +1306,9 @@ coalesceLogicalTransactionStatement(LogicalTransaction *txn,
 		 * and potential heap memory fragmentation.
 		 */
 		capacity *= 2;
-		array = (LogicalMessageValues *) realloc(array, sizeof(LogicalMessageValues) *
-												 capacity);
+		array = (LogicalMessageValues *)
+				realloc(array, sizeof(LogicalMessageValues) * capacity);
+
 		if (array == NULL)
 		{
 			log_error(ALLOCATION_FAILED_ERROR);
@@ -1254,7 +1350,8 @@ canCoalesceLogicalTransactionStatement(LogicalTransaction *txn,
 	LogicalTransactionStatement *last = txn->last;
 
 	/* TODO: Support UPDATE and DELETE */
-	if (last->action != STREAM_ACTION_INSERT || new->action != STREAM_ACTION_INSERT)
+	if (last->action != STREAM_ACTION_INSERT ||
+		new->action != STREAM_ACTION_INSERT)
 	{
 		return false;
 	}
@@ -1263,8 +1360,8 @@ canCoalesceLogicalTransactionStatement(LogicalTransaction *txn,
 	LogicalMessageInsert *newInsert = &new->stmt.insert;
 
 	/* Last and current statements must target same relation */
-	if (!streq(lastInsert->nspname, newInsert->nspname) || !streq(lastInsert->relname,
-																  newInsert->relname))
+	if (!streq(lastInsert->nspname, newInsert->nspname) ||
+		!streq(lastInsert->relname, newInsert->relname))
 	{
 		return false;
 	}
@@ -1928,7 +2025,14 @@ stream_write_insert(FILE *out, LogicalMessageInsert *insert)
 
 		for (int c = 0; c < stmt->cols; c++)
 		{
-			appendPQExpBuffer(buf, "%s\"%s\"",
+			/*
+			 * In the case of the test_decoding plugin, it already escapes
+			 * keywords using double quotes, so we should avoid double quoting
+			 * again.
+			 */
+			const char *quoteFormatStr = (stmt->columns[c][0] == '"') ? "%s%s" :
+										 "%s\"%s\"";
+			appendPQExpBuffer(buf, quoteFormatStr,
 							  c > 0 ? ", " : "",
 							  stmt->columns[c]);
 		}
@@ -2101,7 +2205,14 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 
 				if (!skip)
 				{
-					appendPQExpBuffer(buf, "%s\"%s\" = $%d",
+					/*
+					 * In the case of the test_decoding plugin, it already escapes
+					 * keywords using double quotes, so we should avoid double quoting
+					 * again.
+					 */
+					const char *quoteFormatStr = (colname[0] == '"') ? "%s%s = $%d" :
+												 "%s\"%s\" = $%d";
+					appendPQExpBuffer(buf, quoteFormatStr,
 									  first ? "" : ", ",
 									  colname,
 									  ++pos);
@@ -2142,7 +2253,14 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 					return false;
 				}
 
-				appendPQExpBuffer(buf, "%s\"%s\" = $%d",
+				/*
+				 * In the case of the test_decoding plugin, it already escapes
+				 * keywords using double quotes, so we should avoid double quoting
+				 * again.
+				 */
+				const char *quoteFormatStr = (old->columns[v][0] == '"') ? "%s%s = $%d" :
+											 "%s\"%s\" = $%d";
+				appendPQExpBuffer(buf, quoteFormatStr,
 								  v > 0 ? " and " : "",
 								  old->columns[v],
 								  ++pos);
@@ -2228,7 +2346,14 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 					return false;
 				}
 
-				appendPQExpBuffer(buf, "%s\"%s\" = $%d",
+				/*
+				 * In the case of the test_decoding plugin, it already escapes
+				 * keywords using double quotes, so we should avoid double quoting
+				 * again.
+				 */
+				const char *quoteFormatStr = (old->columns[v][0] == '"') ? "%s%s = $%d" :
+											 "%s\"%s\" = $%d";
+				appendPQExpBuffer(buf, quoteFormatStr,
 								  v > 0 ? " and " : "",
 								  old->columns[v],
 								  ++pos);
@@ -2476,70 +2601,4 @@ LogicalMessageValueEq(LogicalMessageValue *a, LogicalMessageValue *b)
 
 	/* makes compiler happy */
 	return false;
-}
-
-
-/*
- *  computeTxnMetadataFilename computes the file path for transaction metadata
- *  based on its transaction id
- */
-bool
-computeTxnMetadataFilename(uint32_t xid, const char *dir, char *filename)
-{
-	if (dir == NULL)
-	{
-		log_error("BUG: computeTxnMetadataFilename is called with "
-				  "directory: NULL");
-		return false;
-	}
-
-	if (xid == 0)
-	{
-		log_error("BUG: computeTxnMetadataFilename is called with "
-				  "transaction xid: %lld", (long long) xid);
-		return false;
-	}
-
-	sformat(filename, MAXPGPATH, "%s/%lld.json", dir, (long long) xid);
-
-	return true;
-}
-
-
-/*
- * writeTxnMetadataFile writes the transaction metadata to a file in the given
- * directory
- */
-bool
-writeTxnMetadataFile(LogicalTransaction *txn, const char *dir)
-{
-	char txnfilename[MAXPGPATH] = { 0 };
-
-	if (!computeTxnMetadataFilename(txn->xid, dir, txnfilename))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	log_debug("stream_write_commit_metadata_file: writing transaction "
-			  "metadata file \"%s\" with commit lsn %X/%X",
-			  txnfilename,
-			  LSN_FORMAT_ARGS(txn->commitLSN));
-
-	char contents[BUFSIZE] = { 0 };
-
-	sformat(contents, BUFSIZE,
-			"{\"xid\":%lld,\"commit_lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
-			(long long) txn->xid,
-			LSN_FORMAT_ARGS(txn->commitLSN),
-			txn->timestamp);
-
-	/* write the metadata to txnfilename */
-	if (!write_file(contents, strlen(contents), txnfilename))
-	{
-		log_error("Failed to write file \"%s\"", txnfilename);
-		return false;
-	}
-
-	return true;
 }

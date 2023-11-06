@@ -14,6 +14,7 @@
 #include "cli_root.h"
 #include "ld_stream.h"
 #include "log.h"
+#include "progress.h"
 #include "signals.h"
 
 
@@ -186,7 +187,7 @@ follow_init_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel)
  * values from the pgcopydb.sentinel table on the source database.
  */
 bool
-follow_get_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel)
+follow_get_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel, bool verbose)
 {
 	PGSQL pgsql = { 0 };
 
@@ -216,16 +217,19 @@ follow_get_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel)
 				 LSN_FORMAT_ARGS(sentinel->replay_lsn),
 				 LSN_FORMAT_ARGS(sentinel->endpos));
 	}
-	else if (sentinel->endpos != InvalidXLogRecPtr)
+	else if (verbose)
 	{
-		log_info("Current sentinel replay_lsn is %X/%X, endpos is %X/%X",
-				 LSN_FORMAT_ARGS(sentinel->replay_lsn),
-				 LSN_FORMAT_ARGS(sentinel->endpos));
-	}
-	else if (sentinel->replay_lsn != InvalidXLogRecPtr)
-	{
-		log_info("Current sentinel replay_lsn is %X/%X",
-				 LSN_FORMAT_ARGS(sentinel->replay_lsn));
+		if (sentinel->endpos != InvalidXLogRecPtr)
+		{
+			log_info("Current sentinel replay_lsn is %X/%X, endpos is %X/%X",
+					 LSN_FORMAT_ARGS(sentinel->replay_lsn),
+					 LSN_FORMAT_ARGS(sentinel->endpos));
+		}
+		else if (sentinel->replay_lsn != InvalidXLogRecPtr)
+		{
+			log_info("Current sentinel replay_lsn is %X/%X",
+					 LSN_FORMAT_ARGS(sentinel->replay_lsn));
+		}
 	}
 
 	return true;
@@ -260,6 +264,16 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	 * connection.
 	 */
 	if (!stream_cleanup_context(streamSpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * Read the catalogs from the source table from on-file disk if
+	 * the schema dump has been done already.
+	 */
+	if (copySpecs->dirState.schemaDumpIsDone && !copydb_parse_schema_json_file(copySpecs))
 	{
 		/* errors have already been logged */
 		return false;
@@ -318,13 +332,6 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		previousMode = currentMode;
 		currentMode = modeArray[++loop % count];
 
-		/* and re-init our streamSpecs for the new mode */
-		if (!stream_init_for_mode(streamSpecs, currentMode))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
 		/*
 		 * Whatever the current/previous mode was, we need to
 		 * ensure to catch-up with files on-disk before switching
@@ -361,6 +368,13 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 
 		log_info("Restarting logical decoding follower in %s mode",
 				 LogicalStreamModeToString(currentMode));
+
+		/* and re-init our streamSpecs for the new mode */
+		if (!stream_init_for_mode(streamSpecs, currentMode))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	/* keep compiler happy */
@@ -375,9 +389,10 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 bool
 follow_reached_endpos(StreamSpecs *streamSpecs, bool *done)
 {
+	bool verbose = true;
 	CopyDBSentinel *sentinel = &(streamSpecs->sentinel);
 
-	if (!follow_get_sentinel(streamSpecs, sentinel))
+	if (!follow_get_sentinel(streamSpecs, sentinel, verbose))
 	{
 		log_error("Failed to get sentinel values");
 		return false;
@@ -443,22 +458,50 @@ follow_prepare_mode_switch(StreamSpecs *streamSpecs,
 			log_notice("Processing %lld messages from the transform queue",
 					   (long long) qStats.msg_qnum);
 
-			if (!stream_transform_from_queue(streamSpecs))
+			FollowSubProcess *transform = &(streamSpecs->transform);
+
+			if (!follow_start_subprocess(streamSpecs, transform))
 			{
-				log_error("Failed to process messages from the transform queue, "
-						  "see above for details");
+				log_error("Failed to start the transform process");
+				return false;
+			}
+
+			if (!follow_wait_subprocesses(streamSpecs))
+			{
+				log_error("Failed to transform %lld messages from the queue, "
+						  "see above for details",
+						  (long long) qStats.msg_qnum);
 				return false;
 			}
 		}
 	}
 
-	/* then catch-up with what's been stream and transformed already */
-	if (!stream_apply_catchup(streamSpecs))
+	/*
+	 * Then catch-up with what's been stream and transformed already, which
+	 * means replaying the files that have already been prepared on-disk.
+	 */
+	LogicalStreamMode mode = streamSpecs->mode;
+	streamSpecs->mode = STREAM_MODE_CATCHUP;
+
+	FollowSubProcess *catchup = &(streamSpecs->catchup);
+
+	if (!follow_start_subprocess(streamSpecs, catchup))
 	{
+		streamSpecs->mode = mode;
+		log_error("Failed to start the %s process", catchup->name);
+		return false;
+	}
+
+	if (!follow_wait_subprocesses(streamSpecs))
+	{
+		streamSpecs->mode = mode;
 		log_error("Failed to catchup with on-disk files, "
 				  "see above for details");
 		return false;
 	}
+
+	/* re-install the streamSpecs->mode as it was before getting there */
+	streamSpecs->mode = mode;
 
 	return true;
 }
@@ -596,7 +639,9 @@ follow_start_prefetch(StreamSpecs *specs)
 	if (specs->mode == STREAM_MODE_REPLAY)
 	{
 		/* arrange to write to the receive-transform pipe */
+		specs->stdIn = false;
 		specs->stdOut = true;
+
 		specs->out = fdopen(specs->pipe_rt[1], "a");
 
 		/* close pipe ends we're not using */
@@ -615,13 +660,20 @@ follow_start_prefetch(StreamSpecs *specs)
 
 		close_fd_or_exit(specs->pipe_rt[1]);
 
+		log_info("Prefetch process has terminated");
+
 		return success;
 	}
 	else
 	{
+		specs->stdIn = false;
 		specs->stdOut = false;
 
-		return startLogicalStreaming(specs);
+		bool success = startLogicalStreaming(specs);
+
+		log_info("Prefetch process has terminated");
+
+		return success;
 	}
 
 	return true;
@@ -703,6 +755,8 @@ follow_start_catchup(StreamSpecs *specs)
 	{
 		/* arrange to read from the transform-apply pipe */
 		specs->stdIn = true;
+		specs->stdOut = false;
+
 		specs->in = fdopen(specs->pipe_ta[0], "r");
 
 		/* close pipe ends we're not using */
@@ -725,6 +779,7 @@ follow_start_catchup(StreamSpecs *specs)
 		 * open the right SQL file and apply statements from there.
 		 */
 		specs->stdIn = false;
+		specs->stdOut = false;
 
 		return stream_apply_catchup(specs);
 	}
@@ -927,6 +982,26 @@ follow_wait_subprocesses(StreamSpecs *specs)
 				if (processArray[i]->returnCode != 0 ||
 					specs->endpos == InvalidXLogRecPtr)
 				{
+					char endposStatus[BUFSIZE] = { 0 };
+
+					if (specs->endpos == InvalidXLogRecPtr)
+					{
+						sformat(endposStatus, sizeof(endposStatus), "unset");
+					}
+					else
+					{
+						sformat(endposStatus, sizeof(endposStatus),
+								"set to %X/%X",
+								LSN_FORMAT_ARGS(specs->endpos));
+					}
+
+					log_notice("Process %s has exited with return code %d, "
+							   "and endpos is %s: "
+							   "terminating other processes",
+							   processArray[i]->name,
+							   processArray[i]->returnCode,
+							   endposStatus);
+
 					if (!follow_terminate_subprocesses(specs))
 					{
 						log_error("Failed to terminate other subprocesses, "
@@ -937,6 +1012,13 @@ follow_wait_subprocesses(StreamSpecs *specs)
 
 				success = success && processArray[i]->returnCode == 0;
 			}
+		}
+
+		/* update current sentinel values (endpos) */
+		if (!follow_get_sentinel(specs, &(specs->sentinel), false))
+		{
+			/* ignore errors here, supervisor can't quit before sub-processes */
+			log_warn("Failed to get sentinel values");
 		}
 
 		/* avoid busy looping, wait for 150ms before checking again */

@@ -27,7 +27,7 @@ typedef enum
 
 typedef struct SourceFilterSchema
 {
-	char nspname[NAMEDATALEN];
+	char nspname[PG_NAMEDATALEN];
 } SourceFilterSchema;
 
 typedef struct SourceFilterSchemaList
@@ -39,8 +39,8 @@ typedef struct SourceFilterSchemaList
 
 typedef struct SourceFilterTable
 {
-	char nspname[NAMEDATALEN];
-	char relname[NAMEDATALEN];
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
 } SourceFilterTable;
 
 typedef struct SourceFilterTableList

@@ -56,6 +56,22 @@ typedef struct SourceSchemaArrayContext
 	bool parsedOk;
 } SourceSchemaArrayContext;
 
+/* Context used when fetching role definitions */
+typedef struct SourceRoleArrayContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	SourceRoleArray *rolesArray;
+	bool parsedOk;
+} SourceRoleArrayContext;
+
+/* Context used when fetching database properties */
+typedef struct SourcePropertiesArrayContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	SourcePropertiesArray *gucsArray;
+	bool parsedOk;
+} SourcePropertiesArrayContext;
+
 /* Context used when fetching all the extension definitions */
 typedef struct SourceExtensionArrayContext
 {
@@ -131,7 +147,11 @@ typedef struct ChecksumContext
 
 static void getSchemaList(void *ctx, PGresult *result);
 
+static void getRoleList(void *ctx, PGresult *result);
+
 static void getDatabaseList(void *ctx, PGresult *result);
+
+static void getDatabaseProperties(void *ctx, PGresult *result);
 
 static void getExtensionList(void *ctx, PGresult *result);
 
@@ -250,6 +270,50 @@ schema_list_databases(PGSQL *pgsql, SourceDatabaseArray *catArray)
 
 
 /*
+ * schema_list_database_properties grabs the list of GUC settings attached to a
+ * given database with either ALTER DATABASE SET or ALTER ROLE IN DATABASE SET
+ * commands.
+ */
+bool
+schema_list_database_properties(PGSQL *pgsql, SourcePropertiesArray *gucsArray)
+{
+	SourcePropertiesArrayContext parseContext = { { 0 }, gucsArray, false };
+
+	char *sql =
+		"select d.datname, NULL as rolname, "
+		"       unnest(rs.setconfig) as setconfig "
+		"  from pg_db_role_setting rs "
+		"       join pg_database d on d.oid = rs.setdatabase "
+		" where d.datname = current_database() "
+		"   and setrole = 0 "
+
+		"union all "
+
+		"select d.datname, format('%I', rolname) as rolname, "
+		"       unnest(rs.setconfig)  as setconfig "
+		"  from pg_db_role_setting rs "
+		"       join pg_database d on d.oid = rs.setdatabase "
+		"       join pg_roles r on r.oid = rs.setrole "
+		" where d.datname = current_database()";
+
+	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+								   &parseContext, &getDatabaseProperties))
+	{
+		log_error("Failed to list databases properties");
+		return false;
+	}
+
+	if (!parseContext.parsedOk)
+	{
+		log_error("Failed to list databases properties");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * schema_list_schemas grabs the list of schema from the given Postgres
  * instance and allocates a SourceSchemaArray array with the result of the
  * query.
@@ -279,6 +343,37 @@ schema_list_schemas(PGSQL *pgsql, SourceSchemaArray *array)
 	if (!parseContext.parsedOk)
 	{
 		log_error("Failed to list schemas that extensions depend on");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * schema_list_roles grabs the list of role from the given Postgres
+ * instance and allocates a SourceRoleArray array with the result of the
+ * query.
+ */
+bool
+schema_list_roles(PGSQL *pgsql, SourceRoleArray *rolesArray)
+{
+	SourceRoleArrayContext parseContext = { { 0 }, rolesArray, false };
+
+	char *sql =
+		"select oid, format('%I', rolname) as rolname from pg_roles";
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   0, NULL, NULL,
+								   &parseContext, &getRoleList))
+	{
+		log_error("Failed to list roles");
+		return false;
+	}
+
+	if (!parseContext.parsedOk)
+	{
+		log_error("Failed to list roles");
 		return false;
 	}
 
@@ -3644,13 +3739,13 @@ getSchemaList(void *ctx, PGresult *result)
 
 		/* 2. nspname */
 		value = PQgetvalue(result, rowNumber, 1);
-		int length = strlcpy(schema->nspname, value, NAMEDATALEN);
+		int length = strlcpy(schema->nspname, value, PG_NAMEDATALEN);
 
-		if (length >= NAMEDATALEN)
+		if (length >= PG_NAMEDATALEN)
 		{
 			log_error("Schema name \"%s\" is %d bytes long, "
-					  "the maximum expected is %d (NAMEDATALEN - 1)",
-					  value, length, NAMEDATALEN - 1);
+					  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+					  value, length, PG_NAMEDATALEN - 1);
 			++errors;
 		}
 
@@ -3670,6 +3765,79 @@ getSchemaList(void *ctx, PGresult *result)
 				  schema->oid,
 				  schema->nspname,
 				  schema->restoreListName);
+	}
+
+	context->parsedOk = errors == 0;
+}
+
+
+/*
+ * getRoleList loops over the SQL result for the role array query and
+ * allocates an array of roles then populates it with the query result.
+ */
+static void
+getRoleList(void *ctx, PGresult *result)
+{
+	SourceRoleArrayContext *context = (SourceRoleArrayContext *) ctx;
+	int nTuples = PQntuples(result);
+
+	log_debug("getRoleList: %d", nTuples);
+
+	if (PQnfields(result) != 2)
+	{
+		log_error("Query returned %d columns, expected 2", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	/* we're not supposed to re-cycle arrays here */
+	if (context->rolesArray->array != NULL)
+	{
+		/* issue a warning but let's try anyway */
+		log_warn("BUG? context's array is not null in getRoleList");
+
+		free(context->rolesArray->array);
+		context->rolesArray->array = NULL;
+	}
+
+	context->rolesArray->count = nTuples;
+	context->rolesArray->array =
+		(SourceRole *) calloc(nTuples, sizeof(SourceRole));
+
+	if (context->rolesArray->array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return;
+	}
+
+	int errors = 0;
+
+	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
+	{
+		SourceRole *role = &(context->rolesArray->array[rowNumber]);
+
+		/* 1. oid */
+		char *value = PQgetvalue(result, rowNumber, 0);
+
+		if (!stringToUInt32(value, &(role->oid)) || role->oid == 0)
+		{
+			log_error("Invalid OID \"%s\"", value);
+			++errors;
+		}
+
+		/* 2. rolname */
+		value = PQgetvalue(result, rowNumber, 1);
+		int length = strlcpy(role->rolname, value, PG_NAMEDATALEN);
+
+		if (length >= PG_NAMEDATALEN)
+		{
+			log_error("Role name \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+					  value, length, PG_NAMEDATALEN - 1);
+			++errors;
+		}
+
+		log_trace("getRoleList: %u %s", role->oid, role->rolname);
 	}
 
 	context->parsedOk = errors == 0;
@@ -3732,13 +3900,13 @@ getDatabaseList(void *ctx, PGresult *result)
 
 		/* 2. datname */
 		value = PQgetvalue(result, rowNumber, 1);
-		int length = strlcpy(database->datname, value, NAMEDATALEN);
+		int length = strlcpy(database->datname, value, PG_NAMEDATALEN);
 
-		if (length >= NAMEDATALEN)
+		if (length >= PG_NAMEDATALEN)
 		{
 			log_error("Database name \"%s\" is %d bytes long, "
-					  "the maximum expected is %d (NAMEDATALEN - 1)",
-					  value, length, NAMEDATALEN - 1);
+					  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+					  value, length, PG_NAMEDATALEN - 1);
 			++errors;
 		}
 
@@ -3765,15 +3933,114 @@ getDatabaseList(void *ctx, PGresult *result)
 
 		/* 4. pg_size_pretty */
 		value = PQgetvalue(result, rowNumber, 3);
-		length = strlcpy(database->bytesPretty, value, NAMEDATALEN);
+		length = strlcpy(database->bytesPretty, value, PG_NAMEDATALEN);
 
-		if (length >= NAMEDATALEN)
+		if (length >= PG_NAMEDATALEN)
 		{
 			log_error("Pretty printed byte size \"%s\" is %d bytes long, "
-					  "the maximum expected is %d (NAMEDATALEN - 1)",
-					  value, length, NAMEDATALEN - 1);
+					  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+					  value, length, PG_NAMEDATALEN - 1);
 			++errors;
 		}
+	}
+
+	context->parsedOk = errors == 0;
+}
+
+
+/*
+ * getDatabaseList loops over the SQL result for the database properties array
+ * query and allocates an array of GUC settings then populates it with the
+ * query result.
+ */
+static void
+getDatabaseProperties(void *ctx, PGresult *result)
+{
+	SourcePropertiesArrayContext *context = (SourcePropertiesArrayContext *) ctx;
+	int nTuples = PQntuples(result);
+
+	log_debug("getDatabaseProperties: %d", nTuples);
+
+	if (PQnfields(result) != 3)
+	{
+		log_error("Query returned %d columns, expected 3", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	/* we're not supposed to re-cycle arrays here */
+	if (context->gucsArray->array != NULL)
+	{
+		/* issue a warning but let's try anyway */
+		log_warn("BUG? context's array is not null in getDatabaseProperties");
+
+		free(context->gucsArray->array);
+		context->gucsArray->array = NULL;
+	}
+
+	context->gucsArray->count = nTuples;
+	context->gucsArray->array =
+		(SourceProperty *) calloc(nTuples, sizeof(SourceProperty));
+
+	if (context->gucsArray->array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return;
+	}
+
+	int errors = 0;
+
+	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
+	{
+		SourceProperty *property = &(context->gucsArray->array[rowNumber]);
+
+		/* 1. datname */
+		char *value = PQgetvalue(result, rowNumber, 0);
+		int length = strlcpy(property->datname, value, PG_NAMEDATALEN);
+
+		if (length >= PG_NAMEDATALEN)
+		{
+			log_error("Properties role name \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+					  value, length, PG_NAMEDATALEN - 1);
+			++errors;
+		}
+
+		/* 2. rolname */
+		if (PQgetisnull(result, rowNumber, 1))
+		{
+			property->roleInDatabase = false;
+		}
+		else
+		{
+			property->roleInDatabase = true;
+
+			value = PQgetvalue(result, rowNumber, 1);
+			int length = strlcpy(property->rolname, value, PG_NAMEDATALEN);
+
+			if (length >= PG_NAMEDATALEN)
+			{
+				log_error("Properties role name \"%s\" is %d bytes long, "
+						  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+						  value, length, PG_NAMEDATALEN - 1);
+				++errors;
+			}
+		}
+
+		/* 3. setconfig */
+		value = PQgetvalue(result, rowNumber, 2);
+		int len = strlen(value);
+		int bytes = len + 1;
+
+		property->setconfig = (char *) calloc(bytes, sizeof(char));
+
+		if (property->setconfig == NULL)
+		{
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return;
+		}
+
+		strlcpy(property->setconfig, value, bytes);
 	}
 
 	context->parsedOk = errors == 0;
@@ -3928,25 +4195,25 @@ parseCurrentExtension(PGresult *result,
 
 	/* 2. extname */
 	value = PQgetvalue(result, rowNumber, 1);
-	int length = strlcpy(extension->extname, value, NAMEDATALEN);
+	int length = strlcpy(extension->extname, value, PG_NAMEDATALEN);
 
-	if (length >= NAMEDATALEN)
+	if (length >= PG_NAMEDATALEN)
 	{
 		log_error("Extension name \"%s\" is %d bytes long, "
-				  "the maximum expected is %d (NAMEDATALEN - 1)",
-				  value, length, NAMEDATALEN - 1);
+				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+				  value, length, PG_NAMEDATALEN - 1);
 		++errors;
 	}
 
 	/* 3. extnamespace */
 	value = PQgetvalue(result, rowNumber, 2);
-	length = strlcpy(extension->extnamespace, value, NAMEDATALEN);
+	length = strlcpy(extension->extnamespace, value, PG_NAMEDATALEN);
 
-	if (length >= NAMEDATALEN)
+	if (length >= PG_NAMEDATALEN)
 	{
 		log_error("Extension extnamespace \"%s\" is %d bytes long, "
-				  "the maximum expected is %d (NAMEDATALEN - 1)",
-				  value, length, NAMEDATALEN - 1);
+				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+				  value, length, PG_NAMEDATALEN - 1);
 		++errors;
 	}
 
@@ -4013,25 +4280,25 @@ parseCurrentExtensionConfig(PGresult *result,
 
 	/* 8. n.nspname */
 	value = PQgetvalue(result, rowNumber, 7);
-	int length = strlcpy(extConfig->nspname, value, NAMEDATALEN);
+	int length = strlcpy(extConfig->nspname, value, PG_NAMEDATALEN);
 
-	if (length >= NAMEDATALEN)
+	if (length >= PG_NAMEDATALEN)
 	{
 		log_error("Schema name \"%s\" is %d bytes long, "
-				  "the maximum expected is %d (NAMEDATALEN - 1)",
-				  value, length, NAMEDATALEN - 1);
+				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+				  value, length, PG_NAMEDATALEN - 1);
 		++errors;
 	}
 
 	/* 9. c.relname */
 	value = PQgetvalue(result, rowNumber, 8);
-	length = strlcpy(extConfig->relname, value, NAMEDATALEN);
+	length = strlcpy(extConfig->relname, value, PG_NAMEDATALEN);
 
-	if (length >= NAMEDATALEN)
+	if (length >= PG_NAMEDATALEN)
 	{
 		log_error("Extension configuration table name \"%s\" is %d bytes long, "
-				  "the maximum expected is %d (NAMEDATALEN - 1)",
-				  value, length, NAMEDATALEN - 1);
+				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+				  value, length, PG_NAMEDATALEN - 1);
 		++errors;
 	}
 
@@ -4098,37 +4365,37 @@ getExtensionsVersions(void *ctx, PGresult *result)
 
 		/* 1. name */
 		char *value = PQgetvalue(result, rowNumber, 0);
-		int length = strlcpy(ev->name, value, NAMEDATALEN);
+		int length = strlcpy(ev->name, value, PG_NAMEDATALEN);
 
-		if (length >= NAMEDATALEN)
+		if (length >= PG_NAMEDATALEN)
 		{
 			log_error("Extension name \"%s\" is %d bytes long, "
-					  "the maximum expected is %d (NAMEDATALEN - 1)",
-					  value, length, NAMEDATALEN - 1);
+					  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+					  value, length, PG_NAMEDATALEN - 1);
 			++errors;
 		}
 
 		/* 2. defaultVersion */
 		value = PQgetvalue(result, rowNumber, 1);
-		length = strlcpy(ev->defaultVersion, value, NAMEDATALEN);
+		length = strlcpy(ev->defaultVersion, value, PG_NAMEDATALEN);
 
-		if (length >= NAMEDATALEN)
+		if (length >= PG_NAMEDATALEN)
 		{
 			log_error("Extension version \"%s\" is %d bytes long, "
-					  "the maximum expected is %d (NAMEDATALEN - 1)",
-					  value, length, NAMEDATALEN - 1);
+					  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+					  value, length, PG_NAMEDATALEN - 1);
 			++errors;
 		}
 
 		/* 3. installedVersion */
 		value = PQgetvalue(result, rowNumber, 2);
-		length = strlcpy(ev->installedVersion, value, NAMEDATALEN);
+		length = strlcpy(ev->installedVersion, value, PG_NAMEDATALEN);
 
-		if (length >= NAMEDATALEN)
+		if (length >= PG_NAMEDATALEN)
 		{
 			log_error("Extension version \"%s\" is %d bytes long, "
-					  "the maximum expected is %d (NAMEDATALEN - 1)",
-					  value, length, NAMEDATALEN - 1);
+					  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+					  value, length, PG_NAMEDATALEN - 1);
 			++errors;
 		}
 
@@ -4208,13 +4475,13 @@ getCollationList(void *ctx, PGresult *result)
 
 		/* 2. collname */
 		value = PQgetvalue(result, rowNumber, 1);
-		int length = strlcpy(collation->collname, value, NAMEDATALEN);
+		int length = strlcpy(collation->collname, value, PG_NAMEDATALEN);
 
-		if (length >= NAMEDATALEN)
+		if (length >= PG_NAMEDATALEN)
 		{
 			log_error("Collation name \"%s\" is %d bytes long, "
-					  "the maximum expected is %d (NAMEDATALEN - 1)",
-					  value, length, NAMEDATALEN - 1);
+					  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+					  value, length, PG_NAMEDATALEN - 1);
 			++errors;
 		}
 
@@ -4343,25 +4610,25 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 
 	/* n.nspname */
 	value = PQgetvalue(result, rowNumber, fnnspname);
-	int length = strlcpy(table->nspname, value, NAMEDATALEN);
+	int length = strlcpy(table->nspname, value, PG_NAMEDATALEN);
 
-	if (length >= NAMEDATALEN)
+	if (length >= PG_NAMEDATALEN)
 	{
 		log_error("Schema name \"%s\" is %d bytes long, "
-				  "the maximum expected is %d (NAMEDATALEN - 1)",
-				  value, length, NAMEDATALEN - 1);
+				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+				  value, length, PG_NAMEDATALEN - 1);
 		++errors;
 	}
 
 	/* c.relname */
 	value = PQgetvalue(result, rowNumber, fnrelname);
-	length = strlcpy(table->relname, value, NAMEDATALEN);
+	length = strlcpy(table->relname, value, PG_NAMEDATALEN);
 
-	if (length >= NAMEDATALEN)
+	if (length >= PG_NAMEDATALEN)
 	{
 		log_error("Table name \"%s\" is %d bytes long, "
-				  "the maximum expected is %d (NAMEDATALEN - 1)",
-				  value, length, NAMEDATALEN - 1);
+				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+				  value, length, PG_NAMEDATALEN - 1);
 		++errors;
 	}
 
@@ -4373,7 +4640,7 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	if (length >= sizeof(table->qname))
 	{
 		log_error("Qualified table name \"%s\".\"%s\" is %d bytes long, "
-				  "the maximum expected is %lld (NAMEDATALEN * 2 + 5)",
+				  "the maximum expected is %lld",
 				  table->nspname,
 				  table->relname,
 				  length,
@@ -4385,18 +4652,18 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	if (PQgetisnull(result, rowNumber, fnamname))
 	{
 		/* table started having an amname in Postgres 12 */
-		strlcpy(table->amname, "heap", NAMEDATALEN);
+		strlcpy(table->amname, "heap", PG_NAMEDATALEN);
 	}
 	else
 	{
 		value = PQgetvalue(result, rowNumber, fnamname);
-		length = strlcpy(table->amname, value, NAMEDATALEN);
+		length = strlcpy(table->amname, value, PG_NAMEDATALEN);
 
-		if (length >= NAMEDATALEN)
+		if (length >= PG_NAMEDATALEN)
 		{
 			log_error("Access Method name \"%s\" is %d bytes long, "
-					  "the maximum expected is %d (NAMEDATALEN - 1)",
-					  value, length, NAMEDATALEN - 1);
+					  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+					  value, length, PG_NAMEDATALEN - 1);
 			++errors;
 		}
 	}
@@ -4463,13 +4730,13 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 
 	/* pg_size_pretty(c.oid) */
 	value = PQgetvalue(result, rowNumber, fnbytespretty);
-	length = strlcpy(table->bytesPretty, value, NAMEDATALEN);
+	length = strlcpy(table->bytesPretty, value, PG_NAMEDATALEN);
 
-	if (length >= NAMEDATALEN)
+	if (length >= PG_NAMEDATALEN)
 	{
 		log_error("Pretty printed byte size \"%s\" is %d bytes long, "
-				  "the maximum expected is %d (NAMEDATALEN - 1)",
-				  value, length, NAMEDATALEN - 1);
+				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+				  value, length, PG_NAMEDATALEN - 1);
 		++errors;
 	}
 
@@ -4499,13 +4766,13 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	else
 	{
 		value = PQgetvalue(result, rowNumber, fnpartkey);
-		length = strlcpy(table->partKey, value, NAMEDATALEN);
+		length = strlcpy(table->partKey, value, PG_NAMEDATALEN);
 
-		if (length >= NAMEDATALEN)
+		if (length >= PG_NAMEDATALEN)
 		{
 			log_error("Partition key column name %s is %d bytes long, "
-					  "the maximum expected is %d (NAMEDATALEN - 1)",
-					  value, length, NAMEDATALEN - 1);
+					  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+					  value, length, PG_NAMEDATALEN - 1);
 			++errors;
 		}
 	}
@@ -4663,25 +4930,25 @@ parseCurrentSourceSequence(PGresult *result, int rowNumber, SourceSequence *seq)
 
 	/* 2. n.nspname */
 	value = PQgetvalue(result, rowNumber, 1);
-	int length = strlcpy(seq->nspname, value, NAMEDATALEN);
+	int length = strlcpy(seq->nspname, value, PG_NAMEDATALEN);
 
-	if (length >= NAMEDATALEN)
+	if (length >= PG_NAMEDATALEN)
 	{
 		log_error("Schema name \"%s\" is %d bytes long, "
-				  "the maximum expected is %d (NAMEDATALEN - 1)",
-				  value, length, NAMEDATALEN - 1);
+				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+				  value, length, PG_NAMEDATALEN - 1);
 		++errors;
 	}
 
 	/* 3. c.relname */
 	value = PQgetvalue(result, rowNumber, 2);
-	length = strlcpy(seq->relname, value, NAMEDATALEN);
+	length = strlcpy(seq->relname, value, PG_NAMEDATALEN);
 
-	if (length >= NAMEDATALEN)
+	if (length >= PG_NAMEDATALEN)
 	{
 		log_error("Sequence name \"%s\" is %d bytes long, "
-				  "the maximum expected is %d (NAMEDATALEN - 1)",
-				  value, length, NAMEDATALEN - 1);
+				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+				  value, length, PG_NAMEDATALEN - 1);
 		++errors;
 	}
 
@@ -4693,7 +4960,7 @@ parseCurrentSourceSequence(PGresult *result, int rowNumber, SourceSequence *seq)
 	if (length >= sizeof(seq->qname))
 	{
 		log_error("Qualified seq name \"%s\".\"%s\" is %d bytes long, "
-				  "the maximum expected is %lld (NAMEDATALEN * 2 + 5)",
+				  "the maximum expected is %lld",
 				  seq->nspname,
 				  seq->relname,
 				  length,
@@ -4844,25 +5111,25 @@ parseCurrentSourceIndex(PGresult *result, int rowNumber, SourceIndex *index)
 
 	/* 2. n.nspname */
 	value = PQgetvalue(result, rowNumber, 1);
-	int length = strlcpy(index->indexNamespace, value, NAMEDATALEN);
+	int length = strlcpy(index->indexNamespace, value, PG_NAMEDATALEN);
 
-	if (length >= NAMEDATALEN)
+	if (length >= PG_NAMEDATALEN)
 	{
 		log_error("Schema name \"%s\" is %d bytes long, "
-				  "the maximum expected is %d (NAMEDATALEN - 1)",
-				  value, length, NAMEDATALEN - 1);
+				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+				  value, length, PG_NAMEDATALEN - 1);
 		++errors;
 	}
 
 	/* 3. i.relname */
 	value = PQgetvalue(result, rowNumber, 2);
-	length = strlcpy(index->indexRelname, value, NAMEDATALEN);
+	length = strlcpy(index->indexRelname, value, PG_NAMEDATALEN);
 
-	if (length >= NAMEDATALEN)
+	if (length >= PG_NAMEDATALEN)
 	{
 		log_error("Index name \"%s\" is %d bytes long, "
-				  "the maximum expected is %d (NAMEDATALEN - 1)",
-				  value, length, NAMEDATALEN - 1);
+				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+				  value, length, PG_NAMEDATALEN - 1);
 		++errors;
 	}
 
@@ -4874,7 +5141,7 @@ parseCurrentSourceIndex(PGresult *result, int rowNumber, SourceIndex *index)
 	if (length >= sizeof(index->tableQname))
 	{
 		log_error("Qualified index name \"%s\".\"%s\" is %d bytes long, "
-				  "the maximum expected is %lld (NAMEDATALEN * 2 + 5)",
+				  "the maximum expected is %lld",
 				  index->indexNamespace,
 				  index->indexRelname,
 				  length,
@@ -4893,25 +5160,25 @@ parseCurrentSourceIndex(PGresult *result, int rowNumber, SourceIndex *index)
 
 	/* 5. rn.nspname */
 	value = PQgetvalue(result, rowNumber, 4);
-	length = strlcpy(index->tableNamespace, value, NAMEDATALEN);
+	length = strlcpy(index->tableNamespace, value, PG_NAMEDATALEN);
 
-	if (length >= NAMEDATALEN)
+	if (length >= PG_NAMEDATALEN)
 	{
 		log_error("Schema name \"%s\" is %d bytes long, "
-				  "the maximum expected is %d (NAMEDATALEN - 1)",
-				  value, length, NAMEDATALEN - 1);
+				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+				  value, length, PG_NAMEDATALEN - 1);
 		++errors;
 	}
 
 	/* 6. r.relname */
 	value = PQgetvalue(result, rowNumber, 5);
-	length = strlcpy(index->tableRelname, value, NAMEDATALEN);
+	length = strlcpy(index->tableRelname, value, PG_NAMEDATALEN);
 
-	if (length >= NAMEDATALEN)
+	if (length >= PG_NAMEDATALEN)
 	{
 		log_error("Index name \"%s\" is %d bytes long, "
-				  "the maximum expected is %d (NAMEDATALEN - 1)",
-				  value, length, NAMEDATALEN - 1);
+				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+				  value, length, PG_NAMEDATALEN - 1);
 		++errors;
 	}
 
@@ -4923,7 +5190,7 @@ parseCurrentSourceIndex(PGresult *result, int rowNumber, SourceIndex *index)
 	if (length >= sizeof(index->tableQname))
 	{
 		log_error("Qualified table name \"%s\".\"%s\" is %d bytes long, "
-				  "the maximum expected is %lld (NAMEDATALEN * 2 + 5)",
+				  "the maximum expected is %lld",
 				  index->tableNamespace,
 				  index->tableRelname,
 				  length,
@@ -5032,13 +5299,13 @@ parseCurrentSourceIndex(PGresult *result, int rowNumber, SourceIndex *index)
 	if (!PQgetisnull(result, rowNumber, 13))
 	{
 		value = PQgetvalue(result, rowNumber, 13);
-		length = strlcpy(index->constraintName, value, NAMEDATALEN);
+		length = strlcpy(index->constraintName, value, PG_NAMEDATALEN);
 
-		if (length >= NAMEDATALEN)
+		if (length >= PG_NAMEDATALEN)
 		{
 			log_error("Index name \"%s\" is %d bytes long, "
-					  "the maximum expected is %d (NAMEDATALEN - 1)",
-					  value, length, NAMEDATALEN - 1);
+					  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+					  value, length, PG_NAMEDATALEN - 1);
 			++errors;
 		}
 	}
@@ -5147,25 +5414,25 @@ parseCurrentSourceDepend(PGresult *result, int rowNumber, SourceDepend *depend)
 
 	/* 1. n.nspname */
 	char *value = PQgetvalue(result, rowNumber, 0);
-	int length = strlcpy(depend->nspname, value, NAMEDATALEN);
+	int length = strlcpy(depend->nspname, value, PG_NAMEDATALEN);
 
-	if (length >= NAMEDATALEN)
+	if (length >= PG_NAMEDATALEN)
 	{
 		log_error("Schema name \"%s\" is %d bytes long, "
-				  "the maximum expected is %d (NAMEDATALEN - 1)",
-				  value, length, NAMEDATALEN - 1);
+				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+				  value, length, PG_NAMEDATALEN - 1);
 		++errors;
 	}
 
 	/* 2. c.relname */
 	value = PQgetvalue(result, rowNumber, 1);
-	length = strlcpy(depend->relname, value, NAMEDATALEN);
+	length = strlcpy(depend->relname, value, PG_NAMEDATALEN);
 
-	if (length >= NAMEDATALEN)
+	if (length >= PG_NAMEDATALEN)
 	{
 		log_error("Table name \"%s\" is %d bytes long, "
-				  "the maximum expected is %d (NAMEDATALEN - 1)",
-				  value, length, NAMEDATALEN - 1);
+				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+				  value, length, PG_NAMEDATALEN - 1);
 		++errors;
 	}
 

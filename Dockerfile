@@ -27,10 +27,15 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
     libssl-dev \
     libxslt1-dev \
     lsof \
+    psmisc \
+    gdb \
+    strace \
+    tmux \
+    watch \
     make \
     openssl \
-    postgresql-client-common \
     postgresql-common \
+    postgresql-client-common \
     postgresql-server-dev-all \
     psutils \
     tmux \
@@ -66,6 +71,9 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
     ca-certificates \
     libpq5 \
     lsof \
+    tmux \
+    watch \
+    psmisc \
     openssl \
     postgresql-client \
     postgresql-client-common \

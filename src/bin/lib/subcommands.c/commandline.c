@@ -274,5 +274,8 @@ commandline_add_breadcrumb(CommandLine *command, CommandLine *subcommand)
 	breadcrumbLength += subcommandLength + 2;
 
 	subcommand->breadcrumb = (char *) malloc(breadcrumbLength * sizeof(char));
-	sprintf(subcommand->breadcrumb, "%s %s", command_bc, subcommand->name);
+
+	snprintf(subcommand->breadcrumb, breadcrumbLength, "%s %s",
+			 command_bc,
+			 subcommand->name);
 }

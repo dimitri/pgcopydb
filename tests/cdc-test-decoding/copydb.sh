@@ -76,8 +76,8 @@ diff ${SHAREDIR}/${SQLFILE} /tmp/${SQLFILENAME}
 # and also discarding ON UPDATE triggers for the timestamps (EXECUTE/last_update)
 DIFFOPTS='-I BEGIN -I COMMIT -I KEEPALIVE -I SWITCH -I ENDPOS -I EXECUTE'
 
+diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} ${SHAREDIR}/${SQLFILENAME} || cat ${SHAREDIR}/${SQLFILENAME}
 diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} ${SHAREDIR}/${SQLFILENAME}
-
 # now allow for replaying/catching-up changes
 pgcopydb stream sentinel set apply
 

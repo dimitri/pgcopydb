@@ -11,17 +11,17 @@ Synopsis
 pgcopydb provides the following commands::
 
   pgcopydb
-    clone    Clone an entire database from source to target
-    fork     Clone an entire database from source to target
-    follow   Replay changes from the source database to the target database
-    snapshot  Create and exports a snapshot on the source database
-  + copy     Implement the data section of the database copy
-  + dump     Dump database objects from a Postgres instance
-  + restore  Restore database objects into a Postgres instance
-  + list     List database objects from a Postgres instance
-  + stream   Stream changes from the source database
-    help     print help message
-    version  print pgcopydb version
+    clone     Clone an entire database from source to target
+    fork      Clone an entire database from source to target
+    follow    Replay changes from the source database to the target database
+    snapshot  Create and export a snapshot on the source database
+  + copy      Implement the data section of the database copy
+  + dump      Dump database objects from a Postgres instance
+  + restore   Restore database objects into a Postgres instance
+  + list      List database objects from a Postgres instance
+  + stream    Stream changes from the source database
+    help      Print help message
+    version   Print pgcopydb version
 
 Description
 -----------
@@ -53,15 +53,15 @@ The ``pgcopydb help`` command lists all the supported sub-commands:
       fork      Clone an entire database from source to target
       follow    Replay changes from the source database to the target database
       copy-db   Clone an entire database from source to target
-      snapshot  Create and exports a snapshot on the source database
+      snapshot  Create and export a snapshot on the source database
     + copy      Implement the data section of the database copy
     + dump      Dump database objects from a Postgres instance
     + restore   Restore database objects into a Postgres instance
     + list      List database objects from a Postgres instance
     + stream    Stream changes from the source database
       ping      Attempt to connect to the source and target instances
-      help      print help message
-      version   print pgcopydb version
+      help      Print help message
+      version   Print pgcopydb version
 
     pgcopydb copy
       db           Copy an entire database from source to target
@@ -70,7 +70,7 @@ The ``pgcopydb help`` command lists all the supported sub-commands:
       schema       Copy the database schema from source to target
       data         Copy the data section from source to target
       table-data   Copy the data from all tables in database from source to target
-      blobs        Copy the blob data from ther source database to the target
+      blobs        Copy the blob data from the source database to the target
       sequences    Copy the current value from all sequences in database from source to target
       indexes      Create all the indexes found in the source database in the target
       constraints  Create all the constraints found in the source database in the target
@@ -102,7 +102,7 @@ The ``pgcopydb help`` command lists all the supported sub-commands:
 
     pgcopydb stream
       setup      Setup source and target systems for logical decoding
-      cleanup    cleanup source and target systems for logical decoding
+      cleanup    Cleanup source and target systems for logical decoding
       prefetch   Stream JSON changes from the source database and transform them to SQL
       catchup    Apply prefetched changes from SQL files to the target database
       replay     Replay changes from the source to the target database, live
@@ -133,9 +133,9 @@ of pgcopydb used, and can do that in the JSON format when using the
 ::
 
    $ pgcopydb version
-   pgcopydb version 0.8
-   compiled with PostgreSQL 12.12 on x86_64-apple-darwin16.7.0, compiled by Apple LLVM version 8.1.0 (clang-802.0.42), 64-bit
-   compatible with Postgres 10, 11, 12, 13, and 14
+   pgcopydb version 0.13.1.g868ad77
+   compiled with PostgreSQL 13.11 (Debian 13.11-0+deb11u1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 10.2.1-6) 10.2.1 20210110, 64-bit
+   compatible with Postgres 10, 11, 12, 13, 14, and 15
 
 In JSON:
 
@@ -143,11 +143,11 @@ In JSON:
 
    $ pgcopydb version --json
    {
-       "pgcopydb": "0.8",
-       "pg_major": "12",
-       "pg_version": "12.12",
-       "pg_version_str": "PostgreSQL 12.12 on x86_64-apple-darwin16.7.0, compiled by Apple LLVM version 8.1.0 (clang-802.0.42), 64-bit",
-       "pg_version_num": 120012
+       "pgcopydb": "0.13.1.g868ad77",
+       "pg_major": "13",
+       "pg_version": "13.11 (Debian 13.11-0+deb11u1)",
+       "pg_version_str": "PostgreSQL 13.11 (Debian 13.11-0+deb11u1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 10.2.1-6) 10.2.1 20210110, 64-bit",
+       "pg_version_num": 130011
    }
 
 The details about the Postgres version applies to the version that's been
@@ -176,7 +176,7 @@ An example output looks like the following:
    $ pgcopydb ping
    18:04:48 84679 INFO   Running pgcopydb version 0.10.31.g7e5fbb8.dirty from "/Users/dim/dev/PostgreSQL/pgcopydb/src/bin/pgcopydb/pgcopydb"
    18:04:48 84683 INFO   Successfully could connect to target database at "postgres://@:/plop?"
-   18:04:48 84682 INFO   Successfully could connect t source database at "postgres://@:/pagila?"
+   18:04:48 84682 INFO   Successfully could connect to source database at "postgres://@:/pagila?"
 
 This command implements a retry policy (named *Decorrelated Jitter*) and can
 be used in automation to make sure that the databases are ready to accept

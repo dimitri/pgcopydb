@@ -120,15 +120,16 @@ copydb_index_worker(CopyDataSpec *specs)
 			{
 				if (!copydb_create_index_by_oid(specs, mesg.data.oid))
 				{
+					++errors;
+
+					log_error("Failed to create index with oid %u, "
+							  "see above for details",
+							  mesg.data.oid);
+
 					if (specs->failFast)
 					{
-						log_error("Failed to create index with oid %u, "
-								  "see above for details",
-								  mesg.data.oid);
 						return false;
 					}
-
-					++errors;
 				}
 				break;
 			}

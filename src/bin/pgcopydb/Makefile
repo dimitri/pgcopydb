@@ -13,13 +13,15 @@ INCLUDES  = $(patsubst ${SRC_DIR}%.h,%.h,$(wildcard ${SRC_DIR}*.h))
 
 SRC   = $(patsubst ${SRC_DIR}%.c,%.c,$(wildcard ${SRC_DIR}*.c))
 OBJS  = $(patsubst %.c,%.o,$(SRC))
-OBJS += lib-log.o lib-commandline.o lib-parson.o lib-snprintf.o lib-strerror.o
+OBJS += lib-log.o lib-commandline.o lib-parson.o
+OBJS += lib-snprintf.o lib-strerror.o lib-dumputils.o lib-string_utils.o
 OBJS += lib-lookup3.o
 
 PG_CONFIG ?= pg_config
 BINDIR    ?= $(shell $(PG_CONFIG) --bindir)
 
 PG_SNPRINTF     = $(wildcard ${SRC_DIR}../lib/pg/snprintf.*)
+PG_DUMPUTILS    = $(wildcard ${SRC_DIR}../lib/pg/*utils.*)
 LOG_SRC         = $(wildcard ${SRC_DIR}../lib/log/src/log.*)
 COMMANDLINE_SRC = $(wildcard ${SRC_DIR}../lib/subcommands.c/commandline.*)
 PARSON_SRC      = $(wildcard ${SRC_DIR}../lib/parson/parson.*)
@@ -93,6 +95,12 @@ lib-snprintf.o: $(PG_SNPRINTF)
 
 lib-strerror.o: $(PG_SNPRINTF)
 	$(CC) $(CFLAGS) -c -MMD -MP -MF$(DEPDIR)/$(*F).Po -MT$@ -o $@ ${SRC_DIR}../lib/pg/strerror.c
+
+lib-dumputils.o: $(PG_DUMPUTILS)
+	$(CC) $(CFLAGS) -c -MMD -MP -MF$(DEPDIR)/$(*F).Po -MT$@ -o $@ ${SRC_DIR}../lib/pg/dumputils.c
+
+lib-string_utils.o: $(PG_DUMPUTILS)
+	$(CC) $(CFLAGS) -c -MMD -MP -MF$(DEPDIR)/$(*F).Po -MT$@ -o $@ ${SRC_DIR}../lib/pg/string_utils.c
 
 lib-log.o: $(LOG_SRC)
 	$(CC) $(CFLAGS) -c -MMD -MP -MF$(DEPDIR)/$(*F).Po -MT$@ -o $@ ${SRC_DIR}../lib/log/src/log.c

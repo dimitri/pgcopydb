@@ -25,7 +25,6 @@
 
 char pgcopydb_argv0[MAXPGPATH];
 char pgcopydb_program[MAXPGPATH];
-int pgconnect_timeout = 10;     /* see also POSTGRES_CONNECT_TIMEOUT */
 
 char *ps_buffer;                /* will point to argv area */
 size_t ps_buffer_size;          /* space determined at run time */
@@ -83,30 +82,6 @@ main(int argc, char **argv)
 	if (env_exists(PGCOPYDB_DEBUG))
 	{
 		command = root_with_debug;
-	}
-
-	/*
-	 * When PGCONNECT_TIMEOUT is set in the environment, keep a copy of it in
-	 * our own global variable pgconnect_timeout. We implement our own
-	 * connection retry policy and will change change the environment variable
-	 * setting when calling pg_basebackup and other tools anyway.
-	 */
-	if (env_exists("PGCONNECT_TIMEOUT"))
-	{
-		char env_pgtimeout[BUFSIZE] = { 0 };
-
-		if (get_env_copy("PGCONNECT_TIMEOUT", env_pgtimeout, BUFSIZE) > 0)
-		{
-			if (!stringToInt(env_pgtimeout, &pgconnect_timeout))
-			{
-				log_warn("Failed to parse environment variable "
-						 "PGCONNECT_TIMEOUT value \"%s\" as a "
-						 "number of seconds (integer), "
-						 "using our default %d seconds instead",
-						 env_pgtimeout,
-						 pgconnect_timeout);
-			}
-		}
 	}
 
 	/*

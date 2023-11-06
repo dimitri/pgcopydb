@@ -218,33 +218,15 @@ pgsql_set_retry_policy(ConnectionRetryPolicy *retryPolicy,
 
 
 /*
- * pgsql_set_default_retry_policy sets the default retry policy: no retry. We
- * use the other default parameters but with a maxR of zero they don't get
- * used.
- *
- * This is the retry policy that prevails in the main keeper loop.
- */
-void
-pgsql_set_main_loop_retry_policy(ConnectionRetryPolicy *retryPolicy)
-{
-	(void) pgsql_set_retry_policy(retryPolicy,
-								  POSTGRES_PING_RETRY_TIMEOUT,
-								  0, /* do not retry by default */
-								  POSTGRES_PING_RETRY_CAP_SLEEP_TIME,
-								  POSTGRES_PING_RETRY_BASE_SLEEP_TIME);
-}
-
-
-/*
- * pgsql_set_interactive_retry_policy sets the retry policy to 2 seconds of
- * total retrying time (or PGCONNECT_TIMEOUT when that's set), unbounded number
- * of attempts, and up to 2 seconds of sleep time in between attempts.
+ * pgsql_set_interactive_retry_policy sets the retry policy to 1 minute of
+ * total retrying time, unbounded number of attempts, and up to 2 seconds
+ * of sleep time in between attempts.
  */
 void
 pgsql_set_interactive_retry_policy(ConnectionRetryPolicy *retryPolicy)
 {
 	(void) pgsql_set_retry_policy(retryPolicy,
-								  pgconnect_timeout,
+								  POSTGRES_PING_RETRY_TIMEOUT,
 								  -1, /* unbounded number of attempts */
 								  POSTGRES_PING_RETRY_CAP_SLEEP_TIME,
 								  POSTGRES_PING_RETRY_BASE_SLEEP_TIME);
@@ -516,21 +498,18 @@ pgsql_open_connection(PGSQL *pgsql)
 		setenv("PGAPPNAME", PGCOPYDB_PGAPPNAME, 1);
 	}
 
-	/* use the parsed password, unless the environment already is set */
-	if (!env_exists("PGPASSWORD") && pgsql->safeURI.password != NULL)
-	{
-		setenv("PGPASSWORD", pgsql->safeURI.password, 1);
-	}
-
 	/* we implement our own retry strategy */
-	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+	if (!env_exists("PGCONNECT_TIMEOUT"))
+	{
+		setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+	}
 
 	/* register our starting time */
 	INSTR_TIME_SET_CURRENT(pgsql->retryPolicy.startTime);
 	INSTR_TIME_SET_ZERO(pgsql->retryPolicy.connectTime);
 
 	/* Make a connection to the database */
-	pgsql->connection = PQconnectdb(pgsql->safeURI.pguri);
+	pgsql->connection = PQconnectdb(pgsql->connectionString);
 
 	/* Check to see that the backend connection was successfully made */
 	if (PQstatus(pgsql->connection) != CONNECTION_OK)
@@ -1475,7 +1454,6 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 						  const Oid *paramTypes, const char **paramValues,
 						  void *context, ParsePostgresResultCB *parseFun)
 {
-	PGresult *result = NULL;
 	PQExpBuffer debugParameters = NULL;
 
 	PGconn *connection = pgsql_open_connection(pgsql);
@@ -1510,20 +1488,48 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 		}
 	}
 
+	int sentQuery = 0;
+
 	if (paramCount == 0)
 	{
-		result = PQexec(connection, sql);
+		sentQuery = PQsendQuery(connection, sql);
 	}
 	else
 	{
-		result = PQexecParams(connection, sql,
-							  paramCount, paramTypes, paramValues,
-							  NULL, NULL, 0);
+		sentQuery = PQsendQueryParams(connection, sql,
+									  paramCount, paramTypes, paramValues,
+									  NULL, NULL, 0);
 	}
 
-	if (!is_response_ok(result))
+	bool done = false;
+	int errors = 0;
+
+	while (!done)
 	{
-		pgsql_execute_log_error(pgsql, result, sql, debugParameters, context);
+		if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
+		{
+			log_error("Postgres query was interrupted: %s", sql);
+
+			destroyPQExpBuffer(debugParameters);
+			(void) pgsql_finish(pgsql);
+
+			return false;
+		}
+
+		/* this uses select() with a timeout: we're not busy looping */
+		if (!pgsql_fetch_results(pgsql, &done, context, parseFun))
+		{
+			++errors;
+			break;
+		}
+	}
+
+	/*
+	 * 1 is returned if the command was successfully dispatched and 0 if not.
+	 */
+	if (sentQuery == 0 || errors > 0)
+	{
+		pgsql_execute_log_error(pgsql, NULL, sql, debugParameters, context);
 		destroyPQExpBuffer(debugParameters);
 
 		/*
@@ -1538,15 +1544,9 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 		return false;
 	}
 
-	if (parseFun != NULL)
-	{
-		(*parseFun)(context, result);
-	}
-
 	destroyPQExpBuffer(debugParameters);
-
-	PQclear(result);
 	clear_results(pgsql);
+
 	if (pgsql->connectionStatementType == PGSQL_CONNECTION_SINGLE_STATEMENT)
 	{
 		(void) pgsql_finish(pgsql);
@@ -1719,23 +1719,42 @@ pgsql_fetch_results(PGSQL *pgsql, bool *done,
 		return false;
 	}
 
-	/* Only collect the result when we know the server is ready for it */
+	/* Only collect the results when we know the server is ready for it */
 	if (PQisBusy(conn) == 0)
 	{
-		PGresult *result = PQgetResult(conn);
+		PGresult *result = NULL;
 
-		if (!is_response_ok(result))
+		/*
+		 * When we got clearance that libpq did fetch the Postgres query result
+		 * in its internal buffers, we process the result without checking for
+		 * interrupts.
+		 *
+		 * The reason is that pgcopydb relies internally on signaling sibling
+		 * processes to terminate at several places, including logical
+		 * replication client and operating mode management. It's better for
+		 * the code that we process the already available query result now and
+		 * let the callers check for interrupts (asked_to_stop and friends).
+		 */
+		while ((result = PQgetResult(conn)) != NULL)
 		{
-			pgsql_execute_log_error(pgsql, result, NULL, NULL, context);
-			return false;
+			/* remember to check PQnotifies after each PQgetResult or PQexec */
+			(void) pgsql_handle_notifications(pgsql);
+
+			if (!is_response_ok(result))
+			{
+				pgsql_execute_log_error(pgsql, result, NULL, NULL, context);
+				return false;
+			}
+
+			if (parseFun != NULL)
+			{
+				(*parseFun)(context, result);
+			}
+
+			PQclear(result);
 		}
 
-		if (parseFun != NULL)
-		{
-			(*parseFun)(context, result);
-
-			*done = true;
-		}
+		*done = true;
 
 		PQclear(result);
 		clear_results(pgsql);
@@ -1896,11 +1915,16 @@ pgsql_execute_log_error(PGSQL *pgsql,
 						PQExpBuffer debugParameters,
 						void *context)
 {
-	char *sqlstate = PQresultErrorField(result, PG_DIAG_SQLSTATE);
+	char *sqlstate = NULL;
 
-	if (sqlstate)
+	if (result != NULL)
 	{
-		strlcpy(pgsql->sqlstate, sqlstate, sizeof(pgsql->sqlstate));
+		sqlstate = PQresultErrorField(result, PG_DIAG_SQLSTATE);
+
+		if (sqlstate)
+		{
+			strlcpy(pgsql->sqlstate, sqlstate, sizeof(pgsql->sqlstate));
+		}
 	}
 
 	char *endpoint =
@@ -1958,7 +1982,10 @@ pgsql_execute_log_error(PGSQL *pgsql,
 		pgsql->status = PG_CONNECTION_BAD;
 	}
 
-	PQclear(result);
+	if (result != NULL)
+	{
+		PQclear(result);
+	}
 	clear_results(pgsql);
 }
 
@@ -2075,30 +2102,35 @@ clear_results(PGSQL *pgsql)
 {
 	PGconn *connection = pgsql->connection;
 
-	/*
-	 * Per Postgres documentation: You should, however, remember to check
-	 * PQnotifies after each PQgetResult or PQexec, to see if any
-	 * notifications came in during the processing of the command.
-	 *
-	 * Before calling clear_results(), we called PQexecParams().
-	 */
-	(void) pgsql_handle_notifications(pgsql);
+	if (PQstatus(connection) == CONNECTION_BAD)
+	{
+		pgsql_finish(pgsql);
+		return false;
+	}
 
 	while (true)
 	{
-		PGresult *result = PQgetResult(connection);
+		if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
+		{
+			pgsql_finish(pgsql);
+			return false;
+		}
 
 		/*
 		 * Per Postgres documentation: You should, however, remember to check
 		 * PQnotifies after each PQgetResult or PQexec, to see if any
 		 * notifications came in during the processing of the command.
 		 *
-		 * Here, we just called PQgetResult().
+		 * Before calling clear_results(), we called PQgetResult().
 		 */
 		(void) pgsql_handle_notifications(pgsql);
 
+		PGresult *result = PQgetResult(connection);
+
 		if (result == NULL)
 		{
+			/* one last time */
+			(void) pgsql_handle_notifications(pgsql);
 			break;
 		}
 
@@ -2140,15 +2172,23 @@ pgsql_handle_notifications(PGSQL *pgsql)
 	PGconn *connection = pgsql->connection;
 	PGnotify *notify;
 
-	if (pgsql->notificationProcessFunction == NULL)
+	if (PQconsumeInput(connection) == 0)
 	{
+		char *message = PQerrorMessage(pgsql->connection);
+		log_error("Failed to process Postgres notifications: %s", message);
 		return;
 	}
 
-	PQconsumeInput(connection);
+	/* consume all notifications, even when there is no function registered */
 	while ((notify = PQnotifies(connection)) != NULL)
 	{
 		log_trace("pgsql_handle_notifications: \"%s\"", notify->extra);
+
+		if (pgsql->notificationProcessFunction == NULL)
+		{
+			PQfreemem(notify);
+			continue;
+		}
 
 		if ((*pgsql->notificationProcessFunction)(pgsql->notificationGroupId,
 												  pgsql->notificationNodeId,
@@ -2160,7 +2200,6 @@ pgsql_handle_notifications(PGSQL *pgsql)
 		}
 
 		PQfreemem(notify);
-		PQconsumeInput(connection);
 	}
 }
 
@@ -2291,7 +2330,21 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 
 	for (;;)
 	{
-		int bufsize = PQgetCopyData(srcConn, &copybuf, 0);
+		/* handle signals */
+		if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
+		{
+			log_debug("COPY was asked to stop");
+
+			if (srcConnIsOurs)
+			{
+				pgsql_finish(src);
+			}
+			(void) pgsql_finish(dst);
+
+			return false;
+		}
+
+		int bufsize = PQgetCopyData(srcConn, &copybuf, 1);
 
 		/*
 		 * A result of -2 indicates that an error occurred.
@@ -2329,6 +2382,62 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 			}
 
 			/* make sure to pass through and send this last COPY buffer */
+		}
+
+		/*
+		 * In async mode, and no data available.
+		 */
+		else if (bufsize == 0)
+		{
+			fd_set input_mask;
+			int sock = PQsocket(srcConn);
+
+			if (sock < 0)
+			{
+				failedOnSrc = true;
+
+				pgcopy_log_error(src, NULL, "invalid socket");
+				break;
+			}
+
+			struct timeval timeout;
+			struct timeval *timeoutptr = NULL;
+
+			/* sleep for 10ms to wait for input on the Postgres socket */
+			timeout.tv_sec = 0;
+			timeout.tv_usec = 10000;
+			timeoutptr = &timeout;
+
+			FD_ZERO(&input_mask);
+			FD_SET(sock, &input_mask);
+
+			int r = select(sock + 1, &input_mask, NULL, NULL, timeoutptr);
+
+			if (r == 0 || (r < 0 && errno == EINTR))
+			{
+				/*
+				 * Got a timeout or signal. Continue the loop and either
+				 * deliver a status packet to the server or just go back into
+				 * blocking.
+				 */
+				continue;
+			}
+			else if (r < 0)
+			{
+				failedOnSrc = true;
+
+				pgcopy_log_error(src, NULL, "select failed: %m");
+				break;
+			}
+
+			/* there is actually data on the socket */
+			if (PQconsumeInput(srcConn) == 0)
+			{
+				failedOnSrc = true;
+
+				pgcopy_log_error(src, NULL, "could not receive data");
+				break;
+			}
 		}
 
 		/*
@@ -3747,7 +3856,7 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 	PGSQL *pgsql = &(client->pgsql);
 	PGconn *conn = client->pgsql.connection;
 
-	PGresult *res;
+	PGresult *res = NULL;
 	char *copybuf = NULL;
 
 	bool time_to_abort = false;
@@ -4161,7 +4270,8 @@ error:
 		copybuf = NULL;
 	}
 
-	clear_results(pgsql);
+	/* do not attempt to clear_results() on protocol failure */
+	PQclear(res);
 	pgsql_finish(pgsql);
 
 	return false;

@@ -27,7 +27,7 @@ static void cli_create_snapshot(int argc, char **argv);
 CommandLine create_snapshot_command =
 	make_command(
 		"snapshot",
-		"Create and exports a snapshot on the source database",
+		"Create and export a snapshot on the source database",
 		" --source ... ",
 		"  --source         Postgres URI to the source database\n"
 		"  --dir            Work directory to use\n"
