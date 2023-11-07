@@ -978,7 +978,15 @@ follow_wait_subprocesses(StreamSpecs *specs)
 				 * Otherwise there is no reason for the other processes to
 				 * stop, and we're missing one: terminate every one and handle
 				 * at the caller.
+				 *
+				 * We need to first update current sentinel values (endpos).
 				 */
+				if (!follow_get_sentinel(specs, &(specs->sentinel), false))
+				{
+					/* continue without updated endpos */
+					log_warn("Failed to get sentinel values");
+				}
+
 				if (processArray[i]->returnCode != 0 ||
 					specs->endpos == InvalidXLogRecPtr)
 				{
@@ -1012,13 +1020,6 @@ follow_wait_subprocesses(StreamSpecs *specs)
 
 				success = success && processArray[i]->returnCode == 0;
 			}
-		}
-
-		/* update current sentinel values (endpos) */
-		if (!follow_get_sentinel(specs, &(specs->sentinel), false))
-		{
-			/* ignore errors here, supervisor can't quit before sub-processes */
-			log_warn("Failed to get sentinel values");
 		}
 
 		/* avoid busy looping, wait for 150ms before checking again */
