@@ -1189,7 +1189,7 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 			/* Generated columns cannot be used in COPY */
 			if (attribute->attisgenerated)
 			{
-				log_info("Skipping %s in COPY as it is a generated column", attname);
+				log_notice("Skipping %s in COPY as it is a generated column", attname);
 				continue;
 			}
 
@@ -1261,7 +1261,7 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 			/* Generated columns cannot be used in COPY */
 			if (attribute->attisgenerated)
 			{
-				log_info("Skipping %s in COPY as it is a generated column", attname);
+				log_notice("Skipping %s in COPY as it is a generated column", attname);
 				continue;
 			}
 
