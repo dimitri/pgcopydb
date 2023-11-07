@@ -218,33 +218,15 @@ pgsql_set_retry_policy(ConnectionRetryPolicy *retryPolicy,
 
 
 /*
- * pgsql_set_default_retry_policy sets the default retry policy: no retry. We
- * use the other default parameters but with a maxR of zero they don't get
- * used.
- *
- * This is the retry policy that prevails in the main keeper loop.
- */
-void
-pgsql_set_main_loop_retry_policy(ConnectionRetryPolicy *retryPolicy)
-{
-	(void) pgsql_set_retry_policy(retryPolicy,
-								  POSTGRES_PING_RETRY_TIMEOUT,
-								  0, /* do not retry by default */
-								  POSTGRES_PING_RETRY_CAP_SLEEP_TIME,
-								  POSTGRES_PING_RETRY_BASE_SLEEP_TIME);
-}
-
-
-/*
- * pgsql_set_interactive_retry_policy sets the retry policy to 2 seconds of
- * total retrying time (or PGCONNECT_TIMEOUT when that's set), unbounded number
- * of attempts, and up to 2 seconds of sleep time in between attempts.
+ * pgsql_set_interactive_retry_policy sets the retry policy to 1 minute of
+ * total retrying time, unbounded number of attempts, and up to 2 seconds
+ * of sleep time in between attempts.
  */
 void
 pgsql_set_interactive_retry_policy(ConnectionRetryPolicy *retryPolicy)
 {
 	(void) pgsql_set_retry_policy(retryPolicy,
-								  pgconnect_timeout,
+								  POSTGRES_PING_RETRY_TIMEOUT,
 								  -1, /* unbounded number of attempts */
 								  POSTGRES_PING_RETRY_CAP_SLEEP_TIME,
 								  POSTGRES_PING_RETRY_BASE_SLEEP_TIME);
@@ -516,21 +498,18 @@ pgsql_open_connection(PGSQL *pgsql)
 		setenv("PGAPPNAME", PGCOPYDB_PGAPPNAME, 1);
 	}
 
-	/* use the parsed password, unless the environment already is set */
-	if (!env_exists("PGPASSWORD") && pgsql->safeURI.password != NULL)
-	{
-		setenv("PGPASSWORD", pgsql->safeURI.password, 1);
-	}
-
 	/* we implement our own retry strategy */
-	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+	if (!env_exists("PGCONNECT_TIMEOUT"))
+	{
+		setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+	}
 
 	/* register our starting time */
 	INSTR_TIME_SET_CURRENT(pgsql->retryPolicy.startTime);
 	INSTR_TIME_SET_ZERO(pgsql->retryPolicy.connectTime);
 
 	/* Make a connection to the database */
-	pgsql->connection = PQconnectdb(pgsql->safeURI.pguri);
+	pgsql->connection = PQconnectdb(pgsql->connectionString);
 
 	/* Check to see that the backend connection was successfully made */
 	if (PQstatus(pgsql->connection) != CONNECTION_OK)

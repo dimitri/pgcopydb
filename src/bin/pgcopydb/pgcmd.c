@@ -15,6 +15,7 @@
 #include "postgres_fe.h"
 #include "pqexpbuffer.h"
 
+#include "cli_root.h"
 #include "defaults.h"
 #include "env_utils.h"
 #include "file_utils.h"
@@ -354,7 +355,10 @@ pg_dump_db(PostgresPaths *pgPaths,
 	char *PGPASSWORD = NULL;
 	bool pgpassword_found_in_env = env_exists("PGPASSWORD");
 
-	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+	if (!env_exists("PGCONNECT_TIMEOUT"))
+	{
+		setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+	}
 
 	/* override PGPASSWORD environment variable if the pguri contains one */
 	if (connStrings->safeSourcePGURI.password != NULL)
@@ -508,7 +512,10 @@ pg_dumpall_roles(PostgresPaths *pgPaths,
 	char *PGPASSWORD = NULL;
 	bool pgpassword_found_in_env = env_exists("PGPASSWORD");
 
-	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+	if (!env_exists("PGCONNECT_TIMEOUT"))
+	{
+		setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+	}
 
 	/* override PGPASSWORD environment variable if the pguri contains one */
 	if (connStrings->safeSourcePGURI.password != NULL)
@@ -592,7 +599,10 @@ pg_restore_roles(PostgresPaths *pgPaths,
 	char *content = NULL;
 	long size = 0L;
 
-	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+	if (!env_exists("PGCONNECT_TIMEOUT"))
+	{
+		setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+	}
 
 	/*
 	 * Rather than using psql --single-transaction --file filename, we read the
@@ -790,10 +800,13 @@ pg_restore_db(PostgresPaths *pgPaths,
 	char *PGPASSWORD = NULL;
 	bool pgpassword_found_in_env = env_exists("PGPASSWORD");
 
-	setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+	if (!env_exists("PGCONNECT_TIMEOUT"))
+	{
+		setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+	}
 
 	/* override PGPASSWORD environment variable if the pguri contains one */
-	if (connStrings->safeSourcePGURI.password != NULL)
+	if (connStrings->safeTargetPGURI.password != NULL)
 	{
 		if (pgpassword_found_in_env && !get_env_dup("PGPASSWORD", &PGPASSWORD))
 		{
@@ -892,7 +905,7 @@ pg_restore_db(PostgresPaths *pgPaths,
 
 	/* make sure to reset the environment PGPASSWORD if we edited it */
 	if (pgpassword_found_in_env &&
-		connStrings->safeSourcePGURI.password != NULL)
+		connStrings->safeTargetPGURI.password != NULL)
 	{
 		setenv("PGPASSWORD", PGPASSWORD, 1);
 	}
@@ -1024,6 +1037,7 @@ struct ArchiveItemDescMapping pgRestoreDescriptionArray[] = {
 	INSERT_MAPPING(ARCHIVE_TAG_INDEX_ATTACH, "INDEX ATTACH"),
 	INSERT_MAPPING(ARCHIVE_TAG_INDEX, "INDEX"),
 	INSERT_MAPPING(ARCHIVE_TAG_LANGUAGE, "LANGUAGE"),
+	INSERT_MAPPING(ARCHIVE_TAG_LARGE_OBJECT, "LARGE OBJECT"),
 	INSERT_MAPPING(ARCHIVE_TAG_MATERIALIZED_VIEW, "MATERIALIZED VIEW"),
 	INSERT_MAPPING(ARCHIVE_TAG_OPERATOR_CLASS, "OPERATOR CLASS"),
 	INSERT_MAPPING(ARCHIVE_TAG_OPERATOR_FAMILY, "OPERATOR FAMILY"),
@@ -1036,6 +1050,7 @@ struct ArchiveItemDescMapping pgRestoreDescriptionArray[] = {
 	INSERT_MAPPING(ARCHIVE_TAG_PUBLICATION_TABLE, "PUBLICATION TABLE"),
 	INSERT_MAPPING(ARCHIVE_TAG_PUBLICATION, "PUBLICATION"),
 	INSERT_MAPPING(ARCHIVE_TAG_REFRESH_MATERIALIZED_VIEW, "REFRESH MATERIALIZED VIEW"),
+	INSERT_MAPPING(ARCHIVE_TAG_ROW_SECURITY, "ROW SECURITY"),
 	INSERT_MAPPING(ARCHIVE_TAG_RULE, "RULE"),
 	INSERT_MAPPING(ARCHIVE_TAG_SCHEMA, "SCHEMA"),
 	INSERT_MAPPING(ARCHIVE_TAG_SEQUENCE_OWNED_BY, "SEQUENCE OWNED BY"),

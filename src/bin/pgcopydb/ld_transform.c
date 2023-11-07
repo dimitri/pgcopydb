@@ -311,6 +311,34 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
 			return false;
 		}
 	}
+	/* at ENDPOS check that it's the current sentinel value and exit */
+	else if (metadata->action == STREAM_ACTION_ENDPOS)
+	{
+		PGSQL src = { 0 };
+		char *dsn = privateContext->connStrings->source_pguri;
+
+		if (!pgsql_init(&src, dsn, PGSQL_CONN_SOURCE))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		CopyDBSentinel sentinel = { 0 };
+
+		if (!pgsql_get_sentinel(&src, &sentinel))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (sentinel.endpos <= metadata->lsn)
+		{
+			*stop = true;
+
+			log_info("Transform process reached ENDPOS %X/%X",
+					 LSN_FORMAT_ARGS(metadata->lsn));
+		}
+	}
 
 	if (privateContext->endpos != InvalidXLogRecPtr &&
 		privateContext->endpos <= metadata->lsn)
@@ -375,18 +403,6 @@ stream_transform_write_message(StreamContext *privateContext,
 	{
 		/* errors have already been logged */
 		return false;
-	}
-
-	/*
-	 * If we're in a continued transaction, it means that the earlier write
-	 * of this txn's BEGIN statement didn't have the COMMIT LSN. Therefore,
-	 * we need to maintain that LSN as a separate metadata file. This is
-	 * necessary because the COMMIT LSN is required later in the apply
-	 * process.
-	 */
-	if (txn->continued && txn->commit)
-	{
-		writeTxnMetadataFile(txn, privateContext->paths.dir);
 	}
 
 	(void) FreeLogicalMessage(currentMsg);
@@ -1241,9 +1257,7 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 				}
 			}
 
-			{
-				(void) streamLogicalTransactionAppendStatement(txn, stmt);
-			}
+			(void) streamLogicalTransactionAppendStatement(txn, stmt);
 
 			break;
 		}
@@ -1269,8 +1283,11 @@ coalesceLogicalTransactionStatement(LogicalTransaction *txn,
 {
 	LogicalTransactionStatement *last = txn->last;
 
-	LogicalMessageValuesArray *lastValuesArray = &(last->stmt.insert.new.array->values);
-	LogicalMessageValuesArray *newValuesArray = &(new->stmt.insert.new.array->values);
+	LogicalMessageValuesArray *lastValuesArray =
+		&(last->stmt.insert.new.array->values);
+
+	LogicalMessageValuesArray *newValuesArray =
+		&(new->stmt.insert.new.array->values);
 
 	int capacity = lastValuesArray->capacity;
 	LogicalMessageValues *array = lastValuesArray->array;
@@ -1289,8 +1306,9 @@ coalesceLogicalTransactionStatement(LogicalTransaction *txn,
 		 * and potential heap memory fragmentation.
 		 */
 		capacity *= 2;
-		array = (LogicalMessageValues *) realloc(array, sizeof(LogicalMessageValues) *
-												 capacity);
+		array = (LogicalMessageValues *)
+				realloc(array, sizeof(LogicalMessageValues) * capacity);
+
 		if (array == NULL)
 		{
 			log_error(ALLOCATION_FAILED_ERROR);
@@ -1332,7 +1350,8 @@ canCoalesceLogicalTransactionStatement(LogicalTransaction *txn,
 	LogicalTransactionStatement *last = txn->last;
 
 	/* TODO: Support UPDATE and DELETE */
-	if (last->action != STREAM_ACTION_INSERT || new->action != STREAM_ACTION_INSERT)
+	if (last->action != STREAM_ACTION_INSERT ||
+		new->action != STREAM_ACTION_INSERT)
 	{
 		return false;
 	}
@@ -1341,8 +1360,8 @@ canCoalesceLogicalTransactionStatement(LogicalTransaction *txn,
 	LogicalMessageInsert *newInsert = &new->stmt.insert;
 
 	/* Last and current statements must target same relation */
-	if (!streq(lastInsert->nspname, newInsert->nspname) || !streq(lastInsert->relname,
-																  newInsert->relname))
+	if (!streq(lastInsert->nspname, newInsert->nspname) ||
+		!streq(lastInsert->relname, newInsert->relname))
 	{
 		return false;
 	}
@@ -2582,70 +2601,4 @@ LogicalMessageValueEq(LogicalMessageValue *a, LogicalMessageValue *b)
 
 	/* makes compiler happy */
 	return false;
-}
-
-
-/*
- *  computeTxnMetadataFilename computes the file path for transaction metadata
- *  based on its transaction id
- */
-bool
-computeTxnMetadataFilename(uint32_t xid, const char *dir, char *filename)
-{
-	if (dir == NULL)
-	{
-		log_error("BUG: computeTxnMetadataFilename is called with "
-				  "directory: NULL");
-		return false;
-	}
-
-	if (xid == 0)
-	{
-		log_error("BUG: computeTxnMetadataFilename is called with "
-				  "transaction xid: %lld", (long long) xid);
-		return false;
-	}
-
-	sformat(filename, MAXPGPATH, "%s/%lld.json", dir, (long long) xid);
-
-	return true;
-}
-
-
-/*
- * writeTxnMetadataFile writes the transaction metadata to a file in the given
- * directory
- */
-bool
-writeTxnMetadataFile(LogicalTransaction *txn, const char *dir)
-{
-	char txnfilename[MAXPGPATH] = { 0 };
-
-	if (!computeTxnMetadataFilename(txn->xid, dir, txnfilename))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	log_debug("stream_write_commit_metadata_file: writing transaction "
-			  "metadata file \"%s\" with commit lsn %X/%X",
-			  txnfilename,
-			  LSN_FORMAT_ARGS(txn->commitLSN));
-
-	char contents[BUFSIZE] = { 0 };
-
-	sformat(contents, BUFSIZE,
-			"{\"xid\":%lld,\"commit_lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
-			(long long) txn->xid,
-			LSN_FORMAT_ARGS(txn->commitLSN),
-			txn->timestamp);
-
-	/* write the metadata to txnfilename */
-	if (!write_file(contents, strlen(contents), txnfilename))
-	{
-		log_error("Failed to write file \"%s\"", txnfilename);
-		return false;
-	}
-
-	return true;
 }
