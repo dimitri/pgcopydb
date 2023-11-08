@@ -299,11 +299,11 @@ copydb_blob_worker(CopyDataSpec *specs)
 			{
 				stop = true;
 				log_debug("Stop message received by Large Objects worker");
-				free(mesg);
 
 				if (!pgsql_commit(&dst))
 				{
 					/* errors have already been logged */
+					free(mesg);
 					return false;
 				}
 
@@ -338,6 +338,8 @@ copydb_blob_worker(CopyDataSpec *specs)
 				break;
 			}
 		}
+
+		free(mesg);
 	}
 
 	/* terminate our connection to the source database now */
