@@ -276,7 +276,7 @@ copydb_blob_worker(CopyDataSpec *specs)
 
 	while (!stop)
 	{
-		QMessage *mesg = malloc(sizeof(QMessage));
+		QMessage *mesg = (QMessage *) calloc(1, sizeof(QMessage));
 		bool recv_ok = queue_receive(&(specs->loQueue), mesg);
 
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
