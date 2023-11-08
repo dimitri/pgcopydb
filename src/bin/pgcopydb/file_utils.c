@@ -419,6 +419,7 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 {
 	int countFdsReadyToRead, nfds; /* see man select(2) */
 	fd_set readFileDescriptorSet;
+	fd_set exceptFileDescriptorSet;
 
 	context->fd = fileno(stream);
 	nfds = context->fd + 1;
@@ -442,15 +443,29 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 		FD_ZERO(&readFileDescriptorSet);
 		FD_SET(context->fd, &readFileDescriptorSet);
 
+		FD_ZERO(&exceptFileDescriptorSet);
+		FD_SET(context->fd, &exceptFileDescriptorSet);
+
 		countFdsReadyToRead =
-			select(nfds, &readFileDescriptorSet, NULL, NULL, &timeout);
+			select(nfds,
+				   &readFileDescriptorSet, NULL, &exceptFileDescriptorSet,
+				   &timeout);
 
 		if (countFdsReadyToRead == -1)
 		{
+			log_debug("countFdsReadyToRead == -1");
+
 			if (errno == EINTR || errno == EAGAIN)
 			{
-				if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+				log_debug("received EINTR or EAGAIN");
+
+				if (asked_to_quit)
 				{
+					/*
+					 * When asked_to_stop || asked_to_stop_fast still continue
+					 * reading through EOF on the input stream, then quit
+					 * normally.
+					 */
 					doneReading = true;
 				}
 
@@ -464,6 +479,14 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 			}
 		}
 
+		if (FD_ISSET(context->fd, &exceptFileDescriptorSet))
+		{
+			log_error("Failed to select on file descriptor %d: "
+					  "an exceptional condition happened",
+					  context->fd);
+			return false;
+		}
+
 		/*
 		 * When asked_to_stop || asked_to_stop_fast still continue reading
 		 * through EOF on the input stream, then quit normally. Here when
@@ -472,10 +495,10 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 		 */
 		if (countFdsReadyToRead == 0)
 		{
-			if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+			if (asked_to_quit)
 			{
 				doneReading = true;
-				log_notice("read_from_stream was asked to stop or quit");
+				log_notice("read_from_stream was asked to quit");
 			}
 
 			continue;

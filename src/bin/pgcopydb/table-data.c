@@ -1171,6 +1171,7 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 						  bool source)
 {
 	SourceTable *table = tableSpecs->sourceTable;
+	bool isFirst = true;
 
 	if (source)
 	{
@@ -1182,11 +1183,22 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 
 		for (int i = 0; i < table->attributes.count; i++)
 		{
-			char *attname = table->attributes.array[i].attname;
+			SourceTableAttribute *attribute = &(table->attributes.array[i]);
+			char *attname = attribute->attname;
 
-			if (i > 0)
+			/* Generated columns cannot be used in COPY */
+			if (attribute->attisgenerated)
+			{
+				log_notice("Skipping %s in COPY as it is a generated column", attname);
+				continue;
+			}
+
+			if (!isFirst)
 			{
 				appendPQExpBufferStr(query, ", ");
+			}
+			else {
+				isFirst = false;
 			}
 
 			appendPQExpBuffer(query, "%s", attname);
@@ -1242,12 +1254,21 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 		appendPQExpBuffer(query, "%s", tableSpecs->sourceTable->qname);
 
 		for (int i = 0; i < table->attributes.count; i++)
-		{
-			char *attname = table->attributes.array[i].attname;
+		{			
+			SourceTableAttribute *attribute = &(table->attributes.array[i]);
+			char *attname = attribute->attname;
 
-			if (i == 0)
+			/* Generated columns cannot be used in COPY */
+			if (attribute->attisgenerated)
+			{
+				log_notice("Skipping %s in COPY as it is a generated column", attname);
+				continue;
+			}
+
+			if (isFirst)
 			{
 				appendPQExpBufferStr(query, "(");
+				isFirst = false;
 			}
 			else
 			{

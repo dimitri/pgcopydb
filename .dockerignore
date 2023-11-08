@@ -1,12 +1,11 @@
+.github
+
 docs/_build
 
-src/bin/pgcopydb/pgcopydb
-src/bin/pgcopydb/*.o
-src/bin/pgcopydb/*.bc
-src/bin/pgcopydb/*.so
-src/bin/pgcopydb/*.so.[0-9]
-src/bin/pgcopydb/*.so.[0-9].[0-9]
-src/bin/pgcopydb/.deps/
+**/*.o
+**/*.bc
+**/*.so*
+**/.deps/
 
 # ignore the git version number in release builds
 src/bin/pgcopydb/git-version.h

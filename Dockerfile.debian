@@ -15,10 +15,10 @@ RUN apt-get update \
         libkrb5-dev \
         zlib1g-dev \
         liblz4-dev \
-    	libpq5 \
+        libpq5 \
         libpq-dev \
         libzstd-dev \
-		postgresql-server-dev-all \
+        postgresql-server-dev-all \
         postgresql-common \
         postgresql \
         python3-sphinx \
