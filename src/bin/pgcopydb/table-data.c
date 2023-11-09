@@ -1210,7 +1210,7 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 			appendPQExpBuffer(query, "%s", attname);
 		}
 
-		appendPQExpBuffer(query, " FROM %s ", tableSpecs->sourceTable->qname);
+		appendPQExpBuffer(query, " FROM only %s ", tableSpecs->sourceTable->qname);
 
 		/*
 		 * On a source COPY query we might want to add filtering.
