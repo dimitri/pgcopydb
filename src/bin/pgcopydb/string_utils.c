@@ -645,7 +645,7 @@ processBufferCallback(const char *buffer, bool error)
 	for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
 	{
 		if (strneq(outLines[lineNumber], ""))
-		{	
+		{
 			char *match = regexp_first_match(outLines[lineNumber], warningPattern);
 			int logLevel = match != NULL ? LOG_WARN : (error ? LOG_ERROR : LOG_INFO);
 			log_level(logLevel, "%s", outLines[lineNumber]);
@@ -683,10 +683,34 @@ pretty_print_bytes(char *buffer, size_t size, uint64_t bytes)
 	sformat(buffer, size, "%d %s", (int) count, suffixes[sIndex]);
 }
 
+/*
+ * pretty_print_bytes_per_second pretty prints bytes transmitted per second in
+ * a human readable form. Given 17179869184 it places the string
+ * "16 GBPS" in the given buffer.
+ */
+void
+pretty_print_bytes_per_second(char *buffer, size_t size, uint64_t bytes,
+							  uint64_t durationMs)
+{
+	/* avoid division by zero */
+	if (durationMs == 0)
+	{
+		sformat(buffer, size, "0 BPS");
+	}
+	else
+	{
+		char bytesPretty[BUFSIZE] = { 0 };
+		uint64_t bytesPerSecond = bytes * 1000 / durationMs;
+
+		pretty_print_bytes(bytesPretty, size-2, bytesPerSecond);
+		sformat(buffer, size, "%sPS", bytesPretty);
+	}
+}
+
 
 /*
  * pretty_print_bytes pretty prints bytes in a human readable form. Given
- * 17179869184 it places the string "16 GB" in the given buffer.
+ * 17179869184 it places the string "17 billion" in the given buffer.
  */
 void
 pretty_print_count(char *buffer, size_t size, uint64_t number)

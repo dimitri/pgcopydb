@@ -32,6 +32,7 @@ typedef struct CopyTableSummary
 	uint64_t durationMs;        /* instr_time duration in milliseconds */
 	instr_time startTimeInstr;  /* internal instr_time tracker */
 	instr_time durationInstr;   /* internal instr_time tracker */
+	uint64_t bytesTransmitted;  /* total number of bytes copied */
 	char *command;              /* malloc'ed area */
 } CopyTableSummary;
 
@@ -74,6 +75,7 @@ typedef struct SummaryTableHeaders
 	int maxNspnameSize;
 	int maxRelnameSize;
 	int maxTableMsSize;
+	int maxBytesSize;
 	int maxIndexCountSize;
 	int maxIndexMsSize;
 
@@ -81,6 +83,7 @@ typedef struct SummaryTableHeaders
 	char nspnameSeparator[NAMEDATALEN];
 	char relnameSeparator[NAMEDATALEN];
 	char tableMsSeparator[NAMEDATALEN];
+	char bytesSeparator[NAMEDATALEN];
 	char indexCountSeparator[NAMEDATALEN];
 	char indexMsSeparator[NAMEDATALEN];
 } SummaryTableHeaders;
@@ -112,6 +115,9 @@ typedef struct SummaryTableEntry
 	char nspname[PG_NAMEDATALEN];
 	char relname[PG_NAMEDATALEN];
 	char tableMs[INTERVAL_MAXLEN];
+	uint64_t bytes;
+	char bytesStr[INTSTRING_MAX_DIGITS];
+	char transmitRate[INTSTRING_MAX_DIGITS];
 	char indexCount[INTSTRING_MAX_DIGITS];
 	char indexMs[INTERVAL_MAXLEN];
 	uint64_t durationTableMs;
@@ -124,7 +130,9 @@ typedef struct SummaryTable
 {
 	int count;
 	SummaryTableHeaders headers;
-	SummaryTableEntry *array;   /* malloc'ed area */
+	uint64_t totalBytes;
+	char totalBytesStr[INTSTRING_MAX_DIGITS];
+	SummaryTableEntry *array;   /* calloc'ed area */
 } SummaryTable;
 
 

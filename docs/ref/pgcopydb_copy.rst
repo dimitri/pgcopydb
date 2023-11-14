@@ -613,17 +613,19 @@ Then copy the data over:
    15:24:36 75688 INFO  Listing ordinary tables in "port=54311 host=localhost dbname=pgloader"
    15:24:36 75688 INFO  Fetched information for 56 tables
    ...
-                                             Step   Connection    Duration   Concurrency
-    ---------------------------------------------   ----------  ----------  ------------
-                                      Dump Schema       source         0ms             1
-                                   Prepare Schema       target         0ms             1
-    COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both         0ms         4 + 4
-                                COPY (cumulative)         both       1s140             4
-                        CREATE INDEX (cumulative)       target         0ms             4
-                                  Finalize Schema       target         0ms             1
-    ---------------------------------------------   ----------  ----------  ------------
-                        Total Wall Clock Duration         both       2s143         4 + 4
-    ---------------------------------------------   ----------  ----------  ------------
+                                               Step   Connection    Duration    Transfer   Concurrency
+ --------------------------------------------------   ----------  ----------  ----------  ------------
+                                        Dump Schema       source         0ms                         1
+   Catalog Queries (table ordering, filtering, etc)       source         0ms                         1
+                                     Prepare Schema       target         0ms                         1
+      COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both         0ms                     4 + 4
+                                  COPY (cumulative)         both       1s140     2955 kB             4
+                         Large Objects (cumulative)         both         0ms                         1
+             CREATE INDEX, CONSTRAINTS (cumulative)       target         0ms                         4
+                                    Finalize Schema       target         0ms                         1
+ --------------------------------------------------   ----------  ----------  ----------  ------------
+                          Total Wall Clock Duration         both       2s143                     4 + 4
+ --------------------------------------------------   ----------  ----------  ----------  ------------
 
 
 And now create the indexes on the target database, using the index
@@ -662,17 +664,19 @@ definitions from the source database:
    15:24:40 76052 INFO  CREATE UNIQUE INDEX IF NOT EXISTS nullif_pkey ON public."nullif" USING btree (id);
    15:24:40 76050 INFO  CREATE UNIQUE INDEX IF NOT EXISTS serial_pkey ON public.serial USING btree (a);
 
-                                             Step   Connection    Duration   Concurrency
-    ---------------------------------------------   ----------  ----------  ------------
-                                      Dump Schema       source         0ms             1
-                                   Prepare Schema       target         0ms             1
-    COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both         0ms         4 + 4
-                                COPY (cumulative)         both       619ms             4
-                        CREATE INDEX (cumulative)       target       1s023             4
-                                  Finalize Schema       target         0ms             1
-    ---------------------------------------------   ----------  ----------  ------------
-                        Total Wall Clock Duration         both       400ms         4 + 4
-    ---------------------------------------------   ----------  ----------  ------------
+                                                 Step   Connection    Duration    Transfer   Concurrency
+   --------------------------------------------------   ----------  ----------  ----------  ------------
+                                          Dump Schema       source         0ms                         1
+     Catalog Queries (table ordering, filtering, etc)       source         0ms                         1
+                                       Prepare Schema       target         0ms                         1
+        COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both         0ms                     4 + 4
+                                    COPY (cumulative)         both       619ms     2955 kB             4
+                           Large Objects (cumulative)         both         0ms                         1
+               CREATE INDEX, CONSTRAINTS (cumulative)       target       1s023                         4
+                                      Finalize Schema       target         0ms                         1
+   --------------------------------------------------   ----------  ----------  ----------  ------------
+                            Total Wall Clock Duration         both       400ms                     4 + 4
+   --------------------------------------------------   ----------  ----------  ----------  ------------
 
 Now re-create the constraints (primary key, unique constraints) from the
 source database schema into the target database:
@@ -697,17 +701,19 @@ source database schema into the target database:
    15:24:43 76159 INFO  ALTER TABLE "public"."udc" ADD CONSTRAINT "udc_pkey" PRIMARY KEY USING INDEX "udc_pkey";
    15:24:43 76108 INFO  ALTER TABLE "err"."errors" ADD CONSTRAINT "errors_pkey" PRIMARY KEY USING INDEX "errors_pkey";
 
-                                             Step   Connection    Duration   Concurrency
-    ---------------------------------------------   ----------  ----------  ------------
-                                      Dump Schema       source         0ms             1
-                                   Prepare Schema       target         0ms             1
-    COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both         0ms         4 + 4
-                                COPY (cumulative)         both       605ms             4
-                        CREATE INDEX (cumulative)       target       1s023             4
-                                  Finalize Schema       target         0ms             1
-    ---------------------------------------------   ----------  ----------  ------------
-                        Total Wall Clock Duration         both       415ms         4 + 4
-    ---------------------------------------------   ----------  ----------  ------------
+                                                 Step   Connection    Duration    Transfer   Concurrency
+   --------------------------------------------------   ----------  ----------  ----------  ------------
+                                          Dump Schema       source         0ms                         1
+     Catalog Queries (table ordering, filtering, etc)       source         0ms                         1
+                                       Prepare Schema       target         0ms                         1
+        COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both         0ms                     4 + 4
+                                    COPY (cumulative)         both       605ms     2955 kB             4
+                           Large Objects (cumulative)         both         0ms                         1
+               CREATE INDEX, CONSTRAINTS (cumulative)       target       1s023                         4
+                                      Finalize Schema       target         0ms                         1
+   --------------------------------------------------   ----------  ----------  ----------  ------------
+                            Total Wall Clock Duration         both       415ms                     4 + 4
+   --------------------------------------------------   ----------  ----------  ----------  ------------
 
 The next step is a VACUUM ANALYZE on each table that's been just filled-in
 with the data, and for that we can just use the `vacuumdb`__ command from

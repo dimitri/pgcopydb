@@ -1109,7 +1109,8 @@ copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 		++attempts;
 
 		/* ignore previous attempts, we need only one success here */
-		success = pg_copy(src, &dst, copySrc->data, copyDst->data, truncate);
+		success = pg_copy(src, &dst, copySrc->data, copyDst->data, truncate,
+						  &(summary->bytesTransmitted));
 
 		if (success)
 		{

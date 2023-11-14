@@ -49,6 +49,8 @@ int splitLines(char *buffer, char **linesArray, int size);
 void processBufferCallback(const char *buffer, bool error);
 
 void pretty_print_bytes(char *buffer, size_t size, uint64_t bytes);
+void pretty_print_bytes_per_second(char *buffer, size_t size, uint64_t bytes,
+								   uint64_t durationMs);
 void pretty_print_count(char *buffer, size_t size, uint64_t count);
 
 #endif /* STRING_UTILS_h */

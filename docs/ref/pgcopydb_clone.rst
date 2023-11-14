@@ -891,15 +891,16 @@ Examples
    13:09:09 81991 INFO  STEP 7: restore the post-data section to the target database
    13:09:09 81991 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_restore --dbname 'postgres://@:/plop?' --single-transaction --clean --if-exists --use-list /var/folders/d7/zzxmgs9s16gdxxcm0hs0sssw0000gn/T//pgcopydb/schema/post.list /var/folders/d7/zzxmgs9s16gdxxcm0hs0sssw0000gn/T//pgcopydb/schema/post.dump
 
-                                             Step   Connection    Duration   Concurrency
-    ---------------------------------------------   ----------  ----------  ------------
-                                      Dump Schema       source       355ms             1
-                                   Prepare Schema       target       135ms             1
-    COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both       641ms        8 + 12
-                                COPY (cumulative)         both       1s598             8
-                       Large Objects (cumulative)         both        29ms             1
-           CREATE INDEX, CONSTRAINTS (cumulative)       target       4s072            12
-                                  Finalize Schema       target       366ms             1
-    ---------------------------------------------   ----------  ----------  ------------
-                        Total Wall Clock Duration         both       1s499        8 + 12
-    ---------------------------------------------   ----------  ----------  ------------
+                                               Step   Connection    Duration    Transfer   Concurrency
+ --------------------------------------------------   ----------  ----------  ----------  ------------
+                                        Dump Schema       source       225ms                         1
+   Catalog Queries (table ordering, filtering, etc)       source       842ms                         1
+                                     Prepare Schema       target       694ms                         1
+      COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both       1s538                    8 + 12
+                                  COPY (cumulative)         both       2s771     2955 kB             8
+                         Large Objects (cumulative)         both       242ms                         1
+             CREATE INDEX, CONSTRAINTS (cumulative)       target       3s489                        12
+                                    Finalize Schema       target       654ms                         1
+ --------------------------------------------------   ----------  ----------  ----------  ------------
+                          Total Wall Clock Duration         both       3s984                    8 + 12
+ --------------------------------------------------   ----------  ----------  ----------  ------------

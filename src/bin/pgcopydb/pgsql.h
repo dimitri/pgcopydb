@@ -308,7 +308,8 @@ bool validate_connection_string(const char *connectionString);
 bool pgsql_truncate(PGSQL *pgsql, const char *qname);
 
 bool pg_copy(PGSQL *src, PGSQL *dst,
-			 const char *srcQname, const char *dstQname, bool truncate);
+			 const char *srcQname, const char *dstQname,
+			 bool truncate, uint64_t *bytesTransmitted);
 
 bool pg_copy_from_stdin(PGSQL *pgsql, const char *qname);
 bool pg_copy_row_from_stdin(PGSQL *pgsql, char *fmt, ...);
