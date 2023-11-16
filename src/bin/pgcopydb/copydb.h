@@ -26,6 +26,7 @@
 	{ "extra_float_digits", "3" }, \
 	{ "statement_timeout", "0" }, \
 	{ "default_transaction_read_only", "off" }
+
 /*
  * These parameters are added to the connection strings, unless the user has
  * added them, allowing user-defined values to be taken into account.
@@ -498,13 +499,15 @@ bool copydb_start_table_data_workers(CopyDataSpec *specs);
 bool copydb_table_data_worker(CopyDataSpec *specs);
 
 bool copydb_add_copy(CopyDataSpec *specs, uint32_t oid, uint32_t part);
-bool copydb_copy_data_by_oid(CopyDataSpec *specs, uint32_t oid, uint32_t part);
+bool copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src,
+							 PGSQL *dst, uint32_t oid, uint32_t part);
 
 bool copydb_process_table_data_worker(CopyDataSpec *specs);
 
 bool copydb_process_table_data_with_workers(CopyDataSpec *specs);
 
-bool copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs);
+bool copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
+					   CopyTableDataSpec *tableSpecs);
 
 
 bool copydb_table_create_lockfile(CopyDataSpec *specs,
