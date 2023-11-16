@@ -1,5 +1,5 @@
 /*
- * src/bin/pgcopydb/cli_copy.c
+ * src/bin/pgcopydb/cli_clone_follow.c
  *     Implementation of a CLI which lets you run individual routines
  *     directly
  */
