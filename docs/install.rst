@@ -53,7 +53,7 @@ stable.
 
 To use this docker image::
 
-  $ docker run --rm -it dimitri/pgcopydb:v0.13 pgcopydb --version
+  $ docker run --rm -it dimitri/pgcopydb:v0.14 pgcopydb --version
 
 __ https://hub.docker.com/r/dimitri/pgcopydb#!
 
