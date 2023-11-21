@@ -224,7 +224,7 @@ cli_ping(int argc, char **argv)
 
 			if (!pgsql_set_gucs(&src, settings))
 			{
-				log_fatal("Failed to set our GUC settings on the target connection, "
+				log_fatal("Failed to set our GUC settings on the source connection, "
 						  "see above for details");
 				pgsql_finish(&src);
 				exit(EXIT_CODE_TARGET);
