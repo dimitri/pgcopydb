@@ -2657,6 +2657,9 @@ stream_cleanup_context(StreamSpecs *specs)
 	success = success && unlink_file(specs->paths.tlifile);
 	success = success && unlink_file(specs->paths.tlihistfile);
 
+	/* reset the timeline, so that we always read from the disk */
+	specs->system.timeline = 0;
+
 	return success;
 }
 
