@@ -1,3 +1,74 @@
+### pgcopydb v0.14 (November 20, 2023) ###
+
+This is a bugfix release with a strong focus on reliability, in particular
+in the logical decoding parts of pgcopydb (the --follow implementation).
+
+### Added
+* Implement multi-value inserts (#465)
+* feat(container): multi arch build (#480)
+* Add support for database properties. (#491)
+* Add tests coverage for Postgres 16. (#478)
+* Set Process Titles as seen in ps/top/htop etc. (#435)
+* Implement same-table concurrency using Postgres CTID column. (#410)
+* When applying --follow changes, set synchronous_commit to off. (#425)
+* Use PREPARE/EXECUTE statements for applying DML in follow mode. (#420)
+* Use --table-jobs processes when computing pgcopydb compare data. (#419)
+* Implement concurrent workers for Large Objects data copy. (#411)
+
+### Changed
+* Improve migration speed by using same connection in a LOB worker. (#533)
+* Improve and fix connection timeout and total retry timeout. (#528)
+* Have the follow process read the schema from disk when it's been exported. (#523)
+* use LOG_WARN for warnings instead of LOG_ERROR (#506)
+* Improve Handling of replay_lsn for Idle Source (#519)
+* Update the lib/parson vendored-in library to a new version. (#512)
+* Review logical decoding client tracking of LSNs. (#502)
+* Add check constraint, language entry mapping (#497)
+* Ensure transactions are not read only by default (#490)
+* Switch to using libpq async API. (#488)
+* Improve error handling when COPY fails. (#485)
+* Switch our call to PQgetCopyData to async in pg_copy(). (#479)
+* Rewrite the ad-hoc parser for Postgres Archive TOC items. (#469)
+* Use an intermediate file on-disk for pg_restore --list output. (#467)
+* Add a way to debug parsing a list file. (#470)
+* Improve connection string TCP keepalive parameters handling. (#457)
+* Review the TCP keepalives settings. (#436)
+* Do not reset sequences on copy --follow failure. (#424)
+* Refactor the cli_compare code. (#418)
+* Use Postgres async queries to compute checksums. (#416)
+* Improve pgcopydb compare data checksum computation. (#407)
+
+### Fix
+* fix inherit data copy (#538)
+* Use dynamically allocated QMessage for msgrcv. (#534)
+* exclude generated columns from COPY statements (#517)
+* Update pgcopydb sentinel in the main follow process. (#521)
+* Remove the usage of txn metadata file (#525)
+* fix password handling in safeURI (#522)
+* Update README.md (One Typo Fixed) (#527)
+* Fix lib/subcommands.c sprintf usage. (#520)
+* Ensure NULL-termination of string when unescaping single-quotes (#514)
+* add archive entry mapping for LARGE OBJECTS and ROW SECURITY (#515)
+* Use target dbname when setting db parameters (#509)
+* Fix various issues with docs (#494)
+* Fix data loss when reading large transaction bodies (#495)
+* Fix test runs for outside contributors
+* Review static memory size of Postgres identifier names. (#486)
+* Fix column name escaping with test_decoding plugin (#482)
+* Fixing PING documentation (#476)
+* fix drop cascade issue (#475)
+* Fix SQL identifier quoting, generalize using format %I. (#464)
+* Fix error handling of fork() calls. (#459)
+* Fix set_ps_title to avoid calling sformat() on possibly short buffers. (#437)
+* Fix escaping double-quotes in SQL identifiers. (#434)
+* Fix memory leaks in transform code (#433)
+* Assorted fixes from review, including stream_read_context retry loop. (#423)
+* Fix a SEGFAULT that was hidden by our waitpid() calls. (#422)
+* Fix exit() calls that should have been return false; (#421)
+* Fix filtering on schema names. (#415)
+* Fix a compile warning on Linux related to printf format strings. (#406)
+
+
 ### pgcopydb v0.13 (July 27, 2023) ###
 
 This is a bugfix release that still manages to include some new features.

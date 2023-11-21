@@ -120,12 +120,15 @@ queue_send(Queue *queue, QMessage *msg)
 bool
 queue_receive(Queue *queue, QMessage *msg)
 {
+	QMessage *buf = (QMessage *) calloc(1, sizeof(QMessage));
+
 	int errStatus;
 	bool firstLoop = true;
 
 	do {
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
+			free(buf);
 			return false;
 		}
 
@@ -138,7 +141,7 @@ queue_receive(Queue *queue, QMessage *msg)
 			pg_usleep(10 * 1000); /* 10 ms */
 		}
 
-		errStatus = msgrcv(queue->qId, msg, sizeof(QMessage), 0, IPC_NOWAIT);
+		errStatus = msgrcv(queue->qId, buf, sizeof(QMessage), 0, IPC_NOWAIT);
 	} while (errStatus < 0 && (errno == EINTR || errno == ENOMSG));
 
 	if (errStatus < 0)
@@ -146,9 +149,12 @@ queue_receive(Queue *queue, QMessage *msg)
 		log_error("Failed to receive a message from %s queue (%d): %m",
 				  queue->name,
 				  queue->qId);
+		free(buf);
 		return false;
 	}
 
+	*msg = *buf;
+	free(buf);
 	return true;
 }
 
