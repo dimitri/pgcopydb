@@ -85,7 +85,7 @@ pgcopydb stream transform --trace ${SHAREDIR}/${WALFILE} /tmp/${SQLFILENAME}
 diff ${SHAREDIR}/${SQLFILE} /tmp/${SQLFILENAME}
 
 # we should also get the same result as expected (discarding LSN numbers)
-DIFFOPTS='-I BEGIN -I COMMIT -I KEEPALIVE -I SWITCH -I ENDPOS'
+DIFFOPTS='-I BEGIN -I COMMIT -I KEEPALIVE -I SWITCH -I ENDPOS -I ROLLBACK'
 
 diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} ${SHAREDIR}/${SQLFILENAME}
 
@@ -99,7 +99,7 @@ timeout 5s pgcopydb stream catchup --resume --endpos "${lsn}" --trace
 pgcopydb stream sentinel set endpos --current
 
 # and replay the available changes, including the transaction in dml2.sql now
-pgcopydb follow --resume
+pgcopydb follow --resume --trace
 
 # now check that all the new rows made it
 sql="select count(*) from category"

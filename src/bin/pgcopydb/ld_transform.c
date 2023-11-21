@@ -373,6 +373,7 @@ stream_transform_write_message(StreamContext *privateContext,
 	 * least a partial transaction within known boundaries.
 	 */
 	if (metadata->action != STREAM_ACTION_COMMIT &&
+		metadata->action != STREAM_ACTION_ROLLBACK &&
 		metadata->action != STREAM_ACTION_KEEPALIVE &&
 		metadata->action != STREAM_ACTION_SWITCH &&
 		metadata->action != STREAM_ACTION_ENDPOS)
@@ -407,7 +408,8 @@ stream_transform_write_message(StreamContext *privateContext,
 
 	(void) FreeLogicalMessage(currentMsg);
 
-	if (metadata->action == STREAM_ACTION_COMMIT)
+	if (metadata->action == STREAM_ACTION_COMMIT ||
+		metadata->action == STREAM_ACTION_ROLLBACK)
 	{
 		/* then prepare a new one, reusing the same memory area */
 		LogicalMessage empty = { 0 };
@@ -902,6 +904,7 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 		 */
 		if (firstMessage &&
 			(metadata->action == STREAM_ACTION_COMMIT ||
+			 metadata->action == STREAM_ACTION_ROLLBACK ||
 			 metadata->action == STREAM_ACTION_INSERT ||
 			 metadata->action == STREAM_ACTION_UPDATE ||
 			 metadata->action == STREAM_ACTION_DELETE ||
@@ -1065,13 +1068,15 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 	}
 
 	/*
-	 * All messages except for BEGIN/COMMIT need a LogicalTransactionStatement
-	 * to represent them within the current transaction.
+	 * All messages except for BEGIN/COMMIT/ROLLBACL need a
+	 * LogicalTransactionStatement to represent them within the
+	 * current transaction.
 	 */
 	LogicalTransactionStatement *stmt = NULL;
 
 	if (metadata->action != STREAM_ACTION_BEGIN &&
-		metadata->action != STREAM_ACTION_COMMIT)
+		metadata->action != STREAM_ACTION_COMMIT &&
+		metadata->action != STREAM_ACTION_ROLLBACK)
 	{
 		stmt = (LogicalTransactionStatement *)
 			   calloc(1, sizeof(LogicalTransactionStatement));
@@ -1139,6 +1144,19 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 			txn->commitLSN = metadata->lsn;
 			txn->commit = true;
 
+			break;
+		}
+
+		case STREAM_ACTION_ROLLBACK:
+		{
+			if (!mesg->isTransaction)
+			{
+				log_error("Failed to parse ROLLBACK: no transaction in progress");
+				return false;
+			}
+
+			txn->rollbackLSN = metadata->lsn;
+			txn->rollback = true;
 			break;
 		}
 
@@ -1888,6 +1906,14 @@ stream_write_transaction(FILE *out, LogicalTransaction *txn)
 		}
 	}
 
+	if (txn->rollback)
+	{
+		if (!stream_write_rollback(out, txn))
+		{
+			return false;
+		}
+	}
+
 	/* flush out stream at transaction boundaries */
 	if (fflush(out) != 0)
 	{
@@ -1933,6 +1959,24 @@ stream_write_begin(FILE *out, LogicalTransaction *txn)
 	}
 
 	/* keep compiler happy */
+	return true;
+}
+
+
+/*
+ * stream_write_rollback writes a COMMIT statement to the already open out
+ * stream.
+ */
+bool
+stream_write_rollback(FILE *out, LogicalTransaction *txn)
+{
+	FFORMAT(out,
+			"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
+			OUTPUT_ROLLBACK,
+			(long long) txn->xid,
+			LSN_FORMAT_ARGS(txn->rollbackLSN),
+			txn->timestamp);
+
 	return true;
 }
 

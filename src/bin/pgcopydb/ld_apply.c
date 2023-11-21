@@ -783,6 +783,21 @@ stream_apply_sql(StreamApplyContext *context,
 			break;
 		}
 
+		case STREAM_ACTION_ROLLBACK:
+		{
+			/* Rollback the transaction */
+			if (!pgsql_execute(pgsql, "ROLLBACK"))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			/* Reset the transactionInProgress after abort */
+			context->transactionInProgress = false;
+
+			break;
+		}
+
 		case STREAM_ACTION_COMMIT:
 		{
 			context->reachedStartPos = context->previousLSN < metadata->lsn;
@@ -893,24 +908,13 @@ stream_apply_sql(StreamApplyContext *context,
 					  LSN_FORMAT_ARGS(context->previousLSN));
 
 			/*
-			 * Don't update previousLSN if we are in a continuedTxn.
-			 *
-			 * Otherwise, during resume a continued txn having an endpos
-			 * will update the previousLSN to endpos's LSN causing the
-			 * current transaction to be applied again.
-			 */
-			if (!context->continuedTxn)
-			{
-				context->previousLSN = metadata->lsn;
-			}
-
-			/*
 			 * It could be the current endpos, or the endpos of a previous
 			 * run.
 			 */
 			if (context->endpos != InvalidXLogRecPtr &&
 				context->endpos <= metadata->lsn)
 			{
+				context->previousLSN = metadata->lsn;
 				context->reachedEndPos = true;
 
 				log_notice("Apply reached end position %X/%X at ENDPOS %X/%X",
@@ -1425,6 +1429,7 @@ parseSQLAction(const char *query, LogicalMessageMetadata *metadata)
 	char *message = NULL;
 	char *begin = strstr(query, OUTPUT_BEGIN);
 	char *commit = strstr(query, OUTPUT_COMMIT);
+	char *rollback = strstr(query, OUTPUT_ROLLBACK);
 	char *switchwal = strstr(query, OUTPUT_SWITCHWAL);
 	char *keepalive = strstr(query, OUTPUT_KEEPALIVE);
 	char *endpos = strstr(query, OUTPUT_ENDPOS);
@@ -1439,6 +1444,11 @@ parseSQLAction(const char *query, LogicalMessageMetadata *metadata)
 	{
 		metadata->action = STREAM_ACTION_COMMIT;
 		message = commit + strlen(OUTPUT_COMMIT);
+	}
+	else if (query == rollback)
+	{
+		metadata->action = STREAM_ACTION_ROLLBACK;
+		message = rollback + strlen(OUTPUT_ROLLBACK);
 	}
 	else if (query == switchwal)
 	{

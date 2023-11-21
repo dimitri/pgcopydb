@@ -12,3 +12,4 @@
 {"action":"I","xid":"492","lsn":"0/244A978","timestamp":"2023-06-14 11:17:51.979475+0000","message":{"action":"I","xid":492,"schema":"public","table":"category","columns":[{"name":"category_id","type":"integer","value":1008},{"name":"name","type":"text","value":"Thriller"},{"name":"last_update","type":"timestamp with time zone","value":"2022-12-15 00:00:01+00"}]}}
 {"action":"K","lsn":"0/244A978","timestamp":"2023-06-14 11:17:51.979481+0000"}
 {"action":"E","lsn":"0/244A978"}
+{"action":"R","lsn":"0/244A978"}
