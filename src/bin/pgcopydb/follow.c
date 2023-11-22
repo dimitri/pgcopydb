@@ -258,6 +258,22 @@ bool
 follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 {
 	/*
+	 * Incase of a crash, execute recovery actions before starting the
+	 * main loop.
+	 */
+	if (!recoverFromUndoLog(&streamSpecs->paths))
+	{
+		log_error("Failed to recover from undo log, see above for details");
+		return false;
+	}
+
+	if (!removeUndoLog(&streamSpecs->paths))
+	{
+		log_error("Failed to remove undo log, see above for details");
+		return false;
+	}
+
+	/*
 	 * Remove the possibly still existing stream context files from
 	 * previous round of operations (--resume, etc). We want to make
 	 * sure that the catchup process reads the files created on this

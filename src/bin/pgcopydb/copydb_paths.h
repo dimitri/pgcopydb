@@ -54,6 +54,7 @@ typedef struct CDCPaths
 	char tlifile[MAXPGPATH];          /* /tmp/pgcopydb/cdc/tli */
 	char tlihistfile[MAXPGPATH];      /* /tmp/pgcopydb/cdc/tli.history */
 	char lsntrackingfile[MAXPGPATH];  /* /tmp/pgcopydb/cdc/lsn.json */
+	char undofile[MAXPGPATH];         /* /tmp/pgcopydb/cdc/undo */
 } CDCPaths;
 
 
