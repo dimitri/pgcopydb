@@ -168,8 +168,9 @@ copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions)
 
 				bool truncate = false;
 				PGSQL *src = &(copySpecs->sourceSnapshot.pgsql);
+				uint64_t bytesTransmitted = 0;
 
-				if (!pg_copy(src, &dst, sql, qname, truncate))
+				if (!pg_copy(src, &dst, sql, qname, truncate, &bytesTransmitted))
 				{
 					/* errors have already been logged */
 					return false;

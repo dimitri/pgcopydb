@@ -2251,7 +2251,7 @@ pgsql_truncate(PGSQL *pgsql, const char *qname)
  */
 bool
 pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
-		bool truncate)
+		bool truncate, uint64_t *bytesTransmitted)
 {
 	bool srcConnIsOurs = src->connection == NULL;
 	PGconn *srcConn = pgsql_open_connection(src);
@@ -2327,6 +2327,7 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 	char *copybuf;
 	bool failedOnSrc = false;
 	bool failedOnDst = false;
+	*bytesTransmitted = 0;
 
 	for (;;)
 	{
@@ -2438,6 +2439,14 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 				pgcopy_log_error(src, NULL, "could not receive data");
 				break;
 			}
+		}
+
+		/*
+		 * If successful PQgetCopyData returns the row length as a result.
+		 */
+		else if (bufsize > 0)
+		{
+			*bytesTransmitted += bufsize;
 		}
 
 		/*
