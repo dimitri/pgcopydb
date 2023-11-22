@@ -689,7 +689,7 @@ pretty_print_bytes(char *buffer, size_t size, uint64_t bytes)
  * "17 GB/s" in the given buffer.
  *
  * Unlike pretty_print_bytes function that uses powers of 2, this function uses
- * powers of 10. So 1 GB/s is 1,000,000,000 bytes per second.
+ * powers of 10. So 1 GBit/s is 1,000,000,000 bits per second.
  */
 void
 pretty_print_bytes_per_second(char *buffer, size_t size, uint64_t bytes,
@@ -703,17 +703,17 @@ pretty_print_bytes_per_second(char *buffer, size_t size, uint64_t bytes,
 	}
 
 	const char *suffixes[7] = {
-		"B/s",                    /* Bytes per second */
-		"kB/s",                   /* Kilobytes per second */
-		"MB/s",                   /* Megabytes per second */
-		"GB/s",                   /* Gigabytes per second */
-		"TB/s",                   /* Terabytes per second */
-		"PB/s",                   /* Petabytes per second */
-		"EB/s"                    /* Exabytes per second */
+		"Bit/s",                    /* Bits per second */
+		"kBit/s",                   /* Kilobits per second */
+		"MBit/s",                   /* Megabits per second */
+		"GBit/s",                   /* Gigabits per second */
+		"TBit/s",                   /* Terabits per second */
+		"PBit/s",                   /* Petabits per second */
+		"EBit/s"                    /* Exabits per second */
 	};
 
 	uint sIndex = 0;
-	long double count = ((long double) bytes) / durationMs * 1000;
+	long double count = ((long double) bytes) * 1000 * 8 / durationMs ;
 
 	while (count >= 10000 && sIndex < 7)
 	{
