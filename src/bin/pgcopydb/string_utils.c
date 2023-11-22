@@ -686,7 +686,10 @@ pretty_print_bytes(char *buffer, size_t size, uint64_t bytes)
 /*
  * pretty_print_bytes_per_second pretty prints bytes transmitted per second in
  * a human readable form. Given 17179869184 it places the string
- * "16 GBPS" in the given buffer.
+ * "17 GB/s" in the given buffer.
+ *
+ * Unlike pretty_print_bytes function that uses powers of 2, this function uses
+ * powers of 10. So 1 GB/s is 1,000,000,000 bytes per second.
  */
 void
 pretty_print_bytes_per_second(char *buffer, size_t size, uint64_t bytes,
@@ -695,16 +698,31 @@ pretty_print_bytes_per_second(char *buffer, size_t size, uint64_t bytes,
 	/* avoid division by zero */
 	if (durationMs == 0)
 	{
-		sformat(buffer, size, "0 BPS");
+		sformat(buffer, size, "0 B/s");
+		return;
 	}
-	else
-	{
-		char bytesPretty[BUFSIZE] = { 0 };
-		uint64_t bytesPerSecond = bytes * 1000 / durationMs;
 
-		pretty_print_bytes(bytesPretty, size-2, bytesPerSecond);
-		sformat(buffer, size, "%sPS", bytesPretty);
+	const char *suffixes[7] = {
+		"B/s",                    /* Bytes per second */
+		"kB/s",                   /* Kilobytes per second */
+		"MB/s",                   /* Megabytes per second */
+		"GB/s",                   /* Gigabytes per second */
+		"TB/s",                   /* Terabytes per second */
+		"PB/s",                   /* Petabytes per second */
+		"EB/s"                    /* Exabytes per second */
+	};
+
+	uint sIndex = 0;
+	long double count = ((long double) bytes) / durationMs * 1000;
+
+	while (count >= 10000 && sIndex < 7)
+	{
+		sIndex++;
+		count /= 1000;
 	}
+
+	/* forget about having more precision, Postgres wants integers here */
+	sformat(buffer, size, "%d %s", (int) count, suffixes[sIndex]);
 }
 
 
