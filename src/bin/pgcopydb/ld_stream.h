@@ -17,6 +17,7 @@
 
 #define OUTPUT_BEGIN "BEGIN; -- "
 #define OUTPUT_COMMIT "COMMIT; -- "
+#define OUTPUT_ROLLBACK "ROLLBACK; -- "
 #define OUTPUT_SWITCHWAL "-- SWITCH WAL "
 #define OUTPUT_KEEPALIVE "-- KEEPALIVE "
 #define OUTPUT_ENDPOS "-- ENDPOS "
@@ -42,7 +43,8 @@ typedef enum
 	STREAM_ACTION_MESSAGE = 'M',
 	STREAM_ACTION_SWITCH = 'X',
 	STREAM_ACTION_KEEPALIVE = 'K',
-	STREAM_ACTION_ENDPOS = 'E'
+	STREAM_ACTION_ENDPOS = 'E',
+	STREAM_ACTION_ROLLBACK = 'R'
 } StreamAction;
 
 typedef struct InternalMessage
@@ -206,9 +208,11 @@ typedef struct LogicalTransaction
 	uint32_t xid;
 	uint64_t beginLSN;
 	uint64_t commitLSN;
+	uint64_t rollbackLSN;
 	char timestamp[PG_MAX_TIMESTAMP];
 	bool continued;
 	bool commit;
+	bool rollback;
 
 	uint32_t count;                     /* number of statements */
 	LogicalTransactionStatement *first;
@@ -284,9 +288,6 @@ typedef struct StreamContext
 	uint64_t endpos;
 	bool apply;
 
-	bool reachedStartPos;
-	StreamAction startposActionFromJSON;
-
 	bool stdIn;
 	bool stdOut;
 
@@ -317,6 +318,8 @@ typedef struct StreamContext
 	FILE *sqlFile;
 
 	StreamCounters counters;
+
+	bool transactionInProgress;
 } StreamContext;
 
 
@@ -440,9 +443,6 @@ struct StreamSpecs
 	uint64_t startpos;
 	uint64_t endpos;
 	CopyDBSentinel sentinel;
-
-	bool startposComputedFromJSON;
-	StreamAction startposActionFromJSON;
 
 	LogicalStreamMode mode;
 
@@ -596,6 +596,7 @@ bool stream_write_endpos(FILE *out, LogicalMessageEndpos *endpos);
 
 bool stream_write_begin(FILE *out, LogicalTransaction *tx);
 bool stream_write_commit(FILE *out, LogicalTransaction *tx);
+bool stream_write_rollback(FILE *out, LogicalTransaction *tx);
 
 bool stream_write_insert(FILE *out, LogicalMessageInsert *insert);
 bool stream_write_truncate(FILE *out, LogicalMessageTruncate *truncate);

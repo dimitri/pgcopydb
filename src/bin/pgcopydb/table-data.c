@@ -1018,6 +1018,14 @@ copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 		return false;
 	}
 
+	/* set GUC values for the target connection */
+	if (!pgsql_set_gucs(&dst, dstSettings))
+	{
+		log_fatal("Failed to set our GUC settings on the target connection, "
+				  "see above for details");
+		return false;
+	}
+
 	/* when using `pgcopydb copy table-data`, we don't truncate */
 	bool truncate = tableSpecs->section != DATA_SECTION_TABLE_DATA;
 

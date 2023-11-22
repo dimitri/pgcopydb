@@ -8,3 +8,4 @@ PREPARE 6a9e34e7 AS INSERT INTO public.category ("category_id", "name", "last_up
 EXECUTE 6a9e34e7["1005","Mystery","2022-12-13 00:00:01+00","1006","Historical drama","2022-12-14 00:00:01+00","1008","Thriller","2022-12-15 00:00:01+00"];
 -- KEEPALIVE {"lsn":"0/244B9A8","timestamp":"2023-09-17 07:04:04.9770+0000"}
 -- ENDPOS {"lsn":"0/244B9A8"}
+ROLLBACK; -- {"xid":492,"lsn":"0/244BF28","timestamp":"2023-11-21 05:43:00.647523+0000"}
