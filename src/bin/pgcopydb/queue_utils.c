@@ -97,7 +97,7 @@ queue_send(Queue *queue, QMessage *msg)
 			pg_usleep(10 * 1000); /* 10 ms */
 		}
 
-		errStatus = msgsnd(queue->qId, msg, sizeof(QMessage), IPC_NOWAIT);
+		errStatus = msgsnd(queue->qId, msg, sizeof(msg->data), IPC_NOWAIT);
 	} while (errStatus < 0 && (errno == EINTR || errno == EAGAIN));
 
 	if (errStatus < 0)
@@ -141,7 +141,7 @@ queue_receive(Queue *queue, QMessage *msg)
 			pg_usleep(10 * 1000); /* 10 ms */
 		}
 
-		errStatus = msgrcv(queue->qId, buf, sizeof(QMessage), 0, IPC_NOWAIT);
+		errStatus = msgrcv(queue->qId, buf, sizeof(buf->data), 0, IPC_NOWAIT);
 	} while (errStatus < 0 && (errno == EINTR || errno == ENOMSG));
 
 	if (errStatus < 0)
