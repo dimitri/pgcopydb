@@ -97,8 +97,8 @@ Running such a query on a large table can take a lot of time.
 Options
 -------
 
-The following options are available to ``pgcopydb create`` and ``pgcopydb
-drop`` subcommands:
+The following options are available to ``pgcopydb compare schema`` and ``pgcopydb
+compare data`` subcommands:
 
 --source
 
