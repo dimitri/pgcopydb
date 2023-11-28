@@ -486,8 +486,8 @@ copydb_table_data_worker(CopyDataSpec *specs)
 
 	while (true)
 	{
-		QMessage *mesg = (QMessage *) calloc(1, sizeof(QMessage));
-		bool recv_ok = queue_receive(&(specs->copyQueue), mesg);
+		QMessage mesg = { 0 };
+		bool recv_ok = queue_receive(&(specs->copyQueue), &mesg);
 
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
@@ -501,32 +501,30 @@ copydb_table_data_worker(CopyDataSpec *specs)
 			break;
 		}
 
-		switch (mesg->type)
+		switch (mesg.type)
 		{
 			case QMSG_TYPE_STOP:
 			{
 				log_debug("Stop message received by COPY worker");
 				(void) copydb_close_snapshot(specs);
-				free(mesg);
 				return true;
 			}
 
 			case QMSG_TYPE_TABLEPOID:
 			{
 				if (!copydb_copy_data_by_oid(specs,
-											 mesg->data.tp.oid,
-											 mesg->data.tp.part))
+											 mesg.data.tp.oid,
+											 mesg.data.tp.part))
 				{
 					log_error("Failed to copy data for table with oid %u "
 							  "and part number %u, see above for details",
-							  mesg->data.tp.oid,
-							  mesg->data.tp.part);
+							  mesg.data.tp.oid,
+							  mesg.data.tp.part);
 
 					++errors;
 
 					if (specs->failFast)
 					{
-						free(mesg);
 						return false;
 					}
 
@@ -536,7 +534,6 @@ copydb_table_data_worker(CopyDataSpec *specs)
 					if (!copydb_set_snapshot(specs))
 					{
 						/* errors have already been logged */
-						free(mesg);
 						return false;
 					}
 				}
@@ -546,13 +543,11 @@ copydb_table_data_worker(CopyDataSpec *specs)
 			default:
 			{
 				log_error("Received unknown message type %ld on table queue %d",
-						  mesg->type,
+						  mesg.type,
 						  specs->copyQueue.qId);
 				break;
 			}
 		}
-
-		free(mesg);
 	}
 
 	/* terminate our connection to the source database now */
@@ -1211,8 +1206,7 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 			{
 				appendPQExpBufferStr(query, ", ");
 			}
-			else
-			{
+			else {
 				isFirst = false;
 			}
 
@@ -1269,7 +1263,7 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 		appendPQExpBuffer(query, "%s", tableSpecs->sourceTable->qname);
 
 		for (int i = 0; i < table->attributes.count; i++)
-		{
+		{			
 			SourceTableAttribute *attribute = &(table->attributes.array[i]);
 			char *attname = attribute->attname;
 

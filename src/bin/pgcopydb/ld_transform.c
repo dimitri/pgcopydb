@@ -622,8 +622,8 @@ stream_transform_from_queue(StreamSpecs *specs)
 
 	while (!stop)
 	{
-		QMessage *mesg = (QMessage *) calloc(1, sizeof(QMessage));
-		bool recv_ok = queue_receive(transformQueue, mesg);
+		QMessage mesg = { 0 };
+		bool recv_ok = queue_receive(transformQueue, &mesg);
 
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
@@ -633,18 +633,16 @@ stream_transform_from_queue(StreamSpecs *specs)
 			 * catchup mode to replay mode.
 			 */
 			log_debug("stream_transform_from_queue was asked to stop");
-			free(mesg);
 			return true;
 		}
 
 		if (!recv_ok)
 		{
 			/* errors have already been logged */
-			free(mesg);
 			return false;
 		}
 
-		switch (mesg->type)
+		switch (mesg.type)
 		{
 			case QMSG_TYPE_STOP:
 			{
@@ -656,14 +654,13 @@ stream_transform_from_queue(StreamSpecs *specs)
 			case QMSG_TYPE_STREAM_TRANSFORM:
 			{
 				log_debug("stream_transform_from_queue: %X/%X",
-						  LSN_FORMAT_ARGS(mesg->data.lsn));
+						  LSN_FORMAT_ARGS(mesg.data.lsn));
 
-				if (!stream_transform_file_at_lsn(specs, mesg->data.lsn))
+				if (!stream_transform_file_at_lsn(specs, mesg.data.lsn))
 				{
 					/* errors have already been logged, break from the loop */
 					++errors;
-					free(mesg);
-					return false;
+					break;
 				}
 
 				break;
@@ -672,15 +669,13 @@ stream_transform_from_queue(StreamSpecs *specs)
 			default:
 			{
 				log_error("Received unknown message type %ld on %s queue %d",
-						  mesg->type,
+						  mesg.type,
 						  transformQueue->name,
 						  transformQueue->qId);
 				++errors;
 				break;
 			}
 		}
-
-		free(mesg);
 	}
 
 	bool success = (stop == true && errors == 0);
