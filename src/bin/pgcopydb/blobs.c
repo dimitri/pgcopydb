@@ -276,24 +276,22 @@ copydb_blob_worker(CopyDataSpec *specs)
 
 	while (!stop)
 	{
-		QMessage *mesg = (QMessage *) calloc(1, sizeof(QMessage));
-		bool recv_ok = queue_receive(&(specs->loQueue), mesg);
+		QMessage mesg = { 0 };
+		bool recv_ok = queue_receive(&(specs->loQueue), &mesg);
 
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
 			log_error("Large Objects worker has been interrupted");
-			free(mesg);
 			return false;
 		}
 
 		if (!recv_ok)
 		{
 			/* errors have already been logged */
-			free(mesg);
 			return false;
 		}
 
-		switch (mesg->type)
+		switch (mesg.type)
 		{
 			case QMSG_TYPE_STOP:
 			{
@@ -303,7 +301,6 @@ copydb_blob_worker(CopyDataSpec *specs)
 				if (!pgsql_commit(&dst))
 				{
 					/* errors have already been logged */
-					free(mesg);
 					return false;
 				}
 
@@ -312,14 +309,13 @@ copydb_blob_worker(CopyDataSpec *specs)
 
 			case QMSG_TYPE_BLOBOID:
 			{
-				if (!pg_copy_large_object(src, &dst, dropIfExists, mesg->data.oid))
+				if (!pg_copy_large_object(src, &dst, dropIfExists, mesg.data.oid))
 				{
 					if (specs->failFast)
 					{
 						log_error("Failed to copy Large Object with oid %u, "
 								  "see above for details",
-								  mesg->data.oid);
-						free(mesg);
+								  mesg.data.oid);
 						return false;
 					}
 
@@ -333,13 +329,11 @@ copydb_blob_worker(CopyDataSpec *specs)
 				++errors;
 				log_error("Received unknown message type %ld on "
 						  "Large Objects queue %d",
-						  mesg->type,
+						  mesg.type,
 						  specs->loQueue.qId);
 				break;
 			}
 		}
-
-		free(mesg);
 	}
 
 	/* terminate our connection to the source database now */

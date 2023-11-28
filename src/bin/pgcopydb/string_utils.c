@@ -645,7 +645,7 @@ processBufferCallback(const char *buffer, bool error)
 	for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
 	{
 		if (strneq(outLines[lineNumber], ""))
-		{	
+		{
 			char *match = regexp_first_match(outLines[lineNumber], warningPattern);
 			int logLevel = match != NULL ? LOG_WARN : (error ? LOG_ERROR : LOG_INFO);
 			log_level(logLevel, "%s", outLines[lineNumber]);
@@ -683,10 +683,52 @@ pretty_print_bytes(char *buffer, size_t size, uint64_t bytes)
 	sformat(buffer, size, "%d %s", (int) count, suffixes[sIndex]);
 }
 
+/*
+ * pretty_print_bytes_per_second pretty prints bytes transmitted per second in
+ * a human readable form. Given 17179869184 it places the string
+ * "17 GB/s" in the given buffer.
+ *
+ * Unlike pretty_print_bytes function that uses powers of 2, this function uses
+ * powers of 10. So 1 GBit/s is 1,000,000,000 bits per second.
+ */
+void
+pretty_print_bytes_per_second(char *buffer, size_t size, uint64_t bytes,
+							  uint64_t durationMs)
+{
+	/* avoid division by zero */
+	if (durationMs == 0)
+	{
+		sformat(buffer, size, "0 B/s");
+		return;
+	}
+
+	const char *suffixes[7] = {
+		"Bit/s",                    /* Bits per second */
+		"kBit/s",                   /* Kilobits per second */
+		"MBit/s",                   /* Megabits per second */
+		"GBit/s",                   /* Gigabits per second */
+		"TBit/s",                   /* Terabits per second */
+		"PBit/s",                   /* Petabits per second */
+		"EBit/s"                    /* Exabits per second */
+	};
+
+	uint sIndex = 0;
+	long double count = ((long double) bytes) * 1000 * 8 / durationMs ;
+
+	while (count >= 10000 && sIndex < 7)
+	{
+		sIndex++;
+		count /= 1000;
+	}
+
+	/* forget about having more precision, Postgres wants integers here */
+	sformat(buffer, size, "%d %s", (int) count, suffixes[sIndex]);
+}
+
 
 /*
  * pretty_print_bytes pretty prints bytes in a human readable form. Given
- * 17179869184 it places the string "16 GB" in the given buffer.
+ * 17179869184 it places the string "17 billion" in the given buffer.
  */
 void
 pretty_print_count(char *buffer, size_t size, uint64_t number)

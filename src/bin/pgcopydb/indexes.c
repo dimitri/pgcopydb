@@ -92,24 +92,22 @@ copydb_index_worker(CopyDataSpec *specs)
 
 	while (!stop)
 	{
-		QMessage *mesg = (QMessage *) calloc(1, sizeof(QMessage));
-		bool recv_ok = queue_receive(&(specs->indexQueue), mesg);
+		QMessage mesg = { 0 };
+		bool recv_ok = queue_receive(&(specs->indexQueue), &mesg);
 
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
 			log_error("CREATE INDEX worker has been interrupted");
-			free(mesg);
 			return false;
 		}
 
 		if (!recv_ok)
 		{
 			/* errors have already been logged */
-			free(mesg);
 			return false;
 		}
 
-		switch (mesg->type)
+		switch (mesg.type)
 		{
 			case QMSG_TYPE_STOP:
 			{
@@ -120,17 +118,16 @@ copydb_index_worker(CopyDataSpec *specs)
 
 			case QMSG_TYPE_INDEXOID:
 			{
-				if (!copydb_create_index_by_oid(specs, mesg->data.oid))
+				if (!copydb_create_index_by_oid(specs, mesg.data.oid))
 				{
 					++errors;
 
 					log_error("Failed to create index with oid %u, "
 							  "see above for details",
-							  mesg->data.oid);
+							  mesg.data.oid);
 
 					if (specs->failFast)
 					{
-						free(mesg);
 						return false;
 					}
 				}
@@ -140,12 +137,11 @@ copydb_index_worker(CopyDataSpec *specs)
 			default:
 			{
 				log_error("Received unknown message type %ld on index queue %d",
-						  mesg->type,
+						  mesg.type,
 						  specs->indexQueue.qId);
 				break;
 			}
 		}
-		free(mesg);
 	}
 
 	bool success = (stop == true && errors == 0);

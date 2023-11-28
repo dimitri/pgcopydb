@@ -34,6 +34,13 @@ write_table_summary(CopyTableSummary *summary, char *filename)
 	JSON_Value *js = json_value_init_object();
 	JSON_Object *jsObj = json_value_get_object(js);
 
+	char bytesPretty[BUFSIZE] = { 0 };
+	pretty_print_bytes(bytesPretty, BUFSIZE, summary->bytesTransmitted);
+
+	char transmitRate[BUFSIZE] = { 0 };
+	pretty_print_bytes_per_second(transmitRate, BUFSIZE, summary->bytesTransmitted,
+								  summary->durationMs);
+
 	json_object_set_number(jsObj, "pid", summary->pid);
 	json_object_dotset_number(jsObj, "table.oid", summary->table->oid);
 	json_object_dotset_string(jsObj, "table.nspname", summary->table->nspname);
@@ -41,6 +48,9 @@ write_table_summary(CopyTableSummary *summary, char *filename)
 	json_object_set_number(jsObj, "start-time-epoch", summary->startTime);
 	json_object_set_number(jsObj, "done-time-epoch", summary->doneTime);
 	json_object_set_number(jsObj, "duration", summary->durationMs);
+	json_object_dotset_number(jsObj, "network.bytes", summary->bytesTransmitted);
+	json_object_dotset_string(jsObj, "network.bytes-pretty", bytesPretty);
+	json_object_dotset_string(jsObj, "network.transmit-rate", transmitRate);
 	json_object_set_string(jsObj, "command", summary->command);
 
 	char *serialized_string = json_serialize_to_string_pretty(js);
@@ -64,7 +74,7 @@ write_table_summary(CopyTableSummary *summary, char *filename)
 
 /*
  * prepare_table_summary_as_json prepares the summary information as a JSON
- * object within the given JSON_Value.
+ * object within the given JSON_Object under the given key.
  */
 bool
 prepare_table_summary_as_json(CopyTableSummary *summary,
@@ -98,7 +108,16 @@ prepare_table_summary_as_json(CopyTableSummary *summary,
 						   "start-time-string",
 						   startTimeStr);
 
-	json_object_set_string(jsSummaryObj, "command", summary->command);
+	/* pretty print transmitted bytes */
+	char bytesPretty[BUFSIZE] = { 0 };
+	pretty_print_bytes(bytesPretty, BUFSIZE, summary->bytesTransmitted);
+
+	/*
+	 * XXX We should also include the transmit rate here, but that would require
+	 * having the durationMs information in the summary, which we don't have yet.
+	 */
+	json_object_dotset_number(jsSummaryObj, "network.bytes", summary->bytesTransmitted);
+	json_object_dotset_string(jsSummaryObj, "network.bytes-pretty", bytesPretty);
 
 	/* attach the JSON array to the main JSON object under the provided key */
 	json_object_set_value(jsobj, key, jsSummary);
@@ -144,7 +163,7 @@ read_table_summary(CopyTableSummary *summary, const char *filename)
 	summary->startTime = json_object_get_number(jsObj, "start-time-epoch");
 	summary->doneTime = json_object_get_number(jsObj, "done-time-epoch");
 	summary->durationMs = json_object_get_number(jsObj, "duration");
-
+	summary->bytesTransmitted = json_object_dotget_number(jsObj, "network.bytes");
 	summary->command = strdup(json_object_get_string(jsObj, "command"));
 
 	if (summary->command == NULL)
@@ -750,64 +769,71 @@ void
 print_toplevel_summary(Summary *summary)
 {
 	char *d10s = "----------";
+	char *s10s = "          ";
 	char *d12s = "------------";
 	char *d50s = "--------------------------------------------------";
 
 	fformat(stdout, "\n");
 
-	fformat(stdout, " %50s   %10s  %10s  %12s\n",
-			"Step", "Connection", "Duration", "Concurrency");
+	fformat(stdout, " %50s   %10s  %10s  %10s  %12s\n",
+			"Step", "Connection", "Duration", "Transfer", "Concurrency");
 
-	fformat(stdout, " %50s   %10s  %10s  %12s\n", d50s, d10s, d10s, d12s);
+	fformat(stdout, " %50s   %10s  %10s  %10s  %12s\n", d50s, d10s, d10s, d10s, d12s);
 
-	fformat(stdout, " %50s   %10s  %10s  %12d\n", "Dump Schema", "source",
-			summary->timings.dumpSchemaMs, 1);
+	fformat(stdout, " %50s   %10s  %10s  %10s  %12d\n", "Dump Schema", "source",
+			summary->timings.dumpSchemaMs, s10s, 1);
 
-	fformat(stdout, " %50s   %10s  %10s  %12d\n",
+	fformat(stdout, " %50s   %10s  %10s  %10s  %12d\n",
 			"Catalog Queries (table ordering, filtering, etc)",
 			"source",
 			summary->timings.fetchSchemaMs,
+			s10s,
 			1);
 
-	fformat(stdout, " %50s   %10s  %10s  %12d\n", "Prepare Schema", "target",
-			summary->timings.prepareSchemaMs, 1);
+	fformat(stdout, " %50s   %10s  %10s  %10s  %12d\n", "Prepare Schema", "target",
+			summary->timings.prepareSchemaMs, s10s, 1);
 
 	char concurrency[BUFSIZE] = { 0 };
 	sformat(concurrency, sizeof(concurrency), "%d + %d",
 			summary->tableJobs,
 			summary->tableJobs + summary->indexJobs);
 
-	fformat(stdout, " %50s   %10s  %10s  %12s\n",
+	fformat(stdout, " %50s   %10s  %10s  %10s  %12s\n",
 			"COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)", "both",
 			summary->timings.dataAndIndexMs,
+			s10s,
 			concurrency);
 
-	fformat(stdout, " %50s   %10s  %10s  %12d\n",
+	fformat(stdout, " %50s   %10s  %10s  %10s  %12d\n",
 			"COPY (cumulative)", "both",
 			summary->timings.totalTableMs,
+			summary->table.totalBytesStr,
 			summary->tableJobs);
 
-	fformat(stdout, " %50s   %10s  %10s  %12d\n",
+	fformat(stdout, " %50s   %10s  %10s  %10s  %12d\n",
 			"Large Objects (cumulative)", "both",
 			summary->timings.blobsMs,
+			s10s,
 			summary->lObjectJobs);
 
-	fformat(stdout, " %50s   %10s  %10s  %12d\n",
+	fformat(stdout, " %50s   %10s  %10s  %10s  %12d\n",
 			"CREATE INDEX, CONSTRAINTS (cumulative)", "target",
 			summary->timings.totalIndexMs,
+			s10s,
 			summary->indexJobs);
 
-	fformat(stdout, " %50s   %10s  %10s  %12d\n", "Finalize Schema", "target",
-			summary->timings.finalizeSchemaMs, 1);
+	fformat(stdout, " %50s   %10s  %10s  %10s  %12d\n", "Finalize Schema", "target",
+			summary->timings.finalizeSchemaMs, s10s, 1);
 
-	fformat(stdout, " %50s   %10s  %10s  %12s\n", d50s, d10s, d10s, d12s);
+	fformat(stdout, " %50s   %10s  %10s  %10s  %12s\n", d50s, d10s, d10s, d10s, d12s);
 
-	fformat(stdout, " %50s   %10s  %10s  %12s\n",
+	fformat(stdout, " %50s   %10s  %10s  %10s  %12s\n",
 			"Total Wall Clock Duration", "both",
 			summary->timings.totalMs,
+			s10s,
 			concurrency);
 
-	fformat(stdout, " %50s   %10s  %10s  %12s\n", d50s, d10s, d10s, d12s);
+	fformat(stdout, " %50s   %10s  %10s  %10s  %12s\n", d50s, d10s, d10s, d10s, d12s);
 
 	fformat(stdout, "\n");
 }
@@ -829,19 +855,21 @@ print_summary_table(SummaryTable *summary)
 
 	fformat(stdout, "\n");
 
-	fformat(stdout, "%*s | %*s | %*s | %*s | %*s | %*s\n",
+	fformat(stdout, "%*s | %*s | %*s | %*s | %*s | %*s | %*s\n",
 			headers->maxOidSize, "OID",
 			headers->maxNspnameSize, "Schema",
 			headers->maxRelnameSize, "Name",
 			headers->maxTableMsSize, "copy duration",
+			headers->maxBytesSize, "transmitted bytes",
 			headers->maxIndexCountSize, "indexes",
 			headers->maxIndexMsSize, "create index duration");
 
-	fformat(stdout, "%s-+-%s-+-%s-+-%s-+-%s-+-%s\n",
+	fformat(stdout, "%s-+-%s-+-%s-+-%s-+-%s-+-%s-+-%s\n",
 			headers->oidSeparator,
 			headers->nspnameSeparator,
 			headers->relnameSeparator,
 			headers->tableMsSeparator,
+			headers->bytesSeparator,
 			headers->indexCountSeparator,
 			headers->indexMsSeparator);
 
@@ -849,11 +877,12 @@ print_summary_table(SummaryTable *summary)
 	{
 		SummaryTableEntry *entry = &(summary->array[i]);
 
-		fformat(stdout, "%*s | %*s | %*s | %*s | %*s | %*s\n",
+		fformat(stdout, "%*s | %*s | %*s | %*s | %*s | %*s | %*s\n",
 				headers->maxOidSize, entry->oidStr,
 				headers->maxNspnameSize, entry->nspname,
 				headers->maxRelnameSize, entry->relname,
 				headers->maxTableMsSize, entry->tableMs,
+				headers->maxBytesSize, entry->bytesStr,
 				headers->maxIndexCountSize, entry->indexCount,
 				headers->maxIndexMsSize, entry->indexMs);
 	}
@@ -936,6 +965,11 @@ print_summary_as_json(Summary *summary, const char *filename)
 	json_object_set_number(jsCopyObj, "duration", timings->tableDurationMs);
 	json_object_set_number(jsCopyObj, "concurrency", summary->tableJobs);
 
+	json_object_dotset_number(jsCopyObj, "network.bytes",
+							  summary->table.totalBytes);
+	json_object_dotset_string(jsCopyObj, "network.bytes-pretty",
+							  summary->table.totalBytesStr);
+
 	json_array_append_value(jsStepArray, jsCopy);
 
 	JSON_Value *jsBlob = json_value_init_object();
@@ -1002,6 +1036,13 @@ print_summary_as_json(Summary *summary, const char *filename)
 
 		json_object_dotset_number(jsTableObj,
 								  "duration", entry->durationTableMs);
+
+		json_object_dotset_number(jsTableObj,
+								  "network.bytes", entry->bytes);
+		json_object_dotset_string(jsTableObj,
+								  "network.bytes-pretty", entry->bytesStr);
+		json_object_dotset_string(jsTableObj,
+								  "network.transmit-rate", entry->transmitRate);
 
 		json_object_dotset_number(jsTableObj,
 								  "index.count", entry->indexArray.count);
@@ -1087,6 +1128,7 @@ prepare_summary_table_headers(SummaryTable *summary)
 	headers->maxNspnameSize = 6;    /* "schema" */
 	headers->maxRelnameSize = 4;    /* "name" */
 	headers->maxTableMsSize = 13;   /* "copy duration" */
+	headers->maxBytesSize = 17;     /* "transmitted bytes" */
 	headers->maxIndexCountSize = 7; /* "indexes" */
 	headers->maxIndexMsSize = 21;   /* "create index duration" */
 
@@ -1124,6 +1166,13 @@ prepare_summary_table_headers(SummaryTable *summary)
 			headers->maxTableMsSize = len;
 		}
 
+		len = strlen(entry->bytesStr);
+
+		if (headers->maxBytesSize < len)
+		{
+			headers->maxBytesSize = len;
+		}
+
 		len = strlen(entry->indexCount);
 
 		if (headers->maxIndexCountSize < len)
@@ -1144,6 +1193,7 @@ prepare_summary_table_headers(SummaryTable *summary)
 	prepareLineSeparator(headers->nspnameSeparator, headers->maxNspnameSize);
 	prepareLineSeparator(headers->relnameSeparator, headers->maxRelnameSize);
 	prepareLineSeparator(headers->tableMsSeparator, headers->maxTableMsSize);
+	prepareLineSeparator(headers->bytesSeparator, headers->maxBytesSize);
 	prepareLineSeparator(headers->indexCountSeparator, headers->maxIndexCountSize);
 	prepareLineSeparator(headers->indexMsSeparator, headers->maxIndexMsSize);
 }
@@ -1223,12 +1273,14 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 	TopLevelTimings *timings = &(summary->timings);
 	SummaryTable *summaryTable = &(summary->table);
 	CopyTableDataSpecsArray *tableSpecsArray = &(specs->tableSpecsArray);
+	uint64_t *totalBytes = &(summaryTable->totalBytes);
+	*totalBytes = 0;
 
 	int count = tableSpecsArray->count;
 
 	summaryTable->count = count;
 	summaryTable->array =
-		(SummaryTableEntry *) malloc(count * sizeof(SummaryTableEntry));
+		(SummaryTableEntry *) calloc(count, sizeof(SummaryTableEntry));
 
 	if (summaryTable->array == NULL)
 	{
@@ -1251,7 +1303,7 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 		strlcpy(entry->nspname, table->nspname, sizeof(entry->nspname));
 		strlcpy(entry->relname, table->relname, sizeof(entry->relname));
 
-		/* the specs doesn't contain timing information */
+		/* the specs doesn't contain timing information or bytes transmitted */
 		CopyTableSummary tableSummary = { .table = table };
 
 		if (!read_table_summary(&tableSummary, tableSpecs->tablePaths.doneFile))
@@ -1260,6 +1312,17 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 					  tableSpecs->tablePaths.doneFile);
 			return false;
 		}
+
+		*totalBytes += tableSummary.bytesTransmitted;
+
+		entry->bytes = tableSummary.bytesTransmitted;
+		pretty_print_bytes(entry->bytesStr,
+						   sizeof(entry->bytesStr),
+						   entry->bytes);
+		pretty_print_bytes_per_second(entry->transmitRate,
+									  sizeof(entry->transmitRate),
+									  tableSummary.bytesTransmitted,
+									  tableSummary.durationMs);
 
 		entry->durationTableMs = tableSummary.durationMs;
 		timings->tableDurationMs += tableSummary.durationMs;
@@ -1383,6 +1446,9 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 
 		entry->durationIndexMs = indexingDurationMs;
 	}
+
+	/* write pretty printed total bytes value */
+	pretty_print_bytes(summary->table.totalBytesStr, BUFSIZE, *totalBytes);
 
 	/*
 	 * Also read the blobs summary file.

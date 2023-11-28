@@ -570,21 +570,21 @@ re-use them all along:
 
 ::
 
-   $ export PGCOPYDB_SOURCE_PGURI="port=54311 host=localhost dbname=pgloader"
-   $ export PGCOPYDB_TARGET_PGURI="port=54311 dbname=plop"
+   $ export PGCOPYDB_SOURCE_PGURI=postgres://pagila:0wn3d@source/pagila
+   $ export PGCOPYDB_TARGET_PGURI=postgres://pagila:0wn3d@target/pagila
 
 Now, first dump the schema:
 
 ::
 
    $ pgcopydb dump schema
-   15:24:24 75511 INFO  Removing the stale pid file "/tmp/pgcopydb/pgcopydb.pid"
-   15:24:24 75511 WARN  Directory "/tmp/pgcopydb" already exists: removing it entirely
-   15:24:24 75511 INFO  Dumping database from "port=54311 host=localhost dbname=pgloader"
-   15:24:24 75511 INFO  Dumping database into directory "/tmp/pgcopydb"
-   15:24:24 75511 INFO  Using pg_dump for Postgres "12.9" at "/Applications/Postgres.app/Contents/Versions/12/bin/pg_dump"
-   15:24:24 75511 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_dump -Fc --section pre-data --file /tmp/pgcopydb/schema/pre.dump 'port=54311 host=localhost dbname=pgloader'
-   15:24:25 75511 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_dump -Fc --section post-data --file /tmp/pgcopydb/schema/post.dump 'port=54311 host=localhost dbname=pgloader'
+   14:28:50 22 INFO   Running pgcopydb version 0.13.38.g22e6544.dirty from "/usr/local/bin/pgcopydb"
+   14:28:50 22 INFO   Dumping database from "postgres://pagila@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
+   14:28:50 22 INFO   Dumping database into directory "/tmp/pgcopydb"
+   14:28:50 22 INFO   Using pg_dump for Postgres "16.1" at "/usr/bin/pg_dumpall"
+   14:28:50 22 INFO   Exported snapshot "00000003-00000022-1" from the source database
+   14:28:50 22 INFO    /usr/bin/pg_dump -Fc --snapshot 00000003-00000022-1 --section pre-data --file /tmp/pgcopydb/schema/pre.dump 'postgres://pagila@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60'
+   14:28:51 22 INFO    /usr/bin/pg_dump -Fc --snapshot 00000003-00000022-1 --section post-data --file /tmp/pgcopydb/schema/post.dump 'postgres://pagila@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60'
 
 Now restore the pre-data schema on the target database, cleaning up the
 already existing objects if any, which allows running this test scenario
@@ -593,12 +593,15 @@ target instance though!
 
 ::
 
-   PGCOPYDB_DROP_IF_EXISTS=on pgcopydb restore pre-data --no-owner
-   15:24:29 75591 INFO  Removing the stale pid file "/tmp/pgcopydb/pgcopydb.pid"
-   15:24:29 75591 INFO  Restoring database from "/tmp/pgcopydb"
-   15:24:29 75591 INFO  Restoring database into "port=54311 dbname=plop"
-   15:24:29 75591 INFO  Using pg_restore for Postgres "12.9" at "/Applications/Postgres.app/Contents/Versions/12/bin/pg_restore"
-   15:24:29 75591 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_restore --dbname 'port=54311 dbname=plop' --clean --if-exists --no-owner /tmp/pgcopydb/schema/pre.dump
+   $ PGCOPYDB_DROP_IF_EXISTS=on pgcopydb restore pre-data --no-owner --resume --not-consistent
+   14:28:51 26 INFO   Running pgcopydb version 0.13.38.g22e6544.dirty from "/usr/local/bin/pgcopydb"
+   14:28:51 26 INFO   Schema dump for pre-data and post-data section have been done
+   14:28:51 26 INFO   Restoring database from existing files at "/tmp/pgcopydb"
+   14:28:51 26 INFO   Using pg_restore for Postgres "16.1" at "/usr/bin/pg_restore"
+   14:28:51 26 INFO   [TARGET] Restoring database into "postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
+   14:28:51 26 INFO   Drop tables on the target database, per --drop-if-exists
+   14:28:51 26 INFO   No tables to migrate, skipping drop tables on the target database
+   14:28:51 26 INFO    /usr/bin/pg_restore --dbname 'postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60' --single-transaction --clean --
 
 
 Then copy the data over:
@@ -606,24 +609,26 @@ Then copy the data over:
 ::
 
    $ pgcopydb copy table-data --resume --not-consistent
-   15:24:36 75688 INFO  [SOURCE] Copying database from "port=54311 host=localhost dbname=pgloader"
-   15:24:36 75688 INFO  [TARGET] Copying database into "port=54311 dbname=plop"
-   15:24:36 75688 INFO  Removing the stale pid file "/tmp/pgcopydb/pgcopydb.pid"
-   15:24:36 75688 INFO  STEP 3: copy data from source to target in sub-processes
-   15:24:36 75688 INFO  Listing ordinary tables in "port=54311 host=localhost dbname=pgloader"
-   15:24:36 75688 INFO  Fetched information for 56 tables
+    14:28:52 30 INFO   Running pgcopydb version 0.13.38.g22e6544.dirty from "/usr/local/bin/pgcopydb"
+    14:28:52 30 INFO   [SOURCE] Copying database from "postgres://pagila@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
+    14:28:52 30 INFO   [TARGET] Copying database into "postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
+    14:28:52 30 INFO   Schema dump for pre-data and post-data section have been done
+    14:28:52 30 INFO   Pre-data schema has been restored on the target instance
+    14:28:52 30 INFO   Copy data from source to target in sub-processes
    ...
-                                             Step   Connection    Duration   Concurrency
-    ---------------------------------------------   ----------  ----------  ------------
-                                      Dump Schema       source         0ms             1
-                                   Prepare Schema       target         0ms             1
-    COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both         0ms         4 + 4
-                                COPY (cumulative)         both       1s140             4
-                        CREATE INDEX (cumulative)       target         0ms             4
-                                  Finalize Schema       target         0ms             1
-    ---------------------------------------------   ----------  ----------  ------------
-                        Total Wall Clock Duration         both       2s143         4 + 4
-    ---------------------------------------------   ----------  ----------  ------------
+                                                  Step   Connection    Duration    Transfer   Concurrency
+    --------------------------------------------------   ----------  ----------  ----------  ------------
+                                           Dump Schema       source         0ms                         1
+      Catalog Queries (table ordering, filtering, etc)       source         0ms                         1
+                                        Prepare Schema       target         0ms                         1
+         COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both         0ms                     4 + 8
+                                     COPY (cumulative)         both       1s671     2955 kB             4
+                            Large Objects (cumulative)         both                                     4
+                CREATE INDEX, CONSTRAINTS (cumulative)       target         0ms                         4
+                                       Finalize Schema       target         0ms                         1
+    --------------------------------------------------   ----------  ----------  ----------  ------------
+                             Total Wall Clock Duration         both       753ms                     4 + 8
+    --------------------------------------------------   ----------  ----------  ----------  ------------
 
 
 And now create the indexes on the target database, using the index
@@ -632,47 +637,30 @@ definitions from the source database:
 ::
 
    $ pgcopydb copy indexes --resume --not-consistent
-   15:24:40 75918 INFO  [SOURCE] Copying database from "port=54311 host=localhost dbname=pgloader"
-   15:24:40 75918 INFO  [TARGET] Copying database into "port=54311 dbname=plop"
-   15:24:40 75918 INFO  Removing the stale pid file "/tmp/pgcopydb/pgcopydb.pid"
-   15:24:40 75918 INFO  STEP 4: create indexes in parallel
-   15:24:40 75918 INFO  Listing ordinary tables in "port=54311 host=localhost dbname=pgloader"
-   15:24:40 75918 INFO  Fetched information for 56 tables
-   15:24:40 75930 INFO  Creating 2 indexes for table "csv"."partial"
-   15:24:40 75922 INFO  Creating 1 index for table "csv"."track"
-   15:24:40 75931 INFO  Creating 1 index for table "err"."errors"
-   15:24:40 75928 INFO  Creating 1 index for table "csv"."blocks"
-   15:24:40 75925 INFO  Creating 1 index for table "public"."track_full"
-   15:24:40 76037 INFO  CREATE INDEX IF NOT EXISTS partial_b_idx ON csv.partial USING btree (b);
-   15:24:40 76036 INFO  CREATE UNIQUE INDEX IF NOT EXISTS track_pkey ON csv.track USING btree (trackid);
-   15:24:40 76035 INFO  CREATE UNIQUE INDEX IF NOT EXISTS partial_a_key ON csv.partial USING btree (a);
-   15:24:40 76038 INFO  CREATE UNIQUE INDEX IF NOT EXISTS errors_pkey ON err.errors USING btree (a);
-   15:24:40 75987 INFO  Creating 1 index for table "public"."xzero"
-   15:24:40 75969 INFO  Creating 1 index for table "public"."csv_escape_mode"
-   15:24:40 75985 INFO  Creating 1 index for table "public"."udc"
-   15:24:40 75965 INFO  Creating 1 index for table "public"."allcols"
-   15:24:40 75981 INFO  Creating 1 index for table "public"."serial"
-   15:24:40 76039 INFO  CREATE INDEX IF NOT EXISTS blocks_ip4r_idx ON csv.blocks USING gist (iprange);
-   15:24:40 76040 INFO  CREATE UNIQUE INDEX IF NOT EXISTS track_full_pkey ON public.track_full USING btree (trackid);
-   15:24:40 75975 INFO  Creating 1 index for table "public"."nullif"
-   15:24:40 76046 INFO  CREATE UNIQUE INDEX IF NOT EXISTS xzero_pkey ON public.xzero USING btree (a);
-   15:24:40 76048 INFO  CREATE UNIQUE INDEX IF NOT EXISTS udc_pkey ON public.udc USING btree (b);
-   15:24:40 76047 INFO  CREATE UNIQUE INDEX IF NOT EXISTS csv_escape_mode_pkey ON public.csv_escape_mode USING btree (id);
-   15:24:40 76049 INFO  CREATE UNIQUE INDEX IF NOT EXISTS allcols_pkey ON public.allcols USING btree (a);
-   15:24:40 76052 INFO  CREATE UNIQUE INDEX IF NOT EXISTS nullif_pkey ON public."nullif" USING btree (id);
-   15:24:40 76050 INFO  CREATE UNIQUE INDEX IF NOT EXISTS serial_pkey ON public.serial USING btree (a);
+   14:28:53 47 INFO   Running pgcopydb version 0.13.38.g22e6544.dirty from "/usr/local/bin/pgcopydb"
+   14:28:53 47 INFO   [SOURCE] Copying database from "postgres://pagila@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
+   14:28:53 47 INFO   [TARGET] Copying database into "postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
+   14:28:53 47 INFO   Schema dump for pre-data and post-data section have been done
+   14:28:53 47 INFO   Pre-data schema has been restored on the target instance
+   14:28:53 47 INFO   All the table data has been copied to the target instance
+   14:28:53 47 INFO   All the indexes have been copied to the target instance
+   14:28:53 47 INFO   Fetched information for 54 indexes
+   14:28:53 47 INFO   Creating 54 indexes in the target database using 4 processes
 
-                                             Step   Connection    Duration   Concurrency
-    ---------------------------------------------   ----------  ----------  ------------
-                                      Dump Schema       source         0ms             1
-                                   Prepare Schema       target         0ms             1
-    COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both         0ms         4 + 4
-                                COPY (cumulative)         both       619ms             4
-                        CREATE INDEX (cumulative)       target       1s023             4
-                                  Finalize Schema       target         0ms             1
-    ---------------------------------------------   ----------  ----------  ------------
-                        Total Wall Clock Duration         both       400ms         4 + 4
-    ---------------------------------------------   ----------  ----------  ------------
+                                                  Step   Connection    Duration    Transfer   Concurrency
+    --------------------------------------------------   ----------  ----------  ----------  ------------
+                                           Dump Schema       source         0ms                         1
+      Catalog Queries (table ordering, filtering, etc)       source         0ms                         1
+                                        Prepare Schema       target         0ms                         1
+         COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both         0ms                     4 + 8
+                                     COPY (cumulative)         both         0ms         0 B             4
+                            Large Objects (cumulative)         both                                     4
+                CREATE INDEX, CONSTRAINTS (cumulative)       target         0ms                         4
+                                       Finalize Schema       target         0ms                         1
+    --------------------------------------------------   ----------  ----------  ----------  ------------
+                             Total Wall Clock Duration         both       696ms                     4 + 8
+    --------------------------------------------------   ----------  ----------  ----------  ------------
+
 
 Now re-create the constraints (primary key, unique constraints) from the
 source database schema into the target database:
@@ -680,34 +668,31 @@ source database schema into the target database:
 ::
 
    $ pgcopydb copy constraints --resume --not-consistent
-   15:24:43 76095 INFO  [SOURCE] Copying database from "port=54311 host=localhost dbname=pgloader"
-   15:24:43 76095 INFO  [TARGET] Copying database into "port=54311 dbname=plop"
-   15:24:43 76095 INFO  Removing the stale pid file "/tmp/pgcopydb/pgcopydb.pid"
-   15:24:43 76095 INFO  STEP 4: create constraints
-   15:24:43 76095 INFO  Listing ordinary tables in "port=54311 host=localhost dbname=pgloader"
-   15:24:43 76095 INFO  Fetched information for 56 tables
-   15:24:43 76099 INFO  ALTER TABLE "csv"."track" ADD CONSTRAINT "track_pkey" PRIMARY KEY USING INDEX "track_pkey";
-   15:24:43 76107 INFO  ALTER TABLE "csv"."partial" ADD CONSTRAINT "partial_a_key" UNIQUE USING INDEX "partial_a_key";
-   15:24:43 76102 INFO  ALTER TABLE "public"."track_full" ADD CONSTRAINT "track_full_pkey" PRIMARY KEY USING INDEX "track_full_pkey";
-   15:24:43 76142 INFO  ALTER TABLE "public"."allcols" ADD CONSTRAINT "allcols_pkey" PRIMARY KEY USING INDEX "allcols_pkey";
-   15:24:43 76157 INFO  ALTER TABLE "public"."serial" ADD CONSTRAINT "serial_pkey" PRIMARY KEY USING INDEX "serial_pkey";
-   15:24:43 76161 INFO  ALTER TABLE "public"."xzero" ADD CONSTRAINT "xzero_pkey" PRIMARY KEY USING INDEX "xzero_pkey";
-   15:24:43 76146 INFO  ALTER TABLE "public"."csv_escape_mode" ADD CONSTRAINT "csv_escape_mode_pkey" PRIMARY KEY USING INDEX "csv_escape_mode_pkey";
-   15:24:43 76154 INFO  ALTER TABLE "public"."nullif" ADD CONSTRAINT "nullif_pkey" PRIMARY KEY USING INDEX "nullif_pkey";
-   15:24:43 76159 INFO  ALTER TABLE "public"."udc" ADD CONSTRAINT "udc_pkey" PRIMARY KEY USING INDEX "udc_pkey";
-   15:24:43 76108 INFO  ALTER TABLE "err"."errors" ADD CONSTRAINT "errors_pkey" PRIMARY KEY USING INDEX "errors_pkey";
+   14:28:54 53 INFO   Running pgcopydb version 0.13.38.g22e6544.dirty from "/usr/local/bin/pgcopydb"
+   14:28:54 53 INFO   [SOURCE] Copying database from "postgres://pagila@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
+   14:28:54 53 INFO   [TARGET] Copying database into "postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
+   14:28:54 53 INFO   Schema dump for pre-data and post-data section have been done
+   14:28:54 53 INFO   Pre-data schema has been restored on the target instance
+   14:28:54 53 INFO   All the table data has been copied to the target instance
+   14:28:54 53 INFO   All the indexes have been copied to the target instance
+   14:28:54 53 INFO   Create constraints
+   14:28:54 53 INFO   Fetched information for 54 indexes
+   14:28:54 53 INFO   Creating 54 indexes in the target database using 4 processes
 
-                                             Step   Connection    Duration   Concurrency
-    ---------------------------------------------   ----------  ----------  ------------
-                                      Dump Schema       source         0ms             1
-                                   Prepare Schema       target         0ms             1
-    COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both         0ms         4 + 4
-                                COPY (cumulative)         both       605ms             4
-                        CREATE INDEX (cumulative)       target       1s023             4
-                                  Finalize Schema       target         0ms             1
-    ---------------------------------------------   ----------  ----------  ------------
-                        Total Wall Clock Duration         both       415ms         4 + 4
-    ---------------------------------------------   ----------  ----------  ------------
+                                                  Step   Connection    Duration    Transfer   Concurrency
+    --------------------------------------------------   ----------  ----------  ----------  ------------
+                                           Dump Schema       source         0ms                         1
+      Catalog Queries (table ordering, filtering, etc)       source         0ms                         1
+                                        Prepare Schema       target         0ms                         1
+         COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both         0ms                     4 + 8
+                                     COPY (cumulative)         both         0ms         0 B             4
+                            Large Objects (cumulative)         both                                     4
+                CREATE INDEX, CONSTRAINTS (cumulative)       target         0ms                         4
+                                       Finalize Schema       target         0ms                         1
+    --------------------------------------------------   ----------  ----------  ----------  ------------
+                             Total Wall Clock Duration         both       283ms                     4 + 8
+    --------------------------------------------------   ----------  ----------  ----------  ------------
+
 
 The next step is a VACUUM ANALYZE on each table that's been just filled-in
 with the data, and for that we can just use the `vacuumdb`__ command from
@@ -718,15 +703,19 @@ __ https://www.postgresql.org/docs/current/app-vacuumdb.html
 ::
 
    $ vacuumdb --analyze --dbname "$PGCOPYDB_TARGET_PGURI" --jobs 4
-   vacuumdb: vacuuming database "plop"
+   vacuumdb: vacuuming database "pagila"
 
 Finally we can restore the post-data section of the schema:
 
 ::
 
    $ pgcopydb restore post-data --resume --not-consistent
-   15:24:50 76328 INFO  Removing the stale pid file "/tmp/pgcopydb/pgcopydb.pid"
-   15:24:50 76328 INFO  Restoring database from "/tmp/pgcopydb"
-   15:24:50 76328 INFO  Restoring database into "port=54311 dbname=plop"
-   15:24:50 76328 INFO  Using pg_restore for Postgres "12.9" at "/Applications/Postgres.app/Contents/Versions/12/bin/pg_restore"
-   15:24:50 76328 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_restore --dbname 'port=54311 dbname=plop' --use-list /tmp/pgcopydb/schema/post.list /tmp/pgcopydb/schema/post.dump
+   14:28:54 60 INFO   Running pgcopydb version 0.13.38.g22e6544.dirty from "/usr/local/bin/pgcopydb"
+   14:28:54 60 INFO   Schema dump for pre-data and post-data section have been done
+   14:28:54 60 INFO   Pre-data schema has been restored on the target instance
+   14:28:54 60 INFO   All the table data has been copied to the target instance
+   14:28:54 60 INFO   All the indexes have been copied to the target instance
+   14:28:54 60 INFO   Restoring database from existing files at "/tmp/pgcopydb"
+   14:28:54 60 INFO   Using pg_restore for Postgres "16.1" at "/usr/bin/pg_restore"
+   14:28:54 60 INFO   [TARGET] Restoring database into "postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
+   14:28:55 60 INFO    /usr/bin/pg_restore --dbname 'postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60' --single-transaction --use-list /tmp/pgcopydb/schema/post-filtered.list /tmp/pgcopydb/schema/post.dump
