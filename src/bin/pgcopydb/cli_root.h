@@ -43,7 +43,7 @@ extern CommandLine follow_command;
 extern CommandLine copy_commands;
 
 /* cli_snapshot.c */
-extern CommandLine create_snapshot_command;
+extern CommandLine snapshot_command;
 
 /* cli_dump.c */
 extern CommandLine dump_commands;

@@ -24,7 +24,7 @@
 static int cli_create_snapshot_getopts(int argc, char **argv);
 static void cli_create_snapshot(int argc, char **argv);
 
-CommandLine create_snapshot_command =
+CommandLine snapshot_command =
 	make_command(
 		"snapshot",
 		"Create and export a snapshot on the source database",
