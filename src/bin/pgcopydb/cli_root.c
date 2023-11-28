@@ -11,10 +11,10 @@
 
 /* local bindings for all the commands */
 CommandLine help =
-	make_command("help", "print help message", "", "", NULL, cli_help);
+	make_command("help", "Print help message", "", "", NULL, cli_help);
 
 CommandLine version =
-	make_command("version", "print pgcopydb version", "", "",
+	make_command("version", "Print pgcopydb version", "", "",
 				 cli_print_version_getopts,
 				 cli_print_version);
 
