@@ -15,6 +15,13 @@ pgcopydb ping
 
 psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pgcopydb/import.sql
 
+# Save info of blobs on the source to compare against the target after migration
+# for validation. We are doing this because we are going to insert some blobs
+# after taking snapshot and ensure we don't migrate them.
+SQL="select loid, count(data) as parts, sum(length(data)) as size from pg_largeobject group by loid order by loid;"
+
+psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -c "${SQL}" > /tmp/source.lo
+
 psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -c 'table pg_largeobject_metadata'
 psql -d ${PGCOPYDB_TARGET_PGURI} -1 -c 'table pg_largeobject_metadata'
 
@@ -40,6 +47,11 @@ export PGCOPYDB_SNAPSHOT="${sn}"
 # with a PGCOPYDB_SNAPSHOT in the environment, no need for --resume etc.
 echo snapshot ${PGCOPYDB_SNAPSHOT}
 
+# Insert some more blobs. This is to ensure we don't restore blobs on target
+# that weren't included in snapshot.
+psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pgcopydb/import.sql
+psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -c 'table pg_largeobject_metadata'
+
 pgcopydb dump schema --snapshot "${sn}"
 pgcopydb restore pre-data --resume
 
@@ -55,9 +67,6 @@ echo '\q' >&"${COPROC[1]}"
 
 wait ${COPROC_PID}
 
-SQL="select loid, count(data) as parts, sum(length(data)) as size from pg_largeobject group by loid order by loid;"
-
-psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -c "${SQL}" > /tmp/source.lo
 psql -d ${PGCOPYDB_TARGET_PGURI} -1 -c "${SQL}" > /tmp/target.lo
 
 diff /tmp/source.lo /tmp/target.lo
