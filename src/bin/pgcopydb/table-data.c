@@ -484,6 +484,24 @@ copydb_table_data_worker(CopyDataSpec *specs)
 		return false;
 	}
 
+	PGSQL *src = &(specs->sourceSnapshot.pgsql);
+	PGSQL dst = { 0 };
+
+	/* initialize our connection to the target database */
+	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* open connection to target and set GUC values */
+	if (!pgsql_set_gucs(&dst, dstSettings))
+	{
+		log_fatal("Failed to set our GUC settings on the target connection, "
+				  "see above for details");
+		return false;
+	}
+
 	while (true)
 	{
 		QMessage mesg = { 0 };
@@ -507,12 +525,16 @@ copydb_table_data_worker(CopyDataSpec *specs)
 			{
 				log_debug("Stop message received by COPY worker");
 				(void) copydb_close_snapshot(specs);
+
+				pgsql_finish(&dst);
 				return true;
 			}
 
 			case QMSG_TYPE_TABLEPOID:
 			{
 				if (!copydb_copy_data_by_oid(specs,
+											 src,
+											 &dst,
 											 mesg.data.tp.oid,
 											 mesg.data.tp.part))
 				{
@@ -525,6 +547,7 @@ copydb_table_data_worker(CopyDataSpec *specs)
 
 					if (specs->failFast)
 					{
+						pgsql_finish(&dst);
 						return false;
 					}
 
@@ -553,6 +576,8 @@ copydb_table_data_worker(CopyDataSpec *specs)
 	/* terminate our connection to the source database now */
 	(void) copydb_close_snapshot(specs);
 
+	pgsql_finish(&dst);
+
 	return errors == 0;
 }
 
@@ -562,7 +587,8 @@ copydb_table_data_worker(CopyDataSpec *specs)
  * COPY the table data to the target database.
  */
 bool
-copydb_copy_data_by_oid(CopyDataSpec *specs, uint32_t oid, uint32_t part)
+copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
+						uint32_t oid, uint32_t part)
 {
 	SourceTable *table = NULL;
 
@@ -641,7 +667,7 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, uint32_t oid, uint32_t part)
 	 */
 	if (!table->excludeData)
 	{
-		if (!copydb_copy_table(specs, &tableSpecs))
+		if (!copydb_copy_table(specs, src, dst, &tableSpecs))
 		{
 			/* errors have already been logged */
 			return false;
@@ -990,7 +1016,8 @@ copydb_table_parts_are_all_done(CopyDataSpec *specs,
  * in parallel.
  */
 bool
-copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
+copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
+				  CopyTableDataSpec *tableSpecs)
 {
 	/* COPY the data from the source table to the target table */
 	if (tableSpecs->section != DATA_SECTION_TABLE_DATA &&
@@ -1000,26 +1027,7 @@ copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 		return true;
 	}
 
-	/* we want to set transaction snapshot to the main one on the source */
-	PGSQL *src = &(specs->sourceSnapshot.pgsql);
-	PGSQL dst = { 0 };
-
 	CopyTableSummary *summary = tableSpecs->summary;
-
-	/* initialize our connection to the target database */
-	if (!pgsql_init(&dst, tableSpecs->connStrings->target_pguri, PGSQL_CONN_TARGET))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/* set GUC values for the target connection */
-	if (!pgsql_set_gucs(&dst, dstSettings))
-	{
-		log_fatal("Failed to set our GUC settings on the target connection, "
-				  "see above for details");
-		return false;
-	}
 
 	/* when using `pgcopydb copy table-data`, we don't truncate */
 	bool truncate = tableSpecs->section != DATA_SECTION_TABLE_DATA;
@@ -1049,7 +1057,7 @@ copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 		/* if the truncate done file already exists, it's been done already */
 		if (!file_exists(tableSpecs->tablePaths.truncateDoneFile))
 		{
-			if (!pgsql_truncate(&dst, tableSpecs->sourceTable->qname))
+			if (!pgsql_truncate(dst, tableSpecs->sourceTable->qname))
 			{
 				/* errors have already been logged */
 				(void) semaphore_unlock(&(specs->tableSemaphore));
@@ -1112,7 +1120,7 @@ copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 		++attempts;
 
 		/* ignore previous attempts, we need only one success here */
-		success = pg_copy(src, &dst, copySrc->data, copyDst->data, truncate,
+		success = pg_copy(src, dst, copySrc->data, copyDst->data, truncate,
 						  &(summary->bytesTransmitted));
 
 		if (success)
@@ -1133,7 +1141,7 @@ copydb_copy_table(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 
 			/* retry only on Connection Exception errors */
 			(pgsql_state_is_connection_error(src) ||
-			 pgsql_state_is_connection_error(&dst));
+			 pgsql_state_is_connection_error(dst));
 
 		if (maxAttempts <= attempts)
 		{
@@ -1263,7 +1271,7 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 		appendPQExpBuffer(query, "%s", tableSpecs->sourceTable->qname);
 
 		for (int i = 0; i < table->attributes.count; i++)
-		{			
+		{
 			SourceTableAttribute *attribute = &(table->attributes.array[i]);
 			char *attname = attribute->attname;
 

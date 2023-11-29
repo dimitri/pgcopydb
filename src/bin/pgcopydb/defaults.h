@@ -40,8 +40,6 @@
 #define PGCOPYDB_FAIL_FAST "PGCOPYDB_FAIL_FAST"
 #define PGCOPYDB_SKIP_VACUUM "PGCOPYDB_SKIP_VACUUM"
 
-#define PGCOPYDB_PGAPPNAME "pgcopydb"
-
 /* default values for the command line options */
 #define DEFAULT_TABLE_JOBS 4
 #define DEFAULT_INDEX_JOBS 4

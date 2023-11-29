@@ -52,7 +52,9 @@ static bool build_parameters_list(PQExpBuffer buffer,
 
 static void parseIdentifySystemResult(void *ctx, PGresult *result);
 static void parseTimelineHistoryResult(void *ctx, PGresult *result);
-
+static bool pg_copy_data(PGSQL *src, PGSQL *dst, const char *srcQname,
+						 const char *dstQname, bool truncate,
+						 uint64_t *bytesTransmitted);
 static bool pg_copy_send_query(PGSQL *pgsql,
 							   const char *qname,
 							   ExecStatusType status,
@@ -492,11 +494,14 @@ pgsql_open_connection(PGSQL *pgsql)
 				pgsql->safeURI.pguri);
 	}
 
-	/* use our own application_name, unless the environment already is set */
-	if (!env_exists("PGAPPNAME"))
-	{
-		setenv("PGAPPNAME", PGCOPYDB_PGAPPNAME, 1);
-	}
+	/*
+	 * set application_name to contain the process title and pid, so that it is
+	 * easier to identify our connections in pg_stat_activity.
+	 */
+	char app_name[BUFSIZE] = { 0 };
+
+	sformat(app_name, sizeof(app_name), "pgcopydb[%d] %s", getpid(), ps_buffer);
+	setenv("PGAPPNAME", app_name, 1);
 
 	/* we implement our own retry strategy */
 	if (!env_exists("PGCONNECT_TIMEOUT"))
@@ -2254,16 +2259,13 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 		bool truncate, uint64_t *bytesTransmitted)
 {
 	bool srcConnIsOurs = src->connection == NULL;
-	PGconn *srcConn = pgsql_open_connection(src);
-
-	if (srcConn == NULL)
+	if (!pgsql_open_connection(src))
 	{
 		return false;
 	}
 
-	PGconn *dstConn = pgsql_open_connection(dst);
-
-	if (dstConn == NULL)
+	bool dstConnIsOurs = dst->connection == NULL;
+	if (!pgsql_open_connection(dst))
 	{
 		/* errors have already been logged */
 		if (srcConnIsOurs)
@@ -2272,14 +2274,38 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 		}
 		return false;
 	}
+
+	bool result = pg_copy_data(src, dst, srcQname, dstQname,
+							   truncate, bytesTransmitted);
+
+	if (srcConnIsOurs)
+	{
+		pgsql_finish(src);
+	}
+
+	if (dstConnIsOurs)
+	{
+		pgsql_finish(dst);
+	}
+
+	return result;
+}
+
+
+/*
+ * pg_copy_data implements the core of pg_copy. That is, COPY operation from a
+ * source Postgres instance (src) to a target Postgres instance (dst). It
+ * expects src and dst are opened connection and doesn't manage their lifetime.
+ */
+static bool
+pg_copy_data(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
+			 bool truncate, uint64_t *bytesTransmitted)
+{
+	PGconn *srcConn = src->connection;
+	PGconn *dstConn = dst->connection;
 
 	if (!pgsql_begin(dst))
 	{
-		/* errors have already been logged */
-		if (srcConnIsOurs)
-		{
-			pgsql_finish(src);
-		}
 		return false;
 	}
 
@@ -2288,13 +2314,6 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 	{
 		if (!pgsql_truncate(dst, dstQname))
 		{
-			/* errors have already been logged */
-			if (srcConnIsOurs)
-			{
-				pgsql_finish(src);
-			}
-			pgsql_finish(dst);
-
 			return false;
 		}
 	}
@@ -2302,24 +2321,12 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 	/* SRC: COPY schema.table TO STDOUT */
 	if (!pg_copy_send_query(src, srcQname, PGRES_COPY_OUT, false))
 	{
-		if (srcConnIsOurs)
-		{
-			pgsql_finish(src);
-		}
-		pgsql_finish(dst);
-
 		return false;
 	}
 
 	/* DST: COPY schema.table FROM STDIN WITH (FREEZE) */
 	if (!pg_copy_send_query(dst, dstQname, PGRES_COPY_IN, truncate))
 	{
-		if (srcConnIsOurs)
-		{
-			pgsql_finish(src);
-		}
-		pgsql_finish(dst);
-
 		return false;
 	}
 
@@ -2335,13 +2342,6 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 		if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
 		{
 			log_debug("COPY was asked to stop");
-
-			if (srcConnIsOurs)
-			{
-				pgsql_finish(src);
-			}
-			(void) pgsql_finish(dst);
-
 			return false;
 		}
 
@@ -2376,11 +2376,6 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 
 			/* we're done here */
 			clear_results(src);
-
-			if (srcConnIsOurs)
-			{
-				pgsql_finish(src);
-			}
 
 			/* make sure to pass through and send this last COPY buffer */
 		}
@@ -2466,11 +2461,6 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 
 				clear_results(src);
 
-				if (srcConnIsOurs)
-				{
-					pgsql_finish(src);
-				}
-
 				break;
 			}
 		}
@@ -2509,15 +2499,12 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 
 		if (!failedOnDst)
 		{
-			if (!pgsql_commit(dst))
+			if (!pgsql_execute(dst, "COMMIT"))
 			{
 				failedOnDst = true;
 			}
 		}
 	}
-
-	/* always close the target connection, that we opened in this function */
-	(void) pgsql_finish(dst);
 
 	return !failedOnSrc && !failedOnDst;
 }

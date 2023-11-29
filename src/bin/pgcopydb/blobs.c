@@ -417,14 +417,14 @@ copydb_send_lo_stop(CopyDataSpec *specs)
 bool
 copydb_queue_largeobject_metadata(CopyDataSpec *specs, uint64_t *count)
 {
-	PGSQL *src = &(specs->sourceSnapshot.pgsql);
-
-	/* initialize our connection to the source database */
-	if (!pgsql_init(src, specs->connStrings.source_pguri, PGSQL_CONN_SOURCE))
+	/* connect to the source database and set snapshot */
+	if (!copydb_set_snapshot(specs))
 	{
 		/* errors have already been logged */
 		return false;
 	}
+
+	PGSQL *src = &(specs->sourceSnapshot.pgsql);
 
 	if (!pgsql_begin(src))
 	{
