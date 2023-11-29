@@ -494,11 +494,14 @@ pgsql_open_connection(PGSQL *pgsql)
 				pgsql->safeURI.pguri);
 	}
 
-	/* use our own application_name, unless the environment already is set */
-	if (!env_exists("PGAPPNAME"))
-	{
-		setenv("PGAPPNAME", PGCOPYDB_PGAPPNAME, 1);
-	}
+	/*
+	 * set application_name to contain the process title and pid, so that it is
+	 * easier to identify our connections in pg_stat_activity.
+	 */
+	char app_name[BUFSIZE] = { 0 };
+
+	sformat(app_name, sizeof(app_name), "pgcopydb[%d] %s", getpid(), ps_buffer);
+	setenv("PGAPPNAME", app_name, 1);
 
 	/* we implement our own retry strategy */
 	if (!env_exists("PGCONNECT_TIMEOUT"))
