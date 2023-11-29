@@ -127,7 +127,8 @@ pg_dump.
 Options
 -------
 
-The following options are available to ``pgcopydb dump schema``:
+The following options are available to ``pgcopydb dump schema``, ``pgcopydb dump pre-data``
+and ``pgcopydb dump post-data`` subcommands:
 
 --source
 

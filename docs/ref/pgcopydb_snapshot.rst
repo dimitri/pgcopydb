@@ -24,8 +24,7 @@ expect to find it.
 Options
 -------
 
-The following options are available to ``pgcopydb create`` and ``pgcopydb
-drop`` subcommands:
+The following options are available to ``pgcopydb snapshot``:
 
 --source
 

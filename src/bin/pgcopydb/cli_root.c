@@ -11,10 +11,10 @@
 
 /* local bindings for all the commands */
 CommandLine help =
-	make_command("help", "print help message", "", "", NULL, cli_help);
+	make_command("help", "Print help message", "", "", NULL, cli_help);
 
 CommandLine version =
-	make_command("version", "print pgcopydb version", "", "",
+	make_command("version", "Print pgcopydb version", "", "",
 				 cli_print_version_getopts,
 				 cli_print_version);
 
@@ -26,7 +26,7 @@ CommandLine *root_subcommands_with_debug[] = {
 	&fork_command,
 	&follow_command,
 	&copy__db_command,          /* backward compat */
-	&create_snapshot_command,
+	&snapshot_command,
 	&compare_commands,
 	&copy_commands,
 	&dump_commands,
@@ -53,7 +53,7 @@ CommandLine *root_subcommands[] = {
 	&fork_command,
 	&follow_command,
 	&copy__db_command,          /* backward compat */
-	&create_snapshot_command,
+	&snapshot_command,
 	&compare_commands,
 	&copy_commands,
 	&dump_commands,
