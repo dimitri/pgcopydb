@@ -284,6 +284,28 @@ cli_copydb_getenv(CopyDBOptions *options)
 		}
 	}
 
+	if (env_exists(PGCOPYDB_RESTORE_JOBS))
+	{
+		char jobs[BUFSIZE] = { 0 };
+
+		if (get_env_copy(PGCOPYDB_RESTORE_JOBS, jobs, sizeof(jobs)))
+		{
+			if (!stringToInt(jobs, &options->restoreOptions.jobs) ||
+				options->restoreOptions.jobs < 1 ||
+				options->restoreOptions.jobs > 128)
+			{
+				log_fatal("Failed to parse PGCOPYDB_RESTORE_JOBS: \"%s\"",
+						  jobs);
+				++errors;
+			}
+		}
+		else
+		{
+			/* errors have already been logged */
+			++errors;
+		}
+	}
+
 	if (env_exists(PGCOPYDB_LARGE_OBJECTS_JOBS))
 	{
 		char jobs[BUFSIZE] = { 0 };
@@ -713,6 +735,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "no-role-passwords", no_argument, NULL, 'P' },
 		{ "no-owner", no_argument, NULL, 'O' },       /* pg_restore -O */
 		{ "no-comments", no_argument, NULL, 'X' },
+		{ "restore-jobs", required_argument, NULL, 'j' },      /* pg_restore --jobs */
 		{ "no-acl", no_argument, NULL, 'x' }, /* pg_restore -x */
 		{ "skip-blobs", no_argument, NULL, 'B' },
 		{ "skip-large-objects", no_argument, NULL, 'B' },
@@ -750,6 +773,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	/* install default values */
 	options.tableJobs = DEFAULT_TABLE_JOBS;
 	options.indexJobs = DEFAULT_INDEX_JOBS;
+	options.restoreOptions.jobs = DEFAULT_RESTORE_JOBS;
 	options.lObjectJobs = DEFAULT_LARGE_OBJECTS_JOBS;
 	options.splitTablesLargerThan.bytes = DEFAULT_SPLIT_TABLES_LARGER_THAN;
 
@@ -761,7 +785,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	}
 
 	while ((c = getopt_long(argc, argv,
-							"S:T:D:J:I:b:L:cOBemlirRCN:xXCtfo:p:s:E:F:Q:iVvdzqh",
+							"S:T:D:J:I:b:L:cOBemlirRCN:xXj:Ctfo:p:s:E:F:Q:iVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -897,6 +921,19 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				options.restoreOptions.noComments = true;
 				log_trace("--no-comments");
+				break;
+			}
+
+			case 'j':
+			{
+				if (!stringToInt(optarg, &options.restoreOptions.jobs) ||
+					options.restoreOptions.jobs < 1 ||
+					options.restoreOptions.jobs > 128)
+				{
+					log_fatal("Failed to parse --restore-jobs count: \"%s\"", optarg);
+					++errors;
+				}
+				log_trace("--restore-jobs %d", options.restoreOptions.jobs);
 				break;
 			}
 
@@ -1131,6 +1168,13 @@ cli_copy_db_getopts(int argc, char **argv)
 				break;
 			}
 		}
+	}
+
+	/* if we haven't set restore-jobs, set it to index-jobs */
+	if (options.restoreOptions.jobs == DEFAULT_RESTORE_JOBS)
+	{
+		options.restoreOptions.jobs = options.indexJobs;
+		log_trace("--restore-jobs %d", options.indexJobs);
 	}
 
 	if (options.connStrings.source_pguri == NULL ||

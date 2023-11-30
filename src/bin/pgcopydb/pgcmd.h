@@ -187,6 +187,7 @@ typedef struct RestoreOptions
 	bool noOwner;
 	bool noComments;
 	bool noACL;
+	int jobs;
 } RestoreOptions;
 
 bool psql_version(PostgresPaths *pgPaths);
