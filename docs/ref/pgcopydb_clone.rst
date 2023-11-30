@@ -842,6 +842,7 @@ Examples
 --------
 
 ::
+
    $ export PGCOPYDB_SOURCE_PGURI=postgres://pagila:0wn3d@source/pagila
    $ export PGCOPYDB_TARGET_PGURI=postgres://pagila:0wn3d@target/pagila
    $ export PGCOPYDB_DROP_IF_EXISTS=on
