@@ -90,7 +90,7 @@ stream_apply_replay(StreamSpecs *specs)
 
 	if (!read_from_stream(specs->in, &readerContext))
 	{
-		log_error("Failed to transform JSON messages from input stream, "
+		log_error("Failed to read SQL lines from input stream, "
 				  "see above for details");
 		return false;
 	}
