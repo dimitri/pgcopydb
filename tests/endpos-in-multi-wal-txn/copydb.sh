@@ -112,7 +112,12 @@ test 16 -eq `psql -AtqX -d ${PGCOPYDB_TARGET_PGURI} -c "${sql}"`
 pgcopydb stream sentinel set endpos --current
 # and replay the available changes, including the 3rd txn.
 pgcopydb follow --resume --trace
-#
+
+# This operation is expected to be a no-op. It tests the scenario where,
+# upon resuming, we skip a transaction that lacks a commitLSN in its
+# BEGIN message but has already been applied.
+pgcopydb stream apply --trace --resume /var/lib/postgres/.local/share/pgcopydb/000000010000000000000004.sql
+
 # now check that all the new rows made it
 sql="select count(*) from table_a"
 test 24 -eq `psql -AtqX -d ${PGCOPYDB_TARGET_PGURI} -c "${sql}"`
