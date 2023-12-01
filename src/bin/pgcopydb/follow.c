@@ -606,6 +606,23 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	}
 
 	/*
+	 * Close pipe ends which follow is not using. Otherwise the processes
+	 * like transform and apply which reads from the pipe during replay
+	 * will never see EOF.
+	 */
+	if (streamSpecs->stdOut)
+	{
+		close_fd_or_exit(streamSpecs->pipe_rt[1]);
+		close_fd_or_exit(streamSpecs->pipe_rt[0]);
+	}
+
+	if (streamSpecs->stdIn)
+	{
+		close_fd_or_exit(streamSpecs->pipe_ta[0]);
+		close_fd_or_exit(streamSpecs->pipe_ta[1]);
+	}
+
+	/*
 	 * Finally wait until the process are finished.
 	 *
 	 * This happens when the sentinel endpos is set, typically using the
@@ -718,6 +735,8 @@ follow_start_transform(StreamSpecs *specs)
 
 		bool success = stream_transform_stream(specs);
 
+		log_info("Transform process has terminated");
+
 		close_fd_or_exit(specs->pipe_rt[0]);
 		close_fd_or_exit(specs->pipe_ta[1]);
 
@@ -734,7 +753,11 @@ follow_start_transform(StreamSpecs *specs)
 		specs->stdIn = false;
 		specs->stdOut = false;
 
-		return stream_transform_worker(specs);
+		bool success = stream_transform_worker(specs);
+
+		log_info("Transform process has terminated");
+
+		return success;
 	}
 
 	return true;
@@ -766,6 +789,8 @@ follow_start_catchup(StreamSpecs *specs)
 
 		bool success = stream_apply_replay(specs);
 
+		log_info("Apply process has terminated");
+
 		close_fd_or_exit(specs->pipe_ta[0]);
 
 		return success;
@@ -781,7 +806,11 @@ follow_start_catchup(StreamSpecs *specs)
 		specs->stdIn = false;
 		specs->stdOut = false;
 
-		return stream_apply_catchup(specs);
+		bool success = stream_apply_catchup(specs);
+
+		log_info("Apply process has terminated");
+
+		return success;
 	}
 
 	return true;
