@@ -4045,7 +4045,7 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 		{
 			int pos;
 			bool replyRequested;
-			XLogRecPtr walEnd;
+			XLogRecPtr cur_record_lsn;
 			bool endposReached = false;
 
 			/*
@@ -4054,12 +4054,18 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 			 * rest.
 			 */
 			pos = 1;            /* skip msgtype 'k' */
-			walEnd = fe_recvint64(&copybuf[pos]);
+			cur_record_lsn = fe_recvint64(&copybuf[pos]);
+
+			/*
+			 * Extract WAL location for keepalive messages in case we call
+			 * keepaliveFunction (directly or via flushAndSendFeedback)
+			 */
+			context->cur_record_lsn = cur_record_lsn;
 
 			client->current.written_lsn =
-				Max(walEnd, client->current.written_lsn);
+				Max(cur_record_lsn, client->current.written_lsn);
 
-			pos += 8;           /* read walEnd */
+			pos += 8;           /* read WAL location */
 
 			/* Extract server's system clock at the time of transmission */
 			context->sendTime = fe_recvint64(&copybuf[pos]);
@@ -4073,25 +4079,24 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 			}
 			replyRequested = copybuf[pos];
 
-			if (client->endpos != InvalidXLogRecPtr && walEnd >= client->endpos)
+			if (client->endpos != InvalidXLogRecPtr && cur_record_lsn >= client->endpos)
 			{
 				/*
 				 * If there's nothing to read on the socket until a keepalive
 				 * we know that the server has nothing to send us; and if
-				 * walEnd has passed endpos, we know nothing else can have
+				 * cur_record_lsn has passed endpos, we know nothing else can have
 				 * committed before endpos.  So we can bail out now.
 				 */
 				endposReached = true;
 
 				log_debug("pgsql_stream_logical: endpos reached on keepalive: "
 						  "%X/%X",
-						  LSN_FORMAT_ARGS(walEnd));
+						  LSN_FORMAT_ARGS(cur_record_lsn));
 			}
 
 			/* call the keepaliveFunction callback now, ignore errors */
 			if (replyRequested)
 			{
-				context->cur_record_lsn = walEnd;
 				context->now = client->now;
 
 				(void) (*client->keepaliveFunction)(context);
