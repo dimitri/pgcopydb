@@ -112,6 +112,14 @@ typedef struct SourceSequenceArrayContext
 	bool parsedOk;
 } SourceSequenceArrayContext;
 
+/* Context used when fetching database definitions */
+typedef struct SourceMatViewArrayContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	SourceMatViewArray *matvArray;
+	bool parsedOk;
+} SourceMatViewArrayContext;
+
 /* Context used when fetching all the indexes definitions */
 typedef struct SourceIndexArrayContext
 {
@@ -175,6 +183,12 @@ static bool parseCurrentSourceTable(PGresult *result,
 									SourceTable *table);
 
 static bool parseAttributesArray(SourceTable *table, JSON_Value *json);
+
+static void getMatViewList(void *ctx, PGresult *result);
+
+static bool parseCurrentSourceMatview(PGresult *result,
+									  int rowNumber,
+									  SourceMatView *matv);
 
 static void getSequenceArray(void *ctx, PGresult *result);
 
@@ -2380,6 +2394,55 @@ schema_set_sequence_value(PGSQL *pgsql, SourceSequence *seq)
 	{
 		log_error("Failed to set sequence %s last value to %lld",
 				  seq->qname, (long long) seq->lastValue);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * matviews_list runs a Postgres catalog query that lists Materialized Views
+ * definitions.
+ */
+bool
+schema_list_matviews(PGSQL *pgsql,
+					 SourceFilters *filters,
+					 SourceMatViewArray *matvArray)
+{
+	SourceMatViewArrayContext parseContext = { { 0 }, matvArray, false };
+
+	char *sql =
+		"  select c.oid, "
+		"         format('%I', n.nspname) as nspname, "
+		"         format('%I', c.relname) as relname, "
+		"         relispopulated, "
+		"         definition, "
+		"         json_agg(i.indexrelid::bigint) "
+
+		"  from pg_catalog.pg_class c"
+		"       join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
+		"       join pg_catalog.pg_matviews m "
+		"         on m.schemaname = n.nspname "
+		"        and m.matviewname = c.relname "
+		"       join pg_catalog.pg_index i on i.indrelid = c.oid"
+
+		" where c.relkind = 'm' "
+
+		"group by c.oid, nspname, relname, relispopulated, definition "
+		"order by nspname, relname";
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   0, NULL, NULL,
+								   &parseContext, &getMatViewList))
+	{
+		log_error("Failed to list matviews");
+		return false;
+	}
+
+	if (!parseContext.parsedOk)
+	{
+		log_error("Failed to list matviews");
 		return false;
 	}
 
@@ -5053,6 +5116,155 @@ parseCurrentSourceSequence(PGresult *result, int rowNumber, SourceSequence *seq)
 			++errors;
 		}
 	}
+
+	return errors == 0;
+}
+
+
+/*
+ * getIndexArray loops over the SQL result for the matviews query and allocates
+ * an array of matview then populates it with the query result.
+ */
+static void
+getMatViewList(void *ctx, PGresult *result)
+{
+	SourceMatViewArrayContext *context = (SourceMatViewArrayContext *) ctx;
+	int nTuples = PQntuples(result);
+
+	log_debug("getMatViewList: %d", nTuples);
+
+	if (PQnfields(result) != 6)
+	{
+		log_error("Query returned %d columns, expected 6", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	/* we're not supposed to re-cycle arrays here */
+	if (context->matvArray->array != NULL)
+	{
+		/* issue a warning but let's try anyway */
+		log_warn("BUG? context's array is not null in getMatViewList");
+
+		free(context->matvArray->array);
+		context->matvArray->array = NULL;
+	}
+
+	context->matvArray->count = nTuples;
+	context->matvArray->array =
+		(SourceMatView *) calloc(nTuples, sizeof(SourceMatView));
+
+	if (context->matvArray->array == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return;
+	}
+
+	bool parsedOk = true;
+
+	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
+	{
+		SourceMatView *matv = &(context->matvArray->array[rowNumber]);
+
+		parsedOk = parsedOk &&
+				   parseCurrentSourceMatview(result, rowNumber, matv);
+	}
+
+	if (!parsedOk)
+	{
+		free(context->matvArray->array);
+		context->matvArray->array = NULL;
+	}
+
+	context->parsedOk = parsedOk;
+}
+
+
+/*
+ * parseCurrentSourceMatview parses a single row of the matview listing query
+ * result.
+ */
+static bool
+parseCurrentSourceMatview(PGresult *result, int rowNumber, SourceMatView *matv)
+{
+	int errors = 0;
+
+	/* 1. c.oid */
+	char *value = PQgetvalue(result, rowNumber, 0);
+
+	if (!stringToUInt32(value, &(matv->oid)) || matv->oid == 0)
+	{
+		log_error("Invalid OID \"%s\"", value);
+		++errors;
+	}
+
+	/* 2. n.nspname */
+	value = PQgetvalue(result, rowNumber, 1);
+	int length = strlcpy(matv->nspname, value, PG_NAMEDATALEN);
+
+	if (length >= PG_NAMEDATALEN)
+	{
+		log_error("Schema name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+				  value, length, PG_NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* 3. c.relname */
+	value = PQgetvalue(result, rowNumber, 2);
+	length = strlcpy(matv->relname, value, PG_NAMEDATALEN);
+
+	if (length >= PG_NAMEDATALEN)
+	{
+		log_error("Materialized View name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+				  value, length, PG_NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* compute the qualified name from the nspname and relname */
+	length = sformat(matv->qname, sizeof(matv->qname), "%s.%s",
+					 matv->nspname,
+					 matv->relname);
+
+	if (length >= sizeof(matv->qname))
+	{
+		log_error("Qualified seq name \"%s\".\"%s\" is %d bytes long, "
+				  "the maximum expected is %lld",
+				  matv->nspname,
+				  matv->relname,
+				  length,
+				  (long long) sizeof(matv->qname) - 1);
+		++errors;
+	}
+
+	/* 4. relispopulated */
+	value = PQgetvalue(result, rowNumber, 3);
+
+	if (value == NULL || ((*value != 't') && (*value != 'f')))
+	{
+		log_error("Invalid relispopulated value \"%s\"", value);
+		++errors;
+	}
+	else
+	{
+		matv->isPopulated = (*value) == 't';
+	}
+
+	/* 5. sql definition */
+	value = PQgetvalue(result, rowNumber, 4);
+	length = strlen(value) + 1;
+	matv->def = (char *) calloc(length, sizeof(char));
+
+	if (matv->def == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	strlcpy(matv->def, value, length);
+
+	/* 6. index oid array */
 
 	return errors == 0;
 }

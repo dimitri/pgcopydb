@@ -300,6 +300,31 @@ typedef struct SourceIndexList
 } SourceIndexList;
 
 
+typedef struct SourceMatView
+{
+	uint32_t oid;
+
+	char qname[PG_NAMEDATALEN_FQ];
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
+
+	bool isPopulated;
+	char *def;                  /* malloc'ed area */
+
+	SourceIndexList *firstIndex;
+	SourceIndexList *lastIndex;
+
+	UT_hash_handle hh;          /* makes this structure hashable */
+} SourceMatView;
+
+
+typedef struct SourceMatViewArray
+{
+	int count;
+	SourceMatView *array;         /* malloc'ed area */
+} SourceMatViewArray;
+
+
 /*
  * SourceDepend caches the information about the dependency graph of
  * filtered-out objects. When filtering-out a table, we want to also filter-out
@@ -361,6 +386,7 @@ typedef struct SourceCatalog
 	SourceExtensionArray extensionArray;
 	SourceCollationArray collationArray;
 	SourceTableArray sourceTableArray;
+	SourceMatViewArray sourceMatvArray;
 	SourceIndexArray sourceIndexArray;
 	SourceSequenceArray sequenceArray;
 
@@ -421,6 +447,10 @@ bool schema_list_ordinary_tables_without_pk(PGSQL *pgsql,
 											SourceTableArray *tableArray);
 
 bool schema_list_partitions(PGSQL *pgsql, SourceTable *table, uint64_t partSize);
+
+bool schema_list_matviews(PGSQL *pgsql,
+						  SourceFilters *filters,
+						  SourceMatViewArray *matvArray);
 
 bool schema_list_sequences(PGSQL *pgsql,
 						   SourceFilters *filters,

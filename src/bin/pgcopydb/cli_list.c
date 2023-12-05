@@ -33,6 +33,7 @@ static void cli_list_extension_requirements(int argc, char **argv);
 static void cli_list_collations(int argc, char **argv);
 static void cli_list_tables(int argc, char **argv);
 static void cli_list_table_parts(int argc, char **argv);
+static void cli_list_matviews(int argc, char **argv);
 static void cli_list_sequences(int argc, char **argv);
 static void cli_list_indexes(int argc, char **argv);
 static void cli_list_depends(int argc, char **argv);
@@ -97,6 +98,17 @@ static CommandLine list_table_parts_command =
 		"  --split-tables-larger-than  Size threshold to consider partitioning\n",
 		cli_list_db_getopts,
 		cli_list_table_parts);
+
+static CommandLine list_matviews_command =
+	make_command(
+		"matviews",
+		"List all the materialized views to copy data from",
+		" --source ... ",
+		"  --source            Postgres URI to the source database\n"
+		"  --filter <filename> Use the filters defined in <filename>\n"
+		"  --list-skipped      List only tables that are setup to be skipped\n",
+		cli_list_db_getopts,
+		cli_list_matviews);
 
 static CommandLine list_sequences_command =
 	make_command(
@@ -164,6 +176,7 @@ static CommandLine *list_subcommands[] = {
 	&list_collations_command,
 	&list_tables_command,
 	&list_table_parts_command,
+	&list_matviews_command,
 	&list_sequences_command,
 	&list_indexes_command,
 	&list_depends_command,
@@ -1259,7 +1272,7 @@ cli_list_table_parts(int argc, char **argv)
 
 
 /*
- * cli_list_tables implements the command: pgcopydb list tables
+ * cli_list_sequences implements the command: pgcopydb list sequences
  */
 static void
 cli_list_sequences(int argc, char **argv)
@@ -1333,6 +1346,82 @@ cli_list_sequences(int argc, char **argv)
 				sequenceArray.array[i].ownedby,
 				sequenceArray.array[i].attrelid,
 				sequenceArray.array[i].attroid);
+	}
+
+	fformat(stdout, "\n");
+}
+
+
+/*
+ * cli_list_matviews implements the command: pgcopydb list matviews
+ */
+static void
+cli_list_matviews(int argc, char **argv)
+{
+	PGSQL pgsql = { 0 };
+	SourceFilters filters = { 0 };
+	SourceMatViewArray matviewArray = { 0, NULL };
+
+	log_info("Listing matviews in source database");
+
+	if (!IS_EMPTY_STRING_BUFFER(listDBoptions.filterFileName))
+	{
+		if (!parse_filters(listDBoptions.filterFileName, &filters))
+		{
+			log_error("Failed to parse filters in file \"%s\"",
+					  listDBoptions.filterFileName);
+			exit(EXIT_CODE_BAD_ARGS);
+		}
+
+		if (listDBoptions.listSkipped)
+		{
+			if (filters.type != SOURCE_FILTER_TYPE_NONE)
+			{
+				filters.type = filterTypeComplement(filters.type);
+
+				if (filters.type == SOURCE_FILTER_TYPE_NONE)
+				{
+					log_error("BUG: can't list skipped matviews "
+							  " from filtering type %d",
+							  filters.type);
+					exit(EXIT_CODE_INTERNAL_ERROR);
+				}
+			}
+		}
+	}
+
+	ConnStrings *dsn = &(listDBoptions.connStrings);
+
+	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	if (!schema_list_matviews(&pgsql, &filters, &matviewArray))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_info("Fetched information for %d matviews", matviewArray.count);
+
+	fformat(stdout, "%8s | %20s | %30s | %11s \n",
+			"OID", "Schema Name", "Matview Name", "isPopulated");
+
+	fformat(stdout, "%8s-+-%20s-+-%30s-+-%11s\n",
+			"--------",
+			"--------------------",
+			"------------------------------",
+			"-----------");
+
+	for (int i = 0; i < matviewArray.count; i++)
+	{
+		fformat(stdout, "%8d | %20s | %30s | %11s\n",
+				matviewArray.array[i].oid,
+				matviewArray.array[i].nspname,
+				matviewArray.array[i].relname,
+				matviewArray.array[i].isPopulated ? "yes" : "no");
 	}
 
 	fformat(stdout, "\n");
