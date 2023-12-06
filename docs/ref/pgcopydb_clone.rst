@@ -30,6 +30,7 @@ Postgres instance to the target Postgres instance.
      --dir                      Work directory to use
      --table-jobs               Number of concurrent COPY jobs to run
      --index-jobs               Number of concurrent CREATE INDEX jobs to run
+     --restore-jobs             Number of concurrent jobs for pg_restore
      --large-objects-jobs       Number of concurrent Large Objects jobs to run
      --split-tables-larger-than Same-table concurrency size threshold
      --drop-if-exists           On the target database, clean-up from a previous run first
@@ -115,6 +116,9 @@ The ``pgcopydb clone`` command implements the following steps:
      When filtering is used, the ``pg_restore --use-list`` feature is used
      to filter the list of objects to restore in this step.
 
+     This step uses as many as ``--restore-jobs`` jobs for ``pg_restore`` to
+     share the workload and restore the objects in parallel.
+
   4. Then as many as ``--table-jobs`` COPY sub-processes are started to
      share the workload and COPY the data from the source to the target
      database one table at a time, in a loop.
@@ -146,14 +150,14 @@ The ``pgcopydb clone`` command implements the following steps:
      be created in parallel with other indexes on the same table, avoiding
      an EXCLUSIVE LOCK while creating the index.
 
-  8. As many as ``-table-jobs`` VACUUM ANALYZE sub-processes are started to
+  8. As many as ``--table-jobs`` VACUUM ANALYZE sub-processes are started to
      share the workload. As soon as a table data COPY has completed, the
      table is queued for processing by the VACUUM ANALYZE sub-processes.
 
-  9. An auxilliary process is loops over the sequences on the source
-     database and for each of them runs a separate query on the source to
-     fetch the ``last_value`` and the ``is_called`` metadata the same way
-     that pg_dump does.
+  9. An auxilliary process loops over the sequences on the source database and
+     for each of them runs a separate query on the source to fetch the
+     ``last_value`` and the ``is_called`` metadata the same way that pg_dump
+     does.
 
      For each sequence, pgcopydb then calls ``pg_catalog.setval()`` on the
      target database with the information obtained on the source database.
@@ -165,6 +169,9 @@ The ``pgcopydb clone`` command implements the following steps:
       The *post-data* script is filtered out using the ``pg_restore
       --use-list`` option so that indexes and primary key constraints
       already created in steps 6 and 7 are properly skipped now.
+
+      This step uses as many as ``--restore-jobs`` jobs for ``pg_restore`` to
+      share the workload and restore the objects in parallel.
 
 .. _superuser:
 
@@ -422,6 +429,15 @@ The following options are available to ``pgcopydb clone``:
   set this option to the count of CPU cores that are available on the
   Postgres target system, minus some cores that are going to be used for
   handling the COPY operations.
+
+--restore-jobs
+
+  How many threads or processes can be used during pg_restore. A good option is
+  to set this option to the count of CPU cores that are available on the
+  Postgres target system.
+
+  If this value is not set, we reuse the ``--index-jobs`` value. If that value
+  is not set either, we use the the default value for ``--index-jobs``.
 
 --large-object-jobs
 
@@ -713,6 +729,12 @@ PGCOPYDB_INDEX_JOBS
 
    Number of concurrent jobs allowed to run CREATE INDEX operations in
    parallel. When ``--index-jobs`` is ommitted from the command line, then
+   this environment variable is used.
+
+PGCOPYDB_RESTORE_JOBS
+
+   Number of concurrent jobs allowed to run `pg_restore` operations in
+   parallel. When ``--restore-jobs`` is ommitted from the command line, then
    this environment variable is used.
 
 PGCOPYDB_LARGE_OBJECTS_JOBS

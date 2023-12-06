@@ -485,8 +485,8 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 	 *
 	 * Here's how to filter out some objects with pg_restore:
 	 *
-	 *   1. pg_restore -f out.list --list post.dump
-	 *   2. edit post.list to comment out lines
+	 *   1. pg_restore -f post.list --list post.dump
+	 *   2. edit post.list to comment out lines and save as filtered.list
 	 *   3. pg_restore --use-list filtered.list post.dump
 	 */
 	ArchiveContentArray contents = { 0 };
