@@ -52,6 +52,7 @@ also :ref:`pgcopydb_clone`.
      --dir                 Work directory to use
      --table-jobs          Number of concurrent COPY jobs to run
      --index-jobs          Number of concurrent CREATE INDEX jobs to run
+     --restore-jobs        Number of concurrent jobs for pg_restore
      --drop-if-exists      On the target database, clean-up from a previous run first
      --roles               Also copy roles found on source to target
      --no-owner            Do not set ownership of objects to match the original database
@@ -169,6 +170,7 @@ steps.
      --dir                 Work directory to use
      --table-jobs          Number of concurrent COPY jobs to run
      --index-jobs          Number of concurrent CREATE INDEX jobs to run
+     --restore-jobs        Number of concurrent jobs for pg_restore
      --drop-if-exists      On the target database, clean-up from a previous run first
      --no-owner            Do not set ownership of objects to match the original database
      --skip-large-objects  Skip copying large objects (blobs)
@@ -300,6 +302,7 @@ target database.
      --target          Postgres URI to the target database
      --dir             Work directory to use
 	 --index-jobs      Number of concurrent CREATE INDEX jobs to run
+     --restore-jobs    Number of concurrent jobs for pg_restore
      --restart         Allow restarting when temp files exist already
      --resume          Allow resuming operations after a failure
      --not-consistent  Allow taking a new snapshot on the source database
@@ -320,8 +323,8 @@ is found existing already on the target database.
 
 ::
 
-   pgcopydb copy indexes: Create all the indexes found in the source database in the target
-   usage: pgcopydb copy indexes  --source ... --target ... [ --table-jobs ... --index-jobs ... ]
+   pgcopydb copy constraints: Create all the constraints found in the source database in the target
+   usage: pgcopydb copy constraints  --source ... --target ... [ --table-jobs ... --index-jobs ... ]
 
      --source          Postgres URI to the source database
      --target          Postgres URI to the target database
@@ -530,6 +533,12 @@ PGCOPYDB_INDEX_JOBS
 
    Number of concurrent jobs allowed to run CREATE INDEX operations in
    parallel. When ``--index-jobs`` is ommitted from the command line, then
+   this environment variable is used.
+
+PGCOPYDB_RESTORE_JOBS
+
+   Number of concurrent jobs allowed to run `pg_restore` operations in
+   parallel. When ``--restore-jobs`` is ommitted from the command line, then
    this environment variable is used.
 
 PGCOPYDB_LARGE_OBJECTS_JOBS

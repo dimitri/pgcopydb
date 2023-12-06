@@ -819,7 +819,16 @@ pg_restore_db(PostgresPaths *pgPaths,
 	args[argsIndex++] = (char *) pgPaths->pg_restore;
 	args[argsIndex++] = "--dbname";
 	args[argsIndex++] = (char *) connStrings->safeTargetPGURI.pguri;
-	args[argsIndex++] = "--single-transaction";
+
+	if (options.jobs == 1)
+	{
+		args[argsIndex++] = "--single-transaction";
+	}
+	else
+	{
+		args[argsIndex++] = "--jobs";
+		args[argsIndex++] = intToString(options.jobs).strValue;
+	}
 
 	if (options.dropIfExists)
 	{
