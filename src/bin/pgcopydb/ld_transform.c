@@ -331,7 +331,8 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
 			return false;
 		}
 
-		if (sentinel.endpos <= metadata->lsn)
+		if (sentinel.endpos != InvalidXLogRecPtr &&
+			sentinel.endpos <= metadata->lsn)
 		{
 			*stop = true;
 
