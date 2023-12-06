@@ -1214,7 +1214,8 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 			{
 				appendPQExpBufferStr(query, ", ");
 			}
-			else {
+			else
+			{
 				isFirst = false;
 			}
 

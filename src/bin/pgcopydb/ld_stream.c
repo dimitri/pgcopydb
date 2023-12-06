@@ -864,6 +864,7 @@ stream_write_json(LogicalStreamContext *context, bool previous)
 	{
 		privateContext->transactionInProgress = false;
 	}
+
 	/*
 	 * We are not expecting STREAM_ACTION_ROLLBACK here. It's a custom
 	 * message we write directly to the "latest" file using
