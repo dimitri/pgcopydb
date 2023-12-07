@@ -629,6 +629,7 @@ splitLines(char *buffer, char **linesArray, int size)
 	return lineNumber;
 }
 
+
 /*
  * processBufferCallback is a function callback to use with the subcommands.c
  * library when we want to output a command's output as it's running, such as
@@ -652,6 +653,7 @@ processBufferCallback(const char *buffer, bool error)
 		}
 	}
 }
+
 
 /*
  * pretty_print_bytes pretty prints bytes in a human readable form. Given
@@ -683,6 +685,7 @@ pretty_print_bytes(char *buffer, size_t size, uint64_t bytes)
 	sformat(buffer, size, "%d %s", (int) count, suffixes[sIndex]);
 }
 
+
 /*
  * pretty_print_bytes_per_second pretty prints bytes transmitted per second in
  * a human readable form. Given 17179869184 it places the string
@@ -713,7 +716,7 @@ pretty_print_bytes_per_second(char *buffer, size_t size, uint64_t bytes,
 	};
 
 	uint sIndex = 0;
-	long double count = ((long double) bytes) * 1000 * 8 / durationMs ;
+	long double count = ((long double) bytes) * 1000 * 8 / durationMs;
 
 	while (count >= 10000 && sIndex < 7)
 	{

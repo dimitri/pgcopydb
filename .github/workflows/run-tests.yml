@@ -52,3 +52,12 @@ jobs:
         timeout-minutes: 5
         run: |
           make tests/${TEST}
+
+  style_checker:
+    runs-on: ubuntu-latest
+    container: citus/stylechecker:latest
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Check C style
+      run: citus_indent --check

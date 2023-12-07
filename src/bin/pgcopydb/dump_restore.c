@@ -251,10 +251,10 @@ copydb_copy_database_properties(CopyDataSpec *specs)
 				{
 					PQExpBuffer command = createPQExpBuffer();
 
-					makeAlterConfigCommand(conn, property->setconfig,
-										   "ROLE", property->rolname,
-										   "DATABASE", specs->connStrings.safeTargetPGURI.uriParams.dbname,
-										   command);
+					makeAlterConfigCommand(conn, property->setconfig, "ROLE",
+										   property->rolname, "DATABASE",
+										   specs->connStrings.safeTargetPGURI.uriParams.
+										   dbname, command);
 
 					/* chomp the \n */
 					if (command->data[command->len - 1] == '\n')
@@ -287,9 +287,9 @@ copydb_copy_database_properties(CopyDataSpec *specs)
 			{
 				PQExpBuffer command = createPQExpBuffer();
 
-				makeAlterConfigCommand(conn, property->setconfig,
-									   "DATABASE", specs->connStrings.safeTargetPGURI.uriParams.dbname, NULL, NULL,
-									   command);
+				makeAlterConfigCommand(conn, property->setconfig, "DATABASE",
+									   specs->connStrings.safeTargetPGURI.uriParams.dbname,
+									   NULL, NULL, command);
 
 				if (command->data[command->len - 1] == '\n')
 				{
