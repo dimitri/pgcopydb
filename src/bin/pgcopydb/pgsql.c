@@ -239,8 +239,14 @@ pgsql_set_interactive_retry_policy(ConnectionRetryPolicy *retryPolicy)
 
 /*
  * http://c-faq.com/lib/randrange.html
+ *
+ * With additional protection against division-by-zero.
  */
-#define random_between(R, M, N) ((M) + R / (RAND_MAX / ((N) -(M) +1) + 1))
+#define random_between(R, M, N) \
+	((((N) -(M) +1) == 0) \
+	 ? ((M) + R / (RAND_MAX / ((N) -(M)) + 1)) \
+	 : ((M) + R / (RAND_MAX / ((N) -(M) +1) + 1)))
+
 
 /*
  * pick_random_sleep_time picks a random sleep time between the given policy
