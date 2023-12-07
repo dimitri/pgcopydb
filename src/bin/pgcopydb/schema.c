@@ -1501,24 +1501,24 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
-		"                regexp_replace(r.relname, '[\\n\\r]', ' '), "
+		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')),"
 		"         NULL as partkey,"
 		"         NULL as attributes"
 
-		"    from pg_class r "
-		"         join pg_namespace n ON n.oid = r.relnamespace "
+		"    from pg_class c "
+		"         join pg_namespace n ON n.oid = c.relnamespace "
 		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
-		"         join pg_roles auth ON auth.oid = r.relowner"
-		"         left join pgcopydb_table_size ts on ts.oid = r.oid"
+		"         join pg_roles auth ON auth.oid = c.relowner"
+		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
-		"   where r.relkind = 'r' and r.relpersistence in ('p', 'u')  "
+		"   where c.relkind = 'r' and c.relpersistence in ('p', 'u')  "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and not exists "
 		"         ( "
 		"           select c.oid "
 		"             from pg_constraint c "
-		"            where c.conrelid = r.oid "
+		"            where c.conrelid = c.oid "
 		"              and c.contype = 'p' "
 		"         ) "
 
@@ -1528,11 +1528,11 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         select 1 "
 		"           from pg_depend d "
 		"          where d.classid = 'pg_class'::regclass "
-		"            and d.objid = r.oid "
+		"            and d.objid = c.oid "
 		"            and d.deptype = 'e' "
 		"       ) "
 
-		"order by n.nspname, r.relname"
+		"order by n.nspname, c.relname"
 	},
 
 	{
@@ -1548,29 +1548,29 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
-		"                regexp_replace(r.relname, '[\\n\\r]', ' '), "
+		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')),"
 		"         NULL as partkey,"
 		"         NULL as attributes"
 
-		"    from pg_class r "
-		"         join pg_namespace n ON n.oid = r.relnamespace "
+		"    from pg_class c "
+		"         join pg_namespace n ON n.oid = c.relnamespace "
 		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
-		"         join pg_roles auth ON auth.oid = r.relowner"
-		"         left join pgcopydb_table_size ts on ts.oid = r.oid"
+		"         join pg_roles auth ON auth.oid = c.relowner"
+		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* include-only-table */
 		"         join pg_temp.filter_include_only_table inc "
 		"           on n.nspname = inc.nspname "
-		"          and r.relname = inc.relname "
+		"          and c.relname = inc.relname "
 
-		"   where r.relkind = 'r' and r.relpersistence in ('p', 'u') "
+		"   where c.relkind = 'r' and c.relpersistence in ('p', 'u') "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and not exists "
 		"         ( "
 		"           select c.oid "
 		"             from pg_constraint c "
-		"            where c.conrelid = r.oid "
+		"            where c.conrelid = c.oid "
 		"              and c.contype = 'p' "
 		"         ) "
 
@@ -1580,11 +1580,11 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         select 1 "
 		"           from pg_depend d "
 		"          where d.classid = 'pg_class'::regclass "
-		"            and d.objid = r.oid "
+		"            and d.objid = c.oid "
 		"            and d.deptype = 'e' "
 		"       ) "
 
-		"order by n.nspname, r.relname"
+		"order by n.nspname, c.relname"
 	},
 
 	{
@@ -1600,16 +1600,16 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         ftd.relname is not null as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
-		"                regexp_replace(r.relname, '[\\n\\r]', ' '), "
+		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')),"
 		"         NULL as partkey,"
 		"         NULL as attributes"
 
-		"    from pg_class r "
-		"         join pg_namespace n ON n.oid = r.relnamespace "
+		"    from pg_class c "
+		"         join pg_namespace n ON n.oid = c.relnamespace "
 		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
-		"         join pg_roles auth ON auth.oid = r.relowner"
-		"         left join pgcopydb_table_size ts on ts.oid = r.oid"
+		"         join pg_roles auth ON auth.oid = c.relowner"
+		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -1618,20 +1618,20 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		/* exclude-table */
 		"         left join pg_temp.filter_exclude_table ft "
 		"                on n.nspname = ft.nspname "
-		"               and r.relname = ft.relname "
+		"               and c.relname = ft.relname "
 
 		/* exclude-table-data */
 		"         left join pg_temp.filter_exclude_table_data ftd "
 		"                on n.nspname = ftd.nspname "
-		"               and r.relname = ftd.relname "
+		"               and c.relname = ftd.relname "
 
-		"   where r.relkind = 'r' and r.relpersistence in ('p', 'u')  "
+		"   where c.relkind = 'r' and c.relpersistence in ('p', 'u')  "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and not exists "
 		"         ( "
 		"           select c.oid "
 		"             from pg_constraint c "
-		"            where c.conrelid = r.oid "
+		"            where c.conrelid = c.oid "
 		"              and c.contype = 'p' "
 		"         ) "
 
@@ -1646,11 +1646,11 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         select 1 "
 		"           from pg_depend d "
 		"          where d.classid = 'pg_class'::regclass "
-		"            and d.objid = r.oid "
+		"            and d.objid = c.oid "
 		"            and d.deptype = 'e' "
 		"       ) "
 
-		"order by n.nspname, r.relname"
+		"order by n.nspname, c.relname"
 	},
 
 	{
@@ -1666,29 +1666,29 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
-		"                regexp_replace(r.relname, '[\\n\\r]', ' '), "
+		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')),"
 		"         NULL as partkey,"
 		"         NULL as attributes"
 
-		"    from pg_class r "
-		"         join pg_namespace n ON n.oid = r.relnamespace "
+		"    from pg_class c "
+		"         join pg_namespace n ON n.oid = c.relnamespace "
 		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
-		"         join pg_roles auth ON auth.oid = r.relowner"
-		"         left join pgcopydb_table_size ts on ts.oid = r.oid"
+		"         join pg_roles auth ON auth.oid = c.relowner"
+		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* include-only-table */
 		"    left join pg_temp.filter_include_only_table inc "
 		"           on n.nspname = inc.nspname "
-		"          and r.relname = inc.relname "
+		"          and c.relname = inc.relname "
 
-		"   where r.relkind = 'r' and r.relpersistence in ('p', 'u')  "
+		"   where c.relkind = 'r' and c.relpersistence in ('p', 'u')  "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and not exists "
 		"         ( "
 		"           select c.oid "
 		"             from pg_constraint c "
-		"            where c.conrelid = r.oid "
+		"            where c.conrelid = c.oid "
 		"              and c.contype = 'p' "
 		"         ) "
 
@@ -1701,11 +1701,11 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         select 1 "
 		"           from pg_depend d "
 		"          where d.classid = 'pg_class'::regclass "
-		"            and d.objid = r.oid "
+		"            and d.objid = c.oid "
 		"            and d.deptype = 'e' "
 		"       ) "
 
-		"order by n.nspname, r.relname"
+		"order by n.nspname, c.relname"
 	},
 
 	{
@@ -1721,16 +1721,16 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
-		"                regexp_replace(r.relname, '[\\n\\r]', ' '), "
+		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')),"
 		"         NULL as partkey,"
 		"         NULL as attributes"
 
-		"    from pg_class r "
-		"         join pg_namespace n ON n.oid = r.relnamespace "
+		"    from pg_class c "
+		"         join pg_namespace n ON n.oid = c.relnamespace "
 		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
-		"         join pg_roles auth ON auth.oid = r.relowner"
-		"         left join pgcopydb_table_size ts on ts.oid = r.oid"
+		"         join pg_roles auth ON auth.oid = c.relowner"
+		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -1739,15 +1739,15 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		/* exclude-table */
 		"         left join pg_temp.filter_exclude_table ft "
 		"                on n.nspname = ft.nspname "
-		"               and r.relname = ft.relname "
+		"               and c.relname = ft.relname "
 
-		"   where r.relkind = 'r' and r.relpersistence in ('p', 'u')  "
+		"   where c.relkind = 'r' and c.relpersistence in ('p', 'u')  "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and not exists "
 		"         ( "
 		"           select c.oid "
 		"             from pg_constraint c "
-		"            where c.conrelid = r.oid "
+		"            where c.conrelid = c.oid "
 		"              and c.contype = 'p' "
 		"         ) "
 
@@ -1761,11 +1761,11 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         select 1 "
 		"           from pg_depend d "
 		"          where d.classid = 'pg_class'::regclass "
-		"            and d.objid = r.oid "
+		"            and d.objid = c.oid "
 		"            and d.deptype = 'e' "
 		"       ) "
 
-		"order by n.nspname, r.relname"
+		"order by n.nspname, c.relname"
 	}
 };
 
