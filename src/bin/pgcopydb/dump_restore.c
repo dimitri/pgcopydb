@@ -13,6 +13,7 @@
 #include "pqexpbuffer.h"
 #include "dumputils.h"
 
+#include "catalog.h"
 #include "copydb.h"
 #include "env_utils.h"
 #include "lock_utils.h"
@@ -22,6 +23,10 @@
 #include "signals.h"
 #include "string_utils.h"
 #include "summary.h"
+
+
+static bool copydb_append_table_hook(void *context, SourceTable *table);
+static bool copydb_copy_database_properties_hook(void *ctx, SourceProperty *property);
 
 
 /*
@@ -51,13 +56,6 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 						  const char *snapshot,
 						  PostgresDumpSection section)
 {
-	SourceExtensionArray *extensionArray = NULL;
-
-	if (specs->skipExtensions)
-	{
-		extensionArray = &(specs->catalog.extensionArray);
-	}
-
 	if (section == PG_DUMP_SECTION_SCHEMA ||
 		section == PG_DUMP_SECTION_PRE_DATA ||
 		section == PG_DUMP_SECTION_ALL)
@@ -73,7 +71,7 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 							 snapshot,
 							 "pre-data",
 							 &(specs->filters),
-							 extensionArray,
+							 &(specs->catalogs.filter),
 							 specs->dumpPaths.preFilename))
 		{
 			/* errors have already been logged */
@@ -104,7 +102,7 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 							 snapshot,
 							 "post-data",
 							 &(specs->filters),
-							 extensionArray,
+							 &(specs->catalogs.filter),
 							 specs->dumpPaths.postFilename))
 		{
 			/* errors have already been logged */
@@ -161,7 +159,7 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 	{
 		log_error("Failed to prepare the pg_restore --use-list catalogs, "
 				  "see above for details");
-		return true;
+		return false;
 	}
 
 	/*
@@ -204,6 +202,13 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 }
 
 
+typedef struct CopyPropertiesContext
+{
+	CopyDataSpec *specs;
+	PGSQL *dst;
+} CopyPropertiesContext;
+
+
 /*
  * copydb_copy_database_properties uses ALTER DATABASE SET commands to set the
  * properties on the target database to look the same way as on the source
@@ -212,6 +217,8 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 bool
 copydb_copy_database_properties(CopyDataSpec *specs)
 {
+	const char *s_dbname = specs->connStrings.safeSourcePGURI.uriParams.dbname;
+
 	PGSQL dst = { 0 };
 
 	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
@@ -226,87 +233,21 @@ copydb_copy_database_properties(CopyDataSpec *specs)
 		return false;
 	}
 
-	PGconn *conn = dst.connection;
-	SourceRole *rolesHashByName = specs->targetCatalog.rolesHashByName;
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	if (specs->catalog.gucsArray.count > 0)
+	CopyPropertiesContext context = {
+		.specs = specs,
+		.dst = &dst
+	};
+
+	if (!catalog_iter_s_database_guc(sourceDB,
+									 s_dbname,
+									 &context,
+									 &copydb_copy_database_properties_hook))
 	{
-		for (int i = 0; i < specs->catalog.gucsArray.count; i++)
-		{
-			SourceProperty *property = &(specs->catalog.gucsArray.array[i]);
-
-			/*
-			 * ALTER ROLE rolname IN DATABASE datname SET ...
-			 */
-			if (property->roleInDatabase)
-			{
-				char *rolname = property->rolname;
-				int len = strlen(rolname);
-
-				SourceRole *role = NULL;
-
-				HASH_FIND(hh, rolesHashByName, rolname, len, role);
-
-				if (role != NULL)
-				{
-					PQExpBuffer command = createPQExpBuffer();
-
-					makeAlterConfigCommand(conn, property->setconfig, "ROLE",
-										   property->rolname, "DATABASE",
-										   specs->connStrings.safeTargetPGURI.uriParams.
-										   dbname, command);
-
-					/* chomp the \n */
-					if (command->data[command->len - 1] == '\n')
-					{
-						command->data[command->len - 1] = '\0';
-					}
-
-					log_info("%s", command->data);
-
-					if (!pgsql_execute(&dst, command->data))
-					{
-						/* errors have already been logged */
-						return false;
-					}
-
-					destroyPQExpBuffer(command);
-				}
-				else
-				{
-					log_warn("Skipping database properties for role %s which "
-							 "does not exists on the target database",
-							 rolname);
-				}
-			}
-
-			/*
-			 * ALTER DATABASE datname SET ...
-			 */
-			else
-			{
-				PQExpBuffer command = createPQExpBuffer();
-
-				makeAlterConfigCommand(conn, property->setconfig, "DATABASE",
-									   specs->connStrings.safeTargetPGURI.uriParams.dbname,
-									   NULL, NULL, command);
-
-				if (command->data[command->len - 1] == '\n')
-				{
-					command->data[command->len - 1] = '\0';
-				}
-
-				log_info("%s", command->data);
-
-				if (!pgsql_execute(&dst, command->data))
-				{
-					/* errors have already been logged */
-					return false;
-				}
-
-				destroyPQExpBuffer(command);
-			}
-		}
+		/* errors have already been logged */
+		(void) pgsql_rollback(&dst);
+		return false;
 	}
 
 	if (!pgsql_commit(&dst))
@@ -320,6 +261,118 @@ copydb_copy_database_properties(CopyDataSpec *specs)
 
 
 /*
+ * copydb_copy_database_properties_hook is an iterator callback function.
+ */
+static bool
+copydb_copy_database_properties_hook(void *ctx, SourceProperty *property)
+{
+	CopyPropertiesContext *context = (CopyPropertiesContext *) ctx;
+
+	CopyDataSpec *specs = context->specs;
+
+	PGSQL *dst = context->dst;
+	PGconn *conn = dst->connection;
+
+	const char *t_dbname = specs->connStrings.safeTargetPGURI.uriParams.dbname;
+
+	/*
+	 * ALTER ROLE rolname IN DATABASE datname SET ...
+	 */
+	if (property->roleInDatabase)
+	{
+		DatabaseCatalog *targetDB = &(specs->catalogs.target);
+
+		SourceRole *role = (SourceRole *) calloc(1, sizeof(SourceRole));
+
+		if (role == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		if (!catalog_lookup_s_role_by_name(targetDB, property->rolname, role))
+		{
+			/* errors have already been logged */
+			free(role);
+			return false;
+		}
+
+		if (role->oid > 0)
+		{
+			PQExpBuffer command = createPQExpBuffer();
+
+			makeAlterConfigCommand(conn, property->setconfig,
+								   "ROLE", property->rolname,
+								   "DATABASE",
+								   t_dbname,
+								   command);
+
+			/* chomp the \n */
+			if (command->data[command->len - 1] == '\n')
+			{
+				command->data[command->len - 1] = '\0';
+			}
+
+			log_info("%s", command->data);
+
+			if (!pgsql_execute(dst, command->data))
+			{
+				/* errors have already been logged */
+				free(role);
+				return false;
+			}
+
+			destroyPQExpBuffer(command);
+		}
+		else
+		{
+			log_warn("Skipping database properties for role %s which "
+					 "does not exists on the target database",
+					 property->rolname);
+		}
+
+		free(role);
+	}
+
+	/*
+	 * ALTER DATABASE datname SET ...
+	 */
+	else
+	{
+		PQExpBuffer command = createPQExpBuffer();
+
+		makeAlterConfigCommand(conn, property->setconfig,
+							   "DATABASE", t_dbname,
+							   NULL, NULL,
+							   command);
+
+		if (command->data[command->len - 1] == '\n')
+		{
+			command->data[command->len - 1] = '\0';
+		}
+
+		log_info("%s", command->data);
+
+		if (!pgsql_execute(dst, command->data))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		destroyPQExpBuffer(command);
+	}
+
+	return true;
+}
+
+
+typedef struct DropTableContext
+{
+	PQExpBuffer query;
+	uint64_t tableIndex;
+} DropTableContext;
+
+/*
  * copydb_target_drop_tables prepares and executes a SQL query that prepares
  * our target database by means of a DROP IF EXISTS ... CASCADE statement that
  * includes all our target tables.
@@ -327,28 +380,36 @@ copydb_copy_database_properties(CopyDataSpec *specs)
 bool
 copydb_target_drop_tables(CopyDataSpec *specs)
 {
-	log_info("Drop tables on the target database, per --drop-if-exists");
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+	CatalogStats stats = { 0 };
 
-	SourceTableArray *tableArray = &(specs->catalog.sourceTableArray);
-
-	if (tableArray->count == 0)
+	if (!catalog_stats(sourceDB, &stats))
 	{
-		log_info("No tables to migrate, skipping drop tables on the target database");
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (stats.count.tables == 0)
+	{
+		log_info("No tables to migrate, skipping drop tables "
+				 "on the target database");
 		return true;
 	}
 
+	log_info("Drop tables on the target database, per --drop-if-exists");
+
 	PQExpBuffer query = createPQExpBuffer();
+
+	DropTableContext context = { .query = query, .tableIndex = 0 };
 
 	appendPQExpBufferStr(query, "DROP TABLE IF EXISTS");
 
-	for (int tableIndex = 0; tableIndex < tableArray->count; tableIndex++)
+	if (!catalog_iter_s_table(sourceDB, &context, &copydb_append_table_hook))
 	{
-		SourceTable *source = &(tableArray->array[tableIndex]);
-
-		appendPQExpBuffer(query, "%s %s.%s",
-						  tableIndex == 0 ? " " : ",",
-						  source->nspname,
-						  source->relname);
+		log_error("Failed to create DROP IF EXISTS query: "
+				  "see above for details");
+		destroyPQExpBuffer(query);
+		return false;
 	}
 
 	appendPQExpBufferStr(query, " CASCADE");
@@ -378,6 +439,29 @@ copydb_target_drop_tables(CopyDataSpec *specs)
 	}
 
 	destroyPQExpBuffer(query);
+
+	return true;
+}
+
+
+/*
+ * copydb_append_table_hook is an iterator callback function.
+ */
+static bool
+copydb_append_table_hook(void *ctx, SourceTable *table)
+{
+	if (table == NULL)
+	{
+		log_error("BUG: copydb_append_table_hook called with a NULL table");
+		return false;
+	}
+
+	DropTableContext *context = (DropTableContext *) ctx;
+
+	appendPQExpBuffer(context->query, "%s %s.%s",
+					  context->tableIndex++ == 0 ? " " : ",",
+					  table->nspname,
+					  table->relname);
 
 	return true;
 }

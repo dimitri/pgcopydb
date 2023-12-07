@@ -17,7 +17,6 @@ typedef struct DirectoryState
 	bool directoryExists;
 	bool directoryIsReady;
 
-	/* when we have a directory, what part of the job has been done? */
 	bool schemaDumpIsDone;
 	bool schemaPreDataHasBeenRestored;
 	bool schemaPostDataHasBeenRestored;
@@ -73,6 +72,9 @@ typedef struct CopyFilePaths
 	char topdir[MAXPGPATH];           /* /tmp/pgcopydb */
 	char pidfile[MAXPGPATH];          /* /tmp/pgcopydb/pgcopydb.pid */
 	char spidfile[MAXPGPATH];         /* /tmp/pgcopydb/pgcopydb.service.pid */
+	char sdbfile[MAXPGPATH];          /* /tmp/pgcopydb/schema/source.db */
+	char fdbfile[MAXPGPATH];          /* /tmp/pgcopydb/schema/filter.db */
+	char tdbfile[MAXPGPATH];          /* /tmp/pgcopydb/schema/target.db */
 	char snfile[MAXPGPATH];           /* /tmp/pgcopydb/snapshot */
 	char schemadir[MAXPGPATH];        /* /tmp/pgcopydb/schema */
 	char schemafile[MAXPGPATH];       /* /tmp/pgcopydb/schema.json */

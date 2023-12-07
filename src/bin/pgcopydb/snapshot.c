@@ -262,6 +262,21 @@ copydb_close_snapshot(CopyDataSpec *copySpecs)
 bool
 copydb_prepare_snapshot(CopyDataSpec *copySpecs)
 {
+	/*
+	 * Allow this function to be called within a context where a snapshot has
+	 * already been prepared. Typically copydb_fetch_schema_and_prepare_specs
+	 * needs to prepare the snapshot, but some higher-level functions already
+	 * did.
+	 */
+	if (copySpecs->sourceSnapshot.state != SNAPSHOT_STATE_UNKNOWN &&
+		copySpecs->sourceSnapshot.state != SNAPSHOT_STATE_CLOSED)
+	{
+		log_debug("copydb_prepare_snapshot: snapshot \"%s\" already prepared, "
+				  "skipping",
+				  copySpecs->sourceSnapshot.snapshot);
+		return true;
+	}
+
 	/* when --not-consistent is used, we have nothing to do here */
 	if (!copySpecs->consistent)
 	{
@@ -300,18 +315,21 @@ copydb_prepare_snapshot(CopyDataSpec *copySpecs)
 	}
 
 	/* store the snapshot in a file, to support --resume --snapshot ... */
-	if (!write_file(sourceSnapshot->snapshot,
-					strlen(sourceSnapshot->snapshot),
-					copySpecs->cfPaths.snfile))
+	if (!file_exists(copySpecs->cfPaths.snfile))
 	{
-		log_fatal("Failed to create the snapshot file \"%s\"",
-				  copySpecs->cfPaths.snfile);
-		return false;
-	}
+		if (!write_file(sourceSnapshot->snapshot,
+						strlen(sourceSnapshot->snapshot),
+						copySpecs->cfPaths.snfile))
+		{
+			log_fatal("Failed to create the snapshot file \"%s\"",
+					  copySpecs->cfPaths.snfile);
+			return false;
+		}
 
-	log_notice("Wrote snapshot \"%s\" to file \"%s\"",
-			   sourceSnapshot->snapshot,
-			   copySpecs->cfPaths.snfile);
+		log_notice("Wrote snapshot \"%s\" to file \"%s\"",
+				   sourceSnapshot->snapshot,
+				   copySpecs->cfPaths.snfile);
+	}
 
 	return true;
 }

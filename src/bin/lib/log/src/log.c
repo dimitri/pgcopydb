@@ -54,6 +54,7 @@ static struct {
 
 static const char *level_names[] = {
 	"TRACE",
+	"SQLite",
 	"DEBUG",
 	"SQL",
 	"NOTICE",
@@ -65,6 +66,7 @@ static const char *level_names[] = {
 
 static const char *level_colors[] = {
   "\x1b[90m",					/* TRACE:  bright black (light gray) */
+  "\x1b[30m",					/* SQLite: black */
   "\x1b[34m",					/* DEBUG:  blue */
   "\x1b[30m",					/* SQL:    black */
   "\x1b[36m",					/* NOTICE: cyan */
@@ -210,7 +212,7 @@ void log_log(int level, const char *file, int line, const char *fmt, ...)
   }
 
   /* max source filename is 20 chars long, max file lines is < 10000 (5) */
-  int showLineNumber = L.showLineNumber || L.level <= 1;
+  int showLineNumber = L.showLineNumber || L.level <= LOG_DEBUG;
   char fileLine[25] = { 0 };
 
   if (showLineNumber || (L.fp && L.fpFmt == LOG_FORMAT_TEXT))

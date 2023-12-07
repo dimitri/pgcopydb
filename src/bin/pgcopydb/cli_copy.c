@@ -395,7 +395,7 @@ cli_copy_table_data(int argc, char **argv)
 		exit(EXIT_CODE_TARGET);
 	}
 
-	if (!copydb_copy_all_table_data(&copySpecs))
+	if (!copydb_copy_supervisor(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -683,7 +683,7 @@ cli_copy_extensions(int argc, char **argv)
 {
 	CopyDataSpec copySpecs = { 0 };
 
-	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_EXTENSION);
+	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_EXTENSIONS);
 
 	if (!copydb_prepare_snapshot(&copySpecs))
 	{

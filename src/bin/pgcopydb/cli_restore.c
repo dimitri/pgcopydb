@@ -8,6 +8,7 @@
 #include <getopt.h>
 #include <inttypes.h>
 
+#include "catalog.h"
 #include "cli_common.h"
 #include "cli_root.h"
 #include "copydb.h"
@@ -430,6 +431,13 @@ cli_restore_schema(int argc, char **argv)
 
 	(void) cli_restore_prepare_specs(&copySpecs);
 
+	/* we need access to the catalogs to filter the pg_restore --list */
+	if (!catalog_init_from_specs(&copySpecs))
+	{
+		log_error("Failed to initialize pgcopydb internal catalogs");
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
 	if (!copydb_target_prepare_schema(&copySpecs))
 	{
 		/* errors have already been logged */
@@ -440,6 +448,12 @@ cli_restore_schema(int argc, char **argv)
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);
+	}
+
+	if (!catalog_close_from_specs(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 }
 
@@ -454,10 +468,23 @@ cli_restore_schema_pre_data(int argc, char **argv)
 
 	(void) cli_restore_prepare_specs(&copySpecs);
 
+	/* we need access to the catalogs to filter the pg_restore --list */
+	if (!catalog_init_from_specs(&copySpecs))
+	{
+		log_error("Failed to initialize pgcopydb internal catalogs");
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
 	if (!copydb_target_prepare_schema(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);
+	}
+
+	if (!catalog_close_from_specs(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 }
 
@@ -472,10 +499,23 @@ cli_restore_schema_post_data(int argc, char **argv)
 
 	(void) cli_restore_prepare_specs(&copySpecs);
 
+	/* we need access to the catalogs to filter the pg_restore --list */
+	if (!catalog_init_from_specs(&copySpecs))
+	{
+		log_error("Failed to initialize pgcopydb internal catalogs");
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
 	if (!copydb_target_finalize_schema(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);
+	}
+
+	if (!catalog_close_from_specs(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 }
 
@@ -641,6 +681,20 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 			exit(EXIT_CODE_BAD_ARGS);
 		}
 	}
+
+	/*
+	 * Prepare our internal catalogs for storing the source database catalog
+	 * query results.
+	 */
+	copySpecs->section = DATA_SECTION_ALL;
+
+	if (!copydb_fetch_schema_and_prepare_specs(copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	copySpecs->section = DATA_SECTION_NONE;
 
 	log_info("Using pg_restore for Postgres \"%s\" at \"%s\"",
 			 pgPaths->pg_version,

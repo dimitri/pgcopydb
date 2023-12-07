@@ -16,6 +16,7 @@
 
 #include "parson.h"
 
+#include "catalog.h"
 #include "cli_common.h"
 #include "cli_root.h"
 #include "copydb.h"
@@ -964,25 +965,42 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 	 * Now lookup our internal catalogs to find out for every column if it is
 	 * part of the pkey definition (WHERE clause) or not (SET clause).
 	 */
-	SourceCatalog *catalog = privateContext->catalog;
-	SourceTable *sourceTableHashByQName = catalog->sourceTableHashByQName;
+	DatabaseCatalog *sourceDB = privateContext->sourceDB;
 
-	SourceTable *table = NULL;
-
-	char *qname = header->qname;
-	size_t len = strlen(qname);
-
-	HASH_FIND(hhQName, sourceTableHashByQName, qname, len, table);
+	SourceTable *table = (SourceTable *) calloc(1, sizeof(SourceTable));
 
 	if (table == NULL)
 	{
-		log_error("Failed to parse decoding message for UPDATE on "
-				  "table %s which is not in our catalogs",
-				  qname);
+		log_error(ALLOCATION_FAILED_ERROR);
 		return false;
 	}
 
-	SourceTableAttributeArray *attributes = &(table->attributes);
+	if (!catalog_lookup_s_table_by_name(sourceDB,
+										header->nspname,
+										header->relname,
+										table))
+	{
+		/* errors have already been logged */
+		free(table);
+		return false;
+	}
+
+	if (table->oid == 0)
+	{
+		log_error("Failed to parse decoding message for UPDATE on "
+				  "table %s which is not in our catalogs",
+				  table->qname);
+		return false;
+	}
+
+	/* FIXME: lookup for the attribute in the SQLite database directly */
+	if (!catalog_s_table_fetch_attrs(sourceDB, table))
+	{
+		log_error("Failed to fetch table %s attribute list, "
+				  "see above for details",
+				  table->qname);
+		return false;
+	}
 
 	int columnCount = cols->values.array[0].cols;
 	bool *pkeyArray = (bool *) calloc(columnCount, sizeof(bool));
@@ -994,26 +1012,23 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 	{
 		const char *colname = cols->columns[c];
 
-		bool found = false;
+		SourceTableAttribute attribute = { 0 };
 
-		/* loop over table attributes to find current column name */
-		for (int i = 0; i < attributes->count; i++)
+		if (!catalog_lookup_s_attr_by_name(sourceDB,
+										   table->oid,
+										   colname,
+										   &attribute))
 		{
-			if (streq(attributes->array[i].attname, colname))
-			{
-				pkeyArray[c] = attributes->array[i].attisprimary;
-				found = true;
-				break;
-			}
-		}
-
-		if (!found)
-		{
-			log_error("Failed to parse decoding message for UPDATE on "
-					  "table %s: column %s not found",
+			log_error("Failed to lookup for table %s attribute %s in our "
+					  "internal catalogs, see above for details",
 					  table->qname,
 					  colname);
 			return false;
+		}
+
+		if (attribute.attnum > 0)
+		{
+			pkeyArray[c] = attribute.attisprimary;
 		}
 
 		if (pkeyArray[c])

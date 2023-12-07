@@ -1,6 +1,6 @@
        OID |                 Name |          Object name
 -----------+----------------------+---------------------
-     12329 |           en_US.utf8 |    database postgres
+     12329 |           en_US.utf8 | database postgres
      12440 |          de-DE-x-icu | column f2 of table colls 
      12559 |          en-US-x-icu | column f2 of table mycoltab 
      12658 |          fr-FR-x-icu | column f1 of table colls 

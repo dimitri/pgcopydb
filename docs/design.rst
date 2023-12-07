@@ -397,3 +397,76 @@ to use this feature:
     using same-table COPY concurrency.
 
     Use your usual Postgres configuration editing for testing.
+
+Internal Catalogs (SQLite)
+--------------------------
+
+To be able to implement pgcopydb operations, a list of SQL objects such as
+tables, indexes, constraints and sequences is needed internally. While
+pgcopydb used to handle such a list as an array in-memory, with also a
+hash-table for direct lookup (by oid and by *restore list name*), in some
+cases the source database contain so many objects that these arrays do not
+fit in memory.
+
+As pgcopydb is written in C, the current best approach to handle an array of
+objects that needs to spill to disk and supports direct lookup is actually
+the SQLite library, file format, and embedded database engine.
+
+That's why the current version of pgcopydb uses SQLite to handle its
+catalogs.
+
+Source, Filters, Target
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Internally pgcopydb stores metadata information in three different catalogs,
+all found in the ``${TMPDIR}/pgcopydb/schema/`` directory by default, unless
+using the recommended ``--dir`` option.
+
+  - The **source** catalog registers metadata about the source database, and
+    also some metadata about the pgcopydb context, consistentcy, and
+    progress.
+
+  - The **filters** catalog is only used with the ``--filters`` option is
+    used, and it registers metadata about the objects in the source database
+    that are going to be skipped.
+
+    This is necessary because the filtering is implemented using the
+    ``pg_restore --list`` and ``pg_restore --use-list`` options. The
+    Postgres archive Table Of Contents format contains an object OID and its
+    *restore list name*, and pgcopydb needs to be able to lookup for that
+    OID or name in its filtering catalogs.
+
+  - The **target** catalog registers metadata about the target database,
+    such as the list of roles, the list of schemas, or the list of already
+    existing constraints found o nthe target database.
+
+Consistency
+^^^^^^^^^^^
+
+The source catalog table ``setup`` registers information about the current
+pgcopydb command. The information is checked at start-up in order to avoid
+re-using data in a different context.
+
+The information registered is the following, and also contains the
+*snapshot* information. In case of a mismatch, consider using ``--resume
+--not-consistent`` when that's relevant to your operations.
+
+Here's how to inspect the current ``setup`` information that pgcopydb:
+
+::
+
+   $ sqlite3 /tmp/pgcopydb/schema/source.db
+   sqlite> .mode line
+   sqlite> select * from setup;
+                         id = 1
+              source_pg_uri = postgres:///pagila
+              target_pg_uri = postgres:///plop
+                   snapshot = 00000003-00000048-1
+   split_tables_larger_than = 0
+                    filters = {"type":"SOURCE_FILTER_TYPE_NONE"}
+                     plugin =
+                  slot_name =
+
+The source and target connection strings only contain the Postgres servers
+hostname, port, database name and connecting role name. In particular,
+authentication credentials are not stored in the catalogs.

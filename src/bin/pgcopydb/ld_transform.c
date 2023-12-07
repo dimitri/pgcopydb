@@ -20,6 +20,7 @@
 #include "lookup3.h"
 #include "parson.h"
 
+#include "catalog.h"
 #include "cli_common.h"
 #include "cli_root.h"
 #include "copydb.h"
@@ -56,6 +57,12 @@ bool
 stream_transform_stream(StreamSpecs *specs)
 {
 	StreamContext *privateContext = &(specs->private);
+
+	if (!catalog_open(specs->sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	/*
 	 * Resume operations by reading the current transform target file, if it
@@ -116,6 +123,12 @@ stream_transform_stream(StreamSpecs *specs)
 		privateContext->sqlFile = NULL;
 
 		log_notice("Closed file \"%s\"", privateContext->sqlFileName);
+	}
+
+	if (!catalog_close(specs->sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	log_notice("Transformed %lld messages and %lld transactions",
@@ -615,6 +628,14 @@ stream_transform_from_queue(StreamSpecs *specs)
 	int errors = 0;
 	bool stop = false;
 
+	DatabaseCatalog *sourceDB = specs->sourceDB;
+
+	if (!catalog_init(sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (!stream_init_context(specs))
 	{
 		/* errors have already been logged */
@@ -677,6 +698,12 @@ stream_transform_from_queue(StreamSpecs *specs)
 				break;
 			}
 		}
+	}
+
+	if (!catalog_close(sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	bool success = (stop == true && errors == 0);

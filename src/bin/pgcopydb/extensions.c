@@ -9,10 +9,14 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "catalog.h"
 #include "copydb.h"
 #include "log.h"
 #include "schema.h"
 #include "signals.h"
+
+
+static bool copydb_copy_extensions_hook(void *ctx, SourceExtension *ext);
 
 
 /*
@@ -73,6 +77,16 @@ copydb_start_extension_data_process(CopyDataSpec *specs)
 }
 
 
+typedef struct CopyExtensionsContext
+{
+	DatabaseCatalog *filtersDB;
+	PGSQL *src;
+	PGSQL *dst;
+	bool createExtensions;
+	ExtensionReqs *reqs;
+} CopyExtensionsContext;
+
+
 /*
  * copydb_copy_extensions copies extensions from the source instance into the
  * target instance.
@@ -80,11 +94,16 @@ copydb_start_extension_data_process(CopyDataSpec *specs)
 bool
 copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions)
 {
-	int errors = 0;
 	PGSQL dst = { 0 };
 
-	ExtensionReqs *reqs = copySpecs->extRequirements;
-	SourceExtensionArray *extensionArray = &(copySpecs->catalog.extensionArray);
+	if (!catalog_init_from_specs(copySpecs))
+	{
+		log_error("Failed to open internal catalogs in COPY supervisor, "
+				  "see above for details");
+		return false;
+	}
+
+	DatabaseCatalog *filtersDB = &(copySpecs->catalogs.filter);
 
 	if (!pgsql_init(&dst, copySpecs->connStrings.target_pguri, PGSQL_CONN_TARGET))
 	{
@@ -92,96 +111,129 @@ copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions)
 		return false;
 	}
 
-	for (int i = 0; i < extensionArray->count; i++)
+	CopyExtensionsContext context = {
+		.filtersDB = filtersDB,
+		.src = &(copySpecs->sourceSnapshot.pgsql),
+		.dst = &dst,
+		.createExtensions = createExtensions,
+		.reqs = copySpecs->extRequirements
+	};
+
+	if (!catalog_iter_s_extension(filtersDB,
+								  &context,
+								  &copydb_copy_extensions_hook))
 	{
-		SourceExtension *ext = &(extensionArray->array[i]);
-
-		if (createExtensions)
-		{
-			PQExpBuffer sql = createPQExpBuffer();
-
-			char *extname = ext->extname;
-			ExtensionReqs *req = NULL;
-
-			HASH_FIND(hh, reqs, extname, strlen(extname), req);
-
-			appendPQExpBuffer(sql,
-							  "create extension if not exists \"%s\" cascade",
-							  ext->extname);
-
-			if (req != NULL)
-			{
-				appendPQExpBuffer(sql, " version \"%s\"", req->version);
-
-				log_notice("%s", sql->data);
-			}
-
-			if (PQExpBufferBroken(sql))
-			{
-				log_error("Failed to build CREATE EXTENSION sql buffer: "
-						  "Out of Memory");
-				(void) destroyPQExpBuffer(sql);
-			}
-
-			log_info("Creating extension \"%s\"", ext->extname);
-
-			if (!pgsql_execute(&dst, sql->data))
-			{
-				log_error("Failed to create extension \"%s\"", ext->extname);
-				++errors;
-			}
-
-			(void) destroyPQExpBuffer(sql);
-		}
-
-		/* do we have to take care of extensions config table? */
-		if (ext->config.count > 0)
-		{
-			for (int i = 0; i < ext->config.count; i++)
-			{
-				SourceExtensionConfig *config = &(ext->config.array[i]);
-
-				log_info("COPY extension \"%s\" "
-						 "configuration table \"%s\".\"%s\"",
-						 ext->extname,
-						 config->nspname,
-						 config->relname);
-
-				/* apply extcondition to the source table */
-				char qname[PG_NAMEDATALEN_FQ] = { 0 };
-
-				sformat(qname, sizeof(qname), "%s.%s",
-						config->nspname,
-						config->relname);
-
-				char *sqlTemplate = "(SELECT * FROM %s %s)";
-
-				size_t sqlLen =
-					strlen(sqlTemplate) +
-					strlen(qname) +
-					strlen(config->condition) +
-					1;
-
-				char *sql = (char *) calloc(sqlLen, sizeof(char));
-
-				sformat(sql, sqlLen, sqlTemplate, qname, config->condition);
-
-				bool truncate = false;
-				PGSQL *src = &(copySpecs->sourceSnapshot.pgsql);
-				uint64_t bytesTransmitted = 0;
-
-				if (!pg_copy(src, &dst, sql, qname, truncate, &bytesTransmitted))
-				{
-					/* errors have already been logged */
-					return false;
-				}
-			}
-		}
+		log_error("Failed to copy extensions, see above for details");
+		return false;
 	}
 
 	(void) pgsql_finish(&dst);
 
-	return errors == 0;
+	if (!catalog_close_from_specs(copySpecs))
+	{
+		log_error("Failed to cloes internal catalogs in COPY supervisor, "
+				  "see above for details");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * copydb_copy_extensions_hook is an iterator callback function.
+ */
+static bool
+copydb_copy_extensions_hook(void *ctx, SourceExtension *ext)
+{
+	CopyExtensionsContext *context = (CopyExtensionsContext *) ctx;
+	PGSQL *src = context->src;
+	PGSQL *dst = context->dst;
+
+	if (context->createExtensions)
+	{
+		PQExpBuffer sql = createPQExpBuffer();
+
+		char *extname = ext->extname;
+		ExtensionReqs *req = NULL;
+
+		HASH_FIND(hh, context->reqs, extname, strlen(extname), req);
+
+		appendPQExpBuffer(sql,
+						  "create extension if not exists \"%s\" cascade",
+						  ext->extname);
+
+		if (req != NULL)
+		{
+			appendPQExpBuffer(sql, " version \"%s\"", req->version);
+
+			log_notice("%s", sql->data);
+		}
+
+		if (PQExpBufferBroken(sql))
+		{
+			log_error("Failed to build CREATE EXTENSION sql buffer: "
+					  "Out of Memory");
+			(void) destroyPQExpBuffer(sql);
+		}
+
+		log_info("Creating extension \"%s\"", ext->extname);
+
+		if (!pgsql_execute(dst, sql->data))
+		{
+			log_error("Failed to create extension \"%s\"", ext->extname);
+		}
+
+		(void) destroyPQExpBuffer(sql);
+	}
+
+	/* do we have to take care of extensions config table? */
+	if (!catalog_s_ext_fetch_extconfig(context->filtersDB, ext))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (ext->config.count > 0)
+	{
+		for (int i = 0; i < ext->config.count; i++)
+		{
+			SourceExtensionConfig *config = &(ext->config.array[i]);
+
+			log_info("COPY extension \"%s\" "
+					 "configuration table \"%s\".\"%s\"",
+					 ext->extname,
+					 config->nspname,
+					 config->relname);
+
+			char qname[PG_NAMEDATALEN_FQ] = { 0 };
+
+			sformat(qname, sizeof(qname), "%s.%s",
+					config->nspname,
+					config->relname);
+
+			/* apply extcondition to the source table */
+			PQExpBuffer sql = createPQExpBuffer();
+
+			appendPQExpBuffer(sql, "(SELECT * FROM %s %s)",
+							  qname,
+							  config->condition);
+
+			bool truncate = false;
+			uint64_t bytesTransmitted = 0;
+
+			if (!pg_copy(src, dst, sql->data, qname, truncate, &bytesTransmitted))
+			{
+				/* errors have already been logged */
+				(void) destroyPQExpBuffer(sql);
+				return false;
+			}
+
+			(void) destroyPQExpBuffer(sql);
+		}
+	}
+
+	return true;
 }
 
 

@@ -687,15 +687,14 @@ parse_pguri_info_key_vals(const char *pguri,
 
 
 /*
- * buildPostgresURIfromPieces builds a Postgres connection string from keywords
- * and values, in a user friendly way.
+ * buildPostgresBareURIfromPieces builds a Postgres connection string from
+ * keywords and values, in a user friendly way. It omits any option other than
+ * the connection string basis: host, port, user, dbname.
  */
 bool
-buildPostgresURIfromPieces(URIParams *uriParams, char **pguri)
+buildPostgresBareURIfromPieces(URIParams *uriParams, char **pguri)
 {
 	PQExpBuffer uri = createPQExpBuffer();
-
-	int index = 0;
 
 	/* prepare the mandatory part of the Postgres URI */
 	appendPQExpBufferStr(uri, "postgres://");
@@ -750,8 +749,41 @@ buildPostgresURIfromPieces(URIParams *uriParams, char **pguri)
 		free(escaped);
 	}
 
+	if (PQExpBufferBroken(uri))
+	{
+		log_error("Failed to build Postgres URI: out of memory");
+		destroyPQExpBuffer(uri);
+		return false;
+	}
+
+	*pguri = strdup(uri->data);
+	destroyPQExpBuffer(uri);
+
+	return true;
+}
+
+
+/*
+ * buildPostgresURIfromPieces builds a Postgres connection string from keywords
+ * and values, in a user friendly way.
+ */
+bool
+buildPostgresURIfromPieces(URIParams *uriParams, char **pguri)
+{
+	if (!buildPostgresBareURIfromPieces(uriParams, pguri))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	PQExpBuffer uri = createPQExpBuffer();
+
+	/* prepare the mandatory part of the Postgres URI */
+	appendPQExpBufferStr(uri, *pguri);
+	free(*pguri);
+
 	/* now add optional parameters to the Postgres URI */
-	for (index = 0; index < uriParams->parameters.count; index++)
+	for (int index = 0; index < uriParams->parameters.count; index++)
 	{
 		char *keyword = uriParams->parameters.keywords[index];
 		char *value = uriParams->parameters.values[index];
@@ -797,6 +829,7 @@ buildPostgresURIfromPieces(URIParams *uriParams, char **pguri)
 	}
 
 	*pguri = strdup(uri->data);
+
 	destroyPQExpBuffer(uri);
 
 	return true;
@@ -1024,6 +1057,40 @@ parse_and_scrub_connection_string(const char *pguri, SafeURI *safeURI)
 
 	/* build the safe connection string with the overriden password */
 	buildPostgresURIfromPieces(uriParams, &(safeURI->pguri));
+
+	return true;
+}
+
+
+/*
+ * bareConnectionString builds a connection string with zero option.
+ */
+bool
+bareConnectionString(const char *pguri, SafeURI *safeURI)
+{
+	URIParams *uriParams = &(safeURI->uriParams);
+
+	KeyVal overrides = { 0 };
+
+	if (pguri == NULL)
+	{
+		safeURI->pguri = NULL;
+		return true;
+	}
+
+	bool checkForCompleteURI = false;
+
+	if (!parse_pguri_info_key_vals(pguri,
+								   &connStringDefaults,
+								   &overrides,
+								   uriParams,
+								   checkForCompleteURI))
+	{
+		return false;
+	}
+
+	/* build the bare connection string: no options */
+	buildPostgresBareURIfromPieces(uriParams, &(safeURI->pguri));
 
 	return true;
 }

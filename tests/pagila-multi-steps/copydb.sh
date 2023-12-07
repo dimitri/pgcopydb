@@ -33,13 +33,16 @@ sleep 1
 pgcopydb dump schema --resume --debug
 pgcopydb restore pre-data --resume
 
-pgcopydb copy table-data --resume
-pgcopydb copy sequences --resume
+pgcopydb copy table-data --resume --notice
+pgcopydb copy sequences --resume --notice
 pgcopydb copy blobs --resume
-pgcopydb copy indexes --resume
-pgcopydb copy constraints --resume
+pgcopydb copy indexes --resume --notice
+pgcopydb copy constraints --resume --notice
 
 pgcopydb restore post-data --resume
 
 kill -TERM ${COPROC_PID}
 wait ${COPROC_PID}
+
+pgcopydb compare schema
+pgcopydb compare data

@@ -58,13 +58,17 @@ coproc ( pgcopydb snapshot --debug )
 sleep 1
 
 # copy the extensions separately, needs superuser (both on source and target)
-pgcopydb list extensions
+pgcopydb list extensions --source ${PGCOPYDB_SOURCE_PGURI_SU}
 
 # now get the extension versions requirements from the target server
 e=/tmp/extensions.json
 r=/tmp/requirements.json
 
-pgcopydb list extensions --source ${PGCOPYDB_TARGET_PGURI} --requirements --json > ${e}
+# make sure to fetch the target list of extensions in a separate directory
+TARGET_OPTS="--dir /tmp/target/pgcopydb"
+TARGET_OPTS="${TARGET_OPTS} --source ${PGCOPYDB_TARGET_PGURI}"
+
+pgcopydb list extensions --requirements --json ${TARGET_OPTS} > ${e}
 
 jq 'map(select(.name == "postgis" or .name == "address_standardizer" or .name == "address_standardizer_data_us" or .name == "postgis_tiger_geocoder" or .name == "postgis_topology"))' < ${e} > ${r}
 
@@ -74,13 +78,16 @@ pgcopydb copy extensions \
          --source ${PGCOPYDB_SOURCE_PGURI_SU} \
          --target ${PGCOPYDB_TARGET_PGURI_SU} \
          --requirements ${r} \
-         --notice
+         --resume --debug
 
 # now clone without superuser privileges (using role pagila on source and target)
-pgcopydb clone --skip-extensions
+pgcopydb clone --skip-extensions --restart
 
 kill -TERM ${COPROC_PID}
 wait ${COPROC_PID}
 
-pgcopydb list extensions --source ${PGCOPYDB_SOURCE_PGURI}
-pgcopydb list extensions --source ${PGCOPYDB_TARGET_PGURI}
+pgcopydb compare schema
+pgcopydb compare data
+
+pgcopydb list extensions --source ${PGCOPYDB_SOURCE_PGURI} --dir /tmp/check/source --debug
+pgcopydb list extensions --source ${PGCOPYDB_TARGET_PGURI} --dir /tmp/check/target

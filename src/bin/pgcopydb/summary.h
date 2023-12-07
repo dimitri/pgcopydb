@@ -74,6 +74,7 @@ typedef struct SummaryTableHeaders
 	int maxOidSize;
 	int maxNspnameSize;
 	int maxRelnameSize;
+	int maxPartCountSize;
 	int maxTableMsSize;
 	int maxBytesSize;
 	int maxIndexCountSize;
@@ -82,6 +83,7 @@ typedef struct SummaryTableHeaders
 	char oidSeparator[NAMEDATALEN];
 	char nspnameSeparator[NAMEDATALEN];
 	char relnameSeparator[NAMEDATALEN];
+	char partCountSeparator[NAMEDATALEN];
 	char tableMsSeparator[NAMEDATALEN];
 	char bytesSeparator[NAMEDATALEN];
 	char indexCountSeparator[NAMEDATALEN];
@@ -114,6 +116,7 @@ typedef struct SummaryTableEntry
 	char oidStr[INTSTRING_MAX_DIGITS];
 	char nspname[PG_NAMEDATALEN];
 	char relname[PG_NAMEDATALEN];
+	char partCount[INTSTRING_MAX_DIGITS];
 	char tableMs[INTERVAL_MAXLEN];
 	uint64_t bytes;
 	char bytesStr[INTSTRING_MAX_DIGITS];
@@ -204,8 +207,9 @@ bool prepare_table_summary_as_json(CopyTableSummary *summary,
 								   JSON_Object *jsobj,
 								   const char *key);
 
-bool create_table_index_file(SourceTable *table, char *filename);
-bool read_table_index_file(SourceIndexArray *indexArray, char *filename);
+bool create_table_index_file(DatabaseCatalog *sourceDB,
+							 SourceTable *table,
+							 char *filename);
 
 bool write_blobs_summary(CopyBlobsSummary *summary, char *filename);
 bool read_blobs_summary(CopyBlobsSummary *summary, char *filename);

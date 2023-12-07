@@ -103,11 +103,14 @@ bool parse_pguri_info_key_vals(const char *pguri,
 							   URIParams *uriParameters,
 							   bool checkForCompleteURI);
 
+bool buildPostgresBareURIfromPieces(URIParams *uriParams, char **pguri);
 bool buildPostgresURIfromPieces(URIParams *uriParams, char **pguri);
 
 bool escapeWithPercentEncoding(const char *str, char **dst);
 
 bool parse_and_scrub_connection_string(const char *pguri, SafeURI *safeURI);
+
+bool bareConnectionString(const char *pguri, SafeURI *safeURI);
 
 void freeSafeURI(SafeURI *safeURI);
 void freeURIParams(URIParams *params);

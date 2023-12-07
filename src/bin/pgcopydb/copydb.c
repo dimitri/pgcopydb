@@ -468,10 +468,15 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths,
 
 	/* now that we have our topdir, prepare all the others from there */
 	sformat(cfPaths->snfile, MAXPGPATH, "%s/snapshot", cfPaths->topdir);
-	sformat(cfPaths->schemadir, MAXPGPATH, "%s/schema", cfPaths->topdir);
 	sformat(cfPaths->rundir, MAXPGPATH, "%s/run", cfPaths->topdir);
 	sformat(cfPaths->tbldir, MAXPGPATH, "%s/run/tables", cfPaths->topdir);
 	sformat(cfPaths->idxdir, MAXPGPATH, "%s/run/indexes", cfPaths->topdir);
+
+	/* internal catalogs db files are in the schemadir */
+	sformat(cfPaths->schemadir, MAXPGPATH, "%s/schema", cfPaths->topdir);
+	sformat(cfPaths->sdbfile, MAXPGPATH, "%s/source.db", cfPaths->schemadir);
+	sformat(cfPaths->fdbfile, MAXPGPATH, "%s/filter.db", cfPaths->schemadir);
+	sformat(cfPaths->tdbfile, MAXPGPATH, "%s/target.db", cfPaths->schemadir);
 
 	/* prepare also the name of the schema file (JSON) */
 	sformat(cfPaths->schemafile, MAXPGPATH, "%s/schema.json", cfPaths->topdir);
@@ -683,6 +688,7 @@ copydb_init_specs(CopyDataSpec *specs,
 	CopyDataSpec tmpCopySpecs = {
 		.cfPaths = specs->cfPaths,
 		.pgPaths = specs->pgPaths,
+		.dirState = specs->dirState,
 
 		.connStrings = options->connStrings,
 
@@ -709,6 +715,11 @@ copydb_init_specs(CopyDataSpec *specs,
 		.resume = options->resume,
 		.consistent = !options->notConsistent,
 
+		.fetchCatalogs = specs->fetchCatalogs,
+
+		/* internal option only, not exposed */
+		.fetchFilteredOids = true,
+
 		.tableJobs = options->tableJobs,
 		.indexJobs = options->indexJobs,
 		.lObjectJobs = options->lObjectJobs,
@@ -724,8 +735,7 @@ copydb_init_specs(CopyDataSpec *specs,
 		.vacuumQueue = { 0 },
 		.indexQueue = { 0 },
 
-		.catalog = { 0 },
-		.tableSpecsArray = { 0, NULL }
+		.catalogs = { 0 }
 	};
 
 	if (!IS_EMPTY_STRING_BUFFER(options->snapshot))
@@ -744,6 +754,21 @@ copydb_init_specs(CopyDataSpec *specs,
 		/* errors have already been logged */
 		return false;
 	}
+
+	/* Initialize the internal catalogs */
+	DatabaseCatalog *source = &(specs->catalogs.source);
+	DatabaseCatalog *filter = &(specs->catalogs.filter);
+	DatabaseCatalog *target = &(specs->catalogs.target);
+
+	/* init the catalog type */
+	source->type = DATABASE_CATALOG_TYPE_SOURCE;
+	filter->type = DATABASE_CATALOG_TYPE_FILTER;
+	target->type = DATABASE_CATALOG_TYPE_TARGET;
+
+	/* pick the dbfile from the specs */
+	strlcpy(source->dbfile, specs->cfPaths.sdbfile, sizeof(source->dbfile));
+	strlcpy(filter->dbfile, specs->cfPaths.fdbfile, sizeof(filter->dbfile));
+	strlcpy(target->dbfile, specs->cfPaths.tdbfile, sizeof(target->dbfile));
 
 	/* create the table semaphore (critical section, one at a time please) */
 	specs->tableSemaphore.initValue = 1;
@@ -779,7 +804,13 @@ copydb_init_specs(CopyDataSpec *specs,
 				return false;
 			}
 		}
+	}
 
+	if (specs->section == DATA_SECTION_ALL ||
+		specs->section == DATA_SECTION_INDEXES ||
+		specs->section == DATA_SECTION_CONSTRAINTS ||
+		specs->section == DATA_SECTION_TABLE_DATA)
+	{
 		/* create the CREATE INDEX process queue */
 		if (!queue_create(&(specs->indexQueue), "create index"))
 		{
@@ -820,7 +851,6 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 		.resume = specs->resume,
 
 		.sourceTable = source,
-		.indexArray = NULL,
 		.summary = NULL,
 
 		.tableJobs = specs->tableJobs,
@@ -833,18 +863,22 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 	*tableSpecs = tmpTableSpecs;
 
 	/* This CopyTableDataSpec might be for a partial COPY */
-	if (source->partsArray.count >= 1)
+	if (source->partition.partCount >= 1)
 	{
-		CopyTableDataPartSpec part = {
-			.partNumber = partNumber,
-			.partCount = source->partsArray.array[partNumber].partCount,
-			.min = source->partsArray.array[partNumber].min,
-			.max = source->partsArray.array[partNumber].max
-		};
+		tableSpecs->part.partNumber = source->partition.partNumber;
+		tableSpecs->part.partCount = source->partition.partCount;
+		tableSpecs->part.min = source->partition.min;
+		tableSpecs->part.max = source->partition.max;
 
-		tableSpecs->part = part;
-
-		strlcpy(tableSpecs->part.partKey, source->partKey, NAMEDATALEN);
+		/* tables that are partitioned without a partKey are using CTID */
+		if (!IS_EMPTY_STRING_BUFFER(source->partKey))
+		{
+			strlcpy(tableSpecs->part.partKey, source->partKey, NAMEDATALEN);
+		}
+		else
+		{
+			strlcpy(tableSpecs->part.partKey, "ctid", NAMEDATALEN);
+		}
 
 		/* now compute the table-specific paths we are using in copydb */
 		if (!copydb_init_tablepaths_for_part(tableSpecs->cfPaths,
@@ -1024,8 +1058,14 @@ copydb_wait_for_subprocesses(bool failFast)
 			default:
 			{
 				int returnCode = WEXITSTATUS(status);
+				int sig = 0;
 
-				if (returnCode == 0)
+				if (WIFSIGNALED(status))
+				{
+					sig = WTERMSIG(status);
+				}
+
+				if (returnCode == 0 && sig == 0)
 				{
 					log_debug("Sub-process %d exited with code %d",
 							  pid, returnCode);
@@ -1034,8 +1074,17 @@ copydb_wait_for_subprocesses(bool failFast)
 				{
 					allReturnCodeAreZero = false;
 
-					log_error("Sub-process %d exited with code %d",
-							  pid, returnCode);
+					if (sig == 0)
+					{
+						log_error("Sub-process %d exited with code %d",
+								  pid, returnCode);
+					}
+					else
+					{
+						log_error("Sub-process %d exited with code %d "
+								  "and signal %s",
+								  pid, returnCode, signal_to_string(sig));
+					}
 
 					if (failFast)
 					{

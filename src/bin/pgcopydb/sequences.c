@@ -9,6 +9,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "catalog.h"
 #include "copydb.h"
 #include "env_utils.h"
 #include "lock_utils.h"
@@ -20,6 +21,16 @@
 #include "summary.h"
 
 
+static bool copydb_prepare_sequence_specs_hook(void *ctx, SourceSequence *seq);
+static bool copydb_copy_all_sequences_hook(void *ctx, SourceSequence *seq);
+
+typedef struct PrepareSequenceContext
+{
+	PGSQL *pgsql;
+	DatabaseCatalog *sourceDB;
+} PrepareSequenceContext;
+
+
 /*
  * sequence_prepare_specs fetches the list of sequences at pgsql connection,
  * using the filtering already prepared in the connection (as temp tables).
@@ -28,69 +39,101 @@
 bool
 copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql)
 {
-	SourceSequenceArray *sequenceArray = &(specs->catalog.sequenceArray);
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	if (!schema_list_sequences(pgsql, &(specs->filters), sequenceArray))
+	if (!schema_list_sequences(pgsql, &(specs->filters), sourceDB))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	SourceSequence *sourceSeqHashByOid = NULL;
+	CatalogCounts count = { 0 };
 
-	log_info("Fetching information for %d sequences", sequenceArray->count);
-
-	int errors = 0;
-
-	for (int seqIndex = 0; seqIndex < sequenceArray->count; seqIndex++)
+	if (!catalog_count_objects(sourceDB, &count))
 	{
-		SourceSequence *seq = &(sequenceArray->array[seqIndex]);
-
-		/* add the current sequence to the sequence Hash-by-OID */
-		HASH_ADD(hh, sourceSeqHashByOid, oid, sizeof(uint32_t), seq);
-
-		/*
-		 * In case of "permission denied" for SELECT on the sequence object, we
-		 * would then have a broken transaction and all the rest of the loop
-		 * would get the following:
-		 *
-		 * ERROR: current transaction is aborted, commands ignored
-		 * until end of transaction block
-		 *
-		 * To avoid that, for each sequence we first see if we're granted the
-		 * SELECT privilege.
-		 */
-		bool granted = false;
-
-		if (!pgsql_has_sequence_privilege(pgsql, seq->qname, "select", &granted))
-		{
-			/* errors have been logged */
-			++errors;
-			break;
-		}
-
-		if (!granted)
-		{
-			log_error("Failed to SELECT values for sequence %s: "
-					  "permission denied",
-					  seq->qname);
-			++errors;
-			continue;
-		}
-
-		if (!schema_get_sequence_value(pgsql, seq))
-		{
-			/* just skip this one */
-			log_warn("Failed to get sequence values for %s", seq->qname);
-			++errors;
-			continue;
-		}
+		log_error("Failed to count objects in our catalogs");
+		return false;
 	}
 
-	/* now attach the final hash table head to the specs */
-	specs->catalog.sourceSeqHashByOid = sourceSeqHashByOid;
+	log_info("Fetching information for %lld sequences",
+			 (long long) count.sequences);
 
-	return errors == 0;
+	PrepareSequenceContext context = {
+		.pgsql = pgsql,
+		.sourceDB = sourceDB
+	};
+
+	if (!catalog_iter_s_seq(sourceDB,
+							&context,
+							&copydb_prepare_sequence_specs_hook))
+	{
+		log_error("Failed to prepare our internal sequence catalogs, "
+				  "see above for details");
+		return false;
+	}
+
+	if (!catalog_register_section(sourceDB, DATA_SECTION_SET_SEQUENCES))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * copydb_prepare_sequence_specs_hook is an iterator callback function.
+ */
+static bool
+copydb_prepare_sequence_specs_hook(void *ctx, SourceSequence *seq)
+{
+	PrepareSequenceContext *context = (PrepareSequenceContext *) ctx;
+	PGSQL *pgsql = context->pgsql;
+
+	/*
+	 * In case of "permission denied" for SELECT on the sequence object, we
+	 * would then have a broken transaction and all the rest of the loop
+	 * would get the following:
+	 *
+	 * ERROR: current transaction is aborted, commands ignored
+	 * until end of transaction block
+	 *
+	 * To avoid that, for each sequence we first see if we're granted the
+	 * SELECT privilege.
+	 */
+	bool granted = false;
+
+	if (!pgsql_has_sequence_privilege(pgsql, seq->qname, "select", &granted))
+	{
+		/* errors have been logged */
+		return false;
+	}
+
+	if (!granted)
+	{
+		log_error("Failed to SELECT values for sequence %s: "
+				  "permission denied",
+				  seq->qname);
+		return false;
+	}
+
+	if (!schema_get_sequence_value(pgsql, seq))
+	{
+		/* just skip this one */
+		log_warn("Failed to get sequence values for %s", seq->qname);
+		return false;
+	}
+
+	if (!catalog_update_sequence_values(context->sourceDB, seq))
+	{
+		log_error("Failed to update sequences values for %s "
+				  "in our internal catalogs",
+				  seq->qname);
+		return false;
+	}
+
+	return true;
 }
 
 
@@ -171,6 +214,13 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 
 	log_info("Reset sequences values on the target database");
 
+	if (!catalog_init_from_specs(specs))
+	{
+		log_error("Failed to open internal catalogs in CREATE INDEX worker, "
+				  "see above for details");
+		return false;
+	}
+
 	PGSQL dst = { 0 };
 
 	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
@@ -185,57 +235,26 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 		return false;
 	}
 
-	int errors = 0;
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	SourceSequenceArray *sequenceArray = &(specs->catalog.sequenceArray);
-
-	for (int seqIndex = 0; seqIndex < sequenceArray->count; seqIndex++)
+	if (!catalog_iter_s_seq(sourceDB, &dst, &copydb_copy_all_sequences_hook))
 	{
-		SourceSequence *seq = &(sequenceArray->array[seqIndex]);
-
-		char qname[BUFSIZE] = { 0 };
-
-		sformat(qname, sizeof(qname), "%s.%s",
-				seq->nspname,
-				seq->relname);
-
-		if (!pgsql_savepoint(&dst, "sequences"))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		if (!schema_set_sequence_value(&dst, seq))
-		{
-			log_error("Failed to set sequence values for %s", qname);
-
-			if (specs->failFast)
-			{
-				(void) pgsql_commit(&dst);
-				return false;
-			}
-
-			if (!pgsql_rollback_to_savepoint(&dst, "sequences"))
-			{
-				/* errors have already been logged */
-				return false;
-			}
-
-			++errors;
-			continue;
-		}
-
-		if (!pgsql_release_savepoint(&dst, "sequences"))
-		{
-			/* errors have already been logged */
-			return false;
-		}
+		log_error("Failed to copy sequences values from our internal catalogs, "
+				  "see above for details");
+		(void) pgsql_finish(&dst);
+		return false;
 	}
 
 	if (!pgsql_commit(&dst))
 	{
 		/* errors have already been logged */
-		++errors;
+		return false;
+	}
+
+	if (!catalog_close_from_specs(specs))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	/* and write that we successfully finished copying all sequences */
@@ -245,11 +264,21 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 				 specs->cfPaths.done.sequences);
 	}
 
-	if (errors > 0)
+	return true;
+}
+
+
+/*
+ * copydb_copy_all_sequences_hook is an iterator callback function.
+ */
+static bool
+copydb_copy_all_sequences_hook(void *ctx, SourceSequence *seq)
+{
+	PGSQL *dst = (PGSQL *) ctx;
+
+	if (!schema_set_sequence_value(dst, seq))
 	{
-		log_warn("Failed to set values for %d sequences, "
-				 "see above for details",
-				 errors);
+		log_error("Failed to set sequence values for %s", seq->qname);
 		return false;
 	}
 

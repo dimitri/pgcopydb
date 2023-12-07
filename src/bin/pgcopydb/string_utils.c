@@ -738,7 +738,7 @@ pretty_print_count(char *buffer, size_t size, uint64_t number)
 {
 	const char *suffixes[7] = {
 		"",                     /* units */
-		"",                     /* thousands */
+		"thousands",            /* 10^3 */
 		"million",              /* 10^6 */
 		"billion",              /* 10^9 */
 		"trillion",             /* 10^12 */

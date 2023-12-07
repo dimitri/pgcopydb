@@ -9,8 +9,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "catalog.h"
 #include "copydb.h"
 #include "env_utils.h"
+#include "filtering.h"
 #include "lock_utils.h"
 #include "log.h"
 #include "pidfile.h"
@@ -18,6 +20,11 @@
 #include "signals.h"
 #include "string_utils.h"
 #include "summary.h"
+
+static bool copydb_fetch_source_catalog_setup(CopyDataSpec *specs);
+static bool copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src);
+
+static bool copydb_prepare_table_specs_hook(void *ctx, SourceTable *source);
 
 
 /*
@@ -31,6 +38,18 @@
 bool
 copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 {
+	if (!copydb_fetch_source_catalog_setup(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!specs->fetchCatalogs)
+	{
+		log_info("Re-using catalog caches");
+		return true;
+	}
+
 	/*
 	 * Either use the already established connection and transaction that
 	 * exports our snapshot in the main process, or establish a transaction
@@ -40,15 +59,30 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 	PGSQL *src = NULL;
 	PGSQL pgsql = { 0 };
 
-	if (specs->consistent)
+	bool preparedSnapshot = false;
+
+	if (specs->resume && specs->consistent)
 	{
 		log_debug("re-use snapshot \"%s\"", specs->sourceSnapshot.snapshot);
 
 		if (IS_EMPTY_STRING_BUFFER(specs->sourceSnapshot.snapshot))
 		{
-			log_error("Trying to re-use snapshot \"%s\"",
+			log_error("Failed to re-use snapshot \"%s\"",
 					  specs->sourceSnapshot.snapshot);
 			return false;
+		}
+
+		/* we might have to prepare the snapshot locally */
+		if (specs->sourceSnapshot.state == SNAPSHOT_STATE_UNKNOWN)
+		{
+			if (!copydb_prepare_snapshot(specs))
+			{
+				log_error("Failed to re-use snapshot \"%s\", see above for details",
+						  specs->sourceSnapshot.snapshot);
+				return false;
+			}
+
+			preparedSnapshot = true;
 		}
 
 		src = &(specs->sourceSnapshot.pgsql);
@@ -70,6 +104,208 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 			return false;
 		}
 	}
+
+	if (!copydb_fetch_source_schema(specs, src))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* time to finish the transaction on the source database */
+	if (preparedSnapshot)
+	{
+		if (!copydb_close_snapshot(specs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+	else
+	{
+		if (!pgsql_commit(src))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	/*
+	 * Now fetch the list of schemas and roles found in the target database.
+	 * The information is needed to fetch related database properties
+	 * (settings) when set to a specific role within that database.
+	 */
+	if (specs->section == DATA_SECTION_ALL ||
+		specs->section == DATA_SECTION_EXTENSIONS ||
+		specs->section == DATA_SECTION_COLLATIONS)
+	{
+		if (!copydb_prepare_target_catalog(specs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * copydb_fetch_source_catalog_setup initializes our local catalog cache and
+ * checks th setup and cache state.
+ */
+static bool
+copydb_fetch_source_catalog_setup(CopyDataSpec *specs)
+{
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+	DatabaseCatalog *filtersDB = &(specs->catalogs.filter);
+
+	/*
+	 * We might just re-use the existing cache, or we might want to do
+	 * cache-invalidation.
+	 */
+	if (!catalog_init_from_specs(specs))
+	{
+		log_error("Failed to initialize pgcopydb internal catalogs");
+		return false;
+	}
+
+	/*
+	 * Now see if the cache has already been filled or if we need to connect to
+	 * the source and fetch the data again. By default, set fetchCatalogs to
+	 * true to force cache invalidation.
+	 */
+	specs->fetchCatalogs = true;
+
+	bool allDone = true;
+
+	/* skip DATA_SECTION_NONE (hard-coded to enum value 0) */
+	for (int i = 1; i < DATA_SECTION_COUNT; i++)
+	{
+		CatalogSection *s = &(sourceDB->sections[i]);
+
+		/* use the enum value as the sections array index */
+		s->section = (CopyDataSection) i;
+
+		if (!catalog_section_state(sourceDB, s))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		/* compute "allDone" in the context of a sourceDB */
+		if (s->section == DATA_SECTION_DATABASE_PROPERTIES ||
+			s->section == DATA_SECTION_TABLE_DATA ||
+			s->section == DATA_SECTION_SET_SEQUENCES ||
+			s->section == DATA_SECTION_INDEXES ||
+			s->section == DATA_SECTION_CONSTRAINTS)
+		{
+			allDone = allDone && s->fetched;
+		}
+
+		/* ignore "parts" unless --split-tables-larger-than has been used */
+		if (sourceDB->setup.splitTablesLargerThanBytes > 0)
+		{
+			if (s->section == DATA_SECTION_TABLE_DATA_PARTS)
+			{
+				allDone = allDone && s->fetched;
+			}
+		}
+	}
+
+	/* compute "allDone" in the context of the filtersDB too */
+	if (specs->fetchFilteredOids)
+	{
+		/* skip DATA_SECTION_NONE (hard-coded to enum value 0) */
+		for (int i = 1; i < DATA_SECTION_COUNT; i++)
+		{
+			CatalogSection *s = &(filtersDB->sections[i]);
+
+			/* use the enum value as the sections array index */
+			s->section = (CopyDataSection) i;
+
+			if (!catalog_section_state(filtersDB, s))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			/* compute "allDone" in the context of a sourceDB */
+			if (s->section == DATA_SECTION_COLLATIONS ||
+				s->section == DATA_SECTION_EXTENSIONS ||
+				s->section == DATA_SECTION_TABLE_DATA ||
+				s->section == DATA_SECTION_SET_SEQUENCES ||
+				s->section == DATA_SECTION_INDEXES ||
+				s->section == DATA_SECTION_CONSTRAINTS ||
+				s->section == DATA_SECTION_DEPENDS ||
+				s->section == DATA_SECTION_FILTERS)
+			{
+				allDone = allDone && s->fetched;
+			}
+		}
+	}
+
+	if (allDone)
+	{
+		specs->fetchCatalogs = false;
+		return true;
+	}
+
+	/*
+	 * Subcommands need only a subpart of the catalogs.
+	 *
+	 * Some commands access the filtersDB catalog only:
+	 *
+	 *  - pgcopydb list collations
+	 *  - pgcopydb list extensions
+	 *  - pgcopydb list depends
+	 */
+	if (specs->section != DATA_SECTION_ALL)
+	{
+		if (specs->section == DATA_SECTION_COLLATIONS ||
+			specs->section == DATA_SECTION_EXTENSIONS ||
+			specs->section == DATA_SECTION_DEPENDS)
+		{
+			specs->fetchCatalogs = !filtersDB->sections[specs->section].fetched;
+		}
+		else
+		{
+			specs->fetchCatalogs = !sourceDB->sections[specs->section].fetched;
+		}
+
+		/*
+		 * Special case for commands that need to fetchFilteredOids and use the
+		 * --skip-extension or --skip-collations options.
+		 */
+		if (specs->fetchFilteredOids)
+		{
+			if (specs->skipExtensions)
+			{
+				specs->fetchCatalogs =
+					specs->fetchCatalogs &&
+					!sourceDB->sections[DATA_SECTION_EXTENSIONS].fetched;
+			}
+
+			if (specs->skipCollations)
+			{
+				specs->fetchCatalogs =
+					specs->fetchCatalogs &&
+					!sourceDB->sections[DATA_SECTION_COLLATIONS].fetched;
+			}
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * copydb_fetch_source_schema is a utility function for the previous definition
+ * copydb_fetch_schema_and_prepare_specs.
+ */
+static bool
+copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
+{
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
 	/* check if we're connected to a standby server, which we don't support */
 	bool pg_is_in_recovery = false;
@@ -122,39 +358,17 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 	 * Grab the source database properties to be able to install them again on
 	 * the target, using ALTER DATABASE SET or ALTER USER IN DATABASE SET.
 	 */
-	if (!schema_list_database_properties(src, &(specs->catalog.gucsArray)))
+	if ((specs->section == DATA_SECTION_ALL ||
+		 specs->section == DATA_SECTION_DATABASE_PROPERTIES) &&
+		!sourceDB->sections[DATA_SECTION_DATABASE_PROPERTIES].fetched)
 	{
-		log_error("Failed to fetch database properties, see above for details");
-		return false;
-	}
-
-	/* now, are we doing extensions? */
-	if (specs->section == DATA_SECTION_ALL ||
-		specs->section == DATA_SECTION_EXTENSION)
-	{
-		SourceExtensionArray *extensionArray = &(specs->catalog.extensionArray);
-
-		if (!schema_list_extensions(src, extensionArray))
+		if (!schema_list_database_properties(src, sourceDB) ||
+			!catalog_register_section(sourceDB, DATA_SECTION_DATABASE_PROPERTIES))
 		{
-			/* errors have already been logged */
+			log_error("Failed to fetch database properties, "
+					  "see above for details");
 			return false;
 		}
-
-		log_info("Fetched information for %d extensions", extensionArray->count);
-	}
-
-	/* now, are we skipping collations? */
-	if (specs->skipCollations)
-	{
-		SourceCollationArray *collationArray = &(specs->catalog.collationArray);
-
-		if (!schema_list_collations(src, collationArray))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		log_info("Fetched information for %d collations", collationArray->count);
 	}
 
 	/*
@@ -167,22 +381,24 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 	 */
 	bool createdTableSizeTable = false;
 
-	/* copydb_fetch_filtered_oids() needs the table size table around */
-	if (!schema_prepare_pgcopydb_table_size(src,
-											&(specs->filters),
-											specs->hasDBCreatePrivilege,
-											false, /* cache */
-											false, /* dropCache */
-											&createdTableSizeTable))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	/* now fetch the list of tables from the source database */
-	if (specs->section == DATA_SECTION_ALL ||
-		specs->section == DATA_SECTION_TABLE_DATA)
+	if ((specs->section == DATA_SECTION_ALL ||
+		 specs->section == DATA_SECTION_TABLE_DATA ||
+		 specs->section == DATA_SECTION_TABLE_DATA_PARTS) &&
+		!sourceDB->sections[DATA_SECTION_TABLE_DATA].fetched)
 	{
+		/* copydb_fetch_filtered_oids() needs the table size table around */
+		if (!schema_prepare_pgcopydb_table_size(src,
+												&(specs->filters),
+												specs->hasDBCreatePrivilege,
+												false, /* cache */
+												false, /* dropCache */
+												&createdTableSizeTable))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
 		if (!copydb_prepare_table_specs(specs, src))
 		{
 			/* errors have already been logged */
@@ -191,9 +407,10 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 	}
 
 	/* fetch the list of all the indexes that are going to be created again */
-	if (specs->section == DATA_SECTION_ALL ||
-		specs->section == DATA_SECTION_INDEXES ||
-		specs->section == DATA_SECTION_CONSTRAINTS)
+	if ((specs->section == DATA_SECTION_ALL ||
+		 specs->section == DATA_SECTION_INDEXES ||
+		 specs->section == DATA_SECTION_CONSTRAINTS) &&
+		!sourceDB->sections[DATA_SECTION_INDEXES].fetched)
 	{
 		if (!copydb_prepare_index_specs(specs, src))
 		{
@@ -202,8 +419,9 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 		}
 	}
 
-	if (specs->section == DATA_SECTION_ALL ||
-		specs->section == DATA_SECTION_SET_SEQUENCES)
+	if ((specs->section == DATA_SECTION_ALL ||
+		 specs->section == DATA_SECTION_SET_SEQUENCES) &&
+		!sourceDB->sections[DATA_SECTION_SET_SEQUENCES].fetched)
 	{
 		if (!copydb_prepare_sequence_specs(specs, src))
 		{
@@ -213,10 +431,13 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 	}
 
 	/* prepare the Oids of objects that are filtered out */
-	if (!copydb_fetch_filtered_oids(specs, src))
+	if (specs->fetchFilteredOids)
 	{
-		/* errors have already been logged */
-		return false;
+		if (!copydb_fetch_filtered_oids(specs, src))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	if (createdTableSizeTable)
@@ -228,29 +449,15 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 		}
 	}
 
-	if (!specs->consistent)
-	{
-		log_debug("--not-consistent: commit and close SOURCE connection now");
-		if (!pgsql_commit(src))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-	}
-
-	/*
-	 * Now fetch the list of schemas and roles found in the target database.
-	 * The information is needed to fetch related database properties
-	 * (settings) when set to a specific role within that database.
-	 */
-	if (!copydb_prepare_target_catalog(specs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	return true;
 }
+
+
+typedef struct PrepareTableSpecsContext
+{
+	CopyDataSpec *specs;
+	PGSQL *pgsql;
+} PrepareTableSpecsContext;
 
 
 /*
@@ -261,187 +468,160 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 bool
 copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 {
-	SourceTableArray *tableArray = &(specs->catalog.sourceTableArray);
-	CopyTableDataSpecsArray *tableSpecsArray = &(specs->tableSpecsArray);
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+	SourceFilters *filters = &(specs->filters);
 
 	/*
 	 * Now get the list of the tables we want to COPY over.
 	 */
-	if (!schema_list_ordinary_tables(pgsql,
-									 &(specs->filters),
-									 tableArray))
+	if (!schema_list_ordinary_tables(pgsql, filters, sourceDB) ||
+		!catalog_register_section(sourceDB, DATA_SECTION_TABLE_DATA))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	int copySpecsCount = 0;
-
 	if (specs->splitTablesLargerThan.bytes > 0)
 	{
 		log_info("Splitting source candidate tables larger than %s",
 				 specs->splitTablesLargerThan.bytesPretty);
-	}
 
-	/* prepare a SourceTable hash table, indexed by Oid, and qualified name */
-	SourceTable *sourceTableHashByOid = NULL;
-	SourceTable *sourceTableHashByQName = NULL;
+		PrepareTableSpecsContext context = {
+			.specs = specs,
+			.pgsql = pgsql
+		};
 
-	/*
-	 * Source table might be split in several concurrent COPY processes. In
-	 * that case we produce a CopyDataSpec entry for each COPY partition.
-	 */
-	for (int tableIndex = 0; tableIndex < tableArray->count; tableIndex++)
-	{
-		SourceTable *source = &(tableArray->array[tableIndex]);
-
-		/* add the current table to the Hash-by-OID */
-		HASH_ADD(hh, sourceTableHashByOid, oid, sizeof(uint32_t), source);
-
-		/* also add the current table to the Hash-by-QName */
-		size_t len = strlen(source->qname);
-		HASH_ADD(hhQName, sourceTableHashByQName, qname, len, source);
-
-		if (specs->splitTablesLargerThan.bytes > 0 &&
-			specs->splitTablesLargerThan.bytes <= source->bytes)
+		if (!catalog_iter_s_table(sourceDB,
+								  &context,
+								  &copydb_prepare_table_specs_hook) ||
+			!catalog_register_section(sourceDB, DATA_SECTION_TABLE_DATA_PARTS))
 		{
-			if (IS_EMPTY_STRING_BUFFER(source->partKey) &&
-				streq(source->amname, "heap"))
-			{
-				log_info("Table %s is %s large "
-						 "which is larger than --split-tables-larger-than %s, "
-						 "and does not have a unique column of type integer: "
-						 "splitting by CTID",
-						 source->qname,
-						 source->bytesPretty,
-						 specs->splitTablesLargerThan.bytesPretty);
-
-				strlcpy(source->partKey, "ctid", sizeof(source->partKey));
-			}
-			else if (!streq(source->amname, "heap"))
-			{
-				log_info("Table %s is %s large "
-						 "which is larger than --split-tables-larger-than %s, "
-						 "does not have a unique column of type integer, "
-						 "and uses table access method \"%s\": "
-						 "same table concurrency is not enabled",
-						 source->qname,
-						 source->bytesPretty,
-						 specs->splitTablesLargerThan.bytesPretty,
-						 source->amname);
-
-				++copySpecsCount;
-				continue;
-			}
-
-			if (!schema_list_partitions(pgsql,
-										source,
-										specs->splitTablesLargerThan.bytes))
-			{
-				/* errors have already been logged */
-				return false;
-			}
-
-			if (source->partsArray.count > 1)
-			{
-				log_info("Table %s is %s large, "
-						 "%d COPY processes will be used, partitioning on %s.",
-						 source->qname,
-						 source->bytesPretty,
-						 source->partsArray.count,
-						 source->partKey);
-
-				copySpecsCount += source->partsArray.count;
-			}
-			else
-			{
-				++copySpecsCount;
-			}
-		}
-		else
-		{
-			++copySpecsCount;
+			log_error("Failed to prepare table specs from internal catalogs, "
+					  "see above for details");
+			return false;
 		}
 	}
 
-	/* now attach the final hash table head to the specs */
-	specs->catalog.sourceTableHashByOid = sourceTableHashByOid;
-	specs->catalog.sourceTableHashByQName = sourceTableHashByQName;
+	/*
+	 * Now display some statistics about the COPY partitioning plan that we
+	 * just computed.
+	 */
+	CatalogTableStats stats = { 0 };
 
-	/* only use as many processes as required */
-	if (copySpecsCount < specs->tableJobs)
+	if (!catalog_s_table_stats(sourceDB, &stats))
 	{
-		specs->tableJobs = copySpecsCount;
+		log_error("Failed to compute source table statistics, "
+				  "see above for details");
+		return false;
 	}
 
-	specs->tableSpecsArray.count = copySpecsCount;
-	specs->tableSpecsArray.array =
-		(CopyTableDataSpec *) malloc(copySpecsCount * sizeof(CopyTableDataSpec));
+	log_info("Fetched information for %lld tables "
+			 "(including %lld tables split in %lld partitions total), "
+			 "with an estimated total of %s tuples and %s on-disk",
+			 (long long) stats.count,
+			 (long long) stats.countSplits,
+			 (long long) stats.countParts,
+			 stats.relTuplesPretty,
+			 stats.bytesPretty);
 
-	uint64_t totalBytes = 0;
-	uint64_t totalTuples = 0;
+	return true;
+}
+
+
+/*
+ * copydb_prepare_table_specs_hook is an iterator callback function.
+ */
+static bool
+copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
+{
+	PrepareTableSpecsContext *context = (PrepareTableSpecsContext *) ctx;
+	CopyDataSpec *specs = context->specs;
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	if (specs->splitTablesLargerThan.bytes > 0 &&
+		source->bytes < specs->splitTablesLargerThan.bytes)
+	{
+		return true;
+	}
 
 	/*
-	 * Prepare the copy specs for each COPY source we have: each full table and
-	 * each table part when partitionning/splitting is in use.
+	 * Now compute partition scheme for same-table COPY concurrency, either
+	 * using a integer field that is unique, or relying on CTID range scans
+	 * otherwise.
+	 *
+	 * When the Table Access Method used is not "heap" we don't know if the
+	 * CTID range scan is supported (see columnar storage extensions), so
+	 * we skip partitioning altogether in that case.
 	 */
-	int specsIndex = 0;
-	CopyTableDataSpec *tableSpecs = &(tableSpecsArray->array[specsIndex]);
-
-	for (int tableIndex = 0; tableIndex < tableArray->count; tableIndex++)
+	if (IS_EMPTY_STRING_BUFFER(source->partKey) &&
+		streq(source->amname, "heap"))
 	{
-		/* initialize our TableDataProcess entry now */
-		SourceTable *source = &(tableArray->array[tableIndex]);
+		log_info("Table %s is %s large "
+				 "which is larger than --split-tables-larger-than %s, "
+				 "and does not have a unique column of type integer: "
+				 "splitting by CTID",
+				 source->qname,
+				 source->bytesPretty,
+				 specs->splitTablesLargerThan.bytesPretty);
+
+		strlcpy(source->partKey, "ctid", sizeof(source->partKey));
 
 		/*
-		 * The CopyTableDataSpec structure has its own memory area for the
-		 * SourceTable entry, which is copied by the following function. This
-		 * means that 'SourceTableArray tableArray' is actually local memory.
+		 * Make sure we have proper statistics (relpages) about the table
+		 * before compute the CTID ranges for the concurrent table scans.
 		 */
-		int partCount = source->partsArray.count;
+		char sql[BUFSIZE] = { 0 };
 
-		if (partCount <= 1)
+		sformat(sql, sizeof(sql), "ANALYZE %s", source->qname);
+
+		log_notice("%s", sql);
+
+		if (!pgsql_execute(context->pgsql, sql))
 		{
-			if (!copydb_init_table_specs(tableSpecs, specs, source, 0))
-			{
-				/* errors have already been logged */
-				return false;
-			}
-
-			tableSpecs = &(tableSpecsArray->array[++specsIndex]);
+			log_error("Failed to refresh table %s statistics",
+					  source->qname);
+			return false;
 		}
-		else
-		{
-			for (int partIndex = 0; partIndex < partCount; partIndex++)
-			{
-				if (!copydb_init_table_specs(tableSpecs,
-											 specs,
-											 source,
-											 partIndex))
-				{
-					/* errors have already been logged */
-					return false;
-				}
+	}
+	else if (!streq(source->amname, "heap"))
+	{
+		log_info("Table %s is %s large "
+				 "which is larger than --split-tables-larger-than %s, "
+				 "does not have a unique column of type integer, "
+				 "and uses table access method \"%s\": "
+				 "same table concurrency is not enabled",
+				 source->qname,
+				 source->bytesPretty,
+				 specs->splitTablesLargerThan.bytesPretty,
+				 source->amname);
 
-				tableSpecs = &(tableSpecsArray->array[++specsIndex]);
-			}
-		}
-
-		totalBytes += source->bytes;
-		totalTuples += source->reltuples;
+		return true;
 	}
 
-	char bytesPretty[BUFSIZE] = { 0 };
-	char relTuplesPretty[BUFSIZE] = { 0 };
+	/*
+	 * The schema_list_partitions() function queries the source database
+	 * for partition ranges depending on the size of the source table and
+	 * the range of unique key numbers (or CTID), and also fills-in our
+	 * internal catalogs s_table_part.
+	 */
+	if (!schema_list_partitions(context->pgsql,
+								sourceDB,
+								source,
+								specs->splitTablesLargerThan.bytes))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
-	(void) pretty_print_bytes(bytesPretty, BUFSIZE, totalBytes);
-	(void) pretty_print_count(relTuplesPretty, BUFSIZE, totalTuples);
-
-	log_info("Fetched information for %d tables, "
-			 "with an estimated total of %s tuples and %s",
-			 tableArray->count,
-			 relTuplesPretty,
-			 bytesPretty);
+	if (source->partsArray.count > 1)
+	{
+		log_info("Table %s is %s large, "
+				 "%d COPY processes will be used, partitioning on %s.",
+				 source->qname,
+				 source->bytesPretty,
+				 source->partsArray.count,
+				 source->partKey);
+	}
 
 	return true;
 }
@@ -455,95 +635,27 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 bool
 copydb_prepare_index_specs(CopyDataSpec *specs, PGSQL *pgsql)
 {
-	SourceIndexArray *indexArray = &(specs->catalog.sourceIndexArray);
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	if (!schema_list_all_indexes(pgsql, &(specs->filters), indexArray))
+	if (!schema_list_all_indexes(pgsql, &(specs->filters), sourceDB) ||
+		!catalog_register_section(sourceDB, DATA_SECTION_INDEXES) ||
+		!catalog_register_section(sourceDB, DATA_SECTION_CONSTRAINTS))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	log_info("Fetched information for %d indexes", indexArray->count);
+	CatalogCounts count = { 0 };
 
-	/*
-	 * Now build a SourceIndexList per table, when we retrieved both the table
-	 * list and the indexes list.
-	 */
-	if (specs->section == DATA_SECTION_ALL)
+	if (!catalog_count_objects(sourceDB, &count))
 	{
-		/* now build the index hash-table */
-		SourceIndex *sourceIndexHashByOid = NULL;
-		SourceIndexArray *indexArray = &(specs->catalog.sourceIndexArray);
-
-		SourceTable *sourceTableHashByOid = specs->catalog.sourceTableHashByOid;
-
-		for (int i = 0; i < indexArray->count; i++)
-		{
-			SourceIndex *index = &(indexArray->array[i]);
-
-			/* add the current index to the index Hash-by-OID */
-			HASH_ADD(hh, sourceIndexHashByOid, indexOid, sizeof(uint32_t), index);
-
-			/* find the index table, update its index list */
-			uint32_t oid = index->tableOid;
-			SourceTable *table = NULL;
-
-			HASH_FIND(hh, sourceTableHashByOid, &oid, sizeof(oid), table);
-
-			if (table == NULL)
-			{
-				log_error("Failed to find table %u (%s) "
-						  " in sourceTableHashByOid",
-						  oid,
-						  indexArray->array[i].tableQname);
-				return false;
-			}
-
-			log_trace("Adding index %u %s to table %u %s",
-					  indexArray->array[i].indexOid,
-					  indexArray->array[i].indexRelname,
-					  table->oid,
-					  table->relname);
-
-			if (table->firstIndex == NULL)
-			{
-				table->firstIndex =
-					(SourceIndexList *) calloc(1, sizeof(SourceIndexList));
-
-				if (table->firstIndex == NULL)
-				{
-					log_error(ALLOCATION_FAILED_ERROR);
-					return false;
-				}
-
-				table->firstIndex->index = index;
-				table->firstIndex->next = NULL;
-
-				table->lastIndex = table->firstIndex;
-			}
-			else
-			{
-				SourceIndexList *current = table->lastIndex;
-
-				table->lastIndex =
-					(SourceIndexList *) calloc(1, sizeof(SourceIndexList));
-
-				if (table->lastIndex == NULL)
-				{
-					log_error(ALLOCATION_FAILED_ERROR);
-					return false;
-				}
-
-				table->lastIndex->index = index;
-				table->lastIndex->next = NULL;
-
-				current->next = table->lastIndex;
-			}
-		}
-
-		/* now attach the final hash table head to the specs */
-		specs->catalog.sourceIndexHashByOid = sourceIndexHashByOid;
+		log_error("Failed to count indexes and constraints in our catalogs");
+		return false;
 	}
+
+	log_info("Fetched information for %lld indexes (supporting %lld constraints)",
+			 (long long) count.indexes,
+			 (long long) count.constraints);
 
 	return true;
 }
@@ -558,16 +670,18 @@ copydb_objectid_is_filtered_out(CopyDataSpec *specs,
 								uint32_t oid,
 								char *restoreListName)
 {
-	SourceFilterItem *hOid = specs->hOid;
-	SourceFilterItem *hName = specs->hName;
-
-	SourceFilterItem *item = NULL;
+	DatabaseCatalog *filtersDB = &(specs->catalogs.filter);
+	CatalogFilter result = { 0 };
 
 	if (oid != 0)
 	{
-		HASH_FIND(hOid, hOid, &oid, sizeof(uint32_t), item);
+		if (!catalog_lookup_filter_by_oid(filtersDB, &result, oid))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 
-		if (item != NULL)
+		if (result.oid != 0)
 		{
 			return true;
 		}
@@ -575,10 +689,13 @@ copydb_objectid_is_filtered_out(CopyDataSpec *specs,
 
 	if (restoreListName != NULL && !IS_EMPTY_STRING_BUFFER(restoreListName))
 	{
-		size_t len = strlen(restoreListName);
-		HASH_FIND(hName, hName, restoreListName, len, item);
+		if (!catalog_lookup_filter_by_rlname(filtersDB, &result, restoreListName))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 
-		if (item != NULL)
+		if (!IS_EMPTY_STRING_BUFFER(result.restoreListName))
 		{
 			return true;
 		}
@@ -597,130 +714,62 @@ copydb_objectid_is_filtered_out(CopyDataSpec *specs,
 bool
 copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 {
+	Catalogs *catalogs = &(specs->catalogs);
+	DatabaseCatalog *filtersDB = &(catalogs->filter);
 	SourceFilters *filters = &(specs->filters);
-	SourceFilterItem *hOid = NULL;
-	SourceFilterItem *hName = NULL;
 
-	SourceTableArray tableArray = { 0, NULL };
-	SourceIndexArray indexArray = { 0, NULL };
-	SourceSequenceArray sequenceArray = { 0, NULL };
-	SourceDependArray dependArray = { 0, NULL };
+	CatalogCounts count = { 0 };
 
-	if (specs->skipExtensions)
+	/* now, are we doing extensions? */
+	if ((specs->section == DATA_SECTION_ALL ||
+		 specs->section == DATA_SECTION_EXTENSIONS) &&
+		!filtersDB->sections[DATA_SECTION_EXTENSIONS].fetched)
 	{
-		SourceSchemaArray schemaArray = { 0, NULL };
-
-		/* fetch the list of schemas that extensions depend on */
-		if (!schema_list_ext_schemas(pgsql, &schemaArray))
+		if (!schema_list_extensions(pgsql, filtersDB) ||
+			!catalog_register_section(filtersDB, DATA_SECTION_EXTENSIONS))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 
-		for (int i = 0; i < schemaArray.count; i++)
+		if (!catalog_count_objects(filtersDB, &count))
 		{
-			SourceSchema *schema = &(schemaArray.array[i]);
-
-			SourceFilterItem *item = malloc(sizeof(SourceFilterItem));
-
-			if (item == NULL)
-			{
-				log_error(ALLOCATION_FAILED_ERROR);
-				return false;
-			}
-
-			item->oid = schema->oid;
-			item->kind = OBJECT_KIND_SCHEMA;
-			item->schema = *schema;
-
-			strlcpy(item->restoreListName,
-					schema->restoreListName,
-					RESTORE_LIST_NAMEDATALEN);
-
-			HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), item);
-
-			size_t len = strlen(item->restoreListName);
-			HASH_ADD(hName, hName, restoreListName, len, item);
+			log_error("Failed to count objects in our catalogs");
+			return false;
 		}
 
-		/* free dynamic memory that's not needed anymore */
-		free(schemaArray.array);
+		log_info("Fetched information for %lld extensions",
+				 (long long) count.extensions);
+	}
 
-		/*
-		 * The main extensionArray can be used both for filtering the
-		 * pg_restore archive catalog, as we either filter all of the
-		 * extensions or none of them.
-		 */
-		for (int i = 0; i < specs->catalog.extensionArray.count; i++)
+	if (specs->skipExtensions)
+	{
+		/* fetch the list of schemas that extensions depend on */
+		if (!schema_list_ext_schemas(pgsql, filtersDB))
 		{
-			SourceExtension *ext = &(specs->catalog.extensionArray.array[i]);
-
-			SourceFilterItem *item = malloc(sizeof(SourceFilterItem));
-
-			if (item == NULL)
-			{
-				log_error(ALLOCATION_FAILED_ERROR);
-				return false;
-			}
-
-			item->oid = ext->oid;
-			item->kind = OBJECT_KIND_EXTENSION;
-			item->extension = *ext;
-
-			/* an extension's pg_restore list name is just its name */
-			strlcpy(item->restoreListName,
-					ext->extname,
-					RESTORE_LIST_NAMEDATALEN);
-
-			HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), item);
-
-			size_t len = strlen(item->restoreListName);
-			HASH_ADD(hName, hName, restoreListName, len, item);
+			/* errors have already been logged */
+			return false;
 		}
 	}
 
-	if (specs->skipCollations)
+	if (specs->skipCollations &&
+		!filtersDB->sections[DATA_SECTION_COLLATIONS].fetched)
 	{
-		/*
-		 * Add all the listed collations OIDs so as to skip them later.
-		 */
-		for (int i = 0; i < specs->catalog.collationArray.count; i++)
+		if (!schema_list_collations(pgsql, filtersDB) ||
+			!catalog_register_section(filtersDB, DATA_SECTION_COLLATIONS))
 		{
-			SourceCollation *coll = &(specs->catalog.collationArray.array[i]);
-			SourceFilterItem *item = malloc(sizeof(SourceFilterItem));
-
-			if (item == NULL)
-			{
-				log_error(ALLOCATION_FAILED_ERROR);
-				return false;
-			}
-
-			item->oid = coll->oid;
-			item->kind = OBJECT_KIND_COLLATION;
-			item->collation = *coll;
-
-			strlcpy(item->restoreListName,
-					coll->restoreListName,
-					RESTORE_LIST_NAMEDATALEN);
-
-			/*
-			 * schema_list_collations might return same collation several
-			 * times, so we need to be careful here when adding entries to the
-			 * hash table.
-			 */
-			uint32_t oid = item->oid;
-			SourceFilterItem *found = { 0 };
-
-			HASH_FIND(hOid, hOid, &oid, sizeof(uint32_t), found);
-
-			if (found == NULL)
-			{
-				HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), item);
-
-				size_t len = strlen(item->restoreListName);
-				HASH_ADD(hName, hName, restoreListName, len, item);
-			}
+			/* errors have already been logged */
+			return false;
 		}
+
+		if (!catalog_count_objects(filtersDB, &count))
+		{
+			log_error("Failed to count indexes and constraints in our catalogs");
+			return false;
+		}
+
+		log_info("Fetched information for %lld collations",
+				 (long long) count.colls);
 	}
 
 	/*
@@ -733,332 +782,106 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 
 	if (filters->type == SOURCE_FILTER_TYPE_NONE)
 	{
-		if (specs->skipExtensions || specs->skipCollations)
+		/* still prepare the filters catalog hash-table (--skip-) */
+		DatabaseCatalog *sourceDB = &(catalogs->source);
+
+		if (!catalog_attach(filtersDB, sourceDB, "source"))
 		{
-			/* publish our hash tables to the main CopyDataSpec instance */
-			specs->hOid = hOid;
-			specs->hName = hName;
+			/* errors have already been logged */
+			return false;
 		}
+
+		if (!catalog_prepare_filter(filtersDB))
+		{
+			log_error("Failed to prepare filtering hash-table, "
+					  "see above for details");
+			return false;
+		}
+
 		return true;
 	}
 
 	/*
 	 * Now fetch the OIDs of tables, indexes, and sequences that we filter out.
 	 */
-	if (!schema_list_ordinary_tables(pgsql, filters, &tableArray))
+	if ((specs->section == DATA_SECTION_ALL ||
+		 specs->section == DATA_SECTION_TABLE_DATA) &&
+		!filtersDB->sections[DATA_SECTION_TABLE_DATA].fetched)
 	{
-		/* errors have already been logged */
-		filters->type = type;
-		return false;
+		if (!schema_list_ordinary_tables(pgsql, filters, filtersDB) ||
+			!catalog_register_section(filtersDB, DATA_SECTION_TABLE_DATA))
+		{
+			/* errors have already been logged */
+			filters->type = type;
+			return false;
+		}
 	}
 
-	if (!schema_list_all_indexes(pgsql, filters, &indexArray))
+	if ((specs->section == DATA_SECTION_ALL ||
+		 specs->section == DATA_SECTION_INDEXES ||
+		 specs->section == DATA_SECTION_CONSTRAINTS) &&
+		!filtersDB->sections[DATA_SECTION_INDEXES].fetched)
 	{
-		/* errors have already been logged */
-		filters->type = type;
-		return false;
+		if (!schema_list_all_indexes(pgsql, filters, filtersDB) ||
+			!catalog_register_section(filtersDB, DATA_SECTION_INDEXES) ||
+			!catalog_register_section(filtersDB, DATA_SECTION_CONSTRAINTS))
+		{
+			/* errors have already been logged */
+			filters->type = type;
+			return false;
+		}
 	}
 
-	if (!schema_list_sequences(pgsql, filters, &sequenceArray))
+	if ((specs->section == DATA_SECTION_ALL ||
+		 specs->section == DATA_SECTION_SET_SEQUENCES) &&
+		!filtersDB->sections[DATA_SECTION_SET_SEQUENCES].fetched)
 	{
-		/* errors have already been logged */
-		filters->type = type;
-		return false;
+		if (!schema_list_sequences(pgsql, filters, filtersDB) ||
+			!catalog_register_section(filtersDB, DATA_SECTION_SET_SEQUENCES))
+		{
+			/* errors have already been logged */
+			filters->type = type;
+			return false;
+		}
 	}
 
-	if (!schema_list_pg_depend(pgsql, filters, &dependArray))
+	if (!filtersDB->sections[DATA_SECTION_DEPENDS].fetched)
 	{
-		/* errors have already been logged */
-		filters->type = type;
-		return false;
+		if (!schema_list_pg_depend(pgsql, filters, filtersDB) ||
+			!catalog_register_section(filtersDB, DATA_SECTION_DEPENDS))
+		{
+			/* errors have already been logged */
+			filters->type = type;
+			return false;
+		}
 	}
 
 	/* re-install the actual filter type */
 	filters->type = type;
 
-	/* first the tables */
-	for (int i = 0; i < tableArray.count; i++)
+	/* now prepare the filters catalog hash-table */
+	DatabaseCatalog *sourceDB = &(catalogs->source);
+
+	if (!catalog_attach(filtersDB, sourceDB, "source"))
 	{
-		SourceTable *table = &(tableArray.array[i]);
-
-		SourceFilterItem *item = malloc(sizeof(SourceFilterItem));
-
-		if (item == NULL)
-		{
-			log_error(ALLOCATION_FAILED_ERROR);
-			return false;
-		}
-
-		item->oid = table->oid;
-		item->kind = OBJECT_KIND_TABLE;
-		item->table = *table;
-
-		strlcpy(item->restoreListName,
-				table->restoreListName,
-				RESTORE_LIST_NAMEDATALEN);
-
-		HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), item);
-
-		size_t len = strlen(item->restoreListName);
-		HASH_ADD(hName, hName, restoreListName, len, item);
+		/* errors have already been logged */
+		return false;
 	}
 
-	/* now indexes and constraints */
-	for (int i = 0; i < indexArray.count; i++)
+	if ((specs->section == DATA_SECTION_ALL ||
+		 specs->section == DATA_SECTION_FILTERS) &&
+		!filtersDB->sections[DATA_SECTION_FILTERS].fetched)
 	{
-		SourceIndex *index = &(indexArray.array[i]);
-
-		SourceFilterItem *idxItem = malloc(sizeof(SourceFilterItem));
-
-		if (idxItem == NULL)
+		if (!catalog_prepare_filter(filtersDB) ||
+			!catalog_register_section(filtersDB, DATA_SECTION_FILTERS))
 		{
-			log_error(ALLOCATION_FAILED_ERROR);
+			log_error("Failed to prepare filtering hash-table, "
+					  "see above for details");
 			return false;
 		}
-
-		idxItem->oid = index->indexOid;
-		idxItem->kind = OBJECT_KIND_INDEX;
-		idxItem->index = *index;
-
-		strlcpy(idxItem->restoreListName,
-				index->indexRestoreListName,
-				RESTORE_LIST_NAMEDATALEN);
-
-
-		HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), idxItem);
-
-		size_t len = strlen(idxItem->restoreListName);
-		HASH_ADD(hName, hName, restoreListName, len, idxItem);
-
-		if (indexArray.array[i].constraintOid > 0)
-		{
-			SourceFilterItem *conItem = malloc(sizeof(SourceFilterItem));
-
-			if (conItem == NULL)
-			{
-				log_error(ALLOCATION_FAILED_ERROR);
-				return false;
-			}
-
-			conItem->oid = index->constraintOid;
-			conItem->kind = OBJECT_KIND_CONSTRAINT;
-			conItem->index = *index;
-
-			/* at the moment we lack restore names for constraints */
-			HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), conItem);
-		}
 	}
-
-	/* now sequences */
-	for (int i = 0; i < sequenceArray.count; i++)
-	{
-		SourceSequence *seq = &(sequenceArray.array[i]);
-
-		SourceFilterItem *item = malloc(sizeof(SourceFilterItem));
-
-		if (item == NULL)
-		{
-			log_error(ALLOCATION_FAILED_ERROR);
-			return false;
-		}
-
-		item->oid = seq->oid;
-		item->kind = OBJECT_KIND_SEQUENCE;
-		item->sequence = *seq;
-
-		strlcpy(item->restoreListName,
-				seq->restoreListName,
-				RESTORE_LIST_NAMEDATALEN);
-
-		/*
-		 * Filtering-out sequences work with the following 3 Archive Catalog
-		 * entry kinds:
-		 *
-		 *  - SEQUENCE, matched by sequence oid
-		 *  - SEQUENCE OWNED BY, matched by sequence restore name
-		 *  - DEFAULT, matched by attribute oid
-		 *
-		 * In some cases we want to create the sequence, but we might want to
-		 * skip the SEQUENCE OWNED BY statement, because we didn't actually
-		 * create the owner table.
-		 *
-		 * In those cases we will find the sequence both in the catalogs of
-		 * objects we want to migrate, and also in the list of objects we want
-		 * to skip. The catalog entry typically has seq->ownedby !=
-		 * seq->attrelid, where the ownedby table is skipped from the migration
-		 * because of the filtering.
-		 */
-		SourceSequence *sourceSeqHashByOid = specs->catalog.sourceSeqHashByOid;
-
-		uint32_t sOid = seq->oid;
-		SourceSequence *sequence = NULL;
-
-		HASH_FIND(hh, sourceSeqHashByOid, &sOid, sizeof(sOid), sequence);
-
-		/*
-		 * When we find the sequence in our catalog selection, then we still
-		 * create it and refrain to add the sequence oid to our hash table
-		 * here.
-		 */
-		if (sequence == NULL)
-		{
-			HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), item);
-		}
-
-		/* find if the SEQUENCE OWNED BY table is in our catalog selection */
-		SourceTable *sourceTableHashByOid = specs->catalog.sourceTableHashByOid;
-
-		uint32_t tOid = seq->ownedby;
-		SourceTable *table = NULL;
-
-		HASH_FIND(hh, sourceTableHashByOid, &tOid, sizeof(tOid), table);
-
-		/*
-		 * Only filter-out the SEQUENCE OWNED BY when our catalog selection
-		 * does not contain the target table.
-		 */
-		if (table == NULL)
-		{
-			size_t len = strlen(seq->restoreListName);
-			HASH_ADD(hName, hName, restoreListName, len, item);
-		}
-
-		/*
-		 * Also add pg_attribute.oid when it's not null (non-zero here). This
-		 * takes care of the DEFAULT entries in the pg_dump Archive Catalog,
-		 * and these entries target the attroid directly.
-		 */
-		if (seq->attroid > 0)
-		{
-			SourceFilterItem *attrItem = malloc(sizeof(SourceFilterItem));
-
-			if (attrItem == NULL)
-			{
-				log_error(ALLOCATION_FAILED_ERROR);
-				return false;
-			}
-
-			attrItem->oid = seq->attroid;
-			attrItem->kind = OBJECT_KIND_DEFAULT;
-			attrItem->sequence = *seq;
-
-			strlcpy(attrItem->restoreListName,
-					seq->restoreListName,
-					RESTORE_LIST_NAMEDATALEN);
-
-			HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), attrItem);
-		}
-	}
-
-	/* finally table dependencies */
-	for (int i = 0; i < dependArray.count; i++)
-	{
-		SourceDepend *depend = &(dependArray.array[i]);
-
-		/*
-		 * In some cases with sequences we might want to skip adding a
-		 * dependency in our hash table here. See the previous discussion for
-		 * details.
-		 */
-		SourceSequence *sourceSeqHashByOid = specs->catalog.sourceSeqHashByOid;
-
-		uint32_t sOid = depend->objid;
-		SourceSequence *sequence = NULL;
-
-		HASH_FIND(hh, sourceSeqHashByOid, &sOid, sizeof(sOid), sequence);
-
-		if (sequence != NULL)
-		{
-			continue;
-		}
-
-		SourceFilterItem *item = malloc(sizeof(SourceFilterItem));
-
-		if (item == NULL)
-		{
-			log_error(ALLOCATION_FAILED_ERROR);
-			return false;
-		}
-
-		item->oid = depend->objid;
-		item->kind = OBJECT_KIND_UNKNOWN;
-
-		strlcpy(item->restoreListName,
-				depend->identity,
-				RESTORE_LIST_NAMEDATALEN);
-
-		HASH_ADD(hOid, hOid, oid, sizeof(uint32_t), item);
-	}
-
-	/* publish our hash tables to the main CopyDataSpec instance */
-	specs->hOid = hOid;
-	specs->hName = hName;
-
-	/* free dynamic memory that's not needed anymore */
-	free(tableArray.array);
-	free(indexArray.array);
-	free(sequenceArray.array);
 
 	return true;
-}
-
-
-/*
- * copydb_ObjectKindToString returns the string representation of an ObjectKind
- * enum value.
- */
-char *
-copydb_ObjectKindToString(ObjectKind kind)
-{
-	switch (kind)
-	{
-		case OBJECT_KIND_UNKNOWN:
-		{
-			return "unknown";
-		}
-
-		case OBJECT_KIND_SCHEMA:
-		{
-			return "schema";
-		}
-
-		case OBJECT_KIND_EXTENSION:
-		{
-			return "extension";
-		}
-
-		case OBJECT_KIND_COLLATION:
-		{
-			return "collation";
-		}
-
-		case OBJECT_KIND_TABLE:
-		{
-			return "table";
-		}
-
-		case OBJECT_KIND_INDEX:
-		{
-			return "index";
-		}
-
-		case OBJECT_KIND_CONSTRAINT:
-		{
-			return "constraint";
-		}
-
-		case OBJECT_KIND_SEQUENCE:
-		{
-			return "sequence";
-		}
-
-		case OBJECT_KIND_DEFAULT:
-		{
-			return "default";
-		}
-	}
-
-	return "unknown";
 }
 
 
@@ -1076,6 +899,26 @@ copydb_prepare_target_catalog(CopyDataSpec *specs)
 	{
 		log_notice("Skipping target catalog preparation");
 		return true;
+	}
+
+	/*
+	 * Always invalidate the catalog caches for the target database.
+	 *
+	 * On the source database, we can use a snapshot and then make sure that
+	 * the view of the database objects we have in the cache is still valid, or
+	 * we can use --not-consistent and accept that it's not.
+	 *
+	 * On the target database, we don't have a snapshot and we need to consider
+	 * that anything goes. Clean-up the caches.
+	 */
+	DatabaseCatalog *targetDB = &(specs->catalogs.target);
+
+	if (!catalog_drop_schema(targetDB) ||
+		!catalog_create_schema(targetDB))
+	{
+		log_error("Failed to clean-up the target catalog cache, "
+				  "see above for details");
+		return false;
 	}
 
 	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
@@ -1096,24 +939,11 @@ copydb_prepare_target_catalog(CopyDataSpec *specs)
 	 * dependency between the extension and the schema (using a DO $$ ... $$
 	 * block for instance), and there is no CREATE SCHEMA IF NOT EXISTS.
 	 */
-	SourceSchema *schemaHashByName = NULL;
-	SourceSchemaArray *schemaArray = &(specs->targetCatalog.schemaArray);
-
-	if (!schema_list_schemas(&dst, schemaArray))
+	if (!schema_list_schemas(&dst, targetDB))
 	{
 		log_error("Failed to list schemas on the target database");
 		return false;
 	}
-
-	for (int i = 0; i < schemaArray->count; i++)
-	{
-		SourceSchema *schema = &(schemaArray->array[i]);
-		size_t len = strlen(schema->nspname);
-
-		HASH_ADD(hh, schemaHashByName, nspname, len, schema);
-	}
-
-	specs->targetCatalog.schemaHashByName = schemaHashByName;
 
 	/*
 	 * Now fetch a list of roles that exist on the target system, so that we
@@ -1123,30 +953,54 @@ copydb_prepare_target_catalog(CopyDataSpec *specs)
 	 *  ALTER DATABASE foo SET name = value;
 	 *  ALTER ROLE bob IN DATABASE foo SET name = value;
 	 */
-	SourceRole *rolesHashByName = NULL;
-	SourceRoleArray *rolesArray = &(specs->targetCatalog.rolesArray);
-
-	if (!schema_list_roles(&dst, rolesArray))
+	if (!schema_list_roles(&dst, targetDB))
 	{
 		log_error("Failed to list roles on the target database");
 		return false;
 	}
 
-	for (int i = 0; i < rolesArray->count; i++)
-	{
-		SourceRole *role = &(rolesArray->array[i]);
-		size_t len = strlen(role->rolname);
+	/*
+	 * Now fetch the list of tables and their indexes and constraints on the
+	 * target catalogs, so that in case of a --resume we can skip the
+	 * constraints that have already been created.
+	 *
+	 * That's necessary because ALTER TABLE ADD CONSTRAINT does not have an IF
+	 * EXISTS options.
+	 */
+	SourceFilters targetDBfilter = { .type = SOURCE_FILTER_TYPE_NONE };
 
-		HASH_ADD(hh, rolesHashByName, rolname, len, role);
+	if (!catalog_delete_s_index_all(targetDB))
+	{
+		log_error("Failed to DELETE all target catalog indexes "
+				  "in our internal catalogs (cache invalidation), "
+				  "see above for details");
+		return false;
 	}
 
-	specs->targetCatalog.rolesHashByName = rolesHashByName;
+	if (!schema_list_all_indexes(&dst, &targetDBfilter, targetDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	if (!pgsql_commit(&dst))
 	{
 		/* errors have already been logged */
 		return false;
 	}
+
+	CatalogCounts count = { 0 };
+
+	if (!catalog_count_objects(targetDB, &count))
+	{
+		log_error("Failed to count indexes and constraints in our catalogs");
+		return false;
+	}
+
+	log_info("Found %lld indexes (supporting %lld constraints) "
+			 "in the target database",
+			 (long long) count.indexes,
+			 (long long) count.constraints);
 
 	return true;
 }
@@ -1161,43 +1015,18 @@ copydb_schema_already_exists(CopyDataSpec *specs,
 							 const char *restoreListName,
 							 bool *exists)
 {
-	SourceSchema *schemaHashByName = specs->targetCatalog.schemaHashByName;
+	DatabaseCatalog *targetDB = &(specs->catalogs.target);
+	SourceSchema schema = { 0 };
 
-	if (strncmp(restoreListName, "- ", 2) != 0)
+	if (!catalog_lookup_s_namespace_by_rlname(targetDB,
+											  restoreListName,
+											  &schema))
 	{
-		log_error("Failed to parse restore list name \"%s\"", restoreListName);
+		/* errors have already been logged */
 		return false;
 	}
 
-	const char *start = restoreListName + 2;
-	char *end = strchr(start, ' ');
-
-	if (end == NULL)
-	{
-		log_error("Failed to parse restore list name \"%s\"", restoreListName);
-		return false;
-	}
-
-	/* skip the end space itself pointed */
-	int len = end - start;
-	char nspname[NAMEDATALEN] = { 0 };
-	size_t bytes = sformat(nspname, sizeof(nspname), "%.*s", len, start);
-
-	if (bytes >= sizeof(nspname))
-	{
-		log_error("Failed to parse schema name \"%s\" (%d bytes long), "
-				  "pgcopydb and Postgres only support names up to %lu bytes",
-				  nspname,
-				  len,
-				  sizeof(nspname));
-		return false;
-	}
-
-	SourceSchema *schema = NULL;
-
-	HASH_FIND(hh, schemaHashByName, nspname, len, schema);
-
-	*exists = schema != NULL;
+	*exists = (schema.oid != 0);
 
 	return true;
 }
