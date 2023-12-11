@@ -45,6 +45,7 @@ of tables, indexes, constraints and sequences there.
      --source         Postgres URI to the source database
      --target         Postgres URI to the target database
      --dir            Work directory to use
+     --snapshot       Use snapshot obtained with pg_export_snapshot on the source database
 
 
 .. _pgcopydb_compare_data:
@@ -92,6 +93,7 @@ Running such a query on a large table can take a lot of time.
      --target         Postgres URI to the target database
      --dir            Work directory to use
      --json           Format the output using JSON
+     --snapshot       Use snapshot obtained with pg_export_snapshot on the source database
 
 
 Options
@@ -125,6 +127,11 @@ compare data`` subcommands:
 
   The output of the command is formatted in JSON, when supported. Ignored
   otherwise.
+
+--snapshot
+
+  Instead of comparing the live data pgcopydb will use an already exported
+  snapshot on the source database for comparison.
 
 --verbose
 
