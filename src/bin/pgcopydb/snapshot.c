@@ -448,6 +448,7 @@ snapshot_write_slot(const char *filename, ReplicationSlot *slot)
 	appendPQExpBuffer(contents, "%X/%X\n", LSN_FORMAT_ARGS(slot->lsn));
 	appendPQExpBuffer(contents, "%s\n", slot->snapshot);
 	appendPQExpBuffer(contents, "%s\n", OutputPluginToString(slot->plugin));
+	appendPQExpBuffer(contents, "%s\n", boolToString(slot->wal2jsonNumericAsString));
 
 	if (PQExpBufferBroken(contents))
 	{
@@ -490,7 +491,7 @@ snapshot_read_slot(const char *filename, ReplicationSlot *slot)
 	char *lines[BUFSIZE] = { 0 };
 	int lineCount = splitLines(contents, lines, BUFSIZE);
 
-	if (lineCount != 4)
+	if (lineCount != 5)
 	{
 		log_error("Failed to parse replication slot file \"%s\"", filename);
 		free(contents);
@@ -547,6 +548,18 @@ snapshot_read_slot(const char *filename, ReplicationSlot *slot)
 				  filename);
 		free(contents);
 		return false;
+	}
+
+	/* 5. wal2json-numeric-as-string */
+	parse_bool(lines[4], &(slot->wal2jsonNumericAsString));
+
+	if (slot->wal2jsonNumericAsString &&
+		slot->plugin != STREAM_PLUGIN_WAL2JSON)
+	{
+		log_error("Failed to read wal2json-numeric-as-string \"%s\" from file \"%s\" "
+				  "because the plugin is not wal2json",
+				  lines[4],
+				  filename);
 	}
 
 	free(contents);
