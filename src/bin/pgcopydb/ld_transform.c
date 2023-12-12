@@ -2061,7 +2061,7 @@ stream_write_insert(FILE *out, LogicalMessageInsert *insert)
 		/*
 		 * First, the PREPARE part.
 		 */
-		appendPQExpBuffer(buf, "INSERT INTO %s.%s ",
+		appendPQExpBuffer(buf, "INSERT INTO \"%s\".\"%s\" ",
 						  insert->nspname,
 						  insert->relname);
 
@@ -2198,7 +2198,7 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 		/*
 		 * First, the PREPARE part.
 		 */
-		appendPQExpBuffer(buf, "UPDATE %s.%s SET ",
+		appendPQExpBuffer(buf, "UPDATE \"%s\".\"%s\" SET ",
 						  update->nspname,
 						  update->relname);
 		int pos = 0;
@@ -2366,7 +2366,7 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 		/*
 		 * First, the PREPARE part.
 		 */
-		appendPQExpBuffer(buf, "DELETE FROM %s.%s WHERE ",
+		appendPQExpBuffer(buf, "DELETE FROM \"%s\".\"%s\" WHERE ",
 						  delete->nspname,
 						  delete->relname);
 
