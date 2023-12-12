@@ -426,12 +426,6 @@ copydb_queue_largeobject_metadata(CopyDataSpec *specs, uint64_t *count)
 
 	PGSQL *src = &(specs->sourceSnapshot.pgsql);
 
-	if (!pgsql_begin(src))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	BlobMetadataArrayContext context = { 0 };
 	char *sql =
 		"DECLARE bloboid CURSOR FOR "
