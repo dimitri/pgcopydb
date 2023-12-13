@@ -20,6 +20,12 @@ expect to find it.
      --follow         Implement logical decoding to replay changes
      --plugin         Output plugin to use (test_decoding, wal2json)
      --slot-name      Use this Postgres replication slot name
+	 --restart        Recreate replication slot and snapshot
+	 --verbose        Increase current verbosity
+	 --debug          Set current verbosity to DEBUG level
+	 --trace          Set current verbosity to TRACE level
+	 --quiet          Set current verbosity to ERROR level
+	 --help           Show this help
 
 Options
 -------
@@ -69,6 +75,17 @@ The following options are available to ``pgcopydb snapshot``:
 --slot-name
 
   Logical decoding slot name to use.
+
+--restart
+
+  When the ``--restart`` option is used, pgcopydb will cleanup the existing
+  replication slot and creates a new replication slot and a snapshot.
+
+--resume
+
+  This option is not supported for ``pgcopydb snapshot``. Postgres snapshot
+  are lost when the transaction finishes and it is not technically possible
+  to resume the lost snapshot. so this option is ignored.
 
 --verbose
 

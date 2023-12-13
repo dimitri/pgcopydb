@@ -28,12 +28,12 @@ CommandLine snapshot_command =
 	make_command(
 		"snapshot",
 		"Create and export a snapshot on the source database",
-		" --source ... ",
 		"  --source         Postgres URI to the source database\n"
 		"  --dir            Work directory to use\n"
 		"  --follow         Implement logical decoding to replay changes\n"
 		"  --plugin         Output plugin to use (test_decoding, wal2json)\n"
 		"  --slot-name      Use this Postgres replication slot name\n",
+		"  --restart        Recreate replication slot and snapshot\n",
 		cli_create_snapshot_getopts,
 		cli_create_snapshot);
 
@@ -52,6 +52,8 @@ cli_create_snapshot_getopts(int argc, char **argv)
 		{ "follow", no_argument, NULL, 'f' },
 		{ "plugin", required_argument, NULL, 'p' },
 		{ "slot-name", required_argument, NULL, 's' },
+		{ "restart", no_argument, NULL, 'r' },
+		{ "resume", no_argument, NULL, 'R' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "notice", no_argument, NULL, 'v' },
@@ -115,6 +117,22 @@ cli_create_snapshot_getopts(int argc, char **argv)
 				options.slot.plugin = OutputPluginFromString(optarg);
 				log_trace("--plugin %s",
 						  OutputPluginToString(options.slot.plugin));
+				break;
+			}
+
+			case 'r':
+			{
+				options.restart = true;
+				log_trace("--restart");
+				break;
+			}
+
+			case 'R':
+			{
+				log_fatal("pgcopydb snapshot --resume is not supported: "
+						  "Postgres snapshot are lost when the transaction "
+						  "finishes");
+				exit(EXIT_CODE_BAD_ARGS);
 				break;
 			}
 
@@ -289,6 +307,23 @@ cli_create_snapshot(int argc, char **argv)
 		StreamSpecs streamSpecs = { 0 };
 
 		bool logSQL = log_get_level() <= LOG_TRACE;
+
+		/*
+		 * When using pgcopydb snapshot --follow --restart we first cleanup the
+		 * previous setup, and that includes dropping the replication slot.
+		 */
+		if (createSNoptions.restart)
+		{
+			log_info("Clean-up replication setup, per --restart");
+
+			if (!stream_cleanup_databases(&copySpecs,
+										  createSNoptions.slot.slotName,
+										  createSNoptions.origin))
+			{
+				/* errors have already been logged */
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+		}
 
 		if (!stream_init_specs(&streamSpecs,
 							   &(copySpecs.cfPaths.cdc),
