@@ -368,6 +368,29 @@ cli_copydb_getenv(CopyDBOptions *options)
 		}
 	}
 
+	/* check if --wal2json-numeric-as-string has been used */
+	if (env_exists(PGCOPYDB_WAL2JSON_NUMERIC_AS_STRING))
+	{
+		char wal2jsonNumericAsString[BUFSIZE] = { 0 };
+
+		if (!get_env_copy(PGCOPYDB_WAL2JSON_NUMERIC_AS_STRING,
+						  wal2jsonNumericAsString,
+						  sizeof(wal2jsonNumericAsString)))
+		{
+			/* errors have already been logged */
+			++errors;
+		}
+		else if (!parse_bool(wal2jsonNumericAsString,
+							 &(options->slot.wal2jsonNumericAsString)))
+		{
+			log_error("Failed to parse environment variable \"%s\" "
+					  "value \"%s\", expected a boolean (on/off)",
+					  PGCOPYDB_WAL2JSON_NUMERIC_AS_STRING,
+					  wal2jsonNumericAsString);
+			++errors;
+		}
+	}
+
 	/* when --drop-if-exists has not been used, check PGCOPYDB_DROP_IF_EXISTS */
 	if (!options->restoreOptions.dropIfExists)
 	{

@@ -766,6 +766,20 @@ PGCOPYDB_SPLIT_TABLES_LARGER_THAN
    When ``--split-tables-larger-than`` is ommitted from the command line,
    then this environment variable is used.
 
+PGCOPYDB_OUTPUT_PLUGIN
+
+   Logical decoding output plugin to use. When ``--plugin`` is omitted from the
+   command line, then this environment variable is used.
+
+PGCOPYDB_WAL2JSON_NUMERIC_AS_STRING
+
+   When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
+   then pgcopydb uses the wal2json option ``--numeric-data-types-as-string``
+   when using the wal2json output plugin.
+
+   When ``--wal2json-numeric-as-string`` is ommitted from the command line
+   then this environment variable is used.
+
 PGCOPYDB_DROP_IF_EXISTS
 
    When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
