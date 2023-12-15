@@ -88,6 +88,11 @@ queue_send(Queue *queue, QMessage *msg)
 	bool firstLoop = true;
 
 	do {
+		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		{
+			return false;
+		}
+
 		if (firstLoop)
 		{
 			firstLoop = false;
