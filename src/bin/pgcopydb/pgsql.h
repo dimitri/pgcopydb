@@ -476,6 +476,7 @@ typedef struct ReplicationSlot
 	uint64_t lsn;
 	char snapshot[BUFSIZE];
 	StreamOutputPlugin plugin;
+	bool wal2jsonNumericAsString;
 } ReplicationSlot;
 
 bool pgsql_create_logical_replication_slot(LogicalStreamClient *client,

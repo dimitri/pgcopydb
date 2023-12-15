@@ -92,14 +92,16 @@ stream_init_specs(StreamSpecs *specs,
 		case STREAM_PLUGIN_WAL2JSON:
 		{
 			KeyVal options = {
-				.count = 6,
+				/* we ignore the last keyword and value if the option is not set */
+				.count = specs->slot.wal2jsonNumericAsString ? 7 : 6,
 				.keywords = {
 					"format-version",
 					"include-xids",
 					"include-schemas",
 					"include-transaction",
 					"include-types",
-					"filter-tables"
+					"filter-tables",
+					"numeric-data-types-as-string"
 				},
 				.values = {
 					"2",
@@ -107,12 +109,12 @@ stream_init_specs(StreamSpecs *specs,
 					"true",
 					"true",
 					"true",
-					"pgcopydb.*"
+					"pgcopydb.*",
+					"true"
 				}
 			};
 
 			specs->pluginOptions = options;
-
 			break;
 		}
 
