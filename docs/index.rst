@@ -27,10 +27,3 @@ __ https://github.com/dimitri/pgcopydb
    design
    install
    ref/manual
-
-Indices and tables
-==================
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
