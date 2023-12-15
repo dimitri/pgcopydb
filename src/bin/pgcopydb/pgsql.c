@@ -501,12 +501,35 @@ pgsql_open_connection(PGSQL *pgsql)
 	}
 
 	/*
-	 * set application_name to contain the process title and pid, so that it is
+	 * Set application_name to contain the process title and pid, so that it is
 	 * easier to identify our connections in pg_stat_activity.
+	 *
+	 * From Postgres docs: The application_name can be any string of less than
+	 * NAMEDATALEN characters (64 characters in a standard build).
+	 *
+	 * See: https://www.postgresql.org/docs/current/runtime-config-logging.html
 	 */
+	const char *ps_buffer_prefix = "pgcopydb: ";
+	int prefixLen = strlen(ps_buffer_prefix);
+
 	char app_name[BUFSIZE] = { 0 };
 
-	sformat(app_name, sizeof(app_name), "pgcopydb[%d] %s", getpid(), ps_buffer);
+	sformat(app_name, sizeof(app_name), "pgcopydb[%d]", getpid());
+
+	if (strncmp(ps_buffer, ps_buffer_prefix, prefixLen) == 0)
+	{
+		sformat(app_name, sizeof(app_name), "%s %s",
+				app_name,
+				ps_buffer + prefixLen);
+	}
+	else
+	{
+		sformat(app_name, sizeof(app_name), "%s %s", app_name, ps_buffer);
+	}
+
+	/* make sure to truncate application name to NAMEDATALEN to avoid notices */
+	app_name[NAMEDATALEN - 1] = '\0';
+
 	setenv("PGAPPNAME", app_name, 1);
 
 	/* we implement our own retry strategy */
@@ -1152,11 +1175,11 @@ pgsql_server_version(PGSQL *pgsql)
 	char *endpoint =
 		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
 
-	log_notice("[%s %d] Postgres version %s (%d)",
-			   endpoint,
-			   PQbackendPID(pgsql->connection),
-			   pgsql->pgversion,
-			   pgsql->pgversion_num);
+	log_debug("[%s %d] Postgres version %s (%d)",
+			  endpoint,
+			  PQbackendPID(pgsql->connection),
+			  pgsql->pgversion,
+			  pgsql->pgversion_num);
 
 	return true;
 }
