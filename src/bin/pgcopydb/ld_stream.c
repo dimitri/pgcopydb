@@ -48,7 +48,7 @@ stream_init_specs(StreamSpecs *specs,
 				  char *origin,
 				  uint64_t endpos,
 				  LogicalStreamMode mode,
-				  SourceCatalog *catalog,
+				  DatabaseCatalog *sourceDB,
 				  bool stdin,
 				  bool stdout,
 				  bool logSQL)
@@ -62,7 +62,7 @@ stream_init_specs(StreamSpecs *specs,
 	specs->paths = *paths;
 	specs->endpos = endpos;
 
-	specs->catalog = catalog;
+	specs->sourceDB = sourceDB;
 
 	/*
 	 * Copy the given ReplicationSlot: it comes from command line parsing, or
@@ -399,7 +399,7 @@ stream_init_context(StreamSpecs *specs)
 	privateContext->maxWrittenLSN = specs->startpos;
 
 	/* transform needs some catalog lookups (pkey, type oid) */
-	privateContext->catalog = specs->catalog;
+	privateContext->sourceDB = specs->sourceDB;
 
 	return true;
 }

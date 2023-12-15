@@ -9,6 +9,7 @@
 
 #include "parson.h"
 
+#include "catalog.h"
 #include "copydb.h"
 #include "env_utils.h"
 #include "log.h"
@@ -20,6 +21,10 @@
 
 
 static void prepareLineSeparator(char dashes[], int size);
+
+static bool create_table_index_file_hook(void *ctx, SourceIndex *index);
+static bool prepare_summary_table_hook(void *context, SourceTable *table);
+static bool prepare_summary_table_index_hook(void *ctx, SourceIndex *index);
 
 
 /*
@@ -233,7 +238,9 @@ finish_table_summary(CopyTableSummary *summary, char *filename)
  * index doneFile.
  */
 bool
-create_table_index_file(SourceTable *table, char *filename)
+create_table_index_file(DatabaseCatalog *catalog,
+						SourceTable *table,
+						char *filename)
 {
 	PQExpBuffer content = createPQExpBuffer();
 
@@ -244,14 +251,16 @@ create_table_index_file(SourceTable *table, char *filename)
 		return false;
 	}
 
-	SourceIndexList *indexListEntry = table->firstIndex;
-
-	for (; indexListEntry != NULL; indexListEntry = indexListEntry->next)
+	if (!catalog_iter_s_index_table(catalog,
+									table->nspname,
+									table->relname,
+									content,
+									&create_table_index_file_hook))
 	{
-		SourceIndex *index = indexListEntry->index;
-
-		appendPQExpBuffer(content, "%u\n", index->indexOid);
-		appendPQExpBuffer(content, "%u\n", index->constraintOid);
+		log_error("Failed to write table %s index list file, "
+				  "see above for details",
+				  table->qname);
+		return false;
 	}
 
 	/* memory allocation could have failed while building string */
@@ -276,68 +285,15 @@ create_table_index_file(SourceTable *table, char *filename)
 
 
 /*
- * read_table_index_file reads an index list file and populates an array of
- * indexes with only the indexOid information. The actual array memory
- * allocation is done in the function.
+ * create_table_index_file_hook is an iterator callback function.
  */
-bool
-read_table_index_file(SourceIndexArray *indexArray, char *filename)
+static bool
+create_table_index_file_hook(void *ctx, SourceIndex *index)
 {
-	char *fileContents = NULL;
-	long fileSize = 0L;
+	PQExpBuffer content = (PQExpBuffer) ctx;
 
-	if (!file_exists(filename))
-	{
-		indexArray->count = 0;
-		indexArray->array = NULL;
-		return true;
-	}
-
-	if (!read_file(filename, &fileContents, &fileSize))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	char *fileLines[BUFSIZE] = { 0 };
-	int lineCount = splitLines(fileContents, fileLines, BUFSIZE);
-
-	/*
-	 * We expect to have alternate lines with first indexOid and then
-	 * constraintOid (which could be zero). No comments, etc.
-	 */
-	indexArray->count = 0;
-	indexArray->array = (SourceIndex *) calloc(lineCount, sizeof(SourceIndex));
-
-	if (indexArray->array == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	for (int i = 0; i < lineCount; i++)
-	{
-		SourceIndex *index = &(indexArray->array[indexArray->count]);
-
-		uint32_t *target =
-			i % 2 == 0 ? &(index->indexOid) : &(index->constraintOid);
-
-		if (!stringToUInt32(fileLines[i], target))
-		{
-			log_error("Failed to read the index oid \"%s\" "
-					  "in file \"%s\" at line %d",
-					  fileLines[i],
-					  filename,
-					  i);
-			return false;
-		}
-
-		/* one index entry (indexOid, constraintOid) spans two lines */
-		if (i % 2 == 1)
-		{
-			++(indexArray->count);
-		}
-	}
+	appendPQExpBuffer(content, "%u\n", index->indexOid);
+	appendPQExpBuffer(content, "%u\n", index->constraintOid);
 
 	return true;
 }
@@ -855,19 +811,21 @@ print_summary_table(SummaryTable *summary)
 
 	fformat(stdout, "\n");
 
-	fformat(stdout, "%*s | %*s | %*s | %*s | %*s | %*s | %*s\n",
+	fformat(stdout, "%*s | %*s | %*s | %*s | %*s | %*s | %*s | %*s \n",
 			headers->maxOidSize, "OID",
 			headers->maxNspnameSize, "Schema",
 			headers->maxRelnameSize, "Name",
+			headers->maxPartCountSize, "Parts",
 			headers->maxTableMsSize, "copy duration",
 			headers->maxBytesSize, "transmitted bytes",
 			headers->maxIndexCountSize, "indexes",
 			headers->maxIndexMsSize, "create index duration");
 
-	fformat(stdout, "%s-+-%s-+-%s-+-%s-+-%s-+-%s-+-%s\n",
+	fformat(stdout, "%s-+-%s-+-%s-+-%s-+-%s-+-%s-+-%s-+-%s\n",
 			headers->oidSeparator,
 			headers->nspnameSeparator,
 			headers->relnameSeparator,
+			headers->partCountSeparator,
 			headers->tableMsSeparator,
 			headers->bytesSeparator,
 			headers->indexCountSeparator,
@@ -877,10 +835,11 @@ print_summary_table(SummaryTable *summary)
 	{
 		SummaryTableEntry *entry = &(summary->array[i]);
 
-		fformat(stdout, "%*s | %*s | %*s | %*s | %*s | %*s | %*s\n",
+		fformat(stdout, "%*s | %*s | %*s | %*s | %*s | %*s | %*s | %*s\n",
 				headers->maxOidSize, entry->oidStr,
 				headers->maxNspnameSize, entry->nspname,
 				headers->maxRelnameSize, entry->relname,
+				headers->maxPartCountSize, entry->partCount,
 				headers->maxTableMsSize, entry->tableMs,
 				headers->maxBytesSize, entry->bytesStr,
 				headers->maxIndexCountSize, entry->indexCount,
@@ -1127,6 +1086,7 @@ prepare_summary_table_headers(SummaryTable *summary)
 	headers->maxOidSize = 3;        /* "oid" */
 	headers->maxNspnameSize = 6;    /* "schema" */
 	headers->maxRelnameSize = 4;    /* "name" */
+	headers->maxPartCountSize = 5;    /* "parts" */
 	headers->maxTableMsSize = 13;   /* "copy duration" */
 	headers->maxBytesSize = 17;     /* "transmitted bytes" */
 	headers->maxIndexCountSize = 7; /* "indexes" */
@@ -1157,6 +1117,13 @@ prepare_summary_table_headers(SummaryTable *summary)
 		if (headers->maxRelnameSize < len)
 		{
 			headers->maxRelnameSize = len;
+		}
+
+		len = strlen(entry->partCount);
+
+		if (headers->maxPartCountSize < len)
+		{
+			headers->maxPartCountSize = len;
 		}
 
 		len = strlen(entry->tableMs);
@@ -1192,6 +1159,7 @@ prepare_summary_table_headers(SummaryTable *summary)
 	prepareLineSeparator(headers->oidSeparator, headers->maxOidSize);
 	prepareLineSeparator(headers->nspnameSeparator, headers->maxNspnameSize);
 	prepareLineSeparator(headers->relnameSeparator, headers->maxRelnameSize);
+	prepareLineSeparator(headers->partCountSeparator, headers->maxPartCountSize);
 	prepareLineSeparator(headers->tableMsSeparator, headers->maxTableMsSize);
 	prepareLineSeparator(headers->bytesSeparator, headers->maxBytesSize);
 	prepareLineSeparator(headers->indexCountSeparator, headers->maxIndexCountSize);
@@ -1263,6 +1231,15 @@ print_summary(Summary *summary, CopyDataSpec *specs)
 }
 
 
+typedef struct SummaryTableContext
+{
+	Summary *summary;
+	CopyDataSpec *specs;
+	uint32_t tableIndex;
+	uint64_t indexingDurationMs;
+} SummaryTableContext;
+
+
 /*
  * prepare_summary_table prepares the summary table array with the durations
  * read from disk in the doneFile for each oid that has been processed.
@@ -1272,15 +1249,31 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 {
 	TopLevelTimings *timings = &(summary->timings);
 	SummaryTable *summaryTable = &(summary->table);
-	CopyTableDataSpecsArray *tableSpecsArray = &(specs->tableSpecsArray);
-	uint64_t *totalBytes = &(summaryTable->totalBytes);
-	*totalBytes = 0;
 
-	int count = tableSpecsArray->count;
+	summaryTable->totalBytes = 0;
 
-	summaryTable->count = count;
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+	CatalogCounts count = { 0 };
+
+	if (!catalog_init_from_specs(specs))
+	{
+		log_error("Failed to initialize pgcopydb internal catalogs");
+		return false;
+	}
+
+	if (!catalog_count_objects(sourceDB, &count))
+	{
+		log_error("Failed to count indexes and constraints in our catalogs");
+		return false;
+	}
+
+	log_info("Printing summary for %lld tables and %lld indexes",
+			 (long long) count.tables,
+			 (long long) count.indexes);
+
+	summaryTable->count = count.tables;
 	summaryTable->array =
-		(SummaryTableEntry *) calloc(count, sizeof(SummaryTableEntry));
+		(SummaryTableEntry *) calloc(count.tables, sizeof(SummaryTableEntry));
 
 	if (summaryTable->array == NULL)
 	{
@@ -1288,167 +1281,30 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 		return false;
 	}
 
-	for (int tableIndex = 0; tableIndex < tableSpecsArray->count; tableIndex++)
+	SummaryTableContext context = {
+		.specs = specs,
+		.summary = summary,
+		.tableIndex = 0
+	};
+
+	if (!catalog_iter_s_table(sourceDB,
+							  &context,
+							  &prepare_summary_table_hook))
 	{
-		CopyTableDataSpec *tableSpecs = &(tableSpecsArray->array[tableIndex]);
-		SourceTable *table = tableSpecs->sourceTable;
+		log_error("Failed to prepare the table summary");
+		return false;
+	}
 
-		SummaryTableEntry *entry = &(summaryTable->array[tableIndex]);
-
-		/* prepare some of the information we already have */
-		IntString oidString = intToString(table->oid);
-
-		entry->oid = table->oid;
-		strlcpy(entry->oidStr, oidString.strValue, sizeof(entry->oidStr));
-		strlcpy(entry->nspname, table->nspname, sizeof(entry->nspname));
-		strlcpy(entry->relname, table->relname, sizeof(entry->relname));
-
-		/* the specs doesn't contain timing information or bytes transmitted */
-		CopyTableSummary tableSummary = { .table = table };
-
-		if (!read_table_summary(&tableSummary, tableSpecs->tablePaths.doneFile))
-		{
-			log_error("Failed to read table summary \"%s\"",
-					  tableSpecs->tablePaths.doneFile);
-			return false;
-		}
-
-		*totalBytes += tableSummary.bytesTransmitted;
-
-		entry->bytes = tableSummary.bytesTransmitted;
-		pretty_print_bytes(entry->bytesStr,
-						   sizeof(entry->bytesStr),
-						   entry->bytes);
-		pretty_print_bytes_per_second(entry->transmitRate,
-									  sizeof(entry->transmitRate),
-									  tableSummary.bytesTransmitted,
-									  tableSummary.durationMs);
-
-		entry->durationTableMs = tableSummary.durationMs;
-		timings->tableDurationMs += tableSummary.durationMs;
-
-		(void) IntervalToString(tableSummary.durationMs,
-								entry->tableMs,
-								sizeof(entry->tableMs));
-
-		/* read the index oid list from the table oid */
-		uint64_t indexingDurationMs = 0;
-
-		SourceIndexArray indexArray = { 0 };
-
-		/* make sure to always initialize this memory area */
-		entry->indexArray.count = 0;
-		entry->indexArray.array = NULL;
-
-		entry->constraintArray.count = 0;
-		entry->constraintArray.array = NULL;
-
-		/*
-		 * When the table COPY processing was split into several processes,
-		 * ensure we only read the index list once: only one of those COPY
-		 * processes started the indexing.
-		 */
-		if (tableSpecs->part.partNumber == 0)
-		{
-			if (!read_table_index_file(&indexArray,
-									   tableSpecs->tablePaths.idxListFile))
-			{
-				log_error("Failed to read table index file \"%s\"",
-						  tableSpecs->tablePaths.idxListFile);
-				return false;
-			}
-
-			/* prepare for as many constraints as indexes */
-			entry->indexArray.array =
-				(SummaryIndexEntry *) calloc(indexArray.count,
-											 sizeof(SummaryIndexEntry));
-
-			entry->constraintArray.array =
-				(SummaryIndexEntry *) calloc(indexArray.count,
-											 sizeof(SummaryIndexEntry));
-
-			if (entry->indexArray.array == NULL ||
-				entry->constraintArray.array == NULL)
-			{
-				log_error(ALLOCATION_FAILED_ERROR);
-				return false;
-			}
-
-			/* for reach index, read the index summary */
-			for (int i = 0; i < indexArray.count; i++)
-			{
-				SourceIndex *index = &(indexArray.array[i]);
-
-				CopyFilePaths *cfPaths = &(specs->cfPaths);
-				IndexFilePaths indexPaths = { 0 };
-
-				if (!copydb_init_index_paths(cfPaths, index, &indexPaths))
-				{
-					/* errors have already been logged */
-					return false;
-				}
-
-				/* when a table has no indexes, the file doesn't exists */
-				if (file_exists(indexPaths.doneFile))
-				{
-					SummaryIndexEntry *indexEntry =
-						&(entry->indexArray.array[(entry->indexArray.count)++]);
-
-					if (!summary_read_index_donefile(index,
-													 indexPaths.doneFile,
-													 false, /* constraint */
-													 indexEntry))
-					{
-						log_error("Failed to read index done file \"%s\"",
-								  indexPaths.doneFile);
-						return false;
-					}
-
-					/* accumulate total duration of creating all the indexes */
-					timings->indexDurationMs += indexEntry->durationMs;
-					indexingDurationMs += indexEntry->durationMs;
-				}
-
-				if (file_exists(indexPaths.constraintDoneFile))
-				{
-					SummaryIndexArray *constraintArray =
-						&(entry->constraintArray);
-
-					SummaryIndexEntry *indexEntry =
-						&(constraintArray->array[(constraintArray->count)++]);
-
-					if (!summary_read_index_donefile(index,
-													 indexPaths.constraintDoneFile,
-													 true, /* constraint */
-													 indexEntry))
-					{
-						log_error("Failed to read index done file \"%s\"",
-								  indexPaths.constraintDoneFile);
-						return false;
-					}
-
-					/* accumulate total duration of creating all the indexes */
-					timings->indexDurationMs += indexEntry->durationMs;
-					indexingDurationMs += indexEntry->durationMs;
-				}
-			}
-		}
-
-		IntString indexCountString = intToString(indexArray.count);
-
-		strlcpy(entry->indexCount,
-				indexCountString.strValue,
-				sizeof(entry->indexCount));
-
-		(void) IntervalToString(indexingDurationMs,
-								entry->indexMs,
-								sizeof(entry->indexMs));
-
-		entry->durationIndexMs = indexingDurationMs;
+	if (!catalog_close_from_specs(specs))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	/* write pretty printed total bytes value */
-	pretty_print_bytes(summary->table.totalBytesStr, BUFSIZE, *totalBytes);
+	(void) pretty_print_bytes(summary->table.totalBytesStr,
+							  BUFSIZE,
+							  summary->table.totalBytes);
 
 	/*
 	 * Also read the blobs summary file.
@@ -1469,6 +1325,262 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 		(void) IntervalToString(blobsSummary.durationMs,
 								timings->blobsMs,
 								sizeof(timings->blobsMs));
+	}
+
+	return true;
+}
+
+
+/*
+ * prepare_summary_table_hook is an iterator callback function.
+ */
+static bool
+prepare_summary_table_hook(void *ctx, SourceTable *table)
+{
+	SummaryTableContext *context = (SummaryTableContext *) ctx;
+
+	CopyDataSpec *specs = (CopyDataSpec *) context->specs;
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	CopyFilePaths *cfPaths = &(specs->cfPaths);
+
+	TopLevelTimings *timings = &(context->summary->timings);
+	SummaryTable *summaryTable = &(context->summary->table);
+
+	SummaryTableEntry *entry = &(summaryTable->array[context->tableIndex]);
+
+	int partCount =
+		table->partition.partCount == 0 ? 1 : table->partition.partCount;
+
+	/* prepare some of the information we already have */
+	IntString oidString = intToString(table->oid);
+	IntString pcStr = intToString(partCount);
+
+	entry->oid = table->oid;
+	strlcpy(entry->partCount, pcStr.strValue, sizeof(entry->partCount));
+	strlcpy(entry->oidStr, oidString.strValue, sizeof(entry->oidStr));
+	strlcpy(entry->nspname, table->nspname, sizeof(entry->nspname));
+	strlcpy(entry->relname, table->relname, sizeof(entry->relname));
+
+	/* fetch timing information from on-disk done files */
+	if (table->partition.partCount == 0)
+	{
+		CopyTableSummary tableSummary = { .table = table };
+		TableFilePaths tablePaths = { 0 };
+
+		if (!copydb_init_tablepaths(cfPaths, &tablePaths, table->oid))
+		{
+			log_error("Failed to prepare pathnames for table %s",
+					  table->qname);
+			return false;
+		}
+
+		if (!read_table_summary(&tableSummary, tablePaths.doneFile))
+		{
+			log_error("Failed to read table summary \"%s\"",
+					  tablePaths.doneFile);
+			return false;
+		}
+
+		summaryTable->totalBytes += tableSummary.bytesTransmitted;
+		entry->bytes = tableSummary.bytesTransmitted;
+
+		pretty_print_bytes(entry->bytesStr,
+						   sizeof(entry->bytesStr),
+						   entry->bytes);
+
+		pretty_print_bytes_per_second(entry->transmitRate,
+									  sizeof(entry->transmitRate),
+									  tableSummary.bytesTransmitted,
+									  tableSummary.durationMs);
+
+		entry->durationTableMs = tableSummary.durationMs;
+		timings->tableDurationMs += tableSummary.durationMs;
+
+		(void) IntervalToString(tableSummary.durationMs,
+								entry->tableMs,
+								sizeof(entry->tableMs));
+	}
+	else
+	{
+		for (int p = 0; p < table->partition.partCount; p++)
+		{
+			int part = p + 1;
+
+			CopyTableSummary tableSummary = { .table = table };
+
+			TableFilePaths tablePaths = { 0 };
+
+			if (!copydb_init_tablepaths_for_part(cfPaths,
+												 &tablePaths,
+												 table->oid,
+												 part))
+			{
+				log_error("Failed to prepare pathnames for "
+						  "partition %d of table %s",
+						  part,
+						  table->qname);
+				return false;
+			}
+
+			if (!read_table_summary(&tableSummary, tablePaths.doneFile))
+			{
+				log_error("Failed to read table summary \"%s\"",
+						  tablePaths.doneFile);
+				return false;
+			}
+
+			summaryTable->totalBytes += tableSummary.bytesTransmitted;
+			entry->bytes += tableSummary.bytesTransmitted;
+
+			entry->durationTableMs += tableSummary.durationMs;
+			timings->tableDurationMs += tableSummary.durationMs;
+		}
+
+		pretty_print_bytes(entry->bytesStr,
+						   sizeof(entry->bytesStr),
+						   entry->bytes);
+
+		pretty_print_bytes_per_second(entry->transmitRate,
+									  sizeof(entry->transmitRate),
+									  entry->bytes,
+									  entry->durationTableMs);
+
+		(void) IntervalToString(entry->durationTableMs,
+								entry->tableMs,
+								sizeof(entry->tableMs));
+	}
+
+	/* read the index oid list from the table oid */
+	context->indexingDurationMs = 0;
+
+	if (!catalog_s_table_count_indexes(sourceDB, table))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* make sure to always initialize this memory area */
+	entry->indexArray.count = 0;
+	entry->indexArray.array = NULL;
+
+	entry->constraintArray.count = 0;
+	entry->constraintArray.array = NULL;
+
+	if (table->indexCount > 0)
+	{
+		/* prepare for as many constraints as indexes */
+		entry->indexArray.array =
+			(SummaryIndexEntry *) calloc(table->indexCount,
+										 sizeof(SummaryIndexEntry));
+
+		entry->constraintArray.array =
+			(SummaryIndexEntry *) calloc(table->constraintCount,
+										 sizeof(SummaryIndexEntry));
+
+		if (entry->indexArray.array == NULL ||
+			entry->constraintArray.array == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		if (!catalog_iter_s_index_table(sourceDB,
+										table->nspname,
+										table->relname,
+										ctx,
+										prepare_summary_table_index_hook))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	IntString indexCountString = intToString(table->indexCount);
+
+	strlcpy(entry->indexCount,
+			indexCountString.strValue,
+			sizeof(entry->indexCount));
+
+	(void) IntervalToString(context->indexingDurationMs,
+							entry->indexMs,
+							sizeof(entry->indexMs));
+
+	entry->durationIndexMs = context->indexingDurationMs;
+
+	/* prepare context for next iteration */
+	++context->tableIndex;
+
+	return true;
+}
+
+
+/*
+ * prepare_summary_table_hook is an iterator callback function.
+ */
+static bool
+prepare_summary_table_index_hook(void *ctx, SourceIndex *index)
+{
+	SummaryTableContext *context = (SummaryTableContext *) ctx;
+
+	CopyDataSpec *specs = (CopyDataSpec *) context->specs;
+	CopyFilePaths *cfPaths = &(specs->cfPaths);
+
+	TopLevelTimings *timings = &(context->summary->timings);
+	SummaryTable *summaryTable = &(context->summary->table);
+
+	SummaryTableEntry *entry = &(summaryTable->array[context->tableIndex]);
+
+	IndexFilePaths indexPaths = { 0 };
+
+	if (!copydb_init_index_paths(cfPaths, index, &indexPaths))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* when a table has no indexes, the file doesn't exists */
+	if (file_exists(indexPaths.doneFile))
+	{
+		SummaryIndexEntry *indexEntry =
+			&(entry->indexArray.array[(entry->indexArray.count)++]);
+
+		if (!summary_read_index_donefile(index,
+										 indexPaths.doneFile,
+										 false, /* constraint */
+										 indexEntry))
+		{
+			log_error("Failed to read index done file \"%s\"",
+					  indexPaths.doneFile);
+			return false;
+		}
+
+		/* accumulate total duration of creating all the indexes */
+		timings->indexDurationMs += indexEntry->durationMs;
+		context->indexingDurationMs += indexEntry->durationMs;
+	}
+
+	if (file_exists(indexPaths.constraintDoneFile))
+	{
+		SummaryIndexArray *constraintArray =
+			&(entry->constraintArray);
+
+		SummaryIndexEntry *indexEntry =
+			&(constraintArray->array[(constraintArray->count)++]);
+
+		if (!summary_read_index_donefile(index,
+										 indexPaths.constraintDoneFile,
+										 true, /* constraint */
+										 indexEntry))
+		{
+			log_error("Failed to read index done file \"%s\"",
+					  indexPaths.constraintDoneFile);
+			return false;
+		}
+
+		/* accumulate total duration of creating all the indexes */
+		timings->indexDurationMs += indexEntry->durationMs;
+		context->indexingDurationMs += indexEntry->durationMs;
 	}
 
 	return true;

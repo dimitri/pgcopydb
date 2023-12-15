@@ -1535,6 +1535,16 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 									  NULL, NULL, 0);
 	}
 
+	/*
+	 * TODO
+	 *
+	 * Use PQsetSingleRowMode(connection) to switch to select single-row mode
+	 * and fetch only one result at a time in memory. Most queries are already
+	 * fine with the idea, thanks to inserting the value into our SQLite
+	 * internal catalogs. Some query still expect PQntuples() to reflect the
+	 * actual number of tuples returned by the query etc.
+	 */
+
 	bool done = false;
 	int errors = 0;
 

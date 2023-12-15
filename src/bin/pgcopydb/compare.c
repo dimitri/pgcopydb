@@ -8,6 +8,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "catalog.h"
 #include "copydb.h"
 #include "env_utils.h"
 #include "lock_utils.h"
@@ -15,6 +16,12 @@
 #include "progress.h"
 #include "signals.h"
 #include "summary.h"
+
+
+static bool compare_queue_table_hook(void *ctx, SourceTable *sourceTable);
+static bool compare_schemas_table_hook(void *ctx, SourceTable *sourceTable);
+static bool compare_schemas_index_hook(void *ctx, SourceIndex *sourceIndex);
+static bool compare_schemas_seq_hook(void *ctx, SourceSequence *sourceSeq);
 
 
 /*
@@ -59,6 +66,22 @@ compare_data(CopyDataSpec *copySpecs)
 		return false;
 	}
 
+	/* cache invalidation for the computed checksums */
+	DatabaseCatalog *sourceDB = &(copySpecs->catalogs.source);
+
+	if (!catalog_init(sourceDB))
+	{
+		log_error("Failed to open internal catalogs in COPY worker process, "
+				  "see above for details");
+		return false;
+	}
+
+	if (!catalog_delete_s_table_chksum_all(sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	/* restore the target_pguri, we will need it later */
 	copySpecs->connStrings.target_pguri = target_pguri;
 
@@ -97,22 +120,9 @@ compare_data(CopyDataSpec *copySpecs)
 		return false;
 	}
 
-	/*
-	 * Once all the workers are done, grab the individual table checksums and
-	 * add them to the global schema file.
-	 */
-	if (!compare_read_tables_sums(copySpecs))
+	if (!catalog_close(sourceDB))
 	{
-		log_fatal("Failed to read checksum in table summary files");
-		return false;
-	}
-
-	/* write the data to file, include the rowcount and checksums */
-	if (!copydb_prepare_schema_json_file(copySpecs))
-	{
-		log_fatal("Failed to store the source database "
-				  "schema to file \"%s\", ",
-				  copySpecs->cfPaths.schemafile);
+		/* errors have already been logged */
 		return false;
 	}
 
@@ -126,31 +136,13 @@ compare_data(CopyDataSpec *copySpecs)
 bool
 compare_queue_tables(CopyDataSpec *copySpecs, Queue *queue)
 {
+	DatabaseCatalog *sourceDB = &(copySpecs->catalogs.source);
+
 	/* now append the table OIDs to the queue */
-	SourceTableArray *tableArray = &(copySpecs->catalog.sourceTableArray);
-
-	for (int i = 0; i < tableArray->count; i++)
+	if (!catalog_iter_s_table(sourceDB, queue, &compare_queue_table_hook))
 	{
-		SourceTable *source = &(tableArray->array[i]);
-
-		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
-		{
-			log_error("Compare data has been interrupted");
-			return false;
-		}
-
-		QMessage mesg = {
-			.type = QMSG_TYPE_TABLEOID,
-			.data.oid = source->oid
-		};
-
-		log_trace("compare_queue_tables(%d): %u", queue->qId, source->oid);
-
-		if (!queue_send(queue, &mesg))
-		{
-			/* errors have already been logged */
-			return false;
-		}
+		log_error("Failed to compare tables, see above for details");
+		return false;
 	}
 
 	/* now append the STOP messages to the queue */
@@ -165,6 +157,37 @@ compare_queue_tables(CopyDataSpec *copySpecs, Queue *queue)
 			/* errors have already been logged */
 			continue;
 		}
+	}
+
+	return true;
+}
+
+
+/*
+ * compare_queue_table_hook is an iterator callback function.
+ */
+static bool
+compare_queue_table_hook(void *ctx, SourceTable *table)
+{
+	Queue *queue = (Queue *) ctx;
+
+	if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+	{
+		log_error("Compare data has been interrupted");
+		return false;
+	}
+
+	QMessage mesg = {
+		.type = QMSG_TYPE_TABLEOID,
+		.data.oid = table->oid
+	};
+
+	log_trace("compare_queue_tables(%d): %u", queue->qId, table->oid);
+
+	if (!queue_send(queue, &mesg))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	return true;
@@ -235,6 +258,13 @@ compare_data_worker(CopyDataSpec *copySpecs, Queue *queue)
 
 	log_notice("Started table worker %d [%d]", pid, getppid());
 
+	if (!catalog_init_from_specs(copySpecs))
+	{
+		log_error("Failed to open internal catalogs in COPY worker process, "
+				  "see above for details");
+		return false;
+	}
+
 	int errors = 0;
 	bool stop = false;
 
@@ -286,6 +316,12 @@ compare_data_worker(CopyDataSpec *copySpecs, Queue *queue)
 		}
 	}
 
+	if (!catalog_close_from_specs(copySpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	bool success = (stop == true && errors == 0);
 
 	if (errors > 0)
@@ -308,15 +344,39 @@ compare_data_worker(CopyDataSpec *copySpecs, Queue *queue)
 bool
 compare_data_by_table_oid(CopyDataSpec *copySpecs, uint32_t oid)
 {
-	SourceTable *sourceTableHashByOid = copySpecs->catalog.sourceTableHashByOid;
-	SourceTable *table = NULL;
+	DatabaseCatalog *sourceDB = &(copySpecs->catalogs.source);
 
-	uint32_t toid = oid;
-	HASH_FIND(hh, sourceTableHashByOid, &toid, sizeof(toid), table);
+	SourceTable *table = (SourceTable *) calloc(1, sizeof(SourceTable));
 
 	if (table == NULL)
 	{
-		log_error("Failed to find table %u in sourceTableHashByOid", oid);
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	if (!catalog_lookup_s_table(sourceDB, oid, 0, table))
+	{
+		log_error("Failed to lookup for table %u in our internal catalogs",
+				  oid);
+
+		free(table);
+		return false;
+	}
+
+	if (table->oid == 0)
+	{
+		log_error("Failed to find table with oid %u in our internal catalogs",
+				  oid);
+
+		free(table);
+		return false;
+	}
+
+	if (!catalog_s_table_fetch_attrs(sourceDB, table))
+	{
+		log_error("Failed to fetch table %s attribute list, "
+				  "see above for details",
+				  table->qname);
 		return false;
 	}
 
@@ -339,47 +399,6 @@ compare_data_by_table_oid(CopyDataSpec *copySpecs, uint32_t oid)
 				  table->qname);
 
 		return false;
-	}
-
-	/* now write the checksums to file */
-	if (!compare_write_checksum(table, tablePaths.chksumFile))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	return true;
-}
-
-
-/*
- * compare_read_tables_sums reads the individual table summary files to fetch
- * the rowcount and checksum computed by the worker processes, and copies the
- * data in the main table array.
- */
-bool
-compare_read_tables_sums(CopyDataSpec *copySpecs)
-{
-	SourceTableArray *tableArray = &(copySpecs->catalog.sourceTableArray);
-
-	for (int i = 0; i < tableArray->count; i++)
-	{
-		SourceTable *source = &(tableArray->array[i]);
-		CopyFilePaths *cfPaths = &(copySpecs->cfPaths);
-		TableFilePaths tablePaths = { 0 };
-
-		if (!copydb_init_tablepaths(cfPaths, &tablePaths, source->oid))
-		{
-			log_error("Failed to prepare pathnames for table %u", source->oid);
-			return false;
-		}
-
-		if (!compare_read_checksum(source, tablePaths.chksumFile))
-		{
-			log_error("Failed to read table summary file: \"%s\"",
-					  tablePaths.chksumFile);
-			return false;
-		}
 	}
 
 	return true;
@@ -489,6 +508,21 @@ compare_table(CopyDataSpec *copySpecs, SourceTable *source)
 		return false;
 	}
 
+	DatabaseCatalog *sourceDB = &(copySpecs->catalogs.source);
+
+	log_notice("%s %u: %lld rows, checksum %s",
+			   source->qname,
+			   source->oid,
+			   (long long) srcChk->rowcount,
+			   srcChk->checksum);
+
+	if (!catalog_add_s_table_chksum(sourceDB, source, srcChk, dstChk))
+	{
+		log_error("Failed to add checksum information to our internal catalogs, "
+				  "see above for details");
+		return false;
+	}
+
 	if (srcChk->rowcount != dstChk->rowcount)
 	{
 		log_error("Table %s has %lld rows on source, %lld rows on target",
@@ -513,6 +547,14 @@ compare_table(CopyDataSpec *copySpecs, SourceTable *source)
 
 	return true;
 }
+
+
+typedef struct CompareSchemaContext
+{
+	DatabaseCatalog *sourceDB;
+	DatabaseCatalog *targetDB;
+	uint64_t diffCount;
+} CompareSchemaContext;
 
 
 /*
@@ -540,250 +582,345 @@ compare_schemas(CopyDataSpec *copySpecs)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	log_info("[SOURCE] table: %d index: %d sequence: %d",
-			 sourceSpecs.catalog.sourceTableArray.count,
-			 sourceSpecs.catalog.sourceIndexArray.count,
-			 sourceSpecs.catalog.sequenceArray.count);
+	CatalogCounts sCount = { 0 };
+	CatalogCounts tCount = { 0 };
 
-	log_info("[TARGET] table: %d index: %d sequence: %d",
-			 targetSpecs.catalog.sourceTableArray.count,
-			 targetSpecs.catalog.sourceIndexArray.count,
-			 targetSpecs.catalog.sequenceArray.count);
+	DatabaseCatalog *sourceDB = &(sourceSpecs.catalogs.source);
+	DatabaseCatalog *targetDB = &(targetSpecs.catalogs.source);
 
-	uint64_t diffCount = 0;
-
-	SourceTable *targetTableHash = targetSpecs.catalog.sourceTableHashByQName;
-
-	for (int i = 0; i < sourceSpecs.catalog.sourceTableArray.count; i++)
+	if (!catalog_count_objects(sourceDB, &sCount) ||
+		!catalog_count_objects(targetDB, &tCount))
 	{
-		SourceTable *source = &(sourceSpecs.catalog.sourceTableArray.array[i]);
-		SourceTable *target = NULL;
-
-		char *qname = source->qname;
-		size_t len = strlen(qname);
-
-		HASH_FIND(hhQName, targetTableHash, qname, len, target);
-
-		if (target == NULL)
-		{
-			++diffCount;
-			log_error("Failed to find table %s in target database",
-					  qname);
-			continue;
-		}
-
-		/* check table columns */
-		if (source->attributes.count != target->attributes.count)
-		{
-			++diffCount;
-			log_error("Table %s has %d columns on source, %d columns on target",
-					  qname,
-					  source->attributes.count,
-					  target->attributes.count);
-			continue;
-		}
-
-		for (int c = 0; c < source->attributes.count; c++)
-		{
-			char *srcAttName = source->attributes.array[c].attname;
-			char *tgtAttName = target->attributes.array[c].attname;
-
-			if (!streq(srcAttName, tgtAttName))
-			{
-				++diffCount;
-				log_error("Table %s attribute number %d "
-						  "has name \"%s\" (%d) on source and "
-						  "has name \"%s\" (%d) on target",
-						  qname,
-						  c,
-						  srcAttName,
-						  source->attributes.array[c].attnum,
-						  tgtAttName,
-						  target->attributes.array[c].attnum);
-			}
-		}
-
-		/* now check table index list */
-		uint64_t indexCount = 0;
-		SourceIndexList *sourceIndexList = source->firstIndex;
-		SourceIndexList *targetIndexList = target->firstIndex;
-
-		for (; sourceIndexList != NULL; sourceIndexList = sourceIndexList->next)
-		{
-			SourceIndex *sourceIndex = sourceIndexList->index;
-
-			++indexCount;
-
-			if (targetIndexList == NULL)
-			{
-				++diffCount;
-				log_error("Table %s is missing index %s on target",
-						  qname,
-						  sourceIndex->indexQname);
-
-				continue;
-			}
-
-			SourceIndex *targetIndex = targetIndexList->index;
-
-			if (!streq(sourceIndex->indexNamespace, targetIndex->indexNamespace) ||
-				!streq(sourceIndex->indexRelname, targetIndex->indexRelname))
-			{
-				++diffCount;
-				log_error("Table %s index mismatch: %s on source, %s on target",
-						  qname,
-						  sourceIndex->indexQname,
-						  targetIndex->indexQname);
-			}
-
-			if (!streq(sourceIndex->indexDef, targetIndex->indexDef))
-			{
-				++diffCount;
-				log_error("Table %s index %s mismatch on index definition",
-						  qname,
-						  sourceIndex->indexQname);
-
-				log_info("Source index %s: %s",
-						 sourceIndex->indexQname,
-						 sourceIndex->indexDef);
-
-				log_info("Target index %s: %s",
-						 targetIndex->indexQname,
-						 targetIndex->indexDef);
-			}
-
-			if (sourceIndex->isPrimary != targetIndex->isPrimary)
-			{
-				++diffCount;
-				log_error("Table %s index %s is %s on source "
-						  "and %s on target",
-						  qname,
-						  sourceIndex->indexQname,
-						  sourceIndex->isPrimary ? "primary" : "not primary",
-						  targetIndex->isPrimary ? "primary" : "not primary");
-			}
-
-			if (sourceIndex->isUnique != targetIndex->isUnique)
-			{
-				++diffCount;
-				log_error("Table %s index %s is %s on source "
-						  "and %s on target",
-						  qname,
-						  sourceIndex->indexQname,
-						  sourceIndex->isUnique ? "unique" : "not unique",
-						  targetIndex->isUnique ? "unique" : "not unique");
-			}
-
-			if (!streq(sourceIndex->constraintName, targetIndex->constraintName))
-			{
-				++diffCount;
-				log_error("Table %s index %s is supporting "
-						  " constraint named %s on source "
-						  "and %s on target",
-						  qname,
-						  sourceIndex->indexQname,
-						  sourceIndex->constraintName,
-						  targetIndex->constraintName);
-			}
-
-			if (sourceIndex->constraintDef != NULL &&
-				(targetIndex->constraintDef == NULL ||
-				 !streq(sourceIndex->constraintDef, targetIndex->constraintDef)))
-			{
-				++diffCount;
-				log_error("Table %s index %s constraint %s "
-						  "definition mismatch.",
-						  qname,
-						  sourceIndex->indexQname,
-						  sourceIndex->constraintName);
-
-				log_info("Source index %s constraint %s: %s",
-						 sourceIndex->indexQname,
-						 sourceIndex->constraintName,
-						 sourceIndex->constraintDef);
-
-				log_info("Target index %s constraint %s: %s",
-						 targetIndex->indexQname,
-						 targetIndex->constraintName,
-						 targetIndex->constraintDef);
-			}
-
-			targetIndexList = targetIndexList->next;
-		}
-
-		log_notice("Matched table %s: %d columns ok, %lld indexes ok",
-				   qname,
-				   source->attributes.count,
-				   (long long) indexCount);
+		log_error("Failed to count indexes and constraints in our catalogs");
+		return false;
 	}
 
-	/*
-	 * Now focus on sequences. First, create the sequence names hash table to
-	 * be able to match source sequences with their target counterparts.
-	 */
-	SourceSequence *targetSeqHash = NULL;
+	log_info("[SOURCE] table: %lld, index: %lld, constraint: %lld, sequence: %lld",
+			 (long long) sCount.tables,
+			 (long long) sCount.indexes,
+			 (long long) sCount.constraints,
+			 (long long) sCount.sequences);
 
-	for (int i = 0; i < targetSpecs.catalog.sequenceArray.count; i++)
+	log_info("[TARGET] table: %lld, index: %lld, constraint: %lld, sequence: %lld",
+			 (long long) tCount.tables,
+			 (long long) tCount.indexes,
+			 (long long) tCount.constraints,
+			 (long long) tCount.sequences);
+
+	CompareSchemaContext context = {
+		.sourceDB = sourceDB,
+		.targetDB = targetDB,
+		.diffCount = 0
+	};
+
+	if (!catalog_iter_s_table(sourceDB, &context, &compare_schemas_table_hook))
 	{
-		SourceSequence *seq = &(targetSpecs.catalog.sequenceArray.array[i]);
-
-		char *qname = seq->qname;
-		size_t len = strlen(qname);
-
-		HASH_ADD(hhQName, targetSeqHash, qname, len, seq);
+		log_error("Failed to compare tables, see above for details");
+		return false;
 	}
 
-	/* publish the now fill-in hash table to the catalog */
-	targetSpecs.catalog.sourceSeqHashByQname = targetSeqHash;
-
-	for (int i = 0; i < sourceSpecs.catalog.sequenceArray.count; i++)
+	if (!catalog_iter_s_index(sourceDB, &context, &compare_schemas_index_hook))
 	{
-		SourceSequence *source = &(sourceSpecs.catalog.sequenceArray.array[i]);
-		SourceSequence *target = NULL;
-
-		char *qname = source->qname;
-		size_t len = strlen(qname);
-
-		HASH_FIND(hhQName, targetSeqHash, qname, len, target);
-
-		if (target == NULL)
-		{
-			++diffCount;
-			log_error("Failed to find sequence %s in target database",
-					  qname);
-			continue;
-		}
-
-		if (source->lastValue != target->lastValue)
-		{
-			++diffCount;
-			log_error("Sequence %s lastValue on source is %lld, on target %lld",
-					  qname,
-					  (long long) source->lastValue,
-					  (long long) target->lastValue);
-		}
-
-		if (source->isCalled != target->isCalled)
-		{
-			++diffCount;
-			log_error("Sequence %s isCalled on source is %s, on target %s",
-					  qname,
-					  source->isCalled ? "yes" : "no",
-					  target->isCalled ? "yes" : "no");
-		}
-
-		log_notice("Matched sequence %s (last value %lld)",
-				   qname,
-				   (long long) source->lastValue);
+		log_error("Failed to compare indexes, see above for details");
+		return false;
 	}
 
-	if (diffCount > 0)
+	if (!catalog_iter_s_seq(sourceDB, &context, &compare_schemas_seq_hook))
+	{
+		log_error("Failed to compare sequences, see above for details");
+		return false;
+	}
+
+	if (context.diffCount > 0)
 	{
 		log_fatal("Schemas on source and target database differ");
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	log_info("pgcopydb schema inspection is successful");
+
+	return true;
+}
+
+
+/*
+ * compare_schemas_table_hook is an iterator callback function.
+ */
+static bool
+compare_schemas_table_hook(void *ctx, SourceTable *sourceTable)
+{
+	CompareSchemaContext *context = (CompareSchemaContext *) ctx;
+
+	SourceTable *targetTable = (SourceTable *) calloc(1, sizeof(SourceTable));
+
+	if (targetTable == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	if (!catalog_lookup_s_table_by_name(context->targetDB,
+										sourceTable->nspname,
+										sourceTable->relname,
+										targetTable))
+	{
+		log_error("Failed to lookup for table \"%s\".\"%s\" in our "
+				  "internal target catalogs",
+				  sourceTable->nspname,
+				  sourceTable->relname);
+
+		free(targetTable);
+		return false;
+	}
+
+	if (targetTable->oid == 0)
+	{
+		++context->diffCount;
+		log_error("Failed to find table %s in target database",
+				  sourceTable->qname);
+	}
+
+	/* now fetch table attributes lists */
+	if (!catalog_s_table_fetch_attrs(context->sourceDB, sourceTable) ||
+		!catalog_s_table_fetch_attrs(context->targetDB, targetTable))
+	{
+		log_error("Failed to fetch table %s attribute list, "
+				  "see above for details",
+				  sourceTable->qname);
+		return false;
+	}
+
+	/* check table columns */
+	if (sourceTable->attributes.count != targetTable->attributes.count)
+	{
+		++context->diffCount;
+		log_error("Table %s has %d columns on source, %d columns on target",
+				  sourceTable->qname,
+				  sourceTable->attributes.count,
+				  targetTable->attributes.count);
+	}
+
+	for (int c = 0; c < sourceTable->attributes.count; c++)
+	{
+		char *srcAttName = sourceTable->attributes.array[c].attname;
+		char *tgtAttName = targetTable->attributes.array[c].attname;
+
+		if (!streq(srcAttName, tgtAttName))
+		{
+			++context->diffCount;
+			log_error("Table %s attribute number %d "
+					  "has name \"%s\" (%d) on source and "
+					  "has name \"%s\" (%d) on target",
+					  sourceTable->qname,
+					  c,
+					  srcAttName,
+					  sourceTable->attributes.array[c].attnum,
+					  tgtAttName,
+					  targetTable->attributes.array[c].attnum);
+		}
+	}
+
+	free(targetTable);
+
+	log_notice("Matched table %s with %d columns ok",
+			   sourceTable->qname,
+			   sourceTable->attributes.count);
+
+	return true;
+}
+
+
+/*
+ * compare_schemas_index_hook is an iterator callback function.
+ */
+static bool
+compare_schemas_index_hook(void *ctx, SourceIndex *sourceIndex)
+{
+	CompareSchemaContext *context = (CompareSchemaContext *) ctx;
+
+	SourceIndex *targetIndex = (SourceIndex *) calloc(1, sizeof(SourceIndex));
+
+	if (targetIndex == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	if (!catalog_lookup_s_index_by_name(context->targetDB,
+										sourceIndex->indexNamespace,
+										sourceIndex->indexRelname,
+										targetIndex))
+	{
+		log_error("Failed to lookup for index \"%s\".\"%s\" in our "
+				  "internal target catalogs",
+				  sourceIndex->indexNamespace,
+				  sourceIndex->indexRelname);
+
+		free(targetIndex);
+		return false;
+	}
+
+	if (targetIndex->indexOid == 0)
+	{
+		++context->diffCount;
+		log_error("Failed to find index %s in target database",
+				  sourceIndex->indexQname);
+	}
+
+	if (!streq(sourceIndex->indexNamespace, targetIndex->indexNamespace) ||
+		!streq(sourceIndex->indexRelname, targetIndex->indexRelname))
+	{
+		++context->diffCount;
+		log_error("Table %s index mismatch: %s on source, %s on target",
+				  sourceIndex->indexQname,
+				  sourceIndex->indexQname,
+				  targetIndex->indexQname);
+	}
+
+	if (!streq(sourceIndex->indexDef, targetIndex->indexDef))
+	{
+		++context->diffCount;
+		log_error("Table %s index %s mismatch on index definition",
+				  sourceIndex->indexQname,
+				  sourceIndex->indexQname);
+
+		log_info("Source index %s: %s",
+				 sourceIndex->indexQname,
+				 sourceIndex->indexDef);
+
+		log_info("Target index %s: %s",
+				 targetIndex->indexQname,
+				 targetIndex->indexDef);
+	}
+
+	if (sourceIndex->isPrimary != targetIndex->isPrimary)
+	{
+		++context->diffCount;
+		log_error("Table %s index %s is %s on source "
+				  "and %s on target",
+				  sourceIndex->indexQname,
+				  sourceIndex->indexQname,
+				  sourceIndex->isPrimary ? "primary" : "not primary",
+				  targetIndex->isPrimary ? "primary" : "not primary");
+	}
+
+	if (sourceIndex->isUnique != targetIndex->isUnique)
+	{
+		++context->diffCount;
+		log_error("Table %s index %s is %s on source "
+				  "and %s on target",
+				  sourceIndex->indexQname,
+				  sourceIndex->indexQname,
+				  sourceIndex->isUnique ? "unique" : "not unique",
+				  targetIndex->isUnique ? "unique" : "not unique");
+	}
+
+	if (!streq(sourceIndex->constraintName, targetIndex->constraintName))
+	{
+		++context->diffCount;
+		log_error("Table %s index %s is supporting "
+				  " constraint named %s on source "
+				  "and %s on target",
+				  sourceIndex->indexQname,
+				  sourceIndex->indexQname,
+				  sourceIndex->constraintName,
+				  targetIndex->constraintName);
+	}
+
+	if (sourceIndex->constraintDef != NULL &&
+		(targetIndex->constraintDef == NULL ||
+		 !streq(sourceIndex->constraintDef, targetIndex->constraintDef)))
+	{
+		++context->diffCount;
+		log_error("Table %s index %s constraint %s "
+				  "definition mismatch.",
+				  sourceIndex->indexQname,
+				  sourceIndex->indexQname,
+				  sourceIndex->constraintName);
+
+		log_info("Source index %s constraint %s: %s",
+				 sourceIndex->indexQname,
+				 sourceIndex->constraintName,
+				 sourceIndex->constraintDef);
+
+		log_info("Target index %s constraint %s: %s",
+				 targetIndex->indexQname,
+				 targetIndex->constraintName,
+				 targetIndex->constraintDef);
+	}
+
+	free(targetIndex);
+
+	log_notice("Matched index %s ok (%s, %s)",
+			   sourceIndex->indexQname,
+			   sourceIndex->isPrimary ? "primary" : "not primary",
+			   sourceIndex->isUnique ? "unique" : "not unique");
+
+	return true;
+}
+
+
+/*
+ * compare_schemas_seq_hook is an iterator callback function.
+ */
+static bool
+compare_schemas_seq_hook(void *ctx, SourceSequence *sourceSeq)
+{
+	CompareSchemaContext *context = (CompareSchemaContext *) ctx;
+
+	SourceSequence *targetSeq =
+		(SourceSequence *) calloc(1, sizeof(SourceSequence));
+
+	if (targetSeq == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	if (!catalog_lookup_s_seq_by_name(context->targetDB,
+									  sourceSeq->nspname,
+									  sourceSeq->relname,
+									  targetSeq))
+	{
+		log_error("Failed to lookup for seq \"%s\".\"%s\" in our "
+				  "internal target catalogs",
+				  sourceSeq->nspname,
+				  sourceSeq->relname);
+
+		free(targetSeq);
+		return false;
+	}
+
+	if (targetSeq->oid == 0)
+	{
+		++context->diffCount;
+		log_error("Failed to find seq %s in target database",
+				  sourceSeq->qname);
+	}
+
+	if (sourceSeq->lastValue != targetSeq->lastValue)
+	{
+		++context->diffCount;
+		log_error("Sequence %s lastValue on source is %lld, on target %lld",
+				  sourceSeq->qname,
+				  (long long) sourceSeq->lastValue,
+				  (long long) targetSeq->lastValue);
+	}
+
+	if (sourceSeq->isCalled != targetSeq->isCalled)
+	{
+		++context->diffCount;
+		log_error("Sequence %s isCalled on source is %s, on target %s",
+				  sourceSeq->qname,
+				  sourceSeq->isCalled ? "yes" : "no",
+				  targetSeq->isCalled ? "yes" : "no");
+	}
+
+	log_notice("Matched sequence %s (last value %lld)",
+			   sourceSeq->qname,
+			   (long long) sourceSeq->lastValue);
+
+	free(targetSeq);
 
 	return true;
 }
@@ -801,16 +938,48 @@ compare_fetch_schemas(CopyDataSpec *copySpecs,
 	*sourceSpecs = *copySpecs;
 	*targetSpecs = *copySpecs;
 
+	/*
+	 * Tweak the sourceSpecs so that we bypass retrieving catalog information
+	 * about the target database entirely.
+	 */
 	ConnStrings *sourceConnStrings = &(sourceSpecs->connStrings);
 
 	sourceConnStrings->target_pguri = NULL;
 
-	ConnStrings *targetConnStrings = &(targetSpecs->connStrings);
+	CopyFilePaths *s_cfPaths = &(sourceSpecs->cfPaths);
 
-	targetConnStrings->source_pguri = targetConnStrings->target_pguri;
-	targetConnStrings->target_pguri = NULL;
+	char sourceDir[MAXPGPATH] = { 0 };
 
-	targetConnStrings->safeSourcePGURI = targetConnStrings->safeTargetPGURI;
+	sformat(sourceDir, sizeof(sourceDir), "%s/source", s_cfPaths->schemadir);
+
+	if (!copydb_rmdir_or_mkdir(sourceDir, true))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	struct db
+	{
+		char *name;
+		DatabaseCatalog *db;
+	}
+	dbs[] =
+	{
+		{ .name = "source", .db = &(sourceSpecs->catalogs.source) },
+		{ .name = "filter", .db = &(sourceSpecs->catalogs.filter) },
+		{ .name = "target", .db = &(sourceSpecs->catalogs.target) },
+		{ NULL, NULL }
+	};
+
+	for (int i = 0; dbs[i].name != NULL; i++)
+	{
+		struct db *d = &(dbs[i]);
+		sformat(d->db->dbfile, MAXPGPATH, "%s/%s.db", sourceDir, d->name);
+	}
+
+	/* ensure cache invalidation here, also refrain from filtering prep */
+	sourceSpecs->fetchCatalogs = true;
+	sourceSpecs->fetchFilteredOids = false;
 
 	/*
 	 * Retrieve our internal representation of the catalogs for both the source
@@ -838,6 +1007,47 @@ compare_fetch_schemas(CopyDataSpec *copySpecs,
 				  sourceSpecs->cfPaths.schemafile);
 		return false;
 	}
+
+	/*
+	 * Tweak the targetSpecs so that we fetch catalogs using the same code as
+	 * for the source database, but target the target catalog database instead.
+	 */
+	ConnStrings *targetConnStrings = &(targetSpecs->connStrings);
+
+	targetConnStrings->source_pguri = targetConnStrings->target_pguri;
+	targetConnStrings->target_pguri = NULL;
+
+	targetConnStrings->safeSourcePGURI = targetConnStrings->safeTargetPGURI;
+
+	CopyFilePaths *t_cfPaths = &(targetSpecs->cfPaths);
+
+	char targetDir[MAXPGPATH] = { 0 };
+
+	sformat(targetDir, sizeof(targetDir), "%s/target", t_cfPaths->schemadir);
+
+	if (!copydb_rmdir_or_mkdir(targetDir, true))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	struct db dbt[] =
+	{
+		{ .name = "source", .db = &(targetSpecs->catalogs.source) },
+		{ .name = "filter", .db = &(targetSpecs->catalogs.filter) },
+		{ .name = "target", .db = &(targetSpecs->catalogs.target) },
+		{ NULL, NULL }
+	};
+
+	for (int i = 0; dbs[i].name != NULL; i++)
+	{
+		struct db *d = &(dbt[i]);
+		sformat(d->db->dbfile, MAXPGPATH, "%s/%s.db", targetDir, d->name);
+	}
+
+	/* ensure cache invalidation here, also refrain from filtering prep */
+	targetSpecs->fetchCatalogs = true;
+	targetSpecs->fetchFilteredOids = false;
 
 	log_info("TARGET: Connecting to \"%s\"",
 			 targetConnStrings->safeSourcePGURI.pguri);

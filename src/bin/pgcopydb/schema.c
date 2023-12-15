@@ -14,6 +14,7 @@
 #include "postgres_fe.h"
 #include "pqexpbuffer.h"
 
+#include "catalog.h"
 #include "defaults.h"
 #include "env_utils.h"
 #include "file_utils.h"
@@ -44,7 +45,7 @@ static bool prepareFilterCopyTableList(PGSQL *pgsql,
 typedef struct SourceDatabaseArrayContext
 {
 	char sqlstate[SQLSTATE_LENGTH];
-	SourceDatabaseArray *databaseArray;
+	DatabaseCatalog *catalog;
 	bool parsedOk;
 } SourceDatabaseArrayContext;
 
@@ -52,7 +53,7 @@ typedef struct SourceDatabaseArrayContext
 typedef struct SourceSchemaArrayContext
 {
 	char sqlstate[SQLSTATE_LENGTH];
-	SourceSchemaArray *schemaArray;
+	DatabaseCatalog *catalog;
 	bool parsedOk;
 } SourceSchemaArrayContext;
 
@@ -60,7 +61,7 @@ typedef struct SourceSchemaArrayContext
 typedef struct SourceRoleArrayContext
 {
 	char sqlstate[SQLSTATE_LENGTH];
-	SourceRoleArray *rolesArray;
+	DatabaseCatalog *catalog;
 	bool parsedOk;
 } SourceRoleArrayContext;
 
@@ -68,7 +69,7 @@ typedef struct SourceRoleArrayContext
 typedef struct SourcePropertiesArrayContext
 {
 	char sqlstate[SQLSTATE_LENGTH];
-	SourcePropertiesArray *gucsArray;
+	DatabaseCatalog *catalog;
 	bool parsedOk;
 } SourcePropertiesArrayContext;
 
@@ -76,7 +77,7 @@ typedef struct SourcePropertiesArrayContext
 typedef struct SourceExtensionArrayContext
 {
 	char sqlstate[SQLSTATE_LENGTH];
-	SourceExtensionArray *extensionArray;
+	DatabaseCatalog *catalog;
 	bool parsedOk;
 } SourceExtensionArrayContext;
 
@@ -92,7 +93,7 @@ typedef struct ExtensionsVersionsArrayContext
 typedef struct SourceCollationArrayContext
 {
 	char sqlstate[SQLSTATE_LENGTH];
-	SourceCollationArray *collationArray;
+	DatabaseCatalog *catalog;
 	bool parsedOk;
 } SourceCollationArrayContext;
 
@@ -100,7 +101,7 @@ typedef struct SourceCollationArrayContext
 typedef struct SourceTableArrayContext
 {
 	char sqlstate[SQLSTATE_LENGTH];
-	SourceTableArray *tableArray;
+	DatabaseCatalog *catalog;
 	bool parsedOk;
 } SourceTableArrayContext;
 
@@ -108,7 +109,7 @@ typedef struct SourceTableArrayContext
 typedef struct SourceSequenceArrayContext
 {
 	char sqlstate[SQLSTATE_LENGTH];
-	SourceSequenceArray *sequenceArray;
+	DatabaseCatalog *catalog;
 	bool parsedOk;
 } SourceSequenceArrayContext;
 
@@ -116,7 +117,7 @@ typedef struct SourceSequenceArrayContext
 typedef struct SourceIndexArrayContext
 {
 	char sqlstate[SQLSTATE_LENGTH];
-	SourceIndexArray *indexArray;
+	DatabaseCatalog *catalog;
 	bool parsedOk;
 } SourceIndexArrayContext;
 
@@ -124,7 +125,7 @@ typedef struct SourceIndexArrayContext
 typedef struct SourceDependArrayContext
 {
 	char sqlstate[SQLSTATE_LENGTH];
-	SourceDependArray *dependArray;
+	DatabaseCatalog *catalog;
 	bool parsedOk;
 } SourceDependArrayContext;
 
@@ -132,6 +133,7 @@ typedef struct SourceDependArrayContext
 typedef struct SourcePartitionContext
 {
 	char sqlstate[SQLSTATE_LENGTH];
+	DatabaseCatalog *catalog;
 	SourceTable *table;
 	bool parsedOk;
 } SourcePartitionContext;
@@ -151,7 +153,15 @@ static void getRoleList(void *ctx, PGresult *result);
 
 static void getDatabaseList(void *ctx, PGresult *result);
 
+static bool parseCurrentDatabase(PGresult *result,
+								 int rowNumber,
+								 SourceDatabase *database);
+
 static void getDatabaseProperties(void *ctx, PGresult *result);
+
+static bool parseDatabaseProperty(PGresult *result,
+								  int rowNumber,
+								  SourceProperty *property);
 
 static void getExtensionList(void *ctx, PGresult *result);
 
@@ -180,7 +190,7 @@ static void getSequenceArray(void *ctx, PGresult *result);
 
 static bool parseCurrentSourceSequence(PGresult *result,
 									   int rowNumber,
-									   SourceSequence *table);
+									   SourceSequence *seq);
 
 static void getIndexArray(void *ctx, PGresult *result);
 
@@ -240,9 +250,9 @@ schema_query_privileges(PGSQL *pgsql,
  * the query.
  */
 bool
-schema_list_databases(PGSQL *pgsql, SourceDatabaseArray *catArray)
+schema_list_databases(PGSQL *pgsql, DatabaseCatalog *catalog)
 {
-	SourceDatabaseArrayContext parseContext = { { 0 }, catArray, false };
+	SourceDatabaseArrayContext parseContext = { { 0 }, catalog, false };
 
 	char *sql =
 		"select d.oid, datname, pg_database_size(d.oid) as bytes, "
@@ -275,9 +285,9 @@ schema_list_databases(PGSQL *pgsql, SourceDatabaseArray *catArray)
  * commands.
  */
 bool
-schema_list_database_properties(PGSQL *pgsql, SourcePropertiesArray *gucsArray)
+schema_list_database_properties(PGSQL *pgsql, DatabaseCatalog *catalog)
 {
-	SourcePropertiesArrayContext parseContext = { { 0 }, gucsArray, false };
+	SourcePropertiesArrayContext parseContext = { { 0 }, catalog, false };
 
 	char *sql =
 		"select d.datname, NULL as rolname, "
@@ -319,9 +329,9 @@ schema_list_database_properties(PGSQL *pgsql, SourcePropertiesArray *gucsArray)
  * query.
  */
 bool
-schema_list_schemas(PGSQL *pgsql, SourceSchemaArray *array)
+schema_list_schemas(PGSQL *pgsql, DatabaseCatalog *catalog)
 {
-	SourceSchemaArrayContext parseContext = { { 0 }, array, false };
+	SourceSchemaArrayContext parseContext = { { 0 }, catalog, false };
 
 	char *sql =
 		"select n.oid, n.nspname, "
@@ -356,9 +366,9 @@ schema_list_schemas(PGSQL *pgsql, SourceSchemaArray *array)
  * query.
  */
 bool
-schema_list_roles(PGSQL *pgsql, SourceRoleArray *rolesArray)
+schema_list_roles(PGSQL *pgsql, DatabaseCatalog *catalog)
 {
-	SourceRoleArrayContext parseContext = { { 0 }, rolesArray, false };
+	SourceRoleArrayContext parseContext = { { 0 }, catalog, false };
 
 	char *sql =
 		"select oid, format('%I', rolname) as rolname from pg_roles";
@@ -387,9 +397,9 @@ schema_list_roles(PGSQL *pgsql, SourceRoleArray *rolesArray)
  * the query.
  */
 bool
-schema_list_extensions(PGSQL *pgsql, SourceExtensionArray *extArray)
+schema_list_extensions(PGSQL *pgsql, DatabaseCatalog *catalog)
 {
-	SourceExtensionArrayContext parseContext = { { 0 }, extArray, false };
+	SourceExtensionArrayContext parseContext = { { 0 }, catalog, false };
 
 	char *sql =
 		"select e.oid, extname, extnamespace::regnamespace, extrelocatable, "
@@ -440,9 +450,9 @@ schema_list_extensions(PGSQL *pgsql, SourceExtensionArray *extArray)
  * array with the result of the query.
  */
 bool
-schema_list_ext_schemas(PGSQL *pgsql, SourceSchemaArray *array)
+schema_list_ext_schemas(PGSQL *pgsql, DatabaseCatalog *catalog)
 {
-	SourceSchemaArrayContext parseContext = { { 0 }, array, false };
+	SourceSchemaArrayContext parseContext = { { 0 }, catalog, false };
 
 	char *sql =
 		"select n.oid, n.nspname, "
@@ -540,9 +550,9 @@ schema_list_ext_versions(PGSQL *pgsql, ExtensionsVersionsArray *array)
  * definition.
  */
 bool
-schema_list_collations(PGSQL *pgsql, SourceCollationArray *array)
+schema_list_collations(PGSQL *pgsql, DatabaseCatalog *catalog)
 {
-	SourceCollationArrayContext parseContext = { { 0 }, array, false };
+	SourceCollationArrayContext parseContext = { { 0 }, catalog, false };
 
 	char *sql =
 		"with indcols as "
@@ -810,7 +820,7 @@ schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
 		/* SOURCE_FILTER_TYPE_EXCL_INDEX etc */
 		default:
 		{
-			log_error("BUG: schema_list_ordinary_tables called with "
+			log_error("BUG: schema_prepare_pgcopydb_table_size called with "
 					  "filtering type %d",
 					  filters->type);
 			return false;
@@ -1418,6 +1428,86 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 
 /*
+ * schema_list_table fetches information for a given table.
+ */
+bool
+schema_list_table(PGSQL *pgsql,
+				  const char *schemaName,
+				  const char *tableName,
+				  DatabaseCatalog *catalog)
+{
+	SourceTableArrayContext context = { { 0 }, catalog, false };
+
+	char *sql =
+		"  select c.oid, "
+		"         format('%I', n.nspname) as nspname, "
+		"         format('%I', c.relname) as relname, "
+		"         pg_am.amname, "
+		"         c.relpages, c.reltuples::bigint, "
+		"         null as bytes, "
+		"         null as pg_size_pretty, "
+		"         false as excludedata, "
+		"         format('%s %s %s', "
+		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
+		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')), "
+		"         null as partkey, "
+		"         attrs.js as attributes "
+
+		"    from pg_catalog.pg_class c"
+		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
+		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
+		"         join pg_roles auth ON auth.oid = c.relowner"
+		"         join lateral ( "
+		"               with atts as "
+		"               ("
+		"                  select attnum, atttypid::integer, "
+		"                         format('%I', attname) as attname, "
+		"                         i.indrelid is not null as attisprimary, "
+		"						  col.is_generated = 'ALWAYS' as attisgenerated "
+		"                    from pg_attribute a "
+		"                         left join pg_index i "
+		"                                on i.indrelid = a.attrelid "
+		"                               and a.attnum = ANY(i.indkey) "
+		"                               and i.indisprimary "
+		"					 	  left join information_schema.columns col "
+		"                    			on col.column_name = a.attname "
+		"					  			and col.table_name = c.relname "
+		"          			 			and col.table_schema = n.nspname "
+		"                   where a.attrelid = c.oid and not a.attisdropped "
+		"                     and a.attnum > 0 "
+		"                order by attnum "
+		"               ) "
+		"               select json_agg(row_to_json(atts)) as js "
+		"                from atts "
+		"              ) as attrs on true"
+		"   where n.nspname = $1 and c.relname = $2 ";
+
+	int paramCount = 2;
+	Oid paramTypes[2] = { TEXTOID, TEXTOID };
+	const char *paramValues[2] = { schemaName, tableName };
+
+	log_trace("schema_list_table");
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   &context, &getTableArray))
+	{
+		log_error("Failed to list table \"%s\".\"%s\"", schemaName, tableName);
+		return false;
+	}
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to list table \"%s\".\"%s\"", schemaName, tableName);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * schema_list_ordinary_tables grabs the list of tables from the given source
  * Postgres instance and allocates a SourceTable array with the result of the
  * query.
@@ -1425,9 +1515,9 @@ struct FilteringQueries listSourceTablesSQL[] = {
 bool
 schema_list_ordinary_tables(PGSQL *pgsql,
 							SourceFilters *filters,
-							SourceTableArray *tableArray)
+							DatabaseCatalog *catalog)
 {
-	SourceTableArrayContext context = { { 0 }, tableArray, false };
+	SourceTableArrayContext context = { { 0 }, catalog, false };
 
 	log_trace("schema_list_ordinary_tables");
 
@@ -1777,9 +1867,9 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 bool
 schema_list_ordinary_tables_without_pk(PGSQL *pgsql,
 									   SourceFilters *filters,
-									   SourceTableArray *tableArray)
+									   DatabaseCatalog *catalog)
 {
-	SourceTableArrayContext context = { { 0 }, tableArray, false };
+	SourceTableArrayContext context = { { 0 }, catalog, false };
 
 	log_trace("schema_list_ordinary_tables_without_pk");
 
@@ -2227,9 +2317,9 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 bool
 schema_list_sequences(PGSQL *pgsql,
 					  SourceFilters *filters,
-					  SourceSequenceArray *seqArray)
+					  DatabaseCatalog *catalog)
 {
-	SourceSequenceArrayContext context = { { 0 }, seqArray, false };
+	SourceSequenceArrayContext context = { { 0 }, catalog, false };
 
 	log_trace("schema_list_sequences");
 
@@ -2866,9 +2956,9 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 bool
 schema_list_all_indexes(PGSQL *pgsql,
 						SourceFilters *filters,
-						SourceIndexArray *indexArray)
+						DatabaseCatalog *catalog)
 {
-	SourceIndexArrayContext context = { { 0 }, indexArray, false };
+	SourceIndexArrayContext context = { { 0 }, catalog, false };
 
 	log_trace("schema_list_all_indexes");
 
@@ -2912,9 +3002,9 @@ bool
 schema_list_table_indexes(PGSQL *pgsql,
 						  const char *schemaName,
 						  const char *tableName,
-						  SourceIndexArray *indexArray)
+						  DatabaseCatalog *catalog)
 {
-	SourceIndexArrayContext context = { { 0 }, indexArray, false };
+	SourceIndexArrayContext context = { { 0 }, catalog, false };
 
 	char *sql =
 		"   select i.oid, "
@@ -3153,9 +3243,9 @@ struct FilteringQueries listSourceDependSQL[] = {
 bool
 schema_list_pg_depend(PGSQL *pgsql,
 					  SourceFilters *filters,
-					  SourceDependArray *dependArray)
+					  DatabaseCatalog *catalog)
 {
-	SourceDependArrayContext context = { { 0 }, dependArray, false };
+	SourceDependArrayContext context = { { 0 }, catalog, false };
 
 	log_trace("schema_list_pg_depend");
 
@@ -3211,7 +3301,10 @@ schema_list_pg_depend(PGSQL *pgsql,
  * from our parameters: table size, --split-tables-larger-than.
  */
 bool
-schema_list_partitions(PGSQL *pgsql, SourceTable *table, uint64_t partSize)
+schema_list_partitions(PGSQL *pgsql,
+					   DatabaseCatalog *catalog,
+					   SourceTable *table,
+					   uint64_t partSize)
 {
 	/* no partKey, no partitions, done. */
 	if (IS_EMPTY_STRING_BUFFER(table->partKey))
@@ -3229,7 +3322,7 @@ schema_list_partitions(PGSQL *pgsql, SourceTable *table, uint64_t partSize)
 
 	PQExpBuffer sql = createPQExpBuffer();
 
-	SourcePartitionContext parseContext = { { 0 }, table, false };
+	SourcePartitionContext parseContext = { { 0 }, catalog, table, false };
 
 	if (streq(table->partKey, "ctid"))
 	{
@@ -3727,31 +3820,18 @@ getSchemaList(void *ctx, PGresult *result)
 		return;
 	}
 
-	/* we're not supposed to re-cycle arrays here */
-	if (context->schemaArray->array != NULL)
-	{
-		/* issue a warning but let's try anyway */
-		log_warn("BUG? context's array is not null in getSchemaList");
-
-		free(context->schemaArray->array);
-		context->schemaArray->array = NULL;
-	}
-
-	context->schemaArray->count = nTuples;
-	context->schemaArray->array =
-		(SourceSchema *) calloc(nTuples, sizeof(SourceSchema));
-
-	if (context->schemaArray->array == NULL)
-	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
-		return;
-	}
-
 	int errors = 0;
 
 	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
 	{
-		SourceSchema *schema = &(context->schemaArray->array[rowNumber]);
+		SourceSchema *schema = (SourceSchema *) calloc(1, sizeof(SourceSchema));
+
+		if (schema == NULL)
+		{
+			++errors;
+			log_error(ALLOCATION_FAILED_ERROR);
+			break;
+		}
 
 		/* 1. oid */
 		char *value = PQgetvalue(result, rowNumber, 0);
@@ -3790,6 +3870,19 @@ getSchemaList(void *ctx, PGresult *result)
 				  schema->oid,
 				  schema->nspname,
 				  schema->restoreListName);
+
+		if (context->catalog != NULL && context->catalog->db != NULL)
+		{
+			if (!catalog_add_s_namespace(context->catalog, schema))
+			{
+				/* errors have already been logged */
+				++errors;
+				free(schema);
+				break;
+			}
+		}
+
+		free(schema);
 	}
 
 	context->parsedOk = errors == 0;
@@ -3815,31 +3908,18 @@ getRoleList(void *ctx, PGresult *result)
 		return;
 	}
 
-	/* we're not supposed to re-cycle arrays here */
-	if (context->rolesArray->array != NULL)
-	{
-		/* issue a warning but let's try anyway */
-		log_warn("BUG? context's array is not null in getRoleList");
-
-		free(context->rolesArray->array);
-		context->rolesArray->array = NULL;
-	}
-
-	context->rolesArray->count = nTuples;
-	context->rolesArray->array =
-		(SourceRole *) calloc(nTuples, sizeof(SourceRole));
-
-	if (context->rolesArray->array == NULL)
-	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
-		return;
-	}
-
 	int errors = 0;
 
 	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
 	{
-		SourceRole *role = &(context->rolesArray->array[rowNumber]);
+		SourceRole *role = (SourceRole *) calloc(1, sizeof(SourceRole));
+
+		if (role == NULL)
+		{
+			++errors;
+			log_error(ALLOCATION_FAILED_ERROR);
+			break;
+		}
 
 		/* 1. oid */
 		char *value = PQgetvalue(result, rowNumber, 0);
@@ -3863,6 +3943,19 @@ getRoleList(void *ctx, PGresult *result)
 		}
 
 		log_trace("getRoleList: %u %s", role->oid, role->rolname);
+
+		if (context->catalog != NULL && context->catalog->db != NULL)
+		{
+			if (!catalog_add_s_role(context->catalog, role))
+			{
+				/* errors have already been logged */
+				++errors;
+				free(role);
+				break;
+			}
+		}
+
+		free(role);
 	}
 
 	context->parsedOk = errors == 0;
@@ -3888,88 +3981,102 @@ getDatabaseList(void *ctx, PGresult *result)
 		return;
 	}
 
-	/* we're not supposed to re-cycle arrays here */
-	if (context->databaseArray->array != NULL)
-	{
-		/* issue a warning but let's try anyway */
-		log_warn("BUG? context's array is not null in getDatabaseList");
-
-		free(context->databaseArray->array);
-		context->databaseArray->array = NULL;
-	}
-
-	context->databaseArray->count = nTuples;
-	context->databaseArray->array =
-		(SourceDatabase *) calloc(nTuples, sizeof(SourceDatabase));
-
-	if (context->databaseArray->array == NULL)
-	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
-		return;
-	}
-
-	int errors = 0;
+	bool parsedOk = true;
 
 	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
 	{
-		SourceDatabase *database = &(context->databaseArray->array[rowNumber]);
+		SourceDatabase *database =
+			(SourceDatabase *) calloc(1, sizeof(SourceDatabase));
 
-		/* 1. oid */
-		char *value = PQgetvalue(result, rowNumber, 0);
-
-		if (!stringToUInt32(value, &(database->oid)) || database->oid == 0)
+		if (!parseCurrentDatabase(result, rowNumber, database))
 		{
-			log_error("Invalid OID \"%s\"", value);
-			++errors;
+			parsedOk = false;
+			free(database);
+			break;
 		}
 
-		/* 2. datname */
-		value = PQgetvalue(result, rowNumber, 1);
-		int length = strlcpy(database->datname, value, PG_NAMEDATALEN);
-
-		if (length >= PG_NAMEDATALEN)
+		if (context->catalog != NULL && context->catalog->db != NULL)
 		{
-			log_error("Database name \"%s\" is %d bytes long, "
-					  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
-					  value, length, PG_NAMEDATALEN - 1);
-			++errors;
-		}
-
-		/* 3. bytes */
-		value = PQgetvalue(result, rowNumber, 2);
-		if (PQgetisnull(result, rowNumber, 2))
-		{
-			/*
-			 * It may happen that pg_table_size() returns NULL (when failing to
-			 * open the given relation).
-			 */
-			database->bytes = 0;
-		}
-		else
-		{
-			value = PQgetvalue(result, rowNumber, 2);
-
-			if (!stringToInt64(value, &(database->bytes)))
+			if (!catalog_add_s_database(context->catalog, database))
 			{
-				log_error("Invalid pg_database_size: \"%s\"", value);
-				++errors;
+				/* errors have already been logged */
+				parsedOk = false;
+				free(database);
+				break;
 			}
 		}
 
-		/* 4. pg_size_pretty */
-		value = PQgetvalue(result, rowNumber, 3);
-		length = strlcpy(database->bytesPretty, value, PG_NAMEDATALEN);
+		free(database);
+	}
 
-		if (length >= PG_NAMEDATALEN)
+	context->parsedOk = parsedOk;
+}
+
+
+/*
+ * parseCurrentDatabase parses a single row of the database listing query
+ * result.
+ */
+static bool
+parseCurrentDatabase(PGresult *result, int rowNumber, SourceDatabase *database)
+{
+	int errors = 0;
+
+	/* 1. oid */
+	char *value = PQgetvalue(result, rowNumber, 0);
+
+	if (!stringToUInt32(value, &(database->oid)) || database->oid == 0)
+	{
+		log_error("Invalid OID \"%s\"", value);
+		++errors;
+	}
+
+	/* 2. datname */
+	value = PQgetvalue(result, rowNumber, 1);
+	int length = strlcpy(database->datname, value, PG_NAMEDATALEN);
+
+	if (length >= PG_NAMEDATALEN)
+	{
+		log_error("Database name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+				  value, length, PG_NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* 3. bytes */
+	value = PQgetvalue(result, rowNumber, 2);
+	if (PQgetisnull(result, rowNumber, 2))
+	{
+		/*
+		 * It may happen that pg_table_size() returns NULL (when failing to
+		 * open the given relation).
+		 */
+		database->bytes = 0;
+	}
+	else
+	{
+		value = PQgetvalue(result, rowNumber, 2);
+
+		if (!stringToInt64(value, &(database->bytes)))
 		{
-			log_error("Pretty printed byte size \"%s\" is %d bytes long, "
-					  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
-					  value, length, PG_NAMEDATALEN - 1);
+			log_error("Invalid pg_database_size: \"%s\"", value);
 			++errors;
 		}
 	}
 
-	context->parsedOk = errors == 0;
+	/* 4. pg_size_pretty */
+	value = PQgetvalue(result, rowNumber, 3);
+	length = strlcpy(database->bytesPretty, value, PG_NAMEDATALEN);
+
+	if (length >= PG_NAMEDATALEN)
+	{
+		log_error("Pretty printed byte size \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+				  value, length, PG_NAMEDATALEN - 1);
+		++errors;
+	}
+
+	return errors == 0;
 }
 
 
@@ -3993,35 +4100,73 @@ getDatabaseProperties(void *ctx, PGresult *result)
 		return;
 	}
 
-	/* we're not supposed to re-cycle arrays here */
-	if (context->gucsArray->array != NULL)
-	{
-		/* issue a warning but let's try anyway */
-		log_warn("BUG? context's array is not null in getDatabaseProperties");
-
-		free(context->gucsArray->array);
-		context->gucsArray->array = NULL;
-	}
-
-	context->gucsArray->count = nTuples;
-	context->gucsArray->array =
-		(SourceProperty *) calloc(nTuples, sizeof(SourceProperty));
-
-	if (context->gucsArray->array == NULL)
-	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
-		return;
-	}
-
-	int errors = 0;
+	bool parsedOk = true;
 
 	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
 	{
-		SourceProperty *property = &(context->gucsArray->array[rowNumber]);
+		SourceProperty *property =
+			(SourceProperty *) calloc(1, sizeof(SourceProperty));
 
-		/* 1. datname */
-		char *value = PQgetvalue(result, rowNumber, 0);
-		int length = strlcpy(property->datname, value, PG_NAMEDATALEN);
+		if (!parseDatabaseProperty(result, rowNumber, property))
+		{
+			parsedOk = false;
+			free(property->setconfig);
+			free(property);
+			break;
+		}
+
+		if (context->catalog != NULL && context->catalog->db != NULL)
+		{
+			if (!catalog_add_s_database_properties(context->catalog, property))
+			{
+				/* errors have already been logged */
+				parsedOk = false;
+				free(property->setconfig);
+				free(property);
+				break;
+			}
+		}
+
+		free(property->setconfig);
+		free(property);
+	}
+
+	context->parsedOk = parsedOk;
+}
+
+
+/*
+ * parseCurrentProperty parses a single row of the database properties listing
+ * query result.
+ */
+static bool
+parseDatabaseProperty(PGresult *result, int rowNumber, SourceProperty *property)
+{
+	int errors = 0;
+
+	/* 1. datname */
+	char *value = PQgetvalue(result, rowNumber, 0);
+	int length = strlcpy(property->datname, value, PG_NAMEDATALEN);
+
+	if (length >= PG_NAMEDATALEN)
+	{
+		log_error("Properties role name \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+				  value, length, PG_NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* 2. rolname */
+	if (PQgetisnull(result, rowNumber, 1))
+	{
+		property->roleInDatabase = false;
+	}
+	else
+	{
+		property->roleInDatabase = true;
+
+		value = PQgetvalue(result, rowNumber, 1);
+		int length = strlcpy(property->rolname, value, PG_NAMEDATALEN);
 
 		if (length >= PG_NAMEDATALEN)
 		{
@@ -4030,45 +4175,24 @@ getDatabaseProperties(void *ctx, PGresult *result)
 					  value, length, PG_NAMEDATALEN - 1);
 			++errors;
 		}
-
-		/* 2. rolname */
-		if (PQgetisnull(result, rowNumber, 1))
-		{
-			property->roleInDatabase = false;
-		}
-		else
-		{
-			property->roleInDatabase = true;
-
-			value = PQgetvalue(result, rowNumber, 1);
-			int length = strlcpy(property->rolname, value, PG_NAMEDATALEN);
-
-			if (length >= PG_NAMEDATALEN)
-			{
-				log_error("Properties role name \"%s\" is %d bytes long, "
-						  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
-						  value, length, PG_NAMEDATALEN - 1);
-				++errors;
-			}
-		}
-
-		/* 3. setconfig */
-		value = PQgetvalue(result, rowNumber, 2);
-		int len = strlen(value);
-		int bytes = len + 1;
-
-		property->setconfig = (char *) calloc(bytes, sizeof(char));
-
-		if (property->setconfig == NULL)
-		{
-			log_fatal(ALLOCATION_FAILED_ERROR);
-			return;
-		}
-
-		strlcpy(property->setconfig, value, bytes);
 	}
 
-	context->parsedOk = errors == 0;
+	/* 3. setconfig */
+	value = PQgetvalue(result, rowNumber, 2);
+	int len = strlen(value);
+	int bytes = len + 1;
+
+	property->setconfig = (char *) calloc(bytes, sizeof(char));
+
+	if (property->setconfig == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	strlcpy(property->setconfig, value, bytes);
+
+	return errors == 0;
 }
 
 
@@ -4091,43 +4215,34 @@ getExtensionList(void *ctx, PGresult *result)
 		return;
 	}
 
-	/* we're not supposed to re-cycle arrays here */
-	if (context->extensionArray->array != NULL)
+	bool parsedOk = true;
+
+	SourceExtension *extension =
+		(SourceExtension *) calloc(1, sizeof(SourceExtension));
+
+	if (extension == NULL)
 	{
-		/* issue a warning but let's try anyway */
-		log_warn("BUG? context's array is not null in getExtensionList");
-
-		free(context->extensionArray->array);
-		context->extensionArray->array = NULL;
-	}
-
-	context->extensionArray->count = 0;
-	context->extensionArray->array =
-		(SourceExtension *) calloc(nTuples, sizeof(SourceExtension));
-
-	if (context->extensionArray->array == NULL)
-	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
+		log_error(ALLOCATION_FAILED_ERROR);
+		parsedOk = false;
 		return;
 	}
 
-	bool parsedOk = true;
-
-	int extArrayIndex = 0;
-	SourceExtension *extension = NULL;
-
 	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
 	{
-		SourceExtension rowExtension = { 0 };
 		int confIndex = 0;
 
-		parsedOk = parsedOk &&
-				   parseCurrentExtension(result, rowNumber, &rowExtension, &confIndex);
+		(void) bzero(extension, sizeof(SourceExtension));
+
+		if (!parseCurrentExtension(result, rowNumber, extension, &confIndex))
+		{
+			parsedOk = false;
+			break;
+		}
 
 		log_trace("getExtensionList: %s [%d/%d]",
-				  rowExtension.extname,
+				  extension->extname,
 				  confIndex,
-				  rowExtension.config.count);
+				  extension->config.count);
 
 		/*
 		 * Only the first extension of a series gets into the extension list.
@@ -4151,47 +4266,55 @@ getExtensionList(void *ctx, PGresult *result)
 		 */
 		if (confIndex == 0 || confIndex == 1)
 		{
-			/* copy the current rowExtension into the target array entry */
-			extension = &(context->extensionArray->array[extArrayIndex++]);
-			*extension = rowExtension;
-
-			/* update the extension array count too, not just the index */
-			context->extensionArray->count++;
+			if (context->catalog != NULL && context->catalog->db != NULL)
+			{
+				if (!catalog_add_s_extension(context->catalog, extension))
+				{
+					/* errors have already been logged */
+					parsedOk = false;
+					break;
+				}
+			}
 		}
 
 		/* now loop over extension configuration, if any */
 		if (extension->config.count > 0)
 		{
-			/* SQL arrays indexes start at 1, C arrays index start at 0 */
-			if (confIndex == 1)
-			{
-				extension->config.array =
-					(SourceExtensionConfig *)
-					calloc(extension->config.count,
-						   sizeof(SourceExtensionConfig));
+			SourceExtensionConfig *config =
+				(SourceExtensionConfig *) calloc(1, sizeof(SourceExtensionConfig));
 
-				if (extension->config.array == NULL)
+			if (config == NULL)
+			{
+				log_fatal(ALLOCATION_FAILED_ERROR);
+				parsedOk = false;
+				return;
+			}
+
+			if (!parseCurrentExtensionConfig(result, rowNumber, config))
+			{
+				parsedOk = false;
+				free(config);
+				break;
+			}
+
+			if (context->catalog != NULL && context->catalog->db != NULL)
+			{
+				config->extoid = extension->oid;
+
+				if (!catalog_add_s_extension_config(context->catalog, config))
 				{
-					log_fatal(ALLOCATION_FAILED_ERROR);
+					/* errors have already been logged */
 					parsedOk = false;
-					return;
+					free(config);
+					break;
 				}
 			}
 
-			/* SQL arrays indexes start at 1, C arrays index start at 0 */
-			SourceExtensionConfig *extConfig =
-				&(extension->config.array[confIndex - 1]);
-
-			parsedOk = parsedOk &&
-					   parseCurrentExtensionConfig(result, rowNumber, extConfig);
+			free(config);
 		}
 	}
 
-	if (!parsedOk)
-	{
-		free(context->extensionArray->array);
-		context->extensionArray->array = NULL;
-	}
+	free(extension);
 
 	context->parsedOk = parsedOk;
 }
@@ -4297,7 +4420,7 @@ parseCurrentExtensionConfig(PGresult *result,
 	/* 7. extconfig (pg_class oid) */
 	char *value = PQgetvalue(result, rowNumber, 6);
 
-	if (!stringToUInt32(value, &(extConfig->oid)))
+	if (!stringToUInt32(value, &(extConfig->reloid)))
 	{
 		log_error("Invalid extension configuration OID \"%s\"", value);
 		++errors;
@@ -4463,31 +4586,19 @@ getCollationList(void *ctx, PGresult *result)
 		return;
 	}
 
-	/* we're not supposed to re-cycle arrays here */
-	if (context->collationArray->array != NULL)
-	{
-		/* issue a warning but let's try anyway */
-		log_warn("BUG? context's array is not null in getCollationList");
-
-		free(context->collationArray->array);
-		context->collationArray->array = NULL;
-	}
-
-	context->collationArray->count = nTuples;
-	context->collationArray->array =
-		(SourceCollation *) calloc(nTuples, sizeof(SourceCollation));
-
-	if (context->collationArray->array == NULL)
-	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
-		return;
-	}
-
 	int errors = 0;
 
 	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
 	{
-		SourceCollation *collation = &(context->collationArray->array[rowNumber]);
+		SourceCollation *collation =
+			(SourceCollation *) calloc(1, sizeof(SourceCollation));
+
+		if (collation == NULL)
+		{
+			++errors;
+			log_error(ALLOCATION_FAILED_ERROR);
+			break;
+		}
 
 		/* 1. oid */
 		char *value = PQgetvalue(result, rowNumber, 0);
@@ -4537,6 +4648,19 @@ getCollationList(void *ctx, PGresult *result)
 					  value, length, RESTORE_LIST_NAMEDATALEN - 1);
 			++errors;
 		}
+
+		if (context->catalog != NULL && context->catalog->db != NULL)
+		{
+			if (!catalog_add_s_coll(context->catalog, collation))
+			{
+				/* errors have already been logged */
+				++errors;
+				free(collation);
+				break;
+			}
+		}
+
+		free(collation);
 	}
 
 	context->parsedOk = errors == 0;
@@ -4562,40 +4686,31 @@ getTableArray(void *ctx, PGresult *result)
 		return;
 	}
 
-	/* we're not supposed to re-cycle arrays here */
-	if (context->tableArray->array != NULL)
-	{
-		/* issue a warning but let's try anyway */
-		log_warn("BUG? context's array is not null in getTableArray");
-
-		free(context->tableArray->array);
-		context->tableArray->array = NULL;
-	}
-
-	context->tableArray->count = nTuples;
-	context->tableArray->array =
-		(SourceTable *) calloc(nTuples, sizeof(SourceTable));
-
-	if (context->tableArray->array == NULL)
-	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
-		return;
-	}
-
 	bool parsedOk = true;
 
 	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
 	{
-		SourceTable *table = &(context->tableArray->array[rowNumber]);
+		SourceTable *table = (SourceTable *) calloc(1, sizeof(SourceTable));
 
-		parsedOk = parsedOk &&
-				   parseCurrentSourceTable(result, rowNumber, table);
-	}
+		if (!parseCurrentSourceTable(result, rowNumber, table))
+		{
+			parsedOk = false;
+			free(table);
+			break;
+		}
 
-	if (!parsedOk)
-	{
-		free(context->tableArray->array);
-		context->tableArray->array = NULL;
+		if (context->catalog != NULL && context->catalog->db != NULL)
+		{
+			if (!catalog_add_s_table(context->catalog, table))
+			{
+				/* errors have already been logged */
+				parsedOk = false;
+				free(table);
+				break;
+			}
+		}
+
+		free(table);
 	}
 
 	context->parsedOk = parsedOk;
@@ -4896,40 +5011,32 @@ getSequenceArray(void *ctx, PGresult *result)
 		return;
 	}
 
-	/* we're not supposed to re-cycle arrays here */
-	if (context->sequenceArray->array != NULL)
-	{
-		/* issue a warning but let's try anyway */
-		log_warn("BUG? context's array is not null in getSequenceArray");
-
-		free(context->sequenceArray->array);
-		context->sequenceArray->array = NULL;
-	}
-
-	context->sequenceArray->count = nTuples;
-	context->sequenceArray->array =
-		(SourceSequence *) calloc(nTuples, sizeof(SourceSequence));
-
-	if (context->sequenceArray->array == NULL)
-	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
-		return;
-	}
-
 	bool parsedOk = true;
 
 	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
 	{
-		SourceSequence *sequence = &(context->sequenceArray->array[rowNumber]);
+		SourceSequence *seq =
+			(SourceSequence *) calloc(1, sizeof(SourceSequence));
 
-		parsedOk = parsedOk &&
-				   parseCurrentSourceSequence(result, rowNumber, sequence);
-	}
+		if (!parseCurrentSourceSequence(result, rowNumber, seq))
+		{
+			parsedOk = false;
+			free(seq);
+			break;
+		}
 
-	if (!parsedOk)
-	{
-		free(context->sequenceArray->array);
-		context->sequenceArray->array = NULL;
+		if (context->catalog != NULL && context->catalog->db != NULL)
+		{
+			if (!catalog_add_s_seq(context->catalog, seq))
+			{
+				/* errors have already been logged */
+				parsedOk = false;
+				free(seq);
+				break;
+			}
+		}
+
+		free(seq);
 	}
 
 	context->parsedOk = parsedOk;
@@ -5025,7 +5132,7 @@ parseCurrentSourceSequence(PGresult *result, int rowNumber, SourceSequence *seq)
 	/* 6. attrelid */
 	if (PQgetisnull(result, rowNumber, 5))
 	{
-		seq->ownedby = 0;
+		seq->attrelid = 0;
 	}
 	else
 	{
@@ -5077,40 +5184,43 @@ getIndexArray(void *ctx, PGresult *result)
 		return;
 	}
 
-	/* we're not supposed to re-cycle arrays here */
-	if (context->indexArray->array != NULL)
-	{
-		/* issue a warning but let's try anyway */
-		log_warn("BUG? context's array is not null in getIndexArray");
-
-		free(context->indexArray->array);
-		context->indexArray->array = NULL;
-	}
-
-	context->indexArray->count = nTuples;
-	context->indexArray->array =
-		(SourceIndex *) calloc(nTuples, sizeof(SourceIndex));
-
-	if (context->indexArray->array == NULL)
-	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
-		return;
-	}
-
 	bool parsedOk = true;
 
 	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
 	{
-		SourceIndex *index = &(context->indexArray->array[rowNumber]);
+		SourceIndex *index = (SourceIndex *) calloc(1, sizeof(SourceIndex));
 
-		parsedOk = parsedOk &&
-				   parseCurrentSourceIndex(result, rowNumber, index);
-	}
+		if (!parseCurrentSourceIndex(result, rowNumber, index))
+		{
+			parsedOk = false;
+			free(index);
+			break;
+		}
 
-	if (!parsedOk)
-	{
-		free(context->indexArray->array);
-		context->indexArray->array = NULL;
+		if (context->catalog != NULL && context->catalog->db != NULL)
+		{
+			if (!catalog_add_s_index(context->catalog, index))
+			{
+				/* errors have already been logged */
+				parsedOk = false;
+				free(index);
+				break;
+			}
+
+			/* not all indexes are supporting a constraint, of course */
+			if (index->constraintOid > 0)
+			{
+				if (!catalog_add_s_constraint(context->catalog, index))
+				{
+					/* errors have already been logged */
+					parsedOk = false;
+					free(index);
+					break;
+				}
+			}
+		}
+
+		free(index);
 	}
 
 	context->parsedOk = parsedOk;
@@ -5389,40 +5499,30 @@ getDependArray(void *ctx, PGresult *result)
 		return;
 	}
 
-	/* we're not supposed to re-cycle arrays here */
-	if (context->dependArray->array != NULL)
-	{
-		/* issue a warning but let's try anyway */
-		log_warn("BUG? context's array is not null in getDependArray");
-
-		free(context->dependArray->array);
-		context->dependArray->array = NULL;
-	}
-
-	context->dependArray->count = nTuples;
-	context->dependArray->array =
-		(SourceDepend *) calloc(nTuples, sizeof(SourceDepend));
-
-	if (context->dependArray->array == NULL)
-	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
-		return;
-	}
-
 	bool parsedOk = true;
 
 	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
 	{
-		SourceDepend *depend = &(context->dependArray->array[rowNumber]);
+		SourceDepend *depend = (SourceDepend *) calloc(1, sizeof(SourceDepend));
 
-		parsedOk = parsedOk &&
-				   parseCurrentSourceDepend(result, rowNumber, depend);
-	}
+		if (!parseCurrentSourceDepend(result, rowNumber, depend))
+		{
+			parsedOk = false;
+			break;
+		}
 
-	if (!parsedOk)
-	{
-		free(context->dependArray->array);
-		context->dependArray->array = NULL;
+		if (context->catalog != NULL && context->catalog->db != NULL)
+		{
+			if (!catalog_add_s_depend(context->catalog, depend))
+			{
+				/* errors have already been logged */
+				parsedOk = false;
+				free(depend);
+				break;
+			}
+		}
+
+		free(depend);
 	}
 
 	context->parsedOk = parsedOk;
@@ -5574,6 +5674,7 @@ static void
 getPartitionList(void *ctx, PGresult *result)
 {
 	SourcePartitionContext *context = (SourcePartitionContext *) ctx;
+	SourceTable *table = context->table;
 	int nTuples = PQntuples(result);
 
 	if (PQnfields(result) != 5)
@@ -5608,10 +5709,32 @@ getPartitionList(void *ctx, PGresult *result)
 
 	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
 	{
-		SourceTableParts *parts = &(context->table->partsArray.array[rowNumber]);
+		SourceTableParts *parts = &(table->partsArray.array[rowNumber]);
 
-		parsedOk = parsedOk &&
-				   parseCurrentPartition(result, rowNumber, parts);
+		if (!parseCurrentPartition(result, rowNumber, parts))
+		{
+			parsedOk = false;
+			break;
+		}
+
+		log_trace("getPartitionList: %s %d %lld %lld %d",
+				  table->qname,
+				  parts->partNumber,
+				  (long long) parts->min,
+				  (long long) parts->max,
+				  parts->partCount);
+	}
+
+	if (parsedOk)
+	{
+		if (context->catalog != NULL && context->catalog->db != NULL)
+		{
+			if (!catalog_add_s_table_parts(context->catalog, table))
+			{
+				/* errors have already been logged */
+				parsedOk = false;
+			}
+		}
 	}
 
 	if (!parsedOk)

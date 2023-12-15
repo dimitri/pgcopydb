@@ -323,15 +323,10 @@ copydb_blob_worker(CopyDataSpec *specs)
 			{
 				if (!pg_copy_large_object(src, &dst, dropIfExists, mesg.data.oid))
 				{
-					if (specs->failFast)
-					{
-						log_error("Failed to copy Large Object with oid %u, "
-								  "see above for details",
-								  mesg.data.oid);
-						return false;
-					}
-
-					++errors;
+					log_error("Failed to copy Large Object with oid %u, "
+							  "see above for details",
+							  mesg.data.oid);
+					return false;
 				}
 				break;
 			}
@@ -348,15 +343,14 @@ copydb_blob_worker(CopyDataSpec *specs)
 		}
 	}
 
-	/* terminate our connection to the source database now */
+	/* terminate our connection to the source and target database now */
 	(void) copydb_close_snapshot(specs);
+	(void) pgsql_finish(&dst);
 
 	bool success = (stop == true && errors == 0);
 
 	if (errors > 0)
 	{
-		pgsql_finish(&dst);
-
 		log_error("Large Objects worker %d encountered %d errors, "
 				  "see above for details",
 				  pid,

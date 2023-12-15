@@ -40,7 +40,7 @@ grep -v "OWNER TO postgres" /usr/src/pagila/pagila-schema.sql > /tmp/pagila-sche
 psql -o /tmp/s.out -d ${PAGILA_SOURCE_PGURI} -1 -f /tmp/pagila-schema.sql
 psql -o /tmp/d.out -d ${PAGILA_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
 
-pgcopydb clone --skip-ext-comments       \
+pgcopydb clone --skip-ext-comments \
          --source ${PAGILA_SOURCE_PGURI} \
          --target ${PAGILA_TARGET_PGURI}
 

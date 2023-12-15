@@ -10,6 +10,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "catalog.h"
 #include "cli_common.h"
 #include "cli_root.h"
 #include "copydb.h"
@@ -20,6 +21,7 @@
 #include "parsing_utils.h"
 #include "pgsql.h"
 #include "progress.h"
+#include "signals.h"
 #include "string_utils.h"
 #include "summary.h"
 
@@ -210,7 +212,7 @@ clone_and_follow(CopyDataSpec *copySpecs)
 						   copyDBoptions.origin,
 						   copyDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
-						   &(copySpecs->catalog),
+						   &(copySpecs->catalogs.source),
 						   copyDBoptions.stdIn,
 						   copyDBoptions.stdOut,
 						   logSQL))
@@ -370,7 +372,7 @@ cli_follow(int argc, char **argv)
 						   copyDBoptions.origin,
 						   copyDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
-						   &(copySpecs.catalog),
+						   &(copySpecs.catalogs.source),
 						   copyDBoptions.stdIn,
 						   copyDBoptions.stdOut,
 						   logSQL))
@@ -523,12 +525,6 @@ cloneDB(CopyDataSpec *copySpecs)
 	/* swap the new instance in place of the previous one */
 	copySpecs->sourceSnapshot = snapshot;
 
-	if (!copydb_set_snapshot(copySpecs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	/* fetch schema information from source catalogs, including filtering */
 	log_info("STEP 1: fetch source database tables, indexes, and sequences");
 
@@ -578,14 +574,24 @@ cloneDB(CopyDataSpec *copySpecs)
 		return false;
 	}
 
-	/* close our snapshot: commit transaction and finish connection */
-	(void) copydb_close_snapshot(copySpecs);
-
 	log_info("STEP 10: restore the post-data section to the target database");
 
 	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_FINALIZE_SCHEMA);
 
+	/* we need access to the catalogs to filter the pg_restore --list */
+	if (!catalog_init_from_specs(copySpecs))
+	{
+		log_error("Failed to initialize pgcopydb internal catalogs");
+		return false;
+	}
+
 	if (!copydb_target_finalize_schema(copySpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_close_from_specs(copySpecs))
 	{
 		/* errors have already been logged */
 		return false;
@@ -725,11 +731,21 @@ cli_clone_follow_wait_subprocess(const char *name, pid_t pid)
 
 		if (exited)
 		{
+			char details[BUFSIZE] = { 0 };
+
+			if (sig != 0)
+			{
+				sformat(details, sizeof(details), " (%s [%d])",
+						signal_to_string(sig),
+						sig);
+			}
+
 			log_level(returnCode == 0 ? LOG_DEBUG : LOG_ERROR,
-					  "%s process %d has terminated [%d]",
+					  "%s process %d has terminated [%d]%s",
 					  name,
 					  pid,
-					  returnCode);
+					  returnCode,
+					  details);
 		}
 
 		/* avoid busy looping, wait for 150ms before checking again */

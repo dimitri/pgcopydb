@@ -12,6 +12,7 @@
 #include "access/xlog_internal.h"
 #include "access/xlogdefs.h"
 
+#include "catalog.h"
 #include "cli_common.h"
 #include "cli_root.h"
 #include "commandline.h"
@@ -579,7 +580,7 @@ cli_stream_setup(int argc, char **argv)
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
-						   &(copySpecs.catalog),
+						   &(copySpecs.catalogs.source),
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL))
@@ -706,7 +707,7 @@ cli_stream_catchup(int argc, char **argv)
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
-						   &(copySpecs.catalog),
+						   &(copySpecs.catalogs.source),
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL))
@@ -789,7 +790,7 @@ cli_stream_replay(int argc, char **argv)
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   STREAM_MODE_REPLAY,
-						   &(copySpecs.catalog),
+						   &(copySpecs.catalogs.source),
 						   true,  /* stdin */
 						   true, /* stdout */
 						   logSQL))
@@ -899,15 +900,6 @@ cli_stream_transform(int argc, char **argv)
 	}
 
 	/*
-	 * Read the catalogs from the source table from on-file disk.
-	 */
-	if (!copydb_parse_schema_json_file(&copySpecs))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	/*
 	 * Refrain from logging SQL statements in the apply module, because they
 	 * contain user data. That said, when --trace has been used, bypass that
 	 * privacy feature.
@@ -923,7 +915,7 @@ cli_stream_transform(int argc, char **argv)
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
-						   &(copySpecs.catalog),
+						   &(copySpecs.catalogs.source),
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL))
@@ -975,10 +967,23 @@ cli_stream_transform(int argc, char **argv)
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 	}
-	else if (!stream_transform_file(&specs, jsonfilename, sqlfilename))
+	else
 	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
+		if (!catalog_open(specs.sourceDB))
+		{
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		if (!stream_transform_file(&specs, jsonfilename, sqlfilename))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		if (!catalog_close(specs.sourceDB))
+		{
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
 	}
 }
 
@@ -1064,7 +1069,7 @@ cli_stream_apply(int argc, char **argv)
 							   streamDBoptions.origin,
 							   streamDBoptions.endpos,
 							   STREAM_MODE_CATCHUP,
-							   &(copySpecs.catalog),
+							   &(copySpecs.catalogs.source),
 							   true, /* streamDBoptions.stdIn */
 							   false, /* streamDBoptions.stdOut */
 							   logSQL))
@@ -1152,15 +1157,6 @@ stream_start_in_mode(LogicalStreamMode mode)
 	}
 
 	/*
-	 * Read the catalogs from the source table from on-file disk.
-	 */
-	if (!copydb_parse_schema_json_file(&copySpecs))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	/*
 	 * Refrain from logging SQL statements in the apply module, because they
 	 * contain user data. That said, when --trace has been used, bypass that
 	 * privacy feature.
@@ -1176,7 +1172,7 @@ stream_start_in_mode(LogicalStreamMode mode)
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   mode,
-						   &(copySpecs.catalog),
+						   &(copySpecs.catalogs.source),
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL))

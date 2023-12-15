@@ -8,6 +8,7 @@
 #include <getopt.h>
 #include <inttypes.h>
 
+#include "catalog.h"
 #include "cli_common.h"
 #include "cli_list.h"
 #include "cli_root.h"
@@ -39,8 +40,23 @@ static void cli_list_depends(int argc, char **argv);
 static void cli_list_schema(int argc, char **argv);
 static void cli_list_progress(int argc, char **argv);
 
-static bool copydb_init_specs_from_listdboptions(CopyDBOptions *options,
-												 ListDBOptions *listDBoptions);
+static bool copydb_init_specs_from_listdboptions(CopyDataSpec *copySpecs,
+												 ListDBOptions *listDBoptions,
+												 CopyDataSection section,
+												 bool createWorkDir);
+
+
+/* Iterator Hooks */
+static bool cli_list_databases_hook(void *context, SourceDatabase *dat);
+static bool cli_list_extension_json_hook(void *ctx, SourceExtension *ext);
+static bool cli_list_extension_print_hook(void *ctx, SourceExtension *ext);
+static bool cli_list_colls_hook(void *context, SourceCollation *coll);
+static bool cli_list_table_print_hook(void *context, SourceTable *table);
+static bool cli_list_table_part_print_hook(void *ctx, SourceTableParts *part);
+static bool cli_list_seq_print_hook(void *context, SourceSequence *seq);
+static bool cli_list_index_print_hook(void *context, SourceIndex *index);
+static bool cli_list_depends_hook(void *ctx, SourceDepend *dep);
+
 
 static CommandLine list_catalogs_command =
 	make_command(
@@ -79,6 +95,7 @@ static CommandLine list_tables_command =
 		" --source ... ",
 		"  --source            Postgres URI to the source database\n"
 		"  --filter <filename> Use the filters defined in <filename>\n"
+		"  --force             Force fetching catalogs again\n"
 		"  --cache             Cache table size in relation pgcopydb.pgcopydb_table_size\n"
 		"  --drop-cache        Drop relation pgcopydb.pgcopydb_table_size\n"
 		"  --list-skipped      List only tables that are setup to be skipped\n"
@@ -92,6 +109,7 @@ static CommandLine list_table_parts_command =
 		"List a source table copy partitions",
 		" --source ... ",
 		"  --source                    Postgres URI to the source database\n"
+		"  --force                     Force fetching catalogs again\n"
 		"  --schema-name               Name of the schema where to find the table\n"
 		"  --table-name                Name of the target table\n"
 		"  --split-tables-larger-than  Size threshold to consider partitioning\n",
@@ -104,6 +122,7 @@ static CommandLine list_sequences_command =
 		"List all the source sequences to copy data from",
 		" --source ... ",
 		"  --source            Postgres URI to the source database\n"
+		"  --force             Force fetching catalogs again\n"
 		"  --filter <filename> Use the filters defined in <filename>\n"
 		"  --list-skipped      List only tables that are setup to be skipped\n",
 		cli_list_db_getopts,
@@ -115,6 +134,7 @@ static CommandLine list_indexes_command =
 		"List all the indexes to create again after copying the data",
 		" --source ... [ --schema-name [ --table-name ] ]",
 		"  --source            Postgres URI to the source database\n"
+		"  --force             Force fetching catalogs again\n"
 		"  --schema-name       Name of the schema where to find the table\n"
 		"  --table-name        Name of the target table\n"
 		"  --filter <filename> Use the filters defined in <filename>\n"
@@ -128,6 +148,7 @@ static CommandLine list_depends_command =
 		"List all the dependencies to filter-out",
 		" --source ... [ --schema-name [ --table-name ] ]",
 		"  --source            Postgres URI to the source database\n"
+		"  --force             Force fetching catalogs again\n"
 		"  --schema-name       Name of the schema where to find the table\n"
 		"  --table-name        Name of the target table\n"
 		"  --filter <filename> Use the filters defined in <filename>\n"
@@ -141,6 +162,7 @@ static CommandLine list_schema_command =
 		"List the schema to migrate, formatted in JSON",
 		" --source ... ",
 		"  --source            Postgres URI to the source database\n"
+		"  --force             Force fetching catalogs again\n"
 		"  --filter <filename> Use the filters defined in <filename>\n",
 		cli_list_db_getopts,
 		cli_list_schema);
@@ -224,12 +246,16 @@ cli_list_db_getopts(int argc, char **argv)
 		{ "without-pkey", no_argument, NULL, 'P' },
 		{ "split-tables-larger-than", required_argument, NULL, 'L' },
 		{ "split-at", required_argument, NULL, 'L' },
+		{ "force", no_argument, NULL, 'f' },
 		{ "cache", no_argument, NULL, 'c' },
 		{ "drop-cache", no_argument, NULL, 'C' },
 		{ "summary", no_argument, NULL, 'y' },
 		{ "available-versions", no_argument, NULL, 'a' },
 		{ "requirements", no_argument, NULL, 'r' },
 		{ "json", no_argument, NULL, 'J' },
+		{ "resume", no_argument, NULL, 'R' },
+		{ "not-consistent", no_argument, NULL, 'I' },
+		{ "snapshot", required_argument, NULL, 'N' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "debug", no_argument, NULL, 'd' },
 		{ "trace", no_argument, NULL, 'z' },
@@ -249,7 +275,7 @@ cli_list_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:D:j:s:t:PL:cCJVvdzqh",
+	while ((c = getopt_long(argc, argv, "S:T:D:j:s:t:PL:cCJRIVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -335,6 +361,13 @@ cli_list_db_getopts(int argc, char **argv)
 				break;
 			}
 
+			case 'f':
+			{
+				options.force = true;
+				log_trace("--force");
+				break;
+			}
+
 			case 'c':
 			{
 				if (options.dropCache)
@@ -386,6 +419,27 @@ cli_list_db_getopts(int argc, char **argv)
 			{
 				outputJSON = true;
 				log_trace("--json");
+				break;
+			}
+
+			case 'R':
+			{
+				options.resume = true;
+				log_trace("--resume");
+				break;
+			}
+
+			case 'I':
+			{
+				options.notConsistent = true;
+				log_trace("--not-consistent");
+				break;
+			}
+
+			case 'N':
+			{
+				strlcpy(options.snapshot, optarg, sizeof(options.snapshot));
+				log_trace("--snapshot %s", options.snapshot);
 				break;
 			}
 
@@ -499,9 +553,34 @@ cli_list_db_getopts(int argc, char **argv)
 static void
 cli_list_databases(int argc, char **argv)
 {
-	PGSQL pgsql = { 0 };
-	SourceDatabaseArray databaseArray = { 0, NULL };
+	CopyDataSpec copySpecs = { 0 };
 
+	bool createWorkDir = true;
+
+	if (!copydb_init_specs_from_listdboptions(&copySpecs,
+											  &listDBoptions,
+											  DATA_SECTION_ALL,
+											  createWorkDir))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	/*
+	 * Prepare our internal catalogs for storing the source database catalog
+	 * query results. When --force is used then we fetch the catalogs again.
+	 */
+	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
+	{
+		log_error("Failed to fetch a local copy of the catalogs, "
+				  "see above for details");
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/* compute total bytes and total reltuples, pretty print them */
+	DatabaseCatalog *sourceDB = &(copySpecs.catalogs.source);
+
+	PGSQL pgsql = { 0 };
 	ConnStrings *dsn = &(listDBoptions.connStrings);
 
 	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE))
@@ -510,13 +589,22 @@ cli_list_databases(int argc, char **argv)
 		exit(EXIT_CODE_SOURCE);
 	}
 
-	if (!schema_list_databases(&pgsql, &databaseArray))
+	if (!schema_list_databases(&pgsql, sourceDB))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	log_info("Fetched information for %d databases", databaseArray.count);
+	CatalogCounts count = { 0 };
+
+	if (!catalog_count_objects(sourceDB, &count))
+	{
+		log_error("Failed to count local catalogs objects");
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_info("Fetched information for %lld databases",
+			 (long long) count.databases);
 
 	fformat(stdout, "%10s | %20s | %20s\n",
 			"OID",
@@ -528,18 +616,36 @@ cli_list_databases(int argc, char **argv)
 			"--------------------",
 			"--------------------");
 
-	for (int i = 0; i < databaseArray.count; i++)
+	if (!catalog_iter_s_database(sourceDB, NULL, &cli_list_databases_hook))
 	{
-		SourceDatabase *cat = &(databaseArray.array[i]);
-
-		fformat(stdout, "%10u | %20s | %20s\n",
-				cat->oid,
-				cat->datname,
-				cat->bytesPretty);
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	fformat(stdout, "\n");
 }
+
+
+/*
+ * cli_list_databases_print_hook is an iterator callback function.
+ */
+static bool
+cli_list_databases_hook(void *context, SourceDatabase *dat)
+{
+	fformat(stdout, "%10u | %20s | %20s\n",
+			dat->oid,
+			dat->datname,
+			dat->bytesPretty);
+
+	return true;
+}
+
+
+typedef struct ListExtensionContext
+{
+	DatabaseCatalog *filtersDB;
+	JSON_Array *jsArray;
+} ListExtensionContext;
 
 
 /*
@@ -562,61 +668,48 @@ cli_list_extensions(int argc, char **argv)
 		exit(EXIT_CODE_QUIT);
 	}
 
-	PGSQL pgsql = { 0 };
-	SourceExtensionArray extensionArray = { 0, NULL };
+	CopyDataSpec copySpecs = { 0 };
 
-	ConnStrings *dsn = &(listDBoptions.connStrings);
+	bool createWorkDir = true;
 
-	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE))
+	if (!copydb_init_specs_from_listdboptions(&copySpecs,
+											  &listDBoptions,
+											  DATA_SECTION_EXTENSIONS,
+											  createWorkDir))
 	{
 		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
+		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	if (!schema_list_extensions(&pgsql, &extensionArray))
+	/*
+	 * Prepare our internal catalogs for storing the source database catalog
+	 * query results. When --force is used then we fetch the catalogs again.
+	 */
+	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
 	{
-		/* errors have already been logged */
+		log_error("Failed to fetch a local copy of the catalogs, "
+				  "see above for details");
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	log_info("Fetched information for %d extensions", extensionArray.count);
+	Catalogs *catalogs = &(copySpecs.catalogs);
+	DatabaseCatalog *filtersDB = &(catalogs->filter);
 
 	if (outputJSON)
 	{
 		JSON_Value *js = json_value_init_array();
 		JSON_Array *jsArray = json_value_get_array(js);
 
-		for (int i = 0; i < extensionArray.count; i++)
+		ListExtensionContext context = {
+			.filtersDB = filtersDB,
+			.jsArray = jsArray
+		};
+
+		if (!catalog_iter_s_extension(filtersDB,
+									  &context,
+									  &cli_list_extension_json_hook))
 		{
-			SourceExtension *ext = &(extensionArray.array[i]);
-
-			JSON_Value *jsExt = json_value_init_object();
-			JSON_Object *jsObj = json_value_get_object(jsExt);
-
-			json_object_set_number(jsObj, "oid", ext->oid);
-			json_object_set_string(jsObj, "name", ext->extname);
-			json_object_set_string(jsObj, "schema", ext->extnamespace);
-
-			JSON_Value *jsConfig = json_value_init_array();
-			JSON_Array *jsConfigArray = json_value_get_array(jsConfig);
-
-			for (int c = 0; c < ext->config.count; c++)
-			{
-				JSON_Value *jsConf = json_value_init_object();
-				JSON_Object *jsConfObj = json_value_get_object(jsConf);
-
-				json_object_set_string(jsConfObj,
-									   "schema", ext->config.array[c].nspname);
-
-				json_object_set_string(jsConfObj,
-									   "name", ext->config.array[c].relname);
-
-				json_array_append_value(jsConfigArray, jsConf);
-			}
-
-			json_object_set_value(jsObj, "config", jsConfig);
-
-			json_array_append_value(jsArray, jsExt);
+			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 
 		char *serialized_string = json_serialize_to_string_pretty(js);
@@ -628,45 +721,117 @@ cli_list_extensions(int argc, char **argv)
 	}
 	else
 	{
-		fformat(stdout, "%10s | %20s | %20s | %10s | %s\n",
+		fformat(stdout, "%10s | %25s | %20s | %10s | %s\n",
 				"OID",
 				"Name",
 				"Schema",
 				"Count",
 				"Config");
 
-		fformat(stdout, "%10s-+-%20s-+-%20s-+-%10s-+-%10s\n",
+		fformat(stdout, "%10s-+-%25s-+-%20s-+-%10s-+-%10s\n",
 				"----------",
-				"--------------------",
+				"-------------------------",
 				"--------------------",
 				"----------",
 				"----------");
 
-		for (int i = 0; i < extensionArray.count; i++)
+		ListExtensionContext context = { .filtersDB = filtersDB };
+
+		if (!catalog_iter_s_extension(filtersDB,
+									  &context,
+									  &cli_list_extension_print_hook))
 		{
-			SourceExtension *ext = &(extensionArray.array[i]);
-
-			char config[BUFSIZE] = { 0 };
-
-			for (int c = 0; c < ext->config.count; c++)
-			{
-				sformat(config, sizeof(config), "%s%s\"%s\".\"%s\"",
-						config,
-						c == 0 ? "" : ",",
-						ext->config.array[c].nspname,
-						ext->config.array[c].relname);
-			}
-
-			fformat(stdout, "%10u | %20s | %20s | %10d | %s\n",
-					ext->oid,
-					ext->extname,
-					ext->extnamespace,
-					ext->config.count,
-					config);
+			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 
 		fformat(stdout, "\n");
 	}
+}
+
+
+/*
+ * cli_list_extension_json_hook is an iterator callback function.
+ */
+static bool
+cli_list_extension_json_hook(void *ctx, SourceExtension *ext)
+{
+	ListExtensionContext *context = (ListExtensionContext *) ctx;
+
+	DatabaseCatalog *filtersDB = context->filtersDB;
+	JSON_Array *jsArray = context->jsArray;
+
+	JSON_Value *jsExt = json_value_init_object();
+	JSON_Object *jsObj = json_value_get_object(jsExt);
+
+	json_object_set_number(jsObj, "oid", ext->oid);
+	json_object_set_string(jsObj, "name", ext->extname);
+	json_object_set_string(jsObj, "schema", ext->extnamespace);
+
+	JSON_Value *jsConfig = json_value_init_array();
+	JSON_Array *jsConfigArray = json_value_get_array(jsConfig);
+
+	if (!catalog_s_ext_fetch_extconfig(filtersDB, ext))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	for (int c = 0; c < ext->config.count; c++)
+	{
+		JSON_Value *jsConf = json_value_init_object();
+		JSON_Object *jsConfObj = json_value_get_object(jsConf);
+
+		json_object_set_string(jsConfObj,
+							   "schema", ext->config.array[c].nspname);
+
+		json_object_set_string(jsConfObj,
+							   "name", ext->config.array[c].relname);
+
+		json_array_append_value(jsConfigArray, jsConf);
+	}
+
+	json_object_set_value(jsObj, "config", jsConfig);
+
+	json_array_append_value(jsArray, jsExt);
+
+	return true;
+}
+
+
+/*
+ * cli_list_extension_json_hook is an iterator callback function.
+ */
+static bool
+cli_list_extension_print_hook(void *ctx, SourceExtension *ext)
+{
+	ListExtensionContext *context = (ListExtensionContext *) ctx;
+	DatabaseCatalog *filtersDB = context->filtersDB;
+
+	if (!catalog_s_ext_fetch_extconfig(filtersDB, ext))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	char config[BUFSIZE] = { 0 };
+
+	for (int c = 0; c < ext->config.count; c++)
+	{
+		sformat(config, sizeof(config), "%s%s\"%s\".\"%s\"",
+				config,
+				c == 0 ? "" : ",",
+				ext->config.array[c].nspname,
+				ext->config.array[c].relname);
+	}
+
+	fformat(stdout, "%10u | %25s | %20s | %10d | %s\n",
+			ext->oid,
+			ext->extname,
+			ext->extnamespace,
+			ext->config.count,
+			config);
+
+	return true;
 }
 
 
@@ -695,7 +860,7 @@ cli_list_extension_versions(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	log_info("Fetched information for %d extensions", evArray.count);
+	log_info("Fetched information for %d extension versions", evArray.count);
 
 	if (outputJSON)
 	{
@@ -763,8 +928,6 @@ static void
 cli_list_extension_requirements(int argc, char **argv)
 {
 	PGSQL pgsql = { 0 };
-	ExtensionsVersionsArray evArray = { 0, NULL };
-
 	ConnStrings *dsn = &(listDBoptions.connStrings);
 
 	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE))
@@ -773,13 +936,15 @@ cli_list_extension_requirements(int argc, char **argv)
 		exit(EXIT_CODE_SOURCE);
 	}
 
+	ExtensionsVersionsArray evArray = { 0, NULL };
+
 	if (!schema_list_ext_versions(&pgsql, &evArray))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	log_info("Fetched information for %d extensions", evArray.count);
+	log_info("Fetched information for %d extension versions", evArray.count);
 
 	if (outputJSON)
 	{
@@ -835,26 +1000,47 @@ cli_list_extension_requirements(int argc, char **argv)
 static void
 cli_list_collations(int argc, char **argv)
 {
-	PGSQL pgsql = { 0 };
-	SourceCollationArray collationArray = { 0, NULL };
+	CopyDataSpec copySpecs = { 0 };
 
-	ConnStrings *dsn = &(listDBoptions.connStrings);
+	bool createWorkDir = true;
 
-	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE))
+	if (!copydb_init_specs_from_listdboptions(&copySpecs,
+											  &listDBoptions,
+											  DATA_SECTION_ALL,
+											  createWorkDir))
 	{
 		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
+		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	if (!schema_list_collations(&pgsql, &collationArray))
+	/* pretend we're using --skip-collations so that we fetch the data */
+	copySpecs.skipCollations = true;
+
+	/*
+	 * Prepare our internal catalogs for storing the source database catalog
+	 * query results. When --force is used then we fetch the catalogs again.
+	 */
+	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
 	{
-		/* errors have already been logged */
+		log_error("Failed to fetch a local copy of the catalogs, "
+				  "see above for details");
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	log_info("Fetched information for %d collations", collationArray.count);
+	/* collations are only used to filter pg_restore --list */
+	DatabaseCatalog *filterDB = &(copySpecs.catalogs.filter);
+	CatalogCounts count = { 0 };
 
-	fformat(stdout, "%10s | %20s | %20s \n",
+	if (!catalog_count_objects(filterDB, &count))
+	{
+		log_error("Failed to count local catalogs objects");
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_info("Fetched information for %lld collations",
+			 (long long) count.colls);
+
+	fformat(stdout, "%10s | %20s | %-20s \n",
 			"OID",
 			"Name",
 			"Object name");
@@ -864,17 +1050,28 @@ cli_list_collations(int argc, char **argv)
 			"--------------------",
 			"--------------------");
 
-	for (int i = 0; i < collationArray.count; i++)
+	if (!catalog_iter_s_coll(filterDB, NULL, &cli_list_colls_hook))
 	{
-		SourceCollation *coll = &(collationArray.array[i]);
-
-		fformat(stdout, "%10u | %20s | %20s \n",
-				coll->oid,
-				coll->collname,
-				coll->desc);
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	fformat(stdout, "\n");
+}
+
+
+/*
+ * cli_list_colls_print_hook is an iterator callback function.
+ */
+static bool
+cli_list_colls_hook(void *context, SourceCollation *coll)
+{
+	fformat(stdout, "%10u | %20s | %s \n",
+			coll->oid,
+			coll->collname,
+			coll->desc);
+
+	return true;
 }
 
 
@@ -884,13 +1081,24 @@ cli_list_collations(int argc, char **argv)
 static void
 cli_list_tables(int argc, char **argv)
 {
-	PGSQL pgsql = { 0 };
-	SourceTableArray tableArray = { 0, NULL };
-	SourceFilters filters = { 0 };
+	CopyDataSpec copySpecs = { 0 };
+
+	bool createWorkDir = true;
+
+	if (!copydb_init_specs_from_listdboptions(&copySpecs,
+											  &listDBoptions,
+											  DATA_SECTION_TABLE_DATA,
+											  createWorkDir))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	SourceFilters *filters = &(copySpecs.filters);
 
 	if (!IS_EMPTY_STRING_BUFFER(listDBoptions.filterFileName))
 	{
-		if (!parse_filters(listDBoptions.filterFileName, &filters))
+		if (!parse_filters(listDBoptions.filterFileName, filters))
 		{
 			log_error("Failed to parse filters in file \"%s\"",
 					  listDBoptions.filterFileName);
@@ -899,128 +1107,43 @@ cli_list_tables(int argc, char **argv)
 
 		if (listDBoptions.listSkipped)
 		{
-			if (filters.type != SOURCE_FILTER_TYPE_NONE)
-			{
-				filters.type = filterTypeComplement(filters.type);
-
-				if (filters.type == SOURCE_FILTER_TYPE_NONE)
-				{
-					log_error("BUG: can't list skipped tables from filtering "
-							  "type %d",
-							  filters.type);
-					exit(EXIT_CODE_INTERNAL_ERROR);
-				}
-			}
+			copySpecs.fetchFilteredOids = true;
 		}
 	}
 
-	ConnStrings *dsn = &(listDBoptions.connStrings);
-
-	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE))
+	/*
+	 * Prepare our internal catalogs for storing the source database catalog
+	 * query results. When --force is used then we fetch the catalogs again.
+	 */
+	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
 	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
-	}
-
-	if (listDBoptions.dropCache)
-	{
-		log_info("Dropping cache table pgcopydb.pgcopydb_table_size");
-		if (!schema_drop_pgcopydb_table_size(&pgsql))
-		{
-			exit(EXIT_CODE_SOURCE);
-		}
-
-		exit(EXIT_CODE_QUIT);
-	}
-
-	if (!pgsql_begin(&pgsql))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
-	}
-
-	bool hasDBCreatePrivilege;
-	bool hasDBTempPrivilege;
-
-	/* check if we have needed privileges here */
-	if (!schema_query_privileges(&pgsql,
-								 &hasDBCreatePrivilege,
-								 &hasDBTempPrivilege))
-	{
-		log_error("Failed to query database privileges, see above for details");
-		exit(EXIT_CODE_SOURCE);
-	}
-
-	if (!pgsql_prepend_search_path(&pgsql, "pgcopydb"))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
-	}
-
-	bool createdTableSizeTable = false;
-	bool dropCache = listDBoptions.cache;
-
-	if (!schema_prepare_pgcopydb_table_size(&pgsql,
-											&filters,
-											hasDBCreatePrivilege,
-											listDBoptions.cache,
-											dropCache,
-											&createdTableSizeTable))
-	{
-		/* errors have already been logged */
+		log_error("Failed to fetch a local copy of the catalogs, "
+				  "see above for details");
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (listDBoptions.noPKey)
-	{
-		log_info("Listing tables without primary key in source database");
+	/* when --list-skipped then use the filters catalogs */
+	DatabaseCatalog *sourceDB = &(copySpecs.catalogs.source);
+	DatabaseCatalog *filtersDB = &(copySpecs.catalogs.filter);
 
-		if (!schema_list_ordinary_tables_without_pk(&pgsql,
-													&filters,
-													&tableArray))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
-	}
-	else
-	{
-		log_info("Listing ordinary tables in source database");
-
-		if (!schema_list_ordinary_tables(&pgsql, &filters, &tableArray))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
-	}
-
-	if (!pgsql_commit(&pgsql))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
-	}
+	DatabaseCatalog *catalog =
+		listDBoptions.listSkipped ? filtersDB : sourceDB;
 
 	/* compute total bytes and total reltuples, pretty print them */
-	uint64_t totalBytes = 0;
-	uint64_t totalTuples = 0;
+	CatalogTableStats stats = { 0 };
 
-	for (int i = 0; i < tableArray.count; i++)
+	if (!catalog_s_table_stats(catalog, &stats))
 	{
-		totalBytes += tableArray.array[i].bytes;
-		totalTuples += tableArray.array[i].reltuples;
+		log_error("Failed to compute source table statistics, "
+				  "see above for details");
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	char bytesPretty[BUFSIZE] = { 0 };
-	char relTuplesPretty[BUFSIZE] = { 0 };
-
-	(void) pretty_print_bytes(bytesPretty, BUFSIZE, totalBytes);
-	(void) pretty_print_count(relTuplesPretty, BUFSIZE, totalTuples);
-
-	log_info("Fetched information for %d tables, "
-			 "with an estimated total of %s tuples and %s",
-			 tableArray.count,
-			 relTuplesPretty,
-			 bytesPretty);
+	log_info("Fetched information for %lld tables, "
+			 "with an estimated total of %s tuples and %s on-disk",
+			 (long long) stats.count,
+			 stats.relTuplesPretty,
+			 stats.bytesPretty);
 
 	fformat(stdout, "%8s | %20s | %20s | %15s | %15s\n",
 			"OID", "Schema Name", "Table Name",
@@ -1033,36 +1156,80 @@ cli_list_tables(int argc, char **argv)
 			"---------------",
 			"---------------");
 
-	for (int i = 0; i < tableArray.count; i++)
+	if (listDBoptions.noPKey)
 	{
-		fformat(stdout, "%8d | %20s | %20s | %15lld | %15s\n",
-				tableArray.array[i].oid,
-				tableArray.array[i].nspname,
-				tableArray.array[i].relname,
-				(long long) tableArray.array[i].reltuples,
-				tableArray.array[i].bytesPretty);
-	}
-
-	fformat(stdout, "\n");
-
-	if (createdTableSizeTable && !listDBoptions.cache)
-	{
-		if (!schema_drop_pgcopydb_table_size(&pgsql))
+		if (!catalog_iter_s_table_nopk(catalog,
+									   NULL,
+									   &cli_list_table_print_hook))
 		{
-			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 	}
+	else
+	{
+		if (!catalog_iter_s_table(catalog, NULL, &cli_list_table_print_hook))
+		{
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+	}
+
+	fformat(stdout, "\n");
 }
 
 
 /*
- * cli_list_tables implements the command: pgcopydb list table-parts
+ * cli_list_table_print_hook is an iterator callback function.
+ */
+static bool
+cli_list_table_print_hook(void *context, SourceTable *table)
+{
+	if (table == NULL)
+	{
+		log_error("BUG: cli_list_table_print_hook called with a NULL table");
+		return false;
+	}
+
+	fformat(stdout, "%8d | %20s | %20s | %15lld | %15s\n",
+			table->oid,
+			table->nspname,
+			table->relname,
+			(long long) table->reltuples,
+			table->bytesPretty);
+
+	return true;
+}
+
+
+typedef struct ListTablePartContext
+{
+	SourceTable *table;
+} ListTablePartContext;
+
+/*
+ * cli_list_table_parts implements the command: pgcopydb list table-parts
  */
 static void
 cli_list_table_parts(int argc, char **argv)
 {
-	PGSQL pgsql = { 0 };
+	CopyDataSpec copySpecs = { 0 };
+
+	if (listDBoptions.splitTablesLargerThan.bytes == 0)
+	{
+		log_warn("Option --split-tables-larger-than is set to zero bytes, "
+				 "skipping");
+		exit(EXIT_CODE_QUIT);
+	}
+
+	bool createWorkDir = true;
+
+	if (!copydb_init_specs_from_listdboptions(&copySpecs,
+											  &listDBoptions,
+											  DATA_SECTION_TABLE_DATA_PARTS,
+											  createWorkDir))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_BAD_ARGS);
+	}
 
 	if (IS_EMPTY_STRING_BUFFER(listDBoptions.table_name))
 	{
@@ -1076,87 +1243,42 @@ cli_list_table_parts(int argc, char **argv)
 		strlcpy(listDBoptions.schema_name, "public", PG_NAMEDATALEN);
 	}
 
-	ConnStrings *dsn = &(listDBoptions.connStrings);
-
-	log_info("Listing COPY partitions for table \"%s\".\"%s\" in \"%s\"",
-			 listDBoptions.schema_name,
-			 listDBoptions.table_name,
-			 dsn->safeSourcePGURI.pguri);
-
-	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE))
+	if (!catalog_init_from_specs(&copySpecs))
 	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
-	}
-
-	if (!pgsql_begin(&pgsql))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
-	}
-
-	/*
-	 * Build a filter that includes only the given target table, our command
-	 * line is built to work on a single table at a time (--schema-name default
-	 * to "public" and --table-name is mandatory).
-	 */
-	SourceFilterTable *tableFilter =
-		(SourceFilterTable *) malloc(1 * sizeof(SourceFilterTable));
-
-	strlcpy(tableFilter[0].nspname, listDBoptions.schema_name, PG_NAMEDATALEN);
-	strlcpy(tableFilter[0].relname, listDBoptions.table_name, PG_NAMEDATALEN);
-
-	SourceFilters filter =
-	{
-		.type = SOURCE_FILTER_TYPE_INCL,
-		.includeOnlyTableList =
-		{
-			.count = 1,
-			.array = tableFilter
-		}
-	};
-
-	/* just don't query for privileges, assume read-only */
-	bool hasDBCreatePrivilege = false;
-	bool createdTableSizeTable = false;
-
-	if (!pgsql_prepend_search_path(&pgsql, "pgcopydb"))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
-	}
-
-	if (!schema_prepare_pgcopydb_table_size(&pgsql,
-											&filter,
-											hasDBCreatePrivilege,
-											false, /* cache */
-											false, /* dropCache */
-											&createdTableSizeTable))
-	{
-		/* errors have already been logged */
+		log_error("Failed to initialize pgcopydb internal catalogs");
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	SourceTableArray tableArray = { 0 };
+	Catalogs *catalogs = &(copySpecs.catalogs);
+	DatabaseCatalog *sourceDB = &(catalogs->source);
+	SourceTable *table = (SourceTable *) calloc(1, sizeof(SourceTable));
 
-	if (!schema_list_ordinary_tables(&pgsql, &filter, &tableArray))
+	if (table == NULL)
 	{
-		/* errors have already been logged */
+		log_error(ALLOCATION_FAILED_ERROR);
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (tableArray.count != 1)
+	if (!catalog_lookup_s_table_by_name(sourceDB,
+										listDBoptions.schema_name,
+										listDBoptions.table_name,
+										table))
 	{
-		log_error("Expected to fetch a single table with schema name \"%s\" "
-				  "and table name \"%s\", fetched %d instead",
+		log_error("Failed to lookup for table \"%s\".\"%s\" in our "
+				  "internal catalogs",
 				  listDBoptions.schema_name,
-				  listDBoptions.table_name,
-				  tableArray.count);
+				  listDBoptions.table_name);
 
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	SourceTable *table = &(tableArray.array[0]);
+	if (table->bytes < listDBoptions.splitTablesLargerThan.bytes)
+	{
+		log_info("Table %s (%s) will not be split",
+				 table->qname,
+				 table->bytesPretty);
+		exit(EXIT_CODE_QUIT);
+	}
 
 	if (IS_EMPTY_STRING_BUFFER(table->partKey))
 	{
@@ -1171,29 +1293,9 @@ cli_list_table_parts(int argc, char **argv)
 		strlcpy(table->partKey, "ctid", sizeof(table->partKey));
 	}
 
-	if (!schema_list_partitions(&pgsql, table,
-								listDBoptions.splitTablesLargerThan.bytes))
-	{
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	if (!pgsql_commit(&pgsql))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
-	}
-
-	if (table->partsArray.count <= 1)
-	{
-		log_info("Table %s (%s) will not be split",
-				 table->qname,
-				 table->bytesPretty);
-		exit(EXIT_CODE_QUIT);
-	}
-
 	log_info("Table %s COPY will be split %d-ways",
 			 table->qname,
-			 table->partsArray.count);
+			 table->partition.partCount);
 
 	fformat(stdout, "%12s | %12s | %12s | %12s\n",
 			"Part", "Min", "Max", "Count");
@@ -1204,54 +1306,14 @@ cli_list_table_parts(int argc, char **argv)
 			"------------",
 			"------------");
 
-	if (streq(table->partKey, "ctid"))
+	ListTablePartContext context = { .table = table };
+
+	if (!catalog_iter_s_table_parts(sourceDB,
+									table->oid,
+									&context,
+									&cli_list_table_part_print_hook))
 	{
-		for (int i = 0; i < table->partsArray.count; i++)
-		{
-			SourceTableParts *part = &(table->partsArray.array[i]);
-
-			char partNC[BUFSIZE] = { 0 };
-			char partMin[BUFSIZE] = { 0 };
-			char partMax[BUFSIZE] = { 0 };
-
-			sformat(partNC, sizeof(partNC), "%d/%d",
-					part->partNumber,
-					part->partCount);
-
-			sformat(partMin, BUFSIZE, "(%lld,0)", (long long) part->min);
-			sformat(partMax, BUFSIZE, "(%lld,0)", (long long) part->max);
-
-			if (i < table->partsArray.count - 1)
-			{
-				fformat(stdout, "%12s | %12s | %12s | %12lld\n",
-						partNC, partMin, partMax, (long long) part->count);
-			}
-			else
-			{
-				/* last row, max and count are NULL */
-				fformat(stdout, "%12s | %12s | %12s | %12s\n",
-						partNC, partMin, "-", "-");
-			}
-		}
-	}
-	else
-	{
-		for (int i = 0; i < table->partsArray.count; i++)
-		{
-			SourceTableParts *part = &(table->partsArray.array[i]);
-
-			char partNC[BUFSIZE] = { 0 };
-
-			sformat(partNC, sizeof(partNC), "%d/%d",
-					part->partNumber,
-					part->partCount);
-
-			fformat(stdout, "%12s | %12lld | %12lld | %12lld\n",
-					partNC,
-					(long long) part->min,
-					(long long) part->max,
-					(long long) part->count);
-		}
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	fformat(stdout, "\n");
@@ -1259,20 +1321,79 @@ cli_list_table_parts(int argc, char **argv)
 
 
 /*
- * cli_list_tables implements the command: pgcopydb list tables
+ * cli_list_table_part_print_hook is an iterator callback function.
+ */
+static bool
+cli_list_table_part_print_hook(void *ctx, SourceTableParts *part)
+{
+	if (part == NULL)
+	{
+		log_error("BUG: cli_list_table_print_hook called with a NULL part");
+		return false;
+	}
+
+	ListTablePartContext *context = (ListTablePartContext *) ctx;
+	SourceTable *table = context->table;
+
+	if (streq(table->partKey, "ctid"))
+	{
+		char partNC[BUFSIZE] = { 0 };
+		char partMin[BUFSIZE] = { 0 };
+		char partMax[BUFSIZE] = { 0 };
+
+		sformat(partNC, sizeof(partNC), "%d/%d",
+				part->partNumber,
+				part->partCount);
+
+		sformat(partMin, BUFSIZE, "(%lld,0)", (long long) part->min);
+		sformat(partMax, BUFSIZE, "(%lld,0)", (long long) part->max);
+
+		fformat(stdout, "%12s | %12s | %12s | %12lld\n",
+				partNC, partMin, partMax, (long long) part->count);
+	}
+	else
+	{
+		char partNC[BUFSIZE] = { 0 };
+
+		sformat(partNC, sizeof(partNC), "%d/%d",
+				part->partNumber,
+				part->partCount);
+
+		fformat(stdout, "%12s | %12lld | %12lld | %12lld\n",
+				partNC,
+				(long long) part->min,
+				(long long) part->max,
+				(long long) part->count);
+	}
+
+	return true;
+}
+
+
+/*
+ * cli_list_sequences implements the command: pgcopydb list sequences
  */
 static void
 cli_list_sequences(int argc, char **argv)
 {
-	PGSQL pgsql = { 0 };
-	SourceFilters filters = { 0 };
-	SourceSequenceArray sequenceArray = { 0, NULL };
+	CopyDataSpec copySpecs = { 0 };
 
-	log_info("Listing ordinary sequences in source database");
+	bool createWorkDir = true;
+
+	if (!copydb_init_specs_from_listdboptions(&copySpecs,
+											  &listDBoptions,
+											  DATA_SECTION_SET_SEQUENCES,
+											  createWorkDir))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	SourceFilters *filters = &(copySpecs.filters);
 
 	if (!IS_EMPTY_STRING_BUFFER(listDBoptions.filterFileName))
 	{
-		if (!parse_filters(listDBoptions.filterFileName, &filters))
+		if (!parse_filters(listDBoptions.filterFileName, filters))
 		{
 			log_error("Failed to parse filters in file \"%s\"",
 					  listDBoptions.filterFileName);
@@ -1281,36 +1402,20 @@ cli_list_sequences(int argc, char **argv)
 
 		if (listDBoptions.listSkipped)
 		{
-			if (filters.type != SOURCE_FILTER_TYPE_NONE)
-			{
-				filters.type = filterTypeComplement(filters.type);
-
-				if (filters.type == SOURCE_FILTER_TYPE_NONE)
-				{
-					log_error("BUG: can't list skipped sequences "
-							  " from filtering type %d",
-							  filters.type);
-					exit(EXIT_CODE_INTERNAL_ERROR);
-				}
-			}
+			copySpecs.fetchFilteredOids = true;
 		}
 	}
 
-	ConnStrings *dsn = &(listDBoptions.connStrings);
-
-	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE))
+	/*
+	 * Prepare our internal catalogs for storing the source database catalog
+	 * query results. When --force is used then we fetch the catalogs again.
+	 */
+	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
 	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
-	}
-
-	if (!schema_list_sequences(&pgsql, &filters, &sequenceArray))
-	{
-		/* errors have already been logged */
+		log_error("Failed to fetch a local copy of the catalogs, "
+				  "see above for details");
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
-
-	log_info("Fetched information for %d sequences", sequenceArray.count);
 
 	fformat(stdout, "%8s | %20s | %30s | %10s | %10s | %10s \n",
 			"OID", "Schema Name", "Sequence Name",
@@ -1324,18 +1429,44 @@ cli_list_sequences(int argc, char **argv)
 			"----------",
 			"----------");
 
-	for (int i = 0; i < sequenceArray.count; i++)
+	/* when --list-skipped then use the filters catalogs */
+	DatabaseCatalog *sourceDB = &(copySpecs.catalogs.source);
+	DatabaseCatalog *filtersDB = &(copySpecs.catalogs.filter);
+
+	DatabaseCatalog *catalog =
+		listDBoptions.listSkipped ? filtersDB : sourceDB;
+
+	if (!catalog_iter_s_seq(catalog, NULL, &cli_list_seq_print_hook))
 	{
-		fformat(stdout, "%8d | %20s | %30s | %10d | %10d | %10d\n",
-				sequenceArray.array[i].oid,
-				sequenceArray.array[i].nspname,
-				sequenceArray.array[i].relname,
-				sequenceArray.array[i].ownedby,
-				sequenceArray.array[i].attrelid,
-				sequenceArray.array[i].attroid);
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	fformat(stdout, "\n");
+}
+
+
+/*
+ * cli_list_seq_print_hook is an iterator callback function.
+ */
+static bool
+cli_list_seq_print_hook(void *context, SourceSequence *seq)
+{
+	if (seq == NULL)
+	{
+		log_error("BUG: cli_list_seq_print_hook called with a NULL seq");
+		return false;
+	}
+
+	fformat(stdout, "%8d | %20s | %30s | %10d | %10d | %10d\n",
+			seq->oid,
+			seq->nspname,
+			seq->relname,
+			seq->ownedby,
+			seq->attrelid,
+			seq->attroid);
+
+	return true;
 }
 
 
@@ -1345,88 +1476,59 @@ cli_list_sequences(int argc, char **argv)
 static void
 cli_list_indexes(int argc, char **argv)
 {
-	PGSQL pgsql = { 0 };
-	SourceIndexArray indexArray = { 0, NULL };
+	CopyDataSpec copySpecs = { 0 };
 
-	ConnStrings *dsn = &(listDBoptions.connStrings);
+	bool createWorkDir = true;
 
-	log_info("Listing indexes in \"%s\"", dsn->safeSourcePGURI.pguri);
-
-	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE))
+	if (!copydb_init_specs_from_listdboptions(&copySpecs,
+											  &listDBoptions,
+											  DATA_SECTION_INDEXES,
+											  createWorkDir))
 	{
 		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
+		exit(EXIT_CODE_BAD_ARGS);
 	}
+
+	SourceFilters *filters = &(copySpecs.filters);
+
+	if (!IS_EMPTY_STRING_BUFFER(listDBoptions.filterFileName))
+	{
+		if (!parse_filters(listDBoptions.filterFileName, filters))
+		{
+			log_error("Failed to parse filters in file \"%s\"",
+					  listDBoptions.filterFileName);
+			exit(EXIT_CODE_BAD_ARGS);
+		}
+
+		if (listDBoptions.listSkipped)
+		{
+			copySpecs.fetchFilteredOids = true;
+		}
+	}
+
+	bool listTableIndexList = false;
 
 	if (IS_EMPTY_STRING_BUFFER(listDBoptions.table_name) &&
 		IS_EMPTY_STRING_BUFFER(listDBoptions.schema_name))
 	{
-		log_info("Fetching all indexes in source database");
-
-		SourceFilters filters = { 0 };
-
-		if (!IS_EMPTY_STRING_BUFFER(listDBoptions.filterFileName))
-		{
-			if (!parse_filters(listDBoptions.filterFileName, &filters))
-			{
-				log_error("Failed to parse filters in file \"%s\"",
-						  listDBoptions.filterFileName);
-				exit(EXIT_CODE_BAD_ARGS);
-			}
-
-			if (listDBoptions.listSkipped)
-			{
-				if (filters.type != SOURCE_FILTER_TYPE_NONE)
-				{
-					filters.type = filterTypeComplement(filters.type);
-
-					if (filters.type == SOURCE_FILTER_TYPE_NONE)
-					{
-						log_error("BUG: can't list skipped indexes "
-								  " from filtering type %d",
-								  filters.type);
-						exit(EXIT_CODE_INTERNAL_ERROR);
-					}
-				}
-			}
-		}
-
-		if (!schema_list_all_indexes(&pgsql, &filters, &indexArray))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
+		/* list all indexes */
+		listTableIndexList = false;
 	}
 	else if (IS_EMPTY_STRING_BUFFER(listDBoptions.schema_name) &&
 			 !IS_EMPTY_STRING_BUFFER(listDBoptions.table_name))
 	{
-		log_info("Fetching all indexes for table \"public\".\"%s\"",
-				 listDBoptions.table_name);
+		/* list indexes for just this one table, in schema "public" */
+		strlcpy(listDBoptions.schema_name,
+				"public",
+				sizeof(listDBoptions.schema_name));
 
-		if (!schema_list_table_indexes(&pgsql,
-									   "public",
-									   listDBoptions.table_name,
-									   &indexArray))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
+		listTableIndexList = true;
 	}
 	else if (!IS_EMPTY_STRING_BUFFER(listDBoptions.schema_name) &&
 			 !IS_EMPTY_STRING_BUFFER(listDBoptions.table_name))
 	{
-		log_info("Fetching all indexes for table \"%s\".\"%s\"",
-				 listDBoptions.schema_name,
-				 listDBoptions.table_name);
-
-		if (!schema_list_table_indexes(&pgsql,
-									   listDBoptions.schema_name,
-									   listDBoptions.table_name,
-									   &indexArray))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
+		/* list indexes for just this one table */
+		listTableIndexList = true;
 	}
 	else
 	{
@@ -1434,7 +1536,16 @@ cli_list_indexes(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	log_info("Fetched information for %d indexes", indexArray.count);
+	/*
+	 * Prepare our internal catalogs for storing the source database catalog
+	 * query results.
+	 */
+	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
+	{
+		log_error("Failed to fetch a local copy of the catalogs, "
+				  "see above for details");
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
 
 	fformat(stdout, "%8s | %10s | %20s | %20s | %25s | %s\n",
 			"OID", "Schema",
@@ -1449,48 +1560,36 @@ cli_list_indexes(int argc, char **argv)
 			"-------------------------",
 			"--------------------");
 
-	for (int i = 0; i < indexArray.count; i++)
-	{
-		SourceIndex *index = &(indexArray.array[i]);
+	/* when --list-skipped then use the filters catalogs */
+	DatabaseCatalog *sourceDB = &(copySpecs.catalogs.source);
+	DatabaseCatalog *filtersDB = &(copySpecs.catalogs.filter);
 
-		if (!IS_EMPTY_STRING_BUFFER(index->constraintName))
+	DatabaseCatalog *catalog =
+		listDBoptions.listSkipped ? filtersDB : sourceDB;
+
+	/*
+	 * Initialize our Index Iterator, depending on if we're listing indexes for
+	 * just a single table or all the indexes we have fetched in our local copy
+	 * of the source database catalogs.
+	 */
+	if (listTableIndexList)
+	{
+		if (!catalog_iter_s_index_table(catalog,
+										listDBoptions.schema_name,
+										listDBoptions.table_name,
+										NULL,
+										&cli_list_index_print_hook))
 		{
-			if (index->isPrimary || index->isUnique)
-			{
-				fformat(stdout, "%8d | %10s | %20s | %20s | %25s | %s\n",
-						index->indexOid,
-						index->indexNamespace,
-						index->indexRelname,
-						index->constraintName,
-						NULL_AS_EMPTY_STRING(index->constraintDef),
-						NULL_AS_EMPTY_STRING(index->indexDef));
-			}
-			else
-			{
-				/*
-				 * We can't create the index separately when it's not a UNIQUE
-				 * or PRIMARY KEY index. EXCLUDE USING constraints are done
-				 * with indexes that don't implement the constraint themselves.
-				 */
-				fformat(stdout, "%8d | %10s | %20s | %20s | %25s | %s\n",
-						index->indexOid,
-						index->indexNamespace,
-						"",
-						index->constraintName,
-						NULL_AS_EMPTY_STRING(index->constraintDef),
-						"");
-			}
+			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
-		else
+	}
+	else
+	{
+		if (!catalog_iter_s_index(catalog,
+								  NULL,
+								  &cli_list_index_print_hook))
 		{
-			/* when the constraint name is empty, the default display is ok */
-			fformat(stdout, "%8d | %10s | %20s | %20s | %25s | %s\n",
-					index->indexOid,
-					index->indexNamespace,
-					index->indexRelname,
-					index->constraintName,
-					NULL_AS_EMPTY_STRING(index->constraintDef),
-					NULL_AS_EMPTY_STRING(index->indexDef));
+			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 	}
 
@@ -1499,14 +1598,86 @@ cli_list_indexes(int argc, char **argv)
 
 
 /*
- * cli_list_indexes implements the command: pgcopydb list depends
+ * cli_list_index_print_hook is an iterator callback function.
+ */
+static bool
+cli_list_index_print_hook(void *context, SourceIndex *index)
+{
+	if (index == NULL)
+	{
+		log_error("BUG: cli_list_index_print_hook called with a NULL index");
+		return false;
+	}
+
+	if (!IS_EMPTY_STRING_BUFFER(index->constraintName))
+	{
+		if (index->isPrimary || index->isUnique)
+		{
+			fformat(stdout, "%8d | %10s | %20s | %20s | %25s | %s\n",
+					index->indexOid,
+					index->indexNamespace,
+					index->indexRelname,
+					index->constraintName,
+					NULL_AS_EMPTY_STRING(index->constraintDef),
+					NULL_AS_EMPTY_STRING(index->indexDef));
+		}
+		else
+		{
+			/*
+			 * We can't create the index separately when it's not a UNIQUE
+			 * or PRIMARY KEY index. EXCLUDE USING constraints are done
+			 * with indexes that don't implement the constraint themselves.
+			 */
+			fformat(stdout, "%8d | %10s | %20s | %20s | %25s | %s\n",
+					index->indexOid,
+					index->indexNamespace,
+					"",
+					index->constraintName,
+					NULL_AS_EMPTY_STRING(index->constraintDef),
+					"");
+		}
+	}
+	else
+	{
+		/* when the constraint name is empty, the default display is ok */
+		fformat(stdout, "%8d | %10s | %20s | %20s | %25s | %s\n",
+				index->indexOid,
+				index->indexNamespace,
+				index->indexRelname,
+				index->constraintName,
+				NULL_AS_EMPTY_STRING(index->constraintDef),
+				NULL_AS_EMPTY_STRING(index->indexDef));
+	}
+
+	return true;
+}
+
+
+/*
+ * cli_list_depends implements the command: pgcopydb list depends
  */
 static void
 cli_list_depends(int argc, char **argv)
 {
-	PGSQL pgsql = { 0 };
-	SourceFilters filters = { 0 };
-	SourceDependArray dependArray = { 0, NULL };
+	CopyDataSpec copySpecs = { 0 };
+	SourceFilters *filters = &(copySpecs.filters);
+
+	if (!listDBoptions.listSkipped)
+	{
+		log_error("pgcopydb list depends --list-skipped option is mandatory");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	bool createWorkDir = true;
+
+	if (!copydb_init_specs_from_listdboptions(&copySpecs,
+											  &listDBoptions,
+											  DATA_SECTION_DEPENDS,
+											  createWorkDir))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_BAD_ARGS);
+	}
 
 	log_info("Listing dependencies in source database");
 
@@ -1516,44 +1687,38 @@ cli_list_depends(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	if (!parse_filters(listDBoptions.filterFileName, &filters))
+	if (!parse_filters(listDBoptions.filterFileName, filters))
 	{
 		log_error("Failed to parse filters in file \"%s\"",
 				  listDBoptions.filterFileName);
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	if (listDBoptions.listSkipped)
+	copySpecs.fetchFilteredOids = true;
+
+	/*
+	 * Prepare our internal catalogs for storing the source database catalog
+	 * query results. When --force is used then we fetch the catalogs again.
+	 */
+	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
 	{
-		if (filters.type != SOURCE_FILTER_TYPE_NONE)
-		{
-			filters.type = filterTypeComplement(filters.type);
-
-			if (filters.type == SOURCE_FILTER_TYPE_NONE)
-			{
-				log_error("BUG: can't list skipped dependencies "
-						  " from filtering type %d",
-						  filters.type);
-				exit(EXIT_CODE_INTERNAL_ERROR);
-			}
-		}
-	}
-
-	ConnStrings *dsn = &(listDBoptions.connStrings);
-
-	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
-	}
-
-	if (!schema_list_pg_depend(&pgsql, &filters, &dependArray))
-	{
-		/* errors have already been logged */
+		log_error("Failed to fetch a local copy of the catalogs, "
+				  "see above for details");
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	log_info("Fetched information for %d dependencies", dependArray.count);
+	DatabaseCatalog *filtersDB = &(copySpecs.catalogs.filter);
+
+	CatalogCounts count = { 0 };
+
+	if (!catalog_count_objects(filtersDB, &count))
+	{
+		log_error("Failed to count local catalogs objects");
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_info("Fetched information for %lld dependencies",
+			 (long long) count.depends);
 
 	fformat(stdout, "%20s | %30s | %8s | %8s | %20s | %s\n",
 			"Schema Name", "Table Name", "Catalog", "OID", "Type", "Identity");
@@ -1566,18 +1731,30 @@ cli_list_depends(int argc, char **argv)
 			"--------------------",
 			"------------------------------");
 
-	for (int i = 0; i < dependArray.count; i++)
+	if (!catalog_iter_s_depend(filtersDB, NULL, &cli_list_depends_hook))
 	{
-		fformat(stdout, "%20s | %30s | %8u | %8u | %20s | %s\n",
-				dependArray.array[i].nspname,
-				dependArray.array[i].relname,
-				dependArray.array[i].classid,
-				dependArray.array[i].objid,
-				dependArray.array[i].type,
-				dependArray.array[i].identity);
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	fformat(stdout, "\n");
+}
+
+
+/*
+ * cli_list_depends_hook is an iterator callback function.
+ */
+static bool
+cli_list_depends_hook(void *ctx, SourceDepend *dep)
+{
+	fformat(stdout, "%20s | %30s | %8u | %8u | %20s | %s\n",
+			dep->nspname,
+			dep->relname,
+			dep->classid,
+			dep->objid,
+			dep->type,
+			dep->identity);
+
+	return true;
 }
 
 
@@ -1589,38 +1766,15 @@ cli_list_schema(int argc, char **argv)
 {
 	CopyDataSpec copySpecs = { 0 };
 
-	(void) find_pg_commands(&(copySpecs.pgPaths));
-
-	/*
-	 * Assume --resume so that we can run the command alongside the main
-	 * process being active.
-	 */
 	bool createWorkDir = true;
 
-	if (!copydb_init_workdir(&copySpecs,
-							 NULL,
-							 false, /* service */
-							 NULL,  /* serviceName */
-							 false, /* restart */
-							 true, /* resume */
-							 createWorkDir))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	CopyDBOptions options = { 0 };
-
-	if (!copydb_init_specs_from_listdboptions(&options, &listDBoptions))
+	if (!copydb_init_specs_from_listdboptions(&copySpecs,
+											  &listDBoptions,
+											  DATA_SECTION_ALL,
+											  createWorkDir))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_BAD_ARGS);
-	}
-
-	if (!copydb_init_specs(&copySpecs, &options, DATA_SECTION_ALL))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	/* parse filters if provided */
@@ -1634,23 +1788,16 @@ cli_list_schema(int argc, char **argv)
 		}
 	}
 
-	/*
-	 * First, we need to open a snapshot that we're going to re-use in all our
-	 * connections to the source database. When the --snapshot option has been
-	 * used, instead of exporting a new snapshot, we can just re-use it.
-	 */
-	if (!copydb_prepare_snapshot(&copySpecs))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
 	ConnStrings *dsn = &(listDBoptions.connStrings);
 
 	log_info("Fetching schema from \"%s\"", dsn->safeSourcePGURI.pguri);
 	log_info("Dumping schema into JSON file \"%s\"",
 			 copySpecs.cfPaths.schemafile);
 
+	/*
+	 * Prepare our internal catalogs for storing the source database catalog
+	 * query results. When --force is used then we fetch the catalogs again.
+	 */
 	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
 	{
 		/* errors have already been logged */
@@ -1688,43 +1835,15 @@ cli_list_progress(int argc, char **argv)
 {
 	CopyDataSpec copySpecs = { 0 };
 
-	(void) find_pg_commands(&(copySpecs.pgPaths));
-
-	char *dir =
-		IS_EMPTY_STRING_BUFFER(listDBoptions.dir)
-		? NULL
-		: listDBoptions.dir;
-
-	/*
-	 * Assume --resume so that we can run the command alongside the main
-	 * process being active.
-	 */
 	bool createWorkDir = false;
 
-	if (!copydb_init_workdir(&copySpecs,
-							 dir,
-							 false, /* service */
-							 NULL,  /* serviceName */
-							 false, /* restart */
-							 true, /* resume */
-							 createWorkDir))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	CopyDBOptions options = { 0 };
-
-	if (!copydb_init_specs_from_listdboptions(&options, &listDBoptions))
+	if (!copydb_init_specs_from_listdboptions(&copySpecs,
+											  &listDBoptions,
+											  DATA_SECTION_NONE,
+											  createWorkDir))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_BAD_ARGS);
-	}
-
-	if (!copydb_init_specs(&copySpecs, &options, DATA_SECTION_ALL))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	if (listDBoptions.summary)
@@ -1764,9 +1883,9 @@ cli_list_progress(int argc, char **argv)
 		}
 	}
 
-	if (!copydb_parse_schema_json_file(&copySpecs))
+	if (!catalog_init_from_specs(&copySpecs))
 	{
-		/* errors have already been logged */
+		log_error("Failed to initialize pgcopydb internal catalogs");
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
@@ -1829,15 +1948,58 @@ cli_list_progress(int argc, char **argv)
  * from a listDBoptions structure.
  */
 static bool
-copydb_init_specs_from_listdboptions(CopyDBOptions *options,
-									 ListDBOptions *listDBoptions)
+copydb_init_specs_from_listdboptions(CopyDataSpec *copySpecs,
+									 ListDBOptions *listDBoptions,
+									 CopyDataSection section,
+									 bool createWorkDir)
 {
-	strlcpy(options->dir, listDBoptions->dir, MAXPGPATH);
-	options->connStrings = listDBoptions->connStrings;
-	options->splitTablesLargerThan = listDBoptions->splitTablesLargerThan;
+	(void) find_pg_commands(&(copySpecs->pgPaths));
 
-	/* pretend like --resume was used in every `pgcopydb list ...` commands */
-	options->resume = true;
+	char *dir =
+		IS_EMPTY_STRING_BUFFER(listDBoptions->dir)
+		? NULL
+		: listDBoptions->dir;
+
+	bool service = false;
+	char *serviceName = NULL;
+
+	/* pretend --resume, allowing to work on an existing directory */
+	bool restart = listDBoptions->force;
+	bool resume = true;
+
+	if (!copydb_init_workdir(copySpecs,
+							 dir,
+							 service,
+							 serviceName,
+							 restart,
+							 resume,
+							 createWorkDir))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	CopyDBOptions options = { 0 };
+
+	strlcpy(options.dir, listDBoptions->dir, MAXPGPATH);
+	options.connStrings = listDBoptions->connStrings;
+	options.splitTablesLargerThan = listDBoptions->splitTablesLargerThan;
+
+	/* process the --resume --not-consistent --snapshot options now */
+	options.resume = listDBoptions->resume;
+	options.notConsistent = listDBoptions->notConsistent;
+
+	if (!cli_copydb_is_consistent(&options))
+	{
+		log_fatal("Option --resume requires option --not-consistent");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	if (!copydb_init_specs(copySpecs, &options, section))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
 
 	return true;
 }

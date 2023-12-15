@@ -8,6 +8,8 @@
 #include <getopt.h>
 #include <inttypes.h>
 
+#include "parson.h"
+
 #include "env_utils.h"
 #include "file_utils.h"
 #include "ini.h"
@@ -477,6 +479,97 @@ parse_filter_quoted_table_name(SourceFilterTable *table, const char *qname)
 				  rellen,
 				  sizeof(table->relname));
 		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * copydb_filtering_as_json prepares the filtering setup of the CopyDataSpecs
+ * as a JSON object within the given JSON_Value.
+ */
+bool
+filters_as_json(SourceFilters *filters, JSON_Value *jsFilter)
+{
+	JSON_Object *jsFilterObj = json_value_get_object(jsFilter);
+
+	json_object_set_string(jsFilterObj,
+						   "type",
+						   filterTypeToString(filters->type));
+
+	/* include-only-schema */
+	if (filters->includeOnlySchemaList.count > 0)
+	{
+		JSON_Value *jsSchema = json_value_init_array();
+		JSON_Array *jsSchemaArray = json_value_get_array(jsSchema);
+
+		for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
+		{
+			char *nspname = filters->includeOnlySchemaList.array[i].nspname;
+
+			json_array_append_string(jsSchemaArray, nspname);
+		}
+
+		json_object_set_value(jsFilterObj, "include-only-schema", jsSchema);
+	}
+
+	/* exclude-schema */
+	if (filters->excludeSchemaList.count > 0)
+	{
+		JSON_Value *jsSchema = json_value_init_array();
+		JSON_Array *jsSchemaArray = json_value_get_array(jsSchema);
+
+		for (int i = 0; i < filters->excludeSchemaList.count; i++)
+		{
+			char *nspname = filters->excludeSchemaList.array[i].nspname;
+
+			json_array_append_string(jsSchemaArray, nspname);
+		}
+
+		json_object_set_value(jsFilterObj, "exclude-schema", jsSchema);
+	}
+
+	/* exclude table lists */
+	struct section
+	{
+		char name[PG_NAMEDATALEN];
+		SourceFilterTableList *list;
+	};
+
+	struct section sections[] = {
+		{ "exclude-table", &(filters->excludeTableList) },
+		{ "exclude-table-data", &(filters->excludeTableDataList) },
+		{ "exclude-index", &(filters->excludeIndexList) },
+		{ "include-only-table", &(filters->includeOnlyTableList) },
+		{ "", NULL },
+	};
+
+	for (int i = 0; sections[i].list != NULL; i++)
+	{
+		char *sectionName = sections[i].name;
+		SourceFilterTableList *list = sections[i].list;
+
+		if (list->count > 0)
+		{
+			JSON_Value *jsList = json_value_init_array();
+			JSON_Array *jsListArray = json_value_get_array(jsList);
+
+			for (int i = 0; i < list->count; i++)
+			{
+				SourceFilterTable *table = &(list->array[i]);
+
+				JSON_Value *jsTable = json_value_init_object();
+				JSON_Object *jsTableObj = json_value_get_object(jsTable);
+
+				json_object_set_string(jsTableObj, "schema", table->nspname);
+				json_object_set_string(jsTableObj, "name", table->relname);
+
+				json_array_append_value(jsListArray, jsTable);
+			}
+
+			json_object_set_value(jsFilterObj, sectionName, jsList);
+		}
 	}
 
 	return true;

@@ -15,6 +15,7 @@
 #include "postgres_fe.h"
 #include "pqexpbuffer.h"
 
+#include "catalog.h"
 #include "cli_root.h"
 #include "defaults.h"
 #include "env_utils.h"
@@ -29,6 +30,9 @@
 
 #define RUN_PROGRAM_IMPLEMENTATION
 #include "runprogram.h"
+
+static bool pg_dump_db_extension_namespace_hook(void *ctx, SourceExtension *ext);
+
 
 /*
  * Get psql --version output in pgPaths->pg_version.
@@ -335,6 +339,13 @@ set_psql_from_pg_config(PostgresPaths *pgPaths)
 }
 
 
+typedef struct DumpExtensionNamespaceContext
+{
+	char **args;
+	int *argsIndex;
+} DumpExtensionNamespaceContext;
+
+
 /*
  * Call pg_dump and get the given section of the dump into the target file.
  */
@@ -344,7 +355,7 @@ pg_dump_db(PostgresPaths *pgPaths,
 		   const char *snapshot,
 		   const char *section,
 		   SourceFilters *filters,
-		   SourceExtensionArray *extensionArray,
+		   DatabaseCatalog *filtersDB,
 		   const char *filename)
 {
 	char *args[PG_CMD_MAX_ARG];
@@ -421,29 +432,18 @@ pg_dump_db(PostgresPaths *pgPaths,
 	}
 
 	/* now --exclude-schema for extension's own schemas */
-	if (extensionArray != NULL)
+	DumpExtensionNamespaceContext context = {
+		.args = args,
+		.argsIndex = &argsIndex
+	};
+
+	if (!catalog_iter_s_extension(filtersDB,
+								  &context,
+								  &pg_dump_db_extension_namespace_hook))
 	{
-		for (int i = 0; i < extensionArray->count; i++)
-		{
-			char *nspname = extensionArray->array[i].extnamespace;
-
-			if (!streq(nspname, "public") && !streq(nspname, "pg_catalog"))
-			{
-				/* check that we still have room for --exclude-schema args */
-				if (PG_CMD_MAX_ARG < (argsIndex + 2))
-				{
-					log_error("Failed to call pg_dump, "
-							  "too many schema are excluded: "
-							  "argsIndex %d > %d",
-							  argsIndex + 2,
-							  PG_CMD_MAX_ARG);
-					return false;
-				}
-
-				args[argsIndex++] = "--exclude-schema";
-				args[argsIndex++] = nspname;
-			}
-		}
+		log_error("Failed to prepare pg_dump command line arguments, "
+				  "see above for details");
+		return false;
 	}
 
 	args[argsIndex++] = "--file";
@@ -491,6 +491,40 @@ pg_dump_db(PostgresPaths *pgPaths,
 	}
 
 	free_program(&program);
+	return true;
+}
+
+
+/*
+ * pg_dump_db_extension_namespace_hook is an iterator callback function.
+ */
+static bool
+pg_dump_db_extension_namespace_hook(void *ctx, SourceExtension *ext)
+{
+	DumpExtensionNamespaceContext *context =
+		(DumpExtensionNamespaceContext *) ctx;
+
+	char **args = context->args;
+
+	char *nspname = ext->extnamespace;
+
+	if (!streq(nspname, "public") && !streq(nspname, "pg_catalog"))
+	{
+		/* check that we still have room for --exclude-schema args */
+		if (PG_CMD_MAX_ARG < (*(context->argsIndex) + 2))
+		{
+			log_error("Failed to call pg_dump, "
+					  "too many schema are excluded: "
+					  "argsIndex %d > %d",
+					  *(context->argsIndex) + 2,
+					  PG_CMD_MAX_ARG);
+			return false;
+		}
+
+		args[*(context->argsIndex)++] = "--exclude-schema";
+		args[*(context->argsIndex)++] = nspname;
+	}
+
 	return true;
 }
 

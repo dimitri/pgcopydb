@@ -304,7 +304,7 @@ typedef struct StreamContext
 	uint64_t lastWriteTime;
 
 	/* transform needs some catalog lookups (pkey, type oid) */
-	SourceCatalog *catalog;
+	DatabaseCatalog *sourceDB;
 
 	Queue *transformQueue;
 	uint32_t WalSegSz;
@@ -456,7 +456,7 @@ struct StreamSpecs
 	FollowSubProcess catchup;
 
 	/* transform needs some catalog lookups (pkey, type oid) */
-	SourceCatalog *catalog;
+	DatabaseCatalog *sourceDB;
 
 	/* receive push json filenames to a queue for transform */
 	Queue transformQueue;
@@ -484,7 +484,7 @@ bool stream_init_specs(StreamSpecs *specs,
 					   char *origin,
 					   uint64_t endpos,
 					   LogicalStreamMode mode,
-					   SourceCatalog *catalog,
+					   DatabaseCatalog *sourceDB,
 					   bool stdIn,
 					   bool stdOut,
 					   bool logSQL);

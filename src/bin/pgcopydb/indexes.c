@@ -9,6 +9,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "catalog.h"
+#include "cli_root.h"
 #include "copydb.h"
 #include "env_utils.h"
 #include "lock_utils.h"
@@ -18,6 +20,12 @@
 #include "signals.h"
 #include "string_utils.h"
 #include "summary.h"
+
+
+static bool copydb_add_table_indexes_hook(void *context, SourceIndex *index);
+static bool copydb_table_indexes_are_done_hook(void *ctx, SourceIndex *index);
+static bool copydb_create_constraints_hook(void *context, SourceIndex *index);
+static bool copydb_copy_all_indexes_hook(void *ctx, SourceIndex *index);
 
 
 /*
@@ -87,6 +95,13 @@ copydb_index_worker(CopyDataSpec *specs)
 
 	log_notice("Started CREATE INDEX worker %d [%d]", pid, getppid());
 
+	if (!catalog_init_from_specs(specs))
+	{
+		log_error("Failed to open internal catalogs in CREATE INDEX worker, "
+				  "see above for details");
+		return false;
+	}
+
 	int errors = 0;
 	bool stop = false;
 
@@ -144,6 +159,17 @@ copydb_index_worker(CopyDataSpec *specs)
 		}
 	}
 
+	if (!catalog_delete_process(&(specs->catalogs.source), pid))
+	{
+		log_warn("Failed to delete catalog process entry for pid %d", pid);
+	}
+
+	if (!catalog_close_from_specs(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	bool success = (stop == true && errors == 0);
 
 	if (errors > 0)
@@ -165,18 +191,24 @@ copydb_index_worker(CopyDataSpec *specs)
 bool
 copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid)
 {
-	uint32_t oid = indexOid;
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	SourceTable *table = NULL;
-	SourceIndex *index = NULL;
+	SourceTable *table = (SourceTable *) calloc(1, sizeof(SourceTable));
+	SourceIndex *index = (SourceIndex *) calloc(1, sizeof(SourceIndex));
 
-	log_trace("copydb_create_index_by_oid: %u", indexOid);
-
-	HASH_FIND(hh, specs->catalog.sourceIndexHashByOid, &oid, sizeof(oid), index);
-
-	if (index == NULL)
+	if (!catalog_lookup_s_index(sourceDB, indexOid, index))
 	{
-		log_error("Failed to find index %u in sourceIndexHashByOid", oid);
+		log_error("Failed to lookup index %u in our catalogs", indexOid);
+		free(index);
+		free(table);
+		return false;
+	}
+
+	if (!catalog_lookup_s_table(sourceDB, index->tableOid, 0, table))
+	{
+		log_error("Failed to lookup table %u in our catalogs", index->tableOid);
+		free(index);
+		free(table);
 		return false;
 	}
 
@@ -185,26 +217,18 @@ copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid)
 	if (!copydb_init_index_paths(&(specs->cfPaths), index, &indexPaths))
 	{
 		/* errors have already been logged */
-		return false;
-	}
-
-	oid = index->tableOid;
-	HASH_FIND(hh, specs->catalog.sourceTableHashByOid, &oid, sizeof(oid), table);
-
-	if (table == NULL)
-	{
-		log_error("Failed to find table %u (%s) "
-				  " in sourceTableHashByOid",
-				  oid,
-				  index->tableQname);
+		free(index);
+		free(table);
 		return false;
 	}
 
 	TableFilePaths tablePaths = { 0 };
 
-	if (!copydb_init_tablepaths(&(specs->cfPaths), &tablePaths, oid))
+	if (!copydb_init_tablepaths(&(specs->cfPaths), &tablePaths, table->oid))
 	{
-		log_error("Failed to prepare pathnames for table %u", oid);
+		log_error("Failed to prepare pathnames for table %u", table->oid);
+		free(index);
+		free(table);
 		return false;
 	}
 
@@ -212,6 +236,28 @@ copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid)
 			  indexOid,
 			  index->indexQname,
 			  table->qname);
+
+	char psTitle[BUFSIZE] = { 0 };
+
+	sformat(psTitle, sizeof(psTitle), "pgcopydb: create index %s",
+			index->indexQname);
+
+	(void) set_ps_title(psTitle);
+
+	/* also track the process information in our catalogs */
+	ProcessInfo ps = {
+		.pid = getpid(),
+		.psType = "CREATE INDEX",
+		.psTitle = ps_buffer,
+		.indexOid = index->indexOid
+	};
+
+	if (!catalog_upsert_process_info(sourceDB, &ps))
+	{
+		log_error("Failed to track progress in our catalogs, "
+				  "see above for details");
+		return false;
+	}
 
 	/*
 	 * Add IF NOT EXISTS clause when the --resume option has been used, or when
@@ -229,6 +275,8 @@ copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid)
 							 ifNotExists))
 	{
 		/* errors have already been logged */
+		free(index);
+		free(table);
 		return false;
 	}
 
@@ -248,6 +296,8 @@ copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid)
 									   &constraintsAreBeingBuilt))
 	{
 		/* errors have already been logged */
+		free(index);
+		free(table);
 		return false;
 	}
 
@@ -264,6 +314,8 @@ copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid)
 		{
 			log_error("Failed to create constraints for table %s",
 					  table->qname);
+			free(index);
+			free(table);
 			return false;
 		}
 
@@ -274,13 +326,28 @@ copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid)
 				log_error("Failed to queue VACUUM ANALYZE %s [%u]",
 						  table->qname,
 						  table->oid);
+				free(index);
+				free(table);
 				return false;
 			}
 		}
 	}
 
+	free(index);
+	free(table);
+
 	return true;
 }
+
+
+typedef struct IndexesAreDoneContext
+{
+	bool builtAllIndexes;
+	CopyDataSpec *specs;
+	SourceTable *table;
+	int total;
+	int done;
+} IndexesAreDoneContext;
 
 
 /*
@@ -294,8 +361,6 @@ copydb_table_indexes_are_done(CopyDataSpec *specs,
 							  bool *indexesAreDone,
 							  bool *constraintsAreBeingBuilt)
 {
-	bool builtAllIndexes = true;
-
 	/* enter the index lockfile/donefile critical section */
 	(void) semaphore_lock(&(specs->indexSemaphore));
 
@@ -316,30 +381,43 @@ copydb_table_indexes_are_done(CopyDataSpec *specs,
 		return true;
 	}
 
-	SourceIndexList *indexListEntry = table->firstIndex;
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	for (; indexListEntry != NULL; indexListEntry = indexListEntry->next)
+	IndexesAreDoneContext context = {
+		.specs = specs,
+		.table = table,
+		.builtAllIndexes = true,
+		.total = 0,
+		.done = 0
+	};
+
+	if (!catalog_iter_s_index_table(sourceDB,
+									table->nspname,
+									table->relname,
+									&context,
+									&copydb_table_indexes_are_done_hook))
 	{
-		SourceIndex *index = indexListEntry->index;
-		IndexFilePaths indexPaths = { 0 };
-
-		if (!copydb_init_index_paths(&(specs->cfPaths), index, &indexPaths))
-		{
-			/* errors have already been logged */
-			(void) semaphore_unlock(&(specs->indexSemaphore));
-			return false;
-		}
-
-		builtAllIndexes = builtAllIndexes && file_exists(indexPaths.doneFile);
+		log_error("Failed to check if all indexes have been created "
+				  "for table %s, see above for details",
+				  table->qname);
+		(void) semaphore_unlock(&(specs->indexSemaphore));
+		return false;
 	}
 
-	if (builtAllIndexes)
+	log_debug("%d/%d indexes are done for table %s",
+			  context.done,
+			  context.total,
+			  table->qname);
+
+	if (context.builtAllIndexes)
 	{
 		/*
 		 * Create an index list file for the table, so that we can easily
 		 * find relevant indexing information from the table itself.
 		 */
-		if (!create_table_index_file(table, tablePaths->idxListFile))
+		log_debug("Creating index list file \"%s\"", tablePaths->idxListFile);
+
+		if (!create_table_index_file(sourceDB, table, tablePaths->idxListFile))
 		{
 			/* this only means summary is missing some indexing information */
 			log_warn("Failed to create table %s index list file \"%s\"",
@@ -348,7 +426,7 @@ copydb_table_indexes_are_done(CopyDataSpec *specs,
 		}
 	}
 
-	*indexesAreDone = builtAllIndexes;
+	*indexesAreDone = context.builtAllIndexes;
 	*constraintsAreBeingBuilt = false;
 
 	/* end of the critical section around lockfile and donefile handling */
@@ -359,34 +437,99 @@ copydb_table_indexes_are_done(CopyDataSpec *specs,
 
 
 /*
+ * copydb_table_indexes_are_done_hook is an iterator callback function.
+ */
+static bool
+copydb_table_indexes_are_done_hook(void *ctx, SourceIndex *index)
+{
+	IndexesAreDoneContext *context = (IndexesAreDoneContext *) ctx;
+	CopyDataSpec *specs = context->specs;
+
+	IndexFilePaths indexPaths = { 0 };
+
+	if (!copydb_init_index_paths(&(specs->cfPaths), index, &indexPaths))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	context->builtAllIndexes =
+		context->builtAllIndexes &&
+		file_exists(indexPaths.doneFile);
+
+	++(context->total);
+
+	if (file_exists(indexPaths.doneFile))
+	{
+		++(context->done);
+	}
+
+	return true;
+}
+
+
+typedef struct QueueTableIndexesContext
+{
+	CopyDataSpec *specs;
+	CopyTableDataSpec *tableSpecs;
+} QueueTableIndexesContext;
+
+
+/*
  * copydb_add_table_indexes sends a message to the CREATE INDEX process queue
  * to process indexes attached to the given table.
  */
 bool
 copydb_add_table_indexes(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 {
-	SourceIndexList *indexListEntry = tableSpecs->sourceTable->firstIndex;
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	for (; indexListEntry != NULL; indexListEntry = indexListEntry->next)
+	QueueTableIndexesContext context = {
+		.specs = specs,
+		.tableSpecs = tableSpecs
+	};
+
+	if (!catalog_iter_s_index_table(sourceDB,
+									tableSpecs->sourceTable->nspname,
+									tableSpecs->sourceTable->relname,
+									&context,
+									&copydb_add_table_indexes_hook))
 	{
-		SourceIndex *index = indexListEntry->index;
+		log_error("Failed to send table %s indexes to craete index queue, "
+				  "see above for details",
+				  tableSpecs->sourceTable->qname);
+		return false;
+	}
 
-		QMessage mesg = {
-			.type = QMSG_TYPE_INDEXOID,
-			.data.oid = index->indexOid
-		};
+	return true;
+}
 
-		log_trace("Queueing index %s [%u] for table %s [%u]",
-				  index->indexQname,
-				  mesg.data.oid,
-				  tableSpecs->sourceTable->qname,
-				  tableSpecs->sourceTable->oid);
 
-		if (!queue_send(&(specs->indexQueue), &mesg))
-		{
-			/* errors have already been logged */
-			return false;
-		}
+/*
+ * copydb_add_table_indexes_hook is an iterator callback function.
+ */
+static bool
+copydb_add_table_indexes_hook(void *ctx, SourceIndex *index)
+{
+	QueueTableIndexesContext *context = (QueueTableIndexesContext *) ctx;
+	CopyDataSpec *specs = context->specs;
+	CopyTableDataSpec *tableSpecs = context->tableSpecs;
+
+	QMessage mesg = {
+		.type = QMSG_TYPE_INDEXOID,
+		.data.oid = index->indexOid
+	};
+
+	log_trace("Queueing index %s [%u] for table %s [%u]",
+			  index->indexQname,
+			  mesg.data.oid,
+			  tableSpecs->sourceTable->qname,
+			  tableSpecs->sourceTable->oid);
+
+	if (!queue_send(&(specs->indexQueue), &mesg))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	return true;
@@ -457,31 +600,6 @@ copydb_init_index_paths(CopyFilePaths *cfPaths,
 
 
 /*
- * copydb_init_indexes_paths prepares a given index (and constraint) file paths
- * to help orchestrate the concurrent operations.
- */
-bool
-copydb_init_indexes_paths(CopyFilePaths *cfPaths,
-						  SourceIndexArray *indexArray,
-						  IndexFilePathsArray *indexPathsArray)
-{
-	indexPathsArray->count = indexArray->count;
-	indexPathsArray->array =
-		(IndexFilePaths *) calloc(indexArray->count, sizeof(IndexFilePaths));
-
-	for (int i = 0; i < indexArray->count; i++)
-	{
-		SourceIndex *index = &(indexArray->array[i]);
-		IndexFilePaths *indexPaths = &(indexPathsArray->array[i]);
-
-		(void) copydb_init_index_paths(cfPaths, index, indexPaths);
-	}
-
-	return true;
-}
-
-
-/*
  * copydb_copy_all_indexes fetches the list of indexes from the source database
  * and then create all the same indexes on the target database, which is
  * expected to have the same tables created already.
@@ -493,6 +611,8 @@ copydb_init_indexes_paths(CopyFilePaths *cfPaths,
 bool
 copydb_copy_all_indexes(CopyDataSpec *specs)
 {
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
 	if (specs->dirState.indexCopyIsDone)
 	{
 		log_info("Skipping indexes, already done on a previous run");
@@ -507,154 +627,72 @@ copydb_copy_all_indexes(CopyDataSpec *specs)
 		return true;
 	}
 
-	SourceIndexArray *indexArray = &(specs->catalog.sourceIndexArray);
-	IndexFilePathsArray indexPathsArray = { 0, NULL };
+	CatalogCounts count = { 0 };
 
-	/* build the index file paths we need for the upcoming operations */
-	if (!copydb_init_indexes_paths(&(specs->cfPaths),
-								   indexArray,
-								   &indexPathsArray))
+	if (!catalog_count_objects(sourceDB, &count))
 	{
-		/* errors have already been logged */
+		log_error("Failed to count indexes and constraints in our catalogs");
 		return false;
 	}
 
-	log_info("Creating %d indexes in the target database using %d processes",
-			 indexArray->count,
+	log_info("Creating %lld indexes in the target database using %d processes",
+			 (long long) count.indexes,
 			 specs->indexJobs);
 
-	if (!copydb_start_index_processes(specs, indexArray, &indexPathsArray))
+	/* first start index workers that feed from the indexQueue */
+	if (!copydb_start_index_workers(specs))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	/* free malloc'ed memory area */
-	free(indexPathsArray.array);
+	/* queue all our indexes for processing by the index workers */
+	if (!catalog_iter_s_index(sourceDB, specs, &copydb_copy_all_indexes_hook))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!copydb_index_workers_send_stop(specs))
+	{
+		log_fatal("Failed to send the STOP message in the index queue");
+		(void) copydb_fatal_exit();
+		return false;
+	}
+
+	if (!copydb_wait_for_subprocesses(specs->failFast))
+	{
+		log_error("Some sub-processes have exited with error status, "
+				  "see above for details");
+		return false;
+	}
 
 	return true;
 }
 
 
 /*
- * copydb_start_index_processes forks() as many as specs->indexJobs processes
- * that will all concurrently run the CREATE INDEX needed to copy the indexes
- * from the source database to the target database.
+ * copydb_copy_all_indexes_hook is an iterator callback function.
  */
-bool
-copydb_start_index_processes(CopyDataSpec *specs,
-							 SourceIndexArray *indexArray,
-							 IndexFilePathsArray *indexPathsArray)
+static bool
+copydb_copy_all_indexes_hook(void *ctx, SourceIndex *index)
 {
-	for (int i = 0; i < specs->indexJobs; i++)
+	CopyDataSpec *specs = (CopyDataSpec *) ctx;
+
+	QMessage mesg = {
+		.type = QMSG_TYPE_INDEXOID,
+		.data.oid = index->indexOid
+	};
+
+	log_trace("Queueing index %s [%u]", index->indexQname, index->indexOid);
+
+	if (!queue_send(&(specs->indexQueue), &mesg))
 	{
-		/*
-		 * Flush stdio channels just before fork, to avoid double-output
-		 * problems.
-		 */
-		fflush(stdout);
-		fflush(stderr);
-
-		int fpid = fork();
-
-		switch (fpid)
-		{
-			case -1:
-			{
-				log_error("Failed to fork a worker process: %m");
-				return false;
-			}
-
-			case 0:
-			{
-				/* child process runs the command */
-				(void) set_ps_title("pgcopydb: create index worker");
-
-				if (!copydb_start_index_process(specs,
-												indexArray,
-												indexPathsArray))
-				{
-					/* errors have already been logged */
-					exit(EXIT_CODE_INTERNAL_ERROR);
-				}
-
-				exit(EXIT_CODE_QUIT);
-			}
-
-			default:
-			{
-				/* fork succeeded, in parent */
-				break;
-			}
-		}
+		/* errors have already been logged */
+		return false;
 	}
 
-	bool success = copydb_wait_for_subprocesses(specs->failFast);
-
-	/* and write that we successfully finished copying all tables */
-	if (!write_file("", 0, specs->cfPaths.done.indexes))
-	{
-		log_warn("Failed to write the tracking file \%s\"",
-				 specs->cfPaths.done.indexes);
-	}
-
-	if (!semaphore_finish(&specs->indexSemaphore))
-	{
-		log_warn("Failed to remove same-index concurrency semaphore %d, "
-				 "see above for details",
-				 specs->indexSemaphore.semId);
-	}
-
-	return success;
-}
-
-
-/*
- * copydb_start_index_process stats a sub-process that walks through the array
- * of indexes to copy over from the source database to the target database.
- *
- * Each process walks through the entire array, and for each entry:
- *
- *  - acquires a semaphore to enter the critical section, alone
- *    - check if the current entry is already done, or being processed
- *    - if not, create the lock file
- *  - exit the critical section
- *  - if we created a lock file, process the selected table
- */
-bool
-copydb_start_index_process(CopyDataSpec *specs,
-						   SourceIndexArray *indexArray,
-						   IndexFilePathsArray *indexPathsArray)
-{
-	int errors = 0;
-	bool constraint = specs->section == DATA_SECTION_CONSTRAINTS;
-
-	for (int i = 0; i < indexArray->count; i++)
-	{
-		SourceIndex *index = &(indexArray->array[i]);
-		IndexFilePaths *indexPaths = &(indexPathsArray->array[i]);
-
-		bool ifNotExists = true;
-
-		if (!copydb_create_index(specs->connStrings.target_pguri,
-								 index,
-								 indexPaths,
-								 &(specs->indexSemaphore),
-								 constraint,
-								 ifNotExists))
-		{
-			/* errors have already been logged */
-			if (specs->failFast)
-			{
-				return false;
-			}
-
-			++errors;
-			continue;
-		}
-	}
-
-	return errors == 0;
+	return true;
 }
 
 
@@ -764,14 +802,6 @@ copydb_create_index(const char *pguri,
 
 	if (!skipCreateIndex)
 	{
-		char psTitle[BUFSIZE] = { 0 };
-
-		sformat(psTitle, sizeof(psTitle), "pgcopydb: create index %s.%s",
-				index->indexNamespace,
-				index->indexRelname);
-
-		(void) set_ps_title(psTitle);
-
 		PGSQL dst = { 0 };
 
 		log_notice("%s", summary->command);
@@ -946,7 +976,7 @@ copydb_mark_index_as_done(SourceIndex *index,
 	}
 
 	/* create the doneFile for the index */
-	log_notice("Creating summary file \"%s\"", doneFile);
+	log_debug("Creating summary file \"%s\"", doneFile);
 
 	if (!finish_index_summary(summary, doneFile, constraint))
 	{
@@ -1099,6 +1129,12 @@ copydb_prepare_create_constraint_command(SourceIndex *index, char **command)
 }
 
 
+typedef struct CreateConstraintsContext
+{
+	CopyDataSpec *specs;
+	PGSQL *dst;
+} CreateConstraintsContext;
+
 /*
  * copydb_create_constraints loops over the index definitions for a given table
  * and creates all the associated constraints, one after the other.
@@ -1133,18 +1169,29 @@ copydb_create_constraints(CopyDataSpec *specs, SourceTable *table)
 	 * interrupted after a constraint creation on the target database, but
 	 * before the creation of its constraintDoneFile.
 	 */
-	SourceIndexArray dstIndexArray = { 0, NULL };
+	DatabaseCatalog *targetDB = &(specs->catalogs.target);
 
-	if (!schema_list_table_indexes(&dst,
-								   table->nspname,
-								   table->relname,
-								   &dstIndexArray))
+	/* have a copy of the source table to edit indexCount etc */
+	SourceTable *targetTable = (SourceTable *) calloc(1, sizeof(SourceTable));
+
+	if (targetTable == NULL)
 	{
-		/* errors have already been logged */
+		log_error(ALLOCATION_FAILED_ERROR);
 		return false;
 	}
 
-	if (dstIndexArray.count > 0)
+	/* copy the structure contents over */
+	*targetTable = *table;
+
+	if (!catalog_s_table_count_indexes(targetDB, targetTable))
+	{
+		log_error("Failed to count indexes for table %s in our target catalog",
+				  targetTable->qname);
+		free(targetTable);
+		return false;
+	}
+
+	if (targetTable->indexCount > 0)
 	{
 		/*
 		 * It's expected that we find indexes on the target database when
@@ -1158,118 +1205,153 @@ copydb_create_constraints(CopyDataSpec *specs, SourceTable *table)
 			specs->section == DATA_SECTION_ALL ? LOG_NOTICE : LOG_INFO;
 
 		log_level(logLevel,
-				  "Found %d indexes on target database for table %s",
-				  dstIndexArray.count,
+				  "Found %lld indexes on target database for table %s",
+				  (long long) targetTable->indexCount,
 				  table->qname);
 	}
 
-	SourceIndexList *indexListEntry = table->firstIndex;
+	free(targetTable);
 
-	for (; indexListEntry != NULL; indexListEntry = indexListEntry->next)
+	/*
+	 * Now iterate over the source database catalog list of indexes attached to
+	 * the current table, and install indexes/constraints on that same table on
+	 * the target database, skipping constraints that already exists on the
+	 * target catalog.
+	 */
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	CreateConstraintsContext context = {
+		.specs = specs,
+		.dst = &dst
+	};
+
+	if (!catalog_iter_s_index_table(sourceDB,
+									table->nspname,
+									table->relname,
+									&context,
+									&copydb_create_constraints_hook))
 	{
-		SourceIndex *index = indexListEntry->index;
-		IndexFilePaths indexPaths = { 0 };
-
-		if (!copydb_init_index_paths(&(specs->cfPaths), index, &indexPaths))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		/* some indexes are not attached to a constraint at all */
-		if (index->constraintOid <= 0 ||
-			IS_EMPTY_STRING_BUFFER(index->constraintName))
-		{
-			continue;
-		}
-
-		/* First, write the lockFile, with a summary of what's going-on */
-		CopyIndexSummary summary = {
-			.pid = getpid(),
-			.index = index,
-			.command = NULL
-		};
-
-		/* we only install constraints in this part of the code */
-		bool constraint = true;
-		char *lockFile = indexPaths.constraintLockFile;
-
-		if (!open_index_summary(&summary, lockFile, constraint))
-		{
-			log_info("Failed to create the lock file at \"%s\"", lockFile);
-			continue;
-		}
-
-		/* skip constraints that already exist on the target database */
-		bool foundConstraintOnTarget = false;
-
-		for (int dstI = 0; dstI < dstIndexArray.count; dstI++)
-		{
-			SourceIndex *dstIndex = &(dstIndexArray.array[dstI]);
-
-			if (strcmp(index->constraintName, dstIndex->constraintName) == 0)
-			{
-				foundConstraintOnTarget = true;
-				log_notice("Found constraint \"%s\" on target, skipping",
-						   index->constraintName);
-				break;
-			}
-		}
-
-		if (!copydb_prepare_create_constraint_command(index, &(summary.command)))
-		{
-			log_warn("Failed to prepare SQL command to create constraint \"%s\"",
-					 index->constraintName);
-			continue;
-		}
-
-		if (!foundConstraintOnTarget)
-		{
-			log_notice("%s", summary.command);
-
-			/*
-			 * Constraints are built by the CREATE INDEX worker process that is
-			 * the last one to finish an index for a given table. We do not
-			 * have to care about concurrency here: no semaphore locking.
-			 */
-			if (!pgsql_execute(&dst, summary.command))
-			{
-				/* errors have already been logged */
-				return false;
-			}
-		}
-
-		/*
-		 * Create the doneFile for the constraint when we know it exists on the
-		 * target database, the main use of this doneFile is to filter out
-		 * already existing objects from the pg_restore --section post-data
-		 * later.
-		 */
-		char *doneFile = indexPaths.constraintDoneFile;
-
-		log_debug("copydb_create_constraints: writing \"%s\"", doneFile);
-
-		if (!finish_index_summary(&summary, doneFile, constraint))
-		{
-			log_warn("Failed to create the constraint done file at \"%s\"",
-					 doneFile);
-			log_warn("Restoring the --post-data part of the schema "
-					 "might fail because of already existing objects");
-			continue;
-		}
-
-		if (!unlink_file(lockFile))
-		{
-			log_error("Failed to remove the lockFile \"%s\"", lockFile);
-			continue;
-		}
+		/* errors have already been logged */
+		return false;
 	}
 
 	/* close connection to the target database now */
 	(void) pgsql_finish(&dst);
 
-	/* free malloc'ed memory area */
-	free(dstIndexArray.array);
 
 	return errors == 0;
+}
+
+
+/*
+ * copydb_create_constraints_hook is an iterator callback function.
+ */
+static bool
+copydb_create_constraints_hook(void *ctx, SourceIndex *index)
+{
+	CreateConstraintsContext *context = (CreateConstraintsContext *) ctx;
+	CopyDataSpec *specs = context->specs;
+	DatabaseCatalog *targetDB = &(specs->catalogs.target);
+
+	IndexFilePaths indexPaths = { 0 };
+
+	if (!copydb_init_index_paths(&(specs->cfPaths), index, &indexPaths))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* some indexes are not attached to a constraint at all */
+	if (index->constraintOid <= 0 ||
+		IS_EMPTY_STRING_BUFFER(index->constraintName))
+	{
+		return true;
+	}
+
+	/* First, write the lockFile, with a summary of what's going-on */
+	CopyIndexSummary summary = {
+		.pid = getpid(),
+		.index = index,
+		.command = NULL
+	};
+
+	/* we only install constraints in this part of the code */
+	bool constraint = true;
+	char *lockFile = indexPaths.constraintLockFile;
+
+	if (!open_index_summary(&summary, lockFile, constraint))
+	{
+		log_info("Failed to create the lock file at \"%s\"", lockFile);
+		return false;
+	}
+
+	/* skip constraints that already exist on the target database */
+	SourceIndex *targetIndex =
+		(SourceIndex *) calloc(1, sizeof(SourceIndex));
+
+	if (targetIndex == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	if (!catalog_lookup_s_index_by_name(targetDB,
+										index->indexNamespace,
+										index->indexRelname,
+										targetIndex))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	bool foundConstraintOnTarget =
+		streq(index->constraintName, targetIndex->constraintName);
+
+	if (!copydb_prepare_create_constraint_command(index, &(summary.command)))
+	{
+		log_warn("Failed to prepare SQL command to create constraint \"%s\"",
+				 index->constraintName);
+		return false;
+	}
+
+	if (!foundConstraintOnTarget)
+	{
+		log_notice("%s", summary.command);
+
+		/*
+		 * Constraints are built by the CREATE INDEX worker process that is
+		 * the last one to finish an index for a given table. We do not
+		 * have to care about concurrency here: no semaphore locking.
+		 */
+		if (!pgsql_execute(context->dst, summary.command))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	/*
+	 * Create the doneFile for the constraint when we know it exists on the
+	 * target database, the main use of this doneFile is to filter out
+	 * already existing objects from the pg_restore --section post-data
+	 * later.
+	 */
+	char *doneFile = indexPaths.constraintDoneFile;
+
+	log_debug("copydb_create_constraints: writing \"%s\"", doneFile);
+
+	if (!finish_index_summary(&summary, doneFile, constraint))
+	{
+		log_error("Failed to create the constraint done file at \"%s\"",
+				  doneFile);
+		return false;
+	}
+
+	if (!unlink_file(lockFile))
+	{
+		log_error("Failed to remove the lockFile \"%s\"", lockFile);
+		return false;
+	}
+
+	return true;
 }

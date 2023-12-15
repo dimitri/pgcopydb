@@ -106,24 +106,6 @@ typedef struct TransactionSnapshot
 	char snapshot[BUFSIZE];
 } TransactionSnapshot;
 
-/*
- * pgcopydb relies on pg_dump and pg_restore to implement the pre-data and the
- * post-data section of the operation, and implements the data section
- * differently. The data section itself is actually split in separate steps.
- */
-typedef enum
-{
-	DATA_SECTION_NONE = 0,
-	DATA_SECTION_SCHEMA,
-	DATA_SECTION_EXTENSION,
-	DATA_SECTION_TABLE_DATA,
-	DATA_SECTION_SET_SEQUENCES,
-	DATA_SECTION_INDEXES,
-	DATA_SECTION_CONSTRAINTS,
-	DATA_SECTION_BLOBS,
-	DATA_SECTION_VACUUM,
-	DATA_SECTION_ALL
-} CopyDataSection;
 
 /* all that's needed to drive a single TABLE DATA copy process */
 typedef struct CopyTableDataPartSpec
@@ -150,7 +132,6 @@ typedef struct CopyTableDataSpec
 
 	SourceTable *sourceTable;
 	CopyTableSummary *summary;
-	SourceIndexArray *indexArray;
 
 	int tableJobs;
 	int indexJobs;
@@ -158,7 +139,6 @@ typedef struct CopyTableDataSpec
 	Semaphore *truncateSemaphore;
 
 	TableFilePaths tablePaths;
-	IndexFilePathsArray indexPathsArray;
 
 	/* same-table concurrency with COPY WHERE clause partitioning */
 	CopyTableDataPartSpec part;
@@ -170,56 +150,6 @@ typedef struct CopyTableDataSpecsArray
 	int count;
 	CopyTableDataSpec *array;   /* malloc'ed area */
 } CopyTableDataSpecsArray;
-
-
-/*
- * Build a hash-table of all the SQL level objects that we filter-out when
- * applying our filtering rules. We need to find those objects again when
- * parsing the pg_restore --list output, where we almost always have the object
- * Oid, but sometimes have to use the "schema name owner" format instead, as in
- * the following pg_restore --list example output:
- *
- *   3310; 0 0 INDEX ATTACH public payment_p2020_06_customer_id_idx postgres
- *
- * The OBJECT_KIND_DEFAULT goes with the pg_attribute catalog OID where
- * Postgres keeps a sequence default value call to nextval():
- *
- *   3291; 2604 497539 DEFAULT bar id dim
- */
-typedef enum
-{
-	OBJECT_KIND_UNKNOWN = 0,
-	OBJECT_KIND_SCHEMA,
-	OBJECT_KIND_EXTENSION,
-	OBJECT_KIND_COLLATION,
-	OBJECT_KIND_TABLE,
-	OBJECT_KIND_INDEX,
-	OBJECT_KIND_CONSTRAINT,
-	OBJECT_KIND_SEQUENCE,
-	OBJECT_KIND_DEFAULT
-} ObjectKind;
-
-
-typedef struct SourceFilterItem
-{
-	uint32_t oid;
-
-	ObjectKind kind;
-
-	/* it's going to be only one of those, depending on the object kind */
-	SourceSchema schema;
-	SourceExtension extension;
-	SourceCollation collation;
-	SourceTable table;
-	SourceSequence sequence;
-	SourceIndex index;
-
-	/* schema - name - owner */
-	char restoreListName[RESTORE_LIST_NAMEDATALEN];
-
-	UT_hash_handle hOid;            /* makes this structure hashable */
-	UT_hash_handle hName;           /* makes this structure hashable */
-} SourceFilterItem;
 
 
 /*
@@ -242,8 +172,6 @@ typedef struct CopyDataSpec
 	DirectoryState dirState;
 
 	SourceFilters filters;
-	SourceFilterItem *hOid;     /* hash table of objects, by Oid */
-	SourceFilterItem *hName;    /* hash table of objects, by pg_restore name */
 
 	ExtensionReqs *extRequirements;
 
@@ -264,6 +192,9 @@ typedef struct CopyDataSpec
 	bool resume;
 	bool consistent;
 	bool failFast;
+
+	bool fetchCatalogs;         /* cache invalidation of local catalogs db */
+	bool fetchFilteredOids;     /* allow bypassing dump/restore filter prep */
 
 	bool follow;                /* pgcopydb fork --follow */
 
@@ -288,9 +219,7 @@ typedef struct CopyDataSpec
 	bool hasDBCreatePrivilege;
 	bool hasDBTempPrivilege;
 
-	SourceCatalog catalog;
-	TargetCatalog targetCatalog;
-	CopyTableDataSpecsArray tableSpecsArray;
+	Catalogs catalogs;
 } CopyDataSpec;
 
 
@@ -364,7 +293,6 @@ bool copydb_unlink_sysv_queue(SysVResArray *array, Queue *queue);
 
 bool copydb_cleanup_sysv_resources(SysVResArray *array);
 
-
 /* snapshot.c */
 bool copydb_copy_snapshot(CopyDataSpec *specs, TransactionSnapshot *snapshot);
 bool copydb_prepare_snapshot(CopyDataSpec *copySpecs);
@@ -407,19 +335,7 @@ bool copydb_init_index_paths(CopyFilePaths *cfPaths,
 							 SourceIndex *index,
 							 IndexFilePaths *indexPaths);
 
-bool copydb_init_indexes_paths(CopyFilePaths *cfPaths,
-							   SourceIndexArray *indexArray,
-							   IndexFilePathsArray *indexPathsArray);
-
 bool copydb_copy_all_indexes(CopyDataSpec *specs);
-
-bool copydb_start_index_processes(CopyDataSpec *specs,
-								  SourceIndexArray *indexArray,
-								  IndexFilePathsArray *indexPathsArray);
-
-bool copydb_start_index_process(CopyDataSpec *specs,
-								SourceIndexArray *indexArray,
-								IndexFilePathsArray *indexPathsArray);
 
 bool copydb_create_index(const char *pguri,
 						 SourceIndex *index,
@@ -480,8 +396,6 @@ bool copydb_objectid_is_filtered_out(CopyDataSpec *specs,
 bool copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql);
 bool copydb_prepare_index_specs(CopyDataSpec *specs, PGSQL *pgsql);
 bool copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql);
-
-char * copydb_ObjectKindToString(ObjectKind kind);
 
 bool copydb_prepare_target_catalog(CopyDataSpec *specs);
 bool copydb_schema_already_exists(CopyDataSpec *specs,

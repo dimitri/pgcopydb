@@ -24,6 +24,7 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
     libpq5 \
     libreadline-dev \
     libselinux1-dev \
+    libsqlite3-dev \
     libssl-dev \
     libxslt1-dev \
     lsof \
@@ -65,7 +66,8 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
 	passwd \
     ca-certificates \
     libpq5 \
-    lsof \
+	libsqlite3-0 \
+	lsof \
     tmux \
     watch \
     psmisc \

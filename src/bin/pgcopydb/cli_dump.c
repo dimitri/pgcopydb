@@ -401,15 +401,18 @@ cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 	}
 
 	/*
-	 * First, we need to open a snapshot that we're going to re-use in all our
-	 * connections to the source database. When the --snapshot option has been
-	 * used, instead of exporting a new snapshot, we can just re-use it.
+	 * Prepare our internal catalogs for storing the source database catalog
+	 * query results.
 	 */
-	if (!copydb_prepare_snapshot(&copySpecs))
+	copySpecs.section = DATA_SECTION_ALL;
+
+	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
 	{
 		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
+		exit(EXIT_CODE_SOURCE);
 	}
+
+	copySpecs.section = DATA_SECTION_NONE;
 
 	if (section == PG_DUMP_SECTION_ROLES)
 	{
@@ -431,13 +434,5 @@ cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
-	}
-
-	if (!copydb_close_snapshot(&copySpecs))
-	{
-		log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
-				  copySpecs.sourceSnapshot.snapshot,
-				  copySpecs.sourceSnapshot.pguri);
-		exit(EXIT_CODE_SOURCE);
 	}
 }

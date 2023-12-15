@@ -13,6 +13,8 @@
 #include "libpq-fe.h"
 #include "pqexpbuffer.h"
 
+#include "catalog.h"
+#include "cli_root.h"
 #include "copydb.h"
 #include "env_utils.h"
 #include "lock_utils.h"
@@ -23,6 +25,9 @@
 #include "string_utils.h"
 #include "summary.h"
 
+
+static bool copydb_copy_supervisor_add_table_hook(void *context,
+												  SourceTable *table);
 
 /*
  * copydb_table_data fetches the list of tables from the source database and
@@ -91,6 +96,13 @@ copydb_process_table_data(CopyDataSpec *specs)
 	int errors = 0;
 
 	log_trace("copydb_process_table_data: \"%s\"", specs->cfPaths.tbldir);
+
+	/* close SQLite databases before fork() */
+	if (!catalog_close_from_specs(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	/*
 	 * Take care of extensions configuration table in an auxilliary process.
@@ -281,24 +293,32 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 		return false;
 	}
 
+	if (!catalog_init_from_specs(specs))
+	{
+		log_error("Failed to open internal catalogs in COPY supervisor, "
+				  "see above for details");
+		return false;
+	}
+
 	/*
 	 * Now fill-in the COPY data queue with the table OIDs / part number.
 	 */
-	CopyTableDataSpecsArray *tableSpecsArray = &(specs->tableSpecsArray);
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	for (int tableIndex = 0; tableIndex < tableSpecsArray->count; tableIndex++)
+	if (!catalog_iter_s_table(sourceDB,
+							  specs,
+							  copydb_copy_supervisor_add_table_hook))
 	{
-		/* initialize our TableDataProcess entry now */
-		CopyTableDataSpec *tableSpecs = &(tableSpecsArray->array[tableIndex]);
-		SourceTable *table = tableSpecs->sourceTable;
+		log_fatal("Failed to add tables to the COPY worker queue, terminating");
+		(void) copydb_fatal_exit();
+		return false;
+	}
 
-		if (!copydb_add_copy(specs, table->oid, tableSpecs->part.partNumber))
-		{
-			/* errors have already been logged */
-			(void) copydb_fatal_exit();
-
-			return false;
-		}
+	if (!catalog_close_from_specs(specs))
+	{
+		log_error("Failed to cloes internal catalogs in COPY supervisor, "
+				  "see above for details");
+		return false;
 	}
 
 	/*
@@ -360,6 +380,44 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 		(void) copydb_fatal_exit();
 
 		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * copydb_copy_supervisor_add_table_hook is an iterator callback function.
+ */
+static bool
+copydb_copy_supervisor_add_table_hook(void *context, SourceTable *table)
+{
+	CopyDataSpec *specs = (CopyDataSpec *) context;
+
+	if (table->partition.partCount == 0)
+	{
+		if (!copydb_add_copy(specs, table->oid, 0))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+	else
+	{
+		/*
+		 * Add as many times the table OID as we have partitions, each with
+		 * their own partition number that starts at 1 (not zero).
+		 */
+		for (int i = 0; i < table->partition.partCount; i++)
+		{
+			int partNumber = i + 1;
+
+			if (!copydb_add_copy(specs, table->oid, partNumber))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+		}
 	}
 
 	return true;
@@ -502,6 +560,13 @@ copydb_table_data_worker(CopyDataSpec *specs)
 		return false;
 	}
 
+	if (!catalog_init_from_specs(specs))
+	{
+		log_error("Failed to open internal catalogs in COPY worker process, "
+				  "see above for details");
+		return false;
+	}
+
 	while (true)
 	{
 		QMessage mesg = { 0 };
@@ -515,7 +580,8 @@ copydb_table_data_worker(CopyDataSpec *specs)
 
 		if (!recv_ok)
 		{
-			/* errors have already been logged */
+			log_error("COPY worker failed to receive a message from queue, "
+					  "see above for details");
 			break;
 		}
 
@@ -525,7 +591,6 @@ copydb_table_data_worker(CopyDataSpec *specs)
 			{
 				log_debug("Stop message received by COPY worker");
 				(void) copydb_close_snapshot(specs);
-
 				pgsql_finish(&dst);
 				return true;
 			}
@@ -578,6 +643,17 @@ copydb_table_data_worker(CopyDataSpec *specs)
 
 	pgsql_finish(&dst);
 
+	if (!catalog_delete_process(&(specs->catalogs.source), pid))
+	{
+		log_warn("Failed to delete catalog process entry for pid %d", pid);
+	}
+
+	if (!catalog_close_from_specs(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	return errors == 0;
 }
 
@@ -590,39 +666,44 @@ bool
 copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 						uint32_t oid, uint32_t part)
 {
-	SourceTable *table = NULL;
-
-	log_trace("copydb_copy_data_by_oid: %u [%d]", oid, part);
-
-	uint32_t toid = oid;
-	HASH_FIND(hh, specs->catalog.sourceTableHashByOid, &toid, sizeof(toid), table);
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+	SourceTable *table = (SourceTable *) calloc(1, sizeof(SourceTable));
 
 	if (table == NULL)
 	{
-		log_error("Failed to find table %u in sourceTableHashByOid", oid);
+		log_error(ALLOCATION_FAILED_ERROR);
 		return false;
 	}
 
-	if (table->partsArray.count < part)
+	if (!catalog_lookup_s_table(sourceDB, oid, part, table) ||
+		table->oid == 0)
 	{
-		log_error("Failed to find part %d for table %s (%u), "
-				  "which has only %d parts",
-				  part,
-				  table->qname,
-				  table->oid,
-				  table->partsArray.count);
+		log_error("Failed to lookup table oid %u in internal catalogs, "
+				  "see above for details",
+				  oid);
+
+		free(table);
 		return false;
 	}
 
-	CopyTableDataSpec tableSpecs = { 0 };
+	log_trace("copydb_copy_data_by_oid: %u %s %lld %lld..%lld",
+			  table->oid, table->qname,
+			  (long long) table->partition.partNumber,
+			  (long long) table->partition.min,
+			  (long long) table->partition.max);
 
-	if (!copydb_init_table_specs(&tableSpecs, specs, table, part))
+	CopyTableDataSpec *tableSpecs =
+		(CopyTableDataSpec *) calloc(1, sizeof(CopyTableDataSpec));
+
+	if (!copydb_init_table_specs(tableSpecs, specs, table, part))
 	{
 		/* errors have already been logged */
+		free(table);
+		free(tableSpecs);
 		return false;
 	}
 
-	log_trace("copydb_copy_data_by_oid: %u %s, part %d",
+	log_debug("copydb_copy_data_by_oid: %u %s, part %d",
 			  oid,
 			  table->qname,
 			  part);
@@ -648,17 +729,21 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 	 */
 	bool isDone = false;
 
-	if (!copydb_table_create_lockfile(specs, &tableSpecs, &isDone))
+	if (!copydb_table_create_lockfile(specs, tableSpecs, &isDone))
 	{
 		/* errors have already been logged */
+		free(table);
+		free(tableSpecs);
 		return false;
 	}
 
 	if (isDone)
 	{
 		log_info("Skipping table %s (%u), already done on a previous run",
-				 tableSpecs.sourceTable->qname,
-				 tableSpecs.sourceTable->oid);
+				 tableSpecs->sourceTable->qname,
+				 tableSpecs->sourceTable->oid);
+		free(table);
+		free(tableSpecs);
 		return true;
 	}
 
@@ -667,17 +752,27 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 	 */
 	if (!table->excludeData)
 	{
-		if (!copydb_copy_table(specs, src, dst, &tableSpecs))
+		if (!copydb_copy_table(specs, src, dst, tableSpecs))
 		{
 			/* errors have already been logged */
+			free(table);
+			free(tableSpecs);
 			return false;
 		}
 	}
 
-	if (!copydb_mark_table_as_done(specs, &tableSpecs))
+	if (!copydb_mark_table_as_done(specs, tableSpecs))
 	{
 		/* errors have already been logged */
+		free(table);
+		free(tableSpecs);
 		return false;
+	}
+
+	if (specs->section == DATA_SECTION_TABLE_DATA)
+	{
+		log_debug("Skip indexes, constraints, vacuum (section: table-data)");
+		return true;
 	}
 
 	/*
@@ -699,11 +794,13 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 		bool indexesAreBeingProcessed = false;
 
 		if (!copydb_table_parts_are_all_done(specs,
-											 &tableSpecs,
+											 tableSpecs,
 											 &allPartsDone,
 											 &indexesAreBeingProcessed))
 		{
 			/* errors have already been logged */
+			free(table);
+			free(tableSpecs);
 			return false;
 		}
 		else if (allPartsDone && !indexesAreBeingProcessed)
@@ -718,30 +815,45 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 			 * checks if all the indexes have been built already. In that case,
 			 * just add the table to the vacuum queue already.
 			 */
-			if (tableSpecs.sourceTable->firstIndex == NULL)
+			if (!catalog_s_table_count_indexes(sourceDB,
+											   tableSpecs->sourceTable))
+			{
+				log_error("Failed to count indexes attached to table %s",
+						  tableSpecs->sourceTable->qname);
+				return false;
+			}
+
+			if (tableSpecs->sourceTable->indexCount == 0)
 			{
 				if (!specs->skipVacuum)
 				{
-					SourceTable *sourceTable = tableSpecs.sourceTable;
+					SourceTable *sourceTable = tableSpecs->sourceTable;
 
 					if (!vacuum_add_table(specs, sourceTable->oid))
 					{
 						log_error("Failed to queue VACUUM ANALYZE %s [%u]",
 								  sourceTable->qname,
 								  sourceTable->oid);
+						free(table);
+						free(tableSpecs);
 						return false;
 					}
 				}
 			}
-			else if (!copydb_add_table_indexes(specs, &tableSpecs))
+			else if (!copydb_add_table_indexes(specs, tableSpecs))
 			{
 				log_error("Failed to add the indexes for %s, "
 						  "see above for details",
-						  tableSpecs.sourceTable->qname);
+						  tableSpecs->sourceTable->qname);
+				free(table);
+				free(tableSpecs);
 				return false;
 			}
 		}
 	}
+
+	free(table);
+	free(tableSpecs);
 
 	return true;
 }
@@ -876,6 +988,24 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 
 	/* attach the new summary to the tableSpecs, where it was NULL before */
 	tableSpecs->summary = summary;
+
+	/* also track the process information in our catalogs */
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	ProcessInfo ps = {
+		.pid = getpid(),
+		.psType = "COPY",
+		.psTitle = ps_buffer,
+		.tableOid = tableSpecs->sourceTable->oid,
+		.partNumber = tableSpecs->part.partNumber
+	};
+
+	if (!catalog_upsert_process_info(sourceDB, &ps))
+	{
+		log_error("Failed to track progress in our catalogs, "
+				  "see above for details");
+		return false;
+	}
 
 	/* end of the critical section */
 	(void) semaphore_unlock(&(specs->tableSemaphore));
@@ -1027,6 +1157,18 @@ copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 		return true;
 	}
 
+	/* first, fetch attributes from our source database */
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	if (!catalog_s_table_fetch_attrs(sourceDB, tableSpecs->sourceTable))
+	{
+		log_error("Failed to fetch table %s attribute list, "
+				  "see above for details",
+				  tableSpecs->sourceTable->qname);
+		return false;
+	}
+
+	/* we want to set transaction snapshot to the main one on the source */
 	CopyTableSummary *summary = tableSpecs->summary;
 
 	/* when using `pgcopydb copy table-data`, we don't truncate */
@@ -1206,7 +1348,8 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 			/* Generated columns cannot be used in COPY */
 			if (attribute->attisgenerated)
 			{
-				log_notice("Skipping %s in COPY as it is a generated column", attname);
+				log_debug("Skipping %s in COPY as it is a generated column",
+						  attname);
 				continue;
 			}
 
@@ -1222,7 +1365,7 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 			appendPQExpBuffer(query, "%s", attname);
 		}
 
-		appendPQExpBuffer(query, " FROM only %s ", tableSpecs->sourceTable->qname);
+		appendPQExpBuffer(query, " FROM ONLY %s ", tableSpecs->sourceTable->qname);
 
 		/*
 		 * On a source COPY query we might want to add filtering.
@@ -1279,7 +1422,8 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
 			/* Generated columns cannot be used in COPY */
 			if (attribute->attisgenerated)
 			{
-				log_notice("Skipping %s in COPY as it is a generated column", attname);
+				log_debug("Skipping %s in COPY as it is a generated column",
+						  attname);
 				continue;
 			}
 

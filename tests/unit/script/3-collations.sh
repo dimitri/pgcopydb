@@ -7,4 +7,4 @@ set -e
 #
 #  - PGCOPYDB_SOURCE_PGURI
 
-pgcopydb list collations -q 2>&1
+pgcopydb list collations -q --dir /tmp/collations 2>&1
