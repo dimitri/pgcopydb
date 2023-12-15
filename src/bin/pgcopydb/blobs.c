@@ -246,6 +246,18 @@ copydb_blob_worker(CopyDataSpec *specs)
 
 	log_notice("Started Large Objects worker %d [%d]", pid, getppid());
 
+	/* make sure that we have our own process local connection */
+	TransactionSnapshot snapshot = { 0 };
+
+	if (!copydb_copy_snapshot(specs, &snapshot))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* swap the new instance in place of the previous one */
+	specs->sourceSnapshot = snapshot;
+
 	/* connect once to the source database for the whole process */
 	if (!copydb_set_snapshot(specs))
 	{
@@ -403,7 +415,7 @@ copydb_send_lo_stop(CopyDataSpec *specs)
 		if (!queue_send(&(specs->loQueue), &stop))
 		{
 			/* errors have already been logged */
-			continue;
+			return false;
 		}
 	}
 
@@ -417,6 +429,18 @@ copydb_send_lo_stop(CopyDataSpec *specs)
 bool
 copydb_queue_largeobject_metadata(CopyDataSpec *specs, uint64_t *count)
 {
+	/* make sure that we have our own process local connection */
+	TransactionSnapshot snapshot = { 0 };
+
+	if (!copydb_copy_snapshot(specs, &snapshot))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* swap the new instance in place of the previous one */
+	specs->sourceSnapshot = snapshot;
+
 	/* connect to the source database and set snapshot */
 	if (!copydb_set_snapshot(specs))
 	{
@@ -425,12 +449,6 @@ copydb_queue_largeobject_metadata(CopyDataSpec *specs, uint64_t *count)
 	}
 
 	PGSQL *src = &(specs->sourceSnapshot.pgsql);
-
-	if (!pgsql_begin(src))
-	{
-		/* errors have already been logged */
-		return false;
-	}
 
 	BlobMetadataArrayContext context = { 0 };
 	char *sql =
@@ -459,6 +477,7 @@ copydb_queue_largeobject_metadata(CopyDataSpec *specs, uint64_t *count)
 									   &context, &parseBlobMetadataArray))
 		{
 			/* errors have already been logged */
+			(void) pgsql_finish(src);
 			return false;
 		}
 
@@ -486,7 +505,7 @@ copydb_queue_largeobject_metadata(CopyDataSpec *specs, uint64_t *count)
 		}
 	}
 
-	if (!pgsql_commit(src))
+	if (!copydb_close_snapshot(specs))
 	{
 		/* errors have already been logged */
 		return false;
