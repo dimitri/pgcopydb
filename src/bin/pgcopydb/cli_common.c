@@ -368,6 +368,29 @@ cli_copydb_getenv(CopyDBOptions *options)
 		}
 	}
 
+	/* check if --wal2json-numeric-as-string has been used */
+	if (env_exists(PGCOPYDB_WAL2JSON_NUMERIC_AS_STRING))
+	{
+		char wal2jsonNumericAsString[BUFSIZE] = { 0 };
+
+		if (!get_env_copy(PGCOPYDB_WAL2JSON_NUMERIC_AS_STRING,
+						  wal2jsonNumericAsString,
+						  sizeof(wal2jsonNumericAsString)))
+		{
+			/* errors have already been logged */
+			++errors;
+		}
+		else if (!parse_bool(wal2jsonNumericAsString,
+							 &(options->slot.wal2jsonNumericAsString)))
+		{
+			log_error("Failed to parse environment variable \"%s\" "
+					  "value \"%s\", expected a boolean (on/off)",
+					  PGCOPYDB_WAL2JSON_NUMERIC_AS_STRING,
+					  wal2jsonNumericAsString);
+			++errors;
+		}
+	}
+
 	/* when --drop-if-exists has not been used, check PGCOPYDB_DROP_IF_EXISTS */
 	if (!options->restoreOptions.dropIfExists)
 	{
@@ -754,6 +777,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "snapshot", required_argument, NULL, 'N' },
 		{ "follow", no_argument, NULL, 'f' },
 		{ "plugin", required_argument, NULL, 'p' },
+		{ "wal2json-numeric-as-string", no_argument, NULL, 'w' },
 		{ "slot-name", required_argument, NULL, 's' },
 		{ "origin", required_argument, NULL, 'o' },
 		{ "create-slot", no_argument, NULL, 't' },
@@ -1046,6 +1070,13 @@ cli_copy_db_getopts(int argc, char **argv)
 				break;
 			}
 
+			case 'w':
+			{
+				options.slot.wal2jsonNumericAsString = true;
+				log_trace("--wal2json-numeric-as-string");
+				break;
+			}
+
 			case 'o':
 			{
 				strlcpy(options.origin, optarg, NAMEDATALEN);
@@ -1181,6 +1212,14 @@ cli_copy_db_getopts(int argc, char **argv)
 		options.connStrings.target_pguri == NULL)
 	{
 		log_fatal("Options --source and --target are mandatory");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	if (options.slot.wal2jsonNumericAsString &&
+		options.slot.plugin != STREAM_PLUGIN_WAL2JSON)
+	{
+		log_fatal("Option --wal2json-numeric-as-string "
+				  "requires option --plugin=wal2json");
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 

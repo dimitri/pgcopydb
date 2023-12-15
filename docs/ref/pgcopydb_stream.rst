@@ -101,16 +101,17 @@ and export a snapshot.
    pgcopydb stream setup: Setup source and target systems for logical decoding
    usage: pgcopydb stream setup
 
-     --source         Postgres URI to the source database
-     --target         Postgres URI to the target database
-     --dir            Work directory to use
-     --restart        Allow restarting when temp files exist already
-     --resume         Allow resuming operations after a failure
-     --not-consistent Allow taking a new snapshot on the source database
-     --snapshot       Use snapshot obtained with pg_export_snapshot
-     --plugin         Output plugin to use (test_decoding, wal2json)
-     --slot-name      Stream changes recorded by this slot
-     --origin         Name of the Postgres replication origin
+     --source                      Postgres URI to the source database
+     --target                      Postgres URI to the target database
+     --dir                         Work directory to use
+     --restart                     Allow restarting when temp files exist already
+     --resume                      Allow resuming operations after a failure
+     --not-consistent              Allow taking a new snapshot on the source database
+     --snapshot                    Use snapshot obtained with pg_export_snapshot
+     --plugin                      Output plugin to use (test_decoding, wal2json)
+     --wal2json-numeric-as-string  Print numeric data type as string when using wal2json output plugin
+     --slot-name                   Stream changes recorded by this slot
+     --origin                      Name of the Postgres replication origin
 
 .. _pgcopydb_stream_cleanup:
 
@@ -485,6 +486,19 @@ The following options are available to ``pgcopydb stream`` sub-commands:
   __ https://www.postgresql.org/docs/current/test-decoding.html
   __ https://github.com/eulerto/wal2json/
 
+--wal2json-numeric-as-string
+
+  When using the wal2json output plugin, it is possible to use the
+  ``--wal2json-numeric-as-string`` option to instruct wal2json to output
+  numeric values as strings and thus prevent some precision loss.
+
+  You need to have a wal2json plugin version on source database that supports
+  ``--numeric-data-types-as-string`` option to use this option.
+
+  See also the documentation for `wal2json`__ regarding this option for details.
+
+  __ https://github.com/eulerto/wal2json/pull/255
+
 --slot-name
 
   Logical decoding slot name to use.
@@ -557,6 +571,20 @@ PGCOPYDB_TARGET_PGURI
 
   Connection string to the target Postgres instance. When ``--target`` is
   ommitted from the command line, then this environment variable is used.
+
+PGCOPYDB_OUTPUT_PLUGIN
+
+  Logical decoding output plugin to use. When ``--plugin`` is omitted from the
+  command line, then this environment variable is used.
+
+PGCOPYDB_WAL2JSON_NUMERIC_AS_STRING
+
+  When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
+  then pgcopydb uses the wal2json option ``--numeric-data-types-as-string``
+  when using the wal2json output plugin.
+
+  When ``--wal2json-numeric-as-string`` is ommitted from the command line
+  then this environment variable is used.
 
 TMPDIR
 
