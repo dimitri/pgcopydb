@@ -1400,6 +1400,63 @@ catalog_add_attributes(DatabaseCatalog *catalog, SourceTable *table)
 
 
 /*
+ * catalog_add_s_table_part INSERTs a SourceTableParts to our internal catalogs
+ * database (s_table_parts).
+ */
+bool
+catalog_add_s_table_part(DatabaseCatalog *catalog, SourceTable *table)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_add_s_table_part: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"insert into s_table_part(oid, partnum, partcount, min, max, count)"
+		"values($1, $2, $3, $4, $5, $6)";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	SourceTableParts *part = &(table->partition);
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "oid", table->oid, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "partnum", part->partNumber, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "partcount", part->partCount, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "min", part->min, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "max", part->max, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "count", part->count, NULL },
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which does not return any row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * catalog_add_s_table_parts INSERTs a SourceTableParts array to our internal
  * catalogs database (s_table_parts).
  */
@@ -4369,7 +4426,7 @@ catalog_lookup_filter_by_rlname(DatabaseCatalog *catalog,
 
 
 /*
- * catalog_s_index_fetch fetches a SourceIndex entry from a SQLite ppStmt
+ * catalog_filter_fetch fetches a CatalogFilter entry from a SQLite ppStmt
  * result set.
  */
 bool

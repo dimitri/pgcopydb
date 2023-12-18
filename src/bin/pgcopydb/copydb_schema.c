@@ -105,6 +105,9 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 		}
 	}
 
+	/* make sure we receive only one row at a time in-memory */
+	src->singleRowMode = true;
+
 	if (!copydb_fetch_source_schema(specs, src))
 	{
 		/* errors have already been logged */
