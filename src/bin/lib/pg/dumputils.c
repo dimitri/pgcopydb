@@ -183,9 +183,9 @@ makeAlterConfigCommand(PGconn *conn, const char *configitem,
 	*pos++ = '\0';
 
 	/* Build the command, with suitable quoting for everything. */
-	appendPQExpBuffer(buf, "ALTER %s \"%s\" ", type, name);
+	appendPQExpBuffer(buf, "ALTER %s %s ", type, PQescapeIdentifier(conn, name, strlen(name)));
 	if (type2 != NULL && name2 != NULL)
-		appendPQExpBuffer(buf, "IN %s \"%s\" ", type2, name2);
+		appendPQExpBuffer(buf, "IN %s %s ", type2, PQescapeIdentifier(conn, name2, strlen(name2)));
 	appendPQExpBuffer(buf, "SET \"%s\" TO ", mine);
 
 	/*

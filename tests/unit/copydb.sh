@@ -13,7 +13,7 @@ set -e
 # make sure source and target databases are ready
 pgcopydb ping
 
-sql="ALTER DATABASE postgres SET search_path TO public, abc;"
+sql='ALTER DATABASE postgres SET search_path TO public, """abc""";'
 psql -a -d "${PGCOPYDB_SOURCE_PGURI}" -c "${sql}"
 psql -a -d "${PGCOPYDB_SOURCE_PGURI}" -1 -f ./setup/setup.sql
 
