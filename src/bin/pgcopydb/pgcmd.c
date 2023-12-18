@@ -521,8 +521,8 @@ pg_dump_db_extension_namespace_hook(void *ctx, SourceExtension *ext)
 			return false;
 		}
 
-		args[*(context->argsIndex)++] = "--exclude-schema";
-		args[*(context->argsIndex)++] = nspname;
+		args[(*context->argsIndex)++] = "--exclude-schema";
+		args[(*context->argsIndex)++] = nspname;
 	}
 
 	return true;
