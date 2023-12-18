@@ -106,6 +106,7 @@ bool catalog_count_fetch(SQLiteQuery *query);
  */
 bool catalog_add_s_table(DatabaseCatalog *catalog, SourceTable *table);
 bool catalog_add_attributes(DatabaseCatalog *catalog, SourceTable *table);
+bool catalog_add_s_table_part(DatabaseCatalog *catalog, SourceTable *table);
 bool catalog_add_s_table_parts(DatabaseCatalog *catalog, SourceTable *table);
 
 bool catalog_add_s_table_chksum(DatabaseCatalog *catalog,

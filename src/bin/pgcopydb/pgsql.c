@@ -1536,14 +1536,20 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 	}
 
 	/*
-	 * TODO
-	 *
 	 * Use PQsetSingleRowMode(connection) to switch to select single-row mode
-	 * and fetch only one result at a time in memory. Most queries are already
-	 * fine with the idea, thanks to inserting the value into our SQLite
-	 * internal catalogs. Some query still expect PQntuples() to reflect the
-	 * actual number of tuples returned by the query etc.
+	 * and fetch only one result at a time in memory. Works with query result
+	 * handlers that do not expect PQntuples() to reflect the actual number of
+	 * tuples returned by the query etc.
 	 */
+	if (pgsql->singleRowMode)
+	{
+		if (PQsetSingleRowMode(connection) != 1)
+		{
+			log_error("Failed to select single-row mode: %s",
+					  PQerrorMessage(connection));
+			return false;
+		}
+	}
 
 	bool done = false;
 	int errors = 0;
@@ -1768,6 +1774,8 @@ pgsql_fetch_results(PGSQL *pgsql, bool *done,
 	{
 		PGresult *result = NULL;
 
+		bool firstResult = true;
+
 		/*
 		 * When we got clearance that libpq did fetch the Postgres query result
 		 * in its internal buffers, we process the result without checking for
@@ -1790,12 +1798,36 @@ pgsql_fetch_results(PGSQL *pgsql, bool *done,
 				return false;
 			}
 
+			/*
+			 * From Postgres docs:
+			 *
+			 * If the query returns any rows, they are returned as individual
+			 * PGresult objects, which look like normal query results except
+			 * for having status code PGRES_SINGLE_TUPLE instead of
+			 * PGRES_TUPLES_OK. After the last row, or immediately if the query
+			 * returns zero rows, a zero-row object with status PGRES_TUPLES_OK
+			 * is returned; this is the signal that no more rows will arrive.
+			 */
 			if (parseFun != NULL)
 			{
-				(*parseFun)(context, result);
+				bool skipCallback =
+					!firstResult &&
+					pgsql->singleRowMode &&
+					PQntuples(result) == 0 &&
+					PQresultStatus(result) == PGRES_TUPLES_OK;
+
+				if (!skipCallback)
+				{
+					(*parseFun)(context, result);
+				}
 			}
 
 			PQclear(result);
+
+			if (firstResult)
+			{
+				firstResult = false;
+			}
 		}
 
 		*done = true;
@@ -5008,14 +5040,16 @@ pgsql_table_exists(PGSQL *pgsql,
 				   const char *relname,
 				   bool *exists)
 {
-	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_INT, false };
+	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_BOOL, false };
 
 	char *existsQuery =
-		"select 1 "
-		"  from pg_class c "
-		"       join pg_namespace n on n.oid = c.relnamespace "
-		" where n.nspname = $1 "
-		"   and c.relname = $2";
+		"select exists( "
+		"         select 1 "
+		"           from pg_class c "
+		"                join pg_namespace n on n.oid = c.relnamespace "
+		"          where n.nspname = $1 "
+		"            and c.relname = $2"
+		"       )";
 
 	int paramCount = 2;
 	const Oid paramTypes[2] = { TEXTOID, TEXTOID };
@@ -5023,7 +5057,7 @@ pgsql_table_exists(PGSQL *pgsql,
 
 	if (!pgsql_execute_with_params(pgsql, existsQuery,
 								   paramCount, paramTypes, paramValues,
-								   &context, &fetchedRows))
+								   &context, &parseSingleValueResult))
 	{
 		log_error("Failed to check if \"%s\".\"%s\" exists", nspname, relname);
 		return false;
@@ -5039,7 +5073,7 @@ pgsql_table_exists(PGSQL *pgsql,
 	 * If the exists query returns no rows, create our table:
 	 *  pgcopydb.pgcopydb_table_size
 	 */
-	*exists = context.intVal == 1;
+	*exists = context.boolVal;
 
 	return true;
 }

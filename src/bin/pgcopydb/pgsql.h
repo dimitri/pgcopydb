@@ -186,6 +186,7 @@ typedef struct PGSQL
 	bool notificationReceived;
 
 	bool logSQL;
+	bool singleRowMode;
 } PGSQL;
 
 
