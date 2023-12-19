@@ -45,14 +45,6 @@ This command prefixes the following sub-commands:
     transform  Transform changes from the source database into SQL commands
     apply      Apply changes from the source database into the target database
 
-  pgcopydb stream create
-    slot    Create a replication slot in the source database
-    origin  Create a replication origin in the target database
-
-  pgcopydb stream drop
-    slot    Drop a replication slot in the source database
-    origin  Drop a replication origin in the target database
-
   pgcopydb stream sentinel
     create  Create the sentinel table on the source database
     drop    Drop the sentinel table on the source database
