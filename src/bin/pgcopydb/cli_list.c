@@ -1794,6 +1794,8 @@ cli_list_schema(int argc, char **argv)
 	log_info("Dumping schema into JSON file \"%s\"",
 			 copySpecs.cfPaths.schemafile);
 
+	copySpecs.fetchFilteredOids = true;
+
 	/*
 	 * Prepare our internal catalogs for storing the source database catalog
 	 * query results. When --force is used then we fetch the catalogs again.
