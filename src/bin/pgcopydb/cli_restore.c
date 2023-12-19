@@ -64,6 +64,8 @@ static CommandLine restore_schema_pre_data_command =
 		"  --no-owner           Do not set ownership of objects to match the original database\n"
 		"  --no-acl             Prevent restoration of access privileges (grant/revoke commands).\n"
 		"  --no-comments        Do not output commands to restore comments\n"
+		"  --skip-extensions    Skip restoring extensions\n" \
+		"  --skip-ext-comments  Skip restoring COMMENT ON EXTENSION\n" \
 		"  --filters <filename> Use the filters defined in <filename>\n"
 		"  --restart            Allow restarting when temp files exist already\n"
 		"  --resume             Allow resuming operations after a failure\n"
@@ -83,6 +85,8 @@ static CommandLine restore_schema_post_data_command =
 		"  --no-owner           Do not set ownership of objects to match the original database\n"
 		"  --no-acl             Prevent restoration of access privileges (grant/revoke commands).\n"
 		"  --no-comments        Do not output commands to restore comments\n"
+		"  --skip-extensions    Skip restoring extensions\n" \
+		"  --skip-ext-comments  Skip restoring COMMENT ON EXTENSION\n" \
 		"  --filters <filename> Use the filters defined in <filename>\n"
 		"  --restart            Allow restarting when temp files exist already\n"
 		"  --resume             Allow resuming operations after a failure\n"
@@ -691,7 +695,7 @@ cli_restore_prepare_specs(CopyDataSpec *copySpecs)
 	if (!copydb_fetch_schema_and_prepare_specs(copySpecs))
 	{
 		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
+		exit(EXIT_CODE_TARGET);
 	}
 
 	copySpecs->section = DATA_SECTION_NONE;
