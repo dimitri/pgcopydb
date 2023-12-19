@@ -232,6 +232,7 @@ copydb_fetch_source_catalog_setup(CopyDataSpec *specs)
 				return false;
 			}
 
+
 			/* compute "allDone" in the context of a sourceDB */
 			if (s->section == DATA_SECTION_COLLATIONS ||
 				s->section == DATA_SECTION_EXTENSIONS ||
@@ -745,7 +746,8 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 				 (long long) count.extensions);
 	}
 
-	if (specs->skipExtensions)
+	if (specs->skipExtensions &&
+		!filtersDB->sections[DATA_SECTION_EXTENSIONS].fetched)
 	{
 		/* fetch the list of schemas that extensions depend on */
 		if (!schema_list_ext_schemas(pgsql, filtersDB))
@@ -785,20 +787,24 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 
 	if (filters->type == SOURCE_FILTER_TYPE_NONE)
 	{
-		/* still prepare the filters catalog hash-table (--skip-) */
-		DatabaseCatalog *sourceDB = &(catalogs->source);
-
-		if (!catalog_attach(filtersDB, sourceDB, "source"))
+		if (!filtersDB->sections[DATA_SECTION_FILTERS].fetched)
 		{
-			/* errors have already been logged */
-			return false;
-		}
+			/* still prepare the filters catalog hash-table (--skip-) */
+			DatabaseCatalog *sourceDB = &(catalogs->source);
 
-		if (!catalog_prepare_filter(filtersDB))
-		{
-			log_error("Failed to prepare filtering hash-table, "
-					  "see above for details");
-			return false;
+			if (!catalog_attach(filtersDB, sourceDB, "source"))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			if (!catalog_prepare_filter(filtersDB) ||
+				!catalog_register_section(filtersDB, DATA_SECTION_FILTERS))
+			{
+				log_error("Failed to prepare filtering hash-table, "
+						  "see above for details");
+				return false;
+			}
 		}
 
 		return true;
