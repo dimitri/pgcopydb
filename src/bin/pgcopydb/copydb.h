@@ -54,8 +54,8 @@ typedef struct SysVRes
 
 	union res
 	{
-		Queue *queue;
-		Semaphore *semaphore;
+		Queue queue;
+		Semaphore semaphore;
 	} res;
 } SysVRes;
 
