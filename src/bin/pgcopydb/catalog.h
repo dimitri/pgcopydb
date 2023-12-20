@@ -6,7 +6,6 @@
 #ifndef CATALOG_H
 #define CATALOG_H
 
-#include "copydb.h"
 #include "schema.h"
 
 /*
@@ -28,9 +27,6 @@ struct SQLiteQuery
 /*
  * Catalog API.
  */
-bool catalog_init_from_specs(CopyDataSpec *copySpecs);
-bool catalog_close_from_specs(CopyDataSpec *copySpecs);
-
 bool catalog_open(DatabaseCatalog *catalog);
 bool catalog_init(DatabaseCatalog *catalog);
 bool catalog_attach(DatabaseCatalog *a, DatabaseCatalog *b, const char *name);
@@ -516,38 +512,6 @@ bool catalog_iter_s_index_in_progress(DatabaseCatalog *catalog,
 
 bool catalog_iter_s_index_in_progress_init(SourceIndexIterator *iter);
 
-
-/*
- * Manage catalog summary entries.
- *
- * see summary.c
- */
-bool summary_add_table(DatabaseCatalog *catalog,
-					   CopyTableDataSpec *tableSpecs);
-
-bool summary_finish_table(DatabaseCatalog *catalog,
-						  CopyTableDataSpec *tableSpecs);
-
-bool summary_lookup_table(DatabaseCatalog *catalog,
-						  CopyTableDataSpec *tableSpecs);
-
-bool summary_table_fetch(SQLiteQuery *query);
-
-bool summary_delete_table(DatabaseCatalog *catalog,
-						  CopyTableDataSpec *tableSpecs);
-
-bool summary_table_count_parts_done(DatabaseCatalog *catalog,
-									CopyTableDataSpec *tableSpecs);
-
-bool summary_table_fetch_count_parts_done(SQLiteQuery *query);
-
-bool summary_add_table_parts_done(DatabaseCatalog *catalog,
-								  CopyTableDataSpec *tableSpecs);
-
-bool summary_lookup_table_parts_done(DatabaseCatalog *catalog,
-									 CopyTableDataSpec *tableSpecs);
-
-bool summary_table_parts_done_fetch(SQLiteQuery *query);
 
 /*
  * Internal tooling for catalogs management

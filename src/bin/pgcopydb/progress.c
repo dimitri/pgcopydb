@@ -714,28 +714,17 @@ copydb_update_progress_index_hook(void *ctx, SourceIndex *index)
 	SourceIndexArray *indexInProgress = &(progress->indexInProgress);
 	CopyIndexSummaryArray *summaryArrayIdx = &(progress->indexSummaryArray);
 
-	IndexFilePaths indexPaths = { 0 };
+	DatabaseCatalog *sourceDB = &(copySpecs->catalogs.source);
+	CopyIndexSpec indexSpecs = { .sourceIndex = index };
 
-	if (!copydb_init_index_paths(&(copySpecs->cfPaths), index, &indexPaths))
+	if (!summary_lookup_index(sourceDB, &indexSpecs))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	if (file_exists(indexPaths.doneFile))
+	if (indexSpecs.summary.pid > 0)
 	{
-		++progress->indexDoneCount;
-	}
-	else if (file_exists(indexPaths.lockFile))
-	{
-		CopyIndexSummary summary = { .index = index };
-
-		if (!read_index_summary(&summary, indexPaths.lockFile))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
 		/*
 		 * Copy the SourceIndex struct in-place to the indexInProgress
 		 * array.
@@ -744,7 +733,7 @@ copydb_update_progress_index_hook(void *ctx, SourceIndex *index)
 			*index;
 
 		summaryArrayIdx->array[progress->indexSummaryArray.count++] =
-			summary;
+			indexSpecs.summary;
 	}
 
 	return true;

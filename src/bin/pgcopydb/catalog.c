@@ -122,7 +122,8 @@ static char *sourceDBcreateDDLs[] = {
 	"  pid integer, "
 	"  tableoid integer references s_table(oid), "
 	"  partnum integer, "
-	"  indexoid integer references s_table(oid), "
+	"  indexoid integer references s_index(oid), "
+	"  conoid integer references s_constraint(oid), "
 	"  start_time_epoch integer, done_time_epoch integer, duration integer, "
 	"  bytes integer, "
 	"  command text, "
@@ -134,7 +135,7 @@ static char *sourceDBcreateDDLs[] = {
 	")",
 
 	"create table s_table_indexes_done("
-	" tableoid integer primary key references s_table(oid), pid integer"
+	" tableoid integer primary key references s_table(oid), pid integer "
 	")"
 };
 
@@ -6572,8 +6573,8 @@ catalog_sql_prepare(sqlite3 *db, const char *sql, SQLiteQuery *query)
 	{
 		ConnectionRetryPolicy retryPolicy = { 0 };
 
-		int maxT = 1;            /* 1s */
-		int maxSleepTime = 50;   /* 50ms */
+		int maxT = 5;            /* 5s */
+		int maxSleepTime = 150;  /* 150ms */
 		int baseSleepTime = 10;  /* 10ms */
 
 		(void) pgsql_set_retry_policy(&retryPolicy,
@@ -6582,7 +6583,8 @@ catalog_sql_prepare(sqlite3 *db, const char *sql, SQLiteQuery *query)
 									  maxSleepTime,
 									  baseSleepTime);
 
-		while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY)
+		while ((rc == SQLITE_LOCKED || rc == SQLITE_BUSY) &&
+			   !pgsql_retry_policy_expired(&retryPolicy))
 		{
 			int sleepTimeMs =
 				pgsql_compute_connection_retry_sleep_time(&retryPolicy);
@@ -6751,8 +6753,8 @@ catalog_sql_step(SQLiteQuery *query)
 	{
 		ConnectionRetryPolicy retryPolicy = { 0 };
 
-		int maxT = 1;            /* 1s */
-		int maxSleepTime = 50;   /* 50ms */
+		int maxT = 5;            /* 5s */
+		int maxSleepTime = 150;  /* 150ms */
 		int baseSleepTime = 10;  /* 10ms */
 
 		(void) pgsql_set_retry_policy(&retryPolicy,
@@ -6761,7 +6763,8 @@ catalog_sql_step(SQLiteQuery *query)
 									  maxSleepTime,
 									  baseSleepTime);
 
-		while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY)
+		while ((rc == SQLITE_LOCKED || rc == SQLITE_BUSY) &&
+			   !pgsql_retry_policy_expired(&retryPolicy))
 		{
 			int sleepTimeMs =
 				pgsql_compute_connection_retry_sleep_time(&retryPolicy);

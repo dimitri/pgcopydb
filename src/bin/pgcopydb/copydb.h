@@ -135,24 +135,26 @@ typedef struct CopyTableDataSpec
 
 	int tableJobs;
 	int indexJobs;
-	Semaphore *indexSemaphore;  /* pointer to the main specs semaphore */
-	Semaphore *truncateSemaphore;
-
-	TableFilePaths tablePaths;
 
 	/* same-table concurrency with COPY WHERE clause partitioning */
 	CopyTableDataPartSpec part;
+
+	/* summary/activity tracking */
 	uint32_t countPartsDone;
 	pid_t partsDonePid;
 	bool allPartsAreDone;
+
+	uint32_t countIndexesLeft;
+	pid_t indexesDonePid;
+	bool allIndexesAreDone;
 } CopyTableDataSpec;
 
 
-typedef struct CopyTableDataSpecsArray
+typedef struct CopyIndexSpec
 {
-	int count;
-	CopyTableDataSpec *array;   /* malloc'ed area */
-} CopyTableDataSpecsArray;
+	SourceIndex *sourceIndex;
+	CopyIndexSummary summary;
+} CopyIndexSpec;
 
 
 /*
@@ -207,9 +209,6 @@ typedef struct CopyDataSpec
 	int lObjectJobs;
 
 	SplitTableLargerThan splitTablesLargerThan;
-
-	Semaphore tableSemaphore;
-	Semaphore indexSemaphore;
 
 	Queue copyQueue;
 	Queue indexQueue;
@@ -274,15 +273,6 @@ bool copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 							 SourceTable *source,
 							 int partNumber);
 
-bool copydb_init_tablepaths(CopyFilePaths *cfPaths,
-							TableFilePaths *tablePaths,
-							uint32_t oid);
-
-bool copydb_init_tablepaths_for_part(CopyFilePaths *cfPaths,
-									 TableFilePaths *tablePaths,
-									 uint32_t oid,
-									 int partNumber);
-
 bool copydb_export_snapshot(TransactionSnapshot *snapshot);
 
 bool copydb_fatal_exit(void);
@@ -295,6 +285,10 @@ bool copydb_unlink_sysv_semaphore(SysVResArray *array, Semaphore *semaphore);
 bool copydb_unlink_sysv_queue(SysVResArray *array, Queue *queue);
 
 bool copydb_cleanup_sysv_resources(SysVResArray *array);
+
+/* catalog.c */
+bool catalog_init_from_specs(CopyDataSpec *copySpecs);
+bool catalog_close_from_specs(CopyDataSpec *copySpecs);
 
 /* snapshot.c */
 bool copydb_copy_snapshot(CopyDataSpec *specs, TransactionSnapshot *snapshot);
@@ -318,10 +312,9 @@ bool copydb_parse_extensions_requirements(CopyDataSpec *copySpecs,
 										  char *filename);
 
 /* indexes.c */
-
 bool copydb_start_index_workers(CopyDataSpec *specs);
 bool copydb_index_worker(CopyDataSpec *specs);
-bool copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid);
+bool copydb_create_index_by_oid(CopyDataSpec *specs, PGSQL *dst, uint32_t indexOid);
 
 bool copydb_add_table_indexes(CopyDataSpec *specs,
 							  CopyTableDataSpec *tableSpecs);
@@ -330,46 +323,28 @@ bool copydb_index_workers_send_stop(CopyDataSpec *specs);
 
 bool copydb_table_indexes_are_done(CopyDataSpec *specs,
 								   SourceTable *table,
-								   TableFilePaths *tablePaths,
 								   bool *indexesAreDone,
 								   bool *constraintsAreBeingBuilt);
 
-bool copydb_init_index_paths(CopyFilePaths *cfPaths,
-							 SourceIndex *index,
-							 IndexFilePaths *indexPaths);
-
 bool copydb_copy_all_indexes(CopyDataSpec *specs);
 
-bool copydb_create_index(const char *pguri,
+bool copydb_create_index(CopyDataSpec *specs,
+						 PGSQL *dst,
 						 SourceIndex *index,
-						 IndexFilePaths *indexPaths,
-						 Semaphore *lockFileSemaphore,
-						 bool constraint,
 						 bool ifNotExists);
 
+bool copydb_index_is_being_processed(CopyDataSpec *specs,
+									 CopyIndexSpec *indexSpecs,
+									 bool *isDone);
 
-bool copydb_index_is_being_processed(SourceIndex *index,
-									 IndexFilePaths *indexPaths,
-									 bool constraint,
-									 Semaphore *lockFileSemaphore,
-									 CopyIndexSummary *summary,
-									 bool *isDone,
-									 bool *isBeingProcessed);
+bool copydb_mark_index_as_done(CopyDataSpec *specs, CopyIndexSpec *indexSpecs);
 
-bool copydb_mark_index_as_done(SourceIndex *index,
-							   IndexFilePaths *indexPaths,
-							   bool constraint,
-							   Semaphore *lockFileSemaphore,
-							   CopyIndexSummary *summary);
+bool copydb_prepare_create_index_command(CopyIndexSpec *indexSpecs,
+										 bool ifNotExists);
 
-bool copydb_prepare_create_index_command(SourceIndex *index,
-										 bool ifNotExists,
-										 char **command);
+bool copydb_prepare_create_constraint_command(CopyIndexSpec *indexSpecs);
 
-bool copydb_prepare_create_constraint_command(SourceIndex *index,
-											  char **command);
-
-bool copydb_create_constraints(CopyDataSpec *spec, SourceTable *table);
+bool copydb_create_constraints(CopyDataSpec *spec, PGSQL *dst, SourceTable *table);
 
 /* dump_restore.c */
 bool copydb_dump_source_schema(CopyDataSpec *specs,
@@ -469,6 +444,83 @@ bool vacuum_send_stop(CopyDataSpec *specs);
 /* summary.c */
 bool prepare_summary_table(Summary *summary, CopyDataSpec *specs);
 bool print_summary(Summary *summary, CopyDataSpec *specs);
+
+bool summary_lookup_oid(DatabaseCatalog *catalog, uint32_t oid, bool *done);
+bool summary_oid_done_fetch(SQLiteQuery *query);
+
+/*
+ * Summary Table
+ */
+bool summary_lookup_table(DatabaseCatalog *catalog,
+						  CopyTableDataSpec *tableSpecs);
+
+bool summary_table_fetch(SQLiteQuery *query);
+
+bool summary_add_table(DatabaseCatalog *catalog,
+					   CopyTableDataSpec *tableSpecs);
+
+bool summary_finish_table(DatabaseCatalog *catalog,
+						  CopyTableDataSpec *tableSpecs);
+
+bool summary_delete_table(DatabaseCatalog *catalog,
+						  CopyTableDataSpec *tableSpecs);
+
+bool summary_table_count_parts_done(DatabaseCatalog *catalog,
+									CopyTableDataSpec *tableSpecs);
+
+bool summary_table_fetch_count_parts_done(SQLiteQuery *query);
+
+bool summary_add_table_parts_done(DatabaseCatalog *catalog,
+								  CopyTableDataSpec *tableSpecs);
+
+bool summary_lookup_table_parts_done(DatabaseCatalog *catalog,
+									 CopyTableDataSpec *tableSpecs);
+
+bool summary_table_parts_done_fetch(SQLiteQuery *query);
+
+/*
+ * Summary for Create Index and Constraints
+ */
+bool summary_lookup_index(DatabaseCatalog *catalog,
+						  CopyIndexSpec *indexSpecs);
+
+bool summary_index_fetch(SQLiteQuery *query);
+
+bool summary_add_index(DatabaseCatalog *catalog,
+					   CopyIndexSpec *indexSpecs);
+
+bool summary_finish_index(DatabaseCatalog *catalog,
+						  CopyIndexSpec *indexSpecs);
+
+bool summary_delete_index(DatabaseCatalog *catalog,
+						  CopyIndexSpec *indexSpecs);
+
+bool summary_lookup_constraint(DatabaseCatalog *catalog,
+							   CopyIndexSpec *indexSpecs);
+
+bool summary_add_constraint(DatabaseCatalog *catalog,
+							CopyIndexSpec *indexSpecs);
+
+bool summary_finish_constraint(DatabaseCatalog *catalog,
+							   CopyIndexSpec *indexSpecs);
+
+bool summary_table_count_indexes_left(DatabaseCatalog *catalog,
+									  CopyTableDataSpec *tableSpecs);
+
+bool summary_table_fetch_count_indexes_left(SQLiteQuery *query);
+
+bool summary_add_table_indexes_done(DatabaseCatalog *catalog,
+									CopyTableDataSpec *tableSpecs);
+
+bool summary_lookup_table_indexes_done(DatabaseCatalog *catalog,
+									   CopyTableDataSpec *tableSpecs);
+
+bool summary_table_indexes_done_fetch(SQLiteQuery *query);
+
+bool summary_prepare_index_entry(DatabaseCatalog *catalog,
+								 SourceIndex *index,
+								 bool constraint,
+								 SummaryIndexEntry *indexEntry);
 
 /* compare.c */
 bool compare_schemas(CopyDataSpec *copySpecs);

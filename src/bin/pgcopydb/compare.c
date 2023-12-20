@@ -380,17 +380,7 @@ compare_data_by_table_oid(CopyDataSpec *copySpecs, uint32_t oid)
 		return false;
 	}
 
-	CopyFilePaths *cfPaths = &(copySpecs->cfPaths);
-	TableFilePaths tablePaths = { 0 };
-
-	if (!copydb_init_tablepaths(cfPaths, &tablePaths, oid))
-	{
-		log_error("Failed to prepare pathnames for table %u", oid);
-		return false;
-	}
-
-	log_trace("compare_data_by_table_oid: %u %s \"%s\"",
-			  oid, table->qname, tablePaths.chksumFile);
+	log_trace("compare_data_by_table_oid: %u %s", oid, table->qname);
 
 	if (!compare_table(copySpecs, table))
 	{

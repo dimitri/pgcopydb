@@ -1055,10 +1055,8 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 		}
 		else
 		{
-			log_notice("Found stale pid %d in file \"%s\", removing it "
-					   "and processing table %s",
+			log_notice("Found stale pid %d, removing it to process table %s",
 					   tableSummary->pid,
-					   tableSpecs->tablePaths.lockFile,
 					   tableSpecs->sourceTable->qname);
 
 			/* stale pid, remove the summary entry and process the table */
@@ -1175,7 +1173,6 @@ copydb_table_parts_are_all_done(CopyDataSpec *specs,
 		*isBeingProcessed = (tableSpecs->partsDonePid != getpid());
 	}
 
-	/* keep compiler happy, we should never end-up here */
 	return true;
 }
 
