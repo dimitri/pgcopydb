@@ -3654,7 +3654,7 @@ catalog_s_table_count_indexes(DatabaseCatalog *catalog, SourceTable *table)
 
 	char *sql =
 		"select count(1) as indexes, "
-		"       count(1) filter(where c.oid is not null) as constraints "
+		"       count(c.oid) as constraints "
 		"  from s_index i "
 		"       left join s_constraint c on c.indexoid = i.oid "
 		" where tableoid = $1";
