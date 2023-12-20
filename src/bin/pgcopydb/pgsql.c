@@ -5627,3 +5627,28 @@ parseSentinel(void *ctx, PGresult *result)
 
 	context->parsedOK = true;
 }
+
+/*
+ * escape_identifier escapes the (postgres) identifiers and the generated string
+ * is always quoted. It uses PQescapeIdentifier
+ * (https://www.postgresql.org/docs/current/libpq-exec.html#LIBPQ-PQESCAPEIDENTIFIER).
+ */
+char *
+escape_identifier(PGSQL *pgsql, char *src)
+{
+	PGconn *conn = pgsql->connection;
+	if (conn == NULL)
+	{
+		return NULL;
+	}
+
+	char *dst = PQescapeIdentifier(conn, src, strlen(src));
+
+	if (dst == NULL)
+	{
+		log_error("Failed to escape identifier %s", src);
+		return NULL;
+	}
+
+	return dst;
+}

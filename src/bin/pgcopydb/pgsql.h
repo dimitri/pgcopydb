@@ -567,5 +567,5 @@ bool pgsql_fetch_sync_sentinel_apply(PGSQL *pgsql,
 									 bool *retry,
 									 CopyDBSentinel *sentinel);
 
-
+char *escape_identifier(PGSQL *pgsql, char *src);
 #endif /* PGSQL_H */

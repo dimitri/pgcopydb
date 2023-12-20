@@ -37,8 +37,7 @@ typedef struct TestDecodingHeader
 {
 	const char *message;
 	char qname[PG_NAMEDATALEN_FQ];
-	char nspname[PG_NAMEDATALEN];
-	char relname[PG_NAMEDATALEN];
+	LogicalMessageRelation table;
 	StreamAction action;
 	int offset;                 /* end of metadata section */
 	int pos;
@@ -172,10 +171,10 @@ parseTestDecodingMessageActionAndXid(LogicalStreamContext *context)
 			return false;
 		}
 
-		if (strcmp(header.nspname, "pgcopydb") == 0)
+		if (strcmp(header.table.nspname, "pgcopydb") == 0)
 		{
 			log_debug("Filtering out message for schema \"%s\": %s",
-					  header.nspname,
+					  header.table.nspname,
 					  context->buffer);
 			metadata->filterOut = true;
 		}
@@ -248,14 +247,14 @@ parseTestDecodingMessage(StreamContext *privateContext,
 
 		case STREAM_ACTION_TRUNCATE:
 		{
-			strlcpy(stmt->stmt.truncate.nspname, header.nspname, PG_NAMEDATALEN);
-			strlcpy(stmt->stmt.truncate.relname, header.relname, PG_NAMEDATALEN);
+			stmt->stmt.truncate.table = header.table;
 
 			break;
 		}
 
 		case STREAM_ACTION_INSERT:
 		{
+			stmt->stmt.insert.table = header.table;
 			if (!parseTestDecodingInsertMessage(privateContext, &header))
 			{
 				log_error("Failed to parse test_decoding INSERT message: %s",
@@ -268,6 +267,7 @@ parseTestDecodingMessage(StreamContext *privateContext,
 
 		case STREAM_ACTION_UPDATE:
 		{
+			stmt->stmt.update.table = header.table;
 			if (!parseTestDecodingUpdateMessage(privateContext, &header))
 			{
 				log_error("Failed to parse test_decoding UPDATE message: %s",
@@ -279,6 +279,7 @@ parseTestDecodingMessage(StreamContext *privateContext,
 
 		case STREAM_ACTION_DELETE:
 		{
+			stmt->stmt.delete.table = header.table;
 			if (!parseTestDecodingDeleteMessage(privateContext, &header))
 			{
 				log_error("Failed to parse test_decoding DELETE message: %s",
@@ -338,13 +339,16 @@ parseTestDecodingMessageHeader(TestDecodingHeader *header, const char *message)
 		return false;
 	}
 
-	/* grab the table schema.name */
-	strlcpy(header->nspname, idp, dot - idp + 1);
-	strlcpy(header->relname, dot + 1, sep - dot);
+	/*
+	 * Grab the table schema.name, which is already escaped by appropriately by
+	 * the plugin
+	 */
+	header->table.nspname = strndup(idp, dot - idp);
+	header->table.relname = strndup(dot + 1, sep - dot - 1);
 
 	sformat(header->qname, sizeof(header->qname), "%s.%s",
-			header->nspname,
-			header->relname);
+			header->table.nspname,
+			header->table.relname);
 
 	/* now grab the action */
 	char action[BUFSIZE] = { 0 };
@@ -389,9 +393,6 @@ parseTestDecodingInsertMessage(StreamContext *privateContext,
 {
 	LogicalTransactionStatement *stmt = privateContext->stmt;
 
-	strlcpy(stmt->stmt.insert.nspname, header->nspname, PG_NAMEDATALEN);
-	strlcpy(stmt->stmt.insert.relname, header->relname, PG_NAMEDATALEN);
-
 	stmt->stmt.insert.new.count = 1;
 	stmt->stmt.insert.new.array =
 		(LogicalMessageTuple *) calloc(1, sizeof(LogicalMessageTuple));
@@ -427,9 +428,6 @@ parseTestDecodingUpdateMessage(StreamContext *privateContext,
 							   TestDecodingHeader *header)
 {
 	LogicalTransactionStatement *stmt = privateContext->stmt;
-
-	strlcpy(stmt->stmt.update.nspname, header->nspname, PG_NAMEDATALEN);
-	strlcpy(stmt->stmt.update.relname, header->relname, PG_NAMEDATALEN);
 
 	stmt->stmt.update.old.count = 1;
 	stmt->stmt.update.new.count = 1;
@@ -522,9 +520,6 @@ parseTestDecodingDeleteMessage(StreamContext *privateContext,
 {
 	LogicalTransactionStatement *stmt = privateContext->stmt;
 
-	strlcpy(stmt->stmt.delete.nspname, header->nspname, PG_NAMEDATALEN);
-	strlcpy(stmt->stmt.delete.relname, header->relname, PG_NAMEDATALEN);
-
 	stmt->stmt.delete.old.count = 1;
 	stmt->stmt.delete.old.array =
 		(LogicalMessageTuple *) calloc(1, sizeof(LogicalMessageTuple));
@@ -549,7 +544,6 @@ parseTestDecodingDeleteMessage(StreamContext *privateContext,
 
 	return true;
 }
-
 
 /*
  * SetColumnNames parses the "columns" (or "identity") JSON object from a
@@ -976,8 +970,8 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 	}
 
 	if (!catalog_lookup_s_table_by_name(sourceDB,
-										header->nspname,
-										header->relname,
+										header->table.nspname,
+										header->table.relname,
 										table))
 	{
 		/* errors have already been logged */

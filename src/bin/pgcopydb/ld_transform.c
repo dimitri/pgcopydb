@@ -31,6 +31,7 @@
 #include "parsing_utils.h"
 #include "pidfile.h"
 #include "pg_utils.h"
+#include "pgsql.h"
 #include "schema.h"
 #include "signals.h"
 #include "string_utils.h"
@@ -43,10 +44,43 @@ typedef struct TransformStreamCtx
 	uint64_t currentMsgIndex;
 } TransformStreamCtx;
 
+static bool stream_transform_stream_internal(StreamSpecs *specs);
+
+static bool stream_transform_from_queue_internal(StreamSpecs *specs);
+
 static bool canCoalesceLogicalTransactionStatement(LogicalTransaction *txn,
 												   LogicalTransactionStatement *new);
 static bool coalesceLogicalTransactionStatement(LogicalTransaction *txn,
 												LogicalTransactionStatement *new);
+
+/*
+ * stream_transform_init_context_pgsql initializes StreamContext's
+ * transformPGSQL and opens a connection to the target. This is required to use
+ * PQescapeIdentifier API of libpq when escaping identifiers
+ */
+bool stream_transform_init_context_pgsql(StreamSpecs *specs)
+{
+	StreamContext *privateContext = &(specs->private);
+
+	privateContext->transformPGSQL = &(specs->transformPGSQL);
+
+	/* initialize our connection to the target database */
+	if (!pgsql_init(privateContext->transformPGSQL,
+					specs->connStrings->target_pguri,
+					PGSQL_CONN_TARGET))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_begin(privateContext->transformPGSQL))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
 
 /*
  * stream_transform_stream transforms a JSON formatted input stream (read line
@@ -56,13 +90,39 @@ static bool coalesceLogicalTransactionStatement(LogicalTransaction *txn,
 bool
 stream_transform_stream(StreamSpecs *specs)
 {
-	StreamContext *privateContext = &(specs->private);
-
 	if (!catalog_open(specs->sourceDB))
 	{
 		/* errors have already been logged */
 		return false;
 	}
+
+	if (!stream_transform_init_context_pgsql(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	bool success = stream_transform_stream_internal(specs);
+
+	pgsql_finish(&(specs->transformPGSQL));
+
+	if (!catalog_close(specs->sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return success;
+}
+
+/*
+ * stream_transform_stream_internal implements the core of
+ * stream_transform_stream
+ */
+static bool
+stream_transform_stream_internal(StreamSpecs *specs)
+{
+	StreamContext *privateContext = &(specs->private);
 
 	/*
 	 * Resume operations by reading the current transform target file, if it
@@ -123,12 +183,6 @@ stream_transform_stream(StreamSpecs *specs)
 		privateContext->sqlFile = NULL;
 
 		log_notice("Closed file \"%s\"", privateContext->sqlFileName);
-	}
-
-	if (!catalog_close(specs->sourceDB))
-	{
-		/* errors have already been logged */
-		return false;
 	}
 
 	log_notice("Transformed %lld messages and %lld transactions",
@@ -623,11 +677,6 @@ stream_transform_worker(StreamSpecs *specs)
 bool
 stream_transform_from_queue(StreamSpecs *specs)
 {
-	Queue *transformQueue = &(specs->transformQueue);
-
-	int errors = 0;
-	bool stop = false;
-
 	DatabaseCatalog *sourceDB = specs->sourceDB;
 
 	if (!catalog_init(sourceDB))
@@ -641,6 +690,37 @@ stream_transform_from_queue(StreamSpecs *specs)
 		/* errors have already been logged */
 		return false;
 	}
+
+	if (!stream_transform_init_context_pgsql(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	bool success = stream_transform_from_queue_internal(specs);
+
+	pgsql_finish(&(specs->transformPGSQL));
+
+	if (!catalog_close(sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return success;
+}
+
+/*
+ * stream_transform_from_queue_internal implements the core of
+ * stream_transform_from_queue
+ */
+static bool
+stream_transform_from_queue_internal(StreamSpecs *specs)
+{
+	Queue *transformQueue = &(specs->transformQueue);
+
+	int errors = 0;
+	bool stop = false;
 
 	while (!stop)
 	{
@@ -698,12 +778,6 @@ stream_transform_from_queue(StreamSpecs *specs)
 				break;
 			}
 		}
-	}
-
-	if (!catalog_close(sourceDB))
-	{
-		/* errors have already been logged */
-		return false;
 	}
 
 	bool success = (stop == true && errors == 0);
@@ -1406,8 +1480,8 @@ canCoalesceLogicalTransactionStatement(LogicalTransaction *txn,
 	LogicalMessageInsert *newInsert = &new->stmt.insert;
 
 	/* Last and current statements must target same relation */
-	if (!streq(lastInsert->nspname, newInsert->nspname) ||
-		!streq(lastInsert->relname, newInsert->relname))
+	if (!streq(lastInsert->table.nspname, newInsert->table.nspname) ||
+		!streq(lastInsert->table.relname, newInsert->table.relname))
 	{
 		return false;
 	}
@@ -1546,12 +1620,14 @@ FreeLogicalTransaction(LogicalTransaction *tx)
 		{
 			case STREAM_ACTION_INSERT:
 			{
+				FreeLogicalMessageRelation(&(currentStmt->stmt.insert.table));
 				FreeLogicalMessageTupleArray(&(currentStmt->stmt.insert.new));
 				break;
 			}
 
 			case STREAM_ACTION_UPDATE:
 			{
+				FreeLogicalMessageRelation(&(currentStmt->stmt.update.table));
 				FreeLogicalMessageTupleArray(&(currentStmt->stmt.update.old));
 				FreeLogicalMessageTupleArray(&(currentStmt->stmt.update.new));
 				break;
@@ -1559,7 +1635,14 @@ FreeLogicalTransaction(LogicalTransaction *tx)
 
 			case STREAM_ACTION_DELETE:
 			{
+				FreeLogicalMessageRelation(&(currentStmt->stmt.delete.table));
 				FreeLogicalMessageTupleArray(&(currentStmt->stmt.delete.old));
+				break;
+			}
+
+			case STREAM_ACTION_TRUNCATE:
+			{
+				FreeLogicalMessageRelation(&(currentStmt->stmt.truncate.table));
 				break;
 			}
 
@@ -1579,6 +1662,12 @@ FreeLogicalTransaction(LogicalTransaction *tx)
 	tx->first = NULL;
 }
 
+void
+FreeLogicalMessageRelation(LogicalMessageRelation *table)
+{
+	free(table->nspname);
+	free(table->relname);
+}
 
 /*
  * FreeLogicalMessageTupleArray frees the malloc'ated memory areas of a
@@ -2088,9 +2177,9 @@ stream_write_insert(FILE *out, LogicalMessageInsert *insert)
 		/*
 		 * First, the PREPARE part.
 		 */
-		appendPQExpBuffer(buf, "INSERT INTO \"%s\".\"%s\" ",
-						  insert->nspname,
-						  insert->relname);
+		appendPQExpBuffer(buf, "INSERT INTO %s.%s ",
+						  insert->table.nspname,
+						  insert->table.relname);
 
 		/* loop over column names and add them to the out stream */
 		appendPQExpBuffer(buf, "%s", "(");
@@ -2225,9 +2314,9 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 		/*
 		 * First, the PREPARE part.
 		 */
-		appendPQExpBuffer(buf, "UPDATE \"%s\".\"%s\" SET ",
-						  update->nspname,
-						  update->relname);
+		appendPQExpBuffer(buf, "UPDATE %s.%s SET ",
+						  update->table.nspname,
+						  update->table.relname);
 		int pos = 0;
 
 		for (int r = 0; r < new->values.count; r++)
@@ -2393,9 +2482,9 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 		/*
 		 * First, the PREPARE part.
 		 */
-		appendPQExpBuffer(buf, "DELETE FROM \"%s\".\"%s\" WHERE ",
-						  delete->nspname,
-						  delete->relname);
+		appendPQExpBuffer(buf, "DELETE FROM %s.%s WHERE ",
+						  delete->table.nspname,
+						  delete->table.relname);
 
 		int pos = 0;
 
@@ -2467,7 +2556,10 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 bool
 stream_write_truncate(FILE *out, LogicalMessageTruncate *truncate)
 {
-	FFORMAT(out, "TRUNCATE ONLY %s.%s\n", truncate->nspname, truncate->relname);
+	FFORMAT(out,
+			"TRUNCATE ONLY %s.%s\n",
+			truncate->table.nspname,
+			truncate->table.relname);
 
 	return true;
 }
