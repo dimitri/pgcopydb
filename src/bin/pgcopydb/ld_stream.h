@@ -137,8 +137,8 @@ typedef struct LogicalMessageTupleArray
 
 typedef struct LogicalMessageRelation
 {
-	char *nspname;	/* malloc'ed area */
-	char *relname;	/* malloc'ed area */
+	char *nspname;  /* malloc'ed area */
+	char *relname;  /* malloc'ed area */
 	bool pqMemory;
 } LogicalMessageRelation;
 

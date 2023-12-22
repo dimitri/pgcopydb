@@ -553,6 +553,7 @@ parseTestDecodingDeleteMessage(StreamContext *privateContext,
 	return true;
 }
 
+
 /*
  * SetColumnNames parses the "columns" (or "identity") JSON object from a
  * wal2json logical replication message and fills-in our internal

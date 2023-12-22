@@ -59,7 +59,8 @@ static bool coalesceLogicalTransactionStatement(LogicalTransaction *txn,
  * transformPGSQL and opens a connection to the target. This is required to use
  * PQescapeIdentifier API of libpq when escaping identifiers
  */
-bool stream_transform_context_init_pgsql(StreamSpecs *specs)
+bool
+stream_transform_context_init_pgsql(StreamSpecs *specs)
 {
 	StreamContext *privateContext = &(specs->private);
 
@@ -82,6 +83,7 @@ bool stream_transform_context_init_pgsql(StreamSpecs *specs)
 
 	return true;
 }
+
 
 /*
  * stream_transform_stream transforms a JSON formatted input stream (read line
@@ -115,6 +117,7 @@ stream_transform_stream(StreamSpecs *specs)
 
 	return success;
 }
+
 
 /*
  * stream_transform_stream_internal implements the core of
@@ -710,6 +713,7 @@ stream_transform_from_queue(StreamSpecs *specs)
 
 	return success;
 }
+
 
 /*
  * stream_transform_from_queue_internal implements the core of
@@ -1663,6 +1667,7 @@ FreeLogicalTransaction(LogicalTransaction *tx)
 	tx->first = NULL;
 }
 
+
 /*
  * FreeLogicalMessageRelation frees the malloc'ated memory areas of
  * LogicalMessageRelation.
@@ -1682,6 +1687,7 @@ FreeLogicalMessageRelation(LogicalMessageRelation *table)
 		free(table->relname);
 	}
 }
+
 
 /*
  * FreeLogicalMessageTupleArray frees the malloc'ated memory areas of a

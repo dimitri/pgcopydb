@@ -5627,6 +5627,7 @@ parseSentinel(void *ctx, PGresult *result)
 	context->parsedOK = true;
 }
 
+
 /*
  * pgsql_escape_identifier escapes PostgreSQL identifiers and always encloses
  * the resulting string in quotes. It utilizes the PQescapeIdentifier function

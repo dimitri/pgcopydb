@@ -35,8 +35,8 @@
 
 
 static bool SetMessageRelation(JSON_Object *jsobj,
-								  LogicalMessageRelation *table,
-								  PGSQL *pgsql);
+							   LogicalMessageRelation *table,
+							   PGSQL *pgsql);
 static bool SetColumnNamesAndValues(LogicalMessageTuple *tuple,
 									const char *message,
 									JSON_Array *jscols);
@@ -269,14 +269,15 @@ parseWal2jsonMessage(StreamContext *privateContext,
 	return true;
 }
 
+
 /*
  * SetMessageRelation parses the table's nspname and relname from the JSON
  * object and escapes it appropriately to be put as it is in SQL statements
  */
 static bool
 SetMessageRelation(JSON_Object *jsobj,
-					  LogicalMessageRelation *table,
-					  PGSQL *pgsql)
+				   LogicalMessageRelation *table,
+				   PGSQL *pgsql)
 {
 	char *schema = NULL;
 	char *relname = NULL;
@@ -307,6 +308,7 @@ SetMessageRelation(JSON_Object *jsobj,
 
 	return true;
 }
+
 
 /*
  * SetColumnNames parses the "columns" (or "identity") JSON object from a
