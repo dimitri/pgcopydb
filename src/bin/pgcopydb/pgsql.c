@@ -33,7 +33,6 @@
 static char * ConnectionTypeToString(ConnectionType connectionType);
 static void log_connection_error(PGconn *connection, int logLevel);
 static void pgAutoCtlDefaultNoticeProcessor(void *arg, const char *message);
-static PGconn * pgsql_open_connection(PGSQL *pgsql);
 static bool pgsql_retry_open_connection(PGSQL *pgsql);
 
 static bool is_response_ok(PGresult *result);
@@ -470,7 +469,7 @@ log_connection_error(PGconn *connection, int logLevel)
  * instance. If a connection is already open in the client (it's not NULL),
  * then this errors, unless we are inside a transaction opened by pgsql_begin.
  */
-static PGconn *
+PGconn *
 pgsql_open_connection(PGSQL *pgsql)
 {
 	/* we might be connected already */
@@ -5626,4 +5625,32 @@ parseSentinel(void *ctx, PGresult *result)
 	}
 
 	context->parsedOK = true;
+}
+
+
+/*
+ * pgsql_escape_identifier escapes PostgreSQL identifiers and always encloses
+ * the resulting string in quotes. It utilizes the PQescapeIdentifier function
+ * (https://www.postgresql.org/docs/current/libpq-exec.html#LIBPQ-PQESCAPEIDENTIFIER),
+ * so the memory allocated for the resulting string must be freed using
+ * PQfreemem.
+ */
+char *
+pgsql_escape_identifier(PGSQL *pgsql, char *src)
+{
+	PGconn *conn = pgsql->connection;
+	if (conn == NULL)
+	{
+		return NULL;
+	}
+
+	char *escapedIdentifier = PQescapeIdentifier(conn, src, strlen(src));
+
+	if (escapedIdentifier == NULL)
+	{
+		log_error("Failed to escape identifier %s", src);
+		return NULL;
+	}
+
+	return escapedIdentifier;
 }

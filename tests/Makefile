@@ -4,7 +4,10 @@
 PGVERSION ?= 16
 BUILD_ARGS = --build-arg PGVERSION=$(PGVERSION)
 
-all: pagila pagila-multi-steps blobs unit filtering cdc follow extensions cdc-endpos-between-transaction endpos-in-multi-wal-txn;
+all: pagila pagila-multi-steps blobs unit filtering extensions \
+	 cdc-wal2json cdc-test-decoding cdc-endpos-between-transaction cdc-low-level \
+	 follow-wal2json follow-9.6 follow-data-only \
+	 endpos-in-multi-wal-txn;
 
 pagila: build
 	$(MAKE) -C $@
@@ -19,6 +22,9 @@ unit: build
 	$(MAKE) -C $@
 
 filtering: build
+	$(MAKE) -C $@
+
+extensions: build
 	$(MAKE) -C $@
 
 cdc-wal2json: build
@@ -37,9 +43,6 @@ follow-wal2json: build
 	$(MAKE) -C $@
 
 follow-9.6: build
-	$(MAKE) -C $@
-
-extensions: build
 	$(MAKE) -C $@
 
 follow-data-only: build
