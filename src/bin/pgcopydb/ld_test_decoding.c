@@ -340,11 +340,19 @@ parseTestDecodingMessageHeader(TestDecodingHeader *header, const char *message)
 	}
 
 	/*
-	 * Grab the table schema.name, which is already escaped by appropriately by
-	 * the plugin
+	 * The table schema.name is already escaped by the plugin using PostgreSQL's
+	 * internal quote_identifier function (see
+	 * https://github.com/postgres/postgres/blob/8793c600/contrib/test_decoding/test_decoding.c#L627-L632).
+	 * The result slightly differs from that of PQescapeIdentifier, as it does
+	 * not add quotes around the schema.name when they are not necessary. Here
+	 * are some possible outputs:
+	 * - public.hello
+	 * - "Public".hello
+	 * - "sp $cial"."t ablE"
 	 */
 	header->table.nspname = strndup(idp, dot - idp);
 	header->table.relname = strndup(dot + 1, sep - dot - 1);
+	header->table.pqMemory = false;
 
 	sformat(header->qname, sizeof(header->qname), "%s.%s",
 			header->table.nspname,

@@ -11,6 +11,7 @@
 
 #include "postgres.h"
 #include "postgres_fe.h"
+#include "libpq-fe.h"
 #include "access/xlog_internal.h"
 #include "access/xlogdefs.h"
 
@@ -33,7 +34,7 @@
 #include "summary.h"
 
 
-static bool SetSchemaAndTableName(JSON_Object *jsobj,
+static bool SetMessageRelation(JSON_Object *jsobj,
 								  LogicalMessageRelation *table,
 								  PGSQL *pgsql);
 static bool SetColumnNamesAndValues(LogicalMessageTuple *tuple,
@@ -126,7 +127,7 @@ parseWal2jsonMessage(StreamContext *privateContext,
 
 	LogicalMessageRelation table = { 0 };
 
-	if (!SetSchemaAndTableName(jsobj, &table, privateContext->transformPGSQL))
+	if (!SetMessageRelation(jsobj, &table, privateContext->transformPGSQL))
 	{
 		log_error("Failed to parse truncated message missing "
 				  "schema or table property: %s",
@@ -269,11 +270,11 @@ parseWal2jsonMessage(StreamContext *privateContext,
 }
 
 /*
- * SetSchemaAndTableName parses the table's nspname and relname from the JSON
+ * SetMessageRelation parses the table's nspname and relname from the JSON
  * object and escapes it appropriately to be put as it is in SQL statements
  */
 static bool
-SetSchemaAndTableName(JSON_Object *jsobj,
+SetMessageRelation(JSON_Object *jsobj,
 					  LogicalMessageRelation *table,
 					  PGSQL *pgsql)
 {
@@ -289,18 +290,20 @@ SetSchemaAndTableName(JSON_Object *jsobj,
 		return false;
 	}
 
-	table->nspname = escape_identifier(pgsql, schema);
+	table->nspname = pgsql_escape_identifier(pgsql, schema);
 	if (table->nspname == NULL)
 	{
 		return false;
 	}
 
-	table->relname = escape_identifier(pgsql, relname);
+	table->relname = pgsql_escape_identifier(pgsql, relname);
 	if (table->relname == NULL)
 	{
-		free(table->nspname);
+		PQfreemem(table->nspname);
 		return false;
 	}
+
+	table->pqMemory = true;
 
 	return true;
 }

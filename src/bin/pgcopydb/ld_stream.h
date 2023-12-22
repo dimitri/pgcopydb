@@ -137,8 +137,9 @@ typedef struct LogicalMessageTupleArray
 
 typedef struct LogicalMessageRelation
 {
-	char *nspname;
-	char *relname;
+	char *nspname;	/* malloc'ed area */
+	char *relname;	/* malloc'ed area */
+	bool pqMemory;
 } LogicalMessageRelation;
 
 typedef struct LogicalMessageInsert
@@ -574,7 +575,7 @@ bool stream_compute_pathnames(uint32_t WalSegSz,
 							  char *walFileName,
 							  char *sqlFileName);
 
-bool stream_transform_init_context_pgsql(StreamSpecs *specs);
+bool stream_transform_context_init_pgsql(StreamSpecs *specs);
 bool stream_transform_stream(StreamSpecs *specs);
 bool stream_transform_resume(StreamSpecs *specs);
 bool stream_transform_line(void *ctx, const char *line, bool *stop);

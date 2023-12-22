@@ -14,6 +14,7 @@
 
 #include "postgres.h"
 #include "postgres_fe.h"
+#include "libpq-fe.h"
 #include "access/xlog_internal.h"
 #include "access/xlogdefs.h"
 
@@ -54,11 +55,11 @@ static bool coalesceLogicalTransactionStatement(LogicalTransaction *txn,
 												LogicalTransactionStatement *new);
 
 /*
- * stream_transform_init_context_pgsql initializes StreamContext's
+ * stream_transform_context_init_pgsql initializes StreamContext's
  * transformPGSQL and opens a connection to the target. This is required to use
  * PQescapeIdentifier API of libpq when escaping identifiers
  */
-bool stream_transform_init_context_pgsql(StreamSpecs *specs)
+bool stream_transform_context_init_pgsql(StreamSpecs *specs)
 {
 	StreamContext *privateContext = &(specs->private);
 
@@ -73,7 +74,7 @@ bool stream_transform_init_context_pgsql(StreamSpecs *specs)
 		return false;
 	}
 
-	if (!pgsql_begin(privateContext->transformPGSQL))
+	if (!pgsql_open_connection(privateContext->transformPGSQL))
 	{
 		/* errors have already been logged */
 		return false;
@@ -96,7 +97,7 @@ stream_transform_stream(StreamSpecs *specs)
 		return false;
 	}
 
-	if (!stream_transform_init_context_pgsql(specs))
+	if (!stream_transform_context_init_pgsql(specs))
 	{
 		/* errors have already been logged */
 		return false;
@@ -691,7 +692,7 @@ stream_transform_from_queue(StreamSpecs *specs)
 		return false;
 	}
 
-	if (!stream_transform_init_context_pgsql(specs))
+	if (!stream_transform_context_init_pgsql(specs))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1662,11 +1663,24 @@ FreeLogicalTransaction(LogicalTransaction *tx)
 	tx->first = NULL;
 }
 
+/*
+ * FreeLogicalMessageRelation frees the malloc'ated memory areas of
+ * LogicalMessageRelation.
+ */
 void
 FreeLogicalMessageRelation(LogicalMessageRelation *table)
 {
-	free(table->nspname);
-	free(table->relname);
+	if (table->pqMemory)
+	{
+		/* use PQfreemem for memory allocated by PQescapeIdentifer */
+		PQfreemem(table->nspname);
+		PQfreemem(table->relname);
+	}
+	else
+	{
+		free(table->nspname);
+		free(table->relname);
+	}
 }
 
 /*
