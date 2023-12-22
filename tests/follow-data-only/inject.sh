@@ -36,6 +36,24 @@ psql -v a=21 -v b=30 -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 # also insert data that won't fit in a single Unix PIPE buffer
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml-bufsize.sql
 
+# add some data to update_test table
+psql -d ${PGCOPYDB_SOURCE_PGURI} << EOF
+begin;
+insert into update_test(id, name) values
+(1, 'a'),
+(2, 'b');
+commit;
+
+begin;
+update update_test set name = 'c' where id = 1;
+commit;
+
+begin;
+update update_test set name = 'd' where id = 2;
+commit;
+
+EOF
+
 # grab the current LSN, it's going to be our streaming end position
 lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_flush_lsn()'`
 pgcopydb stream sentinel set endpos --current
