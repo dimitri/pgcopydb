@@ -36,9 +36,6 @@ pgcopydb stream setup
 # pgcopydb copy db uses the environment variables
 pgcopydb clone
 
-kill -TERM ${COPROC_PID}
-wait ${COPROC_PID}
-
 # now that the copying is done, inject some SQL DML changes to the source
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 
@@ -104,6 +101,9 @@ pgcopydb follow --resume --trace
 # now check that all the new rows made it
 sql="select count(*) from category"
 test 26 -eq `psql -AtqX -d ${PGCOPYDB_SOURCE_PGURI} -c "${sql}"`
+
+kill -TERM ${COPROC_PID}
+wait ${COPROC_PID}
 
 # cleanup
 pgcopydb stream cleanup

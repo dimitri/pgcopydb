@@ -427,6 +427,30 @@ cli_follow(int argc, char **argv)
 		exit(EXIT_CODE_QUIT);
 	}
 
+	/* make sure that we have our own process local connection */
+	TransactionSnapshot snapshot = { 0 };
+
+	if (!copydb_copy_snapshot(&copySpecs, &snapshot))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	/* swap the new instance in place of the previous one */
+	copySpecs.sourceSnapshot = snapshot;
+
+	if (!copydb_set_snapshot(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
+	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_SOURCE);
+	}
+
 	if (!follow_main_loop(&copySpecs, &specs))
 	{
 		/* errors have already been logged */
