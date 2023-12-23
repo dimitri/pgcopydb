@@ -32,36 +32,10 @@ pgcopydb stream - Stream changes from source database
 
 This command prefixes the following sub-commands:
 
-::
-
-  pgcopydb stream
-    setup      Setup source and target systems for logical decoding
-    cleanup    cleanup source and target systems for logical decoding
-    prefetch   Stream JSON changes from the source database and transform them to SQL
-    catchup    Apply prefetched changes from SQL files to the target database
-    replay     Replay changes from the source to the target database, live
-  + sentinel   Maintain a sentinel table on the source database
-    receive    Stream changes from the source database
-    transform  Transform changes from the source database into SQL commands
-    apply      Apply changes from the source database into the target database
-
-  pgcopydb stream create
-    slot    Create a replication slot in the source database
-    origin  Create a replication origin in the target database
-
-  pgcopydb stream drop
-    slot    Drop a replication slot in the source database
-    origin  Drop a replication origin in the target database
-
-  pgcopydb stream sentinel
-    get     Get the sentinel table values on the source database
-  + set     Maintain a sentinel table on the source database
-
-  pgcopydb stream sentinel set
-    startpos  Set the sentinel start position LSN on the source database
-    endpos    Set the sentinel end position LSN on the source database
-    apply     Set the sentinel apply mode on the source database
-    prefetch  Set the sentinel prefetch mode on the source database
+.. include:: ../include/stream.rst
+.. include:: ../include/stream-sentinel.rst
+.. include:: ../include/stream-sentinel-set.rst
+.. include:: ../include/stream-sentinel-setup.rst
 
 Those commands implement a part of the whole database replay operation as
 detailed in section :ref:`pgcopydb_follow`. Only use those commands to debug
@@ -93,22 +67,7 @@ decoding replication slot that must have been created already. See
 :ref:`pgcopydb_snapshot` to create the replication slot and export a
 snapshot.
 
-::
-
-   pgcopydb stream setup: Setup source and target systems for logical decoding
-   usage: pgcopydb stream setup
-
-     --source                      Postgres URI to the source database
-     --target                      Postgres URI to the target database
-     --dir                         Work directory to use
-     --restart                     Allow restarting when temp files exist already
-     --resume                      Allow resuming operations after a failure
-     --not-consistent              Allow taking a new snapshot on the source database
-     --snapshot                    Use snapshot obtained with pg_export_snapshot
-     --plugin                      Output plugin to use (test_decoding, wal2json)
-     --wal2json-numeric-as-string  Print numeric data type as string when using wal2json output plugin
-     --slot-name                   Stream changes recorded by this slot
-     --origin                      Name of the Postgres replication origin
+.. include:: ../include/stream-setup.rst
 
 .. _pgcopydb_stream_cleanup:
 
@@ -121,19 +80,7 @@ The command ``pgcopydb stream cleanup`` connects to the source and target
 databases to delete the objects created in the ``pgcopydb stream setup``
 step.
 
-::
-
-   pgcopydb stream cleanup: cleanup source and target systems for logical decoding
-   usage: pgcopydb stream cleanup
-
-     --source         Postgres URI to the source database
-     --target         Postgres URI to the target database
-     --restart        Allow restarting when temp files exist already
-     --resume         Allow resuming operations after a failure
-     --not-consistent Allow taking a new snapshot on the source database
-     --snapshot       Use snapshot obtained with pg_export_snapshot
-     --slot-name      Stream changes recorded by this slot
-     --origin         Name of the Postgres replication origin
+.. include:: ../include/stream-cleanup.rst
 
 .. _pgcopydb_stream_prefetch:
 
@@ -151,19 +98,7 @@ as their origin WAL filename (with the ``.json`` extension). Each time a
 JSON file is closed, a subprocess is started to transform the JSON into an
 SQL file.
 
-
-::
-
-   pgcopydb stream prefetch: Stream JSON changes from the source database and transform them to SQL
-   usage: pgcopydb stream prefetch
-
-     --source         Postgres URI to the source database
-     --dir            Work directory to use
-     --restart        Allow restarting when temp files exist already
-     --resume         Allow resuming operations after a failure
-     --not-consistent Allow taking a new snapshot on the source database
-     --slot-name      Stream changes recorded by this slot
-     --endpos         LSN position where to stop receiving changes
+.. include:: ../include/stream-prefetch.rst
 
 .. _pgcopydb_stream_catchup:
 
@@ -176,21 +111,7 @@ The command ``pgcopydb stream catchup`` connects to the target database and
 applies changes from the SQL files that have been prepared with the
 ``pgcopydb stream prefetch`` command.
 
-
-::
-
-   pgcopydb stream catchup: Apply prefetched changes from SQL files to the target database
-   usage: pgcopydb stream catchup
-
-     --source         Postgres URI to the source database
-     --target         Postgres URI to the target database
-     --dir            Work directory to use
-     --restart        Allow restarting when temp files exist already
-     --resume         Allow resuming operations after a failure
-     --not-consistent Allow taking a new snapshot on the source database
-     --slot-name      Stream changes recorded by this slot
-     --endpos         LSN position where to stop receiving changes
-	 --origin         Name of the Postgres replication origin
+.. include:: ../include/stream-catchup.rst
 
 .. _pgcopydb_stream_replay:
 
@@ -204,21 +125,7 @@ streams changes using the logical decoding protocol, and internally streams
 those changes to a transform process and then a replay process, which
 connects to the target database and applies SQL changes.
 
-::
-
-   pgcopydb stream replay: Replay changes from the source to the target database, live
-   usage: pgcopydb stream replay
-
-     --source         Postgres URI to the source database
-     --target         Postgres URI to the target database
-     --dir            Work directory to use
-     --restart        Allow restarting when temp files exist already
-     --resume         Allow resuming operations after a failure
-     --not-consistent Allow taking a new snapshot on the source database
-     --slot-name      Stream changes recorded by this slot
-     --endpos         LSN position where to stop receiving changes
-     --origin         Name of the Postgres replication origin
-
+.. include:: ../include/stream-replay.rst
 
 This command is equivalent to running the following script::
 
@@ -233,13 +140,7 @@ pgcopydb stream sentinel get
 
 pgcopydb stream sentinel get - Get the sentinel table values on the source database
 
-::
-
-   pgcopydb stream sentinel get: Get the sentinel table values on the source database
-   usage: pgcopydb stream sentinel get
-
-     --source      Postgres URI to the source database
-     --json        Format the output using JSON
+.. include:: ../include/stream-sentinel-get.rst
 
 .. _pgcopydb_stream_sentinel_set_startpos:
 
@@ -248,12 +149,7 @@ pgcopydb stream sentinel set startpos
 
 pgcopydb stream sentinel set startpos - Set the sentinel start position LSN on the source database
 
-::
-
-   pgcopydb stream sentinel set startpos: Set the sentinel start position LSN on the source database
-   usage: pgcopydb stream sentinel set startpos <start LSN>
-
-     --source      Postgres URI to the source database
+.. include:: ../include/stream-sentinel-set-startpos.rst
 
 .. _pgcopydb_stream_sentinel_set_endpos:
 
@@ -262,14 +158,7 @@ pgcopydb stream sentinel set endpos
 
 pgcopydb stream sentinel set endpos - Set the sentinel end position LSN on the source database
 
-::
-
-   pgcopydb stream sentinel set endpos: Set the sentinel end position LSN on the source database
-   usage: pgcopydb stream sentinel set endpos <end LSN>
-
-     --source      Postgres URI to the source database
-     --current     Use pg_current_wal_flush_lsn() as the endpos
-
+.. include:: ../include/stream-sentinel-set-endpos.rst
 
 .. _pgcopydb_stream_sentinel_set_apply:
 
@@ -278,13 +167,7 @@ pgcopydb stream sentinel set apply
 
 pgcopydb stream sentinel set apply - Set the sentinel apply mode on the source database
 
-::
-
-   pgcopydb stream sentinel set apply: Set the sentinel apply mode on the source database
-   usage: pgcopydb stream sentinel set apply
-
-     --source      Postgres URI to the source database
-
+.. include:: ../include/stream-sentinel-set-apply.rst
 
 .. _pgcopydb_stream_sentinel_set_prefetch:
 
@@ -293,13 +176,7 @@ pgcopydb stream sentinel set prefetch
 
 pgcopydb stream sentinel set prefetch - Set the sentinel prefetch mode on the source database
 
-::
-
-   pgcopydb stream sentinel set prefetch: Set the sentinel prefetch mode on the source database
-   usage: pgcopydb stream sentinel set prefetch
-
-     --source      Postgres URI to the source database
-
+.. include:: ../include/stream-sentinel-set-prefetch.rst
 
 .. _pgcopydb_stream_receive:
 
@@ -315,20 +192,7 @@ The receive command receives the changes from the source database in a
 streaming fashion, and writes them in a series of JSON files named the same
 as their origin WAL filename (with the ``.json`` extension).
 
-::
-
-   pgcopydb stream receive: Stream changes from the source database
-   usage: pgcopydb stream receive  --source ...
-
-     --source         Postgres URI to the source database
-     --dir            Work directory to use
-     --to-stdout      Stream logical decoding messages to stdout
-     --restart        Allow restarting when temp files exist already
-     --resume         Allow resuming operations after a failure
-     --not-consistent Allow taking a new snapshot on the source database
-     --slot-name      Stream changes recorded by this slot
-     --endpos         LSN position where to stop receiving changes
-
+.. include:: ../include/stream-receive.rst
 
 .. _pgcopydb_stream_transform:
 
@@ -341,16 +205,7 @@ The command ``pgcopydb stream transform`` transforms a JSON file as received
 by the ``pgcopydb stream receive`` command into an SQL file with one query
 per line.
 
-::
-
-   pgcopydb stream transform: Transform changes from the source database into SQL commands
-   usage: pgcopydb stream transform  <json filename> <sql filename>
-
-     --target         Postgres URI to the target database
-     --dir            Work directory to use
-     --restart        Allow restarting when temp files exist already
-     --resume         Allow resuming operations after a failure
-     --not-consistent Allow taking a new snapshot on the source database
+.. include:: ../include/stream-transform.rst
 
 The command supports using ``-`` as the filename for either the JSON input
 or the SQL output, or both. In that case reading from standard input and/or
@@ -369,17 +224,7 @@ Tracking`__.
 
 __ https://www.postgresql.org/docs/current/replication-origins.html
 
-::
-
-   pgcopydb stream apply: Apply changes from the source database into the target database
-   usage: pgcopydb stream apply <sql filename>
-
-     --target         Postgres URI to the target database
-     --dir            Work directory to use
-     --restart        Allow restarting when temp files exist already
-     --resume         Allow resuming operations after a failure
-     --not-consistent Allow taking a new snapshot on the source database
-     --origin         Name of the Postgres replication origin
+.. include:: ../include/stream-apply.rst
 
 This command supports using ``-`` as the filename to read from, and in that
 case reads from the standard input in a streaming fashion instead.
