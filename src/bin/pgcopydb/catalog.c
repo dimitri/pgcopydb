@@ -263,6 +263,23 @@ static char *filterDBcreateDDLs[] = {
 	"create table filter(oid integer, restore_list_name text, kind text)",
 	"create unique index filter_oid on filter(oid)",
 	"create index filter_rlname on filter(restore_list_name)",
+
+	/*
+	 * While we don't use a summary table in the filter database, some queries
+	 * that are meant to work on both filters database and source database use
+	 * LEFT JOIN summary.
+	 */
+	"create table summary("
+	"  pid integer, "
+	"  tableoid integer references s_table(oid), "
+	"  partnum integer, "
+	"  indexoid integer references s_index(oid), "
+	"  conoid integer references s_constraint(oid), "
+	"  start_time_epoch integer, done_time_epoch integer, duration integer, "
+	"  bytes integer, "
+	"  command text, "
+	"  unique(tableoid, partnum)"
+	")",
 };
 
 
@@ -364,7 +381,8 @@ static char *filterDBdropDDLs[] = {
 	"drop table if exists s_constraint",
 	"drop table if exists s_seq",
 	"drop table if exists s_depend",
-	"drop table if exists filter"
+	"drop table if exists filter",
+	"drop table if exists summary"
 };
 
 

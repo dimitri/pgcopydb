@@ -2773,9 +2773,9 @@ summary_prepare_index_entry(DatabaseCatalog *catalog,
 			return false;
 		}
 
-		indexEntry->oid = indexSummary->index->constraintOid;
+		indexEntry->oid = index->constraintOid;
 
-		IntString oidString = intToString(indexSummary->index->constraintOid);
+		IntString oidString = intToString(index->constraintOid);
 		strlcpy(indexEntry->oidStr,
 				oidString.strValue,
 				sizeof(indexEntry->oidStr));
@@ -2788,9 +2788,9 @@ summary_prepare_index_entry(DatabaseCatalog *catalog,
 			return false;
 		}
 
-		indexEntry->oid = indexSummary->index->indexOid;
+		indexEntry->oid = index->indexOid;
 
-		IntString oidString = intToString(indexSummary->index->indexOid);
+		IntString oidString = intToString(index->indexOid);
 		strlcpy(indexEntry->oidStr,
 				oidString.strValue,
 				sizeof(indexEntry->oidStr));
@@ -2801,10 +2801,13 @@ summary_prepare_index_entry(DatabaseCatalog *catalog,
 			sizeof(indexEntry->nspname));
 
 	strlcpy(indexEntry->relname,
-			indexSummary->index->indexRelname,
+			index->indexRelname,
 			sizeof(indexEntry->relname));
 
-	indexEntry->sql = strdup(indexSummary->command);
+	if (indexSummary->command != NULL)
+	{
+		indexEntry->sql = strdup(indexSummary->command);
+	}
 
 	indexEntry->durationMs = indexSummary->durationMs;
 
