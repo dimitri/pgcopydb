@@ -299,6 +299,139 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 		return false;
 	}
 
+	/*
+	 * Now start the worker that adds tables to the queue.
+	 */
+	if (!copydb_copy_start_worker_queue_tables(specs))
+	{
+		log_fatal("Failed to start table data COPY queue worker, "
+				  "see above for details");
+
+		(void) copydb_fatal_exit();
+
+		return false;
+	}
+
+	/*
+	 * Now just wait for the table-data COPY processes to be done.
+	 */
+	if (!copydb_wait_for_subprocesses(specs->failFast))
+	{
+		log_error("Some COPY worker process(es) have exited with error, "
+				  "see above for details");
+
+		if (specs->failFast)
+		{
+			(void) copydb_fatal_exit();
+		}
+		else
+		{
+			/* send vacuum and create index workers a STOP message */
+			if (!vacuum_send_stop(specs) ||
+				!copydb_index_workers_send_stop(specs))
+			{
+				(void) copydb_fatal_exit();
+			}
+		}
+
+		return false;
+	}
+
+	/* write that we successfully finished copying all tables */
+	if (!write_file("", 0, specs->cfPaths.done.tables))
+	{
+		log_warn("Failed to write the tracking file \%s\"",
+				 specs->cfPaths.done.tables);
+	}
+
+	bool success = true;
+
+	/*
+	 * Now that the COPY processes are done, signal this is the end to the
+	 * vacuum and CREATE INDEX sub-processes by adding the STOP message to
+	 * their queues.
+	 */
+	success = success && vacuum_send_stop(specs);
+	success = success && copydb_index_workers_send_stop(specs);
+
+	if (!success)
+	{
+		/*
+		 * The other subprocesses need to see a STOP message to stop their
+		 * processing. Failing to send the STOP messages means that the main
+		 * pgcopydb never finishes, and we want to ensure the command
+		 * terminates.
+		 */
+		(void) copydb_fatal_exit();
+
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * copydb_copy_start_worker_queue_tables starts the COPY worker process that
+ * iterate over the list of tables and add them to the tables-data process
+ * queue.
+ */
+bool
+copydb_copy_start_worker_queue_tables(CopyDataSpec *specs)
+{
+	/*
+	 * Flush stdio channels just before fork, to avoid double-output problems.
+	 */
+	fflush(stdout);
+	fflush(stderr);
+
+	int fpid = fork();
+
+	switch (fpid)
+	{
+		case -1:
+		{
+			log_error("Failed to fork copy supervisor process: %m");
+			return false;
+		}
+
+		case 0:
+		{
+			/* child process runs the command */
+			(void) set_ps_title("pgcopydb: copy queue tables");
+
+			if (!copydb_copy_worker_queue_tables(specs))
+			{
+				log_error("Failed to copy table data, see above for details");
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			exit(EXIT_CODE_QUIT);
+		}
+
+		default:
+		{
+			/* fork succeeded, in parent */
+			break;
+		}
+	}
+
+	/* now we're done, and we want async behavior, do not wait */
+	return true;
+}
+
+
+/*
+ * copydb_copy_worker_queue_tables iterates over the list of tables and sends
+ * the to the table-data copy queue.
+ */
+bool
+copydb_copy_worker_queue_tables(CopyDataSpec *specs)
+{
+	pid_t pid = getpid();
+
+	log_notice("Started queue tables COPY worker %d [%d]", pid, getppid());
+
 	CopySupervisorContext context = {
 		.specs = specs,
 		.dst = NULL
@@ -377,54 +510,6 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 		log_fatal("Failed to send STOP messages to the COPY queue");
 
 		/* we still need to make sure the COPY processes terminate */
-		(void) copydb_fatal_exit();
-
-		return false;
-	}
-
-	/*
-	 * Now just wait for the table-data COPY processes to be done.
-	 */
-	if (!copydb_wait_for_subprocesses(specs->failFast))
-	{
-		log_error("Some COPY worker process(es) have exited with error, "
-				  "see above for details");
-
-		/* make sure vacuum and create index processes see a STOP message */
-		if (!vacuum_send_stop(specs) ||
-			!copydb_index_workers_send_stop(specs))
-		{
-			(void) copydb_fatal_exit();
-		}
-
-		return false;
-	}
-
-	/* write that we successfully finished copying all tables */
-	if (!write_file("", 0, specs->cfPaths.done.tables))
-	{
-		log_warn("Failed to write the tracking file \%s\"",
-				 specs->cfPaths.done.tables);
-	}
-
-	bool success = true;
-
-	/*
-	 * Now that the COPY processes are done, signal this is the end to the
-	 * vacuum and CREATE INDEX sub-processes by adding the STOP message to
-	 * their queues.
-	 */
-	success = success && vacuum_send_stop(specs);
-	success = success && copydb_index_workers_send_stop(specs);
-
-	if (!success)
-	{
-		/*
-		 * The other subprocesses need to see a STOP message to stop their
-		 * processing. Failing to send the STOP messages means that the main
-		 * pgcopydb never finishes, and we want to ensure the command
-		 * terminates.
-		 */
 		(void) copydb_fatal_exit();
 
 		return false;
@@ -535,7 +620,7 @@ copydb_add_copy(CopyDataSpec *specs, uint32_t oid, uint32_t part)
 bool
 copydb_start_table_data_workers(CopyDataSpec *specs)
 {
-	log_info("STEP 4: starting %d table data COPY processes", specs->tableJobs);
+	log_info("STEP 4: starting %d table-data COPY processes", specs->tableJobs);
 
 	for (int i = 0; i < specs->tableJobs; i++)
 	{
@@ -593,7 +678,7 @@ copydb_table_data_worker(CopyDataSpec *specs)
 	uint64_t errors = 0;
 	pid_t pid = getpid();
 
-	log_notice("Started table data COPY worker %d [%d]", pid, getppid());
+	log_notice("Started table-data COPY worker %d [%d]", pid, getppid());
 
 	/* connect once to the source database for the whole process */
 	if (!copydb_set_snapshot(specs))

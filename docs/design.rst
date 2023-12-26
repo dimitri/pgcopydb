@@ -59,6 +59,8 @@ The process tree then looks like the following:
 
      * pgcopydb copy supervisor (``--table-jobs 4``)
 
+       * pgcopydb copy queue worker
+
        #. pgcopydb copy worker
 
        #. pgcopydb copy worker
@@ -104,29 +106,29 @@ The process tree then looks like the following:
      * pgcopydb stream catchup
 
 We see that when using ``pgcopydb clone --follow --table-jobs 4 --index-jobs
-4 --large-objects-jobs 4`` then pgcopydb creates 24 sub-processes, including
-one transient sub-process each time a JSON file is to be converted to a SQL
-file for replay.
+4 --large-objects-jobs 4`` then pgcopydb creates 25 sub-processes.
 
-The 24 total is counted from:
+The 25 total is counted from:
 
- - 1 clone worker + 1 copy supervisor + 4 copy workers + 1 blob metadata worker
-   + 4 blob data workers + 4 index workers + 4 vacuum workers + 1 sequence reset
-   worker
+ - 1 clone worker + 1 copy supervisor + 1 copy queue worker + 4 copy
+   workers + 1 blob metadata worker + 4 blob data workers + 4 index
+   workers + 4 vacuum workers + 1 sequence reset worker
 
-   that's 1 + 1 + 4 + 1 + 4 + 4 + 4 + 1 = 20
+   that's 1 + 1 + 1 + 4 + 1 + 4 + 4 + 4 + 1 = 21
 
  - 1 follow worker + 1 stream receive + 1 stream transform + 1 stream catchup
 
    that's 1 + 1 + 1 + 1 = 4
 
- - that's 20 + 4 = 24 total
+ - that's 21 + 4 = 25 total
 
 Here is a description of the process tree:
 
  * When starting with the TABLE DATA copying step, then pgcopydb creates as
    many sub-processes as specified by the ``--table-jobs`` command line
-   option (or the environment variable ``PGCOPYDB_TABLE_JOBS``).
+   option (or the environment variable ``PGCOPYDB_TABLE_JOBS``), and an
+   extra process is created to send the table to the queue and handle
+   TRUNCATE commands for COPY-partitioned tables.
 
  * A single sub-process is created by pgcopydb to copy the Postgres Large
    Objects (BLOBs) metadata found on the source database to the target
