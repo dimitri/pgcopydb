@@ -26,7 +26,8 @@
 
 
 static bool copydb_append_table_hook(void *context, SourceTable *table);
-static bool copydb_copy_database_properties_hook(void *ctx, SourceProperty *property);
+static bool copydb_copy_database_properties_hook(void *ctx,
+												 SourceProperty *property);
 
 
 /*
@@ -36,14 +37,17 @@ static bool copydb_copy_database_properties_hook(void *ctx, SourceProperty *prop
 bool
 copydb_objectid_has_been_processed_already(CopyDataSpec *specs, uint32_t oid)
 {
-	char doneFile[MAXPGPATH] = { 0 };
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	/* build the doneFile for the target index or constraint */
-	sformat(doneFile, sizeof(doneFile), "%s/%u.done",
-			specs->cfPaths.idxdir,
-			oid);
+	bool done = false;
 
-	return file_exists(doneFile);
+	if (!summary_lookup_oid(sourceDB, oid, &done))
+	{
+		/* errors have aleady been logged */
+		return false;
+	}
+
+	return done;
 }
 
 

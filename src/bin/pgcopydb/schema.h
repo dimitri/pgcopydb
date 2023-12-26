@@ -14,6 +14,7 @@
 #include "uthash.h"
 
 #include "filtering.h"
+#include "lock_utils.h"
 #include "pgsql.h"
 #include "pg_utils.h"
 
@@ -118,13 +119,6 @@ typedef struct SourceTableParts
 } SourceTableParts;
 
 
-typedef struct SourceTablePartsArray
-{
-	int count;
-	SourceTableParts *array;    /* malloc'ed area */
-} SourceTablePartsArray;
-
-
 typedef struct SourceTableAttribute
 {
 	int attnum;
@@ -173,12 +167,15 @@ typedef struct SourceTable
 
 	char partKey[PG_NAMEDATALEN];
 	SourceTableParts partition;
-	SourceTablePartsArray partsArray;
 
 	SourceTableAttributeArray attributes;
 
 	uint64_t indexCount;
 	uint64_t constraintCount;
+
+	/* summary information */
+	uint64_t durationMs;
+	uint64_t bytesTransmitted;
 } SourceTable;
 
 
@@ -354,10 +351,14 @@ typedef struct CatalogSection
 typedef struct DatabaseCatalog
 {
 	DatabaseCatalogType type;
+
 	CatalogSetup setup;
 	CatalogSection sections[DATA_SECTION_COUNT];
+
 	char dbfile[MAXPGPATH];
 	sqlite3 *db;
+
+	Semaphore sema;
 } DatabaseCatalog;
 
 

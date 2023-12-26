@@ -105,32 +105,4 @@ typedef struct DumpPaths
 } DumpPaths;
 
 
-/* per-table file paths */
-typedef struct TableFilePaths
-{
-	char lockFile[MAXPGPATH];    /* table lock file */
-	char doneFile[MAXPGPATH];    /* table done file (summary) */
-	char idxListFile[MAXPGPATH]; /* index oids list file */
-
-	char chksumFile[MAXPGPATH]; /* table checksum file */
-
-	char truncateDoneFile[MAXPGPATH];    /* table truncate done file */
-} TableFilePaths;
-
-
-/* per-index file paths */
-typedef struct IndexFilePaths
-{
-	char lockFile[MAXPGPATH];           /* index lock file */
-	char doneFile[MAXPGPATH];           /* index done file (summary) */
-	char constraintLockFile[MAXPGPATH]; /* constraint lock file */
-	char constraintDoneFile[MAXPGPATH]; /* constraint done file */
-} IndexFilePaths;
-
-typedef struct IndexFilePathsArray
-{
-	int count;
-	IndexFilePaths *array;      /* malloc'ed area */
-} IndexFilePathsArray;
-
 #endif /* COPYDB_PATHS_H */

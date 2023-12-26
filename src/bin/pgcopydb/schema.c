@@ -3309,14 +3309,14 @@ schema_list_partitions(PGSQL *pgsql,
 	/* no partKey, no partitions, done. */
 	if (IS_EMPTY_STRING_BUFFER(table->partKey))
 	{
-		table->partsArray.count = 0;
+		table->partition.partCount = 0;
 		return true;
 	}
 
 	/* when partSize is zero, just don't partition the COPY */
 	if (partSize == 0)
 	{
-		table->partsArray.count = 0;
+		table->partition.partCount = 0;
 		return true;
 	}
 

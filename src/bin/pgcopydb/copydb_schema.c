@@ -617,13 +617,13 @@ copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
 		return false;
 	}
 
-	if (source->partsArray.count > 1)
+	if (source->partition.partCount > 1)
 	{
 		log_info("Table %s is %s large, "
 				 "%d COPY processes will be used, partitioning on %s.",
 				 source->qname,
 				 source->bytesPretty,
-				 source->partsArray.count,
+				 source->partition.partCount,
 				 source->partKey);
 	}
 

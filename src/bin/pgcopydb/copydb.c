@@ -729,9 +729,6 @@ copydb_init_specs(CopyDataSpec *specs,
 
 		.splitTablesLargerThan = options->splitTablesLargerThan,
 
-		.tableSemaphore = { 0 },
-		.indexSemaphore = { 0 },
-
 		.vacuumQueue = { 0 },
 		.indexQueue = { 0 },
 
@@ -769,28 +766,6 @@ copydb_init_specs(CopyDataSpec *specs,
 	strlcpy(source->dbfile, specs->cfPaths.sdbfile, sizeof(source->dbfile));
 	strlcpy(filter->dbfile, specs->cfPaths.fdbfile, sizeof(filter->dbfile));
 	strlcpy(target->dbfile, specs->cfPaths.tdbfile, sizeof(target->dbfile));
-
-	/* create the table semaphore (critical section, one at a time please) */
-	specs->tableSemaphore.initValue = 1;
-
-	if (!semaphore_create(&(specs->tableSemaphore)))
-	{
-		log_error("Failed to create the table concurrency semaphore "
-				  "to orchestrate %d TABLE DATA COPY jobs",
-				  options->tableJobs);
-		return false;
-	}
-
-	/* create the index semaphore (critical section, one at a time please) */
-	specs->indexSemaphore.initValue = 1;
-
-	if (!semaphore_create(&(specs->indexSemaphore)))
-	{
-		log_error("Failed to create the index concurrency semaphore "
-				  "to orchestrate %d CREATE INDEX jobs",
-				  options->indexJobs);
-		return false;
-	}
 
 	if (specs->section == DATA_SECTION_ALL ||
 		specs->section == DATA_SECTION_TABLE_DATA)
@@ -851,12 +826,10 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 		.resume = specs->resume,
 
 		.sourceTable = source,
-		.summary = NULL,
+		.summary = { 0 },
 
 		.tableJobs = specs->tableJobs,
-		.indexJobs = specs->indexJobs,
-
-		.indexSemaphore = &(specs->indexSemaphore)
+		.indexJobs = specs->indexJobs
 	};
 
 	/* copy the structure as a whole memory area to the target place */
@@ -879,32 +852,6 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 		{
 			strlcpy(tableSpecs->part.partKey, "ctid", NAMEDATALEN);
 		}
-
-		/* now compute the table-specific paths we are using in copydb */
-		if (!copydb_init_tablepaths_for_part(tableSpecs->cfPaths,
-											 &(tableSpecs->tablePaths),
-											 tableSpecs->sourceTable->oid,
-											 partNumber))
-		{
-			log_error("Failed to prepare pathnames for partition %d of table %s",
-					  partNumber,
-					  tableSpecs->sourceTable->qname);
-			return false;
-		}
-
-		/* used only by one process, the one finishing a partial COPY last */
-		sformat(tableSpecs->tablePaths.idxListFile, MAXPGPATH, "%s/%u.idx",
-				tableSpecs->cfPaths->tbldir,
-				source->oid);
-
-		/*
-		 * And now the truncateLockFile and truncateDoneFile, which are used to
-		 * provide a critical section to the same-table concurrent processes.
-		 */
-		sformat(tableSpecs->tablePaths.truncateDoneFile, MAXPGPATH,
-				"%s/%u.truncate",
-				tableSpecs->cfPaths->tbldir,
-				source->oid);
 	}
 	else
 	{
@@ -914,73 +861,10 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 			log_error("BUG: copydb_init_table_specs partNumber is %d and "
 					  "source table partArray.count is %d",
 					  partNumber,
-					  source->partsArray.count);
-			return false;
-		}
-
-		/* now compute the table-specific paths we are using in copydb */
-		if (!copydb_init_tablepaths(tableSpecs->cfPaths,
-									&(tableSpecs->tablePaths),
-									tableSpecs->sourceTable->oid))
-		{
-			log_error("Failed to prepare pathnames for table %u",
-					  tableSpecs->sourceTable->oid);
+					  source->partition.partCount);
 			return false;
 		}
 	}
-
-	return true;
-}
-
-
-/*
- * copydb_init_tablepaths computes the lockFile, doneFile, and idxListFile
- * pathnames for a given table oid and global cfPaths setup.
- */
-bool
-copydb_init_tablepaths(CopyFilePaths *cfPaths,
-					   TableFilePaths *tablePaths,
-					   uint32_t oid)
-{
-	sformat(tablePaths->lockFile, MAXPGPATH, "%s/%d",
-			cfPaths->rundir,
-			oid);
-
-	sformat(tablePaths->doneFile, MAXPGPATH, "%s/%d.done",
-			cfPaths->tbldir,
-			oid);
-
-	sformat(tablePaths->idxListFile, MAXPGPATH, "%s/%u.idx",
-			cfPaths->tbldir,
-			oid);
-
-	sformat(tablePaths->chksumFile, MAXPGPATH, "%s/%u.sum.json",
-			cfPaths->tbldir,
-			oid);
-
-	return true;
-}
-
-
-/*
- * copydb_init_tablepaths_for_part computes the lockFile and doneFile pathnames
- * for a given COPY partition of a table.
- */
-bool
-copydb_init_tablepaths_for_part(CopyFilePaths *cfPaths,
-								TableFilePaths *tablePaths,
-								uint32_t oid,
-								int partNumber)
-{
-	sformat(tablePaths->lockFile, MAXPGPATH, "%s/%d.%d",
-			cfPaths->rundir,
-			oid,
-			partNumber);
-
-	sformat(tablePaths->doneFile, MAXPGPATH, "%s/%d.%d.done",
-			cfPaths->tbldir,
-			oid,
-			partNumber);
 
 	return true;
 }

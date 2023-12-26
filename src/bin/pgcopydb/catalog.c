@@ -5,6 +5,7 @@
 
 #include <inttypes.h>
 #include <limits.h>
+#include <stdlib.h>
 #include <sys/select.h>
 #include <time.h>
 #include <unistd.h>
@@ -121,9 +122,21 @@ static char *sourceDBcreateDDLs[] = {
 	"create table summary("
 	"  pid integer, "
 	"  tableoid integer references s_table(oid), "
-	"  indexoid integer references s_table(oid), "
+	"  partnum integer, "
+	"  indexoid integer references s_index(oid), "
+	"  conoid integer references s_constraint(oid), "
 	"  start_time_epoch integer, done_time_epoch integer, duration integer, "
-	"  command text"
+	"  bytes integer, "
+	"  command text, "
+	"  unique(tableoid, partnum)"
+	")",
+
+	"create table s_table_parts_done("
+	" tableoid integer primary key references s_table(oid), pid integer"
+	")",
+
+	"create table s_table_indexes_done("
+	" tableoid integer primary key references s_table(oid), pid integer "
 	")"
 };
 
@@ -250,6 +263,23 @@ static char *filterDBcreateDDLs[] = {
 	"create table filter(oid integer, restore_list_name text, kind text)",
 	"create unique index filter_oid on filter(oid)",
 	"create index filter_rlname on filter(restore_list_name)",
+
+	/*
+	 * While we don't use a summary table in the filter database, some queries
+	 * that are meant to work on both filters database and source database use
+	 * LEFT JOIN summary.
+	 */
+	"create table summary("
+	"  pid integer, "
+	"  tableoid integer references s_table(oid), "
+	"  partnum integer, "
+	"  indexoid integer references s_index(oid), "
+	"  conoid integer references s_constraint(oid), "
+	"  start_time_epoch integer, done_time_epoch integer, duration integer, "
+	"  bytes integer, "
+	"  command text, "
+	"  unique(tableoid, partnum)"
+	")",
 };
 
 
@@ -329,7 +359,9 @@ static char *sourceDBdropDDLs[] = {
 	"drop table if exists t_constraint",
 
 	"drop table if exists process",
-	"drop table if exists summary"
+	"drop table if exists summary",
+	"drop table if exists s_table_parts_done",
+	"drop table if exists s_table_indexes_done"
 };
 
 
@@ -349,7 +381,8 @@ static char *filterDBdropDDLs[] = {
 	"drop table if exists s_constraint",
 	"drop table if exists s_seq",
 	"drop table if exists s_depend",
-	"drop table if exists filter"
+	"drop table if exists filter",
+	"drop table if exists summary"
 };
 
 
@@ -617,9 +650,70 @@ catalog_init(DatabaseCatalog *catalog)
 		return false;
 	}
 
+	/*
+	 * The source catalog needs a semaphore to serialize concurrent write
+	 * access to the SQLite database.
+	 */
+	if (!catalog_create_semaphore(catalog))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * Because the source catalog also registers the activity information,
+	 * which generates a non-trivial amount of small writes with some level of
+	 * concurrency, we turn the WAL mode on that one.
+	 *
+	 * PRAGMA journal_mode=WAL is persistent, so we only call that when
+	 * creating the catalog.
+	 */
 	if (createSchema)
 	{
+		if (catalog->type == DATABASE_CATALOG_TYPE_SOURCE)
+		{
+			/* bypass the WAL mode, unclear if we benefit from it */
+			if (false)
+			{
+				if (!catalog_set_wal_mode(catalog))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+			}
+		}
+
 		return catalog_create_schema(catalog);
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_create_semaphore creates a semaphore to protect concurrent access to
+ * the SQLite database that hosts our internal catalogs, allowing sequential
+ * access and enforce one-writer-at-a-time.
+ */
+bool
+catalog_create_semaphore(DatabaseCatalog *catalog)
+{
+	catalog->sema.reentrant = true;
+
+	/*
+	 * When we don't have a semId yet (it's zero), create a semaphore. When the
+	 * semaphore is non-zero, it's been created already and we can simply use
+	 * it: all we need to know is the semId.
+	 */
+	if (catalog->sema.semId == 0)
+	{
+		catalog->sema.initValue = 1;
+
+		if (!semaphore_create(&(catalog->sema)))
+		{
+			log_error("Failed to create the catalog concurrency semaphore");
+			return false;
+		}
 	}
 
 	return true;
@@ -798,16 +892,75 @@ catalog_drop_schema(DatabaseCatalog *catalog)
 
 
 /*
- * catalog_begin explicitely begins a SQLite transaction.
+ * catalog_set_wal_mode convert given SQLite database to WAL mode.
  */
 bool
-catalog_begin(DatabaseCatalog *catalog)
+catalog_set_wal_mode(DatabaseCatalog *catalog)
 {
-	int rc = sqlite3_exec(catalog->db, "BEGIN", NULL, NULL, NULL);
+	char *sql = "PRAGMA journal_mode=WAL;";
+
+	log_sqlite("[SQLite] %s", sql);
+
+	int rc = sqlite3_exec(catalog->db, sql, NULL, NULL, NULL);
 
 	if (rc != SQLITE_OK)
 	{
-		log_error("[SQLite]: BEGIN failed: %s", sqlite3_errmsg(catalog->db));
+		log_error("[SQLite]: PRAGMA journal_mode=WAL failed: %s",
+				  sqlite3_errstr(rc));
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_begin explicitely begins a SQLite transaction.
+ */
+bool
+catalog_begin(DatabaseCatalog *catalog, bool immediate)
+{
+	char *sql = immediate ? "BEGIN IMMEDIATE" : "BEGIN";
+
+	log_sqlite("[SQLite] %s", sql);
+
+	int rc = sqlite3_exec(catalog->db, sql, NULL, NULL, NULL);
+
+	if (rc == SQLITE_LOCKED || rc == SQLITE_BUSY)
+	{
+		ConnectionRetryPolicy retryPolicy = { 0 };
+
+		int maxT = 5;            /* 5s */
+		int maxSleepTime = 350;  /* 350ms */
+		int baseSleepTime = 10;  /* 10ms */
+
+		(void) pgsql_set_retry_policy(&retryPolicy,
+									  maxT,
+									  -1, /* unbounded number of attempts */
+									  maxSleepTime,
+									  baseSleepTime);
+
+		while ((rc == SQLITE_LOCKED || rc == SQLITE_BUSY) &&
+			   !pgsql_retry_policy_expired(&retryPolicy))
+		{
+			int sleepTimeMs =
+				pgsql_compute_connection_retry_sleep_time(&retryPolicy);
+
+			log_sqlite("[SQLite %d]: %s, try again in %dms",
+					   rc,
+					   sqlite3_errstr(rc),
+					   sleepTimeMs);
+
+			/* we have milliseconds, pg_usleep() wants microseconds */
+			(void) pg_usleep(sleepTimeMs * 1000);
+
+			rc = sqlite3_exec(catalog->db, "BEGIN", NULL, NULL, NULL);
+		}
+	}
+
+	if (rc != SQLITE_OK)
+	{
+		log_error("[SQLite] Failed to %s", sql);
 		return false;
 	}
 
@@ -821,11 +974,33 @@ catalog_begin(DatabaseCatalog *catalog)
 bool
 catalog_commit(DatabaseCatalog *catalog)
 {
+	log_sqlite("[SQLite] COMMIT");
+
 	int rc = sqlite3_exec(catalog->db, "COMMIT", NULL, NULL, NULL);
 
 	if (rc != SQLITE_OK)
 	{
-		log_error("[SQLite]: COMMIT failed: %s", sqlite3_errmsg(catalog->db));
+		log_error("[SQLite]: COMMIT failed: %s", sqlite3_errstr(rc));
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_rollback explicitely rollbacks a SQLite transaction.
+ */
+bool
+catalog_rollback(DatabaseCatalog *catalog)
+{
+	log_sqlite("[SQLite] ROLLBACK");
+
+	int rc = sqlite3_exec(catalog->db, "ROLLBACK", NULL, NULL, NULL);
+
+	if (rc != SQLITE_OK)
+	{
+		log_error("[SQLite]: ROLLBACK failed: %s", sqlite3_errstr(rc));
 		return false;
 	}
 
@@ -922,9 +1097,16 @@ catalog_setup(DatabaseCatalog *catalog)
 		"       split_tables_larger_than, filters "
 		"  from setup";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -932,8 +1114,11 @@ catalog_setup(DatabaseCatalog *catalog)
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -1457,73 +1642,6 @@ catalog_add_s_table_part(DatabaseCatalog *catalog, SourceTable *table)
 
 
 /*
- * catalog_add_s_table_parts INSERTs a SourceTableParts array to our internal
- * catalogs database (s_table_parts).
- */
-bool
-catalog_add_s_table_parts(DatabaseCatalog *catalog, SourceTable *table)
-{
-	sqlite3 *db = catalog->db;
-
-	if (db == NULL)
-	{
-		log_error("BUG: catalog_add_s_table_part: db is NULL");
-		return false;
-	}
-
-	char *sql =
-		"insert into s_table_part(oid, partnum, partcount, min, max, count)"
-		"values($1, $2, $3, $4, $5, $6)";
-
-	SQLiteQuery query = { 0 };
-
-	if (!catalog_sql_prepare(db, sql, &query))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	for (int i = 0; i < table->partsArray.count; i++)
-	{
-		SourceTableParts *part = &(table->partsArray.array[i]);
-
-		BindParam params[] = {
-			{ BIND_PARAMETER_TYPE_INT64, "oid", table->oid, NULL },
-			{ BIND_PARAMETER_TYPE_INT64, "partnum", part->partNumber, NULL },
-			{ BIND_PARAMETER_TYPE_INT64, "partcount", part->partCount, NULL },
-			{ BIND_PARAMETER_TYPE_INT64, "min", part->min, NULL },
-			{ BIND_PARAMETER_TYPE_INT64, "max", part->max, NULL },
-			{ BIND_PARAMETER_TYPE_INT64, "count", part->count, NULL },
-		};
-
-		int count = sizeof(params) / sizeof(params[0]);
-
-		if (!catalog_sql_bind(&query, params, count))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		/* now execute the query, which does not return any row */
-		if (!catalog_sql_execute(&query))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-	}
-
-	/* and finalize the query */
-	if (!catalog_sql_finalize(&query))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	return true;
-}
-
-
-/*
  * catalog_add_s_table INSERTs a SourceTable to our internal catalogs database.
  */
 bool
@@ -1545,11 +1663,18 @@ catalog_add_s_table_chksum(DatabaseCatalog *catalog,
 		"  oid, srcrowcount, srcsum, dstrowcount, dstsum)"
 		"values($1, $2, $3, $4, $5)";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	SQLiteQuery query = { 0 };
 
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -1567,6 +1692,7 @@ catalog_add_s_table_chksum(DatabaseCatalog *catalog,
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -1574,8 +1700,11 @@ catalog_add_s_table_chksum(DatabaseCatalog *catalog,
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -1850,6 +1979,12 @@ catalog_lookup_s_table(DatabaseCatalog *catalog,
 		return false;
 	}
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	SQLiteQuery query = {
 		.context = table,
 		.fetchFunction = &catalog_s_table_fetch
@@ -1871,6 +2006,7 @@ catalog_lookup_s_table(DatabaseCatalog *catalog,
 		if (!catalog_sql_prepare(db, sql, &query))
 		{
 			/* errors have already been logged */
+			(void) semaphore_unlock(&(catalog->sema));
 			return false;
 		}
 
@@ -1885,6 +2021,7 @@ catalog_lookup_s_table(DatabaseCatalog *catalog,
 		if (!catalog_sql_bind(&query, params, count))
 		{
 			/* errors have already been logged */
+			(void) semaphore_unlock(&(catalog->sema));
 			return false;
 		}
 	}
@@ -1901,6 +2038,7 @@ catalog_lookup_s_table(DatabaseCatalog *catalog,
 		if (!catalog_sql_prepare(db, sql, &query))
 		{
 			/* errors have already been logged */
+			(void) semaphore_unlock(&(catalog->sema));
 			return false;
 		}
 
@@ -1914,6 +2052,7 @@ catalog_lookup_s_table(DatabaseCatalog *catalog,
 		if (!catalog_sql_bind(&query, params, count))
 		{
 			/* errors have already been logged */
+			(void) semaphore_unlock(&(catalog->sema));
 			return false;
 		}
 	}
@@ -1922,8 +2061,11 @@ catalog_lookup_s_table(DatabaseCatalog *catalog,
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -2267,15 +2409,18 @@ catalog_iter_s_table_init(SourceTableIterator *iter)
 	{
 		sql =
 			"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
-			"         relpages, reltuples, bytes, bytes_pretty, "
+			"         relpages, reltuples, t.bytes, t.bytes_pretty, "
 			"         exclude_data, part_key, "
-			"         count(p.oid), 0 as partnum, 0 as min, 0 as max, "
-			"         c.srcrowcount, c.srcsum, c.dstrowcount, c.dstsum "
+			"         coalesce(p.partcount, 0) as partcount, "
+			"         0 as partnum, 0 as min, 0 as max, "
+			"         c.srcrowcount, c.srcsum, c.dstrowcount, c.dstsum, "
+			"         sum(s.duration), sum(s.bytes) "
 			"    from s_table t "
-			"         left join s_table_part p on t.oid = p.oid "
-			"         left join s_table_chksum c on t.oid = c.oid "
+			"         left join s_table_part p on p.oid = t.oid "
+			"         left join s_table_chksum c on c.oid = t.oid "
+			"         left join summary s on s.tableoid = t.oid "
 			"group by t.oid "
-			"order by bytes desc";
+			"order by t.bytes desc";
 	}
 
 	SQLiteQuery *query = &(iter->query);
@@ -2445,6 +2590,7 @@ catalog_s_table_fetch(SQLiteQuery *query)
 	 */
 	int cols = sqlite3_column_count(query->ppStmt);
 
+	/* partition information from s_table_part */
 	if (cols >= 16)
 	{
 		table->partition.partNumber = sqlite3_column_int64(query->ppStmt, 13);
@@ -2452,7 +2598,8 @@ catalog_s_table_fetch(SQLiteQuery *query)
 		table->partition.max = sqlite3_column_int64(query->ppStmt, 15);
 	}
 
-	if (cols == 20)
+	/* checksum information from s_table_chksum */
+	if (cols >= 20)
 	{
 		table->sourceChecksum.rowcount =
 			sqlite3_column_int64(query->ppStmt, 16);
@@ -2473,6 +2620,13 @@ catalog_s_table_fetch(SQLiteQuery *query)
 					(char *) sqlite3_column_text(query->ppStmt, 19),
 					sizeof(table->targetChecksum.checksum));
 		}
+	}
+
+	/* summary information from s_table_parts_done */
+	if (cols == 22)
+	{
+		table->durationMs = sqlite3_column_int64(query->ppStmt, 20);
+		table->bytesTransmitted = sqlite3_column_int64(query->ppStmt, 21);
 	}
 
 	return true;
@@ -3131,6 +3285,12 @@ catalog_lookup_s_index(DatabaseCatalog *catalog, uint32_t oid, SourceIndex *inde
 		"         left join s_constraint c on c.indexoid = i.oid"
 		"   where i.oid = $1 ";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	SQLiteQuery query = {
 		.context = index,
 		.fetchFunction = &catalog_s_index_fetch
@@ -3139,6 +3299,7 @@ catalog_lookup_s_index(DatabaseCatalog *catalog, uint32_t oid, SourceIndex *inde
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -3150,6 +3311,7 @@ catalog_lookup_s_index(DatabaseCatalog *catalog, uint32_t oid, SourceIndex *inde
 	if (!catalog_sql_bind(&query, params, 1))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -3157,8 +3319,11 @@ catalog_lookup_s_index(DatabaseCatalog *catalog, uint32_t oid, SourceIndex *inde
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -3192,6 +3357,12 @@ catalog_lookup_s_index_by_name(DatabaseCatalog *catalog,
 		"         left join s_constraint c on c.indexoid = i.oid"
 		"   where i.nspname = $1 and i.relname = $2 ";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	SQLiteQuery query = {
 		.context = index,
 		.fetchFunction = &catalog_s_index_fetch
@@ -3200,6 +3371,7 @@ catalog_lookup_s_index_by_name(DatabaseCatalog *catalog,
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -3214,6 +3386,7 @@ catalog_lookup_s_index_by_name(DatabaseCatalog *catalog,
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -3221,8 +3394,11 @@ catalog_lookup_s_index_by_name(DatabaseCatalog *catalog,
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -3418,6 +3594,12 @@ catalog_iter_s_index_table(DatabaseCatalog *catalog,
 	iter->nspname = nspname;
 	iter->relname = relname;
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (!catalog_iter_s_index_table_init(iter))
 	{
 		/* errors have already been logged */
@@ -3431,6 +3613,7 @@ catalog_iter_s_index_table(DatabaseCatalog *catalog,
 		{
 			/* errors have already been logged */
 			free(iter);
+			(void) semaphore_unlock(&(catalog->sema));
 			return false;
 		}
 
@@ -3442,6 +3625,7 @@ catalog_iter_s_index_table(DatabaseCatalog *catalog,
 			{
 				/* errors have already been logged */
 				free(iter);
+				(void) semaphore_unlock(&(catalog->sema));
 				return false;
 			}
 
@@ -3453,11 +3637,14 @@ catalog_iter_s_index_table(DatabaseCatalog *catalog,
 		{
 			log_error("Failed to iterate over list of indexes, "
 					  "see above for details");
+			free(iter);
+			(void) semaphore_unlock(&(catalog->sema));
 			return false;
 		}
 	}
 
 	free(iter);
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -3659,6 +3846,12 @@ catalog_s_table_count_indexes(DatabaseCatalog *catalog, SourceTable *table)
 		"       left join s_constraint c on c.indexoid = i.oid "
 		" where tableoid = $1";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	SQLiteQuery query = {
 		.context = table,
 		.fetchFunction = &catalog_s_table_count_indexes_fetch
@@ -3667,6 +3860,7 @@ catalog_s_table_count_indexes(DatabaseCatalog *catalog, SourceTable *table)
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -3678,6 +3872,7 @@ catalog_s_table_count_indexes(DatabaseCatalog *catalog, SourceTable *table)
 	if (!catalog_sql_bind(&query, params, 1))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -3685,8 +3880,11 @@ catalog_s_table_count_indexes(DatabaseCatalog *catalog, SourceTable *table)
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -6285,11 +6483,18 @@ catalog_upsert_process_info(DatabaseCatalog *catalog, ProcessInfo *ps)
 		"  pid, ps_type, ps_title, tableoid, partnum, indexoid)"
 		"values($1, $2, $3, $4, $5, $6)";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	SQLiteQuery query = { 0 };
 
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -6308,6 +6513,7 @@ catalog_upsert_process_info(DatabaseCatalog *catalog, ProcessInfo *ps)
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -6315,8 +6521,11 @@ catalog_upsert_process_info(DatabaseCatalog *catalog, ProcessInfo *ps)
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -6338,11 +6547,18 @@ catalog_delete_process(DatabaseCatalog *catalog, pid_t pid)
 
 	char *sql = "delete from process where pid = $1";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	SQLiteQuery query = { 0 };
 
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -6356,6 +6572,7 @@ catalog_delete_process(DatabaseCatalog *catalog, pid_t pid)
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -6363,8 +6580,11 @@ catalog_delete_process(DatabaseCatalog *catalog, pid_t pid)
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -6454,10 +6674,22 @@ catalog_iter_s_table_in_copy_init(SourceTableIterator *iter)
 
 	char *sql =
 		"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
-		"         relpages, reltuples, bytes, bytes_pretty, "
+		"         relpages, reltuples, t.bytes, t.bytes_pretty, "
 		"         exclude_data, part_key, "
-		"         count(p.oid), 0 as partnum, 0 as min, 0 as max "
-		"    from process p join s_table t on p.tableoid = t.oid "
+		"         coalesce(part.partcount, 0), s.partnum, 0 as min, 0 as max, "
+		"         c.srcrowcount, c.srcsum, c.dstrowcount, c.dstsum, "
+		"         sum(s.duration), sum(s.bytes) "
+
+		"    from process p "
+		"         join s_table t on p.tableoid = t.oid "
+		"         join summary s on s.pid = t.pid and s.tableoid = p.tableoid "
+
+		"         left join s_table_part part "
+		"                on part.oid = p.tableoid "
+		"               and part.partnum = s.partnum "
+
+		"         left join s_table_chksum c on c.oid = p.tableoid "
+
 		"   where p.ps_type = 'COPY' "
 		"order by p.pid";
 
@@ -6602,8 +6834,8 @@ catalog_sql_prepare(sqlite3 *db, const char *sql, SQLiteQuery *query)
 	{
 		ConnectionRetryPolicy retryPolicy = { 0 };
 
-		int maxT = 1;            /* 1s */
-		int maxSleepTime = 50;   /* 50ms */
+		int maxT = 5;            /* 5s */
+		int maxSleepTime = 150;  /* 150ms */
 		int baseSleepTime = 10;  /* 10ms */
 
 		(void) pgsql_set_retry_policy(&retryPolicy,
@@ -6612,15 +6844,16 @@ catalog_sql_prepare(sqlite3 *db, const char *sql, SQLiteQuery *query)
 									  maxSleepTime,
 									  baseSleepTime);
 
-		while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY)
+		while ((rc == SQLITE_LOCKED || rc == SQLITE_BUSY) &&
+			   !pgsql_retry_policy_expired(&retryPolicy))
 		{
 			int sleepTimeMs =
 				pgsql_compute_connection_retry_sleep_time(&retryPolicy);
 
-			log_trace("[SQLite %d]: %s, try again in %dms",
-					  rc,
-					  sqlite3_errstr(rc),
-					  sleepTimeMs);
+			log_sqlite("[SQLite %d]: %s, try again in %dms",
+					   rc,
+					   sqlite3_errstr(rc),
+					   sleepTimeMs);
 
 			/* we have milliseconds, pg_usleep() wants microseconds */
 			(void) pg_usleep(sleepTimeMs * 1000);
@@ -6781,8 +7014,8 @@ catalog_sql_step(SQLiteQuery *query)
 	{
 		ConnectionRetryPolicy retryPolicy = { 0 };
 
-		int maxT = 1;            /* 1s */
-		int maxSleepTime = 50;   /* 50ms */
+		int maxT = 5;            /* 5s */
+		int maxSleepTime = 350;  /* 350ms */
 		int baseSleepTime = 10;  /* 10ms */
 
 		(void) pgsql_set_retry_policy(&retryPolicy,
@@ -6791,15 +7024,16 @@ catalog_sql_step(SQLiteQuery *query)
 									  maxSleepTime,
 									  baseSleepTime);
 
-		while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY)
+		while ((rc == SQLITE_LOCKED || rc == SQLITE_BUSY) &&
+			   !pgsql_retry_policy_expired(&retryPolicy))
 		{
 			int sleepTimeMs =
 				pgsql_compute_connection_retry_sleep_time(&retryPolicy);
 
-			log_trace("[SQLite %d]: %s, try again in %dms",
-					  rc,
-					  sqlite3_errstr(rc),
-					  sleepTimeMs);
+			log_sqlite("[SQLite %d]: %s, try again in %dms",
+					   rc,
+					   sqlite3_errstr(rc),
+					   sleepTimeMs);
 
 			/* we have milliseconds, pg_usleep() wants microseconds */
 			(void) pg_usleep(sleepTimeMs * 1000);

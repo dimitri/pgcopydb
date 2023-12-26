@@ -27,6 +27,8 @@
 
 
 static bool copydb_copy_supervisor_add_table_hook(void *ctx, SourceTable *table);
+static void FreeCopyTableDataSpec(CopyTableDataSpec *tableSpecs);
+static void FreeCopyArgs(CopyArgs *args);
 
 /*
  * copydb_table_data fetches the list of tables from the source database and
@@ -843,8 +845,7 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 	if (!copydb_init_table_specs(tableSpecs, specs, table, part))
 	{
 		/* errors have already been logged */
-		free(table);
-		free(tableSpecs);
+		FreeCopyTableDataSpec(tableSpecs);
 		return false;
 	}
 
@@ -855,12 +856,12 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 
 	char psTitle[BUFSIZE] = { 0 };
 
-	if (table->partsArray.count > 0)
+	if (table->partition.partCount > 0)
 	{
 		sformat(psTitle, sizeof(psTitle), "pgcopydb: copy %s [%d/%d]",
 				table->qname,
-				part + 1,
-				table->partsArray.count);
+				table->partition.partNumber,
+				table->partition.partCount);
 	}
 	else
 	{
@@ -877,8 +878,7 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 	if (!copydb_table_create_lockfile(specs, tableSpecs, &isDone))
 	{
 		/* errors have already been logged */
-		free(table);
-		free(tableSpecs);
+		FreeCopyTableDataSpec(tableSpecs);
 		return false;
 	}
 
@@ -887,8 +887,7 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 		log_info("Skipping table %s (%u), already done on a previous run",
 				 tableSpecs->sourceTable->qname,
 				 tableSpecs->sourceTable->oid);
-		free(table);
-		free(tableSpecs);
+		FreeCopyTableDataSpec(tableSpecs);
 		return true;
 	}
 
@@ -900,8 +899,7 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 		if (!copydb_copy_table(specs, src, dst, tableSpecs))
 		{
 			/* errors have already been logged */
-			free(table);
-			free(tableSpecs);
+			FreeCopyTableDataSpec(tableSpecs);
 			return false;
 		}
 	}
@@ -909,8 +907,7 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 	if (!copydb_mark_table_as_done(specs, tableSpecs))
 	{
 		/* errors have already been logged */
-		free(table);
-		free(tableSpecs);
+		FreeCopyTableDataSpec(tableSpecs);
 		return false;
 	}
 
@@ -944,8 +941,7 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 											 &indexesAreBeingProcessed))
 		{
 			/* errors have already been logged */
-			free(table);
-			free(tableSpecs);
+			FreeCopyTableDataSpec(tableSpecs);
 			return false;
 		}
 		else if (allPartsDone && !indexesAreBeingProcessed)
@@ -965,6 +961,7 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 			{
 				log_error("Failed to count indexes attached to table %s",
 						  tableSpecs->sourceTable->qname);
+				FreeCopyTableDataSpec(tableSpecs);
 				return false;
 			}
 
@@ -979,8 +976,7 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 						log_error("Failed to queue VACUUM ANALYZE %s [%u]",
 								  sourceTable->qname,
 								  sourceTable->oid);
-						free(table);
-						free(tableSpecs);
+						FreeCopyTableDataSpec(tableSpecs);
 						return false;
 					}
 				}
@@ -990,15 +986,13 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 				log_error("Failed to add the indexes for %s, "
 						  "see above for details",
 						  tableSpecs->sourceTable->qname);
-				free(table);
-				free(tableSpecs);
+				FreeCopyTableDataSpec(tableSpecs);
 				return false;
 			}
 		}
 	}
 
-	free(table);
-	free(tableSpecs);
+	FreeCopyTableDataSpec(tableSpecs);
 
 	return true;
 }
@@ -1014,6 +1008,8 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 							 CopyTableDataSpec *tableSpecs,
 							 bool *isDone)
 {
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
 	if (specs->dirState.tableCopyIsDone)
 	{
 		log_notice("Skipping table %s, already done on a previous run",
@@ -1023,71 +1019,44 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 		return true;
 	}
 
-	/* enter the critical section */
-	(void) semaphore_lock(&(specs->tableSemaphore));
+	if (!summary_lookup_table(sourceDB, tableSpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
-	/*
-	 * If the doneFile exists, then the table has been processed already,
-	 * skip it.
-	 */
-	if (file_exists(tableSpecs->tablePaths.doneFile))
+	CopyTableSummary *tableSummary = &(tableSpecs->summary);
+
+	/* if the catalog summary information is complete, we're done */
+	if (tableSummary->doneTime > 0)
 	{
 		*isDone = true;
-		(void) semaphore_unlock(&(specs->tableSemaphore));
-
 		return true;
 	}
 
-	/* okay so it's not done yet */
-	*isDone = false;
-
-	if (file_exists(tableSpecs->tablePaths.lockFile))
+	if (tableSummary->pid != 0)
 	{
-		/*
-		 * Now it could be that the lockFile still exists and has been created
-		 * on a previous run, in which case the pid in there would be a stale
-		 * pid.
-		 *
-		 * So check for that situation before returning with the happy path.
-		 */
-		CopyTableSummary tableSummary = { .table = tableSpecs->sourceTable };
-
-		if (!read_table_summary(&tableSummary, tableSpecs->tablePaths.lockFile))
-		{
-			/* errors have already been logged */
-			(void) semaphore_unlock(&(specs->tableSemaphore));
-
-			return false;
-		}
-
 		/* if we can signal the pid, it is still running */
-		if (kill(tableSummary.pid, 0) == 0)
+		if (kill(tableSummary->pid, 0) == 0)
 		{
-			(void) semaphore_unlock(&(specs->tableSemaphore));
-
 			log_error("Failed to start table-data COPY worker for table %s (%u), "
-					  "lock file \"%s\" is owned by running process %d",
+					  "already being processed by pid %d",
 					  tableSpecs->sourceTable->qname,
 					  tableSpecs->sourceTable->oid,
-					  tableSpecs->tablePaths.lockFile,
-					  tableSummary.pid);
+					  tableSummary->pid);
 
 			return false;
 		}
 		else
 		{
-			log_notice("Found stale pid %d in file \"%s\", removing it "
-					   "and processing table %s",
-					   tableSummary.pid,
-					   tableSpecs->tablePaths.lockFile,
+			log_notice("Found stale pid %d, removing it to process table %s",
+					   tableSummary->pid,
 					   tableSpecs->sourceTable->qname);
 
-			/* stale pid, remove the old lockFile now, then process the table */
-			if (!unlink_file(tableSpecs->tablePaths.lockFile))
+			/* stale pid, remove the summary entry and process the table */
+			if (!summary_delete_table(sourceDB, tableSpecs))
 			{
-				log_error("Failed to remove the stale lockFile \"%s\"",
-						  tableSpecs->tablePaths.lockFile);
-				(void) semaphore_unlock(&(specs->tableSemaphore));
+				/* errors have already been logged */
 				return false;
 			}
 
@@ -1095,48 +1064,45 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 		}
 	}
 
-	/*
-	 * Now, write the lockFile, with a summary of what's going-on.
-	 */
-	CopyTableSummary emptySummary = { 0 };
-	CopyTableSummary *summary =
-		(CopyTableSummary *) calloc(1, sizeof(CopyTableSummary));
-
-	*summary = emptySummary;
-
-	summary->pid = getpid();
-	summary->table = tableSpecs->sourceTable;
-
-	/* "COPY " is 5 bytes, then 1 for \0 */
-	int len = strlen(tableSpecs->sourceTable->qname) + 5 + 1;
-	summary->command = (char *) calloc(len, sizeof(char));
-
-	if (summary->command == NULL)
+	/* COPY FROM tablename, or maybe COPY FROM (SELECT ... WHERE ...) */
+	if (!catalog_s_table_fetch_attrs(sourceDB, tableSpecs->sourceTable))
 	{
-		log_error(ALLOCATION_FAILED_ERROR);
+		log_error("Failed to fetch table %s attribute list, "
+				  "see above for details",
+				  tableSpecs->sourceTable->qname);
 		return false;
 	}
 
-	sformat(summary->command, len, "COPY %s", tableSpecs->sourceTable->qname);
+	CopyArgs *args = &(tableSpecs->copyArgs);
 
-	if (!open_table_summary(summary, tableSpecs->tablePaths.lockFile))
+	args->srcQname = tableSpecs->sourceTable->qname;
+	args->srcAttrList = NULL;
+	args->srcWhereClause = NULL;
+	args->dstQname = tableSpecs->sourceTable->qname;
+	args->dstAttrList = NULL;
+	args->truncate = tableSpecs->sourceTable->partition.partCount <= 1;
+	args->freeze = tableSpecs->sourceTable->partition.partCount <= 1;
+	args->bytesTransmitted = 0;
+
+	if (!copydb_prepare_copy_query(tableSpecs, args))
 	{
-		log_info("Failed to create the lock file for table %s at \"%s\"",
-				 tableSpecs->sourceTable->qname,
-				 tableSpecs->tablePaths.lockFile);
-
-		/* end of the critical section */
-		(void) semaphore_unlock(&(specs->tableSemaphore));
-
+		/* errors have already been logged */
 		return false;
 	}
 
-	/* attach the new summary to the tableSpecs, where it was NULL before */
-	tableSpecs->summary = summary;
+	if (!copydb_prepare_summary_command(tableSpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!summary_add_table(sourceDB, tableSpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	/* also track the process information in our catalogs */
-	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
-
 	ProcessInfo ps = {
 		.pid = getpid(),
 		.psType = "COPY",
@@ -1152,9 +1118,6 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 		return false;
 	}
 
-	/* end of the critical section */
-	(void) semaphore_unlock(&(specs->tableSemaphore));
-
 	return true;
 }
 
@@ -1168,33 +1131,13 @@ bool
 copydb_mark_table_as_done(CopyDataSpec *specs,
 						  CopyTableDataSpec *tableSpecs)
 {
-	/* enter the critical section to communicate that we're done */
-	(void) semaphore_lock(&(specs->tableSemaphore));
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	if (!unlink_file(tableSpecs->tablePaths.lockFile))
+	if (!summary_finish_table(sourceDB, tableSpecs))
 	{
-		log_error("Failed to remove the lockFile \"%s\"",
-				  tableSpecs->tablePaths.lockFile);
-		(void) semaphore_unlock(&(specs->tableSemaphore));
+		/* errors have already been logged */
 		return false;
 	}
-
-	/* write the doneFile with the summary and timings now */
-	if (!finish_table_summary(tableSpecs->summary,
-							  tableSpecs->tablePaths.doneFile))
-	{
-		log_error("Failed to create the summary file at \"%s\"",
-				  tableSpecs->tablePaths.doneFile);
-		(void) semaphore_unlock(&(specs->tableSemaphore));
-		return false;
-	}
-
-	log_debug("Wrote summary for table %s at \"%s\"",
-			  tableSpecs->sourceTable->qname,
-			  tableSpecs->tablePaths.doneFile);
-
-	/* end of the critical section */
-	(void) semaphore_unlock(&(specs->tableSemaphore));
 
 	return true;
 }
@@ -1211,6 +1154,8 @@ copydb_table_parts_are_all_done(CopyDataSpec *specs,
 								bool *allPartsDone,
 								bool *isBeingProcessed)
 {
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
 	if (tableSpecs->part.partCount <= 1)
 	{
 		*allPartsDone = true;
@@ -1220,67 +1165,40 @@ copydb_table_parts_are_all_done(CopyDataSpec *specs,
 
 	*allPartsDone = false;
 
-	/* enter the critical section */
-	(void) semaphore_lock(&(specs->tableSemaphore));
+	if (!summary_table_count_parts_done(sourceDB, tableSpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
-	/* make sure only one process created the indexes/constraints */
-	if (file_exists(tableSpecs->tablePaths.idxListFile))
+	/*
+	 * If all partitions are done, try and register this worker's PID as the
+	 * first worker that saw the situation. Only that one is allowed to queue
+	 * the CREATE INDEX (or VACUUM) commands.
+	 */
+	int partCount = tableSpecs->sourceTable->partition.partCount;
+
+	if (tableSpecs->countPartsDone == partCount)
 	{
 		*allPartsDone = true;
-		*isBeingProcessed = true;
 
-		(void) semaphore_unlock(&(specs->tableSemaphore));
-		return true;
-	}
-
-	bool allDone = true;
-
-	CopyFilePaths *cfPaths = &(specs->cfPaths);
-	uint32_t oid = tableSpecs->sourceTable->oid;
-
-	for (int i = 0; i < tableSpecs->part.partCount; i++)
-	{
-		TableFilePaths partPaths = { 0 };
-
-		(void) copydb_init_tablepaths_for_part(cfPaths, &partPaths, oid, i);
-
-		if (!file_exists(partPaths.doneFile))
-		{
-			allDone = false;
-			break;
-		}
-	}
-
-	/* create an empty index list file now, when allDone is still true */
-	if (allDone)
-	{
-		if (!write_file("", 0, tableSpecs->tablePaths.idxListFile))
+		/* insert or ignore our pid as the partsDonePid */
+		if (!summary_add_table_parts_done(sourceDB, tableSpecs))
 		{
 			/* errors have already been logged */
-			(void) semaphore_unlock(&(specs->tableSemaphore));
 			return false;
 		}
 
-		*allPartsDone = true;
-		*isBeingProcessed = false; /* allow processing of the indexes */
+		if (!summary_lookup_table_parts_done(sourceDB, tableSpecs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 
-		/* end of the critical section */
-		(void) semaphore_unlock(&(specs->tableSemaphore));
-
-		return true;
-	}
-	else
-	{
-		/* end of the critical section */
-		(void) semaphore_unlock(&(specs->tableSemaphore));
-
-		*allPartsDone = false;
-		*isBeingProcessed = false;
-
-		return true;
+		/* set isBeingProcessed to false to allow processing indexes */
+		*isBeingProcessed = (tableSpecs->partsDonePid != getpid());
 	}
 
-	/* keep compiler happy, we should never end-up here */
 	return true;
 }
 
@@ -1302,41 +1220,9 @@ copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 		return true;
 	}
 
-	/* first, fetch attributes from our source database */
-	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
-
-	if (!catalog_s_table_fetch_attrs(sourceDB, tableSpecs->sourceTable))
-	{
-		log_error("Failed to fetch table %s attribute list, "
-				  "see above for details",
-				  tableSpecs->sourceTable->qname);
-		return false;
-	}
-
 	/* Now copy the data from source to target */
-	CopyTableSummary *summary = tableSpecs->summary;
+	CopyTableSummary *summary = &(tableSpecs->summary);
 	log_notice("%s", summary->command);
-
-	/* COPY FROM tablename, or maybe COPY FROM (SELECT ... WHERE ...) */
-	CopyArgs args = {
-		.srcQname = tableSpecs->sourceTable->qname,
-		.srcAttrList = NULL,
-		.srcWhereClause = NULL,
-		.dstQname = tableSpecs->sourceTable->qname,
-		.dstAttrList = NULL,
-		.truncate = tableSpecs->sourceTable->partition.partCount <= 1,
-		.freeze = tableSpecs->sourceTable->partition.partCount <= 1,
-		.bytesTransmitted = 0
-	};
-
-	if (!copydb_prepare_copy_query(tableSpecs, &args))
-	{
-		/* errors have already been logged */
-		free(args.srcAttrList);
-		free(args.srcWhereClause);
-		free(args.dstAttrList);
-		return false;
-	}
 
 	int attempts = 0;
 	int maxAttempts = 5;        /* allow 5 attempts total, 4 retries */
@@ -1349,7 +1235,7 @@ copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 		++attempts;
 
 		/* ignore previous attempts, we need only one success here */
-		success = pg_copy(src, dst, &args);
+		success = pg_copy(src, dst, &(tableSpecs->copyArgs));
 
 		if (success)
 		{
@@ -1400,11 +1286,7 @@ copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 	}
 
 	/* publish bytesTransmitted accumulated value to the summary */
-	summary->bytesTransmitted = args.bytesTransmitted;
-
-	free(args.srcAttrList);
-	free(args.srcWhereClause);
-	free(args.dstAttrList);
+	summary->bytesTransmitted = tableSpecs->copyArgs.bytesTransmitted;
 
 	return success;
 }
@@ -1542,4 +1424,62 @@ copydb_prepare_copy_query_attrlist(CopyTableDataSpec *tableSpecs,
 	}
 
 	return true;
+}
+
+
+/*
+ * copydb_prepare_summary_command prepares the table summary command:
+ *
+ *  COPY qname WHERE ...
+ */
+bool
+copydb_prepare_summary_command(CopyTableDataSpec *tableSpecs)
+{
+	CopyTableSummary *tableSummary = &(tableSpecs->summary);
+
+	PQExpBuffer command = createPQExpBuffer();
+
+	appendPQExpBuffer(command, "COPY %s", tableSpecs->sourceTable->qname);
+
+	if (tableSpecs->copyArgs.srcWhereClause != NULL)
+	{
+		appendPQExpBuffer(command, " %s", tableSpecs->copyArgs.srcWhereClause);
+	}
+
+	tableSummary->command =
+		command->data != NULL ? strdup(command->data) : NULL;
+
+	if (PQExpBufferBroken(command) || tableSummary->command == NULL)
+	{
+		log_error("Failed to create summary command for %s: out of memory",
+				  tableSpecs->sourceTable->qname);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * FreeCopyTableDataSpec takes care of free'ing the allocated memory for the
+ * CopyTableDataSpec.
+ */
+static void
+FreeCopyTableDataSpec(CopyTableDataSpec *tableSpecs)
+{
+	free(tableSpecs->sourceTable);
+	free(tableSpecs->summary.command);
+	FreeCopyArgs(&(tableSpecs->copyArgs));
+}
+
+
+/*
+ * FreeCopyArgs takes care of free'ing the allocated memory for the CopyArgs.
+ */
+static void
+FreeCopyArgs(CopyArgs *args)
+{
+	free(args->srcAttrList);
+	free(args->srcWhereClause);
+	free(args->dstAttrList);
 }

@@ -18,10 +18,9 @@
 #include "pqexpbuffer.h"
 #include "portability/instr_time.h"
 
+#include "catalog.h"
 #include "string_utils.h"
 #include "schema.h"
-
-#define COPY_TABLE_SUMMARY_LINES 8
 
 typedef struct CopyTableSummary
 {
@@ -37,8 +36,6 @@ typedef struct CopyTableSummary
 } CopyTableSummary;
 
 
-#define COPY_INDEX_SUMMARY_LINES 8
-
 typedef struct CopyIndexSummary
 {
 	pid_t pid;                  /* pid */
@@ -51,6 +48,15 @@ typedef struct CopyIndexSummary
 	char *command;              /* malloc'ed area */
 } CopyIndexSummary;
 
+
+/* generic data type for OID lookup */
+typedef struct CopyOidSummary
+{
+	pid_t pid;                  /* pid */
+	uint64_t startTime;         /* time(NULL) at start time */
+	uint64_t doneTime;          /* time(NULL) at done time */
+	uint64_t durationMs;        /* instr_time duration in milliseconds */
+} CopyOidSummary;
 
 #define COPY_BLOBS_SUMMARY_LINES 3
 
@@ -198,48 +204,48 @@ typedef struct Summary
 	int lObjectJobs;
 } Summary;
 
-bool write_table_summary(CopyTableSummary *summary, char *filename);
-bool read_table_summary(CopyTableSummary *summary, const char *filename);
-bool open_table_summary(CopyTableSummary *summary, char *filename);
-bool finish_table_summary(CopyTableSummary *summary, char *filename);
 
+/*
+ * Internals
+ */
+bool table_summary_init(CopyTableSummary *summary);
+bool table_summary_finish(CopyTableSummary *summary);
+
+bool index_summary_init(CopyIndexSummary *summary);
+bool index_summary_finish(CopyIndexSummary *summary);
+
+/*
+ * Summary as JSON
+ */
 bool prepare_table_summary_as_json(CopyTableSummary *summary,
 								   JSON_Object *jsobj,
 								   const char *key);
-
-bool create_table_index_file(DatabaseCatalog *sourceDB,
-							 SourceTable *table,
-							 char *filename);
-
-bool write_blobs_summary(CopyBlobsSummary *summary, char *filename);
-bool read_blobs_summary(CopyBlobsSummary *summary, char *filename);
-
-
-void summary_set_current_time(TopLevelTimings *timings, TimingStep step);
-
-
-bool write_index_summary(CopyIndexSummary *summary, char *filename,
-						 bool constraint);
-bool read_index_summary(CopyIndexSummary *summary, const char *filename);
-bool open_index_summary(CopyIndexSummary *summary, char *filename,
-						bool constraint);
-bool finish_index_summary(CopyIndexSummary *summary, char *filename,
-						  bool constraint);
 
 bool prepare_index_summary_as_json(CopyIndexSummary *summary,
 								   JSON_Object *jsobj,
 								   const char *key);
 
+void print_summary_as_json(Summary *summary, const char *filename);
+
+/*
+ * Large Object top-level like summary
+ */
+bool write_blobs_summary(CopyBlobsSummary *summary, char *filename);
+bool read_blobs_summary(CopyBlobsSummary *summary, char *filename);
+
+
+/*
+ * Top-Level Summary.
+ */
+void summary_set_current_time(TopLevelTimings *timings, TimingStep step);
+
+
+/*
+ * Human Readable Summary Table
+ */
 void summary_prepare_toplevel_durations(Summary *summary);
 void print_toplevel_summary(Summary *summary);
 void print_summary_table(SummaryTable *summary);
 void prepare_summary_table_headers(SummaryTable *summary);
-
-void print_summary_as_json(Summary *summary, const char *filename);
-
-bool summary_read_index_donefile(SourceIndex *index,
-								 const char *filename,
-								 bool constraint,
-								 SummaryIndexEntry *indexEntry);
 
 #endif /* SUMMARY_H */

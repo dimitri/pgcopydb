@@ -6,7 +6,6 @@
 #ifndef CATALOG_H
 #define CATALOG_H
 
-#include "copydb.h"
 #include "schema.h"
 
 /*
@@ -28,20 +27,20 @@ struct SQLiteQuery
 /*
  * Catalog API.
  */
-bool catalog_init_from_specs(CopyDataSpec *copySpecs);
-bool catalog_close_from_specs(CopyDataSpec *copySpecs);
-
 bool catalog_open(DatabaseCatalog *catalog);
 bool catalog_init(DatabaseCatalog *catalog);
+bool catalog_create_semaphore(DatabaseCatalog *catalog);
 bool catalog_attach(DatabaseCatalog *a, DatabaseCatalog *b, const char *name);
 bool catalog_close(DatabaseCatalog *catalog);
 
 bool catalog_create_schema(DatabaseCatalog *catalog);
 bool catalog_drop_schema(DatabaseCatalog *catalog);
 
+bool catalog_set_wal_mode(DatabaseCatalog *catalog);
 
-bool catalog_begin(DatabaseCatalog *catalog);
+bool catalog_begin(DatabaseCatalog *catalog, bool immediate);
 bool catalog_commit(DatabaseCatalog *catalog);
+bool catalog_rollback(DatabaseCatalog *catalog);
 
 bool catalog_register_setup(DatabaseCatalog *catalog,
 							const char *source_pg_uri,
@@ -107,7 +106,6 @@ bool catalog_count_fetch(SQLiteQuery *query);
 bool catalog_add_s_table(DatabaseCatalog *catalog, SourceTable *table);
 bool catalog_add_attributes(DatabaseCatalog *catalog, SourceTable *table);
 bool catalog_add_s_table_part(DatabaseCatalog *catalog, SourceTable *table);
-bool catalog_add_s_table_parts(DatabaseCatalog *catalog, SourceTable *table);
 
 bool catalog_add_s_table_chksum(DatabaseCatalog *catalog,
 								SourceTable *table,
