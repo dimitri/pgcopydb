@@ -26,8 +26,7 @@
 #include "summary.h"
 
 
-static bool copydb_copy_supervisor_add_table_hook(void *context,
-												  SourceTable *table);
+static bool copydb_copy_supervisor_add_table_hook(void *ctx, SourceTable *table);
 
 /*
  * copydb_table_data fetches the list of tables from the source database and
@@ -262,6 +261,13 @@ copydb_start_copy_supervisor(CopyDataSpec *specs)
 }
 
 
+typedef struct CopySupervisorContext
+{
+	CopyDataSpec *specs;
+	PGSQL *dst;
+} CopySupervisorContext;
+
+
 /*
  * copydb_copy_supervisor creates the copyQueue and if needed the
  * copyDoneQueue too, then starts --table-jobs COPY table data workers to
@@ -293,6 +299,11 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 		return false;
 	}
 
+	CopySupervisorContext context = {
+		.specs = specs,
+		.dst = NULL
+	};
+
 	if (!catalog_init_from_specs(specs))
 	{
 		log_error("Failed to open internal catalogs in COPY supervisor, "
@@ -304,19 +315,56 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 	 * Now fill-in the COPY data queue with the table OIDs / part number.
 	 */
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+	CatalogTableStats stats = { 0 };
+
+	if (!catalog_s_table_stats(sourceDB, &stats))
+	{
+		log_error("Failed to compute source table statistics, "
+				  "see above for details");
+		return false;
+	}
+
+	/*
+	 * If some of our tables are going to be partitioned, then we need to
+	 * TRUNCATE them on the target server before adding them to the process
+	 * queue. That means we need to open a connection now.
+	 *
+	 * We don't bother with setting our GUCs in that connection as all we're
+	 * going to do here is a series of TRUNCATE ONLY commands.
+	 */
+	PGSQL dst = { 0 };
+
+	if (stats.countSplits > 0)
+	{
+		char *pguri = specs->connStrings.target_pguri;
+
+		if (!pgsql_init(&dst, pguri, PGSQL_CONN_TARGET))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		context.dst = &dst;
+	}
 
 	if (!catalog_iter_s_table(sourceDB,
-							  specs,
+							  &context,
 							  copydb_copy_supervisor_add_table_hook))
 	{
 		log_fatal("Failed to add tables to the COPY worker queue, terminating");
+		(void) pgsql_finish(&dst);
 		(void) copydb_fatal_exit();
 		return false;
 	}
 
+	if (stats.countSplits > 0)
+	{
+		(void) pgsql_finish(&dst);
+	}
+
 	if (!catalog_close_from_specs(specs))
 	{
-		log_error("Failed to cloes internal catalogs in COPY supervisor, "
+		log_error("Failed to close internal catalogs in COPY supervisor, "
 				  "see above for details");
 		return false;
 	}
@@ -390,9 +438,12 @@ copydb_copy_supervisor(CopyDataSpec *specs)
  * copydb_copy_supervisor_add_table_hook is an iterator callback function.
  */
 static bool
-copydb_copy_supervisor_add_table_hook(void *context, SourceTable *table)
+copydb_copy_supervisor_add_table_hook(void *ctx, SourceTable *table)
 {
-	CopyDataSpec *specs = (CopyDataSpec *) context;
+	CopySupervisorContext *context = (CopySupervisorContext *) ctx;
+
+	CopyDataSpec *specs = context->specs;
+	PGSQL *dst = context->dst;
 
 	if (table->partition.partCount == 0)
 	{
@@ -407,7 +458,16 @@ copydb_copy_supervisor_add_table_hook(void *context, SourceTable *table)
 		/*
 		 * Add as many times the table OID as we have partitions, each with
 		 * their own partition number that starts at 1 (not zero).
+		 *
+		 * Before adding the table to be processed by workers, truncate it on
+		 * the target database now, avoiding concurrency issues.
 		 */
+		if (!pgsql_truncate(dst, table->qname))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
 		for (int i = 0; i < table->partition.partCount; i++)
 		{
 			int partNumber = i + 1;
@@ -1168,86 +1228,28 @@ copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 		return false;
 	}
 
-	/* we want to set transaction snapshot to the main one on the source */
-	CopyTableSummary *summary = tableSpecs->summary;
-
-	/* when using `pgcopydb copy table-data`, we don't truncate */
-	bool truncate = tableSpecs->section != DATA_SECTION_TABLE_DATA;
-
-	/*
-	 * When COPYing a partition, TRUNCATE only when it's the first one. Both
-	 * checking of the partition is the first one being processed and the
-	 * TRUNCATE operation itself must be protected in a critical section.
-	 */
-	if (truncate && tableSpecs->part.partCount > 1)
-	{
-		/*
-		 * When partitioning for COPY we can only TRUNCATE once per table, we
-		 * avoid doing a TRUNCATE per part. So only the process that reaches
-		 * this area first is allowed to TRUNCATE, and it must do so within a
-		 * critical section.
-		 *
-		 * As processes for the other parts of the same source table are
-		 * waiting for the TRUNCATE to be done with, we can't do it in the same
-		 * transaction as the COPY, and we won't be able to COPY with FREEZE
-		 * either.
-		 */
-
-		/* enter the critical section */
-		(void) semaphore_lock(&(specs->tableSemaphore));
-
-		/* if the truncate done file already exists, it's been done already */
-		if (!file_exists(tableSpecs->tablePaths.truncateDoneFile))
-		{
-			if (!pgsql_truncate(dst, tableSpecs->sourceTable->qname))
-			{
-				/* errors have already been logged */
-				(void) semaphore_unlock(&(specs->tableSemaphore));
-				return false;
-			}
-
-			if (!write_file("", 0, tableSpecs->tablePaths.truncateDoneFile))
-			{
-				/* errors have already been logged */
-				(void) semaphore_unlock(&(specs->tableSemaphore));
-				return false;
-			}
-		}
-
-		/* end of the critical section */
-		(void) semaphore_unlock(&(specs->tableSemaphore));
-
-		/* now TRUNCATE has been done, refrain from an extra one in pg_copy */
-		truncate = false;
-	}
-
-	truncate = false;
-
 	/* Now copy the data from source to target */
+	CopyTableSummary *summary = tableSpecs->summary;
 	log_notice("%s", summary->command);
 
 	/* COPY FROM tablename, or maybe COPY FROM (SELECT ... WHERE ...) */
-	PQExpBuffer copySrc = createPQExpBuffer();
-	PQExpBuffer copyDst = createPQExpBuffer();
+	CopyArgs args = {
+		.srcQname = tableSpecs->sourceTable->qname,
+		.srcAttrList = NULL,
+		.srcWhereClause = NULL,
+		.dstQname = tableSpecs->sourceTable->qname,
+		.dstAttrList = NULL,
+		.truncate = tableSpecs->sourceTable->partition.partCount <= 1,
+		.freeze = tableSpecs->sourceTable->partition.partCount <= 1,
+		.bytesTransmitted = 0
+	};
 
-	if (copySrc == NULL || copyDst == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	if (!copydb_prepare_copy_query(tableSpecs, copySrc, true))
-	{
-		/* errors have already been logged */
-		destroyPQExpBuffer(copySrc);
-		return false;
-	}
-
-	if (!copydb_prepare_copy_query(tableSpecs, copyDst, false))
+	if (!copydb_prepare_copy_query(tableSpecs, &args))
 	{
 		/* errors have already been logged */
-		destroyPQExpBuffer(copySrc);
-		destroyPQExpBuffer(copyDst);
+		free(args.srcAttrList);
+		free(args.srcWhereClause);
+		free(args.dstAttrList);
 		return false;
 	}
 
@@ -1262,8 +1264,7 @@ copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 		++attempts;
 
 		/* ignore previous attempts, we need only one success here */
-		success = pg_copy(src, dst, copySrc->data, copyDst->data, truncate,
-						  &(summary->bytesTransmitted));
+		success = pg_copy(src, dst, &args);
 
 		if (success)
 		{
@@ -1313,8 +1314,12 @@ copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 		}
 	}
 
-	destroyPQExpBuffer(copySrc);
-	destroyPQExpBuffer(copyDst);
+	/* publish bytesTransmitted accumulated value to the summary */
+	summary->bytesTransmitted = args.bytesTransmitted;
+
+	free(args.srcAttrList);
+	free(args.srcWhereClause);
+	free(args.dstAttrList);
 
 	return success;
 }
@@ -1325,130 +1330,128 @@ copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
  * names from the SourceTable instance.
  */
 bool
-copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
-						  PQExpBuffer query,
-						  bool source)
+copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs, CopyArgs *args)
+{
+	PQExpBuffer srcAttrList = createPQExpBuffer();
+
+	if (!copydb_prepare_copy_query_attrlist(tableSpecs, srcAttrList))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	args->srcAttrList = strdup(srcAttrList->data);
+	destroyPQExpBuffer(srcAttrList);
+
+	/*
+	 * On a source COPY query we might want to add filtering.
+	 */
+	if (tableSpecs->sourceTable->partition.partCount > 1)
+	{
+		PQExpBuffer srcWhereClause = createPQExpBuffer();
+
+		/*
+		 * The way schema_list_partitions prepares the boundaries is non
+		 * overlapping, so we can use the BETWEEN operator to select our source
+		 * rows in the COPY sub-query.
+		 */
+		if (streq(tableSpecs->part.partKey, "ctid"))
+		{
+			if (tableSpecs->part.max == -1)
+			{
+				/* the last part for ctid splits covers "extra" relpages */
+				appendPQExpBuffer(srcWhereClause,
+								  "WHERE ctid >= '(%lld,0)'::tid",
+								  (long long) tableSpecs->part.min + 1);
+			}
+			else
+			{
+				appendPQExpBuffer(srcWhereClause,
+								  "WHERE ctid >= '(%lld,0)'::tid"
+								  " and ctid < '(%lld,0)'::tid",
+								  (long long) tableSpecs->part.min,
+								  (long long) tableSpecs->part.max + 1);
+			}
+		}
+		else
+		{
+			appendPQExpBuffer(srcWhereClause,
+							  "WHERE %s BETWEEN %lld AND %lld",
+							  tableSpecs->part.partKey,
+							  (long long) tableSpecs->part.min,
+							  (long long) tableSpecs->part.max);
+		}
+
+		if (PQExpBufferBroken(srcWhereClause))
+		{
+			log_error("Failed to create where clause for %s: out of memory",
+					  args->srcQname);
+			return false;
+		}
+
+		args->srcWhereClause = strdup(srcWhereClause->data);
+		destroyPQExpBuffer(srcWhereClause);
+	}
+
+	/*
+	 * Prepare COPY args for destination query (COPY ... FROM)
+	 */
+	PQExpBuffer dstAttrList = createPQExpBuffer();
+
+	if (!copydb_prepare_copy_query_attrlist(tableSpecs, dstAttrList))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	args->dstAttrList = strdup(dstAttrList->data);
+	destroyPQExpBuffer(dstAttrList);
+
+	return true;
+}
+
+
+/*
+ * copydb_prepare_copy_query_attrlist prepares the attribute list from a given
+ * table specification.
+ */
+bool
+copydb_prepare_copy_query_attrlist(CopyTableDataSpec *tableSpecs,
+								   PQExpBuffer attrList)
 {
 	SourceTable *table = tableSpecs->sourceTable;
+
 	bool isFirst = true;
 
-	if (source)
+	for (int i = 0; i < table->attributes.count; i++)
 	{
-		/*
-		 * Always use a sub-query as the copy source, that's easier to hack
-		 * around if comes a time when sophistication is required.
-		 */
-		appendPQExpBufferStr(query, "(SELECT ");
+		SourceTableAttribute *attribute = &(table->attributes.array[i]);
+		char *attname = attribute->attname;
 
-		for (int i = 0; i < table->attributes.count; i++)
+		/* Generated columns cannot be used in COPY */
+		if (attribute->attisgenerated)
 		{
-			SourceTableAttribute *attribute = &(table->attributes.array[i]);
-			char *attname = attribute->attname;
-
-			/* Generated columns cannot be used in COPY */
-			if (attribute->attisgenerated)
-			{
-				log_debug("Skipping %s in COPY as it is a generated column",
-						  attname);
-				continue;
-			}
-
-			if (!isFirst)
-			{
-				appendPQExpBufferStr(query, ", ");
-			}
-			else
-			{
-				isFirst = false;
-			}
-
-			appendPQExpBuffer(query, "%s", attname);
+			log_debug("Skipping %s.%s in COPY as it is a generated column",
+					  tableSpecs->sourceTable->qname,
+					  attname);
+			continue;
 		}
 
-		appendPQExpBuffer(query, " FROM ONLY %s ", tableSpecs->sourceTable->qname);
-
-		/*
-		 * On a source COPY query we might want to add filtering.
-		 */
-		if (tableSpecs->part.partCount > 1)
+		if (isFirst)
 		{
-			/*
-			 * The way schema_list_partitions prepares the boundaries is non
-			 * overlapping, so we can use the BETWEEN operator to select our source
-			 * rows in the COPY sub-query.
-			 */
-			if (streq(tableSpecs->part.partKey, "ctid"))
-			{
-				if (tableSpecs->part.max == -1)
-				{
-					/* the last part for ctid splits covers "extra" relpages */
-					appendPQExpBuffer(query,
-									  " WHERE ctid >= '(%lld,0)'::tid",
-									  (long long) tableSpecs->part.min + 1);
-				}
-				else
-				{
-					appendPQExpBuffer(query,
-									  " WHERE ctid >= '(%lld,0)'::tid"
-									  " and ctid < '(%lld,0)'::tid",
-									  (long long) tableSpecs->part.min,
-									  (long long) tableSpecs->part.max + 1);
-				}
-			}
-			else
-			{
-				appendPQExpBuffer(query,
-								  " WHERE %s BETWEEN %lld AND %lld ",
-								  tableSpecs->part.partKey,
-								  (long long) tableSpecs->part.min,
-								  (long long) tableSpecs->part.max);
-			}
+			isFirst = false;
+		}
+		else
+		{
+			appendPQExpBufferStr(attrList, ", ");
 		}
 
-		appendPQExpBufferStr(query, ")");
-	}
-	else
-	{
-		/*
-		 * For the destination query, use the table(...) syntax.
-		 */
-		appendPQExpBuffer(query, "%s", tableSpecs->sourceTable->qname);
-
-		for (int i = 0; i < table->attributes.count; i++)
-		{
-			SourceTableAttribute *attribute = &(table->attributes.array[i]);
-			char *attname = attribute->attname;
-
-			/* Generated columns cannot be used in COPY */
-			if (attribute->attisgenerated)
-			{
-				log_debug("Skipping %s in COPY as it is a generated column",
-						  attname);
-				continue;
-			}
-
-			if (isFirst)
-			{
-				appendPQExpBufferStr(query, "(");
-				isFirst = false;
-			}
-			else
-			{
-				appendPQExpBufferStr(query, ", ");
-			}
-
-			appendPQExpBuffer(query, "%s", attname);
-		}
-
-		if (table->attributes.count > 0)
-		{
-			appendPQExpBufferStr(query, ")");
-		}
+		appendPQExpBuffer(attrList, "%s", attname);
 	}
 
-	if (PQExpBufferBroken(query))
+	if (PQExpBufferBroken(attrList))
 	{
-		log_error("Failed to create COPY query for %s: out of memory",
+		log_error("Failed to create attribute list for %s: out of memory",
 				  tableSpecs->sourceTable->qname);
 		return false;
 	}

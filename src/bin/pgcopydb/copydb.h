@@ -436,9 +436,10 @@ bool copydb_table_parts_are_all_done(CopyDataSpec *specs,
 									 bool *allPartsDone,
 									 bool *isBeingProcessed);
 
-bool copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
-							   PQExpBuffer query,
-							   bool source);
+bool copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs, CopyArgs *args);
+
+bool copydb_prepare_copy_query_attrlist(CopyTableDataSpec *tableSpecs,
+										PQExpBuffer attrList);
 
 /* blobs.c */
 bool copydb_start_blob_process(CopyDataSpec *specs);

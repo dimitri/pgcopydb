@@ -212,24 +212,20 @@ copydb_copy_extensions_hook(void *ctx, SourceExtension *ext)
 					config->nspname,
 					config->relname);
 
-			/* apply extcondition to the source table */
-			PQExpBuffer sql = createPQExpBuffer();
+			CopyArgs args = {
+				.srcQname = qname,
+				.srcAttrList = "*",
+				.srcWhereClause = config->condition,
+				.dstQname = qname,
+				.dstAttrList = "",
+				.bytesTransmitted = 0
+			};
 
-			appendPQExpBuffer(sql, "(SELECT * FROM %s %s)",
-							  qname,
-							  config->condition);
-
-			bool truncate = false;
-			uint64_t bytesTransmitted = 0;
-
-			if (!pg_copy(src, dst, sql->data, qname, truncate, &bytesTransmitted))
+			if (!pg_copy(src, dst, &args))
 			{
 				/* errors have already been logged */
-				(void) destroyPQExpBuffer(sql);
 				return false;
 			}
-
-			(void) destroyPQExpBuffer(sql);
 		}
 	}
 
