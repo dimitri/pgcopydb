@@ -131,7 +131,7 @@ typedef struct CopyTableDataSpec
 	bool resume;
 
 	SourceTable *sourceTable;
-	CopyTableSummary *summary;
+	CopyTableSummary summary;
 
 	int tableJobs;
 	int indexJobs;
@@ -142,6 +142,9 @@ typedef struct CopyTableDataSpec
 
 	/* same-table concurrency with COPY WHERE clause partitioning */
 	CopyTableDataPartSpec part;
+	uint32_t countPartsDone;
+	pid_t partsDonePid;
+	bool allPartsAreDone;
 } CopyTableDataSpec;
 
 

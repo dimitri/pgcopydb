@@ -649,90 +649,46 @@ copydb_update_progress_table_hook(void *ctx, SourceTable *table)
 
 	int partCount = table->partition.partCount;
 
+	CopyTableDataSpec tableSpecs = { 0 };
+
+	if (!copydb_init_table_specs(&tableSpecs, copySpecs, table, 0))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	DatabaseCatalog *sourceDB = &(copySpecs->catalogs.source);
+
+	if (!summary_lookup_table(sourceDB, &tableSpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * Copy the SourceTable struct in-place to the tableInProgress array.
+	 */
+	tableInProgress->array[progress->tableInProgress.count++] = *table;
+	summaryArray->array[progress->tableSummaryArray.count++] = tableSpecs.summary;
+
 	bool done = false;
 
 	if (partCount <= 1)
 	{
-		CopyTableDataSpec tableSpecs = { 0 };
-
-		if (!copydb_init_table_specs(&tableSpecs, copySpecs, table, 0))
+		if (tableSpecs.summary.doneTime > 0)
+		{
+			done = true;
+		}
+	}
+	else
+	{
+		if (!summary_lookup_table_parts_done(sourceDB, &tableSpecs))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 
-		if (file_exists(tableSpecs.tablePaths.doneFile))
-		{
-			done = true;
-		}
-		else if (file_exists(tableSpecs.tablePaths.lockFile))
-		{
-			CopyTableSummary summary = { .table = table };
-
-			if (!read_table_summary(&summary,
-									tableSpecs.tablePaths.lockFile))
-			{
-				/* errors have already been logged */
-				return false;
-			}
-
-			/*
-			 * Copy the SourceTable struct in-place to the tableInProgress
-			 * array.
-			 */
-			tableInProgress->array[progress->tableInProgress.count++] =
-				*table;
-
-			summaryArray->array[progress->tableSummaryArray.count++] =
-				summary;
-		}
-	}
-	else
-	{
-		bool allPartsAreDone = true;
-
-		for (int partIndex = 0; partIndex < partCount; partIndex++)
-		{
-			CopyTableDataSpec tableSpecs = { 0 };
-
-			if (!copydb_init_table_specs(&tableSpecs,
-										 copySpecs,
-										 table,
-										 partIndex))
-			{
-				/* errors have already been logged */
-				return false;
-			}
-
-			if (!file_exists(tableSpecs.tablePaths.doneFile))
-			{
-				allPartsAreDone = false;
-			}
-
-			if (file_exists(tableSpecs.tablePaths.lockFile))
-			{
-				CopyTableSummary summary = { .table = table };
-
-				if (!read_table_summary(&summary,
-										tableSpecs.tablePaths.lockFile))
-				{
-					/* errors have already been logged */
-					return false;
-				}
-
-				/*
-				 * Copy the SourceTable struct in-place to the
-				 * tableInProgress array.
-				 */
-				tableInProgress->array[progress->tableInProgress.count++] =
-					*table;
-
-				summaryArray->array[progress->tableSummaryArray.count++] =
-					summary;
-			}
-		}
-
-		done = allPartsAreDone;
+		done = tableSpecs.partsDonePid > 0;
 	}
 
 	if (done)

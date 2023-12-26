@@ -107,7 +107,6 @@ bool catalog_count_fetch(SQLiteQuery *query);
 bool catalog_add_s_table(DatabaseCatalog *catalog, SourceTable *table);
 bool catalog_add_attributes(DatabaseCatalog *catalog, SourceTable *table);
 bool catalog_add_s_table_part(DatabaseCatalog *catalog, SourceTable *table);
-bool catalog_add_s_table_parts(DatabaseCatalog *catalog, SourceTable *table);
 
 bool catalog_add_s_table_chksum(DatabaseCatalog *catalog,
 								SourceTable *table,
@@ -517,6 +516,38 @@ bool catalog_iter_s_index_in_progress(DatabaseCatalog *catalog,
 
 bool catalog_iter_s_index_in_progress_init(SourceIndexIterator *iter);
 
+
+/*
+ * Manage catalog summary entries.
+ *
+ * see summary.c
+ */
+bool summary_add_table(DatabaseCatalog *catalog,
+					   CopyTableDataSpec *tableSpecs);
+
+bool summary_finish_table(DatabaseCatalog *catalog,
+						  CopyTableDataSpec *tableSpecs);
+
+bool summary_lookup_table(DatabaseCatalog *catalog,
+						  CopyTableDataSpec *tableSpecs);
+
+bool summary_table_fetch(SQLiteQuery *query);
+
+bool summary_delete_table(DatabaseCatalog *catalog,
+						  CopyTableDataSpec *tableSpecs);
+
+bool summary_table_count_parts_done(DatabaseCatalog *catalog,
+									CopyTableDataSpec *tableSpecs);
+
+bool summary_table_fetch_count_parts_done(SQLiteQuery *query);
+
+bool summary_add_table_parts_done(DatabaseCatalog *catalog,
+								  CopyTableDataSpec *tableSpecs);
+
+bool summary_lookup_table_parts_done(DatabaseCatalog *catalog,
+									 CopyTableDataSpec *tableSpecs);
+
+bool summary_table_parts_done_fetch(SQLiteQuery *query);
 
 /*
  * Internal tooling for catalogs management

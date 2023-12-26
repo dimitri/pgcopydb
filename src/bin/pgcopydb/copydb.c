@@ -851,7 +851,7 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 		.resume = specs->resume,
 
 		.sourceTable = source,
-		.summary = NULL,
+		.summary = { 0 },
 
 		.tableJobs = specs->tableJobs,
 		.indexJobs = specs->indexJobs,
@@ -914,7 +914,7 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 			log_error("BUG: copydb_init_table_specs partNumber is %d and "
 					  "source table partArray.count is %d",
 					  partNumber,
-					  source->partsArray.count);
+					  source->partition.partCount);
 			return false;
 		}
 

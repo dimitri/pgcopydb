@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <unistd.h>
 
 #include "parson.h"
 
@@ -28,50 +29,522 @@ static bool prepare_summary_table_index_hook(void *ctx, SourceIndex *index);
 
 
 /*
- * create_table_summary creates a summary file for the copy operation of a
- * given table. The summary file contains identification information and
- * duration information and can be used both as a lock file and as a resource
- * file to display what's happening.
+ * summary_lookup_table looks-up for a table summary in our catalogs, in case
+ * the given table (partition) has already been done in a previous run.
  */
 bool
-write_table_summary(CopyTableSummary *summary, char *filename)
+summary_lookup_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 {
-	JSON_Value *js = json_value_init_object();
-	JSON_Object *jsObj = json_value_get_object(js);
+	sqlite3 *db = catalog->db;
 
-	char bytesPretty[BUFSIZE] = { 0 };
-	pretty_print_bytes(bytesPretty, BUFSIZE, summary->bytesTransmitted);
-
-	char transmitRate[BUFSIZE] = { 0 };
-	pretty_print_bytes_per_second(transmitRate, BUFSIZE, summary->bytesTransmitted,
-								  summary->durationMs);
-
-	json_object_set_number(jsObj, "pid", summary->pid);
-	json_object_dotset_number(jsObj, "table.oid", summary->table->oid);
-	json_object_dotset_string(jsObj, "table.nspname", summary->table->nspname);
-	json_object_dotset_string(jsObj, "table.relname", summary->table->relname);
-	json_object_set_number(jsObj, "start-time-epoch", summary->startTime);
-	json_object_set_number(jsObj, "done-time-epoch", summary->doneTime);
-	json_object_set_number(jsObj, "duration", summary->durationMs);
-	json_object_dotset_number(jsObj, "network.bytes", summary->bytesTransmitted);
-	json_object_dotset_string(jsObj, "network.bytes-pretty", bytesPretty);
-	json_object_dotset_string(jsObj, "network.transmit-rate", transmitRate);
-	json_object_set_string(jsObj, "command", summary->command);
-
-	char *serialized_string = json_serialize_to_string_pretty(js);
-	size_t len = strlen(serialized_string);
-
-	/* write the summary to the doneFile */
-	bool success = write_file(serialized_string, len, filename);
-
-	json_free_serialized_string(serialized_string);
-	json_value_free(js);
-
-	if (!success)
+	if (db == NULL)
 	{
-		log_error("Failed to write table summary file \"%s\"", filename);
+		log_error("BUG: summary_lookup_table: db is NULL");
 		return false;
 	}
+
+	SourceTable *table = tableSpecs->sourceTable;
+	CopyTableSummary *tableSummary = &(tableSpecs->summary);
+
+	tableSummary->table = tableSpecs->sourceTable;
+
+	char *sql =
+		"  select pid, start_time_epoch, done_time_epoch, duration, "
+		"         bytes, command "
+		"    from summary "
+		"   where tableoid = $1 and partnum = $2";
+
+	SQLiteQuery query = {
+		.context = tableSummary,
+		.fetchFunction = &summary_table_fetch
+	};
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "tableoid", table->oid, NULL },
+
+		{ BIND_PARAMETER_TYPE_TEXT, "partnum",
+		  table->partition.partNumber, NULL },
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which return exactly one row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * table_summary_fetch fetches a CopyTableSummary entry from a SQLite ppStmt
+ * result set.
+ */
+bool
+summary_table_fetch(SQLiteQuery *query)
+{
+	CopyTableSummary *tableSummary = (CopyTableSummary *) query->context;
+
+	tableSummary->pid = sqlite3_column_int64(query->ppStmt, 0);
+	tableSummary->startTime = sqlite3_column_int64(query->ppStmt, 1);
+	tableSummary->doneTime = sqlite3_column_int64(query->ppStmt, 2);
+	tableSummary->durationMs = sqlite3_column_int64(query->ppStmt, 3);
+	tableSummary->bytesTransmitted = sqlite3_column_int64(query->ppStmt, 4);
+
+	if (sqlite3_column_type(query->ppStmt, 5) == SQLITE_NULL)
+	{
+		tableSummary->command = NULL;
+	}
+	else
+	{
+		int len = sqlite3_column_bytes(query->ppStmt, 5);
+		int bytes = len + 1;
+
+		tableSummary->command = (char *) calloc(bytes, sizeof(char));
+
+		if (tableSummary->command == NULL)
+		{
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		strlcpy(tableSummary->command,
+				(char *) sqlite3_column_text(query->ppStmt, 5),
+				bytes);
+	}
+
+	/* no serialization for that internal in-memory only data */
+	tableSummary->startTimeInstr = (instr_time) {
+		0
+	};
+	tableSummary->durationInstr = (instr_time) {
+		0
+	};
+
+	INSTR_TIME_SET_CURRENT(tableSummary->startTimeInstr);
+
+	return true;
+}
+
+
+/*
+ * summary_delete_table DELETEs the summary entry for the given table.
+ */
+bool
+summary_delete_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: summary_delete_table: db is NULL");
+		return false;
+	}
+
+	char *sql = "delete from summary where tableoid = $1 and partnumber = $2";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "tableoid",
+		  tableSpecs->sourceTable->oid, NULL },
+
+		{ BIND_PARAMETER_TYPE_INT64, "partnum",
+		  tableSpecs->sourceTable->partition.partNumber, NULL }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which does not return any row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * summary_add_table INSERTs a SourceTable summary entry to our internal
+ * catalogs database.
+ */
+bool
+summary_add_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: summary_add_table: db is NULL");
+		return false;
+	}
+
+	SourceTable *table = tableSpecs->sourceTable;
+	CopyTableSummary *tableSummary = &(tableSpecs->summary);
+
+	tableSummary->pid = getpid();
+	tableSummary->table = tableSpecs->sourceTable;
+
+	if (!table_summary_init(tableSummary))
+	{
+		log_error("Failed to initialize table summary for pid %d and "
+				  "table %s",
+				  getpid(),
+				  table->qname);
+		return false;
+	}
+
+	char *sql =
+		"insert into summary(pid, tableoid, partnum, start_time_epoch, command)"
+		"values($1, $2, $3, $4, $5)";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "pid", tableSummary->pid, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "tableoid", table->oid, NULL },
+
+		{ BIND_PARAMETER_TYPE_INT64, "partnum",
+		  table->partition.partNumber, NULL },
+
+		{ BIND_PARAMETER_TYPE_INT64, "start_time_epoch",
+		  tableSummary->startTime, NULL },
+
+		{ BIND_PARAMETER_TYPE_TEXT, "command",
+		  0, (char *) tableSummary->command }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which does not return any row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * summary_finish_table UPDATEs a SourceTable summary entry to our internal
+ * catalogs database.
+ */
+bool
+summary_finish_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: summary_add_table: db is NULL");
+		return false;
+	}
+
+	SourceTable *table = tableSpecs->sourceTable;
+	CopyTableSummary *tableSummary = &(tableSpecs->summary);
+
+	if (!table_summary_finish(tableSummary))
+	{
+		log_error("Failed to finish summary for table %s", table->qname);
+		return false;
+	}
+
+	char *sql =
+		"update summary set done_time_epoch = $1, duration = $2, bytes = $3 "
+		"where pid = $4 and tableoid = $5 and partnum = $6";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "done_time_epoch",
+		  tableSummary->doneTime, NULL },
+
+		{ BIND_PARAMETER_TYPE_INT64, "duration",
+		  tableSummary->durationMs, NULL },
+
+		{ BIND_PARAMETER_TYPE_INT64, "bytes",
+		  tableSummary->bytesTransmitted, NULL },
+
+		{ BIND_PARAMETER_TYPE_INT64, "pid", getpid(), NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "tableoid", table->oid, NULL },
+
+		{ BIND_PARAMETER_TYPE_INT64, "partnum",
+		  table->partition.partNumber, NULL }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which does not return any row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * summary_table_all_parts_done sets tableSpecs->allPartsAreDone to true when
+ * all the parts have already been done in the summary table of our internal
+ * catalogs.
+ */
+bool
+summary_table_count_parts_done(DatabaseCatalog *catalog,
+							   CopyTableDataSpec *tableSpecs)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: summary_add_table: db is NULL");
+		return false;
+	}
+
+	SourceTable *table = tableSpecs->sourceTable;
+
+	char *sql =
+		"select count(s.oid) "
+		" from s_table t "
+		"      join s_table_part p on t.oid = p.oid "
+		"      left join summary s "
+		"             on s.tableoid = p.oid "
+		"            and s.partnum = p.partnum "
+		"where tableoid = $1";
+
+	SQLiteQuery query = {
+		.context = tableSpecs,
+		.fetchFunction = &summary_table_fetch_count_parts_done
+	};
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "tableoid", table->oid, NULL }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which does not return any row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * summary_table_fetch_count_parts_done fetches the count of parts already done
+ * in our summary from a SQLiteQuere ppStmt result.
+ */
+bool
+summary_table_fetch_count_parts_done(SQLiteQuery *query)
+{
+	CopyTableDataSpec *tableSpecs = (CopyTableDataSpec *) query->context;
+
+	tableSpecs->countPartsDone = sqlite3_column_int(query->ppStmt, 0);
+
+	return true;
+}
+
+
+/*
+ * summary_add_table_parts_done registers the first pid that sees all tables
+ * parts aredone, using SQLite insert-or-ignore returning facility to ensure
+ * concurrency control.
+ */
+bool
+summary_add_table_parts_done(DatabaseCatalog *catalog,
+							 CopyTableDataSpec *tableSpecs)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: summary_add_table_parts_done: db is NULL");
+		return false;
+	}
+
+	SourceTable *table = tableSpecs->sourceTable;
+
+	char *sql =
+		"insert or ignore into s_table_parts_done(tableoid, pid) "
+		"values($1, $2)";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "tableoid", table->oid, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "pid", getpid(), NULL }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which return exactly one row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * summary_lookup_table_parts_done selects the PID that went there first.
+ *
+ * We could use insert or ignore ... returning ... but that's supported by
+ * SQLite since version 3.35.0 (2021-03-12) and debian oldstable (bullseye) is
+ * still around with Package: libsqlite3-0 (3.34.1-3).
+ */
+bool
+summary_lookup_table_parts_done(DatabaseCatalog *catalog,
+								CopyTableDataSpec *tableSpecs)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: summary_add_table: db is NULL");
+		return false;
+	}
+
+	SourceTable *table = tableSpecs->sourceTable;
+
+	char *sql = "select pid from s_table_parts_done where tableoid = $1 ";
+
+	SQLiteQuery query = {
+		.context = tableSpecs,
+		.fetchFunction = &summary_table_parts_done_fetch
+	};
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "tableoid", table->oid, NULL }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which does not return any row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * summary_table_parts_done_fetch fetches a row from s_table_parts_done.
+ */
+bool
+summary_table_parts_done_fetch(SQLiteQuery *query)
+{
+	CopyTableDataSpec *tableSpecs = (CopyTableDataSpec *) query->context;
+
+	tableSpecs->partsDonePid = sqlite3_column_int(query->ppStmt, 0);
 
 	return true;
 }
@@ -132,72 +605,23 @@ prepare_table_summary_as_json(CopyTableSummary *summary,
 
 
 /*
- * read_table_summary reads a summary on-disk and parses the content of the
- * file, and populates the given summary with what we read in the on-disk file.
- *
- * Couple notes:
- *
- *  1. the summary->table SourceTable pointer should point to allocated memory,
- *
- *  2. the instr_time fields can't be read from their on-disk representation
- *     and are set to zero instead.
+ * table_summary_init initializes the time elements of a table summary.
  */
 bool
-read_table_summary(CopyTableSummary *summary, const char *filename)
+table_summary_init(CopyTableSummary *summary)
 {
-	JSON_Value *json = json_parse_file(filename);
-
-	if (json == NULL)
-	{
-		log_error("Failed to parse summary file \"%s\"", filename);
-		return false;
-	}
-
-	JSON_Object *jsObj = json_value_get_object(json);
-
-	summary->pid = json_object_get_number(jsObj, "pid");
-
-	summary->table->oid = json_object_dotget_number(jsObj, "table.oid");
-
-	char *schema = (char *) json_object_dotget_string(jsObj, "table.nspname");
-	char *name = (char *) json_object_dotget_string(jsObj, "table.relname");
-
-	strlcpy(summary->table->nspname, schema, sizeof(summary->table->nspname));
-	strlcpy(summary->table->relname, name, sizeof(summary->table->relname));
-
-	summary->startTime = json_object_get_number(jsObj, "start-time-epoch");
-	summary->doneTime = json_object_get_number(jsObj, "done-time-epoch");
-	summary->durationMs = json_object_get_number(jsObj, "duration");
-	summary->bytesTransmitted = json_object_dotget_number(jsObj, "network.bytes");
-	summary->command = strdup(json_object_get_string(jsObj, "command"));
+	/* "COPY " is 5 bytes, then 1 for \0 */
+	int len = strlen(summary->table->qname) + 5 + 1;
+	summary->command = (char *) calloc(len, sizeof(char));
 
 	if (summary->command == NULL)
 	{
 		log_error(ALLOCATION_FAILED_ERROR);
-		json_value_free(json);
 		return false;
 	}
 
-	/* we can't provide instr_time readers */
-	summary->startTimeInstr = (instr_time) {
-		0
-	};
-	summary->durationInstr = (instr_time) {
-		0
-	};
+	sformat(summary->command, len, "COPY %s", summary->table->qname);
 
-	json_value_free(json);
-	return true;
-}
-
-
-/*
- * open_table_summary initializes the time elements of a table summary and
- * writes the summary in the given filename. Typically, the lockFile.
- */
-bool
-open_table_summary(CopyTableSummary *summary, char *filename)
-{
 	summary->startTime = time(NULL);
 	summary->doneTime = 0;
 	summary->durationMs = 0;
@@ -210,16 +634,15 @@ open_table_summary(CopyTableSummary *summary, char *filename)
 
 	INSTR_TIME_SET_CURRENT(summary->startTimeInstr);
 
-	return write_table_summary(summary, filename);
+	return true;
 }
 
 
 /*
- * finish_table_summary sets the duration of the summary fields and writes the
- * summary in the given filename. Typically, the doneFile.
+ * table_summary_finish sets the duration of the summary fields.
  */
 bool
-finish_table_summary(CopyTableSummary *summary, char *filename)
+table_summary_finish(CopyTableSummary *summary)
 {
 	summary->doneTime = time(NULL);
 
@@ -228,7 +651,7 @@ finish_table_summary(CopyTableSummary *summary, char *filename)
 
 	summary->durationMs = INSTR_TIME_GET_MILLISEC(summary->durationInstr);
 
-	return write_table_summary(summary, filename);
+	return true;
 }
 
 
@@ -1342,8 +1765,6 @@ prepare_summary_table_hook(void *ctx, SourceTable *table)
 	CopyDataSpec *specs = (CopyDataSpec *) context->specs;
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	CopyFilePaths *cfPaths = &(specs->cfPaths);
-
 	TopLevelTimings *timings = &(context->summary->timings);
 	SummaryTable *summaryTable = &(context->summary->table);
 
@@ -1362,94 +1783,24 @@ prepare_summary_table_hook(void *ctx, SourceTable *table)
 	strlcpy(entry->nspname, table->nspname, sizeof(entry->nspname));
 	strlcpy(entry->relname, table->relname, sizeof(entry->relname));
 
-	/* fetch timing information from on-disk done files */
-	if (table->partition.partCount == 0)
-	{
-		CopyTableSummary tableSummary = { .table = table };
-		TableFilePaths tablePaths = { 0 };
+	entry->durationTableMs = table->durationMs;
+	timings->tableDurationMs += table->durationMs;
 
-		if (!copydb_init_tablepaths(cfPaths, &tablePaths, table->oid))
-		{
-			log_error("Failed to prepare pathnames for table %s",
-					  table->qname);
-			return false;
-		}
+	(void) IntervalToString(table->durationMs,
+							entry->tableMs,
+							sizeof(entry->tableMs));
 
-		if (!read_table_summary(&tableSummary, tablePaths.doneFile))
-		{
-			log_error("Failed to read table summary \"%s\"",
-					  tablePaths.doneFile);
-			return false;
-		}
+	entry->bytes = table->bytesTransmitted;
+	summaryTable->totalBytes += table->bytesTransmitted;
 
-		summaryTable->totalBytes += tableSummary.bytesTransmitted;
-		entry->bytes = tableSummary.bytesTransmitted;
+	pretty_print_bytes(entry->bytesStr,
+					   sizeof(entry->bytesStr),
+					   entry->bytes);
 
-		pretty_print_bytes(entry->bytesStr,
-						   sizeof(entry->bytesStr),
-						   entry->bytes);
-
-		pretty_print_bytes_per_second(entry->transmitRate,
-									  sizeof(entry->transmitRate),
-									  tableSummary.bytesTransmitted,
-									  tableSummary.durationMs);
-
-		entry->durationTableMs = tableSummary.durationMs;
-		timings->tableDurationMs += tableSummary.durationMs;
-
-		(void) IntervalToString(tableSummary.durationMs,
-								entry->tableMs,
-								sizeof(entry->tableMs));
-	}
-	else
-	{
-		for (int p = 0; p < table->partition.partCount; p++)
-		{
-			int part = p + 1;
-
-			CopyTableSummary tableSummary = { .table = table };
-
-			TableFilePaths tablePaths = { 0 };
-
-			if (!copydb_init_tablepaths_for_part(cfPaths,
-												 &tablePaths,
-												 table->oid,
-												 part))
-			{
-				log_error("Failed to prepare pathnames for "
-						  "partition %d of table %s",
-						  part,
-						  table->qname);
-				return false;
-			}
-
-			if (!read_table_summary(&tableSummary, tablePaths.doneFile))
-			{
-				log_error("Failed to read table summary \"%s\"",
-						  tablePaths.doneFile);
-				return false;
-			}
-
-			summaryTable->totalBytes += tableSummary.bytesTransmitted;
-			entry->bytes += tableSummary.bytesTransmitted;
-
-			entry->durationTableMs += tableSummary.durationMs;
-			timings->tableDurationMs += tableSummary.durationMs;
-		}
-
-		pretty_print_bytes(entry->bytesStr,
-						   sizeof(entry->bytesStr),
-						   entry->bytes);
-
-		pretty_print_bytes_per_second(entry->transmitRate,
-									  sizeof(entry->transmitRate),
-									  entry->bytes,
-									  entry->durationTableMs);
-
-		(void) IntervalToString(entry->durationTableMs,
-								entry->tableMs,
-								sizeof(entry->tableMs));
-	}
+	pretty_print_bytes_per_second(entry->transmitRate,
+								  sizeof(entry->transmitRate),
+								  entry->bytes,
+								  entry->durationTableMs);
 
 	/* read the index oid list from the table oid */
 	context->indexingDurationMs = 0;

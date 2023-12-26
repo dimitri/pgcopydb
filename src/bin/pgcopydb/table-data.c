@@ -855,12 +855,12 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 
 	char psTitle[BUFSIZE] = { 0 };
 
-	if (table->partsArray.count > 0)
+	if (table->partition.partCount > 0)
 	{
 		sformat(psTitle, sizeof(psTitle), "pgcopydb: copy %s [%d/%d]",
 				table->qname,
-				part + 1,
-				table->partsArray.count);
+				table->partition.partNumber,
+				table->partition.partCount);
 	}
 	else
 	{
@@ -1014,6 +1014,8 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 							 CopyTableDataSpec *tableSpecs,
 							 bool *isDone)
 {
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
 	if (specs->dirState.tableCopyIsDone)
 	{
 		log_notice("Skipping table %s, already done on a previous run",
@@ -1023,54 +1025,31 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 		return true;
 	}
 
-	/* enter the critical section */
-	(void) semaphore_lock(&(specs->tableSemaphore));
+	if (!summary_lookup_table(sourceDB, tableSpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
-	/*
-	 * If the doneFile exists, then the table has been processed already,
-	 * skip it.
-	 */
-	if (file_exists(tableSpecs->tablePaths.doneFile))
+	CopyTableSummary *tableSummary = &(tableSpecs->summary);
+
+	/* if the catalog summary information is complete, we're done */
+	if (tableSummary->doneTime > 0)
 	{
 		*isDone = true;
-		(void) semaphore_unlock(&(specs->tableSemaphore));
-
 		return true;
 	}
 
-	/* okay so it's not done yet */
-	*isDone = false;
-
-	if (file_exists(tableSpecs->tablePaths.lockFile))
+	if (tableSummary->pid != 0)
 	{
-		/*
-		 * Now it could be that the lockFile still exists and has been created
-		 * on a previous run, in which case the pid in there would be a stale
-		 * pid.
-		 *
-		 * So check for that situation before returning with the happy path.
-		 */
-		CopyTableSummary tableSummary = { .table = tableSpecs->sourceTable };
-
-		if (!read_table_summary(&tableSummary, tableSpecs->tablePaths.lockFile))
-		{
-			/* errors have already been logged */
-			(void) semaphore_unlock(&(specs->tableSemaphore));
-
-			return false;
-		}
-
 		/* if we can signal the pid, it is still running */
-		if (kill(tableSummary.pid, 0) == 0)
+		if (kill(tableSummary->pid, 0) == 0)
 		{
-			(void) semaphore_unlock(&(specs->tableSemaphore));
-
 			log_error("Failed to start table-data COPY worker for table %s (%u), "
-					  "lock file \"%s\" is owned by running process %d",
+					  "already being processed by pid %d",
 					  tableSpecs->sourceTable->qname,
 					  tableSpecs->sourceTable->oid,
-					  tableSpecs->tablePaths.lockFile,
-					  tableSummary.pid);
+					  tableSummary->pid);
 
 			return false;
 		}
@@ -1078,16 +1057,14 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 		{
 			log_notice("Found stale pid %d in file \"%s\", removing it "
 					   "and processing table %s",
-					   tableSummary.pid,
+					   tableSummary->pid,
 					   tableSpecs->tablePaths.lockFile,
 					   tableSpecs->sourceTable->qname);
 
-			/* stale pid, remove the old lockFile now, then process the table */
-			if (!unlink_file(tableSpecs->tablePaths.lockFile))
+			/* stale pid, remove the summary entry and process the table */
+			if (!summary_delete_table(sourceDB, tableSpecs))
 			{
-				log_error("Failed to remove the stale lockFile \"%s\"",
-						  tableSpecs->tablePaths.lockFile);
-				(void) semaphore_unlock(&(specs->tableSemaphore));
+				/* errors have already been logged */
 				return false;
 			}
 
@@ -1095,48 +1072,13 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 		}
 	}
 
-	/*
-	 * Now, write the lockFile, with a summary of what's going-on.
-	 */
-	CopyTableSummary emptySummary = { 0 };
-	CopyTableSummary *summary =
-		(CopyTableSummary *) calloc(1, sizeof(CopyTableSummary));
-
-	*summary = emptySummary;
-
-	summary->pid = getpid();
-	summary->table = tableSpecs->sourceTable;
-
-	/* "COPY " is 5 bytes, then 1 for \0 */
-	int len = strlen(tableSpecs->sourceTable->qname) + 5 + 1;
-	summary->command = (char *) calloc(len, sizeof(char));
-
-	if (summary->command == NULL)
+	if (!summary_add_table(sourceDB, tableSpecs))
 	{
-		log_error(ALLOCATION_FAILED_ERROR);
+		/* errors have already been logged */
 		return false;
 	}
-
-	sformat(summary->command, len, "COPY %s", tableSpecs->sourceTable->qname);
-
-	if (!open_table_summary(summary, tableSpecs->tablePaths.lockFile))
-	{
-		log_info("Failed to create the lock file for table %s at \"%s\"",
-				 tableSpecs->sourceTable->qname,
-				 tableSpecs->tablePaths.lockFile);
-
-		/* end of the critical section */
-		(void) semaphore_unlock(&(specs->tableSemaphore));
-
-		return false;
-	}
-
-	/* attach the new summary to the tableSpecs, where it was NULL before */
-	tableSpecs->summary = summary;
 
 	/* also track the process information in our catalogs */
-	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
-
 	ProcessInfo ps = {
 		.pid = getpid(),
 		.psType = "COPY",
@@ -1152,9 +1094,6 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 		return false;
 	}
 
-	/* end of the critical section */
-	(void) semaphore_unlock(&(specs->tableSemaphore));
-
 	return true;
 }
 
@@ -1168,33 +1107,13 @@ bool
 copydb_mark_table_as_done(CopyDataSpec *specs,
 						  CopyTableDataSpec *tableSpecs)
 {
-	/* enter the critical section to communicate that we're done */
-	(void) semaphore_lock(&(specs->tableSemaphore));
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	if (!unlink_file(tableSpecs->tablePaths.lockFile))
+	if (!summary_finish_table(sourceDB, tableSpecs))
 	{
-		log_error("Failed to remove the lockFile \"%s\"",
-				  tableSpecs->tablePaths.lockFile);
-		(void) semaphore_unlock(&(specs->tableSemaphore));
+		/* errors have already been logged */
 		return false;
 	}
-
-	/* write the doneFile with the summary and timings now */
-	if (!finish_table_summary(tableSpecs->summary,
-							  tableSpecs->tablePaths.doneFile))
-	{
-		log_error("Failed to create the summary file at \"%s\"",
-				  tableSpecs->tablePaths.doneFile);
-		(void) semaphore_unlock(&(specs->tableSemaphore));
-		return false;
-	}
-
-	log_debug("Wrote summary for table %s at \"%s\"",
-			  tableSpecs->sourceTable->qname,
-			  tableSpecs->tablePaths.doneFile);
-
-	/* end of the critical section */
-	(void) semaphore_unlock(&(specs->tableSemaphore));
 
 	return true;
 }
@@ -1211,6 +1130,8 @@ copydb_table_parts_are_all_done(CopyDataSpec *specs,
 								bool *allPartsDone,
 								bool *isBeingProcessed)
 {
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
 	if (tableSpecs->part.partCount <= 1)
 	{
 		*allPartsDone = true;
@@ -1220,64 +1141,38 @@ copydb_table_parts_are_all_done(CopyDataSpec *specs,
 
 	*allPartsDone = false;
 
-	/* enter the critical section */
-	(void) semaphore_lock(&(specs->tableSemaphore));
+	if (!summary_table_count_parts_done(sourceDB, tableSpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
-	/* make sure only one process created the indexes/constraints */
-	if (file_exists(tableSpecs->tablePaths.idxListFile))
+	/*
+	 * If all partitions are done, try and register this worker's PID as the
+	 * first worker that saw the situation. Only that one is allowed to queue
+	 * the CREATE INDEX (or VACUUM) commands.
+	 */
+	int partCount = tableSpecs->sourceTable->partition.partCount;
+
+	if (tableSpecs->countPartsDone == partCount)
 	{
 		*allPartsDone = true;
-		*isBeingProcessed = true;
 
-		(void) semaphore_unlock(&(specs->tableSemaphore));
-		return true;
-	}
-
-	bool allDone = true;
-
-	CopyFilePaths *cfPaths = &(specs->cfPaths);
-	uint32_t oid = tableSpecs->sourceTable->oid;
-
-	for (int i = 0; i < tableSpecs->part.partCount; i++)
-	{
-		TableFilePaths partPaths = { 0 };
-
-		(void) copydb_init_tablepaths_for_part(cfPaths, &partPaths, oid, i);
-
-		if (!file_exists(partPaths.doneFile))
-		{
-			allDone = false;
-			break;
-		}
-	}
-
-	/* create an empty index list file now, when allDone is still true */
-	if (allDone)
-	{
-		if (!write_file("", 0, tableSpecs->tablePaths.idxListFile))
+		/* insert or ignore our pid as the partsDonePid */
+		if (!summary_add_table_parts_done(sourceDB, tableSpecs))
 		{
 			/* errors have already been logged */
-			(void) semaphore_unlock(&(specs->tableSemaphore));
 			return false;
 		}
 
-		*allPartsDone = true;
-		*isBeingProcessed = false; /* allow processing of the indexes */
+		if (!summary_lookup_table_parts_done(sourceDB, tableSpecs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 
-		/* end of the critical section */
-		(void) semaphore_unlock(&(specs->tableSemaphore));
-
-		return true;
-	}
-	else
-	{
-		/* end of the critical section */
-		(void) semaphore_unlock(&(specs->tableSemaphore));
-
-		*allPartsDone = false;
-		*isBeingProcessed = false;
-
-		return true;
+		/* set isBeingProcessed to false to allow processing indexes */
+		*isBeingProcessed = (tableSpecs->partsDonePid != getpid());
 	}
 
 	/* keep compiler happy, we should never end-up here */
@@ -1314,7 +1209,7 @@ copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 	}
 
 	/* Now copy the data from source to target */
-	CopyTableSummary *summary = tableSpecs->summary;
+	CopyTableSummary *summary = &(tableSpecs->summary);
 	log_notice("%s", summary->command);
 
 	/* COPY FROM tablename, or maybe COPY FROM (SELECT ... WHERE ...) */

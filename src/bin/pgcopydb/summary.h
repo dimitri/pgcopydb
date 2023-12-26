@@ -198,11 +198,6 @@ typedef struct Summary
 	int lObjectJobs;
 } Summary;
 
-bool write_table_summary(CopyTableSummary *summary, char *filename);
-bool read_table_summary(CopyTableSummary *summary, const char *filename);
-bool open_table_summary(CopyTableSummary *summary, char *filename);
-bool finish_table_summary(CopyTableSummary *summary, char *filename);
-
 bool prepare_table_summary_as_json(CopyTableSummary *summary,
 								   JSON_Object *jsobj,
 								   const char *key);
@@ -241,5 +236,9 @@ bool summary_read_index_donefile(SourceIndex *index,
 								 const char *filename,
 								 bool constraint,
 								 SummaryIndexEntry *indexEntry);
+
+
+bool table_summary_init(CopyTableSummary *summary);
+bool table_summary_finish(CopyTableSummary *summary);
 
 #endif /* SUMMARY_H */

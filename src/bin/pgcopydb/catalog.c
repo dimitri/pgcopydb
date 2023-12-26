@@ -121,9 +121,20 @@ static char *sourceDBcreateDDLs[] = {
 	"create table summary("
 	"  pid integer, "
 	"  tableoid integer references s_table(oid), "
+	"  partnum integer, "
 	"  indexoid integer references s_table(oid), "
 	"  start_time_epoch integer, done_time_epoch integer, duration integer, "
-	"  command text"
+	"  bytes integer, "
+	"  command text, "
+	"  unique(tableoid, partnum)"
+	")",
+
+	"create table s_table_parts_done("
+	" tableoid integer primary key references s_table(oid), pid integer"
+	")",
+
+	"create table s_table_indexes_done("
+	" tableoid integer primary key references s_table(oid), pid integer"
 	")"
 };
 
@@ -329,7 +340,9 @@ static char *sourceDBdropDDLs[] = {
 	"drop table if exists t_constraint",
 
 	"drop table if exists process",
-	"drop table if exists summary"
+	"drop table if exists summary",
+	"drop table if exists s_table_parts_done",
+	"drop table if exists s_table_indexes_done"
 };
 
 
@@ -1457,73 +1470,6 @@ catalog_add_s_table_part(DatabaseCatalog *catalog, SourceTable *table)
 
 
 /*
- * catalog_add_s_table_parts INSERTs a SourceTableParts array to our internal
- * catalogs database (s_table_parts).
- */
-bool
-catalog_add_s_table_parts(DatabaseCatalog *catalog, SourceTable *table)
-{
-	sqlite3 *db = catalog->db;
-
-	if (db == NULL)
-	{
-		log_error("BUG: catalog_add_s_table_part: db is NULL");
-		return false;
-	}
-
-	char *sql =
-		"insert into s_table_part(oid, partnum, partcount, min, max, count)"
-		"values($1, $2, $3, $4, $5, $6)";
-
-	SQLiteQuery query = { 0 };
-
-	if (!catalog_sql_prepare(db, sql, &query))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	for (int i = 0; i < table->partsArray.count; i++)
-	{
-		SourceTableParts *part = &(table->partsArray.array[i]);
-
-		BindParam params[] = {
-			{ BIND_PARAMETER_TYPE_INT64, "oid", table->oid, NULL },
-			{ BIND_PARAMETER_TYPE_INT64, "partnum", part->partNumber, NULL },
-			{ BIND_PARAMETER_TYPE_INT64, "partcount", part->partCount, NULL },
-			{ BIND_PARAMETER_TYPE_INT64, "min", part->min, NULL },
-			{ BIND_PARAMETER_TYPE_INT64, "max", part->max, NULL },
-			{ BIND_PARAMETER_TYPE_INT64, "count", part->count, NULL },
-		};
-
-		int count = sizeof(params) / sizeof(params[0]);
-
-		if (!catalog_sql_bind(&query, params, count))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		/* now execute the query, which does not return any row */
-		if (!catalog_sql_execute(&query))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-	}
-
-	/* and finalize the query */
-	if (!catalog_sql_finalize(&query))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	return true;
-}
-
-
-/*
  * catalog_add_s_table INSERTs a SourceTable to our internal catalogs database.
  */
 bool
@@ -2267,15 +2213,18 @@ catalog_iter_s_table_init(SourceTableIterator *iter)
 	{
 		sql =
 			"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
-			"         relpages, reltuples, bytes, bytes_pretty, "
+			"         relpages, reltuples, t.bytes, t.bytes_pretty, "
 			"         exclude_data, part_key, "
-			"         count(p.oid), 0 as partnum, 0 as min, 0 as max, "
-			"         c.srcrowcount, c.srcsum, c.dstrowcount, c.dstsum "
+			"         coalesce(p.partcount, 0) as partcount, "
+			"         0 as partnum, 0 as min, 0 as max, "
+			"         c.srcrowcount, c.srcsum, c.dstrowcount, c.dstsum, "
+			"         sum(s.duration), sum(s.bytes) "
 			"    from s_table t "
-			"         left join s_table_part p on t.oid = p.oid "
-			"         left join s_table_chksum c on t.oid = c.oid "
+			"         left join s_table_part p on p.oid = t.oid "
+			"         left join s_table_chksum c on c.oid = t.oid "
+			"         left join summary s on s.tableoid = t.oid "
 			"group by t.oid "
-			"order by bytes desc";
+			"order by t.bytes desc";
 	}
 
 	SQLiteQuery *query = &(iter->query);
@@ -2445,6 +2394,7 @@ catalog_s_table_fetch(SQLiteQuery *query)
 	 */
 	int cols = sqlite3_column_count(query->ppStmt);
 
+	/* partition information from s_table_part */
 	if (cols >= 16)
 	{
 		table->partition.partNumber = sqlite3_column_int64(query->ppStmt, 13);
@@ -2452,7 +2402,8 @@ catalog_s_table_fetch(SQLiteQuery *query)
 		table->partition.max = sqlite3_column_int64(query->ppStmt, 15);
 	}
 
-	if (cols == 20)
+	/* checksum information from s_table_chksum */
+	if (cols >= 20)
 	{
 		table->sourceChecksum.rowcount =
 			sqlite3_column_int64(query->ppStmt, 16);
@@ -2473,6 +2424,13 @@ catalog_s_table_fetch(SQLiteQuery *query)
 					(char *) sqlite3_column_text(query->ppStmt, 19),
 					sizeof(table->targetChecksum.checksum));
 		}
+	}
+
+	/* summary information from s_table_parts_done */
+	if (cols == 22)
+	{
+		table->durationMs = sqlite3_column_int64(query->ppStmt, 20);
+		table->bytesTransmitted = sqlite3_column_int64(query->ppStmt, 21);
 	}
 
 	return true;
@@ -6454,10 +6412,22 @@ catalog_iter_s_table_in_copy_init(SourceTableIterator *iter)
 
 	char *sql =
 		"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
-		"         relpages, reltuples, bytes, bytes_pretty, "
+		"         relpages, reltuples, t.bytes, t.bytes_pretty, "
 		"         exclude_data, part_key, "
-		"         count(p.oid), 0 as partnum, 0 as min, 0 as max "
-		"    from process p join s_table t on p.tableoid = t.oid "
+		"         coalesce(part.partcount, 0), s.partnum, 0 as min, 0 as max, "
+		"         c.srcrowcount, c.srcsum, c.dstrowcount, c.dstsum, "
+		"         sum(s.duration), sum(s.bytes) "
+
+		"    from process p "
+		"         join s_table t on p.tableoid = t.oid "
+		"         join summary s on s.pid = t.pid and s.tableoid = p.tableoid "
+
+		"         left join s_table_part part "
+		"                on part.oid = p.tableoid "
+		"               and part.partnum = s.partnum "
+
+		"         left join s_table_chksum c on c.oid = p.tableoid "
+
 		"   where p.ps_type = 'COPY' "
 		"order by p.pid";
 
