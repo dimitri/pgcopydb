@@ -51,13 +51,12 @@ static bool build_parameters_list(PQExpBuffer buffer,
 
 static void parseIdentifySystemResult(void *ctx, PGresult *result);
 static void parseTimelineHistoryResult(void *ctx, PGresult *result);
-static bool pg_copy_data(PGSQL *src, PGSQL *dst, const char *srcQname,
-						 const char *dstQname, bool truncate,
-						 uint64_t *bytesTransmitted);
-static bool pg_copy_send_query(PGSQL *pgsql,
-							   const char *qname,
-							   ExecStatusType status,
-							   bool freeze);
+
+static bool pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args);
+
+static bool pg_copy_send_query(PGSQL *pgsql, CopyArgs *args,
+							   ExecStatusType status);
+
 static void pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context);
 
 static void getSequenceValue(void *ctx, PGresult *result);
@@ -2314,6 +2313,8 @@ pgsql_truncate(PGSQL *pgsql, const char *qname)
 
 	sformat(sql, sizeof(sql), "TRUNCATE ONLY %s", qname);
 
+	log_sql("%s", sql);
+
 	return pgsql_execute(pgsql, sql);
 }
 
@@ -2325,8 +2326,7 @@ pgsql_truncate(PGSQL *pgsql, const char *qname)
  * referenced by the qualified identifier name dstQname on the target.
  */
 bool
-pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
-		bool truncate, uint64_t *bytesTransmitted)
+pg_copy(PGSQL *src, PGSQL *dst, CopyArgs *args)
 {
 	bool srcConnIsOurs = src->connection == NULL;
 	if (!pgsql_open_connection(src))
@@ -2345,8 +2345,7 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 		return false;
 	}
 
-	bool result = pg_copy_data(src, dst, srcQname, dstQname,
-							   truncate, bytesTransmitted);
+	bool result = pg_copy_data(src, dst, args);
 
 	if (srcConnIsOurs)
 	{
@@ -2368,8 +2367,7 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
  * expects src and dst are opened connection and doesn't manage their lifetime.
  */
 static bool
-pg_copy_data(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
-			 bool truncate, uint64_t *bytesTransmitted)
+pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args)
 {
 	PGconn *srcConn = src->connection;
 	PGconn *dstConn = dst->connection;
@@ -2379,23 +2377,23 @@ pg_copy_data(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 		return false;
 	}
 
-	/* DST: TRUNCATE schema.table */
-	if (truncate)
+	if (args->truncate)
 	{
-		if (!pgsql_truncate(dst, dstQname))
+		if (!pgsql_truncate(dst, args->dstQname))
 		{
+			/* errors have already been logged */
 			return false;
 		}
 	}
 
 	/* SRC: COPY schema.table TO STDOUT */
-	if (!pg_copy_send_query(src, srcQname, PGRES_COPY_OUT, false))
+	if (!pg_copy_send_query(src, args, PGRES_COPY_OUT))
 	{
 		return false;
 	}
 
 	/* DST: COPY schema.table FROM STDIN WITH (FREEZE) */
-	if (!pg_copy_send_query(dst, dstQname, PGRES_COPY_IN, truncate))
+	if (!pg_copy_send_query(dst, args, PGRES_COPY_IN))
 	{
 		return false;
 	}
@@ -2404,7 +2402,7 @@ pg_copy_data(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 	char *copybuf;
 	bool failedOnSrc = false;
 	bool failedOnDst = false;
-	*bytesTransmitted = 0;
+	args->bytesTransmitted = 0;
 
 	for (;;)
 	{
@@ -2511,7 +2509,7 @@ pg_copy_data(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 		 */
 		else if (bufsize > 0)
 		{
-			*bytesTransmitted += bufsize;
+			args->bytesTransmitted += bufsize;
 		}
 
 		/*
@@ -2713,33 +2711,45 @@ pg_copy_end(PGSQL *pgsql)
  * to a Postgres instance, and checks that the server's result is as expected.
  */
 static bool
-pg_copy_send_query(PGSQL *pgsql,
-				   const char *qname, ExecStatusType status, bool freeze)
+pg_copy_send_query(PGSQL *pgsql, CopyArgs *args, ExecStatusType status)
 {
-	char *sql = NULL;
+	PQExpBuffer sql = createPQExpBuffer();
 
 	if (status == PGRES_COPY_OUT)
 	{
 		/* There is no COPY TO with FREEZE */
-		char *template = "copy %s to stdout";
-		size_t len = strlen(template) + strlen(qname) + 1;
-
-		sql = (char *) calloc(len, sizeof(char));
-
-		sformat(sql, len, template, qname);
+		if (args->srcWhereClause != NULL)
+		{
+			appendPQExpBuffer(sql, "copy (SELECT %s FROM ONLY %s %s) ",
+							  args->srcAttrList,
+							  args->srcQname,
+							  args->srcWhereClause);
+		}
+		else
+		{
+			appendPQExpBuffer(sql, "copy (SELECT %s FROM ONLY %s) ",
+							  args->srcAttrList,
+							  args->srcQname);
+		}
+		appendPQExpBuffer(sql, "to stdout");
 	}
 	else if (status == PGRES_COPY_IN)
 	{
-		char *template =
-			freeze
-			? "copy %s from stdin with (freeze)"
-			: "copy %s from stdin";
+		if (args->dstAttrList != NULL && !streq(args->dstAttrList, ""))
+		{
+			appendPQExpBuffer(sql, "copy %s(%s) from stdin",
+							  args->dstQname,
+							  args->dstAttrList);
+		}
+		else
+		{
+			appendPQExpBuffer(sql, "copy %s from stdin", args->dstQname);
+		}
 
-		size_t len = strlen(template) + strlen(qname) + 1;
-
-		sql = (char *) calloc(len, sizeof(char));
-
-		sformat(sql, len, template, qname);
+		if (args->freeze)
+		{
+			appendPQExpBuffer(sql, " with (freeze)");
+		}
 	}
 	else
 	{
@@ -2747,19 +2757,26 @@ pg_copy_send_query(PGSQL *pgsql,
 		return false;
 	}
 
-	log_sql("%s;", sql);
-
-	PGresult *res = PQexec(pgsql->connection, sql);
-
-	if (PQresultStatus(res) != status)
+	if (PQExpBufferBroken(sql))
 	{
-		pgcopy_log_error(pgsql, res, sql);
-		free(sql);
-
+		log_error("Failed to create COPY query for %s: out of memory",
+				  args->srcQname);
 		return false;
 	}
 
-	free(sql);
+	log_sql("%s;", sql->data);
+
+	PGresult *res = PQexec(pgsql->connection, sql->data);
+
+	if (PQresultStatus(res) != status)
+	{
+		pgcopy_log_error(pgsql, res, sql->data);
+
+		destroyPQExpBuffer(sql);
+		return false;
+	}
+
+	destroyPQExpBuffer(sql);
 	return true;
 }
 
