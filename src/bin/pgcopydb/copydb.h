@@ -446,6 +446,8 @@ bool copydb_prepare_copy_query_attrlist(CopyTableDataSpec *tableSpecs,
 /* blobs.c */
 bool copydb_start_blob_process(CopyDataSpec *specs);
 
+bool copydb_has_large_objects(CopyDataSpec *specs, bool *hasLargeObjects);
+
 bool copydb_blob_supervisor(CopyDataSpec *specs);
 bool copydb_start_blob_workers(CopyDataSpec *specs);
 bool copydb_blob_worker(CopyDataSpec *specs);

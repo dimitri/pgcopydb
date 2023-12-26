@@ -47,6 +47,20 @@ copydb_start_blob_process(CopyDataSpec *specs)
 		return true;
 	}
 
+	bool hasLargeObjects = true;
+
+	if (!copydb_has_large_objects(specs, &hasLargeObjects))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!hasLargeObjects)
+	{
+		log_info("Skipping large objects: none found.");
+		return true;
+	}
+
 	/*
 	 * Flush stdio channels just before fork, to avoid double-output problems.
 	 */
@@ -85,6 +99,52 @@ copydb_start_blob_process(CopyDataSpec *specs)
 	}
 
 	/* now we're done, and we want async behavior, do not wait */
+	return true;
+}
+
+
+/*
+ * copydb_has_large_objects runs a SQL query to discover if the source database
+ * has any Large Objects to migrate to the target database.
+ */
+bool
+copydb_has_large_objects(CopyDataSpec *specs, bool *hasLargeObjects)
+{
+	/* make sure that we have our own process local connection */
+	TransactionSnapshot snapshot = { 0 };
+
+	if (!copydb_copy_snapshot(specs, &snapshot))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* swap the new instance in place of the previous one */
+	specs->sourceSnapshot = snapshot;
+
+	/* connect to the source database and set snapshot */
+	if (!copydb_set_snapshot(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	PGSQL *src = &(specs->sourceSnapshot.pgsql);
+
+	char *sql = "select exists(select 1 from pg_largeobject_metadata)";
+
+	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_BOOL, false };
+
+	if (!pgsql_execute_with_params(src, sql, 0, NULL, NULL,
+								   &context, &parseSingleValueResult))
+	{
+		log_error("Failed to check if source database contains "
+				  "large objects, see above for details");
+		return false;
+	}
+
+	*hasLargeObjects = context.boolVal;
+
 	return true;
 }
 
