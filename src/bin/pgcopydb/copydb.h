@@ -132,6 +132,7 @@ typedef struct CopyTableDataSpec
 
 	SourceTable *sourceTable;
 	CopyTableSummary summary;
+	CopyArgs copyArgs;
 
 	int tableJobs;
 	int indexJobs;
@@ -420,6 +421,9 @@ bool copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs, CopyArgs *args);
 
 bool copydb_prepare_copy_query_attrlist(CopyTableDataSpec *tableSpecs,
 										PQExpBuffer attrList);
+
+bool copydb_prepare_summary_command(CopyTableDataSpec *tableSpecs);
+
 
 /* blobs.c */
 bool copydb_start_blob_process(CopyDataSpec *specs);

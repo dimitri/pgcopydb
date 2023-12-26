@@ -200,7 +200,7 @@ compare_queue_table_hook(void *ctx, SourceTable *table)
 bool
 compare_start_workers(CopyDataSpec *copySpecs, Queue *queue)
 {
-	log_info("starting %d table compare processes", copySpecs->tableJobs);
+	log_info("Starting %d table compare processes", copySpecs->tableJobs);
 
 	for (int i = 0; i < copySpecs->tableJobs; i++)
 	{

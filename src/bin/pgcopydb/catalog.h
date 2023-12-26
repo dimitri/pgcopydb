@@ -29,15 +29,18 @@ struct SQLiteQuery
  */
 bool catalog_open(DatabaseCatalog *catalog);
 bool catalog_init(DatabaseCatalog *catalog);
+bool catalog_create_semaphore(DatabaseCatalog *catalog);
 bool catalog_attach(DatabaseCatalog *a, DatabaseCatalog *b, const char *name);
 bool catalog_close(DatabaseCatalog *catalog);
 
 bool catalog_create_schema(DatabaseCatalog *catalog);
 bool catalog_drop_schema(DatabaseCatalog *catalog);
 
+bool catalog_set_wal_mode(DatabaseCatalog *catalog);
 
-bool catalog_begin(DatabaseCatalog *catalog);
+bool catalog_begin(DatabaseCatalog *catalog, bool immediate);
 bool catalog_commit(DatabaseCatalog *catalog);
+bool catalog_rollback(DatabaseCatalog *catalog);
 
 bool catalog_register_setup(DatabaseCatalog *catalog,
 							const char *source_pg_uri,

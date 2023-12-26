@@ -14,6 +14,7 @@
 #include "uthash.h"
 
 #include "filtering.h"
+#include "lock_utils.h"
 #include "pgsql.h"
 #include "pg_utils.h"
 
@@ -350,10 +351,14 @@ typedef struct CatalogSection
 typedef struct DatabaseCatalog
 {
 	DatabaseCatalogType type;
+
 	CatalogSetup setup;
 	CatalogSection sections[DATA_SECTION_COUNT];
+
 	char dbfile[MAXPGPATH];
 	sqlite3 *db;
+
+	Semaphore sema;
 } DatabaseCatalog;
 
 

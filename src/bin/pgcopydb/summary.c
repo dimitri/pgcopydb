@@ -49,6 +49,12 @@ summary_lookup_oid(DatabaseCatalog *catalog, uint32_t oid, bool *done)
 		"    from summary "
 		"   where indexoid = $1 or conoid = $2 ";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	CopyOidSummary s = { 0 };
 
 	SQLiteQuery query = {
@@ -59,6 +65,7 @@ summary_lookup_oid(DatabaseCatalog *catalog, uint32_t oid, bool *done)
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -73,6 +80,7 @@ summary_lookup_oid(DatabaseCatalog *catalog, uint32_t oid, bool *done)
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -80,10 +88,13 @@ summary_lookup_oid(DatabaseCatalog *catalog, uint32_t oid, bool *done)
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
 	*done = s.pid > 0 && s.doneTime > 0;
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -133,6 +144,12 @@ summary_lookup_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 		"    from summary "
 		"   where tableoid = $1 and partnum = $2";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	SQLiteQuery query = {
 		.context = tableSummary,
 		.fetchFunction = &summary_table_fetch
@@ -141,6 +158,7 @@ summary_lookup_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -157,6 +175,7 @@ summary_lookup_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -164,8 +183,11 @@ summary_lookup_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -238,11 +260,18 @@ summary_delete_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 
 	char *sql = "delete from summary where tableoid = $1 and partnumber = $2";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	SQLiteQuery query = { 0 };
 
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -260,6 +289,7 @@ summary_delete_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -267,8 +297,11 @@ summary_delete_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -308,11 +341,18 @@ summary_add_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 		"insert into summary(pid, tableoid, partnum, start_time_epoch, command)"
 		"values($1, $2, $3, $4, $5)";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	SQLiteQuery query = { 0 };
 
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -336,6 +376,7 @@ summary_add_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -343,8 +384,11 @@ summary_add_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -378,11 +422,18 @@ summary_finish_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 		"update summary set done_time_epoch = $1, duration = $2, bytes = $3 "
 		"where pid = $4 and tableoid = $5 and partnum = $6";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	SQLiteQuery query = { 0 };
 
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -409,6 +460,7 @@ summary_finish_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -416,8 +468,11 @@ summary_finish_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -452,6 +507,12 @@ summary_table_count_parts_done(DatabaseCatalog *catalog,
 		"where tableoid = $1 "
 		"  and s.pid > 0 and s.done_time_epoch > 0";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	SQLiteQuery query = {
 		.context = tableSpecs,
 		.fetchFunction = &summary_table_fetch_count_parts_done
@@ -460,6 +521,7 @@ summary_table_count_parts_done(DatabaseCatalog *catalog,
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -473,6 +535,7 @@ summary_table_count_parts_done(DatabaseCatalog *catalog,
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -480,8 +543,11 @@ summary_table_count_parts_done(DatabaseCatalog *catalog,
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -525,11 +591,18 @@ summary_add_table_parts_done(DatabaseCatalog *catalog,
 		"insert or ignore into s_table_parts_done(tableoid, pid) "
 		"values($1, $2)";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	SQLiteQuery query = { 0 };
 
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -544,6 +617,7 @@ summary_add_table_parts_done(DatabaseCatalog *catalog,
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -551,8 +625,11 @@ summary_add_table_parts_done(DatabaseCatalog *catalog,
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -581,6 +658,12 @@ summary_lookup_table_parts_done(DatabaseCatalog *catalog,
 
 	char *sql = "select pid from s_table_parts_done where tableoid = $1 ";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	SQLiteQuery query = {
 		.context = tableSpecs,
 		.fetchFunction = &summary_table_parts_done_fetch
@@ -589,6 +672,7 @@ summary_lookup_table_parts_done(DatabaseCatalog *catalog,
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -602,6 +686,7 @@ summary_lookup_table_parts_done(DatabaseCatalog *catalog,
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -609,8 +694,11 @@ summary_lookup_table_parts_done(DatabaseCatalog *catalog,
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -655,6 +743,12 @@ summary_lookup_index(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 		"    from summary "
 		"   where indexoid = $1";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	SQLiteQuery query = {
 		.context = indexSummary,
 		.fetchFunction = &summary_index_fetch
@@ -663,6 +757,7 @@ summary_lookup_index(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -676,6 +771,7 @@ summary_lookup_index(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -683,8 +779,11 @@ summary_lookup_index(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -715,6 +814,12 @@ summary_lookup_constraint(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 		"    from summary "
 		"   where conoid = $1";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	SQLiteQuery query = {
 		.context = indexSummary,
 		.fetchFunction = &summary_index_fetch
@@ -723,6 +828,7 @@ summary_lookup_constraint(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -736,6 +842,7 @@ summary_lookup_constraint(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -743,8 +850,11 @@ summary_lookup_constraint(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -816,11 +926,18 @@ summary_delete_index(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 
 	char *sql = "delete from summary where indexoid = $1";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	SQLiteQuery query = { 0 };
 
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -836,6 +953,7 @@ summary_delete_index(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -843,8 +961,11 @@ summary_delete_index(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -884,11 +1005,18 @@ summary_add_index(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 		"insert into summary(pid, indexoid, start_time_epoch, command)"
 		"values($1, $2, $3, $4)";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	SQLiteQuery query = { 0 };
 
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -909,6 +1037,7 @@ summary_add_index(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -916,8 +1045,11 @@ summary_add_index(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -951,11 +1083,18 @@ summary_finish_index(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 		"update summary set done_time_epoch = $1, duration = $2 "
 		"where pid = $3 and indexoid = $4";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	SQLiteQuery query = { 0 };
 
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -976,6 +1115,7 @@ summary_finish_index(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -983,8 +1123,11 @@ summary_finish_index(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -1024,11 +1167,18 @@ summary_add_constraint(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 		"insert or replace into summary(pid, conoid, start_time_epoch, command)"
 		"values($1, $2, $3, $4)";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	SQLiteQuery query = { 0 };
 
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -1049,6 +1199,7 @@ summary_add_constraint(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -1056,8 +1207,11 @@ summary_add_constraint(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -1092,11 +1246,18 @@ summary_finish_constraint(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 		"update summary set done_time_epoch = $1, duration = $2 "
 		"where pid = $3 and conoid = $4";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	SQLiteQuery query = { 0 };
 
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -1117,6 +1278,7 @@ summary_finish_constraint(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -1124,8 +1286,11 @@ summary_finish_constraint(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -1195,6 +1360,12 @@ summary_table_count_indexes_left(DatabaseCatalog *catalog,
 		"             and s.pid > 0 and s.done_time_epoch > 0"
 		"        ) ";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	SQLiteQuery query = {
 		.context = tableSpecs,
 		.fetchFunction = &summary_table_fetch_count_indexes_left
@@ -1203,6 +1374,7 @@ summary_table_count_indexes_left(DatabaseCatalog *catalog,
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -1217,6 +1389,7 @@ summary_table_count_indexes_left(DatabaseCatalog *catalog,
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -1224,8 +1397,11 @@ summary_table_count_indexes_left(DatabaseCatalog *catalog,
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -1269,11 +1445,18 @@ summary_add_table_indexes_done(DatabaseCatalog *catalog,
 		"insert or ignore into s_table_indexes_done(tableoid, pid) "
 		"values($1, $2)";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	SQLiteQuery query = { 0 };
 
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -1288,6 +1471,7 @@ summary_add_table_indexes_done(DatabaseCatalog *catalog,
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -1295,8 +1479,11 @@ summary_add_table_indexes_done(DatabaseCatalog *catalog,
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -1325,6 +1512,12 @@ summary_lookup_table_indexes_done(DatabaseCatalog *catalog,
 
 	char *sql = "select pid from s_table_indexes_done where tableoid = $1 ";
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	SQLiteQuery query = {
 		.context = tableSpecs,
 		.fetchFunction = &summary_table_indexes_done_fetch
@@ -1333,6 +1526,7 @@ summary_lookup_table_indexes_done(DatabaseCatalog *catalog,
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -1346,6 +1540,7 @@ summary_lookup_table_indexes_done(DatabaseCatalog *catalog,
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -1353,8 +1548,11 @@ summary_lookup_table_indexes_done(DatabaseCatalog *catalog,
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -1434,18 +1632,6 @@ prepare_table_summary_as_json(CopyTableSummary *summary,
 bool
 table_summary_init(CopyTableSummary *summary)
 {
-	/* "COPY " is 5 bytes, then 1 for \0 */
-	int len = strlen(summary->table->qname) + 5 + 1;
-	summary->command = (char *) calloc(len, sizeof(char));
-
-	if (summary->command == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	sformat(summary->command, len, "COPY %s", summary->table->qname);
-
 	summary->startTime = time(NULL);
 	summary->doneTime = 0;
 	summary->durationMs = 0;
