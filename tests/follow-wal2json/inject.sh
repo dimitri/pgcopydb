@@ -47,13 +47,20 @@ do
     sleep 1
 done
 
+#
+# produce a single transaction with more contents than fits in a single PIPE
+# buffer/write
+#
+sql="insert into foo select x, repeat('a', x) from generate_series(1, 60000) as t(x)"
+psql -d ${PGCOPYDB_SOURCE_PGURI} -c "${sql}"
+
 # grab the current LSN, it's going to be our streaming end position
 lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_flush_lsn()'`
 pgcopydb stream sentinel set endpos --current
 pgcopydb stream sentinel get
 
 #
-# Becaure we're using docker-compose --abort-on-container-exit make sure
+# Because we're using docker-compose --abort-on-container-exit make sure
 # that the other process in the pgcopydb service is done before exiting
 # here.
 #
