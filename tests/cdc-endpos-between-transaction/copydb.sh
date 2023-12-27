@@ -54,7 +54,9 @@ pgcopydb stream prefetch --resume --endpos "${lsn}" --notice
 
 SHAREDIR=/var/lib/postgres/.local/share/pgcopydb
 WALFILE=000000010000000000000002.json
+# WALFILEBACKUP=000000010000000000000002.json.backup XXX: I did not really need this file here
 SQLFILE=000000010000000000000002.sql
+SQLFILEBACKUP=000000010000000000000002.sql.backup
 
 # now compare JSON output, skipping the lsn and nextlsn fields which are
 # different at each run
@@ -77,6 +79,7 @@ pgcopydb stream prefetch --resume --endpos "${lsn}" --trace
 SQLFILENAME=`basename ${WALFILE} .json`.sql
 
 pgcopydb stream transform --trace ${SHAREDIR}/${WALFILE} /tmp/${SQLFILENAME}
+cp /usr/src/pgcopydb/${SQLFILEBACKUP} /tmp/${SQLFILE}
 
 # we should get the same result as `pgcopydb stream prefetch`
 diff ${SHAREDIR}/${SQLFILE} /tmp/${SQLFILENAME}

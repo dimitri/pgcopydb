@@ -45,7 +45,9 @@ pgcopydb stream prefetch --resume --endpos "${lsn}" --debug
 
 SHAREDIR=/var/lib/postgres/.local/share/pgcopydb
 WALFILE=000000010000000000000002.json
+WALFILEBACKUP=000000010000000000000002.json.backup
 SQLFILE=000000010000000000000002.sql
+SQLFILEBACKUP=000000010000000000000002.sql.backup
 
 # now compare JSON output, skipping the lsn and nextlsn fields which are
 # different at each run
@@ -68,6 +70,7 @@ pgcopydb stream prefetch --resume --endpos "${lsn}" --notice
 SQLFILENAME=`basename ${WALFILE} .json`.sql
 
 pgcopydb stream transform --debug ${SHAREDIR}/${WALFILE} /tmp/${SQLFILENAME}
+cp /usr/src/pgcopydb/${WALFILEBACKUP} ${SHAREDIR}/${WALFILE}
 
 # we should get the same result as `pgcopydb stream prefetch`
 diff ${SHAREDIR}/${SQLFILE} /tmp/${SQLFILENAME}
@@ -83,6 +86,7 @@ pgcopydb stream sentinel set apply
 
 # now apply the SQL file to the target database
 pgcopydb stream catchup --resume --endpos "${lsn}" -vv
+cp /usr/src/pgcopydb/${SQLFILEBACKUP} /tmp/${SQLFILE}
 
 # now apply AGAIN the SQL file to the target database, skipping transactions
 pgcopydb stream catchup --resume --endpos "${lsn}" -vv
