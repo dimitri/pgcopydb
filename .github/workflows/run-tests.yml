@@ -48,6 +48,10 @@ jobs:
         run: |
             echo "TEST=${{ matrix.TEST }}" >> $GITHUB_ENV
 
+      - name: Fix workdir host permissions
+        run: |
+          chmod a+rwx tests/*/workdir
+
       - name: Run a test
         timeout-minutes: 5
         run: |
