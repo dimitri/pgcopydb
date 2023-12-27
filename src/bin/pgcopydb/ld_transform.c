@@ -213,17 +213,9 @@ stream_transform_resume(StreamSpecs *specs)
 	 * command line option (found in specs->endpos) prevails, but when it's not
 	 * been used, we have a look at the sentinel value.
 	 */
-	PGSQL src = { 0 };
-
-	if (!pgsql_init(&src, specs->connStrings->source_pguri, PGSQL_CONN_SOURCE))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	CopyDBSentinel sentinel = { 0 };
 
-	if (!pgsql_get_sentinel(&src, &sentinel))
+	if (!sentinel_get(privateContext->sourceDB, &sentinel))
 	{
 		/* errors have already been logged */
 		return false;
@@ -233,7 +225,7 @@ stream_transform_resume(StreamSpecs *specs)
 	{
 		specs->endpos = sentinel.endpos;
 	}
-	else
+	else if (specs->endpos != sentinel.endpos)
 	{
 		log_warn("Sentinel endpos is %X/%X, overriden by --endpos %X/%X",
 				 LSN_FORMAT_ARGS(sentinel.endpos),
@@ -385,18 +377,9 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
 	/* at ENDPOS check that it's the current sentinel value and exit */
 	else if (metadata->action == STREAM_ACTION_ENDPOS)
 	{
-		PGSQL src = { 0 };
-		char *dsn = privateContext->connStrings->source_pguri;
-
-		if (!pgsql_init(&src, dsn, PGSQL_CONN_SOURCE))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
 		CopyDBSentinel sentinel = { 0 };
 
-		if (!pgsql_get_sentinel(&src, &sentinel))
+		if (!sentinel_get(privateContext->sourceDB, &sentinel))
 		{
 			/* errors have already been logged */
 			return false;

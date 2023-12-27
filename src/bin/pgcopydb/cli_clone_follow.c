@@ -617,19 +617,17 @@ cloneDB(CopyDataSpec *copySpecs)
 	 */
 	if (copySpecs->follow)
 	{
-		PGSQL pgsql = { 0 };
-
 		log_info("Updating the pgcopydb.sentinel to enable applying changes");
 
-		if (!pgsql_init(&pgsql,
-						copySpecs->connStrings.source_pguri,
-						PGSQL_CONN_SOURCE))
+		DatabaseCatalog *sourceDB = &(copySpecs->catalogs.source);
+
+		if (!catalog_open(sourceDB))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 
-		if (!pgsql_update_sentinel_apply(&pgsql, true))
+		if (!sentinel_update_apply(sourceDB, true))
 		{
 			/* errors have already been logged */
 			return false;

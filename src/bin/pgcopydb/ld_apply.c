@@ -181,6 +181,7 @@ stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
 {
 	/* init our context */
 	if (!stream_apply_init_context(context,
+								   specs->sourceDB,
 								   &(specs->paths),
 								   specs->connStrings,
 								   specs->origin,
@@ -275,18 +276,8 @@ stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
 bool
 stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
 {
-	PGSQL src = { 0 };
 	bool firstLoop = true;
 	CopyDBSentinel sentinel = { 0 };
-
-	if (!pgsql_init(&src, specs->connStrings->source_pguri, PGSQL_CONN_SOURCE))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/* skip logging the sentinel queries, we log_debug the values fetched */
-	src.logSQL = context->logSQL;
 
 	/* make sure context->apply is false before entering the loop */
 	context->apply = false;
@@ -302,7 +293,7 @@ stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
 		}
 
 		/* this reconnects on each loop iteration, every 10s by default */
-		if (!pgsql_get_sentinel(&src, &sentinel))
+		if (!sentinel_get(specs->sourceDB, &sentinel))
 		{
 			log_warn("Retrying to fetch pgcopydb sentinel values in %ds",
 					 CATCHINGUP_SLEEP_MS / 10);
@@ -325,7 +316,7 @@ stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
 		{
 			context->endpos = sentinel.endpos;
 		}
-		else
+		else if (context->endpos != sentinel.endpos)
 		{
 			log_warn("Sentinel endpos is %X/%X, overriden by --endpos %X/%X",
 					 LSN_FORMAT_ARGS(sentinel.endpos),
@@ -384,24 +375,12 @@ stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
 bool
 stream_apply_sync_sentinel(StreamApplyContext *context, bool findDurableLSN)
 {
-	PGSQL src = { 0 };
-	CopyDBSentinel sentinel = { 0 };
-
 	/* now is a good time to write the LSN tracking to disk */
 	if (!stream_apply_write_lsn_tracking(context))
 	{
 		/* errors have already been logged */
 		return false;
 	}
-
-	if (!pgsql_init(&src, context->connStrings->source_pguri, PGSQL_CONN_SOURCE))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/* limit the amount of logging of the apply process */
-	src.logSQL = context->logSQL;
 
 	uint64_t durableLSN = InvalidXLogRecPtr;
 
@@ -422,7 +401,9 @@ stream_apply_sync_sentinel(StreamApplyContext *context, bool findDurableLSN)
 		}
 	}
 
-	if (!pgsql_sync_sentinel_apply(&src, durableLSN, &sentinel))
+	CopyDBSentinel sentinel = { 0 };
+
+	if (!sentinel_sync_apply(context->sourceDB, durableLSN, &sentinel))
 	{
 		log_warn("Failed to sync progress with the pgcopydb sentinel");
 		return true;
@@ -431,86 +412,6 @@ stream_apply_sync_sentinel(StreamApplyContext *context, bool findDurableLSN)
 	context->apply = sentinel.apply;
 	context->endpos = sentinel.endpos;
 	context->startpos = sentinel.startpos;
-
-	return true;
-}
-
-
-/*
- * stream_apply_send_sync_sentinel sends a query to sync with the pgcopydb
- * sentinel table using the libpq async API. Use the associated function
- * stream_apply_fetch_sync_sentinel to check for availability of the result and
- * fetch it when it's available.
- */
-bool
-stream_apply_send_sync_sentinel(StreamApplyContext *context)
-{
-	PGSQL *src = &(context->src);
-
-	if (context->sentinelQueryInProgress)
-	{
-		log_error("BUG: stream_apply_send_sync_sentinel already in progress");
-		return false;
-	}
-
-	/* we're going to keep the connection around */
-	context->src.connectionStatementType = PGSQL_CONNECTION_MULTI_STATEMENT;
-
-	/* limit the amount of logging of the apply process */
-	src->logSQL = true;
-
-	uint64_t durableLSN = InvalidXLogRecPtr;
-
-	if (!stream_apply_find_durable_lsn(context, &durableLSN))
-	{
-		log_debug("Skipping sentinel replay_lsn update, "
-				  "failed to find a durable LSN matching current flushLSN");
-		return true;
-	}
-
-	if (!pgsql_send_sync_sentinel_apply(src, durableLSN))
-	{
-		log_warn("Failed to sync progress with the pgcopydb sentinel");
-		return true;
-	}
-
-	context->sentinelSyncTime = time(NULL);
-	context->sentinelQueryInProgress = true;
-
-	return true;
-}
-
-
-/*
- * stream_apply_fetch_sync_sentinel checks to see if the result of the
- * pgcopydb sentinel sync query is available and fetches it then.
- */
-bool
-stream_apply_fetch_sync_sentinel(StreamApplyContext *context)
-{
-	PGSQL *src = &(context->src);
-
-	bool retry;
-	CopyDBSentinel sentinel = { 0 };
-
-	if (!pgsql_fetch_sync_sentinel_apply(src, &retry, &sentinel))
-	{
-		log_error("Failed to fetch sentinel update query results");
-		return false;
-	}
-
-	if (!retry)
-	{
-		context->sentinelQueryInProgress = false;
-
-		/* also disconnect between async queries */
-		(void) pgsql_finish(&(context->src));
-
-		context->apply = sentinel.apply;
-		context->endpos = sentinel.endpos;
-		context->startpos = sentinel.startpos;
-		context->replay_lsn = sentinel.replay_lsn;
-	}
 
 	return true;
 }
@@ -1367,11 +1268,13 @@ setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
  */
 bool
 stream_apply_init_context(StreamApplyContext *context,
+						  DatabaseCatalog *sourceDB,
 						  CDCPaths *paths,
 						  ConnStrings *connStrings,
 						  char *origin,
 						  uint64_t endpos)
 {
+	context->sourceDB = sourceDB;
 	context->paths = *paths;
 
 	/*
@@ -1679,11 +1582,20 @@ stream_apply_track_insert_lsn(StreamApplyContext *context, uint64_t sourceLSN)
 bool
 stream_apply_find_durable_lsn(StreamApplyContext *context, uint64_t *durableLSN)
 {
-	PGSQL *pgsql = &(context->pgsql);
+	PGSQL src = { 0 };
+
+	if (!pgsql_init(&src, context->connStrings->source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* limit the amount of logging of the apply process */
+	src.logSQL = context->logSQL;
 
 	uint64_t flushLSN = InvalidXLogRecPtr;
 
-	if (!pgsql_current_wal_flush_lsn(pgsql, &flushLSN))
+	if (!pgsql_current_wal_flush_lsn(&src, &flushLSN))
 	{
 		/* errors have already been logged */
 		return false;

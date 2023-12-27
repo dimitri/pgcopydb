@@ -143,15 +143,9 @@ follow_reset_sequences(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 bool
 follow_init_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel)
 {
-	PGSQL pgsql = { 0 };
+	DatabaseCatalog *sourceDB = specs->sourceDB;
 
-	if (!pgsql_init(&pgsql, specs->connStrings->source_pguri, PGSQL_CONN_SOURCE))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!pgsql_begin(&pgsql))
+	if (!catalog_open(sourceDB))
 	{
 		/* errors have already been logged */
 		return false;
@@ -159,20 +153,14 @@ follow_init_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel)
 
 	if (specs->endpos != InvalidXLogRecPtr)
 	{
-		if (!pgsql_update_sentinel_endpos(&pgsql, false, specs->endpos))
+		if (!sentinel_update_endpos(sourceDB, specs->endpos))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 	}
 
-	if (!pgsql_get_sentinel(&pgsql, sentinel))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!pgsql_commit(&pgsql))
+	if (!sentinel_get(sourceDB, sentinel))
 	{
 		/* errors have already been logged */
 		return false;
@@ -189,15 +177,9 @@ follow_init_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel)
 bool
 follow_get_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel, bool verbose)
 {
-	PGSQL pgsql = { 0 };
+	DatabaseCatalog *sourceDB = specs->sourceDB;
 
-	if (!pgsql_init(&pgsql, specs->connStrings->source_pguri, PGSQL_CONN_SOURCE))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!pgsql_get_sentinel(&pgsql, sentinel))
+	if (!sentinel_get(sourceDB, sentinel))
 	{
 		/* errors have already been logged */
 		return false;
@@ -264,6 +246,14 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	 * connection.
 	 */
 	if (!stream_cleanup_context(streamSpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	DatabaseCatalog *sourceDB = &(copySpecs->catalogs.source);
+
+	if (!catalog_open(sourceDB))
 	{
 		/* errors have already been logged */
 		return false;

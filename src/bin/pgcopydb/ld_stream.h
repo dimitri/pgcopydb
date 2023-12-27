@@ -364,9 +364,8 @@ typedef struct StreamApplyContext
 	/* target connection */
 	PGSQL pgsql;
 
-	/* source connection to publish sentinel updates */
-	PGSQL src;
-	bool sentinelQueryInProgress;
+	/* apply needs access to the catalogs to register sentinel replay_lsn */
+	DatabaseCatalog *sourceDB;
 	uint64_t sentinelSyncTime;
 
 	ConnStrings *connStrings;
@@ -656,9 +655,6 @@ bool stream_apply_wait_for_sentinel(StreamSpecs *specs,
 bool stream_apply_sync_sentinel(StreamApplyContext *context,
 								bool findDurableLSN);
 
-bool stream_apply_send_sync_sentinel(StreamApplyContext *context);
-bool stream_apply_fetch_sync_sentinel(StreamApplyContext *context);
-
 bool stream_apply_file(StreamApplyContext *context);
 
 bool stream_apply_sql(StreamApplyContext *context,
@@ -666,6 +662,7 @@ bool stream_apply_sql(StreamApplyContext *context,
 					  const char *sql);
 
 bool stream_apply_init_context(StreamApplyContext *context,
+							   DatabaseCatalog *sourceDB,
 							   CDCPaths *paths,
 							   ConnStrings *connStrings,
 							   char *origin,

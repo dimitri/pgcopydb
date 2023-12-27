@@ -137,7 +137,13 @@ static char *sourceDBcreateDDLs[] = {
 
 	"create table s_table_indexes_done("
 	" tableoid integer primary key references s_table(oid), pid integer "
-	")"
+	")",
+
+	/* use SQLite more general dynamic type system: pg_lsn is text */
+	"create table sentinel("
+	"  id integer primary key check (id = 1), "
+	"  startpos pg_lsn, endpos pg_lsn, apply bool, "
+	" write_lsn pg_lsn, flush_lsn pg_lsn, replay_lsn pg_lsn)"
 };
 
 
@@ -361,7 +367,9 @@ static char *sourceDBdropDDLs[] = {
 	"drop table if exists process",
 	"drop table if exists summary",
 	"drop table if exists s_table_parts_done",
-	"drop table if exists s_table_indexes_done"
+	"drop table if exists s_table_indexes_done",
+
+	"drop table if exists sentinel"
 };
 
 
@@ -6942,7 +6950,11 @@ catalog_sql_execute(SQLiteQuery *query)
 
 		if (rc == SQLITE_DONE)
 		{
-			log_sqlite("catalog_sql_execute: 0 row: %s", query->sql);
+			if (query->errorOnZeroRows)
+			{
+				log_error("SQLite query returned 0 row: %s", query->sql);
+				return false;
+			}
 		}
 		else
 		{

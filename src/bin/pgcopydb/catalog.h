@@ -19,6 +19,9 @@ struct SQLiteQuery
 	sqlite3 *db;
 	sqlite3_stmt *ppStmt;
 	const char *sql;
+
+	bool errorOnZeroRows;
+
 	CatalogFetchResult *fetchFunction;
 	void *context;
 };
