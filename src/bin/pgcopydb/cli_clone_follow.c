@@ -776,5 +776,5 @@ cli_clone_follow_wait_subprocess(const char *name, pid_t pid)
 		pg_usleep(150 * 1000);
 	}
 
-	return returnCode == 0;
+	return returnCode == 0 && signal_is_handled(sig);
 }
