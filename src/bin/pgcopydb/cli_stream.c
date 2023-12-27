@@ -983,13 +983,17 @@ cli_stream_transform(int argc, char **argv)
 
 		pgsql_finish(&(specs.transformPGSQL));
 
-		if (remove(sqlfilename) != 0)
+		/*
+		 * XXX: verify with Dimitri if it is ok to remove the json file in a
+		 * successful `pgcopydb stream transform` execution
+		 */
+		if (remove(jsonfilename) != 0)
 		{
-			log_warn("Failed to remove file \"%s\"", sqlfilename);
+			log_warn("Failed to remove file \"%s\"", jsonfilename);
 		}
 		else
 		{
-			log_info("Done transforming, removed file \"%s\"", sqlfilename);
+			log_info("Done transforming, removed file \"%s\"", jsonfilename);
 		}
 
 		if (!catalog_close(specs.sourceDB))
