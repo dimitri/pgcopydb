@@ -58,6 +58,18 @@ copydb_start_blob_process(CopyDataSpec *specs)
 	if (!hasLargeObjects)
 	{
 		log_info("Skipping large objects: none found.");
+
+		CopyBlobsSummary summary = {
+			.pid = getpid(),
+			.count = 0,
+			.startTime = time(NULL),
+			.doneTime = time(NULL),
+			.durationMs = 0
+		};
+
+		/* ignore errors on the blob file summary */
+		(void) write_blobs_summary(&summary, specs->cfPaths.done.blobs);
+
 		return true;
 	}
 
