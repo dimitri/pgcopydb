@@ -189,6 +189,22 @@ stream_transform_stream_internal(StreamSpecs *specs)
 		log_notice("Closed file \"%s\"", privateContext->sqlFileName);
 	}
 
+	if (!catalog_close(specs->sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (remove(privateContext->sqlFileName) != 0)
+	{
+		log_warn("Failed to remove file \"%s\"", privateContext->sqlFileName);
+	}
+	else
+	{
+		log_info("Done transforming, removed file \"%s\"",
+				 privateContext->sqlFileName);
+	}
+
 	log_notice("Transformed %lld messages and %lld transactions",
 			   (long long) context.lineno,
 			   (long long) ctx.currentMsgIndex + 1);
@@ -307,9 +323,9 @@ stream_transform_resume(StreamSpecs *specs)
 			   sqlFileName);
 
 	/*
-	 * If the JSON file already exists on-disk, make sure to read it file again
-	 * now. The previous round of streaming might have stopped at an endpos
-	 * that fits in the middle of a transaction.
+	 * If the JSON file already exists on-disk, make sure to read that file
+	 * again now. The previous round of streaming might have stopped at an
+	 * endpos that fits in the middle of a transaction.
 	 *
 	 * We can think about this as "cache invalidation" of the SQL file on-disk.
 	 */
@@ -823,6 +839,15 @@ stream_transform_file_at_lsn(StreamSpecs *specs, uint64_t lsn)
 	{
 		/* errors have already been logged */
 		return false;
+	}
+
+	if (remove(sqlFileName) != 0)
+	{
+		log_warn("Failed to remove file \"%s\"", sqlFileName);
+	}
+	else
+	{
+		log_info("Done transforming, removed file \"%s\"", sqlFileName);
 	}
 
 	return true;

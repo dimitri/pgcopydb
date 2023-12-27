@@ -983,6 +983,15 @@ cli_stream_transform(int argc, char **argv)
 
 		pgsql_finish(&(specs.transformPGSQL));
 
+		if (remove(sqlfilename) != 0)
+		{
+			log_warn("Failed to remove file \"%s\"", sqlfilename);
+		}
+		else
+		{
+			log_info("Done transforming, removed file \"%s\"", sqlfilename);
+		}
+
 		if (!catalog_close(specs.sourceDB))
 		{
 			exit(EXIT_CODE_INTERNAL_ERROR);

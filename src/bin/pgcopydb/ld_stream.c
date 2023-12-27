@@ -1195,7 +1195,7 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 	 * 'E' message to signal transform and replay processes to skip replaying
 	 * the possibly opened transaction for now.
 	 *
-	 * Note that as the user can edit the endpos and restart pgcopydb, we neex
+	 * Note that as the user can edit the endpos and restart pgcopydb, we need
 	 * to be able to stop replay because of endpos and still skip replaying a
 	 * partial transaction.
 	 */

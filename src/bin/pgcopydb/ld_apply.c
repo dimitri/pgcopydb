@@ -622,10 +622,23 @@ stream_apply_file(StreamApplyContext *context)
 	free(content.buffer);
 	free(content.lines);
 
+	/* we're done with this file, remove it */
+	if (!remove(context->sqlFileName))
+	{
+		log_warn("Failed to remove file \"%s\"", context->sqlFileName);
+	}
+	else
+	{
+		log_info("Done replaying, removed file \"%s\"", context->sqlFileName);
+	}
+
 	/*
 	 * Each time we are done applying a file, we update our progress and
 	 * fetch new values from the pgcopydb sentinel. Errors are warning
 	 * here, we'll update next time.
+	 *
+	 * XXX: Should we update the comment above? It does not look like errors are
+	 * warning here.
 	 */
 	bool findDurableLSN = false;
 
