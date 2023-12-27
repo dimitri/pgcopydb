@@ -31,5 +31,6 @@ void unset_signal_flags(void);
 int get_current_signal(int defaultSignal);
 int pick_stronger_signal(int sig1, int sig2);
 char * signal_to_string(int signal);
+bool signal_is_handled(int signal);
 
 #endif /* SIGNALS_H */

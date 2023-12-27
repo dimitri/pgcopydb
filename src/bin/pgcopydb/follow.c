@@ -949,7 +949,16 @@ follow_wait_subprocesses(StreamSpecs *specs)
 				int logLevel = LOG_NOTICE;
 				char details[BUFSIZE] = { 0 };
 
-				if (processArray[i]->returnCode == 0)
+				/*
+				 * A sub-process exit is considered a "successful" exit when
+				 * the return code is zero and the signal for termination is a
+				 * signal that pgcopydb knows to handle and expects.
+				 */
+				bool exitedSuccessfully =
+					processArray[i]->returnCode == 0 &&
+					signal_is_handled(processArray[i]->sig);
+
+				if (exitedSuccessfully)
 				{
 					if (processArray[i]->sig == 0)
 					{
@@ -966,9 +975,17 @@ follow_wait_subprocesses(StreamSpecs *specs)
 				{
 					logLevel = LOG_ERROR;
 
-					if (processArray[i]->sig == 0)
+					if (processArray[i]->returnCode == 0)
 					{
-						sformat(details, sizeof(details), "with error code %d",
+						sformat(details, sizeof(details),
+								"with return code %d and signal %s",
+								processArray[i]->returnCode,
+								signal_to_string(processArray[i]->sig));
+					}
+					else if (processArray[i]->sig == 0)
+					{
+						sformat(details, sizeof(details),
+								"with error code %d",
 								processArray[i]->returnCode);
 					}
 					else
@@ -1006,7 +1023,7 @@ follow_wait_subprocesses(StreamSpecs *specs)
 					log_warn("Failed to get sentinel values");
 				}
 
-				if (processArray[i]->returnCode != 0 ||
+				if (!exitedSuccessfully ||
 					specs->endpos == InvalidXLogRecPtr)
 				{
 					char endposStatus[BUFSIZE] = { 0 };
@@ -1022,11 +1039,14 @@ follow_wait_subprocesses(StreamSpecs *specs)
 								LSN_FORMAT_ARGS(specs->endpos));
 					}
 
-					log_notice("Process %s has exited with return code %d, "
+					const char *exitmode =
+						exitedSuccessfully ? "successfully" : "unexpectedly";
+
+					log_notice("Process %s has exited %s, "
 							   "and endpos is %s: "
 							   "terminating other processes",
 							   processArray[i]->name,
-							   processArray[i]->returnCode,
+							   exitmode,
 							   endposStatus);
 
 					if (!follow_terminate_subprocesses(specs))
@@ -1037,7 +1057,7 @@ follow_wait_subprocesses(StreamSpecs *specs)
 					}
 				}
 
-				success = success && processArray[i]->returnCode == 0;
+				success = success && exitedSuccessfully;
 			}
 		}
 

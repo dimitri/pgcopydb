@@ -271,3 +271,21 @@ signal_to_string(int signal)
 		}
 	}
 }
+
+
+/*
+ * signal_is_handled returns true when the given signal is handled/expected by
+ * pgcopydb.
+ */
+bool
+signal_is_handled(int signal)
+{
+	return
+
+	    /* we add zero here for compliance with the waitpid() API */
+		signal == 0 ||
+		signal == SIGINT ||
+		signal == SIGTERM ||
+		signal == SIGQUIT ||
+		signal == SIGHUP;
+}

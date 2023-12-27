@@ -949,7 +949,7 @@ copydb_wait_for_subprocesses(bool failFast)
 					sig = WTERMSIG(status);
 				}
 
-				if (returnCode == 0 && sig == 0)
+				if (returnCode == 0 && signal_is_handled(sig))
 				{
 					log_debug("Sub-process %d exited with code %d",
 							  pid, returnCode);
