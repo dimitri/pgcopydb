@@ -32,7 +32,6 @@ vacuum_start_workers(CopyDataSpec *specs)
 	}
 
 	log_info("STEP 8: starting %d VACUUM processes", specs->vacuumJobs);
-	log_trace("vacuum_start_workers: \"%s\"", specs->cfPaths.tbldir);
 
 	for (int i = 0; i < specs->vacuumJobs; i++)
 	{
@@ -90,7 +89,6 @@ vacuum_worker(CopyDataSpec *specs)
 	pid_t pid = getpid();
 
 	log_notice("Started VACUUM worker %d [%d]", pid, getppid());
-	log_trace("vacuum_worker: \"%s\"", specs->cfPaths.tbldir);
 
 	if (!catalog_init_from_specs(specs))
 	{

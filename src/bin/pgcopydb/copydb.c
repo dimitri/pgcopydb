@@ -103,7 +103,7 @@ copydb_init_workdir(CopyDataSpec *copySpecs,
 		return false;
 	}
 
-	log_notice("Using work dir \"%s\"", cfPaths->topdir);
+	log_info("Using work dir \"%s\"", cfPaths->topdir);
 
 	/*
 	 * Some inspection commands piggy-back on the work directory that has been
@@ -199,8 +199,6 @@ copydb_init_workdir(CopyDataSpec *copySpecs,
 	const char *dirs[] = {
 		cfPaths->schemadir,
 		cfPaths->rundir,
-		cfPaths->tbldir,
-		cfPaths->idxdir,
 		cfPaths->cdc.dir,
 		cfPaths->compare.dir,
 		NULL
@@ -334,8 +332,6 @@ copydb_inspect_workdir(CopyFilePaths *cfPaths, DirectoryState *dirState)
 	const char *dirs[] = {
 		cfPaths->schemadir,
 		cfPaths->rundir,
-		cfPaths->tbldir,
-		cfPaths->idxdir,
 		NULL
 	};
 
@@ -469,8 +465,6 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths,
 	/* now that we have our topdir, prepare all the others from there */
 	sformat(cfPaths->snfile, MAXPGPATH, "%s/snapshot", cfPaths->topdir);
 	sformat(cfPaths->rundir, MAXPGPATH, "%s/run", cfPaths->topdir);
-	sformat(cfPaths->tbldir, MAXPGPATH, "%s/run/tables", cfPaths->topdir);
-	sformat(cfPaths->idxdir, MAXPGPATH, "%s/run/indexes", cfPaths->topdir);
 
 	/* internal catalogs db files are in the schemadir */
 	sformat(cfPaths->schemadir, MAXPGPATH, "%s/schema", cfPaths->topdir);

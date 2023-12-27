@@ -80,8 +80,6 @@ typedef struct CopyFilePaths
 	char schemafile[MAXPGPATH];       /* /tmp/pgcopydb/schema.json */
 	char summaryfile[MAXPGPATH];      /* /tmp/pgcopydb/summary.json */
 	char rundir[MAXPGPATH];           /* /tmp/pgcopydb/run */
-	char tbldir[MAXPGPATH];           /* /tmp/pgcopydb/run/tables */
-	char idxdir[MAXPGPATH];           /* /tmp/pgcopydb/run/indexes */
 
 	CDCPaths cdc;
 	CopyDoneFilePaths done;

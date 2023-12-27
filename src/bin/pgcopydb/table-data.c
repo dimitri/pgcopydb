@@ -96,8 +96,6 @@ copydb_process_table_data(CopyDataSpec *specs)
 {
 	int errors = 0;
 
-	log_trace("copydb_process_table_data: \"%s\"", specs->cfPaths.tbldir);
-
 	/* close SQLite databases before fork() */
 	if (!catalog_close_from_specs(specs))
 	{
