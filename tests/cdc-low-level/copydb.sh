@@ -47,7 +47,9 @@ pgcopydb stream receive --debug --resume --endpos "${lsn}"
 
 SHAREDIR=/var/lib/postgres/.local/share/pgcopydb
 WALFILE=000000010000000000000002.json
+WALFILEBACKUP=000000010000000000000002.json.backup
 SQLFILE=000000010000000000000002.sql
+SQLFILEBACKUP=000000010000000000000002.sql.backup
 
 # now compare JSON output, skipping the lsn and nextlsn fields which are
 # different at each run
@@ -70,6 +72,7 @@ pgcopydb stream receive --debug --resume --endpos "${lsn}"
 SQLFILENAME=`basename ${WALFILE} .json`.sql
 
 pgcopydb stream transform --debug ${SHAREDIR}/${WALFILE} /tmp/${SQLFILENAME}
+cp /usr/src/pgcopydb/${WALFILEBACKUP} ${SHAREDIR}/${WALFILE}
 
 # we should also get the same result as expected (discarding LSN numbers)
 DIFFOPTS='-I BEGIN -I COMMIT -I KEEPALIVE -I SWITCH -I ENDPOS'
@@ -79,9 +82,11 @@ diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} /tmp/${SQLFILENAME}
 
 # now apply the SQL file to the target database
 pgcopydb stream apply --trace --resume /tmp/${SQLFILE}
+cp /usr/src/pgcopydb/${SQLFILEBACKUP} /tmp/${SQLFILE}
 
 # now apply AGAIN the SQL file to the target database, skipping transactions
 pgcopydb stream apply --debug --resume /tmp/${SQLFILE}
+cp /usr/src/pgcopydb/${SQLFILEBACKUP} /tmp/${SQLFILE}
 
 #
 # switching to "live streaming" tests, using unix pipes
