@@ -40,14 +40,15 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 # grab the current LSN, it's going to be our streaming end position
 lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_lsn()'`
 
-# and prefetch the changes captured in our replication slot
-pgcopydb stream prefetch --resume --endpos "${lsn}" --debug
-
 SHAREDIR=/var/lib/postgres/.local/share/pgcopydb
 WALFILE=000000010000000000000002.json
 WALFILEBACKUP=000000010000000000000002.json.backup
 SQLFILE=000000010000000000000002.sql
 SQLFILEBACKUP=000000010000000000000002.sql.backup
+
+# and prefetch the changes captured in our replication slot
+pgcopydb stream prefetch --resume --endpos "${lsn}" --debug
+cp /usr/src/pgcopydb/${WALFILEBACKUP} /tmp/${WALFILE}
 
 # now compare JSON output, skipping the lsn and nextlsn fields which are
 # different at each run
@@ -86,7 +87,6 @@ pgcopydb stream sentinel set apply
 
 # now apply the SQL file to the target database
 pgcopydb stream catchup --resume --endpos "${lsn}" -vv
-cp /usr/src/pgcopydb/${SQLFILEBACKUP} /tmp/${SQLFILE}
 
 # now apply AGAIN the SQL file to the target database, skipping transactions
 pgcopydb stream catchup --resume --endpos "${lsn}" -vv

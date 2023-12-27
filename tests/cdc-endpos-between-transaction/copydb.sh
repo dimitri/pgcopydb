@@ -49,14 +49,15 @@ psql -t -d ${PGCOPYDB_SOURCE_PGURI} \
 # grab a LSN between `begin` and `commit` from second transaction, it's going to be our streaming end position
 lsn=`jq -r 'select((.columns // empty) | .[] | ((.name == "category_id") and (.value == 1008))) | .lsn' ${SLOT_PEEK_FILE}`
 
-# and prefetch the changes captured in our replication slot
-pgcopydb stream prefetch --resume --endpos "${lsn}" --notice
-
 SHAREDIR=/var/lib/postgres/.local/share/pgcopydb
 WALFILE=000000010000000000000002.json
-# WALFILEBACKUP=000000010000000000000002.json.backup XXX: I did not really need this file here
+WALFILEBACKUP=000000010000000000000002.json.backup
 SQLFILE=000000010000000000000002.sql
 SQLFILEBACKUP=000000010000000000000002.sql.backup
+
+# and prefetch the changes captured in our replication slot
+pgcopydb stream prefetch --resume --endpos "${lsn}" --notice
+cp /usr/src/pgcopydb/${WALFILEBACKUP} ${SHAREDIR}/${WALFILE}
 
 # now compare JSON output, skipping the lsn and nextlsn fields which are
 # different at each run
@@ -74,12 +75,13 @@ diff ${expected} ${result}
 
 # now prefetch the changes again, which should be a noop
 pgcopydb stream prefetch --resume --endpos "${lsn}" --trace
+cp /usr/src/pgcopydb/${WALFILEBACKUP} ${SHAREDIR}/${WALFILE}
 
 # now transform the JSON file into SQL
 SQLFILENAME=`basename ${WALFILE} .json`.sql
 
 pgcopydb stream transform --trace ${SHAREDIR}/${WALFILE} /tmp/${SQLFILENAME}
-cp /usr/src/pgcopydb/${SQLFILEBACKUP} /tmp/${SQLFILE}
+cp /usr/src/pgcopydb/${WALFILEBACKUP} ${SHAREDIR}/${WALFILE}
 
 # we should get the same result as `pgcopydb stream prefetch`
 diff ${SHAREDIR}/${SQLFILE} /tmp/${SQLFILENAME}
