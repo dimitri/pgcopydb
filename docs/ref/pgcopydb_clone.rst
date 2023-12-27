@@ -25,37 +25,39 @@ Postgres instance to the target Postgres instance.
    pgcopydb clone: Clone an entire database from source to target
    usage: pgcopydb clone  --source ... --target ... [ --table-jobs ... --index-jobs ... ]
 
-     --source                   Postgres URI to the source database
-     --target                   Postgres URI to the target database
-     --dir                      Work directory to use
-     --table-jobs               Number of concurrent COPY jobs to run
-     --index-jobs               Number of concurrent CREATE INDEX jobs to run
-     --large-objects-jobs       Number of concurrent Large Objects jobs to run
-     --split-tables-larger-than Same-table concurrency size threshold
-     --drop-if-exists           On the target database, clean-up from a previous run first
-     --roles                    Also copy roles found on source to target
-     --no-role-passwords        Do not dump passwords for roles
-     --no-owner                 Do not set ownership of objects to match the original database
-     --no-acl                   Prevent restoration of access privileges (grant/revoke commands).
-     --no-comments              Do not output commands to restore comments
-     --skip-large-objects       Skip copying large objects (blobs)
-     --skip-extensions          Skip restoring extensions
-     --skip-ext-comments        Skip restoring COMMENT ON EXTENSION
-     --skip-collations          Skip restoring collations
-     --skip-vacuum              Skip running VACUUM ANALYZE
-     --requirements <filename>  List extensions requirements
-     --filters <filename>       Use the filters defined in <filename>
-     --fail-fast                Abort early in case of error
-     --restart                  Allow restarting when temp files exist already
-     --resume                   Allow resuming operations after a failure
-     --not-consistent           Allow taking a new snapshot on the source database
-     --snapshot                 Use snapshot obtained with pg_export_snapshot
-     --follow                   Implement logical decoding to replay changes
-     --plugin                   Output plugin to use (test_decoding, wal2json)
-     --slot-name                Use this Postgres replication slot name
-     --create-slot              Create the replication slot
-     --origin                   Use this Postgres replication origin node name
-     --endpos                   Stop replaying changes when reaching this LSN
+     --source                      Postgres URI to the source database
+     --target                      Postgres URI to the target database
+     --dir                         Work directory to use
+     --table-jobs                  Number of concurrent COPY jobs to run
+     --index-jobs                  Number of concurrent CREATE INDEX jobs to run
+     --restore-jobs                Number of concurrent jobs for pg_restore
+     --large-objects-jobs          Number of concurrent Large Objects jobs to run
+     --split-tables-larger-than    Same-table concurrency size threshold
+     --drop-if-exists              On the target database, clean-up from a previous run first
+     --roles                       Also copy roles found on source to target
+     --no-role-passwords           Do not dump passwords for roles
+     --no-owner                    Do not set ownership of objects to match the original database
+     --no-acl                      Prevent restoration of access privileges (grant/revoke commands).
+     --no-comments                 Do not output commands to restore comments
+     --skip-large-objects          Skip copying large objects (blobs)
+     --skip-extensions             Skip restoring extensions
+     --skip-ext-comments           Skip restoring COMMENT ON EXTENSION
+     --skip-collations             Skip restoring collations
+     --skip-vacuum                 Skip running VACUUM ANALYZE
+     --requirements <filename>     List extensions requirements
+     --filters <filename>          Use the filters defined in <filename>
+     --fail-fast                   Abort early in case of error
+     --restart                     Allow restarting when temp files exist already
+     --resume                      Allow resuming operations after a failure
+     --not-consistent              Allow taking a new snapshot on the source database
+     --snapshot                    Use snapshot obtained with pg_export_snapshot
+     --follow                      Implement logical decoding to replay changes
+     --plugin                      Output plugin to use (test_decoding, wal2json)
+     --wal2json-numeric-as-string  Print numeric data type as string when using wal2json output plugin
+     --slot-name                   Use this Postgres replication slot name
+     --create-slot                 Create the replication slot
+     --origin                      Use this Postgres replication origin node name
+     --endpos                      Stop replaying changes when reaching this LSN
 
 .. _pgcopydb_fork:
 
@@ -115,6 +117,9 @@ The ``pgcopydb clone`` command implements the following steps:
      When filtering is used, the ``pg_restore --use-list`` feature is used
      to filter the list of objects to restore in this step.
 
+     This step uses as many as ``--restore-jobs`` jobs for ``pg_restore`` to
+     share the workload and restore the objects in parallel.
+
   4. Then as many as ``--table-jobs`` COPY sub-processes are started to
      share the workload and COPY the data from the source to the target
      database one table at a time, in a loop.
@@ -146,14 +151,14 @@ The ``pgcopydb clone`` command implements the following steps:
      be created in parallel with other indexes on the same table, avoiding
      an EXCLUSIVE LOCK while creating the index.
 
-  8. As many as ``-table-jobs`` VACUUM ANALYZE sub-processes are started to
+  8. As many as ``--table-jobs`` VACUUM ANALYZE sub-processes are started to
      share the workload. As soon as a table data COPY has completed, the
      table is queued for processing by the VACUUM ANALYZE sub-processes.
 
-  9. An auxilliary process is loops over the sequences on the source
-     database and for each of them runs a separate query on the source to
-     fetch the ``last_value`` and the ``is_called`` metadata the same way
-     that pg_dump does.
+  9. An auxilliary process loops over the sequences on the source database and
+     for each of them runs a separate query on the source to fetch the
+     ``last_value`` and the ``is_called`` metadata the same way that pg_dump
+     does.
 
      For each sequence, pgcopydb then calls ``pg_catalog.setval()`` on the
      target database with the information obtained on the source database.
@@ -165,6 +170,9 @@ The ``pgcopydb clone`` command implements the following steps:
       The *post-data* script is filtered out using the ``pg_restore
       --use-list`` option so that indexes and primary key constraints
       already created in steps 6 and 7 are properly skipped now.
+
+      This step uses as many as ``--restore-jobs`` jobs for ``pg_restore`` to
+      share the workload and restore the objects in parallel.
 
 .. _superuser:
 
@@ -423,6 +431,15 @@ The following options are available to ``pgcopydb clone``:
   Postgres target system, minus some cores that are going to be used for
   handling the COPY operations.
 
+--restore-jobs
+
+  How many threads or processes can be used during pg_restore. A good option is
+  to set this option to the count of CPU cores that are available on the
+  Postgres target system.
+
+  If this value is not set, we reuse the ``--index-jobs`` value. If that value
+  is not set either, we use the the default value for ``--index-jobs``.
+
 --large-object-jobs
 
   How many worker processes to start to copy Large Objects concurrently.
@@ -632,6 +649,19 @@ The following options are available to ``pgcopydb clone``:
   __ https://www.postgresql.org/docs/current/test-decoding.html
   __ https://github.com/eulerto/wal2json/
 
+--wal2json-numeric-as-string
+
+  When using the wal2json output plugin, it is possible to use the
+  ``--wal2json-numeric-as-string`` option to instruct wal2json to output
+  numeric values as strings and thus prevent some precision loss.
+
+  You need to have a wal2json plugin version on source database that supports
+  ``--numeric-data-types-as-string`` option to use this option.
+
+  See also the documentation for `wal2json`__ regarding this option for details.
+
+  __ https://github.com/eulerto/wal2json/pull/255
+
 --slot-name
 
   Logical decoding slot name to use. Defaults to ``pgcopydb``. which is
@@ -715,6 +745,12 @@ PGCOPYDB_INDEX_JOBS
    parallel. When ``--index-jobs`` is ommitted from the command line, then
    this environment variable is used.
 
+PGCOPYDB_RESTORE_JOBS
+
+   Number of concurrent jobs allowed to run `pg_restore` operations in
+   parallel. When ``--restore-jobs`` is ommitted from the command line, then
+   this environment variable is used.
+
 PGCOPYDB_LARGE_OBJECTS_JOBS
 
    Number of concurrent jobs allowed to copy Large Objects data in parallel.
@@ -728,6 +764,20 @@ PGCOPYDB_SPLIT_TABLES_LARGER_THAN
    units B, kB, MB, GB, TB, PB, and EB are known.
 
    When ``--split-tables-larger-than`` is ommitted from the command line,
+   then this environment variable is used.
+
+PGCOPYDB_OUTPUT_PLUGIN
+
+   Logical decoding output plugin to use. When ``--plugin`` is omitted from the
+   command line, then this environment variable is used.
+
+PGCOPYDB_WAL2JSON_NUMERIC_AS_STRING
+
+   When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
+   then pgcopydb uses the wal2json option ``--numeric-data-types-as-string``
+   when using the wal2json output plugin.
+
+   When ``--wal2json-numeric-as-string`` is ommitted from the command line
    then this environment variable is used.
 
 PGCOPYDB_DROP_IF_EXISTS

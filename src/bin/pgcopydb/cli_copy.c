@@ -39,6 +39,7 @@ static CommandLine copy_db_command =
 		"  --dir                 Work directory to use\n"
 		"  --table-jobs          Number of concurrent COPY jobs to run\n"
 		"  --index-jobs          Number of concurrent CREATE INDEX jobs to run\n"
+		"  --restore-jobs        Number of concurrent jobs for pg_restore\n"
 		"  --drop-if-exists      On the target database, clean-up from a previous run first\n"
 		"  --roles               Also copy roles found on source to target\n"
 		"  --no-owner            Do not set ownership of objects to match the original database\n"
@@ -108,6 +109,7 @@ static CommandLine copy_data_command =
 		"  --dir                 Work directory to use\n"
 		"  --table-jobs          Number of concurrent COPY jobs to run\n"
 		"  --index-jobs          Number of concurrent CREATE INDEX jobs to run\n"
+		"  --restore-jobs        Number of concurrent jobs for pg_restore\n"
 		"  --skip-large-objects  Skip copying large objects (blobs)\n"
 		"  --filters <filename>  Use the filters defined in <filename>\n"
 		"  --restart             Allow restarting when temp files exist already\n"
@@ -176,6 +178,7 @@ static CommandLine copy_indexes_command =
 		"  --target             Postgres URI to the target database\n"
 		"  --dir                Work directory to use\n"
 		"  --index-jobs         Number of concurrent CREATE INDEX jobs to run\n"
+		"  --restore-jobs       Number of concurrent jobs for pg_restore\n"
 		"  --filters <filename> Use the filters defined in <filename>\n"
 		"  --restart            Allow restarting when temp files exist already\n"
 		"  --resume             Allow resuming operations after a failure\n"
@@ -392,7 +395,7 @@ cli_copy_table_data(int argc, char **argv)
 		exit(EXIT_CODE_TARGET);
 	}
 
-	if (!copydb_copy_all_table_data(&copySpecs))
+	if (!copydb_copy_supervisor(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -680,7 +683,7 @@ cli_copy_extensions(int argc, char **argv)
 {
 	CopyDataSpec copySpecs = { 0 };
 
-	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_EXTENSION);
+	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_EXTENSIONS);
 
 	if (!copydb_prepare_snapshot(&copySpecs))
 	{

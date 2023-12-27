@@ -284,6 +284,28 @@ cli_copydb_getenv(CopyDBOptions *options)
 		}
 	}
 
+	if (env_exists(PGCOPYDB_RESTORE_JOBS))
+	{
+		char jobs[BUFSIZE] = { 0 };
+
+		if (get_env_copy(PGCOPYDB_RESTORE_JOBS, jobs, sizeof(jobs)))
+		{
+			if (!stringToInt(jobs, &options->restoreOptions.jobs) ||
+				options->restoreOptions.jobs < 1 ||
+				options->restoreOptions.jobs > 128)
+			{
+				log_fatal("Failed to parse PGCOPYDB_RESTORE_JOBS: \"%s\"",
+						  jobs);
+				++errors;
+			}
+		}
+		else
+		{
+			/* errors have already been logged */
+			++errors;
+		}
+	}
+
 	if (env_exists(PGCOPYDB_LARGE_OBJECTS_JOBS))
 	{
 		char jobs[BUFSIZE] = { 0 };
@@ -342,6 +364,29 @@ cli_copydb_getenv(CopyDBOptions *options)
 			log_fatal("Unknown replication plugin \"%s\", please use either "
 					  "test_decoding (the default) or wal2json",
 					  OutputPluginToString(options->slot.plugin));
+			++errors;
+		}
+	}
+
+	/* check if --wal2json-numeric-as-string has been used */
+	if (env_exists(PGCOPYDB_WAL2JSON_NUMERIC_AS_STRING))
+	{
+		char wal2jsonNumericAsString[BUFSIZE] = { 0 };
+
+		if (!get_env_copy(PGCOPYDB_WAL2JSON_NUMERIC_AS_STRING,
+						  wal2jsonNumericAsString,
+						  sizeof(wal2jsonNumericAsString)))
+		{
+			/* errors have already been logged */
+			++errors;
+		}
+		else if (!parse_bool(wal2jsonNumericAsString,
+							 &(options->slot.wal2jsonNumericAsString)))
+		{
+			log_error("Failed to parse environment variable \"%s\" "
+					  "value \"%s\", expected a boolean (on/off)",
+					  PGCOPYDB_WAL2JSON_NUMERIC_AS_STRING,
+					  wal2jsonNumericAsString);
 			++errors;
 		}
 	}
@@ -713,6 +758,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "no-role-passwords", no_argument, NULL, 'P' },
 		{ "no-owner", no_argument, NULL, 'O' },       /* pg_restore -O */
 		{ "no-comments", no_argument, NULL, 'X' },
+		{ "restore-jobs", required_argument, NULL, 'j' },      /* pg_restore --jobs */
 		{ "no-acl", no_argument, NULL, 'x' }, /* pg_restore -x */
 		{ "skip-blobs", no_argument, NULL, 'B' },
 		{ "skip-large-objects", no_argument, NULL, 'B' },
@@ -731,6 +777,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "snapshot", required_argument, NULL, 'N' },
 		{ "follow", no_argument, NULL, 'f' },
 		{ "plugin", required_argument, NULL, 'p' },
+		{ "wal2json-numeric-as-string", no_argument, NULL, 'w' },
 		{ "slot-name", required_argument, NULL, 's' },
 		{ "origin", required_argument, NULL, 'o' },
 		{ "create-slot", no_argument, NULL, 't' },
@@ -750,6 +797,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	/* install default values */
 	options.tableJobs = DEFAULT_TABLE_JOBS;
 	options.indexJobs = DEFAULT_INDEX_JOBS;
+	options.restoreOptions.jobs = DEFAULT_RESTORE_JOBS;
 	options.lObjectJobs = DEFAULT_LARGE_OBJECTS_JOBS;
 	options.splitTablesLargerThan.bytes = DEFAULT_SPLIT_TABLES_LARGER_THAN;
 
@@ -761,7 +809,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	}
 
 	while ((c = getopt_long(argc, argv,
-							"S:T:D:J:I:b:L:cOBemlirRCN:xXCtfo:p:s:E:F:Q:iVvdzqh",
+							"S:T:D:J:I:b:L:cOBemlirRCN:xXj:Ctfo:p:s:E:F:Q:iVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -900,6 +948,19 @@ cli_copy_db_getopts(int argc, char **argv)
 				break;
 			}
 
+			case 'j':
+			{
+				if (!stringToInt(optarg, &options.restoreOptions.jobs) ||
+					options.restoreOptions.jobs < 1 ||
+					options.restoreOptions.jobs > 128)
+				{
+					log_fatal("Failed to parse --restore-jobs count: \"%s\"", optarg);
+					++errors;
+				}
+				log_trace("--restore-jobs %d", options.restoreOptions.jobs);
+				break;
+			}
+
 			case 'B':
 			{
 				options.skipLargeObjects = true;
@@ -1006,6 +1067,13 @@ cli_copy_db_getopts(int argc, char **argv)
 				options.slot.plugin = OutputPluginFromString(optarg);
 				log_trace("--plugin %s",
 						  OutputPluginToString(options.slot.plugin));
+				break;
+			}
+
+			case 'w':
+			{
+				options.slot.wal2jsonNumericAsString = true;
+				log_trace("--wal2json-numeric-as-string");
 				break;
 			}
 
@@ -1133,10 +1201,25 @@ cli_copy_db_getopts(int argc, char **argv)
 		}
 	}
 
+	/* if we haven't set restore-jobs, set it to index-jobs */
+	if (options.restoreOptions.jobs == DEFAULT_RESTORE_JOBS)
+	{
+		options.restoreOptions.jobs = options.indexJobs;
+		log_trace("--restore-jobs %d", options.indexJobs);
+	}
+
 	if (options.connStrings.source_pguri == NULL ||
 		options.connStrings.target_pguri == NULL)
 	{
 		log_fatal("Options --source and --target are mandatory");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	if (options.slot.wal2jsonNumericAsString &&
+		options.slot.plugin != STREAM_PLUGIN_WAL2JSON)
+	{
+		log_fatal("Option --wal2json-numeric-as-string "
+				  "requires option --plugin=wal2json");
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 

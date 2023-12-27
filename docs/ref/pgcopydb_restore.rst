@@ -37,6 +37,7 @@ be fed with the directory output from the ``pgcopydb dump ...`` commands.
      --source             Postgres URI to the source database
      --target             Postgres URI to the target database
      --dir                Work directory to use
+     --restore-jobs       Number of concurrent jobs for pg_restore
      --drop-if-exists     On the target database, clean-up from a previous run first
      --no-owner           Do not set ownership of objects to match the original database
      --no-acl             Prevent restoration of access privileges (grant/revoke commands).
@@ -67,6 +68,7 @@ be fed with the directory output from the ``pgcopydb dump ...`` commands.
      --source             Postgres URI to the source database
      --target             Postgres URI to the target database
      --dir                Work directory to use
+     --restore-jobs       Number of concurrent jobs for pg_restore
      --drop-if-exists     On the target database, clean-up from a previous run first
      --no-owner           Do not set ownership of objects to match the original database
      --no-acl             Prevent restoration of access privileges (grant/revoke commands).
@@ -96,6 +98,7 @@ be fed with the directory output from the ``pgcopydb dump ...`` commands.
      --source             Postgres URI to the source database
      --target             Postgres URI to the target database
      --dir                Work directory to use
+     --restore-jobs       Number of concurrent jobs for pg_restore
      --no-owner           Do not set ownership of objects to match the original database
      --no-acl             Prevent restoration of access privileges (grant/revoke commands).
      --no-comments        Do not output commands to restore comments
@@ -129,6 +132,7 @@ target database.
      --source             Postgres URI to the source database
      --target             Postgres URI to the target database
      --dir                Work directory to use
+     --restore-jobs       Number of concurrent jobs for pg_restore
 
 
 .. _pgcopydb_restore_parse_list:
@@ -205,6 +209,15 @@ The following options are available to ``pgcopydb restore schema``:
   location given by this option, or defaults to
   ``${TMPDIR}/pgcopydb`` when the environment variable is set, or
   then to ``/tmp/pgcopydb``.
+
+--restore-jobs
+
+  How many threads or processes can be used during pg_restore. A good option is
+  to set this option to the count of CPU cores that are available on the
+  Postgres target system.
+
+  If this value is not set, we reuse the ``--index-jobs`` value. If that value
+  is not set either, we use the the default value for ``--index-jobs``.
 
 --drop-if-exists
 

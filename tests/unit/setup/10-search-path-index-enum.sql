@@ -5,20 +5,20 @@
 
 BEGIN;
 
-CREATE SCHEMA abc;
+CREATE SCHEMA """abc""";
 
-CREATE TYPE abc.state AS ENUM (
+CREATE TYPE """abc""".state AS ENUM (
     'PROPOSED',
     'SCHEDULED',
     'STARTED'
 );
 
-CREATE TABLE abc.job (
+CREATE TABLE """abc""".job (
     id bigint NOT NULL,
-    state abc.state DEFAULT 'SCHEDULED'::abc.state NOT NULL,
+    state """abc""".state DEFAULT 'SCHEDULED'::"""abc""".state NOT NULL,
     date date NOT NULL
 );
 
-CREATE INDEX indexname ON abc.job USING btree (state) WHERE (state = 'SCHEDULED'::state);
+CREATE INDEX indexname ON """abc""".job USING btree (state) WHERE (state = 'SCHEDULED'::state);
 
 COMMIT;

@@ -54,8 +54,8 @@ typedef struct SysVRes
 
 	union res
 	{
-		Queue *queue;
-		Semaphore *semaphore;
+		Queue queue;
+		Semaphore semaphore;
 	} res;
 } SysVRes;
 
@@ -106,24 +106,6 @@ typedef struct TransactionSnapshot
 	char snapshot[BUFSIZE];
 } TransactionSnapshot;
 
-/*
- * pgcopydb relies on pg_dump and pg_restore to implement the pre-data and the
- * post-data section of the operation, and implements the data section
- * differently. The data section itself is actually split in separate steps.
- */
-typedef enum
-{
-	DATA_SECTION_NONE = 0,
-	DATA_SECTION_SCHEMA,
-	DATA_SECTION_EXTENSION,
-	DATA_SECTION_TABLE_DATA,
-	DATA_SECTION_SET_SEQUENCES,
-	DATA_SECTION_INDEXES,
-	DATA_SECTION_CONSTRAINTS,
-	DATA_SECTION_BLOBS,
-	DATA_SECTION_VACUUM,
-	DATA_SECTION_ALL
-} CopyDataSection;
 
 /* all that's needed to drive a single TABLE DATA copy process */
 typedef struct CopyTableDataPartSpec
@@ -149,77 +131,31 @@ typedef struct CopyTableDataSpec
 	bool resume;
 
 	SourceTable *sourceTable;
-	CopyTableSummary *summary;
-	SourceIndexArray *indexArray;
+	CopyTableSummary summary;
+	CopyArgs copyArgs;
 
 	int tableJobs;
 	int indexJobs;
-	Semaphore *indexSemaphore;  /* pointer to the main specs semaphore */
-	Semaphore *truncateSemaphore;
-
-	TableFilePaths tablePaths;
-	IndexFilePathsArray indexPathsArray;
 
 	/* same-table concurrency with COPY WHERE clause partitioning */
 	CopyTableDataPartSpec part;
+
+	/* summary/activity tracking */
+	uint32_t countPartsDone;
+	pid_t partsDonePid;
+	bool allPartsAreDone;
+
+	uint32_t countIndexesLeft;
+	pid_t indexesDonePid;
+	bool allIndexesAreDone;
 } CopyTableDataSpec;
 
 
-typedef struct CopyTableDataSpecsArray
+typedef struct CopyIndexSpec
 {
-	int count;
-	CopyTableDataSpec *array;   /* malloc'ed area */
-} CopyTableDataSpecsArray;
-
-
-/*
- * Build a hash-table of all the SQL level objects that we filter-out when
- * applying our filtering rules. We need to find those objects again when
- * parsing the pg_restore --list output, where we almost always have the object
- * Oid, but sometimes have to use the "schema name owner" format instead, as in
- * the following pg_restore --list example output:
- *
- *   3310; 0 0 INDEX ATTACH public payment_p2020_06_customer_id_idx postgres
- *
- * The OBJECT_KIND_DEFAULT goes with the pg_attribute catalog OID where
- * Postgres keeps a sequence default value call to nextval():
- *
- *   3291; 2604 497539 DEFAULT bar id dim
- */
-typedef enum
-{
-	OBJECT_KIND_UNKNOWN = 0,
-	OBJECT_KIND_SCHEMA,
-	OBJECT_KIND_EXTENSION,
-	OBJECT_KIND_COLLATION,
-	OBJECT_KIND_TABLE,
-	OBJECT_KIND_INDEX,
-	OBJECT_KIND_CONSTRAINT,
-	OBJECT_KIND_SEQUENCE,
-	OBJECT_KIND_DEFAULT
-} ObjectKind;
-
-
-typedef struct SourceFilterItem
-{
-	uint32_t oid;
-
-	ObjectKind kind;
-
-	/* it's going to be only one of those, depending on the object kind */
-	SourceSchema schema;
-	SourceExtension extension;
-	SourceCollation collation;
-	SourceTable table;
-	SourceSequence sequence;
-	SourceIndex index;
-
-	/* schema - name - owner */
-	char restoreListName[RESTORE_LIST_NAMEDATALEN];
-
-	UT_hash_handle hOid;            /* makes this structure hashable */
-	UT_hash_handle hName;           /* makes this structure hashable */
-} SourceFilterItem;
+	SourceIndex *sourceIndex;
+	CopyIndexSummary summary;
+} CopyIndexSpec;
 
 
 /*
@@ -242,8 +178,6 @@ typedef struct CopyDataSpec
 	DirectoryState dirState;
 
 	SourceFilters filters;
-	SourceFilterItem *hOid;     /* hash table of objects, by Oid */
-	SourceFilterItem *hName;    /* hash table of objects, by pg_restore name */
 
 	ExtensionReqs *extRequirements;
 
@@ -265,6 +199,9 @@ typedef struct CopyDataSpec
 	bool consistent;
 	bool failFast;
 
+	bool fetchCatalogs;         /* cache invalidation of local catalogs db */
+	bool fetchFilteredOids;     /* allow bypassing dump/restore filter prep */
+
 	bool follow;                /* pgcopydb fork --follow */
 
 	int tableJobs;
@@ -273,9 +210,6 @@ typedef struct CopyDataSpec
 	int lObjectJobs;
 
 	SplitTableLargerThan splitTablesLargerThan;
-
-	Semaphore tableSemaphore;
-	Semaphore indexSemaphore;
 
 	Queue copyQueue;
 	Queue indexQueue;
@@ -288,9 +222,7 @@ typedef struct CopyDataSpec
 	bool hasDBCreatePrivilege;
 	bool hasDBTempPrivilege;
 
-	SourceCatalog catalog;
-	TargetCatalog targetCatalog;
-	CopyTableDataSpecsArray tableSpecsArray;
+	Catalogs catalogs;
 } CopyDataSpec;
 
 
@@ -342,15 +274,6 @@ bool copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 							 SourceTable *source,
 							 int partNumber);
 
-bool copydb_init_tablepaths(CopyFilePaths *cfPaths,
-							TableFilePaths *tablePaths,
-							uint32_t oid);
-
-bool copydb_init_tablepaths_for_part(CopyFilePaths *cfPaths,
-									 TableFilePaths *tablePaths,
-									 uint32_t oid,
-									 int partNumber);
-
 bool copydb_export_snapshot(TransactionSnapshot *snapshot);
 
 bool copydb_fatal_exit(void);
@@ -364,6 +287,9 @@ bool copydb_unlink_sysv_queue(SysVResArray *array, Queue *queue);
 
 bool copydb_cleanup_sysv_resources(SysVResArray *array);
 
+/* catalog.c */
+bool catalog_init_from_specs(CopyDataSpec *copySpecs);
+bool catalog_close_from_specs(CopyDataSpec *copySpecs);
 
 /* snapshot.c */
 bool copydb_copy_snapshot(CopyDataSpec *specs, TransactionSnapshot *snapshot);
@@ -387,10 +313,9 @@ bool copydb_parse_extensions_requirements(CopyDataSpec *copySpecs,
 										  char *filename);
 
 /* indexes.c */
-
 bool copydb_start_index_workers(CopyDataSpec *specs);
 bool copydb_index_worker(CopyDataSpec *specs);
-bool copydb_create_index_by_oid(CopyDataSpec *specs, uint32_t indexOid);
+bool copydb_create_index_by_oid(CopyDataSpec *specs, PGSQL *dst, uint32_t indexOid);
 
 bool copydb_add_table_indexes(CopyDataSpec *specs,
 							  CopyTableDataSpec *tableSpecs);
@@ -399,58 +324,28 @@ bool copydb_index_workers_send_stop(CopyDataSpec *specs);
 
 bool copydb_table_indexes_are_done(CopyDataSpec *specs,
 								   SourceTable *table,
-								   TableFilePaths *tablePaths,
 								   bool *indexesAreDone,
 								   bool *constraintsAreBeingBuilt);
 
-bool copydb_init_index_paths(CopyFilePaths *cfPaths,
-							 SourceIndex *index,
-							 IndexFilePaths *indexPaths);
-
-bool copydb_init_indexes_paths(CopyFilePaths *cfPaths,
-							   SourceIndexArray *indexArray,
-							   IndexFilePathsArray *indexPathsArray);
-
 bool copydb_copy_all_indexes(CopyDataSpec *specs);
 
-bool copydb_start_index_processes(CopyDataSpec *specs,
-								  SourceIndexArray *indexArray,
-								  IndexFilePathsArray *indexPathsArray);
-
-bool copydb_start_index_process(CopyDataSpec *specs,
-								SourceIndexArray *indexArray,
-								IndexFilePathsArray *indexPathsArray);
-
-bool copydb_create_index(const char *pguri,
+bool copydb_create_index(CopyDataSpec *specs,
+						 PGSQL *dst,
 						 SourceIndex *index,
-						 IndexFilePaths *indexPaths,
-						 Semaphore *lockFileSemaphore,
-						 bool constraint,
 						 bool ifNotExists);
 
+bool copydb_index_is_being_processed(CopyDataSpec *specs,
+									 CopyIndexSpec *indexSpecs,
+									 bool *isDone);
 
-bool copydb_index_is_being_processed(SourceIndex *index,
-									 IndexFilePaths *indexPaths,
-									 bool constraint,
-									 Semaphore *lockFileSemaphore,
-									 CopyIndexSummary *summary,
-									 bool *isDone,
-									 bool *isBeingProcessed);
+bool copydb_mark_index_as_done(CopyDataSpec *specs, CopyIndexSpec *indexSpecs);
 
-bool copydb_mark_index_as_done(SourceIndex *index,
-							   IndexFilePaths *indexPaths,
-							   bool constraint,
-							   Semaphore *lockFileSemaphore,
-							   CopyIndexSummary *summary);
+bool copydb_prepare_create_index_command(CopyIndexSpec *indexSpecs,
+										 bool ifNotExists);
 
-bool copydb_prepare_create_index_command(SourceIndex *index,
-										 bool ifNotExists,
-										 char **command);
+bool copydb_prepare_create_constraint_command(CopyIndexSpec *indexSpecs);
 
-bool copydb_prepare_create_constraint_command(SourceIndex *index,
-											  char **command);
-
-bool copydb_create_constraints(CopyDataSpec *spec, SourceTable *table);
+bool copydb_create_constraints(CopyDataSpec *spec, PGSQL *dst, SourceTable *table);
 
 /* dump_restore.c */
 bool copydb_dump_source_schema(CopyDataSpec *specs,
@@ -481,8 +376,6 @@ bool copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql);
 bool copydb_prepare_index_specs(CopyDataSpec *specs, PGSQL *pgsql);
 bool copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql);
 
-char * copydb_ObjectKindToString(ObjectKind kind);
-
 bool copydb_prepare_target_catalog(CopyDataSpec *specs);
 bool copydb_schema_already_exists(CopyDataSpec *specs,
 								  const char *restoreListName,
@@ -494,6 +387,8 @@ bool copydb_process_table_data(CopyDataSpec *specs);
 
 bool copydb_start_copy_supervisor(CopyDataSpec *specs);
 bool copydb_copy_supervisor(CopyDataSpec *specs);
+bool copydb_copy_start_worker_queue_tables(CopyDataSpec *specs);
+bool copydb_copy_worker_queue_tables(CopyDataSpec *specs);
 bool copydb_copy_supervisor_send_stop(CopyDataSpec *specs);
 bool copydb_start_table_data_workers(CopyDataSpec *specs);
 bool copydb_table_data_worker(CopyDataSpec *specs);
@@ -522,12 +417,18 @@ bool copydb_table_parts_are_all_done(CopyDataSpec *specs,
 									 bool *allPartsDone,
 									 bool *isBeingProcessed);
 
-bool copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs,
-							   PQExpBuffer query,
-							   bool source);
+bool copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs, CopyArgs *args);
+
+bool copydb_prepare_copy_query_attrlist(CopyTableDataSpec *tableSpecs,
+										PQExpBuffer attrList);
+
+bool copydb_prepare_summary_command(CopyTableDataSpec *tableSpecs);
+
 
 /* blobs.c */
 bool copydb_start_blob_process(CopyDataSpec *specs);
+
+bool copydb_has_large_objects(CopyDataSpec *specs, bool *hasLargeObjects);
 
 bool copydb_blob_supervisor(CopyDataSpec *specs);
 bool copydb_start_blob_workers(CopyDataSpec *specs);
@@ -547,6 +448,83 @@ bool vacuum_send_stop(CopyDataSpec *specs);
 /* summary.c */
 bool prepare_summary_table(Summary *summary, CopyDataSpec *specs);
 bool print_summary(Summary *summary, CopyDataSpec *specs);
+
+bool summary_lookup_oid(DatabaseCatalog *catalog, uint32_t oid, bool *done);
+bool summary_oid_done_fetch(SQLiteQuery *query);
+
+/*
+ * Summary Table
+ */
+bool summary_lookup_table(DatabaseCatalog *catalog,
+						  CopyTableDataSpec *tableSpecs);
+
+bool summary_table_fetch(SQLiteQuery *query);
+
+bool summary_add_table(DatabaseCatalog *catalog,
+					   CopyTableDataSpec *tableSpecs);
+
+bool summary_finish_table(DatabaseCatalog *catalog,
+						  CopyTableDataSpec *tableSpecs);
+
+bool summary_delete_table(DatabaseCatalog *catalog,
+						  CopyTableDataSpec *tableSpecs);
+
+bool summary_table_count_parts_done(DatabaseCatalog *catalog,
+									CopyTableDataSpec *tableSpecs);
+
+bool summary_table_fetch_count_parts_done(SQLiteQuery *query);
+
+bool summary_add_table_parts_done(DatabaseCatalog *catalog,
+								  CopyTableDataSpec *tableSpecs);
+
+bool summary_lookup_table_parts_done(DatabaseCatalog *catalog,
+									 CopyTableDataSpec *tableSpecs);
+
+bool summary_table_parts_done_fetch(SQLiteQuery *query);
+
+/*
+ * Summary for Create Index and Constraints
+ */
+bool summary_lookup_index(DatabaseCatalog *catalog,
+						  CopyIndexSpec *indexSpecs);
+
+bool summary_index_fetch(SQLiteQuery *query);
+
+bool summary_add_index(DatabaseCatalog *catalog,
+					   CopyIndexSpec *indexSpecs);
+
+bool summary_finish_index(DatabaseCatalog *catalog,
+						  CopyIndexSpec *indexSpecs);
+
+bool summary_delete_index(DatabaseCatalog *catalog,
+						  CopyIndexSpec *indexSpecs);
+
+bool summary_lookup_constraint(DatabaseCatalog *catalog,
+							   CopyIndexSpec *indexSpecs);
+
+bool summary_add_constraint(DatabaseCatalog *catalog,
+							CopyIndexSpec *indexSpecs);
+
+bool summary_finish_constraint(DatabaseCatalog *catalog,
+							   CopyIndexSpec *indexSpecs);
+
+bool summary_table_count_indexes_left(DatabaseCatalog *catalog,
+									  CopyTableDataSpec *tableSpecs);
+
+bool summary_table_fetch_count_indexes_left(SQLiteQuery *query);
+
+bool summary_add_table_indexes_done(DatabaseCatalog *catalog,
+									CopyTableDataSpec *tableSpecs);
+
+bool summary_lookup_table_indexes_done(DatabaseCatalog *catalog,
+									   CopyTableDataSpec *tableSpecs);
+
+bool summary_table_indexes_done_fetch(SQLiteQuery *query);
+
+bool summary_prepare_index_entry(DatabaseCatalog *catalog,
+								 SourceIndex *index,
+								 bool constraint,
+								 SummaryIndexEntry *indexEntry);
 
 /* compare.c */
 bool compare_schemas(CopyDataSpec *copySpecs);

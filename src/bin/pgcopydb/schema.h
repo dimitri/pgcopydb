@@ -8,10 +8,13 @@
 
 #include <stdbool.h>
 
+#include <sqlite3.h>
+
 #include "parson.h"
 #include "uthash.h"
 
 #include "filtering.h"
+#include "lock_utils.h"
 #include "pgsql.h"
 #include "pg_utils.h"
 
@@ -25,14 +28,7 @@ typedef struct SourceDatabase
 	char datname[PG_NAMEDATALEN];
 	int64_t bytes;
 	char bytesPretty[PG_NAMEDATALEN]; /* pg_size_pretty */
-}
-SourceDatabase;
-
-typedef struct SourceDatabaseArray
-{
-	int count;
-	SourceDatabase *array;
-} SourceDatabaseArray;
+} SourceDatabase;
 
 
 typedef struct SourceRole
@@ -44,27 +40,12 @@ typedef struct SourceRole
 } SourceRole;
 
 
-typedef struct SourceRoleArray
-{
-	int count;
-	SourceRole *array;          /* malloc'ed area */
-} SourceRoleArray;
-
-
 typedef struct SourceSchema
 {
 	uint32_t oid;
 	char nspname[PG_NAMEDATALEN];
 	char restoreListName[RESTORE_LIST_NAMEDATALEN];
-
-	UT_hash_handle hh;          /* makes this structure hashable */
 } SourceSchema;
-
-typedef struct SourceSchemaArray
-{
-	int count;
-	SourceSchema *array;        /* malloc'ed area */
-} SourceSchemaArray;
 
 
 /*
@@ -73,7 +54,8 @@ typedef struct SourceSchemaArray
  */
 typedef struct SourceExtensionConfig
 {
-	uint32_t oid;               /* pg_class.oid */
+	uint32_t extoid;               /* extension's oid */
+	uint32_t reloid;               /* pg_class.oid */
 	char nspname[PG_NAMEDATALEN];
 	char relname[PG_NAMEDATALEN];
 	char *condition;            /* strdup from PQresult: malloc'ed area */
@@ -97,13 +79,6 @@ typedef struct SourceExtension
 } SourceExtension;
 
 
-typedef struct SourceExtensionArray
-{
-	int count;
-	SourceExtension *array;         /* malloc'ed area */
-} SourceExtensionArray;
-
-
 typedef struct ExtensionsVersions
 {
 	char name[PG_NAMEDATALEN];
@@ -118,6 +93,7 @@ typedef struct ExtensionsVersionsArray
 	ExtensionsVersions *array;  /* malloc'ed area */
 } ExtensionsVersionsArray;
 
+
 typedef struct SourceCollation
 {
 	uint32_t oid;
@@ -125,12 +101,6 @@ typedef struct SourceCollation
 	char *desc;                 /* malloc'ed area */
 	char restoreListName[RESTORE_LIST_NAMEDATALEN];
 } SourceCollation;
-
-typedef struct SourceCollationArray
-{
-	int count;
-	SourceCollation *array;         /* malloc'ed area */
-} SourceCollationArray;
 
 
 /*
@@ -147,13 +117,6 @@ typedef struct SourceTableParts
 
 	int64_t count;              /* max - min + 1 */
 } SourceTableParts;
-
-
-typedef struct SourceTablePartsArray
-{
-	int count;
-	SourceTableParts *array;    /* malloc'ed area */
-} SourceTablePartsArray;
 
 
 typedef struct SourceTableAttribute
@@ -191,6 +154,7 @@ typedef struct SourceTable
 	char nspname[PG_NAMEDATALEN];
 	char relname[PG_NAMEDATALEN];
 	char amname[PG_NAMEDATALEN];
+	char restoreListName[RESTORE_LIST_NAMEDATALEN];
 
 	int64_t relpages;
 	int64_t reltuples;
@@ -201,20 +165,21 @@ typedef struct SourceTable
 	TableChecksum sourceChecksum;
 	TableChecksum targetChecksum;
 
-	char restoreListName[RESTORE_LIST_NAMEDATALEN];
 	char partKey[PG_NAMEDATALEN];
-	SourceTablePartsArray partsArray;
+	SourceTableParts partition;
 
 	SourceTableAttributeArray attributes;
 
-	struct SourceIndexList *firstIndex;
-	struct SourceIndexList *lastIndex;
+	uint64_t indexCount;
+	uint64_t constraintCount;
 
-	UT_hash_handle hh;          /* makes this structure hashable */
-	UT_hash_handle hhQName;     /* makes this structure hashable */
+	/* summary information */
+	uint64_t durationMs;
+	uint64_t bytesTransmitted;
 } SourceTable;
 
 
+/* still used in progress.[ch] */
 typedef struct SourceTableArray
 {
 	int count;
@@ -240,17 +205,8 @@ typedef struct SourceSequence
 	bool isCalled;
 
 	char restoreListName[RESTORE_LIST_NAMEDATALEN];
-
-	UT_hash_handle hh;          /* makes this structure hashable */
-	UT_hash_handle hhQName;     /* makes this structure hashable */
 } SourceSequence;
 
-
-typedef struct SourceSequenceArray
-{
-	int count;
-	SourceSequence *array;         /* malloc'ed area */
-} SourceSequenceArray;
 
 /*
  * SourceIndex caches the information we need about all the indexes attached to
@@ -281,23 +237,15 @@ typedef struct SourceIndex
 
 	char indexRestoreListName[RESTORE_LIST_NAMEDATALEN];
 	char constraintRestoreListName[RESTORE_LIST_NAMEDATALEN];
-
-	UT_hash_handle hh;          /* makes this structure hashable */
 } SourceIndex;
 
 
+/* still used in progress.[ch] */
 typedef struct SourceIndexArray
 {
 	int count;
 	SourceIndex *array;         /* malloc'ed area */
 } SourceIndexArray;
-
-
-typedef struct SourceIndexList
-{
-	SourceIndex *index;
-	struct SourceIndexList *next;
-} SourceIndexList;
 
 
 /*
@@ -320,13 +268,6 @@ typedef struct SourceDepend
 } SourceDepend;
 
 
-typedef struct SourceDependArray
-{
-	int count;
-	SourceDepend *array;         /* malloc'ed area */
-} SourceDependArray;
-
-
 /*
  * SourceProperty caches data found in Postgres catalog pg_db_role_setting,
  * allowing to support ALTER DATABASE SET and ALTER ROLE IN DATABASE
@@ -345,63 +286,109 @@ typedef struct SourceProperty
 	char *setconfig;            /* malloc'ed area */
 } SourceProperty;
 
-typedef struct SourcePropertiesArray
-{
-	int count;
-	SourceProperty *array;      /* malloc'ed area */
-} SourcePropertiesArray;
 
 /*
- * SourceCatalog regroups all the information we fetch from a Postgres
- * instance.
+ * There is a cyclic dependency between schema.c and catalog.h, because the
+ * schema queries need to fill-in the internal catalogs, and the internal
+ * catalog API deals with schema.h structures (e.g. SourceTable or
+ * SourceIndex).
+ *
+ * The easiest way to avoid the cyclic dependency issue at compile time seems
+ * to be defining the top-level DatabaseCatalog structure in schema.h, that
+ * needs to be #include'd in catalog.h anyway.
  */
-typedef struct SourceCatalog
+typedef enum
 {
-	SourcePropertiesArray gucsArray;
-	SourceExtensionArray extensionArray;
-	SourceCollationArray collationArray;
-	SourceTableArray sourceTableArray;
-	SourceIndexArray sourceIndexArray;
-	SourceSequenceArray sequenceArray;
-
-	SourceTable *sourceTableHashByOid;
-	SourceTable *sourceTableHashByQName;
-	SourceIndex *sourceIndexHashByOid;
-	SourceSequence *sourceSeqHashByOid;
-	SourceSequence *sourceSeqHashByQname;
-} SourceCatalog;
+	DATABASE_CATALOG_TYPE_UNKNOWN = 0,
+	DATABASE_CATALOG_TYPE_SOURCE,
+	DATABASE_CATALOG_TYPE_FILTER,
+	DATABASE_CATALOG_TYPE_TARGET
+} DatabaseCatalogType;
 
 
-typedef struct TargetCatalog
+/*
+ * Catalog setup and section allow decision-making about cache re-use and cache
+ * invalidation.
+ */
+typedef struct CatalogSetup
 {
-	SourceRoleArray rolesArray;
-	SourceSchemaArray schemaArray;
+	int id;                     /* 1 when setup has been done, otherwise zero */
+	char *source_pguri;         /* malloc'ed area */
+	char *target_pguri;         /* malloc'ed area */
+	char snapshot[BUFSIZE];
+	uint64_t splitTablesLargerThanBytes;
+	char *filters;              /* malloc'ed area */
+} CatalogSetup;
 
-	SourceRole *rolesHashByName;
-	SourceSchema *schemaHashByName;
-} TargetCatalog;
+typedef enum
+{
+	DATA_SECTION_NONE = 0,
+	DATA_SECTION_DATABASE_PROPERTIES,
+	DATA_SECTION_COLLATIONS,
+	DATA_SECTION_EXTENSIONS,
+	DATA_SECTION_SCHEMA,
+	DATA_SECTION_TABLE_DATA,
+	DATA_SECTION_TABLE_DATA_PARTS,
+	DATA_SECTION_SET_SEQUENCES,
+	DATA_SECTION_INDEXES,
+	DATA_SECTION_CONSTRAINTS,
+	DATA_SECTION_DEPENDS,
+	DATA_SECTION_FILTERS,
+	DATA_SECTION_BLOBS,
+	DATA_SECTION_VACUUM,
+	DATA_SECTION_ALL
+} CopyDataSection;
+
+#define DATA_SECTION_COUNT (DATA_SECTION_ALL + 1)
+
+typedef struct CatalogSection
+{
+	CopyDataSection section;
+	char name[PG_NAMEDATALEN];
+	bool fetched;
+} CatalogSection;
+
+typedef struct DatabaseCatalog
+{
+	DatabaseCatalogType type;
+
+	CatalogSetup setup;
+	CatalogSection sections[DATA_SECTION_COUNT];
+
+	char dbfile[MAXPGPATH];
+	sqlite3 *db;
+
+	Semaphore sema;
+} DatabaseCatalog;
+
+
+typedef struct Catalogs
+{
+	DatabaseCatalog source;
+	DatabaseCatalog filter;
+	DatabaseCatalog target;
+} Catalogs;
 
 
 bool schema_query_privileges(PGSQL *pgsql,
 							 bool *hasDBCreatePrivilage,
 							 bool *hasDBTempPrivilege);
 
-bool schema_list_databases(PGSQL *pgsql, SourceDatabaseArray *catArray);
+bool schema_list_databases(PGSQL *pgsql, DatabaseCatalog *catalog);
 
-bool schema_list_database_properties(PGSQL *pgsql,
-									 SourcePropertiesArray *gucsArray);
+bool schema_list_database_properties(PGSQL *pgsql, DatabaseCatalog *catalog);
 
-bool schema_list_schemas(PGSQL *pgsql, SourceSchemaArray *array);
+bool schema_list_schemas(PGSQL *pgsql, DatabaseCatalog *catalog);
 
-bool schema_list_roles(PGSQL *pgsql, SourceRoleArray *rolesArray);
+bool schema_list_roles(PGSQL *pgsql, DatabaseCatalog *catalog);
 
-bool schema_list_ext_schemas(PGSQL *pgsql, SourceSchemaArray *array);
+bool schema_list_ext_schemas(PGSQL *pgsql, DatabaseCatalog *catalog);
 
-bool schema_list_extensions(PGSQL *pgsql, SourceExtensionArray *extArray);
+bool schema_list_extensions(PGSQL *pgsql, DatabaseCatalog *catalog);
 
 bool schema_list_ext_versions(PGSQL *pgsql, ExtensionsVersionsArray *array);
 
-bool schema_list_collations(PGSQL *pgsql, SourceCollationArray *array);
+bool schema_list_collations(PGSQL *pgsql, DatabaseCatalog *catalog);
 
 bool schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
 										SourceFilters *filters,
@@ -412,35 +399,43 @@ bool schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
 
 bool schema_drop_pgcopydb_table_size(PGSQL *pgsql);
 
+bool schema_list_table(PGSQL *pgsql,
+					   const char *schemaName,
+					   const char *tableName,
+					   DatabaseCatalog *catalog);
+
 bool schema_list_ordinary_tables(PGSQL *pgsql,
 								 SourceFilters *filters,
-								 SourceTableArray *tableArray);
+								 DatabaseCatalog *catalog);
 
 bool schema_list_ordinary_tables_without_pk(PGSQL *pgsql,
 											SourceFilters *filters,
-											SourceTableArray *tableArray);
+											DatabaseCatalog *catalog);
 
-bool schema_list_partitions(PGSQL *pgsql, SourceTable *table, uint64_t partSize);
+bool schema_list_partitions(PGSQL *pgsql,
+							DatabaseCatalog *catalog,
+							SourceTable *table,
+							uint64_t partSize);
 
 bool schema_list_sequences(PGSQL *pgsql,
 						   SourceFilters *filters,
-						   SourceSequenceArray *seqArray);
+						   DatabaseCatalog *catalog);
 
 bool schema_get_sequence_value(PGSQL *pgsql, SourceSequence *seq);
 bool schema_set_sequence_value(PGSQL *pgsql, SourceSequence *seq);
 
 bool schema_list_all_indexes(PGSQL *pgsql,
 							 SourceFilters *filters,
-							 SourceIndexArray *indexArray);
+							 DatabaseCatalog *catalog);
 
 bool schema_list_table_indexes(PGSQL *pgsql,
 							   const char *shemaName,
 							   const char *tableName,
-							   SourceIndexArray *indexArray);
+							   DatabaseCatalog *catalog);
 
 bool schema_list_pg_depend(PGSQL *pgsql,
 						   SourceFilters *filters,
-						   SourceDependArray *dependArray);
+						   DatabaseCatalog *catalog);
 
 bool schema_send_table_checksum(PGSQL *pgsql, SourceTable *table);
 bool schema_fetch_table_checksum(PGSQL *pgsql, TableChecksum *sum, bool *done);

@@ -49,4 +49,5 @@ bool copydb_progress_as_json(CopyDataSpec *copySpecs,
 							 CopyProgress *progress,
 							 JSON_Value *js);
 
+
 #endif  /* PROGRESS_H */

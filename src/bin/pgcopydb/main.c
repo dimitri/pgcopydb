@@ -264,6 +264,13 @@ set_logger()
 static void
 unlink_system_res_atexit(void)
 {
+	(void) copydb_cleanup_sysv_resources(&system_res_array);
+
+	/*
+	 * close the log file after cleaning up System V resources. This ordering
+	 * is important because we want to log any errors that might happen during
+	 * System V resources clean-up.
+	 */
 	if (logfp != NULL)
 	{
 		if (fclose(logfp) != 0)
@@ -271,6 +278,4 @@ unlink_system_res_atexit(void)
 			fformat(stderr, "Failed to close log file: %m\n");
 		}
 	}
-
-	(void) copydb_cleanup_sysv_resources(&system_res_array);
 }

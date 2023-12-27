@@ -468,10 +468,15 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths,
 
 	/* now that we have our topdir, prepare all the others from there */
 	sformat(cfPaths->snfile, MAXPGPATH, "%s/snapshot", cfPaths->topdir);
-	sformat(cfPaths->schemadir, MAXPGPATH, "%s/schema", cfPaths->topdir);
 	sformat(cfPaths->rundir, MAXPGPATH, "%s/run", cfPaths->topdir);
 	sformat(cfPaths->tbldir, MAXPGPATH, "%s/run/tables", cfPaths->topdir);
 	sformat(cfPaths->idxdir, MAXPGPATH, "%s/run/indexes", cfPaths->topdir);
+
+	/* internal catalogs db files are in the schemadir */
+	sformat(cfPaths->schemadir, MAXPGPATH, "%s/schema", cfPaths->topdir);
+	sformat(cfPaths->sdbfile, MAXPGPATH, "%s/source.db", cfPaths->schemadir);
+	sformat(cfPaths->fdbfile, MAXPGPATH, "%s/filter.db", cfPaths->schemadir);
+	sformat(cfPaths->tdbfile, MAXPGPATH, "%s/target.db", cfPaths->schemadir);
 
 	/* prepare also the name of the schema file (JSON) */
 	sformat(cfPaths->schemafile, MAXPGPATH, "%s/schema.json", cfPaths->topdir);
@@ -683,6 +688,7 @@ copydb_init_specs(CopyDataSpec *specs,
 	CopyDataSpec tmpCopySpecs = {
 		.cfPaths = specs->cfPaths,
 		.pgPaths = specs->pgPaths,
+		.dirState = specs->dirState,
 
 		.connStrings = options->connStrings,
 
@@ -709,6 +715,11 @@ copydb_init_specs(CopyDataSpec *specs,
 		.resume = options->resume,
 		.consistent = !options->notConsistent,
 
+		.fetchCatalogs = specs->fetchCatalogs,
+
+		/* internal option only, not exposed */
+		.fetchFilteredOids = true,
+
 		.tableJobs = options->tableJobs,
 		.indexJobs = options->indexJobs,
 		.lObjectJobs = options->lObjectJobs,
@@ -718,14 +729,10 @@ copydb_init_specs(CopyDataSpec *specs,
 
 		.splitTablesLargerThan = options->splitTablesLargerThan,
 
-		.tableSemaphore = { 0 },
-		.indexSemaphore = { 0 },
-
 		.vacuumQueue = { 0 },
 		.indexQueue = { 0 },
 
-		.catalog = { 0 },
-		.tableSpecsArray = { 0, NULL }
+		.catalogs = { 0 }
 	};
 
 	if (!IS_EMPTY_STRING_BUFFER(options->snapshot))
@@ -745,27 +752,20 @@ copydb_init_specs(CopyDataSpec *specs,
 		return false;
 	}
 
-	/* create the table semaphore (critical section, one at a time please) */
-	specs->tableSemaphore.initValue = 1;
+	/* Initialize the internal catalogs */
+	DatabaseCatalog *source = &(specs->catalogs.source);
+	DatabaseCatalog *filter = &(specs->catalogs.filter);
+	DatabaseCatalog *target = &(specs->catalogs.target);
 
-	if (!semaphore_create(&(specs->tableSemaphore)))
-	{
-		log_error("Failed to create the table concurrency semaphore "
-				  "to orchestrate %d TABLE DATA COPY jobs",
-				  options->tableJobs);
-		return false;
-	}
+	/* init the catalog type */
+	source->type = DATABASE_CATALOG_TYPE_SOURCE;
+	filter->type = DATABASE_CATALOG_TYPE_FILTER;
+	target->type = DATABASE_CATALOG_TYPE_TARGET;
 
-	/* create the index semaphore (critical section, one at a time please) */
-	specs->indexSemaphore.initValue = 1;
-
-	if (!semaphore_create(&(specs->indexSemaphore)))
-	{
-		log_error("Failed to create the index concurrency semaphore "
-				  "to orchestrate %d CREATE INDEX jobs",
-				  options->indexJobs);
-		return false;
-	}
+	/* pick the dbfile from the specs */
+	strlcpy(source->dbfile, specs->cfPaths.sdbfile, sizeof(source->dbfile));
+	strlcpy(filter->dbfile, specs->cfPaths.fdbfile, sizeof(filter->dbfile));
+	strlcpy(target->dbfile, specs->cfPaths.tdbfile, sizeof(target->dbfile));
 
 	if (specs->section == DATA_SECTION_ALL ||
 		specs->section == DATA_SECTION_TABLE_DATA)
@@ -779,7 +779,13 @@ copydb_init_specs(CopyDataSpec *specs,
 				return false;
 			}
 		}
+	}
 
+	if (specs->section == DATA_SECTION_ALL ||
+		specs->section == DATA_SECTION_INDEXES ||
+		specs->section == DATA_SECTION_CONSTRAINTS ||
+		specs->section == DATA_SECTION_TABLE_DATA)
+	{
 		/* create the CREATE INDEX process queue */
 		if (!queue_create(&(specs->indexQueue), "create index"))
 		{
@@ -820,57 +826,32 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 		.resume = specs->resume,
 
 		.sourceTable = source,
-		.indexArray = NULL,
-		.summary = NULL,
+		.summary = { 0 },
 
 		.tableJobs = specs->tableJobs,
-		.indexJobs = specs->indexJobs,
-
-		.indexSemaphore = &(specs->indexSemaphore)
+		.indexJobs = specs->indexJobs
 	};
 
 	/* copy the structure as a whole memory area to the target place */
 	*tableSpecs = tmpTableSpecs;
 
 	/* This CopyTableDataSpec might be for a partial COPY */
-	if (source->partsArray.count >= 1)
+	if (source->partition.partCount >= 1)
 	{
-		CopyTableDataPartSpec part = {
-			.partNumber = partNumber,
-			.partCount = source->partsArray.array[partNumber].partCount,
-			.min = source->partsArray.array[partNumber].min,
-			.max = source->partsArray.array[partNumber].max
-		};
+		tableSpecs->part.partNumber = source->partition.partNumber;
+		tableSpecs->part.partCount = source->partition.partCount;
+		tableSpecs->part.min = source->partition.min;
+		tableSpecs->part.max = source->partition.max;
 
-		tableSpecs->part = part;
-
-		strlcpy(tableSpecs->part.partKey, source->partKey, NAMEDATALEN);
-
-		/* now compute the table-specific paths we are using in copydb */
-		if (!copydb_init_tablepaths_for_part(tableSpecs->cfPaths,
-											 &(tableSpecs->tablePaths),
-											 tableSpecs->sourceTable->oid,
-											 partNumber))
+		/* tables that are partitioned without a partKey are using CTID */
+		if (!IS_EMPTY_STRING_BUFFER(source->partKey))
 		{
-			log_error("Failed to prepare pathnames for partition %d of table %s",
-					  partNumber,
-					  tableSpecs->sourceTable->qname);
-			return false;
+			strlcpy(tableSpecs->part.partKey, source->partKey, NAMEDATALEN);
 		}
-
-		/* used only by one process, the one finishing a partial COPY last */
-		sformat(tableSpecs->tablePaths.idxListFile, MAXPGPATH, "%s/%u.idx",
-				tableSpecs->cfPaths->tbldir,
-				source->oid);
-
-		/*
-		 * And now the truncateLockFile and truncateDoneFile, which are used to
-		 * provide a critical section to the same-table concurrent processes.
-		 */
-		sformat(tableSpecs->tablePaths.truncateDoneFile, MAXPGPATH,
-				"%s/%u.truncate",
-				tableSpecs->cfPaths->tbldir,
-				source->oid);
+		else
+		{
+			strlcpy(tableSpecs->part.partKey, "ctid", NAMEDATALEN);
+		}
 	}
 	else
 	{
@@ -880,73 +861,10 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 			log_error("BUG: copydb_init_table_specs partNumber is %d and "
 					  "source table partArray.count is %d",
 					  partNumber,
-					  source->partsArray.count);
-			return false;
-		}
-
-		/* now compute the table-specific paths we are using in copydb */
-		if (!copydb_init_tablepaths(tableSpecs->cfPaths,
-									&(tableSpecs->tablePaths),
-									tableSpecs->sourceTable->oid))
-		{
-			log_error("Failed to prepare pathnames for table %u",
-					  tableSpecs->sourceTable->oid);
+					  source->partition.partCount);
 			return false;
 		}
 	}
-
-	return true;
-}
-
-
-/*
- * copydb_init_tablepaths computes the lockFile, doneFile, and idxListFile
- * pathnames for a given table oid and global cfPaths setup.
- */
-bool
-copydb_init_tablepaths(CopyFilePaths *cfPaths,
-					   TableFilePaths *tablePaths,
-					   uint32_t oid)
-{
-	sformat(tablePaths->lockFile, MAXPGPATH, "%s/%d",
-			cfPaths->rundir,
-			oid);
-
-	sformat(tablePaths->doneFile, MAXPGPATH, "%s/%d.done",
-			cfPaths->tbldir,
-			oid);
-
-	sformat(tablePaths->idxListFile, MAXPGPATH, "%s/%u.idx",
-			cfPaths->tbldir,
-			oid);
-
-	sformat(tablePaths->chksumFile, MAXPGPATH, "%s/%u.sum.json",
-			cfPaths->tbldir,
-			oid);
-
-	return true;
-}
-
-
-/*
- * copydb_init_tablepaths_for_part computes the lockFile and doneFile pathnames
- * for a given COPY partition of a table.
- */
-bool
-copydb_init_tablepaths_for_part(CopyFilePaths *cfPaths,
-								TableFilePaths *tablePaths,
-								uint32_t oid,
-								int partNumber)
-{
-	sformat(tablePaths->lockFile, MAXPGPATH, "%s/%d.%d",
-			cfPaths->rundir,
-			oid,
-			partNumber);
-
-	sformat(tablePaths->doneFile, MAXPGPATH, "%s/%d.%d.done",
-			cfPaths->tbldir,
-			oid,
-			partNumber);
 
 	return true;
 }
@@ -1024,8 +942,14 @@ copydb_wait_for_subprocesses(bool failFast)
 			default:
 			{
 				int returnCode = WEXITSTATUS(status);
+				int sig = 0;
 
-				if (returnCode == 0)
+				if (WIFSIGNALED(status))
+				{
+					sig = WTERMSIG(status);
+				}
+
+				if (returnCode == 0 && sig == 0)
 				{
 					log_debug("Sub-process %d exited with code %d",
 							  pid, returnCode);
@@ -1034,8 +958,17 @@ copydb_wait_for_subprocesses(bool failFast)
 				{
 					allReturnCodeAreZero = false;
 
-					log_error("Sub-process %d exited with code %d",
-							  pid, returnCode);
+					if (sig == 0)
+					{
+						log_error("Sub-process %d exited with code %d",
+								  pid, returnCode);
+					}
+					else
+					{
+						log_error("Sub-process %d exited with code %d "
+								  "and signal %s",
+								  pid, returnCode, signal_to_string(sig));
+					}
 
 					if (failFast)
 					{
@@ -1075,7 +1008,7 @@ copydb_register_sysv_semaphore(SysVResArray *array, Semaphore *semaphore)
 			  semaphore->semId);
 
 	array->array[array->count].kind = SYSV_SEMAPHORE;
-	array->array[array->count].res.semaphore = semaphore;
+	array->array[array->count].res.semaphore = *semaphore;
 
 	++(array->count);
 
@@ -1094,7 +1027,7 @@ copydb_unlink_sysv_semaphore(SysVResArray *array, Semaphore *semaphore)
 		SysVRes *res = &(array->array[i]);
 
 		if (res->kind == SYSV_SEMAPHORE &&
-			res->res.semaphore->semId == semaphore->semId)
+			res->res.semaphore.semId == semaphore->semId)
 		{
 			res->unlinked = true;
 			return true;
@@ -1129,7 +1062,7 @@ copydb_register_sysv_queue(SysVResArray *array, Queue *queue)
 			  queue->qId);
 
 	array->array[array->count].kind = SYSV_QUEUE;
-	array->array[array->count].res.queue = queue;
+	array->array[array->count].res.queue = *queue;
 
 	++(array->count);
 
@@ -1147,7 +1080,7 @@ copydb_unlink_sysv_queue(SysVResArray *array, Queue *queue)
 	{
 		SysVRes *res = &(array->array[i]);
 
-		if (res->kind == SYSV_QUEUE && res->res.queue->qId == queue->qId)
+		if (res->kind == SYSV_QUEUE && res->res.queue.qId == queue->qId)
 		{
 			res->unlinked = true;
 			return true;
@@ -1191,7 +1124,7 @@ copydb_cleanup_sysv_resources(SysVResArray *array)
 		{
 			case SYSV_QUEUE:
 			{
-				Queue *queue = res->res.queue;
+				Queue *queue = &res->res.queue;
 
 				if (queue->owner == pid)
 				{
@@ -1207,7 +1140,7 @@ copydb_cleanup_sysv_resources(SysVResArray *array)
 
 			case SYSV_SEMAPHORE:
 			{
-				Semaphore *semaphore = res->res.semaphore;
+				Semaphore *semaphore = &res->res.semaphore;
 
 				if (!semaphore_finish(semaphore))
 				{

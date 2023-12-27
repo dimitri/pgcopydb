@@ -186,6 +186,7 @@ typedef struct PGSQL
 	bool notificationReceived;
 
 	bool logSQL;
+	bool singleRowMode;
 } PGSQL;
 
 
@@ -236,6 +237,8 @@ typedef struct GUC
 } GUC;
 
 bool pgsql_init(PGSQL *pgsql, char *url, ConnectionType connectionType);
+
+PGconn * pgsql_open_connection(PGSQL *pgsql);
 
 void pgsql_set_retry_policy(ConnectionRetryPolicy *retryPolicy,
 							int maxT,
@@ -307,9 +310,19 @@ bool validate_connection_string(const char *connectionString);
 
 bool pgsql_truncate(PGSQL *pgsql, const char *qname);
 
-bool pg_copy(PGSQL *src, PGSQL *dst,
-			 const char *srcQname, const char *dstQname,
-			 bool truncate, uint64_t *bytesTransmitted);
+typedef struct CopyArgs
+{
+	char *srcQname;
+	char *srcAttrList;
+	char *srcWhereClause;
+	char *dstQname;
+	char *dstAttrList;
+	bool truncate;
+	bool freeze;
+	uint64_t bytesTransmitted;
+} CopyArgs;
+
+bool pg_copy(PGSQL *src, PGSQL *dst, CopyArgs *args);
 
 bool pg_copy_from_stdin(PGSQL *pgsql, const char *qname);
 bool pg_copy_row_from_stdin(PGSQL *pgsql, char *fmt, ...);
@@ -476,6 +489,7 @@ typedef struct ReplicationSlot
 	uint64_t lsn;
 	char snapshot[BUFSIZE];
 	StreamOutputPlugin plugin;
+	bool wal2jsonNumericAsString;
 } ReplicationSlot;
 
 bool pgsql_create_logical_replication_slot(LogicalStreamClient *client,
@@ -565,5 +579,5 @@ bool pgsql_fetch_sync_sentinel_apply(PGSQL *pgsql,
 									 bool *retry,
 									 CopyDBSentinel *sentinel);
 
-
+char * pgsql_escape_identifier(PGSQL *pgsql, char *src);
 #endif /* PGSQL_H */

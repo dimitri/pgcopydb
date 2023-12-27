@@ -17,6 +17,7 @@ RUN apt-get update \
     htop \
 	strace \
 	gdb \
+	sqlite3 \
     libpq5 \
     postgresql-client-common \
     curl \
@@ -44,3 +45,4 @@ RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 
 COPY --from=pgcopydb /usr/local/bin/pgcopydb /usr/local/bin
 COPY .psqlrc /var/lib/postgres
+COPY .sqliterc /var/lib/postgres

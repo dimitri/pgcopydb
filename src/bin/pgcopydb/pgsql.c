@@ -33,7 +33,6 @@
 static char * ConnectionTypeToString(ConnectionType connectionType);
 static void log_connection_error(PGconn *connection, int logLevel);
 static void pgAutoCtlDefaultNoticeProcessor(void *arg, const char *message);
-static PGconn * pgsql_open_connection(PGSQL *pgsql);
 static bool pgsql_retry_open_connection(PGSQL *pgsql);
 
 static bool is_response_ok(PGresult *result);
@@ -52,13 +51,12 @@ static bool build_parameters_list(PQExpBuffer buffer,
 
 static void parseIdentifySystemResult(void *ctx, PGresult *result);
 static void parseTimelineHistoryResult(void *ctx, PGresult *result);
-static bool pg_copy_data(PGSQL *src, PGSQL *dst, const char *srcQname,
-						 const char *dstQname, bool truncate,
-						 uint64_t *bytesTransmitted);
-static bool pg_copy_send_query(PGSQL *pgsql,
-							   const char *qname,
-							   ExecStatusType status,
-							   bool freeze);
+
+static bool pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args);
+
+static bool pg_copy_send_query(PGSQL *pgsql, CopyArgs *args,
+							   ExecStatusType status);
+
 static void pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context);
 
 static void getSequenceValue(void *ctx, PGresult *result);
@@ -239,8 +237,14 @@ pgsql_set_interactive_retry_policy(ConnectionRetryPolicy *retryPolicy)
 
 /*
  * http://c-faq.com/lib/randrange.html
+ *
+ * With additional protection against division-by-zero.
  */
-#define random_between(R, M, N) ((M) + R / (RAND_MAX / ((N) -(M) +1) + 1))
+#define random_between(R, M, N) \
+	((((N) -(M) +1) == 0) \
+	 ? ((M) + R / (RAND_MAX / ((N) -(M)) + 1)) \
+	 : ((M) + R / (RAND_MAX / ((N) -(M) +1) + 1)))
+
 
 /*
  * pick_random_sleep_time picks a random sleep time between the given policy
@@ -464,7 +468,7 @@ log_connection_error(PGconn *connection, int logLevel)
  * instance. If a connection is already open in the client (it's not NULL),
  * then this errors, unless we are inside a transaction opened by pgsql_begin.
  */
-static PGconn *
+PGconn *
 pgsql_open_connection(PGSQL *pgsql)
 {
 	/* we might be connected already */
@@ -495,12 +499,35 @@ pgsql_open_connection(PGSQL *pgsql)
 	}
 
 	/*
-	 * set application_name to contain the process title and pid, so that it is
+	 * Set application_name to contain the process title and pid, so that it is
 	 * easier to identify our connections in pg_stat_activity.
+	 *
+	 * From Postgres docs: The application_name can be any string of less than
+	 * NAMEDATALEN characters (64 characters in a standard build).
+	 *
+	 * See: https://www.postgresql.org/docs/current/runtime-config-logging.html
 	 */
+	const char *ps_buffer_prefix = "pgcopydb: ";
+	int prefixLen = strlen(ps_buffer_prefix);
+
 	char app_name[BUFSIZE] = { 0 };
 
-	sformat(app_name, sizeof(app_name), "pgcopydb[%d] %s", getpid(), ps_buffer);
+	sformat(app_name, sizeof(app_name), "pgcopydb[%d]", getpid());
+
+	if (strncmp(ps_buffer, ps_buffer_prefix, prefixLen) == 0)
+	{
+		sformat(app_name, sizeof(app_name), "%s %s",
+				app_name,
+				ps_buffer + prefixLen);
+	}
+	else
+	{
+		sformat(app_name, sizeof(app_name), "%s %s", app_name, ps_buffer);
+	}
+
+	/* make sure to truncate application name to NAMEDATALEN to avoid notices */
+	app_name[NAMEDATALEN - 1] = '\0';
+
 	setenv("PGAPPNAME", app_name, 1);
 
 	/* we implement our own retry strategy */
@@ -1146,11 +1173,11 @@ pgsql_server_version(PGSQL *pgsql)
 	char *endpoint =
 		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
 
-	log_notice("[%s %d] Postgres version %s (%d)",
-			   endpoint,
-			   PQbackendPID(pgsql->connection),
-			   pgsql->pgversion,
-			   pgsql->pgversion_num);
+	log_debug("[%s %d] Postgres version %s (%d)",
+			  endpoint,
+			  PQbackendPID(pgsql->connection),
+			  pgsql->pgversion,
+			  pgsql->pgversion_num);
 
 	return true;
 }
@@ -1506,6 +1533,22 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 									  NULL, NULL, 0);
 	}
 
+	/*
+	 * Use PQsetSingleRowMode(connection) to switch to select single-row mode
+	 * and fetch only one result at a time in memory. Works with query result
+	 * handlers that do not expect PQntuples() to reflect the actual number of
+	 * tuples returned by the query etc.
+	 */
+	if (pgsql->singleRowMode)
+	{
+		if (PQsetSingleRowMode(connection) != 1)
+		{
+			log_error("Failed to select single-row mode: %s",
+					  PQerrorMessage(connection));
+			return false;
+		}
+	}
+
 	bool done = false;
 	int errors = 0;
 
@@ -1729,6 +1772,8 @@ pgsql_fetch_results(PGSQL *pgsql, bool *done,
 	{
 		PGresult *result = NULL;
 
+		bool firstResult = true;
+
 		/*
 		 * When we got clearance that libpq did fetch the Postgres query result
 		 * in its internal buffers, we process the result without checking for
@@ -1751,12 +1796,36 @@ pgsql_fetch_results(PGSQL *pgsql, bool *done,
 				return false;
 			}
 
+			/*
+			 * From Postgres docs:
+			 *
+			 * If the query returns any rows, they are returned as individual
+			 * PGresult objects, which look like normal query results except
+			 * for having status code PGRES_SINGLE_TUPLE instead of
+			 * PGRES_TUPLES_OK. After the last row, or immediately if the query
+			 * returns zero rows, a zero-row object with status PGRES_TUPLES_OK
+			 * is returned; this is the signal that no more rows will arrive.
+			 */
 			if (parseFun != NULL)
 			{
-				(*parseFun)(context, result);
+				bool skipCallback =
+					!firstResult &&
+					pgsql->singleRowMode &&
+					PQntuples(result) == 0 &&
+					PQresultStatus(result) == PGRES_TUPLES_OK;
+
+				if (!skipCallback)
+				{
+					(*parseFun)(context, result);
+				}
 			}
 
 			PQclear(result);
+
+			if (firstResult)
+			{
+				firstResult = false;
+			}
 		}
 
 		*done = true;
@@ -2244,6 +2313,8 @@ pgsql_truncate(PGSQL *pgsql, const char *qname)
 
 	sformat(sql, sizeof(sql), "TRUNCATE ONLY %s", qname);
 
+	log_sql("%s", sql);
+
 	return pgsql_execute(pgsql, sql);
 }
 
@@ -2255,8 +2326,7 @@ pgsql_truncate(PGSQL *pgsql, const char *qname)
  * referenced by the qualified identifier name dstQname on the target.
  */
 bool
-pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
-		bool truncate, uint64_t *bytesTransmitted)
+pg_copy(PGSQL *src, PGSQL *dst, CopyArgs *args)
 {
 	bool srcConnIsOurs = src->connection == NULL;
 	if (!pgsql_open_connection(src))
@@ -2275,8 +2345,7 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 		return false;
 	}
 
-	bool result = pg_copy_data(src, dst, srcQname, dstQname,
-							   truncate, bytesTransmitted);
+	bool result = pg_copy_data(src, dst, args);
 
 	if (srcConnIsOurs)
 	{
@@ -2298,8 +2367,7 @@ pg_copy(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
  * expects src and dst are opened connection and doesn't manage their lifetime.
  */
 static bool
-pg_copy_data(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
-			 bool truncate, uint64_t *bytesTransmitted)
+pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args)
 {
 	PGconn *srcConn = src->connection;
 	PGconn *dstConn = dst->connection;
@@ -2309,23 +2377,23 @@ pg_copy_data(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 		return false;
 	}
 
-	/* DST: TRUNCATE schema.table */
-	if (truncate)
+	if (args->truncate)
 	{
-		if (!pgsql_truncate(dst, dstQname))
+		if (!pgsql_truncate(dst, args->dstQname))
 		{
+			/* errors have already been logged */
 			return false;
 		}
 	}
 
 	/* SRC: COPY schema.table TO STDOUT */
-	if (!pg_copy_send_query(src, srcQname, PGRES_COPY_OUT, false))
+	if (!pg_copy_send_query(src, args, PGRES_COPY_OUT))
 	{
 		return false;
 	}
 
 	/* DST: COPY schema.table FROM STDIN WITH (FREEZE) */
-	if (!pg_copy_send_query(dst, dstQname, PGRES_COPY_IN, truncate))
+	if (!pg_copy_send_query(dst, args, PGRES_COPY_IN))
 	{
 		return false;
 	}
@@ -2334,7 +2402,7 @@ pg_copy_data(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 	char *copybuf;
 	bool failedOnSrc = false;
 	bool failedOnDst = false;
-	*bytesTransmitted = 0;
+	args->bytesTransmitted = 0;
 
 	for (;;)
 	{
@@ -2441,7 +2509,7 @@ pg_copy_data(PGSQL *src, PGSQL *dst, const char *srcQname, const char *dstQname,
 		 */
 		else if (bufsize > 0)
 		{
-			*bytesTransmitted += bufsize;
+			args->bytesTransmitted += bufsize;
 		}
 
 		/*
@@ -2643,33 +2711,45 @@ pg_copy_end(PGSQL *pgsql)
  * to a Postgres instance, and checks that the server's result is as expected.
  */
 static bool
-pg_copy_send_query(PGSQL *pgsql,
-				   const char *qname, ExecStatusType status, bool freeze)
+pg_copy_send_query(PGSQL *pgsql, CopyArgs *args, ExecStatusType status)
 {
-	char *sql = NULL;
+	PQExpBuffer sql = createPQExpBuffer();
 
 	if (status == PGRES_COPY_OUT)
 	{
 		/* There is no COPY TO with FREEZE */
-		char *template = "copy %s to stdout";
-		size_t len = strlen(template) + strlen(qname) + 1;
-
-		sql = (char *) calloc(len, sizeof(char));
-
-		sformat(sql, len, template, qname);
+		if (args->srcWhereClause != NULL)
+		{
+			appendPQExpBuffer(sql, "copy (SELECT %s FROM ONLY %s %s) ",
+							  args->srcAttrList,
+							  args->srcQname,
+							  args->srcWhereClause);
+		}
+		else
+		{
+			appendPQExpBuffer(sql, "copy (SELECT %s FROM ONLY %s) ",
+							  args->srcAttrList,
+							  args->srcQname);
+		}
+		appendPQExpBuffer(sql, "to stdout");
 	}
 	else if (status == PGRES_COPY_IN)
 	{
-		char *template =
-			freeze
-			? "copy %s from stdin with (freeze)"
-			: "copy %s from stdin";
+		if (args->dstAttrList != NULL && !streq(args->dstAttrList, ""))
+		{
+			appendPQExpBuffer(sql, "copy %s(%s) from stdin",
+							  args->dstQname,
+							  args->dstAttrList);
+		}
+		else
+		{
+			appendPQExpBuffer(sql, "copy %s from stdin", args->dstQname);
+		}
 
-		size_t len = strlen(template) + strlen(qname) + 1;
-
-		sql = (char *) calloc(len, sizeof(char));
-
-		sformat(sql, len, template, qname);
+		if (args->freeze)
+		{
+			appendPQExpBuffer(sql, " with (freeze)");
+		}
 	}
 	else
 	{
@@ -2677,19 +2757,26 @@ pg_copy_send_query(PGSQL *pgsql,
 		return false;
 	}
 
-	log_sql("%s;", sql);
-
-	PGresult *res = PQexec(pgsql->connection, sql);
-
-	if (PQresultStatus(res) != status)
+	if (PQExpBufferBroken(sql))
 	{
-		pgcopy_log_error(pgsql, res, sql);
-		free(sql);
-
+		log_error("Failed to create COPY query for %s: out of memory",
+				  args->srcQname);
 		return false;
 	}
 
-	free(sql);
+	log_sql("%s;", sql->data);
+
+	PGresult *res = PQexec(pgsql->connection, sql->data);
+
+	if (PQresultStatus(res) != status)
+	{
+		pgcopy_log_error(pgsql, res, sql->data);
+
+		destroyPQExpBuffer(sql);
+		return false;
+	}
+
+	destroyPQExpBuffer(sql);
 	return true;
 }
 
@@ -4969,14 +5056,16 @@ pgsql_table_exists(PGSQL *pgsql,
 				   const char *relname,
 				   bool *exists)
 {
-	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_INT, false };
+	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_BOOL, false };
 
 	char *existsQuery =
-		"select 1 "
-		"  from pg_class c "
-		"       join pg_namespace n on n.oid = c.relnamespace "
-		" where n.nspname = $1 "
-		"   and c.relname = $2";
+		"select exists( "
+		"         select 1 "
+		"           from pg_class c "
+		"                join pg_namespace n on n.oid = c.relnamespace "
+		"          where n.nspname = $1 "
+		"            and c.relname = $2"
+		"       )";
 
 	int paramCount = 2;
 	const Oid paramTypes[2] = { TEXTOID, TEXTOID };
@@ -4984,7 +5073,7 @@ pgsql_table_exists(PGSQL *pgsql,
 
 	if (!pgsql_execute_with_params(pgsql, existsQuery,
 								   paramCount, paramTypes, paramValues,
-								   &context, &fetchedRows))
+								   &context, &parseSingleValueResult))
 	{
 		log_error("Failed to check if \"%s\".\"%s\" exists", nspname, relname);
 		return false;
@@ -5000,7 +5089,7 @@ pgsql_table_exists(PGSQL *pgsql,
 	 * If the exists query returns no rows, create our table:
 	 *  pgcopydb.pgcopydb_table_size
 	 */
-	*exists = context.intVal == 1;
+	*exists = context.boolVal;
 
 	return true;
 }
@@ -5553,4 +5642,32 @@ parseSentinel(void *ctx, PGresult *result)
 	}
 
 	context->parsedOK = true;
+}
+
+
+/*
+ * pgsql_escape_identifier escapes PostgreSQL identifiers and always encloses
+ * the resulting string in quotes. It utilizes the PQescapeIdentifier function
+ * (https://www.postgresql.org/docs/current/libpq-exec.html#LIBPQ-PQESCAPEIDENTIFIER),
+ * so the memory allocated for the resulting string must be freed using
+ * PQfreemem.
+ */
+char *
+pgsql_escape_identifier(PGSQL *pgsql, char *src)
+{
+	PGconn *conn = pgsql->connection;
+	if (conn == NULL)
+	{
+		return NULL;
+	}
+
+	char *escapedIdentifier = PQescapeIdentifier(conn, src, strlen(src));
+
+	if (escapedIdentifier == NULL)
+	{
+		log_error("Failed to escape identifier %s", src);
+		return NULL;
+	}
+
+	return escapedIdentifier;
 }

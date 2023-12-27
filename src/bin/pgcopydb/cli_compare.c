@@ -8,6 +8,7 @@
 #include <getopt.h>
 #include <inttypes.h>
 
+#include "catalog.h"
 #include "cli_common.h"
 #include "cli_root.h"
 #include "commandline.h"
@@ -25,6 +26,8 @@
 static int cli_compare_getopts(int argc, char **argv);
 static void cli_compare_schema(int argc, char **argv);
 static void cli_compare_data(int argc, char **argv);
+
+static bool cli_compare_data_table_hook(void *ctx, SourceTable *table);
 
 static CommandLine compare_schema_command =
 	make_command(
@@ -93,7 +96,6 @@ cli_compare_getopts(int argc, char **argv)
 	options.tableJobs = DEFAULT_TABLE_JOBS;
 	options.indexJobs = DEFAULT_INDEX_JOBS;
 	options.lObjectJobs = DEFAULT_LARGE_OBJECTS_JOBS;
-	options.splitTablesLargerThan.bytes = DEFAULT_SPLIT_TABLES_LARGER_THAN;
 
 	/* read values from the environment */
 	if (!cli_copydb_getenv(&options))
@@ -101,6 +103,9 @@ cli_compare_getopts(int argc, char **argv)
 		log_fatal("Failed to read default values from the environment");
 		exit(EXIT_CODE_BAD_ARGS);
 	}
+
+	/* bypass computing partitionning specs */
+	options.splitTablesLargerThan.bytes = 0;
 
 	while ((c = getopt_long(argc, argv, "S:T:D:j:Vvdzqh",
 							long_options, &option_index)) != -1)
@@ -295,6 +300,10 @@ cli_compare_schema(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	/* bypass computing partitionning specs */
+	SplitTableLargerThan empty = { 0 };
+	compareOptions.splitTablesLargerThan = empty;
+
 	if (!copydb_init_specs(&copySpecs, &compareOptions, DATA_SECTION_ALL))
 	{
 		/* errors have already been logged */
@@ -344,7 +353,7 @@ cli_compare_data(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (!copydb_init_specs(&copySpecs, &compareOptions, DATA_SECTION_ALL))
+	if (!copydb_init_specs(&copySpecs, &compareOptions, DATA_SECTION_TABLE_DATA))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -356,40 +365,26 @@ cli_compare_data(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	SourceTableArray *tableArray = &(copySpecs.catalog.sourceTableArray);
+	DatabaseCatalog *sourceDB = &(copySpecs.catalogs.source);
+
+	if (!catalog_init(sourceDB))
+	{
+		log_error("Failed to open internal catalogs in COPY worker process, "
+				  "see above for details");
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
 
 	if (outputJSON)
 	{
 		JSON_Value *js = json_value_init_array();
 		JSON_Array *jsArray = json_value_get_array(js);
 
-		for (int i = 0; i < tableArray->count; i++)
+		if (!catalog_iter_s_table(sourceDB,
+								  jsArray,
+								  &cli_compare_data_table_hook))
 		{
-			SourceTable *source = &(tableArray->array[i]);
-
-			JSON_Value *jsComp = json_value_init_object();
-			JSON_Object *jsObj = json_value_get_object(jsComp);
-
-			json_object_dotset_string(jsObj, "schema", source->nspname);
-			json_object_dotset_string(jsObj, "name", source->relname);
-
-			json_object_dotset_number(jsObj,
-									  "source.rowcount",
-									  source->sourceChecksum.rowcount);
-
-			json_object_dotset_string(jsObj,
-									  "source.checksum",
-									  source->sourceChecksum.checksum);
-
-			json_object_dotset_number(jsObj,
-									  "target.rowcount",
-									  source->targetChecksum.rowcount);
-
-			json_object_dotset_string(jsObj,
-									  "target.checksum",
-									  source->targetChecksum.checksum);
-
-			json_array_append_value(jsArray, jsComp);
+			log_error("Failed to compare tables, see above for details");
+			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 
 		char *serialized_string = json_serialize_to_string_pretty(js);
@@ -410,20 +405,70 @@ cli_compare_data(int argc, char **argv)
 				"------------------------------------",
 				"------------------------------------");
 
-		for (int i = 0; i < tableArray->count; i++)
+		if (!catalog_iter_s_table(sourceDB,
+								  NULL,
+								  &cli_compare_data_table_hook))
 		{
-			SourceTable *source = &(tableArray->array[i]);
-
-			TableChecksum *srcChk = &(source->sourceChecksum);
-			TableChecksum *dstChk = &(source->targetChecksum);
-
-			fformat(stdout, "%30s | %s | %36s | %36s \n",
-					source->qname,
-					streq(srcChk->checksum, dstChk->checksum) ? " " : "!",
-					srcChk->checksum,
-					dstChk->checksum);
+			log_error("Failed to compare tables, see above for details");
+			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 
 		fformat(stdout, "\n");
 	}
+
+	if (!catalog_close(sourceDB))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+}
+
+
+/*
+ * compare_queue_table_hook is an iterator callback function.
+ */
+static bool
+cli_compare_data_table_hook(void *ctx, SourceTable *table)
+{
+	if (outputJSON)
+	{
+		JSON_Array *jsArray = (JSON_Array *) ctx;
+
+		JSON_Value *jsComp = json_value_init_object();
+		JSON_Object *jsObj = json_value_get_object(jsComp);
+
+		json_object_dotset_string(jsObj, "schema", table->nspname);
+		json_object_dotset_string(jsObj, "name", table->relname);
+
+		json_object_dotset_number(jsObj,
+								  "source.rowcount",
+								  table->sourceChecksum.rowcount);
+
+		json_object_dotset_string(jsObj,
+								  "source.checksum",
+								  table->sourceChecksum.checksum);
+
+		json_object_dotset_number(jsObj,
+								  "target.rowcount",
+								  table->targetChecksum.rowcount);
+
+		json_object_dotset_string(jsObj,
+								  "target.checksum",
+								  table->targetChecksum.checksum);
+
+		json_array_append_value(jsArray, jsComp);
+	}
+	else
+	{
+		TableChecksum *srcChk = &(table->sourceChecksum);
+		TableChecksum *dstChk = &(table->targetChecksum);
+
+		fformat(stdout, "%30s | %s | %36s | %36s \n",
+				table->qname,
+				streq(srcChk->checksum, dstChk->checksum) ? " " : "!",
+				srcChk->checksum,
+				dstChk->checksum);
+	}
+
+	return true;
 }

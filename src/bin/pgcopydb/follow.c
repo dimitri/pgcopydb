@@ -270,16 +270,6 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	}
 
 	/*
-	 * Read the catalogs from the source table from on-file disk if
-	 * the schema dump has been done already.
-	 */
-	if (copySpecs->dirState.schemaDumpIsDone && !copydb_parse_schema_json_file(copySpecs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/*
 	 * In case of successful exit from the follow sub-processes, we
 	 * switch back and forth between CATCHUP and REPLAY modes and
 	 * continue replaying changes. In case of error, we stop.

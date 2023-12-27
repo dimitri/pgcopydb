@@ -12,6 +12,7 @@
 #include "access/xlog_internal.h"
 #include "access/xlogdefs.h"
 
+#include "catalog.h"
 #include "cli_common.h"
 #include "cli_root.h"
 #include "commandline.h"
@@ -48,16 +49,17 @@ static CommandLine stream_setup_command =
 		"setup",
 		"Setup source and target systems for logical decoding",
 		"",
-		"  --source         Postgres URI to the source database\n"
-		"  --target         Postgres URI to the target database\n"
-		"  --dir            Work directory to use\n"
-		"  --restart        Allow restarting when temp files exist already\n"
-		"  --resume         Allow resuming operations after a failure\n"
-		"  --not-consistent Allow taking a new snapshot on the source database\n"
-		"  --snapshot       Use snapshot obtained with pg_export_snapshot\n"
-		"  --plugin         Output plugin to use (test_decoding, wal2json)\n" \
-		"  --slot-name      Stream changes recorded by this slot\n"
-		"  --origin         Name of the Postgres replication origin\n",
+		"  --source                      Postgres URI to the source database\n"
+		"  --target                      Postgres URI to the target database\n"
+		"  --dir                         Work directory to use\n"
+		"  --restart                     Allow restarting when temp files exist already\n"
+		"  --resume                      Allow resuming operations after a failure\n"
+		"  --not-consistent              Allow taking a new snapshot on the source database\n"
+		"  --snapshot                    Use snapshot obtained with pg_export_snapshot\n"
+		"  --plugin                      Output plugin to use (test_decoding, wal2json)\n"
+		"  --wal2json-numeric-as-string  Print numeric data type as string when using wal2json output plugin\n"
+		"  --slot-name                   Stream changes recorded by this slot\n"
+		"  --origin                      Name of the Postgres replication origin\n",
 		cli_stream_getopts,
 		cli_stream_setup);
 
@@ -147,7 +149,7 @@ static CommandLine stream_transform_command =
 		"transform",
 		"Transform changes from the source database into SQL commands",
 		" <json filename> <sql filename> ",
-		"  --source         Postgres URI to the source database\n"
+		"  --target         Postgres URI to the target database\n"
 		"  --dir            Work directory to use\n"
 		"  --restart        Allow restarting when temp files exist already\n"
 		"  --resume         Allow resuming operations after a failure\n"
@@ -204,6 +206,7 @@ cli_stream_getopts(int argc, char **argv)
 		{ "target", required_argument, NULL, 'T' },
 		{ "dir", required_argument, NULL, 'D' },
 		{ "plugin", required_argument, NULL, 'p' },
+		{ "wal2json-numeric-as-string", no_argument, NULL, 'w' },
 		{ "slot-name", required_argument, NULL, 's' },
 		{ "snapshot", required_argument, NULL, 'N' },
 		{ "origin", required_argument, NULL, 'o' },
@@ -282,6 +285,13 @@ cli_stream_getopts(int argc, char **argv)
 				options.slot.plugin = OutputPluginFromString(optarg);
 				log_trace("--plugin %s",
 						  OutputPluginToString(options.slot.plugin));
+				break;
+			}
+
+			case 'w':
+			{
+				options.slot.wal2jsonNumericAsString = true;
+				log_trace("--wal2json-numeric-as-string");
 				break;
 			}
 
@@ -440,6 +450,14 @@ cli_stream_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
+	if (options.slot.wal2jsonNumericAsString &&
+		options.slot.plugin != STREAM_PLUGIN_WAL2JSON)
+	{
+		log_fatal("Option --wal2json-numeric-as-string "
+				  "requires option --plugin=wal2json");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
 	/* prepare safe versions of the connection strings (without password) */
 	if (!cli_prepare_pguris(&(options.connStrings)))
 	{
@@ -562,7 +580,7 @@ cli_stream_setup(int argc, char **argv)
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
-						   &(copySpecs.catalog),
+						   &(copySpecs.catalogs.source),
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL))
@@ -689,7 +707,7 @@ cli_stream_catchup(int argc, char **argv)
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
-						   &(copySpecs.catalog),
+						   &(copySpecs.catalogs.source),
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL))
@@ -772,7 +790,7 @@ cli_stream_replay(int argc, char **argv)
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   STREAM_MODE_REPLAY,
-						   &(copySpecs.catalog),
+						   &(copySpecs.catalogs.source),
 						   true,  /* stdin */
 						   true, /* stdout */
 						   logSQL))
@@ -882,15 +900,6 @@ cli_stream_transform(int argc, char **argv)
 	}
 
 	/*
-	 * Read the catalogs from the source table from on-file disk.
-	 */
-	if (!copydb_parse_schema_json_file(&copySpecs))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	/*
 	 * Refrain from logging SQL statements in the apply module, because they
 	 * contain user data. That said, when --trace has been used, bypass that
 	 * privacy feature.
@@ -906,7 +915,7 @@ cli_stream_transform(int argc, char **argv)
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
-						   &(copySpecs.catalog),
+						   &(copySpecs.catalogs.source),
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL))
@@ -958,10 +967,31 @@ cli_stream_transform(int argc, char **argv)
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 	}
-	else if (!stream_transform_file(&specs, jsonfilename, sqlfilename))
+	else
 	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
+		if (!catalog_open(specs.sourceDB))
+		{
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		if (!stream_transform_context_init_pgsql(&specs))
+		{
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		bool success = stream_transform_file(&specs, jsonfilename, sqlfilename);
+
+		pgsql_finish(&(specs.transformPGSQL));
+
+		if (!catalog_close(specs.sourceDB))
+		{
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		if (!success)
+		{
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
 	}
 }
 
@@ -1047,7 +1077,7 @@ cli_stream_apply(int argc, char **argv)
 							   streamDBoptions.origin,
 							   streamDBoptions.endpos,
 							   STREAM_MODE_CATCHUP,
-							   &(copySpecs.catalog),
+							   &(copySpecs.catalogs.source),
 							   true, /* streamDBoptions.stdIn */
 							   false, /* streamDBoptions.stdOut */
 							   logSQL))
@@ -1135,15 +1165,6 @@ stream_start_in_mode(LogicalStreamMode mode)
 	}
 
 	/*
-	 * Read the catalogs from the source table from on-file disk.
-	 */
-	if (!copydb_parse_schema_json_file(&copySpecs))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	/*
 	 * Refrain from logging SQL statements in the apply module, because they
 	 * contain user data. That said, when --trace has been used, bypass that
 	 * privacy feature.
@@ -1159,7 +1180,7 @@ stream_start_in_mode(LogicalStreamMode mode)
 						   streamDBoptions.origin,
 						   streamDBoptions.endpos,
 						   mode,
-						   &(copySpecs.catalog),
+						   &(copySpecs.catalogs.source),
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL))

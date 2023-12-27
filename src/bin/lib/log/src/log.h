@@ -23,6 +23,7 @@ typedef void (*log_LockFn)(void *udata, int lock);
 
 enum {
 	LOG_TRACE,
+	LOG_SQLITE,
 	LOG_DEBUG,
 	LOG_SQL,
 	LOG_NOTICE,
@@ -33,6 +34,7 @@ enum {
 };
 
 #define log_trace(...) log_log(LOG_TRACE, __FILE__, __LINE__, __VA_ARGS__)
+#define log_sqlite(...) log_log(LOG_SQLITE, __FILE__, __LINE__, __VA_ARGS__)
 #define log_debug(...) log_log(LOG_DEBUG, __FILE__, __LINE__, __VA_ARGS__)
 #define log_sql(...) log_log(LOG_SQL, __FILE__, __LINE__, __VA_ARGS__)
 #define log_notice(...)  log_log(LOG_NOTICE,  __FILE__, __LINE__, __VA_ARGS__)

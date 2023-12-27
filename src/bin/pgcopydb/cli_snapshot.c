@@ -29,11 +29,12 @@ CommandLine snapshot_command =
 		"snapshot",
 		"Create and export a snapshot on the source database",
 		" --source ... ",
-		"  --source         Postgres URI to the source database\n"
-		"  --dir            Work directory to use\n"
-		"  --follow         Implement logical decoding to replay changes\n"
-		"  --plugin         Output plugin to use (test_decoding, wal2json)\n"
-		"  --slot-name      Use this Postgres replication slot name\n",
+		"  --source                      Postgres URI to the source database\n"
+		"  --dir                         Work directory to use\n"
+		"  --follow                      Implement logical decoding to replay changes\n"
+		"  --plugin                      Output plugin to use (test_decoding, wal2json)\n"
+		"  --wal2json-numeric-as-string  Print numeric data type as string when using wal2json output plugin\n"
+		"  --slot-name                   Use this Postgres replication slot name\n",
 		cli_create_snapshot_getopts,
 		cli_create_snapshot);
 
@@ -51,6 +52,7 @@ cli_create_snapshot_getopts(int argc, char **argv)
 		{ "dir", required_argument, NULL, 'D' },
 		{ "follow", no_argument, NULL, 'f' },
 		{ "plugin", required_argument, NULL, 'p' },
+		{ "wal2json-numeric-as-string", no_argument, NULL, 'w' },
 		{ "slot-name", required_argument, NULL, 's' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
@@ -115,6 +117,13 @@ cli_create_snapshot_getopts(int argc, char **argv)
 				options.slot.plugin = OutputPluginFromString(optarg);
 				log_trace("--plugin %s",
 						  OutputPluginToString(options.slot.plugin));
+				break;
+			}
+
+			case 'w':
+			{
+				options.slot.wal2jsonNumericAsString = true;
+				log_trace("--wal2json-numeric-as-string");
 				break;
 			}
 
@@ -190,6 +199,14 @@ cli_create_snapshot_getopts(int argc, char **argv)
 	{
 		log_fatal("Option --source is mandatory");
 		++errors;
+	}
+
+	if (options.slot.wal2jsonNumericAsString &&
+		options.slot.plugin != STREAM_PLUGIN_WAL2JSON)
+	{
+		log_fatal("Option --wal2json-numeric-as-string "
+				  "requires option --plugin=wal2json");
+		exit(EXIT_CODE_BAD_ARGS);
 	}
 
 	/* prepare safe versions of the connection strings (without password) */
@@ -297,7 +314,7 @@ cli_create_snapshot(int argc, char **argv)
 							   createSNoptions.origin,
 							   createSNoptions.endpos,
 							   STREAM_MODE_CATCHUP,
-							   &(copySpecs.catalog),
+							   &(copySpecs.catalogs.source),
 							   createSNoptions.stdIn,
 							   createSNoptions.stdOut,
 							   logSQL))

@@ -16,6 +16,7 @@
 
 #include "parson.h"
 
+#include "catalog.h"
 #include "cli_common.h"
 #include "cli_root.h"
 #include "copydb.h"
@@ -36,8 +37,7 @@ typedef struct TestDecodingHeader
 {
 	const char *message;
 	char qname[PG_NAMEDATALEN_FQ];
-	char nspname[PG_NAMEDATALEN];
-	char relname[PG_NAMEDATALEN];
+	LogicalMessageRelation table;
 	StreamAction action;
 	int offset;                 /* end of metadata section */
 	int pos;
@@ -171,10 +171,10 @@ parseTestDecodingMessageActionAndXid(LogicalStreamContext *context)
 			return false;
 		}
 
-		if (strcmp(header.nspname, "pgcopydb") == 0)
+		if (strcmp(header.table.nspname, "pgcopydb") == 0)
 		{
 			log_debug("Filtering out message for schema \"%s\": %s",
-					  header.nspname,
+					  header.table.nspname,
 					  context->buffer);
 			metadata->filterOut = true;
 		}
@@ -247,14 +247,14 @@ parseTestDecodingMessage(StreamContext *privateContext,
 
 		case STREAM_ACTION_TRUNCATE:
 		{
-			strlcpy(stmt->stmt.truncate.nspname, header.nspname, PG_NAMEDATALEN);
-			strlcpy(stmt->stmt.truncate.relname, header.relname, PG_NAMEDATALEN);
+			stmt->stmt.truncate.table = header.table;
 
 			break;
 		}
 
 		case STREAM_ACTION_INSERT:
 		{
+			stmt->stmt.insert.table = header.table;
 			if (!parseTestDecodingInsertMessage(privateContext, &header))
 			{
 				log_error("Failed to parse test_decoding INSERT message: %s",
@@ -267,6 +267,7 @@ parseTestDecodingMessage(StreamContext *privateContext,
 
 		case STREAM_ACTION_UPDATE:
 		{
+			stmt->stmt.update.table = header.table;
 			if (!parseTestDecodingUpdateMessage(privateContext, &header))
 			{
 				log_error("Failed to parse test_decoding UPDATE message: %s",
@@ -278,6 +279,7 @@ parseTestDecodingMessage(StreamContext *privateContext,
 
 		case STREAM_ACTION_DELETE:
 		{
+			stmt->stmt.delete.table = header.table;
 			if (!parseTestDecodingDeleteMessage(privateContext, &header))
 			{
 				log_error("Failed to parse test_decoding DELETE message: %s",
@@ -337,13 +339,24 @@ parseTestDecodingMessageHeader(TestDecodingHeader *header, const char *message)
 		return false;
 	}
 
-	/* grab the table schema.name */
-	strlcpy(header->nspname, idp, dot - idp + 1);
-	strlcpy(header->relname, dot + 1, sep - dot);
+	/*
+	 * The table schema.name is already escaped by the plugin using PostgreSQL's
+	 * internal quote_identifier function (see
+	 * https://github.com/postgres/postgres/blob/8793c600/contrib/test_decoding/test_decoding.c#L627-L632).
+	 * The result slightly differs from that of PQescapeIdentifier, as it does
+	 * not add quotes around the schema.name when they are not necessary. Here
+	 * are some possible outputs:
+	 * - public.hello
+	 * - "Public".hello
+	 * - "sp $cial"."t ablE"
+	 */
+	header->table.nspname = strndup(idp, dot - idp);
+	header->table.relname = strndup(dot + 1, sep - dot - 1);
+	header->table.pqMemory = false;
 
 	sformat(header->qname, sizeof(header->qname), "%s.%s",
-			header->nspname,
-			header->relname);
+			header->table.nspname,
+			header->table.relname);
 
 	/* now grab the action */
 	char action[BUFSIZE] = { 0 };
@@ -388,9 +401,6 @@ parseTestDecodingInsertMessage(StreamContext *privateContext,
 {
 	LogicalTransactionStatement *stmt = privateContext->stmt;
 
-	strlcpy(stmt->stmt.insert.nspname, header->nspname, PG_NAMEDATALEN);
-	strlcpy(stmt->stmt.insert.relname, header->relname, PG_NAMEDATALEN);
-
 	stmt->stmt.insert.new.count = 1;
 	stmt->stmt.insert.new.array =
 		(LogicalMessageTuple *) calloc(1, sizeof(LogicalMessageTuple));
@@ -426,9 +436,6 @@ parseTestDecodingUpdateMessage(StreamContext *privateContext,
 							   TestDecodingHeader *header)
 {
 	LogicalTransactionStatement *stmt = privateContext->stmt;
-
-	strlcpy(stmt->stmt.update.nspname, header->nspname, PG_NAMEDATALEN);
-	strlcpy(stmt->stmt.update.relname, header->relname, PG_NAMEDATALEN);
 
 	stmt->stmt.update.old.count = 1;
 	stmt->stmt.update.new.count = 1;
@@ -520,9 +527,6 @@ parseTestDecodingDeleteMessage(StreamContext *privateContext,
 							   TestDecodingHeader *header)
 {
 	LogicalTransactionStatement *stmt = privateContext->stmt;
-
-	strlcpy(stmt->stmt.delete.nspname, header->nspname, PG_NAMEDATALEN);
-	strlcpy(stmt->stmt.delete.relname, header->relname, PG_NAMEDATALEN);
 
 	stmt->stmt.delete.old.count = 1;
 	stmt->stmt.delete.old.array =
@@ -964,25 +968,42 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 	 * Now lookup our internal catalogs to find out for every column if it is
 	 * part of the pkey definition (WHERE clause) or not (SET clause).
 	 */
-	SourceCatalog *catalog = privateContext->catalog;
-	SourceTable *sourceTableHashByQName = catalog->sourceTableHashByQName;
+	DatabaseCatalog *sourceDB = privateContext->sourceDB;
 
-	SourceTable *table = NULL;
-
-	char *qname = header->qname;
-	size_t len = strlen(qname);
-
-	HASH_FIND(hhQName, sourceTableHashByQName, qname, len, table);
+	SourceTable *table = (SourceTable *) calloc(1, sizeof(SourceTable));
 
 	if (table == NULL)
 	{
-		log_error("Failed to parse decoding message for UPDATE on "
-				  "table %s which is not in our catalogs",
-				  qname);
+		log_error(ALLOCATION_FAILED_ERROR);
 		return false;
 	}
 
-	SourceTableAttributeArray *attributes = &(table->attributes);
+	if (!catalog_lookup_s_table_by_name(sourceDB,
+										header->table.nspname,
+										header->table.relname,
+										table))
+	{
+		/* errors have already been logged */
+		free(table);
+		return false;
+	}
+
+	if (table->oid == 0)
+	{
+		log_error("Failed to parse decoding message for UPDATE on "
+				  "table %s which is not in our catalogs",
+				  table->qname);
+		return false;
+	}
+
+	/* FIXME: lookup for the attribute in the SQLite database directly */
+	if (!catalog_s_table_fetch_attrs(sourceDB, table))
+	{
+		log_error("Failed to fetch table %s attribute list, "
+				  "see above for details",
+				  table->qname);
+		return false;
+	}
 
 	int columnCount = cols->values.array[0].cols;
 	bool *pkeyArray = (bool *) calloc(columnCount, sizeof(bool));
@@ -994,26 +1015,23 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 	{
 		const char *colname = cols->columns[c];
 
-		bool found = false;
+		SourceTableAttribute attribute = { 0 };
 
-		/* loop over table attributes to find current column name */
-		for (int i = 0; i < attributes->count; i++)
+		if (!catalog_lookup_s_attr_by_name(sourceDB,
+										   table->oid,
+										   colname,
+										   &attribute))
 		{
-			if (streq(attributes->array[i].attname, colname))
-			{
-				pkeyArray[c] = attributes->array[i].attisprimary;
-				found = true;
-				break;
-			}
-		}
-
-		if (!found)
-		{
-			log_error("Failed to parse decoding message for UPDATE on "
-					  "table %s: column %s not found",
+			log_error("Failed to lookup for table %s attribute %s in our "
+					  "internal catalogs, see above for details",
 					  table->qname,
 					  colname);
 			return false;
+		}
+
+		if (attribute.attnum > 0)
+		{
+			pkeyArray[c] = attribute.attisprimary;
 		}
 
 		if (pkeyArray[c])

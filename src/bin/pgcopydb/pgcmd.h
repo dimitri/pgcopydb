@@ -187,6 +187,7 @@ typedef struct RestoreOptions
 	bool noOwner;
 	bool noComments;
 	bool noACL;
+	int jobs;
 } RestoreOptions;
 
 bool psql_version(PostgresPaths *pgPaths);
@@ -202,7 +203,7 @@ bool pg_dump_db(PostgresPaths *pgPaths,
 				const char *snapshot,
 				const char *section,
 				SourceFilters *filters,
-				SourceExtensionArray *extensionArray,
+				DatabaseCatalog *filtersDB,
 				const char *filename);
 
 bool pg_dumpall_roles(PostgresPaths *pgPaths,
