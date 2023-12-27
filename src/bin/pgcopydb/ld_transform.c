@@ -195,14 +195,14 @@ stream_transform_stream_internal(StreamSpecs *specs)
 		return false;
 	}
 
-	if (remove(privateContext->sqlFileName) != 0)
+	if (remove(privateContext->walFileName) != 0)
 	{
-		log_warn("Failed to remove file \"%s\"", privateContext->sqlFileName);
+		log_warn("Failed to remove file \"%s\"", privateContext->walFileName);
 	}
 	else
 	{
 		log_info("Done transforming, removed file \"%s\"",
-				 privateContext->sqlFileName);
+				 privateContext->walFileName);
 	}
 
 	log_notice("Transformed %lld messages and %lld transactions",
@@ -841,13 +841,13 @@ stream_transform_file_at_lsn(StreamSpecs *specs, uint64_t lsn)
 		return false;
 	}
 
-	if (remove(sqlFileName) != 0)
+	if (remove(walFileName) != 0)
 	{
-		log_warn("Failed to remove file \"%s\"", sqlFileName);
+		log_warn("Failed to remove file \"%s\"", walFileName);
 	}
 	else
 	{
-		log_info("Done transforming, removed file \"%s\"", sqlFileName);
+		log_info("Done transforming, removed file \"%s\"", walFileName);
 	}
 
 	return true;
