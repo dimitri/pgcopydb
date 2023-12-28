@@ -33,7 +33,7 @@ sleep 1
 # now setup the replication origin (target) and the pgcopydb.sentinel (source)
 pgcopydb stream setup
 
-# pgcopydb copy db uses the environment variables
+# pgcopydb clone uses the environment variables
 pgcopydb clone
 
 # now that the copying is done, inject some SQL DML changes to the source

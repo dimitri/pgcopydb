@@ -10,7 +10,6 @@ same operation:
   pgcopydb
     clone     Clone an entire database from source to target
     fork      Clone an entire database from source to target
-    copy-db   Copy an entire database from source to target
 
 .. _pgcopydb_clone:
 
@@ -67,22 +66,6 @@ pgcopydb fork
 The command ``pgcopydb fork`` copies a database from the given source
 Postgres instance to the target Postgres instance. This command is an alias
 to the command ``pgcopydb clone`` seen above.
-
-.. _pgcopydb_copy__db:
-
-pgcopydb copy-db
-----------------
-
-The command ``pgcopydb copy-db`` copies a database from the given source
-Postgres instance to the target Postgres instance. This command is an alias
-to the command ``pgcopydb clone`` seen above, and available for backward
-compatibility only.
-
-.. warning::
-
-   The ``pgcopydb copy-db`` command is now deprecated and will get removed
-   from pgcopydb when hitting version 1.0, please upgrade your scripts and
-   integrations.
 
 Description
 -----------

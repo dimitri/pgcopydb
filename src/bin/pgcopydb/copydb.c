@@ -788,7 +788,7 @@ copydb_init_specs(CopyDataSpec *specs,
 		}
 	}
 
-	/* we only respect the --skip-blobs option in pgcopydb copy-db command */
+	/* we only respect the --skip-blobs option in pgcopydb clone command */
 	if (specs->section != DATA_SECTION_ALL)
 	{
 		specs->skipLargeObjects = true;

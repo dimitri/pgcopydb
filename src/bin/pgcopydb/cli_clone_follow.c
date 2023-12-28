@@ -78,16 +78,6 @@ CommandLine fork_command =
 		cli_copy_db_getopts,
 		cli_clone);
 
-/* pgcopydb copy db is an alias for pgcopydb clone */
-CommandLine copy__db_command =
-	make_command(
-		"copy-db",
-		"Clone an entire database from source to target",
-		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
-		PGCOPYDB_CLONE_GETOPTS_HELP,
-		cli_copy_db_getopts,
-		cli_clone);
-
 
 CommandLine follow_command =
 	make_command(
