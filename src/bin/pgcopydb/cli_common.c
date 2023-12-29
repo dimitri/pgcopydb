@@ -36,12 +36,6 @@ void
 cli_help(int argc, char **argv)
 {
 	CommandLine command = root;
-
-	if (env_exists(PGCOPYDB_DEBUG))
-	{
-		command = root_with_debug;
-	}
-
 	(void) commandline_print_command_tree(&command, stdout);
 }
 

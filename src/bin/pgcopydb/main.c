@@ -76,15 +76,6 @@ main(int argc, char **argv)
 	atexit(unlink_system_res_atexit);
 
 	/*
-	 * When PGCOPYDB_DEBUG is set in the environment, provide the user
-	 * commands available to debug a pgcopydb instance.
-	 */
-	if (env_exists(PGCOPYDB_DEBUG))
-	{
-		command = root_with_debug;
-	}
-
-	/*
 	 * We need to follow POSIX specifications for argument parsing, in
 	 * particular we want getopt() to stop as soon as it reaches a non option
 	 * in the command line.
