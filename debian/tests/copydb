@@ -10,7 +10,7 @@ pg_virtualenv << EOF
   createdb dst
   psql -c 'create table foo as select 123+456' src
   rm -rf $WORKDIR
-  HOME=$WORKDIR pgcopydb copy-db --source "dbname=src" --target "dbname=dst" --dir $WORKDIR
+  HOME=$WORKDIR pgcopydb clone --source "dbname=src" --target "dbname=dst" --dir $WORKDIR
   pg_dump -t foo dst
   pg_dump -t foo dst | grep 579
 EOF

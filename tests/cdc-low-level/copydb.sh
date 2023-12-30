@@ -30,8 +30,8 @@ sleep 1
 # now setup the replication origin (target) and the pgcopydb.sentinel (source)
 pgcopydb stream setup
 
-# pgcopydb copy db uses the environment variables
-pgcopydb copy-db
+# pgcopydb clone uses the environment variables
+pgcopydb clone
 
 kill -TERM ${COPROC_PID}
 wait ${COPROC_PID}
