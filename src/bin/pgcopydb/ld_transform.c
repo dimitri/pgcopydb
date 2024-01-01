@@ -194,9 +194,6 @@ stream_transform_resume(StreamSpecs *specs)
 {
 	StreamContext *privateContext = &(specs->private);
 
-	log_fatal("stream_transform_resume: %p", specs->private.connStrings);
-	log_fatal("stream_transform_resume: %p", privateContext->sourceDB);
-
 	/*
 	 * Now grab the current sentinel values, specifically the current endpos.
 	 *
@@ -211,6 +208,15 @@ stream_transform_resume(StreamSpecs *specs)
 		/* errors have already been logged */
 		return false;
 	}
+
+	log_notice("stream_transform_resume: "
+			   "startpos %X/%X endpos %X/%X "
+			   "write_lsn %X/%X flush_lsn %X/%X replay_lsn %X/%X",
+			   LSN_FORMAT_ARGS(sentinel.startpos),
+			   LSN_FORMAT_ARGS(sentinel.endpos),
+			   LSN_FORMAT_ARGS(sentinel.write_lsn),
+			   LSN_FORMAT_ARGS(sentinel.flush_lsn),
+			   LSN_FORMAT_ARGS(sentinel.replay_lsn));
 
 	if (specs->endpos == InvalidXLogRecPtr)
 	{
@@ -236,10 +242,8 @@ stream_transform_resume(StreamSpecs *specs)
 		{
 			specs->startpos = sentinel.startpos;
 
-			log_info("Resuming streaming at LSN %X/%X "
-					 "from replication slot \"%s\"",
-					 LSN_FORMAT_ARGS(specs->startpos),
-					 specs->slot.slotName);
+			log_notice("Resuming transform at LSN %X/%X from sentinel",
+					   LSN_FORMAT_ARGS(specs->startpos));
 		}
 	}
 
@@ -656,12 +660,6 @@ bool
 stream_transform_from_queue(StreamSpecs *specs)
 {
 	DatabaseCatalog *sourceDB = specs->sourceDB;
-
-	if (!catalog_init(sourceDB))
-	{
-		/* errors have already been logged */
-		return false;
-	}
 
 	if (!stream_init_context(specs))
 	{

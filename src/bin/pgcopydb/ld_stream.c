@@ -1417,6 +1417,12 @@ streamFlush(LogicalStreamContext *context)
 				  privateContext->partialFileName);
 	}
 
+	/* at flush time also update our internal sentinel tracking */
+	if (!stream_sync_sentinel(context))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 	return true;
 }
 
@@ -1518,8 +1524,6 @@ streamClose(LogicalStreamContext *context)
 bool
 streamFeedback(LogicalStreamContext *context)
 {
-	StreamContext *privateContext = (StreamContext *) context->private;
-
 	int feedbackInterval = 1 * 1000; /* 1s */
 
 	if (!context->forceFeedback)
@@ -1532,6 +1536,27 @@ streamFeedback(LogicalStreamContext *context)
 		}
 	}
 
+	if (!stream_sync_sentinel(context))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* mark that we just did a feedback sync */
+	context->lastFeedbackSync = context->now;
+
+	return true;
+}
+
+
+/*
+ * stream_sync_sentinel syncs the sentinel values in our internal catalogs with
+ * the current streaming protocol values.
+ */
+bool
+stream_sync_sentinel(LogicalStreamContext *context)
+{
+	StreamContext *privateContext = (StreamContext *) context->private;
 	CopyDBSentinel sentinel = { 0 };
 
 	if (!sentinel_sync_recv(privateContext->sourceDB,
@@ -1539,7 +1564,8 @@ streamFeedback(LogicalStreamContext *context)
 							context->tracking->flushed_lsn,
 							&sentinel))
 	{
-		/* errors have already been logged */
+		log_error("Failed to update sentinel at stream flush time, "
+				  "see above for details");
 		return false;
 	}
 
@@ -1554,10 +1580,9 @@ streamFeedback(LogicalStreamContext *context)
 	context->endpos = sentinel.endpos;
 	context->tracking->applied_lsn = sentinel.replay_lsn;
 
-	context->lastFeedbackSync = context->now;
-
-	log_debug("streamFeedback: written %X/%X flushed %X/%X applied %X/%X "
-			  " startpos %X/%X endpos %X/%X apply %s",
+	log_debug("stream_sync_sentinel: "
+			  "write_lsn %X/%X flush_lsn %X/%X apply_lsn %X/%X "
+			  "startpos %X/%X endpos %X/%X apply %s",
 			  LSN_FORMAT_ARGS(context->tracking->written_lsn),
 			  LSN_FORMAT_ARGS(context->tracking->flushed_lsn),
 			  LSN_FORMAT_ARGS(context->tracking->applied_lsn),

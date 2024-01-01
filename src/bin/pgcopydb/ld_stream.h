@@ -537,6 +537,8 @@ bool stream_read_latest(StreamSpecs *specs, StreamContent *content);
 bool stream_update_latest_symlink(StreamContext *privateContext,
 								  const char *filename);
 
+bool stream_sync_sentinel(LogicalStreamContext *context);
+
 bool buildReplicationURI(const char *pguri, char **repl_pguri);
 
 bool stream_setup_databases(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);

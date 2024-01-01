@@ -413,6 +413,16 @@ stream_apply_sync_sentinel(StreamApplyContext *context, bool findDurableLSN)
 	context->endpos = sentinel.endpos;
 	context->startpos = sentinel.startpos;
 
+	log_debug("stream_apply_sync_sentinel: "
+			  "write_lsn %X/%X flush_lsn %X/%X replay_lsn %X/%X "
+			  "startpos %X/%X endpos %X/%X apply %s",
+			  LSN_FORMAT_ARGS(sentinel.write_lsn),
+			  LSN_FORMAT_ARGS(sentinel.flush_lsn),
+			  LSN_FORMAT_ARGS(sentinel.replay_lsn),
+			  LSN_FORMAT_ARGS(context->startpos),
+			  LSN_FORMAT_ARGS(context->endpos),
+			  context->apply ? "enabled" : "disabled");
+
 	return true;
 }
 

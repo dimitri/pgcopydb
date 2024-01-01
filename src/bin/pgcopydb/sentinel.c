@@ -308,17 +308,15 @@ sentinel_update_write_flush_lsn(DatabaseCatalog *catalog,
 	/*
 	 * Update startpos to flush_lsn, which is our safe restart point.
 	 */
-	char startLSN[PG_LSN_MAXLENGTH] = { 0 };
 	char writeLSN[PG_LSN_MAXLENGTH] = { 0 };
 	char flushLSN[PG_LSN_MAXLENGTH] = { 0 };
 
-	sformat(startLSN, sizeof(startLSN), "%X/%X", LSN_FORMAT_ARGS(flush_lsn));
 	sformat(writeLSN, sizeof(writeLSN), "%X/%X", LSN_FORMAT_ARGS(write_lsn));
 	sformat(flushLSN, sizeof(flushLSN), "%X/%X", LSN_FORMAT_ARGS(flush_lsn));
 
 	/* bind our parameters now */
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "startpos", 0, (char *) startLSN },
+		{ BIND_PARAMETER_TYPE_TEXT, "startpos", 0, (char *) flushLSN },
 		{ BIND_PARAMETER_TYPE_TEXT, "write_lsn", 0, (char *) writeLSN },
 		{ BIND_PARAMETER_TYPE_TEXT, "flush_lsn", 0, (char *) flushLSN }
 	};
@@ -553,6 +551,10 @@ sentinel_sync_recv(DatabaseCatalog *catalog,
 		return false;
 	}
 
+	log_debug("sentinel_sync_recv: write_lsn %X/%X flush_lsn %X/%X",
+			  LSN_FORMAT_ARGS(sentinel->write_lsn),
+			  LSN_FORMAT_ARGS(sentinel->flush_lsn));
+
 	return true;
 }
 
@@ -571,9 +573,6 @@ sentinel_sync_apply(DatabaseCatalog *catalog,
 		/* errors have already been logged */
 		return false;
 	}
-
-	log_debug("sentinel_sync_apply: replay_lsn %X/%X",
-			  LSN_FORMAT_ARGS(replay_lsn));
 
 	if (!sentinel_get(catalog, sentinel))
 	{
