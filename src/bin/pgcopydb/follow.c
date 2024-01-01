@@ -40,6 +40,16 @@ follow_export_snapshot(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		return false;
 	}
 
+	if (!catalog_setup_replication(streamSpecs->sourceDB,
+								   streamSpecs->slot.snapshot,
+								   OutputPluginToString(streamSpecs->slot.plugin),
+								   streamSpecs->slot.slotName))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+
 	return true;
 }
 
@@ -520,6 +530,17 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	}
 
 	/*
+	 * Before starting sub-processes, make sure to close our SQLite catalogs.
+	 * We open the SQLite catalogs again before returning from this function
+	 * (if only when reaching the end of it and returning true).
+	 */
+	if (!catalog_close(streamSpecs->sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
 	 * Prepare the sub-process communication mechanisms, when needed:
 	 *
 	 *   - pgcopydb stream receive --to-stdout
@@ -607,7 +628,18 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	 *
 	 * This happens when the sentinel endpos is set, typically using the
 	 * command: pgcopydb stream sentinel set endpos --current.
+	 *
+	 * When waipid() catches a subprocess termination, we need to update our
+	 * sentinel values, and for that we need to catalogs open again. The caller
+	 * to this function had the catalogs open, so we let them opened when
+	 * returning here.
 	 */
+	if (!catalog_open(streamSpecs->sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (follow_wait_subprocesses(streamSpecs))
 	{
 		log_info("Subprocesses for %s, %s, and %s have now all exited",
@@ -828,12 +860,36 @@ follow_start_subprocess(StreamSpecs *specs, FollowSubProcess *subprocess)
 		case 0:
 		{
 			/* child process runs the command */
+			pid_t pid = getpid();
 			char psTitle[BUFSIZE] = { 0 };
 
 			sformat(psTitle, sizeof(psTitle), "pgcopydb: follow %s",
 					subprocess->name);
 
 			(void) set_ps_title(psTitle);
+
+			/* also track the process information in our catalogs */
+			ProcessInfo ps = {
+				.pid = pid,
+				.psTitle = ps_buffer
+			};
+
+			strlcpy(ps.psType, subprocess->name, sizeof(ps.psType));
+
+			DatabaseCatalog *sourceDB = specs->sourceDB;
+
+			if (!catalog_open(sourceDB))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			if (!catalog_upsert_process_info(sourceDB, &ps))
+			{
+				log_error("Failed to track progress in our catalogs, "
+						  "see above for details");
+				return false;
+			}
 
 			log_notice("Starting the %s sub-process", subprocess->name);
 
@@ -935,6 +991,16 @@ follow_wait_subprocesses(StreamSpecs *specs)
 			if (processArray[i]->exited)
 			{
 				--stillRunning;
+
+				/*
+				 * First, delete the process from our tracking in the catalogs.
+				 */
+				if (!catalog_delete_process(specs->sourceDB,
+											processArray[i]->pid))
+				{
+					log_notice("Failed to delete process entry for pid %d",
+							   processArray[i]->pid);
+				}
 
 				int logLevel = LOG_NOTICE;
 				char details[BUFSIZE] = { 0 };

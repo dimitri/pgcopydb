@@ -572,11 +572,17 @@ sentinel_sync_apply(DatabaseCatalog *catalog,
 		return false;
 	}
 
+	log_debug("sentinel_sync_apply: replay_lsn %X/%X",
+			  LSN_FORMAT_ARGS(replay_lsn));
+
 	if (!sentinel_get(catalog, sentinel))
 	{
 		/* errors have already been logged */
 		return false;
 	}
+
+	log_debug("sentinel_sync_apply: sentinel.replay_lsn %X/%X",
+			  LSN_FORMAT_ARGS(sentinel->replay_lsn));
 
 	return true;
 }

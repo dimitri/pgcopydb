@@ -13,6 +13,7 @@ run: build
 
 down:
 	docker-compose down
+	rm -rf workdir/*
 
 build:
 	docker-compose build --quiet

@@ -1178,6 +1178,17 @@ setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
 	/* we also might want to skip logging any SQL query that we apply */
 	pgsql->logSQL = logSQL;
 
+	/*
+	 * Grab the Postgres server version on the target, we need to know that for
+	 * being able to call pgsql_current_wal_insert_lsn using the right Postgres
+	 * function name.
+	 */
+	if (!pgsql_server_version(pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	uint32_t oid = 0;
 
 	if (!pgsql_replication_origin_oid(pgsql, nodeName, &oid))
@@ -1595,7 +1606,25 @@ stream_apply_find_durable_lsn(StreamApplyContext *context, uint64_t *durableLSN)
 
 	uint64_t flushLSN = InvalidXLogRecPtr;
 
+	if (!pgsql_begin(&src))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_server_version(&src))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (!pgsql_current_wal_flush_lsn(&src, &flushLSN))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_commit(&src))
 	{
 		/* errors have already been logged */
 		return false;

@@ -305,6 +305,7 @@ bool copydb_cleanup_sysv_resources(SysVResArray *array);
 /* catalog.c */
 bool catalog_init_from_specs(CopyDataSpec *copySpecs);
 bool catalog_close_from_specs(CopyDataSpec *copySpecs);
+bool catalog_register_setup_from_specs(CopyDataSpec *copySpecs);
 
 /* snapshot.c */
 bool copydb_copy_snapshot(CopyDataSpec *specs, TransactionSnapshot *snapshot);

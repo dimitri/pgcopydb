@@ -318,6 +318,8 @@ typedef struct CatalogSetup
 	char snapshot[BUFSIZE];
 	uint64_t splitTablesLargerThanBytes;
 	char *filters;              /* malloc'ed area */
+	char plugin[BUFSIZE];
+	char slotName[BUFSIZE];
 } CatalogSetup;
 
 typedef enum

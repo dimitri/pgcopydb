@@ -93,12 +93,6 @@ stream_transform_context_init_pgsql(StreamSpecs *specs)
 bool
 stream_transform_stream(StreamSpecs *specs)
 {
-	if (!catalog_open(specs->sourceDB))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	if (!stream_transform_context_init_pgsql(specs))
 	{
 		/* errors have already been logged */
@@ -108,12 +102,6 @@ stream_transform_stream(StreamSpecs *specs)
 	bool success = stream_transform_stream_internal(specs);
 
 	pgsql_finish(&(specs->transformPGSQL));
-
-	if (!catalog_close(specs->sourceDB))
-	{
-		/* errors have already been logged */
-		return false;
-	}
 
 	return success;
 }
@@ -206,6 +194,9 @@ stream_transform_resume(StreamSpecs *specs)
 {
 	StreamContext *privateContext = &(specs->private);
 
+	log_fatal("stream_transform_resume: %p", specs->private.connStrings);
+	log_fatal("stream_transform_resume: %p", privateContext->sourceDB);
+
 	/*
 	 * Now grab the current sentinel values, specifically the current endpos.
 	 *
@@ -215,7 +206,7 @@ stream_transform_resume(StreamSpecs *specs)
 	 */
 	CopyDBSentinel sentinel = { 0 };
 
-	if (!sentinel_get(privateContext->sourceDB, &sentinel))
+	if (!sentinel_get(specs->sourceDB, &sentinel))
 	{
 		/* errors have already been logged */
 		return false;

@@ -43,6 +43,12 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/multi-wal-txn.sql
 # check the replication slot file contents
 cat /var/lib/postgres/.local/share/pgcopydb/slot
 
+# check the sqlite setup contents too
+sqlite3 ${TMPDIR}/pgcopydb/schema/source.db <<EOF
+.mode line
+select * from setup;
+EOF
+
 # copy the data
 pgcopydb copy table-data
 

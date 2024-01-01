@@ -5138,6 +5138,20 @@ pgsql_current_wal_flush_lsn(PGSQL *pgsql, uint64_t *lsn)
 
 	const char *sql = "select pg_current_wal_flush_lsn()";
 
+	/*
+	 * Postgres function pg_current_wal_flush_lsn() has had different names.
+	 */
+	if (pgsql->pgversion_num < 90600)
+	{
+		/* Postgres 9.5 only had that one */
+		sql = "select pg_current_xlog_location()";
+	}
+	else if (pgsql->pgversion_num < 100000)
+	{
+		/* Postgres 9.6 then had that new one */
+		sql = "select pg_current_xlog_flush_location()";
+	}
+
 	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
 								   &context, &parseSingleValueResult))
 	{
@@ -5178,6 +5192,20 @@ pgsql_current_wal_insert_lsn(PGSQL *pgsql, uint64_t *lsn)
 	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_STRING, false };
 
 	const char *sql = "select pg_current_wal_insert_lsn()";
+
+	/*
+	 * Postgres function pg_current_wal_insert_lsn() has had different names.
+	 */
+	if (pgsql->pgversion_num < 100000)
+	{
+		/* Postgres 9.5 and 9.6 had that function name */
+		sql = "select pg_current_xlog_insert_location()";
+	}
+	else if (pgsql->pgversion_num < 110000)
+	{
+		/* Postgres 10 had that function name (now returned pg_lsn) */
+		sql = "select pg_current_wal_insert_lsn()";
+	}
 
 	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
 								   &context, &parseSingleValueResult))
