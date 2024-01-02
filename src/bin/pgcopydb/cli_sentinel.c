@@ -474,35 +474,9 @@ cli_sentinel_set_endpos(int argc, char **argv)
 	if (useCurrentLSN)
 	{
 		char *pguri = (char *) sentinelDBoptions.connStrings.source_pguri;
-		PGSQL pgsql = { 0 };
 
-		if (!pgsql_init(&pgsql, pguri, PGSQL_CONN_SOURCE))
+		if (!stream_fetch_current_lsn(&endpos, pguri, PGSQL_CONN_SOURCE))
 		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_SOURCE);
-		}
-
-		if (!pgsql_begin(&pgsql))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_SOURCE);
-		}
-
-		if (!pgsql_server_version(&pgsql))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_SOURCE);
-		}
-
-		if (!pgsql_current_wal_flush_lsn(&pgsql, &endpos))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_SOURCE);
-		}
-
-		if (!pgsql_commit(&pgsql))
-		{
-			/* errors have already been logged */
 			exit(EXIT_CODE_SOURCE);
 		}
 

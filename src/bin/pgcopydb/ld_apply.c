@@ -1603,40 +1603,14 @@ stream_apply_track_insert_lsn(StreamApplyContext *context, uint64_t sourceLSN)
 bool
 stream_apply_find_durable_lsn(StreamApplyContext *context, uint64_t *durableLSN)
 {
-	PGSQL src = { 0 };
-
-	if (!pgsql_init(&src, context->connStrings->source_pguri, PGSQL_CONN_SOURCE))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/* limit the amount of logging of the apply process */
-	src.logSQL = context->logSQL;
-
 	uint64_t flushLSN = InvalidXLogRecPtr;
 
-	if (!pgsql_begin(&src))
+	if (!stream_fetch_current_lsn(&flushLSN,
+								  context->connStrings->source_pguri,
+								  PGSQL_CONN_SOURCE))
 	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!pgsql_server_version(&src))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!pgsql_current_wal_flush_lsn(&src, &flushLSN))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!pgsql_commit(&src))
-	{
-		/* errors have already been logged */
+		log_error("Failed to retrieve current WAL positions, "
+				  "see above for details");
 		return false;
 	}
 
