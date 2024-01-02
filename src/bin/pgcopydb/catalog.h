@@ -19,6 +19,9 @@ struct SQLiteQuery
 	sqlite3 *db;
 	sqlite3_stmt *ppStmt;
 	const char *sql;
+
+	bool errorOnZeroRows;
+
 	CatalogFetchResult *fetchFunction;
 	void *context;
 };
@@ -48,6 +51,11 @@ bool catalog_register_setup(DatabaseCatalog *catalog,
 							const char *snapshot,
 							uint64_t splitTablesLargerThanBytes,
 							const char *filters);
+
+bool catalog_setup_replication(DatabaseCatalog *catalog,
+							   const char *snapshot,
+							   const char *plugin,
+							   const char *slotName);
 
 bool catalog_setup(DatabaseCatalog *catalog);
 bool catalog_setup_fetch(SQLiteQuery *query);

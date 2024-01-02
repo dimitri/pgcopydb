@@ -544,40 +544,5 @@ bool pgsql_table_exists(PGSQL *pgsql,
 bool pgsql_current_wal_flush_lsn(PGSQL *pgsql, uint64_t *lsn);
 bool pgsql_current_wal_insert_lsn(PGSQL *pgsql, uint64_t *lsn);
 
-/*
- * pgcopydb sentinel is a table that's created on the source database and
- * allows communicating elements from the outside, and in between the receive
- * and apply processes.
- */
-typedef struct CopyDBSentinel
-{
-	bool apply;
-	uint64_t startpos;
-	uint64_t endpos;
-	uint64_t write_lsn;
-	uint64_t flush_lsn;
-	uint64_t replay_lsn;
-} CopyDBSentinel;
-
-bool pgsql_update_sentinel_startpos(PGSQL *pgsql, uint64_t startpos);
-bool pgsql_update_sentinel_endpos(PGSQL *pgsql, bool current, uint64_t endpos);
-bool pgsql_update_sentinel_apply(PGSQL *pgsql, bool apply);
-
-bool pgsql_get_sentinel(PGSQL *pgsql, CopyDBSentinel *sentinel);
-
-bool pgsql_sync_sentinel_recv(PGSQL *pgsql,
-							  uint64_t write_lsn,
-							  uint64_t flush_lsn,
-							  CopyDBSentinel *sentinel);
-
-bool pgsql_sync_sentinel_apply(PGSQL *pgsql,
-							   uint64_t replay_lsn,
-							   CopyDBSentinel *sentinel);
-
-bool pgsql_send_sync_sentinel_apply(PGSQL *pgsql, uint64_t replay_lsn);
-bool pgsql_fetch_sync_sentinel_apply(PGSQL *pgsql,
-									 bool *retry,
-									 CopyDBSentinel *sentinel);
-
 char * pgsql_escape_identifier(PGSQL *pgsql, char *src);
 #endif /* PGSQL_H */

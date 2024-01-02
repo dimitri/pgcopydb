@@ -10,9 +10,6 @@ set -e
 #  - PGCOPYDB_TABLE_JOBS
 #  - PGCOPYDB_INDEX_JOBS
 
-# make sure source and target databases are ready
-pgcopydb ping
-
 #
 # Hack the pagila schema to make it compatible with Postgres 9.6. Remove:
 #  - default_table_access_method
@@ -43,14 +40,20 @@ fi
 sed -i -e '/default_table_access_method/d' /tmp/schema.sql
 perl -pi -e 's/FOR EACH ROW EXECUTE FUNCTION/FOR EACH ROW EXECUTE PROCEDURE/' /tmp/schema.sql
 
+# make sure source and target databases are ready
+pgcopydb ping
+
+# install hacked pagila schema and data
 psql -o /tmp/s.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /tmp/schema.sql
 psql -o /tmp/d.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /tmp/data.sql
 
 # alter the pagila schema to allow capturing DDLs without pkey
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/ddl.sql
 
-# pgcopydb clone uses the environment variables
-pgcopydb clone --follow
+find ${TMPDIR}
+
+# pgcopydb copy db uses the environment variables
+pgcopydb clone --follow --notice
 
 # cleanup
 pgcopydb stream sentinel get

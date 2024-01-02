@@ -169,6 +169,21 @@ typedef struct ExtensionReqs
 	UT_hash_handle hh;          /* makes this structure hashable */
 } ExtensionReqs;
 
+/*
+ * pgcopydb sentinel is a table that's created on the source catalog and allows
+ * communicating elements from the outside, and in between the receive and
+ * apply processes.
+ */
+typedef struct CopyDBSentinel
+{
+	bool apply;
+	uint64_t startpos;
+	uint64_t endpos;
+	uint64_t write_lsn;
+	uint64_t flush_lsn;
+	uint64_t replay_lsn;
+} CopyDBSentinel;
+
 
 /* all that's needed to start a TABLE DATA copy for a whole database */
 typedef struct CopyDataSpec
@@ -290,6 +305,7 @@ bool copydb_cleanup_sysv_resources(SysVResArray *array);
 /* catalog.c */
 bool catalog_init_from_specs(CopyDataSpec *copySpecs);
 bool catalog_close_from_specs(CopyDataSpec *copySpecs);
+bool catalog_register_setup_from_specs(CopyDataSpec *copySpecs);
 
 /* snapshot.c */
 bool copydb_copy_snapshot(CopyDataSpec *specs, TransactionSnapshot *snapshot);
@@ -444,6 +460,32 @@ bool vacuum_worker(CopyDataSpec *specs);
 bool vacuum_analyze_table_by_oid(CopyDataSpec *specs, uint32_t oid);
 bool vacuum_add_table(CopyDataSpec *specs, uint32_t oid);
 bool vacuum_send_stop(CopyDataSpec *specs);
+
+/* sentinel.c */
+bool sentinel_setup(DatabaseCatalog *catalog,
+					uint64_t startpos, uint64_t endpos);
+
+bool sentinel_update_startpos(DatabaseCatalog *catalog, uint64_t startpos);
+bool sentinel_update_endpos(DatabaseCatalog *catalog, uint64_t endpos);
+bool sentinel_update_apply(DatabaseCatalog *catalog, bool apply);
+
+bool sentinel_update_write_flush_lsn(DatabaseCatalog *catalog,
+									 uint64_t write_lsn,
+									 uint64_t flush_lsn);
+
+bool sentinel_update_replay_lsn(DatabaseCatalog *catalog, uint64_t replay_lsn);
+
+bool sentinel_get(DatabaseCatalog *catalog, CopyDBSentinel *sentinel);
+bool sentinel_fetch(SQLiteQuery *query);
+
+bool sentinel_sync_recv(DatabaseCatalog *catalog,
+						uint64_t write_lsn,
+						uint64_t flush_lsn,
+						CopyDBSentinel *sentinel);
+
+bool sentinel_sync_apply(DatabaseCatalog *catalog,
+						 uint64_t replay_lsn,
+						 CopyDBSentinel *sentinel);
 
 /* summary.c */
 bool prepare_summary_table(Summary *summary, CopyDataSpec *specs);

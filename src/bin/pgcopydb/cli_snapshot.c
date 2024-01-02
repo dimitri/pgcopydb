@@ -323,11 +323,17 @@ cli_create_snapshot(int argc, char **argv)
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 
-		char *logrep_pguri = streamSpecs.connStrings->logrep_pguri;
+		/*
+		 * Make sure to register our setup here, as usually the command
+		 * `pgcopydb snapshot` is used first.
+		 */
+		if (!catalog_register_setup_from_specs(&copySpecs))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
 
-		if (!copydb_create_logical_replication_slot(&copySpecs,
-													logrep_pguri,
-													&(streamSpecs.slot)))
+		if (!follow_export_snapshot(&copySpecs, &streamSpecs))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);

@@ -137,7 +137,13 @@ static char *sourceDBcreateDDLs[] = {
 
 	"create table s_table_indexes_done("
 	" tableoid integer primary key references s_table(oid), pid integer "
-	")"
+	")",
+
+	/* use SQLite more general dynamic type system: pg_lsn is text */
+	"create table sentinel("
+	"  id integer primary key check (id = 1), "
+	"  startpos pg_lsn, endpos pg_lsn, apply bool, "
+	" write_lsn pg_lsn, flush_lsn pg_lsn, replay_lsn pg_lsn)"
 };
 
 
@@ -361,7 +367,9 @@ static char *sourceDBdropDDLs[] = {
 	"drop table if exists process",
 	"drop table if exists summary",
 	"drop table if exists s_table_parts_done",
-	"drop table if exists s_table_indexes_done"
+	"drop table if exists s_table_indexes_done",
+
+	"drop table if exists sentinel"
 };
 
 
@@ -416,6 +424,40 @@ catalog_init_from_specs(CopyDataSpec *copySpecs)
 		/* errors have already been logged */
 		return false;
 	}
+
+	if (!catalog_register_setup_from_specs(copySpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_close_from_specs closes our SQLite databases for internal catalogs.
+ */
+bool
+catalog_close_from_specs(CopyDataSpec *copySpecs)
+{
+	DatabaseCatalog *source = &(copySpecs->catalogs.source);
+	DatabaseCatalog *filter = &(copySpecs->catalogs.filter);
+	DatabaseCatalog *target = &(copySpecs->catalogs.target);
+
+	return catalog_close(source) &&
+		   catalog_close(filter) &&
+		   catalog_close(target);
+}
+
+
+/*
+ * catalog_register_setup_from_specs registers the current copySpecs setup.
+ */
+bool
+catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
+{
+	DatabaseCatalog *sourceDB = &(copySpecs->catalogs.source);
 
 	/*
 	 * Fetch and register the catalog setup.
@@ -598,22 +640,6 @@ catalog_init_from_specs(CopyDataSpec *copySpecs)
 
 
 /*
- * catalog_close_from_specs closes our SQLite databases for internal catalogs.
- */
-bool
-catalog_close_from_specs(CopyDataSpec *copySpecs)
-{
-	DatabaseCatalog *source = &(copySpecs->catalogs.source);
-	DatabaseCatalog *filter = &(copySpecs->catalogs.filter);
-	DatabaseCatalog *target = &(copySpecs->catalogs.target);
-
-	return catalog_close(source) &&
-		   catalog_close(filter) &&
-		   catalog_close(target);
-}
-
-
-/*
  * catalog_open opens an already initialized catalog database file.
  */
 bool
@@ -636,6 +662,13 @@ catalog_open(DatabaseCatalog *catalog)
 bool
 catalog_init(DatabaseCatalog *catalog)
 {
+	if (catalog->db != NULL)
+	{
+		log_debug("Skipping opening SQLite database \"%s\": already opened",
+				  catalog->dbfile);
+		return true;
+	}
+
 	log_debug("Opening SQLite database \"%s\" with lib version %s",
 			  catalog->dbfile,
 			  sqlite3_libversion());
@@ -1094,7 +1127,7 @@ catalog_setup(DatabaseCatalog *catalog)
 
 	char *sql =
 		"select id, source_pg_uri, target_pg_uri, snapshot, "
-		"       split_tables_larger_than, filters "
+		"       split_tables_larger_than, filters, plugin, slot_name "
 		"  from setup";
 
 	if (!semaphore_lock(&(catalog->sema)))
@@ -1218,6 +1251,86 @@ catalog_setup_fetch(SQLiteQuery *query)
 		strlcpy(setup->filters,
 				(char *) sqlite3_column_text(query->ppStmt, 5),
 				bytes);
+	}
+
+	/*
+	 * plugin (a string buffer)
+	 */
+	if (sqlite3_column_type(query->ppStmt, 6) != SQLITE_NULL)
+	{
+		strlcpy(setup->plugin,
+				(char *) sqlite3_column_text(query->ppStmt, 6),
+				sizeof(setup->plugin));
+	}
+
+
+	/*
+	 * slot_name (a string buffer)
+	 */
+	if (sqlite3_column_type(query->ppStmt, 7) != SQLITE_NULL)
+	{
+		strlcpy(setup->slotName,
+				(char *) sqlite3_column_text(query->ppStmt, 7),
+				sizeof(setup->slotName));
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_setup_replication updates the catalog setup with the information
+ * relevant to the logical replication setup. It is meant to be called after
+ * having initialized the catalog, once the replication slot has been created,
+ * exporting the snapshot.
+ */
+bool
+catalog_setup_replication(DatabaseCatalog *catalog,
+						  const char *snapshot,
+						  const char *plugin,
+						  const char *slotName)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_setup_replication: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"update setup "
+		"   set snapshot = $1, plugin = $2, slot_name = $3 "
+		" where id = 1";
+
+	SQLiteQuery query = { .errorOnZeroRows = true };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_TEXT, "snapshot", 0, (char *) snapshot },
+		{ BIND_PARAMETER_TYPE_TEXT, "plugin", 0, (char *) plugin },
+		{ BIND_PARAMETER_TYPE_TEXT, "slot_name", 0, (char *) slotName }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which does not return any row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	return true;
@@ -6942,7 +7055,11 @@ catalog_sql_execute(SQLiteQuery *query)
 
 		if (rc == SQLITE_DONE)
 		{
-			log_sqlite("catalog_sql_execute: 0 row: %s", query->sql);
+			if (query->errorOnZeroRows)
+			{
+				log_error("SQLite query returned 0 row: %s", query->sql);
+				return false;
+			}
 		}
 		else
 		{

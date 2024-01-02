@@ -14,6 +14,7 @@ run: build
 
 down:
 	docker-compose down
+	rm -rf ./workdir/*
 
 build:
 	PGVERSION=$(PGVERSION) docker-compose build

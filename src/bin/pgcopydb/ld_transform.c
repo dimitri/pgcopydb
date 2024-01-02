@@ -93,12 +93,6 @@ stream_transform_context_init_pgsql(StreamSpecs *specs)
 bool
 stream_transform_stream(StreamSpecs *specs)
 {
-	if (!catalog_open(specs->sourceDB))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	if (!stream_transform_context_init_pgsql(specs))
 	{
 		/* errors have already been logged */
@@ -108,12 +102,6 @@ stream_transform_stream(StreamSpecs *specs)
 	bool success = stream_transform_stream_internal(specs);
 
 	pgsql_finish(&(specs->transformPGSQL));
-
-	if (!catalog_close(specs->sourceDB))
-	{
-		/* errors have already been logged */
-		return false;
-	}
 
 	return success;
 }
@@ -213,27 +201,28 @@ stream_transform_resume(StreamSpecs *specs)
 	 * command line option (found in specs->endpos) prevails, but when it's not
 	 * been used, we have a look at the sentinel value.
 	 */
-	PGSQL src = { 0 };
-
-	if (!pgsql_init(&src, specs->connStrings->source_pguri, PGSQL_CONN_SOURCE))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	CopyDBSentinel sentinel = { 0 };
 
-	if (!pgsql_get_sentinel(&src, &sentinel))
+	if (!sentinel_get(specs->sourceDB, &sentinel))
 	{
 		/* errors have already been logged */
 		return false;
 	}
+
+	log_notice("stream_transform_resume: "
+			   "startpos %X/%X endpos %X/%X "
+			   "write_lsn %X/%X flush_lsn %X/%X replay_lsn %X/%X",
+			   LSN_FORMAT_ARGS(sentinel.startpos),
+			   LSN_FORMAT_ARGS(sentinel.endpos),
+			   LSN_FORMAT_ARGS(sentinel.write_lsn),
+			   LSN_FORMAT_ARGS(sentinel.flush_lsn),
+			   LSN_FORMAT_ARGS(sentinel.replay_lsn));
 
 	if (specs->endpos == InvalidXLogRecPtr)
 	{
 		specs->endpos = sentinel.endpos;
 	}
-	else
+	else if (specs->endpos != sentinel.endpos)
 	{
 		log_warn("Sentinel endpos is %X/%X, overriden by --endpos %X/%X",
 				 LSN_FORMAT_ARGS(sentinel.endpos),
@@ -253,10 +242,8 @@ stream_transform_resume(StreamSpecs *specs)
 		{
 			specs->startpos = sentinel.startpos;
 
-			log_info("Resuming streaming at LSN %X/%X "
-					 "from replication slot \"%s\"",
-					 LSN_FORMAT_ARGS(specs->startpos),
-					 specs->slot.slotName);
+			log_notice("Resuming transform at LSN %X/%X from sentinel",
+					   LSN_FORMAT_ARGS(specs->startpos));
 		}
 	}
 
@@ -385,18 +372,9 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
 	/* at ENDPOS check that it's the current sentinel value and exit */
 	else if (metadata->action == STREAM_ACTION_ENDPOS)
 	{
-		PGSQL src = { 0 };
-		char *dsn = privateContext->connStrings->source_pguri;
-
-		if (!pgsql_init(&src, dsn, PGSQL_CONN_SOURCE))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
 		CopyDBSentinel sentinel = { 0 };
 
-		if (!pgsql_get_sentinel(&src, &sentinel))
+		if (!sentinel_get(privateContext->sourceDB, &sentinel))
 		{
 			/* errors have already been logged */
 			return false;
@@ -682,12 +660,6 @@ bool
 stream_transform_from_queue(StreamSpecs *specs)
 {
 	DatabaseCatalog *sourceDB = specs->sourceDB;
-
-	if (!catalog_init(sourceDB))
-	{
-		/* errors have already been logged */
-		return false;
-	}
 
 	if (!stream_init_context(specs))
 	{
