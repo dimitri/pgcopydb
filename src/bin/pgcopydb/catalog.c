@@ -6791,13 +6791,14 @@ catalog_iter_s_table_in_copy_init(SourceTableIterator *iter)
 		"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
 		"         relpages, reltuples, t.bytes, t.bytes_pretty, "
 		"         exclude_data, part_key, "
-		"         coalesce(part.partcount, 0), s.partnum, 0 as min, 0 as max, "
+		"         part.partcount, s.partnum, part.min, part.max, "
 		"         c.srcrowcount, c.srcsum, c.dstrowcount, c.dstsum, "
 		"         sum(s.duration), sum(s.bytes) "
 
 		"    from process p "
 		"         join s_table t on p.tableoid = t.oid "
-		"         join summary s on s.pid = t.pid and s.tableoid = p.tableoid "
+		"         join summary s on s.pid = p.pid "
+		"                       and s.tableoid = p.tableoid "
 
 		"         left join s_table_part part "
 		"                on part.oid = p.tableoid "
@@ -6927,6 +6928,86 @@ catalog_iter_s_index_in_progress_init(SourceIndexIterator *iter)
 		/* errors have already been logged */
 		return false;
 	}
+
+	return true;
+}
+
+
+/*
+ * catalog_count_summary_done counts the number of tables and indexes that have
+ * already been processed from the summary table.
+ */
+bool
+catalog_count_summary_done(DatabaseCatalog *catalog,
+						   CatalogProgressCount *count)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_count_summary_done: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"select "
+		"  ("
+		"    with pdone as "
+		"    ("
+		"     select tableoid, "
+		"            count(s.partnum) as partdone, "
+		"            coalesce(p.partcount, 1) as partcount "
+		"       from summary s "
+		"            join s_table t on t.oid = s.tableoid "
+		"            left join s_table_part p on p.oid = t.oid "
+		"      where tableoid is not null "
+		"        and done_time_epoch is not null "
+		"   group by tableoid"
+		"    ) "
+		"    select count(tableoid) from pdone where partdone = partcount"
+		"  ) as tblcount,"
+		"  ("
+		"   select count(indexoid) "
+		"     from summary "
+		"    where indexoid is not null and done_time_epoch is not null"
+		"  ) as idxcount";
+
+	SQLiteQuery query = {
+		.context = count,
+		.fetchFunction = &catalog_count_summary_done_fetch
+	};
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which return exactly one row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_count_summary_done_fetch fetches a CatalogProgressCount from a query
+ * ppStmt result.
+ */
+bool
+catalog_count_summary_done_fetch(SQLiteQuery *query)
+{
+	CatalogProgressCount *count = (CatalogProgressCount *) query->context;
+
+	/* cleanup the memory area before re-use */
+	bzero(count, sizeof(CatalogProgressCount));
+
+	count->table = sqlite3_column_int64(query->ppStmt, 0);
+	count->index = sqlite3_column_int64(query->ppStmt, 1);
 
 	return true;
 }
