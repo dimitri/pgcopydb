@@ -35,21 +35,141 @@
 static bool updateStreamCounters(StreamContext *context,
 								 LogicalMessageMetadata *metadata);
 
-
-bool DoesMessageNeedToBeFilteredOut(SourceFilters *filters, char *nspname, char *relname)
+/*
+ * Determines whether a message needs to be filtered out based on the
+ * provided filters. The caller function should have already parsed and
+ * validated the filters.
+ */
+bool ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
 {
+	/*
+	 * Validate nspname is not NULL or empty
+	 */
+	if (nspname == NULL || strlen(nspname) == 0)
+	{
+		log_error("BUG: nspname is NULL or empty");
+		return true;
+	}
+
+	/*
+	 * Validate relname is not NULL or empty
+	 */
+	if (relname == NULL || strlen(relname) == 0)
+	{
+		log_error("BUG: relname is NULL or empty");
+		return true;
+	}
+
+	/*
+	 * Filter-out pgcopydb.* in any case
+	 */
 	if (strcmp(nspname, "pgcopydb") == 0)
 	{
-		log_info("Filtering out message for schema \"%s\"", nspname);
+		log_info("Filtering out message for pgcopydb internal tables \"%s\"", nspname);
 		return true;
 	}
 
-	if (strcmp(relname, "test") == 0)
+	/*
+	 * If no filters are set, then we don't need to filter out any messages
+	 */
+	if (filters->type == SOURCE_FILTER_TYPE_NONE)
 	{
-		log_info("Filtering out message for table \"%s\"", relname);
-		return true;
+		return false;
 	}
 
+	/*
+	 * Filtering based on the sourceFilters.exclude-table-data
+	 * return true if the table is in the list
+	 * exclude-table-data filters should be processed first, otherwise
+	 * include-only-table will be able to filter the message before
+	 * we can check if the table is in the exclude-table-data list
+	 * and we will not be able to filter out the message.
+	 */
+	for (int i = 0; i < filters->excludeTableDataList.count; i++)
+	{
+		char *filteredNspName = filters->excludeTableDataList.array[i].nspname;
+		char *filteredRelName = filters->excludeTableDataList.array[i].relname;
+
+		if ((strcmp(filteredNspName, nspname) == 0 &&
+			strcmp(filteredRelName, relname) == 0))
+		{
+			log_debug("[exclude-table-data] Filtering out message for relname: %s.%s", filteredNspName, filteredRelName);
+			return true;
+		}
+	}
+
+	/*
+	 * Filtering based on the sourceFilters.include-only-table
+	 * return true if the table is not in the list
+	 */
+	for (int i = 0; i < filters->includeOnlyTableList.count; i++)
+	{
+		char *filteredNspName = filters->includeOnlyTableList.array[i].nspname;
+		char *filteredRelName = filters->includeOnlyTableList.array[i].relname;
+
+		if (!(strcmp(filteredNspName, nspname) == 0 &&
+			strcmp(filteredRelName, relname) == 0))
+		{
+			log_debug("[include-only-table] Filtering out message for relname: %s.%s", filteredNspName, filteredRelName);
+			return true;
+		}
+	}
+
+	/*
+	 * Filtering based on the sourceFilters.include-only-schema
+	 * return true if the schema is not in the list
+	 */
+	for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
+	{
+		char *filteredNspName = filters->includeOnlySchemaList.array[i].nspname;
+
+		if (!(strcmp(filteredNspName, nspname) == 0))
+		{
+			log_debug("[include-only-schema] Filtering out message for nspname: %s", filteredNspName);
+			return true;
+		}
+	}
+
+	/*
+	 * Filtering based on the sourceFilters.exclude-table
+	 * return true if the table is in the list
+	 */
+	for (int i = 0; i < filters->excludeTableList.count; i++)
+	{
+		char *filteredNspName = filters->excludeTableList.array[i].nspname;
+		char *filteredRelName = filters->excludeTableList.array[i].relname;
+
+		if ((strcmp(filteredNspName, nspname) == 0 &&
+			strcmp(filteredRelName, relname) == 0))
+		{
+			log_debug("[exclude-table] Filtering out message for relname: %s.%s", filteredNspName, filteredRelName);
+			return true;
+		}
+	}
+
+	/*
+	 * Filtering based on the sourceFilters.exclude-schema
+	 * return true if the schema is in the list
+	 */
+	for (int i = 0; i < filters->excludeSchemaList.count; i++)
+	{
+		char *filteredNspName = filters->excludeSchemaList.array[i].nspname;
+
+		if ((strcmp(filteredNspName, nspname) == 0))
+		{
+			log_debug("[exclude-schema] Filtering out message for nspname: %s", filteredNspName);
+			return true;
+		}
+	}
+
+	/*
+	 * No need to process sourceFilters.exclude-index because DDL
+	 * statements are not streamed.
+	 */
+
+	/*
+	 * No filters matched, so we don't need to filter out the message
+	 */
 	return false;
 }
 
