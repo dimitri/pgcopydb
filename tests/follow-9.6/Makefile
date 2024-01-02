@@ -14,7 +14,7 @@ run: build
 
 down:
 	docker-compose down
-	rm -rf ./workdir/*
+	rm -rf workdir/pgcopydb
 
 build:
 	PGVERSION=$(PGVERSION) docker-compose build
