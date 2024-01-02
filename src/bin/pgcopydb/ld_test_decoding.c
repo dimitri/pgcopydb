@@ -171,15 +171,13 @@ parseTestDecodingMessageActionAndXid(LogicalStreamContext *context)
 			return false;
 		}
 
-		if (strcmp(header.table.nspname, "pgcopydb") == 0)
+		SourceFilters filters;
+		metadata->action = header.action;
+
+		if(DoesMessageNeedToBeFilteredOut(&filters, header.table.nspname, header.table.relname))
 		{
-			log_debug("Filtering out message for schema \"%s\": %s",
-					  header.table.nspname,
-					  context->buffer);
 			metadata->filterOut = true;
 		}
-
-		metadata->action = header.action;
 	}
 	else
 	{

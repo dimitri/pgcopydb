@@ -36,6 +36,23 @@ static bool updateStreamCounters(StreamContext *context,
 								 LogicalMessageMetadata *metadata);
 
 
+bool DoesMessageNeedToBeFilteredOut(SourceFilters *filters, char *nspname, char *relname)
+{
+	if (strcmp(nspname, "pgcopydb") == 0)
+	{
+		log_info("Filtering out message for schema \"%s\"", nspname);
+		return true;
+	}
+
+	if (strcmp(relname, "test") == 0)
+	{
+		log_info("Filtering out message for table \"%s\"", relname);
+		return true;
+	}
+
+	return false;
+}
+
 /*
  * stream_init_specs initializes Change Data Capture streaming specifications
  * from a copyDBSpecs structure.
