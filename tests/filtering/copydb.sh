@@ -82,3 +82,48 @@ do
     diff $e $r || cat $r
     diff $e $r || exit 1
 done
+
+# --follow tests
+pgcopydb stream cleanup
+
+# --follow with inclusion filters
+coproc (pgcopydb follow --plugin test_decoding --filters /usr/src/pgcopydb/include.ini --restart)
+
+# execute DML queries against the source database to test filtering for include.ini
+psql -d "${PGCOPYDB_SOURCE_PGURI}" ${pgopts} --file ./follow-mode/dml-for-include.sql
+
+# set the end position to the current position to complete the follow operation
+pgcopydb stream sentinel set endpos --current
+
+# make sure the inject service has had time to see the final sentinel values
+sleep 2
+
+# cleanup the stream
+pgcopydb stream cleanup
+
+# --follow with exclusion filters
+coproc (pgcopydb follow --plugin test_decoding --filters /usr/src/pgcopydb/exclude.ini --restart --not-consistent)
+
+# execute DML queries against the source database to test filtering for include.ini
+psql -d "${PGCOPYDB_SOURCE_PGURI}" ${pgopts} --file ./follow-mode/dml-for-exclude.sql
+
+# set the end position to the current position to complete the follow operation
+pgcopydb stream sentinel set endpos --current
+
+# make sure the inject service has had time to see the final sentinel values
+sleep 2
+
+# cleanup the stream
+pgcopydb stream cleanup
+
+# run assertions on the target database
+for f in ./follow-mode/sql/*.sql
+do
+    t=`basename $f .sql`
+    r=/tmp/results/${t}.out
+    e=./expected/${t}.out
+    psql -d "${PGCOPYDB_TARGET_PGURI}" ${pgopts} --file ./sql/$t.sql &> $r
+    test -f $e || cat $r
+    diff $e $r || cat $r
+    diff $e $r || exit 1
+done

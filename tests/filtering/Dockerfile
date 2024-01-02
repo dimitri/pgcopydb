@@ -9,6 +9,7 @@ COPY ./extra.sql extra.sql
 # unit tests
 COPY ./sql ./test/sql
 COPY ./expected ./test/expected
+COPY ./follow-mode ./test/follow-mode
 
 USER docker
 WORKDIR /usr/src/pgcopydb/test/
