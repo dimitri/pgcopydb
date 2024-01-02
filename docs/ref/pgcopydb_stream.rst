@@ -54,8 +54,6 @@ This command prefixes the following sub-commands:
     origin  Drop a replication origin in the target database
 
   pgcopydb stream sentinel
-    create  Create the sentinel table on the source database
-    drop    Drop the sentinel table on the source database
     get     Get the sentinel table values on the source database
   + set     Maintain a sentinel table on the source database
 
@@ -89,12 +87,11 @@ pgcopydb stream setup
 
 pgcopydb stream setup - Setup source and target systems for logical decoding
 
-The command ``pgcopydb stream setup`` connects to the source database and
-creates creates a ``pgcopydb.sentinel`` table, and then connects to the
-target database and creates a replication origin positioned at the LSN
-position of the logical decoding replication slot that must have been
-created already. See :ref:`pgcopydb_snapshot` to create the replication slot
-and export a snapshot.
+The command ``pgcopydb stream setup`` connects to the target database and
+creates a replication origin positioned at the LSN position of the logical
+decoding replication slot that must have been created already. See
+:ref:`pgcopydb_snapshot` to create the replication slot and export a
+snapshot.
 
 ::
 
@@ -228,43 +225,6 @@ This command is equivalent to running the following script::
   pgcopydb stream receive --to-stdout
   | pgcopydb stream transform - -
   | pgcopydb stream apply -
-
-.. _pgcopydb_stream_sentinel_create:
-
-pgcopydb stream sentinel create
--------------------------------
-
-pgcopydb stream sentinel create - Create the sentinel table on the source database
-
-The ``pgcopydb.sentinel`` table allows to remote control the prefetch and
-catchup processes of the logical decoding implementation in pgcopydb.
-
-::
-
-   pgcopydb stream sentinel create: Create the sentinel table on the source database
-   usage: pgcopydb stream sentinel create
-
-     --source      Postgres URI to the source database
-     --startpos    Start replaying changes when reaching this LSN
-     --endpos      Stop replaying changes when reaching this LSN
-
-
-.. _pgcopydb_stream_sentinel_drop:
-
-pgcopydb stream sentinel drop
------------------------------
-
-pgcopydb stream sentinel drop - Drop the sentinel table on the source database
-
-The ``pgcopydb.sentinel`` table allows to remote control the prefetch and
-catchup processes of the logical decoding implementation in pgcopydb.
-
-::
-
-   pgcopydb stream sentinel drop: Drop the sentinel table on the source database
-   usage: pgcopydb stream sentinel drop
-
-     --source      Postgres URI to the source database
 
 .. _pgcopydb_stream_sentinel_get:
 
