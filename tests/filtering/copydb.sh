@@ -92,11 +92,13 @@ coproc (pgcopydb follow --plugin test_decoding --filters /usr/src/pgcopydb/inclu
 # execute DML queries against the source database to test filtering for include.ini
 psql -d "${PGCOPYDB_SOURCE_PGURI}" ${pgopts} --file ./follow-mode/dml-for-include.sql
 
-# set the end position to the current position to complete the follow operation
-pgcopydb stream sentinel set endpos --current
-
 # make sure the inject service has had time to see the final sentinel values
 sleep 2
+
+pgcopydb stream sentinel get
+
+# set the end position to the current position to complete the follow operation
+pgcopydb stream sentinel set endpos --current --debug
 
 # cleanup the stream
 pgcopydb stream cleanup

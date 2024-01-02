@@ -310,7 +310,7 @@ cli_create_snapshot(int argc, char **argv)
 		if (!stream_init_specs(&streamSpecs,
 							   &(copySpecs.cfPaths.cdc),
 							   &(copySpecs.connStrings),
-						   	   &(copySpecs.filters),
+							   &(copySpecs.filters),
 							   &(createSNoptions.slot),
 							   createSNoptions.origin,
 							   createSNoptions.endpos,

@@ -71,8 +71,8 @@ prepareWal2jsonMessage(LogicalStreamContext *context)
 bool
 parseWal2jsonMessageActionAndXid(LogicalStreamContext *context)
 {
-	// GG: Implement filtering-out of messages based on the table name
-	// and schema name
+	/* GG: Implement filtering-out of messages based on the table name */
+	/* and schema name */
 
 	StreamContext *privateContext = (StreamContext *) context->private;
 	LogicalMessageMetadata *metadata = &(privateContext->metadata);

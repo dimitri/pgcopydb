@@ -1077,7 +1077,7 @@ cli_stream_apply(int argc, char **argv)
 		if (!stream_init_specs(&specs,
 							   &(copySpecs.cfPaths.cdc),
 							   &(copySpecs.connStrings),
-						   	   &(copySpecs.filters),
+							   &(copySpecs.filters),
 							   &(streamDBoptions.slot),
 							   streamDBoptions.origin,
 							   streamDBoptions.endpos,

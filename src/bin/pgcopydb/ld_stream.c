@@ -40,7 +40,8 @@ static bool updateStreamCounters(StreamContext *context,
  * provided filters. The caller function should have already parsed and
  * validated the filters.
  */
-bool ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
+bool
+ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
 {
 	/*
 	 * Validate nspname is not NULL or empty
@@ -91,9 +92,10 @@ bool ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname
 		char *filteredRelName = filters->excludeTableDataList.array[i].relname;
 
 		if ((strcmp(filteredNspName, nspname) == 0 &&
-			strcmp(filteredRelName, relname) == 0))
+			 strcmp(filteredRelName, relname) == 0))
 		{
-			log_debug("[exclude-table-data] Filtering out message for relname: %s.%s", filteredNspName, filteredRelName);
+			log_debug("[exclude-table-data] Filtering out message for relname: %s.%s",
+					  filteredNspName, filteredRelName);
 			return true;
 		}
 	}
@@ -108,9 +110,10 @@ bool ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname
 		char *filteredRelName = filters->includeOnlyTableList.array[i].relname;
 
 		if (!(strcmp(filteredNspName, nspname) == 0 &&
-			strcmp(filteredRelName, relname) == 0))
+			  strcmp(filteredRelName, relname) == 0))
 		{
-			log_debug("[include-only-table] Filtering out message for relname: %s.%s", filteredNspName, filteredRelName);
+			log_debug("[include-only-table] Filtering out message for relname: %s.%s",
+					  filteredNspName, filteredRelName);
 			return true;
 		}
 	}
@@ -125,7 +128,8 @@ bool ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname
 
 		if (!(strcmp(filteredNspName, nspname) == 0))
 		{
-			log_debug("[include-only-schema] Filtering out message for nspname: %s", filteredNspName);
+			log_debug("[include-only-schema] Filtering out message for nspname: %s",
+					  filteredNspName);
 			return true;
 		}
 	}
@@ -140,9 +144,10 @@ bool ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname
 		char *filteredRelName = filters->excludeTableList.array[i].relname;
 
 		if ((strcmp(filteredNspName, nspname) == 0 &&
-			strcmp(filteredRelName, relname) == 0))
+			 strcmp(filteredRelName, relname) == 0))
 		{
-			log_debug("[exclude-table] Filtering out message for relname: %s.%s", filteredNspName, filteredRelName);
+			log_debug("[exclude-table] Filtering out message for relname: %s.%s",
+					  filteredNspName, filteredRelName);
 			return true;
 		}
 	}
@@ -157,7 +162,8 @@ bool ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname
 
 		if ((strcmp(filteredNspName, nspname) == 0))
 		{
-			log_debug("[exclude-schema] Filtering out message for nspname: %s", filteredNspName);
+			log_debug("[exclude-schema] Filtering out message for nspname: %s",
+					  filteredNspName);
 			return true;
 		}
 	}
@@ -172,6 +178,7 @@ bool ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname
 	 */
 	return false;
 }
+
 
 /*
  * stream_init_specs initializes Change Data Capture streaming specifications
