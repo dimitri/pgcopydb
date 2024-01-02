@@ -171,10 +171,9 @@ parseTestDecodingMessageActionAndXid(LogicalStreamContext *context)
 			return false;
 		}
 
-		SourceFilters filters;
 		metadata->action = header.action;
 
-		if(DoesMessageNeedToBeFilteredOut(&filters, header.table.nspname, header.table.relname))
+		if(DoesMessageNeedToBeFilteredOut(&(privateContext->filters), header.table.nspname, header.table.relname))
 		{
 			metadata->filterOut = true;
 		}

@@ -61,6 +61,7 @@ bool
 stream_init_specs(StreamSpecs *specs,
 				  CDCPaths *paths,
 				  ConnStrings *connStrings,
+				  SourceFilters *filters,
 				  ReplicationSlot *slot,
 				  char *origin,
 				  uint64_t endpos,
@@ -80,6 +81,8 @@ stream_init_specs(StreamSpecs *specs,
 	specs->endpos = endpos;
 
 	specs->sourceDB = sourceDB;
+
+	specs->filters = *filters;
 
 	/*
 	 * Copy the given ReplicationSlot: it comes from command line parsing, or
@@ -365,6 +368,8 @@ stream_init_context(StreamSpecs *specs)
 	privateContext->paths = specs->paths;
 
 	privateContext->connStrings = specs->connStrings;
+
+	privateContext->filters = specs->filters;
 
 	/*
 	 * When using PIPEs for inter-process communication, makes sure the PIPEs
