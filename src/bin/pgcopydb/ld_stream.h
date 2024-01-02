@@ -554,6 +554,10 @@ bool stream_create_sentinel(CopyDataSpec *copySpecs,
 							uint64_t startpos,
 							uint64_t endpos);
 
+bool stream_fetch_current_lsn(uint64_t *lsn,
+							  const char *pguri,
+							  ConnectionType connectionType);
+
 bool stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream);
 bool stream_cleanup_context(StreamSpecs *specs);
 bool stream_read_context(CDCPaths *paths,

@@ -2533,6 +2533,60 @@ stream_create_sentinel(CopyDataSpec *copySpecs,
 
 
 /*
+ * stream_fetch_current_source_lsn connects to the given Postgres service and
+ * fetches the current WAL LSN position by calling pg_current_wal_flush_lsn
+ * there, or the variant of that function that is supported by this Postgres
+ * version.
+ */
+bool
+stream_fetch_current_lsn(uint64_t *lsn,
+						 const char *pguri,
+						 ConnectionType connectionType)
+{
+	PGSQL src = { 0 };
+
+	if (!pgsql_init(&src, (char *) pguri, connectionType))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* limit the amount of logging of the apply process */
+	src.logSQL = false;
+
+	uint64_t flushLSN = InvalidXLogRecPtr;
+
+	if (!pgsql_begin(&src))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_server_version(&src))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_current_wal_flush_lsn(&src, &flushLSN))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_commit(&src))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	*lsn = flushLSN;
+
+	return true;
+}
+
+
+/*
  * stream_write_context writes the wal_segment_size and timeline history to
  * files.
  */
