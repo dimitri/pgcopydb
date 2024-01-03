@@ -373,6 +373,13 @@ typedef struct Catalogs
 } Catalogs;
 
 
+typedef struct SplitTableLargerThan
+{
+	uint64_t bytes;
+	char bytesPretty[NAMEDATALEN];
+} SplitTableLargerThan;
+
+
 bool schema_query_privileges(PGSQL *pgsql,
 							 bool *hasDBCreatePrivilage,
 							 bool *hasDBTempPrivilege);
@@ -409,7 +416,8 @@ bool schema_list_table(PGSQL *pgsql,
 
 bool schema_list_ordinary_tables(PGSQL *pgsql,
 								 SourceFilters *filters,
-								 DatabaseCatalog *catalog);
+								 DatabaseCatalog *catalog,
+								 SplitTableLargerThan *splitTablesLargerThan);
 
 bool schema_list_ordinary_tables_without_pk(PGSQL *pgsql,
 											SourceFilters *filters,

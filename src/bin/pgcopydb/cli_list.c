@@ -52,6 +52,7 @@ static bool cli_list_extension_json_hook(void *ctx, SourceExtension *ext);
 static bool cli_list_extension_print_hook(void *ctx, SourceExtension *ext);
 static bool cli_list_colls_hook(void *context, SourceCollation *coll);
 static bool cli_list_table_print_hook(void *context, SourceTable *table);
+static bool cli_list_table_fetch_parts_hook(void *ctx, SourceTable *table);
 static bool cli_list_table_part_print_hook(void *ctx, SourceTableParts *part);
 static bool cli_list_seq_print_hook(void *context, SourceSequence *seq);
 static bool cli_list_index_print_hook(void *context, SourceIndex *index);
@@ -106,12 +107,10 @@ static CommandLine list_tables_command =
 static CommandLine list_table_parts_command =
 	make_command(
 		"table-parts",
-		"List a source table copy partitions",
+		"List all the source tables copy partitions",
 		" --source ... ",
 		"  --source                    Postgres URI to the source database\n"
-		"  --force                     Force fetching catalogs again\n"
-		"  --schema-name               Name of the schema where to find the table\n"
-		"  --table-name                Name of the target table\n"
+		"  --force                     Force recalculation of copy partitions\n"
 		"  --split-tables-larger-than  Size threshold to consider partitioning\n",
 		cli_list_db_getopts,
 		cli_list_table_parts);
@@ -1201,10 +1200,11 @@ cli_list_table_print_hook(void *context, SourceTable *table)
 }
 
 
-typedef struct ListTablePartContext
+typedef struct ListTablePartFetchPartsContext
 {
-	SourceTable *table;
-} ListTablePartContext;
+	DatabaseCatalog *sourceDB;
+} ListTablePartFetchPartsContext;
+
 
 /*
  * cli_list_table_parts implements the command: pgcopydb list table-parts
@@ -1232,18 +1232,6 @@ cli_list_table_parts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	if (IS_EMPTY_STRING_BUFFER(listDBoptions.table_name))
-	{
-		log_fatal("Option --table-name is mandatory");
-		commandline_help(stderr);
-		exit(EXIT_CODE_BAD_ARGS);
-	}
-
-	if (IS_EMPTY_STRING_BUFFER(listDBoptions.schema_name))
-	{
-		strlcpy(listDBoptions.schema_name, "public", PG_NAMEDATALEN);
-	}
-
 	if (!catalog_init_from_specs(&copySpecs))
 	{
 		log_error("Failed to initialize pgcopydb internal catalogs");
@@ -1252,72 +1240,79 @@ cli_list_table_parts(int argc, char **argv)
 
 	Catalogs *catalogs = &(copySpecs.catalogs);
 	DatabaseCatalog *sourceDB = &(catalogs->source);
-	SourceTable *table = (SourceTable *) calloc(1, sizeof(SourceTable));
 
+	ListTablePartFetchPartsContext context = { .sourceDB = sourceDB };
+
+	if (!catalog_iter_s_table(sourceDB,
+							  &context,
+							  &cli_list_table_fetch_parts_hook))
+	{
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	fformat(stdout, "\n");
+}
+
+
+typedef struct ListTablePartPrintPartsContext
+{
+	SourceTable *table;
+} ListTablePartPrintPartsContext;
+
+
+/*
+ * cli_list_table_fetch_parts_hook is an iterator callback that receives a
+ * SourceTable and fetches the parts from s_table_part catalog table.
+ */
+static bool
+cli_list_table_fetch_parts_hook(void *ctx, SourceTable *table)
+{
 	if (table == NULL)
 	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		exit(EXIT_CODE_INTERNAL_ERROR);
+		log_error("BUG: cli_list_table_print_hook called with a NULL table");
+		return false;
 	}
 
-	if (!catalog_lookup_s_table_by_name(sourceDB,
-										listDBoptions.schema_name,
-										listDBoptions.table_name,
-										table))
+	ListTablePartFetchPartsContext *fetchPartsContext =
+		(ListTablePartFetchPartsContext *) ctx;
+	DatabaseCatalog *sourceDB = fetchPartsContext->sourceDB;
+
+	if (table->partition.partCount == 0)
 	{
-		log_error("Failed to lookup for table \"%s\".\"%s\" in our "
-				  "internal catalogs",
-				  listDBoptions.schema_name,
-				  listDBoptions.table_name);
-
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	if (table->bytes < listDBoptions.splitTablesLargerThan.bytes)
-	{
-		log_info("Table %s (%s) will not be split",
-				 table->qname,
-				 table->bytesPretty);
-		exit(EXIT_CODE_QUIT);
-	}
-
-	if (IS_EMPTY_STRING_BUFFER(table->partKey))
-	{
-		log_info("Table %s is %s large "
-				 "which is larger than --split-tables-larger-than %s, "
-				 "and does not have a unique column of type integer: "
-				 "splitting by CTID",
-				 table->qname,
-				 table->bytesPretty,
-				 listDBoptions.splitTablesLargerThan.bytesPretty);
-
-		strlcpy(table->partKey, "ctid", sizeof(table->partKey));
+		log_info("Table %s COPY will not be split", table->qname);
+		return true;
 	}
 
 	log_info("Table %s COPY will be split %d-ways",
 			 table->qname,
 			 table->partition.partCount);
 
-	fformat(stdout, "%12s | %12s | %12s | %12s\n",
+	fformat(stdout, "%8s | %25s | %25s | %12s | %12s | %12s | %12s\n",
+			"OID", "Schema Name", "Table Name",
 			"Part", "Min", "Max", "Count");
 
-	fformat(stdout, "%12s-+-%12s-+-%12s-+-%12s\n",
+	fformat(stdout, "%8s-+-%25s-+-%25s-+-%12s-+-%12s-+-%12s-+-%12s\n",
+			"--------",
+			"-------------------------",
+			"-------------------------",
 			"------------",
 			"------------",
 			"------------",
 			"------------");
 
-	ListTablePartContext context = { .table = table };
+	ListTablePartPrintPartsContext context = { .table = table };
 
 	if (!catalog_iter_s_table_parts(sourceDB,
 									table->oid,
 									&context,
 									&cli_list_table_part_print_hook))
 	{
-		exit(EXIT_CODE_INTERNAL_ERROR);
+		return false;
 	}
 
 	fformat(stdout, "\n");
+
+	return true;
 }
 
 
@@ -1333,7 +1328,7 @@ cli_list_table_part_print_hook(void *ctx, SourceTableParts *part)
 		return false;
 	}
 
-	ListTablePartContext *context = (ListTablePartContext *) ctx;
+	ListTablePartPrintPartsContext *context = (ListTablePartPrintPartsContext *) ctx;
 	SourceTable *table = context->table;
 
 	if (streq(table->partKey, "ctid"))
@@ -1349,8 +1344,19 @@ cli_list_table_part_print_hook(void *ctx, SourceTableParts *part)
 		sformat(partMin, BUFSIZE, "(%lld,0)", (long long) part->min);
 		sformat(partMax, BUFSIZE, "(%lld,0)", (long long) part->max);
 
-		fformat(stdout, "%12s | %12s | %12s | %12lld\n",
-				partNC, partMin, partMax, (long long) part->count);
+		if (part->partCount != part->partNumber)
+		{
+			fformat(stdout, "%8d | %25s | %25s | %12s | %12s | %12s | %12lld\n",
+					table->oid, table->nspname, table->relname,
+					partNC, partMin, partMax, (long long) part->count);
+		}
+		else
+		{
+			/* last row, max and count are NULL */
+			fformat(stdout, "%8d | %25s | %25s | %12s | %12s | %12s | %12s\n",
+					table->oid, table->nspname, table->relname,
+					partNC, partMin, "-", "-");
+		}
 	}
 	else
 	{
@@ -1360,7 +1366,8 @@ cli_list_table_part_print_hook(void *ctx, SourceTableParts *part)
 				part->partNumber,
 				part->partCount);
 
-		fformat(stdout, "%12s | %12lld | %12lld | %12lld\n",
+		fformat(stdout, "%8d | %25s | %25s | %12s | %12lld | %12lld | %12lld\n",
+				table->oid, table->nspname, table->relname,
 				partNC,
 				(long long) part->min,
 				(long long) part->max,
