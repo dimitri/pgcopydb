@@ -36,7 +36,6 @@ void cli_clone(int argc, char **argv);
 void cli_follow(int argc, char **argv);
 
 /* cli_copy.h */
-extern CommandLine copy__db_command;
 extern CommandLine clone_command;
 extern CommandLine fork_command;
 extern CommandLine follow_command;

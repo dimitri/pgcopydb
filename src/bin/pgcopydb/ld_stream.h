@@ -364,9 +364,8 @@ typedef struct StreamApplyContext
 	/* target connection */
 	PGSQL pgsql;
 
-	/* source connection to publish sentinel updates */
-	PGSQL src;
-	bool sentinelQueryInProgress;
+	/* apply needs access to the catalogs to register sentinel replay_lsn */
+	DatabaseCatalog *sourceDB;
 	uint64_t sentinelSyncTime;
 
 	ConnStrings *connStrings;
@@ -538,6 +537,8 @@ bool stream_read_latest(StreamSpecs *specs, StreamContent *content);
 bool stream_update_latest_symlink(StreamContext *privateContext,
 								  const char *filename);
 
+bool stream_sync_sentinel(LogicalStreamContext *context);
+
 bool buildReplicationURI(const char *pguri, char **repl_pguri);
 
 bool stream_setup_databases(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs);
@@ -552,6 +553,10 @@ bool stream_create_origin(CopyDataSpec *copySpecs,
 bool stream_create_sentinel(CopyDataSpec *copySpecs,
 							uint64_t startpos,
 							uint64_t endpos);
+
+bool stream_fetch_current_lsn(uint64_t *lsn,
+							  const char *pguri,
+							  ConnectionType connectionType);
 
 bool stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream);
 bool stream_cleanup_context(StreamSpecs *specs);
@@ -656,9 +661,6 @@ bool stream_apply_wait_for_sentinel(StreamSpecs *specs,
 bool stream_apply_sync_sentinel(StreamApplyContext *context,
 								bool findDurableLSN);
 
-bool stream_apply_send_sync_sentinel(StreamApplyContext *context);
-bool stream_apply_fetch_sync_sentinel(StreamApplyContext *context);
-
 bool stream_apply_file(StreamApplyContext *context);
 
 bool stream_apply_sql(StreamApplyContext *context,
@@ -666,6 +668,7 @@ bool stream_apply_sql(StreamApplyContext *context,
 					  const char *sql);
 
 bool stream_apply_init_context(StreamApplyContext *context,
+							   DatabaseCatalog *sourceDB,
 							   CDCPaths *paths,
 							   ConnStrings *connStrings,
 							   char *origin,

@@ -58,19 +58,6 @@ stream_apply_replay(StreamSpecs *specs)
 		return true;
 	}
 
-	/*
-	 * The stream_replay_line read_from_stream callback is going to send async
-	 * queries to the source server to maintain the sentinel tables. Initialize
-	 * our connection info now.
-	 */
-	PGSQL *src = &(context->src);
-
-	if (!pgsql_init(src, context->connStrings->source_pguri, PGSQL_CONN_SOURCE))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	/* check for having reached endpos in a previous run already */
 	(void) stream_replay_reached_endpos(specs, context, false);
 
@@ -93,22 +80,6 @@ stream_apply_replay(StreamSpecs *specs)
 		log_error("Failed to read SQL lines from input stream, "
 				  "see above for details");
 		return false;
-	}
-
-	/*
-	 * When we are done reading our input stream and applying changes, we might
-	 * still have a sentinel query in flight. Make sure to terminate it now.
-	 */
-	while (context->sentinelQueryInProgress)
-	{
-		if (!stream_apply_fetch_sync_sentinel(context))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		/* sleep 100ms between retries */
-		pg_usleep(100 * 1000);
 	}
 
 	/* make sure to send a last round of sentinel update before exit */
@@ -196,19 +167,12 @@ stream_replay_line(void *ctx, const char *line, bool *stop)
 		{
 			uint64_t now = time(NULL);
 
-			if (context->sentinelQueryInProgress)
-			{
-				if (!stream_apply_fetch_sync_sentinel(context))
-				{
-					/* errors have already been logged */
-					return false;
-				}
-			}
-
 			/* rate limit to 1 update per second */
-			else if (1 < (now - context->sentinelSyncTime))
+			if (1 < (now - context->sentinelSyncTime))
 			{
-				if (!stream_apply_send_sync_sentinel(context))
+				bool findDurableLSN = true;
+
+				if (!stream_apply_sync_sentinel(context, findDurableLSN))
 				{
 					/* errors have already been logged */
 					return false;
@@ -219,18 +183,9 @@ stream_replay_line(void *ctx, const char *line, bool *stop)
 
 		case STREAM_ACTION_ENDPOS:
 		{
-			PGSQL src = { 0 };
-			char *dsn = context->connStrings->source_pguri;
-
-			if (!pgsql_init(&src, dsn, PGSQL_CONN_SOURCE))
-			{
-				/* errors have already been logged */
-				return false;
-			}
-
 			CopyDBSentinel sentinel = { 0 };
 
-			if (!pgsql_get_sentinel(&src, &sentinel))
+			if (!sentinel_get(context->sourceDB, &sentinel))
 			{
 				/* errors have already been logged */
 				return false;
