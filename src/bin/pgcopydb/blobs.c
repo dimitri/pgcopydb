@@ -47,6 +47,20 @@ copydb_start_blob_process(CopyDataSpec *specs)
 		return true;
 	}
 
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	if (!catalog_open(sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!summary_start_timing(sourceDB, TIMING_SECTION_LARGE_OBJECTS))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	bool hasLargeObjects = true;
 
 	if (!copydb_has_large_objects(specs, &hasLargeObjects))
@@ -59,18 +73,21 @@ copydb_start_blob_process(CopyDataSpec *specs)
 	{
 		log_info("Skipping large objects: none found.");
 
-		CopyBlobsSummary summary = {
-			.pid = getpid(),
-			.count = 0,
-			.startTime = time(NULL),
-			.doneTime = time(NULL),
-			.durationMs = 0
-		};
-
-		/* ignore errors on the blob file summary */
-		(void) write_blobs_summary(&summary, specs->cfPaths.done.blobs);
+		if (!summary_stop_timing(sourceDB, TIMING_SECTION_LARGE_OBJECTS) ||
+			!catalog_close(sourceDB))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 
 		return true;
+	}
+
+	/* close SQLite database before fork() */
+	if (!catalog_close(sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	/*
@@ -168,6 +185,14 @@ copydb_has_large_objects(CopyDataSpec *specs, bool *hasLargeObjects)
 bool
 copydb_blob_supervisor(CopyDataSpec *specs)
 {
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	if (!catalog_open(sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	pid_t pid = getpid();
 
 	log_notice("Started Large Objects supervisor %d [%d]", pid, getppid());
@@ -177,15 +202,6 @@ copydb_blob_supervisor(CopyDataSpec *specs)
 		log_error("Failed to create the Large Objects process queue");
 		return false;
 	}
-
-	CopyBlobsSummary summary = {
-		.pid = getpid(),
-		.count = 0,
-		.startTime = time(NULL)
-	};
-
-	instr_time startTime;
-	INSTR_TIME_SET_CURRENT(startTime);
 
 	if (!copydb_start_blob_workers(specs))
 	{
@@ -230,17 +246,17 @@ copydb_blob_supervisor(CopyDataSpec *specs)
 		return false;
 	}
 
-	instr_time duration;
+	if (!summary_stop_timing(sourceDB, TIMING_SECTION_LARGE_OBJECTS))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
-	INSTR_TIME_SET_CURRENT(duration);
-	INSTR_TIME_SUBTRACT(duration, startTime);
-
-	/* and write that we successfully finished copying all blobs */
-	summary.doneTime = time(NULL);
-	summary.durationMs = INSTR_TIME_GET_MILLISEC(duration);
-
-	/* ignore errors on the blob file summary */
-	(void) write_blobs_summary(&summary, specs->cfPaths.done.blobs);
+	if (!catalog_close(sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	return true;
 }
@@ -337,6 +353,14 @@ copydb_blob_worker(CopyDataSpec *specs)
 		return false;
 	}
 
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	if (!catalog_open(sourceDB))
+	{
+		log_error("Failed to open source catalogs, see above for details");
+		return false;
+	}
+
 	PGSQL *src = &(specs->sourceSnapshot.pgsql);
 	PGSQL dst = { 0 };
 
@@ -393,13 +417,39 @@ copydb_blob_worker(CopyDataSpec *specs)
 
 			case QMSG_TYPE_BLOBOID:
 			{
-				if (!pg_copy_large_object(src, &dst, dropIfExists, mesg.data.oid))
+				uint64_t bytesTransmitted = 0;
+
+				instr_time startTime;
+				INSTR_TIME_SET_CURRENT(startTime);
+
+				if (!pg_copy_large_object(src, &dst,
+										  dropIfExists,
+										  mesg.data.oid,
+										  &bytesTransmitted))
 				{
 					log_error("Failed to copy Large Object with oid %u, "
 							  "see above for details",
 							  mesg.data.oid);
 					return false;
 				}
+
+				instr_time duration;
+
+				INSTR_TIME_SET_CURRENT(duration);
+				INSTR_TIME_SUBTRACT(duration, startTime);
+
+				uint64_t durationMs = INSTR_TIME_GET_MILLISEC(duration);
+
+				if (!summary_increment_timing(sourceDB,
+											  TIMING_SECTION_LARGE_OBJECTS,
+											  1, /* count */
+											  bytesTransmitted,
+											  durationMs))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+
 				break;
 			}
 
@@ -418,6 +468,12 @@ copydb_blob_worker(CopyDataSpec *specs)
 	/* terminate our connection to the source and target database now */
 	(void) copydb_close_snapshot(specs);
 	(void) pgsql_finish(&dst);
+
+	if (!catalog_close(sourceDB))
+	{
+		log_error("Failed to close source catalogs, see above for details");
+		return false;
+	}
 
 	bool success = (stop == true && errors == 0);
 

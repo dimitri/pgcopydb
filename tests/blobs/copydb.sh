@@ -62,6 +62,8 @@ pgcopydb copy blobs --large-objects-jobs 2 --resume
 
 pgcopydb restore post-data --resume
 
+pgcopydb list progress --summary
+
 echo 'commit;' >&"${COPROC[1]}"
 echo '\q' >&"${COPROC[1]}"
 

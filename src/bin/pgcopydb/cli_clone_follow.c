@@ -508,14 +508,31 @@ cloneDB(CopyDataSpec *copySpecs)
 	 * the work is split into a clone sub-process and a follow sub-process that
 	 * work concurrently.
 	 */
-	Summary summary = { 0 };
-	TopLevelTimings *timings = &(summary.timings);
+	DatabaseCatalog *sourceDB = &(copySpecs->catalogs.source);
 
-	(void) summary_set_current_time(timings, TIMING_STEP_START);
+	/* grab startTime before opening the catalogs */
+	TopLevelTiming *timing = &(topLevelTimingArray[TIMING_SECTION_TOTAL]);
+	(void) catalog_start_timing(timing);
+
+	/* fetch schema information from source catalogs, including filtering */
+	log_info("STEP 1: fetch source database tables, indexes, and sequences");
+
+	if (!copydb_fetch_schema_and_prepare_specs(copySpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now register in the catalogs the already known startTime */
+	if (!summary_start_timing(sourceDB, TIMING_SECTION_TOTAL))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	if (copySpecs->roles)
 	{
-		log_info("STEP 0: copy the source database roles");
+		log_info("Copy the source database roles, per --roles");
 
 		if (!pg_copy_roles(&(copySpecs->pgPaths),
 						   &(copySpecs->connStrings),
@@ -539,27 +556,7 @@ cloneDB(CopyDataSpec *copySpecs)
 	/* swap the new instance in place of the previous one */
 	copySpecs->sourceSnapshot = snapshot;
 
-	/* fetch schema information from source catalogs, including filtering */
-	log_info("STEP 1: fetch source database tables, indexes, and sequences");
-
-	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_SCHEMA_FETCH);
-
-	if (!copydb_fetch_schema_and_prepare_specs(copySpecs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/* prepare the schema JSON file with all the migration details */
-	if (!copydb_prepare_schema_json_file(copySpecs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	log_info("STEP 2: dump the source database schema (pre/post data)");
-
-	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_SCHEMA_DUMP);
 
 	if (!copydb_dump_source_schema(copySpecs,
 								   copySpecs->sourceSnapshot.snapshot,
@@ -571,15 +568,12 @@ cloneDB(CopyDataSpec *copySpecs)
 
 	log_info("STEP 3: restore the pre-data section to the target database");
 
-	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_PREPARE_SCHEMA);
-
 	if (!copydb_target_prepare_schema(copySpecs))
 	{
-		/* errors have already been logged */
+		log_error("Failed to prepare schema on the target database, "
+				  "see above for details");
 		return false;
 	}
-
-	(void) summary_set_current_time(timings, TIMING_STEP_AFTER_PREPARE_SCHEMA);
 
 	/* STEPs 4, 5, 6, 7, 8, and 9 are printed when starting the sub-processes */
 	if (!copydb_copy_all_table_data(copySpecs))
@@ -590,24 +584,10 @@ cloneDB(CopyDataSpec *copySpecs)
 
 	log_info("STEP 10: restore the post-data section to the target database");
 
-	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_FINALIZE_SCHEMA);
-
-	/* we need access to the catalogs to filter the pg_restore --list */
-	if (!catalog_init_from_specs(copySpecs))
-	{
-		log_error("Failed to initialize pgcopydb internal catalogs");
-		return false;
-	}
-
 	if (!copydb_target_finalize_schema(copySpecs))
 	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!catalog_close_from_specs(copySpecs))
-	{
-		/* errors have already been logged */
+		log_error("Failed to finalize schema on the target database, "
+				  "see above for details");
 		return false;
 	}
 
@@ -619,14 +599,6 @@ cloneDB(CopyDataSpec *copySpecs)
 	{
 		log_info("Updating the pgcopydb.sentinel to enable applying changes");
 
-		DatabaseCatalog *sourceDB = &(copySpecs->catalogs.source);
-
-		if (!catalog_open(sourceDB))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
 		if (!sentinel_update_apply(sourceDB, true))
 		{
 			/* errors have already been logged */
@@ -634,10 +606,23 @@ cloneDB(CopyDataSpec *copySpecs)
 		}
 	}
 
-	(void) summary_set_current_time(timings, TIMING_STEP_AFTER_FINALIZE_SCHEMA);
-	(void) summary_set_current_time(timings, TIMING_STEP_END);
+	/* stop the timing wall-clock, and print the top-level summary */
+	if (!summary_stop_timing(sourceDB, TIMING_SECTION_TOTAL))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
-	(void) print_summary(&summary, copySpecs);
+	log_info("All step are now done, %s elapsed", timing->ppDuration);
+
+	(void) print_summary(copySpecs);
+
+	/* time to close the catalogs now */
+	if (!catalog_close_from_specs(copySpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	return true;
 }
@@ -744,6 +729,7 @@ cli_clone_follow_wait_subprocess(const char *name, pid_t pid)
 		if (exited)
 		{
 			char details[BUFSIZE] = { 0 };
+			bool exitedSuccessfully = returnCode == 0 && signal_is_handled(sig);
 
 			if (sig != 0)
 			{
@@ -752,7 +738,7 @@ cli_clone_follow_wait_subprocess(const char *name, pid_t pid)
 						sig);
 			}
 
-			log_level(returnCode == 0 ? LOG_DEBUG : LOG_ERROR,
+			log_level(exitedSuccessfully ? LOG_DEBUG : LOG_ERROR,
 					  "%s process %d has terminated [%d]%s",
 					  name,
 					  pid,

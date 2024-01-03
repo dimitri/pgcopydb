@@ -337,7 +337,8 @@ bool pgsql_set_gucs(PGSQL *pgsql, GUC *settings);
 bool pg_copy_large_object(PGSQL *src,
 						  PGSQL *dst,
 						  bool dropIfExists,
-						  uint32_t oid);
+						  uint32_t oid,
+						  uint64_t *bytesTransmitted);
 
 /*
  * Maximum length of serialized pg_lsn value

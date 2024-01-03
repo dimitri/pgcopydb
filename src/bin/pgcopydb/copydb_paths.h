@@ -10,39 +10,6 @@
 
 #include "pgsql.h"
 
-/* we can inspect a work directory and discover previous run state */
-typedef struct DirectoryState
-{
-	/* first, about the directory itself */
-	bool directoryExists;
-	bool directoryIsReady;
-
-	bool schemaDumpIsDone;
-	bool schemaPreDataHasBeenRestored;
-	bool schemaPostDataHasBeenRestored;
-
-	bool tableCopyIsDone;
-	bool indexCopyIsDone;
-	bool sequenceCopyIsDone;
-	bool blobsCopyIsDone;
-
-	bool allDone;
-} DirectoryState;
-
-/* track activity and allow resuming from a known state */
-typedef struct CopyDoneFilePaths
-{
-	char preDataDump[MAXPGPATH];     /* /tmp/pgcopydb/run/dump-pre.done */
-	char postDataDump[MAXPGPATH];    /* /tmp/pgcopydb/run/dump-post.done */
-	char preDataRestore[MAXPGPATH];  /* /tmp/pgcopydb/run/restore-pre.done */
-	char postDataRestore[MAXPGPATH]; /* /tmp/pgcopydb/run/restore-post.done */
-
-	char tables[MAXPGPATH];     /* /tmp/pgcopydb/run/tables.done */
-	char indexes[MAXPGPATH];    /* /tmp/pgcopydb/run/indexes.done */
-	char sequences[MAXPGPATH];  /* /tmp/pgcopydb/run/sequences.done */
-	char blobs[MAXPGPATH];      /* /tmp/pgcopydb/run/blobs.done */
-} CopyDoneFilePaths;
-
 /* Change Data Capture (logical decoding) paths */
 typedef struct CDCPaths
 {
@@ -66,6 +33,7 @@ typedef struct ComparePaths
 	char tdatafile[MAXPGPATH];    /* /tmp/pgcopydb/compare/target-data.json */
 } ComparePaths;
 
+
 /* maintain all the internal paths we need in one place */
 typedef struct CopyFilePaths
 {
@@ -79,10 +47,8 @@ typedef struct CopyFilePaths
 	char schemadir[MAXPGPATH];        /* /tmp/pgcopydb/schema */
 	char schemafile[MAXPGPATH];       /* /tmp/pgcopydb/schema.json */
 	char summaryfile[MAXPGPATH];      /* /tmp/pgcopydb/summary.json */
-	char rundir[MAXPGPATH];           /* /tmp/pgcopydb/run */
 
 	CDCPaths cdc;
-	CopyDoneFilePaths done;
 	ComparePaths compare;
 } CopyFilePaths;
 

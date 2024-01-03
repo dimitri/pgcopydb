@@ -1792,8 +1792,6 @@ cli_list_schema(int argc, char **argv)
 	ConnStrings *dsn = &(listDBoptions.connStrings);
 
 	log_info("Fetching schema from \"%s\"", dsn->safeSourcePGURI.pguri);
-	log_info("Dumping schema into JSON file \"%s\"",
-			 copySpecs.cfPaths.schemafile);
 
 	copySpecs.fetchFilteredOids = true;
 
@@ -1807,26 +1805,32 @@ cli_list_schema(int argc, char **argv)
 		exit(EXIT_CODE_SOURCE);
 	}
 
-	if (!copydb_prepare_schema_json_file(&copySpecs))
+	if (outputJSON)
 	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
+		log_info("Dumping schema into JSON file \"%s\"",
+				 copySpecs.cfPaths.schemafile);
+
+		if (!copydb_prepare_schema_json_file(&copySpecs))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		log_info("Wrote \"%s\"", copySpecs.cfPaths.schemafile);
+
+		/* output the JSON contents from the json schema file */
+		char *json = NULL;
+		long size = 0L;
+
+		if (!read_file(copySpecs.cfPaths.schemafile, &json, &size))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		fformat(stdout, "%s\n", json);
+		free(json);
 	}
-
-	log_info("Wrote \"%s\"", copySpecs.cfPaths.schemafile);
-
-	/* output the JSON contents from the json schema file */
-	char *json = NULL;
-	long size = 0L;
-
-	if (!read_file(copySpecs.cfPaths.schemafile, &json, &size))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	fformat(stdout, "%s\n", json);
-	free(json);
 }
 
 
@@ -1876,13 +1880,23 @@ cli_list_progress(int argc, char **argv)
 		}
 		else
 		{
-			/*
-			 * TODO: parse the JSON summary file, prepare our internal data
-			 * structure with the information found, including pretty printed
-			 * strings for durations etc, and then call print_summary().
-			 */
-			log_fatal("Failed to display summary, please use --json");
-			exit(EXIT_CODE_BAD_ARGS);
+			DatabaseCatalog *sourceDB = &(copySpecs.catalogs.source);
+
+			if (!catalog_open(sourceDB))
+			{
+				/* errors have already been logged */
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			(void) print_summary(&copySpecs);
+
+			if (!catalog_close(sourceDB))
+			{
+				/* errors have already been logged */
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			exit(EXIT_CODE_QUIT);
 		}
 	}
 

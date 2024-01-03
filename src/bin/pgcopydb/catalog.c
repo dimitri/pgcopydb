@@ -20,6 +20,7 @@
 #include "schema.h"
 #include "signals.h"
 #include "string_utils.h"
+#include "summary.h"
 
 
 /*
@@ -38,7 +39,8 @@ static char *sourceDBcreateDDLs[] = {
 	")",
 
 	"create table section("
-	"  name text primary key, fetched boolean "
+	"  name text primary key, fetched boolean, "
+	"  start_time_epoch integer, done_time_epoch integer, duration integer"
 	")",
 
 	"create table s_database("
@@ -119,6 +121,14 @@ static char *sourceDBcreateDDLs[] = {
 	"  indexoid integer references s_index(oid) "
 	")",
 
+	"create table timings("
+	"  id integer primary key,"
+	"  label text,"
+	"  start_time_epoch integer, done_time_epoch integer, duration integer, "
+	"  duration_pretty, "
+	"  count integer, bytes integer, bytes_pretty text"
+	")",
+
 	"create table summary("
 	"  pid integer, "
 	"  tableoid integer references s_table(oid), "
@@ -129,6 +139,13 @@ static char *sourceDBcreateDDLs[] = {
 	"  bytes integer, "
 	"  command text, "
 	"  unique(tableoid, partnum)"
+	")",
+
+	"create table vacuum_summary("
+	"  pid integer, "
+	"  tableoid integer references s_table(oid), "
+	"  start_time_epoch integer, done_time_epoch integer, duration integer, "
+	"  unique(tableoid)"
 	")",
 
 	"create table s_table_parts_done("
@@ -166,7 +183,8 @@ static char *sourceDBcreateDDLs[] = {
  */
 static char *filterDBcreateDDLs[] = {
 	"create table section("
-	"  name text primary key, fetched boolean "
+	"  name text primary key, fetched boolean, "
+	"  start_time_epoch integer, done_time_epoch integer, duration integer"
 	")",
 
 	"create table s_coll("
@@ -297,7 +315,8 @@ static char *filterDBcreateDDLs[] = {
  */
 static char *targetDBcreateDDLs[] = {
 	"create table section("
-	"  name text primary key, fetched boolean "
+	"  name text primary key, fetched boolean, "
+	"  start_time_epoch integer, done_time_epoch integer, duration integer"
 	")",
 
 	"create table s_role("
@@ -435,6 +454,22 @@ catalog_init_from_specs(CopyDataSpec *copySpecs)
 	}
 
 	return true;
+}
+
+
+/*
+ * catalog_open_from_specs opens our SQLite databases for internal catalogs.
+ */
+bool
+catalog_open_from_specs(CopyDataSpec *copySpecs)
+{
+	DatabaseCatalog *source = &(copySpecs->catalogs.source);
+	DatabaseCatalog *filter = &(copySpecs->catalogs.filter);
+	DatabaseCatalog *target = &(copySpecs->catalogs.target);
+
+	return catalog_open(source) &&
+		   catalog_open(filter) &&
+		   catalog_open(target);
 }
 
 
@@ -1176,20 +1211,23 @@ catalog_setup_fetch(SQLiteQuery *query)
 	/*
 	 * source_pguri
 	 */
-	int len = sqlite3_column_bytes(query->ppStmt, 1);
-	int bytes = len + 1;
-
-	setup->source_pguri = (char *) calloc(bytes, sizeof(char));
-
-	if (setup->source_pguri == NULL)
+	if (sqlite3_column_type(query->ppStmt, 1) != SQLITE_NULL)
 	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
+		int len = sqlite3_column_bytes(query->ppStmt, 1);
+		int bytes = len + 1;
 
-	strlcpy(setup->source_pguri,
-			(char *) sqlite3_column_text(query->ppStmt, 1),
-			bytes);
+		setup->source_pguri = (char *) calloc(bytes, sizeof(char));
+
+		if (setup->source_pguri == NULL)
+		{
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		strlcpy(setup->source_pguri,
+				(char *) sqlite3_column_text(query->ppStmt, 1),
+				bytes);
+	}
 
 	/*
 	 * target_pguri
@@ -1265,7 +1303,6 @@ catalog_setup_fetch(SQLiteQuery *query)
 				(char *) sqlite3_column_text(query->ppStmt, 6),
 				sizeof(setup->plugin));
 	}
-
 
 	/*
 	 * slot_name (a string buffer)
@@ -1345,7 +1382,7 @@ catalog_setup_replication(DatabaseCatalog *catalog,
  * internal catalogs.
  */
 bool
-catalog_register_section(DatabaseCatalog *catalog, CopyDataSection section)
+catalog_register_section(DatabaseCatalog *catalog, TopLevelTiming *timing)
 {
 	sqlite3 *db = catalog->db;
 
@@ -1355,7 +1392,10 @@ catalog_register_section(DatabaseCatalog *catalog, CopyDataSection section)
 		return false;
 	}
 
-	char *sql = "insert into section(name, fetched) values($1, 1)";
+	char *sql =
+		"insert or replace into section"
+		"(name, fetched, start_time_epoch, done_time_epoch, duration) "
+		"values($1, $2, $3, $4, $5)";
 
 	SQLiteQuery query = { 0 };
 
@@ -1367,8 +1407,11 @@ catalog_register_section(DatabaseCatalog *catalog, CopyDataSection section)
 
 	/* bind our parameters now */
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "section", 0,
-		  CopyDataSectionToString(section) }
+		{ BIND_PARAMETER_TYPE_TEXT, "section", 0, (char *) timing->label },
+		{ BIND_PARAMETER_TYPE_INT, "fetched", 1, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "start", timing->startTime, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "done", timing->doneTime, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "duration", timing->durationMs, NULL }
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -1409,7 +1452,7 @@ catalog_section_state(DatabaseCatalog *catalog, CatalogSection *section)
 		.fetchFunction = &catalog_section_fetch
 	};
 
-	char *sql = "select name, fetched from section where name = $1";
+	char *sql = "select name, fetched, duration from section where name = $1";
 
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
@@ -1455,6 +1498,28 @@ catalog_section_fetch(SQLiteQuery *query)
 			sizeof(section->name));
 
 	section->fetched = sqlite3_column_int(query->ppStmt, 1) == 1;
+
+	section->durationMs = sqlite3_column_int64(query->ppStmt, 2);
+
+	return true;
+}
+
+
+/*
+ * catalog_total_duration loops over a catalog section array and compute the
+ * total duration in milliseconds.
+ */
+bool
+catalog_total_duration(DatabaseCatalog *catalog)
+{
+	catalog->totalDurationMs = 0;
+
+	for (int i = 1; i < DATA_SECTION_COUNT; i++)
+	{
+		CatalogSection *s = &(catalog->sections[i]);
+
+		catalog->totalDurationMs += s->durationMs;
+	}
 
 	return true;
 }
@@ -2687,15 +2752,21 @@ catalog_s_table_fetch(SQLiteQuery *query)
 	table->reltuples = sqlite3_column_int64(query->ppStmt, 7);
 	table->bytes = sqlite3_column_int64(query->ppStmt, 8);
 
-	strlcpy(table->bytesPretty,
-			(char *) sqlite3_column_text(query->ppStmt, 9),
-			sizeof(table->bytesPretty));
+	if (sqlite3_column_type(query->ppStmt, 9) != SQLITE_NULL)
+	{
+		strlcpy(table->bytesPretty,
+				(char *) sqlite3_column_text(query->ppStmt, 9),
+				sizeof(table->bytesPretty));
+	}
 
 	table->excludeData = sqlite3_column_int64(query->ppStmt, 10) == 1;
 
-	strlcpy(table->partKey,
-			(char *) sqlite3_column_text(query->ppStmt, 11),
-			sizeof(table->partKey));
+	if (sqlite3_column_type(query->ppStmt, 11) != SQLITE_NULL)
+	{
+		strlcpy(table->partKey,
+				(char *) sqlite3_column_text(query->ppStmt, 11),
+				sizeof(table->partKey));
+	}
 
 	table->partition.partCount = sqlite3_column_int64(query->ppStmt, 12);
 
@@ -3567,35 +3638,41 @@ catalog_s_index_fetch(SQLiteQuery *query)
 	index->isPrimary = sqlite3_column_int(query->ppStmt, 9) == 1;
 	index->isUnique = sqlite3_column_int(query->ppStmt, 10) == 1;
 
-	int len = sqlite3_column_bytes(query->ppStmt, 11);
-	int bytes = len + 1;
-
-	index->indexColumns = (char *) calloc(bytes, sizeof(char));
-
-	if (index->indexColumns == NULL)
+	if (sqlite3_column_type(query->ppStmt, 11) != SQLITE_NULL)
 	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
-		return false;
+		int len = sqlite3_column_bytes(query->ppStmt, 11);
+		int bytes = len + 1;
+
+		index->indexColumns = (char *) calloc(bytes, sizeof(char));
+
+		if (index->indexColumns == NULL)
+		{
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		strlcpy(index->indexColumns,
+				(char *) sqlite3_column_text(query->ppStmt, 11),
+				bytes);
 	}
 
-	strlcpy(index->indexColumns,
-			(char *) sqlite3_column_text(query->ppStmt, 11),
-			bytes);
-
-	len = sqlite3_column_bytes(query->ppStmt, 12);
-	bytes = len + 1;
-
-	index->indexDef = (char *) calloc(bytes, sizeof(char));
-
-	if (index->indexDef == NULL)
+	if (sqlite3_column_type(query->ppStmt, 12) != SQLITE_NULL)
 	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
+		int len = sqlite3_column_bytes(query->ppStmt, 12);
+		int bytes = len + 1;
 
-	strlcpy(index->indexDef,
-			(char *) sqlite3_column_text(query->ppStmt, 12),
-			bytes);
+		index->indexDef = (char *) calloc(bytes, sizeof(char));
+
+		if (index->indexDef == NULL)
+		{
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		strlcpy(index->indexDef,
+				(char *) sqlite3_column_text(query->ppStmt, 12),
+				bytes);
+	}
 
 	/* constraint */
 	if (sqlite3_column_type(query->ppStmt, 13) != SQLITE_NULL)
@@ -3609,20 +3686,24 @@ catalog_s_index_fetch(SQLiteQuery *query)
 		index->condeferrable = sqlite3_column_int(query->ppStmt, 15) == 1;
 		index->condeferred = sqlite3_column_int(query->ppStmt, 16) == 1;
 
-		len = sqlite3_column_bytes(query->ppStmt, 17);
-		bytes = len + 1;
 
-		index->constraintDef = (char *) calloc(bytes, sizeof(char));
-
-		if (index->constraintDef == NULL)
+		if (sqlite3_column_type(query->ppStmt, 17) != SQLITE_NULL)
 		{
-			log_fatal(ALLOCATION_FAILED_ERROR);
-			return false;
-		}
+			int len = sqlite3_column_bytes(query->ppStmt, 17);
+			int bytes = len + 1;
 
-		strlcpy(index->constraintDef,
-				(char *) sqlite3_column_text(query->ppStmt, 17),
-				bytes);
+			index->constraintDef = (char *) calloc(bytes, sizeof(char));
+
+			if (index->constraintDef == NULL)
+			{
+				log_fatal(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			strlcpy(index->constraintDef,
+					(char *) sqlite3_column_text(query->ppStmt, 17),
+					bytes);
+		}
 	}
 
 	return true;
@@ -5232,28 +5313,37 @@ catalog_s_database_guc_fetch(SQLiteQuery *query)
 
 	property->roleInDatabase = sqlite3_column_int(query->ppStmt, 0) == 1;
 
-	strlcpy(property->rolname,
-			(char *) sqlite3_column_text(query->ppStmt, 1),
-			sizeof(property->rolname));
-
-	strlcpy(property->datname,
-			(char *) sqlite3_column_text(query->ppStmt, 2),
-			sizeof(property->datname));
-
-	int len = sqlite3_column_bytes(query->ppStmt, 3);
-	int bytes = len + 1;
-
-	property->setconfig = (char *) calloc(bytes, sizeof(char));
-
-	if (property->setconfig == NULL)
+	if (sqlite3_column_type(query->ppStmt, 1) != SQLITE_NULL)
 	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
-		return false;
+		strlcpy(property->rolname,
+				(char *) sqlite3_column_text(query->ppStmt, 1),
+				sizeof(property->rolname));
 	}
 
-	strlcpy(property->setconfig,
-			(char *) sqlite3_column_text(query->ppStmt, 3),
-			bytes);
+	if (sqlite3_column_type(query->ppStmt, 2) != SQLITE_NULL)
+	{
+		strlcpy(property->datname,
+				(char *) sqlite3_column_text(query->ppStmt, 2),
+				sizeof(property->datname));
+	}
+
+	if (sqlite3_column_type(query->ppStmt, 3) != SQLITE_NULL)
+	{
+		int len = sqlite3_column_bytes(query->ppStmt, 3);
+		int bytes = len + 1;
+
+		property->setconfig = (char *) calloc(bytes, sizeof(char));
+
+		if (property->setconfig == NULL)
+		{
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		strlcpy(property->setconfig,
+				(char *) sqlite3_column_text(query->ppStmt, 3),
+				bytes);
+	}
 
 	return true;
 }
@@ -5493,20 +5583,23 @@ catalog_s_coll_fetch(SQLiteQuery *query)
 			sizeof(coll->collname));
 
 	/* coll->desc is a malloc'ed area */
-	int len = sqlite3_column_bytes(query->ppStmt, 2);
-	int bytes = len + 1;
-
-	coll->desc = (char *) calloc(bytes, sizeof(char));
-
-	if (coll->desc == NULL)
+	if (sqlite3_column_type(query->ppStmt, 2) != SQLITE_NULL)
 	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
+		int len = sqlite3_column_bytes(query->ppStmt, 2);
+		int bytes = len + 1;
 
-	strlcpy(coll->desc,
-			(char *) sqlite3_column_text(query->ppStmt, 2),
-			bytes);
+		coll->desc = (char *) calloc(bytes, sizeof(char));
+
+		if (coll->desc == NULL)
+		{
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		strlcpy(coll->desc,
+				(char *) sqlite3_column_text(query->ppStmt, 2),
+				bytes);
+	}
 
 	strlcpy(coll->restoreListName,
 			(char *) sqlite3_column_text(query->ppStmt, 3),
@@ -6171,20 +6264,23 @@ catalog_s_ext_extconfig_fetch(SQLiteQuery *query)
 			sizeof(conf->relname));
 
 	/* config->condition is a malloc'ed area */
-	int len = sqlite3_column_bytes(query->ppStmt, 6);
-	int bytes = len + 1;
-
-	conf->condition = (char *) calloc(bytes, sizeof(char));
-
-	if (conf->condition == NULL)
+	if (sqlite3_column_type(query->ppStmt, 6) != SQLITE_NULL)
 	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
+		int len = sqlite3_column_bytes(query->ppStmt, 6);
+		int bytes = len + 1;
 
-	strlcpy(conf->condition,
-			(char *) sqlite3_column_text(query->ppStmt, 6),
-			bytes);
+		conf->condition = (char *) calloc(bytes, sizeof(char));
+
+		if (conf->condition == NULL)
+		{
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		strlcpy(conf->condition,
+				(char *) sqlite3_column_text(query->ppStmt, 6),
+				bytes);
+	}
 
 	conf->relkind = sqlite3_column_int(query->ppStmt, 7);
 
@@ -6544,13 +6640,19 @@ catalog_s_depend_fetch(SQLiteQuery *query)
 	/* we have a single char deptype */
 	dep->deptype = deptype[0];
 
-	strlcpy(dep->type,
-			(char *) sqlite3_column_text(query->ppStmt, 7),
-			sizeof(dep->type));
+	if (sqlite3_column_type(query->ppStmt, 7) != SQLITE_NULL)
+	{
+		strlcpy(dep->type,
+				(char *) sqlite3_column_text(query->ppStmt, 7),
+				sizeof(dep->type));
+	}
 
-	strlcpy(dep->identity,
-			(char *) sqlite3_column_text(query->ppStmt, 8),
-			sizeof(dep->identity));
+	if (sqlite3_column_type(query->ppStmt, 8) != SQLITE_NULL)
+	{
+		strlcpy(dep->identity,
+				(char *) sqlite3_column_text(query->ppStmt, 8),
+				sizeof(dep->identity));
+	}
 
 	return true;
 }
@@ -7127,7 +7229,7 @@ catalog_sql_execute(SQLiteQuery *query)
 		if (rc != SQLITE_DONE)
 		{
 			log_error("Failed to execute statement: %s", query->sql);
-			log_error("[SQLite] %s", sqlite3_errmsg(query->db));
+			log_error("[SQLite %d] %s", rc, sqlite3_errstr(rc));
 
 			(void) sqlite3_clear_bindings(query->ppStmt);
 			(void) sqlite3_finalize(query->ppStmt);
@@ -7153,7 +7255,7 @@ catalog_sql_execute(SQLiteQuery *query)
 			if (rc != SQLITE_ROW)
 			{
 				log_error("Failed to step through statement: %s", query->sql);
-				log_error("[SQLite] %s", sqlite3_errmsg(query->db));
+				log_error("[SQLite %d] %s", rc, sqlite3_errstr(rc));
 
 				(void) sqlite3_clear_bindings(query->ppStmt);
 				(void) sqlite3_finalize(query->ppStmt);
@@ -7174,7 +7276,7 @@ catalog_sql_execute(SQLiteQuery *query)
 			if (catalog_sql_step(query) != SQLITE_DONE)
 			{
 				log_error("Failed to execute statement: %s", query->sql);
-				log_error("[SQLite] %s", sqlite3_errmsg(query->db));
+				log_error("[SQLite %d] %s", rc, sqlite3_errstr(rc));
 
 				(void) sqlite3_clear_bindings(query->ppStmt);
 				(void) sqlite3_finalize(query->ppStmt);
@@ -7185,18 +7287,20 @@ catalog_sql_execute(SQLiteQuery *query)
 	}
 
 	/* clean-up after execute */
-	if (sqlite3_clear_bindings(query->ppStmt) != SQLITE_OK)
+	int rc = sqlite3_clear_bindings(query->ppStmt);
+
+	if (rc != SQLITE_OK)
 	{
-		log_error("Failed to clear SQLite bindings: %s",
-				  sqlite3_errmsg(query->db));
+		log_error("Failed to clear SQLite bindings: %s", sqlite3_errstr(rc));
 		return false;
 	}
 
 	/* reset the prepared Statement too */
-	if (sqlite3_reset(query->ppStmt) != SQLITE_OK)
+	rc = sqlite3_reset(query->ppStmt);
+
+	if (rc != SQLITE_OK)
 	{
-		log_error("Failed to reset SQLite statement: %s",
-				  sqlite3_errmsg(query->db));
+		log_error("Failed to reset SQLite statement: %s", sqlite3_errstr(rc));
 		return false;
 	}
 
@@ -7332,7 +7436,9 @@ catalog_bind_parameters(sqlite3 *db,
 			{
 				int rc;
 
-				if (p->strVal == NULL)
+				/* deal with empty string[] buffers same as NULL pointers */
+				if (p->strVal == NULL ||
+					IS_EMPTY_STRING_BUFFER(p->strVal))
 				{
 					rc = sqlite3_bind_null(ppStmt, n);
 
@@ -7384,4 +7490,48 @@ catalog_bind_parameters(sqlite3 *db,
 	destroyPQExpBuffer(debugParameters);
 
 	return true;
+}
+
+
+/*
+ * catalog_start_timing starts our timing.
+ */
+void
+catalog_start_timing(TopLevelTiming *timing)
+{
+	/*
+	 * In some cases the startTime is set here first and then later registered
+	 * to the catalogs via a call to summary_start_timing. So if the startTime
+	 * has already been set previously, just keep whatever value is already
+	 * there.
+	 */
+	if (timing->startTime == 0)
+	{
+		timing->startTime = time(NULL);
+		INSTR_TIME_SET_CURRENT(timing->startTimeInstr);
+	}
+}
+
+
+/*
+ * catalog_start_timing stops our timing and compute the duration in
+ * milliseconds.
+ */
+void
+catalog_stop_timing(TopLevelTiming *timing)
+{
+	timing->doneTime = time(NULL);
+
+	/* cumulative timings increment their duration separately */
+	if (!timing->cumulative)
+	{
+		INSTR_TIME_SET_CURRENT(timing->durationInstr);
+		INSTR_TIME_SUBTRACT(timing->durationInstr, timing->startTimeInstr);
+
+		timing->durationMs = INSTR_TIME_GET_MILLISEC(timing->durationInstr);
+
+		IntervalToString(timing->durationMs,
+						 timing->ppDuration,
+						 INTSTRING_MAX_DIGITS);
+	}
 }

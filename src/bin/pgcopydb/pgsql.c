@@ -3360,7 +3360,8 @@ bool
 pg_copy_large_object(PGSQL *src,
 					 PGSQL *dst,
 					 bool dropIfExists,
-					 uint32_t blobOid)
+					 uint32_t blobOid,
+					 uint64_t *bytesTransmitted)
 {
 	log_debug("Copying large object %u", blobOid);
 
@@ -3515,6 +3516,8 @@ pg_copy_large_object(PGSQL *src,
 		}
 
 		(void) free(buffer);
+
+		*bytesTransmitted += bytesRead;
 	} while (bytesRead > 0);
 
 	lo_close(src->connection, srcfd);

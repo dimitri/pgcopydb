@@ -231,13 +231,6 @@ cli_copy_schema(int argc, char **argv)
 
 	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_SCHEMA);
 
-	Summary summary = { 0 };
-	TopLevelTimings *timings = &(summary.timings);
-
-	(void) summary_set_current_time(timings, TIMING_STEP_START);
-
-	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_SCHEMA_DUMP);
-
 	/*
 	 * First, we need to open a snapshot that we're going to re-use in all our
 	 * connections to the source database. When the --snapshot option has been
@@ -269,8 +262,6 @@ cli_copy_schema(int argc, char **argv)
 	/* now close the snapshot we kept for the whole operation */
 	(void) copydb_close_snapshot(&copySpecs);
 
-	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_PREPARE_SCHEMA);
-
 	if (!copydb_target_prepare_schema(&copySpecs))
 	{
 		/* errors have already been logged */
@@ -278,20 +269,11 @@ cli_copy_schema(int argc, char **argv)
 		exit(EXIT_CODE_TARGET);
 	}
 
-	(void) summary_set_current_time(timings, TIMING_STEP_AFTER_PREPARE_SCHEMA);
-
-	(void) summary_set_current_time(timings, TIMING_STEP_BEFORE_FINALIZE_SCHEMA);
-
 	if (!copydb_target_finalize_schema(&copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);
 	}
-
-	(void) summary_set_current_time(timings, TIMING_STEP_AFTER_FINALIZE_SCHEMA);
-	(void) summary_set_current_time(timings, TIMING_STEP_END);
-
-	(void) print_summary(&summary, &copySpecs);
 }
 
 
@@ -309,11 +291,6 @@ cli_copy_data(int argc, char **argv)
 	CopyDataSpec copySpecs = { 0 };
 
 	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_ALL);
-
-	Summary summary = { 0 };
-	TopLevelTimings *timings = &(summary.timings);
-
-	(void) summary_set_current_time(timings, TIMING_STEP_START);
 
 	/*
 	 * First, we need to open a snapshot that we're going to re-use in all our
@@ -351,9 +328,6 @@ cli_copy_data(int argc, char **argv)
 				  copySpecs.sourceSnapshot.pguri);
 		exit(EXIT_CODE_SOURCE);
 	}
-
-	(void) summary_set_current_time(timings, TIMING_STEP_END);
-	(void) print_summary(&summary, &copySpecs);
 }
 
 
@@ -368,11 +342,6 @@ cli_copy_table_data(int argc, char **argv)
 	CopyDataSpec copySpecs = { 0 };
 
 	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_TABLE_DATA);
-
-	Summary summary = { 0 };
-	TopLevelTimings *timings = &(summary.timings);
-
-	(void) summary_set_current_time(timings, TIMING_STEP_START);
 
 	/*
 	 * First, we need to open a snapshot that we're going to re-use in all our
@@ -408,9 +377,6 @@ cli_copy_table_data(int argc, char **argv)
 				  copySpecs.sourceSnapshot.pguri);
 		exit(EXIT_CODE_SOURCE);
 	}
-
-	(void) summary_set_current_time(timings, TIMING_STEP_END);
-	(void) print_summary(&summary, &copySpecs);
 }
 
 
@@ -427,11 +393,6 @@ cli_copy_sequences(int argc, char **argv)
 	CopyDataSpec copySpecs = { 0 };
 
 	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_SET_SEQUENCES);
-
-	Summary summary = { 0 };
-	TopLevelTimings *timings = &(summary.timings);
-
-	(void) summary_set_current_time(timings, TIMING_STEP_START);
 
 	/*
 	 * First, we need to open a snapshot that we're going to re-use in all our
@@ -465,9 +426,6 @@ cli_copy_sequences(int argc, char **argv)
 				  copySpecs.sourceSnapshot.pguri);
 		exit(EXIT_CODE_SOURCE);
 	}
-
-	(void) summary_set_current_time(timings, TIMING_STEP_END);
-	(void) print_summary(&summary, &copySpecs);
 }
 
 
@@ -481,11 +439,6 @@ cli_copy_indexes(int argc, char **argv)
 	CopyDataSpec copySpecs = { 0 };
 
 	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_INDEXES);
-
-	Summary summary = { 0 };
-	TopLevelTimings *timings = &(summary.timings);
-
-	(void) summary_set_current_time(timings, TIMING_STEP_START);
 
 	/*
 	 * First, we need to open a snapshot that we're going to re-use in all our
@@ -519,9 +472,6 @@ cli_copy_indexes(int argc, char **argv)
 				  copySpecs.sourceSnapshot.pguri);
 		exit(EXIT_CODE_SOURCE);
 	}
-
-	(void) summary_set_current_time(timings, TIMING_STEP_END);
-	(void) print_summary(&summary, &copySpecs);
 }
 
 
@@ -536,11 +486,6 @@ cli_copy_constraints(int argc, char **argv)
 	CopyDataSpec copySpecs = { 0 };
 
 	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_CONSTRAINTS);
-
-	Summary summary = { 0 };
-	TopLevelTimings *timings = &(summary.timings);
-
-	(void) summary_set_current_time(timings, TIMING_STEP_START);
 
 	log_info("Create constraints");
 
@@ -576,9 +521,6 @@ cli_copy_constraints(int argc, char **argv)
 				  copySpecs.sourceSnapshot.pguri);
 		exit(EXIT_CODE_SOURCE);
 	}
-
-	(void) summary_set_current_time(timings, TIMING_STEP_END);
-	(void) print_summary(&summary, &copySpecs);
 }
 
 
@@ -595,11 +537,6 @@ cli_copy_blobs(int argc, char **argv)
 
 	/* ensure defaults */
 	copySpecs.skipLargeObjects = false;
-
-	Summary summary = { 0 };
-	TopLevelTimings *timings = &(summary.timings);
-
-	(void) summary_set_current_time(timings, TIMING_STEP_START);
 
 	log_info("Copy large objects");
 
@@ -633,9 +570,6 @@ cli_copy_blobs(int argc, char **argv)
 				  copySpecs.sourceSnapshot.pguri);
 		exit(EXIT_CODE_SOURCE);
 	}
-
-	(void) summary_set_current_time(timings, TIMING_STEP_END);
-	(void) print_summary(&summary, &copySpecs);
 }
 
 

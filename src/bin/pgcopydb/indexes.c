@@ -28,6 +28,126 @@ static bool copydb_copy_all_indexes_hook(void *ctx, SourceIndex *index);
 
 
 /*
+ * copydb_start_index_supervisor starts a CREATE INDEX supervisor process.
+ */
+bool
+copydb_start_index_supervisor(CopyDataSpec *specs)
+{
+	/*
+	 * Flush stdio channels just before fork, to avoid double-output problems.
+	 */
+	fflush(stdout);
+	fflush(stderr);
+
+	int fpid = fork();
+
+	switch (fpid)
+	{
+		case -1:
+		{
+			log_error("Failed to fork copy supervisor process: %m");
+			return false;
+		}
+
+		case 0:
+		{
+			/* child process runs the command */
+			(void) set_ps_title("pgcopydb: index supervisor");
+
+			if (!copydb_index_supervisor(specs))
+			{
+				log_error("Failed to create indexes, see above for details");
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			exit(EXIT_CODE_QUIT);
+		}
+
+		default:
+		{
+			/* fork succeeded, in parent */
+			break;
+		}
+	}
+
+	/* now we're done, and we want async behavior, do not wait */
+	return true;
+}
+
+
+/*
+ * copydb_index_supervisor starts the create index workers and does the
+ * waitpid() dance for them.
+ */
+bool
+copydb_index_supervisor(CopyDataSpec *specs)
+{
+	pid_t pid = getpid();
+
+	log_notice("Started INDEX supervisor %d [%d]", pid, getppid());
+
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	if (!catalog_open(sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * Start cumulative sections timings for indexes and constraints
+	 */
+	if (!summary_start_timing(sourceDB, TIMING_SECTION_CREATE_INDEX))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!summary_start_timing(sourceDB, TIMING_SECTION_ALTER_TABLE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!copydb_start_index_workers(specs))
+	{
+		log_error("Failed to start index workers, see above for details");
+		return false;
+	}
+
+	/*
+	 * Now just wait for the create index processes to be done.
+	 */
+	if (!copydb_wait_for_subprocesses(specs->failFast))
+	{
+		log_error("Some INDEX worker process(es) have exited with error, "
+				  "see above for details");
+
+		if (specs->failFast)
+		{
+			(void) copydb_fatal_exit();
+		}
+
+		return false;
+	}
+
+	if (!summary_stop_timing(sourceDB, TIMING_SECTION_CREATE_INDEX))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!summary_stop_timing(sourceDB, TIMING_SECTION_ALTER_TABLE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * copydb_start_index_workers create as many sub-process as needed, per
  * --index-jobs.
  */
@@ -516,7 +636,7 @@ copydb_copy_all_indexes(CopyDataSpec *specs)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	if (specs->dirState.indexCopyIsDone)
+	if (specs->runState.indexCopyIsDone)
 	{
 		log_info("Skipping indexes, already done on a previous run");
 		return true;
@@ -543,7 +663,7 @@ copydb_copy_all_indexes(CopyDataSpec *specs)
 			 specs->indexJobs);
 
 	/* first start index workers that feed from the indexQueue */
-	if (!copydb_start_index_workers(specs))
+	if (!copydb_start_index_supervisor(specs))
 	{
 		/* errors have already been logged */
 		return false;
@@ -758,6 +878,16 @@ copydb_mark_index_as_done(CopyDataSpec *specs, CopyIndexSpec *indexSpecs)
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
 	if (!summary_finish_index(sourceDB, indexSpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!summary_increment_timing(sourceDB,
+								  TIMING_SECTION_CREATE_INDEX,
+								  1, /* count */
+								  0, /* bytes */
+								  indexSpecs->summary.durationMs))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1055,6 +1185,16 @@ copydb_create_constraints_hook(void *ctx, SourceIndex *index)
 	}
 
 	if (!summary_finish_constraint(sourceDB, &indexSpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!summary_increment_timing(sourceDB,
+								  TIMING_SECTION_ALTER_TABLE,
+								  1, /* count */
+								  0, /* bytes */
+								  indexSpecs.summary.durationMs))
 	{
 		/* errors have already been logged */
 		return false;

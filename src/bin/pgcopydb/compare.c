@@ -985,19 +985,6 @@ compare_fetch_schemas(CopyDataSpec *copySpecs,
 		return false;
 	}
 
-	/* copy the source schema to the compare file */
-	strlcpy(sourceSpecs->cfPaths.schemafile,
-			sourceSpecs->cfPaths.compare.sschemafile,
-			MAXPGPATH);
-
-	if (!copydb_prepare_schema_json_file(sourceSpecs))
-	{
-		log_fatal("Failed to store the source database schema to file \"%s\", "
-				  "see above for details",
-				  sourceSpecs->cfPaths.schemafile);
-		return false;
-	}
-
 	/*
 	 * Tweak the targetSpecs so that we fetch catalogs using the same code as
 	 * for the source database, but target the target catalog database instead.
@@ -1046,19 +1033,6 @@ compare_fetch_schemas(CopyDataSpec *copySpecs,
 	{
 		log_fatal("Failed to retrieve source database schema, "
 				  "see above for details.");
-		return false;
-	}
-
-	/* copy the target schema to the compare file */
-	strlcpy(targetSpecs->cfPaths.schemafile,
-			targetSpecs->cfPaths.compare.tschemafile,
-			MAXPGPATH);
-
-	if (!copydb_prepare_schema_json_file(targetSpecs))
-	{
-		log_fatal("Failed to store the target database schema to file \"%s\", "
-				  "see above for details",
-				  targetSpecs->cfPaths.schemafile);
 		return false;
 	}
 
