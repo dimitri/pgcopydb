@@ -41,3 +41,4 @@ lib*.pc
 /env/
 /GIT-VERSION-FILE
 /version
+ci/Dockerfile.docs

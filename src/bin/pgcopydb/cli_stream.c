@@ -66,7 +66,7 @@ static CommandLine stream_setup_command =
 static CommandLine stream_cleanup_command =
 	make_command(
 		"cleanup",
-		"cleanup source and target systems for logical decoding",
+		"Cleanup source and target systems for logical decoding",
 		"",
 		"  --source         Postgres URI to the source database\n"
 		"  --target         Postgres URI to the target database\n"

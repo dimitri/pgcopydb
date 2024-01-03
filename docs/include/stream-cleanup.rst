@@ -1,6 +1,6 @@
 ::
 
-   pgcopydb stream cleanup: cleanup source and target systems for logical decoding
+   pgcopydb stream cleanup: Cleanup source and target systems for logical decoding
    usage: pgcopydb stream cleanup 
    
      --source         Postgres URI to the source database

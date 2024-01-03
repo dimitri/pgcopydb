@@ -9,6 +9,13 @@ set -o pipefail
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 INCLUDE_DIR="$SCRIPT_DIR/include"
 
+# set PGCOPYDB if not already set
+if [ -z "${PGCOPYDB:-}" ]; then
+    PGCOPYDB="${SCRIPT_DIR}/../src/bin/pgcopydb/pgcopydb"
+fi
+
+echo "Updating documentation templates using binary ${PGCOPYDB}"
+
 # Given a single command, print the help text, and wrap the output in rst style
 # code block format in a file under include directory
 function print_help_to_file() {
@@ -18,17 +25,26 @@ function print_help_to_file() {
     local cmd
     cmd=$(echo "$*" | sed -E "s/^ +//")
 
-    # Replace spaces in the file name with dashes We print the output of
-    # `pgcopydb --help` to `pgcopydb.rst`
-    # `pgcopydb compare --help` to `compare.rst`
-    # `pgcopydb compare data --help` to `compare-data.rst`
+    # Replace spaces in the command name with dashes to generate the file name.
+    #
+    # We print the output of
+    #   `pgcopydb --help` to `pgcopydb.rst`
+    #   `pgcopydb compare --help` to `compare.rst`
+    #   `pgcopydb compare data --help` to `compare-data.rst` etc.
+    #
+    #  One exception is the `pgcopydb help` command. We print the output of
+    #  `pgcopydb help` to `help.rst` instead of supplying a `--help` argument to
+    #  the command.
     local file_path
     local help_cmd
     if [ "${cmd}" = "" ]; then
-        help_cmd="pgcopydb --help 2>&1"
+        help_cmd="${PGCOPYDB} --help 2>&1"
         file_path="${INCLUDE_DIR}/pgcopydb.rst"
+    elif [ "${cmd}" = "help" ]; then
+        help_cmd="${PGCOPYDB} help 2>&1"
+        file_path="${INCLUDE_DIR}/help.rst"
     else
-        help_cmd="pgcopydb ${cmd} --help 2>&1"
+        help_cmd="${PGCOPYDB} ${cmd} --help 2>&1"
         file_path="${INCLUDE_DIR}/${cmd// /-}.rst"
     fi
 
@@ -51,6 +67,8 @@ function print_help_to_file() {
 # Parse the output of `pgcopydb help` and call print_help_to_file for each command
 function parse_help_output() {
 
+    local cmd=""
+    local subcmd=""
     # Loop over all the lines of the help text, parse commands and subcommands,
     # and call print_help_to_file for each command.
     #
@@ -115,7 +133,7 @@ function parse_help_output() {
         # print the help message for the subcommand to file
         print_help_to_file "${cmd} ${subcmd}"
 
-    done < <(pgcopydb help 2>&1)
+    done < <(${PGCOPYDB} help 2>&1)
 }
 
 # Delete all the existing help files and recreate them
@@ -124,5 +142,4 @@ parse_help_output
 
 # Remove the help messages for the commands that are not covered in docs
 rm -rf "${INCLUDE_DIR}/fork.rst" \
-       "${INCLUDE_DIR}/help.rst" \
        "${INCLUDE_DIR}/version.rst"
