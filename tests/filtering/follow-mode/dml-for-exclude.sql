@@ -13,5 +13,4 @@ insert into foo.tbl1(desc_text) values ('bar');
 
 -- DML on app.foo should not be migrated because it is
 -- filtered out in exclude.ini
-insert into app.foo(f1) values ('foo');
-
+insert into app.foo(f1) values ('bar');

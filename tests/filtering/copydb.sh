@@ -49,7 +49,24 @@ select NULL as oid, s.restore_list_name, 'sequence owned by'
        (select 1 from source.s_table st where st.oid = s.ownedby);
 EOF
 
-pgcopydb clone --filters /usr/src/pgcopydb/exclude.ini --resume --not-consistent
+coproc (pgcopydb clone --follow --filters /usr/src/pgcopydb/exclude.ini --restart)
+
+# execute DML queries against the source database to test filtering for include.ini
+psql -d "${PGCOPYDB_SOURCE_PGURI}" ${pgopts} --file ./follow-mode/dml-for-exclude.sql
+
+# make sure the inject service has had time to see the final sentinel values
+sleep 2
+
+pgcopydb stream sentinel get
+
+# set the end position to the current position to complete the follow operation
+pgcopydb stream sentinel set endpos --current
+
+# make sure the transform & apply service has had time to see the final sentinel values
+sleep 10
+
+# cleanup the stream
+pgcopydb stream cleanup
 
 export TMPDIR=/tmp/include
 
@@ -58,7 +75,24 @@ pgcopydb list tables --filters /usr/src/pgcopydb/include.ini
 pgcopydb list tables --filters /usr/src/pgcopydb/include.ini --list-skipped
 
 # now another migration with the "include-only" parts of the data
-pgcopydb clone --filters /usr/src/pgcopydb/include.ini --resume --not-consistent
+coproc (pgcopydb clone --follow --filters /usr/src/pgcopydb/include.ini --restart)
+
+# execute DML queries against the source database to test filtering for include.ini
+psql -d "${PGCOPYDB_SOURCE_PGURI}" ${pgopts} --file ./follow-mode/dml-for-include.sql
+
+# make sure the inject service has had time to see the final sentinel values
+sleep 2
+
+pgcopydb stream sentinel get
+
+# set the end position to the current position to complete the follow operation
+pgcopydb stream sentinel set endpos --current
+
+# make sure the inject service has had time to see the final sentinel values
+sleep 10
+
+# cleanup the stream
+pgcopydb stream cleanup
 
 # print out the definition of the copy.foo table
 psql -d ${PGCOPYDB_SOURCE_PGURI} -c '\d app|copy.foo'
@@ -83,48 +117,13 @@ do
     diff $e $r || exit 1
 done
 
-# --follow tests
-pgcopydb stream cleanup
-
-# --follow with inclusion filters
-coproc (pgcopydb follow --plugin test_decoding --filters /usr/src/pgcopydb/include.ini --restart)
-
-# execute DML queries against the source database to test filtering for include.ini
-psql -d "${PGCOPYDB_SOURCE_PGURI}" ${pgopts} --file ./follow-mode/dml-for-include.sql
-
-# make sure the inject service has had time to see the final sentinel values
-sleep 2
-
-pgcopydb stream sentinel get
-
-# set the end position to the current position to complete the follow operation
-pgcopydb stream sentinel set endpos --current --debug
-
-# cleanup the stream
-pgcopydb stream cleanup
-
-# --follow with exclusion filters
-coproc (pgcopydb follow --plugin test_decoding --filters /usr/src/pgcopydb/exclude.ini --restart --not-consistent)
-
-# execute DML queries against the source database to test filtering for include.ini
-psql -d "${PGCOPYDB_SOURCE_PGURI}" ${pgopts} --file ./follow-mode/dml-for-exclude.sql
-
-# set the end position to the current position to complete the follow operation
-pgcopydb stream sentinel set endpos --current
-
-# make sure the inject service has had time to see the final sentinel values
-sleep 2
-
-# cleanup the stream
-pgcopydb stream cleanup
-
 # run assertions on the target database
 for f in ./follow-mode/sql/*.sql
 do
     t=`basename $f .sql`
     r=/tmp/results/${t}.out
-    e=./expected/${t}.out
-    psql -d "${PGCOPYDB_TARGET_PGURI}" ${pgopts} --file ./sql/$t.sql &> $r
+    e=./follow-mode/expected/${t}.out
+    psql -d "${PGCOPYDB_TARGET_PGURI}" ${pgopts} --file ./follow-mode/sql/$t.sql &> $r
     test -f $e || cat $r
     diff $e $r || cat $r
     diff $e $r || exit 1

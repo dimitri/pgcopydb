@@ -11,8 +11,6 @@ update public.actor set first_name = 'JENNIFER' where actor_id = 1;
 -- filtered out in include.ini
 insert into foo.tbl1(desc_text) values ('foo');
 
--- DML on public.rental should not be migrated because it is
--- filtered out in include.ini
-delete from public.payment where rental_id = 3;
-delete from public.rental where rental_id = 3;
-
+-- DML on public.film should be migrated because it is
+-- filtered in include.ini
+delete from public.film_category where film_id = 1;
