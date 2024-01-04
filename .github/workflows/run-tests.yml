@@ -37,7 +37,7 @@ jobs:
           - endpos-in-multi-wal-txn
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0 # all history for all branches and tags
 
@@ -61,7 +61,7 @@ jobs:
     runs-on: ubuntu-latest
     container: citus/stylechecker:latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
 
     - name: Check C style
       run: citus_indent --check
