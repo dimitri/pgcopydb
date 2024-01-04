@@ -17,14 +17,7 @@ At the moment, the ``pgcopydb compare`` tool is pretty limited in terms of
 schema support: it only covers what pgcopydb needs to know about the
 database schema, which isn't much.
 
-::
-
-   pgcopydb compare: Compare source and target databases
-
-   Available commands:
-     pgcopydb compare
-       schema  Compare source and target schema
-       data    Compare source and target data
+.. include:: ../include/compare.rst
 
 .. _pgcopydb_compare_schema:
 
@@ -37,15 +30,7 @@ The command ``pgcopydb compare schema`` connects to the source and target
 databases and executes SQL queries using the Postgres catalogs to get a list
 of tables, indexes, constraints and sequences there.
 
-::
-
-   pgcopydb compare schema: Compare source and target schema
-   usage: pgcopydb compare schema  --source ...
-
-     --source         Postgres URI to the source database
-     --target         Postgres URI to the target database
-     --dir            Work directory to use
-
+.. include:: ../include/compare-schema.rst
 
 .. _pgcopydb_compare_data:
 
@@ -83,16 +68,7 @@ count and a checksum for each table::
 
 Running such a query on a large table can take a lot of time.
 
-::
-
-   pgcopydb compare data: Compare source and target data
-   usage: pgcopydb compare data  --source ...
-
-     --source         Postgres URI to the source database
-     --target         Postgres URI to the target database
-     --dir            Work directory to use
-     --json           Format the output using JSON
-
+.. include:: ../include/compare-data.rst
 
 Options
 -------

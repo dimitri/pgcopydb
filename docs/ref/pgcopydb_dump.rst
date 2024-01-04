@@ -7,14 +7,7 @@ pgcopydb dump - Dump database objects from a Postgres instance
 
 This command prefixes the following sub-commands:
 
-::
-
-   pgcopydb dump
-     schema     Dump source database schema as custom files in target directory
-     pre-data   Dump source database pre-data schema as custom files in target directory
-     post-data  Dump source database post-data schema as custom files in target directory
-     roles      Dump source database roles as custome file in work directory
-
+.. include:: ../include/dump.rst
 
 .. _pgcopydb_dump_schema:
 
@@ -26,15 +19,7 @@ pgcopydb dump schema - Dump source database schema as custom files in target dir
 The command ``pgcopydb dump schema`` uses pg_dump to export SQL schema
 definitions from the given source Postgres instance.
 
-::
-
-   pgcopydb dump schema: Dump source database schema as custom files in target directory
-   usage: pgcopydb dump schema  --source <URI> --target <dir>
-
-     --source          Postgres URI to the source database
-     --target          Directory where to save the dump files
-     --dir             Work directory to use
-     --snapshot        Use snapshot obtained with pg_export_snapshot
+.. include:: ../include/dump-schema.rst
 
 .. _pgcopydb_dump_pre_data:
 
@@ -46,15 +31,7 @@ pgcopydb dump pre-data - Dump source database pre-data schema as custom files in
 The command ``pgcopydb dump pre-data`` uses pg_dump to export SQL schema
 *pre-data* definitions from the given source Postgres instance.
 
-::
-
-   pgcopydb dump pre-data: Dump source database pre-data schema as custom files in target directory
-   usage: pgcopydb dump schema  --source <URI> --target <dir>
-
-     --source          Postgres URI to the source database
-     --target          Directory where to save the dump files
-     --dir             Work directory to use
-     --snapshot        Use snapshot obtained with pg_export_snapshot
+.. include:: ../include/dump-pre-data.rst
 
 .. _pgcopydb_dump_post_data:
 
@@ -66,16 +43,7 @@ pgcopydb dump post-data - Dump source database post-data schema as custom files 
 The command ``pgcopydb dump post-data`` uses pg_dump to export SQL schema
 *post-data* definitions from the given source Postgres instance.
 
-::
-
-   pgcopydb dump post-data: Dump source database post-data schema as custom files in target directory
-   usage: pgcopydb dump schema  --source <URI> --target <dir>
-
-     --source          Postgres URI to the source database
-     --target          Directory where to save the dump files
-     --dir             Work directory to use
-     --snapshot        Use snapshot obtained with pg_export_snapshot
-
+.. include:: ../include/dump-post-data.rst
 
 .. _pgcopydb_dump_roles:
 
@@ -87,15 +55,7 @@ pgcopydb dump roles - Dump source database roles as custome file in work directo
 The command ``pgcopydb dump roles`` uses pg_dumpall --roles-only to export
 SQL definitions of the roles found on the source Postgres instance.
 
-::
-
-   pgcopydb dump roles: Dump source database roles as custome file in work directory
-   usage: pgcopydb dump roles  --source <URI>
-
-     --source            Postgres URI to the source database
-     --target            Directory where to save the dump files
-     --dir               Work directory to use
-     --no-role-passwords Do not dump passwords for roles
+.. include:: ../include/dump-roles.rst
 
 The ``pg_dumpall --roles-only`` is used to fetch the list of roles from the
 source database, and this command includes support for passwords. As a
