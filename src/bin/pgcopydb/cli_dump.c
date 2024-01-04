@@ -133,7 +133,7 @@ cli_dump_schema_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:D:PrRCNVvdzqh",
+	while ((c = getopt_long(argc, argv, "S:T:D:PrReCNVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
