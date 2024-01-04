@@ -9,6 +9,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <gc.h>
+
 #include "postgres.h"
 #include "postgres_fe.h"
 #include "access/xlog_internal.h"
@@ -970,7 +972,7 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 	 */
 	DatabaseCatalog *sourceDB = privateContext->sourceDB;
 
-	SourceTable *table = (SourceTable *) calloc(1, sizeof(SourceTable));
+	SourceTable *table = (SourceTable *) GC_malloc(sizeof(SourceTable));
 
 	if (table == NULL)
 	{
@@ -984,7 +986,6 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 										table))
 	{
 		/* errors have already been logged */
-		free(table);
 		return false;
 	}
 

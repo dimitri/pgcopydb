@@ -22,6 +22,7 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
     libpam-dev \
     libpq-dev \
     libpq5 \
+	libgc-dev \
     libreadline-dev \
     libselinux1-dev \
     libsqlite3-dev \

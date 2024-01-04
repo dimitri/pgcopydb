@@ -9,6 +9,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <gc.h>
+
 #include "postgres.h"
 #include "postgres_fe.h"
 #include "access/xlog_internal.h"
@@ -446,7 +448,7 @@ stream_apply_file(StreamApplyContext *context)
 	}
 
 	content.count = countLines(content.buffer);
-	content.lines = (char **) calloc(content.count, sizeof(char *));
+	content.lines = (char **) GC_malloc(content.count * sizeof(char *));
 	content.count = splitLines(content.buffer, content.lines, content.count);
 
 	if (content.lines == NULL)
@@ -476,9 +478,6 @@ stream_apply_file(StreamApplyContext *context)
 		if (!parseSQLAction(sql, metadata))
 		{
 			/* errors have already been logged */
-			free(content.buffer);
-			free(content.lines);
-
 			return false;
 		}
 
@@ -494,9 +493,6 @@ stream_apply_file(StreamApplyContext *context)
 					  content.filename,
 					  i + 1,
 					  content.count);
-
-			free(content.buffer);
-			free(content.lines);
 
 			return false;
 		}
@@ -522,16 +518,10 @@ stream_apply_file(StreamApplyContext *context)
 					  "see above for details",
 					  content.filename);
 
-			free(content.buffer);
-			free(content.lines);
 
 			return false;
 		}
 	}
-
-	/* free dynamic memory that's not needed anymore */
-	free(content.buffer);
-	free(content.lines);
 
 	/*
 	 * Each time we are done applying a file, we update our progress and

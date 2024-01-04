@@ -12,6 +12,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <gc.h>
+
 #include "postgres.h"
 #include "postgres_fe.h"
 #include "libpq-fe.h"
@@ -906,14 +908,12 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 	}
 
 	content.count = countLines(content.buffer);
-	content.lines = (char **) calloc(content.count, sizeof(char *));
+	content.lines = (char **) GC_malloc(content.count * sizeof(char *));
 	content.count = splitLines(content.buffer, content.lines, content.count);
 
 	if (content.lines == NULL)
 	{
 		log_error(ALLOCATION_FAILED_ERROR);
-		free(content.buffer);
-		free(content.lines);
 		return false;
 	}
 
@@ -936,8 +936,6 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 	if (privateContext->sqlFile == NULL)
 	{
 		log_error("Failed to open file \"%s\"", tempfilename);
-		free(content.buffer);
-		free(content.lines);
 		return false;
 	}
 
@@ -967,8 +965,6 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 		{
 			/* errors have already been logged */
 			json_value_free(json);
-			free(content.buffer);
-			free(content.lines);
 			return false;
 		}
 
@@ -1001,8 +997,6 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 		{
 			log_error("Failed to parse JSON message: %s", message);
 			json_value_free(json);
-			free(content.buffer);
-			free(content.lines);
 			return false;
 		}
 
@@ -1018,8 +1012,6 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 		{
 			log_error("Failed to transform and flush the current message, "
 					  "see above for details");
-			free(content.buffer);
-			free(content.lines);
 			return false;
 		}
 
@@ -1036,8 +1028,6 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 	if (fclose(privateContext->sqlFile) == EOF)
 	{
 		log_error("Failed to write file \"%s\"", tempfilename);
-		free(content.buffer);
-		free(content.lines);
 		return false;
 	}
 
@@ -1052,8 +1042,6 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 		log_error("Failed to move \"%s\" to \"%s\": %m",
 				  tempfilename,
 				  sqlfilename);
-		free(content.buffer);
-		free(content.lines);
 		return false;
 	}
 
@@ -1061,8 +1049,6 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 			 content.count,
 			 sqlfilename);
 
-	free(content.buffer);
-	free(content.lines);
 
 	return true;
 }

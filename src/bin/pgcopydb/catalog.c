@@ -10,6 +10,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <gc.h>
 #include <sqlite3.h>
 
 #include "catalog.h"
@@ -2372,14 +2373,13 @@ catalog_iter_s_table(DatabaseCatalog *catalog,
 					 SourceTableIterFun *callback)
 {
 	SourceTableIterator *iter =
-		(SourceTableIterator *) calloc(1, sizeof(SourceTableIterator));
+		(SourceTableIterator *) GC_malloc(sizeof(SourceTableIterator));
 
 	iter->catalog = catalog;
 
 	if (!catalog_iter_s_table_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -2388,7 +2388,6 @@ catalog_iter_s_table(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_table_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -2399,7 +2398,6 @@ catalog_iter_s_table(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_table_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -2414,8 +2412,6 @@ catalog_iter_s_table(DatabaseCatalog *catalog,
 			return false;
 		}
 	}
-
-	free(iter);
 
 	return true;
 }
@@ -2431,14 +2427,13 @@ catalog_iter_s_table_nopk(DatabaseCatalog *catalog,
 						  SourceTableIterFun *callback)
 {
 	SourceTableIterator *iter =
-		(SourceTableIterator *) calloc(1, sizeof(SourceTableIterator));
+		(SourceTableIterator *) GC_malloc(sizeof(SourceTableIterator));
 
 	iter->catalog = catalog;
 
 	if (!catalog_iter_s_table_nopk_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -2447,7 +2442,6 @@ catalog_iter_s_table_nopk(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_table_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -2458,7 +2452,6 @@ catalog_iter_s_table_nopk(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_table_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -2473,8 +2466,6 @@ catalog_iter_s_table_nopk(DatabaseCatalog *catalog,
 			return false;
 		}
 	}
-
-	free(iter);
 
 	return true;
 }
@@ -2495,7 +2486,7 @@ catalog_iter_s_table_init(SourceTableIterator *iter)
 		return false;
 	}
 
-	iter->table = (SourceTable *) calloc(1, sizeof(SourceTable));
+	iter->table = (SourceTable *) GC_malloc(sizeof(SourceTable));
 
 	if (iter->table == NULL)
 	{
@@ -2586,7 +2577,7 @@ catalog_iter_s_table_nopk_init(SourceTableIterator *iter)
 		return false;
 	}
 
-	iter->table = (SourceTable *) calloc(1, sizeof(SourceTable));
+	iter->table = (SourceTable *) GC_malloc(sizeof(SourceTable));
 
 	if (iter->table == NULL)
 	{
@@ -2631,7 +2622,6 @@ catalog_iter_s_table_next(SourceTableIterator *iter)
 
 	if (rc == SQLITE_DONE)
 	{
-		free(iter->table);
 		iter->table = NULL;
 
 		return true;
@@ -2758,10 +2748,7 @@ catalog_iter_s_table_finish(SourceTableIterator *iter)
 	SQLiteQuery *query = &(iter->query);
 
 	/* in case we finish before reaching the DONE step */
-	if (iter->table != NULL)
-	{
-		free(iter->table);
-	}
+	iter->table = NULL;
 
 	if (!catalog_sql_finalize(query))
 	{
@@ -2784,7 +2771,7 @@ catalog_iter_s_table_parts(DatabaseCatalog *catalog,
 						   SourceTablePartsIterFun *callback)
 {
 	SourceTablePartsIterator *iter =
-		(SourceTablePartsIterator *) calloc(1, sizeof(SourceTablePartsIterator));
+		(SourceTablePartsIterator *) GC_malloc(sizeof(SourceTablePartsIterator));
 
 	iter->catalog = catalog;
 	iter->oid = oid;
@@ -2792,7 +2779,6 @@ catalog_iter_s_table_parts(DatabaseCatalog *catalog,
 	if (!catalog_iter_s_table_part_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -2801,7 +2787,6 @@ catalog_iter_s_table_parts(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_table_part_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -2812,7 +2797,6 @@ catalog_iter_s_table_parts(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_table_part_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -2828,7 +2812,6 @@ catalog_iter_s_table_parts(DatabaseCatalog *catalog,
 		}
 	}
 
-	free(iter);
 
 	return true;
 }
@@ -2849,7 +2832,7 @@ catalog_iter_s_table_part_init(SourceTablePartsIterator *iter)
 		return false;
 	}
 
-	iter->part = (SourceTableParts *) calloc(1, sizeof(SourceTableParts));
+	iter->part = (SourceTableParts *) GC_malloc(sizeof(SourceTableParts));
 
 	if (iter->part == NULL)
 	{
@@ -2900,7 +2883,6 @@ catalog_iter_s_table_part_next(SourceTablePartsIterator *iter)
 
 	if (rc == SQLITE_DONE)
 	{
-		free(iter->part);
 		iter->part = NULL;
 
 		return true;
@@ -2949,10 +2931,7 @@ catalog_iter_s_table_part_finish(SourceTablePartsIterator *iter)
 	SQLiteQuery *query = &(iter->query);
 
 	/* in case we finish before reaching the DONE step */
-	if (iter->part != NULL)
-	{
-		free(iter->part);
-	}
+	iter->part = NULL;
 
 	if (!catalog_sql_finalize(query))
 	{
@@ -2972,8 +2951,7 @@ bool
 catalog_s_table_fetch_attrs(DatabaseCatalog *catalog, SourceTable *table)
 {
 	SourceTableAttrsIterator *iter =
-		(SourceTableAttrsIterator *) calloc(1,
-											sizeof(SourceTableAttrsIterator));
+		(SourceTableAttrsIterator *) GC_malloc(sizeof(SourceTableAttrsIterator));
 
 	if (iter == NULL)
 	{
@@ -2987,7 +2965,6 @@ catalog_s_table_fetch_attrs(DatabaseCatalog *catalog, SourceTable *table)
 	if (!catalog_iter_s_table_attrs_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -2996,7 +2973,6 @@ catalog_s_table_fetch_attrs(DatabaseCatalog *catalog, SourceTable *table)
 		if (!catalog_iter_s_table_attrs_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 	}
@@ -3004,11 +2980,9 @@ catalog_s_table_fetch_attrs(DatabaseCatalog *catalog, SourceTable *table)
 	if (!catalog_iter_s_table_attrs_finish(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
-	free(iter);
 
 	return true;
 }
@@ -3637,7 +3611,7 @@ catalog_iter_s_index(DatabaseCatalog *catalog,
 					 SourceIndexIterFun *callback)
 {
 	SourceIndexIterator *iter =
-		(SourceIndexIterator *) calloc(1, sizeof(SourceIndexIterator));
+		(SourceIndexIterator *) GC_malloc(sizeof(SourceIndexIterator));
 
 	if (iter == NULL)
 	{
@@ -3650,7 +3624,6 @@ catalog_iter_s_index(DatabaseCatalog *catalog,
 	if (!catalog_iter_s_index_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -3659,7 +3632,6 @@ catalog_iter_s_index(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_index_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -3670,7 +3642,6 @@ catalog_iter_s_index(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_index_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -3685,8 +3656,6 @@ catalog_iter_s_index(DatabaseCatalog *catalog,
 			return false;
 		}
 	}
-
-	free(iter);
 
 	return true;
 }
@@ -3703,7 +3672,7 @@ catalog_iter_s_index_table(DatabaseCatalog *catalog,
 						   SourceIndexIterFun *callback)
 {
 	SourceIndexIterator *iter =
-		(SourceIndexIterator *) calloc(1, sizeof(SourceIndexIterator));
+		(SourceIndexIterator *) GC_malloc(sizeof(SourceIndexIterator));
 
 	iter->catalog = catalog;
 	iter->nspname = nspname;
@@ -3718,7 +3687,6 @@ catalog_iter_s_index_table(DatabaseCatalog *catalog,
 	if (!catalog_iter_s_index_table_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -3727,7 +3695,6 @@ catalog_iter_s_index_table(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_index_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			(void) semaphore_unlock(&(catalog->sema));
 			return false;
 		}
@@ -3739,7 +3706,6 @@ catalog_iter_s_index_table(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_index_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				(void) semaphore_unlock(&(catalog->sema));
 				return false;
 			}
@@ -3752,13 +3718,11 @@ catalog_iter_s_index_table(DatabaseCatalog *catalog,
 		{
 			log_error("Failed to iterate over list of indexes, "
 					  "see above for details");
-			free(iter);
 			(void) semaphore_unlock(&(catalog->sema));
 			return false;
 		}
 	}
 
-	free(iter);
 	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
@@ -3780,7 +3744,7 @@ catalog_iter_s_index_init(SourceIndexIterator *iter)
 		return false;
 	}
 
-	iter->index = (SourceIndex *) calloc(1, sizeof(SourceIndex));
+	iter->index = (SourceIndex *) GC_malloc(sizeof(SourceIndex));
 
 	if (iter->index == NULL)
 	{
@@ -3829,7 +3793,7 @@ catalog_iter_s_index_table_init(SourceIndexIterator *iter)
 		return false;
 	}
 
-	iter->index = (SourceIndex *) calloc(1, sizeof(SourceIndex));
+	iter->index = (SourceIndex *) GC_malloc(sizeof(SourceIndex));
 
 	if (iter->index == NULL)
 	{
@@ -3888,11 +3852,6 @@ catalog_iter_s_index_next(SourceIndexIterator *iter)
 
 	if (rc == SQLITE_DONE)
 	{
-		free(iter->index->indexDef);
-		free(iter->index->indexColumns);
-		free(iter->index->constraintDef);
-		free(iter->index);
-
 		iter->index = NULL;
 
 		return true;
@@ -3919,15 +3878,7 @@ catalog_iter_s_index_finish(SourceIndexIterator *iter)
 	SQLiteQuery *query = &(iter->query);
 
 	/* in case we finish before reaching the DONE step */
-	if (iter->index != NULL)
-	{
-		free(iter->index->indexDef);
-		free(iter->index->indexColumns);
-		free(iter->index->constraintDef);
-		free(iter->index);
-
-		iter->index = NULL;
-	}
+	iter->index = NULL;
 
 	if (!catalog_sql_finalize(query))
 	{
@@ -4301,14 +4252,13 @@ catalog_iter_s_seq(DatabaseCatalog *catalog,
 				   SourceSequenceIterFun *callback)
 {
 	SourceSeqIterator *iter =
-		(SourceSeqIterator *) calloc(1, sizeof(SourceSeqIterator));
+		(SourceSeqIterator *) GC_malloc(sizeof(SourceSeqIterator));
 
 	iter->catalog = catalog;
 
 	if (!catalog_iter_s_seq_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -4317,7 +4267,6 @@ catalog_iter_s_seq(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_seq_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -4328,7 +4277,6 @@ catalog_iter_s_seq(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_seq_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -4344,7 +4292,6 @@ catalog_iter_s_seq(DatabaseCatalog *catalog,
 		}
 	}
 
-	free(iter);
 
 	return true;
 }
@@ -4365,7 +4312,7 @@ catalog_iter_s_seq_init(SourceSeqIterator *iter)
 		return false;
 	}
 
-	iter->seq = (SourceSequence *) calloc(1, sizeof(SourceSequence));
+	iter->seq = (SourceSequence *) GC_malloc(sizeof(SourceSequence));
 
 	if (iter->seq == NULL)
 	{
@@ -4407,7 +4354,6 @@ catalog_iter_s_seq_next(SourceSeqIterator *iter)
 
 	if (rc == SQLITE_DONE)
 	{
-		free(iter->seq);
 		iter->seq = NULL;
 
 		return true;
@@ -4476,7 +4422,6 @@ catalog_iter_s_seq_finish(SourceSeqIterator *iter)
 	/* in case we finish before reaching the DONE step */
 	if (iter->seq != NULL)
 	{
-		free(iter->seq);
 		iter->seq = NULL;
 	}
 
@@ -4892,14 +4837,13 @@ catalog_iter_s_database(DatabaseCatalog *catalog,
 						SourceDatabaseIterFun *callback)
 {
 	SourceDatabaseIterator *iter =
-		(SourceDatabaseIterator *) calloc(1, sizeof(SourceDatabaseIterator));
+		(SourceDatabaseIterator *) GC_malloc(sizeof(SourceDatabaseIterator));
 
 	iter->catalog = catalog;
 
 	if (!catalog_iter_s_database_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -4908,7 +4852,6 @@ catalog_iter_s_database(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_database_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -4919,7 +4862,6 @@ catalog_iter_s_database(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_database_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -4935,7 +4877,6 @@ catalog_iter_s_database(DatabaseCatalog *catalog,
 		}
 	}
 
-	free(iter);
 
 	return true;
 }
@@ -4956,7 +4897,7 @@ catalog_iter_s_database_init(SourceDatabaseIterator *iter)
 		return false;
 	}
 
-	iter->dat = (SourceDatabase *) calloc(1, sizeof(SourceDatabase));
+	iter->dat = (SourceDatabase *) GC_malloc(sizeof(SourceDatabase));
 
 	if (iter->dat == NULL)
 	{
@@ -4997,7 +4938,6 @@ catalog_iter_s_database_next(SourceDatabaseIterator *iter)
 
 	if (rc == SQLITE_DONE)
 	{
-		free(iter->dat);
 		iter->dat = NULL;
 
 		return true;
@@ -5054,7 +4994,6 @@ catalog_iter_s_database_finish(SourceDatabaseIterator *iter)
 	/* in case we finish before reaching the DONE step */
 	if (iter->dat != NULL)
 	{
-		free(iter->dat);
 		iter->dat = NULL;
 	}
 
@@ -5079,7 +5018,7 @@ catalog_iter_s_database_guc(DatabaseCatalog *catalog,
 							SourcePropertyIterFun *callback)
 {
 	SourcePropertyIterator *iter =
-		(SourcePropertyIterator *) calloc(1, sizeof(SourcePropertyIterator));
+		(SourcePropertyIterator *) GC_malloc(sizeof(SourcePropertyIterator));
 
 	iter->catalog = catalog;
 	iter->dbname = dbname;
@@ -5087,7 +5026,6 @@ catalog_iter_s_database_guc(DatabaseCatalog *catalog,
 	if (!catalog_iter_s_database_guc_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -5096,7 +5034,6 @@ catalog_iter_s_database_guc(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_database_guc_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -5107,7 +5044,6 @@ catalog_iter_s_database_guc(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_database_guc_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -5119,12 +5055,10 @@ catalog_iter_s_database_guc(DatabaseCatalog *catalog,
 		{
 			log_error("Failed to iterate over list of dats, "
 					  "see above for details");
-			free(iter);
 			return false;
 		}
 	}
 
-	free(iter);
 
 	return true;
 }
@@ -5145,7 +5079,7 @@ catalog_iter_s_database_guc_init(SourcePropertyIterator *iter)
 		return false;
 	}
 
-	iter->property = (SourceProperty *) calloc(1, sizeof(SourceProperty));
+	iter->property = (SourceProperty *) GC_malloc(sizeof(SourceProperty));
 
 	if (iter->property == NULL)
 	{
@@ -5199,8 +5133,6 @@ catalog_iter_s_database_guc_next(SourcePropertyIterator *iter)
 
 	if (rc == SQLITE_DONE)
 	{
-		free(iter->property->setconfig);
-		free(iter->property);
 		iter->property = NULL;
 
 		return true;
@@ -5270,8 +5202,6 @@ catalog_iter_s_database_guc_finish(SourcePropertyIterator *iter)
 	/* in case we finish before reaching the DONE step */
 	if (iter->property != NULL)
 	{
-		free(iter->property->setconfig);
-		free(iter->property);
 		iter->property = NULL;
 	}
 
@@ -5350,14 +5280,13 @@ catalog_iter_s_coll(DatabaseCatalog *catalog,
 					SourceCollationIterFun *callback)
 {
 	SourceCollationIterator *iter =
-		(SourceCollationIterator *) calloc(1, sizeof(SourceCollationIterator));
+		(SourceCollationIterator *) GC_malloc(sizeof(SourceCollationIterator));
 
 	iter->catalog = catalog;
 
 	if (!catalog_iter_s_coll_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -5366,7 +5295,6 @@ catalog_iter_s_coll(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_coll_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -5377,7 +5305,6 @@ catalog_iter_s_coll(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_coll_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -5393,7 +5320,6 @@ catalog_iter_s_coll(DatabaseCatalog *catalog,
 		}
 	}
 
-	free(iter);
 
 	return true;
 }
@@ -5414,7 +5340,7 @@ catalog_iter_s_coll_init(SourceCollationIterator *iter)
 		return false;
 	}
 
-	iter->coll = (SourceCollation *) calloc(1, sizeof(SourceCollation));
+	iter->coll = (SourceCollation *) GC_malloc(sizeof(SourceCollation));
 
 	if (iter->coll == NULL)
 	{
@@ -5455,8 +5381,6 @@ catalog_iter_s_coll_next(SourceCollationIterator *iter)
 
 	if (rc == SQLITE_DONE)
 	{
-		free(iter->coll->desc);
-		free(iter->coll);
 		iter->coll = NULL;
 
 		return true;
@@ -5525,12 +5449,7 @@ catalog_iter_s_coll_finish(SourceCollationIterator *iter)
 	SQLiteQuery *query = &(iter->query);
 
 	/* in case we finish before reaching the DONE step */
-	if (iter->coll != NULL)
-	{
-		free(iter->coll->desc);
-		free(iter->coll);
-		iter->coll = NULL;
-	}
+	iter->coll = NULL;
 
 	if (!catalog_sql_finalize(query))
 	{
@@ -5801,14 +5720,13 @@ catalog_iter_s_extension(DatabaseCatalog *catalog,
 						 SourceExtensionIterFun *callback)
 {
 	SourceExtensionIterator *iter =
-		(SourceExtensionIterator *) calloc(1, sizeof(SourceExtensionIterator));
+		(SourceExtensionIterator *) GC_malloc(sizeof(SourceExtensionIterator));
 
 	iter->catalog = catalog;
 
 	if (!catalog_iter_s_extension_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -5817,7 +5735,6 @@ catalog_iter_s_extension(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_extension_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -5828,7 +5745,6 @@ catalog_iter_s_extension(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_extension_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -5844,7 +5760,6 @@ catalog_iter_s_extension(DatabaseCatalog *catalog,
 		}
 	}
 
-	free(iter);
 
 	return true;
 }
@@ -5865,7 +5780,7 @@ catalog_iter_s_extension_init(SourceExtensionIterator *iter)
 		return false;
 	}
 
-	iter->ext = (SourceExtension *) calloc(1, sizeof(SourceExtension));
+	iter->ext = (SourceExtension *) GC_malloc(sizeof(SourceExtension));
 
 	if (iter->ext == NULL)
 	{
@@ -5906,7 +5821,6 @@ catalog_iter_s_extension_next(SourceExtensionIterator *iter)
 
 	if (rc == SQLITE_DONE)
 	{
-		free(iter->ext);
 		iter->ext = NULL;
 
 		return true;
@@ -5961,11 +5875,7 @@ catalog_iter_s_extension_finish(SourceExtensionIterator *iter)
 	SQLiteQuery *query = &(iter->query);
 
 	/* in case we finish before reaching the DONE step */
-	if (iter->ext != NULL)
-	{
-		free(iter->ext);
-		iter->ext = NULL;
-	}
+	iter->ext = NULL;
 
 	if (!catalog_sql_finalize(query))
 	{
@@ -5985,7 +5895,7 @@ bool
 catalog_s_ext_fetch_extconfig(DatabaseCatalog *catalog, SourceExtension *ext)
 {
 	SourceExtConfigIterator *iter =
-		(SourceExtConfigIterator *) calloc(1, sizeof(SourceExtConfigIterator));
+		(SourceExtConfigIterator *) GC_malloc(sizeof(SourceExtConfigIterator));
 
 	if (iter == NULL)
 	{
@@ -5999,7 +5909,6 @@ catalog_s_ext_fetch_extconfig(DatabaseCatalog *catalog, SourceExtension *ext)
 	if (!catalog_iter_s_ext_extconfig_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -6008,7 +5917,6 @@ catalog_s_ext_fetch_extconfig(DatabaseCatalog *catalog, SourceExtension *ext)
 		if (!catalog_iter_s_ext_extconfig_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 	}
@@ -6016,11 +5924,9 @@ catalog_s_ext_fetch_extconfig(DatabaseCatalog *catalog, SourceExtension *ext)
 	if (!catalog_iter_s_ext_extconfig_finish(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
-	free(iter);
 
 	return true;
 }
@@ -6387,14 +6293,13 @@ catalog_iter_s_depend(DatabaseCatalog *catalog,
 					  SourceDependIterFun *callback)
 {
 	SourceDependIterator *iter =
-		(SourceDependIterator *) calloc(1, sizeof(SourceDependIterator));
+		(SourceDependIterator *) GC_malloc(sizeof(SourceDependIterator));
 
 	iter->catalog = catalog;
 
 	if (!catalog_iter_s_depend_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -6403,7 +6308,6 @@ catalog_iter_s_depend(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_depend_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -6414,7 +6318,6 @@ catalog_iter_s_depend(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_depend_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -6430,7 +6333,6 @@ catalog_iter_s_depend(DatabaseCatalog *catalog,
 		}
 	}
 
-	free(iter);
 
 	return true;
 }
@@ -6451,7 +6353,7 @@ catalog_iter_s_depend_init(SourceDependIterator *iter)
 		return false;
 	}
 
-	iter->dep = (SourceDepend *) calloc(1, sizeof(SourceDepend));
+	iter->dep = (SourceDepend *) GC_malloc(sizeof(SourceDepend));
 
 	if (iter->dep == NULL)
 	{
@@ -6493,7 +6395,6 @@ catalog_iter_s_depend_next(SourceDependIterator *iter)
 
 	if (rc == SQLITE_DONE)
 	{
-		free(iter->dep);
 		iter->dep = NULL;
 
 		return true;
@@ -6564,7 +6465,6 @@ catalog_iter_s_depend_finish(SourceDependIterator *iter)
 	/* in case we finish before reaching the DONE step */
 	if (iter->dep != NULL)
 	{
-		free(iter->dep);
 		iter->dep = NULL;
 	}
 
@@ -6715,14 +6615,13 @@ catalog_iter_s_table_in_copy(DatabaseCatalog *catalog,
 							 SourceTableIterFun *callback)
 {
 	SourceTableIterator *iter =
-		(SourceTableIterator *) calloc(1, sizeof(SourceTableIterator));
+		(SourceTableIterator *) GC_malloc(sizeof(SourceTableIterator));
 
 	iter->catalog = catalog;
 
 	if (!catalog_iter_s_table_in_copy_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -6731,7 +6630,6 @@ catalog_iter_s_table_in_copy(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_table_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -6742,7 +6640,6 @@ catalog_iter_s_table_in_copy(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_table_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -6758,7 +6655,6 @@ catalog_iter_s_table_in_copy(DatabaseCatalog *catalog,
 		}
 	}
 
-	free(iter);
 
 	return true;
 }
@@ -6779,7 +6675,7 @@ catalog_iter_s_table_in_copy_init(SourceTableIterator *iter)
 		return false;
 	}
 
-	iter->table = (SourceTable *) calloc(1, sizeof(SourceTable));
+	iter->table = (SourceTable *) GC_malloc(sizeof(SourceTable));
 
 	if (iter->table == NULL)
 	{
@@ -6834,14 +6730,13 @@ catalog_iter_s_index_in_progress(DatabaseCatalog *catalog,
 								 SourceIndexIterFun *callback)
 {
 	SourceIndexIterator *iter =
-		(SourceIndexIterator *) calloc(1, sizeof(SourceIndexIterator));
+		(SourceIndexIterator *) GC_malloc(sizeof(SourceIndexIterator));
 
 	iter->catalog = catalog;
 
 	if (!catalog_iter_s_index_in_progress_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -6850,7 +6745,6 @@ catalog_iter_s_index_in_progress(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_index_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -6861,7 +6755,6 @@ catalog_iter_s_index_in_progress(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_index_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -6876,8 +6769,6 @@ catalog_iter_s_index_in_progress(DatabaseCatalog *catalog,
 			return false;
 		}
 	}
-
-	free(iter);
 
 	return true;
 }
@@ -6898,7 +6789,7 @@ catalog_iter_s_index_in_progress_init(SourceIndexIterator *iter)
 		return false;
 	}
 
-	iter->index = (SourceIndex *) calloc(1, sizeof(SourceIndex));
+	iter->index = (SourceIndex *) GC_malloc(sizeof(SourceIndex));
 
 	if (iter->index == NULL)
 	{
