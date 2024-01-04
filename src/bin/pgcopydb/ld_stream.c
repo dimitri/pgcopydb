@@ -49,7 +49,7 @@ ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
 	if (nspname == NULL || strlen(nspname) == 0)
 	{
 		log_error("BUG: nspname is NULL or empty");
-		return true;
+		return false;
 	}
 
 	/*
@@ -58,7 +58,7 @@ ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
 	if (relname == NULL || strlen(relname) == 0)
 	{
 		log_error("BUG: relname is NULL or empty");
-		return true;
+		return false;
 	}
 
 	/*

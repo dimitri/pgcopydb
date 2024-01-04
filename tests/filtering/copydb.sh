@@ -49,7 +49,8 @@ select NULL as oid, s.restore_list_name, 'sequence owned by'
        (select 1 from source.s_table st where st.oid = s.ownedby);
 EOF
 
-coproc (pgcopydb clone --follow --filters /usr/src/pgcopydb/exclude.ini --restart)
+
+coproc (pgcopydb clone --follow --plugin wal2json --filters /usr/src/pgcopydb/exclude.ini --restart)
 
 # execute DML queries against the source database to test filtering for include.ini
 psql -d "${PGCOPYDB_SOURCE_PGURI}" ${pgopts} --file ./follow-mode/dml-for-exclude.sql
@@ -75,7 +76,7 @@ pgcopydb list tables --filters /usr/src/pgcopydb/include.ini
 pgcopydb list tables --filters /usr/src/pgcopydb/include.ini --list-skipped
 
 # now another migration with the "include-only" parts of the data
-coproc (pgcopydb clone --follow --filters /usr/src/pgcopydb/include.ini --restart)
+coproc (pgcopydb clone --follow --plugin text_decoding --filters /usr/src/pgcopydb/include.ini --restart)
 
 # execute DML queries against the source database to test filtering for include.ini
 psql -d "${PGCOPYDB_SOURCE_PGURI}" ${pgopts} --file ./follow-mode/dml-for-include.sql
@@ -117,7 +118,7 @@ do
     diff $e $r || exit 1
 done
 
-# run assertions on the target database
+# run assertions for follow-mode
 for f in ./follow-mode/sql/*.sql
 do
     t=`basename $f .sql`

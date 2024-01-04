@@ -173,6 +173,9 @@ parseTestDecodingMessageActionAndXid(LogicalStreamContext *context)
 
 		metadata->action = header.action;
 
+		/*
+		 * Check if the message should be filtered out based on namespace and relation name
+		 */
 		if (ShouldFilterOutMessage(&(privateContext->filters), header.table.nspname,
 								   header.table.relname))
 		{

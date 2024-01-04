@@ -71,9 +71,6 @@ prepareWal2jsonMessage(LogicalStreamContext *context)
 bool
 parseWal2jsonMessageActionAndXid(LogicalStreamContext *context)
 {
-	/* GG: Implement filtering-out of messages based on the table name */
-	/* and schema name */
-
 	StreamContext *privateContext = (StreamContext *) context->private;
 	LogicalMessageMetadata *metadata = &(privateContext->metadata);
 
@@ -96,6 +93,40 @@ parseWal2jsonMessageActionAndXid(LogicalStreamContext *context)
 	{
 		/* errors have already been logged */
 		return false;
+	}
+
+	/*
+	 * if metadata action is one of INSERT, UPDATE, DELETE, TRUNCATE
+	 * then we need to parse the schema and table name from the message
+	 * and check if the message should be filtered out
+	 */
+	if (metadata->action == STREAM_ACTION_INSERT ||
+		metadata->action == STREAM_ACTION_UPDATE ||
+		metadata->action == STREAM_ACTION_DELETE ||
+		metadata->action == STREAM_ACTION_TRUNCATE
+		)
+	{
+		char *schema = (char *) json_object_get_string(jsobj, "schema");
+		char *table = (char *) json_object_get_string(jsobj, "table");
+
+		if ((schema == NULL || strlen(schema) == 0) || (table == NULL || strlen(table) ==
+														0))
+		{
+			log_error("Failed to parse schema \"%s\" or table \"%s\" in JSON message: %s",
+					  schema ? "NULL" : schema,
+					  table ? "NULL" : table,
+					  context->buffer);
+
+			return false;
+		}
+
+		/*
+		 * Check if the message should be filtered out based on namespace and relation name
+		 */
+		if (ShouldFilterOutMessage(&(privateContext->filters), schema, table))
+		{
+			metadata->filterOut = true;
+		}
 	}
 
 	if (json_object_has_value(jsobj, "xid"))
