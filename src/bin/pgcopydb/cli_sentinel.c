@@ -150,7 +150,7 @@ cli_sentinel_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:s:E:CVvdzqh",
+	while ((c = getopt_long(argc, argv, "S:D:E:s:CJVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -281,6 +281,12 @@ cli_sentinel_getopts(int argc, char **argv)
 				exit(EXIT_CODE_QUIT);
 				break;
 			}
+
+			case '?':
+			default:
+			{
+				++errors;
+			}
 		}
 	}
 
@@ -308,6 +314,7 @@ cli_sentinel_getopts(int argc, char **argv)
 
 	if (errors > 0)
 	{
+		commandline_help(stderr);
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 

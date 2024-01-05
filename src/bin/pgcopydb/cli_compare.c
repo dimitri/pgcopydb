@@ -107,7 +107,7 @@ cli_compare_getopts(int argc, char **argv)
 	/* bypass computing partitionning specs */
 	options.splitTablesLargerThan.bytes = 0;
 
-	while ((c = getopt_long(argc, argv, "S:T:D:j:Vvdzqh",
+	while ((c = getopt_long(argc, argv, "S:T:D:j:JVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)

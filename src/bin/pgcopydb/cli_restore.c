@@ -153,7 +153,6 @@ cli_restore_schema_getopts(int argc, char **argv)
 		{ "source", required_argument, NULL, 'S' },
 		{ "target", required_argument, NULL, 'T' },
 		{ "dir", required_argument, NULL, 'D' },
-		{ "schema", required_argument, NULL, 's' },
 		{ "drop-if-exists", no_argument, NULL, 'c' }, /* pg_restore -c */
 		{ "no-owner", no_argument, NULL, 'O' },       /* pg_restore -O */
 		{ "no-comments", no_argument, NULL, 'X' },
@@ -191,7 +190,7 @@ cli_restore_schema_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:D:s:cOj:xXFeErRCNVvdzqh",
+	while ((c = getopt_long(argc, argv, "S:T:D:cOXj:xF:eErRCN:Vvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -391,6 +390,12 @@ cli_restore_schema_getopts(int argc, char **argv)
 				exit(EXIT_CODE_QUIT);
 				break;
 			}
+
+			case '?':
+			default:
+			{
+				++errors;
+			}
 		}
 	}
 
@@ -408,6 +413,7 @@ cli_restore_schema_getopts(int argc, char **argv)
 
 	if (errors > 0)
 	{
+		commandline_help(stderr);
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 

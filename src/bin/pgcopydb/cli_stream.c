@@ -235,7 +235,7 @@ cli_stream_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:j:p:s:o:t:PVvdzqh",
+	while ((c = getopt_long(argc, argv, "S:T:D:p:ws:N:o:E:rRCOIVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -435,6 +435,7 @@ cli_stream_getopts(int argc, char **argv)
 			}
 
 			case '?':
+			default:
 			{
 				commandline_help(stderr);
 				exit(EXIT_CODE_BAD_ARGS);
