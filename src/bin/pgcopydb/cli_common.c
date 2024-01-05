@@ -36,12 +36,6 @@ void
 cli_help(int argc, char **argv)
 {
 	CommandLine command = root;
-
-	if (env_exists(PGCOPYDB_DEBUG))
-	{
-		command = root_with_debug;
-	}
-
 	(void) commandline_print_command_tree(&command, stdout);
 }
 
@@ -57,19 +51,13 @@ cli_print_version_getopts(int argc, char **argv)
 
 	static struct option long_options[] = {
 		{ "json", no_argument, NULL, 'J' },
-		{ "version", no_argument, NULL, 'V' },
-		{ "verbose", no_argument, NULL, 'v' },
-		{ "notice", no_argument, NULL, 'v' },
-		{ "debug", no_argument, NULL, 'd' },
-		{ "trace", no_argument, NULL, 'z' },
-		{ "quiet", no_argument, NULL, 'q' },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 }
 	};
 	optind = 0;
 
 	/*
-	 * The only command lines that are using keeper_cli_getopt_pgdata are
+	 * The only command lines that are using cli_print_version_getopts are
 	 * terminal ones: they don't accept subcommands. In that case our option
 	 * parsing can happen in any order and we don't need getopt_long to behave
 	 * in a POSIXLY_CORRECT way.
@@ -78,7 +66,7 @@ cli_print_version_getopts(int argc, char **argv)
 	 */
 	unsetenv("POSIXLY_CORRECT");
 
-	while ((c = getopt_long(argc, argv, "JVvdzqh",
+	while ((c = getopt_long(argc, argv, "Jh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -97,6 +85,7 @@ cli_print_version_getopts(int argc, char **argv)
 				break;
 			}
 
+			case '?':
 			default:
 			{
 				/*
@@ -440,7 +429,7 @@ cli_copydb_getenv(CopyDBOptions *options)
 		}
 	}
 
-	/* when --fail-fast has not been used, check PGCOPYDB_FAIL_FAST */
+	/* when --skip-vacuum has not been used, check PGCOPYDB_SKIP_VACUUM */
 	if (!options->skipVacuum)
 	{
 		if (env_exists(PGCOPYDB_SKIP_VACUUM))
@@ -809,7 +798,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	}
 
 	while ((c = getopt_long(argc, argv,
-							"S:T:D:J:I:b:L:cOBemlirRCN:xXj:Ctfo:p:s:E:F:Q:iVvdzqh",
+							"S:T:D:J:I:b:L:cAPOXj:xBeMlUF:F:Q:irRCN:fp:ws:o:tE:Vvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -1193,6 +1182,7 @@ cli_copy_db_getopts(int argc, char **argv)
 			}
 
 			case '?':
+			default:
 			{
 				commandline_help(stderr);
 				exit(EXIT_CODE_BAD_ARGS);
