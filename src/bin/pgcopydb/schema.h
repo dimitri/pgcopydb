@@ -59,6 +59,7 @@ typedef struct SourceExtensionConfig
 	char nspname[PG_NAMEDATALEN];
 	char relname[PG_NAMEDATALEN];
 	char *condition;            /* strdup from PQresult: malloc'ed area */
+	char relkind;                  /* 'r' for regular table, 'S' for sequence */
 } SourceExtensionConfig;
 
 

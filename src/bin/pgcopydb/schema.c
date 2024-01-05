@@ -405,7 +405,8 @@ schema_list_extensions(PGSQL *pgsql, DatabaseCatalog *catalog)
 		"select e.oid, extname, extnamespace::regnamespace, extrelocatable, "
 		"       0 as count, null as n, "
 		"       null as extconfig, null as nspname, null as relname, "
-		"       null as extcondition "
+		"       null as extcondition, "
+		"		null as relkind "
 		"  from pg_extension e "
 		" where extconfig is null "
 
@@ -417,7 +418,8 @@ schema_list_extensions(PGSQL *pgsql, DatabaseCatalog *catalog)
 		"         extconfig.extconfig, "
 		"         format('%I', n.nspname) as nspname, "
 		"         format('%I', c.relname) as relname, "
-		"         extcondition[extconfig.n] "
+		"         extcondition[extconfig.n], "
+		"         c.relkind as relkind "
 		"    from pg_extension e, "
 		"         unnest(extconfig) with ordinality as extconfig(extconfig, n) "
 		"          left join pg_class c on c.oid = extconfig.extconfig "
@@ -2433,8 +2435,7 @@ bool
 schema_get_sequence_value(PGSQL *pgsql, SourceSequence *seq)
 {
 	return pgsql_get_sequence(pgsql,
-							  seq->nspname,
-							  seq->relname,
+							  seq->qname,
 							  &(seq->lastValue),
 							  &(seq->isCalled));
 }
@@ -4208,7 +4209,7 @@ getExtensionList(void *ctx, PGresult *result)
 
 	log_debug("getExtensionList: %d", nTuples);
 
-	if (PQnfields(result) != 10)
+	if (PQnfields(result) != 11)
 	{
 		log_error("Query returned %d columns, expected 10", PQnfields(result));
 		context->parsedOk = false;
@@ -4457,6 +4458,16 @@ parseCurrentExtensionConfig(PGresult *result,
 	if (extConfig->condition == NULL)
 	{
 		log_error(ALLOCATION_FAILED_ERROR);
+		++errors;
+	}
+
+	/* 11. relkind */
+	value = PQgetvalue(result, rowNumber, 10);
+	extConfig->relkind = value[0];
+
+	if (extConfig->relkind == 0)
+	{
+		log_error("Extension configuration relkind is empty");
 		++errors;
 	}
 

@@ -2855,7 +2855,7 @@ typedef struct SourceSequenceContext
  * The connection is expected to be opened and closed from the caller.
  */
 bool
-pgsql_get_sequence(PGSQL *pgsql, const char *nspname, const char *relname,
+pgsql_get_sequence(PGSQL *pgsql, const char *qname,
 				   int64_t *lastValue,
 				   bool *isCalled)
 {
@@ -2863,22 +2863,21 @@ pgsql_get_sequence(PGSQL *pgsql, const char *nspname, const char *relname,
 	SourceSequenceContext context = { 0 };
 
 	/* identifiers have already been escaped thanks to format('%I', ...) */
-	sformat(sql, sizeof(sql), "select last_value, is_called from %s.%s",
-			nspname,
-			relname);
+	sformat(sql, sizeof(sql), "select last_value, is_called from %s",
+			qname);
 
 	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
 								   &context, &getSequenceValue))
 	{
-		log_error("Failed to retrieve metadata for sequence \"%s\".\"%s\"",
-				  nspname, relname);
+		log_error("Failed to retrieve metadata for sequence %s",
+				  qname);
 		return false;
 	}
 
 	if (!context.parsedOk)
 	{
-		log_error("Failed to retrieve metadata for sequence \"%s\".\"%s\"",
-				  nspname, relname);
+		log_error("Failed to retrieve metadata for sequence %s",
+				  qname);
 		return false;
 	}
 
