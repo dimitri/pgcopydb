@@ -49,21 +49,22 @@ select NULL as oid, s.restore_list_name, 'sequence owned by'
        (select 1 from source.s_table st where st.oid = s.ownedby);
 EOF
 
-
+# Starts a coprocess to clone the database using the 'wal2json' plugin, applying filters from 'exclude.ini'
 coproc (pgcopydb clone --follow --plugin wal2json --filters /usr/src/pgcopydb/exclude.ini --restart)
 
-# execute DML queries against the source database to test filtering for include.ini
+# execute DML queries against the source database to test filtering for exclude.ini
 psql -d "${PGCOPYDB_SOURCE_PGURI}" ${pgopts} --file ./follow-mode/dml-for-exclude.sql
 
 # make sure the inject service has had time to see the final sentinel values
 sleep 2
 
+# get the current sentinel values
 pgcopydb stream sentinel get
 
 # set the end position to the current position to complete the follow operation
 pgcopydb stream sentinel set endpos --current
 
-# make sure the transform & apply service has had time to see the final sentinel values
+# make sure the transform & apply service has had time to process remaining events
 sleep 10
 
 # cleanup the stream
@@ -75,8 +76,8 @@ export TMPDIR=/tmp/include
 pgcopydb list tables --filters /usr/src/pgcopydb/include.ini
 pgcopydb list tables --filters /usr/src/pgcopydb/include.ini --list-skipped
 
-# now another migration with the "include-only" parts of the data
-coproc (pgcopydb clone --follow --plugin text_decoding --filters /usr/src/pgcopydb/include.ini --restart)
+# now another migration with the "include-only" parts of the data by using text_decoding plugin
+coproc (pgcopydb clone --follow --plugin text_decoding --filters /usr/src/pgcopydb/include.ini --not-consistent)
 
 # execute DML queries against the source database to test filtering for include.ini
 psql -d "${PGCOPYDB_SOURCE_PGURI}" ${pgopts} --file ./follow-mode/dml-for-include.sql
@@ -84,12 +85,13 @@ psql -d "${PGCOPYDB_SOURCE_PGURI}" ${pgopts} --file ./follow-mode/dml-for-includ
 # make sure the inject service has had time to see the final sentinel values
 sleep 2
 
+# get the current sentinel values
 pgcopydb stream sentinel get
 
 # set the end position to the current position to complete the follow operation
 pgcopydb stream sentinel set endpos --current
 
-# make sure the inject service has had time to see the final sentinel values
+# make sure the transform & apply service has had time to process remaining events
 sleep 10
 
 # cleanup the stream
