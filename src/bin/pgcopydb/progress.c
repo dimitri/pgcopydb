@@ -558,8 +558,16 @@ copydb_update_progress(CopyDataSpec *copySpecs, CopyProgress *progress)
 			  progress->tableCount,
 			  progress->indexCount);
 
+	CatalogProgressCount done = { 0 };
+
+	if (!catalog_count_summary_done(sourceDB, &done))
+	{
+		log_error("Failed to count tables and indexes done in our catalogs");
+		return false;
+	}
+
 	/* count table in progress, table done */
-	progress->tableDoneCount = 0;
+	progress->tableDoneCount = done.table;
 	progress->tableInProgress.count = 0;
 
 	/* we can't have more table in progress than tableJobs */
@@ -597,7 +605,7 @@ copydb_update_progress(CopyDataSpec *copySpecs, CopyProgress *progress)
 	}
 
 	/* count index in progress, index done */
-	progress->indexDoneCount = 0;
+	progress->indexDoneCount = done.index;
 	progress->indexInProgress.count = 0;
 
 	/* we can't have more index in progress than indexJobs */

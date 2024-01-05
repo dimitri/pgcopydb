@@ -7,15 +7,7 @@ pgcopydb restore - Restore database objects into a Postgres instance
 
 This command prefixes the following sub-commands:
 
-::
-
-  pgcopydb restore
-    schema      Restore a database schema from custom files to target database
-    pre-data    Restore a database pre-data schema from custom file to target database
-    post-data   Restore a database post-data schema from custom file to target database
-    roles       Restore database roles from SQL file to target database
-    parse-list  Parse pg_restore --list output from custom file
-
+.. include:: ../include/restore.rst
 
 .. _pgcopydb_restore_schema:
 
@@ -29,24 +21,7 @@ schema definitions from the given ``pgcopydb dump schema`` export directory.
 This command is not compatible with using Postgres files directly, it must
 be fed with the directory output from the ``pgcopydb dump ...`` commands.
 
-::
-
-   pgcopydb restore schema: Restore a database schema from custom files to target database
-   usage: pgcopydb restore schema  --dir <dir> [ --source <URI> ] --target <URI>
-
-     --source             Postgres URI to the source database
-     --target             Postgres URI to the target database
-     --dir                Work directory to use
-     --restore-jobs       Number of concurrent jobs for pg_restore
-     --drop-if-exists     On the target database, clean-up from a previous run first
-     --no-owner           Do not set ownership of objects to match the original database
-     --no-acl             Prevent restoration of access privileges (grant/revoke commands).
-     --no-comments        Do not output commands to restore comments
-     --filters <filename> Use the filters defined in <filename>
-     --restart            Allow restarting when temp files exist already
-     --resume             Allow resuming operations after a failure
-     --not-consistent     Allow taking a new snapshot on the source database
-
+.. include:: ../include/restore-schema.rst
 
 .. _pgcopydb_restore_pre_data:
 
@@ -60,23 +35,7 @@ schema definitions from the given ``pgcopydb dump schema`` export directory.
 This command is not compatible with using Postgres files directly, it must
 be fed with the directory output from the ``pgcopydb dump ...`` commands.
 
-::
-
-   pgcopydb restore pre-data: Restore a database pre-data schema from custom file to target database
-   usage: pgcopydb restore pre-data  --dir <dir> [ --source <URI> ] --target <URI>
-
-     --source             Postgres URI to the source database
-     --target             Postgres URI to the target database
-     --dir                Work directory to use
-     --restore-jobs       Number of concurrent jobs for pg_restore
-     --drop-if-exists     On the target database, clean-up from a previous run first
-     --no-owner           Do not set ownership of objects to match the original database
-     --no-acl             Prevent restoration of access privileges (grant/revoke commands).
-     --no-comments        Do not output commands to restore comments
-     --filters <filename> Use the filters defined in <filename>
-     --restart            Allow restarting when temp files exist already
-     --resume             Allow resuming operations after a failure
-     --not-consistent     Allow taking a new snapshot on the source database
+.. include:: ../include/restore-pre-data.rst
 
 .. _pgcopydb_restore_post_data:
 
@@ -90,23 +49,7 @@ schema definitions from the given ``pgcopydb dump schema`` export directory.
 This command is not compatible with using Postgres files directly, it must
 be fed with the directory output from the ``pgcopydb dump ...`` commands.
 
-::
-
-   pgcopydb restore post-data: Restore a database post-data schema from custom file to target database
-   usage: pgcopydb restore post-data  --dir <dir> [ --source <URI> ] --target <URI>
-
-     --source             Postgres URI to the source database
-     --target             Postgres URI to the target database
-     --dir                Work directory to use
-     --restore-jobs       Number of concurrent jobs for pg_restore
-     --no-owner           Do not set ownership of objects to match the original database
-     --no-acl             Prevent restoration of access privileges (grant/revoke commands).
-     --no-comments        Do not output commands to restore comments
-     --filters <filename> Use the filters defined in <filename>
-     --restart            Allow restarting when temp files exist already
-     --resume             Allow resuming operations after a failure
-     --not-consistent     Allow taking a new snapshot on the source database
-
+.. include:: ../include/restore-post-data.rst
 
 .. _pgcopydb_restore_roles:
 
@@ -124,16 +67,7 @@ The ``pg_dumpall`` command issues two lines per role, the first one is a
 command. Both those lines are skipped when the role already exists on the
 target database.
 
-::
-
-   pgcopydb restore roles: Restore database roles from SQL file to target database
-   usage: pgcopydb restore roles  --dir <dir> [ --source <URI> ] --target <URI>
-
-     --source             Postgres URI to the source database
-     --target             Postgres URI to the target database
-     --dir                Work directory to use
-     --restore-jobs       Number of concurrent jobs for pg_restore
-
+.. include:: ../include/restore-roles.rst
 
 .. _pgcopydb_restore_parse_list:
 
@@ -153,21 +87,7 @@ output of the command shows those pg_restore catalog entries commented out.
 A pg_restore archive catalog entry is commented out when its line starts
 with a semi-colon character (`;`).
 
-::
-
-   pgcopydb restore parse-list: Parse pg_restore --list output from custom file
-   usage: pgcopydb restore parse-list  --dir <dir> [ --source <URI> ] --target <URI>
-
-     --source             Postgres URI to the source database
-     --target             Postgres URI to the target database
-     --dir                Work directory to use
-     --filters <filename> Use the filters defined in <filename>
-     --skip-extensions    Skip restoring extensions
-     --skip-ext-comments  Skip restoring COMMENT ON EXTENSION
-     --restart            Allow restarting when temp files exist already
-     --resume             Allow resuming operations after a failure
-     --not-consistent     Allow taking a new snapshot on the source database
-
+.. include:: ../include/restore-parse-list.rst
 
 Description
 -----------

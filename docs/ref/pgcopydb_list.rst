@@ -7,20 +7,7 @@ pgcopydb list - List database objects from a Postgres instance
 
 This command prefixes the following sub-commands:
 
-::
-
-  pgcopydb list
-    databases    List databases
-    extensions   List all the source extensions to copy
-    collations   List all the source collations to copy
-    tables       List all the source tables to copy data from
-    table-parts  List a source table copy partitions
-    sequences    List all the source sequences to copy data from
-    indexes      List all the indexes to create again after copying the data
-    depends      List all the dependencies to filter-out
-    schema       List the schema to migrate, formatted in JSON
-    progress     List the progress
-
+.. include:: ../include/list.rst
 
 .. _pgcopydb_list_databases:
 
@@ -33,12 +20,7 @@ The command ``pgcopydb list databases`` connects to the source database and
 executes a SQL query using the Postgres catalogs to get a list of all the
 databases there.
 
-::
-
-   pgcopydb list databases: List databases
-   usage: pgcopydb list databases  --source ...
-
-     --source            Postgres URI to the source database
+.. include:: ../include/list-databases.rst
 
 .. _pgcopydb_list_extensions:
 
@@ -51,15 +33,7 @@ The command ``pgcopydb list extensions`` connects to the source database and
 executes a SQL query using the Postgres catalogs to get a list of all the
 extensions to COPY to the target database.
 
-::
-
-   pgcopydb list extensions: List all the source extensions to copy
-   usage: pgcopydb list extensions  --source ...
-
-     --source              Postgres URI to the source database
-     --json                Format the output using JSON
-     --available-versions  List available extension versions
-     --requirements        List extensions requirements
+.. include:: ../include/list-extensions.rst
 
 The command ``pgcopydb list extensions --available-versions`` is typically
 used with the target database. If you're using the connection string
@@ -78,12 +52,7 @@ The command ``pgcopydb list collations`` connects to the source database and
 executes a SQL query using the Postgres catalogs to get a list of all the
 collations to COPY to the target database.
 
-::
-
-   pgcopydb list collations: List all the source collations to copy
-   usage: pgcopydb list collations  --source ...
-
-     --source            Postgres URI to the source database
+.. include:: ../include/list-collations.rst
 
 The SQL query that is used lists the database collation, and then any
 non-default collation that's used in a user column or a user index.
@@ -99,17 +68,7 @@ The command ``pgcopydb list tables`` connects to the source database and
 executes a SQL query using the Postgres catalogs to get a list of all the
 tables to COPY the data from.
 
-::
-
-   pgcopydb list tables: List all the source tables to copy data from
-   usage: pgcopydb list tables  --source ...
-
-     --source            Postgres URI to the source database
-     --filter <filename> Use the filters defined in <filename>
-     --cache             Cache table size in relation pgcopydb.pgcopydb_table_size
-     --drop-cache        Drop relation pgcopydb.pgcopydb_table_size
-     --list-skipped      List only tables that are setup to be skipped
-     --without-pkey      List only tables that have no primary key
+.. include:: ../include/list-tables.rst
 
 The ``--cache`` option allows caching the `pg_table_size()`__ result in the
 newly created table ``pgcopydb.pgcopydb_table_size``. This is only useful in
@@ -130,15 +89,7 @@ and executes a SQL query using the Postgres catalogs to get detailed
 information about the given source table, and then another SQL query to
 compute how to split this source table given the size threshold argument.
 
-::
-
-   pgcopydb list table-parts: List a source table copy partitions
-   usage: pgcopydb list table-parts  --source ...
-
-     --source                    Postgres URI to the source database
-     --schema-name               Name of the schema where to find the table
-     --table-name                Name of the target table
-     --split-tables-larger-than  Size threshold to consider partitioning
+.. include:: ../include/list-table-parts.rst
 
 .. _pgcopydb_list_sequences:
 
@@ -151,14 +102,7 @@ The command ``pgcopydb list sequences`` connects to the source database and
 executes a SQL query using the Postgres catalogs to get a list of all the
 sequences to COPY the data from.
 
-::
-
-   pgcopydb list sequences: List all the source sequences to copy data from
-   usage: pgcopydb list sequences  --source ...
-
-     --source            Postgres URI to the source database
-     --filter <filename> Use the filters defined in <filename>
-     --list-skipped      List only tables that are setup to be skipped
+.. include:: ../include/list-sequences.rst
 
 .. _pgcopydb_list_indexes:
 
@@ -171,16 +115,7 @@ The command ``pgcopydb list indexes`` connects to the source database and
 executes a SQL query using the Postgres catalogs to get a list of all the
 indexes to COPY the data from.
 
-::
-
-  pgcopydb list indexes: List all the indexes to create again after copying the data
-  usage: pgcopydb list indexes  --source ... [ --schema-name [ --table-name ] ]
-
-    --source            Postgres URI to the source database
-    --schema-name       Name of the schema where to find the table
-    --table-name        Name of the target table
-    --filter <filename> Use the filters defined in <filename>
-    --list-skipped      List only tables that are setup to be skipped
+.. include:: ../include/list-indexes.rst
 
 .. _pgcopydb_list_depends:
 
@@ -193,17 +128,7 @@ The command ``pgcopydb list depends`` connects to the source database and
 executes a SQL query using the Postgres catalogs to get a list of all the
 objects that depend on excluded objects from the filtering rules.
 
-::
-
-   pgcopydb list depends: List all the dependencies to filter-out
-   usage: pgcopydb list depends  --source ... [ --schema-name [ --table-name ] ]
-
-     --source            Postgres URI to the source database
-     --schema-name       Name of the schema where to find the table
-     --table-name        Name of the target table
-     --filter <filename> Use the filters defined in <filename>
-     --list-skipped      List only tables that are setup to be skipped
-
+.. include:: ../include/list-depends.rst
 
 .. _pgcopydb_list_schema:
 
@@ -217,14 +142,7 @@ executes a SQL queries using the Postgres catalogs to get a list of the
 tables, indexes, and sequences to migrate. The command then outputs a JSON
 formatted string that contains detailed information about all those objects.
 
-::
-
-   pgcopydb list schema: List the schema to migrate, formatted in JSON
-   usage: pgcopydb list schema  --source ...
-
-     --source            Postgres URI to the source database
-     --filter <filename> Use the filters defined in <filename>
-
+.. include:: ../include/list-schema.rst
 
 .. _pgcopydb_list_progress:
 
@@ -241,16 +159,7 @@ done already, and how many are in-progress.
 When using the option ``--json`` the JSON formatted output also includes a
 list of all the tables and indexes that are currently being processed.
 
-::
-
-    pgcopydb list progress: List the progress
-    usage: pgcopydb list progress  --source ...
-
-      --source  Postgres URI to the source database
-      --summary List the summary, requires --json
-      --json    Format the output using JSON
-      --dir     Work directory to use
-
+.. include:: ../include/list-progress.rst
 
 Options
 -------

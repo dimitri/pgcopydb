@@ -19,6 +19,9 @@ struct SQLiteQuery
 	sqlite3 *db;
 	sqlite3_stmt *ppStmt;
 	const char *sql;
+
+	bool errorOnZeroRows;
+
 	CatalogFetchResult *fetchFunction;
 	void *context;
 };
@@ -48,6 +51,11 @@ bool catalog_register_setup(DatabaseCatalog *catalog,
 							const char *snapshot,
 							uint64_t splitTablesLargerThanBytes,
 							const char *filters);
+
+bool catalog_setup_replication(DatabaseCatalog *catalog,
+							   const char *snapshot,
+							   const char *plugin,
+							   const char *slotName);
 
 bool catalog_setup(DatabaseCatalog *catalog);
 bool catalog_setup_fetch(SQLiteQuery *query);
@@ -488,7 +496,7 @@ bool catalog_iter_s_depend_finish(SourceDependIterator *iter);
 bool catalog_s_depend_fetch(SQLiteQuery *query);
 
 /*
- * Processes
+ * Processes, progress, summary
  */
 typedef struct ProcessInfo
 {
@@ -499,6 +507,7 @@ typedef struct ProcessInfo
 	uint32_t partNumber;
 	uint32_t indexOid;
 } ProcessInfo;
+
 
 bool catalog_upsert_process_info(DatabaseCatalog *catalog, ProcessInfo *ps);
 bool catalog_delete_process(DatabaseCatalog *catalog, pid_t pid);
@@ -514,6 +523,17 @@ bool catalog_iter_s_index_in_progress(DatabaseCatalog *catalog,
 									  SourceIndexIterFun *callback);
 
 bool catalog_iter_s_index_in_progress_init(SourceIndexIterator *iter);
+
+
+typedef struct CatalogProgressCount
+{
+	uint64_t table;
+	uint64_t index;
+} CatalogProgressCount;
+
+bool catalog_count_summary_done(DatabaseCatalog *catalog,
+								CatalogProgressCount *count);
+bool catalog_count_summary_done_fetch(SQLiteQuery *query);
 
 
 /*

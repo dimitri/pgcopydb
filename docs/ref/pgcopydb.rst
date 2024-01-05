@@ -8,20 +8,9 @@ pgcopydb - copy an entire Postgres database from source to target
 Synopsis
 --------
 
-pgcopydb provides the following commands::
+pgcopydb provides the following commands
 
-  pgcopydb
-    clone     Clone an entire database from source to target
-    fork      Clone an entire database from source to target
-    follow    Replay changes from the source database to the target database
-    snapshot  Create and export a snapshot on the source database
-  + copy      Implement the data section of the database copy
-  + dump      Dump database objects from a Postgres instance
-  + restore   Restore database objects into a Postgres instance
-  + list      List database objects from a Postgres instance
-  + stream    Stream changes from the source database
-    help      Print help message
-    version   Print pgcopydb version
+.. include:: ../include/pgcopydb.rst
 
 Description
 -----------
@@ -53,6 +42,7 @@ The ``pgcopydb help`` command lists all the supported sub-commands:
       fork      Clone an entire database from source to target
       follow    Replay changes from the source database to the target database
       snapshot  Create and export a snapshot on the source database
+    + compare   Compare source and target databases
     + copy      Implement the data section of the database copy
     + dump      Dump database objects from a Postgres instance
     + restore   Restore database objects into a Postgres instance
@@ -61,6 +51,10 @@ The ``pgcopydb help`` command lists all the supported sub-commands:
       ping      Attempt to connect to the source and target instances
       help      Print help message
       version   Print pgcopydb version
+
+    pgcopydb compare
+      schema  Compare source and target schema
+      data    Compare source and target data
 
     pgcopydb copy
       db           Copy an entire database from source to target
@@ -111,8 +105,7 @@ The ``pgcopydb help`` command lists all the supported sub-commands:
       apply      Apply changes from the source database into the target database
 
     pgcopydb stream sentinel
-      create  Create the sentinel table on the source database
-      drop    Drop the sentinel table on the source database
+      setup   Setup the sentinel table
       get     Get the sentinel table values on the source database
     + set     Maintain a sentinel table on the source database
 
@@ -160,13 +153,7 @@ pgcopydb ping
 The ``pgcopydb ping`` command attempts to connect to both the source and the
 target Postgres databases, concurrently.
 
-::
-
-   pgcopydb ping: Attempt to connect to the source and target instances
-   usage: pgcopydb ping  --source ... --target ...
-
-     --source              Postgres URI to the source database
-     --target              Postgres URI to the target database
+.. include:: ../include/ping.rst
 
 An example output looks like the following:
 

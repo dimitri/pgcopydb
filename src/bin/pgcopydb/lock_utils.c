@@ -305,7 +305,7 @@ semaphore_lock(Semaphore *semaphore)
 	 * from the operation prematurely because we were sent a signal.  So we
 	 * try and lock the semaphore again.
 	 */
-	int errStatus;
+	int errStatus = 0;
 	struct sembuf sops;
 
 	sops.sem_op = -1;           /* decrement */
@@ -313,7 +313,8 @@ semaphore_lock(Semaphore *semaphore)
 	sops.sem_num = 0;
 
 	do {
-		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		if (errStatus < 0 &&
+			(asked_to_stop || asked_to_stop_fast || asked_to_quit))
 		{
 			return false;
 		}
@@ -360,7 +361,7 @@ semaphore_unlock(Semaphore *semaphore)
 	 * from the operation prematurely because we were sent a signal. So we try
 	 * and unlock the semaphore again.
 	 */
-	int errStatus;
+	int errStatus = 0;
 	struct sembuf sops;
 
 	sops.sem_op = 1;            /* increment */
@@ -368,7 +369,8 @@ semaphore_unlock(Semaphore *semaphore)
 	sops.sem_num = 0;
 
 	do {
-		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		if (errStatus < 0 &&
+			(asked_to_stop || asked_to_stop_fast || asked_to_quit))
 		{
 			return false;
 		}

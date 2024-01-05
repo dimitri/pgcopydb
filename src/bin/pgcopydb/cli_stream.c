@@ -1105,6 +1105,7 @@ cli_stream_apply(int argc, char **argv)
 		StreamApplyContext context = { 0 };
 
 		if (!stream_apply_init_context(&context,
+									   &(copySpecs.catalogs.source),
 									   &(copySpecs.cfPaths.cdc),
 									   &(streamDBoptions.connStrings),
 									   streamDBoptions.origin,

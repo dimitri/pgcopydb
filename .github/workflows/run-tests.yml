@@ -48,6 +48,10 @@ jobs:
         run: |
             echo "TEST=${{ matrix.TEST }}" >> $GITHUB_ENV
 
+      - name: Fix workdir host permissions
+        run: |
+          chmod a+rwx tests/*/workdir
+
       - name: Run a test
         timeout-minutes: 5
         run: |
@@ -61,3 +65,13 @@ jobs:
 
     - name: Check C style
       run: citus_indent --check
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      - name: Build docs
+        uses: ammaraskar/sphinx-action@master
+        with:
+          docs-folder: "docs/"

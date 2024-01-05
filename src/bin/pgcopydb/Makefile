@@ -49,6 +49,13 @@ DEFAULT_CFLAGS += -Werror=implicit-function-declaration
 DEFAULT_CFLAGS += -Werror=return-type
 DEFAULT_CFLAGS += -Wno-declaration-after-statement
 
+ifdef DEBUG
+# Use optimization option that provides good debugging experience
+# https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html.
+# It overrides '-O2' flag of pg_config.
+DEFAULT_CFLAGS += -Og
+endif
+
 # Needed for FreeBSD
 DEFAULT_CFLAGS += -D_WANT_SEMUN
 

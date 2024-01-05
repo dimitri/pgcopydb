@@ -21,6 +21,9 @@ maintainer-clean: clean
 docs:
 	$(MAKE) -C docs clean man html
 
+update-docs: install
+	bash ./docs/update-help-messages.sh
+
 test: build
 	$(MAKE) -C tests all
 
