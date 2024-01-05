@@ -46,7 +46,7 @@ ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
 	/*
 	 * Validate nspname is not NULL or empty
 	 */
-	if (nspname == NULL || strlen(nspname) == 0)
+	if (nspname == NULL || IS_EMPTY_STRING_BUFFER(nspname))
 	{
 		log_error("BUG: nspname is NULL or empty");
 		return false;
