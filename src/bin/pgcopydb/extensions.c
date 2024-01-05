@@ -16,6 +16,8 @@
 #include "signals.h"
 
 
+static bool copydb_copy_ext_table(PGSQL *src, PGSQL *dst, char *qname, char *condition);
+static bool copydb_copy_ext_sequence(PGSQL *src, PGSQL *dst, char *qname);
 static bool copydb_copy_extensions_hook(void *ctx, SourceExtension *ext);
 
 
@@ -141,6 +143,59 @@ copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions)
 
 
 /*
+ * copydb_copy_ext_table copies table data from the source extension
+ * configuration table into the target extension.
+ */
+static bool
+copydb_copy_ext_table(PGSQL *src, PGSQL *dst, char *qname, char *condition)
+{
+	CopyArgs args = {
+		.srcQname = qname,
+		.srcAttrList = "*",
+		.srcWhereClause = condition,
+		.dstQname = qname,
+		.dstAttrList = "",
+		.bytesTransmitted = 0
+	};
+
+	if (!pg_copy(src, dst, &args))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * copydb_copy_ext_sequence copies sequence values from the source extension
+ * configuration table into the target extension.
+ */
+static bool
+copydb_copy_ext_sequence(PGSQL *src, PGSQL *dst, char *qname)
+{
+	SourceSequence seq = { 0 };
+
+	strlcpy(seq.qname, qname, sizeof(seq.qname));
+
+	if (!schema_get_sequence_value(src, &seq))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!schema_set_sequence_value(dst, &seq))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * copydb_copy_extensions_hook is an iterator callback function.
  */
 static bool
@@ -200,31 +255,72 @@ copydb_copy_extensions_hook(void *ctx, SourceExtension *ext)
 		{
 			SourceExtensionConfig *config = &(ext->config.array[i]);
 
-			log_info("COPY extension \"%s\" "
-					 "configuration table \"%s\".\"%s\"",
-					 ext->extname,
-					 config->nspname,
-					 config->relname);
-
 			char qname[PG_NAMEDATALEN_FQ] = { 0 };
 
 			sformat(qname, sizeof(qname), "%s.%s",
 					config->nspname,
 					config->relname);
 
-			CopyArgs args = {
-				.srcQname = qname,
-				.srcAttrList = "*",
-				.srcWhereClause = config->condition,
-				.dstQname = qname,
-				.dstAttrList = "",
-				.bytesTransmitted = 0
-			};
-
-			if (!pg_copy(src, dst, &args))
+			switch (config->relkind)
 			{
-				/* errors have already been logged */
-				return false;
+				/*
+				 * According to the PostgreSQL documentation, relkind 'r' is a
+				 * regular table, and 'S' is a sequence.
+				 * https://www.postgresql.org/docs/current/catalog-pg-class.html
+				 */
+				case 'r':
+				{
+					log_info("COPY extension \"%s\" "
+							 "configuration table %s",
+							 ext->extname,
+							 qname);
+
+
+					if (!copydb_copy_ext_table(src,
+											   dst,
+											   qname,
+											   config->condition))
+					{
+						/* errors have already been logged */
+						return false;
+					}
+
+					break;
+				}
+
+				case 'S':
+				{
+					log_info("COPY extension \"%s\" "
+							 "configuration sequence %s",
+							 ext->extname,
+							 qname);
+
+					if (!copydb_copy_ext_sequence(src,
+												  dst,
+												  qname))
+					{
+						/* errors have already been logged */
+						return false;
+					}
+
+					break;
+				}
+
+				default:
+				{
+					/*
+					 * According to the PostgreSQL documentation, extension
+					 * configuration tables can only be of type table or
+					 * sequence.
+					 * https://www.postgresql.org/docs/current/extend-extensions.html#EXTEND-EXTENSIONS-CONFIG-TABLES
+					 */
+					log_error("Unexpected configuration type '%c' found "
+							  "for extension \"%s\" configuration table %s",
+							  (char) config->relkind,
+							  ext->extname,
+							  qname);
+					return false;
+				}
 			}
 		}
 	}
