@@ -814,7 +814,7 @@ cli_list_extension_print_hook(void *ctx, SourceExtension *ext)
 		return false;
 	}
 
-	char config[BUFSIZE] = { 0 };
+	char config[4 * BUFSIZE] = { 0 };
 
 	for (int c = 0; c < ext->config.count; c++)
 	{
