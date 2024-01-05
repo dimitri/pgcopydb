@@ -64,7 +64,7 @@ ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
 	/*
 	 * Filter-out pgcopydb.* in any case
 	 */
-	if (strcmp(nspname, "pgcopydb") == 0)
+	if (streq(nspname, "pgcopydb"))
 	{
 		log_info("Filtering out message for pgcopydb internal tables \"%s\"", nspname);
 		return true;
