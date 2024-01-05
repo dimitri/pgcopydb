@@ -91,8 +91,8 @@ ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
 		char *filteredNspName = filters->excludeTableDataList.array[i].nspname;
 		char *filteredRelName = filters->excludeTableDataList.array[i].relname;
 
-		if ((strcmp(filteredNspName, nspname) == 0 &&
-			 strcmp(filteredRelName, relname) == 0))
+		if (streq(filteredNspName, nspname) &&
+			streq(filteredRelName, relname))
 		{
 			log_debug("[exclude-table-data] Filtering out message for relname: %s.%s",
 					  filteredNspName, filteredRelName);
@@ -109,8 +109,8 @@ ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
 		char *filteredNspName = filters->includeOnlyTableList.array[i].nspname;
 		char *filteredRelName = filters->includeOnlyTableList.array[i].relname;
 
-		if (!(strcmp(filteredNspName, nspname) == 0 &&
-			  strcmp(filteredRelName, relname) == 0))
+		if (!(streq(filteredNspName, nspname) &&
+			  streq(filteredRelName, relname)))
 		{
 			log_debug("[include-only-table] Filtering out message for relname: %s.%s",
 					  filteredNspName, filteredRelName);
@@ -126,7 +126,7 @@ ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
 	{
 		char *filteredNspName = filters->includeOnlySchemaList.array[i].nspname;
 
-		if (!(strcmp(filteredNspName, nspname) == 0))
+		if (!streq(filteredNspName, nspname))
 		{
 			log_debug("[include-only-schema] Filtering out message for nspname: %s",
 					  filteredNspName);
@@ -143,8 +143,8 @@ ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
 		char *filteredNspName = filters->excludeTableList.array[i].nspname;
 		char *filteredRelName = filters->excludeTableList.array[i].relname;
 
-		if ((strcmp(filteredNspName, nspname) == 0 &&
-			 strcmp(filteredRelName, relname) == 0))
+		if (streq(filteredNspName, nspname) &&
+			streq(filteredRelName, relname))
 		{
 			log_debug("[exclude-table] Filtering out message for relname: %s.%s",
 					  filteredNspName, filteredRelName);
@@ -160,7 +160,7 @@ ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
 	{
 		char *filteredNspName = filters->excludeSchemaList.array[i].nspname;
 
-		if ((strcmp(filteredNspName, nspname) == 0))
+		if (streq(filteredNspName, nspname))
 		{
 			log_debug("[exclude-schema] Filtering out message for nspname: %s",
 					  filteredNspName);
