@@ -20,12 +20,7 @@
 #include "parsing_utils.h"
 #include "pgcmd.h"
 #include "pgsql.h"
-
-typedef struct SplitTableLargerThan
-{
-	uint64_t bytes;
-	char bytesPretty[NAMEDATALEN];
-} SplitTableLargerThan;
+#include "schema.h"
 
 
 typedef struct CopyDBOptions

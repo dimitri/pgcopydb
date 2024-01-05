@@ -1,30 +1,54 @@
-2023-07-31 13:58:39 96 INFO   main.c:163                Running pgcopydb version 0.13.3.g1e88091 from "/usr/local/bin/pgcopydb"
-2023-07-31 13:58:39 96 INFO   cli_list.c:1081           Listing COPY partitions for table "public"."table_1" in "postgres://postgres@source/postgres"
-2023-07-31 13:58:39 96 INFO   cli_list.c:1195           Table "public"."table_1" COPY will be split 10-ways
-        Part |          Min |          Max |        Count
--------------+--------------+--------------+-------------
-        1/10 |            1 |           11 |           11
-        2/10 |           12 |           22 |           11
-        3/10 |           23 |           33 |           11
-        4/10 |           34 |           44 |           11
-        5/10 |           45 |           55 |           11
-        6/10 |           56 |           66 |           11
-        7/10 |           67 |           77 |           11
-        8/10 |           78 |           88 |           11
-        9/10 |           89 |           99 |           11
-       10/10 |          100 |          100 |            1
+     OID |               Schema Name |                Table Name |         Part |          Min |          Max |        Count
+---------+---------------------------+---------------------------+--------------+--------------+--------------+-------------
+   16432 |                    public |                   table_1 |         1/10 |            1 |           11 |           11
+   16432 |                    public |                   table_1 |         2/10 |           12 |           22 |           11
+   16432 |                    public |                   table_1 |         3/10 |           23 |           33 |           11
+   16432 |                    public |                   table_1 |         4/10 |           34 |           44 |           11
+   16432 |                    public |                   table_1 |         5/10 |           45 |           55 |           11
+   16432 |                    public |                   table_1 |         6/10 |           56 |           66 |           11
+   16432 |                    public |                   table_1 |         7/10 |           67 |           77 |           11
+   16432 |                    public |                   table_1 |         8/10 |           78 |           88 |           11
+   16432 |                    public |                   table_1 |         9/10 |           89 |           99 |           11
+   16432 |                    public |                   table_1 |        10/10 |          100 |          100 |            1
 
-2023-07-31 13:58:39 97 INFO   main.c:163                Running pgcopydb version 0.13.3.g1e88091 from "/usr/local/bin/pgcopydb"
-2023-07-31 13:58:39 97 INFO   cli_list.c:1081           Listing COPY partitions for table "public"."table_2" in "postgres://postgres@source/postgres"
-2023-07-31 13:58:39 97 INFO   cli_list.c:1195           Table "public"."table_2" COPY will be split 5-ways
-        Part |          Min |          Max |        Count
--------------+--------------+--------------+-------------
-         1/5 |            1 |           21 |           21
-         2/5 |           22 |           42 |           21
-         3/5 |           43 |           63 |           21
-         4/5 |           64 |           84 |           21
-         5/5 |           85 |          100 |           16
+     OID |               Schema Name |                Table Name |         Part |          Min |          Max |        Count
+---------+---------------------------+---------------------------+--------------+--------------+--------------+-------------
+   16456 |                    public |                   table_4 |         1/11 |        (0,0) |        (0,0) |            1
+   16456 |                    public |                   table_4 |         2/11 |        (1,0) |        (1,0) |            1
+   16456 |                    public |                   table_4 |        11/11 |        (1,0) |            - |            -
 
-2023-07-31 13:58:39 98 INFO   main.c:163                Running pgcopydb version 0.13.3.g1e88091 from "/usr/local/bin/pgcopydb"
-2023-07-31 13:58:39 98 INFO   cli_list.c:1081           Listing COPY partitions for table "public"."table_3" in "postgres://postgres@source/postgres"
-2023-07-31 13:58:39 98 INFO   cli_list.c:1188           Table "public"."table_3" () will not be split
+     OID |               Schema Name |                Table Name |         Part |          Min |          Max |        Count
+---------+---------------------------+---------------------------+--------------+--------------+--------------+-------------
+   16467 |          "Sp1eCial .Char" |            source1testing |         1/10 |            1 |         1001 |         1001
+   16467 |          "Sp1eCial .Char" |            source1testing |         2/10 |         1002 |         2002 |         1001
+   16467 |          "Sp1eCial .Char" |            source1testing |         3/10 |         2003 |         3003 |         1001
+   16467 |          "Sp1eCial .Char" |            source1testing |         4/10 |         3004 |         4004 |         1001
+   16467 |          "Sp1eCial .Char" |            source1testing |         5/10 |         4005 |         5005 |         1001
+   16467 |          "Sp1eCial .Char" |            source1testing |         6/10 |         5006 |         6006 |         1001
+   16467 |          "Sp1eCial .Char" |            source1testing |         7/10 |         6007 |         7007 |         1001
+   16467 |          "Sp1eCial .Char" |            source1testing |         8/10 |         7008 |         8008 |         1001
+   16467 |          "Sp1eCial .Char" |            source1testing |         9/10 |         8009 |         9009 |         1001
+   16467 |          "Sp1eCial .Char" |            source1testing |        10/10 |         9010 |        10000 |          991
+
+     OID |               Schema Name |                Table Name |         Part |          Min |          Max |        Count
+---------+---------------------------+---------------------------+--------------+--------------+--------------+-------------
+   16472 |          "Sp1eCial .Char" |         "Tabl e.1testing" |         1/10 |            1 |         1001 |         1001
+   16472 |          "Sp1eCial .Char" |         "Tabl e.1testing" |         2/10 |         1002 |         2002 |         1001
+   16472 |          "Sp1eCial .Char" |         "Tabl e.1testing" |         3/10 |         2003 |         3003 |         1001
+   16472 |          "Sp1eCial .Char" |         "Tabl e.1testing" |         4/10 |         3004 |         4004 |         1001
+   16472 |          "Sp1eCial .Char" |         "Tabl e.1testing" |         5/10 |         4005 |         5005 |         1001
+   16472 |          "Sp1eCial .Char" |         "Tabl e.1testing" |         6/10 |         5006 |         6006 |         1001
+   16472 |          "Sp1eCial .Char" |         "Tabl e.1testing" |         7/10 |         6007 |         7007 |         1001
+   16472 |          "Sp1eCial .Char" |         "Tabl e.1testing" |         8/10 |         7008 |         8008 |         1001
+   16472 |          "Sp1eCial .Char" |         "Tabl e.1testing" |         9/10 |         8009 |         9009 |         1001
+   16472 |          "Sp1eCial .Char" |         "Tabl e.1testing" |        10/10 |         9010 |        10000 |          991
+
+     OID |               Schema Name |                Table Name |         Part |          Min |          Max |        Count
+---------+---------------------------+---------------------------+--------------+--------------+--------------+-------------
+   16440 |                    public |                   table_2 |          1/5 |            1 |           21 |           21
+   16440 |                    public |                   table_2 |          2/5 |           22 |           42 |           21
+   16440 |                    public |                   table_2 |          3/5 |           43 |           63 |           21
+   16440 |                    public |                   table_2 |          4/5 |           64 |           84 |           21
+   16440 |                    public |                   table_2 |          5/5 |           85 |          100 |           16
+
+

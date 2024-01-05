@@ -20,7 +20,14 @@ create table table_3 (
     c_char char(10)
 );
 
--- Insert 100 rows into table_1 and duplicate data in table_2 and table_3.
+-- Create one more table with same schema except it doesn't have
+-- primary key (or any suitable part-key).
+create table table_4 (
+    c_bigserial bigserial,
+    c_char char(10)
+);
+
+-- Insert 100 rows into table_1 and duplicate it to table_2, table_3 and table_4.
 
 insert into table_1 (c_char)
 select
@@ -36,6 +43,12 @@ from
     table_1;
 
 insert into table_3
+select
+    *
+from
+    table_1;
+
+insert into table_4
 select
     *
 from
@@ -62,7 +75,11 @@ with cache_table_size as ((
     union (
         select
             'table_2'::regclass::oid,
-            51200))
+            51200)
+    union (
+        select
+            'table_4'::regclass::oid,
+            102400))
 insert into pgcopydb.pgcopydb_table_size (oid, bytes)
 select
     *
@@ -109,6 +126,6 @@ from
 
 insert into pgcopydb.pgcopydb_table_size (oid, bytes)
      select tname::regclass,
-            10 * 1024 * 1024
+            100 * 1024 -- 100 KiB
        from (values ('"Sp1eCial .Char"."source1testing"'),
                     ('"Sp1eCial .Char"."Tabl e.1testing"')) as t(tname);

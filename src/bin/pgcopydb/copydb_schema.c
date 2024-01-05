@@ -478,7 +478,8 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 	/*
 	 * Now get the list of the tables we want to COPY over.
 	 */
-	if (!schema_list_ordinary_tables(pgsql, filters, sourceDB) ||
+	if (!schema_list_ordinary_tables(pgsql, filters,
+									 sourceDB, &(specs->splitTablesLargerThan)) ||
 		!catalog_register_section(sourceDB, DATA_SECTION_TABLE_DATA))
 	{
 		/* errors have already been logged */
@@ -548,28 +549,13 @@ copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
 		return true;
 	}
 
-	/*
-	 * Now compute partition scheme for same-table COPY concurrency, either
-	 * using a integer field that is unique, or relying on CTID range scans
-	 * otherwise.
-	 *
-	 * When the Table Access Method used is not "heap" we don't know if the
-	 * CTID range scan is supported (see columnar storage extensions), so
-	 * we skip partitioning altogether in that case.
-	 */
-	if (IS_EMPTY_STRING_BUFFER(source->partKey) &&
-		streq(source->amname, "heap"))
+	if (IS_EMPTY_STRING_BUFFER(source->partKey))
 	{
-		log_info("Table %s is %s large "
-				 "which is larger than --split-tables-larger-than %s, "
-				 "and does not have a unique column of type integer: "
-				 "splitting by CTID",
-				 source->qname,
-				 source->bytesPretty,
-				 specs->splitTablesLargerThan.bytesPretty);
+		return true;
+	}
 
-		strlcpy(source->partKey, "ctid", sizeof(source->partKey));
-
+	if (streq(source->partKey, "ctid"))
+	{
 		/*
 		 * Make sure we have proper statistics (relpages) about the table
 		 * before compute the CTID ranges for the concurrent table scans.
@@ -586,20 +572,6 @@ copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
 					  source->qname);
 			return false;
 		}
-	}
-	else if (!streq(source->amname, "heap"))
-	{
-		log_info("Table %s is %s large "
-				 "which is larger than --split-tables-larger-than %s, "
-				 "does not have a unique column of type integer, "
-				 "and uses table access method \"%s\": "
-				 "same table concurrency is not enabled",
-				 source->qname,
-				 source->bytesPretty,
-				 specs->splitTablesLargerThan.bytesPretty,
-				 source->amname);
-
-		return true;
 	}
 
 	/*
@@ -817,7 +789,8 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		 specs->section == DATA_SECTION_TABLE_DATA) &&
 		!filtersDB->sections[DATA_SECTION_TABLE_DATA].fetched)
 	{
-		if (!schema_list_ordinary_tables(pgsql, filters, filtersDB) ||
+		if (!schema_list_ordinary_tables(pgsql, filters,
+										 filtersDB, &(specs->splitTablesLargerThan)) ||
 			!catalog_register_section(filtersDB, DATA_SECTION_TABLE_DATA))
 		{
 			/* errors have already been logged */

@@ -40,6 +40,8 @@ static bool prepareFilterCopyTableList(PGSQL *pgsql,
 									   SourceFilterTableList *tableList,
 									   const char *temp_table_name);
 
+static bool useCtidAsFallbackPartKey(SourceTable *source,
+									 SplitTableLargerThan *splitTablesLargerThan);
 
 /* Context used when fetching database definitions */
 typedef struct SourceDatabaseArrayContext
@@ -103,6 +105,7 @@ typedef struct SourceTableArrayContext
 	char sqlstate[SQLSTATE_LENGTH];
 	DatabaseCatalog *catalog;
 	bool parsedOk;
+	SplitTableLargerThan *splitTablesLargerThan;
 } SourceTableArrayContext;
 
 /* Context used when fetching all the sequence definitions */
@@ -1430,86 +1433,6 @@ struct FilteringQueries listSourceTablesSQL[] = {
 
 
 /*
- * schema_list_table fetches information for a given table.
- */
-bool
-schema_list_table(PGSQL *pgsql,
-				  const char *schemaName,
-				  const char *tableName,
-				  DatabaseCatalog *catalog)
-{
-	SourceTableArrayContext context = { { 0 }, catalog, false };
-
-	char *sql =
-		"  select c.oid, "
-		"         format('%I', n.nspname) as nspname, "
-		"         format('%I', c.relname) as relname, "
-		"         pg_am.amname, "
-		"         c.relpages, c.reltuples::bigint, "
-		"         null as bytes, "
-		"         null as pg_size_pretty, "
-		"         false as excludedata, "
-		"         format('%s %s %s', "
-		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
-		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')), "
-		"         null as partkey, "
-		"         attrs.js as attributes "
-
-		"    from pg_catalog.pg_class c"
-		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
-		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
-		"         join pg_roles auth ON auth.oid = c.relowner"
-		"         join lateral ( "
-		"               with atts as "
-		"               ("
-		"                  select attnum, atttypid::integer, "
-		"                         format('%I', attname) as attname, "
-		"                         i.indrelid is not null as attisprimary, "
-		"						  col.is_generated = 'ALWAYS' as attisgenerated "
-		"                    from pg_attribute a "
-		"                         left join pg_index i "
-		"                                on i.indrelid = a.attrelid "
-		"                               and a.attnum = ANY(i.indkey) "
-		"                               and i.indisprimary "
-		"					 	  left join information_schema.columns col "
-		"                    			on col.column_name = a.attname "
-		"					  			and col.table_name = c.relname "
-		"          			 			and col.table_schema = n.nspname "
-		"                   where a.attrelid = c.oid and not a.attisdropped "
-		"                     and a.attnum > 0 "
-		"                order by attnum "
-		"               ) "
-		"               select json_agg(row_to_json(atts)) as js "
-		"                from atts "
-		"              ) as attrs on true"
-		"   where n.nspname = $1 and c.relname = $2 ";
-
-	int paramCount = 2;
-	Oid paramTypes[2] = { TEXTOID, TEXTOID };
-	const char *paramValues[2] = { schemaName, tableName };
-
-	log_trace("schema_list_table");
-
-	if (!pgsql_execute_with_params(pgsql, sql,
-								   paramCount, paramTypes, paramValues,
-								   &context, &getTableArray))
-	{
-		log_error("Failed to list table \"%s\".\"%s\"", schemaName, tableName);
-		return false;
-	}
-
-	if (!context.parsedOk)
-	{
-		log_error("Failed to list table \"%s\".\"%s\"", schemaName, tableName);
-		return false;
-	}
-
-	return true;
-}
-
-
-/*
  * schema_list_ordinary_tables grabs the list of tables from the given source
  * Postgres instance and allocates a SourceTable array with the result of the
  * query.
@@ -1517,9 +1440,10 @@ schema_list_table(PGSQL *pgsql,
 bool
 schema_list_ordinary_tables(PGSQL *pgsql,
 							SourceFilters *filters,
-							DatabaseCatalog *catalog)
+							DatabaseCatalog *catalog,
+							SplitTableLargerThan *splitTablesLargerThan)
 {
-	SourceTableArrayContext context = { { 0 }, catalog, false };
+	SourceTableArrayContext context = { { 0 }, catalog, false, splitTablesLargerThan };
 
 	log_trace("schema_list_ordinary_tables");
 
@@ -1860,72 +1784,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"order by n.nspname, c.relname"
 	}
 };
-
-/*
- * schema_list_ordinary_tables_without_pk lists all tables that do not have a
- * primary key. This is useful to prepare a migration when some kind of change
- * data capture technique is considered.
- */
-bool
-schema_list_ordinary_tables_without_pk(PGSQL *pgsql,
-									   SourceFilters *filters,
-									   DatabaseCatalog *catalog)
-{
-	SourceTableArrayContext context = { { 0 }, catalog, false };
-
-	log_trace("schema_list_ordinary_tables_without_pk");
-
-	switch (filters->type)
-	{
-		case SOURCE_FILTER_TYPE_NONE:
-		{
-			/* skip filters preparing (temp tables) */
-			break;
-		}
-
-		case SOURCE_FILTER_TYPE_INCL:
-		case SOURCE_FILTER_TYPE_EXCL:
-		case SOURCE_FILTER_TYPE_LIST_NOT_INCL:
-		case SOURCE_FILTER_TYPE_LIST_EXCL:
-		{
-			if (!prepareFilters(pgsql, filters))
-			{
-				log_error("Failed to prepare pgcopydb filters, "
-						  "see above for details");
-				return false;
-			}
-			break;
-		}
-
-		/* SOURCE_FILTER_TYPE_EXCL_INDEX etc */
-		default:
-		{
-			log_error("BUG: schema_list_ordinary_tables_without_pk called with "
-					  "filtering type %d",
-					  filters->type);
-			return false;
-		}
-	}
-
-	log_debug("listSourceTablesNoPKSQL[%s]", filterTypeToString(filters->type));
-
-	char *sql = listSourceTablesNoPKSQL[filters->type].sql;
-
-	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
-								   &context, &getTableArray))
-	{
-		log_error("Failed to list tables without primary key");
-		return false;
-	}
-
-	if (!context.parsedOk)
-	{
-		log_error("Failed to list tables without primary key");
-		return false;
-	}
-
-	return true;
-}
 
 
 /*
@@ -4708,6 +4566,13 @@ getTableArray(void *ctx, PGresult *result)
 			break;
 		}
 
+		if (!useCtidAsFallbackPartKey(table, context->splitTablesLargerThan))
+		{
+			parsedOk = false;
+			free(table);
+			break;
+		}
+
 		if (context->catalog != NULL && context->catalog->db != NULL)
 		{
 			if (!catalog_add_s_table(context->catalog, table))
@@ -4723,6 +4588,54 @@ getTableArray(void *ctx, PGresult *result)
 	}
 
 	context->parsedOk = parsedOk;
+}
+
+
+/*
+ * useCtidAsFallbackPartKey checks whether we can use ctid as part-key if
+ * table doesn't have unique integer field.
+ */
+static bool
+useCtidAsFallbackPartKey(SourceTable *source,
+						 SplitTableLargerThan *splitTablesLargerThan)
+{
+	/* Skip if partKey is already calculated using unique integer field */
+	if (!IS_EMPTY_STRING_BUFFER(source->partKey))
+	{
+		return true;
+	}
+
+	/*
+	 * When the Table Access Method used is not "heap" we don't know if the
+	 * CTID range scan is supported (see columnar storage extensions), so
+	 * we skip partitioning altogether in that case.
+	 */
+	if (!streq(source->amname, "heap"))
+	{
+		log_info("Table %s is %s large, "
+				 "which is larger than --split-tables-larger-than %s, "
+				 "does not have a unique column of type integer, "
+				 "and uses table access method \"%s\": "
+				 "same table concurrency is not enabled",
+				 source->qname,
+				 source->bytesPretty,
+				 splitTablesLargerThan->bytesPretty,
+				 source->amname);
+
+		return true;
+	}
+
+	log_info("Table %s is %s large, "
+			 "which is larger than --split-tables-larger-than %s, "
+			 "and does not have a unique column of type integer: "
+			 "splitting by CTID",
+			 source->qname,
+			 source->bytesPretty,
+			 splitTablesLargerThan->bytesPretty);
+
+	strlcpy(source->partKey, "ctid", sizeof(source->partKey));
+
+	return true;
 }
 
 
