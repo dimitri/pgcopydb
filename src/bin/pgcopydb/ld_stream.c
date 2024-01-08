@@ -87,7 +87,7 @@ ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
 		if (streq(filteredNspName, nspname) &&
 			streq(filteredRelName, relname))
 		{
-			log_debug("[exclude-table-data] Filtering out message for relname: %s.%s",
+			log_trace("[exclude-table-data] Filtering out message for relname: %s.%s",
 					  filteredNspName, filteredRelName);
 			return true;
 		}
@@ -105,7 +105,7 @@ ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
 		if (!(streq(filteredNspName, nspname) &&
 			  streq(filteredRelName, relname)))
 		{
-			log_debug("[include-only-table] Filtering out message for relname: %s.%s",
+			log_trace("[include-only-table] Filtering out message for relname: %s.%s",
 					  filteredNspName, filteredRelName);
 			return true;
 		}
@@ -121,7 +121,7 @@ ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
 
 		if (!streq(filteredNspName, nspname))
 		{
-			log_debug("[include-only-schema] Filtering out message for nspname: %s",
+			log_trace("[include-only-schema] Filtering out message for nspname: %s",
 					  filteredNspName);
 			return true;
 		}
@@ -139,7 +139,7 @@ ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
 		if (streq(filteredNspName, nspname) &&
 			streq(filteredRelName, relname))
 		{
-			log_debug("[exclude-table] Filtering out message for relname: %s.%s",
+			log_trace("[exclude-table] Filtering out message for relname: %s.%s",
 					  filteredNspName, filteredRelName);
 			return true;
 		}
@@ -155,7 +155,7 @@ ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
 
 		if (streq(filteredNspName, nspname))
 		{
-			log_debug("[exclude-schema] Filtering out message for nspname: %s",
+			log_trace("[exclude-schema] Filtering out message for nspname: %s",
 					  filteredNspName);
 			return true;
 		}
