@@ -62,7 +62,6 @@ ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
 	}
 
 
-
 	/*
 	 * If no filters are set, then we don't need to filter out any messages
 	 */
