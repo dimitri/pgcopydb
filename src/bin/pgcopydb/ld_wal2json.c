@@ -123,10 +123,16 @@ parseWal2jsonMessageActionAndXid(LogicalStreamContext *context)
 		/*
 		 * Check if the message should be filtered out based on namespace and relation name
 		 */
-		if (ShouldFilterOutMessage(&(privateContext->filters), schema, table))
+
+		bool shouldFilterOutMessage = false;
+
+		if (!ShouldFilterOutMessage(&(privateContext->filters), schema, table,
+									&shouldFilterOutMessage))
 		{
-			metadata->filterOut = true;
+			log_error("Failed to check if message should be filtered out");
 		}
+
+		metadata->filterOut = shouldFilterOutMessage;
 	}
 
 	if (json_object_has_value(jsobj, "xid"))

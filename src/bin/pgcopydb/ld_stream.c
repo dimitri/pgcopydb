@@ -36,12 +36,13 @@ static bool updateStreamCounters(StreamContext *context,
 								 LogicalMessageMetadata *metadata);
 
 /*
- * Determines whether a message needs to be filtered out based on the
- * provided filters. The caller function should have already parsed and
- * validated the filters.
+ * Determines whether a message should be filtered out based on the provided source filters.
+ * @param shouldFilterOutMessage A pointer to a boolean variable indicating whether the message should be filtered out.
+ * Returns true if the function succeeded, false otherwise.
  */
 bool
-ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
+ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname,
+					   bool *shouldFilterOutMessage)
 {
 	/*
 	 * Validate nspname is not NULL or empty
@@ -67,7 +68,7 @@ ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
 	 */
 	if (filters->type == SOURCE_FILTER_TYPE_NONE)
 	{
-		return false;
+		*shouldFilterOutMessage = false;
 	}
 
 	/*
@@ -88,7 +89,7 @@ ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
 		{
 			log_trace("[exclude-table-data] Filtering out message for relname: %s.%s",
 					  filteredNspName, filteredRelName);
-			return true;
+			*shouldFilterOutMessage = true;
 		}
 	}
 
@@ -106,7 +107,7 @@ ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
 		{
 			log_trace("[include-only-table] Filtering out message for relname: %s.%s",
 					  filteredNspName, filteredRelName);
-			return true;
+			*shouldFilterOutMessage = true;
 		}
 	}
 
@@ -122,7 +123,7 @@ ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
 		{
 			log_trace("[include-only-schema] Filtering out message for nspname: %s",
 					  filteredNspName);
-			return true;
+			*shouldFilterOutMessage = true;
 		}
 	}
 
@@ -140,7 +141,7 @@ ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
 		{
 			log_trace("[exclude-table] Filtering out message for relname: %s.%s",
 					  filteredNspName, filteredRelName);
-			return true;
+			*shouldFilterOutMessage = true;
 		}
 	}
 
@@ -156,7 +157,7 @@ ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
 		{
 			log_trace("[exclude-schema] Filtering out message for nspname: %s",
 					  filteredNspName);
-			return true;
+			*shouldFilterOutMessage = true;
 		}
 	}
 
@@ -168,7 +169,7 @@ ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname)
 	/*
 	 * No filters matched, so we don't need to filter out the message
 	 */
-	return false;
+	return true;
 }
 
 

@@ -176,11 +176,15 @@ parseTestDecodingMessageActionAndXid(LogicalStreamContext *context)
 		/*
 		 * Check if the message should be filtered out based on namespace and relation name
 		 */
-		if (ShouldFilterOutMessage(&(privateContext->filters), header.table.nspname,
-								   header.table.relname))
+		bool shouldFilterOutMessage = false;
+
+		if (!ShouldFilterOutMessage(&(privateContext->filters), header.table.nspname,
+									header.table.relname, &shouldFilterOutMessage))
 		{
-			metadata->filterOut = true;
+			log_error("Failed to check if message should be filtered out");
 		}
+
+		metadata->filterOut = shouldFilterOutMessage;
 	}
 	else
 	{
