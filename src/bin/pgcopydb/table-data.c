@@ -27,7 +27,6 @@
 
 
 static bool copydb_copy_supervisor_add_table_hook(void *ctx, SourceTable *table);
-static void FreeCopyTableDataSpec(CopyTableDataSpec *tableSpecs);
 static void FreeCopyArgs(CopyArgs *args);
 
 /*
@@ -42,11 +41,17 @@ static void FreeCopyArgs(CopyArgs *args);
 bool
 copydb_copy_all_table_data(CopyDataSpec *specs)
 {
-	int errors = 0;
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	if (specs->dirState.tableCopyIsDone &&
-		specs->dirState.indexCopyIsDone &&
-		specs->dirState.sequenceCopyIsDone &&
+	if (!summary_start_timing(sourceDB, TIMING_SECTION_TOTAL_DATA))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (specs->runState.tableCopyIsDone &&
+		specs->runState.indexCopyIsDone &&
+		specs->runState.sequenceCopyIsDone &&
 		specs->section != DATA_SECTION_CONSTRAINTS)
 	{
 		log_info("Skipping tables, indexes, and sequences, "
@@ -54,12 +59,13 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 		return true;
 	}
 
-	/*
-	 * Now we have tableArray.count tables to migrate and we want to use
-	 * specs->tableJobs sub-processes to work on those migrations. Start the
-	 * processes, each sub-process walks through the array and pick the first
-	 * table that's not being processed already, until all has been done.
-	 */
+	/* close SQLite databases before fork() */
+	if (!catalog_close_from_specs(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (!copydb_process_table_data(specs))
 	{
 		log_fatal("Failed to COPY the data, see above for details");
@@ -75,14 +81,22 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 		return false;
 	}
 
-	/* Now write that we successfully finished copying all indexes */
-	if (!write_file("", 0, specs->cfPaths.done.indexes))
+	/*
+	 * Catalogs have been closed before forking sub-processes, re-open again.
+	 */
+	if (!catalog_open_from_specs(specs))
 	{
-		log_warn("Failed to write the tracking file \%s\"",
-				 specs->cfPaths.done.indexes);
+		/* errors have already been logged */
+		return false;
 	}
 
-	return errors == 0;
+	if (!summary_stop_timing(sourceDB, TIMING_SECTION_TOTAL_DATA))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
 }
 
 
@@ -95,13 +109,6 @@ bool
 copydb_process_table_data(CopyDataSpec *specs)
 {
 	int errors = 0;
-
-	/* close SQLite databases before fork() */
-	if (!catalog_close_from_specs(specs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
 
 	/*
 	 * Take care of extensions configuration table in an auxilliary process.
@@ -134,7 +141,7 @@ copydb_process_table_data(CopyDataSpec *specs)
 		/*
 		 * Start as many index worker process as --index-jobs
 		 */
-		if (errors == 0 && !copydb_start_index_workers(specs))
+		if (errors == 0 && !copydb_start_index_supervisor(specs))
 		{
 			/* errors have already been logged */
 			++errors;
@@ -145,7 +152,7 @@ copydb_process_table_data(CopyDataSpec *specs)
 		 * --table-jobs. Could be exposed separately as --vacuumJobs too, but
 		 * that's not been done at this time.
 		 */
-		if (errors == 0 && !vacuum_start_workers(specs))
+		if (errors == 0 && !vacuum_start_supervisor(specs))
 		{
 			/* errors have already been logged */
 			++errors;
@@ -299,6 +306,20 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 		return false;
 	}
 
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	if (!catalog_open(sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!summary_start_timing(sourceDB, TIMING_SECTION_COPY_DATA))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	/*
 	 * Now start the worker that adds tables to the queue.
 	 */
@@ -337,11 +358,16 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 		return false;
 	}
 
-	/* write that we successfully finished copying all tables */
-	if (!write_file("", 0, specs->cfPaths.done.tables))
+	if (!summary_stop_timing(sourceDB, TIMING_SECTION_COPY_DATA))
 	{
-		log_warn("Failed to write the tracking file \%s\"",
-				 specs->cfPaths.done.tables);
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_close(sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	bool success = true;
@@ -923,7 +949,7 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 	 * This check should be done in the critical section too. Only one process
 	 * can see all parts as done already, and that's the one finishing last.
 	 */
-	if (specs->dirState.indexCopyIsDone &&
+	if (specs->runState.indexCopyIsDone &&
 		specs->section != DATA_SECTION_CONSTRAINTS)
 	{
 		log_info("Skipping indexes, already done on a previous run");
@@ -1008,7 +1034,7 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	if (specs->dirState.tableCopyIsDone)
+	if (specs->runState.tableCopyIsDone)
 	{
 		log_notice("Skipping table %s, already done on a previous run",
 				   tableSpecs->sourceTable->qname);
@@ -1132,6 +1158,16 @@ copydb_mark_table_as_done(CopyDataSpec *specs,
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
 	if (!summary_finish_table(sourceDB, tableSpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!summary_increment_timing(sourceDB,
+								  TIMING_SECTION_COPY_DATA,
+								  1, /* count */
+								  tableSpecs->sourceTable->bytes,
+								  tableSpecs->summary.durationMs))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1462,7 +1498,7 @@ copydb_prepare_summary_command(CopyTableDataSpec *tableSpecs)
  * FreeCopyTableDataSpec takes care of free'ing the allocated memory for the
  * CopyTableDataSpec.
  */
-static void
+void
 FreeCopyTableDataSpec(CopyTableDataSpec *tableSpecs)
 {
 	free(tableSpecs->sourceTable);

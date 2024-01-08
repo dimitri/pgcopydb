@@ -151,10 +151,13 @@ pgcopydb list progress
 
 pgcopydb list progress - List the progress
 
-The command ``pgcopydb list progress`` reads the ``schema.json`` file in the
-work directory, parses it, and then computes how many tables and indexes are
-planned to be copied and created on the target database, how many have been
-done already, and how many are in-progress.
+The command ``pgcopydb list progress`` reads the internal SQLite catalogs in
+the work directory, parses it, and then computes how many tables and indexes
+are planned to be copied and created on the target database, how many have
+been done already, and how many are in-progress.
+
+The ``--summary`` option displays the top-level summary, and can be used
+while the command is running or after-the-fact.
 
 When using the option ``--json`` the JSON formatted output also includes a
 list of all the tables and indexes that are currently being processed.

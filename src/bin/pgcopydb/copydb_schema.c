@@ -22,6 +22,7 @@
 #include "summary.h"
 
 static bool copydb_fetch_source_catalog_setup(CopyDataSpec *specs);
+static bool copydb_fetch_previous_run_state(CopyDataSpec *specs);
 static bool copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src);
 
 static bool copydb_prepare_table_specs_hook(void *ctx, SourceTable *source);
@@ -48,6 +49,13 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 	{
 		log_info("Re-using catalog caches");
 		return true;
+	}
+
+	if (!summary_start_timing(&(specs->catalogs.source),
+							  TIMING_SECTION_CATALOG_QUERIES))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	/*
@@ -148,6 +156,24 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 		}
 	}
 
+	/*
+	 * The catalog totalDurationMs has been fetched from the previous state of
+	 * the cache in copydb_fetch_source_catalog_setup, update the value now.
+	 */
+	if (!catalog_total_duration(&(specs->catalogs.source)) ||
+		!catalog_total_duration(&(specs->catalogs.filter)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!summary_stop_timing(&(specs->catalogs.source),
+							 TIMING_SECTION_CATALOG_QUERIES))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	return true;
 }
 
@@ -172,6 +198,12 @@ copydb_fetch_source_catalog_setup(CopyDataSpec *specs)
 		return false;
 	}
 
+	if (!copydb_fetch_previous_run_state(specs))
+	{
+		log_error("Failed to fetch catalog state from a potential previous run");
+		return false;
+	}
+
 	/*
 	 * Now see if the cache has already been filled or if we need to connect to
 	 * the source and fetch the data again. By default, set fetchCatalogs to
@@ -180,6 +212,7 @@ copydb_fetch_source_catalog_setup(CopyDataSpec *specs)
 	specs->fetchCatalogs = true;
 
 	bool allDone = true;
+	sourceDB->totalDurationMs = 0;
 
 	/* skip DATA_SECTION_NONE (hard-coded to enum value 0) */
 	for (int i = 1; i < DATA_SECTION_COUNT; i++)
@@ -194,6 +227,8 @@ copydb_fetch_source_catalog_setup(CopyDataSpec *specs)
 			/* errors have already been logged */
 			return false;
 		}
+
+		sourceDB->totalDurationMs += s->durationMs;
 
 		/* compute "allDone" in the context of a sourceDB */
 		if (s->section == DATA_SECTION_DATABASE_PROPERTIES ||
@@ -216,6 +251,8 @@ copydb_fetch_source_catalog_setup(CopyDataSpec *specs)
 	}
 
 	/* compute "allDone" in the context of the filtersDB too */
+	filtersDB->totalDurationMs = 0;
+
 	if (specs->fetchFilteredOids)
 	{
 		/* skip DATA_SECTION_NONE (hard-coded to enum value 0) */
@@ -232,6 +269,7 @@ copydb_fetch_source_catalog_setup(CopyDataSpec *specs)
 				return false;
 			}
 
+			filtersDB->totalDurationMs += s->durationMs;
 
 			/* compute "allDone" in the context of a sourceDB */
 			if (s->section == DATA_SECTION_COLLATIONS ||
@@ -303,6 +341,74 @@ copydb_fetch_source_catalog_setup(CopyDataSpec *specs)
 
 
 /*
+ * copydb_fetch_previous_run_state inspects a potential previous run state.
+ */
+static bool
+copydb_fetch_previous_run_state(CopyDataSpec *specs)
+{
+	/*
+	 * See if previous work was done already, by using the timings
+	 * done_time_epoch columns of the Top-Level Timings in the catalogs.
+	 */
+	if (!summary_prepare_toplevel_durations(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (topLevelTimingArray[TIMING_SECTION_TOTAL].doneTime > 0)
+	{
+		specs->runState.allDone = true;
+		log_info("A previous run has run through completion");
+	}
+
+	if (topLevelTimingArray[TIMING_SECTION_DUMP_SCHEMA].doneTime > 0)
+	{
+		specs->runState.schemaDumpIsDone = true;
+		log_notice("Schema dump for pre-data and post-data have been done");
+	}
+
+	if (topLevelTimingArray[TIMING_SECTION_PREPARE_SCHEMA].doneTime > 0)
+	{
+		specs->runState.schemaPreDataHasBeenRestored = true;
+		log_notice("Pre-data schema has been restored on the target instance");
+	}
+
+	if (topLevelTimingArray[TIMING_SECTION_COPY_DATA].doneTime > 0)
+	{
+		specs->runState.tableCopyIsDone = true;
+		log_notice("Table Data has been copied to the target instance");
+	}
+
+	if (topLevelTimingArray[TIMING_SECTION_CREATE_INDEX].doneTime > 0)
+	{
+		specs->runState.indexCopyIsDone = true;
+		log_notice("Indexes have been copied to the target instance");
+	}
+
+	if (topLevelTimingArray[TIMING_SECTION_SET_SEQUENCES].doneTime > 0)
+	{
+		specs->runState.sequenceCopyIsDone = true;
+		log_notice("Sequences have been copied to the target instance");
+	}
+
+	if (topLevelTimingArray[TIMING_SECTION_LARGE_OBJECTS].doneTime > 0)
+	{
+		specs->runState.blobsCopyIsDone = true;
+		log_notice("Large Objects have been copied to the target instance");
+	}
+
+	if (topLevelTimingArray[TIMING_SECTION_FINALIZE_SCHEMA].doneTime > 0)
+	{
+		specs->runState.schemaPostDataHasBeenRestored = true;
+		log_notice("Post-data schema has been restored on the target instance");
+	}
+
+	return true;
+}
+
+
+/*
  * copydb_fetch_source_schema is a utility function for the previous definition
  * copydb_fetch_schema_and_prepare_specs.
  */
@@ -366,11 +472,24 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 		 specs->section == DATA_SECTION_DATABASE_PROPERTIES) &&
 		!sourceDB->sections[DATA_SECTION_DATABASE_PROPERTIES].fetched)
 	{
-		if (!schema_list_database_properties(src, sourceDB) ||
-			!catalog_register_section(sourceDB, DATA_SECTION_DATABASE_PROPERTIES))
+		TopLevelTiming timing = {
+			.label = CopyDataSectionToString(DATA_SECTION_DATABASE_PROPERTIES)
+		};
+
+		(void) catalog_start_timing(&timing);
+
+		if (!schema_list_database_properties(src, sourceDB))
 		{
 			log_error("Failed to fetch database properties, "
 					  "see above for details");
+			return false;
+		}
+
+		(void) catalog_stop_timing(&timing);
+
+		if (!catalog_register_section(sourceDB, &timing))
+		{
+			/* errors have already been logged */
 			return false;
 		}
 	}
@@ -475,11 +594,25 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 	SourceFilters *filters = &(specs->filters);
 
+	TopLevelTiming timing = {
+		.label = CopyDataSectionToString(DATA_SECTION_TABLE_DATA)
+	};
+
+	(void) catalog_start_timing(&timing);
+
 	/*
 	 * Now get the list of the tables we want to COPY over.
 	 */
-	if (!schema_list_ordinary_tables(pgsql, filters, sourceDB) ||
-		!catalog_register_section(sourceDB, DATA_SECTION_TABLE_DATA))
+	if (!schema_list_ordinary_tables(pgsql, filters, sourceDB))
+	{
+		log_error("Failed to prepare table specs in our catalogs, "
+				  "see above for details");
+		return false;
+	}
+
+	(void) catalog_stop_timing(&timing);
+
+	if (!catalog_register_section(sourceDB, &timing))
 	{
 		/* errors have already been logged */
 		return false;
@@ -490,6 +623,12 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 		log_info("Splitting source candidate tables larger than %s",
 				 specs->splitTablesLargerThan.bytesPretty);
 
+		TopLevelTiming timing = {
+			.label = CopyDataSectionToString(DATA_SECTION_TABLE_DATA_PARTS)
+		};
+
+		(void) catalog_start_timing(&timing);
+
 		PrepareTableSpecsContext context = {
 			.specs = specs,
 			.pgsql = pgsql
@@ -497,11 +636,18 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 
 		if (!catalog_iter_s_table(sourceDB,
 								  &context,
-								  &copydb_prepare_table_specs_hook) ||
-			!catalog_register_section(sourceDB, DATA_SECTION_TABLE_DATA_PARTS))
+								  &copydb_prepare_table_specs_hook))
 		{
 			log_error("Failed to prepare table specs from internal catalogs, "
 					  "see above for details");
+			return false;
+		}
+
+		(void) catalog_stop_timing(&timing);
+
+		if (!catalog_register_section(sourceDB, &timing))
+		{
+			/* errors have already been logged */
 			return false;
 		}
 	}
@@ -641,9 +787,34 @@ copydb_prepare_index_specs(CopyDataSpec *specs, PGSQL *pgsql)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	if (!schema_list_all_indexes(pgsql, &(specs->filters), sourceDB) ||
-		!catalog_register_section(sourceDB, DATA_SECTION_INDEXES) ||
-		!catalog_register_section(sourceDB, DATA_SECTION_CONSTRAINTS))
+	TopLevelTiming timing = {
+		.label = CopyDataSectionToString(DATA_SECTION_INDEXES)
+	};
+
+	(void) catalog_start_timing(&timing);
+
+	if (!schema_list_all_indexes(pgsql, &(specs->filters), sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	(void) catalog_stop_timing(&timing);
+
+	if (!catalog_register_section(sourceDB, &timing))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* also register constraints section, with zero duration */
+	TopLevelTiming cTiming = {
+		.label = CopyDataSectionToString(DATA_SECTION_CONSTRAINTS),
+		.startTime = timing.startTime,
+		.doneTime = timing.doneTime
+	};
+
+	if (!catalog_register_section(sourceDB, &cTiming))
 	{
 		/* errors have already been logged */
 		return false;
@@ -729,8 +900,21 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		 specs->section == DATA_SECTION_EXTENSIONS) &&
 		!filtersDB->sections[DATA_SECTION_EXTENSIONS].fetched)
 	{
-		if (!schema_list_extensions(pgsql, filtersDB) ||
-			!catalog_register_section(filtersDB, DATA_SECTION_EXTENSIONS))
+		TopLevelTiming timing = {
+			.label = CopyDataSectionToString(DATA_SECTION_EXTENSIONS)
+		};
+
+		(void) catalog_start_timing(&timing);
+
+		if (!schema_list_extensions(pgsql, filtersDB))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		(void) catalog_stop_timing(&timing);
+
+		if (!catalog_register_section(filtersDB, &timing))
 		{
 			/* errors have already been logged */
 			return false;
@@ -760,8 +944,21 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 	if (specs->skipCollations &&
 		!filtersDB->sections[DATA_SECTION_COLLATIONS].fetched)
 	{
-		if (!schema_list_collations(pgsql, filtersDB) ||
-			!catalog_register_section(filtersDB, DATA_SECTION_COLLATIONS))
+		TopLevelTiming timing = {
+			.label = CopyDataSectionToString(DATA_SECTION_COLLATIONS)
+		};
+
+		(void) catalog_start_timing(&timing);
+
+		if (!schema_list_collations(pgsql, filtersDB))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		(void) catalog_stop_timing(&timing);
+
+		if (!catalog_register_section(filtersDB, &timing))
 		{
 			/* errors have already been logged */
 			return false;
@@ -798,11 +995,24 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 				return false;
 			}
 
-			if (!catalog_prepare_filter(filtersDB) ||
-				!catalog_register_section(filtersDB, DATA_SECTION_FILTERS))
+			TopLevelTiming timing = {
+				.label = CopyDataSectionToString(DATA_SECTION_FILTERS)
+			};
+
+			(void) catalog_start_timing(&timing);
+
+			if (!catalog_prepare_filter(filtersDB))
 			{
 				log_error("Failed to prepare filtering hash-table, "
 						  "see above for details");
+				return false;
+			}
+
+			(void) catalog_stop_timing(&timing);
+
+			if (!catalog_register_section(filtersDB, &timing))
+			{
+				/* errors have already been logged */
 				return false;
 			}
 		}
@@ -817,8 +1027,22 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		 specs->section == DATA_SECTION_TABLE_DATA) &&
 		!filtersDB->sections[DATA_SECTION_TABLE_DATA].fetched)
 	{
-		if (!schema_list_ordinary_tables(pgsql, filters, filtersDB) ||
-			!catalog_register_section(filtersDB, DATA_SECTION_TABLE_DATA))
+		TopLevelTiming timing = {
+			.label = CopyDataSectionToString(DATA_SECTION_TABLE_DATA)
+		};
+
+		(void) catalog_start_timing(&timing);
+
+		if (!schema_list_ordinary_tables(pgsql, filters, filtersDB))
+		{
+			/* errors have already been logged */
+			filters->type = type;
+			return false;
+		}
+
+		(void) catalog_stop_timing(&timing);
+
+		if (!catalog_register_section(filtersDB, &timing))
 		{
 			/* errors have already been logged */
 			filters->type = type;
@@ -831,12 +1055,38 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		 specs->section == DATA_SECTION_CONSTRAINTS) &&
 		!filtersDB->sections[DATA_SECTION_INDEXES].fetched)
 	{
-		if (!schema_list_all_indexes(pgsql, filters, filtersDB) ||
-			!catalog_register_section(filtersDB, DATA_SECTION_INDEXES) ||
-			!catalog_register_section(filtersDB, DATA_SECTION_CONSTRAINTS))
+		TopLevelTiming timing = {
+			.label = CopyDataSectionToString(DATA_SECTION_INDEXES)
+		};
+
+		(void) catalog_start_timing(&timing);
+
+		if (!schema_list_all_indexes(pgsql, filters, filtersDB))
 		{
 			/* errors have already been logged */
 			filters->type = type;
+			return false;
+		}
+
+		(void) catalog_stop_timing(&timing);
+
+		if (!catalog_register_section(filtersDB, &timing))
+		{
+			/* errors have already been logged */
+			filters->type = type;
+			return false;
+		}
+
+		/* also register constraints section, with zero duration */
+		TopLevelTiming cTiming = {
+			.label = CopyDataSectionToString(DATA_SECTION_CONSTRAINTS),
+			.startTime = timing.startTime,
+			.doneTime = timing.doneTime
+		};
+
+		if (!catalog_register_section(filtersDB, &cTiming))
+		{
+			/* errors have already been logged */
 			return false;
 		}
 	}
@@ -845,8 +1095,22 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		 specs->section == DATA_SECTION_SET_SEQUENCES) &&
 		!filtersDB->sections[DATA_SECTION_SET_SEQUENCES].fetched)
 	{
-		if (!schema_list_sequences(pgsql, filters, filtersDB) ||
-			!catalog_register_section(filtersDB, DATA_SECTION_SET_SEQUENCES))
+		TopLevelTiming timing = {
+			.label = CopyDataSectionToString(DATA_SECTION_SET_SEQUENCES)
+		};
+
+		(void) catalog_start_timing(&timing);
+
+		if (!schema_list_sequences(pgsql, filters, filtersDB))
+		{
+			/* errors have already been logged */
+			filters->type = type;
+			return false;
+		}
+
+		(void) catalog_stop_timing(&timing);
+
+		if (!catalog_register_section(filtersDB, &timing))
 		{
 			/* errors have already been logged */
 			filters->type = type;
@@ -856,8 +1120,22 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 
 	if (!filtersDB->sections[DATA_SECTION_DEPENDS].fetched)
 	{
-		if (!schema_list_pg_depend(pgsql, filters, filtersDB) ||
-			!catalog_register_section(filtersDB, DATA_SECTION_DEPENDS))
+		TopLevelTiming timing = {
+			.label = CopyDataSectionToString(DATA_SECTION_DEPENDS)
+		};
+
+		(void) catalog_start_timing(&timing);
+
+		if (!schema_list_pg_depend(pgsql, filters, filtersDB))
+		{
+			/* errors have already been logged */
+			filters->type = type;
+			return false;
+		}
+
+		(void) catalog_stop_timing(&timing);
+
+		if (!catalog_register_section(filtersDB, &timing))
 		{
 			/* errors have already been logged */
 			filters->type = type;
@@ -881,11 +1159,24 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		 specs->section == DATA_SECTION_FILTERS) &&
 		!filtersDB->sections[DATA_SECTION_FILTERS].fetched)
 	{
-		if (!catalog_prepare_filter(filtersDB) ||
-			!catalog_register_section(filtersDB, DATA_SECTION_FILTERS))
+		TopLevelTiming timing = {
+			.label = CopyDataSectionToString(DATA_SECTION_FILTERS)
+		};
+
+		(void) catalog_start_timing(&timing);
+
+		if (!catalog_prepare_filter(filtersDB))
 		{
 			log_error("Failed to prepare filtering hash-table, "
 					  "see above for details");
+			return false;
+		}
+
+		(void) catalog_stop_timing(&timing);
+
+		if (!catalog_register_section(filtersDB, &timing))
+		{
+			/* errors have already been logged */
 			return false;
 		}
 	}

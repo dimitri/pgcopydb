@@ -41,6 +41,12 @@ copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
+	TopLevelTiming timing = {
+		.label = CopyDataSectionToString(DATA_SECTION_SET_SEQUENCES)
+	};
+
+	(void) catalog_start_timing(&timing);
+
 	if (!schema_list_sequences(pgsql, &(specs->filters), sourceDB))
 	{
 		/* errors have already been logged */
@@ -72,7 +78,9 @@ copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql)
 		return false;
 	}
 
-	if (!catalog_register_section(sourceDB, DATA_SECTION_SET_SEQUENCES))
+	(void) catalog_stop_timing(&timing);
+
+	if (!catalog_register_section(sourceDB, &timing))
 	{
 		/* errors have already been logged */
 		return false;
@@ -188,6 +196,13 @@ copydb_start_seq_process(CopyDataSpec *specs)
 }
 
 
+typedef struct CopySeqContext
+{
+	PGSQL *dst;
+	uint64_t count;
+} CopySeqContext;
+
+
 /*
  * copydb_copy_all_sequences fetches the list of sequences from the source
  * database and then for each of them runs a SELECT last_value, is_called FROM
@@ -199,10 +214,25 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 {
 	log_notice("Now starting setval process %d [%d]", getpid(), getppid());
 
-	if (specs->dirState.sequenceCopyIsDone)
+	if (specs->runState.sequenceCopyIsDone)
 	{
 		log_info("Skipping sequences, already done on a previous run");
 		return true;
+	}
+
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	if (!catalog_open(sourceDB))
+	{
+		log_error("Failed to open internal catalogs in sequence reset worker, "
+				  "see above for details");
+		return false;
+	}
+
+	if (!summary_start_timing(sourceDB, TIMING_SECTION_SET_SEQUENCES))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	if (specs->section != DATA_SECTION_SET_SEQUENCES &&
@@ -213,13 +243,6 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 	}
 
 	log_info("Reset sequences values on the target database");
-
-	if (!catalog_init_from_specs(specs))
-	{
-		log_error("Failed to open internal catalogs in CREATE INDEX worker, "
-				  "see above for details");
-		return false;
-	}
 
 	PGSQL dst = { 0 };
 
@@ -235,9 +258,9 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 		return false;
 	}
 
-	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+	CopySeqContext context = { .dst = &dst, .count = 0 };
 
-	if (!catalog_iter_s_seq(sourceDB, &dst, &copydb_copy_all_sequences_hook))
+	if (!catalog_iter_s_seq(sourceDB, &context, &copydb_copy_all_sequences_hook))
 	{
 		log_error("Failed to copy sequences values from our internal catalogs, "
 				  "see above for details");
@@ -251,17 +274,24 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 		return false;
 	}
 
-	if (!catalog_close_from_specs(specs))
+	if (!summary_stop_timing(sourceDB, TIMING_SECTION_SET_SEQUENCES))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	/* and write that we successfully finished copying all sequences */
-	if (!write_file("", 0, specs->cfPaths.done.sequences))
+	if (!summary_set_timing_count(sourceDB,
+								  TIMING_SECTION_SET_SEQUENCES,
+								  context.count))
 	{
-		log_warn("Failed to write the tracking file \%s\"",
-				 specs->cfPaths.done.sequences);
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_close(sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	return true;
@@ -274,13 +304,15 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 static bool
 copydb_copy_all_sequences_hook(void *ctx, SourceSequence *seq)
 {
-	PGSQL *dst = (PGSQL *) ctx;
+	CopySeqContext *context = (CopySeqContext *) ctx;
 
-	if (!schema_set_sequence_value(dst, seq))
+	if (!schema_set_sequence_value(context->dst, seq))
 	{
 		log_error("Failed to set sequence values for %s", seq->qname);
 		return false;
 	}
+
+	++(context->count);
 
 	return true;
 }

@@ -132,6 +132,7 @@ typedef struct CopyTableDataSpec
 
 	SourceTable *sourceTable;
 	CopyTableSummary summary;
+	CopyVacuumTableSummary vSummary;
 	CopyArgs copyArgs;
 
 	int tableJobs;
@@ -185,12 +186,28 @@ typedef struct CopyDBSentinel
 } CopyDBSentinel;
 
 
+/* we can inspect the source catalogs and discover previous run state */
+typedef struct PreviousRunState
+{
+	bool schemaDumpIsDone;
+	bool schemaPreDataHasBeenRestored;
+	bool schemaPostDataHasBeenRestored;
+
+	bool tableCopyIsDone;
+	bool indexCopyIsDone;
+	bool sequenceCopyIsDone;
+	bool blobsCopyIsDone;
+
+	bool allDone;
+} PreviousRunState;
+
+
 /* all that's needed to start a TABLE DATA copy for a whole database */
 typedef struct CopyDataSpec
 {
 	CopyFilePaths cfPaths;
 	PostgresPaths pgPaths;
-	DirectoryState dirState;
+	PreviousRunState runState;
 
 	SourceFilters filters;
 
@@ -275,7 +292,7 @@ bool copydb_prepare_filepaths(CopyFilePaths *cfPaths,
 							  const char *topdir,
 							  const char *serviceName);
 
-bool copydb_inspect_workdir(CopyFilePaths *cfPaths, DirectoryState *dirState);
+bool copydb_inspect_workdir(CopyFilePaths *cfPaths);
 
 bool copydb_rmdir_or_mkdir(const char *dir, bool removeDir);
 bool copydb_prepare_dump_paths(CopyFilePaths *cfPaths, DumpPaths *dumpPaths);
@@ -288,6 +305,8 @@ bool copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 							 CopyDataSpec *specs,
 							 SourceTable *source,
 							 int partNumber);
+
+void FreeCopyTableDataSpec(CopyTableDataSpec *tableSpecs);
 
 bool copydb_export_snapshot(TransactionSnapshot *snapshot);
 
@@ -304,6 +323,7 @@ bool copydb_cleanup_sysv_resources(SysVResArray *array);
 
 /* catalog.c */
 bool catalog_init_from_specs(CopyDataSpec *copySpecs);
+bool catalog_open_from_specs(CopyDataSpec *copySpecs);
 bool catalog_close_from_specs(CopyDataSpec *copySpecs);
 bool catalog_register_setup_from_specs(CopyDataSpec *copySpecs);
 
@@ -329,6 +349,8 @@ bool copydb_parse_extensions_requirements(CopyDataSpec *copySpecs,
 										  char *filename);
 
 /* indexes.c */
+bool copydb_start_index_supervisor(CopyDataSpec *specs);
+bool copydb_index_supervisor(CopyDataSpec *specs);
 bool copydb_start_index_workers(CopyDataSpec *specs);
 bool copydb_index_worker(CopyDataSpec *specs);
 bool copydb_create_index_by_oid(CopyDataSpec *specs, PGSQL *dst, uint32_t indexOid);
@@ -455,6 +477,8 @@ bool copydb_add_blob(CopyDataSpec *specs, uint32_t oid);
 bool copydb_send_lo_stop(CopyDataSpec *specs);
 
 /* vacuum.c */
+bool vacuum_start_supervisor(CopyDataSpec *specs);
+bool vacuum_supervisor(CopyDataSpec *specs);
 bool vacuum_start_workers(CopyDataSpec *specs);
 bool vacuum_worker(CopyDataSpec *specs);
 bool vacuum_analyze_table_by_oid(CopyDataSpec *specs, uint32_t oid);
@@ -488,8 +512,9 @@ bool sentinel_sync_apply(DatabaseCatalog *catalog,
 						 CopyDBSentinel *sentinel);
 
 /* summary.c */
+bool print_summary(CopyDataSpec *specs);
+bool summary_prepare_toplevel_durations(CopyDataSpec *specs);
 bool prepare_summary_table(Summary *summary, CopyDataSpec *specs);
-bool print_summary(Summary *summary, CopyDataSpec *specs);
 
 bool summary_lookup_oid(DatabaseCatalog *catalog, uint32_t oid, bool *done);
 bool summary_oid_done_fetch(SQLiteQuery *query);
@@ -523,6 +548,12 @@ bool summary_lookup_table_parts_done(DatabaseCatalog *catalog,
 									 CopyTableDataSpec *tableSpecs);
 
 bool summary_table_parts_done_fetch(SQLiteQuery *query);
+
+bool summary_add_vacuum(DatabaseCatalog *catalog,
+						CopyTableDataSpec *tableSpecs);
+
+bool summary_finish_vacuum(DatabaseCatalog *catalog,
+						   CopyTableDataSpec *tableSpecs);
 
 /*
  * Summary for Create Index and Constraints

@@ -18,6 +18,114 @@
 #include "summary.h"
 
 /*
+ * vacuum_start_supervisor starts a VACUUM supervisor process.
+ */
+bool
+vacuum_start_supervisor(CopyDataSpec *specs)
+{
+	/*
+	 * Flush stdio channels just before fork, to avoid double-output problems.
+	 */
+	fflush(stdout);
+	fflush(stderr);
+
+	int fpid = fork();
+
+	switch (fpid)
+	{
+		case -1:
+		{
+			log_error("Failed to fork copy supervisor process: %m");
+			return false;
+		}
+
+		case 0:
+		{
+			/* child process runs the command */
+			(void) set_ps_title("pgcopydb: vacuum supervisor");
+
+			if (!vacuum_supervisor(specs))
+			{
+				log_error("Failed to create indexes, see above for details");
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			exit(EXIT_CODE_QUIT);
+		}
+
+		default:
+		{
+			/* fork succeeded, in parent */
+			break;
+		}
+	}
+
+	/* now we're done, and we want async behavior, do not wait */
+	return true;
+}
+
+
+/*
+ * vacuum_supervisor starts the vacuum workers and does the waitpid() dance for
+ * them.
+ */
+bool
+vacuum_supervisor(CopyDataSpec *specs)
+{
+	pid_t pid = getpid();
+
+	log_notice("Started VACUUM supervisor %d [%d]", pid, getppid());
+
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	if (!catalog_open(sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * Start cumulative sections timings for indexes and constraints
+	 */
+	if (!summary_start_timing(sourceDB, TIMING_SECTION_VACUUM))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!vacuum_start_workers(specs))
+	{
+		log_error("Failed to start vacuum workers, see above for details");
+		return false;
+	}
+
+	/*
+	 * Now just wait for the create index processes to be done.
+	 */
+	if (!copydb_wait_for_subprocesses(specs->failFast))
+	{
+		log_error("Some INDEX worker process(es) have exited with error, "
+				  "see above for details");
+
+		if (specs->failFast)
+		{
+			(void) copydb_fatal_exit();
+		}
+
+		return false;
+	}
+
+	if (!summary_stop_timing(sourceDB, TIMING_SECTION_VACUUM))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * vacuum_start_workers create as many sub-process as needed, per --table-jobs.
  * Could be exposed separately as --vacuumJobs too, but that's not been done at
  * this time.
@@ -188,25 +296,26 @@ bool
 vacuum_analyze_table_by_oid(CopyDataSpec *specs, uint32_t oid)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
-	SourceTable *table = (SourceTable *) calloc(1, sizeof(SourceTable));
+	SourceTable table = { 0 };
 
-	if (table == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	if (!catalog_lookup_s_table(sourceDB, oid, 0, table))
+	if (!catalog_lookup_s_table(sourceDB, oid, 0, &table))
 	{
 		log_error("Failed to lookup table oid %u in internal catalogs, "
 				  "see above for details",
 				  oid);
-
-		free(table);
 		return false;
 	}
 
-	log_trace("vacuum_analyze_table_by_oid: %u %s", table->oid, table->qname);
+	log_trace("vacuum_analyze_table_by_oid: %u %s", table.oid, table.qname);
+
+	CopyTableDataSpec tableSpecs = { 0 };
+
+	/* vacuum is done per table, irrespective of the COPY partitioning */
+	if (!copydb_init_table_specs(&tableSpecs, specs, &table, 0))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	PGSQL dst = { 0 };
 
@@ -222,8 +331,8 @@ vacuum_analyze_table_by_oid(CopyDataSpec *specs, uint32_t oid)
 
 	sformat(vacuum, sizeof(vacuum),
 			"VACUUM ANALYZE %s.%s",
-			table->nspname,
-			table->relname);
+			table.nspname,
+			table.relname);
 
 	/* also set the process title for this specific table */
 	char psTitle[BUFSIZE] = { 0 };
@@ -237,13 +346,19 @@ vacuum_analyze_table_by_oid(CopyDataSpec *specs, uint32_t oid)
 		.pid = getpid(),
 		.psType = "VACUUM",
 		.psTitle = ps_buffer,
-		.tableOid = table->oid
+		.tableOid = table.oid
 	};
 
 	if (!catalog_upsert_process_info(sourceDB, &ps))
 	{
 		log_error("Failed to track progress in our catalogs, "
 				  "see above for details");
+		return false;
+	}
+
+	if (!summary_add_vacuum(sourceDB, &tableSpecs))
+	{
+		/* errors have already been logged */
 		return false;
 	}
 
@@ -254,6 +369,22 @@ vacuum_analyze_table_by_oid(CopyDataSpec *specs, uint32_t oid)
 	}
 
 	(void) pgsql_finish(&dst);
+
+	if (!summary_finish_vacuum(sourceDB, &tableSpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!summary_increment_timing(sourceDB,
+								  TIMING_SECTION_VACUUM,
+								  1, /* count */
+								  0, /* bytes */
+								  tableSpecs.vSummary.durationMs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	return true;
 }

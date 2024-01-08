@@ -349,6 +349,7 @@ typedef struct CatalogSection
 	CopyDataSection section;
 	char name[PG_NAMEDATALEN];
 	bool fetched;
+	uint64_t durationMs;
 } CatalogSection;
 
 typedef struct DatabaseCatalog
@@ -357,6 +358,7 @@ typedef struct DatabaseCatalog
 
 	CatalogSetup setup;
 	CatalogSection sections[DATA_SECTION_COUNT];
+	uint64_t totalDurationMs;
 
 	char dbfile[MAXPGPATH];
 	sqlite3 *db;

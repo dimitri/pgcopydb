@@ -60,15 +60,23 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 						  const char *snapshot,
 						  PostgresDumpSection section)
 {
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	if (!summary_start_timing(sourceDB, TIMING_SECTION_DUMP_SCHEMA))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (section == PG_DUMP_SECTION_SCHEMA ||
 		section == PG_DUMP_SECTION_PRE_DATA ||
 		section == PG_DUMP_SECTION_ALL)
 	{
-		if (file_exists(specs->cfPaths.done.preDataDump))
+		if (file_exists(specs->dumpPaths.preFilename))
 		{
 			log_info("Skipping pg_dump --section=pre-data, "
 					 "as \"%s\" already exists",
-					 specs->cfPaths.done.preDataDump);
+					 specs->dumpPaths.preFilename);
 		}
 		else if (!pg_dump_db(&(specs->pgPaths),
 							 &(specs->connStrings),
@@ -81,25 +89,17 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 			/* errors have already been logged */
 			return false;
 		}
-
-		/* now write the doneFile to keep track */
-		if (!write_file("", 0, specs->cfPaths.done.preDataDump))
-		{
-			log_error("Failed to write the tracking file \"%s\"",
-					  specs->cfPaths.done.preDataDump);
-			return false;
-		}
 	}
 
 	if (section == PG_DUMP_SECTION_SCHEMA ||
 		section == PG_DUMP_SECTION_POST_DATA ||
 		section == PG_DUMP_SECTION_ALL)
 	{
-		if (file_exists(specs->cfPaths.done.postDataDump))
+		if (file_exists(specs->dumpPaths.postFilename))
 		{
 			log_info("Skipping pg_dump --section=post-data, "
 					 "as \"%s\" already exists",
-					 specs->cfPaths.done.postDataDump);
+					 specs->dumpPaths.postFilename);
 		}
 		else if (!pg_dump_db(&(specs->pgPaths),
 							 &(specs->connStrings),
@@ -112,14 +112,12 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 			/* errors have already been logged */
 			return false;
 		}
+	}
 
-		/* now write the doneFile to keep track */
-		if (!write_file("", 0, specs->cfPaths.done.postDataDump))
-		{
-			log_error("Failed to write the tracking file \"%s\"",
-					  specs->cfPaths.done.postDataDump);
-			return false;
-		}
+	if (!summary_stop_timing(sourceDB, TIMING_SECTION_DUMP_SCHEMA))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	return true;
@@ -133,15 +131,23 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 bool
 copydb_target_prepare_schema(CopyDataSpec *specs)
 {
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	if (!summary_start_timing(sourceDB, TIMING_SECTION_PREPARE_SCHEMA))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (!file_exists(specs->dumpPaths.preFilename))
 	{
 		log_fatal("File \"%s\" does not exists", specs->dumpPaths.preFilename);
 		return false;
 	}
 
-	if (file_exists(specs->cfPaths.done.preDataRestore))
+	if (specs->runState.schemaPreDataHasBeenRestored)
 	{
-		log_info("Skipping pg_restore of pre-data section, "
+		log_info("Skipping pg_restore for pre-data section, "
 				 "done on a previous run");
 		return true;
 	}
@@ -194,11 +200,9 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 		return false;
 	}
 
-	/* now write the doneFile to keep track */
-	if (!write_file("", 0, specs->cfPaths.done.preDataRestore))
+	if (!summary_stop_timing(sourceDB, TIMING_SECTION_PREPARE_SCHEMA))
 	{
-		log_error("Failed to write the tracking file \"%s\"",
-				  specs->cfPaths.done.preDataRestore);
+		/* errors have already been logged */
 		return false;
 	}
 
@@ -479,15 +483,23 @@ copydb_append_table_hook(void *ctx, SourceTable *table)
 bool
 copydb_target_finalize_schema(CopyDataSpec *specs)
 {
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	if (!summary_start_timing(sourceDB, TIMING_SECTION_FINALIZE_SCHEMA))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (!file_exists(specs->dumpPaths.postFilename))
 	{
 		log_fatal("File \"%s\" does not exists", specs->dumpPaths.postFilename);
 		return false;
 	}
 
-	if (file_exists(specs->cfPaths.done.postDataRestore))
+	if (specs->runState.schemaPostDataHasBeenRestored)
 	{
-		log_info("Skipping pg_restore --section=pre-data, "
+		log_info("Skipping pg_restore for --section=post-data, "
 				 "done on a previous run");
 		return true;
 	}
@@ -510,11 +522,9 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 		return false;
 	}
 
-	/* now write the doneFile to keep track */
-	if (!write_file("", 0, specs->cfPaths.done.postDataRestore))
+	if (!summary_stop_timing(sourceDB, TIMING_SECTION_FINALIZE_SCHEMA))
 	{
-		log_error("Failed to write the tracking file \"%s\"",
-				  specs->cfPaths.done.postDataRestore);
+		/* errors have already been logged */
 		return false;
 	}
 

@@ -79,21 +79,25 @@ The process tree then looks like the following:
 
        #. pgcopydb blob data worker
 
-     1. pgcopydb index/constraints worker (``--index-jobs 4``)
+     * pgcopydb index supervisor (``--large-objects-jobs 4``)
 
-     2. pgcopydb index/constraints worker (``--index-jobs 4``)
+	   #. pgcopydb index/constraints worker
 
-     3. pgcopydb index/constraints worker (``--index-jobs 4``)
+	   #. pgcopydb index/constraints worker
 
-     4. pgcopydb index/constraints worker (``--index-jobs 4``)
+	   #. pgcopydb index/constraints worker
 
-     1. pgcopydb vacuum analyze worker (``--table-jobs 4``)
+	   #. pgcopydb index/constraints worker
 
-     2. pgcopydb vacuum analyze worker (``--table-jobs 4``)
+     * pgcopydb vacuum supervisor (``--table-jobs 4``)
 
-     3. pgcopydb vacuum analyze worker (``--table-jobs 4``)
+	   #. pgcopydb vacuum analyze worker (``--table-jobs 4``)
 
-     4. pgcopydb vacuum analyze worker (``--table-jobs 4``)
+	   #. pgcopydb vacuum analyze worker (``--table-jobs 4``)
+
+	   #. pgcopydb vacuum analyze worker (``--table-jobs 4``)
+
+	   #. pgcopydb vacuum analyze worker (``--table-jobs 4``)
 
      * pgcopydb sequences reset worker
 
@@ -106,21 +110,22 @@ The process tree then looks like the following:
      * pgcopydb stream catchup
 
 We see that when using ``pgcopydb clone --follow --table-jobs 4 --index-jobs
-4 --large-objects-jobs 4`` then pgcopydb creates 25 sub-processes.
+4 --large-objects-jobs 4`` then pgcopydb creates 27 sub-processes.
 
-The 25 total is counted from:
+The 27 total is counted from:
 
  - 1 clone worker + 1 copy supervisor + 1 copy queue worker + 4 copy
-   workers + 1 blob metadata worker + 4 blob data workers + 4 index
-   workers + 4 vacuum workers + 1 sequence reset worker
+   workers + 1 blob metadata worker + 4 blob data workers + 1 index
+   supervisor + 4 index workers + 1 vacuum supervisor + 4 vacuum workers + 1
+   sequence reset worker
 
-   that's 1 + 1 + 1 + 4 + 1 + 4 + 4 + 4 + 1 = 21
+   that's 1 + 1 + 1 + 4 + 1 + 4 + 1 + 4 + 1 + 4 + 1 = 23
 
  - 1 follow worker + 1 stream receive + 1 stream transform + 1 stream catchup
 
    that's 1 + 1 + 1 + 1 = 4
 
- - that's 21 + 4 = 25 total
+ - that's 23 + 4 = 27 total
 
 Here is a description of the process tree:
 

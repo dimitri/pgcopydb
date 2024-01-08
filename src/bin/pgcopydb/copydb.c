@@ -95,7 +95,6 @@ copydb_init_workdir(CopyDataSpec *copySpecs,
 					bool createWorkDir)
 {
 	CopyFilePaths *cfPaths = &(copySpecs->cfPaths);
-	DirectoryState *dirState = &(copySpecs->dirState);
 
 	if (!copydb_prepare_filepaths(cfPaths, dir, serviceName))
 	{
@@ -121,56 +120,6 @@ copydb_init_workdir(CopyDataSpec *copySpecs,
 	if (restart)
 	{
 		removeDir = true;
-	}
-	else
-	{
-		if (!copydb_inspect_workdir(cfPaths, dirState))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		if (dirState->directoryExists)
-		{
-			/* if we did nothing yet, just act as if --resume was used */
-			if (!dirState->schemaDumpIsDone)
-			{
-				log_notice("Schema dump has not been done yet, just continue");
-			}
-
-			/* if --resume has been used, we just continue */
-			else if (resume)
-			{
-				/* no-op */
-				(void) 0;
-			}
-			else if (dirState->allDone)
-			{
-				log_fatal("Please use --restart to allow for removing files "
-						  "that belong to a completed previous run.");
-				return false;
-			}
-			else if (!resume)
-			{
-				log_fatal("Please use --resume --not-consistent to allow "
-						  "for resuming from the previous run, "
-						  "which failed before completion.");
-				return false;
-			}
-
-			/*
-			 * Here we should have restart true or resume true or we didn't even do
-			 * the schema dump on the previous run.
-			 */
-		}
-	}
-
-	/* warn about trashing data from a previous run */
-	if (removeDir && !restart)
-	{
-		log_notice("Inspection of \"%s\" shows that it is safe "
-				   "to remove it and continue",
-				   cfPaths->topdir);
 	}
 
 	if (removeDir)
@@ -198,7 +147,6 @@ copydb_init_workdir(CopyDataSpec *copySpecs,
 	/* and now for the other sub-directories */
 	const char *dirs[] = {
 		cfPaths->schemadir,
-		cfPaths->rundir,
 		cfPaths->cdc.dir,
 		cfPaths->compare.dir,
 		NULL
@@ -311,115 +259,6 @@ copydb_create_pidfile(const char *pidfile, pid_t pid, bool createPidFile)
 
 
 /*
- * copydb_inspect_workdir inspects the given target directory to see what work
- * has been tracked in there. From the doneFile(s) and the lockFile(s) that we
- * can list in the directory, we can have a good idea of why the command is
- * attempted to be run again.
- */
-bool
-copydb_inspect_workdir(CopyFilePaths *cfPaths, DirectoryState *dirState)
-{
-	dirState->directoryExists = directory_exists(cfPaths->topdir);
-
-	if (!dirState->directoryExists)
-	{
-		return true;
-	}
-
-	/* the directory exists, checks if our expected components are there */
-	bool foundAllComponents = true;
-
-	const char *dirs[] = {
-		cfPaths->schemadir,
-		cfPaths->rundir,
-		NULL
-	};
-
-	for (int i = 0; dirs[i] != NULL; i++)
-	{
-		foundAllComponents = foundAllComponents && directory_exists(dirs[i]);
-	}
-
-	if (!foundAllComponents)
-	{
-		log_debug("copydb_inspect_workdir: not all components found");
-		dirState->directoryIsReady = false;
-		return true;
-	}
-
-	dirState->schemaDumpIsDone =
-		file_exists(cfPaths->done.preDataDump) &&
-		file_exists(cfPaths->done.postDataDump);
-
-	dirState->schemaPreDataHasBeenRestored =
-		file_exists(cfPaths->done.preDataRestore);
-
-	dirState->schemaPostDataHasBeenRestored =
-		file_exists(cfPaths->done.postDataRestore);
-
-	dirState->tableCopyIsDone = file_exists(cfPaths->done.tables);
-	dirState->indexCopyIsDone = file_exists(cfPaths->done.indexes);
-	dirState->sequenceCopyIsDone = file_exists(cfPaths->done.sequences);
-	dirState->blobsCopyIsDone = file_exists(cfPaths->done.blobs);
-
-	dirState->allDone =
-		dirState->schemaDumpIsDone &&
-		dirState->schemaPreDataHasBeenRestored &&
-		dirState->schemaPostDataHasBeenRestored &&
-		dirState->tableCopyIsDone &&
-		dirState->indexCopyIsDone &&
-		dirState->sequenceCopyIsDone &&
-		dirState->blobsCopyIsDone;
-
-	/* let's be verbose about our inspection results */
-	log_notice("Work directory \"%s\" already exists", cfPaths->topdir);
-
-	if (dirState->allDone)
-	{
-		log_info("A previous run has run through completion");
-		return true;
-	}
-
-	if (dirState->schemaDumpIsDone)
-	{
-		log_info("Schema dump for pre-data and post-data section have been done");
-	}
-
-	if (dirState->schemaPreDataHasBeenRestored)
-	{
-		log_info("Pre-data schema has been restored on the target instance");
-	}
-
-	if (dirState->tableCopyIsDone)
-	{
-		log_info("All the table data has been copied to the target instance");
-	}
-
-	if (dirState->indexCopyIsDone)
-	{
-		log_info("All the indexes have been copied to the target instance");
-	}
-
-	if (dirState->sequenceCopyIsDone)
-	{
-		log_info("All the sequences have been copied to the target instance");
-	}
-
-	if (dirState->blobsCopyIsDone)
-	{
-		log_info("All the large objects have been copied to the target instance");
-	}
-
-	if (dirState->schemaPostDataHasBeenRestored)
-	{
-		log_info("Post-data schema has been restored on the target instance");
-	}
-
-	return true;
-}
-
-
-/*
  * copydb_prepare_filepaths computes all the path components that are needed
  * for top-level operations.
  */
@@ -464,7 +303,6 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths,
 
 	/* now that we have our topdir, prepare all the others from there */
 	sformat(cfPaths->snfile, MAXPGPATH, "%s/snapshot", cfPaths->topdir);
-	sformat(cfPaths->rundir, MAXPGPATH, "%s/run", cfPaths->topdir);
 
 	/* internal catalogs db files are in the schemadir */
 	sformat(cfPaths->schemadir, MAXPGPATH, "%s/schema", cfPaths->topdir);
@@ -477,31 +315,6 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths,
 
 	/* prepare also the name of the summary file (JSON) */
 	sformat(cfPaths->summaryfile, MAXPGPATH, "%s/summary.json", cfPaths->topdir);
-
-	/* now prepare the done files */
-	struct pair
-	{
-		char *dst;
-		char *fmt;
-	};
-
-	struct pair donePaths[] = {
-		{ (char *) &(cfPaths->done.preDataDump), "%s/run/dump-pre.done" },
-		{ (char *) &(cfPaths->done.postDataDump), "%s/run/dump-post.done" },
-		{ (char *) &(cfPaths->done.preDataRestore), "%s/run/restore-pre.done" },
-		{ (char *) &(cfPaths->done.postDataRestore), "%s/run/restore-post.done" },
-
-		{ (char *) &(cfPaths->done.tables), "%s/run/tables.done" },
-		{ (char *) &(cfPaths->done.indexes), "%s/run/indexes.done" },
-		{ (char *) &(cfPaths->done.sequences), "%s/run/sequences.done" },
-		{ (char *) &(cfPaths->done.blobs), "%s/run/blobs.done" },
-		{ NULL, NULL }
-	};
-
-	for (int i = 0; donePaths[i].dst != NULL; i++)
-	{
-		sformat(donePaths[i].dst, MAXPGPATH, donePaths[i].fmt, cfPaths->topdir);
-	}
 
 	/*
 	 * Now prepare the Change Data Capture (logical decoding) intermediate
@@ -682,7 +495,6 @@ copydb_init_specs(CopyDataSpec *specs,
 	CopyDataSpec tmpCopySpecs = {
 		.cfPaths = specs->cfPaths,
 		.pgPaths = specs->pgPaths,
-		.dirState = specs->dirState,
 
 		.connStrings = options->connStrings,
 
