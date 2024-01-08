@@ -622,16 +622,20 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 			}
 		}
 
-		if (!streq(json, setup->filters))
+		/* skip comparing filters when --not-consistent is used */
+		if (copySpecs->consistent)
 		{
-			log_info("Current filtering setup is: %s", json);
-			log_info("Catalog filtering setup is: %s", setup->filters);
-			log_error("Catalogs at \"%s\" have been setup for a different "
-					  "filtering than the current command, "
-					  "see above for details",
-					  sourceDB->dbfile);
+			if (!streq(json, setup->filters))
+			{
+				log_info("Current filtering setup is: %s", json);
+				log_info("Catalog filtering setup is: %s", setup->filters);
+				log_error("Catalogs at \"%s\" have been setup for a different "
+						  "filtering than the current command, "
+						  "see above for details",
+						  sourceDB->dbfile);
 
-			return false;
+				return false;
+			}
 		}
 	}
 
