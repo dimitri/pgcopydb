@@ -183,7 +183,8 @@ static char *filterDBcreateDDLs[] = {
 
 	"create table s_extension_config("
 	"  extoid integer references s_extension(oid), "
-	"  reloid integer, nspname text, relname text, condition text"
+	"  reloid integer, nspname text, relname text, condition text, "
+	"  relkind integer "
 	")",
 
 	"create index s_ec_oid on s_extension_config(extoid)",
@@ -5752,8 +5753,8 @@ catalog_add_s_extension_config(DatabaseCatalog *catalog,
 
 	char *sql =
 		"insert into s_extension_config"
-		"  (extoid, reloid, nspname, relname, condition) "
-		"values($1, $2, $3, $4, $5)";
+		"  (extoid, reloid, nspname, relname, condition, relkind) "
+		"values($1, $2, $3, $4, $5, $6)";
 
 	SQLiteQuery query = { 0 };
 
@@ -5769,7 +5770,8 @@ catalog_add_s_extension_config(DatabaseCatalog *catalog,
 		{ BIND_PARAMETER_TYPE_INT64, "reloid", config->reloid, NULL },
 		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, config->nspname },
 		{ BIND_PARAMETER_TYPE_TEXT, "relname", 0, config->relname },
-		{ BIND_PARAMETER_TYPE_TEXT, "condition", 0, config->condition }
+		{ BIND_PARAMETER_TYPE_TEXT, "condition", 0, config->condition },
+		{ BIND_PARAMETER_TYPE_INT, "relkind", (int) config->relkind, NULL }
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -6052,7 +6054,7 @@ catalog_iter_s_ext_extconfig_init(SourceExtConfigIterator *iter)
 	char *sql =
 		"  select count(*) over(order by reloid) as num,  "
 		"         count(*) over() as count, "
-		"         oid, reloid, nspname, relname, condition "
+		"         oid, reloid, nspname, relname, condition, relkind "
 		"    from s_extension_config "
 		"   where extoid = $1 "
 		"order by reloid";
@@ -6183,6 +6185,8 @@ catalog_s_ext_extconfig_fetch(SQLiteQuery *query)
 	strlcpy(conf->condition,
 			(char *) sqlite3_column_text(query->ppStmt, 6),
 			bytes);
+
+	conf->relkind = sqlite3_column_int(query->ppStmt, 7);
 
 	return true;
 }

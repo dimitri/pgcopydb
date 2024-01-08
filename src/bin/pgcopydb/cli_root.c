@@ -18,31 +18,6 @@ CommandLine version =
 				 cli_print_version_getopts,
 				 cli_print_version);
 
-/*
- * Command line options when using PGCOPYDB_DEBUG=1, as sub-processes do.
- */
-CommandLine *root_subcommands_with_debug[] = {
-	&clone_command,
-	&fork_command,
-	&follow_command,
-	&snapshot_command,
-	&compare_commands,
-	&copy_commands,
-	&dump_commands,
-	&restore_commands,
-	&list_commands,
-	&stream_commands,
-	&ping_command,
-	&help,
-	&version,
-	NULL
-};
-
-CommandLine root_with_debug =
-	make_command_set("pgcopydb",
-					 "pgcopydb tool",
-					 "[ --verbose --quiet ]", NULL,
-					 root_options, root_subcommands);
 
 /*
  * Command line options intended to normal users.

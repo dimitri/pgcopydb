@@ -275,7 +275,7 @@ cli_list_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:D:j:s:t:PL:cCJRIVvdzqh",
+	while ((c = getopt_long(argc, argv, "S:D:s:t:F:xPL:fcCyarJRIN:Vdzvqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -509,6 +509,7 @@ cli_list_db_getopts(int argc, char **argv)
 				break;
 			}
 
+			case '?':
 			default:
 			{
 				++errors;

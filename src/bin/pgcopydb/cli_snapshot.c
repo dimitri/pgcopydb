@@ -73,7 +73,7 @@ cli_create_snapshot_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:D:Vvdzqh",
+	while ((c = getopt_long(argc, argv, "S:D:fp:ws:Vvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -192,6 +192,13 @@ cli_create_snapshot_getopts(int argc, char **argv)
 				exit(EXIT_CODE_QUIT);
 				break;
 			}
+
+			case '?':
+			default:
+			{
+				++errors;
+				break;
+			}
 		}
 	}
 
@@ -235,6 +242,7 @@ cli_create_snapshot_getopts(int argc, char **argv)
 
 	if (errors > 0)
 	{
+		commandline_help(stderr);
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 

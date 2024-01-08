@@ -328,7 +328,7 @@ bool pg_copy_from_stdin(PGSQL *pgsql, const char *qname);
 bool pg_copy_row_from_stdin(PGSQL *pgsql, char *fmt, ...);
 bool pg_copy_end(PGSQL *pgsql);
 
-bool pgsql_get_sequence(PGSQL *pgsql, const char *nspname, const char *relname,
+bool pgsql_get_sequence(PGSQL *pgsql, const char *qname,
 						int64_t *lastValue,
 						bool *isCalled);
 

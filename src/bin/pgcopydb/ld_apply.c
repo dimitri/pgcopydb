@@ -1606,7 +1606,7 @@ stream_apply_find_durable_lsn(StreamApplyContext *context, uint64_t *durableLSN)
 	uint64_t flushLSN = InvalidXLogRecPtr;
 
 	if (!stream_fetch_current_lsn(&flushLSN,
-								  context->connStrings->source_pguri,
+								  context->connStrings->target_pguri,
 								  PGSQL_CONN_SOURCE))
 	{
 		log_error("Failed to retrieve current WAL positions, "
