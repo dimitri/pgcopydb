@@ -58,14 +58,10 @@ psql -d "${PGCOPYDB_SOURCE_PGURI}" ${pgopts} --file ./follow-mode/dml-for-exclud
 # make sure the inject service has had time to see the final sentinel values
 sleep 2
 
-# get the current sentinel values
-pgcopydb stream sentinel get
-
 # set the end position to the current position to complete the follow operation
 pgcopydb stream sentinel set endpos --current
 
 # the follow command ends when reaching endpos
-kill -TERM ${COPROC_PID}
 wait ${COPROC_PID}
 
 # cleanup the stream
@@ -78,7 +74,7 @@ pgcopydb list tables --filters /usr/src/pgcopydb/include.ini
 pgcopydb list tables --filters /usr/src/pgcopydb/include.ini --list-skipped
 
 # now another migration with the "include-only" parts of the data by using text_decoding plugin
-coproc (pgcopydb clone --follow --plugin text_decoding --filters /usr/src/pgcopydb/include.ini --not-consistent)
+coproc (pgcopydb clone --follow --plugin test_decoding --filters /usr/src/pgcopydb/include.ini --restart)
 
 # execute DML queries against the source database to test filtering for include.ini
 psql -d "${PGCOPYDB_SOURCE_PGURI}" ${pgopts} --file ./follow-mode/dml-for-include.sql
@@ -86,14 +82,10 @@ psql -d "${PGCOPYDB_SOURCE_PGURI}" ${pgopts} --file ./follow-mode/dml-for-includ
 # make sure the inject service has had time to see the final sentinel values
 sleep 2
 
-# get the current sentinel values
-pgcopydb stream sentinel get
-
 # set the end position to the current position to complete the follow operation
 pgcopydb stream sentinel set endpos --current
 
 # the follow command ends when reaching endpos
-kill -TERM ${COPROC_PID}
 wait ${COPROC_PID}
 
 # cleanup the stream
