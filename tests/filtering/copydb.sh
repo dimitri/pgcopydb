@@ -64,8 +64,9 @@ pgcopydb stream sentinel get
 # set the end position to the current position to complete the follow operation
 pgcopydb stream sentinel set endpos --current
 
-# make sure the transform & apply service has had time to process remaining events
-sleep 10
+# the follow command ends when reaching endpos
+kill -TERM ${COPROC_PID}
+wait ${COPROC_PID}
 
 # cleanup the stream
 pgcopydb stream cleanup
@@ -91,8 +92,9 @@ pgcopydb stream sentinel get
 # set the end position to the current position to complete the follow operation
 pgcopydb stream sentinel set endpos --current
 
-# make sure the transform & apply service has had time to process remaining events
-sleep 10
+# the follow command ends when reaching endpos
+kill -TERM ${COPROC_PID}
+wait ${COPROC_PID}
 
 # cleanup the stream
 pgcopydb stream cleanup
