@@ -35,6 +35,10 @@
 static bool updateStreamCounters(StreamContext *context,
 								 LogicalMessageMetadata *metadata);
 
+static bool convertFiltersToWal2JsonOptions(SourceFilters *filters,
+											PQExpBuffer commaSeperatedAddTables,
+											PQExpBuffer commaSeperatedFilterTables);
+
 /*
  * Determines whether a message should be filtered out based on the provided source filters.
  * @param shouldFilterOutMessage A pointer to a boolean variable indicating whether the message should be filtered out.
@@ -44,6 +48,7 @@ bool
 ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname,
 					   bool *shouldFilterOutMessage)
 {
+	// TODO:GG Check filterdb for the logic to filter out messages
 	/*
 	 * Validate nspname is not NULL or empty
 	 */
@@ -240,28 +245,83 @@ stream_init_specs(StreamSpecs *specs,
 
 		case STREAM_PLUGIN_WAL2JSON:
 		{
+			/* Initialize empty strings for tables to add and filter */
+			char *commaSeperatedAddTables = { 0 };
+			char *commaSeperatedFilterTables = { 0 };
+
+			if (filters->type != SOURCE_FILTER_TYPE_NONE)
+			{
+				/* convert filters to wal2json options. */
+
+				PQExpBuffer addTablesBuffer = createPQExpBuffer();
+				PQExpBuffer filterTablesBuffer = createPQExpBuffer();
+
+				if (!convertFiltersToWal2JsonOptions(filters,
+													 addTablesBuffer,
+													 filterTablesBuffer))
+				{
+					log_error("Failed to create wal2json filters");
+					return false;
+				}
+
+				commaSeperatedAddTables = strdup(addTablesBuffer->data);
+				commaSeperatedFilterTables = strdup(filterTablesBuffer->data);
+
+				destroyPQExpBuffer(addTablesBuffer);
+				destroyPQExpBuffer(filterTablesBuffer);
+			}
+
 			KeyVal options = {
-				/* we ignore the last keyword and value if the option is not set */
-				.count = specs->slot.wal2jsonNumericAsString ? 7 : 6,
+				.count = 5,
 				.keywords = {
 					"format-version",
 					"include-xids",
 					"include-schemas",
 					"include-transaction",
-					"include-types",
-					"filter-tables",
-					"numeric-data-types-as-string"
+					"include-types"
 				},
 				.values = {
 					"2",
 					"true",
 					"true",
 					"true",
-					"true",
-					"pgcopydb.*",
 					"true"
 				}
 			};
+
+			/* Add tables to include and filter to wal2json options */
+			if (commaSeperatedAddTables != NULL)
+			{
+				options.keywords[options.count] = "add-tables";
+				options.values[options.count] = commaSeperatedAddTables;
+				options.count++;
+			}
+
+			/*
+			 * Add tables to filter to wal2json options. Note that we don't
+			 */
+			if (commaSeperatedFilterTables != NULL)
+			{
+				options.keywords[options.count] = "filter-tables";
+				options.values[options.count] = commaSeperatedFilterTables;
+				options.count++;
+			}
+
+			/* Add option to print numeric data types as string */
+			if (specs->slot.wal2jsonNumericAsString)
+			{
+				options.keywords[options.count] = "numeric-data-types-as-string";
+				options.values[options.count] = "true";
+				options.count++;
+			}
+
+			/* log_trace for options */
+			for (int i = 0; i < options.count; i++)
+			{
+				log_trace("wal2json option: %s = %s",
+						 options.keywords[i],
+						 options.values[i]);
+			}
 
 			specs->pluginOptions = options;
 			break;
@@ -355,6 +415,107 @@ stream_init_specs(StreamSpecs *specs,
 			/* pass */
 			break;
 		}
+	}
+
+	return true;
+}
+
+
+/*
+ * Converts source filters to wal2json options.
+ *
+ * This function takes a SourceFilters struct and two PQExpBuffer objects. It converts the filters
+ * into comma-separated lists of tables and schemas to include or exclude, and appends these lists
+ * to the provided PQExpBuffer objects.
+ *
+ * Returns true if the conversion was successful, false otherwise.
+ */
+bool
+convertFiltersToWal2JsonOptions(SourceFilters *filters,
+								PQExpBuffer commaSeperatedAddTables,
+								PQExpBuffer commaSeperatedFilterTables)
+{
+	// TODO:GG Check filterdb for the logic to convert filters to wal2json options
+	if (filters->type == SOURCE_FILTER_TYPE_NONE)
+	{
+		return true;
+	}
+
+	for (int i = 0; i < filters->includeOnlyTableList.count; i++)
+	{
+		char *filteredNspName = filters->includeOnlyTableList.array[i].nspname;
+		char *filteredRelName = filters->includeOnlyTableList.array[i].relname;
+
+		if (commaSeperatedAddTables->len != 0)
+		{
+			appendPQExpBufferChar(commaSeperatedAddTables, ',');
+		}
+
+		appendPQExpBuffer(commaSeperatedAddTables, "%s.%s", filteredNspName,
+						  filteredRelName);
+	}
+
+	for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
+	{
+		char *filteredNspName = filters->includeOnlySchemaList.array[i].nspname;
+
+		if (commaSeperatedAddTables->len != 0)
+		{
+			appendPQExpBufferChar(commaSeperatedAddTables, ',');
+		}
+
+		appendPQExpBuffer(commaSeperatedAddTables, "%s.*", filteredNspName);
+	}
+
+	for (int i = 0; i < filters->excludeTableList.count; i++)
+	{
+		char *filteredNspName = filters->excludeTableList.array[i].nspname;
+		char *filteredRelName = filters->excludeTableList.array[i].relname;
+
+		if (commaSeperatedFilterTables->len != 0)
+		{
+			appendPQExpBufferChar(commaSeperatedFilterTables, ',');
+		}
+
+		appendPQExpBuffer(commaSeperatedFilterTables, "%s.%s", filteredNspName,
+						  filteredRelName);
+	}
+
+	for (int i = 0; i < filters->excludeSchemaList.count; i++)
+	{
+		char *filteredNspName = filters->excludeSchemaList.array[i].nspname;
+
+		if (commaSeperatedFilterTables->len != 0)
+		{
+			appendPQExpBufferChar(commaSeperatedFilterTables, ',');
+		}
+
+		appendPQExpBuffer(commaSeperatedFilterTables, "%s.*", filteredNspName);
+	}
+
+	for (int i = 0; i < filters->excludeTableDataList.count; i++)
+	{
+		char *filteredNspName = filters->excludeTableDataList.array[i].nspname;
+		char *filteredRelName = filters->excludeTableDataList.array[i].relname;
+
+		if (commaSeperatedFilterTables->len != 0)
+		{
+			appendPQExpBufferChar(commaSeperatedFilterTables, ',');
+		}
+
+		appendPQExpBuffer(commaSeperatedFilterTables, "%s.%s", filteredNspName,
+						  filteredRelName);
+	}
+
+	if (PQExpBufferBroken(commaSeperatedAddTables) ||
+		PQExpBufferBroken(commaSeperatedFilterTables))
+	{
+		log_error("Failed to convert source filters to wal2json filters: out of memory");
+
+		destroyPQExpBuffer(commaSeperatedAddTables);
+		destroyPQExpBuffer(commaSeperatedFilterTables);
+
+		return false;
 	}
 
 	return true;
