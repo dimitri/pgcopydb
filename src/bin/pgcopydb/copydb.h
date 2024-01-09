@@ -511,6 +511,7 @@ bool sentinel_sync_apply(DatabaseCatalog *catalog,
 						 uint64_t replay_lsn,
 						 CopyDBSentinel *sentinel);
 
+
 /* summary.c */
 bool print_summary(CopyDataSpec *specs);
 bool summary_prepare_toplevel_durations(CopyDataSpec *specs);

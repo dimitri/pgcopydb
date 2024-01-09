@@ -21,6 +21,7 @@
 #include "copydb.h"
 #include "env_utils.h"
 #include "ld_stream.h"
+#include "lsn_tracking.h"
 #include "lock_utils.h"
 #include "log.h"
 #include "parsing_utils.h"
@@ -192,7 +193,7 @@ stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
 	}
 
 	/* read-in the previous lsn tracking file, if it exists */
-	if (!stream_apply_read_lsn_tracking(context))
+	if (!lsn_tracking_read(context))
 	{
 		log_error("Failed to read LSN tracking file");
 		return false;
@@ -376,7 +377,7 @@ bool
 stream_apply_sync_sentinel(StreamApplyContext *context, bool findDurableLSN)
 {
 	/* now is a good time to write the LSN tracking to disk */
-	if (!stream_apply_write_lsn_tracking(context))
+	if (!lsn_tracking_write(context->sourceDB, context->lsnTrackingList))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1652,134 +1653,6 @@ stream_apply_find_durable_lsn(StreamApplyContext *context, uint64_t *durableLSN)
 		free(tail);
 		tail = previous;
 	}
-
-	return true;
-}
-
-
-/*
- * stream_apply_write_lsn_tracking writes the context->LSNTracking linked-list
- * as a JSON array on-disk.
- */
-bool
-stream_apply_write_lsn_tracking(StreamApplyContext *context)
-{
-	const char *filename = context->paths.lsntrackingfile;
-	LSNTracking *current = context->lsnTrackingList;
-
-	JSON_Value *js = json_value_init_array();
-	JSON_Array *jsArray = json_value_get_array(js);
-
-	for (; current != NULL; current = current->previous)
-	{
-		JSON_Value *jsObj = json_value_init_object();
-		JSON_Object *jsLSNObj = json_value_get_object(jsObj);
-
-		char sourceLSN[PG_LSN_MAXLENGTH] = { 0 };
-		char insertLSN[PG_LSN_MAXLENGTH] = { 0 };
-
-		sformat(sourceLSN, sizeof(sourceLSN), "%X/%X",
-				LSN_FORMAT_ARGS(current->sourceLSN));
-
-		sformat(insertLSN, sizeof(insertLSN), "%X/%X",
-				LSN_FORMAT_ARGS(current->insertLSN));
-
-		json_object_set_string(jsLSNObj, "source", sourceLSN);
-		json_object_set_string(jsLSNObj, "insert", insertLSN);
-
-		json_array_append_value(jsArray, jsObj);
-	}
-
-	char *serialized_string = json_serialize_to_string(js);
-	size_t len = strlen(serialized_string);
-
-	if (!write_file(serialized_string, len, filename))
-	{
-		log_error("Failed to write LSN tracking to file \"%s\"", filename);
-		return false;
-	}
-
-	json_free_serialized_string(serialized_string);
-	json_value_free(js);
-
-	return true;
-}
-
-
-/*
- * stream_apply_read_lsn_tracking reads the context->LSNTracking linked-list
- * from a JSON array on-disk.
- */
-bool
-stream_apply_read_lsn_tracking(StreamApplyContext *context)
-{
-	const char *filename = context->paths.lsntrackingfile;
-	LSNTracking *current = context->lsnTrackingList;
-
-	if (current != NULL)
-	{
-		log_error("BUG: stream_apply_read_lsn_tracking current is not NULL");
-		return false;
-	}
-
-	/* it's okay if the file does not exists, just skip the operation */
-	if (!file_exists(filename))
-	{
-		log_notice("Failed to parse JSON file \"%s\": file does not exists",
-				   filename);
-		return true;
-	}
-
-	JSON_Value *json = json_parse_file(filename);
-
-	if (json == NULL)
-	{
-		log_error("Failed to parse JSON file \"%s\"", filename);
-		return false;
-	}
-
-	JSON_Array *jsArray = json_value_get_array(json);
-	int count = json_array_get_count(jsArray);
-
-	for (int i = 0; i < count; i++)
-	{
-		LSNTracking *lsn_tracking =
-			(LSNTracking *) calloc(1, sizeof(LSNTracking));
-
-		if (lsn_tracking == NULL)
-		{
-			log_error(ALLOCATION_FAILED_ERROR);
-
-			(void) json_value_free(json);
-			return false;
-		}
-
-		JSON_Object *jsObj = json_array_get_object(jsArray, i);
-		const char *source = json_object_get_string(jsObj, "source");
-		const char *insert = json_object_get_string(jsObj, "insert");
-
-		if (!parseLSN(source, &(lsn_tracking->sourceLSN)))
-		{
-			log_error("Failed to parse source LSN \"%s\"", source);
-
-			(void) json_value_free(json);
-			return false;
-		}
-
-		if (!parseLSN(insert, &(lsn_tracking->insertLSN)))
-		{
-			log_error("Failed to parse insert LSN \"%s\"", insert);
-
-			(void) json_value_free(json);
-			return false;
-		}
-
-		/* update the linked list */
-		lsn_tracking->previous = context->lsnTrackingList;
-		context->lsnTrackingList = lsn_tracking;
-	}
-
-	(void) json_value_free(json);
 
 	return true;
 }

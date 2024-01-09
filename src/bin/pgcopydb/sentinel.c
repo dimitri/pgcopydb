@@ -10,6 +10,7 @@
 
 #include "catalog.h"
 #include "copydb.h"
+#include "ld_stream.h"
 #include "log.h"
 #include "schema.h"
 #include "string_utils.h"

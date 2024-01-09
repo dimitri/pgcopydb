@@ -1120,11 +1120,18 @@ cli_stream_apply(int argc, char **argv)
 			exit(EXIT_CODE_TARGET);
 		}
 
+		if (!catalog_open(context.sourceDB))
+		{
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
 		if (!stream_apply_file(&context))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
+
+		(void) catalog_close(context.sourceDB);
 	}
 }
 
