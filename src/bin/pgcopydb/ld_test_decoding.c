@@ -178,7 +178,7 @@ parseTestDecodingMessageActionAndXid(LogicalStreamContext *context)
 		 */
 		bool shouldFilterOutMessage = false;
 
-		if (!ShouldFilterOutMessage(&(privateContext->filters), header.table.nspname,
+		if (!ShouldFilterOutMessage(privateContext, header.table.nspname,
 									header.table.relname, &shouldFilterOutMessage))
 		{
 			log_error("Failed to check if message should be filtered out");

@@ -484,7 +484,7 @@ struct StreamSpecs
 	FILE *out;
 };
 
-bool ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname,
+bool ShouldFilterOutMessage(StreamContext *streamContext, char *nspname, char *relname,
 							bool *shouldFilterOutMessage);
 
 bool stream_init_specs(StreamSpecs *specs,

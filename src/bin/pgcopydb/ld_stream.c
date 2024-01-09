@@ -40,16 +40,16 @@ static bool convertFiltersToWal2JsonOptions(SourceFilters *filters,
 											PQExpBuffer commaSeperatedFilterTables);
 
 /*
- * Determines whether a message should be filtered out based on the provided source filters.
+ * This function checks if the table is in the s_table table in sourceDB internal catalog. If it exists and exclude-data is true
+ * then the message should be filtered out. Otherwise, the message should not be filtered out. If the table is not in the s_table
+ * table, then the message should be filtered out.
  * @param shouldFilterOutMessage A pointer to a boolean variable indicating whether the message should be filtered out.
  * Returns true if the function succeeded, false otherwise.
  */
 bool
-ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname,
+ShouldFilterOutMessage(StreamContext *streamContext, char *nspname, char *relname,
 					   bool *shouldFilterOutMessage)
 {
-	/* TODO:GG Check filterdb for the logic to filter out messages */
-
 	/*
 	 * Validate nspname is not NULL or empty
 	 */
@@ -68,113 +68,57 @@ ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname,
 		return false;
 	}
 
-
 	/*
 	 * If no filters are set, then we don't need to filter out any messages
 	 */
-	if (filters->type == SOURCE_FILTER_TYPE_NONE)
+	if (streamContext->filters.type == SOURCE_FILTER_TYPE_NONE)
 	{
 		*shouldFilterOutMessage = false;
+		return true;
 	}
 
 	/*
-	 * Filtering based on the sourceFilters.exclude-table-data
-	 * return true if the table is in the list
-	 * exclude-table-data filters should be processed first, otherwise
-	 * include-only-table will be able to filter the message before
-	 * we can check if the table is in the exclude-table-data list
-	 * and we will not be able to filter out the message.
+	 * If the filters are set, then we need to check if the message should be
+	 * filtered out. To do that, we lookup the table in our internal source
+	 * catalogs and check if the table is in the s_table table.
 	 */
-	for (int i = 0; i < filters->excludeTableDataList.count; i++)
+
+	SourceTable *table = (SourceTable *) calloc(1, sizeof(SourceTable));
+
+	if (table == NULL)
 	{
-		char *filteredNspName = filters->excludeTableDataList.array[i].nspname;
-		char *filteredRelName = filters->excludeTableDataList.array[i].relname;
-
-		if (streq(filteredNspName, nspname) &&
-			streq(filteredRelName, relname))
-		{
-			log_trace("[exclude-table-data] Filtering out message for relname: %s.%s",
-					  filteredNspName, filteredRelName);
-			*shouldFilterOutMessage = true;
-		}
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
 	}
 
-	/*
-	 * Filtering based on the sourceFilters.include-only-table
-	 * return true if the table is not in the list
-	 */
-	for (int i = 0; i < filters->includeOnlyTableList.count; i++)
+	if (!catalog_lookup_s_table_by_name(streamContext->sourceDB,
+										nspname,
+										relname,
+										table))
 	{
-		char *filteredNspName = filters->includeOnlyTableList.array[i].nspname;
-		char *filteredRelName = filters->includeOnlyTableList.array[i].relname;
+		log_error("Failed to lookup for table \"%s\".\"%s\" in our "
+				  "internal source catalogs",
+				  nspname,
+				  relname);
 
-		if (!(streq(filteredNspName, nspname) &&
-			  streq(filteredRelName, relname)))
-		{
-			log_trace("[include-only-table] Filtering out message for relname: %s.%s",
-					  filteredNspName, filteredRelName);
-			*shouldFilterOutMessage = true;
-		}
+		free(table);
+		return false;
 	}
 
 	/*
-	 * Filtering based on the sourceFilters.include-only-schema
-	 * return true if the schema is not in the list
+	 * If the table is in the s_table table, then we should filter out the
+	 * message if exclude-data is set to true. Otherwise, we should filter out.
 	 */
-	for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
+	if (table->oid != 0)
 	{
-		char *filteredNspName = filters->includeOnlySchemaList.array[i].nspname;
-
-		if (!streq(filteredNspName, nspname))
-		{
-			log_trace("[include-only-schema] Filtering out message for nspname: %s",
-					  filteredNspName);
-			*shouldFilterOutMessage = true;
-		}
+		*shouldFilterOutMessage = table->excludeData;
 	}
-
-	/*
-	 * Filtering based on the sourceFilters.exclude-table
-	 * return true if the table is in the list
-	 */
-	for (int i = 0; i < filters->excludeTableList.count; i++)
+	else
 	{
-		char *filteredNspName = filters->excludeTableList.array[i].nspname;
-		char *filteredRelName = filters->excludeTableList.array[i].relname;
-
-		if (streq(filteredNspName, nspname) &&
-			streq(filteredRelName, relname))
-		{
-			log_trace("[exclude-table] Filtering out message for relname: %s.%s",
-					  filteredNspName, filteredRelName);
-			*shouldFilterOutMessage = true;
-		}
+		*shouldFilterOutMessage = true;
 	}
 
-	/*
-	 * Filtering based on the sourceFilters.exclude-schema
-	 * return true if the schema is in the list
-	 */
-	for (int i = 0; i < filters->excludeSchemaList.count; i++)
-	{
-		char *filteredNspName = filters->excludeSchemaList.array[i].nspname;
-
-		if (streq(filteredNspName, nspname))
-		{
-			log_trace("[exclude-schema] Filtering out message for nspname: %s",
-					  filteredNspName);
-			*shouldFilterOutMessage = true;
-		}
-	}
-
-	/*
-	 * No need to process sourceFilters.exclude-index because DDL
-	 * statements are not streamed.
-	 */
-
-	/*
-	 * No filters matched, so we don't need to filter out the message
-	 */
+	free(table);
 	return true;
 }
 

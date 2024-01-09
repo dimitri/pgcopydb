@@ -126,7 +126,7 @@ parseWal2jsonMessageActionAndXid(LogicalStreamContext *context)
 
 		bool shouldFilterOutMessage = false;
 
-		if (!ShouldFilterOutMessage(&(privateContext->filters), schema, table,
+		if (!ShouldFilterOutMessage(privateContext, schema, table,
 									&shouldFilterOutMessage))
 		{
 			log_error("Failed to check if message should be filtered out");
