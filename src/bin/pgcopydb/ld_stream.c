@@ -48,7 +48,8 @@ bool
 ShouldFilterOutMessage(SourceFilters *filters, char *nspname, char *relname,
 					   bool *shouldFilterOutMessage)
 {
-	// TODO:GG Check filterdb for the logic to filter out messages
+	/* TODO:GG Check filterdb for the logic to filter out messages */
+
 	/*
 	 * Validate nspname is not NULL or empty
 	 */
@@ -319,8 +320,8 @@ stream_init_specs(StreamSpecs *specs,
 			for (int i = 0; i < options.count; i++)
 			{
 				log_trace("wal2json option: %s = %s",
-						 options.keywords[i],
-						 options.values[i]);
+						  options.keywords[i],
+						  options.values[i]);
 			}
 
 			specs->pluginOptions = options;
@@ -435,7 +436,7 @@ convertFiltersToWal2JsonOptions(SourceFilters *filters,
 								PQExpBuffer commaSeperatedAddTables,
 								PQExpBuffer commaSeperatedFilterTables)
 {
-	// TODO:GG Check filterdb for the logic to convert filters to wal2json options
+	/* TODO:GG Check filterdb for the logic to convert filters to wal2json options */
 	if (filters->type == SOURCE_FILTER_TYPE_NONE)
 	{
 		return true;
