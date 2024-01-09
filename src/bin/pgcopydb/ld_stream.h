@@ -655,6 +655,8 @@ bool parseWal2jsonMessageActionAndXid(LogicalStreamContext *context);
 bool parseWal2jsonMessage(StreamContext *privateContext,
 						  char *message,
 						  JSON_Value *json);
+bool populateWal2jsonAddTablesFilter(DatabaseCatalog *sourceDB,
+									 PQExpBuffer addTablesFilter);
 
 /* ld_apply.c */
 bool stream_apply_catchup(StreamSpecs *specs);
