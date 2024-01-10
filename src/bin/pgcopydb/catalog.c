@@ -288,7 +288,7 @@ static char *filterDBcreateDDLs[] = {
 
 	/* the filter table is our hash-table */
 	"create table filter(oid integer, restore_list_name text, kind text)",
-	"create unique index filter_oid on filter(oid)",
+	"create unique index filter_oid on filter(oid) where oid > 0",
 	"create index filter_rlname on filter(restore_list_name)",
 
 	/*
@@ -7340,7 +7340,7 @@ catalog_sql_step(SQLiteQuery *query)
 
 			log_sqlite("[SQLite %d]: %s, try again in %dms",
 					   rc,
-					   sqlite3_errstr(rc),
+					   sqlite3_errmsg(query->db),
 					   sleepTimeMs);
 
 			/* we have milliseconds, pg_usleep() wants microseconds */
