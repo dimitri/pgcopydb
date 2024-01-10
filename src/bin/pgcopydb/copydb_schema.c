@@ -623,11 +623,11 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 		log_info("Splitting source candidate tables larger than %s",
 				 specs->splitTablesLargerThan.bytesPretty);
 
-		TopLevelTiming timing = {
+		TopLevelTiming partsTiming = {
 			.label = CopyDataSectionToString(DATA_SECTION_TABLE_DATA_PARTS)
 		};
 
-		(void) catalog_start_timing(&timing);
+		(void) catalog_start_timing(&partsTiming);
 
 		PrepareTableSpecsContext context = {
 			.specs = specs,
@@ -643,9 +643,9 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 			return false;
 		}
 
-		(void) catalog_stop_timing(&timing);
+		(void) catalog_stop_timing(&partsTiming);
 
-		if (!catalog_register_section(sourceDB, &timing))
+		if (!catalog_register_section(sourceDB, &partsTiming))
 		{
 			/* errors have already been logged */
 			return false;

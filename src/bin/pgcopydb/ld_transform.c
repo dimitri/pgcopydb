@@ -483,16 +483,16 @@ stream_transform_write_message(StreamContext *privateContext,
 		new.isTransaction = true;
 		new.action = STREAM_ACTION_BEGIN;
 
-		LogicalTransaction *old = &(currentMsg->command.tx);
-		LogicalTransaction *txn = &(new.command.tx);
+		LogicalTransaction *oldTxn = &(currentMsg->command.tx);
+		LogicalTransaction *newTxn = &(new.command.tx);
 
-		txn->continued = true;
+		newTxn->continued = true;
 
-		txn->xid = old->xid;
-		txn->beginLSN = old->beginLSN;
-		strlcpy(txn->timestamp, old->timestamp, sizeof(txn->timestamp));
+		newTxn->xid = oldTxn->xid;
+		newTxn->beginLSN = oldTxn->beginLSN;
+		strlcpy(newTxn->timestamp, oldTxn->timestamp, sizeof(newTxn->timestamp));
 
-		txn->first = NULL;
+		newTxn->first = NULL;
 
 		*currentMsg = new;
 	}

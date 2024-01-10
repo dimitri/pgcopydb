@@ -4202,15 +4202,23 @@ parseDatabaseProperty(PGresult *result, int rowNumber, SourceProperty *property)
 	int errors = 0;
 
 	/* 1. datname */
-	char *value = PQgetvalue(result, rowNumber, 0);
-	int length = strlcpy(property->datname, value, PG_NAMEDATALEN);
-
-	if (length >= PG_NAMEDATALEN)
+	if (PQgetisnull(result, rowNumber, 0))
 	{
-		log_error("Properties role name \"%s\" is %d bytes long, "
-				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
-				  value, length, PG_NAMEDATALEN - 1);
+		log_error("BUG: parseDatabaseProperty: datname is NULL");
 		++errors;
+	}
+	else
+	{
+		char *value = PQgetvalue(result, rowNumber, 0);
+		int length = strlcpy(property->datname, value, PG_NAMEDATALEN);
+
+		if (length >= PG_NAMEDATALEN)
+		{
+			log_error("Properties role name \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+					  value, length, PG_NAMEDATALEN - 1);
+			++errors;
+		}
 	}
 
 	/* 2. rolname */
@@ -4222,7 +4230,7 @@ parseDatabaseProperty(PGresult *result, int rowNumber, SourceProperty *property)
 	{
 		property->roleInDatabase = true;
 
-		value = PQgetvalue(result, rowNumber, 1);
+		char *value = PQgetvalue(result, rowNumber, 1);
 		int length = strlcpy(property->rolname, value, PG_NAMEDATALEN);
 
 		if (length >= PG_NAMEDATALEN)
@@ -4235,19 +4243,27 @@ parseDatabaseProperty(PGresult *result, int rowNumber, SourceProperty *property)
 	}
 
 	/* 3. setconfig */
-	value = PQgetvalue(result, rowNumber, 2);
-	int len = strlen(value);
-	int bytes = len + 1;
-
-	property->setconfig = (char *) calloc(bytes, sizeof(char));
-
-	if (property->setconfig == NULL)
+	if (PQgetisnull(result, rowNumber, 2))
 	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
-		return false;
+		log_error("BUG: parseDatabaseProperty: setconfig is NULL");
+		++errors;
 	}
+	else
+	{
+		char *value = PQgetvalue(result, rowNumber, 2);
+		int len = strlen(value);
+		int bytes = len + 1;
 
-	strlcpy(property->setconfig, value, bytes);
+		property->setconfig = (char *) calloc(bytes, sizeof(char));
+
+		if (property->setconfig == NULL)
+		{
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		strlcpy(property->setconfig, value, bytes);
+	}
 
 	return errors == 0;
 }
