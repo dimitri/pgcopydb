@@ -1121,7 +1121,7 @@ parseVersionContext(void *ctx, PGresult *result)
 	if (length >= sizeof(context->pgversion))
 	{
 		log_error("Postgres version string \"%s\" is %d bytes long, "
-				  "the maximum expected is %ld",
+				  "the maximum expected is %zu",
 				  value, length, sizeof(context->pgversion) - 1);
 		++errors;
 	}
@@ -3730,7 +3730,7 @@ pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 
 		if (length >= sizeof(slot->snapshot))
 		{
-			log_error("Snapshot \"%s\" is %d bytes long, the maximum is %ld",
+			log_error("Snapshot \"%s\" is %d bytes long, the maximum is %zu",
 					  value, length, sizeof(slot->snapshot) - 1);
 			pgsql_finish(pgsql);
 			return false;
@@ -4132,7 +4132,6 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 		{
 			int pos;
 			bool replyRequested;
-			XLogRecPtr cur_record_lsn;
 			bool endposReached = false;
 
 			/*

@@ -788,10 +788,10 @@ copydb_progress_as_json(CopyDataSpec *copySpecs,
 
 	for (int i = 0; i < tableArray->count; i++)
 	{
-		JSON_Object *jsTableObj = json_array_get_object(jsTableArray, i);
+		JSON_Object *jsTableObjItem = json_array_get_object(jsTableArray, i);
 		CopyTableSummary *summary = &(progress->tableSummaryArray.array[i]);
 
-		if (!prepare_table_summary_as_json(summary, jsTableObj, "process"))
+		if (!prepare_table_summary_as_json(summary, jsTableObjItem, "process"))
 		{
 			/* errors have already been logged */
 			return false;
@@ -824,10 +824,10 @@ copydb_progress_as_json(CopyDataSpec *copySpecs,
 
 	for (int i = 0; i < indexArray->count; i++)
 	{
-		JSON_Object *jsIndexObj = json_array_get_object(jsIndexArray, i);
+		JSON_Object *jsIndexObjItem = json_array_get_object(jsIndexArray, i);
 		CopyIndexSummary *summary = &(progress->indexSummaryArray.array[i]);
 
-		if (!prepare_index_summary_as_json(summary, jsIndexObj, "process"))
+		if (!prepare_index_summary_as_json(summary, jsIndexObjItem, "process"))
 		{
 			/* errors have already been logged */
 			return false;

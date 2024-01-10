@@ -555,9 +555,9 @@ filters_as_json(SourceFilters *filters, JSON_Value *jsFilter)
 			JSON_Value *jsList = json_value_init_array();
 			JSON_Array *jsListArray = json_value_get_array(jsList);
 
-			for (int i = 0; i < list->count; i++)
+			for (int j = 0; j < list->count; j++)
 			{
-				SourceFilterTable *table = &(list->array[i]);
+				SourceFilterTable *table = &(list->array[j]);
 
 				JSON_Value *jsTable = json_value_init_object();
 				JSON_Object *jsTableObj = json_value_get_object(jsTable);

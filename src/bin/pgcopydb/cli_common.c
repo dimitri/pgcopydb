@@ -110,13 +110,13 @@ cli_print_version(int argc, char **argv)
 	if (outputJSON)
 	{
 		JSON_Value *js = json_value_init_object();
-		JSON_Object *root = json_value_get_object(js);
+		JSON_Object *jsObj = json_value_get_object(js);
 
-		json_object_set_string(root, "pgcopydb", VERSION_STRING);
-		json_object_set_string(root, "pg_major", PG_MAJORVERSION);
-		json_object_set_string(root, "pg_version", PG_VERSION);
-		json_object_set_string(root, "pg_version_str", PG_VERSION_STR);
-		json_object_set_number(root, "pg_version_num", (double) PG_VERSION_NUM);
+		json_object_set_string(jsObj, "pgcopydb", VERSION_STRING);
+		json_object_set_string(jsObj, "pg_major", PG_MAJORVERSION);
+		json_object_set_string(jsObj, "pg_version", PG_VERSION);
+		json_object_set_string(jsObj, "pg_version_str", PG_VERSION_STR);
+		json_object_set_number(jsObj, "pg_version_num", (double) PG_VERSION_NUM);
 
 		(void) cli_pprint_json(js);
 	}

@@ -1038,9 +1038,7 @@ stream_apply_sql(StreamApplyContext *context,
 					return false;
 				}
 
-				PreparedStmt *stmt =
-					(PreparedStmt *) calloc(1, sizeof(PreparedStmt));
-
+				stmt = (PreparedStmt *) calloc(1, sizeof(PreparedStmt));
 				stmt->hash = hash;
 				stmt->prepared = true;
 

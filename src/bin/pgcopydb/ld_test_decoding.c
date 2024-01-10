@@ -907,10 +907,10 @@ listToTuple(LogicalMessageTuple *tuple, TestDecodingColumns *cols, int count)
 			}
 
 			/* copy the string contents without the surrounding quotes */
-			for (int i = 0, j = 0; i < cur->valueLen; i++)
+			for (int pidx = 0, vidx = 0; pidx < cur->valueLen; pidx++)
 			{
-				char *ptr = cur->valueStart + i;
-				char *nxt = cur->valueStart + i + 1;
+				char *ptr = cur->valueStart + pidx;
+				char *nxt = cur->valueStart + pidx + 1;
 
 				/* unescape the single-quotes */
 				if (*ptr == '\'' && *nxt == '\'')
@@ -918,7 +918,7 @@ listToTuple(LogicalMessageTuple *tuple, TestDecodingColumns *cols, int count)
 					continue;
 				}
 
-				valueColumn->val.str[j++] = *ptr;
+				valueColumn->val.str[vidx++] = *ptr;
 			}
 		}
 		else
