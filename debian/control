@@ -13,6 +13,7 @@ Build-Depends:
  libpam0g-dev,
  libreadline-dev,
  libselinux1-dev,
+ libsqlite3-dev,
  libssl-dev,
  libxslt1-dev,
  libzstd-dev,
