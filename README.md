@@ -202,7 +202,7 @@ Several distributions are available for pgcopydb:
      version currently in debian stable.
 
 	 ```
-	 $ docker run --rm -it dimitri/pgcopydb:v0.14 pgcopydb --version
+	 $ docker run --rm -it dimitri/pgcopydb:v0.15 pgcopydb --version
 	 ```
 
 	 Or you can use the CI/CD integration that publishes packages from the
