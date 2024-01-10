@@ -3173,10 +3173,10 @@ parseTimelineHistoryResult(void *ctx, PGresult *result)
 
 	if (strlen(value) >= sizeof(context->content))
 	{
-		log_error("Received a timeline history file of %lu bytes, "
-				  "pgcopydb is limited to files of up to %lu bytes.",
-				  (unsigned long) strlen(value),
-				  (unsigned long) sizeof(context->content));
+		log_error("Received a timeline history file of %zu bytes, "
+				  "pgcopydb is limited to files of up to %zu bytes.",
+				  strlen(value),
+				  sizeof(context->content));
 		context->parsedOk = false;
 	}
 	strlcpy(context->content, value, sizeof(context->content));

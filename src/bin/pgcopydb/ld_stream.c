@@ -1908,8 +1908,8 @@ parseMessageMetadata(LogicalMessageMetadata *metadata,
 			if (strlcpy(metadata->timestamp, timestamp, n) >= n)
 			{
 				log_error("Failed to parse JSON message timestamp value \"%s\" "
-						  "which is %lu bytes long, "
-						  "pgcopydb only support timestamps up to %lu bytes",
+						  "which is %zu bytes long, "
+						  "pgcopydb only support timestamps up to %zu bytes",
 						  timestamp,
 						  strlen(timestamp),
 						  sizeof(metadata->timestamp));

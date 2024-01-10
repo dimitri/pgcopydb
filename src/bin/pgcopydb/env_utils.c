@@ -106,11 +106,11 @@ get_env_copy_with_fallback(const char *name, char *result, int maxLength,
 	if (actualLength >= maxLength)
 	{
 		log_error("Failed to copy value stored in %s environment setting, "
-				  "which is %lu long. pgcopydb only supports %lu bytes for "
+				  "which is %zu long. pgcopydb only supports %d bytes for "
 				  "this environment setting",
 				  name,
-				  (unsigned long) actualLength,
-				  (unsigned long) maxLength - 1);
+				  actualLength,
+				  maxLength - 1);
 		return false;
 	}
 	return true;
