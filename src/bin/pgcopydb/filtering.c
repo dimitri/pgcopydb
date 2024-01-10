@@ -439,7 +439,7 @@ parse_filter_quoted_table_name(SourceFilterTable *table, const char *qname)
 	if (nspbytes >= sizeof(table->nspname))
 	{
 		log_error("Failed to parse schema name \"%s\" (%d bytes long), "
-				  "pgcopydb and Postgres only support names up to %lu bytes",
+				  "pgcopydb and Postgres only support names up to %zu bytes",
 				  table->nspname,
 				  nsplen,
 				  sizeof(table->nspname));
@@ -474,7 +474,7 @@ parse_filter_quoted_table_name(SourceFilterTable *table, const char *qname)
 	if (relbytes >= sizeof(table->relname))
 	{
 		log_error("Failed to parse relation name \"%s\" (%d bytes long), "
-				  "pgcopydb and Postgres only support names up to %lu bytes",
+				  "pgcopydb and Postgres only support names up to %zu bytes",
 				  table->relname,
 				  rellen,
 				  sizeof(table->relname));
