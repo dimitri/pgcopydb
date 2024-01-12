@@ -2607,7 +2607,7 @@ stream_add_value_in_json_array(LogicalMessageValue *value, JSON_Array *jsArray)
 				}
 				else
 				{
-					sformat(string, sizeof(string), "%f", value->val.float8);
+					sformat(string, sizeof(string), "%.15f", value->val.float8);
 				}
 
 				json_array_append_string(jsArray, string);
