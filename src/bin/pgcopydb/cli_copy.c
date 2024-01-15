@@ -635,7 +635,7 @@ cli_copy_extensions(int argc, char **argv)
 
 	bool createExtensions = true;
 
-	if (!copydb_copy_extensions(&copySpecs, createExtensions))
+	if (!copydb_start_extension_data_process(&copySpecs, createExtensions))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);

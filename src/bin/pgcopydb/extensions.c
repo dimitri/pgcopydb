@@ -27,7 +27,7 @@ static bool copydb_copy_extensions_hook(void *ctx, SourceExtension *ext);
  * database.
  */
 bool
-copydb_start_extension_data_process(CopyDataSpec *specs)
+copydb_start_extension_data_process(CopyDataSpec *specs, bool createExtensions)
 {
 	if (specs->skipExtensions)
 	{
@@ -54,8 +54,6 @@ copydb_start_extension_data_process(CopyDataSpec *specs)
 		{
 			/* child process runs the command */
 			(void) set_ps_title("pgcopydb: extension data");
-
-			bool createExtensions = false;
 
 			if (!copydb_copy_extensions(specs, createExtensions))
 			{
@@ -107,6 +105,26 @@ copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions)
 
 	DatabaseCatalog *filtersDB = &(copySpecs->catalogs.filter);
 
+	/* make sure that we have our own process local connection */
+	TransactionSnapshot snapshot = { 0 };
+
+	if (!copydb_copy_snapshot(copySpecs, &snapshot))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* swap the new instance in place of the previous one */
+	copySpecs->sourceSnapshot = snapshot;
+
+	/* connect to the source database and set snapshot */
+	if (!copydb_set_snapshot(copySpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* also connect to the target database  */
 	if (!pgsql_init(&dst, copySpecs->connStrings.target_pguri, PGSQL_CONN_TARGET))
 	{
 		/* errors have already been logged */

@@ -113,7 +113,9 @@ copydb_process_table_data(CopyDataSpec *specs)
 	/*
 	 * Take care of extensions configuration table in an auxilliary process.
 	 */
-	if (!copydb_start_extension_data_process(specs))
+	bool createExtension = false;
+
+	if (!copydb_start_extension_data_process(specs, createExtension))
 	{
 		/* errors have already been logged */
 		return false;
