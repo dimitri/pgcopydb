@@ -334,10 +334,11 @@ schema_list_schemas(PGSQL *pgsql, DatabaseCatalog *catalog)
 	SourceSchemaArrayContext parseContext = { { 0 }, catalog, false };
 
 	char *sql =
-		"select n.oid, n.nspname, "
+		"select n.oid, format('%I', n.nspname) as nspname, "
 		"       format('- %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')) "
+		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')), "
+		"       format('%I', current_database()) as datname"
 		"  from pg_namespace n "
 		"       join pg_roles auth ON auth.oid = n.nspowner "
 		" where nspname <> 'information_schema' and nspname !~ '^pg_'";
@@ -402,7 +403,9 @@ schema_list_extensions(PGSQL *pgsql, DatabaseCatalog *catalog)
 	SourceExtensionArrayContext parseContext = { { 0 }, catalog, false };
 
 	char *sql =
-		"select e.oid, extname, extnamespace::regnamespace, extrelocatable, "
+		"select e.oid, extname, extnamespace::regnamespace, "
+		"       format('%I', current_database()) as datname, "
+		"       extrelocatable, "
 		"       0 as count, null as n, "
 		"       null as extconfig, null as nspname, null as relname, "
 		"       null as extcondition, "
@@ -412,7 +415,9 @@ schema_list_extensions(PGSQL *pgsql, DatabaseCatalog *catalog)
 
 		" UNION ALL "
 
-		"  select e.oid, extname, extnamespace::regnamespace, extrelocatable, "
+		"  select e.oid, extname, extnamespace::regnamespace, "
+		"         format('%I', current_database()) as datname, "
+		"         extrelocatable, "
 		"         array_length(e.extconfig, 1) as count, "
 		"         extconfig.n, "
 		"         extconfig.extconfig, "
@@ -457,10 +462,11 @@ schema_list_ext_schemas(PGSQL *pgsql, DatabaseCatalog *catalog)
 	SourceSchemaArrayContext parseContext = { { 0 }, catalog, false };
 
 	char *sql =
-		"select n.oid, n.nspname, "
+		"select n.oid, format('%I', n.nspname) as nspname, "
 		"       format('- %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')) "
+		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')), "
+		"       format('%I', current_database()) as datname"
 		"  from pg_namespace n "
 		"       join pg_roles auth ON auth.oid = n.nspowner "
 		"       join pg_depend d "
@@ -568,6 +574,7 @@ schema_list_collations(PGSQL *pgsql, DatabaseCatalog *catalog)
 		" ) "
 		"select colloid, collname, "
 		"       pg_describe_object('pg_class'::regclass, indexrelid, 0), "
+		"       format('%I', current_database()) as datname, "
 		"       format('%s %s %s', "
 		"              regexp_replace(n.nspname, '[\\n\\r]', ' '), "
 		"              regexp_replace(c.collname, '[\\n\\r]', ' '), "
@@ -582,7 +589,8 @@ schema_list_collations(PGSQL *pgsql, DatabaseCatalog *catalog)
 		"union "
 
 		"select c.oid as colloid, c.collname, "
-		"       format('database %s', d.datname) as desc, "
+		"       format('database %I', current_database()) as desc, "
+		"       format('%I', current_database()) as datname, "
 		"       format('%s %s %s', "
 		"              regexp_replace(n.nspname, '[\\n\\r]', ' '), "
 		"              regexp_replace(c.collname, '[\\n\\r]', ' '), "
@@ -597,6 +605,7 @@ schema_list_collations(PGSQL *pgsql, DatabaseCatalog *catalog)
 
 		"select coll.oid as colloid, coll.collname, "
 		"       pg_describe_object('pg_class'::regclass, attrelid, attnum), "
+		"       format('%I', current_database()) as datname, "
 		"       format('%s %s %s', "
 		"              regexp_replace(cn.nspname, '[\\n\\r]', ' '), "
 		"              regexp_replace(coll.collname, '[\\n\\r]', ' '), "
@@ -971,6 +980,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"  select c.oid, "
 		"         format('%I', n.nspname) as nspname, "
 		"         format('%I', c.relname) as relname, "
+		"         format('%I', current_database()) as datname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
@@ -1056,6 +1066,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"  select c.oid, "
 		"         format('%I', n.nspname) as nspname, "
 		"         format('%I', c.relname) as relname, "
+		"         format('%I', current_database()) as datname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
@@ -1149,6 +1160,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"  select c.oid, "
 		"         format('%I', n.nspname) as nspname, "
 		"         format('%I', c.relname) as relname, "
+		"         format('%I', current_database()) as datname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
@@ -1253,6 +1265,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"  select c.oid, "
 		"         format('%I', n.nspname) as nspname, "
 		"         format('%I', c.relname) as relname, "
+		"         format('%I', current_database()) as datname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
@@ -1346,6 +1359,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"  select c.oid, "
 		"         format('%I', n.nspname) as nspname, "
 		"         format('%I', c.relname) as relname, "
+		"         format('%I', current_database()) as datname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
@@ -1455,6 +1469,7 @@ schema_list_table(PGSQL *pgsql,
 		"  select c.oid, "
 		"         format('%I', n.nspname) as nspname, "
 		"         format('%I', c.relname) as relname, "
+		"         format('%I', current_database()) as datname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
 		"         null as bytes, "
@@ -1608,6 +1623,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"  select c.oid, "
 		"         format('%I', n.nspname) as nspname, "
 		"         format('%I', c.relname) as relname, "
+		"         format('%I', current_database()) as datname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
@@ -1655,6 +1671,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"  select c.oid, "
 		"         format('%I', n.nspname) as nspname, "
 		"         format('%I', c.relname) as relname, "
+		"         format('%I', current_database()) as datname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
@@ -1707,6 +1724,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"  select c.oid, "
 		"         format('%I', n.nspname) as nspname, "
 		"         format('%I', c.relname) as relname, "
+		"         format('%I', current_database()) as datname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
@@ -1773,6 +1791,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"  select c.oid, "
 		"         format('%I', n.nspname) as nspname, "
 		"         format('%I', c.relname) as relname, "
+		"         format('%I', current_database()) as datname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
@@ -1828,6 +1847,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"  select c.oid, "
 		"         format('%I', n.nspname) as nspname, "
 		"         format('%I', c.relname) as relname, "
+		"         format('%I', current_database()) as datname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
 		"         ts.bytes as bytes, "
@@ -1975,6 +1995,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
 		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')), "
+		"         format('%I', current_database()) as datname, "
 		"         NULL as ownedby, "
 		"         NULL as attrelid, "
 		"         NULL as attroid "
@@ -2040,6 +2061,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		 * by using a DEFAULT value.
 		 */
 		"    select s.seqoid, s.nspname, s.relname, s.restore_list_name, "
+		"           format('%I', current_database()) as datname, "
 		"           r1.oid as ownedby, "
 		"           r2.oid as attrelid, "
 		"           a.oid as attroid "
@@ -2119,6 +2141,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		 * by using a DEFAULT value.
 		 */
 		"    select s.seqoid, s.nspname, s.relname, s.restore_list_name, "
+		"           format('%I', current_database()) as datname, "
 		"           r1.oid as ownedby, "
 		"           r2.oid as attrelid, "
 		"           a.oid as attroid "
@@ -2222,6 +2245,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		 * by using a DEFAULT value.
 		 */
 		"    select s.seqoid, s.nspname, s.relname, s.restore_list_name, "
+		"           format('%I', current_database()) as datname, "
 		"           r1.oid as ownedby, "
 		"           r2.oid as attrelid, "
 		"           a.oid as attroid "
@@ -2301,6 +2325,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		 * by using a DEFAULT value.
 		 */
 		"    select s.seqoid, s.nspname, s.relname, s.restore_list_name, "
+		"           format('%I', current_database()) as datname, "
 		"           r1.oid as ownedby, "
 		"           r2.oid as attrelid, "
 		"           a.oid as attroid "
@@ -2426,6 +2451,7 @@ schema_list_sequences(PGSQL *pgsql,
 			"       format('%%I', nspname) as nspname, "
 			"       format('%%I', relname) as relname, "
 			"       restore_list_name, "
+			"       format('%%I', current_database()) as datname, "
 			"       ownedby, attrelid, attroid "
 			"  from (%s) as exclude "
 			" where not exists "
@@ -3868,11 +3894,9 @@ getSchemaList(void *ctx, PGresult *result)
 	SourceSchemaArrayContext *context = (SourceSchemaArrayContext *) ctx;
 	int nTuples = PQntuples(result);
 
-	log_debug("getSchemaList: %d", nTuples);
-
-	if (PQnfields(result) != 3)
+	if (PQnfields(result) != 4)
 	{
-		log_error("Query returned %d columns, expected 3", PQnfields(result));
+		log_error("Query returned %d columns, expected 4", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -3920,6 +3944,18 @@ getSchemaList(void *ctx, PGresult *result)
 			log_error("Schema restore list name \"%s\" is %d bytes long, "
 					  "the maximum expected is %d (RESTORE_LIST_NAMEDATALEN - 1)",
 					  value, length, RESTORE_LIST_NAMEDATALEN - 1);
+			++errors;
+		}
+
+		/* 4. datname */
+		value = PQgetvalue(result, rowNumber, 3);
+		length = strlcpy(schema->datname, value, PG_NAMEDATALEN);
+
+		if (length >= PG_NAMEDATALEN)
+		{
+			log_error("Schema datname \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+					  value, length, PG_NAMEDATALEN - 1);
 			++errors;
 		}
 
@@ -4281,9 +4317,9 @@ getExtensionList(void *ctx, PGresult *result)
 
 	log_debug("getExtensionList: %d", nTuples);
 
-	if (PQnfields(result) != 11)
+	if (PQnfields(result) != 12)
 	{
-		log_error("Query returned %d columns, expected 10", PQnfields(result));
+		log_error("Query returned %d columns, expected 12", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -4438,18 +4474,30 @@ parseCurrentExtension(PGresult *result,
 		++errors;
 	}
 
-	/* 4. extrelocatable */
+	/* 4. datname */
 	value = PQgetvalue(result, rowNumber, 3);
+	length = strlcpy(extension->datname, value, PG_NAMEDATALEN);
+
+	if (length >= PG_NAMEDATALEN)
+	{
+		log_error("Extension datname \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+				  value, length, PG_NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* 5. extrelocatable */
+	value = PQgetvalue(result, rowNumber, 4);
 	extension->extrelocatable = (*value) == 't';
 
-	/* 5. array_length(extconfig), or NULL */
-	if (PQgetisnull(result, rowNumber, 4))
+	/* 6. array_length(extconfig), or NULL */
+	if (PQgetisnull(result, rowNumber, 5))
 	{
 		extension->config.count = 0;
 	}
 	else
 	{
-		value = PQgetvalue(result, rowNumber, 4);
+		value = PQgetvalue(result, rowNumber, 5);
 
 		if (!stringToInt(value, &(extension->config.count)))
 		{
@@ -4458,14 +4506,14 @@ parseCurrentExtension(PGresult *result,
 		}
 	}
 
-	/* 6. n (position over count), or NULL */
-	if (PQgetisnull(result, rowNumber, 5))
+	/* 7. n (position over count), or NULL */
+	if (PQgetisnull(result, rowNumber, 6))
 	{
 		*confIndex = 0;
 	}
 	else
 	{
-		value = PQgetvalue(result, rowNumber, 5);
+		value = PQgetvalue(result, rowNumber, 6);
 
 		if (!stringToInt(value, confIndex))
 		{
@@ -4490,8 +4538,8 @@ parseCurrentExtensionConfig(PGresult *result,
 {
 	int errors = 0;
 
-	/* 7. extconfig (pg_class oid) */
-	char *value = PQgetvalue(result, rowNumber, 6);
+	/* 8. extconfig (pg_class oid) */
+	char *value = PQgetvalue(result, rowNumber, 7);
 
 	if (!stringToUInt32(value, &(extConfig->reloid)))
 	{
@@ -4499,8 +4547,8 @@ parseCurrentExtensionConfig(PGresult *result,
 		++errors;
 	}
 
-	/* 8. n.nspname */
-	value = PQgetvalue(result, rowNumber, 7);
+	/* 9. n.nspname */
+	value = PQgetvalue(result, rowNumber, 8);
 	int length = strlcpy(extConfig->nspname, value, PG_NAMEDATALEN);
 
 	if (length >= PG_NAMEDATALEN)
@@ -4511,8 +4559,8 @@ parseCurrentExtensionConfig(PGresult *result,
 		++errors;
 	}
 
-	/* 9. c.relname */
-	value = PQgetvalue(result, rowNumber, 8);
+	/* 10. c.relname */
+	value = PQgetvalue(result, rowNumber, 9);
 	length = strlcpy(extConfig->relname, value, PG_NAMEDATALEN);
 
 	if (length >= PG_NAMEDATALEN)
@@ -4523,8 +4571,8 @@ parseCurrentExtensionConfig(PGresult *result,
 		++errors;
 	}
 
-	/* 10. extcondition */
-	value = PQgetvalue(result, rowNumber, 9);
+	/* 11. extcondition */
+	value = PQgetvalue(result, rowNumber, 10);
 	extConfig->condition = strdup(value);
 
 	if (extConfig->condition == NULL)
@@ -4533,8 +4581,8 @@ parseCurrentExtensionConfig(PGresult *result,
 		++errors;
 	}
 
-	/* 11. relkind */
-	value = PQgetvalue(result, rowNumber, 10);
+	/* 12. relkind */
+	value = PQgetvalue(result, rowNumber, 11);
 	extConfig->relkind = value[0];
 
 	if (extConfig->relkind == 0)
@@ -4662,9 +4710,9 @@ getCollationList(void *ctx, PGresult *result)
 
 	log_debug("getCollationList: %d", nTuples);
 
-	if (PQnfields(result) != 4)
+	if (PQnfields(result) != 5)
 	{
-		log_error("Query returned %d columns, expected 4", PQnfields(result));
+		log_error("Query returned %d columns, expected 5", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -4717,8 +4765,20 @@ getCollationList(void *ctx, PGresult *result)
 
 		strlcpy(collation->desc, value, length);
 
-		/* 4. restoreListName */
+		/* 4. datname */
 		value = PQgetvalue(result, rowNumber, 3);
+		length = strlcpy(collation->datname, value, PG_NAMEDATALEN);
+
+		if (length >= PG_NAMEDATALEN)
+		{
+			log_error("Collation datname \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+					  value, length, PG_NAMEDATALEN - 1);
+			++errors;
+		}
+
+		/* 5. restoreListName */
+		value = PQgetvalue(result, rowNumber, 4);
 		length =
 			strlcpy(collation->restoreListName,
 					value,
@@ -4760,9 +4820,9 @@ getTableArray(void *ctx, PGresult *result)
 	SourceTableArrayContext *context = (SourceTableArrayContext *) ctx;
 	int nTuples = PQntuples(result);
 
-	if (PQnfields(result) != 12)
+	if (PQnfields(result) != 13)
 	{
-		log_error("Query returned %d columns, expected 12", PQnfields(result));
+		log_error("Query returned %d columns, expected 13", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -4810,6 +4870,7 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	int fnoid = PQfnumber(result, "oid");
 	int fnnspname = PQfnumber(result, "nspname");
 	int fnrelname = PQfnumber(result, "relname");
+	int fndatname = PQfnumber(result, "datname");
 	int fnamname = PQfnumber(result, "amname");
 	int fnrelpages = PQfnumber(result, "relpages");
 	int fnreltuples = PQfnumber(result, "reltuples");
@@ -4866,6 +4927,18 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 				  table->relname,
 				  length,
 				  (long long) sizeof(table->qname) - 1);
+		++errors;
+	}
+
+	/* datname */
+	value = PQgetvalue(result, rowNumber, fndatname);
+	length = strlcpy(table->datname, value, PG_NAMEDATALEN);
+
+	if (length >= PG_NAMEDATALEN)
+	{
+		log_error("Table datname \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+				  value, length, PG_NAMEDATALEN - 1);
 		++errors;
 	}
 
@@ -5083,9 +5156,9 @@ getSequenceArray(void *ctx, PGresult *result)
 	SourceSequenceArrayContext *context = (SourceSequenceArrayContext *) ctx;
 	int nTuples = PQntuples(result);
 
-	if (PQnfields(result) != 7)
+	if (PQnfields(result) != 8)
 	{
-		log_error("Query returned %d columns, expected 7", PQnfields(result));
+		log_error("Query returned %d columns, expected 8", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -5186,20 +5259,32 @@ parseCurrentSourceSequence(PGresult *result, int rowNumber, SourceSequence *seq)
 
 	if (length >= RESTORE_LIST_NAMEDATALEN)
 	{
-		log_error("Table restore list name \"%s\" is %d bytes long, "
+		log_error("Sequence restore list name \"%s\" is %d bytes long, "
 				  "the maximum expected is %d (RESTORE_LIST_NAMEDATALEN - 1)",
 				  value, length, RESTORE_LIST_NAMEDATALEN - 1);
 		++errors;
 	}
 
-	/* 5. ownedby */
-	if (PQgetisnull(result, rowNumber, 4))
+	/* 5. datname */
+	value = PQgetvalue(result, rowNumber, 4);
+	length = strlcpy(seq->datname, value, PG_NAMEDATALEN);
+
+	if (length >= PG_NAMEDATALEN)
+	{
+		log_error("Sequence datname \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (RESTORE_LIST_NAMEDATALEN - 1)",
+				  value, length, RESTORE_LIST_NAMEDATALEN - 1);
+		++errors;
+	}
+
+	/* 6. ownedby */
+	if (PQgetisnull(result, rowNumber, 5))
 	{
 		seq->ownedby = 0;
 	}
 	else
 	{
-		value = PQgetvalue(result, rowNumber, 4);
+		value = PQgetvalue(result, rowNumber, 5);
 
 		if (!stringToUInt32(value, &(seq->ownedby)) || seq->ownedby == 0)
 		{
@@ -5208,14 +5293,14 @@ parseCurrentSourceSequence(PGresult *result, int rowNumber, SourceSequence *seq)
 		}
 	}
 
-	/* 6. attrelid */
-	if (PQgetisnull(result, rowNumber, 5))
+	/* 7. attrelid */
+	if (PQgetisnull(result, rowNumber, 6))
 	{
 		seq->attrelid = 0;
 	}
 	else
 	{
-		value = PQgetvalue(result, rowNumber, 5);
+		value = PQgetvalue(result, rowNumber, 6);
 
 		if (!stringToUInt32(value, &(seq->attrelid)) || seq->attrelid == 0)
 		{
@@ -5224,14 +5309,14 @@ parseCurrentSourceSequence(PGresult *result, int rowNumber, SourceSequence *seq)
 		}
 	}
 
-	/* 6. attroid */
-	if (PQgetisnull(result, rowNumber, 6))
+	/* 8. attroid */
+	if (PQgetisnull(result, rowNumber, 7))
 	{
 		seq->attroid = 0;
 	}
 	else
 	{
-		value = PQgetvalue(result, rowNumber, 6);
+		value = PQgetvalue(result, rowNumber, 7);
 
 		if (!stringToUInt32(value, &(seq->attroid)) || seq->attroid == 0)
 		{
