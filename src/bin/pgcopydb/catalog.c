@@ -4539,7 +4539,7 @@ catalog_s_seq_fetch(SQLiteQuery *query)
 			(char *) sqlite3_column_text(query->ppStmt, 7),
 			sizeof(seq->restoreListName));
 
-	seq->lastValue = sqlite3_column_int(query->ppStmt, 8);
+	seq->lastValue = sqlite3_column_int64(query->ppStmt, 8);
 	seq->isCalled = sqlite3_column_int(query->ppStmt, 9);
 
 	return true;
