@@ -548,10 +548,10 @@ IntervalToString(uint64_t millisecs, char *buffer, size_t size)
  * countLines returns how many line separators (\n) are found in the given
  * string.
  */
-int
+uint64_t
 countLines(char *buffer)
 {
-	int lineNumber = 0;
+	uint64_t lineNumber = 0;
 	char *currentLine = buffer;
 
 	if (buffer == NULL)
@@ -583,25 +583,35 @@ countLines(char *buffer)
 
 
 /*
- * splitLines prepares a multi-line error message in a way that calling code
- * can loop around one line at a time and call log_error() or log_warn() on
- * individual lines.
+ * splitLines splits a C-string "buffer" into a lines array. The buffer is
+ * modified: \n are replaced with \0. Then the lines array is just an array of
+ * pointers into the first character of each line found in the buffer memory
+ * area.
  */
-int
-splitLines(char *buffer, char **linesArray, int size)
+bool
+splitLines(LinesBuffer *lbuf, char *buffer, bool ownsBuffer)
 {
-	int lineNumber = 0;
-	char *currentLine = buffer;
+	lbuf->buffer = buffer;
+	lbuf->ownsBuffer = ownsBuffer;
+	lbuf->count = countLines(lbuf->buffer);
 
-	if (buffer == NULL)
+	if (lbuf->buffer == NULL || lbuf->count == 0)
 	{
-		return 0;
+		/* make sure we have a NULL lines in that case */
+		lbuf->lines = NULL;
+		return true;
 	}
 
-	if (linesArray == NULL)
+	lbuf->lines = (char **) calloc(lbuf->count, sizeof(char *));
+
+	if (lbuf->lines == NULL)
 	{
-		return -1;
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
 	}
+
+	uint64_t lineNumber = 0;
+	char *currentLine = lbuf->buffer;
 
 	do {
 		char *newLinePtr = strchr(currentLine, '\n');
@@ -611,7 +621,7 @@ splitLines(char *buffer, char **linesArray, int size)
 			/* strlen(currentLine) > 0 */
 			if (*currentLine != '\0')
 			{
-				linesArray[lineNumber++] = currentLine;
+				lbuf->lines[lineNumber++] = currentLine;
 			}
 
 			currentLine = NULL;
@@ -620,13 +630,30 @@ splitLines(char *buffer, char **linesArray, int size)
 		{
 			*newLinePtr = '\0';
 
-			linesArray[lineNumber++] = currentLine;
+			lbuf->lines[lineNumber++] = currentLine;
 
 			currentLine = ++newLinePtr;
 		}
-	} while (currentLine != NULL && *currentLine != '\0' && lineNumber < size);
+	} while (currentLine != NULL &&
+			 *currentLine != '\0' &&
+			 lineNumber < lbuf->count);
 
-	return lineNumber;
+	return true;
+}
+
+
+/*
+ * FreeLinesBuffer frees the allocated memory for LinesBuffer instance.
+ */
+void
+FreeLinesBuffer(LinesBuffer *lbuf)
+{
+	free(lbuf->lines);
+
+	if (lbuf->ownsBuffer)
+	{
+		free(lbuf->buffer);
+	}
 }
 
 
@@ -638,20 +665,28 @@ splitLines(char *buffer, char **linesArray, int size)
 void
 processBufferCallback(const char *buffer, bool error)
 {
-	char *outLines[BUFSIZE] = { 0 };
-	int lineCount = splitLines((char *) buffer, outLines, BUFSIZE);
-	int lineNumber = 0;
 	const char *warningPattern = "^(pg_dump: warning:|pg_restore: warning:)";
+	LinesBuffer lbuf = { 0 };
 
-	for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
+	if (!splitLines(&lbuf, (char *) buffer, true))
 	{
-		if (strneq(outLines[lineNumber], ""))
+		/* errors have already been logged */
+		return;
+	}
+
+	for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
+	{
+		char *line = lbuf.lines[lineNumber];
+
+		if (strneq(line, ""))
 		{
-			char *match = regexp_first_match(outLines[lineNumber], warningPattern);
+			char *match = regexp_first_match(line, warningPattern);
 			int logLevel = match != NULL ? LOG_WARN : (error ? LOG_ERROR : LOG_INFO);
-			log_level(logLevel, "%s", outLines[lineNumber]);
+			log_level(logLevel, "%s", line);
 		}
 	}
+
+	FreeLinesBuffer(&lbuf);
 }
 
 

@@ -14,6 +14,7 @@
 #include "queue_utils.h"
 #include "pgsql.h"
 #include "schema.h"
+#include "string_utils.h"
 
 #define OUTPUT_BEGIN "BEGIN; -- "
 #define OUTPUT_COMMIT "COMMIT; -- "
@@ -401,9 +402,7 @@ typedef struct StreamApplyContext
 typedef struct StreamContent
 {
 	char filename[MAXPGPATH];
-	int count;
-	char *buffer;
-	char **lines;                     /* malloc'ed area */
+	LinesBuffer lbuf;
 	LogicalMessageMetadata *messages; /* malloc'ed area */
 } StreamContent;
 

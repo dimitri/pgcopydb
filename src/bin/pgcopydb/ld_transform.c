@@ -886,7 +886,6 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 {
 	StreamContext *privateContext = &(specs->private);
 	StreamContent content = { 0 };
-	long size = 0L;
 
 	log_notice("Transforming JSON file \"%s\" into SQL file \"%s\"",
 			   jsonfilename,
@@ -899,27 +898,33 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 	 * decoding messages, and parse the JSON messages into our internal
 	 * representation structure.
 	 */
-	if (!read_file(content.filename, &(content.buffer), &size))
+	char *contents = NULL;
+	long size = 0L;
+
+	if (!read_file(content.filename, &contents, &size))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	content.count = countLines(content.buffer);
-	content.lines = (char **) calloc(content.count, sizeof(char *));
-	content.count = splitLines(content.buffer, content.lines, content.count);
-
-	if (content.lines == NULL)
+	if (!splitLines(&(content.lbuf), contents, true))
 	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		free(content.buffer);
-		free(content.lines);
+		/* errors have already been logged */
 		return false;
 	}
 
-	log_debug("stream_transform_file: read %d lines from \"%s\"",
-			  content.count,
+	log_debug("stream_transform_file: read %lld lines from \"%s\"",
+			  (long long) content.lbuf.count,
 			  content.filename);
+
+	/*
+	 * If the file contains zero lines, we're done already, Also malloc(zero)
+	 * leads to "corrupted size vs. prev_size" run-time errors.
+	 */
+	if (content.lbuf.count == 0)
+	{
+		return true;
+	}
 
 	/*
 	 * The output is written to a temp/partial file which is renamed after
@@ -936,8 +941,7 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 	if (privateContext->sqlFile == NULL)
 	{
 		log_error("Failed to open file \"%s\"", tempfilename);
-		free(content.buffer);
-		free(content.lines);
+		FreeLinesBuffer(&(content.lbuf));
 		return false;
 	}
 
@@ -952,14 +956,14 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 	/* we skip KEEPALIVE message in the beginning of the file */
 	bool firstMessage = true;
 
-	for (int i = 0; i < content.count; i++)
+	for (uint64_t i = 0; i < content.lbuf.count; i++)
 	{
-		char *message = content.lines[i];
+		char *message = content.lbuf.lines[i];
 
 		LogicalMessageMetadata empty = { 0 };
 		*metadata = empty;
 
-		log_trace("stream_transform_file[%2d]: %s", i, message);
+		log_trace("stream_transform_file[%4lld]: %s", (long long) i, message);
 
 		JSON_Value *json = json_parse_string(message);
 
@@ -967,8 +971,7 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 		{
 			/* errors have already been logged */
 			json_value_free(json);
-			free(content.buffer);
-			free(content.lines);
+			FreeLinesBuffer(&(content.lbuf));
 			return false;
 		}
 
@@ -1001,8 +1004,7 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 		{
 			log_error("Failed to parse JSON message: %s", message);
 			json_value_free(json);
-			free(content.buffer);
-			free(content.lines);
+			FreeLinesBuffer(&(content.lbuf));
 			return false;
 		}
 
@@ -1018,8 +1020,7 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 		{
 			log_error("Failed to transform and flush the current message, "
 					  "see above for details");
-			free(content.buffer);
-			free(content.lines);
+			FreeLinesBuffer(&(content.lbuf));
 			return false;
 		}
 
@@ -1033,11 +1034,11 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 		}
 	}
 
+	FreeLinesBuffer(&(content.lbuf));
+
 	if (fclose(privateContext->sqlFile) == EOF)
 	{
-		log_error("Failed to write file \"%s\"", tempfilename);
-		free(content.buffer);
-		free(content.lines);
+		log_error("Failed to close file \"%s\"", tempfilename);
 		return false;
 	}
 
@@ -1052,17 +1053,12 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 		log_error("Failed to move \"%s\" to \"%s\": %m",
 				  tempfilename,
 				  sqlfilename);
-		free(content.buffer);
-		free(content.lines);
 		return false;
 	}
 
-	log_info("Transformed %d JSON messages into SQL file \"%s\"",
-			 content.count,
+	log_info("Transformed %lld JSON messages into SQL file \"%s\"",
+			 (long long) content.lbuf.count,
 			 sqlfilename);
-
-	free(content.buffer);
-	free(content.lines);
 
 	return true;
 }
