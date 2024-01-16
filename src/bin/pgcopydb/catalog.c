@@ -7380,14 +7380,21 @@ catalog_bind_parameters(sqlite3 *db,
 						BindParam *params,
 						int count)
 {
-	PQExpBuffer debugParameters = createPQExpBuffer();
+	PQExpBuffer debugParameters = NULL;
+
+	bool logSQL = log_get_level() <= LOG_SQLITE;
+
+	if (logSQL)
+	{
+		debugParameters = createPQExpBuffer();
+	}
 
 	for (int i = 0; i < count; i++)
 	{
 		int n = i + 1;
 		BindParam *p = &(params[i]);
 
-		if (i > 0)
+		if (logSQL && i > 0)
 		{
 			appendPQExpBufferStr(debugParameters, ", ");
 		}
@@ -7408,7 +7415,10 @@ catalog_bind_parameters(sqlite3 *db,
 					return false;
 				}
 
-				appendPQExpBuffer(debugParameters, "%lld", (long long) p->intVal);
+				if (logSQL)
+				{
+					appendPQExpBuffer(debugParameters, "%lld", (long long) p->intVal);
+				}
 
 				break;
 			}
@@ -7427,7 +7437,10 @@ catalog_bind_parameters(sqlite3 *db,
 					return false;
 				}
 
-				appendPQExpBuffer(debugParameters, "%lld", (long long) p->intVal);
+				if (logSQL)
+				{
+					appendPQExpBuffer(debugParameters, "%lld", (long long) p->intVal);
+				}
 
 				break;
 			}
@@ -7442,7 +7455,10 @@ catalog_bind_parameters(sqlite3 *db,
 				{
 					rc = sqlite3_bind_null(ppStmt, n);
 
-					appendPQExpBuffer(debugParameters, "%s", "null");
+					if (logSQL)
+					{
+						appendPQExpBuffer(debugParameters, "%s", "null");
+					}
 				}
 				else
 				{
@@ -7451,8 +7467,10 @@ catalog_bind_parameters(sqlite3 *db,
 										   p->strVal,
 										   strlen(p->strVal),
 										   SQLITE_STATIC);
-
-					appendPQExpBuffer(debugParameters, "%s", p->strVal);
+					if (logSQL)
+					{
+						appendPQExpBuffer(debugParameters, "%s", p->strVal);
+					}
 				}
 
 				if (rc != SQLITE_OK)
@@ -7478,16 +7496,21 @@ catalog_bind_parameters(sqlite3 *db,
 		}
 	}
 
-	if (PQExpBufferBroken(debugParameters))
-	{
-		log_error("Failed to create log message for SQL query parameters: "
-				  "out of memory");
-		destroyPQExpBuffer(debugParameters);
-		return false;
-	}
 
-	log_sqlite("[SQLite] %s", debugParameters->data);
-	destroyPQExpBuffer(debugParameters);
+	if (logSQL)
+	{
+		if (PQExpBufferBroken(debugParameters))
+		{
+			log_error("Failed to create log message for SQL query parameters: "
+					  "out of memory");
+			destroyPQExpBuffer(debugParameters);
+			return false;
+		}
+
+		log_sqlite("[SQLite] %s", debugParameters->data);
+
+		destroyPQExpBuffer(debugParameters);
+	}
 
 	return true;
 }
