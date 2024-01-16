@@ -658,6 +658,8 @@ streamCheckResumePosition(StreamSpecs *specs)
 		log_notice("Resume replication from latest message: %s", latestMessage);
 	}
 
+	FreeLinesBuffer(&(latestStreamedContent.lbuf));
+
 	PGSQL src = { 0 };
 
 	if (!pgsql_init(&src, specs->connStrings->source_pguri, PGSQL_CONN_SOURCE))
@@ -1975,14 +1977,11 @@ stream_read_file(StreamContent *content)
 		{
 			/* errors have already been logged */
 			json_value_free(json);
-			FreeLinesBuffer(&(content->lbuf));
 			return false;
 		}
 
 		json_value_free(json);
 	}
-
-	FreeLinesBuffer(&(content->lbuf));
 
 	return true;
 }
