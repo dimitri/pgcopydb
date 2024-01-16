@@ -331,11 +331,13 @@ populateWal2jsonAddTablesFilter(DatabaseCatalog *sourceDB,
 		.addTablesFilter = addTablesFilterX
 	};
 
-	if (!catalog_iter_s_table(sourceDB, &addTablesFilterContext, add_tables_filter_table_hook))
+	if (!catalog_iter_s_table(sourceDB, &addTablesFilterContext,
+							  add_tables_filter_table_hook))
 	{
-		log_error("Failed to iterate over s_table table to populate wal2json addtables filter");
+		log_error(
+			"Failed to iterate over s_table table to populate wal2json addtables filter");
 		destroyPQExpBuffer(addTablesFilterX);
-		
+
 		return false;
 	}
 
@@ -537,6 +539,7 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple,
 	return true;
 }
 
+
 /*
  * This function is a callback function for catalog_iter_s_table.
  * It appends the table name to the addtables filter.
@@ -559,7 +562,8 @@ add_tables_filter_table_hook(void *ctx, SourceTable *table)
 			appendPQExpBufferChar(addTablesFilterContext->addTablesFilter, ',');
 		}
 
-		appendPQExpBuffer(addTablesFilterContext->addTablesFilter, "%s.%s", table->nspname, table->relname);
+		appendPQExpBuffer(addTablesFilterContext->addTablesFilter, "%s.%s",
+						  table->nspname, table->relname);
 	}
 
 	return true;
