@@ -545,24 +545,27 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 
 			/* if the buffer doesn't terminate with \n it's a partial read */
 			bool partialRead = buf[bytes - 1] != '\n';
+			LinesBuffer lbuf = { 0 };
 
-			int count = countLines(buf);
-			char **lines = (char **) calloc(count, sizeof(char *));
-			int lineCount = splitLines(buf, lines, count);
+			if (!splitLines(&lbuf, buf, true))
+			{
+				/* errors have already been logged */
+				return false;
+			}
 
-			log_trace("read_from_stream read %6zu bytes in %d lines %s[%lld]",
+			log_trace("read_from_stream read %6zu bytes in %lld lines %s[%lld]",
 					  bytes,
-					  lineCount,
+					  (long long) lbuf.count,
 					  partialRead ? "partial" : "",
 					  (long long) multiPartCount);
 
-			for (int i = 0; i < lineCount; i++)
+			for (uint64_t i = 0; i < lbuf.count; i++)
 			{
 				/*
 				 * Now might look like a good time to check for interrupts...
 				 * That said we want to finish processing the current buffer.
 				 */
-				char *line = lines[i];
+				char *line = lbuf.lines[i];
 
 				/*
 				 * Take care of partial reads:
@@ -586,7 +589,7 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 				 *   multiPartCount > 0 && (!partialRead || lineCount > 1)
 				 */
 				bool firstLine = i == 0;
-				bool lastLine = (i == (lineCount - 1));
+				bool lastLine = (i == (lbuf.count - 1));
 				bool callUserCallback = true;
 				bool appendToCurrentBuffer = false;
 
@@ -599,14 +602,15 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 				}
 
 				/* middle part of a multi-part buffer */
-				else if (partialRead && multiPartCount > 0 && lineCount == 1)
+				else if (partialRead && multiPartCount > 0 && lbuf.count == 1)
 				{
 					if (multiPartBuffer == NULL)
 					{
 						log_error("BUG: multiPartBuffer is NULL, "
 								  "multiPartCount == %lld, "
-								  "line == %d, lineCount == 1",
-								  (long long) multiPartCount, i);
+								  "line == %lld, lineCount == 1",
+								  (long long) multiPartCount,
+								  (long long) i);
 						return false;
 					}
 					callUserCallback = false;
@@ -665,7 +669,7 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 
 					if (!(*context->callback)(context->ctx, line, &stop))
 					{
-						free(buf);
+						FreeLinesBuffer(&lbuf);
 						destroyPQExpBuffer(multiPartBuffer);
 						return false;
 					}
@@ -686,8 +690,7 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 				}
 			}
 
-			free(lines);
-			free(buf);
+			FreeLinesBuffer(&lbuf);
 		}
 
 		/* doneReading might have been set from the user callback already */

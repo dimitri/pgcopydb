@@ -622,7 +622,7 @@ streamCheckResumePosition(StreamSpecs *specs)
 				 LSN_FORMAT_ARGS(specs->endpos));
 	}
 
-	if (latestStreamedContent.count == 0)
+	if (latestStreamedContent.lbuf.count == 0)
 	{
 		if (specs->mode == STREAM_MODE_RECEIVE)
 		{
@@ -642,7 +642,7 @@ streamCheckResumePosition(StreamSpecs *specs)
 	else
 	{
 		/* lines are counted starting at zero */
-		int lastLineNb = latestStreamedContent.count - 1;
+		int lastLineNb = latestStreamedContent.lbuf.count - 1;
 
 		LogicalMessageMetadata *messages = latestStreamedContent.messages;
 		LogicalMessageMetadata *latest = &(messages[lastLineNb]);
@@ -654,9 +654,11 @@ streamCheckResumePosition(StreamSpecs *specs)
 				 LSN_FORMAT_ARGS(specs->startpos),
 				 latestStreamedContent.filename);
 
-		char *latestMessage = latestStreamedContent.lines[lastLineNb];
+		char *latestMessage = latestStreamedContent.lbuf.lines[lastLineNb];
 		log_notice("Resume replication from latest message: %s", latestMessage);
 	}
+
+	FreeLinesBuffer(&(latestStreamedContent.lbuf));
 
 	PGSQL src = { 0 };
 
@@ -1931,25 +1933,31 @@ bool
 stream_read_file(StreamContent *content)
 {
 	long size = 0L;
+	char *contents = NULL;
 
-	if (!read_file(content->filename, &(content->buffer), &size))
+	if (!read_file(content->filename, &contents, &size))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	content->count = countLines(content->buffer);
-	content->lines = (char **) calloc(content->count, sizeof(char *));
-	content->count = splitLines(content->buffer, content->lines, content->count);
-
-	if (content->lines == NULL)
+	if (!splitLines(&(content->lbuf), contents, true))
 	{
-		log_error(ALLOCATION_FAILED_ERROR);
+		/* errors have already been logged */
 		return false;
 	}
 
+	/*
+	 * If the file contains zero lines, we're done already, Also malloc(zero)
+	 * leads to "corrupted size vs. prev_size" run-time errors.
+	 */
+	if (content->lbuf.count == 0)
+	{
+		return true;
+	}
+
 	content->messages =
-		(LogicalMessageMetadata *) calloc(content->count,
+		(LogicalMessageMetadata *) calloc(content->lbuf.count,
 										  sizeof(LogicalMessageMetadata));
 
 	if (content->messages == NULL)
@@ -1958,9 +1966,9 @@ stream_read_file(StreamContent *content)
 		return false;
 	}
 
-	for (int i = 0; i < content->count; i++)
+	for (uint64_t i = 0; i < content->lbuf.count; i++)
 	{
-		char *message = content->lines[i];
+		char *message = content->lbuf.lines[i];
 		LogicalMessageMetadata *metadata = &(content->messages[i]);
 
 		JSON_Value *json = json_parse_string(message);

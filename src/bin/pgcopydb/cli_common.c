@@ -692,31 +692,37 @@ cli_read_one_line(const char *filename,
 	}
 
 	/* make sure to use only the first line of the file, without \n */
-	char *lines[BUFSIZE] = { 0 };
-	int lineCount = splitLines(contents, lines, BUFSIZE);
+	LinesBuffer lbuf = { 0 };
 
-	if (lineCount != 1)
+	if (!splitLines(&lbuf, contents, true))
 	{
-		log_error("Failed to parse %s file \"%s\"", name, filename);
-		free(contents);
+		/* errors have already been logged */
 		return false;
 	}
 
-	if (size < (strlen(lines[0]) + 1))
+	if (lbuf.count != 1)
+	{
+		log_error("Failed to parse %s file \"%s\"", name, filename);
+		FreeLinesBuffer(&lbuf);
+		return false;
+	}
+
+	if (size < (strlen(lbuf.lines[0]) + 1))
 	{
 		log_error("Failed to parse %s \"%s\" with %lld bytes, "
 				  "pgcopydb supports only snapshot references up to %lld bytes",
 				  name,
-				  lines[0],
-				  (long long) strlen(lines[0]) + 1,
+				  lbuf.lines[0],
+				  (long long) strlen(lbuf.lines[0]) + 1,
 				  (long long) size);
-		free(contents);
+		FreeLinesBuffer(&lbuf);
 		return false;
 	}
 
 	/* publish the one line to the snapshot variable */
-	strlcpy(target, lines[0], size);
-	free(contents);
+	strlcpy(target, lbuf.lines[0], size);
+
+	FreeLinesBuffer(&lbuf);
 
 	return true;
 }

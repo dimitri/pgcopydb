@@ -440,45 +440,51 @@ stream_apply_file(StreamApplyContext *context)
 
 	strlcpy(content.filename, context->sqlFileName, sizeof(content.filename));
 
-	if (!read_file(content.filename, &(content.buffer), &size))
+	char *contents = NULL;
+
+	if (!read_file(content.filename, &contents, &size))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	content.count = countLines(content.buffer);
-	content.lines = (char **) calloc(content.count, sizeof(char *));
-	content.count = splitLines(content.buffer, content.lines, content.count);
-
-	if (content.lines == NULL)
+	if (!splitLines(&(content.lbuf), contents, true))
 	{
-		log_error(ALLOCATION_FAILED_ERROR);
+		/* errors have already been logged */
 		return false;
 	}
 
 	log_info("Replaying changes from file \"%s\"", context->sqlFileName);
 
-	log_debug("Read %d lines in file \"%s\"",
-			  content.count,
+	log_debug("Read %lld lines in file \"%s\"",
+			  (long long) content.lbuf.count,
 			  content.filename);
 
+	/*
+	 * If the file contains zero lines, we're done already, Also malloc(zero)
+	 * leads to "corrupted size vs. prev_size" run-time errors.
+	 */
+	if (content.lbuf.count == 0)
+	{
+		return true;
+	}
+
 	LogicalMessageMetadata *mArray =
-		(LogicalMessageMetadata *) calloc(content.count,
+		(LogicalMessageMetadata *) calloc(content.lbuf.count,
 										  sizeof(LogicalMessageMetadata));
 
 	LogicalMessageMetadata *lastCommit = NULL;
 
 	/* parse the SQL commands metadata from the SQL file */
-	for (int i = 0; i < content.count && !context->reachedEndPos; i++)
+	for (uint64_t i = 0; i < content.lbuf.count && !context->reachedEndPos; i++)
 	{
-		const char *sql = content.lines[i];
+		const char *sql = content.lbuf.lines[i];
 		LogicalMessageMetadata *metadata = &(mArray[i]);
 
 		if (!parseSQLAction(sql, metadata))
 		{
 			/* errors have already been logged */
-			free(content.buffer);
-			free(content.lines);
+			FreeLinesBuffer(&(content.lbuf));
 
 			return false;
 		}
@@ -487,17 +493,16 @@ stream_apply_file(StreamApplyContext *context)
 		 * The SWITCH WAL command should always be the last line of the file.
 		 */
 		if (metadata->action == STREAM_ACTION_SWITCH &&
-			i != (content.count - 1))
+			i != (content.lbuf.count - 1))
 		{
-			log_error("SWITCH command for LSN %X/%X found in \"%s\" line %d, "
-					  "before last line %d",
+			log_error("SWITCH command for LSN %X/%X found in \"%s\" line %lld, "
+					  "before last line %lld",
 					  LSN_FORMAT_ARGS(metadata->lsn),
 					  content.filename,
-					  i + 1,
-					  content.count);
+					  (long long) i + 1,
+					  (long long) content.lbuf.count);
 
-			free(content.buffer);
-			free(content.lines);
+			FreeLinesBuffer(&(content.lbuf));
 
 			return false;
 		}
@@ -509,9 +514,9 @@ stream_apply_file(StreamApplyContext *context)
 	}
 
 	/* replay the SQL commands from the SQL file */
-	for (int i = 0; i < content.count && !context->reachedEndPos; i++)
+	for (uint64_t i = 0; i < content.lbuf.count && !context->reachedEndPos; i++)
 	{
-		const char *sql = content.lines[i];
+		const char *sql = content.lbuf.lines[i];
 		LogicalMessageMetadata *metadata = &(mArray[i]);
 
 		/* last commit of a file requires synchronous_commit on */
@@ -523,16 +528,14 @@ stream_apply_file(StreamApplyContext *context)
 					  "see above for details",
 					  content.filename);
 
-			free(content.buffer);
-			free(content.lines);
+			FreeLinesBuffer(&(content.lbuf));
 
 			return false;
 		}
 	}
 
 	/* free dynamic memory that's not needed anymore */
-	free(content.buffer);
-	free(content.lines);
+	FreeLinesBuffer(&(content.lbuf));
 
 	/*
 	 * Each time we are done applying a file, we update our progress and

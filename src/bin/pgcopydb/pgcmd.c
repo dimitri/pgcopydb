@@ -195,8 +195,6 @@ set_psql_from_config_bindir(PostgresPaths *pgPaths, const char *pg_config)
 
 	Program prog = run_program(pg_config, "--bindir", NULL);
 
-	char *lines[1];
-
 	if (prog.returnCode != 0)
 	{
 		errno = prog.error;
@@ -206,14 +204,17 @@ set_psql_from_config_bindir(PostgresPaths *pgPaths, const char *pg_config)
 		return false;
 	}
 
-	if (splitLines(prog.stdOut, lines, 1) != 1)
+	LinesBuffer lbuf = { 0 };
+
+	if (!splitLines(&lbuf, prog.stdOut, false) || lbuf.count != 1)
 	{
 		log_error("Unable to parse output from pg_config --bindir");
 		free_program(&prog);
+		FreeLinesBuffer(&lbuf);
 		return false;
 	}
 
-	char *bindir = lines[0];
+	char *bindir = lbuf.lines[0];
 	join_path_components(psql, bindir, "psql");
 
 	/* we're now done with the Program and its output */
@@ -224,10 +225,12 @@ set_psql_from_config_bindir(PostgresPaths *pgPaths, const char *pg_config)
 		log_error("Failed to find psql at \"%s\" from PG_CONFIG at \"%s\"",
 				  pgPaths->psql,
 				  pg_config);
+		FreeLinesBuffer(&lbuf);
 		return false;
 	}
 
 	strlcpy(pgPaths->psql, psql, sizeof(pgPaths->psql));
+	FreeLinesBuffer(&lbuf);
 
 	return true;
 }
@@ -691,8 +694,13 @@ pg_restore_roles(PostgresPaths *pgPaths,
 		return false;
 	}
 
-	char *lines[BUFSIZE] = { 0 };
-	int lineCount = splitLines(content, lines, BUFSIZE);
+	LinesBuffer lbuf = { 0 };
+
+	if (!splitLines(&lbuf, content, true))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	PGSQL pgsql = { 0 };
 
@@ -718,9 +726,9 @@ pg_restore_roles(PostgresPaths *pgPaths,
 	 */
 	bool skipNextLine = false;
 
-	for (int l = 0; l < lineCount; l++)
+	for (uint64_t l = 0; l < lbuf.count; l++)
 	{
-		char *currentLine = lines[l];
+		char *currentLine = lbuf.lines[l];
 
 		if (skipNextLine)
 		{
@@ -756,6 +764,7 @@ pg_restore_roles(PostgresPaths *pgPaths,
 			{
 				log_error("Failed to parse create role statement \"%s\"",
 						  currentLine);
+				FreeLinesBuffer(&lbuf);
 				return false;
 			}
 
@@ -772,6 +781,7 @@ pg_restore_roles(PostgresPaths *pgPaths,
 			if (!pgsql_role_exists(&pgsql, roleName, &exists))
 			{
 				/* errors have already been logged */
+				FreeLinesBuffer(&lbuf);
 				return false;
 			}
 
@@ -792,6 +802,7 @@ pg_restore_roles(PostgresPaths *pgPaths,
 			if (!pgsql_execute(&pgsql, createRole))
 			{
 				/* errors have already been logged */
+				FreeLinesBuffer(&lbuf);
 				return false;
 			}
 		}
@@ -802,10 +813,13 @@ pg_restore_roles(PostgresPaths *pgPaths,
 			if (!pgsql_execute(&pgsql, currentLine))
 			{
 				/* errors have already been logged */
+				FreeLinesBuffer(&lbuf);
 				return false;
 			}
 		}
 	}
+
+	FreeLinesBuffer(&lbuf);
 
 	if (!pgsql_commit(&pgsql))
 	{
@@ -1164,28 +1178,32 @@ parse_archive_list(const char *filename, ArchiveContentArray *contents)
 		return false;
 	}
 
-	int lineCount = countLines(buffer);
-	char **lines = (char **) calloc(lineCount, sizeof(char *));
-	int splitCount = splitLines(buffer, lines, lineCount);
+	LinesBuffer lbuf = { 0 };
 
-	if (splitCount != lineCount)
+	if (!splitLines(&lbuf, buffer, true))
 	{
-		log_error("BUG: parse_archive_list counted %d lines "
-				  "and got %d after split",
-				  lineCount,
-				  splitCount);
+		/* errors have already been logged */
 		return false;
+	}
+
+	/*
+	 * If the file contains zero lines, we're done already, Also malloc(zero)
+	 * leads to "corrupted size vs. prev_size" run-time errors.
+	 */
+	if (lbuf.count == 0)
+	{
+		return true;
 	}
 
 	contents->count = 0;
 	contents->array =
-		(ArchiveContentItem *) calloc(lineCount, sizeof(ArchiveContentItem));
+		(ArchiveContentItem *) calloc(lbuf.count, sizeof(ArchiveContentItem));
 
-	for (int lineNumber = 0; lineNumber < lineCount; lineNumber++)
+	for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
 	{
 		ArchiveContentItem *item = &(contents->array[contents->count]);
 
-		char *line = lines[lineNumber];
+		char *line = lbuf.lines[lineNumber];
 
 		/* skip empty lines and lines that start with a semi-colon (comment) */
 		if (line == NULL || *line == '\0' || *line == ';')
@@ -1195,10 +1213,11 @@ parse_archive_list(const char *filename, ArchiveContentArray *contents)
 
 		if (!parse_archive_list_entry(item, line))
 		{
-			log_error("Failed to parse line %d of \"%s\", "
+			log_error("Failed to parse line %lld of \"%s\", "
 					  "see above for details",
-					  lineNumber,
+					  (long long) lineNumber,
 					  filename);
+			FreeLinesBuffer(&lbuf);
 			return false;
 		}
 
@@ -1218,6 +1237,8 @@ parse_archive_list(const char *filename, ArchiveContentArray *contents)
 
 		++contents->count;
 	}
+
+	FreeLinesBuffer(&lbuf);
 
 	return true;
 }
