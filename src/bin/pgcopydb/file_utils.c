@@ -1235,9 +1235,8 @@ sformat(char *str, size_t count, const char *fmt, ...)
 	if (len >= count)
 	{
 		log_error("BUG: sformat needs %d bytes to expend format string \"%s\", "
-				  "and a target string of %lu bytes only has been given.",
-				  len, fmt,
-				  (unsigned long) count);
+				  "and a target string of %zu bytes only has been given.",
+				  len, fmt, count);
 	}
 
 	return len;

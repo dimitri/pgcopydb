@@ -439,7 +439,7 @@ parse_filter_quoted_table_name(SourceFilterTable *table, const char *qname)
 	if (nspbytes >= sizeof(table->nspname))
 	{
 		log_error("Failed to parse schema name \"%s\" (%d bytes long), "
-				  "pgcopydb and Postgres only support names up to %lu bytes",
+				  "pgcopydb and Postgres only support names up to %zu bytes",
 				  table->nspname,
 				  nsplen,
 				  sizeof(table->nspname));
@@ -474,7 +474,7 @@ parse_filter_quoted_table_name(SourceFilterTable *table, const char *qname)
 	if (relbytes >= sizeof(table->relname))
 	{
 		log_error("Failed to parse relation name \"%s\" (%d bytes long), "
-				  "pgcopydb and Postgres only support names up to %lu bytes",
+				  "pgcopydb and Postgres only support names up to %zu bytes",
 				  table->relname,
 				  rellen,
 				  sizeof(table->relname));
@@ -555,9 +555,9 @@ filters_as_json(SourceFilters *filters, JSON_Value *jsFilter)
 			JSON_Value *jsList = json_value_init_array();
 			JSON_Array *jsListArray = json_value_get_array(jsList);
 
-			for (int i = 0; i < list->count; i++)
+			for (int j = 0; j < list->count; j++)
 			{
-				SourceFilterTable *table = &(list->array[i]);
+				SourceFilterTable *table = &(list->array[j]);
 
 				JSON_Value *jsTable = json_value_init_object();
 				JSON_Object *jsTableObj = json_value_get_object(jsTable);

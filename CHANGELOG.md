@@ -1,3 +1,61 @@
+### pgcopydb v0.15 (January 10, 2024) ###
+
+### Added
+* Skip creating Large Objects workers when database has zero of them. (#599)
+* Add millisecond level resolution to log lines (#550)
+* Support skipping extensions & filtering in pgcopydb dump/restore (#572)
+* Add option to output numeric as string on wal2json (#576)
+* Parallelize pg_restore operations (#561)
+* Add byte level details to list progress command (#503)
+* Rollback incomplete txns on graceful exit (#544)
+* Set GUCs in the connection for COPY to target. (#541)
+
+### Changed
+* Use SQLite to store our internal copy of the source catalogs. (#569)
+* Debian: B-D on libsqlite3-dev (#628)
+* Use libpq Single Row Mode when fetching catalogs. (#584)
+* Use SQLite for LSN tracking. (#625)
+* Use SQLite catalogs for top-level timings too. (#616)
+* Use our SQLite catalogs for the pgcopydb sentinel table. (#601)
+* Refactor code to fetch current LSN position from Postgres. (#608)
+* Review CDC/Follow tests workdir cleanup (and git registration). (#607)
+* Removes copy-db command (#605)
+* Remove tbldir and idxdir in the workdir (not needed anymore). (#604)
+* Remove summary files, use our SQLite database instead. (#590)
+* Review the COPY arguments API to fix TRUNCATE calls. (#597)
+* Set application name to process title and pid (#553)
+* Use same connection in table copy worker. (#542)
+* Invalidate context state during cleanup (#547)
+
+### Fix
+* Fix gcc warnings found when building on i386. (#629)
+* Use %zu for size_t values (sizeof, strlen). (#627)
+* Fix our exclude-index filtering. (#626)
+* Problem: `pgcopydb copy extension` fails when sequences exists part of ext configuration (#621)
+* Fix numerous issues with argument parsing (#617)
+* Problem: Incorrect flush LSN from source being used to find durable LSN (#615)
+* Fix pgcopydb list progress command. (#610)
+* Fix sub-process "success" condition and error handling. (#603)
+* Fix error handling (--fail-fast) for copy workers. (#598)
+* Fix escaping of identifiers while transforming for wal2json plugin. (#595)
+* Fix crash on exit with --debug and PGCOPYDB_LOG_FILENAME (#589)
+* Fix stack pointer access while cleaning up resources on exit (#592)
+* Fix issues with --skip-extensions flag (#587)
+* Fix args index bug due to incorrect evaluation order (#585)
+* Fix extra quotes of identifier in ALTER database properties (#583)
+* Fix interrupt handling in queue_receive. (#580)
+* Fix Postgres connection handling in Large Object related code. (#579)
+* Fix application_name truncation notice messages. (#578)
+* Fix division-by-zero hazard in random_between macro. (#571)
+* Fix the listSourceTablesNoPKSQL queries (#570)
+* Compare endpos only if it is valid (#568)
+* Fix issue where the replay process fails to reach the end position. (#566)
+* Fix duplicate key errors on resuming continued txn (#555)
+* Close pipes created by follow after forking childs (#563)
+* Fix copying blobs that are not included in snapshot. (#558)
+* Fix memory corruption while calling SysV msgsnd & msgrcv (#551)
+* Fix some copy paste errors (#543)
+
 ### pgcopydb v0.14 (November 20, 2023) ###
 
 This is a bugfix release with a strong focus on reliability, in particular

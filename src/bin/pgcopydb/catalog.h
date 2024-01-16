@@ -7,6 +7,7 @@
 #define CATALOG_H
 
 #include "schema.h"
+#include "string_utils.h"
 
 /*
  * Internal infrastructure to bind values to SQLite prepared statements.
@@ -60,9 +61,67 @@ bool catalog_setup_replication(DatabaseCatalog *catalog,
 bool catalog_setup(DatabaseCatalog *catalog);
 bool catalog_setup_fetch(SQLiteQuery *query);
 
-bool catalog_register_section(DatabaseCatalog *catalog, CopyDataSection section);
+/*
+ * Catalog sections keep track of items that have been fetched to cache
+ * already, such as tables, database properties, indexes, sequences, etc etc.
+ * The sections are registered with a "fetched" boolean and some timing
+ * information.
+ *
+ * To avoid a circular dependency between summary.h and catalog.h the timing
+ * structures are defined here in catalog.h, and thus made available to
+ * summary.h too.
+ */
+typedef enum
+{
+	TIMING_SECTION_UNKNOWN = 0,
+	TIMING_SECTION_CATALOG_QUERIES,
+	TIMING_SECTION_DUMP_SCHEMA,
+	TIMING_SECTION_PREPARE_SCHEMA,
+	TIMING_SECTION_TOTAL_DATA,
+	TIMING_SECTION_COPY_DATA,
+	TIMING_SECTION_CREATE_INDEX,
+	TIMING_SECTION_ALTER_TABLE,
+	TIMING_SECTION_VACUUM,
+	TIMING_SECTION_SET_SEQUENCES,
+	TIMING_SECTION_LARGE_OBJECTS,
+	TIMING_SECTION_FINALIZE_SCHEMA,
+	TIMING_SECTION_TOTAL
+} TimingSection;
+
+#define TIMING_SINGLE_JOB 1
+#define TIMING_TABLE_JOBS 2
+#define TIMING_INDEX_JOBS 4
+#define TIMING_VACUUM_JOBS 8
+#define TIMING_RESTORE_JOBS 16
+#define TIMING_LOBJECTS_JOBS 32
+#define TIMING_ALL_JOBS 64
+
+typedef struct TopLevelTiming
+{
+	TimingSection section;
+	bool cumulative;
+	uint64_t startTime;         /* time(NULL) at start time */
+	uint64_t doneTime;          /* time(NULL) at done time */
+	uint64_t durationMs;        /* instr_time duration in milliseconds */
+	instr_time startTimeInstr;  /* internal instr_time tracker */
+	instr_time durationInstr;   /* internal instr_time tracker */
+	char ppDuration[INTSTRING_MAX_DIGITS];
+	uint32_t jobsMask;
+	uint64_t count;             /* count objects or "things" */
+	uint64_t bytes;             /* when relevant, sum bytes */
+	char ppBytes[BUFSIZE];
+	char *label;            /* malloc'ed area */
+	const char *conn;
+} TopLevelTiming;
+
+void catalog_start_timing(TopLevelTiming *timing);
+void catalog_stop_timing(TopLevelTiming *timing);
+
+bool catalog_register_section(DatabaseCatalog *catalog, TopLevelTiming *timing);
+
 bool catalog_section_state(DatabaseCatalog *catalog, CatalogSection *section);
 bool catalog_section_fetch(SQLiteQuery *query);
+bool catalog_total_duration(DatabaseCatalog *catalog);
 
 char * CopyDataSectionToString(CopyDataSection section);
 

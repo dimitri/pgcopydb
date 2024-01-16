@@ -1121,7 +1121,7 @@ parseVersionContext(void *ctx, PGresult *result)
 	if (length >= sizeof(context->pgversion))
 	{
 		log_error("Postgres version string \"%s\" is %d bytes long, "
-				  "the maximum expected is %ld",
+				  "the maximum expected is %zu",
 				  value, length, sizeof(context->pgversion) - 1);
 		++errors;
 	}
@@ -3173,10 +3173,10 @@ parseTimelineHistoryResult(void *ctx, PGresult *result)
 
 	if (strlen(value) >= sizeof(context->content))
 	{
-		log_error("Received a timeline history file of %lu bytes, "
-				  "pgcopydb is limited to files of up to %lu bytes.",
-				  (unsigned long) strlen(value),
-				  (unsigned long) sizeof(context->content));
+		log_error("Received a timeline history file of %zu bytes, "
+				  "pgcopydb is limited to files of up to %zu bytes.",
+				  strlen(value),
+				  sizeof(context->content));
 		context->parsedOk = false;
 	}
 	strlcpy(context->content, value, sizeof(context->content));
@@ -3360,7 +3360,8 @@ bool
 pg_copy_large_object(PGSQL *src,
 					 PGSQL *dst,
 					 bool dropIfExists,
-					 uint32_t blobOid)
+					 uint32_t blobOid,
+					 uint64_t *bytesTransmitted)
 {
 	log_debug("Copying large object %u", blobOid);
 
@@ -3515,6 +3516,8 @@ pg_copy_large_object(PGSQL *src,
 		}
 
 		(void) free(buffer);
+
+		*bytesTransmitted += bytesRead;
 	} while (bytesRead > 0);
 
 	lo_close(src->connection, srcfd);
@@ -3727,7 +3730,7 @@ pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 
 		if (length >= sizeof(slot->snapshot))
 		{
-			log_error("Snapshot \"%s\" is %d bytes long, the maximum is %ld",
+			log_error("Snapshot \"%s\" is %d bytes long, the maximum is %zu",
 					  value, length, sizeof(slot->snapshot) - 1);
 			pgsql_finish(pgsql);
 			return false;
@@ -4129,7 +4132,6 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 		{
 			int pos;
 			bool replyRequested;
-			XLogRecPtr cur_record_lsn;
 			bool endposReached = false;
 
 			/*

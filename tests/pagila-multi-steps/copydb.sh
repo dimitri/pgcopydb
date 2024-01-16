@@ -41,6 +41,8 @@ pgcopydb copy constraints --resume --notice
 
 pgcopydb restore post-data --resume
 
+pgcopydb list progress --summary
+
 kill -TERM ${COPROC_PID}
 wait ${COPROC_PID}
 
