@@ -325,10 +325,10 @@ parseWal2jsonMessage(StreamContext *privateContext,
  */
 bool
 populateWal2jsonAddTablesFilter(DatabaseCatalog *sourceDB,
-								PQExpBuffer addTablesFilterX)
+								PQExpBuffer addTablesFilter)
 {
 	AddTablesFilterContext addTablesFilterContext = {
-		.addTablesFilter = addTablesFilterX
+		.addTablesFilter = addTablesFilter
 	};
 
 	if (!catalog_iter_s_table(sourceDB, &addTablesFilterContext,
@@ -336,15 +336,15 @@ populateWal2jsonAddTablesFilter(DatabaseCatalog *sourceDB,
 	{
 		log_error(
 			"Failed to iterate over s_table table to populate wal2json addtables filter");
-		destroyPQExpBuffer(addTablesFilterX);
+		destroyPQExpBuffer(addTablesFilter);
 
 		return false;
 	}
 
-	if (PQExpBufferBroken(addTablesFilterX))
+	if (PQExpBufferBroken(addTablesFilter))
 	{
 		log_error("Failed to populate wal2json addtables filter: out of memory");
-		destroyPQExpBuffer(addTablesFilterX);
+		destroyPQExpBuffer(addTablesFilter);
 
 		return false;
 	}
