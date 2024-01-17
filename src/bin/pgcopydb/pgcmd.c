@@ -1331,6 +1331,14 @@ parse_archive_list_entry(ArchiveContentItem *item, const char *line)
 	}
 
 	item->desc = token.desc;
+	int itemDescLen = token.ptr - start + 1;
+
+	if (itemDescLen == 0)
+	{
+		log_error("Failed to parse Archive TOC: %s", line);
+		return false;
+	}
+
 	item->description = (char *) calloc(token.ptr - start + 1, sizeof(char));
 
 	if (item->description == NULL)
@@ -1380,6 +1388,13 @@ parse_archive_list_entry(ArchiveContentItem *item, const char *line)
 		/* 10. restore list name */
 		size_t len = strlen(token.ptr) + 1;
 		item->restoreListName = (char *) calloc(len, sizeof(char));
+
+		if (item->restoreListName == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
 		strlcpy(item->restoreListName, token.ptr, len);
 	}
 
@@ -1455,6 +1470,13 @@ tokenize_archive_list_entry(ArchiveToken *token)
 		int len = ptr - line + 1;
 		size_t size = len + 1;
 		char *buf = (char *) calloc(size, sizeof(char));
+
+		if (buf == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
 		strlcpy(buf, line, len);
 
 		if (!stringToUInt32(buf, &(token->oid)))

@@ -543,6 +543,15 @@ copydb_update_progress(CopyDataSpec *copySpecs, CopyProgress *progress)
 {
 	DatabaseCatalog *sourceDB = &(copySpecs->catalogs.source);
 
+	/* avoid calloc of size zero */
+	if (copySpecs->tableJobs == 0 || copySpecs->indexJobs == 0)
+	{
+		log_error("BUG: --table-jobs %d --index-jobs %d",
+				  copySpecs->tableJobs,
+				  copySpecs->indexJobs);
+		return false;
+	}
+
 	CatalogCounts count = { 0 };
 
 	if (!catalog_count_objects(sourceDB, &count))

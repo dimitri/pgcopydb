@@ -904,6 +904,7 @@ escapeWithPercentEncoding(const char *str, char **dst)
 		return false;
 	}
 
+	/* minimum computed size is 1 (for string terminator char \0) */
 	size_t size = computePercentEncodedSize(str);
 	char *escaped = (char *) calloc(size, sizeof(char));
 

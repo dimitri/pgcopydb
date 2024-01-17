@@ -1718,6 +1718,19 @@ bool
 AllocateLogicalMessageTuple(LogicalMessageTuple *tuple, int count)
 {
 	tuple->cols = count;
+
+	if (count == 0)
+	{
+		tuple->columns = NULL;
+
+		LogicalMessageValuesArray *valuesArray = &(tuple->values);
+		valuesArray->count = 0;
+		valuesArray->capacity = 0;
+		valuesArray->array = NULL;
+
+		return true;
+	}
+
 	tuple->columns = (char **) calloc(count, sizeof(char *));
 
 	if (tuple->columns == NULL)

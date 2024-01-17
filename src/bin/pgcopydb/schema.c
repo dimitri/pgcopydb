@@ -4568,6 +4568,11 @@ getExtensionsVersions(void *ctx, PGresult *result)
 		return;
 	}
 
+	if (nTuples == 0)
+	{
+		return;
+	}
+
 	/* we're not supposed to re-cycle arrays here */
 	if (context->evArray->array != NULL)
 	{
@@ -5044,6 +5049,13 @@ parseAttributesArray(SourceTable *table, JSON_Value *json)
 	int count = json_array_get_count(jsAttsArray);
 
 	table->attributes.count = count;
+
+	if (count == 0)
+	{
+		table->attributes.array = NULL;
+		return true;
+	}
+
 	table->attributes.array =
 		(SourceTableAttribute *) calloc(count, sizeof(SourceTableAttribute));
 
