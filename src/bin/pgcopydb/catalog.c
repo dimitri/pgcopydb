@@ -4578,7 +4578,9 @@ catalog_iter_s_seq_finish(SourceSeqIterator *iter)
  * spill to disk when we have giant database catalogs to take care of.
  */
 bool
-catalog_prepare_filter(DatabaseCatalog *catalog)
+catalog_prepare_filter(DatabaseCatalog *catalog,
+					   bool skipExtensions,
+					   bool skipCollations)
 {
 	sqlite3 *db = catalog->db;
 
@@ -4596,11 +4598,6 @@ catalog_prepare_filter(DatabaseCatalog *catalog)
 
 		"  union all "
 
-		"    select oid, restore_list_name, 'coll' "
-		"      from s_coll "
-
-		"  union all "
-
 		"     select oid, restore_list_name, 'table' "
 		"       from s_table "
 
@@ -4608,11 +4605,6 @@ catalog_prepare_filter(DatabaseCatalog *catalog)
 
 		"     select oid, restore_list_name, 'index' "
 		"       from s_index "
-
-		"  union all "
-
-		"     select oid, extname, 'extension' "
-		"       from s_extension "
 
 		"  union all "
 
@@ -4710,6 +4702,54 @@ catalog_prepare_filter(DatabaseCatalog *catalog)
 	{
 		/* errors have already been logged */
 		return false;
+	}
+
+	/*
+	 * Implement --skip-extensions
+	 */
+	if (skipExtensions)
+	{
+		char *s_extension_sql =
+			"insert or ignore into filter(oid, restore_list_name, kind) "
+			"     select oid, extname, 'extension' "
+			"       from s_extension ";
+
+		if (!catalog_sql_prepare(db, s_extension_sql, &query))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		/* now execute the query, which does not return any row */
+		if (!catalog_sql_execute_once(&query))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	/*
+	 * Implement --skip-collations
+	 */
+	if (skipCollations)
+	{
+		char *s_coll_sql =
+			"insert or ignore into filter(oid, restore_list_name, kind) "
+			"    select oid, restore_list_name, 'coll' "
+			"      from s_coll ";
+
+		if (!catalog_sql_prepare(db, s_coll_sql, &query))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		/* now execute the query, which does not return any row */
+		if (!catalog_sql_execute_once(&query))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	return true;
