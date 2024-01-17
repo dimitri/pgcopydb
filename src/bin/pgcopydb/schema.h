@@ -45,6 +45,7 @@ typedef struct SourceSchema
 	uint32_t oid;
 	char nspname[PG_NAMEDATALEN];
 	char restoreListName[RESTORE_LIST_NAMEDATALEN];
+	char datname[PG_NAMEDATALEN];
 } SourceSchema;
 
 
@@ -75,6 +76,7 @@ typedef struct SourceExtension
 	uint32_t oid;
 	char extname[PG_NAMEDATALEN];
 	char extnamespace[PG_NAMEDATALEN];
+	char datname[PG_NAMEDATALEN];
 	bool extrelocatable;
 	SourceExtensionConfigArray config;
 } SourceExtension;
@@ -101,6 +103,7 @@ typedef struct SourceCollation
 	char collname[PG_NAMEDATALEN];
 	char *desc;                 /* malloc'ed area */
 	char restoreListName[RESTORE_LIST_NAMEDATALEN];
+	char datname[PG_NAMEDATALEN];
 } SourceCollation;
 
 
@@ -154,6 +157,7 @@ typedef struct SourceTable
 	char qname[PG_NAMEDATALEN_FQ];
 	char nspname[PG_NAMEDATALEN];
 	char relname[PG_NAMEDATALEN];
+	char datname[PG_NAMEDATALEN];
 	char amname[PG_NAMEDATALEN];
 	char restoreListName[RESTORE_LIST_NAMEDATALEN];
 
@@ -202,6 +206,7 @@ typedef struct SourceSequence
 	char qname[PG_NAMEDATALEN_FQ];
 	char nspname[PG_NAMEDATALEN];
 	char relname[PG_NAMEDATALEN];
+	char datname[PG_NAMEDATALEN];
 	int64_t lastValue;
 	bool isCalled;
 
