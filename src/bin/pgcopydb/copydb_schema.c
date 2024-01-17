@@ -906,6 +906,14 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 
 		(void) catalog_start_timing(&timing);
 
+		/* fetch the list of schemas that extensions depend on */
+		if (!schema_list_ext_schemas(pgsql, filtersDB))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		/* and fetch the list of extensions we want to skip */
 		if (!schema_list_extensions(pgsql, filtersDB))
 		{
 			/* errors have already been logged */
@@ -928,17 +936,6 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 
 		log_info("Fetched information for %lld extensions",
 				 (long long) count.extensions);
-	}
-
-	if (specs->skipExtensions &&
-		!filtersDB->sections[DATA_SECTION_EXTENSIONS].fetched)
-	{
-		/* fetch the list of schemas that extensions depend on */
-		if (!schema_list_ext_schemas(pgsql, filtersDB))
-		{
-			/* errors have already been logged */
-			return false;
-		}
 	}
 
 	if (specs->skipCollations &&
@@ -1001,7 +998,9 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 
 			(void) catalog_start_timing(&timing);
 
-			if (!catalog_prepare_filter(filtersDB))
+			if (!catalog_prepare_filter(filtersDB,
+										specs->skipExtensions,
+										specs->skipCollations))
 			{
 				log_error("Failed to prepare filtering hash-table, "
 						  "see above for details");
@@ -1165,7 +1164,9 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 
 		(void) catalog_start_timing(&timing);
 
-		if (!catalog_prepare_filter(filtersDB))
+		if (!catalog_prepare_filter(filtersDB,
+									specs->skipExtensions,
+									specs->skipCollations))
 		{
 			log_error("Failed to prepare filtering hash-table, "
 					  "see above for details");

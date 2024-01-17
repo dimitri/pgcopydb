@@ -372,7 +372,9 @@ bool catalog_s_seq_fetch(SQLiteQuery *query);
  * pg_restore archives TOC list names (restore_list_name) in such a way that we
  * can get away with a single hash-table like lookup.
  */
-bool catalog_prepare_filter(DatabaseCatalog *catalog);
+bool catalog_prepare_filter(DatabaseCatalog *catalog,
+							bool skipExtensions,
+							bool skipCollations);
 
 typedef struct CatalogFilter
 {
