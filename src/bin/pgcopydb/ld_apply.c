@@ -1092,30 +1092,35 @@ stream_apply_sql(StreamApplyContext *context,
 			JSON_Array *jsArray = json_value_get_array(js);
 
 			int count = json_array_get_count(jsArray);
-			const char **paramValues =
-				(const char **) calloc(count, sizeof(char *));
 
-			if (paramValues == NULL)
+			if (0 < count)
 			{
-				log_error(ALLOCATION_FAILED_ERROR);
-				return false;
+				const char **paramValues =
+					(const char **) calloc(count, sizeof(char *));
+
+				if (paramValues == NULL)
+				{
+					log_error(ALLOCATION_FAILED_ERROR);
+					return false;
+				}
+
+				for (int i = 0; i < count; i++)
+				{
+					const char *value = json_array_get_string(jsArray, i);
+					paramValues[i] = value;
+				}
+
+				if (!pgsql_execute_prepared(pgsql, name,
+											count, paramValues,
+											NULL, NULL))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+
+				free(paramValues);
 			}
 
-			for (int i = 0; i < count; i++)
-			{
-				const char *value = json_array_get_string(jsArray, i);
-				paramValues[i] = value;
-			}
-
-			if (!pgsql_execute_prepared(pgsql, name,
-										count, paramValues,
-										NULL, NULL))
-			{
-				/* errors have already been logged */
-				return false;
-			}
-
-			free(paramValues);
 			free(metadata->jsonBuffer);
 			json_value_free(js);
 

@@ -190,7 +190,7 @@ parse_filters(const char *filename, SourceFilters *filters)
 
 		if (strcmp(ini_section_name(ini, sectionIndex), sectionName) != 0)
 		{
-			/* skip prefix match, only accept full lenght match */
+			/* skip prefix match, only accept full length match */
 			continue;
 		}
 
@@ -215,6 +215,12 @@ parse_filters(const char *filename, SourceFilters *filters)
 					(SourceFilterSchema *) calloc(optionCount,
 												  sizeof(SourceFilterSchema));
 
+				if (filters->includeOnlySchemaList.array == NULL)
+				{
+					log_error(ALLOCATION_FAILED_ERROR);
+					return false;
+				}
+
 				for (int o = 0; o < optionCount; o++)
 				{
 					SourceFilterSchema *schema =
@@ -236,6 +242,12 @@ parse_filters(const char *filename, SourceFilters *filters)
 				filters->excludeSchemaList.array =
 					(SourceFilterSchema *) calloc(optionCount,
 												  sizeof(SourceFilterSchema));
+
+				if (filters->excludeSchemaList.array == NULL)
+				{
+					log_error(ALLOCATION_FAILED_ERROR);
+					return false;
+				}
 
 				for (int o = 0; o < optionCount; o++)
 				{
@@ -260,8 +272,15 @@ parse_filters(const char *filename, SourceFilters *filters)
 				SourceFilterTableList *list = sections[i].list;
 
 				list->count = optionCount;
-				list->array = (SourceFilterTable *)
-							  malloc(optionCount * sizeof(SourceFilterTable));
+				list->array =
+					(SourceFilterTable *) calloc(optionCount,
+												 sizeof(SourceFilterTable));
+
+				if (list->array == NULL)
+				{
+					log_error(ALLOCATION_FAILED_ERROR);
+					return false;
+				}
 
 				for (int o = 0; o < optionCount; o++)
 				{

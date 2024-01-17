@@ -1006,41 +1006,52 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 	}
 
 	int columnCount = cols->values.array[0].cols;
-	bool *pkeyArray = (bool *) calloc(columnCount, sizeof(bool));
+	bool *pkeyArray = NULL;
 
 	int oldCount = 0;
 	int newCount = 0;
 
-	for (int c = 0; c < columnCount; c++)
+	if (0 < columnCount)
 	{
-		const char *colname = cols->columns[c];
+		pkeyArray = (bool *) calloc(columnCount, sizeof(bool));
 
-		SourceTableAttribute attribute = { 0 };
-
-		if (!catalog_lookup_s_attr_by_name(sourceDB,
-										   table->oid,
-										   colname,
-										   &attribute))
+		if (pkeyArray == NULL)
 		{
-			log_error("Failed to lookup for table %s attribute %s in our "
-					  "internal catalogs, see above for details",
-					  table->qname,
-					  colname);
+			log_error(ALLOCATION_FAILED_ERROR);
 			return false;
 		}
 
-		if (attribute.attnum > 0)
+		for (int c = 0; c < columnCount; c++)
 		{
-			pkeyArray[c] = attribute.attisprimary;
-		}
+			const char *colname = cols->columns[c];
 
-		if (pkeyArray[c])
-		{
-			++oldCount;
-		}
-		else
-		{
-			++newCount;
+			SourceTableAttribute attribute = { 0 };
+
+			if (!catalog_lookup_s_attr_by_name(sourceDB,
+											   table->oid,
+											   colname,
+											   &attribute))
+			{
+				log_error("Failed to lookup for table %s attribute %s in our "
+						  "internal catalogs, see above for details",
+						  table->qname,
+						  colname);
+				return false;
+			}
+
+			if (attribute.attnum > 0)
+			{
+				pkeyArray[c] = attribute.attisprimary;
+			}
+
+			if (pkeyArray[c])
+			{
+				++oldCount;
+			}
+			else
+			{
+				++newCount;
+			}
 		}
 	}
 

@@ -3163,6 +3163,13 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
 			 (long long) count.indexes);
 
 	summaryTable->count = count.tables;
+
+	if (count.tables == 0)
+	{
+		summaryTable->array = NULL;
+		return true;
+	}
+
 	summaryTable->array =
 		(SummaryTableEntry *) calloc(count.tables, sizeof(SummaryTableEntry));
 
