@@ -18,7 +18,6 @@
 #include "env_utils.h"
 #include "lock_utils.h"
 #include "log.h"
-#include "pgsql.h"
 #include "pidfile.h"
 #include "schema.h"
 #include "signals.h"
