@@ -18,6 +18,7 @@
 #include "env_utils.h"
 #include "lock_utils.h"
 #include "log.h"
+#include "pgsql.h"
 #include "pidfile.h"
 #include "schema.h"
 #include "signals.h"
@@ -281,7 +282,12 @@ copydb_copy_database_properties_hook(void *ctx, SourceProperty *property)
 	PGSQL *dst = context->dst;
 	PGconn *conn = dst->connection;
 
-	const char *t_dbname = specs->connStrings.safeTargetPGURI.uriParams.dbname;
+	const char *t_dbname = pgsql_escape_identifier(dst, specs->connStrings.safeTargetPGURI.uriParams.dbname);
+	
+	if (t_dbname == NULL)
+	{
+		return false;
+	}
 
 	/*
 	 * ALTER ROLE rolname IN DATABASE datname SET ...
