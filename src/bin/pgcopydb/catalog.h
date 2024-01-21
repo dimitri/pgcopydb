@@ -618,6 +618,8 @@ typedef struct BindParam
 } BindParam;
 
 
+bool catalog_execute(DatabaseCatalog *catalog, char *sql);
+
 bool catalog_sql_prepare(sqlite3 *db, const char *sql, SQLiteQuery *query);
 bool catalog_sql_bind(SQLiteQuery *query, BindParam *params, int count);
 bool catalog_sql_execute(SQLiteQuery *query);
