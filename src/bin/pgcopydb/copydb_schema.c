@@ -504,6 +504,12 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 	 */
 	bool createdTableSizeTable = false;
 
+	if (!catalog_begin(sourceDB, false))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	/* now fetch the list of tables from the source database */
 	if ((specs->section == DATA_SECTION_ALL ||
 		 specs->section == DATA_SECTION_TABLE_DATA ||
@@ -570,6 +576,12 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 			/* errors have already been logged */
 			return false;
 		}
+	}
+
+	if (!catalog_commit(sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	return true;
@@ -1234,6 +1246,12 @@ copydb_prepare_target_catalog(CopyDataSpec *specs)
 		return false;
 	}
 
+	if (!catalog_begin(targetDB, false))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	/*
 	 * First, get a list of the schema that already exist on the target system.
 	 * Some extensions scripts create schema in a way that does not register a
@@ -1279,6 +1297,12 @@ copydb_prepare_target_catalog(CopyDataSpec *specs)
 	}
 
 	if (!schema_list_all_indexes(&dst, &targetDBfilter, targetDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_commit(targetDB))
 	{
 		/* errors have already been logged */
 		return false;

@@ -448,12 +448,24 @@ pg_dump_db(PostgresPaths *pgPaths,
 		.extNamespaceCount = &extNamespaceCount,
 	};
 
+	if (!catalog_begin(filtersDB, false))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (!catalog_iter_s_extension(filtersDB,
 								  &context,
 								  &pg_dump_db_extension_namespace_hook))
 	{
 		log_error("Failed to prepare pg_dump command line arguments, "
 				  "see above for details");
+		return false;
+	}
+
+	if (!catalog_commit(filtersDB))
+	{
+		/* errors have already been logged */
 		return false;
 	}
 

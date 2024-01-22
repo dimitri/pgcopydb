@@ -732,28 +732,17 @@ catalog_init(DatabaseCatalog *catalog)
 	}
 
 	/*
-	 * Because the source catalog also registers the activity information,
-	 * which generates a non-trivial amount of small writes with some level of
-	 * concurrency, we turn the WAL mode on that one.
-	 *
-	 * PRAGMA journal_mode=WAL is persistent, so we only call that when
-	 * creating the catalog.
+	 * WAL journal_mode is significantly faster for writes and allows
+	 * concurrency of readers not blocking writers and vice versa.
 	 */
+	if (!catalog_set_wal_mode(catalog))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (createSchema)
 	{
-		if (catalog->type == DATABASE_CATALOG_TYPE_SOURCE)
-		{
-			/* bypass the WAL mode, unclear if we benefit from it */
-			if (false)
-			{
-				if (!catalog_set_wal_mode(catalog))
-				{
-					/* errors have already been logged */
-					return false;
-				}
-			}
-		}
-
 		return catalog_create_schema(catalog);
 	}
 
@@ -963,25 +952,17 @@ catalog_drop_schema(DatabaseCatalog *catalog)
 
 
 /*
- * catalog_set_wal_mode convert given SQLite database to WAL mode.
+ * catalog_set_wal_mode convert given SQLite database to WAL mode
+ * (https://www.sqlite.org/pragma.html#pragma_journal_mode).
+ *
+ * Note: It generates "additional quasi-persistent '-wal' file and '-shm'
+ * shared memory file associated with each database"
+ * (https://www.sqlite.org/wal.html).
  */
 bool
 catalog_set_wal_mode(DatabaseCatalog *catalog)
 {
-	char *sql = "PRAGMA journal_mode=WAL;";
-
-	log_sqlite("[SQLite] %s", sql);
-
-	int rc = sqlite3_exec(catalog->db, sql, NULL, NULL, NULL);
-
-	if (rc != SQLITE_OK)
-	{
-		log_error("[SQLite]: PRAGMA journal_mode=WAL failed: %s",
-				  sqlite3_errstr(rc));
-		return false;
-	}
-
-	return true;
+	return catalog_execute(catalog, "PRAGMA journal_mode = WAL");
 }
 
 
@@ -1045,17 +1026,7 @@ catalog_begin(DatabaseCatalog *catalog, bool immediate)
 bool
 catalog_commit(DatabaseCatalog *catalog)
 {
-	log_sqlite("[SQLite] COMMIT");
-
-	int rc = sqlite3_exec(catalog->db, "COMMIT", NULL, NULL, NULL);
-
-	if (rc != SQLITE_OK)
-	{
-		log_error("[SQLite]: COMMIT failed: %s", sqlite3_errstr(rc));
-		return false;
-	}
-
-	return true;
+	return catalog_execute(catalog, "COMMIT");
 }
 
 
@@ -1065,17 +1036,7 @@ catalog_commit(DatabaseCatalog *catalog)
 bool
 catalog_rollback(DatabaseCatalog *catalog)
 {
-	log_sqlite("[SQLite] ROLLBACK");
-
-	int rc = sqlite3_exec(catalog->db, "ROLLBACK", NULL, NULL, NULL);
-
-	if (rc != SQLITE_OK)
-	{
-		log_error("[SQLite]: ROLLBACK failed: %s", sqlite3_errstr(rc));
-		return false;
-	}
-
-	return true;
+	return catalog_execute(catalog, "ROLLBACK");
 }
 
 
@@ -7154,6 +7115,26 @@ catalog_count_summary_done_fetch(SQLiteQuery *query)
 
 	count->table = sqlite3_column_int64(query->ppStmt, 0);
 	count->index = sqlite3_column_int64(query->ppStmt, 1);
+
+	return true;
+}
+
+
+/*
+ * catalog_execute executes sqlite query
+ */
+bool
+catalog_execute(DatabaseCatalog *catalog, char *sql)
+{
+	log_sqlite("[SQLite] %s", sql);
+
+	int rc = sqlite3_exec(catalog->db, sql, NULL, NULL, NULL);
+
+	if (rc != SQLITE_OK)
+	{
+		log_error("[SQLite]: %s failed: %s", sql, sqlite3_errstr(rc));
+		return false;
+	}
 
 	return true;
 }
