@@ -718,7 +718,6 @@ cli_list_extensions(int argc, char **argv)
 		fformat(stdout, "%s\n", serialized_string);
 
 		json_free_serialized_string(serialized_string);
-		json_value_free(js);
 	}
 	else
 	{
@@ -887,7 +886,6 @@ cli_list_extension_versions(int argc, char **argv)
 		fformat(stdout, "%s\n", serialized_string);
 
 		json_free_serialized_string(serialized_string);
-		json_value_free(js);
 	}
 	else
 	{
@@ -971,7 +969,6 @@ cli_list_extension_requirements(int argc, char **argv)
 		fformat(stdout, "%s\n", serialized_string);
 
 		json_free_serialized_string(serialized_string);
-		json_value_free(js);
 	}
 	else
 	{
@@ -1829,7 +1826,6 @@ cli_list_schema(int argc, char **argv)
 		}
 
 		fformat(stdout, "%s\n", json);
-		free(json);
 	}
 }
 
@@ -1929,7 +1925,6 @@ cli_list_progress(int argc, char **argv)
 		fformat(stdout, "%s\n", serialized_string);
 
 		json_free_serialized_string(serialized_string);
-		json_value_free(js);
 	}
 	else
 	{

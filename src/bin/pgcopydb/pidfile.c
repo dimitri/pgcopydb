@@ -128,8 +128,6 @@ read_pidfile(const char *pidfile, pid_t *pid)
 
 	*pid = pidnum;
 
-	FreeLinesBuffer(&lbuf);
-
 	if (pid <= 0)
 	{
 		log_debug("Read negative pid %d in file \"%s\", removing it",

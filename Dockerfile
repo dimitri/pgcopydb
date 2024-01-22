@@ -15,6 +15,7 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
     valgrind \
     build-essential \
     libedit-dev \
+    libgc-dev \
     libicu-dev \
     libkrb5-dev \
     liblz4-dev \
@@ -65,7 +66,8 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
     sudo \
 	passwd \
     ca-certificates \
-    libpq5 \
+    libgc1 \
+	libpq5 \
 	libsqlite3-0 \
 	lsof \
     tmux \

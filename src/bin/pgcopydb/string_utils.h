@@ -54,7 +54,6 @@ typedef struct LinesBuffer
 
 uint64_t countLines(char *buffer);
 bool splitLines(LinesBuffer *lbuf, char *buffer, bool ownsBuffer);
-void FreeLinesBuffer(LinesBuffer *lbuf);
 
 void processBufferCallback(const char *buffer, bool error);
 

@@ -6,6 +6,21 @@
 #ifndef DEFAULTS_H
 #define DEFAULTS_H
 
+/*
+ * Setup Boehm-Demers-Weiser conservative garbage collector as a garbage
+ * collecting replacement for malloc. See https://www.hboehm.info/gc/
+ */
+#include <gc/gc.h>
+
+#define malloc(n) GC_malloc(n)
+#define calloc(m, n) GC_malloc((m) * (n))
+#define free(p) GC_free(p)
+#define realloc(p, n) GC_realloc((p), (n))
+#define CHECK_LEAKS() GC_gcollect()
+
+/*
+ * Now install the version string.
+ */
 #include "git-version.h"
 
 /* additional version information for printing version on CLI */

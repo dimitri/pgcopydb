@@ -266,18 +266,14 @@ semaphore_cleanup(const char *pidfile)
 				  pidfile,
 				  (long long) lbuf.count,
 				  PIDFILE_LINE_SEM_ID);
-		FreeLinesBuffer(&lbuf);
 		return false;
 	}
 
 	if (!stringToInt(lbuf.lines[PIDFILE_LINE_SEM_ID], &(semaphore.semId)))
 	{
 		/* errors have already been logged */
-		FreeLinesBuffer(&lbuf);
 		return false;
 	}
-
-	FreeLinesBuffer(&lbuf);
 
 	log_trace("Read semaphore id %d from stale pidfile", semaphore.semId);
 

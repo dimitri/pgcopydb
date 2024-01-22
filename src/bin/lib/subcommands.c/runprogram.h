@@ -18,6 +18,9 @@
 
 #include "pqexpbuffer.h"
 
+/*
+ * Now setup internal constants
+ */
 #define BUFSIZE 1024
 #define ARGS_INCREMENT 12
 
@@ -51,7 +54,7 @@ typedef struct
 	char *stdErr;
 } Program;
 
-Program run_program(const char *program, ...);
+Program *run_program(const char *program, ...);
 void initialize_program(Program *prog, char **args, bool setsid);
 void execute_subprogram(Program *prog);
 void execute_program(Program *prog);
@@ -77,51 +80,55 @@ static void waitprogram(Program *prog, pid_t childPid);
  * the run and then return a Program struct instance with the result of running
  * the program.
  */
-Program
+Program *
 run_program(const char *program, ...)
 {
 	int nb_args = 0;
 	va_list args;
 	const char *param;
-	Program prog = { 0 };
+	Program *prog = (Program *) malloc(sizeof(Program));
 
-	prog.program = strdup(program);
-	prog.returnCode = -1;
-	prog.error = 0;
-	prog.setsid = false;
-	prog.capture = true;
-	prog.tty = false;
-	prog.processBuffer = NULL;
-	prog.stdOutFd = -1;
-	prog.stdErrFd = -1;
-	prog.stdOut = NULL;
-	prog.stdErr = NULL;
+	if (prog == NULL)
+	{
+		return NULL;
+	}
 
-	prog.args = (char **) malloc(ARGS_INCREMENT * sizeof(char *));
-	prog.args[nb_args++] = prog.program;
+	prog->program = strdup(program);
+	prog->returnCode = -1;
+	prog->error = 0;
+	prog->setsid = false;
+	prog->capture = true;
+	prog->tty = false;
+	prog->processBuffer = NULL;
+	prog->stdOutFd = -1;
+	prog->stdErrFd = -1;
+	prog->stdOut = NULL;
+	prog->stdErr = NULL;
+
+	prog->args = (char **) malloc(ARGS_INCREMENT * sizeof(char *));
+	prog->args[nb_args++] = prog->program;
 
 	va_start(args, program);
 	while ((param = va_arg(args, const char *)) != NULL)
 	{
 		if (nb_args % ARGS_INCREMENT == 0)
 		{
-			char **newargs = (char **) malloc((ARGS_INCREMENT *
-											   (nb_args / ARGS_INCREMENT + 1)) *
-											  sizeof(char *));
-			for (int i = 0; i < nb_args; i++)
-			{
-				newargs[i] = prog.args[i];
-			}
-			free(prog.args);
+			int newcount = (ARGS_INCREMENT * (nb_args / ARGS_INCREMENT + 1));
+			size_t newsize = newcount * sizeof(char *);
 
-			prog.args = newargs;
+			prog->args = (char **) realloc(prog->args, newsize);
+
+			if (prog->args == NULL)
+			{
+				return NULL;
+			}
 		}
-		prog.args[nb_args++] = strdup(param);
+		prog->args[nb_args++] = strdup(param);
 	}
 	va_end(args);
-	prog.args[nb_args] = NULL;
+	prog->args[nb_args] = NULL;
 
-	execute_subprogram(&prog);
+	execute_subprogram(prog);
 
 	return prog;
 }

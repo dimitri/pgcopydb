@@ -372,7 +372,6 @@ copydb_parse_extensions_requirements(CopyDataSpec *copySpecs, char *filename)
 		return false;
 	}
 
-	json_value_free(schema);
 
 	JSON_Array *jsReqArray = json_value_get_array(json);
 	size_t count = json_array_get_count(jsReqArray);

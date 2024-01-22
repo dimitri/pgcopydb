@@ -643,21 +643,6 @@ splitLines(LinesBuffer *lbuf, char *buffer, bool ownsBuffer)
 
 
 /*
- * FreeLinesBuffer frees the allocated memory for LinesBuffer instance.
- */
-void
-FreeLinesBuffer(LinesBuffer *lbuf)
-{
-	free(lbuf->lines);
-
-	if (lbuf->ownsBuffer)
-	{
-		free(lbuf->buffer);
-	}
-}
-
-
-/*
  * processBufferCallback is a function callback to use with the subcommands.c
  * library when we want to output a command's output as it's running, such as
  * when running a pg_basebackup command.
@@ -685,8 +670,6 @@ processBufferCallback(const char *buffer, bool error)
 			log_level(logLevel, "%s", line);
 		}
 	}
-
-	FreeLinesBuffer(&lbuf);
 }
 
 

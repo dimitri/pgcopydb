@@ -110,7 +110,6 @@ prepareTestDecodingMessage(LogicalStreamContext *context)
 		return false;
 	}
 
-	json_value_free(js);
 	json_free_serialized_string(jsonstr);
 
 	return true;
@@ -627,21 +626,6 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple, TestDecodingHeader *header)
 		return false;
 	}
 
-	/*
-	 * Free the TestDecodingColumns memory that we allocated: only the
-	 * structure itself, the rest is just a bunch of pointers to parts of the
-	 * messages.
-	 */
-	TestDecodingColumns *c = cols;
-
-	for (; c != NULL;)
-	{
-		TestDecodingColumns *next = c->next;
-
-		free(c);
-		c = next;
-	}
-
 	return true;
 }
 
@@ -984,7 +968,6 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 										table))
 	{
 		/* errors have already been logged */
-		free(table);
 		return false;
 	}
 
@@ -1120,8 +1103,6 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 		/* avoid double-free now */
 		cols->values.array[0].array[c].val.str = NULL;
 	}
-
-	(void) FreeLogicalMessageTuple(cols);
 
 	return true;
 }
