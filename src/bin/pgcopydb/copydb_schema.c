@@ -559,6 +559,13 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 		}
 	}
 
+	/* now update --split-tables-larger-than and target pguri */
+	if (!catalog_update_setup(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	/* prepare the Oids of objects that are filtered out */
 	if (specs->fetchFilteredOids)
 	{
