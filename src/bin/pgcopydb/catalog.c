@@ -629,7 +629,24 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 		if (copySpecs->section == DATA_SECTION_ALL ||
 			copySpecs->section == DATA_SECTION_TABLE_DATA_PARTS)
 		{
-			if (copySpecs->splitTablesLargerThan.bytes !=
+			CatalogSection *tablePartsDataSection =
+				&(sourceDB->sections[DATA_SECTION_TABLE_DATA_PARTS]);
+
+			/* make sure the section has been initialized properly */
+			tablePartsDataSection->section = DATA_SECTION_TABLE_DATA_PARTS;
+
+			if (!catalog_section_state(sourceDB, tablePartsDataSection))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			/*
+			 * Difference in --split-at is only meaningful if table-data cache
+			 * has already been populated.
+			 */
+			if (tablePartsDataSection->fetched &&
+				copySpecs->splitTablesLargerThan.bytes !=
 				setup->splitTablesLargerThanBytes)
 			{
 				char bytesPretty[BUFSIZE] = { 0 };
@@ -638,13 +655,13 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 								   BUFSIZE,
 								   setup->splitTablesLargerThanBytes);
 
-				log_info("setup: %lld (%s)",
-						 (long long) setup->splitTablesLargerThanBytes,
-						 bytesPretty);
+				log_debug("setup: %lld (%s)",
+						  (long long) setup->splitTablesLargerThanBytes,
+						  bytesPretty);
 
-				log_info("specs: %lld (%s)",
-						 (long long) copySpecs->splitTablesLargerThan.bytes,
-						 copySpecs->splitTablesLargerThan.bytesPretty);
+				log_debug("specs: %lld (%s)",
+						  (long long) copySpecs->splitTablesLargerThan.bytes,
+						  copySpecs->splitTablesLargerThan.bytesPretty);
 
 				log_error("Catalogs at \"%s\" have been setup for "
 						  "--split-tables-larger-than \"%s\" "
@@ -1061,32 +1078,41 @@ catalog_register_setup(DatabaseCatalog *catalog,
 
 	char *sql =
 		"insert into setup("
-		"  id, source_pg_uri, target_pg_uri, snapshot, "
-		"  split_tables_larger_than, filters) "
+		"  id, source_pg_uri, target_pg_uri, snapshot, filters, "
+		"  split_tables_larger_than) "
 		"values($1, $2, $3, $4, $5, $6)";
 
 	SQLiteQuery query = { 0 };
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "id", 1, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "source_pg_uri", 0, (char *) source_pg_uri },
+		{ BIND_PARAMETER_TYPE_TEXT, "target_pg_uri", 0, (char *) target_pg_uri },
+		{ BIND_PARAMETER_TYPE_TEXT, "snapshot", 0, (char *) snapshot },
+		{ BIND_PARAMETER_TYPE_TEXT, "filters", 0, (char *) filters },
+
+		{ BIND_PARAMETER_TYPE_INT64, "split_tables_larger_than",
+		  splitTablesLargerThanBytes, NULL }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	/* skip splitTableLargerThanBytes when it's not been set */
+	if (splitTablesLargerThanBytes == 0)
+	{
+		sql =
+			"insert into setup("
+			"  id, source_pg_uri, target_pg_uri, snapshot, filters) "
+			"values($1, $2, $3, $4, $5)";
+
+		--count;
+	}
 
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
 		return false;
 	}
-
-	/* bind our parameters now */
-	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_INT64, "id", 1, NULL },
-		{ BIND_PARAMETER_TYPE_TEXT, "source_pg_uri", 0, (char *) source_pg_uri },
-		{ BIND_PARAMETER_TYPE_TEXT, "target_pg_uri", 0, (char *) target_pg_uri },
-		{ BIND_PARAMETER_TYPE_TEXT, "snapshot", 0, (char *) snapshot },
-
-		{ BIND_PARAMETER_TYPE_INT64, "split_tables_larger_than",
-		  splitTablesLargerThanBytes, NULL },
-
-		{ BIND_PARAMETER_TYPE_TEXT, "filters", 0, (char *) filters }
-	};
-
-	int count = sizeof(params) / sizeof(params[0]);
 
 	if (!catalog_sql_bind(&query, params, count))
 	{
@@ -1139,6 +1165,78 @@ catalog_setup(DatabaseCatalog *catalog)
 	{
 		/* errors have already been logged */
 		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* now execute the query, which return exactly one row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
+ * catalog_update_setup updates the registered catalog setup metadata.
+ */
+bool
+catalog_update_setup(CopyDataSpec *copySpecs)
+{
+	DatabaseCatalog *catalog = &(copySpecs->catalogs.source);
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_setup: db is NULL");
+		return false;
+	}
+
+	SafeURI tpguri = { 0 };
+
+	if (!bareConnectionString(copySpecs->connStrings.target_pguri, &tpguri))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	SQLiteQuery query = { 0 };
+
+	char *sql =
+		"update setup "
+		"   set target_pg_uri = $1, "
+		"       split_tables_larger_than = $2 "
+		" where id = 1";
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_TEXT, "target_pg_uri", 0, (char *) tpguri.pguri },
+		{ BIND_PARAMETER_TYPE_INT64, "split_tables_larger_than",
+		  copySpecs->splitTablesLargerThan.bytes, NULL }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
 		return false;
 	}
 

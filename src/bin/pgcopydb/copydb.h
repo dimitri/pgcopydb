@@ -326,6 +326,7 @@ bool catalog_init_from_specs(CopyDataSpec *copySpecs);
 bool catalog_open_from_specs(CopyDataSpec *copySpecs);
 bool catalog_close_from_specs(CopyDataSpec *copySpecs);
 bool catalog_register_setup_from_specs(CopyDataSpec *copySpecs);
+bool catalog_update_setup(CopyDataSpec *copySpecs);
 
 /* snapshot.c */
 bool copydb_copy_snapshot(CopyDataSpec *specs, TransactionSnapshot *snapshot);
