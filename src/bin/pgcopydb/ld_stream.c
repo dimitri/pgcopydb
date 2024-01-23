@@ -234,18 +234,18 @@ stream_init_specs(StreamSpecs *specs,
 				}
 			};
 
-			/* Add tables to include and filter to wal2json options */
-			if (commaSeperatedAddTables != NULL)
+			/* Add the "add-tables" option to the wal2json plugin options */
+			if (commaSeperatedAddTables != NULL && !IS_EMPTY_STRING_BUFFER(
+					commaSeperatedAddTables))
 			{
 				options.keywords[options.count] = "add-tables";
 				options.values[options.count] = commaSeperatedAddTables;
 				options.count++;
 			}
 
-			/*
-			 * Add tables to filter to wal2json options. Note that we don't
-			 */
-			if (commaSeperatedFilterTables != NULL)
+			/* Add the "filter-tables" option to the wal2json plugin options */
+			if (commaSeperatedFilterTables != NULL && !IS_EMPTY_STRING_BUFFER(
+					commaSeperatedFilterTables))
 			{
 				options.keywords[options.count] = "filter-tables";
 				options.values[options.count] = commaSeperatedFilterTables;
@@ -380,7 +380,6 @@ convertFiltersToWal2JsonOptions(SourceFilters *filters,
 								PQExpBuffer commaSeperatedAddTables,
 								PQExpBuffer commaSeperatedFilterTables)
 {
-	/* TODO:GG Check filterdb for the logic to convert filters to wal2json options */
 	if (filters->type == SOURCE_FILTER_TYPE_NONE)
 	{
 		return true;
@@ -1125,7 +1124,6 @@ stream_write_json(LogicalStreamContext *context, bool previous)
 	{
 		privateContext->transactionInProgress = false;
 	}
-
 	/*
 	 * We are not expecting STREAM_ACTION_ROLLBACK here. It's a custom
 	 * message we write directly to the "latest" file using
@@ -1307,7 +1305,6 @@ streamRotateFile(LogicalStreamContext *context)
 		{
 			jsonFileLSN = context->cur_record_lsn;
 		}
-
 		/* maxWrittenLSN always points to the current file and skips rotation */
 		else
 		{
@@ -1913,7 +1910,6 @@ prepareMessageMetadataFromContext(LogicalStreamContext *context)
 	{
 		metadata->skipping = true;
 	}
-
 	/* COMMIT message and previous one is a BEGIN */
 	else if (previous->action == STREAM_ACTION_BEGIN &&
 			 metadata->action == STREAM_ACTION_COMMIT)
@@ -1930,7 +1926,6 @@ prepareMessageMetadataFromContext(LogicalStreamContext *context)
 			}
 		}
 	}
-
 	/*
 	 * NOT a COMMIT message and previous one is a BEGIN
 	 *
