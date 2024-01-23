@@ -281,11 +281,12 @@ copydb_copy_database_properties_hook(void *ctx, SourceProperty *property)
 	PGSQL *dst = context->dst;
 	PGconn *conn = dst->connection;
 
-	const char *t_pguri = specs->connStrings.safeTargetPGURI.uriParams.dbname;
-	const char *t_dbname = pgsql_escape_identifier(dst, t_pguri);
+	const char *t_dbname = specs->connStrings.safeTargetPGURI.uriParams.dbname;
+	const char *t_escaped_dbname = pgsql_escape_identifier(dst, t_dbname);
 
-	if (t_dbname == NULL)
+	if (t_escaped_dbname == NULL)
 	{
+		/* errors are already logged */
 		return false;
 	}
 
@@ -318,7 +319,7 @@ copydb_copy_database_properties_hook(void *ctx, SourceProperty *property)
 			makeAlterConfigCommand(conn, property->setconfig,
 								   "ROLE", property->rolname,
 								   "DATABASE",
-								   t_dbname,
+								   t_escaped_dbname,
 								   command);
 
 			/* chomp the \n */
@@ -356,7 +357,7 @@ copydb_copy_database_properties_hook(void *ctx, SourceProperty *property)
 		PQExpBuffer command = createPQExpBuffer();
 
 		makeAlterConfigCommand(conn, property->setconfig,
-							   "DATABASE", t_dbname,
+							   "DATABASE", t_escaped_dbname,
 							   NULL, NULL,
 							   command);
 
