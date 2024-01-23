@@ -34,13 +34,6 @@
 #include "summary.h"
 
 
-typedef struct AddTablesFilterContext
-{
-	PQExpBuffer addTablesFilter;
-} AddTablesFilterContext;
-
-bool add_tables_filter_table_hook(void *ctx, SourceTable *table);
-
 static bool SetMessageRelation(JSON_Object *jsobj,
 							   LogicalMessageRelation *table,
 							   PGSQL *pgsql);
@@ -317,42 +310,6 @@ parseWal2jsonMessage(StreamContext *privateContext,
 }
 
 
-/* This function populates the wal2json addtables filter by iterating over the s_table table
- * in the source database.
- * @param sourceDB The database catalog of the source database.
- * @param addTablesFilter The PQExpBuffer to store the addtables filter.
- * @return Returns true if the addtables filter is successfully populated, false otherwise.
- */
-bool
-populateWal2jsonAddTablesFilter(DatabaseCatalog *sourceDB,
-								PQExpBuffer addTablesFilter)
-{
-	AddTablesFilterContext addTablesFilterContext = {
-		.addTablesFilter = addTablesFilter
-	};
-
-	if (!catalog_iter_s_table(sourceDB, &addTablesFilterContext,
-							  add_tables_filter_table_hook))
-	{
-		log_error(
-			"Failed to iterate over s_table table to populate wal2json addtables filter");
-		destroyPQExpBuffer(addTablesFilter);
-
-		return false;
-	}
-
-	if (PQExpBufferBroken(addTablesFilter))
-	{
-		log_error("Failed to populate wal2json addtables filter: out of memory");
-		destroyPQExpBuffer(addTablesFilter);
-
-		return false;
-	}
-
-	return true;
-}
-
-
 /*
  * SetMessageRelation parses the table's nspname and relname from the JSON
  * object and escapes it appropriately to be put as it is in SQL statements
@@ -534,36 +491,6 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple,
 				return false;
 			}
 		}
-	}
-
-	return true;
-}
-
-
-/*
- * This function is a callback function for catalog_iter_s_table.
- * It appends the table name to the addtables filter.
- */
-bool
-add_tables_filter_table_hook(void *ctx, SourceTable *table)
-{
-	if (table == NULL)
-	{
-		log_error("BUG: table is NULL");
-		return false;
-	}
-
-	AddTablesFilterContext *addTablesFilterContext = (AddTablesFilterContext *) ctx;
-
-	if (table->oid != 0)
-	{
-		if (addTablesFilterContext->addTablesFilter->len != 0)
-		{
-			appendPQExpBufferChar(addTablesFilterContext->addTablesFilter, ',');
-		}
-
-		appendPQExpBuffer(addTablesFilterContext->addTablesFilter, "%s.%s",
-						  table->nspname, table->relname);
 	}
 
 	return true;
