@@ -434,20 +434,24 @@ pgsql_finish(PGSQL *pgsql)
 static void
 log_connection_error(PGconn *connection, int logLevel)
 {
-	char *message = connection != NULL ? PQerrorMessage(connection) : NULL;
-	char *errorLines[BUFSIZE] = { 0 };
-	int lineCount = splitLines(message, errorLines, BUFSIZE);
-	int lineNumber = 0;
-
 	/* PQerrorMessage is then "connection pointer is NULL", not helpful */
 	if (connection == NULL)
 	{
 		return;
 	}
 
-	for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
+	char *message = PQerrorMessage(connection);
+	LinesBuffer lbuf = { 0 };
+
+	if (!splitLines(&lbuf, message, false))
 	{
-		char *line = errorLines[lineNumber];
+		/* errors have already been logged */
+		return;
+	}
+
+	for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
+	{
+		char *line = lbuf.lines[lineNumber];
 
 		if (lineNumber == 0)
 		{
@@ -458,6 +462,8 @@ log_connection_error(PGconn *connection, int logLevel)
 			log_level(logLevel, "%s", line);
 		}
 	}
+
+	FreeLinesBuffer(&lbuf);
 }
 
 
@@ -846,17 +852,20 @@ pgsql_retry_open_connection(PGSQL *pgsql)
 static void
 pgAutoCtlDefaultNoticeProcessor(void *arg, const char *message)
 {
-	char *m = strdup(message);
-	char *lines[BUFSIZE];
-	int lineCount = splitLines(m, lines, BUFSIZE);
-	int lineNumber = 0;
+	LinesBuffer lbuf = { 0 };
 
-	for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
+	if (!splitLines(&lbuf, (char *) message, false))
 	{
-		log_warn("%s", lines[lineNumber]);
+		/* errors have already been logged */
+		return;
 	}
 
-	free(m);
+	for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
+	{
+		log_warn("%s", lbuf.lines[lineNumber]);
+	}
+
+	FreeLinesBuffer(&lbuf);
 }
 
 
@@ -867,17 +876,20 @@ pgAutoCtlDefaultNoticeProcessor(void *arg, const char *message)
 void
 pgAutoCtlDebugNoticeProcessor(void *arg, const char *message)
 {
-	char *m = strdup(message);
-	char *lines[BUFSIZE];
-	int lineCount = splitLines(m, lines, BUFSIZE);
-	int lineNumber = 0;
+	LinesBuffer lbuf = { 0 };
 
-	for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
+	if (!splitLines(&lbuf, (char *) message, false))
 	{
-		log_sql("%s", lines[lineNumber]);
+		/* errors have already been logged */
+		return;
 	}
 
-	free(m);
+	for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
+	{
+		log_sql("%s", lbuf.lines[lineNumber]);
+	}
+
+	FreeLinesBuffer(&lbuf);
 }
 
 
@@ -1664,20 +1676,25 @@ pgsql_send_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 	if (result == 0)
 	{
 		char *message = PQerrorMessage(connection);
-		char *errorLines[BUFSIZE] = { 0 };
-		int lineCount = splitLines(message, errorLines, BUFSIZE);
-		int lineNumber = 0;
+
+		LinesBuffer lbuf = { 0 };
+
+		if (!splitLines(&lbuf, message, false))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 
 		/*
 		 * PostgreSQL Error message might contain several lines. Log each of
 		 * them as a separate ERROR line here.
 		 */
-		for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
+		for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
 		{
 			log_error("[%s %d] %s",
 					  endpoint,
 					  PQbackendPID(pgsql->connection),
-					  errorLines[lineNumber]);
+					  lbuf.lines[lineNumber]);
 		}
 
 		if (pgsql->logSQL)
@@ -1687,7 +1704,7 @@ pgsql_send_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 		}
 
 		destroyPQExpBuffer(debugParameters);
-
+		FreeLinesBuffer(&lbuf);
 		clear_results(pgsql);
 
 		return false;
@@ -2008,16 +2025,23 @@ pgsql_execute_log_error(PGSQL *pgsql,
 	 */
 	char *message = PQerrorMessage(pgsql->connection);
 
-	char *errorLines[BUFSIZE] = { 0 };
-	int lineCount = splitLines(message, errorLines, BUFSIZE);
+	LinesBuffer lbuf = { 0 };
 
-	for (int lineNumber = 0; lineNumber < lineCount; lineNumber++)
+	if (!splitLines(&lbuf, message, false))
+	{
+		/* errors have already been logged */
+		return;
+	}
+
+	for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
 	{
 		log_error("[%s %d] %s",
 				  endpoint,
 				  PQbackendPID(pgsql->connection),
-				  errorLines[lineNumber]);
+				  lbuf.lines[lineNumber]);
 	}
+
+	FreeLinesBuffer(&lbuf);
 
 	if (pgsql->logSQL)
 	{
@@ -2208,17 +2232,23 @@ clear_results(PGSQL *pgsql)
 
 		if (!is_response_ok(result))
 		{
+			LinesBuffer lbuf = { 0 };
 			char *pqmessage = PQerrorMessage(connection);
-			char *errorLines[BUFSIZE] = { 0 };
-			int lineCount = splitLines(pqmessage, errorLines, BUFSIZE);
 
-			for (int lineNumber = 0; lineNumber < lineCount; lineNumber++)
+			if (!splitLines(&lbuf, pqmessage, false))
 			{
-				log_error("[Postgres] %s", errorLines[lineNumber]);
+				/* errors have already been logged */
+				return false;
+			}
+
+			for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
+			{
+				log_error("[Postgres] %s", lbuf.lines[lineNumber]);
 			}
 
 			PQclear(result);
 			pgsql_finish(pgsql);
+			FreeLinesBuffer(&lbuf);
 			return false;
 		}
 
@@ -2786,10 +2816,14 @@ pg_copy_send_query(PGSQL *pgsql, CopyArgs *args, ExecStatusType status)
 static void
 pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context)
 {
+	LinesBuffer lbuf = { 0 };
 	char *message = PQerrorMessage(pgsql->connection);
-	char *errorLines[BUFSIZE] = { 0 };
-	int lineCount = splitLines(message, errorLines, BUFSIZE);
-	int lineNumber = 0;
+
+	if (!splitLines(&lbuf, message, false))
+	{
+		/* errors have already been logged */
+		return;
+	}
 
 	if (res != NULL)
 	{
@@ -2804,7 +2838,7 @@ pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context)
 	 * PostgreSQL Error message might contain several lines. Log each of
 	 * them as a separate ERROR line here.
 	 */
-	for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
+	for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
 	{
 		if (lineNumber == 0 && res != NULL)
 		{
@@ -2812,14 +2846,14 @@ pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context)
 					  endpoint,
 					  PQbackendPID(pgsql->connection),
 					  pgsql->sqlstate,
-					  errorLines[lineNumber]);
+					  lbuf.lines[lineNumber]);
 		}
 		else
 		{
 			log_error("[%s %d] %s",
 					  endpoint,
 					  PQbackendPID(pgsql->connection),
-					  errorLines[lineNumber]);
+					  lbuf.lines[lineNumber]);
 		}
 	}
 
@@ -2827,6 +2861,8 @@ pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context)
 			  endpoint,
 			  PQbackendPID(pgsql->connection),
 			  context);
+
+	FreeLinesBuffer(&lbuf);
 
 	if (res != NULL)
 	{
@@ -3192,15 +3228,19 @@ bool
 parseTimeLineHistory(const char *filename, const char *content,
 					 IdentifySystem *system)
 {
-	char *historyLines[BUFSIZE] = { 0 };
-	int lineCount = splitLines((char *) content, historyLines, BUFSIZE);
-	int lineNumber = 0;
+	LinesBuffer lbuf = { 0 };
 
-	if (lineCount >= PGCOPYDB_MAX_TIMELINES)
+	if (!splitLines(&lbuf, (char *) content, false))
 	{
-		log_error("history file \"%s\" contains %d lines, "
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (lbuf.count >= PGCOPYDB_MAX_TIMELINES)
+	{
+		log_error("history file \"%s\" contains %lld lines, "
 				  "pgcopydb only supports up to %d lines",
-				  filename, lineCount, PGCOPYDB_MAX_TIMELINES - 1);
+				  filename, (long long) lbuf.count, PGCOPYDB_MAX_TIMELINES - 1);
 		return false;
 	}
 
@@ -3215,9 +3255,9 @@ parseTimeLineHistory(const char *filename, const char *content,
 	TimeLineHistoryEntry *entry =
 		&(system->timelines.history[system->timelines.count]);
 
-	for (lineNumber = 0; lineNumber < lineCount; lineNumber++)
+	for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
 	{
-		char *ptr = historyLines[lineNumber];
+		char *ptr = lbuf.lines[lineNumber];
 
 		/* skip leading whitespace and check for # comment */
 		for (; *ptr; ptr++)
@@ -3233,24 +3273,26 @@ parseTimeLineHistory(const char *filename, const char *content,
 			continue;
 		}
 
-		log_trace("parseTimeLineHistory line %d is \"%s\"",
-				  lineNumber,
-				  historyLines[lineNumber]);
+		log_trace("parseTimeLineHistory line %lld is \"%s\"",
+				  (long long) lineNumber,
+				  lbuf.lines[lineNumber]);
 
-		char *tabptr = strchr(historyLines[lineNumber], '\t');
+		char *tabptr = strchr(lbuf.lines[lineNumber], '\t');
 
 		if (tabptr == NULL)
 		{
-			log_error("Failed to parse history file line %d: \"%s\"",
-					  lineNumber, ptr);
+			log_error("Failed to parse history file line %lld: \"%s\"",
+					  (long long) lineNumber, ptr);
+			FreeLinesBuffer(&lbuf);
 			return false;
 		}
 
 		*tabptr = '\0';
 
-		if (!stringToUInt(historyLines[lineNumber], &(entry->tli)))
+		if (!stringToUInt(lbuf.lines[lineNumber], &(entry->tli)))
 		{
 			log_error("Failed to parse history timeline \"%s\"", tabptr);
+			FreeLinesBuffer(&lbuf);
 			return false;
 		}
 
@@ -3269,6 +3311,7 @@ parseTimeLineHistory(const char *filename, const char *content,
 		{
 			log_error("Failed to parse history timeline %d LSN \"%s\"",
 					  entry->tli, lsn);
+			FreeLinesBuffer(&lbuf);
 			return false;
 		}
 
@@ -3278,13 +3321,13 @@ parseTimeLineHistory(const char *filename, const char *content,
 		log_trace("parseTimeLineHistory[%d]: tli %d [%X/%X %X/%X]",
 				  system->timelines.count,
 				  entry->tli,
-				  (uint32) (entry->begin >> 32),
-				  (uint32) entry->begin,
-				  (uint32) (entry->end >> 32),
-				  (uint32) entry->end);
+				  LSN_FORMAT_ARGS(entry->begin),
+				  LSN_FORMAT_ARGS(entry->end));
 
 		entry = &(system->timelines.history[++system->timelines.count]);
 	}
+
+	FreeLinesBuffer(&lbuf);
 
 	/*
 	 * Create one more entry for the "tip" of the timeline, which has no entry
@@ -3297,10 +3340,8 @@ parseTimeLineHistory(const char *filename, const char *content,
 	log_trace("parseTimeLineHistory[%d]: tli %d [%X/%X %X/%X]",
 			  system->timelines.count,
 			  entry->tli,
-			  (uint32) (entry->begin >> 32),
-			  (uint32) entry->begin,
-			  (uint32) (entry->end >> 32),
-			  (uint32) entry->end);
+			  LSN_FORMAT_ARGS(entry->begin),
+			  LSN_FORMAT_ARGS(entry->end));
 
 	/* fix the off-by-one so that the count is a count, not an index */
 	++system->timelines.count;
@@ -4380,12 +4421,17 @@ pgsql_stream_log_error(PGSQL *pgsql, PGresult *res, const char *message)
 	}
 	else
 	{
-		char *errorLines[BUFSIZE] = { 0 };
-		int lineCount = splitLines(pqmessage, errorLines, BUFSIZE);
+		LinesBuffer lbuf = { 0 };
 
-		if (lineCount == 1)
+		if (!splitLines(&lbuf, pqmessage, false))
 		{
-			log_error("%s: %s", message, errorLines[0]);
+			/* errors have already been logged */
+			return;
+		}
+
+		if (lbuf.count == 1)
+		{
+			log_error("%s: %s", message, lbuf.lines[0]);
 		}
 		else
 		{
@@ -4395,11 +4441,13 @@ pgsql_stream_log_error(PGSQL *pgsql, PGresult *res, const char *message)
 			 */
 			log_error("%s:", message);
 
-			for (int lineNumber = 0; lineNumber < lineCount; lineNumber++)
+			for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
 			{
-				log_error("%s", errorLines[lineNumber]);
+				log_error("%s", lbuf.lines[lineNumber]);
 			}
 		}
+
+		FreeLinesBuffer(&lbuf);
 	}
 
 	if (res != NULL)

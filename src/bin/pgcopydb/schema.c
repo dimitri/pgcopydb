@@ -3868,8 +3868,6 @@ getSchemaList(void *ctx, PGresult *result)
 	SourceSchemaArrayContext *context = (SourceSchemaArrayContext *) ctx;
 	int nTuples = PQntuples(result);
 
-	log_debug("getSchemaList: %d", nTuples);
-
 	if (PQnfields(result) != 3)
 	{
 		log_error("Query returned %d columns, expected 3", PQnfields(result));
@@ -3956,8 +3954,6 @@ getRoleList(void *ctx, PGresult *result)
 	SourceRoleArrayContext *context = (SourceRoleArrayContext *) ctx;
 	int nTuples = PQntuples(result);
 
-	log_debug("getRoleList: %d", nTuples);
-
 	if (PQnfields(result) != 2)
 	{
 		log_error("Query returned %d columns, expected 2", PQnfields(result));
@@ -4028,8 +4024,6 @@ getDatabaseList(void *ctx, PGresult *result)
 {
 	SourceDatabaseArrayContext *context = (SourceDatabaseArrayContext *) ctx;
 	int nTuples = PQntuples(result);
-
-	log_debug("getDatabaseList: %d", nTuples);
 
 	if (PQnfields(result) != 4)
 	{
@@ -4147,8 +4141,6 @@ getDatabaseProperties(void *ctx, PGresult *result)
 {
 	SourcePropertiesArrayContext *context = (SourcePropertiesArrayContext *) ctx;
 	int nTuples = PQntuples(result);
-
-	log_debug("getDatabaseProperties: %d", nTuples);
 
 	if (PQnfields(result) != 3)
 	{
@@ -4278,8 +4270,6 @@ getExtensionList(void *ctx, PGresult *result)
 {
 	SourceExtensionArrayContext *context = (SourceExtensionArrayContext *) ctx;
 	int nTuples = PQntuples(result);
-
-	log_debug("getExtensionList: %d", nTuples);
 
 	if (PQnfields(result) != 11)
 	{
@@ -4559,12 +4549,15 @@ getExtensionsVersions(void *ctx, PGresult *result)
 
 	int nTuples = PQntuples(result);
 
-	log_debug("getExtensionsVersions: %d", nTuples);
-
 	if (PQnfields(result) != 4)
 	{
 		log_error("Query returned %d columns, expected 4", PQnfields(result));
 		context->parsedOk = false;
+		return;
+	}
+
+	if (nTuples == 0)
+	{
 		return;
 	}
 
@@ -4659,8 +4652,6 @@ getCollationList(void *ctx, PGresult *result)
 {
 	SourceCollationArrayContext *context = (SourceCollationArrayContext *) ctx;
 	int nTuples = PQntuples(result);
-
-	log_debug("getCollationList: %d", nTuples);
 
 	if (PQnfields(result) != 4)
 	{
@@ -5044,6 +5035,13 @@ parseAttributesArray(SourceTable *table, JSON_Value *json)
 	int count = json_array_get_count(jsAttsArray);
 
 	table->attributes.count = count;
+
+	if (count == 0)
+	{
+		table->attributes.array = NULL;
+		return true;
+	}
+
 	table->attributes.array =
 		(SourceTableAttribute *) calloc(count, sizeof(SourceTableAttribute));
 
@@ -5566,8 +5564,6 @@ getDependArray(void *ctx, PGresult *result)
 {
 	SourceDependArrayContext *context = (SourceDependArrayContext *) ctx;
 	int nTuples = PQntuples(result);
-
-	log_debug("getDependArray: %d", nTuples);
 
 	if (PQnfields(result) != 9)
 	{

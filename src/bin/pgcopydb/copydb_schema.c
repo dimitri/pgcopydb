@@ -504,6 +504,12 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 	 */
 	bool createdTableSizeTable = false;
 
+	if (!catalog_begin(sourceDB, false))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	/* now fetch the list of tables from the source database */
 	if ((specs->section == DATA_SECTION_ALL ||
 		 specs->section == DATA_SECTION_TABLE_DATA ||
@@ -553,6 +559,13 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 		}
 	}
 
+	/* now update --split-tables-larger-than and target pguri */
+	if (!catalog_update_setup(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	/* prepare the Oids of objects that are filtered out */
 	if (specs->fetchFilteredOids)
 	{
@@ -570,6 +583,12 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 			/* errors have already been logged */
 			return false;
 		}
+	}
+
+	if (!catalog_commit(sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	return true;
@@ -906,6 +925,14 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 
 		(void) catalog_start_timing(&timing);
 
+		/* fetch the list of schemas that extensions depend on */
+		if (!schema_list_ext_schemas(pgsql, filtersDB))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		/* and fetch the list of extensions we want to skip */
 		if (!schema_list_extensions(pgsql, filtersDB))
 		{
 			/* errors have already been logged */
@@ -928,17 +955,6 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 
 		log_info("Fetched information for %lld extensions",
 				 (long long) count.extensions);
-	}
-
-	if (specs->skipExtensions &&
-		!filtersDB->sections[DATA_SECTION_EXTENSIONS].fetched)
-	{
-		/* fetch the list of schemas that extensions depend on */
-		if (!schema_list_ext_schemas(pgsql, filtersDB))
-		{
-			/* errors have already been logged */
-			return false;
-		}
 	}
 
 	if (specs->skipCollations &&
@@ -1001,7 +1017,9 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 
 			(void) catalog_start_timing(&timing);
 
-			if (!catalog_prepare_filter(filtersDB))
+			if (!catalog_prepare_filter(filtersDB,
+										specs->skipExtensions,
+										specs->skipCollations))
 			{
 				log_error("Failed to prepare filtering hash-table, "
 						  "see above for details");
@@ -1165,7 +1183,9 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 
 		(void) catalog_start_timing(&timing);
 
-		if (!catalog_prepare_filter(filtersDB))
+		if (!catalog_prepare_filter(filtersDB,
+									specs->skipExtensions,
+									specs->skipCollations))
 		{
 			log_error("Failed to prepare filtering hash-table, "
 					  "see above for details");
@@ -1233,6 +1253,12 @@ copydb_prepare_target_catalog(CopyDataSpec *specs)
 		return false;
 	}
 
+	if (!catalog_begin(targetDB, false))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	/*
 	 * First, get a list of the schema that already exist on the target system.
 	 * Some extensions scripts create schema in a way that does not register a
@@ -1278,6 +1304,12 @@ copydb_prepare_target_catalog(CopyDataSpec *specs)
 	}
 
 	if (!schema_list_all_indexes(&dst, &targetDBfilter, targetDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_commit(targetDB))
 	{
 		/* errors have already been logged */
 		return false;

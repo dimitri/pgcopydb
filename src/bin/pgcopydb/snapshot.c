@@ -506,10 +506,15 @@ snapshot_read_slot(const char *filename, ReplicationSlot *slot)
 	}
 
 	/* make sure to use only the first line of the file, without \n */
-	char *lines[BUFSIZE] = { 0 };
-	int lineCount = splitLines(contents, lines, BUFSIZE);
+	LinesBuffer lbuf = { 0 };
 
-	if (lineCount != 5)
+	if (!splitLines(&lbuf, contents, true))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (lbuf.count != 5)
 	{
 		log_error("Failed to parse replication slot file \"%s\"", filename);
 		free(contents);
@@ -517,66 +522,66 @@ snapshot_read_slot(const char *filename, ReplicationSlot *slot)
 	}
 
 	/* 1. slotName */
-	int length = strlcpy(slot->slotName, lines[0], sizeof(slot->slotName));
+	int length = strlcpy(slot->slotName, lbuf.lines[0], sizeof(slot->slotName));
 
 	if (length >= sizeof(slot->slotName))
 	{
 		log_error("Failed to read replication slot name \"%s\" from file \"%s\", "
 				  "length is %lld bytes which exceeds maximum %lld bytes",
-				  lines[0],
+				  lbuf.lines[0],
 				  filename,
-				  (long long) strlen(lines[0]),
+				  (long long) strlen(lbuf.lines[0]),
 				  (long long) sizeof(slot->slotName));
 		free(contents);
 		return false;
 	}
 
 	/* 2. LSN (consistent_point) */
-	if (!parseLSN(lines[1], &(slot->lsn)))
+	if (!parseLSN(lbuf.lines[1], &(slot->lsn)))
 	{
 		log_error("Failed to parse LSN \"%s\" from file \"%s\"",
-				  lines[1],
+				  lbuf.lines[1],
 				  filename);
 		free(contents);
 		return false;
 	}
 
 	/* 3. snapshot */
-	length = strlcpy(slot->snapshot, lines[2], sizeof(slot->snapshot));
+	length = strlcpy(slot->snapshot, lbuf.lines[2], sizeof(slot->snapshot));
 
 	if (length >= sizeof(slot->snapshot))
 	{
 		log_error("Failed to read replication snapshot \"%s\" from file \"%s\", "
 				  "length is %lld bytes which exceeds maximum %lld bytes",
-				  lines[2],
+				  lbuf.lines[2],
 				  filename,
-				  (long long) strlen(lines[2]),
+				  (long long) strlen(lbuf.lines[2]),
 				  (long long) sizeof(slot->snapshot));
 		free(contents);
 		return false;
 	}
 
 	/* 4. plugin */
-	slot->plugin = OutputPluginFromString(lines[3]);
+	slot->plugin = OutputPluginFromString(lbuf.lines[3]);
 
 	if (slot->plugin == STREAM_PLUGIN_UNKNOWN)
 	{
 		log_error("Failed to read plugin \"%s\" from file \"%s\"",
-				  lines[3],
+				  lbuf.lines[3],
 				  filename);
 		free(contents);
 		return false;
 	}
 
 	/* 5. wal2json-numeric-as-string */
-	parse_bool(lines[4], &(slot->wal2jsonNumericAsString));
+	parse_bool(lbuf.lines[4], &(slot->wal2jsonNumericAsString));
 
 	if (slot->wal2jsonNumericAsString &&
 		slot->plugin != STREAM_PLUGIN_WAL2JSON)
 	{
 		log_error("Failed to read wal2json-numeric-as-string \"%s\" from file \"%s\" "
 				  "because the plugin is not wal2json",
-				  lines[4],
+				  lbuf.lines[4],
 				  filename);
 	}
 

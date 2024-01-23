@@ -30,7 +30,7 @@ sleep 1
 pgcopydb stream setup
 
 # pgcopydb clone uses the environment variables
-pgcopydb clone
+pgcopydb clone --split-tables-larger-than 200kB
 
 kill -TERM ${COPROC_PID}
 wait ${COPROC_PID}

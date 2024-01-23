@@ -629,8 +629,14 @@ cli_copy_extensions(int argc, char **argv)
 	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
 	{
 		/* errors have already been logged */
-		(void) copydb_close_snapshot(&copySpecs);
-		exit(EXIT_CODE_TARGET);
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/* time to close the catalogs now */
+	if (!catalog_close_from_specs(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	bool createExtensions = true;
@@ -638,9 +644,13 @@ cli_copy_extensions(int argc, char **argv)
 	if (!copydb_start_extension_data_process(&copySpecs, createExtensions))
 	{
 		/* errors have already been logged */
-		exit(EXIT_CODE_TARGET);
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	/* now close the snapshot we kept for the whole operation */
-	(void) copydb_close_snapshot(&copySpecs);
+	if (!copydb_wait_for_subprocesses(copySpecs.failFast))
+	{
+		log_error("Some sub-processes have exited with error status, "
+				  "see above for details");
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
 }

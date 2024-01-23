@@ -629,7 +629,24 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 		if (copySpecs->section == DATA_SECTION_ALL ||
 			copySpecs->section == DATA_SECTION_TABLE_DATA_PARTS)
 		{
-			if (copySpecs->splitTablesLargerThan.bytes !=
+			CatalogSection *tablePartsDataSection =
+				&(sourceDB->sections[DATA_SECTION_TABLE_DATA_PARTS]);
+
+			/* make sure the section has been initialized properly */
+			tablePartsDataSection->section = DATA_SECTION_TABLE_DATA_PARTS;
+
+			if (!catalog_section_state(sourceDB, tablePartsDataSection))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			/*
+			 * Difference in --split-at is only meaningful if table-data cache
+			 * has already been populated.
+			 */
+			if (tablePartsDataSection->fetched &&
+				copySpecs->splitTablesLargerThan.bytes !=
 				setup->splitTablesLargerThanBytes)
 			{
 				char bytesPretty[BUFSIZE] = { 0 };
@@ -638,13 +655,13 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 								   BUFSIZE,
 								   setup->splitTablesLargerThanBytes);
 
-				log_info("setup: %lld (%s)",
-						 (long long) setup->splitTablesLargerThanBytes,
-						 bytesPretty);
+				log_debug("setup: %lld (%s)",
+						  (long long) setup->splitTablesLargerThanBytes,
+						  bytesPretty);
 
-				log_info("specs: %lld (%s)",
-						 (long long) copySpecs->splitTablesLargerThan.bytes,
-						 copySpecs->splitTablesLargerThan.bytesPretty);
+				log_debug("specs: %lld (%s)",
+						  (long long) copySpecs->splitTablesLargerThan.bytes,
+						  copySpecs->splitTablesLargerThan.bytesPretty);
 
 				log_error("Catalogs at \"%s\" have been setup for "
 						  "--split-tables-larger-than \"%s\" "
@@ -736,28 +753,17 @@ catalog_init(DatabaseCatalog *catalog)
 	}
 
 	/*
-	 * Because the source catalog also registers the activity information,
-	 * which generates a non-trivial amount of small writes with some level of
-	 * concurrency, we turn the WAL mode on that one.
-	 *
-	 * PRAGMA journal_mode=WAL is persistent, so we only call that when
-	 * creating the catalog.
+	 * WAL journal_mode is significantly faster for writes and allows
+	 * concurrency of readers not blocking writers and vice versa.
 	 */
+	if (!catalog_set_wal_mode(catalog))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (createSchema)
 	{
-		if (catalog->type == DATABASE_CATALOG_TYPE_SOURCE)
-		{
-			/* bypass the WAL mode, unclear if we benefit from it */
-			if (false)
-			{
-				if (!catalog_set_wal_mode(catalog))
-				{
-					/* errors have already been logged */
-					return false;
-				}
-			}
-		}
-
 		return catalog_create_schema(catalog);
 	}
 
@@ -967,25 +973,17 @@ catalog_drop_schema(DatabaseCatalog *catalog)
 
 
 /*
- * catalog_set_wal_mode convert given SQLite database to WAL mode.
+ * catalog_set_wal_mode convert given SQLite database to WAL mode
+ * (https://www.sqlite.org/pragma.html#pragma_journal_mode).
+ *
+ * Note: It generates "additional quasi-persistent '-wal' file and '-shm'
+ * shared memory file associated with each database"
+ * (https://www.sqlite.org/wal.html).
  */
 bool
 catalog_set_wal_mode(DatabaseCatalog *catalog)
 {
-	char *sql = "PRAGMA journal_mode=WAL;";
-
-	log_sqlite("[SQLite] %s", sql);
-
-	int rc = sqlite3_exec(catalog->db, sql, NULL, NULL, NULL);
-
-	if (rc != SQLITE_OK)
-	{
-		log_error("[SQLite]: PRAGMA journal_mode=WAL failed: %s",
-				  sqlite3_errstr(rc));
-		return false;
-	}
-
-	return true;
+	return catalog_execute(catalog, "PRAGMA journal_mode = WAL");
 }
 
 
@@ -1049,17 +1047,7 @@ catalog_begin(DatabaseCatalog *catalog, bool immediate)
 bool
 catalog_commit(DatabaseCatalog *catalog)
 {
-	log_sqlite("[SQLite] COMMIT");
-
-	int rc = sqlite3_exec(catalog->db, "COMMIT", NULL, NULL, NULL);
-
-	if (rc != SQLITE_OK)
-	{
-		log_error("[SQLite]: COMMIT failed: %s", sqlite3_errstr(rc));
-		return false;
-	}
-
-	return true;
+	return catalog_execute(catalog, "COMMIT");
 }
 
 
@@ -1069,17 +1057,7 @@ catalog_commit(DatabaseCatalog *catalog)
 bool
 catalog_rollback(DatabaseCatalog *catalog)
 {
-	log_sqlite("[SQLite] ROLLBACK");
-
-	int rc = sqlite3_exec(catalog->db, "ROLLBACK", NULL, NULL, NULL);
-
-	if (rc != SQLITE_OK)
-	{
-		log_error("[SQLite]: ROLLBACK failed: %s", sqlite3_errstr(rc));
-		return false;
-	}
-
-	return true;
+	return catalog_execute(catalog, "ROLLBACK");
 }
 
 
@@ -1104,32 +1082,41 @@ catalog_register_setup(DatabaseCatalog *catalog,
 
 	char *sql =
 		"insert into setup("
-		"  id, source_pg_uri, target_pg_uri, snapshot, "
-		"  split_tables_larger_than, filters) "
+		"  id, source_pg_uri, target_pg_uri, snapshot, filters, "
+		"  split_tables_larger_than) "
 		"values($1, $2, $3, $4, $5, $6)";
 
 	SQLiteQuery query = { 0 };
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "id", 1, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "source_pg_uri", 0, (char *) source_pg_uri },
+		{ BIND_PARAMETER_TYPE_TEXT, "target_pg_uri", 0, (char *) target_pg_uri },
+		{ BIND_PARAMETER_TYPE_TEXT, "snapshot", 0, (char *) snapshot },
+		{ BIND_PARAMETER_TYPE_TEXT, "filters", 0, (char *) filters },
+
+		{ BIND_PARAMETER_TYPE_INT64, "split_tables_larger_than",
+		  splitTablesLargerThanBytes, NULL }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	/* skip splitTableLargerThanBytes when it's not been set */
+	if (splitTablesLargerThanBytes == 0)
+	{
+		sql =
+			"insert into setup("
+			"  id, source_pg_uri, target_pg_uri, snapshot, filters) "
+			"values($1, $2, $3, $4, $5)";
+
+		--count;
+	}
 
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
 		return false;
 	}
-
-	/* bind our parameters now */
-	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_INT64, "id", 1, NULL },
-		{ BIND_PARAMETER_TYPE_TEXT, "source_pg_uri", 0, (char *) source_pg_uri },
-		{ BIND_PARAMETER_TYPE_TEXT, "target_pg_uri", 0, (char *) target_pg_uri },
-		{ BIND_PARAMETER_TYPE_TEXT, "snapshot", 0, (char *) snapshot },
-
-		{ BIND_PARAMETER_TYPE_INT64, "split_tables_larger_than",
-		  splitTablesLargerThanBytes, NULL },
-
-		{ BIND_PARAMETER_TYPE_TEXT, "filters", 0, (char *) filters }
-	};
-
-	int count = sizeof(params) / sizeof(params[0]);
 
 	if (!catalog_sql_bind(&query, params, count))
 	{
@@ -1182,6 +1169,78 @@ catalog_setup(DatabaseCatalog *catalog)
 	{
 		/* errors have already been logged */
 		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* now execute the query, which return exactly one row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
+ * catalog_update_setup updates the registered catalog setup metadata.
+ */
+bool
+catalog_update_setup(CopyDataSpec *copySpecs)
+{
+	DatabaseCatalog *catalog = &(copySpecs->catalogs.source);
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_setup: db is NULL");
+		return false;
+	}
+
+	SafeURI tpguri = { 0 };
+
+	if (!bareConnectionString(copySpecs->connStrings.target_pguri, &tpguri))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	SQLiteQuery query = { 0 };
+
+	char *sql =
+		"update setup "
+		"   set target_pg_uri = $1, "
+		"       split_tables_larger_than = $2 "
+		" where id = 1";
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_TEXT, "target_pg_uri", 0, (char *) tpguri.pguri },
+		{ BIND_PARAMETER_TYPE_INT64, "split_tables_larger_than",
+		  copySpecs->splitTablesLargerThan.bytes, NULL }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
 		return false;
 	}
 
@@ -4582,7 +4641,9 @@ catalog_iter_s_seq_finish(SourceSeqIterator *iter)
  * spill to disk when we have giant database catalogs to take care of.
  */
 bool
-catalog_prepare_filter(DatabaseCatalog *catalog)
+catalog_prepare_filter(DatabaseCatalog *catalog,
+					   bool skipExtensions,
+					   bool skipCollations)
 {
 	sqlite3 *db = catalog->db;
 
@@ -4600,11 +4661,6 @@ catalog_prepare_filter(DatabaseCatalog *catalog)
 
 		"  union all "
 
-		"    select oid, restore_list_name, 'coll' "
-		"      from s_coll "
-
-		"  union all "
-
 		"     select oid, restore_list_name, 'table' "
 		"       from s_table "
 
@@ -4612,11 +4668,6 @@ catalog_prepare_filter(DatabaseCatalog *catalog)
 
 		"     select oid, restore_list_name, 'index' "
 		"       from s_index "
-
-		"  union all "
-
-		"     select oid, extname, 'extension' "
-		"       from s_extension "
 
 		"  union all "
 
@@ -4714,6 +4765,54 @@ catalog_prepare_filter(DatabaseCatalog *catalog)
 	{
 		/* errors have already been logged */
 		return false;
+	}
+
+	/*
+	 * Implement --skip-extensions
+	 */
+	if (skipExtensions)
+	{
+		char *s_extension_sql =
+			"insert or ignore into filter(oid, restore_list_name, kind) "
+			"     select oid, extname, 'extension' "
+			"       from s_extension ";
+
+		if (!catalog_sql_prepare(db, s_extension_sql, &query))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		/* now execute the query, which does not return any row */
+		if (!catalog_sql_execute_once(&query))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	/*
+	 * Implement --skip-collations
+	 */
+	if (skipCollations)
+	{
+		char *s_coll_sql =
+			"insert or ignore into filter(oid, restore_list_name, kind) "
+			"    select oid, restore_list_name, 'coll' "
+			"      from s_coll ";
+
+		if (!catalog_sql_prepare(db, s_coll_sql, &query))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		/* now execute the query, which does not return any row */
+		if (!catalog_sql_execute_once(&query))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	return true;
@@ -7124,6 +7223,26 @@ catalog_count_summary_done_fetch(SQLiteQuery *query)
 
 
 /*
+ * catalog_execute executes sqlite query
+ */
+bool
+catalog_execute(DatabaseCatalog *catalog, char *sql)
+{
+	log_sqlite("[SQLite] %s", sql);
+
+	int rc = sqlite3_exec(catalog->db, sql, NULL, NULL, NULL);
+
+	if (rc != SQLITE_OK)
+	{
+		log_error("[SQLite]: %s failed: %s", sql, sqlite3_errstr(rc));
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * catalog_sql_prepare prepares a SQLite query for our internal catalogs.
  */
 bool
@@ -7384,14 +7503,21 @@ catalog_bind_parameters(sqlite3 *db,
 						BindParam *params,
 						int count)
 {
-	PQExpBuffer debugParameters = createPQExpBuffer();
+	PQExpBuffer debugParameters = NULL;
+
+	bool logSQL = log_get_level() <= LOG_SQLITE;
+
+	if (logSQL)
+	{
+		debugParameters = createPQExpBuffer();
+	}
 
 	for (int i = 0; i < count; i++)
 	{
 		int n = i + 1;
 		BindParam *p = &(params[i]);
 
-		if (i > 0)
+		if (logSQL && i > 0)
 		{
 			appendPQExpBufferStr(debugParameters, ", ");
 		}
@@ -7412,7 +7538,10 @@ catalog_bind_parameters(sqlite3 *db,
 					return false;
 				}
 
-				appendPQExpBuffer(debugParameters, "%lld", (long long) p->intVal);
+				if (logSQL)
+				{
+					appendPQExpBuffer(debugParameters, "%lld", (long long) p->intVal);
+				}
 
 				break;
 			}
@@ -7431,7 +7560,10 @@ catalog_bind_parameters(sqlite3 *db,
 					return false;
 				}
 
-				appendPQExpBuffer(debugParameters, "%lld", (long long) p->intVal);
+				if (logSQL)
+				{
+					appendPQExpBuffer(debugParameters, "%lld", (long long) p->intVal);
+				}
 
 				break;
 			}
@@ -7446,7 +7578,10 @@ catalog_bind_parameters(sqlite3 *db,
 				{
 					rc = sqlite3_bind_null(ppStmt, n);
 
-					appendPQExpBuffer(debugParameters, "%s", "null");
+					if (logSQL)
+					{
+						appendPQExpBuffer(debugParameters, "%s", "null");
+					}
 				}
 				else
 				{
@@ -7455,8 +7590,10 @@ catalog_bind_parameters(sqlite3 *db,
 										   p->strVal,
 										   strlen(p->strVal),
 										   SQLITE_STATIC);
-
-					appendPQExpBuffer(debugParameters, "%s", p->strVal);
+					if (logSQL)
+					{
+						appendPQExpBuffer(debugParameters, "%s", p->strVal);
+					}
 				}
 
 				if (rc != SQLITE_OK)
@@ -7482,16 +7619,21 @@ catalog_bind_parameters(sqlite3 *db,
 		}
 	}
 
-	if (PQExpBufferBroken(debugParameters))
-	{
-		log_error("Failed to create log message for SQL query parameters: "
-				  "out of memory");
-		destroyPQExpBuffer(debugParameters);
-		return false;
-	}
 
-	log_sqlite("[SQLite] %s", debugParameters->data);
-	destroyPQExpBuffer(debugParameters);
+	if (logSQL)
+	{
+		if (PQExpBufferBroken(debugParameters))
+		{
+			log_error("Failed to create log message for SQL query parameters: "
+					  "out of memory");
+			destroyPQExpBuffer(debugParameters);
+			return false;
+		}
+
+		log_sqlite("[SQLite] %s", debugParameters->data);
+
+		destroyPQExpBuffer(debugParameters);
+	}
 
 	return true;
 }

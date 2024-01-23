@@ -240,7 +240,6 @@ semaphore_cleanup(const char *pidfile)
 
 	long fileSize = 0L;
 	char *fileContents = NULL;
-	char *fileLines[BUFSIZE] = { 0 };
 
 	if (!file_exists(pidfile))
 	{
@@ -252,27 +251,33 @@ semaphore_cleanup(const char *pidfile)
 		return false;
 	}
 
-	int lineCount = splitLines(fileContents, fileLines, BUFSIZE);
+	LinesBuffer lbuf = { 0 };
 
-	if (lineCount < PIDFILE_LINE_SEM_ID)
-	{
-		log_debug("Failed to cleanup the semaphore from stale pid file \"%s\": "
-				  "it contains %d lines, semaphore id is expected in line %d",
-				  pidfile,
-				  lineCount,
-				  PIDFILE_LINE_SEM_ID);
-		free(fileContents);
-		return false;
-	}
-
-	if (!stringToInt(fileLines[PIDFILE_LINE_SEM_ID], &(semaphore.semId)))
+	if (!splitLines(&lbuf, fileContents, true))
 	{
 		/* errors have already been logged */
-		free(fileContents);
 		return false;
 	}
 
-	free(fileContents);
+	if (lbuf.count < PIDFILE_LINE_SEM_ID)
+	{
+		log_debug("Failed to cleanup the semaphore from stale pid file \"%s\": "
+				  "it contains %lld lines, semaphore id is expected in line %d",
+				  pidfile,
+				  (long long) lbuf.count,
+				  PIDFILE_LINE_SEM_ID);
+		FreeLinesBuffer(&lbuf);
+		return false;
+	}
+
+	if (!stringToInt(lbuf.lines[PIDFILE_LINE_SEM_ID], &(semaphore.semId)))
+	{
+		/* errors have already been logged */
+		FreeLinesBuffer(&lbuf);
+		return false;
+	}
+
+	FreeLinesBuffer(&lbuf);
 
 	log_trace("Read semaphore id %d from stale pidfile", semaphore.semId);
 
