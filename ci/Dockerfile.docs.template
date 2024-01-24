@@ -1,0 +1,24 @@
+# This file requires a copy of the main Dockerfile in the beginning.
+#
+# Run `cat Dockerfile ci/Dockerfile.docs.template > ci/Dockerfile.docs` in the
+# top directory to generate a working Dockerfile.
+#
+# Notice that the "build" image that is not defined in here is used as a base
+# image. Since Docker does not support multi-stage builds with dependencies
+# across different Dockerfiles for now, we need to prepend a copy of the
+# original Dockerfile in the beginning of this file.
+
+FROM --platform=${TARGETPLATFORM} build
+RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
+  && apt install -qqy --no-install-suggests --no-install-recommends \
+	git \
+	&& apt clean \
+	&& rm -rf /var/lib/apt/lists/*
+
+WORKDIR /usr/src/pgcopydb
+
+ENTRYPOINT make -s -j$(nproc) update-docs && \
+		   git add docs && \
+		   git diff --staged --exit-code || \
+		   (echo "Docs are not up to date, please run 'make update-docs'" && false) && \
+		   echo "Docs are up to date"

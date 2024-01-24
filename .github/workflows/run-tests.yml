@@ -75,3 +75,8 @@ jobs:
         uses: ammaraskar/sphinx-action@master
         with:
           docs-folder: "docs/"
+      - name: Check that docs are up to date
+        run: |
+          cat Dockerfile ci/Dockerfile.docs.template > ci/Dockerfile.docs && \
+          docker build --file=ci/Dockerfile.docs --tag test-docs . && \
+          docker run test-docs

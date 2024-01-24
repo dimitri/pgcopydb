@@ -2,6 +2,7 @@
 # Licensed under the PostgreSQL License.
 
 TOP := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+PGCOPYDB ?= $(TOP)src/bin/pgcopydb/pgcopydb
 
 all: bin ;
 
@@ -21,7 +22,7 @@ maintainer-clean: clean
 docs:
 	$(MAKE) -C docs clean man html
 
-update-docs: install
+update-docs: bin
 	bash ./docs/update-help-messages.sh
 
 test: build
@@ -66,7 +67,7 @@ debsh-qa: deb-qa
 	docker run --rm -it pgcopydb_debian_qa bash
 
 .PHONY: all
-.PHONY: bin clean install docs maintainer-clean
+.PHONY: bin clean install docs maintainer-clean update-docs
 .PHONY: test tests tests/ci tests/*
 .PHONY: deb debsh deb-qa debsh-qa
 .PHONY: GIT-VERSION-FILE
