@@ -281,8 +281,8 @@ copydb_copy_database_properties_hook(void *ctx, SourceProperty *property)
 	PGSQL *dst = context->dst;
 	PGconn *conn = dst->connection;
 
-	const char *t_dbname = specs->connStrings.safeTargetPGURI.uriParams.dbname;
-	const char *t_escaped_dbname = pgsql_escape_identifier(dst, t_dbname);
+	char *t_dbname = specs->connStrings.safeTargetPGURI.uriParams.dbname;
+	char *t_escaped_dbname = pgsql_escape_identifier(dst, t_dbname);
 
 	if (t_escaped_dbname == NULL)
 	{
