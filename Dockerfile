@@ -64,12 +64,12 @@ LABEL org.opencontainers.image.source https://github.com/dimitri/pgcopydb
 RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
   && apt install -qqy --no-install-suggests --no-install-recommends \
     sudo \
-	passwd \
+    passwd \
     ca-certificates \
     libgc1 \
-	libpq5 \
-	libsqlite3-0 \
-	lsof \
+    libpq5 \
+    libsqlite3-0 \
+    lsof \
     tmux \
     watch \
     psmisc \

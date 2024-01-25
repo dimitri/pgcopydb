@@ -52,6 +52,12 @@ psql_version(PostgresPaths *pgPaths)
 	char pg_version_string[PG_VERSION_STRING_MAX] = { 0 };
 	int pg_version = 0;
 
+	if (prog == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
 	if (prog->returnCode != 0)
 	{
 		errno = prog->error;
@@ -199,6 +205,12 @@ set_psql_from_config_bindir(PostgresPaths *pgPaths, const char *pg_config)
 	}
 
 	Program *prog = run_program(pg_config, "--bindir", NULL);
+
+	if (prog == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
 
 	if (prog->returnCode != 0)
 	{

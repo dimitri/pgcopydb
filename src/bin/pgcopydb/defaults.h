@@ -16,6 +16,11 @@
 #define calloc(m, n) GC_malloc((m) * (n))
 #define free(p) GC_free(p)
 #define realloc(p, n) GC_realloc((p), (n))
+
+/*
+ * The GC API can also be used as leak detector, thanks to using the following
+ * macro, as per https://www.hboehm.info/gc/leak.html
+ */
 #define CHECK_LEAKS() GC_gcollect()
 
 /*
