@@ -46,14 +46,13 @@ bool IntervalToString(uint64_t millisecs, char *buffer, size_t size);
 
 typedef struct LinesBuffer
 {
-	bool ownsBuffer;
 	char *buffer;
 	uint64_t count;
 	char **lines;                     /* malloc'ed area */
 } LinesBuffer;
 
 uint64_t countLines(char *buffer);
-bool splitLines(LinesBuffer *lbuf, char *buffer, bool ownsBuffer);
+bool splitLines(LinesBuffer *lbuf, char *buffer);
 
 void processBufferCallback(const char *buffer, bool error);
 

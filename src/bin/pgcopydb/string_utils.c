@@ -589,10 +589,9 @@ countLines(char *buffer)
  * area.
  */
 bool
-splitLines(LinesBuffer *lbuf, char *buffer, bool ownsBuffer)
+splitLines(LinesBuffer *lbuf, char *buffer)
 {
 	lbuf->buffer = buffer;
-	lbuf->ownsBuffer = ownsBuffer;
 	lbuf->count = countLines(lbuf->buffer);
 
 	if (lbuf->buffer == NULL || lbuf->count == 0)
@@ -653,7 +652,7 @@ processBufferCallback(const char *buffer, bool error)
 	const char *warningPattern = "^(pg_dump: warning:|pg_restore: warning:)";
 	LinesBuffer lbuf = { 0 };
 
-	if (!splitLines(&lbuf, (char *) buffer, true))
+	if (!splitLines(&lbuf, (char *) buffer))
 	{
 		/* errors have already been logged */
 		return;

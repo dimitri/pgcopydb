@@ -508,7 +508,7 @@ snapshot_read_slot(const char *filename, ReplicationSlot *slot)
 	/* make sure to use only the first line of the file, without \n */
 	LinesBuffer lbuf = { 0 };
 
-	if (!splitLines(&lbuf, contents, true))
+	if (!splitLines(&lbuf, contents))
 	{
 		/* errors have already been logged */
 		return false;

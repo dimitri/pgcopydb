@@ -902,7 +902,7 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 		return false;
 	}
 
-	if (!splitLines(&(content.lbuf), contents, true))
+	if (!splitLines(&(content.lbuf), contents))
 	{
 		/* errors have already been logged */
 		return false;

@@ -448,7 +448,7 @@ stream_apply_file(StreamApplyContext *context)
 		return false;
 	}
 
-	if (!splitLines(&(content.lbuf), contents, true))
+	if (!splitLines(&(content.lbuf), contents))
 	{
 		/* errors have already been logged */
 		return false;

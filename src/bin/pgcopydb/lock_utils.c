@@ -253,7 +253,7 @@ semaphore_cleanup(const char *pidfile)
 
 	LinesBuffer lbuf = { 0 };
 
-	if (!splitLines(&lbuf, fileContents, true))
+	if (!splitLines(&lbuf, fileContents))
 	{
 		/* errors have already been logged */
 		return false;

@@ -543,7 +543,7 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 			bool partialRead = buf[bytes - 1] != '\n';
 			LinesBuffer lbuf = { 0 };
 
-			if (!splitLines(&lbuf, buf, true))
+			if (!splitLines(&lbuf, buf))
 			{
 				/* errors have already been logged */
 				return false;

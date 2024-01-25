@@ -222,7 +222,7 @@ set_psql_from_config_bindir(PostgresPaths *pgPaths, const char *pg_config)
 
 	LinesBuffer lbuf = { 0 };
 
-	if (!splitLines(&lbuf, prog->stdOut, false) || lbuf.count != 1)
+	if (!splitLines(&lbuf, prog->stdOut) || lbuf.count != 1)
 	{
 		log_error("Unable to parse output from pg_config --bindir");
 		return false;
@@ -707,7 +707,7 @@ pg_restore_roles(PostgresPaths *pgPaths,
 
 	LinesBuffer lbuf = { 0 };
 
-	if (!splitLines(&lbuf, content, true))
+	if (!splitLines(&lbuf, content))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1180,7 +1180,7 @@ parse_archive_list(const char *filename, ArchiveContentArray *contents)
 
 	LinesBuffer lbuf = { 0 };
 
-	if (!splitLines(&lbuf, buffer, true))
+	if (!splitLines(&lbuf, buffer))
 	{
 		/* errors have already been logged */
 		return false;

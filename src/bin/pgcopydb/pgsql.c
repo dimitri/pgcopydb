@@ -440,7 +440,7 @@ log_connection_error(PGconn *connection, int logLevel)
 	char *message = PQerrorMessage(connection);
 	LinesBuffer lbuf = { 0 };
 
-	if (!splitLines(&lbuf, message, false))
+	if (!splitLines(&lbuf, message))
 	{
 		/* errors have already been logged */
 		return;
@@ -849,7 +849,7 @@ pgAutoCtlDefaultNoticeProcessor(void *arg, const char *message)
 {
 	LinesBuffer lbuf = { 0 };
 
-	if (!splitLines(&lbuf, (char *) message, false))
+	if (!splitLines(&lbuf, (char *) message))
 	{
 		/* errors have already been logged */
 		return;
@@ -871,7 +871,7 @@ pgAutoCtlDebugNoticeProcessor(void *arg, const char *message)
 {
 	LinesBuffer lbuf = { 0 };
 
-	if (!splitLines(&lbuf, (char *) message, false))
+	if (!splitLines(&lbuf, (char *) message))
 	{
 		/* errors have already been logged */
 		return;
@@ -1670,7 +1670,7 @@ pgsql_send_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 
 		LinesBuffer lbuf = { 0 };
 
-		if (!splitLines(&lbuf, message, false))
+		if (!splitLines(&lbuf, message))
 		{
 			/* errors have already been logged */
 			return false;
@@ -2017,7 +2017,7 @@ pgsql_execute_log_error(PGSQL *pgsql,
 
 	LinesBuffer lbuf = { 0 };
 
-	if (!splitLines(&lbuf, message, false))
+	if (!splitLines(&lbuf, message))
 	{
 		/* errors have already been logged */
 		return;
@@ -2223,7 +2223,7 @@ clear_results(PGSQL *pgsql)
 			LinesBuffer lbuf = { 0 };
 			char *pqmessage = PQerrorMessage(connection);
 
-			if (!splitLines(&lbuf, pqmessage, false))
+			if (!splitLines(&lbuf, pqmessage))
 			{
 				/* errors have already been logged */
 				return false;
@@ -2806,7 +2806,7 @@ pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context)
 	LinesBuffer lbuf = { 0 };
 	char *message = PQerrorMessage(pgsql->connection);
 
-	if (!splitLines(&lbuf, message, false))
+	if (!splitLines(&lbuf, message))
 	{
 		/* errors have already been logged */
 		return;
@@ -3215,7 +3215,7 @@ parseTimeLineHistory(const char *filename, const char *content,
 {
 	LinesBuffer lbuf = { 0 };
 
-	if (!splitLines(&lbuf, (char *) content, false))
+	if (!splitLines(&lbuf, (char *) content))
 	{
 		/* errors have already been logged */
 		return false;
@@ -4401,7 +4401,7 @@ pgsql_stream_log_error(PGSQL *pgsql, PGresult *res, const char *message)
 	{
 		LinesBuffer lbuf = { 0 };
 
-		if (!splitLines(&lbuf, pqmessage, false))
+		if (!splitLines(&lbuf, pqmessage))
 		{
 			/* errors have already been logged */
 			return;
