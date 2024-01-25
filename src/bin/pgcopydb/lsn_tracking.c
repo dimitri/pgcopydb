@@ -205,7 +205,6 @@ lsn_tracking_iter(DatabaseCatalog *catalog,
 	if (!lsn_tracking_iter_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -214,7 +213,6 @@ lsn_tracking_iter(DatabaseCatalog *catalog,
 		if (!lsn_tracking_iter_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -225,7 +223,6 @@ lsn_tracking_iter(DatabaseCatalog *catalog,
 			if (!lsn_tracking_iter_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -241,7 +238,6 @@ lsn_tracking_iter(DatabaseCatalog *catalog,
 		}
 	}
 
-	free(iter);
 
 	return true;
 }
@@ -299,7 +295,6 @@ lsn_tracking_iter_next(LSNTrackingIterator *iter)
 
 	if (rc == SQLITE_DONE)
 	{
-		free(iter->lsnTracking);
 		iter->lsnTracking = NULL;
 
 		return true;

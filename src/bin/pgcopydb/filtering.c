@@ -137,7 +137,6 @@ parse_filters(const char *filename, SourceFilters *filters)
 	}
 
 	ini_t *ini = ini_load(fileContents, NULL);
-	free(fileContents);
 
 	/*
 	 * The index in the sections array matches the SourceFilterSection enum

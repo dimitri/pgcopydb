@@ -624,11 +624,6 @@ bool parseMessage(StreamContext *privateContext, char *message, JSON_Value *json
 bool streamLogicalTransactionAppendStatement(LogicalTransaction *txn,
 											 LogicalTransactionStatement *stmt);
 
-void FreeLogicalMessage(LogicalMessage *msg);
-void FreeLogicalTransaction(LogicalTransaction *tx);
-void FreeLogicalMessageTupleArray(LogicalMessageTupleArray *tupleArray);
-void FreeLogicalMessageRelation(LogicalMessageRelation *table);
-void FreeLogicalMessageTuple(LogicalMessageTuple *tuple);
 bool AllocateLogicalMessageTuple(LogicalMessageTuple *tuple, int count);
 
 /* ld_test_decoding.c */

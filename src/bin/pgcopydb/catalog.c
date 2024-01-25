@@ -571,7 +571,6 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 		{
 			/* errors have already been logged */
 			json_free_serialized_string(json);
-			json_value_free(jsFilters);
 			return false;
 		}
 	}
@@ -688,7 +687,6 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 	}
 
 	json_free_serialized_string(json);
-	json_value_free(jsFilters);
 
 	return true;
 }
@@ -2504,7 +2502,6 @@ catalog_iter_s_table(DatabaseCatalog *catalog,
 	if (!catalog_iter_s_table_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -2513,7 +2510,6 @@ catalog_iter_s_table(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_table_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -2524,7 +2520,6 @@ catalog_iter_s_table(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_table_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -2540,7 +2535,6 @@ catalog_iter_s_table(DatabaseCatalog *catalog,
 		}
 	}
 
-	free(iter);
 
 	return true;
 }
@@ -2563,7 +2557,6 @@ catalog_iter_s_table_nopk(DatabaseCatalog *catalog,
 	if (!catalog_iter_s_table_nopk_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -2572,7 +2565,6 @@ catalog_iter_s_table_nopk(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_table_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -2583,7 +2575,6 @@ catalog_iter_s_table_nopk(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_table_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -2599,7 +2590,6 @@ catalog_iter_s_table_nopk(DatabaseCatalog *catalog,
 		}
 	}
 
-	free(iter);
 
 	return true;
 }
@@ -2756,7 +2746,6 @@ catalog_iter_s_table_next(SourceTableIterator *iter)
 
 	if (rc == SQLITE_DONE)
 	{
-		free(iter->table);
 		iter->table = NULL;
 
 		return true;
@@ -2888,12 +2877,6 @@ catalog_iter_s_table_finish(SourceTableIterator *iter)
 {
 	SQLiteQuery *query = &(iter->query);
 
-	/* in case we finish before reaching the DONE step */
-	if (iter->table != NULL)
-	{
-		free(iter->table);
-	}
-
 	if (!catalog_sql_finalize(query))
 	{
 		/* errors have already been logged */
@@ -2923,7 +2906,6 @@ catalog_iter_s_table_parts(DatabaseCatalog *catalog,
 	if (!catalog_iter_s_table_part_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -2932,7 +2914,6 @@ catalog_iter_s_table_parts(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_table_part_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -2943,7 +2924,6 @@ catalog_iter_s_table_parts(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_table_part_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -2959,7 +2939,6 @@ catalog_iter_s_table_parts(DatabaseCatalog *catalog,
 		}
 	}
 
-	free(iter);
 
 	return true;
 }
@@ -3031,7 +3010,6 @@ catalog_iter_s_table_part_next(SourceTablePartsIterator *iter)
 
 	if (rc == SQLITE_DONE)
 	{
-		free(iter->part);
 		iter->part = NULL;
 
 		return true;
@@ -3079,12 +3057,6 @@ catalog_iter_s_table_part_finish(SourceTablePartsIterator *iter)
 {
 	SQLiteQuery *query = &(iter->query);
 
-	/* in case we finish before reaching the DONE step */
-	if (iter->part != NULL)
-	{
-		free(iter->part);
-	}
-
 	if (!catalog_sql_finalize(query))
 	{
 		/* errors have already been logged */
@@ -3118,7 +3090,6 @@ catalog_s_table_fetch_attrs(DatabaseCatalog *catalog, SourceTable *table)
 	if (!catalog_iter_s_table_attrs_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -3127,7 +3098,6 @@ catalog_s_table_fetch_attrs(DatabaseCatalog *catalog, SourceTable *table)
 		if (!catalog_iter_s_table_attrs_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 	}
@@ -3135,11 +3105,9 @@ catalog_s_table_fetch_attrs(DatabaseCatalog *catalog, SourceTable *table)
 	if (!catalog_iter_s_table_attrs_finish(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
-	free(iter);
 
 	return true;
 }
@@ -3791,7 +3759,6 @@ catalog_iter_s_index(DatabaseCatalog *catalog,
 	if (!catalog_iter_s_index_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -3800,7 +3767,6 @@ catalog_iter_s_index(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_index_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -3811,7 +3777,6 @@ catalog_iter_s_index(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_index_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -3827,7 +3792,6 @@ catalog_iter_s_index(DatabaseCatalog *catalog,
 		}
 	}
 
-	free(iter);
 
 	return true;
 }
@@ -3859,7 +3823,6 @@ catalog_iter_s_index_table(DatabaseCatalog *catalog,
 	if (!catalog_iter_s_index_table_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -3868,7 +3831,6 @@ catalog_iter_s_index_table(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_index_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			(void) semaphore_unlock(&(catalog->sema));
 			return false;
 		}
@@ -3880,7 +3842,6 @@ catalog_iter_s_index_table(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_index_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				(void) semaphore_unlock(&(catalog->sema));
 				return false;
 			}
@@ -3893,13 +3854,11 @@ catalog_iter_s_index_table(DatabaseCatalog *catalog,
 		{
 			log_error("Failed to iterate over list of indexes, "
 					  "see above for details");
-			free(iter);
 			(void) semaphore_unlock(&(catalog->sema));
 			return false;
 		}
 	}
 
-	free(iter);
 	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
@@ -4029,11 +3988,6 @@ catalog_iter_s_index_next(SourceIndexIterator *iter)
 
 	if (rc == SQLITE_DONE)
 	{
-		free(iter->index->indexDef);
-		free(iter->index->indexColumns);
-		free(iter->index->constraintDef);
-		free(iter->index);
-
 		iter->index = NULL;
 
 		return true;
@@ -4062,11 +4016,6 @@ catalog_iter_s_index_finish(SourceIndexIterator *iter)
 	/* in case we finish before reaching the DONE step */
 	if (iter->index != NULL)
 	{
-		free(iter->index->indexDef);
-		free(iter->index->indexColumns);
-		free(iter->index->constraintDef);
-		free(iter->index);
-
 		iter->index = NULL;
 	}
 
@@ -4449,7 +4398,6 @@ catalog_iter_s_seq(DatabaseCatalog *catalog,
 	if (!catalog_iter_s_seq_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -4458,7 +4406,6 @@ catalog_iter_s_seq(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_seq_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -4469,7 +4416,6 @@ catalog_iter_s_seq(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_seq_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -4485,7 +4431,6 @@ catalog_iter_s_seq(DatabaseCatalog *catalog,
 		}
 	}
 
-	free(iter);
 
 	return true;
 }
@@ -4548,7 +4493,6 @@ catalog_iter_s_seq_next(SourceSeqIterator *iter)
 
 	if (rc == SQLITE_DONE)
 	{
-		free(iter->seq);
 		iter->seq = NULL;
 
 		return true;
@@ -4617,7 +4561,6 @@ catalog_iter_s_seq_finish(SourceSeqIterator *iter)
 	/* in case we finish before reaching the DONE step */
 	if (iter->seq != NULL)
 	{
-		free(iter->seq);
 		iter->seq = NULL;
 	}
 
@@ -5080,7 +5023,6 @@ catalog_iter_s_database(DatabaseCatalog *catalog,
 	if (!catalog_iter_s_database_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -5089,7 +5031,6 @@ catalog_iter_s_database(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_database_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -5100,7 +5041,6 @@ catalog_iter_s_database(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_database_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -5116,7 +5056,6 @@ catalog_iter_s_database(DatabaseCatalog *catalog,
 		}
 	}
 
-	free(iter);
 
 	return true;
 }
@@ -5178,7 +5117,6 @@ catalog_iter_s_database_next(SourceDatabaseIterator *iter)
 
 	if (rc == SQLITE_DONE)
 	{
-		free(iter->dat);
 		iter->dat = NULL;
 
 		return true;
@@ -5235,7 +5173,6 @@ catalog_iter_s_database_finish(SourceDatabaseIterator *iter)
 	/* in case we finish before reaching the DONE step */
 	if (iter->dat != NULL)
 	{
-		free(iter->dat);
 		iter->dat = NULL;
 	}
 
@@ -5268,7 +5205,6 @@ catalog_iter_s_database_guc(DatabaseCatalog *catalog,
 	if (!catalog_iter_s_database_guc_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -5277,7 +5213,6 @@ catalog_iter_s_database_guc(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_database_guc_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -5288,7 +5223,6 @@ catalog_iter_s_database_guc(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_database_guc_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -5300,12 +5234,10 @@ catalog_iter_s_database_guc(DatabaseCatalog *catalog,
 		{
 			log_error("Failed to iterate over list of dats, "
 					  "see above for details");
-			free(iter);
 			return false;
 		}
 	}
 
-	free(iter);
 
 	return true;
 }
@@ -5380,8 +5312,6 @@ catalog_iter_s_database_guc_next(SourcePropertyIterator *iter)
 
 	if (rc == SQLITE_DONE)
 	{
-		free(iter->property->setconfig);
-		free(iter->property);
 		iter->property = NULL;
 
 		return true;
@@ -5460,8 +5390,6 @@ catalog_iter_s_database_guc_finish(SourcePropertyIterator *iter)
 	/* in case we finish before reaching the DONE step */
 	if (iter->property != NULL)
 	{
-		free(iter->property->setconfig);
-		free(iter->property);
 		iter->property = NULL;
 	}
 
@@ -5547,7 +5475,6 @@ catalog_iter_s_coll(DatabaseCatalog *catalog,
 	if (!catalog_iter_s_coll_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -5556,7 +5483,6 @@ catalog_iter_s_coll(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_coll_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -5567,7 +5493,6 @@ catalog_iter_s_coll(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_coll_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -5583,7 +5508,6 @@ catalog_iter_s_coll(DatabaseCatalog *catalog,
 		}
 	}
 
-	free(iter);
 
 	return true;
 }
@@ -5645,8 +5569,6 @@ catalog_iter_s_coll_next(SourceCollationIterator *iter)
 
 	if (rc == SQLITE_DONE)
 	{
-		free(iter->coll->desc);
-		free(iter->coll);
 		iter->coll = NULL;
 
 		return true;
@@ -5720,8 +5642,6 @@ catalog_iter_s_coll_finish(SourceCollationIterator *iter)
 	/* in case we finish before reaching the DONE step */
 	if (iter->coll != NULL)
 	{
-		free(iter->coll->desc);
-		free(iter->coll);
 		iter->coll = NULL;
 	}
 
@@ -6002,7 +5922,6 @@ catalog_iter_s_extension(DatabaseCatalog *catalog,
 	if (!catalog_iter_s_extension_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -6011,7 +5930,6 @@ catalog_iter_s_extension(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_extension_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -6022,7 +5940,6 @@ catalog_iter_s_extension(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_extension_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -6038,7 +5955,6 @@ catalog_iter_s_extension(DatabaseCatalog *catalog,
 		}
 	}
 
-	free(iter);
 
 	return true;
 }
@@ -6100,7 +6016,6 @@ catalog_iter_s_extension_next(SourceExtensionIterator *iter)
 
 	if (rc == SQLITE_DONE)
 	{
-		free(iter->ext);
 		iter->ext = NULL;
 
 		return true;
@@ -6157,7 +6072,6 @@ catalog_iter_s_extension_finish(SourceExtensionIterator *iter)
 	/* in case we finish before reaching the DONE step */
 	if (iter->ext != NULL)
 	{
-		free(iter->ext);
 		iter->ext = NULL;
 	}
 
@@ -6193,7 +6107,6 @@ catalog_s_ext_fetch_extconfig(DatabaseCatalog *catalog, SourceExtension *ext)
 	if (!catalog_iter_s_ext_extconfig_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -6202,7 +6115,6 @@ catalog_s_ext_fetch_extconfig(DatabaseCatalog *catalog, SourceExtension *ext)
 		if (!catalog_iter_s_ext_extconfig_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 	}
@@ -6210,11 +6122,9 @@ catalog_s_ext_fetch_extconfig(DatabaseCatalog *catalog, SourceExtension *ext)
 	if (!catalog_iter_s_ext_extconfig_finish(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
-	free(iter);
 
 	return true;
 }
@@ -6593,7 +6503,6 @@ catalog_iter_s_depend(DatabaseCatalog *catalog,
 	if (!catalog_iter_s_depend_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -6602,7 +6511,6 @@ catalog_iter_s_depend(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_depend_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -6613,7 +6521,6 @@ catalog_iter_s_depend(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_depend_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -6629,7 +6536,6 @@ catalog_iter_s_depend(DatabaseCatalog *catalog,
 		}
 	}
 
-	free(iter);
 
 	return true;
 }
@@ -6692,7 +6598,6 @@ catalog_iter_s_depend_next(SourceDependIterator *iter)
 
 	if (rc == SQLITE_DONE)
 	{
-		free(iter->dep);
 		iter->dep = NULL;
 
 		return true;
@@ -6769,7 +6674,6 @@ catalog_iter_s_depend_finish(SourceDependIterator *iter)
 	/* in case we finish before reaching the DONE step */
 	if (iter->dep != NULL)
 	{
-		free(iter->dep);
 		iter->dep = NULL;
 	}
 
@@ -6927,7 +6831,6 @@ catalog_iter_s_table_in_copy(DatabaseCatalog *catalog,
 	if (!catalog_iter_s_table_in_copy_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -6936,7 +6839,6 @@ catalog_iter_s_table_in_copy(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_table_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -6947,7 +6849,6 @@ catalog_iter_s_table_in_copy(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_table_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -6963,7 +6864,6 @@ catalog_iter_s_table_in_copy(DatabaseCatalog *catalog,
 		}
 	}
 
-	free(iter);
 
 	return true;
 }
@@ -7046,7 +6946,6 @@ catalog_iter_s_index_in_progress(DatabaseCatalog *catalog,
 	if (!catalog_iter_s_index_in_progress_init(iter))
 	{
 		/* errors have already been logged */
-		free(iter);
 		return false;
 	}
 
@@ -7055,7 +6954,6 @@ catalog_iter_s_index_in_progress(DatabaseCatalog *catalog,
 		if (!catalog_iter_s_index_next(iter))
 		{
 			/* errors have already been logged */
-			free(iter);
 			return false;
 		}
 
@@ -7066,7 +6964,6 @@ catalog_iter_s_index_in_progress(DatabaseCatalog *catalog,
 			if (!catalog_iter_s_index_finish(iter))
 			{
 				/* errors have already been logged */
-				free(iter);
 				return false;
 			}
 
@@ -7082,7 +6979,6 @@ catalog_iter_s_index_in_progress(DatabaseCatalog *catalog,
 		}
 	}
 
-	free(iter);
 
 	return true;
 }

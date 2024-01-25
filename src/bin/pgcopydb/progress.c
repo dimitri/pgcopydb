@@ -119,7 +119,6 @@ copydb_prepare_schema_json_file(CopyDataSpec *copySpecs)
 	}
 
 	json_free_serialized_string(serialized_string);
-	json_value_free(js);
 
 	return true;
 }

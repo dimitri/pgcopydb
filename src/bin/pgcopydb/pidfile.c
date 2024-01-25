@@ -118,7 +118,7 @@ read_pidfile(const char *pidfile, pid_t *pid)
 
 	LinesBuffer lbuf = { 0 };
 
-	if (!splitLines(&lbuf, fileContents, true) || lbuf.count != 1)
+	if (!splitLines(&lbuf, fileContents) || lbuf.count != 1)
 	{
 		/* errors have already been logged */
 		return false;
@@ -127,8 +127,6 @@ read_pidfile(const char *pidfile, pid_t *pid)
 	stringToInt(lbuf.lines[0], &pidnum);
 
 	*pid = pidnum;
-
-	FreeLinesBuffer(&lbuf);
 
 	if (pid <= 0)
 	{
