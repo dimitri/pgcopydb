@@ -64,6 +64,7 @@ regexp_first_match(const char *string, const char *regex)
 		log_error("Failed to compile regex \"%s\": %s%s",
 				  regex, message, bytes < BUFSIZE ? "..." : "");
 
+		regfree(&compiledRegex);
 
 		return NULL;
 	}
@@ -73,6 +74,7 @@ regexp_first_match(const char *string, const char *regex)
 	 * returns a nonzero value.
 	 */
 	int matchStatus = regexec(&compiledRegex, string, RE_MATCH_COUNT, m, 0);
+	regfree(&compiledRegex);
 
 	/* We're interested into 1. re matches 2. captured at least one group */
 	if (matchStatus != 0 || m[0].rm_so == -1 || m[1].rm_so == -1)
@@ -84,7 +86,7 @@ regexp_first_match(const char *string, const char *regex)
 		regoff_t start = m[1].rm_so;
 		regoff_t finish = m[1].rm_eo;
 		int length = finish - start + 1;
-		char *result = (char *) malloc(length * sizeof(char));
+		char *result = (char *) calloc(length, sizeof(char));
 
 		if (result == NULL)
 		{
