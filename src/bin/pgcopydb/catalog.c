@@ -748,18 +748,18 @@ catalog_init(DatabaseCatalog *catalog)
 		return false;
 	}
 
-	/*
-	 * WAL journal_mode is significantly faster for writes and allows
-	 * concurrency of readers not blocking writers and vice versa.
-	 */
-	if (!catalog_set_wal_mode(catalog))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	if (createSchema)
 	{
+		/*
+		 * WAL journal_mode is significantly faster for writes and allows
+		 * concurrency of readers not blocking writers and vice versa.
+		 */
+		if (!catalog_set_wal_mode(catalog))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
 		return catalog_create_schema(catalog);
 	}
 
