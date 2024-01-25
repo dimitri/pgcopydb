@@ -29,4 +29,3 @@ from
     generate_series(1, 5) as t(x);
 
 commit;
-
