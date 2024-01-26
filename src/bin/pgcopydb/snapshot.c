@@ -57,12 +57,6 @@ copydb_export_snapshot(TransactionSnapshot *snapshot)
 		return false;
 	}
 
-	if (!pgsql_begin(pgsql))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	/*
 	 * As Postgres docs for SET TRANSACTION SNAPSHOT say:
 	 *
@@ -78,6 +72,30 @@ copydb_export_snapshot(TransactionSnapshot *snapshot)
 	IsolationLevel level = ISOLATION_SERIALIZABLE;
 	bool readOnly = false;
 	bool deferrable = true;
+
+	/*
+	 * If the source server is in recovery mode,
+	 * set the isolation level to REPEATABLE READ and read-only mode.
+	 */
+	bool pg_is_in_recovery = false;
+	if (!pgsql_is_in_recovery(pgsql, &pg_is_in_recovery))
+	{
+		/* errors have already been logged */
+		(void) pgsql_finish(pgsql);
+		return false;
+	}
+
+	if (pg_is_in_recovery)
+	{
+		level = ISOLATION_REPEATABLE_READ;
+		readOnly = true;
+	}
+
+	if (!pgsql_begin(pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	if (!pgsql_set_transaction(pgsql, level, readOnly, deferrable))
 	{
