@@ -80,6 +80,7 @@ LIBS += $(shell $(PG_CONFIG) --libs)
 LIBS += -lpq
 LIBS += -lncurses
 LIBS += -lsqlite3
+LIBS += -lgc
 
 all: $(PGCOPYDB) ;
 

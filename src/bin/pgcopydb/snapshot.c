@@ -526,7 +526,7 @@ snapshot_read_slot(const char *filename, ReplicationSlot *slot)
 	/* make sure to use only the first line of the file, without \n */
 	LinesBuffer lbuf = { 0 };
 
-	if (!splitLines(&lbuf, contents, true))
+	if (!splitLines(&lbuf, contents))
 	{
 		/* errors have already been logged */
 		return false;
@@ -535,7 +535,6 @@ snapshot_read_slot(const char *filename, ReplicationSlot *slot)
 	if (lbuf.count != 5)
 	{
 		log_error("Failed to parse replication slot file \"%s\"", filename);
-		free(contents);
 		return false;
 	}
 
@@ -550,7 +549,6 @@ snapshot_read_slot(const char *filename, ReplicationSlot *slot)
 				  filename,
 				  (long long) strlen(lbuf.lines[0]),
 				  (long long) sizeof(slot->slotName));
-		free(contents);
 		return false;
 	}
 
@@ -560,7 +558,6 @@ snapshot_read_slot(const char *filename, ReplicationSlot *slot)
 		log_error("Failed to parse LSN \"%s\" from file \"%s\"",
 				  lbuf.lines[1],
 				  filename);
-		free(contents);
 		return false;
 	}
 
@@ -575,7 +572,6 @@ snapshot_read_slot(const char *filename, ReplicationSlot *slot)
 				  filename,
 				  (long long) strlen(lbuf.lines[2]),
 				  (long long) sizeof(slot->snapshot));
-		free(contents);
 		return false;
 	}
 
@@ -587,7 +583,6 @@ snapshot_read_slot(const char *filename, ReplicationSlot *slot)
 		log_error("Failed to read plugin \"%s\" from file \"%s\"",
 				  lbuf.lines[3],
 				  filename);
-		free(contents);
 		return false;
 	}
 
@@ -603,7 +598,6 @@ snapshot_read_slot(const char *filename, ReplicationSlot *slot)
 				  filename);
 	}
 
-	free(contents);
 
 	log_notice("Read replication slot file \"%s\" with snapshot \"%s\", "
 			   "slot \"%s\", lsn %X/%X, and plugin \"%s\"",

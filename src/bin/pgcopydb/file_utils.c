@@ -356,14 +356,12 @@ read_file_internal(FILE *fileStream,
 	{
 		log_error("Failed to read file \"%s\": %m", filePath);
 		fclose(fileStream);
-		free(data);
 		return false;
 	}
 
 	if (fclose(fileStream) == EOF)
 	{
 		log_error("Failed to read file \"%s\"", filePath);
-		free(data);
 		return false;
 	}
 
@@ -530,12 +528,10 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 			if (bytes == -1)
 			{
 				log_error("Failed to read from input stream: %m");
-				free(buf);
 				return false;
 			}
 			else if (bytes == 0)
 			{
-				free(buf);
 				doneReading = true;
 				continue;
 			}
@@ -547,7 +543,7 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 			bool partialRead = buf[bytes - 1] != '\n';
 			LinesBuffer lbuf = { 0 };
 
-			if (!splitLines(&lbuf, buf, true))
+			if (!splitLines(&lbuf, buf))
 			{
 				/* errors have already been logged */
 				return false;
@@ -669,7 +665,6 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 
 					if (!(*context->callback)(context->ctx, line, &stop))
 					{
-						FreeLinesBuffer(&lbuf);
 						destroyPQExpBuffer(multiPartBuffer);
 						return false;
 					}
@@ -689,8 +684,6 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 					}
 				}
 			}
-
-			FreeLinesBuffer(&lbuf);
 		}
 
 		/* doneReading might have been set from the user callback already */
@@ -793,7 +786,6 @@ duplicate_file(char *sourcePath, char *destinationPath)
 
 	bool foundError = !write_file(fileContents, fileSize, destinationPath);
 
-	free(fileContents);
 
 	if (foundError)
 	{

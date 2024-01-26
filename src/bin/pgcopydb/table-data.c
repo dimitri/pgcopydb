@@ -27,7 +27,6 @@
 
 
 static bool copydb_copy_supervisor_add_table_hook(void *ctx, SourceTable *table);
-static void FreeCopyArgs(CopyArgs *args);
 
 /*
  * copydb_table_data fetches the list of tables from the source database and
@@ -855,7 +854,6 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 				  "see above for details",
 				  oid);
 
-		free(table);
 		return false;
 	}
 
@@ -871,7 +869,6 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 	if (!copydb_init_table_specs(tableSpecs, specs, table, part))
 	{
 		/* errors have already been logged */
-		FreeCopyTableDataSpec(tableSpecs);
 		return false;
 	}
 
@@ -904,7 +901,6 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 	if (!copydb_table_create_lockfile(specs, tableSpecs, &isDone))
 	{
 		/* errors have already been logged */
-		FreeCopyTableDataSpec(tableSpecs);
 		return false;
 	}
 
@@ -913,7 +909,6 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 		log_info("Skipping table %s (%u), already done on a previous run",
 				 tableSpecs->sourceTable->qname,
 				 tableSpecs->sourceTable->oid);
-		FreeCopyTableDataSpec(tableSpecs);
 		return true;
 	}
 
@@ -925,7 +920,6 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 		if (!copydb_copy_table(specs, src, dst, tableSpecs))
 		{
 			/* errors have already been logged */
-			FreeCopyTableDataSpec(tableSpecs);
 			return false;
 		}
 	}
@@ -933,7 +927,6 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 	if (!copydb_mark_table_as_done(specs, tableSpecs))
 	{
 		/* errors have already been logged */
-		FreeCopyTableDataSpec(tableSpecs);
 		return false;
 	}
 
@@ -967,7 +960,6 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 											 &indexesAreBeingProcessed))
 		{
 			/* errors have already been logged */
-			FreeCopyTableDataSpec(tableSpecs);
 			return false;
 		}
 		else if (allPartsDone && !indexesAreBeingProcessed)
@@ -987,7 +979,6 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 			{
 				log_error("Failed to count indexes attached to table %s",
 						  tableSpecs->sourceTable->qname);
-				FreeCopyTableDataSpec(tableSpecs);
 				return false;
 			}
 
@@ -1002,7 +993,6 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 						log_error("Failed to queue VACUUM ANALYZE %s [%u]",
 								  sourceTable->qname,
 								  sourceTable->oid);
-						FreeCopyTableDataSpec(tableSpecs);
 						return false;
 					}
 				}
@@ -1012,13 +1002,10 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 				log_error("Failed to add the indexes for %s, "
 						  "see above for details",
 						  tableSpecs->sourceTable->qname);
-				FreeCopyTableDataSpec(tableSpecs);
 				return false;
 			}
 		}
 	}
-
-	FreeCopyTableDataSpec(tableSpecs);
 
 	return true;
 }
@@ -1493,29 +1480,4 @@ copydb_prepare_summary_command(CopyTableDataSpec *tableSpecs)
 	}
 
 	return true;
-}
-
-
-/*
- * FreeCopyTableDataSpec takes care of free'ing the allocated memory for the
- * CopyTableDataSpec.
- */
-void
-FreeCopyTableDataSpec(CopyTableDataSpec *tableSpecs)
-{
-	free(tableSpecs->sourceTable);
-	free(tableSpecs->summary.command);
-	FreeCopyArgs(&(tableSpecs->copyArgs));
-}
-
-
-/*
- * FreeCopyArgs takes care of free'ing the allocated memory for the CopyArgs.
- */
-static void
-FreeCopyArgs(CopyArgs *args)
-{
-	free(args->srcAttrList);
-	free(args->srcWhereClause);
-	free(args->dstAttrList);
 }

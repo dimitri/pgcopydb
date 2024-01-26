@@ -7,6 +7,7 @@ Uploaders:
 Build-Depends:
  debhelper-compat (= 13),
  libedit-dev,
+ libgc-dev,
  libkrb5-dev,
  liblz4-dev,
  libncurses-dev,

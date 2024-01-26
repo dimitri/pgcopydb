@@ -15,6 +15,7 @@
 typedef struct CopyTableSummaryArray
 {
 	int count;
+	int capacity;
 	CopyTableSummary *array;         /* malloc'ed area */
 } CopyTableSummaryArray;
 
@@ -22,6 +23,7 @@ typedef struct CopyTableSummaryArray
 typedef struct CopyIndexSummaryArray
 {
 	int count;
+	int capacity;
 	CopyIndexSummary *array;         /* malloc'ed area */
 } CopyIndexSummaryArray;
 

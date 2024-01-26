@@ -456,8 +456,6 @@ stream_transform_write_message(StreamContext *privateContext,
 		return false;
 	}
 
-	(void) FreeLogicalMessage(currentMsg);
-
 	if (metadata->action == STREAM_ACTION_COMMIT ||
 		metadata->action == STREAM_ACTION_ROLLBACK)
 	{
@@ -515,7 +513,6 @@ stream_transform_message(StreamContext *privateContext, char *message)
 	if (!parseMessageMetadata(metadata, message, json, false))
 	{
 		/* errors have already been logged */
-		json_value_free(json);
 		return false;
 	}
 
@@ -524,11 +521,9 @@ stream_transform_message(StreamContext *privateContext, char *message)
 		log_error("Failed to parse JSON message: %.1024s%s",
 				  message,
 				  strlen(message) > 1024 ? "..." : "");
-		json_value_free(json);
 		return false;
 	}
 
-	json_value_free(json);
 
 	return true;
 }
@@ -907,7 +902,7 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 		return false;
 	}
 
-	if (!splitLines(&(content.lbuf), contents, true))
+	if (!splitLines(&(content.lbuf), contents))
 	{
 		/* errors have already been logged */
 		return false;
@@ -941,7 +936,6 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 	if (privateContext->sqlFile == NULL)
 	{
 		log_error("Failed to open file \"%s\"", tempfilename);
-		FreeLinesBuffer(&(content.lbuf));
 		return false;
 	}
 
@@ -970,8 +964,6 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 		if (!parseMessageMetadata(metadata, message, json, false))
 		{
 			/* errors have already been logged */
-			json_value_free(json);
-			FreeLinesBuffer(&(content.lbuf));
 			return false;
 		}
 
@@ -1003,12 +995,9 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 		if (!parseMessage(privateContext, message, json))
 		{
 			log_error("Failed to parse JSON message: %s", message);
-			json_value_free(json);
-			FreeLinesBuffer(&(content.lbuf));
 			return false;
 		}
 
-		json_value_free(json);
 
 		/*
 		 * Prepare a new message when we just read the COMMIT message of an
@@ -1020,7 +1009,6 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 		{
 			log_error("Failed to transform and flush the current message, "
 					  "see above for details");
-			FreeLinesBuffer(&(content.lbuf));
 			return false;
 		}
 
@@ -1033,8 +1021,6 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 			firstMessage = false;
 		}
 	}
-
-	FreeLinesBuffer(&(content.lbuf));
 
 	if (fclose(privateContext->sqlFile) == EOF)
 	{
@@ -1244,7 +1230,6 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 				/* copy the stmt over, then free the extra allocated memory */
 				mesg->action = metadata->action;
 				mesg->command.switchwal = stmt->stmt.switchwal;
-				free(stmt);
 			}
 
 			break;
@@ -1268,7 +1253,6 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 				/* copy the stmt over, then free the extra allocated memory */
 				mesg->action = metadata->action;
 				mesg->command.keepalive = stmt->stmt.keepalive;
-				free(stmt);
 			}
 
 			break;
@@ -1287,7 +1271,6 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 				/* copy the stmt over, then free the extra allocated memory */
 				mesg->action = metadata->action;
 				mesg->command.endpos = stmt->stmt.endpos;
-				free(stmt);
 			}
 
 			break;
@@ -1420,10 +1403,6 @@ coalesceLogicalTransactionStatement(LogicalTransaction *txn,
 	 */
 	lastValuesArray->array[lastValuesArray->count++] = newValuesArray->array[0];
 	newValuesArray->count = 0;
-
-	/* Deallocate the tuple and the new statement */
-	FreeLogicalMessageTupleArray(&(new->stmt.insert.new));
-	free(new);
 
 	return true;
 }
@@ -1562,151 +1541,6 @@ streamLogicalTransactionAppendStatement(LogicalTransaction *txn,
 	++txn->count;
 
 	return true;
-}
-
-
-/*
- * FreeLogicalMessage frees the malloc'ated memory areas of a LogicalMessage.
- */
-void
-FreeLogicalMessage(LogicalMessage *msg)
-{
-	if (msg->isTransaction)
-	{
-		FreeLogicalTransaction(&(msg->command.tx));
-	}
-}
-
-
-/*
- * FreeLogicalTransaction frees the malloc'ated memory areas of a
- * LogicalTransaction.
- */
-void
-FreeLogicalTransaction(LogicalTransaction *tx)
-{
-	LogicalTransactionStatement *currentStmt = tx->first;
-
-	for (; currentStmt != NULL;)
-	{
-		switch (currentStmt->action)
-		{
-			case STREAM_ACTION_INSERT:
-			{
-				FreeLogicalMessageRelation(&(currentStmt->stmt.insert.table));
-				FreeLogicalMessageTupleArray(&(currentStmt->stmt.insert.new));
-				break;
-			}
-
-			case STREAM_ACTION_UPDATE:
-			{
-				FreeLogicalMessageRelation(&(currentStmt->stmt.update.table));
-				FreeLogicalMessageTupleArray(&(currentStmt->stmt.update.old));
-				FreeLogicalMessageTupleArray(&(currentStmt->stmt.update.new));
-				break;
-			}
-
-			case STREAM_ACTION_DELETE:
-			{
-				FreeLogicalMessageRelation(&(currentStmt->stmt.delete.table));
-				FreeLogicalMessageTupleArray(&(currentStmt->stmt.delete.old));
-				break;
-			}
-
-			case STREAM_ACTION_TRUNCATE:
-			{
-				FreeLogicalMessageRelation(&(currentStmt->stmt.truncate.table));
-				break;
-			}
-
-			/* no malloc'ated area in a BEGIN, COMMIT, or TRUNCATE statement */
-			default:
-			{
-				break;
-			}
-		}
-
-		LogicalTransactionStatement *stmt = currentStmt;
-		currentStmt = currentStmt->next;
-
-		free(stmt);
-	}
-
-	tx->first = NULL;
-}
-
-
-/*
- * FreeLogicalMessageRelation frees the malloc'ated memory areas of
- * LogicalMessageRelation.
- */
-void
-FreeLogicalMessageRelation(LogicalMessageRelation *table)
-{
-	if (table->pqMemory)
-	{
-		/* use PQfreemem for memory allocated by PQescapeIdentifer */
-		PQfreemem(table->nspname);
-		PQfreemem(table->relname);
-	}
-	else
-	{
-		free(table->nspname);
-		free(table->relname);
-	}
-}
-
-
-/*
- * FreeLogicalMessageTupleArray frees the malloc'ated memory areas of a
- * LogicalMessageTupleArray.
- */
-void
-FreeLogicalMessageTupleArray(LogicalMessageTupleArray *tupleArray)
-{
-	for (int s = 0; s < tupleArray->count; s++)
-	{
-		LogicalMessageTuple *tuple = &(tupleArray->array[s]);
-
-		(void) FreeLogicalMessageTuple(tuple);
-	}
-
-	free(tupleArray->array);
-}
-
-
-/*
- * FreeLogicalMessageTuple frees the malloc'ated memory areas of a
- * LogicalMessageTuple.
- */
-void
-FreeLogicalMessageTuple(LogicalMessageTuple *tuple)
-{
-	for (int i = 0; i < tuple->cols; i++)
-	{
-		free(tuple->columns[i]);
-	}
-	free(tuple->columns);
-
-	for (int r = 0; r < tuple->values.count; r++)
-	{
-		LogicalMessageValues *values = &(tuple->values.array[r]);
-
-		for (int v = 0; v < values->cols; v++)
-		{
-			LogicalMessageValue *value = &(values->array[v]);
-
-			if ((value->oid == TEXTOID || value->oid == BYTEAOID) &&
-				!value->isNull)
-			{
-				free(value->val.str);
-			}
-		}
-
-		free(values->array);
-	}
-
-	free(tuple->values.array);
 }
 
 
@@ -2267,7 +2101,6 @@ stream_write_insert(FILE *out, LogicalMessageInsert *insert)
 		FFORMAT(out, "EXECUTE %x%s;\n", hash, serialized_string);
 
 		json_free_serialized_string(serialized_string);
-		json_value_free(js);
 	}
 
 	return true;
@@ -2457,7 +2290,6 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 		FFORMAT(out, "EXECUTE %x%s;\n", hash, serialized_string);
 
 		json_free_serialized_string(serialized_string);
-		json_value_free(js);
 	}
 
 	return true;
@@ -2543,7 +2375,6 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 		FFORMAT(out, "EXECUTE %x%s;\n", hash, serialized_string);
 
 		json_free_serialized_string(serialized_string);
-		json_value_free(js);
 	}
 
 	return true;

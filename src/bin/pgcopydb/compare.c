@@ -359,7 +359,6 @@ compare_data_by_table_oid(CopyDataSpec *copySpecs, uint32_t oid)
 		log_error("Failed to lookup for table %u in our internal catalogs",
 				  oid);
 
-		free(table);
 		return false;
 	}
 
@@ -368,7 +367,6 @@ compare_data_by_table_oid(CopyDataSpec *copySpecs, uint32_t oid)
 		log_error("Failed to find table with oid %u in our internal catalogs",
 				  oid);
 
-		free(table);
 		return false;
 	}
 
@@ -558,7 +556,6 @@ compare_schemas(CopyDataSpec *copySpecs)
 	/*
 	 * Now prepare two specifications with only the source uri.
 	 *
-	 * We don't free() any memory here as the two CopyDataSpecs copies are
 	 * going to share pointers to memory allocated in the main copySpecs
 	 * instance.
 	 */
@@ -659,7 +656,6 @@ compare_schemas_table_hook(void *ctx, SourceTable *sourceTable)
 				  sourceTable->nspname,
 				  sourceTable->relname);
 
-		free(targetTable);
 		return false;
 	}
 
@@ -710,7 +706,6 @@ compare_schemas_table_hook(void *ctx, SourceTable *sourceTable)
 		}
 	}
 
-	free(targetTable);
 
 	log_notice("Matched table %s with %d columns ok",
 			   sourceTable->qname,
@@ -746,7 +741,6 @@ compare_schemas_index_hook(void *ctx, SourceIndex *sourceIndex)
 				  sourceIndex->indexNamespace,
 				  sourceIndex->indexRelname);
 
-		free(targetIndex);
 		return false;
 	}
 
@@ -839,7 +833,6 @@ compare_schemas_index_hook(void *ctx, SourceIndex *sourceIndex)
 				 targetIndex->constraintDef);
 	}
 
-	free(targetIndex);
 
 	log_notice("Matched index %s ok (%s, %s)",
 			   sourceIndex->indexQname,
@@ -877,7 +870,6 @@ compare_schemas_seq_hook(void *ctx, SourceSequence *sourceSeq)
 				  sourceSeq->nspname,
 				  sourceSeq->relname);
 
-		free(targetSeq);
 		return false;
 	}
 
@@ -910,7 +902,6 @@ compare_schemas_seq_hook(void *ctx, SourceSequence *sourceSeq)
 			   sourceSeq->qname,
 			   (long long) sourceSeq->lastValue);
 
-	free(targetSeq);
 
 	return true;
 }
@@ -1075,7 +1066,6 @@ compare_write_checksum(SourceTable *table, const char *filename)
 	bool success = write_file(serialized_string, len, filename);
 
 	json_free_serialized_string(serialized_string);
-	json_value_free(js);
 
 	if (!success)
 	{
@@ -1109,7 +1099,6 @@ compare_read_checksum(SourceTable *table, const char *filename)
 				  table->oid,
 				  table->qname,
 				  filename);
-		json_value_free(json);
 		return false;
 	}
 
