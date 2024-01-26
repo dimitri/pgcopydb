@@ -181,9 +181,12 @@ typedef struct SourceTable
 
 
 /* still used in progress.[ch] */
+#define ARRAY_CAPACITY_INCREMENT 2
+
 typedef struct SourceTableArray
 {
 	int count;
+	int capacity;
 	SourceTable *array;         /* malloc'ed area */
 } SourceTableArray;
 
@@ -245,6 +248,7 @@ typedef struct SourceIndex
 typedef struct SourceIndexArray
 {
 	int count;
+	int capacity;
 	SourceIndex *array;         /* malloc'ed area */
 } SourceIndexArray;
 

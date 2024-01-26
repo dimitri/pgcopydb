@@ -2776,25 +2776,40 @@ catalog_s_table_fetch(SQLiteQuery *query)
 
 	table->oid = sqlite3_column_int64(query->ppStmt, 0);
 
-	strlcpy(table->qname,
-			(char *) sqlite3_column_text(query->ppStmt, 1),
-			sizeof(table->qname));
+	if (sqlite3_column_type(query->ppStmt, 1) != SQLITE_NULL)
+	{
+		strlcpy(table->qname,
+				(char *) sqlite3_column_text(query->ppStmt, 1),
+				sizeof(table->qname));
+	}
 
-	strlcpy(table->nspname,
-			(char *) sqlite3_column_text(query->ppStmt, 2),
-			sizeof(table->nspname));
+	if (sqlite3_column_type(query->ppStmt, 2) != SQLITE_NULL)
+	{
+		strlcpy(table->nspname,
+				(char *) sqlite3_column_text(query->ppStmt, 2),
+				sizeof(table->nspname));
+	}
 
-	strlcpy(table->relname,
-			(char *) sqlite3_column_text(query->ppStmt, 3),
-			sizeof(table->relname));
+	if (sqlite3_column_type(query->ppStmt, 3) != SQLITE_NULL)
+	{
+		strlcpy(table->relname,
+				(char *) sqlite3_column_text(query->ppStmt, 3),
+				sizeof(table->relname));
+	}
 
-	strlcpy(table->amname,
-			(char *) sqlite3_column_text(query->ppStmt, 4),
-			sizeof(table->amname));
+	if (sqlite3_column_type(query->ppStmt, 4) != SQLITE_NULL)
+	{
+		strlcpy(table->amname,
+				(char *) sqlite3_column_text(query->ppStmt, 4),
+				sizeof(table->amname));
+	}
 
-	strlcpy(table->restoreListName,
-			(char *) sqlite3_column_text(query->ppStmt, 5),
-			sizeof(table->restoreListName));
+	if (sqlite3_column_type(query->ppStmt, 5) != SQLITE_NULL)
+	{
+		strlcpy(table->restoreListName,
+				(char *) sqlite3_column_text(query->ppStmt, 5),
+				sizeof(table->restoreListName));
+	}
 
 	table->relpages = sqlite3_column_int64(query->ppStmt, 6);
 	table->reltuples = sqlite3_column_int64(query->ppStmt, 7);

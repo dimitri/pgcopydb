@@ -542,15 +542,6 @@ copydb_update_progress(CopyDataSpec *copySpecs, CopyProgress *progress)
 {
 	DatabaseCatalog *sourceDB = &(copySpecs->catalogs.source);
 
-	/* avoid calloc of size zero */
-	if (copySpecs->tableJobs == 0 || copySpecs->indexJobs == 0)
-	{
-		log_error("BUG: --table-jobs %d --index-jobs %d",
-				  copySpecs->tableJobs,
-				  copySpecs->indexJobs);
-		return false;
-	}
-
 	CatalogCounts count = { 0 };
 
 	if (!catalog_count_objects(sourceDB, &count))
@@ -577,10 +568,12 @@ copydb_update_progress(CopyDataSpec *copySpecs, CopyProgress *progress)
 	/* count table in progress, table done */
 	progress->tableDoneCount = done.table;
 	progress->tableInProgress.count = 0;
+	progress->tableInProgress.capacity = ARRAY_CAPACITY_INCREMENT;
 
 	/* we can't have more table in progress than tableJobs */
 	progress->tableInProgress.array =
-		(SourceTable *) calloc(copySpecs->tableJobs, sizeof(SourceTable));
+		(SourceTable *) calloc(progress->tableInProgress.capacity,
+							   sizeof(SourceTable));
 
 	if (progress->tableInProgress.array == NULL)
 	{
@@ -589,8 +582,9 @@ copydb_update_progress(CopyDataSpec *copySpecs, CopyProgress *progress)
 	}
 
 	progress->tableSummaryArray.count = 0;
+	progress->tableSummaryArray.capacity = ARRAY_CAPACITY_INCREMENT;
 	progress->tableSummaryArray.array =
-		(CopyTableSummary *) calloc(copySpecs->tableJobs,
+		(CopyTableSummary *) calloc(progress->tableSummaryArray.capacity,
 									sizeof(CopyTableSummary));
 
 	if (progress->tableSummaryArray.array == NULL)
@@ -615,10 +609,12 @@ copydb_update_progress(CopyDataSpec *copySpecs, CopyProgress *progress)
 	/* count index in progress, index done */
 	progress->indexDoneCount = done.index;
 	progress->indexInProgress.count = 0;
+	progress->indexInProgress.capacity = ARRAY_CAPACITY_INCREMENT;
 
 	/* we can't have more index in progress than indexJobs */
 	progress->indexInProgress.array =
-		(SourceIndex *) calloc(copySpecs->indexJobs, sizeof(SourceIndex));
+		(SourceIndex *) calloc(progress->indexInProgress.capacity,
+							   sizeof(SourceIndex));
 
 	if (progress->indexInProgress.array == NULL)
 	{
@@ -627,8 +623,9 @@ copydb_update_progress(CopyDataSpec *copySpecs, CopyProgress *progress)
 	}
 
 	progress->indexSummaryArray.count = 0;
+	progress->indexSummaryArray.capacity = 0;
 	progress->indexSummaryArray.array =
-		(CopyIndexSummary *) calloc(copySpecs->indexJobs,
+		(CopyIndexSummary *) calloc(progress->indexSummaryArray.capacity,
 									sizeof(CopyIndexSummary));
 
 	if (progress->indexSummaryArray.array == NULL)
@@ -684,6 +681,34 @@ copydb_update_progress_table_hook(void *ctx, SourceTable *table)
 	/*
 	 * Copy the SourceTable struct in-place to the tableInProgress array.
 	 */
+	if (tableInProgress->count == tableInProgress->capacity)
+	{
+		tableInProgress->capacity += ARRAY_CAPACITY_INCREMENT;
+
+		tableInProgress->array =
+			(SourceTable *) realloc(tableInProgress->array,
+									tableInProgress->capacity *
+									sizeof(SourceTable));
+
+		if (tableInProgress->array == NULL)
+		{
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		summaryArray->capacity += ARRAY_CAPACITY_INCREMENT;
+		summaryArray->array =
+			(CopyTableSummary *) realloc(summaryArray->array,
+										 summaryArray->capacity *
+										 sizeof(CopyTableSummary));
+
+		if (summaryArray->array == NULL)
+		{
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+	}
+
 	tableInProgress->array[progress->tableInProgress.count++] = *table;
 	summaryArray->array[progress->tableSummaryArray.count++] = tableSpecs.summary;
 
@@ -745,6 +770,34 @@ copydb_update_progress_index_hook(void *ctx, SourceIndex *index)
 		 * Copy the SourceIndex struct in-place to the indexInProgress
 		 * array.
 		 */
+		if (indexInProgress->count == indexInProgress->capacity)
+		{
+			indexInProgress->capacity += ARRAY_CAPACITY_INCREMENT;
+
+			indexInProgress->array =
+				(SourceIndex *) realloc(indexInProgress->array,
+										indexInProgress->capacity *
+										sizeof(SourceIndex));
+
+			if (indexInProgress->array == NULL)
+			{
+				log_fatal(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			summaryArrayIdx->capacity += ARRAY_CAPACITY_INCREMENT;
+			summaryArrayIdx->array =
+				(CopyIndexSummary *) realloc(summaryArrayIdx->array,
+											 summaryArrayIdx->capacity *
+											 sizeof(CopyIndexSummary));
+
+			if (summaryArrayIdx->array == NULL)
+			{
+				log_fatal(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+		}
+
 		indexInProgress->array[progress->indexInProgress.count++] =
 			*index;
 
@@ -768,9 +821,6 @@ copydb_progress_as_json(CopyDataSpec *copySpecs,
 	DatabaseCatalog *sourceDB = &(copySpecs->catalogs.source);
 
 	JSON_Object *jsobj = json_value_get_object(js);
-
-	json_object_set_number(jsobj, "table-jobs", copySpecs->tableJobs);
-	json_object_set_number(jsobj, "index-jobs", copySpecs->indexJobs);
 
 	/* table counts */
 	JSON_Value *jsTable = json_value_init_object();
