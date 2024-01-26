@@ -1,6 +1,16 @@
 version: "3.9"
-services:
-  source:
+
+x-postgres-base-env: &x-postgres-base-env
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: h4ckm3
+  POSTGRES_DB: pagila
+  POSTGRES_HOST_AUTH_METHOD: "trust"
+
+x-postgres-base-env-allow-replication: &x-postgres-base-env-allow-replication
+  <<: *x-postgres-base-env
+  POSTGRES_HOST_AUTH_METHOD: "trust\nhost replication all 0.0.0.0/0 trust"
+
+x-postgres-base: &x-postgres-base
     image: postgres:13-bullseye
     user: postgres
     expose:
@@ -10,11 +20,12 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+services:
+  source:
+    <<: *x-postgres-base
     environment:
-        POSTGRES_USER: postgres
-        POSTGRES_PASSWORD: h4ckm3
-        POSTGRES_DB: pagila
-        POSTGRES_HOST_AUTH_METHOD: "trust\nhost replication all 0.0.0.0/0 trust"
+        <<: *x-postgres-base-env-allow-replication
     command: |
       postgres
       -c ssl=on
@@ -27,20 +38,11 @@ services:
       -c hot_standby_feedback=on
     volumes:
       - ./00_init_replication_slot.sql:/docker-entrypoint-initdb.d/00_init_replication_slot.sql
+
   source-standby:
-    image: postgres:13-bullseye
-    user: postgres
-    expose:
-      - 5432
-    healthcheck:
-      test: 'pg_isready -U postgres --dbname=pagila'
-      interval: 10s
-      timeout: 5s
-      retries: 5
+    <<: *x-postgres-base
     environment:
-        POSTGRES_USER: postgres
-        POSTGRES_PASSWORD: h4ckm3
-        POSTGRES_DB: pagila
+        <<: *x-postgres-base-env
     command: |
      bash -c "
       until pg_basebackup --pgdata=/var/lib/postgresql/data -R --slot=replication_slot -d postgres://postgres:h4ckm3@source/pagila
@@ -54,24 +56,16 @@ services:
      "
     depends_on:
       - source
+
   target:
-    image: postgres:13-bullseye
-    expose:
-      - 5432
-    healthcheck:
-      test: 'pg_isready -U postgres --dbname=pagila'
-      interval: 10s
-      timeout: 5s
-      retries: 5
+    <<: *x-postgres-base
     environment:
-        POSTGRES_USER: postgres
-        POSTGRES_PASSWORD: h4ckm3
-        POSTGRES_HOST_AUTH_METHOD: "trust\nhost replication all 0.0.0.0/0 trust"
-        POSTGRES_DB: pagila
+      <<: *x-postgres-base-env
     command: >
       -c ssl=on
       -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
       -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
+
   test:
     build:
       context: .
