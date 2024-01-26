@@ -426,11 +426,11 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 		return false;
 	}
 
-	if (pg_is_in_recovery)
+	if (pg_is_in_recovery && specs->filters.type != SOURCE_FILTER_TYPE_NONE)
 	{
 		log_fatal("Connected to a standby server where pg_is_in_recovery(): "
 				  "pgcopydb does not support operating on standby server "
-				  "at this point, as it needs to create temp tables");
+				  "when --filters are used, as it needs to create temp tables");
 		return false;
 	}
 
