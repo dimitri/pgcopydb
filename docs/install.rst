@@ -83,3 +83,8 @@ use ``make clean install``, if you want to be more fancy consider also::
 
   $ make -s clean
   $ make -s -j12 install
+
+Once you made it this far, it is a good idea to check our `Contribution
+Guide`__.
+
+__ https://github.com/dimitri/pgcopydb/blob/main/CONTRIBUTING.md
