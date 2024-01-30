@@ -6911,9 +6911,7 @@ catalog_iter_s_table_in_copy_init(SourceTableIterator *iter)
 		"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
 		"         relpages, reltuples, t.bytes, t.bytes_pretty, "
 		"         exclude_data, part_key, "
-		"         part.partcount, s.partnum, part.min, part.max, "
-		"         c.srcrowcount, c.srcsum, c.dstrowcount, c.dstsum, "
-		"         sum(s.duration), sum(s.bytes) "
+		"         part.partcount, s.partnum, part.min, part.max "
 
 		"    from process p "
 		"         join s_table t on p.tableoid = t.oid "

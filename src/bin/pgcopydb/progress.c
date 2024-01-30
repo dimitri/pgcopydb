@@ -36,6 +36,15 @@ static bool copydb_table_array_as_json(DatabaseCatalog *sourceDB,
 									   JSON_Object *jsobj,
 									   const char *key);
 
+static bool copydb_table_in_progress_as_json(DatabaseCatalog *sourceDB,
+											 SourceTableArray *tableInProgress,
+											 JSON_Object *jsobj,
+											 const char *key);
+
+static bool copydb_index_in_progress_as_json(SourceIndexArray *indexInProgress,
+											 JSON_Object *jsobj,
+											 const char *key);
+
 static bool copydb_index_array_as_json(DatabaseCatalog *sourceDB,
 									   JSON_Object *jsobj,
 									   const char *key);
@@ -243,6 +252,43 @@ copydb_table_array_as_json(DatabaseCatalog *sourceDB,
 
 
 /*
+ * copydb_table_in_progress_as_json prepares the given SourceTableArray as a
+ * JSON array of objects within the given JSON_Object.
+ */
+static bool
+copydb_table_in_progress_as_json(DatabaseCatalog *sourceDB,
+								 SourceTableArray *tableInProgress,
+								 JSON_Object *jsobj,
+								 const char *key)
+{
+	JSON_Value *jsTables = json_value_init_array();
+	JSON_Array *jsTableArray = json_value_get_array(jsTables);
+
+	TableContext context = {
+		.sourceDB = sourceDB,
+		.jsTableArray = jsTableArray
+	};
+
+	for (int i = 0; i < tableInProgress->count; i++)
+	{
+		SourceTable *table = &(tableInProgress->array[i]);
+
+		if (!copydb_table_array_as_json_hook(&context, table))
+		{
+			log_error("Failed to populate the JSON array of tables in progress, "
+					  "see above for details");
+			return false;
+		}
+	}
+
+	/* attach the JSON array to the main JSON object under the provided key */
+	json_object_set_value(jsobj, key, jsTables);
+
+	return true;
+}
+
+
+/*
  * copydb_table_array_as_json_hook is an iterator callback function.
  */
 static bool
@@ -391,6 +437,37 @@ copydb_index_array_as_json(DatabaseCatalog *sourceDB,
 		log_error("Failed to prepare a JSON array for our catalog of indexes, "
 				  "see above for details");
 		return false;
+	}
+
+	/* attach the JSON array to the main JSON object under the provided key */
+	json_object_set_value(jsobj, key, jsIndexes);
+
+	return true;
+}
+
+
+/*
+ * copydb_index_in_progress_as_json prepares the given SourceIndexArray as a
+ * JSON array of objects within the given JSON_Object.
+ */
+static bool
+copydb_index_in_progress_as_json(SourceIndexArray *indexInProgress,
+								 JSON_Object *jsobj,
+								 const char *key)
+{
+	JSON_Value *jsIndexes = json_value_init_array();
+	JSON_Array *jsIndexArray = json_value_get_array(jsIndexes);
+
+	for (int i = 0; i < indexInProgress->count; i++)
+	{
+		SourceIndex *index = &(indexInProgress->array[i]);
+
+		if (!copydb_index_array_as_json_hook(jsIndexArray, index))
+		{
+			log_error("Failed to populate the JSON array of indexs in progress, "
+					  "see above for details");
+			return false;
+		}
 	}
 
 	/* attach the JSON array to the main JSON object under the provided key */
@@ -832,7 +909,10 @@ copydb_progress_as_json(CopyDataSpec *copySpecs,
 	/* in-progress */
 	SourceTableArray *tableArray = &(progress->tableInProgress);
 
-	if (!copydb_table_array_as_json(sourceDB, jsTableObj, "in-progress"))
+	if (!copydb_table_in_progress_as_json(sourceDB,
+										  tableArray,
+										  jsTableObj,
+										  "in-progress"))
 	{
 		/* errors have already been logged */
 		return false;
@@ -868,7 +948,7 @@ copydb_progress_as_json(CopyDataSpec *copySpecs,
 	/* in-progress */
 	SourceIndexArray *indexArray = &(progress->indexInProgress);
 
-	if (!copydb_index_array_as_json(sourceDB, jsIndexObj, "in-progress"))
+	if (!copydb_index_in_progress_as_json(indexArray, jsIndexObj, "in-progress"))
 	{
 		/* errors have already been logged */
 		return false;
