@@ -729,15 +729,6 @@ copydb_update_progress(CopyDataSpec *copySpecs, CopyProgress *progress)
 static bool
 copydb_update_progress_table_hook(void *ctx, SourceTable *table)
 {
-	/*
-	 * The SQLite query in catalog_iter_s_table_in_copy_init() returns an extra
-	 * row where all the columns are NULL. Skip it.
-	 */
-	if (table->oid == 0)
-	{
-		return true;
-	}
-
 	TableProgressContext *context = (TableProgressContext *) ctx;
 
 	CopyDataSpec *copySpecs = context->copySpecs;
