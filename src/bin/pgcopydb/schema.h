@@ -408,11 +408,6 @@ bool schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
 
 bool schema_drop_pgcopydb_table_size(PGSQL *pgsql);
 
-bool schema_list_table(PGSQL *pgsql,
-					   const char *schemaName,
-					   const char *tableName,
-					   DatabaseCatalog *catalog);
-
 bool schema_list_ordinary_tables(PGSQL *pgsql,
 								 SourceFilters *filters,
 								 DatabaseCatalog *catalog);
