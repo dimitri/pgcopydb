@@ -25,7 +25,6 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
     libpq5 \
     libreadline-dev \
     libselinux1-dev \
-    libsqlite3-dev \
     libssl-dev \
     libxslt1-dev \
     lsof \
@@ -68,12 +67,12 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
     ca-certificates \
     libgc1 \
     libpq5 \
-    libsqlite3-0 \
     lsof \
     tmux \
     watch \
     psmisc \
     openssl \
+    sqlite3 \
     postgresql-common \
     postgresql-client \
     postgresql-client-common \

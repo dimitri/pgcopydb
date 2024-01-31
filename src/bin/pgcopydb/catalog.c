@@ -10,7 +10,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include <sqlite3.h>
+#include "sqlite3.h"
 
 #include "catalog.h"
 #include "copydb.h"
