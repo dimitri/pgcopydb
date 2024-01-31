@@ -8,7 +8,7 @@
 
 #include <stdbool.h>
 
-#include <sqlite3.h>
+#include "sqlite3.h"
 
 #include "parson.h"
 #include "uthash.h"

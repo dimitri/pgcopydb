@@ -12,6 +12,9 @@ GIT-VERSION-FILE:
 bin: GIT-VERSION-FILE
 	$(MAKE) -C src/bin/ all
 
+sqlite3:
+	$(MAKE) -C src/bin/lib/sqlite $@
+
 clean:
 	rm -f GIT-VERSION-FILE
 	$(MAKE) -C src/bin/ clean
