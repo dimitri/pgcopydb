@@ -1077,8 +1077,8 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 		}
 	}
 
-	/* COPY FROM tablename, or maybe COPY FROM (SELECT ... WHERE ...) */
-	if (!catalog_s_table_fetch_attrs(sourceDB, tableSpecs->sourceTable))
+	/* build the table attributes' list */
+	if (!catalog_s_table_attrlist(sourceDB, tableSpecs->sourceTable))
 	{
 		log_error("Failed to fetch table %s attribute list, "
 				  "see above for details",
@@ -1086,13 +1086,14 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 		return false;
 	}
 
+	/* COPY FROM tablename, or maybe COPY FROM (SELECT ... WHERE ...) */
 	CopyArgs *args = &(tableSpecs->copyArgs);
 
 	args->srcQname = tableSpecs->sourceTable->qname;
-	args->srcAttrList = NULL;
+	args->srcAttrList = tableSpecs->sourceTable->attrList;
 	args->srcWhereClause = NULL;
 	args->dstQname = tableSpecs->sourceTable->qname;
-	args->dstAttrList = NULL;
+	args->dstAttrList = tableSpecs->sourceTable->attrList;
 	args->truncate = tableSpecs->sourceTable->partition.partCount <= 1;
 	args->freeze = tableSpecs->sourceTable->partition.partCount <= 1;
 	args->bytesTransmitted = 0;
@@ -1322,17 +1323,6 @@ copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 bool
 copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs, CopyArgs *args)
 {
-	PQExpBuffer srcAttrList = createPQExpBuffer();
-
-	if (!copydb_prepare_copy_query_attrlist(tableSpecs, srcAttrList))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	args->srcAttrList = strdup(srcAttrList->data);
-	destroyPQExpBuffer(srcAttrList);
-
 	/*
 	 * On a source COPY query we might want to add filtering.
 	 */
@@ -1381,69 +1371,6 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs, CopyArgs *args)
 
 		args->srcWhereClause = strdup(srcWhereClause->data);
 		destroyPQExpBuffer(srcWhereClause);
-	}
-
-	/*
-	 * Prepare COPY args for destination query (COPY ... FROM)
-	 */
-	PQExpBuffer dstAttrList = createPQExpBuffer();
-
-	if (!copydb_prepare_copy_query_attrlist(tableSpecs, dstAttrList))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	args->dstAttrList = strdup(dstAttrList->data);
-	destroyPQExpBuffer(dstAttrList);
-
-	return true;
-}
-
-
-/*
- * copydb_prepare_copy_query_attrlist prepares the attribute list from a given
- * table specification.
- */
-bool
-copydb_prepare_copy_query_attrlist(CopyTableDataSpec *tableSpecs,
-								   PQExpBuffer attrList)
-{
-	SourceTable *table = tableSpecs->sourceTable;
-
-	bool isFirst = true;
-
-	for (int i = 0; i < table->attributes.count; i++)
-	{
-		SourceTableAttribute *attribute = &(table->attributes.array[i]);
-		char *attname = attribute->attname;
-
-		/* Generated columns cannot be used in COPY */
-		if (attribute->attisgenerated)
-		{
-			log_debug("Skipping %s.%s in COPY as it is a generated column",
-					  tableSpecs->sourceTable->qname,
-					  attname);
-			continue;
-		}
-
-		if (isFirst)
-		{
-			isFirst = false;
-		}
-		else
-		{
-			appendPQExpBufferStr(attrList, ", ");
-		}
-
-		appendPQExpBuffer(attrList, "%s", attname);
-	}
-
-	if (PQExpBufferBroken(attrList))
-	{
-		log_error("Failed to create attribute list for %s: out of memory",
-				  tableSpecs->sourceTable->qname);
-		return false;
 	}
 
 	return true;
