@@ -1,0 +1,3 @@
+# Trick editorconfig to think that there are no rules for formatting in this
+# directory so that the libraries are not formatted.
+root = true
