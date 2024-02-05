@@ -73,10 +73,38 @@ Building from source requires a list of build-dependencies that's comparable
 to that of Postgres itself. The pgcopydb source code is written in C and the
 build process uses a GNU Makefile.
 
-See our main `Dockerfile`__ for a complete recipe to build pgcopydb when
-using a debian environment.
+See our main `Dockerfile`__ for a complete recipe to build pgcopydb as a
+debian package when using a debian environment.
 
 __ https://github.com/dimitri/pgcopydb/blob/main/Dockerfile
+
+In particular the following build dependencies are required to build
+pgcopydb. The list is long, because pgcopydb requires a lot of the same
+things as Postgres itself:
+
+::
+   
+  $ apt-get install -y --no-install-recommends \
+      build-essential \
+      autotools-dev \
+      libedit-dev \
+      libgc-dev \
+      libpam0g-dev \
+      libreadline-dev \
+      libselinux1-dev \
+      libxslt1-dev \
+      libssl-dev \
+      libkrb5-dev \
+      zlib1g-dev \
+      liblz4-dev \
+      libpq5 \
+      libpq-dev \
+      libzstd-dev \
+      postgresql-server-dev-all \
+      postgresql-common \
+      postgresql \
+      python3-sphinx
+
 
 Then the build process is pretty simple, in its simplest form you can just
 use ``make clean install``, if you want to be more fancy consider also::
