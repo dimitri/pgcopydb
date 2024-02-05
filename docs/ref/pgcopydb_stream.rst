@@ -212,6 +212,8 @@ or the SQL output, or both. In that case reading from standard input and/or
 writing to standard output is implemented, in a streaming fashion. A classic
 use case is to use Unix Pipes, see :ref:`pgcopydb_stream_replay` too.
 
+.. _pgcopydb_stream_apply:
+
 pgcopydb stream apply
 ---------------------
 
