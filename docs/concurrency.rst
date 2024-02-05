@@ -1,46 +1,10 @@
-Design Considerations
-=====================
+Concurrency
+===========
 
 The reason why ``pgcopydb`` has been developed is mostly to allow two
 aspects that are not possible to achieve directly with ``pg_dump`` and
 ``pg_restore``, and that requires just enough fiddling around that not many
 scripts have been made available to automate around.
-
-.. _bypass_intermediate_files:
-
-Bypass intermediate files for the TABLE DATA
---------------------------------------------
-
-First aspect is that for ``pg_dump`` and ``pg_restore`` to implement
-concurrency they need to write to an intermediate file first.
-
-The `docs for pg_dump`__ say the following about the ``--jobs`` parameter:
-
-__ https://www.postgresql.org/docs/current/app-pgdump.html
-
-  You can only use this option with the directory output format because this
-  is the only output format where multiple processes can write their data at
-  the same time.
-
-The `docs for pg_restore`__ say the following about the ``--jobs``
-parameter:
-
-__ https://www.postgresql.org/docs/current/app-pgrestore.html
-
-  Only the custom and directory archive formats are supported with this
-  option. The input must be a regular file or directory (not, for example, a
-  pipe or standard input).
-
-So the first idea with ``pgcopydb`` is to provide the ``--jobs`` concurrency and
-bypass intermediate files (and directories) altogether, at least as far as
-the actual TABLE DATA set is concerned.
-
-The trick to achieve that is that ``pgcopydb`` must be able to connect to the
-source database during the whole operation, when ``pg_restore`` may be used
-from an export on-disk, without having to still be able to connect to the
-source database. In the context of ``pgcopydb`` requiring access to the source
-database is fine. In the context of ``pg_restore``, it would not be
-acceptable.
 
 .. _pgcopydb_concurrency:
 
@@ -51,63 +15,41 @@ The pgcopydb too implements many operations concurrently to one another, by
 ways of using the ``fork()`` system call. This means that pgcopydb creates
 sub-processes that each handle a part of the work.
 
-The process tree then looks like the following:
+The process tree then looks like the following::
 
- * pgcopydb clone --follow --table-jobs 4 --index-jobs 4 --large-objects-jobs 4
+  $ pgcopydb clone --follow --table-jobs 4 --index-jobs 4 --large-objects-jobs 4
+   + pgcopydb clone worker
+      + pgcopydb copy supervisor [ --table-jobs 4 ]
+        - pgcopydb copy queue worker
+        - pgcopydb copy worker
+        - pgcopydb copy worker
+        - pgcopydb copy worker
+        - pgcopydb copy worker
+ 
+      + pgcopydb blob metadata worker [ --large-objects-jobs 4 ]
+        - pgcopydb blob data worker
+        - pgcopydb blob data worker
+        - pgcopydb blob data worker
+        - pgcopydb blob data worker
 
-   * pgcopydb clone worker
+      + pgcopydb index supervisor [ --index-jobs 4 ]
+        - pgcopydb index/constraints worker
+        - pgcopydb index/constraints worker
+        - pgcopydb index/constraints worker
+        - pgcopydb index/constraints worker
 
-     * pgcopydb copy supervisor (``--table-jobs 4``)
+      + pgcopydb vacuum supervisor [ --table-jobs 4 ]
+        - pgcopydb vacuum analyze worker
+        - pgcopydb vacuum analyze worker
+        - pgcopydb vacuum analyze worker
+        - pgcopydb vacuum analyze worker
 
-       * pgcopydb copy queue worker
+      + pgcopydb sequences reset worker
 
-       #. pgcopydb copy worker
-
-       #. pgcopydb copy worker
-
-       #. pgcopydb copy worker
-
-       #. pgcopydb copy worker
-
-     * pgcopydb blob metadata worker (``--large-objects-jobs 4``)
-
-       #. pgcopydb blob data worker
-
-       #. pgcopydb blob data worker
-
-       #. pgcopydb blob data worker
-
-       #. pgcopydb blob data worker
-
-     * pgcopydb index supervisor (``--large-objects-jobs 4``)
-
-	   #. pgcopydb index/constraints worker
-
-	   #. pgcopydb index/constraints worker
-
-	   #. pgcopydb index/constraints worker
-
-	   #. pgcopydb index/constraints worker
-
-     * pgcopydb vacuum supervisor (``--table-jobs 4``)
-
-	   #. pgcopydb vacuum analyze worker (``--table-jobs 4``)
-
-	   #. pgcopydb vacuum analyze worker (``--table-jobs 4``)
-
-	   #. pgcopydb vacuum analyze worker (``--table-jobs 4``)
-
-	   #. pgcopydb vacuum analyze worker (``--table-jobs 4``)
-
-     * pgcopydb sequences reset worker
-
-   * pgcopydb follow worker
-
-     * pgcopydb stream receive
-
-     * pgcopydb stream transform
-
-     * pgcopydb stream catchup
+   + pgcopydb follow worker [ --follow ]
+     - pgcopydb stream receive
+     - pgcopydb stream transform
+     - pgcopydb stream catchup
 
 We see that when using ``pgcopydb clone --follow --table-jobs 4 --index-jobs
 4 --large-objects-jobs 4`` then pgcopydb creates 27 sub-processes.
@@ -194,6 +136,8 @@ behavior:
 
 __ https://postgresqlco.nf/doc/en/param/synchronize_seqscans/
 
+.. admonition:: From the PostgreSQL documentation
+
   This allows sequential scans of large tables to synchronize with each
   other, so that concurrent scans read the same block at about the same time
   and hence share the I/O workload.
@@ -211,6 +155,8 @@ of locking that prevents any concurrency. As we can read on the `docs for
 ALTER TABLE`__:
 
 __ https://www.postgresql.org/docs/current/sql-altertable.html
+
+.. admonition:: From the PostgreSQL documentation
 
   Although most forms of ADD table_constraint require an ACCESS EXCLUSIVE
   lock, ADD FOREIGN KEY requires only a SHARE ROW EXCLUSIVE lock. Note that
@@ -405,75 +351,3 @@ to use this feature:
 
     Use your usual Postgres configuration editing for testing.
 
-Internal Catalogs (SQLite)
---------------------------
-
-To be able to implement pgcopydb operations, a list of SQL objects such as
-tables, indexes, constraints and sequences is needed internally. While
-pgcopydb used to handle such a list as an array in-memory, with also a
-hash-table for direct lookup (by oid and by *restore list name*), in some
-cases the source database contain so many objects that these arrays do not
-fit in memory.
-
-As pgcopydb is written in C, the current best approach to handle an array of
-objects that needs to spill to disk and supports direct lookup is actually
-the SQLite library, file format, and embedded database engine.
-
-That's why the current version of pgcopydb uses SQLite to handle its
-catalogs.
-
-Source, Filters, Target
-^^^^^^^^^^^^^^^^^^^^^^^
-
-Internally pgcopydb stores metadata information in three different catalogs,
-all found in the ``${TMPDIR}/pgcopydb/schema/`` directory by default, unless
-using the recommended ``--dir`` option.
-
-  - The **source** catalog registers metadata about the source database, and
-    also some metadata about the pgcopydb context, consistentcy, and
-    progress.
-
-  - The **filters** catalog is only used with the ``--filters`` option is
-    used, and it registers metadata about the objects in the source database
-    that are going to be skipped.
-
-    This is necessary because the filtering is implemented using the
-    ``pg_restore --list`` and ``pg_restore --use-list`` options. The
-    Postgres archive Table Of Contents format contains an object OID and its
-    *restore list name*, and pgcopydb needs to be able to lookup for that
-    OID or name in its filtering catalogs.
-
-  - The **target** catalog registers metadata about the target database,
-    such as the list of roles, the list of schemas, or the list of already
-    existing constraints found o nthe target database.
-
-Consistency
-^^^^^^^^^^^
-
-The source catalog table ``setup`` registers information about the current
-pgcopydb command. The information is checked at start-up in order to avoid
-re-using data in a different context.
-
-The information registered is the following, and also contains the
-*snapshot* information. In case of a mismatch, consider using ``--resume
---not-consistent`` when that's relevant to your operations.
-
-Here's how to inspect the current ``setup`` information that pgcopydb:
-
-::
-
-   $ sqlite3 /tmp/pgcopydb/schema/source.db
-   sqlite> .mode line
-   sqlite> select * from setup;
-                         id = 1
-              source_pg_uri = postgres:///pagila
-              target_pg_uri = postgres:///plop
-                   snapshot = 00000003-00000048-1
-   split_tables_larger_than = 0
-                    filters = {"type":"SOURCE_FILTER_TYPE_NONE"}
-                     plugin =
-                  slot_name =
-
-The source and target connection strings only contain the Postgres servers
-hostname, port, database name and connecting role name. In particular,
-authentication credentials are not stored in the catalogs.
