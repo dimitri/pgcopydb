@@ -3083,6 +3083,95 @@ catalog_iter_s_table_part_finish(SourceTablePartsIterator *iter)
 
 
 /*
+ * catalog_s_table_attrlist fetches the attributes of a table as a single
+ * C-string, using ', ' as a separator.
+ */
+bool
+catalog_s_table_attrlist(DatabaseCatalog *catalog, SourceTable *table)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_s_table_attrlist: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"select group_concat(attname, ', ' order by attnum) "
+		"       filter (where not attisgenerated) "
+		"  from s_attr "
+		" where oid = $1";
+
+	SQLiteQuery query = {
+		.context = table,
+		.fetchFunction = &catalog_s_table_fetch_attrlist
+	};
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[1] = {
+		{ BIND_PARAMETER_TYPE_INT64, "oid", table->oid, NULL }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which return exactly one row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_s_table_fetch_attrlist fetches a SourceTable attrlist from a SQLite
+ * query result.
+ */
+bool
+catalog_s_table_fetch_attrlist(SQLiteQuery *query)
+{
+	SourceTable *table = (SourceTable *) query->context;
+
+	table->attrList = NULL;
+
+	if (sqlite3_column_type(query->ppStmt, 0) != SQLITE_NULL)
+	{
+		int len = sqlite3_column_bytes(query->ppStmt, 0);
+		int bytes = len + 1;
+
+		table->attrList = (char *) calloc(bytes, sizeof(char));
+
+		if (table->attrList == NULL)
+		{
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		strlcpy(table->attrList,
+				(char *) sqlite3_column_text(query->ppStmt, 0),
+				bytes);
+	}
+
+	return true;
+}
+
+
+/*
  * catalog_s_table_fetch_attrs fetches the table SourceTableAttribute array
  * from our s_attr catalog.
  */
