@@ -457,9 +457,6 @@ bool copydb_table_parts_are_all_done(CopyDataSpec *specs,
 
 bool copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs, CopyArgs *args);
 
-bool copydb_prepare_copy_query_attrlist(CopyTableDataSpec *tableSpecs,
-										PQExpBuffer attrList);
-
 bool copydb_prepare_summary_command(CopyTableDataSpec *tableSpecs);
 
 
