@@ -106,7 +106,7 @@ migrating a Citus database to its new hosting environment. For that, the
 ``schema-changes.sql`` script from the previous section needs to be the
 Citus script that calls into the `Citus DDL`__ functions.
 
-__ https://docs.citusdata.com/en/v6.0/dist_tables/ddl.html
+__ https://docs.citusdata.com/en/latest/develop/reference_ddl.html
 
 Here is an SQL query that exports the commands to use to reproduce a Citus
 distribution scheme:
