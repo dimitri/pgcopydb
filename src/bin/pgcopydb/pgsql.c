@@ -4038,14 +4038,22 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 
 			client->last_status = client->now;
 
-			/* the endpos target might have been updated in the past */
-			if (context->endpos != InvalidXLogRecPtr &&
-				context->endpos <= cur_record_lsn)
+			if (client->endpos != InvalidXLogRecPtr &&
+				client->endpos <= cur_record_lsn)
 			{
-				log_warn("New endpos %X/%X is in the past, current "
-						 "record LSN is %X/%X",
-						 LSN_FORMAT_ARGS(context->endpos),
-						 LSN_FORMAT_ARGS(cur_record_lsn));
+				log_debug("pgsql_stream_logical: reached endpos at %X/%X ",
+						  LSN_FORMAT_ARGS(cur_record_lsn));
+
+				context->cur_record_lsn = cur_record_lsn;
+
+				if (!flushAndSendFeedback(client, context))
+				{
+					goto error;
+				}
+
+				prepareToTerminate(client, false, InvalidXLogRecPtr);
+				time_to_abort = true;
+				break;
 			}
 		}
 
@@ -4184,7 +4192,8 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 			}
 			replyRequested = copybuf[pos];
 
-			if (client->endpos != InvalidXLogRecPtr && cur_record_lsn >= client->endpos)
+			if (client->endpos != InvalidXLogRecPtr &&
+				client->endpos < cur_record_lsn)
 			{
 				/*
 				 * If there's nothing to read on the socket until a keepalive
