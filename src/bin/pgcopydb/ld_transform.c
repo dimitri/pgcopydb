@@ -623,37 +623,6 @@ stream_transform_rotate(StreamContext *privateContext)
 bool
 stream_transform_worker(StreamSpecs *specs)
 {
-	/*
-	 * The timeline and wal segment size are determined when connecting to the
-	 * source database, and stored to local files at that time. When the Stream
-	 * Transform Worker process is created, that information is read from our
-	 * local files.
-	 */
-	if (!stream_read_context(&(specs->paths), &(specs->system), &(specs->WalSegSz)))
-	{
-		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
-		{
-			log_debug("Stream Transform Worker startup was interrupted");
-			return true;
-		}
-
-		log_error("Failed to read the streaming context information "
-				  "from the source database, see above for details");
-		return false;
-	}
-
-	return stream_transform_from_queue(specs);
-}
-
-
-/*
- * stream_transform_from_queue loops over messages from a System V queue, each
- * message contains the WAL.json and the WAL.sql file names. When receiving
- * such a message, the WAL.json file is transformed into the WAL.sql file.
- */
-bool
-stream_transform_from_queue(StreamSpecs *specs)
-{
 	DatabaseCatalog *sourceDB = specs->sourceDB;
 
 	if (!stream_init_context(specs))
@@ -774,6 +743,30 @@ stream_transform_file_at_lsn(StreamSpecs *specs, uint64_t lsn)
 {
 	char walFileName[MAXPGPATH] = { 0 };
 	char sqlFileName[MAXPGPATH] = { 0 };
+
+	/*
+	 * The timeline and wal segment size are determined when connecting to the
+	 * source database, and stored to local files at that time. When the Stream
+	 * Transform Worker process is created, that information is read from our
+	 * local files.
+	 */
+	if (specs->system.timeline == 0 || specs->WalSegSz == 0)
+	{
+		if (!stream_read_context(&(specs->paths),
+								 &(specs->system),
+								 &(specs->WalSegSz)))
+		{
+			if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+			{
+				log_debug("Stream Transform Worker startup was interrupted");
+				return true;
+			}
+
+			log_error("Failed to read the streaming context information "
+					  "from the source database, see above for details");
+			return false;
+		}
+	}
 
 	if (!stream_compute_pathnames(specs->WalSegSz,
 								  specs->system.timeline,

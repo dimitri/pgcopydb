@@ -452,6 +452,35 @@ startLogicalStreaming(StreamSpecs *specs)
 	StreamContext *privateContext = &(specs->private);
 	context.private = (void *) privateContext;
 
+	/*
+	 * We could be resuming operations after having already reached the endpos,
+	 * in that case just skip streaming entirely. We would still need to create
+	 * the context files with the timeline and wal_segment_size, that's why
+	 * this check is so late here.
+	 */
+	if (specs->endpos <= specs->startpos)
+	{
+		log_info("Skipping streaming: endpos %X/%X had already been reached",
+				 LSN_FORMAT_ARGS(specs->endpos));
+
+		/*
+		 * When skipping streaming entirely, and in file-based mode where the
+		 * transform process reads from a queue, make sure the transform
+		 * process reaches the end of the queue.
+		 */
+		if (privateContext->mode == STREAM_MODE_PREFETCH ||
+			privateContext->mode == STREAM_MODE_CATCHUP)
+		{
+			if (!stream_transform_send_stop(privateContext->transformQueue))
+			{
+				log_error("Failed to send STOP to the transform queue");
+				return false;
+			}
+		}
+
+		return true;
+	}
+
 	log_notice("Connecting to logical decoding replication stream");
 
 	/*
@@ -633,10 +662,13 @@ streamCheckResumePosition(StreamSpecs *specs)
 		{
 			specs->startpos = sentinel.startpos;
 
-			log_info("Resuming streaming at LSN %X/%X "
-					 "from replication slot \"%s\"",
-					 LSN_FORMAT_ARGS(specs->startpos),
-					 specs->slot.slotName);
+			if (specs->startpos < specs->endpos)
+			{
+				log_info("Resuming streaming at LSN %X/%X "
+						 "from replication slot \"%s\"",
+						 LSN_FORMAT_ARGS(specs->startpos),
+						 specs->slot.slotName);
+			}
 		}
 	}
 	else
@@ -649,10 +681,13 @@ streamCheckResumePosition(StreamSpecs *specs)
 
 		specs->startpos = latest->lsn;
 
-		log_info("Resuming streaming at LSN %X/%X "
-				 "from JSON file \"%s\" ",
-				 LSN_FORMAT_ARGS(specs->startpos),
-				 latestStreamedContent.filename);
+		if (specs->startpos < specs->endpos)
+		{
+			log_info("Resuming streaming at LSN %X/%X "
+					 "from JSON file \"%s\" ",
+					 LSN_FORMAT_ARGS(specs->startpos),
+					 latestStreamedContent.filename);
+		}
 
 		char *latestMessage = latestStreamedContent.lbuf.lines[lastLineNb];
 		log_notice("Resume replication from latest message: %s", latestMessage);
