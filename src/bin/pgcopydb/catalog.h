@@ -248,7 +248,10 @@ bool catalog_iter_s_table_part_init(SourceTablePartsIterator *iter);
 bool catalog_iter_s_table_part_next(SourceTablePartsIterator *iter);
 bool catalog_iter_s_table_part_finish(SourceTablePartsIterator *iter);
 
+bool catalog_s_table_attrlist(DatabaseCatalog *catalog, SourceTable *table);
 bool catalog_s_table_part_fetch(SQLiteQuery *query);
+
+bool catalog_s_table_fetch_attrlist(SQLiteQuery *query);
 
 typedef struct SourceTableAttrsIterator
 {

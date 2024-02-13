@@ -8,7 +8,7 @@
 
 #include <stdbool.h>
 
-#include <sqlite3.h>
+#include "sqlite3.h"
 
 #include "parson.h"
 #include "uthash.h"
@@ -169,6 +169,7 @@ typedef struct SourceTable
 	char partKey[PG_NAMEDATALEN];
 	SourceTableParts partition;
 
+	char *attrList;             /* malloc'ed area */
 	SourceTableAttributeArray attributes;
 
 	uint64_t indexCount;

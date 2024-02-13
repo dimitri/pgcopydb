@@ -15,14 +15,7 @@ create schema if not exists "Sp1eCial .Char";
 
 create table "Sp1eCial .Char"."source1testing"(
     "s0" serial primary key,
-    "s1" int not null
-);
-
-create schema if not exists "sp4ecial$char";
-
-create table "sp4ecial$char"."source4testing"(
-    "s0" serial primary key,
-    "s1" int not null
+    "s""1" int not null
 );
 
 commit;

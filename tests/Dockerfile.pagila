@@ -7,24 +7,24 @@ ARG PGVERSION
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
-	gnupg \
+    gnupg \
     openssl \
-	sudo \
+    sudo \
     tmux \
     watch \
     lsof \
-	psmisc \
+    psmisc \
     htop \
-	strace \
-	gdb \
-	sqlite3 \
-	libgc1 \
+    strace \
+    gdb \
+    sqlite3 \
+    libgc1 \
     libpq5 \
     postgresql-client-common \
     curl \
-	git \
+    git \
     jq \
-	&& rm -rf /var/lib/apt/lists/*
+  && rm -rf /var/lib/apt/lists/*
 
 RUN curl https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
 RUN echo "deb http://apt.postgresql.org/pub/repos/apt bullseye-pgdg main ${PGVERSION}" > /etc/apt/sources.list.d/pgdg.list
@@ -32,9 +32,9 @@ RUN echo "deb http://apt.postgresql.org/pub/repos/apt bullseye-pgdg main ${PGVER
 # bypass initdb of a "main" cluster
 RUN echo 'create_main_cluster = false' | sudo tee -a /etc/postgresql-common/createcluster.conf
 RUN apt-get update \
-	&& DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-     postgresql-${PGVERSION} \
-	&& rm -rf /var/lib/apt/lists/*
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    postgresql-${PGVERSION} \
+  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src/
 RUN git clone --depth 1 https://github.com/devrimgunduz/pagila.git
