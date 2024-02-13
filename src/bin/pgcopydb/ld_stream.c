@@ -2770,3 +2770,24 @@ stream_read_context(CDCPaths *paths,
 
 	return true;
 }
+
+
+/*
+ * formatQnameWithoutQuotes formats a qualified name from schema and table.
+ * It removes the quotes that are present in schema and table names before
+ * formatting the qualified name.
+ */
+void
+formatQnameWithoutQuotes(char *qname, const char *schema, const char *table)
+{
+	char schemaName[PG_NAMEDATALEN] = { 0 };
+	char tableName[PG_NAMEDATALEN] = { 0 };
+
+	(void) strlcpy(schemaName, schema, sizeof(schemaName));
+	(void) strlcpy(tableName, table, sizeof(tableName));
+
+	trimQuotes(schemaName);
+	trimQuotes(tableName);
+
+	(void) sformat(qname, PG_NAMEDATALEN_FQ, "%s.%s", schemaName, tableName);
+}

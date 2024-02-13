@@ -275,6 +275,20 @@ typedef enum
 	STREAM_MODE_REPLAY          /* pgcopydb replay */
 } LogicalStreamMode;
 
+/*
+ * Keep track of tables with generated columns to avoid unnecessary lookups
+ * in the catalog.
+ */
+typedef struct GeneratedColCatalog
+{
+	char qname[PG_NAMEDATALEN_FQ]; /* key: "schema.table" */
+
+	char **colnames;             /* malloc'ed area */
+	int colcount;
+
+	UT_hash_handle hh;          /* makes this structure hashable */
+} GeneratedColCatalog;
+
 
 /*
  * StreamContext allows tracking the progress of the ld_stream module and is
@@ -309,6 +323,9 @@ typedef struct StreamContext
 
 	/* transform needs some catalog lookups (pkey, type oid) */
 	DatabaseCatalog *sourceDB;
+
+	/* hash table to keep track of tables with generated columns */
+	GeneratedColCatalog *generatedCols;
 
 	Queue *transformQueue;
 	PGSQL *transformPGSQL;
@@ -618,6 +635,8 @@ bool stream_write_sql_escape_string_constant(FILE *out, const char *str);
 bool stream_add_value_in_json_array(LogicalMessageValue *value,
 									JSON_Array *jsArray);
 
+
+void formatQnameWithoutQuotes(char *dest, const char *schema, const char *table);
 
 bool parseMessage(StreamContext *privateContext, char *message, JSON_Value *json);
 

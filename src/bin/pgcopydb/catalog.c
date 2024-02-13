@@ -2624,6 +2624,61 @@ catalog_iter_s_table(DatabaseCatalog *catalog,
 
 
 /*
+ * catalog_iter_s_table_attisgenerated iterates over the list of tables that
+ * have a generated columns in our catalogs.
+ */
+bool
+catalog_iter_s_table_attisgenerated(DatabaseCatalog *catalog,
+									void *context,
+									SourceTableIterFun *callback)
+{
+	SourceTableIterator *iter =
+		(SourceTableIterator *) calloc(1, sizeof(SourceTableIterator));
+
+	iter->catalog = catalog;
+
+	if (!catalog_iter_s_table_attisgenerated_init(iter))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	for (;;)
+	{
+		if (!catalog_iter_s_table_next(iter))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		SourceTable *table = iter->table;
+
+		if (table == NULL)
+		{
+			if (!catalog_iter_s_table_finish(iter))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			break;
+		}
+
+		/* now call the provided callback */
+		if (!(*callback)(context, table))
+		{
+			log_error("Failed to iterate over list of tables, "
+					  "see above for details");
+			return false;
+		}
+	}
+
+
+	return true;
+}
+
+
+/*
  * catalog_iter_s_table_nopk iterates over the list of tables that don't have a
  * Primary Key in our catalogs.
  */
@@ -2772,6 +2827,55 @@ catalog_iter_s_table_init(SourceTableIterator *iter)
 
 
 /*
+ * catalog_iter_s_table_attisgenerated_init initializes an Interator over our
+ * catalog of SourceTable entries which has generated columns.
+ */
+bool
+catalog_iter_s_table_attisgenerated_init(SourceTableIterator *iter)
+{
+	sqlite3 *db = iter->catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: Failed to initialize s_table iterator: db is NULL");
+		return false;
+	}
+
+	iter->table = (SourceTable *) calloc(1, sizeof(SourceTable));
+
+	if (iter->table == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	char *sql =
+		"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
+		"         relpages, reltuples, ts.bytes, ts.bytes_pretty, "
+		"         exclude_data, part_key, "
+		"         (select count(1) from s_table_part p where p.oid = t.oid) "
+		"    from s_table t join s_attr a on a.oid = t.oid "
+		"       left join s_table_size ts on ts.oid = t.oid "
+		"group by t.oid "
+		"  having sum(a.attisgenerated) > 0 "
+		"order by bytes desc";
+
+	SQLiteQuery *query = &(iter->query);
+
+	query->context = iter->table;
+	query->fetchFunction = &catalog_s_table_fetch;
+
+	if (!catalog_sql_prepare(db, sql, query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * catalog_iter_s_table_init initializes an Interator over our catalog of
  * SourceTable entries.
  */
@@ -2799,7 +2903,7 @@ catalog_iter_s_table_nopk_init(SourceTableIterator *iter)
 		"         relpages, reltuples, ts.bytes, ts.bytes_pretty, "
 		"         exclude_data, part_key, "
 		"         (select count(1) from s_table_part p where p.oid = t.oid) "
-		"    from s_table t join join s_attr a on a.oid = t.oid "
+		"    from s_table t join s_attr a on a.oid = t.oid "
 		"       left join s_table_size ts on ts.oid = t.oid "
 		"group by t.oid "
 		"  having sum(a.attisprimary) = 0 "

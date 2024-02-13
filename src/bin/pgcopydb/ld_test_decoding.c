@@ -69,13 +69,16 @@ static bool parseTestDecodingUpdateMessage(StreamContext *privateContext,
 static bool parseTestDecodingDeleteMessage(StreamContext *privateContext,
 										   TestDecodingHeader *header);
 
-static bool SetColumnNamesAndValues(LogicalMessageTuple *tuple,
+static bool SetColumnNamesAndValues(GeneratedColCatalog *generatedCols,
+									LogicalMessageTuple *tuple,
 									TestDecodingHeader *header);
 
 static bool parseNextColumn(TestDecodingColumns *cols,
 							TestDecodingHeader *header);
 
-static bool listToTuple(LogicalMessageTuple *tuple,
+static bool listToTuple(GeneratedColCatalog *generatedCols,
+						TestDecodingHeader *header,
+						LogicalMessageTuple *tuple,
 						TestDecodingColumns *cols,
 						int count);
 
@@ -414,7 +417,8 @@ parseTestDecodingInsertMessage(StreamContext *privateContext,
 
 	LogicalMessageTuple *tuple = &(stmt->stmt.insert.new.array[0]);
 
-	if (!SetColumnNamesAndValues(tuple, header))
+	GeneratedColCatalog *generatedCols = privateContext->generatedCols;
+	if (!SetColumnNamesAndValues(generatedCols, tuple, header))
 	{
 		log_error("Failed to parse INSERT columns for logical "
 				  "message %s",
@@ -461,7 +465,7 @@ parseTestDecodingUpdateMessage(StreamContext *privateContext,
 
 		LogicalMessageTuple *old = &(stmt->stmt.update.old.array[0]);
 
-		if (!SetColumnNamesAndValues(old, header))
+		if (!SetColumnNamesAndValues(NULL, old, header))
 		{
 			log_error("Failed to parse UPDATE old-key columns for logical "
 					  "message %s",
@@ -483,7 +487,8 @@ parseTestDecodingUpdateMessage(StreamContext *privateContext,
 
 		LogicalMessageTuple *new = &(stmt->stmt.update.new.array[0]);
 
-		if (!SetColumnNamesAndValues(new, header))
+		GeneratedColCatalog *generatedCols = privateContext->generatedCols;
+		if (!SetColumnNamesAndValues(generatedCols, new, header))
 		{
 			log_error("Failed to parse UPDATE new-tuple columns for logical "
 					  "message %s",
@@ -541,7 +546,7 @@ parseTestDecodingDeleteMessage(StreamContext *privateContext,
 
 	LogicalMessageTuple *tuple = &(stmt->stmt.delete.old.array[0]);
 
-	if (!SetColumnNamesAndValues(tuple, header))
+	if (!SetColumnNamesAndValues(NULL, tuple, header))
 	{
 		log_error("Failed to parse DELETE columns for logical "
 				  "message %s",
@@ -559,7 +564,9 @@ parseTestDecodingDeleteMessage(StreamContext *privateContext,
  * representation for a tuple.
  */
 static bool
-SetColumnNamesAndValues(LogicalMessageTuple *tuple, TestDecodingHeader *header)
+SetColumnNamesAndValues(GeneratedColCatalog *generatedCols,
+						LogicalMessageTuple *tuple,
+						TestDecodingHeader *header)
 {
 	log_trace("SetColumnNamesAndValues: %c %s",
 			  header->action,
@@ -620,7 +627,7 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple, TestDecodingHeader *header)
 	 * Transform the internal TestDecodingColumns linked-list into our internal
 	 * representation for DML tuples, which is output plugin independant.
 	 */
-	if (!listToTuple(tuple, cols, count))
+	if (!listToTuple(generatedCols, header, tuple, cols, count))
 	{
 		log_error("Failed to convert test_decoding column to tuple");
 		return false;
@@ -833,9 +840,35 @@ parseNextColumn(TestDecodingColumns *cols,
  * into our internal data structure for a tuple.
  */
 static bool
-listToTuple(LogicalMessageTuple *tuple, TestDecodingColumns *cols, int count)
+listToTuple(GeneratedColCatalog *generatedCols,
+			TestDecodingHeader *header,
+			LogicalMessageTuple *tuple,
+			TestDecodingColumns *cols,
+			int count)
 {
-	if (!AllocateLogicalMessageTuple(tuple, count))
+	GeneratedColCatalog *genColumnTable = NULL;
+	int generatedColCount = 0;
+	char **generatedColArray = NULL;
+
+	if (generatedCols != NULL)
+	{
+		char qname[PG_NAMEDATALEN_FQ] = { 0 };
+
+		/* normalize qname by removing quotes */
+		formatQnameWithoutQuotes(qname,
+								 header->table.nspname,
+								 header->table.relname);
+
+		HASH_FIND_STR(generatedCols, qname, genColumnTable);
+
+		if (genColumnTable != NULL)
+		{
+			generatedColCount = genColumnTable->colcount;
+			generatedColArray = genColumnTable->colnames;
+		}
+	}
+
+	if (!AllocateLogicalMessageTuple(tuple, count - generatedColCount))
 	{
 		/* errors have already been logged */
 		return false;
@@ -850,11 +883,39 @@ listToTuple(LogicalMessageTuple *tuple, TestDecodingColumns *cols, int count)
 	int i = 0;
 	TestDecodingColumns *cur = cols;
 
-	for (; i < count && cur != NULL; cur = cur->next, i++)
+	for (; i < (count - generatedColCount) && cur != NULL; cur = cur->next)
 	{
+		char *colname = strndup(cur->colnameStart, cur->colnameLen);
+
+		if (colname == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		/* skip generated columns */
+		if (generatedColArray != NULL)
+		{
+			bool isGenerated = false;
+
+			for (int g = 0; g < generatedColCount; g++)
+			{
+				if (streq(colname, generatedColArray[g]))
+				{
+					isGenerated = true;
+					break;
+				}
+			}
+
+			if (isGenerated)
+			{
+				continue;
+			}
+		}
+
 		LogicalMessageValue *valueColumn = &(values->array[i]);
 
-		tuple->columns[i] = strndup(cur->colnameStart, cur->colnameLen);
+		tuple->columns[i] = colname;
 		valueColumn->oid = TEXTOID;
 
 		if (cur->valueStart == NULL)
@@ -916,6 +977,8 @@ listToTuple(LogicalMessageTuple *tuple, TestDecodingColumns *cols, int count)
 				return false;
 			}
 		}
+
+		i++;
 	}
 
 	return true;
@@ -941,7 +1004,7 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 	LogicalMessageTuple *cols =
 		(LogicalMessageTuple *) calloc(1, sizeof(LogicalMessageTuple));
 
-	if (!SetColumnNamesAndValues(cols, header))
+	if (!SetColumnNamesAndValues(NULL, cols, header))
 	{
 		log_error("Failed to parse UPDATE columns for logical message %s",
 				  header->message);
@@ -1055,6 +1118,33 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 	}
 
 	/*
+	 * Find out if we have generated columns in the table, and if so, how many
+	 * and which ones.
+	 */
+	GeneratedColCatalog *generatedCols = privateContext->generatedCols;
+	GeneratedColCatalog *genColumnTable = NULL;
+	int generatedColCount = 0;
+	char **generatedColArray = NULL;
+
+	if (generatedCols != NULL)
+	{
+		char qname[PG_NAMEDATALEN_FQ] = { 0 };
+
+		/* normalize qname by removing quotes */
+		formatQnameWithoutQuotes(qname,
+								 header->table.nspname,
+								 header->table.relname);
+
+		HASH_FIND_STR(generatedCols, qname, genColumnTable);
+
+		if (genColumnTable != NULL)
+		{
+			generatedColCount = genColumnTable->colcount;
+			generatedColArray = genColumnTable->colnames;
+		}
+	}
+
+	/*
 	 * Now that we know for each key if it's a pkey (identity, WHERE
 	 * clause, old-key) or a new value (columns, SET clause), dispatch the
 	 * columns accordingly.
@@ -1063,7 +1153,7 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 	LogicalMessageTuple *new = &(stmt->stmt.update.new.array[0]);
 
 	if (!AllocateLogicalMessageTuple(old, oldCount) ||
-		!AllocateLogicalMessageTuple(new, newCount))
+		!AllocateLogicalMessageTuple(new, newCount - generatedColCount))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1094,6 +1184,26 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 		}
 		else
 		{
+			/* skip generated columns */
+			if (generatedColArray != NULL)
+			{
+				bool isGenerated = false;
+
+				for (int g = 0; g < generatedColCount; g++)
+				{
+					if (streq(colname, generatedColArray[g]))
+					{
+						isGenerated = true;
+						break;
+					}
+				}
+
+				if (isGenerated)
+				{
+					continue;
+				}
+			}
+
 			new->columns[newPos] = strdup(colname);
 			new->values.array[0].array[newPos] = cols->values.array[0].array[c];
 
