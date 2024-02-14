@@ -181,6 +181,13 @@ typedef struct SourceTable
 } SourceTable;
 
 
+typedef struct SourceTableSize
+{
+	uint32_t oid;
+	int64_t bytes;
+	char bytesPretty[PG_NAMEDATALEN]; /* pg_size_pretty */
+} SourceTableSize;
+
 /* still used in progress.[ch] */
 #define ARRAY_CAPACITY_INCREMENT 2
 
@@ -401,11 +408,7 @@ bool schema_list_ext_versions(PGSQL *pgsql, ExtensionsVersionsArray *array);
 bool schema_list_collations(PGSQL *pgsql, DatabaseCatalog *catalog);
 
 bool schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
-										SourceFilters *filters,
-										bool hasDBCreatePrivilege,
-										bool cache,
-										bool dropCache,
-										bool *createdTableSizeTable);
+										SourceFilters *filters, DatabaseCatalog *catalog);
 
 bool schema_drop_pgcopydb_table_size(PGSQL *pgsql);
 

@@ -105,6 +105,16 @@ typedef struct SourceTableArrayContext
 	bool parsedOk;
 } SourceTableArrayContext;
 
+
+/* Context used when fetching all the table size definitions */
+typedef struct SourceTableSizeArrayContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	DatabaseCatalog *catalog;
+	bool parsedOk;
+} SourceTableSizeArrayContext;
+
+
 /* Context used when fetching all the sequence definitions */
 typedef struct SourceSequenceArrayContext
 {
@@ -184,6 +194,11 @@ static bool parseCurrentSourceTable(PGresult *result,
 									int rowNumber,
 									SourceTable *table);
 
+static void getTableSizeArray(void *ctx, PGresult *result);
+
+static bool parseCurrentSourceTableSize(PGresult *result,
+										int rowNumber,
+										SourceTableSize *tableSize);
 static bool parseAttributesArray(SourceTable *table, JSON_Value *json);
 
 static void getSequenceArray(void *ctx, PGresult *result);
@@ -636,7 +651,8 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_NONE,
 
-		"  select c.oid, pg_table_size(c.oid) as bytes "
+		"  select c.oid, pg_table_size(c.oid) as bytes ,"
+		"         pg_size_pretty(pg_table_size(c.oid)) "
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
 
@@ -658,6 +674,7 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 		SOURCE_FILTER_TYPE_INCL,
 
 		"  select c.oid, pg_table_size(c.oid) as bytes "
+		"         pg_size_pretty(pg_table_size(c.oid)) "
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
 
@@ -684,6 +701,7 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 		SOURCE_FILTER_TYPE_EXCL,
 
 		"  select c.oid, pg_table_size(c.oid) as bytes "
+		"         pg_size_pretty(pg_table_size(c.oid)) "
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
 
@@ -724,6 +742,7 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 		SOURCE_FILTER_TYPE_LIST_NOT_INCL,
 
 		"  select c.oid, pg_table_size(c.oid) as bytes "
+		"         pg_size_pretty(pg_table_size(c.oid)) "
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
 
@@ -753,6 +772,7 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 		SOURCE_FILTER_TYPE_LIST_EXCL,
 
 		"  select c.oid, pg_table_size(c.oid) as bytes "
+		"         pg_size_pretty(pg_table_size(c.oid)) "
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
 
@@ -790,10 +810,7 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 bool
 schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
 								   SourceFilters *filters,
-								   bool hasDBCreatePrivilege,
-								   bool cache,
-								   bool dropCache,
-								   bool *createdTableSizeTable)
+								   DatabaseCatalog *catalog)
 {
 	log_trace("schema_prepare_pgcopydb_table_size");
 
@@ -840,118 +857,11 @@ schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
 		}
 	}
 
-	if ((cache || dropCache) && !hasDBCreatePrivilege)
-	{
-		log_fatal("Connecting with a role that does not have CREATE privileges "
-				  "on the source database prevents pg_table_size() caching");
-		return false;
-	}
+	SourceTableSizeArrayContext context = { { 0 }, catalog, false };
 
-	/*
-	 * See if a pgcopydb.pgcopydb_table_size table already exists.
-	 */
-	bool exists = false;
-
-	if (dropCache)
-	{
-		if (!schema_drop_pgcopydb_table_size(pgsql))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-	}
-	else
-	{
-		if (!pgsql_table_exists(pgsql, "pgcopydb", "pgcopydb_table_size", &exists))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		if (exists)
-		{
-			log_notice("Table pgcopydb.pgcopydb_table_size already exists, "
-					   "re-using it");
-			return true;
-		}
-	}
-
-	/*
-	 * Now the table does not exists, and we have to decide if we want to make
-	 * it a persitent table in the possibly new schema "pgcopydb" (cache ==
-	 * true), or a temporary table (cache == false).
-	 */
-	if (cache)
-	{
-		char *createSchema = "create schema if not exists pgcopydb";
-
-		if (!pgsql_execute(pgsql, createSchema))
-		{
-			log_error("Failed to compute table size, see above for details");
-			return false;
-		}
-	}
-
-	char *tablename = "pgcopydb_table_size";
-	PQExpBuffer sql = createPQExpBuffer();
-
-	if (cache)
-	{
-		appendPQExpBuffer(sql,
-						  "create table if not exists pgcopydb.%s as %s",
-						  tablename,
-						  listSourceTableSizeSQL[filterType].sql);
-	}
-	else
-	{
-		appendPQExpBuffer(sql,
-						  "create temp table %s  on commit drop as %s",
-						  tablename,
-						  listSourceTableSizeSQL[filterType].sql);
-	}
-
-	if (PQExpBufferBroken(sql))
-	{
-		log_error("Failed to prepare create pgcopydb_table_size query "
-				  "buffer: Out of Memory");
-		(void) destroyPQExpBuffer(sql);
-		return false;
-	}
-
-	if (!pgsql_execute(pgsql, sql->data))
-	{
-		log_error("Failed to compute table size, see above for details");
-		(void) destroyPQExpBuffer(sql);
-		return false;
-	}
-
-	(void) destroyPQExpBuffer(sql);
-
-	char *createIndex = "create index on pgcopydb_table_size(oid)";
-
-	if (!pgsql_execute(pgsql, createIndex))
-	{
-		log_error("Failed to compute table size, see above for details");
-		return false;
-	}
-
-	/* we only consider that we created the cache when cache is true */
-	*createdTableSizeTable = cache;
-
-	return true;
-}
-
-
-/*
- * schema_drop_pgcopydb_table_size drops the pgcopydb.pgcopydb_table_size
- * table.
- */
-bool
-schema_drop_pgcopydb_table_size(PGSQL *pgsql)
-{
-	char *sql = "drop table if exists pgcopydb.pgcopydb_table_size cascade";
-
-	if (!pgsql_execute(pgsql, sql))
+	if (!pgsql_execute_with_params(pgsql, listSourceTableSizeSQL[filterType].sql,
+								   0, NULL, NULL,
+								   &context, &getTableSizeArray))
 	{
 		log_error("Failed to compute table size, see above for details");
 		return false;
@@ -973,8 +883,6 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
-		"         ts.bytes as bytes, "
-		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1012,7 +920,6 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"               select json_agg(row_to_json(atts)) as js "
 		"                from atts "
 		"              ) as attrs on true"
-		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* find a copy partition key candidate */
 		"         left join lateral ("
@@ -1047,7 +954,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"            and d.deptype = 'e' "
 		"       ) "
 
-		"order by bytes desc, n.nspname, c.relname"
+		"order by n.nspname, c.relname"
 	},
 
 	{
@@ -1058,8 +965,6 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
-		"         ts.bytes as bytes, "
-		"         pg_size_pretty(ts.bytes), "
 		"         exists(select 1 "
 		"                  from pg_temp.filter_exclude_table_data ftd "
 		"                 where n.nspname = ftd.nspname "
@@ -1100,7 +1005,6 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"               select json_agg(row_to_json(atts)) as js "
 		"                from atts "
 		"              ) as attrs on true"
-		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* include-only-table */
 		"         join pg_temp.filter_include_only_table inc "
@@ -1140,7 +1044,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"            and d.deptype = 'e' "
 		"       ) "
 
-		"order by bytes desc, n.nspname, c.relname"
+		"order by n.nspname, c.relname"
 	},
 
 	{
@@ -1151,8 +1055,6 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
-		"         ts.bytes as bytes, "
-		"         pg_size_pretty(ts.bytes), "
 		"         ftd.relname is not null as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1190,7 +1092,6 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"               select json_agg(row_to_json(atts)) as js "
 		"                from atts "
 		"              ) as attrs on true"
-		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -1244,7 +1145,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"            and d.deptype = 'e' "
 		"       ) "
 
-		"order by bytes desc, n.nspname, c.relname"
+		"order by n.nspname, c.relname"
 	},
 
 	{
@@ -1255,8 +1156,6 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
-		"         ts.bytes as bytes, "
-		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1294,7 +1193,6 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"               select json_agg(row_to_json(atts)) as js "
 		"                from atts "
 		"              ) as attrs on true"
-		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* include-only-table */
 		"    left join pg_temp.filter_include_only_table inc "
@@ -1337,7 +1235,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"            and d.deptype = 'e' "
 		"       ) "
 
-		"order by bytes desc, n.nspname, c.relname"
+		"order by n.nspname, c.relname"
 	},
 
 	{
@@ -1348,8 +1246,6 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
-		"         ts.bytes as bytes, "
-		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1387,7 +1283,6 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"               select json_agg(row_to_json(atts)) as js "
 		"                from atts "
 		"              ) as attrs on true"
-		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -1435,7 +1330,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"            and d.deptype = 'e' "
 		"       ) "
 
-		"order by bytes desc, n.nspname, c.relname"
+		"order by n.nspname, c.relname"
 	}
 };
 
@@ -1529,8 +1424,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
-		"         ts.bytes as bytes, "
-		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1543,7 +1436,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         join pg_namespace n ON n.oid = c.relnamespace "
 		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
 		"         join pg_roles auth ON auth.oid = c.relowner"
-		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		"   where c.relkind = 'r' and c.relpersistence in ('p', 'u')  "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
@@ -1576,8 +1468,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
-		"         ts.bytes as bytes, "
-		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1590,7 +1480,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         join pg_namespace n ON n.oid = c.relnamespace "
 		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
 		"         join pg_roles auth ON auth.oid = c.relowner"
-		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* include-only-table */
 		"         join pg_temp.filter_include_only_table inc "
@@ -1628,8 +1517,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
-		"         ts.bytes as bytes, "
-		"         pg_size_pretty(ts.bytes), "
 		"         ftd.relname is not null as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1642,7 +1529,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         join pg_namespace n ON n.oid = c.relnamespace "
 		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
 		"         join pg_roles auth ON auth.oid = c.relowner"
-		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -1694,8 +1580,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
-		"         ts.bytes as bytes, "
-		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1708,7 +1592,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         join pg_namespace n ON n.oid = c.relnamespace "
 		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
 		"         join pg_roles auth ON auth.oid = c.relowner"
-		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* include-only-table */
 		"    left join pg_temp.filter_include_only_table inc "
@@ -1749,8 +1632,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
-		"         ts.bytes as bytes, "
-		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1763,7 +1644,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         join pg_namespace n ON n.oid = c.relnamespace "
 		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
 		"         join pg_roles auth ON auth.oid = c.relowner"
-		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -4634,6 +4514,89 @@ getCollationList(void *ctx, PGresult *result)
 }
 
 
+static void
+getTableSizeArray(void *ctx, PGresult *result)
+{
+	SourceTableSizeArrayContext *context = (SourceTableSizeArrayContext *) ctx;
+	int nTuples = PQntuples(result);
+
+	if (PQnfields(result) != 3)
+	{
+		log_error("Query returned %d columns, expected 3", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	bool parsedOk = true;
+
+	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
+	{
+		SourceTableSize *tableSize =
+			(SourceTableSize *) calloc(1, sizeof(SourceTableSize));
+
+		if (!parseCurrentSourceTableSize(result, rowNumber, tableSize))
+		{
+			parsedOk = false;
+			break;
+		}
+
+		if (context->catalog != NULL && context->catalog->db != NULL)
+		{
+			if (!catalog_add_s_table_size(context->catalog, tableSize))
+			{
+				/* errors have already been logged */
+				parsedOk = false;
+				break;
+			}
+		}
+	}
+
+	context->parsedOk = parsedOk;
+}
+
+
+static bool
+parseCurrentSourceTableSize(PGresult *result, int rowNumber, SourceTableSize *tableSize)
+{
+	int errors = 0;
+
+	int fnoid = PQfnumber(result, "oid");
+	int fnbytes = PQfnumber(result, "bytes");
+	int fnbytespretty = PQfnumber(result, "pg_size_pretty");
+
+	/* 1. oid */
+	char *value = PQgetvalue(result, rowNumber, fnoid);
+
+	if (!stringToUInt32(value, &(tableSize->oid)) || tableSize->oid == 0)
+	{
+		log_error("Invalid OID \"%s\"", value);
+		++errors;
+	}
+
+	/* 2. bytes */
+	value = PQgetvalue(result, rowNumber, fnbytes);
+
+	if (!stringToInt64(value, &(tableSize->bytes)))
+	{
+		log_error("Invalid pg_table_size: \"%s\"", value);
+		++errors;
+	}
+
+	/* 3. pg_size_pretty */
+	value = PQgetvalue(result, rowNumber, fnbytespretty);
+	int length = strlcpy(tableSize->bytesPretty, value, PG_NAMEDATALEN);
+
+	if (length >= PG_NAMEDATALEN)
+	{
+		log_error("Pretty printed byte size \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+				  value, length, PG_NAMEDATALEN - 1);
+		++errors;
+	}
+
+	return errors == 0;
+}
+
 /*
  * getTableArray loops over the SQL result for the tables array query and
  * allocates an array of tables then populates it with the query result.
@@ -4642,11 +4605,12 @@ static void
 getTableArray(void *ctx, PGresult *result)
 {
 	SourceTableArrayContext *context = (SourceTableArrayContext *) ctx;
+
 	int nTuples = PQntuples(result);
 
-	if (PQnfields(result) != 12)
+	if (PQnfields(result) != 10)
 	{
-		log_error("Query returned %d columns, expected 12", PQnfields(result));
+		log_error("Query returned %d columns, expected 10", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -4693,8 +4657,6 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	int fnamname = PQfnumber(result, "amname");
 	int fnrelpages = PQfnumber(result, "relpages");
 	int fnreltuples = PQfnumber(result, "reltuples");
-	int fnbytes = PQfnumber(result, "bytes");
-	int fnbytespretty = PQfnumber(result, "pg_size_pretty");
 	int fnexcldata = PQfnumber(result, "excludedata");
 	int fnrestorelistname = PQfnumber(result, "format");
 	int fnpartkey = PQfnumber(result, "partkey");
@@ -4807,38 +4769,6 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 			log_error("Invalid reltuples::bigint \"%s\"", value);
 			++errors;
 		}
-	}
-
-	/* pg_table_size(c.oid) as bytes */
-	if (PQgetisnull(result, rowNumber, fnbytes))
-	{
-		/*
-		 * It may happen that pg_table_size() returns NULL (when failing to
-		 * open the given relation).
-		 */
-		table->bytes = 0;
-	}
-	else
-	{
-		value = PQgetvalue(result, rowNumber, fnbytes);
-
-		if (!stringToInt64(value, &(table->bytes)))
-		{
-			log_error("Invalid reltuples::bigint \"%s\"", value);
-			++errors;
-		}
-	}
-
-	/* pg_size_pretty(c.oid) */
-	value = PQgetvalue(result, rowNumber, fnbytespretty);
-	length = strlcpy(table->bytesPretty, value, PG_NAMEDATALEN);
-
-	if (length >= PG_NAMEDATALEN)
-	{
-		log_error("Pretty printed byte size \"%s\" is %d bytes long, "
-				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
-				  value, length, PG_NAMEDATALEN - 1);
-		++errors;
 	}
 
 	/* excludeData */

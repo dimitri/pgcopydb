@@ -519,10 +519,7 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 		/* copydb_fetch_filtered_oids() needs the table size table around */
 		if (!schema_prepare_pgcopydb_table_size(src,
 												&(specs->filters),
-												specs->hasDBCreatePrivilege,
-												false, /* cache */
-												false, /* dropCache */
-												&createdTableSizeTable))
+												sourceDB))
 		{
 			/* errors have already been logged */
 			return false;
