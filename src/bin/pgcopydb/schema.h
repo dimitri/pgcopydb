@@ -160,6 +160,9 @@ typedef struct SourceTable
 	int64_t relpages;
 	int64_t reltuples;
 	int64_t bytes;
+	int64_t partmin;
+	int64_t partmax;
+
 	char bytesPretty[PG_NAMEDATALEN]; /* pg_size_pretty */
 	bool excludeData;
 
@@ -430,6 +433,7 @@ bool schema_list_sequences(PGSQL *pgsql,
 						   DatabaseCatalog *catalog);
 
 bool schema_get_sequence_value(PGSQL *pgsql, SourceSequence *seq);
+bool schema_get_relpages(PGSQL *pgsql, SourceTable *table);
 bool schema_set_sequence_value(PGSQL *pgsql, SourceSequence *seq);
 
 bool schema_list_all_indexes(PGSQL *pgsql,

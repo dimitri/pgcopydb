@@ -26,7 +26,7 @@
 #include "schema.h"
 #include "signals.h"
 #include "string_utils.h"
-
+#include <math.h>
 
 static bool prepareFilters(PGSQL *pgsql, SourceFilters *filters);
 
@@ -114,6 +114,14 @@ typedef struct SourceTableSizeArrayContext
 	bool parsedOk;
 } SourceTableSizeArrayContext;
 
+/* Context used when fetching candidate partition key range for a table */
+typedef struct SourceTablePartKeyMinMaxValueContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	int64_t min;
+	int64_t max;
+	bool parsedOk;
+} SourceTablePartKeyMinMaxValueContext;
 
 /* Context used when fetching all the sequence definitions */
 typedef struct SourceSequenceArrayContext
@@ -199,6 +207,10 @@ static void getTableSizeArray(void *ctx, PGresult *result);
 static bool parseCurrentSourceTableSize(PGresult *result,
 										int rowNumber,
 										SourceTableSize *tableSize);
+static void getPartKeyMinMaxValue(void *ctx, PGresult *result);
+
+static bool calculatePartKeyMinMaxValue(PGSQL *pgsql, SourceTable *table);
+
 static bool parseAttributesArray(SourceTable *table, JSON_Value *json);
 
 static void getSequenceArray(void *ctx, PGresult *result);
@@ -218,12 +230,6 @@ static void getDependArray(void *ctx, PGresult *result);
 static bool parseCurrentSourceDepend(PGresult *result,
 									 int rowNumber,
 									 SourceDepend *depend);
-
-static void getPartitionList(void *ctx, PGresult *result);
-
-static bool parseCurrentPartition(PGresult *result,
-								  int rowNumber,
-								  SourceTableParts *parts);
 
 static void getTableChecksum(void *ctx, PGresult *result);
 
@@ -2285,6 +2291,40 @@ schema_get_sequence_value(PGSQL *pgsql, SourceSequence *seq)
 
 
 /*
+ * schema_get_relpages fetches the number of pages for the given table.
+ */
+bool
+schema_get_relpages(PGSQL *pgsql, SourceTable *table)
+{
+	SingleValueResultContext parseContext = { { 0 }, PGSQL_RESULT_INT, false };
+
+	char *sql = "select relpages from pg_class where oid = $1::regclass";
+
+	int paramCount = 1;
+	Oid paramTypes[1] = { TEXTOID };
+	const char *paramValues[1] = { table->qname };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   &parseContext, &parseSingleValueResult))
+	{
+		log_error("Failed to get number of pages for table %s", table->qname);
+		return false;
+	}
+
+	if (!parseContext.parsedOk)
+	{
+		log_error("Failed to get number of pages for table %s", table->qname);
+		return false;
+	}
+
+	table->relpages = parseContext.intVal;
+
+	return true;
+}
+
+
+/*
  * schema_set_sequence_value calls pg_catalog.setval() on the given sequence.
  */
 bool
@@ -3176,122 +3216,51 @@ schema_list_partitions(PGSQL *pgsql,
 		return true;
 	}
 
-	PQExpBuffer sql = createPQExpBuffer();
+	/* if we have a partKey and it's not "ctid", calculate key bounds  */
+	if (!IS_EMPTY_STRING_BUFFER(table->partKey) && !streq(table->partKey, "ctid"))
+	{
+		if (!calculatePartKeyMinMaxValue(pgsql, table))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
 
-	SourcePartitionContext parseContext = { { 0 }, catalog, table, false };
+	int64_t min = table->partmin;
+	int64_t max = table->partmax;
+	int64_t partsCount = ceil(table->bytes / partSize);
 
 	if (streq(table->partKey, "ctid"))
 	{
-		char *sqlTemplate =
-			" with "
-			" relpage_bounds (min, max) as "
-			" ( "
-			"   select 0, relpages "
-			"     from pg_class "
-			"    where pg_class.oid = '%s'::regclass "
-			" ), "
-			" t (parts) as "
-			" ( "
-			"   select ceil(bytes::float / $1) as parts "
-			"     from pgcopydb_table_size "
-			"     where oid = $2 "
-			"	union all "
-			"	select 1 as parts "
-			"	order by parts desc "
-			"	limit 1 "
-			" ), "
-			" ranges(n, parts, a, b) as "
-			" ( "
-			"   select n, "
-			"          parts + 1, "
-			"          x as a, "
-			"          coalesce((lead(x, 1) over(order by n)) - 1, max) as b "
-			"     from relpage_bounds, t, "
-			"          generate_series(min, max, ((max-min+1)/parts)::bigint + 1) "
-			"          with ordinality as s(x, n) "
-			"   union all "
-			"   select parts + 1, "
-			"          parts + 1, "
-			"          max, "
-			"          NULL "
-			"     from relpage_bounds, t "
-			" ) "
-			" "
-			"  select n, parts, a, b, b-a+1 as pages "
-			"    from ranges "
-			"order by n";
-
-		appendPQExpBuffer(sql, sqlTemplate, table->qname);
-	}
-	else
-	{
-		char *sqlTemplate =
-			" with "
-			" key_bounds (min, max) as "
-			" ( "
-			"   select min(%s), max(%s) "
-			"     from %s "
-			" ), "
-			" t (parts) as "
-			" ( "
-			"   select ceil(bytes::float / $1) as parts "
-			"     from pgcopydb_table_size "
-			"     where oid = $2 "
-			"	union all "
-			"	select 1 as parts "
-			"	order by parts desc "
-			"	limit 1 "
-			" ), "
-			" ranges(n, parts, a, b) as "
-			" ( "
-			"   select n, "
-			"          parts, "
-			"          x as a, "
-			"          coalesce((lead(x, 1) over(order by n)) - 1, max) as b "
-			"     from key_bounds, t, "
-			"          generate_series(min, max, ((max-min+1)/parts)::bigint + 1) "
-			"          with ordinality as s(x, n) "
-			" ) "
-			" "
-			"  select n, parts, a, b, b-a+1 as count "
-			"    from ranges "
-			"order by n";
-
-		appendPQExpBuffer(sql, sqlTemplate,
-						  table->partKey, table->partKey, table->qname);
+		min = 0;
+		max = table->relpages;
 	}
 
-	if (PQExpBufferBroken(sql))
+	int64_t range = ((max - min + 1) / partsCount) + 1;
+
+	for (int64_t i = 0; i < partsCount; i++)
 	{
-		(void) destroyPQExpBuffer(sql);
-		log_error("Failed to prepare partition query for table %s: out of memory",
-				  table->qname);
-		return false;
-	}
+		SourceTableParts *parts = &(table->partition);
 
-	int paramCount = 2;
-	Oid paramTypes[2] = { INT8OID, OIDOID };
-	const char *paramValues[2];
+		bzero(parts, sizeof(SourceTableParts));
 
-	paramValues[0] = intToString(partSize).strValue;
-	paramValues[1] = intToString(table->oid).strValue;
+		parts->partNumber = i + 1;
+		parts->partCount = partsCount;
+		parts->min = min + (i * range);
+		parts->max = min + ((i + 1) * range) - 1;
+		parts->count = parts->max - parts->min + 1;
 
-	if (!pgsql_execute_with_params(pgsql, sql->data,
-								   paramCount, paramTypes, paramValues,
-								   &parseContext, &getPartitionList))
-	{
-		(void) destroyPQExpBuffer(sql);
-		log_error("Failed to compute partition list for table %s",
-				  table->qname);
-		return false;
-	}
+		log_info("Partition %s#%d: %lld - %lld (%lld)", table->qname, parts->partNumber,
+				 (long long) parts->min, (long long) parts->max, (long
+																  long) parts->count);
 
-	(void) destroyPQExpBuffer(sql);
-
-	if (!parseContext.parsedOk)
-	{
-		log_error("Failed to list table COPY partition list");
-		return false;
+		if (catalog != NULL && catalog->db != NULL)
+		{
+			if (!catalog_add_s_table_part(catalog, table))
+			{
+				/* errors have already been logged */
+			}
+		}
 	}
 
 	return true;
@@ -4597,6 +4566,7 @@ parseCurrentSourceTableSize(PGresult *result, int rowNumber, SourceTableSize *ta
 	return errors == 0;
 }
 
+
 /*
  * getTableArray loops over the SQL result for the tables array query and
  * allocates an array of tables then populates it with the query result.
@@ -4639,6 +4609,99 @@ getTableArray(void *ctx, PGresult *result)
 	}
 
 	context->parsedOk = parsedOk;
+}
+
+
+/*
+ * calculatePartKeyMinMaxValue calculates the min and max values for the
+ * candidate partition key of the given table.
+ */
+static bool
+calculatePartKeyMinMaxValue(PGSQL *pgsql, SourceTable *table)
+{
+	PQExpBuffer sql = createPQExpBuffer();
+	char *sqlTemplate = "select min(%s), max(%s) "
+						"  from %s ";
+
+	appendPQExpBuffer(sql, sqlTemplate, table->partKey, table->partKey, table->qname);
+
+	if (PQExpBufferBroken(sql))
+	{
+		(void) destroyPQExpBuffer(sql);
+		log_error(
+			"Failed to allocate memory for SQL query string to get partition key range");
+		return false;
+	}
+
+	SourceTablePartKeyMinMaxValueContext partKeyMinMaxValueContext = { 0 };
+	if (!pgsql_execute_with_params(pgsql, sql->data, 0, NULL, NULL,
+								   &partKeyMinMaxValueContext, &getPartKeyMinMaxValue))
+	{
+		(void) destroyPQExpBuffer(sql);
+		log_error("Failed to execute SQL query to get partition key range");
+		return false;
+	}
+
+	if (!partKeyMinMaxValueContext.parsedOk)
+	{
+		(void) destroyPQExpBuffer(sql);
+		log_error("Failed to parse SQL query to get partition key range");
+		return false;
+	}
+
+	(void) destroyPQExpBuffer(sql);
+
+	table->partmax = (partKeyMinMaxValueContext.max);
+	table->partmin = (partKeyMinMaxValueContext.min);
+
+	return true;
+}
+
+
+/*
+ * getPartKeyMinMaxValue loops over the SQL result for the partition key min max value query and
+ * allocates an array of tables then populates it with the query result.
+ */
+static void
+getPartKeyMinMaxValue(void *ctx, PGresult *result)
+{
+	SourceTablePartKeyMinMaxValueContext *context =
+		(SourceTablePartKeyMinMaxValueContext *) ctx;
+
+	int nTuples = PQntuples(result);
+	int errors = 0;
+
+	if (nTuples != 1)
+	{
+		log_error("Query returned %d tuples, expected 1", nTuples);
+		context->parsedOk = false;
+		return;
+	}
+
+	if (PQnfields(result) != 2)
+	{
+		log_error("Query returned %d columns, expected 2", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	/* 1. min */
+	char *value = PQgetvalue(result, 0, 0);
+	if (!stringToInt64(value, &(context->min)))
+	{
+		log_error("Invalid min value: \"%s\"", value);
+		++errors;
+	}
+
+	/* 2. max */
+	value = PQgetvalue(result, 0, 1);
+	if (!stringToInt64(value, &(context->max)))
+	{
+		log_error("Invalid max value: \"%s\"", value);
+		++errors;
+	}
+
+	context->parsedOk = errors == 0;
 }
 
 
@@ -5537,133 +5600,6 @@ parseCurrentSourceDepend(PGresult *result, int rowNumber, SourceDepend *depend)
 				  "the maximum expected is %d (BUFSIZE - 1)",
 				  value, length, BUFSIZE - 1);
 		++errors;
-	}
-
-	return errors == 0;
-}
-
-
-/*
- * getPartitionList loops over the SQL result for the COPY partitions query and
- * allocate an array of SourceTableParts and populates it with the query
- * results.
- */
-static void
-getPartitionList(void *ctx, PGresult *result)
-{
-	SourcePartitionContext *context = (SourcePartitionContext *) ctx;
-	SourceTable *table = context->table;
-	int nTuples = PQntuples(result);
-
-	if (PQnfields(result) != 5)
-	{
-		log_error("Query returned %d columns, expected 5", PQnfields(result));
-		context->parsedOk = false;
-		return;
-	}
-
-	bool parsedOk = true;
-
-	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
-	{
-		SourceTableParts *parts = &(table->partition);
-
-		/* make sure to clean-up the memory area we keep re-using */
-		bzero(parts, sizeof(SourceTableParts));
-
-		if (!parseCurrentPartition(result, rowNumber, parts))
-		{
-			parsedOk = false;
-			break;
-		}
-
-		log_trace("getPartitionList: %s %d %lld %lld %d",
-				  table->qname,
-				  parts->partNumber,
-				  (long long) parts->min,
-				  (long long) parts->max,
-				  parts->partCount);
-
-		if (context->catalog != NULL && context->catalog->db != NULL)
-		{
-			if (!catalog_add_s_table_part(context->catalog, table))
-			{
-				/* errors have already been logged */
-				parsedOk = false;
-			}
-		}
-	}
-
-	context->parsedOk = parsedOk;
-}
-
-
-/*
- * parseCurrentPartition parses a single row of the table COPY partition
- * listing query result.
- */
-static bool
-parseCurrentPartition(PGresult *result, int rowNumber, SourceTableParts *parts)
-{
-	int errors = 0;
-
-	/* 1. partNumber */
-	char *value = PQgetvalue(result, rowNumber, 0);
-
-	if (!stringToInt(value, &(parts->partNumber)))
-	{
-		log_error("Invalid part number \"%s\"", value);
-		++errors;
-	}
-
-	/* 2. partCount */
-	value = PQgetvalue(result, rowNumber, 1);
-
-	if (!stringToInt(value, &(parts->partCount)))
-	{
-		log_error("Invalid part count \"%s\"", value);
-		++errors;
-	}
-
-	/* 3. min */
-	value = PQgetvalue(result, rowNumber, 2);
-
-	if (!stringToInt64(value, &(parts->min)))
-	{
-		log_error("Invalid part min \"%s\"", value);
-		++errors;
-	}
-
-	/* 4. max */
-	if (PQgetisnull(result, rowNumber, 3))
-	{
-		parts->max = -1;
-	}
-	else
-	{
-		value = PQgetvalue(result, rowNumber, 3);
-
-		if (!stringToInt64(value, &(parts->max)))
-		{
-			log_error("Invalid part max \"%s\"", value);
-			++errors;
-		}
-	}
-
-	/* 5. count */
-	if (PQgetisnull(result, rowNumber, 4))
-	{
-		parts->count = -1;
-	}
-	else
-	{
-		value = PQgetvalue(result, rowNumber, 4);
-
-		if (!stringToInt64(value, &(parts->count)))
-		{
-			log_error("Invalid part count \"%s\"", value);
-			++errors;
-		}
 	}
 
 	return errors == 0;

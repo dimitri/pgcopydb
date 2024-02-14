@@ -748,6 +748,14 @@ copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
 					  source->qname);
 			return false;
 		}
+
+		/* fetch the relpages for the table after ANALYZE */
+		if (!schema_get_relpages(context->pgsql, source))
+		{
+			log_error("Failed to fetch table %s relpages",
+					  source->qname);
+			return false;
+		}
 	}
 	else if (!streq(source->amname, "heap"))
 	{
