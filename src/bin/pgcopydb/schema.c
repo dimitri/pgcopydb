@@ -657,7 +657,7 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_NONE,
 
-		"  select c.oid, pg_table_size(c.oid) as bytes ,"
+		"  select c.oid, pg_table_size(c.oid) as bytes, "
 		"         pg_size_pretty(pg_table_size(c.oid)) "
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
@@ -679,7 +679,7 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_INCL,
 
-		"  select c.oid, pg_table_size(c.oid) as bytes "
+		"  select c.oid, pg_table_size(c.oid) as bytes, "
 		"         pg_size_pretty(pg_table_size(c.oid)) "
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
@@ -706,7 +706,7 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_EXCL,
 
-		"  select c.oid, pg_table_size(c.oid) as bytes "
+		"  select c.oid, pg_table_size(c.oid) as bytes, "
 		"         pg_size_pretty(pg_table_size(c.oid)) "
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
@@ -747,7 +747,7 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_LIST_NOT_INCL,
 
-		"  select c.oid, pg_table_size(c.oid) as bytes "
+		"  select c.oid, pg_table_size(c.oid) as bytes, "
 		"         pg_size_pretty(pg_table_size(c.oid)) "
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
@@ -777,7 +777,7 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_LIST_EXCL,
 
-		"  select c.oid, pg_table_size(c.oid) as bytes "
+		"  select c.oid, pg_table_size(c.oid) as bytes, "
 		"         pg_size_pretty(pg_table_size(c.oid)) "
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
