@@ -3228,7 +3228,6 @@ schema_list_partitions(PGSQL *pgsql,
 
 	int64_t min = table->partmin;
 	int64_t max = table->partmax;
-	int64_t partsCount = ceil(table->bytes / partSize);
 
 	if (streq(table->partKey, "ctid"))
 	{
@@ -3236,7 +3235,9 @@ schema_list_partitions(PGSQL *pgsql,
 		max = table->relpages;
 	}
 
-	int64_t range = ((max - min + 1) / partsCount) + 1;
+	int64_t partsCount = ceil((double) table->bytes / (double) partSize);
+	int64_t range = ceil((double) (max - min + 1) / (double) table->bytes *
+						 (double) partSize);
 
 	for (int64_t i = 0; i < partsCount; i++)
 	{
@@ -3248,6 +3249,12 @@ schema_list_partitions(PGSQL *pgsql,
 		parts->partCount = partsCount;
 		parts->min = min + (i * range);
 		parts->max = min + ((i + 1) * range) - 1;
+
+		if (parts->max > max)
+		{
+			parts->max = max;
+		}
+
 		parts->count = parts->max - parts->min + 1;
 
 		log_info("Partition %s#%d: %lld - %lld (%lld)", table->qname, parts->partNumber,
@@ -3260,6 +3267,13 @@ schema_list_partitions(PGSQL *pgsql,
 			{
 				/* errors have already been logged */
 			}
+		}
+
+		/* if we hit max, no need to iterate  */
+		if (parts->max == max)
+		{
+			parts->partCount = i + 1;
+			break;
 		}
 	}
 
