@@ -87,5 +87,10 @@ pgcopydb stream catchup --resume --endpos "${lsn}" -vv
 # now apply AGAIN the SQL file to the target database, skipping transactions
 pgcopydb stream catchup --resume --endpos "${lsn}" -vv
 
+# test whether transform propertly sets xid for continued transactions.
+pgcopydb stream transform --debug /usr/src/pgcopydb/continued-txn.json /tmp/continued-txn.sql
+
+diff /usr/src/pgcopydb/continued-txn.sql /tmp/continued-txn.sql
+
 # cleanup
 pgcopydb stream cleanup

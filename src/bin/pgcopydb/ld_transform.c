@@ -986,6 +986,12 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 
 			LogicalTransaction *txn = &(new.command.tx);
 			txn->continued = true;
+
+			/*
+			 * test_decoding DML logical messages will always have xid = 0.
+			 * We handle that in parseMessage STREAM_ACTION_COMMIT by using
+			 * the xid from the COMMIT message.
+			 */
 			txn->xid = metadata->xid;
 			txn->first = NULL;
 
@@ -1198,6 +1204,13 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 			/* update the timestamp for tracking in replication origin */
 			strlcpy(txn->timestamp, metadata->timestamp, sizeof(txn->timestamp));
 			txn->commitLSN = metadata->lsn;
+
+			/*
+			 * Unlike wal2json, test_decoding don't have xid in the DML logical
+			 * messages. So we use the xid from the COMMIT message to update the
+			 * transaction xid.
+			 */
+			txn->xid = metadata->xid;
 			txn->commit = true;
 
 			break;
