@@ -433,7 +433,7 @@ bool schema_list_sequences(PGSQL *pgsql,
 						   DatabaseCatalog *catalog);
 
 bool schema_get_sequence_value(PGSQL *pgsql, SourceSequence *seq);
-bool schema_get_relpages(PGSQL *pgsql, SourceTable *table);
+bool schema_list_relpages(PGSQL *pgsql, SourceTable *table, DatabaseCatalog *catalog);
 bool schema_set_sequence_value(PGSQL *pgsql, SourceSequence *seq);
 
 bool schema_list_all_indexes(PGSQL *pgsql,
