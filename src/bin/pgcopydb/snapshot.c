@@ -31,6 +31,7 @@ copydb_copy_snapshot(CopyDataSpec *specs, TransactionSnapshot *snapshot)
 	snapshot->exportedCreateSlotSnapshot = source->exportedCreateSlotSnapshot;
 	snapshot->pguri = strdup(source->pguri);
 	strlcpy(snapshot->snapshot, source->snapshot, sizeof(snapshot->snapshot));
+	snapshot->isReadOnly = source->isReadOnly;
 
 	return true;
 }
@@ -69,26 +70,14 @@ copydb_export_snapshot(TransactionSnapshot *snapshot)
 	 * database to then implement the filtering as JOINs with the Postgres
 	 * catalogs. And even TEMP tables need read-write transaction.
 	 */
-	IsolationLevel level = ISOLATION_SERIALIZABLE;
-	bool readOnly = false;
+	IsolationLevel level = ISOLATION_REPEATABLE_READ;
 	bool deferrable = true;
 
-	/*
-	 * If the source server is in recovery mode,
-	 * set the isolation level to REPEATABLE READ and read-only mode.
-	 */
-	bool pg_is_in_recovery = false;
-	if (!pgsql_is_in_recovery(pgsql, &pg_is_in_recovery))
+	if (!pgsql_is_in_recovery(pgsql, &(snapshot->isReadOnly)))
 	{
 		/* errors have already been logged */
 		(void) pgsql_finish(pgsql);
 		return false;
-	}
-
-	if (pg_is_in_recovery)
-	{
-		level = ISOLATION_REPEATABLE_READ;
-		readOnly = true;
 	}
 
 	if (!pgsql_begin(pgsql))
@@ -97,7 +86,7 @@ copydb_export_snapshot(TransactionSnapshot *snapshot)
 		return false;
 	}
 
-	if (!pgsql_set_transaction(pgsql, level, readOnly, deferrable))
+	if (!pgsql_set_transaction(pgsql, level, snapshot->isReadOnly, deferrable))
 	{
 		/* errors have already been logged */
 		(void) pgsql_finish(pgsql);
@@ -178,10 +167,9 @@ copydb_set_snapshot(CopyDataSpec *copySpecs)
 		 * catalogs. And even TEMP tables need read-write transaction.
 		 */
 		IsolationLevel level = ISOLATION_REPEATABLE_READ;
-		bool readOnly = false;
 		bool deferrable = true;
 
-		if (!pgsql_set_transaction(pgsql, level, readOnly, deferrable))
+		if (!pgsql_set_transaction(pgsql, level, snapshot->isReadOnly, deferrable))
 		{
 			/* errors have already been logged */
 			(void) pgsql_finish(pgsql);
