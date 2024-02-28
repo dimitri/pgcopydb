@@ -139,6 +139,14 @@ vacuum_start_workers(CopyDataSpec *specs)
 		return true;
 	}
 
+	if (specs->sourceSnapshot.isReadOnly)
+	{
+		log_warn(
+			"Skipping VACUUM jobs because source database is in recovery (or read-only) mode ");
+		return true;
+	}
+
+
 	log_info("STEP 8: starting %d VACUUM processes", specs->vacuumJobs);
 
 	for (int i = 0; i < specs->vacuumJobs; i++)
