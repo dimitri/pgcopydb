@@ -2326,6 +2326,7 @@ schema_list_relpages(PGSQL *pgsql, SourceTable *table, DatabaseCatalog *catalog)
 		if (!catalog_update_s_table_relpages(catalog, table))
 		{
 			/* errors have already been logged */
+			return false;
 		}
 	}
 
