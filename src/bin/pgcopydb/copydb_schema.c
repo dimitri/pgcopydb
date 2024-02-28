@@ -746,7 +746,7 @@ copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
 		}
 
 		/* fetch the relpages for the table after ANALYZE */
-		if (!schema_get_relpages(context->pgsql, source))
+		if (!schema_list_relpages(context->pgsql, source, sourceDB))
 		{
 			log_error("Failed to fetch table %s relpages",
 					  source->qname);
