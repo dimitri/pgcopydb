@@ -207,9 +207,9 @@ static void getTableSizeArray(void *ctx, PGresult *result);
 static bool parseCurrentSourceTableSize(PGresult *result,
 										int rowNumber,
 										SourceTableSize *tableSize);
-static void getPartKeyMinMaxValue(void *ctx, PGresult *result);
+static void parsePartKeyMinMaxValue(void *ctx, PGresult *result);
 
-static bool calculatePartKeyMinMaxValue(PGSQL *pgsql, SourceTable *table);
+static bool getPartKeyMinMaxValue(PGSQL *pgsql, SourceTable *table);
 
 static bool parseAttributesArray(SourceTable *table, JSON_Value *json);
 
@@ -3228,7 +3228,7 @@ schema_list_partitions(PGSQL *pgsql,
 	/* if we have a partKey and it's not "ctid", calculate key bounds  */
 	if (!IS_EMPTY_STRING_BUFFER(table->partKey) && !streq(table->partKey, "ctid"))
 	{
-		if (!calculatePartKeyMinMaxValue(pgsql, table))
+		if (!getPartKeyMinMaxValue(pgsql, table))
 		{
 			/* errors have already been logged */
 			return false;
@@ -4636,11 +4636,11 @@ getTableArray(void *ctx, PGresult *result)
 
 
 /*
- * calculatePartKeyMinMaxValue calculates the min and max values for the
+ * getPartKeyMinMaxValue retrieves the min and max values for the
  * candidate partition key of the given table.
  */
 static bool
-calculatePartKeyMinMaxValue(PGSQL *pgsql, SourceTable *table)
+getPartKeyMinMaxValue(PGSQL *pgsql, SourceTable *table)
 {
 	PQExpBuffer sql = createPQExpBuffer();
 	char *sqlTemplate = "select min(%s), max(%s) "
@@ -4658,7 +4658,7 @@ calculatePartKeyMinMaxValue(PGSQL *pgsql, SourceTable *table)
 
 	SourceTablePartKeyMinMaxValueContext partKeyMinMaxValueContext = { 0 };
 	if (!pgsql_execute_with_params(pgsql, sql->data, 0, NULL, NULL,
-								   &partKeyMinMaxValueContext, &getPartKeyMinMaxValue))
+								   &partKeyMinMaxValueContext, &parsePartKeyMinMaxValue))
 	{
 		(void) destroyPQExpBuffer(sql);
 		log_error("Failed to execute SQL query to get partition key range");
@@ -4682,11 +4682,10 @@ calculatePartKeyMinMaxValue(PGSQL *pgsql, SourceTable *table)
 
 
 /*
- * getPartKeyMinMaxValue loops over the SQL result for the partition key min max value query and
- * allocates an array of tables then populates it with the query result.
+ * Parses the minimum and maximum values of a partition key from a PostgreSQL result.
  */
 static void
-getPartKeyMinMaxValue(void *ctx, PGresult *result)
+parsePartKeyMinMaxValue(void *ctx, PGresult *result)
 {
 	SourceTablePartKeyMinMaxValueContext *context =
 		(SourceTablePartKeyMinMaxValueContext *) ctx;
