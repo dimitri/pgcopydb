@@ -3238,6 +3238,14 @@ schema_list_partitions(PGSQL *pgsql,
 	int64_t min = table->partmin;
 	int64_t max = table->partmax;
 
+	/*
+	 * When the partition key is set to "ctid", it means that the table will be
+	 * partitioned based on the physical location of the rows in the table.
+	 * In this case, the relpages value represents the total number of pages in the
+	 * table, which can be used as the maximum value for the partition range.
+	 * By setting min to 0 and max to table->relpages, we ensure that each partition
+	 * covers the entire range of pages in the table.
+	 */
 	if (streq(table->partKey, "ctid"))
 	{
 		min = 0;
