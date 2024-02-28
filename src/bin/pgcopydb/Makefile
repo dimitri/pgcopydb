@@ -9,6 +9,9 @@ SRC_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 DEPDIR = $(SRC_DIR)/.deps
 
+SQLITE3_DIR = $(SRC_DIR)../lib/sqlite/
+SQLITE3_LIB = $(SQLITE3_DIR)sqlite3.o
+
 INCLUDES  = $(patsubst ${SRC_DIR}%.h,%.h,$(wildcard ${SRC_DIR}*.h))
 
 SRC   = $(patsubst ${SRC_DIR}%.c,%.c,$(wildcard ${SRC_DIR}*.c))
@@ -16,6 +19,7 @@ OBJS  = $(patsubst %.c,%.o,$(SRC))
 OBJS += lib-log.o lib-commandline.o lib-parson.o
 OBJS += lib-snprintf.o lib-strerror.o lib-dumputils.o lib-string_utils.o
 OBJS += lib-lookup3.o
+OBJS += lib-sqlite3.o
 
 PG_CONFIG ?= pg_config
 BINDIR    ?= $(shell $(PG_CONFIG) --bindir)
@@ -34,6 +38,7 @@ COMMON_LIBS += -I${SRC_DIR}../lib/libs/
 COMMON_LIBS += -I${SRC_DIR}../lib/parson/
 COMMON_LIBS += -I${SRC_DIR}../lib/uthash/
 COMMON_LIBS += -I${SRC_DIR}../lib/jenkins/
+COMMON_LIBS += -I${SRC_DIR}../lib/sqlite/
 
 CC = $(shell $(PG_CONFIG) --cc)
 
@@ -79,10 +84,9 @@ LIBS += $(shell $(PG_CONFIG) --ldflags)
 LIBS += $(shell $(PG_CONFIG) --libs)
 LIBS += -lpq
 LIBS += -lncurses
-LIBS += -lsqlite3
 LIBS += -lgc
 
-all: $(PGCOPYDB) ;
+all: $(PGCOPYDB) $(SQLITE3) ;
 
 # Based on Postgres Makefile for automatic dependency generation
 # https://github.com/postgres/postgres/blob/1933ae629e7b706c6c23673a381e778819db307d/src/Makefile.global.in#L890-L924
@@ -98,6 +102,12 @@ endif
 
 $(PGCOPYDB): VERSION-FILE $(OBJS) $(INCLUDES)
 	$(CC) $(CFLAGS) $(OBJS) $(LDFLAGS) $(LIBS) -o $@
+
+$(SQLITE3_LIB):
+	$(MAKE) -C $(SQLITE3_DIR) sqlite3.o
+
+lib-sqlite3.o: $(SQLITE3_LIB)
+	ln -sf $(SQLITE3_LIB) $@
 
 lib-snprintf.o: $(PG_SNPRINTF)
 	$(CC) $(CFLAGS) -c -MMD -MP -MF$(DEPDIR)/$(*F).Po -MT$@ -o $@ ${SRC_DIR}../lib/pg/snprintf.c
@@ -131,13 +141,12 @@ git-version.h:
 clean:
 	rm -f git-version.h
 	rm -f $(OBJS) $(PGCOPYDB)
+	$(MAKE) -C $(SQLITE3_DIR) clean
 	rm -rf $(DEPDIR)
 
 install: $(PGCOPYDB)
 	install -d $(DESTDIR)$(BINDIR)
 	install -m 0755 $(PGCOPYDB) $(DESTDIR)$(BINDIR)
-
-
 
 .PHONY: all monitor clean
 .PHONY: VERSION-FILE
