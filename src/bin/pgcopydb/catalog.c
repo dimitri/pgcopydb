@@ -1962,6 +1962,9 @@ catalog_add_s_table_chksum(DatabaseCatalog *catalog,
 }
 
 
+/*
+ * catalog_add_s_table_size inserts a SourceTableSize to our internal catalogs database.
+ */
 bool
 catalog_add_s_table_size(DatabaseCatalog *catalog,
 						 SourceTableSize *tableSize)
