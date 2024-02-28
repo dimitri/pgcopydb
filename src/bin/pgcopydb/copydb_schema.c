@@ -417,16 +417,8 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	/* check if we're connected to a standby server, which we don't support */
-	bool pg_is_in_recovery = false;
-
-	if (!pgsql_is_in_recovery(src, &pg_is_in_recovery))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (pg_is_in_recovery && specs->filters.type != SOURCE_FILTER_TYPE_NONE)
+	if (specs->sourceSnapshot.isReadOnly && specs->filters.type !=
+		SOURCE_FILTER_TYPE_NONE)
 	{
 		log_fatal("Connected to a standby server where pg_is_in_recovery(): "
 				  "pgcopydb does not support operating on standby server "
@@ -718,9 +710,13 @@ copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
 	 * When the Table Access Method used is not "heap" we don't know if the
 	 * CTID range scan is supported (see columnar storage extensions), so
 	 * we skip partitioning altogether in that case.
+	 *
+	 * Also, we cannot execute ANALYZE on a database that is in recovery mode,
+	 * so we skip partitioning in that case too.
 	 */
 	if (IS_EMPTY_STRING_BUFFER(source->partKey) &&
-		streq(source->amname, "heap"))
+		streq(source->amname, "heap") &&
+		!specs->sourceSnapshot.isReadOnly)
 	{
 		log_info("Table %s is %s large "
 				 "which is larger than --split-tables-larger-than %s, "
