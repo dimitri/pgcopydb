@@ -4506,6 +4506,9 @@ getCollationList(void *ctx, PGresult *result)
 }
 
 
+/*
+ * Retrieves the table size array from the PostgreSQL result and populates the context.
+ */
 static void
 getTableSizeArray(void *ctx, PGresult *result)
 {
