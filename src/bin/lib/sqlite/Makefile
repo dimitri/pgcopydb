@@ -25,7 +25,7 @@ SQLITE_CFLAGS += -DSQLITE_ENABLE_MATH_FUNCTIONS
 SQLITE_CFLAGS += -Wno-missing-prototypes
 SQLITE_CFLAGS += -Wno-implicit-fallthrough
 
-override CFLAGS := $(DEFAULT_CFLAGS) $(SQLITE_CFLAGS) $(CFLAGS)
+override CFLAGS := $(DEFAULT_CFLAGS) $(CFLAGS) $(SQLITE_CFLAGS)
 
 LIBS += -lm
 LIBS += -lreadline
