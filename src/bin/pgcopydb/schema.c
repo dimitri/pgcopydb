@@ -4550,6 +4550,9 @@ getTableSizeArray(void *ctx, PGresult *result)
 }
 
 
+/*
+ * Parses the current source table size from the given PGresult object.
+ */
 static bool
 parseCurrentSourceTableSize(PGresult *result, int rowNumber, SourceTableSize *tableSize)
 {
