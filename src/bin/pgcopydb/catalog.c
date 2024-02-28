@@ -4514,6 +4514,58 @@ catalog_update_sequence_values(DatabaseCatalog *catalog, SourceSequence *seq)
 
 
 /*
+ * Updates the 'relpages' field of the 's_table' table in the database catalog with the given values.
+ */
+bool
+catalog_update_s_table_relpages(DatabaseCatalog *catalog, SourceTable *sourceTable)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_update_s_table_relpages: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"update s_table "
+		"   set relpages = $1 "
+		" where oid = $2";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "relpages", sourceTable->relpages, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "oid", sourceTable->oid, NULL },
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which does not return any row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * catalog_lookup_s_seq_by_name fetches a SourceSeq from our catalogs.
  */
 bool

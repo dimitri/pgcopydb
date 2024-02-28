@@ -347,6 +347,7 @@ bool catalog_s_index_fetch(SQLiteQuery *query);
  */
 bool catalog_add_s_seq(DatabaseCatalog *catalog, SourceSequence *index);
 bool catalog_update_sequence_values(DatabaseCatalog *catalog, SourceSequence *seq);
+bool catalog_update_s_table_relpages(DatabaseCatalog *catalog, SourceTable *sourceTable);
 
 typedef bool (SourceSequenceIterFun)(void *context, SourceSequence *seq);
 

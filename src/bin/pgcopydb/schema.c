@@ -2291,10 +2291,11 @@ schema_get_sequence_value(PGSQL *pgsql, SourceSequence *seq)
 
 
 /*
- * schema_get_relpages fetches the number of pages for the given table.
+ * schema_list_relpages fetches the number of pages for the given table
+ * and updates our internal catalog with that information.
  */
 bool
-schema_get_relpages(PGSQL *pgsql, SourceTable *table)
+schema_list_relpages(PGSQL *pgsql, SourceTable *table, DatabaseCatalog *catalog)
 {
 	SingleValueResultContext parseContext = { { 0 }, PGSQL_RESULT_INT, false };
 
@@ -2319,6 +2320,14 @@ schema_get_relpages(PGSQL *pgsql, SourceTable *table)
 	}
 
 	table->relpages = parseContext.intVal;
+
+	if (catalog != NULL && catalog->db != NULL)
+	{
+		if (!catalog_update_s_table_relpages(catalog, table))
+		{
+			/* errors have already been logged */
+		}
+	}
 
 	return true;
 }
