@@ -239,6 +239,13 @@ static char *filterDBcreateDDLs[] = {
 	"create unique index s_t_qname on s_table(qname)",
 	"create unique index s_t_rlname on s_table(restore_list_name)",
 
+	"create table s_table_size("
+	"  oid integer primary key references s_table(oid), "
+	"  bytes integer, bytes_pretty text "
+	")",
+
+	"create unique index s_ts_oid on s_table_size(oid)",
+
 	"create table s_attr("
 	"  oid integer references s_table(oid), "
 	"  attnum integer, attypid integer, attname text, "
