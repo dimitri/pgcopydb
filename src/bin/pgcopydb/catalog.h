@@ -179,6 +179,8 @@ bool catalog_add_s_table_chksum(DatabaseCatalog *catalog,
 								TableChecksum *srcChk,
 								TableChecksum *dstChk);
 
+bool catalog_add_s_table_size(DatabaseCatalog *catalog,
+							  SourceTableSize *tableSize);
 bool catalog_delete_s_table(DatabaseCatalog *catalog,
 							const char *nspname,
 							const char *relname);
