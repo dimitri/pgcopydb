@@ -3252,6 +3252,23 @@ schema_list_partitions(PGSQL *pgsql,
 		max = table->relpages;
 	}
 
+	/*
+	 * Below code block calculates the number of parts needed and assigns the minimum and
+	 * maximum values for each part. It also logs information about each partition and
+	 * adds the table part to the catalog if provided.
+	 * Example:
+	 * int64_t tableSize (table->bytes) = 100;
+	 * int64_t partSize = 10;
+	 * int64_t min = 1;
+	 * int64_t max = 100;
+	 * int64_t result = partitionTable(&table, partSize, min, max, &catalog);
+	 * // Output:
+	 * // Partition table#1: 1 - 10 (10)
+	 * // Partition table#2: 11 - 20 (10)
+	 * // Partition table#3: 21 - 30 (10)
+	 * // ...
+	 * // Partition table#10: 91 - 100 (10)
+	 */
 	int64_t partsCount = ceil((double) table->bytes / (double) partSize);
 	int64_t range = ceil((double) (max - min + 1) / (double) table->bytes *
 						 (double) partSize);
