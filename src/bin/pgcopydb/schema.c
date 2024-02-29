@@ -457,7 +457,7 @@ schema_list_ext_schemas(PGSQL *pgsql, DatabaseCatalog *catalog)
 	SourceSchemaArrayContext parseContext = { { 0 }, catalog, false };
 
 	char *sql =
-		"select n.oid, n.nspname, "
+		"select distinct on (n.oid) n.oid, n.nspname, "
 		"       format('- %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
 		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')) "
