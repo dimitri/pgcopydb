@@ -306,8 +306,6 @@ bool copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 							 SourceTable *source,
 							 int partNumber);
 
-void FreeCopyTableDataSpec(CopyTableDataSpec *tableSpecs);
-
 bool copydb_export_snapshot(TransactionSnapshot *snapshot);
 
 bool copydb_fatal_exit(void);
@@ -458,9 +456,6 @@ bool copydb_table_parts_are_all_done(CopyDataSpec *specs,
 									 bool *isBeingProcessed);
 
 bool copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs, CopyArgs *args);
-
-bool copydb_prepare_copy_query_attrlist(CopyTableDataSpec *tableSpecs,
-										PQExpBuffer attrList);
 
 bool copydb_prepare_summary_command(CopyTableDataSpec *tableSpecs);
 

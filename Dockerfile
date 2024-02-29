@@ -15,6 +15,7 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
     valgrind \
     build-essential \
     libedit-dev \
+    libgc-dev \
     libicu-dev \
     libkrb5-dev \
     liblz4-dev \
@@ -24,7 +25,6 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
     libpq5 \
     libreadline-dev \
     libselinux1-dev \
-    libsqlite3-dev \
     libssl-dev \
     libxslt1-dev \
     lsof \
@@ -63,15 +63,16 @@ LABEL org.opencontainers.image.source https://github.com/dimitri/pgcopydb
 RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
   && apt install -qqy --no-install-suggests --no-install-recommends \
     sudo \
-	passwd \
+    passwd \
     ca-certificates \
+    libgc1 \
     libpq5 \
-	libsqlite3-0 \
-	lsof \
+    lsof \
     tmux \
     watch \
     psmisc \
     openssl \
+    sqlite3 \
     postgresql-common \
     postgresql-client \
     postgresql-client-common \

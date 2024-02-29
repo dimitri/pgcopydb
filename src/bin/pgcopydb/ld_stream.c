@@ -905,8 +905,6 @@ streamCheckResumePosition(StreamSpecs *specs)
 		log_notice("Resume replication from latest message: %s", latestMessage);
 	}
 
-	FreeLinesBuffer(&(latestStreamedContent.lbuf));
-
 	PGSQL src = { 0 };
 
 	if (!pgsql_init(&src, specs->connStrings->source_pguri, PGSQL_CONN_SOURCE))
@@ -1110,7 +1108,6 @@ stream_write_json(LogicalStreamContext *context, bool previous)
 	}
 
 	destroyPQExpBuffer(buffer);
-	free(metadata->jsonBuffer);
 
 	/*
 	 * Maintain the transaction progress based on the BEGIN and COMMIT messages
@@ -2184,7 +2181,7 @@ stream_read_file(StreamContent *content)
 		return false;
 	}
 
-	if (!splitLines(&(content->lbuf), contents, true))
+	if (!splitLines(&(content->lbuf), contents))
 	{
 		/* errors have already been logged */
 		return false;
@@ -2219,11 +2216,8 @@ stream_read_file(StreamContent *content)
 		if (!parseMessageMetadata(metadata, message, json, false))
 		{
 			/* errors have already been logged */
-			json_value_free(json);
 			return false;
 		}
-
-		json_value_free(json);
 	}
 
 	return true;
@@ -2386,11 +2380,9 @@ buildReplicationURI(const char *pguri, char **repl_pguri)
 	if (!buildPostgresURIfromPieces(&params, repl_pguri))
 	{
 		log_error("Failed to produce the replication connection string");
-		freeURIParams(&params);
 		return false;
 	}
 
-	freeURIParams(&params);
 	return true;
 }
 
@@ -3003,33 +2995,21 @@ stream_read_context(CDCPaths *paths,
 	if (!stringToUInt(wal_segment_size, WalSegSz))
 	{
 		/* errors have already been logged */
-		free(wal_segment_size);
-		free(tli);
-		free(history);
 		return false;
 	}
 
 	if (!stringToUInt(tli, &(system->timeline)))
 	{
 		/* errors have already been logged */
-		free(wal_segment_size);
-		free(tli);
-		free(history);
 		return false;
 	}
 
 	if (!parseTimeLineHistory(paths->tlihistfile, history, system))
 	{
 		/* errors have already been logged */
-		free(wal_segment_size);
-		free(tli);
-		free(history);
 		return false;
 	}
 
-	free(wal_segment_size);
-	free(tli);
-	free(history);
 
 	return true;
 }

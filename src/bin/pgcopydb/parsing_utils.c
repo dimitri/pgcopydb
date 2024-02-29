@@ -86,7 +86,7 @@ regexp_first_match(const char *string, const char *regex)
 		regoff_t start = m[1].rm_so;
 		regoff_t finish = m[1].rm_eo;
 		int length = finish - start + 1;
-		char *result = (char *) malloc(length * sizeof(char));
+		char *result = (char *) calloc(length, sizeof(char));
 
 		if (result == NULL)
 		{
@@ -127,11 +127,9 @@ parse_version_number(const char *version_string,
 	if (!parse_pg_version_string(pg_version_string, pg_version))
 	{
 		/* errors have already been logged */
-		free(match);
 		return false;
 	}
 
-	free(match);
 	return true;
 }
 
@@ -710,7 +708,6 @@ buildPostgresBareURIfromPieces(URIParams *uriParams, char **pguri)
 			return false;
 		}
 		appendPQExpBuffer(uri, "%s@", escaped);
-		free(escaped);
 	}
 
 	if (uriParams->hostname)
@@ -724,7 +721,6 @@ buildPostgresBareURIfromPieces(URIParams *uriParams, char **pguri)
 			return false;
 		}
 		appendPQExpBuffer(uri, "%s", escaped);
-		free(escaped);
 	}
 
 	if (uriParams->port)
@@ -746,7 +742,6 @@ buildPostgresBareURIfromPieces(URIParams *uriParams, char **pguri)
 			return false;
 		}
 		appendPQExpBuffer(uri, "%s", escaped);
-		free(escaped);
 	}
 
 	if (PQExpBufferBroken(uri))
@@ -780,7 +775,6 @@ buildPostgresURIfromPieces(URIParams *uriParams, char **pguri)
 
 	/* prepare the mandatory part of the Postgres URI */
 	appendPQExpBufferStr(uri, *pguri);
-	free(*pguri);
 
 	/* now add optional parameters to the Postgres URI */
 	for (int index = 0; index < uriParams->parameters.count; index++)
@@ -812,8 +806,6 @@ buildPostgresURIfromPieces(URIParams *uriParams, char **pguri)
 							  index == 0 ? "?" : "&",
 							  keyword,
 							  escapedValue);
-
-			free(escapedValue);
 		}
 		else
 		{
@@ -1094,57 +1086,4 @@ bareConnectionString(const char *pguri, SafeURI *safeURI)
 	buildPostgresBareURIfromPieces(uriParams, &(safeURI->pguri));
 
 	return true;
-}
-
-
-/*
- * freeSafeURI frees the dynamic memory allocated for handling the safe URI.
- */
-void
-freeSafeURI(SafeURI *safeURI)
-{
-	free(safeURI->pguri);
-	free(safeURI->password);
-	freeURIParams(&(safeURI->uriParams));
-
-	safeURI->pguri = NULL;
-	safeURI->password = NULL;
-}
-
-
-/*
- * freeURIParams frees the dynamic memory allocated for handling URI params.
- */
-void
-freeURIParams(URIParams *params)
-{
-	free(params->username);
-	free(params->hostname);
-	free(params->port);
-	free(params->dbname);
-	freeKeyVal(&(params->parameters));
-
-	params->username = NULL;
-	params->hostname = NULL;
-	params->port = NULL;
-	params->dbname = NULL;
-}
-
-
-/*
- * freeKeyVal frees the dynamic memory allocated for handling KeyVal parameters
- */
-void
-freeKeyVal(KeyVal *parameters)
-{
-	for (int i = 0; i < parameters->count; i++)
-	{
-		free(parameters->keywords[i]);
-		free(parameters->values[i]);
-
-		parameters->keywords[i] = NULL;
-		parameters->values[i] = NULL;
-	}
-
-	parameters->count = 0;
 }

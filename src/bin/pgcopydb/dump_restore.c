@@ -281,7 +281,14 @@ copydb_copy_database_properties_hook(void *ctx, SourceProperty *property)
 	PGSQL *dst = context->dst;
 	PGconn *conn = dst->connection;
 
-	const char *t_dbname = specs->connStrings.safeTargetPGURI.uriParams.dbname;
+	char *t_dbname = specs->connStrings.safeTargetPGURI.uriParams.dbname;
+	char *t_escaped_dbname = pgsql_escape_identifier(dst, t_dbname);
+
+	if (t_escaped_dbname == NULL)
+	{
+		/* errors are already logged */
+		return false;
+	}
 
 	/*
 	 * ALTER ROLE rolname IN DATABASE datname SET ...
@@ -301,7 +308,6 @@ copydb_copy_database_properties_hook(void *ctx, SourceProperty *property)
 		if (!catalog_lookup_s_role_by_name(targetDB, property->rolname, role))
 		{
 			/* errors have already been logged */
-			free(role);
 			return false;
 		}
 
@@ -312,7 +318,7 @@ copydb_copy_database_properties_hook(void *ctx, SourceProperty *property)
 			makeAlterConfigCommand(conn, property->setconfig,
 								   "ROLE", property->rolname,
 								   "DATABASE",
-								   t_dbname,
+								   t_escaped_dbname,
 								   command);
 
 			/* chomp the \n */
@@ -326,7 +332,6 @@ copydb_copy_database_properties_hook(void *ctx, SourceProperty *property)
 			if (!pgsql_execute(dst, command->data))
 			{
 				/* errors have already been logged */
-				free(role);
 				return false;
 			}
 
@@ -338,8 +343,6 @@ copydb_copy_database_properties_hook(void *ctx, SourceProperty *property)
 					 "does not exists on the target database",
 					 property->rolname);
 		}
-
-		free(role);
 	}
 
 	/*
@@ -350,7 +353,7 @@ copydb_copy_database_properties_hook(void *ctx, SourceProperty *property)
 		PQExpBuffer command = createPQExpBuffer();
 
 		makeAlterConfigCommand(conn, property->setconfig,
-							   "DATABASE", t_dbname,
+							   "DATABASE", t_escaped_dbname,
 							   NULL, NULL,
 							   command);
 
@@ -595,7 +598,6 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 						 &contents))
 	{
 		/* errors have already been logged */
-		FreeArchiveContentArray(&contents);
 		return false;
 	}
 
@@ -710,7 +712,6 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 	{
 		log_error("Failed to create pg_restore list file: out of memory");
 		destroyPQExpBuffer(listContents);
-		FreeArchiveContentArray(&contents);
 		return false;
 	}
 
@@ -720,12 +721,10 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 	{
 		/* errors have already been logged */
 		destroyPQExpBuffer(listContents);
-		FreeArchiveContentArray(&contents);
 		return false;
 	}
 
 	destroyPQExpBuffer(listContents);
-	FreeArchiveContentArray(&contents);
 
 	return true;
 }

@@ -3932,12 +3932,9 @@ getSchemaList(void *ctx, PGresult *result)
 			{
 				/* errors have already been logged */
 				++errors;
-				free(schema);
 				break;
 			}
 		}
-
-		free(schema);
 	}
 
 	context->parsedOk = errors == 0;
@@ -4003,12 +4000,9 @@ getRoleList(void *ctx, PGresult *result)
 			{
 				/* errors have already been logged */
 				++errors;
-				free(role);
 				break;
 			}
 		}
-
-		free(role);
 	}
 
 	context->parsedOk = errors == 0;
@@ -4042,7 +4036,6 @@ getDatabaseList(void *ctx, PGresult *result)
 		if (!parseCurrentDatabase(result, rowNumber, database))
 		{
 			parsedOk = false;
-			free(database);
 			break;
 		}
 
@@ -4052,12 +4045,9 @@ getDatabaseList(void *ctx, PGresult *result)
 			{
 				/* errors have already been logged */
 				parsedOk = false;
-				free(database);
 				break;
 			}
 		}
-
-		free(database);
 	}
 
 	context->parsedOk = parsedOk;
@@ -4159,8 +4149,6 @@ getDatabaseProperties(void *ctx, PGresult *result)
 		if (!parseDatabaseProperty(result, rowNumber, property))
 		{
 			parsedOk = false;
-			free(property->setconfig);
-			free(property);
 			break;
 		}
 
@@ -4170,14 +4158,9 @@ getDatabaseProperties(void *ctx, PGresult *result)
 			{
 				/* errors have already been logged */
 				parsedOk = false;
-				free(property->setconfig);
-				free(property);
 				break;
 			}
 		}
-
-		free(property->setconfig);
-		free(property);
 	}
 
 	context->parsedOk = parsedOk;
@@ -4356,7 +4339,6 @@ getExtensionList(void *ctx, PGresult *result)
 			if (!parseCurrentExtensionConfig(result, rowNumber, config))
 			{
 				parsedOk = false;
-				free(config);
 				break;
 			}
 
@@ -4368,16 +4350,12 @@ getExtensionList(void *ctx, PGresult *result)
 				{
 					/* errors have already been logged */
 					parsedOk = false;
-					free(config);
 					break;
 				}
 			}
-
-			free(config);
 		}
 	}
 
-	free(extension);
 
 	context->parsedOk = parsedOk;
 }
@@ -4567,7 +4545,6 @@ getExtensionsVersions(void *ctx, PGresult *result)
 		/* issue a warning but let's try anyway */
 		log_warn("BUG? context's array is not null in getExtensionsVersions");
 
-		free(context->evArray->array);
 		context->evArray->array = NULL;
 	}
 
@@ -4729,12 +4706,9 @@ getCollationList(void *ctx, PGresult *result)
 			{
 				/* errors have already been logged */
 				++errors;
-				free(collation);
 				break;
 			}
 		}
-
-		free(collation);
 	}
 
 	context->parsedOk = errors == 0;
@@ -4767,7 +4741,6 @@ getTableArray(void *ctx, PGresult *result)
 		if (!parseCurrentSourceTable(result, rowNumber, table))
 		{
 			parsedOk = false;
-			free(table);
 			break;
 		}
 
@@ -4777,12 +4750,9 @@ getTableArray(void *ctx, PGresult *result)
 			{
 				/* errors have already been logged */
 				parsedOk = false;
-				free(table);
 				break;
 			}
 		}
-
-		free(table);
 	}
 
 	context->parsedOk = parsedOk;
@@ -5008,8 +4978,6 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 					  value);
 			++errors;
 		}
-
-		json_value_free(json);
 	}
 
 	log_trace("parseCurrentSourceTable: %s.%s", table->nspname, table->relname);
@@ -5098,7 +5066,6 @@ getSequenceArray(void *ctx, PGresult *result)
 		if (!parseCurrentSourceSequence(result, rowNumber, seq))
 		{
 			parsedOk = false;
-			free(seq);
 			break;
 		}
 
@@ -5108,12 +5075,9 @@ getSequenceArray(void *ctx, PGresult *result)
 			{
 				/* errors have already been logged */
 				parsedOk = false;
-				free(seq);
 				break;
 			}
 		}
-
-		free(seq);
 	}
 
 	context->parsedOk = parsedOk;
@@ -5268,7 +5232,6 @@ getIndexArray(void *ctx, PGresult *result)
 		if (!parseCurrentSourceIndex(result, rowNumber, index))
 		{
 			parsedOk = false;
-			free(index);
 			break;
 		}
 
@@ -5278,7 +5241,6 @@ getIndexArray(void *ctx, PGresult *result)
 			{
 				/* errors have already been logged */
 				parsedOk = false;
-				free(index);
 				break;
 			}
 
@@ -5289,13 +5251,10 @@ getIndexArray(void *ctx, PGresult *result)
 				{
 					/* errors have already been logged */
 					parsedOk = false;
-					free(index);
 					break;
 				}
 			}
 		}
-
-		free(index);
 	}
 
 	context->parsedOk = parsedOk;
@@ -5590,12 +5549,9 @@ getDependArray(void *ctx, PGresult *result)
 			{
 				/* errors have already been logged */
 				parsedOk = false;
-				free(depend);
 				break;
 			}
 		}
-
-		free(depend);
 	}
 
 	context->parsedOk = parsedOk;

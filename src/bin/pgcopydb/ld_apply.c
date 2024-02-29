@@ -448,7 +448,7 @@ stream_apply_file(StreamApplyContext *context)
 		return false;
 	}
 
-	if (!splitLines(&(content.lbuf), contents, true))
+	if (!splitLines(&(content.lbuf), contents))
 	{
 		/* errors have already been logged */
 		return false;
@@ -484,8 +484,6 @@ stream_apply_file(StreamApplyContext *context)
 		if (!parseSQLAction(sql, metadata))
 		{
 			/* errors have already been logged */
-			FreeLinesBuffer(&(content.lbuf));
-
 			return false;
 		}
 
@@ -501,8 +499,6 @@ stream_apply_file(StreamApplyContext *context)
 					  content.filename,
 					  (long long) i + 1,
 					  (long long) content.lbuf.count);
-
-			FreeLinesBuffer(&(content.lbuf));
 
 			return false;
 		}
@@ -528,14 +524,9 @@ stream_apply_file(StreamApplyContext *context)
 					  "see above for details",
 					  content.filename);
 
-			FreeLinesBuffer(&(content.lbuf));
-
 			return false;
 		}
 	}
-
-	/* free dynamic memory that's not needed anymore */
-	FreeLinesBuffer(&(content.lbuf));
 
 	/*
 	 * Each time we are done applying a file, we update our progress and
@@ -1117,12 +1108,8 @@ stream_apply_sql(StreamApplyContext *context,
 					/* errors have already been logged */
 					return false;
 				}
-
-				free(paramValues);
 			}
 
-			free(metadata->jsonBuffer);
-			json_value_free(js);
 
 			break;
 		}
@@ -1443,11 +1430,9 @@ parseSQLAction(const char *query, LogicalMessageMetadata *metadata)
 		if (!parseMessageMetadata(metadata, message, json, true))
 		{
 			/* errors have already been logged */
-			json_value_free(json);
 			return false;
 		}
 
-		json_value_free(json);
 
 		return true;
 	}
@@ -1656,7 +1641,6 @@ stream_apply_find_durable_lsn(StreamApplyContext *context, uint64_t *durableLSN)
 	while (tail != NULL)
 	{
 		LSNTracking *previous = tail->previous;
-		free(tail);
 		tail = previous;
 	}
 
@@ -1746,12 +1730,9 @@ parseTxnMetadataFile(const char *filename, LogicalMessageMetadata *metadata)
 	if (!parseMessageMetadata(metadata, txnMetadataContent, json, true))
 	{
 		/* errors have already been logged */
-		json_value_free(json);
 		return false;
 	}
 
-	json_value_free(json);
-	free(txnMetadataContent);
 
 	if (metadata->txnCommitLSN == InvalidXLogRecPtr ||
 		metadata->xid != xid ||

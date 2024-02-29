@@ -339,16 +339,12 @@ copydb_create_index_by_oid(CopyDataSpec *specs, PGSQL *dst, uint32_t indexOid)
 	if (!catalog_lookup_s_index(sourceDB, indexOid, index))
 	{
 		log_error("Failed to lookup index %u in our catalogs", indexOid);
-		free(index);
-		free(table);
 		return false;
 	}
 
 	if (!catalog_lookup_s_table(sourceDB, index->tableOid, 0, table))
 	{
 		log_error("Failed to lookup table %u in our catalogs", index->tableOid);
-		free(index);
-		free(table);
 		return false;
 	}
 
@@ -390,8 +386,6 @@ copydb_create_index_by_oid(CopyDataSpec *specs, PGSQL *dst, uint32_t indexOid)
 	if (!copydb_create_index(specs, dst, index, ifNotExists))
 	{
 		/* errors have already been logged */
-		free(index);
-		free(table);
 		return false;
 	}
 
@@ -410,8 +404,6 @@ copydb_create_index_by_oid(CopyDataSpec *specs, PGSQL *dst, uint32_t indexOid)
 									   &constraintsAreBeingBuilt))
 	{
 		/* errors have already been logged */
-		free(index);
-		free(table);
 		return false;
 	}
 
@@ -428,8 +420,6 @@ copydb_create_index_by_oid(CopyDataSpec *specs, PGSQL *dst, uint32_t indexOid)
 		{
 			log_error("Failed to create constraints for table %s",
 					  table->qname);
-			free(index);
-			free(table);
 			return false;
 		}
 
@@ -440,15 +430,11 @@ copydb_create_index_by_oid(CopyDataSpec *specs, PGSQL *dst, uint32_t indexOid)
 				log_error("Failed to queue VACUUM ANALYZE %s [%u]",
 						  table->qname,
 						  table->oid);
-				free(index);
-				free(table);
 				return false;
 			}
 		}
 	}
 
-	free(index);
-	free(table);
 
 	return true;
 }
@@ -1060,7 +1046,6 @@ copydb_create_constraints(CopyDataSpec *specs, PGSQL *dst, SourceTable *table)
 	{
 		log_error("Failed to count indexes for table %s in our target catalog",
 				  targetTable->qname);
-		free(targetTable);
 		return false;
 	}
 
@@ -1083,7 +1068,6 @@ copydb_create_constraints(CopyDataSpec *specs, PGSQL *dst, SourceTable *table)
 				  table->qname);
 	}
 
-	free(targetTable);
 
 	/*
 	 * Now iterate over the source database catalog list of indexes attached to

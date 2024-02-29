@@ -39,7 +39,8 @@ static bool SetMessageRelation(JSON_Object *jsobj,
 							   PGSQL *pgsql);
 static bool SetColumnNamesAndValues(LogicalMessageTuple *tuple,
 									const char *message,
-									JSON_Array *jscols);
+									JSON_Array *jscols,
+									PGSQL *pgsql);
 
 
 /*
@@ -141,7 +142,6 @@ parseWal2jsonMessageActionAndXid(LogicalStreamContext *context)
 		metadata->xid = (uint32_t) xid;
 	}
 
-	json_value_free(json);
 
 	return true;
 }
@@ -167,7 +167,9 @@ parseWal2jsonMessage(StreamContext *privateContext,
 
 	LogicalMessageRelation table = { 0 };
 
-	if (!SetMessageRelation(jsobj, &table, privateContext->transformPGSQL))
+	PGSQL *pgsql = privateContext->transformPGSQL;
+
+	if (!SetMessageRelation(jsobj, &table, pgsql))
 	{
 		log_error("Failed to parse truncated message missing "
 				  "schema or table property: %s",
@@ -211,7 +213,7 @@ parseWal2jsonMessage(StreamContext *privateContext,
 
 			LogicalMessageTuple *tuple = &(stmt->stmt.insert.new.array[0]);
 
-			if (!SetColumnNamesAndValues(tuple, message, jscols))
+			if (!SetColumnNamesAndValues(tuple, message, jscols, pgsql))
 			{
 				log_error("Failed to parse INSERT columns for logical "
 						  "message %s",
@@ -246,7 +248,7 @@ parseWal2jsonMessage(StreamContext *privateContext,
 			JSON_Array *jsids =
 				json_object_dotget_array(jsobj, "message.identity");
 
-			if (!SetColumnNamesAndValues(old, message, jsids))
+			if (!SetColumnNamesAndValues(old, message, jsids, pgsql))
 			{
 				log_error("Failed to parse UPDATE identity (old) for logical "
 						  "message %s",
@@ -258,7 +260,7 @@ parseWal2jsonMessage(StreamContext *privateContext,
 			JSON_Array *jscols =
 				json_object_dotget_array(jsobj, "message.columns");
 
-			if (!SetColumnNamesAndValues(new, message, jscols))
+			if (!SetColumnNamesAndValues(new, message, jscols, pgsql))
 			{
 				log_error("Failed to parse UPDATE columns (new) for logical "
 						  "message %s",
@@ -287,7 +289,7 @@ parseWal2jsonMessage(StreamContext *privateContext,
 			JSON_Array *jsids =
 				json_object_dotget_array(jsobj, "message.identity");
 
-			if (!SetColumnNamesAndValues(old, message, jsids))
+			if (!SetColumnNamesAndValues(old, message, jsids, pgsql))
 			{
 				log_error("Failed to parse DELETE identity (old) for logical "
 						  "message %s",
@@ -358,7 +360,8 @@ SetMessageRelation(JSON_Object *jsobj,
 static bool
 SetColumnNamesAndValues(LogicalMessageTuple *tuple,
 						const char *message,
-						JSON_Array *jscols)
+						JSON_Array *jscols,
+						PGSQL *pgsql)
 {
 	int count = json_array_get_count(jscols);
 
@@ -394,7 +397,7 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple,
 			return false;
 		}
 
-		tuple->columns[i] = strndup(colname, PG_NAMEDATALEN);
+		tuple->columns[i] = pgsql_escape_identifier(pgsql, (char *) colname);
 
 		if (tuple->columns[i] == NULL)
 		{

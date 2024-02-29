@@ -1,0 +1,3 @@
+{"action":"I","xid":"0","lsn":"6F/140005C0","timestamp":"2024-02-22 19:55:32.604734+0000","message":"table public.readings: INSERT: \"time\"[timestamp with time zone]:'2017-07-15 02:54:30+00' tags_id[integer]:48 latitude[double precision]:3.46436 longitude[double precision]:68.56976 elevation[double precision]:115 velocity[double precision]:55 heading[double precision]:30 grade[double precision]:78 fuel_consumption[double precision]:1.8 additional_tags[jsonb]:null"}
+{"action":"C","xid":"6730937","lsn":"6F/14003AD8","timestamp":"2024-02-22 19:55:32.604741+0000","message":"COMMIT 6730937"}
+{"action":"X","lsn":"6F/15004368"}
