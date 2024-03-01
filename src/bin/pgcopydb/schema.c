@@ -3292,9 +3292,9 @@ schema_list_partitions(PGSQL *pgsql,
 
 		parts->count = parts->max - parts->min + 1;
 
-		log_info("Partition %s#%d: %lld - %lld (%lld)", table->qname, parts->partNumber,
-				 (long long) parts->min, (long long) parts->max, (long
-																  long) parts->count);
+		log_debug("Partition %s#%d: %lld - %lld (%lld)", table->qname, parts->partNumber,
+				  (long long) parts->min, (long long) parts->max, (long
+																   long) parts->count);
 
 		if (catalog != NULL && catalog->db != NULL)
 		{
@@ -4533,7 +4533,7 @@ getCollationList(void *ctx, PGresult *result)
 
 
 /*
- * Retrieves the table size array from the PostgreSQL result and populates the context.
+ * getTableSizeArray retrieves the table size array from the PostgreSQL result and populates the context.
  */
 static void
 getTableSizeArray(void *ctx, PGresult *result)
@@ -4577,7 +4577,7 @@ getTableSizeArray(void *ctx, PGresult *result)
 
 
 /*
- * Parses the current source table size from the given PGresult object.
+ * parseCurrentSourceTableSize parses the current source table size from the given PGresult object.
  */
 static bool
 parseCurrentSourceTableSize(PGresult *result, int rowNumber, SourceTableSize *tableSize)
