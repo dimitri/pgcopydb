@@ -114,7 +114,7 @@ Start with the initial copy and the replication setup:
    $ pgcopydb clone --follow
 
 While the command is running, check the replication progress made by
-pgcopydb with the Postgres `pg_stat_replication`_ view.
+pgcopydb with the Postgres `pg_stat_replication`__ view.
 
 __ https://www.postgresql.org/docs/current/monitoring-stats.html#MONITORING-PG-STAT-REPLICATION-VIEW
 
