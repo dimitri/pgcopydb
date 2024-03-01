@@ -26,7 +26,7 @@
 #include "schema.h"
 #include "signals.h"
 #include "string_utils.h"
-
+#include <math.h>
 
 static bool prepareFilters(PGSQL *pgsql, SourceFilters *filters);
 
@@ -104,6 +104,24 @@ typedef struct SourceTableArrayContext
 	DatabaseCatalog *catalog;
 	bool parsedOk;
 } SourceTableArrayContext;
+
+
+/* Context used when fetching all the table size definitions */
+typedef struct SourceTableSizeArrayContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	DatabaseCatalog *catalog;
+	bool parsedOk;
+} SourceTableSizeArrayContext;
+
+/* Context used when fetching candidate partition key range for a table */
+typedef struct SourceTablePartKeyMinMaxValueContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	int64_t min;
+	int64_t max;
+	bool parsedOk;
+} SourceTablePartKeyMinMaxValueContext;
 
 /* Context used when fetching all the sequence definitions */
 typedef struct SourceSequenceArrayContext
@@ -184,6 +202,15 @@ static bool parseCurrentSourceTable(PGresult *result,
 									int rowNumber,
 									SourceTable *table);
 
+static void getTableSizeArray(void *ctx, PGresult *result);
+
+static bool parseCurrentSourceTableSize(PGresult *result,
+										int rowNumber,
+										SourceTableSize *tableSize);
+static void parsePartKeyMinMaxValue(void *ctx, PGresult *result);
+
+static bool getPartKeyMinMaxValue(PGSQL *pgsql, SourceTable *table);
+
 static bool parseAttributesArray(SourceTable *table, JSON_Value *json);
 
 static void getSequenceArray(void *ctx, PGresult *result);
@@ -203,12 +230,6 @@ static void getDependArray(void *ctx, PGresult *result);
 static bool parseCurrentSourceDepend(PGresult *result,
 									 int rowNumber,
 									 SourceDepend *depend);
-
-static void getPartitionList(void *ctx, PGresult *result);
-
-static bool parseCurrentPartition(PGresult *result,
-								  int rowNumber,
-								  SourceTableParts *parts);
 
 static void getTableChecksum(void *ctx, PGresult *result);
 
@@ -636,7 +657,8 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_NONE,
 
-		"  select c.oid, pg_table_size(c.oid) as bytes "
+		"  select c.oid, pg_table_size(c.oid) as bytes, "
+		"         pg_size_pretty(pg_table_size(c.oid)) "
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
 
@@ -657,7 +679,8 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_INCL,
 
-		"  select c.oid, pg_table_size(c.oid) as bytes "
+		"  select c.oid, pg_table_size(c.oid) as bytes, "
+		"         pg_size_pretty(pg_table_size(c.oid)) "
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
 
@@ -683,7 +706,8 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_EXCL,
 
-		"  select c.oid, pg_table_size(c.oid) as bytes "
+		"  select c.oid, pg_table_size(c.oid) as bytes, "
+		"         pg_size_pretty(pg_table_size(c.oid)) "
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
 
@@ -723,7 +747,8 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_LIST_NOT_INCL,
 
-		"  select c.oid, pg_table_size(c.oid) as bytes "
+		"  select c.oid, pg_table_size(c.oid) as bytes, "
+		"         pg_size_pretty(pg_table_size(c.oid)) "
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
 
@@ -752,7 +777,8 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 	{
 		SOURCE_FILTER_TYPE_LIST_EXCL,
 
-		"  select c.oid, pg_table_size(c.oid) as bytes "
+		"  select c.oid, pg_table_size(c.oid) as bytes, "
+		"         pg_size_pretty(pg_table_size(c.oid)) "
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
 
@@ -790,10 +816,7 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 bool
 schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
 								   SourceFilters *filters,
-								   bool hasDBCreatePrivilege,
-								   bool cache,
-								   bool dropCache,
-								   bool *createdTableSizeTable)
+								   DatabaseCatalog *catalog)
 {
 	log_trace("schema_prepare_pgcopydb_table_size");
 
@@ -840,118 +863,11 @@ schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
 		}
 	}
 
-	if ((cache || dropCache) && !hasDBCreatePrivilege)
-	{
-		log_fatal("Connecting with a role that does not have CREATE privileges "
-				  "on the source database prevents pg_table_size() caching");
-		return false;
-	}
+	SourceTableSizeArrayContext context = { { 0 }, catalog, false };
 
-	/*
-	 * See if a pgcopydb.pgcopydb_table_size table already exists.
-	 */
-	bool exists = false;
-
-	if (dropCache)
-	{
-		if (!schema_drop_pgcopydb_table_size(pgsql))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-	}
-	else
-	{
-		if (!pgsql_table_exists(pgsql, "pgcopydb", "pgcopydb_table_size", &exists))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		if (exists)
-		{
-			log_notice("Table pgcopydb.pgcopydb_table_size already exists, "
-					   "re-using it");
-			return true;
-		}
-	}
-
-	/*
-	 * Now the table does not exists, and we have to decide if we want to make
-	 * it a persitent table in the possibly new schema "pgcopydb" (cache ==
-	 * true), or a temporary table (cache == false).
-	 */
-	if (cache)
-	{
-		char *createSchema = "create schema if not exists pgcopydb";
-
-		if (!pgsql_execute(pgsql, createSchema))
-		{
-			log_error("Failed to compute table size, see above for details");
-			return false;
-		}
-	}
-
-	char *tablename = "pgcopydb_table_size";
-	PQExpBuffer sql = createPQExpBuffer();
-
-	if (cache)
-	{
-		appendPQExpBuffer(sql,
-						  "create table if not exists pgcopydb.%s as %s",
-						  tablename,
-						  listSourceTableSizeSQL[filterType].sql);
-	}
-	else
-	{
-		appendPQExpBuffer(sql,
-						  "create temp table %s  on commit drop as %s",
-						  tablename,
-						  listSourceTableSizeSQL[filterType].sql);
-	}
-
-	if (PQExpBufferBroken(sql))
-	{
-		log_error("Failed to prepare create pgcopydb_table_size query "
-				  "buffer: Out of Memory");
-		(void) destroyPQExpBuffer(sql);
-		return false;
-	}
-
-	if (!pgsql_execute(pgsql, sql->data))
-	{
-		log_error("Failed to compute table size, see above for details");
-		(void) destroyPQExpBuffer(sql);
-		return false;
-	}
-
-	(void) destroyPQExpBuffer(sql);
-
-	char *createIndex = "create index on pgcopydb_table_size(oid)";
-
-	if (!pgsql_execute(pgsql, createIndex))
-	{
-		log_error("Failed to compute table size, see above for details");
-		return false;
-	}
-
-	/* we only consider that we created the cache when cache is true */
-	*createdTableSizeTable = cache;
-
-	return true;
-}
-
-
-/*
- * schema_drop_pgcopydb_table_size drops the pgcopydb.pgcopydb_table_size
- * table.
- */
-bool
-schema_drop_pgcopydb_table_size(PGSQL *pgsql)
-{
-	char *sql = "drop table if exists pgcopydb.pgcopydb_table_size cascade";
-
-	if (!pgsql_execute(pgsql, sql))
+	if (!pgsql_execute_with_params(pgsql, listSourceTableSizeSQL[filterType].sql,
+								   0, NULL, NULL,
+								   &context, &getTableSizeArray))
 	{
 		log_error("Failed to compute table size, see above for details");
 		return false;
@@ -973,8 +889,6 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
-		"         ts.bytes as bytes, "
-		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1012,7 +926,6 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"               select json_agg(row_to_json(atts)) as js "
 		"                from atts "
 		"              ) as attrs on true"
-		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* find a copy partition key candidate */
 		"         left join lateral ("
@@ -1047,7 +960,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"            and d.deptype = 'e' "
 		"       ) "
 
-		"order by bytes desc, n.nspname, c.relname"
+		"order by n.nspname, c.relname"
 	},
 
 	{
@@ -1058,8 +971,6 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
-		"         ts.bytes as bytes, "
-		"         pg_size_pretty(ts.bytes), "
 		"         exists(select 1 "
 		"                  from pg_temp.filter_exclude_table_data ftd "
 		"                 where n.nspname = ftd.nspname "
@@ -1100,7 +1011,6 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"               select json_agg(row_to_json(atts)) as js "
 		"                from atts "
 		"              ) as attrs on true"
-		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* include-only-table */
 		"         join pg_temp.filter_include_only_table inc "
@@ -1140,7 +1050,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"            and d.deptype = 'e' "
 		"       ) "
 
-		"order by bytes desc, n.nspname, c.relname"
+		"order by n.nspname, c.relname"
 	},
 
 	{
@@ -1151,8 +1061,6 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
-		"         ts.bytes as bytes, "
-		"         pg_size_pretty(ts.bytes), "
 		"         ftd.relname is not null as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1190,7 +1098,6 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"               select json_agg(row_to_json(atts)) as js "
 		"                from atts "
 		"              ) as attrs on true"
-		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -1244,7 +1151,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"            and d.deptype = 'e' "
 		"       ) "
 
-		"order by bytes desc, n.nspname, c.relname"
+		"order by n.nspname, c.relname"
 	},
 
 	{
@@ -1255,8 +1162,6 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
-		"         ts.bytes as bytes, "
-		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1294,7 +1199,6 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"               select json_agg(row_to_json(atts)) as js "
 		"                from atts "
 		"              ) as attrs on true"
-		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* include-only-table */
 		"    left join pg_temp.filter_include_only_table inc "
@@ -1337,7 +1241,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"            and d.deptype = 'e' "
 		"       ) "
 
-		"order by bytes desc, n.nspname, c.relname"
+		"order by n.nspname, c.relname"
 	},
 
 	{
@@ -1348,8 +1252,6 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
-		"         ts.bytes as bytes, "
-		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1387,7 +1289,6 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"               select json_agg(row_to_json(atts)) as js "
 		"                from atts "
 		"              ) as attrs on true"
-		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -1435,90 +1336,9 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"            and d.deptype = 'e' "
 		"       ) "
 
-		"order by bytes desc, n.nspname, c.relname"
+		"order by n.nspname, c.relname"
 	}
 };
-
-
-/*
- * schema_list_table fetches information for a given table.
- */
-bool
-schema_list_table(PGSQL *pgsql,
-				  const char *schemaName,
-				  const char *tableName,
-				  DatabaseCatalog *catalog)
-{
-	SourceTableArrayContext context = { { 0 }, catalog, false };
-
-	char *sql =
-		"  select c.oid, "
-		"         format('%I', n.nspname) as nspname, "
-		"         format('%I', c.relname) as relname, "
-		"         pg_am.amname, "
-		"         c.relpages, c.reltuples::bigint, "
-		"         null as bytes, "
-		"         null as pg_size_pretty, "
-		"         false as excludedata, "
-		"         format('%s %s %s', "
-		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
-		"                regexp_replace(c.relname, '[\\n\\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')), "
-		"         null as partkey, "
-		"         attrs.js as attributes "
-
-		"    from pg_catalog.pg_class c"
-		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
-		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
-		"         join pg_roles auth ON auth.oid = c.relowner"
-		"         join lateral ( "
-		"               with atts as "
-		"               ("
-		"                  select attnum, atttypid::integer, "
-		"                         format('%I', attname) as attname, "
-		"                         i.indrelid is not null as attisprimary, "
-		"						  col.is_generated = 'ALWAYS' as attisgenerated "
-		"                    from pg_attribute a "
-		"                         left join pg_index i "
-		"                                on i.indrelid = a.attrelid "
-		"                               and a.attnum = ANY(i.indkey) "
-		"                               and i.indisprimary "
-		"					 	  left join information_schema.columns col "
-		"                    			on col.column_name = a.attname "
-		"					  			and col.table_name = c.relname "
-		"          			 			and col.table_schema = n.nspname "
-		"                   where a.attrelid = c.oid and not a.attisdropped "
-		"                     and a.attnum > 0 "
-		"                order by attnum "
-		"               ) "
-		"               select json_agg(row_to_json(atts)) as js "
-		"                from atts "
-		"              ) as attrs on true"
-		"   where n.nspname = $1 and c.relname = $2 ";
-
-	int paramCount = 2;
-	Oid paramTypes[2] = { TEXTOID, TEXTOID };
-	const char *paramValues[2] = { schemaName, tableName };
-
-	log_trace("schema_list_table");
-
-	if (!pgsql_execute_with_params(pgsql, sql,
-								   paramCount, paramTypes, paramValues,
-								   &context, &getTableArray))
-	{
-		log_error("Failed to list table \"%s\".\"%s\"", schemaName, tableName);
-		return false;
-	}
-
-	if (!context.parsedOk)
-	{
-		log_error("Failed to list table \"%s\".\"%s\"", schemaName, tableName);
-		return false;
-	}
-
-	return true;
-}
-
 
 /*
  * schema_list_ordinary_tables grabs the list of tables from the given source
@@ -1610,8 +1430,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
-		"         ts.bytes as bytes, "
-		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1624,7 +1442,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         join pg_namespace n ON n.oid = c.relnamespace "
 		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
 		"         join pg_roles auth ON auth.oid = c.relowner"
-		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		"   where c.relkind = 'r' and c.relpersistence in ('p', 'u')  "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
@@ -1657,8 +1474,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
-		"         ts.bytes as bytes, "
-		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1671,7 +1486,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         join pg_namespace n ON n.oid = c.relnamespace "
 		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
 		"         join pg_roles auth ON auth.oid = c.relowner"
-		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* include-only-table */
 		"         join pg_temp.filter_include_only_table inc "
@@ -1709,8 +1523,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
-		"         ts.bytes as bytes, "
-		"         pg_size_pretty(ts.bytes), "
 		"         ftd.relname is not null as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1723,7 +1535,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         join pg_namespace n ON n.oid = c.relnamespace "
 		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
 		"         join pg_roles auth ON auth.oid = c.relowner"
-		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -1775,8 +1586,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
-		"         ts.bytes as bytes, "
-		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1789,7 +1598,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         join pg_namespace n ON n.oid = c.relnamespace "
 		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
 		"         join pg_roles auth ON auth.oid = c.relowner"
-		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* include-only-table */
 		"    left join pg_temp.filter_include_only_table inc "
@@ -1830,8 +1638,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
-		"         ts.bytes as bytes, "
-		"         pg_size_pretty(ts.bytes), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1844,7 +1650,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         join pg_namespace n ON n.oid = c.relnamespace "
 		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
 		"         join pg_roles auth ON auth.oid = c.relowner"
-		"         left join pgcopydb_table_size ts on ts.oid = c.oid"
 
 		/* exclude-schema */
 		"         left join pg_temp.filter_exclude_schema fn "
@@ -2482,6 +2287,50 @@ schema_get_sequence_value(PGSQL *pgsql, SourceSequence *seq)
 							  seq->qname,
 							  &(seq->lastValue),
 							  &(seq->isCalled));
+}
+
+
+/*
+ * schema_list_relpages fetches the number of pages for the given table
+ * and updates our internal catalog with that information.
+ */
+bool
+schema_list_relpages(PGSQL *pgsql, SourceTable *table, DatabaseCatalog *catalog)
+{
+	SingleValueResultContext parseContext = { { 0 }, PGSQL_RESULT_INT, false };
+
+	char *sql = "select relpages from pg_class where oid = $1::regclass";
+
+	int paramCount = 1;
+	Oid paramTypes[1] = { TEXTOID };
+	const char *paramValues[1] = { table->qname };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   &parseContext, &parseSingleValueResult))
+	{
+		log_error("Failed to get number of pages for table %s", table->qname);
+		return false;
+	}
+
+	if (!parseContext.parsedOk)
+	{
+		log_error("Failed to get number of pages for table %s", table->qname);
+		return false;
+	}
+
+	table->relpages = parseContext.intVal;
+
+	if (catalog != NULL && catalog->db != NULL)
+	{
+		if (!catalog_update_s_table_relpages(catalog, table))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	return true;
 }
 
 
@@ -3377,122 +3226,90 @@ schema_list_partitions(PGSQL *pgsql,
 		return true;
 	}
 
-	PQExpBuffer sql = createPQExpBuffer();
+	/* if we have a partKey and it's not "ctid", calculate key bounds  */
+	if (!IS_EMPTY_STRING_BUFFER(table->partKey) && !streq(table->partKey, "ctid"))
+	{
+		if (!getPartKeyMinMaxValue(pgsql, table))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
 
-	SourcePartitionContext parseContext = { { 0 }, catalog, table, false };
+	int64_t min = table->partmin;
+	int64_t max = table->partmax;
 
+	/*
+	 * When the partition key is set to "ctid", it means that the table will be
+	 * partitioned based on the physical location of the rows in the table.
+	 * In this case, the relpages value represents the total number of pages in the
+	 * table, which can be used as the maximum value for the partition range.
+	 * By setting min to 0 and max to table->relpages, we ensure that each partition
+	 * covers the entire range of pages in the table.
+	 */
 	if (streq(table->partKey, "ctid"))
 	{
-		char *sqlTemplate =
-			" with "
-			" relpage_bounds (min, max) as "
-			" ( "
-			"   select 0, relpages "
-			"     from pg_class "
-			"    where pg_class.oid = '%s'::regclass "
-			" ), "
-			" t (parts) as "
-			" ( "
-			"   select ceil(bytes::float / $1) as parts "
-			"     from pgcopydb_table_size "
-			"     where oid = $2 "
-			"	union all "
-			"	select 1 as parts "
-			"	order by parts desc "
-			"	limit 1 "
-			" ), "
-			" ranges(n, parts, a, b) as "
-			" ( "
-			"   select n, "
-			"          parts + 1, "
-			"          x as a, "
-			"          coalesce((lead(x, 1) over(order by n)) - 1, max) as b "
-			"     from relpage_bounds, t, "
-			"          generate_series(min, max, ((max-min+1)/parts)::bigint + 1) "
-			"          with ordinality as s(x, n) "
-			"   union all "
-			"   select parts + 1, "
-			"          parts + 1, "
-			"          max, "
-			"          NULL "
-			"     from relpage_bounds, t "
-			" ) "
-			" "
-			"  select n, parts, a, b, b-a+1 as pages "
-			"    from ranges "
-			"order by n";
-
-		appendPQExpBuffer(sql, sqlTemplate, table->qname);
-	}
-	else
-	{
-		char *sqlTemplate =
-			" with "
-			" key_bounds (min, max) as "
-			" ( "
-			"   select min(%s), max(%s) "
-			"     from %s "
-			" ), "
-			" t (parts) as "
-			" ( "
-			"   select ceil(bytes::float / $1) as parts "
-			"     from pgcopydb_table_size "
-			"     where oid = $2 "
-			"	union all "
-			"	select 1 as parts "
-			"	order by parts desc "
-			"	limit 1 "
-			" ), "
-			" ranges(n, parts, a, b) as "
-			" ( "
-			"   select n, "
-			"          parts, "
-			"          x as a, "
-			"          coalesce((lead(x, 1) over(order by n)) - 1, max) as b "
-			"     from key_bounds, t, "
-			"          generate_series(min, max, ((max-min+1)/parts)::bigint + 1) "
-			"          with ordinality as s(x, n) "
-			" ) "
-			" "
-			"  select n, parts, a, b, b-a+1 as count "
-			"    from ranges "
-			"order by n";
-
-		appendPQExpBuffer(sql, sqlTemplate,
-						  table->partKey, table->partKey, table->qname);
+		min = 0;
+		max = table->relpages;
 	}
 
-	if (PQExpBufferBroken(sql))
+	/*
+	 * Below code block calculates the number of parts needed and assigns the minimum and
+	 * maximum values for each part. It also logs information about each partition and
+	 * adds the table part to the catalog if provided.
+	 * Example:
+	 * int64_t tableSize (table->bytes) = 100;
+	 * int64_t partSize = 10;
+	 * int64_t min = 1;
+	 * int64_t max = 100;
+	 * int64_t result = partitionTable(&table, partSize, min, max, &catalog);
+	 * // Output:
+	 * // Partition table#1: 1 - 10 (10)
+	 * // Partition table#2: 11 - 20 (10)
+	 * // Partition table#3: 21 - 30 (10)
+	 * // ...
+	 * // Partition table#10: 91 - 100 (10)
+	 */
+	int64_t partsCount = ceil((double) table->bytes / (double) partSize);
+	int64_t range = ceil((double) (max - min + 1) / (double) table->bytes *
+						 (double) partSize);
+
+	for (int64_t i = 0; i < partsCount; i++)
 	{
-		(void) destroyPQExpBuffer(sql);
-		log_error("Failed to prepare partition query for table %s: out of memory",
-				  table->qname);
-		return false;
-	}
+		SourceTableParts *parts = &(table->partition);
 
-	int paramCount = 2;
-	Oid paramTypes[2] = { INT8OID, OIDOID };
-	const char *paramValues[2];
+		bzero(parts, sizeof(SourceTableParts));
 
-	paramValues[0] = intToString(partSize).strValue;
-	paramValues[1] = intToString(table->oid).strValue;
+		parts->partNumber = i + 1;
+		parts->partCount = partsCount;
+		parts->min = min + (i * range);
+		parts->max = min + ((i + 1) * range) - 1;
 
-	if (!pgsql_execute_with_params(pgsql, sql->data,
-								   paramCount, paramTypes, paramValues,
-								   &parseContext, &getPartitionList))
-	{
-		(void) destroyPQExpBuffer(sql);
-		log_error("Failed to compute partition list for table %s",
-				  table->qname);
-		return false;
-	}
+		if (parts->max > max)
+		{
+			parts->max = max;
+		}
 
-	(void) destroyPQExpBuffer(sql);
+		parts->count = parts->max - parts->min + 1;
 
-	if (!parseContext.parsedOk)
-	{
-		log_error("Failed to list table COPY partition list");
-		return false;
+		log_debug("Partition %s#%d: %lld - %lld (%lld)", table->qname, parts->partNumber,
+				  (long long) parts->min, (long long) parts->max, (long
+																   long) parts->count);
+
+		if (catalog != NULL && catalog->db != NULL)
+		{
+			if (!catalog_add_s_table_part(catalog, table))
+			{
+				/* errors have already been logged */
+			}
+		}
+
+		/* if we hit max, no need to iterate  */
+		if (parts->max == max)
+		{
+			parts->partCount = i + 1;
+			break;
+		}
 	}
 
 	return true;
@@ -4716,6 +4533,96 @@ getCollationList(void *ctx, PGresult *result)
 
 
 /*
+ * getTableSizeArray retrieves the table size array from the PostgreSQL result and populates the context.
+ */
+static void
+getTableSizeArray(void *ctx, PGresult *result)
+{
+	SourceTableSizeArrayContext *context = (SourceTableSizeArrayContext *) ctx;
+	int nTuples = PQntuples(result);
+
+	if (PQnfields(result) != 3)
+	{
+		log_error("Query returned %d columns, expected 3", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	bool parsedOk = true;
+
+	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
+	{
+		SourceTableSize *tableSize =
+			(SourceTableSize *) calloc(1, sizeof(SourceTableSize));
+
+		if (!parseCurrentSourceTableSize(result, rowNumber, tableSize))
+		{
+			parsedOk = false;
+			break;
+		}
+
+		if (context->catalog != NULL && context->catalog->db != NULL)
+		{
+			if (!catalog_add_s_table_size(context->catalog, tableSize))
+			{
+				/* errors have already been logged */
+				parsedOk = false;
+				break;
+			}
+		}
+	}
+
+	context->parsedOk = parsedOk;
+}
+
+
+/*
+ * parseCurrentSourceTableSize parses the current source table size from the given PGresult object.
+ */
+static bool
+parseCurrentSourceTableSize(PGresult *result, int rowNumber, SourceTableSize *tableSize)
+{
+	int errors = 0;
+
+	int fnoid = PQfnumber(result, "oid");
+	int fnbytes = PQfnumber(result, "bytes");
+	int fnbytespretty = PQfnumber(result, "pg_size_pretty");
+
+	/* 1. oid */
+	char *value = PQgetvalue(result, rowNumber, fnoid);
+
+	if (!stringToUInt32(value, &(tableSize->oid)) || tableSize->oid == 0)
+	{
+		log_error("Invalid OID \"%s\"", value);
+		++errors;
+	}
+
+	/* 2. bytes */
+	value = PQgetvalue(result, rowNumber, fnbytes);
+
+	if (!stringToInt64(value, &(tableSize->bytes)))
+	{
+		log_error("Invalid pg_table_size: \"%s\"", value);
+		++errors;
+	}
+
+	/* 3. pg_size_pretty */
+	value = PQgetvalue(result, rowNumber, fnbytespretty);
+	int length = strlcpy(tableSize->bytesPretty, value, PG_NAMEDATALEN);
+
+	if (length >= PG_NAMEDATALEN)
+	{
+		log_error("Pretty printed byte size \"%s\" is %d bytes long, "
+				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+				  value, length, PG_NAMEDATALEN - 1);
+		++errors;
+	}
+
+	return errors == 0;
+}
+
+
+/*
  * getTableArray loops over the SQL result for the tables array query and
  * allocates an array of tables then populates it with the query result.
  */
@@ -4723,11 +4630,12 @@ static void
 getTableArray(void *ctx, PGresult *result)
 {
 	SourceTableArrayContext *context = (SourceTableArrayContext *) ctx;
+
 	int nTuples = PQntuples(result);
 
-	if (PQnfields(result) != 12)
+	if (PQnfields(result) != 10)
 	{
-		log_error("Query returned %d columns, expected 12", PQnfields(result));
+		log_error("Query returned %d columns, expected 10", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -4760,6 +4668,98 @@ getTableArray(void *ctx, PGresult *result)
 
 
 /*
+ * getPartKeyMinMaxValue retrieves the min and max values for the
+ * candidate partition key of the given table.
+ */
+static bool
+getPartKeyMinMaxValue(PGSQL *pgsql, SourceTable *table)
+{
+	PQExpBuffer sql = createPQExpBuffer();
+	char *sqlTemplate = "select min(%s), max(%s) "
+						"  from %s ";
+
+	appendPQExpBuffer(sql, sqlTemplate, table->partKey, table->partKey, table->qname);
+
+	if (PQExpBufferBroken(sql))
+	{
+		(void) destroyPQExpBuffer(sql);
+		log_error(
+			"Failed to allocate memory for SQL query string to get partition key range");
+		return false;
+	}
+
+	SourceTablePartKeyMinMaxValueContext partKeyMinMaxValueContext = { 0 };
+	if (!pgsql_execute_with_params(pgsql, sql->data, 0, NULL, NULL,
+								   &partKeyMinMaxValueContext, &parsePartKeyMinMaxValue))
+	{
+		(void) destroyPQExpBuffer(sql);
+		log_error("Failed to execute SQL query to get partition key range");
+		return false;
+	}
+
+	if (!partKeyMinMaxValueContext.parsedOk)
+	{
+		(void) destroyPQExpBuffer(sql);
+		log_error("Failed to parse SQL query to get partition key range");
+		return false;
+	}
+
+	(void) destroyPQExpBuffer(sql);
+
+	table->partmax = (partKeyMinMaxValueContext.max);
+	table->partmin = (partKeyMinMaxValueContext.min);
+
+	return true;
+}
+
+
+/*
+ * Parses the minimum and maximum values of a partition key from a PostgreSQL result.
+ */
+static void
+parsePartKeyMinMaxValue(void *ctx, PGresult *result)
+{
+	SourceTablePartKeyMinMaxValueContext *context =
+		(SourceTablePartKeyMinMaxValueContext *) ctx;
+
+	int nTuples = PQntuples(result);
+	int errors = 0;
+
+	if (nTuples != 1)
+	{
+		log_error("Query returned %d tuples, expected 1", nTuples);
+		context->parsedOk = false;
+		return;
+	}
+
+	if (PQnfields(result) != 2)
+	{
+		log_error("Query returned %d columns, expected 2", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	/* 1. min */
+	char *value = PQgetvalue(result, 0, 0);
+	if (!stringToInt64(value, &(context->min)))
+	{
+		log_error("Invalid min value: \"%s\"", value);
+		++errors;
+	}
+
+	/* 2. max */
+	value = PQgetvalue(result, 0, 1);
+	if (!stringToInt64(value, &(context->max)))
+	{
+		log_error("Invalid max value: \"%s\"", value);
+		++errors;
+	}
+
+	context->parsedOk = errors == 0;
+}
+
+
+/*
  * parseCurrentSourceTable parses a single row of the table listing query
  * result.
  */
@@ -4774,8 +4774,6 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	int fnamname = PQfnumber(result, "amname");
 	int fnrelpages = PQfnumber(result, "relpages");
 	int fnreltuples = PQfnumber(result, "reltuples");
-	int fnbytes = PQfnumber(result, "bytes");
-	int fnbytespretty = PQfnumber(result, "pg_size_pretty");
 	int fnexcldata = PQfnumber(result, "excludedata");
 	int fnrestorelistname = PQfnumber(result, "format");
 	int fnpartkey = PQfnumber(result, "partkey");
@@ -4888,38 +4886,6 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 			log_error("Invalid reltuples::bigint \"%s\"", value);
 			++errors;
 		}
-	}
-
-	/* pg_table_size(c.oid) as bytes */
-	if (PQgetisnull(result, rowNumber, fnbytes))
-	{
-		/*
-		 * It may happen that pg_table_size() returns NULL (when failing to
-		 * open the given relation).
-		 */
-		table->bytes = 0;
-	}
-	else
-	{
-		value = PQgetvalue(result, rowNumber, fnbytes);
-
-		if (!stringToInt64(value, &(table->bytes)))
-		{
-			log_error("Invalid reltuples::bigint \"%s\"", value);
-			++errors;
-		}
-	}
-
-	/* pg_size_pretty(c.oid) */
-	value = PQgetvalue(result, rowNumber, fnbytespretty);
-	length = strlcpy(table->bytesPretty, value, PG_NAMEDATALEN);
-
-	if (length >= PG_NAMEDATALEN)
-	{
-		log_error("Pretty printed byte size \"%s\" is %d bytes long, "
-				  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
-				  value, length, PG_NAMEDATALEN - 1);
-		++errors;
 	}
 
 	/* excludeData */
@@ -5688,133 +5654,6 @@ parseCurrentSourceDepend(PGresult *result, int rowNumber, SourceDepend *depend)
 				  "the maximum expected is %d (BUFSIZE - 1)",
 				  value, length, BUFSIZE - 1);
 		++errors;
-	}
-
-	return errors == 0;
-}
-
-
-/*
- * getPartitionList loops over the SQL result for the COPY partitions query and
- * allocate an array of SourceTableParts and populates it with the query
- * results.
- */
-static void
-getPartitionList(void *ctx, PGresult *result)
-{
-	SourcePartitionContext *context = (SourcePartitionContext *) ctx;
-	SourceTable *table = context->table;
-	int nTuples = PQntuples(result);
-
-	if (PQnfields(result) != 5)
-	{
-		log_error("Query returned %d columns, expected 5", PQnfields(result));
-		context->parsedOk = false;
-		return;
-	}
-
-	bool parsedOk = true;
-
-	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
-	{
-		SourceTableParts *parts = &(table->partition);
-
-		/* make sure to clean-up the memory area we keep re-using */
-		bzero(parts, sizeof(SourceTableParts));
-
-		if (!parseCurrentPartition(result, rowNumber, parts))
-		{
-			parsedOk = false;
-			break;
-		}
-
-		log_trace("getPartitionList: %s %d %lld %lld %d",
-				  table->qname,
-				  parts->partNumber,
-				  (long long) parts->min,
-				  (long long) parts->max,
-				  parts->partCount);
-
-		if (context->catalog != NULL && context->catalog->db != NULL)
-		{
-			if (!catalog_add_s_table_part(context->catalog, table))
-			{
-				/* errors have already been logged */
-				parsedOk = false;
-			}
-		}
-	}
-
-	context->parsedOk = parsedOk;
-}
-
-
-/*
- * parseCurrentPartition parses a single row of the table COPY partition
- * listing query result.
- */
-static bool
-parseCurrentPartition(PGresult *result, int rowNumber, SourceTableParts *parts)
-{
-	int errors = 0;
-
-	/* 1. partNumber */
-	char *value = PQgetvalue(result, rowNumber, 0);
-
-	if (!stringToInt(value, &(parts->partNumber)))
-	{
-		log_error("Invalid part number \"%s\"", value);
-		++errors;
-	}
-
-	/* 2. partCount */
-	value = PQgetvalue(result, rowNumber, 1);
-
-	if (!stringToInt(value, &(parts->partCount)))
-	{
-		log_error("Invalid part count \"%s\"", value);
-		++errors;
-	}
-
-	/* 3. min */
-	value = PQgetvalue(result, rowNumber, 2);
-
-	if (!stringToInt64(value, &(parts->min)))
-	{
-		log_error("Invalid part min \"%s\"", value);
-		++errors;
-	}
-
-	/* 4. max */
-	if (PQgetisnull(result, rowNumber, 3))
-	{
-		parts->max = -1;
-	}
-	else
-	{
-		value = PQgetvalue(result, rowNumber, 3);
-
-		if (!stringToInt64(value, &(parts->max)))
-		{
-			log_error("Invalid part max \"%s\"", value);
-			++errors;
-		}
-	}
-
-	/* 5. count */
-	if (PQgetisnull(result, rowNumber, 4))
-	{
-		parts->count = -1;
-	}
-	else
-	{
-		value = PQgetvalue(result, rowNumber, 4);
-
-		if (!stringToInt64(value, &(parts->count)))
-		{
-			log_error("Invalid part count \"%s\"", value);
-			++errors;
-		}
 	}
 
 	return errors == 0;

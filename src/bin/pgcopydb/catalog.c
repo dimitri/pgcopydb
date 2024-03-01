@@ -57,13 +57,20 @@ static char *sourceDBcreateDDLs[] = {
 	"  oid integer primary key, "
 	"  datname text, qname text, nspname text, relname text, amname text, "
 	"  restore_list_name text, "
-	"  relpages integer, reltuples integer, bytes integer, bytes_pretty text, "
+	"  relpages integer, reltuples integer, "
 	"  exclude_data boolean, "
 	"  part_key text"
 	")",
 
 	"create unique index s_t_qname on s_table(qname)",
 	"create unique index s_t_rlname on s_table(restore_list_name)",
+
+	"create table s_table_size("
+	"  oid integer primary key references s_table(oid), "
+	"  bytes integer, bytes_pretty text "
+	")",
+
+	"create unique index s_ts_oid on s_table_size(oid)",
 
 	"create table s_attr("
 	"  oid integer references s_table(oid), "
@@ -223,7 +230,7 @@ static char *filterDBcreateDDLs[] = {
 	"  oid integer primary key, "
 	"  datname text, qname text, nspname text, relname text, amname text, "
 	"  restore_list_name text, "
-	"  relpages integer, reltuples integer, bytes integer, bytes_pretty text, "
+	"  relpages integer, reltuples integer, "
 	"  exclude_data boolean, "
 	"  srcrowcount integer, srcsum text, dstrowcount integer, dstsum text, "
 	"  part_key text"
@@ -231,6 +238,13 @@ static char *filterDBcreateDDLs[] = {
 
 	"create unique index s_t_qname on s_table(qname)",
 	"create unique index s_t_rlname on s_table(restore_list_name)",
+
+	"create table s_table_size("
+	"  oid integer primary key references s_table(oid), "
+	"  bytes integer, bytes_pretty text "
+	")",
+
+	"create unique index s_ts_oid on s_table_size(oid)",
 
 	"create table s_attr("
 	"  oid integer references s_table(oid), "
@@ -333,7 +347,7 @@ static char *targetDBcreateDDLs[] = {
 	"  oid integer primary key, "
 	"  datname text, qname text, nspname text, relname text, amname text, "
 	"  restore_list_name text, "
-	"  relpages integer, reltuples integer, bytes integer, bytes_pretty text, "
+	"  relpages integer, reltuples integer, "
 	"  exclude_data boolean, "
 	"  srcrowcount integer, srcsum text, dstrowcount integer, dstsum text, "
 	"  part_key text"
@@ -376,6 +390,7 @@ static char *sourceDBdropDDLs[] = {
 	"drop table if exists s_attr",
 	"drop table if exists s_table_part",
 	"drop table if exists s_table_chksum",
+	"drop table if exists s_table_size",
 	"drop table if exists s_index",
 	"drop table if exists s_constraint",
 	"drop table if exists s_seq",
@@ -407,6 +422,7 @@ static char *filterDBdropDDLs[] = {
 	"drop table if exists s_attr",
 	"drop table if exists s_table_part",
 	"drop table if exists s_table_chksum",
+	"drop table if exists s_table_size",
 	"drop table if exists s_index",
 	"drop table if exists s_constraint",
 	"drop table if exists s_seq",
@@ -1690,8 +1706,8 @@ catalog_add_s_table(DatabaseCatalog *catalog, SourceTable *table)
 	char *sql =
 		"insert into s_table("
 		"  oid, qname, nspname, relname, amname, restore_list_name, "
-		"  relpages, reltuples, bytes, bytes_pretty, exclude_data, part_key) "
-		"values($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)";
+		"  relpages, reltuples, exclude_data, part_key) "
+		"values($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)";
 
 	SQLiteQuery query = { 0 };
 
@@ -1714,8 +1730,6 @@ catalog_add_s_table(DatabaseCatalog *catalog, SourceTable *table)
 
 		{ BIND_PARAMETER_TYPE_INT64, "relpages", table->relpages, NULL },
 		{ BIND_PARAMETER_TYPE_INT64, "reltuples", table->reltuples, NULL },
-		{ BIND_PARAMETER_TYPE_INT64, "bytes", table->bytes, NULL },
-		{ BIND_PARAMETER_TYPE_TEXT, "bytes_pretty", 0, table->bytesPretty },
 
 		{ BIND_PARAMETER_TYPE_INT, "exclude_data",
 		  table->excludeData ? 1 : 0, NULL },
@@ -1949,6 +1963,71 @@ catalog_add_s_table_chksum(DatabaseCatalog *catalog,
 
 
 /*
+ * catalog_add_s_table_size inserts a SourceTableSize to our internal catalogs database.
+ */
+bool
+catalog_add_s_table_size(DatabaseCatalog *catalog,
+						 SourceTableSize *tableSize)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_add_s_table_size: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"insert into s_table_size("
+		"  oid, bytes, bytes_pretty)"
+		"values($1, $2, $3)";
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "oid", tableSize->oid, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "bytes", tableSize->bytes, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "bytes_pretty", 0, tableSize->bytesPretty },
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* now execute the query, which does not return any row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
  * catalog_delete_s_table_chksum_all implements cache invalidation for pgcopydb
  * compare data.
  */
@@ -2025,7 +2104,7 @@ catalog_s_table_stats(DatabaseCatalog *catalog, CatalogTableStats *stats)
 		"select count(t.oid) as count, "
 		"       count(p.oid) as countSplits, "
 		"       sum(p.partcount) as countParts, "
-		"       sum(bytes) as totalBytes, "
+		"       sum(ts.bytes) as totalBytes, "
 		"       sum(reltuples) as totalTuples "
 		"  from s_table t "
 		"       left join "
@@ -2034,7 +2113,8 @@ catalog_s_table_stats(DatabaseCatalog *catalog, CatalogTableStats *stats)
 		"               from s_table_part "
 		"           group by oid"
 		"         ) p "
-		"        on p.oid = t.oid";
+		"        on p.oid = t.oid"
+		"       left join s_table_size ts on ts.oid = t.oid ";
 
 	SQLiteQuery query = {
 		.context = stats,
@@ -2232,13 +2312,14 @@ catalog_lookup_s_table(DatabaseCatalog *catalog,
 	{
 		char *sql =
 			"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
-			"         relpages, reltuples, bytes, bytes_pretty, "
+			"         relpages, reltuples, ts.bytes, ts.bytes_pretty, "
 			"         exclude_data, part_key, "
 			"         p.partcount as partcount, p.partnum, p.min, p.max "
 			"    from s_table t "
 			"         join s_table_part p "
 			"           on t.oid = p.oid "
 			"          and p.partnum = $1"
+			"       left join s_table_size ts on ts.oid = t.oid "
 			"   where t.oid = $2 ";
 
 		if (!catalog_sql_prepare(db, sql, &query))
@@ -2267,10 +2348,11 @@ catalog_lookup_s_table(DatabaseCatalog *catalog,
 	{
 		char *sql =
 			"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
-			"         relpages, reltuples, bytes, bytes_pretty, "
+			"         relpages, reltuples, ts.bytes, ts.bytes_pretty, "
 			"         exclude_data, part_key, "
 			"         count(p.oid) as partcount "
 			"    from s_table t left join s_table_part p on t.oid = p.oid"
+			"       left join s_table_size ts on ts.oid = t.oid "
 			"   where t.oid = $1 ";
 
 		if (!catalog_sql_prepare(db, sql, &query))
@@ -2328,7 +2410,7 @@ catalog_lookup_s_table_by_name(DatabaseCatalog *catalog,
 
 	char *sql =
 		"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
-		"         relpages, reltuples, bytes, bytes_pretty, "
+		"         relpages, reltuples, ts.bytes, ts.bytes_pretty, "
 		"         exclude_data, part_key, "
 		"         p.partcount, 0 as partnum, 0 as min, 0 as max "
 		"    from s_table t "
@@ -2339,6 +2421,7 @@ catalog_lookup_s_table_by_name(DatabaseCatalog *catalog,
 		"           group by oid"
 		"         ) p "
 		"        on p.oid = t.oid"
+		"       left join s_table_size ts on ts.oid = t.oid "
 		"   where nspname = $1 and relname = $2 ";
 
 	SQLiteQuery query = {
@@ -2624,13 +2707,14 @@ catalog_iter_s_table_init(SourceTableIterator *iter)
 	{
 		sql =
 			"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
-			"         relpages, reltuples, bytes, bytes_pretty, "
+			"         relpages, reltuples, ts.bytes, ts.bytes_pretty, "
 			"         exclude_data, part_key, "
 			"         count(p.oid), 0 as partnum, 0 as min, 0 as max, "
 			"         c.srcrowcount, c.srcsum, c.dstrowcount, c.dstsum "
 			"    from s_table t "
 			"         left join s_table_part p on t.oid = p.oid "
 			"         left join s_table_chksum c on t.oid = c.oid "
+			"         left join s_table_size ts on ts.oid = t.oid "
 			"   where bytes >= $1 "
 			"group by t.oid "
 			"order by bytes desc";
@@ -2639,7 +2723,7 @@ catalog_iter_s_table_init(SourceTableIterator *iter)
 	{
 		sql =
 			"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
-			"         relpages, reltuples, t.bytes, t.bytes_pretty, "
+			"         relpages, reltuples, ts.bytes, ts.bytes_pretty, "
 			"         exclude_data, part_key, "
 			"         coalesce(p.partcount, 0) as partcount, "
 			"         0 as partnum, 0 as min, 0 as max, "
@@ -2649,8 +2733,9 @@ catalog_iter_s_table_init(SourceTableIterator *iter)
 			"         left join s_table_part p on p.oid = t.oid "
 			"         left join s_table_chksum c on c.oid = t.oid "
 			"         left join summary s on s.tableoid = t.oid "
+			"         left join s_table_size ts on ts.oid = t.oid "
 			"group by t.oid "
-			"order by t.bytes desc";
+			"order by ts.bytes desc";
 	}
 
 	SQLiteQuery *query = &(iter->query);
@@ -2711,10 +2796,11 @@ catalog_iter_s_table_nopk_init(SourceTableIterator *iter)
 
 	char *sql =
 		"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
-		"         relpages, reltuples, bytes, bytes_pretty, "
+		"         relpages, reltuples, ts.bytes, ts.bytes_pretty, "
 		"         exclude_data, part_key, "
 		"         (select count(1) from s_table_part p where p.oid = t.oid) "
 		"    from s_table t join join s_attr a on a.oid = t.oid "
+		"       left join s_table_size ts on ts.oid = t.oid "
 		"group by t.oid "
 		"  having sum(a.attisprimary) = 0 "
 		"order by bytes desc";
@@ -4000,8 +4086,9 @@ catalog_iter_s_index_init(SourceIndexIterator *iter)
 		"         condeferrable, condeferred, c.sql as condef"
 		"    from s_index i "
 		"         join s_table t on t.oid = i.tableoid "
+		"		  left join s_table_size ts on ts.oid = i.tableoid"
 		"         left join s_constraint c on c.indexoid = i.oid "
-		"order by t.bytes desc, t.oid";
+		"order by ts.bytes desc, t.oid";
 
 	SQLiteQuery *query = &(iter->query);
 
@@ -4405,6 +4492,58 @@ catalog_update_sequence_values(DatabaseCatalog *catalog, SourceSequence *seq)
 		{ BIND_PARAMETER_TYPE_INT64, "isCalled", seq->isCalled ? 1 : 0, NULL },
 		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, seq->nspname },
 		{ BIND_PARAMETER_TYPE_TEXT, "relname", 0, seq->relname }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which does not return any row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * Updates the 'relpages' field of the 's_table' table in the database catalog with the given values.
+ */
+bool
+catalog_update_s_table_relpages(DatabaseCatalog *catalog, SourceTable *sourceTable)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_update_s_table_relpages: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"update s_table "
+		"   set relpages = $1 "
+		" where oid = $2";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "relpages", sourceTable->relpages, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "oid", sourceTable->oid, NULL },
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -6998,7 +7137,7 @@ catalog_iter_s_table_in_copy_init(SourceTableIterator *iter)
 
 	char *sql =
 		"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
-		"         relpages, reltuples, t.bytes, t.bytes_pretty, "
+		"         relpages, reltuples, ts.bytes, ts.bytes_pretty, "
 		"         exclude_data, part_key, "
 		"         part.partcount, s.partnum, part.min, part.max "
 
@@ -7012,7 +7151,7 @@ catalog_iter_s_table_in_copy_init(SourceTableIterator *iter)
 		"               and part.partnum = s.partnum "
 
 		"         left join s_table_chksum c on c.oid = p.tableoid "
-
+		"		  left join s_table_size ts on ts.oid = p.tableoid "
 		"   where p.ps_type = 'COPY' "
 		"order by p.pid";
 

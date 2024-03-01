@@ -160,6 +160,9 @@ typedef struct SourceTable
 	int64_t relpages;
 	int64_t reltuples;
 	int64_t bytes;
+	int64_t partmin;
+	int64_t partmax;
+
 	char bytesPretty[PG_NAMEDATALEN]; /* pg_size_pretty */
 	bool excludeData;
 
@@ -180,6 +183,13 @@ typedef struct SourceTable
 	uint64_t bytesTransmitted;
 } SourceTable;
 
+
+typedef struct SourceTableSize
+{
+	uint32_t oid;
+	int64_t bytes;
+	char bytesPretty[PG_NAMEDATALEN]; /* pg_size_pretty */
+} SourceTableSize;
 
 /* still used in progress.[ch] */
 #define ARRAY_CAPACITY_INCREMENT 2
@@ -401,18 +411,9 @@ bool schema_list_ext_versions(PGSQL *pgsql, ExtensionsVersionsArray *array);
 bool schema_list_collations(PGSQL *pgsql, DatabaseCatalog *catalog);
 
 bool schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
-										SourceFilters *filters,
-										bool hasDBCreatePrivilege,
-										bool cache,
-										bool dropCache,
-										bool *createdTableSizeTable);
+										SourceFilters *filters, DatabaseCatalog *catalog);
 
 bool schema_drop_pgcopydb_table_size(PGSQL *pgsql);
-
-bool schema_list_table(PGSQL *pgsql,
-					   const char *schemaName,
-					   const char *tableName,
-					   DatabaseCatalog *catalog);
 
 bool schema_list_ordinary_tables(PGSQL *pgsql,
 								 SourceFilters *filters,
@@ -432,6 +433,7 @@ bool schema_list_sequences(PGSQL *pgsql,
 						   DatabaseCatalog *catalog);
 
 bool schema_get_sequence_value(PGSQL *pgsql, SourceSequence *seq);
+bool schema_list_relpages(PGSQL *pgsql, SourceTable *table, DatabaseCatalog *catalog);
 bool schema_set_sequence_value(PGSQL *pgsql, SourceSequence *seq);
 
 bool schema_list_all_indexes(PGSQL *pgsql,

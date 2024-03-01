@@ -519,10 +519,7 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 		/* copydb_fetch_filtered_oids() needs the table size table around */
 		if (!schema_prepare_pgcopydb_table_size(src,
 												&(specs->filters),
-												specs->hasDBCreatePrivilege,
-												false, /* cache */
-												false, /* dropCache */
-												&createdTableSizeTable))
+												sourceDB))
 		{
 			/* errors have already been logged */
 			return false;
@@ -748,6 +745,14 @@ copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
 		if (!pgsql_execute(context->pgsql, sql))
 		{
 			log_error("Failed to refresh table %s statistics",
+					  source->qname);
+			return false;
+		}
+
+		/* fetch the relpages for the table after ANALYZE */
+		if (!schema_list_relpages(context->pgsql, source, sourceDB))
+		{
+			log_error("Failed to fetch table %s relpages",
 					  source->qname);
 			return false;
 		}
