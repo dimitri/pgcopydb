@@ -179,6 +179,8 @@ bool catalog_add_s_table_chksum(DatabaseCatalog *catalog,
 								TableChecksum *srcChk,
 								TableChecksum *dstChk);
 
+bool catalog_add_s_table_size(DatabaseCatalog *catalog,
+							  SourceTableSize *tableSize);
 bool catalog_delete_s_table(DatabaseCatalog *catalog,
 							const char *nspname,
 							const char *relname);
@@ -345,6 +347,7 @@ bool catalog_s_index_fetch(SQLiteQuery *query);
  */
 bool catalog_add_s_seq(DatabaseCatalog *catalog, SourceSequence *index);
 bool catalog_update_sequence_values(DatabaseCatalog *catalog, SourceSequence *seq);
+bool catalog_update_s_table_relpages(DatabaseCatalog *catalog, SourceTable *sourceTable);
 
 typedef bool (SourceSequenceIterFun)(void *context, SourceSequence *seq);
 
