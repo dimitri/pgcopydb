@@ -68,6 +68,14 @@ DEFAULT_CFLAGS += -D_WANT_SEMUN
 DEFAULT_CFLAGS += -Wno-missing-braces
 DEFAULT_CFLAGS += $(COMMON_LIBS)
 
+# Needed for ARM64 based OSX
+ifeq ($(shell uname -s),Darwin)
+	ifeq ($(shell uname -m),arm64)
+		DEFAULT_CFLAGS += -I/opt/homebrew/include
+	endif
+endif
+
+
 ifdef USE_SECURITY_FLAGS
 # Flags taken from: https://liquid.microsoft.com/Web/Object/Read/ms.security/Requirements/Microsoft.Security.SystemsADM.10203#guide
 SECURITY_CFLAGS=-fstack-protector-strong -D_FORTIFY_SOURCE=2 -O2 -z noexecstack -fpie -Wl,-pie -Wl,-z,relro -Wl,-z,now -Wformat -Wformat-security -Werror=format-security
@@ -85,6 +93,13 @@ LIBS += $(shell $(PG_CONFIG) --libs)
 LIBS += -lpq
 LIBS += -lncurses
 LIBS += -lgc
+
+# Needed for ARM64 based OSX
+ifeq ($(shell uname -s),Darwin)
+	ifeq ($(shell uname -m),arm64)
+		LIBS += -L/opt/homebrew/lib
+	endif
+endif
 
 all: $(PGCOPYDB) $(SQLITE3) ;
 
