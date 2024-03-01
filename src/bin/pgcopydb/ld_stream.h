@@ -568,7 +568,6 @@ char * StreamActionToString(StreamAction action);
 
 /* ld_transform.c */
 bool stream_transform_worker(StreamSpecs *specs);
-bool stream_transform_from_queue(StreamSpecs *specs);
 bool stream_transform_add_file(Queue *queue, uint64_t firstLSN);
 bool stream_transform_send_stop(Queue *queue);
 

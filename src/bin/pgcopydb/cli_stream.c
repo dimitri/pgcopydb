@@ -1215,17 +1215,9 @@ stream_start_in_mode(LogicalStreamMode mode)
 		case STREAM_MODE_PREFETCH:
 		{
 			/*
-			 * Remove the possibly still existing stream context files from
-			 * previous round of operations (--resume, etc). We want to make
-			 * sure that the catchup process reads the files created on this
-			 * connection.
+			 * Just hand over processing to followDB() which implements the
+			 * previous rounds cleaning and all the jazz really.
 			 */
-			if (!stream_cleanup_context(&specs))
-			{
-				/* errors have already been logged */
-				exit(EXIT_CODE_INTERNAL_ERROR);
-			}
-
 			if (!followDB(&copySpecs, &specs))
 			{
 				/* errors have already been logged */

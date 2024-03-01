@@ -73,6 +73,13 @@ diff ${expected} ${result}
 # now prefetch the changes again, which should be a noop
 pgcopydb stream prefetch --resume --endpos "${lsn}" --trace
 
+# recheck output (should have been a noop)
+jq "${JQSCRIPT}" /usr/src/pgcopydb/${WALFILE} > ${expected}
+jq "${JQSCRIPT}" ${SHAREDIR}/${WALFILE} > ${result}
+
+diff ${expected} ${result} || cat ${SHAREDIR}/${WALFILE}
+diff ${expected} ${result}
+
 # now transform the JSON file into SQL
 SQLFILENAME=`basename ${WALFILE} .json`.sql
 

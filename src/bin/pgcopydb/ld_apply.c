@@ -240,7 +240,7 @@ stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
 	}
 
 	char *process =
-		specs->mode == STREAM_MODE_CATCHUP ? "Catchup-up with" : "Replaying";
+		specs->mode == STREAM_MODE_CATCHUP ? "Catching-up with" : "Replaying";
 
 	if (context->endpos != InvalidXLogRecPtr)
 	{

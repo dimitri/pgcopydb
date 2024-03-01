@@ -45,7 +45,16 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
 
 WORKDIR /usr/src/pgcopydb
 
-COPY . .
+#
+# Avoid dependency with the tests/ and docs/ subdirectories here. We don't
+# need to build that docker image again when something is updated outside of
+# the src/ dir and some files.
+#
+COPY Makefile Makefile
+COPY src/ src/
+COPY GIT-VERSION-GEN GIT-VERSION-GEN
+COPY GIT-VERSION-FILE GIT-VERSION-FILE
+COPY version version
 
 RUN make -s clean && make -s -j$(nproc) install
 
