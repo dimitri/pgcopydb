@@ -413,8 +413,6 @@ bool schema_list_collations(PGSQL *pgsql, DatabaseCatalog *catalog);
 bool schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
 										SourceFilters *filters, DatabaseCatalog *catalog);
 
-bool schema_drop_pgcopydb_table_size(PGSQL *pgsql);
-
 bool schema_list_ordinary_tables(PGSQL *pgsql,
 								 SourceFilters *filters,
 								 DatabaseCatalog *catalog);
