@@ -460,19 +460,19 @@ cli_copydb_getenv(CopyDBOptions *options)
 				char SKIP_TABLESPACES[BUFSIZE] = { 0 };
 
 				if (!get_env_copy(PGCOPYDB_SKIP_TABLESPACES,
-								SKIP_TABLESPACES,
-								sizeof(SKIP_TABLESPACES)))
+								  SKIP_TABLESPACES,
+								  sizeof(SKIP_TABLESPACES)))
 				{
 					/* errors have already been logged */
 					++errors;
 				}
 				else if (!parse_bool(SKIP_TABLESPACES,
-									&(options->restoreOptions.noTableSpaces)))
+									 &(options->restoreOptions.noTableSpaces)))
 				{
 					log_error("Failed to parse environment variable \"%s\" "
-							"value \"%s\", expected a boolean (on/off)",
-							PGCOPYDB_SKIP_TABLESPACES,
-							SKIP_TABLESPACES);
+							  "value \"%s\", expected a boolean (on/off)",
+							  PGCOPYDB_SKIP_TABLESPACES,
+							  SKIP_TABLESPACES);
 					++errors;
 				}
 			}
