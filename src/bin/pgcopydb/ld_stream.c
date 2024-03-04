@@ -543,6 +543,9 @@ startLogicalStreaming(StreamSpecs *specs)
 					 privateContext->counters.total > 0 ? "s" : "");
 		}
 
+		/* if we are going to retry, we need to rollback the last txn */
+		context.onRetry = retry;
+
 		/* sleep for one entire second before retrying */
 		if (retry)
 		{
@@ -781,6 +784,32 @@ stream_write_json(LogicalStreamContext *context, bool previous)
 	{
 		log_error("Failed to write Logical Message: jsonFile is NULL");
 		return false;
+	}
+
+	if (context->onRetry)
+	{
+		/*
+		 * When retrying due to a transient network error or server conn
+		 * failure, we need to rollback the last incomplete transaction.
+		 *
+		 * Otherwise, we would end up with a partial transaction in the
+		 * JSON file, and the transform process would fail to process it.
+		 */
+		if (privateContext->transactionInProgress)
+		{
+			InternalMessage rollback = {
+				.action = STREAM_ACTION_ROLLBACK,
+				.lsn = context->cur_record_lsn
+			};
+
+			if (!stream_write_internal_message(context, &rollback))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+		}
+
+		context->onRetry = false;
 	}
 
 	/* prepare a in-memory buffer with the whole data formatted in JSON */

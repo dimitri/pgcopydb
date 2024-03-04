@@ -436,6 +436,14 @@ typedef struct LogicalStreamContext
 	XLogRecPtr endpos;          /* might be update at runtime */
 
 	LogicalTrackLSN *tracking;  /* expose LogicalStreamClient.current */
+
+	/* This is set to true when the connection running START_REPLICATION
+	 * is interrupted and we need to retry.
+	 *
+	 * This is majorly used to add synthetic ROLLBACK statements to the
+	 * JSON file to avoid partial transactions.
+	 */
+	bool onRetry;
 } LogicalStreamContext;
 
 
