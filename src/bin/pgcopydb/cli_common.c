@@ -451,6 +451,32 @@ cli_copydb_getenv(CopyDBOptions *options)
 				++errors;
 			}
 		}
+
+		/* when --no-tablespaces has not been used, check PGCOPYDB_SKIP_TABLESPACES */
+		if (!options->restoreOptions.noTableSpaces)
+		{
+			if (env_exists(PGCOPYDB_SKIP_TABLESPACES))
+			{
+				char SKIP_TABLESPACES[BUFSIZE] = { 0 };
+
+				if (!get_env_copy(PGCOPYDB_SKIP_TABLESPACES,
+								  SKIP_TABLESPACES,
+								  sizeof(SKIP_TABLESPACES)))
+				{
+					/* errors have already been logged */
+					++errors;
+				}
+				else if (!parse_bool(SKIP_TABLESPACES,
+									 &(options->restoreOptions.noTableSpaces)))
+				{
+					log_error("Failed to parse environment variable \"%s\" "
+							  "value \"%s\", expected a boolean (on/off)",
+							  PGCOPYDB_SKIP_TABLESPACES,
+							  SKIP_TABLESPACES);
+					++errors;
+				}
+			}
+		}
 	}
 
 	return errors == 0;
@@ -779,6 +805,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "trace", no_argument, NULL, 'z' },
 		{ "quiet", no_argument, NULL, 'q' },
 		{ "help", no_argument, NULL, 'h' },
+		{ "no-tablespaces", no_argument, NULL, 'y' },
 		{ NULL, 0, NULL, 0 }
 	};
 
@@ -1179,6 +1206,13 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				commandline_help(stderr);
 				exit(EXIT_CODE_QUIT);
+				break;
+			}
+
+			case 'y':
+			{
+				options.restoreOptions.noTableSpaces = true;
+				log_trace("--no-tablespaces");
 				break;
 			}
 

@@ -934,6 +934,11 @@ pg_restore_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = "--no-acl";
 	}
 
+	if (options.noTableSpaces)
+	{
+		args[argsIndex++] = "--no-tablespaces";
+	}
+
 	/*
 	 * Do not apply [include-only-schema] filtering.
 	 *

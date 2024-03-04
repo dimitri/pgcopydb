@@ -40,6 +40,7 @@
 	"  --no-owner                    Do not set ownership of objects to match the original database\n" \
 	"  --no-acl                      Prevent restoration of access privileges (grant/revoke commands).\n" \
 	"  --no-comments                 Do not output commands to restore comments\n" \
+	"  --no-tablespaces              Do not output commands to select tablespaces\n" \
 	"  --skip-large-objects          Skip copying large objects (blobs)\n" \
 	"  --skip-extensions             Skip restoring extensions\n" \
 	"  --skip-ext-comments           Skip restoring COMMENT ON EXTENSION\n" \
