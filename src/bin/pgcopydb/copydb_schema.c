@@ -494,16 +494,6 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 		}
 	}
 
-	/*
-	 * First, if it doesn't exist yet, create the pgcopydb.table_size table.
-	 * Keep track of whether we had to create that table, if we did, it is
-	 * expected that we DROP it before the end of this transaction.
-	 *
-	 * In order to allow for users to prepare that table in advance, we do not
-	 * use a TEMP table here.
-	 */
-	bool createdTableSizeTable = false;
-
 	if (!catalog_begin(sourceDB, false))
 	{
 		/* errors have already been logged */
@@ -567,15 +557,6 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 	if (specs->fetchFilteredOids)
 	{
 		if (!copydb_fetch_filtered_oids(specs, src))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-	}
-
-	if (createdTableSizeTable)
-	{
-		if (!schema_drop_pgcopydb_table_size(src))
 		{
 			/* errors have already been logged */
 			return false;
