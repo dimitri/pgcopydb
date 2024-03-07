@@ -3327,9 +3327,9 @@ catalog_iter_s_table_attrs_init(SourceTableAttrsIterator *iter)
 	}
 
 	char *sql =
-		"  select attnum, "
+		"  select count(*) over(order by attnum) as num, "
 		"         count(*) over() as count, "
-		"         attypid, attname, attisprimary, attisgenerated "
+		"         attnum, attypid, attname, attisprimary, attisgenerated "
 		"    from s_attr "
 		"   where oid = $1 "
 		"order by attnum";
@@ -3415,10 +3415,10 @@ catalog_s_table_attrs_fetch(SQLiteQuery *query)
 {
 	SourceTable *table = (SourceTable *) query->context;
 
-	int attnum = sqlite3_column_int(query->ppStmt, 0);
+	int num = sqlite3_column_int(query->ppStmt, 0);
 	int count = sqlite3_column_int(query->ppStmt, 1);
 
-	if (attnum == 1)
+	if (num == 1)
 	{
 		table->attributes.count = count;
 		table->attributes.array =
@@ -3432,17 +3432,17 @@ catalog_s_table_attrs_fetch(SQLiteQuery *query)
 		}
 	}
 
-	SourceTableAttribute *attr = &(table->attributes.array[attnum - 1]);
+	SourceTableAttribute *attr = &(table->attributes.array[num - 1]);
 
-	attr->attnum = attnum;
-	attr->atttypid = sqlite3_column_int64(query->ppStmt, 2);
+	attr->attnum = sqlite3_column_int(query->ppStmt, 2);
+	attr->atttypid = sqlite3_column_int64(query->ppStmt, 3);
 
 	strlcpy(attr->attname,
-			(char *) sqlite3_column_text(query->ppStmt, 3),
+			(char *) sqlite3_column_text(query->ppStmt, 4),
 			sizeof(attr->attname));
 
-	attr->attisprimary = sqlite3_column_int(query->ppStmt, 4) == 1;
-	attr->attisgenerated = sqlite3_column_int(query->ppStmt, 5) == 1;
+	attr->attisprimary = sqlite3_column_int(query->ppStmt, 5) == 1;
+	attr->attisgenerated = sqlite3_column_int(query->ppStmt, 6) == 1;
 
 	return true;
 }

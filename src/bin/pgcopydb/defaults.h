@@ -16,6 +16,8 @@
 #define calloc(m, n) GC_malloc((m) * (n))
 #define free(p) GC_free(p)
 #define realloc(p, n) GC_realloc((p), (n))
+#define strdup(p) GC_strdup(p)
+#define strndup(p, n) GC_strndup(p, n)
 
 /*
  * The GC API can also be used as leak detector, thanks to using the following
@@ -61,6 +63,7 @@
 #define PGCOPYDB_LOG_FILENAME "PGCOPYDB_LOG_FILENAME"
 #define PGCOPYDB_FAIL_FAST "PGCOPYDB_FAIL_FAST"
 #define PGCOPYDB_SKIP_VACUUM "PGCOPYDB_SKIP_VACUUM"
+#define PGCOPYDB_SKIP_TABLESPACES "PGCOPYDB_SKIP_TABLESPACES"
 
 /* default values for the command line options */
 #define DEFAULT_TABLE_JOBS 4

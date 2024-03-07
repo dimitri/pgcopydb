@@ -11,6 +11,7 @@
      --no-owner           Do not set ownership of objects to match the original database
      --no-acl             Prevent restoration of access privileges (grant/revoke commands).
      --no-comments        Do not output commands to restore comments
+     --no-tablespaces     Do not output commands to select tablespaces
      --filters <filename> Use the filters defined in <filename>
      --restart            Allow restarting when temp files exist already
      --resume             Allow resuming operations after a failure

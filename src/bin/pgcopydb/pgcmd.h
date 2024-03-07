@@ -187,6 +187,7 @@ typedef struct RestoreOptions
 	bool noOwner;
 	bool noComments;
 	bool noACL;
+	bool noTableSpaces;
 	int jobs;
 } RestoreOptions;
 

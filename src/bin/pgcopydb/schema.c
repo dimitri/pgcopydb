@@ -3292,9 +3292,9 @@ schema_list_partitions(PGSQL *pgsql,
 
 		parts->count = parts->max - parts->min + 1;
 
-		log_info("Partition %s#%d: %lld - %lld (%lld)", table->qname, parts->partNumber,
-				 (long long) parts->min, (long long) parts->max, (long
-																  long) parts->count);
+		log_debug("Partition %s#%d: %lld - %lld (%lld)", table->qname, parts->partNumber,
+				  (long long) parts->min, (long long) parts->max, (long
+																   long) parts->count);
 
 		if (catalog != NULL && catalog->db != NULL)
 		{
