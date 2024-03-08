@@ -4533,7 +4533,7 @@ getCollationList(void *ctx, PGresult *result)
 
 
 /*
- * Retrieves the table size array from the PostgreSQL result and populates the context.
+ * getTableSizeArray retrieves the table size array from the PostgreSQL result and populates the context.
  */
 static void
 getTableSizeArray(void *ctx, PGresult *result)
@@ -4577,7 +4577,7 @@ getTableSizeArray(void *ctx, PGresult *result)
 
 
 /*
- * Parses the current source table size from the given PGresult object.
+ * parseCurrentSourceTableSize parses the current source table size from the given PGresult object.
  */
 static bool
 parseCurrentSourceTableSize(PGresult *result, int rowNumber, SourceTableSize *tableSize)
