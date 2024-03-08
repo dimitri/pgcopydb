@@ -42,12 +42,6 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	if (!summary_start_timing(sourceDB, TIMING_SECTION_TOTAL_DATA))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	if (specs->runState.tableCopyIsDone &&
 		specs->runState.indexCopyIsDone &&
 		specs->runState.sequenceCopyIsDone &&
@@ -56,6 +50,12 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 		log_info("Skipping tables, indexes, and sequences, "
 				 "already done on a previous run");
 		return true;
+	}
+
+	if (!summary_start_timing(sourceDB, TIMING_SECTION_TOTAL_DATA))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	/* close SQLite databases before fork() */

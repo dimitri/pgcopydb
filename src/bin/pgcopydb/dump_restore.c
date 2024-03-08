@@ -62,6 +62,13 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
+	if (specs->runState.schemaDumpIsDone)
+	{
+		log_info("Skipping pg_dump for pre-data/post-data section, "
+				 "done on a previous run");
+		return true;
+	}
+
 	if (!summary_start_timing(sourceDB, TIMING_SECTION_DUMP_SCHEMA))
 	{
 		/* errors have already been logged */
@@ -133,12 +140,6 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	if (!summary_start_timing(sourceDB, TIMING_SECTION_PREPARE_SCHEMA))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	if (!file_exists(specs->dumpPaths.preFilename))
 	{
 		log_fatal("File \"%s\" does not exists", specs->dumpPaths.preFilename);
@@ -150,6 +151,12 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 		log_info("Skipping pg_restore for pre-data section, "
 				 "done on a previous run");
 		return true;
+	}
+
+	if (!summary_start_timing(sourceDB, TIMING_SECTION_PREPARE_SCHEMA))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	/*
@@ -488,12 +495,6 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	if (!summary_start_timing(sourceDB, TIMING_SECTION_FINALIZE_SCHEMA))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	if (!file_exists(specs->dumpPaths.postFilename))
 	{
 		log_fatal("File \"%s\" does not exists", specs->dumpPaths.postFilename);
@@ -505,6 +506,12 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 		log_info("Skipping pg_restore for --section=post-data, "
 				 "done on a previous run");
 		return true;
+	}
+
+	if (!summary_start_timing(sourceDB, TIMING_SECTION_FINALIZE_SCHEMA))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	if (!copydb_write_restore_list(specs, PG_DUMP_SECTION_POST_DATA))
