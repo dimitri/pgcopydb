@@ -423,11 +423,35 @@ schema_list_extensions(PGSQL *pgsql, DatabaseCatalog *catalog)
 	SourceExtensionArrayContext parseContext = { { 0 }, catalog, false };
 
 	char *sql =
+		"with recursive fk_constraints as ( "
+		"     select conrelid, confrelid from pg_constraint where contype = 'f' and conrelid <> confrelid "
+		" ), raw_ordered_fk_constraints as ( "
+		"     select "
+		"            distinct c.confrelid as relid, "
+		"            0 as depth "
+		"       from fk_constraints c "
+		"      where not exists ( "
+		"            select 1 "
+		"              from fk_constraints fc "
+		"             where fc.conrelid = c.confrelid "
+		"            ) "
+		"     UNION "
+		"     select "
+		"            distinct c.conrelid as relid, "
+		"            r.depth + 1 as depth "
+		"       from raw_ordered_fk_constraints r "
+		"       join fk_constraints c ON c.confrelid = r.relid"
+		" ), ordered_fk_constraints AS ( "
+		"     select "
+		"            relid, "
+		"            max(depth) as depth "
+		"       from raw_ordered_fk_constraints group by relid "
+		" ), extension_config_data as ( "
 		"select e.oid, extname, extnamespace::regnamespace, extrelocatable, "
 		"       0 as count, null as n, "
 		"       null as extconfig, null as nspname, null as relname, "
 		"       null as extcondition, "
-		"		null as relkind "
+		"       null as relkind "
 		"  from pg_extension e "
 		" where extconfig is null "
 
@@ -446,8 +470,18 @@ schema_list_extensions(PGSQL *pgsql, DatabaseCatalog *catalog)
 		"          left join pg_class c on c.oid = extconfig.extconfig "
 		"          join pg_namespace n on c.relnamespace = n.oid "
 		"   where extconfig.extconfig is not null "
-
-		"order by oid, n";
+		") "
+		"select oid, extname, extnamespace, extrelocatable, "
+		"       count, "
+		"       row_number() over (partition by oid order by depth) as n, "
+		"       extconfig, "
+		"       nspname, "
+		"       relname, "
+		"       extcondition, "
+		"       relkind "
+		" from extension_config_data "
+		"      left outer join ordered_fk_constraints ofc on extconfig = ofc.relid "
+	;
 
 	if (!pgsql_execute_with_params(pgsql, sql,
 								   0, NULL, NULL,
@@ -4073,7 +4107,7 @@ getExtensionList(void *ctx, PGresult *result)
 
 	if (PQnfields(result) != 11)
 	{
-		log_error("Query returned %d columns, expected 10", PQnfields(result));
+		log_error("Query returned %d columns, expected 11", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
