@@ -434,7 +434,7 @@ summary_add_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 	}
 
 	char *sql =
-		"insert into summary(pid, tableoid, partnum, start_time_epoch, command)"
+		"insert or replace into summary(pid, tableoid, partnum, start_time_epoch, command)"
 		"values($1, $2, $3, $4, $5)";
 
 	if (!semaphore_lock(&(catalog->sema)))
