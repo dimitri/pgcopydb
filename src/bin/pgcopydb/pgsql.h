@@ -423,7 +423,6 @@ typedef struct LogicalStreamContext
 
 	XLogRecPtr cur_record_lsn;
 	int timeline;
-	uint32_t WalSegSz;
 
 	const char *buffer;         /* expose internal buffer */
 	StreamOutputPlugin plugin;
@@ -450,8 +449,6 @@ typedef struct LogicalStreamClient
 
 	StreamOutputPlugin plugin;
 	KeyVal pluginOptions;
-
-	uint32_t WalSegSz;
 
 	XLogRecPtr startpos;
 	XLogRecPtr endpos;
@@ -501,11 +498,6 @@ bool pgsql_timestamptz_to_string(TimestampTz ts, char *str, size_t size);
 bool pgsql_start_replication(LogicalStreamClient *client);
 bool pgsql_stream_logical(LogicalStreamClient *client,
 						  LogicalStreamContext *context);
-
-/* SHOW command for replication connection was introduced in version 10 */
-#define MINIMUM_VERSION_FOR_SHOW_CMD 100000
-
-bool RetrieveWalSegSize(LogicalStreamClient *client);
 
 bool pgsql_replication_origin_oid(PGSQL *pgsql, char *nodeName, uint32_t *oid);
 bool pgsql_replication_origin_create(PGSQL *pgsql, char *nodeName);

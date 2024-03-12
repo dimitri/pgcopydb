@@ -204,6 +204,7 @@ clone_and_follow(CopyDataSpec *copySpecs)
 						   copyDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
 						   &(copySpecs->catalogs.source),
+						   &(copySpecs->catalogs.replay),
 						   copyDBoptions.stdIn,
 						   copyDBoptions.stdOut,
 						   logSQL))
@@ -364,6 +365,7 @@ cli_follow(int argc, char **argv)
 						   copyDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
 						   &(copySpecs.catalogs.source),
+						   &(copySpecs.catalogs.replay),
 						   copyDBoptions.stdIn,
 						   copyDBoptions.stdOut,
 						   logSQL))
