@@ -297,6 +297,9 @@ bool pgsql_send_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 bool pgsql_fetch_results(PGSQL *pgsql, bool *done,
 						 void *context, ParsePostgresResultCB *parseFun);
 
+bool pgsql_pipeline_enter(PGSQL *pgsql);
+bool pgsql_pipeline_sync(PGSQL *pgsql);
+
 bool pgsql_prepare(PGSQL *pgsql, const char *name, const char *sql,
 				   int paramCount, const Oid *paramTypes);
 

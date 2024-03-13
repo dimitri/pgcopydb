@@ -178,6 +178,19 @@ stream_replay_line(void *ctx, const char *line, bool *stop)
 					return false;
 				}
 			}
+
+			/* rate limit to 1 pipeline sync per seconds */
+			if (1 < (now - context->pipelineSyncTime))
+			{
+				if (!pgsql_pipeline_sync(&(context->pgsqlPipeline)))
+				{
+					log_error("Failed to sync the pipeline, see previous "
+							  "error for details");
+					return false;
+				}
+
+				context->pipelineSyncTime = now;
+			}
 			break;
 		}
 
@@ -231,6 +244,16 @@ stream_replay_line(void *ctx, const char *line, bool *stop)
 		log_info("Replay reached end position %X/%X at %X/%X",
 				 LSN_FORMAT_ARGS(context->endpos),
 				 LSN_FORMAT_ARGS(context->previousLSN));
+	}
+
+	if (*stop)
+	{
+		if (!pgsql_pipeline_sync(&(context->pgsqlPipeline)))
+		{
+			log_error("Failed to sync the pipeline, see previous error for "
+					  "details");
+			return false;
+		}
 	}
 
 	return true;

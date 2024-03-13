@@ -365,6 +365,12 @@ typedef struct StreamApplyContext
 	/* target connection */
 	PGSQL pgsql;
 
+	/* target connection created in pipeline mode */
+	PGSQL pgsqlPipeline;
+
+	/* track the last time we synced the pipeline */
+	uint64_t pipelineSyncTime;
+
 	/* apply needs access to the catalogs to register sentinel replay_lsn */
 	DatabaseCatalog *sourceDB;
 	uint64_t sentinelSyncTime;
@@ -648,6 +654,8 @@ bool parseWal2jsonMessage(StreamContext *privateContext,
 bool stream_apply_catchup(StreamSpecs *specs);
 
 bool stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context);
+
+bool stream_apply_cleanup(StreamApplyContext *context);
 
 bool stream_apply_wait_for_sentinel(StreamSpecs *specs,
 									StreamApplyContext *context);

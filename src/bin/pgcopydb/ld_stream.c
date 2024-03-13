@@ -35,7 +35,6 @@
 static bool updateStreamCounters(StreamContext *context,
 								 LogicalMessageMetadata *metadata);
 
-
 /*
  * stream_init_specs initializes Change Data Capture streaming specifications
  * from a copyDBSpecs structure.

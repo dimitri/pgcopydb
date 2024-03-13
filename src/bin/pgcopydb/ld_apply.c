@@ -54,6 +54,8 @@ static bool computeTxnMetadataFilename(uint32_t xid, const char *dir, char *file
 
 static bool writeTxnCommitMetadata(LogicalMessageMetadata *mesg, const char *dir);
 
+static bool setupConnection(PGSQL *pgsql, StreamApplyContext *context);
+
 /*
  * stream_apply_catchup catches up with SQL files that have been prepared by
  * either the `pgcopydb stream prefetch` command.
@@ -101,7 +103,7 @@ stream_apply_catchup(StreamSpecs *specs)
 			log_info("File \"%s\" does not exists yet, exit",
 					 context.sqlFileName);
 
-			(void) pgsql_finish(&(context.pgsql));
+			(void) stream_apply_cleanup(&context);
 			return true;
 		}
 
@@ -111,7 +113,7 @@ stream_apply_catchup(StreamSpecs *specs)
 		if (!stream_apply_file(&context))
 		{
 			/* errors have already been logged */
-			(void) pgsql_finish(&(context.pgsql));
+			(void) stream_apply_cleanup(&context);
 			return false;
 		}
 
@@ -143,7 +145,7 @@ stream_apply_catchup(StreamSpecs *specs)
 		if (!computeSQLFileName(&context))
 		{
 			/* errors have already been logged */
-			(void) pgsql_finish(&(context.pgsql));
+			(void) stream_apply_cleanup(&context);
 			return false;
 		}
 
@@ -159,7 +161,7 @@ stream_apply_catchup(StreamSpecs *specs)
 					 LSN_FORMAT_ARGS(context.previousLSN));
 
 			/* make sure we close the connection on the way out */
-			(void) pgsql_finish(&(context.pgsql));
+			(void) stream_apply_cleanup(&context);
 			return true;
 		}
 
@@ -167,7 +169,7 @@ stream_apply_catchup(StreamSpecs *specs)
 	}
 
 	/* make sure we close the connection on the way out */
-	(void) pgsql_finish(&(context.pgsql));
+	(void) stream_apply_cleanup(&context);
 	return true;
 }
 
@@ -264,6 +266,21 @@ stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
 				 process,
 				 LSN_FORMAT_ARGS(context->previousLSN));
 	}
+
+	return true;
+}
+
+
+/*
+ * stream_apply_cleanup cleans up the resources used by the apply process.
+ */
+bool
+stream_apply_cleanup(StreamApplyContext *context)
+{
+	/* make sure we close the connection on the way out */
+	(void) pgsql_finish(&(context->pgsql));
+
+	(void) pgsql_finish(&(context->pgsqlPipeline));
 
 	return true;
 }
@@ -509,6 +526,8 @@ stream_apply_file(StreamApplyContext *context)
 		}
 	}
 
+	uint32_t pipelineSyncTime = time(NULL);
+
 	/* replay the SQL commands from the SQL file */
 	for (uint64_t i = 0; i < content.lbuf.count && !context->reachedEndPos; i++)
 	{
@@ -526,6 +545,31 @@ stream_apply_file(StreamApplyContext *context)
 
 			return false;
 		}
+
+
+		/* rate limit to 1 pipeline sync per second */
+		if ((metadata->action == STREAM_ACTION_COMMIT ||
+			 metadata->action == STREAM_ACTION_KEEPALIVE) &&
+			(1 < (time(NULL) - pipelineSyncTime)))
+		{
+			/* fetch results until done */
+			if (!pgsql_pipeline_sync(&(context->pgsqlPipeline)))
+			{
+				log_error("Failed to sync the pipeline, see previous error for "
+						  "details");
+				return false;
+			}
+
+			pipelineSyncTime = time(NULL);
+		}
+	}
+
+	/* Always sync pipline at the end of file */
+	if (!pgsql_pipeline_sync(&(context->pgsqlPipeline)))
+	{
+		log_error("Failed to sync the pipeline, see previous error for "
+				  "details");
+		return false;
 	}
 
 	/*
@@ -556,7 +600,7 @@ stream_apply_sql(StreamApplyContext *context,
 				 LogicalMessageMetadata *metadata,
 				 const char *sql)
 {
-	PGSQL *pgsql = &(context->pgsql);
+	PGSQL *pgsql = &(context->pgsqlPipeline);
 
 	switch (metadata->action)
 	{
@@ -1157,6 +1201,44 @@ stream_apply_sql(StreamApplyContext *context,
 
 
 /*
+ * setupConnection ensures that the target database connection is
+ * prepared for pipeline mode. We want to have a dedicated connection for
+ * pipeline mode, so that we can control the lifecycle of that connection
+ * separately from the main connection.
+ */
+static bool
+setupConnection(PGSQL *pgsql, StreamApplyContext *context)
+{
+	if (!pgsql_init(pgsql,
+					context->connStrings->target_pguri,
+					PGSQL_CONN_TARGET))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* we're going to send several replication origin commands */
+	pgsql->connectionStatementType = PGSQL_CONNECTION_MULTI_STATEMENT;
+
+	/* we also might want to skip logging any SQL query that we apply */
+	pgsql->logSQL = context->logSQL;
+
+	/*
+	 * Grab the Postgres server version on the target, we need to know that for
+	 * being able to call pgsql_current_wal_insert_lsn using the right Postgres
+	 * function name.
+	 */
+	if (!pgsql_server_version(pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * setupReplicationOrigin ensures that a replication origin has been created on
  * the target database, and if it has been created previously then fetches the
  * previous LSN position it was at.
@@ -1167,29 +1249,27 @@ stream_apply_sql(StreamApplyContext *context,
 bool
 setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
 {
-	PGSQL *pgsql = &(context->pgsql);
 	char *nodeName = context->origin;
 
-	if (!pgsql_init(pgsql, context->connStrings->target_pguri, PGSQL_CONN_TARGET))
+	/*
+	 * We want to have a dedicated connection for pipeline mode, so that we can
+	 * control the lifecycle of that connection separately from the other
+	 * connection.
+	 */
+	PGSQL *pgsql = &(context->pgsqlPipeline);
+	if (!setupConnection(pgsql, context))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	/* we're going to send several replication origin commands */
-	pgsql->connectionStatementType = PGSQL_CONNECTION_MULTI_STATEMENT;
-
-	/* we also might want to skip logging any SQL query that we apply */
-	pgsql->logSQL = logSQL;
-
 	/*
-	 * Grab the Postgres server version on the target, we need to know that for
-	 * being able to call pgsql_current_wal_insert_lsn using the right Postgres
-	 * function name.
+	 * Setup non pipeline connection for operations like finding wal insert lsn
+	 * which expects immediate response.
 	 */
-	if (!pgsql_server_version(pgsql))
+	if (!setupConnection(&context->pgsql, context))
 	{
-		/* errors have already been logged */
+		log_error("Failed to setup pipeline mode on target connection");
 		return false;
 	}
 
@@ -1269,6 +1349,13 @@ setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
 			  context->sqlFileName);
 
 	if (!pgsql_replication_origin_session_setup(pgsql, nodeName))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* Enter into pipeline mode, sync operations are not allowed after this. */
+	if (!pgsql_pipeline_enter(pgsql))
 	{
 		/* errors have already been logged */
 		return false;
