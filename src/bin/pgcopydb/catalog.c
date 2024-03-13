@@ -3184,7 +3184,7 @@ catalog_s_table_attrlist(DatabaseCatalog *catalog, SourceTable *table)
 	}
 
 	char *sql =
-		"select group_concat(attname, ', ' order by attnum) "
+		" select group_concat(attname order by attnum, ', ') "
 		"       filter (where not attisgenerated) "
 		"  from s_attr "
 		" where oid = $1";
