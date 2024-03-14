@@ -1909,11 +1909,17 @@ pgsql_pipeline_enter(PGSQL *pgsql)
 	log_trace("Enabled pipeline mode");
 	return true;
 #else
-	log_warn("Pipeline mode is not available on Postgres version %d, "
-			 "need at least version 14",
-			 PG_MAJORVERSION_NUM);
+	static bool warned = false;
 
-	return false;
+	if (!warned)
+	{
+		log_warn("Pipeline mode is not available on Postgres version %d, "
+				 "need at least version 14",
+				 PG_MAJORVERSION_NUM);
+		warned = true;
+	}
+
+	return true;
 #endif
 }
 
