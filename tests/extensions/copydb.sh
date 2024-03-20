@@ -31,6 +31,8 @@ EOF
 psql -a -1 ${PGCOPYDB_SOURCE_PGURI_SU} <<EOF
 create extension intarray cascade;
 create extension postgis cascade;
+create schema foo;
+create extension hstore with schema foo cascade;
 EOF
 
 #
@@ -56,6 +58,14 @@ psql -o /tmp/c.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pgcopydb/countries
 coproc ( pgcopydb snapshot --debug )
 
 sleep 1
+
+# copy the schemas to the target database
+# before we copy the extensions
+pgcopydb copy schemas \
+         --source ${PGCOPYDB_SOURCE_PGURI_SU} \
+         --target ${PGCOPYDB_TARGET_PGURI_SU} \
+         --resume \
+         --debug
 
 # copy the extensions separately, needs superuser (both on source and target)
 pgcopydb list extensions --source ${PGCOPYDB_SOURCE_PGURI_SU}

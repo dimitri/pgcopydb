@@ -646,12 +646,35 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 
 		bool skip = false;
 
+		log_trace("Processing dumpId %d: %s %u %u %s",
+				  item->dumpId,
+				  item->description,
+				  item->catalogOid,
+				  item->objectOid,
+				  item->restoreListName);
+
+		/*
+		 * Skip everything except SCHEMAS when specs->section == DATA_SECTION_SCHEMAS
+		 */
+		if (specs->section == DATA_SECTION_SCHEMAS &&
+			(item->isCompositeTag ?
+			 item->tagType != ARCHIVE_TAG_TYPE_SCHEMA :
+			 item->desc != ARCHIVE_TAG_SCHEMA))
+		{
+			skip = true;
+			log_debug("Skipping non schema %d: %s %u %s",
+					  item->dumpId,
+					  item->description,
+					  item->objectOid,
+					  item->restoreListName);
+		}
+
 		/*
 		 * Skip COMMENT ON EXTENSION when either of the option
 		 * --skip-extensions or --skip-ext-comment has been used.
 		 */
-		if ((specs->skipExtensions ||
-			 specs->skipCommentOnExtension) &&
+		if (!skip && (specs->skipExtensions ||
+					  specs->skipCommentOnExtension) &&
 			item->isCompositeTag &&
 			item->tagKind == ARCHIVE_TAG_KIND_COMMENT &&
 			item->tagType == ARCHIVE_TAG_TYPE_EXTENSION)
