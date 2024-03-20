@@ -444,7 +444,7 @@ pg_dump_db(PostgresPaths *pgPaths,
 	}
 
 	args[argsIndex++] = "--extension";
-	args[argsIndex++] = "somejunk";
+	args[argsIndex++] = "pg_stat_statements";
 
 	/*
 	 * Store extension args in a separate array, extension args will dynamically
