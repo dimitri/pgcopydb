@@ -443,6 +443,8 @@ pg_dump_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = nspname;
 	}
 
+	// TODO: this was a naive way to try and filter the extensions from pg_dump, but
+	// it isn't effective, we need to find a better way to do this.
 	args[argsIndex++] = "--extension";
 	args[argsIndex++] = "pg_stat_statements";
 
