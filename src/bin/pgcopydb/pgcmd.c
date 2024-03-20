@@ -443,6 +443,9 @@ pg_dump_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = nspname;
 	}
 
+	args[argsIndex++] = "--extension";
+	args[argsIndex++] = "somejunk";
+
 	/*
 	 * Store extension args in a separate array, extension args will dynamically
 	 * allocated by pg_dump_db_extension_namespace_hook and we want to free
