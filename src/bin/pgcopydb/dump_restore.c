@@ -121,6 +121,8 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 		}
 	}
 
+	// TODO: can we scrub CREATE EXTENSION entries from the dump?
+
 	if (!summary_stop_timing(sourceDB, TIMING_SECTION_DUMP_SCHEMA))
 	{
 		/* errors have already been logged */
