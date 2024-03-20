@@ -234,7 +234,7 @@ copydb_copy_extensions_hook(void *ctx, SourceExtension *ext)
 
 		appendPQExpBuffer(sql,
 						  "create extension if not exists \"%s\" with schema \"%s\" cascade",
-						  ext->extname, ext->schema);
+						  ext->extname, ext->extnamespace);
 
 		if (req != NULL)
 		{
