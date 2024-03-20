@@ -31,6 +31,13 @@ EOF
 psql -a -1 ${PGCOPYDB_SOURCE_PGURI_SU} <<EOF
 create extension intarray cascade;
 create extension postgis cascade;
+create schema foo;
+create extension hstore with schema foo cascade;
+EOF
+
+# create schemas for extensions on the target pagila database (needs superuser)
+psql -a -1 ${PGCOPYDB_TARGET_PGURI_SU} <<EOF
+create schema foo;
 EOF
 
 #
