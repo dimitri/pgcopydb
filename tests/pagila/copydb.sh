@@ -30,9 +30,26 @@ EOF
 PAGILA_SOURCE_PGURI="postgres://pagila:0wn3d@source/pagila"
 PAGILA_TARGET_PGURI="postgres://pagila:0wn3d@target/pagila"
 
+# Create extensions in the default and alternative schemas to always
+# ensure these copy as expected.
 psql -d ${PAGILA_SOURCE_PGURI} <<EOF
 create extension ltree;
 create extension hstore;
+create schema foo;
+create extension intarray schema foo cascade;
+create schema bar;
+create extension pg_trgm schema bar cascade;
+create schema "Foo Bar";
+create extension pgcrypto schema "Foo Bar" cascade;
+create schema "With a space";
+create extension seg schema "With a space" cascade;
+EOF
+
+# Create a couple of schemas in the target database
+# to ensure they get skipped during the clone
+psql -d ${PAGILA_TARGET_PGURI} <<EOF
+create schema bar;
+create schema "With a space";
 EOF
 
 grep -v "OWNER TO postgres" /usr/src/pagila/pagila-schema.sql > /tmp/pagila-schema.sql

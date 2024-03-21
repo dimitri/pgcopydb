@@ -53,6 +53,12 @@ static char *sourceDBcreateDDLs[] = {
 
 	"create index s_d_p_oid on s_database_property(datname)",
 
+	"create table s_namespace("
+	"  nspname text primary key, restore_list_name text"
+	")",
+
+	"create index s_n_rlname on s_namespace(restore_list_name)",
+
 	"create table s_table("
 	"  oid integer primary key, "
 	"  datname text, qname text, nspname text, relname text, amname text, "
@@ -1672,6 +1678,11 @@ CopyDataSectionToString(CopyDataSection section)
 		case DATA_SECTION_ALL:
 		{
 			return "all";
+		}
+
+		case DATA_SECTION_NAMESPACES:
+		{
+			return "namespaces";
 		}
 
 		case DATA_SECTION_NONE:
@@ -4836,11 +4847,6 @@ catalog_prepare_filter(DatabaseCatalog *catalog,
 	char *sql =
 		"insert into filter(oid, restore_list_name, kind) "
 
-		"     select oid, restore_list_name, 's_namespace' "
-		"       from s_namespace "
-
-		"  union all "
-
 		"     select oid, restore_list_name, 'table' "
 		"       from s_table "
 
@@ -5952,25 +5958,25 @@ catalog_add_s_namespace(DatabaseCatalog *catalog, SourceSchema *namespace)
 
 
 /*
- * catalog_lookup_s_namespace_by_rlname fetches a  entry from our catalogs.
+ * catalog_lookup_s_namespace_by_nspname fetches a s_namespace entry from our catalogs.
  */
 bool
-catalog_lookup_s_namespace_by_rlname(DatabaseCatalog *catalog,
-									 const char *restoreListName,
-									 SourceSchema *result)
+catalog_lookup_s_namespace_by_nspname(DatabaseCatalog *catalog,
+									  const char *nspname,
+									  SourceSchema *result)
 {
 	sqlite3 *db = catalog->db;
 
 	if (db == NULL)
 	{
-		log_error("BUG: catalog_lookup_s_namespace_by_rlname: db is NULL");
+		log_error("BUG: catalog_lookup_s_namespace_by_nspname: db is NULL");
 		return false;
 	}
 
 	char *sql =
 		"  select oid, nspname, restore_list_name "
 		"    from s_namespace "
-		"   where restore_list_name = $1 ";
+		"   where nspname = $1 ";
 
 	SQLiteQuery query = {
 		.context = result,
@@ -5985,8 +5991,62 @@ catalog_lookup_s_namespace_by_rlname(DatabaseCatalog *catalog,
 
 	/* bind our parameters now */
 	BindParam params[1] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
-		  (char *) restoreListName },
+		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0,
+		  (char *) nspname },
+	};
+
+	if (!catalog_sql_bind(&query, params, 1))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which return exactly one row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_lookup_s_namespace_by_oid fetches a s_namespace entry from our catalogs using the oid.
+ */
+bool
+catalog_lookup_s_namespace_by_oid(DatabaseCatalog *catalog,
+								  uint32_t oid,
+								  SourceSchema *result)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_lookup_s_namespace_by_oid: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"  select oid, nspname, restore_list_name "
+		"    from s_namespace "
+		"   where oid = $1 ";
+
+	SQLiteQuery query = {
+		.context = result,
+		.fetchFunction = &catalog_s_namespace_fetch
+	};
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[1] = {
+		{ BIND_PARAMETER_TYPE_INT64, "oid", oid, NULL },
 	};
 
 	if (!catalog_sql_bind(&query, params, 1))

@@ -412,11 +412,12 @@ bool copydb_objectid_is_filtered_out(CopyDataSpec *specs,
 
 bool copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql);
 bool copydb_prepare_index_specs(CopyDataSpec *specs, PGSQL *pgsql);
+bool copydb_prepare_namespace_specs(CopyDataSpec *specs, PGSQL *pgsql);
 bool copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql);
 
 bool copydb_prepare_target_catalog(CopyDataSpec *specs);
 bool copydb_schema_already_exists(CopyDataSpec *specs,
-								  const char *restoreListName,
+								  uint32_t sourceOid,
 								  bool *exists);
 
 /* table-data.c */
