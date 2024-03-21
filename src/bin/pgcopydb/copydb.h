@@ -400,7 +400,7 @@ bool copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
 bool copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section);
 
 /* sequences.c */
-bool copydb_copy_all_sequences(CopyDataSpec *specs);
+bool copydb_copy_all_sequences(CopyDataSpec *specs, bool reset);
 bool copydb_start_seq_process(CopyDataSpec *specs);
 bool copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql);
 

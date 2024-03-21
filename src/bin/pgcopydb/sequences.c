@@ -176,7 +176,9 @@ copydb_start_seq_process(CopyDataSpec *specs)
 			/* child process runs the command */
 			(void) set_ps_title("pgcopydb: copy sequences");
 
-			if (!copydb_copy_all_sequences(specs))
+			bool reset = false;
+
+			if (!copydb_copy_all_sequences(specs, reset))
 			{
 				/* errors have already been logged */
 				exit(EXIT_CODE_INTERNAL_ERROR);
@@ -210,11 +212,11 @@ typedef struct CopySeqContext
  * target database with the same values.
  */
 bool
-copydb_copy_all_sequences(CopyDataSpec *specs)
+copydb_copy_all_sequences(CopyDataSpec *specs, bool reset)
 {
 	log_notice("Now starting setval process %d [%d]", getpid(), getppid());
 
-	if (specs->runState.sequenceCopyIsDone)
+	if (specs->runState.sequenceCopyIsDone && !reset)
 	{
 		log_info("Skipping sequences, already done on a previous run");
 		return true;
