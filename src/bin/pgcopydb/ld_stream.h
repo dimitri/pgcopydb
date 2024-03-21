@@ -323,6 +323,11 @@ typedef struct StreamContext
 	FILE *jsonFile;
 	FILE *sqlFile;
 
+	char wal[MAXPGPATH];
+	char lastUndoWal[MAXPGPATH];
+	FILE *undoFile;
+	bool undoInProgress;
+
 	StreamCounters counters;
 
 	bool transactionInProgress;
@@ -503,6 +508,9 @@ bool stream_init_context(StreamSpecs *specs);
 bool startLogicalStreaming(StreamSpecs *specs);
 bool streamCheckResumePosition(StreamSpecs *specs);
 
+bool recoverFromUndoLog(CDCPaths *path);
+bool removeUndoLog(CDCPaths *path);
+
 bool streamWrite(LogicalStreamContext *context);
 bool streamFlush(LogicalStreamContext *context);
 bool streamKeepalive(LogicalStreamContext *context);
@@ -533,7 +541,7 @@ bool stream_write_internal_message(LogicalStreamContext *context,
 
 bool stream_read_file(StreamContent *content);
 bool stream_read_latest(StreamSpecs *specs, StreamContent *content);
-bool stream_update_latest_symlink(StreamContext *privateContext,
+bool stream_update_latest_symlink(CDCPaths *paths,
 								  const char *filename);
 
 bool stream_sync_sentinel(LogicalStreamContext *context);
