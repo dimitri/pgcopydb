@@ -76,7 +76,6 @@ jq 'map(select(.name == "postgis" or .name == "address_standardizer" or .name ==
 
 cat ${r}
 
-# TODO: copy extensions returns with a non-zero exit code when it fails to copy the foo.hstore extension
 pgcopydb copy extensions \
          --source ${PGCOPYDB_SOURCE_PGURI_SU} \
          --target ${PGCOPYDB_TARGET_PGURI_SU} \
