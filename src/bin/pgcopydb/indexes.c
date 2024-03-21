@@ -296,6 +296,8 @@ copydb_index_worker(CopyDataSpec *specs)
 		}
 	}
 
+	pgsql_finish(&dst);
+
 	if (!catalog_delete_process(&(specs->catalogs.source), pid))
 	{
 		log_warn("Failed to delete catalog process entry for pid %d", pid);
@@ -304,11 +306,8 @@ copydb_index_worker(CopyDataSpec *specs)
 	if (!catalog_close_from_specs(specs))
 	{
 		/* errors have already been logged */
-		(void) pgsql_finish(&dst);
 		return false;
 	}
-
-	(void) pgsql_finish(&dst);
 
 	bool success = (stop == true && errors == 0);
 

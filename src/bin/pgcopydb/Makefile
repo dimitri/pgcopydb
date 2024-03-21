@@ -76,15 +76,13 @@ ifeq ($(shell uname -s),Darwin)
 endif
 
 
-ifdef USE_SECURITY_FLAGS
 # Flags taken from: https://liquid.microsoft.com/Web/Object/Read/ms.security/Requirements/Microsoft.Security.SystemsADM.10203#guide
 SECURITY_CFLAGS=-fstack-protector-strong -D_FORTIFY_SOURCE=2 -O2 -z noexecstack -fpie -Wl,-pie -Wl,-z,relro -Wl,-z,now -Wformat -Wformat-security -Werror=format-security
 DEFAULT_CFLAGS += $(SECURITY_CFLAGS)
-endif
 
 override CFLAGS := $(DEFAULT_CFLAGS) $(CFLAGS)
 
-JENKINS_CFLAGS = $(CFAGS) -Wno-implicit-fallthrough -Wno-format
+JENKINS_CFLAGS = $(CFLAGS) -Wno-implicit-fallthrough
 
 LIBS  = -L $(shell $(PG_CONFIG) --pkglibdir)
 LIBS += -L $(shell $(PG_CONFIG) --libdir)
