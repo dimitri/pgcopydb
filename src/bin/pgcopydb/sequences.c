@@ -216,7 +216,25 @@ copydb_copy_all_sequences(CopyDataSpec *specs, bool reset)
 {
 	log_notice("Now starting setval process %d [%d]", getpid(), getppid());
 
-	if (specs->runState.sequenceCopyIsDone && !reset)
+	if (reset)
+	{
+		log_info("Resetting sequences values");
+
+		PGSQL src = { 0 };
+
+		if (!pgsql_init(&src, specs->connStrings.source_pguri, PGSQL_CONN_SOURCE))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!copydb_prepare_sequence_specs(specs, &src))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+	else if (specs->runState.sequenceCopyIsDone)
 	{
 		log_info("Skipping sequences, already done on a previous run");
 		return true;
