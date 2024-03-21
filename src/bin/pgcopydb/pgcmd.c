@@ -443,11 +443,6 @@ pg_dump_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = nspname;
 	}
 
-	// TODO: this was a naive way to try and filter the extensions from pg_dump, but
-	// it isn't effective, we need to find a better way to do this.
-	// args[argsIndex++] = "--extension";
-	// args[argsIndex++] = "pg_stat_statements";
-
 	/*
 	 * Store extension args in a separate array, extension args will dynamically
 	 * allocated by pg_dump_db_extension_namespace_hook and we want to free
@@ -455,9 +450,6 @@ pg_dump_db(PostgresPaths *pgPaths,
 	 */
 	char *extNamespaces[PG_CMD_MAX_ARG];
 	int extNamespaceCount = 0;
-
-	// TODO: commenting this out as this create extension requires a schema
-	// before hand.
 
 	/* now --exclude-schema for extension's own schemas */
 	DumpExtensionNamespaceContext context = {
