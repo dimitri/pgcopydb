@@ -7301,7 +7301,7 @@ catalog_count_summary_done(DatabaseCatalog *catalog,
 		"            coalesce(p.partcount, 1) as partcount "
 		"       from summary s "
 		"            join s_table t on t.oid = s.tableoid "
-		"            left join s_table_part p on p.oid = t.oid "
+		"            left join s_table_part p on p.oid = t.oid and p.partnum = s.partnum "
 		"      where tableoid is not null "
 		"        and done_time_epoch is not null "
 		"   group by tableoid"
