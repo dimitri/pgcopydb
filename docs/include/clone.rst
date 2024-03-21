@@ -23,6 +23,7 @@
      --skip-ext-comments           Skip restoring COMMENT ON EXTENSION
      --skip-collations             Skip restoring collations
      --skip-vacuum                 Skip running VACUUM ANALYZE
+     --skip-ext-schemas            Skip creating schemas before extensions
      --requirements <filename>     List extensions requirements
      --filters <filename>          Use the filters defined in <filename>
      --fail-fast                   Abort early in case of error

@@ -4825,7 +4825,8 @@ catalog_iter_s_seq_finish(SourceSeqIterator *iter)
 bool
 catalog_prepare_filter(DatabaseCatalog *catalog,
 					   bool skipExtensions,
-					   bool skipCollations)
+					   bool skipCollations,
+					   bool skipExtSchemas)
 {
 	sqlite3 *db = catalog->db;
 
@@ -4837,11 +4838,6 @@ catalog_prepare_filter(DatabaseCatalog *catalog,
 
 	char *sql =
 		"insert into filter(oid, restore_list_name, kind) "
-
-		"     select oid, restore_list_name, 's_namespace' "
-		"       from s_namespace "
-
-		"  union all "
 
 		"     select oid, restore_list_name, 'table' "
 		"       from s_table "
@@ -4984,6 +4980,31 @@ catalog_prepare_filter(DatabaseCatalog *catalog,
 			"      from s_coll ";
 
 		if (!catalog_sql_prepare(db, s_coll_sql, &query))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		/* now execute the query, which does not return any row */
+		if (!catalog_sql_execute_once(&query))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	/*
+	 * Implement --skip-ext-schemas by filtering any schemas during a pg_restore
+	 * to allow for precreated schemas to be used without error.
+	 */
+	if (skipExtSchemas)
+	{
+		char *s_schema_sql =
+			"insert or ignore into filter(oid, restore_list_name, kind) "
+			"    select oid, nspname, 's_namespace' "
+			"      from s_namespace ";
+
+		if (!catalog_sql_prepare(db, s_schema_sql, &query))
 		{
 			/* errors have already been logged */
 			return false;
