@@ -30,12 +30,11 @@
 #include "signals.h"
 #include "string_utils.h"
 
-/* Pipeline mode is only available in PostgreSQL 14 and later */
-#if PG_MAJORVERSION_NUM >= 14
-#define onPipelineMode(conn) (PQpipelineStatus(conn) == PQ_PIPELINE_ON)
+#if defined(LIBPQ_HAS_PIPELINING) && LIBPQ_HAS_PIPELINING
+#define pqPipelineModeEnabled(conn) (PQpipelineStatus(conn) == PQ_PIPELINE_ON)
 #else
-#warning Pipeline mode is only available in PostgreSQL 14 and later
-#define onPipelineMode(conn) (false)
+#warning Pipeline mode is only available in libpq PostgreSQL 14 and later
+#define pqPipelineModeEnabled(conn) (false)
 #endif
 
 static char * ConnectionTypeToString(ConnectionType connectionType);
@@ -1504,7 +1503,7 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 		return false;
 	}
 
-	bool pipelineMode = onPipelineMode(connection);
+	bool pipelineMode = pqPipelineModeEnabled(connection);
 
 	/* parseFun is not allowed in pipeline mode */
 	if (pipelineMode && parseFun != NULL)
@@ -1871,13 +1870,13 @@ pgsql_fetch_results(PGSQL *pgsql, bool *done,
 
 
 /*
- * pgsql_pipeline_enter enables the pipeline mode in the given PGSQL
+ * pgsql_enable_pipeline_mode enables the pipeline mode in the given PGSQL
  * connection. It also sets the connection to non-blocking mode.
  */
 bool
-pgsql_pipeline_enter(PGSQL *pgsql)
+pgsql_enable_pipeline_mode(PGSQL *pgsql)
 {
-#if PG_MAJORVERSION_NUM >= 14
+#if defined(LIBPQ_HAS_PIPELINING) && LIBPQ_HAS_PIPELINING
 	PGconn *conn = pgsql_open_connection(pgsql);
 
 	if (conn == NULL)
@@ -1887,7 +1886,7 @@ pgsql_pipeline_enter(PGSQL *pgsql)
 
 	if (PQpipelineStatus(conn) == PQ_PIPELINE_ON)
 	{
-		log_error("BUG: pgsql_pipeline_enter called with connection "
+		log_error("BUG: pgsql_enable_pipeline_mode called with connection "
 				  "already in pipeline mode");
 		return false;
 	}
@@ -1913,7 +1912,7 @@ pgsql_pipeline_enter(PGSQL *pgsql)
 
 	if (!warned)
 	{
-		log_warn("Pipeline mode is not available on Postgres version %d, "
+		log_warn("libpq in Postgres version %d does not support pipeline mode, "
 				 "need at least version 14",
 				 PG_MAJORVERSION_NUM);
 		warned = true;
@@ -1925,18 +1924,18 @@ pgsql_pipeline_enter(PGSQL *pgsql)
 
 
 /*
- * pgsql_pipeline_sync drains the pipeline by sending a SYNC message and
+ * pgsql_sync_pipeline drains the pipeline by sending a SYNC message and
  * reading until we get a PGRES_PIPELINE_SYNC result.
  */
 bool
-pgsql_pipeline_sync(PGSQL *pgsql)
+pgsql_sync_pipeline(PGSQL *pgsql)
 {
-#if PG_MAJORVERSION_NUM >= 14
+#if defined(LIBPQ_HAS_PIPELINING) && LIBPQ_HAS_PIPELINING
 	PGconn *conn = pgsql->connection;
 
 	if (conn == NULL)
 	{
-		log_error("BUG: pgsql_pipeline_sync called with NULL connection");
+		log_error("BUG: pgsql_sync_pipeline called with NULL connection");
 		return false;
 	}
 
@@ -2013,7 +2012,7 @@ pgsql_pipeline_sync(PGSQL *pgsql)
 			(void) pgsql_stream_log_error(
 				pgsql,
 				NULL,
-				"could not receive data from WAL stream");
+				"Failed to consume input for pipeline sync");
 			return false;
 		}
 
@@ -2052,11 +2051,14 @@ pgsql_pipeline_sync(PGSQL *pgsql)
 
 			if (!is_response_ok(res))
 			{
-				(void) pgcopy_log_error(pgsql, res, "Read after pipeline sync failed");
+				(void) pgcopy_log_error(pgsql, res, "Failed to receive pipeline sync");
 				return false;
 			}
 		}
 	}
+
+	/* update the last pipeline sync time */
+	pgsql->pipelineSyncTime = time(NULL);
 
 	log_trace("Endof pipeline sync");
 
@@ -2066,7 +2068,7 @@ pgsql_pipeline_sync(PGSQL *pgsql)
 
 	if (!warned)
 	{
-		log_warn("Pipeline mode is not available on Postgres version %d, "
+		log_warn("libpq in Postgres version %d does not support pipeline mode, "
 				 "need at least version 14",
 				 PG_MAJORVERSION_NUM);
 		warned = true;
@@ -2093,7 +2095,7 @@ pgsql_prepare(PGSQL *pgsql, const char *name, const char *sql,
 		return false;
 	}
 
-	bool pipelineMode = onPipelineMode(connection);
+	bool pipelineMode = pqPipelineModeEnabled(connection);
 
 	char *endpoint =
 		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
@@ -2169,7 +2171,7 @@ pgsql_execute_prepared(PGSQL *pgsql, const char *name,
 		return false;
 	}
 
-	bool pipelineMode = onPipelineMode(connection);
+	bool pipelineMode = pqPipelineModeEnabled(connection);
 
 	/* parseFun is not allowed in pipeline mode */
 	if (pipelineMode && parseFun != NULL)

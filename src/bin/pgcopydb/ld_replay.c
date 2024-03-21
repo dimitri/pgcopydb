@@ -92,8 +92,7 @@ stream_apply_replay(StreamSpecs *specs)
 		return false;
 	}
 
-	/* we might still have to disconnect now */
-	(void) pgsql_finish(&(context->pgsql));
+	(void) stream_apply_cleanup(context);
 
 	/* check for reaching endpos */
 	(void) stream_replay_reached_endpos(specs, context, true);
@@ -180,16 +179,14 @@ stream_replay_line(void *ctx, const char *line, bool *stop)
 			}
 
 			/* rate limit to 1 pipeline sync per seconds */
-			if (1 < (now - context->pipelineSyncTime))
+			if (1 < (now - context->applyPGSQL.pipelineSyncTime))
 			{
-				if (!pgsql_pipeline_sync(&(context->pgsqlPipeline)))
+				if (!pgsql_sync_pipeline(&(context->applyPGSQL)))
 				{
 					log_error("Failed to sync the pipeline, see previous "
 							  "error for details");
 					return false;
 				}
-
-				context->pipelineSyncTime = now;
 			}
 			break;
 		}
@@ -248,7 +245,7 @@ stream_replay_line(void *ctx, const char *line, bool *stop)
 
 	if (*stop)
 	{
-		if (!pgsql_pipeline_sync(&(context->pgsqlPipeline)))
+		if (!pgsql_sync_pipeline(&(context->applyPGSQL)))
 		{
 			log_error("Failed to sync the pipeline, see previous error for "
 					  "details");

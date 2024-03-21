@@ -362,14 +362,11 @@ typedef struct StreamApplyContext
 {
 	CDCPaths paths;
 
-	/* target connection */
-	PGSQL pgsql;
+	/* target connection to find current wal_lsn for replay_lsn mapping */
+	PGSQL controlPGSQL;
 
-	/* target connection created in pipeline mode */
-	PGSQL pgsqlPipeline;
-
-	/* track the last time we synced the pipeline */
-	uint64_t pipelineSyncTime;
+	/* target connection created in pipeline mode responsible for apply */
+	PGSQL applyPGSQL;
 
 	/* apply needs access to the catalogs to register sentinel replay_lsn */
 	DatabaseCatalog *sourceDB;
