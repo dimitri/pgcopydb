@@ -248,6 +248,7 @@ copydb_copy_extensions_hook(void *ctx, SourceExtension *ext)
 			log_error("Failed to build CREATE EXTENSION sql buffer: "
 					  "Out of Memory");
 			(void) destroyPQExpBuffer(sql);
+			return false;
 		}
 
 		log_info("Creating extension \"%s\"", ext->extname);
