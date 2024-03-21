@@ -80,7 +80,8 @@ pgcopydb copy extensions \
          --source ${PGCOPYDB_SOURCE_PGURI_SU} \
          --target ${PGCOPYDB_TARGET_PGURI_SU} \
          --requirements ${r} \
-         --resume --debug
+         --resume --debug \
+         --fail-fast
 
 # now clone without superuser privileges (using role pagila on source and target)
 pgcopydb clone --skip-extensions --restart
