@@ -189,8 +189,8 @@ typedef struct PGSQL
 	bool singleRowMode;
 
 	/*
-	 * Tracks the last time we synced the pipeline. Applicable only for
-	 * connections which are in pipeline mode.
+	 * Keeps track of the last sync time for the pipeline. This is relevant
+	 * only for connections in pipeline mode.
 	 */
 	uint64_t pipelineSyncTime;
 } PGSQL;

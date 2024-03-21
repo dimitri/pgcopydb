@@ -1925,7 +1925,7 @@ pgsql_enable_pipeline_mode(PGSQL *pgsql)
 
 /*
  * pgsql_sync_pipeline drains the pipeline by sending a SYNC message and
- * reading until we get a PGRES_PIPELINE_SYNC result.
+ * reads results until we get a PGRES_PIPELINE_SYNC result.
  */
 bool
 pgsql_sync_pipeline(PGSQL *pgsql)

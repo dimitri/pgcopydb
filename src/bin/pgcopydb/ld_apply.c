@@ -1197,10 +1197,7 @@ stream_apply_sql(StreamApplyContext *context,
 
 
 /*
- * setupConnection ensures that the target database connection is
- * prepared for pipeline mode. We want to have a dedicated connection for
- * pipeline mode, so that we can control the lifecycle of that connection
- * separately from the main connection.
+ * setupConnection sets up a connection to the target database.
  */
 static bool
 setupConnection(PGSQL *pgsql, StreamApplyContext *context)
@@ -1248,9 +1245,9 @@ setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
 	char *nodeName = context->origin;
 
 	/*
-	 * We want to have a dedicated connection for pipeline mode, so that we can
-	 * control the lifecycle of that connection separately from the other
-	 * connection.
+	 * A dedicated connection to apply logical messages into the target.
+	 * This will be converted to pipeline mode after we have setup the
+	 * replication origin.
 	 */
 	PGSQL *applyPGSQL = &(context->applyPGSQL);
 	if (!setupConnection(applyPGSQL, context))
@@ -1260,8 +1257,8 @@ setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
 	}
 
 	/*
-	 * Setup non pipeline connection for operations like finding wal insert lsn
-	 * which expects immediate response.
+	 * Establish a regular connection for operations requiring immediate
+	 * responses, such as finding the WAL insert LSN.
 	 */
 	if (!setupConnection(&context->controlPGSQL, context))
 	{
@@ -1351,7 +1348,10 @@ setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
 		return false;
 	}
 
-	/* Enter into pipeline mode, sync operations are not allowed after this. */
+	/*
+	 * Enter into pipeline mode, SQL statements which expects sync responses
+	 * are not allowed in this connection anymore.
+	 */
 	if (!pgsql_enable_pipeline_mode(applyPGSQL))
 	{
 		/* errors have already been logged */
