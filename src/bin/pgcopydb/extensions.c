@@ -255,6 +255,8 @@ copydb_copy_extensions_hook(void *ctx, SourceExtension *ext)
 		if (!pgsql_execute(dst, sql->data))
 		{
 			log_error("Failed to create extension \"%s\"", ext->extname);
+			(void) destroyPQExpBuffer(sql);
+			return false;
 		}
 
 		(void) destroyPQExpBuffer(sql);
