@@ -539,7 +539,9 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 		 specs->section == DATA_SECTION_SET_SEQUENCES) &&
 		!sourceDB->sections[DATA_SECTION_SET_SEQUENCES].fetched)
 	{
-		if (!copydb_prepare_sequence_specs(specs, src))
+		bool reset = false;
+
+		if (!copydb_prepare_sequence_specs(specs, src, reset))
 		{
 			/* errors have already been logged */
 			return false;
