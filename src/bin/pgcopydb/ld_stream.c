@@ -35,6 +35,93 @@
 static bool updateStreamCounters(StreamContext *context,
 								 LogicalMessageMetadata *metadata);
 
+static bool convertFiltersToWal2JsonOptions(SourceFilters *filters,
+											PQExpBuffer commaSeperatedAddTables,
+											PQExpBuffer commaSeperatedFilterTables);
+
+/*
+ * This function checks if the table is in the s_table table in sourceDB internal catalog. If it exists and exclude-data is true
+ * then the message should be filtered out. Otherwise, the message should not be filtered out. If the table is not in the s_table
+ * table, then the message should be filtered out.
+ * @param shouldFilterOutMessage A pointer to a boolean variable indicating whether the message should be filtered out.
+ * Returns true if the function succeeded, false otherwise.
+ */
+bool
+ShouldFilterOutMessage(StreamContext *streamContext, char *nspname, char *relname,
+					   bool *shouldFilterOutMessage)
+{
+	/*
+	 * Validate nspname is not NULL or empty
+	 */
+	if (nspname == NULL || IS_EMPTY_STRING_BUFFER(nspname))
+	{
+		log_error("BUG: nspname is NULL or empty");
+		return false;
+	}
+
+	/*
+	 * Validate relname is not NULL or empty
+	 */
+	if (relname == NULL || IS_EMPTY_STRING_BUFFER(relname))
+	{
+		log_error("BUG: relname is NULL or empty");
+		return false;
+	}
+
+	/*
+	 * If no filters are set, then we don't need to filter out any messages
+	 */
+	if (streamContext->filters.type == SOURCE_FILTER_TYPE_NONE)
+	{
+		*shouldFilterOutMessage = false;
+		return true;
+	}
+
+	/*
+	 * If the filters are set, then we need to check if the message should be
+	 * filtered out. To do that, we lookup the table in our internal source
+	 * catalogs and check if the table is in the s_table table.
+	 */
+
+	SourceTable *table = (SourceTable *) calloc(1, sizeof(SourceTable));
+
+	if (table == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	if (!catalog_lookup_s_table_by_name(streamContext->sourceDB,
+										nspname,
+										relname,
+										table))
+	{
+		log_error("Failed to lookup for table \"%s\".\"%s\" in our "
+				  "internal source catalogs",
+				  nspname,
+				  relname);
+
+		free(table);
+		return false;
+	}
+
+	/*
+	 * If the table is in the s_table table, then we should filter out the
+	 * message if exclude-data is set to true. Otherwise, we should filter out.
+	 */
+	if (table->oid != 0)
+	{
+		*shouldFilterOutMessage = table->excludeData;
+	}
+	else
+	{
+		*shouldFilterOutMessage = true;
+	}
+
+	free(table);
+	return true;
+}
+
 
 /*
  * stream_init_specs initializes Change Data Capture streaming specifications
@@ -44,6 +131,7 @@ bool
 stream_init_specs(StreamSpecs *specs,
 				  CDCPaths *paths,
 				  ConnStrings *connStrings,
+				  SourceFilters *filters,
 				  ReplicationSlot *slot,
 				  char *origin,
 				  uint64_t endpos,
@@ -66,6 +154,8 @@ stream_init_specs(StreamSpecs *specs,
 	 * Open the specified sourceDB catalog.
 	 */
 	specs->sourceDB = sourceDB;
+
+	specs->filters = *filters;
 
 	if (!catalog_init(specs->sourceDB))
 	{
@@ -100,28 +190,83 @@ stream_init_specs(StreamSpecs *specs,
 
 		case STREAM_PLUGIN_WAL2JSON:
 		{
+			/* Initialize empty strings for tables to add and filter */
+			char *commaSeperatedAddTables = { 0 };
+			char *commaSeperatedFilterTables = { 0 };
+
+			if (filters->type != SOURCE_FILTER_TYPE_NONE)
+			{
+				/* convert filters to wal2json options. */
+
+				PQExpBuffer addTablesBuffer = createPQExpBuffer();
+				PQExpBuffer filterTablesBuffer = createPQExpBuffer();
+
+				if (!convertFiltersToWal2JsonOptions(filters,
+													 addTablesBuffer,
+													 filterTablesBuffer))
+				{
+					log_error("Failed to create wal2json filters");
+					return false;
+				}
+
+				commaSeperatedAddTables = strdup(addTablesBuffer->data);
+				commaSeperatedFilterTables = strdup(filterTablesBuffer->data);
+
+				destroyPQExpBuffer(addTablesBuffer);
+				destroyPQExpBuffer(filterTablesBuffer);
+			}
+
 			KeyVal options = {
-				/* we ignore the last keyword and value if the option is not set */
-				.count = specs->slot.wal2jsonNumericAsString ? 7 : 6,
+				.count = 5,
 				.keywords = {
 					"format-version",
 					"include-xids",
 					"include-schemas",
 					"include-transaction",
-					"include-types",
-					"filter-tables",
-					"numeric-data-types-as-string"
+					"include-types"
 				},
 				.values = {
 					"2",
 					"true",
 					"true",
 					"true",
-					"true",
-					"pgcopydb.*",
 					"true"
 				}
 			};
+
+			/* Add the "add-tables" option to the wal2json plugin options */
+			if (commaSeperatedAddTables != NULL && !IS_EMPTY_STRING_BUFFER(
+					commaSeperatedAddTables))
+			{
+				options.keywords[options.count] = "add-tables";
+				options.values[options.count] = commaSeperatedAddTables;
+				options.count++;
+			}
+
+			/* Add the "filter-tables" option to the wal2json plugin options */
+			if (commaSeperatedFilterTables != NULL && !IS_EMPTY_STRING_BUFFER(
+					commaSeperatedFilterTables))
+			{
+				options.keywords[options.count] = "filter-tables";
+				options.values[options.count] = commaSeperatedFilterTables;
+				options.count++;
+			}
+
+			/* Add option to print numeric data types as string */
+			if (specs->slot.wal2jsonNumericAsString)
+			{
+				options.keywords[options.count] = "numeric-data-types-as-string";
+				options.values[options.count] = "true";
+				options.count++;
+			}
+
+			/* log_trace for options */
+			for (int i = 0; i < options.count; i++)
+			{
+				log_trace("wal2json option: %s = %s",
+						  options.keywords[i],
+						  options.values[i]);
+			}
 
 			specs->pluginOptions = options;
 			break;
@@ -215,6 +360,106 @@ stream_init_specs(StreamSpecs *specs,
 			/* pass */
 			break;
 		}
+	}
+
+	return true;
+}
+
+
+/*
+ * Converts source filters to wal2json options.
+ *
+ * This function takes a SourceFilters struct and two PQExpBuffer objects. It converts the filters
+ * into comma-separated lists of tables and schemas to include or exclude, and appends these lists
+ * to the provided PQExpBuffer objects.
+ *
+ * Returns true if the conversion was successful, false otherwise.
+ */
+bool
+convertFiltersToWal2JsonOptions(SourceFilters *filters,
+								PQExpBuffer commaSeperatedAddTables,
+								PQExpBuffer commaSeperatedFilterTables)
+{
+	if (filters->type == SOURCE_FILTER_TYPE_NONE)
+	{
+		return true;
+	}
+
+	for (int i = 0; i < filters->includeOnlyTableList.count; i++)
+	{
+		char *filteredNspName = filters->includeOnlyTableList.array[i].nspname;
+		char *filteredRelName = filters->includeOnlyTableList.array[i].relname;
+
+		if (commaSeperatedAddTables->len != 0)
+		{
+			appendPQExpBufferChar(commaSeperatedAddTables, ',');
+		}
+
+		appendPQExpBuffer(commaSeperatedAddTables, "%s.%s", filteredNspName,
+						  filteredRelName);
+	}
+
+	for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
+	{
+		char *filteredNspName = filters->includeOnlySchemaList.array[i].nspname;
+
+		if (commaSeperatedAddTables->len != 0)
+		{
+			appendPQExpBufferChar(commaSeperatedAddTables, ',');
+		}
+
+		appendPQExpBuffer(commaSeperatedAddTables, "%s.*", filteredNspName);
+	}
+
+	for (int i = 0; i < filters->excludeTableList.count; i++)
+	{
+		char *filteredNspName = filters->excludeTableList.array[i].nspname;
+		char *filteredRelName = filters->excludeTableList.array[i].relname;
+
+		if (commaSeperatedFilterTables->len != 0)
+		{
+			appendPQExpBufferChar(commaSeperatedFilterTables, ',');
+		}
+
+		appendPQExpBuffer(commaSeperatedFilterTables, "%s.%s", filteredNspName,
+						  filteredRelName);
+	}
+
+	for (int i = 0; i < filters->excludeSchemaList.count; i++)
+	{
+		char *filteredNspName = filters->excludeSchemaList.array[i].nspname;
+
+		if (commaSeperatedFilterTables->len != 0)
+		{
+			appendPQExpBufferChar(commaSeperatedFilterTables, ',');
+		}
+
+		appendPQExpBuffer(commaSeperatedFilterTables, "%s.*", filteredNspName);
+	}
+
+	for (int i = 0; i < filters->excludeTableDataList.count; i++)
+	{
+		char *filteredNspName = filters->excludeTableDataList.array[i].nspname;
+		char *filteredRelName = filters->excludeTableDataList.array[i].relname;
+
+		if (commaSeperatedFilterTables->len != 0)
+		{
+			appendPQExpBufferChar(commaSeperatedFilterTables, ',');
+		}
+
+		appendPQExpBuffer(commaSeperatedFilterTables, "%s.%s", filteredNspName,
+						  filteredRelName);
+	}
+
+	if (PQExpBufferBroken(commaSeperatedAddTables) ||
+		PQExpBufferBroken(commaSeperatedFilterTables))
+	{
+		log_error("Failed to convert source filters to wal2json filters: out of memory");
+
+		destroyPQExpBuffer(commaSeperatedAddTables);
+		destroyPQExpBuffer(commaSeperatedFilterTables);
+
+		return false;
 	}
 
 	return true;
@@ -357,6 +602,8 @@ stream_init_context(StreamSpecs *specs)
 	privateContext->paths = specs->paths;
 
 	privateContext->connStrings = specs->connStrings;
+
+	privateContext->filters = specs->filters;
 
 	/*
 	 * When using PIPEs for inter-process communication, makes sure the PIPEs
@@ -903,7 +1150,6 @@ stream_write_json(LogicalStreamContext *context, bool previous)
 	{
 		privateContext->transactionInProgress = false;
 	}
-
 	/*
 	 * We are not expecting STREAM_ACTION_ROLLBACK here. It's a custom
 	 * message we write directly to the "latest" file using
@@ -1085,7 +1331,6 @@ streamRotateFile(LogicalStreamContext *context)
 		{
 			jsonFileLSN = context->cur_record_lsn;
 		}
-
 		/* maxWrittenLSN always points to the current file and skips rotation */
 		else
 		{
@@ -1691,7 +1936,6 @@ prepareMessageMetadataFromContext(LogicalStreamContext *context)
 	{
 		metadata->skipping = true;
 	}
-
 	/* COMMIT message and previous one is a BEGIN */
 	else if (previous->action == STREAM_ACTION_BEGIN &&
 			 metadata->action == STREAM_ACTION_COMMIT)
@@ -1708,7 +1952,6 @@ prepareMessageMetadataFromContext(LogicalStreamContext *context)
 			}
 		}
 	}
-
 	/*
 	 * NOT a COMMIT message and previous one is a BEGIN
 	 *

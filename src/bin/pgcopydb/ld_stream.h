@@ -287,6 +287,7 @@ typedef struct StreamContext
 	LogicalStreamMode mode;
 
 	ConnStrings *connStrings;
+	SourceFilters filters;
 
 	uint64_t startpos;
 	uint64_t endpos;
@@ -435,6 +436,8 @@ struct StreamSpecs
 
 	ConnStrings *connStrings;
 
+	SourceFilters filters;
+
 	uint32_t WalSegSz;
 	IdentifySystem system;
 
@@ -480,10 +483,13 @@ struct StreamSpecs
 	FILE *out;
 };
 
+bool ShouldFilterOutMessage(StreamContext *streamContext, char *nspname, char *relname,
+							bool *shouldFilterOutMessage);
 
 bool stream_init_specs(StreamSpecs *specs,
 					   CDCPaths *paths,
 					   ConnStrings *connStrings,
+					   SourceFilters *filters,
 					   ReplicationSlot *slot,
 					   char *origin,
 					   uint64_t endpos,

@@ -170,15 +170,20 @@ parseTestDecodingMessageActionAndXid(LogicalStreamContext *context)
 			return false;
 		}
 
-		if (strcmp(header.table.nspname, "pgcopydb") == 0)
+		metadata->action = header.action;
+
+		/*
+		 * Check if the message should be filtered out based on namespace and relation name
+		 */
+		bool shouldFilterOutMessage = false;
+
+		if (!ShouldFilterOutMessage(privateContext, header.table.nspname,
+									header.table.relname, &shouldFilterOutMessage))
 		{
-			log_debug("Filtering out message for schema \"%s\": %s",
-					  header.table.nspname,
-					  context->buffer);
-			metadata->filterOut = true;
+			log_error("Failed to check if message should be filtered out");
 		}
 
-		metadata->action = header.action;
+		metadata->filterOut = shouldFilterOutMessage;
 	}
 	else
 	{
