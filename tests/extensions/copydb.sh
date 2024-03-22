@@ -35,6 +35,11 @@ create schema foo;
 create extension hstore with schema foo cascade;
 EOF
 
+# The extension copy will not create the foo schema on the target, so lets do it now
+psql -a -1 ${PGCOPYDB_TARGET_PGURI_SU} <<EOF
+create schema foo;
+EOF
+
 #
 # create extension pg_partman cascade;
 # create extension postgis_tiger_geocoder cascade;
