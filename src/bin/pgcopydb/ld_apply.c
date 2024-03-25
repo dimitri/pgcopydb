@@ -278,9 +278,9 @@ bool
 stream_apply_cleanup(StreamApplyContext *context)
 {
 	/* make sure we close the connection on the way out */
-	(void) pgsql_finish(&(context->controlPGSQL));
+	(void) pgsql_finish(&(context->controlPgConn));
 
-	(void) pgsql_finish(&(context->applyPGSQL));
+	(void) pgsql_finish(&(context->applyPgConn));
 
 	return true;
 }
@@ -548,10 +548,10 @@ stream_apply_file(StreamApplyContext *context)
 		/* rate limit to 1 pipeline sync per second */
 		if ((metadata->action == STREAM_ACTION_COMMIT ||
 			 metadata->action == STREAM_ACTION_KEEPALIVE) &&
-			(1 < (time(NULL) - context->applyPGSQL.pipelineSyncTime)))
+			(1 < (time(NULL) - context->applyPgConn.pipelineSyncTime)))
 		{
 			/* fetch results until done */
-			if (!pgsql_sync_pipeline(&(context->applyPGSQL)))
+			if (!pgsql_sync_pipeline(&(context->applyPgConn)))
 			{
 				log_error("Failed to sync the pipeline, see previous error for "
 						  "details");
@@ -561,7 +561,7 @@ stream_apply_file(StreamApplyContext *context)
 	}
 
 	/* Always sync pipline at the end of file */
-	if (!pgsql_sync_pipeline(&(context->applyPGSQL)))
+	if (!pgsql_sync_pipeline(&(context->applyPgConn)))
 	{
 		log_error("Failed to sync the pipeline, see previous error for "
 				  "details");
@@ -596,7 +596,7 @@ stream_apply_sql(StreamApplyContext *context,
 				 LogicalMessageMetadata *metadata,
 				 const char *sql)
 {
-	PGSQL *applyPGSQL = &(context->applyPGSQL);
+	PGSQL *applyPgConn = &(context->applyPgConn);
 
 	switch (metadata->action)
 	{
@@ -703,7 +703,7 @@ stream_apply_sql(StreamApplyContext *context,
 			 * We're all good to replay that transaction, let's BEGIN and
 			 * register our origin tracking on the target database.
 			 */
-			if (!pgsql_begin(applyPGSQL))
+			if (!pgsql_begin(applyPgConn))
 			{
 				/* errors have already been logged */
 				return false;
@@ -734,7 +734,7 @@ stream_apply_sql(StreamApplyContext *context,
 						   LSN_FORMAT_ARGS(context->endpos));
 			}
 
-			if (!pgsql_set_gucs(applyPGSQL, settings))
+			if (!pgsql_set_gucs(applyPgConn, settings))
 			{
 				log_error("Failed to set the apply GUC settings, "
 						  "see above for details");
@@ -749,7 +749,7 @@ stream_apply_sql(StreamApplyContext *context,
 		case STREAM_ACTION_ROLLBACK:
 		{
 			/* Rollback the transaction */
-			if (!pgsql_execute(applyPGSQL, "ROLLBACK"))
+			if (!pgsql_execute(applyPgConn, "ROLLBACK"))
 			{
 				/* errors have already been logged */
 				return false;
@@ -803,7 +803,7 @@ stream_apply_sql(StreamApplyContext *context,
 							   LSN_FORMAT_ARGS(context->previousLSN));
 
 					/* Rollback the transaction */
-					if (!pgsql_execute(applyPGSQL, "ROLLBACK"))
+					if (!pgsql_execute(applyPgConn, "ROLLBACK"))
 					{
 						/* errors have already been logged */
 						return false;
@@ -826,7 +826,7 @@ stream_apply_sql(StreamApplyContext *context,
 			sformat(lsn, sizeof(lsn), "%X/%X",
 					LSN_FORMAT_ARGS(metadata->lsn));
 
-			if (!pgsql_replication_origin_xact_setup(applyPGSQL,
+			if (!pgsql_replication_origin_xact_setup(applyPgConn,
 													 lsn,
 													 metadata->timestamp))
 			{
@@ -841,7 +841,7 @@ stream_apply_sql(StreamApplyContext *context,
 
 
 			/* calling pgsql_commit() would finish the connection, avoid */
-			if (!pgsql_execute(applyPGSQL, "COMMIT"))
+			if (!pgsql_execute(applyPgConn, "COMMIT"))
 			{
 				/* errors have already been logged */
 				return false;
@@ -908,7 +908,7 @@ stream_apply_sql(StreamApplyContext *context,
 
 				if (context->transactionInProgress)
 				{
-					if (!pgsql_execute(applyPGSQL, "ROLLBACK"))
+					if (!pgsql_execute(applyPgConn, "ROLLBACK"))
 					{
 						/* errors have already been logged */
 						return false;
@@ -987,7 +987,7 @@ stream_apply_sql(StreamApplyContext *context,
 				return true;
 			}
 
-			if (!pgsql_begin(applyPGSQL))
+			if (!pgsql_begin(applyPgConn))
 			{
 				/* errors have already been logged */
 				return false;
@@ -998,7 +998,7 @@ stream_apply_sql(StreamApplyContext *context,
 			sformat(lsn, sizeof(lsn), "%X/%X",
 					LSN_FORMAT_ARGS(metadata->lsn));
 
-			if (!pgsql_replication_origin_xact_setup(applyPGSQL,
+			if (!pgsql_replication_origin_xact_setup(applyPgConn,
 													 lsn,
 													 metadata->timestamp))
 			{
@@ -1007,7 +1007,7 @@ stream_apply_sql(StreamApplyContext *context,
 			}
 
 			/* calling pgsql_commit() would finish the connection, avoid */
-			if (!pgsql_execute(applyPGSQL, "COMMIT"))
+			if (!pgsql_execute(applyPgConn, "COMMIT"))
 			{
 				/* errors have already been logged */
 				return false;
@@ -1066,7 +1066,7 @@ stream_apply_sql(StreamApplyContext *context,
 				char name[NAMEDATALEN] = { 0 };
 				sformat(name, sizeof(name), "%x", metadata->hash);
 
-				if (!pgsql_prepare(applyPGSQL, name, metadata->stmt, 0, NULL))
+				if (!pgsql_prepare(applyPgConn, name, metadata->stmt, 0, NULL))
 				{
 					/* errors have already been logged */
 					return false;
@@ -1141,7 +1141,7 @@ stream_apply_sql(StreamApplyContext *context,
 					paramValues[i] = value;
 				}
 
-				if (!pgsql_execute_prepared(applyPGSQL, name,
+				if (!pgsql_execute_prepared(applyPgConn, name,
 											count, paramValues,
 											NULL, NULL))
 				{
@@ -1174,7 +1174,7 @@ stream_apply_sql(StreamApplyContext *context,
 				*ptr = '\0';
 			}
 
-			if (!pgsql_execute(applyPGSQL, sql))
+			if (!pgsql_execute(applyPgConn, sql))
 			{
 				/* errors have already been logged */
 				return false;
@@ -1249,8 +1249,8 @@ setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
 	 * This will be converted to pipeline mode after we have setup the
 	 * replication origin.
 	 */
-	PGSQL *applyPGSQL = &(context->applyPGSQL);
-	if (!setupConnection(applyPGSQL, context))
+	PGSQL *applyPgConn = &(context->applyPgConn);
+	if (!setupConnection(applyPgConn, context))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1260,7 +1260,7 @@ setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
 	 * Establish a regular connection for operations requiring immediate
 	 * responses, such as finding the WAL insert LSN.
 	 */
-	if (!setupConnection(&context->controlPGSQL, context))
+	if (!setupConnection(&context->controlPgConn, context))
 	{
 		log_error("Failed to setup pipeline mode on target connection");
 		return false;
@@ -1268,7 +1268,7 @@ setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
 
 	uint32_t oid = 0;
 
-	if (!pgsql_replication_origin_oid(applyPGSQL, nodeName, &oid))
+	if (!pgsql_replication_origin_oid(applyPgConn, nodeName, &oid))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1281,8 +1281,8 @@ setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
 		log_error("Failed to fetch progress for replication origin \"%s\": "
 				  "replication origin not found on target database",
 				  nodeName);
-		(void) pgsql_finish(applyPGSQL);
-		(void) pgsql_finish(&context->controlPGSQL);
+		(void) pgsql_finish(applyPgConn);
+		(void) pgsql_finish(&context->controlPgConn);
 		return false;
 	}
 
@@ -1294,7 +1294,7 @@ setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
 	 */
 	uint64_t originLSN = InvalidXLogRecPtr;
 
-	if (!pgsql_replication_origin_progress(applyPGSQL, nodeName, true, &originLSN))
+	if (!pgsql_replication_origin_progress(applyPgConn, nodeName, true, &originLSN))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1342,7 +1342,7 @@ setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
 			  LSN_FORMAT_ARGS(context->previousLSN),
 			  context->sqlFileName);
 
-	if (!pgsql_replication_origin_session_setup(applyPGSQL, nodeName))
+	if (!pgsql_replication_origin_session_setup(applyPgConn, nodeName))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1352,7 +1352,7 @@ setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
 	 * Enter into pipeline mode, SQL statements which expects sync responses
 	 * are not allowed in this connection anymore.
 	 */
-	if (!pgsql_enable_pipeline_mode(applyPGSQL))
+	if (!pgsql_enable_pipeline_mode(applyPgConn))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1652,7 +1652,7 @@ stream_apply_track_insert_lsn(StreamApplyContext *context, uint64_t sourceLSN)
 
 	lsn_tracking->sourceLSN = sourceLSN;
 
-	if (!pgsql_current_wal_insert_lsn(&(context->controlPGSQL),
+	if (!pgsql_current_wal_insert_lsn(&(context->controlPgConn),
 									  &(lsn_tracking->insertLSN)))
 	{
 		/* errors have already been logged */

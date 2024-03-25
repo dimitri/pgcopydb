@@ -33,7 +33,7 @@
 #if defined(LIBPQ_HAS_PIPELINING) && LIBPQ_HAS_PIPELINING
 #define pqPipelineModeEnabled(conn) (PQpipelineStatus(conn) == PQ_PIPELINE_ON)
 #else
-#warning Pipeline mode is only available in libpq PostgreSQL 14 and later
+#warning Compiling pgcopydb without libpq pipeline mode, available from libpq 14 and later
 #define pqPipelineModeEnabled(conn) (false)
 #endif
 
@@ -1912,9 +1912,11 @@ pgsql_enable_pipeline_mode(PGSQL *pgsql)
 
 	if (!warned)
 	{
-		log_warn("libpq in Postgres version %d does not support pipeline mode, "
-				 "need at least version 14",
+		log_warn("Skipping libpq pipeline mode optimisation because pgcopydb "
+				 "was built with libpq %d, pipeline mode is available since "
+				 "libpq 14",
 				 PG_MAJORVERSION_NUM);
+
 		warned = true;
 	}
 
@@ -2068,9 +2070,11 @@ pgsql_sync_pipeline(PGSQL *pgsql)
 
 	if (!warned)
 	{
-		log_warn("libpq in Postgres version %d does not support pipeline mode, "
-				 "need at least version 14",
+		log_warn("Skipping libpq pipeline mode optimisation because pgcopydb "
+				 "was built with libpq %d, pipeline mode is available since "
+				 "libpq 14",
 				 PG_MAJORVERSION_NUM);
+
 		warned = true;
 	}
 
