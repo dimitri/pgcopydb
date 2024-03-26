@@ -250,6 +250,24 @@ clone_and_follow(CopyDataSpec *copySpecs)
 	}
 
 	/*
+	 * We fetch the schema here, rather than later in the clone subprocess,
+	 * which simply reuses this cached data. This is done to avoid lock
+	 * contention between the clone and follow subprocesses, as they both try to
+	 * write concurrently to the source.db SQLite database, leading one to
+	 * failure. This is also necessary for plugins like test_decoding, which
+	 * require information such as primary keys.
+	 *
+	 * In the future, if the follow subprocess doesn't need a catalog (e.g. if
+	 * we remove test_decoding), we should separate out tables for the follow
+	 * subprocess into their own database.
+	 */
+	if (!copydb_fetch_schema_and_prepare_specs(copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/*
 	 * Preparation and snapshot are now done, time to fork our two main worker
 	 * processes.
 	 */

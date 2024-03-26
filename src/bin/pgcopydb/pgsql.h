@@ -187,6 +187,12 @@ typedef struct PGSQL
 
 	bool logSQL;
 	bool singleRowMode;
+
+	/*
+	 * Keeps track of the last sync time for the pipeline. This is relevant
+	 * only for connections in pipeline mode.
+	 */
+	uint64_t pipelineSyncTime;
 } PGSQL;
 
 
@@ -296,6 +302,9 @@ bool pgsql_send_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 
 bool pgsql_fetch_results(PGSQL *pgsql, bool *done,
 						 void *context, ParsePostgresResultCB *parseFun);
+
+bool pgsql_enable_pipeline_mode(PGSQL *pgsql);
+bool pgsql_sync_pipeline(PGSQL *pgsql);
 
 bool pgsql_prepare(PGSQL *pgsql, const char *name, const char *sql,
 				   int paramCount, const Oid *paramTypes);
@@ -436,6 +445,14 @@ typedef struct LogicalStreamContext
 	XLogRecPtr endpos;          /* might be update at runtime */
 
 	LogicalTrackLSN *tracking;  /* expose LogicalStreamClient.current */
+
+	/* This is set to true when the connection running START_REPLICATION
+	 * is interrupted and we need to retry.
+	 *
+	 * This is majorly used to add synthetic ROLLBACK statements to the
+	 * JSON file to avoid partial transactions.
+	 */
+	bool onRetry;
 } LogicalStreamContext;
 
 

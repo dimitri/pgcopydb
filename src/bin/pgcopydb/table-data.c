@@ -739,7 +739,9 @@ copydb_table_data_worker(CopyDataSpec *specs)
 		return false;
 	}
 
-	while (true)
+	bool stop = false;
+
+	while (!stop)
 	{
 		QMessage mesg = { 0 };
 		bool recv_ok = queue_receive(&(specs->copyQueue), &mesg);
@@ -761,10 +763,9 @@ copydb_table_data_worker(CopyDataSpec *specs)
 		{
 			case QMSG_TYPE_STOP:
 			{
+				stop = true;
 				log_debug("Stop message received by COPY worker");
-				(void) copydb_close_snapshot(specs);
-				pgsql_finish(&dst);
-				return true;
+				break;
 			}
 
 			case QMSG_TYPE_TABLEPOID:
@@ -826,7 +827,7 @@ copydb_table_data_worker(CopyDataSpec *specs)
 		return false;
 	}
 
-	return errors == 0;
+	return stop == true && errors == 0;
 }
 
 

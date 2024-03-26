@@ -37,7 +37,7 @@ typedef struct PrepareSequenceContext
  * Then the function loops over the sequences to fetch their current values.
  */
 bool
-copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql)
+copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql, bool reset)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
@@ -45,12 +45,26 @@ copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql)
 		.label = CopyDataSectionToString(DATA_SECTION_SET_SEQUENCES)
 	};
 
-	(void) catalog_start_timing(&timing);
+	/*
+	 * At sequence RESET time, we already have a list of sequences in our
+	 * catalogs, so just skip listing sequences and use the cache we have
+	 * on-disk.
+	 */
+	instr_time startTime;
 
-	if (!schema_list_sequences(pgsql, &(specs->filters), sourceDB))
+	if (reset)
 	{
-		/* errors have already been logged */
-		return false;
+		INSTR_TIME_SET_CURRENT(startTime);
+	}
+	else
+	{
+		(void) catalog_start_timing(&timing);
+
+		if (!schema_list_sequences(pgsql, &(specs->filters), sourceDB))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	CatalogCounts count = { 0 };
@@ -78,12 +92,37 @@ copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql)
 		return false;
 	}
 
-	(void) catalog_stop_timing(&timing);
-
-	if (!catalog_register_section(sourceDB, &timing))
+	if (reset)
 	{
-		/* errors have already been logged */
-		return false;
+		instr_time duration;
+
+		INSTR_TIME_SET_CURRENT(duration);
+		INSTR_TIME_SUBTRACT(duration, startTime);
+
+		uint64_t durationMs = INSTR_TIME_GET_MILLISEC(duration);
+
+		if (!summary_increment_timing(sourceDB,
+									  TIMING_SECTION_SET_SEQUENCES,
+									  0, /* count didn't change */
+									  0, /* bytesTransmitted */
+									  durationMs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+	else
+	{
+		(void) catalog_stop_timing(&timing);
+
+		/*
+		 * Only register the section has done the first time (reset is false).
+		 */
+		if (!catalog_register_section(sourceDB, &timing))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	return true;
@@ -176,7 +215,9 @@ copydb_start_seq_process(CopyDataSpec *specs)
 			/* child process runs the command */
 			(void) set_ps_title("pgcopydb: copy sequences");
 
-			if (!copydb_copy_all_sequences(specs))
+			bool reset = false;
+
+			if (!copydb_copy_all_sequences(specs, reset))
 			{
 				/* errors have already been logged */
 				exit(EXIT_CODE_INTERNAL_ERROR);
@@ -210,13 +251,30 @@ typedef struct CopySeqContext
  * target database with the same values.
  */
 bool
-copydb_copy_all_sequences(CopyDataSpec *specs)
+copydb_copy_all_sequences(CopyDataSpec *specs, bool reset)
 {
+	PGSQL src = { 0 };
+	instr_time startTime;
+
 	log_notice("Now starting setval process %d [%d]", getpid(), getppid());
 
-	if (specs->runState.sequenceCopyIsDone)
+	if (reset)
+	{
+		if (!pgsql_init(&src, specs->connStrings.source_pguri, PGSQL_CONN_SOURCE))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+	else if (specs->runState.sequenceCopyIsDone)
 	{
 		log_info("Skipping sequences, already done on a previous run");
+		return true;
+	}
+	else if (specs->section != DATA_SECTION_SET_SEQUENCES &&
+			 specs->section != DATA_SECTION_ALL)
+	{
+		log_debug("Skipping sequences in section %d", specs->section);
 		return true;
 	}
 
@@ -229,20 +287,34 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 		return false;
 	}
 
-	if (!summary_start_timing(sourceDB, TIMING_SECTION_SET_SEQUENCES))
+	log_info("%s sequences values on the target database",
+			 reset ? "Reset" : "Set");
+
+	if (reset)
 	{
-		/* errors have already been logged */
-		return false;
+		INSTR_TIME_SET_CURRENT(startTime);
+	}
+	else
+	{
+		if (!summary_start_timing(sourceDB, TIMING_SECTION_SET_SEQUENCES))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
-	if (specs->section != DATA_SECTION_SET_SEQUENCES &&
-		specs->section != DATA_SECTION_ALL)
+	/*
+	 * At sequence RESET time, we need to fetch the current values of the
+	 * sequences on the source database all over again.
+	 */
+	if (reset)
 	{
-		log_debug("Skipping sequences in section %d", specs->section);
-		return true;
+		if (!copydb_prepare_sequence_specs(specs, &src, reset))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
-
-	log_info("Reset sequences values on the target database");
 
 	PGSQL dst = { 0 };
 
@@ -274,18 +346,40 @@ copydb_copy_all_sequences(CopyDataSpec *specs)
 		return false;
 	}
 
-	if (!summary_stop_timing(sourceDB, TIMING_SECTION_SET_SEQUENCES))
+	if (reset)
 	{
-		/* errors have already been logged */
-		return false;
-	}
+		instr_time duration;
 
-	if (!summary_set_timing_count(sourceDB,
-								  TIMING_SECTION_SET_SEQUENCES,
-								  context.count))
+		INSTR_TIME_SET_CURRENT(duration);
+		INSTR_TIME_SUBTRACT(duration, startTime);
+
+		uint64_t durationMs = INSTR_TIME_GET_MILLISEC(duration);
+
+		if (!summary_increment_timing(sourceDB,
+									  TIMING_SECTION_SET_SEQUENCES,
+									  0, /* count didn't change */
+									  0, /* bytesTransmitted */
+									  durationMs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+	else
 	{
-		/* errors have already been logged */
-		return false;
+		if (!summary_stop_timing(sourceDB, TIMING_SECTION_SET_SEQUENCES))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!summary_set_timing_count(sourceDB,
+									  TIMING_SECTION_SET_SEQUENCES,
+									  context.count))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	if (!catalog_close(sourceDB))
