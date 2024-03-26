@@ -1915,7 +1915,7 @@ pgsql_enable_pipeline_mode(PGSQL *pgsql)
 		log_warn("Skipping libpq pipeline mode optimisation because pgcopydb "
 				 "was built with libpq %d, pipeline mode is available since "
 				 "libpq 14",
-				 PG_MAJORVERSION_NUM);
+				 PG_MAJORVERSION);
 
 		warned = true;
 	}
@@ -2073,7 +2073,7 @@ pgsql_sync_pipeline(PGSQL *pgsql)
 		log_warn("Skipping libpq pipeline mode optimisation because pgcopydb "
 				 "was built with libpq %d, pipeline mode is available since "
 				 "libpq 14",
-				 PG_MAJORVERSION_NUM);
+				 PG_MAJORVERSION);
 
 		warned = true;
 	}
