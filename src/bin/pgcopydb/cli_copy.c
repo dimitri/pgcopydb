@@ -203,6 +203,8 @@ static CommandLine copy_constraints_command =
 		cli_copy_db_getopts,
 		cli_copy_constraints);
 
+// TODO: this should probably be copy_schemas_command and pgcopydb copy schemas
+// these internal versus external names do my head in :-))).
 static CommandLine copy_namespaces_command =
 	make_command(
 		"namespaces",
