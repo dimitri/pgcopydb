@@ -216,7 +216,6 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 	return true;
 }
 
-
 typedef struct CopyPropertiesContext
 {
 	CopyDataSpec *specs;
@@ -627,6 +626,33 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 		char *name = item->restoreListName;
 
 		bool skip = false;
+
+		// TODO: for debugging
+
+		log_debug("Processing dumpId %d: %s %u %u %s",
+				   item->dumpId,
+				   item->description,
+				   item->catalogOid,
+				   item->objectOid,
+				   item->restoreListName);
+
+		// TODO: not sure if this is the best way to pass this flag per se, I feel
+		// like this is overloading something. Not sure if we need a future way to
+		// only include certain objects.
+
+		/*
+		 * Skip everything except SCHEMAS when specs->section == DATA_SECTION_NAMESPACES
+		 */
+		if (specs->section == DATA_SECTION_NAMESPACES &&
+			item->desc != ARCHIVE_TAG_SCHEMA) // TODO: this skips the comments and acls on the schema
+		{
+			skip = true;
+			log_notice("Skipping non schema %d: %s %u %s",
+						item->dumpId,
+						item->description,
+						item->objectOid,
+						item->restoreListName);
+		}
 
 		/*
 		 * Skip COMMENT ON EXTENSION when either of the option
