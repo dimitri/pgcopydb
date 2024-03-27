@@ -2,7 +2,7 @@
 
    pgcopydb copy schemas: Create all the schemas found in the source database in the target
    usage: pgcopydb copy schemas  --source ... --target ... [ --table-jobs ... --index-jobs ... ]
-
+   
      --source             Postgres URI to the source database
      --target             Postgres URI to the target database
      --dir                Work directory to use

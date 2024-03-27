@@ -1,7 +1,7 @@
 ::
 
    pgcopydb copy: Implement the data section of the database copy
-
+   
    Available commands:
      pgcopydb copy
        db           Copy an entire database from source to target
