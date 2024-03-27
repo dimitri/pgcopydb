@@ -294,6 +294,7 @@ cli_copy_schema(int argc, char **argv)
 	}
 }
 
+
 /*
  * cli_copy_data implements the data section of the pgcopydb program, skipping
  * the pre-data and post-data operations on the schema. It expects the tables

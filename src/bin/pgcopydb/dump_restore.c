@@ -216,6 +216,7 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 	return true;
 }
 
+
 typedef struct CopyPropertiesContext
 {
 	CopyDataSpec *specs;
