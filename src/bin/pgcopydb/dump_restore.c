@@ -644,10 +644,12 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 		 * Skip everything except SCHEMAS when specs->section == DATA_SECTION_NAMESPACES
 		 */
 		if (specs->section == DATA_SECTION_NAMESPACES &&
-			item->desc != ARCHIVE_TAG_SCHEMA) // TODO: this skips the comments and acls on the schema
+			(item->isCompositeTag ?
+				item->tagType != ARCHIVE_TAG_TYPE_SCHEMA :
+				item->desc != ARCHIVE_TAG_SCHEMA))
 		{
 			skip = true;
-			log_notice("Skipping non schema %d: %s %u %s",
+			log_debug("Skipping non schema %d: %s %u %s",
 						item->dumpId,
 						item->description,
 						item->objectOid,
@@ -658,7 +660,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 		 * Skip COMMENT ON EXTENSION when either of the option
 		 * --skip-extensions or --skip-ext-comment has been used.
 		 */
-		if ((specs->skipExtensions ||
+		if (!skip && (specs->skipExtensions ||
 			 specs->skipCommentOnExtension) &&
 			item->isCompositeTag &&
 			item->tagKind == ARCHIVE_TAG_KIND_COMMENT &&
