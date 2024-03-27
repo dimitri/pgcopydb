@@ -668,8 +668,7 @@ cli_copy_extensions(int argc, char **argv)
 
 	if (!copydb_wait_for_subprocesses(copySpecs.failFast))
 	{
-		log_error("Some sub-processes have exited with error status, "
-				  "see above for details");
+		log_error("Some sub-processes have exited with error status, see above for details");
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 }
@@ -704,8 +703,8 @@ cli_copy_schemas(int argc, char **argv)
 	}
 
 	if (!copydb_dump_source_schema(&copySpecs,
-								   copySpecs.sourceSnapshot.snapshot,
-								   PG_DUMP_SECTION_PRE_DATA))
+		copySpecs.sourceSnapshot.snapshot,
+		PG_DUMP_SECTION_PRE_DATA))
 	{
 		/* errors have already been logged */
 		(void) copydb_close_snapshot(&copySpecs);
@@ -715,8 +714,7 @@ cli_copy_schemas(int argc, char **argv)
 	/* Now restore the pre-data, but only the schemas */
 	if (!copydb_target_prepare_schema(&copySpecs))
 	{
-		log_error("Failed to prepare schema on the target database, "
-				  "see above for details");
+		log_error("Failed to prepare schema on the target database, see above for details");
 		(void) copydb_close_snapshot(&copySpecs);
 		exit(EXIT_CODE_TARGET);
 	}
@@ -724,8 +722,8 @@ cli_copy_schemas(int argc, char **argv)
 	if (!copydb_close_snapshot(&copySpecs))
 	{
 		log_fatal("Failed to close snapshot \"%s\" on \"%s\"",
-				  copySpecs.sourceSnapshot.snapshot,
-				  copySpecs.sourceSnapshot.pguri);
+			copySpecs.sourceSnapshot.snapshot,
+			copySpecs.sourceSnapshot.pguri);
 		exit(EXIT_CODE_SOURCE);
 	}
 }
