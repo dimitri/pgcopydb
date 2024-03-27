@@ -41,6 +41,7 @@ pgcopydb copy schemas \
          --source ${PGCOPYDB_SOURCE_PGURI_SU} \
          --target ${PGCOPYDB_TARGET_PGURI_SU} \
          --debug
+rm -rf /tmp/pgcopydb
 
 #
 # create extension pg_partman cascade;
