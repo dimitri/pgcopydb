@@ -104,6 +104,9 @@ typedef struct TransactionSnapshot
 	ConnectionType connectionType;
 
 	char snapshot[BUFSIZE];
+
+	/* indicator for read-only source db */
+	bool isReadOnly;
 } TransactionSnapshot;
 
 

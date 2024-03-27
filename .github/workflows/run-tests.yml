@@ -23,6 +23,7 @@ jobs:
           - ci
           - pagila
           - pagila-multi-steps
+          - pagila-standby
           - unit
           - blobs
           - filtering
