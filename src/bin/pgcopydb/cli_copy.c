@@ -682,7 +682,7 @@ cli_copy_schemas(int argc, char **argv)
 {
 	CopyDataSpec copySpecs = { 0 };
 
-	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_schemas);
+	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_SCHEMAS);
 
 	/*
 	 * First, we need to open a snapshot that we're going to re-use in all our
