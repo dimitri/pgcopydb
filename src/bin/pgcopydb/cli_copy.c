@@ -203,8 +203,6 @@ static CommandLine copy_constraints_command =
 		cli_copy_db_getopts,
 		cli_copy_constraints);
 
-// TODO: this should probably be copy_schemas_command and pgcopydb copy schemas
-// these internal versus external names do my head in :-))).
 static CommandLine copy_schemas_command =
 	make_command(
 		"schemas",
@@ -659,8 +657,6 @@ cli_copy_extensions(int argc, char **argv)
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
-
-	// TODO: should we create schemas here as well?
 
 	bool createExtensions = true;
 

@@ -627,18 +627,12 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 
 		bool skip = false;
 
-		// TODO: for debugging
-
-		log_debug("Processing dumpId %d: %s %u %u %s",
+		log_trace("Processing dumpId %d: %s %u %u %s",
 				   item->dumpId,
 				   item->description,
 				   item->catalogOid,
 				   item->objectOid,
 				   item->restoreListName);
-
-		// TODO: not sure if this is the best way to pass this flag per se, I feel
-		// like this is overloading something. Not sure if we need a future way to
-		// only include certain objects.
 
 		/*
 		 * Skip everything except SCHEMAS when specs->section == DATA_SECTION_SCHEMAS
