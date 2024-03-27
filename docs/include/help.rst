@@ -37,7 +37,7 @@
        pre-data   Dump source database pre-data schema as custom files in work directory
        post-data  Dump source database post-data schema as custom files in work directory
        roles      Dump source database roles as custome file in work directory
-
+   
      pgcopydb restore
        schema      Restore a database schema from custom files to target database
        pre-data    Restore a database pre-data schema from custom file to target database
@@ -78,4 +78,4 @@
        endpos    Set the sentinel end position LSN on the source database
        apply     Set the sentinel apply mode on the source database
        prefetch  Set the sentinel prefetch mode on the source database
-
+   
