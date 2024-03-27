@@ -269,6 +269,13 @@ copydb_copy_extensions_hook(void *ctx, SourceExtension *ext)
 
 	if (ext->config.count > 0)
 	{
+		if (!pgsql_begin(dst))
+		{
+			log_error("Failed to start a transaction for extension(%s) "
+					  "configuration copy", ext->extname);
+			return false;
+		}
+
 		for (int i = 0; i < ext->config.count; i++)
 		{
 			SourceExtensionConfig *config = &(ext->config.array[i]);
@@ -340,6 +347,13 @@ copydb_copy_extensions_hook(void *ctx, SourceExtension *ext)
 					return false;
 				}
 			}
+		}
+
+		if (!pgsql_commit(dst))
+		{
+			log_error("Failed to commit a transaction for extension(%s) "
+					  "configuration copy", ext->extname);
+			return false;
 		}
 	}
 
