@@ -28,7 +28,7 @@ static void cli_copy_sequences(int argc, char **argv);
 static void cli_copy_indexes(int argc, char **argv);
 static void cli_copy_constraints(int argc, char **argv);
 static void cli_copy_blobs(int argc, char **argv);
-static void cli_copy_namespaces(int argc, char **argv);
+static void cli_copy_schemas(int argc, char **argv);
 
 static CommandLine copy_db_command =
 	make_command(
@@ -205,10 +205,10 @@ static CommandLine copy_constraints_command =
 
 // TODO: this should probably be copy_schemas_command and pgcopydb copy schemas
 // these internal versus external names do my head in :-))).
-static CommandLine copy_namespaces_command =
+static CommandLine copy_schemas_command =
 	make_command(
-		"namespaces",
-		"Create all the namespaces found in the source database in the target",
+		"schemas",
+		"Create all the schemas found in the source database in the target",
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
 		"  --source             Postgres URI to the source database\n"
 		"  --target             Postgres URI to the target database\n"
@@ -218,7 +218,7 @@ static CommandLine copy_namespaces_command =
 		"  --resume             Allow resuming operations after a failure\n"
 		"  --not-consistent     Allow taking a new snapshot on the source database\n",
 		cli_copy_db_getopts,
-		cli_copy_namespaces);
+		cli_copy_schemas);
 
 static CommandLine *copy_subcommands[] = {
 	&copy_db_command,
@@ -231,7 +231,7 @@ static CommandLine *copy_subcommands[] = {
 	&copy_sequence_command,
 	&copy_indexes_command,
 	&copy_constraints_command,
-	&copy_namespaces_command,
+	&copy_schemas_command,
 	NULL
 };
 
@@ -660,7 +660,7 @@ cli_copy_extensions(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	// TODO: should we create namespaces here as well?
+	// TODO: should we create schemas here as well?
 
 	bool createExtensions = true;
 
@@ -679,14 +679,14 @@ cli_copy_extensions(int argc, char **argv)
 }
 
 /*
- * cli_copy_namespaces implements copying namespaces
+ * cli_copy_schemas implements copying schemas
  */
 static void
-cli_copy_namespaces(int argc, char **argv)
+cli_copy_schemas(int argc, char **argv)
 {
 	CopyDataSpec copySpecs = { 0 };
 
-	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_NAMESPACES);
+	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_schemas);
 
 	/*
 	 * First, we need to open a snapshot that we're going to re-use in all our
@@ -716,11 +716,12 @@ cli_copy_namespaces(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	/* Now restore the pre-data, but only the namespaces */
+	/* Now restore the pre-data, but only the schemas */
 	if (!copydb_target_prepare_schema(&copySpecs))
 	{
 		log_error("Failed to prepare schema on the target database, "
 				  "see above for details");
+		(void) copydb_close_snapshot(&copySpecs);
 		exit(EXIT_CODE_TARGET);
 	}
 

@@ -35,9 +35,9 @@ create schema foo;
 create extension hstore with schema foo cascade;
 EOF
 
-# copy the namespaces to the target database
+# copy the schemas to the target database
 # before we copy the extensions
-pgcopydb copy namespaces \
+pgcopydb copy schemas \
          --source ${PGCOPYDB_SOURCE_PGURI_SU} \
          --target ${PGCOPYDB_TARGET_PGURI_SU} \
          --debug

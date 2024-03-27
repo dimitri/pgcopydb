@@ -641,9 +641,9 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 		// only include certain objects.
 
 		/*
-		 * Skip everything except SCHEMAS when specs->section == DATA_SECTION_NAMESPACES
+		 * Skip everything except SCHEMAS when specs->section == DATA_SECTION_SCHEMAS
 		 */
-		if (specs->section == DATA_SECTION_NAMESPACES &&
+		if (specs->section == DATA_SECTION_SCHEMAS &&
 			(item->isCompositeTag ?
 				item->tagType != ARCHIVE_TAG_TYPE_SCHEMA :
 				item->desc != ARCHIVE_TAG_SCHEMA))
