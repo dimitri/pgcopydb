@@ -1403,12 +1403,6 @@ streamFlush(LogicalStreamContext *context)
 {
 	StreamContext *privateContext = (StreamContext *) context->private;
 
-	/* when there is currently no file opened, just skip the flush operation */
-	if (privateContext->jsonFile == NULL)
-	{
-		return true;
-	}
-
 	log_debug("streamFlush: %X/%X %X/%X",
 			  LSN_FORMAT_ARGS(context->tracking->written_lsn),
 			  LSN_FORMAT_ARGS(context->cur_record_lsn));
