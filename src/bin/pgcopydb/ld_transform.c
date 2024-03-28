@@ -2266,18 +2266,29 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 				 * keywords using double quotes, so we should avoid double quoting
 				 * again.
 				 */
-				const char *quoteFormatStr = (old->columns[v][0] == '"') ? "%s%s = $%d" :
-											 "%s\"%s\" = $%d";
-				appendPQExpBuffer(buf, quoteFormatStr,
-								  v > 0 ? " and " : "",
-								  old->columns[v],
-								  ++pos);
-
-				if (!stream_add_value_in_json_array(value, jsArray))
+				if (value->isNull && value->oid == TEXTOID)
 				{
-					/* errors have already been logged */
-					destroyPQExpBuffer(buf);
-					return false;
+					const char *quoteFormatStr = (old->columns[v][0] == '"') ? "%s%s IS NULL" :
+												 "%s\"%s\" IS NULL";
+					appendPQExpBuffer(buf, quoteFormatStr,
+									  v > 0 ? " and " : "",
+									  old->columns[v]);
+				}
+				else
+				{
+					const char *quoteFormatStr = (old->columns[v][0] == '"') ? "%s%s = $%d" :
+												 "%s\"%s\" = $%d";
+					appendPQExpBuffer(buf, quoteFormatStr,
+									  v > 0 ? " and " : "",
+									  old->columns[v],
+									  ++pos);
+
+					if (!stream_add_value_in_json_array(value, jsArray))
+					{
+						/* errors have already been logged */
+						destroyPQExpBuffer(buf);
+						return false;
+					}
 				}
 			}
 		}
@@ -2358,18 +2369,29 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 				 * keywords using double quotes, so we should avoid double quoting
 				 * again.
 				 */
-				const char *quoteFormatStr = (old->columns[v][0] == '"') ? "%s%s = $%d" :
-											 "%s\"%s\" = $%d";
-				appendPQExpBuffer(buf, quoteFormatStr,
-								  v > 0 ? " and " : "",
-								  old->columns[v],
-								  ++pos);
-
-				if (!stream_add_value_in_json_array(value, jsArray))
+				if (value->isNull && value->oid == TEXTOID)
 				{
-					/* errors have already been logged */
-					destroyPQExpBuffer(buf);
-					return false;
+					const char *quoteFormatStr = (old->columns[v][0] == '"') ? "%s%s IS NULL" :
+												 "%s\"%s\" IS NULL";
+					appendPQExpBuffer(buf, quoteFormatStr,
+									  v > 0 ? " and " : "",
+									  old->columns[v]);
+				}
+				else
+				{
+					const char *quoteFormatStr = (old->columns[v][0] == '"') ? "%s%s = $%d" :
+												 "%s\"%s\" = $%d";
+					appendPQExpBuffer(buf, quoteFormatStr,
+									  v > 0 ? " and " : "",
+									  old->columns[v],
+									  ++pos);
+
+					if (!stream_add_value_in_json_array(value, jsArray))
+					{
+						/* errors have already been logged */
+						destroyPQExpBuffer(buf);
+						return false;
+					}
 				}
 			}
 		}
