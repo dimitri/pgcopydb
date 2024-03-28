@@ -357,6 +357,22 @@ copydb_copy_database_properties_hook(void *ctx, SourceProperty *property)
 	 */
 	else
 	{
+		bool exists = false;
+
+		if (!pgsql_configuration_exists(dst, property->setconfig, &exists))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!exists)
+		{
+			log_warn("Skipping database property %s which "
+					 "does not exists on the target database",
+					 property->setconfig);
+			return true;
+		}
+
 		PQExpBuffer command = createPQExpBuffer();
 
 		makeAlterConfigCommand(conn, property->setconfig,

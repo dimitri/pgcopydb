@@ -5438,6 +5438,47 @@ pgsql_role_exists(PGSQL *pgsql, const char *roleName, bool *exists)
 
 
 /*
+ * pgsql_configuration_exists checks that a configuration exists on the
+ * Postgres server.
+ */
+bool
+pgsql_configuration_exists(PGSQL *pgsql, const char *setconfig, bool *exists)
+{
+	char *sql = "select exists(select name from pg_settings WHERE name = $1)";
+
+	char *configName = strdup(setconfig);
+	char *equalsSign = strchr(configName, '=');
+	if (equalsSign != NULL)
+	{
+		*equalsSign = '\0';
+	}
+
+	int paramCount = 1;
+	Oid paramTypes[1] = { TEXTOID };
+	const char *paramValues[1] = { configName };
+
+	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_BOOL, false };
+
+	if (!pgsql_execute_with_params(pgsql, sql, paramCount, paramTypes, paramValues,
+								   &context, &parseSingleValueResult))
+	{
+		return false;
+	}
+
+	if (!context.parsedOk)
+	{
+		log_error(
+			"Failed to check if target database contains the configuration, see above for details");
+		return false;
+	}
+
+	*exists = context.boolVal;
+
+	return true;
+}
+
+
+/*
  * pgsql_current_wal_flush_lsn calls pg_current_wal_flush_lsn().
  */
 bool
