@@ -31,6 +31,8 @@ EOF
 psql -a -1 ${PGCOPYDB_SOURCE_PGURI_SU} <<EOF
 create extension intarray cascade;
 create extension postgis cascade;
+create schema foo;
+create extension hstore with schema foo cascade;
 EOF
 
 #
@@ -73,6 +75,14 @@ pgcopydb list extensions --requirements --json ${TARGET_OPTS} > ${e}
 jq 'map(select(.name == "postgis" or .name == "address_standardizer" or .name == "address_standardizer_data_us" or .name == "postgis_tiger_geocoder" or .name == "postgis_topology"))' < ${e} > ${r}
 
 cat ${r}
+
+# copy the schemas to the target database
+# before we copy the extensions
+pgcopydb copy schemas \
+         --source ${PGCOPYDB_SOURCE_PGURI_SU} \
+         --target ${PGCOPYDB_TARGET_PGURI_SU} \
+         --resume \
+         --debug
 
 pgcopydb copy extensions \
          --source ${PGCOPYDB_SOURCE_PGURI_SU} \

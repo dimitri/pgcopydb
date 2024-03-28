@@ -30,6 +30,7 @@
        sequences    Copy the current value from all sequences in database from source to target
        indexes      Create all the indexes found in the source database in the target
        constraints  Create all the constraints found in the source database in the target
+       schemas      Create all the schemas found in the source database in the target
    
      pgcopydb dump
        schema     Dump source database schema as custom files in work directory

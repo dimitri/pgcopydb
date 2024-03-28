@@ -233,8 +233,8 @@ copydb_copy_extensions_hook(void *ctx, SourceExtension *ext)
 		HASH_FIND(hh, context->reqs, extname, strlen(extname), req);
 
 		appendPQExpBuffer(sql,
-						  "create extension if not exists \"%s\" cascade",
-						  ext->extname);
+						  "create extension if not exists \"%s\" with schema \"%s\" cascade",
+						  ext->extname, ext->extnamespace);
 
 		if (req != NULL)
 		{
@@ -248,6 +248,7 @@ copydb_copy_extensions_hook(void *ctx, SourceExtension *ext)
 			log_error("Failed to build CREATE EXTENSION sql buffer: "
 					  "Out of Memory");
 			(void) destroyPQExpBuffer(sql);
+			return false;
 		}
 
 		log_info("Creating extension \"%s\"", ext->extname);
@@ -255,6 +256,8 @@ copydb_copy_extensions_hook(void *ctx, SourceExtension *ext)
 		if (!pgsql_execute(dst, sql->data))
 		{
 			log_error("Failed to create extension \"%s\"", ext->extname);
+			(void) destroyPQExpBuffer(sql);
+			return false;
 		}
 
 		(void) destroyPQExpBuffer(sql);
