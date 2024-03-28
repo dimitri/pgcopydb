@@ -42,12 +42,6 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	if (!summary_start_timing(sourceDB, TIMING_SECTION_TOTAL_DATA))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	if (specs->runState.tableCopyIsDone &&
 		specs->runState.indexCopyIsDone &&
 		specs->runState.sequenceCopyIsDone &&
@@ -56,6 +50,12 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 		log_info("Skipping tables, indexes, and sequences, "
 				 "already done on a previous run");
 		return true;
+	}
+
+	if (!summary_start_timing(sourceDB, TIMING_SECTION_TOTAL_DATA))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	/* close SQLite databases before fork() */
@@ -739,7 +739,9 @@ copydb_table_data_worker(CopyDataSpec *specs)
 		return false;
 	}
 
-	while (true)
+	bool stop = false;
+
+	while (!stop)
 	{
 		QMessage mesg = { 0 };
 		bool recv_ok = queue_receive(&(specs->copyQueue), &mesg);
@@ -761,10 +763,9 @@ copydb_table_data_worker(CopyDataSpec *specs)
 		{
 			case QMSG_TYPE_STOP:
 			{
+				stop = true;
 				log_debug("Stop message received by COPY worker");
-				(void) copydb_close_snapshot(specs);
-				pgsql_finish(&dst);
-				return true;
+				break;
 			}
 
 			case QMSG_TYPE_TABLEPOID:
@@ -826,7 +827,7 @@ copydb_table_data_worker(CopyDataSpec *specs)
 		return false;
 	}
 
-	return errors == 0;
+	return stop == true && errors == 0;
 }
 
 
@@ -904,30 +905,36 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 		return false;
 	}
 
+	/*
+	 * Skip only table-data copy when it it has been done already on a previous
+	 * run. We still need to process the indexes, constraints, and vacuum.
+	 * So, signal the index and vacuum workers as usual.
+	 */
 	if (isDone)
 	{
-		log_info("Skipping table %s (%u), already done on a previous run",
+		log_info("Skipping table-data %s (%u), already done on a previous run",
 				 tableSpecs->sourceTable->qname,
 				 tableSpecs->sourceTable->oid);
-		return true;
 	}
-
-	/*
-	 * 1. Now COPY the TABLE DATA from the source to the destination.
-	 */
-	if (!table->excludeData)
+	else
 	{
-		if (!copydb_copy_table(specs, src, dst, tableSpecs))
+		/*
+		 * 1. Now COPY the TABLE DATA from the source to the destination.
+		 */
+		if (!table->excludeData)
+		{
+			if (!copydb_copy_table(specs, src, dst, tableSpecs))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+		}
+
+		if (!copydb_mark_table_as_done(specs, tableSpecs))
 		{
 			/* errors have already been logged */
 			return false;
 		}
-	}
-
-	if (!copydb_mark_table_as_done(specs, tableSpecs))
-	{
-		/* errors have already been logged */
-		return false;
 	}
 
 	if (specs->section == DATA_SECTION_TABLE_DATA)

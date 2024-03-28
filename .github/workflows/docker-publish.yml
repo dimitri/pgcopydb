@@ -45,7 +45,7 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@main
         with:
-          cosign-release: 'v1.13.1'
+          cosign-release: 'v2.2.3'
 
       - name: Check cosign version
         run: cosign version
@@ -95,7 +95,7 @@ jobs:
         if: ${{ github.event_name != 'pull_request' }}
         # This step uses the identity token to provision an ephemeral certificate
         # against the sigstore community Fulcio instance.
-        run: cosign sign ${TAGS}
+        run: cosign sign --yes ${TAGS}
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
           # should use @${{ steps.build-and-push.outputs.digest }}

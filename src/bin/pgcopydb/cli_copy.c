@@ -414,7 +414,9 @@ cli_copy_sequences(int argc, char **argv)
 		exit(EXIT_CODE_TARGET);
 	}
 
-	if (!copydb_copy_all_sequences(&copySpecs))
+	bool reset = true;
+
+	if (!copydb_copy_all_sequences(&copySpecs, reset))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

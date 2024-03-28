@@ -61,3 +61,16 @@ pgcopydb stream sentinel get
 # make sure the inject service has had time to see the final sentinel values
 sleep 2
 pgcopydb stream cleanup
+
+sql="select count(*), sum(amount) from payment"
+psql -d ${PGCOPYDB_SOURCE_PGURI} -c "${sql}" > /tmp/s.out
+psql -d ${PGCOPYDB_TARGET_PGURI} -c "${sql}" > /tmp/t.out
+
+diff /tmp/s.out /tmp/t.out
+
+# check the last value of sequence
+sql="select last_value from payment_payment_id_seq"
+psql -d ${PGCOPYDB_SOURCE_PGURI} -c "${sql}" > /tmp/s.out
+psql -d ${PGCOPYDB_TARGET_PGURI} -c "${sql}" > /tmp/t.out
+
+diff /tmp/s.out /tmp/t.out
