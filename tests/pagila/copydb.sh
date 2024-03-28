@@ -30,9 +30,13 @@ EOF
 PAGILA_SOURCE_PGURI="postgres://pagila:0wn3d@source/pagila"
 PAGILA_TARGET_PGURI="postgres://pagila:0wn3d@target/pagila"
 
+# Create extensions in the default and alternative schemas to always
+# ensure these copy as expected.
 psql -d ${PAGILA_SOURCE_PGURI} <<EOF
 create extension ltree;
 create extension hstore;
+create schema foo;
+create extension intarray schema foo cascade;
 EOF
 
 grep -v "OWNER TO postgres" /usr/src/pagila/pagila-schema.sql > /tmp/pagila-schema.sql
@@ -40,14 +44,28 @@ grep -v "OWNER TO postgres" /usr/src/pagila/pagila-schema.sql > /tmp/pagila-sche
 psql -o /tmp/s.out -d ${PAGILA_SOURCE_PGURI} -1 -f /tmp/pagila-schema.sql
 psql -o /tmp/d.out -d ${PAGILA_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
 
+function compare_schema() {
+    pgcopydb compare schema \
+             --source ${PAGILA_SOURCE_PGURI} \
+             --target ${PAGILA_TARGET_PGURI}
+}
+
+function compare_data() {
+    pgcopydb compare data \
+             --source ${PAGILA_SOURCE_PGURI} \
+             --target ${PAGILA_TARGET_PGURI}
+}
+
 pgcopydb clone --skip-ext-comments --notice \
          --source ${PAGILA_SOURCE_PGURI} \
          --target ${PAGILA_TARGET_PGURI}
+compare_schema
+compare_data
 
-pgcopydb compare schema \
+# Repeat the process with --drop-if-exists to ensure it is idempotent
+pgcopydb clone --skip-ext-comments --notice \
          --source ${PAGILA_SOURCE_PGURI} \
-         --target ${PAGILA_TARGET_PGURI}
-
-pgcopydb compare data \
-         --source ${PAGILA_SOURCE_PGURI} \
-         --target ${PAGILA_TARGET_PGURI}
+         --target ${PAGILA_TARGET_PGURI} \
+         --drop-if-exists
+compare_schema
+compare_data

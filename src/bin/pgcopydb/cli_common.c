@@ -783,6 +783,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "skip-ext-comments", no_argument, NULL, 'M' },
 		{ "skip-collations", no_argument, NULL, 'l' },
 		{ "skip-vacuum", no_argument, NULL, 'U' },
+		{ "skip-ext-schemas", no_argument, NULL, 'n' },
 		{ "filter", required_argument, NULL, 'F' },
 		{ "filters", required_argument, NULL, 'F' },
 		{ "requirements", required_argument, NULL, 'Q' },
@@ -995,7 +996,14 @@ cli_copy_db_getopts(int argc, char **argv)
 			case 'M':
 			{
 				options.skipCommentOnExtension = true;
-				log_trace("--skip-extensions");
+				log_trace("--skip-ext-comments");
+				break;
+			}
+
+			case 'n':
+			{
+				options.skipExtSchemas = true;
+				log_trace("--skip-ext-schemas");
 				break;
 			}
 
