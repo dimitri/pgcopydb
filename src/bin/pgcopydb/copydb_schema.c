@@ -180,7 +180,7 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 
 /*
  * copydb_fetch_source_catalog_setup initializes our local catalog cache and
- * checks th setup and cache state.
+ * checks the setup and cache state.
  */
 static bool
 copydb_fetch_source_catalog_setup(CopyDataSpec *specs)

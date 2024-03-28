@@ -168,7 +168,7 @@ copydb_process_table_data(CopyDataSpec *specs)
 	}
 
 	/*
-	 * Are blobs table data? well pg_dump --section sayth yes.
+	 * Are blobs table data? well pg_dump --section says yes.
 	 */
 	if (errors == 0 && !copydb_start_blob_process(specs))
 	{
