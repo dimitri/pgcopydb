@@ -49,10 +49,98 @@ static bool stream_transform_stream_internal(StreamSpecs *specs);
 
 static bool stream_transform_from_queue_internal(StreamSpecs *specs);
 
+static bool addToGeneratedColCatalog(void *ctx, SourceTable *table);
+
 static bool canCoalesceLogicalTransactionStatement(LogicalTransaction *txn,
 												   LogicalTransactionStatement *new);
 static bool coalesceLogicalTransactionStatement(LogicalTransaction *txn,
 												LogicalTransactionStatement *new);
+
+/*
+ * addToGeneratedColCatalog is an iterator callback
+ * function.
+ */
+static bool
+addToGeneratedColCatalog(void *ctx, SourceTable *table)
+{
+	StreamSpecs *specs = (StreamSpecs *) ctx;
+	StreamContext *privateContext = &(specs->private);
+	DatabaseCatalog *sourceDB = specs->sourceDB;
+
+	if (!catalog_s_table_fetch_attrs(sourceDB, table))
+	{
+		log_error("Failed to fetch attributes for table \"%s\".%s",
+				  table->nspname, table->relname);
+		return false;
+	}
+
+	GeneratedColCatalog *generatedColTable = (GeneratedColCatalog *)
+											 calloc(1,
+													sizeof(
+														GeneratedColCatalog));
+	if (generatedColTable == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	int generatedColumnsCount = 0;
+
+	for (int i = 0; i < table->attributes.count; i++)
+	{
+		SourceTableAttribute *attr = &(table->attributes.array[i]);
+		if (attr->attisgenerated)
+		{
+			generatedColumnsCount++;
+		}
+	}
+
+	char **generatedColumns = (char **) calloc(generatedColumnsCount,
+											   sizeof(char *));
+	if (generatedColumns == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	/* find the generated columns */
+	int j = 0;
+	for (int i = 0; i < table->attributes.count; i++)
+	{
+		SourceTableAttribute *attr = &(table->attributes.array[i]);
+		if (attr->attisgenerated)
+		{
+			generatedColumns[j] = strdup(attr->attname);
+			if (generatedColumns[j] == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			j++;
+		}
+	}
+
+	GeneratedColCatalog *generatedCols = privateContext->generatedCols;
+
+	generatedColTable->colcount = generatedColumnsCount;
+	generatedColTable->colnames = generatedColumns;
+
+	/* normalize qname by removing quotes */
+	formatQnameWithoutQuotes(generatedColTable->qname,
+							 table->nspname,
+							 table->relname);
+
+	HASH_ADD_STR(generatedCols, qname, generatedColTable);
+
+	privateContext->generatedCols = generatedCols;
+
+	log_info("Table %s has %d generated columns",
+			 table->qname, generatedColumnsCount);
+
+	return true;
+}
+
 
 /*
  * stream_transform_context_init_pgsql initializes StreamContext's
@@ -81,6 +169,7 @@ stream_transform_context_init_pgsql(StreamSpecs *specs)
 		return false;
 	}
 
+	/* initialize tables with generated columns cache */
 	return true;
 }
 
@@ -96,6 +185,16 @@ stream_transform_stream(StreamSpecs *specs)
 	if (!stream_transform_context_init_pgsql(specs))
 	{
 		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_iter_s_table_attisgenerated(specs->sourceDB,
+											 specs,
+											 &
+											 addToGeneratedColCatalog))
+	{
+		log_error("Failed to prepare a generated column cache for our catalog,"
+				  "see above for details");
 		return false;
 	}
 
@@ -665,6 +764,16 @@ stream_transform_from_queue(StreamSpecs *specs)
 	if (!stream_transform_context_init_pgsql(specs))
 	{
 		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_iter_s_table_attisgenerated(sourceDB,
+											 specs,
+											 &
+											 addToGeneratedColCatalog))
+	{
+		log_error("Failed to prepare a generated column cache for our catalog,"
+				  "see above for details");
 		return false;
 	}
 

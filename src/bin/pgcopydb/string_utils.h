@@ -61,4 +61,6 @@ void pretty_print_bytes_per_second(char *buffer, size_t size, uint64_t bytes,
 								   uint64_t durationMs);
 void pretty_print_count(char *buffer, size_t size, uint64_t count);
 
+void trimQuotes(char *str);
+
 #endif /* STRING_UTILS_h */

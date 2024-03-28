@@ -789,3 +789,28 @@ pretty_print_count(char *buffer, size_t size, uint64_t number)
 		sformat(buffer, size, "%d %s", (int) count, suffixes[sIndex]);
 	}
 }
+
+
+/*
+ * Removes leading and trailing whitespace from the string.
+ * Modifies the string in-place. The behavior is same is SQL's TRIM function.
+ */
+void
+trimQuotes(char *str)
+{
+	int len = strlen(str);
+
+	if (len < 2)
+	{
+		return;
+	}
+
+	if (str[0] == '"' && str[len - 1] == '"')
+	{
+		for (int i = 0; i < len - 1; i++)
+		{
+			str[i] = str[i + 1];
+		}
+		str[len - 2] = '\0';
+	}
+}

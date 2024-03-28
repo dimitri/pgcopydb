@@ -37,10 +37,13 @@
 static bool SetMessageRelation(JSON_Object *jsobj,
 							   LogicalMessageRelation *table,
 							   PGSQL *pgsql);
-static bool SetColumnNamesAndValues(LogicalMessageTuple *tuple,
-									const char *message,
-									JSON_Array *jscols,
-									PGSQL *pgsql);
+static
+bool SetColumnNamesAndValues(const LogicalMessageRelation *table,
+							 GeneratedColCatalog *generatedCols,
+							 LogicalMessageTuple *tuple,
+							 const char *message,
+							 JSON_Array *jscols,
+							 PGSQL *pgsql);
 
 
 /*
@@ -136,6 +139,7 @@ parseWal2jsonMessage(StreamContext *privateContext,
 				  message);
 	}
 
+	GeneratedColCatalog *generatedCols = privateContext->generatedCols;
 	switch (metadata->action)
 	{
 		case STREAM_ACTION_BEGIN:
@@ -173,7 +177,12 @@ parseWal2jsonMessage(StreamContext *privateContext,
 
 			LogicalMessageTuple *tuple = &(stmt->stmt.insert.new.array[0]);
 
-			if (!SetColumnNamesAndValues(tuple, message, jscols, pgsql))
+			if (!SetColumnNamesAndValues(&table,
+										 generatedCols,
+										 tuple,
+										 message,
+										 jscols,
+										 pgsql))
 			{
 				log_error("Failed to parse INSERT columns for logical "
 						  "message %s",
@@ -208,7 +217,13 @@ parseWal2jsonMessage(StreamContext *privateContext,
 			JSON_Array *jsids =
 				json_object_dotget_array(jsobj, "message.identity");
 
-			if (!SetColumnNamesAndValues(old, message, jsids, pgsql))
+			/* generated columns can be part of the WHERE clause */
+			if (!SetColumnNamesAndValues(&table,
+										 NULL,
+										 old,
+										 message,
+										 jsids,
+										 pgsql))
 			{
 				log_error("Failed to parse UPDATE identity (old) for logical "
 						  "message %s",
@@ -220,7 +235,13 @@ parseWal2jsonMessage(StreamContext *privateContext,
 			JSON_Array *jscols =
 				json_object_dotget_array(jsobj, "message.columns");
 
-			if (!SetColumnNamesAndValues(new, message, jscols, pgsql))
+			/* generated columns shouldn't be part of SET clause */
+			if (!SetColumnNamesAndValues(&table,
+										 generatedCols,
+										 new,
+										 message,
+										 jscols,
+										 pgsql))
 			{
 				log_error("Failed to parse UPDATE columns (new) for logical "
 						  "message %s",
@@ -249,7 +270,12 @@ parseWal2jsonMessage(StreamContext *privateContext,
 			JSON_Array *jsids =
 				json_object_dotget_array(jsobj, "message.identity");
 
-			if (!SetColumnNamesAndValues(old, message, jsids, pgsql))
+			if (!SetColumnNamesAndValues(&table,
+										 NULL,
+										 old,
+										 message,
+										 jsids,
+										 pgsql))
 			{
 				log_error("Failed to parse DELETE identity (old) for logical "
 						  "message %s",
@@ -318,14 +344,39 @@ SetMessageRelation(JSON_Object *jsobj,
  * representation for a tuple.
  */
 static bool
-SetColumnNamesAndValues(LogicalMessageTuple *tuple,
+SetColumnNamesAndValues(const LogicalMessageRelation *table,
+						GeneratedColCatalog *generatedCols,
+						LogicalMessageTuple *tuple,
 						const char *message,
 						JSON_Array *jscols,
 						PGSQL *pgsql)
 {
 	int count = json_array_get_count(jscols);
 
-	if (!AllocateLogicalMessageTuple(tuple, count))
+	GeneratedColCatalog *genColumnTable = NULL;
+	int generatedColCount = 0;
+	char **generatedColArray = NULL;
+
+	if (generatedCols != NULL)
+	{
+		char qname[PG_NAMEDATALEN_FQ] = { 0 };
+
+		/* normalize qname by removing quotes */
+		formatQnameWithoutQuotes(qname,
+								 table->nspname,
+								 table->relname);
+
+		HASH_FIND_STR(generatedCols, qname, genColumnTable);
+
+		if (genColumnTable != NULL)
+		{
+			generatedColCount = genColumnTable->colcount;
+			generatedColArray = genColumnTable->colnames;
+		}
+	}
+
+	/* Allocate size by removing the generated columns */
+	if (!AllocateLogicalMessageTuple(tuple, count - generatedColCount))
 	{
 		/* errors have already been logged */
 		return false;
@@ -337,12 +388,31 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple,
 	 * Now that our memory areas are allocated and initialized to zeroes, fill
 	 * them in with the values from the JSON message.
 	 */
-	for (int i = 0; i < tuple->cols; i++)
+	int j = 0;
+	for (int i = 0; i < count; i++)
 	{
-		LogicalMessageValue *valueColumn = &(values->array[i]);
-
 		JSON_Object *jscol = json_array_get_object(jscols, i);
 		const char *colname = json_object_get_string(jscol, "name");
+
+		/* skip generated columns */
+		if (generatedColArray != NULL)
+		{
+			bool isGenerated = false;
+
+			for (int g = 0; g < generatedColCount; g++)
+			{
+				if (streq(colname, generatedColArray[g]))
+				{
+					isGenerated = true;
+					break;
+				}
+			}
+
+			if (isGenerated)
+			{
+				continue;
+			}
+		}
 
 		if (jscol == NULL || colname == NULL)
 		{
@@ -357,13 +427,15 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple,
 			return false;
 		}
 
-		tuple->columns[i] = pgsql_escape_identifier(pgsql, (char *) colname);
+		tuple->columns[j] = pgsql_escape_identifier(pgsql, (char *) colname);
 
-		if (tuple->columns[i] == NULL)
+		if (tuple->columns[j] == NULL)
 		{
 			log_error(ALLOCATION_FAILED_ERROR);
 			return false;
 		}
+
+		LogicalMessageValue *valueColumn = &(values->array[j]);
 
 		JSON_Value *jsval = json_object_get_value(jscol, "value");
 
@@ -454,6 +526,7 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple,
 				return false;
 			}
 		}
+		j++;
 	}
 
 	return true;
