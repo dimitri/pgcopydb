@@ -993,6 +993,25 @@ stream_apply_sql(StreamApplyContext *context,
 				return false;
 			}
 
+			/*
+			 * When the source is idle, the replay_lsn won't move forward.
+			 * We are fixing that creating a fake transaction which
+			 * creates a temporary table and truncates it.
+			 */
+			char *sql = "CREATE TEMP TABLE IF NOT EXISTS pgcopydb_keepalive()";
+
+			if (!pgsql_execute(applyPgConn, sql))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			if (!pgsql_truncate(applyPgConn, "pgcopydb_keepalive"))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
 			char lsn[PG_LSN_MAXLENGTH] = { 0 };
 
 			sformat(lsn, sizeof(lsn), "%X/%X",
