@@ -867,17 +867,6 @@ stream_apply_sql(StreamApplyContext *context,
 				return true;
 			}
 
-			/*
-			 * An idle source producing only KEEPALIVE should move the
-			 * replay_lsn forward.
-			 */
-			if (!stream_apply_track_insert_lsn(context, metadata->lsn))
-			{
-				log_error("Failed to track target LSN position, "
-						  "see above for details");
-				return false;
-			}
-
 			break;
 		}
 
@@ -1051,13 +1040,6 @@ stream_apply_sql(StreamApplyContext *context,
 						   LSN_FORMAT_ARGS(context->endpos),
 						   LSN_FORMAT_ARGS(context->previousLSN));
 				break;
-			}
-
-			if (!stream_apply_track_insert_lsn(context, metadata->lsn))
-			{
-				log_error("Failed to track target LSN position, "
-						  "see above for details");
-				return false;
 			}
 
 			break;
@@ -1702,52 +1684,20 @@ stream_apply_find_durable_lsn(StreamApplyContext *context, uint64_t *durableLSN)
 {
 	uint64_t flushLSN = InvalidXLogRecPtr;
 
-	if (!stream_fetch_current_lsn(&flushLSN,
-								  context->connStrings->target_pguri,
-								  PGSQL_CONN_SOURCE))
+	bool flush = true;
+
+	if (!pgsql_replication_origin_progress(&(context->controlPgConn),
+										   context->origin,
+										   flush,
+										   &flushLSN))
 	{
-		log_error("Failed to retrieve current WAL positions, "
+		/* errors have already been logged */
+		log_error("Failed to retrieve origin progress, "
 				  "see above for details");
 		return false;
 	}
 
-	bool found = false;
-	LSNTracking *current = context->lsnTrackingList;
-
-	for (; current != NULL; current = current->previous)
-	{
-		if (current->insertLSN <= flushLSN)
-		{
-			found = true;
-			*durableLSN = current->sourceLSN;
-			break;
-		}
-	}
-
-	if (!found)
-	{
-		*durableLSN = InvalidXLogRecPtr;
-
-		log_debug("Failed to find a durable source LSN for target LSN %X/%X",
-				  LSN_FORMAT_ARGS(flushLSN));
-
-		return false;
-	}
-
-	log_debug("stream_apply_find_durable_lsn(%X/%X): %X/%X :: %X/%X",
-			  LSN_FORMAT_ARGS(flushLSN),
-			  LSN_FORMAT_ARGS(current->sourceLSN),
-			  LSN_FORMAT_ARGS(current->insertLSN));
-
-	/* clean-up the lsn tracking list */
-	LSNTracking *tail = current->previous;
-	current->previous = NULL;
-
-	while (tail != NULL)
-	{
-		LSNTracking *previous = tail->previous;
-		tail = previous;
-	}
+	*durableLSN = flushLSN;
 
 	return true;
 }
