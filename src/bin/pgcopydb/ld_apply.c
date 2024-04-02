@@ -993,6 +993,27 @@ stream_apply_sql(StreamApplyContext *context,
 				return false;
 			}
 
+			/*
+			 * Replication origin is handled differently by the postgres
+			 * backend to avoid database bloat and runtime overhead[1].
+			 * This optimization leads to persist origin progress only when
+			 * the txn modifies the state of the database. So, an empty txn
+			 * created to update KEEPALIVE LSN effectively ignored by the
+			 * backend leading to not updating the origin progress.
+			 *
+			 * To workaround this, we execute `SELECT txid_current()` query to
+			 * force the backend to update the origin progress.
+			 *
+			 * [1] https://www.postgresql.org/docs/current/replication-origins.html
+			 */
+			char *sql = "SELECT txid_current()";
+
+			if (!pgsql_execute(applyPgConn, sql))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
 			char lsn[PG_LSN_MAXLENGTH] = { 0 };
 
 			sformat(lsn, sizeof(lsn), "%X/%X",
