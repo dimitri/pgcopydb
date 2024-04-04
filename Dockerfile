@@ -6,7 +6,7 @@ FROM --platform=${TARGETPLATFORM} debian:11-slim as build
 ARG TARGETPLATFORM
 ARG TARGETOS
 ARG TARGETARCH
-ARG PGVERSION=14
+ARG PGVERSION=16
 
 RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
   && apt install -qqy --no-install-recommends \
@@ -37,6 +37,7 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
     libselinux1-dev \
     libssl-dev \
     libxslt1-dev \
+    libzstd-dev \
     lsof \
     psmisc \
     gdb \
@@ -64,7 +65,7 @@ FROM --platform=${TARGETPLATFORM} debian:11-slim as run
 ARG TARGETPLATFORM
 ARG TARGETOS
 ARG TARGETARCH
-ARG PGVERSION=14
+ARG PGVERSION=16
 
 # used to configure Github Packages
 LABEL org.opencontainers.image.source https://github.com/dimitri/pgcopydb
