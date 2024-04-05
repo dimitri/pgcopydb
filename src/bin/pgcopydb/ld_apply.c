@@ -21,7 +21,6 @@
 #include "copydb.h"
 #include "env_utils.h"
 #include "ld_stream.h"
-#include "lsn_tracking.h"
 #include "lock_utils.h"
 #include "log.h"
 #include "parsing_utils.h"
@@ -191,13 +190,6 @@ stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
 								   specs->endpos))
 	{
 		/* errors have already been logged */
-		return false;
-	}
-
-	/* read-in the previous lsn tracking file, if it exists */
-	if (!lsn_tracking_read(context))
-	{
-		log_error("Failed to read LSN tracking file");
 		return false;
 	}
 
@@ -393,13 +385,6 @@ stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
 bool
 stream_apply_sync_sentinel(StreamApplyContext *context, bool findDurableLSN)
 {
-	/* now is a good time to write the LSN tracking to disk */
-	if (!lsn_tracking_write(context->sourceDB, context->lsnTrackingList))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	uint64_t durableLSN = InvalidXLogRecPtr;
 
 	/*
@@ -1638,46 +1623,8 @@ parseSQLAction(const char *query, LogicalMessageMetadata *metadata)
 
 
 /*
- * stream_apply_track_insert_lsn tracks the current pg_current_wal_insert_lsn()
- * location on the target system right after a COMMIT; of a transaction that
- * was assigned sourceLSN on the source system.
- */
-bool
-stream_apply_track_insert_lsn(StreamApplyContext *context, uint64_t sourceLSN)
-{
-	LSNTracking *lsn_tracking = (LSNTracking *) calloc(1, sizeof(LSNTracking));
-
-	if (lsn_tracking == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	lsn_tracking->sourceLSN = sourceLSN;
-
-	if (!pgsql_current_wal_insert_lsn(&(context->controlPgConn),
-									  &(lsn_tracking->insertLSN)))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	log_debug("stream_apply_track_insert_lsn: %X/%X :: %X/%X",
-			  LSN_FORMAT_ARGS(sourceLSN),
-			  LSN_FORMAT_ARGS(lsn_tracking->insertLSN));
-
-	/* update the linked list */
-	lsn_tracking->previous = context->lsnTrackingList;
-	context->lsnTrackingList = lsn_tracking;
-
-	return true;
-}
-
-
-/*
  * stream_apply_find_durable_lsn fetches the LSN for the current durable
- * location on the target system, and finds the greatest sourceLSN with an
- * associated insertLSN that's before the current (durable) write location.
+ * location on the target system using pg_replication_origin_progress.
  */
 bool
 stream_apply_find_durable_lsn(StreamApplyContext *context, uint64_t *durableLSN)

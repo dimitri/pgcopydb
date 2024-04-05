@@ -167,9 +167,7 @@ static char *sourceDBcreateDDLs[] = {
 	"create table sentinel("
 	"  id integer primary key check (id = 1), "
 	"  startpos pg_lsn, endpos pg_lsn, apply bool, "
-	" write_lsn pg_lsn, flush_lsn pg_lsn, replay_lsn pg_lsn)",
-
-	"create table lsn_tracking(source pg_lsn, target pg_lsn)"
+	" write_lsn pg_lsn, flush_lsn pg_lsn, replay_lsn pg_lsn)"
 };
 
 
