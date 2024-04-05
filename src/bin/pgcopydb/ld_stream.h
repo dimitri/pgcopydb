@@ -679,14 +679,9 @@ bool computeSQLFileName(StreamApplyContext *context);
 
 bool parseSQLAction(const char *query, LogicalMessageMetadata *metadata);
 
-bool stream_apply_track_insert_lsn(StreamApplyContext *context,
-								   uint64_t sourceLSN);
-
 bool stream_apply_find_durable_lsn(StreamApplyContext *context,
 								   uint64_t *durableLSN);
 
-bool stream_apply_write_lsn_tracking(StreamApplyContext *context);
-bool stream_apply_read_lsn_tracking(StreamApplyContext *context);
 
 /* ld_replay */
 bool stream_replay(StreamSpecs *specs);
