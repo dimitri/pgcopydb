@@ -452,10 +452,12 @@ bool catalog_s_database_guc_fetch(SQLiteQuery *query);
  * Namespaces
  */
 bool catalog_add_s_namespace(DatabaseCatalog * catalog, SourceSchema *namespace);
-
-bool catalog_lookup_s_namespace_by_rlname(DatabaseCatalog *catalog,
-										  const char *restoreListName,
-										  SourceSchema *result);
+bool catalog_lookup_s_namespace_by_oid(DatabaseCatalog *catalog,
+									   uint32_t oid,
+									   SourceSchema *result);
+bool catalog_lookup_s_namespace_by_nspname(DatabaseCatalog *catalog,
+										   const char *nspname,
+										   SourceSchema *result);
 
 bool catalog_s_namespace_fetch(SQLiteQuery *query);
 

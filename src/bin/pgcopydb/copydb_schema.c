@@ -232,6 +232,7 @@ copydb_fetch_source_catalog_setup(CopyDataSpec *specs)
 
 		/* compute "allDone" in the context of a sourceDB */
 		if (s->section == DATA_SECTION_DATABASE_PROPERTIES ||
+			s->section == DATA_SECTION_NAMESPACES ||
 			s->section == DATA_SECTION_TABLE_DATA ||
 			s->section == DATA_SECTION_SET_SEQUENCES ||
 			s->section == DATA_SECTION_INDEXES ||
@@ -409,6 +410,40 @@ copydb_fetch_previous_run_state(CopyDataSpec *specs)
 
 
 /*
+ * Retrieve a list of namespaces from the source databases and store them
+ * in the source catalog and register the section as fetched.
+ */
+bool
+copydb_prepare_namespace_specs(CopyDataSpec *specs, PGSQL *pgsql)
+{
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	TopLevelTiming timing = {
+		.label = CopyDataSectionToString(DATA_SECTION_NAMESPACES)
+	};
+
+	(void) catalog_start_timing(&timing);
+
+	if (!schema_list_schemas(pgsql, sourceDB))
+	{
+		log_error("Failed to prepare namespace specs in our catalogs, "
+				  "see above for details");
+		return false;
+	}
+
+	(void) catalog_stop_timing(&timing);
+
+	if (!catalog_register_section(sourceDB, &timing))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * copydb_fetch_source_schema is a utility function for the previous definition
  * copydb_fetch_schema_and_prepare_specs.
  */
@@ -542,6 +577,17 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 		bool reset = false;
 
 		if (!copydb_prepare_sequence_specs(specs, src, reset))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	if ((specs->section == DATA_SECTION_ALL ||
+		 specs->section == DATA_SECTION_NAMESPACES) &&
+		!sourceDB->sections[DATA_SECTION_NAMESPACES].fetched)
+	{
+		if (!copydb_prepare_namespace_specs(specs, src))
 		{
 			/* errors have already been logged */
 			return false;
@@ -1332,21 +1378,39 @@ copydb_prepare_target_catalog(CopyDataSpec *specs)
  */
 bool
 copydb_schema_already_exists(CopyDataSpec *specs,
-							 const char *restoreListName,
+							 uint32_t sourceOid,
 							 bool *exists)
 {
-	DatabaseCatalog *targetDB = &(specs->catalogs.target);
-	SourceSchema schema = { 0 };
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+	SourceSchema sourceResults = { 0 };
 
-	if (!catalog_lookup_s_namespace_by_rlname(targetDB,
-											  restoreListName,
-											  &schema))
+	if (!catalog_lookup_s_namespace_by_oid(sourceDB,
+										   sourceOid,
+										   &sourceResults))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	*exists = (schema.oid != 0);
+	if (sourceResults.oid == 0)
+	{
+		log_error("Failed to find schema with oid %d in source database",
+				  sourceOid);
+		return false;
+	}
+
+	DatabaseCatalog *targetDB = &(specs->catalogs.target);
+	SourceSchema targetResults = { 0 };
+
+	if (!catalog_lookup_s_namespace_by_nspname(targetDB,
+											   sourceResults.nspname,
+											   &targetResults))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	*exists = (targetResults.oid != 0);
 
 	return true;
 }

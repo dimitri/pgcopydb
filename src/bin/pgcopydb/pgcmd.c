@@ -451,50 +451,6 @@ pg_dump_db(PostgresPaths *pgPaths,
 	char *extNamespaces[PG_CMD_MAX_ARG];
 	int extNamespaceCount = 0;
 
-	/* now --exclude-schema for extension's own schemas */
-	DumpExtensionNamespaceContext context = {
-		.extNamespaces = extNamespaces,
-		.extNamespaceCount = &extNamespaceCount,
-	};
-
-	if (!catalog_begin(filtersDB, false))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!catalog_iter_s_extension(filtersDB,
-								  &context,
-								  &pg_dump_db_extension_namespace_hook))
-	{
-		log_error("Failed to prepare pg_dump command line arguments, "
-				  "see above for details");
-		return false;
-	}
-
-	if (!catalog_commit(filtersDB))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	for (int i = 0; i < extNamespaceCount; i++)
-	{
-		/* check that we still have room for --exclude-schema args */
-		if (PG_CMD_MAX_ARG < (argsIndex + 2))
-		{
-			log_error("Failed to call pg_dump, "
-					  "too many schema are excluded: "
-					  "argsIndex %d > %d",
-					  argsIndex + 2,
-					  PG_CMD_MAX_ARG);
-			return false;
-		}
-
-		args[argsIndex++] = "--exclude-schema";
-		args[argsIndex++] = extNamespaces[i];
-	}
-
 	args[argsIndex++] = "--file";
 	args[argsIndex++] = (char *) filename;
 	args[argsIndex++] = (char *) connStrings->safeSourcePGURI.pguri;

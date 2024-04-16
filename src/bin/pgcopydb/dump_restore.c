@@ -662,7 +662,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 		{
 			bool exists = false;
 
-			if (!copydb_schema_already_exists(specs, name, &exists))
+			if (!copydb_schema_already_exists(specs, oid, &exists))
 			{
 				log_error("Failed to check if restore name \"%s\" "
 						  "already exists",
