@@ -235,7 +235,8 @@ copydb_fetch_source_catalog_setup(CopyDataSpec *specs)
 			s->section == DATA_SECTION_TABLE_DATA ||
 			s->section == DATA_SECTION_SET_SEQUENCES ||
 			s->section == DATA_SECTION_INDEXES ||
-			s->section == DATA_SECTION_CONSTRAINTS)
+			s->section == DATA_SECTION_CONSTRAINTS ||
+			s->section == DATA_SECTION_NAMESPACES)
 		{
 			allDone = allDone && s->fetched;
 		}
