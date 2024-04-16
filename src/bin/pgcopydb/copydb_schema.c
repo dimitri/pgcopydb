@@ -232,11 +232,11 @@ copydb_fetch_source_catalog_setup(CopyDataSpec *specs)
 
 		/* compute "allDone" in the context of a sourceDB */
 		if (s->section == DATA_SECTION_DATABASE_PROPERTIES ||
+			s->section == DATA_SECTION_NAMESPACES ||
 			s->section == DATA_SECTION_TABLE_DATA ||
 			s->section == DATA_SECTION_SET_SEQUENCES ||
 			s->section == DATA_SECTION_INDEXES ||
-			s->section == DATA_SECTION_CONSTRAINTS ||
-			s->section == DATA_SECTION_NAMESPACES)
+			s->section == DATA_SECTION_CONSTRAINTS)
 		{
 			allDone = allDone && s->fetched;
 		}
