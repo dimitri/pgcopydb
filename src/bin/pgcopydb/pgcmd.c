@@ -39,8 +39,6 @@
 #define RUN_PROGRAM_IMPLEMENTATION
 #include "runprogram.h"
 
-static bool pg_dump_db_extension_namespace_hook(void *ctx, SourceExtension *ext);
-
 
 /*
  * Get psql --version output in pgPaths->pg_version.
@@ -443,14 +441,6 @@ pg_dump_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = nspname;
 	}
 
-	/*
-	 * Store extension args in a separate array, extension args will dynamically
-	 * allocated by pg_dump_db_extension_namespace_hook and we want to free
-	 * them after the call to pg_dump.
-	 */
-	char *extNamespaces[PG_CMD_MAX_ARG];
-	int extNamespaceCount = 0;
-
 	args[argsIndex++] = "--file";
 	args[argsIndex++] = (char *) filename;
 	args[argsIndex++] = (char *) connStrings->safeSourcePGURI.pguri;
@@ -492,39 +482,6 @@ pg_dump_db(PostgresPaths *pgPaths,
 		log_error("Failed to run pg_dump: exit code %d", program.returnCode);
 
 		return false;
-	}
-
-	return true;
-}
-
-
-/*
- * pg_dump_db_extension_namespace_hook is an iterator callback function.
- */
-static bool
-pg_dump_db_extension_namespace_hook(void *ctx, SourceExtension *ext)
-{
-	DumpExtensionNamespaceContext *context =
-		(DumpExtensionNamespaceContext *) ctx;
-
-	char **extNamespaces = context->extNamespaces;
-
-	char *nspname = ext->extnamespace;
-
-	if (!streq(nspname, "public") && !streq(nspname, "pg_catalog"))
-	{
-		/* check that we still have room for args */
-		if (PG_CMD_MAX_ARG < ((*context->extNamespaceCount) + 1))
-		{
-			log_error("Failed to call pg_dump, "
-					  "too many schema are excluded: "
-					  "extNamespaceCount %d > %d",
-					  (*context->extNamespaceCount) + 1,
-					  PG_CMD_MAX_ARG);
-			return false;
-		}
-
-		extNamespaces[(*context->extNamespaceCount)++] = strdup(nspname);
 	}
 
 	return true;
