@@ -446,6 +446,7 @@ bool copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 
 bool copydb_table_create_lockfile(CopyDataSpec *specs,
 								  CopyTableDataSpec *tableSpecs,
+								  PGSQL *dst,
 								  bool *isDone);
 
 bool copydb_mark_table_as_done(CopyDataSpec *specs,

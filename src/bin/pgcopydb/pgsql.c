@@ -1330,6 +1330,44 @@ pgsql_has_sequence_privilege(PGSQL *pgsql,
 
 
 /*
+ * pgsql_has_table_privilege calls has_table_privilege() and copies the result
+ * in the granted boolean pointer given.
+ */
+bool
+pgsql_has_table_privilege(PGSQL *pgsql,
+						  const char *tablename,
+						  const char *privilege,
+						  bool *granted)
+{
+	SingleValueResultContext parseContext = { { 0 }, PGSQL_RESULT_BOOL, false };
+
+	char *sql = "select has_table_privilege($1, $2);";
+
+	int paramCount = 2;
+	Oid paramTypes[2] = { TEXTOID, TEXTOID };
+	const char *paramValues[2] = { tablename, privilege };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   &parseContext, &parseSingleValueResult))
+	{
+		log_error("Failed to query privileges for table \"%s\"", tablename);
+		return false;
+	}
+
+	if (!parseContext.parsedOk)
+	{
+		log_error("Failed to query privileges for table \"%s\"", tablename);
+		return false;
+	}
+
+	*granted = parseContext.boolVal;
+
+	return true;
+}
+
+
+/*
  * pgsql_get_search_path runs the query "show search_path" and copies the
  * result in the given pre-allocated string buffer.
  */
@@ -2614,7 +2652,8 @@ pgsql_truncate(PGSQL *pgsql, const char *qname)
 
 	sformat(sql, sizeof(sql), "TRUNCATE ONLY %s", qname);
 
-	log_sql("%s", sql);
+	/* this being more like a DDL operation, proper log level is NOTICE */
+	log_notice("%s", sql);
 
 	return pgsql_execute(pgsql, sql);
 }
@@ -2686,6 +2725,9 @@ pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args)
 			return false;
 		}
 	}
+
+	/* make sure to log TRUNCATE before we log COPY, avoid confusion */
+	log_notice("%s", args->logCommand);
 
 	/* SRC: COPY schema.table TO STDOUT */
 	if (!pg_copy_send_query(src, args, PGRES_COPY_OUT))
