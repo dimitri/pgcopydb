@@ -81,3 +81,12 @@ update public.identifer_as_column set "time" = 1 where "time" = 0;
 delete from public.identifer_as_column where "time" = 1;
 
 commit;
+
+--
+-- See https://github.com/dimitri/pgcopydb/issues/736
+--
+begin;
+
+insert into t_bit_types (a,b) values (B'10'::bit(3), B'101');
+
+commit;
