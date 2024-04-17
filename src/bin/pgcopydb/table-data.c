@@ -574,10 +574,21 @@ copydb_copy_supervisor_add_table_hook(void *ctx, SourceTable *table)
 		 * Before adding the table to be processed by workers, truncate it on
 		 * the target database now, avoiding concurrency issues.
 		 */
-		if (!pgsql_truncate(dst, table->qname))
+		bool granted = false;
+
+		if (!pgsql_has_table_privilege(dst, table->qname, "TRUNCATE", &granted))
 		{
 			/* errors have already been logged */
 			return false;
+		}
+
+		if (granted)
+		{
+			if (!pgsql_truncate(dst, table->qname))
+			{
+				/* errors have already been logged */
+				return false;
+			}
 		}
 
 		for (int i = 0; i < table->partition.partCount; i++)
@@ -899,7 +910,7 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 	 */
 	bool isDone = false;
 
-	if (!copydb_table_create_lockfile(specs, tableSpecs, &isDone))
+	if (!copydb_table_create_lockfile(specs, tableSpecs, dst, &isDone))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1026,6 +1037,7 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 bool
 copydb_table_create_lockfile(CopyDataSpec *specs,
 							 CopyTableDataSpec *tableSpecs,
+							 PGSQL *dst,
 							 bool *isDone)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
@@ -1101,9 +1113,36 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 	args->srcWhereClause = NULL;
 	args->dstQname = tableSpecs->sourceTable->qname;
 	args->dstAttrList = tableSpecs->sourceTable->attrList;
-	args->truncate = tableSpecs->sourceTable->partition.partCount <= 1;
+	args->truncate = false;     /* default value, see below */
 	args->freeze = tableSpecs->sourceTable->partition.partCount <= 1;
 	args->bytesTransmitted = 0;
+
+	/*
+	 * Check to see if we want to TRUNCATE the table and benefit from the COPY
+	 * FREEZE optimisation.
+	 *
+	 * First, if the table COPY is partitionned then we truncate at the
+	 * top-level rather than for each partition, disabling the COPY FREEZE
+	 * optimisation.
+	 *
+	 * Second, we need the permission to run the TRUNCATE command on the target
+	 * table on the target database.
+	 */
+	if (tableSpecs->sourceTable->partition.partCount <= 1)
+	{
+		bool granted = false;
+
+		if (!pgsql_has_table_privilege(dst,
+									   tableSpecs->sourceTable->qname,
+									   "TRUNCATE",
+									   &granted))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		args->truncate = granted;
+	}
 
 	if (!copydb_prepare_copy_query(tableSpecs, args))
 	{
@@ -1253,7 +1292,6 @@ copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 
 	/* Now copy the data from source to target */
 	CopyTableSummary *summary = &(tableSpecs->summary);
-	log_notice("%s", summary->command);
 
 	int attempts = 0;
 	int maxAttempts = 5;        /* allow 5 attempts total, 4 retries */
@@ -1405,6 +1443,9 @@ copydb_prepare_summary_command(CopyTableDataSpec *tableSpecs)
 
 	tableSummary->command =
 		command->data != NULL ? strdup(command->data) : NULL;
+
+	/* also keep a pointer around in the copyArgs structure */
+	tableSpecs->copyArgs.logCommand = tableSummary->command;
 
 	if (PQExpBufferBroken(command) || tableSummary->command == NULL)
 	{
