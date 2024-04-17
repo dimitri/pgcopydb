@@ -889,6 +889,25 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 			  table->qname,
 			  part);
 
+	/*
+	 * Now check that the table still exists on the source server.
+	 */
+	bool tableStillExists = true;
+
+	if (!copydb_check_table_exists(src, table, &tableStillExists))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!tableStillExists)
+	{
+		log_warn("Skipping table %s (oid %u) which does not exists anymore "
+				 "on the source database",
+				 table->qname, oid);
+		return true;
+	}
+
 	char psTitle[BUFSIZE] = { 0 };
 
 	if (table->partition.partCount > 0)
@@ -1455,4 +1474,54 @@ copydb_prepare_summary_command(CopyTableDataSpec *tableSpecs)
 	}
 
 	return true;
+}
+
+
+/*
+ * copydb_check_table_exists checks that a table still exists. In order to
+ * avoid race conditions when checking for existence, grab a explicit ACCESS
+ * SHARE LOCK on the table.
+ */
+bool
+copydb_check_table_exists(PGSQL *pgsql, SourceTable *table, bool *exists)
+{
+	if (!pgsql_table_exists(pgsql,
+							table->oid,
+							table->nspname,
+							table->relname,
+							exists))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* if the table does not exists, we stop here */
+	if (!exists)
+	{
+		return true;
+	}
+
+	/* if the table was reported to exists, try and lock it */
+	bool locked = pgsql_lock_table(pgsql, table->qname, "ACCESS SHARE");
+
+	if (!locked)
+	{
+		log_error("Failed to LOCK table %s in ACCESS SHARE mode", table->qname);
+	}
+
+	/*
+	 * If we failed to obtain the lock, maybe the table doesn't exists anymore,
+	 * in which case we do not want to report an error condition.
+	 */
+	if (!pgsql_table_exists(pgsql,
+							table->oid,
+							table->nspname,
+							table->relname,
+							exists))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return locked || !(*exists);
 }
