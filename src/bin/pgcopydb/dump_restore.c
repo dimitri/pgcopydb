@@ -456,6 +456,8 @@ copydb_target_drop_tables(CopyDataSpec *specs)
 		return false;
 	}
 
+	log_notice("%s", query->data);
+
 	PGSQL dst = { 0 };
 
 	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))

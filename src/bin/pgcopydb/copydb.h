@@ -461,6 +461,7 @@ bool copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs, CopyArgs *args);
 
 bool copydb_prepare_summary_command(CopyTableDataSpec *tableSpecs);
 
+bool copydb_check_table_exists(PGSQL *pgsql, SourceTable *table, bool *exists);
 
 /* blobs.c */
 bool copydb_start_blob_process(CopyDataSpec *specs);

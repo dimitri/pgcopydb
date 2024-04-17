@@ -2642,6 +2642,23 @@ validate_connection_string(const char *connectionString)
 
 
 /*
+ * pgsql_lock_table runs a LOCK command with given lockmode.
+ */
+bool
+pgsql_lock_table(PGSQL *pgsql, const char *qname, const char *lockmode)
+{
+	char sql[BUFSIZE] = { 0 };
+
+	sformat(sql, sizeof(sql), "LOCK TABLE ONLY %s IN %s MODE", qname, lockmode);
+
+	/* this is an internal operation, not meaningful from the outside */
+	log_sql("%s", sql);
+
+	return pgsql_execute(pgsql, sql);
+}
+
+
+/*
  * pgsql_truncate executes the TRUNCATE command on the given quoted relation
  * name qname, in the given Postgres connection.
  */
@@ -5401,6 +5418,7 @@ parseReplicationSlot(void *ctx, PGresult *result)
  */
 bool
 pgsql_table_exists(PGSQL *pgsql,
+				   uint32_t oid,
 				   const char *nspname,
 				   const char *relname,
 				   bool *exists)
@@ -5412,13 +5430,18 @@ pgsql_table_exists(PGSQL *pgsql,
 		"         select 1 "
 		"           from pg_class c "
 		"                join pg_namespace n on n.oid = c.relnamespace "
-		"          where n.nspname = $1 "
-		"            and c.relname = $2"
+		"          where c.oid = $1 "
+		"            and format('%I', n.nspname) = $2 "
+		"            and format('%I', c.relname) = $3"
 		"       )";
 
-	int paramCount = 2;
-	const Oid paramTypes[2] = { TEXTOID, TEXTOID };
-	const char *paramValues[2] = { nspname, relname };
+	int paramCount = 3;
+	const Oid paramTypes[3] = { OIDOID, TEXTOID, TEXTOID };
+	const char *paramValues[3] = { 0 };
+
+	paramValues[0] = intToString(oid).strValue;
+	paramValues[1] = nspname;
+	paramValues[2] = relname;
 
 	if (!pgsql_execute_with_params(pgsql, existsQuery,
 								   paramCount, paramTypes, paramValues,

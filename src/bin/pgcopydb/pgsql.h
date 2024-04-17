@@ -322,6 +322,8 @@ void pgAutoCtlDebugNoticeProcessor(void *arg, const char *message);
 
 bool validate_connection_string(const char *connectionString);
 
+bool pgsql_lock_table(PGSQL *pgsql, const char *qname, const char *lockmode);
+
 bool pgsql_truncate(PGSQL *pgsql, const char *qname);
 
 typedef struct CopyArgs
@@ -563,6 +565,7 @@ bool pgsql_role_exists(PGSQL *pgsql, const char *roleName, bool *exists);
 bool pgsql_configuration_exists(PGSQL *pgsql, const char *setconfig, bool *exists);
 
 bool pgsql_table_exists(PGSQL *pgsql,
+						uint32_t oid,
 						const char *relname,
 						const char *nspname,
 						bool *exists);
