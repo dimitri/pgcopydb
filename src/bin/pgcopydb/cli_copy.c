@@ -28,6 +28,7 @@ static void cli_copy_sequences(int argc, char **argv);
 static void cli_copy_indexes(int argc, char **argv);
 static void cli_copy_constraints(int argc, char **argv);
 static void cli_copy_blobs(int argc, char **argv);
+static void cli_copy_schemas(int argc, char **argv);
 
 static CommandLine copy_db_command =
 	make_command(
@@ -202,6 +203,21 @@ static CommandLine copy_constraints_command =
 		cli_copy_db_getopts,
 		cli_copy_constraints);
 
+static CommandLine copy_schemas_command =
+	make_command(
+		"schemas",
+		"Create all the schemas found in the source database in the target",
+		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
+		"  --source             Postgres URI to the source database\n"
+		"  --target             Postgres URI to the target database\n"
+		"  --dir                Work directory to use\n"
+		"  --filters <filename> Use the filters defined in <filename>\n"
+		"  --restart            Allow restarting when temp files exist already\n"
+		"  --resume             Allow resuming operations after a failure\n"
+		"  --not-consistent     Allow taking a new snapshot on the source database\n",
+		cli_copy_db_getopts,
+		cli_copy_schemas);
+
 static CommandLine *copy_subcommands[] = {
 	&copy_db_command,
 	&copy_roles_command,
@@ -213,6 +229,7 @@ static CommandLine *copy_subcommands[] = {
 	&copy_sequence_command,
 	&copy_indexes_command,
 	&copy_constraints_command,
+	&copy_schemas_command,
 	NULL
 };
 
@@ -655,5 +672,51 @@ cli_copy_extensions(int argc, char **argv)
 		log_error("Some sub-processes have exited with error status, "
 				  "see above for details");
 		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+}
+
+
+/*
+ * cli_copy_schemas implements copying schemas
+ */
+static void
+cli_copy_schemas(int argc, char **argv)
+{
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_SCHEMAS);
+
+	/*
+	 * First, we need to open a snapshot that we're going to re-use in all our
+	 * connections to the source database. When the --snapshot option has been
+	 * used, instead of exporting a new snapshot, we can just re-use it.
+	 */
+	if (!copydb_prepare_snapshot(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/* fetch schema information from source catalogs, including filtering */
+	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!copydb_dump_source_schema(&copySpecs,
+								   copySpecs.sourceSnapshot.snapshot,
+								   PG_DUMP_SECTION_PRE_DATA))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/* Now restore the pre-data, but only the schemas */
+	if (!copydb_target_prepare_schema(&copySpecs))
+	{
+		log_error(
+			"Failed to prepare schema on the target database, see above for details");
+		exit(EXIT_CODE_TARGET);
 	}
 }

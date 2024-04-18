@@ -198,6 +198,15 @@ is found existing already on the target database.
 
 .. include:: ../include/copy-constraints.rst
 
+pgcopydb copy schemas
+---------------------
+
+pgcopydb copy schemas - Creates all the schemas found in the source database in the target
+
+The command ``pgcopydb copy schemas`` fetches all the CREATE SCHEMA commands from the pre-data section of pg_dump. Ownership and ACLs can also be restored if they pre-exist, or the ``pgcopydb copy roles`` command can be used beforehand.
+
+.. include:: ../include/copy-schemas.rst
+
 Description
 -----------
 
