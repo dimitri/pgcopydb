@@ -58,6 +58,7 @@ grep -v "OWNER TO postgres" /usr/src/pagila/pagila-schema.sql > /tmp/pagila-sche
 psql -o /tmp/s.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /tmp/pagila-schema.sql
 psql -o /tmp/d.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
 psql -o /tmp/c.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pgcopydb/countries.sql
+psql -o /tmp/d.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pgcopydb/ddl.sql
 
 # take a snapshot using role pagila on source database
 coproc ( pgcopydb snapshot --debug )
