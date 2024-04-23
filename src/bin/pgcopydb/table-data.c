@@ -42,12 +42,6 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	if (!summary_start_timing(sourceDB, TIMING_SECTION_TOTAL_DATA))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	if (specs->runState.tableCopyIsDone &&
 		specs->runState.indexCopyIsDone &&
 		specs->runState.sequenceCopyIsDone &&
@@ -56,6 +50,12 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 		log_info("Skipping tables, indexes, and sequences, "
 				 "already done on a previous run");
 		return true;
+	}
+
+	if (!summary_start_timing(sourceDB, TIMING_SECTION_TOTAL_DATA))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	/* close SQLite databases before fork() */
@@ -574,10 +574,21 @@ copydb_copy_supervisor_add_table_hook(void *ctx, SourceTable *table)
 		 * Before adding the table to be processed by workers, truncate it on
 		 * the target database now, avoiding concurrency issues.
 		 */
-		if (!pgsql_truncate(dst, table->qname))
+		bool granted = false;
+
+		if (!pgsql_has_table_privilege(dst, table->qname, "TRUNCATE", &granted))
 		{
 			/* errors have already been logged */
 			return false;
+		}
+
+		if (granted)
+		{
+			if (!pgsql_truncate(dst, table->qname))
+			{
+				/* errors have already been logged */
+				return false;
+			}
 		}
 
 		for (int i = 0; i < table->partition.partCount; i++)
@@ -739,7 +750,9 @@ copydb_table_data_worker(CopyDataSpec *specs)
 		return false;
 	}
 
-	while (true)
+	bool stop = false;
+
+	while (!stop)
 	{
 		QMessage mesg = { 0 };
 		bool recv_ok = queue_receive(&(specs->copyQueue), &mesg);
@@ -761,10 +774,9 @@ copydb_table_data_worker(CopyDataSpec *specs)
 		{
 			case QMSG_TYPE_STOP:
 			{
+				stop = true;
 				log_debug("Stop message received by COPY worker");
-				(void) copydb_close_snapshot(specs);
-				pgsql_finish(&dst);
-				return true;
+				break;
 			}
 
 			case QMSG_TYPE_TABLEPOID:
@@ -826,7 +838,7 @@ copydb_table_data_worker(CopyDataSpec *specs)
 		return false;
 	}
 
-	return errors == 0;
+	return stop == true && errors == 0;
 }
 
 
@@ -877,6 +889,25 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 			  table->qname,
 			  part);
 
+	/*
+	 * Now check that the table still exists on the source server.
+	 */
+	bool tableStillExists = true;
+
+	if (!copydb_check_table_exists(src, table, &tableStillExists))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!tableStillExists)
+	{
+		log_warn("Skipping table %s (oid %u) which does not exists anymore "
+				 "on the source database",
+				 table->qname, oid);
+		return true;
+	}
+
 	char psTitle[BUFSIZE] = { 0 };
 
 	if (table->partition.partCount > 0)
@@ -898,36 +929,42 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 	 */
 	bool isDone = false;
 
-	if (!copydb_table_create_lockfile(specs, tableSpecs, &isDone))
+	if (!copydb_table_create_lockfile(specs, tableSpecs, dst, &isDone))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
+	/*
+	 * Skip only table-data copy when it it has been done already on a previous
+	 * run. We still need to process the indexes, constraints, and vacuum.
+	 * So, signal the index and vacuum workers as usual.
+	 */
 	if (isDone)
 	{
-		log_info("Skipping table %s (%u), already done on a previous run",
+		log_info("Skipping table-data %s (%u), already done on a previous run",
 				 tableSpecs->sourceTable->qname,
 				 tableSpecs->sourceTable->oid);
-		return true;
 	}
-
-	/*
-	 * 1. Now COPY the TABLE DATA from the source to the destination.
-	 */
-	if (!table->excludeData)
+	else
 	{
-		if (!copydb_copy_table(specs, src, dst, tableSpecs))
+		/*
+		 * 1. Now COPY the TABLE DATA from the source to the destination.
+		 */
+		if (!table->excludeData)
+		{
+			if (!copydb_copy_table(specs, src, dst, tableSpecs))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+		}
+
+		if (!copydb_mark_table_as_done(specs, tableSpecs))
 		{
 			/* errors have already been logged */
 			return false;
 		}
-	}
-
-	if (!copydb_mark_table_as_done(specs, tableSpecs))
-	{
-		/* errors have already been logged */
-		return false;
 	}
 
 	if (specs->section == DATA_SECTION_TABLE_DATA)
@@ -1019,6 +1056,7 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 bool
 copydb_table_create_lockfile(CopyDataSpec *specs,
 							 CopyTableDataSpec *tableSpecs,
+							 PGSQL *dst,
 							 bool *isDone)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
@@ -1094,9 +1132,36 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 	args->srcWhereClause = NULL;
 	args->dstQname = tableSpecs->sourceTable->qname;
 	args->dstAttrList = tableSpecs->sourceTable->attrList;
-	args->truncate = tableSpecs->sourceTable->partition.partCount <= 1;
+	args->truncate = false;     /* default value, see below */
 	args->freeze = tableSpecs->sourceTable->partition.partCount <= 1;
 	args->bytesTransmitted = 0;
+
+	/*
+	 * Check to see if we want to TRUNCATE the table and benefit from the COPY
+	 * FREEZE optimisation.
+	 *
+	 * First, if the table COPY is partitionned then we truncate at the
+	 * top-level rather than for each partition, disabling the COPY FREEZE
+	 * optimisation.
+	 *
+	 * Second, we need the permission to run the TRUNCATE command on the target
+	 * table on the target database.
+	 */
+	if (tableSpecs->sourceTable->partition.partCount <= 1)
+	{
+		bool granted = false;
+
+		if (!pgsql_has_table_privilege(dst,
+									   tableSpecs->sourceTable->qname,
+									   "TRUNCATE",
+									   &granted))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		args->truncate = granted;
+	}
 
 	if (!copydb_prepare_copy_query(tableSpecs, args))
 	{
@@ -1246,7 +1311,6 @@ copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 
 	/* Now copy the data from source to target */
 	CopyTableSummary *summary = &(tableSpecs->summary);
-	log_notice("%s", summary->command);
 
 	int attempts = 0;
 	int maxAttempts = 5;        /* allow 5 attempts total, 4 retries */
@@ -1399,6 +1463,9 @@ copydb_prepare_summary_command(CopyTableDataSpec *tableSpecs)
 	tableSummary->command =
 		command->data != NULL ? strdup(command->data) : NULL;
 
+	/* also keep a pointer around in the copyArgs structure */
+	tableSpecs->copyArgs.logCommand = tableSummary->command;
+
 	if (PQExpBufferBroken(command) || tableSummary->command == NULL)
 	{
 		log_error("Failed to create summary command for %s: out of memory",
@@ -1407,4 +1474,54 @@ copydb_prepare_summary_command(CopyTableDataSpec *tableSpecs)
 	}
 
 	return true;
+}
+
+
+/*
+ * copydb_check_table_exists checks that a table still exists. In order to
+ * avoid race conditions when checking for existence, grab a explicit ACCESS
+ * SHARE LOCK on the table.
+ */
+bool
+copydb_check_table_exists(PGSQL *pgsql, SourceTable *table, bool *exists)
+{
+	if (!pgsql_table_exists(pgsql,
+							table->oid,
+							table->nspname,
+							table->relname,
+							exists))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* if the table does not exists, we stop here */
+	if (!exists)
+	{
+		return true;
+	}
+
+	/* if the table was reported to exists, try and lock it */
+	bool locked = pgsql_lock_table(pgsql, table->qname, "ACCESS SHARE");
+
+	if (!locked)
+	{
+		log_error("Failed to LOCK table %s in ACCESS SHARE mode", table->qname);
+	}
+
+	/*
+	 * If we failed to obtain the lock, maybe the table doesn't exists anymore,
+	 * in which case we do not want to report an error condition.
+	 */
+	if (!pgsql_table_exists(pgsql,
+							table->oid,
+							table->nspname,
+							table->relname,
+							exists))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return locked || !(*exists);
 }

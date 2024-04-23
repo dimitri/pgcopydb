@@ -400,9 +400,9 @@ bool copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
 bool copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section);
 
 /* sequences.c */
-bool copydb_copy_all_sequences(CopyDataSpec *specs);
+bool copydb_copy_all_sequences(CopyDataSpec *specs, bool reset);
 bool copydb_start_seq_process(CopyDataSpec *specs);
-bool copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql);
+bool copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql, bool reset);
 
 /* copydb_schema.c */
 bool copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs);
@@ -412,11 +412,12 @@ bool copydb_objectid_is_filtered_out(CopyDataSpec *specs,
 
 bool copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql);
 bool copydb_prepare_index_specs(CopyDataSpec *specs, PGSQL *pgsql);
+bool copydb_prepare_namespace_specs(CopyDataSpec *specs, PGSQL *pgsql);
 bool copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql);
 
 bool copydb_prepare_target_catalog(CopyDataSpec *specs);
 bool copydb_schema_already_exists(CopyDataSpec *specs,
-								  const char *restoreListName,
+								  uint32_t sourceOid,
 								  bool *exists);
 
 /* table-data.c */
@@ -445,6 +446,7 @@ bool copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 
 bool copydb_table_create_lockfile(CopyDataSpec *specs,
 								  CopyTableDataSpec *tableSpecs,
+								  PGSQL *dst,
 								  bool *isDone);
 
 bool copydb_mark_table_as_done(CopyDataSpec *specs,
@@ -459,6 +461,7 @@ bool copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs, CopyArgs *args);
 
 bool copydb_prepare_summary_command(CopyTableDataSpec *tableSpecs);
 
+bool copydb_check_table_exists(PGSQL *pgsql, SourceTable *table, bool *exists);
 
 /* blobs.c */
 bool copydb_start_blob_process(CopyDataSpec *specs);

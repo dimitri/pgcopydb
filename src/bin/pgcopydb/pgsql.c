@@ -30,6 +30,13 @@
 #include "signals.h"
 #include "string_utils.h"
 
+#if defined(LIBPQ_HAS_PIPELINING) && LIBPQ_HAS_PIPELINING
+#define pqPipelineModeEnabled(conn) (PQpipelineStatus(conn) == PQ_PIPELINE_ON)
+#else
+#warning Compiling pgcopydb without libpq pipeline mode, available from libpq 14 and later
+#define pqPipelineModeEnabled(conn) (false)
+#endif
+
 static char * ConnectionTypeToString(ConnectionType connectionType);
 static void log_connection_error(PGconn *connection, int logLevel);
 static void pgAutoCtlDefaultNoticeProcessor(void *arg, const char *message);
@@ -1323,6 +1330,44 @@ pgsql_has_sequence_privilege(PGSQL *pgsql,
 
 
 /*
+ * pgsql_has_table_privilege calls has_table_privilege() and copies the result
+ * in the granted boolean pointer given.
+ */
+bool
+pgsql_has_table_privilege(PGSQL *pgsql,
+						  const char *tablename,
+						  const char *privilege,
+						  bool *granted)
+{
+	SingleValueResultContext parseContext = { { 0 }, PGSQL_RESULT_BOOL, false };
+
+	char *sql = "select has_table_privilege($1, $2);";
+
+	int paramCount = 2;
+	Oid paramTypes[2] = { TEXTOID, TEXTOID };
+	const char *paramValues[2] = { tablename, privilege };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   &parseContext, &parseSingleValueResult))
+	{
+		log_error("Failed to query privileges for table \"%s\"", tablename);
+		return false;
+	}
+
+	if (!parseContext.parsedOk)
+	{
+		log_error("Failed to query privileges for table \"%s\"", tablename);
+		return false;
+	}
+
+	*granted = parseContext.boolVal;
+
+	return true;
+}
+
+
+/*
  * pgsql_get_search_path runs the query "show search_path" and copies the
  * result in the given pre-allocated string buffer.
  */
@@ -1496,6 +1541,16 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 		return false;
 	}
 
+	bool pipelineMode = pqPipelineModeEnabled(connection);
+
+	/* parseFun is not allowed in pipeline mode */
+	if (pipelineMode && parseFun != NULL)
+	{
+		log_error("BUG: pgsql_execute_with_params called in pipeline mode "
+				  "with a parseFun callback");
+		return false;
+	}
+
 	char *endpoint =
 		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
 
@@ -1523,7 +1578,7 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 
 	int sentQuery = 0;
 
-	if (paramCount == 0)
+	if (paramCount == 0 && !pipelineMode)
 	{
 		sentQuery = PQsendQuery(connection, sql);
 	}
@@ -1553,23 +1608,27 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 	bool done = false;
 	int errors = 0;
 
-	while (!done)
+	/* Don't fetch results in pipeline mode */
+	if (!pipelineMode)
 	{
-		if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
+		while (!done)
 		{
-			log_error("Postgres query was interrupted: %s", sql);
+			if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
+			{
+				log_error("Postgres query was interrupted: %s", sql);
 
-			destroyPQExpBuffer(debugParameters);
-			(void) pgsql_finish(pgsql);
+				destroyPQExpBuffer(debugParameters);
+				(void) pgsql_finish(pgsql);
 
-			return false;
-		}
+				return false;
+			}
 
-		/* this uses select() with a timeout: we're not busy looping */
-		if (!pgsql_fetch_results(pgsql, &done, context, parseFun))
-		{
-			++errors;
-			break;
+			/* this uses select() with a timeout: we're not busy looping */
+			if (!pgsql_fetch_results(pgsql, &done, context, parseFun))
+			{
+				++errors;
+				break;
+			}
 		}
 	}
 
@@ -1594,7 +1653,12 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 	}
 
 	destroyPQExpBuffer(debugParameters);
-	clear_results(pgsql);
+
+	/* Don't clear results in pipeline mode */
+	if (!pipelineMode)
+	{
+		clear_results(pgsql);
+	}
 
 	if (pgsql->connectionStatementType == PGSQL_CONNECTION_SINGLE_STATEMENT)
 	{
@@ -1844,6 +1908,218 @@ pgsql_fetch_results(PGSQL *pgsql, bool *done,
 
 
 /*
+ * pgsql_enable_pipeline_mode enables the pipeline mode in the given PGSQL
+ * connection. It also sets the connection to non-blocking mode.
+ */
+bool
+pgsql_enable_pipeline_mode(PGSQL *pgsql)
+{
+#if defined(LIBPQ_HAS_PIPELINING) && LIBPQ_HAS_PIPELINING
+	PGconn *conn = pgsql_open_connection(pgsql);
+
+	if (conn == NULL)
+	{
+		return false;
+	}
+
+	if (PQpipelineStatus(conn) == PQ_PIPELINE_ON)
+	{
+		log_error("BUG: pgsql_enable_pipeline_mode called with connection "
+				  "already in pipeline mode");
+		return false;
+	}
+
+	/* enter pipeline mode */
+	if (PQenterPipelineMode(conn) != 1)
+	{
+		(void) pgcopy_log_error(pgsql, NULL, "Failed to enter pipeline");
+		return false;
+	}
+
+	/* set non-blocking mode */
+	if (PQsetnonblocking(conn, 1) != 0)
+	{
+		(void) pgcopy_log_error(pgsql, NULL, "Failed to set non-blocking mode");
+		return false;
+	}
+
+	log_trace("Enabled pipeline mode");
+	return true;
+#else
+	static bool warned = false;
+
+	if (!warned)
+	{
+		log_warn("Skipping libpq pipeline mode optimisation because pgcopydb "
+				 "was built with libpq " PG_MAJORVERSION
+				 ", pipeline mode is available since libpq 14");
+
+		warned = true;
+	}
+
+	return true;
+#endif
+}
+
+
+/*
+ * pgsql_sync_pipeline drains the pipeline by sending a SYNC message and
+ * reads results until we get a PGRES_PIPELINE_SYNC result.
+ */
+bool
+pgsql_sync_pipeline(PGSQL *pgsql)
+{
+#if defined(LIBPQ_HAS_PIPELINING) && LIBPQ_HAS_PIPELINING
+	PGconn *conn = pgsql->connection;
+
+	if (conn == NULL)
+	{
+		log_error("BUG: pgsql_sync_pipeline called with NULL connection");
+		return false;
+	}
+
+	log_trace("Start pipeline sync");
+
+	if (PQpipelineStatus(conn) != PQ_PIPELINE_ON)
+	{
+		log_error("BUG: Connection is not in pipeline mode");
+		return false;
+	}
+
+	if (PQsocket(conn) < 0)
+	{
+		(void) pgsql_stream_log_error(pgsql, NULL, "invalid socket");
+
+		clear_results(pgsql);
+		pgsql_finish(pgsql);
+
+		return false;
+	}
+
+	if (PQpipelineSync(conn) != 1)
+	{
+		(void) pgcopy_log_error(pgsql, NULL, "Failed send sync pipeline");
+		return false;
+	}
+
+	bool syncReceived = false;
+
+	while (!syncReceived)
+	{
+		if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
+		{
+			log_error("Pipeline sync was interrupted");
+
+			clear_results(pgsql);
+			pgsql_finish(pgsql);
+
+			return false;
+		}
+
+		fd_set input_mask;
+		struct timeval timeout;
+		struct timeval *timeoutptr = NULL;
+
+		/* sleep for 10ms to wait for input on the Postgres socket */
+		timeout.tv_sec = 0;
+		timeout.tv_usec = 10000;
+		timeoutptr = &timeout;
+
+		FD_ZERO(&input_mask);
+		FD_SET(PQsocket(conn), &input_mask);
+
+		int r = select(PQsocket(conn) + 1, &input_mask, NULL, NULL, timeoutptr);
+
+		if (r == 0 || (r < 0 && errno == EINTR))
+		{
+			/* got a timeout or signal. The caller will get back later. */
+			continue;
+		}
+		else if (r < 0)
+		{
+			(void) pgsql_stream_log_error(pgsql, NULL, "select failed: %m");
+
+			clear_results(pgsql);
+			pgsql_finish(pgsql);
+
+			return false;
+		}
+
+		/* Else there is actually data on the socket */
+		if (PQconsumeInput(conn) == 0)
+		{
+			(void) pgsql_stream_log_error(
+				pgsql,
+				NULL,
+				"Failed to consume input for pipeline sync");
+			return false;
+		}
+
+		int results = 0;
+
+		while (!PQisBusy(conn))
+		{
+			PGresult *res = PQgetResult(conn);
+
+			if (res == NULL)
+			{
+				/*
+				 * NULL represents a end of result for a single query, but we are
+				 * in pipeline mode and we can have multiple results.
+				 *
+				 * We need to continue consuming until we get a SYNC message.
+				 */
+
+				continue;
+			}
+
+			results++;
+
+			ExecStatusType resultStatus = PQresultStatus(res);
+
+			PQclear(res);
+
+			if (resultStatus == PGRES_PIPELINE_SYNC)
+			{
+				syncReceived = true;
+
+				log_trace("Received pipeline sync. Total results: %d", results);
+
+				break;
+			}
+
+			if (!is_response_ok(res))
+			{
+				(void) pgcopy_log_error(pgsql, res, "Failed to receive pipeline sync");
+				return false;
+			}
+		}
+	}
+
+	/* update the last pipeline sync time */
+	pgsql->pipelineSyncTime = time(NULL);
+
+	log_trace("Endof pipeline sync");
+
+	return true;
+#else
+	static bool warned = false;
+
+	if (!warned)
+	{
+		log_warn("Skipping libpq pipeline mode optimisation because pgcopydb "
+				 "was built with libpq " PG_MAJORVERSION
+				 ", pipeline mode is available since libpq 14");
+
+		warned = true;
+	}
+
+	return true;
+#endif
+}
+
+
+/*
  * pgsql_prepare implements server-side prepared statements by using the
  * Postgres protocol prepare/bind/execute messages. Use with
  * pgsql_execute_prepared().
@@ -1859,6 +2135,8 @@ pgsql_prepare(PGSQL *pgsql, const char *name, const char *sql,
 		return false;
 	}
 
+	bool pipelineMode = pqPipelineModeEnabled(connection);
+
 	char *endpoint =
 		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
 
@@ -1868,9 +2146,21 @@ pgsql_prepare(PGSQL *pgsql, const char *name, const char *sql,
 				endpoint, PQbackendPID(connection), name, sql);
 	}
 
-	PGresult *result = PQprepare(connection, name, sql, paramCount, paramTypes);
+	PGresult *result = NULL;
+	bool ok = false;
 
-	if (!is_response_ok(result))
+	if (pipelineMode)
+	{
+		ok = PQsendPrepare(connection, name, sql, paramCount, paramTypes) != 0;
+	}
+	else
+	{
+		result = PQprepare(connection, name, sql, paramCount, paramTypes);
+
+		ok = is_response_ok(result);
+	}
+
+	if (!ok)
 	{
 		pgsql_execute_log_error(pgsql, result, sql, NULL, NULL);
 
@@ -1886,8 +2176,13 @@ pgsql_prepare(PGSQL *pgsql, const char *name, const char *sql,
 		return false;
 	}
 
-	PQclear(result);
-	clear_results(pgsql);
+	/* Don't clear results in pipeline mode */
+	if (!pipelineMode)
+	{
+		PQclear(result);
+		clear_results(pgsql);
+	}
+
 	if (pgsql->connectionStatementType == PGSQL_CONNECTION_SINGLE_STATEMENT)
 	{
 		(void) pgsql_finish(pgsql);
@@ -1913,6 +2208,16 @@ pgsql_execute_prepared(PGSQL *pgsql, const char *name,
 
 	if (connection == NULL)
 	{
+		return false;
+	}
+
+	bool pipelineMode = pqPipelineModeEnabled(connection);
+
+	/* parseFun is not allowed in pipeline mode */
+	if (pipelineMode && parseFun != NULL)
+	{
+		log_error("BUG: pgsql_execute_prepared called in pipeline mode "
+				  "with a parseFun callback");
 		return false;
 	}
 
@@ -1942,11 +2247,25 @@ pgsql_execute_prepared(PGSQL *pgsql, const char *name,
 		}
 	}
 
-	PGresult *result = PQexecPrepared(connection, name,
-									  paramCount, paramValues,
-									  NULL, NULL, 0);
+	PGresult *result = NULL;
+	bool ok = false;
 
-	if (!is_response_ok(result))
+	if (pipelineMode)
+	{
+		ok = PQsendQueryPrepared(connection, name,
+								 paramCount, paramValues,
+								 NULL, NULL, 0) != 0;
+	}
+	else
+	{
+		result = PQexecPrepared(connection, name,
+								paramCount, paramValues,
+								NULL, NULL, 0);
+
+		ok = is_response_ok(result);
+	}
+
+	if (!ok)
 	{
 		char sql[BUFSIZE] = { 0 };
 		sformat(sql, sizeof(sql), "EXECUTE %s;", name);
@@ -1973,8 +2292,13 @@ pgsql_execute_prepared(PGSQL *pgsql, const char *name,
 
 	destroyPQExpBuffer(debugParameters);
 
-	PQclear(result);
-	clear_results(pgsql);
+	/* Don't clear results in pipeline mode */
+	if (!pipelineMode)
+	{
+		PQclear(result);
+		clear_results(pgsql);
+	}
+
 	if (pgsql->connectionStatementType == PGSQL_CONNECTION_SINGLE_STATEMENT)
 	{
 		(void) pgsql_finish(pgsql);
@@ -2318,6 +2642,23 @@ validate_connection_string(const char *connectionString)
 
 
 /*
+ * pgsql_lock_table runs a LOCK command with given lockmode.
+ */
+bool
+pgsql_lock_table(PGSQL *pgsql, const char *qname, const char *lockmode)
+{
+	char sql[BUFSIZE] = { 0 };
+
+	sformat(sql, sizeof(sql), "LOCK TABLE ONLY %s IN %s MODE", qname, lockmode);
+
+	/* this is an internal operation, not meaningful from the outside */
+	log_sql("%s", sql);
+
+	return pgsql_execute(pgsql, sql);
+}
+
+
+/*
  * pgsql_truncate executes the TRUNCATE command on the given quoted relation
  * name qname, in the given Postgres connection.
  */
@@ -2328,7 +2669,8 @@ pgsql_truncate(PGSQL *pgsql, const char *qname)
 
 	sformat(sql, sizeof(sql), "TRUNCATE ONLY %s", qname);
 
-	log_sql("%s", sql);
+	/* this being more like a DDL operation, proper log level is NOTICE */
+	log_notice("%s", sql);
 
 	return pgsql_execute(pgsql, sql);
 }
@@ -2400,6 +2742,9 @@ pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args)
 			return false;
 		}
 	}
+
+	/* make sure to log TRUNCATE before we log COPY, avoid confusion */
+	log_notice("%s", args->logCommand);
 
 	/* SRC: COPY schema.table TO STDOUT */
 	if (!pg_copy_send_query(src, args, PGRES_COPY_OUT))
@@ -5073,6 +5418,7 @@ parseReplicationSlot(void *ctx, PGresult *result)
  */
 bool
 pgsql_table_exists(PGSQL *pgsql,
+				   uint32_t oid,
 				   const char *nspname,
 				   const char *relname,
 				   bool *exists)
@@ -5084,13 +5430,18 @@ pgsql_table_exists(PGSQL *pgsql,
 		"         select 1 "
 		"           from pg_class c "
 		"                join pg_namespace n on n.oid = c.relnamespace "
-		"          where n.nspname = $1 "
-		"            and c.relname = $2"
+		"          where c.oid = $1 "
+		"            and format('%I', n.nspname) = $2 "
+		"            and format('%I', c.relname) = $3"
 		"       )";
 
-	int paramCount = 2;
-	const Oid paramTypes[2] = { TEXTOID, TEXTOID };
-	const char *paramValues[2] = { nspname, relname };
+	int paramCount = 3;
+	const Oid paramTypes[3] = { OIDOID, TEXTOID, TEXTOID };
+	const char *paramValues[3] = { 0 };
+
+	paramValues[0] = intToString(oid).strValue;
+	paramValues[1] = nspname;
+	paramValues[2] = relname;
 
 	if (!pgsql_execute_with_params(pgsql, existsQuery,
 								   paramCount, paramTypes, paramValues,

@@ -362,8 +362,11 @@ typedef struct StreamApplyContext
 {
 	CDCPaths paths;
 
-	/* target connection */
-	PGSQL pgsql;
+	/* target connection to find current wal_lsn for replay_lsn mapping */
+	PGSQL controlPgConn;
+
+	/* target connection created in pipeline mode responsible for apply */
+	PGSQL applyPgConn;
 
 	/* apply needs access to the catalogs to register sentinel replay_lsn */
 	DatabaseCatalog *sourceDB;
@@ -649,6 +652,8 @@ bool stream_apply_catchup(StreamSpecs *specs);
 
 bool stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context);
 
+bool stream_apply_cleanup(StreamApplyContext *context);
+
 bool stream_apply_wait_for_sentinel(StreamSpecs *specs,
 									StreamApplyContext *context);
 
@@ -674,14 +679,9 @@ bool computeSQLFileName(StreamApplyContext *context);
 
 bool parseSQLAction(const char *query, LogicalMessageMetadata *metadata);
 
-bool stream_apply_track_insert_lsn(StreamApplyContext *context,
-								   uint64_t sourceLSN);
-
 bool stream_apply_find_durable_lsn(StreamApplyContext *context,
 								   uint64_t *durableLSN);
 
-bool stream_apply_write_lsn_tracking(StreamApplyContext *context);
-bool stream_apply_read_lsn_tracking(StreamApplyContext *context);
 
 /* ld_replay */
 bool stream_replay(StreamSpecs *specs);
