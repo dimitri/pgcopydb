@@ -48,3 +48,18 @@ begin;
 update public.payment set amount = 11.99 where amount = 11.95;
 
 commit;
+
+--
+-- Test "is null" transformation in change data capture.
+--
+begin;
+
+-- Disable triggers to prevent automatic refresh of 'last_updated' attribute
+-- when modifying rows in the address table.
+set session_replication_role = replica;
+
+delete from address where city_id = 300 and address2 is null;
+
+update address set postal_code = '751007' where phone = '6172235589' and address2 is null;
+
+commit;
