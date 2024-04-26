@@ -11,7 +11,6 @@
 
 #include "postgres.h"
 #include "postgres_fe.h"
-#include "libpq-fe.h"
 #include "access/xlog_internal.h"
 #include "access/xlogdefs.h"
 
@@ -294,19 +293,18 @@ SetMessageRelation(JSON_Object *jsobj,
 	}
 
 	table->nspname = pgsql_escape_identifier(pgsql, schema);
+
 	if (table->nspname == NULL)
 	{
 		return false;
 	}
 
 	table->relname = pgsql_escape_identifier(pgsql, relname);
+
 	if (table->relname == NULL)
 	{
-		PQfreemem(table->nspname);
 		return false;
 	}
-
-	table->pqMemory = true;
 
 	return true;
 }

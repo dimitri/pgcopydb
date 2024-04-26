@@ -5650,9 +5650,7 @@ pgsql_current_wal_insert_lsn(PGSQL *pgsql, uint64_t *lsn)
 /*
  * pgsql_escape_identifier escapes PostgreSQL identifiers and always encloses
  * the resulting string in quotes. It utilizes the PQescapeIdentifier function
- * (https://www.postgresql.org/docs/current/libpq-exec.html#LIBPQ-PQESCAPEIDENTIFIER),
- * so the memory allocated for the resulting string must be freed using
- * PQfreemem.
+ * (https://www.postgresql.org/docs/current/libpq-exec.html#LIBPQ-PQESCAPEIDENTIFIER).
  */
 char *
 pgsql_escape_identifier(PGSQL *pgsql, char *src)
@@ -5671,5 +5669,29 @@ pgsql_escape_identifier(PGSQL *pgsql, char *src)
 		return NULL;
 	}
 
-	return escapedIdentifier;
+	/*
+	 * The PQescapeIdentifier function returns a string that is allocated
+	 * using C's malloc. However, we use libgc to manage memory with in
+	 * pgcopydb, so we need to copy the string into a new memory location
+	 * that is managed by libgc.
+	 *
+	 * Please note that the below strdup is a macro that uses libgc's
+	 * GC_strdup function which is defined in defaults.h.
+	 */
+	char *escapedIdentifierCopy = strdup(escapedIdentifier);
+
+	if (escapedIdentifierCopy == NULL)
+	{
+		log_error("Failed to allocate memory for escaped identifier %s",
+				  escapedIdentifier);
+		return NULL;
+	}
+
+	/*
+	 * Free escapedIdentifier as we already copied the string into a memory
+	 * location managed by libgc.
+	 */
+	PQfreemem(escapedIdentifier);
+
+	return escapedIdentifierCopy;
 }
