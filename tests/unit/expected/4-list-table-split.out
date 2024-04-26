@@ -1,30 +1,32 @@
-2023-07-31 13:58:39 96 INFO   main.c:163                Running pgcopydb version 0.13.3.g1e88091 from "/usr/local/bin/pgcopydb"
-2023-07-31 13:58:39 96 INFO   cli_list.c:1081           Listing COPY partitions for table "public"."table_1" in "postgres://postgres@source/postgres"
-2023-07-31 13:58:39 96 INFO   cli_list.c:1195           Table "public"."table_1" COPY will be split 10-ways
+2024-04-26 15:30:56.639 87 INFO   main.c:136                Running pgcopydb version 0.15.59.g9a151a6.dirty from "/usr/local/bin/pgcopydb"
+2024-04-26 15:30:56.685 87 INFO   copydb.c:105              Using work dir "/tmp/unit/split"
+2024-04-26 15:30:56.688 87 INFO   cli_list.c:1294           Table public.table_1 COPY will be split 11-ways
         Part |          Min |          Max |        Count
 -------------+--------------+--------------+-------------
-        1/10 |            1 |           11 |           11
-        2/10 |           12 |           22 |           11
-        3/10 |           23 |           33 |           11
-        4/10 |           34 |           44 |           11
-        5/10 |           45 |           55 |           11
-        6/10 |           56 |           66 |           11
-        7/10 |           67 |           77 |           11
-        8/10 |           78 |           88 |           11
-        9/10 |           89 |           99 |           11
-       10/10 |          100 |          100 |            1
+        1/11 |           -1 |           -1 |           -1
+        2/11 |            1 |           10 |           10
+        3/11 |           11 |           20 |           10
+        4/11 |           21 |           30 |           10
+        5/11 |           31 |           40 |           10
+        6/11 |           41 |           50 |           10
+        7/11 |           51 |           60 |           10
+        8/11 |           61 |           70 |           10
+        9/11 |           71 |           80 |           10
+       10/11 |           81 |           90 |           10
+       11/11 |           91 |           -1 |           -1
 
-2023-07-31 13:58:39 97 INFO   main.c:163                Running pgcopydb version 0.13.3.g1e88091 from "/usr/local/bin/pgcopydb"
-2023-07-31 13:58:39 97 INFO   cli_list.c:1081           Listing COPY partitions for table "public"."table_2" in "postgres://postgres@source/postgres"
-2023-07-31 13:58:39 97 INFO   cli_list.c:1195           Table "public"."table_2" COPY will be split 5-ways
+2024-04-26 15:30:56.695 94 INFO   main.c:136                Running pgcopydb version 0.15.59.g9a151a6.dirty from "/usr/local/bin/pgcopydb"
+2024-04-26 15:30:56.741 94 INFO   copydb.c:105              Using work dir "/tmp/unit/split"
+2024-04-26 15:30:56.744 94 INFO   cli_list.c:1294           Table public.table_2 COPY will be split 6-ways
         Part |          Min |          Max |        Count
 -------------+--------------+--------------+-------------
-         1/5 |            1 |           21 |           21
-         2/5 |           22 |           42 |           21
-         3/5 |           43 |           63 |           21
-         4/5 |           64 |           84 |           21
-         5/5 |           85 |          100 |           16
+         1/6 |           -1 |           -1 |           -1
+         2/6 |            1 |           17 |           17
+         3/6 |           18 |           34 |           17
+         4/6 |           35 |           51 |           17
+         5/6 |           52 |           68 |           17
+         6/6 |           69 |           -1 |           -1
 
-2023-07-31 13:58:39 98 INFO   main.c:163                Running pgcopydb version 0.13.3.g1e88091 from "/usr/local/bin/pgcopydb"
-2023-07-31 13:58:39 98 INFO   cli_list.c:1081           Listing COPY partitions for table "public"."table_3" in "postgres://postgres@source/postgres"
-2023-07-31 13:58:39 98 INFO   cli_list.c:1188           Table "public"."table_3" () will not be split
+2024-04-26 15:30:56.753 101 INFO   main.c:136                Running pgcopydb version 0.15.59.g9a151a6.dirty from "/usr/local/bin/pgcopydb"
+2024-04-26 15:30:56.812 101 INFO   copydb.c:105              Using work dir "/tmp/unit/split"
+2024-04-26 15:30:56.815 101 INFO   cli_list.c:1275           Table public.table_3 (8192 bytes) will not be split
