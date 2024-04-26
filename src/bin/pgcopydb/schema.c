@@ -3278,62 +3278,109 @@ schema_list_partitions(PGSQL *pgsql,
 	int64_t min = table->partmin;
 	int64_t max = table->partmax;
 
+	int64_t partsCount = 1;
+	int64_t partsSize = max - min + 1;
+
 	/*
 	 * When the partition key is set to "ctid", it means that the table will be
 	 * partitioned based on the physical location of the rows in the table.
-	 * In this case, the relpages value represents the total number of pages in the
-	 * table, which can be used as the maximum value for the partition range.
-	 * By setting min to 0 and max to table->relpages, we ensure that each partition
-	 * covers the entire range of pages in the table.
+	 *
+	 * The relpages value represents the total number of pages in the table,
+	 * which can be used as the maximum value for the partition range. By
+	 * setting min to 0 and max to table->relpages, we ensure that each
+	 * partition covers the entire range of pages in the table.
 	 */
-	if (streq(table->partKey, "ctid"))
+	bool splitByCTID = streq(table->partKey, "ctid");
+
+	if (splitByCTID)
 	{
 		min = 0;
 		max = table->relpages;
+
+		/* Postgres page size is static: 8192 Bytes */
+		uint64_t pagesPerPart = ceil((double) partSize / 8192);
+
+		partsCount = ceil((double) table->relpages / (double) pagesPerPart);
+		partsSize = ceil((double) table->relpages / partsCount);
 	}
 
 	/*
-	 * Below code block calculates the number of parts needed and assigns the minimum and
-	 * maximum values for each part. It also logs information about each partition and
-	 * adds the table part to the catalog if provided.
+	 * Below code block calculates the number of parts needed and assigns the
+	 * minimum and maximum values for each part. It also logs information about
+	 * each partition and adds the table part to the catalog if provided.
+	 *
 	 * Example:
 	 * int64_t tableSize (table->bytes) = 100;
 	 * int64_t partSize = 10;
 	 * int64_t min = 1;
 	 * int64_t max = 100;
 	 * int64_t result = partitionTable(&table, partSize, min, max, &catalog);
-	 * // Output:
-	 * // Partition table#1: 1 - 10 (10)
-	 * // Partition table#2: 11 - 20 (10)
-	 * // Partition table#3: 21 - 30 (10)
-	 * // ...
-	 * // Partition table#10: 91 - 100 (10)
+	 *
+	 * Output:
+	 *  Partition table#1: 1 - 10 (10)
+	 *  Partition table#2: 11 - 20 (10)
+	 *  Partition table#3: 21 - 30 (10)
+	 *  ...
+	 *  Partition table#10: 91 - 100 (10)
 	 */
-	int64_t partsCount = ceil((double) table->bytes / (double) partSize);
-	int64_t range = ceil((double) (max - min + 1) / (double) table->bytes *
-						 (double) partSize);
+	else
+	{
+		/* add a partition for IS NULL (first) */
+		partsCount = ceil((double) table->bytes / (double) partSize) + 1;
+		partsSize = ceil((double) (max - min + 1) / partsCount);
+	}
 
+	/*
+	 * Now add an s_table_part row per partition.
+	 */
 	for (int64_t i = 0; i < partsCount; i++)
 	{
+		int64_t partNumber = i + 1;
 		SourceTableParts *parts = &(table->partition);
 
 		bzero(parts, sizeof(SourceTableParts));
 
-		parts->partNumber = i + 1;
+		parts->partNumber = partNumber;
 		parts->partCount = partsCount;
-		parts->min = min + (i * range);
-		parts->max = min + ((i + 1) * range) - 1;
 
-		if (parts->max > max)
+		/* take care of NULL values (we accept partkey with unique indexes) */
+		if (i == 0 && !splitByCTID)
 		{
-			parts->max = max;
+			parts->min = -1;
+			parts->max = -1;
+			parts->count = -1;
+		}
+		else if (splitByCTID)
+		{
+			parts->min = min + (i * partsSize);
+			parts->max = min + ((i + 1) * partsSize) - 1;
+			parts->count = parts->max - parts->min + 1;
+		}
+		else
+		{
+			/*
+			 * partNumber == 0 is for NULL values
+			 * partNumber == 1 is for range [ 0 .. a ], etc
+			 */
+			parts->min = min + ((i - 1) * partsSize);
+			parts->max = min + (i * partsSize) - 1;
+			parts->count = parts->max - parts->min + 1;
 		}
 
-		parts->count = parts->max - parts->min + 1;
+		/* the last partition has no upper bound */
+		if (partNumber == partsCount)
+		{
+			parts->max = -1;
+			parts->count = -1;
+		}
 
-		log_debug("Partition %s#%d: %lld - %lld (%lld)", table->qname, parts->partNumber,
-				  (long long) parts->min, (long long) parts->max, (long
-																   long) parts->count);
+		log_debug("Partition %s #%d/%d: [%lld .. %lld] (%lld)",
+				  table->qname,
+				  parts->partNumber,
+				  parts->partCount,
+				  (long long) parts->min,
+				  (long long) parts->max,
+				  (long long) parts->count);
 
 		if (catalog != NULL && catalog->db != NULL)
 		{
@@ -3341,13 +3388,6 @@ schema_list_partitions(PGSQL *pgsql,
 			{
 				/* errors have already been logged */
 			}
-		}
-
-		/* if we hit max, no need to iterate  */
-		if (parts->max == max)
-		{
-			parts->partCount = i + 1;
-			break;
 		}
 	}
 
@@ -4778,20 +4818,46 @@ parsePartKeyMinMaxValue(void *ctx, PGresult *result)
 		return;
 	}
 
-	/* 1. min */
-	char *value = PQgetvalue(result, 0, 0);
-	if (!stringToInt64(value, &(context->min)))
+	/* min and max are both null on empty tables */
+	if (PQgetisnull(result, 0, 0) &&
+		PQgetisnull(result, 0, 1))
 	{
-		log_error("Invalid min value: \"%s\"", value);
-		++errors;
+		context->min = 0;
+		context->max = 0;
 	}
-
-	/* 2. max */
-	value = PQgetvalue(result, 0, 1);
-	if (!stringToInt64(value, &(context->max)))
+	else
 	{
-		log_error("Invalid max value: \"%s\"", value);
-		++errors;
+		/* 1. min */
+		if (PQgetisnull(result, 0, 0))
+		{
+			log_error("Invalid min value: NULL");
+			++errors;
+		}
+		else
+		{
+			char *value = PQgetvalue(result, 0, 0);
+			if (!stringToInt64(value, &(context->min)))
+			{
+				log_error("Invalid min value: \"%s\"", value);
+				++errors;
+			}
+		}
+
+		/* 2. max */
+		if (PQgetisnull(result, 0, 1))
+		{
+			log_error("Invalid max value: NULL");
+			++errors;
+		}
+		else
+		{
+			char *value = PQgetvalue(result, 0, 1);
+			if (!stringToInt64(value, &(context->max)))
+			{
+				log_error("Invalid max value: \"%s\"", value);
+				++errors;
+			}
+		}
 	}
 
 	context->parsedOk = errors == 0;
