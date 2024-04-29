@@ -3208,7 +3208,8 @@ catalog_s_table_fetch_attrlist(SQLiteQuery *query)
 {
 	SourceTable *table = (SourceTable *) query->context;
 
-	table->attrList = NULL;
+	/* the default empty attribute list is an empty string */
+	table->attrList = "";
 
 	if (sqlite3_column_type(query->ppStmt, 0) != SQLITE_NULL)
 	{
