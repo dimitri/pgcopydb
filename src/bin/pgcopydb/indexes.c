@@ -511,12 +511,18 @@ copydb_table_indexes_are_done(CopyDataSpec *specs,
 }
 
 
+typedef struct IndexOIDArray
+{
+	int count;
+	uint32_t *array;            /* malloc'ed area */
+} IndexOIDArray;
+
 typedef struct QueueTableIndexesContext
 {
 	CopyDataSpec *specs;
 	CopyTableDataSpec *tableSpecs;
+	IndexOIDArray *indexArray;
 } QueueTableIndexesContext;
-
 
 /*
  * copydb_add_table_indexes sends a message to the CREATE INDEX process queue
@@ -526,22 +532,81 @@ bool
 copydb_add_table_indexes(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+	IndexOIDArray indexArray = { 0, NULL };
+
+	if (!catalog_s_table_count_indexes(sourceDB, tableSpecs->sourceTable))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * While this COPY process is holding a catalog lock to iterate over the
+	 * indexes of the given table, CREATE INDEX processes are attempting to
+	 * grab the same catalog lock in order to fetch the metadata for the OID
+	 * received from the queue.
+	 *
+	 * To avoid grabbing the SQLite semaphore while doing the queue_send()
+	 * operation, we allocate an array of indexes OIDs in memory and fill the
+	 * information from the iterator callback function.
+	 *
+	 * That's important because the queue_send() operation contains a retry
+	 * loop in case of errors, one possible error is EGAIN (queue is full). We
+	 * need to make sure that the CREATE INDEX processes are able to empty the
+	 * queue (and thus grab the catalog lock) during the queue_send() retry
+	 * loop.
+	 */
+	int indexCount = tableSpecs->sourceTable->indexCount;
+	indexArray.count = 0;
+	indexArray.array = (uint32_t *) calloc(indexCount, sizeof(uint32_t));
+
+	if (indexArray.array == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
 
 	QueueTableIndexesContext context = {
 		.specs = specs,
-		.tableSpecs = tableSpecs
+		.tableSpecs = tableSpecs,
+		.indexArray = &indexArray
 	};
 
+	/* iterate over SQLite results and fill-in the indexArray */
 	if (!catalog_iter_s_index_table(sourceDB,
 									tableSpecs->sourceTable->nspname,
 									tableSpecs->sourceTable->relname,
 									&context,
 									&copydb_add_table_indexes_hook))
 	{
-		log_error("Failed to send table %s indexes to craete index queue, "
+		log_error("Failed to send table %s indexes to create index queue, "
 				  "see above for details",
 				  tableSpecs->sourceTable->qname);
 		return false;
+	}
+
+	/*
+	 * Now that we are no longer holding the catalog lock, walk through the
+	 * indexArray and send index OIDs to the create index queue, retrying the
+	 * operation if the queue is full.
+	 */
+	for (int i = 0; i < indexArray.count; i++)
+	{
+		QMessage mesg = {
+			.type = QMSG_TYPE_INDEXOID,
+			.data.oid = indexArray.array[i]
+		};
+
+		log_trace("Queueing index [%u] for table %s [%u]",
+				  mesg.data.oid,
+				  tableSpecs->sourceTable->qname,
+				  tableSpecs->sourceTable->oid);
+
+		if (!queue_send(&(specs->indexQueue), &mesg))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	return true;
@@ -555,25 +620,9 @@ static bool
 copydb_add_table_indexes_hook(void *ctx, SourceIndex *index)
 {
 	QueueTableIndexesContext *context = (QueueTableIndexesContext *) ctx;
-	CopyDataSpec *specs = context->specs;
-	CopyTableDataSpec *tableSpecs = context->tableSpecs;
+	IndexOIDArray *indexArray = context->indexArray;
 
-	QMessage mesg = {
-		.type = QMSG_TYPE_INDEXOID,
-		.data.oid = index->indexOid
-	};
-
-	log_trace("Queueing index %s [%u] for table %s [%u]",
-			  index->indexQname,
-			  mesg.data.oid,
-			  tableSpecs->sourceTable->qname,
-			  tableSpecs->sourceTable->oid);
-
-	if (!queue_send(&(specs->indexQueue), &mesg))
-	{
-		/* errors have already been logged */
-		return false;
-	}
+	indexArray->array[(indexArray->count)++] = index->indexOid;
 
 	return true;
 }
