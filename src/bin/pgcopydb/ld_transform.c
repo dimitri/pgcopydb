@@ -2034,14 +2034,7 @@ stream_write_insert(FILE *out, LogicalMessageInsert *insert)
 
 		for (int c = 0; c < stmt->cols; c++)
 		{
-			/*
-			 * In the case of the test_decoding plugin, it already escapes
-			 * keywords using double quotes, so we should avoid double quoting
-			 * again.
-			 */
-			const char *quoteFormatStr = (stmt->columns[c][0] == '"') ? "%s%s" :
-										 "%s\"%s\"";
-			appendPQExpBuffer(buf, quoteFormatStr,
+			appendPQExpBuffer(buf, "%s%s",
 							  c > 0 ? ", " : "",
 							  stmt->columns[c]);
 		}
@@ -2213,14 +2206,7 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 
 				if (!skip)
 				{
-					/*
-					 * In the case of the test_decoding plugin, it already escapes
-					 * keywords using double quotes, so we should avoid double quoting
-					 * again.
-					 */
-					const char *quoteFormatStr = (colname[0] == '"') ? "%s%s = $%d" :
-												 "%s\"%s\" = $%d";
-					appendPQExpBuffer(buf, quoteFormatStr,
+					appendPQExpBuffer(buf, "%s%s = $%d",
 									  first ? "" : ", ",
 									  colname,
 									  ++pos);
@@ -2261,30 +2247,19 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 					return false;
 				}
 
-				/*
-				 * In the case of the test_decoding plugin, it already escapes
-				 * keywords using double quotes, so we should avoid double quoting
-				 * again.
-				 */
 				if (value->isNull)
 				{
 					/*
 					 * Attributes with the value `NULL` require `IS NULL` instead of `=`
 					 * in the WHERE clause.
 					 */
-					const char *quoteFormatStr = (old->columns[v][0] == '"') ?
-												 "%s%s IS NULL" :
-												 "%s\"%s\" IS NULL";
-					appendPQExpBuffer(buf, quoteFormatStr,
+					appendPQExpBuffer(buf, "%s%s IS NULL",
 									  v > 0 ? " and " : "",
 									  old->columns[v]);
 				}
 				else
 				{
-					const char *quoteFormatStr = (old->columns[v][0] == '"') ?
-												 "%s%s = $%d" :
-												 "%s\"%s\" = $%d";
-					appendPQExpBuffer(buf, quoteFormatStr,
+					appendPQExpBuffer(buf, "%s%s = $%d",
 									  v > 0 ? " and " : "",
 									  old->columns[v],
 									  ++pos);
@@ -2370,30 +2345,19 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 					return false;
 				}
 
-				/*
-				 * In the case of the test_decoding plugin, it already escapes
-				 * keywords using double quotes, so we should avoid double quoting
-				 * again.
-				 */
 				if (value->isNull)
 				{
 					/*
 					 * Attributes with the value `NULL` require `IS NULL` instead of `=`
 					 * in the WHERE clause.
 					 */
-					const char *quoteFormatStr = (old->columns[v][0] == '"') ?
-												 "%s%s IS NULL" :
-												 "%s\"%s\" IS NULL";
-					appendPQExpBuffer(buf, quoteFormatStr,
+					appendPQExpBuffer(buf, "%s%s IS NULL",
 									  v > 0 ? " and " : "",
 									  old->columns[v]);
 				}
 				else
 				{
-					const char *quoteFormatStr = (old->columns[v][0] == '"') ?
-												 "%s%s = $%d" :
-												 "%s\"%s\" = $%d";
-					appendPQExpBuffer(buf, quoteFormatStr,
+					appendPQExpBuffer(buf, "%s%s = $%d",
 									  v > 0 ? " and " : "",
 									  old->columns[v],
 									  ++pos);
