@@ -520,6 +520,7 @@ copydb_init_specs(CopyDataSpec *specs,
 		.restart = options->restart,
 		.resume = options->resume,
 		.consistent = !options->notConsistent,
+		.disableSplitByCtid = options->disableSplitByCtid,
 
 		.fetchCatalogs = specs->fetchCatalogs,
 

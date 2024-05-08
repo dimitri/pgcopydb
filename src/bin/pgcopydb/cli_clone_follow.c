@@ -60,6 +60,7 @@
 	"  --create-slot                 Create the replication slot\n" \
 	"  --origin                      Use this Postgres replication origin node name\n" \
 	"  --endpos                      Stop replaying changes when reaching this LSN\n" \
+	"  --disable-split-by-ctid	   	 Disable splitting tables by ctid\n" \
 
 CommandLine clone_command =
 	make_command(

@@ -37,4 +37,5 @@
      --create-slot                 Create the replication slot
      --origin                      Use this Postgres replication origin node name
      --endpos                      Stop replaying changes when reaching this LSN
+     --disable-split-by-ctid	   	 Disable splitting tables by ctid
    

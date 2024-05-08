@@ -230,6 +230,7 @@ typedef struct CopyDataSpec
 	bool resume;
 	bool consistent;
 	bool failFast;
+	bool disableSplitByCtid;
 
 	bool fetchCatalogs;         /* cache invalidation of local catalogs db */
 	bool fetchFilteredOids;     /* allow bypassing dump/restore filter prep */

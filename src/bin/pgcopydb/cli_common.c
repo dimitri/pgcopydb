@@ -477,6 +477,32 @@ cli_copydb_getenv(CopyDBOptions *options)
 				}
 			}
 		}
+
+		/* when --disable-split-by-ctid has not been used, check PGCOPYDB_DISABLE_SPLIT_BY_CTID */
+		if (!options->disableSplitByCtid)
+		{
+			if (env_exists(PGCOPYDB_DISABLE_SPLIT_BY_CTID))
+			{
+				char DISABLE_SPLIT_BY_CTID[BUFSIZE] = { 0 };
+
+				if (!get_env_copy(PGCOPYDB_DISABLE_SPLIT_BY_CTID,
+								  DISABLE_SPLIT_BY_CTID,
+								  sizeof(DISABLE_SPLIT_BY_CTID)))
+				{
+					/* errors have already been logged */
+					++errors;
+				}
+				else if (!parse_bool(DISABLE_SPLIT_BY_CTID,
+									 &(options->disableSplitByCtid)))
+				{
+					log_error("Failed to parse environment variable \"%s\" "
+							  "value \"%s\", expected a boolean (on/off)",
+							  PGCOPYDB_DISABLE_SPLIT_BY_CTID,
+							  DISABLE_SPLIT_BY_CTID);
+					++errors;
+				}
+			}
+		}
 	}
 
 	return errors == 0;
@@ -806,6 +832,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "quiet", no_argument, NULL, 'q' },
 		{ "help", no_argument, NULL, 'h' },
 		{ "no-tablespaces", no_argument, NULL, 'y' },
+		{ "disable-split-by-ctid", no_argument, NULL, 'k' },
 		{ NULL, 0, NULL, 0 }
 	};
 
@@ -826,7 +853,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	}
 
 	while ((c = getopt_long(argc, argv,
-							"S:T:D:J:I:b:L:cAPOXj:xBeMlUF:F:Q:irRCN:fp:ws:o:tE:Vvdzqh",
+							"S:T:D:J:I:b:L:cAPOXj:xBeMlUF:F:Q:irRCN:fp:ws:o:tE:Vvdzqhyk",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -1213,6 +1240,13 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				options.restoreOptions.noTableSpaces = true;
 				log_trace("--no-tablespaces");
+				break;
+			}
+
+			case 'k':
+			{
+				options.disableSplitByCtid = true;
+				log_trace("--disable-split-by-ctid");
 				break;
 			}
 

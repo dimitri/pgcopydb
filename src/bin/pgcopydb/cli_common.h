@@ -54,6 +54,7 @@ typedef struct CopyDBOptions
 	bool restart;
 	bool resume;
 	bool notConsistent;
+	bool disableSplitByCtid;
 
 	ReplicationSlot slot;
 	char snapshot[BUFSIZE];
