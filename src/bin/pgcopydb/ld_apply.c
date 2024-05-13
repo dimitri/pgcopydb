@@ -415,6 +415,7 @@ stream_apply_sync_sentinel(StreamApplyContext *context, bool findDurableLSN)
 	context->apply = sentinel.apply;
 	context->endpos = sentinel.endpos;
 	context->startpos = sentinel.startpos;
+	context->sentinelSyncTime = time(NULL);
 
 	log_debug("stream_apply_sync_sentinel: "
 			  "write_lsn %X/%X flush_lsn %X/%X replay_lsn %X/%X "
