@@ -1897,8 +1897,8 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"       left join pg_depend d2 on d2.refobjid = s.seqoid "
 		"        and d2.refclassid = 'pg_class'::regclass "
 		"        and d2.classid = 'pg_attrdef'::regclass "
-		"       join pg_attrdef a on a.oid = d2.objid "
-		"       join pg_attribute at "
+		"       left join pg_attrdef a on a.oid = d2.objid "
+		"       left join pg_attribute at "
 		"         on at.attrelid = a.adrelid "
 		"        and at.attnum = a.adnum "
 
@@ -1976,16 +1976,16 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"       left join pg_depend d2 on d2.refobjid = s.seqoid "
 		"        and d2.refclassid = 'pg_class'::regclass "
 		"        and d2.classid = 'pg_attrdef'::regclass "
-		"       join pg_attrdef a on a.oid = d2.objid "
-		"       join pg_attribute at "
+		"       left join pg_attrdef a on a.oid = d2.objid "
+		"       left join pg_attribute at "
 		"         on at.attrelid = a.adrelid "
 		"        and at.attnum = a.adnum "
 
 		"       left join pg_class r1 on r1.oid = d1.refobjid "
-		"       join pg_namespace rn1 on rn1.oid = r1.relnamespace "
+		"       left join pg_namespace rn1 on rn1.oid = r1.relnamespace "
 
 		"       left join pg_class r2 on r2.oid = at.attrelid  "
-		"       join pg_namespace rn2 on rn2.oid = r2.relnamespace "
+		"       left join pg_namespace rn2 on rn2.oid = r2.relnamespace "
 
 		/* exclude-schema */
 		"      left join pg_temp.filter_exclude_schema fn1 "
@@ -2013,7 +2013,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"            and r2.relname = ftd2.relname "
 
 		/* WHERE clause for exclusion filters */
-		"     where case when r1.oid = r2.oid "
+		"     where case when r2.oid is null or r1.oid = r2.oid"
 		"           then rn1.nspname is not null and fn1.nspname is null "
 		"            and r1.relname is not null and ft1.relname is null "
 		"            and r1.relname is not null and ftd1.relname is null "
@@ -2079,8 +2079,8 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"       left join pg_depend d2 on d2.refobjid = s.seqoid "
 		"        and d2.refclassid = 'pg_class'::regclass "
 		"        and d2.classid = 'pg_attrdef'::regclass "
-		"       join pg_attrdef a on a.oid = d2.objid "
-		"       join pg_attribute at "
+		"       left join pg_attrdef a on a.oid = d2.objid "
+		"       left join pg_attribute at "
 		"         on at.attrelid = a.adrelid "
 		"        and at.attnum = a.adnum "
 
@@ -2158,16 +2158,16 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"       left join pg_depend d2 on d2.refobjid = s.seqoid "
 		"        and d2.refclassid = 'pg_class'::regclass "
 		"        and d2.classid = 'pg_attrdef'::regclass "
-		"       join pg_attrdef a on a.oid = d2.objid "
-		"       join pg_attribute at "
+		"       left join pg_attrdef a on a.oid = d2.objid "
+		"       left join pg_attribute at "
 		"         on at.attrelid = a.adrelid "
 		"        and at.attnum = a.adnum "
 
 		"       left join pg_class r1 on r1.oid = d1.refobjid "
-		"       join pg_namespace rn1 on rn1.oid = r1.relnamespace "
+		"       left join pg_namespace rn1 on rn1.oid = r1.relnamespace "
 
 		"       left join pg_class r2 on r2.oid = at.attrelid  "
-		"       join pg_namespace rn2 on rn2.oid = r2.relnamespace "
+		"       left join pg_namespace rn2 on rn2.oid = r2.relnamespace "
 
 		/* exclude-schema */
 		"      left join pg_temp.filter_exclude_schema fn "
