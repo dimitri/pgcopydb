@@ -140,7 +140,6 @@ typedef struct LogicalMessageRelation
 {
 	char *nspname;  /* malloc'ed area */
 	char *relname;  /* malloc'ed area */
-	bool pqMemory;
 } LogicalMessageRelation;
 
 typedef struct LogicalMessageInsert

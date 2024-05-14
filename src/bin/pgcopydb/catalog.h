@@ -206,9 +206,6 @@ typedef struct SourceTableIterator
 	DatabaseCatalog *catalog;
 	SourceTable *table;
 	SQLiteQuery query;
-
-	/* optional parameters */
-	uint64_t splitTableLargerThanBytes;
 } SourceTableIterator;
 
 bool catalog_iter_s_table_init(SourceTableIterator *iter);

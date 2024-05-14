@@ -1406,7 +1406,7 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs, CopyArgs *args)
 				/* the last part for ctid splits covers "extra" relpages */
 				appendPQExpBuffer(srcWhereClause,
 								  "WHERE ctid >= '(%lld,0)'::tid",
-								  (long long) tableSpecs->part.min + 1);
+								  (long long) tableSpecs->part.min);
 			}
 			else
 			{
@@ -1419,11 +1419,31 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs, CopyArgs *args)
 		}
 		else
 		{
-			appendPQExpBuffer(srcWhereClause,
-							  "WHERE %s BETWEEN %lld AND %lld",
-							  tableSpecs->part.partKey,
-							  (long long) tableSpecs->part.min,
-							  (long long) tableSpecs->part.max);
+			/* partition to take care of NULL values */
+			if (tableSpecs->part.min == -1 &&
+				tableSpecs->part.max == -1)
+			{
+				appendPQExpBuffer(srcWhereClause,
+								  "WHERE %s IS NULL",
+								  tableSpecs->part.partKey);
+			}
+
+			/* the last partition has no upper bound */
+			else if (tableSpecs->part.max == -1)
+			{
+				appendPQExpBuffer(srcWhereClause,
+								  "WHERE %s >= %lld",
+								  tableSpecs->part.partKey,
+								  (long long) tableSpecs->part.min);
+			}
+			else
+			{
+				appendPQExpBuffer(srcWhereClause,
+								  "WHERE %s BETWEEN %lld AND %lld",
+								  tableSpecs->part.partKey,
+								  (long long) tableSpecs->part.min,
+								  (long long) tableSpecs->part.max);
+			}
 		}
 
 		if (PQExpBufferBroken(srcWhereClause))
