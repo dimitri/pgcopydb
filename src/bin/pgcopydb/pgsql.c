@@ -2743,6 +2743,9 @@ pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args)
 		}
 	}
 
+	/* cannot perform COPY FREEZE if the table was not created or truncated in the current subtransaction */
+	args->freeze &= args->truncate;
+
 	/* make sure to log TRUNCATE before we log COPY, avoid confusion */
 	log_notice("%s", args->logCommand);
 
