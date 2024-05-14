@@ -1161,9 +1161,6 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 		}
 
 		args->truncate = granted;
-
-		/* cannot perform COPY FREEZE if the table was not created or truncated in the current subtransaction */
-		args->freeze &= granted;
 	}
 
 	if (!copydb_prepare_copy_query(tableSpecs, args))
