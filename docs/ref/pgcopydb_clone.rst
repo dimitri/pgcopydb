@@ -498,6 +498,15 @@ The following options are available to ``pgcopydb clone``:
   Skip running VACUUM ANALYZE on the target database once a table has been
   copied, its indexes have been created, and constraints installed.
 
+--skip-db-properties
+
+  Skip fetching database properties and copying them using the SQL command
+  ``ALTER DATABASE ... SET name = value``. This is useful when the source
+  and target database have a different set of properties, or when the target
+  database is hosted in a way that disabled setting some of the properties
+  that have been set on the source database, or also when copying these
+  settings is not wanted.
+
 --filters <filename>
 
   This option allows to exclude table and indexes from the copy operations.
@@ -749,6 +758,13 @@ PGCOPYDB_SKIP_VACUUM
    When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
    then pgcopydb skips the VACUUM ANALYZE jobs entirely, same as when using
    the ``--skip-vacuum`` option.
+
+PGCOPYDB_SKIP_DB_PROPERTIES
+
+   When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
+   then pgcopydb skips the ALTER DATABASET SET properties commands that copy
+   the setting from the source to the target database, same as when using
+   the ``--skip-db-properties`` option.
 
 PGCOPYDB_SNAPSHOT
 
