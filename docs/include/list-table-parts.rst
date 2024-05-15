@@ -9,4 +9,5 @@
      --table-name                Name of the target table
      --split-tables-larger-than  Size threshold to consider partitioning
      --skip-split-by-ctid        Skip the ctid split
+     --estimate-table-sizes      Allow using estimates for relation sizes
    

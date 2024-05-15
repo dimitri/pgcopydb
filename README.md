@@ -289,9 +289,8 @@ implementing any step on its own.
   6. `pgcopydb copy sequences`
   7. `pgcopydb copy indexes`
   8. `pgcopydb copy constraints`
-  9. `pgcopydb vacuumdb`
- 10. `pgcopydb restore post-data`
- 11. `kill %1`
+  9. `pgcopydb restore post-data`
+ 10. `kill %1`
 
 Using individual commands fails to provide the advanced concurrency
 capabilities of the main `pgcopydb clone` command, so it is strongly

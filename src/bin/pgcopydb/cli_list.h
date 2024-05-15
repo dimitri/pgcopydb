@@ -29,8 +29,6 @@ typedef struct ListDBOptions
 	bool listSkipped;
 	bool noPKey;
 	bool force;
-	bool cache;
-	bool dropCache;
 	bool summary;
 	bool availableVersions;
 	bool requirements;
@@ -41,6 +39,7 @@ typedef struct ListDBOptions
 	char snapshot[BUFSIZE];
 
 	SplitTableLargerThan splitTablesLargerThan;
+	bool estimateTableSizes;
 } ListDBOptions;
 
 

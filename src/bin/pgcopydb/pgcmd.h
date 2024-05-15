@@ -1,5 +1,5 @@
 /*
- * src/bin/pg_autoctl/pgcmd.h
+ * src/bin/pgcopydb/pgcmd.h
  *   API for running PostgreSQL commands such as pg_dump and pg_restore.
  *
  */
@@ -30,6 +30,7 @@ typedef struct PostgresPaths
 	char pg_dump[MAXPGPATH];
 	char pg_dumpall[MAXPGPATH];
 	char pg_restore[MAXPGPATH];
+	char vacuumdb[MAXPGPATH];
 	char pg_version[PG_VERSION_STRING_MAX];
 } PostgresPaths;
 
@@ -207,6 +208,8 @@ bool pg_dump_db(PostgresPaths *pgPaths,
 				SourceFilters *filters,
 				DatabaseCatalog *filtersDB,
 				const char *filename);
+
+bool pg_vacuumdb_analyze_only(PostgresPaths *pgPaths, ConnStrings *connStrings, int jobs);
 
 bool pg_dumpall_roles(PostgresPaths *pgPaths,
 					  ConnStrings *connStrings,

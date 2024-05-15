@@ -1,5 +1,5 @@
 /*
- * src/bin/pg_autoctl/pgsql.c
+ * src/bin/pgcopydb/pgsql.c
  *	 API for sending SQL commands to a PostgreSQL server
  */
 #include <stdlib.h>
@@ -5416,7 +5416,7 @@ parseReplicationSlot(void *ctx, PGresult *result)
 
 
 /*
- * pgsql_table_exists checks that a role with the given table exists on the
+ * pgsql_table_exists checks that a table with the given name exists on the
  * Postgres server.
  */
 bool
@@ -5460,10 +5460,6 @@ pgsql_table_exists(PGSQL *pgsql,
 		return false;
 	}
 
-	/*
-	 * If the exists query returns no rows, create our table:
-	 *  pgcopydb.pgcopydb_table_size
-	 */
 	*exists = context.boolVal;
 
 	return true;
@@ -5498,7 +5494,7 @@ pgsql_role_exists(PGSQL *pgsql, const char *roleName, bool *exists)
 		return false;
 	}
 
-	/* we receive 0 rows in the result when the slot does not exist yet */
+	/* we receive 0 rows in the result when the role does not exist yet */
 	*exists = context.intVal == 1;
 
 	return true;
