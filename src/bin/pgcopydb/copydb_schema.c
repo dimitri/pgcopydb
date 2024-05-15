@@ -516,9 +516,14 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 	 * Grab the source database properties to be able to install them again on
 	 * the target, using ALTER DATABASE SET or ALTER USER IN DATABASE SET.
 	 */
-	if ((specs->section == DATA_SECTION_ALL ||
-		 specs->section == DATA_SECTION_DATABASE_PROPERTIES) &&
-		!sourceDB->sections[DATA_SECTION_DATABASE_PROPERTIES].fetched)
+	if (specs->skipDBproperties)
+	{
+		log_notice("Skipping ALTER DATABASE SET operations, "
+				   "see --skip-db-properties");
+	}
+	else if ((specs->section == DATA_SECTION_ALL ||
+			  specs->section == DATA_SECTION_DATABASE_PROPERTIES) &&
+			 !sourceDB->sections[DATA_SECTION_DATABASE_PROPERTIES].fetched)
 	{
 		TopLevelTiming timing = {
 			.label = CopyDataSectionToString(DATA_SECTION_DATABASE_PROPERTIES)
