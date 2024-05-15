@@ -421,6 +421,16 @@ PGCOPYDB_SPLIT_TABLES_LARGER_THAN
    When ``--split-tables-larger-than`` is ommitted from the command line,
    then this environment variable is used.
 
+PGCOPYDB_ESTIMATE_TABLE_SIZES
+
+   When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
+   then pgcopydb estimates the size of tables to determine whether or not to
+   split tables. This option is only useful when querying the relation sizes on
+   source database is costly.
+
+   When ``--estimate-table-sizes`` is ommitted from the command line, then
+   this environment variable is used.
+
 PGCOPYDB_DROP_IF_EXISTS
 
    When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)

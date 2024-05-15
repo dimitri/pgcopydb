@@ -35,7 +35,7 @@ vacuum_start_supervisor(CopyDataSpec *specs)
 	{
 		case -1:
 		{
-			log_error("Failed to fork copy supervisor process: %m");
+			log_error("Failed to fork vacuum supervisor process: %m");
 			return false;
 		}
 
@@ -46,7 +46,8 @@ vacuum_start_supervisor(CopyDataSpec *specs)
 
 			if (!vacuum_supervisor(specs))
 			{
-				log_error("Failed to create indexes, see above for details");
+				log_error(
+					"Failed to vacuum analyze tables on target, see above for details");
 				exit(EXIT_CODE_INTERNAL_ERROR);
 			}
 
@@ -85,7 +86,7 @@ vacuum_supervisor(CopyDataSpec *specs)
 	}
 
 	/*
-	 * Start cumulative sections timings for indexes and constraints
+	 * Start cumulative sections timings for vacuum
 	 */
 	if (!summary_start_timing(sourceDB, TIMING_SECTION_VACUUM))
 	{
@@ -100,11 +101,11 @@ vacuum_supervisor(CopyDataSpec *specs)
 	}
 
 	/*
-	 * Now just wait for the create index processes to be done.
+	 * Now just wait for the vacuum processes to be done.
 	 */
 	if (!copydb_wait_for_subprocesses(specs->failFast))
 	{
-		log_error("Some INDEX worker process(es) have exited with error, "
+		log_error("Some VACUUM worker process(es) have exited with error, "
 				  "see above for details");
 
 		if (specs->failFast)
@@ -200,7 +201,7 @@ vacuum_worker(CopyDataSpec *specs)
 
 	if (!catalog_init_from_specs(specs))
 	{
-		log_error("Failed to open internal catalogs in COPY worker process, "
+		log_error("Failed to open internal catalogs in VACUUM worker process, "
 				  "see above for details");
 		return false;
 	}

@@ -1,5 +1,5 @@
 /*
- * src/bin/pg_autoctl/cli_common.h
+ * src/bin/pgcopydb/cli_common.h
  *     Implementation of a CLI which lets you run individual keeper routines
  *     directly
  *
@@ -39,6 +39,7 @@ typedef struct CopyDBOptions
 	int lObjectJobs;
 
 	SplitTableLargerThan splitTablesLargerThan;
+	bool estimateTableSizes;
 
 	RestoreOptions restoreOptions;
 
