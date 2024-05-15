@@ -80,10 +80,5 @@ pgcopydb compare data \
          --source ${PAGILA_SOURCE_PGURI} \
          --target ${PAGILA_TARGET_PGURI}
 
-psql -d ${PAGILA_TARGET_PGURI} <<EOF
-select last_value from identity_table_id_seq;
-EOF | grep -q 667
-
-psql -d ${PAGILA_TARGET_PGURI} <<EOF
-select last_value from normal_table_id_seq;
-EOF | grep -q 667
+psql -d ${PAGILA_TARGET_PGURI} -c "select last_value from identity_table_id_seq;" | grep -q 667
+psql -d ${PAGILA_TARGET_PGURI} -c "select last_value from normal_table_id_seq;" | grep -q 667
