@@ -34,26 +34,26 @@ static CommandLine copy_db_command =
 		"db",
 		"Copy an entire database from source to target",
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
-		"  --source              		Postgres URI to the source database\n"
-		"  --target              		Postgres URI to the target database\n"
-		"  --dir                 		Work directory to use\n"
-		"  --table-jobs          		Number of concurrent COPY jobs to run\n"
-		"  --index-jobs          		Number of concurrent CREATE INDEX jobs to run\n"
-		"  --restore-jobs        		Number of concurrent jobs for pg_restore\n"
-		"  --drop-if-exists      		On the target database, clean-up from a previous run first\n"
-		"  --roles               		Also copy roles found on source to target\n"
-		"  --no-owner            		Do not set ownership of objects to match the original database\n"
-		"  --no-acl              		Prevent restoration of access privileges (grant/revoke commands).\n"
-		"  --no-comments         		Do not output commands to restore comments\n"
-		"  --no-tablespaces      		Do not output commands to select tablespaces\n"
-		"  --skip-large-objects  		Skip copying large objects (blobs)\n"
-		"  --filters <filename>  		Use the filters defined in <filename>\n"
-		"  --fail-fast           		Abort early in case of error\n"
-		"  --restart             		Allow restarting when temp files exist already\n"
-		"  --resume              		Allow resuming operations after a failure\n"
-		"  --not-consistent      		Allow taking a new snapshot on the source database\n"
-		"  --snapshot            		Use snapshot obtained with pg_export_snapshot\n"
-		"  --disable-split-by-ctid	   	Disable splitting tables by ctid\n",
+		"  --source              Postgres URI to the source database\n"
+		"  --target              Postgres URI to the target database\n"
+		"  --dir                 Work directory to use\n"
+		"  --table-jobs          Number of concurrent COPY jobs to run\n"
+		"  --index-jobs          Number of concurrent CREATE INDEX jobs to run\n"
+		"  --restore-jobs        Number of concurrent jobs for pg_restore\n"
+		"  --drop-if-exists      On the target database, clean-up from a previous run first\n"
+		"  --roles               Also copy roles found on source to target\n"
+		"  --no-owner            Do not set ownership of objects to match the original database\n"
+		"  --no-acl              Prevent restoration of access privileges (grant/revoke commands).\n"
+		"  --no-comments         Do not output commands to restore comments\n"
+		"  --no-tablespaces      Do not output commands to select tablespaces\n"
+		"  --skip-large-objects  Skip copying large objects (blobs)\n"
+		"  --filters <filename>  Use the filters defined in <filename>\n"
+		"  --fail-fast           Abort early in case of error\n"
+		"  --restart             Allow restarting when temp files exist already\n"
+		"  --resume              Allow resuming operations after a failure\n"
+		"  --not-consistent      Allow taking a new snapshot on the source database\n"
+		"  --snapshot            Use snapshot obtained with pg_export_snapshot\n"
+		"  --disable-split-by-ctid     Disable splitting tables by ctid\n",
 		cli_copy_db_getopts,
 		cli_clone);
 
