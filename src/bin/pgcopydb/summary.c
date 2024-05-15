@@ -262,7 +262,7 @@ summary_lookup_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 	BindParam params[] = {
 		{ BIND_PARAMETER_TYPE_INT64, "tableoid", table->oid, NULL },
 
-		{ BIND_PARAMETER_TYPE_TEXT, "partnum",
+		{ BIND_PARAMETER_TYPE_INT64, "partnum",
 		  table->partition.partNumber, NULL },
 	};
 
@@ -354,7 +354,7 @@ summary_delete_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 		return false;
 	}
 
-	char *sql = "delete from summary where tableoid = $1 and partnumber = $2";
+	char *sql = "delete from summary where tableoid = $1 and partnum = $2";
 
 	if (!semaphore_lock(&(catalog->sema)))
 	{
