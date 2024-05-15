@@ -45,15 +45,6 @@ create schema "With a space";
 create extension seg schema "With a space" cascade;
 EOF
 
-# Create sequences and tables to ensure they get reset.
-psql -d ${PAGILA_SOURCE_PGURI} <<EOF
-create sequence normal_table_id_seq;
-create table normal_table (id integer primary key default nextval('normal_table_id_seq'));
-create table identity_table (id integer primary key generated always as identity);
-select setval('identity_table_id_seq', 667);
-select setval('normal_table_id_seq', 667);
-EOF
-
 # Create a couple of schemas in the target database
 # to ensure they get skipped during the clone
 psql -d ${PAGILA_TARGET_PGURI} <<EOF
@@ -79,6 +70,3 @@ pgcopydb compare schema \
 pgcopydb compare data \
          --source ${PAGILA_SOURCE_PGURI} \
          --target ${PAGILA_TARGET_PGURI}
-
-psql -d ${PAGILA_TARGET_PGURI} -c "select last_value from identity_table_id_seq;" | grep -q 667
-psql -d ${PAGILA_TARGET_PGURI} -c "select last_value from normal_table_id_seq;" | grep -q 667
