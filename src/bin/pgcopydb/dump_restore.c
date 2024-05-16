@@ -74,7 +74,7 @@ copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
 			return indexSpecs.summary.doneTime > 0;
 		}
 
-		/* we don't have internal pgcopydb suppor for other objects */
+		/* we don't have internal pgcopydb support for other objects */
 		default:
 		{
 			return false;
