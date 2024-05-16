@@ -396,7 +396,7 @@ bool copydb_target_drop_tables(CopyDataSpec *specs);
 bool copydb_target_finalize_schema(CopyDataSpec *specs);
 
 bool copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
-												uint32_t oid);
+												ArchiveContentItem *item);
 
 bool copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section);
 
@@ -518,7 +518,6 @@ bool print_summary(CopyDataSpec *specs);
 bool summary_prepare_toplevel_durations(CopyDataSpec *specs);
 bool prepare_summary_table(Summary *summary, CopyDataSpec *specs);
 
-bool summary_lookup_oid(DatabaseCatalog *catalog, uint32_t oid, bool *done);
 bool summary_oid_done_fetch(SQLiteQuery *query);
 
 /*
