@@ -1175,6 +1175,12 @@ summary_add_index(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 	indexSummary->pid = getpid();
 	indexSummary->index = indexSpecs->sourceIndex;
 
+	/* use the indexDef as the command if not set */
+	if (indexSummary->command == NULL)
+	{
+		indexSummary->command = index->indexDef;
+	}
+
 	if (!index_summary_init(indexSummary))
 	{
 		log_error("Failed to initialize index summary for pid %d and "
