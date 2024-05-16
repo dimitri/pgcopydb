@@ -765,16 +765,6 @@ copydb_create_index(CopyDataSpec *specs,
 	CopyIndexSpec indexSpecs = { .sourceIndex = index };
 	CopyIndexSummary *indexSummary = &(indexSpecs.summary);
 
-	/*
-	 * Prepare the summary CREATE INDEX command early so that we can insert it
-	 * in our SQLite catalogs.
-	 */
-	if (!copydb_prepare_create_index_command(&indexSpecs, ifNotExists))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	bool isConstraintIndex = index->constraintOid != 0;
 	bool skipCreateIndex = false;
 
@@ -816,6 +806,16 @@ copydb_create_index(CopyDataSpec *specs,
 
 	if (!skipCreateIndex)
 	{
+		/*
+		 * Prepare the CREATE INDEX command based on the index definition and
+		 * ifNotExists flag.
+		 */
+		if (!copydb_prepare_create_index_command(&indexSpecs, ifNotExists))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
 		log_notice("%s", indexSummary->command);
 
 		if (!pgsql_execute(dst, indexSummary->command))
