@@ -455,27 +455,27 @@ cli_copydb_getenv(CopyDBOptions *options)
 
 	/*
 	 * When --skip-db-properties has not been used, check
-	 * PGCOPYDB_SKIP_CTID_SPLIT
+	 * PGCOPYDB_SKIP_DB_PROPERTIES
 	 */
 	if (!options->skipDBproperties)
 	{
-		if (env_exists(PGCOPYDB_SKIP_CTID_SPLIT))
+		if (env_exists(PGCOPYDB_SKIP_DB_PROPERTIES))
 		{
-			char SKIP_CTID_SPLIT[BUFSIZE] = { 0 };
+			char SKIP_DB_PROPS[BUFSIZE] = { 0 };
 
-			if (!get_env_copy(PGCOPYDB_SKIP_CTID_SPLIT,
-							  SKIP_CTID_SPLIT,
-							  sizeof(SKIP_CTID_SPLIT)))
+			if (!get_env_copy(PGCOPYDB_SKIP_DB_PROPERTIES,
+							  SKIP_DB_PROPS,
+							  sizeof(SKIP_DB_PROPS)))
 			{
 				/* errors have already been logged */
 				++errors;
 			}
-			else if (!parse_bool(SKIP_CTID_SPLIT, &(options->skipDBproperties)))
+			else if (!parse_bool(SKIP_DB_PROPS, &(options->skipDBproperties)))
 			{
 				log_error("Failed to parse environment variable \"%s\" "
 						  "value \"%s\", expected a boolean (on/off)",
-						  PGCOPYDB_SKIP_CTID_SPLIT,
-						  SKIP_CTID_SPLIT);
+						  PGCOPYDB_SKIP_DB_PROPERTIES,
+						  SKIP_DB_PROPS);
 				++errors;
 			}
 		}
@@ -1089,15 +1089,15 @@ cli_copy_db_getopts(int argc, char **argv)
 
 			case 'g':
 			{
-				options.skipCtidSplit = true;
-				log_trace("--skip-ctid-split");
+				options.skipDBproperties = true;
+				log_trace("--skip-db-properties");
 				break;
 			}
 
 			case 'k':
 			{
-				options.failFast = true;
-				log_trace("--fail-fast");
+				options.skipCtidSplit = true;
+				log_trace("--skip-ctid-split");
 				break;
 			}
 
