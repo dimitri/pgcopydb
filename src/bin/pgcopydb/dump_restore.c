@@ -682,6 +682,16 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 		bool skip = false;
 
 		/*
+		 * Always skip DATABASE objets as pgcopydb does not create the target
+		 * database.
+		 */
+		if (item->desc == ARCHIVE_TAG_DATABASE)
+		{
+			skip = true;
+			log_notice("Skipping DATABASE \"%s\"", name);
+		}
+
+		/*
 		 * Skip COMMENT ON EXTENSION when either of the option
 		 * --skip-extensions or --skip-ext-comment has been used.
 		 */
