@@ -2519,9 +2519,17 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"           on rn.nspname = inc.nspname "
 		"          and r.relname = inc.relname "
 
+		/* exclude-index */
+		"         left join pg_temp.filter_exclude_index fei "
+		"                on n.nspname = fei.nspname "
+		"               and i.relname = fei.relname "
+
 		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
 		"      and n.nspname !~ 'pgcopydb' "
+
+		/* WHERE clause for exclusion filters */
+		"		and fei.nspname is null "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -2591,6 +2599,11 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"                on rn.nspname = ftd.nspname "
 		"               and r.relname = ftd.relname "
 
+		/* exclude-index */
+		"         left join pg_temp.filter_exclude_index fei "
+		"                on n.nspname = fei.nspname "
+		"               and i.relname = fei.relname "
+
 		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
 		"      and n.nspname !~ 'pgcopydb' "
@@ -2599,6 +2612,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"     and fn.nspname is null "
 		"     and ft.relname is null "
 		"     and ftd.relname is null "
+		"     and fei.relname is null "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -2659,12 +2673,19 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"           on rn.nspname = inc.nspname "
 		"          and r.relname = inc.relname "
 
+		/* exclude-index */
+		"    left join pg_temp.filter_exclude_index fei "
+		"           on n.nspname = fei.nspname "
+		"          and i.relname = fei.relname "
+
 		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
 		"      and n.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
-		"     and inc.relname is null "
+		"     and (  inc.relname is null "
+		"          or "
+		"            fei.relname is not null ) "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -2729,12 +2750,18 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"                on rn.nspname = ft.nspname "
 		"               and r.relname = ft.relname "
 
+		/* exclude-index */
+		"         left join pg_temp.filter_exclude_index fei "
+		"                on n.nspname = fei.nspname "
+		"               and i.relname = fei.relname "
+
 		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
 		"      and n.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
 		"     and (   fn.nspname is not null "
+		"          or fei.relname is not null "
 		"          or ft.relname is not null ) "
 
 		/* avoid pg_class entries which belong to extensions */
