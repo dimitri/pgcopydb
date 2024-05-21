@@ -54,13 +54,28 @@ static bool canCoalesceLogicalTransactionStatement(LogicalTransaction *txn,
 static bool coalesceLogicalTransactionStatement(LogicalTransaction *txn,
 												LogicalTransactionStatement *new);
 
+static bool removeGeneratedColumnsFromTransaction(GeneratedColumnsCache *cache,
+												  LogicalTransaction *txn);
+static bool removeGeneratedColumnsFromStatement(GeneratedColumnsCache *cache,
+												LogicalTransactionStatement *stmt);
+
+static bool prepareGeneratedColumnsCache_hook(void *ctx, SourceTable *table);
+
+static bool prepareGeneratedColumnsCache(StreamSpecs *specs);
+
+static bool isGeneratedColumn(GeneratedColumnSet *columns, const char *attname);
+
+static bool findGeneratedColumns(GeneratedColumnsCache *cache,
+								 const char *nspname,
+								 const char *relname,
+								 GeneratedColumnSet **columns);
+
 /*
- * stream_transform_context_init_pgsql initializes StreamContext's
- * transformPGSQL and opens a connection to the target. This is required to use
- * PQescapeIdentifier API of libpq when escaping identifiers
+ * stream_transform_context_init initializes StreamContext for the transform
+ * operation.
  */
 bool
-stream_transform_context_init_pgsql(StreamSpecs *specs)
+stream_transform_context_init(StreamSpecs *specs)
 {
 	StreamContext *privateContext = &(specs->private);
 
@@ -81,6 +96,16 @@ stream_transform_context_init_pgsql(StreamSpecs *specs)
 		return false;
 	}
 
+	/*
+	 * Prepare the generated columns cache, which helps to skip the generated
+	 * columns in the SQL output.
+	 */
+	if (!prepareGeneratedColumnsCache(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	return true;
 }
 
@@ -93,7 +118,7 @@ stream_transform_context_init_pgsql(StreamSpecs *specs)
 bool
 stream_transform_stream(StreamSpecs *specs)
 {
-	if (!stream_transform_context_init_pgsql(specs))
+	if (!stream_transform_context_init(specs))
 	{
 		/* errors have already been logged */
 		return false;
@@ -439,6 +464,22 @@ stream_transform_write_message(StreamContext *privateContext,
 		txn->commit = true;
 	}
 
+	/*
+	 * Before serializing the transaction to disk or stdout, we need to remove
+	 * the generated columns from the transaction, as they are not supposed to
+	 * be part of the SQL output.
+	 */
+	GeneratedColumnsCache *cache = privateContext->generatedColumnsCache;
+
+	if (currentMsg->isTransaction && cache != NULL)
+	{
+		if (!removeGeneratedColumnsFromTransaction(cache, txn))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
 	/* now write the transaction out */
 	if (privateContext->out != NULL)
 	{
@@ -662,7 +703,7 @@ stream_transform_from_queue(StreamSpecs *specs)
 		return false;
 	}
 
-	if (!stream_transform_context_init_pgsql(specs))
+	if (!stream_transform_context_init(specs))
 	{
 		/* errors have already been logged */
 		return false;
@@ -2608,4 +2649,328 @@ LogicalMessageValueEq(LogicalMessageValue *a, LogicalMessageValue *b)
 
 	/* makes compiler happy */
 	return false;
+}
+
+
+/*
+ * Identifiers such as schema, table, column comes from various
+ * sources(e.g. wal2json, test_decoding and source catalog) and some of them
+ * already escapes identifiers and few don't.
+ * We need to check if the identifier is already quoted or not before
+ * escaping it.
+ * Whatever we are here is not a fool proof escaping mechanism, but a best
+ * effort to make sure that the identifiers are normalized by quoting them
+ * if it is not already quoted.
+ *
+ * Here is an example:
+ * foo -> "foo"
+ * "foo" -> "foo"
+ * foo"bar -> "foo"bar"
+ * "foo -> ""foo"
+ *
+ * The goal of this normalization is to make sure that the identifiers are
+ * comparable in the context of Hash Table.
+ */
+#define NORMALIZED_PG_NAMEDATA_COPY(dst, src) \
+	{ \
+		int len = strlen(src); \
+		if (src[0] == '"' && src[len - 1] == '"') \
+		{ \
+			strlcpy(dst, src, PG_NAMEDATALEN); \
+		} \
+		else \
+		{ \
+			sformat(dst, PG_NAMEDATALEN, "\"%s\"", src); \
+		} \
+	}
+
+/*
+ * findGeneratedColumns finds whether the given "nspname.relname" has any
+ * generated columns using the cache, if found it returns true and populates
+ * "columns" with the generated columns.
+ *
+ * NOTE: There is no error condition, if the cache is NULL, it means that we
+ * don't have any generated columns in the catalog.
+ */
+static bool
+findGeneratedColumns(GeneratedColumnsCache *cache,
+					 const char *nspname,
+					 const char *relname,
+					 GeneratedColumnSet **columns)
+{
+	/*
+	 * NULL cache means that we don't have any generated columns in the
+	 * catalog.
+	 */
+	if (cache == NULL)
+	{
+		return false;
+	}
+
+	GeneratedColumnsCache *item = NULL;
+
+	GeneratedColumnsCache_Lookup key = { 0 };
+
+	NORMALIZED_PG_NAMEDATA_COPY(key.nspname, nspname);
+	NORMALIZED_PG_NAMEDATA_COPY(key.relname, relname);
+
+	HASH_FIND(hh, cache, &key, sizeof(GeneratedColumnsCache_Lookup), item);
+
+	if (item == NULL)
+	{
+		return false;
+	}
+
+	if (item->columns == NULL)
+	{
+		log_error("BUG: Table \"%s.%s\" is in the cache but columns are NULL",
+				  nspname, relname);
+		return false;
+	}
+
+	*columns = item->columns;
+
+	log_trace("Table \"%s.%s\" has generated columns", nspname, relname);
+
+	return true;
+}
+
+
+/*
+ * isGeneratedColumn checks whether the given "attname" is a generated column.
+ *
+ * Returns true if the column is generated, false otherwise.
+ *
+ * NOTE: There is no error condition, if the cache is NULL, it means that we
+ * don't have any generated columns in the catalog.
+ */
+static bool
+isGeneratedColumn(GeneratedColumnSet *columns, const char *attname)
+{
+	char attnameNormalized[PG_NAMEDATALEN] = { 0 };
+
+	NORMALIZED_PG_NAMEDATA_COPY(attnameNormalized, attname);
+
+	GeneratedColumnSet *generatedColumns = NULL;
+
+	HASH_FIND_STR(columns, attnameNormalized, generatedColumns);
+
+	if (generatedColumns != NULL)
+	{
+		log_trace("Column \"%s\" is generated", attnameNormalized);
+
+		return true;
+	}
+
+	return false;
+}
+
+
+/*
+ * prepareGeneratedColumnsCache_hook is a callback function that populates the
+ * generated columns cache from the catalog.
+ */
+static bool
+prepareGeneratedColumnsCache_hook(void *ctx, SourceTable *table)
+{
+	StreamSpecs *specs = (StreamSpecs *) ctx;
+	StreamContext *privateContext = &(specs->private);
+	DatabaseCatalog *sourceDB = specs->sourceDB;
+
+	if (!catalog_s_table_fetch_attrs(sourceDB, table))
+	{
+		log_error("Failed to fetch attributes for table \"%s\".%s",
+				  table->nspname, table->relname);
+		return false;
+	}
+
+	GeneratedColumnsCache *item = (GeneratedColumnsCache *)
+								  calloc(1, sizeof(GeneratedColumnsCache));
+
+	if (item == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	for (int i = 0; i < table->attributes.count; i++)
+	{
+		SourceTableAttribute *attr = &(table->attributes.array[i]);
+
+		if (attr->attisgenerated)
+		{
+			/* Add a generated column to the GeneratedColumnSet */
+			GeneratedColumnSet *generatedColumn = (GeneratedColumnSet *)
+												  calloc(1, sizeof(GeneratedColumnSet));
+			if (generatedColumn == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			NORMALIZED_PG_NAMEDATA_COPY(generatedColumn->attname, attr->attname);
+			HASH_ADD_STR(item->columns, attname, generatedColumn);
+		}
+	}
+
+
+	NORMALIZED_PG_NAMEDATA_COPY(item->nspname, table->nspname);
+	NORMALIZED_PG_NAMEDATA_COPY(item->relname, table->relname);
+
+	/*
+	 * Prepare keylen as per https://troydhanson.github.io/uthash/userguide.html#_compound_keys
+	 */
+	unsigned keylen = offsetof(GeneratedColumnsCache, relname) + /* offset of last key field */
+					  sizeof(item->relname) -    /* size of last key field */
+					  offsetof(GeneratedColumnsCache, nspname); /* offset of first key field */
+
+	/* Add the table to the GeneratedColumnsCache. */
+	HASH_ADD(hh,
+			 privateContext->generatedColumnsCache,
+			 nspname,
+			 keylen,
+			 item);
+
+	return true;
+}
+
+
+/*
+ * prepareGeneratedColumnsCache fills-in the cache with the tables having
+ * generated columns.
+ */
+static bool
+prepareGeneratedColumnsCache(StreamSpecs *specs)
+{
+	/*
+	 * TODO: GeneratedColumn must be retrieved from the target catalog
+	 * because the schema of the target can be different from the source.
+	 */
+	if (!catalog_iter_s_table_generated_columns(specs->sourceDB,
+												specs,
+												&prepareGeneratedColumnsCache_hook))
+	{
+		log_error("Failed to prepare a generated column cache for our catalog,"
+				  "see above for details");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * removeGeneratedColumnsFromTransaction removes the generated columns from the
+ * given transaction.
+ */
+static bool
+removeGeneratedColumnsFromTransaction(GeneratedColumnsCache *cache,
+									  LogicalTransaction *txn)
+{
+	LogicalTransactionStatement *stmt = txn->first;
+
+	for (; stmt != NULL; stmt = stmt->next)
+	{
+		if (!removeGeneratedColumnsFromStatement(cache, stmt))
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * removeGeneratedColumnsFromStatement removes the generated columns from the
+ * given statement after looking up the cache.
+ */
+static bool
+removeGeneratedColumnsFromStatement(GeneratedColumnsCache *cache,
+									LogicalTransactionStatement *stmt)
+{
+	LogicalMessageTupleArray *columns = NULL;
+	const char *nspname = NULL;
+	const char *relname = NULL;
+
+	if (stmt->action == STREAM_ACTION_INSERT)
+	{
+		columns = &(stmt->stmt.insert.new);
+		nspname = stmt->stmt.insert.table.nspname;
+		relname = stmt->stmt.insert.table.relname;
+	}
+	else if (stmt->action == STREAM_ACTION_UPDATE)
+	{
+		columns = &(stmt->stmt.update.new);
+		nspname = stmt->stmt.update.table.nspname;
+		relname = stmt->stmt.update.table.relname;
+	}
+	else
+	{
+		/*
+		 * Only INSERT and UPDATE statements can update the table
+		 * generated columns.
+		 */
+		return true;
+	}
+
+	GeneratedColumnSet *generatedColumns = NULL;
+
+	if (!findGeneratedColumns(cache, nspname, relname, &generatedColumns))
+	{
+		/* no generated columns in this table */
+		return true;
+	}
+
+	for (int i = 0; i < columns->count; i++)
+	{
+		LogicalMessageTuple *tuple = &(columns->array[i]);
+
+		for (int c = 0; c < tuple->cols; c++)
+		{
+			if (isGeneratedColumn(generatedColumns, tuple->columns[c]))
+			{
+				/* deallocate the column */
+				free(tuple->columns[c]);
+
+				/* remove the column from the tuple */
+				for (int j = c; j < tuple->cols - 1; j++)
+				{
+					tuple->columns[j] = tuple->columns[j + 1];
+				}
+
+				/* number of colums have reduced now */
+				tuple->cols--;
+
+				/* remove the value from the tuple */
+				for (int r = 0; r < tuple->values.count; r++)
+				{
+					LogicalMessageValues *values = &(tuple->values.array[r]);
+
+					LogicalMessageValue *value = &(values->array[c]);
+
+					if ((value->oid == TEXTOID || value->oid == BYTEAOID) &&
+						!value->isNull)
+					{
+						free(value->val.str);
+					}
+
+					for (int v = c; v < values->cols - 1; v++)
+					{
+						values->array[v] = values->array[v + 1];
+					}
+
+					values->cols--;
+				}
+
+				/*
+				 * Since we move the next column to the current position, the
+				 * moved once can be generated too, so we need to recheck it.
+				 */
+				c--;
+			}
+		}
+	}
+
+	return true;
 }
