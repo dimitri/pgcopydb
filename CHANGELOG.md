@@ -1,3 +1,85 @@
+### pgcopydb v0.16 (May 22, 2024) ###
+
+pgcopydb v0.16 is mostly a bugfix release. The main changes internally are
+the integration of the Boehm-Demers-Weiser Garbage Collector, and the
+continuing work on using SQLite for internal catalogs. The SQLite library is
+now vendored-in using the recommended *amalgamation* source distribution.
+
+### Added
+* Allow identity based sequences to be found and reset (#778)
+* Implement --skip-db-properties. (#779)
+* Check configuration on target before applying db properties. (#726)
+* Respect FK constraints for extension config tables (#702)
+* Add skip tablespaces in restore options. (#683)
+* Add ARM based OSX support to Makefile (#685)
+* Improve documentation (resume, snapshots, tutorials). (#669)
+* Vendor SQLite amalgamation distribution. (#660)
+* Introduce CONTRIBUTING.md (#653)
+* Use Boehm-Demers-Weiser Garbage Collector. (#647)
+
+### Changed
+* Parse pg_restore Archive TOC entry for DATABASE. (#786)
+* Freeze only if we TRUNCATE (#769)
+* Sentinel is updated for every commit (#774)
+* Create extensions in the correct schemas for pgcopydb clone extensions (#711)
+* Check that a table still exists before running COPY. (#748)
+* Check that we have TRUNCATE privileges before running the command. (#746)
+* Problem: Finding replay_lsn with lsn tracking is 7.5 times slower (#731)
+* Dockerfile: make pg_dump more interoperable (#735)
+* Improve speed of CDC replication/apply (#704)
+* Force sequences reset at the end of the follow process. (#716)
+* Review table attributes listing and usage of attnum. (#690)
+* Cleanup schema_drop_pgcopydb_table_size. (#689)
+* Move table size queries into pgcopydb catalogs (#684)
+* Compute COPY attribute list using SQL. (#661)
+* [sqlite] Set PRAGMA only once for catalogs. (#651)
+* Improve documentation templates (#618)
+* Improve sqlite catalog setup performance. (#646)
+* Skip building debugParameters when not necessary. (#637)
+
+### Fix
+* BUG: summary_start_timing: db is NULL (#784)
+* Fix resume on interruped index creation (#783)
+* Fix index/constraint lookup when preparing pg_restore list files. (#782)
+* Incorrect type used for `partnum` while querying summary table (#781)
+* Fix short args common cli options (#780)
+* Fix SQLite database is locked (#767)
+* Remove redundant identifier escaping from transform (#771)
+* Fix a deadlock situation when queueing a table's indexes. (#766)
+* Fix the default value for the table attr list. (#764)
+* Fix pgsql_escape_identifier leaks memory (#761)
+* Fix COPY partitioning. (#762)
+* fix: use IS NULL during an UPDATE/DELETE (#706)
+* Fix infinite recursion for schema_list_extensions() catalog query (#752)
+* Fix varbit parsing in our test_decoding support. (#747)
+* Fix building on macos. (#744)
+* Fix our implementation of CREATE SCHEMA if not exists (#717)
+* Fix replay_lsn is not moving until the first message received (#727)
+* Fix Idle source doesn't move replay progress forward (#703)
+* Fix interrupted clone resume fails with index relation already exists error (#699)
+* Fix building with older libpq (pg 11 and 12) (#722)
+* Fix "database is locked" due to concurrent writes between follow and clone. (#712)
+* Fix Resume failure after interrupted replication connection (#707)
+* Fix list progress when there are partitions. (#713)
+* Fix list progress due to missing delete in catalog `process` table. (#714)
+* Fix resuming after interrupted clone always fails (#698)
+* Fix duplicate hazards when listing extension namespaces dependencies. (#687)
+* Fix documentation typo for hyperlink. (#686)
+* Fix xid is missing in test_decoding commit for a continued txn (#682)
+* Fix Snapshot id printed on stdout doesn't appear on console (#681)
+* Fix ordering of CFLAGS for sqlite (#680)
+* Fix `make deb` target, improve build-from-sources docs. (#670)
+* Escape column names while transforming for wal2json plugin. (#663)
+* Fix confusion around reporting operations in progress. (#658)
+* Fix pgcopydb list progress. (#654)
+* Fix database name identifier in ALTER DATABASE properties using PQescapeIdentifier. (#645)
+* Fix cache invalidation of zero --split-tables-larger-than setup. (#648)
+* Fix eager extension/collation skipping. (#642)
+* Review zero-byte allocation hasards. (#641)
+* Review the splitLines() API to avoid allocating zero bytes. (#638)
+* Blind attempt to fix a segfault in copy extensions code. (#636)
+* use int64 for lastValue (#633)
+
 ### pgcopydb v0.15 (January 10, 2024) ###
 
 ### Added
