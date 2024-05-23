@@ -482,7 +482,7 @@ cli_copydb_getenv(CopyDBOptions *options)
 	}
 
 	/*
-	 * When ----skip-split-by-ctid has not been used, check
+	 * When --skip-split-by-ctid has not been used, check
 	 * PGCOPYDB_SKIP_CTID_SPLIT
 	 */
 	if (!options->skipCtidSplit)
@@ -1097,7 +1097,7 @@ cli_copy_db_getopts(int argc, char **argv)
 			case 'k':
 			{
 				options.skipCtidSplit = true;
-				log_trace("----skip-split-by-ctid");
+				log_trace("--skip-split-by-ctid");
 				break;
 			}
 

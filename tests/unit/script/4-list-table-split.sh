@@ -44,5 +44,5 @@ pgcopydb list table-parts --dir ${DIR} \
 pgcopydb list table-parts --dir ${DIR} \
     --schema-name "public" --table-name "table_ctid_candidate_skip" \
     --split-tables-larger-than "10 kB" \
-    ----skip-split-by-ctid 2>&1
+    --skip-split-by-ctid 2>&1
 

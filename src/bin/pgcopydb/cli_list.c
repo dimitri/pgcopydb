@@ -113,7 +113,7 @@ static CommandLine list_table_parts_command =
 		"  --schema-name               Name of the schema where to find the table\n"
 		"  --table-name                Name of the target table\n"
 		"  --split-tables-larger-than  Size threshold to consider partitioning\n"
-		"  ----skip-split-by-ctid           Skip the ctid split\n",
+		"  --skip-split-by-ctid        Skip the ctid split\n",
 		cli_list_db_getopts,
 		cli_list_table_parts);
 
@@ -366,7 +366,7 @@ cli_list_db_getopts(int argc, char **argv)
 			case 'k':
 			{
 				options.skipCtidSplit = true;
-				log_trace("----skip-split-by-ctid");
+				log_trace("--skip-split-by-ctid");
 				break;
 			}
 

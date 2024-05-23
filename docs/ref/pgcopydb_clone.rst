@@ -507,7 +507,7 @@ The following options are available to ``pgcopydb clone``:
   that have been set on the source database, or also when copying these
   settings is not wanted.
 
-----skip-split-by-ctid
+--skip-split-by-ctid
 
   Skip splitting tables based on CTID during the copy operation. By default,
   pgcopydb splits large tables into smaller chunks based on the CTID column 
@@ -778,7 +778,7 @@ PGCOPYDB_SKIP_CTID_SPLIT
 
   When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
   then pgcopydb skips the CTID split operation during the clone process,
-  same as when using the ``----skip-split-by-ctid`` option.
+  same as when using the ``--skip-split-by-ctid`` option.
 
 PGCOPYDB_SNAPSHOT
 
