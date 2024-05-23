@@ -12,6 +12,7 @@ RUN apt-get update \
         devscripts \
         debhelper \
         autotools-dev \
+        libgc-dev \
         libedit-dev \
         libpam0g-dev \
         libreadline-dev \
