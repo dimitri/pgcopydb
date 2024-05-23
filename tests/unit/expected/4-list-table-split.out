@@ -30,3 +30,19 @@
 2024-04-26 15:30:56.753 101 INFO   main.c:136                Running pgcopydb version 0.15.59.g9a151a6.dirty from "/usr/local/bin/pgcopydb"
 2024-04-26 15:30:56.812 101 INFO   copydb.c:105              Using work dir "/tmp/unit/split"
 2024-04-26 15:30:56.815 101 INFO   cli_list.c:1275           Table public.table_3 (8192 bytes) will not be split
+024-05-23 09:14:52.903 184 INFO   main.c:136                Running pgcopydb version 0.15.28.g40af8d7 from "/usr/local/bin/pgcopydb"
+2024-05-23 09:14:52.941 184 INFO   copydb.c:105              Using work dir "/tmp/unit/split"
+2024-05-23 09:14:52.944 184 INFO   cli_list.c:1297           Table public.table_ctid_candidate is 152 kB large which is larger than --split-tables-larger-than 10 kB, and does not have a unique column of type integer: splitting by CTID
+2024-05-23 09:14:52.944 184 INFO   cli_list.c:1321           Table public.table_ctid_candidate COPY will be split 8-ways
+        Part |          Min |          Max |        Count
+-------------+--------------+--------------+-------------
+         1/8 |        (0,0) |        (1,0) |            2
+         2/8 |        (2,0) |        (3,0) |            2
+         3/8 |        (4,0) |        (5,0) |            2
+         4/8 |        (6,0) |        (7,0) |            2
+         5/8 |        (8,0) |        (9,0) |            2
+         6/8 |       (10,0) |       (11,0) |            2
+         7/8 |       (12,0) |       (13,0) |            2
+         8/8 |       (14,0) |       (-1,0) |           -1
+2024-05-23 11:01:25.505 201 INFO   main.c:136                Running pgcopydb version 0.15.28.g40af8d7 from "/usr/local/bin/pgcopydb"
+2024-05-23 11:01:25.551 201 INFO   cli_list.c:1300           Table public.table_ctid_candidate_skip is 152 kB large which is larger than --split-tables-larger-than 10 kB, does not have a unique column of type integer, and CTID split is disabled.Same table concurrency is not enabled
