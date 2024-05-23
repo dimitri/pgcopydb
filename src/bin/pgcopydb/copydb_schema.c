@@ -778,7 +778,7 @@ copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
 			log_info("Table %s is %s large "
 					 "which is larger than --split-tables-larger-than %s, "
 					 "does not have a unique column of type integer, "
-					 "and CTID split is disabled."
+					 "and CTID split is disabled. "
 					 "Same table concurrency is not enabled",
 					 source->qname,
 					 source->bytesPretty,

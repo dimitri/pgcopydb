@@ -840,7 +840,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "skip-collations", no_argument, NULL, 'l' },
 		{ "skip-vacuum", no_argument, NULL, 'U' },
 		{ "skip-db-properties", no_argument, NULL, 'g' },
-		{ "--skip-split-by-ctid", no_argument, NULL, 'k' },
+		{ "skip-split-by-ctid", no_argument, NULL, 'k' },
 		{ "no-tablespaces", no_argument, NULL, 'y' },
 		{ "filter", required_argument, NULL, 'F' },
 		{ "filters", required_argument, NULL, 'F' },
@@ -884,7 +884,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	}
 
 	const char *optstring =
-		"S:T:D:J:I:b:L:cAPOXj:xBeMlUgyF:F:Q:irRCN:fp:ws:o:tE:Vvdzqhk";
+		"S:T:D:J:I:b:L:cAPOXj:xBeMlUgkyF:F:Q:irRCN:fp:ws:o:tE:Vvdzqh";
 
 	while ((c = getopt_long(argc, argv,
 							optstring, long_options, &option_index)) != -1)

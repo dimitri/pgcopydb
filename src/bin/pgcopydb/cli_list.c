@@ -247,7 +247,7 @@ cli_list_db_getopts(int argc, char **argv)
 		{ "without-pkey", no_argument, NULL, 'P' },
 		{ "split-tables-larger-than", required_argument, NULL, 'L' },
 		{ "split-at", required_argument, NULL, 'L' },
-		{ "--skip-split-by-ctid", no_argument, NULL, 'k' },
+		{ "skip-split-by-ctid", no_argument, NULL, 'k' },
 		{ "force", no_argument, NULL, 'f' },
 		{ "cache", no_argument, NULL, 'c' },
 		{ "drop-cache", no_argument, NULL, 'C' },
@@ -277,7 +277,7 @@ cli_list_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:D:s:t:F:xPL:fcCyarJRIN:Vdzvqhk",
+	while ((c = getopt_long(argc, argv, "S:D:s:t:F:xPLk:fcCyarJRIN:Vdzvqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -1295,7 +1295,7 @@ cli_list_table_parts(int argc, char **argv)
 			log_info("Table %s is %s large "
 					 "which is larger than --split-tables-larger-than %s, "
 					 "does not have a unique column of type integer, "
-					 "and CTID split is disabled."
+					 "and CTID split is disabled. "
 					 "Same table concurrency is not enabled",
 					 table->qname,
 					 table->bytesPretty,
