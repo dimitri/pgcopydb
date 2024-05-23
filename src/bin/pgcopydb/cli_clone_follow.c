@@ -47,6 +47,7 @@
 	"  --skip-collations             Skip restoring collations\n" \
 	"  --skip-vacuum                 Skip running VACUUM ANALYZE\n" \
 	"  --skip-db-properties          Skip copying ALTER DATABASE SET properties\n" \
+	"  --skip-split-by-ctid          Skip spliting tables by ctid\n" \
 	"  --requirements <filename>     List extensions requirements\n" \
 	"  --filters <filename>          Use the filters defined in <filename>\n" \
 	"  --fail-fast                   Abort early in case of error\n" \

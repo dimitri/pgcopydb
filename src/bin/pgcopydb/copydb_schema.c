@@ -773,6 +773,20 @@ copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
 	if (IS_EMPTY_STRING_BUFFER(source->partKey) &&
 		streq(source->amname, "heap"))
 	{
+		if (specs->skipCtidSplit)
+		{
+			log_info("Table %s is %s large "
+					 "which is larger than --split-tables-larger-than %s, "
+					 "does not have a unique column of type integer, "
+					 "and CTID split is disabled. "
+					 "Same table concurrency is not enabled",
+					 source->qname,
+					 source->bytesPretty,
+					 specs->splitTablesLargerThan.bytesPretty);
+
+			return true;
+		}
+
 		log_info("Table %s is %s large "
 				 "which is larger than --split-tables-larger-than %s, "
 				 "and does not have a unique column of type integer: "

@@ -481,6 +481,34 @@ cli_copydb_getenv(CopyDBOptions *options)
 		}
 	}
 
+	/*
+	 * When --skip-split-by-ctid has not been used, check
+	 * PGCOPYDB_SKIP_CTID_SPLIT
+	 */
+	if (!options->skipCtidSplit)
+	{
+		if (env_exists(PGCOPYDB_SKIP_CTID_SPLIT))
+		{
+			char SKIP_CTID_SPLIT[BUFSIZE] = { 0 };
+
+			if (!get_env_copy(PGCOPYDB_SKIP_CTID_SPLIT,
+							  SKIP_CTID_SPLIT,
+							  sizeof(SKIP_CTID_SPLIT)))
+			{
+				/* errors have already been logged */
+				++errors;
+			}
+			else if (!parse_bool(SKIP_CTID_SPLIT, &(options->skipDBproperties)))
+			{
+				log_error("Failed to parse environment variable \"%s\" "
+						  "value \"%s\", expected a boolean (on/off)",
+						  PGCOPYDB_SKIP_CTID_SPLIT,
+						  SKIP_CTID_SPLIT);
+				++errors;
+			}
+		}
+	}
+
 	/* when --no-tablespaces has not been used, check PGCOPYDB_SKIP_TABLESPACES */
 	if (!options->restoreOptions.noTableSpaces)
 	{
@@ -812,6 +840,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "skip-collations", no_argument, NULL, 'l' },
 		{ "skip-vacuum", no_argument, NULL, 'U' },
 		{ "skip-db-properties", no_argument, NULL, 'g' },
+		{ "skip-split-by-ctid", no_argument, NULL, 'k' },
 		{ "no-tablespaces", no_argument, NULL, 'y' },
 		{ "filter", required_argument, NULL, 'F' },
 		{ "filters", required_argument, NULL, 'F' },
@@ -855,7 +884,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	}
 
 	const char *optstring =
-		"S:T:D:J:I:b:L:cAPOXj:xBeMlUgyF:F:Q:irRCN:fp:ws:o:tE:Vvdzqh";
+		"S:T:D:J:I:b:L:cAPOXj:xBeMlUgkyF:F:Q:irRCN:fp:ws:o:tE:Vvdzqh";
 
 	while ((c = getopt_long(argc, argv,
 							optstring, long_options, &option_index)) != -1)
@@ -1062,6 +1091,13 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				options.skipDBproperties = true;
 				log_trace("--skip-db-properties");
+				break;
+			}
+
+			case 'k':
+			{
+				options.skipCtidSplit = true;
+				log_trace("--skip-split-by-ctid");
 				break;
 			}
 
