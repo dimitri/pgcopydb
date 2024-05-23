@@ -482,7 +482,7 @@ cli_copydb_getenv(CopyDBOptions *options)
 	}
 
 	/*
-	 * When --skip-ctid-split has not been used, check
+	 * When ----skip-split-by-ctid has not been used, check
 	 * PGCOPYDB_SKIP_CTID_SPLIT
 	 */
 	if (!options->skipCtidSplit)
@@ -840,7 +840,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "skip-collations", no_argument, NULL, 'l' },
 		{ "skip-vacuum", no_argument, NULL, 'U' },
 		{ "skip-db-properties", no_argument, NULL, 'g' },
-		{ "skip-ctid-split", no_argument, NULL, 'k' },
+		{ "--skip-split-by-ctid", no_argument, NULL, 'k' },
 		{ "no-tablespaces", no_argument, NULL, 'y' },
 		{ "filter", required_argument, NULL, 'F' },
 		{ "filters", required_argument, NULL, 'F' },
@@ -1097,7 +1097,7 @@ cli_copy_db_getopts(int argc, char **argv)
 			case 'k':
 			{
 				options.skipCtidSplit = true;
-				log_trace("--skip-ctid-split");
+				log_trace("----skip-split-by-ctid");
 				break;
 			}
 

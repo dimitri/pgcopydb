@@ -113,7 +113,7 @@ static CommandLine list_table_parts_command =
 		"  --schema-name               Name of the schema where to find the table\n"
 		"  --table-name                Name of the target table\n"
 		"  --split-tables-larger-than  Size threshold to consider partitioning\n"
-		"  --skip-ctid-split           Skip the ctid split\n",
+		"  ----skip-split-by-ctid           Skip the ctid split\n",
 		cli_list_db_getopts,
 		cli_list_table_parts);
 
@@ -247,7 +247,7 @@ cli_list_db_getopts(int argc, char **argv)
 		{ "without-pkey", no_argument, NULL, 'P' },
 		{ "split-tables-larger-than", required_argument, NULL, 'L' },
 		{ "split-at", required_argument, NULL, 'L' },
-		{ "skip-ctid-split", no_argument, NULL, 'k' },
+		{ "--skip-split-by-ctid", no_argument, NULL, 'k' },
 		{ "force", no_argument, NULL, 'f' },
 		{ "cache", no_argument, NULL, 'c' },
 		{ "drop-cache", no_argument, NULL, 'C' },
@@ -366,7 +366,7 @@ cli_list_db_getopts(int argc, char **argv)
 			case 'k':
 			{
 				options.skipCtidSplit = true;
-				log_trace("--skip-ctid-split");
+				log_trace("----skip-split-by-ctid");
 				break;
 			}
 
