@@ -423,8 +423,17 @@ schema_list_extensions(PGSQL *pgsql, DatabaseCatalog *catalog)
 	SourceExtensionArrayContext parseContext = { { 0 }, catalog, false };
 
 	char *sql =
-		"with recursive fk_constraints as ( "
-		"     select oid, conrelid, confrelid from pg_constraint where contype = 'f' and conrelid <> confrelid "
+		"with recursive extconfig_paths as ( "
+		"     select extconfig "
+		"     from pg_extension "
+		"     where extconfig is not null "
+		" ), fk_constraints as ( "
+		"     select fk.oid, fk.conrelid, fk.confrelid "
+		"     from pg_constraint fk "
+		"     inner join extconfig_paths "
+		"         on fk.conrelid = any(extconfig_paths.extconfig) "
+		"         or fk.confrelid = any(extconfig_paths.extconfig) "
+		"     where fk.contype = 'f' and fk.conrelid <> fk.confrelid "
 		" ), raw_ordered_fk_constraints as ( "
 		"     select "
 		"            distinct c.confrelid as relid, "
