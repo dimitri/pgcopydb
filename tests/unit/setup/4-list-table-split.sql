@@ -20,7 +20,7 @@ create table table_3 (
     c_char char(512)
 );
 
--- Insert 100 rows into table_1 and duplicate data in table_2 and table_3.
+-- Insert 100 rows into table_1 and duplicate data in table_2, table_3 is empty.
 
 insert into table_1 (c_char)
 select
@@ -72,6 +72,32 @@ select
     'Name ' || "s0"
 from
     "Sp1eCial .Char"."source1testing";
+
+-- Create two tables with identical schema and data to test ctid split
+
+create table table_ctid_candidate (
+    c_char char(512),
+    d_char char(512)
+);
+
+create table table_ctid_candidate_skip (
+    c_char char(512),
+    d_char char(512)
+);
+
+-- Insert 100 rows into table_ctid_candidate
+insert into table_ctid_candidate (c_char, d_char)
+select
+    left (md5(random()::text), 10),
+    left (md5(random()::text), 10)
+from
+    generate_series(1, 100) s (i);
+
+insert into table_ctid_candidate_skip
+select
+    *
+from
+    table_ctid_candidate;
 
 -- insert into pgcopydb.pgcopydb_table_size (oid, bytes)
 --      select tname::regclass,

@@ -11,3 +11,5 @@
 \ir 11-check-constraint.sql
 \ir 12-generated-column.sql
 \ir 14-uuid.sql
+\ir 15-attgenerated.sql
+\ir 16-sequences.sql

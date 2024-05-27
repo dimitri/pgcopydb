@@ -34,3 +34,15 @@ pgcopydb list table-parts --dir ${DIR} \
 pgcopydb list table-parts --dir ${DIR} \
     --schema-name "public" --table-name "table_3" \
     --split-tables-larger-than "10 kB" 2>&1
+
+# table_ctid_candidate doesn't have a unique integer, therefore it will be split by ctid
+pgcopydb list table-parts --dir ${DIR} \
+    --schema-name "public" --table-name "table_ctid_candidate" \
+    --split-tables-larger-than "10 kB" 2>&1
+
+# ctid split is disabled, no partitioning will be done
+pgcopydb list table-parts --dir ${DIR} \
+    --schema-name "public" --table-name "table_ctid_candidate_skip" \
+    --split-tables-larger-than "10 kB" \
+    --skip-split-by-ctid 2>&1
+

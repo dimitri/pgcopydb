@@ -112,7 +112,8 @@ static CommandLine list_table_parts_command =
 		"  --force                     Force fetching catalogs again\n"
 		"  --schema-name               Name of the schema where to find the table\n"
 		"  --table-name                Name of the target table\n"
-		"  --split-tables-larger-than  Size threshold to consider partitioning\n",
+		"  --split-tables-larger-than  Size threshold to consider partitioning\n"
+		"  --skip-split-by-ctid        Skip the ctid split\n",
 		cli_list_db_getopts,
 		cli_list_table_parts);
 
@@ -246,6 +247,7 @@ cli_list_db_getopts(int argc, char **argv)
 		{ "without-pkey", no_argument, NULL, 'P' },
 		{ "split-tables-larger-than", required_argument, NULL, 'L' },
 		{ "split-at", required_argument, NULL, 'L' },
+		{ "skip-split-by-ctid", no_argument, NULL, 'k' },
 		{ "force", no_argument, NULL, 'f' },
 		{ "cache", no_argument, NULL, 'c' },
 		{ "drop-cache", no_argument, NULL, 'C' },
@@ -275,7 +277,7 @@ cli_list_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:D:s:t:F:xPL:fcCyarJRIN:Vdzvqh",
+	while ((c = getopt_long(argc, argv, "S:D:s:t:F:xPLk:fcCyarJRIN:Vdzvqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -358,6 +360,13 @@ cli_list_db_getopts(int argc, char **argv)
 				log_trace("--split-tables-larger-than %s (%lld)",
 						  options.splitTablesLargerThan.bytesPretty,
 						  (long long) options.splitTablesLargerThan.bytes);
+				break;
+			}
+
+			case 'k':
+			{
+				options.skipCtidSplit = true;
+				log_trace("--skip-split-by-ctid");
 				break;
 			}
 
@@ -1278,8 +1287,22 @@ cli_list_table_parts(int argc, char **argv)
 		exit(EXIT_CODE_QUIT);
 	}
 
-	if (IS_EMPTY_STRING_BUFFER(table->partKey))
+	if (IS_EMPTY_STRING_BUFFER(table->partKey) &&
+		streq(table->amname, "heap"))
 	{
+		if (copySpecs.skipCtidSplit)
+		{
+			log_info("Table %s is %s large "
+					 "which is larger than --split-tables-larger-than %s, "
+					 "does not have a unique column of type integer, "
+					 "and CTID split is disabled. "
+					 "Same table concurrency is not enabled",
+					 table->qname,
+					 table->bytesPretty,
+					 listDBoptions.splitTablesLargerThan.bytesPretty);
+			exit(EXIT_CODE_QUIT);
+		}
+
 		log_info("Table %s is %s large "
 				 "which is larger than --split-tables-larger-than %s, "
 				 "and does not have a unique column of type integer: "
@@ -1289,6 +1312,19 @@ cli_list_table_parts(int argc, char **argv)
 				 listDBoptions.splitTablesLargerThan.bytesPretty);
 
 		strlcpy(table->partKey, "ctid", sizeof(table->partKey));
+	}
+	else if (IS_EMPTY_STRING_BUFFER(table->partKey))
+	{
+		log_info("Table %s is %s large "
+				 "which is larger than --split-tables-larger-than %s, "
+				 "does not have a unique column of type integer, "
+				 "and uses table access method \"%s\": "
+				 "same table concurrency is not enabled",
+				 table->qname,
+				 table->bytesPretty,
+				 listDBoptions.splitTablesLargerThan.bytesPretty,
+				 table->amname);
+		exit(EXIT_CODE_QUIT);
 	}
 
 	log_info("Table %s COPY will be split %d-ways",
@@ -1996,6 +2032,7 @@ copydb_init_specs_from_listdboptions(CopyDataSpec *copySpecs,
 	strlcpy(options.dir, listDBoptions->dir, MAXPGPATH);
 	options.connStrings = listDBoptions->connStrings;
 	options.splitTablesLargerThan = listDBoptions->splitTablesLargerThan;
+	options.skipCtidSplit = listDBoptions->skipCtidSplit;
 
 	/* process the --resume --not-consistent --snapshot options now */
 	options.resume = listDBoptions->resume;

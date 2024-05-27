@@ -31,23 +31,58 @@ static bool copydb_copy_database_properties_hook(void *ctx,
 
 
 /*
- * copydb_objectid_has_been_processed_already returns true when a doneFile
- * could be found on-disk for the given target object OID.
+ * copydb_objectid_has_been_processed_already returns true when the given
+ * target object OID is found in our SQLite summary catalogs. This only applies
+ * to indexes or constraints, as TABLE DATA is not part of either the
+ * --pre-data parts of the schema nor the --post-data parts of the schema.
  */
 bool
-copydb_objectid_has_been_processed_already(CopyDataSpec *specs, uint32_t oid)
+copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
+										   ArchiveContentItem *item)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	bool done = false;
+	uint32_t oid = item->objectOid;
 
-	if (!summary_lookup_oid(sourceDB, oid, &done))
+	switch (item->desc)
 	{
-		/* errors have aleady been logged */
-		return false;
+		case ARCHIVE_TAG_INDEX:
+		{
+			SourceIndex index = { .indexOid = oid };
+			CopyIndexSpec indexSpecs = { .sourceIndex = &index };
+
+			if (!summary_lookup_index(sourceDB, &indexSpecs))
+			{
+				/* errors have aleady been logged */
+				return false;
+			}
+
+			return indexSpecs.summary.doneTime > 0;
+		}
+
+		case ARCHIVE_TAG_CONSTRAINT:
+		{
+			SourceIndex index = { .constraintOid = oid };
+			CopyIndexSpec indexSpecs = { .sourceIndex = &index };
+
+			if (!summary_lookup_constraint(sourceDB, &indexSpecs))
+			{
+				/* errors have aleady been logged */
+				return false;
+			}
+
+			return indexSpecs.summary.doneTime > 0;
+		}
+
+		/* we don't have internal pgcopydb support for other objects */
+		default:
+		{
+			return false;
+		}
 	}
 
-	return done;
+	/* keep compiler happy */
+	return false;
 }
 
 
@@ -647,6 +682,16 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 		bool skip = false;
 
 		/*
+		 * Always skip DATABASE objets as pgcopydb does not create the target
+		 * database.
+		 */
+		if (item->desc == ARCHIVE_TAG_DATABASE)
+		{
+			skip = true;
+			log_notice("Skipping DATABASE \"%s\"", name);
+		}
+
+		/*
 		 * Skip COMMENT ON EXTENSION when either of the option
 		 * --skip-extensions or --skip-ext-comment has been used.
 		 */
@@ -685,7 +730,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 			}
 		}
 
-		if (!skip && copydb_objectid_has_been_processed_already(specs, oid))
+		if (!skip && copydb_objectid_has_been_processed_already(specs, item))
 		{
 			skip = true;
 

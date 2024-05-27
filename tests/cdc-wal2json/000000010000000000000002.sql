@@ -55,6 +55,14 @@ EXECUTE dc973d3c["11.990000","28814","592","1","3973","11.950000","2022-07-06 12
 PREPARE dc973d3c AS UPDATE "public"."payment_p2022_07" SET "amount" = $1 WHERE "payment_id" = $2 and "customer_id" = $3 and "staff_id" = $4 and "rental_id" = $5 and "amount" = $6 and "payment_date" = $7;
 EXECUTE dc973d3c["11.990000","29136","13","2","8831","11.950000","2022-07-22 16:15:40.797771+00"];
 COMMIT; -- {"xid":501,"lsn":"0/24E7158","timestamp":"2024-02-02 09:33:28.573357+0000"}
+BEGIN; -- {"xid":503,"lsn":"0/24E3598","timestamp":"2024-04-26 09:36:17.632070+0000","commit_lsn":"0/24E3870"}
+PREPARE 21a8a4dc AS DELETE FROM "public"."address" WHERE "address_id" = $1 and "address" = $2 and "address2" IS NULL and "district" = $3 and "city_id" = $4 and "postal_code" = $5 and "phone" = $6 and "last_update" = $7;
+EXECUTE 21a8a4dc["1","47 MySakila Drive","Alberta","300","","","2022-02-15 09:45:30+00"];
+PREPARE 21a8a4dc AS DELETE FROM "public"."address" WHERE "address_id" = $1 and "address" = $2 and "address2" IS NULL and "district" = $3 and "city_id" = $4 and "postal_code" = $5 and "phone" = $6 and "last_update" = $7;
+EXECUTE 21a8a4dc["3","23 Workhaven Lane","Alberta","300","","14033335568","2022-02-15 09:45:30+00"];
+PREPARE 3f3ad11 AS UPDATE "public"."address" SET "postal_code" = $1 WHERE "address_id" = $2 and "address" = $3 and "address2" IS NULL and "district" = $4 and "city_id" = $5 and "postal_code" = $6 and "phone" = $7 and "last_update" = $8;
+EXECUTE 3f3ad11["751007","4","1411 Lillydale Drive","QLD","576","","6172235589","2022-02-15 09:45:30+00"];
+COMMIT; -- {"xid":503,"lsn":"0/24E3870","timestamp":"2024-04-26 09:36:17.632070+0000"}
 BEGIN; -- {"xid":502,"lsn":"0/24E7158","timestamp":"2024-02-02 09:33:28.573418+0000","commit_lsn":"0/24E7800"}
 TRUNCATE ONLY "Sp1eCial .Char"."source1testing"
 COMMIT; -- {"xid":502,"lsn":"0/24E7800","timestamp":"2024-02-02 09:33:28.573418+0000"}

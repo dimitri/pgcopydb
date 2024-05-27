@@ -451,30 +451,86 @@ cli_copydb_getenv(CopyDBOptions *options)
 				++errors;
 			}
 		}
+	}
 
-		/* when --no-tablespaces has not been used, check PGCOPYDB_SKIP_TABLESPACES */
-		if (!options->restoreOptions.noTableSpaces)
+	/*
+	 * When --skip-db-properties has not been used, check
+	 * PGCOPYDB_SKIP_DB_PROPERTIES
+	 */
+	if (!options->skipDBproperties)
+	{
+		if (env_exists(PGCOPYDB_SKIP_DB_PROPERTIES))
 		{
-			if (env_exists(PGCOPYDB_SKIP_TABLESPACES))
-			{
-				char SKIP_TABLESPACES[BUFSIZE] = { 0 };
+			char SKIP_DB_PROPS[BUFSIZE] = { 0 };
 
-				if (!get_env_copy(PGCOPYDB_SKIP_TABLESPACES,
-								  SKIP_TABLESPACES,
-								  sizeof(SKIP_TABLESPACES)))
-				{
-					/* errors have already been logged */
-					++errors;
-				}
-				else if (!parse_bool(SKIP_TABLESPACES,
-									 &(options->restoreOptions.noTableSpaces)))
-				{
-					log_error("Failed to parse environment variable \"%s\" "
-							  "value \"%s\", expected a boolean (on/off)",
-							  PGCOPYDB_SKIP_TABLESPACES,
-							  SKIP_TABLESPACES);
-					++errors;
-				}
+			if (!get_env_copy(PGCOPYDB_SKIP_DB_PROPERTIES,
+							  SKIP_DB_PROPS,
+							  sizeof(SKIP_DB_PROPS)))
+			{
+				/* errors have already been logged */
+				++errors;
+			}
+			else if (!parse_bool(SKIP_DB_PROPS, &(options->skipDBproperties)))
+			{
+				log_error("Failed to parse environment variable \"%s\" "
+						  "value \"%s\", expected a boolean (on/off)",
+						  PGCOPYDB_SKIP_DB_PROPERTIES,
+						  SKIP_DB_PROPS);
+				++errors;
+			}
+		}
+	}
+
+	/*
+	 * When --skip-split-by-ctid has not been used, check
+	 * PGCOPYDB_SKIP_CTID_SPLIT
+	 */
+	if (!options->skipCtidSplit)
+	{
+		if (env_exists(PGCOPYDB_SKIP_CTID_SPLIT))
+		{
+			char SKIP_CTID_SPLIT[BUFSIZE] = { 0 };
+
+			if (!get_env_copy(PGCOPYDB_SKIP_CTID_SPLIT,
+							  SKIP_CTID_SPLIT,
+							  sizeof(SKIP_CTID_SPLIT)))
+			{
+				/* errors have already been logged */
+				++errors;
+			}
+			else if (!parse_bool(SKIP_CTID_SPLIT, &(options->skipDBproperties)))
+			{
+				log_error("Failed to parse environment variable \"%s\" "
+						  "value \"%s\", expected a boolean (on/off)",
+						  PGCOPYDB_SKIP_CTID_SPLIT,
+						  SKIP_CTID_SPLIT);
+				++errors;
+			}
+		}
+	}
+
+	/* when --no-tablespaces has not been used, check PGCOPYDB_SKIP_TABLESPACES */
+	if (!options->restoreOptions.noTableSpaces)
+	{
+		if (env_exists(PGCOPYDB_SKIP_TABLESPACES))
+		{
+			char SKIP_TABLESPACES[BUFSIZE] = { 0 };
+
+			if (!get_env_copy(PGCOPYDB_SKIP_TABLESPACES,
+							  SKIP_TABLESPACES,
+							  sizeof(SKIP_TABLESPACES)))
+			{
+				/* errors have already been logged */
+				++errors;
+			}
+			else if (!parse_bool(SKIP_TABLESPACES,
+								 &(options->restoreOptions.noTableSpaces)))
+			{
+				log_error("Failed to parse environment variable \"%s\" "
+						  "value \"%s\", expected a boolean (on/off)",
+						  PGCOPYDB_SKIP_TABLESPACES,
+						  SKIP_TABLESPACES);
+				++errors;
 			}
 		}
 	}
@@ -783,6 +839,9 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "skip-ext-comments", no_argument, NULL, 'M' },
 		{ "skip-collations", no_argument, NULL, 'l' },
 		{ "skip-vacuum", no_argument, NULL, 'U' },
+		{ "skip-db-properties", no_argument, NULL, 'g' },
+		{ "skip-split-by-ctid", no_argument, NULL, 'k' },
+		{ "no-tablespaces", no_argument, NULL, 'y' },
 		{ "filter", required_argument, NULL, 'F' },
 		{ "filters", required_argument, NULL, 'F' },
 		{ "requirements", required_argument, NULL, 'Q' },
@@ -805,7 +864,6 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "trace", no_argument, NULL, 'z' },
 		{ "quiet", no_argument, NULL, 'q' },
 		{ "help", no_argument, NULL, 'h' },
-		{ "no-tablespaces", no_argument, NULL, 'y' },
 		{ NULL, 0, NULL, 0 }
 	};
 
@@ -825,9 +883,11 @@ cli_copy_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
+	const char *optstring =
+		"S:T:D:J:I:b:L:cAPOXj:xBeMlUgkyF:F:Q:irRCN:fp:ws:o:tE:Vvdzqh";
+
 	while ((c = getopt_long(argc, argv,
-							"S:T:D:J:I:b:L:cAPOXj:xBeMlUF:F:Q:irRCN:fp:ws:o:tE:Vvdzqh",
-							long_options, &option_index)) != -1)
+							optstring, long_options, &option_index)) != -1)
 	{
 		switch (c)
 		{
@@ -1024,6 +1084,20 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				options.skipVacuum = true;
 				log_trace("--skip-vacuum");
+				break;
+			}
+
+			case 'g':
+			{
+				options.skipDBproperties = true;
+				log_trace("--skip-db-properties");
+				break;
+			}
+
+			case 'k':
+			{
+				options.skipCtidSplit = true;
+				log_trace("--skip-split-by-ctid");
 				break;
 			}
 

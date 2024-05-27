@@ -36,6 +36,7 @@ typedef struct ListDBOptions
 	bool requirements;
 	bool resume;
 	bool notConsistent;
+	bool skipCtidSplit;
 
 	char snapshot[BUFSIZE];
 

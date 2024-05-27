@@ -307,6 +307,10 @@ static char *filterDBcreateDDLs[] = {
 	/* the filter table is our hash-table */
 	"create table filter(oid integer, restore_list_name text, kind text)",
 	"create unique index filter_oid on filter(oid) where oid > 0",
+
+	"create unique index filter_oid_rlname on filter(oid, restore_list_name) "
+	" where oid > 0",
+
 	"create index filter_rlname on filter(restore_list_name)",
 
 	/*
@@ -2710,42 +2714,22 @@ catalog_iter_s_table_init(SourceTableIterator *iter)
 		return false;
 	}
 
-	char *sql = NULL;
-
-	if (iter->splitTableLargerThanBytes > 0)
-	{
-		sql =
-			"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
-			"         relpages, reltuples, ts.bytes, ts.bytes_pretty, "
-			"         exclude_data, part_key, "
-			"         count(p.oid), 0 as partnum, 0 as min, 0 as max, "
-			"         c.srcrowcount, c.srcsum, c.dstrowcount, c.dstsum "
-			"    from s_table t "
-			"         left join s_table_part p on t.oid = p.oid "
-			"         left join s_table_chksum c on t.oid = c.oid "
-			"         left join s_table_size ts on ts.oid = t.oid "
-			"   where bytes >= $1 "
-			"group by t.oid "
-			"order by bytes desc";
-	}
-	else
-	{
-		sql =
-			"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
-			"         relpages, reltuples, ts.bytes, ts.bytes_pretty, "
-			"         exclude_data, part_key, "
-			"         coalesce(p.partcount, 0) as partcount, "
-			"         0 as partnum, 0 as min, 0 as max, "
-			"         c.srcrowcount, c.srcsum, c.dstrowcount, c.dstsum, "
-			"         sum(s.duration), sum(s.bytes) "
-			"    from s_table t "
-			"         left join s_table_part p on p.oid = t.oid "
-			"         left join s_table_chksum c on c.oid = t.oid "
-			"         left join summary s on s.tableoid = t.oid "
-			"         left join s_table_size ts on ts.oid = t.oid "
-			"group by t.oid "
-			"order by ts.bytes desc";
-	}
+	char *sql =
+		"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
+		"         relpages, reltuples, ts.bytes, ts.bytes_pretty, "
+		"         exclude_data, part_key, "
+		"         coalesce(p.partcount, 0) as partcount, "
+		"         coalesce(p.partnum, 0) as partnum, "
+		"         coalesce(p.min, 0) as min, coalesce(p.max, 0) as max, "
+		"         c.srcrowcount, c.srcsum, c.dstrowcount, c.dstsum, "
+		"         sum(s.duration), sum(s.bytes) "
+		"    from s_table t "
+		"         left join s_table_part p on p.oid = t.oid "
+		"         left join s_table_chksum c on c.oid = t.oid "
+		"         left join summary s on s.tableoid = t.oid "
+		"         left join s_table_size ts on ts.oid = t.oid "
+		"group by t.oid "
+		"order by ts.bytes desc";
 
 	SQLiteQuery *query = &(iter->query);
 
@@ -2756,24 +2740,6 @@ catalog_iter_s_table_init(SourceTableIterator *iter)
 	{
 		/* errors have already been logged */
 		return false;
-	}
-
-	if (iter->splitTableLargerThanBytes > 0)
-	{
-		BindParam params[1] = {
-			{
-				BIND_PARAMETER_TYPE_INT64,
-				"bytes",
-				iter->splitTableLargerThanBytes,
-				NULL
-			}
-		};
-
-		if (!catalog_sql_bind(query, params, 1))
-		{
-			/* errors have already been logged */
-			return false;
-		}
 	}
 
 	return true;
@@ -3242,7 +3208,8 @@ catalog_s_table_fetch_attrlist(SQLiteQuery *query)
 {
 	SourceTable *table = (SourceTable *) query->context;
 
-	table->attrList = NULL;
+	/* the default empty attribute list is an empty string */
+	table->attrList = "";
 
 	if (sqlite3_column_type(query->ppStmt, 0) != SQLITE_NULL)
 	{
@@ -4022,6 +3989,7 @@ catalog_iter_s_index_table(DatabaseCatalog *catalog,
 	if (!catalog_iter_s_index_table_init(iter))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -4897,12 +4865,19 @@ catalog_prepare_filter(DatabaseCatalog *catalog,
 		 */
 		"  union all "
 
-		"     select NULL as oid, s.restore_list_name, 'sequence owned by' "
-		"       from s_seq s "
-		"      where not exists"
-		"            (select 1 from source.s_seq ss where ss.oid = s.oid)"
-		"        and not exists"
-		"            (select 1 from source.s_table st where st.oid = s.ownedby) "
+		"     select NULL as oid, restore_list_name, 'sequence owned by' "
+		"       from ( "
+		"              select distinct s.restore_list_name "
+		"                from s_seq s "
+		"               where not exists"
+		"                     (select 1 "
+		"                        from source.s_seq ss "
+		"                       where ss.oid = s.oid) "
+		"                and not exists"
+		"                    (select 1 "
+		"                       from source.s_table st "
+		"                      where st.oid = s.ownedby) "
+		"            ) as seqownedby "
 
 		/*
 		 * Also add pg_attribute.oid when it's not null (non-zero here). This
@@ -4911,8 +4886,9 @@ catalog_prepare_filter(DatabaseCatalog *catalog,
 		 */
 		"  union all "
 
-		"     select s.attroid, s.restore_list_name, 'default' "
-		"       from s_seq s ";
+		"     select distinct s.attroid, s.restore_list_name, 'default' "
+		"       from s_seq s "
+		"      where s.attroid > 0";
 
 	SQLiteQuery query = { 0 };
 
@@ -5031,9 +5007,16 @@ catalog_lookup_filter_by_oid(DatabaseCatalog *catalog,
 		.fetchFunction = &catalog_filter_fetch
 	};
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -5045,6 +5028,7 @@ catalog_lookup_filter_by_oid(DatabaseCatalog *catalog,
 	if (!catalog_sql_bind(&query, params, 1))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -5052,15 +5036,18 @@ catalog_lookup_filter_by_oid(DatabaseCatalog *catalog,
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
 
 
 /*
- * catalog_lookup_filter_by_rlname fetches a  entry from our catalogs.
+ * catalog_lookup_filter_by_rlname fetches a filter entry from our catalogs.
  */
 bool
 catalog_lookup_filter_by_rlname(DatabaseCatalog *catalog,
@@ -5075,19 +5062,36 @@ catalog_lookup_filter_by_rlname(DatabaseCatalog *catalog,
 		return false;
 	}
 
+	/*
+	 * In the case of archive entries for SEQUENCE, SEQUENCE OWNED BY, and
+	 * DEFAULT values that depend on sequences, we might find the same sequence
+	 * restore_list_name more than once with different values for the OID (the
+	 * sequence oid, NUL, or the attroid oid).
+	 *
+	 * Because of that, add a LIMIT 1 to our query here to avoid throwing an
+	 * SQLite error condition about "another row available".
+	 */
 	char *sql =
 		"  select oid, restore_list_name, kind "
 		"    from filter "
-		"   where restore_list_name = $1 ";
+		"   where restore_list_name = $1 "
+		"   limit 1";
 
 	SQLiteQuery query = {
 		.context = result,
 		.fetchFunction = &catalog_filter_fetch
 	};
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -5100,6 +5104,7 @@ catalog_lookup_filter_by_rlname(DatabaseCatalog *catalog,
 	if (!catalog_sql_bind(&query, params, 1))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -5107,8 +5112,11 @@ catalog_lookup_filter_by_rlname(DatabaseCatalog *catalog,
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -5958,7 +5966,8 @@ catalog_add_s_namespace(DatabaseCatalog *catalog, SourceSchema *namespace)
 
 
 /*
- * catalog_lookup_s_namespace_by_nspname fetches a s_namespace entry from our catalogs.
+ * catalog_lookup_s_namespace_by_nspname fetches a s_namespace entry from our
+ * catalogs.
  */
 bool
 catalog_lookup_s_namespace_by_nspname(DatabaseCatalog *catalog,
@@ -5983,9 +5992,16 @@ catalog_lookup_s_namespace_by_nspname(DatabaseCatalog *catalog,
 		.fetchFunction = &catalog_s_namespace_fetch
 	};
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -5998,6 +6014,7 @@ catalog_lookup_s_namespace_by_nspname(DatabaseCatalog *catalog,
 	if (!catalog_sql_bind(&query, params, 1))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -6005,15 +6022,19 @@ catalog_lookup_s_namespace_by_nspname(DatabaseCatalog *catalog,
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
 
 
 /*
- * catalog_lookup_s_namespace_by_oid fetches a s_namespace entry from our catalogs using the oid.
+ * catalog_lookup_s_namespace_by_oid fetches a s_namespace entry from our
+ * catalogs using the oid.
  */
 bool
 catalog_lookup_s_namespace_by_oid(DatabaseCatalog *catalog,
@@ -6038,9 +6059,16 @@ catalog_lookup_s_namespace_by_oid(DatabaseCatalog *catalog,
 		.fetchFunction = &catalog_s_namespace_fetch
 	};
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -6052,6 +6080,7 @@ catalog_lookup_s_namespace_by_oid(DatabaseCatalog *catalog,
 	if (!catalog_sql_bind(&query, params, 1))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -6059,8 +6088,11 @@ catalog_lookup_s_namespace_by_oid(DatabaseCatalog *catalog,
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }

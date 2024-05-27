@@ -351,7 +351,6 @@ parseTestDecodingMessageHeader(TestDecodingHeader *header, const char *message)
 	 */
 	header->table.nspname = strndup(idp, dot - idp);
 	header->table.relname = strndup(dot + 1, sep - dot - 1);
-	header->table.pqMemory = false;
 
 	sformat(header->qname, sizeof(header->qname), "%s.%s",
 			header->table.nspname,
