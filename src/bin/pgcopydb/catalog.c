@@ -3147,6 +3147,50 @@ catalog_iter_s_table_part_finish(SourceTablePartsIterator *iter)
 
 
 /*
+ * catalog_iter_s_generated_column_init initializes an Interator over our
+ * catalog of GeneratedColumn.
+ */
+bool
+catalog_iter_s_generated_column_init(GeneratedColumnIterator *iter)
+{
+	sqlite3 *db = iter->catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: Failed to initialize s_table iterator: db is NULL");
+		return false;
+	}
+
+	iter->column = (GeneratedColumn *) calloc(1, sizeof(GeneratedColumn));
+
+	if (iter->column == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	char *sql =
+		"  select nspname, relname, attname "
+		"    from s_attr a"
+		"      join s_table t on t.oid = a.oid "
+		"   where a.attisgenerated";
+
+	SQLiteQuery *query = &(iter->query);
+
+	query->context = iter->column;
+	query->fetchFunction = &catalog_s_generated_column_fetch;
+
+	if (!catalog_sql_prepare(db, sql, query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * catalog_iter_s_generated_column_next fetches the next GeneratedColumn entry
  * in our catalogs.
  */
@@ -3281,50 +3325,6 @@ catalog_iter_s_generated_column(DatabaseCatalog *catalog,
 		}
 	}
 
-
-	return true;
-}
-
-
-/*
- * catalog_iter_s_generated_column_init initializes an Interator over our
- * catalog of GeneratedColumn.
- */
-bool
-catalog_iter_s_generated_column_init(GeneratedColumnIterator *iter)
-{
-	sqlite3 *db = iter->catalog->db;
-
-	if (db == NULL)
-	{
-		log_error("BUG: Failed to initialize s_table iterator: db is NULL");
-		return false;
-	}
-
-	iter->column = (GeneratedColumn *) calloc(1, sizeof(GeneratedColumn));
-
-	if (iter->column == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	char *sql =
-		"  select nspname, relname, attname "
-		"    from s_attr a"
-		"      join s_table t on t.oid = a.oid "
-		"   where a.attisgenerated";
-
-	SQLiteQuery *query = &(iter->query);
-
-	query->context = iter->column;
-	query->fetchFunction = &catalog_s_generated_column_fetch;
-
-	if (!catalog_sql_prepare(db, sql, query))
-	{
-		/* errors have already been logged */
-		return false;
-	}
 
 	return true;
 }

@@ -59,19 +59,19 @@ static bool removeGeneratedColumnsFromTransaction(GeneratedColumnsCache *cache,
 static bool removeGeneratedColumnsFromStatement(GeneratedColumnsCache *cache,
 												LogicalTransactionStatement *stmt);
 
-static void createFQColumnName(FQColumnName *qColumnName,
-							   const char *schema,
-							   const char *table,
-							   const char *column);
+static void normalizedGeneratedColumn(GeneratedColumn *generatedColumn,
+									  const char *nspname,
+									  const char *relname,
+									  const char *attname);
 
-static bool populateGeneratedColumnCache(void *ctx, GeneratedColumn *column);
+static bool generated_column_iter_hook(void *ctx, GeneratedColumn *column);
 
 static bool prepareGeneratedColumnsCache(StreamSpecs *specs);
 
 static bool isGeneratedColumn(GeneratedColumnsCache *cache,
-							  const char *schema,
-							  const char *table,
-							  const char *column);
+							  const char *nspname,
+							  const char *relname,
+							  const char *attname);
 
 /*
  * stream_transform_context_init initializes StreamContext for the transform
@@ -2674,47 +2674,37 @@ LogicalMessageValueEq(LogicalMessageValue *a, LogicalMessageValue *b)
  * The goal of this normalization is to make sure that the identifiers are
  * comparable in the context of Hash Table.
  */
-#define NORMALIZE_IDENTIFIER(buf, bufsize, offset, ident) \
+#define NORMALIZE_IDENTIFIER(dst, src, size) \
 	{ \
-		int len = strlen(ident); \
-		if (ident[0] == '"' && ident[len - 1] == '"') \
+		int len = strlen(src); \
+		if (src[0] == '"' && src[len - 1] == '"') \
 		{ \
-			offset += sformat(buf, bufsize, "%s", ident); \
+			strlcpy(dst, src, size); \
 		} \
 		else \
 		{ \
-			offset += sformat(buf, bufsize, "\"%s\"", ident); \
+			sformat(dst, size, "\"%s\"", src); \
 		} \
 	}
 
 /*
- * createFQColumnName creates a fully qualified column name in the form
- * schema.table.column and normalizes the identifiers by quoting them if
- * necessary.
- *
+ * normalizedGeneratedColumn creates normalized generatedColumn by quoting
+ * identifiers if necessary.
  */
 static void
-createFQColumnName(FQColumnName *qColumnName,
-				   const char *schema,
-				   const char *table,
-				   const char *column)
+normalizedGeneratedColumn(GeneratedColumn *generatedColumn,
+						  const char *nspname,
+						  const char *relname,
+						  const char *attname)
 {
-	int offset = 0;
-	char *buf = (char *) qColumnName;
-	const int bufsize = sizeof(FQColumnName);
-
-	NORMALIZE_IDENTIFIER(buf + offset, bufsize - offset, offset, schema);
-	offset += sformat(buf + offset, bufsize - offset, ".");
-
-	NORMALIZE_IDENTIFIER(buf + offset, bufsize - offset, offset, table);
-	offset += sformat(buf + offset, bufsize - offset, ".");
-
-	NORMALIZE_IDENTIFIER(buf + offset, bufsize - offset, offset, column);
+	NORMALIZE_IDENTIFIER(generatedColumn->nspname, nspname, PG_NAMEDATALEN);
+	NORMALIZE_IDENTIFIER(generatedColumn->relname, relname, PG_NAMEDATALEN);
+	NORMALIZE_IDENTIFIER(generatedColumn->attname, attname, PG_NAMEDATALEN);
 }
 
 
 /*
- * isGeneratedColumn checks whether the given "column" in "schema.table" is
+ * isGeneratedColumn checks whether the given "attname" in "nspname.relname" is
  * generated or not using the cache.
  *
  * Returns true if the column is generated, false otherwise.
@@ -2724,9 +2714,9 @@ createFQColumnName(FQColumnName *qColumnName,
  */
 static bool
 isGeneratedColumn(GeneratedColumnsCache *cache,
-				  const char *schema,
-				  const char *table,
-				  const char *column)
+				  const char *nspname,
+				  const char *relname,
+				  const char *attname)
 {
 	/*
 	 * NULL cache means that we don't have any generated columns in the
@@ -2738,19 +2728,22 @@ isGeneratedColumn(GeneratedColumnsCache *cache,
 	}
 
 	GeneratedColumnsCache *item = NULL;
-	FQColumnName qColumnName = { 0 };
 
-	(void) createFQColumnName(&qColumnName,
-							  schema, table, column);
+	GeneratedColumn generatedColumn = { 0 };
 
-	HASH_FIND_STR(cache, qColumnName, item);
+	(void) normalizedGeneratedColumn(&generatedColumn,
+									 nspname,
+									 relname,
+									 attname);
+
+	HASH_FIND(hh, cache, &generatedColumn, sizeof(GeneratedColumn), item);
 
 	bool isGenerated = (item != NULL);
 
 	if (isGenerated)
 	{
-		log_debug("IsColumnGenerated: %s is a generated column",
-				  qColumnName);
+		log_debug("IsColumnGenerated: \"%s.%s.%s\" is a generated column",
+				  nspname, relname, attname);
 	}
 
 	return isGenerated;
@@ -2758,11 +2751,11 @@ isGeneratedColumn(GeneratedColumnsCache *cache,
 
 
 /*
- * populateGeneratedColumnCache is a callback function that populates the
+ * generated_column_iter_hook is a callback function that populates the
  * generated columns cache from the catalog.
  */
 static bool
-populateGeneratedColumnCache(void *ctx, GeneratedColumn *column)
+generated_column_iter_hook(void *ctx, GeneratedColumn *column)
 {
 	StreamSpecs *specs = (StreamSpecs *) ctx;
 	StreamContext *privateContext = &(specs->private);
@@ -2776,12 +2769,16 @@ populateGeneratedColumnCache(void *ctx, GeneratedColumn *column)
 		return false;
 	}
 
-	(void) createFQColumnName(&(item->qColumnName),
-							  column->nspname,
-							  column->relname,
-							  column->attname);
+	(void) normalizedGeneratedColumn(&(item->generatedColumn),
+									 column->nspname,
+									 column->relname,
+									 column->attname);
 
-	HASH_ADD_STR(privateContext->generatedColumnsCache, qColumnName, item);
+	HASH_ADD(hh,
+			 privateContext->generatedColumnsCache,
+			 generatedColumn,
+			 sizeof(GeneratedColumn),
+			 item);
 
 	return true;
 }
@@ -2794,9 +2791,13 @@ populateGeneratedColumnCache(void *ctx, GeneratedColumn *column)
 static bool
 prepareGeneratedColumnsCache(StreamSpecs *specs)
 {
+	/*
+	 * TODO: GeneratedColumn must be retrieved from the target catalog
+	 * because the schema of the target can be different from the source.
+	 */
 	if (!catalog_iter_s_generated_column(specs->sourceDB,
 										 specs,
-										 &populateGeneratedColumnCache))
+										 &generated_column_iter_hook))
 	{
 		log_error("Failed to prepare a generated column cache for our catalog,"
 				  "see above for details");

@@ -276,20 +276,12 @@ typedef enum
 
 
 /*
- * Fully Qualified Postgres column name: "nspname"."relname"."attname".
- * We need to account for the dots hence add 2 more bytes.
- */
-typedef char FQColumnName[(PG_NAMEDATALEN * 3) + 2];
-
-
-/*
  * Keep track of tables with generated columns to avoid unnecessary lookups
  * in the catalog.
  */
 typedef struct GeneratedColumnsCache
 {
-	/* This is a char [] type */
-	FQColumnName qColumnName;
+	GeneratedColumn generatedColumn;
 
 	UT_hash_handle hh;          /* makes this structure hashable */
 } GeneratedColumnsCache;

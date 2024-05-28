@@ -201,13 +201,6 @@ bool catalog_iter_s_table_nopk(DatabaseCatalog *catalog,
 							   void *context,
 							   SourceTableIterFun *callback);
 
-typedef struct GeneratedColumn
-{
-	char nspname[PG_NAMEDATALEN];
-	char relname[PG_NAMEDATALEN];
-	char attname[PG_NAMEDATALEN];
-} GeneratedColumn;
-
 typedef struct GeneratedColumnIterator
 {
 	DatabaseCatalog *catalog;
@@ -221,13 +214,14 @@ typedef struct GeneratedColumnIterator
  */
 typedef bool (GeneratedColumnIterFun)(void *context, GeneratedColumn *column);
 
-bool catalog_iter_s_generated_column_finish(GeneratedColumnIterator *iter);
+bool catalog_iter_s_generated_column_init(GeneratedColumnIterator *iter);
 bool catalog_iter_s_generated_column_next(GeneratedColumnIterator *iter);
+bool catalog_s_generated_column_fetch(SQLiteQuery *query);
+bool catalog_iter_s_generated_column_finish(GeneratedColumnIterator *iter);
+
 bool catalog_iter_s_generated_column(DatabaseCatalog *catalog,
 									 void *context,
 									 GeneratedColumnIterFun *callback);
-bool catalog_s_generated_column_fetch(SQLiteQuery *query);
-bool catalog_iter_s_generated_column_init(GeneratedColumnIterator *iter);
 
 typedef struct SourceTableIterator
 {
