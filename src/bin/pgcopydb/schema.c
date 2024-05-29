@@ -4881,12 +4881,12 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	int fnamname = PQfnumber(result, "amname");
 	int fnrelpages = PQfnumber(result, "relpages");
 	int fnreltuples = PQfnumber(result, "reltuples");
+	int fnbytesestimate = PQfnumber(result, "bytesestimate");
+	int fnbytesestimatepp = PQfnumber(result, "pg_size_pretty");
 	int fnexcldata = PQfnumber(result, "excludedata");
 	int fnrestorelistname = PQfnumber(result, "format");
 	int fnpartkey = PQfnumber(result, "partkey");
 	int fnattrs = PQfnumber(result, "attributes");
-	int fnbytesestimate = PQfnumber(result, "bytesestimate");
-	int fnbytesestimatepp = PQfnumber(result, "pg_size_pretty");
 
 	/* c.oid */
 	char *value = PQgetvalue(result, rowNumber, fnoid);
