@@ -670,7 +670,7 @@ processBufferCallback(const char *buffer, bool error)
 
 			int logLevel = error ? LOG_ERROR : LOG_INFO;
 
-			if(matchDebug != NULL)
+			if (matchDebug != NULL)
 			{
 				logLevel = LOG_DEBUG;
 			}
