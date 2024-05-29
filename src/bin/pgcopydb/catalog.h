@@ -168,6 +168,25 @@ bool catalog_count_objects(DatabaseCatalog *catalog, CatalogCounts *count);
 bool catalog_count_fetch(SQLiteQuery *query);
 
 /*
+ * Materialized views
+ */
+typedef struct CatalogMatView
+{
+	uint32_t oid;
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
+	char restoreListName[RESTORE_LIST_NAMEDATALEN];
+	bool excludeData;
+} CatalogMatView;
+
+bool catalog_add_s_matview(DatabaseCatalog *catalog, SourceTable *table);
+
+bool catalog_lookup_s_matview_by_oid(DatabaseCatalog *catalog,
+									 CatalogMatView *result,
+									 uint32_t oid);
+bool catalog_s_matview_fetch(SQLiteQuery *query);
+
+/*
  * Tables and their attributes and parts (COPY partitioning).
  */
 bool catalog_add_s_table(DatabaseCatalog *catalog, SourceTable *table);

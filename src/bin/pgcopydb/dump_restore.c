@@ -756,6 +756,24 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 			name = NULL;
 		}
 
+		/*
+		 * There could be a case where the materalized view is included in the
+		 * dump, but the refresh is filtered out using [exclude-table-data].
+		 * In this case, we want to skip the refresh.
+		 */
+		if (!skip &&
+			item->desc == ARCHIVE_TAG_REFRESH_MATERIALIZED_VIEW &&
+			copydb_matview_refresh_is_filtered_out(specs, oid))
+		{
+			skip = true;
+
+			log_notice("Skipping materialized view refresh dumpId %d: %s %u %s",
+					   contents.array[i].dumpId,
+					   contents.array[i].description,
+					   contents.array[i].objectOid,
+					   contents.array[i].restoreListName);
+		}
+
 		if (!skip && copydb_objectid_is_filtered_out(specs, oid, name))
 		{
 			skip = true;

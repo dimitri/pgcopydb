@@ -947,6 +947,44 @@ copydb_prepare_index_specs(CopyDataSpec *specs, PGSQL *pgsql)
 
 
 /*
+ * copydb_matview_refresh_is_filtered_out returns true when the
+ * given oid belongs to a materialized view object that's
+ * data(refresh) has been filtered out by the filtering setup using
+ * [exclude-table-data].
+ */
+bool
+copydb_matview_refresh_is_filtered_out(CopyDataSpec *specs, uint32_t oid)
+{
+	/*
+	 * We need to check the s_matview table exists on the source catalog
+	 * to find out if the materialized view refresh has been filtered out.
+	 *
+	 * The filtering of materialized view as a whole handled by the
+	 * existing filtering setup(i.e. copydb_objectid_is_filtered_out).
+	 */
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	CatalogMatView result = { 0 };
+
+	if (oid != 0)
+	{
+		if (!catalog_lookup_s_matview_by_oid(sourceDB, &result, oid))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (result.oid != 0 && result.excludeData)
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+
+/*
  * copydb_objectid_is_filtered_out returns true when the given oid belongs to a
  * database object that's been filtered out by the filtering setup.
  */

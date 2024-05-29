@@ -7,8 +7,8 @@ COPY ./exclude.ini exclude.ini
 COPY ./extra.sql extra.sql
 
 # unit tests
-COPY ./sql ./test/sql
-COPY ./expected ./test/expected
+COPY ./include ./test/include
+COPY ./exclude ./test/exclude
 
 USER docker
 WORKDIR /usr/src/pgcopydb/test/

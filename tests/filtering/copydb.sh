@@ -53,6 +53,25 @@ pgcopydb clone --filters /usr/src/pgcopydb/exclude.ini --resume --not-consistent
 
 export TMPDIR=/tmp/include
 
+# now compare the output of running the SQL command with what's expected
+# as we're not root when running tests, can't write in /usr/src
+mkdir -p /tmp/results
+
+find .
+
+pgopts="--single-transaction --no-psqlrc --expanded"
+
+for f in ./exclude/sql/*.sql
+do
+    t=`basename $f .sql`
+    r=/tmp/results/${t}.out
+    e=./exclude/expected/${t}.out
+    psql -d "${PGCOPYDB_TARGET_PGURI}" ${pgopts} --file ./exclude/sql/$t.sql &> $r
+    test -f $e || cat $r
+    diff -urN $e $r || cat $e $r
+    diff -urN $e $r || exit 1
+done
+
 # list the tables that are (not) selected by the filters
 pgcopydb list tables --filters /usr/src/pgcopydb/include.ini
 pgcopydb list tables --filters /usr/src/pgcopydb/include.ini --list-skipped
@@ -64,20 +83,12 @@ pgcopydb clone --filters /usr/src/pgcopydb/include.ini --resume --not-consistent
 psql -d ${PGCOPYDB_SOURCE_PGURI} -c '\d app|copy.foo'
 psql -d ${PGCOPYDB_TARGET_PGURI} -c '\d app|copy.foo'
 
-# now compare the output of running the SQL command with what's expected
-# as we're not root when running tests, can't write in /usr/src
-mkdir -p /tmp/results
-
-find .
-
-pgopts="--single-transaction --no-psqlrc --expanded"
-
-for f in ./sql/*.sql
+for f in ./include/sql/*.sql
 do
     t=`basename $f .sql`
     r=/tmp/results/${t}.out
-    e=./expected/${t}.out
-    psql -d "${PGCOPYDB_TARGET_PGURI}" ${pgopts} --file ./sql/$t.sql &> $r
+    e=./include/expected/${t}.out
+    psql -d "${PGCOPYDB_TARGET_PGURI}" ${pgopts} --file ./include/sql/$t.sql &> $r
     test -f $e || cat $r
     diff $e $r || cat $r
     diff $e $r || exit 1
