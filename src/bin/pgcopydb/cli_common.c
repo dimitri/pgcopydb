@@ -850,8 +850,8 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "index-jobs", required_argument, NULL, 'I' },
 		{ "large-objects-jobs", required_argument, NULL, 'b' },
 		{ "split-tables-larger-than", required_argument, NULL, 'L' },
-		{ "estimate-table-sizes", no_argument, NULL, 'm' },
 		{ "split-at", required_argument, NULL, 'L' },
+		{ "estimate-table-sizes", no_argument, NULL, 'm' },
 		{ "drop-if-exists", no_argument, NULL, 'c' }, /* pg_restore -c */
 		{ "roles", no_argument, NULL, 'A' },          /* pg_dumpall --roles-only */
 		{ "no-role-passwords", no_argument, NULL, 'P' },
