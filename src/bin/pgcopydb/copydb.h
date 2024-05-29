@@ -244,6 +244,7 @@ typedef struct CopyDataSpec
 	int lObjectJobs;
 
 	SplitTableLargerThan splitTablesLargerThan;
+	bool estimateTableSizes;
 
 	Queue copyQueue;
 	Queue indexQueue;

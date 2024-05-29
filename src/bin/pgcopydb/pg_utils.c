@@ -1,5 +1,5 @@
 /*
- * src/bin/pg_autoctl/pg_utils.c
+ * src/bin/pgcopydb/pg_utils.c
  *	 API for sending SQL commands to a PostgreSQL server
  */
 #include <stdlib.h>

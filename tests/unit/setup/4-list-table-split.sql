@@ -98,9 +98,3 @@ select
     *
 from
     table_ctid_candidate;
-
--- insert into pgcopydb.pgcopydb_table_size (oid, bytes)
---      select tname::regclass,
---             10 * 1024 * 1024
---        from (values ('"Sp1eCial .Char"."source1testing"'),
---                     ('"Sp1eCial .Char"."Tabl e.1testing"')) as t(tname);

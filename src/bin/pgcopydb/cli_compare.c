@@ -104,8 +104,9 @@ cli_compare_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	/* bypass computing partitionning specs */
-	options.splitTablesLargerThan.bytes = 0;
+	/* bypass computing partitioning specs */
+	SplitTableLargerThan empty = { 0 };
+	options.splitTablesLargerThan = empty;
 
 	while ((c = getopt_long(argc, argv, "S:T:D:j:JVvdzqh",
 							long_options, &option_index)) != -1)

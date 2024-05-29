@@ -102,6 +102,7 @@ typedef struct SourceTableArrayContext
 {
 	char sqlstate[SQLSTATE_LENGTH];
 	DatabaseCatalog *catalog;
+	bool estimateTableSizes;
 	bool parsedOk;
 } SourceTableArrayContext;
 
@@ -857,9 +858,8 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 
 
 /*
- * schema_prepare_pgcopydb_table_size creates a table named pgcopydb_table_size
- * on the given connection (typically, the source database). The creation is
- * skipped if the table already exists.
+ * schema_prepare_pgcopydb_table_size creates an internal catalog table named
+ * s_table_size.
  */
 bool
 schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
@@ -937,6 +937,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
+		"         c.relpages * current_setting('block_size')::bigint as bytesestimate, "
+		"         pg_size_pretty(c.relpages * current_setting('block_size')::bigint), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1019,6 +1021,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
+		"         c.relpages * current_setting('block_size')::bigint as bytesestimate, "
+		"         pg_size_pretty(c.relpages * current_setting('block_size')::bigint), "
 		"         exists(select 1 "
 		"                  from pg_temp.filter_exclude_table_data ftd "
 		"                 where n.nspname = ftd.nspname "
@@ -1109,6 +1113,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
+		"         c.relpages * current_setting('block_size')::bigint as bytesestimate, "
+		"         pg_size_pretty(c.relpages * current_setting('block_size')::bigint), "
 		"         ftd.relname is not null as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1210,6 +1216,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
+		"         c.relpages * current_setting('block_size')::bigint as bytesestimate, "
+		"         pg_size_pretty(c.relpages * current_setting('block_size')::bigint), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1300,6 +1308,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
+		"         c.relpages * current_setting('block_size')::bigint as bytesestimate, "
+		"         pg_size_pretty(c.relpages * current_setting('block_size')::bigint), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1396,9 +1406,10 @@ struct FilteringQueries listSourceTablesSQL[] = {
 bool
 schema_list_ordinary_tables(PGSQL *pgsql,
 							SourceFilters *filters,
+							bool estimateTableSizes,
 							DatabaseCatalog *catalog)
 {
-	SourceTableArrayContext context = { { 0 }, catalog, false };
+	SourceTableArrayContext context = { { 0 }, catalog, estimateTableSizes, false };
 
 	log_trace("schema_list_ordinary_tables");
 
@@ -1478,6 +1489,8 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
+		"         c.relpages * current_setting('block_size')::bigint as bytesestimate, "
+		"         pg_size_pretty(c.relpages * current_setting('block_size')::bigint), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1522,6 +1535,8 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
+		"         c.relpages * current_setting('block_size')::bigint as bytesestimate, "
+		"         pg_size_pretty(c.relpages * current_setting('block_size')::bigint), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1571,6 +1586,8 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
+		"         c.relpages * current_setting('block_size')::bigint as bytesestimate, "
+		"         pg_size_pretty(c.relpages * current_setting('block_size')::bigint), "
 		"         ftd.relname is not null as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1634,6 +1651,8 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
+		"         c.relpages * current_setting('block_size')::bigint as bytesestimate, "
+		"         pg_size_pretty(c.relpages * current_setting('block_size')::bigint), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1686,6 +1705,8 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         format('%I', c.relname) as relname, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
+		"         c.relpages * current_setting('block_size')::bigint as bytesestimate, "
+		"         pg_size_pretty(c.relpages * current_setting('block_size')::bigint), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1735,83 +1756,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"order by n.nspname, c.relname"
 	}
 };
-
-/*
- * schema_list_ordinary_tables_without_pk lists all tables that do not have a
- * primary key. This is useful to prepare a migration when some kind of change
- * data capture technique is considered.
- */
-bool
-schema_list_ordinary_tables_without_pk(PGSQL *pgsql,
-									   SourceFilters *filters,
-									   DatabaseCatalog *catalog)
-{
-	SourceTableArrayContext context = { { 0 }, catalog, false };
-
-	log_trace("schema_list_ordinary_tables_without_pk");
-
-	SourceFilterType filterType = SOURCE_FILTER_TYPE_NONE;
-
-	switch (filters->type)
-	{
-		case SOURCE_FILTER_TYPE_NONE:
-		case SOURCE_FILTER_TYPE_EXCL_INDEX:
-		{
-			/* skip filters preparing (temp tables) */
-			break;
-		}
-
-		case SOURCE_FILTER_TYPE_INCL:
-		case SOURCE_FILTER_TYPE_EXCL:
-		case SOURCE_FILTER_TYPE_LIST_NOT_INCL:
-		case SOURCE_FILTER_TYPE_LIST_EXCL:
-		{
-			if (!prepareFilters(pgsql, filters))
-			{
-				log_error("Failed to prepare pgcopydb filters, "
-						  "see above for details");
-				return false;
-			}
-
-			filterType = filters->type;
-
-			break;
-		}
-
-		/* ignore "exclude-index" listing of filtered-out tables */
-		case SOURCE_FILTER_TYPE_LIST_EXCL_INDEX:
-		{
-			return true;
-		}
-
-		default:
-		{
-			log_error("BUG: schema_list_ordinary_tables_without_pk called with "
-					  "filtering type %d",
-					  filters->type);
-			return false;
-		}
-	}
-
-	log_debug("listSourceTablesNoPKSQL[%s]", filterTypeToString(filterType));
-
-	char *sql = listSourceTablesNoPKSQL[filterType].sql;
-
-	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
-								   &context, &getTableArray))
-	{
-		log_error("Failed to list tables without primary key");
-		return false;
-	}
-
-	if (!context.parsedOk)
-	{
-		log_error("Failed to list tables without primary key");
-		return false;
-	}
-
-	return true;
-}
 
 
 /*
@@ -3334,7 +3278,7 @@ schema_list_partitions(PGSQL *pgsql,
 		max = table->relpages;
 
 		/* Postgres page size is static: 8192 Bytes */
-		uint64_t pagesPerPart = ceil((double) partSize / 8192);
+		uint64_t pagesPerPart = ceil((double) partSize / POSTGRES_BLOCK_SIZE);
 
 		partsCount = ceil((double) table->relpages / (double) pagesPerPart);
 		partsSize = ceil((double) table->relpages / partsCount);
@@ -4738,8 +4682,11 @@ parseCurrentSourceTableSize(PGresult *result, int rowNumber, SourceTableSize *ta
 
 
 /*
- * getTableArray loops over the SQL result for the tables array query and
- * allocates an array of tables then populates it with the query result.
+ * getTableArray loops over the SQL result for the tables array query and saves
+ * each source table in our internal catalog.
+ *
+ * If we enabled estimating table sizes, we also store an estimage for the table
+ * sizes in the internal catalog.
  */
 static void
 getTableArray(void *ctx, PGresult *result)
@@ -4748,9 +4695,9 @@ getTableArray(void *ctx, PGresult *result)
 
 	int nTuples = PQntuples(result);
 
-	if (PQnfields(result) != 10)
+	if (PQnfields(result) != 12)
 	{
-		log_error("Query returned %d columns, expected 10", PQnfields(result));
+		log_error("Query returned %d columns, expected 12", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -4774,6 +4721,25 @@ getTableArray(void *ctx, PGresult *result)
 				/* errors have already been logged */
 				parsedOk = false;
 				break;
+			}
+
+			if (context->estimateTableSizes)
+			{
+				SourceTableSize sourceTableSize = {
+					.oid = table->oid,
+					.bytes = table->bytesEstimate
+				};
+
+				strlcpy(sourceTableSize.bytesPretty,
+						table->bytesEstimatePretty,
+						sizeof(sourceTableSize.bytesPretty));
+
+				if (!catalog_add_s_table_size(context->catalog, &sourceTableSize))
+				{
+					/* errors have already been logged */
+					parsedOk = false;
+					break;
+				}
 			}
 		}
 	}
@@ -4915,6 +4881,8 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	int fnamname = PQfnumber(result, "amname");
 	int fnrelpages = PQfnumber(result, "relpages");
 	int fnreltuples = PQfnumber(result, "reltuples");
+	int fnbytesestimate = PQfnumber(result, "bytesestimate");
+	int fnbytesestimatepp = PQfnumber(result, "pg_size_pretty");
 	int fnexcldata = PQfnumber(result, "excludedata");
 	int fnrestorelistname = PQfnumber(result, "format");
 	int fnpartkey = PQfnumber(result, "partkey");
@@ -5028,6 +4996,45 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 			++errors;
 		}
 	}
+
+	/* fnbytesestimate */
+	if (PQgetisnull(result, rowNumber, fnbytesestimate))
+	{
+		/* the query didn't care to add the estimates, skip parsing them */
+		table->bytesEstimate = 0;
+	}
+	else
+	{
+		value = PQgetvalue(result, rowNumber, fnbytesestimate);
+
+		if (!stringToInt64(value, &(table->bytesEstimate)))
+		{
+			log_error("Invalid bytesestimate::bigint \"%s\"", value);
+			++errors;
+		}
+	}
+
+
+	/* fnbytesestimatepp */
+	if (PQgetisnull(result, rowNumber, fnbytesestimatepp))
+	{
+		/* the query didn't care to add the estimates, skip parsing them */
+		table->bytesEstimatePretty[0] = '\0';
+	}
+	else
+	{
+		value = PQgetvalue(result, rowNumber, fnbytesestimatepp);
+		length = strlcpy(table->bytesEstimatePretty, value, PG_NAMEDATALEN);
+
+		if (length >= PG_NAMEDATALEN)
+		{
+			log_error("Pretty printed table size estimate \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+					  value, length, PG_NAMEDATALEN - 1);
+			++errors;
+		}
+	}
+
 
 	/* excludeData */
 	value = PQgetvalue(result, rowNumber, fnexcldata);

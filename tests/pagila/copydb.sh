@@ -60,6 +60,7 @@ psql -o /tmp/d.out -d ${PAGILA_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.s
 pgcopydb clone --notice \
          --skip-ext-comments \
          --skip-db-properties \
+         --estimate-table-sizes \
          --source ${PAGILA_SOURCE_PGURI} \
          --target ${PAGILA_TARGET_PGURI}
 

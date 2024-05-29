@@ -536,6 +536,7 @@ copydb_init_specs(CopyDataSpec *specs,
 		.vacuumJobs = options->tableJobs,
 
 		.splitTablesLargerThan = options->splitTablesLargerThan,
+		.estimateTableSizes = options->estimateTableSizes,
 
 		.vacuumQueue = { 0 },
 		.indexQueue = { 0 },

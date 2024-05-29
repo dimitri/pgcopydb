@@ -322,6 +322,32 @@ cli_copydb_getenv(CopyDBOptions *options)
 		++errors;
 	}
 
+	/* when --estimate-table-sizes has not been used, check PGCOPYDB_ESTIMATE_TABLE_SIZES */
+	if (!options->estimateTableSizes)
+	{
+		if (env_exists(PGCOPYDB_ESTIMATE_TABLE_SIZES))
+		{
+			char estimateTableSizesAsString[BUFSIZE] = { 0 };
+
+			if (!get_env_copy(PGCOPYDB_ESTIMATE_TABLE_SIZES,
+							  estimateTableSizesAsString,
+							  sizeof(estimateTableSizesAsString)))
+			{
+				/* errors have already been logged */
+				++errors;
+			}
+			else if (!parse_bool(estimateTableSizesAsString,
+								 &(options->estimateTableSizes)))
+			{
+				log_error("Failed to parse environment variable \"%s\" "
+						  "value \"%s\", expected a boolean (on/off)",
+						  PGCOPYDB_ESTIMATE_TABLE_SIZES,
+						  estimateTableSizesAsString);
+				++errors;
+			}
+		}
+	}
+
 	/* when --snapshot has not been used, check PGCOPYDB_SNAPSHOT */
 	if (env_exists(PGCOPYDB_SNAPSHOT))
 	{
@@ -825,6 +851,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "large-objects-jobs", required_argument, NULL, 'b' },
 		{ "split-tables-larger-than", required_argument, NULL, 'L' },
 		{ "split-at", required_argument, NULL, 'L' },
+		{ "estimate-table-sizes", no_argument, NULL, 'm' },
 		{ "drop-if-exists", no_argument, NULL, 'c' }, /* pg_restore -c */
 		{ "roles", no_argument, NULL, 'A' },          /* pg_dumpall --roles-only */
 		{ "no-role-passwords", no_argument, NULL, 'P' },
@@ -884,7 +911,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	}
 
 	const char *optstring =
-		"S:T:D:J:I:b:L:cAPOXj:xBeMlUgkyF:F:Q:irRCN:fp:ws:o:tE:Vvdzqh";
+		"S:T:D:J:I:b:L:mcAPOXj:xBeMlUgkyF:F:Q:irRCN:fp:ws:o:tE:Vvdzqh";
 
 	while ((c = getopt_long(argc, argv,
 							optstring, long_options, &option_index)) != -1)
@@ -980,6 +1007,13 @@ cli_copy_db_getopts(int argc, char **argv)
 				log_trace("--split-tables-larger-than %s (%lld)",
 						  options.splitTablesLargerThan.bytesPretty,
 						  (long long) options.splitTablesLargerThan.bytes);
+				break;
+			}
+
+			case 'm':
+			{
+				options.estimateTableSizes = true;
+				log_trace("--estimate-table-sizes");
 				break;
 			}
 

@@ -70,13 +70,6 @@ tables to COPY the data from.
 
 .. include:: ../include/list-tables.rst
 
-The ``--cache`` option allows caching the `pg_table_size()`__ result in the
-newly created table ``pgcopydb.pgcopydb_table_size``. This is only useful in
-Postgres deployments where this computation is quite slow, and when the
-pgcopydb operation is going to be run multiple times.
-
-__ https://www.postgresql.org/docs/15/functions-admin.html#FUNCTIONS-ADMIN-DBSIZE
-
 .. _pgcopydb_list_table_parts:
 
 pgcopydb list table-parts

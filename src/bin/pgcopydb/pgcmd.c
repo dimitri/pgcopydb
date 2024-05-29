@@ -120,7 +120,7 @@ find_pg_commands(PostgresPaths *pgPaths)
 
 
 /*
- * set_postgres_commands sets the rest of the Postgres commands that pgcyopdb
+ * set_postgres_commands sets the rest of the Postgres commands that pgcopydb
  * needs from knowing the pgPaths->psql absolute location already.
  */
 void
@@ -129,6 +129,7 @@ set_postgres_commands(PostgresPaths *pgPaths)
 	path_in_same_directory(pgPaths->psql, "pg_dump", pgPaths->pg_dump);
 	path_in_same_directory(pgPaths->psql, "pg_dumpall", pgPaths->pg_dumpall);
 	path_in_same_directory(pgPaths->psql, "pg_restore", pgPaths->pg_restore);
+	path_in_same_directory(pgPaths->psql, "vacuumdb", pgPaths->vacuumdb);
 }
 
 
@@ -480,6 +481,86 @@ pg_dump_db(PostgresPaths *pgPaths,
 	if (program.returnCode != 0)
 	{
 		log_error("Failed to run pg_dump: exit code %d", program.returnCode);
+
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * Call `vacuumdb --analyze-only --jobs ${table-jobs}`
+ */
+bool
+pg_vacuumdb_analyze_only(PostgresPaths *pgPaths, ConnStrings *connStrings, int jobs)
+{
+	char *args[16];
+	int argsIndex = 0;
+
+	char command[BUFSIZE] = { 0 };
+
+	char *PGPASSWORD = NULL;
+	bool pgpassword_found_in_env = env_exists("PGPASSWORD");
+
+	if (!env_exists("PGCONNECT_TIMEOUT"))
+	{
+		setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+	}
+
+	/* override PGPASSWORD environment variable if the pguri contains one */
+	if (connStrings->safeSourcePGURI.password != NULL)
+	{
+		if (pgpassword_found_in_env && !get_env_dup("PGPASSWORD", &PGPASSWORD))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+		setenv("PGPASSWORD", connStrings->safeSourcePGURI.password, 1);
+	}
+
+	args[argsIndex++] = (char *) pgPaths->vacuumdb;
+	args[argsIndex++] = "--analyze-only";
+	args[argsIndex++] = "--jobs";
+	args[argsIndex++] = intToString(jobs).strValue;
+	args[argsIndex++] = "--dbname";
+	args[argsIndex++] = (char *) connStrings->safeSourcePGURI.pguri;
+
+	args[argsIndex] = NULL;
+
+	/*
+	 * We do not want to call setsid() when running vacuumdb.
+	 */
+	Program program = { 0 };
+
+	(void) initialize_program(&program, args, false);
+	program.processBuffer = &processBufferCallback;
+
+	/* log the exact command line we're using */
+	int commandSize = snprintf_program_command_line(&program, command, BUFSIZE);
+
+	if (commandSize >= BUFSIZE)
+	{
+		/* we only display the first BUFSIZE bytes of the real command */
+		log_info("%s...", command);
+	}
+	else
+	{
+		log_info("%s", command);
+	}
+
+	(void) execute_subprogram(&program);
+
+	/* make sure to reset the environment PGPASSWORD if we edited it */
+	if (pgpassword_found_in_env &&
+		connStrings->safeSourcePGURI.password != NULL)
+	{
+		setenv("PGPASSWORD", PGPASSWORD, 1);
+	}
+
+	if (program.returnCode != 0)
+	{
+		log_error("Failed to run vacuumdb: exit code %d", program.returnCode);
 
 		return false;
 	}

@@ -553,16 +553,6 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 		 specs->section == DATA_SECTION_TABLE_DATA_PARTS) &&
 		!sourceDB->sections[DATA_SECTION_TABLE_DATA].fetched)
 	{
-		/* copydb_fetch_filtered_oids() needs the table size table around */
-		if (!schema_prepare_pgcopydb_table_size(src,
-												&(specs->filters),
-												sourceDB))
-		{
-			/* errors have already been logged */
-			(void) semaphore_unlock(&(sourceDB->sema));
-			return false;
-		}
-
 		if (!copydb_prepare_table_specs(specs, src))
 		{
 			/* errors have already been logged */
@@ -667,14 +657,45 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 
 	(void) catalog_start_timing(&timing);
 
+	/* if we're estimating table sizes, we need to run analyze to update relpages values. */
+	if (specs->estimateTableSizes)
+	{
+		log_info("Running vacuumdb --analyze-only on source database before "
+				 "calculating table size estimates");
+
+		if (!pg_vacuumdb_analyze_only(&(specs->pgPaths), &(specs->connStrings),
+									  specs->tableJobs))
+		{
+			log_error("Failed to vacuum analyze source database, "
+					  "see above for details");
+			return false;
+		}
+	}
+
 	/*
 	 * Now get the list of the tables we want to COPY over.
+	 *
+	 * If we enabled estimates, we also update the table sizes in our internal
+	 * catalog using the relpages values.
 	 */
-	if (!schema_list_ordinary_tables(pgsql, filters, sourceDB))
+	if (!schema_list_ordinary_tables(pgsql, filters, specs->estimateTableSizes, sourceDB))
 	{
 		log_error("Failed to prepare table specs in our catalogs, "
 				  "see above for details");
 		return false;
+	}
+
+	/*
+	 * if we did not enable estimates, update table sizes in our internal
+	 * catalogue with exact values
+	 */
+	if (!specs->estimateTableSizes)
+	{
+		if (!schema_prepare_pgcopydb_table_size(pgsql, filters, sourceDB))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	(void) catalog_stop_timing(&timing);
@@ -1139,7 +1160,8 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 
 		(void) catalog_start_timing(&timing);
 
-		if (!schema_list_ordinary_tables(pgsql, filters, filtersDB))
+		if (!schema_list_ordinary_tables(pgsql, filters, specs->estimateTableSizes,
+										 filtersDB))
 		{
 			/* errors have already been logged */
 			filters->type = type;

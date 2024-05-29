@@ -396,6 +396,16 @@ The following options are available to ``pgcopydb clone``:
    This environment variable value is expected to be a byte size, and bytes
    units B, kB, MB, GB, TB, PB, and EB are known.
 
+--estimate-table-sizes
+
+   Use estimates on table sizes to decide how to split tables when using
+   :ref:`same_table_concurrency`.
+
+   When this option is used, we run `vacuumdb --analyze-only --jobs=<table-jobs>`
+   command on the source database that updates the statistics for the number of
+   pages for each relation. Later, we use the number of pages, and the size for
+   each page to estimate the actual size of the tables.
+
 --drop-if-exists
 
   When restoring the schema on the target Postgres instance, ``pgcopydb``
@@ -510,9 +520,9 @@ The following options are available to ``pgcopydb clone``:
 --skip-split-by-ctid
 
   Skip splitting tables based on CTID during the copy operation. By default,
-  pgcopydb splits large tables into smaller chunks based on the CTID column 
-  if there isn't a unique integer column in the table. However, in some cases 
-  you may want to skip this splitting process if the CTID range scan is slow 
+  pgcopydb splits large tables into smaller chunks based on the CTID column
+  if there isn't a unique integer column in the table. However, in some cases
+  you may want to skip this splitting process if the CTID range scan is slow
   in the underlying system.
 
 --filters <filename>
@@ -728,6 +738,21 @@ PGCOPYDB_SPLIT_TABLES_LARGER_THAN
 
    When ``--split-tables-larger-than`` is ommitted from the command line,
    then this environment variable is used.
+
+PGCOPYDB_ESTIMATE_TABLE_SIZES
+
+   When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
+   then pgcopydb estimates the size of tables to determine whether or not to
+   split tables. This option is only useful when querying the relation sizes on
+   source database is costly.
+
+   When ``--estimate-table-sizes`` is ommitted from the command line, then
+   this environment variable is used.
+
+   When this option is used, we run `vacuumdb --analyze-only --jobs=<table-jobs>`
+   command on the source database that updates the statistics for the number of
+   pages for each relation. Later, we use the number of pages, and the size for
+   each page to estimate the actual size of the tables.
 
 PGCOPYDB_OUTPUT_PLUGIN
 
