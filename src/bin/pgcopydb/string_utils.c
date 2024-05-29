@@ -772,7 +772,7 @@ pretty_print_count(char *buffer, size_t size, uint64_t number)
 		int t = number / 1000;
 		int u = number - (t * 1000);
 
-		sformat(buffer, size, "%d %d", t, u);
+		sformat(buffer, size, "%d %03d", t, u);
 	}
 	else
 	{
