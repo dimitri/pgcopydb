@@ -53,6 +53,12 @@ static char *sourceDBcreateDDLs[] = {
 
 	"create index s_d_p_oid on s_database_property(datname)",
 
+	"create table s_namespace("
+	"  nspname text primary key, restore_list_name text"
+	")",
+
+	"create index s_n_rlname on s_namespace(restore_list_name)",
+
 	"create table s_table("
 	"  oid integer primary key, "
 	"  datname text, qname text, nspname text, relname text, amname text, "
@@ -64,6 +70,15 @@ static char *sourceDBcreateDDLs[] = {
 
 	"create unique index s_t_qname on s_table(qname)",
 	"create unique index s_t_rlname on s_table(restore_list_name)",
+
+	"create table s_matview("
+	"  oid integer primary key, "
+	"  qname text, nspname text, relname text, restore_list_name text, "
+	"  exclude_data boolean"
+	")",
+
+	"create unique index s_mv_rlname on s_matview(restore_list_name)",
+	"create unique index s_mv_qname on s_matview(nspname, relname)",
 
 	"create table s_table_size("
 	"  oid integer primary key references s_table(oid), "
@@ -167,9 +182,7 @@ static char *sourceDBcreateDDLs[] = {
 	"create table sentinel("
 	"  id integer primary key check (id = 1), "
 	"  startpos pg_lsn, endpos pg_lsn, apply bool, "
-	" write_lsn pg_lsn, flush_lsn pg_lsn, replay_lsn pg_lsn)",
-
-	"create table lsn_tracking(source pg_lsn, target pg_lsn)"
+	" write_lsn pg_lsn, flush_lsn pg_lsn, replay_lsn pg_lsn)"
 };
 
 
@@ -239,6 +252,15 @@ static char *filterDBcreateDDLs[] = {
 	"create unique index s_t_qname on s_table(qname)",
 	"create unique index s_t_rlname on s_table(restore_list_name)",
 
+	"create table s_matview("
+	"  oid integer primary key, "
+	"  qname text, nspname text, relname text, restore_list_name text, "
+	"  exclude_data boolean"
+	")",
+
+	"create unique index s_mv_rlname on s_matview(restore_list_name)",
+	"create unique index s_mv_qname on s_matview(nspname, relname)",
+
 	"create table s_table_size("
 	"  oid integer primary key references s_table(oid), "
 	"  bytes integer, bytes_pretty text "
@@ -303,6 +325,10 @@ static char *filterDBcreateDDLs[] = {
 	/* the filter table is our hash-table */
 	"create table filter(oid integer, restore_list_name text, kind text)",
 	"create unique index filter_oid on filter(oid) where oid > 0",
+
+	"create unique index filter_oid_rlname on filter(oid, restore_list_name) "
+	" where oid > 0",
+
 	"create index filter_rlname on filter(restore_list_name)",
 
 	/*
@@ -387,6 +413,7 @@ static char *sourceDBdropDDLs[] = {
 	"drop table if exists s_database",
 	"drop table if exists s_database_property",
 	"drop table if exists s_table",
+	"drop table if exists s_matview",
 	"drop table if exists s_attr",
 	"drop table if exists s_table_part",
 	"drop table if exists s_table_chksum",
@@ -419,6 +446,7 @@ static char *filterDBdropDDLs[] = {
 	"drop table if exists s_extension_versions",
 	"drop table if exists s_namespace",
 	"drop table if exists s_table",
+	"drop table if exists s_matview",
 	"drop table if exists s_attr",
 	"drop table if exists s_table_part",
 	"drop table if exists s_table_chksum",
@@ -1676,6 +1704,11 @@ CopyDataSectionToString(CopyDataSection section)
 			return "all";
 		}
 
+		case DATA_SECTION_NAMESPACES:
+		{
+			return "namespaces";
+		}
+
 		case DATA_SECTION_NONE:
 		default:
 		{
@@ -1686,6 +1719,174 @@ CopyDataSectionToString(CopyDataSection section)
 
 	/* keep compiler happy */
 	return "unknown";
+}
+
+
+/*
+ * catalog_add_s_matview INSERTs a SourceTable to our matview internal catalogs
+ * database.
+ */
+bool
+catalog_add_s_matview(DatabaseCatalog *catalog, SourceTable *table)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_add_s_matview: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"insert into s_matview("
+		"  oid, qname, nspname, relname, restore_list_name, "
+		"  exclude_data) "
+		"values($1, $2, $3, $4, $5, $6)";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "oid", table->oid, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "qname", 0, table->qname },
+		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, table->nspname },
+		{ BIND_PARAMETER_TYPE_TEXT, "relname", 0, table->relname },
+
+		{ BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
+		  table->restoreListName },
+
+		{ BIND_PARAMETER_TYPE_INT, "exclude_data",
+		  table->excludeData ? 1 : 0, NULL },
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which does not return any row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_lookup_s_matview_by_oid fetches a s_matview entry from catalog.
+ */
+bool
+catalog_lookup_s_matview_by_oid(DatabaseCatalog *catalog,
+								CatalogMatView *result,
+								uint32_t oid)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_lookup_filter_by_oid: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"  select oid, nspname, relname, restore_list_name, exclude_data"
+		"    from s_matview "
+		"   where oid = $1 ";
+
+	SQLiteQuery query = {
+		.context = result,
+		.fetchFunction = &catalog_s_matview_fetch
+	};
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[1] = {
+		{ BIND_PARAMETER_TYPE_INT64, "oid", oid, NULL },
+	};
+
+	if (!catalog_sql_bind(&query, params, 1))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* now execute the query, which return exactly one row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
+ * catalog_s_matview_fetch fetches a CatalogMatview entry from a SQLite ppStmt
+ * result set.
+ */
+bool
+catalog_s_matview_fetch(SQLiteQuery *query)
+{
+	CatalogMatView *entry = (CatalogMatView *) query->context;
+
+	/* cleanup the memory area before re-use */
+	bzero(entry, sizeof(CatalogMatView));
+
+	entry->oid = sqlite3_column_int64(query->ppStmt, 0);
+
+	if (sqlite3_column_type(query->ppStmt, 1) != SQLITE_NULL)
+	{
+		strlcpy(entry->nspname,
+				(char *) sqlite3_column_text(query->ppStmt, 1),
+				sizeof(entry->nspname));
+	}
+
+	if (sqlite3_column_type(query->ppStmt, 2) != SQLITE_NULL)
+	{
+		strlcpy(entry->relname,
+				(char *) sqlite3_column_text(query->ppStmt, 2),
+				sizeof(entry->relname));
+	}
+
+	if (sqlite3_column_type(query->ppStmt, 3) != SQLITE_NULL)
+	{
+		strlcpy(entry->restoreListName,
+				(char *) sqlite3_column_text(query->ppStmt, 3),
+				sizeof(entry->restoreListName));
+	}
+
+	entry->excludeData = sqlite3_column_int64(query->ppStmt, 4) == 1;
+
+	return true;
 }
 
 
@@ -2701,42 +2902,22 @@ catalog_iter_s_table_init(SourceTableIterator *iter)
 		return false;
 	}
 
-	char *sql = NULL;
-
-	if (iter->splitTableLargerThanBytes > 0)
-	{
-		sql =
-			"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
-			"         relpages, reltuples, ts.bytes, ts.bytes_pretty, "
-			"         exclude_data, part_key, "
-			"         count(p.oid), 0 as partnum, 0 as min, 0 as max, "
-			"         c.srcrowcount, c.srcsum, c.dstrowcount, c.dstsum "
-			"    from s_table t "
-			"         left join s_table_part p on t.oid = p.oid "
-			"         left join s_table_chksum c on t.oid = c.oid "
-			"         left join s_table_size ts on ts.oid = t.oid "
-			"   where bytes >= $1 "
-			"group by t.oid "
-			"order by bytes desc";
-	}
-	else
-	{
-		sql =
-			"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
-			"         relpages, reltuples, ts.bytes, ts.bytes_pretty, "
-			"         exclude_data, part_key, "
-			"         coalesce(p.partcount, 0) as partcount, "
-			"         0 as partnum, 0 as min, 0 as max, "
-			"         c.srcrowcount, c.srcsum, c.dstrowcount, c.dstsum, "
-			"         sum(s.duration), sum(s.bytes) "
-			"    from s_table t "
-			"         left join s_table_part p on p.oid = t.oid "
-			"         left join s_table_chksum c on c.oid = t.oid "
-			"         left join summary s on s.tableoid = t.oid "
-			"         left join s_table_size ts on ts.oid = t.oid "
-			"group by t.oid "
-			"order by ts.bytes desc";
-	}
+	char *sql =
+		"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
+		"         relpages, reltuples, ts.bytes, ts.bytes_pretty, "
+		"         exclude_data, part_key, "
+		"         coalesce(p.partcount, 0) as partcount, "
+		"         coalesce(p.partnum, 0) as partnum, "
+		"         coalesce(p.min, 0) as min, coalesce(p.max, 0) as max, "
+		"         c.srcrowcount, c.srcsum, c.dstrowcount, c.dstsum, "
+		"         sum(s.duration), sum(s.bytes) "
+		"    from s_table t "
+		"         left join s_table_part p on p.oid = t.oid "
+		"         left join s_table_chksum c on c.oid = t.oid "
+		"         left join summary s on s.tableoid = t.oid "
+		"         left join s_table_size ts on ts.oid = t.oid "
+		"group by t.oid "
+		"order by ts.bytes desc";
 
 	SQLiteQuery *query = &(iter->query);
 
@@ -2747,24 +2928,6 @@ catalog_iter_s_table_init(SourceTableIterator *iter)
 	{
 		/* errors have already been logged */
 		return false;
-	}
-
-	if (iter->splitTableLargerThanBytes > 0)
-	{
-		BindParam params[1] = {
-			{
-				BIND_PARAMETER_TYPE_INT64,
-				"bytes",
-				iter->splitTableLargerThanBytes,
-				NULL
-			}
-		};
-
-		if (!catalog_sql_bind(query, params, 1))
-		{
-			/* errors have already been logged */
-			return false;
-		}
 	}
 
 	return true;
@@ -3184,7 +3347,7 @@ catalog_s_table_attrlist(DatabaseCatalog *catalog, SourceTable *table)
 	}
 
 	char *sql =
-		"select group_concat(attname, ', ' order by attnum) "
+		" select group_concat(attname order by attnum, ', ') "
 		"       filter (where not attisgenerated) "
 		"  from s_attr "
 		" where oid = $1";
@@ -3233,7 +3396,8 @@ catalog_s_table_fetch_attrlist(SQLiteQuery *query)
 {
 	SourceTable *table = (SourceTable *) query->context;
 
-	table->attrList = NULL;
+	/* the default empty attribute list is an empty string */
+	table->attrList = "";
 
 	if (sqlite3_column_type(query->ppStmt, 0) != SQLITE_NULL)
 	{
@@ -4013,6 +4177,7 @@ catalog_iter_s_index_table(DatabaseCatalog *catalog,
 	if (!catalog_iter_s_index_table_init(iter))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -4838,13 +5003,18 @@ catalog_prepare_filter(DatabaseCatalog *catalog,
 	char *sql =
 		"insert into filter(oid, restore_list_name, kind) "
 
-		"     select oid, restore_list_name, 's_namespace' "
-		"       from s_namespace "
-
-		"  union all "
-
 		"     select oid, restore_list_name, 'table' "
 		"       from s_table "
+
+		/*
+		 * This is only for materialized views. Materialized view refresh
+		 * filtering is done with the help of s_matview table on source
+		 * catalog.
+		 */
+		"  union all "
+
+		"	 select oid, restore_list_name, 'matview' "
+		"	   from s_matview"
 
 		"  union all "
 
@@ -4893,12 +5063,19 @@ catalog_prepare_filter(DatabaseCatalog *catalog,
 		 */
 		"  union all "
 
-		"     select NULL as oid, s.restore_list_name, 'sequence owned by' "
-		"       from s_seq s "
-		"      where not exists"
-		"            (select 1 from source.s_seq ss where ss.oid = s.oid)"
-		"        and not exists"
-		"            (select 1 from source.s_table st where st.oid = s.ownedby) "
+		"     select NULL as oid, restore_list_name, 'sequence owned by' "
+		"       from ( "
+		"              select distinct s.restore_list_name "
+		"                from s_seq s "
+		"               where not exists"
+		"                     (select 1 "
+		"                        from source.s_seq ss "
+		"                       where ss.oid = s.oid) "
+		"                and not exists"
+		"                    (select 1 "
+		"                       from source.s_table st "
+		"                      where st.oid = s.ownedby) "
+		"            ) as seqownedby "
 
 		/*
 		 * Also add pg_attribute.oid when it's not null (non-zero here). This
@@ -4907,8 +5084,9 @@ catalog_prepare_filter(DatabaseCatalog *catalog,
 		 */
 		"  union all "
 
-		"     select s.attroid, s.restore_list_name, 'default' "
-		"       from s_seq s ";
+		"     select distinct s.attroid, s.restore_list_name, 'default' "
+		"       from s_seq s "
+		"      where s.attroid > 0";
 
 	SQLiteQuery query = { 0 };
 
@@ -5027,9 +5205,16 @@ catalog_lookup_filter_by_oid(DatabaseCatalog *catalog,
 		.fetchFunction = &catalog_filter_fetch
 	};
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -5041,6 +5226,7 @@ catalog_lookup_filter_by_oid(DatabaseCatalog *catalog,
 	if (!catalog_sql_bind(&query, params, 1))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -5048,15 +5234,18 @@ catalog_lookup_filter_by_oid(DatabaseCatalog *catalog,
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
 
 
 /*
- * catalog_lookup_filter_by_rlname fetches a  entry from our catalogs.
+ * catalog_lookup_filter_by_rlname fetches a filter entry from our catalogs.
  */
 bool
 catalog_lookup_filter_by_rlname(DatabaseCatalog *catalog,
@@ -5071,19 +5260,36 @@ catalog_lookup_filter_by_rlname(DatabaseCatalog *catalog,
 		return false;
 	}
 
+	/*
+	 * In the case of archive entries for SEQUENCE, SEQUENCE OWNED BY, and
+	 * DEFAULT values that depend on sequences, we might find the same sequence
+	 * restore_list_name more than once with different values for the OID (the
+	 * sequence oid, NUL, or the attroid oid).
+	 *
+	 * Because of that, add a LIMIT 1 to our query here to avoid throwing an
+	 * SQLite error condition about "another row available".
+	 */
 	char *sql =
 		"  select oid, restore_list_name, kind "
 		"    from filter "
-		"   where restore_list_name = $1 ";
+		"   where restore_list_name = $1 "
+		"   limit 1";
 
 	SQLiteQuery query = {
 		.context = result,
 		.fetchFunction = &catalog_filter_fetch
 	};
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -5096,6 +5302,7 @@ catalog_lookup_filter_by_rlname(DatabaseCatalog *catalog,
 	if (!catalog_sql_bind(&query, params, 1))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -5103,8 +5310,11 @@ catalog_lookup_filter_by_rlname(DatabaseCatalog *catalog,
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -5954,46 +6164,55 @@ catalog_add_s_namespace(DatabaseCatalog *catalog, SourceSchema *namespace)
 
 
 /*
- * catalog_lookup_s_namespace_by_rlname fetches a  entry from our catalogs.
+ * catalog_lookup_s_namespace_by_nspname fetches a s_namespace entry from our
+ * catalogs.
  */
 bool
-catalog_lookup_s_namespace_by_rlname(DatabaseCatalog *catalog,
-									 const char *restoreListName,
-									 SourceSchema *result)
+catalog_lookup_s_namespace_by_nspname(DatabaseCatalog *catalog,
+									  const char *nspname,
+									  SourceSchema *result)
 {
 	sqlite3 *db = catalog->db;
 
 	if (db == NULL)
 	{
-		log_error("BUG: catalog_lookup_s_namespace_by_rlname: db is NULL");
+		log_error("BUG: catalog_lookup_s_namespace_by_nspname: db is NULL");
 		return false;
 	}
 
 	char *sql =
 		"  select oid, nspname, restore_list_name "
 		"    from s_namespace "
-		"   where restore_list_name = $1 ";
+		"   where nspname = $1 ";
 
 	SQLiteQuery query = {
 		.context = result,
 		.fetchFunction = &catalog_s_namespace_fetch
 	};
 
-	if (!catalog_sql_prepare(db, sql, &query))
+	if (!semaphore_lock(&(catalog->sema)))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
 	/* bind our parameters now */
 	BindParam params[1] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
-		  (char *) restoreListName },
+		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0,
+		  (char *) nspname },
 	};
 
 	if (!catalog_sql_bind(&query, params, 1))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -6001,8 +6220,77 @@ catalog_lookup_s_namespace_by_rlname(DatabaseCatalog *catalog,
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
+ * catalog_lookup_s_namespace_by_oid fetches a s_namespace entry from our
+ * catalogs using the oid.
+ */
+bool
+catalog_lookup_s_namespace_by_oid(DatabaseCatalog *catalog,
+								  uint32_t oid,
+								  SourceSchema *result)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_lookup_s_namespace_by_oid: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"  select oid, nspname, restore_list_name "
+		"    from s_namespace "
+		"   where oid = $1 ";
+
+	SQLiteQuery query = {
+		.context = result,
+		.fetchFunction = &catalog_s_namespace_fetch
+	};
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[1] = {
+		{ BIND_PARAMETER_TYPE_INT64, "oid", oid, NULL },
+	};
+
+	if (!catalog_sql_bind(&query, params, 1))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* now execute the query, which return exactly one row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -7301,7 +7589,7 @@ catalog_count_summary_done(DatabaseCatalog *catalog,
 		"            coalesce(p.partcount, 1) as partcount "
 		"       from summary s "
 		"            join s_table t on t.oid = s.tableoid "
-		"            left join s_table_part p on p.oid = t.oid "
+		"            left join s_table_part p on p.oid = t.oid and p.partnum = s.partnum "
 		"      where tableoid is not null "
 		"        and done_time_epoch is not null "
 		"   group by tableoid"

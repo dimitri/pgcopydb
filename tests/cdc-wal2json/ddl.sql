@@ -12,3 +12,7 @@ alter table payment_p2022_05 replica identity full;
 alter table payment_p2022_06 replica identity full;
 alter table payment_p2022_07 replica identity full;
 commit;
+
+begin;
+alter table address replica identity full;
+commit;

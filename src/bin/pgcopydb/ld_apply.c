@@ -21,7 +21,6 @@
 #include "copydb.h"
 #include "env_utils.h"
 #include "ld_stream.h"
-#include "lsn_tracking.h"
 #include "lock_utils.h"
 #include "log.h"
 #include "parsing_utils.h"
@@ -53,6 +52,8 @@ static bool parseTxnMetadataFile(const char *filename, LogicalMessageMetadata *m
 static bool computeTxnMetadataFilename(uint32_t xid, const char *dir, char *filename);
 
 static bool writeTxnCommitMetadata(LogicalMessageMetadata *mesg, const char *dir);
+
+static bool setupConnection(PGSQL *pgsql, StreamApplyContext *context);
 
 /*
  * stream_apply_catchup catches up with SQL files that have been prepared by
@@ -101,7 +102,7 @@ stream_apply_catchup(StreamSpecs *specs)
 			log_info("File \"%s\" does not exists yet, exit",
 					 context.sqlFileName);
 
-			(void) pgsql_finish(&(context.pgsql));
+			(void) stream_apply_cleanup(&context);
 			return true;
 		}
 
@@ -111,7 +112,7 @@ stream_apply_catchup(StreamSpecs *specs)
 		if (!stream_apply_file(&context))
 		{
 			/* errors have already been logged */
-			(void) pgsql_finish(&(context.pgsql));
+			(void) stream_apply_cleanup(&context);
 			return false;
 		}
 
@@ -143,7 +144,7 @@ stream_apply_catchup(StreamSpecs *specs)
 		if (!computeSQLFileName(&context))
 		{
 			/* errors have already been logged */
-			(void) pgsql_finish(&(context.pgsql));
+			(void) stream_apply_cleanup(&context);
 			return false;
 		}
 
@@ -159,7 +160,7 @@ stream_apply_catchup(StreamSpecs *specs)
 					 LSN_FORMAT_ARGS(context.previousLSN));
 
 			/* make sure we close the connection on the way out */
-			(void) pgsql_finish(&(context.pgsql));
+			(void) stream_apply_cleanup(&context);
 			return true;
 		}
 
@@ -167,7 +168,7 @@ stream_apply_catchup(StreamSpecs *specs)
 	}
 
 	/* make sure we close the connection on the way out */
-	(void) pgsql_finish(&(context.pgsql));
+	(void) stream_apply_cleanup(&context);
 	return true;
 }
 
@@ -189,13 +190,6 @@ stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
 								   specs->endpos))
 	{
 		/* errors have already been logged */
-		return false;
-	}
-
-	/* read-in the previous lsn tracking file, if it exists */
-	if (!lsn_tracking_read(context))
-	{
-		log_error("Failed to read LSN tracking file");
 		return false;
 	}
 
@@ -264,6 +258,21 @@ stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
 				 process,
 				 LSN_FORMAT_ARGS(context->previousLSN));
 	}
+
+	return true;
+}
+
+
+/*
+ * stream_apply_cleanup cleans up the resources used by the apply process.
+ */
+bool
+stream_apply_cleanup(StreamApplyContext *context)
+{
+	/* make sure we close the connection on the way out */
+	(void) pgsql_finish(&(context->controlPgConn));
+
+	(void) pgsql_finish(&(context->applyPgConn));
 
 	return true;
 }
@@ -376,13 +385,6 @@ stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
 bool
 stream_apply_sync_sentinel(StreamApplyContext *context, bool findDurableLSN)
 {
-	/* now is a good time to write the LSN tracking to disk */
-	if (!lsn_tracking_write(context->sourceDB, context->lsnTrackingList))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	uint64_t durableLSN = InvalidXLogRecPtr;
 
 	/*
@@ -413,6 +415,7 @@ stream_apply_sync_sentinel(StreamApplyContext *context, bool findDurableLSN)
 	context->apply = sentinel.apply;
 	context->endpos = sentinel.endpos;
 	context->startpos = sentinel.startpos;
+	context->sentinelSyncTime = time(NULL);
 
 	log_debug("stream_apply_sync_sentinel: "
 			  "write_lsn %X/%X flush_lsn %X/%X replay_lsn %X/%X "
@@ -526,6 +529,29 @@ stream_apply_file(StreamApplyContext *context)
 
 			return false;
 		}
+
+
+		/* rate limit to 1 pipeline sync per second */
+		if ((metadata->action == STREAM_ACTION_COMMIT ||
+			 metadata->action == STREAM_ACTION_KEEPALIVE) &&
+			(1 < (time(NULL) - context->applyPgConn.pipelineSyncTime)))
+		{
+			/* fetch results until done */
+			if (!pgsql_sync_pipeline(&(context->applyPgConn)))
+			{
+				log_error("Failed to sync the pipeline, see previous error for "
+						  "details");
+				return false;
+			}
+		}
+	}
+
+	/* Always sync pipline at the end of file */
+	if (!pgsql_sync_pipeline(&(context->applyPgConn)))
+	{
+		log_error("Failed to sync the pipeline, see previous error for "
+				  "details");
+		return false;
 	}
 
 	/*
@@ -556,7 +582,7 @@ stream_apply_sql(StreamApplyContext *context,
 				 LogicalMessageMetadata *metadata,
 				 const char *sql)
 {
-	PGSQL *pgsql = &(context->pgsql);
+	PGSQL *applyPgConn = &(context->applyPgConn);
 
 	switch (metadata->action)
 	{
@@ -663,7 +689,7 @@ stream_apply_sql(StreamApplyContext *context,
 			 * We're all good to replay that transaction, let's BEGIN and
 			 * register our origin tracking on the target database.
 			 */
-			if (!pgsql_begin(pgsql))
+			if (!pgsql_begin(applyPgConn))
 			{
 				/* errors have already been logged */
 				return false;
@@ -694,7 +720,7 @@ stream_apply_sql(StreamApplyContext *context,
 						   LSN_FORMAT_ARGS(context->endpos));
 			}
 
-			if (!pgsql_set_gucs(pgsql, settings))
+			if (!pgsql_set_gucs(applyPgConn, settings))
 			{
 				log_error("Failed to set the apply GUC settings, "
 						  "see above for details");
@@ -709,7 +735,7 @@ stream_apply_sql(StreamApplyContext *context,
 		case STREAM_ACTION_ROLLBACK:
 		{
 			/* Rollback the transaction */
-			if (!pgsql_execute(pgsql, "ROLLBACK"))
+			if (!pgsql_execute(applyPgConn, "ROLLBACK"))
 			{
 				/* errors have already been logged */
 				return false;
@@ -763,7 +789,7 @@ stream_apply_sql(StreamApplyContext *context,
 							   LSN_FORMAT_ARGS(context->previousLSN));
 
 					/* Rollback the transaction */
-					if (!pgsql_execute(pgsql, "ROLLBACK"))
+					if (!pgsql_execute(applyPgConn, "ROLLBACK"))
 					{
 						/* errors have already been logged */
 						return false;
@@ -786,7 +812,7 @@ stream_apply_sql(StreamApplyContext *context,
 			sformat(lsn, sizeof(lsn), "%X/%X",
 					LSN_FORMAT_ARGS(metadata->lsn));
 
-			if (!pgsql_replication_origin_xact_setup(pgsql,
+			if (!pgsql_replication_origin_xact_setup(applyPgConn,
 													 lsn,
 													 metadata->timestamp))
 			{
@@ -801,7 +827,7 @@ stream_apply_sql(StreamApplyContext *context,
 
 
 			/* calling pgsql_commit() would finish the connection, avoid */
-			if (!pgsql_execute(pgsql, "COMMIT"))
+			if (!pgsql_execute(applyPgConn, "COMMIT"))
 			{
 				/* errors have already been logged */
 				return false;
@@ -825,17 +851,6 @@ stream_apply_sql(StreamApplyContext *context,
 						   LSN_FORMAT_ARGS(context->endpos),
 						   LSN_FORMAT_ARGS(context->previousLSN));
 				return true;
-			}
-
-			/*
-			 * An idle source producing only KEEPALIVE should move the
-			 * replay_lsn forward.
-			 */
-			if (!stream_apply_track_insert_lsn(context, metadata->lsn))
-			{
-				log_error("Failed to track target LSN position, "
-						  "see above for details");
-				return false;
 			}
 
 			break;
@@ -868,7 +883,7 @@ stream_apply_sql(StreamApplyContext *context,
 
 				if (context->transactionInProgress)
 				{
-					if (!pgsql_execute(pgsql, "ROLLBACK"))
+					if (!pgsql_execute(applyPgConn, "ROLLBACK"))
 					{
 						/* errors have already been logged */
 						return false;
@@ -947,7 +962,28 @@ stream_apply_sql(StreamApplyContext *context,
 				return true;
 			}
 
-			if (!pgsql_begin(pgsql))
+			if (!pgsql_begin(applyPgConn))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			/*
+			 * Replication origin is handled differently by the postgres
+			 * backend to avoid database bloat and runtime overhead[1].
+			 * This optimization leads to persist origin progress only when
+			 * the txn modifies the state of the database. So, an empty txn
+			 * created to update KEEPALIVE LSN effectively ignored by the
+			 * backend leading to not updating the origin progress.
+			 *
+			 * To workaround this, we execute `SELECT txid_current()` query to
+			 * force the backend to update the origin progress.
+			 *
+			 * [1] https://www.postgresql.org/docs/current/replication-origins.html
+			 */
+			char *sql = "SELECT txid_current()";
+
+			if (!pgsql_execute(applyPgConn, sql))
 			{
 				/* errors have already been logged */
 				return false;
@@ -958,7 +994,7 @@ stream_apply_sql(StreamApplyContext *context,
 			sformat(lsn, sizeof(lsn), "%X/%X",
 					LSN_FORMAT_ARGS(metadata->lsn));
 
-			if (!pgsql_replication_origin_xact_setup(pgsql,
+			if (!pgsql_replication_origin_xact_setup(applyPgConn,
 													 lsn,
 													 metadata->timestamp))
 			{
@@ -967,7 +1003,7 @@ stream_apply_sql(StreamApplyContext *context,
 			}
 
 			/* calling pgsql_commit() would finish the connection, avoid */
-			if (!pgsql_execute(pgsql, "COMMIT"))
+			if (!pgsql_execute(applyPgConn, "COMMIT"))
 			{
 				/* errors have already been logged */
 				return false;
@@ -990,13 +1026,6 @@ stream_apply_sql(StreamApplyContext *context,
 						   LSN_FORMAT_ARGS(context->endpos),
 						   LSN_FORMAT_ARGS(context->previousLSN));
 				break;
-			}
-
-			if (!stream_apply_track_insert_lsn(context, metadata->lsn))
-			{
-				log_error("Failed to track target LSN position, "
-						  "see above for details");
-				return false;
 			}
 
 			break;
@@ -1026,7 +1055,7 @@ stream_apply_sql(StreamApplyContext *context,
 				char name[NAMEDATALEN] = { 0 };
 				sformat(name, sizeof(name), "%x", metadata->hash);
 
-				if (!pgsql_prepare(pgsql, name, metadata->stmt, 0, NULL))
+				if (!pgsql_prepare(applyPgConn, name, metadata->stmt, 0, NULL))
 				{
 					/* errors have already been logged */
 					return false;
@@ -1101,7 +1130,7 @@ stream_apply_sql(StreamApplyContext *context,
 					paramValues[i] = value;
 				}
 
-				if (!pgsql_execute_prepared(pgsql, name,
+				if (!pgsql_execute_prepared(applyPgConn, name,
 											count, paramValues,
 											NULL, NULL))
 				{
@@ -1134,7 +1163,7 @@ stream_apply_sql(StreamApplyContext *context,
 				*ptr = '\0';
 			}
 
-			if (!pgsql_execute(pgsql, sql))
+			if (!pgsql_execute(applyPgConn, sql))
 			{
 				/* errors have already been logged */
 				return false;
@@ -1157,20 +1186,14 @@ stream_apply_sql(StreamApplyContext *context,
 
 
 /*
- * setupReplicationOrigin ensures that a replication origin has been created on
- * the target database, and if it has been created previously then fetches the
- * previous LSN position it was at.
- *
- * Also setupReplicationOrigin calls pg_replication_origin_setup() in the
- * current connection.
+ * setupConnection sets up a connection to the target database.
  */
-bool
-setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
+static bool
+setupConnection(PGSQL *pgsql, StreamApplyContext *context)
 {
-	PGSQL *pgsql = &(context->pgsql);
-	char *nodeName = context->origin;
-
-	if (!pgsql_init(pgsql, context->connStrings->target_pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(pgsql,
+					context->connStrings->target_pguri,
+					PGSQL_CONN_TARGET))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1180,7 +1203,7 @@ setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
 	pgsql->connectionStatementType = PGSQL_CONNECTION_MULTI_STATEMENT;
 
 	/* we also might want to skip logging any SQL query that we apply */
-	pgsql->logSQL = logSQL;
+	pgsql->logSQL = context->logSQL;
 
 	/*
 	 * Grab the Postgres server version on the target, we need to know that for
@@ -1193,9 +1216,48 @@ setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
 		return false;
 	}
 
+	return true;
+}
+
+
+/*
+ * setupReplicationOrigin ensures that a replication origin has been created on
+ * the target database, and if it has been created previously then fetches the
+ * previous LSN position it was at.
+ *
+ * Also setupReplicationOrigin calls pg_replication_origin_setup() in the
+ * current connection.
+ */
+bool
+setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
+{
+	char *nodeName = context->origin;
+
+	/*
+	 * A dedicated connection to apply logical messages into the target.
+	 * This will be converted to pipeline mode after we have setup the
+	 * replication origin.
+	 */
+	PGSQL *applyPgConn = &(context->applyPgConn);
+	if (!setupConnection(applyPgConn, context))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * Establish a regular connection for operations requiring immediate
+	 * responses, such as finding the WAL insert LSN.
+	 */
+	if (!setupConnection(&context->controlPgConn, context))
+	{
+		log_error("Failed to setup pipeline mode on target connection");
+		return false;
+	}
+
 	uint32_t oid = 0;
 
-	if (!pgsql_replication_origin_oid(pgsql, nodeName, &oid))
+	if (!pgsql_replication_origin_oid(applyPgConn, nodeName, &oid))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1208,7 +1270,8 @@ setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
 		log_error("Failed to fetch progress for replication origin \"%s\": "
 				  "replication origin not found on target database",
 				  nodeName);
-		(void) pgsql_finish(pgsql);
+		(void) pgsql_finish(applyPgConn);
+		(void) pgsql_finish(&context->controlPgConn);
 		return false;
 	}
 
@@ -1220,7 +1283,7 @@ setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
 	 */
 	uint64_t originLSN = InvalidXLogRecPtr;
 
-	if (!pgsql_replication_origin_progress(pgsql, nodeName, true, &originLSN))
+	if (!pgsql_replication_origin_progress(applyPgConn, nodeName, true, &originLSN))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1268,7 +1331,17 @@ setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
 			  LSN_FORMAT_ARGS(context->previousLSN),
 			  context->sqlFileName);
 
-	if (!pgsql_replication_origin_session_setup(pgsql, nodeName))
+	if (!pgsql_replication_origin_session_setup(applyPgConn, nodeName))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * Enter into pipeline mode, SQL statements which expects sync responses
+	 * are not allowed in this connection anymore.
+	 */
+	if (!pgsql_enable_pipeline_mode(applyPgConn))
 	{
 		/* errors have already been logged */
 		return false;
@@ -1551,98 +1624,28 @@ parseSQLAction(const char *query, LogicalMessageMetadata *metadata)
 
 
 /*
- * stream_apply_track_insert_lsn tracks the current pg_current_wal_insert_lsn()
- * location on the target system right after a COMMIT; of a transaction that
- * was assigned sourceLSN on the source system.
- */
-bool
-stream_apply_track_insert_lsn(StreamApplyContext *context, uint64_t sourceLSN)
-{
-	LSNTracking *lsn_tracking = (LSNTracking *) calloc(1, sizeof(LSNTracking));
-
-	if (lsn_tracking == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	lsn_tracking->sourceLSN = sourceLSN;
-
-	if (!pgsql_current_wal_insert_lsn(&(context->pgsql),
-									  &(lsn_tracking->insertLSN)))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	log_debug("stream_apply_track_insert_lsn: %X/%X :: %X/%X",
-			  LSN_FORMAT_ARGS(sourceLSN),
-			  LSN_FORMAT_ARGS(lsn_tracking->insertLSN));
-
-	/* update the linked list */
-	lsn_tracking->previous = context->lsnTrackingList;
-	context->lsnTrackingList = lsn_tracking;
-
-	return true;
-}
-
-
-/*
  * stream_apply_find_durable_lsn fetches the LSN for the current durable
- * location on the target system, and finds the greatest sourceLSN with an
- * associated insertLSN that's before the current (durable) write location.
+ * location on the target system using pg_replication_origin_progress.
  */
 bool
 stream_apply_find_durable_lsn(StreamApplyContext *context, uint64_t *durableLSN)
 {
 	uint64_t flushLSN = InvalidXLogRecPtr;
 
-	if (!stream_fetch_current_lsn(&flushLSN,
-								  context->connStrings->target_pguri,
-								  PGSQL_CONN_SOURCE))
+	bool flush = true;
+
+	if (!pgsql_replication_origin_progress(&(context->controlPgConn),
+										   context->origin,
+										   flush,
+										   &flushLSN))
 	{
-		log_error("Failed to retrieve current WAL positions, "
+		/* errors have already been logged */
+		log_error("Failed to retrieve origin progress, "
 				  "see above for details");
 		return false;
 	}
 
-	bool found = false;
-	LSNTracking *current = context->lsnTrackingList;
-
-	for (; current != NULL; current = current->previous)
-	{
-		if (current->insertLSN <= flushLSN)
-		{
-			found = true;
-			*durableLSN = current->sourceLSN;
-			break;
-		}
-	}
-
-	if (!found)
-	{
-		*durableLSN = InvalidXLogRecPtr;
-
-		log_debug("Failed to find a durable source LSN for target LSN %X/%X",
-				  LSN_FORMAT_ARGS(flushLSN));
-
-		return false;
-	}
-
-	log_debug("stream_apply_find_durable_lsn(%X/%X): %X/%X :: %X/%X",
-			  LSN_FORMAT_ARGS(flushLSN),
-			  LSN_FORMAT_ARGS(current->sourceLSN),
-			  LSN_FORMAT_ARGS(current->insertLSN));
-
-	/* clean-up the lsn tracking list */
-	LSNTracking *tail = current->previous;
-	current->previous = NULL;
-
-	while (tail != NULL)
-	{
-		LSNTracking *previous = tail->previous;
-		tail = previous;
-	}
+	*durableLSN = flushLSN;
 
 	return true;
 }

@@ -96,8 +96,6 @@ static CommandLine list_tables_command =
 		"  --source            Postgres URI to the source database\n"
 		"  --filter <filename> Use the filters defined in <filename>\n"
 		"  --force             Force fetching catalogs again\n"
-		"  --cache             Cache table size in relation pgcopydb.pgcopydb_table_size\n"
-		"  --drop-cache        Drop relation pgcopydb.pgcopydb_table_size\n"
 		"  --list-skipped      List only tables that are setup to be skipped\n"
 		"  --without-pkey      List only tables that have no primary key\n",
 		cli_list_db_getopts,
@@ -112,7 +110,9 @@ static CommandLine list_table_parts_command =
 		"  --force                     Force fetching catalogs again\n"
 		"  --schema-name               Name of the schema where to find the table\n"
 		"  --table-name                Name of the target table\n"
-		"  --split-tables-larger-than  Size threshold to consider partitioning\n",
+		"  --split-tables-larger-than  Size threshold to consider partitioning\n"
+		"  --skip-split-by-ctid        Skip the ctid split\n"
+		"  --estimate-table-sizes      Allow using estimates for relation sizes\n",
 		cli_list_db_getopts,
 		cli_list_table_parts);
 
@@ -221,6 +221,32 @@ cli_list_getenv(ListDBOptions *options)
 		++errors;
 	}
 
+	/* when --estimate-table-sizes has not been used, check PGCOPYDB_ESTIMATE_TABLE_SIZES */
+	if (!options->estimateTableSizes)
+	{
+		if (env_exists(PGCOPYDB_ESTIMATE_TABLE_SIZES))
+		{
+			char estimateTableSizesAsString[BUFSIZE] = { 0 };
+
+			if (!get_env_copy(PGCOPYDB_ESTIMATE_TABLE_SIZES,
+							  estimateTableSizesAsString,
+							  sizeof(estimateTableSizesAsString)))
+			{
+				/* errors have already been logged */
+				++errors;
+			}
+			else if (!parse_bool(estimateTableSizesAsString,
+								 &(options->estimateTableSizes)))
+			{
+				log_error("Failed to parse environment variable \"%s\" "
+						  "value \"%s\", expected a boolean (on/off)",
+						  PGCOPYDB_ESTIMATE_TABLE_SIZES,
+						  estimateTableSizesAsString);
+				++errors;
+			}
+		}
+	}
+
 	return errors == 0;
 }
 
@@ -246,9 +272,9 @@ cli_list_db_getopts(int argc, char **argv)
 		{ "without-pkey", no_argument, NULL, 'P' },
 		{ "split-tables-larger-than", required_argument, NULL, 'L' },
 		{ "split-at", required_argument, NULL, 'L' },
+		{ "estimate-table-sizes", no_argument, NULL, 'm' },
+		{ "skip-split-by-ctid", no_argument, NULL, 'k' },
 		{ "force", no_argument, NULL, 'f' },
-		{ "cache", no_argument, NULL, 'c' },
-		{ "drop-cache", no_argument, NULL, 'C' },
 		{ "summary", no_argument, NULL, 'y' },
 		{ "available-versions", no_argument, NULL, 'a' },
 		{ "requirements", no_argument, NULL, 'r' },
@@ -275,7 +301,9 @@ cli_list_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:D:s:t:F:xPL:fcCyarJRIN:Vdzvqh",
+	const char *optstring = "S:D:s:t:F:xPLk:mfyarJRIN:Vdzvqh";
+
+	while ((c = getopt_long(argc, argv, optstring,
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -361,6 +389,13 @@ cli_list_db_getopts(int argc, char **argv)
 				break;
 			}
 
+			case 'k':
+			{
+				options.skipCtidSplit = true;
+				log_trace("--skip-split-by-ctid");
+				break;
+			}
+
 			case 'f':
 			{
 				options.force = true;
@@ -368,29 +403,10 @@ cli_list_db_getopts(int argc, char **argv)
 				break;
 			}
 
-			case 'c':
+			case 'm':
 			{
-				if (options.dropCache)
-				{
-					log_fatal("Please choose either --cache or --drop-cache");
-					++errors;
-				}
-
-				options.cache = true;
-				log_trace("--cache");
-				break;
-			}
-
-			case 'C':
-			{
-				if (options.cache)
-				{
-					log_fatal("Please choose either --cache or --drop-cache");
-					++errors;
-				}
-
-				options.dropCache = true;
-				log_trace("--drop-cache");
+				options.estimateTableSizes = true;
+				log_trace("--estimate-table-sizes");
 				break;
 			}
 
@@ -1278,8 +1294,22 @@ cli_list_table_parts(int argc, char **argv)
 		exit(EXIT_CODE_QUIT);
 	}
 
-	if (IS_EMPTY_STRING_BUFFER(table->partKey))
+	if (IS_EMPTY_STRING_BUFFER(table->partKey) &&
+		streq(table->amname, "heap"))
 	{
+		if (copySpecs.skipCtidSplit)
+		{
+			log_info("Table %s is %s large "
+					 "which is larger than --split-tables-larger-than %s, "
+					 "does not have a unique column of type integer, "
+					 "and CTID split is disabled. "
+					 "Same table concurrency is not enabled",
+					 table->qname,
+					 table->bytesPretty,
+					 listDBoptions.splitTablesLargerThan.bytesPretty);
+			exit(EXIT_CODE_QUIT);
+		}
+
 		log_info("Table %s is %s large "
 				 "which is larger than --split-tables-larger-than %s, "
 				 "and does not have a unique column of type integer: "
@@ -1289,6 +1319,19 @@ cli_list_table_parts(int argc, char **argv)
 				 listDBoptions.splitTablesLargerThan.bytesPretty);
 
 		strlcpy(table->partKey, "ctid", sizeof(table->partKey));
+	}
+	else if (IS_EMPTY_STRING_BUFFER(table->partKey))
+	{
+		log_info("Table %s is %s large "
+				 "which is larger than --split-tables-larger-than %s, "
+				 "does not have a unique column of type integer, "
+				 "and uses table access method \"%s\": "
+				 "same table concurrency is not enabled",
+				 table->qname,
+				 table->bytesPretty,
+				 listDBoptions.splitTablesLargerThan.bytesPretty,
+				 table->amname);
+		exit(EXIT_CODE_QUIT);
 	}
 
 	log_info("Table %s COPY will be split %d-ways",
@@ -1996,6 +2039,8 @@ copydb_init_specs_from_listdboptions(CopyDataSpec *copySpecs,
 	strlcpy(options.dir, listDBoptions->dir, MAXPGPATH);
 	options.connStrings = listDBoptions->connStrings;
 	options.splitTablesLargerThan = listDBoptions->splitTablesLargerThan;
+	options.skipCtidSplit = listDBoptions->skipCtidSplit;
+	options.estimateTableSizes = listDBoptions->estimateTableSizes;
 
 	/* process the --resume --not-consistent --snapshot options now */
 	options.resume = listDBoptions->resume;

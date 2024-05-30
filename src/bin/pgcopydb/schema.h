@@ -157,6 +157,9 @@ typedef struct SourceTable
 	char amname[PG_NAMEDATALEN];
 	char restoreListName[RESTORE_LIST_NAMEDATALEN];
 
+	/* 'r' for ordinary table, 'm' for matview */
+	char relkind;
+
 	int64_t relpages;
 	int64_t reltuples;
 	int64_t bytes;
@@ -174,6 +177,9 @@ typedef struct SourceTable
 
 	char *attrList;             /* malloc'ed area */
 	SourceTableAttributeArray attributes;
+
+	int64_t bytesEstimate;
+	char bytesEstimatePretty[PG_NAMEDATALEN];
 
 	uint64_t indexCount;
 	uint64_t constraintCount;
@@ -354,7 +360,8 @@ typedef enum
 	DATA_SECTION_FILTERS,
 	DATA_SECTION_BLOBS,
 	DATA_SECTION_VACUUM,
-	DATA_SECTION_ALL
+	DATA_SECTION_NAMESPACES,
+	DATA_SECTION_ALL,
 } CopyDataSection;
 
 #define DATA_SECTION_COUNT (DATA_SECTION_ALL + 1)
@@ -411,15 +418,13 @@ bool schema_list_ext_versions(PGSQL *pgsql, ExtensionsVersionsArray *array);
 bool schema_list_collations(PGSQL *pgsql, DatabaseCatalog *catalog);
 
 bool schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
-										SourceFilters *filters, DatabaseCatalog *catalog);
+										SourceFilters *filters,
+										DatabaseCatalog *catalog);
 
 bool schema_list_ordinary_tables(PGSQL *pgsql,
 								 SourceFilters *filters,
+								 bool estimateTableSizes,
 								 DatabaseCatalog *catalog);
-
-bool schema_list_ordinary_tables_without_pk(PGSQL *pgsql,
-											SourceFilters *filters,
-											DatabaseCatalog *catalog);
 
 bool schema_list_partitions(PGSQL *pgsql,
 							DatabaseCatalog *catalog,

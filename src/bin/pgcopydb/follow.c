@@ -136,7 +136,9 @@ follow_reset_sequences(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		return false;
 	}
 
-	if (!copydb_copy_all_sequences(&seqSpecs))
+	bool reset = true;
+
+	if (!copydb_copy_all_sequences(&seqSpecs, reset))
 	{
 		/* errors have already been logged */
 		return false;

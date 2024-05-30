@@ -11,6 +11,7 @@
      --restore-jobs                Number of concurrent jobs for pg_restore
      --large-objects-jobs          Number of concurrent Large Objects jobs to run
      --split-tables-larger-than    Same-table concurrency size threshold
+     --estimate-table-sizes        Allow using estimates for relation sizes
      --drop-if-exists              On the target database, clean-up from a previous run first
      --roles                       Also copy roles found on source to target
      --no-role-passwords           Do not dump passwords for roles
@@ -23,6 +24,8 @@
      --skip-ext-comments           Skip restoring COMMENT ON EXTENSION
      --skip-collations             Skip restoring collations
      --skip-vacuum                 Skip running VACUUM ANALYZE
+     --skip-db-properties          Skip copying ALTER DATABASE SET properties
+     --skip-split-by-ctid          Skip spliting tables by ctid
      --requirements <filename>     List extensions requirements
      --filters <filename>          Use the filters defined in <filename>
      --fail-fast                   Abort early in case of error

@@ -31,23 +31,58 @@ static bool copydb_copy_database_properties_hook(void *ctx,
 
 
 /*
- * copydb_objectid_has_been_processed_already returns true when a doneFile
- * could be found on-disk for the given target object OID.
+ * copydb_objectid_has_been_processed_already returns true when the given
+ * target object OID is found in our SQLite summary catalogs. This only applies
+ * to indexes or constraints, as TABLE DATA is not part of either the
+ * --pre-data parts of the schema nor the --post-data parts of the schema.
  */
 bool
-copydb_objectid_has_been_processed_already(CopyDataSpec *specs, uint32_t oid)
+copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
+										   ArchiveContentItem *item)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	bool done = false;
+	uint32_t oid = item->objectOid;
 
-	if (!summary_lookup_oid(sourceDB, oid, &done))
+	switch (item->desc)
 	{
-		/* errors have aleady been logged */
-		return false;
+		case ARCHIVE_TAG_INDEX:
+		{
+			SourceIndex index = { .indexOid = oid };
+			CopyIndexSpec indexSpecs = { .sourceIndex = &index };
+
+			if (!summary_lookup_index(sourceDB, &indexSpecs))
+			{
+				/* errors have aleady been logged */
+				return false;
+			}
+
+			return indexSpecs.summary.doneTime > 0;
+		}
+
+		case ARCHIVE_TAG_CONSTRAINT:
+		{
+			SourceIndex index = { .constraintOid = oid };
+			CopyIndexSpec indexSpecs = { .sourceIndex = &index };
+
+			if (!summary_lookup_constraint(sourceDB, &indexSpecs))
+			{
+				/* errors have aleady been logged */
+				return false;
+			}
+
+			return indexSpecs.summary.doneTime > 0;
+		}
+
+		/* we don't have internal pgcopydb support for other objects */
+		default:
+		{
+			return false;
+		}
 	}
 
-	return done;
+	/* keep compiler happy */
+	return false;
 }
 
 
@@ -61,6 +96,13 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 						  PostgresDumpSection section)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	if (specs->runState.schemaDumpIsDone)
+	{
+		log_info("Skipping pg_dump for pre-data/post-data section, "
+				 "done on a previous run");
+		return true;
+	}
 
 	if (!summary_start_timing(sourceDB, TIMING_SECTION_DUMP_SCHEMA))
 	{
@@ -133,12 +175,6 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	if (!summary_start_timing(sourceDB, TIMING_SECTION_PREPARE_SCHEMA))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	if (!file_exists(specs->dumpPaths.preFilename))
 	{
 		log_fatal("File \"%s\" does not exists", specs->dumpPaths.preFilename);
@@ -150,6 +186,12 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 		log_info("Skipping pg_restore for pre-data section, "
 				 "done on a previous run");
 		return true;
+	}
+
+	if (!summary_start_timing(sourceDB, TIMING_SECTION_PREPARE_SCHEMA))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	/*
@@ -350,6 +392,22 @@ copydb_copy_database_properties_hook(void *ctx, SourceProperty *property)
 	 */
 	else
 	{
+		bool exists = false;
+
+		if (!pgsql_configuration_exists(dst, property->setconfig, &exists))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!exists)
+		{
+			log_warn("Skipping database property %s which "
+					 "does not exists on the target database",
+					 property->setconfig);
+			return true;
+		}
+
 		PQExpBuffer command = createPQExpBuffer();
 
 		makeAlterConfigCommand(conn, property->setconfig,
@@ -433,6 +491,8 @@ copydb_target_drop_tables(CopyDataSpec *specs)
 		return false;
 	}
 
+	log_notice("%s", query->data);
+
 	PGSQL dst = { 0 };
 
 	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
@@ -488,12 +548,6 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	if (!summary_start_timing(sourceDB, TIMING_SECTION_FINALIZE_SCHEMA))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	if (!file_exists(specs->dumpPaths.postFilename))
 	{
 		log_fatal("File \"%s\" does not exists", specs->dumpPaths.postFilename);
@@ -505,6 +559,12 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 		log_info("Skipping pg_restore for --section=post-data, "
 				 "done on a previous run");
 		return true;
+	}
+
+	if (!summary_start_timing(sourceDB, TIMING_SECTION_FINALIZE_SCHEMA))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	if (!copydb_write_restore_list(specs, PG_DUMP_SECTION_POST_DATA))
@@ -622,6 +682,16 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 		bool skip = false;
 
 		/*
+		 * Always skip DATABASE objets as pgcopydb does not create the target
+		 * database.
+		 */
+		if (item->desc == ARCHIVE_TAG_DATABASE)
+		{
+			skip = true;
+			log_notice("Skipping DATABASE \"%s\"", name);
+		}
+
+		/*
 		 * Skip COMMENT ON EXTENSION when either of the option
 		 * --skip-extensions or --skip-ext-comment has been used.
 		 */
@@ -639,7 +709,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 		{
 			bool exists = false;
 
-			if (!copydb_schema_already_exists(specs, name, &exists))
+			if (!copydb_schema_already_exists(specs, oid, &exists))
 			{
 				log_error("Failed to check if restore name \"%s\" "
 						  "already exists",
@@ -660,7 +730,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 			}
 		}
 
-		if (!skip && copydb_objectid_has_been_processed_already(specs, oid))
+		if (!skip && copydb_objectid_has_been_processed_already(specs, item))
 		{
 			skip = true;
 
@@ -684,6 +754,24 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 		if (item->desc == ARCHIVE_TAG_SEQUENCE)
 		{
 			name = NULL;
+		}
+
+		/*
+		 * There could be a case where the materalized view is included in the
+		 * dump, but the refresh is filtered out using [exclude-table-data].
+		 * In this case, we want to skip the refresh.
+		 */
+		if (!skip &&
+			item->desc == ARCHIVE_TAG_REFRESH_MATERIALIZED_VIEW &&
+			copydb_matview_refresh_is_filtered_out(specs, oid))
+		{
+			skip = true;
+
+			log_notice("Skipping materialized view refresh dumpId %d: %s %u %s",
+					   contents.array[i].dumpId,
+					   contents.array[i].description,
+					   contents.array[i].objectOid,
+					   contents.array[i].restoreListName);
 		}
 
 		if (!skip && copydb_objectid_is_filtered_out(specs, oid, name))

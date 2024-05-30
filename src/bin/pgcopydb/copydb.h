@@ -227,6 +227,8 @@ typedef struct CopyDataSpec
 	bool skipCommentOnExtension;
 	bool skipCollations;
 	bool skipVacuum;
+	bool skipDBproperties;
+	bool skipCtidSplit;
 	bool noRolesPasswords;
 
 	bool restart;
@@ -245,6 +247,7 @@ typedef struct CopyDataSpec
 	int lObjectJobs;
 
 	SplitTableLargerThan splitTablesLargerThan;
+	bool estimateTableSizes;
 
 	Queue copyQueue;
 	Queue indexQueue;
@@ -398,28 +401,31 @@ bool copydb_target_drop_tables(CopyDataSpec *specs);
 bool copydb_target_finalize_schema(CopyDataSpec *specs);
 
 bool copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
-												uint32_t oid);
+												ArchiveContentItem *item);
 
 bool copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section);
 
 /* sequences.c */
-bool copydb_copy_all_sequences(CopyDataSpec *specs);
+bool copydb_copy_all_sequences(CopyDataSpec *specs, bool reset);
 bool copydb_start_seq_process(CopyDataSpec *specs);
-bool copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql);
+bool copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql, bool reset);
 
 /* copydb_schema.c */
 bool copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs);
 bool copydb_objectid_is_filtered_out(CopyDataSpec *specs,
 									 uint32_t oid,
 									 char *restoreListName);
+bool copydb_matview_refresh_is_filtered_out(CopyDataSpec *specs,
+											uint32_t oid);
 
 bool copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql);
 bool copydb_prepare_index_specs(CopyDataSpec *specs, PGSQL *pgsql);
+bool copydb_prepare_namespace_specs(CopyDataSpec *specs, PGSQL *pgsql);
 bool copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql);
 
 bool copydb_prepare_target_catalog(CopyDataSpec *specs);
 bool copydb_schema_already_exists(CopyDataSpec *specs,
-								  const char *restoreListName,
+								  uint32_t sourceOid,
 								  bool *exists);
 
 /* table-data.c */
@@ -448,6 +454,7 @@ bool copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 
 bool copydb_table_create_lockfile(CopyDataSpec *specs,
 								  CopyTableDataSpec *tableSpecs,
+								  PGSQL *dst,
 								  bool *isDone);
 
 bool copydb_mark_table_as_done(CopyDataSpec *specs,
@@ -462,6 +469,7 @@ bool copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs, CopyArgs *args);
 
 bool copydb_prepare_summary_command(CopyTableDataSpec *tableSpecs);
 
+bool copydb_check_table_exists(PGSQL *pgsql, SourceTable *table, bool *exists);
 
 /* blobs.c */
 bool copydb_start_blob_process(CopyDataSpec *specs);
@@ -517,7 +525,6 @@ bool print_summary(CopyDataSpec *specs);
 bool summary_prepare_toplevel_durations(CopyDataSpec *specs);
 bool prepare_summary_table(Summary *summary, CopyDataSpec *specs);
 
-bool summary_lookup_oid(DatabaseCatalog *catalog, uint32_t oid, bool *done);
 bool summary_oid_done_fetch(SQLiteQuery *query);
 
 /*

@@ -62,3 +62,23 @@ create table schema_name_20_chars.very______long______table______name_______50_c
  (
    id serial
  );
+
+--
+-- To test materialized view filtering
+--
+create materialized view foo.matview_1 as select 1 as id;
+create index matview_1_idx on foo.matview_1(id);
+
+create materialized view foo.matview_1_exclude_data as select 1;
+
+create materialized view foo.matview_1_exclude_as_table as select 1 as id;
+
+create materialized view foo.matview_2_depends_on_matview_1_exclude_as_table as select * from foo.matview_1_exclude_as_table;
+
+--
+-- TODO: We don't handle the case where a materialized view depends
+-- on another materialized view that's refresh is filtered out.
+-- In that case, we should exclude the materialized refresh of
+-- the dependent materialized view as well.
+--
+-- create materialized view foo.matview_3_depends_on_matview_1_exclude_table as select * from foo.matview_1_exclude_data;

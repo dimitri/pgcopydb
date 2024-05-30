@@ -32,3 +32,19 @@ CREATE TABLE IF NOT EXISTS public.identifer_as_column
 alter table public.identifer_as_column replica identity full;
 
 commit;
+
+--
+-- See https://github.com/dimitri/pgcopydb/issues/736
+--
+begin;
+
+CREATE TABLE t_bit_types
+(
+    id serial primary key,
+     a bit(3),
+     b bit varying(5)
+);
+
+INSERT INTO t_bit_types (a,b) VALUES (B'101', B'00');
+
+commit;

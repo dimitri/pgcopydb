@@ -102,6 +102,7 @@ typedef struct SourceTableArrayContext
 {
 	char sqlstate[SQLSTATE_LENGTH];
 	DatabaseCatalog *catalog;
+	bool estimateTableSizes;
 	bool parsedOk;
 } SourceTableArrayContext;
 
@@ -423,11 +424,49 @@ schema_list_extensions(PGSQL *pgsql, DatabaseCatalog *catalog)
 	SourceExtensionArrayContext parseContext = { { 0 }, catalog, false };
 
 	char *sql =
+		"with recursive extconfig_paths as ( "
+		"     select extconfig "
+		"     from pg_extension "
+		"     where extconfig is not null "
+		" ), fk_constraints as ( "
+		"     select fk.oid, fk.conrelid, fk.confrelid "
+		"     from pg_constraint fk "
+		"     inner join extconfig_paths "
+		"         on fk.conrelid = any(extconfig_paths.extconfig) "
+		"         or fk.confrelid = any(extconfig_paths.extconfig) "
+		"     where fk.contype = 'f' and fk.conrelid <> fk.confrelid "
+		" ), raw_ordered_fk_constraints as ( "
+		"     select "
+		"            distinct c.confrelid as relid, "
+		"            0 as depth, "
+		"            false as is_cycle, "
+		"            ARRAY[c.oid] as path "
+		"       from fk_constraints c "
+		"      where not exists ( "
+		"            select 1 "
+		"              from fk_constraints fc "
+		"             where fc.conrelid = c.confrelid "
+		"            ) "
+		"     UNION "
+		"     select "
+		"            distinct c.conrelid as relid, "
+		"            r.depth + 1 as depth, "
+		"            c.oid = ANY(path) as is_cycle, "
+		"            path || c.oid as path "
+		"       from raw_ordered_fk_constraints r "
+		"       join fk_constraints c ON c.confrelid = r.relid"
+		"      where not is_cycle "
+		" ), ordered_fk_constraints AS ( "
+		"     select "
+		"            relid, "
+		"            max(depth) as depth "
+		"       from raw_ordered_fk_constraints group by relid "
+		" ), extension_config_data as ( "
 		"select e.oid, extname, extnamespace::regnamespace, extrelocatable, "
 		"       0 as count, null as n, "
 		"       null as extconfig, null as nspname, null as relname, "
 		"       null as extcondition, "
-		"		null as relkind "
+		"       null as relkind "
 		"  from pg_extension e "
 		" where extconfig is null "
 
@@ -446,8 +485,18 @@ schema_list_extensions(PGSQL *pgsql, DatabaseCatalog *catalog)
 		"          left join pg_class c on c.oid = extconfig.extconfig "
 		"          join pg_namespace n on c.relnamespace = n.oid "
 		"   where extconfig.extconfig is not null "
-
-		"order by oid, n";
+		") "
+		"select oid, extname, extnamespace, extrelocatable, "
+		"       count, "
+		"       row_number() over (partition by oid order by depth) as n, "
+		"       extconfig, "
+		"       nspname, "
+		"       relname, "
+		"       extcondition, "
+		"       relkind "
+		" from extension_config_data "
+		"      left outer join ordered_fk_constraints ofc on extconfig = ofc.relid "
+	;
 
 	if (!pgsql_execute_with_params(pgsql, sql,
 								   0, NULL, NULL,
@@ -809,9 +858,8 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 
 
 /*
- * schema_prepare_pgcopydb_table_size creates a table named pgcopydb_table_size
- * on the given connection (typically, the source database). The creation is
- * skipped if the table already exists.
+ * schema_prepare_pgcopydb_table_size creates an internal catalog table named
+ * s_table_size.
  */
 bool
 schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
@@ -887,8 +935,11 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"  select c.oid, "
 		"         format('%I', n.nspname) as nspname, "
 		"         format('%I', c.relname) as relname, "
+		"         c.relkind as relkind, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
+		"         c.relpages * current_setting('block_size')::bigint as bytesestimate, "
+		"         pg_size_pretty(c.relpages * current_setting('block_size')::bigint), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -946,7 +997,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"              limit 1"
 		"         ) as pkeys on true"
 
-		"   where relkind = 'r' and c.relpersistence in ('p', 'u') "
+		"   where relkind in ('r', 'm') and c.relpersistence in ('p', 'u') "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and n.nspname !~ 'pgcopydb' "
 
@@ -969,8 +1020,11 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"  select c.oid, "
 		"         format('%I', n.nspname) as nspname, "
 		"         format('%I', c.relname) as relname, "
+		"         c.relkind as relkind, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
+		"         c.relpages * current_setting('block_size')::bigint as bytesestimate, "
+		"         pg_size_pretty(c.relpages * current_setting('block_size')::bigint), "
 		"         exists(select 1 "
 		"                  from pg_temp.filter_exclude_table_data ftd "
 		"                 where n.nspname = ftd.nspname "
@@ -1036,7 +1090,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"              limit 1"
 		"         ) as pkeys on true"
 
-		"   where relkind = 'r' and c.relpersistence in ('p', 'u') "
+		"   where relkind in ('r', 'm') and c.relpersistence in ('p', 'u') "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and n.nspname !~ 'pgcopydb' "
 
@@ -1059,8 +1113,11 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"  select c.oid, "
 		"         format('%I', n.nspname) as nspname, "
 		"         format('%I', c.relname) as relname, "
+		"         c.relkind as relkind, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
+		"         c.relpages * current_setting('block_size')::bigint as bytesestimate, "
+		"         pg_size_pretty(c.relpages * current_setting('block_size')::bigint), "
 		"         ftd.relname is not null as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1132,14 +1189,13 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"              limit 1"
 		"         ) as pkeys on true"
 
-		"   where relkind in ('r', 'p') and c.relpersistence in ('p', 'u') "
+		"   where relkind in ('r', 'p', 'm') and c.relpersistence in ('p', 'u') "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and n.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
 		"     and fn.nspname is null "
 		"     and ft.relname is null "
-		"     and ftd.relname is null "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -1160,8 +1216,11 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"  select c.oid, "
 		"         format('%I', n.nspname) as nspname, "
 		"         format('%I', c.relname) as relname, "
+		"         c.relkind as relkind, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
+		"         c.relpages * current_setting('block_size')::bigint as bytesestimate, "
+		"         pg_size_pretty(c.relpages * current_setting('block_size')::bigint), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1224,7 +1283,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"              limit 1"
 		"         ) as pkeys on true"
 
-		"   where relkind in ('r', 'p') and c.relpersistence in ('p', 'u') "
+		"   where relkind in ('r', 'p', 'm') and c.relpersistence in ('p', 'u') "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and n.nspname !~ 'pgcopydb' "
 
@@ -1250,8 +1309,11 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"  select c.oid, "
 		"         format('%I', n.nspname) as nspname, "
 		"         format('%I', c.relname) as relname, "
+		"         c.relkind as relkind, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
+		"         c.relpages * current_setting('block_size')::bigint as bytesestimate, "
+		"         pg_size_pretty(c.relpages * current_setting('block_size')::bigint), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1318,7 +1380,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"              limit 1"
 		"         ) as pkeys on true"
 
-		"   where relkind in ('r', 'p') and c.relpersistence in ('p', 'u') "
+		"   where relkind in ('r', 'p', 'm') and c.relpersistence in ('p', 'u') "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and n.nspname !~ 'pgcopydb' "
 
@@ -1348,9 +1410,10 @@ struct FilteringQueries listSourceTablesSQL[] = {
 bool
 schema_list_ordinary_tables(PGSQL *pgsql,
 							SourceFilters *filters,
+							bool estimateTableSizes,
 							DatabaseCatalog *catalog)
 {
-	SourceTableArrayContext context = { { 0 }, catalog, false };
+	SourceTableArrayContext context = { { 0 }, catalog, estimateTableSizes, false };
 
 	log_trace("schema_list_ordinary_tables");
 
@@ -1428,8 +1491,11 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"  select c.oid, "
 		"         format('%I', n.nspname) as nspname, "
 		"         format('%I', c.relname) as relname, "
+		"         c.relkind as relkind, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
+		"         c.relpages * current_setting('block_size')::bigint as bytesestimate, "
+		"         pg_size_pretty(c.relpages * current_setting('block_size')::bigint), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1443,7 +1509,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
 		"         join pg_roles auth ON auth.oid = c.relowner"
 
-		"   where c.relkind = 'r' and c.relpersistence in ('p', 'u')  "
+		"   where c.relkind in ('r', 'm') and c.relpersistence in ('p', 'u')  "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and not exists "
 		"         ( "
@@ -1472,8 +1538,11 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"  select c.oid, "
 		"         format('%I', n.nspname) as nspname, "
 		"         format('%I', c.relname) as relname, "
+		"         c.relkind as relkind, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
+		"         c.relpages * current_setting('block_size')::bigint as bytesestimate, "
+		"         pg_size_pretty(c.relpages * current_setting('block_size')::bigint), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1492,7 +1561,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"           on n.nspname = inc.nspname "
 		"          and c.relname = inc.relname "
 
-		"   where c.relkind = 'r' and c.relpersistence in ('p', 'u') "
+		"   where c.relkind in ('r', 'm') and c.relpersistence in ('p', 'u') "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and not exists "
 		"         ( "
@@ -1521,8 +1590,11 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"  select c.oid, "
 		"         format('%I', n.nspname) as nspname, "
 		"         format('%I', c.relname) as relname, "
+		"         c.relkind as relkind, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
+		"         c.relpages * current_setting('block_size')::bigint as bytesestimate, "
+		"         pg_size_pretty(c.relpages * current_setting('block_size')::bigint), "
 		"         ftd.relname is not null as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1550,7 +1622,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"                on n.nspname = ftd.nspname "
 		"               and c.relname = ftd.relname "
 
-		"   where c.relkind = 'r' and c.relpersistence in ('p', 'u')  "
+		"   where c.relkind in ('r', 'm') and c.relpersistence in ('p', 'u')  "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and not exists "
 		"         ( "
@@ -1563,7 +1635,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		/* WHERE clause for exclusion filters */
 		"     and fn.nspname is null "
 		"     and ft.relname is null "
-		"     and ftd.relname is null "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -1584,8 +1655,11 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"  select c.oid, "
 		"         format('%I', n.nspname) as nspname, "
 		"         format('%I', c.relname) as relname, "
+		"         c.relkind as relkind, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
+		"         c.relpages * current_setting('block_size')::bigint as bytesestimate, "
+		"         pg_size_pretty(c.relpages * current_setting('block_size')::bigint), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1604,7 +1678,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"           on n.nspname = inc.nspname "
 		"          and c.relname = inc.relname "
 
-		"   where c.relkind = 'r' and c.relpersistence in ('p', 'u')  "
+		"   where c.relkind in ('r', 'm') and c.relpersistence in ('p', 'u')  "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and not exists "
 		"         ( "
@@ -1636,8 +1710,11 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"  select c.oid, "
 		"         format('%I', n.nspname) as nspname, "
 		"         format('%I', c.relname) as relname, "
+		"         c.relkind as relkind, "
 		"         pg_am.amname, "
 		"         c.relpages, c.reltuples::bigint, "
+		"         c.relpages * current_setting('block_size')::bigint as bytesestimate, "
+		"         pg_size_pretty(c.relpages * current_setting('block_size')::bigint), "
 		"         false as excludedata, "
 		"         format('%s %s %s', "
 		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
@@ -1660,7 +1737,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"                on n.nspname = ft.nspname "
 		"               and c.relname = ft.relname "
 
-		"   where c.relkind = 'r' and c.relpersistence in ('p', 'u')  "
+		"   where c.relkind in ('r', 'm') and c.relpersistence in ('p', 'u')  "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and not exists "
 		"         ( "
@@ -1687,83 +1764,6 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"order by n.nspname, c.relname"
 	}
 };
-
-/*
- * schema_list_ordinary_tables_without_pk lists all tables that do not have a
- * primary key. This is useful to prepare a migration when some kind of change
- * data capture technique is considered.
- */
-bool
-schema_list_ordinary_tables_without_pk(PGSQL *pgsql,
-									   SourceFilters *filters,
-									   DatabaseCatalog *catalog)
-{
-	SourceTableArrayContext context = { { 0 }, catalog, false };
-
-	log_trace("schema_list_ordinary_tables_without_pk");
-
-	SourceFilterType filterType = SOURCE_FILTER_TYPE_NONE;
-
-	switch (filters->type)
-	{
-		case SOURCE_FILTER_TYPE_NONE:
-		case SOURCE_FILTER_TYPE_EXCL_INDEX:
-		{
-			/* skip filters preparing (temp tables) */
-			break;
-		}
-
-		case SOURCE_FILTER_TYPE_INCL:
-		case SOURCE_FILTER_TYPE_EXCL:
-		case SOURCE_FILTER_TYPE_LIST_NOT_INCL:
-		case SOURCE_FILTER_TYPE_LIST_EXCL:
-		{
-			if (!prepareFilters(pgsql, filters))
-			{
-				log_error("Failed to prepare pgcopydb filters, "
-						  "see above for details");
-				return false;
-			}
-
-			filterType = filters->type;
-
-			break;
-		}
-
-		/* ignore "exclude-index" listing of filtered-out tables */
-		case SOURCE_FILTER_TYPE_LIST_EXCL_INDEX:
-		{
-			return true;
-		}
-
-		default:
-		{
-			log_error("BUG: schema_list_ordinary_tables_without_pk called with "
-					  "filtering type %d",
-					  filters->type);
-			return false;
-		}
-	}
-
-	log_debug("listSourceTablesNoPKSQL[%s]", filterTypeToString(filterType));
-
-	char *sql = listSourceTablesNoPKSQL[filterType].sql;
-
-	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
-								   &context, &getTableArray))
-	{
-		log_error("Failed to list tables without primary key");
-		return false;
-	}
-
-	if (!context.parsedOk)
-	{
-		log_error("Failed to list tables without primary key");
-		return false;
-	}
-
-	return true;
-}
 
 
 /*
@@ -1858,8 +1858,8 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"       left join pg_depend d2 on d2.refobjid = s.seqoid "
 		"        and d2.refclassid = 'pg_class'::regclass "
 		"        and d2.classid = 'pg_attrdef'::regclass "
-		"       join pg_attrdef a on a.oid = d2.objid "
-		"       join pg_attribute at "
+		"       left join pg_attrdef a on a.oid = d2.objid "
+		"       left join pg_attribute at "
 		"         on at.attrelid = a.adrelid "
 		"        and at.attnum = a.adnum "
 
@@ -1937,16 +1937,16 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"       left join pg_depend d2 on d2.refobjid = s.seqoid "
 		"        and d2.refclassid = 'pg_class'::regclass "
 		"        and d2.classid = 'pg_attrdef'::regclass "
-		"       join pg_attrdef a on a.oid = d2.objid "
-		"       join pg_attribute at "
+		"       left join pg_attrdef a on a.oid = d2.objid "
+		"       left join pg_attribute at "
 		"         on at.attrelid = a.adrelid "
 		"        and at.attnum = a.adnum "
 
 		"       left join pg_class r1 on r1.oid = d1.refobjid "
-		"       join pg_namespace rn1 on rn1.oid = r1.relnamespace "
+		"       left join pg_namespace rn1 on rn1.oid = r1.relnamespace "
 
 		"       left join pg_class r2 on r2.oid = at.attrelid  "
-		"       join pg_namespace rn2 on rn2.oid = r2.relnamespace "
+		"       left join pg_namespace rn2 on rn2.oid = r2.relnamespace "
 
 		/* exclude-schema */
 		"      left join pg_temp.filter_exclude_schema fn1 "
@@ -1974,7 +1974,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"            and r2.relname = ftd2.relname "
 
 		/* WHERE clause for exclusion filters */
-		"     where case when r1.oid = r2.oid "
+		"     where case when r2.oid is null or r1.oid = r2.oid"
 		"           then rn1.nspname is not null and fn1.nspname is null "
 		"            and r1.relname is not null and ft1.relname is null "
 		"            and r1.relname is not null and ftd1.relname is null "
@@ -2040,8 +2040,8 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"       left join pg_depend d2 on d2.refobjid = s.seqoid "
 		"        and d2.refclassid = 'pg_class'::regclass "
 		"        and d2.classid = 'pg_attrdef'::regclass "
-		"       join pg_attrdef a on a.oid = d2.objid "
-		"       join pg_attribute at "
+		"       left join pg_attrdef a on a.oid = d2.objid "
+		"       left join pg_attribute at "
 		"         on at.attrelid = a.adrelid "
 		"        and at.attnum = a.adnum "
 
@@ -2119,16 +2119,16 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"       left join pg_depend d2 on d2.refobjid = s.seqoid "
 		"        and d2.refclassid = 'pg_class'::regclass "
 		"        and d2.classid = 'pg_attrdef'::regclass "
-		"       join pg_attrdef a on a.oid = d2.objid "
-		"       join pg_attribute at "
+		"       left join pg_attrdef a on a.oid = d2.objid "
+		"       left join pg_attribute at "
 		"         on at.attrelid = a.adrelid "
 		"        and at.attnum = a.adnum "
 
 		"       left join pg_class r1 on r1.oid = d1.refobjid "
-		"       join pg_namespace rn1 on rn1.oid = r1.relnamespace "
+		"       left join pg_namespace rn1 on rn1.oid = r1.relnamespace "
 
 		"       left join pg_class r2 on r2.oid = at.attrelid  "
-		"       join pg_namespace rn2 on rn2.oid = r2.relnamespace "
+		"       left join pg_namespace rn2 on rn2.oid = r2.relnamespace "
 
 		/* exclude-schema */
 		"      left join pg_temp.filter_exclude_schema fn "
@@ -2480,9 +2480,17 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"           on rn.nspname = inc.nspname "
 		"          and r.relname = inc.relname "
 
+		/* exclude-index */
+		"         left join pg_temp.filter_exclude_index fei "
+		"                on n.nspname = fei.nspname "
+		"               and i.relname = fei.relname "
+
 		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
 		"      and n.nspname !~ 'pgcopydb' "
+
+		/* WHERE clause for exclusion filters */
+		"		and fei.nspname is null "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -2552,6 +2560,11 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"                on rn.nspname = ftd.nspname "
 		"               and r.relname = ftd.relname "
 
+		/* exclude-index */
+		"         left join pg_temp.filter_exclude_index fei "
+		"                on n.nspname = fei.nspname "
+		"               and i.relname = fei.relname "
+
 		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
 		"      and n.nspname !~ 'pgcopydb' "
@@ -2560,6 +2573,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"     and fn.nspname is null "
 		"     and ft.relname is null "
 		"     and ftd.relname is null "
+		"     and fei.relname is null "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -2620,12 +2634,19 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"           on rn.nspname = inc.nspname "
 		"          and r.relname = inc.relname "
 
+		/* exclude-index */
+		"    left join pg_temp.filter_exclude_index fei "
+		"           on n.nspname = fei.nspname "
+		"          and i.relname = fei.relname "
+
 		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
 		"      and n.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
-		"     and inc.relname is null "
+		"     and (  inc.relname is null "
+		"          or "
+		"            fei.relname is not null ) "
 
 		/* avoid pg_class entries which belong to extensions */
 		"     and not exists "
@@ -2690,12 +2711,18 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"                on rn.nspname = ft.nspname "
 		"               and r.relname = ft.relname "
 
+		/* exclude-index */
+		"         left join pg_temp.filter_exclude_index fei "
+		"                on n.nspname = fei.nspname "
+		"               and i.relname = fei.relname "
+
 		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
 		"      and n.nspname !~ 'pgcopydb' "
 
 		/* WHERE clause for exclusion filters */
 		"     and (   fn.nspname is not null "
+		"          or fei.relname is not null "
 		"          or ft.relname is not null ) "
 
 		/* avoid pg_class entries which belong to extensions */
@@ -3239,62 +3266,109 @@ schema_list_partitions(PGSQL *pgsql,
 	int64_t min = table->partmin;
 	int64_t max = table->partmax;
 
+	int64_t partsCount = 1;
+	int64_t partsSize = max - min + 1;
+
 	/*
 	 * When the partition key is set to "ctid", it means that the table will be
 	 * partitioned based on the physical location of the rows in the table.
-	 * In this case, the relpages value represents the total number of pages in the
-	 * table, which can be used as the maximum value for the partition range.
-	 * By setting min to 0 and max to table->relpages, we ensure that each partition
-	 * covers the entire range of pages in the table.
+	 *
+	 * The relpages value represents the total number of pages in the table,
+	 * which can be used as the maximum value for the partition range. By
+	 * setting min to 0 and max to table->relpages, we ensure that each
+	 * partition covers the entire range of pages in the table.
 	 */
-	if (streq(table->partKey, "ctid"))
+	bool splitByCTID = streq(table->partKey, "ctid");
+
+	if (splitByCTID)
 	{
 		min = 0;
 		max = table->relpages;
+
+		/* Postgres page size is static: 8192 Bytes */
+		uint64_t pagesPerPart = ceil((double) partSize / POSTGRES_BLOCK_SIZE);
+
+		partsCount = ceil((double) table->relpages / (double) pagesPerPart);
+		partsSize = ceil((double) table->relpages / partsCount);
 	}
 
 	/*
-	 * Below code block calculates the number of parts needed and assigns the minimum and
-	 * maximum values for each part. It also logs information about each partition and
-	 * adds the table part to the catalog if provided.
+	 * Below code block calculates the number of parts needed and assigns the
+	 * minimum and maximum values for each part. It also logs information about
+	 * each partition and adds the table part to the catalog if provided.
+	 *
 	 * Example:
 	 * int64_t tableSize (table->bytes) = 100;
 	 * int64_t partSize = 10;
 	 * int64_t min = 1;
 	 * int64_t max = 100;
 	 * int64_t result = partitionTable(&table, partSize, min, max, &catalog);
-	 * // Output:
-	 * // Partition table#1: 1 - 10 (10)
-	 * // Partition table#2: 11 - 20 (10)
-	 * // Partition table#3: 21 - 30 (10)
-	 * // ...
-	 * // Partition table#10: 91 - 100 (10)
+	 *
+	 * Output:
+	 *  Partition table#1: 1 - 10 (10)
+	 *  Partition table#2: 11 - 20 (10)
+	 *  Partition table#3: 21 - 30 (10)
+	 *  ...
+	 *  Partition table#10: 91 - 100 (10)
 	 */
-	int64_t partsCount = ceil((double) table->bytes / (double) partSize);
-	int64_t range = ceil((double) (max - min + 1) / (double) table->bytes *
-						 (double) partSize);
+	else
+	{
+		/* add a partition for IS NULL (first) */
+		partsCount = ceil((double) table->bytes / (double) partSize) + 1;
+		partsSize = ceil((double) (max - min + 1) / partsCount);
+	}
 
+	/*
+	 * Now add an s_table_part row per partition.
+	 */
 	for (int64_t i = 0; i < partsCount; i++)
 	{
+		int64_t partNumber = i + 1;
 		SourceTableParts *parts = &(table->partition);
 
 		bzero(parts, sizeof(SourceTableParts));
 
-		parts->partNumber = i + 1;
+		parts->partNumber = partNumber;
 		parts->partCount = partsCount;
-		parts->min = min + (i * range);
-		parts->max = min + ((i + 1) * range) - 1;
 
-		if (parts->max > max)
+		/* take care of NULL values (we accept partkey with unique indexes) */
+		if (i == 0 && !splitByCTID)
 		{
-			parts->max = max;
+			parts->min = -1;
+			parts->max = -1;
+			parts->count = -1;
+		}
+		else if (splitByCTID)
+		{
+			parts->min = min + (i * partsSize);
+			parts->max = min + ((i + 1) * partsSize) - 1;
+			parts->count = parts->max - parts->min + 1;
+		}
+		else
+		{
+			/*
+			 * partNumber == 0 is for NULL values
+			 * partNumber == 1 is for range [ 0 .. a ], etc
+			 */
+			parts->min = min + ((i - 1) * partsSize);
+			parts->max = min + (i * partsSize) - 1;
+			parts->count = parts->max - parts->min + 1;
 		}
 
-		parts->count = parts->max - parts->min + 1;
+		/* the last partition has no upper bound */
+		if (partNumber == partsCount)
+		{
+			parts->max = -1;
+			parts->count = -1;
+		}
 
-		log_debug("Partition %s#%d: %lld - %lld (%lld)", table->qname, parts->partNumber,
-				  (long long) parts->min, (long long) parts->max, (long
-																   long) parts->count);
+		log_debug("Partition %s #%d/%d: [%lld .. %lld] (%lld)",
+				  table->qname,
+				  parts->partNumber,
+				  parts->partCount,
+				  (long long) parts->min,
+				  (long long) parts->max,
+				  (long long) parts->count);
 
 		if (catalog != NULL && catalog->db != NULL)
 		{
@@ -3302,13 +3376,6 @@ schema_list_partitions(PGSQL *pgsql,
 			{
 				/* errors have already been logged */
 			}
-		}
-
-		/* if we hit max, no need to iterate  */
-		if (parts->max == max)
-		{
-			parts->partCount = i + 1;
-			break;
 		}
 	}
 
@@ -4073,7 +4140,7 @@ getExtensionList(void *ctx, PGresult *result)
 
 	if (PQnfields(result) != 11)
 	{
-		log_error("Query returned %d columns, expected 10", PQnfields(result));
+		log_error("Query returned %d columns, expected 11", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -4623,8 +4690,11 @@ parseCurrentSourceTableSize(PGresult *result, int rowNumber, SourceTableSize *ta
 
 
 /*
- * getTableArray loops over the SQL result for the tables array query and
- * allocates an array of tables then populates it with the query result.
+ * getTableArray loops over the SQL result for the tables array query and saves
+ * each source table in our internal catalog.
+ *
+ * If we enabled estimating table sizes, we also store an estimage for the table
+ * sizes in the internal catalog.
  */
 static void
 getTableArray(void *ctx, PGresult *result)
@@ -4633,16 +4703,16 @@ getTableArray(void *ctx, PGresult *result)
 
 	int nTuples = PQntuples(result);
 
-	if (PQnfields(result) != 10)
+	if (PQnfields(result) != 13)
 	{
-		log_error("Query returned %d columns, expected 10", PQnfields(result));
+		log_error("Query returned %d columns, expected 13", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
 
 	bool parsedOk = true;
 
-	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
+	for (int rowNumber = 0; rowNumber < nTuples && parsedOk; rowNumber++)
 	{
 		SourceTable *table = (SourceTable *) calloc(1, sizeof(SourceTable));
 
@@ -4654,11 +4724,46 @@ getTableArray(void *ctx, PGresult *result)
 
 		if (context->catalog != NULL && context->catalog->db != NULL)
 		{
-			if (!catalog_add_s_table(context->catalog, table))
+			switch (table->relkind)
 			{
-				/* errors have already been logged */
-				parsedOk = false;
-				break;
+				/* regular or partitioned table */
+				case 'r':
+				case 'p':
+				{
+					parsedOk = catalog_add_s_table(context->catalog, table);
+
+					if (parsedOk && context->estimateTableSizes)
+					{
+						SourceTableSize sourceTableSize = {
+							.oid = table->oid,
+							.bytes = table->bytesEstimate
+						};
+
+						strlcpy(sourceTableSize.bytesPretty,
+								table->bytesEstimatePretty,
+								sizeof(sourceTableSize.bytesPretty));
+
+						parsedOk = catalog_add_s_table_size(context->catalog,
+															&sourceTableSize);
+					}
+
+					break;
+				}
+
+				/* materialized view */
+				case 'm':
+				{
+					parsedOk = catalog_add_s_matview(context->catalog, table);
+					break;
+				}
+
+				default:
+				{
+					log_error("Unknown relkind \"%c\" for relation \"%s\"",
+							  table->relkind, table->qname);
+					parsedOk = false;
+					break;
+				}
 			}
 		}
 	}
@@ -4739,20 +4844,46 @@ parsePartKeyMinMaxValue(void *ctx, PGresult *result)
 		return;
 	}
 
-	/* 1. min */
-	char *value = PQgetvalue(result, 0, 0);
-	if (!stringToInt64(value, &(context->min)))
+	/* min and max are both null on empty tables */
+	if (PQgetisnull(result, 0, 0) &&
+		PQgetisnull(result, 0, 1))
 	{
-		log_error("Invalid min value: \"%s\"", value);
-		++errors;
+		context->min = 0;
+		context->max = 0;
 	}
-
-	/* 2. max */
-	value = PQgetvalue(result, 0, 1);
-	if (!stringToInt64(value, &(context->max)))
+	else
 	{
-		log_error("Invalid max value: \"%s\"", value);
-		++errors;
+		/* 1. min */
+		if (PQgetisnull(result, 0, 0))
+		{
+			log_error("Invalid min value: NULL");
+			++errors;
+		}
+		else
+		{
+			char *value = PQgetvalue(result, 0, 0);
+			if (!stringToInt64(value, &(context->min)))
+			{
+				log_error("Invalid min value: \"%s\"", value);
+				++errors;
+			}
+		}
+
+		/* 2. max */
+		if (PQgetisnull(result, 0, 1))
+		{
+			log_error("Invalid max value: NULL");
+			++errors;
+		}
+		else
+		{
+			char *value = PQgetvalue(result, 0, 1);
+			if (!stringToInt64(value, &(context->max)))
+			{
+				log_error("Invalid max value: \"%s\"", value);
+				++errors;
+			}
+		}
 	}
 
 	context->parsedOk = errors == 0;
@@ -4772,8 +4903,11 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	int fnnspname = PQfnumber(result, "nspname");
 	int fnrelname = PQfnumber(result, "relname");
 	int fnamname = PQfnumber(result, "amname");
+	int fnrelkind = PQfnumber(result, "relkind");
 	int fnrelpages = PQfnumber(result, "relpages");
 	int fnreltuples = PQfnumber(result, "reltuples");
+	int fnbytesestimate = PQfnumber(result, "bytesestimate");
+	int fnbytesestimatepp = PQfnumber(result, "pg_size_pretty");
 	int fnexcldata = PQfnumber(result, "excludedata");
 	int fnrestorelistname = PQfnumber(result, "format");
 	int fnpartkey = PQfnumber(result, "partkey");
@@ -4848,6 +4982,10 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		}
 	}
 
+	/* c.relkind */
+	value = PQgetvalue(result, rowNumber, fnrelkind);
+	table->relkind = value[0];
+
 	/* c.relpages */
 	if (PQgetisnull(result, rowNumber, fnrelpages))
 	{
@@ -4887,6 +5025,45 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 			++errors;
 		}
 	}
+
+	/* fnbytesestimate */
+	if (PQgetisnull(result, rowNumber, fnbytesestimate))
+	{
+		/* the query didn't care to add the estimates, skip parsing them */
+		table->bytesEstimate = 0;
+	}
+	else
+	{
+		value = PQgetvalue(result, rowNumber, fnbytesestimate);
+
+		if (!stringToInt64(value, &(table->bytesEstimate)))
+		{
+			log_error("Invalid bytesestimate::bigint \"%s\"", value);
+			++errors;
+		}
+	}
+
+
+	/* fnbytesestimatepp */
+	if (PQgetisnull(result, rowNumber, fnbytesestimatepp))
+	{
+		/* the query didn't care to add the estimates, skip parsing them */
+		table->bytesEstimatePretty[0] = '\0';
+	}
+	else
+	{
+		value = PQgetvalue(result, rowNumber, fnbytesestimatepp);
+		length = strlcpy(table->bytesEstimatePretty, value, PG_NAMEDATALEN);
+
+		if (length >= PG_NAMEDATALEN)
+		{
+			log_error("Pretty printed table size estimate \"%s\" is %d bytes long, "
+					  "the maximum expected is %d (PG_NAMEDATALEN - 1)",
+					  value, length, PG_NAMEDATALEN - 1);
+			++errors;
+		}
+	}
+
 
 	/* excludeData */
 	value = PQgetvalue(result, rowNumber, fnexcldata);

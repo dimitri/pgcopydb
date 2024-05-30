@@ -34,6 +34,7 @@
 	"  --restore-jobs                Number of concurrent jobs for pg_restore\n" \
 	"  --large-objects-jobs          Number of concurrent Large Objects jobs to run\n" \
 	"  --split-tables-larger-than    Same-table concurrency size threshold\n" \
+	"  --estimate-table-sizes        Allow using estimates for relation sizes\n" \
 	"  --drop-if-exists              On the target database, clean-up from a previous run first\n" \
 	"  --roles                       Also copy roles found on source to target\n" \
 	"  --no-role-passwords           Do not dump passwords for roles\n" \
@@ -46,6 +47,8 @@
 	"  --skip-ext-comments           Skip restoring COMMENT ON EXTENSION\n" \
 	"  --skip-collations             Skip restoring collations\n" \
 	"  --skip-vacuum                 Skip running VACUUM ANALYZE\n" \
+	"  --skip-db-properties          Skip copying ALTER DATABASE SET properties\n" \
+	"  --skip-split-by-ctid          Skip spliting tables by ctid\n" \
 	"  --requirements <filename>     List extensions requirements\n" \
 	"  --filters <filename>          Use the filters defined in <filename>\n" \
 	"  --fail-fast                   Abort early in case of error\n" \
@@ -244,6 +247,24 @@ clone_and_follow(CopyDataSpec *copySpecs)
 	 * the source and target database for Change Data Capture.
 	 */
 	if (!follow_setup_databases(copySpecs, &streamSpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/*
+	 * We fetch the schema here, rather than later in the clone subprocess,
+	 * which simply reuses this cached data. This is done to avoid lock
+	 * contention between the clone and follow subprocesses, as they both try to
+	 * write concurrently to the source.db SQLite database, leading one to
+	 * failure. This is also necessary for plugins like test_decoding, which
+	 * require information such as primary keys.
+	 *
+	 * In the future, if the follow subprocess doesn't need a catalog (e.g. if
+	 * we remove test_decoding), we should separate out tables for the follow
+	 * subprocess into their own database.
+	 */
+	if (!copydb_fetch_schema_and_prepare_specs(copySpecs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

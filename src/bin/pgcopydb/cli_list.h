@@ -29,17 +29,17 @@ typedef struct ListDBOptions
 	bool listSkipped;
 	bool noPKey;
 	bool force;
-	bool cache;
-	bool dropCache;
 	bool summary;
 	bool availableVersions;
 	bool requirements;
 	bool resume;
 	bool notConsistent;
+	bool skipCtidSplit;
 
 	char snapshot[BUFSIZE];
 
 	SplitTableLargerThan splitTablesLargerThan;
+	bool estimateTableSizes;
 } ListDBOptions;
 
 

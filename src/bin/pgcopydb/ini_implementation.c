@@ -1,5 +1,5 @@
 /*
- * src/bin/pg_autoctl/ini_implementation.c
+ * src/bin/pgcopydb/ini_implementation.c
  *     The file containing library code used to parse files with .INI syntax
  *
  *     The main reason this is in a separate file is so you can exclude a file

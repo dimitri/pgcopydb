@@ -124,79 +124,6 @@ static bool summary_prepare_toplevel_durations_hook(void *ctx,
 
 
 /*
- * summary_lookup_oid looks-up for a table summary in our catalogs.
- *
- * This is used in the context of pg_dump/pg_restore filtering, which concerns
- * index and constraint oids. See copydb_objectid_has_been_processed_already.
- */
-bool
-summary_lookup_oid(DatabaseCatalog *catalog, uint32_t oid, bool *done)
-{
-	sqlite3 *db = catalog->db;
-
-	if (db == NULL)
-	{
-		log_error("BUG: summary_lookup_oid: db is NULL");
-		return false;
-	}
-
-	char *sql =
-		"  select pid, start_time_epoch, done_time_epoch, duration "
-		"    from summary "
-		"   where indexoid = $1 or conoid = $2 ";
-
-	if (!semaphore_lock(&(catalog->sema)))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	CopyOidSummary s = { 0 };
-
-	SQLiteQuery query = {
-		.context = &s,
-		.fetchFunction = &summary_oid_done_fetch
-	};
-
-	if (!catalog_sql_prepare(db, sql, &query))
-	{
-		/* errors have already been logged */
-		(void) semaphore_unlock(&(catalog->sema));
-		return false;
-	}
-
-	/* bind our parameters now */
-	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_INT64, "oid", oid, NULL },
-		{ BIND_PARAMETER_TYPE_INT64, "oid", oid, NULL }
-	};
-
-	int count = sizeof(params) / sizeof(params[0]);
-
-	if (!catalog_sql_bind(&query, params, count))
-	{
-		/* errors have already been logged */
-		(void) semaphore_unlock(&(catalog->sema));
-		return false;
-	}
-
-	/* now execute the query, which return exactly one row */
-	if (!catalog_sql_execute_once(&query))
-	{
-		/* errors have already been logged */
-		(void) semaphore_unlock(&(catalog->sema));
-		return false;
-	}
-
-	*done = s.pid > 0 && s.doneTime > 0;
-
-	(void) semaphore_unlock(&(catalog->sema));
-
-	return true;
-}
-
-
-/*
  * summary_pid_done_fetch fetches a generic CopyOidSummary from a SQLiteQuery
  * result.
  */
@@ -262,7 +189,7 @@ summary_lookup_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 	BindParam params[] = {
 		{ BIND_PARAMETER_TYPE_INT64, "tableoid", table->oid, NULL },
 
-		{ BIND_PARAMETER_TYPE_TEXT, "partnum",
+		{ BIND_PARAMETER_TYPE_INT64, "partnum",
 		  table->partition.partNumber, NULL },
 	};
 
@@ -354,7 +281,7 @@ summary_delete_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 		return false;
 	}
 
-	char *sql = "delete from summary where tableoid = $1 and partnumber = $2";
+	char *sql = "delete from summary where tableoid = $1 and partnum = $2";
 
 	if (!semaphore_lock(&(catalog->sema)))
 	{
@@ -434,7 +361,7 @@ summary_add_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 	}
 
 	char *sql =
-		"insert into summary(pid, tableoid, partnum, start_time_epoch, command)"
+		"insert or replace into summary(pid, tableoid, partnum, start_time_epoch, command)"
 		"values($1, $2, $3, $4, $5)";
 
 	if (!semaphore_lock(&(catalog->sema)))
@@ -1247,6 +1174,12 @@ summary_add_index(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 
 	indexSummary->pid = getpid();
 	indexSummary->index = indexSpecs->sourceIndex;
+
+	/* use the indexDef as the command if not set */
+	if (indexSummary->command == NULL)
+	{
+		indexSummary->command = index->indexDef;
+	}
 
 	if (!index_summary_init(indexSummary))
 	{
@@ -2262,9 +2195,16 @@ summary_iter_timing(DatabaseCatalog *catalog,
 
 	iter->catalog = catalog;
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (!summary_iter_timing_init(iter))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -2273,6 +2213,7 @@ summary_iter_timing(DatabaseCatalog *catalog,
 		if (!summary_iter_timing_next(iter))
 		{
 			/* errors have already been logged */
+			(void) semaphore_unlock(&(catalog->sema));
 			return false;
 		}
 
@@ -2283,6 +2224,7 @@ summary_iter_timing(DatabaseCatalog *catalog,
 			if (!summary_iter_timing_finish(iter))
 			{
 				/* errors have already been logged */
+				(void) semaphore_unlock(&(catalog->sema));
 				return false;
 			}
 
@@ -2294,10 +2236,12 @@ summary_iter_timing(DatabaseCatalog *catalog,
 		{
 			log_error("Failed to iterate over list of timings, "
 					  "see above for details");
+			(void) semaphore_unlock(&(catalog->sema));
 			return false;
 		}
 	}
 
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }

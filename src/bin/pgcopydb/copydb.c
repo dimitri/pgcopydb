@@ -514,6 +514,8 @@ copydb_init_specs(CopyDataSpec *specs,
 		.skipCommentOnExtension = options->skipCommentOnExtension,
 		.skipCollations = options->skipCollations,
 		.skipVacuum = options->skipVacuum,
+		.skipDBproperties = options->skipDBproperties,
+		.skipCtidSplit = options->skipCtidSplit,
 		.noRolesPasswords = options->noRolesPasswords,
 		.failFast = options->failFast,
 
@@ -534,6 +536,7 @@ copydb_init_specs(CopyDataSpec *specs,
 		.vacuumJobs = options->tableJobs,
 
 		.splitTablesLargerThan = options->splitTablesLargerThan,
+		.estimateTableSizes = options->estimateTableSizes,
 
 		.vacuumQueue = { 0 },
 		.indexQueue = { 0 },

@@ -351,7 +351,6 @@ parseTestDecodingMessageHeader(TestDecodingHeader *header, const char *message)
 	 */
 	header->table.nspname = strndup(idp, dot - idp);
 	header->table.relname = strndup(dot + 1, sep - dot - 1);
-	header->table.pqMemory = false;
 
 	sformat(header->qname, sizeof(header->qname), "%s.%s",
 			header->table.nspname,
@@ -703,7 +702,7 @@ parseNextColumn(TestDecodingColumns *cols,
 	cols->colnameStart = ptr;
 	cols->colnameLen = typA - ptr;
 
-	log_trace("parseNextColumn[%s]: %.*s",
+	log_trace("parseNextColumn[%s]: \"%.*s\"",
 			  typname,
 			  cols->colnameLen,
 			  cols->colnameStart);
@@ -782,7 +781,7 @@ parseNextColumn(TestDecodingColumns *cols,
 
 		/* advance to past the value, skip the next space */
 		ptr = end + 1;
-		header->pos = ptr - header->message;
+		header->pos = ptr - header->message + 1;
 
 		log_trace("parseNextColumn: bit string value: %.*s",
 				  cols->valueLen,

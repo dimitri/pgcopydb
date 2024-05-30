@@ -187,6 +187,12 @@ typedef struct PGSQL
 
 	bool logSQL;
 	bool singleRowMode;
+
+	/*
+	 * Keeps track of the last sync time for the pipeline. This is relevant
+	 * only for connections in pipeline mode.
+	 */
+	uint64_t pipelineSyncTime;
 } PGSQL;
 
 
@@ -279,6 +285,11 @@ bool pgsql_has_sequence_privilege(PGSQL *pgsql,
 								  const char *privilege,
 								  bool *granted);
 
+bool pgsql_has_table_privilege(PGSQL *pgsql,
+							   const char *tablename,
+							   const char *privilege,
+							   bool *granted);
+
 bool pgsql_get_search_path(PGSQL *pgsql, char *search_path, size_t size);
 bool pgsql_set_search_path(PGSQL *pgsql, char *search_path, bool local);
 bool pgsql_prepend_search_path(PGSQL *pgsql, const char *namespace);
@@ -297,6 +308,9 @@ bool pgsql_send_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 bool pgsql_fetch_results(PGSQL *pgsql, bool *done,
 						 void *context, ParsePostgresResultCB *parseFun);
 
+bool pgsql_enable_pipeline_mode(PGSQL *pgsql);
+bool pgsql_sync_pipeline(PGSQL *pgsql);
+
 bool pgsql_prepare(PGSQL *pgsql, const char *name, const char *sql,
 				   int paramCount, const Oid *paramTypes);
 
@@ -308,6 +322,8 @@ void pgAutoCtlDebugNoticeProcessor(void *arg, const char *message);
 
 bool validate_connection_string(const char *connectionString);
 
+bool pgsql_lock_table(PGSQL *pgsql, const char *qname, const char *lockmode);
+
 bool pgsql_truncate(PGSQL *pgsql, const char *qname);
 
 typedef struct CopyArgs
@@ -317,6 +333,7 @@ typedef struct CopyArgs
 	char *srcWhereClause;
 	char *dstQname;
 	char *dstAttrList;
+	char *logCommand;
 	bool truncate;
 	bool freeze;
 	uint64_t bytesTransmitted;
@@ -436,6 +453,14 @@ typedef struct LogicalStreamContext
 	XLogRecPtr endpos;          /* might be update at runtime */
 
 	LogicalTrackLSN *tracking;  /* expose LogicalStreamClient.current */
+
+	/* This is set to true when the connection running START_REPLICATION
+	 * is interrupted and we need to retry.
+	 *
+	 * This is majorly used to add synthetic ROLLBACK statements to the
+	 * JSON file to avoid partial transactions.
+	 */
+	bool onRetry;
 } LogicalStreamContext;
 
 
@@ -537,7 +562,10 @@ bool pgsql_drop_replication_slot(PGSQL *pgsql, const char *slotName);
 
 bool pgsql_role_exists(PGSQL *pgsql, const char *roleName, bool *exists);
 
+bool pgsql_configuration_exists(PGSQL *pgsql, const char *setconfig, bool *exists);
+
 bool pgsql_table_exists(PGSQL *pgsql,
+						uint32_t oid,
 						const char *relname,
 						const char *nspname,
 						bool *exists);

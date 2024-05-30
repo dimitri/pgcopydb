@@ -180,7 +180,7 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 
 /*
  * copydb_fetch_source_catalog_setup initializes our local catalog cache and
- * checks th setup and cache state.
+ * checks the setup and cache state.
  */
 static bool
 copydb_fetch_source_catalog_setup(CopyDataSpec *specs)
@@ -232,6 +232,7 @@ copydb_fetch_source_catalog_setup(CopyDataSpec *specs)
 
 		/* compute "allDone" in the context of a sourceDB */
 		if (s->section == DATA_SECTION_DATABASE_PROPERTIES ||
+			s->section == DATA_SECTION_NAMESPACES ||
 			s->section == DATA_SECTION_TABLE_DATA ||
 			s->section == DATA_SECTION_SET_SEQUENCES ||
 			s->section == DATA_SECTION_INDEXES ||
@@ -409,6 +410,40 @@ copydb_fetch_previous_run_state(CopyDataSpec *specs)
 
 
 /*
+ * Retrieve a list of namespaces from the source databases and store them
+ * in the source catalog and register the section as fetched.
+ */
+bool
+copydb_prepare_namespace_specs(CopyDataSpec *specs, PGSQL *pgsql)
+{
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	TopLevelTiming timing = {
+		.label = CopyDataSectionToString(DATA_SECTION_NAMESPACES)
+	};
+
+	(void) catalog_start_timing(&timing);
+
+	if (!schema_list_schemas(pgsql, sourceDB))
+	{
+		log_error("Failed to prepare namespace specs in our catalogs, "
+				  "see above for details");
+		return false;
+	}
+
+	(void) catalog_stop_timing(&timing);
+
+	if (!catalog_register_section(sourceDB, &timing))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * copydb_fetch_source_schema is a utility function for the previous definition
  * copydb_fetch_schema_and_prepare_specs.
  */
@@ -456,13 +491,31 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 				 "on the source database discards pg_table_size() caching");
 	}
 
+	if (!semaphore_lock(&(sourceDB->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_begin(sourceDB, false))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(sourceDB->sema));
+		return false;
+	}
+
 	/*
 	 * Grab the source database properties to be able to install them again on
 	 * the target, using ALTER DATABASE SET or ALTER USER IN DATABASE SET.
 	 */
-	if ((specs->section == DATA_SECTION_ALL ||
-		 specs->section == DATA_SECTION_DATABASE_PROPERTIES) &&
-		!sourceDB->sections[DATA_SECTION_DATABASE_PROPERTIES].fetched)
+	if (specs->skipDBproperties)
+	{
+		log_notice("Skipping ALTER DATABASE SET operations, "
+				   "see --skip-db-properties");
+	}
+	else if ((specs->section == DATA_SECTION_ALL ||
+			  specs->section == DATA_SECTION_DATABASE_PROPERTIES) &&
+			 !sourceDB->sections[DATA_SECTION_DATABASE_PROPERTIES].fetched)
 	{
 		TopLevelTiming timing = {
 			.label = CopyDataSectionToString(DATA_SECTION_DATABASE_PROPERTIES)
@@ -486,30 +539,16 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 		}
 	}
 
-	if (!catalog_begin(sourceDB, false))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	/* now fetch the list of tables from the source database */
 	if ((specs->section == DATA_SECTION_ALL ||
 		 specs->section == DATA_SECTION_TABLE_DATA ||
 		 specs->section == DATA_SECTION_TABLE_DATA_PARTS) &&
 		!sourceDB->sections[DATA_SECTION_TABLE_DATA].fetched)
 	{
-		/* copydb_fetch_filtered_oids() needs the table size table around */
-		if (!schema_prepare_pgcopydb_table_size(src,
-												&(specs->filters),
-												sourceDB))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
 		if (!copydb_prepare_table_specs(specs, src))
 		{
 			/* errors have already been logged */
+			(void) semaphore_unlock(&(sourceDB->sema));
 			return false;
 		}
 	}
@@ -523,6 +562,7 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 		if (!copydb_prepare_index_specs(specs, src))
 		{
 			/* errors have already been logged */
+			(void) semaphore_unlock(&(sourceDB->sema));
 			return false;
 		}
 	}
@@ -531,9 +571,24 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 		 specs->section == DATA_SECTION_SET_SEQUENCES) &&
 		!sourceDB->sections[DATA_SECTION_SET_SEQUENCES].fetched)
 	{
-		if (!copydb_prepare_sequence_specs(specs, src))
+		bool reset = false;
+
+		if (!copydb_prepare_sequence_specs(specs, src, reset))
 		{
 			/* errors have already been logged */
+			(void) semaphore_unlock(&(sourceDB->sema));
+			return false;
+		}
+	}
+
+	if ((specs->section == DATA_SECTION_ALL ||
+		 specs->section == DATA_SECTION_NAMESPACES) &&
+		!sourceDB->sections[DATA_SECTION_NAMESPACES].fetched)
+	{
+		if (!copydb_prepare_namespace_specs(specs, src))
+		{
+			/* errors have already been logged */
+			(void) semaphore_unlock(&(sourceDB->sema));
 			return false;
 		}
 	}
@@ -542,6 +597,7 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 	if (!catalog_update_setup(specs))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(sourceDB->sema));
 		return false;
 	}
 
@@ -551,6 +607,7 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 		if (!copydb_fetch_filtered_oids(specs, src))
 		{
 			/* errors have already been logged */
+			(void) semaphore_unlock(&(sourceDB->sema));
 			return false;
 		}
 	}
@@ -558,8 +615,11 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 	if (!catalog_commit(sourceDB))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(sourceDB->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(sourceDB->sema));
 
 	return true;
 }
@@ -589,14 +649,45 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 
 	(void) catalog_start_timing(&timing);
 
+	/* if we're estimating table sizes, we need to run analyze to update relpages values. */
+	if (specs->estimateTableSizes)
+	{
+		log_info("Running vacuumdb --analyze-only on source database before "
+				 "calculating table size estimates");
+
+		if (!pg_vacuumdb_analyze_only(&(specs->pgPaths), &(specs->connStrings),
+									  specs->tableJobs))
+		{
+			log_error("Failed to vacuum analyze source database, "
+					  "see above for details");
+			return false;
+		}
+	}
+
 	/*
 	 * Now get the list of the tables we want to COPY over.
+	 *
+	 * If we enabled estimates, we also update the table sizes in our internal
+	 * catalog using the relpages values.
 	 */
-	if (!schema_list_ordinary_tables(pgsql, filters, sourceDB))
+	if (!schema_list_ordinary_tables(pgsql, filters, specs->estimateTableSizes, sourceDB))
 	{
 		log_error("Failed to prepare table specs in our catalogs, "
 				  "see above for details");
 		return false;
+	}
+
+	/*
+	 * if we did not enable estimates, update table sizes in our internal
+	 * catalogue with exact values
+	 */
+	if (!specs->estimateTableSizes)
+	{
+		if (!schema_prepare_pgcopydb_table_size(pgsql, filters, sourceDB))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	(void) catalog_stop_timing(&timing);
@@ -699,6 +790,20 @@ copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
 		streq(source->amname, "heap") &&
 		!specs->sourceSnapshot.isReadOnly)
 	{
+		if (specs->skipCtidSplit)
+		{
+			log_info("Table %s is %s large "
+					 "which is larger than --split-tables-larger-than %s, "
+					 "does not have a unique column of type integer, "
+					 "and CTID split is disabled. "
+					 "Same table concurrency is not enabled",
+					 source->qname,
+					 source->bytesPretty,
+					 specs->splitTablesLargerThan.bytesPretty);
+
+			return true;
+		}
+
 		log_info("Table %s is %s large "
 				 "which is larger than --split-tables-larger-than %s, "
 				 "and does not have a unique column of type integer: "
@@ -838,6 +943,44 @@ copydb_prepare_index_specs(CopyDataSpec *specs, PGSQL *pgsql)
 
 
 /*
+ * copydb_matview_refresh_is_filtered_out returns true when the
+ * given oid belongs to a materialized view object that's
+ * data(refresh) has been filtered out by the filtering setup using
+ * [exclude-table-data].
+ */
+bool
+copydb_matview_refresh_is_filtered_out(CopyDataSpec *specs, uint32_t oid)
+{
+	/*
+	 * We need to check the s_matview table exists on the source catalog
+	 * to find out if the materialized view refresh has been filtered out.
+	 *
+	 * The filtering of materialized view as a whole handled by the
+	 * existing filtering setup(i.e. copydb_objectid_is_filtered_out).
+	 */
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	CatalogMatView result = { 0 };
+
+	if (oid != 0)
+	{
+		if (!catalog_lookup_s_matview_by_oid(sourceDB, &result, oid))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (result.oid != 0 && result.excludeData)
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+
+/*
  * copydb_objectid_is_filtered_out returns true when the given oid belongs to a
  * database object that's been filtered out by the filtering setup.
  */
@@ -896,6 +1039,12 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 
 	CatalogCounts count = { 0 };
 
+	if (!semaphore_lock(&(filtersDB->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	/* now, are we doing extensions? */
 	if ((specs->section == DATA_SECTION_ALL ||
 		 specs->section == DATA_SECTION_EXTENSIONS) &&
@@ -911,6 +1060,7 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		if (!schema_list_ext_schemas(pgsql, filtersDB))
 		{
 			/* errors have already been logged */
+			(void) semaphore_unlock(&(filtersDB->sema));
 			return false;
 		}
 
@@ -918,6 +1068,7 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		if (!schema_list_extensions(pgsql, filtersDB))
 		{
 			/* errors have already been logged */
+			(void) semaphore_unlock(&(filtersDB->sema));
 			return false;
 		}
 
@@ -926,12 +1077,14 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		if (!catalog_register_section(filtersDB, &timing))
 		{
 			/* errors have already been logged */
+			(void) semaphore_unlock(&(filtersDB->sema));
 			return false;
 		}
 
 		if (!catalog_count_objects(filtersDB, &count))
 		{
 			log_error("Failed to count objects in our catalogs");
+			(void) semaphore_unlock(&(filtersDB->sema));
 			return false;
 		}
 
@@ -951,6 +1104,7 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		if (!schema_list_collations(pgsql, filtersDB))
 		{
 			/* errors have already been logged */
+			(void) semaphore_unlock(&(filtersDB->sema));
 			return false;
 		}
 
@@ -959,12 +1113,14 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		if (!catalog_register_section(filtersDB, &timing))
 		{
 			/* errors have already been logged */
+			(void) semaphore_unlock(&(filtersDB->sema));
 			return false;
 		}
 
 		if (!catalog_count_objects(filtersDB, &count))
 		{
 			log_error("Failed to count indexes and constraints in our catalogs");
+			(void) semaphore_unlock(&(filtersDB->sema));
 			return false;
 		}
 
@@ -990,6 +1146,7 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 			if (!catalog_attach(filtersDB, sourceDB, "source"))
 			{
 				/* errors have already been logged */
+				(void) semaphore_unlock(&(filtersDB->sema));
 				return false;
 			}
 
@@ -1005,6 +1162,7 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 			{
 				log_error("Failed to prepare filtering hash-table, "
 						  "see above for details");
+				(void) semaphore_unlock(&(filtersDB->sema));
 				return false;
 			}
 
@@ -1013,9 +1171,12 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 			if (!catalog_register_section(filtersDB, &timing))
 			{
 				/* errors have already been logged */
+				(void) semaphore_unlock(&(filtersDB->sema));
 				return false;
 			}
 		}
+
+		(void) semaphore_unlock(&(filtersDB->sema));
 
 		return true;
 	}
@@ -1033,10 +1194,12 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 
 		(void) catalog_start_timing(&timing);
 
-		if (!schema_list_ordinary_tables(pgsql, filters, filtersDB))
+		if (!schema_list_ordinary_tables(pgsql, filters, specs->estimateTableSizes,
+										 filtersDB))
 		{
 			/* errors have already been logged */
 			filters->type = type;
+			(void) semaphore_unlock(&(filtersDB->sema));
 			return false;
 		}
 
@@ -1046,6 +1209,7 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		{
 			/* errors have already been logged */
 			filters->type = type;
+			(void) semaphore_unlock(&(filtersDB->sema));
 			return false;
 		}
 	}
@@ -1065,6 +1229,7 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		{
 			/* errors have already been logged */
 			filters->type = type;
+			(void) semaphore_unlock(&(filtersDB->sema));
 			return false;
 		}
 
@@ -1074,6 +1239,7 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		{
 			/* errors have already been logged */
 			filters->type = type;
+			(void) semaphore_unlock(&(filtersDB->sema));
 			return false;
 		}
 
@@ -1087,6 +1253,7 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		if (!catalog_register_section(filtersDB, &cTiming))
 		{
 			/* errors have already been logged */
+			(void) semaphore_unlock(&(filtersDB->sema));
 			return false;
 		}
 	}
@@ -1105,6 +1272,7 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		{
 			/* errors have already been logged */
 			filters->type = type;
+			(void) semaphore_unlock(&(filtersDB->sema));
 			return false;
 		}
 
@@ -1114,6 +1282,7 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		{
 			/* errors have already been logged */
 			filters->type = type;
+			(void) semaphore_unlock(&(filtersDB->sema));
 			return false;
 		}
 	}
@@ -1130,6 +1299,7 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		{
 			/* errors have already been logged */
 			filters->type = type;
+			(void) semaphore_unlock(&(filtersDB->sema));
 			return false;
 		}
 
@@ -1139,6 +1309,7 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		{
 			/* errors have already been logged */
 			filters->type = type;
+			(void) semaphore_unlock(&(filtersDB->sema));
 			return false;
 		}
 	}
@@ -1152,6 +1323,7 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 	if (!catalog_attach(filtersDB, sourceDB, "source"))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(filtersDB->sema));
 		return false;
 	}
 
@@ -1171,6 +1343,7 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		{
 			log_error("Failed to prepare filtering hash-table, "
 					  "see above for details");
+			(void) semaphore_unlock(&(filtersDB->sema));
 			return false;
 		}
 
@@ -1179,9 +1352,12 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		if (!catalog_register_section(filtersDB, &timing))
 		{
 			/* errors have already been logged */
+			(void) semaphore_unlock(&(filtersDB->sema));
 			return false;
 		}
 	}
+
+	(void) semaphore_unlock(&(filtersDB->sema));
 
 	return true;
 }
@@ -1215,29 +1391,39 @@ copydb_prepare_target_catalog(CopyDataSpec *specs)
 	 */
 	DatabaseCatalog *targetDB = &(specs->catalogs.target);
 
+	if (!semaphore_lock(&(targetDB->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (!catalog_drop_schema(targetDB) ||
 		!catalog_create_schema(targetDB))
 	{
 		log_error("Failed to clean-up the target catalog cache, "
 				  "see above for details");
+		(void) semaphore_unlock(&(targetDB->sema));
 		return false;
 	}
 
 	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(targetDB->sema));
 		return false;
 	}
 
 	if (!pgsql_begin(&dst))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(targetDB->sema));
 		return false;
 	}
 
 	if (!catalog_begin(targetDB, false))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(targetDB->sema));
 		return false;
 	}
 
@@ -1250,6 +1436,7 @@ copydb_prepare_target_catalog(CopyDataSpec *specs)
 	if (!schema_list_schemas(&dst, targetDB))
 	{
 		log_error("Failed to list schemas on the target database");
+		(void) semaphore_unlock(&(targetDB->sema));
 		return false;
 	}
 
@@ -1264,6 +1451,7 @@ copydb_prepare_target_catalog(CopyDataSpec *specs)
 	if (!schema_list_roles(&dst, targetDB))
 	{
 		log_error("Failed to list roles on the target database");
+		(void) semaphore_unlock(&(targetDB->sema));
 		return false;
 	}
 
@@ -1282,24 +1470,28 @@ copydb_prepare_target_catalog(CopyDataSpec *specs)
 		log_error("Failed to DELETE all target catalog indexes "
 				  "in our internal catalogs (cache invalidation), "
 				  "see above for details");
+		(void) semaphore_unlock(&(targetDB->sema));
 		return false;
 	}
 
 	if (!schema_list_all_indexes(&dst, &targetDBfilter, targetDB))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(targetDB->sema));
 		return false;
 	}
 
 	if (!catalog_commit(targetDB))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(targetDB->sema));
 		return false;
 	}
 
 	if (!pgsql_commit(&dst))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(targetDB->sema));
 		return false;
 	}
 
@@ -1308,6 +1500,7 @@ copydb_prepare_target_catalog(CopyDataSpec *specs)
 	if (!catalog_count_objects(targetDB, &count))
 	{
 		log_error("Failed to count indexes and constraints in our catalogs");
+		(void) semaphore_unlock(&(targetDB->sema));
 		return false;
 	}
 
@@ -1315,6 +1508,8 @@ copydb_prepare_target_catalog(CopyDataSpec *specs)
 			 "in the target database",
 			 (long long) count.indexes,
 			 (long long) count.constraints);
+
+	(void) semaphore_unlock(&(targetDB->sema));
 
 	return true;
 }
@@ -1326,21 +1521,39 @@ copydb_prepare_target_catalog(CopyDataSpec *specs)
  */
 bool
 copydb_schema_already_exists(CopyDataSpec *specs,
-							 const char *restoreListName,
+							 uint32_t sourceOid,
 							 bool *exists)
 {
-	DatabaseCatalog *targetDB = &(specs->catalogs.target);
-	SourceSchema schema = { 0 };
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+	SourceSchema sourceResults = { 0 };
 
-	if (!catalog_lookup_s_namespace_by_rlname(targetDB,
-											  restoreListName,
-											  &schema))
+	if (!catalog_lookup_s_namespace_by_oid(sourceDB,
+										   sourceOid,
+										   &sourceResults))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	*exists = (schema.oid != 0);
+	if (sourceResults.oid == 0)
+	{
+		log_error("Failed to find schema with oid %d in source database",
+				  sourceOid);
+		return false;
+	}
+
+	DatabaseCatalog *targetDB = &(specs->catalogs.target);
+	SourceSchema targetResults = { 0 };
+
+	if (!catalog_lookup_s_namespace_by_nspname(targetDB,
+											   sourceResults.nspname,
+											   &targetResults))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	*exists = (targetResults.oid != 0);
 
 	return true;
 }

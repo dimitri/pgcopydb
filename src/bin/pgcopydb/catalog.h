@@ -168,6 +168,25 @@ bool catalog_count_objects(DatabaseCatalog *catalog, CatalogCounts *count);
 bool catalog_count_fetch(SQLiteQuery *query);
 
 /*
+ * Materialized views
+ */
+typedef struct CatalogMatView
+{
+	uint32_t oid;
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
+	char restoreListName[RESTORE_LIST_NAMEDATALEN];
+	bool excludeData;
+} CatalogMatView;
+
+bool catalog_add_s_matview(DatabaseCatalog *catalog, SourceTable *table);
+
+bool catalog_lookup_s_matview_by_oid(DatabaseCatalog *catalog,
+									 CatalogMatView *result,
+									 uint32_t oid);
+bool catalog_s_matview_fetch(SQLiteQuery *query);
+
+/*
  * Tables and their attributes and parts (COPY partitioning).
  */
 bool catalog_add_s_table(DatabaseCatalog *catalog, SourceTable *table);
@@ -206,9 +225,6 @@ typedef struct SourceTableIterator
 	DatabaseCatalog *catalog;
 	SourceTable *table;
 	SQLiteQuery query;
-
-	/* optional parameters */
-	uint64_t splitTableLargerThanBytes;
 } SourceTableIterator;
 
 bool catalog_iter_s_table_init(SourceTableIterator *iter);
@@ -452,10 +468,12 @@ bool catalog_s_database_guc_fetch(SQLiteQuery *query);
  * Namespaces
  */
 bool catalog_add_s_namespace(DatabaseCatalog * catalog, SourceSchema *namespace);
-
-bool catalog_lookup_s_namespace_by_rlname(DatabaseCatalog *catalog,
-										  const char *restoreListName,
-										  SourceSchema *result);
+bool catalog_lookup_s_namespace_by_oid(DatabaseCatalog *catalog,
+									   uint32_t oid,
+									   SourceSchema *result);
+bool catalog_lookup_s_namespace_by_nspname(DatabaseCatalog *catalog,
+										   const char *nspname,
+										   SourceSchema *result);
 
 bool catalog_s_namespace_fetch(SQLiteQuery *query);
 

@@ -644,12 +644,13 @@ splitLines(LinesBuffer *lbuf, char *buffer)
 /*
  * processBufferCallback is a function callback to use with the subcommands.c
  * library when we want to output a command's output as it's running, such as
- * when running a pg_basebackup command.
+ * when running a pg_basebackup or vacuumdb command.
  */
 void
 processBufferCallback(const char *buffer, bool error)
 {
-	const char *warningPattern = "^(pg_dump: warning:|pg_restore: warning:)";
+	const char *warningPattern = "^(pg_dump: warning:|pg_restore: warning:|WARNING:)";
+	const char *debugPattern = "^(DEBUG:)";
 	LinesBuffer lbuf = { 0 };
 
 	if (!splitLines(&lbuf, (char *) buffer))
@@ -664,8 +665,20 @@ processBufferCallback(const char *buffer, bool error)
 
 		if (strneq(line, ""))
 		{
-			char *match = regexp_first_match(line, warningPattern);
-			int logLevel = match != NULL ? LOG_WARN : (error ? LOG_ERROR : LOG_INFO);
+			char *matchWarning = regexp_first_match(line, warningPattern);
+			char *matchDebug = regexp_first_match(line, debugPattern);
+
+			int logLevel = error ? LOG_ERROR : LOG_INFO;
+
+			if (matchDebug != NULL)
+			{
+				logLevel = LOG_DEBUG;
+			}
+			else if (matchWarning != NULL)
+			{
+				logLevel = LOG_WARN;
+			}
+
 			log_level(logLevel, "%s", line);
 		}
 	}
@@ -772,7 +785,7 @@ pretty_print_count(char *buffer, size_t size, uint64_t number)
 		int t = number / 1000;
 		int u = number - (t * 1000);
 
-		sformat(buffer, size, "%d %d", t, u);
+		sformat(buffer, size, "%d %03d", t, u);
 	}
 	else
 	{

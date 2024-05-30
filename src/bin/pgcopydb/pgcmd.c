@@ -39,8 +39,6 @@
 #define RUN_PROGRAM_IMPLEMENTATION
 #include "runprogram.h"
 
-static bool pg_dump_db_extension_namespace_hook(void *ctx, SourceExtension *ext);
-
 
 /*
  * Get psql --version output in pgPaths->pg_version.
@@ -122,7 +120,7 @@ find_pg_commands(PostgresPaths *pgPaths)
 
 
 /*
- * set_postgres_commands sets the rest of the Postgres commands that pgcyopdb
+ * set_postgres_commands sets the rest of the Postgres commands that pgcopydb
  * needs from knowing the pgPaths->psql absolute location already.
  */
 void
@@ -131,6 +129,7 @@ set_postgres_commands(PostgresPaths *pgPaths)
 	path_in_same_directory(pgPaths->psql, "pg_dump", pgPaths->pg_dump);
 	path_in_same_directory(pgPaths->psql, "pg_dumpall", pgPaths->pg_dumpall);
 	path_in_same_directory(pgPaths->psql, "pg_restore", pgPaths->pg_restore);
+	path_in_same_directory(pgPaths->psql, "vacuumdb", pgPaths->vacuumdb);
 }
 
 
@@ -443,58 +442,6 @@ pg_dump_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = nspname;
 	}
 
-	/*
-	 * Store extension args in a separate array, extension args will dynamically
-	 * allocated by pg_dump_db_extension_namespace_hook and we want to free
-	 * them after the call to pg_dump.
-	 */
-	char *extNamespaces[PG_CMD_MAX_ARG];
-	int extNamespaceCount = 0;
-
-	/* now --exclude-schema for extension's own schemas */
-	DumpExtensionNamespaceContext context = {
-		.extNamespaces = extNamespaces,
-		.extNamespaceCount = &extNamespaceCount,
-	};
-
-	if (!catalog_begin(filtersDB, false))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!catalog_iter_s_extension(filtersDB,
-								  &context,
-								  &pg_dump_db_extension_namespace_hook))
-	{
-		log_error("Failed to prepare pg_dump command line arguments, "
-				  "see above for details");
-		return false;
-	}
-
-	if (!catalog_commit(filtersDB))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	for (int i = 0; i < extNamespaceCount; i++)
-	{
-		/* check that we still have room for --exclude-schema args */
-		if (PG_CMD_MAX_ARG < (argsIndex + 2))
-		{
-			log_error("Failed to call pg_dump, "
-					  "too many schema are excluded: "
-					  "argsIndex %d > %d",
-					  argsIndex + 2,
-					  PG_CMD_MAX_ARG);
-			return false;
-		}
-
-		args[argsIndex++] = "--exclude-schema";
-		args[argsIndex++] = extNamespaces[i];
-	}
-
 	args[argsIndex++] = "--file";
 	args[argsIndex++] = (char *) filename;
 	args[argsIndex++] = (char *) connStrings->safeSourcePGURI.pguri;
@@ -543,32 +490,79 @@ pg_dump_db(PostgresPaths *pgPaths,
 
 
 /*
- * pg_dump_db_extension_namespace_hook is an iterator callback function.
+ * Call `vacuumdb --analyze-only --jobs ${table-jobs}`
  */
-static bool
-pg_dump_db_extension_namespace_hook(void *ctx, SourceExtension *ext)
+bool
+pg_vacuumdb_analyze_only(PostgresPaths *pgPaths, ConnStrings *connStrings, int jobs)
 {
-	DumpExtensionNamespaceContext *context =
-		(DumpExtensionNamespaceContext *) ctx;
+	char *args[16];
+	int argsIndex = 0;
 
-	char **extNamespaces = context->extNamespaces;
+	char command[BUFSIZE] = { 0 };
 
-	char *nspname = ext->extnamespace;
+	char *PGPASSWORD = NULL;
+	bool pgpassword_found_in_env = env_exists("PGPASSWORD");
 
-	if (!streq(nspname, "public") && !streq(nspname, "pg_catalog"))
+	if (!env_exists("PGCONNECT_TIMEOUT"))
 	{
-		/* check that we still have room for args */
-		if (PG_CMD_MAX_ARG < ((*context->extNamespaceCount) + 1))
+		setenv("PGCONNECT_TIMEOUT", POSTGRES_CONNECT_TIMEOUT, 1);
+	}
+
+	/* override PGPASSWORD environment variable if the pguri contains one */
+	if (connStrings->safeSourcePGURI.password != NULL)
+	{
+		if (pgpassword_found_in_env && !get_env_dup("PGPASSWORD", &PGPASSWORD))
 		{
-			log_error("Failed to call pg_dump, "
-					  "too many schema are excluded: "
-					  "extNamespaceCount %d > %d",
-					  (*context->extNamespaceCount) + 1,
-					  PG_CMD_MAX_ARG);
+			/* errors have already been logged */
 			return false;
 		}
+		setenv("PGPASSWORD", connStrings->safeSourcePGURI.password, 1);
+	}
 
-		extNamespaces[(*context->extNamespaceCount)++] = strdup(nspname);
+	args[argsIndex++] = (char *) pgPaths->vacuumdb;
+	args[argsIndex++] = "--analyze-only";
+	args[argsIndex++] = "--jobs";
+	args[argsIndex++] = intToString(jobs).strValue;
+	args[argsIndex++] = "--dbname";
+	args[argsIndex++] = (char *) connStrings->safeSourcePGURI.pguri;
+
+	args[argsIndex] = NULL;
+
+	/*
+	 * We do not want to call setsid() when running vacuumdb.
+	 */
+	Program program = { 0 };
+
+	(void) initialize_program(&program, args, false);
+	program.processBuffer = &processBufferCallback;
+
+	/* log the exact command line we're using */
+	int commandSize = snprintf_program_command_line(&program, command, BUFSIZE);
+
+	if (commandSize >= BUFSIZE)
+	{
+		/* we only display the first BUFSIZE bytes of the real command */
+		log_info("%s...", command);
+	}
+	else
+	{
+		log_info("%s", command);
+	}
+
+	(void) execute_subprogram(&program);
+
+	/* make sure to reset the environment PGPASSWORD if we edited it */
+	if (pgpassword_found_in_env &&
+		connStrings->safeSourcePGURI.password != NULL)
+	{
+		setenv("PGPASSWORD", PGPASSWORD, 1);
+	}
+
+	if (program.returnCode != 0)
+	{
+		log_error("Failed to run vacuumdb: exit code %d", program.returnCode);
+
+		return false;
 	}
 
 	return true;
@@ -1115,6 +1109,7 @@ struct ArchiveItemDescMapping pgRestoreDescriptionArray[] = {
 	INSERT_MAPPING(ARCHIVE_TAG_COMMENT, "COMMENT"),
 	INSERT_MAPPING(ARCHIVE_TAG_CONSTRAINT, "CONSTRAINT"),
 	INSERT_MAPPING(ARCHIVE_TAG_CONVERSION, "CONVERSION"),
+	INSERT_MAPPING(ARCHIVE_TAG_DATABASE, "DATABASE"),
 	INSERT_MAPPING(ARCHIVE_TAG_DEFAULT_ACL, "DEFAULT ACL"),
 	INSERT_MAPPING(ARCHIVE_TAG_DEFAULT, "DEFAULT"),
 	INSERT_MAPPING(ARCHIVE_TAG_DOMAIN, "DOMAIN"),
@@ -1130,6 +1125,13 @@ struct ArchiveItemDescMapping pgRestoreDescriptionArray[] = {
 	INSERT_MAPPING(ARCHIVE_TAG_INDEX, "INDEX"),
 	INSERT_MAPPING(ARCHIVE_TAG_LANGUAGE, "LANGUAGE"),
 	INSERT_MAPPING(ARCHIVE_TAG_LARGE_OBJECT, "LARGE OBJECT"),
+
+	/*
+	 * MATERIALIZED VIEW DATA should come before MATERIALIZED VIEW, otherwise
+	 * the strncmp will match the first part of the string and misidentify the
+	 * MATERIALIZED VIEW DATA as MATERIALIZED VIEW.
+	 */
+	INSERT_MAPPING(ARCHIVE_TAG_REFRESH_MATERIALIZED_VIEW, "MATERIALIZED VIEW DATA"),
 	INSERT_MAPPING(ARCHIVE_TAG_MATERIALIZED_VIEW, "MATERIALIZED VIEW"),
 	INSERT_MAPPING(ARCHIVE_TAG_OPERATOR_CLASS, "OPERATOR CLASS"),
 	INSERT_MAPPING(ARCHIVE_TAG_OPERATOR_FAMILY, "OPERATOR FAMILY"),
@@ -1141,7 +1143,6 @@ struct ArchiveItemDescMapping pgRestoreDescriptionArray[] = {
 				   "PUBLICATION TABLES IN SCHEMA"),
 	INSERT_MAPPING(ARCHIVE_TAG_PUBLICATION_TABLE, "PUBLICATION TABLE"),
 	INSERT_MAPPING(ARCHIVE_TAG_PUBLICATION, "PUBLICATION"),
-	INSERT_MAPPING(ARCHIVE_TAG_REFRESH_MATERIALIZED_VIEW, "REFRESH MATERIALIZED VIEW"),
 	INSERT_MAPPING(ARCHIVE_TAG_ROW_SECURITY, "ROW SECURITY"),
 	INSERT_MAPPING(ARCHIVE_TAG_RULE, "RULE"),
 	INSERT_MAPPING(ARCHIVE_TAG_SCHEMA, "SCHEMA"),
