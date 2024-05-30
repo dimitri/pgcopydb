@@ -78,6 +78,8 @@ configuration then the sections ``exclude-schema`` and ``exclude-table`` are
 disallowed. We would not know how to handle tables that exist on the source
 database and are not part of any filter.
 
+NOTE: Materialized views are also considered as tables during the filtering.
+
 exclude-schema
 ^^^^^^^^^^^^^^
 
@@ -110,6 +112,8 @@ going to be ignored by the pgcopydb command.
 This section is not allowed when the section ``include-only-table`` is
 used.
 
+NOTE: Materialized views are also considered as tables during the filtering.
+
 exclude-index
 ^^^^^^^^^^^^^
 
@@ -123,6 +127,8 @@ exclude-table-data
 This section allows to skip copying the data from a list of qualified table
 names. The schema, index, constraints, etc of the table are still copied
 over.
+
+NOTE: Materialized views are also considered as tables during the filtering.
 
 Reviewing and Debugging the filters
 -----------------------------------

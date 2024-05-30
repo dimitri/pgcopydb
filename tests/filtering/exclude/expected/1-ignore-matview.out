@@ -1,0 +1,9 @@
+-[ RECORD 1 ]-----------------------
+schemaname  | foo
+matviewname | matview_1
+ispopulated | t
+-[ RECORD 2 ]-----------------------
+schemaname  | foo
+matviewname | matview_1_exclude_data
+ispopulated | f
+
