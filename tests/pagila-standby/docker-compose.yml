@@ -1,0 +1,89 @@
+version: "3.9"
+
+x-postgres-base-env: &x-postgres-base-env
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: h4ckm3
+  POSTGRES_DB: pagila
+  POSTGRES_HOST_AUTH_METHOD: "trust"
+
+x-postgres-base-env-allow-replication: &x-postgres-base-env-allow-replication
+  <<: *x-postgres-base-env
+  POSTGRES_HOST_AUTH_METHOD: "trust\nhost replication all 0.0.0.0/0 trust"
+
+x-postgres-base: &x-postgres-base
+    image: postgres:13-bullseye
+    user: postgres
+    expose:
+      - 5432
+    healthcheck:
+      test: 'pg_isready -U postgres --dbname=pagila'
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+services:
+  source:
+    <<: *x-postgres-base
+    environment:
+        <<: *x-postgres-base-env-allow-replication
+    command: |
+      postgres
+      -c ssl=on
+      -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
+      -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
+      -c wal_level=replica
+      -c hot_standby=on
+      -c max_wal_senders=10
+      -c max_replication_slots=10
+      -c hot_standby_feedback=on
+    volumes:
+      - ./00_init_replication_slot.sql:/docker-entrypoint-initdb.d/00_init_replication_slot.sql
+
+  source-standby:
+    <<: *x-postgres-base
+    environment:
+        <<: *x-postgres-base-env
+    command: |
+     bash -c "
+      until pg_basebackup --pgdata=/var/lib/postgresql/data -R --slot=replication_slot -d postgres://postgres:h4ckm3@source/pagila
+      do
+      echo 'Waiting for primary to connect...'
+      sleep 1s
+      done
+      echo 'Backup done, starting replica...'
+      chmod 0700 /var/lib/postgresql/data
+      postgres -c ssl=on -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
+     "
+    depends_on:
+      - source
+
+  target:
+    <<: *x-postgres-base
+    environment:
+      <<: *x-postgres-base-env
+    command: >
+      -c ssl=on
+      -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
+      -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
+
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    cap_add:
+      - SYS_ADMIN
+      - SYS_PTRACE
+    environment:
+      PGSSLMODE: "require"
+      PGCOPYDB_SOURCE_PGURI: postgres://postgres:h4ckm3@source/pagila
+      PGCOPYDB_SOURCE_STANDBY_PGURI: postgres://postgres:h4ckm3@source-standby/pagila
+      PGCOPYDB_TARGET_PGURI: postgres://postgres:h4ckm3@target/pagila
+      PGCOPYDB_TABLE_JOBS: 4
+      PGCOPYDB_INDEX_JOBS: 4
+      PGCOPYDB_LARGE_OBJECTS_JOBS: 4
+      PGCOPYDB_SPLIT_TABLES_LARGER_THAN: 200kB
+      PGCOPYDB_FAIL_FAST: "true"
+    depends_on:
+      - source
+      - source-standby
+      - target
