@@ -792,6 +792,8 @@ copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
 		log_warn("Connected to a standby server where pg_is_in_recovery(): "
 				 "skipping partitioning for table %s",
 				 source->qname);
+
+		return true;
 	}
 
 	if (IS_EMPTY_STRING_BUFFER(source->partKey) &&
