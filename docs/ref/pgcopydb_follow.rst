@@ -194,7 +194,7 @@ Logical Decoding Pre-Fetching
 
 When using ``pgcopydb clone --follow`` a logical replication slot is created
 on the source database before the initial COPY, using the same Postgres
-snapshot. This ensure data consistency.
+snapshot. This ensures data consistency.
 
 Within the ``pgcopydb clone --follow`` approach, it is only possible to
 start applying the changes from the source database after the initial COPY
@@ -356,9 +356,9 @@ The following options are available to ``pgcopydb follow``:
 
   During its normal operations pgcopydb creates a lot of temporary files to
   track sub-processes progress. Temporary files are created in the directory
-  location given by this option, or defaults to
+  specified by this option, or defaults to
   ``${TMPDIR}/pgcopydb`` when the environment variable is set, or
-  then to ``/tmp/pgcopydb``.
+  otherwise to ``/tmp/pgcopydb``.
 
 --restart
 

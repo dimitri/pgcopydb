@@ -253,9 +253,9 @@ The following options are available to ``pgcopydb stream`` sub-commands:
 
   During its normal operations pgcopydb creates a lot of temporary files to
   track sub-processes progress. Temporary files are created in the directory
-  location given by this option, or defaults to
+  specified by this option, or defaults to
   ``${TMPDIR}/pgcopydb`` when the environment variable is set, or
-  then to ``/tmp/pgcopydb``.
+  otherwise to ``/tmp/pgcopydb``.
 
   Change Data Capture files are stored in the ``cdc`` sub-directory of the
   ``--dir`` option when provided, otherwise see XDG_DATA_HOME environment

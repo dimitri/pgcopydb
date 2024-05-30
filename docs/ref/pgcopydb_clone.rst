@@ -2,7 +2,7 @@ pgcopydb clone
 ==============
 
 The main pgcopydb operation is the clone operation, and for historical and
-user friendlyness reasons three aliases are available that implement the
+user friendliness reasons two aliases are available that implement the
 same operation:
 
 ::
@@ -357,9 +357,9 @@ The following options are available to ``pgcopydb clone``:
 
   During its normal operations pgcopydb creates a lot of temporary files to
   track sub-processes progress. Temporary files are created in the directory
-  location given by this option, or defaults to
+  specified by this option, or defaults to
   ``${TMPDIR}/pgcopydb`` when the environment variable is set, or
-  then to ``/tmp/pgcopydb``.
+  otherwise to ``/tmp/pgcopydb``.
 
 --table-jobs
 
@@ -482,11 +482,11 @@ The following options are available to ``pgcopydb clone``:
   the JSON contents must be an array of objects with the keys ``"name"`` and
   ``"version"``.
 
-  The command ``pgcopydb list extension --requirements --json`` produces
+  The command ``pgcopydb list extensions --requirements --json`` produces
   such a JSON file and can be used on the target database instance to get
   started.
 
-  See also the command ``pgcopydb list extension --available-versions``.
+  See also the command ``pgcopydb list extensions --available-versions``.
 
   See also :ref:`pgcopydb_list_extensions`.
 
