@@ -786,9 +786,16 @@ copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
 	 * Also, we cannot execute ANALYZE on a database that is in recovery mode,
 	 * so we skip partitioning in that case too.
 	 */
+
+	if (specs->sourceSnapshot.isReadOnly)
+	{
+		log_warn("Connected to a standby server where pg_is_in_recovery(): "
+				 "skipping partitioning for table %s",
+				 source->qname);
+	}
+
 	if (IS_EMPTY_STRING_BUFFER(source->partKey) &&
-		streq(source->amname, "heap") &&
-		!specs->sourceSnapshot.isReadOnly)
+		streq(source->amname, "heap"))
 	{
 		if (specs->skipCtidSplit)
 		{
