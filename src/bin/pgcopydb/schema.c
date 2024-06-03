@@ -3290,7 +3290,8 @@ schema_list_partitions(PGSQL *pgsql,
 		 * and then memoize it.
 		 */
 		static int blockSize = 0;
-		if (!blockSize && !pgsql_get_block_size(pgsql, &blockSize))
+		bool isBlockSizeCached = blockSize != 0;
+		if (!isBlockSizeCached && !pgsql_get_block_size(pgsql, &blockSize))
 		{
 			/* errors have already been logged */
 			return false;

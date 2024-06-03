@@ -5021,33 +5021,23 @@ pgsql_get_block_size(PGSQL *pgsql, int *blockSize)
 		return false;
 	}
 
+	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_BIGINT, false };
 	const char *query = "SELECT current_setting('block_size')";
-	PGresult *res = PQexec(conn, query);
-	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+
+	if (!pgsql_execute_with_params(pgsql, query, 0, NULL, NULL,
+								   &context, &parseSingleValueResult))
 	{
-		log_error("could not send command \"%s\": %s", query, PQerrorMessage(conn));
-		PQclear(res);
+		/* errors have been logged already */
 		return false;
 	}
 
-	if (PQntuples(res) != 1 || PQnfields(res) < 1)
+	if (!context.parsedOk)
 	{
-		log_error("could not fetch block size: got %d rows and %d fields, "
-				  "expected %d rows and %d or more fields",
-				  PQntuples(res), PQnfields(res), 1, 1);
-		PQclear(res);
+		log_error("Failed to get result from current_setting('block_size')");
 		return false;
 	}
 
-	/* fetch block size value and unit from the result */
-	if (sscanf(PQgetvalue(res, 0, 0), "%d", blockSize) != 1)
-	{
-		log_error("block size could not be parsed");
-		PQclear(res);
-		return false;
-	}
-
-	PQclear(res);
+	*blockSize = context.bigint;
 
 	log_sql("pgsql_get_block_size: %d", *blockSize);
 	return true;
