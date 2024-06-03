@@ -5009,7 +5009,8 @@ RetrieveWalSegSize(LogicalStreamClient *client)
 /*
  * Get block size from the connected Postgres instance.
  */
-bool pgsql_get_block_size(PGSQL *pgsql, int *blockSize)
+bool
+pgsql_get_block_size(PGSQL *pgsql, int *blockSize)
 {
 	PGconn *conn = pgsql->connection;
 
@@ -5020,7 +5021,7 @@ bool pgsql_get_block_size(PGSQL *pgsql, int *blockSize)
 		return false;
 	}
 
-	const char* query = "SELECT current_setting('block_size')";
+	const char *query = "SELECT current_setting('block_size')";
 	PGresult *res = PQexec(conn, query);
 	if (PQresultStatus(res) != PGRES_TUPLES_OK)
 	{
@@ -5051,6 +5052,7 @@ bool pgsql_get_block_size(PGSQL *pgsql, int *blockSize)
 	log_sql("pgsql_get_block_size: %d", *blockSize);
 	return true;
 }
+
 
 /*
  * pgsql_replication_origin_oid calls pg_replication_origin_oid().
