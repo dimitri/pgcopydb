@@ -3285,8 +3285,18 @@ schema_list_partitions(PGSQL *pgsql,
 		min = 0;
 		max = table->relpages;
 
-		/* Postgres page size is static: 8192 Bytes */
-		uint64_t pagesPerPart = ceil((double) partSize / POSTGRES_BLOCK_SIZE);
+		/*
+		 * Get the block size from the origin in the first attempt
+		 * and then memoize it.
+		 */
+		static int blockSize = 0;
+		bool isBlockSizeCached = blockSize != 0;
+		if (!isBlockSizeCached && !pgsql_get_block_size(pgsql, &blockSize))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+		uint64_t pagesPerPart = ceil((double) partSize / blockSize);
 
 		partsCount = ceil((double) table->relpages / (double) pagesPerPart);
 		partsSize = ceil((double) table->relpages / partsCount);

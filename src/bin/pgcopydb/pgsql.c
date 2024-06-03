@@ -5007,6 +5007,44 @@ RetrieveWalSegSize(LogicalStreamClient *client)
 
 
 /*
+ * Get block size from the connected Postgres instance.
+ */
+bool
+pgsql_get_block_size(PGSQL *pgsql, int *blockSize)
+{
+	PGconn *conn = pgsql->connection;
+
+	/* check connection existence */
+	if (conn == NULL)
+	{
+		log_error("BUG: pgsql_get_block_size called with a NULL client connection");
+		return false;
+	}
+
+	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_BIGINT, false };
+	const char *query = "SELECT current_setting('block_size')";
+
+	if (!pgsql_execute_with_params(pgsql, query, 0, NULL, NULL,
+								   &context, &parseSingleValueResult))
+	{
+		/* errors have been logged already */
+		return false;
+	}
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to get result from current_setting('block_size')");
+		return false;
+	}
+
+	*blockSize = context.bigint;
+
+	log_sql("pgsql_get_block_size: %d", *blockSize);
+	return true;
+}
+
+
+/*
  * pgsql_replication_origin_oid calls pg_replication_origin_oid().
  */
 bool
