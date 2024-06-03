@@ -5007,6 +5007,59 @@ RetrieveWalSegSize(LogicalStreamClient *client)
 
 
 /*
+ * Get block size from the connected Postgres instance.
+ */
+bool pgsql_get_block_size(PGSQL *pgsql, int *blockSize)
+{
+	PGconn *conn = pgsql->connection;
+
+	/* check connection existence */
+	if (conn == NULL)
+	{
+		log_error("BUG: pgsql_get_block_size called with a NULL client connection");
+		return false;
+	}
+
+	/* for previous versions set the default block size */
+	if (PQserverVersion(conn) < MINIMUM_VERSION_FOR_SHOW_CMD)
+	{
+		*blockSize = POSTGRES_BLOCK_SIZE;
+		return true;
+	}
+
+	PGresult *res = PQexec(conn, "SHOW block_size");
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+	{
+		log_error("could not send command \"%s\": %s",
+				  "SHOW block_size", PQerrorMessage(conn));
+		PQclear(res);
+		return false;
+	}
+
+	if (PQntuples(res) != 1 || PQnfields(res) < 1)
+	{
+		log_error("could not fetch block size: got %d rows and %d fields, "
+				  "expected %d rows and %d or more fields",
+				  PQntuples(res), PQnfields(res), 1, 1);
+		PQclear(res);
+		return false;
+	}
+
+	/* fetch block size value and unit from the result */
+	if (sscanf(PQgetvalue(res, 0, 0), "%d", blockSize) != 1)
+	{
+		log_error("block size could not be parsed");
+		PQclear(res);
+		return false;
+	}
+
+	PQclear(res);
+
+	log_sql("pgsql_get_block_size: %d", *blockSize);
+	return true;
+}
+
+/*
  * pgsql_replication_origin_oid calls pg_replication_origin_oid().
  */
 bool
