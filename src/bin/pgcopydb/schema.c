@@ -3285,9 +3285,12 @@ schema_list_partitions(PGSQL *pgsql,
 		min = 0;
 		max = table->relpages;
 
-		/* Get the block size from the origin */
-		int blockSize = 0;
-		if (!pgsql_get_block_size(pgsql, &blockSize))
+		/*
+		 * Get the block size from the origin in the first attempt
+		 * and then memoize it.
+		 */
+		static int blockSize = 0;
+		if (!blockSize && !pgsql_get_block_size(pgsql, &blockSize))
 		{
 			/* errors have already been logged */
 			return false;

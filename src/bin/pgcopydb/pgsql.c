@@ -5020,18 +5020,11 @@ bool pgsql_get_block_size(PGSQL *pgsql, int *blockSize)
 		return false;
 	}
 
-	/* for previous versions set the default block size */
-	if (PQserverVersion(conn) < MINIMUM_VERSION_FOR_SHOW_CMD)
-	{
-		*blockSize = POSTGRES_BLOCK_SIZE;
-		return true;
-	}
-
-	PGresult *res = PQexec(conn, "SHOW block_size");
+	const char* query = "SELECT current_setting('block_size')";
+	PGresult *res = PQexec(conn, query);
 	if (PQresultStatus(res) != PGRES_TUPLES_OK)
 	{
-		log_error("could not send command \"%s\": %s",
-				  "SHOW block_size", PQerrorMessage(conn));
+		log_error("could not send command \"%s\": %s", query, PQerrorMessage(conn));
 		PQclear(res);
 		return false;
 	}
