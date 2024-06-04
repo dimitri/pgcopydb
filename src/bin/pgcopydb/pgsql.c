@@ -864,7 +864,17 @@ pgAutoCtlDefaultNoticeProcessor(void *arg, const char *message)
 
 	for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
 	{
-		log_warn("%s", lbuf.lines[lineNumber]);
+		const char *line = lbuf.lines[lineNumber];
+
+		/* Map WARNING to LOG_WARN, and others to LOG_NOTICE */
+		if (regexp_first_match(line, "^(WARNING:)"))
+		{
+			log_warn("%s", line);
+		}
+		else
+		{
+			log_notice("%s", line);
+		}
 	}
 }
 
