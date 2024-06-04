@@ -1,6 +1,6 @@
 ::
 
-   pgcopydb stream sentinel set endpos: Set the sentinel end position LSN on the source database
+   pgcopydb stream sentinel set endpos: Set the sentinel end position LSN
    usage: pgcopydb stream sentinel set endpos  --source ... <end LSN>
    
      --source      Postgres URI to the source database

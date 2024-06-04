@@ -225,8 +225,7 @@ The sentinel table, or the Remote Control
 -----------------------------------------
 
 To track progress and allow resuming of operations, pgcopydb uses a sentinel
-table on the source database. The sentinel table consists of a single row
-with the following fields:
+table. The sentinel table consists of a single row with the following fields:
 
 ::
 

@@ -44,7 +44,7 @@ CommandLine sentinel_setup_command =
 CommandLine sentinel_get_command =
 	make_command(
 		"get",
-		"Get the sentinel table values on the source database",
+		"Get the sentinel table values",
 		" --source ... ",
 		"  --source      Postgres URI to the source database\n"
 		"  --json        Format the output using JSON\n",
@@ -54,7 +54,7 @@ CommandLine sentinel_get_command =
 CommandLine sentinel_set_startpos_command =
 	make_command(
 		"startpos",
-		"Set the sentinel start position LSN on the source database",
+		"Set the sentinel start position LSN",
 		" --source ... <start LSN>",
 		"  --source      Postgres URI to the source database\n",
 		cli_sentinel_getopts,
@@ -63,7 +63,7 @@ CommandLine sentinel_set_startpos_command =
 CommandLine sentinel_set_endpos_command =
 	make_command(
 		"endpos",
-		"Set the sentinel end position LSN on the source database",
+		"Set the sentinel end position LSN",
 		" --source ... <end LSN>",
 		"  --source      Postgres URI to the source database\n"
 		"  --current     Use pg_current_wal_flush_lsn() as the endpos\n",
@@ -73,7 +73,7 @@ CommandLine sentinel_set_endpos_command =
 CommandLine sentinel_set_apply_command =
 	make_command(
 		"apply",
-		"Set the sentinel apply mode on the source database",
+		"Set the sentinel apply mode",
 		"",
 		"  --source      Postgres URI to the source database\n",
 		cli_sentinel_getopts,
@@ -82,7 +82,7 @@ CommandLine sentinel_set_apply_command =
 CommandLine sentinel_set_prefetch_command =
 	make_command(
 		"prefetch",
-		"Set the sentinel prefetch mode on the source database",
+		"Set the sentinel prefetch mode",
 		"",
 		"  --source      Postgres URI to the source database\n",
 		cli_sentinel_getopts,
@@ -98,7 +98,7 @@ static CommandLine *sentinel_set_subcommands[] = {
 
 static CommandLine sentinel_set_commands =
 	make_command_set("set",
-					 "Maintain a sentinel table on the source database",
+					 "Set the sentinel table values",
 					 NULL, NULL, NULL, sentinel_set_subcommands);
 
 static CommandLine *sentinel_subcommands[] = {
@@ -110,7 +110,7 @@ static CommandLine *sentinel_subcommands[] = {
 
 CommandLine sentinel_commands =
 	make_command_set("sentinel",
-					 "Maintain a sentinel table on the source database",
+					 "Maintain a sentinel table",
 					 NULL, NULL, NULL, sentinel_subcommands);
 
 
@@ -359,7 +359,7 @@ cli_sentinel_setup(int argc, char **argv)
 
 /*
  * cli_sentinel_set_startpos updates the startpos registered on the pgcopydb
- * sentinel on the source database.
+ * sentinel.
  */
 static void
 cli_sentinel_set_startpos(int argc, char **argv)
@@ -420,7 +420,7 @@ cli_sentinel_set_startpos(int argc, char **argv)
 
 /*
  * cli_sentinel_set_endpos updates the endpos registered on the pgcopydb
- * sentinel on the source database.
+ * sentinel.
  */
 static void
 cli_sentinel_set_endpos(int argc, char **argv)
@@ -516,7 +516,7 @@ cli_sentinel_set_endpos(int argc, char **argv)
 
 /*
  * cli_sentinel_set_apply updates the apply boolean registered on the pgcopydb
- * sentinel on the source database. When the apply boolean is true,
+ * sentinel. When the apply boolean is true,
  * catching-up is allowed: it's not only prefetching anymore.
  */
 static void
@@ -548,7 +548,7 @@ cli_sentinel_set_apply(int argc, char **argv)
 
 /*
  * cli_sentinel_set_prefetch updates the apply boolean registered on the
- * pgcopydb sentinel on the source database. When the apply boolean is false,
+ * pgcopydb sentinel. When the apply boolean is false,
  * catching-up is not allowed: it's prefetching only.
  */
 static void

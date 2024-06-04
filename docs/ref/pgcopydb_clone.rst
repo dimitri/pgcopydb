@@ -272,7 +272,6 @@ following steps:
      The following SQL objects are then created:
 
        - a replication slot on the source database,
-       - a ``pgcopydb.sentinel`` table on the source database,
        - a replication origin on the target database.
 
      This step is also implemented when using ``pgcopydb clone --follow``.
@@ -298,9 +297,8 @@ following steps:
         consuming changes and before the process terminates.
 
   6. Clean-up the specific resources created for supporting resumability of
-     the whole process (replication slot on the source database, pgcopydb
-     sentinel table on the source database, replication origin on the target
-     database).
+     the whole process (replication slot on the source database, replication
+     origin on the target database).
 
   7. Stop holding a snaphot on the source database by stopping the
      ``pgcopydb snapshot`` process left running in the background.

@@ -138,7 +138,7 @@ This command is equivalent to running the following script::
 pgcopydb stream sentinel get
 ----------------------------
 
-pgcopydb stream sentinel get - Get the sentinel table values on the source database
+pgcopydb stream sentinel get - Get the sentinel table values
 
 .. include:: ../include/stream-sentinel-get.rst
 
@@ -147,7 +147,7 @@ pgcopydb stream sentinel get - Get the sentinel table values on the source datab
 pgcopydb stream sentinel set startpos
 -------------------------------------
 
-pgcopydb stream sentinel set startpos - Set the sentinel start position LSN on the source database
+pgcopydb stream sentinel set startpos - Set the sentinel start position LSN
 
 .. include:: ../include/stream-sentinel-set-startpos.rst
 
@@ -156,7 +156,7 @@ pgcopydb stream sentinel set startpos - Set the sentinel start position LSN on t
 pgcopydb stream sentinel set endpos
 -----------------------------------
 
-pgcopydb stream sentinel set endpos - Set the sentinel end position LSN on the source database
+pgcopydb stream sentinel set endpos - Set the sentinel end position LSN
 
 .. include:: ../include/stream-sentinel-set-endpos.rst
 
@@ -165,7 +165,7 @@ pgcopydb stream sentinel set endpos - Set the sentinel end position LSN on the s
 pgcopydb stream sentinel set apply
 ----------------------------------
 
-pgcopydb stream sentinel set apply - Set the sentinel apply mode on the source database
+pgcopydb stream sentinel set apply - Set the sentinel apply mode
 
 .. include:: ../include/stream-sentinel-set-apply.rst
 
@@ -174,7 +174,7 @@ pgcopydb stream sentinel set apply - Set the sentinel apply mode on the source d
 pgcopydb stream sentinel set prefetch
 -------------------------------------
 
-pgcopydb stream sentinel set prefetch - Set the sentinel prefetch mode on the source database
+pgcopydb stream sentinel set prefetch - Set the sentinel prefetch mode
 
 .. include:: ../include/stream-sentinel-set-prefetch.rst
 
