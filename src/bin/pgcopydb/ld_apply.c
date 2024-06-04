@@ -279,9 +279,9 @@ stream_apply_cleanup(StreamApplyContext *context)
 
 
 /*
- * stream_apply_wait_for_sentinel fetches the current pgcopydb sentinel values
- * on the source database: the catchup processing only gets to start when the
- * sentinel "apply" column has been set to true.
+ * stream_apply_wait_for_sentinel fetches the current pgcopydb sentinel values:
+ * the catchup processing only gets to start when the sentinel "apply" column
+ * has been set to true.
  */
 bool
 stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)

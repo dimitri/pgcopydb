@@ -1,6 +1,6 @@
 ::
 
-   pgcopydb stream sentinel get: Get the sentinel table values on the source database
+   pgcopydb stream sentinel get: Get the sentinel table values
    usage: pgcopydb stream sentinel get  --source ... 
    
      --source      Postgres URI to the source database

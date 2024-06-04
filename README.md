@@ -107,22 +107,21 @@ $ pgcopydb help
     prefetch   Stream JSON changes from the source database and transform them to SQL
     catchup    Apply prefetched changes from SQL files to the target database
     replay     Replay changes from the source to the target database, live
-  + sentinel   Maintain a sentinel table on the source database
+  + sentinel   Maintain a sentinel table
     receive    Stream changes from the source database
     transform  Transform changes from the source database into SQL commands
     apply      Apply changes from the source database into the target database
 
   pgcopydb stream sentinel
-    create  Create the sentinel table on the source database
-    drop    Drop the sentinel table on the source database
-    get     Get the sentinel table values on the source database
-  + set     Maintain a sentinel table on the source database
+    setup   Setup the sentinel table
+    get     Get the sentinel table values
+  + set     Set the sentinel table values
 
   pgcopydb stream sentinel set
-    startpos  Set the sentinel start position LSN on the source database
-    endpos    Set the sentinel end position LSN on the source database
-    apply     Set the sentinel apply mode on the source database
-    prefetch  Set the sentinel prefetch mode on the source database
+    startpos  Set the sentinel start position LSN
+    endpos    Set the sentinel end position LSN
+    apply     Set the sentinel apply mode
+    prefetch  Set the sentinel prefetch mode
 ```
 
 ## Example

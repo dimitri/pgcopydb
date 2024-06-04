@@ -196,7 +196,7 @@ tables. When this happens, the concurrency model that is implemented with
 ``--table-jobs`` still allocates a single process to COPY all the data from
 the source table.
 
-Same-table concurrency allows pgcopydb to use more than once process at the
+Same-table concurrency allows pgcopydb to use more than one process at the
 same time to process a single source table. The data is then logically
 partitionned (on the fly) and split between processes:
 
@@ -288,8 +288,8 @@ Specifically:
 
     Even when same-table COPY concurrency is enabled, creating the indexes
     on the target system only happens after the whole data set has been
-    copied over. This means that only the when the last process is done with
-    the COPYing then this process will take care of the the indexes and the
+    copied over. This means that only when the last process is done with
+    the COPYing then this process will take care of the indexes and the
     *vacuum analyze* operation.
 
 Same-table COPY concurrency performance limitations

@@ -184,7 +184,7 @@ follow_init_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel)
 
 /*
  * follow_get_sentinel refreshes the given CopyDBSentinel with the current
- * values from the pgcopydb.sentinel table on the source database.
+ * values from the pgcopydb.sentinel table.
  */
 bool
 follow_get_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel, bool verbose)
