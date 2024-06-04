@@ -452,20 +452,12 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	/* check if we're connected to a standby server, which we don't support */
-	bool pg_is_in_recovery = false;
-
-	if (!pgsql_is_in_recovery(src, &pg_is_in_recovery))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (pg_is_in_recovery)
+	if (specs->sourceSnapshot.isReadOnly && specs->filters.type !=
+		SOURCE_FILTER_TYPE_NONE)
 	{
 		log_fatal("Connected to a standby server where pg_is_in_recovery(): "
 				  "pgcopydb does not support operating on standby server "
-				  "at this point, as it needs to create temp tables");
+				  "when --filters are used, as it needs to create temp tables");
 		return false;
 	}
 
@@ -790,7 +782,20 @@ copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
 	 * When the Table Access Method used is not "heap" we don't know if the
 	 * CTID range scan is supported (see columnar storage extensions), so
 	 * we skip partitioning altogether in that case.
+	 *
+	 * Also, we cannot execute ANALYZE on a database that is in recovery mode,
+	 * so we skip partitioning in that case too.
 	 */
+
+	if (specs->sourceSnapshot.isReadOnly)
+	{
+		log_warn("Connected to a standby server where pg_is_in_recovery(): "
+				 "skipping partitioning for table %s",
+				 source->qname);
+
+		return true;
+	}
+
 	if (IS_EMPTY_STRING_BUFFER(source->partKey) &&
 		streq(source->amname, "heap"))
 	{
@@ -943,6 +948,44 @@ copydb_prepare_index_specs(CopyDataSpec *specs, PGSQL *pgsql)
 			 (long long) count.constraints);
 
 	return true;
+}
+
+
+/*
+ * copydb_matview_refresh_is_filtered_out returns true when the
+ * given oid belongs to a materialized view object that's
+ * data(refresh) has been filtered out by the filtering setup using
+ * [exclude-table-data].
+ */
+bool
+copydb_matview_refresh_is_filtered_out(CopyDataSpec *specs, uint32_t oid)
+{
+	/*
+	 * We need to check the s_matview table exists on the source catalog
+	 * to find out if the materialized view refresh has been filtered out.
+	 *
+	 * The filtering of materialized view as a whole handled by the
+	 * existing filtering setup(i.e. copydb_objectid_is_filtered_out).
+	 */
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	CatalogMatView result = { 0 };
+
+	if (oid != 0)
+	{
+		if (!catalog_lookup_s_matview_by_oid(sourceDB, &result, oid))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (result.oid != 0 && result.excludeData)
+		{
+			return true;
+		}
+	}
+
+	return false;
 }
 
 

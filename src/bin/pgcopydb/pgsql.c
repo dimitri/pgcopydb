@@ -864,7 +864,17 @@ pgAutoCtlDefaultNoticeProcessor(void *arg, const char *message)
 
 	for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
 	{
-		log_warn("%s", lbuf.lines[lineNumber]);
+		const char *line = lbuf.lines[lineNumber];
+
+		/* Map WARNING to LOG_WARN, and others to LOG_NOTICE */
+		if (regexp_first_match(line, "^(WARNING:)"))
+		{
+			log_warn("%s", line);
+		}
+		else
+		{
+			log_notice("%s", line);
+		}
 	}
 }
 
@@ -5002,6 +5012,44 @@ RetrieveWalSegSize(LogicalStreamClient *client)
 
 	log_sql("RetrieveWalSegSize: %d", client->WalSegSz);
 
+	return true;
+}
+
+
+/*
+ * Get block size from the connected Postgres instance.
+ */
+bool
+pgsql_get_block_size(PGSQL *pgsql, int *blockSize)
+{
+	PGconn *conn = pgsql->connection;
+
+	/* check connection existence */
+	if (conn == NULL)
+	{
+		log_error("BUG: pgsql_get_block_size called with a NULL client connection");
+		return false;
+	}
+
+	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_BIGINT, false };
+	const char *query = "SELECT current_setting('block_size')";
+
+	if (!pgsql_execute_with_params(pgsql, query, 0, NULL, NULL,
+								   &context, &parseSingleValueResult))
+	{
+		/* errors have been logged already */
+		return false;
+	}
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to get result from current_setting('block_size')");
+		return false;
+	}
+
+	*blockSize = context.bigint;
+
+	log_sql("pgsql_get_block_size: %d", *blockSize);
 	return true;
 }
 

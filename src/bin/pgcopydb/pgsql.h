@@ -532,6 +532,8 @@ bool pgsql_stream_logical(LogicalStreamClient *client,
 
 bool RetrieveWalSegSize(LogicalStreamClient *client);
 
+bool pgsql_get_block_size(PGSQL *pgsql, int *blockSize);
+
 bool pgsql_replication_origin_oid(PGSQL *pgsql, char *nodeName, uint32_t *oid);
 bool pgsql_replication_origin_create(PGSQL *pgsql, char *nodeName);
 bool pgsql_replication_origin_drop(PGSQL *pgsql, char *nodeName);

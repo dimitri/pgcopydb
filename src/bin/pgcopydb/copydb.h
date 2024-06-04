@@ -104,6 +104,9 @@ typedef struct TransactionSnapshot
 	ConnectionType connectionType;
 
 	char snapshot[BUFSIZE];
+
+	/* indicator for read-only source db */
+	bool isReadOnly;
 } TransactionSnapshot;
 
 
@@ -412,6 +415,8 @@ bool copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs);
 bool copydb_objectid_is_filtered_out(CopyDataSpec *specs,
 									 uint32_t oid,
 									 char *restoreListName);
+bool copydb_matview_refresh_is_filtered_out(CopyDataSpec *specs,
+											uint32_t oid);
 
 bool copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql);
 bool copydb_prepare_index_specs(CopyDataSpec *specs, PGSQL *pgsql);

@@ -83,7 +83,6 @@
 #define POSTGRES_PING_RETRY_BASE_SLEEP_TIME 5         /* milliseconds */
 
 #define POSTGRES_PORT 5432
-#define POSTGRES_BLOCK_SIZE 8192
 
 /* default replication slot and origin for logical replication */
 #define REPLICATION_ORIGIN "pgcopydb"

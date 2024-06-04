@@ -157,6 +157,9 @@ typedef struct SourceTable
 	char amname[PG_NAMEDATALEN];
 	char restoreListName[RESTORE_LIST_NAMEDATALEN];
 
+	/* 'r' for ordinary table, 'm' for matview */
+	char relkind;
+
 	int64_t relpages;
 	int64_t reltuples;
 	int64_t bytes;
