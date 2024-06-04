@@ -46,3 +46,12 @@
          8/8 |       (14,0) |       (-1,0) |           -1
 2024-05-23 11:01:25.505 201 INFO   main.c:136                Running pgcopydb version 0.15.28.g40af8d7 from "/usr/local/bin/pgcopydb"
 2024-05-23 11:01:25.551 201 INFO   cli_list.c:1300           Table public.table_ctid_candidate_skip is 152 kB large which is larger than --split-tables-larger-than 10 kB, does not have a unique column of type integer, and CTID split is disabled.Same table concurrency is not enabled
+
+20:54:39.774 58 INFO   Running pgcopydb version 0.15.63.g1fd2daa from "/usr/local/bin/pgcopydb"
+20:54:39.833 58 INFO   Using work dir "/tmp/unit/split-with-limits"
+20:54:39.837 58 INFO   Table public.table_1 COPY will be split 3-ways
+        Part |          Min |          Max |        Count
+-------------+--------------+--------------+-------------
+         1/3 |           -1 |           -1 |           -1
+         2/3 |            1 |           34 |           34
+         3/3 |           35 |           -1 |           -1

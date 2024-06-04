@@ -421,6 +421,12 @@ PGCOPYDB_SPLIT_TABLES_LARGER_THAN
    When ``--split-tables-larger-than`` is ommitted from the command line,
    then this environment variable is used.
 
+PGCOPYDB_SPLIT_MAX_PARTS
+
+   Limit the maximum number of parts when :ref:`same_table_concurrency` is
+   used. When ``--split-max-parts`` is ommitted from the command line, then this
+   environment variable is used.
+
 PGCOPYDB_ESTIMATE_TABLE_SIZES
 
    When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)

@@ -593,7 +593,10 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 		}
 	}
 
-	/* now update --split-tables-larger-than and target pguri */
+	/*
+	 * now update target pguri, --split-tables-larger-than, and
+	 * --split-max-parts
+	 */
 	if (!catalog_update_setup(specs))
 	{
 		/* errors have already been logged */
@@ -872,7 +875,8 @@ copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
 	if (!schema_list_partitions(context->pgsql,
 								sourceDB,
 								source,
-								specs->splitTablesLargerThan.bytes))
+								specs->splitTablesLargerThan.bytes,
+								specs->splitMaxParts))
 	{
 		/* errors have already been logged */
 		return false;
