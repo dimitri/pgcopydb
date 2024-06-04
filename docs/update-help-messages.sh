@@ -114,8 +114,7 @@ function parse_help_output() {
 
         # Parse subcommands that are followed by a section header. For example,
         # there are the subcommands under pgcopydb strem sentinel section:
-        #     create  Create the sentinel table
-        #     drop    Drop the sentinel table
+        #     setup   Setup the sentinel table
         #     get     Get the sentinel table values
         #   + set     Set the sentinel table values
         #

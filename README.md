@@ -113,8 +113,7 @@ $ pgcopydb help
     apply      Apply changes from the source database into the target database
 
   pgcopydb stream sentinel
-    create  Create the sentinel table
-    drop    Drop the sentinel table
+    setup   Setup the sentinel table
     get     Get the sentinel table values
   + set     Set the sentinel table values
 
