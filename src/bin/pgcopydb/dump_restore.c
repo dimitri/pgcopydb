@@ -28,6 +28,7 @@
 static bool copydb_append_table_hook(void *context, SourceTable *table);
 static bool copydb_copy_database_properties_hook(void *ctx,
 												 SourceProperty *property);
+static void getSectionOptions(PostgresDumpSection section, char *sections[3]);
 
 
 /*
@@ -86,6 +87,48 @@ copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
 }
 
 
+/**
+ * Stores the section options in the provided 'sections' array based on
+ * the given PostgresDumpSection. In the end, the 'sections' will be a
+ * NULL terminated array.
+ *
+ * @param section The PostgresDumpSection value representing the section.
+ * @param sections The array to store the section options.
+ */
+void
+getSectionOptions(PostgresDumpSection section, char *sections[3])
+{
+	switch (section)
+	{
+		case PG_DUMP_SECTION_SCHEMA | PG_DUMP_SECTION_ALL:
+		{
+			sections[0] = "pre-data";
+			sections[1] = "post-data";
+			break;
+		}
+
+		case PG_DUMP_SECTION_PRE_DATA:
+		{
+			sections[0] = "pre-data";
+			break;
+		}
+
+		case PG_DUMP_SECTION_POST_DATA:
+		{
+			sections[0] = "post-data";
+			break;
+		}
+
+		default:
+		{
+			break;
+		}
+	}
+
+	sections[2] = NULL;
+}
+
+
 /*
  * copydb_dump_source_schema uses pg_dump -Fc --schema --section=pre-data or
  * --section=post-data to dump the source database schema to files.
@@ -110,46 +153,24 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 		return false;
 	}
 
-	if (section == PG_DUMP_SECTION_SCHEMA ||
-		section == PG_DUMP_SECTION_PRE_DATA ||
-		section == PG_DUMP_SECTION_ALL)
+	char *sections[3] = { NULL };
+	getSectionOptions(section, sections);
+
+	if (sections[0])
 	{
-		if (file_exists(specs->dumpPaths.preFilename))
+		if (file_exists(specs->dumpPaths.dumpFilename))
 		{
 			log_info("Skipping pg_dump --section=pre-data, "
 					 "as \"%s\" already exists",
-					 specs->dumpPaths.preFilename);
+					 specs->dumpPaths.dumpFilename);
 		}
 		else if (!pg_dump_db(&(specs->pgPaths),
 							 &(specs->connStrings),
 							 snapshot,
-							 "pre-data",
+							 sections,
 							 &(specs->filters),
 							 &(specs->catalogs.filter),
-							 specs->dumpPaths.preFilename))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-	}
-
-	if (section == PG_DUMP_SECTION_SCHEMA ||
-		section == PG_DUMP_SECTION_POST_DATA ||
-		section == PG_DUMP_SECTION_ALL)
-	{
-		if (file_exists(specs->dumpPaths.postFilename))
-		{
-			log_info("Skipping pg_dump --section=post-data, "
-					 "as \"%s\" already exists",
-					 specs->dumpPaths.postFilename);
-		}
-		else if (!pg_dump_db(&(specs->pgPaths),
-							 &(specs->connStrings),
-							 snapshot,
-							 "post-data",
-							 &(specs->filters),
-							 &(specs->catalogs.filter),
-							 specs->dumpPaths.postFilename))
+							 specs->dumpPaths.dumpFilename))
 		{
 			/* errors have already been logged */
 			return false;
@@ -175,9 +196,9 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	if (!file_exists(specs->dumpPaths.preFilename))
+	if (!file_exists(specs->dumpPaths.dumpFilename))
 	{
-		log_fatal("File \"%s\" does not exists", specs->dumpPaths.preFilename);
+		log_fatal("File \"%s\" does not exists", specs->dumpPaths.dumpFilename);
 		return false;
 	}
 
@@ -231,10 +252,12 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 		}
 	}
 
+	strlcpy(specs->restoreOptions.section, "pre-data",
+			sizeof(specs->restoreOptions.section));
 	if (!pg_restore_db(&(specs->pgPaths),
 					   &(specs->connStrings),
 					   &(specs->filters),
-					   specs->dumpPaths.preFilename,
+					   specs->dumpPaths.dumpFilename,
 					   specs->dumpPaths.preListFilename,
 					   specs->restoreOptions))
 	{
@@ -548,9 +571,9 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	if (!file_exists(specs->dumpPaths.postFilename))
+	if (!file_exists(specs->dumpPaths.dumpFilename))
 	{
-		log_fatal("File \"%s\" does not exists", specs->dumpPaths.postFilename);
+		log_fatal("File \"%s\" does not exists", specs->dumpPaths.dumpFilename);
 		return false;
 	}
 
@@ -574,10 +597,12 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 		return false;
 	}
 
+	strlcpy(specs->restoreOptions.section, "post-data",
+			sizeof(specs->restoreOptions.section));
 	if (!pg_restore_db(&(specs->pgPaths),
 					   &(specs->connStrings),
 					   &(specs->filters),
-					   specs->dumpPaths.postFilename,
+					   specs->dumpPaths.dumpFilename,
 					   specs->dumpPaths.postListFilename,
 					   specs->restoreOptions))
 	{
@@ -611,7 +636,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 	{
 		case PG_DUMP_SECTION_PRE_DATA:
 		{
-			dumpFilename = specs->dumpPaths.preFilename;
+			dumpFilename = specs->dumpPaths.dumpFilename;
 			listFilename = specs->dumpPaths.preListFilename;
 			listOutFilename = specs->dumpPaths.preListOutFilename;
 			break;
@@ -619,7 +644,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 
 		case PG_DUMP_SECTION_POST_DATA:
 		{
-			dumpFilename = specs->dumpPaths.postFilename;
+			dumpFilename = specs->dumpPaths.dumpFilename;
 			listFilename = specs->dumpPaths.postListFilename;
 			listOutFilename = specs->dumpPaths.postListOutFilename;
 			break;

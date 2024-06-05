@@ -618,7 +618,7 @@ cli_restore_schema_parse_list(int argc, char **argv)
 
 	log_info("Preparing the pg_restore --use-list for the pre-data "
 			 "archive file \"%s\" at: \"%s\"",
-			 copySpecs.dumpPaths.preFilename,
+			 copySpecs.dumpPaths.dumpFilename,
 			 copySpecs.dumpPaths.preListFilename);
 
 	if (!copydb_write_restore_list(&copySpecs, PG_DUMP_SECTION_PRE_DATA))
@@ -630,7 +630,7 @@ cli_restore_schema_parse_list(int argc, char **argv)
 
 	log_info("Preparing the pg_restore --use-list for the post-data "
 			 "archive file \"%s\" at: \"%s\"",
-			 copySpecs.dumpPaths.postFilename,
+			 copySpecs.dumpPaths.dumpFilename,
 			 copySpecs.dumpPaths.postListFilename);
 
 	if (!copydb_write_restore_list(&copySpecs, PG_DUMP_SECTION_POST_DATA))

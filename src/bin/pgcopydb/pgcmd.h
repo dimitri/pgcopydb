@@ -191,6 +191,7 @@ typedef struct RestoreOptions
 	bool noACL;
 	bool noTableSpaces;
 	int jobs;
+	char section[BUFSIZE];
 } RestoreOptions;
 
 bool psql_version(PostgresPaths *pgPaths);
@@ -204,7 +205,7 @@ bool set_psql_from_pg_config(PostgresPaths *pgPaths);
 bool pg_dump_db(PostgresPaths *pgPaths,
 				ConnStrings *connStrings,
 				const char *snapshot,
-				const char *section,
+				char *sections[],
 				SourceFilters *filters,
 				DatabaseCatalog *filtersDB,
 				const char *filename);

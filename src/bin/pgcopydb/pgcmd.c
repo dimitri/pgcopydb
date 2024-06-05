@@ -358,13 +358,13 @@ typedef struct DumpExtensionNamespaceContext
 
 
 /*
- * Call pg_dump and get the given section of the dump into the target file.
+ * Call pg_dump and get the given section(s) of the dump into the target file.
  */
 bool
 pg_dump_db(PostgresPaths *pgPaths,
 		   ConnStrings *connStrings,
 		   const char *snapshot,
-		   const char *section,
+		   char *sections[],
 		   SourceFilters *filters,
 		   DatabaseCatalog *filtersDB,
 		   const char *filename)
@@ -402,8 +402,11 @@ pg_dump_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = (char *) snapshot;
 	}
 
-	args[argsIndex++] = "--section";
-	args[argsIndex++] = (char *) section;
+	for (int i = 0; sections[i] != NULL; i++)
+	{
+		args[argsIndex++] = "--section";
+		args[argsIndex++] = sections[i];
+	}
 
 	/* apply [include-only-schema] filtering */
 	for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
@@ -896,6 +899,12 @@ pg_restore_db(PostgresPaths *pgPaths,
 	args[argsIndex++] = (char *) pgPaths->pg_restore;
 	args[argsIndex++] = "--dbname";
 	args[argsIndex++] = (char *) connStrings->safeTargetPGURI.pguri;
+
+	if (!IS_EMPTY_STRING_BUFFER(options.section))
+	{
+		args[argsIndex++] = "--section";
+		args[argsIndex++] = options.section;
+	}
 
 	if (options.jobs == 1)
 	{
