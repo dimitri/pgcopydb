@@ -364,7 +364,6 @@ bool
 pg_dump_db(PostgresPaths *pgPaths,
 		   ConnStrings *connStrings,
 		   const char *snapshot,
-		   char *sections[],
 		   SourceFilters *filters,
 		   DatabaseCatalog *filtersDB,
 		   const char *filename)
@@ -402,11 +401,7 @@ pg_dump_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = (char *) snapshot;
 	}
 
-	for (int i = 0; sections[i] != NULL; i++)
-	{
-		args[argsIndex++] = "--section";
-		args[argsIndex++] = sections[i];
-	}
+	args[argsIndex++] = "--schema-only";
 
 	/* apply [include-only-schema] filtering */
 	for (int i = 0; i < filters->includeOnlySchemaList.count; i++)

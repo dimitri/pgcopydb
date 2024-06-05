@@ -28,7 +28,6 @@
 static bool copydb_append_table_hook(void *context, SourceTable *table);
 static bool copydb_copy_database_properties_hook(void *ctx,
 												 SourceProperty *property);
-static void getSectionOptions(PostgresDumpSection section, char *sections[3]);
 
 
 /*
@@ -87,56 +86,13 @@ copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
 }
 
 
-/**
- * Stores the section options in the provided 'sections' array based on
- * the given PostgresDumpSection. In the end, the 'sections' will be a
- * NULL terminated array.
- *
- * @param section The PostgresDumpSection value representing the section.
- * @param sections The array to store the section options.
- */
-void
-getSectionOptions(PostgresDumpSection section, char *sections[3])
-{
-	switch (section)
-	{
-		case PG_DUMP_SECTION_SCHEMA | PG_DUMP_SECTION_ALL:
-		{
-			sections[0] = "pre-data";
-			sections[1] = "post-data";
-			break;
-		}
-
-		case PG_DUMP_SECTION_PRE_DATA:
-		{
-			sections[0] = "pre-data";
-			break;
-		}
-
-		case PG_DUMP_SECTION_POST_DATA:
-		{
-			sections[0] = "post-data";
-			break;
-		}
-
-		default:
-		{
-			break;
-		}
-	}
-
-	sections[2] = NULL;
-}
-
-
 /*
- * copydb_dump_source_schema uses pg_dump -Fc --schema --section=pre-data or
- * --section=post-data to dump the source database schema to files.
+ * copydb_dump_source_schema uses pg_dump -Fc --schema --schema-only
+ * to dump the source database schema to file.
  */
 bool
 copydb_dump_source_schema(CopyDataSpec *specs,
-						  const char *snapshot,
-						  PostgresDumpSection section)
+						  const char *snapshot)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
@@ -153,28 +109,21 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 		return false;
 	}
 
-	char *sections[3] = { NULL };
-	getSectionOptions(section, sections);
-
-	if (sections[0])
+	if (file_exists(specs->dumpPaths.dumpFilename))
 	{
-		if (file_exists(specs->dumpPaths.dumpFilename))
-		{
-			log_info("Skipping pg_dump --section=pre-data, "
-					 "as \"%s\" already exists",
-					 specs->dumpPaths.dumpFilename);
-		}
-		else if (!pg_dump_db(&(specs->pgPaths),
-							 &(specs->connStrings),
-							 snapshot,
-							 sections,
-							 &(specs->filters),
-							 &(specs->catalogs.filter),
-							 specs->dumpPaths.dumpFilename))
-		{
-			/* errors have already been logged */
-			return false;
-		}
+		log_info("Skipping pg_dump --section=pre-data, "
+				 "as \"%s\" already exists",
+				 specs->dumpPaths.dumpFilename);
+	}
+	else if (!pg_dump_db(&(specs->pgPaths),
+						 &(specs->connStrings),
+						 snapshot,
+						 &(specs->filters),
+						 &(specs->catalogs.filter),
+						 specs->dumpPaths.dumpFilename))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	if (!summary_stop_timing(sourceDB, TIMING_SECTION_DUMP_SCHEMA))

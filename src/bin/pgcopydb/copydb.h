@@ -393,9 +393,7 @@ bool copydb_prepare_create_constraint_command(CopyIndexSpec *indexSpecs);
 bool copydb_create_constraints(CopyDataSpec *spec, PGSQL *dst, SourceTable *table);
 
 /* dump_restore.c */
-bool copydb_dump_source_schema(CopyDataSpec *specs,
-							   const char *snapshot,
-							   PostgresDumpSection section);
+bool copydb_dump_source_schema(CopyDataSpec *specs, const char *snapshot);
 bool copydb_target_prepare_schema(CopyDataSpec *specs);
 bool copydb_copy_database_properties(CopyDataSpec *specs);
 bool copydb_target_drop_tables(CopyDataSpec *specs);

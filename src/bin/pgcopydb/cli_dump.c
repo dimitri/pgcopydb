@@ -437,9 +437,7 @@ cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 	}
 	else
 	{
-		if (!copydb_dump_source_schema(&copySpecs,
-									   copySpecs.sourceSnapshot.snapshot,
-									   section))
+		if (!copydb_dump_source_schema(&copySpecs, copySpecs.sourceSnapshot.snapshot))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);

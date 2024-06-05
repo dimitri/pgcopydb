@@ -205,7 +205,6 @@ bool set_psql_from_pg_config(PostgresPaths *pgPaths);
 bool pg_dump_db(PostgresPaths *pgPaths,
 				ConnStrings *connStrings,
 				const char *snapshot,
-				char *sections[],
 				SourceFilters *filters,
 				DatabaseCatalog *filtersDB,
 				const char *filename);

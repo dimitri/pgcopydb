@@ -424,7 +424,7 @@ copydb_prepare_dump_paths(CopyFilePaths *cfPaths, DumpPaths *dumpPaths)
 			cfPaths->schemadir, "extnamespaces.dump");
 
 	sformat(dumpPaths->dumpFilename, MAXPGPATH, "%s/%s",
-			cfPaths->schemadir, "pre_post.dump");
+			cfPaths->schemadir, "schema.dump");
 
 	sformat(dumpPaths->preListOutFilename, MAXPGPATH, "%s/%s",
 			cfPaths->schemadir, "pre-out.list");
