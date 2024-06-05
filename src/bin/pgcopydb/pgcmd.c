@@ -401,7 +401,9 @@ pg_dump_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = (char *) snapshot;
 	}
 
-	args[argsIndex++] = "--schema-only";
+	/* args[argsIndex++] = "--schema-only"; */
+	args[argsIndex++] = "--section=pre-data";
+	args[argsIndex++] = "--section=post-data";
 
 	/* apply [include-only-schema] filtering */
 	for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
