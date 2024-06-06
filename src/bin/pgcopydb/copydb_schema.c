@@ -830,17 +830,25 @@ copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
 		 * Make sure we have proper statistics (relpages) about the table
 		 * before compute the CTID ranges for the concurrent table scans.
 		 */
-		char sql[BUFSIZE] = { 0 };
-
-		sformat(sql, sizeof(sql), "ANALYZE %s", source->qname);
-
-		log_notice("%s", sql);
-
-		if (!pgsql_execute(context->pgsql, sql))
+		if (specs->estimateTableSizes)
 		{
-			log_error("Failed to refresh table %s statistics",
+			log_debug("Skipping running ANALYZE on table %s for CTID split",
 					  source->qname);
-			return false;
+		}
+		else
+		{
+			char sql[BUFSIZE] = { 0 };
+
+			sformat(sql, sizeof(sql), "ANALYZE %s", source->qname);
+
+			log_notice("%s", sql);
+
+			if (!pgsql_execute(context->pgsql, sql))
+			{
+				log_error("Failed to refresh table %s statistics",
+						  source->qname);
+				return false;
+			}
 		}
 
 		/* fetch the relpages for the table after ANALYZE */
