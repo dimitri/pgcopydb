@@ -3239,7 +3239,7 @@ schema_list_partitions(PGSQL *pgsql,
 					   DatabaseCatalog *catalog,
 					   SourceTable *table,
 					   uint64_t partSize,
-					   int partCountMaxLimit)
+					   int splitMaxParts)
 {
 	/* no partKey, no partitions, done. */
 	if (IS_EMPTY_STRING_BUFFER(table->partKey))
@@ -3302,9 +3302,9 @@ schema_list_partitions(PGSQL *pgsql,
 
 		partsCount = ceil((double) table->relpages / (double) pagesPerPart);
 
-		if (partCountMaxLimit > 0 && partsCount > partCountMaxLimit)
+		if (splitMaxParts > 0 && partsCount > splitMaxParts)
 		{
-			partsCount = partCountMaxLimit;
+			partsCount = splitMaxParts;
 		}
 
 		partsSize = ceil((double) table->relpages / partsCount);
@@ -3334,9 +3334,9 @@ schema_list_partitions(PGSQL *pgsql,
 		/* add a partition for IS NULL (first) */
 		partsCount = ceil((double) table->bytes / (double) partSize) + 1;
 
-		if (partCountMaxLimit > 0 && partsCount > partCountMaxLimit)
+		if (splitMaxParts > 0 && partsCount > splitMaxParts)
 		{
-			partsCount = partCountMaxLimit;
+			partsCount = splitMaxParts;
 		}
 
 		partsSize = ceil((double) (max - min + 1) / partsCount);

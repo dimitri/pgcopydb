@@ -431,7 +431,7 @@ bool schema_list_partitions(PGSQL *pgsql,
 							DatabaseCatalog *catalog,
 							SourceTable *table,
 							uint64_t partSize,
-							int partCountMaxLimit);
+							int splitMaxParts);
 
 bool schema_list_sequences(PGSQL *pgsql,
 						   SourceFilters *filters,
