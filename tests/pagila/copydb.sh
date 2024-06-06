@@ -61,7 +61,6 @@ pgcopydb clone --notice \
          --skip-ext-comments \
          --skip-db-properties \
          --estimate-table-sizes \
-         --split-max-parts=5 \
          --source ${PAGILA_SOURCE_PGURI} \
          --target ${PAGILA_TARGET_PGURI}
 
