@@ -322,6 +322,28 @@ cli_copydb_getenv(CopyDBOptions *options)
 		++errors;
 	}
 
+	/* when --split-max-parts has not been used, check PGCOPYDB_SPLIT_MAX_PARTS */
+	if (options->splitMaxParts == 0)
+	{
+		if (env_exists(PGCOPYDB_SPLIT_MAX_PARTS))
+		{
+			char maxParts[BUFSIZE] = { 0 };
+
+			if (!get_env_copy(PGCOPYDB_SPLIT_MAX_PARTS, maxParts, sizeof(maxParts)))
+			{
+				/* errors have already been logged */
+				++errors;
+			}
+			else if (!stringToInt(maxParts, &options->splitMaxParts) ||
+					 options->splitMaxParts < 1)
+			{
+				log_fatal("Failed to parse PGCOPYDB_SPLIT_MAX_PARTS: \"%s\"",
+						  maxParts);
+				++errors;
+			}
+		}
+	}
+
 	/* when --estimate-table-sizes has not been used, check PGCOPYDB_ESTIMATE_TABLE_SIZES */
 	if (!options->estimateTableSizes)
 	{
@@ -851,6 +873,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "large-objects-jobs", required_argument, NULL, 'b' },
 		{ "split-tables-larger-than", required_argument, NULL, 'L' },
 		{ "split-at", required_argument, NULL, 'L' },
+		{ "split-max-parts", required_argument, NULL, 'u' },
 		{ "estimate-table-sizes", no_argument, NULL, 'm' },
 		{ "drop-if-exists", no_argument, NULL, 'c' }, /* pg_restore -c */
 		{ "roles", no_argument, NULL, 'A' },          /* pg_dumpall --roles-only */
@@ -911,7 +934,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	}
 
 	const char *optstring =
-		"S:T:D:J:I:b:L:mcAPOXj:xBeMlUgkyF:F:Q:irRCN:fp:ws:o:tE:Vvdzqh";
+		"S:T:D:J:I:b:L:u:mcAPOXj:xBeMlUgkyF:F:Q:irRCN:fp:ws:o:tE:Vvdzqh";
 
 	while ((c = getopt_long(argc, argv,
 							optstring, long_options, &option_index)) != -1)
@@ -1007,6 +1030,19 @@ cli_copy_db_getopts(int argc, char **argv)
 				log_trace("--split-tables-larger-than %s (%lld)",
 						  options.splitTablesLargerThan.bytesPretty,
 						  (long long) options.splitTablesLargerThan.bytes);
+				break;
+			}
+
+			case 'u':
+			{
+				if (!stringToInt(optarg, &options.splitMaxParts) ||
+					options.splitMaxParts < 1)
+				{
+					log_fatal("Failed to parse --split-max-parts: \"%s\"",
+							  optarg);
+					++errors;
+				}
+				log_trace("--split-max-parts %d", options.splitMaxParts);
 				break;
 			}
 

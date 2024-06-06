@@ -111,6 +111,7 @@ static CommandLine list_table_parts_command =
 		"  --schema-name               Name of the schema where to find the table\n"
 		"  --table-name                Name of the target table\n"
 		"  --split-tables-larger-than  Size threshold to consider partitioning\n"
+		"  --split-max-parts           Maximum number of jobs for Same-table concurrency \n" \
 		"  --skip-split-by-ctid        Skip the ctid split\n"
 		"  --estimate-table-sizes      Allow using estimates for relation sizes\n",
 		cli_list_db_getopts,
@@ -221,6 +222,28 @@ cli_list_getenv(ListDBOptions *options)
 		++errors;
 	}
 
+	/* when --split-max-parts has not been used, check PGCOPYDB_SPLIT_MAX_PARTS */
+	if (options->splitMaxParts == 0)
+	{
+		if (env_exists(PGCOPYDB_SPLIT_MAX_PARTS))
+		{
+			char maxParts[BUFSIZE] = { 0 };
+
+			if (!get_env_copy(PGCOPYDB_SPLIT_MAX_PARTS, maxParts, sizeof(maxParts)))
+			{
+				/* errors have already been logged */
+				++errors;
+			}
+			else if (!stringToInt(maxParts, &options->splitMaxParts) ||
+					 options->splitMaxParts < 1)
+			{
+				log_fatal("Failed to parse PGCOPYDB_SPLIT_MAX_PARTS: \"%s\"",
+						  maxParts);
+				++errors;
+			}
+		}
+	}
+
 	/* when --estimate-table-sizes has not been used, check PGCOPYDB_ESTIMATE_TABLE_SIZES */
 	if (!options->estimateTableSizes)
 	{
@@ -271,6 +294,7 @@ cli_list_db_getopts(int argc, char **argv)
 		{ "list-skipped", no_argument, NULL, 'x' },
 		{ "without-pkey", no_argument, NULL, 'P' },
 		{ "split-tables-larger-than", required_argument, NULL, 'L' },
+		{ "split-max-parts", required_argument, NULL, 'u' },
 		{ "split-at", required_argument, NULL, 'L' },
 		{ "estimate-table-sizes", no_argument, NULL, 'm' },
 		{ "skip-split-by-ctid", no_argument, NULL, 'k' },
@@ -301,7 +325,7 @@ cli_list_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	const char *optstring = "S:D:s:t:F:xPLk:mfyarJRIN:Vdzvqh";
+	const char *optstring = "S:D:s:t:F:xPL:u:k:mfyarJRIN:Vdzvqh";
 
 	while ((c = getopt_long(argc, argv, optstring,
 							long_options, &option_index)) != -1)
@@ -386,6 +410,19 @@ cli_list_db_getopts(int argc, char **argv)
 				log_trace("--split-tables-larger-than %s (%lld)",
 						  options.splitTablesLargerThan.bytesPretty,
 						  (long long) options.splitTablesLargerThan.bytes);
+				break;
+			}
+
+			case 'u':
+			{
+				if (!stringToInt(optarg, &options.splitMaxParts) ||
+					options.splitMaxParts < 1)
+				{
+					log_fatal("Failed to parse --split-max-parts: \"%s\"",
+							  optarg);
+					++errors;
+				}
+				log_trace("--split-max-parts %d", options.splitMaxParts);
 				break;
 			}
 
@@ -2039,6 +2076,7 @@ copydb_init_specs_from_listdboptions(CopyDataSpec *copySpecs,
 	strlcpy(options.dir, listDBoptions->dir, MAXPGPATH);
 	options.connStrings = listDBoptions->connStrings;
 	options.splitTablesLargerThan = listDBoptions->splitTablesLargerThan;
+	options.splitMaxParts = listDBoptions->splitMaxParts;
 	options.skipCtidSplit = listDBoptions->skipCtidSplit;
 	options.estimateTableSizes = listDBoptions->estimateTableSizes;
 

@@ -111,7 +111,7 @@ typedef struct SourceCollation
 typedef struct SourceTableParts
 {
 	int partNumber;
-	int partCount;              /* zero when table is not partitionned */
+	int partCount;              /* zero when table is not partitioned */
 
 	int64_t min;                /* WHERE partKey >= min */
 	int64_t max;                /*   AND partKey  < max */
@@ -339,6 +339,7 @@ typedef struct CatalogSetup
 	char *target_pguri;         /* malloc'ed area */
 	char snapshot[BUFSIZE];
 	uint64_t splitTablesLargerThanBytes;
+	int splitMaxParts;
 	char *filters;              /* malloc'ed area */
 	char plugin[BUFSIZE];
 	char slotName[BUFSIZE];
@@ -429,7 +430,8 @@ bool schema_list_ordinary_tables(PGSQL *pgsql,
 bool schema_list_partitions(PGSQL *pgsql,
 							DatabaseCatalog *catalog,
 							SourceTable *table,
-							uint64_t partSize);
+							uint64_t partSize,
+							int splitMaxParts);
 
 bool schema_list_sequences(PGSQL *pgsql,
 						   SourceFilters *filters,

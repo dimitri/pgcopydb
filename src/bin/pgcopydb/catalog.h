@@ -51,6 +51,7 @@ bool catalog_register_setup(DatabaseCatalog *catalog,
 							const char *target_pg_uri,
 							const char *snapshot,
 							uint64_t splitTablesLargerThanBytes,
+							int splitMaxParts,
 							const char *filters);
 
 bool catalog_setup_replication(DatabaseCatalog *catalog,

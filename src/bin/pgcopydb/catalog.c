@@ -33,6 +33,7 @@ static char *sourceDBcreateDDLs[] = {
 	"  target_pg_uri text, "
 	"  snapshot text, "
 	"  split_tables_larger_than integer, "
+	"  split_max_parts integer, "
 	"  filters text, "
 	"  plugin text, "
 	"  slot_name text "
@@ -611,6 +612,7 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 									tpguri.pguri,
 									copySpecs->sourceSnapshot.snapshot,
 									copySpecs->splitTablesLargerThan.bytes,
+									copySpecs->splitMaxParts,
 									json))
 		{
 			/* errors have already been logged */
@@ -712,6 +714,27 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 						  sourceDB->dbfile,
 						  bytesPretty,
 						  copySpecs->splitTablesLargerThan.bytesPretty);
+
+				return false;
+			}
+
+			/*
+			 * Difference in --split-max-parts is only meaningful if
+			 * table-data cache has already been populated.
+			 */
+			if (tablePartsDataSection->fetched &&
+				copySpecs->splitMaxParts != setup->splitMaxParts)
+			{
+				log_debug("setup: %d", setup->splitMaxParts);
+
+				log_debug("specs: %d", copySpecs->splitMaxParts);
+
+				log_error("Catalogs at \"%s\" have been setup for "
+						  "--split-max-parts \"%d\" "
+						  "and current value is \"%d\"",
+						  sourceDB->dbfile,
+						  setup->splitMaxParts,
+						  copySpecs->splitMaxParts);
 
 				return false;
 			}
@@ -1108,6 +1131,7 @@ catalog_register_setup(DatabaseCatalog *catalog,
 					   const char *target_pg_uri,
 					   const char *snapshot,
 					   uint64_t splitTablesLargerThanBytes,
+					   int splitMaxParts,
 					   const char *filters)
 {
 	sqlite3 *db = catalog->db;
@@ -1121,8 +1145,8 @@ catalog_register_setup(DatabaseCatalog *catalog,
 	char *sql =
 		"insert into setup("
 		"  id, source_pg_uri, target_pg_uri, snapshot, filters, "
-		"  split_tables_larger_than) "
-		"values($1, $2, $3, $4, $5, $6)";
+		"  split_tables_larger_than, split_max_parts) "
+		"values($1, $2, $3, $4, $5, $6, $7)";
 
 	SQLiteQuery query = { 0 };
 
@@ -1134,18 +1158,36 @@ catalog_register_setup(DatabaseCatalog *catalog,
 		{ BIND_PARAMETER_TYPE_TEXT, "filters", 0, (char *) filters },
 
 		{ BIND_PARAMETER_TYPE_INT64, "split_tables_larger_than",
-		  splitTablesLargerThanBytes, NULL }
+		  splitTablesLargerThanBytes, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "split_max_parts",
+		  splitMaxParts, NULL }
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
 
-	/* skip splitTableLargerThanBytes when it's not been set */
+	/*
+	 * skip splitTableLargerThanBytes, and splitMaxParts when
+	 * splitTableLargerThanBytes has not been set.
+	 *
+	 * skip only splitMaxParts when only splitMaxParts has not been
+	 * set.
+	 */
 	if (splitTablesLargerThanBytes == 0)
 	{
 		sql =
 			"insert into setup("
 			"  id, source_pg_uri, target_pg_uri, snapshot, filters) "
 			"values($1, $2, $3, $4, $5)";
+
+		count -= 2;
+	}
+	else if (splitMaxParts == 0)
+	{
+		sql =
+			"insert into setup("
+			"  id, source_pg_uri, target_pg_uri, snapshot, filters, "
+			"  split_tables_larger_than) "
+			"values($1, $2, $3, $4, $5, $6)";
 
 		--count;
 	}
@@ -1194,8 +1236,9 @@ catalog_setup(DatabaseCatalog *catalog)
 
 	char *sql =
 		"select id, source_pg_uri, target_pg_uri, snapshot, "
-		"       split_tables_larger_than, filters, plugin, slot_name "
-		"  from setup";
+		"       split_tables_larger_than, split_max_parts, filters, "
+		"       plugin, slot_name "
+		"from setup";
 
 	if (!semaphore_lock(&(catalog->sema)))
 	{
@@ -1252,13 +1295,16 @@ catalog_update_setup(CopyDataSpec *copySpecs)
 	char *sql =
 		"update setup "
 		"   set target_pg_uri = $1, "
-		"       split_tables_larger_than = $2 "
+		"       split_tables_larger_than = $2, "
+		"       split_max_parts = $3 "
 		" where id = 1";
 
 	BindParam params[] = {
 		{ BIND_PARAMETER_TYPE_TEXT, "target_pg_uri", 0, (char *) tpguri.pguri },
 		{ BIND_PARAMETER_TYPE_INT64, "split_tables_larger_than",
-		  copySpecs->splitTablesLargerThan.bytes, NULL }
+		  copySpecs->splitTablesLargerThan.bytes, NULL },
+		{ BIND_PARAMETER_TYPE_INT, "split_max_parts",
+		  copySpecs->splitMaxParts, NULL }
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -1371,15 +1417,20 @@ catalog_setup_fetch(SQLiteQuery *query)
 	setup->splitTablesLargerThanBytes = sqlite3_column_int64(query->ppStmt, 4);
 
 	/*
+	 * split-max-parts
+	 */
+	setup->splitMaxParts = sqlite3_column_int(query->ppStmt, 5);
+
+	/*
 	 * filters
 	 */
-	if (sqlite3_column_type(query->ppStmt, 5) == SQLITE_NULL)
+	if (sqlite3_column_type(query->ppStmt, 6) == SQLITE_NULL)
 	{
 		setup->filters = NULL;
 	}
 	else
 	{
-		int len = sqlite3_column_bytes(query->ppStmt, 5);
+		int len = sqlite3_column_bytes(query->ppStmt, 6);
 		int bytes = len + 1;
 
 		setup->filters = (char *) calloc(bytes, sizeof(char));
@@ -1391,27 +1442,27 @@ catalog_setup_fetch(SQLiteQuery *query)
 		}
 
 		strlcpy(setup->filters,
-				(char *) sqlite3_column_text(query->ppStmt, 5),
+				(char *) sqlite3_column_text(query->ppStmt, 6),
 				bytes);
 	}
 
 	/*
 	 * plugin (a string buffer)
 	 */
-	if (sqlite3_column_type(query->ppStmt, 6) != SQLITE_NULL)
+	if (sqlite3_column_type(query->ppStmt, 7) != SQLITE_NULL)
 	{
 		strlcpy(setup->plugin,
-				(char *) sqlite3_column_text(query->ppStmt, 6),
+				(char *) sqlite3_column_text(query->ppStmt, 7),
 				sizeof(setup->plugin));
 	}
 
 	/*
 	 * slot_name (a string buffer)
 	 */
-	if (sqlite3_column_type(query->ppStmt, 7) != SQLITE_NULL)
+	if (sqlite3_column_type(query->ppStmt, 8) != SQLITE_NULL)
 	{
 		strlcpy(setup->slotName,
-				(char *) sqlite3_column_text(query->ppStmt, 7),
+				(char *) sqlite3_column_text(query->ppStmt, 8),
 				sizeof(setup->slotName));
 	}
 

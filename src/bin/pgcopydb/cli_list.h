@@ -39,6 +39,7 @@ typedef struct ListDBOptions
 	char snapshot[BUFSIZE];
 
 	SplitTableLargerThan splitTablesLargerThan;
+	int splitMaxParts;
 	bool estimateTableSizes;
 } ListDBOptions;
 

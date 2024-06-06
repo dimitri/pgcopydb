@@ -46,3 +46,14 @@ pgcopydb list table-parts --dir ${DIR} \
     --split-tables-larger-than "10 kB" \
     --skip-split-by-ctid 2>&1
 
+
+# Now we will test the limits on the number of parts
+DIR=/tmp/unit/split-with-limits
+OPTS+=" --split-max-parts 3"
+
+pgcopydb list schema --dir ${DIR} ${OPTS} >/dev/null
+
+# limits on the number of parts will be respected, and we will see 3 parts now
+pgcopydb list table-parts --dir ${DIR} \
+    --schema-name "public" --table-name "table_1" \
+    --split-tables-larger-than "10 kB" --split-max-parts 3 2>&1

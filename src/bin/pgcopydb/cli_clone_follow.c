@@ -34,6 +34,7 @@
 	"  --restore-jobs                Number of concurrent jobs for pg_restore\n" \
 	"  --large-objects-jobs          Number of concurrent Large Objects jobs to run\n" \
 	"  --split-tables-larger-than    Same-table concurrency size threshold\n" \
+	"  --split-max-parts             Maximum number of jobs for Same-table concurrency \n" \
 	"  --estimate-table-sizes        Allow using estimates for relation sizes\n" \
 	"  --drop-if-exists              On the target database, clean-up from a previous run first\n" \
 	"  --roles                       Also copy roles found on source to target\n" \
