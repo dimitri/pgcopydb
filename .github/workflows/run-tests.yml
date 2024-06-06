@@ -62,7 +62,7 @@ jobs:
     runs-on: ubuntu-latest
     container: citus/stylechecker:latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v3 # intentionally using v3 to avoid v4 bug
 
     - name: Check C style
       run: citus_indent --check
@@ -71,7 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Build docs
         uses: ammaraskar/sphinx-action@master
         with:
