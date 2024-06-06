@@ -235,8 +235,7 @@ cli_list_getenv(ListDBOptions *options)
 				++errors;
 			}
 			else if (!stringToInt(maxParts, &options->splitMaxParts) ||
-					 options->splitMaxParts < 1 ||
-					 options->splitMaxParts > 128)
+					 options->splitMaxParts < 1)
 			{
 				log_fatal("Failed to parse PGCOPYDB_SPLIT_MAX_PARTS: \"%s\"",
 						  maxParts);
@@ -417,8 +416,7 @@ cli_list_db_getopts(int argc, char **argv)
 			case 'u':
 			{
 				if (!stringToInt(optarg, &options.splitMaxParts) ||
-					options.splitMaxParts < 1 ||
-					options.splitMaxParts > 128)
+					options.splitMaxParts < 1)
 				{
 					log_fatal("Failed to parse --split-max-parts: \"%s\"",
 							  optarg);
