@@ -402,6 +402,12 @@ pg_dump_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = (char *) snapshot;
 	}
 
+	/*
+	 * To address a migration issue (https://github.com/dimitri/pgcopydb/issues/760),
+	 * we need to dump the pre-data and post-data sections together in a single file.
+	 * Using --schema-only instead is not an option because it does not include
+	 * the necessary large object metadata.
+	 */
 	args[argsIndex++] = "--section=pre-data";
 	args[argsIndex++] = "--section=post-data";
 
@@ -897,9 +903,10 @@ pg_restore_db(PostgresPaths *pgPaths,
 	args[argsIndex++] = "--dbname";
 	args[argsIndex++] = (char *) connStrings->safeTargetPGURI.pguri;
 
-	const char *sectionOption = sectionOptionToString(options.section);
+	const char *sectionOption = postgresDumpSectionToString(options.section);
 	if (sectionOption != NULL)
 	{
+		args[argsIndex++] = "--section";
 		args[argsIndex++] = (char *) sectionOption;
 	}
 

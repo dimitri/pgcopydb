@@ -264,19 +264,6 @@ typedef struct CopyDataSpec
 	Catalogs catalogs;
 } CopyDataSpec;
 
-
-/* specify section of a dump: pre-data, post-data, data, schema */
-typedef enum
-{
-	PG_DUMP_SECTION_ALL = 0,
-	PG_DUMP_SECTION_SCHEMA,
-	PG_DUMP_SECTION_PRE_DATA,
-	PG_DUMP_SECTION_POST_DATA,
-	PG_DUMP_SECTION_DATA,
-	PG_DUMP_SECTION_ROLES       /* pg_dumpall --roles-only */
-} PostgresDumpSection;
-
-
 extern GUC srcSettings95[];
 extern GUC srcSettings[];
 extern GUC dstSettings[];

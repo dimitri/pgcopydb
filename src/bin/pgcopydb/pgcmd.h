@@ -182,32 +182,33 @@ typedef struct ArchiveContentArray
 	ArchiveContentItem *array;  /* malloc'ed area */
 } ArchiveContentArray;
 
-
-/*
- * Section options to use with pg_dump and pg_restore.
- */
+/* specify section of a dump: pre-data, post-data, data, schema */
 typedef enum
 {
-	PRE_DATA = 0,
-	POST_DATA,
-} SectionOption;
+	PG_DUMP_SECTION_ALL = 0,
+	PG_DUMP_SECTION_SCHEMA,
+	PG_DUMP_SECTION_PRE_DATA,
+	PG_DUMP_SECTION_POST_DATA,
+	PG_DUMP_SECTION_DATA,
+	PG_DUMP_SECTION_ROLES       /* pg_dumpall --roles-only */
+} PostgresDumpSection;
 
 /*
- * Convert SectionOption to string.
+ * Convert PostgresDumpSection to string.
  */
 static inline const char *
-sectionOptionToString(SectionOption section)
+postgresDumpSectionToString(PostgresDumpSection section)
 {
 	switch (section)
 	{
-		case PRE_DATA:
+		case PG_DUMP_SECTION_PRE_DATA:
 		{
-			return "--section=pre-data";
+			return "pre-data";
 		}
 
-		case POST_DATA:
+		case PG_DUMP_SECTION_POST_DATA:
 		{
-			return "--section=post-data";
+			return "post-data";
 		}
 
 		default:
@@ -226,7 +227,7 @@ typedef struct RestoreOptions
 	bool noACL;
 	bool noTableSpaces;
 	int jobs;
-	SectionOption section;
+	PostgresDumpSection section;
 } RestoreOptions;
 
 bool psql_version(PostgresPaths *pgPaths);
