@@ -183,6 +183,41 @@ typedef struct ArchiveContentArray
 } ArchiveContentArray;
 
 
+/*
+ * Section options to use with pg_dump and pg_restore.
+ */
+typedef enum
+{
+	PRE_DATA = 0,
+	POST_DATA,
+} SectionOption;
+
+/*
+ * Convert SectionOption to string.
+ */
+static inline const char *
+sectionOptionToString(SectionOption section)
+{
+	switch (section)
+	{
+		case PRE_DATA:
+		{
+			return "--section=pre-data";
+		}
+
+		case POST_DATA:
+		{
+			return "--section=post-data";
+		}
+
+		default:
+		{
+			return NULL;
+		}
+	}
+}
+
+
 typedef struct RestoreOptions
 {
 	bool dropIfExists;
@@ -191,7 +226,7 @@ typedef struct RestoreOptions
 	bool noACL;
 	bool noTableSpaces;
 	int jobs;
-	char section[BUFSIZE];
+	SectionOption section;
 } RestoreOptions;
 
 bool psql_version(PostgresPaths *pgPaths);

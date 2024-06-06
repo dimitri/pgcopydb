@@ -201,8 +201,7 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 		}
 	}
 
-	strlcpy(specs->restoreOptions.section, "pre-data",
-			sizeof(specs->restoreOptions.section));
+	specs->restoreOptions.section = PRE_DATA;
 	if (!pg_restore_db(&(specs->pgPaths),
 					   &(specs->connStrings),
 					   &(specs->filters),
@@ -546,8 +545,7 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 		return false;
 	}
 
-	strlcpy(specs->restoreOptions.section, "post-data",
-			sizeof(specs->restoreOptions.section));
+	specs->restoreOptions.section = POST_DATA;
 	if (!pg_restore_db(&(specs->pgPaths),
 					   &(specs->connStrings),
 					   &(specs->filters),

@@ -401,7 +401,6 @@ pg_dump_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = (char *) snapshot;
 	}
 
-	/* args[argsIndex++] = "--schema-only"; */
 	args[argsIndex++] = "--section=pre-data";
 	args[argsIndex++] = "--section=post-data";
 
@@ -897,10 +896,10 @@ pg_restore_db(PostgresPaths *pgPaths,
 	args[argsIndex++] = "--dbname";
 	args[argsIndex++] = (char *) connStrings->safeTargetPGURI.pguri;
 
-	if (!IS_EMPTY_STRING_BUFFER(options.section))
+	const char *sectionOption = sectionOptionToString(options.section);
+	if (sectionOption != NULL)
 	{
-		args[argsIndex++] = "--section";
-		args[argsIndex++] = options.section;
+		args[argsIndex++] = (char *) sectionOption;
 	}
 
 	if (options.jobs == 1)
