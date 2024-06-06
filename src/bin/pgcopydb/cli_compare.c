@@ -92,11 +92,6 @@ cli_compare_getopts(int argc, char **argv)
 
 	optind = 0;
 
-	/* install default values */
-	options.tableJobs = DEFAULT_TABLE_JOBS;
-	options.indexJobs = DEFAULT_INDEX_JOBS;
-	options.lObjectJobs = DEFAULT_LARGE_OBJECTS_JOBS;
-
 	/* read values from the environment */
 	if (!cli_copydb_getenv(&options))
 	{

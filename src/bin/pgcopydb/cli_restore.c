@@ -182,10 +182,6 @@ cli_restore_schema_getopts(int argc, char **argv)
 
 	optind = 0;
 
-	/* install default values */
-	options.indexJobs = DEFAULT_INDEX_JOBS;
-	options.restoreOptions.jobs = DEFAULT_RESTORE_JOBS;
-
 	/* read values from the environment */
 	if (!cli_copydb_getenv(&options))
 	{
