@@ -111,7 +111,7 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 
 	if (file_exists(specs->dumpPaths.dumpFilename))
 	{
-		log_info("Skipping pg_dump --section=pre-data, "
+		log_info("Skipping source schema dump, "
 				 "as \"%s\" already exists",
 				 specs->dumpPaths.dumpFilename);
 	}
