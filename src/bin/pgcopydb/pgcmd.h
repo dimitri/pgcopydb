@@ -217,7 +217,9 @@ postgresDumpSectionToString(PostgresDumpSection section)
 			return "data";
 		}
 
-		case PG_DUMP_SECTION_SCHEMA | PG_DUMP_SECTION_ROLES | PG_DUMP_SECTION_ALL:
+		case PG_DUMP_SECTION_SCHEMA:
+		case PG_DUMP_SECTION_ROLES:
+		case PG_DUMP_SECTION_ALL:
 		{
 			log_error(
 				"BUG: postgresDumpSectionToString called with unexpected section %d",
