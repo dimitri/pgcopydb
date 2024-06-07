@@ -16,6 +16,7 @@
 #include "defaults.h"
 #include "file_utils.h"
 #include "filtering.h"
+#include "log.h"
 #include "parsing_utils.h"
 #include "pgsql.h"
 #include "schema.h"
@@ -211,8 +212,22 @@ postgresDumpSectionToString(PostgresDumpSection section)
 			return "post-data";
 		}
 
+		case PG_DUMP_SECTION_DATA:
+		{
+			return "data";
+		}
+
+		case PG_DUMP_SECTION_SCHEMA | PG_DUMP_SECTION_ROLES | PG_DUMP_SECTION_ALL:
+		{
+			log_error(
+				"BUG: postgresDumpSectionToString called with unexpected section %d",
+				section);
+			return NULL;
+		}
+
 		default:
 		{
+			log_error("unknown pg_dump section %d", section);
 			return NULL;
 		}
 	}
