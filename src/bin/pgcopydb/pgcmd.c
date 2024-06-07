@@ -358,7 +358,7 @@ typedef struct DumpExtensionNamespaceContext
 
 
 /*
- * Call pg_dump and get the given pre-data post-data sections of
+ * Call pg_dump and get the given pre-data and post-data sections of
  * the dump into the target file.
  */
 bool

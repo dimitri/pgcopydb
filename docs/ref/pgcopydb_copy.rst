@@ -473,8 +473,7 @@ Now, first dump the schema:
    14:28:50 22 INFO   Dumping database into directory "/tmp/pgcopydb"
    14:28:50 22 INFO   Using pg_dump for Postgres "16.1" at "/usr/bin/pg_dumpall"
    14:28:50 22 INFO   Exported snapshot "00000003-00000022-1" from the source database
-   14:28:50 22 INFO    /usr/bin/pg_dump -Fc --snapshot 00000003-00000022-1 --section pre-data --file /tmp/pgcopydb/schema/pre.dump 'postgres://pagila@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60'
-   14:28:51 22 INFO    /usr/bin/pg_dump -Fc --snapshot 00000003-00000022-1 --section post-data --file /tmp/pgcopydb/schema/post.dump 'postgres://pagila@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60'
+   14:28:50 22 INFO    /usr/bin/pg_dump -Fc --snapshot 00000003-00000022-1 --section pre-data --section post-data --file /tmp/pgcopydb/schema/schema.dump 'postgres://pagila@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60'
 
 Now restore the pre-data schema on the target database, cleaning up the
 already existing objects if any, which allows running this test scenario
@@ -608,4 +607,4 @@ Finally we can restore the post-data section of the schema:
    14:28:54 60 INFO   Restoring database from existing files at "/tmp/pgcopydb"
    14:28:54 60 INFO   Using pg_restore for Postgres "16.1" at "/usr/bin/pg_restore"
    14:28:54 60 INFO   [TARGET] Restoring database into "postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
-   14:28:55 60 INFO    /usr/bin/pg_restore --dbname 'postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60' --single-transaction --use-list /tmp/pgcopydb/schema/post-filtered.list /tmp/pgcopydb/schema/post.dump
+   14:28:55 60 INFO    /usr/bin/pg_restore --dbname 'postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60' --single-transaction --use-list /tmp/pgcopydb/schema/post-filtered.list /tmp/pgcopydb/schema/schema.dump

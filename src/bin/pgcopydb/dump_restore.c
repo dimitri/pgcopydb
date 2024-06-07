@@ -137,7 +137,7 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 
 
 /*
- * copydb_target_prepare_schema restores the pre.dump file into the target
+ * copydb_target_prepare_schema restores the schema.dump file into the target
  * database.
  */
 bool
@@ -607,20 +607,20 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 	}
 
 	/*
-	 * The pre.dump archive file contains all the objects to create in the
+	 * The schema.dump archive file contains all the objects to create in the
 	 * target database. We want to filter out the schemas and tables excluded
 	 * from the filtering setup.
 	 *
-	 * The post.dump archive file contains all the objects to create once the
+	 * This archive file also contains all the objects to create once the
 	 * table data has been copied over. It contains in particular the
 	 * constraints and indexes that we have already built concurrently in the
 	 * previous step, so we want to filter those out.
 	 *
 	 * Here's how to filter out some objects with pg_restore:
 	 *
-	 *   1. pg_restore -f post.list --list post.dump
+	 *   1. pg_restore -f post.list --list schema.dump
 	 *   2. edit post.list to comment out lines and save as filtered.list
-	 *   3. pg_restore --use-list filtered.list post.dump
+	 *   3. pg_restore --use-list filtered.list schema.dump
 	 */
 	ArchiveContentArray contents = { 0 };
 

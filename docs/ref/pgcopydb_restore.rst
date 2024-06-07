@@ -101,7 +101,7 @@ expected location within the ``--target`` directory, which has typically
 been created with the ``pgcopydb dump schema`` command.
 
 The ``pgcopydb restore pre-data`` and ``pgcopydb restore post-data`` are
-limiting their action to respectively the pre-data and the post-data files
+limiting their actions to the file with pre-data and post-data
 in the source directory..
 
 Options
@@ -290,8 +290,8 @@ First, using ``pgcopydb restore schema``
    09:54:37 20401 INFO  Found a stale pidfile at "/tmp/target//pgcopydb.pid"
    09:54:37 20401 WARN  Removing the stale pid file "/tmp/target//pgcopydb.pid"
    09:54:37 20401 INFO  Using pg_restore for Postgres "12.9" at "/Applications/Postgres.app/Contents/Versions/12/bin/pg_restore"
-   09:54:37 20401 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_restore --dbname 'port=54314 dbname=demo' --clean --if-exists /tmp/target//schema/pre.dump
-   09:54:38 20401 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_restore --dbname 'port=54314 dbname=demo' --clean --if-exists --use-list /tmp/target//schema/post.list /tmp/target//schema/post.dump
+   09:54:37 20401 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_restore --dbname 'port=54314 dbname=demo' --clean --if-exists /tmp/target//schema/schema.dump
+   09:54:38 20401 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_restore --dbname 'port=54314 dbname=demo' --clean --if-exists --use-list /tmp/target//schema/post.list /tmp/target//schema/schema.dump
 
 
 Then the ``pgcopydb restore pre-data`` and ``pgcopydb restore post-data``
