@@ -2194,7 +2194,7 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 					{
 						/* only works because old->values.count == 1 */
 						LogicalMessageValue *oldValue =
-							&(old->values.array[0].array[v]);
+							&(old->values.array[0].array[oc]);
 
 						if (LogicalMessageValueEq(oldValue, value))
 						{
