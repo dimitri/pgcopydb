@@ -919,10 +919,9 @@ Examples
    14:49:01 24 INFO   Fetched information for 54 indexes
    14:49:01 24 INFO   Fetching information for 13 sequences
    14:49:01 24 INFO   STEP 2: dump the source database schema (pre/post data)
-   14:49:01 24 INFO    /usr/bin/pg_dump -Fc --snapshot 00000003-00000022-1 --section pre-data --file /tmp/pgcopydb/schema/pre.dump 'postgres://pagila@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60'
-   14:49:01 24 INFO    /usr/bin/pg_dump -Fc --snapshot 00000003-00000022-1 --section post-data --file /tmp/pgcopydb/schema/post.dump 'postgres://pagila@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60'
+   14:49:01 24 INFO    /usr/bin/pg_dump -Fc --snapshot 00000003-00000022-1 --section pre-data --section post-data --file /tmp/pgcopydb/schema/schema.dump 'postgres://pagila@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60'
    14:49:02 24 INFO   STEP 3: restore the pre-data section to the target database
-   14:49:02 24 INFO    /usr/bin/pg_restore --dbname 'postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60' --single-transaction --use-list /tmp/pgcopydb/schema/pre-filtered.list /tmp/pgcopydb/schema/pre.dump
+   14:49:02 24 INFO    /usr/bin/pg_restore --dbname 'postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60' --single-transaction --use-list /tmp/pgcopydb/schema/pre-filtered.list /tmp/pgcopydb/schema/schema.dump
    14:49:02 24 INFO   STEP 6: starting 12 CREATE INDEX processes
    14:49:02 24 INFO   STEP 7: constraints are built by the CREATE INDEX processes
    14:49:02 24 INFO   STEP 8: starting 8 VACUUM processes
@@ -932,7 +931,7 @@ Examples
    14:49:02 52 INFO   Reset sequences values on the target database
    14:49:02 51 INFO   Added 0 large objects to the queue
    14:49:04 24 INFO   STEP 10: restore the post-data section to the target database
-   14:49:04 24 INFO    /usr/bin/pg_restore --dbname 'postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60' --single-transaction --use-list /tmp/pgcopydb/schema/post-filtered.list /tmp/pgcopydb/schema/post.dump
+   14:49:04 24 INFO    /usr/bin/pg_restore --dbname 'postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60' --single-transaction --use-list /tmp/pgcopydb/schema/post-filtered.list /tmp/pgcopydb/schema/schema.dump
 
      OID | Schema |             Name | copy duration | transmitted bytes | indexes | create index duration
    ------+--------+------------------+---------------+-------------------+---------+----------------------

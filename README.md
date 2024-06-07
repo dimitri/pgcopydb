@@ -78,8 +78,6 @@ $ pgcopydb help
 
   pgcopydb dump
     schema     Dump source database schema as custom files in work directory
-    pre-data   Dump source database pre-data schema as custom files in work directory
-    post-data  Dump source database post-data schema as custom files in work directory
     roles      Dump source database roles as custom file in work directory
 
   pgcopydb restore
@@ -145,10 +143,9 @@ an overall summary that looks like the following:
 18:26:35 77615 INFO  [SOURCE] Copying database from "port=54311 host=localhost dbname=pgloader"
 18:26:35 77615 INFO  [TARGET] Copying database into "port=54311 dbname=plop"
 18:26:35 77615 INFO  STEP 1: dump the source database schema (pre/post data)
-18:26:35 77615 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_dump -Fc --section pre-data --file /tmp/pgcopydb/schema/pre.dump 'port=54311 host=localhost dbname=pgloader'
-18:26:35 77615 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_dump -Fc --section post-data --file /tmp/pgcopydb/schema/post.dump 'port=54311 host=localhost dbname=pgloader'
+18:26:35 77615 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_dump -Fc --section pre-data --section post-data --file /tmp/pgcopydb/schema/schema.dump 'port=54311 host=localhost dbname=pgloader'
 18:26:36 77615 INFO  STEP 2: restore the pre-data section to the target database
-18:26:36 77615 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_restore --dbname 'port=54311 dbname=plop' /tmp/pgcopydb/schema/pre.dump
+18:26:36 77615 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_restore --dbname 'port=54311 dbname=plop' /tmp/pgcopydb/schema/schema.dump
 18:26:36 77615 INFO  STEP 3: copy data from source to target in sub-processes
 18:26:36 77615 INFO  STEP 4: create indexes and constraints in parallel
 18:26:36 77615 INFO  STEP 5: vacuum analyze each table
@@ -156,7 +153,7 @@ an overall summary that looks like the following:
 18:26:36 77615 INFO  Fetched information for 56 tables
 ...
 18:26:37 77615 INFO  STEP 6: restore the post-data section to the target database
-18:26:37 77615 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_restore --dbname 'port=54311 dbname=plop' --use-list /tmp/pgcopydb/schema/post.list /tmp/pgcopydb/schema/post.dump
+18:26:37 77615 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_restore --dbname 'port=54311 dbname=plop' --use-list /tmp/pgcopydb/schema/post.list /tmp/pgcopydb/schema/schema.dump
 
   OID |   Schema |            Name | copy duration | indexes | create index duration
 ------+----------+-----------------+---------------+---------+----------------------
