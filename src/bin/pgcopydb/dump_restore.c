@@ -201,7 +201,7 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 		}
 	}
 
-	specs->restoreOptions.section = PG_DUMP_SECTION_PRE_DATA;
+	specs->restoreOptions.section = PG_RESTORE_SECTION_PRE_DATA;
 	if (!pg_restore_db(&(specs->pgPaths),
 					   &(specs->connStrings),
 					   &(specs->filters),
@@ -545,7 +545,7 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 		return false;
 	}
 
-	specs->restoreOptions.section = PG_DUMP_SECTION_POST_DATA;
+	specs->restoreOptions.section = PG_RESTORE_SECTION_POST_DATA;
 	if (!pg_restore_db(&(specs->pgPaths),
 					   &(specs->connStrings),
 					   &(specs->filters),

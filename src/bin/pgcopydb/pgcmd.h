@@ -194,42 +194,38 @@ typedef enum
 	PG_DUMP_SECTION_ROLES       /* pg_dumpall --roles-only */
 } PostgresDumpSection;
 
+
+/*
+ * Enumeration representing the different section options of
+ * a Postgres restore operation.
+ */
+typedef enum
+{
+	PG_RESTORE_SECTION_PRE_DATA = 0,
+	PG_RESTORE_SECTION_POST_DATA,
+} PostgresRestoreSection;
+
 /*
  * Convert PostgresDumpSection to string.
  */
 static inline const char *
-postgresDumpSectionToString(PostgresDumpSection section)
+postgresRestoreSectionToString(PostgresRestoreSection section)
 {
 	switch (section)
 	{
-		case PG_DUMP_SECTION_PRE_DATA:
+		case PG_RESTORE_SECTION_PRE_DATA:
 		{
 			return "pre-data";
 		}
 
-		case PG_DUMP_SECTION_POST_DATA:
+		case PG_RESTORE_SECTION_POST_DATA:
 		{
 			return "post-data";
 		}
 
-		case PG_DUMP_SECTION_DATA:
-		{
-			return "data";
-		}
-
-		case PG_DUMP_SECTION_SCHEMA:
-		case PG_DUMP_SECTION_ROLES:
-		case PG_DUMP_SECTION_ALL:
-		{
-			log_error(
-				"BUG: postgresDumpSectionToString called with unexpected section %d",
-				section);
-			return NULL;
-		}
-
 		default:
 		{
-			log_error("unknown pg_dump section %d", section);
+			log_error("unknown PostgresRestoreSection value %d", section);
 			return NULL;
 		}
 	}
@@ -244,7 +240,7 @@ typedef struct RestoreOptions
 	bool noACL;
 	bool noTableSpaces;
 	int jobs;
-	PostgresDumpSection section;
+	PostgresRestoreSection section;
 } RestoreOptions;
 
 bool psql_version(PostgresPaths *pgPaths);

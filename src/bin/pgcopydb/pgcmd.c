@@ -903,12 +903,15 @@ pg_restore_db(PostgresPaths *pgPaths,
 	args[argsIndex++] = "--dbname";
 	args[argsIndex++] = (char *) connStrings->safeTargetPGURI.pguri;
 
-	const char *sectionOption = postgresDumpSectionToString(options.section);
-	if (sectionOption != NULL)
+	const char *sectionOption = postgresRestoreSectionToString(options.section);
+	if (sectionOption == NULL)
 	{
-		args[argsIndex++] = "--section";
-		args[argsIndex++] = (char *) sectionOption;
+		/* errors have already been logged */
+		return false;
 	}
+
+	args[argsIndex++] = "--section";
+	args[argsIndex++] = (char *) sectionOption;
 
 	if (options.jobs == 1)
 	{

@@ -922,7 +922,6 @@ Examples
    08:13:14.678 42904 INFO   Skipping large objects: none found.
    08:13:14.693 42920 INFO   STEP 6: starting 2 CREATE INDEX processes
    08:13:14.693 42920 INFO   STEP 7: constraints are built by the CREATE INDEX processes
-   2024-06-10 08:13:14.695 +03 [42955] LOG:  unexpected EOF on client connection with an open transaction
    08:13:14.699 42904 INFO   STEP 9: reset sequences values
    08:13:14.700 42959 INFO   Set sequences values on the target database
    08:13:16.716 42904 INFO   STEP 10: restore the post-data section to the target database
