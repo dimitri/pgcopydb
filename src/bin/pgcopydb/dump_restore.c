@@ -620,7 +620,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 	 *
 	 *   1. pg_restore -f post.list --list schema.dump
 	 *   2. edit post.list to comment out lines and save as filtered.list
-	 *   3. pg_restore --use-list filtered.list schema.dump
+	 *   3. pg_restore --section post-data --use-list filtered.list schema.dump
 	 */
 	ArchiveContentArray contents = { 0 };
 

@@ -140,38 +140,53 @@ the table COPY, cumulative timing for the CREATE INDEX commands), and then
 an overall summary that looks like the following:
 
 ```
-18:26:35 77615 INFO  [SOURCE] Copying database from "port=54311 host=localhost dbname=pgloader"
-18:26:35 77615 INFO  [TARGET] Copying database into "port=54311 dbname=plop"
-18:26:35 77615 INFO  STEP 1: dump the source database schema (pre/post data)
-18:26:35 77615 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_dump -Fc --section pre-data --section post-data --file /tmp/pgcopydb/schema/schema.dump 'port=54311 host=localhost dbname=pgloader'
-18:26:36 77615 INFO  STEP 2: restore the pre-data section to the target database
-18:26:36 77615 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_restore --dbname 'port=54311 dbname=plop' /tmp/pgcopydb/schema/schema.dump
-18:26:36 77615 INFO  STEP 3: copy data from source to target in sub-processes
-18:26:36 77615 INFO  STEP 4: create indexes and constraints in parallel
-18:26:36 77615 INFO  STEP 5: vacuum analyze each table
-18:26:36 77615 INFO  Listing ordinary tables in "port=54311 host=localhost dbname=pgloader"
-18:26:36 77615 INFO  Fetched information for 56 tables
-...
-18:26:37 77615 INFO  STEP 6: restore the post-data section to the target database
-18:26:37 77615 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_restore --dbname 'port=54311 dbname=plop' --use-list /tmp/pgcopydb/schema/post.list /tmp/pgcopydb/schema/schema.dump
+07:54:31.646 40543 INFO   [SOURCE] Copying database from "postgres://user@source.host.dev/dbname?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
+07:54:31.646 40543 INFO   [TARGET] Copying database into "postgres://role@target.host.dev/dbname?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
+07:54:31.711 40543 INFO   Using work dir "/tmp/pgcopydb"
+07:54:31.719 40543 INFO   Exported snapshot "00000003-000000D1-1" from the source database
+07:54:31.722 40554 INFO   STEP 1: fetch source database tables, indexes, and sequences
+07:54:32.046 40554 INFO   Fetched information for 1 tables (including 0 tables split in 0 partitions total), with an estimated total of 18 quintillion tuples and 8192 B on-disk
+07:54:32.050 40554 INFO   Fetched information for 1 indexes (supporting 1 constraints)
+07:54:32.051 40554 INFO   Fetching information for 1 sequences
+07:54:32.062 40554 INFO   Fetched information for 1 extensions
+07:54:32.150 40554 INFO   Found 1 indexes (supporting 1 constraints) in the target database
+07:54:32.157 40554 INFO   STEP 2: dump the source database schema (pre/post data)
+07:54:32.161 40554 INFO    /usr/bin/pg_dump -Fc --snapshot 00000003-000000D1-1 --section=pre-data --section=post-data --file /tmp/pgcopydb/schema/schema.dump 'postgres://user@source.host.dev/dbname?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60'
+07:54:32.227 40554 INFO   STEP 3: restore the pre-data section to the target database
+07:54:32.238 40554 INFO    /usr/bin/pg_restore --dbname 'postgres://role@target.host.dev/dbname?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60' --section pre-data --jobs 2 --use-list /tmp/pgcopydb/schema/pre-filtered.list /tmp/pgcopydb/schema/schema.dump
+07:54:32.302 40569 INFO   STEP 4: starting 8 table-data COPY processes
+07:54:32.321 40571 INFO   STEP 8: starting 8 VACUUM processes
+07:54:32.330 40554 INFO   Skipping large objects: none found.
+07:54:32.332 40570 INFO   STEP 6: starting 2 CREATE INDEX processes
+07:54:32.332 40570 INFO   STEP 7: constraints are built by the CREATE INDEX processes
+2024-06-10 07:54:32.333 +03 [40597] LOG:  unexpected EOF on client connection with an open transaction
+07:54:32.342 40554 INFO   STEP 9: reset sequences values
+07:54:32.344 40609 INFO   Set sequences values on the target database
+07:54:32.547 40554 INFO   STEP 10: restore the post-data section to the target database
+07:54:32.554 40554 INFO    /usr/bin/pg_restore --dbname 'postgres://role@target.host.dev/dbname?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60' --section post-data --jobs 2 --use-list /tmp/pgcopydb/schema/post-filtered.list /tmp/pgcopydb/schema/schema.dump
+07:54:32.583 40554 INFO   All step are now done, 857ms elapsed
+07:54:32.583 40554 INFO   Printing summary for 1 tables and 1 indexes
 
-  OID |   Schema |            Name | copy duration | indexes | create index duration
-------+----------+-----------------+---------------+---------+----------------------
-17085 |      csv |           track |          62ms |       1 |                  24ms
-  ...
-  ...
+  OID | Schema |   Name | Parts | copy duration | transmitted bytes | indexes | create index duration
+------+--------+--------+-------+---------------+-------------------+---------+----------------------
+16386 | public | table1 |     1 |          22ms |             984 B |       1 |                  11ms
 
-                                          Step   Connection    Duration   Concurrency
- ---------------------------------------------   ----------  ----------  ------------
-                                   Dump Schema       source       884ms             1
-                                Prepare Schema       target       405ms             1
- COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both       1s281         8 + 2
-                             COPY (cumulative)         both       2s040             8
-                     CREATE INDEX (cumulative)       target       381ms             2
-                               Finalize Schema       target        29ms             1
- ---------------------------------------------   ----------  ----------  ------------
-                     Total Wall Clock Duration         both       2s639         8 + 2
- ---------------------------------------------   ----------  ----------  ------------
+
+                                               Step   Connection    Duration    Transfer   Concurrency
+ --------------------------------------------------   ----------  ----------  ----------  ------------
+   Catalog Queries (table ordering, filtering, etc)       source       126ms                         1
+                                        Dump Schema       source        66ms                         1
+                                     Prepare Schema       target        46ms                         1
+      COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both       263ms                        18
+                                  COPY (cumulative)         both        22ms      8192 B             8
+                          CREATE INDEX (cumulative)       target         8ms                         2
+                           CONSTRAINTS (cumulative)       target         3ms                         2
+                                VACUUM (cumulative)       target         8ms                         8
+                                    Reset Sequences         both        16ms                         1
+                         Large Objects (cumulative)       (null)         0ms                         0
+                                    Finalize Schema         both        28ms                         2
+ --------------------------------------------------   ----------  ----------  ----------  ------------
+                          Total Wall Clock Duration         both       857ms                        24
 ```
 
 ## Installing pgcopydb
