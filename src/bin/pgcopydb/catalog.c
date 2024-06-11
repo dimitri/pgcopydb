@@ -8117,17 +8117,8 @@ catalog_bind_parameters(sqlite3 *db,
 void
 catalog_start_timing(TopLevelTiming *timing)
 {
-	/*
-	 * In some cases the startTime is set here first and then later registered
-	 * to the catalogs via a call to summary_start_timing. So if the startTime
-	 * has already been set previously, just keep whatever value is already
-	 * there.
-	 */
-	if (timing->startTime == 0)
-	{
-		timing->startTime = time(NULL);
-		INSTR_TIME_SET_CURRENT(timing->startTimeInstr);
-	}
+	timing->startTime = time(NULL);
+	INSTR_TIME_SET_CURRENT(timing->startTimeInstr);
 }
 
 
