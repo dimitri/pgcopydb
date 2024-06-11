@@ -903,82 +903,53 @@ Examples
    $ export PGCOPYDB_DROP_IF_EXISTS=on
 
    $ pgcopydb clone --table-jobs 8 --index-jobs 12
-   14:49:01 22 INFO   Running pgcopydb version 0.13.38.g22e6544.dirty from "/usr/local/bin/pgcopydb"
-   14:49:01 22 INFO   [SOURCE] Copying database from "postgres://pagila@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
-   14:49:01 22 INFO   [TARGET] Copying database into "postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
-   14:49:01 22 INFO   Exported snapshot "00000003-00000022-1" from the source database
-   14:49:01 24 INFO   STEP 1: fetch source database tables, indexes, and sequences
-   14:49:01 24 INFO   Fetched information for 3 extensions
-   14:49:01 24 INFO   Splitting source candidate tables larger than 200 kB
-   14:49:01 24 INFO   Table public.rental is 1224 kB large, 7 COPY processes will be used, partitioning on rental_id.
-   14:49:01 24 INFO   Table public.film is 472 kB large, 3 COPY processes will be used, partitioning on film_id.
-   14:49:01 24 INFO   Table public.film_actor is 264 kB large which is larger than --split-tables-larger-than 200 kB, and does not have a unique column of type integer: splitting by CTID
-   14:49:01 24 INFO   Table public.film_actor is 264 kB large, 2 COPY processes will be used, partitioning on ctid.
-   14:49:01 24 INFO   Table public.inventory is 264 kB large, 2 COPY processes will be used, partitioning on inventory_id.
-   14:49:01 24 INFO   Fetched information for 21 tables, with an estimated total of 0 tuples and 3816 kB
-   14:49:01 24 INFO   Fetched information for 54 indexes
-   14:49:01 24 INFO   Fetching information for 13 sequences
-   14:49:01 24 INFO   STEP 2: dump the source database schema (pre/post data)
-   14:49:01 24 INFO    /usr/bin/pg_dump -Fc --snapshot 00000003-00000022-1 --section pre-data --file /tmp/pgcopydb/schema/pre.dump 'postgres://pagila@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60'
-   14:49:01 24 INFO    /usr/bin/pg_dump -Fc --snapshot 00000003-00000022-1 --section post-data --file /tmp/pgcopydb/schema/post.dump 'postgres://pagila@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60'
-   14:49:02 24 INFO   STEP 3: restore the pre-data section to the target database
-   14:49:02 24 INFO    /usr/bin/pg_restore --dbname 'postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60' --single-transaction --use-list /tmp/pgcopydb/schema/pre-filtered.list /tmp/pgcopydb/schema/pre.dump
-   14:49:02 24 INFO   STEP 6: starting 12 CREATE INDEX processes
-   14:49:02 24 INFO   STEP 7: constraints are built by the CREATE INDEX processes
-   14:49:02 24 INFO   STEP 8: starting 8 VACUUM processes
-   14:49:02 24 INFO   STEP 9: reset sequences values
-   14:49:02 51 INFO   STEP 5: starting 4 Large Objects workers
-   14:49:02 30 INFO   STEP 4: starting 8 table data COPY processes
-   14:49:02 52 INFO   Reset sequences values on the target database
-   14:49:02 51 INFO   Added 0 large objects to the queue
-   14:49:04 24 INFO   STEP 10: restore the post-data section to the target database
-   14:49:04 24 INFO    /usr/bin/pg_restore --dbname 'postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60' --single-transaction --use-list /tmp/pgcopydb/schema/post-filtered.list /tmp/pgcopydb/schema/post.dump
+   08:13:13.961 42893 INFO   [SOURCE] Copying database from "postgres://pagila:0wn3d@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
+   08:13:13.961 42893 INFO   [TARGET] Copying database into "postgres://pagila:0wn3d@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
+   08:13:14.009 42893 INFO   Using work dir "/tmp/pgcopydb"
+   08:13:14.017 42893 INFO   Exported snapshot "00000003-000000EB-1" from the source database
+   08:13:14.019 42904 INFO   STEP 1: fetch source database tables, indexes, and sequences
+   08:13:14.339 42904 INFO   Fetched information for 5 tables (including 0 tables split in 0 partitions total), with an estimated total of 1000 thousands tuples and 128 MB on-disk
+   08:13:14.342 42904 INFO   Fetched information for 4 indexes (supporting 4 constraints)
+   08:13:14.343 42904 INFO   Fetching information for 1 sequences
+   08:13:14.353 42904 INFO   Fetched information for 1 extensions
+   08:13:14.436 42904 INFO   Found 1 indexes (supporting 1 constraints) in the target database
+   08:13:14.443 42904 INFO   STEP 2: dump the source database schema (pre/post data)
+   08:13:14.448 42904 INFO    /usr/bin/pg_dump -Fc --snapshot 00000003-000000EB-1 --section=pre-data --section=post-data --file /tmp/pgcopydb/schema/schema.dump 'postgres://pagila:0wn3d@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60'
+   08:13:14.513 42904 INFO   STEP 3: restore the pre-data section to the target database
+   08:13:14.524 42904 INFO    /usr/bin/pg_restore --dbname 'postgres://pagila:0wn3d@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60' --section pre-data --jobs 2 --use-list /tmp/pgcopydb/schema/pre-filtered.list /tmp/pgcopydb/schema/schema.dump
+   08:13:14.608 42919 INFO   STEP 4: starting 8 table-data COPY processes
+   08:13:14.678 42921 INFO   STEP 8: starting 8 VACUUM processes
+   08:13:14.678 42904 INFO   Skipping large objects: none found.
+   08:13:14.693 42920 INFO   STEP 6: starting 2 CREATE INDEX processes
+   08:13:14.693 42920 INFO   STEP 7: constraints are built by the CREATE INDEX processes
+   08:13:14.699 42904 INFO   STEP 9: reset sequences values
+   08:13:14.700 42959 INFO   Set sequences values on the target database
+   08:13:16.716 42904 INFO   STEP 10: restore the post-data section to the target database
+   08:13:16.726 42904 INFO    /usr/bin/pg_restore --dbname 'postgres://pagila:0wn3d@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60' --section post-data --jobs 2 --use-list /tmp/pgcopydb/schema/post-filtered.list /tmp/pgcopydb/schema/schema.dump
+   08:13:16.751 42904 INFO   All step are now done,  2s728 elapsed
+   08:13:16.752 42904 INFO   Printing summary for 5 tables and 4 indexes
 
-     OID | Schema |             Name | copy duration | transmitted bytes | indexes | create index duration
-   ------+--------+------------------+---------------+-------------------+---------+----------------------
-   16880 | public |           rental |         160ms |            188 kB |       3 |                 230ms
-   16880 | public |           rental |          77ms |            189 kB |       0 |                   0ms
-   16880 | public |           rental |         105ms |            189 kB |       0 |                   0ms
-   16880 | public |           rental |         107ms |            189 kB |       0 |                   0ms
-   16880 | public |           rental |          97ms |            190 kB |       0 |                   0ms
-   16880 | public |           rental |          82ms |            189 kB |       0 |                   0ms
-   16880 | public |           rental |          81ms |            189 kB |       0 |                   0ms
-   16758 | public |             film |         136ms |            112 kB |       5 |                 462ms
-   16758 | public |             film |          52ms |            110 kB |       0 |                   0ms
-   16758 | public |             film |          74ms |            111 kB |       0 |                   0ms
-   16770 | public |       film_actor |          74ms |            5334 B |       0 |                   0ms
-   16770 | public |       film_actor |          77ms |            156 kB |       0 |                   0ms
-   16825 | public |        inventory |         106ms |             74 kB |       2 |                 586ms
-   16825 | public |        inventory |         107ms |             76 kB |       0 |                   0ms
-   16858 | public | payment_p2022_03 |          86ms |            137 kB |       4 |                 468ms
-   16866 | public | payment_p2022_05 |          98ms |            136 kB |       4 |                 663ms
-   16870 | public | payment_p2022_06 |         106ms |            134 kB |       4 |                 571ms
-   16862 | public | payment_p2022_04 |         125ms |            129 kB |       4 |                 775ms
-   16854 | public | payment_p2022_02 |         117ms |            121 kB |       4 |                 684ms
-   16874 | public | payment_p2022_07 |         255ms |            118 kB |       1 |                 270ms
-   16724 | public |         customer |         247ms |             55 kB |       4 |                 1s091
-   16785 | public |          address |         128ms |             47 kB |       2 |                 132ms
-   16795 | public |             city |         163ms |             23 kB |       2 |                 270ms
-   16774 | public |    film_category |         172ms |             28 kB |       1 |                  47ms
-   16850 | public | payment_p2022_01 |         166ms |             36 kB |       4 |                 679ms
-   16738 | public |            actor |         399ms |            7999 B |       2 |                 116ms
-   16748 | public |         category |         170ms |             526 B |       1 |                 200ms
-   16805 | public |          country |          63ms |            3918 B |       1 |                 226ms
-   16900 | public |            staff |         170ms |             272 B |       1 |                 114ms
-   16832 | public |         language |         115ms |             276 B |       1 |                  68ms
-   16911 | public |            store |          88ms |              58 B |       2 |                 185ms
+     OID | Schema |             Name | Parts | copy duration | transmitted bytes | indexes | create index duration
+   ------+--------+------------------+-------+---------------+-------------------+---------+----------------------
+   16398 | public | pgbench_accounts |     1 |         1s496 |             91 MB |       1 |                 302ms
+   16395 | public |  pgbench_tellers |     1 |          37ms |            1002 B |       1 |                  15ms
+   16401 | public | pgbench_branches |     1 |          45ms |              71 B |       1 |                  18ms
+   16386 | public |           table1 |     1 |          36ms |             984 B |       1 |                  21ms
+   16392 | public |  pgbench_history |     1 |          41ms |               0 B |       0 |                   0ms
 
 
                                                   Step   Connection    Duration    Transfer   Concurrency
     --------------------------------------------------   ----------  ----------  ----------  ------------
-                                           Dump Schema       source        98ms                         1
-      Catalog Queries (table ordering, filtering, etc)       source       687ms                         1
-                                        Prepare Schema       target       667ms                         1
-         COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both       1s256                    8 + 20
-                                     COPY (cumulative)         both       4s003     2955 kB             8
-                            Large Objects (cumulative)         both       877ms                         4
-                CREATE INDEX, CONSTRAINTS (cumulative)       target       7s837                        12
-                                       Finalize Schema       target       487ms                         1
+      Catalog Queries (table ordering, filtering, etc)       source       119ms                         1
+                                           Dump Schema       source        66ms                         1
+                                        Prepare Schema       target        59ms                         1
+         COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both       2s125                        18
+                                     COPY (cumulative)         both       1s655      128 MB             8
+                             CREATE INDEX (cumulative)       target       343ms                         2
+                              CONSTRAINTS (cumulative)       target        13ms                         2
+                                   VACUUM (cumulative)       target       144ms                         8
+                                       Reset Sequences         both        15ms                         1
+                            Large Objects (cumulative)       (null)         0ms                         0
+                                       Finalize Schema         both        27ms                         2
     --------------------------------------------------   ----------  ----------  ----------  ------------
-                             Total Wall Clock Duration         both       3s208                    8 + 20
-    --------------------------------------------------   ----------  ----------  ----------  ------------
+                             Total Wall Clock Duration         both       2s728                        24

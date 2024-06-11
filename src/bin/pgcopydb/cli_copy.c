@@ -251,9 +251,7 @@ cli_copy_schema(int argc, char **argv)
 		exit(EXIT_CODE_TARGET);
 	}
 
-	if (!copydb_dump_source_schema(&copySpecs,
-								   copySpecs.sourceSnapshot.snapshot,
-								   PG_DUMP_SECTION_SCHEMA))
+	if (!copydb_dump_source_schema(&copySpecs, copySpecs.sourceSnapshot.snapshot))
 	{
 		/* errors have already been logged */
 		(void) copydb_close_snapshot(&copySpecs);

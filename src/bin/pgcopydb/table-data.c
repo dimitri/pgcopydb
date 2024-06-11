@@ -348,9 +348,8 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 		}
 		else
 		{
-			/* send vacuum and create index workers a STOP message */
-			if (!vacuum_send_stop(specs) ||
-				!copydb_index_workers_send_stop(specs))
+			/* send create index workers a STOP message */
+			if (!copydb_index_workers_send_stop(specs))
 			{
 				(void) copydb_fatal_exit();
 			}
@@ -371,17 +370,12 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 		return false;
 	}
 
-	bool success = true;
-
 	/*
 	 * Now that the COPY processes are done, signal this is the end to the
-	 * vacuum and CREATE INDEX sub-processes by adding the STOP message to
+	 * CREATE INDEX sub-processes by adding the STOP message to
 	 * their queues.
 	 */
-	success = success && vacuum_send_stop(specs);
-	success = success && copydb_index_workers_send_stop(specs);
-
-	if (!success)
+	if (!copydb_index_workers_send_stop(specs))
 	{
 		/*
 		 * The other subprocesses need to see a STOP message to stop their
