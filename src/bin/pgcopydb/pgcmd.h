@@ -16,6 +16,7 @@
 #include "defaults.h"
 #include "file_utils.h"
 #include "filtering.h"
+#include "log.h"
 #include "parsing_utils.h"
 #include "pgsql.h"
 #include "schema.h"
@@ -182,6 +183,54 @@ typedef struct ArchiveContentArray
 	ArchiveContentItem *array;  /* malloc'ed area */
 } ArchiveContentArray;
 
+/* specify section of a dump: pre-data, post-data, data, schema */
+typedef enum
+{
+	PG_DUMP_SECTION_ALL = 0,
+	PG_DUMP_SECTION_SCHEMA,
+	PG_DUMP_SECTION_PRE_DATA,
+	PG_DUMP_SECTION_POST_DATA,
+	PG_DUMP_SECTION_DATA,
+	PG_DUMP_SECTION_ROLES       /* pg_dumpall --roles-only */
+} PostgresDumpSection;
+
+
+/*
+ * Enumeration representing the different section options of
+ * a Postgres restore operation.
+ */
+typedef enum
+{
+	PG_RESTORE_SECTION_PRE_DATA = 0,
+	PG_RESTORE_SECTION_POST_DATA,
+} PostgresRestoreSection;
+
+/*
+ * Convert PostgresDumpSection to string.
+ */
+static inline const char *
+postgresRestoreSectionToString(PostgresRestoreSection section)
+{
+	switch (section)
+	{
+		case PG_RESTORE_SECTION_PRE_DATA:
+		{
+			return "pre-data";
+		}
+
+		case PG_RESTORE_SECTION_POST_DATA:
+		{
+			return "post-data";
+		}
+
+		default:
+		{
+			log_error("unknown PostgresRestoreSection value %d", section);
+			return NULL;
+		}
+	}
+}
+
 
 typedef struct RestoreOptions
 {
@@ -191,6 +240,7 @@ typedef struct RestoreOptions
 	bool noACL;
 	bool noTableSpaces;
 	int jobs;
+	PostgresRestoreSection section;
 } RestoreOptions;
 
 bool psql_version(PostgresPaths *pgPaths);
@@ -204,7 +254,6 @@ bool set_psql_from_pg_config(PostgresPaths *pgPaths);
 bool pg_dump_db(PostgresPaths *pgPaths,
 				ConnStrings *connStrings,
 				const char *snapshot,
-				const char *section,
 				SourceFilters *filters,
 				DatabaseCatalog *filtersDB,
 				const char *filename);

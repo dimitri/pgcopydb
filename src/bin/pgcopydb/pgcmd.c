@@ -358,13 +358,13 @@ typedef struct DumpExtensionNamespaceContext
 
 
 /*
- * Call pg_dump and get the given section of the dump into the target file.
+ * Call pg_dump and get the given pre-data and post-data sections of
+ * the dump into the target file.
  */
 bool
 pg_dump_db(PostgresPaths *pgPaths,
 		   ConnStrings *connStrings,
 		   const char *snapshot,
-		   const char *section,
 		   SourceFilters *filters,
 		   DatabaseCatalog *filtersDB,
 		   const char *filename)
@@ -402,8 +402,14 @@ pg_dump_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = (char *) snapshot;
 	}
 
-	args[argsIndex++] = "--section";
-	args[argsIndex++] = (char *) section;
+	/*
+	 * To address a migration issue (https://github.com/dimitri/pgcopydb/issues/760),
+	 * we need to dump the pre-data and post-data sections together in a single file.
+	 * Using --schema-only instead is not an option because it does not include
+	 * the necessary large object metadata.
+	 */
+	args[argsIndex++] = "--section=pre-data";
+	args[argsIndex++] = "--section=post-data";
 
 	/* apply [include-only-schema] filtering */
 	for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
@@ -896,6 +902,16 @@ pg_restore_db(PostgresPaths *pgPaths,
 	args[argsIndex++] = (char *) pgPaths->pg_restore;
 	args[argsIndex++] = "--dbname";
 	args[argsIndex++] = (char *) connStrings->safeTargetPGURI.pguri;
+
+	const char *sectionOption = postgresRestoreSectionToString(options.section);
+	if (sectionOption == NULL)
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	args[argsIndex++] = "--section";
+	args[argsIndex++] = (char *) sectionOption;
 
 	if (options.jobs == 1)
 	{
