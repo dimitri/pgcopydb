@@ -1955,6 +1955,9 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"      left join pg_temp.filter_exclude_schema fn2 "
 		"             on rn2.nspname = fn2.nspname "
 
+		"      left join pg_temp.filter_exclude_schema fn3 "
+		"			 on s.nspname = fn3.nspname "
+
 		/* exclude-table */
 		"      left join pg_temp.filter_exclude_table ft1 "
 		"             on rn1.nspname = ft1.nspname "
@@ -1974,14 +1977,22 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"            and r2.relname = ftd2.relname "
 
 		/* WHERE clause for exclusion filters */
-		"     where case when r2.oid is null or r1.oid = r2.oid"
+		"     where case "
+
+		/* Default sequences */
+		"           when (r2.oid is null and r1.oid is not null) or r1.oid = r2.oid"
 		"           then rn1.nspname is not null and fn1.nspname is null "
 		"            and r1.relname is not null and ft1.relname is null "
 		"            and r1.relname is not null and ftd1.relname is null "
 
-		"           else rn2.nspname is not null and fn2.nspname is null "
+		/* Identity sequences */
+		"           when r1.oid is null and r2.oid is not null"
+		"           then rn2.nspname is not null and fn2.nspname is null "
 		"            and r2.relname is not null and ft2.relname is null "
 		"            and r2.relname is not null and ftd2.relname is null "
+
+		/* Standalone sequences - no table relationships here */
+		"           else s.nspname is not null and fn3.nspname is null "
 		"           end"
 
 		"   order by nspname, relname"
