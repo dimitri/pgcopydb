@@ -264,19 +264,6 @@ typedef struct CopyDataSpec
 	Catalogs catalogs;
 } CopyDataSpec;
 
-
-/* specify section of a dump: pre-data, post-data, data, schema */
-typedef enum
-{
-	PG_DUMP_SECTION_ALL = 0,
-	PG_DUMP_SECTION_SCHEMA,
-	PG_DUMP_SECTION_PRE_DATA,
-	PG_DUMP_SECTION_POST_DATA,
-	PG_DUMP_SECTION_DATA,
-	PG_DUMP_SECTION_ROLES       /* pg_dumpall --roles-only */
-} PostgresDumpSection;
-
-
 extern GUC srcSettings95[];
 extern GUC srcSettings[];
 extern GUC dstSettings[];
@@ -393,9 +380,7 @@ bool copydb_prepare_create_constraint_command(CopyIndexSpec *indexSpecs);
 bool copydb_create_constraints(CopyDataSpec *spec, PGSQL *dst, SourceTable *table);
 
 /* dump_restore.c */
-bool copydb_dump_source_schema(CopyDataSpec *specs,
-							   const char *snapshot,
-							   PostgresDumpSection section);
+bool copydb_dump_source_schema(CopyDataSpec *specs, const char *snapshot);
 bool copydb_target_prepare_schema(CopyDataSpec *specs);
 bool copydb_copy_database_properties(CopyDataSpec *specs);
 bool copydb_target_drop_tables(CopyDataSpec *specs);
