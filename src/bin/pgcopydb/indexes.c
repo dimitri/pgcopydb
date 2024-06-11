@@ -127,6 +127,31 @@ copydb_index_supervisor(CopyDataSpec *specs)
 		{
 			(void) copydb_fatal_exit();
 		}
+		else
+		{
+			/* send vacuum workers a STOP message */
+			if (!vacuum_send_stop(specs))
+			{
+				(void) copydb_fatal_exit();
+			}
+		}
+
+		return false;
+	}
+
+	/*
+	 * Send the STOP message to the VACUUM ANALYZE workers, so they can stop
+	 * processing the tables.
+	 */
+	if (!vacuum_send_stop(specs))
+	{
+		/*
+		 * The other subprocesses need to see a STOP message to stop their
+		 * processing. Failing to send the STOP messages means that the main
+		 * pgcopydb never finishes, and we want to ensure the command
+		 * terminates.
+		 */
+		(void) copydb_fatal_exit();
 
 		return false;
 	}
