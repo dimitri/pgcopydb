@@ -9,6 +9,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "archive_iterator.h"
+#include "file_utils.h"
 #include "postgres_fe.h"
 #include "pqexpbuffer.h"
 #include "dumputils.h"
@@ -622,31 +624,64 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 	 *   2. edit post.list to comment out lines and save as filtered.list
 	 *   3. pg_restore --section post-data --use-list filtered.list schema.dump
 	 */
-	ArchiveContentArray contents = { 0 };
-
 	if (!pg_restore_list(&(specs->pgPaths),
 						 dumpFilename,
-						 listOutFilename,
-						 &contents))
+						 listOutFilename))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
 	/* edit our post.list file now */
-	PQExpBuffer listContents = createPQExpBuffer();
-
-	if (listContents == NULL)
+	PQExpBuffer line = createPQExpBuffer();
+	if (line == NULL)
 	{
 		log_error(ALLOCATION_FAILED_ERROR);
-		destroyPQExpBuffer(listContents);
+		destroyPQExpBuffer(line);
 		return false;
 	}
 
-	/* for each object in the list, comment when we already processed it */
-	for (int i = 0; i < contents.count; i++)
+	ArchiveIterator *iterator = archive_iterator_from(listOutFilename);
+	if (iterator == NULL)
 	{
-		ArchiveContentItem *item = &(contents.array[i]);
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!unlink_file(listFilename))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+
+	ArchiveContentItem *item = NULL;
+	for (;;)
+	{
+		if (!archive_iterator_next(iterator, &item))
+		{
+			log_error("Failed to read next item from archive iterator");
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+		if (item == NULL)
+		{
+			break;
+		}
+
+		/* use same format as file input */
+		log_trace("copydb_write_restore_list: %u; %u %u %s %s",
+				  item->dumpId,
+				  item->catalogOid,
+				  item->objectOid,
+				  item->description,
+				  item->restoreListName);
+
+		if (item->desc == ARCHIVE_TAG_UNKNOWN ||
+			IS_EMPTY_STRING_BUFFER(item->description))
+		{
+			log_warn("Failed to parse desc");
+		}
+
 		uint32_t oid = item->objectOid;
 		uint32_t catOid = item->catalogOid;
 		char *name = item->restoreListName;
@@ -686,7 +721,8 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 				log_error("Failed to check if restore name \"%s\" "
 						  "already exists",
 						  name);
-				destroyPQExpBuffer(listContents);
+				destroyPQExpBuffer(line);
+				archive_iterator_destroy(iterator);
 				return false;
 			}
 
@@ -695,10 +731,10 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 				skip = true;
 
 				log_notice("Skipping already existing dumpId %d: %s %u %s",
-						   contents.array[i].dumpId,
-						   contents.array[i].description,
-						   contents.array[i].objectOid,
-						   contents.array[i].restoreListName);
+						   item->dumpId,
+						   item->description,
+						   item->objectOid,
+						   item->restoreListName);
 			}
 		}
 
@@ -707,10 +743,10 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 			skip = true;
 
 			log_notice("Skipping already processed dumpId %d: %s %u %s",
-					   contents.array[i].dumpId,
-					   contents.array[i].description,
-					   contents.array[i].objectOid,
-					   contents.array[i].restoreListName);
+					   item->dumpId,
+					   item->description,
+					   item->objectOid,
+					   item->restoreListName);
 		}
 
 		/*
@@ -740,10 +776,10 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 			skip = true;
 
 			log_notice("Skipping materialized view refresh dumpId %d: %s %u %s",
-					   contents.array[i].dumpId,
-					   contents.array[i].description,
-					   contents.array[i].objectOid,
-					   contents.array[i].restoreListName);
+					   item->dumpId,
+					   item->description,
+					   item->objectOid,
+					   item->restoreListName);
 		}
 
 		if (!skip && copydb_objectid_is_filtered_out(specs, oid, name))
@@ -751,40 +787,34 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 			skip = true;
 
 			log_notice("Skipping filtered-out dumpId %d: %s %u %u %s",
-					   contents.array[i].dumpId,
-					   contents.array[i].description,
-					   contents.array[i].catalogOid,
-					   contents.array[i].objectOid,
-					   contents.array[i].restoreListName);
+					   item->dumpId,
+					   item->description,
+					   item->catalogOid,
+					   item->objectOid,
+					   item->restoreListName);
 		}
 
-		appendPQExpBuffer(listContents, "%s%d; %u %u %s %s\n",
+		printfPQExpBuffer(line, "%s%d; %u %u %s %s",
 						  skip ? ";" : "",
-						  contents.array[i].dumpId,
-						  contents.array[i].catalogOid,
-						  contents.array[i].objectOid,
-						  contents.array[i].description,
-						  contents.array[i].restoreListName);
+						  item->dumpId,
+						  item->catalogOid,
+						  item->objectOid,
+						  item->description,
+						  item->restoreListName);
+
+		if (!append_to_file(line->data, line->len, listFilename))
+		{
+			/* errors have already been logged */
+			destroyPQExpBuffer(line);
+			archive_iterator_destroy(iterator);
+			return false;
+		}
 	}
 
-	/* memory allocation could have failed while building string */
-	if (PQExpBufferBroken(listContents))
-	{
-		log_error("Failed to create pg_restore list file: out of memory");
-		destroyPQExpBuffer(listContents);
-		return false;
-	}
+	log_notice("Wrote filtered pg_restore list file at \"%s\"", listFilename);
 
-	log_notice("Write filtered pg_restore list file at \"%s\"", listFilename);
-
-	if (!write_file(listContents->data, listContents->len, listFilename))
-	{
-		/* errors have already been logged */
-		destroyPQExpBuffer(listContents);
-		return false;
-	}
-
-	destroyPQExpBuffer(listContents);
+	destroyPQExpBuffer(line);
+	archive_iterator_destroy(iterator);
 
 	return true;
 }

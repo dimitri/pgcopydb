@@ -7,7 +7,9 @@
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <time.h>
 
+#include "archive_iterator.h"
 #include "catalog.h"
 #include "cli_common.h"
 #include "cli_root.h"
@@ -561,19 +563,26 @@ cli_restore_schema_parse_list(int argc, char **argv)
 
 		log_info("Parsing Archive Content pre.list file: \"%s\"", filename);
 
-		ArchiveContentArray contents = { 0 };
-
-		if (!parse_archive_list(filename, &contents))
+		ArchiveIterator *iterator = archive_iterator_from(filename);
+		if (iterator == NULL)
 		{
-			/* errors have already been logged */
+			log_error("Failed to open archive iterator for \"%s\"", filename);
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 
-		log_notice("Read %d archive items in \"%s\"", contents.count, filename);
+		ArchiveContentItem *item = NULL;
 
-		for (int i = 0; i < contents.count; i++)
+		for (;;)
 		{
-			ArchiveContentItem *item = &(contents.array[i]);
+			if (!archive_iterator_next(iterator, &item))
+			{
+				log_error("Failed to read next item from archive iterator");
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+			if (item == NULL)
+			{
+				break;
+			}
 
 			fformat(stdout,
 					"%d; %u %u %s %s\n",
