@@ -3,6 +3,9 @@
  *   Implementations of a file iterator for reading new lıne seperated files
  */
 
+#ifndef FILE_ITER_H
+#define FILE_ITER_H
+
 #include <stdlib.h>
 #include <stdbool.h>
 
@@ -17,3 +20,5 @@ size_t file_iterator_get_line_number(FileIterator *iterator);
 const char * file_iterator_get_file_name(FileIterator *iterator);
 
 void file_iterator_destroy(FileIterator *iterator);
+
+#endif /* FILE_ITER_H */

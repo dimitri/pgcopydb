@@ -8,6 +8,7 @@
 #include <string.h>
 #include "log.h"
 #include "file_iterator.h"
+#include "file_utils.h"
 
 /*
  * A struct to hold the state of the file iterator. This
@@ -35,7 +36,7 @@ file_iterator_from(const char *filename)
 	}
 
 	iterator->filename = filename;
-	iterator->file = fopen(filename, "r");
+	iterator->file = fopen_read_only(filename);
 	if (iterator->file == NULL)
 	{
 		log_error("Failed to open file");
