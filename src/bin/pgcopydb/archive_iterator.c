@@ -67,11 +67,6 @@ archive_iterator_destroy(ArchiveIterator *iterator)
 	{
 		file_iterator_destroy(iterator->file_iterator);
 	}
-	if (iterator->item)
-	{
-		free(iterator->item);
-	}
-	free(iterator);
 }
 
 

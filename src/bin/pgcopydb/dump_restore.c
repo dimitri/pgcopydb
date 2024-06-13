@@ -794,7 +794,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 					   item->restoreListName);
 		}
 
-		printfPQExpBuffer(line, "%s%d; %u %u %s %s",
+		printfPQExpBuffer(line, "%s%d; %u %u %s %s\n",
 						  skip ? ";" : "",
 						  item->dumpId,
 						  item->catalogOid,

@@ -40,7 +40,6 @@ file_iterator_from(const char *filename)
 	if (iterator->file == NULL)
 	{
 		log_error("Failed to open file");
-		file_iterator_destroy(iterator);
 		return NULL;
 	}
 
@@ -57,14 +56,12 @@ bool
 file_iterator_next(FileIterator *iterator, char **line)
 {
 	*line = NULL;
-	if (iterator->line)
-	{
-		free(iterator->line);
-		iterator->line = NULL;
-	}
+	iterator->line = NULL;
 	size_t len = 0;
 	if (getline(&(iterator->line), &len, iterator->file) != -1)
 	{
+		/* replace the new line character with null terminator */
+		iterator->line[strcspn(iterator->line, "\n")] = '\0';
 		*line = iterator->line;
 		iterator->line_num++;
 		return true;
@@ -110,9 +107,4 @@ file_iterator_destroy(FileIterator *iterator)
 	{
 		fclose(iterator->file);
 	}
-	if (iterator->line)
-	{
-		free(iterator->line);
-	}
-	free(iterator);
 }
