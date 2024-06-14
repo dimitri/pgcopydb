@@ -10,10 +10,13 @@
 
 typedef struct ArchiveContentItem ArchiveContentItem;
 
-typedef bool (ArchiveterFun)(void *context, ArchiveContentItem *item);
+typedef bool (ArchiveIterCallback)(void *context, ArchiveContentItem *item);
 
+/*
+ * Iterate over the archive and call the callback function for each archive item.
+ */
 bool archive_iter(const char *filename,
 				  void *context,
-				  ArchiveterFun *callback);
+				  ArchiveIterCallback *callback);
 
 #endif /* ARCHIVE_ITER_H */

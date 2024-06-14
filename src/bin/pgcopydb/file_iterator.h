@@ -6,19 +6,15 @@
 #ifndef FILE_ITER_H
 #define FILE_ITER_H
 
-#include <stdlib.h>
 #include <stdbool.h>
 
-typedef struct FileIterator FileIterator;
+typedef bool (FileIterCallback)(void *context, const char *item);
 
-FileIterator * file_iterator_from(const char *filename);
-
-bool file_iterator_next(FileIterator *iterator, char **line);
-
-size_t file_iterator_get_line_number(FileIterator *iterator);
-
-const char * file_iterator_get_file_name(FileIterator *iterator);
-
-void file_iterator_destroy(FileIterator *iterator);
+/*
+ * Iterate over the file line-by-line and call the callback function for each line.
+ */
+bool file_iter(const char *filename,
+			   void *context,
+			   FileIterCallback *callback);
 
 #endif /* FILE_ITER_H */

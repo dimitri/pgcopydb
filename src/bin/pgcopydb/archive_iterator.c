@@ -14,63 +14,6 @@
 #include "archive.h"
 #include "string_utils.h"
 
-/*
- * A struct to hold the state of the archive iterator. This
- * iterator iterates an archive item-by-item.
- */
-typedef struct ArchiveIterator
-{
-	FileIterator *file_iterator;
-	ArchiveContentItem *item;
-} ArchiveIterator;
-
-/*
- * Destroy the iterator and free resources
- */
-static bool
-archive_iterator_destroy(ArchiveIterator *iterator)
-{
-	if (iterator->file_iterator)
-	{
-		file_iterator_destroy(iterator->file_iterator);
-	}
-
-	return true;
-}
-
-
-/*
- * Create a new iterator from the file name
- */
-static ArchiveIterator *
-archive_iterator_from(const char *filename)
-{
-	ArchiveIterator *iterator = (ArchiveIterator *) calloc(1, sizeof(ArchiveIterator));
-	if (iterator == NULL)
-	{
-		log_error("Failed to allocate memory for ArchiveIterator");
-		return NULL;
-	}
-
-	iterator->file_iterator = file_iterator_from(filename);
-	if (iterator->file_iterator == NULL)
-	{
-		log_error("Failed to allocate memory for FileIterator");
-		archive_iterator_destroy(iterator);
-		return NULL;
-	}
-
-	iterator->item = calloc(1, sizeof(ArchiveContentItem));
-	if (iterator->item == NULL)
-	{
-		log_error("Failed to allocate memory for ArchiveContentItem");
-		archive_iterator_destroy(iterator);
-		return NULL;
-	}
-
-	return iterator;
-}
-
 
 /* remember to skip the \0 at the end of the static string here */
 #define INSERT_MAPPING(d, s) { d, sizeof(s) - 1, s }
@@ -547,91 +490,43 @@ parse_archive_list_entry(ArchiveContentItem *item, const char *line)
 }
 
 
-/*
- * Get the next item from the archive.
- *
- * The memory for the item is allocated by this function and will be freed by it too.
- */
-static bool
-archive_iterator_next(ArchiveIterator *iterator, ArchiveContentItem **item)
+typedef struct ArchiveContext
 {
-	*item = NULL;
-	char *line = NULL;
-	bool should_skip = true;
-	while (should_skip)
-	{
-		if (!file_iterator_next(iterator->file_iterator, &line))
-		{
-			log_error("Failed to read line from the archive file");
-			return false;
-		}
-		if (line == NULL)
-		{
-			/* no more lines, stop */
-			return true;
-		}
+	ArchiveIterCallback *callback;
+	void *context;
+	size_t line_number;
+	const char *filename;
+} ArchiveContext;
 
-		/* skip empty lines and lines that start with a semi-colon (comment) */
-		should_skip = *line == '\0' || *line == ';';
+static bool
+file_iter_callback(void *context, const char *line)
+{
+	/* skip empty lines and lines that start with a semi-colon (comment) */
+	if (*line == '\0' || *line == ';')
+	{
+		return true;
 	}
 
-	/* prepare the item by resetting to zero */
-	bzero(iterator->item, sizeof(ArchiveContentItem));
-	*item = iterator->item;
-	if (!parse_archive_list_entry(*item, line))
+	ArchiveContext *archiveContext = (ArchiveContext *) context;
+	ArchiveContentItem item = { 0 };
+	if (!parse_archive_list_entry(&item, line))
 	{
 		log_error("Failed to parse line %ld of \"%s\", "
 				  "see above for details",
-				  file_iterator_get_line_number(iterator->file_iterator),
-				  file_iterator_get_file_name(iterator->file_iterator));
+				  archiveContext->line_number,
+				  archiveContext->filename);
 		return false;
 	}
 
-	return true;
+	return archiveContext->callback(archiveContext->context, &item);
 }
 
 
 bool
 archive_iter(const char *filename,
 			 void *context,
-			 ArchiveterFun *callback)
+			 ArchiveIterCallback *callback)
 {
-	ArchiveIterator *iter = archive_iterator_from(filename);
-	if (!iter)
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	ArchiveContentItem *item = NULL;
-	for (;;)
-	{
-		if (!archive_iterator_next(iter, &item))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		if (item == NULL)
-		{
-			if (!archive_iterator_destroy(iter))
-			{
-				/* errors have already been logged */
-				return false;
-			}
-
-			break;
-		}
-
-		/* now call the provided callback */
-		if (!(*callback)(context, item))
-		{
-			log_error("Failed to iterate over list of colls, "
-					  "see above for details");
-			return false;
-		}
-	}
-
-
-	return true;
+	ArchiveContext archiveContext = { callback, context, 0, filename };
+	return file_iter(filename, &archiveContext, file_iter_callback);
 }
