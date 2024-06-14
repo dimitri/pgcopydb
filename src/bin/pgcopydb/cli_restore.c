@@ -551,6 +551,21 @@ cli_restore_roles(int argc, char **argv)
 }
 
 
+static bool
+print_archive_item(void *context, ArchiveContentItem *item)
+{
+	fformat(stdout,
+			"%d; %u %u %s %s\n",
+			item->dumpId,
+			item->catalogOid,
+			item->objectOid,
+			item->description ? item->description : "",
+			item->restoreListName ? item->restoreListName : "");
+
+	return true;
+}
+
+
 /*
  * cli_restore_schema implements the command: pgcopydb restore parse-list
  */
@@ -563,36 +578,7 @@ cli_restore_schema_parse_list(int argc, char **argv)
 
 		log_info("Parsing Archive Content pre.list file: \"%s\"", filename);
 
-		ArchiveIterator *iterator = archive_iterator_from(filename);
-		if (iterator == NULL)
-		{
-			log_error("Failed to open archive iterator for \"%s\"", filename);
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
-
-		ArchiveContentItem *item = NULL;
-
-		for (;;)
-		{
-			if (!archive_iterator_next(iterator, &item))
-			{
-				log_error("Failed to read next item from archive iterator");
-				exit(EXIT_CODE_INTERNAL_ERROR);
-			}
-			if (item == NULL)
-			{
-				break;
-			}
-
-			fformat(stdout,
-					"%d; %u %u %s %s\n",
-					item->dumpId,
-					item->catalogOid,
-					item->objectOid,
-					item->description ? item->description : "",
-					item->restoreListName ? item->restoreListName : "");
-		}
-
+		archive_iter(filename, NULL, print_archive_item);
 		exit(EXIT_CODE_QUIT);
 	}
 

@@ -8,13 +8,12 @@
 
 #include <stdbool.h>
 
-typedef struct ArchiveIterator ArchiveIterator;
 typedef struct ArchiveContentItem ArchiveContentItem;
 
-ArchiveIterator * archive_iterator_from(const char *filename);
+typedef bool (ArchiveterFun)(void *context, ArchiveContentItem *item);
 
-bool archive_iterator_next(ArchiveIterator *iterator, ArchiveContentItem **item);
-
-void archive_iterator_destroy(ArchiveIterator *iterator);
+bool archive_iter(const char *filename,
+				  void *context,
+				  ArchiveterFun *callback);
 
 #endif /* ARCHIVE_ITER_H */

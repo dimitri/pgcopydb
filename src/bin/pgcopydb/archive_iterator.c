@@ -25,9 +25,24 @@ typedef struct ArchiveIterator
 } ArchiveIterator;
 
 /*
+ * Destroy the iterator and free resources
+ */
+static bool
+archive_iterator_destroy(ArchiveIterator *iterator)
+{
+	if (iterator->file_iterator)
+	{
+		file_iterator_destroy(iterator->file_iterator);
+	}
+
+	return true;
+}
+
+
+/*
  * Create a new iterator from the file name
  */
-ArchiveIterator *
+static ArchiveIterator *
 archive_iterator_from(const char *filename)
 {
 	ArchiveIterator *iterator = (ArchiveIterator *) calloc(1, sizeof(ArchiveIterator));
@@ -54,19 +69,6 @@ archive_iterator_from(const char *filename)
 	}
 
 	return iterator;
-}
-
-
-/*
- * Destroy the iterator and free resources
- */
-void
-archive_iterator_destroy(ArchiveIterator *iterator)
-{
-	if (iterator->file_iterator)
-	{
-		file_iterator_destroy(iterator->file_iterator);
-	}
 }
 
 
@@ -550,7 +552,7 @@ parse_archive_list_entry(ArchiveContentItem *item, const char *line)
  *
  * The memory for the item is allocated by this function and will be freed by it too.
  */
-bool
+static bool
 archive_iterator_next(ArchiveIterator *iterator, ArchiveContentItem **item)
 {
 	*item = NULL;
@@ -584,6 +586,52 @@ archive_iterator_next(ArchiveIterator *iterator, ArchiveContentItem **item)
 				  file_iterator_get_file_name(iterator->file_iterator));
 		return false;
 	}
+
+	return true;
+}
+
+
+bool
+archive_iter(const char *filename,
+			 void *context,
+			 ArchiveterFun *callback)
+{
+	ArchiveIterator *iter = archive_iterator_from(filename);
+	if (!iter)
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	ArchiveContentItem *item = NULL;
+	for (;;)
+	{
+		if (!archive_iterator_next(iter, &item))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (item == NULL)
+		{
+			if (!archive_iterator_destroy(iter))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			break;
+		}
+
+		/* now call the provided callback */
+		if (!(*callback)(context, item))
+		{
+			log_error("Failed to iterate over list of colls, "
+					  "see above for details");
+			return false;
+		}
+	}
+
 
 	return true;
 }
