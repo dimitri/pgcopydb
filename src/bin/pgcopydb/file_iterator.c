@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "defaults.h"
 #include "log.h"
 #include "file_iterator.h"
 #include "file_utils.h"
@@ -18,7 +19,7 @@ typedef struct FileIterator
 {
 	FILE *file;
 	const char *filename;
-	char *line;
+	char line[BUFSIZE];
 	size_t line_num;
 } FileIterator;
 
@@ -56,9 +57,8 @@ bool
 file_iterator_next(FileIterator *iterator, char **line)
 {
 	*line = NULL;
-	iterator->line = NULL;
-	size_t len = 0;
-	if (getline(&(iterator->line), &len, iterator->file) != -1)
+	iterator->line_num = 0;
+	if (fgets(iterator->line, sizeof(iterator->line), iterator->file) != NULL)
 	{
 		/* replace the new line character with null terminator */
 		iterator->line[strcspn(iterator->line, "\n")] = '\0';

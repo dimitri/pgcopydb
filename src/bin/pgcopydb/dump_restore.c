@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <stdio.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -648,9 +649,11 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 		return false;
 	}
 
-	if (!unlink_file(listFilename))
+
+	FILE *listFile = fopen_with_umask(listFilename, "wb", FOPEN_FLAGS_W, 0644);
+	if (!listFilename)
 	{
-		/* errors have already been logged */
+		log_error("Failed to open list file \"%s\": %m", listFilename);
 		return false;
 	}
 
@@ -721,6 +724,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 				log_error("Failed to check if restore name \"%s\" "
 						  "already exists",
 						  name);
+				fclose(listFile);
 				destroyPQExpBuffer(line);
 				archive_iterator_destroy(iterator);
 				return false;
@@ -794,6 +798,10 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 					   item->restoreListName);
 		}
 
+		/*
+		 * Since printfPQExpBuffer generates a NULL-terminated string,
+		 * we have the ability to use the same buffer repeatedly.
+		 */
 		printfPQExpBuffer(line, "%s%d; %u %u %s %s\n",
 						  skip ? ";" : "",
 						  item->dumpId,
@@ -802,9 +810,11 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 						  item->description,
 						  item->restoreListName);
 
-		if (!append_to_file(line->data, line->len, listFilename))
+		/* append the line to the file */
+		if (fwrite(line->data, sizeof(char), line->len, listFile) < line->len)
 		{
 			/* errors have already been logged */
+			fclose(listFile);
 			destroyPQExpBuffer(line);
 			archive_iterator_destroy(iterator);
 			return false;
@@ -813,6 +823,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 
 	log_notice("Wrote filtered pg_restore list file at \"%s\"", listFilename);
 
+	fclose(listFile);
 	destroyPQExpBuffer(line);
 	archive_iterator_destroy(iterator);
 
