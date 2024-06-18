@@ -2760,7 +2760,7 @@ stream_read_context(CDCPaths *paths,
 				  sleepTimeMs);
 
 		/* we have milliseconds, pg_usleep() wants microseconds */
-		(void) pg_usleep(sleepTimeMs * 1000);
+		(void) pg_usleep(sleepTimeMs * 1000L);
 	}
 
 	/* did retry policy expire before the files are created? */
