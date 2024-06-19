@@ -544,26 +544,18 @@ bool stream_fetch_current_lsn(uint64_t *lsn,
 StreamAction StreamActionFromChar(char action);
 char * StreamActionToString(StreamAction action);
 
-/* ld_store.c */
-bool ld_store_open_replaydb(StreamSpecs *specs);
-bool ld_store_current_filename(StreamSpecs *specs);
-bool ld_store_current_filename_fetch(SQLiteQuery *query);
-
-bool ld_store_insert_cdc_filename(StreamSpecs *specs);
-
-bool ld_store_insert_timeline_history(DatabaseCatalog *catalog,
-									  uint32_t tli,
-									  uint64_t startpos,
-									  uint64_t endpos);
-
-bool ld_store_insert_message(DatabaseCatalog *catalog,
-							 LogicalMessageMetadata *metadata);
-
-bool ld_store_insert_internal_message(DatabaseCatalog *catalog,
-									  InternalMessage *message);
-
 
 /* ld_transform.c */
+bool stream_transform_messages(StreamSpecs *specs);
+bool stream_transform_cdc_file(StreamSpecs *specs);
+
+bool stream_transform_write_transaction(StreamSpecs *specs);
+bool stream_transform_write_replay_stmt(StreamSpecs *specs);
+bool stream_transform_write_replay_txn(StreamSpecs *specs);
+
+bool stream_transform_write_message(StreamContext *privateContext,
+									uint64_t *currentMsgIndex);
+
 bool stream_transform_worker(StreamSpecs *specs);
 bool stream_transform_from_queue(StreamSpecs *specs);
 
@@ -584,8 +576,6 @@ bool stream_transform_stream(StreamSpecs *specs);
 bool stream_transform_resume(StreamSpecs *specs);
 bool stream_transform_line(void *ctx, const char *line, bool *stop);
 
-bool stream_transform_write_message(StreamContext *privateContext,
-									uint64_t *currentMsgIndex);
 
 bool stream_transform_message(StreamContext *privateContext,
 							  char *message);
@@ -604,23 +594,6 @@ bool stream_compute_pathnames(uint32_t WalSegSz,
 							  char *dir,
 							  char *walFileName,
 							  char *sqlFileName);
-
-bool stream_write_message(FILE *out, LogicalMessage *msg);
-bool stream_write_transaction(FILE *out, LogicalTransaction *tx);
-
-bool stream_write_switchwal(FILE *out, LogicalMessageSwitchWAL *switchwal);
-bool stream_write_keepalive(FILE *out, LogicalMessageKeepalive *keepalive);
-bool stream_write_endpos(FILE *out, LogicalMessageEndpos *endpos);
-
-bool stream_write_begin(FILE *out, LogicalTransaction *tx);
-bool stream_write_commit(FILE *out, LogicalTransaction *tx);
-bool stream_write_rollback(FILE *out, LogicalTransaction *tx);
-
-bool stream_write_insert(FILE *out, LogicalMessageInsert *insert);
-bool stream_write_truncate(FILE *out, LogicalMessageTruncate *truncate);
-bool stream_write_update(FILE *out, LogicalMessageUpdate *update);
-bool stream_write_delete(FILE * out, LogicalMessageDelete *delete);
-bool stream_write_sql_escape_string_constant(FILE *out, const char *str);
 
 bool stream_add_value_in_json_array(LogicalMessageValue *value,
 									JSON_Array *jsArray);
