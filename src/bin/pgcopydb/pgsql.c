@@ -1996,13 +1996,9 @@ pgsql_sync_pipeline(PGSQL *pgsql)
 		return false;
 	}
 
-	if (PQsocket(conn) < 0)
+	if (PQisnonblocking(conn) == 0)
 	{
-		(void) pgsql_stream_log_error(pgsql, NULL, "invalid socket");
-
-		clear_results(pgsql);
-		pgsql_finish(pgsql);
-
+		log_error("BUG: Connection is not in non-blocking mode");
 		return false;
 	}
 
@@ -2013,6 +2009,19 @@ pgsql_sync_pipeline(PGSQL *pgsql)
 	}
 
 	bool syncReceived = false;
+
+	int results = 0;
+
+	if (PQconsumeInput(conn) == 0)
+	{
+		(void) pgsql_stream_log_error(
+			pgsql,
+			NULL,
+			"Failed to consume input for pipeline sync");
+		return false;
+	}
+
+	(void) pgsql_handle_notifications(pgsql);
 
 	while (!syncReceived)
 	{
@@ -2026,84 +2035,44 @@ pgsql_sync_pipeline(PGSQL *pgsql)
 			return false;
 		}
 
-		fd_set input_mask;
-		struct timeval timeout;
-		struct timeval *timeoutptr = NULL;
+		PGresult *res = PQgetResult(conn);
 
-		/* sleep for 10ms to wait for input on the Postgres socket */
-		timeout.tv_sec = 0;
-		timeout.tv_usec = 10000;
-		timeoutptr = &timeout;
-
-		FD_ZERO(&input_mask);
-		FD_SET(PQsocket(conn), &input_mask);
-
-		int r = select(PQsocket(conn) + 1, &input_mask, NULL, NULL, timeoutptr);
-
-		if (r == 0 || (r < 0 && errno == EINTR))
+		if (res == NULL)
 		{
-			/* got a timeout or signal. The caller will get back later. */
+			/*
+			 * NULL represents a end of result for a single query, but we are
+			 * in pipeline mode and we can have multiple results.
+			 *
+			 * We need to continue consuming until we get a SYNC message.
+			 */
+
 			continue;
 		}
-		else if (r < 0)
+
+		results++;
+
+		ExecStatusType resultStatus = PQresultStatus(res);
+
+		if (resultStatus == PGRES_PIPELINE_SYNC)
 		{
-			(void) pgsql_stream_log_error(pgsql, NULL, "select failed: %m");
+			syncReceived = true;
 
-			clear_results(pgsql);
-			pgsql_finish(pgsql);
-
-			return false;
-		}
-
-		/* Else there is actually data on the socket */
-		if (PQconsumeInput(conn) == 0)
-		{
-			(void) pgsql_stream_log_error(
-				pgsql,
-				NULL,
-				"Failed to consume input for pipeline sync");
-			return false;
-		}
-
-		int results = 0;
-
-		while (!PQisBusy(conn))
-		{
-			PGresult *res = PQgetResult(conn);
-
-			if (res == NULL)
-			{
-				/*
-				 * NULL represents a end of result for a single query, but we are
-				 * in pipeline mode and we can have multiple results.
-				 *
-				 * We need to continue consuming until we get a SYNC message.
-				 */
-
-				continue;
-			}
-
-			results++;
-
-			ExecStatusType resultStatus = PQresultStatus(res);
+			log_trace("Received pipeline sync. Total results: %d", results);
 
 			PQclear(res);
 
-			if (resultStatus == PGRES_PIPELINE_SYNC)
-			{
-				syncReceived = true;
-
-				log_trace("Received pipeline sync. Total results: %d", results);
-
-				break;
-			}
-
-			if (!is_response_ok(res))
-			{
-				(void) pgcopy_log_error(pgsql, res, "Failed to receive pipeline sync");
-				return false;
-			}
+			break;
 		}
+
+		if (!is_response_ok(res))
+		{
+			(void) pgcopy_log_error(pgsql, res, "Failed to receive pipeline sync");
+			PQclear(res);
+
+			return false;
+		}
+
+		PQclear(res);
 	}
 
 	/* update the last pipeline sync time */
