@@ -11,6 +11,7 @@
 #include "parsing_utils.h"
 #include "string_utils.h"
 #include "log.h"
+#include "pqexpbuffer.h"
 
 bool get_env_using_parser(EnvParser *parser);
 
@@ -271,8 +272,36 @@ get_env_using_parser(EnvParser *parser)
 					 (parser->upperBounded &&
 					  *((int *) parser->target) > parser->maxValue))
 			{
-				log_fatal("Failed to parse \"%s\": \"%s\"", parser->envname,
-						  envValue);
+				PQExpBuffer errorMessage = createPQExpBuffer();
+
+				appendPQExpBuffer(errorMessage,
+								  "Failed to parse \"%s\": \"%s\", "
+								  "expected an integer",
+								  parser->envname,
+								  envValue);
+
+				if (parser->lowerBounded)
+				{
+					appendPQExpBuffer(errorMessage,
+									  " greater than %d",
+									  parser->minValue - 1);
+				}
+
+				if (parser->lowerBounded && parser->upperBounded)
+				{
+					appendPQExpBuffer(errorMessage, " and");
+				}
+
+				if (parser->upperBounded)
+				{
+					appendPQExpBuffer(errorMessage,
+									  " less than %d",
+									  parser->maxValue + 1);
+				}
+
+				log_fatal("%s", errorMessage->data);
+
+				destroyPQExpBuffer(errorMessage);
 				return false;
 			}
 			break;
