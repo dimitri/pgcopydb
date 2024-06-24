@@ -468,13 +468,16 @@ Now, first dump the schema:
 ::
 
    $ pgcopydb dump schema
-   14:28:50 22 INFO   Running pgcopydb version 0.13.38.g22e6544.dirty from "/usr/local/bin/pgcopydb"
-   14:28:50 22 INFO   Dumping database from "postgres://pagila@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
-   14:28:50 22 INFO   Dumping database into directory "/tmp/pgcopydb"
-   14:28:50 22 INFO   Using pg_dump for Postgres "16.1" at "/usr/bin/pg_dumpall"
-   14:28:50 22 INFO   Exported snapshot "00000003-00000022-1" from the source database
-   14:28:50 22 INFO    /usr/bin/pg_dump -Fc --snapshot 00000003-00000022-1 --section pre-data --file /tmp/pgcopydb/schema/pre.dump 'postgres://pagila@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60'
-   14:28:51 22 INFO    /usr/bin/pg_dump -Fc --snapshot 00000003-00000022-1 --section post-data --file /tmp/pgcopydb/schema/post.dump 'postgres://pagila@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60'
+   08:27:48.633 44371 INFO   Using work dir "/tmp/pgcopydb"
+   08:27:48.634 44371 INFO   Dumping database from "postgres://pagila:0wn3d@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
+   08:27:48.634 44371 INFO   Dumping database into directory "/tmp/pgcopydb"
+   08:27:48.634 44371 INFO   Using pg_dump for Postgres "16.2" at "/usr/bin/pg_dump"
+   08:27:48.971 44371 INFO   Fetched information for 5 tables (including 0 tables split in 0 partitions total), with an estimated total of 1000 thousands tuples and 128 MB on-disk
+   08:27:48.978 44371 INFO   Fetched information for 4 indexes (supporting 4 constraints)
+   08:27:48.983 44371 INFO   Fetching information for 1 sequences
+   08:27:48.996 44371 INFO   Fetched information for 1 extensions
+   08:27:49.072 44371 INFO   Found 5 indexes (supporting 5 constraints) in the target database
+   08:27:49.078 44371 INFO    /usr/bin/pg_dump -Fc --section=pre-data --section=post-data --file /tmp/pgcopydb/schema/schema.dump 'postgres://pagila:0wn3d@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60'
 
 Now restore the pre-data schema on the target database, cleaning up the
 already existing objects if any, which allows running this test scenario
@@ -484,42 +487,25 @@ target instance though!
 ::
 
    $ PGCOPYDB_DROP_IF_EXISTS=on pgcopydb restore pre-data --no-owner --resume --not-consistent
-   14:28:51 26 INFO   Running pgcopydb version 0.13.38.g22e6544.dirty from "/usr/local/bin/pgcopydb"
-   14:28:51 26 INFO   Schema dump for pre-data and post-data section have been done
-   14:28:51 26 INFO   Restoring database from existing files at "/tmp/pgcopydb"
-   14:28:51 26 INFO   Using pg_restore for Postgres "16.1" at "/usr/bin/pg_restore"
-   14:28:51 26 INFO   [TARGET] Restoring database into "postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
-   14:28:51 26 INFO   Drop tables on the target database, per --drop-if-exists
-   14:28:51 26 INFO   No tables to migrate, skipping drop tables on the target database
-   14:28:51 26 INFO    /usr/bin/pg_restore --dbname 'postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60' --single-transaction --clean --
-
+   08:30:13.621 44597 INFO   Using work dir "/tmp/pgcopydb"
+   08:30:13.621 44597 INFO   Restoring database from existing files at "/tmp/pgcopydb"
+   08:30:13.706 44597 INFO   Found 5 indexes (supporting 5 constraints) in the target database
+   08:30:13.710 44597 INFO   Using pg_restore for Postgres "16.2" at "/usr/bin/pg_restore"
+   08:30:13.711 44597 INFO   [TARGET] Restoring database into "postgres://pagila:0wn3d@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
+   08:30:13.730 44597 INFO   Drop tables on the target database, per --drop-if-exists
+   08:30:13.774 44597 INFO    /usr/bin/pg_restore --dbname 'postgres://pagila:0wn3d@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60' --section pre-data --jobs 4 --clean --if-exists --no-owner --use-list /tmp/pgcopydb/schema/pre-filtered.list /tmp/pgcopydb/schema/schema.dump
 
 Then copy the data over:
 
 ::
 
    $ pgcopydb copy table-data --resume --not-consistent
-    14:28:52 30 INFO   Running pgcopydb version 0.13.38.g22e6544.dirty from "/usr/local/bin/pgcopydb"
-    14:28:52 30 INFO   [SOURCE] Copying database from "postgres://pagila@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
-    14:28:52 30 INFO   [TARGET] Copying database into "postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
-    14:28:52 30 INFO   Schema dump for pre-data and post-data section have been done
-    14:28:52 30 INFO   Pre-data schema has been restored on the target instance
-    14:28:52 30 INFO   Copy data from source to target in sub-processes
-   ...
-                                                  Step   Connection    Duration    Transfer   Concurrency
-    --------------------------------------------------   ----------  ----------  ----------  ------------
-                                           Dump Schema       source         0ms                         1
-      Catalog Queries (table ordering, filtering, etc)       source         0ms                         1
-                                        Prepare Schema       target         0ms                         1
-         COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both         0ms                     4 + 8
-                                     COPY (cumulative)         both       1s671     2955 kB             4
-                            Large Objects (cumulative)         both                                     4
-                CREATE INDEX, CONSTRAINTS (cumulative)       target         0ms                         4
-                                       Finalize Schema       target         0ms                         1
-    --------------------------------------------------   ----------  ----------  ----------  ------------
-                             Total Wall Clock Duration         both       753ms                     4 + 8
-    --------------------------------------------------   ----------  ----------  ----------  ------------
-
+   08:34:02.813 44834 INFO   [SOURCE] Copying database from "postgres://pagila:0wn3d@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
+   08:34:02.813 44834 INFO   [TARGET] Copying database into "postgres://pagila:0wn3d@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
+   08:34:02.861 44834 INFO   Using work dir "/tmp/pgcopydb"
+   08:34:02.862 44834 INFO   Copy data from source to target in sub-processes
+   08:34:02.863 44834 INFO   Re-using catalog caches
+   08:34:02.863 44834 INFO   STEP 4: starting 4 table-data COPY processes
 
 And now create the indexes on the target database, using the index
 definitions from the source database:
@@ -608,4 +594,4 @@ Finally we can restore the post-data section of the schema:
    14:28:54 60 INFO   Restoring database from existing files at "/tmp/pgcopydb"
    14:28:54 60 INFO   Using pg_restore for Postgres "16.1" at "/usr/bin/pg_restore"
    14:28:54 60 INFO   [TARGET] Restoring database into "postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
-   14:28:55 60 INFO    /usr/bin/pg_restore --dbname 'postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60' --single-transaction --use-list /tmp/pgcopydb/schema/post-filtered.list /tmp/pgcopydb/schema/post.dump
+   14:28:55 60 INFO    /usr/bin/pg_restore --dbname 'postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60' --single-transaction --use-list /tmp/pgcopydb/schema/post-filtered.list /tmp/pgcopydb/schema/schema.dump

@@ -581,9 +581,7 @@ cloneDB(CopyDataSpec *copySpecs)
 
 	log_info("STEP 2: dump the source database schema (pre/post data)");
 
-	if (!copydb_dump_source_schema(copySpecs,
-								   copySpecs->sourceSnapshot.snapshot,
-								   PG_DUMP_SECTION_SCHEMA))
+	if (!copydb_dump_source_schema(copySpecs, copySpecs->sourceSnapshot.snapshot))
 	{
 		/* errors have already been logged */
 		return false;

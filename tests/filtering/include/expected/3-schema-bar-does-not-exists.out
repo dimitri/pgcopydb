@@ -8,4 +8,6 @@ nspname | foo
 nspname | public
 -[ RECORD 5 ]-----------------
 nspname | schema_name_20_chars
+-[ RECORD 6 ]-----------------
+nspname | seq
 

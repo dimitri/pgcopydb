@@ -101,7 +101,7 @@ expected location within the ``--target`` directory, which has typically
 been created with the ``pgcopydb dump schema`` command.
 
 The ``pgcopydb restore pre-data`` and ``pgcopydb restore post-data`` are
-limiting their action to respectively the pre-data and the post-data files
+limiting their actions to the file with pre-data and post-data
 in the source directory..
 
 Options
@@ -285,14 +285,14 @@ First, using ``pgcopydb restore schema``
 ::
 
    $ PGCOPYDB_DROP_IF_EXISTS=on pgcopydb restore schema --source /tmp/target/ --target "port=54314 dbname=demo"
-   09:54:37 20401 INFO  Restoring database from "/tmp/target/"
-   09:54:37 20401 INFO  Restoring database into "port=54314 dbname=demo"
-   09:54:37 20401 INFO  Found a stale pidfile at "/tmp/target//pgcopydb.pid"
-   09:54:37 20401 WARN  Removing the stale pid file "/tmp/target//pgcopydb.pid"
-   09:54:37 20401 INFO  Using pg_restore for Postgres "12.9" at "/Applications/Postgres.app/Contents/Versions/12/bin/pg_restore"
-   09:54:37 20401 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_restore --dbname 'port=54314 dbname=demo' --clean --if-exists /tmp/target//schema/pre.dump
-   09:54:38 20401 INFO   /Applications/Postgres.app/Contents/Versions/12/bin/pg_restore --dbname 'port=54314 dbname=demo' --clean --if-exists --use-list /tmp/target//schema/post.list /tmp/target//schema/post.dump
-
+   07:45:10.626 39254 INFO   Using work dir "/tmp/pgcopydb"
+   07:45:10.626 39254 INFO   Restoring database from existing files at "/tmp/pgcopydb"
+   07:45:10.720 39254 INFO   Found 2 indexes (supporting 2 constraints) in the target database
+   07:45:10.723 39254 INFO   Using pg_restore for Postgres "16.2" at "/usr/bin/pg_restore"
+   07:45:10.723 39254 INFO   [TARGET] Restoring database into "postgres://postgres@127.0.0.1:5435/demo?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
+   07:45:10.737 39254 INFO   Drop tables on the target database, per --drop-if-exists
+   07:45:10.750 39254 INFO    /usr/bin/pg_restore --dbname 'postgres://postgres@127.0.0.1:5435/demo?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60' --section pre-data --jobs 4 --clean --if-exists --use-list /tmp/pgcopydb/schema/pre-filtered.list /tmp/pgcopydb/schema/schema.dump
+   07:45:10.803 39254 INFO    /usr/bin/pg_restore --dbname 'postgres://postgres@127.0.0.1:5435/demo?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60' --section post-data --jobs 4 --clean --if-exists --use-list /tmp/pgcopydb/schema/post-filtered.list /tmp/pgcopydb/schema/schema.dump
 
 Then the ``pgcopydb restore pre-data`` and ``pgcopydb restore post-data``
 would look the same with just a single call to pg_restore instead of the

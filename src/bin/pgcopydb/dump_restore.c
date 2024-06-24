@@ -87,13 +87,12 @@ copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
 
 
 /*
- * copydb_dump_source_schema uses pg_dump -Fc --schema --section=pre-data or
- * --section=post-data to dump the source database schema to files.
+ * copydb_dump_source_schema uses pg_dump -Fc --schema --schema-only
+ * to dump the source database schema to file.
  */
 bool
 copydb_dump_source_schema(CopyDataSpec *specs,
-						  const char *snapshot,
-						  PostgresDumpSection section)
+						  const char *snapshot)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
@@ -110,50 +109,21 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 		return false;
 	}
 
-	if (section == PG_DUMP_SECTION_SCHEMA ||
-		section == PG_DUMP_SECTION_PRE_DATA ||
-		section == PG_DUMP_SECTION_ALL)
+	if (file_exists(specs->dumpPaths.dumpFilename))
 	{
-		if (file_exists(specs->dumpPaths.preFilename))
-		{
-			log_info("Skipping pg_dump --section=pre-data, "
-					 "as \"%s\" already exists",
-					 specs->dumpPaths.preFilename);
-		}
-		else if (!pg_dump_db(&(specs->pgPaths),
-							 &(specs->connStrings),
-							 snapshot,
-							 "pre-data",
-							 &(specs->filters),
-							 &(specs->catalogs.filter),
-							 specs->dumpPaths.preFilename))
-		{
-			/* errors have already been logged */
-			return false;
-		}
+		log_info("Skipping source schema dump, "
+				 "as \"%s\" already exists",
+				 specs->dumpPaths.dumpFilename);
 	}
-
-	if (section == PG_DUMP_SECTION_SCHEMA ||
-		section == PG_DUMP_SECTION_POST_DATA ||
-		section == PG_DUMP_SECTION_ALL)
+	else if (!pg_dump_db(&(specs->pgPaths),
+						 &(specs->connStrings),
+						 snapshot,
+						 &(specs->filters),
+						 &(specs->catalogs.filter),
+						 specs->dumpPaths.dumpFilename))
 	{
-		if (file_exists(specs->dumpPaths.postFilename))
-		{
-			log_info("Skipping pg_dump --section=post-data, "
-					 "as \"%s\" already exists",
-					 specs->dumpPaths.postFilename);
-		}
-		else if (!pg_dump_db(&(specs->pgPaths),
-							 &(specs->connStrings),
-							 snapshot,
-							 "post-data",
-							 &(specs->filters),
-							 &(specs->catalogs.filter),
-							 specs->dumpPaths.postFilename))
-		{
-			/* errors have already been logged */
-			return false;
-		}
+		/* errors have already been logged */
+		return false;
 	}
 
 	if (!summary_stop_timing(sourceDB, TIMING_SECTION_DUMP_SCHEMA))
@@ -167,7 +137,7 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 
 
 /*
- * copydb_target_prepare_schema restores the pre.dump file into the target
+ * copydb_target_prepare_schema restores the schema.dump file into the target
  * database.
  */
 bool
@@ -175,9 +145,9 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	if (!file_exists(specs->dumpPaths.preFilename))
+	if (!file_exists(specs->dumpPaths.dumpFilename))
 	{
-		log_fatal("File \"%s\" does not exists", specs->dumpPaths.preFilename);
+		log_fatal("File \"%s\" does not exists", specs->dumpPaths.dumpFilename);
 		return false;
 	}
 
@@ -231,10 +201,11 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 		}
 	}
 
+	specs->restoreOptions.section = PG_RESTORE_SECTION_PRE_DATA;
 	if (!pg_restore_db(&(specs->pgPaths),
 					   &(specs->connStrings),
 					   &(specs->filters),
-					   specs->dumpPaths.preFilename,
+					   specs->dumpPaths.dumpFilename,
 					   specs->dumpPaths.preListFilename,
 					   specs->restoreOptions))
 	{
@@ -548,9 +519,9 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	if (!file_exists(specs->dumpPaths.postFilename))
+	if (!file_exists(specs->dumpPaths.dumpFilename))
 	{
-		log_fatal("File \"%s\" does not exists", specs->dumpPaths.postFilename);
+		log_fatal("File \"%s\" does not exists", specs->dumpPaths.dumpFilename);
 		return false;
 	}
 
@@ -574,10 +545,11 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 		return false;
 	}
 
+	specs->restoreOptions.section = PG_RESTORE_SECTION_POST_DATA;
 	if (!pg_restore_db(&(specs->pgPaths),
 					   &(specs->connStrings),
 					   &(specs->filters),
-					   specs->dumpPaths.postFilename,
+					   specs->dumpPaths.dumpFilename,
 					   specs->dumpPaths.postListFilename,
 					   specs->restoreOptions))
 	{
@@ -611,7 +583,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 	{
 		case PG_DUMP_SECTION_PRE_DATA:
 		{
-			dumpFilename = specs->dumpPaths.preFilename;
+			dumpFilename = specs->dumpPaths.dumpFilename;
 			listFilename = specs->dumpPaths.preListFilename;
 			listOutFilename = specs->dumpPaths.preListOutFilename;
 			break;
@@ -619,7 +591,7 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 
 		case PG_DUMP_SECTION_POST_DATA:
 		{
-			dumpFilename = specs->dumpPaths.postFilename;
+			dumpFilename = specs->dumpPaths.dumpFilename;
 			listFilename = specs->dumpPaths.postListFilename;
 			listOutFilename = specs->dumpPaths.postListOutFilename;
 			break;
@@ -635,20 +607,20 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 	}
 
 	/*
-	 * The pre.dump archive file contains all the objects to create in the
+	 * The schema.dump archive file contains all the objects to create in the
 	 * target database. We want to filter out the schemas and tables excluded
 	 * from the filtering setup.
 	 *
-	 * The post.dump archive file contains all the objects to create once the
+	 * This archive file also contains all the objects to create once the
 	 * table data has been copied over. It contains in particular the
 	 * constraints and indexes that we have already built concurrently in the
 	 * previous step, so we want to filter those out.
 	 *
 	 * Here's how to filter out some objects with pg_restore:
 	 *
-	 *   1. pg_restore -f post.list --list post.dump
+	 *   1. pg_restore -f post.list --list schema.dump
 	 *   2. edit post.list to comment out lines and save as filtered.list
-	 *   3. pg_restore --use-list filtered.list post.dump
+	 *   3. pg_restore --section post-data --use-list filtered.list schema.dump
 	 */
 	ArchiveContentArray contents = { 0 };
 

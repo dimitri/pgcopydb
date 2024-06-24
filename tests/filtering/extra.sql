@@ -82,3 +82,28 @@ create materialized view foo.matview_2_depends_on_matview_1_exclude_as_table as 
 -- the dependent materialized view as well.
 --
 -- create materialized view foo.matview_3_depends_on_matview_1_exclude_table as select * from foo.matview_1_exclude_data;
+
+--
+-- See: https://github.com/dimitri/pgcopydb/issues/817
+--
+create schema seq;
+
+-- A sequence used as default
+create sequence seq.default_table_id_seq;
+create table seq.default_table (id integer primary key default nextval('seq.default_table_id_seq'));
+select setval('seq.default_table_id_seq', 667);
+
+-- A sequence used as identity
+create table seq.identity_table (id integer primary key generated always as identity);
+select setval('seq.identity_table_id_seq', 668);
+
+-- A standalone sequence
+create sequence seq.standalone_id_seq;
+select setval('seq.standalone_id_seq', 669);
+
+-- A standalone sequence smallint
+create sequence seq.standalone_smallint_id_seq as smallint;
+select setval('seq.standalone_smallint_id_seq', 670);
+
+-- A standalone sequence with a minvalue that has not been set
+create sequence seq.standalone_minvalue_id_seq minvalue 671;

@@ -59,11 +59,11 @@ typedef struct DumpPaths
 	char rolesFilename[MAXPGPATH];   /* pg_dumpall --roles-only */
 	char extnspFilename[MAXPGPATH];  /* pg_dump --schema-only -n ... */
 
-	char preFilename[MAXPGPATH];     /* pg_dump --section=pre-data */
+	char dumpFilename[MAXPGPATH];     /* pg_dump --section=pre-data --section=post-data */
+
 	char preListOutFilename[MAXPGPATH]; /* pg_restore --list */
 	char preListFilename[MAXPGPATH]; /* pg_restore --use-list */
 
-	char postFilename[MAXPGPATH];     /* pg_dump --section=post-data */
 	char postListOutFilename[MAXPGPATH]; /* pg_restore --list */
 	char postListFilename[MAXPGPATH];    /* pg_restore --use-list */
 } DumpPaths;
