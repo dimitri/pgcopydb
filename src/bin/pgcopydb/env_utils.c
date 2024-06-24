@@ -283,8 +283,8 @@ get_env_using_parser(EnvParser *parser)
 				if (parser->lowerBounded)
 				{
 					appendPQExpBuffer(errorMessage,
-									  " greater than %d",
-									  parser->minValue - 1);
+									  " >= %d",
+									  parser->minValue);
 				}
 
 				if (parser->lowerBounded && parser->upperBounded)
@@ -295,8 +295,8 @@ get_env_using_parser(EnvParser *parser)
 				if (parser->upperBounded)
 				{
 					appendPQExpBuffer(errorMessage,
-									  " less than %d",
-									  parser->maxValue + 1);
+									  " <= %d",
+									  parser->maxValue);
 				}
 
 				log_fatal("%s", errorMessage->data);
