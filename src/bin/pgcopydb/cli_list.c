@@ -212,7 +212,7 @@ cli_list_getenv(ListDBOptions *options)
 
 	EnvParser parsers[] = {
 		{ PGCOPYDB_SPLIT_MAX_PARTS, ENV_TYPE_INT,
-		  &(options->splitMaxParts), 0, 1, 1 },
+		  &(options->splitMaxParts), 0, true, 1 },
 		{ PGCOPYDB_ESTIMATE_TABLE_SIZES, ENV_TYPE_BOOL,
 		  &(options->estimateTableSizes) },
 	};
