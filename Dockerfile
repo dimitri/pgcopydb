@@ -54,9 +54,16 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
 
 WORKDIR /usr/src/pgcopydb
 
-COPY . .
+COPY Makefile .
+COPY GIT-VERSION-GEN .
+COPY GIT-VERSION-FILE .
+COPY version .
+COPY src src
 
 RUN make -s clean && make -s -j$(nproc) install
+
+# When only tests are updated, reuse previous binary build
+COPY tests tests
 
 # Now the "run" image, as small as possible
 FROM --platform=${TARGETPLATFORM} debian:11-slim as run
