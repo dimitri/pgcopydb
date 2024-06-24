@@ -577,8 +577,14 @@ typedef struct ArchiveContext
 	FILE *listFile;
 } ArchiveContext;
 
+/*
+ * Writes the restore list for the copydb utility.
+ *
+ * This function is called as a hook during the archive content processing.
+ * It writes the restore list to a file based on the provided ArchiveContentItem.
+ */
 static bool
-copydb_write_restore_list_callback(void *ctx, ArchiveContentItem *item)
+copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 {
 	CopyDataSpec *specs = ((ArchiveContext *) ctx)->specs;
 	FILE *listFile = ((ArchiveContext *) ctx)->listFile;
@@ -804,21 +810,20 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 	}
 
 	FILE *listFile = fopen_with_umask(listFilename, "wb", FOPEN_FLAGS_W, 0644);
-	if (!listFilename)
+	if (listFile == NULL)
 	{
 		log_error("Failed to open list file \"%s\": %m", listFilename);
 		return false;
 	}
-	ArchiveContext context = { 0 };
-	context.specs = specs;
-	context.line = line;
-	context.listFile = listFile;
+
+	ArchiveContext context = { .specs = specs, .line = line, .listFile = listFile };
 
 	bool res = archive_iter(listOutFilename, &context,
-							copydb_write_restore_list_callback);
+							copydb_write_restore_list_hook);
 	if (!res)
 	{
-		log_error("Failed to write filtered pg_restore list file at \"%s\"",
+		log_error("Failed to write filtered pg_restore list file at \"%s\""
+				  ", see above for details",
 				  listFilename);
 	}
 	else

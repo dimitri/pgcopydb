@@ -551,8 +551,11 @@ cli_restore_roles(int argc, char **argv)
 }
 
 
+/*
+ * Prints the details of an archive content item to stdout.
+ */
 static bool
-print_archive_item(void *context, ArchiveContentItem *item)
+print_archive_item_hook(void *context, ArchiveContentItem *item)
 {
 	fformat(stdout,
 			"%d; %u %u %s %s\n",
@@ -578,7 +581,7 @@ cli_restore_schema_parse_list(int argc, char **argv)
 
 		log_info("Parsing Archive Content pre.list file: \"%s\"", filename);
 
-		archive_iter(filename, NULL, print_archive_item);
+		archive_iter(filename, NULL, print_archive_item_hook);
 		exit(EXIT_CODE_QUIT);
 	}
 

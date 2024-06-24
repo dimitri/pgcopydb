@@ -156,13 +156,6 @@ typedef struct ArchiveContentItem
 } ArchiveContentItem;
 
 
-typedef struct ArchiveContentArray
-{
-	int count;
-	ArchiveContentItem *array;  /* malloc'ed area */
-} ArchiveContentArray;
-
-
 /*
  * parse_archive_list parses a archive content list as obtained with the
  * pg_restore --list option.

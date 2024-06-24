@@ -7,12 +7,140 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "file_iterator.h"
 #include "file_utils.h"
 #include "log.h"
 #include "archive_iterator.h"
 #include "archive.h"
 #include "string_utils.h"
+#include "defaults.h"
+
+typedef bool (FileIterCallback)(void *context, const char *item);
+
+/*
+ * A struct to hold the state of the file iterator. This
+ * iterator is used to iterate a file line-by-line.
+ */
+typedef struct FileIterator
+{
+	FILE *file;
+	const char *filename;
+	char line[BUFSIZE];
+} FileIterator;
+
+/*
+ * Create a new iterator from the file name
+ */
+static FileIterator *
+file_iterator_from(const char *filename)
+{
+	FileIterator *iterator = (FileIterator *) calloc(1, sizeof(FileIterator));
+	if (iterator == NULL)
+	{
+		log_error("Failed to allocate memory for FileIterator");
+		return NULL;
+	}
+
+	iterator->filename = filename;
+	iterator->file = fopen_read_only(filename);
+	if (iterator->file == NULL)
+	{
+		log_error("Failed to open file");
+		return NULL;
+	}
+
+	return iterator;
+}
+
+
+/*
+ * Get the next line/item from the file/iterator.
+ *
+ * The memory for the line is allocated by this function and will be freed by it too.
+ */
+static bool
+file_iterator_next(FileIterator *iterator, char **line)
+{
+	*line = NULL;
+	if (fgets(iterator->line, sizeof(iterator->line), iterator->file) != NULL)
+	{
+		/* replace the new line character with null terminator */
+		iterator->line[strcspn(iterator->line, "\n")] = '\0';
+		*line = iterator->line;
+		return true;
+	}
+
+	if (ferror(iterator->file))
+	{
+		log_error("Failed to read line from file %s", iterator->filename);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * Destroy the iterator and free resources
+ */
+static bool
+file_iterator_destroy(FileIterator *iterator)
+{
+	if (iterator->file)
+	{
+		fclose(iterator->file);
+	}
+
+	return true;
+}
+
+
+/*
+ * Iterate over the file line-by-line and call the callback function for each line.
+ */
+static bool
+file_iter(const char *filename,
+		  void *context,
+		  FileIterCallback *callback)
+{
+	FileIterator *iter = file_iterator_from(filename);
+	if (!iter)
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	char *line = NULL;
+	for (;;)
+	{
+		if (!file_iterator_next(iter, &line))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (line == NULL)
+		{
+			if (!file_iterator_destroy(iter))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			break;
+		}
+
+		/* now call the provided callback */
+		if (!(*callback)(context, line))
+		{
+			log_error("Failed to iterate over list of colls, "
+					  "see above for details");
+			return false;
+		}
+	}
+
+
+	return true;
+}
 
 
 /* remember to skip the \0 at the end of the static string here */
@@ -490,16 +618,20 @@ parse_archive_list_entry(ArchiveContentItem *item, const char *line)
 }
 
 
-typedef struct ArchiveContext
+typedef struct FileIterContext
 {
 	ArchiveIterCallback *callback;
 	void *context;
 	size_t line_number;
 	const char *filename;
-} ArchiveContext;
+} FileIterContext;
 
+
+/*
+ * Parses an archive list entry and invokes the hook function.
+ */
 static bool
-file_iter_callback(void *context, const char *line)
+parse_archive_list_entry_hook(void *context, const char *line)
 {
 	/* skip empty lines and lines that start with a semi-colon (comment) */
 	if (*line == '\0' || *line == ';')
@@ -507,18 +639,18 @@ file_iter_callback(void *context, const char *line)
 		return true;
 	}
 
-	ArchiveContext *archiveContext = (ArchiveContext *) context;
+	FileIterContext *iterContext = (FileIterContext *) context;
 	ArchiveContentItem item = { 0 };
 	if (!parse_archive_list_entry(&item, line))
 	{
 		log_error("Failed to parse line %ld of \"%s\", "
 				  "see above for details",
-				  archiveContext->line_number,
-				  archiveContext->filename);
+				  iterContext->line_number,
+				  iterContext->filename);
 		return false;
 	}
 
-	return archiveContext->callback(archiveContext->context, &item);
+	return iterContext->callback(iterContext->context, &item);
 }
 
 
@@ -527,6 +659,6 @@ archive_iter(const char *filename,
 			 void *context,
 			 ArchiveIterCallback *callback)
 {
-	ArchiveContext archiveContext = { callback, context, 0, filename };
-	return file_iter(filename, &archiveContext, file_iter_callback);
+	FileIterContext iterContext = { callback, context, 0, filename };
+	return file_iter(filename, &iterContext, parse_archive_list_entry_hook);
 }

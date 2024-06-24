@@ -20,7 +20,6 @@
 #include "defaults.h"
 #include "env_utils.h"
 #include "file_utils.h"
-#include "file_iterator.h"
 #include "filtering.h"
 #include "log.h"
 #include "parsing_utils.h"
