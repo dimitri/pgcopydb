@@ -8,8 +8,12 @@
 
 #include "defaults.h"
 #include "env_utils.h"
+#include "parsing_utils.h"
+#include "string_utils.h"
 #include "log.h"
+#include "pqexpbuffer.h"
 
+bool get_env_using_parser(EnvParser *parser);
 
 /*
  * env_found_empty returns true if the passed environment variable is the empty
@@ -161,7 +165,7 @@ get_env_dup_with_fallback(const char *name, char **result, const char *fallback)
 
 
 /*
- * get_env_dup copies the environmennt variable with "name" into the result
+ * get_env_dup copies the environment variable with "name" into the result
  * buffer using strdup. It returns false when it fails. The environment variable not
  * existing is also considered a failure.
  */
@@ -173,7 +177,7 @@ get_env_dup(const char *name, char **result)
 
 
 /*
- * get_env_copy copies the environmennt variable with "name" into tho result
+ * get_env_copy copies the environment variable with "name" into tho result
  * buffer. It returns false when it fails. The environment variable not
  * existing is also considered a failure.
  */
@@ -214,4 +218,133 @@ get_env_pgdata_or_exit(char *pgdata)
 	log_fatal("Failed to set PGDATA either from the environment "
 			  "or from --pgdata");
 	exit(EXIT_CODE_BAD_ARGS);
+}
+
+
+/*
+ * get_env_using_parsers iterates over the parsers array and calls
+ * get_env_using_parser for each parser.
+ */
+bool
+get_env_using_parsers(EnvParserArray *parsers)
+{
+	int errors = 0;
+
+	for (int i = 0; i < parsers->count; i++)
+	{
+		if (!get_env_using_parser(&parsers->array[i]))
+		{
+			++errors;
+		}
+	}
+
+	return errors == 0;
+}
+
+
+/*
+ * get_env_using_parser checks if the environment variable exists and if it does
+ * it parses it and stores it in the target. If the environment variable is not
+ * set, the target is not modified. If the environment variable is set but the
+ * parsing fails, an error is logged and the errors counter is incremented.
+ */
+bool
+get_env_using_parser(EnvParser *parser)
+{
+	if (!env_exists(parser->envname))
+	{
+		return true;
+	}
+
+	switch (parser->type)
+	{
+		case ENV_TYPE_INT:
+		{
+			char envValue[BUFSIZE] = { 0 };
+			if (!get_env_copy(parser->envname, envValue, sizeof(envValue)))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+			else if (!stringToInt(envValue, (int *) parser->target) ||
+					 (parser->lowerBounded &&
+					  *((int *) parser->target) < parser->minValue) ||
+					 (parser->upperBounded &&
+					  *((int *) parser->target) > parser->maxValue))
+			{
+				PQExpBuffer errorMessage = createPQExpBuffer();
+
+				appendPQExpBuffer(errorMessage,
+								  "Failed to parse \"%s\": \"%s\", "
+								  "expected an integer",
+								  parser->envname,
+								  envValue);
+
+				if (parser->lowerBounded)
+				{
+					appendPQExpBuffer(errorMessage,
+									  " >= %d",
+									  parser->minValue);
+				}
+
+				if (parser->lowerBounded && parser->upperBounded)
+				{
+					appendPQExpBuffer(errorMessage, " and");
+				}
+
+				if (parser->upperBounded)
+				{
+					appendPQExpBuffer(errorMessage,
+									  " <= %d",
+									  parser->maxValue);
+				}
+
+				log_fatal("%s", errorMessage->data);
+
+				destroyPQExpBuffer(errorMessage);
+				return false;
+			}
+			break;
+		}
+
+		case ENV_TYPE_BOOL:
+		{
+			char envValue[BUFSIZE] = { 0 };
+			if (!get_env_copy(parser->envname, envValue, sizeof(envValue)))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+			else if (!parser->target &&
+					 !parse_bool(envValue, (bool *) parser->target))
+			{
+				log_fatal("Failed to parse \"%s\": \"%s\", "
+						  "expected a boolean (on/off)",
+						  parser->envname, envValue);
+				return false;
+			}
+			break;
+		}
+
+		case ENV_TYPE_STRING:
+		{
+			if (!get_env_copy(parser->envname,
+							  parser->target,
+							  parser->targetSize))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+			break;
+		}
+
+		default:
+		{
+			log_fatal("Unknown parser type %d", parser->type);
+			return false;
+			break;
+		}
+	}
+
+	return true;
 }

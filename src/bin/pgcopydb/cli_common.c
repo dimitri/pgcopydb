@@ -212,6 +212,54 @@ cli_copydb_getenv(CopyDBOptions *options)
 {
 	int errors = 0;
 
+	/* Fill in the defaults before reading environment variables */
+	options->tableJobs = DEFAULT_TABLE_JOBS;
+	options->indexJobs = DEFAULT_INDEX_JOBS;
+	options->restoreOptions.jobs = DEFAULT_RESTORE_JOBS;
+	options->lObjectJobs = DEFAULT_LARGE_OBJECTS_JOBS;
+	options->splitTablesLargerThan.bytes = DEFAULT_SPLIT_TABLES_LARGER_THAN;
+
+	EnvParser parsers[] = {
+		{ PGCOPYDB_TABLE_JOBS, ENV_TYPE_INT,
+		  &(options->tableJobs), 0, true, 1, true, 128 },
+		{ PGCOPYDB_INDEX_JOBS, ENV_TYPE_INT,
+		  &(options->indexJobs), 0, true, 1, true, 128 },
+		{ PGCOPYDB_RESTORE_JOBS, ENV_TYPE_INT,
+		  &(options->restoreOptions.jobs), 0, true, 1, true, 128 },
+		{ PGCOPYDB_LARGE_OBJECTS_JOBS, ENV_TYPE_INT,
+		  &(options->lObjectJobs), 0, true, 1, true, 128 },
+		{ PGCOPYDB_SPLIT_MAX_PARTS, ENV_TYPE_INT,
+		  &(options->splitMaxParts), 0, true, 1 },
+		{ PGCOPYDB_ESTIMATE_TABLE_SIZES, ENV_TYPE_BOOL,
+		  &(options->estimateTableSizes) },
+		{ PGCOPYDB_SNAPSHOT, ENV_TYPE_STRING,
+		  &(options->snapshot), sizeof(options->snapshot) },
+		{ PGCOPYDB_WAL2JSON_NUMERIC_AS_STRING, ENV_TYPE_BOOL,
+		  &(options->slot.wal2jsonNumericAsString) },
+		{ PGCOPYDB_DROP_IF_EXISTS, ENV_TYPE_BOOL,
+		  &(options->restoreOptions.dropIfExists) },
+		{ PGCOPYDB_FAIL_FAST, ENV_TYPE_BOOL,
+		  &(options->failFast) },
+		{ PGCOPYDB_SKIP_VACUUM, ENV_TYPE_BOOL,
+		  &(options->skipVacuum) },
+		{ PGCOPYDB_SKIP_DB_PROPERTIES, ENV_TYPE_BOOL,
+		  &(options->skipDBproperties) },
+		{ PGCOPYDB_SKIP_CTID_SPLIT, ENV_TYPE_BOOL,
+		  &(options->skipCtidSplit) },
+		{ PGCOPYDB_SKIP_TABLESPACES, ENV_TYPE_BOOL,
+		  &(options->restoreOptions.noTableSpaces) }
+	};
+
+	int parserCount = sizeof(parsers) / sizeof(parsers[0]);
+
+	EnvParserArray parserArray = { .count = parserCount, .array = parsers };
+
+	if (!get_env_using_parsers(&parserArray))
+	{
+		/* errors have already been logged */
+		++errors;
+	}
+
 	if (!cli_copydb_getenv_source_pguri(&(options->connStrings.source_pguri)))
 	{
 		/* errors have already been logged */
@@ -228,158 +276,10 @@ cli_copydb_getenv(CopyDBOptions *options)
 		}
 	}
 
-	if (env_exists(PGCOPYDB_TABLE_JOBS))
-	{
-		char jobs[BUFSIZE] = { 0 };
-
-		if (get_env_copy(PGCOPYDB_TABLE_JOBS, jobs, sizeof(jobs)))
-		{
-			if (!stringToInt(jobs, &options->tableJobs) ||
-				options->tableJobs < 1 ||
-				options->tableJobs > 128)
-			{
-				log_fatal("Failed to parse PGCOPYDB_TABLE_JOBS: \"%s\"",
-						  jobs);
-				++errors;
-			}
-		}
-		else
-		{
-			/* errors have already been logged */
-			++errors;
-		}
-	}
-
-	if (env_exists(PGCOPYDB_INDEX_JOBS))
-	{
-		char jobs[BUFSIZE] = { 0 };
-
-		if (get_env_copy(PGCOPYDB_INDEX_JOBS, jobs, sizeof(jobs)))
-		{
-			if (!stringToInt(jobs, &options->indexJobs) ||
-				options->indexJobs < 1 ||
-				options->indexJobs > 128)
-			{
-				log_fatal("Failed to parse PGCOPYDB_INDEX_JOBS: \"%s\"",
-						  jobs);
-				++errors;
-			}
-		}
-		else
-		{
-			/* errors have already been logged */
-			++errors;
-		}
-	}
-
-	if (env_exists(PGCOPYDB_RESTORE_JOBS))
-	{
-		char jobs[BUFSIZE] = { 0 };
-
-		if (get_env_copy(PGCOPYDB_RESTORE_JOBS, jobs, sizeof(jobs)))
-		{
-			if (!stringToInt(jobs, &options->restoreOptions.jobs) ||
-				options->restoreOptions.jobs < 1 ||
-				options->restoreOptions.jobs > 128)
-			{
-				log_fatal("Failed to parse PGCOPYDB_RESTORE_JOBS: \"%s\"",
-						  jobs);
-				++errors;
-			}
-		}
-		else
-		{
-			/* errors have already been logged */
-			++errors;
-		}
-	}
-
-	if (env_exists(PGCOPYDB_LARGE_OBJECTS_JOBS))
-	{
-		char jobs[BUFSIZE] = { 0 };
-
-		if (get_env_copy(PGCOPYDB_LARGE_OBJECTS_JOBS, jobs, sizeof(jobs)))
-		{
-			if (!stringToInt(jobs, &options->lObjectJobs) ||
-				options->lObjectJobs < 1 ||
-				options->lObjectJobs > 128)
-			{
-				log_fatal("Failed to parse PGCOPYDB_LARGE_OBJECTS_JOBS: \"%s\"",
-						  jobs);
-				++errors;
-			}
-		}
-		else
-		{
-			/* errors have already been logged */
-			++errors;
-		}
-	}
-
 	if (!cli_copydb_getenv_split(&(options->splitTablesLargerThan)))
 	{
 		/* errors have already been logged */
 		++errors;
-	}
-
-	/* when --split-max-parts has not been used, check PGCOPYDB_SPLIT_MAX_PARTS */
-	if (options->splitMaxParts == 0)
-	{
-		if (env_exists(PGCOPYDB_SPLIT_MAX_PARTS))
-		{
-			char maxParts[BUFSIZE] = { 0 };
-
-			if (!get_env_copy(PGCOPYDB_SPLIT_MAX_PARTS, maxParts, sizeof(maxParts)))
-			{
-				/* errors have already been logged */
-				++errors;
-			}
-			else if (!stringToInt(maxParts, &options->splitMaxParts) ||
-					 options->splitMaxParts < 1)
-			{
-				log_fatal("Failed to parse PGCOPYDB_SPLIT_MAX_PARTS: \"%s\"",
-						  maxParts);
-				++errors;
-			}
-		}
-	}
-
-	/* when --estimate-table-sizes has not been used, check PGCOPYDB_ESTIMATE_TABLE_SIZES */
-	if (!options->estimateTableSizes)
-	{
-		if (env_exists(PGCOPYDB_ESTIMATE_TABLE_SIZES))
-		{
-			char estimateTableSizesAsString[BUFSIZE] = { 0 };
-
-			if (!get_env_copy(PGCOPYDB_ESTIMATE_TABLE_SIZES,
-							  estimateTableSizesAsString,
-							  sizeof(estimateTableSizesAsString)))
-			{
-				/* errors have already been logged */
-				++errors;
-			}
-			else if (!parse_bool(estimateTableSizesAsString,
-								 &(options->estimateTableSizes)))
-			{
-				log_error("Failed to parse environment variable \"%s\" "
-						  "value \"%s\", expected a boolean (on/off)",
-						  PGCOPYDB_ESTIMATE_TABLE_SIZES,
-						  estimateTableSizesAsString);
-				++errors;
-			}
-		}
-	}
-
-	/* when --snapshot has not been used, check PGCOPYDB_SNAPSHOT */
-	if (env_exists(PGCOPYDB_SNAPSHOT))
-	{
-		if (!get_env_copy(PGCOPYDB_SNAPSHOT,
-						  options->snapshot,
-						  sizeof(options->snapshot)))
-		{
-			/* errors have already been logged */
-			++errors;
-		}
 	}
 
 	/* check --plugin environment variable */
@@ -401,185 +301,6 @@ cli_copydb_getenv(CopyDBOptions *options)
 					  "test_decoding (the default) or wal2json",
 					  OutputPluginToString(options->slot.plugin));
 			++errors;
-		}
-	}
-
-	/* check if --wal2json-numeric-as-string has been used */
-	if (env_exists(PGCOPYDB_WAL2JSON_NUMERIC_AS_STRING))
-	{
-		char wal2jsonNumericAsString[BUFSIZE] = { 0 };
-
-		if (!get_env_copy(PGCOPYDB_WAL2JSON_NUMERIC_AS_STRING,
-						  wal2jsonNumericAsString,
-						  sizeof(wal2jsonNumericAsString)))
-		{
-			/* errors have already been logged */
-			++errors;
-		}
-		else if (!parse_bool(wal2jsonNumericAsString,
-							 &(options->slot.wal2jsonNumericAsString)))
-		{
-			log_error("Failed to parse environment variable \"%s\" "
-					  "value \"%s\", expected a boolean (on/off)",
-					  PGCOPYDB_WAL2JSON_NUMERIC_AS_STRING,
-					  wal2jsonNumericAsString);
-			++errors;
-		}
-	}
-
-	/* when --drop-if-exists has not been used, check PGCOPYDB_DROP_IF_EXISTS */
-	if (!options->restoreOptions.dropIfExists)
-	{
-		if (env_exists(PGCOPYDB_DROP_IF_EXISTS))
-		{
-			char DROP_IF_EXISTS[BUFSIZE] = { 0 };
-
-			if (!get_env_copy(PGCOPYDB_DROP_IF_EXISTS,
-							  DROP_IF_EXISTS,
-							  sizeof(DROP_IF_EXISTS)))
-			{
-				/* errors have already been logged */
-				++errors;
-			}
-			else if (!parse_bool(DROP_IF_EXISTS,
-								 &(options->restoreOptions.dropIfExists)))
-			{
-				log_error("Failed to parse environment variable \"%s\" "
-						  "value \"%s\", expected a boolean (on/off)",
-						  PGCOPYDB_DROP_IF_EXISTS,
-						  DROP_IF_EXISTS);
-				++errors;
-			}
-		}
-	}
-
-	/* when --fail-fast has not been used, check PGCOPYDB_FAIL_FAST */
-	if (!options->failFast)
-	{
-		if (env_exists(PGCOPYDB_FAIL_FAST))
-		{
-			char FAIL_FAST[BUFSIZE] = { 0 };
-
-			if (!get_env_copy(PGCOPYDB_FAIL_FAST, FAIL_FAST, sizeof(FAIL_FAST)))
-			{
-				/* errors have already been logged */
-				++errors;
-			}
-			else if (!parse_bool(FAIL_FAST, &(options->failFast)))
-			{
-				log_error("Failed to parse environment variable \"%s\" "
-						  "value \"%s\", expected a boolean (on/off)",
-						  PGCOPYDB_FAIL_FAST,
-						  FAIL_FAST);
-				++errors;
-			}
-		}
-	}
-
-	/* when --skip-vacuum has not been used, check PGCOPYDB_SKIP_VACUUM */
-	if (!options->skipVacuum)
-	{
-		if (env_exists(PGCOPYDB_SKIP_VACUUM))
-		{
-			char SKIP_VACUUM[BUFSIZE] = { 0 };
-
-			if (!get_env_copy(PGCOPYDB_SKIP_VACUUM,
-							  SKIP_VACUUM,
-							  sizeof(SKIP_VACUUM)))
-			{
-				/* errors have already been logged */
-				++errors;
-			}
-			else if (!parse_bool(SKIP_VACUUM, &(options->skipVacuum)))
-			{
-				log_error("Failed to parse environment variable \"%s\" "
-						  "value \"%s\", expected a boolean (on/off)",
-						  PGCOPYDB_SKIP_VACUUM,
-						  SKIP_VACUUM);
-				++errors;
-			}
-		}
-	}
-
-	/*
-	 * When --skip-db-properties has not been used, check
-	 * PGCOPYDB_SKIP_DB_PROPERTIES
-	 */
-	if (!options->skipDBproperties)
-	{
-		if (env_exists(PGCOPYDB_SKIP_DB_PROPERTIES))
-		{
-			char SKIP_DB_PROPS[BUFSIZE] = { 0 };
-
-			if (!get_env_copy(PGCOPYDB_SKIP_DB_PROPERTIES,
-							  SKIP_DB_PROPS,
-							  sizeof(SKIP_DB_PROPS)))
-			{
-				/* errors have already been logged */
-				++errors;
-			}
-			else if (!parse_bool(SKIP_DB_PROPS, &(options->skipDBproperties)))
-			{
-				log_error("Failed to parse environment variable \"%s\" "
-						  "value \"%s\", expected a boolean (on/off)",
-						  PGCOPYDB_SKIP_DB_PROPERTIES,
-						  SKIP_DB_PROPS);
-				++errors;
-			}
-		}
-	}
-
-	/*
-	 * When --skip-split-by-ctid has not been used, check
-	 * PGCOPYDB_SKIP_CTID_SPLIT
-	 */
-	if (!options->skipCtidSplit)
-	{
-		if (env_exists(PGCOPYDB_SKIP_CTID_SPLIT))
-		{
-			char SKIP_CTID_SPLIT[BUFSIZE] = { 0 };
-
-			if (!get_env_copy(PGCOPYDB_SKIP_CTID_SPLIT,
-							  SKIP_CTID_SPLIT,
-							  sizeof(SKIP_CTID_SPLIT)))
-			{
-				/* errors have already been logged */
-				++errors;
-			}
-			else if (!parse_bool(SKIP_CTID_SPLIT, &(options->skipDBproperties)))
-			{
-				log_error("Failed to parse environment variable \"%s\" "
-						  "value \"%s\", expected a boolean (on/off)",
-						  PGCOPYDB_SKIP_CTID_SPLIT,
-						  SKIP_CTID_SPLIT);
-				++errors;
-			}
-		}
-	}
-
-	/* when --no-tablespaces has not been used, check PGCOPYDB_SKIP_TABLESPACES */
-	if (!options->restoreOptions.noTableSpaces)
-	{
-		if (env_exists(PGCOPYDB_SKIP_TABLESPACES))
-		{
-			char SKIP_TABLESPACES[BUFSIZE] = { 0 };
-
-			if (!get_env_copy(PGCOPYDB_SKIP_TABLESPACES,
-							  SKIP_TABLESPACES,
-							  sizeof(SKIP_TABLESPACES)))
-			{
-				/* errors have already been logged */
-				++errors;
-			}
-			else if (!parse_bool(SKIP_TABLESPACES,
-								 &(options->restoreOptions.noTableSpaces)))
-			{
-				log_error("Failed to parse environment variable \"%s\" "
-						  "value \"%s\", expected a boolean (on/off)",
-						  PGCOPYDB_SKIP_TABLESPACES,
-						  SKIP_TABLESPACES);
-				++errors;
-			}
 		}
 	}
 
@@ -918,13 +639,6 @@ cli_copy_db_getopts(int argc, char **argv)
 	};
 
 	optind = 0;
-
-	/* install default values */
-	options.tableJobs = DEFAULT_TABLE_JOBS;
-	options.indexJobs = DEFAULT_INDEX_JOBS;
-	options.restoreOptions.jobs = DEFAULT_RESTORE_JOBS;
-	options.lObjectJobs = DEFAULT_LARGE_OBJECTS_JOBS;
-	options.splitTablesLargerThan.bytes = DEFAULT_SPLIT_TABLES_LARGER_THAN;
 
 	/* read values from the environment */
 	if (!cli_copydb_getenv(&options))

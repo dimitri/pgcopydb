@@ -210,6 +210,23 @@ cli_list_getenv(ListDBOptions *options)
 {
 	int errors = 0;
 
+	EnvParser parsers[] = {
+		{ PGCOPYDB_SPLIT_MAX_PARTS, ENV_TYPE_INT,
+		  &(options->splitMaxParts), 0, true, 1 },
+		{ PGCOPYDB_ESTIMATE_TABLE_SIZES, ENV_TYPE_BOOL,
+		  &(options->estimateTableSizes) },
+	};
+
+	int parserCount = sizeof(parsers) / sizeof(parsers[0]);
+
+	EnvParserArray parserArray = { .count = parserCount, .array = parsers };
+
+	if (!get_env_using_parsers(&parserArray))
+	{
+		/* errors have already been logged */
+		++errors;
+	}
+
 	if (!cli_copydb_getenv_source_pguri(&(options->connStrings.source_pguri)))
 	{
 		/* errors have already been logged */
@@ -220,54 +237,6 @@ cli_list_getenv(ListDBOptions *options)
 	{
 		/* errors have already been logged */
 		++errors;
-	}
-
-	/* when --split-max-parts has not been used, check PGCOPYDB_SPLIT_MAX_PARTS */
-	if (options->splitMaxParts == 0)
-	{
-		if (env_exists(PGCOPYDB_SPLIT_MAX_PARTS))
-		{
-			char maxParts[BUFSIZE] = { 0 };
-
-			if (!get_env_copy(PGCOPYDB_SPLIT_MAX_PARTS, maxParts, sizeof(maxParts)))
-			{
-				/* errors have already been logged */
-				++errors;
-			}
-			else if (!stringToInt(maxParts, &options->splitMaxParts) ||
-					 options->splitMaxParts < 1)
-			{
-				log_fatal("Failed to parse PGCOPYDB_SPLIT_MAX_PARTS: \"%s\"",
-						  maxParts);
-				++errors;
-			}
-		}
-	}
-
-	/* when --estimate-table-sizes has not been used, check PGCOPYDB_ESTIMATE_TABLE_SIZES */
-	if (!options->estimateTableSizes)
-	{
-		if (env_exists(PGCOPYDB_ESTIMATE_TABLE_SIZES))
-		{
-			char estimateTableSizesAsString[BUFSIZE] = { 0 };
-
-			if (!get_env_copy(PGCOPYDB_ESTIMATE_TABLE_SIZES,
-							  estimateTableSizesAsString,
-							  sizeof(estimateTableSizesAsString)))
-			{
-				/* errors have already been logged */
-				++errors;
-			}
-			else if (!parse_bool(estimateTableSizesAsString,
-								 &(options->estimateTableSizes)))
-			{
-				log_error("Failed to parse environment variable \"%s\" "
-						  "value \"%s\", expected a boolean (on/off)",
-						  PGCOPYDB_ESTIMATE_TABLE_SIZES,
-						  estimateTableSizesAsString);
-				++errors;
-			}
-		}
 	}
 
 	return errors == 0;
