@@ -822,9 +822,9 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 							copydb_write_restore_list_hook);
 	if (!res)
 	{
-		log_error("Failed to write filtered pg_restore list file at \"%s\""
-				  ", see above for details",
-				  listFilename);
+		log_error(
+			"Failed to write filtered pg_restore list file at \"%s\", see above for details",
+			listFilename);
 	}
 	else
 	{

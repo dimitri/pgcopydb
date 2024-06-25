@@ -24,7 +24,7 @@ typedef struct FileIterator
 {
 	FILE *file;
 	const char *filename;
-	char line[BUFSIZE];
+	char line[BUFSIZE]; /* BUFSIZE is large enough to hold an archive item */
 } FileIterator;
 
 /*
@@ -36,7 +36,7 @@ file_iterator_from(const char *filename)
 	FileIterator *iterator = (FileIterator *) calloc(1, sizeof(FileIterator));
 	if (iterator == NULL)
 	{
-		log_error("Failed to allocate memory for FileIterator");
+		log_fatal(ALLOCATION_FAILED_ERROR);
 		return NULL;
 	}
 
@@ -44,7 +44,7 @@ file_iterator_from(const char *filename)
 	iterator->file = fopen_read_only(filename);
 	if (iterator->file == NULL)
 	{
-		log_error("Failed to open file");
+		log_error("Failed to open file \"%s\": %m", filename);
 		return NULL;
 	}
 
@@ -64,14 +64,14 @@ file_iterator_next(FileIterator *iterator, char **line)
 	if (fgets(iterator->line, sizeof(iterator->line), iterator->file) != NULL)
 	{
 		/* replace the new line character with null terminator */
-		iterator->line[strcspn(iterator->line, "\n")] = '\0';
+		iterator->line[strlen(iterator->line) - 1] = '\0';
 		*line = iterator->line;
 		return true;
 	}
 
 	if (ferror(iterator->file))
 	{
-		log_error("Failed to read line from file %s", iterator->filename);
+		log_error("Failed to read line from file \"%s\": %m", iterator->filename);
 		return false;
 	}
 
@@ -83,7 +83,7 @@ file_iterator_next(FileIterator *iterator, char **line)
  * Destroy the iterator and free resources
  */
 static bool
-file_iterator_destroy(FileIterator *iterator)
+file_iterator_finish(FileIterator *iterator)
 {
 	if (iterator->file)
 	{
@@ -120,7 +120,7 @@ file_iter(const char *filename,
 
 		if (line == NULL)
 		{
-			if (!file_iterator_destroy(iter))
+			if (!file_iterator_finish(iter))
 			{
 				/* errors have already been logged */
 				return false;
