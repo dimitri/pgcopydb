@@ -25,6 +25,7 @@
      --skip-ext-comments           Skip restoring COMMENT ON EXTENSION
      --skip-collations             Skip restoring collations
      --skip-vacuum                 Skip running VACUUM ANALYZE
+     --skip-analyze                Skip running vacuumdb --analyze-only
      --skip-db-properties          Skip copying ALTER DATABASE SET properties
      --skip-split-by-ctid          Skip spliting tables by ctid
      --requirements <filename>     List extensions requirements

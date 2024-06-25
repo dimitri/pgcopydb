@@ -242,6 +242,8 @@ cli_copydb_getenv(CopyDBOptions *options)
 		  &(options->failFast) },
 		{ PGCOPYDB_SKIP_VACUUM, ENV_TYPE_BOOL,
 		  &(options->skipVacuum) },
+		{ PGCOPYDB_SKIP_ANALYZE, ENV_TYPE_BOOL,
+		  &(options->skipAnalyze) },
 		{ PGCOPYDB_SKIP_DB_PROPERTIES, ENV_TYPE_BOOL,
 		  &(options->skipDBproperties) },
 		{ PGCOPYDB_SKIP_CTID_SPLIT, ENV_TYPE_BOOL,
@@ -610,6 +612,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "skip-ext-comments", no_argument, NULL, 'M' },
 		{ "skip-collations", no_argument, NULL, 'l' },
 		{ "skip-vacuum", no_argument, NULL, 'U' },
+		{ "skip-analyze", no_argument, NULL, 'a' },
 		{ "skip-db-properties", no_argument, NULL, 'g' },
 		{ "skip-split-by-ctid", no_argument, NULL, 'k' },
 		{ "no-tablespaces", no_argument, NULL, 'y' },
@@ -648,7 +651,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	}
 
 	const char *optstring =
-		"S:T:D:J:I:b:L:u:mcAPOXj:xBeMlUgkyF:F:Q:irRCN:fp:ws:o:tE:Vvdzqh";
+		"S:T:D:J:I:b:L:u:mcAPOXj:xBeMlUagkyF:F:Q:irRCN:fp:ws:o:tE:Vvdzqh";
 
 	while ((c = getopt_long(argc, argv,
 							optstring, long_options, &option_index)) != -1)
@@ -868,6 +871,13 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				options.skipVacuum = true;
 				log_trace("--skip-vacuum");
+				break;
+			}
+
+			case 'a':
+			{
+				options.skipAnalyze = true;
+				log_trace("--skip-analyze");
 				break;
 			}
 

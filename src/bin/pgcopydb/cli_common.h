@@ -50,6 +50,7 @@ typedef struct CopyDBOptions
 	bool skipCommentOnExtension;
 	bool skipCollations;
 	bool skipVacuum;
+	bool skipAnalyze;
 	bool skipDBproperties;
 	bool skipCtidSplit;
 	bool noRolesPasswords;

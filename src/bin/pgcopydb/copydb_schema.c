@@ -652,18 +652,28 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 
 	(void) catalog_start_timing(&timing);
 
-	/* if we're estimating table sizes, we need to run analyze to update relpages values. */
+	/* if we're estimating table sizes, we need statistics */
 	if (specs->estimateTableSizes)
 	{
-		log_info("Running vacuumdb --analyze-only on source database before "
-				 "calculating table size estimates");
-
-		if (!pg_vacuumdb_analyze_only(&(specs->pgPaths), &(specs->connStrings),
-									  specs->tableJobs))
+		/* if --skip-analyze was used, we assume the user updated the statistics */
+		if (specs->skipAnalyze)
 		{
-			log_error("Failed to vacuum analyze source database, "
-					  "see above for details");
-			return false;
+			log_info("Skipping vacuumdb --analyze-only on source database "
+					 "before calculating table size estimates");
+		}
+		else
+		{
+			log_info("Running vacuumdb --analyze-only on source database before "
+					 "calculating table size estimates");
+
+			if (!pg_vacuumdb_analyze_only(&(specs->pgPaths),
+										  &(specs->connStrings),
+										  specs->tableJobs))
+			{
+				log_error("Failed to vacuum analyze source database, "
+						  "see above for details");
+				return false;
+			}
 		}
 	}
 
