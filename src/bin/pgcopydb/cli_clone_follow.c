@@ -48,6 +48,7 @@
 	"  --skip-ext-comments           Skip restoring COMMENT ON EXTENSION\n" \
 	"  --skip-collations             Skip restoring collations\n" \
 	"  --skip-vacuum                 Skip running VACUUM ANALYZE\n" \
+	"  --skip-analyze                Skip running vacuumdb --analyze-only\n" \
 	"  --skip-db-properties          Skip copying ALTER DATABASE SET properties\n" \
 	"  --skip-split-by-ctid          Skip spliting tables by ctid\n" \
 	"  --requirements <filename>     List extensions requirements\n" \

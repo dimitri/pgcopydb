@@ -227,6 +227,7 @@ typedef struct CopyDataSpec
 	bool skipCommentOnExtension;
 	bool skipCollations;
 	bool skipVacuum;
+	bool skipAnalyze;
 	bool skipDBproperties;
 	bool skipCtidSplit;
 	bool noRolesPasswords;

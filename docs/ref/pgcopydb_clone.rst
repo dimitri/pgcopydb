@@ -399,10 +399,14 @@ The following options are available to ``pgcopydb clone``:
    Use estimates on table sizes to decide how to split tables when using
    :ref:`same_table_concurrency`.
 
-   When this option is used, we run `vacuumdb --analyze-only --jobs=<table-jobs>`
+   When this option is used, we run ``vacuumdb --analyze-only --jobs=<table-jobs>``
    command on the source database that updates the statistics for the number of
    pages for each relation. Later, we use the number of pages, and the size for
    each page to estimate the actual size of the tables.
+
+   If you wish to run the ANALYZE command manually before running pgcopydb, you
+   can use the ``--skip-analyze`` option. This way, you can decrease the time
+   spent on the migration.
 
 --drop-if-exists
 
@@ -505,6 +509,14 @@ The following options are available to ``pgcopydb clone``:
 
   Skip running VACUUM ANALYZE on the target database once a table has been
   copied, its indexes have been created, and constraints installed.
+
+--skip-analyze
+
+  Skip running ``vacuumdb --analyze-only`` on the source database to update
+  statistics that are required when estimating table sizes.
+
+  This option is useful only when using ``--estimate-table-sizes`` and the user
+  runs the relevant ANALYZE command manually before running pgcopydb.
 
 --skip-db-properties
 
@@ -753,10 +765,14 @@ PGCOPYDB_ESTIMATE_TABLE_SIZES
    When ``--estimate-table-sizes`` is ommitted from the command line, then
    this environment variable is used.
 
-   When this option is used, we run `vacuumdb --analyze-only --jobs=<table-jobs>`
+   When this option is used, we run ``vacuumdb --analyze-only --jobs=<table-jobs>``
    command on the source database that updates the statistics for the number of
    pages for each relation. Later, we use the number of pages, and the size for
    each page to estimate the actual size of the tables.
+
+   If you wish to run the ANALYZE command manually before running pgcopydb, you
+   can use the ``--skip-analyze`` option or `PGCOPYDB_SKIP_ANALYZE` environment
+   variable. This way, you can decrease the time spent on the migration.
 
 PGCOPYDB_OUTPUT_PLUGIN
 
@@ -795,6 +811,12 @@ PGCOPYDB_SKIP_VACUUM
    When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
    then pgcopydb skips the VACUUM ANALYZE jobs entirely, same as when using
    the ``--skip-vacuum`` option.
+
+PGCOPYDB_SKIP_ANALYZE
+
+   When true (or *yes*, or *on*, or 1, same input as a Postgres boolean) then
+   pgcopydb skips the ``vacuumdb --analyze-only`` commands entirely, same as
+   when using the ``--skip-analyze`` option.
 
 PGCOPYDB_SKIP_DB_PROPERTIES
 
