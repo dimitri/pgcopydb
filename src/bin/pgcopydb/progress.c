@@ -53,14 +53,14 @@ static bool copydb_seq_array_as_json(DatabaseCatalog *sourceDB,
 									 JSON_Object *jsobj,
 									 const char *key);
 
-static bool copydb_table_array_as_json_hook(void *ctx, SourceTable *table);
+static bool copydb_table_array_as_json_hook(void *ctx, void *item);
 static bool copydb_index_array_as_json_hook(void *ctx, SourceIndex *index);
 static bool copydb_seq_array_as_json_hook(void *ctx, SourceSequence *seq);
 
 static bool copydb_table_parts_array_as_json_hook(void *ctx,
 												  SourceTableParts *part);
 
-static bool copydb_update_progress_table_hook(void *ctx, SourceTable *table);
+static bool copydb_update_progress_table_hook(void *ctx, void *item);
 static bool copydb_update_progress_index_hook(void *ctx, SourceIndex *index);
 
 
@@ -292,8 +292,10 @@ copydb_table_in_progress_as_json(DatabaseCatalog *sourceDB,
  * copydb_table_array_as_json_hook is an iterator callback function.
  */
 static bool
-copydb_table_array_as_json_hook(void *ctx, SourceTable *table)
+copydb_table_array_as_json_hook(void *ctx, void *data)
 {
+	SourceTableIterator *iter = (SourceTableIterator *) data;
+	SourceTable *table = iter->table;
 	TableContext *context = (TableContext *) ctx;
 	DatabaseCatalog *sourceDB = context->sourceDB;
 	JSON_Array *jsTableArray = context->jsTableArray;
@@ -727,8 +729,10 @@ copydb_update_progress(CopyDataSpec *copySpecs, CopyProgress *progress)
  * copydb_update_progress_table_hook is an iterator callback function.
  */
 static bool
-copydb_update_progress_table_hook(void *ctx, SourceTable *table)
+copydb_update_progress_table_hook(void *ctx, void *data)
 {
+	SourceTableIterator *iter = (SourceTableIterator *) data;
+	SourceTable *table = iter->table;
 	TableProgressContext *context = (TableProgressContext *) ctx;
 
 	CopyDataSpec *copySpecs = context->copySpecs;

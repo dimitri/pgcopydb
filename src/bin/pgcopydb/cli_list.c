@@ -51,7 +51,7 @@ static bool cli_list_databases_hook(void *context, SourceDatabase *dat);
 static bool cli_list_extension_json_hook(void *ctx, SourceExtension *ext);
 static bool cli_list_extension_print_hook(void *ctx, SourceExtension *ext);
 static bool cli_list_colls_hook(void *context, SourceCollation *coll);
-static bool cli_list_table_print_hook(void *context, SourceTable *table);
+static bool cli_list_table_print_hook(void *context, void *item);
 static bool cli_list_table_part_print_hook(void *ctx, SourceTableParts *part);
 static bool cli_list_seq_print_hook(void *context, SourceSequence *seq);
 static bool cli_list_index_print_hook(void *context, SourceIndex *index);
@@ -1232,8 +1232,10 @@ cli_list_tables(int argc, char **argv)
  * cli_list_table_print_hook is an iterator callback function.
  */
 static bool
-cli_list_table_print_hook(void *context, SourceTable *table)
+cli_list_table_print_hook(void *context, void *data)
 {
+	SourceTableIterator *iter = (SourceTableIterator *) data;
+	SourceTable *table = iter->table;
 	if (table == NULL)
 	{
 		log_error("BUG: cli_list_table_print_hook called with a NULL table");

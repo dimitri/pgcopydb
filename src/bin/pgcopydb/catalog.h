@@ -8,6 +8,7 @@
 
 #include "schema.h"
 #include "string_utils.h"
+#include "iterator.h"
 
 /*
  * Internal infrastructure to bind values to SQLite prepared statements.
@@ -215,11 +216,11 @@ typedef bool (SourceTableIterFun)(void *context, SourceTable *table);
 
 bool catalog_iter_s_table(DatabaseCatalog *catalog,
 						  void *context,
-						  SourceTableIterFun *callback);
+						  IterCallback *callback);
 
 bool catalog_iter_s_table_nopk(DatabaseCatalog *catalog,
 							   void *context,
-							   SourceTableIterFun *callback);
+							   IterCallback *callback);
 
 typedef struct SourceTableIterator
 {
@@ -228,10 +229,11 @@ typedef struct SourceTableIterator
 	SQLiteQuery query;
 } SourceTableIterator;
 
-bool catalog_iter_s_table_init(SourceTableIterator *iter);
-bool catalog_iter_s_table_nopk_init(SourceTableIterator *iter);
-bool catalog_iter_s_table_next(SourceTableIterator *iter);
-bool catalog_iter_s_table_finish(SourceTableIterator *iter);
+bool catalog_iter_s_table_init(Iterator *iterator);
+bool catalog_iter_s_table_nopk_init(Iterator *iterator);
+bool catalog_iter_s_table_has_next(Iterator *iterator);
+bool catalog_iter_s_table_next(Iterator *iterator);
+bool catalog_iter_s_table_finish(Iterator *iterator);
 
 bool catalog_lookup_s_table(DatabaseCatalog *catalog,
 							uint32_t oid,
@@ -600,9 +602,9 @@ bool catalog_delete_process(DatabaseCatalog *catalog, pid_t pid);
 
 bool catalog_iter_s_table_in_copy(DatabaseCatalog *catalog,
 								  void *context,
-								  SourceTableIterFun *callback);
+								  IterCallback *callback);
 
-bool catalog_iter_s_table_in_copy_init(SourceTableIterator *iter);
+bool catalog_iter_s_table_in_copy_init(Iterator *iterator);
 
 bool catalog_iter_s_index_in_progress(DatabaseCatalog *catalog,
 									  void *context,

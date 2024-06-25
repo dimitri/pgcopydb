@@ -25,7 +25,7 @@ static bool copydb_fetch_source_catalog_setup(CopyDataSpec *specs);
 static bool copydb_fetch_previous_run_state(CopyDataSpec *specs);
 static bool copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src);
 
-static bool copydb_prepare_table_specs_hook(void *ctx, SourceTable *source);
+static bool copydb_prepare_table_specs_hook(void *ctx, void *item);
 
 
 /*
@@ -765,8 +765,10 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
  * copydb_prepare_table_specs_hook is an iterator callback function.
  */
 static bool
-copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
+copydb_prepare_table_specs_hook(void *ctx, void *data)
 {
+	SourceTableIterator *iter = (SourceTableIterator *) data;
+	SourceTable *source = iter->table;
 	PrepareTableSpecsContext *context = (PrepareTableSpecsContext *) ctx;
 	CopyDataSpec *specs = context->specs;
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);

@@ -10,6 +10,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "iterator.h"
 #include "sqlite3.h"
 
 #include "catalog.h"
@@ -2821,57 +2822,36 @@ catalog_delete_s_table(DatabaseCatalog *catalog,
 }
 
 
+static Iterator *
+source_table_iterator_create(DatabaseCatalog *catalog, IterInit *init_func)
+{
+	Iterator *iterator = (Iterator *) malloc(sizeof(Iterator));
+
+	SourceTableIterator *iter =
+		(SourceTableIterator *) calloc(1, sizeof(SourceTableIterator));
+
+	iter->catalog = catalog;
+
+	iterator->data = iter;
+	iterator->has_next = catalog_iter_s_table_has_next;
+	iterator->next = catalog_iter_s_table_next;
+	iterator->init = init_func;
+	iterator->finish = catalog_iter_s_table_finish;
+
+	return iterator;
+}
+
+
 /*
  * catalog_iter_s_table iterates over the list of tables in our catalogs.
  */
 bool
 catalog_iter_s_table(DatabaseCatalog *catalog,
 					 void *context,
-					 SourceTableIterFun *callback)
+					 IterCallback *callback)
 {
-	SourceTableIterator *iter =
-		(SourceTableIterator *) calloc(1, sizeof(SourceTableIterator));
-
-	iter->catalog = catalog;
-
-	if (!catalog_iter_s_table_init(iter))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	for (;;)
-	{
-		if (!catalog_iter_s_table_next(iter))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		SourceTable *table = iter->table;
-
-		if (table == NULL)
-		{
-			if (!catalog_iter_s_table_finish(iter))
-			{
-				/* errors have already been logged */
-				return false;
-			}
-
-			break;
-		}
-
-		/* now call the provided callback */
-		if (!(*callback)(context, table))
-		{
-			log_error("Failed to iterate over list of tables, "
-					  "see above for details");
-			return false;
-		}
-	}
-
-
-	return true;
+	Iterator *iterator = source_table_iterator_create(catalog, catalog_iter_s_table_init);
+	return for_each(iterator, context, callback);
 }
 
 
@@ -2882,51 +2862,11 @@ catalog_iter_s_table(DatabaseCatalog *catalog,
 bool
 catalog_iter_s_table_nopk(DatabaseCatalog *catalog,
 						  void *context,
-						  SourceTableIterFun *callback)
+						  IterCallback *callback)
 {
-	SourceTableIterator *iter =
-		(SourceTableIterator *) calloc(1, sizeof(SourceTableIterator));
-
-	iter->catalog = catalog;
-
-	if (!catalog_iter_s_table_nopk_init(iter))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	for (;;)
-	{
-		if (!catalog_iter_s_table_next(iter))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		SourceTable *table = iter->table;
-
-		if (table == NULL)
-		{
-			if (!catalog_iter_s_table_finish(iter))
-			{
-				/* errors have already been logged */
-				return false;
-			}
-
-			break;
-		}
-
-		/* now call the provided callback */
-		if (!(*callback)(context, table))
-		{
-			log_error("Failed to iterate over list of tables, "
-					  "see above for details");
-			return false;
-		}
-	}
-
-
-	return true;
+	Iterator *iterator = source_table_iterator_create(catalog,
+													  catalog_iter_s_table_nopk_init);
+	return for_each(iterator, context, callback);
 }
 
 
@@ -2935,8 +2875,10 @@ catalog_iter_s_table_nopk(DatabaseCatalog *catalog,
  * SourceTable entries.
  */
 bool
-catalog_iter_s_table_init(SourceTableIterator *iter)
+catalog_iter_s_table_init(Iterator *iterator)
 {
+	SourceTableIterator *iter = (SourceTableIterator *) iterator->data;
+
 	sqlite3 *db = iter->catalog->db;
 
 	if (db == NULL)
@@ -2990,8 +2932,9 @@ catalog_iter_s_table_init(SourceTableIterator *iter)
  * SourceTable entries.
  */
 bool
-catalog_iter_s_table_nopk_init(SourceTableIterator *iter)
+catalog_iter_s_table_nopk_init(Iterator *iterator)
 {
+	SourceTableIterator *iter = (SourceTableIterator *) iterator->data;
 	sqlite3 *db = iter->catalog->db;
 
 	if (db == NULL)
@@ -3034,12 +2977,22 @@ catalog_iter_s_table_nopk_init(SourceTableIterator *iter)
 }
 
 
+bool
+catalog_iter_s_table_has_next(Iterator *iterator)
+{
+	SourceTableIterator *iter = (SourceTableIterator *) iterator->data;
+
+	return iter->table != NULL;
+}
+
+
 /*
  * catalog_iter_s_table_next fetches the next SourceTable entry in our catalogs.
  */
 bool
-catalog_iter_s_table_next(SourceTableIterator *iter)
+catalog_iter_s_table_next(Iterator *iterator)
 {
+	SourceTableIterator *iter = (SourceTableIterator *) iterator->data;
 	SQLiteQuery *query = &(iter->query);
 
 	int rc = catalog_sql_step(query);
@@ -3188,8 +3141,9 @@ catalog_s_table_fetch(SQLiteQuery *query)
  * iteration.
  */
 bool
-catalog_iter_s_table_finish(SourceTableIterator *iter)
+catalog_iter_s_table_finish(Iterator *iterator)
 {
+	SourceTableIterator *iter = (SourceTableIterator *) iterator->data;
 	SQLiteQuery *query = &(iter->query);
 
 	if (!catalog_sql_finalize(query))
@@ -7397,57 +7351,16 @@ catalog_delete_process(DatabaseCatalog *catalog, pid_t pid)
 
 
 /*
- * catalog_iter_s_table_in_copy iterates over the list of tables with a COPY
- * process in our catalogs.
+ * catalog_iter_s_table iterates over the list of tables in our catalogs.
  */
 bool
 catalog_iter_s_table_in_copy(DatabaseCatalog *catalog,
 							 void *context,
-							 SourceTableIterFun *callback)
+							 IterCallback *callback)
 {
-	SourceTableIterator *iter =
-		(SourceTableIterator *) calloc(1, sizeof(SourceTableIterator));
-
-	iter->catalog = catalog;
-
-	if (!catalog_iter_s_table_in_copy_init(iter))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	for (;;)
-	{
-		if (!catalog_iter_s_table_next(iter))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		SourceTable *table = iter->table;
-
-		if (table == NULL)
-		{
-			if (!catalog_iter_s_table_finish(iter))
-			{
-				/* errors have already been logged */
-				return false;
-			}
-
-			break;
-		}
-
-		/* now call the provided callback */
-		if (!(*callback)(context, table))
-		{
-			log_error("Failed to iterate over list of tables, "
-					  "see above for details");
-			return false;
-		}
-	}
-
-
-	return true;
+	Iterator *iterator = source_table_iterator_create(catalog,
+													  catalog_iter_s_table_in_copy_init);
+	return for_each(iterator, context, callback);
 }
 
 
@@ -7456,8 +7369,9 @@ catalog_iter_s_table_in_copy(DatabaseCatalog *catalog,
  * of SourceTable entries.
  */
 bool
-catalog_iter_s_table_in_copy_init(SourceTableIterator *iter)
+catalog_iter_s_table_in_copy_init(Iterator *iterator)
 {
+	SourceTableIterator *iter = (SourceTableIterator *) iterator->data;
 	sqlite3 *db = iter->catalog->db;
 
 	if (db == NULL)

@@ -18,8 +18,8 @@
 #include "summary.h"
 
 
-static bool compare_queue_table_hook(void *ctx, SourceTable *sourceTable);
-static bool compare_schemas_table_hook(void *ctx, SourceTable *sourceTable);
+static bool compare_queue_table_hook(void *ctx, void *item);
+static bool compare_schemas_table_hook(void *ctx, void *item);
 static bool compare_schemas_index_hook(void *ctx, SourceIndex *sourceIndex);
 static bool compare_schemas_seq_hook(void *ctx, SourceSequence *sourceSeq);
 
@@ -167,8 +167,10 @@ compare_queue_tables(CopyDataSpec *copySpecs, Queue *queue)
  * compare_queue_table_hook is an iterator callback function.
  */
 static bool
-compare_queue_table_hook(void *ctx, SourceTable *table)
+compare_queue_table_hook(void *ctx, void *data)
 {
+	SourceTableIterator *iter = (SourceTableIterator *) data;
+	SourceTable *table = iter->table;
 	Queue *queue = (Queue *) ctx;
 
 	if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
@@ -634,8 +636,10 @@ compare_schemas(CopyDataSpec *copySpecs)
  * compare_schemas_table_hook is an iterator callback function.
  */
 static bool
-compare_schemas_table_hook(void *ctx, SourceTable *sourceTable)
+compare_schemas_table_hook(void *ctx, void *data)
 {
+	SourceTableIterator *iter = (SourceTableIterator *) data;
+	SourceTable *sourceTable = iter->table;
 	CompareSchemaContext *context = (CompareSchemaContext *) ctx;
 
 	SourceTable *targetTable = (SourceTable *) calloc(1, sizeof(SourceTable));

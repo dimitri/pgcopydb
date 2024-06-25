@@ -26,7 +26,7 @@
 #include "summary.h"
 
 
-static bool copydb_copy_supervisor_add_table_hook(void *ctx, SourceTable *table);
+static bool copydb_copy_supervisor_add_table_hook(void *ctx, void *item);
 
 /*
  * copydb_table_data fetches the list of tables from the source database and
@@ -544,8 +544,10 @@ copydb_copy_worker_queue_tables(CopyDataSpec *specs)
  * copydb_copy_supervisor_add_table_hook is an iterator callback function.
  */
 static bool
-copydb_copy_supervisor_add_table_hook(void *ctx, SourceTable *table)
+copydb_copy_supervisor_add_table_hook(void *ctx, void *data)
 {
+	SourceTableIterator *iter = (SourceTableIterator *) data;
+	SourceTable *table = iter->table;
 	CopySupervisorContext *context = (CopySupervisorContext *) ctx;
 
 	CopyDataSpec *specs = context->specs;

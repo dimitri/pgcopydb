@@ -25,7 +25,7 @@
 #include "summary.h"
 
 
-static bool copydb_append_table_hook(void *context, SourceTable *table);
+static bool copydb_append_table_hook(void *context, void *item);
 static bool copydb_copy_database_properties_hook(void *ctx,
 												 SourceProperty *property);
 
@@ -490,8 +490,10 @@ copydb_target_drop_tables(CopyDataSpec *specs)
  * copydb_append_table_hook is an iterator callback function.
  */
 static bool
-copydb_append_table_hook(void *ctx, SourceTable *table)
+copydb_append_table_hook(void *ctx, void *data)
 {
+	SourceTableIterator *iter = (SourceTableIterator *) data;
+	SourceTable *table = iter->table;
 	if (table == NULL)
 	{
 		log_error("BUG: copydb_append_table_hook called with a NULL table");

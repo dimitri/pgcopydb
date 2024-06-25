@@ -117,7 +117,7 @@ int topLevelTimingArrayCount =
 
 static void prepareLineSeparator(char dashes[], int size);
 
-static bool prepare_summary_table_hook(void *context, SourceTable *table);
+static bool prepare_summary_table_hook(void *ctx, void *item);
 static bool prepare_summary_table_index_hook(void *ctx, SourceIndex *index);
 static bool summary_prepare_toplevel_durations_hook(void *ctx,
 													TopLevelTiming *timing);
@@ -3141,8 +3141,10 @@ prepare_summary_table(Summary *summary, CopyDataSpec *specs)
  * prepare_summary_table_hook is an iterator callback function.
  */
 static bool
-prepare_summary_table_hook(void *ctx, SourceTable *table)
+prepare_summary_table_hook(void *ctx, void *data)
 {
+	SourceTableIterator *iter = (SourceTableIterator *) data;
+	SourceTable *table = iter->table;
 	SummaryTableContext *context = (SummaryTableContext *) ctx;
 
 	CopyDataSpec *specs = (CopyDataSpec *) context->specs;

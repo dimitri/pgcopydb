@@ -27,7 +27,7 @@ static int cli_compare_getopts(int argc, char **argv);
 static void cli_compare_schema(int argc, char **argv);
 static void cli_compare_data(int argc, char **argv);
 
-static bool cli_compare_data_table_hook(void *ctx, SourceTable *table);
+static bool cli_compare_data_table_hook(void *ctx, void *item);
 
 static CommandLine compare_schema_command =
 	make_command(
@@ -428,8 +428,9 @@ cli_compare_data(int argc, char **argv)
  * compare_queue_table_hook is an iterator callback function.
  */
 static bool
-cli_compare_data_table_hook(void *ctx, SourceTable *table)
+cli_compare_data_table_hook(void *ctx, void *item)
 {
+	SourceTable *table = (SourceTable *) item;
 	if (outputJSON)
 	{
 		JSON_Array *jsArray = (JSON_Array *) ctx;
