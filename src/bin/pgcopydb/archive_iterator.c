@@ -1,6 +1,6 @@
 /*
  * src/bin/pgcopydb/archive_iterator.c
- *   Implementations of a file iterator for reading new lıne seperated files
+ *   Implementations of a archive iterator for reading archive items
  */
 
 #include <ctype.h>
@@ -13,134 +13,6 @@
 #include "archive.h"
 #include "string_utils.h"
 #include "defaults.h"
-
-typedef bool (FileIterCallback)(void *context, const char *item);
-
-/*
- * A struct to hold the state of the file iterator. This
- * iterator is used to iterate a file line-by-line.
- */
-typedef struct FileIterator
-{
-	FILE *file;
-	const char *filename;
-	char line[BUFSIZE]; /* BUFSIZE is large enough to hold an archive item */
-} FileIterator;
-
-/*
- * Create a new iterator from the file name
- */
-static FileIterator *
-file_iterator_from(const char *filename)
-{
-	FileIterator *iterator = (FileIterator *) calloc(1, sizeof(FileIterator));
-	if (iterator == NULL)
-	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
-		return NULL;
-	}
-
-	iterator->filename = filename;
-	iterator->file = fopen_read_only(filename);
-	if (iterator->file == NULL)
-	{
-		log_error("Failed to open file \"%s\": %m", filename);
-		return NULL;
-	}
-
-	return iterator;
-}
-
-
-/*
- * Get the next line/item from the file/iterator.
- *
- * The memory for the line is allocated by this function and will be freed by it too.
- */
-static bool
-file_iterator_next(FileIterator *iterator, char **line)
-{
-	*line = NULL;
-	if (fgets(iterator->line, sizeof(iterator->line), iterator->file) != NULL)
-	{
-		/* replace the new line character with null terminator */
-		iterator->line[strlen(iterator->line) - 1] = '\0';
-		*line = iterator->line;
-		return true;
-	}
-
-	if (ferror(iterator->file))
-	{
-		log_error("Failed to read line from file \"%s\": %m", iterator->filename);
-		return false;
-	}
-
-	return true;
-}
-
-
-/*
- * Destroy the iterator and free resources
- */
-static bool
-file_iterator_finish(FileIterator *iterator)
-{
-	if (iterator->file)
-	{
-		fclose(iterator->file);
-	}
-
-	return true;
-}
-
-
-/*
- * Iterate over the file line-by-line and call the callback function for each line.
- */
-static bool
-file_iter(const char *filename,
-		  void *context,
-		  FileIterCallback *callback)
-{
-	FileIterator *iter = file_iterator_from(filename);
-	if (!iter)
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	char *line = NULL;
-	for (;;)
-	{
-		if (!file_iterator_next(iter, &line))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		if (line == NULL)
-		{
-			if (!file_iterator_finish(iter))
-			{
-				/* errors have already been logged */
-				return false;
-			}
-
-			break;
-		}
-
-		/* now call the provided callback */
-		if (!(*callback)(context, line))
-		{
-			log_error("Failed to iterate over list of colls, "
-					  "see above for details");
-			return false;
-		}
-	}
-
-
-	return true;
-}
 
 
 /* remember to skip the \0 at the end of the static string here */
@@ -618,20 +490,20 @@ parse_archive_list_entry(ArchiveContentItem *item, const char *line)
 }
 
 
-typedef struct FileIterContext
+typedef struct ArchiveIterContext
 {
-	ArchiveIterCallback *callback;
 	void *context;
 	size_t line_number;
-	const char *filename;
-} FileIterContext;
+	const char *filePath;
+} ArchiveIterContext;
 
 
 /*
  * Parses an archive list entry and invokes the hook function.
  */
 static bool
-parse_archive_list_entry_hook(void *context, const char *line)
+parse_archive_list_entry_and_callback(ArchiveIterContext *iterContext, const char *line,
+									  ArchiveIterCallback *callback)
 {
 	/* skip empty lines and lines that start with a semi-colon (comment) */
 	if (*line == '\0' || *line == ';')
@@ -639,26 +511,144 @@ parse_archive_list_entry_hook(void *context, const char *line)
 		return true;
 	}
 
-	FileIterContext *iterContext = (FileIterContext *) context;
 	ArchiveContentItem item = { 0 };
 	if (!parse_archive_list_entry(&item, line))
 	{
 		log_error("Failed to parse line %ld of \"%s\", "
 				  "see above for details",
 				  iterContext->line_number,
-				  iterContext->filename);
+				  iterContext->filePath);
 		return false;
 	}
 
-	return iterContext->callback(iterContext->context, &item);
+	return callback(iterContext->context, &item);
 }
 
 
+/*
+ * A struct to hold the state of the archive iterator. This
+ * iterator is used to iterate a archive item-by-item.
+ */
+typedef struct ArchiveIterator
+{
+	FILE *file;
+	const char *filePath;
+	char line[BUFSIZE]; /* BUFSIZE is large enough to hold an archive item */
+} ArchiveIterator;
+
+/*
+ * Create a new archive iterator from the file path
+ */
+static ArchiveIterator *
+archive_iterator_from(const char *filePath)
+{
+	ArchiveIterator *iterator = (ArchiveIterator *) calloc(1, sizeof(ArchiveIterator));
+	if (iterator == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return NULL;
+	}
+
+	iterator->filePath = filePath;
+	iterator->file = fopen_read_only(filePath);
+	if (iterator->file == NULL)
+	{
+		log_error("Failed to open file \"%s\": %m", filePath);
+		return NULL;
+	}
+
+	return iterator;
+}
+
+
+/*
+ * Get the next line/item from the file/iterator.
+ *
+ * The memory for the line is allocated by this function and will be freed by it too.
+ */
+static bool
+archive_iterator_next(ArchiveIterator *iterator, char **line)
+{
+	*line = NULL;
+	if (fgets(iterator->line, sizeof(iterator->line), iterator->file) != NULL)
+	{
+		/* replace the new line character with null terminator */
+		iterator->line[strlen(iterator->line) - 1] = '\0';
+		*line = iterator->line;
+		return true;
+	}
+
+	if (ferror(iterator->file))
+	{
+		log_error("Failed to read line from file \"%s\": %m", iterator->filePath);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * Destroy the iterator and free resources
+ */
+static bool
+archive_iterator_finish(ArchiveIterator *iterator)
+{
+	if (iterator->file)
+	{
+		fclose(iterator->file);
+	}
+
+	return true;
+}
+
+
+/*
+ * Iterate over the archive item-by-item and
+ * callback function for each archive item.
+ */
 bool
-archive_iter(const char *filename,
+archive_iter(const char *filePath,
 			 void *context,
 			 ArchiveIterCallback *callback)
 {
-	FileIterContext iterContext = { callback, context, 0, filename };
-	return file_iter(filename, &iterContext, parse_archive_list_entry_hook);
+	ArchiveIterContext iterContext = { context, 0, filePath };
+	ArchiveIterator *iter = archive_iterator_from(filePath);
+	if (!iter)
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	char *line = NULL;
+	for (;;)
+	{
+		if (!archive_iterator_next(iter, &line))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (line == NULL)
+		{
+			if (!archive_iterator_finish(iter))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			break;
+		}
+
+		/* now call the provided callback */
+		if (!parse_archive_list_entry_and_callback(&iterContext, line, callback))
+		{
+			log_error("Failed to iterate over list of colls, "
+					  "see above for details");
+			return false;
+		}
+	}
+
+
+	return true;
 }
