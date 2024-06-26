@@ -80,6 +80,28 @@ KeyVal connStringDefaults = {
 	}
 };
 
+/*
+ * We add an extra parameter to the connection string for replication to reduce
+ * the waiting time for the initial CREATE_REPLICATION_SLOT command.
+ */
+KeyVal connStringDefaultsForReplication = {
+	.count = 5,
+	.keywords = {
+		"keepalives",
+		"keepalives_idle",
+		"keepalives_interval",
+		"keepalives_count",
+		"lock_timeout"
+	},
+	.values = {
+		"1",
+		"10",
+		"10",
+		"60",
+		"60000"
+	}
+};
+
 
 /*
  * copydb_init_tempdir initialises the file paths that are going to be used to

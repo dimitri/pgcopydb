@@ -32,6 +32,7 @@
  * added them, allowing user-defined values to be taken into account.
  */
 extern KeyVal connStringDefaults;
+extern KeyVal connStringDefaultsForReplication;
 
 
 /*
