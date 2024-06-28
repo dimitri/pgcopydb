@@ -628,6 +628,7 @@ bool catalog_count_summary_done_fetch(SQLiteQuery *query);
 typedef enum
 {
 	BIND_PARAMETER_TYPE_UNKNOWN = 0,
+	BIND_PARAMETER_TYPE_NULL,
 	BIND_PARAMETER_TYPE_INT,
 	BIND_PARAMETER_TYPE_INT64,
 	BIND_PARAMETER_TYPE_TEXT

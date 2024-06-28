@@ -175,8 +175,8 @@ typedef struct ExtensionReqs
 
 /*
  * pgcopydb sentinel is a table that's created on the source catalog and allows
- * communicating elements from the outside, and in between the receive and
- * apply processes.
+ * communicating elements from the outside, and in between the receive,
+ * transform and apply processes.
  */
 typedef struct CopyDBSentinel
 {
@@ -184,6 +184,7 @@ typedef struct CopyDBSentinel
 	uint64_t startpos;
 	uint64_t endpos;
 	uint64_t write_lsn;
+	uint64_t transform_lsn;
 	uint64_t flush_lsn;
 	uint64_t replay_lsn;
 } CopyDBSentinel;
@@ -492,6 +493,7 @@ bool sentinel_update_write_flush_lsn(DatabaseCatalog *catalog,
 									 uint64_t write_lsn,
 									 uint64_t flush_lsn);
 
+bool sentinel_update_transform_lsn(DatabaseCatalog *catalog, uint64_t transform_lsn);
 bool sentinel_update_replay_lsn(DatabaseCatalog *catalog, uint64_t replay_lsn);
 
 bool sentinel_get(DatabaseCatalog *catalog, CopyDBSentinel *sentinel);
@@ -501,6 +503,10 @@ bool sentinel_sync_recv(DatabaseCatalog *catalog,
 						uint64_t write_lsn,
 						uint64_t flush_lsn,
 						CopyDBSentinel *sentinel);
+
+bool sentinel_sync_transform(DatabaseCatalog *catalog,
+							 uint64_t transform_lsn,
+							 CopyDBSentinel *sentinel);
 
 bool sentinel_sync_apply(DatabaseCatalog *catalog,
 						 uint64_t replay_lsn,

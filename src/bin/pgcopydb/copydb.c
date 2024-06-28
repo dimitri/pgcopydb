@@ -564,21 +564,25 @@ copydb_init_specs(CopyDataSpec *specs,
 	DatabaseCatalog *source = &(specs->catalogs.source);
 	DatabaseCatalog *filter = &(specs->catalogs.filter);
 	DatabaseCatalog *target = &(specs->catalogs.target);
+	DatabaseCatalog *replay = &(specs->catalogs.replay);
 
 	/* init the catalog type */
 	source->type = DATABASE_CATALOG_TYPE_SOURCE;
 	filter->type = DATABASE_CATALOG_TYPE_FILTER;
 	target->type = DATABASE_CATALOG_TYPE_TARGET;
+	replay->type = DATABASE_CATALOG_TYPE_REPLAY;
 
 	/* pick the dbfile from the specs */
 	strlcpy(source->dbfile, specs->cfPaths.sdbfile, sizeof(source->dbfile));
 	strlcpy(filter->dbfile, specs->cfPaths.fdbfile, sizeof(filter->dbfile));
 	strlcpy(target->dbfile, specs->cfPaths.tdbfile, sizeof(target->dbfile));
 
-	bool shouldCreateVacuumQueue = (specs->section == DATA_SECTION_ALL ||
-									specs->section == DATA_SECTION_INDEXES ||
-									specs->section == DATA_SECTION_TABLE_DATA) &&
-								   !specs->skipVacuum;
+	bool shouldCreateVacuumQueue =
+		(specs->section == DATA_SECTION_ALL ||
+		 specs->section == DATA_SECTION_INDEXES ||
+		 specs->section == DATA_SECTION_TABLE_DATA) &&
+		!specs->skipVacuum;
+
 	if (shouldCreateVacuumQueue)
 	{
 		if (!queue_create(&(specs->vacuumQueue), "vacuum"))

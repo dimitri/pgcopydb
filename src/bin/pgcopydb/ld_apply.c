@@ -184,6 +184,7 @@ stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
 	/* init our context */
 	if (!stream_apply_init_context(context,
 								   specs->sourceDB,
+								   specs->replayDB,
 								   &(specs->paths),
 								   specs->connStrings,
 								   specs->origin,
@@ -206,23 +207,11 @@ stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
 		return true;
 	}
 
-	if (specs->system.timeline == 0)
+	if (!ld_store_open_replaydb(specs))
 	{
-		if (!stream_read_context(&(specs->paths),
-								 &(specs->system),
-								 &(specs->WalSegSz)))
-		{
-			log_error("Failed to read the streaming context information "
-					  "from the source database, see above for details");
-			return false;
-		}
+		/* errors have already been logged */
+		return false;
 	}
-
-	context->system = specs->system;
-	context->WalSegSz = specs->WalSegSz;
-
-	log_debug("Source database wal_segment_size is %u", context->WalSegSz);
-	log_debug("Source database timeline is %d", context->system.timeline);
 
 	/*
 	 * Use the replication origin for our setup (context->previousLSN).
@@ -1357,6 +1346,7 @@ setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
 bool
 stream_apply_init_context(StreamApplyContext *context,
 						  DatabaseCatalog *sourceDB,
+						  DatabaseCatalog *replayDB,
 						  CDCPaths *paths,
 						  ConnStrings *connStrings,
 						  char *origin,
@@ -1393,6 +1383,12 @@ stream_apply_init_context(StreamApplyContext *context,
 	context->connStrings = connStrings;
 
 	strlcpy(context->origin, origin, sizeof(context->origin));
+
+	/*
+	 * TODO: get rid of WalSegSz entirely. In the meantime, have it set to a
+	 * fixed value as in the old Postgres versions.
+	 */
+	context->WalSegSz = 16 * 1024 * 1024;
 
 	return true;
 }

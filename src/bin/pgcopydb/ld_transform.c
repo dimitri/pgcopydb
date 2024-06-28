@@ -256,24 +256,11 @@ stream_transform_resume(StreamSpecs *specs)
 		return false;
 	}
 
-	/* we need timeline and wal_segment_size to compute WAL filenames */
-	if (specs->system.timeline == 0)
+	if (!ld_store_open_replaydb(specs))
 	{
-		if (!stream_read_context(&(specs->paths),
-								 &(specs->system),
-								 &(specs->WalSegSz)))
-		{
-			log_error("Failed to read the streaming context information "
-					  "from the source database, see above for details");
-			return false;
-		}
+		/* errors have already been logged */
+		return false;
 	}
-
-	privateContext->WalSegSz = specs->WalSegSz;
-	privateContext->timeline = specs->system.timeline;
-
-	log_debug("Source database wal_segment_size is %u", specs->WalSegSz);
-	log_debug("Source database timeline is %d", specs->system.timeline);
 
 	char jsonFileName[MAXPGPATH] = { 0 };
 	char sqlFileName[MAXPGPATH] = { 0 };
@@ -623,22 +610,10 @@ stream_transform_rotate(StreamContext *privateContext)
 bool
 stream_transform_worker(StreamSpecs *specs)
 {
-	/*
-	 * The timeline and wal segment size are determined when connecting to the
-	 * source database, and stored to local files at that time. When the Stream
-	 * Transform Worker process is created, that information is read from our
-	 * local files.
-	 */
-	if (!stream_read_context(&(specs->paths), &(specs->system), &(specs->WalSegSz)))
+	/* at startup, open the current replaydb file */
+	if (!ld_store_open_replaydb(specs))
 	{
-		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
-		{
-			log_debug("Stream Transform Worker startup was interrupted");
-			return true;
-		}
-
-		log_error("Failed to read the streaming context information "
-				  "from the source database, see above for details");
+		/* errors have already been logged */
 		return false;
 	}
 
