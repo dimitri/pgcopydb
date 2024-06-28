@@ -161,7 +161,6 @@ git-version.h:
 clean:
 	rm -f git-version.h
 	rm -f $(OBJS) $(PGCOPYDB)
-	$(MAKE) -C $(SQLITE3_DIR) clean
 	rm -rf $(DEPDIR)
 
 install: $(PGCOPYDB)

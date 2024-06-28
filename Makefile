@@ -19,7 +19,9 @@ clean:
 	rm -f GIT-VERSION-FILE
 	$(MAKE) -C src/bin/ clean
 
-maintainer-clean: clean
+maintainer-clean:
+	rm -f GIT-VERSION-FILE
+	$(MAKE) -C src/bin/ maintainer-clean
 	rm -f version
 
 docs:
