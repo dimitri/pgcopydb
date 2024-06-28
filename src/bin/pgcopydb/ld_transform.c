@@ -60,6 +60,8 @@ static bool stream_transform_cdc_file_hook(StreamSpecs *specs,
 										   ReplayDBOutputMessage *output,
 										   bool *stop);
 
+static bool stream_transform_prepare_message(StreamSpecs *specs,
+											 ReplayDBOutputMessage *output);
 
 static bool stream_write_insert(ReplayDBStmt *replayStmt,
 								LogicalMessageInsert *insert);
@@ -81,23 +83,34 @@ static bool stream_write_truncate(ReplayDBStmt *replayStmt,
 bool
 stream_transform_messages(StreamSpecs *specs)
 {
+	CopyDBSentinel *sentinel = &(specs->sentinel);
 	StreamContext *privateContext = &(specs->private);
 
+	/* First, grab init values from the sentinel */
+	if (!stream_transform_resume(specs))
+	{
+		log_error("Failed to resume transform from %X/%X, startpos %X/%X",
+				  LSN_FORMAT_ARGS(privateContext->transform_lsn),
+				  LSN_FORMAT_ARGS(privateContext->startpos));
+		return false;
+	}
+
+	/*
+	 * Now prepare our context, including a pgsql connection that's needed for
+	 * libpq's implementation of escaping identifiers and such.
+	 */
 	if (!stream_transform_context_init_pgsql(specs))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	if (!stream_transform_resume(specs))
-	{
-		log_error("Failed to resume streaming from %X/%X",
-				  LSN_FORMAT_ARGS(privateContext->startpos));
-		return false;
-	}
-
+	/*
+	 * And loop over iterating our replayDB files one transaction at a time,
+	 * switching over to the next file when necessary.
+	 */
 	while (privateContext->endpos == InvalidXLogRecPtr ||
-		   specs->sentinel.transform_lsn <= privateContext->endpos)
+		   sentinel->transform_lsn < privateContext->endpos)
 	{
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
@@ -105,12 +118,11 @@ stream_transform_messages(StreamSpecs *specs)
 			return true;
 		}
 
-		if (!ld_store_set_cdc_filename_at_lsn(specs,
-											  specs->sentinel.transform_lsn))
+		if (!ld_store_set_cdc_filename_at_lsn(specs, sentinel->transform_lsn))
 		{
 			log_error("Failed to find CDC file at lsn %X/%X, "
 					  "see above for details",
-					  LSN_FORMAT_ARGS(specs->sentinel.transform_lsn));
+					  LSN_FORMAT_ARGS(sentinel->transform_lsn));
 			return false;
 		}
 
@@ -123,12 +135,16 @@ stream_transform_messages(StreamSpecs *specs)
 		}
 
 		/* allow some time for the files and content to be created */
-		pg_usleep(150 * 100);
+		pg_usleep(1500 * 1000); /* 1.5s */
 	}
 
+	/*
+	 * This time use the sentinel transform_lsn, as a process restart will use
+	 * that value, not the internal in-memory one.
+	 */
 	log_info("Transform reached end position %X/%X at %X/%X",
 			 LSN_FORMAT_ARGS(privateContext->endpos),
-			 LSN_FORMAT_ARGS(specs->sentinel.transform_lsn));
+			 LSN_FORMAT_ARGS(sentinel->transform_lsn));
 
 	return true;
 }
@@ -172,15 +188,52 @@ stream_transform_context_init_pgsql(StreamSpecs *specs)
 bool
 stream_transform_cdc_file(StreamSpecs *specs)
 {
-	log_notice("Transforming Logical Decoding messages from file \"%s\"",
-			   specs->replayDB->dbfile);
+	CopyDBSentinel *sentinel = &(specs->sentinel);
+	StreamContext *privateContext = &(specs->private);
+	LogicalMessageMetadata *metadata = &(privateContext->metadata);
 
-	if (!ld_store_iter_output(specs, &stream_transform_cdc_file_hook))
+	log_warn("Transforming Logical Decoding messages from file \"%s\" [%X/%X]",
+			 specs->replayDB->dbfile,
+			 LSN_FORMAT_ARGS(specs->sentinel.transform_lsn));
+
+	while (metadata->action != STREAM_ACTION_SWITCH)
 	{
-		log_error("Failed to iterate over CDC file \"%s\", "
-				  "see above for details",
-				  specs->replayDB->dbfile);
-		return false;
+		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		{
+			log_debug("stream_transform_messages was asked to stop");
+			return true;
+		}
+
+		if (!ld_store_iter_output(specs, &stream_transform_cdc_file_hook))
+		{
+			log_error("Failed to iterate over CDC file \"%s\", "
+					  "see above for details",
+					  specs->replayDB->dbfile);
+			return false;
+		}
+
+		/* endpos might have been set now */
+		if (!sentinel_get(specs->sourceDB, sentinel))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		log_warn("stream_transform_cdc_file: endpos %X/%X",
+				 LSN_FORMAT_ARGS(sentinel->endpos));
+
+		if (sentinel->endpos != InvalidXLogRecPtr &&
+			sentinel->endpos <= sentinel->transform_lsn)
+		{
+			log_notice("Transform reached end position %X/%X at %X/%X",
+					   LSN_FORMAT_ARGS(privateContext->endpos),
+					   LSN_FORMAT_ARGS(sentinel->transform_lsn));
+
+			return true;
+		}
+
+		/* allow some time for the files and content to be created */
+		pg_usleep(1500 * 1000); /* 1.5s */
 	}
 
 	return true;
@@ -197,10 +250,9 @@ stream_transform_cdc_file_hook(StreamSpecs *specs,
 {
 	CopyDBSentinel *sentinel = &(specs->sentinel);
 	StreamContext *privateContext = &(specs->private);
-	LogicalMessageMetadata *metadata = &(privateContext->metadata);
 
 	/* parse the logical decoding output */
-	if (!stream_transform_message(privateContext, output->jsonBuffer))
+	if (!stream_transform_prepare_message(specs, output))
 	{
 		/* errors have already been logged */
 		return false;
@@ -213,56 +265,125 @@ stream_transform_cdc_file_hook(StreamSpecs *specs,
 		return false;
 	}
 
+	DatabaseCatalog *sourceDB = specs->sourceDB;
+
+	/* make internal note of the progress */
+	uint64_t transform_lsn = privateContext->transform_lsn = output->lsn;
+
 	/*
 	 * At COMMIT, ROLLBACK, and KEEPALIVE, sync the sentinel transform_lsn.
 	 * At SWITCH, also sync transform_lsn so that we move on to the next file.
 	 */
-	if (metadata->action == STREAM_ACTION_COMMIT ||
-		metadata->action == STREAM_ACTION_ROLLBACK ||
-		metadata->action == STREAM_ACTION_SWITCH ||
-		metadata->action == STREAM_ACTION_KEEPALIVE)
+	switch (output->action)
 	{
-		if (!sentinel_sync_transform(specs->sourceDB, metadata->lsn, sentinel))
+		case STREAM_ACTION_COMMIT:
+		case STREAM_ACTION_ROLLBACK:
+		case STREAM_ACTION_SWITCH:
+		case STREAM_ACTION_KEEPALIVE:
 		{
-			/* errors have already been logged */
-			return false;
+			if (!sentinel_sync_transform(sourceDB, transform_lsn, sentinel))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			/* SWITCH is expected to be the last entry in the file */
+			if (output->action == STREAM_ACTION_SWITCH)
+			{
+				*stop = true;
+			}
+
+			break;
 		}
 
-		/* SWITCH is expected to be the last entry in the file */
-		if (metadata->action == STREAM_ACTION_SWITCH)
+		/* at ENDPOS check that it's the current sentinel value and exit */
+		case STREAM_ACTION_ENDPOS:
 		{
-			*stop = true;
+			if (!sentinel_sync_transform(sourceDB, transform_lsn, sentinel))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			if (sentinel->endpos != InvalidXLogRecPtr &&
+				sentinel->endpos <= transform_lsn)
+			{
+				*stop = true;
+
+				log_info("Transform process reached ENDPOS %X/%X",
+						 LSN_FORMAT_ARGS(output->lsn));
+
+				return true;
+			}
+
+			break;
+		}
+
+		/* nothing to do here for other actions */
+		default:
+		{
+			/* noop */
+			break;
 		}
 	}
-	/* at ENDPOS check that it's the current sentinel value and exit */
-	else if (metadata->action == STREAM_ACTION_ENDPOS)
-	{
-		if (!sentinel_sync_transform(specs->sourceDB, metadata->lsn, sentinel))
-		{
-			/* errors have already been logged */
-			return false;
-		}
 
-		if (sentinel->endpos != InvalidXLogRecPtr &&
-			sentinel->endpos <= metadata->lsn)
-		{
-			*stop = true;
-
-			log_info("Transform process reached ENDPOS %X/%X",
-					 LSN_FORMAT_ARGS(metadata->lsn));
-
-			return true;
-		}
-	}
-
-	if (privateContext->endpos != InvalidXLogRecPtr &&
-		privateContext->endpos <= metadata->lsn)
+	/* we could reach the endpos on any message, not just ENDPOS */
+	if (sentinel->endpos != InvalidXLogRecPtr &&
+		sentinel->endpos <= transform_lsn)
 	{
 		*stop = true;
 
 		log_info("Transform reached end position %X/%X at %X/%X",
-				 LSN_FORMAT_ARGS(privateContext->endpos),
-				 LSN_FORMAT_ARGS(metadata->lsn));
+				 LSN_FORMAT_ARGS(sentinel->endpos),
+				 LSN_FORMAT_ARGS(transform_lsn));
+	}
+
+	return true;
+}
+
+
+/*
+ * stream_transform_prepare_message prepares a message with metadata taken from
+ * the replayDB output table, and parses the actual Logical Decoding message
+ * parts.
+ */
+bool
+stream_transform_prepare_message(StreamSpecs *specs,
+								 ReplayDBOutputMessage *output)
+{
+	StreamContext *privateContext = &(specs->private);
+	LogicalMessageMetadata *metadata = &(privateContext->metadata);
+
+	log_warn("stream_transform_prepare_message");
+
+	/* first re-build the metadata from the SQLite row */
+	LogicalMessageMetadata outputMetadata = {
+		.action = output->action,
+		.xid = output->xid,
+		.lsn = output->lsn,
+		.jsonBuffer = output->jsonBuffer
+	};
+
+	*metadata = outputMetadata;
+
+	/* copy the timestamp over */
+	strlcpy(metadata->timestamp, output->timestamp, PG_MAX_TIMESTAMP);
+
+	log_warn("stream_transform_prepare_message: %lld %c %lld %X/%X %s",
+			 (long long) output->id,
+			 metadata->action,
+			 (long long) metadata->xid,
+			 LSN_FORMAT_ARGS(metadata->lsn),
+			 metadata->jsonBuffer);
+
+	JSON_Value *json = json_parse_string(output->jsonBuffer);
+
+	if (!parseMessage(privateContext, output->jsonBuffer, json))
+	{
+		log_error("Failed to parse JSON message: %.1024s%s",
+				  output->jsonBuffer,
+				  strlen(output->jsonBuffer) > 1024 ? "..." : "");
+		return false;
 	}
 
 	return true;
@@ -277,7 +398,6 @@ bool
 stream_transform_write_transaction(StreamSpecs *specs)
 {
 	StreamContext *privateContext = &(specs->private);
-
 	LogicalMessage *currentMsg = &(privateContext->currentMsg);
 	LogicalMessageMetadata *metadata = &(privateContext->metadata);
 
@@ -299,6 +419,8 @@ stream_transform_write_transaction(StreamSpecs *specs)
 			/* then prepare a new transaction, reusing the same memory area */
 			LogicalMessage empty = { 0 };
 			*currentMsg = empty;
+
+			log_warn("stream_transform_write_transaction: currentMsg is empty");
 
 			return true;
 		}
@@ -434,9 +556,50 @@ stream_transform_resume(StreamSpecs *specs)
 	 */
 	CopyDBSentinel *sentinel = &(specs->sentinel);
 
-	if (!sentinel_get(specs->sourceDB, sentinel))
+	ConnectionRetryPolicy retryPolicy = { 0 };
+
+	int maxT = 300;             /* 5m */
+	int maxSleepTime = 1500;    /* 1.5s */
+	int baseSleepTime = 150;    /* 150ms */
+
+	(void) pgsql_set_retry_policy(&retryPolicy,
+								  maxT,
+								  -1, /* unbounded number of attempts */
+								  maxSleepTime,
+								  baseSleepTime);
+
+	while (!pgsql_retry_policy_expired(&retryPolicy))
 	{
-		/* errors have already been logged */
+		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		{
+			log_debug("stream_transform_messages was asked to stop");
+			log_fatal("stream_transform_messages was asked to stop");
+			return true;
+		}
+
+		if (!sentinel_get(specs->sourceDB, sentinel))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (sentinel->transform_lsn != InvalidXLogRecPtr)
+		{
+			break;
+		}
+
+		int sleepTimeMs =
+			pgsql_compute_connection_retry_sleep_time(&retryPolicy);
+
+		/* we have milliseconds, pg_usleep() wants microseconds */
+		(void) pg_usleep(sleepTimeMs * 1000);
+	}
+
+	if (sentinel->transform_lsn == InvalidXLogRecPtr)
+	{
+		log_error("Transform failed to grab sentinel values "
+				  "(transform_lsn is %X/%X)",
+				  LSN_FORMAT_ARGS(sentinel->transform_lsn));
 		return false;
 	}
 
@@ -1245,13 +1408,13 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 		return false;
 	}
 
-	if (message == NULL)
+	if (message == NULL && StreamActionIsDML(metadata->action))
 	{
 		log_error("BUG: parseMessage called with a NULL message");
 		return false;
 	}
 
-	if (json == NULL)
+	if (json == NULL && StreamActionIsDML(metadata->action))
 	{
 		log_error("BUG: parseMessage called with a NULL JSON_Value");
 		return false;
@@ -1265,17 +1428,16 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 	}
 
 	/*
-	 * Check that XID make sense, except for SWITCH messages, which don't have
-	 * XID information, only have LSN information.
+	 * Check that XID make sense for DML actions (Insert, Update, Delete,
+	 * Truncate).
 	 */
-	if (metadata->action == STREAM_ACTION_INSERT ||
-		metadata->action == STREAM_ACTION_UPDATE ||
-		metadata->action == STREAM_ACTION_DELETE ||
-		metadata->action == STREAM_ACTION_TRUNCATE)
+	if (StreamActionIsDML(metadata->action))
 	{
 		if (mesg->isTransaction)
 		{
-			if (txn->xid > 0 && metadata->xid > 0 && txn->xid != metadata->xid)
+			if (txn->xid > 0 &&
+				metadata->xid > 0 &&
+				txn->xid != metadata->xid)
 			{
 				log_debug("%s", message);
 				log_error("BUG: logical message xid is %lld, which is different "
@@ -1296,15 +1458,13 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 	}
 
 	/*
-	 * All messages except for BEGIN/COMMIT/ROLLBACL need a
-	 * LogicalTransactionStatement to represent them within the
-	 * current transaction.
+	 * All messages except for BEGIN/COMMIT/ROLLBACK (Transaction Control
+	 * Language, or TCL) need a LogicalTransactionStatement to represent them
+	 * within the current transaction.
 	 */
 	LogicalTransactionStatement *stmt = NULL;
 
-	if (metadata->action != STREAM_ACTION_BEGIN &&
-		metadata->action != STREAM_ACTION_COMMIT &&
-		metadata->action != STREAM_ACTION_ROLLBACK)
+	if (!StreamActionIsTCL(metadata->action))
 	{
 		stmt = (LogicalTransactionStatement *)
 			   calloc(1, sizeof(LogicalTransactionStatement));
@@ -1316,6 +1476,10 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 		}
 
 		stmt->action = metadata->action;
+		stmt->xid = metadata->xid;
+		stmt->lsn = metadata->lsn;
+
+		strlcpy(stmt->timestamp, metadata->timestamp, sizeof(stmt->timestamp));
 
 		/* publish the statement in the privateContext */
 		privateContext->stmt = stmt;
@@ -1398,17 +1562,16 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 		/* switch wal messages are pgcopydb internal messages */
 		case STREAM_ACTION_SWITCH:
 		{
-			stmt->stmt.switchwal.lsn = metadata->lsn;
-
 			if (mesg->isTransaction)
 			{
 				(void) streamLogicalTransactionAppendStatement(txn, stmt);
 			}
 			else
 			{
-				/* copy the stmt over, then free the extra allocated memory */
+				/* maintain the LogicalMessage copy of the metadata */
 				mesg->action = metadata->action;
-				mesg->command.switchwal = stmt->stmt.switchwal;
+				mesg->lsn = metadata->lsn;
+				strlcpy(mesg->timestamp, metadata->timestamp, PG_MAX_TIMESTAMP);
 			}
 
 			break;
@@ -1417,21 +1580,16 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 		/* keepalive messages are pgcopydb internal messages */
 		case STREAM_ACTION_KEEPALIVE:
 		{
-			stmt->stmt.keepalive.lsn = metadata->lsn;
-
-			strlcpy(stmt->stmt.keepalive.timestamp,
-					metadata->timestamp,
-					sizeof(stmt->stmt.keepalive.timestamp));
-
 			if (mesg->isTransaction)
 			{
 				(void) streamLogicalTransactionAppendStatement(txn, stmt);
 			}
 			else
 			{
-				/* copy the stmt over, then free the extra allocated memory */
+				/* maintain the LogicalMessage copy of the metadata */
 				mesg->action = metadata->action;
-				mesg->command.keepalive = stmt->stmt.keepalive;
+				mesg->lsn = metadata->lsn;
+				strlcpy(mesg->timestamp, metadata->timestamp, PG_MAX_TIMESTAMP);
 			}
 
 			break;
@@ -1439,17 +1597,16 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 
 		case STREAM_ACTION_ENDPOS:
 		{
-			stmt->stmt.endpos.lsn = metadata->lsn;
-
 			if (mesg->isTransaction)
 			{
 				(void) streamLogicalTransactionAppendStatement(txn, stmt);
 			}
 			else
 			{
-				/* copy the stmt over, then free the extra allocated memory */
+				/* maintain the LogicalMessage copy of the metadata */
 				mesg->action = metadata->action;
-				mesg->command.endpos = stmt->stmt.endpos;
+				mesg->lsn = metadata->lsn;
+				strlcpy(mesg->timestamp, metadata->timestamp, PG_MAX_TIMESTAMP);
 			}
 
 			break;
@@ -1471,11 +1628,7 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 			 * use the raw JSON message as a json object in the "message"
 			 * object key.
 			 */
-			JSON_Value_Type jsmesgtype =
-				json_value_get_type(
-					json_object_get_value(
-						json_value_get_object(json),
-						"message"));
+			JSON_Value_Type jsmesgtype = json_value_get_type(json);
 
 			switch (jsmesgtype)
 			{
@@ -1811,38 +1964,22 @@ stream_transform_write_replay_stmt(StreamSpecs *specs)
 	}
 	else
 	{
-		ReplayDBStmt replayStmt = { .action = msg->action };
+		ReplayDBStmt replayStmt = {
+			.action = msg->action,
+			.xid = msg->xid,
+			.lsn = msg->lsn
+		};
 
-		switch (msg->action)
+		strlcpy(replayStmt.timestamp, msg->timestamp, PG_MAX_TIMESTAMP);
+
+		if (replayStmt.action != STREAM_ACTION_SWITCH &&
+			replayStmt.action != STREAM_ACTION_KEEPALIVE &&
+			replayStmt.action != STREAM_ACTION_ENDPOS)
 		{
-			case STREAM_ACTION_SWITCH:
-			{
-				replayStmt.lsn = msg->command.switchwal.lsn;
-				break;
-			}
-
-			case STREAM_ACTION_KEEPALIVE:
-			{
-				replayStmt.lsn = msg->command.keepalive.lsn;
-
-				strlcpy(replayStmt.timestamp,
-						msg->command.keepalive.timestamp,
-						sizeof(replayStmt.timestamp));
-				break;
-			}
-
-			case STREAM_ACTION_ENDPOS:
-			{
-				replayStmt.lsn = msg->command.endpos.lsn;
-				break;
-			}
-
-			default:
-			{
-				log_error("BUG: Failed to write SQL for LogicalMessage action %d",
-						  msg->action);
-				return false;
-			}
+			log_error("BUG: Failed to write SQL for unexpected "
+					  "LogicalMessage action %d",
+					  replayStmt.action);
+			return false;
 		}
 
 		if (!ld_store_insert_replay_stmt(specs->replayDB, &replayStmt))
@@ -1852,7 +1989,7 @@ stream_transform_write_replay_stmt(StreamSpecs *specs)
 		}
 	}
 
-	return false;
+	return true;
 }
 
 
@@ -1870,8 +2007,13 @@ stream_transform_write_replay_txn(StreamSpecs *specs)
 	ReplayDBStmt begin = {
 		.action = STREAM_ACTION_BEGIN,
 		.xid = txn->xid,
-		.lsn = txn->beginLSN
+		.lsn = txn->beginLSN,
+		.endlsn = txn->commit ? txn->commitLSN : txn->rollbackLSN
 	};
+
+	log_warn("stream_transform_write_replay_txn: lsn %X/%X endlsn %X/%X",
+			 LSN_FORMAT_ARGS(begin.lsn),
+			 LSN_FORMAT_ARGS(begin.endlsn));
 
 	strlcpy(begin.timestamp, txn->timestamp, sizeof(begin.timestamp));
 
@@ -1885,7 +2027,13 @@ stream_transform_write_replay_txn(StreamSpecs *specs)
 
 	for (; currentStmt != NULL; currentStmt = currentStmt->next)
 	{
-		ReplayDBStmt stmt = { .action = currentStmt->action };
+		ReplayDBStmt stmt = {
+			.action = currentStmt->action,
+			.xid = currentStmt->xid,
+			.lsn = currentStmt->lsn
+		};
+
+		strlcpy(stmt.timestamp, currentStmt->timestamp, PG_MAX_TIMESTAMP);
 
 		switch (currentStmt->action)
 		{
@@ -1893,6 +2041,7 @@ stream_transform_write_replay_txn(StreamSpecs *specs)
 			{
 				if (!stream_write_insert(&stmt, &(currentStmt->stmt.insert)))
 				{
+					/* errors have already been logged */
 					return false;
 				}
 
@@ -1903,6 +2052,7 @@ stream_transform_write_replay_txn(StreamSpecs *specs)
 			{
 				if (!stream_write_update(&stmt, &(currentStmt->stmt.update)))
 				{
+					/* errors have already been logged */
 					return false;
 				}
 				break;
@@ -1912,6 +2062,7 @@ stream_transform_write_replay_txn(StreamSpecs *specs)
 			{
 				if (!stream_write_delete(&stmt, &(currentStmt->stmt.delete)))
 				{
+					/* errors have already been logged */
 					return false;
 				}
 				break;
@@ -1921,6 +2072,7 @@ stream_transform_write_replay_txn(StreamSpecs *specs)
 			{
 				if (!stream_write_truncate(&stmt, &(currentStmt->stmt.truncate)))
 				{
+					/* errors have already been logged */
 					return false;
 				}
 				break;
@@ -1928,7 +2080,7 @@ stream_transform_write_replay_txn(StreamSpecs *specs)
 
 			default:
 			{
-				log_error("BUG: Failed to write SQL action %d",
+				log_error("BUG: Failed to write unexepected SQL action %d",
 						  currentStmt->action);
 				return false;
 			}

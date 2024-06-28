@@ -567,18 +567,26 @@ startLogicalStreaming(StreamSpecs *specs)
 		/* ignore errors, try again unless asked to stop */
 		bool cleanExit = pgsql_stream_logical(&stream, &context);
 
-		if (cleanExit || asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		if ((cleanExit && context.endpos != InvalidXLogRecPtr) ||
+			asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
 			retry = false;
 		}
 
-		if (cleanExit)
+		if (cleanExit && context.endpos != InvalidXLogRecPtr)
 		{
 			log_info("Streamed up to write_lsn %X/%X, flush_lsn %X/%X, stopping: "
 					 "endpos is %X/%X",
 					 LSN_FORMAT_ARGS(context.tracking->written_lsn),
 					 LSN_FORMAT_ARGS(context.tracking->flushed_lsn),
 					 LSN_FORMAT_ARGS(context.endpos));
+		}
+		else if (cleanExit && context.endpos == InvalidXLogRecPtr)
+		{
+			log_info("Streamed up to write_lsn %X/%X, flush_lsn %X/%X, "
+					 "reconnecting in 1s ",
+					 LSN_FORMAT_ARGS(context.tracking->written_lsn),
+					 LSN_FORMAT_ARGS(context.tracking->flushed_lsn));
 		}
 		else if (retries > 0 &&
 				 context.tracking->written_lsn == waterMarkLSN)
@@ -1068,6 +1076,9 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 			.action = STREAM_ACTION_ENDPOS,
 			.lsn = context->cur_record_lsn
 		};
+
+		log_warn("streamCloseFile: insert ENDPOS at %X/%X",
+				 LSN_FORMAT_ARGS(endpos.lsn));
 
 		if (!ld_store_insert_internal_message(replayDB, &endpos))
 		{
@@ -1951,6 +1962,80 @@ StreamActionToString(StreamAction action)
 
 	/* keep compiler happy */
 	return "unknown";
+}
+
+
+/*
+ * StreamActionIsTCL returns true if the action is part of the Transaction
+ * Control Language.
+ */
+bool
+StreamActionIsTCL(StreamAction action)
+{
+	switch (action)
+	{
+		case STREAM_ACTION_BEGIN:
+		case STREAM_ACTION_COMMIT:
+		case STREAM_ACTION_ROLLBACK:
+		{
+			return true;
+		}
+
+		default:
+			return false;
+	}
+
+	/* keep compiler happy */
+	return false;
+}
+
+
+/*
+ * StreamActionIsDML returns true if the action is a DML.
+ */
+bool
+StreamActionIsDML(StreamAction action)
+{
+	switch (action)
+	{
+		case STREAM_ACTION_INSERT:
+		case STREAM_ACTION_UPDATE:
+		case STREAM_ACTION_DELETE:
+		case STREAM_ACTION_TRUNCATE:
+		{
+			return true;
+		}
+
+		default:
+			return false;
+	}
+
+	/* keep compiler happy */
+	return false;
+}
+
+
+/*
+ * StreamActionIsInternal returns true if the action is internal.
+ */
+bool
+StreamActionIsInternal(StreamAction action)
+{
+	switch (action)
+	{
+		case STREAM_ACTION_ENDPOS:
+		case STREAM_ACTION_KEEPALIVE:
+		case STREAM_ACTION_SWITCH:
+		{
+			return true;
+		}
+
+		default:
+			return false;
+	}
+
+	/* keep compiler happy */
+	return false;
 }
 
 

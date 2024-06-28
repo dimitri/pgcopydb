@@ -38,6 +38,7 @@ typedef struct ReplayDBStmt
 	StreamAction action;
 	uint32_t xid;
 	uint64_t lsn;
+	uint64_t endlsn;
 
 	char timestamp[PG_MAX_TIMESTAMP];
 
@@ -50,12 +51,23 @@ typedef struct ReplayDBStmt
 bool ld_store_open_replaydb(StreamSpecs *specs);
 
 bool ld_store_set_current_cdc_filename(StreamSpecs *specs);
-bool ld_store_set_first_cdc_filename(StreamSpecs *specs);
 bool ld_store_set_cdc_filename_at_lsn(StreamSpecs *specs, uint64_t lsn);
 
 bool ld_store_cdc_filename_fetch(SQLiteQuery *query);
 
-bool ld_store_lookup_lsn(DatabaseCatalog *catalog, uint64_t lsn);
+bool ld_store_lookup_output_at_lsn(DatabaseCatalog *catalog,
+								   uint64_t lsn,
+								   ReplayDBOutputMessage *output);
+
+bool ld_store_lookup_output_after_lsn(DatabaseCatalog *catalog,
+									  uint64_t lsn,
+									  ReplayDBOutputMessage *output);
+
+bool ld_store_lookup_output_xid_end(DatabaseCatalog *catalog,
+									uint32_t xid,
+									ReplayDBOutputMessage *output);
+
+bool ld_store_output_fetch(SQLiteQuery *query);
 
 bool ld_store_insert_cdc_filename(StreamSpecs *specs);
 
@@ -91,7 +103,6 @@ typedef struct ReplayDBOutputIterator
 
 bool ld_store_iter_output_init(ReplayDBOutputIterator *iter);
 bool ld_store_iter_output_next(ReplayDBOutputIterator *iter);
-bool ld_store_output_fetch(SQLiteQuery *query);
 bool ld_store_iter_output_finish(ReplayDBOutputIterator *iter);
 
 #endif /* LD_STORE_H */

@@ -18,7 +18,9 @@ pgcopydb ping
 # that's the case is the existence of the pgcopydb.sentinel table on the
 # source database.
 #
-while [ ! -s ${TMPDIR}/pgcopydb/schema/source.db ]
+db=${TMPDIR}/pgcopydb/schema/source.db
+
+while [ ! -s ${db} ]
 do
     sleep 1
 done
@@ -52,9 +54,9 @@ pgcopydb stream sentinel get
 # that the other process in the pgcopydb service is done before exiting
 # here.
 #
-sql="select '${lsn}'::pg_lsn <= flush_lsn from pgcopydb.sentinel"
+sql="select '${lsn}' <= flush_lsn from sentinel"
 
-while [ `psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c "${sql}"` != 't' ]
+while [ `sqlite3 ${db} "${sql}"` != '1' ]
 do
     sleep 1
 done
