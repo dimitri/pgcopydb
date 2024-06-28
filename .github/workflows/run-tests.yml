@@ -72,10 +72,15 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
       - name: Build docs
         uses: ammaraskar/sphinx-action@master
         with:
           docs-folder: "docs/"
+
+      - name: Set Version String From .git
+        run: make version
+
       - name: Check that docs are up to date
         run: |
           cat Dockerfile ci/Dockerfile.docs.template > ci/Dockerfile.docs && \
