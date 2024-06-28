@@ -30,6 +30,11 @@ docs:
 update-docs: bin
 	bash ./docs/update-help-messages.sh
 
+check-docs:
+	cat Dockerfile ci/Dockerfile.docs.template > ci/Dockerfile.docs
+	docker build --file=ci/Dockerfile.docs --tag test-docs .
+	docker run test-docs
+
 test: build
 	$(MAKE) -C tests all
 
