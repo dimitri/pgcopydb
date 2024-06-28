@@ -537,8 +537,8 @@ copydb_init_specs(CopyDataSpec *specs,
 		.splitMaxParts = options->splitMaxParts,
 		.estimateTableSizes = options->estimateTableSizes,
 
-		.vacuumQueue = { 0 },
-		.indexQueue = { 0 },
+		.vacuumQueue = { NULL, -1 },
+		.indexQueue = { NULL, -1 },
 
 		.catalogs = { 0 }
 	};
@@ -575,17 +575,16 @@ copydb_init_specs(CopyDataSpec *specs,
 	strlcpy(filter->dbfile, specs->cfPaths.fdbfile, sizeof(filter->dbfile));
 	strlcpy(target->dbfile, specs->cfPaths.tdbfile, sizeof(target->dbfile));
 
-	if (specs->section == DATA_SECTION_ALL ||
-		specs->section == DATA_SECTION_TABLE_DATA)
+	bool shouldCreateVacuumQueue = (specs->section == DATA_SECTION_ALL ||
+									specs->section == DATA_SECTION_INDEXES ||
+									specs->section == DATA_SECTION_TABLE_DATA) &&
+								   !specs->skipVacuum;
+	if (shouldCreateVacuumQueue)
 	{
-		/* create the VACUUM process queue */
-		if (!specs->skipVacuum)
+		if (!queue_create(&(specs->vacuumQueue), "vacuum"))
 		{
-			if (!queue_create(&(specs->vacuumQueue), "vacuum"))
-			{
-				log_error("Failed to create the VACUUM process queue");
-				return false;
-			}
+			log_error("Failed to create the VACUUM process queue");
+			return false;
 		}
 	}
 
