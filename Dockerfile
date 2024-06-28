@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:latest
 # Define a base image with all our build dependencies.
-FROM --platform=${TARGETPLATFORM} debian:11-slim as build
+FROM --platform=${TARGETPLATFORM} debian:11-slim AS build
 
 # multi-arch
 ARG TARGETPLATFORM
@@ -54,12 +54,35 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
 
 WORKDIR /usr/src/pgcopydb
 
-COPY . .
+COPY Makefile .
+COPY GIT-VERSION-GEN .
+COPY GIT-VERSION-FILE .
+COPY version .
+
+COPY src/bin/lib/sqlite src/bin/lib/sqlite
+RUN make -C src/bin/lib/sqlite sqlite3.o
+
+# The COPY --exclude flag is not yet available in Docker releases
+#COPY --exclude src/bin/lib/sqlite src src
+
+COPY src/bin/lib/jenkins src/bin/lib/jenkins
+COPY src/bin/lib/libs src/bin/lib/libs
+COPY src/bin/lib/log src/bin/lib/log
+COPY src/bin/lib/parson src/bin/lib/parson
+COPY src/bin/lib/pg src/bin/lib/pg
+COPY src/bin/lib/subcommands.c src/bin/lib/subcommands.c
+COPY src/bin/lib/uthash src/bin/lib/uthash
+
+COPY src/bin/Makefile src/bin/Makefile
+COPY src/bin/pgcopydb src/bin/pgcopydb
 
 RUN make -s clean && make -s -j$(nproc) install
 
+# When only tests are updated, reuse previous binary build
+COPY tests tests
+
 # Now the "run" image, as small as possible
-FROM --platform=${TARGETPLATFORM} debian:11-slim as run
+FROM --platform=${TARGETPLATFORM} debian:11-slim AS run
 
 # multi-arch
 ARG TARGETPLATFORM
@@ -68,7 +91,7 @@ ARG TARGETARCH
 ARG PGVERSION=16
 
 # used to configure Github Packages
-LABEL org.opencontainers.image.source https://github.com/dimitri/pgcopydb
+LABEL org.opencontainers.image.source=https://github.com/dimitri/pgcopydb
 
 RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
   && apt install -qqy --no-install-recommends \

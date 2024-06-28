@@ -16,9 +16,7 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src/pgcopydb
+COPY ci/check-docs.mk .
+COPY docs docs
 
-ENTRYPOINT make -s -j$(nproc) update-docs && \
-  git add docs && \
-  git diff --staged --exit-code || \
-  (echo "Docs are not up to date, please run 'make update-docs'" && false) && \
-  echo "Docs are up to date"
+ENTRYPOINT ["make", "-f", "check-docs.mk"]

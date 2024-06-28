@@ -19,7 +19,9 @@ clean:
 	rm -f GIT-VERSION-FILE
 	$(MAKE) -C src/bin/ clean
 
-maintainer-clean: clean
+maintainer-clean:
+	rm -f GIT-VERSION-FILE
+	$(MAKE) -C src/bin/ maintainer-clean
 	rm -f version
 
 docs:
@@ -27,6 +29,11 @@ docs:
 
 update-docs: bin
 	bash ./docs/update-help-messages.sh
+
+check-docs:
+	cat Dockerfile ci/Dockerfile.docs.template > ci/Dockerfile.docs
+	docker build --file=ci/Dockerfile.docs --tag test-docs .
+	docker run test-docs
 
 test: build
 	$(MAKE) -C tests all

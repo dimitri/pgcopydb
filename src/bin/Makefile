@@ -9,6 +9,10 @@ pgcopydb:
 clean:
 	$(MAKE) -C pgcopydb clean
 
+maintainer-clean:
+	$(MAKE) -C pgcopydb clean
+	$(MAKE) -C lib/sqlite clean
+
 install: $(pgcopydb)
 	$(MAKE) -C pgcopydb install
 
