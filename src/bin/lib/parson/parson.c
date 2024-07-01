@@ -1243,6 +1243,8 @@ static int json_serialize_to_buffer_r(const JSON_Value *value, char *buf, int le
             }
             if (parson_number_serialization_function) {
                 written = parson_number_serialization_function(num, num_buf);
+            } else if (!num_buf) {
+                return -1;
             } else if (parson_float_format) {
                 written = snprintf(num_buf, PARSON_NUM_BUF_SIZE, parson_float_format, num);
             } else {

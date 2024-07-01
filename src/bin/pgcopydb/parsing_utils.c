@@ -799,6 +799,7 @@ buildPostgresURIfromPieces(URIParams *uriParams, char **pguri)
 							  "value \"%s\"",
 							  keyword, value);
 				}
+                destroyPQExpBuffer(uri);
 				return false;
 			}
 
@@ -925,6 +926,9 @@ escapeWithPercentEncoding(const char *str, char **dst)
 				log_error("BUG: percent-encoded Postgres URI does not fit "
 						  "in the computed size: %lld bytes",
 						  (long long) size);
+
+                free(escaped);
+
 				return false;
 			}
 
@@ -946,6 +950,9 @@ escapeWithPercentEncoding(const char *str, char **dst)
 				log_error("BUG: percent-encoded Postgres URI does not fit "
 						  "in the computed size: %lld bytes",
 						  (long long) size);
+
+                free(escaped);
+
 				return false;
 			}
 

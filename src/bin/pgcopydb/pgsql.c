@@ -666,7 +666,7 @@ pgsql_retry_open_connection(PGSQL *pgsql)
 			pgsql_compute_connection_retry_sleep_time(&(pgsql->retryPolicy));
 
 		/* we have milliseconds, pg_usleep() wants microseconds */
-		(void) pg_usleep(sleep * 1000);
+		(void) pg_usleep(sleep * 1000L);
 
 		log_sql("PQping(%s): slept %d ms on attempt %d",
 				pgsql->safeURI.pguri,
@@ -831,7 +831,7 @@ pgsql_retry_open_connection(PGSQL *pgsql)
 		}
 	}
 
-	if (!connectionOk && pgsql->connection != NULL)
+	if (!connectionOk || pgsql->connection != NULL)
 	{
 		INSTR_TIME_SET_CURRENT(pgsql->retryPolicy.connectTime);
 
@@ -2419,6 +2419,7 @@ build_parameters_list(PQExpBuffer buffer,
 			log_error("Failed to create log message for SQL query parameters: "
 					  "out of memory");
 			destroyPQExpBuffer(buffer);
+            buffer = NULL;
 			return false;
 		}
 	}
@@ -3797,8 +3798,8 @@ pg_copy_large_object(PGSQL *src,
 	 * 4. Read the large object content in chunks on the source
 	 *    database, and write them on the target database.
 	 */
-	uint64_t bytesRead = 0;
-	uint64_t bytesWritten = 0;
+	int64_t bytesRead = 0;
+	int64_t bytesWritten = 0;
 
 	do {
 		char *buffer = (char *) calloc(LOBBUFSIZE, sizeof(char));

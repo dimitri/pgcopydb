@@ -118,10 +118,12 @@ stringToInt64(const char *str, int64_t *number)
 	{
 		return false;
 	}
+    #if LLONG_MAX > INT64_MAX
 	else if (n < INT64_MIN || n > INT64_MAX)
 	{
 		return false;
 	}
+    #endif
 
 	*number = n;
 
@@ -208,10 +210,12 @@ stringToUInt64(const char *str, uint64_t *number)
 	{
 		return false;
 	}
+    #if LLONG_MAX > INT64_MAX
 	else if (n > UINT64_MAX)
 	{
 		return false;
 	}
+    #endif
 
 	*number = n;
 
@@ -507,7 +511,7 @@ IntervalToString(uint64_t millisecs, char *buffer, size_t size)
 	else if (seconds < 10.0)
 	{
 		int s = (int) seconds;
-		uint64_t ms = millisecs - (1000 * s);
+		uint64_t ms = millisecs - (1000L * s);
 
 		sformat(buffer, size, "%2ds%03lld", s, (long long) ms);
 	}
@@ -692,7 +696,7 @@ processBufferCallback(const char *buffer, bool error)
 void
 pretty_print_bytes(char *buffer, size_t size, uint64_t bytes)
 {
-	const char *suffixes[7] = {
+	const char *suffixes[] = {
 		"B",                    /* Bytes */
 		"kB",                   /* Kilo */
 		"MB",                   /* Mega */
@@ -705,7 +709,7 @@ pretty_print_bytes(char *buffer, size_t size, uint64_t bytes)
 	uint sIndex = 0;
 	long double count = bytes;
 
-	while (count >= 10240 && sIndex < 7)
+	while (count >= 10240 && sIndex < (sizeof(suffixes) / sizeof(char) - 1))
 	{
 		sIndex++;
 		count /= 1024;
@@ -766,7 +770,7 @@ pretty_print_bytes_per_second(char *buffer, size_t size, uint64_t bytes,
 void
 pretty_print_count(char *buffer, size_t size, uint64_t number)
 {
-	const char *suffixes[7] = {
+	const char *suffixes[] = {
 		"",                     /* units */
 		"thousands",            /* 10^3 */
 		"million",              /* 10^6 */
@@ -793,7 +797,7 @@ pretty_print_count(char *buffer, size_t size, uint64_t number)
 		long double count = number;
 
 		/* issue 1234 million rather than 1 billion or 1.23 billion */
-		while (count >= 10000 && sIndex < 7)
+		while (count >= 10000 && sIndex < (sizeof(suffixes) / sizeof(char) - 1))
 		{
 			sIndex++;
 			count /= 1000;
