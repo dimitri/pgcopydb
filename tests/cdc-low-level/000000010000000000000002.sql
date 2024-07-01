@@ -1,10 +1,10 @@
-BEGIN; -- {"xid":489,"lsn":"0/24D2208","timestamp":"2024-05-08 11:10:09.242465+0000","commit_lsn":"0/24D4588"}
+BEGIN; -- {"xid":489,"lsn":"0/24D2168","timestamp":"2024-06-28 03:23:06.960051+0000","commit_lsn":"0/24D44E8"}
 PREPARE 58013803 AS INSERT INTO public.rental (rental_id, rental_date, inventory_id, customer_id, return_date, staff_id, last_update) overriding system value VALUES ($1, $2, $3, $4, $5, $6, $7), ($8, $9, $10, $11, $12, $13, $14);
 EXECUTE 58013803["16050","2022-06-01 00:00:00+00","371","291",null,"1","2022-06-01 00:00:00+00","16051","2022-06-01 00:00:00+00","373","293",null,"2","2022-06-01 00:00:00+00"];
 PREPARE dd147129 AS INSERT INTO public.payment_p2022_06 (payment_id, customer_id, staff_id, rental_id, amount, payment_date) overriding system value VALUES ($1, $2, $3, $4, $5, $6), ($7, $8, $9, $10, $11, $12);
 EXECUTE dd147129["32099","291","1","16050","5.99","2022-06-01 00:00:00+00","32100","293","2","16051","5.99","2022-06-01 00:00:00+00"];
-COMMIT; -- {"xid":489,"lsn":"0/24D4588","timestamp":"2024-05-08 11:10:09.242465+0000"}
-BEGIN; -- {"xid":490,"lsn":"0/24D4588","timestamp":"2024-05-08 11:10:09.242871+0000","commit_lsn":"0/24D5658"}
+COMMIT; -- {"xid":489,"lsn":"0/24D44E8","timestamp":"2024-06-28 03:23:06.960051+0000"}
+BEGIN; -- {"xid":490,"lsn":"0/24D44E8","timestamp":"2024-06-28 03:23:06.960576+0000","commit_lsn":"0/24D55B8"}
 PREPARE b44633db AS UPDATE public.payment_p2022_02 SET amount = $1 WHERE payment_id = $2 and customer_id = $3 and staff_id = $4 and rental_id = $5 and amount = $6 and payment_date = $7;
 EXECUTE b44633db["11.95","23757","116","2","14763","11.99","2022-02-11 03:52:25.634006+00"];
 PREPARE b44633db AS UPDATE public.payment_p2022_02 SET amount = $1 WHERE payment_id = $2 and customer_id = $3 and staff_id = $4 and rental_id = $5 and amount = $6 and payment_date = $7;
@@ -25,18 +25,14 @@ PREPARE 4b3d4a5b AS UPDATE public.payment_p2022_07 SET amount = $1 WHERE payment
 EXECUTE 4b3d4a5b["11.95","28814","592","1","3973","11.99","2022-07-06 12:15:38.928947+00"];
 PREPARE 4b3d4a5b AS UPDATE public.payment_p2022_07 SET amount = $1 WHERE payment_id = $2 and customer_id = $3 and staff_id = $4 and rental_id = $5 and amount = $6 and payment_date = $7;
 EXECUTE 4b3d4a5b["11.95","29136","13","2","8831","11.99","2022-07-22 16:15:40.797771+00"];
-COMMIT; -- {"xid":490,"lsn":"0/24D5658","timestamp":"2024-05-08 11:10:09.242871+0000"}
-BEGIN; -- {"xid":491,"lsn":"0/24D5818","timestamp":"2024-05-08 11:10:09.242917+0000","commit_lsn":"0/24D59C8"}
-PREPARE e1d51ac7 AS DELETE FROM public.payment_p2022_06 WHERE payment_id = $1 and customer_id = $2 and staff_id = $3 and rental_id = $4 and amount = $5 and payment_date = $6;
-EXECUTE e1d51ac7["32099","291","1","16050","5.99","2022-06-01 00:00:00+00"];
-PREPARE e1d51ac7 AS DELETE FROM public.payment_p2022_06 WHERE payment_id = $1 and customer_id = $2 and staff_id = $3 and rental_id = $4 and amount = $5 and payment_date = $6;
-EXECUTE e1d51ac7["32100","293","2","16051","5.99","2022-06-01 00:00:00+00"];
-PREPARE 3f2797d9 AS DELETE FROM public.rental WHERE rental_id = $1;
-EXECUTE 3f2797d9["16050"];
-PREPARE 3f2797d9 AS DELETE FROM public.rental WHERE rental_id = $1;
-EXECUTE 3f2797d9["16051"];
-COMMIT; -- {"xid":491,"lsn":"0/24D59C8","timestamp":"2024-05-08 11:10:09.242917+0000"}
-BEGIN; -- {"xid":492,"lsn":"0/24D59C8","timestamp":"2024-05-08 11:10:09.243006+0000","commit_lsn":"0/24D5F48"}
+COMMIT; -- {"xid":490,"lsn":"0/24D55B8","timestamp":"2024-06-28 03:23:06.960576+0000"}
+BEGIN; -- {"xid":491,"lsn":"0/24D5778","timestamp":"2024-06-28 03:23:06.960643+0000","commit_lsn":"0/24D5928"}
+PREPARE a38ef4dc AS DELETE FROM public.payment_p2022_06 WHERE (payment_id = $1 and customer_id = $2 and staff_id = $3 and rental_id = $4 and amount = $5 and payment_date = $6) or (payment_id = $7 and customer_id = $8 and staff_id = $9 and rental_id = $10 and amount = $11 and payment_date = $12);
+EXECUTE a38ef4dc["32099","291","1","16050","5.99","2022-06-01 00:00:00+00","32100","293","2","16051","5.99","2022-06-01 00:00:00+00"];
+PREPARE e57c09e8 AS DELETE FROM public.rental WHERE (rental_id = $1) or (rental_id = $2);
+EXECUTE e57c09e8["16050","16051"];
+COMMIT; -- {"xid":491,"lsn":"0/24D5928","timestamp":"2024-06-28 03:23:06.960643+0000"}
+BEGIN; -- {"xid":492,"lsn":"0/24D5928","timestamp":"2024-06-28 03:23:06.960791+0000","commit_lsn":"0/24D5EA8"}
 PREPARE b44633db AS UPDATE public.payment_p2022_02 SET amount = $1 WHERE payment_id = $2 and customer_id = $3 and staff_id = $4 and rental_id = $5 and amount = $6 and payment_date = $7;
 EXECUTE b44633db["11.99","23757","116","2","14763","11.95","2022-02-11 03:52:25.634006+00"];
 PREPARE b44633db AS UPDATE public.payment_p2022_02 SET amount = $1 WHERE payment_id = $2 and customer_id = $3 and staff_id = $4 and rental_id = $5 and amount = $6 and payment_date = $7;
@@ -57,6 +53,6 @@ PREPARE 4b3d4a5b AS UPDATE public.payment_p2022_07 SET amount = $1 WHERE payment
 EXECUTE 4b3d4a5b["11.99","28814","592","1","3973","11.95","2022-07-06 12:15:38.928947+00"];
 PREPARE 4b3d4a5b AS UPDATE public.payment_p2022_07 SET amount = $1 WHERE payment_id = $2 and customer_id = $3 and staff_id = $4 and rental_id = $5 and amount = $6 and payment_date = $7;
 EXECUTE 4b3d4a5b["11.99","29136","13","2","8831","11.95","2022-07-22 16:15:40.797771+00"];
-COMMIT; -- {"xid":492,"lsn":"0/24D5F48","timestamp":"2024-05-08 11:10:09.243006+0000"}
--- KEEPALIVE {"lsn":"0/24D5F48","timestamp":"2024-05-08 11:10:09.243014+0000"}
--- ENDPOS {"lsn":"0/24D5F48"}
+COMMIT; -- {"xid":492,"lsn":"0/24D5EA8","timestamp":"2024-06-28 03:23:06.960791+0000"}
+-- KEEPALIVE {"lsn":"0/24D5EA8","timestamp":"2024-06-28 03:23:06.960801+0000"}
+-- ENDPOS {"lsn":"0/24D5EA8"}
