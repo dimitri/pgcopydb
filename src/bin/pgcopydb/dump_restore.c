@@ -26,8 +26,12 @@
 
 
 static bool copydb_append_table_hook(void *context, SourceTable *table);
+
 static bool copydb_copy_database_properties_hook(void *ctx,
 												 SourceProperty *property);
+
+static bool copydb_write_restore_list_hook(void *ctx,
+										   ArchiveContentItem *item);
 
 
 /*
@@ -567,6 +571,12 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 }
 
 
+typedef struct RestoreListContext
+{
+	CopyDataSpec *specs;
+	FILE *outStream;
+} RestoreListContext;
+
 /*
  * copydb_write_restore_list fetches the pg_restore --list output, parses it,
  * and then writes it again to file and applies the filtering to the archive
@@ -622,169 +632,192 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 	 *   2. edit post.list to comment out lines and save as filtered.list
 	 *   3. pg_restore --section post-data --use-list filtered.list schema.dump
 	 */
-	ArchiveContentArray contents = { 0 };
-
 	if (!pg_restore_list(&(specs->pgPaths),
 						 dumpFilename,
-						 listOutFilename,
-						 &contents))
+						 listOutFilename))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
 	/* edit our post.list file now */
-	PQExpBuffer listContents = createPQExpBuffer();
+	FILE *out = fopen_with_umask(listFilename, "ab", FOPEN_FLAGS_A, 0644);
 
-	if (listContents == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		destroyPQExpBuffer(listContents);
-		return false;
-	}
-
-	/* for each object in the list, comment when we already processed it */
-	for (int i = 0; i < contents.count; i++)
-	{
-		ArchiveContentItem *item = &(contents.array[i]);
-		uint32_t oid = item->objectOid;
-		uint32_t catOid = item->catalogOid;
-		char *name = item->restoreListName;
-
-		bool skip = false;
-
-		/*
-		 * Always skip DATABASE objets as pgcopydb does not create the target
-		 * database.
-		 */
-		if (item->desc == ARCHIVE_TAG_DATABASE)
-		{
-			skip = true;
-			log_notice("Skipping DATABASE \"%s\"", name);
-		}
-
-		/*
-		 * Skip COMMENT ON EXTENSION when either of the option
-		 * --skip-extensions or --skip-ext-comment has been used.
-		 */
-		if ((specs->skipExtensions ||
-			 specs->skipCommentOnExtension) &&
-			item->isCompositeTag &&
-			item->tagKind == ARCHIVE_TAG_KIND_COMMENT &&
-			item->tagType == ARCHIVE_TAG_TYPE_EXTENSION)
-		{
-			skip = true;
-			log_notice("Skipping COMMENT ON EXTENSION \"%s\"", name);
-		}
-
-		if (!skip && catOid == PG_NAMESPACE_OID)
-		{
-			bool exists = false;
-
-			if (!copydb_schema_already_exists(specs, oid, &exists))
-			{
-				log_error("Failed to check if restore name \"%s\" "
-						  "already exists",
-						  name);
-				destroyPQExpBuffer(listContents);
-				return false;
-			}
-
-			if (exists)
-			{
-				skip = true;
-
-				log_notice("Skipping already existing dumpId %d: %s %u %s",
-						   contents.array[i].dumpId,
-						   contents.array[i].description,
-						   contents.array[i].objectOid,
-						   contents.array[i].restoreListName);
-			}
-		}
-
-		if (!skip && copydb_objectid_has_been_processed_already(specs, item))
-		{
-			skip = true;
-
-			log_notice("Skipping already processed dumpId %d: %s %u %s",
-					   contents.array[i].dumpId,
-					   contents.array[i].description,
-					   contents.array[i].objectOid,
-					   contents.array[i].restoreListName);
-		}
-
-		/*
-		 * For SEQUENCE catalog entries, we want to limit the scope of the hash
-		 * table search to the OID, and bypass searching by restore name. We
-		 * only use the restore name for the SEQUENCE OWNED BY statements.
-		 *
-		 * This also allows complex filtering of sequences that are owned by
-		 * table a and used as a default value in table b, where table a has
-		 * been filtered-out from pgcopydb scope of operations, but not table
-		 * b.
-		 */
-		if (item->desc == ARCHIVE_TAG_SEQUENCE)
-		{
-			name = NULL;
-		}
-
-		/*
-		 * There could be a case where the materalized view is included in the
-		 * dump, but the refresh is filtered out using [exclude-table-data].
-		 * In this case, we want to skip the refresh.
-		 */
-		if (!skip &&
-			item->desc == ARCHIVE_TAG_REFRESH_MATERIALIZED_VIEW &&
-			copydb_matview_refresh_is_filtered_out(specs, oid))
-		{
-			skip = true;
-
-			log_notice("Skipping materialized view refresh dumpId %d: %s %u %s",
-					   contents.array[i].dumpId,
-					   contents.array[i].description,
-					   contents.array[i].objectOid,
-					   contents.array[i].restoreListName);
-		}
-
-		if (!skip && copydb_objectid_is_filtered_out(specs, oid, name))
-		{
-			skip = true;
-
-			log_notice("Skipping filtered-out dumpId %d: %s %u %u %s",
-					   contents.array[i].dumpId,
-					   contents.array[i].description,
-					   contents.array[i].catalogOid,
-					   contents.array[i].objectOid,
-					   contents.array[i].restoreListName);
-		}
-
-		appendPQExpBuffer(listContents, "%s%d; %u %u %s %s\n",
-						  skip ? ";" : "",
-						  contents.array[i].dumpId,
-						  contents.array[i].catalogOid,
-						  contents.array[i].objectOid,
-						  contents.array[i].description,
-						  contents.array[i].restoreListName);
-	}
-
-	/* memory allocation could have failed while building string */
-	if (PQExpBufferBroken(listContents))
-	{
-		log_error("Failed to create pg_restore list file: out of memory");
-		destroyPQExpBuffer(listContents);
-		return false;
-	}
-
-	log_notice("Write filtered pg_restore list file at \"%s\"", listFilename);
-
-	if (!write_file(listContents->data, listContents->len, listFilename))
+	if (out == NULL)
 	{
 		/* errors have already been logged */
-		destroyPQExpBuffer(listContents);
 		return false;
 	}
 
-	destroyPQExpBuffer(listContents);
+	RestoreListContext context = {
+		.specs = specs,
+		.outStream = out
+	};
+
+	if (!archive_iter_toc(listOutFilename,
+						  &context,
+						  copydb_write_restore_list_hook))
+	{
+		log_error("Failed to prepare the pg_restore list file, "
+				  "see above for details");
+		return false;
+	}
+
+	if (fclose(out) == EOF)
+	{
+		log_error("Failed to write file \"%s\"", listFilename);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * copydb_write_restore_list_hook is an iterator callback function.
+ */
+static bool
+copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
+{
+	RestoreListContext *context = (RestoreListContext *) ctx;
+	CopyDataSpec *specs = context->specs;
+
+	uint32_t oid = item->objectOid;
+	uint32_t catOid = item->catalogOid;
+	char *name = item->restoreListName;
+
+	bool skip = false;
+
+	/*
+	 * Always skip DATABASE objets as pgcopydb does not create the target
+	 * database.
+	 */
+	if (item->desc == ARCHIVE_TAG_DATABASE)
+	{
+		skip = true;
+		log_notice("Skipping DATABASE \"%s\"", name);
+	}
+
+	/*
+	 * Skip COMMENT ON EXTENSION when either of the option
+	 * --skip-extensions or --skip-ext-comment has been used.
+	 */
+	if ((specs->skipExtensions ||
+		 specs->skipCommentOnExtension) &&
+		item->isCompositeTag &&
+		item->tagKind == ARCHIVE_TAG_KIND_COMMENT &&
+		item->tagType == ARCHIVE_TAG_TYPE_EXTENSION)
+	{
+		skip = true;
+		log_notice("Skipping COMMENT ON EXTENSION \"%s\"", name);
+	}
+
+	if (!skip && catOid == PG_NAMESPACE_OID)
+	{
+		bool exists = false;
+
+		if (!copydb_schema_already_exists(specs, oid, &exists))
+		{
+			log_error("Failed to check if restore name \"%s\" "
+					  "already exists",
+					  name);
+			return false;
+		}
+
+		if (exists)
+		{
+			skip = true;
+
+			log_notice("Skipping already existing dumpId %d: %s %u %s",
+					   item->dumpId,
+					   item->description,
+					   item->objectOid,
+					   item->restoreListName);
+		}
+	}
+
+	if (!skip && copydb_objectid_has_been_processed_already(specs, item))
+	{
+		skip = true;
+
+		log_notice("Skipping already processed dumpId %d: %s %u %s",
+				   item->dumpId,
+				   item->description,
+				   item->objectOid,
+				   item->restoreListName);
+	}
+
+	/*
+	 * For SEQUENCE catalog entries, we want to limit the scope of the hash
+	 * table search to the OID, and bypass searching by restore name. We
+	 * only use the restore name for the SEQUENCE OWNED BY statements.
+	 *
+	 * This also allows complex filtering of sequences that are owned by
+	 * table a and used as a default value in table b, where table a has
+	 * been filtered-out from pgcopydb scope of operations, but not table
+	 * b.
+	 */
+	if (item->desc == ARCHIVE_TAG_SEQUENCE)
+	{
+		name = NULL;
+	}
+
+	/*
+	 * There could be a case where the materalized view is included in the
+	 * dump, but the refresh is filtered out using [exclude-table-data].
+	 * In this case, we want to skip the refresh.
+	 */
+	if (!skip &&
+		item->desc == ARCHIVE_TAG_REFRESH_MATERIALIZED_VIEW &&
+		copydb_matview_refresh_is_filtered_out(specs, oid))
+	{
+		skip = true;
+
+		log_notice("Skipping materialized view refresh dumpId %d: %s %u %s",
+				   item->dumpId,
+				   item->description,
+				   item->objectOid,
+				   item->restoreListName);
+	}
+
+	if (!skip && copydb_objectid_is_filtered_out(specs, oid, name))
+	{
+		skip = true;
+
+		log_notice("Skipping filtered-out dumpId %d: %s %u %u %s",
+				   item->dumpId,
+				   item->description,
+				   item->catalogOid,
+				   item->objectOid,
+				   item->restoreListName);
+	}
+
+	PQExpBuffer buf = createPQExpBuffer();
+
+	printfPQExpBuffer(buf, "%s%d; %u %u %s %s\n",
+					  skip ? ";" : "",
+					  item->dumpId,
+					  item->catalogOid,
+					  item->objectOid,
+					  item->description,
+					  item->restoreListName);
+
+	/* memory allocation could have failed while building string */
+	if (PQExpBufferBroken(buf))
+	{
+		log_error("Failed to create pg_restore list file: out of memory");
+		destroyPQExpBuffer(buf);
+		return false;
+	}
+
+	if (!write_to_stream(context->outStream, buf->data, buf->len))
+	{
+		log_error("Failed to write pg_restore list file, "
+				  "see above for details");
+		return false;
+	}
+
+	destroyPQExpBuffer(buf);
 
 	return true;
 }

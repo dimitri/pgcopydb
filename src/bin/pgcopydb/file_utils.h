@@ -54,6 +54,26 @@ bool write_file(char *data, long fileSize, const char *filePath);
 bool append_to_file(char *data, long fileSize, const char *filePath);
 bool read_file(const char *filePath, char **contents, long *fileSize);
 bool read_file_if_exists(const char *filePath, char **contents, long *fileSize);
+
+/* iterate over a file one line at a time */
+typedef bool (FileIterLinesFun)(void *context, char *line);
+
+bool file_iter_lines(const char *filename, size_t bufsize,
+					 void *context,
+					 FileIterLinesFun *callback);
+
+typedef struct FileLinesIterator
+{
+	const char *filename;
+	FILE *stream;
+	size_t bufsize;
+	char *line;                 /* malloc'ed area */
+} FileLinesIterator;
+
+bool file_iter_lines_init(FileLinesIterator *iter);
+bool file_iter_lines_next(FileLinesIterator *iter);
+bool file_iter_lines_finish(FileLinesIterator *iter);
+
 bool move_file(char *sourcePath, char *destinationPath);
 bool duplicate_file(char *sourcePath, char *destinationPath);
 bool create_symbolic_link(char *sourcePath, char *targetPath);
