@@ -283,8 +283,25 @@ bool pg_restore_db(PostgresPaths *pgPaths,
 
 bool pg_restore_list(PostgresPaths *pgPaths,
 					 const char *restoreFilename,
-					 const char *listFilename,
-					 ArchiveContentArray *archive);
+					 const char *listFilename);
+
+/* iterate over a file one line at a time */
+typedef bool (ArchiveTOCFun)(void *context, ArchiveContentItem *item);
+
+bool archive_iter_toc(const char *filename,
+					  void *context,
+					  ArchiveTOCFun *callback);
+
+typedef struct ArchiveTOCIterator
+{
+	const char *filename;
+	FileLinesIterator *fileIterator;
+	ArchiveContentItem *item;
+} ArchiveTOCIterator;
+
+bool archive_iter_toc_init(ArchiveTOCIterator *iter);
+bool archive_iter_toc_next(ArchiveTOCIterator *iter);
+bool archive_iter_toc_finish(ArchiveTOCIterator *iter);
 
 bool parse_archive_list(const char *filename, ArchiveContentArray *archive);
 

@@ -373,6 +373,154 @@ read_file_internal(FILE *fileStream,
 
 
 /*
+ * file_iter_lines read a file's content line-by-line, and for each line calls
+ * the user-provided callback function.
+ */
+bool
+file_iter_lines(const char *filename,
+				size_t bufsize,
+				void *context, FileIterLinesFun *callback)
+{
+	FileLinesIterator *iter =
+		(FileLinesIterator *) calloc(1, sizeof(FileLinesIterator));
+
+	if (iter == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	iter->filename = filename;
+	iter->bufsize = bufsize;
+
+	if (!file_iter_lines_init(iter))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	for (;;)
+	{
+		if (!file_iter_lines_next(iter))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (iter->line == NULL)
+		{
+			if (!file_iter_lines_finish(iter))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			break;
+		}
+
+		if (!(*callback)(context, iter->line))
+		{
+			log_error("Failed to iterate over lines of file \"%s\", "
+					  "see above for details",
+					  iter->filename);
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * file_iter_lines_init initializes an Iterator over a file to read it
+ * line-by-line and allocate only one line at a time.
+ */
+bool
+file_iter_lines_init(FileLinesIterator *iter)
+{
+	iter->stream = fopen_read_only(iter->filename);
+
+	if (iter->stream == NULL)
+	{
+		log_error("Failed to open file \"%s\": %m", iter->filename);
+		return false;
+	}
+
+	/*
+	 * Allocate a buffer to hold the line contents, and re-use the same buffer
+	 * over and over when reading the next line.
+	 */
+	iter->line = calloc(1, iter->bufsize * sizeof(char));
+
+	if (iter->line == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * file_iter_lines_next fetches the next line in the opened file.
+ */
+bool
+file_iter_lines_next(FileLinesIterator *iter)
+{
+	size_t len = iter->bufsize - 1;
+
+	char *lineptr = fgets(iter->line, len, iter->stream);
+
+	/* Upon successful completion, fgets() shall return s. */
+	if (lineptr == iter->line)
+	{
+		return true;
+	}
+
+	if (lineptr == NULL)
+	{
+		/*
+		 * If the stream is at end-of-file, the end-of-file indicator for the
+		 * stream shall be set and fgets() shall return a null pointer.
+		 */
+		if (feof(iter->stream) != 0)
+		{
+			/* signal end-of-file by setting line to NULL */
+			iter->line = NULL;
+			return true;
+		}
+
+		/*
+		 * If a read error occurs, the error indicator for the stream shall be
+		 * set, fgets() shall return a null pointer, and shall set errno to
+		 * indicate the error.
+		 */
+		log_error("Failed to iterate over file \"%s\": %m", iter->filename);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * file_iter_lines_finish closes the file that was iterated over.
+ */
+bool
+file_iter_lines_finish(FileLinesIterator *iter)
+{
+	if (fclose(iter->stream) == EOF)
+	{
+		log_error("Failed to read file \"%s\"", iter->filename);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * write_to_stream writes given buffer of given size to the given stream. It
  * loops around calling write(2) if necessary: not all the bytes of the buffer
  * might be sent in a single call.

@@ -550,6 +550,24 @@ cli_restore_roles(int argc, char **argv)
 
 
 /*
+ * print_archive_toc_item_hook is an iterator callback function.
+ */
+static bool
+print_archive_toc_item_hook(void *context, ArchiveContentItem *item)
+{
+	fformat(stdout,
+			"%d; %u %u %s %s\n",
+			item->dumpId,
+			item->catalogOid,
+			item->objectOid,
+			item->description ? item->description : "",
+			item->restoreListName ? item->restoreListName : "");
+
+	return true;
+}
+
+
+/*
  * cli_restore_schema implements the command: pgcopydb restore parse-list
  */
 static void
@@ -561,27 +579,10 @@ cli_restore_schema_parse_list(int argc, char **argv)
 
 		log_info("Parsing Archive Content pre.list file: \"%s\"", filename);
 
-		ArchiveContentArray contents = { 0 };
-
-		if (!parse_archive_list(filename, &contents))
+		if (!archive_iter_toc(filename, NULL, print_archive_toc_item_hook))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
-
-		log_notice("Read %d archive items in \"%s\"", contents.count, filename);
-
-		for (int i = 0; i < contents.count; i++)
-		{
-			ArchiveContentItem *item = &(contents.array[i]);
-
-			fformat(stdout,
-					"%d; %u %u %s %s\n",
-					item->dumpId,
-					item->catalogOid,
-					item->objectOid,
-					item->description ? item->description : "",
-					item->restoreListName ? item->restoreListName : "");
 		}
 
 		exit(EXIT_CODE_QUIT);

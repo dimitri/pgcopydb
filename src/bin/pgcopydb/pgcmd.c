@@ -1029,14 +1029,13 @@ pg_restore_db(PostgresPaths *pgPaths,
 
 
 /*
- * pg_restore_list runs the command pg_restore -f- -l on the given custom
- * format dump file and returns an array of pg_dump archive objects.
+ * pg_restore_list runs the command pg_restore -f listFilename --list on the
+ * given custom format dump file.
  */
 bool
 pg_restore_list(PostgresPaths *pgPaths,
 				const char *restoreFilename,
-				const char *listFilename,
-				ArchiveContentArray *archive)
+				const char *listFilename)
 {
 	char *args[PG_CMD_MAX_ARG];
 	int argsIndex = 0;
@@ -1074,7 +1073,207 @@ pg_restore_list(PostgresPaths *pgPaths,
 		return false;
 	}
 
-	if (!parse_archive_list(listFilename, archive))
+	return true;
+}
+
+
+/*
+ * archive_iter_toc reads a pg_dump archive TOC file as obtained with the
+ * pg_restore --list command, and iterates through the archive TOC entries.
+ */
+bool
+archive_iter_toc(const char *filename, void *context, ArchiveTOCFun *callback)
+{
+	ArchiveTOCIterator *iter =
+		(ArchiveTOCIterator *) calloc(1, sizeof(ArchiveTOCIterator));
+
+	if (iter == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	iter->filename = filename;
+
+	if (!archive_iter_toc_init(iter))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	for (;;)
+	{
+		if (!archive_iter_toc_next(iter))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		ArchiveContentItem *item = iter->item;
+
+		if (item == NULL)
+		{
+			if (!archive_iter_toc_finish(iter))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			break;
+		}
+
+		if (!(*callback)(context, item))
+		{
+			log_error("Failed to iterate over lines of file \"%s\", "
+					  "see above for details",
+					  iter->filename);
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * archive_iter_toc_init initializes an Iterator over a Postgres archive TOC
+ * file.
+ */
+bool
+archive_iter_toc_init(ArchiveTOCIterator *iter)
+{
+	iter->fileIterator =
+		(FileLinesIterator *) calloc(1, sizeof(FileLinesIterator));
+
+	if (iter->fileIterator == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	iter->fileIterator->filename = iter->filename;
+
+	/*
+	 * An archive TOC entry has a fixed format that looks like the following:
+	 *
+	 * ahprintf(AH, "%d; %u %u %s %s %s %s\n", te->dumpId,
+	 *          te->catalogId.tableoid, te->catalogId.oid, te->desc,
+	 *          sanitized_schema, sanitized_name, sanitized_owner);
+	 *
+	 * The %s parts are PG_NAMEDATALEN. The overall line fits into BUFSIZE.
+	 *
+	 * Numbers require up to 10 chars (digits) to be printed, and
+	 * PG_NAMEDATALEN is 64 characters, but we need to double that for quoting
+	 * rules. Add in the semi-colon. And the desc is less than 32 characters,
+	 * the longest known being "PUBLICATION TABLES IN SCHEMA" at 30. Let's make
+	 * it 64 for headroom:
+	 *
+	 * 3 * (10 + 1) + 1 + 3 * (2 * 64) + 64 = 482 chars
+	 *
+	 * BUFSIZE is 1024 bytes.
+	 */
+	iter->fileIterator->bufsize = BUFSIZE;
+
+	if (!file_iter_lines_init(iter->fileIterator))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	iter->item = (ArchiveContentItem *) calloc(1, sizeof(ArchiveContentItem));
+
+	if (iter->item == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * archive_iter_toc_next fetches the next archive TOC item.
+ */
+bool
+archive_iter_toc_next(ArchiveTOCIterator *iter)
+{
+	/* read next line using the file iterator low-level API */
+	bool skippingEmptyLinesAndComments = true;
+
+	while (skippingEmptyLinesAndComments)
+	{
+		if (!file_iter_lines_next(iter->fileIterator))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (iter->fileIterator->line == NULL)
+		{
+			iter->item = NULL;
+			return true;
+		}
+
+		/* skip empty lines and lines that start with a semi-colon (comment) */
+		char *line = iter->fileIterator->line;
+
+		skippingEmptyLinesAndComments = (*line == '\0' || *line == ';');
+	}
+
+	/* remove end-of-line \n character in our line buffer */
+	size_t len = strlen(iter->fileIterator->line);
+
+	if (iter->fileIterator->line[len - 1] == '\n')
+	{
+		iter->fileIterator->line[len - 1] = '\0';
+	}
+	else
+	{
+		/* if that's not the last line, then we got a partial read */
+		if (feof(iter->fileIterator->stream) != 0)
+		{
+			log_error("Failed to parse archive TOC file \"%s\": partial read",
+					  iter->filename);
+			return false;
+		}
+	}
+
+	/* reset our memory area before re-use */
+	ArchiveContentItem empty = { 0 };
+	*(iter->item) = empty;
+
+	/* now parse the line */
+	if (!parse_archive_list_entry(iter->item, iter->fileIterator->line))
+	{
+		/* errors have already been logged  */
+		return false;
+	}
+
+	log_trace("archive_iter_toc_next: %u; %u %u %s %s",
+			  iter->item->dumpId,
+			  iter->item->catalogOid,
+			  iter->item->objectOid,
+			  iter->item->description,
+			  iter->item->restoreListName);
+
+	if (iter->item->desc == ARCHIVE_TAG_UNKNOWN ||
+		IS_EMPTY_STRING_BUFFER(iter->item->description))
+	{
+		log_warn("Failed to parse desc \"%s\"", iter->fileIterator->line);
+	}
+
+	return true;
+}
+
+
+/*
+ * archive_iter_toc_finish closes the iterator.
+ */
+bool
+archive_iter_toc_finish(ArchiveTOCIterator *iter)
+{
+	if (!file_iter_lines_finish(iter->fileIterator))
 	{
 		/* errors have already been logged */
 		return false;
