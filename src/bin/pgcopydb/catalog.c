@@ -183,7 +183,17 @@ static char *sourceDBcreateDDLs[] = {
 	"create table sentinel("
 	"  id integer primary key check (id = 1), "
 	"  startpos pg_lsn, endpos pg_lsn, apply bool, "
-	" write_lsn pg_lsn, flush_lsn pg_lsn, replay_lsn pg_lsn)"
+	"  write_lsn pg_lsn, flush_lsn pg_lsn, "
+	"  transform_lsn pg_lsn, "
+	"  replay_lsn pg_lsn)",
+
+	"create table cdc_files("
+	"  id integer primary key, filename text unique, timeline integer, "
+	"  startpos pg_lsn, endpos pg_lsn, "
+	"  start_time_epoch integer, done_time_epoch integer)",
+
+	"create table timeline_history("
+	"  tli integer primary key, startpos pg_lsn, endpos pg_lsn)"
 };
 
 
@@ -407,6 +417,28 @@ static char *targetDBcreateDDLs[] = {
 };
 
 
+static char *replayDBcreateDDLs[] = {
+	"create table output("
+	"  id integer primary key, "
+	"  action text, xid integer, lsn integer, timestamp text, "
+	"  message text)",
+
+	"create unique index o_a_lsn on output(action, lsn)",
+	"create index o_a_xid on output(action, xid)",
+
+	"create table stmt(hash text primary key, sql text)",
+	"create unique index stmt_hash on stmt(hash)",
+
+	"create table replay("
+	"  id integer primary key, "
+	"  action text, xid integer, lsn integer, endlsn integer, timestamp text, "
+	"  stmt_hash text references stmt(hash), stmt_args jsonb)",
+
+	"create index r_xid on replay(xid)",
+	"create index r_lsn on replay(lsn)",
+};
+
+
 static char *sourceDBdropDDLs[] = {
 	"drop table if exists setup",
 	"drop table if exists section",
@@ -470,6 +502,12 @@ static char *targetDBdropDDLs[] = {
 	"drop table if exists s_attr",
 	"drop table if exists s_index",
 	"drop table if exists s_constraint"
+};
+
+
+static char *replayDBdropDDLs[] = {
+	"drop table if exists output",
+	"drop table if exists replay"
 };
 
 
@@ -945,6 +983,13 @@ catalog_create_schema(DatabaseCatalog *catalog)
 			break;
 		}
 
+		case DATABASE_CATALOG_TYPE_REPLAY:
+		{
+			createDDLs = replayDBcreateDDLs;
+			count = sizeof(replayDBcreateDDLs) / sizeof(replayDBcreateDDLs[0]);
+			break;
+		}
+
 		default:
 		{
 			log_error("BUG: called catalog_init for unknown type %d",
@@ -1002,6 +1047,13 @@ catalog_drop_schema(DatabaseCatalog *catalog)
 		{
 			dropDDLs = targetDBdropDDLs;
 			count = sizeof(targetDBdropDDLs) / sizeof(targetDBdropDDLs[0]);
+			break;
+		}
+
+		case DATABASE_CATALOG_TYPE_REPLAY:
+		{
+			dropDDLs = replayDBdropDDLs;
+			count = sizeof(replayDBdropDDLs) / sizeof(replayDBdropDDLs[0]);
 			break;
 		}
 
@@ -7778,7 +7830,9 @@ catalog_sql_bind(SQLiteQuery *query, BindParam *params, int count)
 {
 	if (!catalog_bind_parameters(query->db, query->ppStmt, params, count))
 	{
-		/* errors have already been logged */
+		log_error("[SQLite] Failed to bind parameters in query: %s",
+				  query->sql);
+
 		(void) sqlite3_clear_bindings(query->ppStmt);
 		(void) sqlite3_finalize(query->ppStmt);
 		return false;
@@ -7850,7 +7904,19 @@ catalog_sql_execute(SQLiteQuery *query)
 			if (rc != SQLITE_ROW)
 			{
 				log_error("Failed to step through statement: %s", query->sql);
-				log_error("[SQLite %d] %s", rc, sqlite3_errstr(rc));
+
+				int offset = sqlite3_error_offset(query->db);
+
+				if (offset != -1)
+				{
+					/* "Failed to step through statement: %s" is 34 chars of prefix */
+					log_error("%34s%*s^", " ", offset, " ");
+				}
+
+				log_error("[SQLite %d: %s]: %s",
+						  rc,
+						  sqlite3_errstr(rc),
+						  sqlite3_errmsg(query->db));
 
 				(void) sqlite3_clear_bindings(query->ppStmt);
 				(void) sqlite3_finalize(query->ppStmt);
@@ -7996,6 +8062,27 @@ catalog_bind_parameters(sqlite3 *db,
 
 		switch (p->type)
 		{
+			case BIND_PARAMETER_TYPE_NULL:
+			{
+				int rc = sqlite3_bind_null(ppStmt, n);
+
+				if (rc != SQLITE_OK)
+				{
+					log_error("[SQLite %d] Failed to bind \"%s\" to NULL: %s",
+							  rc,
+							  p->name,
+							  sqlite3_errstr(rc));
+					return false;
+				}
+
+				if (logSQL)
+				{
+					appendPQExpBuffer(debugParameters, "%s", "null");
+				}
+
+				break;
+			}
+
 			case BIND_PARAMETER_TYPE_INT:
 			{
 				int rc = sqlite3_bind_int(ppStmt, n, p->intVal);

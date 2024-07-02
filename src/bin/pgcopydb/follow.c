@@ -251,18 +251,6 @@ follow_get_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel, bool verbose)
 bool
 follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 {
-	/*
-	 * Remove the possibly still existing stream context files from
-	 * previous round of operations (--resume, etc). We want to make
-	 * sure that the catchup process reads the files created on this
-	 * connection.
-	 */
-	if (!stream_cleanup_context(streamSpecs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	DatabaseCatalog *sourceDB = &(copySpecs->catalogs.source);
 
 	if (!catalog_open(sourceDB))
@@ -417,18 +405,6 @@ follow_prepare_mode_switch(StreamSpecs *streamSpecs,
 {
 	log_info("Catching-up from existing on-disk files");
 
-	if (streamSpecs->system.timeline == 0)
-	{
-		if (!stream_read_context(&(streamSpecs->paths),
-								 &(streamSpecs->system),
-								 &(streamSpecs->WalSegSz)))
-		{
-			log_error("Failed to read the streaming context information "
-					  "from the source database, see above for details");
-			return false;
-		}
-	}
-
 	/*
 	 * If the previous mode was catch-up, then before proceeding, we might need
 	 * to empty the transform queue where the STOP message was sent.
@@ -515,19 +491,6 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	if (streamSpecs->mode < STREAM_MODE_PREFETCH)
 	{
 		log_error("BUG: followDB with stream mode %d", streamSpecs->mode);
-		return false;
-	}
-
-	/*
-	 * Before starting sub-processes, clean-up intermediate files from previous
-	 * round. Here that's the stream context with WAL segment size and timeline
-	 * history, which are fetched from the source server to compute WAL file
-	 * names. The current timeline can only change at a server restart or a
-	 * failover, both with trigger a reconnect.
-	 */
-	if (!stream_cleanup_context(streamSpecs))
-	{
-		/* errors have already been logged */
 		return false;
 	}
 
@@ -718,6 +681,14 @@ follow_start_prefetch(StreamSpecs *specs)
 bool
 follow_start_transform(StreamSpecs *specs)
 {
+	if (!stream_transform_messages(specs))
+	{
+		log_error("Transform process failed, see above for details");
+		return false;
+	}
+
+	return true;
+
 	/*
 	 * In replay mode, the JSON messages are read from stdin, which we
 	 * now setup to be a pipe between prefetch and transform processes;
