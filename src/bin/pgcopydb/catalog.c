@@ -97,6 +97,9 @@ static char *sourceDBcreateDDLs[] = {
 
 	"create index s_a_oid_attname on s_attr(oid, attname)",
 
+	/* index for filtering out generated columns */
+	"create index s_a_attisgenerated on s_attr(attisgenerated) where attisgenerated",
+
 	"create table s_table_part("
 	"  oid integer references s_table(oid), "
 	"  partnum integer, partcount integer, "
@@ -3377,6 +3380,190 @@ catalog_iter_s_table_part_finish(SourceTablePartsIterator *iter)
 		/* errors have already been logged */
 		return false;
 	}
+
+	return true;
+}
+
+
+/*
+ * catalog_iter_s_generated_column_init initializes an Interator over our
+ * catalog of GeneratedColumn.
+ */
+bool
+catalog_iter_s_generated_column_init(GeneratedColumnIterator *iter)
+{
+	sqlite3 *db = iter->catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: Failed to initialize s_table iterator: db is NULL");
+		return false;
+	}
+
+	iter->column = (GeneratedColumn *) calloc(1, sizeof(GeneratedColumn));
+
+	if (iter->column == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	char *sql =
+		"  select nspname, relname, attname "
+		"    from s_attr a"
+		"      join s_table t on t.oid = a.oid "
+		"   where a.attisgenerated";
+
+	SQLiteQuery *query = &(iter->query);
+
+	query->context = iter->column;
+	query->fetchFunction = &catalog_s_generated_column_fetch;
+
+	if (!catalog_sql_prepare(db, sql, query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_iter_s_generated_column_next fetches the next GeneratedColumn entry
+ * in our catalogs.
+ */
+bool
+catalog_iter_s_generated_column_next(GeneratedColumnIterator *iter)
+{
+	SQLiteQuery *query = &(iter->query);
+
+	int rc = catalog_sql_step(query);
+
+	if (rc == SQLITE_DONE)
+	{
+		iter->column = NULL;
+
+		return true;
+	}
+
+	if (rc != SQLITE_ROW)
+	{
+		log_error("Failed to step through statement: %s", query->sql);
+		log_error("[SQLite] %s", sqlite3_errmsg(query->db));
+		return false;
+	}
+
+	return catalog_s_generated_column_fetch(query);
+}
+
+
+/*
+ * catalog_s_generated_column_fetch fetches a GeneratedColumn entry from
+ * a SQLite ppStmt result set.
+ */
+bool
+catalog_s_generated_column_fetch(SQLiteQuery *query)
+{
+	GeneratedColumn *column = (GeneratedColumn *) query->context;
+
+	/* cleanup the memory area before re-use */
+	bzero(column, sizeof(GeneratedColumn));
+
+	if (sqlite3_column_type(query->ppStmt, 0) != SQLITE_NULL)
+	{
+		strlcpy(column->nspname,
+				(char *) sqlite3_column_text(query->ppStmt, 0),
+				sizeof(column->nspname));
+	}
+
+	if (sqlite3_column_type(query->ppStmt, 1) != SQLITE_NULL)
+	{
+		strlcpy(column->relname,
+				(char *) sqlite3_column_text(query->ppStmt, 1),
+				sizeof(column->relname));
+	}
+
+	if (sqlite3_column_type(query->ppStmt, 2) != SQLITE_NULL)
+	{
+		strlcpy(column->attname,
+				(char *) sqlite3_column_text(query->ppStmt, 2),
+				sizeof(column->attname));
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_iter_s_generated_column_finish cleans-up the internal memory used
+ * for the iteration.
+ */
+bool
+catalog_iter_s_generated_column_finish(GeneratedColumnIterator *iter)
+{
+	SQLiteQuery *query = &(iter->query);
+
+	if (!catalog_sql_finalize(query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_iter_s_generated_column iterates over the list of tables that
+ * have a generated columns in our catalogs.
+ */
+bool
+catalog_iter_s_generated_column(DatabaseCatalog *catalog,
+								void *context,
+								GeneratedColumnIterFun *callback)
+{
+	GeneratedColumnIterator *iter =
+		(GeneratedColumnIterator *) calloc(1, sizeof(GeneratedColumnIterator));
+
+	iter->catalog = catalog;
+
+	if (!catalog_iter_s_generated_column_init(iter))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	for (;;)
+	{
+		if (!catalog_iter_s_generated_column_next(iter))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		GeneratedColumn *column = iter->column;
+
+		if (column == NULL)
+		{
+			if (!catalog_iter_s_generated_column_finish(iter))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			break;
+		}
+
+		/* now call the provided callback */
+		if (!(*callback)(context, column))
+		{
+			log_error("Failed to iterate over list of tables, "
+					  "see above for details");
+			return false;
+		}
+	}
+
 
 	return true;
 }

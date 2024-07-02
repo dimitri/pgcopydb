@@ -221,6 +221,28 @@ bool catalog_iter_s_table_nopk(DatabaseCatalog *catalog,
 							   void *context,
 							   SourceTableIterFun *callback);
 
+typedef struct GeneratedColumnIterator
+{
+	DatabaseCatalog *catalog;
+	GeneratedColumn *column;
+	SQLiteQuery query;
+} GeneratedColumnIterator;
+
+/*
+ * To loop over our catalog "arrays" we provide an iterator based API, which
+ * allows for allocating a single item in memory for the whole scan.
+ */
+typedef bool (GeneratedColumnIterFun)(void *context, GeneratedColumn *column);
+
+bool catalog_iter_s_generated_column_init(GeneratedColumnIterator *iter);
+bool catalog_iter_s_generated_column_next(GeneratedColumnIterator *iter);
+bool catalog_s_generated_column_fetch(SQLiteQuery *query);
+bool catalog_iter_s_generated_column_finish(GeneratedColumnIterator *iter);
+
+bool catalog_iter_s_generated_column(DatabaseCatalog *catalog,
+									 void *context,
+									 GeneratedColumnIterFun *callback);
+
 typedef struct SourceTableIterator
 {
 	DatabaseCatalog *catalog;

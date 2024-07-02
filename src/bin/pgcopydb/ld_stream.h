@@ -276,6 +276,18 @@ typedef enum
 
 
 /*
+ * Keep track of tables with generated columns to avoid unnecessary lookups
+ * in the catalog.
+ */
+typedef struct GeneratedColumnsCache
+{
+	GeneratedColumn generatedColumn;
+
+	UT_hash_handle hh;          /* makes this structure hashable */
+} GeneratedColumnsCache;
+
+
+/*
  * StreamContext allows tracking the progress of the ld_stream module and is
  * shared also with the ld_transform module, which has its own instance of a
  * StreamContext to track its own progress.
@@ -308,6 +320,9 @@ typedef struct StreamContext
 
 	/* transform needs some catalog lookups (pkey, type oid) */
 	DatabaseCatalog *sourceDB;
+
+	/* hash table acts as a cache for tables with generated columns */
+	GeneratedColumnsCache *generatedColumnsCache;
 
 	Queue *transformQueue;
 	PGSQL *transformPGSQL;
@@ -581,7 +596,7 @@ bool stream_compute_pathnames(uint32_t WalSegSz,
 							  char *walFileName,
 							  char *sqlFileName);
 
-bool stream_transform_context_init_pgsql(StreamSpecs *specs);
+bool stream_transform_context_init(StreamSpecs *specs);
 bool stream_transform_stream(StreamSpecs *specs);
 bool stream_transform_resume(StreamSpecs *specs);
 bool stream_transform_line(void *ctx, const char *line, bool *stop);

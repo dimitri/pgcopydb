@@ -209,6 +209,18 @@ typedef struct SourceTableArray
 
 
 /*
+ * GeneratedColumn caches the information we need about all the generated
+ * columns found in the database.
+ */
+typedef struct GeneratedColumn
+{
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
+	char attname[PG_NAMEDATALEN];
+} GeneratedColumn;
+
+
+/*
  * SourceSequence caches the information we need about all the sequences found
  * in the source database.
  */

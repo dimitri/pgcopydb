@@ -36,6 +36,7 @@ jobs:
           - follow-9.6
           - follow-data-only
           - endpos-in-multi-wal-txn
+          - cdc-generated-column
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
