@@ -265,7 +265,6 @@ compare_data_worker(CopyDataSpec *copySpecs, Queue *queue)
 		return false;
 	}
 
-	int errors = 0;
 	bool stop = false;
 
 	while (!stop)
@@ -322,15 +321,7 @@ compare_data_worker(CopyDataSpec *copySpecs, Queue *queue)
 		return false;
 	}
 
-	bool success = (stop == true && errors == 0);
-
-	if (errors > 0)
-	{
-		log_error("Compare data worker %d encountered %d errors, "
-				  "see above for details",
-				  pid,
-				  errors);
-	}
+	bool success = stop == true;
 
 	return success;
 }

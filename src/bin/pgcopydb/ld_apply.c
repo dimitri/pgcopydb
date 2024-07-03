@@ -1357,7 +1357,7 @@ setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
 bool
 stream_apply_init_context(StreamApplyContext *context,
 						  DatabaseCatalog *sourceDB,
-						  CDCPaths *paths,
+						  const CDCPaths *paths,
 						  ConnStrings *connStrings,
 						  char *origin,
 						  uint64_t endpos)

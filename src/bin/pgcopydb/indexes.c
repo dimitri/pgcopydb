@@ -1091,8 +1091,6 @@ typedef struct CreateConstraintsContext
 bool
 copydb_create_constraints(CopyDataSpec *specs, PGSQL *dst, SourceTable *table)
 {
-	int errors = 0;
-
 	/*
 	 * Postgres doesn't implement ALTER TABLE ... ADD CONSTRAINT ... IF NOT
 	 * EXISTS, which we would be using here in some cases otherwise.
@@ -1165,7 +1163,7 @@ copydb_create_constraints(CopyDataSpec *specs, PGSQL *dst, SourceTable *table)
 		return false;
 	}
 
-	return errors == 0;
+	return true;
 }
 
 
@@ -1182,7 +1180,7 @@ copydb_create_constraints_hook(void *ctx, SourceIndex *index)
 	DatabaseCatalog *targetDB = &(specs->catalogs.target);
 
 	/* some indexes are not attached to a constraint at all */
-	if (index->constraintOid <= 0 ||
+	if (index->constraintOid == 0 ||
 		IS_EMPTY_STRING_BUFFER(index->constraintName))
 	{
 		return true;

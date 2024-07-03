@@ -3280,7 +3280,7 @@ schema_list_partitions(PGSQL *pgsql,
 	int64_t max = table->partmax;
 
 	int64_t partsCount = 1;
-	int64_t partsSize = max - min + 1;
+	int64_t partsSize;
 
 	/*
 	 * When the partition key is set to "ctid", it means that the table will be
@@ -4004,7 +4004,6 @@ parseCurrentDatabase(PGresult *result, int rowNumber, SourceDatabase *database)
 	}
 
 	/* 3. bytes */
-	value = PQgetvalue(result, rowNumber, 2);
 	if (PQgetisnull(result, rowNumber, 2))
 	{
 		/*

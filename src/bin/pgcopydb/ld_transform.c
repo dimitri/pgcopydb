@@ -2136,8 +2136,7 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 		LogicalMessageTuple *new = &(update->new.array[s]);
 
 		if (old->values.count != new->values.count ||
-			old->values.count != 1 ||
-			new->values.count != 1)
+			old->values.count != 1)
 		{
 			log_error("Failed to write multi-values UPDATE statement "
 					  "with %d old rows and %d new rows",
@@ -2570,7 +2569,7 @@ LogicalMessageValueEq(LogicalMessageValue *a, LogicalMessageValue *b)
 		return false;
 	}
 
-	if (a->isNull && b->isNull)
+	if (a->isNull)
 	{
 		return true;
 	}

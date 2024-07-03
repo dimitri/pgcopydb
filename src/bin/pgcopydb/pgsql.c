@@ -2008,8 +2008,6 @@ pgsql_sync_pipeline(PGSQL *pgsql)
 		return false;
 	}
 
-	bool syncReceived = false;
-
 	int results = 0;
 
 	if (PQconsumeInput(conn) == 0)
@@ -2023,7 +2021,7 @@ pgsql_sync_pipeline(PGSQL *pgsql)
 
 	(void) pgsql_handle_notifications(pgsql);
 
-	while (!syncReceived)
+	while (true)
 	{
 		if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
 		{
@@ -2055,8 +2053,6 @@ pgsql_sync_pipeline(PGSQL *pgsql)
 
 		if (resultStatus == PGRES_PIPELINE_SYNC)
 		{
-			syncReceived = true;
-
 			log_trace("Received pipeline sync. Total results: %d", results);
 
 			PQclear(res);
@@ -3797,8 +3793,7 @@ pg_copy_large_object(PGSQL *src,
 	 * 4. Read the large object content in chunks on the source
 	 *    database, and write them on the target database.
 	 */
-	uint64_t bytesRead = 0;
-	uint64_t bytesWritten = 0;
+	int bytesRead = 0;
 
 	do {
 		char *buffer = (char *) calloc(LOBBUFSIZE, sizeof(char));
@@ -3842,8 +3837,8 @@ pg_copy_large_object(PGSQL *src,
 			return false;
 		}
 
-		bytesWritten =
-			lo_write(dst->connection, dstfd, buffer, bytesRead);
+		int bytesWritten =
+			lo_write(dst->connection, dstfd, buffer, (size_t) bytesRead);
 
 		if (bytesWritten != bytesRead)
 		{
@@ -4386,7 +4381,6 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 			 */
 			fd_set input_mask;
 			TimestampTz message_target = 0;
-			TimestampTz fsync_target = 0;
 			struct timeval timeout;
 			struct timeval *timeoutptr = NULL;
 
@@ -4408,7 +4402,7 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 			}
 
 			/* Now compute when to wakeup. */
-			if (message_target > 0 || fsync_target > 0)
+			if (message_target > 0)
 			{
 				TimestampTz targettime;
 				long secs;
