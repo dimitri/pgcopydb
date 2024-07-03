@@ -2378,10 +2378,7 @@ summary_iter_timing_finish(TimingIterator *iter)
 	SQLiteQuery *query = &(iter->query);
 
 	/* in case we finish before reaching the DONE step */
-	if (iter->timing != NULL)
-	{
-		iter->timing = NULL;
-	}
+	iter->timing = NULL;
 
 	if (!catalog_sql_finalize(query))
 	{

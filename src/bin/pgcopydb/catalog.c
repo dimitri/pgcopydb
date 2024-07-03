@@ -4421,10 +4421,7 @@ catalog_iter_s_index_finish(SourceIndexIterator *iter)
 	SQLiteQuery *query = &(iter->query);
 
 	/* in case we finish before reaching the DONE step */
-	if (iter->index != NULL)
-	{
-		iter->index = NULL;
-	}
+	iter->index = NULL;
 
 	if (!catalog_sql_finalize(query))
 	{
@@ -5018,10 +5015,7 @@ catalog_iter_s_seq_finish(SourceSeqIterator *iter)
 	SQLiteQuery *query = &(iter->query);
 
 	/* in case we finish before reaching the DONE step */
-	if (iter->seq != NULL)
-	{
-		iter->seq = NULL;
-	}
+	iter->seq = NULL;
 
 	if (!catalog_sql_finalize(query))
 	{
@@ -5675,10 +5669,7 @@ catalog_iter_s_database_finish(SourceDatabaseIterator *iter)
 	SQLiteQuery *query = &(iter->query);
 
 	/* in case we finish before reaching the DONE step */
-	if (iter->dat != NULL)
-	{
-		iter->dat = NULL;
-	}
+	iter->dat = NULL;
 
 	if (!catalog_sql_finalize(query))
 	{
@@ -5892,10 +5883,7 @@ catalog_iter_s_database_guc_finish(SourcePropertyIterator *iter)
 	SQLiteQuery *query = &(iter->query);
 
 	/* in case we finish before reaching the DONE step */
-	if (iter->property != NULL)
-	{
-		iter->property = NULL;
-	}
+	iter->property = NULL;
 
 	if (!catalog_sql_finalize(query))
 	{
@@ -6144,10 +6132,7 @@ catalog_iter_s_coll_finish(SourceCollationIterator *iter)
 	SQLiteQuery *query = &(iter->query);
 
 	/* in case we finish before reaching the DONE step */
-	if (iter->coll != NULL)
-	{
-		iter->coll = NULL;
-	}
+	iter->coll = NULL;
 
 	if (!catalog_sql_finalize(query))
 	{
@@ -6652,10 +6637,7 @@ catalog_iter_s_extension_finish(SourceExtensionIterator *iter)
 	SQLiteQuery *query = &(iter->query);
 
 	/* in case we finish before reaching the DONE step */
-	if (iter->ext != NULL)
-	{
-		iter->ext = NULL;
-	}
+	iter->ext = NULL;
 
 	if (!catalog_sql_finalize(query))
 	{
@@ -7254,10 +7236,7 @@ catalog_iter_s_depend_finish(SourceDependIterator *iter)
 	SQLiteQuery *query = &(iter->query);
 
 	/* in case we finish before reaching the DONE step */
-	if (iter->dep != NULL)
-	{
-		iter->dep = NULL;
-	}
+	iter->dep = NULL;
 
 	if (!catalog_sql_finalize(query))
 	{

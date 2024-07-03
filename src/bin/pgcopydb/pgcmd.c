@@ -369,7 +369,7 @@ pg_dump_db(PostgresPaths *pgPaths,
 		   DatabaseCatalog *filtersDB,
 		   const char *filename)
 {
-	char *args[PG_CMD_MAX_ARG];
+	char *args[PG_CMD_MAX_ARG] = { NULL };
 	int argsIndex = 0;
 
 	char command[BUFSIZE] = { 0 };
@@ -411,6 +411,10 @@ pg_dump_db(PostgresPaths *pgPaths,
 	args[argsIndex++] = "--section=pre-data";
 	args[argsIndex++] = "--section=post-data";
 
+	args[argsIndex++] = "--file";
+	args[argsIndex++] = (char *) filename;
+	args[argsIndex++] = (char *) connStrings->safeSourcePGURI.pguri;
+
 	/* apply [include-only-schema] filtering */
 	for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
 	{
@@ -447,12 +451,6 @@ pg_dump_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = "--exclude-schema";
 		args[argsIndex++] = nspname;
 	}
-
-	args[argsIndex++] = "--file";
-	args[argsIndex++] = (char *) filename;
-	args[argsIndex++] = (char *) connStrings->safeSourcePGURI.pguri;
-
-	args[argsIndex] = NULL;
 
 	/*
 	 * We do not want to call setsid() when running pg_dump.
@@ -875,7 +873,7 @@ pg_restore_db(PostgresPaths *pgPaths,
 			  const char *listFilename,
 			  RestoreOptions options)
 {
-	char *args[PG_CMD_MAX_ARG];
+	char *args[PG_CMD_MAX_ARG] = { NULL };
 	int argsIndex = 0;
 
 	char command[BUFSIZE] = { 0 };
@@ -949,6 +947,14 @@ pg_restore_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = "--no-tablespaces";
 	}
 
+	if (listFilename != NULL)
+	{
+		args[argsIndex++] = "--use-list";
+		args[argsIndex++] = (char *) listFilename;
+	}
+
+	args[argsIndex++] = (char *) dumpFilename;
+
 	/*
 	 * Do not apply [include-only-schema] filtering.
 	 *
@@ -976,16 +982,6 @@ pg_restore_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = "--exclude-schema";
 		args[argsIndex++] = nspname;
 	}
-
-	if (listFilename != NULL)
-	{
-		args[argsIndex++] = "--use-list";
-		args[argsIndex++] = (char *) listFilename;
-	}
-
-	args[argsIndex++] = (char *) dumpFilename;
-
-	args[argsIndex] = NULL;
 
 	/*
 	 * We do not want to call setsid() when running pg_dump.

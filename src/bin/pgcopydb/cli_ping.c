@@ -194,8 +194,6 @@ cli_ping_getopts(int argc, char **argv)
 static void
 cli_ping(int argc, char **argv)
 {
-	int errors = 0;
-
 	ConnStrings *dsn = &(copyDBoptions.connStrings);
 
 	char *source = dsn->source_pguri;
@@ -209,7 +207,6 @@ cli_ping(int argc, char **argv)
 		case -1:
 		{
 			log_error("Failed to fork a subprocess to ping source db: %m");
-			++errors;
 			break;
 		}
 
@@ -267,7 +264,6 @@ cli_ping(int argc, char **argv)
 		case -1:
 		{
 			log_error("Failed to fork a subprocess to ping target db: %m");
-			++errors;
 			break;
 		}
 
