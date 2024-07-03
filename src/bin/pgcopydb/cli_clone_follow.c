@@ -488,7 +488,7 @@ start_clone_process(CopyDataSpec *copySpecs, pid_t *pid)
 		case -1:
 		{
 			log_error("Failed to fork a subprocess to prefetch changes: %m");
-			return -1;
+			return false;
 		}
 
 		case 0:
@@ -693,7 +693,7 @@ start_follow_process(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs,
 		case -1:
 		{
 			log_error("Failed to fork a subprocess to prefetch changes: %m");
-			return -1;
+			return false;
 		}
 
 		case 0:

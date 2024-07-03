@@ -413,6 +413,7 @@ pg_dump_db(PostgresPaths *pgPaths,
 
 	args[argsIndex++] = "--file";
 	args[argsIndex++] = (char *) filename;
+	args[argsIndex++] = "--dbname";
 	args[argsIndex++] = (char *) connStrings->safeSourcePGURI.pguri;
 
 	/* apply [include-only-schema] filtering */
@@ -953,8 +954,6 @@ pg_restore_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = (char *) listFilename;
 	}
 
-	args[argsIndex++] = (char *) dumpFilename;
-
 	/*
 	 * Do not apply [include-only-schema] filtering.
 	 *
@@ -970,7 +969,7 @@ pg_restore_db(PostgresPaths *pgPaths,
 		char *nspname = filters->excludeSchemaList.array[i].nspname;
 
 		/* check that we still have room for --exclude-schema args */
-		if (PG_CMD_MAX_ARG < (argsIndex + 2))
+		if (PG_CMD_MAX_ARG < (argsIndex + 3))
 		{
 			log_error("Failed to call pg_restore, too many exclude-schema "
 					  "entries: argsIndex %d > %d",
@@ -982,6 +981,8 @@ pg_restore_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = "--exclude-schema";
 		args[argsIndex++] = nspname;
 	}
+
+	args[argsIndex++] = (char *) dumpFilename;
 
 	/*
 	 * We do not want to call setsid() when running pg_dump.
@@ -1672,14 +1673,8 @@ tokenize_archive_list_entry(ArchiveToken *token)
 		char *ptr = line;
 
 		/* advance ptr as long as *ptr is a digit */
-		for (; ptr != NULL && isdigit(*ptr); ptr++)
+		for (; isdigit(*ptr); ptr++)
 		{ }
-
-		if (ptr == NULL)
-		{
-			log_error("Failed to tokenize Archive Item line: %s", line);
-			return false;
-		}
 
 		int len = ptr - line + 1;
 		size_t size = len + 1;
