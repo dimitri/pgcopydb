@@ -3394,14 +3394,14 @@ pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system)
 			return false;
 		}
 
-		if (!parseTimeLineHistory(hContext.filename, hContext.content, system))
+		if (!parseTimelineHistory(hContext.filename, hContext.content, system))
 		{
 			/* errors have already been logged */
 			PQfinish(connection);
 			return false;
 		}
 
-		TimeLineHistoryEntry *current =
+		TimelineHistoryEntry *current =
 			&(system->timelines.history[system->timelines.count - 1]);
 
 		log_sql("TIMELINE_HISTORY: \"%s\", timeline %d started at %X/%X",
@@ -3534,10 +3534,10 @@ parseTimelineHistoryResult(void *ctx, PGresult *result)
 
 
 /*
- * parseTimeLineHistory parses the content of a timeline history file.
+ * parseTimelineHistory parses the content of a timeline history file.
  */
 bool
-parseTimeLineHistory(const char *filename, const char *content,
+parseTimelineHistory(const char *filename, const char *content,
 					 IdentifySystem *system)
 {
 	LinesBuffer lbuf = { 0 };
@@ -3564,7 +3564,7 @@ parseTimeLineHistory(const char *filename, const char *content,
 
 	system->timelines.count = 0;
 
-	TimeLineHistoryEntry *entry =
+	TimelineHistoryEntry *entry =
 		&(system->timelines.history[system->timelines.count]);
 
 	for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
@@ -3585,7 +3585,7 @@ parseTimeLineHistory(const char *filename, const char *content,
 			continue;
 		}
 
-		log_trace("parseTimeLineHistory line %lld is \"%s\"",
+		log_trace("parseTimelineHistory line %lld is \"%s\"",
 				  (long long) lineNumber,
 				  lbuf.lines[lineNumber]);
 
@@ -3627,7 +3627,7 @@ parseTimeLineHistory(const char *filename, const char *content,
 		entry->begin = prevend;
 		prevend = entry->end;
 
-		log_trace("parseTimeLineHistory[%d]: tli %d [%X/%X %X/%X]",
+		log_trace("parseTimelineHistory[%d]: tli %d [%X/%X %X/%X]",
 				  system->timelines.count,
 				  entry->tli,
 				  LSN_FORMAT_ARGS(entry->begin),
@@ -3644,7 +3644,7 @@ parseTimeLineHistory(const char *filename, const char *content,
 	entry->begin = prevend;
 	entry->end = InvalidXLogRecPtr;
 
-	log_trace("parseTimeLineHistory[%d]: tli %d [%X/%X %X/%X]",
+	log_trace("parseTimelineHistory[%d]: tli %d [%X/%X %X/%X]",
 			  system->timelines.count,
 			  entry->tli,
 			  LSN_FORMAT_ARGS(entry->begin),

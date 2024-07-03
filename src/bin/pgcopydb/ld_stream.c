@@ -2787,7 +2787,7 @@ stream_read_context(CDCPaths *paths,
 		return false;
 	}
 
-	if (!parseTimeLineHistory(paths->tlihistfile, history, system))
+	if (!parseTimelineHistory(paths->tlihistfile, history, system))
 	{
 		/* errors have already been logged */
 		return false;
