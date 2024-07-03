@@ -592,27 +592,6 @@ cli_restore_schema_parse_list(int argc, char **argv)
 
 	(void) cli_restore_prepare_specs(&copySpecs);
 
-	SourceFilters *filters = &(copySpecs.filters);
-
-	if (filters->type != SOURCE_FILTER_TYPE_NONE)
-	{
-		if (!copydb_prepare_snapshot(&copySpecs))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
-
-		/* fetch schema information from source catalogs, including filtering */
-		if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
-		{
-			/* errors have already been logged */
-			(void) copydb_close_snapshot(&copySpecs);
-			exit(EXIT_CODE_TARGET);
-		}
-
-		(void) copydb_close_snapshot(&copySpecs);
-	}
-
 	log_info("Preparing the pg_restore --use-list for the pre-data "
 			 "archive file \"%s\" at: \"%s\"",
 			 copySpecs.dumpPaths.dumpFilename,
