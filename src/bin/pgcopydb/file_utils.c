@@ -563,12 +563,11 @@ write_to_stream(FILE *stream, const char *buffer, size_t size)
 bool
 read_from_stream(FILE *stream, ReadFromStreamContext *context)
 {
-	int countFdsReadyToRead, nfds; /* see man select(2) */
 	fd_set readFileDescriptorSet;
 	fd_set exceptFileDescriptorSet;
 
 	context->fd = fileno(stream);
-	nfds = context->fd + 1;
+	int nfds = context->fd + 1;
 
 	bool doneReading = false;
 
@@ -592,7 +591,7 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 		FD_ZERO(&exceptFileDescriptorSet);
 		FD_SET(context->fd, &exceptFileDescriptorSet);
 
-		countFdsReadyToRead =
+		int countFdsReadyToRead =
 			select(nfds,
 				   &readFileDescriptorSet, NULL, &exceptFileDescriptorSet,
 				   &timeout);

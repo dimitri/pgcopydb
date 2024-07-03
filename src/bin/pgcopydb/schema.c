@@ -3296,7 +3296,6 @@ schema_list_partitions(PGSQL *pgsql,
 	if (splitByCTID)
 	{
 		min = 0;
-		max = table->relpages;
 
 		/*
 		 * Get the block size from the origin in the first attempt
@@ -4187,7 +4186,6 @@ getExtensionList(void *ctx, PGresult *result)
 	if (extension == NULL)
 	{
 		log_error(ALLOCATION_FAILED_ERROR);
-		parsedOk = false;
 		return;
 	}
 
@@ -4250,7 +4248,6 @@ getExtensionList(void *ctx, PGresult *result)
 			if (config == NULL)
 			{
 				log_fatal(ALLOCATION_FAILED_ERROR);
-				parsedOk = false;
 				return;
 			}
 

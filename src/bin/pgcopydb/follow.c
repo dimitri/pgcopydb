@@ -284,8 +284,6 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	int count = sizeof(modeArray) / sizeof(modeArray[0]);
 
 	uint64_t loop = 0;
-	LogicalStreamMode currentMode = modeArray[0];
-	LogicalStreamMode previousMode = STREAM_MODE_UNKNOW;
 
 	while (true)
 	{
@@ -321,8 +319,9 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		}
 
 		/* switch to the next mode, increment loop counter */
-		previousMode = currentMode;
-		currentMode = modeArray[++loop % count];
+		size_t prev = loop % count;
+		LogicalStreamMode previousMode = modeArray[prev];
+		LogicalStreamMode currentMode = modeArray[prev + 1];
 
 		/*
 		 * Whatever the current/previous mode was, we need to

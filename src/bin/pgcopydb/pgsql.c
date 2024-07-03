@@ -3073,7 +3073,7 @@ pg_copy_send_query(PGSQL *pgsql, CopyArgs *args, ExecStatusType status)
 	}
 	else if (status == PGRES_COPY_IN)
 	{
-		if (args->dstAttrList != NULL && !streq(args->dstAttrList, ""))
+		if (!streq(args->dstAttrList, ""))
 		{
 			appendPQExpBuffer(sql, "copy %s(%s) from stdin",
 							  args->dstQname,

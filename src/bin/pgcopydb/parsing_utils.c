@@ -602,7 +602,7 @@ parse_pguri_info_key_vals(const char *pguri,
 			foundDBName = true;
 			uriParameters->dbname = strdup(option->val);
 		}
-		else if (value != NULL && !streq(value, ""))
+		else if (!streq(value, ""))
 		{
 			/* make a copy in our key/val arrays */
 			uriParameters->parameters.keywords[paramIndex] =
@@ -631,7 +631,7 @@ parse_pguri_info_key_vals(const char *pguri,
 		{
 			if (streq(keyword, option->keyword))
 			{
-				found = option->val != NULL && !streq(option->val, "");
+				found = !streq(option->val, "");
 				break;
 			}
 		}
@@ -782,7 +782,7 @@ buildPostgresURIfromPieces(URIParams *uriParams, char **pguri)
 		char *keyword = uriParams->parameters.keywords[index];
 		char *value = uriParams->parameters.values[index];
 
-		if (value != NULL && !streq(value, ""))
+		if (!streq(value, ""))
 		{
 			char *escapedValue = NULL;
 
