@@ -146,7 +146,6 @@ root_options(int argc, char **argv)
 			{
 				commandline_help(stderr);
 				exit(EXIT_CODE_QUIT);
-				break;
 			}
 
 			default:

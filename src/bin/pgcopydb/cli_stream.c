@@ -431,7 +431,6 @@ cli_stream_getopts(int argc, char **argv)
 			{
 				commandline_help(stderr);
 				exit(EXIT_CODE_QUIT);
-				break;
 			}
 
 			case '?':
