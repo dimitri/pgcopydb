@@ -46,6 +46,7 @@ void commandline_print_subcommands(CommandLine *command, FILE *stream);
 void commandline_print_command_tree(CommandLine *command, FILE *stream);
 void commandline_add_breadcrumb(CommandLine *command, CommandLine *subcommand);
 
-#define streq(a, b) (a != NULL && b != NULL && strcmp(a, b) == 0)
+#define streq(a, b) \
+	(((const char *) a != NULL) && ((const char *) b != NULL) && strcmp(a, b) == 0)
 
 #endif  /* COMMANDLINE_H */

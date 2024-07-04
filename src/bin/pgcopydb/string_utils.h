@@ -11,10 +11,11 @@
 
 #define NULL_AS_EMPTY_STRING(str) (str == NULL ? "" : str)
 
-#define streq(a, b) (a != NULL && b != NULL && strcmp(a, b) == 0)
+#define streq(a, b) \
+	(((const char *) a != NULL) && ((const char *) b != NULL) && strcmp(a, b) == 0)
 
 #define strneq(x, y) \
-	((x != NULL) && (y != NULL) && (strcmp(x, y) != 0))
+	(((const char *) x != NULL) && ((const char *) y != NULL) && (strcmp(x, y) != 0))
 
 /* maximum decimal int64 length with minus and NUL */
 #define INTSTRING_MAX_DIGITS 21
