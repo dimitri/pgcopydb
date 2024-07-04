@@ -2569,8 +2569,11 @@ LogicalMessageValueEq(LogicalMessageValue *a, LogicalMessageValue *b)
 		return false;
 	}
 
+	/* both values are either NULL or not */
+
 	if (a->isNull)
 	{
+		/* both values are NULL */
 		return true;
 	}
 

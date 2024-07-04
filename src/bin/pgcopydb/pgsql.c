@@ -2021,6 +2021,7 @@ pgsql_sync_pipeline(PGSQL *pgsql)
 
 	(void) pgsql_handle_notifications(pgsql);
 
+	/* consume results until we get a PGRES_PIPELINE_SYNC */
 	while (true)
 	{
 		if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
