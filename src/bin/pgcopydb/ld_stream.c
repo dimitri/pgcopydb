@@ -319,9 +319,9 @@ stream_check_in_out(StreamSpecs *specs)
 
 	if (specs->stdOut)
 	{
-		char buf[0];
+		char buf = 0;
 
-		if (fwrite(buf, sizeof(char), 0, specs->in) != 0)
+		if (fwrite(&buf, sizeof(char), 0, specs->in) != 0)
 		{
 			log_error("Failed to write to output PIPE: %m");
 			return false;
