@@ -342,7 +342,6 @@ get_env_using_parser(EnvParser *parser)
 		{
 			log_fatal("Unknown parser type %d", parser->type);
 			return false;
-			break;
 		}
 	}
 

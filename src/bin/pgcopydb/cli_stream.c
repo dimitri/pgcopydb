@@ -438,7 +438,6 @@ cli_stream_getopts(int argc, char **argv)
 			{
 				commandline_help(stderr);
 				exit(EXIT_CODE_BAD_ARGS);
-				break;
 			}
 		}
 	}
@@ -1237,7 +1236,6 @@ stream_start_in_mode(LogicalStreamMode mode)
 		{
 			log_fatal("BUG: stream_start_in_mode called in mode %d", mode);
 			exit(EXIT_CODE_INTERNAL_ERROR);
-			break;
 		}
 	}
 }
