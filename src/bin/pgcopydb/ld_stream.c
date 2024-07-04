@@ -728,9 +728,7 @@ streamWrite(LogicalStreamContext *context)
 	/* write the actual JSON message to file, unless instructed not to */
 	if (!metadata->skipping)
 	{
-		bool previous = false;
-
-		if (!stream_write_json(context, previous))
+		if (!stream_write_json(context, false))
 		{
 			/* errors have already been logged */
 			return false;
@@ -1719,9 +1717,7 @@ prepareMessageMetadataFromContext(LogicalStreamContext *context)
 		previous->skipping = false;
 		metadata->skipping = false;
 
-		bool previous = true;
-
-		if (!stream_write_json(context, previous))
+		if (!stream_write_json(context, true))
 		{
 			/* errors have been logged */
 			return false;

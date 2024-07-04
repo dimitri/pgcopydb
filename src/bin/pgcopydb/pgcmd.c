@@ -801,13 +801,9 @@ pg_restore_roles(PostgresPaths *pgPaths,
 				continue;
 			}
 
-			char createRole[BUFSIZE] = { 0 };
+			log_info("%s", currentLine);
 
-			sformat(createRole, sizeof(createRole), "CREATE ROLE %s", roleName);
-
-			log_info("%s", createRole);
-
-			if (!pgsql_execute(&pgsql, createRole))
+			if (!pgsql_execute(&pgsql, currentLine))
 			{
 				/* errors have already been logged */
 				return false;

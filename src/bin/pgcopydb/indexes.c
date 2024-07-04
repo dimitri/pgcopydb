@@ -1130,10 +1130,10 @@ copydb_create_constraints(CopyDataSpec *specs, PGSQL *dst, SourceTable *table)
 		 * When running pgcopydb create constraints, that information is more
 		 * relevant.
 		 */
-		int logLevel =
+		int level =
 			specs->section == DATA_SECTION_ALL ? LOG_NOTICE : LOG_INFO;
 
-		log_level(logLevel,
+		log_level(level,
 				  "Found %lld indexes on target database for table %s",
 				  (long long) targetTable->indexCount,
 				  table->qname);

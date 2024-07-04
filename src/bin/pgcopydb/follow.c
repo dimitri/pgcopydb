@@ -1003,7 +1003,6 @@ follow_wait_subprocesses(StreamSpecs *specs)
 							   processArray[i]->pid);
 				}
 
-				int logLevel = LOG_NOTICE;
 				char details[BUFSIZE] = { 0 };
 
 				/*
@@ -1030,8 +1029,6 @@ follow_wait_subprocesses(StreamSpecs *specs)
 				}
 				else
 				{
-					logLevel = LOG_ERROR;
-
 					if (processArray[i]->returnCode == 0)
 					{
 						sformat(details, sizeof(details),
@@ -1054,7 +1051,7 @@ follow_wait_subprocesses(StreamSpecs *specs)
 					}
 				}
 
-				log_level(logLevel,
+				log_level(exitedSuccessfully ? LOG_NOTICE : LOG_ERROR,
 						  "Subprocess %s with pid %d has exited %s",
 						  processArray[i]->name,
 						  processArray[i]->pid,

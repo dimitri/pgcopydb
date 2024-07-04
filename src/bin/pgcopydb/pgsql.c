@@ -1435,15 +1435,15 @@ pgsql_set_search_path(PGSQL *pgsql, char *search_path, bool local)
 bool
 pgsql_prepend_search_path(PGSQL *pgsql, const char *namespace)
 {
-	char search_path[BUFSIZE] = { 0 };
+	char searchPath[BUFSIZE] = { 0 };
 
-	if (!pgsql_get_search_path(pgsql, search_path, sizeof(search_path)))
+	if (!pgsql_get_search_path(pgsql, searchPath, sizeof(searchPath)))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	if (IS_EMPTY_STRING_BUFFER(search_path))
+	if (IS_EMPTY_STRING_BUFFER(searchPath))
 	{
 		return pgsql_set_search_path(pgsql, (char *) namespace, true);
 	}
@@ -1454,7 +1454,7 @@ pgsql_prepend_search_path(PGSQL *pgsql, const char *namespace)
 		sformat(new_search_path, sizeof(new_search_path),
 				"%s, %s",
 				namespace,
-				search_path);
+				searchPath);
 
 		return pgsql_set_search_path(pgsql, new_search_path, true);
 	}
@@ -2889,9 +2889,7 @@ pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args)
 		char *errormsg =
 			failedOnSrc ? "Failed to get data from source" : NULL;
 
-		int res = PQputCopyEnd(dstConn, errormsg);
-
-		if (res > 0)
+		if (PQputCopyEnd(dstConn, errormsg) > 0)
 		{
 			PGresult *res = PQgetResult(dstConn);
 

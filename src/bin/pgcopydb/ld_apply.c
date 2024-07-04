@@ -981,9 +981,9 @@ stream_apply_sql(StreamApplyContext *context,
 			 *
 			 * [1] https://www.postgresql.org/docs/current/replication-origins.html
 			 */
-			char *sql = "SELECT txid_current()";
+			char *sqlCmd = "SELECT txid_current()";
 
-			if (!pgsql_execute(applyPgConn, sql))
+			if (!pgsql_execute(applyPgConn, sqlCmd))
 			{
 				/* errors have already been logged */
 				return false;
