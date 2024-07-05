@@ -124,11 +124,11 @@ the migration off, and re-connect your applications to the target database:
 
    $ pgcopydb stream sentinel set endpos --current
 
-This command must run with the same ``--dir`` as the main ``pgcopydb clone
+This command must be run within the same ``--dir`` as the main ``pgcopydb clone
 --follow`` command, in order to share the same internal catalogs with the
 running processes.
 
-When the migration is over with, now cleanup the resources created for the
+When the migration is completed, cleanup the resources created for the
 Change Data Capture with the following command:
 
 ::
@@ -141,15 +141,16 @@ operations.
 How to validate schema and data migration?
 ------------------------------------------
 
-The command :ref:`pgcopydb_compare_schema` is limited to comparing the
-metadata that pgcopydb grabs about the Postgres schema at the moment. This
-means comparing the list of tables, their attributes, their indexes and
+The command :ref:`pgcopydb_compare_schema` is currently limited to comparing the
+metadata that pgcopydb grabs about the Postgres schema. This
+applies to comparing the list of tables, their attributes, their indexes and
 constraints, and the sequences values.
 
-The command :ref:`pgcopydb_compare_data` run a SQL query that computes a
-checksum of the data on each Postgres instance, for each table, and then
-only compares there checksums. This is not a full comparison of the data
-set, cases where the checksum are the same and the data differ can be found.
+The command :ref:`pgcopydb_compare_data` runs an SQL query that computes a
+checksum of the data on each Postgres instance (i.e. source and destination) 
+for each table, and then only compares the checksums. This is not a full comparison 
+of the data set, and it shall produce a false positive for cases where the checksums
+are the same but the data is different.
 
 ::
 
