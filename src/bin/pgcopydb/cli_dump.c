@@ -33,11 +33,12 @@ static CommandLine dump_schema_command =
 		"schema",
 		"Dump source database schema as custom files in work directory",
 		" --source <URI> ",
-		"  --source          Postgres URI to the source database\n"
-		"  --target          Directory where to save the dump files\n"
-		"  --dir             Work directory to use\n"
-		"  --skip-extensions Skip restoring extensions\n" \
-		"  --snapshot        Use snapshot obtained with pg_export_snapshot\n",
+		"  --source             Postgres URI to the source database\n"
+		"  --target             Directory where to save the dump files\n"
+		"  --dir                Work directory to use\n"
+		"  --skip-extensions    Skip restoring extensions\n" \
+		"  --filters <filename> Use the filters defined in <filename>\n"
+		"  --snapshot           Use snapshot obtained with pg_export_snapshot\n",
 		cli_dump_schema_getopts,
 		cli_dump_schema);
 
@@ -84,6 +85,8 @@ cli_dump_schema_getopts(int argc, char **argv)
 		{ "resume", no_argument, NULL, 'R' },
 		{ "skip-extensions", no_argument, NULL, 'e' },
 		{ "not-consistent", no_argument, NULL, 'C' },
+		{ "filter", required_argument, NULL, 'F' },
+		{ "filters", required_argument, NULL, 'F' },
 		{ "snapshot", required_argument, NULL, 'N' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
@@ -104,7 +107,7 @@ cli_dump_schema_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:D:PrReCNVvdzqh",
+	while ((c = getopt_long(argc, argv, "S:T:D:PrReFCNVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -146,6 +149,20 @@ cli_dump_schema_getopts(int argc, char **argv)
 			{
 				options.noRolesPasswords = true;
 				log_trace("--no-role-passwords");
+				break;
+			}
+
+			case 'F':
+			{
+				strlcpy(options.filterFileName, optarg, MAXPGPATH);
+				log_trace("--filters \"%s\"", options.filterFileName);
+
+				if (!file_exists(options.filterFileName))
+				{
+					log_error("Filters file \"%s\" does not exists",
+							  options.filterFileName);
+					++errors;
+				}
 				break;
 			}
 
@@ -335,6 +352,18 @@ cli_dump_schema_section(CopyDBOptions *dumpDBoptions,
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!IS_EMPTY_STRING_BUFFER(dumpDBoptions->filterFileName))
+	{
+		SourceFilters *filters = &(copySpecs.filters);
+
+		if (!parse_filters(dumpDBoptions->filterFileName, filters))
+		{
+			log_error("Failed to parse filters in file \"%s\"",
+					  dumpDBoptions->filterFileName);
+			exit(EXIT_CODE_BAD_ARGS);
+		}
 	}
 
 	ConnStrings *dsn = &(copySpecs.connStrings);
