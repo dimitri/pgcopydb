@@ -1,14 +1,14 @@
 Tutorial
 ========
 
-This documentation section for pgcopydb contains a list of classic pgcopydb
+This documentation section for ``pgcopydb`` contains a list of classic ``pgcopydb``
 use-cases. For details about the commands and their options see the manual
 page for each command at :ref:`pgcopydb`.
 
 Copy Postgres Database to a new server
 --------------------------------------
 
-The simplest way to use pgcopydb is to just use the :ref:`pgcopydb_clone`
+The simplest way to use ``pgcopydb`` is to just use the :ref:`pgcopydb_clone`
 command as in the following example.
 
 ::
@@ -19,20 +19,19 @@ command as in the following example.
    $ pgcopydb clone
 
 Note that the options ``--source`` and ``--target`` can also be used to set
-the Postgres connection strings to the databases. Using environment
-variables is particulary useful when using Docker containers.
+the Postgres connection strings to the databases; however, using *environment
+variables* is particulary useful when using Docker containers.
 
 You might also notice here that both the source and target Postgres
-databases must already exist for pgcopydb to operate.
+databases must already exist for ``pgcopydb`` to operate.
 
 Copy Postgres users and extensions
 ----------------------------------
 
-To copy Postgres users a privileged connection to the target database must
-be made, and to include passwords a privileged connection to the source
-database must be made too. It is sometimes wanted to limit these privileged
-connection to the minimum, and then an approach that looks like the
-following may be used:
+To copy Postgres users, a privileged connection to the target database must
+be setup, and to include passwords, a privileged connection to the source
+database must be present as well. If it is required to limit these privileged
+connections to a minimum, then the following approach may be used:
 
 ::
 
@@ -52,16 +51,15 @@ following may be used:
 How to edit the schema when copying a database?
 -----------------------------------------------
 
-It is possible to split pgcopydb operations and run them one at a time.
+It is possible to split ``pgcopydb`` operations and to run them one at a time.
 
-
-Please note that concurrency and performance characteristics that depend on
-concurrency are then going to be pretty limited compared to the main
+However, please note that in these cases, concurrency and performance characteristics 
+that depend on concurrency are then going to be pretty limited compared to the main
 ``pgcopydb clone`` command where different sections are running concurrently
-to one-another.
+with one-another.
 
-Still running operations with more control over the different steps can be
-necessary. An interesting use-case consists of injecting schema changes
+Still in some cases, running operations with more control over different steps can be
+necessary. An interesting such use-case consists of injecting schema changes
 before copying the data over:
 
 ::
