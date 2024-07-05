@@ -705,7 +705,7 @@ pretty_print_bytes(char *buffer, size_t size, uint64_t bytes)
 	uint sIndex = 0;
 	long double count = bytes;
 
-	while (count >= 10240 && sIndex < suffixes_len - 1)
+	while (count >= 10240 && sIndex < (suffixes_len - 1))
 	{
 		sIndex++;
 		count /= 1024;
@@ -749,7 +749,7 @@ pretty_print_bytes_per_second(char *buffer, size_t size, uint64_t bytes,
 	uint sIndex = 0;
 	long double count = ((long double) bytes) * 1000 * 8 / durationMs;
 
-	while (count >= 10000 && sIndex < suffixes_len - 1)
+	while (count >= 10000 && sIndex < (suffixes_len - 1))
 	{
 		sIndex++;
 		count /= 1000;
@@ -795,7 +795,7 @@ pretty_print_count(char *buffer, size_t size, uint64_t number)
 		long double count = number;
 
 		/* issue 1234 million rather than 1 billion or 1.23 billion */
-		while (count >= 10000 && sIndex < suffixes_len - 1)
+		while (count >= 10000 && sIndex < (suffixes_len - 1))
 		{
 			sIndex++;
 			count /= 1000;
