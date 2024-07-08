@@ -21,7 +21,7 @@ streaming with this simple command line::
   $ pgcopydb clone --table-jobs 4 --index-jobs 4
 
 See the manual page for :ref:`pgcopydb_clone` for detailed information about
-how the command is implementedalong with many other supported options.
+how the command is implemented along with many other supported options.
 
 Feature Matrix
 --------------
