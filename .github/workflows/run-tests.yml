@@ -60,9 +60,14 @@ jobs:
 
   style_checker:
     runs-on: ubuntu-latest
-    container: citus/stylechecker:latest
+    container: citus/stylechecker:no-py
     steps:
-    - uses: actions/checkout@v3 # intentionally using v3 to avoid v4 bug
+    - uses: actions/checkout@v4.1.7
+      name: Checkout code
+
+    - name: Set safe directory for git
+      run: |
+        git config --global --add safe.directory ${GITHUB_WORKSPACE}
 
     - name: Check C style
       run: citus_indent --check
