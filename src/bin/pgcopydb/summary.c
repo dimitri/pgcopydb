@@ -833,7 +833,7 @@ summary_finish_vacuum(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 
 	if (db == NULL)
 	{
-		log_error("BUG: summary_finish_table: db is NULL");
+		log_error("BUG: summary_finish_vacuum: db is NULL");
 		return false;
 	}
 
@@ -2347,21 +2347,21 @@ catalog_timing_fetch(SQLiteQuery *query)
 	timing->doneTime = sqlite3_column_int64(query->ppStmt, 3);
 	timing->durationMs = sqlite3_column_int64(query->ppStmt, 4);
 
-	if (sqlite3_column_type(query->ppStmt, 5) != SQLITE_NULL)
+	if (timing->durationMs > 0)
 	{
-		strlcpy(timing->ppDuration,
-				(char *) sqlite3_column_text(query->ppStmt, 5),
-				sizeof(timing->ppDuration));
+		IntervalToString(timing->durationMs,
+						 timing->ppDuration,
+						 INTSTRING_MAX_DIGITS);
 	}
 
 	timing->count = sqlite3_column_int64(query->ppStmt, 6);
 	timing->bytes = sqlite3_column_int64(query->ppStmt, 7);
 
-	if (sqlite3_column_type(query->ppStmt, 8) != SQLITE_NULL)
+	if (timing->bytes > 0)
 	{
-		strlcpy(timing->ppBytes,
-				(char *) sqlite3_column_text(query->ppStmt, 8),
-				sizeof(timing->ppBytes));
+		pretty_print_bytes(timing->ppBytes,
+						   sizeof(timing->ppBytes),
+						   timing->bytes);
 	}
 
 	return true;

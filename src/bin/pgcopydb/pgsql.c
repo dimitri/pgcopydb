@@ -59,7 +59,8 @@ static bool build_parameters_list(PQExpBuffer buffer,
 static void parseIdentifySystemResult(void *ctx, PGresult *result);
 static void parseTimelineHistoryResult(void *ctx, PGresult *result);
 
-static bool pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args);
+static bool pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args, CopyProgressCallback
+						 onProgress, void *context);
 
 static bool pg_copy_send_query(PGSQL *pgsql, CopyArgs *args,
 							   ExecStatusType status);
@@ -2662,7 +2663,8 @@ pgsql_truncate(PGSQL *pgsql, const char *qname)
  * referenced by the qualified identifier name dstQname on the target.
  */
 bool
-pg_copy(PGSQL *src, PGSQL *dst, CopyArgs *args)
+pg_copy(PGSQL *src, PGSQL *dst, CopyArgs *args, CopyProgressCallback
+		on_copy_progress_hook, void *context)
 {
 	bool srcConnIsOurs = src->connection == NULL;
 	if (!pgsql_open_connection(src))
@@ -2681,7 +2683,7 @@ pg_copy(PGSQL *src, PGSQL *dst, CopyArgs *args)
 		return false;
 	}
 
-	bool result = pg_copy_data(src, dst, args);
+	bool result = pg_copy_data(src, dst, args, on_copy_progress_hook, context);
 
 	if (srcConnIsOurs)
 	{
@@ -2703,7 +2705,8 @@ pg_copy(PGSQL *src, PGSQL *dst, CopyArgs *args)
  * expects src and dst are opened connection and doesn't manage their lifetime.
  */
 static bool
-pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args)
+pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args, CopyProgressCallback
+			 on_copy_progress_hook, void *context)
 {
 	PGconn *srcConn = src->connection;
 	PGconn *dstConn = dst->connection;
@@ -2745,6 +2748,8 @@ pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args)
 	bool failedOnSrc = false;
 	bool failedOnDst = false;
 	args->bytesTransmitted = 0;
+	args->bytesTransmittedBeforeSavingProgress = 0;
+	args->lastSavingTimeMs = time(NULL);
 
 	for (;;)
 	{
@@ -2849,9 +2854,9 @@ pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args)
 		/*
 		 * If successful PQgetCopyData returns the row length as a result.
 		 */
-		else if (bufsize > 0)
+		else if (bufsize > 0 && on_copy_progress_hook != NULL)
 		{
-			args->bytesTransmitted += bufsize;
+			on_copy_progress_hook(bufsize, context);
 		}
 
 		/*

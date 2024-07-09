@@ -436,7 +436,9 @@ bool copydb_process_table_data_worker(CopyDataSpec *specs);
 bool copydb_process_table_data_with_workers(CopyDataSpec *specs);
 
 bool copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
-					   CopyTableDataSpec *tableSpecs);
+					   CopyTableDataSpec *tableSpecs,
+					   CopyProgressCallback onCopyProgress,
+					   void *onCopyProgressContext);
 
 
 bool copydb_table_create_lockfile(CopyDataSpec *specs,
@@ -444,7 +446,7 @@ bool copydb_table_create_lockfile(CopyDataSpec *specs,
 								  PGSQL *dst,
 								  bool *isDone);
 
-bool copydb_mark_table_as_done(CopyDataSpec *specs,
+bool copydb_save_copy_progress(CopyDataSpec *specs,
 							   CopyTableDataSpec *tableSpecs);
 
 bool copydb_table_parts_are_all_done(CopyDataSpec *specs,
