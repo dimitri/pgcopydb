@@ -847,7 +847,7 @@ typedef struct CopyProgressContext
 
 /*
  * on_copy_progress_hook saves the copy progress into the catalog.
- * It avoids frequent access to the DB by using an arbitrary threshold value.
+ * It writes to the DB within at an arbitrary interval.
  */
 static bool
 on_copy_progress_hook(int bytesTransmitted, void *context)
@@ -860,8 +860,13 @@ on_copy_progress_hook(int bytesTransmitted, void *context)
 	copyArgs->bytesTransmittedBeforeSavingProgress += bytesTransmitted;
 	copyArgs->bytesTransmitted += bytesTransmitted;
 	tableSpecs->summary.bytesTransmitted += bytesTransmitted;
-	const int NUMBER_OF_BYTES_BEFORE_SAVE = 10 * 1024 * 1024;
-	if (copyArgs->bytesTransmittedBeforeSavingProgress < NUMBER_OF_BYTES_BEFORE_SAVE)
+
+	/* calculate the elapsed time since the last copy operation */
+	uint64_t nowMs = time(NULL);
+	uint64_t elapsedTimeSec = nowMs - copyArgs->lastSavingTimeMs;
+
+	const int SAVE_INTERVAL_MS = 5;
+	if (elapsedTimeSec < SAVE_INTERVAL_MS)
 	{
 		/* Avoid frequent access to DB, safe to return here */
 		return true;

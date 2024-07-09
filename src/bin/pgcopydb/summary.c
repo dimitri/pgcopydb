@@ -1866,12 +1866,6 @@ summary_stop_timing(DatabaseCatalog *catalog, TimingSection section)
 			return false;
 		}
 
-		if (!summary_pretty_print_timing(catalog, timing))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
 		const char *sql =
 			"update timings "
 			"set done_time_epoch = $1, bytes_pretty = $2, duration_pretty = $3 "
@@ -2096,25 +2090,6 @@ summary_set_timing_count(DatabaseCatalog *catalog,
 
 
 /*
- * summary_pretty_print_timing computes the pretty-printed versions of the
- * bytes and duration values in a given Top-Level Timing section.
- */
-bool
-summary_pretty_print_timing(DatabaseCatalog *catalog, TopLevelTiming *timing)
-{
-	pretty_print_bytes(timing->ppBytes,
-					   sizeof(timing->ppBytes),
-					   timing->bytes);
-
-	IntervalToString(timing->durationMs,
-					 timing->ppDuration,
-					 INTSTRING_MAX_DIGITS);
-
-	return true;
-}
-
-
-/*
  * catalog_lookup_timing fetches a TopLevelTiming entry from our catalogs.
  */
 bool
@@ -2143,7 +2118,7 @@ summary_lookup_timing(DatabaseCatalog *catalog,
 
 	char *sql =
 		"  select id, label, start_time_epoch, done_time_epoch, duration, "
-		"         duration_pretty, count, bytes, bytes_pretty "
+		"         count, bytes "
 		"    from timings "
 		"   where id = $1";
 
@@ -2272,7 +2247,7 @@ summary_iter_timing_init(TimingIterator *iter)
 
 	char *sql =
 		"  select id, label, start_time_epoch, done_time_epoch, duration, "
-		"         duration_pretty, count, bytes, bytes_pretty "
+		"         count, bytes "
 		"    from timings "
 		"order by id";
 
@@ -2354,8 +2329,8 @@ catalog_timing_fetch(SQLiteQuery *query)
 						 INTSTRING_MAX_DIGITS);
 	}
 
-	timing->count = sqlite3_column_int64(query->ppStmt, 6);
-	timing->bytes = sqlite3_column_int64(query->ppStmt, 7);
+	timing->count = sqlite3_column_int64(query->ppStmt, 5);
+	timing->bytes = sqlite3_column_int64(query->ppStmt, 6);
 
 	if (timing->bytes > 0)
 	{
