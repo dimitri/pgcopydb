@@ -423,6 +423,8 @@ cli_read_previous_options(CopyDBOptions *options, CopyFilePaths *cfPaths)
 							   val,
 							   opts[i].size))
 		{
+            free(val);
+
 			/* errors have already been logged */
 			return false;
 		}
@@ -436,6 +438,8 @@ cli_read_previous_options(CopyDBOptions *options, CopyFilePaths *cfPaths)
 					   opts[i].optname,
 					   opts[i].target,
 					   opts[i].filename);
+
+            free(val);
 		}
 
 		/*
@@ -451,8 +455,13 @@ cli_read_previous_options(CopyDBOptions *options, CopyFilePaths *cfPaths)
 					  val,
 					  opts[i].optname,
 					  opts[i].target);
+
+            free(val);
+
 			return false;
 		}
+
+        free(val);
 	}
 
 	/*

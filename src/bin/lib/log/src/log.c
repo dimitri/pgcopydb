@@ -173,6 +173,10 @@ void log_log(int level, const char *file, int line, const char *fmt, ...)
   gettimeofday(&t, NULL);
   lt = localtime(&t.tv_sec);
 
+  if (!lt) {
+    return;
+  }
+
   char *json_string = NULL;
 
   /* Prepare JSON format if needed */

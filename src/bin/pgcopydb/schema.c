@@ -4243,7 +4243,7 @@ getExtensionList(void *ctx, PGresult *result)
 		}
 
 		/* now loop over extension configuration, if any */
-		if (extension->config.count > 0)
+		if (extension && extension->config.count > 0)
 		{
 			SourceExtensionConfig *config =
 				(SourceExtensionConfig *) calloc(1, sizeof(SourceExtensionConfig));

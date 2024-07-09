@@ -1701,11 +1701,16 @@ tokenize_archive_list_entry(ArchiveToken *token)
 		{
 			log_error("Failed to parse OID \"%s\" from pg_restore --list",
 					  buf);
+
+            free(buf);
+
 			return false;
 		}
 
 		token->type = ARCHIVE_TOKEN_OID;
 		token->ptr = ptr;
+
+        free(buf);
 
 		return true;
 	}

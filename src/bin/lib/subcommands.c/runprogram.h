@@ -366,6 +366,12 @@ execute_program(Program *prog)
 		 */
 		int stdIn = open(DEV_NULL, O_RDONLY);
 
+        if (stdIn < 0) {
+		    prog->returnCode = -1;
+		    prog->error = errno;
+		    return;
+        }
+
 		/* Avoid double-output problems */
 		fflush(stdout);
 		fflush(stderr);
