@@ -3797,8 +3797,8 @@ pg_copy_large_object(PGSQL *src,
 	 * 4. Read the large object content in chunks on the source
 	 *    database, and write them on the target database.
 	 */
-	uint64_t bytesRead = 0;
-	uint64_t bytesWritten = 0;
+	int bytesRead = 0;
+	int bytesWritten = 0;
 
 	do {
 		char *buffer = (char *) calloc(LOBBUFSIZE, sizeof(char));
@@ -3843,7 +3843,7 @@ pg_copy_large_object(PGSQL *src,
 		}
 
 		bytesWritten =
-			lo_write(dst->connection, dstfd, buffer, bytesRead);
+			lo_write(dst->connection, dstfd, buffer, (size_t) bytesRead);
 
 		if (bytesWritten != bytesRead)
 		{

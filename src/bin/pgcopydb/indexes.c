@@ -1182,7 +1182,7 @@ copydb_create_constraints_hook(void *ctx, SourceIndex *index)
 	DatabaseCatalog *targetDB = &(specs->catalogs.target);
 
 	/* some indexes are not attached to a constraint at all */
-	if (index->constraintOid <= 0 ||
+	if (index->constraintOid == 0 ||
 		IS_EMPTY_STRING_BUFFER(index->constraintName))
 	{
 		return true;

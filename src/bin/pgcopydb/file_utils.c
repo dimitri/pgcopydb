@@ -671,7 +671,7 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 
 			/* add 1 byte for the terminating \0 */
 			char *buf = calloc(availableBytes + 1, sizeof(char));
-			size_t bytes = read(context->fd, buf, availableBytes);
+			ssize_t bytes = read(context->fd, buf, availableBytes);
 
 			if (bytes == -1)
 			{

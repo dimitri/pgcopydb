@@ -701,11 +701,11 @@ pretty_print_bytes(char *buffer, size_t size, uint64_t bytes)
 		"PB",                   /* Peta */
 		"EB"                    /* Exa */
 	};
-
+	uint suffixes_len = sizeof(suffixes) / sizeof(suffixes[0]);
 	uint sIndex = 0;
 	long double count = bytes;
 
-	while (count >= 10240 && sIndex < 7)
+	while (count >= 10240 && sIndex < (suffixes_len - 1))
 	{
 		sIndex++;
 		count /= 1024;
@@ -744,11 +744,12 @@ pretty_print_bytes_per_second(char *buffer, size_t size, uint64_t bytes,
 		"PBit/s",                   /* Petabits per second */
 		"EBit/s"                    /* Exabits per second */
 	};
+	uint suffixes_len = sizeof(suffixes) / sizeof(suffixes[0]);
 
 	uint sIndex = 0;
 	long double count = ((long double) bytes) * 1000 * 8 / durationMs;
 
-	while (count >= 10000 && sIndex < 7)
+	while (count >= 10000 && sIndex < (suffixes_len - 1))
 	{
 		sIndex++;
 		count /= 1000;
@@ -775,6 +776,7 @@ pretty_print_count(char *buffer, size_t size, uint64_t number)
 		"quadrillion",          /* 10^15 */
 		"quintillion"           /* 10^18 */
 	};
+	uint suffixes_len = sizeof(suffixes) / sizeof(suffixes[0]);
 
 	if (number < 1000)
 	{
@@ -793,7 +795,7 @@ pretty_print_count(char *buffer, size_t size, uint64_t number)
 		long double count = number;
 
 		/* issue 1234 million rather than 1 billion or 1.23 billion */
-		while (count >= 10000 && sIndex < 7)
+		while (count >= 10000 && sIndex < (suffixes_len - 1))
 		{
 			sIndex++;
 			count /= 1000;
