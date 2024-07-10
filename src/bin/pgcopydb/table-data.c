@@ -877,7 +877,7 @@ on_copy_progress_hook(int bytesTransmitted, void *context)
 		return true;
 	}
 
-	if (!copydb_save_copy_progress(specs, tableSpecs, 0,
+	if (!copydb_save_copy_progress(specs, 0,
 								   ctx->bytesTransmittedBeforeSavingProgress,
 								   ctx->lastSavingTimeMs))
 	{
@@ -1018,9 +1018,15 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 			}
 		}
 
-		if (!copydb_save_copy_progress(specs, tableSpecs, 1,
+		if (!copydb_save_copy_progress(specs, 1,
 									   context.bytesTransmittedBeforeSavingProgress,
 									   context.lastSavingTimeMs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!summary_finish_table(sourceDB, tableSpecs))
 		{
 			/* errors have already been logged */
 			return false;
@@ -1267,18 +1273,11 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
  */
 bool
 copydb_save_copy_progress(CopyDataSpec *specs,
-						  CopyTableDataSpec *tableSpecs,
 						  uint64_t count,
 						  uint64_t bytes,
 						  instr_time lastSavingTimeMs)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
-
-	if (!summary_finish_table(sourceDB, tableSpecs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
 
 	instr_time nowMs;
 	INSTR_TIME_SET_CURRENT(nowMs);

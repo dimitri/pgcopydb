@@ -448,7 +448,6 @@ bool copydb_table_create_lockfile(CopyDataSpec *specs,
 								  bool *isDone);
 
 bool copydb_save_copy_progress(CopyDataSpec *specs,
-							   CopyTableDataSpec *tableSpecs,
 							   uint64_t count,
 							   uint64_t bytes,
 							   instr_time lastSavingTime);
