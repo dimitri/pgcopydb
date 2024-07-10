@@ -2322,6 +2322,10 @@ catalog_timing_fetch(SQLiteQuery *query)
 	timing->doneTime = sqlite3_column_int64(query->ppStmt, 3);
 	timing->durationMs = sqlite3_column_int64(query->ppStmt, 4);
 
+	/*
+	 * Skip reading `ppDuration` from DB and create it from `durationMs`
+	 * in accordance with the single source of truth
+	 */
 	if (timing->durationMs > 0)
 	{
 		IntervalToString(timing->durationMs,
@@ -2332,6 +2336,10 @@ catalog_timing_fetch(SQLiteQuery *query)
 	timing->count = sqlite3_column_int64(query->ppStmt, 5);
 	timing->bytes = sqlite3_column_int64(query->ppStmt, 6);
 
+	/*
+	 * Skip reading `ppBytes` from DB and create it from `bytes`
+	 * in accordance with the single source of truth
+	 */
 	if (timing->bytes > 0)
 	{
 		pretty_print_bytes(timing->ppBytes,
