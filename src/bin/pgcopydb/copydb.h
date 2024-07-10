@@ -10,6 +10,7 @@
 #include "copydb_paths.h"
 #include "filtering.h"
 #include "lock_utils.h"
+#include "portability/instr_time.h"
 #include "queue_utils.h"
 #include "pgcmd.h"
 #include "pgsql.h"
@@ -437,8 +438,8 @@ bool copydb_process_table_data_with_workers(CopyDataSpec *specs);
 
 bool copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 					   CopyTableDataSpec *tableSpecs,
-					   CopyProgressCallback onCopyProgress,
-					   void *onCopyProgressContext);
+					   void *onCopyProgressContext,
+					   CopyProgressCallback onCopyProgress);
 
 
 bool copydb_table_create_lockfile(CopyDataSpec *specs,
@@ -447,7 +448,10 @@ bool copydb_table_create_lockfile(CopyDataSpec *specs,
 								  bool *isDone);
 
 bool copydb_save_copy_progress(CopyDataSpec *specs,
-							   CopyTableDataSpec *tableSpecs);
+							   CopyTableDataSpec *tableSpecs,
+							   uint64_t count,
+							   uint64_t bytes,
+							   instr_time lastSavingTime);
 
 bool copydb_table_parts_are_all_done(CopyDataSpec *specs,
 									 CopyTableDataSpec *tableSpecs,

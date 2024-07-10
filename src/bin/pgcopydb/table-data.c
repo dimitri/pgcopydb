@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include "pgsql.h"
+#include "portability/instr_time.h"
 #include "postgres_fe.h"
 #include "libpq-fe.h"
 #include "pqexpbuffer.h"
@@ -843,6 +844,8 @@ typedef struct CopyProgressContext
 {
 	CopyDataSpec *specs;
 	CopyTableDataSpec *tableSpecs;
+	uint64_t bytesTransmittedBeforeSavingProgress; /* the bytes transmitted before saving the progress to DB */
+	instr_time lastSavingTimeMs; /* the last saving time of the progress to the DB */
 } CopyProgressContext;
 
 /*
@@ -857,28 +860,33 @@ on_copy_progress_hook(int bytesTransmitted, void *context)
 	CopyTableDataSpec *tableSpecs = ctx->tableSpecs;
 	CopyArgs *copyArgs = &(tableSpecs->copyArgs);
 
-	copyArgs->bytesTransmittedBeforeSavingProgress += bytesTransmitted;
+	ctx->bytesTransmittedBeforeSavingProgress += bytesTransmitted;
 	copyArgs->bytesTransmitted += bytesTransmitted;
 	tableSpecs->summary.bytesTransmitted += bytesTransmitted;
 
 	/* calculate the elapsed time since the last copy operation */
-	uint64_t nowMs = time(NULL);
-	uint64_t elapsedTimeSec = nowMs - copyArgs->lastSavingTimeMs;
+	instr_time nowMs;
+	INSTR_TIME_SET_CURRENT(nowMs);
+	INSTR_TIME_SUBTRACT(nowMs, ctx->lastSavingTimeMs);
+	uint64_t elapsedTimeMs = INSTR_TIME_GET_MILLISEC(nowMs);
 
-	const int SAVE_INTERVAL_MS = 5;
-	if (elapsedTimeSec < SAVE_INTERVAL_MS)
+	const uint64_t SAVE_INTERVAL_MS = 5 * 1000;
+	if (elapsedTimeMs < SAVE_INTERVAL_MS)
 	{
 		/* Avoid frequent access to DB, safe to return here */
 		return true;
 	}
 
-	if (!copydb_save_copy_progress(specs, tableSpecs))
+	if (!copydb_save_copy_progress(specs, tableSpecs, 0,
+								   ctx->bytesTransmittedBeforeSavingProgress,
+								   ctx->lastSavingTimeMs))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	copyArgs->bytesTransmittedBeforeSavingProgress = 0;
+	INSTR_TIME_SET_CURRENT(ctx->lastSavingTimeMs);
+	ctx->bytesTransmittedBeforeSavingProgress = 0;
 	return true;
 }
 
@@ -992,21 +1000,27 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 		/*
 		 * 1. Now COPY the TABLE DATA from the source to the destination.
 		 */
+		CopyProgressContext context = {
+			.specs = specs,
+			.tableSpecs = tableSpecs,
+			.bytesTransmittedBeforeSavingProgress = 0,
+			.lastSavingTimeMs = 0
+		};
+		INSTR_TIME_SET_CURRENT(context.lastSavingTimeMs);
 		if (!table->excludeData)
 		{
-			CopyProgressContext context = {
-				.specs = specs,
-				.tableSpecs = tableSpecs
-			};
-			if (!copydb_copy_table(specs, src, dst, tableSpecs, on_copy_progress_hook,
-								   &context))
+			if (!copydb_copy_table(specs, src, dst, tableSpecs, &context,
+								   on_copy_progress_hook
+								   ))
 			{
 				/* errors have already been logged */
 				return false;
 			}
 		}
 
-		if (!copydb_save_copy_progress(specs, tableSpecs))
+		if (!copydb_save_copy_progress(specs, tableSpecs, 1,
+									   context.bytesTransmittedBeforeSavingProgress,
+									   context.lastSavingTimeMs))
 		{
 			/* errors have already been logged */
 			return false;
@@ -1181,8 +1195,6 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 	args->truncate = false;     /* default value, see below */
 	args->freeze = tableSpecs->sourceTable->partition.partCount <= 1;
 	args->bytesTransmitted = 0;
-	args->bytesTransmittedBeforeSavingProgress = 0;
-	args->lastSavingTimeMs = time(NULL);
 
 	/*
 	 * Check to see if we want to TRUNCATE the table and benefit from the COPY
@@ -1255,7 +1267,10 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
  */
 bool
 copydb_save_copy_progress(CopyDataSpec *specs,
-						  CopyTableDataSpec *tableSpecs)
+						  CopyTableDataSpec *tableSpecs,
+						  uint64_t count,
+						  uint64_t bytes,
+						  instr_time lastSavingTimeMs)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
@@ -1265,16 +1280,16 @@ copydb_save_copy_progress(CopyDataSpec *specs,
 		return false;
 	}
 
-	CopyArgs *copyArgs = &(tableSpecs->copyArgs);
+	instr_time nowMs;
+	INSTR_TIME_SET_CURRENT(nowMs);
+	INSTR_TIME_SUBTRACT(nowMs, lastSavingTimeMs);
+	uint64_t elapsedTimeMs = INSTR_TIME_GET_MILLISEC(nowMs);
 
 	/* calculate the elapsed time since the last copy operation */
-	uint64_t nowMs = time(NULL);
-	uint64_t elapsedTimeMs = nowMs - copyArgs->lastSavingTimeMs;
-	copyArgs->lastSavingTimeMs = nowMs;
 	if (!summary_increment_timing(sourceDB,
 								  TIMING_SECTION_COPY_DATA,
-								  1, /* count */
-								  copyArgs->bytesTransmittedBeforeSavingProgress,
+								  count,
+								  bytes,
 								  elapsedTimeMs))
 	{
 		/* errors have already been logged */
@@ -1353,8 +1368,8 @@ copydb_table_parts_are_all_done(CopyDataSpec *specs,
 bool
 copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 				  CopyTableDataSpec *tableSpecs,
-				  CopyProgressCallback onCopyProgress,
-				  void *onCopyProgressContext)
+				  void *onCopyProgressContext,
+				  CopyProgressCallback onCopyProgress)
 {
 	/* COPY the data from the source table to the target table */
 	if (tableSpecs->section != DATA_SECTION_TABLE_DATA &&
@@ -1376,8 +1391,9 @@ copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 		++attempts;
 
 		/* ignore previous attempts, we need only one success here */
-		success = pg_copy(src, dst, &(tableSpecs->copyArgs), onCopyProgress,
-						  onCopyProgressContext);
+		success = pg_copy(src, dst, &(tableSpecs->copyArgs), onCopyProgressContext,
+						  onCopyProgress
+						  );
 
 		if (success)
 		{

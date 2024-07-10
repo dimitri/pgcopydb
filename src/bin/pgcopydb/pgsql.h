@@ -337,16 +337,14 @@ typedef struct CopyArgs
 	bool truncate;
 	bool freeze;
 	uint64_t bytesTransmitted;
-	uint64_t bytesTransmittedBeforeSavingProgress; /* the bytes transmitted before saving the progress to DB */
-	uint64_t lastSavingTimeMs; /* the last saving time of the progress to the DB */
 } CopyArgs;
 
 /* Callback type to be called during the copy data operation */
 typedef bool (*CopyProgressCallback)(int bytesTransmitted, void *context);
 
 
-bool pg_copy(PGSQL *src, PGSQL *dst, CopyArgs *args, CopyProgressCallback
-			 on_copy_progress_hook, void *context);
+bool pg_copy(PGSQL *src, PGSQL *dst, CopyArgs *args, void *context, CopyProgressCallback
+			 on_copy_progress_hook);
 
 bool pg_copy_from_stdin(PGSQL *pgsql, const char *qname);
 bool pg_copy_row_from_stdin(PGSQL *pgsql, char *fmt, ...);
