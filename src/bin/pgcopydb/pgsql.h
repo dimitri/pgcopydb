@@ -568,8 +568,8 @@ bool pgsql_configuration_exists(PGSQL *pgsql, const char *setconfig, bool *exist
 
 bool pgsql_table_exists(PGSQL *pgsql,
 						uint32_t oid,
-						const char *relname,
 						const char *nspname,
+						const char *relname,
 						bool *exists);
 
 bool pgsql_current_wal_flush_lsn(PGSQL *pgsql, uint64_t *lsn);

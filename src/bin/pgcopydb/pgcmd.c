@@ -435,7 +435,7 @@ pg_dump_db(PostgresPaths *pgPaths,
 		char *nspname = filters->excludeSchemaList.array[i].nspname;
 
 		/* check that we still have room for --exclude-schema args */
-		if (PG_CMD_MAX_ARG < (argsIndex + 2))
+		if (PG_CMD_MAX_ARG < (argsIndex + 6))
 		{
 			log_error("Failed to call pg_dump, too many exclude-schema entries: "
 					  "argsIndex %d > %d",
