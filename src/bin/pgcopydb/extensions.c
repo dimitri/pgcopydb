@@ -174,7 +174,6 @@ copydb_copy_ext_table(PGSQL *src, PGSQL *dst, char *qname, char *condition)
 		.srcWhereClause = condition,
 		.dstQname = qname,
 		.dstAttrList = "",
-		.bytesTransmitted = 0,
 	};
 
 	if (!pg_copy(src, dst, &args, NULL, NULL))

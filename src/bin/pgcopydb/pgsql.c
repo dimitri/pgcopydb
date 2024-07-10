@@ -2748,7 +2748,6 @@ pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args, void *context, CopyProgress
 	char *copybuf;
 	bool failedOnSrc = false;
 	bool failedOnDst = false;
-	args->bytesTransmitted = 0;
 
 	for (;;)
 	{

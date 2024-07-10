@@ -336,7 +336,6 @@ typedef struct CopyArgs
 	char *logCommand;
 	bool truncate;
 	bool freeze;
-	uint64_t bytesTransmitted;
 } CopyArgs;
 
 /* Callback type to be called during the copy data operation */

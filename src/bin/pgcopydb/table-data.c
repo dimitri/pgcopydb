@@ -844,6 +844,7 @@ typedef struct CopyProgressContext
 {
 	CopyDataSpec *specs;
 	CopyTableDataSpec *tableSpecs;
+	uint64_t bytesTransmitted;
 	uint64_t bytesTransmittedBeforeSavingProgress; /* the bytes transmitted before saving the progress to DB */
 	instr_time lastSavingTimeMs; /* the last saving time of the progress to the DB */
 } CopyProgressContext;
@@ -858,10 +859,9 @@ on_copy_progress_hook(int bytesTransmitted, void *context)
 	CopyProgressContext *ctx = (CopyProgressContext *) context;
 	CopyDataSpec *specs = ctx->specs;
 	CopyTableDataSpec *tableSpecs = ctx->tableSpecs;
-	CopyArgs *copyArgs = &(tableSpecs->copyArgs);
 
 	ctx->bytesTransmittedBeforeSavingProgress += bytesTransmitted;
-	copyArgs->bytesTransmitted += bytesTransmitted;
+	ctx->bytesTransmitted += bytesTransmitted;
 	tableSpecs->summary.bytesTransmitted += bytesTransmitted;
 
 	/* calculate the elapsed time since the last copy operation */
@@ -1003,6 +1003,7 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 		CopyProgressContext context = {
 			.specs = specs,
 			.tableSpecs = tableSpecs,
+			.bytesTransmitted = 0,
 			.bytesTransmittedBeforeSavingProgress = 0,
 			.lastSavingTimeMs = 0
 		};
@@ -1200,7 +1201,6 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 	args->dstAttrList = tableSpecs->sourceTable->attrList;
 	args->truncate = false;     /* default value, see below */
 	args->freeze = tableSpecs->sourceTable->partition.partCount <= 1;
-	args->bytesTransmitted = 0;
 
 	/*
 	 * Check to see if we want to TRUNCATE the table and benefit from the COPY
