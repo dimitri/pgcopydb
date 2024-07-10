@@ -30,7 +30,7 @@ Copy Postgres users and extensions
 
 To copy Postgres users, a privileged connection to the target database must
 be setup, and to include passwords, a privileged connection to the source
-database must be present as well. If it is required to limit these privileged
+database must be setup as well. If it is required to limit these privileged
 connections to a minimum, then the following approach may be used:
 
 ::
@@ -147,7 +147,7 @@ applies to comparing the list of tables, their attributes, their indexes and
 constraints, and the sequences values.
 
 The command :ref:`pgcopydb_compare_data` runs an SQL query that computes a
-checksum of the data on each Postgres instance (i.e. source and destination) 
+checksum of the data on each Postgres instance (i.e. source and target) 
 for each table, and then only compares the checksums. This is not a full comparison 
 of the data set, and it shall produce a false positive for cases where the checksums
 are the same but the data is different.

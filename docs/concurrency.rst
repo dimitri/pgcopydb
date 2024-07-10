@@ -11,7 +11,7 @@ scripts have been made available to automate around.
 Notes about concurrency
 -----------------------
 
-The pgcopydb too implements many operations concurrent to one another, by
+The pgcopydb too implements many operations concurrently to one another, by
 ways of using the ``fork()`` system call. This means that pgcopydb creates
 sub-processes that each handle a part of the work.
 
@@ -190,7 +190,7 @@ __ https://github.com/dimitri/pgloader
 Same-table Concurrency
 ----------------------
 
-For some databases, itso  happens that most of the database size
+For some databases, it just so happens that most of the database size
 on-disk is contained within a single giant table, or within a short list of giant
 tables. When this happens, the concurrency model that is implemented with
 ``--table-jobs`` still allocates a single process to COPY all the data from
