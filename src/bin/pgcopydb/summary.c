@@ -2324,7 +2324,7 @@ catalog_timing_fetch(SQLiteQuery *query)
 
 	/*
 	 * Skip reading `ppDuration` from DB and create it from `durationMs`
-	 * in accordance with the single source of truth
+	 * in accordance with the single source of truth principle.
 	 */
 	if (timing->durationMs > 0)
 	{
@@ -2338,7 +2338,7 @@ catalog_timing_fetch(SQLiteQuery *query)
 
 	/*
 	 * Skip reading `ppBytes` from DB and create it from `bytes`
-	 * in accordance with the single source of truth
+	 * in accordance with the single source of truth principle.
 	 */
 	if (timing->bytes > 0)
 	{
