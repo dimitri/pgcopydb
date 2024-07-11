@@ -28,10 +28,3 @@ pgcopydb stream sentinel get
 # make sure the inject service has had time to see the final sentinel values
 sleep 2
 pgcopydb stream cleanup
-
-# check the generated column test table
-sql="select * from generated_column_test"
-psql -d ${PGCOPYDB_SOURCE_PGURI} -c "${sql}" > /tmp/s.out
-psql -d ${PGCOPYDB_TARGET_PGURI} -c "${sql}" > /tmp/t.out
-
-diff /tmp/s.out /tmp/t.out || cat /tmp/s.out /tmp/t.out

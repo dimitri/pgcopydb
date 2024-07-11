@@ -60,8 +60,7 @@ jq "${JQSCRIPT}" /usr/src/pgcopydb/${WALFILE} > ${expected}
 jq "${JQSCRIPT}" ${SHAREDIR}/${WALFILE} > ${result}
 
 # first command to provide debug information, second to stop when returns non-zero
-diff ${expected} ${result} || cat ${SHAREDIR}/${WALFILE}
-diff ${expected} ${result}
+diff ${expected} ${result} || (cat ${expected} && exit 1)
 
 # now prefetch the changes again, which should be a noop
 pgcopydb stream prefetch --resume --endpos "${lsn}" -vv
@@ -72,12 +71,12 @@ SQLFILENAME=`basename ${WALFILE} .json`.sql
 pgcopydb stream transform -vv ${SHAREDIR}/${WALFILE} /tmp/${SQLFILENAME}
 
 # we should get the same result as `pgcopydb stream prefetch`
-diff ${SHAREDIR}/${SQLFILE} /tmp/${SQLFILENAME}
+diff ${SHAREDIR}/${SQLFILE} /tmp/${SQLFILENAME} || (cat /tmp/${SQLFILENAME} && exit 1)
 
 # we should also get the same result as expected (discarding LSN numbers)
 DIFFOPTS='-I BEGIN -I COMMIT -I KEEPALIVE -I SWITCH -I ENDPOS'
 
-diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} ${SHAREDIR}/${SQLFILENAME}
+diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} ${SHAREDIR}/${SQLFILENAME} || (cat ${SHAREDIR}/${SQLFILENAME} && exit 1)
 
 # now allow for replaying/catching-up changes
 pgcopydb stream sentinel set apply

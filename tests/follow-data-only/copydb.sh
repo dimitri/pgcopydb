@@ -83,10 +83,3 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -c "${sql}" > /tmp/s.out
 psql -d ${PGCOPYDB_TARGET_PGURI} -c "${sql}" > /tmp/t.out
 
 diff /tmp/s.out /tmp/t.out
-
-# check the generated column test table
-sql="select * from generated_column_test"
-psql -d ${PGCOPYDB_SOURCE_PGURI} -c "${sql}" > /tmp/s.out
-psql -d ${PGCOPYDB_TARGET_PGURI} -c "${sql}" > /tmp/t.out
-
-diff /tmp/s.out /tmp/t.out || cat /tmp/s.out /tmp/t.out

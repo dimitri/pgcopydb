@@ -54,10 +54,10 @@ static bool canCoalesceLogicalTransactionStatement(LogicalTransaction *txn,
 static bool coalesceLogicalTransactionStatement(LogicalTransaction *txn,
 												LogicalTransactionStatement *new);
 
-static bool removeGeneratedColumnsFromTransaction(GeneratedColumnsCache *cache,
-												  LogicalTransaction *txn);
-static bool removeGeneratedColumnsFromStatement(GeneratedColumnsCache *cache,
-												LogicalTransactionStatement *stmt);
+static bool markGeneratedColumnsFromTransaction(GeneratedColumnsCache *cache,
+												LogicalTransaction *txn);
+static bool markGeneratedColumnsFromStatement(GeneratedColumnsCache *cache,
+											  LogicalTransactionStatement *stmt);
 
 static bool prepareGeneratedColumnsCache_hook(void *ctx, SourceTable *table);
 
@@ -65,10 +65,9 @@ static bool prepareGeneratedColumnsCache(StreamSpecs *specs);
 
 static bool isGeneratedColumn(GeneratedColumnSet *columns, const char *attname);
 
-static bool findGeneratedColumns(GeneratedColumnsCache *cache,
-								 const char *nspname,
-								 const char *relname,
-								 GeneratedColumnSet **columns);
+static GeneratedColumnSet * lookupGeneratedColumnsForTable(GeneratedColumnsCache *cache,
+														   const char *nspname,
+														   const char *relname);
 
 /*
  * stream_transform_context_init initializes StreamContext for the transform
@@ -465,15 +464,17 @@ stream_transform_write_message(StreamContext *privateContext,
 	}
 
 	/*
-	 * Before serializing the transaction to disk or stdout, we need to remove
-	 * the generated columns from the transaction, as they are not supposed to
-	 * be part of the SQL output.
+	 * Before serializing the transaction to disk or stdout, we need to find
+	 * the generated columns from the transactionn and mark them as such.
+	 *
+	 * It will help to set the value of the generated columns to DEFAULT in the
+	 * SQL output.
 	 */
 	GeneratedColumnsCache *cache = privateContext->generatedColumnsCache;
 
 	if (currentMsg->isTransaction && cache != NULL)
 	{
-		if (!removeGeneratedColumnsFromTransaction(cache, txn))
+		if (!markGeneratedColumnsFromTransaction(cache, txn))
 		{
 			/* errors have already been logged */
 			return false;
@@ -2112,15 +2113,23 @@ stream_write_insert(FILE *out, LogicalMessageInsert *insert)
 			{
 				LogicalMessageValue *value = &(values->array[v]);
 
-				appendPQExpBuffer(buf, "%s$%d",
-								  v > 0 ? ", " : "",
-								  ++pos);
-
-				if (!stream_add_value_in_json_array(value, jsArray))
+				if (value->isGenerated)
 				{
-					/* errors have already been logged */
-					destroyPQExpBuffer(buf);
-					return false;
+					appendPQExpBuffer(buf, "%sDEFAULT",
+									  v > 0 ? ", " : "");
+				}
+				else
+				{
+					appendPQExpBuffer(buf, "%s$%d",
+									  v > 0 ? ", " : "",
+									  ++pos);
+
+					if (!stream_add_value_in_json_array(value, jsArray))
+					{
+						/* errors have already been logged */
+						destroyPQExpBuffer(buf);
+						return false;
+					}
 				}
 			}
 
@@ -2247,16 +2256,25 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 
 				if (!skip)
 				{
-					appendPQExpBuffer(buf, "%s%s = $%d",
-									  first ? "" : ", ",
-									  colname,
-									  ++pos);
-
-					if (!stream_add_value_in_json_array(value, jsArray))
+					if (value->isGenerated)
 					{
-						/* errors have already been logged */
-						destroyPQExpBuffer(buf);
-						return false;
+						appendPQExpBuffer(buf, "%s%s = DEFAULT",
+										  first ? "" : ", ",
+										  colname);
+					}
+					else
+					{
+						appendPQExpBuffer(buf, "%s%s = $%d",
+										  first ? "" : ", ",
+										  colname,
+										  ++pos);
+
+						if (!stream_add_value_in_json_array(value, jsArray))
+						{
+							/* errors have already been logged */
+							destroyPQExpBuffer(buf);
+							return false;
+						}
 					}
 
 					if (first)
@@ -2685,18 +2703,19 @@ LogicalMessageValueEq(LogicalMessageValue *a, LogicalMessageValue *b)
 	}
 
 /*
- * findGeneratedColumns finds whether the given "nspname.relname" has any
- * generated columns using the cache, if found it returns true and populates
- * "columns" with the generated columns.
+ * lookupGeneratedColumnsForTable lookup the generated columns set for the given
+ * table "nspname.relname".
+ *
+ * Returns a GeneratedColumnSet if the table has generated columns, NULL
+ * otherwise.
  *
  * NOTE: There is no error condition, if the cache is NULL, it means that we
  * don't have any generated columns in the catalog.
  */
-static bool
-findGeneratedColumns(GeneratedColumnsCache *cache,
-					 const char *nspname,
-					 const char *relname,
-					 GeneratedColumnSet **columns)
+static GeneratedColumnSet *
+lookupGeneratedColumnsForTable(GeneratedColumnsCache *cache,
+							   const char *nspname,
+							   const char *relname)
 {
 	/*
 	 * NULL cache means that we don't have any generated columns in the
@@ -2704,7 +2723,7 @@ findGeneratedColumns(GeneratedColumnsCache *cache,
 	 */
 	if (cache == NULL)
 	{
-		return false;
+		return NULL;
 	}
 
 	GeneratedColumnsCache *item = NULL;
@@ -2718,21 +2737,19 @@ findGeneratedColumns(GeneratedColumnsCache *cache,
 
 	if (item == NULL)
 	{
-		return false;
+		return NULL;
 	}
 
 	if (item->columns == NULL)
 	{
 		log_error("BUG: Table \"%s.%s\" is in the cache but columns are NULL",
 				  nspname, relname);
-		return false;
+		return NULL;
 	}
-
-	*columns = item->columns;
 
 	log_trace("Table \"%s.%s\" has generated columns", nspname, relname);
 
-	return true;
+	return item->columns;
 }
 
 
@@ -2741,7 +2758,7 @@ findGeneratedColumns(GeneratedColumnsCache *cache,
  *
  * Returns true if the column is generated, false otherwise.
  *
- * NOTE: There is no error condition, if the cache is NULL, it means that we
+ * NOTE: There is no error condition, if the columns is NULL, it means that we
  * don't have any generated columns in the catalog.
  */
 static bool
@@ -2860,18 +2877,18 @@ prepareGeneratedColumnsCache(StreamSpecs *specs)
 
 
 /*
- * removeGeneratedColumnsFromTransaction removes the generated columns from the
- * given transaction.
+ * markGeneratedColumnsFromTransaction marks the generated columns in the
+ * transaction.
  */
 static bool
-removeGeneratedColumnsFromTransaction(GeneratedColumnsCache *cache,
-									  LogicalTransaction *txn)
+markGeneratedColumnsFromTransaction(GeneratedColumnsCache *cache,
+									LogicalTransaction *txn)
 {
 	LogicalTransactionStatement *stmt = txn->first;
 
 	for (; stmt != NULL; stmt = stmt->next)
 	{
-		if (!removeGeneratedColumnsFromStatement(cache, stmt))
+		if (!markGeneratedColumnsFromStatement(cache, stmt))
 		{
 			return false;
 		}
@@ -2882,12 +2899,12 @@ removeGeneratedColumnsFromTransaction(GeneratedColumnsCache *cache,
 
 
 /*
- * removeGeneratedColumnsFromStatement removes the generated columns from the
+ * markGeneratedColumnsFromStatement marks the generated columns in the
  * given statement after looking up the cache.
  */
 static bool
-removeGeneratedColumnsFromStatement(GeneratedColumnsCache *cache,
-									LogicalTransactionStatement *stmt)
+markGeneratedColumnsFromStatement(GeneratedColumnsCache *cache,
+								  LogicalTransactionStatement *stmt)
 {
 	LogicalMessageTupleArray *columns = NULL;
 	const char *nspname = NULL;
@@ -2914,9 +2931,10 @@ removeGeneratedColumnsFromStatement(GeneratedColumnsCache *cache,
 		return true;
 	}
 
-	GeneratedColumnSet *generatedColumns = NULL;
+	GeneratedColumnSet *generatedColumns = lookupGeneratedColumnsForTable(cache, nspname,
+																		  relname);
 
-	if (!findGeneratedColumns(cache, nspname, relname, &generatedColumns))
+	if (generatedColumns == NULL)
 	{
 		/* no generated columns in this table */
 		return true;
@@ -2930,44 +2948,12 @@ removeGeneratedColumnsFromStatement(GeneratedColumnsCache *cache,
 		{
 			if (isGeneratedColumn(generatedColumns, tuple->columns[c]))
 			{
-				/* deallocate the column */
-				free(tuple->columns[c]);
-
-				/* remove the column from the tuple */
-				for (int j = c; j < tuple->cols - 1; j++)
+				for (int v = 0; v < tuple->values.count; v++)
 				{
-					tuple->columns[j] = tuple->columns[j + 1];
+					LogicalMessageValues *value = &(tuple->values.array[v]);
+
+					value->array[c].isGenerated = true;
 				}
-
-				/* number of colums have reduced now */
-				tuple->cols--;
-
-				/* remove the value from the tuple */
-				for (int r = 0; r < tuple->values.count; r++)
-				{
-					LogicalMessageValues *values = &(tuple->values.array[r]);
-
-					LogicalMessageValue *value = &(values->array[c]);
-
-					if ((value->oid == TEXTOID || value->oid == BYTEAOID) &&
-						!value->isNull)
-					{
-						free(value->val.str);
-					}
-
-					for (int v = c; v < values->cols - 1; v++)
-					{
-						values->array[v] = values->array[v + 1];
-					}
-
-					values->cols--;
-				}
-
-				/*
-				 * Since we move the next column to the current position, the
-				 * moved once can be generated too, so we need to recheck it.
-				 */
-				c--;
 			}
 		}
 	}

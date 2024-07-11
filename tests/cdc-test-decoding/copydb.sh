@@ -58,8 +58,7 @@ jq "${JQSCRIPT}" /usr/src/pgcopydb/${WALFILE} > ${expected}
 jq "${JQSCRIPT}" ${SHAREDIR}/${WALFILE} > ${result}
 
 # first command to provide debug information, second to stop when returns non-zero
-diff -I 'last_update' ${expected} ${result} || cat ${SHAREDIR}/${WALFILE}
-diff -I 'last_update' ${expected} ${result}
+diff -I 'last_update' ${expected} ${result} || (cat ${expected} && exit 1)
 
 # now prefetch the changes again, which should be a noop
 pgcopydb stream prefetch --resume --endpos "${lsn}" --notice
@@ -70,14 +69,13 @@ SQLFILENAME=`basename ${WALFILE} .json`.sql
 pgcopydb stream transform --debug ${SHAREDIR}/${WALFILE} /tmp/${SQLFILENAME}
 
 # we should get the same result as `pgcopydb stream prefetch`
-diff ${SHAREDIR}/${SQLFILE} /tmp/${SQLFILENAME}
+diff ${SHAREDIR}/${SQLFILE} /tmp/${SQLFILENAME} || (cat ${SHAREDIR}/${SQLFILENAME} && exit 1)
 
 # we should also get the same result as expected (discarding LSN numbers)
 # and also discarding ON UPDATE triggers for the timestamps (EXECUTE/last_update)
 DIFFOPTS='-I BEGIN -I COMMIT -I KEEPALIVE -I SWITCH -I ENDPOS -I EXECUTE'
 
-diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} ${SHAREDIR}/${SQLFILENAME} || cat ${SHAREDIR}/${SQLFILENAME}
-diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} ${SHAREDIR}/${SQLFILENAME}
+diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} ${SHAREDIR}/${SQLFILENAME} || (cat ${SHAREDIR}/${SQLFILENAME} && exit 1)
 # now allow for replaying/catching-up changes
 pgcopydb stream sentinel set apply
 
@@ -90,7 +88,7 @@ pgcopydb stream catchup --resume --endpos "${lsn}" -vv
 # test whether transform propertly sets xid for continued transactions.
 pgcopydb stream transform --debug /usr/src/pgcopydb/continued-txn.json /tmp/continued-txn.sql
 
-diff /usr/src/pgcopydb/continued-txn.sql /tmp/continued-txn.sql
+diff /usr/src/pgcopydb/continued-txn.sql /tmp/continued-txn.sql || (cat /tmp/continued-txn.sql && exit 1)
 
 # cleanup
 pgcopydb stream cleanup

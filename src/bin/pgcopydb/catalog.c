@@ -8221,7 +8221,8 @@ catalog_iter_s_table_generated_columns_init(SourceTableIterator *iter)
 
 	if (db == NULL)
 	{
-		log_error("BUG: Failed to initialize s_table iterator: db is NULL");
+		log_error(
+			"BUG: Failed to initialize catalog_iter_s_table_generated_columns_init iterator: db is NULL");
 		return false;
 	}
 
@@ -8239,6 +8240,15 @@ catalog_iter_s_table_generated_columns_init(SourceTableIterator *iter)
 		"         exclude_data, part_key, "
 		"         (select count(1) from s_table_part p where p.oid = t.oid) "
 		"    from s_table t join s_attr a "
+
+		/*
+		 * Currently, we handle only:
+		 * - Generated columns with is_generated = 'ALWAYS' for INSERT and UPDATE
+		 * - IDENTITY columns for INSERT using "overriding system value"
+		 *
+		 * TODO: Add support for IDENTITY columns in UPDATE.
+		 * https://github.com/dimitri/pgcopydb/issues/844
+		 */
 		"       on (a.oid = t.oid and a.attisgenerated = 1) "
 		"       left join s_table_size ts on ts.oid = t.oid "
 		"group by t.oid "
