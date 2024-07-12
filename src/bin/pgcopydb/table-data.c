@@ -845,7 +845,6 @@ typedef struct CopyProgressContext
 	CopyDataSpec *specs;
 	CopyTableDataSpec *tableSpecs;
 	uint64_t bytesTransmitted;
-	uint64_t bytesTransmittedBeforeSavingProgress; /* the bytes transmitted before saving the progress to DB */
 	instr_time lastSavingTimeMs; /* the last saving time of the progress to the DB */
 } CopyProgressContext;
 
@@ -860,7 +859,6 @@ on_copy_progress_hook(int bytesTransmitted, void *context)
 	CopyDataSpec *specs = ctx->specs;
 	CopyTableDataSpec *tableSpecs = ctx->tableSpecs;
 
-	ctx->bytesTransmittedBeforeSavingProgress += bytesTransmitted;
 	ctx->bytesTransmitted += bytesTransmitted;
 	tableSpecs->summary.bytesTransmitted += bytesTransmitted;
 
@@ -878,7 +876,7 @@ on_copy_progress_hook(int bytesTransmitted, void *context)
 	}
 
 	if (!copydb_save_copy_progress(specs, 0,
-								   ctx->bytesTransmittedBeforeSavingProgress,
+								   ctx->bytesTransmitted,
 								   ctx->lastSavingTimeMs))
 	{
 		/* errors have already been logged */
@@ -886,7 +884,7 @@ on_copy_progress_hook(int bytesTransmitted, void *context)
 	}
 
 	INSTR_TIME_SET_CURRENT(ctx->lastSavingTimeMs);
-	ctx->bytesTransmittedBeforeSavingProgress = 0;
+	ctx->bytesTransmitted = 0;
 	return true;
 }
 
@@ -1004,7 +1002,6 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 			.specs = specs,
 			.tableSpecs = tableSpecs,
 			.bytesTransmitted = 0,
-			.bytesTransmittedBeforeSavingProgress = 0,
 			.lastSavingTimeMs = 0
 		};
 		INSTR_TIME_SET_CURRENT(context.lastSavingTimeMs);
@@ -1020,7 +1017,7 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 		}
 
 		if (!copydb_save_copy_progress(specs, 1,
-									   context.bytesTransmittedBeforeSavingProgress,
+									   context.bytesTransmitted,
 									   context.lastSavingTimeMs))
 		{
 			/* errors have already been logged */
