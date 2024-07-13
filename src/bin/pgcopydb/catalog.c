@@ -6735,13 +6735,19 @@ catalog_iter_s_ext_extconfig_init(SourceExtConfigIterator *iter)
 		return false;
 	}
 
+	/*
+	 * Query extension config table based on the order at which it is
+	 * inserted using sqlite's inbuilt "rowid". The insertion order ensures
+	 * that the config tables are inserted according to it's foreign key
+	 * dependency.
+	 */
 	char *sql =
-		"  select count(*) over(order by reloid) as num,  "
+		"  select count(*) over(order by rowid) as num,  "
 		"         count(*) over() as count, "
 		"         oid, reloid, nspname, relname, condition, relkind "
 		"    from s_extension_config "
 		"   where extoid = $1 "
-		"order by reloid";
+		"order by rowid";
 
 	SQLiteQuery *query = &(iter->query);
 
