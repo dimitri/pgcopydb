@@ -4264,6 +4264,7 @@ getExtensionList(void *ctx, PGresult *result)
 			if (context->catalog != NULL && context->catalog->db != NULL)
 			{
 				config->extoid = extension->oid;
+				config->index = confIndex;
 
 				if (!catalog_add_s_extension_config(context->catalog, config))
 				{

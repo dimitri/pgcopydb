@@ -56,6 +56,7 @@ typedef struct SourceExtensionConfig
 {
 	uint32_t extoid;               /* extension's oid */
 	uint32_t reloid;               /* pg_class.oid */
+	uint32_t index;                /* extension config index */
 	char nspname[PG_NAMEDATALEN];
 	char relname[PG_NAMEDATALEN];
 	char *condition;            /* strdup from PQresult: malloc'ed area */

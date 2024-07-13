@@ -223,6 +223,7 @@ static char *filterDBcreateDDLs[] = {
 	"create table s_extension_config("
 	"  extoid integer references s_extension(oid), "
 	"  reloid integer, nspname text, relname text, condition text, "
+	"  \"index\" integer, "
 	"  relkind integer "
 	")",
 
@@ -6447,8 +6448,8 @@ catalog_add_s_extension_config(DatabaseCatalog *catalog,
 
 	char *sql =
 		"insert into s_extension_config"
-		"  (extoid, reloid, nspname, relname, condition, relkind) "
-		"values($1, $2, $3, $4, $5, $6)";
+		"  (extoid, reloid, nspname, relname, condition, \"index\", relkind) "
+		"values($1, $2, $3, $4, $5, $6, $7)";
 
 	SQLiteQuery query = { 0 };
 
@@ -6465,6 +6466,7 @@ catalog_add_s_extension_config(DatabaseCatalog *catalog,
 		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, config->nspname },
 		{ BIND_PARAMETER_TYPE_TEXT, "relname", 0, config->relname },
 		{ BIND_PARAMETER_TYPE_TEXT, "condition", 0, config->condition },
+		{ BIND_PARAMETER_TYPE_INT64, "relkind", (int) config->index, NULL },
 		{ BIND_PARAMETER_TYPE_INT, "relkind", (int) config->relkind, NULL }
 	};
 
@@ -6736,12 +6738,12 @@ catalog_iter_s_ext_extconfig_init(SourceExtConfigIterator *iter)
 	}
 
 	char *sql =
-		"  select count(*) over(order by reloid) as num,  "
+		"  select count(*) over(order by \"index\") as num,  "
 		"         count(*) over() as count, "
-		"         oid, reloid, nspname, relname, condition, relkind "
+		"         oid, reloid, nspname, relname, condition, \"index\", relkind "
 		"    from s_extension_config "
 		"   where extoid = $1 "
-		"order by reloid";
+		"order by \"index\"";
 
 	SQLiteQuery *query = &(iter->query);
 
@@ -6873,7 +6875,8 @@ catalog_s_ext_extconfig_fetch(SQLiteQuery *query)
 				bytes);
 	}
 
-	conf->relkind = sqlite3_column_int(query->ppStmt, 7);
+	conf->index = sqlite3_column_int64(query->ppStmt, 7);
+	conf->relkind = sqlite3_column_int(query->ppStmt, 8);
 
 	return true;
 }
