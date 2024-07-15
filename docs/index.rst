@@ -26,8 +26,8 @@ The idea would be to run ``pg_dump -jN | pg_restore -jN`` between two
 running Postgres servers. To make a copy of a database to another server as
 quickly as possible, one would like to use the parallel options of
 ``pg_dump`` and still be able to stream the data to as many ``pg_restore``
-jobs. Unfortunately, that approach can't be implemented by using pg_dump and
-pg_restore directly, see :ref:`bypass_intermediate_files`.
+jobs. Unfortunately, this approach cannot be implemented by using ``pg_dump`` and
+``pg_restore`` directly, see :ref:`bypass_intermediate_files`.
 
 When using ``pgcopydb`` it is possible to achieve both concurrency and
 streaming with this simple command line::
@@ -38,39 +38,39 @@ streaming with this simple command line::
   $ pgcopydb clone --table-jobs 4 --index-jobs 4
 
 See the manual page for :ref:`pgcopydb_clone` for detailed information about
-how the command is implemented, and many other supported options.
+how the command is implemented along with many other supported options.
 
 Main pgcopydb features
 ----------------------
 
 Bypass intermediate files
-    When using ``pg_dump`` and ``pg_restore`` with the ``-jobs`` option the
+    When using ``pg_dump`` and ``pg_restore`` with the ``-jobs`` option, the
     table data is first copied to files on-disk before being read again and
-    sent to the target server. pgcopydb avoids that steps and instead
+    sent to the target server. pgcopydb avoids those steps and instead
     streams the COPY buffers from the source to the target with zero
     processing.
 
 Use COPY FREEZE
-    Postgres has an optimisation that reduces post-migration vacuum work by
-    marking the imported rows frozen during the import already, that's the
+    Postgres has an optimization which reduces post-migration vacuum work by
+    marking the imported rows as frozen already during the import, that's the
     FREEZE option to the VACUUM command. pgcopydb uses that option, unless
     when using same-table concurrency.
 
 Create Index Concurrency
-    When creating an index on a table Postgres has to implement a full
+    When creating an index on a table, Postgres has to implement a full
     sequential scan to read all the rows. Implemented in Postgres 8.3 is the
-    `synchronize_seqscans`__ optimisation where a single such on-disk read
+    `synchronize_seqscans`__ optimization where a single such on-disk read
     is able to feed several SQL commands running concurrently in different
     client sessions.
 
-    pgcopydb takes benefit of that by running many CREATE INDEX commands on
+    pgcopydb takes benefit of this feature by running many CREATE INDEX commands on
     the same table at the same time. This number is limited by the
     ``--index-jobs`` option.
 
     __ https://www.postgresql.org/docs/current/runtime-config-compatible.html#GUC-SYNCHRONIZE-SEQSCANS
 
 Same Table Concurrency
-    When migrating very large table it might be beneficial to *partition*
+    When migrating a very large table, it might be beneficial to *partition*
     the table and run several COPY commands, distributing the source data
     using a non-overlapping WHERE clause. pgcopydb implements that approach
     with the ``split-table-larger-than`` option.
@@ -81,7 +81,7 @@ Change Data Capture
     size of the data to migrate.
 
     Sometimes the migration context needs to reduce that downtime window.
-    For these advanced and complex cases pgcopydb embeds a full replication
+    For these advanced and complex cases, pgcopydb embeds a full replication
     solution using the Postgres Logical Decoding low-level APIs, available
     since Postgres 9.4.
 

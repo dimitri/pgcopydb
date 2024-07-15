@@ -9,8 +9,8 @@ The idea would be to run ``pg_dump -jN | pg_restore -jN`` between two
 running Postgres servers. To make a copy of a database to another server as
 quickly as possible, one would like to use the parallel options of
 ``pg_dump`` and still be able to stream the data to as many ``pg_restore``
-jobs. Unfortunately, that approach can't be implemented by using pg_dump and
-pg_restore directly, see :ref:`bypass_intermediate_files`.
+jobs. Unfortunately, this approach cannot be implemented by using ``pg_dump`` and
+``pg_restore`` directly, see :ref:`bypass_intermediate_files`.
 
 When using ``pgcopydb`` it is possible to achieve both concurrency and
 streaming with this simple command line::
@@ -21,13 +21,13 @@ streaming with this simple command line::
   $ pgcopydb clone --table-jobs 4 --index-jobs 4
 
 See the manual page for :ref:`pgcopydb_clone` for detailed information about
-how the command is implemented, and many other supported options.
+how the command is implemented along with many other supported options.
 
 Feature Matrix
 --------------
 
-Here is a comparison of the features available when using pg_dump and
-pg_restore directly, and when using pgcopydb to handle the database copying.
+Here is a comparison of the features available when using ``pg_dump`` and
+``pg_restore`` directly versus when using ``pgcopydb`` to handle the database copying:
 
 ==============================   ========  =====================
 Feature                          pgcopydb   pg_dump ; pg_restore
@@ -49,30 +49,30 @@ Tablespaces                       ✗         ✗ (needs pg_dumpall)
 Follow changes                    ✓         ✗
 ==============================   ========  =====================
 
-See documentation about pgcopydb :ref:`config` for its *Advanced filtering*
+Refer to the documentation about :ref:`config` for its *Advanced filtering*
 capabilities.
 
 pgcopydb uses pg_dump and pg_restore
 ------------------------------------
 
-The implementation of pgcopydb actually calls into the pg_dump and
-pg_restore binaries to handle a large part of the work, such as the pre-data
-and post-data sections. See `pg_dump docs`__ for more information about the
+The implementation of ``pgcopydb`` actually calls into the ``pg_dump`` and
+``pg_restore`` binaries to handle a large part of the work, such as the pre-data
+and post-data sections. Refer to `pg_dump docs`__ for more information about the
 three sections supported.
 
 __ https://www.postgresql.org/docs/current/app-pgdump.html
 
-After using pg_dump to obtain the pre-data and the post-data parts, then
-pgcopydb restore the pre-data parts to the target Postgres instance using
-pg_restore.
+After using ``pg_dump`` to obtain the pre-data and the post-data parts, then
+``pgcopydb`` restores the pre-data parts to the target Postgres instance using
+``pg_restore``.
 
-Then pgcopydb uses SQL commands and the `COPY streaming protocol`__ to
+``pgcopydb`` then uses SQL commands and the `COPY streaming protocol`__ to
 migrate the table contents, the large objects data, and to VACUUM ANALYZE
-tables as soon as the data is available on the target instance.
+tables as soon as the data becomes available on the target instance.
 
 __ https://www.postgresql.org/docs/current/sql-copy.html
 
-Then pgcopydb uses SQL commands to build the indexes on the target Postgres
+Then ``pgcopydb`` uses SQL commands to build the indexes on the target Postgres
 instance, as detailed in the design doc :ref:`index_concurrency`. This
 allows to include *constraint indexes* such as Primary Keys in the list of
 indexes built at the same time.

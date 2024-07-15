@@ -51,8 +51,8 @@ The process tree then looks like the following::
      - pgcopydb stream transform
      - pgcopydb stream catchup
 
-We see that when using ``pgcopydb clone --follow --table-jobs 4 --index-jobs
-4 --large-objects-jobs 4`` then pgcopydb creates 27 sub-processes.
+Observe that when using ``pgcopydb clone --follow --table-jobs 4 --index-jobs
+4 --large-objects-jobs 4``, pgcopydb creates 27 sub-processes.
 
 The 27 total is counted from:
 
@@ -67,14 +67,14 @@ The 27 total is counted from:
 
    that's 1 + 1 + 1 + 1 = 4
 
- - that's 23 + 4 = 27 total
+ - At the end, it is 23 + 4 = 27 total
 
 Here is a description of the process tree:
 
  * When starting with the TABLE DATA copying step, then pgcopydb creates as
    many sub-processes as specified by the ``--table-jobs`` command line
    option (or the environment variable ``PGCOPYDB_TABLE_JOBS``), and an
-   extra process is created to send the table to the queue and handle
+   extra process is created to send the table to the queue and to handle
    TRUNCATE commands for COPY-partitioned tables.
 
  * A single sub-process is created by pgcopydb to copy the Postgres Large
@@ -90,7 +90,7 @@ Here is a description of the process tree:
    It is possible with Postgres to create several indexes for the same table
    in parallel, for that, the client just needs to open a separate database
    connection for each index and run each CREATE INDEX command in its own
-   connection, at the same time. In pgcopydb this is implemented by running
+   connection, at the same time. In pgcopydb, this is implemented by running
    one sub-process per index to create.
 
    The ``--index-jobs`` option is global for the whole operation, so that
@@ -98,7 +98,7 @@ Here is a description of the process tree:
    Postgres instance. Usually, a given CREATE INDEX command uses 100% of a
    single core.
 
- * To drive the VACUUM ANALYZE workload on the target database pgcopydb
+ * To drive the VACUUM ANALYZE workload on the target database, pgcopydb
    creates as many sub-processes as specified by the ``--table-jobs``
    command line option.
 
@@ -109,7 +109,7 @@ Here is a description of the process tree:
    created to handle the three Change Data Capture processes.
 
     - One process implements :ref:`pgcopydb_stream_receive` to fetch changes
-      in the JSON format and pre-fetch them in JSON files.
+      in the JSON format and to pre-fetch them in JSON files.
 
     - As soon as JSON file is completed, the pgcopydb stream transform
       worker transforms the JSON file into SQL, as if by calling the command
@@ -148,7 +148,7 @@ particular unique constraints and primary keys.
 
 Those indexes are exported using the ``ALTER TABLE`` command directly. This is
 fine because the command creates both the constraint and the underlying
-index, so the schema in the end is found as expected.
+index, so the schema in the end is constructed as expected.
 
 That said, those ``ALTER TABLE ... ADD CONSTRAINT`` commands require a level
 of locking that prevents any concurrency. As we can read on the `docs for
@@ -167,7 +167,7 @@ __ https://www.postgresql.org/docs/current/sql-altertable.html
 The trick is then to first issue a ``CREATE UNIQUE INDEX`` statement and when
 the index has been built then issue a second command in the form of ``ALTER
 TABLE ... ADD CONSTRAINT ... PRIMARY KEY USING INDEX ...``, as in the
-following example taken from the logs of actually running ``pgcopydb``::
+following example which is taken from the logs of an actual ``pgcopydb`` run::
 
   21:52:06 68898 INFO  COPY "demo"."tracking";
   21:52:06 68899 INFO  COPY "demo"."client";
@@ -190,15 +190,15 @@ __ https://github.com/dimitri/pgloader
 Same-table Concurrency
 ----------------------
 
-In some database schema design, it happens that most of the database size
-on-disk is to be found in a single giant table, or a short list of giant
+For some databases, it just so happens that most of the database size
+on-disk is contained within a single giant table, or within a short list of giant
 tables. When this happens, the concurrency model that is implemented with
 ``--table-jobs`` still allocates a single process to COPY all the data from
 the source table.
 
 Same-table concurrency allows pgcopydb to use more than one process at the
 same time to process a single source table. The data is then logically
-partitionned (on the fly) and split between processes:
+partitioned (on the fly) and split between processes:
 
   - To fetch the data from the source database, the COPY processes then use
     SELECT queries like in the following example:
@@ -262,11 +262,11 @@ When same-table concurrency happens for a source table, some operations are
 not implemented as they would have been without same-table concurrency.
 Specifically:
 
-  - TRUNCATE and COPY FREEZE Postgres optimisation
+  - TRUNCATE and COPY FREEZE Postgres optimization
 
     When using a single COPY process, it's then possible to TRUNCATE the
     target table in the same transaction as the COPY command, as in the
-    following syntethic example:
+    following synthetic example:
 
     ::
 
@@ -275,7 +275,7 @@ Specifically:
        COPY table FROM stdin WITH (FREEZE);
        COMMIT
 
-    This technique allows Postgres to implement several optimisations, doing
+    This technique allows Postgres to implement several optimizations, doing
     work during the COPY that would otherwise need to happen later when
     executing the first queries on the table.
 
@@ -289,7 +289,7 @@ Specifically:
     Even when same-table COPY concurrency is enabled, creating the indexes
     on the target system only happens after the whole data set has been
     copied over. This means that only when the last process is done with
-    the COPYing then this process will take care of the indexes and the
+    the COPYing, then this process will take care of the indexes and the
     *vacuum analyze* operation.
 
 Same-table COPY concurrency performance limitations
@@ -307,7 +307,7 @@ to use this feature:
 
   - Disks IOPS
 
-    The second most command performance bottleneck relevant to database
+    The second most common performance bottleneck relevant to database
     migrations is disks IOPS and, in the Cloud, burst capacity. When the
     disk bandwidth is used in full, then same-table concurrency will provide
     no performance benefits.

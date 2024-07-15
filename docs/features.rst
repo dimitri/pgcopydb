@@ -1,10 +1,9 @@
 Features Highlights
 ===================
 
-The reason why ``pgcopydb`` has been developed is mostly to allow two
-aspects that are not possible to achieve directly with ``pg_dump`` and
-``pg_restore``, and that requires just enough fiddling around that not many
-scripts have been made available to automate around.
+``pgcopydb`` project was started to allow certain improvements and considerations
+which were otherwise not possible to achieve directly with ``pg_dump`` and
+``pg_restore`` commands. Below are the details of what ``pgcopydb`` can achieve.
 
 .. _bypass_intermediate_files:
 
@@ -12,7 +11,7 @@ Bypass intermediate files for the TABLE DATA
 --------------------------------------------
 
 First aspect is that for ``pg_dump`` and ``pg_restore`` to implement
-concurrency they need to write to an intermediate file first.
+concurrency, they need to write to an intermediate file first.
 
 The `docs for pg_dump`__ say the following about the ``--jobs`` parameter:
 
@@ -40,9 +39,9 @@ bypass intermediate files (and directories) altogether, at least as far as
 the actual TABLE DATA set is concerned.
 
 The trick to achieve that is that ``pgcopydb`` must be able to connect to the
-source database during the whole operation, when ``pg_restore`` may be used
+source database during the whole operation, whereas ``pg_restore`` may be used
 from an export on-disk, without having to still be able to connect to the
-source database. In the context of ``pgcopydb`` requiring access to the source
+source database. In the context of ``pgcopydb``, requiring access to the source
 database is fine. In the context of ``pg_restore``, it would not be
 acceptable.
 
@@ -50,7 +49,7 @@ Large-Objects Support
 ---------------------
 
 The `Postgres Large-Objects`__ API is nobody's favorite, though the
-trade-offs implemented there are found very useful by many application
+trade-offs implemented in that API are found to be very useful by many application
 developers. In the context dump and restore, Postgres separates the large
 objects metadata from the large object contents.
 
@@ -61,7 +60,7 @@ considered to be part of the pre-data section of a Postgres dump.
 
 This means that pgcopydb relies on ``pg_dump`` to import the large object
 metadata from the source to the target Postgres server, but then implements
-its own code to migrate the large objects contents, using several worker
+its own logic to migrate the large objects contents, using several worker
 processes depending on the setting of the command-line option
 ``--large-objects-jobs``.
 
@@ -70,7 +69,7 @@ Concurrency
 
 A major feature of pgcopydb is how concurrency is implemented, including
 options to obtain same-table COPY concurrency. See the
-:ref:`pgcopydb_concurrency` chapter of the documentation for more about it.
+:ref:`pgcopydb_concurrency` chapter of the documentation for more information.
 
 Change Data Capture
 -------------------
@@ -81,8 +80,8 @@ be compatible with old versions of Postgres, starting with version 9.4.
 
 __ https://www.postgresql.org/docs/current/logicaldecoding.html
 
-Always first do a test migration without the ``--follow`` option to have an
-idea of the downtime window needed in your very own case. This will inform
+Always do a test migration first without the ``--follow`` option to have an
+idea of the downtime window needed for your very own case. This will inform
 your decision about using the Change Data Capture mode, which makes a
 migration a lot more complex to drive to success.
 
@@ -94,15 +93,15 @@ changes from the source Postgres instance concurrently to the initial COPY
 of the data. Three worker processes are created to handle the logical
 decoding client:
 
-  - The streaming process fetches data from the Postgres replication slot
+  - The **streaming** process fetches data from the Postgres replication slot
     using the Postgres replication protocol.
 
-  - The transform process transforms the data fetched from a intermediate
+  - The **transform** process transforms the data fetched from an intermediate
     JSON format into a derivative of the SQL language. In *prefetch mode*
-    this is implemented as a batch operation, in *replay mode* this is done
+    this is implemented as a batch operation; in *replay mode* this is done
     in a streaming fashion, one line at a time, reading from a unix pipe.
 
-  - The apply process then applies the SQL script to the target Postgres
+  - The **apply** process then applies the SQL script to the target Postgres
     database system and uses Postgres APIs for `Replication Progress
     Tracking`__.
 
@@ -141,8 +140,8 @@ named `test_decoding`__. Another commonly used output plugin is named
 __ https://www.postgresql.org/docs/16/test-decoding.html
 __ https://github.com/eulerto/wal2json
 
-pgcopydb is compatible with both ``test_decoding`` and also ``wal2json`` and
-as a user it's possible to choose an output plugin with the ``--plugin``
+pgcopydb is compatible with both ``test_decoding`` and ``wal2json`` plugins. 
+As a user it's possible to choose an output plugin with the ``--plugin``
 command-line option.
 
 The output plugin compatibility means that pgcopydb has to implement code to
@@ -154,8 +153,8 @@ the changes and the output plugin message, as-is.
 __ https://jsonlines.org
 
 This JSON Lines format is transformed into SQL scripts. At first, pgcopydb
-would just use SQL for the intermediate format, but then as an optimisation
-support for `prepared statements`__ was added. This means that our SQL
+would just use SQL for the intermediate format, but then support for 
+`prepared statements`__ was added  as an optimization. This means that our SQL
 script uses commands such as the following examples::
 
   PREPARE d33a643f AS INSERT INTO public.rental ("rental_id", "rental_date", "inventory_id", "customer_id", "return_date", "staff_id", "last_update") overriding system value VALUES ($1, $2, $3, $4, $5, $6, $7), ($8, $9, $10, $11, $12, $13, $14);
@@ -206,8 +205,8 @@ using the recommended ``--dir`` option.
     also some metadata about the pgcopydb context, consistency, and
     progress.
 
-  - The **filters** catalog is only used with the ``--filters`` option is
-    used, and it registers metadata about the objects in the source database
+  - The **filters** catalog is only used when the ``--filters`` option is
+    provided, and it registers metadata about the objects in the source database
     that are going to be skipped.
 
     This is necessary because the filtering is implemented using the

@@ -21,7 +21,7 @@ RPM packages
 The Postgres community repository for RPM packages is `yum.postgresql.org`__
 and includes binary packages for pgcopydb. The way packages are built for
 RPM based systems means that the user needs to choose which version of
-Postgres pgcopydb was built with. In practice this doesn't have much
+Postgres pgcopydb was built with. In practice, this doesn't have much
 importance, because ``libpq`` is meant to be compatible with many different
 Postgres server versions.
 
@@ -78,9 +78,9 @@ debian package when using a debian environment.
 
 __ https://github.com/dimitri/pgcopydb/blob/main/Dockerfile
 
-In particular the following build dependencies are required to build
+In particular, the following build dependencies are required to build
 pgcopydb. The list is long, because pgcopydb requires a lot of the same
-things as Postgres itself:
+packages as Postgres itself:
 
 ::
    
@@ -107,7 +107,8 @@ things as Postgres itself:
 
 
 Then the build process is pretty simple, in its simplest form you can just
-use ``make clean install``, if you want to be more fancy consider also::
+use ``make clean install``.
+If you want to be more fancy, you can also consider::
 
   $ make -s clean
   $ make -s -j12 install

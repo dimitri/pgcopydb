@@ -9,10 +9,10 @@ worker processes to implement parallelism.
 
 Even when using multiple worker processes, it is important that pgcopydb
 operations are consistent. It is essential to guarantee that the same source
-schema and data set is used by every single worker process throughout the
+schema and data set are used by every single worker process throughout the
 operations.
 
-Consistency with multiple Postgres sessions is achieved thanks to Postgres
+Consistency with multiple Postgres sessions is achieved thanks to Postgres'
 ability to export and import snapshots. As per Postgres docs about `Snapshot
 Synchronization Functions`__:
 
@@ -137,8 +137,8 @@ interrupted.
 Bypassing consistency issues
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-When using the ``--resume --not-consistent`` options then there is no
-restriction around snapsht re-use when trying to resume interrupted
+When the ``--resume --not-consistent`` options are used, then there is no
+restrictions around snapshot re-use when trying to resume interrupted
 operations.
 
 Consistent copy of the data
@@ -146,7 +146,7 @@ Consistent copy of the data
 
 When using ``pgcopydb clone --resume`` the snapshot used in the previous
 attempts is going to be re-used. For Postgres to be able to import that
-snapshot again, the transaction that exported the snapshot must be still
+snapshot again, the transaction that exported the snapshot must still be
 running on the source database system.
 
 Single pgcopydb command
@@ -181,7 +181,7 @@ operations consistently requires the following situation:
      
   2. The logical replication on the client side is not concerned with the
      snapshot operations, that's done server-side when creating the
-     replication slot; from there on all the client has to do is consume
+     replication slot; from there on, all the client has to do is consume
      from the replication slot.
 
      
