@@ -107,6 +107,7 @@ copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions)
 
 	/* make sure that we have our own process local connection */
 	TransactionSnapshot snapshot = { 0 };
+	
 	if (!copydb_copy_snapshot(copySpecs, &snapshot))
 	{
 		/* errors have already been logged */
@@ -421,10 +422,11 @@ copydb_prepare_extensions_restore(CopyDataSpec *copySpecs)
 	bool timescaledb = false;
 	Catalogs *catalogs = &(copySpecs->catalogs);
 	DatabaseCatalog *filtersDB = &(catalogs->filter);
-	timescaledb=catalog_iter_s_extension_checker(filtersDB);
+	catalog_iter_s_extension_timescaledb_checker(filtersDB, &timescaledb);
 
 	if (timescaledb)
 	{
+		log_debug("Timescaledb extension is present");
 		if (!timescaledb_pre_restore(copySpecs))
 		{
 			/* errors have already been logged */
@@ -448,10 +450,11 @@ copydb_finalize_extensions_restore(CopyDataSpec *copySpecs)
 	bool timescaledb = false;
 	Catalogs *catalogs = &(copySpecs->catalogs);
 	DatabaseCatalog *filtersDB = &(catalogs->filter);
-	timescaledb=catalog_iter_s_extension_checker(filtersDB);
+	catalog_iter_s_extension_timescaledb_checker(filtersDB, &timescaledb);
 
 	if (timescaledb)
 	{
+		log_debug("Timescaledb extension is present");
 		if (!timescaledb_post_restore(copySpecs))
 		{
 			/* errors have already been logged */

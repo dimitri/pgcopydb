@@ -586,8 +586,6 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 		return false;
 	}
 
-
-
 	return true;
 }
 
