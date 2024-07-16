@@ -19,12 +19,8 @@ services:
   test:
     build: .
     environment:
-      POSTGRES_SOURCE: postgres://postgres:h4ckm3@source/postgres
-      POSTGRES_TARGET: postgres://postgres:h4ckm3@target/postgres
-      PGCOPYDB_SOURCE_PGURI_SU: postgres://postgres:h4ckm3@source/tsdb
-      PGCOPYDB_TARGET_PGURI_SU: postgres://postgres:h4ckm3@target/tsdb
-      PGCOPYDB_SOURCE_PGURI: postgres://tsdb:own3d@source/tsdb
-      PGCOPYDB_TARGET_PGURI: postgres://tsdb:own3d@target/tsdb
+      PGCOPYDB_SOURCE_PGURI: postgres://postgres:h4ckm3@source/postgres
+      PGCOPYDB_TARGET_PGURI: postgres://postgres:h4ckm3@target/postgres
       PGCOPYDB_TABLE_JOBS: 4
       PGCOPYDB_INDEX_JOBS: 2
     depends_on:
