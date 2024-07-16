@@ -28,6 +28,22 @@ typedef struct SplitTableLargerThan
 } SplitTableLargerThan;
 
 
+typedef struct SentinelOptions
+{
+	/* pgcopydb stream sentinel get --flush-lsn */
+	bool startpos;
+	bool endpos;
+	bool apply;
+	bool writeLSN;
+	bool transformLSN;
+	bool flushLSN;
+	bool replayLSN;
+
+	/* pgcopydb stream sentinel set endpos --current */
+	bool currentLSN;
+} SentinelOptions;
+
+
 typedef struct CopyDBOptions
 {
 	char dir[MAXPGPATH];
@@ -69,9 +85,12 @@ typedef struct CopyDBOptions
 
 	bool follow;
 	bool createSlot;
-	bool currentpos;
+
+	/* pgcopydb stream sentinel get --flush-lsn and friends */
+	SentinelOptions sentinelOptions;
+
+	/* pgcopydb stream receive|transform|apply --endpos %X%X */
 	uint64_t endpos;
-	uint64_t startpos;
 
 	char filterFileName[MAXPGPATH];
 	char requirementsFileName[MAXPGPATH];

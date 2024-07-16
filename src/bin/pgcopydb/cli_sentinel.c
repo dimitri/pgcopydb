@@ -35,9 +35,7 @@ CommandLine sentinel_setup_command =
 	make_command(
 		"setup",
 		"Setup the sentinel table",
-		"",
-		"  --startpos    Start replaying changes when reaching this LSN\n"
-		"  --endpos      Stop replaying changes when reaching this LSN\n",
+		"<start lsn> <end lsn>", "",
 		cli_sentinel_getopts,
 		cli_sentinel_setup);
 
@@ -45,9 +43,14 @@ CommandLine sentinel_get_command =
 	make_command(
 		"get",
 		"Get the sentinel table values",
-		" --source ... ",
-		"  --source      Postgres URI to the source database\n"
-		"  --json        Format the output using JSON\n",
+		"",
+		"  --json           Format the output using JSON\n"
+		"  --startpos       Get only the startpos value\n"
+		"  --endpos         Get only the endpos value\n"
+		"  --apply          Get only the apply value\n"
+		"  --write-lsn      Get only the write LSN value\n"
+		"  --flush-lsn      Get only the flush LSN value\n"
+		"  --replay-lsn     Get only the replay LSN value\n",
 		cli_sentinel_getopts,
 		cli_sentinel_get);
 
@@ -55,8 +58,7 @@ CommandLine sentinel_set_startpos_command =
 	make_command(
 		"startpos",
 		"Set the sentinel start position LSN",
-		" --source ... <start LSN>",
-		"  --source      Postgres URI to the source database\n",
+		"<start lsn>", "",
 		cli_sentinel_getopts,
 		cli_sentinel_set_startpos);
 
@@ -64,7 +66,7 @@ CommandLine sentinel_set_endpos_command =
 	make_command(
 		"endpos",
 		"Set the sentinel end position LSN",
-		" --source ... <end LSN>",
+		"[ --source ... ] [ <end lsn> | --current ]",
 		"  --source      Postgres URI to the source database\n"
 		"  --current     Use pg_current_wal_flush_lsn() as the endpos\n",
 		cli_sentinel_getopts,
@@ -72,19 +74,13 @@ CommandLine sentinel_set_endpos_command =
 
 CommandLine sentinel_set_apply_command =
 	make_command(
-		"apply",
-		"Set the sentinel apply mode",
-		"",
-		"  --source      Postgres URI to the source database\n",
+		"apply", "Set the sentinel apply mode", "", "",
 		cli_sentinel_getopts,
 		cli_sentinel_set_apply);
 
 CommandLine sentinel_set_prefetch_command =
 	make_command(
-		"prefetch",
-		"Set the sentinel prefetch mode",
-		"",
-		"  --source      Postgres URI to the source database\n",
+		"prefetch", "Set the sentinel prefetch mode", "", "",
 		cli_sentinel_getopts,
 		cli_sentinel_set_prefetch);
 
@@ -127,8 +123,12 @@ cli_sentinel_getopts(int argc, char **argv)
 	static struct option long_options[] = {
 		{ "source", required_argument, NULL, 'S' },
 		{ "dir", required_argument, NULL, 'D' },
-		{ "endpos", required_argument, NULL, 'E' },
-		{ "startpos", required_argument, NULL, 's' },
+		{ "startpos", no_argument, NULL, 's' },
+		{ "endpos", no_argument, NULL, 'e' },
+		{ "apply", no_argument, NULL, 'a' },
+		{ "write-lsn", no_argument, NULL, 'w' },
+		{ "flush-lsn", no_argument, NULL, 'f' },
+		{ "replay-lsn", no_argument, NULL, 'r' },
 		{ "current", no_argument, NULL, 'C' },
 		{ "json", no_argument, NULL, 'J' },
 		{ "version", no_argument, NULL, 'V' },
@@ -150,7 +150,9 @@ cli_sentinel_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:D:E:s:CJVvdzqh",
+	int sentinelOptionsCount = 0;
+
+	while ((c = getopt_long(argc, argv, "S:D:esawtfrCJVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -175,36 +177,57 @@ cli_sentinel_getopts(int argc, char **argv)
 				break;
 			}
 
-			case 'E':
+			case 's':
 			{
-				if (!parseLSN(optarg, &(options.endpos)))
-				{
-					log_fatal("Failed to parse endpos LSN: \"%s\"", optarg);
-					exit(EXIT_CODE_BAD_ARGS);
-				}
-
-				log_trace("--endpos %X/%X",
-						  (uint32_t) (options.endpos >> 32),
-						  (uint32_t) options.endpos);
+				++sentinelOptionsCount;
+				options.sentinelOptions.startpos = true;
+				log_trace("--startpos");
 				break;
 			}
 
-			case 's':
+			case 'e':
 			{
-				if (!parseLSN(optarg, &(options.startpos)))
-				{
-					log_fatal("Failed to parse endpos LSN: \"%s\"", optarg);
-					exit(EXIT_CODE_BAD_ARGS);
-				}
+				++sentinelOptionsCount;
+				options.sentinelOptions.endpos = true;
+				log_trace("--endpos");
+				break;
+			}
 
-				log_trace("--startpos %X/%X",
-						  LSN_FORMAT_ARGS(options.startpos));
+			case 'a':
+			{
+				++sentinelOptionsCount;
+				options.sentinelOptions.apply = true;
+				log_trace("--apply");
+				break;
+			}
+
+			case 'w':
+			{
+				++sentinelOptionsCount;
+				options.sentinelOptions.writeLSN = true;
+				log_trace("--write-lsn");
+				break;
+			}
+
+			case 'f':
+			{
+				++sentinelOptionsCount;
+				options.sentinelOptions.flushLSN = true;
+				log_trace("--flush-lsn");
+				break;
+			}
+
+			case 'r':
+			{
+				++sentinelOptionsCount;
+				options.sentinelOptions.replayLSN = true;
+				log_trace("--replay-lsn");
 				break;
 			}
 
 			case 'C':
 			{
-				options.currentpos = true;
+				options.sentinelOptions.currentLSN = true;
 				log_trace("--current");
 				break;
 			}
@@ -290,14 +313,15 @@ cli_sentinel_getopts(int argc, char **argv)
 		}
 	}
 
-	if (options.currentpos)
+	if (sentinelOptionsCount > 1)
 	{
-		if (options.endpos != InvalidXLogRecPtr)
-		{
-			log_fatal("Please choose only one of --endpos and --current");
-			++errors;
-		}
+		log_fatal("Please choose only one of --startpos --endpos --apply "
+				  "--write-lsn --flush-lsn --replay-lsn");
+		++errors;
+	}
 
+	if (options.sentinelOptions.currentLSN)
+	{
 		if (options.connStrings.source_pguri == NULL)
 		{
 			log_fatal("Options --source is mandatory when using --current");
@@ -331,9 +355,24 @@ cli_sentinel_getopts(int argc, char **argv)
 static void
 cli_sentinel_setup(int argc, char **argv)
 {
-	if (argc > 0)
+	if (argc != 2)
 	{
 		commandline_help(stderr);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	uint64_t startpos = InvalidXLogRecPtr;
+	uint64_t endpos = InvalidXLogRecPtr;
+
+	if (!parseLSN(argv[0], &startpos))
+	{
+		log_fatal("Failed to parse startpos LSN \"%s\"", argv[0]);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	if (!parseLSN(argv[1], &endpos))
+	{
+		log_fatal("Failed to parse endpos LSN \"%s\"", argv[1]);
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
@@ -347,9 +386,7 @@ cli_sentinel_setup(int argc, char **argv)
 
 	DatabaseCatalog *sourceDB = &(copySpecs.catalogs.source);
 
-	if (!sentinel_setup(sourceDB,
-						sentinelDBoptions.startpos,
-						sentinelDBoptions.endpos))
+	if (!sentinel_setup(sourceDB, startpos, endpos))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -366,38 +403,17 @@ cli_sentinel_set_startpos(int argc, char **argv)
 {
 	uint64_t startpos = InvalidXLogRecPtr;
 
-	switch (argc)
+	if (argc != 1)
 	{
-		case 0:
-		{
-			startpos = sentinelDBoptions.startpos;
+		log_fatal("Please provide <startpos>");
+		commandline_help(stderr);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
 
-			if (sentinelDBoptions.startpos == InvalidXLogRecPtr)
-			{
-				log_fatal("Please provide <startpos> or --startpos option");
-				commandline_help(stderr);
-				exit(EXIT_CODE_BAD_ARGS);
-			}
-
-			break;
-		}
-
-		case 1:
-		{
-			if (!parseLSN(argv[0], &startpos))
-			{
-				log_fatal("Failed to parse startpos LSN: \"%s\"", argv[0]);
-				exit(EXIT_CODE_BAD_ARGS);
-			}
-
-			break;
-		}
-
-		default:
-		{
-			commandline_help(stderr);
-			exit(EXIT_CODE_BAD_ARGS);
-		}
+	if (!parseLSN(argv[0], &startpos))
+	{
+		log_fatal("Failed to parse startpos LSN: \"%s\"", argv[0]);
+		exit(EXIT_CODE_BAD_ARGS);
 	}
 
 	CopyDataSpec copySpecs = { 0 };
@@ -426,18 +442,15 @@ static void
 cli_sentinel_set_endpos(int argc, char **argv)
 {
 	uint64_t endpos = InvalidXLogRecPtr;
-	bool useCurrentLSN = sentinelDBoptions.currentpos;
+	bool useCurrentLSN = sentinelDBoptions.sentinelOptions.currentLSN;
 
 	switch (argc)
 	{
 		case 0:
 		{
-			endpos = sentinelDBoptions.endpos;
-
-			if (!useCurrentLSN &&
-				sentinelDBoptions.endpos == InvalidXLogRecPtr)
+			if (!useCurrentLSN)
 			{
-				log_fatal("Please provide <endpos> or --endpos option");
+				log_fatal("Please provide <endpos> or --current option");
 				commandline_help(stderr);
 				exit(EXIT_CODE_BAD_ARGS);
 			}
@@ -608,7 +621,31 @@ cli_sentinel_get(int argc, char **argv)
 		exit(EXIT_CODE_SOURCE);
 	}
 
-	if (outputJSON)
+	if (sentinelDBoptions.sentinelOptions.startpos)
+	{
+		fformat(stdout, "%X/%X\n", LSN_FORMAT_ARGS(sentinel.startpos));
+	}
+	else if (sentinelDBoptions.sentinelOptions.endpos)
+	{
+		fformat(stdout, "%X/%X\n", LSN_FORMAT_ARGS(sentinel.endpos));
+	}
+	else if (sentinelDBoptions.sentinelOptions.apply)
+	{
+		fformat(stdout, "%s\n", sentinel.apply ? "enabled" : "disabled");
+	}
+	else if (sentinelDBoptions.sentinelOptions.writeLSN)
+	{
+		fformat(stdout, "%X/%X\n", LSN_FORMAT_ARGS(sentinel.write_lsn));
+	}
+	else if (sentinelDBoptions.sentinelOptions.flushLSN)
+	{
+		fformat(stdout, "%X/%X\n", LSN_FORMAT_ARGS(sentinel.flush_lsn));
+	}
+	else if (sentinelDBoptions.sentinelOptions.replayLSN)
+	{
+		fformat(stdout, "%X/%X\n", LSN_FORMAT_ARGS(sentinel.replay_lsn));
+	}
+	else if (outputJSON)
 	{
 		JSON_Value *js = json_value_init_object();
 		JSON_Object *jsobj = json_value_get_object(js);
