@@ -58,7 +58,7 @@ jq "${JQSCRIPT}" /usr/src/pgcopydb/${WALFILE} > ${expected}
 jq "${JQSCRIPT}" ${SHAREDIR}/${WALFILE} > ${result}
 
 # first command to provide debug information, second to stop when returns non-zero
-diff -I 'last_update' ${expected} ${result} || (cat ${expected} && exit 1)
+diff -I 'last_update' ${expected} ${result} || (cat ${SHAREDIR}/${WALFILE} && exit 1)
 
 # now prefetch the changes again, which should be a noop
 pgcopydb stream prefetch --resume --endpos "${lsn}" --notice
@@ -69,7 +69,7 @@ SQLFILENAME=`basename ${WALFILE} .json`.sql
 pgcopydb stream transform --debug ${SHAREDIR}/${WALFILE} /tmp/${SQLFILENAME}
 
 # we should get the same result as `pgcopydb stream prefetch`
-diff ${SHAREDIR}/${SQLFILE} /tmp/${SQLFILENAME} || (cat ${SHAREDIR}/${SQLFILENAME} && exit 1)
+diff ${SHAREDIR}/${SQLFILE} /tmp/${SQLFILENAME}
 
 # we should also get the same result as expected (discarding LSN numbers)
 # and also discarding ON UPDATE triggers for the timestamps (EXECUTE/last_update)
