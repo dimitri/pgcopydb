@@ -59,8 +59,11 @@ COPY GIT-VERSION-GEN .
 COPY GIT-VERSION-FILE .
 COPY version .
 
+# Separate building SQLite lib (and binary) for docker cache benefits
 COPY src/bin/lib/sqlite src/bin/lib/sqlite
-RUN make -C src/bin/lib/sqlite sqlite3.o
+RUN make -C src/bin/lib/sqlite clean sqlite3.o sqlite3
+RUN install src/bin/lib/sqlite/sqlite3 /usr/local/bin/sqlite3
+RUN sqlite3 --version
 
 # The COPY --exclude flag is not yet available in Docker releases
 #COPY --exclude src/bin/lib/sqlite src src
@@ -114,7 +117,6 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
     watch \
     psmisc \
     openssl \
-    sqlite3 \
     postgresql-common \
     postgresql-client \
     postgresql-client-common \
@@ -125,6 +127,7 @@ RUN useradd -rm -d /var/lib/postgres -s /bin/bash -g postgres -G sudo docker
 RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 
 COPY --from=build --chmod=755 /usr/lib/postgresql/${PGVERSION}/bin/pgcopydb /usr/local/bin
+COPY --from=build /usr/local/bin/sqlite3 /usr/local/bin/sqlite3
 
 USER docker
 
