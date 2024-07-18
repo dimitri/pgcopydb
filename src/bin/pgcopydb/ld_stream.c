@@ -1414,6 +1414,12 @@ stream_sync_sentinel(LogicalStreamContext *context)
 	privateContext->endpos = sentinel.endpos;
 	privateContext->startpos = sentinel.startpos;
 
+	if (context->endpos != sentinel.endpos)
+	{
+		log_warn("stream_sync_sentinel: updating endpos to %X/%X",
+				 LSN_FORMAT_ARGS(sentinel.endpos));
+	}
+
 	context->endpos = sentinel.endpos;
 	context->tracking->applied_lsn = sentinel.replay_lsn;
 

@@ -839,6 +839,8 @@ catalog_init(DatabaseCatalog *catalog)
 
 	if (sqlite3_open(catalog->dbfile, &(catalog->db)) != SQLITE_OK)
 	{
+		/* ensure a db is NULL unless it's opened */
+		catalog->db = NULL;
 		log_error("Failed to open \"%s\": %s",
 				  catalog->dbfile,
 				  sqlite3_errmsg(catalog->db));
@@ -8293,7 +8295,7 @@ catalog_sql_step(SQLiteQuery *query)
 			int sleepTimeMs =
 				pgsql_compute_connection_retry_sleep_time(&retryPolicy);
 
-			log_sqlite("[SQLite %d]: %s, try again in %dms",
+			log_notice("[SQLite %d]: %s, try again in %dms",
 					   rc,
 					   sqlite3_errmsg(query->db),
 					   sleepTimeMs);

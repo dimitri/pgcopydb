@@ -140,12 +140,16 @@ stream_transform_messages(StreamSpecs *specs)
 			return false;
 		}
 
-		if (!stream_transform_cdc_file(specs))
+		/* race conditions: we could have zero file registered yet */
+		if (specs->replayDB->db != NULL)
 		{
-			log_error("Failed to transform CDC messages from file \"%s\", "
-					  "see above for details",
-					  specs->replayDB->dbfile);
-			return false;
+			if (!stream_transform_cdc_file(specs))
+			{
+				log_error("Failed to transform CDC messages from file \"%s\", "
+						  "see above for details",
+						  specs->replayDB->dbfile);
+				return false;
+			}
 		}
 
 		/* allow some time for the files and content to be created */
@@ -256,7 +260,7 @@ stream_transform_cdc_file(StreamSpecs *specs)
 		}
 
 		/* allow some time for the files and content to be created */
-		pg_usleep(1500 * 1000); /* 1.5s */
+		pg_usleep(50 * 1000); /* 50ms */
 	}
 
 	return true;
