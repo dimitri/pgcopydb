@@ -151,6 +151,14 @@ pgcopydb stream sentinel set startpos - Set the sentinel start position LSN
 
 .. include:: ../include/stream-sentinel-set-startpos.rst
 
+This is an advanced API used for unit-testing and debugging, the operation
+is automatically covered in normal pgcopydb operations.
+             
+Logical replication target system registers progress by assigning a current
+LSN to the ``--origin`` node name. When creating an origin on the target
+database system, it is required to provide the current LSN from the source
+database system, in order to properly bootstrap pgcopydb logical decoding.
+
 .. _pgcopydb_stream_sentinel_set_endpos:
 
 pgcopydb stream sentinel set endpos
@@ -160,6 +168,19 @@ pgcopydb stream sentinel set endpos - Set the sentinel end position LSN
 
 .. include:: ../include/stream-sentinel-set-endpos.rst
 
+Logical replication target LSN to use. Automatically stop replication and
+exit with normal exit status 0 when receiving reaches the specified LSN. If
+there's a record with LSN exactly equal to lsn, the record will be output.
+
+The ``--endpos`` option is not aware of transaction boundaries and may
+truncate output partway through a transaction. Any partially output
+transaction will not be consumed and will be replayed again when the slot is
+next read from. Individual messages are never truncated.
+
+See also documentation for `pg_recvlogical`__.
+
+__ https://www.postgresql.org/docs/current/app-pgrecvlogical.html
+             
 .. _pgcopydb_stream_sentinel_set_apply:
 
 pgcopydb stream sentinel set apply
@@ -310,22 +331,6 @@ The following options are available to ``pgcopydb stream`` sub-commands:
 
   Logical decoding slot name to use.
 
---endpos
-
-  Logical replication target LSN to use. Automatically stop replication and
-  exit with normal exit status 0 when receiving reaches the specified LSN.
-  If there's a record with LSN exactly equal to lsn, the record will be
-  output.
-
-  The ``--endpos`` option is not aware of transaction boundaries and may
-  truncate output partway through a transaction. Any partially output
-  transaction will not be consumed and will be replayed again when the slot
-  is next read from. Individual messages are never truncated.
-
-  See also documentation for `pg_recvlogical`__.
-
-  __ https://www.postgresql.org/docs/current/app-pgrecvlogical.html
-
 --origin
 
   Logical replication target system needs to track the transactions that
@@ -339,14 +344,6 @@ The following options are available to ``pgcopydb stream`` sub-commands:
   target, where each source should have their own unique origin node name.
 
   __ https://www.postgresql.org/docs/current/replication-origins.html
-
---startpos
-
-  Logical replication target system registers progress by assigning a
-  current LSN to the ``--origin`` node name. When creating an origin on the
-  target database system, it is required to provide the current LSN from the
-  source database system, in order to properly bootstrap pgcopydb logical
-  decoding.
 
 --verbose
 
