@@ -849,6 +849,20 @@ typedef struct CopyProgressContext
 } CopyProgressContext;
 
 /*
+ * copy_progress_context_init initializes the copy progress context with the given specifications.
+ */
+static void
+copy_progress_context_init(CopyProgressContext *ctx, CopyDataSpec *specs,
+						   CopyTableDataSpec *tableSpecs)
+{
+	ctx->specs = specs;
+	ctx->tableSpecs = tableSpecs;
+	ctx->bytesTransmitted = 0;
+	INSTR_TIME_SET_CURRENT(ctx->lastSavingTimeMs);
+}
+
+
+/*
  * on_copy_progress_hook saves the copy progress into the catalog.
  * It writes to the DB within at an arbitrary interval.
  */
@@ -998,13 +1012,8 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 		/*
 		 * 1. Now COPY the TABLE DATA from the source to the destination.
 		 */
-		CopyProgressContext context = {
-			.specs = specs,
-			.tableSpecs = tableSpecs,
-			.bytesTransmitted = 0,
-			.lastSavingTimeMs = 0
-		};
-		INSTR_TIME_SET_CURRENT(context.lastSavingTimeMs);
+		CopyProgressContext context = { 0 };
+		copy_progress_context_init(&context, specs, tableSpecs);
 		if (!table->excludeData)
 		{
 			if (!copydb_copy_table(specs, src, dst, tableSpecs, &context,
