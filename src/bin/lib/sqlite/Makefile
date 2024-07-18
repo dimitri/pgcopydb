@@ -32,7 +32,7 @@ LIBS += -lreadline
 LIBS += -lncurses
 
 sqlite3: $(SRC) $(INC)
-	$(CC) $(CFLAGS) $(LIBS) $(SRC) -o $@
+	$(CC) $(CFLAGS) $(SRC) $(LIBS) -o $@
 
 sqlite3.o: sqlite3.c sqlite3.h sqlite3ext.h
 	$(CC) -c $(CFLAGS) $< -o $@

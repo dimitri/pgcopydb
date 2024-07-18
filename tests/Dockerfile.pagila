@@ -7,23 +7,23 @@ ARG PGVERSION
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
+    curl \
+    gdb \
+    git \
     gnupg \
+    htop \
+    jq \
+    libgc1 \
+    libpq5 \
+    lsof \
+    make \
     openssl \
+    postgresql-client-common \
+    psmisc \
+    strace \
     sudo \
     tmux \
     watch \
-    lsof \
-    psmisc \
-    htop \
-    strace \
-    gdb \
-    sqlite3 \
-    libgc1 \
-    libpq5 \
-    postgresql-client-common \
-    curl \
-    git \
-    jq \
   && rm -rf /var/lib/apt/lists/*
 
 RUN curl https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
@@ -44,6 +44,8 @@ RUN git clone --depth 1 https://github.com/devrimgunduz/pagila.git
 RUN useradd -rm -d /var/lib/postgres -s /bin/bash -g postgres -G sudo docker
 RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 
+COPY --from=pgcopydb /usr/local/bin/sqlite3 /usr/local/bin
 COPY --from=pgcopydb /usr/local/bin/pgcopydb /usr/local/bin
+
 COPY .psqlrc /var/lib/postgres
 COPY .sqliterc /var/lib/postgres
