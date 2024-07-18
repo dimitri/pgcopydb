@@ -715,7 +715,7 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 	if (item->desc == ARCHIVE_TAG_DATABASE)
 	{
 		skip = true;
-		log_notice("Skipping DATABASE \"%s\"", name);
+		log_debug("Skipping DATABASE \"%s\"", name);
 	}
 
 	/*
@@ -729,7 +729,7 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 		item->tagType == ARCHIVE_TAG_TYPE_EXTENSION)
 	{
 		skip = true;
-		log_notice("Skipping COMMENT ON EXTENSION \"%s\"", name);
+		log_debug("Skipping COMMENT ON EXTENSION \"%s\"", name);
 	}
 
 	if (!skip && catOid == PG_NAMESPACE_OID)
@@ -748,11 +748,11 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 		{
 			skip = true;
 
-			log_notice("Skipping already existing dumpId %d: %s %u %s",
-					   item->dumpId,
-					   item->description,
-					   item->objectOid,
-					   item->restoreListName);
+			log_debug("Skipping already existing dumpId %d: %s %u %s",
+					  item->dumpId,
+					  item->description,
+					  item->objectOid,
+					  item->restoreListName);
 		}
 	}
 
@@ -760,11 +760,11 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 	{
 		skip = true;
 
-		log_notice("Skipping already processed dumpId %d: %s %u %s",
-				   item->dumpId,
-				   item->description,
-				   item->objectOid,
-				   item->restoreListName);
+		log_debug("Skipping already processed dumpId %d: %s %u %s",
+				  item->dumpId,
+				  item->description,
+				  item->objectOid,
+				  item->restoreListName);
 	}
 
 	/*
@@ -793,23 +793,23 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 	{
 		skip = true;
 
-		log_notice("Skipping materialized view refresh dumpId %d: %s %u %s",
-				   item->dumpId,
-				   item->description,
-				   item->objectOid,
-				   item->restoreListName);
+		log_debug("Skipping materialized view refresh dumpId %d: %s %u %s",
+				  item->dumpId,
+				  item->description,
+				  item->objectOid,
+				  item->restoreListName);
 	}
 
 	if (!skip && copydb_objectid_is_filtered_out(specs, oid, name))
 	{
 		skip = true;
 
-		log_notice("Skipping filtered-out dumpId %d: %s %u %u %s",
-				   item->dumpId,
-				   item->description,
-				   item->catalogOid,
-				   item->objectOid,
-				   item->restoreListName);
+		log_debug("Skipping filtered-out dumpId %d: %s %u %u %s",
+				  item->dumpId,
+				  item->description,
+				  item->catalogOid,
+				  item->objectOid,
+				  item->restoreListName);
 	}
 
 	PQExpBuffer buf = createPQExpBuffer();

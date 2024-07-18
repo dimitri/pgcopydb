@@ -20,7 +20,7 @@ psql -o /tmp/d.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/ddl.sql
 
 # pgcopydb clone uses the environment variables
-pgcopydb clone --follow --plugin wal2json --debug
+pgcopydb clone --follow --plugin wal2json --notice
 
 db="/var/lib/postgres/.local/share/pgcopydb/00000001-*.db"
 

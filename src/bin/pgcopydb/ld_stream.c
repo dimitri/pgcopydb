@@ -1048,7 +1048,8 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 	 * partial transaction.
 	 */
 	if (time_to_abort &&
-		privateContext->jsonFile != NULL &&
+
+	    /* privateContext->jsonFile != NULL && */
 		privateContext->endpos != InvalidXLogRecPtr &&
 		privateContext->endpos <= context->cur_record_lsn)
 	{
@@ -1208,9 +1209,9 @@ streamFlush(LogicalStreamContext *context)
 {
 	StreamContext *privateContext = (StreamContext *) context->private;
 
-	log_debug("streamFlush: %X/%X %X/%X",
-			  LSN_FORMAT_ARGS(context->tracking->written_lsn),
-			  LSN_FORMAT_ARGS(context->cur_record_lsn));
+	log_warn("streamFlush: %X/%X %X/%X",
+			 LSN_FORMAT_ARGS(context->tracking->written_lsn),
+			 LSN_FORMAT_ARGS(context->cur_record_lsn));
 
 	/* if needed, flush our current file now (fsync) */
 	if (context->tracking->flushed_lsn < context->tracking->written_lsn)
@@ -1230,14 +1231,19 @@ streamFlush(LogicalStreamContext *context)
 		/*
 		 * streamKeepalive ensures we have a valid jsonFile by calling
 		 * streamRotateFile, so we can safely call fsync here.
+		 *
+		 * TODO: remove that code.
 		 */
-		int fd = fileno(privateContext->jsonFile);
-
-		if (fsync(fd) != 0)
+		if (privateContext->jsonFile != NULL)
 		{
-			log_error("Failed to fsync file \"%s\": %m",
-					  privateContext->partialFileName);
-			return false;
+			int fd = fileno(privateContext->jsonFile);
+
+			if (fsync(fd) != 0)
+			{
+				log_error("Failed to fsync file \"%s\": %m",
+						  privateContext->partialFileName);
+				return false;
+			}
 		}
 
 		context->tracking->flushed_lsn = context->tracking->written_lsn;
@@ -1411,15 +1417,15 @@ stream_sync_sentinel(LogicalStreamContext *context)
 	context->endpos = sentinel.endpos;
 	context->tracking->applied_lsn = sentinel.replay_lsn;
 
-	log_debug("stream_sync_sentinel: "
-			  "write_lsn %X/%X flush_lsn %X/%X apply_lsn %X/%X "
-			  "startpos %X/%X endpos %X/%X apply %s",
-			  LSN_FORMAT_ARGS(context->tracking->written_lsn),
-			  LSN_FORMAT_ARGS(context->tracking->flushed_lsn),
-			  LSN_FORMAT_ARGS(context->tracking->applied_lsn),
-			  LSN_FORMAT_ARGS(privateContext->startpos),
-			  LSN_FORMAT_ARGS(privateContext->endpos),
-			  privateContext->apply ? "enabled" : "disabled");
+	log_warn("stream_sync_sentinel: "
+			 "write_lsn %X/%X flush_lsn %X/%X apply_lsn %X/%X "
+			 "startpos %X/%X endpos %X/%X apply %s",
+			 LSN_FORMAT_ARGS(context->tracking->written_lsn),
+			 LSN_FORMAT_ARGS(context->tracking->flushed_lsn),
+			 LSN_FORMAT_ARGS(context->tracking->applied_lsn),
+			 LSN_FORMAT_ARGS(privateContext->startpos),
+			 LSN_FORMAT_ARGS(privateContext->endpos),
+			 privateContext->apply ? "enabled" : "disabled");
 
 	return true;
 }

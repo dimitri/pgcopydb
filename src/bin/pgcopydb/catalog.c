@@ -8148,7 +8148,19 @@ catalog_sql_execute(SQLiteQuery *query)
 		if (rc != SQLITE_DONE)
 		{
 			log_error("Failed to execute statement: %s", query->sql);
-			log_error("[SQLite %d] %s", rc, sqlite3_errstr(rc));
+
+			int offset = sqlite3_error_offset(query->db);
+
+			if (offset != -1)
+			{
+				/* "Failed to step through statement: %s" is 34 chars of prefix */
+				log_error("%34s%*s^", " ", offset, " ");
+			}
+
+			log_error("[SQLite %d: %s]: %s",
+					  rc,
+					  sqlite3_errstr(rc),
+					  sqlite3_errmsg(query->db));
 
 			(void) sqlite3_clear_bindings(query->ppStmt);
 			(void) sqlite3_finalize(query->ppStmt);
@@ -8207,7 +8219,19 @@ catalog_sql_execute(SQLiteQuery *query)
 			if (catalog_sql_step(query) != SQLITE_DONE)
 			{
 				log_error("Failed to execute statement: %s", query->sql);
-				log_error("[SQLite %d] %s", rc, sqlite3_errstr(rc));
+
+				int offset = sqlite3_error_offset(query->db);
+
+				if (offset != -1)
+				{
+					/* "Failed to step through statement: %s" is 34 chars of prefix */
+					log_error("%34s%*s^", " ", offset, " ");
+				}
+
+				log_error("[SQLite %d: %s]: %s",
+						  rc,
+						  sqlite3_errstr(rc),
+						  sqlite3_errmsg(query->db));
 
 				(void) sqlite3_clear_bindings(query->ppStmt);
 				(void) sqlite3_finalize(query->ppStmt);
