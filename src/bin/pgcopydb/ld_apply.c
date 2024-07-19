@@ -208,12 +208,11 @@ stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
 
 	if (specs->system.timeline == 0)
 	{
-		if (!stream_read_context(&(specs->paths),
-								 &(specs->system),
-								 &(specs->WalSegSz)))
+		if (!stream_read_context(specs))
 		{
 			log_error("Failed to read the streaming context information "
-					  "from the source database, see above for details");
+					  "from the source database and internal catalogs, "
+					  "see above for details");
 			return false;
 		}
 	}

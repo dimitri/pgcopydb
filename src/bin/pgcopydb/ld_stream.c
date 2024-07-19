@@ -420,6 +420,9 @@ stream_init_context(StreamSpecs *specs)
 bool
 startLogicalStreaming(StreamSpecs *specs)
 {
+	/* prepare the context for timeline history */
+	TimelineHistoryContext timelineContext = { .source = specs->sourceDB };
+
 	/* prepare the stream options */
 	LogicalStreamClient stream = { 0 };
 
@@ -490,7 +493,7 @@ startLogicalStreaming(StreamSpecs *specs)
 				  OutputPluginToString(specs->slot.plugin),
 				  specs->pluginOptions.count);
 
-		if (!pgsql_start_replication(&stream))
+		if (!pgsql_start_replication(&stream, &timelineContext))
 		{
 			/* errors have already been logged */
 			return false;
@@ -2613,8 +2616,7 @@ stream_fetch_current_lsn(uint64_t *lsn,
 
 
 /*
- * stream_write_context writes the wal_segment_size and timeline history to
- * files.
+ * stream_write_context writes the wal_segment_size and tli to files.
  */
 bool
 stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream)
@@ -2652,16 +2654,6 @@ stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream)
 
 	log_debug("Wrote tli %s timeline file \"%s\"", tli, specs->paths.tlifile);
 
-	if (!write_file(system->timelines.content,
-					strlen(system->timelines.content),
-					specs->paths.tlihistfile))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	log_debug("Wrote timeline history file \"%s\"", specs->paths.tlihistfile);
-
 	return true;
 }
 
@@ -2677,7 +2669,6 @@ stream_cleanup_context(StreamSpecs *specs)
 
 	success = success && unlink_file(specs->paths.walsegsizefile);
 	success = success && unlink_file(specs->paths.tlifile);
-	success = success && unlink_file(specs->paths.tlihistfile);
 
 	/* reset the timeline, so that we always read from the disk */
 	specs->system.timeline = 0;
@@ -2691,14 +2682,14 @@ stream_cleanup_context(StreamSpecs *specs)
  * wal_segment_size and timeline history.
  */
 bool
-stream_read_context(CDCPaths *paths,
-					IdentifySystem *system,
-					uint32_t *WalSegSz)
+stream_read_context(StreamSpecs *specs)
 {
+	CDCPaths *paths = &(specs->paths);
+	IdentifySystem *system = &(specs->system);
+	uint32_t *WalSegSz = &(specs->WalSegSz);
+
 	char *wal_segment_size = NULL;
 	char *tli = NULL;
-	char *history = NULL;
-
 	long size = 0L;
 
 	/*
@@ -2727,8 +2718,7 @@ stream_read_context(CDCPaths *paths,
 		}
 
 		if (file_exists(paths->walsegsizefile) &&
-			file_exists(paths->tlifile) &&
-			file_exists(paths->tlihistfile))
+			file_exists(paths->tlifile))
 		{
 			/*
 			 * File did exist, but might have been deleted now (race condition
@@ -2741,9 +2731,6 @@ stream_read_context(CDCPaths *paths,
 
 			success = success &&
 					  read_file(paths->tlifile, &tli, &size);
-
-			success = success &&
-					  read_file(paths->tlihistfile, &history, &size);
 
 			if (success)
 			{
@@ -2765,8 +2752,7 @@ stream_read_context(CDCPaths *paths,
 
 	/* did retry policy expire before the files are created? */
 	if (!(file_exists(paths->walsegsizefile) &&
-		  file_exists(paths->tlifile) &&
-		  file_exists(paths->tlihistfile)))
+		  file_exists(paths->tlifile)))
 	{
 		log_error("Failed to read stream context file: retry policy expired");
 		return false;
@@ -2786,13 +2772,8 @@ stream_read_context(CDCPaths *paths,
 		/* errors have already been logged */
 		return false;
 	}
-
-	if (!parseTimelineHistory(paths->tlihistfile, history, system))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
+/* TODO: read the current timeline from internal catalog */
+/* It may not really be necessary as it is not used anywhere */
 
 	return true;
 }

@@ -392,9 +392,7 @@ typedef struct TimelineHistoryEntry
 
 typedef struct TimelineHistory
 {
-	int count;
-	TimelineHistoryEntry history[PGCOPYDB_MAX_TIMELINES];
-
+	TimelineHistoryEntry current;
 	char filename[MAXPGPATH];
 	char content[PGCOPYDB_MAX_TIMELINE_CONTENT];
 } TimelineHistory;
@@ -412,9 +410,9 @@ typedef struct IdentifySystem
 	TimelineHistory timelines;
 } IdentifySystem;
 
-bool pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system);
+bool pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, void *timelineContext);
 bool parseTimelineHistory(const char *filename, const char *content,
-						  IdentifySystem *system);
+						  IdentifySystem *system, void *timelineContext);
 
 /*
  * Logical Decoding support.
@@ -523,7 +521,7 @@ bool pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 
 bool pgsql_timestamptz_to_string(TimestampTz ts, char *str, size_t size);
 
-bool pgsql_start_replication(LogicalStreamClient *client);
+bool pgsql_start_replication(LogicalStreamClient *client, void *timelineContext);
 bool pgsql_stream_logical(LogicalStreamClient *client,
 						  LogicalStreamContext *context);
 

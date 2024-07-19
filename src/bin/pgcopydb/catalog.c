@@ -183,7 +183,10 @@ static char *sourceDBcreateDDLs[] = {
 	"create table sentinel("
 	"  id integer primary key check (id = 1), "
 	"  startpos pg_lsn, endpos pg_lsn, apply bool, "
-	" write_lsn pg_lsn, flush_lsn pg_lsn, replay_lsn pg_lsn)"
+	" write_lsn pg_lsn, flush_lsn pg_lsn, replay_lsn pg_lsn)",
+
+	"create table timeline_history("
+	"  tli integer primary key, startpos pg_lsn, endpos pg_lsn)"
 };
 
 
@@ -434,7 +437,8 @@ static char *sourceDBdropDDLs[] = {
 	"drop table if exists s_table_parts_done",
 	"drop table if exists s_table_indexes_done",
 
-	"drop table if exists sentinel"
+	"drop table if exists sentinel",
+	"drop table if exists timeline_history"
 };
 
 
@@ -7695,6 +7699,66 @@ catalog_count_summary_done_fetch(SQLiteQuery *query)
 
 	count->table = sqlite3_column_int64(query->ppStmt, 0);
 	count->index = sqlite3_column_int64(query->ppStmt, 1);
+
+	return true;
+}
+
+
+/*
+ * catalog_add_timeline_history inserts a timeline history entry to our
+ * SQLite catalogs.
+ */
+bool
+catalog_add_timeline_history(DatabaseCatalog *catalog,
+							 TimelineHistoryEntry *entry)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_add_timeline_history: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"insert or replace into timeline_history(tli, startpos, endpos)"
+		"values($1, $2, $3)";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	char slsn[PG_LSN_MAXLENGTH] = { 0 };
+	char elsn[PG_LSN_MAXLENGTH] = { 0 };
+
+	sformat(slsn, sizeof(slsn), "%X/%X", LSN_FORMAT_ARGS(entry->begin));
+	sformat(elsn, sizeof(elsn), "%X/%X", LSN_FORMAT_ARGS(entry->end));
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT, "tli", entry->tli, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "startpos", 0, slsn },
+		{ BIND_PARAMETER_TYPE_TEXT, "endpos", 0, elsn }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which does not return any row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	return true;
 }

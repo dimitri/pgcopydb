@@ -623,6 +623,12 @@ bool catalog_count_summary_done_fetch(SQLiteQuery *query);
 
 
 /*
+ * Logical decoding
+ */
+bool catalog_add_timeline_history(DatabaseCatalog *catalog,
+								  TimelineHistoryEntry *entry);
+
+/*
  * Internal tooling for catalogs management
  */
 typedef enum

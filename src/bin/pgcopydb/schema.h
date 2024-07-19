@@ -389,6 +389,11 @@ typedef struct DatabaseCatalog
 	Semaphore sema;
 } DatabaseCatalog;
 
+typedef struct TimelineHistoryContext
+{
+	DatabaseCatalog *source;
+} TimelineHistoryContext;
+
 
 typedef struct Catalogs
 {

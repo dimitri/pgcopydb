@@ -29,6 +29,8 @@
 #include "pg_utils.h"
 #include "signals.h"
 #include "string_utils.h"
+#include "schema.h"
+#include "catalog.h"
 
 #if defined(LIBPQ_HAS_PIPELINING) && LIBPQ_HAS_PIPELINING
 #define pqPipelineModeEnabled(conn) (PQpipelineStatus(conn) == PQ_PIPELINE_ON)
@@ -2767,7 +2769,6 @@ pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args)
 			pgcopy_log_error(src, NULL, "Failed to fetch data from source");
 			break;
 		}
-
 		/*
 		 * PQgetCopyData returns -1 to indicate that the COPY is done. Call
 		 * PQgetResult to obtain the final result status of the COPY command.
@@ -2789,7 +2790,6 @@ pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args)
 
 			/* make sure to pass through and send this last COPY buffer */
 		}
-
 		/*
 		 * In async mode, and no data available.
 		 */
@@ -2845,7 +2845,6 @@ pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args)
 				break;
 			}
 		}
-
 		/*
 		 * If successful PQgetCopyData returns the row length as a result.
 		 */
@@ -3316,7 +3315,7 @@ typedef struct TimelineHistoryResult
  * contain the 'replication=1' parameter.
  */
 bool
-pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system)
+pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, void *timelineContext)
 {
 	bool connIsOurs = pgsql->connection == NULL;
 
@@ -3394,15 +3393,15 @@ pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system)
 			return false;
 		}
 
-		if (!parseTimelineHistory(hContext.filename, hContext.content, system))
+		if (!parseTimelineHistory(hContext.filename, hContext.content, system,
+								  timelineContext))
 		{
 			/* errors have already been logged */
 			PQfinish(connection);
 			return false;
 		}
 
-		TimelineHistoryEntry *current =
-			&(system->timelines.history[system->timelines.count - 1]);
+		TimelineHistoryEntry *current = &(system->timelines.current);
 
 		log_sql("TIMELINE_HISTORY: \"%s\", timeline %d started at %X/%X",
 				hContext.filename,
@@ -3421,8 +3420,8 @@ pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system)
 
 
 /*
- * parsePgMetadata parses the result from a PostgreSQL query fetching
- * two columns from pg_stat_replication: sync_state and currentLSN.
+ * parseIdentifySystemResult parses the result from a replication query
+ * IDENTIFY_SYSTEM, and fills the given IdentifySystem structure.
  */
 static void
 parseIdentifySystemResult(void *ctx, PGresult *result)
@@ -3483,8 +3482,8 @@ parseIdentifySystemResult(void *ctx, PGresult *result)
 
 
 /*
- * parseTimelineHistory parses the result of the TIMELINE_HISTORY replication
- * command.
+ * parseTimelineHistoryResult parses the result of the TIMELINE_HISTORY
+ * replication command.
  */
 static void
 parseTimelineHistoryResult(void *ctx, PGresult *result)
@@ -3500,7 +3499,7 @@ parseTimelineHistoryResult(void *ctx, PGresult *result)
 
 	if (PQntuples(result) == 0)
 	{
-		log_sql("parseTimelineHistory: query returned no rows");
+		log_sql("parseTimelineHistoryResult: query returned no rows");
 		context->parsedOk = false;
 		return;
 	}
@@ -3538,21 +3537,15 @@ parseTimelineHistoryResult(void *ctx, PGresult *result)
  */
 bool
 parseTimelineHistory(const char *filename, const char *content,
-					 IdentifySystem *system)
+					 IdentifySystem *system, void *timelineContext)
 {
+	TimelineHistoryContext *context = (TimelineHistoryContext *) timelineContext;
+
 	LinesBuffer lbuf = { 0 };
 
 	if (!splitLines(&lbuf, (char *) content))
 	{
 		/* errors have already been logged */
-		return false;
-	}
-
-	if (lbuf.count >= PGCOPYDB_MAX_TIMELINES)
-	{
-		log_error("history file \"%s\" contains %lld lines, "
-				  "pgcopydb only supports up to %d lines",
-				  filename, (long long) lbuf.count, PGCOPYDB_MAX_TIMELINES - 1);
 		return false;
 	}
 
@@ -3562,10 +3555,8 @@ parseTimelineHistory(const char *filename, const char *content,
 
 	uint64_t prevend = InvalidXLogRecPtr;
 
-	system->timelines.count = 0;
-
-	TimelineHistoryEntry *entry =
-		&(system->timelines.history[system->timelines.count]);
+	TimelineHistoryEntry *entry = &system->timelines.current;
+	int timelineCount = 0;
 
 	for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
 	{
@@ -3600,7 +3591,7 @@ parseTimelineHistory(const char *filename, const char *content,
 
 		*tabptr = '\0';
 
-		if (!stringToUInt(lbuf.lines[lineNumber], &(entry->tli)))
+		if (!stringToUInt(lbuf.lines[lineNumber], &entry->tli))
 		{
 			log_error("Failed to parse history timeline \"%s\"", tabptr);
 			return false;
@@ -3617,7 +3608,7 @@ parseTimelineHistory(const char *filename, const char *content,
 			}
 		}
 
-		if (!parseLSN(lsn, &(entry->end)))
+		if (!parseLSN(lsn, &entry->end))
 		{
 			log_error("Failed to parse history timeline %d LSN \"%s\"",
 					  entry->tli, lsn);
@@ -3628,12 +3619,13 @@ parseTimelineHistory(const char *filename, const char *content,
 		prevend = entry->end;
 
 		log_trace("parseTimelineHistory[%d]: tli %d [%X/%X %X/%X]",
-				  system->timelines.count,
+				  timelineCount,
 				  entry->tli,
 				  LSN_FORMAT_ARGS(entry->begin),
 				  LSN_FORMAT_ARGS(entry->end));
 
-		entry = &(system->timelines.history[++system->timelines.count]);
+		catalog_add_timeline_history(context->source, entry);
+		timelineCount++;
 	}
 
 	/*
@@ -3645,13 +3637,12 @@ parseTimelineHistory(const char *filename, const char *content,
 	entry->end = InvalidXLogRecPtr;
 
 	log_trace("parseTimelineHistory[%d]: tli %d [%X/%X %X/%X]",
-			  system->timelines.count,
+			  timelineCount,
 			  entry->tli,
 			  LSN_FORMAT_ARGS(entry->begin),
 			  LSN_FORMAT_ARGS(entry->end));
 
-	/* fix the off-by-one so that the count is a count, not an index */
-	++system->timelines.count;
+	catalog_add_timeline_history(context->source, entry);
 
 	return true;
 }
@@ -4182,7 +4173,7 @@ pgsql_timestamptz_to_string(TimestampTz ts, char *str, size_t size)
  * Send the START_REPLICATION logical replication command.
  */
 bool
-pgsql_start_replication(LogicalStreamClient *client)
+pgsql_start_replication(LogicalStreamClient *client, void *timelineContext)
 {
 	PGSQL *pgsql = &(client->pgsql);
 
@@ -4236,7 +4227,7 @@ pgsql_start_replication(LogicalStreamClient *client)
 	}
 
 	/* fetch the source timeline */
-	if (!pgsql_identify_system(pgsql, &(client->system)))
+	if (!pgsql_identify_system(pgsql, &(client->system), timelineContext))
 	{
 		/* errors have already been logged */
 		destroyPQExpBuffer(query);
