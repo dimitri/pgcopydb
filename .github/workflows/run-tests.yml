@@ -51,9 +51,7 @@ jobs:
 
       - name: Create docker volumes
         run: |
-          docker volume create follow-9.6 &&
-          docker volume create follow-wal2json &&
-          docker volume create follow-data-only
+          case ${TEST} in "follow-*") docker volume create ${TEST};; esac
 
       - name: Run a test
         timeout-minutes: 5
