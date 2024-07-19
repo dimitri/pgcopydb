@@ -51,7 +51,7 @@ jobs:
 
       - name: Create docker volumes
         run: |
-          if [[ ${TEST} =~ "^follow-" ]]; then docker volume create ${TEST}; fi
+          docker volume create ${TEST}
 
       - name: List docker volumes
         run: |
