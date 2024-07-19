@@ -53,6 +53,14 @@ jobs:
         run: |
           case ${TEST} in "follow-*") docker volume create ${TEST};; esac
 
+      - name: List docker volumes
+        run: |
+          docker volume ls
+
+      - name: Docker Compose Version
+        run: |
+          docker compose --version
+
       - name: Run a test
         timeout-minutes: 5
         run: |
