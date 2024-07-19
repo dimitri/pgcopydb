@@ -2772,6 +2772,7 @@ stream_read_context(StreamSpecs *specs)
 		/* errors have already been logged */
 		return false;
 	}
+
 /* TODO: read the current timeline from internal catalog */
 /* It may not really be necessary as it is not used anywhere */
 

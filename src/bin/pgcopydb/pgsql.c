@@ -2769,6 +2769,7 @@ pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args)
 			pgcopy_log_error(src, NULL, "Failed to fetch data from source");
 			break;
 		}
+
 		/*
 		 * PQgetCopyData returns -1 to indicate that the COPY is done. Call
 		 * PQgetResult to obtain the final result status of the COPY command.
@@ -2790,6 +2791,7 @@ pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args)
 
 			/* make sure to pass through and send this last COPY buffer */
 		}
+
 		/*
 		 * In async mode, and no data available.
 		 */
@@ -2845,6 +2847,7 @@ pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args)
 				break;
 			}
 		}
+
 		/*
 		 * If successful PQgetCopyData returns the row length as a result.
 		 */
