@@ -18,9 +18,9 @@ pgcopydb ping
 # that's the case is the existence of the pgcopydb.sentinel table on the
 # source database.
 #
-db=${TMPDIR}/pgcopydb/schema/source.db
+dbfile=${TMPDIR}/pgcopydb/schema/source.db
 
-until [ -s ${db} ]
+until [ -s ${dbfile} ]
 do
     sleep 1
 done
@@ -59,7 +59,7 @@ then
 fi
 
 #
-# Becaure we're using docker-compose --abort-on-container-exit make sure
+# Because we're using docker-compose --abort-on-container-exit make sure
 # that the other process in the pgcopydb service is done before exiting
 # here.
 #

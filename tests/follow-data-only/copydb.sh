@@ -41,7 +41,7 @@ kill -TERM ${BACKGROUND_TRAFFIC_PID}
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/multi-wal-txn.sql
 
 # check the replication slot file contents
-cat /var/lib/postgres/.local/share/pgcopydb/slot
+cat ${XDG_DATA_HOME}/pgcopydb/slot
 
 # check the sqlite setup contents too
 sqlite3 ${TMPDIR}/pgcopydb/schema/source.db <<EOF

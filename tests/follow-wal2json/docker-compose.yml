@@ -1,15 +1,13 @@
-version: "3.9"  # optional since v1.27.0
 services:
   source:
+    image: postgres-wal2json:13-bullseye
     build:
       context: .
       dockerfile: Dockerfile.pg
     expose:
       - 5432
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: h4ckm3
-      POSTGRES_HOST_AUTH_METHOD: trust
+    env_file:
+      - ../postgres.env
     command: >
       -c wal_level=logical
       -c ssl=on
@@ -20,10 +18,8 @@ services:
     image: postgres:16-bullseye
     expose:
       - 5432
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: h4ckm3
-      POSTGRES_HOST_AUTH_METHOD: trust
+    env_file:
+      - ../postgres.env
     command: >
       -c ssl=on
       -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
@@ -34,8 +30,8 @@ services:
       context: .
       dockerfile: Dockerfile.inject
     env_file:
-      - uris.env
-      - paths.env
+      - ../uris.env
+      - ../paths.env
     # share TMPDIR between inject and test services
     volumes:
       - follow-wal2json:/var/run/pgcopydb
@@ -50,8 +46,8 @@ services:
       PGCOPYDB_TABLE_JOBS: 4
       PGCOPYDB_INDEX_JOBS: 2
     env_file:
-      - uris.env
-      - paths.env
+      - ../uris.env
+      - ../paths.env
     # share TMPDIR between inject and test services
     volumes:
       - follow-wal2json:/var/run/pgcopydb
