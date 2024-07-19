@@ -9,10 +9,10 @@ up: down build
 	docker-compose up $(COMPOSE_EXIT)
 
 run: build fix-volumes
-	docker-compose run test
+	docker-compose --verbose run test
 
 down:
-	docker-compose down --volumes --remove-orphans
+	docker-compose --verbose down --volumes --remove-orphans
 
 build:
 	docker-compose build --quiet
