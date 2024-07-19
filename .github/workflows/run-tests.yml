@@ -50,6 +50,12 @@ jobs:
         run: |
             echo "TEST=${{ matrix.TEST }}" >> $GITHUB_ENV
 
+      - name: Create docker volumes
+        run: |
+          docker volume create follow-9.6 &&
+          docker volume create follow-wal2json &&
+          docker volume create follow-data-only
+
       - name: Run a test
         timeout-minutes: 5
         run: |
