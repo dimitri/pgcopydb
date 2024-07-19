@@ -51,7 +51,7 @@ jobs:
 
       - name: Create docker volumes
         run: |
-          case ${TEST} in "follow-*") docker volume create ${TEST};; esac
+          if [[ ${TEST} ~= "^follow-" ]]; then docker volume create ${TEST}; fi
 
       - name: List docker volumes
         run: |
@@ -59,7 +59,7 @@ jobs:
 
       - name: Docker Compose Version
         run: |
-          docker compose --version
+          docker-compose --version
 
       - name: Run a test
         timeout-minutes: 5
