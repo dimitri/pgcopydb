@@ -107,7 +107,7 @@ copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions)
 
 	/* make sure that we have our own process local connection */
 	TransactionSnapshot snapshot = { 0 };
-	
+
 	if (!copydb_copy_snapshot(copySpecs, &snapshot))
 	{
 		/* errors have already been logged */
@@ -444,7 +444,7 @@ copydb_prepare_extensions_restore(CopyDataSpec *copySpecs)
  * At the moment we need to call timescaledb_pre_restore() when timescaledb has
  * been used.
  */
-bool 
+bool
 copydb_finalize_extensions_restore(CopyDataSpec *copySpecs)
 {
 	bool timescaledb = false;

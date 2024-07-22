@@ -511,7 +511,7 @@ bool catalog_iter_s_extension(DatabaseCatalog *catalog,
 							  SourceExtensionIterFun *callback);
 
 bool catalog_iter_s_extension_timescaledb_checker(DatabaseCatalog *catalog,
-												  bool *timescaledb);						  
+												  bool *timescaledb);
 
 typedef struct SourceExtensionIterator
 {

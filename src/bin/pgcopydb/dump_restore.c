@@ -570,6 +570,7 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 		/* errors have already been logged */
 		return false;
 	}
+
 	/*
 	 * Some extensions such as timescaledb need a post restore step.
 	 */
