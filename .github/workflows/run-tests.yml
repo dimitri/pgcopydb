@@ -91,3 +91,21 @@ jobs:
           cat Dockerfile ci/Dockerfile.docs.template > ci/Dockerfile.docs && \
           docker build --file=ci/Dockerfile.docs --tag test-docs . && \
           docker run test-docs
+
+  cppcheck:
+    name: cppcheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: list the files
+        run: |
+          pwd
+          ls -al src/bin/pgcopydb
+
+      - name: c-linter
+        uses: tonybaloney/cppcheck-action@master
+        with:
+          path: .
+          options: --enable=all --verbose
