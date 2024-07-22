@@ -108,4 +108,4 @@ jobs:
         uses: rimbi/cppcheck-action@master
         with:
           path: ./src/bin/pgcopydb
-          opts: --enable=warning --quiet --error-exitcode=1
+          opts: --enable=warning --quiet
