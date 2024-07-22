@@ -105,6 +105,6 @@ jobs:
           ls -al src/bin/pgcopydb
 
       - name: c-linter
-        uses: deep5050/cppcheck-action@main
+        uses: tonybaloney/cppcheck-action@master
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN}}
+          path: ./src/bin/pgcopydb
