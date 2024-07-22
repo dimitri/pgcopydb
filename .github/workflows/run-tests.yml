@@ -99,12 +99,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: list the files
-        run: |
-          pwd
-          ls -al src/bin/pgcopydb
-
-      - name: c-linter
+      - name: Execute cppcheck
         uses: rimbi/cppcheck-action@master
         with:
           path: ./src/bin/pgcopydb
