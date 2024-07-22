@@ -12,7 +12,7 @@ run: build fix-volumes
 	docker-compose --verbose run test
 
 down:
-	docker-compose --verbose down --volumes --remove-orphans
+	docker-compose down
 
 build:
 	docker compose build --quiet
