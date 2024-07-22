@@ -105,6 +105,6 @@ jobs:
           ls -al src/bin/pgcopydb
 
       - name: c-linter
-        uses: tonybaloney/cppcheck-action@master
+        uses: rimbi/cppcheck-action@master
         with:
           path: ./src/bin/pgcopydb
