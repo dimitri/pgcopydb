@@ -108,4 +108,4 @@ jobs:
         uses: tonybaloney/cppcheck-action@master
         with:
           path: .
-          options: --enable=all --verbose
+          opts: --enable=all --verbose
