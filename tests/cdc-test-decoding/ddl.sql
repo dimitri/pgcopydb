@@ -25,11 +25,26 @@ commit;
 
 begin;
 
-CREATE TABLE IF NOT EXISTS public.identifer_as_column
+CREATE SCHEMA IF NOT EXISTS "Foo"".Bar";
+
+CREATE TABLE IF NOT EXISTS "Foo"".Bar".":Identifer As ""Column"".$1:"
 (
-    time bigserial
+    time bigserial,
+    "[column name]" text,
+    primary key (time, "[column name]")
 );
-alter table public.identifer_as_column replica identity full;
+
+CREATE SCHEMA IF NOT EXISTS "Unicode""Test";
+
+CREATE TYPE "[Status]" AS ENUM ('new', 'open', 'closed');
+
+CREATE TABLE IF NOT EXISTS "Unicode""Test".U&"\0441\043B\043E\043D"
+(
+    id bigserial,
+    U&"!0441!043B!043E!043D" UESCAPE '!' "[Status]",
+    U&"!043A!043E!043B!043E!043D!043A!0430" UESCAPE '!' text,
+    primary key (id, U&"!0441!043B!043E!043D" UESCAPE '!')
+);
 
 commit;
 

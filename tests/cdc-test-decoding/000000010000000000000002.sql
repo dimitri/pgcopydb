@@ -63,10 +63,18 @@ PREPARE 4835081e AS INSERT INTO public."""dqname""" (id) overriding system value
 EXECUTE 4835081e["1"];
 COMMIT; -- {"xid":497,"lsn":"0/24DFFA8","timestamp":"2024-05-08 11:10:15.240285+0000"}
 BEGIN; -- {"xid":498,"lsn":"0/24DFFA8","timestamp":"2024-05-08 11:10:15.240338+0000","commit_lsn":"0/24E00E0"}
-PREPARE 7a201c42 AS INSERT INTO public.identifer_as_column ("time") overriding system value VALUES ($1);
-EXECUTE 7a201c42["1"];
-PREPARE df296f92 AS DELETE FROM public.identifer_as_column WHERE "time" = $1;
-EXECUTE df296f92["1"];
+PREPARE 6035915f AS INSERT INTO "Foo"".Bar".":Identifer As ""Column"".$1:" ("time", "[column name]") overriding system value VALUES ($1, $2);
+EXECUTE 6035915f["1","foo"];
+PREPARE b08f5996 AS UPDATE "Foo"".Bar".":Identifer As ""Column"".$1:" SET "time" = $1, "[column name]" = $2 WHERE "time" = $3 and "[column name]" = $4;
+EXECUTE b08f5996["2","[bar]","1","foo"];
+PREPARE 9a0b3ec6 AS DELETE FROM "Foo"".Bar".":Identifer As ""Column"".$1:" WHERE "time" = $1 and "[column name]" = $2;
+EXECUTE 9a0b3ec6["2","[bar]"];
+PREPARE 786445a1 AS INSERT INTO "Unicode""Test"."слон" (id, "слон", "колонка") overriding system value VALUES ($1, $2, $3);
+EXECUTE 786445a1["1","open","foo"];
+PREPARE ca780274 AS UPDATE "Unicode""Test"."слон" SET id = $1, "слон" = $2, "колонка" = $3 WHERE id = $4 and "слон" = $5;
+EXECUTE ca780274["2","closed","[bar]","1","open"];
+PREPARE a6b34a6f AS DELETE FROM "Unicode""Test"."слон" WHERE id = $1 and "слон" = $2;
+EXECUTE a6b34a6f["2","closed"];
 COMMIT; -- {"xid":498,"lsn":"0/24E00E0","timestamp":"2024-05-08 11:10:15.240338+0000"}
 BEGIN; -- {"xid":499,"lsn":"0/24E00E0","timestamp":"2024-05-08 11:10:15.240400+0000","commit_lsn":"0/24E0198"}
 PREPARE 15aec07e AS INSERT INTO public.t_bit_types (id, a, b) overriding system value VALUES ($1, $2, $3);

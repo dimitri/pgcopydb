@@ -83,6 +83,8 @@ static bool prepareUpdateTuppleArrays(StreamContext *privateContext,
 									  TestDecodingHeader *header);
 
 
+static bool findIdentifierEndPos(const char *message, char separator, int *position);
+
 /*
  * prepareWal2jsonMessage prepares our internal JSON entry from a test_decoding
  * message. At this stage we only escape the message as a proper JSON string.
@@ -301,6 +303,81 @@ parseTestDecodingMessage(StreamContext *privateContext,
 
 
 /*
+ * findIdentifierEndPos returns the first position of the separator in the given
+ * message after navigating through all the quotes. It assumes that the message
+ * contains a well-formed identifier and doesn't attempt to handle errors while
+ * parsing the message.
+ *
+ * This should always find an identifier end position, as we are parsing a
+ * well-formed message from the test_decoding plugin.
+ */
+static bool
+findIdentifierEndPos(const char *message, char separator, int *position)
+{
+	if (message == NULL || position == NULL)
+	{
+		log_error("findIdentifierEndPos: message or position cannot be NULL");
+		return false;
+	}
+
+	/*
+	 * The separator cannot be a quote, as we are looking for the first
+	 * separator outside the quotes.
+	 */
+	if (separator == '"')
+	{
+		log_error("findIdentifierEndPos: separator cannot be a quote");
+		return false;
+	}
+
+	int quoteCount = 0;
+
+	int pos = 0;
+
+	for (pos = 0; message[pos] != '\0'; pos++)
+	{
+		if (message[pos] == '"')
+		{
+			quoteCount++;
+		}
+
+		/*
+		 * We are looking for the first 'separator' in the message which
+		 * should be outside the quotes.
+		 *
+		 * When there is 'separator' inside quotes, quoteCount will be odd,
+		 * and we need to account it as a part of the identifier.
+		 *
+		 * Here are some possible inputs and ^ indicates the position
+		 * we want to find:
+		 *
+		 * separator: '.'
+		 * "Foo.Bar"."Baz": UPDATE:
+		 *          ^
+		 * separator: '.'
+		 * "Foo Bar.Baz".hello: UPDATE:
+		 *		        ^
+		 * separator: ':'
+		 * "Foo Bar.Baz": UPDATE:
+		 *		        ^
+		 */
+		else if (message[pos] == separator && (quoteCount % 2) == 0)
+		{
+			*position = pos;
+			return true;
+		}
+	}
+
+	/*
+	 * We should never reach the end of the message without finding the
+	 * separator, as we are parsing a well-formed message from the test_decoding
+	 * plugin.
+	 */
+	return false;
+}
+
+
+/*
  * parseTestDecodingMessageHeader parses a raw test_decoding message to find
  * the header information only. It stops after having parsed the target table
  * qualified name and the action type (INSERT/UPDATE/DELETE/TRUNCATE), and
@@ -319,24 +396,36 @@ parseTestDecodingMessageHeader(TestDecodingHeader *header, const char *message)
 	 *      idp   dot             sep acp   end
 	 */
 	char *idp = (char *) message + strlen("table ");
-	char *dot = strchr(idp, '.');
-	char *sep = strchr(idp, ':');
+
+	int schemaEndPos = 0;
+	char schemaSeparator = '.';
+
+	if (!findIdentifierEndPos(idp, schemaSeparator, &schemaEndPos))
+	{
+		log_error("Failed to parse schema name in test_decoding message: %s",
+				  message);
+		return false;
+	}
+
+	char *dot = idp + schemaEndPos;
+
+	int tableEndPos = 0;
+	char tableSeparator = ':';
+
+	if (!findIdentifierEndPos(dot, tableSeparator, &tableEndPos))
+	{
+		log_error("Failed to parse table name in test_decoding message: %s",
+				  message);
+		return false;
+	}
+
+	char *sep = dot + tableEndPos;
+
 	char *acp = sep + 2;    /* skip ": " */
 	char *end = strchr(acp, ':');
 
 	/* skip the last ":" of the header in the offset */
 	header->offset = (end - message + 1) + 1;
-
-	bool quoted = *idp == '"';
-
-	if (quoted)
-	{
-		char ident[BUFSIZE] = { 0 };
-		strlcpy(ident, idp, sep - idp);
-
-		log_error("Failed to parse quoted qualified identifer %s", ident);
-		return false;
-	}
 
 	/*
 	 * The table schema.name is already escaped by the plugin using PostgreSQL's
@@ -657,8 +746,42 @@ parseNextColumn(TestDecodingColumns *cols,
 	}
 
 	/* search for data type name separators (open/close, or A/B) */
-	char *typA = strchr(ptr, '[');
-	char *typB = typA != NULL ? strchr(typA, ']') : NULL;
+	int columnEndPos = 0;
+	char columnSeparator = '[';
+
+	/*
+	 * Find the end of the column name, which is the first '[' character, which
+	 * is also the start of the column type.
+	 * e.g. "payment_id[integer]:23757"
+	 *                 ^
+	 */
+	if (!findIdentifierEndPos(ptr, columnSeparator, &columnEndPos))
+	{
+		log_error("Failed to parse test_decoding column name in message: %s",
+				  header->message);
+
+		return false;
+	}
+
+	char *typA = ptr + columnEndPos;
+
+	int typeEndPos = 0;
+	char typeSeparator = ']';
+
+	/*
+	 * Find the end of the column type, which is the first ']' character.
+	 * e.g. "payment_id[integer]:23757"
+	 *                         ^
+	 */
+	if (!findIdentifierEndPos(typA, typeSeparator, &typeEndPos))
+	{
+		log_error("Failed to parse test_decoding column type in message: %s",
+				  header->message);
+
+		return false;
+	}
+
+	char *typB = typA + typeEndPos;
 
 	/*
 	 * Postgres array data types are spelled like: "text[]". In test_decoding
