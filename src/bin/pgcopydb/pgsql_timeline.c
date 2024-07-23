@@ -339,7 +339,11 @@ parseTimelineHistory(const char *filename, const char *content,
 				  LSN_FORMAT_ARGS(entry->begin),
 				  LSN_FORMAT_ARGS(entry->end));
 
-		catalog_add_timeline_history(context, entry);
+		if (!catalog_add_timeline_history(context, entry))
+		{
+			log_error("Failed to add timeline history entry, see above for details");
+			return false;
+		}
 		timelineCount++;
 	}
 
@@ -357,7 +361,11 @@ parseTimelineHistory(const char *filename, const char *content,
 			  LSN_FORMAT_ARGS(entry->begin),
 			  LSN_FORMAT_ARGS(entry->end));
 
-	catalog_add_timeline_history(context, entry);
+	if (!catalog_add_timeline_history(context, entry))
+	{
+		log_error("Failed to add timeline history entry, see above for details");
+		return false;
+	}
 
 	return true;
 }
