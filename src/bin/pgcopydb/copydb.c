@@ -368,6 +368,10 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths,
 			"%s/slot",
 			cfPaths->cdc.dir);
 
+	sformat(cfPaths->cdc.tlihistfile, MAXPGPATH,
+			"%s/tli.history",
+			cfPaths->cdc.dir);
+
 	sformat(cfPaths->cdc.tlifile, MAXPGPATH,
 			"%s/tli",
 			cfPaths->cdc.dir);
