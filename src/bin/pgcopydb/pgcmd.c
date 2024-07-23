@@ -1676,14 +1676,8 @@ tokenize_archive_list_entry(ArchiveToken *token)
 		char *ptr = line;
 
 		/* advance ptr as long as *ptr is a digit */
-		for (; ptr != NULL && isdigit(*ptr); ptr++)
+		for (; isdigit(*ptr); ptr++)
 		{ }
-
-		if (ptr == NULL)
-		{
-			log_error("Failed to tokenize Archive Item line: %s", line);
-			return false;
-		}
 
 		int len = ptr - line + 1;
 		size_t size = len + 1;
