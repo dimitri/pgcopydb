@@ -10,9 +10,6 @@
 #include "pgsql_utils.h"
 #include "pgsql.h"
 
-static void parseIdentifySystemResult(void *ctx, PGresult *result);
-static void parseTimelineHistoryResult(void *ctx, PGresult *result);
-
 
 typedef struct IdentifySystemResult
 {
@@ -30,13 +27,16 @@ typedef struct TimelineHistoryResult
 	char *content;
 } TimelineHistoryResult;
 
+static void parseIdentifySystemResult(IdentifySystemResult *ctx, PGresult *result);
+static void parseTimelineHistoryResult(TimelineHistoryResult *context, PGresult *result);
+
 /*
  * pgsql_identify_system connects to the given pgsql client and issue the
  * replication command IDENTIFY_SYSTEM. The pgsql connection string should
  * contain the 'replication=1' parameter.
  */
 bool
-pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, void *ctx)
+pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, DatabaseCatalog *catalog)
 {
 	bool connIsOurs = pgsql->connection == NULL;
 
@@ -115,7 +115,7 @@ pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, void *ctx)
 		}
 
 		if (!parseTimelineHistory(hContext.filename, hContext.content, system,
-								  ctx))
+								  catalog))
 		{
 			/* errors have already been logged */
 			PQfinish(connection);
@@ -144,10 +144,8 @@ pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, void *ctx)
  * IDENTIFY_SYSTEM, and fills the given IdentifySystem structure.
  */
 static void
-parseIdentifySystemResult(void *ctx, PGresult *result)
+parseIdentifySystemResult(IdentifySystemResult *context, PGresult *result)
 {
-	IdentifySystemResult *context = (IdentifySystemResult *) ctx;
-
 	if (PQnfields(result) != 4)
 	{
 		log_error("Query returned %d columns, expected 4", PQnfields(result));
@@ -206,10 +204,8 @@ parseIdentifySystemResult(void *ctx, PGresult *result)
  * replication command.
  */
 static void
-parseTimelineHistoryResult(void *ctx, PGresult *result)
+parseTimelineHistoryResult(TimelineHistoryResult *context, PGresult *result)
 {
-	TimelineHistoryResult *context = (TimelineHistoryResult *) ctx;
-
 	if (PQnfields(result) != 2)
 	{
 		log_error("Query returned %d columns, expected 2", PQnfields(result));
@@ -257,7 +253,7 @@ parseTimelineHistoryResult(void *ctx, PGresult *result)
  */
 bool
 parseTimelineHistory(const char *filename, const char *content,
-					 IdentifySystem *system, void *context)
+					 IdentifySystem *system, DatabaseCatalog *catalog)
 {
 	LinesBuffer lbuf = { 0 };
 
@@ -338,7 +334,7 @@ parseTimelineHistory(const char *filename, const char *content,
 				  LSN_FORMAT_ARGS(entry->begin),
 				  LSN_FORMAT_ARGS(entry->end));
 
-		if (!catalog_add_timeline_history(context, entry))
+		if (!catalog_add_timeline_history(catalog, entry))
 		{
 			log_error("Failed to add timeline history entry, see above for details");
 			return false;
@@ -360,7 +356,7 @@ parseTimelineHistory(const char *filename, const char *content,
 			  LSN_FORMAT_ARGS(entry->begin),
 			  LSN_FORMAT_ARGS(entry->end));
 
-	if (!catalog_add_timeline_history(context, entry))
+	if (!catalog_add_timeline_history(catalog, entry))
 	{
 		log_error("Failed to add timeline history entry, see above for details");
 		return false;

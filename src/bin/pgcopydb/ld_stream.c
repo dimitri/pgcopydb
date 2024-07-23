@@ -490,7 +490,7 @@ startLogicalStreaming(StreamSpecs *specs)
 				  OutputPluginToString(specs->slot.plugin),
 				  specs->pluginOptions.count);
 
-		if (!pgsql_start_replication(&stream, &specs->sourceDB))
+		if (!pgsql_start_replication(&stream, specs->sourceDB))
 		{
 			/* errors have already been logged */
 			return false;
