@@ -36,7 +36,7 @@ typedef struct TimelineHistoryResult
  * contain the 'replication=1' parameter.
  */
 bool
-pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, void *timelineContext)
+pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, void *ctx)
 {
 	bool connIsOurs = pgsql->connection == NULL;
 
@@ -115,7 +115,7 @@ pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, void *timelineContex
 		}
 
 		if (!parseTimelineHistory(hContext.filename, hContext.content, system,
-								  timelineContext))
+								  ctx))
 		{
 			/* errors have already been logged */
 			PQfinish(connection);
