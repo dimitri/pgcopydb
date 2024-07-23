@@ -29,6 +29,8 @@ typedef struct TimelineHistoryResult
 
 static void parseIdentifySystemResult(IdentifySystemResult *ctx, PGresult *result);
 static void parseTimelineHistoryResult(TimelineHistoryResult *context, PGresult *result);
+static bool writeTimelineHistoryFile(char *filename, char *content, char *cdcPathDir);
+
 
 /*
  * pgsql_identify_system connects to the given pgsql client and issue the
@@ -36,7 +38,8 @@ static void parseTimelineHistoryResult(TimelineHistoryResult *context, PGresult 
  * contain the 'replication=1' parameter.
  */
 bool
-pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, DatabaseCatalog *catalog)
+pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, DatabaseCatalog *catalog,
+					  char *cdcPathDir)
 {
 	bool connIsOurs = pgsql->connection == NULL;
 
@@ -114,8 +117,14 @@ pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, DatabaseCatalog *cat
 			return false;
 		}
 
-		if (!parseTimelineHistory(hContext.filename, hContext.content, system,
-								  catalog))
+		if (!writeTimelineHistoryFile(hContext.filename, hContext.content, cdcPathDir))
+		{
+			log_error("Failed to write contents of TIMELINE_HISTORY command to disk");
+			PQfinish(connection);
+			return false;
+		}
+
+		if (!parseTimelineHistory(hContext.content, system, catalog))
 		{
 			/* errors have already been logged */
 			PQfinish(connection);
@@ -136,6 +145,18 @@ pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, DatabaseCatalog *cat
 	}
 
 	return true;
+}
+
+
+static bool
+writeTimelineHistoryFile(char *filename, char *content, char *cdcPathDir)
+{
+	char path[MAXPGPATH] = { 0 };
+	sformat(path, MAXPGPATH, "%s/%s", cdcPathDir, filename);
+
+	size_t size = strlen(content);
+
+	return write_file(content, size, path);
 }
 
 
@@ -252,8 +273,8 @@ parseTimelineHistoryResult(TimelineHistoryResult *context, PGresult *result)
  * parseTimelineHistory parses the content of a timeline history file.
  */
 bool
-parseTimelineHistory(const char *filename, const char *content,
-					 IdentifySystem *system, DatabaseCatalog *catalog)
+parseTimelineHistory(const char *content, IdentifySystem *system,
+					 DatabaseCatalog *catalog)
 {
 	LinesBuffer lbuf = { 0 };
 

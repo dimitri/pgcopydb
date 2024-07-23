@@ -403,9 +403,9 @@ typedef struct IdentifySystem
 /* forward declaration */
 typedef struct DatabaseCatalog DatabaseCatalog;
 bool pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system,
-						   DatabaseCatalog *catalog);
-bool parseTimelineHistory(const char *filename, const char *content,
-						  IdentifySystem *system, DatabaseCatalog *catalog);
+						   DatabaseCatalog *catalog, char *cdcPathDir);
+bool parseTimelineHistory(const char *content, IdentifySystem *system,
+						  DatabaseCatalog *catalog);
 
 /*
  * Logical Decoding support.
@@ -514,7 +514,8 @@ bool pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 
 bool pgsql_timestamptz_to_string(TimestampTz ts, char *str, size_t size);
 
-bool pgsql_start_replication(LogicalStreamClient *client, DatabaseCatalog *catalog);
+bool pgsql_start_replication(LogicalStreamClient *client, DatabaseCatalog *catalog,
+							 char *cdcPathDir);
 bool pgsql_stream_logical(LogicalStreamClient *client,
 						  LogicalStreamContext *context);
 
