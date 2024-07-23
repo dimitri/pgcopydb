@@ -7710,7 +7710,7 @@ catalog_count_summary_done_fetch(SQLiteQuery *query)
 /*
  * catalog_add_timeline_history is a wrapper for
  * catalog_add_timeline_history_internal so that callers can be agnostic of the
- * TimelineHistory context contexts.
+ * TimelineHistoryContext.
  */
 bool
 catalog_add_timeline_history(void *ctx, TimelineHistoryEntry *entry)

@@ -390,13 +390,6 @@ typedef struct TimelineHistoryEntry
 } TimelineHistoryEntry;
 
 
-typedef struct TimelineHistory
-{
-	TimelineHistoryEntry current;
-	char filename[MAXPGPATH];
-	char content[PGCOPYDB_MAX_TIMELINE_CONTENT];
-} TimelineHistory;
-
 /*
  * The IdentifySystem contains information that is parsed from the
  * IDENTIFY_SYSTEM replication command, and then the TIMELINE_HISTORY result.
@@ -407,7 +400,7 @@ typedef struct IdentifySystem
 	uint32_t timeline;
 	char xlogpos[PG_LSN_MAXLENGTH];
 	char dbname[NAMEDATALEN];
-	TimelineHistory timelines;
+	TimelineHistoryEntry currentTimeline;
 } IdentifySystem;
 
 bool pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, void *timelineContext);

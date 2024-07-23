@@ -3403,7 +3403,7 @@ pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, void *timelineContex
 			return false;
 		}
 
-		TimelineHistoryEntry *current = &(system->timelines.current);
+		TimelineHistoryEntry *current = &(system->currentTimeline);
 
 		log_sql("TIMELINE_HISTORY: \"%s\", timeline %d started at %X/%X",
 				hContext.filename,
@@ -3549,13 +3549,9 @@ parseTimelineHistory(const char *filename, const char *content,
 		return false;
 	}
 
-	/* keep the original content around */
-	strlcpy(system->timelines.filename, filename, MAXPGPATH);
-	strlcpy(system->timelines.content, content, PGCOPYDB_MAX_TIMELINE_CONTENT);
-
 	uint64_t prevend = InvalidXLogRecPtr;
 
-	TimelineHistoryEntry *entry = &system->timelines.current;
+	TimelineHistoryEntry *entry = &system->currentTimeline;
 	int timelineCount = 0;
 
 	for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
