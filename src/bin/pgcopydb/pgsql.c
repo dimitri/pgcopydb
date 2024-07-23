@@ -29,7 +29,6 @@
 #include "pg_utils.h"
 #include "signals.h"
 #include "string_utils.h"
-#include "schema.h"
 #include "catalog.h"
 
 #if defined(LIBPQ_HAS_PIPELINING) && LIBPQ_HAS_PIPELINING
@@ -3540,10 +3539,8 @@ parseTimelineHistoryResult(void *ctx, PGresult *result)
  */
 bool
 parseTimelineHistory(const char *filename, const char *content,
-					 IdentifySystem *system, void *timelineContext)
+					 IdentifySystem *system, void *context)
 {
-	TimelineHistoryContext *context = (TimelineHistoryContext *) timelineContext;
-
 	LinesBuffer lbuf = { 0 };
 
 	if (!splitLines(&lbuf, (char *) content))
@@ -3627,7 +3624,7 @@ parseTimelineHistory(const char *filename, const char *content,
 				  LSN_FORMAT_ARGS(entry->begin),
 				  LSN_FORMAT_ARGS(entry->end));
 
-		catalog_add_timeline_history(context->source, entry);
+		catalog_add_timeline_history(context, entry);
 		timelineCount++;
 	}
 
@@ -3645,7 +3642,7 @@ parseTimelineHistory(const char *filename, const char *content,
 			  LSN_FORMAT_ARGS(entry->begin),
 			  LSN_FORMAT_ARGS(entry->end));
 
-	catalog_add_timeline_history(context->source, entry);
+	catalog_add_timeline_history(context, entry);
 
 	return true;
 }

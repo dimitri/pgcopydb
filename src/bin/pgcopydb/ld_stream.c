@@ -420,9 +420,6 @@ stream_init_context(StreamSpecs *specs)
 bool
 startLogicalStreaming(StreamSpecs *specs)
 {
-	/* prepare the context for timeline history */
-	TimelineHistoryContext timelineContext = { .source = specs->sourceDB };
-
 	/* prepare the stream options */
 	LogicalStreamClient stream = { 0 };
 
@@ -492,6 +489,9 @@ startLogicalStreaming(StreamSpecs *specs)
 		log_debug("startLogicalStreaming: %s (%d)",
 				  OutputPluginToString(specs->slot.plugin),
 				  specs->pluginOptions.count);
+
+		/* prepare the context for timeline history */
+		TimelineHistoryContext timelineContext = { .source = specs->sourceDB };
 
 		if (!pgsql_start_replication(&stream, &timelineContext))
 		{
