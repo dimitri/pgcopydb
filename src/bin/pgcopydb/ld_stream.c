@@ -495,10 +495,6 @@ startLogicalStreaming(StreamSpecs *specs)
 			/* errors have already been logged */
 			return false;
 		}
-		{
-			/* errors have already been logged */
-			return false;
-		}
 
 		/* write the wal_segment_size and timeline history files */
 		if (!stream_write_context(specs, &stream))

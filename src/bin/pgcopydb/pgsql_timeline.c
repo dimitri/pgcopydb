@@ -148,6 +148,10 @@ pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, DatabaseCatalog *cat
 }
 
 
+/*
+ * writeTimelineHistoryFile writes the content of a timeline history file to disk.
+ * The filename is determined by the PostgreSQL TIMELINE_HISTORY command.
+ */
 static bool
 writeTimelineHistoryFile(char *filename, char *content, char *cdcPathDir)
 {
