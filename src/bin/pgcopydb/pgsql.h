@@ -379,9 +379,6 @@ bool pg_copy_large_object(PGSQL *src,
 #define InvalidXLogRecPtr 0
 #define XLogRecPtrIsInvalid(r) ((r) == InvalidXLogRecPtr)
 
-#define PGCOPYDB_MAX_TIMELINES 1024
-#define PGCOPYDB_MAX_TIMELINE_CONTENT (1024 * 1024)
-
 typedef struct TimelineHistoryEntry
 {
 	uint32_t tli;
