@@ -7772,19 +7772,19 @@ catalog_add_timeline_history(void *ctx, TimelineHistoryEntry *entry)
 
 
 /*
- * catalog_lookup_timeline fetches the current TimelineHistoryEntry
+ * catalog_lookup_timeline_history fetches the current TimelineHistoryEntry
  * from our catalogs.
  */
 bool
-catalog_lookup_timeline(DatabaseCatalog *catalog,
-						int tli,
-						TimelineHistoryEntry *entry)
+catalog_lookup_timeline_history(DatabaseCatalog *catalog,
+								int tli,
+								TimelineHistoryEntry *entry)
 {
 	sqlite3 *db = catalog->db;
 
 	if (db == NULL)
 	{
-		log_error("BUG: catalog_lookup_timeline: db is NULL");
+		log_error("BUG: catalog_lookup_timeline_history: db is NULL");
 		return false;
 	}
 

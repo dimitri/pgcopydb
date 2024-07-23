@@ -2771,7 +2771,8 @@ stream_read_context(StreamSpecs *specs)
 	}
 
 	DatabaseCatalog *source = specs->sourceDB;
-	if (!catalog_lookup_timeline(source, system->timeline, &system->currentTimeline))
+	if (!catalog_lookup_timeline_history(source, system->timeline,
+										 &system->currentTimeline))
 	{
 		/* errors have already been logged */
 		return false;
