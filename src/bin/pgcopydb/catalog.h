@@ -625,7 +625,7 @@ bool catalog_count_summary_done_fetch(SQLiteQuery *query);
 /*
  * Logical decoding
  */
-bool catalog_add_timeline_history(void *context,
+bool catalog_add_timeline_history(DatabaseCatalog *catalog,
 								  TimelineHistoryEntry *entry);
 bool catalog_lookup_timeline_history(DatabaseCatalog *catalog,
 									 int tli,

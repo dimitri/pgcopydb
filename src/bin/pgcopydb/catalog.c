@@ -7709,10 +7709,8 @@ catalog_count_summary_done_fetch(SQLiteQuery *query)
  * internal catalogs database.
  */
 bool
-catalog_add_timeline_history(void *ctx, TimelineHistoryEntry *entry)
+catalog_add_timeline_history(DatabaseCatalog *catalog, TimelineHistoryEntry *entry)
 {
-	DatabaseCatalog *catalog = (DatabaseCatalog *) ctx;
-
 	if (catalog == NULL)
 	{
 		log_error("BUG: catalog_add_timeline_history: catalog is NULL");
