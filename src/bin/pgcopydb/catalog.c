@@ -7805,8 +7805,7 @@ catalog_lookup_timeline(DatabaseCatalog *catalog,
 	char *sql =
 		"  select tli, startpos, endpos"
 		"    from timeline_history"
-		"   where tli = $1"
-		"   limit 1";
+		"   where tli = $1";
 
 
 	if (!catalog_sql_prepare(db, sql, &query))

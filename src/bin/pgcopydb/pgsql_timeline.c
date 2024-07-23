@@ -27,7 +27,7 @@ typedef struct TimelineHistoryResult
 	char sqlstate[6];
 	bool parsedOk;
 	char filename[MAXPGPATH];
-	char content[BUFSIZE * BUFSIZE]; /* 1MB should get us quite very far */
+	char *content;
 } TimelineHistoryResult;
 
 /*
@@ -238,16 +238,16 @@ parseTimelineHistoryResult(void *ctx, PGresult *result)
 
 	/* content (bytea) */
 	value = PQgetvalue(result, 0, 1);
+	context->content = strdup(value);
 
-	if (strlen(value) >= sizeof(context->content))
+	if (context->content == NULL)
 	{
-		log_error("Received a timeline history file of %zu bytes, "
-				  "pgcopydb is limited to files of up to %zu bytes.",
-				  strlen(value),
-				  sizeof(context->content));
+		log_error("parseTimelineHistoryResult: Failed to allocate memory for "
+				  "timeline history file of %zu bytes",
+				  strlen(value));
 		context->parsedOk = false;
+		return;
 	}
-	strlcpy(context->content, value, sizeof(context->content));
 
 	context->parsedOk = true;
 }
