@@ -7781,6 +7781,103 @@ catalog_add_timeline_history_internal(DatabaseCatalog *catalog,
 
 
 /*
+ * catalog_lookup_timeline fetches the current TimelineHistoryEntry
+ * from our catalogs.
+ */
+bool
+catalog_lookup_timeline(DatabaseCatalog *catalog,
+						int tli,
+						TimelineHistoryEntry *entry)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_lookup_timeline: db is NULL");
+		return false;
+	}
+
+	SQLiteQuery query = {
+		.context = entry,
+		.fetchFunction = &catalog_timeline_history_fetch
+	};
+
+	char *sql =
+		"  select tli, startpos, endpos"
+		"    from timeline_history"
+		"   where tli = $1"
+		"   limit 1";
+
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT, "tli", tli, NULL }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which return exactly one row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+bool
+catalog_timeline_history_fetch(SQLiteQuery *query)
+{
+	TimelineHistoryEntry *entry = (TimelineHistoryEntry *) query->context;
+
+	bzero(entry, sizeof(TimelineHistoryEntry));
+
+	/* tli */
+	entry->tli = sqlite3_column_int(query->ppStmt, 0);
+
+	/* begin LSN */
+	if (sqlite3_column_type(query->ppStmt, 1) != SQLITE_NULL)
+	{
+		const char *startpos = (const char *) sqlite3_column_text(query->ppStmt, 1);
+
+		if (!parseLSN(startpos, &entry->begin))
+		{
+			log_error("Failed to parse LSN from \"%s\"", startpos);
+			return false;
+		}
+	}
+
+	/* end LSN */
+	if (sqlite3_column_type(query->ppStmt, 2) != SQLITE_NULL)
+	{
+		const char *endpos = (const char *) sqlite3_column_text(query->ppStmt, 2);
+
+		if (!parseLSN(endpos, &entry->end))
+		{
+			log_error("Failed to parse LSN from \"%s\"", endpos);
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
  * catalog_execute executes sqlite query
  */
 bool

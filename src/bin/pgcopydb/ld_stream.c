@@ -2773,8 +2773,12 @@ stream_read_context(StreamSpecs *specs)
 		return false;
 	}
 
-/* TODO: read the current timeline from internal catalog */
-/* It may not really be necessary as it is not used anywhere */
+	DatabaseCatalog *source = specs->sourceDB;
+	if (!catalog_lookup_timeline(source, system->timeline, &system->currentTimeline))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	return true;
 }
