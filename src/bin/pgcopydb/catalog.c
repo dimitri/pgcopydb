@@ -476,9 +476,6 @@ static char *targetDBdropDDLs[] = {
 	"drop table if exists s_constraint"
 };
 
-static bool catalog_add_timeline_history_internal(DatabaseCatalog *catalog,
-												  TimelineHistoryEntry *entry);
-
 
 /*
  * catalog_init_from_specs initializes our internal catalog database file from
@@ -7708,26 +7705,20 @@ catalog_count_summary_done_fetch(SQLiteQuery *query)
 
 
 /*
- * catalog_add_timeline_history is a wrapper for
- * catalog_add_timeline_history_internal so that callers can be agnostic of the
- * TimelineHistoryContext.
+ * catalog_add_timeline_history inserts a timeline history entry to our
+ * internal catalogs database.
  */
 bool
 catalog_add_timeline_history(void *ctx, TimelineHistoryEntry *entry)
 {
 	TimelineHistoryContext *context = (TimelineHistoryContext *) ctx;
-	return catalog_add_timeline_history_internal(context->source, entry);
-}
+	DatabaseCatalog *catalog = context->source;
+	if (catalog == NULL)
+	{
+		log_error("BUG: catalog_add_timeline_history: catalog is NULL");
+		return false;
+	}
 
-
-/*
- * catalog_add_timeline_history inserts a timeline history entry to our
- * SQLite catalogs.
- */
-static bool
-catalog_add_timeline_history_internal(DatabaseCatalog *catalog,
-									  TimelineHistoryEntry *entry)
-{
 	sqlite3 *db = catalog->db;
 
 	if (db == NULL)
