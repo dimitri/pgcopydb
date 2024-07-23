@@ -3,12 +3,12 @@
  *	 API for sending SQL commands about timelines to a PostgreSQL server
  */
 
+#include "catalog.h"
 #include "file_utils.h"
 #include "log.h"
-
-#include "pgsql.h"
+#include "pg_utils.h"
 #include "pgsql_utils.h"
-#include "catalog.h"
+#include "pgsql.h"
 
 static void parseIdentifySystemResult(void *ctx, PGresult *result);
 static void parseTimelineHistoryResult(void *ctx, PGresult *result);
@@ -127,8 +127,7 @@ pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, void *ctx)
 		log_sql("TIMELINE_HISTORY: \"%s\", timeline %d started at %X/%X",
 				hContext.filename,
 				current->tli,
-				(uint32_t) (current->begin >> 32),
-				(uint32_t) current->begin);
+				LSN_FORMAT_ARGS(current->begin));
 	}
 
 	if (connIsOurs)
