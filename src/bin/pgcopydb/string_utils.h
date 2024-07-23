@@ -11,9 +11,11 @@
 
 #define NULL_AS_EMPTY_STRING(str) (str == NULL ? "" : str)
 
+/* casting to const char * is necessary to avoid literalWithCharPtrCompare cppcheck finding */
 #define streq(a, b) \
 	(((const char *) a != NULL) && ((const char *) b != NULL) && (strcmp(a, b) == 0))
 
+/* casting to const char * is necessary to avoid literalWithCharPtrCompare cppcheck finding */
 #define strneq(a, b) \
 	(((const char *) a != NULL) && ((const char *) b != NULL) && (strcmp(a, b) != 0))
 
