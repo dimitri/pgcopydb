@@ -6499,7 +6499,7 @@ catalog_add_s_extension_config(DatabaseCatalog *catalog,
  *   and checks for presence of timescaledb extension.
  */
 bool
-catalog_iter_s_extension_timescaledb_checker(DatabaseCatalog *catalog,
+catalog_has_timescaledb_extension(DatabaseCatalog *catalog,
 											 bool *timescaledb)
 {
 	SourceExtensionIterator *iter =
