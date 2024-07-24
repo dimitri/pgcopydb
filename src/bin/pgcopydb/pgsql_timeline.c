@@ -7,6 +7,7 @@
 #include "file_utils.h"
 #include "log.h"
 #include "pg_utils.h"
+#include "pgsql_timeline.h"
 #include "pgsql_utils.h"
 #include "pgsql.h"
 

@@ -26,6 +26,7 @@
 #include "log.h"
 #include "parsing_utils.h"
 #include "pgsql.h"
+#include "pgsql_timeline.h"
 #include "pgsql_utils.h"
 #include "pg_utils.h"
 #include "signals.h"
