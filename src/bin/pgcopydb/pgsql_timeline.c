@@ -125,6 +125,10 @@ pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, DatabaseCatalog *cat
 			return false;
 		}
 
+		log_debug("Wrote tli %s timeline history file \"%s/%s\"",
+				  system->currentTimeline.tli, cdcPathDir, hContext.filename);
+
+
 		if (!parseTimelineHistory(hContext.content, system, catalog))
 		{
 			/* errors have already been logged */
