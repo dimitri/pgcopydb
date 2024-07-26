@@ -6536,7 +6536,7 @@ catalog_has_timescaledb_extension(DatabaseCatalog *catalog,
 			break;
 		}
 
-		if (strcmp(ext->extname, "timescaledb") == 0)
+		if (streq(ext->extname, "timescaledb"))
 		{
 			if (!catalog_iter_s_extension_finish(iter))
 			{
