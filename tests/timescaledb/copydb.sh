@@ -11,21 +11,11 @@ set -e
 #  - PGCOPYDB_INDEX_JOBS
 
 # make sure source and target databases are ready
-pgcopydb ping --source ${PGCOPYDB_SOURCE_PGURI} --target ${PGCOPYDB_TARGET_PGURI}
-
-psql -a ${PGCOPYDB_SOURCE_PGURI} <<EOF
-create role tsdb NOSUPERUSER CREATEDB NOCREATEROLE LOGIN PASSWORD '0wn3d';
-create database tsdb owner tsdb;
-EOF
+pgcopydb ping 
 
 # copying roles needs superuser
 # and we use the postgres database here still
-pgcopydb copy roles --source ${PGCOPYDB_SOURCE_PGURI} --target ${PGCOPYDB_TARGET_PGURI}
-
-# now create the tsdb database on the target, owned by new role tsdb
-psql ${PGCOPYDB_TARGET_PGURI} <<EOF
-create database tsdb owner tsdb;
-EOF
+pgcopydb copy roles 
 
 psql -o /tmp/c.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pgcopydb/rides.sql
 
@@ -38,12 +28,10 @@ coproc ( pgcopydb snapshot --debug )
 sleep 1
 
 # copy the extensions separately, needs superuser (both on source and target)
-pgcopydb list extensions
+pgcopydb copy extensions
 
 # now clone with superuser privileges, seems to be required for timescaledb
-pgcopydb clone --skip-extensions \
-         --source ${PGCOPYDB_SOURCE_PGURI} \
-         --target ${PGCOPYDB_TARGET_PGURI}
+pgcopydb clone --skip-extensions 
 
 kill -TERM ${COPROC_PID}
 wait ${COPROC_PID}
