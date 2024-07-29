@@ -37,8 +37,12 @@
 {"action":"I","xid":"0","lsn":"0/24DF6F0","timestamp":"2024-04-17 12:28:50.815952+0000","message":"table public.\"\"\"dqname\"\"\": INSERT: id[bigint]:1"}
 {"action":"C","xid":"497","lsn":"0/24DF760","timestamp":"2024-04-17 12:28:50.815962+0000","message":"COMMIT 497"}
 {"action":"B","xid":"498","lsn":"0/24DF760","timestamp":"2024-04-17 12:28:50.815979+0000","message":"BEGIN 498"}
-{"action":"I","xid":"0","lsn":"0/24DF7C8","timestamp":"2024-04-17 12:28:50.816004+0000","message":"table public.identifer_as_column: INSERT: \"time\"[bigint]:1"}
-{"action":"D","xid":"0","lsn":"0/24DF808","timestamp":"2024-04-17 12:28:50.816015+0000","message":"table public.identifer_as_column: DELETE: \"time\"[bigint]:1"}
+{"action":"I","xid":"0","lsn":"0/24E33D8","timestamp":"2024-07-26 13:52:38.916787+0000","message":"table \"Foo\"\".Bar\".\":Identifer As \"\"Column\"\".$1:\": INSERT: \"time\"[bigint]:1 \"[column name]\"[text]:'foo'"}
+{"action":"U","xid":"0","lsn":"0/24E34D0","timestamp":"2024-07-26 13:52:38.916806+0000","message":"table \"Foo\"\".Bar\".\":Identifer As \"\"Column\"\".$1:\": UPDATE: old-key: \"time\"[bigint]:1 \"[column name]\"[text]:'foo' new-tuple: \"time\"[bigint]:2 \"[column name]\"[text]:'[bar]'"}
+{"action":"D","xid":"0","lsn":"0/24E3580","timestamp":"2024-07-26 13:52:38.916815+0000","message":"table \"Foo\"\".Bar\".\":Identifer As \"\"Column\"\".$1:\": DELETE: \"time\"[bigint]:2 \"[column name]\"[text]:'[bar]'"}
+{"action":"I","xid":"0","lsn":"0/24EB1D8","timestamp":"2024-07-27 03:09:41.672406+0000","message":"table \"Unicode\"\"Test\".\"слон\": INSERT: id[bigint]:1 \"слон\"[\"[Status]\"]:'open' \"колонка\"[text]:'foo'"}
+{"action":"U","xid":"0","lsn":"0/24EB2D0","timestamp":"2024-07-27 03:09:41.672433+0000","message":"table \"Unicode\"\"Test\".\"слон\": UPDATE: old-key: id[bigint]:1 \"слон\"[\"[Status]\"]:'open' new-tuple: id[bigint]:2 \"слон\"[\"[Status]\"]:'closed' \"колонка\"[text]:'[bar]'"}
+{"action":"D","xid":"0","lsn":"0/24EB380","timestamp":"2024-07-27 03:09:41.672445+0000","message":"table \"Unicode\"\"Test\".\"слон\": DELETE: id[bigint]:2 \"слон\"[\"[Status]\"]:'closed'"}
 {"action":"C","xid":"498","lsn":"0/24DF880","timestamp":"2024-04-17 12:28:50.816023+0000","message":"COMMIT 498"}
 {"action":"B","xid":"499","lsn":"0/24DF880","timestamp":"2024-04-17 12:28:50.816038+0000","message":"BEGIN 499"}
 {"action":"I","xid":"0","lsn":"0/24DF880","timestamp":"2024-04-17 12:28:50.816083+0000","message":"table public.t_bit_types: INSERT: id[integer]:2 a[bit]:B'100' b[bit varying]:B'101'"}

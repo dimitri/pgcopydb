@@ -74,12 +74,17 @@ commit;
 --
 begin;
 
-insert into public.identifer_as_column default values;
+insert into "Foo"".Bar".":Identifer As ""Column"".$1:" ("time", "[column name]") values (1, 'foo');
 
-update public.identifer_as_column set "time" = 1 where "time" = 0;
+update "Foo"".Bar".":Identifer As ""Column"".$1:" set "time" = 2, "[column name]" = '[bar]' where "time" = 1;
 
-delete from public.identifer_as_column where "time" = 1;
+delete from "Foo"".Bar".":Identifer As ""Column"".$1:" where "time" = 2;
 
+insert into "Unicode""Test".U&"\0441\043B\043E\043D" (id, U&"!0441!043B!043E!043D" UESCAPE '!', U&"!043A!043E!043B!043E!043D!043A!0430" UESCAPE '!') values (1, 'open', 'foo');
+
+update "Unicode""Test".U&"\0441\043B\043E\043D" set id = 2, U&"!0441!043B!043E!043D" UESCAPE '!' = 'closed', U&"\043A\043E\043B\043E\043D\043A\0430" = '[bar]' where id = 1;
+
+delete from "Unicode""Test".U&"\0441\043B\043E\043D" where id = 2;
 commit;
 
 --
