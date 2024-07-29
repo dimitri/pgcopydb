@@ -125,10 +125,6 @@ pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, DatabaseCatalog *cat
 			return false;
 		}
 
-		log_debug("Wrote tli %s timeline history file \"%s/%s\"",
-				  system->currentTimeline.tli, cdcPathDir, hContext.filename);
-
-
 		if (!parseTimelineHistory(hContext.content, system, catalog))
 		{
 			/* errors have already been logged */
@@ -163,8 +159,9 @@ writeTimelineHistoryFile(char *filename, char *content, char *cdcPathDir)
 	char path[MAXPGPATH] = { 0 };
 	sformat(path, MAXPGPATH, "%s/%s", cdcPathDir, filename);
 
-	size_t size = strlen(content);
+	log_debug("Writing timeline history file \"%s\"", path);
 
+	size_t size = strlen(content);
 	return write_file(content, size, path);
 }
 
