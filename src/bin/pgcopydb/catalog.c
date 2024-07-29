@@ -6495,66 +6495,6 @@ catalog_add_s_extension_config(DatabaseCatalog *catalog,
 
 
 /*
- *   catalog_iter_s_extesnion_timescaledb_checker , iterates over the list of extensions in our catalogs
- *   and checks for presence of timescaledb extension.
- */
-bool
-catalog_has_timescaledb_extension(DatabaseCatalog *catalog,
-											 bool *timescaledb)
-{
-	SourceExtensionIterator *iter =
-		(SourceExtensionIterator *) calloc(1, sizeof(SourceExtensionIterator));
-
-	iter->catalog = catalog;
-
-	*timescaledb = false;
-
-	if (!catalog_iter_s_extension_init(iter))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	for (;;)
-	{
-		if (!catalog_iter_s_extension_next(iter))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		SourceExtension *ext = iter->ext;
-
-		if (ext == NULL)
-		{
-			if (!catalog_iter_s_extension_finish(iter))
-			{
-				/* errors have already been logged */
-				return false;
-			}
-
-			break;
-		}
-
-		if (streq(ext->extname, "timescaledb"))
-		{
-			if (!catalog_iter_s_extension_finish(iter))
-			{
-				return false;
-			}
-
-			*timescaledb = true;
-
-			return true;
-		}
-	}
-
-
-	return true;
-}
-
-
-/*
  * catalog_iter_s_extension iterates over the list of extensions in our
  * catalogs.
  */

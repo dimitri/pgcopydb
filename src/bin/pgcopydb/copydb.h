@@ -346,6 +346,7 @@ bool copydb_parse_extensions_requirements(CopyDataSpec *copySpecs,
 bool copydb_prepare_extensions_restore(CopyDataSpec *copySpecs);
 bool copydb_finalize_extensions_restore(CopyDataSpec *copySpecs);
 
+bool source_has_timescaledb_extension(CopyDataSpec *copySpecs, bool *hasTimescaledb);
 bool timescaledb_pre_restore(CopyDataSpec *copySpecs);
 bool timescaledb_post_restore(CopyDataSpec *copySpecs);
 

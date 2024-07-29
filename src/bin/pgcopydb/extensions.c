@@ -409,6 +409,39 @@ copydb_parse_extensions_requirements(CopyDataSpec *copySpecs, char *filename)
 }
 
 
+/* source_has_timescaledb_extension will check if timescaledb extension is present in 
+ * source database, if it exists then prepare the target database for timescale data
+ */
+bool 
+source_has_timescaledb_extension(CopyDataSpec *copySpecs, bool *hasTimescaledb)
+{
+	PGSQL dst = { 0 };
+
+	if (!pgsql_init(&dst, copySpecs->connStrings.source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	char *sql = "select exists(select 1 from pg_extension where extname = 'timescaledb')";
+
+	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_BOOL, false };
+
+	if (!pgsql_execute_with_params(&dst, sql, 0, NULL, NULL,
+								   &context, &parseSingleValueResult))
+	{
+		log_error("Failed to check if source database contains "
+				  "timescaledb extension, see above for details");
+		return false;
+	}
+
+	*hasTimescaledb = context.boolVal;
+
+	return true;
+
+}
+
+
 /*
  * copydb_prepare_extensions_restore implements pre pg_restore steps that might
  * be needed for some extensions.
@@ -419,12 +452,11 @@ copydb_parse_extensions_requirements(CopyDataSpec *copySpecs, char *filename)
 bool
 copydb_prepare_extensions_restore(CopyDataSpec *copySpecs)
 {
-	bool timescaledb = false;
-	Catalogs *catalogs = &(copySpecs->catalogs);
-	DatabaseCatalog *filtersDB = &(catalogs->filter);
-	catalog_has_timescaledb_extension(filtersDB, &timescaledb);
+	bool hasTimescaledb = false;
+	
+	source_has_timescaledb_extension(copySpecs, &hasTimescaledb);
 
-	if (timescaledb)
+	if (hasTimescaledb)
 	{
 		log_debug("Timescaledb extension is present");
 		if (!timescaledb_pre_restore(copySpecs))
@@ -447,12 +479,11 @@ copydb_prepare_extensions_restore(CopyDataSpec *copySpecs)
 bool
 copydb_finalize_extensions_restore(CopyDataSpec *copySpecs)
 {
-	bool timescaledb = false;
-	Catalogs *catalogs = &(copySpecs->catalogs);
-	DatabaseCatalog *filtersDB = &(catalogs->filter);
-	catalog_has_timescaledb_extension(filtersDB, &timescaledb);
+	bool hasTimescaledb = false;
+	
+	source_has_timescaledb_extension(copySpecs, &hasTimescaledb);
 
-	if (timescaledb)
+	if (hasTimescaledb)
 	{
 		log_debug("Timescaledb extension is present");
 		if (!timescaledb_post_restore(copySpecs))
