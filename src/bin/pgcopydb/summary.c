@@ -2869,6 +2869,9 @@ print_summary_table(SummaryTable *summary)
 }
 
 
+/*
+ * summary_index_array_as_json converts a SummaryIndexArray to a JSON array.
+ */
 static JSON_Value *
 summary_index_array_as_json(SummaryIndexArray *indexArray)
 {
