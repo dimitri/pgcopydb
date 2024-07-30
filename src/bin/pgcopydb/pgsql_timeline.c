@@ -25,11 +25,11 @@ typedef struct TimelineHistoryResult
 	char sqlstate[6];
 	bool parsedOk;
 	char filename[MAXPGPATH];
-	char *content;
 } TimelineHistoryResult;
 
 static void parseIdentifySystemResult(IdentifySystemResult *ctx, PGresult *result);
-static void parseTimelineHistoryResult(TimelineHistoryResult *context, PGresult *result);
+static void parseTimelineHistoryResult(TimelineHistoryResult *context, PGresult *result,
+									   char *cdcPathDir);
 static bool writeTimelineHistoryFile(char *filename, char *content, char *cdcPathDir);
 
 
@@ -106,7 +106,7 @@ pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, DatabaseCatalog *cat
 			return false;
 		}
 
-		(void) parseTimelineHistoryResult((void *) &hContext, result);
+		(void) parseTimelineHistoryResult((void *) &hContext, result, cdcPathDir);
 
 		PQclear(result);
 		clear_results(pgsql);
@@ -118,26 +118,18 @@ pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, DatabaseCatalog *cat
 			return false;
 		}
 
-		if (!writeTimelineHistoryFile(hContext.filename, hContext.content, cdcPathDir))
-		{
-			log_error("Failed to write contents of TIMELINE_HISTORY command to disk");
-			PQfinish(connection);
-			return false;
-		}
+		ParseTimelineHistoryContext pContext = {
+			.catalog = catalog,
+			.currentTimeline = system->timeline
+		};
 
-		if (!parseTimelineHistory(hContext.content, system, catalog))
+		if (!timeline_iter_history(hContext.filename, &pContext,
+								   timeline_history_add_hook))
 		{
 			/* errors have already been logged */
 			PQfinish(connection);
 			return false;
 		}
-
-		TimelineHistoryEntry *current = &(system->currentTimeline);
-
-		log_sql("TIMELINE_HISTORY: \"%s\", timeline %d started at %X/%X",
-				hContext.filename,
-				current->tli,
-				LSN_FORMAT_ARGS(current->begin));
 	}
 
 	if (connIsOurs)
@@ -228,10 +220,12 @@ parseIdentifySystemResult(IdentifySystemResult *context, PGresult *result)
 
 /*
  * parseTimelineHistoryResult parses the result of the TIMELINE_HISTORY
- * replication command.
+ * replication command. The content is written to disk, and the filename
+ * is stored in the TimelineHistoryResult structure.
  */
 static void
-parseTimelineHistoryResult(TimelineHistoryResult *context, PGresult *result)
+parseTimelineHistoryResult(TimelineHistoryResult *context, PGresult *result,
+						   char *cdcPathDir)
 {
 	if (PQnfields(result) != 2)
 	{
@@ -258,15 +252,16 @@ parseTimelineHistoryResult(TimelineHistoryResult *context, PGresult *result)
 	char *value = PQgetvalue(result, 0, 0);
 	strlcpy(context->filename, value, sizeof(context->filename));
 
-	/* content (bytea) */
+	/*
+	 * content (bytea)
+	 *
+	 * We do not want to store this value in memory. Instead we write it to disk
+	 * as it is.
+	 */
 	value = PQgetvalue(result, 0, 1);
-	context->content = strdup(value);
-
-	if (context->content == NULL)
+	if (!writeTimelineHistoryFile(context->filename, value, cdcPathDir))
 	{
-		log_error("parseTimelineHistoryResult: Failed to allocate memory for "
-				  "timeline history file of %zu bytes",
-				  strlen(value));
+		log_error("Failed to write timeline history file \"%s\"", context->filename);
 		context->parsedOk = false;
 		return;
 	}
@@ -275,117 +270,253 @@ parseTimelineHistoryResult(TimelineHistoryResult *context, PGresult *result)
 }
 
 
-/*
- * parseTimelineHistory parses the content of a timeline history file.
- */
+/* timeline_iter_history is used to iterate over the content of a timeline history file. */
 bool
-parseTimelineHistory(const char *content, IdentifySystem *system,
-					 DatabaseCatalog *catalog)
+timeline_iter_history(char *filename,
+					  ParseTimelineHistoryContext *context,
+					  TimelineHistoryFun *callback)
 {
-	LinesBuffer lbuf = { 0 };
+	TimelineHistoryIterator *iter =
+		(TimelineHistoryIterator *) malloc(sizeof(TimelineHistoryIterator));
 
-	if (!splitLines(&lbuf, (char *) content))
+	if (iter == NULL)
+	{
+		log_error("Failed to allocate memory for timeline history iterator");
+		return false;
+	}
+
+	iter->filename = filename;
+	iter->currentTimeline = context->currentTimeline;
+	iter->prevend = InvalidXLogRecPtr;
+
+	if (!timeline_iter_history_init(iter))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	uint64_t prevend = InvalidXLogRecPtr;
-
-	TimelineHistoryEntry *entry = &system->currentTimeline;
-	int timelineCount = 0;
-
-	for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
+	for (;;)
 	{
-		char *ptr = lbuf.lines[lineNumber];
-
-		/* skip leading whitespace and check for # comment */
-		for (; *ptr; ptr++)
+		if (!timeline_iter_history_next(iter))
 		{
-			if (!isspace((unsigned char) *ptr))
+			/* errors have already been logged */
+			return false;
+		}
+
+		TimelineHistoryEntry *entry = iter->entry;
+
+		if (entry == NULL)
+		{
+			if (!timeline_iter_history_finish(iter))
 			{
-				break;
+				/* errors have already been logged */
+				return false;
 			}
+
+			break;
 		}
 
-		if (*ptr == '\0' || *ptr == '#')
+		if (!callback(context, entry))
 		{
-			continue;
-		}
-
-		log_trace("parseTimelineHistory line %lld is \"%s\"",
-				  (long long) lineNumber,
-				  lbuf.lines[lineNumber]);
-
-		char *tabptr = strchr(lbuf.lines[lineNumber], '\t');
-
-		if (tabptr == NULL)
-		{
-			log_error("Failed to parse history file line %lld: \"%s\"",
-					  (long long) lineNumber, ptr);
+			log_error("Failed to parse timeline history entry in file \"%s\"",
+					  filename);
 			return false;
 		}
+	}
 
-		*tabptr = '\0';
+	/* use the callback for the final entry that holds the details of the current timeline */
+	if (!callback(context, iter->entry))
+	{
+		log_error("Failed to parse timeline history entry in file \"%s\"",
+				  filename);
+		return false;
+	}
 
-		if (!stringToUInt(lbuf.lines[lineNumber], &entry->tli))
-		{
-			log_error("Failed to parse history timeline \"%s\"", tabptr);
-			return false;
-		}
 
-		char *lsn = tabptr + 1;
+	return true;
+}
 
-		for (char *lsnend = lsn; *lsnend; lsnend++)
-		{
-			if (!(isxdigit((unsigned char) *lsnend) || *lsnend == '/'))
-			{
-				*lsnend = '\0';
-				break;
-			}
-		}
 
-		if (!parseLSN(lsn, &entry->end))
-		{
-			log_error("Failed to parse history timeline %d LSN \"%s\"",
-					  entry->tli, lsn);
-			return false;
-		}
+/*
+ * timeline_iter_history_init initializes a TimelineHistoryIterator that will be
+ * used to iterate over the content of a timeline history file.
+ */
+bool
+timeline_iter_history_init(TimelineHistoryIterator *iter)
+{
+	iter->prevend = InvalidXLogRecPtr;
 
-		entry->begin = prevend;
-		prevend = entry->end;
+	iter->fileIterator = (FileLinesIterator *) malloc(sizeof(FileLinesIterator));
 
-		log_trace("parseTimelineHistory[%d]: tli %d [%X/%X %X/%X]",
-				  timelineCount,
-				  entry->tli,
-				  LSN_FORMAT_ARGS(entry->begin),
-				  LSN_FORMAT_ARGS(entry->end));
-
-		if (!catalog_add_timeline_history(catalog, entry))
-		{
-			log_error("Failed to add timeline history entry, see above for details");
-			return false;
-		}
-		timelineCount++;
+	if (iter->fileIterator == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
 	}
 
 	/*
-	 * Create one more entry for the "tip" of the timeline, which has no entry
-	 * in the history file.
+	 * A timeline history file has a fixed format that looks like the following:
+	 *
+	 * 1	0/5000148	no recovery target specified
+	 * 2	0/7000148	no recovery target specified
+	 * 3	0/C0109B8	no recovery target specified
+	 *
+	 * We are only interested in the LSN values in the second column.
 	 */
-	entry->tli = system->timeline;
-	entry->begin = prevend;
-	entry->end = InvalidXLogRecPtr;
+	iter->fileIterator->bufsize = BUFSIZE;
+	iter->fileIterator->filename = iter->filename;
 
-	log_trace("parseTimelineHistory[%d]: tli %d [%X/%X %X/%X]",
-			  timelineCount,
+	if (!file_iter_lines_init(iter->fileIterator))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	iter->entry = (TimelineHistoryEntry *) malloc(sizeof(TimelineHistoryEntry));
+
+	if (iter->entry == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	return true;
+}
+
+
+/* timeline_iter_history_next reads the next line of the timeline history file */
+bool
+timeline_iter_history_next(TimelineHistoryIterator *iter)
+{
+	/* read next line using the file iterator low-level API */
+	bool skippingEmptyLinesAndComments = true;
+
+	while (skippingEmptyLinesAndComments)
+	{
+		if (!file_iter_lines_next(iter->fileIterator))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (iter->fileIterator->line == NULL)
+		{
+			iter->entry = NULL;
+			return true;
+		}
+
+		char *line = iter->fileIterator->line;
+
+		/* skip leading whitespace */
+		for (; *line; line++)
+		{
+			if (!isspace((unsigned char) *line))
+			{
+				break;
+			}
+		}
+
+		skippingEmptyLinesAndComments = (*line == '\0' || *line == '#');
+	}
+
+	char *line = iter->fileIterator->line;
+
+	log_trace("timeline_iter_history_next: line is \"%s\"", line);
+
+	char *tabptr = strchr(line, '\t');
+
+	if (tabptr == NULL)
+	{
+		log_error("Failed to parse history file line \"%s\"", line);
+		return false;
+	}
+
+	*tabptr = '\0';
+
+	TimelineHistoryEntry *entry = iter->entry;
+
+	if (!stringToUInt(line, &entry->tli))
+	{
+		log_error("Failed to parse history timeline \"%s\"", line);
+		return false;
+	}
+
+	char *lsn = tabptr + 1;
+
+	for (char *lsnend = lsn; *lsnend; lsnend++)
+	{
+		if (!(isxdigit((unsigned char) *lsnend) || *lsnend == '/'))
+		{
+			*lsnend = '\0';
+			break;
+		}
+	}
+
+	if (!parseLSN(lsn, &entry->end))
+	{
+		log_error("Failed to parse history timeline %d LSN \"%s\"",
+				  entry->tli, lsn);
+		return false;
+	}
+
+	entry->begin = iter->prevend;
+	iter->prevend = entry->end;
+
+	log_trace("timeline_iter_history_next: tli %d [%X/%X %X/%X]",
 			  entry->tli,
 			  LSN_FORMAT_ARGS(entry->begin),
 			  LSN_FORMAT_ARGS(entry->end));
 
+	return true;
+}
+
+
+/*
+ * timeline_iter_history_finish closes the file iterator and creates a final entry
+ * for the "tip" of the timeline, which has no entry in the history file.
+ */
+bool
+timeline_iter_history_finish(TimelineHistoryIterator *iter)
+{
+	/*
+	 * Create one more entry for the "tip" of the timeline, which has no entry
+	 * in the history file.
+	 */
+	TimelineHistoryEntry *entry = iter->entry;
+	entry->tli = iter->currentTimeline;
+	entry->begin = iter->prevend;
+	entry->end = InvalidXLogRecPtr;
+
+	if (!file_iter_lines_finish(iter->fileIterator))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_trace("timeline_iter_history_next: tli %d [%X/%X %X/%X]",
+			  entry->tli,
+			  LSN_FORMAT_ARGS(entry->begin),
+			  LSN_FORMAT_ARGS(entry->end));
+
+
+	return true;
+}
+
+
+/*
+ * timeline_history_add_hook is a callback function that adds a
+ * TimelineHistoryEntry to the internal catalogs.
+ */
+bool
+timeline_history_add_hook(void *context, TimelineHistoryEntry *entry)
+{
+	ParseTimelineHistoryContext *pContext = (ParseTimelineHistoryContext *) context;
+
+	DatabaseCatalog *catalog = pContext->catalog;
+
 	if (!catalog_add_timeline_history(catalog, entry))
 	{
-		log_error("Failed to add timeline history entry, see above for details");
+		log_error("Failed to add timeline history entry to catalog");
 		return false;
 	}
 
