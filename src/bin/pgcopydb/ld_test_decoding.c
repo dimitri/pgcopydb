@@ -975,14 +975,15 @@ listToTuple(LogicalMessageTuple *tuple, TestDecodingColumns *cols, int count)
 	for (; i < count && cur != NULL; cur = cur->next, i++)
 	{
 		LogicalMessageValue *valueColumn = &(values->array[i]);
+		LogicalMessageAttribute *attr = &(tuple->attributes.array[i]);
 
-		tuple->columns[i] = strndup(cur->colnameStart, cur->colnameLen);
+		attr->attname = strndup(cur->colnameStart, cur->colnameLen);
 		valueColumn->oid = TEXTOID;
 
 		if (cur->valueStart == NULL)
 		{
 			log_error("BUG: listToTuple current value is NULL for \"%s\"",
-					  tuple->columns[i]);
+					  attr->attname);
 			return false;
 		}
 
@@ -1128,19 +1129,19 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 
 		for (int c = 0; c < columnCount; c++)
 		{
-			const char *colname = cols->columns[c];
+			LogicalMessageAttribute *attr = &(cols->attributes.array[c]);
 
 			SourceTableAttribute attribute = { 0 };
 
 			if (!catalog_lookup_s_attr_by_name(sourceDB,
 											   table->oid,
-											   colname,
+											   attr->attname,
 											   &attribute))
 			{
 				log_error("Failed to lookup for table %s attribute %s in our "
 						  "internal catalogs, see above for details",
 						  table->qname,
-						  colname);
+						  attr->attname);
 				return false;
 			}
 
@@ -1196,7 +1197,9 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 
 	for (int c = 0; c < columnCount; c++)
 	{
-		const char *colname = cols->columns[c];
+		LogicalMessageAttribute *attr = &(cols->attributes.array[c]);
+		LogicalMessageAttribute *oldAttr = &(old->attributes.array[oldPos]);
+		LogicalMessageAttribute *newAttr = &(new->attributes.array[newPos]);
 
 		/* we lack multi-values support at the moment, so... */
 		if (cols->values.count != 1)
@@ -1209,14 +1212,14 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 
 		if (pkeyArray[c])
 		{
-			old->columns[oldPos] = strdup(colname);
+			oldAttr->attname = strdup(attr->attname);
 			old->values.array[0].array[oldPos] = cols->values.array[0].array[c];
 
 			++oldPos;
 		}
 		else
 		{
-			new->columns[newPos] = strdup(colname);
+			newAttr->attname = strdup(attr->attname);
 			new->values.array[0].array[newPos] = cols->values.array[0].array[c];
 
 			++newPos;

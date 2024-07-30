@@ -221,6 +221,10 @@ bool catalog_iter_s_table_nopk(DatabaseCatalog *catalog,
 							   void *context,
 							   SourceTableIterFun *callback);
 
+bool catalog_iter_s_table_generated_columns(DatabaseCatalog *catalog,
+											void *context,
+											SourceTableIterFun *callback);
+
 typedef struct SourceTableIterator
 {
 	DatabaseCatalog *catalog;
@@ -230,6 +234,7 @@ typedef struct SourceTableIterator
 
 bool catalog_iter_s_table_init(SourceTableIterator *iter);
 bool catalog_iter_s_table_nopk_init(SourceTableIterator *iter);
+bool catalog_iter_s_table_generated_columns_init(SourceTableIterator *iter);
 bool catalog_iter_s_table_next(SourceTableIterator *iter);
 bool catalog_iter_s_table_finish(SourceTableIterator *iter);
 

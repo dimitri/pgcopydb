@@ -335,9 +335,10 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple,
 	 * Now that our memory areas are allocated and initialized to zeroes, fill
 	 * them in with the values from the JSON message.
 	 */
-	for (int i = 0; i < tuple->cols; i++)
+	for (int i = 0; i < tuple->attributes.count; i++)
 	{
 		LogicalMessageValue *valueColumn = &(values->array[i]);
+		LogicalMessageAttribute *attr = &(tuple->attributes.array[i]);
 
 		JSON_Object *jscol = json_array_get_object(jscols, i);
 		const char *colname = json_object_get_string(jscol, "name");
@@ -355,9 +356,9 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple,
 			return false;
 		}
 
-		tuple->columns[i] = pgsql_escape_identifier(pgsql, (char *) colname);
+		attr->attname = pgsql_escape_identifier(pgsql, (char *) colname);
 
-		if (tuple->columns[i] == NULL)
+		if (attr->attname == NULL)
 		{
 			log_error(ALLOCATION_FAILED_ERROR);
 			return false;

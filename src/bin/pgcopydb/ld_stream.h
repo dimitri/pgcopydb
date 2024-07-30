@@ -116,6 +116,7 @@ typedef struct LogicalMessageValues
 	LogicalMessageValue *array; /* malloc'ed area */
 } LogicalMessageValues;
 
+
 typedef struct LogicalMessageValuesArray
 {
 	int count;
@@ -123,10 +124,22 @@ typedef struct LogicalMessageValuesArray
 	LogicalMessageValues *array; /* malloc'ed area */
 } LogicalMessageValuesArray;
 
+typedef struct LogicalMessageAttribute
+{
+	char *attname; /* malloc'ed area */
+
+	bool isgenerated;
+} LogicalMessageAttribute;
+
+typedef struct LogicalMessageAttributeArray
+{
+	int count;
+	LogicalMessageAttribute *array; /* malloc'ed area */
+} LogicalMessageAttributeArray;
+
 typedef struct LogicalMessageTuple
 {
-	int cols;
-	char **columns;                  /* malloc'ed area */
+	LogicalMessageAttributeArray attributes;
 	LogicalMessageValuesArray values;
 } LogicalMessageTuple;
 
@@ -276,6 +289,49 @@ typedef enum
 
 
 /*
+ * Lookup key for the hash table GeneratedColumnsCache.
+ */
+typedef struct GeneratedColumnsCache_Lookup
+{
+	/* The table which has generated columns */
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
+} GeneratedColumnsCache_Lookup;
+
+
+typedef struct GeneratedColumnSet
+{
+	char attname[PG_NAMEDATALEN];
+
+	UT_hash_handle hh;           /* makes this structure hashable */
+} GeneratedColumnSet;
+
+
+/*
+ * This is a multi-level hash table. The first level is the table
+ * (nspname.relname) with generated columns. The second level is the
+ * column name (attname).
+ *
+ * This design quickly eliminates tables without generated columns and
+ * finds generated column names efficiently.
+ *
+ * Another option is a single hash table with a composite key of
+ * nspname.relname.attname, but it requires a lookup for each column
+ * while processing.
+ */
+typedef struct GeneratedColumnsCache
+{
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
+
+	/* set of generated columns implemented as a hash table */
+	GeneratedColumnSet *columns;
+
+	UT_hash_handle hh;           /* makes this structure hashable */
+} GeneratedColumnsCache;
+
+
+/*
  * StreamContext allows tracking the progress of the ld_stream module and is
  * shared also with the ld_transform module, which has its own instance of a
  * StreamContext to track its own progress.
@@ -308,6 +364,9 @@ typedef struct StreamContext
 
 	/* transform needs some catalog lookups (pkey, type oid) */
 	DatabaseCatalog *sourceDB;
+
+	/* hash table acts as a cache for tables with generated columns */
+	GeneratedColumnsCache *generatedColumnsCache;
 
 	Queue *transformQueue;
 	PGSQL *transformPGSQL;
@@ -581,7 +640,7 @@ bool stream_compute_pathnames(uint32_t WalSegSz,
 							  char *walFileName,
 							  char *sqlFileName);
 
-bool stream_transform_context_init_pgsql(StreamSpecs *specs);
+bool stream_transform_context_init(StreamSpecs *specs);
 bool stream_transform_stream(StreamSpecs *specs);
 bool stream_transform_resume(StreamSpecs *specs);
 bool stream_transform_line(void *ctx, const char *line, bool *stop);

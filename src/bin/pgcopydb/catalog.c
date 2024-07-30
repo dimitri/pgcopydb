@@ -97,6 +97,9 @@ static char *sourceDBcreateDDLs[] = {
 
 	"create index s_a_oid_attname on s_attr(oid, attname)",
 
+	/* index for filtering out generated columns */
+	"create index s_a_attisgenerated on s_attr(attisgenerated) where attisgenerated",
+
 	"create table s_table_part("
 	"  oid integer references s_table(oid), "
 	"  partnum integer, partcount integer, "
@@ -8149,4 +8152,119 @@ catalog_stop_timing(TopLevelTiming *timing)
 						 timing->ppDuration,
 						 INTSTRING_MAX_DIGITS);
 	}
+}
+
+
+/*
+ * catalog_iter_s_table_generated_columns iterates over the list of tables that
+ * have a generated columns in our catalogs.
+ */
+bool
+catalog_iter_s_table_generated_columns(DatabaseCatalog *catalog,
+									   void *context,
+									   SourceTableIterFun *callback)
+{
+	SourceTableIterator *iter =
+		(SourceTableIterator *) calloc(1, sizeof(SourceTableIterator));
+
+	iter->catalog = catalog;
+
+	if (!catalog_iter_s_table_generated_columns_init(iter))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	for (;;)
+	{
+		if (!catalog_iter_s_table_next(iter))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		SourceTable *table = iter->table;
+
+		if (table == NULL)
+		{
+			if (!catalog_iter_s_table_finish(iter))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			break;
+		}
+
+		/* now call the provided callback */
+		if (!(*callback)(context, table))
+		{
+			log_error("Failed to iterate over list of tables, "
+					  "see above for details");
+			return false;
+		}
+	}
+
+
+	return true;
+}
+
+
+/*
+ * catalog_iter_s_table_generated_columns_init initializes an Interator over our
+ * catalog of SourceTable entries which has generated columns.
+ */
+bool
+catalog_iter_s_table_generated_columns_init(SourceTableIterator *iter)
+{
+	sqlite3 *db = iter->catalog->db;
+
+	if (db == NULL)
+	{
+		log_error(
+			"BUG: Failed to initialize catalog_iter_s_table_generated_columns_init iterator: db is NULL");
+		return false;
+	}
+
+	iter->table = (SourceTable *) calloc(1, sizeof(SourceTable));
+
+	if (iter->table == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	char *sql =
+		"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
+		"         relpages, reltuples, ts.bytes, ts.bytes_pretty, "
+		"         exclude_data, part_key, "
+		"         (select count(1) from s_table_part p where p.oid = t.oid) "
+		"    from s_table t join s_attr a "
+
+		/*
+		 * Currently, we handle only:
+		 * - Generated columns with is_generated = 'ALWAYS' for INSERT and UPDATE
+		 * - IDENTITY columns for INSERT using "overriding system value"
+		 *
+		 * TODO: Add support for IDENTITY columns in UPDATE.
+		 * https://github.com/dimitri/pgcopydb/issues/844
+		 */
+		"       on (a.oid = t.oid and a.attisgenerated = 1) "
+		"       left join s_table_size ts on ts.oid = t.oid "
+		"group by t.oid "
+		"  having sum(a.attisgenerated) > 0 "
+		"order by bytes desc";
+
+	SQLiteQuery *query = &(iter->query);
+
+	query->context = iter->table;
+	query->fetchFunction = &catalog_s_table_fetch;
+
+	if (!catalog_sql_prepare(db, sql, query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
 }
