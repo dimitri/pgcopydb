@@ -3816,8 +3816,7 @@ pgsql_timestamptz_to_string(TimestampTz ts, char *str, size_t size)
  * Send the START_REPLICATION logical replication command.
  */
 bool
-pgsql_start_replication(LogicalStreamClient *client, DatabaseCatalog *catalog,
-						char *cdcPathDir)
+pgsql_start_replication(LogicalStreamClient *client, char *cdcPathDir)
 {
 	PGSQL *pgsql = &(client->pgsql);
 
@@ -3871,7 +3870,7 @@ pgsql_start_replication(LogicalStreamClient *client, DatabaseCatalog *catalog,
 	}
 
 	/* fetch the source timeline */
-	if (!pgsql_identify_system(pgsql, &(client->system), catalog, cdcPathDir))
+	if (!pgsql_identify_system(pgsql, &(client->system), cdcPathDir))
 	{
 		/* errors have already been logged */
 		destroyPQExpBuffer(query);

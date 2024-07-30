@@ -39,8 +39,7 @@ static bool writeTimelineHistoryFile(char *filename, char *content, char *cdcPat
  * contain the 'replication=1' parameter.
  */
 bool
-pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, DatabaseCatalog *catalog,
-					  char *cdcPathDir)
+pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, char *cdcPathDir)
 {
 	bool connIsOurs = pgsql->connection == NULL;
 
@@ -108,25 +107,15 @@ pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, DatabaseCatalog *cat
 
 		(void) parseTimelineHistoryResult((void *) &hContext, result, cdcPathDir);
 
+		sformat(system->timelineHistoryFilename, sizeof(system->timelineHistoryFilename),
+				"%s", hContext.filename);
+
 		PQclear(result);
 		clear_results(pgsql);
 
 		if (!hContext.parsedOk)
 		{
 			log_error("Failed to get result from TIMELINE_HISTORY");
-			PQfinish(connection);
-			return false;
-		}
-
-		ParseTimelineHistoryContext pContext = {
-			.catalog = catalog,
-			.currentTimeline = system->timeline
-		};
-
-		if (!timeline_iter_history(hContext.filename, &pContext,
-								   timeline_history_add_hook))
-		{
-			/* errors have already been logged */
 			PQfinish(connection);
 			return false;
 		}

@@ -398,6 +398,7 @@ typedef struct IdentifySystem
 	char xlogpos[PG_LSN_MAXLENGTH];
 	char dbname[NAMEDATALEN];
 	TimelineHistoryEntry currentTimeline;
+	char timelineHistoryFilename[MAXPGPATH];
 } IdentifySystem;
 
 

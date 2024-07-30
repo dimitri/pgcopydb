@@ -491,7 +491,7 @@ startLogicalStreaming(StreamSpecs *specs)
 				  OutputPluginToString(specs->slot.plugin),
 				  specs->pluginOptions.count);
 
-		if (!pgsql_start_replication(&stream, specs->sourceDB, specs->paths.dir))
+		if (!pgsql_start_replication(&stream, specs->paths.dir))
 		{
 			/* errors have already been logged */
 			return false;
@@ -2614,7 +2614,8 @@ stream_fetch_current_lsn(uint64_t *lsn,
 
 
 /*
- * stream_write_context writes the wal_segment_size and tli to files.
+ * stream_write_context writes the wal_segment_size and tli to files, as well as
+ * populate our internal catalogs with information in the timeline history file.
  */
 bool
 stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream)
@@ -2651,6 +2652,21 @@ stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream)
 	}
 
 	log_debug("Wrote tli %s timeline file \"%s\"", tli, specs->paths.tlifile);
+
+
+	ParseTimelineHistoryContext pContext = {
+		.catalog = specs->sourceDB,
+		.currentTimeline = stream->system.timeline
+	};
+
+	/* read from the timeline history file and populate internal catalogs */
+	if (!timeline_iter_history(stream->system.timelineHistoryFilename,
+							   &pContext,
+							   timeline_history_add_hook))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	return true;
 }
