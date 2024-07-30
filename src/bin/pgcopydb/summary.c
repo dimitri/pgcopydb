@@ -1989,8 +1989,8 @@ summary_stop_timing(DatabaseCatalog *catalog, TimingSection section)
 
 		const char *sql =
 			"update timings "
-			"set done_time_epoch = $1, bytes_pretty = $2, duration_pretty = $3 "
-			"where id = $4";
+			"set done_time_epoch = $1 "
+			"where id = $2";
 
 		if (!catalog_sql_prepare(db, sql, &query))
 		{
@@ -2001,8 +2001,6 @@ summary_stop_timing(DatabaseCatalog *catalog, TimingSection section)
 
 		BindParam params[] = {
 			{ BIND_PARAMETER_TYPE_INT64, "done", doneTime, NULL },
-			{ BIND_PARAMETER_TYPE_TEXT, "ppBytes", 0, timing->ppBytes },
-			{ BIND_PARAMETER_TYPE_TEXT, "ppDuration", 0, timing->ppDuration },
 			{ BIND_PARAMETER_TYPE_INT, "id", timing->section, NULL }
 		};
 
@@ -2019,8 +2017,8 @@ summary_stop_timing(DatabaseCatalog *catalog, TimingSection section)
 	{
 		char *sql =
 			"update timings "
-			"set done_time_epoch = $1, duration = $2, duration_pretty = $3 "
-			"where id = $4";
+			"set done_time_epoch = $1, duration = $2 "
+			"where id = $3";
 
 		if (!catalog_sql_prepare(db, sql, &query))
 		{
@@ -2032,7 +2030,6 @@ summary_stop_timing(DatabaseCatalog *catalog, TimingSection section)
 		BindParam params[] = {
 			{ BIND_PARAMETER_TYPE_INT64, "done", timing->doneTime, NULL },
 			{ BIND_PARAMETER_TYPE_INT64, "duration", timing->durationMs, NULL },
-			{ BIND_PARAMETER_TYPE_TEXT, "d_pretty", 0, timing->ppDuration },
 			{ BIND_PARAMETER_TYPE_INT, "id", timing->section, NULL }
 		};
 
@@ -2443,10 +2440,6 @@ catalog_timing_fetch(SQLiteQuery *query)
 	timing->doneTime = sqlite3_column_int64(query->ppStmt, 3);
 	timing->durationMs = sqlite3_column_int64(query->ppStmt, 4);
 
-	/*
-	 * Skip reading `ppDuration` from DB and create it from `durationMs`
-	 * in accordance with the single source of truth principle.
-	 */
 	if (timing->durationMs > 0)
 	{
 		IntervalToString(timing->durationMs,
@@ -2457,10 +2450,6 @@ catalog_timing_fetch(SQLiteQuery *query)
 	timing->count = sqlite3_column_int64(query->ppStmt, 5);
 	timing->bytes = sqlite3_column_int64(query->ppStmt, 6);
 
-	/*
-	 * Skip reading `ppBytes` from DB and create it from `bytes`
-	 * in accordance with the single source of truth principle.
-	 */
 	if (timing->bytes > 0)
 	{
 		pretty_print_bytes(timing->ppBytes,
