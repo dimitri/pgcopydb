@@ -409,39 +409,6 @@ copydb_parse_extensions_requirements(CopyDataSpec *copySpecs, char *filename)
 }
 
 
-/* source_has_timescaledb_extension will check if timescaledb extension is present in 
- * source database, if it exists then prepare the target database for timescale data
- */
-bool 
-source_has_timescaledb_extension(CopyDataSpec *copySpecs, bool *hasTimescaledb)
-{
-	PGSQL dst = { 0 };
-
-	if (!pgsql_init(&dst, copySpecs->connStrings.source_pguri, PGSQL_CONN_SOURCE))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	char *sql = "select exists(select 1 from pg_extension where extname = 'timescaledb')";
-
-	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_BOOL, false };
-
-	if (!pgsql_execute_with_params(&dst, sql, 0, NULL, NULL,
-								   &context, &parseSingleValueResult))
-	{
-		log_error("Failed to check if source database contains "
-				  "timescaledb extension, see above for details");
-		return false;
-	}
-
-	*hasTimescaledb = context.boolVal;
-
-	return true;
-
-}
-
-
 /*
  * copydb_prepare_extensions_restore implements pre pg_restore steps that might
  * be needed for some extensions.
@@ -453,9 +420,15 @@ bool
 copydb_prepare_extensions_restore(CopyDataSpec *copySpecs)
 {
 	bool hasTimescaledb = false;
-	
-	source_has_timescaledb_extension(copySpecs, &hasTimescaledb);
+	DatabaseCatalog *filterDB = &(copySpecs->catalogs.filter);
+	const char *extensionName = "timescaledb";
 
+	if (!catalog_extension_exists(filterDB, extensionName, &hasTimescaledb))
+	{
+		/* errors have already been logged*/
+		return false;
+	}
+    
 	if (hasTimescaledb)
 	{
 		log_debug("Timescaledb extension is present");
@@ -480,8 +453,14 @@ bool
 copydb_finalize_extensions_restore(CopyDataSpec *copySpecs)
 {
 	bool hasTimescaledb = false;
-	
-	source_has_timescaledb_extension(copySpecs, &hasTimescaledb);
+	DatabaseCatalog *filterDB = &(copySpecs->catalogs.filter);
+	const char *extensionName = "timescaledb";
+
+    if (!catalog_extension_exists(filterDB, extensionName, &hasTimescaledb))
+	{
+		/* errors have already been logged*/
+		return false;
+	}
 
 	if (hasTimescaledb)
 	{

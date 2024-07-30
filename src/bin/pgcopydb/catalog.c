@@ -1665,6 +1665,73 @@ catalog_section_fetch(SQLiteQuery *query)
 
 
 /*
+ * catalog_extension_exists checks for existenece of any extension depending on tha name provided 
+ * through the function's arguement extensionName
+ */
+bool
+catalog_extension_exists(DatabaseCatalog *catalog, const char *extensionName, bool *exists)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_extension_exists: db is NULL");
+		return false;
+	}
+
+	SQLiteQuery query = {
+		.context = exists,
+		.fetchFunction = &catalog_extension_fetch
+	};
+
+	char *sql = "SELECT 1 FROM s_extension WHERE extname = $1";
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_TEXT, "name", 0, extensionName }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which return exactly one row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_extension_fetch is a SQLiteQuery callback.
+ */
+bool
+catalog_extension_fetch(SQLiteQuery *query)
+{
+	bool *exists = (bool *)query->context;
+
+	/* If a row is returned, the extension exists*/
+    *exists = sqlite3_column_int(query->ppStmt, 0) == 1;
+
+	return true;
+}
+
+
+/*
  * catalog_total_duration loops over a catalog section array and compute the
  * total duration in milliseconds.
  */
