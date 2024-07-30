@@ -2660,7 +2660,8 @@ stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream)
 	};
 
 	/* read from the timeline history file and populate internal catalogs */
-	if (!timeline_iter_history(stream->system.timelineHistoryFilename,
+	if (!strlen(stream->system.timelineHistoryFilename) > 0 &&
+		!timeline_iter_history(stream->system.timelineHistoryFilename,
 							   &pContext,
 							   timeline_history_add_hook))
 	{
