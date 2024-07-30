@@ -7829,6 +7829,7 @@ catalog_lookup_timeline_history(DatabaseCatalog *catalog,
 	return true;
 }
 
+
 /*
  * catalog_timeline_history_fetch fetches a TimelineHistoryEntry from a query
  * ppStmt result.
