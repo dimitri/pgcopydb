@@ -22,6 +22,14 @@
 #include "string_utils.h"
 #include "schema.h"
 
+typedef struct CopyStats
+{
+	uint64_t bytes; /* total number of bytes copied */
+	char bytesStr[INTSTRING_MAX_DIGITS];
+	char transmitRate[INTSTRING_MAX_DIGITS];
+} CopyStats;
+
+
 typedef struct CopyTableSummary
 {
 	pid_t pid;                  /* pid */
@@ -31,7 +39,7 @@ typedef struct CopyTableSummary
 	uint64_t durationMs;        /* instr_time duration in milliseconds */
 	instr_time startTimeInstr;  /* internal instr_time tracker */
 	instr_time durationInstr;   /* internal instr_time tracker */
-	uint64_t bytesTransmitted;  /* total number of bytes copied */
+	CopyStats copyStats;
 	char *command;              /* malloc'ed area */
 } CopyTableSummary;
 
@@ -135,9 +143,7 @@ typedef struct SummaryTableEntry
 	char relname[PG_NAMEDATALEN];
 	char partCount[INTSTRING_MAX_DIGITS];
 	char tableMs[INTERVAL_MAXLEN];
-	uint64_t bytes;
-	char bytesStr[INTSTRING_MAX_DIGITS];
-	char transmitRate[INTSTRING_MAX_DIGITS];
+	CopyStats copyStats;
 	char indexCount[INTSTRING_MAX_DIGITS];
 	char indexMs[INTERVAL_MAXLEN];
 	uint64_t durationTableMs;
@@ -170,6 +176,8 @@ typedef struct Summary
 	int restoreJobs;
 } Summary;
 
+
+void copy_stats_update(CopyStats *stats, uint64_t bytes, uint64_t durationMs);
 
 bool summary_start_timing(DatabaseCatalog *catalog, TimingSection section);
 bool summary_stop_timing(DatabaseCatalog *catalog, TimingSection section);

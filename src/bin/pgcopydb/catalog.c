@@ -2989,7 +2989,7 @@ catalog_iter_s_table_init(SourceTableIterator *iter)
 
 
 /*
- * catalog_iter_s_table_init initializes an Interator over our catalog of
+ * catalog_iter_s_table_nopk_init initializes an Interator over our catalog of
  * SourceTable entries.
  */
 bool

@@ -871,10 +871,15 @@ on_copy_progress_hook(int bytesTransmitted, void *context)
 {
 	CopyProgressContext *ctx = (CopyProgressContext *) context;
 	CopyDataSpec *specs = ctx->specs;
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 	CopyTableDataSpec *tableSpecs = ctx->tableSpecs;
 
 	ctx->bytesTransmitted += bytesTransmitted;
-	tableSpecs->summary.bytesTransmitted += bytesTransmitted;
+
+	tableSpecs->summary.copyStats.bytes += bytesTransmitted;
+	copy_stats_update(&(tableSpecs->summary.copyStats),
+					  tableSpecs->summary.copyStats.bytes,
+					  tableSpecs->summary.durationMs);
 
 	/* calculate the elapsed time since the last copy operation */
 	instr_time nowMs;
@@ -892,6 +897,12 @@ on_copy_progress_hook(int bytesTransmitted, void *context)
 	if (!copydb_save_copy_progress(specs, 0,
 								   ctx->bytesTransmitted,
 								   ctx->lastSavingTimeMs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!summary_update_table(sourceDB, tableSpecs))
 	{
 		/* errors have already been logged */
 		return false;

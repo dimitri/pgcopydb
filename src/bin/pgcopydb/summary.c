@@ -4,8 +4,10 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <stdint.h>
 #include <unistd.h>
 
 #include "parson.h"
@@ -217,6 +219,45 @@ summary_lookup_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 
 
 /*
+ * copy_stats_update updates the CopyStats structure with the given bytes and
+ * durationMs values.
+ */
+void
+copy_stats_update(CopyStats *stats, uint64_t bytes, uint64_t durationMs)
+{
+	stats->bytes = bytes;
+	pretty_print_bytes(stats->bytesStr,
+					   sizeof(stats->bytesStr),
+					   stats->bytes);
+	pretty_print_bytes_per_second(stats->transmitRate,
+								  sizeof(stats->transmitRate),
+								  stats->bytes,
+								  durationMs);
+}
+
+
+/*
+ * copy_stats_as_json serializes a CopyStats structure into a JSON_Value.
+ */
+static JSON_Value *
+copy_stats_as_json(CopyStats *stats)
+{
+	JSON_Value *jsValue = json_value_init_object();
+	JSON_Object *jsObject = json_value_get_object(jsValue);
+
+	json_object_dotset_number(jsObject,
+							  "bytes", stats->bytes);
+	json_object_dotset_string(jsObject,
+							  "bytes-pretty", stats->bytesStr);
+	json_object_dotset_string(jsObject,
+							  "transmit-rate", stats->transmitRate);
+
+
+	return jsValue;
+}
+
+
+/*
  * table_summary_fetch fetches a CopyTableSummary entry from a SQLite ppStmt
  * result set.
  */
@@ -229,7 +270,12 @@ summary_table_fetch(SQLiteQuery *query)
 	tableSummary->startTime = sqlite3_column_int64(query->ppStmt, 1);
 	tableSummary->doneTime = sqlite3_column_int64(query->ppStmt, 2);
 	tableSummary->durationMs = sqlite3_column_int64(query->ppStmt, 3);
-	tableSummary->bytesTransmitted = sqlite3_column_int64(query->ppStmt, 4);
+	uint64_t bytesTransmitted = sqlite3_column_int64(query->ppStmt, 4);
+
+	uint64_t now = time(NULL);
+	uint64_t durationMs = (now - tableSummary->startTime) * 1000;
+	copy_stats_update(&tableSummary->copyStats, bytesTransmitted,
+					  durationMs);
 
 	if (sqlite3_column_type(query->ppStmt, 5) == SQLITE_NULL)
 	{
@@ -469,7 +515,82 @@ summary_finish_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 		  tableSummary->durationMs, NULL },
 
 		{ BIND_PARAMETER_TYPE_INT64, "bytes",
-		  tableSummary->bytesTransmitted, NULL },
+		  tableSummary->copyStats.bytes, NULL },
+
+		{ BIND_PARAMETER_TYPE_INT64, "pid", getpid(), NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "tableoid", table->oid, NULL },
+
+		{ BIND_PARAMETER_TYPE_INT64, "partnum",
+		  table->partition.partNumber, NULL }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* now execute the query, which does not return any row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
+ * summary_update_table UPDATEs a SourceTable summary entry to our internal
+ * catalogs database.
+ */
+bool
+summary_update_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: summary_finish_table: db is NULL");
+		return false;
+	}
+
+	SourceTable *table = tableSpecs->sourceTable;
+	CopyTableSummary *tableSummary = &(tableSpecs->summary);
+
+	char *sql =
+		"update summary set duration = $1, bytes = $2 "
+		"where pid = $3 and tableoid = $4 and partnum = $5";
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "duration",
+		  tableSummary->durationMs, NULL },
+
+		{ BIND_PARAMETER_TYPE_INT64, "bytes",
+		  tableSummary->copyStats.bytes, NULL },
 
 		{ BIND_PARAMETER_TYPE_INT64, "pid", getpid(), NULL },
 		{ BIND_PARAMETER_TYPE_INT64, "tableoid", table->oid, NULL },
@@ -2412,16 +2533,12 @@ prepare_table_summary_as_json(CopyTableSummary *summary,
 						   "start-time-string",
 						   startTimeStr);
 
-	/* pretty print transmitted bytes */
-	char bytesPretty[BUFSIZE] = { 0 };
-	pretty_print_bytes(bytesPretty, BUFSIZE, summary->bytesTransmitted);
-
 	/*
 	 * XXX We should also include the transmit rate here, but that would require
 	 * having the durationMs information in the summary, which we don't have yet.
 	 */
-	json_object_dotset_number(jsSummaryObj, "network.bytes", summary->bytesTransmitted);
-	json_object_dotset_string(jsSummaryObj, "network.bytes-pretty", bytesPretty);
+	JSON_Value *jsNetwork = copy_stats_as_json(&summary->copyStats);
+	json_object_set_value(jsSummaryObj, "network", jsNetwork);
 
 	/* attach the JSON array to the main JSON object under the provided key */
 	json_object_set_value(jsobj, key, jsSummary);
@@ -2743,12 +2860,165 @@ print_summary_table(SummaryTable *summary)
 				headers->maxRelnameSize, entry->relname,
 				headers->maxPartCountSize, entry->partCount,
 				headers->maxTableMsSize, entry->tableMs,
-				headers->maxBytesSize, entry->bytesStr,
+				headers->maxBytesSize, entry->copyStats.bytesStr,
 				headers->maxIndexCountSize, entry->indexCount,
 				headers->maxIndexMsSize, entry->indexMs);
 	}
 
 	fformat(stdout, "\n");
+}
+
+
+static JSON_Value *
+summary_index_array_as_json(SummaryIndexArray *indexArray)
+{
+	JSON_Value *jsIndexes = json_value_init_array();
+	JSON_Array *jsIndexArray = json_value_get_array(jsIndexes);
+
+	for (int j = 0; j < indexArray->count; j++)
+	{
+		SummaryIndexEntry *indexEntry = &(indexArray->array[j]);
+
+		JSON_Value *jsIndex = json_value_init_object();
+		JSON_Object *jsIndexObj = json_value_get_object(jsIndex);
+
+		json_object_set_number(jsIndexObj, "oid", indexEntry->oid);
+		json_object_set_string(jsIndexObj, "schema", indexEntry->nspname);
+		json_object_set_string(jsIndexObj, "name", indexEntry->relname);
+		json_object_set_string(jsIndexObj, "sql", indexEntry->sql);
+		json_object_dotset_number(jsIndexObj, "ms", indexEntry->durationMs);
+
+		json_array_append_value(jsIndexArray, jsIndex);
+	}
+
+	return jsIndexes;
+}
+
+
+/*
+ * summary_table_entry_as_json converts a SummaryTableEntry to a JSON object.
+ */
+static JSON_Value *
+summary_table_entry_as_json(SummaryTableEntry *entry)
+{
+	JSON_Value *jsTable = json_value_init_object();
+	JSON_Object *jsTableObj = json_value_get_object(jsTable);
+
+	json_object_set_number(jsTableObj, "oid", entry->oid);
+	json_object_set_string(jsTableObj, "schema", entry->nspname);
+	json_object_set_string(jsTableObj, "name", entry->relname);
+
+	json_object_dotset_number(jsTableObj,
+							  "duration", entry->durationTableMs);
+
+	JSON_Value *jsNetwork = copy_stats_as_json(&entry->copyStats);
+	json_object_set_value(jsTableObj, "network", jsNetwork);
+
+	json_object_dotset_number(jsTableObj,
+							  "index.count", entry->indexArray.count);
+	json_object_dotset_number(jsTableObj,
+							  "index.duration", entry->durationIndexMs);
+
+	JSON_Value *jsIndexes = summary_index_array_as_json(&entry->indexArray);
+
+	/* add the index array to the current table */
+	json_object_set_value(jsTableObj, "indexes", jsIndexes);
+
+	JSON_Value *jsConstraints = summary_index_array_as_json(&entry->constraintArray);
+
+	/* add the constraint array to the current table */
+	json_object_set_value(jsTableObj, "constraints", jsConstraints);
+
+	return jsTable;
+}
+
+
+/*
+ * summary_tables_as_json converts a SummaryTable to a JSON array.
+ */
+static JSON_Value *
+summary_tables_as_json(SummaryTable *summaryTable)
+{
+	JSON_Value *jsTables = json_value_init_array();
+	JSON_Array *jsTableArray = json_value_get_array(jsTables);
+
+	for (int i = 0; i < summaryTable->count; i++)
+	{
+		SummaryTableEntry *entry = &(summaryTable->array[i]);
+		JSON_Value *jsTable = summary_table_entry_as_json(entry);
+
+		/* append the current table to the table array */
+		json_array_append_value(jsTableArray, jsTable);
+	}
+
+	return jsTables;
+}
+
+
+/*
+ * top_level_timing_as_json converts a TopLevelTiming to a JSON object.
+ */
+static JSON_Value *
+top_level_timing_as_json(TopLevelTiming *timing, int concurrency)
+{
+	JSON_Value *jsStep = json_value_init_object();
+	JSON_Object *jsStepObj = json_value_get_object(jsStep);
+
+	json_object_set_string(jsStepObj, "label", timing->label);
+	json_object_set_string(jsStepObj, "conn", timing->conn);
+	json_object_set_number(jsStepObj, "duration", timing->durationMs);
+	json_object_set_string(jsStepObj, "duration_pretty", timing->ppDuration);
+	json_object_set_number(jsStepObj, "concurrency", concurrency);
+
+	return jsStep;
+}
+
+
+/*
+ * top_level_timings_as_json converts the top-level timings to a JSON array.
+ */
+static JSON_Value *
+top_level_timings_as_json(Summary *summary)
+{
+	JSON_Value *jsSteps = json_value_init_array();
+	JSON_Array *jsStepArray = json_value_get_array(jsSteps);
+
+	for (int i = 0; i < topLevelTimingArrayCount; i++)
+	{
+		TopLevelTiming *timing = &(topLevelTimingArray[i]);
+
+		int concurrency = TopLevelTimingConcurrency(summary, timing);
+
+		JSON_Value *jsStep = top_level_timing_as_json(timing, concurrency);
+
+		json_array_append_value(jsStepArray, jsStep);
+	}
+
+	return jsSteps;
+}
+
+
+/*
+ * summary_as_json converts a Summary to a JSON object.
+ */
+static JSON_Value *
+summary_as_json(Summary *summary)
+{
+	JSON_Value *js = json_value_init_object();
+	JSON_Object *jsobj = json_value_get_object(js);
+
+	json_object_dotset_number(jsobj, "setup.table-jobs", summary->tableJobs);
+	json_object_dotset_number(jsobj, "setup.index-jobs", summary->indexJobs);
+
+	JSON_Value *jsSteps = top_level_timings_as_json(summary);
+	json_object_set_value(jsobj, "steps", jsSteps);
+
+	JSON_Value *jsTables = summary_tables_as_json(&(summary->table));
+
+	/* add the table array to the main JSON top-level dict */
+	json_object_set_value(jsobj, "tables", jsTables);
+
+	return js;
 }
 
 
@@ -2761,117 +3031,7 @@ print_summary_as_json(Summary *summary, const char *filename)
 {
 	log_notice("Storing migration summary in JSON file \"%s\"", filename);
 
-	JSON_Value *js = json_value_init_object();
-	JSON_Object *jsobj = json_value_get_object(js);
-
-	json_object_dotset_number(jsobj, "setup.table-jobs", summary->tableJobs);
-	json_object_dotset_number(jsobj, "setup.index-jobs", summary->indexJobs);
-
-	JSON_Value *jsSteps = json_value_init_array();
-	JSON_Array *jsStepArray = json_value_get_array(jsSteps);
-
-	for (int i = 0; i < topLevelTimingArrayCount; i++)
-	{
-		TopLevelTiming *timing = &(topLevelTimingArray[i]);
-
-		JSON_Value *jsStep = json_value_init_object();
-		JSON_Object *jsStepObj = json_value_get_object(jsStep);
-
-		json_object_set_string(jsStepObj, "label", timing->label);
-		json_object_set_string(jsStepObj, "conn", timing->conn);
-		json_object_set_number(jsStepObj, "duration", timing->durationMs);
-		json_object_set_string(jsStepObj, "duration_pretty", timing->ppDuration);
-
-		int concurrency = TopLevelTimingConcurrency(summary, timing);
-
-		json_object_set_number(jsStepObj, "concurrency", concurrency);
-
-		json_array_append_value(jsStepArray, jsStep);
-	}
-
-	json_object_set_value(jsobj, "steps", jsSteps);
-
-	SummaryTable *summaryTable = &(summary->table);
-
-	JSON_Value *jsTables = json_value_init_array();
-	JSON_Array *jsTableArray = json_value_get_array(jsTables);
-
-	for (int i = 0; i < summaryTable->count; i++)
-	{
-		SummaryTableEntry *entry = &(summaryTable->array[i]);
-
-		JSON_Value *jsTable = json_value_init_object();
-		JSON_Object *jsTableObj = json_value_get_object(jsTable);
-
-		json_object_set_number(jsTableObj, "oid", entry->oid);
-		json_object_set_string(jsTableObj, "schema", entry->nspname);
-		json_object_set_string(jsTableObj, "name", entry->relname);
-
-		json_object_dotset_number(jsTableObj,
-								  "duration", entry->durationTableMs);
-
-		json_object_dotset_number(jsTableObj,
-								  "network.bytes", entry->bytes);
-		json_object_dotset_string(jsTableObj,
-								  "network.bytes-pretty", entry->bytesStr);
-		json_object_dotset_string(jsTableObj,
-								  "network.transmit-rate", entry->transmitRate);
-
-		json_object_dotset_number(jsTableObj,
-								  "index.count", entry->indexArray.count);
-		json_object_dotset_number(jsTableObj,
-								  "index.duration", entry->durationIndexMs);
-
-		JSON_Value *jsIndexes = json_value_init_array();
-		JSON_Array *jsIndexArray = json_value_get_array(jsIndexes);
-
-		for (int j = 0; j < entry->indexArray.count; j++)
-		{
-			SummaryIndexEntry *indexEntry = &(entry->indexArray.array[j]);
-
-			JSON_Value *jsIndex = json_value_init_object();
-			JSON_Object *jsIndexObj = json_value_get_object(jsIndex);
-
-			json_object_set_number(jsIndexObj, "oid", indexEntry->oid);
-			json_object_set_string(jsIndexObj, "schema", indexEntry->nspname);
-			json_object_set_string(jsIndexObj, "name", indexEntry->relname);
-			json_object_set_string(jsIndexObj, "sql", indexEntry->sql);
-			json_object_dotset_number(jsIndexObj, "ms", indexEntry->durationMs);
-
-			json_array_append_value(jsIndexArray, jsIndex);
-		}
-
-		/* add the index array to the current table */
-		json_object_set_value(jsTableObj, "indexes", jsIndexes);
-
-		JSON_Value *jsConstraints = json_value_init_array();
-		JSON_Array *jsConstraintArray = json_value_get_array(jsConstraints);
-
-		for (int j = 0; j < entry->constraintArray.count; j++)
-		{
-			SummaryIndexEntry *cEntry = &(entry->constraintArray.array[j]);
-
-			JSON_Value *jsConstraint = json_value_init_object();
-			JSON_Object *jsConstraintObj = json_value_get_object(jsConstraint);
-
-			json_object_set_number(jsConstraintObj, "oid", cEntry->oid);
-			json_object_set_string(jsConstraintObj, "schema", cEntry->nspname);
-			json_object_set_string(jsConstraintObj, "name", cEntry->relname);
-			json_object_set_string(jsConstraintObj, "sql", cEntry->sql);
-			json_object_dotset_number(jsConstraintObj, "ms", cEntry->durationMs);
-
-			json_array_append_value(jsConstraintArray, jsConstraint);
-		}
-
-		/* add the constraint array to the current table */
-		json_object_set_value(jsTableObj, "constraints", jsConstraints);
-
-		/* append the current table to the table array */
-		json_array_append_value(jsTableArray, jsTable);
-	}
-
-	/* add the table array to the main JSON top-level dict */
-	json_object_set_value(jsobj, "tables", jsTables);
+	JSON_Value *js = summary_as_json(summary);
 
 	char *serialized_string = json_serialize_to_string_pretty(js);
 	size_t len = strlen(serialized_string);
@@ -2946,7 +3106,7 @@ prepare_summary_table_headers(SummaryTable *summary)
 			headers->maxTableMsSize = len;
 		}
 
-		len = strlen(entry->bytesStr);
+		len = strlen(entry->copyStats.bytesStr);
 
 		if (headers->maxBytesSize < len)
 		{
@@ -3154,17 +3314,9 @@ prepare_summary_table_hook(void *ctx, SourceTable *table)
 							entry->tableMs,
 							sizeof(entry->tableMs));
 
-	entry->bytes = table->bytesTransmitted;
 	summaryTable->totalBytes += table->bytesTransmitted;
 
-	pretty_print_bytes(entry->bytesStr,
-					   sizeof(entry->bytesStr),
-					   entry->bytes);
-
-	pretty_print_bytes_per_second(entry->transmitRate,
-								  sizeof(entry->transmitRate),
-								  entry->bytes,
-								  entry->durationTableMs);
+	copy_stats_update(&entry->copyStats, table->bytes, table->durationMs);
 
 	/* read the index oid list from the table oid */
 	context->indexingDurationMs = 0;
@@ -3231,7 +3383,7 @@ prepare_summary_table_hook(void *ctx, SourceTable *table)
 
 
 /*
- * prepare_summary_table_hook is an iterator callback function.
+ * prepare_summary_table_index_hook is an iterator callback function.
  */
 static bool
 prepare_summary_table_index_hook(void *ctx, SourceIndex *index)

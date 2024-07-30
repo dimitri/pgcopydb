@@ -533,6 +533,9 @@ bool summary_add_table(DatabaseCatalog *catalog,
 bool summary_finish_table(DatabaseCatalog *catalog,
 						  CopyTableDataSpec *tableSpecs);
 
+bool summary_update_table(DatabaseCatalog *catalog,
+						  CopyTableDataSpec *tableSpecs);
+
 bool summary_delete_table(DatabaseCatalog *catalog,
 						  CopyTableDataSpec *tableSpecs);
 
