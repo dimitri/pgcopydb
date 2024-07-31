@@ -107,8 +107,8 @@ pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, char *cdcPathDir)
 
 		(void) parseTimelineHistoryResult((void *) &hContext, result, cdcPathDir);
 
-		sformat(system->timelineHistoryFilename, sizeof(system->timelineHistoryFilename),
-				"%s", hContext.filename);
+		sformat(system->timelineHistoryFilename, MAXPGPATH,
+				"%s/%s", cdcPathDir, hContext.filename);
 
 		PQclear(result);
 		clear_results(pgsql);
