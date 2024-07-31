@@ -30,7 +30,7 @@ typedef struct TimelineHistoryResult
 static void parseIdentifySystemResult(IdentifySystemResult *ctx, PGresult *result);
 static void parseTimelineHistoryResult(TimelineHistoryResult *context, PGresult *result,
 									   char *cdcPathDir);
-static bool writeTimelineHistoryFile(char *filename, char *content, char *cdcPathDir);
+static bool writeTimelineHistoryFile(char *filename, char *content);
 
 
 /*
@@ -107,9 +107,6 @@ pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, char *cdcPathDir)
 
 		(void) parseTimelineHistoryResult((void *) &hContext, result, cdcPathDir);
 
-		sformat(system->timelineHistoryFilename, MAXPGPATH,
-				"%s/%s", cdcPathDir, hContext.filename);
-
 		PQclear(result);
 		clear_results(pgsql);
 
@@ -119,6 +116,9 @@ pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, char *cdcPathDir)
 			PQfinish(connection);
 			return false;
 		}
+
+		/* store the filename for the timeline history file */
+		strlcpy(system->timelineHistoryFilename, hContext.filename, MAXPGPATH);
 	}
 
 	if (connIsOurs)
@@ -135,15 +135,12 @@ pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, char *cdcPathDir)
  * The filename is determined by the PostgreSQL TIMELINE_HISTORY command.
  */
 static bool
-writeTimelineHistoryFile(char *filename, char *content, char *cdcPathDir)
+writeTimelineHistoryFile(char *filename, char *content)
 {
-	char path[MAXPGPATH] = { 0 };
-	sformat(path, MAXPGPATH, "%s/%s", cdcPathDir, filename);
-
-	log_debug("Writing timeline history file \"%s\"", path);
+	log_debug("Writing timeline history file \"%s\"", filename);
 
 	size_t size = strlen(content);
-	return write_file(content, size, path);
+	return write_file(content, size, filename);
 }
 
 
@@ -239,7 +236,7 @@ parseTimelineHistoryResult(TimelineHistoryResult *context, PGresult *result,
 
 	/* filename (text) */
 	char *value = PQgetvalue(result, 0, 0);
-	strlcpy(context->filename, value, sizeof(context->filename));
+	sformat(context->filename, sizeof(context->filename), "%s/%s", cdcPathDir, value);
 
 	/*
 	 * content (bytea)
@@ -248,7 +245,7 @@ parseTimelineHistoryResult(TimelineHistoryResult *context, PGresult *result,
 	 * as it is.
 	 */
 	value = PQgetvalue(result, 0, 1);
-	if (!writeTimelineHistoryFile(context->filename, value, cdcPathDir))
+	if (!writeTimelineHistoryFile(context->filename, value))
 	{
 		log_error("Failed to write timeline history file \"%s\"", context->filename);
 		context->parsedOk = false;
