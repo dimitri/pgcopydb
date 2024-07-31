@@ -1440,6 +1440,8 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs, CopyArgs *args)
 			}
 		}
 
+		appendPQExpBuffer(srcWhereClause, " WITH (FORMAT BINARY)");
+
 		if (PQExpBufferBroken(srcWhereClause))
 		{
 			log_error("Failed to create where clause for %s: out of memory",
