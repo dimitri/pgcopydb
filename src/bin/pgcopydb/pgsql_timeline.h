@@ -41,6 +41,6 @@ bool timeline_iter_history_finish(TimelineHistoryIterator *iter);
 bool timeline_history_add_hook(void *context, TimelineHistoryEntry *entry);
 
 /* pgsql.c */
-bool pgsql_start_replication(LogicalStreamClient *client, char *cdcPathDir);
+bool pgsql_start_replication(LogicalStreamClient *client);
 
 #endif /* PGSQL_TIMELINE_H */

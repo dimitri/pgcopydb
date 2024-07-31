@@ -430,6 +430,7 @@ startLogicalStreaming(StreamSpecs *specs)
 	stream.closeFunction = &streamClose;
 	stream.feedbackFunction = &streamFeedback;
 	stream.keepaliveFunction = &streamKeepalive;
+	strlcpy(stream.cdcPathDir, specs->paths.dir, MAXPGPATH);
 
 	/*
 	 * Read possibly already existing file to initialize the start LSN from a
@@ -491,7 +492,7 @@ startLogicalStreaming(StreamSpecs *specs)
 				  OutputPluginToString(specs->slot.plugin),
 				  specs->pluginOptions.count);
 
-		if (!pgsql_start_replication(&stream, specs->paths.dir))
+		if (!pgsql_start_replication(&stream))
 		{
 			/* errors have already been logged */
 			return false;

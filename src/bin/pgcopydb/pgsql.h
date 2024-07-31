@@ -456,6 +456,7 @@ typedef struct LogicalStreamClient
 {
 	PGSQL pgsql;
 	IdentifySystem system;
+	char cdcPathDir[MAXPGPATH];
 
 	char slotName[NAMEDATALEN];
 
