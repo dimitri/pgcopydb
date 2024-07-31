@@ -8,12 +8,6 @@
 #include "pgsql.h"
 #include "schema.h"
 
-typedef struct ParseTimelineHistoryContext
-{
-	uint32_t currentTimeline;
-	DatabaseCatalog *catalog;
-} ParseTimelineHistoryContext;
-
 
 typedef struct TimelineHistoryIterator
 {
@@ -31,14 +25,13 @@ typedef bool (TimelineHistoryFun)(void *context, TimelineHistoryEntry *entry);
 bool pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system,
 						   char *cdcPathDir);
 bool timeline_iter_history(char *filename,
-						   ParseTimelineHistoryContext *context,
+						   DatabaseCatalog *catalog,
+						   uint32_t timeline,
 						   TimelineHistoryFun *callback);
 
 bool timeline_iter_history_init(TimelineHistoryIterator *iter);
 bool timeline_iter_history_next(TimelineHistoryIterator *iter);
 bool timeline_iter_history_finish(TimelineHistoryIterator *iter);
-
-bool timeline_history_add_hook(void *context, TimelineHistoryEntry *entry);
 
 /* pgsql.c */
 bool pgsql_start_replication(LogicalStreamClient *client);

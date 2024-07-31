@@ -2654,17 +2654,12 @@ stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream)
 
 	log_debug("Wrote tli %s timeline file \"%s\"", tli, specs->paths.tlifile);
 
-
-	ParseTimelineHistoryContext pContext = {
-		.catalog = specs->sourceDB,
-		.currentTimeline = stream->system.timeline
-	};
-
 	/* read from the timeline history file and populate internal catalogs */
 	if (stream->system.timeline > 1 &&
 		!timeline_iter_history(stream->system.timelineHistoryFilename,
-							   &pContext,
-							   timeline_history_add_hook))
+							   specs->sourceDB,
+							   stream->system.timeline,
+							   catalog_add_timeline_history))
 	{
 		/* errors have already been logged */
 		return false;

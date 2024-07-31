@@ -262,7 +262,8 @@ parseTimelineHistoryResult(TimelineHistoryResult *context, PGresult *result,
 /* timeline_iter_history is used to iterate over the content of a timeline history file. */
 bool
 timeline_iter_history(char *filename,
-					  ParseTimelineHistoryContext *context,
+					  DatabaseCatalog *catalog,
+					  uint32_t timeline,
 					  TimelineHistoryFun *callback)
 {
 	TimelineHistoryIterator *iter =
@@ -275,7 +276,7 @@ timeline_iter_history(char *filename,
 	}
 
 	iter->filename = filename;
-	iter->currentTimeline = context->currentTimeline;
+	iter->currentTimeline = timeline;
 	iter->prevend = InvalidXLogRecPtr;
 
 	if (!timeline_iter_history_init(iter))
@@ -305,7 +306,7 @@ timeline_iter_history(char *filename,
 			break;
 		}
 
-		if (!callback(context, entry))
+		if (!callback(catalog, entry))
 		{
 			log_error("Failed to parse timeline history entry in file \"%s\"",
 					  filename);
@@ -314,7 +315,7 @@ timeline_iter_history(char *filename,
 	}
 
 	/* use the callback for the final entry that holds the details of the current timeline */
-	if (!callback(context, iter->entry))
+	if (!callback(catalog, iter->entry))
 	{
 		log_error("Failed to parse timeline history entry in file \"%s\"",
 				  filename);
@@ -487,27 +488,6 @@ timeline_iter_history_finish(TimelineHistoryIterator *iter)
 			  LSN_FORMAT_ARGS(entry->begin),
 			  LSN_FORMAT_ARGS(entry->end));
 
-
-	return true;
-}
-
-
-/*
- * timeline_history_add_hook is a callback function that adds a
- * TimelineHistoryEntry to the internal catalogs.
- */
-bool
-timeline_history_add_hook(void *context, TimelineHistoryEntry *entry)
-{
-	ParseTimelineHistoryContext *pContext = (ParseTimelineHistoryContext *) context;
-
-	DatabaseCatalog *catalog = pContext->catalog;
-
-	if (!catalog_add_timeline_history(catalog, entry))
-	{
-		log_error("Failed to add timeline history entry to catalog");
-		return false;
-	}
 
 	return true;
 }
