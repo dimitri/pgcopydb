@@ -2926,7 +2926,7 @@ pg_copy_from_stdin(PGSQL *pgsql, const char *qname)
 {
 	char sql[BUFSIZE] = { 0 };
 
-	sformat(sql, sizeof(sql), "COPY %s FROM stdin WITH (format binary)", qname);
+	sformat(sql, sizeof(sql), "COPY %s FROM stdin", qname);
 
 	char *endpoint =
 		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
@@ -3070,7 +3070,13 @@ pg_copy_send_query(PGSQL *pgsql, CopyArgs *args, ExecStatusType status)
 							  args->srcAttrList,
 							  args->srcQname);
 		}
-		appendPQExpBuffer(sql, "to stdout with (format binary);");
+
+		appendPQExpBuffer(sql, "to stdout");
+
+		if (args->useCopyBinary)
+		{
+			appendPQExpBuffer(sql, " with (format binary)");
+		}
 	}
 	else if (status == PGRES_COPY_IN)
 	{
@@ -3085,9 +3091,17 @@ pg_copy_send_query(PGSQL *pgsql, CopyArgs *args, ExecStatusType status)
 			appendPQExpBuffer(sql, "copy %s from stdin", args->dstQname);
 		}
 
-		if (args->freeze)
+		if (args->freeze && args->useCopyBinary)
 		{
 			appendPQExpBuffer(sql, " with (freeze, format binary)");
+		}
+		else if (args->freeze)
+		{
+			appendPQExpBuffer(sql, " with (freeze)");
+		}
+		else if (args->useCopyBinary)
+		{
+			appendPQExpBuffer(sql, " with (format binary)");
 		}
 	}
 	else

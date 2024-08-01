@@ -1129,6 +1129,7 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 	args->truncate = false;     /* default value, see below */
 	args->freeze = tableSpecs->sourceTable->partition.partCount <= 1;
 	args->bytesTransmitted = 0;
+	args->useCopyBinary = specs->useCopyBinary;
 
 	/*
 	 * Check to see if we want to TRUNCATE the table and benefit from the COPY
@@ -1439,8 +1440,6 @@ copydb_prepare_copy_query(CopyTableDataSpec *tableSpecs, CopyArgs *args)
 								  (long long) tableSpecs->part.max);
 			}
 		}
-
-		appendPQExpBuffer(srcWhereClause, " WITH (FORMAT BINARY)");
 
 		if (PQExpBufferBroken(srcWhereClause))
 		{

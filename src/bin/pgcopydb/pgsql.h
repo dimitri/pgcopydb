@@ -336,6 +336,7 @@ typedef struct CopyArgs
 	char *logCommand;
 	bool truncate;
 	bool freeze;
+	bool useCopyBinary;
 	uint64_t bytesTransmitted;
 } CopyArgs;
 

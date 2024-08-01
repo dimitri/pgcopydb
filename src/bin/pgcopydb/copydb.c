@@ -512,6 +512,7 @@ copydb_init_specs(CopyDataSpec *specs,
 		.skipCtidSplit = options->skipCtidSplit,
 		.noRolesPasswords = options->noRolesPasswords,
 		.failFast = options->failFast,
+		.useCopyBinary = options->useCopyBinary,
 
 		.restart = options->restart,
 		.resume = options->resume,

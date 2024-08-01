@@ -34,7 +34,7 @@ sleep 1
 pgcopydb stream setup
 
 # pgcopydb clone uses the environment variables
-pgcopydb clone
+pgcopydb clone --use-binary-copy
 
 # now that the copying is done, inject some SQL DML changes to the source
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/multi-wal-txn.sql
