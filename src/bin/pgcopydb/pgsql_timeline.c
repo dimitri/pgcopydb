@@ -293,7 +293,7 @@ parse_timeline_history_file(char *filename,
 	if (currentTimeline != context.prevtli + 1)
 	{
 		log_warn("parse_timeline_history_file: Expected timeline %d, got %d",
-				 currentTimeline, context.prevtli + 1);
+				 context.prevtli + 1, currentTimeline);
 	}
 
 	TimelineHistoryEntry entry = {
