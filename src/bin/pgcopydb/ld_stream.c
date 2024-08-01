@@ -2656,10 +2656,9 @@ stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream)
 
 	/* read from the timeline history file and populate internal catalogs */
 	if (stream->system.timeline > 1 &&
-		!timeline_iter_history(stream->system.timelineHistoryFilename,
-							   specs->sourceDB,
-							   stream->system.timeline,
-							   catalog_add_timeline_history))
+		!parse_timeline_history_file(stream->system.timelineHistoryFilename,
+									 specs->sourceDB,
+									 stream->system.timeline))
 	{
 		/* errors have already been logged */
 		return false;
