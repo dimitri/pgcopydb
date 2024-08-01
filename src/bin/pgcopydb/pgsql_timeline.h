@@ -15,7 +15,4 @@ bool parse_timeline_history_file(char *filename,
 								 DatabaseCatalog *catalog,
 								 uint32_t currentTimeline);
 
-/* pgsql.c */
-bool pgsql_start_replication(LogicalStreamClient *client);
-
 #endif /* PGSQL_TIMELINE_H */

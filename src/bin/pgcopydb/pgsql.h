@@ -510,6 +510,7 @@ bool pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 
 bool pgsql_timestamptz_to_string(TimestampTz ts, char *str, size_t size);
 
+bool pgsql_start_replication(LogicalStreamClient *client);
 bool pgsql_stream_logical(LogicalStreamClient *client,
 						  LogicalStreamContext *context);
 
