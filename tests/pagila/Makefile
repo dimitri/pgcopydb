@@ -4,12 +4,12 @@
 test: down run down ;
 
 run: build
-	docker-compose run test
+	docker compose run test
 
 down:
-	docker-compose down
+	docker compose down
 
 build:
-	docker-compose build --quiet
+	docker compose build --quiet
 
 .PHONY: down build test
