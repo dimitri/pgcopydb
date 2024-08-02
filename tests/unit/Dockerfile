@@ -1,4 +1,4 @@
-# that image is built by docker-compose build: project-service
+# that image is built by docker compose build: project-service
 FROM pagila
 
 WORKDIR /usr/src/pgcopydb

@@ -66,7 +66,7 @@ pgcopydb stream sentinel set endpos --current
 pgcopydb stream sentinel get
 
 #
-# Becaure we're using docker-compose --abort-on-container-exit make sure
+# Becaure we're using docker compose --abort-on-container-exit make sure
 # that the other process in the pgcopydb service is done before exiting
 # here.
 #
