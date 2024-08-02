@@ -4,4 +4,3 @@ Dockerfile
 Dockerfile.pg
 Dockerfile.inject
 docker-compose.yml
-workdir/
