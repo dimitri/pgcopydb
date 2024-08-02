@@ -49,3 +49,4 @@ COPY --from=pgcopydb /usr/local/bin/pgcopydb /usr/local/bin
 
 COPY .psqlrc /var/lib/postgres
 COPY .sqliterc /var/lib/postgres
+COPY cleanup.mk /var/lib/postgres
