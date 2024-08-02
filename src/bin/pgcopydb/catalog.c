@@ -186,7 +186,10 @@ static char *sourceDBcreateDDLs[] = {
 	"create table sentinel("
 	"  id integer primary key check (id = 1), "
 	"  startpos pg_lsn, endpos pg_lsn, apply bool, "
-	" write_lsn pg_lsn, flush_lsn pg_lsn, replay_lsn pg_lsn)"
+	" write_lsn pg_lsn, flush_lsn pg_lsn, replay_lsn pg_lsn)",
+
+	"create table timeline_history("
+	"  tli integer primary key, startpos pg_lsn, endpos pg_lsn)"
 };
 
 
@@ -437,7 +440,8 @@ static char *sourceDBdropDDLs[] = {
 	"drop table if exists s_table_parts_done",
 	"drop table if exists s_table_indexes_done",
 
-	"drop table if exists sentinel"
+	"drop table if exists sentinel",
+	"drop table if exists timeline_history"
 };
 
 
@@ -7698,6 +7702,171 @@ catalog_count_summary_done_fetch(SQLiteQuery *query)
 
 	count->table = sqlite3_column_int64(query->ppStmt, 0);
 	count->index = sqlite3_column_int64(query->ppStmt, 1);
+
+	return true;
+}
+
+
+/*
+ * catalog_add_timeline_history inserts a timeline history entry to our
+ * internal catalogs database.
+ */
+bool
+catalog_add_timeline_history(DatabaseCatalog *catalog, TimelineHistoryEntry *entry)
+{
+	if (catalog == NULL)
+	{
+		log_error("BUG: catalog_add_timeline_history: catalog is NULL");
+		return false;
+	}
+
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_add_timeline_history: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"insert or replace into timeline_history(tli, startpos, endpos)"
+		"values($1, $2, $3)";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	char slsn[PG_LSN_MAXLENGTH] = { 0 };
+	char elsn[PG_LSN_MAXLENGTH] = { 0 };
+
+	sformat(slsn, sizeof(slsn), "%X/%X", LSN_FORMAT_ARGS(entry->begin));
+	sformat(elsn, sizeof(elsn), "%X/%X", LSN_FORMAT_ARGS(entry->end));
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT, "tli", entry->tli, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "startpos", 0, slsn },
+		{ BIND_PARAMETER_TYPE_TEXT, "endpos", 0, elsn }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which does not return any row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_lookup_timeline_history fetches the current TimelineHistoryEntry
+ * from our catalogs.
+ */
+bool
+catalog_lookup_timeline_history(DatabaseCatalog *catalog,
+								int tli,
+								TimelineHistoryEntry *entry)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_lookup_timeline_history: db is NULL");
+		return false;
+	}
+
+	SQLiteQuery query = {
+		.context = entry,
+		.fetchFunction = &catalog_timeline_history_fetch
+	};
+
+	char *sql =
+		"  select tli, startpos, endpos"
+		"    from timeline_history"
+		"   where tli = $1";
+
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT, "tli", tli, NULL }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which return exactly one row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_timeline_history_fetch fetches a TimelineHistoryEntry from a query
+ * ppStmt result.
+ */
+bool
+catalog_timeline_history_fetch(SQLiteQuery *query)
+{
+	TimelineHistoryEntry *entry = (TimelineHistoryEntry *) query->context;
+
+	bzero(entry, sizeof(TimelineHistoryEntry));
+
+	/* tli */
+	entry->tli = sqlite3_column_int(query->ppStmt, 0);
+
+	/* begin LSN */
+	if (sqlite3_column_type(query->ppStmt, 1) != SQLITE_NULL)
+	{
+		const char *startpos = (const char *) sqlite3_column_text(query->ppStmt, 1);
+
+		if (!parseLSN(startpos, &entry->begin))
+		{
+			log_error("Failed to parse LSN from \"%s\"", startpos);
+			return false;
+		}
+	}
+
+	/* end LSN */
+	if (sqlite3_column_type(query->ppStmt, 2) != SQLITE_NULL)
+	{
+		const char *endpos = (const char *) sqlite3_column_text(query->ppStmt, 2);
+
+		if (!parseLSN(endpos, &entry->end))
+		{
+			log_error("Failed to parse LSN from \"%s\"", endpos);
+			return false;
+		}
+	}
 
 	return true;
 }

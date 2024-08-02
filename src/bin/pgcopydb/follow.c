@@ -419,12 +419,11 @@ follow_prepare_mode_switch(StreamSpecs *streamSpecs,
 
 	if (streamSpecs->system.timeline == 0)
 	{
-		if (!stream_read_context(&(streamSpecs->paths),
-								 &(streamSpecs->system),
-								 &(streamSpecs->WalSegSz)))
+		if (!stream_read_context(streamSpecs))
 		{
 			log_error("Failed to read the streaming context information "
-					  "from the source database, see above for details");
+					  "from the source database and internal catalogs, "
+					  "see above for details");
 			return false;
 		}
 	}

@@ -367,10 +367,10 @@ bool pg_copy_large_object(PGSQL *src,
 #define PG_LSN_MAXLENGTH 18
 
 /*
- * TimeLineHistoryEntry is taken from Postgres definitions and adapted to
+ * TimelineHistoryEntry is taken from Postgres definitions and adapted to
  * client-size code where we don't have all the necessary infrastruture. In
  * particular we don't define a XLogRecPtr data type nor do we define a
- * TimeLineID data type.
+ * TimelineID data type.
  *
  * Zero is used indicate an invalid pointer. Bootstrap skips the first possible
  * WAL segment, initializing the first WAL page at WAL segment size, so no XLOG
@@ -379,25 +379,13 @@ bool pg_copy_large_object(PGSQL *src,
 #define InvalidXLogRecPtr 0
 #define XLogRecPtrIsInvalid(r) ((r) == InvalidXLogRecPtr)
 
-#define PGCOPYDB_MAX_TIMELINES 1024
-#define PGCOPYDB_MAX_TIMELINE_CONTENT (1024 * 1024)
-
-typedef struct TimeLineHistoryEntry
+typedef struct TimelineHistoryEntry
 {
 	uint32_t tli;
 	uint64_t begin;         /* inclusive */
 	uint64_t end;           /* exclusive, InvalidXLogRecPtr means infinity */
-} TimeLineHistoryEntry;
+} TimelineHistoryEntry;
 
-
-typedef struct TimeLineHistory
-{
-	int count;
-	TimeLineHistoryEntry history[PGCOPYDB_MAX_TIMELINES];
-
-	char filename[MAXPGPATH];
-	char content[PGCOPYDB_MAX_TIMELINE_CONTENT];
-} TimeLineHistory;
 
 /*
  * The IdentifySystem contains information that is parsed from the
@@ -409,12 +397,10 @@ typedef struct IdentifySystem
 	uint32_t timeline;
 	char xlogpos[PG_LSN_MAXLENGTH];
 	char dbname[NAMEDATALEN];
-	TimeLineHistory timelines;
+	TimelineHistoryEntry currentTimeline;
+	char timelineHistoryFilename[MAXPGPATH];
 } IdentifySystem;
 
-bool pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system);
-bool parseTimeLineHistory(const char *filename, const char *content,
-						  IdentifySystem *system);
 
 /*
  * Logical Decoding support.
@@ -470,6 +456,7 @@ typedef struct LogicalStreamClient
 {
 	PGSQL pgsql;
 	IdentifySystem system;
+	char cdcPathDir[MAXPGPATH];
 
 	char slotName[NAMEDATALEN];
 

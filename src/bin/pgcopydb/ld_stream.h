@@ -620,9 +620,7 @@ bool stream_fetch_current_lsn(uint64_t *lsn,
 
 bool stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream);
 bool stream_cleanup_context(StreamSpecs *specs);
-bool stream_read_context(CDCPaths *paths,
-						 IdentifySystem *system,
-						 uint32_t *WalSegSz);
+bool stream_read_context(StreamSpecs *specs);
 
 StreamAction StreamActionFromChar(char action);
 char * StreamActionToString(StreamAction action);

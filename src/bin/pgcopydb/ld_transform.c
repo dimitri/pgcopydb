@@ -283,12 +283,11 @@ stream_transform_resume(StreamSpecs *specs)
 	/* we need timeline and wal_segment_size to compute WAL filenames */
 	if (specs->system.timeline == 0)
 	{
-		if (!stream_read_context(&(specs->paths),
-								 &(specs->system),
-								 &(specs->WalSegSz)))
+		if (!stream_read_context(specs))
 		{
 			log_error("Failed to read the streaming context information "
-					  "from the source database, see above for details");
+					  "from the source database and internal catalogs, "
+					  "see above for details");
 			return false;
 		}
 	}
@@ -669,9 +668,9 @@ stream_transform_worker(StreamSpecs *specs)
 	 * The timeline and wal segment size are determined when connecting to the
 	 * source database, and stored to local files at that time. When the Stream
 	 * Transform Worker process is created, that information is read from our
-	 * local files.
+	 * local files and internal catalogs.
 	 */
-	if (!stream_read_context(&(specs->paths), &(specs->system), &(specs->WalSegSz)))
+	if (!stream_read_context(specs))
 	{
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
@@ -680,7 +679,8 @@ stream_transform_worker(StreamSpecs *specs)
 		}
 
 		log_error("Failed to read the streaming context information "
-				  "from the source database, see above for details");
+				  "from the source database and internal catalogs, "
+				  "see above for details");
 		return false;
 	}
 

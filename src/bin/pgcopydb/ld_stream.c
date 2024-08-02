@@ -24,8 +24,9 @@
 #include "lock_utils.h"
 #include "log.h"
 #include "parsing_utils.h"
-#include "pidfile.h"
 #include "pg_utils.h"
+#include "pgsql_timeline.h"
+#include "pidfile.h"
 #include "schema.h"
 #include "signals.h"
 #include "string_utils.h"
@@ -429,6 +430,7 @@ startLogicalStreaming(StreamSpecs *specs)
 	stream.closeFunction = &streamClose;
 	stream.feedbackFunction = &streamFeedback;
 	stream.keepaliveFunction = &streamKeepalive;
+	strlcpy(stream.cdcPathDir, specs->paths.dir, MAXPGPATH);
 
 	/*
 	 * Read possibly already existing file to initialize the start LSN from a
@@ -2613,8 +2615,8 @@ stream_fetch_current_lsn(uint64_t *lsn,
 
 
 /*
- * stream_write_context writes the wal_segment_size and timeline history to
- * files.
+ * stream_write_context writes the wal_segment_size and tli to files, as well as
+ * populate our internal catalogs with information in the timeline history file.
  */
 bool
 stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream)
@@ -2652,15 +2654,15 @@ stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream)
 
 	log_debug("Wrote tli %s timeline file \"%s\"", tli, specs->paths.tlifile);
 
-	if (!write_file(system->timelines.content,
-					strlen(system->timelines.content),
-					specs->paths.tlihistfile))
+	/* read from the timeline history file and populate internal catalogs */
+	if (stream->system.timeline > 1 &&
+		!parse_timeline_history_file(stream->system.timelineHistoryFilename,
+									 specs->sourceDB,
+									 stream->system.timeline))
 	{
 		/* errors have already been logged */
 		return false;
 	}
-
-	log_debug("Wrote timeline history file \"%s\"", specs->paths.tlihistfile);
 
 	return true;
 }
@@ -2677,7 +2679,6 @@ stream_cleanup_context(StreamSpecs *specs)
 
 	success = success && unlink_file(specs->paths.walsegsizefile);
 	success = success && unlink_file(specs->paths.tlifile);
-	success = success && unlink_file(specs->paths.tlihistfile);
 
 	/* reset the timeline, so that we always read from the disk */
 	specs->system.timeline = 0;
@@ -2691,14 +2692,14 @@ stream_cleanup_context(StreamSpecs *specs)
  * wal_segment_size and timeline history.
  */
 bool
-stream_read_context(CDCPaths *paths,
-					IdentifySystem *system,
-					uint32_t *WalSegSz)
+stream_read_context(StreamSpecs *specs)
 {
+	CDCPaths *paths = &(specs->paths);
+	IdentifySystem *system = &(specs->system);
+	uint32_t *WalSegSz = &(specs->WalSegSz);
+
 	char *wal_segment_size = NULL;
 	char *tli = NULL;
-	char *history = NULL;
-
 	long size = 0L;
 
 	/*
@@ -2727,8 +2728,7 @@ stream_read_context(CDCPaths *paths,
 		}
 
 		if (file_exists(paths->walsegsizefile) &&
-			file_exists(paths->tlifile) &&
-			file_exists(paths->tlihistfile))
+			file_exists(paths->tlifile))
 		{
 			/*
 			 * File did exist, but might have been deleted now (race condition
@@ -2741,9 +2741,6 @@ stream_read_context(CDCPaths *paths,
 
 			success = success &&
 					  read_file(paths->tlifile, &tli, &size);
-
-			success = success &&
-					  read_file(paths->tlihistfile, &history, &size);
 
 			if (success)
 			{
@@ -2765,8 +2762,7 @@ stream_read_context(CDCPaths *paths,
 
 	/* did retry policy expire before the files are created? */
 	if (!(file_exists(paths->walsegsizefile) &&
-		  file_exists(paths->tlifile) &&
-		  file_exists(paths->tlihistfile)))
+		  file_exists(paths->tlifile)))
 	{
 		log_error("Failed to read stream context file: retry policy expired");
 		return false;
@@ -2787,12 +2783,13 @@ stream_read_context(CDCPaths *paths,
 		return false;
 	}
 
-	if (!parseTimeLineHistory(paths->tlihistfile, history, system))
+	DatabaseCatalog *source = specs->sourceDB;
+	if (!catalog_lookup_timeline_history(source, system->timeline,
+										 &system->currentTimeline))
 	{
 		/* errors have already been logged */
 		return false;
 	}
-
 
 	return true;
 }
