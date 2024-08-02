@@ -340,7 +340,18 @@ typedef struct CopyArgs
 	uint64_t bytesTransmitted;
 } CopyArgs;
 
-bool pg_copy(PGSQL *src, PGSQL *dst, CopyArgs *args);
+
+typedef struct CopyStats
+{
+	uint64_t startTime;
+	uint64_t bytesTransmitted;
+} CopyStats;
+
+typedef bool (CopyStatsCallback)(void *context, CopyStats *stats);
+
+bool pg_copy(PGSQL *src, PGSQL *dst,
+			 CopyArgs *args, CopyStats *stats,
+			 void *context, CopyStatsCallback *callback);
 
 bool pg_copy_from_stdin(PGSQL *pgsql, const char *qname);
 bool pg_copy_row_from_stdin(PGSQL *pgsql, char *fmt, ...);

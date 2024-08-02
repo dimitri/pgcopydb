@@ -172,11 +172,13 @@ copydb_copy_ext_table(PGSQL *src, PGSQL *dst, char *qname, char *condition)
 		.srcAttrList = "*",
 		.srcWhereClause = condition,
 		.dstQname = qname,
-		.dstAttrList = "",
-		.bytesTransmitted = 0
+		.dstAttrList = ""
 	};
 
-	if (!pg_copy(src, dst, &args))
+	/* skip statistics maintenance on extension configuration tables */
+	CopyStats stats = { 0 };
+
+	if (!pg_copy(src, dst, &args, &stats, NULL, NULL))
 	{
 		/* errors have already been logged */
 		return false;
