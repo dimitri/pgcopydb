@@ -1,5 +1,3 @@
-version: "3.9"
-
 x-postgres-base-env: &x-postgres-base-env
   POSTGRES_USER: postgres
   POSTGRES_PASSWORD: h4ckm3
