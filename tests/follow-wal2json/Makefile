@@ -9,10 +9,10 @@ up: down build
 	docker compose up $(COMPOSE_EXIT)
 
 run: build fix-volumes
-	docker-compose --verbose run test
+	docker compose --verbose run test
 
 down:
-	docker-compose down
+	docker compose down
 
 build:
 	docker compose build --quiet

@@ -60,7 +60,7 @@ jobs:
 
       - name: Docker Compose Version
         run: |
-          docker-compose --version
+          docker compose --version
 
       - name: Run a test
         timeout-minutes: 5
