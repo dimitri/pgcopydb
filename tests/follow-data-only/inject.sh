@@ -19,9 +19,9 @@ pgcopydb ping
 # catalogs database, where the prefetch/transform/catchup sub-processes
 # register themselves in the process table.
 #
-dbf=${TMPDIR}/pgcopydb/schema/source.db
+dbfile=${TMPDIR}/pgcopydb/schema/source.db
 
-while [ ! -s ${dbf} ]
+until [ -s ${dbfile} ]
 do
     sleep 1
 done
@@ -32,7 +32,7 @@ pidf=/tmp/prefetch.pid
 while [ ! -s ${pidf} ]
 do
     # sometimes we have "Error: database is locked", ignore
-    sqlite3 -batch -bail -noheader ${dbf} "${sql}" > ${pidf} || echo error
+    sqlite3 -batch -bail -noheader ${dbfile} "${sql}" > ${pidf} || echo error
     sleep 1
 done
 
@@ -76,7 +76,6 @@ pgcopydb stream sentinel get
 # that the other process in the pgcopydb service is done before exiting
 # here.
 #
-sql="select '${lsn}'::pg_lsn <= replay_lsn from pgcopydb.sentinel"
 sql="select exists(select 1 from pg_replication_slots where slot_name = 'pgcopydb')"
 
 while [ `psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c "${sql}"` = 't' ]

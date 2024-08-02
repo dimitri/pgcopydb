@@ -21,10 +21,10 @@ PATH    = /var/run/pgcopydb
 CNAME   = follow-wal2json
 VNAME   = follow-wal2json
 VOLUMES = -v $(VNAME):$(PATH)
-OPTS    = --env-file=paths.env $(VOLUMES)
+OPTS    = --env-file=../paths.env $(VOLUMES)
 CLEANUP = make -f /var/lib/postgres/cleanup.mk
 
 fix-volumes:
 	docker run --rm -it $(OPTS) $(CNAME) $(CLEANUP)
 
-.PHONY: run down build test fix-volumes create-volumes
+.PHONY: run down build test fix-volumes
