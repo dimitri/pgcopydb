@@ -56,7 +56,9 @@ static bool build_parameters_list(PQExpBuffer buffer,
 								  int paramCount,
 								  const char **paramValues);
 
-static bool pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args);
+static bool pg_copy_data(PGSQL *src, PGSQL *dst,
+						 CopyArgs *args, CopyStats *stats,
+						 void *context, CopyStatsCallback *callback);
 
 static bool pg_copy_send_query(PGSQL *pgsql, CopyArgs *args,
 							   ExecStatusType status);
@@ -2659,7 +2661,9 @@ pgsql_truncate(PGSQL *pgsql, const char *qname)
  * referenced by the qualified identifier name dstQname on the target.
  */
 bool
-pg_copy(PGSQL *src, PGSQL *dst, CopyArgs *args)
+pg_copy(PGSQL *src, PGSQL *dst,
+		CopyArgs *args, CopyStats *stats,
+		void *context, CopyStatsCallback *callback)
 {
 	bool srcConnIsOurs = src->connection == NULL;
 	if (!pgsql_open_connection(src))
@@ -2678,7 +2682,7 @@ pg_copy(PGSQL *src, PGSQL *dst, CopyArgs *args)
 		return false;
 	}
 
-	bool result = pg_copy_data(src, dst, args);
+	bool result = pg_copy_data(src, dst, args, stats, context, callback);
 
 	if (srcConnIsOurs)
 	{
@@ -2700,7 +2704,9 @@ pg_copy(PGSQL *src, PGSQL *dst, CopyArgs *args)
  * expects src and dst are opened connection and doesn't manage their lifetime.
  */
 static bool
-pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args)
+pg_copy_data(PGSQL *src, PGSQL *dst,
+			 CopyArgs *args, CopyStats *stats,
+			 void *context, CopyStatsCallback *callback)
 {
 	PGconn *srcConn = src->connection;
 	PGconn *dstConn = dst->connection;
@@ -2719,7 +2725,10 @@ pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args)
 		}
 	}
 
-	/* cannot perform COPY FREEZE if the table was not created or truncated in the current subtransaction */
+	/*
+	 * COPY FREEZE is only accepted by Postgres if the table was created or
+	 * truncated in the current transaction.
+	 */
 	args->freeze &= args->truncate;
 
 	/* make sure to log TRUNCATE before we log COPY, avoid confusion */
@@ -2741,7 +2750,10 @@ pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args)
 	char *copybuf;
 	bool failedOnSrc = false;
 	bool failedOnDst = false;
-	args->bytesTransmitted = 0;
+
+	/* also init and maintain copy statistics */
+	stats->startTime = time(NULL);
+	stats->bytesTransmitted = 0;
 
 	for (;;)
 	{
@@ -2848,7 +2860,20 @@ pg_copy_data(PGSQL *src, PGSQL *dst, CopyArgs *args)
 		 */
 		else if (bufsize > 0)
 		{
-			args->bytesTransmitted += bufsize;
+			stats->bytesTransmitted += bufsize;
+
+			if (callback != NULL)
+			{
+				/*
+				 * Allow the Copy Stats user callback to fail, still continue
+				 * with the copy.
+				 */
+				if (!(*callback)(context, stats))
+				{
+					log_debug("Copy Stats Callback failed, "
+							  "see above for details");
+				}
+			}
 		}
 
 		/*

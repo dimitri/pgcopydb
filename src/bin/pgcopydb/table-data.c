@@ -27,6 +27,7 @@
 
 
 static bool copydb_copy_supervisor_add_table_hook(void *ctx, SourceTable *table);
+static bool copydb_update_copy_stats_hook(void *ctx, CopyStats *stats);
 
 /*
  * copydb_table_data fetches the list of tables from the source database and
@@ -1128,7 +1129,6 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 	args->dstAttrList = tableSpecs->sourceTable->attrList;
 	args->truncate = false;     /* default value, see below */
 	args->freeze = tableSpecs->sourceTable->partition.partCount <= 1;
-	args->bytesTransmitted = 0;
 
 	/*
 	 * Check to see if we want to TRUNCATE the table and benefit from the COPY
@@ -1286,6 +1286,14 @@ copydb_table_parts_are_all_done(CopyDataSpec *specs,
 }
 
 
+typedef struct UpdateCopyStatsContext
+{
+	CopyDataSpec *specs;
+	CopyTableDataSpec *tableSpecs;
+	uint64_t lastWrite;
+} UpdateCopyStatsContext;
+
+
 /*
  * copydb_copy_table implements the sub-process activity to pg_dump |
  * pg_restore the table's data and then create the indexes and the constraints
@@ -1305,6 +1313,7 @@ copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 
 	/* Now copy the data from source to target */
 	CopyTableSummary *summary = &(tableSpecs->summary);
+	CopyStats stats = { 0 };
 
 	int attempts = 0;
 	int maxAttempts = 5;        /* allow 5 attempts total, 4 retries */
@@ -1316,8 +1325,19 @@ copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 	{
 		++attempts;
 
+		/* re-init stats between attempts */
+		CopyStats empty = { 0 };
+		stats = empty;
+
+		UpdateCopyStatsContext context = {
+			.specs = specs,
+			.tableSpecs = tableSpecs
+		};
+
 		/* ignore previous attempts, we need only one success here */
-		success = pg_copy(src, dst, &(tableSpecs->copyArgs));
+		success = pg_copy(src, dst,
+						  &(tableSpecs->copyArgs), &stats,
+						  &context, &copydb_update_copy_stats_hook);
 
 		if (success)
 		{
@@ -1368,9 +1388,60 @@ copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 	}
 
 	/* publish bytesTransmitted accumulated value to the summary */
-	summary->bytesTransmitted = tableSpecs->copyArgs.bytesTransmitted;
+	summary->bytesTransmitted = stats.bytesTransmitted;
 
 	return success;
+}
+
+
+/*
+ * copydb_update_copy_stats_hook updates the bytesTransmitted data in our
+ * SQLite summary.
+ */
+static bool
+copydb_update_copy_stats_hook(void *ctx, CopyStats *stats)
+{
+	UpdateCopyStatsContext *context = (UpdateCopyStatsContext *) ctx;
+
+	DatabaseCatalog *sourceDB = &(context->specs->catalogs.source);
+	CopyTableDataSpec *tableSpecs = context->tableSpecs;
+	CopyTableSummary *summary = &(tableSpecs->summary);
+
+	uint64_t now = time(NULL);
+
+	if (context->lastWrite == 0)
+	{
+		context->lastWrite = now;
+	}
+
+	/* refrain from updating the statistics too often */
+	const uint64_t WRITE_INTERVAL_SECS = 5;
+
+	if ((now - context->lastWrite) < WRITE_INTERVAL_SECS)
+	{
+		return true;
+	}
+
+	/* update tablespecs summary durationMs and bytesTransmitted */
+	summary->bytesTransmitted = stats->bytesTransmitted;
+
+	instr_time duration;
+
+	INSTR_TIME_SET_CURRENT(duration);
+	INSTR_TIME_SUBTRACT(duration, summary->startTimeInstr);
+
+	summary->durationMs = INSTR_TIME_GET_MILLISEC(duration);
+
+	if (!summary_update_table_copy_stats(sourceDB, tableSpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* keep track of when we wrote last time */
+	context->lastWrite = now;
+
+	return true;
 }
 
 

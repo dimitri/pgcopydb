@@ -314,6 +314,12 @@ cli_ping(int argc, char **argv)
 		}
 	}
 
+	if (errors > 0)
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
 	/*
 	 * In case of error in one sub-process, we still want the other to fully
 	 * try.

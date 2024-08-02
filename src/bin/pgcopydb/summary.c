@@ -502,6 +502,83 @@ summary_finish_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 
 
 /*
+ * summary_update_table_copy_stats UPDATEs a summary entry to our internal
+ * catalogs database with the current COPY statistics, typically while the COPY
+ * command is running.
+ */
+bool
+summary_update_table_copy_stats(DatabaseCatalog *catalog,
+								CopyTableDataSpec *tableSpecs)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: summary_update_table_copy_stats: db is NULL");
+		return false;
+	}
+
+	SourceTable *table = tableSpecs->sourceTable;
+	CopyTableSummary *tableSummary = &(tableSpecs->summary);
+
+	char *sql =
+		"update summary set duration = $1, bytes = $2 "
+		"where pid = $3 and tableoid = $4 and partnum = $5";
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "duration",
+		  tableSummary->durationMs, NULL },
+
+		{ BIND_PARAMETER_TYPE_INT64, "bytes",
+		  tableSummary->bytesTransmitted, NULL },
+
+		{ BIND_PARAMETER_TYPE_INT64, "pid", getpid(), NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "tableoid", table->oid, NULL },
+
+		{ BIND_PARAMETER_TYPE_INT64, "partnum",
+		  table->partition.partNumber, NULL }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* now execute the query, which does not return any row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
  * summary_table_all_parts_done sets tableSpecs->allPartsAreDone to true when
  * all the parts have already been done in the summary table of our internal
  * catalogs.
