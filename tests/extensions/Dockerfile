@@ -6,4 +6,4 @@ COPY ./ddl.sql ddl.sql
 COPY ./countries.sql countries.sql
 
 USER docker
-CMD /usr/src/pgcopydb/copydb.sh
+CMD ["/usr/src/pgcopydb/copydb.sh"]

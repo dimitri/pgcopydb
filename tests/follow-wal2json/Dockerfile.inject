@@ -11,4 +11,4 @@ COPY ./inject.sh inject.sh
 COPY ./dml.sql dml.sql
 
 USER docker
-CMD /usr/src/pgcopydb/inject.sh
+CMD ["/usr/src/pgcopydb/inject.sh"]

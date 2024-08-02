@@ -12,4 +12,4 @@ COPY ./exclude ./test/exclude
 
 USER docker
 WORKDIR /usr/src/pgcopydb/test/
-CMD /usr/src/pgcopydb/copydb.sh
+CMD ["/usr/src/pgcopydb/copydb.sh"]
