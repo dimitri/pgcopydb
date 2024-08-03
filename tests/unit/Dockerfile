@@ -10,4 +10,4 @@ COPY ./expected ./test/expected
 
 USER docker
 WORKDIR /usr/src/pgcopydb/test/
-CMD /usr/src/pgcopydb/copydb.sh
+CMD ["/usr/src/pgcopydb/copydb.sh"]

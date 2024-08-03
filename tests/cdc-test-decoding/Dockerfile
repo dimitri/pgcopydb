@@ -10,4 +10,4 @@ COPY ./continued-txn.json continued-txn.json
 COPY ./continued-txn.sql continued-txn.sql
 
 USER docker
-CMD /usr/src/pgcopydb/copydb.sh
+CMD ["/usr/src/pgcopydb/copydb.sh"]
