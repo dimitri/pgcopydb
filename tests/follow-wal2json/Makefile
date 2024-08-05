@@ -9,7 +9,7 @@ up: down build
 	docker compose up $(COMPOSE_EXIT)
 
 run: build fix-volumes
-	docker compose --verbose run test
+	docker compose run test
 
 down:
 	docker compose down
