@@ -9,4 +9,4 @@ COPY ./ddl.sql ddl.sql
 COPY ./multi-wal-txn.sql multi-wal-txn.sql
 
 USER docker
-CMD /usr/src/pgcopydb/copydb.sh
+CMD ["/usr/src/pgcopydb/copydb.sh"]

@@ -6,4 +6,4 @@ COPY ./import.sql import.sql
 COPY ./imgs imgs
 
 USER docker
-CMD /usr/src/pgcopydb/copydb.sh
+CMD ["/usr/src/pgcopydb/copydb.sh"]

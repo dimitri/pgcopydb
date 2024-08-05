@@ -1,4 +1,3 @@
-version: "3.9"  # optional since v1.27.0
 services:
   source:
     build:
@@ -16,7 +15,9 @@ services:
       -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
       -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
   target:
-    image: postgres:13-bullseye
+    build:
+      context: .
+      dockerfile: Dockerfile.pg
     expose:
       - 5432
     environment:
@@ -27,31 +28,18 @@ services:
       -c ssl=on
       -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
       -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
-  inject:
-    build:
-      context: .
-      dockerfile: Dockerfile.inject
-    environment:
-      PGSSLMODE: "require"
-      PGCOPYDB_SOURCE_PGURI: postgres://postgres:h4ckm3@source/postgres
-      PGCOPYDB_TARGET_PGURI: postgres://postgres:h4ckm3@target/postgres
-      TMPDIR: /var/run/pgcopydb
-    # share TMPDIR between inject and test services
-    volumes:
-      - ./workdir:/var/run/pgcopydb
   test:
     build: .
     environment:
       PGSSLMODE: "require"
-      PGCOPYDB_SOURCE_PGURI: postgres://postgres:h4ckm3@source/postgres
-      PGCOPYDB_TARGET_PGURI: postgres://postgres:h4ckm3@target/postgres
+      POSTGRES_SOURCE: postgres://postgres:h4ckm3@source/postgres
+      POSTGRES_TARGET: postgres://postgres:h4ckm3@target/postgres
+      PGCOPYDB_SOURCE_PGURI_SU: postgres://postgres:h4ckm3@source/pagila
+      PGCOPYDB_TARGET_PGURI_SU: postgres://postgres:h4ckm3@target/pagila
+      PGCOPYDB_SOURCE_PGURI: postgres://pagila:own3d@source/pagila
+      PGCOPYDB_TARGET_PGURI: postgres://pagila:own3d@target/pagila
       PGCOPYDB_TABLE_JOBS: 4
       PGCOPYDB_INDEX_JOBS: 2
-      TMPDIR: /var/run/pgcopydb
-    # share TMPDIR between inject and test services
-    volumes:
-      - ./workdir:/var/run/pgcopydb
     depends_on:
       - source
       - target
-      - inject

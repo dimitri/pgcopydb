@@ -1,4 +1,3 @@
-version: "3.9"  # optional since v1.27.0
 services:
   source:
     image: postgres:13-bullseye
@@ -8,11 +7,6 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: h4ckm3
       POSTGRES_HOST_AUTH_METHOD: trust
-    command: >
-      -c wal_level=logical
-      -c ssl=on
-      -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
-      -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
   target:
     image: postgres:13-bullseye
     expose:
@@ -21,19 +15,9 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: h4ckm3
       POSTGRES_HOST_AUTH_METHOD: trust
-    command: >
-      -c ssl=on
-      -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
-      -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
   test:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    cap_add:
-      - SYS_ADMIN
-      - SYS_PTRACE
+    build: .
     environment:
-      PGSSLMODE: "require"
       PGCOPYDB_SOURCE_PGURI: postgres://postgres:h4ckm3@source/postgres
       PGCOPYDB_TARGET_PGURI: postgres://postgres:h4ckm3@target/postgres
       PGCOPYDB_TABLE_JOBS: 4
