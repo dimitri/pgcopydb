@@ -52,7 +52,8 @@ static CommandLine copy_db_command =
 		"  --restart             Allow restarting when temp files exist already\n"
 		"  --resume              Allow resuming operations after a failure\n"
 		"  --not-consistent      Allow taking a new snapshot on the source database\n"
-		"  --snapshot            Use snapshot obtained with pg_export_snapshot\n",
+		"  --snapshot            Use snapshot obtained with pg_export_snapshot\n"
+		"  --use-copy-binary     Use the COPY BINARY format for COPY operations\n",
 		cli_copy_db_getopts,
 		cli_clone);
 
