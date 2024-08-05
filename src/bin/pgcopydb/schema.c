@@ -1189,7 +1189,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"              limit 1"
 		"         ) as pkeys on true"
 
-		"   where relkind in ('r', 'p', 'm') and c.relpersistence in ('p', 'u') "
+		"   where relkind in ('r', 'm') and c.relpersistence in ('p', 'u') "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and n.nspname !~ 'pgcopydb' "
 
