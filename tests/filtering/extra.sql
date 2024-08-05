@@ -107,3 +107,15 @@ select setval('seq.standalone_smallint_id_seq', 670);
 
 -- A standalone sequence with a minvalue that has not been set
 create sequence seq.standalone_minvalue_id_seq minvalue 671;
+
+create schema partitioned_tables;
+
+create table partitioned_tables.sellers (
+    id bigint,
+    archive smallint not null
+) partition by list (archive);
+
+create table partitioned_tables.sellers_active partition of partitioned_tables.sellers default;
+create table partitioned_tables.sellers_archive partition of partitioned_tables.sellers for values in ('1');
+
+insert into partitioned_tables.sellers (id, archive) values (1, 0), (2, 1), (3, 0);
