@@ -294,7 +294,7 @@ cli_list_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	const char *optstring = "S:D:s:t:F:xPL:u:k:mfyarJRIN:Vdzvqh";
+	const char *optstring = construct_optstring(long_options);
 
 	while ((c = getopt_long(argc, argv, optstring,
 							long_options, &option_index)) != -1)

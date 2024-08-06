@@ -577,6 +577,34 @@ cli_read_one_line(const char *filename,
 
 
 /*
+ * construct_optstring constructs the optstring for getopt_long based on the
+ * long_options array.
+ */
+char *
+construct_optstring(struct option *long_options)
+{
+	PQExpBuffer buf = createPQExpBuffer();
+
+	while (long_options->name != NULL)
+	{
+		appendPQExpBufferChar(buf, long_options->val);
+
+		if (long_options->has_arg)
+		{
+			appendPQExpBufferChar(buf, ':');
+		}
+
+		long_options++;
+	}
+
+	char *optstring = strdup(buf->data);
+	destroyPQExpBuffer(buf);
+
+	return optstring;
+}
+
+
+/*
  * cli_copy_db_getopts parses the CLI options for the `copy db` command.
  */
 int
@@ -650,8 +678,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	const char *optstring =
-		"S:T:D:J:I:b:L:u:mcAPOXj:xBeMlUagkyF:F:Q:irRCN:fp:ws:o:tE:Vvdzqh";
+	const char *optstring = construct_optstring(long_options);
 
 	while ((c = getopt_long(argc, argv,
 							optstring, long_options, &option_index)) != -1)
