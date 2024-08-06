@@ -249,7 +249,9 @@ cli_copydb_getenv(CopyDBOptions *options)
 		{ PGCOPYDB_SKIP_CTID_SPLIT, ENV_TYPE_BOOL,
 		  &(options->skipCtidSplit) },
 		{ PGCOPYDB_SKIP_TABLESPACES, ENV_TYPE_BOOL,
-		  &(options->restoreOptions.noTableSpaces) }
+		  &(options->restoreOptions.noTableSpaces) },
+		{ PGCOPYDB_USE_COPY_BINARY, ENV_TYPE_BOOL,
+		  &(options->useCopyBinary) }
 	};
 
 	int parserCount = sizeof(parsers) / sizeof(parsers[0]);
@@ -616,6 +618,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "skip-db-properties", no_argument, NULL, 'g' },
 		{ "skip-split-by-ctid", no_argument, NULL, 'k' },
 		{ "no-tablespaces", no_argument, NULL, 'y' },
+		{ "use-copy-binary", no_argument, NULL, 'n' },
 		{ "filter", required_argument, NULL, 'F' },
 		{ "filters", required_argument, NULL, 'F' },
 		{ "requirements", required_argument, NULL, 'Q' },
@@ -651,7 +654,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	}
 
 	const char *optstring =
-		"S:T:D:J:I:b:L:u:mcAPOXj:xBeMlUagkyF:F:Q:irRCN:fp:ws:o:tE:Vvdzqh";
+		"S:T:D:J:I:b:L:u:mcAPOXj:xBeMlUagkynF:F:Q:irRCN:fp:ws:o:tE:Vvdzqh";
 
 	while ((c = getopt_long(argc, argv,
 							optstring, long_options, &option_index)) != -1)
@@ -1081,6 +1084,13 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				options.restoreOptions.noTableSpaces = true;
 				log_trace("--no-tablespaces");
+				break;
+			}
+
+			case 'n':
+			{
+				options.useCopyBinary = true;
+				log_trace("--use-copy-binary");
 				break;
 			}
 

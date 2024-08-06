@@ -1129,6 +1129,7 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 	args->dstAttrList = tableSpecs->sourceTable->attrList;
 	args->truncate = false;     /* default value, see below */
 	args->freeze = tableSpecs->sourceTable->partition.partCount <= 1;
+	args->useCopyBinary = specs->useCopyBinary;
 
 	/*
 	 * Check to see if we want to TRUNCATE the table and benefit from the COPY

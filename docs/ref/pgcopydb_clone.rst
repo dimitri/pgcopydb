@@ -671,6 +671,14 @@ The following options are available to ``pgcopydb clone``:
 
   __ https://www.postgresql.org/docs/current/app-pgrecvlogical.html
 
+--use-copy-binary
+
+  Use the COPY WITH (FORMAT BINARY) instead of the COPY command. 
+
+  See also documentation for `COPY`__.
+
+  __ https://www.postgresql.org/docs/current/sql-copy.html
+
 --origin
 
   Logical replication target system needs to track the transactions that
@@ -830,6 +838,12 @@ PGCOPYDB_SKIP_CTID_SPLIT
   When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
   then pgcopydb skips the CTID split operation during the clone process,
   same as when using the ``--skip-split-by-ctid`` option.
+
+PGCOPYDB_USE_COPY_BINARY
+
+  When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
+  then pgcopydb uses the COPY WITH (FORMAT BINARY) instead of the COPY
+  command, same as when using the ``--use-copy-binary`` option.
 
 PGCOPYDB_SNAPSHOT
 

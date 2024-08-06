@@ -356,6 +356,14 @@ The following options are available to ``pgcopydb copy`` sub-commands:
   ``pg_export_snapshot()`` it is possible for pgcopydb to re-use an already
   exported snapshot.
 
+--use-copy-binary
+
+  Use the COPY WITH (FORMAT BINARY) instead of the COPY command. 
+
+  See also documentation for `COPY`__.
+
+  __ https://www.postgresql.org/docs/current/sql-copy.html
+
 --verbose
 
   Increase current verbosity. The default level of verbosity is INFO. In
@@ -446,6 +454,12 @@ PGCOPYDB_DROP_IF_EXISTS
 PGCOPYDB_SNAPSHOT
 
   Postgres snapshot identifier to re-use, see also ``--snapshot``.
+
+PGCOPYDB_USE_COPY_BINARY
+
+  When true (or *yes*, or *on*, or 1, same input as a Postgres boolean)
+  then pgcopydb uses the COPY WITH (FORMAT BINARY) instead of the COPY
+  command, same as when using the ``--use-copy-binary`` option.
 
 TMPDIR
 
