@@ -66,7 +66,9 @@ cli_print_version_getopts(int argc, char **argv)
 	 */
 	unsetenv("POSIXLY_CORRECT");
 
-	while ((c = getopt_long(argc, argv, "Jh",
+	const char *optstring = construct_optstring(long_options);
+
+	while ((c = getopt_long(argc, argv, optstring,
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
