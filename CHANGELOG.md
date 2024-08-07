@@ -1,3 +1,59 @@
+### pgcopydb v0.17 (August 7, 2024) ###
+
+pgcopydb v0.17 is mostly a bugfix release. New features include
+compatibility and performance options such as disabling the COPY partition
+by CTID scans, which older Postgres versions are not good at, or using COPY
+WITH FORMAT (binary) when the source and target have been checked to be
+binary compatible (manual operation, use pgcopydb --with-copy-binary
+option).
+
+It is now possible to use a read-only standby as the source for pgcopydb, as
+long as filtering options and --follow option are not used. It should be
+possible to later add full support for CDC from a Postgres standby in
+Postgres 16 or more recent, the work has not been done yet.
+
+### Added
+* Refactor pgcopydb for standby server support (#655)
+* Support CDC on tables with generated columns (#664)
+* Implement support for filtering materialized view and data (refresh) (#737)
+* Introduce new option --with-copy-binary. (#857)
+* Update COPY statistics during the copy operation. (#858)
+* Add support for limiting same table concurrency (#803)
+* Skip disable by ctid (#785)
+* Introduce new options for estimating table sizes (#793)
+* Introduce --skip-analyze (#825)
+
+### Changed
+* Store timelines in internal catalogs (#848)
+* Review pgcopydb stream sentinel CLI. (#846)
+* Use a single dump file to give more dependency information to pg_restore. (#804)
+* Log libpq notice messages with proper log levels. (#802)
+* Get the block size from Postgres source database. (#795)
+* Improve formatting for pretty printed integers (#792)
+* Improve foreign key dependency tracking SQL query for extension tables (#790)
+* Allow exclude-index filtering with other filters (#789)
+
+### Fix
+* Bugfix: support filtering out only some of the partitions (#863)
+* Fix test_decoding schema parsing with quoted identifier (#852)
+* Remove redundant NULL pointer checks (#853)
+* Minor updates to docs (#837)
+* Extension config tables are not copied in dependency order (#841)
+* Adding filtering flag to pgcopydb dump schema (#836)
+* Fixes probable bug sources (#840)
+* Fix issues with stylechecker tests (#838)
+* Fix double sqlite source.db attach in restore parse-list (#835)
+* Fix out-of-memory issue in creating our pg_restore list file. (#831)
+* Fix/build and test (#830)
+* Review when to create a vacuum job queue (#827)
+* Refactor environment variable parsing logic (#807)
+* Problem: Pipeline sync deadlock (#823)
+* Standalone sequences do not get reset when schema is filtered (#816)
+* Fix initialisation of the start time, fixing timing reports on subsequent runs (#814)
+* Problem: Vacuum worker exits early (just after table copy) (#815)
+* Fix Array out of bounds access during transform (#809)
+* Fix issues in the docs. (#801)
+
 ### pgcopydb v0.16 (May 22, 2024) ###
 
 pgcopydb v0.16 is mostly a bugfix release. The main changes internally are
