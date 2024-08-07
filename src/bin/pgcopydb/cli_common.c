@@ -586,9 +586,19 @@ char *
 construct_optstring(struct option *long_options)
 {
 	PQExpBuffer buf = createPQExpBuffer();
+	int prev_val = 0;
 
 	while (long_options->name != NULL)
 	{
+		/* Skip option if it is an alias of the previous one */
+		if (long_options->val == prev_val)
+		{
+			long_options++;
+			continue;
+		}
+
+		prev_val = long_options->val;
+
 		appendPQExpBufferChar(buf, long_options->val);
 
 		if (long_options->has_arg)
