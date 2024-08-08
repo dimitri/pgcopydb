@@ -42,3 +42,6 @@ psql -o $s -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/fares.sql
 psql -o $t -d ${PGCOPYDB_TARGET_PGURI} -f /usr/src/pgcopydb/fares.sql
 
 diff $s $t
+
+pgcopydb compare schema
+pgcopydb compare data
