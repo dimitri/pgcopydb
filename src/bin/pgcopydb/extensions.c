@@ -419,25 +419,34 @@ copydb_parse_extensions_requirements(CopyDataSpec *copySpecs, char *filename)
 bool
 copydb_prepare_extensions_restore(CopyDataSpec *copySpecs)
 {
-	bool hasTimescaledb = false;
 	DatabaseCatalog *filterDB = &(copySpecs->catalogs.filter);
 	const char *extensionName = "timescaledb";
 
-	if (!catalog_extension_exists(filterDB, extensionName, &hasTimescaledb))
+	SourceExtension *extension = (SourceExtension *) calloc(1, sizeof(SourceExtension));
+
+	if (extension == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	if (!catalog_lookup_s_extension_by_extname(filterDB, extensionName, extension))
 	{
 		/* errors have already been logged*/
 		return false;
 	}
-    
-	if (hasTimescaledb)
+
+	if (extension->oid > 0)
 	{
-		log_debug("Timescaledb extension is present");
-		if (!timescaledb_pre_restore(copySpecs))
+		log_debug("Executing pre-restore steps for timescaledb extension");
+
+		if (!timescaledb_pre_restore(copySpecs, extension))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 	}
+
 	return true;
 }
 
@@ -452,20 +461,28 @@ copydb_prepare_extensions_restore(CopyDataSpec *copySpecs)
 bool
 copydb_finalize_extensions_restore(CopyDataSpec *copySpecs)
 {
-	bool hasTimescaledb = false;
 	DatabaseCatalog *filterDB = &(copySpecs->catalogs.filter);
 	const char *extensionName = "timescaledb";
 
-    if (!catalog_extension_exists(filterDB, extensionName, &hasTimescaledb))
+	SourceExtension *extension = (SourceExtension *) calloc(1, sizeof(SourceExtension));
+
+	if (extension == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	if (!catalog_lookup_s_extension_by_extname(filterDB, extensionName, extension))
 	{
 		/* errors have already been logged*/
 		return false;
 	}
 
-	if (hasTimescaledb)
+	if (extension->oid > 0)
 	{
-		log_debug("Timescaledb extension is present");
-		if (!timescaledb_post_restore(copySpecs))
+		log_debug("Executing post-restore steps for timescaledb extension");
+
+		if (!timescaledb_post_restore(copySpecs, extension))
 		{
 			/* errors have already been logged */
 			return false;
@@ -480,7 +497,7 @@ copydb_finalize_extensions_restore(CopyDataSpec *copySpecs)
  * Call the timescaledb_pre_restore() SQL function on the target database.
  */
 bool
-timescaledb_pre_restore(CopyDataSpec *copySpecs)
+timescaledb_pre_restore(CopyDataSpec *copySpecs, SourceExtension *extension)
 {
 	PGSQL dst = { 0 };
 
@@ -490,13 +507,27 @@ timescaledb_pre_restore(CopyDataSpec *copySpecs)
 		return false;
 	}
 
-	char *sql = "SELECT timescaledb_pre_restore()";
+	PQExpBuffer sql = createPQExpBuffer();
+	char *sqlTemplate = "select %s.timescaledb_pre_restore()";
 
-	if (!pgsql_execute(&dst, sql))
+	appendPQExpBuffer(sql, sqlTemplate, extension->extnamespace);
+
+	if (PQExpBufferBroken(sql))
 	{
-		log_error("Failed to call timescaledb_pre_restore()");
+		(void) destroyPQExpBuffer(sql);
+		log_error(
+			"Failed to allocate memory for SQL query string to get partition key range");
 		return false;
 	}
+
+	if (!pgsql_execute(&dst, sql->data))
+	{
+		(void) destroyPQExpBuffer(sql);
+		log_error("Failed to call %s.timescaledb_pre_restore()", extension->extnamespace);
+		return false;
+	}
+
+	(void) destroyPQExpBuffer(sql);
 
 	return true;
 }
@@ -506,7 +537,7 @@ timescaledb_pre_restore(CopyDataSpec *copySpecs)
  * Call the timescaledb_post_restore() SQL function on the target database.
  */
 bool
-timescaledb_post_restore(CopyDataSpec *copySpecs)
+timescaledb_post_restore(CopyDataSpec *copySpecs, SourceExtension *extension)
 {
 	PGSQL dst = { 0 };
 
@@ -516,13 +547,28 @@ timescaledb_post_restore(CopyDataSpec *copySpecs)
 		return false;
 	}
 
-	char *sql = "SELECT timescaledb_post_restore()";
+	PQExpBuffer sql = createPQExpBuffer();
+	char *sqlTemplate = "select %s.timescaledb_post_restore()";
 
-	if (!pgsql_execute(&dst, sql))
+	appendPQExpBuffer(sql, sqlTemplate, extension->extnamespace);
+
+	if (PQExpBufferBroken(sql))
 	{
-		log_error("Failed to call timescaledb_post_restore()");
+		(void) destroyPQExpBuffer(sql);
+		log_error(
+			"Failed to allocate memory for SQL query string to get partition key range");
 		return false;
 	}
+
+	if (!pgsql_execute(&dst, sql->data))
+	{
+		(void) destroyPQExpBuffer(sql);
+		log_error("Failed to call %s.timescaledb_post_restore()",
+				  extension->extnamespace);
+		return false;
+	}
+
+	(void) destroyPQExpBuffer(sql);
 
 	return true;
 }

@@ -1665,73 +1665,6 @@ catalog_section_fetch(SQLiteQuery *query)
 
 
 /*
- * catalog_extension_exists checks for existenece of any extension depending on tha name provided 
- * through the function's arguement extensionName
- */
-bool
-catalog_extension_exists(DatabaseCatalog *catalog, const char *extensionName, bool *exists)
-{
-	sqlite3 *db = catalog->db;
-
-	if (db == NULL)
-	{
-		log_error("BUG: catalog_extension_exists: db is NULL");
-		return false;
-	}
-
-	SQLiteQuery query = {
-		.context = exists,
-		.fetchFunction = &catalog_extension_fetch
-	};
-
-	char *sql = "SELECT 1 FROM s_extension WHERE extname = $1";
-
-	if (!catalog_sql_prepare(db, sql, &query))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/* bind our parameters now */
-	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "name", 0, extensionName }
-	};
-
-	int count = sizeof(params) / sizeof(params[0]);
-
-	if (!catalog_sql_bind(&query, params, count))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/* now execute the query, which return exactly one row */
-	if (!catalog_sql_execute_once(&query))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	return true;
-}
-
-
-/*
- * catalog_extension_fetch is a SQLiteQuery callback.
- */
-bool
-catalog_extension_fetch(SQLiteQuery *query)
-{
-	bool *exists = (bool *)query->context;
-
-	/* If a row is returned, the extension exists*/
-    *exists = sqlite3_column_int(query->ppStmt, 0) == 1;
-
-	return true;
-}
-
-
-/*
  * catalog_total_duration loops over a catalog section array and compute the
  * total duration in milliseconds.
  */
@@ -6442,6 +6375,101 @@ catalog_s_namespace_fetch(SQLiteQuery *query)
 	strlcpy(schema->restoreListName,
 			(char *) sqlite3_column_text(query->ppStmt, 2),
 			sizeof(schema->restoreListName));
+
+	return true;
+}
+
+
+/*
+ * catalog_extension_fetch fetches a SourceExtension entry from a SQLite
+ * ppStmt result set.
+ */
+bool
+catalog_extension_fetch(SQLiteQuery *query)
+{
+	SourceExtension *extension = (SourceExtension *) query->context;
+
+	/* cleanup the memory area before re-use */
+	bzero(extension, sizeof(SourceExtension));
+
+	extension->oid = sqlite3_column_int64(query->ppStmt, 0);
+
+	strlcpy(extension->extname,
+			(char *) sqlite3_column_text(query->ppStmt, 1),
+			sizeof(extension->extname));
+
+	strlcpy(extension->extnamespace,
+			(char *) sqlite3_column_text(query->ppStmt, 2),
+			sizeof(extension->extnamespace));
+
+	extension->extrelocatable = sqlite3_column_int(query->ppStmt, 3) == 1;
+
+	return true;
+}
+
+
+/*
+ * catalog_lookup_ext_namespace_by_extname fetches a s_extension entry from our
+ * catalogs.
+ */
+bool
+catalog_lookup_s_extension_by_extname(DatabaseCatalog *catalog,
+									  const char *extname,
+									  SourceExtension *result)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_lookup_s_extension_by_extname: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"  select oid, extname, extnamespace, extrelocatable "
+		"    from s_extension "
+		"   where extname = $1 ";
+
+	SQLiteQuery query = {
+		.context = result,
+		.fetchFunction = &catalog_extension_fetch
+	};
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[1] = {
+		{ BIND_PARAMETER_TYPE_TEXT, "extname", 0,
+		  (char *) extname },
+	};
+
+	if (!catalog_sql_bind(&query, params, 1))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* now execute the query, which return exactly one row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
