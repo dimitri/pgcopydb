@@ -45,3 +45,14 @@ diff $s $t
 
 pgcopydb compare schema
 pgcopydb compare data
+
+# check timescaledb hypertables and chunks catalogs
+psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -c "SELECT * FROM timescaledb_information.hypertables" > /tmp/source_hypertables.out
+psql -d ${PGCOPYDB_TARGET_PGURI} -1 -c "SELECT * FROM timescaledb_information.hypertables" > /tmp/target_hypertables.out
+
+diff /tmp/source_hypertables.out /tmp/target_hypertables.out
+
+psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -c "SELECT * FROM timescaledb_information.chunks" > /tmp/source_chunks.out
+psql -d ${PGCOPYDB_TARGET_PGURI} -1 -c "SELECT * FROM timescaledb_information.chunks" > /tmp/target_chunks.out
+
+diff /tmp/source_chunks.out /tmp/target_chunks.out

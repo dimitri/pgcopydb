@@ -507,27 +507,16 @@ timescaledb_pre_restore(CopyDataSpec *copySpecs, SourceExtension *extension)
 		return false;
 	}
 
-	PQExpBuffer sql = createPQExpBuffer();
+	char sql[128] = { 0 };
 	char *sqlTemplate = "select %s.timescaledb_pre_restore()";
 
-	appendPQExpBuffer(sql, sqlTemplate, extension->extnamespace);
+	sformat(sql, sizeof(sql), sqlTemplate, extension->extnamespace);
 
-	if (PQExpBufferBroken(sql))
+	if (!pgsql_execute(&dst, sql))
 	{
-		(void) destroyPQExpBuffer(sql);
-		log_error(
-			"Failed to allocate memory for SQL query string to get partition key range");
-		return false;
-	}
-
-	if (!pgsql_execute(&dst, sql->data))
-	{
-		(void) destroyPQExpBuffer(sql);
 		log_error("Failed to call %s.timescaledb_pre_restore()", extension->extnamespace);
 		return false;
 	}
-
-	(void) destroyPQExpBuffer(sql);
 
 	return true;
 }
@@ -547,28 +536,17 @@ timescaledb_post_restore(CopyDataSpec *copySpecs, SourceExtension *extension)
 		return false;
 	}
 
-	PQExpBuffer sql = createPQExpBuffer();
+	char sql[128] = { 0 };
 	char *sqlTemplate = "select %s.timescaledb_post_restore()";
 
-	appendPQExpBuffer(sql, sqlTemplate, extension->extnamespace);
+	sformat(sql, sizeof(sql), sqlTemplate, extension->extnamespace);
 
-	if (PQExpBufferBroken(sql))
+	if (!pgsql_execute(&dst, sql))
 	{
-		(void) destroyPQExpBuffer(sql);
-		log_error(
-			"Failed to allocate memory for SQL query string to get partition key range");
-		return false;
-	}
-
-	if (!pgsql_execute(&dst, sql->data))
-	{
-		(void) destroyPQExpBuffer(sql);
 		log_error("Failed to call %s.timescaledb_post_restore()",
 				  extension->extnamespace);
 		return false;
 	}
-
-	(void) destroyPQExpBuffer(sql);
 
 	return true;
 }
