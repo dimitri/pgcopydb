@@ -31,7 +31,7 @@ sleep 1
 pgcopydb copy extensions
 
 # now clone with superuser privileges, seems to be required for timescaledb
-pgcopydb clone --skip-extensions 
+pgcopydb clone --skip-extensions --no-owner
 
 kill -TERM ${COPROC_PID}
 wait ${COPROC_PID}
