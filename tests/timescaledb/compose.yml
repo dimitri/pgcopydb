@@ -1,0 +1,27 @@
+services:
+  source:
+    image: timescale/timescaledb:latest-pg13
+    expose:
+      - 5432
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: h4ckm3
+      POSTGRES_HOST_AUTH_METHOD: trust
+  target:
+    image: timescale/timescaledb:latest-pg13
+    expose:
+      - 5432
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: h4ckm3
+      POSTGRES_HOST_AUTH_METHOD: trust
+  test:
+    build: .
+    environment:
+      PGCOPYDB_SOURCE_PGURI: postgres://postgres:h4ckm3@source/postgres
+      PGCOPYDB_TARGET_PGURI: postgres://postgres:h4ckm3@target/postgres
+      PGCOPYDB_TABLE_JOBS: 4
+      PGCOPYDB_INDEX_JOBS: 2
+    depends_on:
+      - source
+      - target

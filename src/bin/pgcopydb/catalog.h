@@ -124,6 +124,11 @@ bool catalog_section_state(DatabaseCatalog *catalog, CatalogSection *section);
 bool catalog_section_fetch(SQLiteQuery *query);
 bool catalog_total_duration(DatabaseCatalog *catalog);
 
+bool catalog_lookup_s_extension_by_extname(DatabaseCatalog *catalog, const
+										   char *extensionName,
+										   SourceExtension *extension);
+bool catalog_extension_fetch(SQLiteQuery *query);
+
 char * CopyDataSectionToString(CopyDataSection section);
 
 /*

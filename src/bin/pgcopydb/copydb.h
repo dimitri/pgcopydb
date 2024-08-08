@@ -343,6 +343,11 @@ bool copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions);
 
 bool copydb_parse_extensions_requirements(CopyDataSpec *copySpecs,
 										  char *filename);
+bool copydb_prepare_extensions_restore(CopyDataSpec *copySpecs);
+bool copydb_finalize_extensions_restore(CopyDataSpec *copySpecs);
+
+bool timescaledb_pre_restore(CopyDataSpec *copySpecs, SourceExtension *ext);
+bool timescaledb_post_restore(CopyDataSpec *copySpecs, SourceExtension *ext);
 
 /* indexes.c */
 bool copydb_start_index_supervisor(CopyDataSpec *specs);

@@ -28,6 +28,7 @@ jobs:
           - blobs
           - filtering
           - extensions
+          - timescaledb
           - cdc-low-level
           - cdc-test-decoding
           - cdc-endpos-between-transaction

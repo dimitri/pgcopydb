@@ -407,3 +407,146 @@ copydb_parse_extensions_requirements(CopyDataSpec *copySpecs, char *filename)
 
 	return true;
 }
+
+
+/*
+ * copydb_prepare_extensions_restore implements pre pg_restore steps that might
+ * be needed for some extensions.
+ *
+ * At the moment we need to call timescaledb_pre_restore() when timescaledb has
+ * been used.
+ */
+bool
+copydb_prepare_extensions_restore(CopyDataSpec *copySpecs)
+{
+	DatabaseCatalog *filterDB = &(copySpecs->catalogs.filter);
+	const char *extensionName = "timescaledb";
+
+	SourceExtension *extension = (SourceExtension *) calloc(1, sizeof(SourceExtension));
+
+	if (extension == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	if (!catalog_lookup_s_extension_by_extname(filterDB, extensionName, extension))
+	{
+		/* errors have already been logged*/
+		return false;
+	}
+
+	if (extension->oid > 0)
+	{
+		log_info("Executing pre-restore steps for timescaledb extension");
+
+		if (!timescaledb_pre_restore(copySpecs, extension))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * copydb_prepare_extensions_restore implements pre pg_restore steps that might
+ * be needed for some extensions.
+ *
+ * At the moment we need to call timescaledb_pre_restore() when timescaledb has
+ * been used.
+ */
+bool
+copydb_finalize_extensions_restore(CopyDataSpec *copySpecs)
+{
+	DatabaseCatalog *filterDB = &(copySpecs->catalogs.filter);
+	const char *extensionName = "timescaledb";
+
+	SourceExtension *extension = (SourceExtension *) calloc(1, sizeof(SourceExtension));
+
+	if (extension == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	if (!catalog_lookup_s_extension_by_extname(filterDB, extensionName, extension))
+	{
+		/* errors have already been logged*/
+		return false;
+	}
+
+	if (extension->oid > 0)
+	{
+		log_info("Executing post-restore steps for timescaledb extension");
+
+		if (!timescaledb_post_restore(copySpecs, extension))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * Call the timescaledb_pre_restore() SQL function on the target database.
+ */
+bool
+timescaledb_pre_restore(CopyDataSpec *copySpecs, SourceExtension *extension)
+{
+	PGSQL dst = { 0 };
+
+	if (!pgsql_init(&dst, copySpecs->connStrings.target_pguri, PGSQL_CONN_TARGET))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	char sql[BUFSIZE] = { 0 };
+	char *sqlTemplate = "select %s.timescaledb_pre_restore()";
+
+	sformat(sql, sizeof(sql), sqlTemplate, extension->extnamespace);
+
+	if (!pgsql_execute(&dst, sql))
+	{
+		log_error("Failed to call %s.timescaledb_pre_restore()", extension->extnamespace);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * Call the timescaledb_post_restore() SQL function on the target database.
+ */
+bool
+timescaledb_post_restore(CopyDataSpec *copySpecs, SourceExtension *extension)
+{
+	PGSQL dst = { 0 };
+
+	if (!pgsql_init(&dst, copySpecs->connStrings.target_pguri, PGSQL_CONN_TARGET))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	char sql[BUFSIZE] = { 0 };
+	char *sqlTemplate = "select %s.timescaledb_post_restore()";
+
+	sformat(sql, sizeof(sql), sqlTemplate, extension->extnamespace);
+
+	if (!pgsql_execute(&dst, sql))
+	{
+		log_error("Failed to call %s.timescaledb_post_restore()",
+				  extension->extnamespace);
+		return false;
+	}
+
+	return true;
+}
