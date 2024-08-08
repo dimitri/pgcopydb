@@ -8,4 +8,4 @@ COPY ./fares.sql fares.sql
 COPY ./nyc_data_rides.10k.csv nyc_data_rides.10k.csv
 
 USER docker
-CMD /usr/src/pgcopydb/copydb.sh
+CMD ["/usr/src/pgcopydb/copydb.sh"]
