@@ -438,7 +438,7 @@ copydb_prepare_extensions_restore(CopyDataSpec *copySpecs)
 
 	if (extension->oid > 0)
 	{
-		log_debug("Executing pre-restore steps for timescaledb extension");
+		log_info("Executing pre-restore steps for timescaledb extension");
 
 		if (!timescaledb_pre_restore(copySpecs, extension))
 		{
@@ -480,7 +480,7 @@ copydb_finalize_extensions_restore(CopyDataSpec *copySpecs)
 
 	if (extension->oid > 0)
 	{
-		log_debug("Executing post-restore steps for timescaledb extension");
+		log_info("Executing post-restore steps for timescaledb extension");
 
 		if (!timescaledb_post_restore(copySpecs, extension))
 		{
