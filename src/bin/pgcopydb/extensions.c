@@ -507,7 +507,7 @@ timescaledb_pre_restore(CopyDataSpec *copySpecs, SourceExtension *extension)
 		return false;
 	}
 
-	char sql[128] = { 0 };
+	char sql[BUFSIZE] = { 0 };
 	char *sqlTemplate = "select %s.timescaledb_pre_restore()";
 
 	sformat(sql, sizeof(sql), sqlTemplate, extension->extnamespace);
@@ -536,7 +536,7 @@ timescaledb_post_restore(CopyDataSpec *copySpecs, SourceExtension *extension)
 		return false;
 	}
 
-	char sql[128] = { 0 };
+	char sql[BUFSIZE] = { 0 };
 	char *sqlTemplate = "select %s.timescaledb_post_restore()";
 
 	sformat(sql, sizeof(sql), sqlTemplate, extension->extnamespace);
