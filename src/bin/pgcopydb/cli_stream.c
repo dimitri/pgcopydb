@@ -235,7 +235,9 @@ cli_stream_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:D:p:ws:N:o:E:rRCOIVvdzqh",
+	const char *optstring = construct_optstring(long_options);
+
+	while ((c = getopt_long(argc, argv, optstring,
 							long_options, &option_index)) != -1)
 	{
 		switch (c)

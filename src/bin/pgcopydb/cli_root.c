@@ -72,7 +72,9 @@ root_options(int argc, char **argv)
 
 	optind = 0;
 
-	while ((c = getopt_long(argc, argv, "JVvdzqh",
+	const char *optstring = construct_optstring(long_options);
+
+	while ((c = getopt_long(argc, argv, optstring,
 							long_options, &option_index)) != -1)
 	{
 		switch (c)

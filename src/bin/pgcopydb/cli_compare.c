@@ -103,7 +103,9 @@ cli_compare_getopts(int argc, char **argv)
 	SplitTableLargerThan empty = { 0 };
 	options.splitTablesLargerThan = empty;
 
-	while ((c = getopt_long(argc, argv, "S:T:D:j:JVvdzqh",
+	const char *optstring = construct_optstring(long_options);
+
+	while ((c = getopt_long(argc, argv, optstring,
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
