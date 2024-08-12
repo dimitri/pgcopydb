@@ -52,7 +52,7 @@ SQLFILE=000000010000000000000002.sql
 expected=/tmp/expected.json
 result=/tmp/result.json
 
-JQSCRIPT='del(.lsn) | del(.nextlsn) | del(.timestamp) | del(.xid)'
+JQSCRIPT='del(.lsn) | del(.nextlsn) | del(.timestamp) | del(.xid) | if has("message") then .message |= sub("(?<m>COMMIT|BEGIN) [0-9]+"; "\(.m) XXX") else . end'
 
 jq "${JQSCRIPT}" /usr/src/pgcopydb/${WALFILE} > ${expected}
 jq "${JQSCRIPT}" ${SHAREDIR}/${WALFILE} > ${result}
