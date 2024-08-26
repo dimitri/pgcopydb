@@ -121,3 +121,38 @@ commit;
 begin;
 delete from generated_column_test where id = 2;
 commit;
+
+
+--
+-- See https://github.com/dimitri/pgcopydb/issues/710
+--
+begin;
+
+-- uncompressed external toast data
+insert into xpto (toasted_col1, toasted_col2)
+select string_agg(g.i::text, ''), string_agg((g.i*2)::text, '')
+from generate_series(1, 2000) g(i);
+
+-- compressed external toast data
+insert into xpto (toasted_col2)
+select repeat(string_agg(to_char(g.i, 'fm0000'), ''), 50)
+from generate_series(1, 500) g(i);
+
+-- update of existing column
+update xpto
+set toasted_col1 = (select string_agg(g.i::text, '')
+from generate_series(1, 2000) g(i))
+where id = 1;
+
+update xpto set rand1 = 123.456 where id = 1;
+
+-- test case where the only data is external toast data
+insert into xpto2 (toasted_col1, toasted_col2)
+select string_agg(g.i::text, ''), string_agg((g.i*2)::text, '')
+from generate_series(1, 2000) g(i);
+
+-- weird update clause where the data is unchanged
+-- we expect to skip the update of the row as the data is unchanged
+update xpto2 set toasted_col1 = toasted_col1, toasted_col2 = toasted_col2;
+
+commit;

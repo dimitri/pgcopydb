@@ -193,3 +193,27 @@ begin
     return 1;
 end;
 $$ language plpgsql;
+
+
+--
+-- See https://github.com/dimitri/pgcopydb/issues/710
+-- Tables with toast columns may output `unchanged-toast-datum` values
+begin;
+create sequence xpto_rand_seq start 79 increment 1499; -- portable "random"
+
+-- test table from PG regression tests
+create table xpto (
+    id serial primary key,
+    toasted_col1 text,
+    rand1 float8 default nextval('xpto_rand_seq'),
+    toasted_col2 text,
+    rand2 float8 default nextval('xpto_rand_seq')
+);
+
+-- table with only toastable columns
+create table xpto2 (
+    toasted_col1 text,
+    toasted_col2 text
+);
+
+commit;
