@@ -1114,7 +1114,7 @@ cli_stream_apply(int argc, char **argv)
 		context.apply = true;
 		strlcpy(context.sqlFileName, sqlfilename, sizeof(context.sqlFileName));
 
-		if (!setupReplicationOrigin(&context, logSQL))
+		if (!setupReplicationOrigin(&context))
 		{
 			log_error("Failed to setup replication origin on the target database");
 			exit(EXIT_CODE_TARGET);

@@ -729,7 +729,7 @@ bool stream_apply_init_context(StreamApplyContext *context,
 							   char *origin,
 							   uint64_t endpos);
 
-bool setupReplicationOrigin(StreamApplyContext *context, bool logSQL);
+bool setupReplicationOrigin(StreamApplyContext *context);
 
 bool computeSQLFileName(StreamApplyContext *context);
 
