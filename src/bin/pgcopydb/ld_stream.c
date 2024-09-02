@@ -2793,3 +2793,48 @@ stream_read_context(StreamSpecs *specs)
 
 	return true;
 }
+
+
+/*
+ * Checks if the logical message metadata should be skipped
+ *
+ * The reason for this is a bug in the wall2json output plugin. It creates an
+ * UPDATE statement with a SET clause that is empty, and a WHERE clause that
+ * contains the actual SET clause as follows:
+ * `UPDATE "public"."test_table_with_composite_pk" SET  WHERE "id"...`
+ * Please see the following issue for more details: https://github.com/dimitri/pgcopydb/issues/750
+ */
+bool
+logical_message_metadata_should_skip_statement(const LogicalMessageMetadata *metadata,
+											   const PreparedStmt *preparedStmt)
+{
+	if (metadata->action == STREAM_ACTION_EXECUTE)
+	{
+		return preparedStmt == NULL;
+	}
+
+	if (metadata->action != STREAM_ACTION_UPDATE)
+	{
+		return false;
+	}
+
+	const char *statement = metadata->stmt;
+	char *set = strstr(statement, "SET");
+	char *where = strstr(statement, "WHERE");
+	if (set == NULL || where == NULL)
+	{
+		return false;
+	}
+
+	set += sizeof("SET");
+	while (set < where)
+	{
+		if (*set != ' ')
+		{
+			return false;
+		}
+		set++;
+	}
+
+	return true;
+}

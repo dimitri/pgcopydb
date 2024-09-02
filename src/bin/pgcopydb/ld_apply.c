@@ -583,6 +583,13 @@ stream_apply_sql(StreamApplyContext *context,
 {
 	PGSQL *applyPgConn = &(context->applyPgConn);
 
+	if (logical_message_metadata_should_skip_statement(metadata, context->preparedStmt))
+	{
+		context->preparedStmt = NULL;
+		log_debug("Skipping statement: %s", sql);
+		return true;
+	}
+
 	switch (metadata->action)
 	{
 		case STREAM_ACTION_SWITCH:

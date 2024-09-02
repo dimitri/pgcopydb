@@ -42,6 +42,11 @@ do
     sleep 1
 done
 
+# This psql call is used to create the test case for the a bug in wall2json problem.
+# For more information, see: https://github.com/dimitri/pgcopydb/issues/750
+psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml2.sql || true
+
+
 # grab the current LSN, it's going to be our streaming end position
 lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_flush_lsn()'`
 pgcopydb stream sentinel set endpos --current

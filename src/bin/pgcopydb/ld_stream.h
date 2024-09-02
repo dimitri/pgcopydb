@@ -777,4 +777,8 @@ bool follow_terminate_subprocesses(StreamSpecs *specs);
 
 bool follow_wait_pid(pid_t subprocess, bool *exited, int *returnCode, int *sig);
 
+bool logical_message_metadata_should_skip_statement(const
+													LogicalMessageMetadata *metadata,
+													const PreparedStmt *preparedStmt);
+
 #endif /* LD_STREAM_H */
