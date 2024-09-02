@@ -1157,22 +1157,43 @@ archive_iter_toc_init(ArchiveTOCIterator *iter)
 	 * An archive TOC entry has a fixed format that looks like the following:
 	 *
 	 * ahprintf(AH, "%d; %u %u %s %s %s %s\n", te->dumpId,
-	 *          te->catalogId.tableoid, te->catalogId.oid, te->desc,
-	 *          sanitized_schema, sanitized_name, sanitized_owner);
+	 * te->catalogId.tableoid, te->catalogId.oid, te->desc, sanitized_schema,
+	 * sanitized_name, sanitized_owner);
 	 *
-	 * The %s parts are PG_NAMEDATALEN. The overall line fits into BUFSIZE.
+	 * The %s parts are PG_NAMEDATALEN except for sanitized_name for functions.
+	 * Let's calculate the maximum line length we can expect for all objects
+	 * except for functions, and add some headroom for the sanitized function
+	 * names later.
 	 *
-	 * Numbers require up to 10 chars (digits) to be printed, and
-	 * PG_NAMEDATALEN is 64 characters, but we need to double that for quoting
-	 * rules. Add in the semi-colon. And the desc is less than 32 characters,
-	 * the longest known being "PUBLICATION TABLES IN SCHEMA" at 30. Let's make
-	 * it 64 for headroom:
+	 * Numbers require up to 10 chars (digits) to be printed, and PG_NAMEDATALEN
+	 * is 64 characters, but we need to double that for quoting rules. Add in
+	 * the semi-colon. And the desc is less than 32 characters, the longest
+	 * known being "PUBLICATION TABLES IN SCHEMA" at 30. Let's make it 64 for
+	 * headroom:
 	 *
 	 * 3 * (10 + 1) + 1 + 3 * (2 * 64) + 64 = 482 chars
 	 *
+	 * The sanitized name of a function contains the name of the function
+	 * followed by a list of parameters types in parantheses, which can be quite
+	 * long. Let's calculate the upper limit for the length of the parameter
+	 * list:
+	 *
+	 * max_function_args is a compile-time constant that is set to 100 by
+	 * default in Postgres. Although it can be changed at compile time, we don't
+	 * want to care about that here.
+	 *
+	 * A type name can be up to PG_NAMEDATALEN characters long, and assuming we
+	 * have BUFSIZE is 1024 bytes.
+	 *
+	 * 100 * (PG_NAMEDATALEN + 2) = 100 * (64 + 2) = 100 * 66 = 6600 chars
+	 *
+	 * 6600 + 482 = 7082 chars
+	 *
 	 * BUFSIZE is 1024 bytes.
+	 *
+	 * 8 kilobytes is a reasonable size for a buffer.
 	 */
-	iter->fileIterator->bufsize = BUFSIZE;
+	iter->fileIterator->bufsize = BUFSIZE * 8;
 
 	if (!file_iter_lines_init(iter->fileIterator))
 	{
