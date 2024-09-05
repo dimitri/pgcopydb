@@ -200,6 +200,10 @@ parseTestDecodingMessageActionAndXid(LogicalStreamContext *context)
 #define TD_NEW_TUPLE_LEN strlen(TD_NEW_TUPLE)
 #define TD_FOUND_NEW_TUPLE(ptr) (strncmp(ptr, TD_NEW_TUPLE, TD_NEW_TUPLE_LEN) == 0)
 
+#define TD_UNCHANGED_TOAST "unchanged-toast-datum"
+#define TD_UNCHANGED_TOAST_LEN strlen(TD_UNCHANGED_TOAST)
+#define TD_FOUND_UNCHANGED_TOAST(ptr) \
+	(strncmp(ptr, TD_UNCHANGED_TOAST, TD_UNCHANGED_TOAST_LEN) == 0)
 
 /*
  * parseTestDecodingMessage parses a message as emitted by test_decoding into
@@ -681,6 +685,15 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple, TestDecodingHeader *header)
 			break;
 		}
 
+		/* when we find unchanged-toast-datum */
+		if (cur->valueStart == NULL)
+		{
+			/* skip the unchanged-toast-datum */
+			TestDecodingColumns emptyTestDecodingColumns = { 0 };
+			*cur = emptyTestDecodingColumns;
+			continue;
+		}
+
 		++count;
 
 		/* that might have been the last column */
@@ -910,6 +923,20 @@ parseNextColumn(TestDecodingColumns *cols,
 				  cols->valueLen,
 				  cols->valueStart);
 	}
+
+	/*
+	 * Parse unchanged-toast-datum string literals
+	 */
+	else if (header->action == STREAM_ACTION_UPDATE && TD_FOUND_UNCHANGED_TOAST(ptr))
+	{
+		/* advance to past the value, skip the next space */
+		ptr = ptr + TD_UNCHANGED_TOAST_LEN;
+		header->pos = ptr - header->message + 1;
+
+		log_trace("parseNextColumn: unchanged-toast-datum for column \"%.*s\"",
+				  cols->colnameLen,
+				  cols->colnameStart);
+	}
 	else
 	{
 		cols->valueStart = ptr;
@@ -1069,6 +1096,14 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 		log_error("Failed to parse UPDATE columns for logical message %s",
 				  header->message);
 		return false;
+	}
+
+	if (cols->attributes.count == 0)
+	{
+		log_trace("prepareUpdateTuppleArrays: Skipping update message as all "
+				  "the column values are unchanged. message: \"%s\"",
+				  header->message);
+		return true;
 	}
 
 	/*

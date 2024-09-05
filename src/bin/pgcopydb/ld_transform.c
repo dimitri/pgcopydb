@@ -2198,9 +2198,14 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 		LogicalMessageTuple *old = &(update->old.array[s]);
 		LogicalMessageTuple *new = &(update->new.array[s]);
 
-		if (old->values.count != new->values.count ||
-			old->values.count != 1 ||
-			new->values.count != 1)
+		if (old->values.count == 0 && new->values.count == 0)
+		{
+			log_trace("stream_write_update: Skipping empty UPDATE statement");
+			continue;
+		}
+		else if (old->values.count != new->values.count ||
+				 old->values.count != 1 ||
+				 new->values.count != 1)
 		{
 			log_error("Failed to write multi-values UPDATE statement "
 					  "with %d old rows and %d new rows",
