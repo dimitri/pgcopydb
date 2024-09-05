@@ -193,6 +193,8 @@ stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
 		return false;
 	}
 
+	context->logSQL = specs->logSQL;
+
 	/* wait until the sentinel enables the apply process */
 	if (!stream_apply_wait_for_sentinel(specs, context))
 	{
@@ -226,7 +228,7 @@ stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
 	/*
 	 * Use the replication origin for our setup (context->previousLSN).
 	 */
-	if (!setupReplicationOrigin(context, specs->logSQL))
+	if (!setupReplicationOrigin(context))
 	{
 		log_error("Failed to setup replication origin on the target database");
 		return false;
@@ -1228,7 +1230,7 @@ setupConnection(PGSQL *pgsql, StreamApplyContext *context)
  * current connection.
  */
 bool
-setupReplicationOrigin(StreamApplyContext *context, bool logSQL)
+setupReplicationOrigin(StreamApplyContext *context)
 {
 	char *nodeName = context->origin;
 

@@ -121,5 +121,10 @@ done
 # and check that the last time there nothing more to do
 pgcopydb stream replay --resume --endpos "${lsn}"
 
+# pipeline deadlock test
+# reset the replication origin to 0/0 to execute the pipeline-deadlock.sql
+psql -At -d ${PGCOPYDB_TARGET_PGURI} -c "select pg_replication_origin_advance('pgcopydb', '0/0');"
+pgcopydb stream apply /usr/src/pgcopydb/pipeline-deadlock.sql
+
 # cleanup
 pgcopydb stream cleanup --verbose
