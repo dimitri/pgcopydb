@@ -2007,21 +2007,31 @@ pgsql_sync_pipeline(PGSQL *pgsql)
 		return false;
 	}
 
-	bool syncReceived = false;
+	int sock = PQsocket(conn);
 
-	int results = 0;
-
-	if (PQconsumeInput(conn) == 0)
+	if (sock < 0)
 	{
-		(void) pgsql_stream_log_error(
-			pgsql,
-			NULL,
-			"Failed to consume input for pipeline sync");
+		(void) pgcopy_log_error(pgsql, NULL, "Failed to get socket for pipeline sync");
 		return false;
 	}
 
-	(void) pgsql_handle_notifications(pgsql);
+	bool syncReceived = false;
 
+	/*
+	 * PQpipelineSync() might clear the select read readiness, so we need to
+	 * consume the input on the first iteration.
+	 *
+	 * The next iterations will consume input only when select() returns read
+	 * readiness.
+	 */
+	bool readyToConsume = true;
+
+	int results = 0;
+
+	/*
+	 * This implementation is based on the following libpq pipeline test,
+	 * https://github.com/postgres/postgres/blob/a68159ff2b32f290b1136e2940470d50b8491301/src/test/modules/libpq_pipeline/libpq_pipeline.c#L1967-L2023
+	 */
 	while (!syncReceived)
 	{
 		if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
@@ -2034,44 +2044,110 @@ pgsql_sync_pipeline(PGSQL *pgsql)
 			return false;
 		}
 
-		PGresult *res = PQgetResult(conn);
-
-		if (res == NULL)
+		/*
+		 * PQisBusy will not itself attempt to read data from the server;
+		 * therefore PQconsumeInput must be invoked first, or the busy state
+		 * will never end.
+		 * Reference: https://www.postgresql.org/docs/current/libpq-async.html
+		 */
+		if (readyToConsume || PQisBusy(conn) == 1)
 		{
+			if (PQconsumeInput(conn) == 0)
+			{
+				(void) pgsql_stream_log_error(pgsql, NULL, "Failed to consume input");
+				return false;
+			}
+
 			/*
-			 * NULL represents a end of result for a single query, but we are
-			 * in pipeline mode and we can have multiple results.
-			 *
-			 * We need to continue consuming until we get a SYNC message.
+			 * On pipeline mode, we are not worried about the order of
+			 * the notifications, we just want to consume them to avoid
+			 * filling the notification buffer.
 			 */
+			(void) pgsql_handle_notifications(pgsql);
+		}
+
+		/*
+		 * Read results when the command is not busy.
+		 */
+		while (PQisBusy(conn) == 0)
+		{
+			PGresult *res = PQgetResult(conn);
+
+			if (res == NULL)
+			{
+				/*
+				 * NULL represents a end of result for a single query, but we are
+				 * in pipeline mode and we can have multiple results.
+				 *
+				 * We need to continue consuming until we get a SYNC message.
+				 */
+
+				continue;
+			}
+
+			results++;
+
+			ExecStatusType resultStatus = PQresultStatus(res);
+
+			if (resultStatus == PGRES_PIPELINE_SYNC)
+			{
+				syncReceived = true;
+
+				log_trace("Received pipeline sync. Total results: %d", results);
+
+				PQclear(res);
+
+				break;
+			}
+
+			if (!is_response_ok(res))
+			{
+				(void) pgcopy_log_error(pgsql, res, "Failed to receive pipeline sync");
+				PQclear(res);
+
+				return false;
+			}
+
+			PQclear(res);
+		}
+
+		/*
+		 * We need to wait for the socket to be ready for reading, otherwise
+		 * select() will return immediately and we will busy loop.
+		 */
+		fd_set input_mask;
+		struct timeval timeout;
+		struct timeval *timeoutptr = NULL;
+
+		/* sleep for 10ms to wait for input on the Postgres socket */
+		timeout.tv_sec = 0;
+		timeout.tv_usec = 10000;
+		timeoutptr = &timeout;
+
+		FD_ZERO(&input_mask);
+		FD_SET(sock, &input_mask);
+
+		int r = select(sock + 1, &input_mask, NULL, NULL, timeoutptr);
+
+		if (r == 0 || (r < 0 && errno == EINTR))
+		{
+			/* got a timeout or signal. The caller will get back later. */
+			readyToConsume = false;
 
 			continue;
 		}
-
-		results++;
-
-		ExecStatusType resultStatus = PQresultStatus(res);
-
-		if (resultStatus == PGRES_PIPELINE_SYNC)
+		else if (r < 0)
 		{
-			syncReceived = true;
+			(void) pgcopy_log_error(pgsql, NULL, "select failed: %m");
 
-			log_trace("Received pipeline sync. Total results: %d", results);
-
-			PQclear(res);
-
-			break;
-		}
-
-		if (!is_response_ok(res))
-		{
-			(void) pgcopy_log_error(pgsql, res, "Failed to receive pipeline sync");
-			PQclear(res);
+			clear_results(pgsql);
+			pgsql_finish(pgsql);
 
 			return false;
 		}
 
-		PQclear(res);
+		/* Else there is actually data on the socket */
+		readyToConsume = true;
 	}
 
 	/* update the last pipeline sync time */
