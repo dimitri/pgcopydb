@@ -32,13 +32,7 @@ bool stringToUInt(const char *str, unsigned int *number);
 bool stringToInt64(const char *str, int64_t *number);
 bool stringToUInt64(const char *str, uint64_t *number);
 
-bool stringToShort(const char *str, short *number);
-bool stringToUShort(const char *str, unsigned short *number);
-
-bool stringToInt32(const char *str, int32_t *number);
 bool stringToUInt32(const char *str, uint32_t *number);
-
-bool stringToDouble(const char *str, double *number);
 
 bool hexStringToUInt32(const char *str, uint32_t *number);
 

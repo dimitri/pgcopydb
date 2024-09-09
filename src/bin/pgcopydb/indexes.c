@@ -464,16 +464,6 @@ copydb_create_index_by_oid(CopyDataSpec *specs, PGSQL *dst, uint32_t indexOid)
 }
 
 
-typedef struct IndexesAreDoneContext
-{
-	bool builtAllIndexes;
-	CopyDataSpec *specs;
-	SourceTable *table;
-	int total;
-	int done;
-} IndexesAreDoneContext;
-
-
 /*
  * copydb_table_indexes_are_done checks that all indexes for a given table have
  * been built already.

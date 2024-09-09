@@ -188,9 +188,6 @@ bool summary_lookup_timing(DatabaseCatalog *catalog,
 						   TopLevelTiming *timing,
 						   TimingSection section);
 
-bool summary_pretty_print_timing(DatabaseCatalog *catalog,
-								 TopLevelTiming *timing);
-
 /*
  * Summary Iterator
  */
@@ -237,13 +234,6 @@ bool prepare_index_summary_as_json(CopyIndexSummary *summary,
 								   const char *key);
 
 void print_summary_as_json(Summary *summary, const char *filename);
-
-/*
- * Large Object top-level like summary
- */
-bool write_blobs_summary(CopyBlobsSummary *summary, char *filename);
-bool read_blobs_summary(CopyBlobsSummary *summary, char *filename);
-
 
 /*
  * Human Readable Summary Table

@@ -124,24 +124,6 @@ static bool summary_prepare_toplevel_durations_hook(void *ctx,
 
 
 /*
- * summary_pid_done_fetch fetches a generic CopyOidSummary from a SQLiteQuery
- * result.
- */
-bool
-summary_oid_done_fetch(SQLiteQuery *query)
-{
-	CopyOidSummary *s = (CopyOidSummary *) query->context;
-
-	s->pid = sqlite3_column_int64(query->ppStmt, 0);
-	s->startTime = sqlite3_column_int64(query->ppStmt, 1);
-	s->doneTime = sqlite3_column_int64(query->ppStmt, 2);
-	s->durationMs = sqlite3_column_int64(query->ppStmt, 3);
-
-	return true;
-}
-
-
-/*
  * summary_lookup_table looks-up for a table summary in our catalogs, in case
  * the given table (partition) has already been done in a previous run.
  */

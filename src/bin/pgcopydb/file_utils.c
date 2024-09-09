@@ -59,34 +59,6 @@ file_exists(const char *filename)
 
 
 /*
- * file_is_empty returns true if the given filename is known to exist on the
- * file system and is empty: its content is "".
- */
-bool
-file_is_empty(const char *filename)
-{
-	if (file_exists(filename))
-	{
-		char *fileContents;
-		long fileSize;
-
-		if (!read_file(filename, &fileContents, &fileSize))
-		{
-			/* errors are logged */
-			return false;
-		}
-
-		if (fileSize == 0)
-		{
-			return true;
-		}
-	}
-
-	return false;
-}
-
-
-/*
  * directory_exists returns whether the given path is the name of a directory that
  * exists on the file system or not.
  */
@@ -228,67 +200,6 @@ write_file(char *data, long fileSize, const char *filePath)
 
 
 /*
- * append_to_file writes the given data to the end of the file given by
- * filePath using our logging library to report errors. If succesful, the
- * function returns true.
- */
-bool
-append_to_file(char *data, long fileSize, const char *filePath)
-{
-	FILE *fileStream = fopen_with_umask(filePath, "ab", FOPEN_FLAGS_A, 0644);
-
-	if (fileStream == NULL)
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (fwrite(data, sizeof(char), fileSize, fileStream) < fileSize)
-	{
-		log_error("Failed to write file \"%s\": %m", filePath);
-		fclose(fileStream);
-		return false;
-	}
-
-	if (fclose(fileStream) == EOF)
-	{
-		log_error("Failed to write file \"%s\"", filePath);
-		return false;
-	}
-
-	return true;
-}
-
-
-/*
- * read_file_if_exists is a utility function that reads the contents of a file
- * using our logging library to report errors. ENOENT is not considered worth
- * of a log message in this function, and we still return false in that case.
- *
- * If successful, the function returns true and fileSize points to the number
- * of bytes that were read and contents points to a buffer containing the entire
- * contents of the file. This buffer should be freed by the caller.
- */
-bool
-read_file_if_exists(const char *filePath, char **contents, long *fileSize)
-{
-	/* open a file */
-	FILE *fileStream = fopen_read_only(filePath);
-
-	if (fileStream == NULL)
-	{
-		if (errno != ENOENT)
-		{
-			log_error("Failed to open file \"%s\": %m", filePath);
-		}
-		return false;
-	}
-
-	return read_file_internal(fileStream, filePath, contents, fileSize);
-}
-
-
-/*
  * read_file is a utility function that reads the contents of a file using our
  * logging library to report errors.
  *
@@ -312,8 +223,7 @@ read_file(const char *filePath, char **contents, long *fileSize)
 
 
 /*
- * read_file_internal is shared by both read_file and read_file_if_exists
- * functions.
+ * read_file_internal is used by read_file function
  */
 static bool
 read_file_internal(FILE *fileStream,
@@ -837,68 +747,6 @@ read_from_stream(FILE *stream, ReadFromStreamContext *context)
 		/* doneReading might have been set from the user callback already */
 		doneReading = doneReading || feof(stream) != 0;
 	}
-
-	return true;
-}
-
-
-/*
- * move_file is a utility function to move a file from sourcePath to
- * destinationPath. It behaves like mv system command. First attempts to move
- * a file using rename. if it fails with EXDEV error, the function duplicates
- * the source file with owner and permission information and removes it.
- */
-bool
-move_file(char *sourcePath, char *destinationPath)
-{
-	if (strncmp(sourcePath, destinationPath, MAXPGPATH) == 0)
-	{
-		/* nothing to do */
-		log_warn("Source and destination are the same \"%s\", nothing to move.",
-				 sourcePath);
-		return true;
-	}
-
-	if (!file_exists(sourcePath))
-	{
-		log_error("Failed to move file, source file \"%s\" does not exist.",
-				  sourcePath);
-		return false;
-	}
-
-	if (file_exists(destinationPath))
-	{
-		log_error("Failed to move file, destination file \"%s\" already exists.",
-				  destinationPath);
-		return false;
-	}
-
-	/* first try atomic move operation */
-	if (rename(sourcePath, destinationPath) == 0)
-	{
-		return true;
-	}
-
-	/*
-	 * rename fails with errno = EXDEV when moving file to a different file
-	 * system.
-	 */
-	if (errno != EXDEV)
-	{
-		log_error("Failed to move file \"%s\" to \"%s\": %m",
-				  sourcePath, destinationPath);
-		return false;
-	}
-
-	if (!duplicate_file(sourcePath, destinationPath))
-	{
-		/* specific error is already logged */
-		log_error("Canceling file move due to errors.");
-		return false;
-	}
-
-	/* everything is successful we can remove the file */
-	unlink_file(sourcePath);
 
 	return true;
 }

@@ -16,31 +16,6 @@
 bool get_env_using_parser(EnvParser *parser);
 
 /*
- * env_found_empty returns true if the passed environment variable is the empty
- * string. It returns false when the environment variable is not set or if it
- * set but is something else than the empty string.
- */
-bool
-env_found_empty(const char *name)
-{
-	if (name == NULL || strlen(name) == 0)
-	{
-		log_error("Failed to get environment setting. "
-				  "NULL or empty variable name is provided");
-		return false;
-	}
-
-	/*
-	 * Explanation of IGNORE-BANNED
-	 * getenv is safe here because we never provide null argument,
-	 * and only check the value it's length.
-	 */
-	char *envvalue = getenv(name); /* IGNORE-BANNED */
-	return envvalue != NULL && strlen(envvalue) == 0;
-}
-
-
-/*
  * env_exists returns true if the passed environment variable exists in the
  * environment, otherwise it returns false.
  */
@@ -185,39 +160,6 @@ bool
 get_env_copy(const char *name, char *result, int maxLength)
 {
 	return get_env_copy_with_fallback(name, result, maxLength, NULL);
-}
-
-
-/*
- * get_env_pgdata checks for environment value PGDATA
- * and copy its value into provided buffer.
- *
- * function returns true on successful run. returns false
- * if it can't find PGDATA or its value is larger than
- * the provided buffer
- */
-bool
-get_env_pgdata(char *pgdata)
-{
-	return get_env_copy("PGDATA", pgdata, MAXPGPATH) > 0;
-}
-
-
-/*
- * get_env_pgdata_or_exit does the same as get_env_pgdata. Instead of
- * returning false in case of error it exits the process and shows a FATAL log
- * message.
- */
-void
-get_env_pgdata_or_exit(char *pgdata)
-{
-	if (get_env_pgdata(pgdata))
-	{
-		return;
-	}
-	log_fatal("Failed to set PGDATA either from the environment "
-			  "or from --pgdata");
-	exit(EXIT_CODE_BAD_ARGS);
 }
 
 

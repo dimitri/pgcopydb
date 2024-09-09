@@ -44,7 +44,6 @@ typedef struct CopyProgress
 
 
 bool copydb_prepare_schema_json_file(CopyDataSpec *copySpecs);
-bool copydb_parse_schema_json_file(CopyDataSpec *copySpecs);
 bool copydb_update_progress(CopyDataSpec *copySpecs, CopyProgress *progress);
 
 bool copydb_progress_as_json(CopyDataSpec *copySpecs,

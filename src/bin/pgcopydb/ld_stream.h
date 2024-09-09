@@ -573,8 +573,6 @@ bool streamFeedback(LogicalStreamContext *context);
 bool streamRotateFile(LogicalStreamContext *context);
 bool streamCloseFile(LogicalStreamContext *context, bool time_to_abort);
 
-bool streamWaitForSubprocess(LogicalStreamContext *context);
-
 bool prepareMessageMetadataFromContext(LogicalStreamContext *context);
 bool prepareMessageJSONbuffer(LogicalStreamContext *context);
 
@@ -672,7 +670,6 @@ bool stream_write_insert(FILE *out, LogicalMessageInsert *insert);
 bool stream_write_truncate(FILE *out, LogicalMessageTruncate *truncate);
 bool stream_write_update(FILE *out, LogicalMessageUpdate *update);
 bool stream_write_delete(FILE * out, LogicalMessageDelete *delete);
-bool stream_write_sql_escape_string_constant(FILE *out, const char *str);
 
 bool stream_add_value_in_json_array(LogicalMessageValue *value,
 									JSON_Array *jsArray);
@@ -740,7 +737,6 @@ bool stream_apply_find_durable_lsn(StreamApplyContext *context,
 
 
 /* ld_replay */
-bool stream_replay(StreamSpecs *specs);
 bool stream_apply_replay(StreamSpecs *specs);
 bool stream_replay_line(void *ctx, const char *line, bool *stop);
 bool stream_replay_reached_endpos(StreamSpecs *specs,

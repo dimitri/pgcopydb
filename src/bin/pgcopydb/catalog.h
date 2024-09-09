@@ -44,7 +44,6 @@ bool catalog_set_wal_mode(DatabaseCatalog *catalog);
 
 bool catalog_begin(DatabaseCatalog *catalog, bool immediate);
 bool catalog_commit(DatabaseCatalog *catalog);
-bool catalog_rollback(DatabaseCatalog *catalog);
 
 bool catalog_register_setup(DatabaseCatalog *catalog,
 							const char *source_pg_uri,
@@ -206,9 +205,6 @@ bool catalog_add_s_table_chksum(DatabaseCatalog *catalog,
 
 bool catalog_add_s_table_size(DatabaseCatalog *catalog,
 							  SourceTableSize *tableSize);
-bool catalog_delete_s_table(DatabaseCatalog *catalog,
-							const char *nspname,
-							const char *relname);
 
 bool catalog_delete_s_table_chksum_all(DatabaseCatalog *catalog);
 
@@ -299,12 +295,6 @@ bool catalog_iter_s_table_attrs_finish(SourceTableAttrsIterator *iter);
 
 bool catalog_s_table_attrs_fetch(SQLiteQuery *query);
 
-bool catalog_s_table_count_attrs(DatabaseCatalog *catalog,
-								 SourceTable *table);
-
-bool catalog_s_table_count_attrs_fetch(SQLiteQuery *query);
-
-
 bool catalog_lookup_s_attr_by_name(DatabaseCatalog *catalog,
 								   uint32_t reloid,
 								   const char *attname,
@@ -326,10 +316,6 @@ bool catalog_lookup_s_index_by_name(DatabaseCatalog *catalog,
 									const char *nspname,
 									const char *relname,
 									SourceIndex *index);
-
-bool catalog_delete_s_index_table(DatabaseCatalog *catalog,
-								  const char *nspname,
-								  const char *relname);
 
 bool catalog_delete_s_index_all(DatabaseCatalog *catalog);
 

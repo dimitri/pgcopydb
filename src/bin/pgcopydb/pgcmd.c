@@ -350,13 +350,6 @@ set_psql_from_pg_config(PostgresPaths *pgPaths)
 }
 
 
-typedef struct DumpExtensionNamespaceContext
-{
-	char **extNamespaces;
-	int *extNamespaceCount;
-} DumpExtensionNamespaceContext;
-
-
 /*
  * Call pg_dump and get the given pre-data and post-data sections of
  * the dump into the target file.
@@ -1403,84 +1396,6 @@ struct ArchiveItemDescMapping pgRestoreDescriptionArray[] = {
 	INSERT_MAPPING(ARCHIVE_TAG_VIEW, "VIEW"),
 	{ ARCHIVE_TAG_UNKNOWN, 0, "" }
 };
-
-
-/*
- * parse_archive_list implementation follows, see above for details/comments.
- */
-bool
-parse_archive_list(const char *filename, ArchiveContentArray *contents)
-{
-	char *buffer = NULL;
-	long fileSize = 0L;
-
-	if (!read_file(filename, &buffer, &fileSize))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	LinesBuffer lbuf = { 0 };
-
-	if (!splitLines(&lbuf, buffer))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/*
-	 * If the file contains zero lines, we're done already, Also malloc(zero)
-	 * leads to "corrupted size vs. prev_size" run-time errors.
-	 */
-	if (lbuf.count == 0)
-	{
-		return true;
-	}
-
-	contents->count = 0;
-	contents->array =
-		(ArchiveContentItem *) calloc(lbuf.count, sizeof(ArchiveContentItem));
-
-	for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
-	{
-		ArchiveContentItem *item = &(contents->array[contents->count]);
-
-		char *line = lbuf.lines[lineNumber];
-
-		/* skip empty lines and lines that start with a semi-colon (comment) */
-		if (line == NULL || *line == '\0' || *line == ';')
-		{
-			continue;
-		}
-
-		if (!parse_archive_list_entry(item, line))
-		{
-			log_error("Failed to parse line %lld of \"%s\", "
-					  "see above for details",
-					  (long long) lineNumber,
-					  filename);
-			return false;
-		}
-
-		/* use same format as file input */
-		log_trace("parse_archive_list: %u; %u %u %s %s",
-				  item->dumpId,
-				  item->catalogOid,
-				  item->objectOid,
-				  item->description,
-				  item->restoreListName);
-
-		if (item->desc == ARCHIVE_TAG_UNKNOWN ||
-			IS_EMPTY_STRING_BUFFER(item->description))
-		{
-			log_warn("Failed to parse desc \"%s\"", line);
-		}
-
-		++contents->count;
-	}
-
-	return true;
-}
 
 
 /*

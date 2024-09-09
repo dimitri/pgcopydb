@@ -32,6 +32,5 @@ bool create_pidfile(const char *pidfile, pid_t pid);
 bool prepare_pidfile_buffer(PQExpBuffer content, pid_t pid);
 bool read_pidfile(const char *pidfile, pid_t *pid);
 bool remove_pidfile(const char *pidfile);
-void check_pidfile(const char *pidfile, pid_t start_pid);
 
 #endif /* PIDFILE_H */

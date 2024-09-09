@@ -1120,16 +1120,6 @@ catalog_commit(DatabaseCatalog *catalog)
 
 
 /*
- * catalog_rollback explicitely rollbacks a SQLite transaction.
- */
-bool
-catalog_rollback(DatabaseCatalog *catalog)
-{
-	return catalog_execute(catalog, "ROLLBACK");
-}
-
-
-/*
  * catalog_register_setup registers the setup metadata for this catalog.
  */
 bool
@@ -2778,57 +2768,6 @@ catalog_lookup_s_attr_by_name(DatabaseCatalog *catalog,
 
 
 /*
- * catalog_delete_s_table deletes an s_table entry for the given oid.
- */
-bool
-catalog_delete_s_table(DatabaseCatalog *catalog,
-					   const char *nspname,
-					   const char *relname)
-{
-	sqlite3 *db = catalog->db;
-
-	if (db == NULL)
-	{
-		log_error("BUG: Failed to initialize s_table iterator: db is NULL");
-		return false;
-	}
-
-	char *sql = "delete from s_table where nspname = $1 and relname = $2";
-
-	SQLiteQuery query = { 0 };
-
-	if (!catalog_sql_prepare(db, sql, &query))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/* bind our parameters now */
-	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, (char *) nspname },
-		{ BIND_PARAMETER_TYPE_TEXT, "relname", 0, (char *) relname }
-	};
-
-	int count = sizeof(params) / sizeof(params[0]);
-
-	if (!catalog_sql_bind(&query, params, count))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/* now execute the query, which does not return any row */
-	if (!catalog_sql_execute_once(&query))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	return true;
-}
-
-
-/*
  * catalog_iter_s_table iterates over the list of tables in our catalogs.
  */
 bool
@@ -3693,73 +3632,6 @@ catalog_s_attr_fetch(SQLiteQuery *query)
 
 
 /*
- * catalog_s_table_fetch_attrs fetches the table SourceTableAttribute array
- * from our s_attr catalog.
- */
-bool
-catalog_s_table_count_attrs(DatabaseCatalog *catalog, SourceTable *table)
-{
-	sqlite3 *db = catalog->db;
-
-	if (db == NULL)
-	{
-		log_error("BUG: catalog_s_table_count_attrs: db is NULL");
-		return false;
-	}
-
-	char *sql = "select count(1) from s_attr where oid = $1";
-
-	SQLiteQuery query = {
-		.context = table,
-		.fetchFunction = &catalog_s_table_count_attrs_fetch
-	};
-
-	if (!catalog_sql_prepare(db, sql, &query))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/* bind our parameters now */
-	BindParam params[1] = {
-		{ BIND_PARAMETER_TYPE_INT64, "oid", table->oid, NULL }
-	};
-
-	if (!catalog_sql_bind(&query, params, 1))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/* now execute the query, which return exactly one row */
-	if (!catalog_sql_execute_once(&query))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	return true;
-}
-
-
-/*
- * catalog_s_table_count_attrs_fetch  is a SQLiteQuery callback.
- */
-bool
-catalog_s_table_count_attrs_fetch(SQLiteQuery *query)
-{
-	SourceTable *table = (SourceTable *) query->context;
-
-	int count = sqlite3_column_int(query->ppStmt, 0);
-
-	table->attributes.count = count;
-	table->attributes.array = NULL;
-
-	return true;
-}
-
-
-/*
  * catalog_add_s_index INSERTs a SourceIndex to our internal catalogs database.
  */
 bool
@@ -4544,65 +4416,6 @@ catalog_delete_s_index_all(DatabaseCatalog *catalog)
 	SQLiteQuery query = { 0 };
 
 	if (!catalog_sql_prepare(db, sql, &query))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/* now execute the query, which does not return any row */
-	if (!catalog_sql_execute_once(&query))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	return true;
-}
-
-
-/*
- * catalog_delete_s_index_table DELETE all the indexes registered in the given
- * database catalog for the given table.
- */
-bool
-catalog_delete_s_index_table(DatabaseCatalog *catalog,
-							 const char *nspname,
-							 const char *relname)
-{
-	sqlite3 *db = catalog->db;
-
-	if (db == NULL)
-	{
-		log_error("BUG: Failed to initialize s_index iterator: db is NULL");
-		return false;
-	}
-
-	char *sql =
-		"delete from s_index "
-		" where tableoid = "
-		"       ("
-		"        select oid "
-		"          from s_table "
-		"         where nspname = $1 and relname = $2"
-		"        )";
-
-	SQLiteQuery query = { 0 };
-
-	if (!catalog_sql_prepare(db, sql, &query))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/* bind our parameters now */
-	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, (char *) nspname },
-		{ BIND_PARAMETER_TYPE_TEXT, "relname", 0, (char *) relname }
-	};
-
-	int count = sizeof(params) / sizeof(params[0]);
-
-	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
 		return false;
