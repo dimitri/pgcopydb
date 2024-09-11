@@ -9,5 +9,6 @@
      --apply          Get only the apply value
      --write-lsn      Get only the write LSN value
      --flush-lsn      Get only the flush LSN value
+     --transform-lsn  Get only the tranform LSN value
      --replay-lsn     Get only the replay LSN value
    
