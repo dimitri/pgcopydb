@@ -325,7 +325,8 @@ typedef enum
 	DATABASE_CATALOG_TYPE_UNKNOWN = 0,
 	DATABASE_CATALOG_TYPE_SOURCE,
 	DATABASE_CATALOG_TYPE_FILTER,
-	DATABASE_CATALOG_TYPE_TARGET
+	DATABASE_CATALOG_TYPE_TARGET,
+	DATABASE_CATALOG_TYPE_REPLAY
 } DatabaseCatalogType;
 
 
@@ -396,6 +397,7 @@ typedef struct Catalogs
 	DatabaseCatalog source;
 	DatabaseCatalog filter;
 	DatabaseCatalog target;
+	DatabaseCatalog replay;
 } Catalogs;
 
 

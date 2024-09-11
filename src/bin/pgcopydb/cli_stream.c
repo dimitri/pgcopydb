@@ -582,6 +582,7 @@ cli_stream_setup(int argc, char **argv)
 						   streamDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
 						   &(copySpecs.catalogs.source),
+						   &(copySpecs.catalogs.replay),
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL))
@@ -709,6 +710,7 @@ cli_stream_catchup(int argc, char **argv)
 						   streamDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
 						   &(copySpecs.catalogs.source),
+						   &(copySpecs.catalogs.replay),
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL))
@@ -792,20 +794,10 @@ cli_stream_replay(int argc, char **argv)
 						   streamDBoptions.endpos,
 						   STREAM_MODE_REPLAY,
 						   &(copySpecs.catalogs.source),
+						   &(copySpecs.catalogs.replay),
 						   true,  /* stdin */
 						   true, /* stdout */
 						   logSQL))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	/*
-	 * Remove the possibly still existing stream context files from
-	 * previous round of operations (--resume, etc). We want to make sure
-	 * that the catchup process reads the files created on this connection.
-	 */
-	if (!stream_cleanup_context(&specs))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -917,6 +909,7 @@ cli_stream_transform(int argc, char **argv)
 						   streamDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
 						   &(copySpecs.catalogs.source),
+						   &(copySpecs.catalogs.replay),
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL))
@@ -1079,6 +1072,7 @@ cli_stream_apply(int argc, char **argv)
 							   streamDBoptions.endpos,
 							   STREAM_MODE_CATCHUP,
 							   &(copySpecs.catalogs.source),
+							   &(copySpecs.catalogs.replay),
 							   true, /* streamDBoptions.stdIn */
 							   false, /* streamDBoptions.stdOut */
 							   logSQL))
@@ -1102,6 +1096,7 @@ cli_stream_apply(int argc, char **argv)
 
 		if (!stream_apply_init_context(&context,
 									   &(copySpecs.catalogs.source),
+									   &(copySpecs.catalogs.replay),
 									   &(copySpecs.cfPaths.cdc),
 									   &(streamDBoptions.connStrings),
 									   streamDBoptions.origin,
@@ -1190,6 +1185,7 @@ stream_start_in_mode(LogicalStreamMode mode)
 						   streamDBoptions.endpos,
 						   mode,
 						   &(copySpecs.catalogs.source),
+						   &(copySpecs.catalogs.replay),
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL))
@@ -1214,18 +1210,6 @@ stream_start_in_mode(LogicalStreamMode mode)
 
 		case STREAM_MODE_PREFETCH:
 		{
-			/*
-			 * Remove the possibly still existing stream context files from
-			 * previous round of operations (--resume, etc). We want to make
-			 * sure that the catchup process reads the files created on this
-			 * connection.
-			 */
-			if (!stream_cleanup_context(&specs))
-			{
-				/* errors have already been logged */
-				exit(EXIT_CODE_INTERNAL_ERROR);
-			}
-
 			if (!followDB(&copySpecs, &specs))
 			{
 				/* errors have already been logged */
