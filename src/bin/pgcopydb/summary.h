@@ -188,6 +188,9 @@ bool summary_lookup_timing(DatabaseCatalog *catalog,
 						   TopLevelTiming *timing,
 						   TimingSection section);
 
+bool summary_pretty_print_timing(DatabaseCatalog *catalog,
+								 TopLevelTiming *timing);
+
 /*
  * Summary Iterator
  */
