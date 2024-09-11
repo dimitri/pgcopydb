@@ -56,17 +56,6 @@ typedef struct InternalMessage
 	char timeStr[BUFSIZE];
 } InternalMessage;
 
-typedef struct StreamCounters
-{
-	uint64_t total;
-	uint64_t begin;
-	uint64_t commit;
-	uint64_t insert;
-	uint64_t update;
-	uint64_t delete;
-	uint64_t truncate;
-} StreamCounters;
-
 
 #define PG_MAX_TIMESTAMP 36     /* "2022-06-27 14:42:21.795714+00" */
 
@@ -86,7 +75,7 @@ typedef struct LogicalMessageMetadata
 	bool filterOut;
 	bool skipping;
 
-	/* the statement part of a PREPARE dseadbeef AS ... */
+	/* the statement part of a PREPARE deadbeef AS ... */
 	char *stmt;
 
 	/* the raw message in our internal JSON format */
@@ -364,6 +353,7 @@ typedef struct StreamContext
 
 	/* transform needs some catalog lookups (pkey, type oid) */
 	DatabaseCatalog *sourceDB;
+	DatabaseCatalog *replayDB;
 
 	/* hash table acts as a cache for tables with generated columns */
 	GeneratedColumnsCache *generatedColumnsCache;
@@ -380,8 +370,6 @@ typedef struct StreamContext
 	char sqlFileName[MAXPGPATH];
 	FILE *jsonFile;
 	FILE *sqlFile;
-
-	StreamCounters counters;
 
 	bool transactionInProgress;
 } StreamContext;
@@ -428,6 +416,7 @@ typedef struct StreamApplyContext
 
 	/* apply needs access to the catalogs to register sentinel replay_lsn */
 	DatabaseCatalog *sourceDB;
+	DatabaseCatalog *replayDB;
 	uint64_t sentinelSyncTime;
 
 	ConnStrings *connStrings;
@@ -521,6 +510,7 @@ struct StreamSpecs
 
 	/* transform needs some catalog lookups (pkey, type oid) */
 	DatabaseCatalog *sourceDB;
+	DatabaseCatalog *replayDB;
 
 	/* receive push json filenames to a queue for transform */
 	Queue transformQueue;
@@ -541,7 +531,7 @@ struct StreamSpecs
 	FILE *out;
 };
 
-
+/* ld_stream.c */
 bool stream_init_specs(StreamSpecs *specs,
 					   CDCPaths *paths,
 					   ConnStrings *connStrings,
@@ -550,6 +540,7 @@ bool stream_init_specs(StreamSpecs *specs,
 					   uint64_t endpos,
 					   LogicalStreamMode mode,
 					   DatabaseCatalog *sourceDB,
+					   DatabaseCatalog *replayDB,
 					   bool stdIn,
 					   bool stdOut,
 					   bool logSQL);
@@ -560,6 +551,7 @@ char * LogicalStreamModeToString(LogicalStreamMode mode);
 
 bool stream_check_in_out(StreamSpecs *specs);
 bool stream_init_context(StreamSpecs *specs);
+bool stream_init_timeline(StreamSpecs *specs, LogicalStreamClient *stream);
 
 bool startLogicalStreaming(StreamSpecs *specs);
 bool streamCheckResumePosition(StreamSpecs *specs);
@@ -587,16 +579,6 @@ bool parseMessageMetadata(LogicalMessageMetadata *metadata,
 
 bool LogicalMessageValueEq(LogicalMessageValue *a, LogicalMessageValue *b);
 
-bool stream_write_json(LogicalStreamContext *context, bool previous);
-
-bool stream_write_internal_message(LogicalStreamContext *context,
-								   InternalMessage *message);
-
-bool stream_read_file(StreamContent *content);
-bool stream_read_latest(StreamSpecs *specs, StreamContent *content);
-bool stream_update_latest_symlink(StreamContext *privateContext,
-								  const char *filename);
-
 bool stream_sync_sentinel(LogicalStreamContext *context);
 
 bool buildReplicationURI(const char *pguri, char **repl_pguri);
@@ -618,25 +600,43 @@ bool stream_fetch_current_lsn(uint64_t *lsn,
 							  const char *pguri,
 							  ConnectionType connectionType);
 
-bool stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream);
-bool stream_cleanup_context(StreamSpecs *specs);
-bool stream_read_context(StreamSpecs *specs);
-
 StreamAction StreamActionFromChar(char action);
 char * StreamActionToString(StreamAction action);
+
+/* ld_store.c */
+bool ld_store_open_replaydb(StreamSpecs *specs);
+bool ld_store_current_filename(StreamSpecs *specs);
+bool ld_store_current_filename_fetch(SQLiteQuery *query);
+
+bool ld_store_insert_cdc_filename(StreamSpecs *specs);
+
+bool ld_store_insert_timeline_history(DatabaseCatalog *catalog,
+									  uint32_t tli,
+									  uint64_t startpos,
+									  uint64_t endpos);
+
+bool ld_store_insert_message(DatabaseCatalog *catalog,
+							 LogicalMessageMetadata *metadata);
+
+bool ld_store_insert_internal_message(DatabaseCatalog *catalog,
+									  InternalMessage *message);
+
 
 /* ld_transform.c */
 bool stream_transform_worker(StreamSpecs *specs);
 bool stream_transform_from_queue(StreamSpecs *specs);
+
 bool stream_transform_add_file(Queue *queue, uint64_t firstLSN);
+
+bool stream_transform_add_action(Queue *queue,
+								 StreamAction action,
+								 uint64_t lsn);
+
 bool stream_transform_send_stop(Queue *queue);
 
-bool stream_compute_pathnames(uint32_t WalSegSz,
-							  uint32_t timeline,
-							  uint64_t lsn,
-							  char *dir,
-							  char *walFileName,
-							  char *sqlFileName);
+bool stream_transform_action_at_lsn(StreamSpecs *specs,
+									StreamAction action,
+									uint64_t lsn);
 
 bool stream_transform_context_init(StreamSpecs *specs);
 bool stream_transform_stream(StreamSpecs *specs);
@@ -656,6 +656,13 @@ bool stream_transform_file(StreamSpecs *specs,
 						   char *sqlfilename);
 
 bool stream_transform_file_at_lsn(StreamSpecs *specs, uint64_t lsn);
+
+bool stream_compute_pathnames(uint32_t WalSegSz,
+							  uint32_t timeline,
+							  uint64_t lsn,
+							  char *dir,
+							  char *walFileName,
+							  char *sqlFileName);
 
 bool stream_write_message(FILE *out, LogicalMessage *msg);
 bool stream_write_transaction(FILE *out, LogicalTransaction *tx);
@@ -724,6 +731,7 @@ bool stream_apply_sql(StreamApplyContext *context,
 
 bool stream_apply_init_context(StreamApplyContext *context,
 							   DatabaseCatalog *sourceDB,
+							   DatabaseCatalog *replayDB,
 							   CDCPaths *paths,
 							   ConnStrings *connStrings,
 							   char *origin,

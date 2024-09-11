@@ -32,8 +32,9 @@ sentinel_setup(DatabaseCatalog *catalog, uint64_t startpos, uint64_t endpos)
 
 	char *sql =
 		"insert or replace into sentinel("
-		"  id, startpos, endpos, apply, write_lsn, flush_lsn, replay_lsn) "
-		"values($1, $2, $3, $4, '0/0', '0/0', '0/0')";
+		"  id, startpos, endpos, apply, "
+		"  write_lsn, transform_lsn, flush_lsn, replay_lsn) "
+		"values($1, $2, $3, $4, '0/0', '0/0', '0/0', '0/0')";
 
 	if (!semaphore_lock(&(catalog->sema)))
 	{
@@ -346,6 +347,70 @@ sentinel_update_write_flush_lsn(DatabaseCatalog *catalog,
 
 
 /*
+ * sentinel_update_transform_lsn updates our pgcopydb sentinel table end pos.
+ */
+bool
+sentinel_update_transform_lsn(DatabaseCatalog *catalog, uint64_t transform_lsn)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: sentinel_update_transform_lsn: db is NULL");
+		return false;
+	}
+
+	char *sql = "update sentinel set transform_lsn = $1 where id = 1";
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	SQLiteQuery query = { .errorOnZeroRows = true };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	char transformLSN[PG_LSN_MAXLENGTH] = { 0 };
+
+	sformat(transformLSN, sizeof(transformLSN), "%X/%X",
+			LSN_FORMAT_ARGS(transform_lsn));
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_TEXT, "transform_lsn", 0, (char *) transformLSN }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* now execute the query, which does not return any row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
  * sentinel_update_replay_lsn updates our pgcopydb sentinel table end pos.
  */
 bool
@@ -422,7 +487,8 @@ sentinel_get(DatabaseCatalog *catalog, CopyDBSentinel *sentinel)
 	}
 
 	char *sql =
-		"select startpos, endpos, apply, write_lsn, flush_lsn, replay_lsn "
+		"select startpos, endpos, apply, "
+		"       write_lsn, transform_lsn, flush_lsn, replay_lsn "
 		"  from sentinel "
 		" where id = 1";
 
@@ -508,9 +574,9 @@ sentinel_fetch(SQLiteQuery *query)
 	{
 		char *lsn = (char *) sqlite3_column_text(query->ppStmt, 4);
 
-		if (!parseLSN(lsn, &(sentinel->flush_lsn)))
+		if (!parseLSN(lsn, &(sentinel->transform_lsn)))
 		{
-			log_error("Failed to parse sentinel flush_lsn LSN \"%s\"", lsn);
+			log_error("Failed to parse sentinel transform_lsn LSN \"%s\"", lsn);
 			return false;
 		}
 	}
@@ -518,6 +584,17 @@ sentinel_fetch(SQLiteQuery *query)
 	if (sqlite3_column_type(query->ppStmt, 5) != SQLITE_NULL)
 	{
 		char *lsn = (char *) sqlite3_column_text(query->ppStmt, 5);
+
+		if (!parseLSN(lsn, &(sentinel->flush_lsn)))
+		{
+			log_error("Failed to parse sentinel flush_lsn LSN \"%s\"", lsn);
+			return false;
+		}
+	}
+
+	if (sqlite3_column_type(query->ppStmt, 6) != SQLITE_NULL)
+	{
+		char *lsn = (char *) sqlite3_column_text(query->ppStmt, 6);
 
 		if (!parseLSN(lsn, &(sentinel->replay_lsn)))
 		{
@@ -555,6 +632,34 @@ sentinel_sync_recv(DatabaseCatalog *catalog,
 	log_debug("sentinel_sync_recv: write_lsn %X/%X flush_lsn %X/%X",
 			  LSN_FORMAT_ARGS(sentinel->write_lsn),
 			  LSN_FORMAT_ARGS(sentinel->flush_lsn));
+
+	return true;
+}
+
+
+/*
+ * sentinel_sync_transform updates the current sentinel values for write_lsn and
+ * flush_lsn, and fetches the current value for replay_lsn, endpos, and apply.
+ */
+bool
+sentinel_sync_transform(DatabaseCatalog *catalog,
+						uint64_t transform_lsn,
+						CopyDBSentinel *sentinel)
+{
+	if (!sentinel_update_transform_lsn(catalog, transform_lsn))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!sentinel_get(catalog, sentinel))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_debug("sentinel_sync_transform: transform_lsn %X/%X",
+			  LSN_FORMAT_ARGS(sentinel->transform_lsn));
 
 	return true;
 }
