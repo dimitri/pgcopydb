@@ -25,7 +25,7 @@ OPTS    = --env-file=../paths.env $(VOLUMES)
 CLEANUP = make -f /var/lib/postgres/cleanup.mk
 
 fix-volumes:
-	docker run --rm -it $(OPTS) $(CNAME) $(CLEANUP)
+	docker run --rm $(OPTS) $(CNAME) $(CLEANUP)
 
 attach:
 	docker run --rm -it $(OPTS) $(CNAME) bash
