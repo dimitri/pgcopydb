@@ -17,10 +17,10 @@ down:
 build:
 	docker compose build --quiet
 
-PATH    = /var/run/pgcopydb
+VPATH   = /var/run/pgcopydb
 CNAME   = follow-wal2json
 VNAME   = follow-wal2json
-VOLUMES = -v $(VNAME):$(PATH)
+VOLUMES = -v $(VNAME):$(VPATH)
 OPTS    = --env-file=../paths.env $(VOLUMES)
 CLEANUP = make -f /var/lib/postgres/cleanup.mk
 

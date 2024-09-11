@@ -20,10 +20,10 @@ down:
 build:
 	docker compose build
 
-PATH    = /var/run/pgcopydb
+VPATH   = /var/run/pgcopydb
 CNAME   = follow-9.6
 VNAME   = follow-9.6
-VOLUMES = -v $(VNAME):$(PATH)
+VOLUMES = -v $(VNAME):$(VPATH)
 OPTS    = --env-file=../paths.env $(VOLUMES)
 CLEANUP = make -f /var/lib/postgres/cleanup.mk
 
