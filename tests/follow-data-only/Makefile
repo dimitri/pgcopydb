@@ -27,4 +27,7 @@ CLEANUP = make -f /var/lib/postgres/cleanup.mk
 fix-volumes:
 	docker run --rm -it $(OPTS) $(CNAME) $(CLEANUP)
 
+attach:
+	docker run --rm -it $(OPTS) $(CNAME) bash
+
 .PHONY: run down build test fix-volumes
