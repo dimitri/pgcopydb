@@ -50,6 +50,7 @@ CommandLine sentinel_get_command =
 		"  --apply          Get only the apply value\n"
 		"  --write-lsn      Get only the write LSN value\n"
 		"  --flush-lsn      Get only the flush LSN value\n"
+		"  --transform-lsn  Get only the tranform LSN value\n"
 		"  --replay-lsn     Get only the replay LSN value\n",
 		cli_sentinel_getopts,
 		cli_sentinel_get);
@@ -127,6 +128,7 @@ cli_sentinel_getopts(int argc, char **argv)
 		{ "endpos", no_argument, NULL, 'e' },
 		{ "apply", no_argument, NULL, 'a' },
 		{ "write-lsn", no_argument, NULL, 'w' },
+		{ "transform-lsn", no_argument, NULL, 't' },
 		{ "flush-lsn", no_argument, NULL, 'f' },
 		{ "replay-lsn", no_argument, NULL, 'r' },
 		{ "current", no_argument, NULL, 'C' },
@@ -206,6 +208,14 @@ cli_sentinel_getopts(int argc, char **argv)
 				++sentinelOptionsCount;
 				options.sentinelOptions.writeLSN = true;
 				log_trace("--write-lsn");
+				break;
+			}
+
+			case 't':
+			{
+				++sentinelOptionsCount;
+				options.sentinelOptions.transformLSN = true;
+				log_trace("--transform-lsn");
 				break;
 			}
 
@@ -316,7 +326,7 @@ cli_sentinel_getopts(int argc, char **argv)
 	if (sentinelOptionsCount > 1)
 	{
 		log_fatal("Please choose only one of --startpos --endpos --apply "
-				  "--write-lsn --flush-lsn --replay-lsn");
+				  "--write-lsn --transform-lsn --flush-lsn --replay-lsn");
 		++errors;
 	}
 
