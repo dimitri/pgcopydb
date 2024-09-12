@@ -9,6 +9,7 @@
 #include "copydb.h"
 #include "ld_stream.h"
 #include "log.h"
+#include "pgsql_timeline.h"
 
 /*
  * copydb_copy_snapshot initializes a new TransactionSnapshot from another
@@ -375,7 +376,8 @@ copydb_should_export_snapshot(CopyDataSpec *copySpecs)
 bool
 copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 									   const char *logrep_pguri,
-									   ReplicationSlot *slot)
+									   ReplicationSlot *slot,
+									   char *cdcPathDir)
 {
 	TransactionSnapshot *sourceSnapshot = &(copySpecs->sourceSnapshot);
 
@@ -416,17 +418,11 @@ copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 
 	if (!pgsql_init_stream(stream,
 						   logrep_pguri,
+						   cdcPathDir,
 						   slot->plugin,
 						   slot->slotName,
 						   InvalidXLogRecPtr,
 						   InvalidXLogRecPtr))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/* fetch the source timeline */
-	if (!pgsql_identify_system(&(stream->pgsql), &(stream->system)))
 	{
 		/* errors have already been logged */
 		return false;

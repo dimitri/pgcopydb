@@ -20,6 +20,7 @@
 #include "cli_root.h"
 #include "copydb.h"
 #include "env_utils.h"
+#include "ld_store.h"
 #include "ld_stream.h"
 #include "lock_utils.h"
 #include "log.h"
@@ -431,42 +432,20 @@ bool
 stream_init_timeline(StreamSpecs *specs, LogicalStreamClient *stream)
 {
 	DatabaseCatalog *sourceDB = specs->sourceDB;
-	StreamContext *privateContext = &(specs->private);
 
-	privateContext->timeline = stream->system.timeline;
-
-	/* insert the timeline history into our catalogs */
-	if (stream->system.timelines.count == 0)
+	if (!parse_timeline_history_file(stream->system.timelineHistoryFilename,
+									 sourceDB,
+									 stream->system.timeline))
 	{
-		if (!ld_store_insert_timeline_history(sourceDB,
-											  1,
-											  InvalidXLogRecPtr,
-											  InvalidXLogRecPtr))
-		{
-			log_error("Failed to initialize source database timeline history, "
-					  "see above for details");
-			return false;
-		}
+		log_error("Failed to parse timeline history file \"%s\": "
+				  "see above for details",
+				  specs->system.timelineHistoryFilename);
+		return false;
 	}
-	else
-	{
-		for (int i = 0; i < stream->system.timelines.count; i++)
-		{
-			uint32_t tli = stream->system.timelines.history[i].tli;
-			uint64_t startpos = stream->system.timelines.history[i].begin;
-			uint64_t endpos = stream->system.timelines.history[i].end;
 
-			if (!ld_store_insert_timeline_history(sourceDB,
-												  tli,
-												  startpos,
-												  endpos))
-			{
-				log_error("Failed to initialize source database timeline history, "
-						  "see above for details");
-				return false;
-			}
-		}
-	}
+	/* publish the stream client Identify System information in the specs */
+	specs->system = stream->system;
+	specs->private.timeline = stream->system.timeline;
 
 	/* now that we have the current timeline and startpos lsn */
 	if (!ld_store_open_replaydb(specs))
@@ -495,7 +474,6 @@ startLogicalStreaming(StreamSpecs *specs)
 	stream.closeFunction = &streamClose;
 	stream.feedbackFunction = &streamFeedback;
 	stream.keepaliveFunction = &streamKeepalive;
-	strlcpy(stream.cdcPathDir, specs->paths.dir, MAXPGPATH);
 
 	/*
 	 * Read possibly already existing file to initialize the start LSN from a
@@ -544,6 +522,7 @@ startLogicalStreaming(StreamSpecs *specs)
 
 		if (!pgsql_init_stream(&stream,
 							   specs->connStrings->logrep_pguri,
+							   specs->paths.dir,
 							   specs->slot.plugin,
 							   specs->slot.slotName,
 							   specs->startpos,
