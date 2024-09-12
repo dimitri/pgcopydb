@@ -663,6 +663,7 @@ cli_sentinel_get(int argc, char **argv)
 		char startpos[PG_LSN_MAXLENGTH] = { 0 };
 		char endpos[PG_LSN_MAXLENGTH] = { 0 };
 		char write_lsn[PG_LSN_MAXLENGTH] = { 0 };
+		char transform_lsn[PG_LSN_MAXLENGTH] = { 0 };
 		char flush_lsn[PG_LSN_MAXLENGTH] = { 0 };
 		char replay_lsn[PG_LSN_MAXLENGTH] = { 0 };
 
@@ -672,6 +673,8 @@ cli_sentinel_get(int argc, char **argv)
 				LSN_FORMAT_ARGS(sentinel.endpos));
 		sformat(write_lsn, PG_LSN_MAXLENGTH, "%X/%X",
 				LSN_FORMAT_ARGS(sentinel.write_lsn));
+		sformat(transform_lsn, PG_LSN_MAXLENGTH, "%X/%X",
+				LSN_FORMAT_ARGS(sentinel.transform_lsn));
 		sformat(flush_lsn, PG_LSN_MAXLENGTH, "%X/%X",
 				LSN_FORMAT_ARGS(sentinel.flush_lsn));
 		sformat(replay_lsn, PG_LSN_MAXLENGTH, "%X/%X",
@@ -681,6 +684,7 @@ cli_sentinel_get(int argc, char **argv)
 		json_object_set_string(jsobj, "endpos", startpos);
 		json_object_set_boolean(jsobj, "apply", sentinel.apply);
 		json_object_set_string(jsobj, "write_lsn", write_lsn);
+		json_object_set_string(jsobj, "transform_lsn", transform_lsn);
 		json_object_set_string(jsobj, "flush_lsn", flush_lsn);
 		json_object_set_string(jsobj, "replay_lsn", replay_lsn);
 
@@ -692,17 +696,19 @@ cli_sentinel_get(int argc, char **argv)
 	}
 	else
 	{
-		fformat(stdout, "%-10s %X/%X\n", "startpos",
+		fformat(stdout, "%-15s %X/%X\n", "startpos",
 				LSN_FORMAT_ARGS(sentinel.startpos));
-		fformat(stdout, "%-10s %X/%X\n", "endpos",
+		fformat(stdout, "%-15s %X/%X\n", "endpos",
 				LSN_FORMAT_ARGS(sentinel.endpos));
-		fformat(stdout, "%-10s %s\n", "apply",
+		fformat(stdout, "%-15s %s\n", "apply",
 				sentinel.apply ? "enabled" : "disabled");
-		fformat(stdout, "%-10s %X/%X\n", "write_lsn",
+		fformat(stdout, "%-15s %X/%X\n", "write_lsn",
 				LSN_FORMAT_ARGS(sentinel.write_lsn));
-		fformat(stdout, "%-10s %X/%X\n", "flush_lsn",
+		fformat(stdout, "%-15s %X/%X\n", "transform_lsn",
+				LSN_FORMAT_ARGS(sentinel.transform_lsn));
+		fformat(stdout, "%-15s %X/%X\n", "flush_lsn",
 				LSN_FORMAT_ARGS(sentinel.flush_lsn));
-		fformat(stdout, "%-10s %X/%X\n", "replay_lsn",
+		fformat(stdout, "%-15s %X/%X\n", "replay_lsn",
 				LSN_FORMAT_ARGS(sentinel.replay_lsn));
 	}
 }

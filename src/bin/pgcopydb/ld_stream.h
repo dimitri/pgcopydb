@@ -191,6 +191,9 @@ typedef struct LogicalMessageEndpos
 typedef struct LogicalTransactionStatement
 {
 	StreamAction action;
+	uint32_t xid;
+	uint64_t lsn;
+	char timestamp[PG_MAX_TIMESTAMP];
 
 	union stmt
 	{
@@ -244,7 +247,11 @@ typedef struct LogicalTransactionArray
 typedef struct LogicalMessage
 {
 	bool isTransaction;
+
 	StreamAction action;
+	uint32_t xid;
+	uint64_t lsn;
+	char timestamp[PG_MAX_TIMESTAMP];
 
 	union command
 	{
@@ -346,6 +353,8 @@ typedef struct StreamContext
 	LogicalMessageMetadata metadata;
 	LogicalMessageMetadata previous;
 	LogicalTransactionStatement *stmt;
+
+	uint64_t transform_lsn;     /* current transform_lsn in-memory */
 
 	uint64_t maxWrittenLSN;     /* max LSN written so far to the JSON files */
 
@@ -602,6 +611,9 @@ bool stream_fetch_current_lsn(uint64_t *lsn,
 
 StreamAction StreamActionFromChar(char action);
 char * StreamActionToString(StreamAction action);
+bool StreamActionIsTCL(StreamAction action);
+bool StreamActionIsDML(StreamAction action);
+bool StreamActionIsInternal(StreamAction action);
 
 
 /* ld_transform.c */
