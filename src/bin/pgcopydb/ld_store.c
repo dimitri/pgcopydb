@@ -177,7 +177,8 @@ ld_store_set_cdc_filename_at_lsn(StreamSpecs *specs, uint64_t lsn)
 {
 	if (lsn == InvalidXLogRecPtr)
 	{
-		return ld_store_set_first_cdc_filename(specs);
+		log_debug("ld_store_set_cdc_filename_at_lsn: 0/0");
+		return true;
 	}
 
 	sqlite3 *db = specs->sourceDB->db;
@@ -254,7 +255,16 @@ ld_store_set_cdc_filename_at_lsn(StreamSpecs *specs, uint64_t lsn)
 		}
 
 		/* now check if the candidateDB contains the given LSN */
-		if (ld_store_lookup_lsn(candidateDB, lsn))
+		ReplayDBOutputMessage output = { 0 };
+
+		if (!ld_store_lookup_output_at_lsn(candidateDB, lsn, &output))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		/* found it? then we opened the right replay db file */
+		if (output.lsn == lsn)
 		{
 			specs->replayDB = candidateDB;
 			break;
@@ -268,45 +278,6 @@ ld_store_set_cdc_filename_at_lsn(StreamSpecs *specs, uint64_t lsn)
 	}
 
 	if (!catalog_sql_finalize(&query))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	return true;
-}
-
-
-/*
- * ld_store_set_cdc_filename_at_lsn sets our replayDB dbfile value to the first
- * CDC file that we have in the catalogs.
- */
-bool
-ld_store_set_first_cdc_filename(StreamSpecs *specs)
-{
-	sqlite3 *db = specs->sourceDB->db;
-
-	if (db == NULL)
-	{
-		log_error("BUG: ld_store_first_cdc_filename: db is NULL");
-		return false;
-	}
-
-	char *sql = "select filename from cdc_files order by id limit 1";
-
-	SQLiteQuery query = {
-		.context = specs->replayDB->dbfile,
-		.fetchFunction = &ld_store_cdc_filename_fetch
-	};
-
-	if (!catalog_sql_prepare(db, sql, &query))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/* now execute the query, which does not return any row */
-	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
 		return false;
@@ -340,27 +311,35 @@ ld_store_cdc_filename_fetch(SQLiteQuery *query)
 
 
 /*
- * ld_store_lookup_lsn searches the given LSN in the given replayDB database.
+ * ld_store_lookup_output_at_lsn searches the given LSN in the given replayDB
+ * database.
  */
 bool
-ld_store_lookup_lsn(DatabaseCatalog *catalog, uint64_t lsn)
+ld_store_lookup_output_at_lsn(DatabaseCatalog *catalog, uint64_t lsn,
+							  ReplayDBOutputMessage *output)
 {
 	sqlite3 *db = catalog->db;
 
 	if (db == NULL)
 	{
-		log_error("BUG: ld_store_lookup_lsn: db is NULL");
+		log_error("BUG: ld_store_lookup_output_at_lsn: db is NULL");
 		return false;
 	}
 
-	char *sql = "select 1 from output where lsn = $1 limit 1";
+	char *sql =
+		"  select id, action, xid, lsn, timestamp, message "
+		"    from output "
+		"   where lsn = $1 "
+		"order by id "
+		"   limit 1";
+
+	log_warn("ld_store_lookup_output_at_lsn: %X/%X", LSN_FORMAT_ARGS(lsn));
 
 	SQLiteQuery query = {
-		.errorOnZeroRows = true
+		.errorOnZeroRows = true,
+		.context = output,
+		.fetchFunction = &ld_store_output_fetch
 	};
-
-	char pg_lsn[PG_LSN_MAXLENGTH] = { 0 };
-	sformat(pg_lsn, sizeof(pg_lsn), "%X/%X", LSN_FORMAT_ARGS(lsn));
 
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
@@ -370,7 +349,7 @@ ld_store_lookup_lsn(DatabaseCatalog *catalog, uint64_t lsn)
 
 	/* bind our parameters now */
 	BindParam params[1] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "lsn", 0, (char *) pg_lsn },
+		{ BIND_PARAMETER_TYPE_INT64, "lsn", lsn },
 	};
 
 	if (!catalog_sql_bind(&query, params, 1))
@@ -384,6 +363,219 @@ ld_store_lookup_lsn(DatabaseCatalog *catalog, uint64_t lsn)
 	{
 		/* errors have already been logged */
 		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * ld_store_lookup_output_after_lsn searches the first message following the
+ * given LSN in the replayDB database.
+ *
+ * The same LSN would typically be used in Postgres for a COMMIT message and
+ * the BEGIN message of the following transaction, so we search for a message
+ * with an lsn greater than or equal to the given one, and a message that's
+ * neither a COMMIT nor a ROLLBACK.
+ *
+ * {"action":"C","xid":"499","lsn":"0/24E1B08"}
+ * {"action":"B","xid":"500","lsn":"0/24E1B08"}
+ */
+bool
+ld_store_lookup_output_after_lsn(DatabaseCatalog *catalog,
+								 uint64_t lsn,
+								 ReplayDBOutputMessage *output)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: ld_store_lookup_output_after_lsn: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"  select id, action, xid, lsn, timestamp, message "
+		"    from output "
+
+		/* only a BEGIN action is expected to have the same LSN again */
+		"   where lsn >= $1 and action = 'B' "
+		" union all "
+		"  select id, action, xid, lsn, timestamp, message "
+		"    from output "
+		"   where lsn > $2 "
+		"order by id "
+		"   limit 1";
+
+	log_warn("ld_store_lookup_output_after_lsn: %X/%X", LSN_FORMAT_ARGS(lsn));
+
+	SQLiteQuery query = {
+		.errorOnZeroRows = false,
+		.context = output,
+		.fetchFunction = &ld_store_output_fetch
+	};
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "lsn", lsn },
+		{ BIND_PARAMETER_TYPE_INT64, "lsn", lsn }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which return exactly one row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * ld_store_lookup_output_xid_end searches the last message for the given
+ * transaction (xid) in the replayDB database.
+ */
+bool
+ld_store_lookup_output_xid_end(DatabaseCatalog *catalog,
+							   uint32_t xid,
+							   ReplayDBOutputMessage *output)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: ld_store_lookup_output_xid_end: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"  select id, action, xid, lsn, timestamp, message "
+		"    from output "
+		"   where xid = $1 and (action = 'C' or action = 'R') "
+		"order by id "
+		"   limit 1";
+
+	log_warn("ld_store_lookup_output_xid_end: %u", xid);
+
+	SQLiteQuery query = {
+		.errorOnZeroRows = true,
+		.context = output,
+		.fetchFunction = &ld_store_output_fetch
+	};
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[1] = {
+		{ BIND_PARAMETER_TYPE_INT64, "xid", xid },
+	};
+
+	if (!catalog_sql_bind(&query, params, 1))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which return exactly one row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * ld_store_output_fetch fetches a ReplayDBOutputMessage entry from a SQLite
+ * ppStmt result set.
+ */
+bool
+ld_store_output_fetch(SQLiteQuery *query)
+{
+	ReplayDBOutputMessage *output = (ReplayDBOutputMessage *) query->context;
+
+	/* cleanup the memory area before re-use */
+	bzero(output, sizeof(ReplayDBOutputMessage));
+
+	output->id = sqlite3_column_int64(query->ppStmt, 0);
+
+	if (sqlite3_column_type(query->ppStmt, 1) != SQLITE_NULL)
+	{
+		char *action = (char *) sqlite3_column_text(query->ppStmt, 1);
+		output->action = action[0];
+	}
+	else
+	{
+		log_error("Failed to fetch action for output id %lld",
+				  (long long) output->id);
+		return false;
+	}
+
+	if (sqlite3_column_type(query->ppStmt, 2) != SQLITE_NULL)
+	{
+		output->xid = sqlite3_column_int64(query->ppStmt, 2);
+	}
+
+	/* lsn could be NULL */
+	output->lsn = InvalidXLogRecPtr;
+
+	if (sqlite3_column_type(query->ppStmt, 3) != SQLITE_NULL)
+	{
+		output->lsn = sqlite3_column_int64(query->ppStmt, 3);
+	}
+
+	log_warn("ld_store_output_fetch: %lld %c %u %X/%X",
+			 (long long) output->id,
+			 output->action,
+			 output->xid,
+			 LSN_FORMAT_ARGS(output->lsn));
+
+	/* timestamp */
+	if (sqlite3_column_type(query->ppStmt, 4) != SQLITE_NULL)
+	{
+		strlcpy(output->timestamp,
+				(char *) sqlite3_column_text(query->ppStmt, 4),
+				sizeof(output->timestamp));
+	}
+
+	/* message */
+	if (sqlite3_column_type(query->ppStmt, 5) != SQLITE_NULL)
+	{
+		int len = sqlite3_column_bytes(query->ppStmt, 5);
+		int bytes = len + 1;
+
+		output->jsonBuffer = (char *) calloc(bytes, sizeof(char));
+
+		if (output->jsonBuffer == NULL)
+		{
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		strlcpy(output->jsonBuffer,
+				(char *) sqlite3_column_text(query->ppStmt, 5),
+				bytes);
 	}
 
 	return true;
@@ -530,8 +722,14 @@ ld_store_insert_message(DatabaseCatalog *catalog,
 	}
 
 	char *sql =
-		"insert or replace into output(action, xid, lsn, timestamp, message)"
-		"values($1, $2, $3, $4, $5)";
+		"insert into output(action, xid, lsn, timestamp, message)"
+		"values($1, $2, $3, $4, $5) ";
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	SQLiteQuery query = { 0 };
 
@@ -546,15 +744,12 @@ ld_store_insert_message(DatabaseCatalog *catalog,
 		metadata->xid == 0 ? BIND_PARAMETER_TYPE_NULL : BIND_PARAMETER_TYPE_INT64;
 
 	char action[2] = { metadata->action, '\0' };
-	char lsn[PG_LSN_MAXLENGTH] = { 0 };
-
-	sformat(lsn, sizeof(lsn), "%X/%X", LSN_FORMAT_ARGS(metadata->lsn));
 
 	/* bind our parameters now */
 	BindParam params[] = {
 		{ BIND_PARAMETER_TYPE_TEXT, "action", 0, action },
 		{ xidParamType, "xid", metadata->xid, NULL },
-		{ BIND_PARAMETER_TYPE_TEXT, "lsn", 0, lsn },
+		{ BIND_PARAMETER_TYPE_INT64, "lsn", metadata->lsn, NULL },
 		{ BIND_PARAMETER_TYPE_TEXT, "timestamp", 0, metadata->timestamp },
 		{ BIND_PARAMETER_TYPE_TEXT, "message", 0, metadata->jsonBuffer }
 	};
@@ -564,6 +759,7 @@ ld_store_insert_message(DatabaseCatalog *catalog,
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -571,8 +767,11 @@ ld_store_insert_message(DatabaseCatalog *catalog,
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -597,6 +796,16 @@ ld_store_insert_internal_message(DatabaseCatalog *catalog,
 	char *sql =
 		"insert or replace into output(action, lsn, timestamp)"
 		"values($1, $2, $3)";
+
+	log_warn("ld_store_insert_internal_message: %c %X/%X",
+			 message->action,
+			 LSN_FORMAT_ARGS(message->lsn));
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	SQLiteQuery query = { 0 };
 
@@ -624,14 +833,11 @@ ld_store_insert_internal_message(DatabaseCatalog *catalog,
 	}
 
 	char action[2] = { message->action, '\0' };
-	char lsn[PG_LSN_MAXLENGTH] = { 0 };
-
-	sformat(lsn, sizeof(lsn), "%X/%X", LSN_FORMAT_ARGS(message->lsn));
 
 	/* bind our parameters now */
 	BindParam params[] = {
 		{ BIND_PARAMETER_TYPE_TEXT, "action", 0, action },
-		{ BIND_PARAMETER_TYPE_TEXT, "lsn", 0, lsn },
+		{ BIND_PARAMETER_TYPE_INT64, "lsn", message->lsn, NULL },
 		{ timeParamType, "timestamp", 0, message->timeStr }
 	};
 
@@ -640,6 +846,7 @@ ld_store_insert_internal_message(DatabaseCatalog *catalog,
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -647,8 +854,11 @@ ld_store_insert_internal_message(DatabaseCatalog *catalog,
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -670,19 +880,26 @@ ld_store_insert_replay_stmt(DatabaseCatalog *catalog,
 		return false;
 	}
 
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	/* compute the hash as a string, needed in both stmt and replay tables */
 	char hash[9] = { 0 };
 	sformat(hash, sizeof(hash), "%x", replayStmt->hash);
 
 	if (replayStmt->stmt != NULL)
 	{
-		char *sql = "insert into stmt (hash, sql) values($1, $2)";
+		char *sql = "insert or ignore into stmt(hash, sql) values($1, $2)";
 
 		SQLiteQuery query = { 0 };
 
 		if (!catalog_sql_prepare(db, sql, &query))
 		{
 			/* errors have already been logged */
+			(void) semaphore_unlock(&(catalog->sema));
 			return false;
 		}
 
@@ -697,6 +914,7 @@ ld_store_insert_replay_stmt(DatabaseCatalog *catalog,
 		if (!catalog_sql_bind(&query, params, count))
 		{
 			/* errors have already been logged */
+			(void) semaphore_unlock(&(catalog->sema));
 			return false;
 		}
 
@@ -704,37 +922,44 @@ ld_store_insert_replay_stmt(DatabaseCatalog *catalog,
 		if (!catalog_sql_execute_once(&query))
 		{
 			/* errors have already been logged */
+			(void) semaphore_unlock(&(catalog->sema));
 			return false;
 		}
 	}
 
 	char *sql =
-		"insert into replay(action, xid, lsn, timestamp, stmt_hash, stmt_args)"
-		"values($1, $2, $3, $4, $5, $6)";
+		"insert into replay"
+		"(action, xid, lsn, endlsn, timestamp, stmt_hash, stmt_args)"
+		"values($1, $2, $3, $4, $5, $6, $7)";
 
 	SQLiteQuery query = { 0 };
 
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
 	char action[2] = { replayStmt->action, '\0' };
 
 	/* not all messages have an xid */
-	BindParameterType xidParamType = replayStmt->xid > 0 ?
-									 BIND_PARAMETER_TYPE_INT64 : BIND_PARAMETER_TYPE_NULL;
+	BindParameterType xidParamType =
+		replayStmt->xid > 0 ?
+		BIND_PARAMETER_TYPE_INT64 :
+		BIND_PARAMETER_TYPE_NULL;
 
 	/* not all messages have an lsn */
-	char lsn[PG_LSN_MAXLENGTH] = { 0 };
-	BindParameterType lsnParamType = BIND_PARAMETER_TYPE_NULL;
+	BindParameterType lsnParamType =
+		replayStmt->lsn == InvalidXLogRecPtr ?
+		BIND_PARAMETER_TYPE_NULL :
+		BIND_PARAMETER_TYPE_INT64;
 
-	if (replayStmt->lsn != InvalidXLogRecPtr)
-	{
-		lsnParamType = BIND_PARAMETER_TYPE_TEXT;
-		sformat(lsn, sizeof(lsn), "%X/%X", LSN_FORMAT_ARGS(replayStmt->lsn));
-	}
+	/* not all messages have an end lsn */
+	BindParameterType endlsnParamType =
+		replayStmt->endlsn == InvalidXLogRecPtr ?
+		BIND_PARAMETER_TYPE_NULL :
+		BIND_PARAMETER_TYPE_INT64;
 
 	/* not all messages have a time entry */
 	char *timestr = NULL;
@@ -747,17 +972,22 @@ ld_store_insert_replay_stmt(DatabaseCatalog *catalog,
 	}
 
 	/* not all messages have a statement (hash, data) */
-	BindParameterType hashParamType = replayStmt->hash > 0 ?
-									  BIND_PARAMETER_TYPE_TEXT : BIND_PARAMETER_TYPE_NULL;
+	BindParameterType hashParamType =
+		replayStmt->hash > 0 ?
+		BIND_PARAMETER_TYPE_TEXT :
+		BIND_PARAMETER_TYPE_NULL;
 
-	BindParameterType dataParamType = replayStmt->data != NULL ?
-									  BIND_PARAMETER_TYPE_TEXT : BIND_PARAMETER_TYPE_NULL;
+	BindParameterType dataParamType =
+		replayStmt->data != NULL ?
+		BIND_PARAMETER_TYPE_TEXT :
+		BIND_PARAMETER_TYPE_NULL;
 
 	/* bind our parameters now */
 	BindParam params[] = {
 		{ BIND_PARAMETER_TYPE_TEXT, "action", 0, action },
 		{ xidParamType, "xid", replayStmt->xid, NULL },
-		{ lsnParamType, "lsn", 0, lsn },
+		{ lsnParamType, "lsn", replayStmt->lsn, NULL },
+		{ endlsnParamType, "endlsn", replayStmt->endlsn, NULL },
 		{ timeParamType, "timestamp", 0, timestr },
 		{ hashParamType, "stmt_hash", 0, hash },
 		{ dataParamType, "stmt_args", 0, replayStmt->data },
@@ -768,6 +998,7 @@ ld_store_insert_replay_stmt(DatabaseCatalog *catalog,
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -775,8 +1006,11 @@ ld_store_insert_replay_stmt(DatabaseCatalog *catalog,
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -795,53 +1029,111 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 	iter->transform_lsn = specs->sentinel.transform_lsn;
 	iter->endpos = specs->endpos;
 
-	if (!ld_store_iter_output_init(iter))
+	DatabaseCatalog *catalog = iter->catalog;
+
+	if (!semaphore_lock(&(catalog->sema)))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	for (;;)
+	if (!ld_store_iter_output_init(iter))
 	{
-		if (!ld_store_iter_output_next(iter))
-		{
-			/* errors have already been logged */
-			return false;
-		}
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
 
+	if (iter->output == NULL ||
+		iter->output->action == STREAM_ACTION_UNKNOWN)
+	{
+		/* no rows returned from the init */
+		log_warn("ld_store_iter_output: no rows");
+		(void) semaphore_unlock(&(catalog->sema));
+		return true;
+	}
+
+	/* single message, call the callback function and finish */
+	if (iter->output->action != STREAM_ACTION_BEGIN)
+	{
+		bool stop = false;
 		ReplayDBOutputMessage *output = iter->output;
 
-		if (output == NULL)
-		{
-			if (!ld_store_iter_output_finish(iter))
-			{
-				/* errors have already been logged */
-				return false;
-			}
-
-			break;
-		}
-
-		bool stop = false;
+		log_warn("ld_store_iter_output: %c %s",
+				 output->action,
+				 StreamActionToString(output->action));
 
 		/* now call the provided callback */
 		if (!(*callback)(specs, output, &stop))
 		{
 			log_error("Failed to iterate over CDC output messages, "
 					  "see above for details");
+			(void) semaphore_unlock(&(catalog->sema));
 			return false;
 		}
 
-		if (stop)
+		if (!ld_store_iter_output_finish(iter))
 		{
-			if (!ld_store_iter_output_finish(iter))
+			/* errors have already been logged */
+			(void) semaphore_unlock(&(catalog->sema));
+			return false;
+		}
+
+		(void) semaphore_unlock(&(catalog->sema));
+
+		return true;
+	}
+	else
+	{
+		/* iterate over a transaction */
+		for (;;)
+		{
+			if (!ld_store_iter_output_next(iter))
 			{
 				/* errors have already been logged */
+				(void) semaphore_unlock(&(catalog->sema));
 				return false;
 			}
-			return true;
+
+			ReplayDBOutputMessage *output = iter->output;
+
+			if (output == NULL)
+			{
+				if (!ld_store_iter_output_finish(iter))
+				{
+					/* errors have already been logged */
+					(void) semaphore_unlock(&(catalog->sema));
+					return false;
+				}
+
+				break;
+			}
+
+			bool stop = false;
+
+			/* now call the provided callback */
+			if (!(*callback)(specs, output, &stop))
+			{
+				log_error("Failed to iterate over CDC output messages, "
+						  "see above for details");
+				(void) semaphore_unlock(&(catalog->sema));
+				return false;
+			}
+
+			if (stop)
+			{
+				if (!ld_store_iter_output_finish(iter))
+				{
+					/* errors have already been logged */
+					(void) semaphore_unlock(&(catalog->sema));
+					return false;
+				}
+				break;
+			}
 		}
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -854,7 +1146,8 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 bool
 ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 {
-	sqlite3 *db = iter->catalog->db;
+	DatabaseCatalog *catalog = iter->catalog;
+	sqlite3 *db = catalog->db;
 
 	if (db == NULL)
 	{
@@ -871,10 +1164,79 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 		return false;
 	}
 
+	ReplayDBOutputMessage first = { 0 };
+	ReplayDBOutputMessage last = { 0 };
+
+	/*
+	 * Grab the output row for the given LSN, and then if it's a single message
+	 * (action is SWITCH, ENDPOS, or KEEPALIVE) return it. If the message is a
+	 * BEGIN message, lookup the associated COMMIT message's lsn (same xid) and
+	 * then grab all the messages from that transaction.
+	 */
+	if (!ld_store_lookup_output_after_lsn(catalog, iter->transform_lsn, &first))
+	{
+		/* errors have already been logged */
+		iter->output = NULL;
+		return false;
+	}
+
+	if (first.lsn == InvalidXLogRecPtr)
+	{
+		/* no rows available yet */
+		iter->output = NULL;
+		return true;
+	}
+
+	switch (first.action)
+	{
+		case STREAM_ACTION_SWITCH:
+		case STREAM_ACTION_KEEPALIVE:
+		case STREAM_ACTION_ENDPOS:
+		{
+			/* single message, just return it */
+			log_warn("ld_store_iter_output_init: single message %c", first.action);
+			*(iter->output) = first;
+			return true;
+		}
+
+		case STREAM_ACTION_BEGIN:
+		{
+			/* greab the COMMIT or ROLLBACK output entry if there is one */
+			if (!ld_store_lookup_output_xid_end(catalog, first.xid, &last))
+			{
+				/* errors have already been logged */
+				iter->output = NULL;
+				return false;
+			}
+
+			/* the COMMIT/ROLLBACK message is not available yet */
+			if (last.lsn == InvalidXLogRecPtr)
+			{
+				iter->output = NULL;
+				return true;
+			}
+
+			/* return the first message we iterate over */
+			*(iter->output) = first;
+
+			break;
+		}
+
+		default:
+		{
+			log_error("Failed to start iterating over output at LSN %X/%X "
+					  "with unexpected action %s",
+					  LSN_FORMAT_ARGS(iter->transform_lsn),
+					  StreamActionToString(first.action));
+			iter->output = NULL;
+			return false;
+		}
+	}
+
 	char *sql =
 		"   select id, action, xid, lsn, timestamp, message "
 		"     from output "
-		"    where lsn > $1 and lsn <= $2 "
+		"    where xid = $1 "
 		" order by id";
 
 	SQLiteQuery *query = &(iter->query);
@@ -882,31 +1244,27 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 	query->context = iter->output;
 	query->fetchFunction = &ld_store_output_fetch;
 
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "xid", first.xid, NULL }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
 	if (!catalog_sql_prepare(db, sql, query))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	char tlsn[PG_LSN_MAXLENGTH] = { 0 };
-	char elsn[PG_LSN_MAXLENGTH] = { 0 };
-
-	sformat(tlsn, sizeof(tlsn), "%X/%X", LSN_FORMAT_ARGS(iter->transform_lsn));
-	sformat(elsn, sizeof(elsn), "%X/%X", LSN_FORMAT_ARGS(iter->endpos));
-
-	/* bind our parameters now */
-	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "transform_lsn", 0, tlsn },
-		{ BIND_PARAMETER_TYPE_TEXT, "endpos", 0, elsn }
-	};
-
-	int count = sizeof(params) / sizeof(params[0]);
-
+	/* re-use params, hard code the count */
 	if (!catalog_sql_bind(query, params, count))
 	{
 		/* errors have already been logged */
 		return false;
 	}
+
+	log_warn("ld_store_iter_output_init: %s", sql);
+	log_warn("ld_store_iter_output_init: xid = %u", first.xid);
 
 	return true;
 }
@@ -932,84 +1290,27 @@ ld_store_iter_output_next(ReplayDBOutputIterator *iter)
 	if (rc != SQLITE_ROW)
 	{
 		log_error("Failed to step through statement: %s", query->sql);
-		log_error("[SQLite] %s", sqlite3_errmsg(query->db));
+
+		int offset = sqlite3_error_offset(query->db);
+
+		if (offset != -1)
+		{
+			/* "Failed to step through statement: %s" is 34 chars of prefix */
+			log_error("%34s%*s^", " ", offset, " ");
+		}
+
+		int errcode = sqlite3_extended_errcode(query->db);
+
+		log_error("[SQLite] %s: %s",
+				  sqlite3_errmsg(query->db),
+				  sqlite3_errstr(errcode));
+
 		return false;
 	}
+
+	log_warn("ld_store_iter_output_next");
 
 	return ld_store_output_fetch(query);
-}
-
-
-/*
- * ld_store_output_fetch fetches a ReplayDBOutputMessage entry from a SQLite
- * ppStmt result set.
- */
-bool
-ld_store_output_fetch(SQLiteQuery *query)
-{
-	ReplayDBOutputMessage *output = (ReplayDBOutputMessage *) query->context;
-
-	/* cleanup the memory area before re-use */
-	bzero(output, sizeof(ReplayDBOutputMessage));
-
-	output->id = sqlite3_column_int64(query->ppStmt, 0);
-
-	if (sqlite3_column_type(query->ppStmt, 1) != SQLITE_NULL)
-	{
-		char *action = (char *) sqlite3_column_text(query->ppStmt, 1);
-		output->action = action[0];
-	}
-	else
-	{
-		log_error("Failed to fetch action for output id %lld",
-				  (long long) output->id);
-		return false;
-	}
-
-	output->xid = sqlite3_column_int64(query->ppStmt, 2);
-
-	/* lsn could be NULL */
-	output->lsn = InvalidXLogRecPtr;
-
-	if (sqlite3_column_type(query->ppStmt, 3) != SQLITE_NULL)
-	{
-		char *lsn = (char *) sqlite3_column_text(query->ppStmt, 3);
-
-		if (!parseLSN(lsn, &(output->lsn)))
-		{
-			log_error("Failed to parse LSN \"%s\"", lsn);
-			return false;
-		}
-	}
-
-	/* timestamp */
-	if (sqlite3_column_type(query->ppStmt, 4) != SQLITE_NULL)
-	{
-		strlcpy(output->timestamp,
-				(char *) sqlite3_column_text(query->ppStmt, 4),
-				sizeof(output->timestamp));
-	}
-
-	/* message */
-	if (sqlite3_column_type(query->ppStmt, 5) != SQLITE_NULL)
-	{
-		int len = sqlite3_column_bytes(query->ppStmt, 5);
-		int bytes = len + 1;
-
-		output->jsonBuffer = (char *) calloc(bytes, sizeof(char));
-
-		if (output->jsonBuffer == NULL)
-		{
-			log_fatal(ALLOCATION_FAILED_ERROR);
-			return false;
-		}
-
-		strlcpy(output->jsonBuffer,
-				(char *) sqlite3_column_text(query->ppStmt, 5),
-				bytes);
-	}
-
-	return true;
 }
 
 
@@ -1026,6 +1327,8 @@ ld_store_iter_output_finish(ReplayDBOutputIterator *iter)
 		/* errors have already been logged */
 		return false;
 	}
+
+	iter->output = NULL;
 
 	return true;
 }

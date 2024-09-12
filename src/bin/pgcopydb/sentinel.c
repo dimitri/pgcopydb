@@ -34,7 +34,7 @@ sentinel_setup(DatabaseCatalog *catalog, uint64_t startpos, uint64_t endpos)
 		"insert or replace into sentinel("
 		"  id, startpos, endpos, apply, "
 		"  write_lsn, transform_lsn, flush_lsn, replay_lsn) "
-		"values($1, $2, $3, $4, '0/0', '0/0', '0/0', '0/0')";
+		"values($1, $2, $3, $4, '0/0', $5, '0/0', '0/0')";
 
 	if (!semaphore_lock(&(catalog->sema)))
 	{
@@ -62,7 +62,8 @@ sentinel_setup(DatabaseCatalog *catalog, uint64_t startpos, uint64_t endpos)
 		{ BIND_PARAMETER_TYPE_INT64, "id", 1, NULL },
 		{ BIND_PARAMETER_TYPE_TEXT, "startpos", 0, (char *) startLSN },
 		{ BIND_PARAMETER_TYPE_TEXT, "endpos", 0, (char *) endLSN },
-		{ BIND_PARAMETER_TYPE_INT, "apply", 0, NULL }
+		{ BIND_PARAMETER_TYPE_INT, "apply", 0, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "transform_lsn", 0, (char *) startLSN }
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);

@@ -155,8 +155,7 @@ parseWal2jsonMessage(StreamContext *privateContext,
 
 		case STREAM_ACTION_INSERT:
 		{
-			JSON_Array *jscols =
-				json_object_dotget_array(jsobj, "message.columns");
+			JSON_Array *jscols = json_object_get_array(jsobj, "columns");
 
 			stmt->stmt.insert.table = table;
 
@@ -204,8 +203,7 @@ parseWal2jsonMessage(StreamContext *privateContext,
 			}
 
 			LogicalMessageTuple *old = &(stmt->stmt.update.old.array[0]);
-			JSON_Array *jsids =
-				json_object_dotget_array(jsobj, "message.identity");
+			JSON_Array *jsids = json_object_get_array(jsobj, "identity");
 
 			if (!SetColumnNamesAndValues(old, message, jsids, pgsql))
 			{
@@ -216,8 +214,7 @@ parseWal2jsonMessage(StreamContext *privateContext,
 			}
 
 			LogicalMessageTuple *new = &(stmt->stmt.update.new.array[0]);
-			JSON_Array *jscols =
-				json_object_dotget_array(jsobj, "message.columns");
+			JSON_Array *jscols = json_object_get_array(jsobj, "columns");
 
 			if (!SetColumnNamesAndValues(new, message, jscols, pgsql))
 			{
@@ -245,8 +242,7 @@ parseWal2jsonMessage(StreamContext *privateContext,
 			}
 
 			LogicalMessageTuple *old = &(stmt->stmt.update.old.array[0]);
-			JSON_Array *jsids =
-				json_object_dotget_array(jsobj, "message.identity");
+			JSON_Array *jsids = json_object_get_array(jsobj, "identity");
 
 			if (!SetColumnNamesAndValues(old, message, jsids, pgsql))
 			{
@@ -283,8 +279,8 @@ SetMessageRelation(JSON_Object *jsobj,
 	char *schema = NULL;
 	char *relname = NULL;
 
-	schema = (char *) json_object_dotget_string(jsobj, "message.schema");
-	relname = (char *) json_object_dotget_string(jsobj, "message.table");
+	schema = (char *) json_object_dotget_string(jsobj, "schema");
+	relname = (char *) json_object_dotget_string(jsobj, "table");
 
 
 	if (schema == NULL || relname == NULL)
