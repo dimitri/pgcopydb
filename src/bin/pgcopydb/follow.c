@@ -34,7 +34,8 @@ follow_export_snapshot(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 
 	if (!copydb_create_logical_replication_slot(copySpecs,
 												logrep_pguri,
-												&(streamSpecs->slot)))
+												&(streamSpecs->slot),
+												streamSpecs->paths.dir))
 	{
 		/* errors have already been logged */
 		return false;
@@ -681,6 +682,14 @@ follow_start_prefetch(StreamSpecs *specs)
 bool
 follow_start_transform(StreamSpecs *specs)
 {
+	if (!stream_transform_messages(specs))
+	{
+		log_error("Transform process failed, see above for details");
+		return false;
+	}
+
+	return true;
+
 	/*
 	 * In replay mode, the JSON messages are read from stdin, which we
 	 * now setup to be a pipe between prefetch and transform processes;

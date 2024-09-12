@@ -496,6 +496,7 @@ typedef struct LogicalStreamClient
 
 bool pgsql_init_stream(LogicalStreamClient *client,
 					   const char *pguri,
+					   const char *cdcPathDir,
 					   StreamOutputPlugin plugin,
 					   const char *slotName,
 					   XLogRecPtr startpos,

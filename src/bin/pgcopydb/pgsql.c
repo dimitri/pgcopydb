@@ -3629,6 +3629,7 @@ pg_copy_large_object(PGSQL *src,
 bool
 pgsql_init_stream(LogicalStreamClient *client,
 				  const char *pguri,
+				  const char *cdcPathDir,
 				  StreamOutputPlugin plugin,
 				  const char *slotName,
 				  XLogRecPtr startpos,
@@ -3644,6 +3645,8 @@ pgsql_init_stream(LogicalStreamClient *client,
 
 	/* we're going to send several replication commands */
 	pgsql->connectionStatementType = PGSQL_CONNECTION_MULTI_STATEMENT;
+
+	strlcpy(client->cdcPathDir, cdcPathDir, sizeof(client->cdcPathDir));
 
 	client->plugin = plugin;
 
@@ -3747,6 +3750,13 @@ pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 			OutputPluginToString(client->plugin));
 
 	if (!pgsql_open_connection(pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* fetch the source timeline */
+	if (!pgsql_identify_system(pgsql, &(client->system), client->cdcPathDir))
 	{
 		/* errors have already been logged */
 		return false;

@@ -8100,7 +8100,9 @@ catalog_sql_bind(SQLiteQuery *query, BindParam *params, int count)
 {
 	if (!catalog_bind_parameters(query->db, query->ppStmt, params, count))
 	{
-		/* errors have already been logged */
+		log_error("[SQLite] Failed to bind parameters in query: %s",
+				  query->sql);
+
 		(void) sqlite3_clear_bindings(query->ppStmt);
 		(void) sqlite3_finalize(query->ppStmt);
 		return false;
