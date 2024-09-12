@@ -53,11 +53,23 @@ SQLFILE=000000010000000000000002.sql
 # different at each run
 expected=/tmp/expected.json
 result=/tmp/result.json
+messages=/tmp/messages.json
 
-JQSCRIPT='del(.lsn) | del(.nextlsn) | del(.timestamp) | del(.xid) | if has("message") then .message |= sub("(?<m>COMMIT|BEGIN) [0-9]+"; "\(.m) XXX") else . end'
+ls -l ${SHAREDIR}
+
+# make a JSON file from our SQLite database, for testing
+sqlite3 ${SHAREDIR}/*.db <<EOF
+.echo off
+.headers off
+.mode list
+.output ${messages}
+select json_object('action', action, 'xid', coalesce(xid, 0), 'lsn', lsn, 'timestamp', timestamp, 'message', json(message)) from output;
+EOF
+
+JQSCRIPT='del(.lsn) | del(.nextlsn) | del(.timestamp) | del(.xid)'
 
 jq "${JQSCRIPT}" /usr/src/pgcopydb/${WALFILE} > ${expected}
-jq "${JQSCRIPT}" ${SHAREDIR}/${WALFILE} > ${result}
+jq "${JQSCRIPT}" ${messages} > ${result}
 
 # first command to provide debug information, second to stop when returns non-zero
 diff ${expected} ${result} || cat ${SHAREDIR}/${WALFILE}

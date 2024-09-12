@@ -283,10 +283,13 @@ parse_timeline_history_file(char *filename,
 	};
 
 	/* step 2: iterate over the file */
-	if (!file_iter_lines(filename, BUFSIZE, &context, register_timeline_hook))
+	if (currentTimeline > 1)
 	{
-		/* errors have already been logged */
-		return false;
+		if (!file_iter_lines(filename, BUFSIZE, &context, register_timeline_hook))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	/* step 3: add the current timeline to catalog */

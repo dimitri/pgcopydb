@@ -1,7 +1,7 @@
 #! /bin/bash
 
 set -x
-set -e
+#set -e
 
 # This script expects the following environment variables to be set:
 #
@@ -20,7 +20,17 @@ psql -o /tmp/d.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/ddl.sql
 
 # pgcopydb clone uses the environment variables
-pgcopydb clone --follow --plugin wal2json
+pgcopydb clone --follow --plugin wal2json --notice
+
+db="/var/lib/postgres/.local/share/pgcopydb/00000001-*.db"
+
+sqlite3 ${db} <<EOF
+select id, action, xid, lsn, substring(message, 1, 48) from output;
+
+select hash, sql from stmt;
+
+select id, action, xid, lsn, endlsn, stmt_hash, stmt_args from replay;
+EOF
 
 # cleanup
 pgcopydb stream sentinel get

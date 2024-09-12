@@ -7,7 +7,9 @@
 #include <inttypes.h>
 
 #include "copydb.h"
+#include "ld_stream.h"
 #include "log.h"
+#include "pgsql_timeline.h"
 
 /*
  * copydb_copy_snapshot initializes a new TransactionSnapshot from another
@@ -374,7 +376,8 @@ copydb_should_export_snapshot(CopyDataSpec *copySpecs)
 bool
 copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 									   const char *logrep_pguri,
-									   ReplicationSlot *slot)
+									   ReplicationSlot *slot,
+									   char *cdcPathDir)
 {
 	TransactionSnapshot *sourceSnapshot = &(copySpecs->sourceSnapshot);
 
@@ -410,10 +413,12 @@ copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 
 	sourceSnapshot->kind = SNAPSHOT_KIND_LOGICAL;
 
+	StreamSpecs specs = { 0 };
 	LogicalStreamClient *stream = &(sourceSnapshot->stream);
 
 	if (!pgsql_init_stream(stream,
 						   logrep_pguri,
+						   cdcPathDir,
 						   slot->plugin,
 						   slot->slotName,
 						   InvalidXLogRecPtr,
@@ -423,6 +428,7 @@ copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 		return false;
 	}
 
+	/* now create the replication slot, exporting the snapshot */
 	if (!pgsql_create_logical_replication_slot(stream, slot))
 	{
 		log_error("Failed to create a logical replication slot "
@@ -453,6 +459,18 @@ copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 	{
 		log_fatal("Failed to create the slot file \"%s\"",
 				  copySpecs->cfPaths.cdc.slotfile);
+		return false;
+	}
+
+	/* initialize catalog timeline history and create a replayDB SQLite file */
+	specs.paths = copySpecs->cfPaths.cdc;
+	specs.sourceDB = &(copySpecs->catalogs.source);
+	specs.replayDB = &(copySpecs->catalogs.replay);
+	specs.private.startpos = slot->lsn;
+
+	if (!stream_init_timeline(&specs, stream))
+	{
+		/* errors have already been logged */
 		return false;
 	}
 

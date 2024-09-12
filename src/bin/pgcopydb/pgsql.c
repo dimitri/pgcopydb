@@ -3629,6 +3629,7 @@ pg_copy_large_object(PGSQL *src,
 bool
 pgsql_init_stream(LogicalStreamClient *client,
 				  const char *pguri,
+				  const char *cdcPathDir,
 				  StreamOutputPlugin plugin,
 				  const char *slotName,
 				  XLogRecPtr startpos,
@@ -3644,6 +3645,8 @@ pgsql_init_stream(LogicalStreamClient *client,
 
 	/* we're going to send several replication commands */
 	pgsql->connectionStatementType = PGSQL_CONNECTION_MULTI_STATEMENT;
+
+	strlcpy(client->cdcPathDir, cdcPathDir, sizeof(client->cdcPathDir));
 
 	client->plugin = plugin;
 
@@ -3747,6 +3750,13 @@ pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 			OutputPluginToString(client->plugin));
 
 	if (!pgsql_open_connection(pgsql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* fetch the source timeline */
+	if (!pgsql_identify_system(pgsql, &(client->system), client->cdcPathDir))
 	{
 		/* errors have already been logged */
 		return false;
@@ -3992,13 +4002,6 @@ pgsql_start_replication(LogicalStreamClient *client)
 		return false;
 	}
 
-	/* determine remote server's xlog segment size */
-	if (!RetrieveWalSegSize(client))
-	{
-		destroyPQExpBuffer(query);
-		return false;
-	}
-
 	log_sql("%s", query->data);
 
 	PGresult *res = PQexec(pgsql->connection, query->data);
@@ -4045,7 +4048,6 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 	context->plugin = client->plugin;
 
 	context->timeline = client->system.timeline;
-	context->WalSegSz = client->WalSegSz;
 	context->tracking = &(client->current);
 
 	client->now = feGetCurrentTimestamp();
@@ -4647,90 +4649,6 @@ prepareToTerminate(LogicalStreamClient *client, bool keepalive, XLogRecPtr lsn)
 				  LSN_FORMAT_ARGS(client->endpos),
 				  LSN_FORMAT_ARGS(client->current.written_lsn));
 	}
-}
-
-
-/*
- * From version 10, explicitly set wal segment size using SHOW wal_segment_size
- * since ControlFile is not accessible here.
- */
-bool
-RetrieveWalSegSize(LogicalStreamClient *client)
-{
-	PGconn *conn = client->pgsql.connection;
-
-	PGresult *res;
-	char xlog_unit[3];
-	int xlog_val,
-		multiplier = 1;
-
-	/* check connection existence */
-	if (conn == NULL)
-	{
-		log_error("BUG: RetrieveWalSegSize called with a NULL client connection");
-		return false;
-	}
-
-	/* for previous versions set the default xlog seg size */
-	if (PQserverVersion(conn) < MINIMUM_VERSION_FOR_SHOW_CMD)
-	{
-		client->WalSegSz = DEFAULT_XLOG_SEG_SIZE;
-		return true;
-	}
-
-	res = PQexec(conn, "SHOW wal_segment_size");
-	if (PQresultStatus(res) != PGRES_TUPLES_OK)
-	{
-		log_error("could not send replication command \"%s\": %s",
-				  "SHOW wal_segment_size", PQerrorMessage(conn));
-
-		PQclear(res);
-		return false;
-	}
-	if (PQntuples(res) != 1 || PQnfields(res) < 1)
-	{
-		log_error("could not fetch WAL segment size: got %d rows and %d fields, "
-				  "expected %d rows and %d or more fields",
-				  PQntuples(res), PQnfields(res), 1, 1);
-
-		PQclear(res);
-		return false;
-	}
-
-	/* fetch xlog value and unit from the result */
-	if (sscanf(PQgetvalue(res, 0, 0), "%d%2s", &xlog_val, xlog_unit) != 2) /* IGNORE-BANNED */
-	{
-		log_error("WAL segment size could not be parsed");
-		PQclear(res);
-		return false;
-	}
-
-	PQclear(res);
-
-	/* set the multiplier based on unit to convert xlog_val to bytes */
-	if (strcmp(xlog_unit, "MB") == 0)
-	{
-		multiplier = 1024 * 1024;
-	}
-	else if (strcmp(xlog_unit, "GB") == 0)
-	{
-		multiplier = 1024 * 1024 * 1024;
-	}
-
-	/* convert and set WalSegSz */
-	client->WalSegSz = xlog_val * multiplier;
-
-	if (!IsValidWalSegSize(client->WalSegSz))
-	{
-		log_error("WAL segment size must be a power of two between 1 MB and 1 GB, "
-				  "but the remote server reported a value of %d bytes",
-				  client->WalSegSz);
-		return false;
-	}
-
-	log_sql("RetrieveWalSegSize: %d", client->WalSegSz);
-
-	return true;
 }
 
 

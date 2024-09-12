@@ -45,7 +45,7 @@ lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_lsn()'`
 # and prefetch the changes captured in our replication slot
 pgcopydb stream prefetch --resume --endpos "${lsn}" -vv
 
-SHAREDIR=/var/lib/postgres/.local/share/pgcopydb
+SHAREDIR=${XDG_DATA_HOME}/pgcopydb
 WALFILE=000000010000000000000002.json
 SQLFILE=000000010000000000000002.sql
 
@@ -54,7 +54,7 @@ SQLFILE=000000010000000000000002.sql
 expected=/tmp/expected.json
 result=/tmp/result.json
 
-JQSCRIPT='del(.lsn) | del(.nextlsn) | del(.timestamp) | del(.xid) | if has("message") then .message |= sub("(?<m>COMMIT|BEGIN) [0-9]+"; "\(.m) XXX") else . end'
+JQSCRIPT='del(.lsn) | del(.nextlsn) | del(.timestamp) | del(.xid)'
 
 jq "${JQSCRIPT}" /usr/src/pgcopydb/${WALFILE} > ${expected}
 jq "${JQSCRIPT}" ${SHAREDIR}/${WALFILE} > ${result}
