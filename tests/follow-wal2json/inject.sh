@@ -18,7 +18,9 @@ pgcopydb ping
 # that's the case is the existence of the pgcopydb.sentinel table on the
 # source database.
 #
-while [ ! -s ${TMPDIR}/pgcopydb/schema/source.db ]
+dbfile=${TMPDIR}/pgcopydb/schema/source.db
+
+until [ -s ${dbfile} ]
 do
     sleep 1
 done
@@ -44,18 +46,28 @@ done
 
 # grab the current LSN, it's going to be our streaming end position
 lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_flush_lsn()'`
-pgcopydb stream sentinel set endpos --current
+
+pgcopydb stream sentinel set endpos --current --debug
 pgcopydb stream sentinel get
 
+endpos=`pgcopydb stream sentinel get --endpos 2>/dev/null`
+
+if [ ${endpos} = "0/0" ]
+then
+    echo "expected ${lsn} endpos, found ${endpos}"
+    exit 1
+fi
+
 #
-# Becaure we're using docker compose --abort-on-container-exit make sure
+# Because we're using docker-compose --abort-on-container-exit make sure
 # that the other process in the pgcopydb service is done before exiting
 # here.
 #
-sql="select '${lsn}'::pg_lsn <= flush_lsn from pgcopydb.sentinel"
+flushlsn="0/0"
 
-while [ `psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c "${sql}"` != 't' ]
+while [ ${flushlsn} \< ${endpos} ]
 do
+    flushlsn=`pgcopydb stream sentinel get --flush-lsn 2>/dev/null`
     sleep 1
 done
 

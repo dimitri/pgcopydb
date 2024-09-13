@@ -50,9 +50,17 @@ jobs:
         run: |
             echo "TEST=${{ matrix.TEST }}" >> $GITHUB_ENV
 
-      - name: Fix workdir host permissions
+      - name: Create docker volumes
         run: |
-          chmod a+rwx tests/*/workdir
+          docker volume create ${TEST}
+
+      - name: List docker volumes
+        run: |
+          docker volume ls
+
+      - name: Docker Compose Version
+        run: |
+          docker compose version
 
       - name: Run a test
         timeout-minutes: 5
