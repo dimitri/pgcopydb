@@ -445,11 +445,6 @@ bool schema_list_all_indexes(PGSQL *pgsql,
 							 SourceFilters *filters,
 							 DatabaseCatalog *catalog);
 
-bool schema_list_table_indexes(PGSQL *pgsql,
-							   const char *shemaName,
-							   const char *tableName,
-							   DatabaseCatalog *catalog);
-
 bool schema_list_pg_depend(PGSQL *pgsql,
 						   SourceFilters *filters,
 						   DatabaseCatalog *catalog);

@@ -148,15 +148,6 @@ typedef struct SourceDependArrayContext
 	bool parsedOk;
 } SourceDependArrayContext;
 
-/* Context used when fetching a list of COPY partitions for a table */
-typedef struct SourcePartitionContext
-{
-	char sqlstate[SQLSTATE_LENGTH];
-	DatabaseCatalog *catalog;
-	SourceTable *table;
-	bool parsedOk;
-} SourcePartitionContext;
-
 /* Context used when fetching a table's rowcount and checksum */
 typedef struct ChecksumContext
 {
@@ -2918,89 +2909,6 @@ schema_list_all_indexes(PGSQL *pgsql,
 	if (!context.parsedOk)
 	{
 		log_error("Failed to list all indexes");
-		return false;
-	}
-
-	return true;
-}
-
-
-/*
- * schema_list_all_indexes grabs the list of indexes from the given source
- * Postgres instance and allocates a SourceIndex array with the result of the
- * query.
- */
-bool
-schema_list_table_indexes(PGSQL *pgsql,
-						  const char *schemaName,
-						  const char *tableName,
-						  DatabaseCatalog *catalog)
-{
-	SourceIndexArrayContext context = { { 0 }, catalog, false };
-
-	char *sql =
-		"   select i.oid, "
-		"          format('%I', n.nspname) as inspname, "
-		"          format('%I', i.relname) as irelname,"
-		"          r.oid, "
-		"          format('%I', rn.nspname) as rnspname, "
-		"          format('%I', r.relname) as rrelname, "
-		"          indisprimary,"
-		"          indisunique,"
-		"          (select string_agg(format('%I', attname), ',')"
-		"             from pg_attribute"
-		"            where attrelid = r.oid"
-		"              and array[attnum::integer] <@ indkey::integer[]"
-		"          ) as cols,"
-		"          pg_get_indexdef(indexrelid),"
-		"          c.oid,"
-		"          c.condeferrable,"
-		"          c.condeferred,"
-		"          case when conname is not null "
-		"               then format('%I', c.conname) "
-		"           end as conname,"
-		"          pg_get_constraintdef(c.oid),"
-		"          format('%s %s %s', "
-		"                 regexp_replace(n.nspname, '[\\n\\r]', ' '), "
-		"                 regexp_replace(i.relname, '[\\n\\r]', ' '), "
-		"                 regexp_replace(auth.rolname, '[\\n\\r]', ' '))"
-		"     from pg_index x"
-		"          join pg_class i ON i.oid = x.indexrelid"
-		"          join pg_class r ON r.oid = x.indrelid"
-		"          join pg_namespace n ON n.oid = i.relnamespace"
-		"          join pg_namespace rn ON rn.oid = r.relnamespace"
-		"          join pg_roles auth ON auth.oid = i.relowner"
-		"          left join pg_depend d "
-		"                 on d.classid = 'pg_class'::regclass"
-		"                and d.objid = i.oid"
-		"                and d.refclassid = 'pg_constraint'::regclass"
-		"                and d.deptype = 'i'"
-		"          left join pg_constraint c ON c.oid = d.refobjid"
-		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') "
-		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
-		"      and n.nspname !~ 'pgcopydb' "
-		"      and rn.nspname = $1 and r.relname = $2"
-		" order by n.nspname, r.relname, i.relname";
-
-	int paramCount = 2;
-	Oid paramTypes[2] = { TEXTOID, TEXTOID };
-	const char *paramValues[2] = { schemaName, tableName };
-
-	log_trace("schema_list_table_indexes");
-
-	if (!pgsql_execute_with_params(pgsql, sql,
-								   paramCount, paramTypes, paramValues,
-								   &context, &getIndexArray))
-	{
-		log_error("Failed to list all indexes for table \"%s\".\"%s\"",
-				  schemaName, tableName);
-		return false;
-	}
-
-	if (!context.parsedOk)
-	{
-		log_error("Failed to list all indexes for table \"%s\".\"%s\"",
-				  schemaName, tableName);
 		return false;
 	}
 

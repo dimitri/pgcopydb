@@ -82,8 +82,6 @@ static void prepareToTerminate(LogicalStreamClient *client,
 							   bool keepalive,
 							   XLogRecPtr lsn);
 
-static void parseReplicationSlot(void *ctx, PGresult *result);
-
 
 /*
  * parseSingleValueResult is a ParsePostgresResultCB callback that reads the
@@ -879,28 +877,6 @@ pgAutoCtlDefaultNoticeProcessor(void *arg, const char *message)
 
 
 /*
- * pgAutoCtlDebugNoticeProcessor is our PostgreSQL libpq Notice Processing to
- * use when wanting to send NOTICE, WARNING, HINT as log_sql messages.
- */
-void
-pgAutoCtlDebugNoticeProcessor(void *arg, const char *message)
-{
-	LinesBuffer lbuf = { 0 };
-
-	if (!splitLines(&lbuf, (char *) message))
-	{
-		/* errors have already been logged */
-		return;
-	}
-
-	for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
-	{
-		log_sql("%s", lbuf.lines[lineNumber]);
-	}
-}
-
-
-/*
  * pgsql_begin is responsible for opening a mutli statement connection and
  * opening a transaction block by issuing a 'BEGIN' query.
  */
@@ -1000,103 +976,6 @@ pgsql_commit(PGSQL *pgsql)
 	}
 
 	return result;
-}
-
-
-/*
- * pgsql_savepoint issues a SAVEPOINT command in the previously established
- * connection.
- */
-bool
-pgsql_savepoint(PGSQL *pgsql, char *name)
-{
-	if (pgsql->connectionStatementType != PGSQL_CONNECTION_MULTI_STATEMENT ||
-		pgsql->connection == NULL)
-	{
-		log_error("BUG: call to pgsql_savepoint() without holding an open "
-				  "multi statement connection");
-		if (pgsql->connection)
-		{
-			pgsql_finish(pgsql);
-		}
-		return false;
-	}
-
-	char sql[BUFSIZE] = { 0 };
-
-	sformat(sql, sizeof(sql), "savepoint %s", name);
-
-	if (!pgsql_execute(pgsql, sql))
-	{
-		pgsql_finish(pgsql);
-		return false;
-	}
-
-	return true;
-}
-
-
-/*
- * pgsql_rollback_to_savepoint issues the command ROLLBACK TO SAVEPOINT.
- */
-bool
-pgsql_rollback_to_savepoint(PGSQL *pgsql, char *name)
-{
-	if (pgsql->connectionStatementType != PGSQL_CONNECTION_MULTI_STATEMENT ||
-		pgsql->connection == NULL)
-	{
-		log_error("BUG: call to pgsql_rollback_to_savepoint() "
-				  "without holding an open multi statement connection");
-		if (pgsql->connection)
-		{
-			pgsql_finish(pgsql);
-		}
-		return false;
-	}
-
-	char sql[BUFSIZE] = { 0 };
-
-	sformat(sql, sizeof(sql), "rollback to savepoint %s", name);
-
-	if (!pgsql_execute(pgsql, sql))
-	{
-		pgsql_finish(pgsql);
-		return false;
-	}
-
-	return true;
-}
-
-
-/*
- * pgsql_release_savepoint issues the command RELEASE SAVEPOINT.
- */
-bool
-pgsql_release_savepoint(PGSQL *pgsql, char *name)
-{
-	if (pgsql->connectionStatementType != PGSQL_CONNECTION_MULTI_STATEMENT ||
-		pgsql->connection == NULL)
-	{
-		log_error("BUG: call to pgsql_release_savepoint() without holding an open "
-				  "multi statement connection");
-		if (pgsql->connection)
-		{
-			pgsql_finish(pgsql);
-		}
-		return false;
-	}
-
-	char sql[BUFSIZE] = { 0 };
-
-	sformat(sql, sizeof(sql), "release savepoint %s", name);
-
-	if (!pgsql_execute(pgsql, sql))
-	{
-		pgsql_finish(pgsql);
-		return false;
-	}
-
-	return true;
 }
 
 
@@ -4979,21 +4858,6 @@ pgsql_replication_origin_progress(PGSQL *pgsql,
 
 
 /*
- * pgsql_replication_slot_maintain advances the current confirmed position of
- * the given replication slot up to the given LSN position, create the
- * replication slot if it does not exist yet, and remove the slots that exist
- * in Postgres but are ommited in the given array of slots.
- */
-typedef struct ReplicationSlotContext
-{
-	char sqlstate[SQLSTATE_LENGTH];
-	char slotName[BUFSIZE];
-	char lsn[PG_LSN_MAXLENGTH];
-	bool parsedOK;
-} ReplicationSlotContext;
-
-
-/*
  * pgsql_replication_slot_exists checks that a replication slot with the given
  * slotName exists on the Postgres server.
  */
@@ -5068,63 +4932,6 @@ pgsql_replication_slot_exists(PGSQL *pgsql, const char *slotName,
 
 
 /*
- * pgsql_create_replication_slot tries to create a replication slot on the
- * database identified by a connection string. It's implemented as CREATE IF
- * NOT EXISTS so that it's idempotent and can be retried easily.
- */
-bool
-pgsql_create_replication_slot(PGSQL *pgsql,
-							  const char *slotName,
-							  StreamOutputPlugin plugin,
-							  uint64_t *lsn)
-{
-	ReplicationSlotContext context = { 0 };
-
-	char *sql =
-		pgsql->pgversion_num < 100000
-		?
-		"SELECT slot_name, xlog_position "
-		"  FROM pg_create_logical_replication_slot($1, $2)"
-		:
-		"SELECT slot_name, lsn "
-		"  FROM pg_create_logical_replication_slot($1, $2)";
-
-	char *pluginStr = OutputPluginToString(plugin);
-
-	int paramCount = 2;
-	const Oid paramTypes[2] = { TEXTOID, TEXTOID };
-	const char *paramValues[2] = { slotName, pluginStr };
-
-	log_sql("Creating logical replication slot \"%s\" with plugin \"%s\"",
-			slotName, pluginStr);
-
-	if (!pgsql_execute_with_params(pgsql, sql,
-								   paramCount, paramTypes, paramValues,
-								   &context, parseReplicationSlot))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!context.parsedOK)
-	{
-		log_error("Failed to create the logical replication slot \"%s\" with "
-				  "plugin \"%s\"",
-				  slotName, pluginStr);
-		return false;
-	}
-
-	if (!parseLSN(context.lsn, lsn))
-	{
-		log_error("Failed to parse LSN \"%s\"", context.lsn);
-		return false;
-	}
-
-	return true;
-}
-
-
-/*
  * pgsql_drop_replication_slot drops a given replication slot.
  */
 bool
@@ -5142,42 +4949,6 @@ pgsql_drop_replication_slot(PGSQL *pgsql, const char *slotName)
 	return pgsql_execute_with_params(pgsql, sql,
 									 1, paramTypes, paramValues,
 									 NULL, NULL);
-}
-
-
-/*
- * parseReplicationSlotMaintain parses the result from a PostgreSQL query
- * fetching two columns from pg_stat_replication: sync_state and currentLSN.
- */
-static void
-parseReplicationSlot(void *ctx, PGresult *result)
-{
-	ReplicationSlotContext *context = (ReplicationSlotContext *) ctx;
-
-	if (PQnfields(result) != 2)
-	{
-		log_error("Query returned %d columns, expected 2", PQnfields(result));
-		context->parsedOK = false;
-		return;
-	}
-
-	if (PQntuples(result) != 1)
-	{
-		log_error("Query returned %d rows, expected 1", PQntuples(result));
-		context->parsedOK = false;
-		return;
-	}
-
-	char *value = PQgetvalue(result, 0, 0);
-	strlcpy(context->slotName, value, sizeof(context->slotName));
-
-	if (!PQgetisnull(result, 0, 1))
-	{
-		value = PQgetvalue(result, 0, 1);
-		strlcpy(context->lsn, value, sizeof(context->lsn));
-	}
-
-	context->parsedOK = true;
 }
 
 
@@ -5350,58 +5121,6 @@ pgsql_current_wal_flush_lsn(PGSQL *pgsql, uint64_t *lsn)
 		{
 			log_error("Failed to parse LSN \"%s\" returned from "
 					  "pg_current_wal_flush_lsn()",
-					  context.strVal);
-
-			return false;
-		}
-	}
-
-	return true;
-}
-
-
-/*
- * pgsql_current_wal_insert_lsn calls pg_current_wal_insert_lsn().
- */
-bool
-pgsql_current_wal_insert_lsn(PGSQL *pgsql, uint64_t *lsn)
-{
-	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_STRING, false };
-
-	const char *sql = "select pg_current_wal_insert_lsn()";
-
-	/*
-	 * Postgres function pg_current_wal_insert_lsn() has had different names.
-	 */
-	if (pgsql->pgversion_num < 100000)
-	{
-		/* Postgres 9.5 and 9.6 had that function name */
-		sql = "select pg_current_xlog_insert_location()";
-	}
-	else if (pgsql->pgversion_num < 110000)
-	{
-		/* Postgres 10 had that function name (now returned pg_lsn) */
-		sql = "select pg_current_wal_insert_lsn()";
-	}
-
-	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
-								   &context, &parseSingleValueResult))
-	{
-		log_error("Failed to call pg_current_wal_insert_lsn()");
-		return false;
-	}
-
-	if (context.isNull)
-	{
-		/* when we get a NULL, return 0/0 instead */
-		*lsn = InvalidXLogRecPtr;
-	}
-	else
-	{
-		if (!parseLSN(context.strVal, lsn))
-		{
-			log_error("Failed to parse LSN \"%s\" returned from "
-					  "pg_current_wal_insert_lsn()",
 					  context.strVal);
 
 			return false;

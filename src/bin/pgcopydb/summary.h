@@ -239,13 +239,6 @@ bool prepare_index_summary_as_json(CopyIndexSummary *summary,
 void print_summary_as_json(Summary *summary, const char *filename);
 
 /*
- * Large Object top-level like summary
- */
-bool write_blobs_summary(CopyBlobsSummary *summary, char *filename);
-bool read_blobs_summary(CopyBlobsSummary *summary, char *filename);
-
-
-/*
  * Human Readable Summary Table
  */
 void print_toplevel_summary(Summary *summary);

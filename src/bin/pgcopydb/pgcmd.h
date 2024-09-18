@@ -303,8 +303,6 @@ bool archive_iter_toc_init(ArchiveTOCIterator *iter);
 bool archive_iter_toc_next(ArchiveTOCIterator *iter);
 bool archive_iter_toc_finish(ArchiveTOCIterator *iter);
 
-bool parse_archive_list(const char *filename, ArchiveContentArray *archive);
-
 bool parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item);
 
 bool parse_archive_list_entry(ArchiveContentItem *item, const char *line);

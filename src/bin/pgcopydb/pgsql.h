@@ -264,9 +264,6 @@ void fetchedRows(void *ctx, PGresult *result);
 bool pgsql_begin(PGSQL *pgsql);
 bool pgsql_commit(PGSQL *pgsql);
 bool pgsql_rollback(PGSQL *pgsql);
-bool pgsql_savepoint(PGSQL *pgsql, char *name);
-bool pgsql_release_savepoint(PGSQL *pgsql, char *name);
-bool pgsql_rollback_to_savepoint(PGSQL *pgsql, char *name);
 
 bool pgsql_server_version(PGSQL *pgsql);
 
@@ -317,8 +314,6 @@ bool pgsql_prepare(PGSQL *pgsql, const char *name, const char *sql,
 bool pgsql_execute_prepared(PGSQL *pgsql, const char *name,
 							int paramCount, const char **paramValues,
 							void *context, ParsePostgresResultCB *parseFun);
-
-void pgAutoCtlDebugNoticeProcessor(void *arg, const char *message);
 
 bool validate_connection_string(const char *connectionString);
 
@@ -553,11 +548,6 @@ bool pgsql_replication_slot_exists(PGSQL *pgsql,
 								   bool *slotExists,
 								   uint64_t *lsn);
 
-bool pgsql_create_replication_slot(PGSQL *pgsql,
-								   const char *slotName,
-								   StreamOutputPlugin plugin,
-								   uint64_t *lsn);
-
 bool pgsql_drop_replication_slot(PGSQL *pgsql, const char *slotName);
 
 bool pgsql_role_exists(PGSQL *pgsql, const char *roleName, bool *exists);
@@ -571,7 +561,6 @@ bool pgsql_table_exists(PGSQL *pgsql,
 						bool *exists);
 
 bool pgsql_current_wal_flush_lsn(PGSQL *pgsql, uint64_t *lsn);
-bool pgsql_current_wal_insert_lsn(PGSQL *pgsql, uint64_t *lsn);
 
 char * pgsql_escape_identifier(PGSQL *pgsql, char *src);
 #endif /* PGSQL_H */

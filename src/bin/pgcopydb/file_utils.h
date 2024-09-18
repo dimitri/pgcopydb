@@ -45,15 +45,12 @@ typedef struct ReadFromStreamContext
 
 
 bool file_exists(const char *filename);
-bool file_is_empty(const char *filename);
 bool directory_exists(const char *path);
 bool ensure_empty_dir(const char *dirname, int mode);
 FILE * fopen_with_umask(const char *filePath, const char *modes, int flags, mode_t umask);
 FILE * fopen_read_only(const char *filePath);
 bool write_file(char *data, long fileSize, const char *filePath);
-bool append_to_file(char *data, long fileSize, const char *filePath);
 bool read_file(const char *filePath, char **contents, long *fileSize);
-bool read_file_if_exists(const char *filePath, char **contents, long *fileSize);
 
 /* iterate over a file one line at a time */
 typedef bool (FileIterLinesFun)(void *context, char *line);
@@ -74,7 +71,6 @@ bool file_iter_lines_init(FileLinesIterator *iter);
 bool file_iter_lines_next(FileLinesIterator *iter);
 bool file_iter_lines_finish(FileLinesIterator *iter);
 
-bool move_file(char *sourcePath, char *destinationPath);
 bool duplicate_file(char *sourcePath, char *destinationPath);
 bool create_symbolic_link(char *sourcePath, char *targetPath);
 
