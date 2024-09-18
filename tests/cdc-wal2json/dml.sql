@@ -89,3 +89,19 @@ commit;
 begin;
 delete from generated_column_test where id = 2;
 commit;
+
+--
+-- Test update is not failing when value is not changed.
+--
+begin;
+insert into single_column_table(id) values (1), (2);
+insert into multi_column_table(id, name, email) values
+(1, 'Alice', 'alice@hello.com'),
+(2, 'Bob', 'bob@hello.com')
+;
+commit;
+
+begin;
+update single_column_table set id = id;
+update multi_column_table set id = id, name = name, email = email;
+commit;

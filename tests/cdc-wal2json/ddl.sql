@@ -33,3 +33,21 @@ create table if not exists generated_column_test
     """hel""lo""" text generated always as ('identifier 4' || name) stored
 );
 commit;
+
+begin;
+-- table with single column to test update is not failing when value is not changed
+create table if not exists single_column_table
+(
+   id bigint
+);
+alter table single_column_table replica identity full;
+
+-- table with 3 columns to test update is not failing when value is not changed
+create table if not exists multi_column_table
+(
+   id bigint,
+   name text,
+   email text
+);
+alter table multi_column_table replica identity full;
+commit;
