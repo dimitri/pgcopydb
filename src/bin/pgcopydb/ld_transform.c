@@ -2227,11 +2227,14 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 						  update->table.relname);
 		int pos = 0;
 
+		int skipColumnCount = 0;
+
 		for (int r = 0; r < new->values.count; r++)
 		{
 			LogicalMessageValues *values = &(new->values.array[r]);
 
 			bool first = true;
+
 
 			/* now loop over column values for this VALUES row */
 			for (int v = 0; v < values->cols; v++)
@@ -2273,7 +2276,11 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 					}
 				}
 
-				if (!skip)
+				if (skip)
+				{
+					++skipColumnCount;
+				}
+				else
 				{
 					if (attr->isgenerated)
 					{
@@ -2358,6 +2365,31 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 			log_error("Failed to transform INSERT statement: Out of Memory");
 			destroyPQExpBuffer(buf);
 			return false;
+		}
+
+		/*
+		 * When all column values in the SET clause are equal to those in the
+		 * WHERE clause, we remove all columns from the SET clause. This results
+		 * in an invalid UPDATE statement like the one shown below:
+		 *
+		 * UPDATE table SET WHERE "id" = 1;
+		 *
+		 * Usually, the above could happen when REPLICA IDENTITY is set to FULL,
+		 * and the UPDATE statement executed with the same values as the old ones.
+		 * For e.g.
+		 * UPDATE table SET "id" = 1 WHERE "id" = 1;
+		 *
+		 * Skip the UPDATE statement in such cases.
+		 */
+		bool skipUpdate = (skipColumnCount == new->attributes.count);
+
+		if (skipUpdate)
+		{
+			log_warn("Skipping UPDATE statement as all columns are "
+					 "the same as the old");
+
+			destroyPQExpBuffer(buf);
+			return true;
 		}
 
 		uint32_t hash = hashlittle(buf->data, buf->len, 5381);
