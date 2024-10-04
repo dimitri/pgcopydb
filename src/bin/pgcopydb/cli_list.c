@@ -263,8 +263,8 @@ cli_list_db_getopts(int argc, char **argv)
 		{ "list-skipped", no_argument, NULL, 'x' },
 		{ "without-pkey", no_argument, NULL, 'P' },
 		{ "split-tables-larger-than", required_argument, NULL, 'L' },
-		{ "split-max-parts", required_argument, NULL, 'u' },
 		{ "split-at", required_argument, NULL, 'L' },
+		{ "split-max-parts", required_argument, NULL, 'u' },
 		{ "estimate-table-sizes", no_argument, NULL, 'm' },
 		{ "skip-split-by-ctid", no_argument, NULL, 'k' },
 		{ "force", no_argument, NULL, 'f' },
@@ -294,7 +294,7 @@ cli_list_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	const char *optstring = "S:D:s:t:F:xPL:u:k:mfyarJRIN:Vdzvqh";
+	const char *optstring = construct_optstring(long_options);
 
 	while ((c = getopt_long(argc, argv, optstring,
 							long_options, &option_index)) != -1)
