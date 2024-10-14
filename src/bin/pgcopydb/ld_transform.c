@@ -2398,7 +2398,7 @@ stream_write_update(ReplayDBStmt *replayStmt, LogicalMessageUpdate *update)
 							return false;
 						}
 					}
-
+					
 					if (first)
 					{
 						first = false;
