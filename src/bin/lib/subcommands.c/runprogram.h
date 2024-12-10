@@ -565,7 +565,7 @@ read_from_pipes(Program *prog, pid_t childPid, int *outpipe, int *errpipe)
 					prog->error = errno;
 				}
 			}
-			doneReading = (bytes_out < BUFSIZE && bytes_err < BUFSIZE);
+			doneReading = (bytes_out == 0 && bytes_err == 0);
 		}
 	}
 
