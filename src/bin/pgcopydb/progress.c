@@ -700,7 +700,7 @@ copydb_update_progress(CopyDataSpec *copySpecs, CopyProgress *progress)
 	}
 
 	progress->indexSummaryArray.count = 0;
-	progress->indexSummaryArray.capacity = 0;
+	progress->indexSummaryArray.capacity = ARRAY_CAPACITY_INCREMENT;
 	progress->indexSummaryArray.array =
 		(CopyIndexSummary *) calloc(progress->indexSummaryArray.capacity,
 									sizeof(CopyIndexSummary));
