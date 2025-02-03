@@ -756,7 +756,7 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 					  "see above for details",
 					  sourceDB->dbfile);
 
-			return false;
+			return true;
 		}
 	}
 
@@ -877,6 +877,11 @@ catalog_create_semaphore(DatabaseCatalog *catalog)
 bool
 catalog_attach(DatabaseCatalog *a, DatabaseCatalog *b, const char *name)
 {
+	char *errMsg = "database %s is already in use";
+	char errMsgBuf[BUFSIZE] = { 0 };
+
+	sformat(errMsgBuf, sizeof(errMsgBuf), errMsg, name);
+
 	char *sqlTmpl = "attach '%s' as %s";
 	char buf[BUFSIZE + MAXPGPATH] = { 0 };
 
@@ -888,6 +893,11 @@ catalog_attach(DatabaseCatalog *a, DatabaseCatalog *b, const char *name)
 	{
 		log_error("Failed to attach '%s' as %s", b->dbfile, name);
 		log_error("%s", sqlite3_errmsg(a->db));
+		if streq(sqlite3_errmsg(a->db), errMsgBuf)
+		{
+			log_warn("Ignoring already attached error");
+			return true;
+		}
 		return false;
 	}
 
