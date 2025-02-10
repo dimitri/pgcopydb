@@ -493,7 +493,7 @@ copydb_copy_worker_queue_tables(CopyDataSpec *specs)
 	{
 		char *pguri = specs->connStrings.target_pguri;
 
-		if (!pgsql_init(&dst, pguri, PGSQL_CONN_TARGET))
+		if (!pgsql_init(&dst, pguri, PGSQL_CONN_TARGET, specs->connectionRetryTimeout))
 		{
 			/* errors have already been logged */
 			return false;
@@ -724,7 +724,8 @@ copydb_table_data_worker(CopyDataSpec *specs)
 	PGSQL dst = { 0 };
 
 	/* initialize our connection to the target database */
-	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET,
+					specs->connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		return false;

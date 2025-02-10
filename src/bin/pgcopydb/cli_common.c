@@ -148,26 +148,6 @@ cli_pprint_json(JSON_Value *js)
 
 
 /*
- * cli_copydb_getenv_source_pguri reads the PGCOPYDB_SOURCE_PGURI environment
- * variable and duplicates its value at the given place.
- */
-bool
-cli_copydb_getenv_source_pguri(char **pguri)
-{
-	if (env_exists(PGCOPYDB_SOURCE_PGURI))
-	{
-		if (!get_env_dup(PGCOPYDB_SOURCE_PGURI, pguri))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-	}
-
-	return true;
-}
-
-
-/*
  * cli_copydb_getenv_split reads the PGCOPYDB_SPLIT_TABLES_LARGER_THAN
  * environment variable and fills in the given SplitTableLargerThan instance.
  */
@@ -204,6 +184,67 @@ cli_copydb_getenv_split(SplitTableLargerThan *splitTablesLargerThan)
 
 
 /*
+ * cli_copydb_getenv_file reads the .env file and fills-in the command line options
+ */
+bool
+cli_copydb_getenv_file(CopyDBOptions *options)
+{
+	int errors = 0;
+
+	EnvParser parsers[] = {
+		{ PGCOPYDB_SOURCE_PGURI, ENV_TYPE_STR_PTR,
+		  &(options->connStrings.source_pguri) },
+		{ PGCOPYDB_TARGET_PGURI, ENV_TYPE_STR_PTR,
+		  &(options->connStrings.target_pguri) },
+		{ PGCOPYDB_TABLE_JOBS, ENV_TYPE_INT,
+		  &(options->tableJobs), 0, true, 1, true, 128 },
+		{ PGCOPYDB_INDEX_JOBS, ENV_TYPE_INT,
+		  &(options->indexJobs), 0, true, 1, true, 128 },
+		{ PGCOPYDB_RESTORE_JOBS, ENV_TYPE_INT,
+		  &(options->restoreOptions.jobs), 0, true, 1, true, 128 },
+		{ PGCOPYDB_LARGE_OBJECTS_JOBS, ENV_TYPE_INT,
+		  &(options->lObjectJobs), 0, true, 1, true, 128 },
+		{ PGCOPYDB_SPLIT_MAX_PARTS, ENV_TYPE_INT,
+		  &(options->splitMaxParts), 0, true, 1 },
+		{ PGCOPYDB_ESTIMATE_TABLE_SIZES, ENV_TYPE_BOOL,
+		  &(options->estimateTableSizes) },
+		{ PGCOPYDB_SNAPSHOT, ENV_TYPE_STRING,
+		  &(options->snapshot), sizeof(options->snapshot) },
+		{ PGCOPYDB_WAL2JSON_NUMERIC_AS_STRING, ENV_TYPE_BOOL,
+		  &(options->slot.wal2jsonNumericAsString) },
+		{ PGCOPYDB_DROP_IF_EXISTS, ENV_TYPE_BOOL,
+		  &(options->restoreOptions.dropIfExists) },
+		{ PGCOPYDB_FAIL_FAST, ENV_TYPE_BOOL,
+		  &(options->failFast) },
+		{ PGCOPYDB_SKIP_VACUUM, ENV_TYPE_BOOL,
+		  &(options->skipVacuum) },
+		{ PGCOPYDB_SKIP_ANALYZE, ENV_TYPE_BOOL,
+		  &(options->skipAnalyze) },
+		{ PGCOPYDB_SKIP_DB_PROPERTIES, ENV_TYPE_BOOL,
+		  &(options->skipDBproperties) },
+		{ PGCOPYDB_SKIP_CTID_SPLIT, ENV_TYPE_BOOL,
+		  &(options->skipCtidSplit) },
+		{ PGCOPYDB_SKIP_TABLESPACES, ENV_TYPE_BOOL,
+		  &(options->restoreOptions.noTableSpaces) },
+		{ PGCOPYDB_USE_COPY_BINARY, ENV_TYPE_BOOL,
+		  &(options->useCopyBinary) }
+	};
+
+	int parserCount = sizeof(parsers) / sizeof(parsers[0]);
+
+	EnvParserArray parserArray = { .count = parserCount, .array = parsers };
+
+	if (!get_env_using_parsers_from_file(&parserArray))
+	{
+		/* errors have already been logged */
+		++errors;
+	}
+
+	return errors == 0;
+}
+
+
+/*
  * cli_copydb_getenv reads from the environment variables and fills-in the
  * command line options.
  */
@@ -220,6 +261,10 @@ cli_copydb_getenv(CopyDBOptions *options)
 	options->splitTablesLargerThan.bytes = DEFAULT_SPLIT_TABLES_LARGER_THAN;
 
 	EnvParser parsers[] = {
+		{ PGCOPYDB_SOURCE_PGURI, ENV_TYPE_STR_PTR,
+		  &(options->connStrings.source_pguri) },
+		{ PGCOPYDB_TARGET_PGURI, ENV_TYPE_STR_PTR,
+		  &(options->connStrings.target_pguri) },
 		{ PGCOPYDB_TABLE_JOBS, ENV_TYPE_INT,
 		  &(options->tableJobs), 0, true, 1, true, 128 },
 		{ PGCOPYDB_INDEX_JOBS, ENV_TYPE_INT,
@@ -262,22 +307,6 @@ cli_copydb_getenv(CopyDBOptions *options)
 	{
 		/* errors have already been logged */
 		++errors;
-	}
-
-	if (!cli_copydb_getenv_source_pguri(&(options->connStrings.source_pguri)))
-	{
-		/* errors have already been logged */
-		++errors;
-	}
-
-	if (env_exists(PGCOPYDB_TARGET_PGURI))
-	{
-		if (!get_env_dup(PGCOPYDB_TARGET_PGURI,
-						 &(options->connStrings.target_pguri)))
-		{
-			/* errors have already been logged */
-			++errors;
-		}
 	}
 
 	if (!cli_copydb_getenv_split(&(options->splitTablesLargerThan)))
@@ -634,6 +663,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "origin", required_argument, NULL, 'o' },
 		{ "create-slot", no_argument, NULL, 't' },
 		{ "endpos", required_argument, NULL, 'E' },
+		{ "connection-retry-timeout", required_argument, NULL, 'W' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "notice", no_argument, NULL, 'v' },
@@ -653,8 +683,15 @@ cli_copy_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
+	/* read values from .env file */
+	if (!cli_copydb_getenv_file(&options))
+	{
+		log_fatal("Failed to read default values from .env file");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
 	const char *optstring =
-		"S:T:D:J:I:b:L:u:mcAPOXj:xBeMlUagkynF:F:Q:irRCN:fp:ws:o:tE:Vvdzqh";
+		"S:T:D:J:I:b:L:u:mcAPOXj:xBeMlUagkynF:F:Q:irRCN:fp:ws:o:tE:VvdzqhW:"; /* YZ left, can use any char afterwards */
 
 	while ((c = getopt_long(argc, argv,
 							optstring, long_options, &option_index)) != -1)
@@ -1091,6 +1128,18 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				options.useCopyBinary = true;
 				log_trace("--use-copy-binary");
+				break;
+			}
+
+			case 'W':
+			{
+				if (!stringToInt(optarg, &options.connectionRetryTimeout) ||
+					options.connectionRetryTimeout < 1)
+				{
+					log_fatal("Failed to parse --connection-retry-timeout: \"%s\"",
+							  optarg);
+					++errors;
+				}
 				break;
 			}
 

@@ -59,7 +59,8 @@ static CommandLine stream_setup_command =
 		"  --plugin                      Output plugin to use (test_decoding, wal2json)\n"
 		"  --wal2json-numeric-as-string  Print numeric data type as string when using wal2json output plugin\n"
 		"  --slot-name                   Stream changes recorded by this slot\n"
-		"  --origin                      Name of the Postgres replication origin\n",
+		"  --origin                      Name of the Postgres replication origin\n"
+		"  --connection-retry-timeout    Number of seconds to retry before connection times out\n",
 		cli_stream_getopts,
 		cli_stream_setup);
 
@@ -223,6 +224,7 @@ cli_stream_getopts(int argc, char **argv)
 		{ "trace", no_argument, NULL, 'z' },
 		{ "quiet", no_argument, NULL, 'q' },
 		{ "help", no_argument, NULL, 'h' },
+		{ "connection-retry-timeout", required_argument, NULL, 'W' },
 		{ NULL, 0, NULL, 0 }
 	};
 
@@ -235,7 +237,14 @@ cli_stream_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:D:p:ws:N:o:E:rRCOIVvdzqh",
+	/* read values from .env file */
+	if (!cli_copydb_getenv_file(&options))
+	{
+		log_fatal("Failed to read default values from .env file");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	while ((c = getopt_long(argc, argv, "S:T:D:p:ws:N:o:E:rRCOIVvdzqhW:",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -434,6 +443,18 @@ cli_stream_getopts(int argc, char **argv)
 				break;
 			}
 
+			case 'W':
+			{
+				if (!stringToInt(optarg, &options.connectionRetryTimeout) ||
+					options.connectionRetryTimeout < 1)
+				{
+					log_fatal("Failed to parse --connection-retry-timeout: \"%s\"",
+							  optarg);
+					++errors;
+				}
+				break;
+			}
+
 			case '?':
 			default:
 			{
@@ -584,7 +605,8 @@ cli_stream_setup(int argc, char **argv)
 						   &(copySpecs.catalogs.source),
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
-						   logSQL))
+						   logSQL,
+						   copySpecs.connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -711,7 +733,8 @@ cli_stream_catchup(int argc, char **argv)
 						   &(copySpecs.catalogs.source),
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
-						   logSQL))
+						   logSQL,
+						   copySpecs.connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -794,7 +817,8 @@ cli_stream_replay(int argc, char **argv)
 						   &(copySpecs.catalogs.source),
 						   true,  /* stdin */
 						   true, /* stdout */
-						   logSQL))
+						   logSQL,
+						   copySpecs.connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -919,7 +943,8 @@ cli_stream_transform(int argc, char **argv)
 						   &(copySpecs.catalogs.source),
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
-						   logSQL))
+						   logSQL,
+						   copySpecs.connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -1081,7 +1106,8 @@ cli_stream_apply(int argc, char **argv)
 							   &(copySpecs.catalogs.source),
 							   true, /* streamDBoptions.stdIn */
 							   false, /* streamDBoptions.stdOut */
-							   logSQL))
+							   logSQL,
+							   copySpecs.connectionRetryTimeout))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);
@@ -1192,7 +1218,8 @@ stream_start_in_mode(LogicalStreamMode mode)
 						   &(copySpecs.catalogs.source),
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
-						   logSQL))
+						   logSQL,
+						   copySpecs.connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

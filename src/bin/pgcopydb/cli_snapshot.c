@@ -34,7 +34,8 @@ CommandLine snapshot_command =
 		"  --follow                      Implement logical decoding to replay changes\n"
 		"  --plugin                      Output plugin to use (test_decoding, wal2json)\n"
 		"  --wal2json-numeric-as-string  Print numeric data type as string when using wal2json output plugin\n"
-		"  --slot-name                   Use this Postgres replication slot name\n",
+		"  --slot-name                   Use this Postgres replication slot name\n"
+		"  --connection-retry-timeout    Number of seconds to retry before connection times out\n",
 		cli_create_snapshot_getopts,
 		cli_create_snapshot);
 
@@ -61,6 +62,7 @@ cli_create_snapshot_getopts(int argc, char **argv)
 		{ "trace", no_argument, NULL, 'z' },
 		{ "quiet", no_argument, NULL, 'q' },
 		{ "help", no_argument, NULL, 'h' },
+		{ "connection-retry-timeout", required_argument, NULL, 'W' },
 		{ NULL, 0, NULL, 0 }
 	};
 
@@ -73,7 +75,14 @@ cli_create_snapshot_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:D:fp:ws:Vvdzqh",
+	/* read values from the env file */
+	if (!cli_copydb_getenv_file(&options))
+	{
+		log_fatal("Failed to read default values from the env file");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	while ((c = getopt_long(argc, argv, "S:D:fp:ws:VvdzqhW:",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -190,6 +199,18 @@ cli_create_snapshot_getopts(int argc, char **argv)
 			{
 				commandline_help(stderr);
 				exit(EXIT_CODE_QUIT);
+				break;
+			}
+
+			case 'W':
+			{
+				if (!stringToInt(optarg, &options.connectionRetryTimeout) ||
+					options.connectionRetryTimeout < 1)
+				{
+					log_fatal("Failed to parse --connection-retry-timeout: \"%s\"",
+							  optarg);
+					++errors;
+				}
 				break;
 			}
 
@@ -325,7 +346,8 @@ cli_create_snapshot(int argc, char **argv)
 							   &(copySpecs.catalogs.source),
 							   createSNoptions.stdIn,
 							   createSNoptions.stdOut,
-							   logSQL))
+							   logSQL,
+							   createSNoptions.connectionRetryTimeout))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);

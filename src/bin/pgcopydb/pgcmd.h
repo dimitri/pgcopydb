@@ -267,12 +267,14 @@ bool pg_dumpall_roles(PostgresPaths *pgPaths,
 
 bool pg_restore_roles(PostgresPaths *pgPaths,
 					  const char *pguri,
-					  const char *filename);
+					  const char *filename,
+					  int connectionRetryTimeout);
 
 bool pg_copy_roles(PostgresPaths *pgPaths,
 				   ConnStrings *connStrings,
 				   const char *filename,
-				   bool noRolesPasswords);
+				   bool noRolesPasswords,
+				   int connectionRetryTimeout);
 
 bool pg_restore_db(PostgresPaths *pgPaths,
 				   ConnStrings *connStrings,

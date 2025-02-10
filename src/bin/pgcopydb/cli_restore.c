@@ -36,19 +36,20 @@ static CommandLine restore_schema_command =
 		"schema",
 		"Restore a database schema from custom files to target database",
 		" --dir <dir> [ --source <URI> ] --target <URI> ",
-		"  --source             Postgres URI to the source database\n"
-		"  --target             Postgres URI to the target database\n"
-		"  --dir                Work directory to use\n"
-		"  --restore-jobs       Number of concurrent jobs for pg_restore\n"
-		"  --drop-if-exists     On the target database, clean-up from a previous run first\n"
-		"  --no-owner           Do not set ownership of objects to match the original database\n"
-		"  --no-acl             Prevent restoration of access privileges (grant/revoke commands).\n"
-		"  --no-comments        Do not output commands to restore comments\n"
-		"  --no-tablespaces     Do not output commands to select tablespaces\n"
-		"  --filters <filename> Use the filters defined in <filename>\n"
-		"  --restart            Allow restarting when temp files exist already\n"
-		"  --resume             Allow resuming operations after a failure\n"
-		"  --not-consistent     Allow taking a new snapshot on the source database\n",
+		"  --source                      Postgres URI to the source database\n"
+		"  --target                      Postgres URI to the target database\n"
+		"  --dir                         Work directory to use\n"
+		"  --restore-jobs                Number of concurrent jobs for pg_restore\n"
+		"  --drop-if-exists              On the target database, clean-up from a previous run first\n"
+		"  --no-owner                    Do not set ownership of objects to match the original database\n"
+		"  --no-acl                      Prevent restoration of access privileges (grant/revoke commands).\n"
+		"  --no-comments                 Do not output commands to restore comments\n"
+		"  --no-tablespaces              Do not output commands to select tablespaces\n"
+		"  --filters <filename>          Use the filters defined in <filename>\n"
+		"  --restart                     Allow restarting when temp files exist already\n"
+		"  --resume                      Allow resuming operations after a failure\n"
+		"  --not-consistent              Allow taking a new snapshot on the source database\n"
+		"  --connection-retry-timeout    Number of seconds to retry before connection times out\n",
 		cli_restore_schema_getopts,
 		cli_restore_schema);
 
@@ -177,6 +178,7 @@ cli_restore_schema_getopts(int argc, char **argv)
 		{ "trace", no_argument, NULL, 'z' },
 		{ "quiet", no_argument, NULL, 'q' },
 		{ "help", no_argument, NULL, 'h' },
+		{ "connection-retry-timeout", required_argument, NULL, 'W' },
 		{ NULL, 0, NULL, 0 }
 	};
 
@@ -189,7 +191,14 @@ cli_restore_schema_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:D:cOXj:xF:eErRCN:Vvdzqh",
+	/* read values from the .env file */
+	if (!cli_copydb_getenv_file(&options))
+	{
+		log_fatal("Failed to read default values from .env file");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	while ((c = getopt_long(argc, argv, "S:T:D:cOXj:xF:eErRCN:VvdzqhW:",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -390,6 +399,18 @@ cli_restore_schema_getopts(int argc, char **argv)
 				break;
 			}
 
+			case 'W':
+			{
+				if (!stringToInt(optarg, &options.connectionRetryTimeout) ||
+					options.connectionRetryTimeout < 1)
+				{
+					log_fatal("Failed to parse --connection-retry-timeout: \"%s\"",
+							  optarg);
+					++errors;
+				}
+				break;
+			}
+
 			case '?':
 			default:
 			{
@@ -541,7 +562,8 @@ cli_restore_roles(int argc, char **argv)
 
 	if (!pg_restore_roles(&(copySpecs.pgPaths),
 						  copySpecs.connStrings.target_pguri,
-						  copySpecs.dumpPaths.rolesFilename))
+						  copySpecs.dumpPaths.rolesFilename,
+						  copySpecs.connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);

@@ -10,6 +10,7 @@
 
 enum EnvType
 {
+	ENV_TYPE_STR_PTR,
 	ENV_TYPE_STRING,
 	ENV_TYPE_INT,
 	ENV_TYPE_BOOL
@@ -40,5 +41,6 @@ bool get_env_copy_with_fallback(const char *name, char *result, int maxLength,
 bool get_env_dup(const char *name, char **result);
 bool get_env_dup_with_fallback(const char *name, char **result, const char *fallback);
 bool get_env_using_parsers(EnvParserArray *parsers);
+bool get_env_using_parsers_from_file(EnvParserArray *parsers);
 
 #endif /* ENV_UTILS_H */

@@ -33,12 +33,13 @@ static CommandLine dump_schema_command =
 		"schema",
 		"Dump source database schema as custom files in work directory",
 		" --source <URI> ",
-		"  --source             Postgres URI to the source database\n"
-		"  --target             Directory where to save the dump files\n"
-		"  --dir                Work directory to use\n"
-		"  --skip-extensions    Skip restoring extensions\n" \
-		"  --filters <filename> Use the filters defined in <filename>\n"
-		"  --snapshot           Use snapshot obtained with pg_export_snapshot\n",
+		"  --source                      Postgres URI to the source database\n"
+		"  --target                      Directory where to save the dump files\n"
+		"  --dir                         Work directory to use\n"
+		"  --skip-extensions             Skip restoring extensions\n" \
+		"  --filters <filename>          Use the filters defined in <filename>\n"
+		"  --snapshot                    Use snapshot obtained with pg_export_snapshot\n"
+		"  --connection-retry-timeout    Number of seconds to retry before connection times out\n",
 		cli_dump_schema_getopts,
 		cli_dump_schema);
 
@@ -47,10 +48,11 @@ static CommandLine dump_roles_command =
 		"roles",
 		"Dump source database roles as custome file in work directory",
 		" --source <URI>",
-		"  --source            Postgres URI to the source database\n"
-		"  --target            Directory where to save the dump files\n"
-		"  --dir               Work directory to use\n"
-		"  --no-role-passwords Do not dump passwords for roles\n",
+		"  --source                      Postgres URI to the source database\n"
+		"  --target                      Directory where to save the dump files\n"
+		"  --dir                         Work directory to use\n"
+		"  --no-role-passwords           Do not dump passwords for roles\n"
+		"  --connection-retry-timeout    Number of seconds to retry before connection times out\n",
 		cli_dump_schema_getopts,
 		cli_dump_roles);
 
@@ -95,6 +97,7 @@ cli_dump_schema_getopts(int argc, char **argv)
 		{ "trace", no_argument, NULL, 'z' },
 		{ "quiet", no_argument, NULL, 'q' },
 		{ "help", no_argument, NULL, 'h' },
+		{ "connection-retry-timeout", required_argument, NULL, 'W' },
 		{ NULL, 0, NULL, 0 }
 	};
 
@@ -107,7 +110,14 @@ cli_dump_schema_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:D:PrReFCNVvdzqh",
+	/* read values from the .env file */
+	if (!cli_copydb_getenv_file(&options))
+	{
+		log_fatal("Failed to read default values from .env file");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	while ((c = getopt_long(argc, argv, "S:T:D:PrReFCNVvdzqhW:",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -257,6 +267,18 @@ cli_dump_schema_getopts(int argc, char **argv)
 			case 'q':
 			{
 				log_set_level(LOG_ERROR);
+				break;
+			}
+
+			case 'W':
+			{
+				if (!stringToInt(optarg, &options.connectionRetryTimeout) ||
+					options.connectionRetryTimeout < 1)
+				{
+					log_fatal("Failed to parse --connection-retry-timeout: \"%s\"",
+							  optarg);
+					++errors;
+				}
 				break;
 			}
 

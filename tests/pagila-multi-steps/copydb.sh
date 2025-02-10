@@ -13,10 +13,10 @@ set -e
 # make sure source and target databases are ready
 pgcopydb ping
 
-psql -o /tmp/d.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-schema.sql
-psql -o /tmp/s.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
+psql -o /tmp/d.out -d ${SCRIPT_PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-schema.sql
+psql -o /tmp/s.out -d ${SCRIPT_PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
 
-psql -d ${PGCOPYDB_TARGET_PGURI} <<EOF
+psql -d ${SCRIPT_PGCOPYDB_TARGET_PGURI} <<EOF
 alter database postgres connection limit 2;
 EOF
 
