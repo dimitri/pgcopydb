@@ -3135,7 +3135,7 @@ pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context)
 		char *sqlstate = PQresultErrorField(res, PG_DIAG_SQLSTATE);
 		if (sqlstate == NULL)
 		{
-			// PQresultErrorField returned NULL!
+			/* PQresultErrorField returned NULL! */
 			pgsql->sqlstate[0] = '\0';  // Set to an empty string to avoid segfault
 		}
 		else
