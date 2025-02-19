@@ -2274,9 +2274,11 @@ pgsql_execute_log_error(PGSQL *pgsql,
 
 	LinesBuffer lbuf = { 0 };
 
-	if (message != NULL){
-		// make sure message is writable by splitLines
+	if (message != NULL)
+	{
+		/* make sure message is writable by splitLines */
 		message = strdup(message);
+		/* Because we link with the libc Garbage Collector, we don't need to call free later */
 	}
 
 	if (!splitLines(&lbuf, message))
@@ -2292,7 +2294,6 @@ pgsql_execute_log_error(PGSQL *pgsql,
 				  PQbackendPID(pgsql->connection),
 				  lbuf.lines[lineNumber]);
 	}
-	free(message); // free copy of message we created above
 
 	if (pgsql->logSQL)
 	{
