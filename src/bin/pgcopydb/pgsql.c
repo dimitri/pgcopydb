@@ -3133,7 +3133,15 @@ pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context)
 	if (res != NULL)
 	{
 		char *sqlstate = PQresultErrorField(res, PG_DIAG_SQLSTATE);
-		strlcpy(pgsql->sqlstate, sqlstate, sizeof(pgsql->sqlstate));
+		if (sqlstate == NULL)
+		{
+			/* PQresultErrorField returned NULL! */
+			pgsql->sqlstate[0] = '\0';  /* Set to an empty string to avoid segfault */
+		}
+		else
+		{
+			strlcpy(pgsql->sqlstate, sqlstate, sizeof(pgsql->sqlstate));
+		}
 	}
 
 	char *endpoint =
