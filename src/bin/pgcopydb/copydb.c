@@ -37,13 +37,18 @@ GUC srcSettings[] = {
 	{ NULL, NULL },
 };
 
-
+/*
+ * "idle_in_transaction_session_timeout" only exists in newer Postgres versions.
+ * We are ok not to support older versions as a target, though, as most likely pgcopydb
+ * is used to upgrade to a newer version of Postgres anyhow.
+ */
 GUC dstSettings[] = {
 	COMMON_GUC_SETTINGS,
 	{ "maintenance_work_mem", "'1 GB'" },
 	{ "synchronous_commit", "'off'" },
 	{ "statement_timeout", "0" },
 	{ "lock_timeout", "0" },
+	{ "idle_in_transaction_session_timeout", "0" },
 	{ NULL, NULL },
 };
 
