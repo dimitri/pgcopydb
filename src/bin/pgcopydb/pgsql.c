@@ -1982,8 +1982,6 @@ pgsql_sync_pipeline(PGSQL *pgsql)
 			if (!is_response_ok(res))
 			{
 				(void) pgcopy_log_error(pgsql, res, "Failed to receive pipeline sync");
-				PQclear(res);
-
 				return false;
 			}
 
