@@ -36,8 +36,8 @@ pgcopydb clone --skip-extensions --no-owner
 kill -TERM ${COPROC_PID}
 wait ${COPROC_PID}
 
-s=/tmp/fares.out
-t=/tmp/fares.out
+s=/tmp/source_fares.out
+t=/tmp/target_fares.out
 psql -o $s -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/fares.sql
 psql -o $t -d ${PGCOPYDB_TARGET_PGURI} -f /usr/src/pgcopydb/fares.sql
 
