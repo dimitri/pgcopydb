@@ -118,6 +118,10 @@ The following options are available to ``pgcopydb dump schema`` subcommand:
 Environment
 -----------
 
+Environment variables that begin with ``PGCOPYDB_`` can be set directly in the
+environment or read from the ``.env`` file located in either 
+``${XDG_CONFIG_HOME}/pgcopydb/.env`` or ``${HOME}/.config/pgcopydb/.env``.
+
 PGCOPYDB_SOURCE_PGURI
 
   Connection string to the source Postgres instance. When ``--source`` is

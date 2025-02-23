@@ -1194,7 +1194,8 @@ setupConnection(PGSQL *pgsql, StreamApplyContext *context)
 {
 	if (!pgsql_init(pgsql,
 					context->connStrings->target_pguri,
-					PGSQL_CONN_TARGET))
+					PGSQL_CONN_TARGET,
+					context->connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		return false;

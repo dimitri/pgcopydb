@@ -32,6 +32,7 @@ static bool copydb_copy_database_properties_hook(void *ctx,
 
 static bool copydb_write_restore_list_hook(void *ctx,
 										   ArchiveContentItem *item);
+static void try_update_connection_string();
 
 
 /*
@@ -91,6 +92,45 @@ copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
 
 
 /*
+ * try_update_connection_string tries to connect to given connection,
+ * updating copyDataSpec if pgsql automatically changes its connection string.
+ */
+static void
+try_update_connection_string(CopyDataSpec *specs, ConnectionType connType)
+{
+	/* Check if we still can connect to given connection type */
+	PGSQL conn = { 0 };
+
+	char *old_pguri = connType == PGSQL_CONN_TARGET ? specs->connStrings.target_pguri :
+					  specs->connStrings.source_pguri;
+
+	pgsql_init(&conn, old_pguri, connType, specs->connectionRetryTimeout);
+
+	if (!pgsql_server_version(&conn))
+	{
+		log_error("Failed to connect to %s database, "
+				  "see above for details",
+				  connType == PGSQL_CONN_TARGET ? "target" : "source");
+	}
+
+	/* If url changed in pgsql, update specs */
+	if (strcmp(conn.connectionString, old_pguri) != 0)
+	{
+		if (connType == PGSQL_CONN_TARGET)
+		{
+			specs->connStrings.target_pguri = strdup(conn.connectionString);
+			specs->connStrings.safeTargetPGURI = conn.safeURI;
+		}
+		else
+		{
+			specs->connStrings.source_pguri = strdup(conn.connectionString);
+			specs->connStrings.safeSourcePGURI = conn.safeURI;
+		}
+	}
+}
+
+
+/*
  * copydb_dump_source_schema uses pg_dump -Fc --schema --schema-only
  * to dump the source database schema to file.
  */
@@ -119,15 +159,19 @@ copydb_dump_source_schema(CopyDataSpec *specs,
 				 "as \"%s\" already exists",
 				 specs->dumpPaths.dumpFilename);
 	}
-	else if (!pg_dump_db(&(specs->pgPaths),
-						 &(specs->connStrings),
-						 snapshot,
-						 &(specs->filters),
-						 &(specs->catalogs.filter),
-						 specs->dumpPaths.dumpFilename))
+	else
 	{
-		/* errors have already been logged */
-		return false;
+		try_update_connection_string(specs, PGSQL_CONN_SOURCE);
+		if (!pg_dump_db(&(specs->pgPaths),
+						&(specs->connStrings),
+						snapshot,
+						&(specs->filters),
+						&(specs->catalogs.filter),
+						specs->dumpPaths.dumpFilename))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	if (!summary_stop_timing(sourceDB, TIMING_SECTION_DUMP_SCHEMA))
@@ -205,6 +249,8 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 		}
 	}
 
+	try_update_connection_string(specs, PGSQL_CONN_TARGET);
+
 	specs->restoreOptions.section = PG_RESTORE_SECTION_PRE_DATA;
 	if (!pg_restore_db(&(specs->pgPaths),
 					   &(specs->connStrings),
@@ -256,7 +302,8 @@ copydb_copy_database_properties(CopyDataSpec *specs)
 
 	PGSQL dst = { 0 };
 
-	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET,
+					specs->connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		return false;
@@ -480,7 +527,8 @@ copydb_target_drop_tables(CopyDataSpec *specs)
 
 	PGSQL dst = { 0 };
 
-	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET,
+					specs->connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		destroyPQExpBuffer(query);
@@ -558,6 +606,8 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 				  "see above for details");
 		return false;
 	}
+
+	try_update_connection_string(specs, PGSQL_CONN_TARGET);
 
 	specs->restoreOptions.section = PG_RESTORE_SECTION_POST_DATA;
 	if (!pg_restore_db(&(specs->pgPaths),

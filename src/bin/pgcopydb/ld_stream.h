@@ -431,6 +431,7 @@ typedef struct StreamApplyContext
 	uint64_t sentinelSyncTime;
 
 	ConnStrings *connStrings;
+	int connectionRetryTimeout;
 	char origin[BUFSIZE];
 
 	IdentifySystem system;      /* information about source database */
@@ -495,6 +496,7 @@ struct StreamSpecs
 	CDCPaths paths;
 
 	ConnStrings *connStrings;
+	int connectionRetryTimeout;
 
 	uint32_t WalSegSz;
 	IdentifySystem system;
@@ -552,7 +554,8 @@ bool stream_init_specs(StreamSpecs *specs,
 					   DatabaseCatalog *sourceDB,
 					   bool stdIn,
 					   bool stdOut,
-					   bool logSQL);
+					   bool logSQL,
+					   int connectionRetryTimeout);
 
 bool stream_init_for_mode(StreamSpecs *specs, LogicalStreamMode mode);
 
@@ -614,7 +617,8 @@ bool stream_create_sentinel(CopyDataSpec *copySpecs,
 
 bool stream_fetch_current_lsn(uint64_t *lsn,
 							  const char *pguri,
-							  ConnectionType connectionType);
+							  ConnectionType connectionType,
+							  int connectionRetryTimeout);
 
 bool stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream);
 bool stream_cleanup_context(StreamSpecs *specs);

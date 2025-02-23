@@ -21,10 +21,11 @@ create role pagila NOSUPERUSER CREATEDB NOCREATEROLE LOGIN PASSWORD '0wn3d';
 create database pagila owner pagila connection limit 8;
 EOF
 
-pgcopydb copy roles
+pgcopydb copy roles --no-role-passwords
 
 psql -a ${PGCOPYDB_TARGET_PGURI} <<EOF
 create database pagila owner pagila connection limit 10;
+alter role pagila with password '0wn3d';
 EOF
 
 PAGILA_SOURCE_PGURI="postgres://pagila:0wn3d@source/pagila"

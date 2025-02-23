@@ -6,7 +6,6 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: h4ckm3
-      POSTGRES_HOST_AUTH_METHOD: trust
     command: >
       -c ssl=on
       -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
@@ -18,7 +17,6 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: h4ckm3
-      POSTGRES_HOST_AUTH_METHOD: trust
     command: >
       -c ssl=on
       -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem

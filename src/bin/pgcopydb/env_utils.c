@@ -8,12 +8,15 @@
 
 #include "defaults.h"
 #include "env_utils.h"
+#include "file_utils.h"
 #include "parsing_utils.h"
 #include "string_utils.h"
 #include "log.h"
 #include "pqexpbuffer.h"
 
-bool get_env_using_parser(EnvParser *parser);
+static bool get_env_using_parser(EnvParser *parser);
+static bool get_env_value_using_parser(char *envValue, EnvParser *parser);
+static bool process_env_line(void *ctx, char *line);
 
 /*
  * env_exists returns true if the passed environment variable exists in the
@@ -164,6 +167,88 @@ get_env_copy(const char *name, char *result, int maxLength)
 
 
 /*
+ * process_env_line parses and processes a single line from .env file
+ */
+static bool
+process_env_line(void *ctx, char *line)
+{
+	EnvParserArray *parsers = (EnvParserArray *) ctx;
+	if (line[0] == '#')
+	{
+		return true;
+	}
+
+	/* split the line into key and value */
+	const char *key = line;
+	char *value = strchr(line, '=');
+	if (value == NULL)
+	{
+		return true;
+	}
+	*value = 0;
+	value++;
+	if (*value == '\n')
+	{
+		return true;
+	}
+
+	/* remove the newline character from the value */
+	value[strcspn(value, "\n ")] = 0;
+
+	for (int i = 0; i < parsers->count; i++)
+	{
+		if (strcmp(key, parsers->array[i].envname) == 0)
+		{
+			return get_env_value_using_parser(value, &parsers->array[i]);
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * get_env_using_parsers_from_file reads the environment variables from
+ * XDG_CONFIG_HOME/pgcopydb/.env file and uses the parsers to parse them.
+ */
+bool
+get_env_using_parsers_from_file(EnvParserArray *parsers)
+{
+	char envFilePath[BUFSIZE];
+	if (env_exists("XDG_CONFIG_HOME"))
+	{
+		char *configHome;
+		get_env_dup("XDG_CONFIG_HOME", &configHome);
+		sformat(envFilePath, sizeof(envFilePath), "%s/pgcopydb/.env", configHome);
+	}
+	else if (env_exists("HOME"))
+	{
+		char *homeDir;
+		get_env_dup("HOME", &homeDir);
+		sformat(envFilePath, sizeof(envFilePath), "%s/.config/pgcopydb/.env", homeDir);
+	}
+	else
+	{
+		log_info("No config home path found");
+		return true;
+	}
+
+	if (!file_exists(envFilePath))
+	{
+		log_info("No %s file found", envFilePath);
+		return true;
+	}
+
+	if (!file_iter_lines(envFilePath, BUFSIZE, parsers, process_env_line))
+	{
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * get_env_using_parsers iterates over the parsers array and calls
  * get_env_using_parser for each parser.
  */
@@ -185,34 +270,21 @@ get_env_using_parsers(EnvParserArray *parsers)
 
 
 /*
- * get_env_using_parser checks if the environment variable exists and if it does
- * it parses it and stores it in the target. If the environment variable is not
- * set, the target is not modified. If the environment variable is set but the
- * parsing fails, an error is logged and the errors counter is incremented.
+ * get_env_value_using_parser processes a single string according to
+ * the given parser.
  */
-bool
-get_env_using_parser(EnvParser *parser)
+static bool
+get_env_value_using_parser(char *envValue, EnvParser *parser)
 {
-	if (!env_exists(parser->envname))
-	{
-		return true;
-	}
-
 	switch (parser->type)
 	{
 		case ENV_TYPE_INT:
 		{
-			char envValue[BUFSIZE] = { 0 };
-			if (!get_env_copy(parser->envname, envValue, sizeof(envValue)))
-			{
-				/* errors have already been logged */
-				return false;
-			}
-			else if (!stringToInt(envValue, (int *) parser->target) ||
-					 (parser->lowerBounded &&
-					  *((int *) parser->target) < parser->minValue) ||
-					 (parser->upperBounded &&
-					  *((int *) parser->target) > parser->maxValue))
+			if (!stringToInt(envValue, (int *) parser->target) ||
+				(parser->lowerBounded &&
+				 *((int *) parser->target) < parser->minValue) ||
+				(parser->upperBounded &&
+				 *((int *) parser->target) > parser->maxValue))
 			{
 				PQExpBuffer errorMessage = createPQExpBuffer();
 
@@ -251,18 +323,81 @@ get_env_using_parser(EnvParser *parser)
 
 		case ENV_TYPE_BOOL:
 		{
+			if (!parse_bool(envValue, (bool *) parser->target))
+			{
+				log_fatal("Failed to parse \"%s\": \"%s\", "
+						  "expected a boolean (on/off)",
+						  parser->envname, envValue);
+				return false;
+			}
+			break;
+		}
+
+		case ENV_TYPE_STRING:
+		{
+			size_t actualLength = strlcpy((char *) parser->target,
+										  envValue,
+										  parser->targetSize);
+
+			/* uses >= to make sure the nullbyte fits */
+			if (actualLength >= parser->targetSize)
+			{
+				log_fatal("Failed to copy value stored in %s environment setting, "
+						  "which is %zu long. pgcopydb only supports %d bytes for "
+						  "this environment setting",
+						  parser->envname,
+						  actualLength,
+						  parser->targetSize - 1);
+				return false;
+			}
+			break;
+		}
+
+		case ENV_TYPE_STR_PTR:
+		{
+			/* Duplicate the new value and assign it to the target */
+			*(char **) (parser->target) = strdup(envValue);
+			if (*(char **) (parser->target) == NULL)
+			{
+				log_fatal("Failed to allocate memory for environment setting %s",
+						  parser->envname);
+				return false;
+			}
+			break;
+		}
+	}
+	return true;
+}
+
+
+/*
+ * get_env_using_parser checks if the environment variable exists and if it does
+ * it parses it and stores it in the target. If the environment variable is not
+ * set, the target is not modified. If the environment variable is set but the
+ * parsing fails, an error is logged and the errors counter is incremented.
+ */
+static bool
+get_env_using_parser(EnvParser *parser)
+{
+	if (!env_exists(parser->envname))
+	{
+		return true;
+	}
+
+	switch (parser->type)
+	{
+		case ENV_TYPE_INT:
+		case ENV_TYPE_BOOL:
+		{
 			char envValue[BUFSIZE] = { 0 };
 			if (!get_env_copy(parser->envname, envValue, sizeof(envValue)))
 			{
 				/* errors have already been logged */
 				return false;
 			}
-			else if (!parser->target &&
-					 !parse_bool(envValue, (bool *) parser->target))
+			else if (!get_env_value_using_parser(envValue, parser))
 			{
-				log_fatal("Failed to parse \"%s\": \"%s\", "
-						  "expected a boolean (on/off)",
-						  parser->envname, envValue);
+				/* errors have already been logged */
 				return false;
 			}
 			break;
@@ -276,6 +411,21 @@ get_env_using_parser(EnvParser *parser)
 			{
 				/* errors have already been logged */
 				return false;
+			}
+			break;
+		}
+
+		case ENV_TYPE_STR_PTR:
+		{
+			char *envValue = NULL;
+			if (!get_env_dup(parser->envname, &envValue))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+			else
+			{
+				*(char **) parser->target = envValue;
 			}
 			break;
 		}

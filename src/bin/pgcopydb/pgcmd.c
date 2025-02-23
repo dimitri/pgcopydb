@@ -665,7 +665,8 @@ pg_dumpall_roles(PostgresPaths *pgPaths,
 bool
 pg_restore_roles(PostgresPaths *pgPaths,
 				 const char *pguri,
-				 const char *filename)
+				 const char *filename,
+				 int connectionRetryTimeout)
 {
 	char *content = NULL;
 	long size = 0L;
@@ -708,7 +709,7 @@ pg_restore_roles(PostgresPaths *pgPaths,
 
 	PGSQL pgsql = { 0 };
 
-	if (!pgsql_init(&pgsql, (char *) pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&pgsql, (char *) pguri, PGSQL_CONN_TARGET, connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		return false;
@@ -838,7 +839,8 @@ bool
 pg_copy_roles(PostgresPaths *pgPaths,
 			  ConnStrings *connStrings,
 			  const char *filename,
-			  bool noRolesPasswords)
+			  bool noRolesPasswords,
+			  int connectionRetryTimeout)
 {
 	if (!pg_dumpall_roles(pgPaths, connStrings, filename, noRolesPasswords))
 	{
@@ -846,7 +848,8 @@ pg_copy_roles(PostgresPaths *pgPaths,
 		return false;
 	}
 
-	if (!pg_restore_roles(pgPaths, connStrings->target_pguri, filename))
+	if (!pg_restore_roles(pgPaths, connStrings->target_pguri, filename,
+						  connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		return false;

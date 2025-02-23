@@ -6,7 +6,6 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: h4ckm3
-      POSTGRES_HOST_AUTH_METHOD: trust
   target:
     image: postgres:13-bullseye
     expose:
@@ -14,12 +13,12 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: h4ckm3
-      POSTGRES_HOST_AUTH_METHOD: trust
   test:
     build: .
     environment:
-      PGCOPYDB_SOURCE_PGURI: postgres://postgres:h4ckm3@source/postgres
-      PGCOPYDB_TARGET_PGURI: postgres://postgres:h4ckm3@target/postgres
+      XDG_CONFIG_HOME: /usr/src/pgcopydb/.config
+      SCRIPT_PGCOPYDB_SOURCE_PGURI: postgres://postgres:h4ckm3@source/postgres
+      SCRIPT_PGCOPYDB_TARGET_PGURI: postgres://postgres:h4ckm3@target/postgres
       PGCOPYDB_TABLE_JOBS: 2
       PGCOPYDB_INDEX_JOBS: 2
     depends_on:

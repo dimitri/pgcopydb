@@ -138,6 +138,7 @@ cli_sentinel_getopts(int argc, char **argv)
 		{ "trace", no_argument, NULL, 'z' },
 		{ "quiet", no_argument, NULL, 'q' },
 		{ "help", no_argument, NULL, 'h' },
+		{ "connection-retry-timeout", required_argument, NULL, 'W' },
 		{ NULL, 0, NULL, 0 }
 	};
 
@@ -150,9 +151,16 @@ cli_sentinel_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
+	/* read values from .env file */
+	if (!cli_copydb_getenv_file(&options))
+	{
+		log_fatal("Failed to read default values from .env file");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
 	int sentinelOptionsCount = 0;
 
-	while ((c = getopt_long(argc, argv, "S:D:esawtfrCJVvdzqh",
+	while ((c = getopt_long(argc, argv, "S:D:esawtfrCJVvdzqhW:",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -302,6 +310,18 @@ cli_sentinel_getopts(int argc, char **argv)
 			{
 				commandline_help(stderr);
 				exit(EXIT_CODE_QUIT);
+				break;
+			}
+
+			case 'W':
+			{
+				if (!stringToInt(optarg, &options.connectionRetryTimeout) ||
+					options.connectionRetryTimeout < 1)
+				{
+					log_fatal("Failed to parse --connection-retry-timeout: \"%s\"",
+							  optarg);
+					exit(EXIT_CODE_BAD_ARGS);
+				}
 				break;
 			}
 
@@ -495,7 +515,8 @@ cli_sentinel_set_endpos(int argc, char **argv)
 	{
 		char *pguri = (char *) sentinelDBoptions.connStrings.source_pguri;
 
-		if (!stream_fetch_current_lsn(&endpos, pguri, PGSQL_CONN_SOURCE))
+		if (!stream_fetch_current_lsn(&endpos, pguri, PGSQL_CONN_SOURCE,
+									  copySpecs.connectionRetryTimeout))
 		{
 			exit(EXIT_CODE_SOURCE);
 		}
