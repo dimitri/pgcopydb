@@ -2272,15 +2272,18 @@ pgsql_execute_log_error(PGSQL *pgsql,
 
 	LinesBuffer lbuf = { 0 };
 
+	/*
+     * PostgreSQL error message could be a static memory area in the
+	 * code, in which case we are not allowed to edit the text and inject
+     * newlines. Duplicate the memory area before manipulating it.
+	 *
+     * Also, because we use the Boehm GC lib, refrain from manually calling
+	 * free() on the newly allocated memory area.
+	 */
 	if (message != NULL)
 	{
 		/* make sure message is writable by splitLines */
 		message = strdup(message);
-
-		/* 
-		 * Because we link with the libc Garbage Collector, 
-		 * we don't need to call free later 
-		 */
 	}
 
 	if (!splitLines(&lbuf, message))
