@@ -2278,7 +2278,11 @@ pgsql_execute_log_error(PGSQL *pgsql,
 	{
 		/* make sure message is writable by splitLines */
 		message = strdup(message);
-		/* Because we link with the libc Garbage Collector, we don't need to call free later */
+
+		/* 
+		 * Because we link with the libc Garbage Collector, 
+		 * we don't need to call free later 
+		 */
 	}
 
 	if (!splitLines(&lbuf, message))
