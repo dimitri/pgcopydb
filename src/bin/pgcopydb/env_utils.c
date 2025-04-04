@@ -6,8 +6,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "defaults.h"
 #include "env_utils.h"
+#include "defaults.h"
+#include "ini.h"
+#include "log.h"
 #include "file_utils.h"
 #include "parsing_utils.h"
 #include "string_utils.h"
@@ -15,8 +17,8 @@
 #include "pqexpbuffer.h"
 
 static bool get_env_using_parser(EnvParser *parser);
-static bool get_env_value_using_parser(char *envValue, EnvParser *parser);
-static bool process_env_line(void *ctx, char *line);
+static bool parse_conf_file(const char *filename, EnvParserArray *parsers);
+static bool get_env_value_using_parser(const char *envValue, EnvParser *parser);
 
 /*
  * env_exists returns true if the passed environment variable exists in the
@@ -167,89 +169,95 @@ get_env_copy(const char *name, char *result, int maxLength)
 
 
 /*
- * process_env_line parses and processes a single line from .env file
+ * Reads the pgcopydb.conf file in ini format and uses the parsers
+ * to parse the environment variables.
  */
 static bool
-process_env_line(void *ctx, char *line)
+parse_conf_file(const char *filename, EnvParserArray *parsers)
 {
-	EnvParserArray *parsers = (EnvParserArray *) ctx;
-	if (line[0] == '#')
+	char *fileContents = NULL;
+	long fileSize = 0L;
+
+	if (!read_file(filename, &fileContents, &fileSize))
 	{
-		return true;
+		log_error("Failed to read %s", filename);
+		return false;
 	}
 
-	/* split the line into key and value */
-	const char *key = line;
-	char *value = strchr(line, '=');
-	if (value == NULL)
+	ini_t *ini = ini_load(fileContents, NULL);
+	if (ini == NULL)
 	{
-		return true;
-	}
-	*value = 0;
-	value++;
-	if (*value == '\n')
-	{
-		return true;
+		log_error("Failed to parse %s", filename);
+		return false;
 	}
 
-	/* remove the newline character from the value */
-	value[strcspn(value, "\n ")] = 0;
+	int confSectionIndex = ini_find_section(ini, "env", 3);
+	if (confSectionIndex == INI_NOT_FOUND)
+	{
+		log_error("Failed to find section [env] in %s", filename);
+		ini_destroy(ini);
+		return false;
+	}
 
 	for (int i = 0; i < parsers->count; i++)
 	{
-		if (strcmp(key, parsers->array[i].envname) == 0)
+		int envNameIndex = ini_find_property(ini, confSectionIndex,
+											 parsers->array[i].envname, strlen(
+												 parsers->array[i].envname));
+		if (envNameIndex != INI_NOT_FOUND)
 		{
-			return get_env_value_using_parser(value, &parsers->array[i]);
+			if (!get_env_value_using_parser(ini_property_value(ini, confSectionIndex,
+															   envNameIndex),
+											&parsers->array[i]))
+			{
+				log_error("Failed to parse %s", parsers->array[i].envname);
+				ini_destroy(ini);
+				return false;
+			}
 		}
 	}
-
 	return true;
 }
 
 
 /*
- * get_env_using_parsers_from_file reads the environment variables from
- * XDG_CONFIG_HOME/pgcopydb/.env file and uses the parsers to parse them.
+ * Reads the environment variables from
+ * pgcopydb.conf file and uses the parsers to parse them.
  */
 bool
 get_env_using_parsers_from_file(EnvParserArray *parsers)
 {
 	char envFilePath[BUFSIZE];
-	if (env_exists("XDG_CONFIG_HOME"))
+	const char *env_vars[] = { "XDG_CONFIG_HOME", "HOME" };
+	const char *formats[] = {
+		"%s/pgcopydb/pgcopydb.conf", "%s/.config/pgcopydb/pgcopydb.conf"
+	};
+
+	for (int i = 0; i < 2; i++)
 	{
-		char *configHome;
-		get_env_dup("XDG_CONFIG_HOME", &configHome);
-		sformat(envFilePath, sizeof(envFilePath), "%s/pgcopydb/.env", configHome);
-	}
-	else if (env_exists("HOME"))
-	{
-		char *homeDir;
-		get_env_dup("HOME", &homeDir);
-		sformat(envFilePath, sizeof(envFilePath), "%s/.config/pgcopydb/.env", homeDir);
-	}
-	else
-	{
-		log_info("No config home path found");
-		return true;
+		char *dir;
+		if (env_exists(env_vars[i]) && get_env_dup(env_vars[i], &dir))
+		{
+			sformat(envFilePath, sizeof(envFilePath), formats[i], dir);
+			if (file_exists(envFilePath))
+			{
+				if (!parse_conf_file(envFilePath, parsers))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+				return true;
+			}
+		}
 	}
 
-	if (!file_exists(envFilePath))
-	{
-		log_info("No %s file found", envFilePath);
-		return true;
-	}
-
-	if (!file_iter_lines(envFilePath, BUFSIZE, parsers, process_env_line))
-	{
-		return false;
-	}
-
+	log_debug("No pgcopydb.conf file found");
 	return true;
 }
 
 
 /*
- * get_env_using_parsers iterates over the parsers array and calls
+ * Iterates over the parsers array and calls
  * get_env_using_parser for each parser.
  */
 bool
@@ -274,7 +282,7 @@ get_env_using_parsers(EnvParserArray *parsers)
  * the given parser.
  */
 static bool
-get_env_value_using_parser(char *envValue, EnvParser *parser)
+get_env_value_using_parser(const char *envValue, EnvParser *parser)
 {
 	switch (parser->type)
 	{

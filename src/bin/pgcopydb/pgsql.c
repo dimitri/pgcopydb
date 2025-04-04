@@ -620,7 +620,7 @@ pgsql_open_connection(PGSQL *pgsql)
 
 /*
  * pgsql_fetch_connection_string tries to update the connection string
- * from the .env file, if it exists.
+ * from the pgcopydb.conf file, if it exists.
  */
 void
 pgsql_fetch_connection_string(PGSQL *pgsql)
@@ -640,7 +640,7 @@ pgsql_fetch_connection_string(PGSQL *pgsql)
 
 	if (!get_env_using_parsers_from_file(&parserArray))
 	{
-		log_error("Failed to read .env file for new connection string");
+		log_error("Failed to read pgcopydb.conf file for new connection string");
 		return;
 	}
 
@@ -721,7 +721,7 @@ pgsql_retry_open_connection(PGSQL *pgsql)
 		/* we have milliseconds, pg_usleep() wants microseconds */
 		(void) pg_usleep(sleep * 1000);
 
-		/* fetch the connection string from the .env file */
+		/* fetch the connection string from the pgcopydb.conf file */
 		pgsql_fetch_connection_string(pgsql);
 
 		log_sql("PQping(%s): slept %d ms on attempt %d",

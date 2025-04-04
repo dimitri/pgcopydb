@@ -241,7 +241,7 @@ cli_list_getenv(ListDBOptions *options)
 
 
 /*
- * cli_list_getenv_file reads the .env file and fills-in the command line options
+ * cli_list_getenv_file reads the pgcopydb.conf file and fills-in the command line options
  */
 static bool
 cli_list_getenv_file(ListDBOptions *options)
@@ -323,10 +323,10 @@ cli_list_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	/* read values from the .env file */
+	/* read values from the pgcopydb.conf file */
 	if (!cli_list_getenv_file(&options))
 	{
-		log_fatal("Failed to read default values from .env file");
+		log_fatal("Failed to read default values from pgcopydb.conf file");
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 

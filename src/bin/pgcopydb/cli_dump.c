@@ -110,10 +110,10 @@ cli_dump_schema_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	/* read values from the .env file */
+	/* read config values from the config file */
 	if (!cli_copydb_getenv_file(&options))
 	{
-		log_fatal("Failed to read default values from .env file");
+		log_fatal("Failed to read the config values from the config file");
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
