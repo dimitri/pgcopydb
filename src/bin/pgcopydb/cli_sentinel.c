@@ -152,7 +152,9 @@ cli_sentinel_getopts(int argc, char **argv)
 
 	int sentinelOptionsCount = 0;
 
-	while ((c = getopt_long(argc, argv, "S:D:esawtfrCJVvdzqh",
+	const char *optstring = construct_optstring(long_options);
+
+	while ((c = getopt_long(argc, argv, optstring,
 							long_options, &option_index)) != -1)
 	{
 		switch (c)

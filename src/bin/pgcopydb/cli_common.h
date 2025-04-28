@@ -129,4 +129,6 @@ bool cli_parse_bytes_pretty(const char *byteString,
 
 bool cli_prepare_pguris(ConnStrings *connStrings);
 
+char * construct_optstring(struct option *long_options);
+
 #endif  /* CLI_COMMON_H */
