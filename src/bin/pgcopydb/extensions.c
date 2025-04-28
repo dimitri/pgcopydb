@@ -125,7 +125,8 @@ copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions)
 	}
 
 	/* also connect to the target database  */
-	if (!pgsql_init(&dst, copySpecs->connStrings.target_pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&dst, copySpecs->connStrings.target_pguri, PGSQL_CONN_TARGET,
+					copySpecs->connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		return false;
@@ -501,7 +502,8 @@ timescaledb_pre_restore(CopyDataSpec *copySpecs, SourceExtension *extension)
 {
 	PGSQL dst = { 0 };
 
-	if (!pgsql_init(&dst, copySpecs->connStrings.target_pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&dst, copySpecs->connStrings.target_pguri, PGSQL_CONN_TARGET,
+					copySpecs->connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		return false;
@@ -530,7 +532,8 @@ timescaledb_post_restore(CopyDataSpec *copySpecs, SourceExtension *extension)
 {
 	PGSQL dst = { 0 };
 
-	if (!pgsql_init(&dst, copySpecs->connStrings.target_pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&dst, copySpecs->connStrings.target_pguri, PGSQL_CONN_TARGET,
+					copySpecs->connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		return false;

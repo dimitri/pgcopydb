@@ -9,6 +9,9 @@
 #include "copydb.h"
 #include "log.h"
 
+static bool copydb_export_snapshot(TransactionSnapshot *snapshot,
+								   int connectionRetryTimeout);
+
 /*
  * copydb_copy_snapshot initializes a new TransactionSnapshot from another
  * snapshot that's been exported already, copying the connection string and the
@@ -43,8 +46,8 @@ copydb_copy_snapshot(CopyDataSpec *specs, TransactionSnapshot *snapshot)
  * This is needed in the main process, so that COPY processes can then re-use
  * the snapshot, and thus we get a consistent view of the database all along.
  */
-bool
-copydb_export_snapshot(TransactionSnapshot *snapshot)
+static bool
+copydb_export_snapshot(TransactionSnapshot *snapshot, int connectionRetryTimeout)
 {
 	PGSQL *pgsql = &(snapshot->pgsql);
 
@@ -52,7 +55,8 @@ copydb_export_snapshot(TransactionSnapshot *snapshot)
 
 	snapshot->kind = SNAPSHOT_KIND_SQL;
 
-	if (!pgsql_init(pgsql, snapshot->pguri, snapshot->connectionType))
+	if (!pgsql_init(pgsql, snapshot->pguri, snapshot->connectionType,
+					connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		return false;
@@ -140,7 +144,8 @@ copydb_set_snapshot(CopyDataSpec *copySpecs)
 
 	snapshot->kind = SNAPSHOT_KIND_SQL;
 
-	if (!pgsql_init(pgsql, snapshot->pguri, snapshot->connectionType))
+	if (!pgsql_init(pgsql, snapshot->pguri, snapshot->connectionType,
+					copySpecs->connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		return false;
@@ -300,7 +305,7 @@ copydb_prepare_snapshot(CopyDataSpec *copySpecs)
 
 	if (IS_EMPTY_STRING_BUFFER(sourceSnapshot->snapshot))
 	{
-		if (!copydb_export_snapshot(sourceSnapshot))
+		if (!copydb_export_snapshot(sourceSnapshot, copySpecs->connectionRetryTimeout))
 		{
 			log_fatal("Failed to export a snapshot on \"%s\"",
 					  sourceSnapshot->pguri);
@@ -417,7 +422,8 @@ copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 						   slot->plugin,
 						   slot->slotName,
 						   InvalidXLogRecPtr,
-						   InvalidXLogRecPtr))
+						   InvalidXLogRecPtr,
+						   copySpecs->connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		return false;

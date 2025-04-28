@@ -247,6 +247,7 @@ typedef struct CopyDataSpec
 	int indexJobs;
 	int vacuumJobs;
 	int lObjectJobs;
+	int connectionRetryTimeout;
 
 	SplitTableLargerThan splitTablesLargerThan;
 	int splitMaxParts;
@@ -299,8 +300,6 @@ bool copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 							 CopyDataSpec *specs,
 							 SourceTable *source,
 							 int partNumber);
-
-bool copydb_export_snapshot(TransactionSnapshot *snapshot);
 
 bool copydb_fatal_exit(void);
 bool copydb_wait_for_subprocesses(bool failFast);

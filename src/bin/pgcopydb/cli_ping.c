@@ -25,8 +25,9 @@ CommandLine ping_command =
 		"ping",
 		"Attempt to connect to the source and target instances",
 		" --source ... --target ... ",
-		"  --source              Postgres URI to the source database\n"
-		"  --target              Postgres URI to the target database\n",
+		"  --source                      Postgres URI to the source database\n"
+		"  --target                      Postgres URI to the target database\n"
+		"  --connection-retry-timeout    Number of seconds to retry before connection times out\n",
 		cli_ping_getopts,
 		cli_ping);
 
@@ -51,6 +52,7 @@ cli_ping_getopts(int argc, char **argv)
 		{ "trace", no_argument, NULL, 'z' },
 		{ "quiet", no_argument, NULL, 'q' },
 		{ "help", no_argument, NULL, 'h' },
+		{ "connection-retry-timeout", required_argument, NULL, 'W' },
 		{ NULL, 0, NULL, 0 }
 	};
 	optind = 0;
@@ -62,7 +64,14 @@ cli_ping_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:Vvdzqh",
+	/* read config values from the config file */
+	if (!cli_copydb_getenv_file(&options))
+	{
+		log_fatal("Failed to read the config values from the config file");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	while ((c = getopt_long(argc, argv, "S:T:VvdzqhW:",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -153,6 +162,18 @@ cli_ping_getopts(int argc, char **argv)
 				break;
 			}
 
+			case 'W':
+			{
+				if (!stringToInt(optarg, &options.connectionRetryTimeout) ||
+					options.connectionRetryTimeout < 1)
+				{
+					log_fatal("Failed to parse --connection-retry-timeout: \"%s\"",
+							  optarg);
+					++errors;
+				}
+				break;
+			}
+
 			case '?':
 			default:
 			{
@@ -201,8 +222,11 @@ cli_ping(int argc, char **argv)
 	char *source = dsn->source_pguri;
 	char *target = dsn->target_pguri;
 
+	int connectionRetryTimeout = copyDBoptions.connectionRetryTimeout;
+
 	/* ping both source and target databases concurrently */
 	pid_t sPid = fork();
+
 
 	switch (sPid)
 	{
@@ -218,7 +242,7 @@ cli_ping(int argc, char **argv)
 			/* child process runs the command */
 			PGSQL src = { 0 };
 
-			if (!pgsql_init(&src, source, PGSQL_CONN_SOURCE))
+			if (!pgsql_init(&src, source, PGSQL_CONN_SOURCE, connectionRetryTimeout))
 			{
 				/* errors have already been logged */
 				exit(EXIT_CODE_SOURCE);
@@ -276,7 +300,7 @@ cli_ping(int argc, char **argv)
 			/* child process runs the command */
 			PGSQL dst = { 0 };
 
-			if (!pgsql_init(&dst, target, PGSQL_CONN_TARGET))
+			if (!pgsql_init(&dst, target, PGSQL_CONN_TARGET, connectionRetryTimeout))
 			{
 				/* errors have already been logged */
 				exit(EXIT_CODE_TARGET);

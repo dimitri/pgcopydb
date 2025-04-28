@@ -405,7 +405,8 @@ compare_table(CopyDataSpec *copySpecs, SourceTable *source)
 	PGSQL src = { 0 };
 	PGSQL dst = { 0 };
 
-	if (!pgsql_init(&src, dsn->source_pguri, PGSQL_CONN_SOURCE))
+	if (!pgsql_init(&src, dsn->source_pguri, PGSQL_CONN_SOURCE,
+					copySpecs->connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		return false;
@@ -417,7 +418,8 @@ compare_table(CopyDataSpec *copySpecs, SourceTable *source)
 		return false;
 	}
 
-	if (!pgsql_init(&dst, dsn->target_pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&dst, dsn->target_pguri, PGSQL_CONN_TARGET,
+					copySpecs->connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		(void) pgsql_finish(&src);

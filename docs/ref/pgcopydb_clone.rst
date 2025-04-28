@@ -333,6 +333,28 @@ Here is an example implement the previous steps:
    $ kill %1
 
 
+Retry mechanism
+^^^^^^^^^^^^^^^
+
+When a connection to either the source or target database fails, the command will
+attempt to reconnect several times before giving up. The maximum duration for these
+retries is determined by the ``--connection-retry-timeout`` parameter, which
+defaults to 60 seconds.
+
+Before each retry, the command will attempt to fetch updated connection strings from
+the ``pgcopydb.conf`` file located in either ``${XDG_CONFIG_HOME}/pgcopydb/pgcopydb.conf`` or
+``${HOME}/.config/pgcopydb/pgcopydb.conf``.
+
+Example ``pgcopydb.conf`` file:
+
+.. code-block:: ini
+  :linenos:
+
+  [env]
+  PGCOPYDB_SOURCE_PGURI = postgres://username:password@source/dbname
+  PGCOPYDB_TARGET_PGURI = postgres://username:password@target/dbname
+
+
 Options
 -------
 
@@ -713,6 +735,20 @@ The following options are available to ``pgcopydb clone``:
 
 Environment
 -----------
+
+Environment variables that begin with ``PGCOPYDB_`` can be set directly in the
+environment or read from the ``pgcopydb.conf`` file located in either
+``${XDG_CONFIG_HOME}/pgcopydb/pgcopydb.conf`` or ``${HOME}/.config/pgcopydb/pgcopydb.conf``.
+
+Example ``pgcopydb.conf`` file:
+
+.. code-block:: ini
+  :linenos:
+
+  [env]
+  PGCOPYDB_SOURCE_PGURI = postgres://username:password@source/dbname
+  PGCOPYDB_TARGET_PGURI = postgres://username:password@target/dbname
+
 
 PGCOPYDB_SOURCE_PGURI
 

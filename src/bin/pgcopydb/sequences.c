@@ -260,7 +260,8 @@ copydb_copy_all_sequences(CopyDataSpec *specs, bool reset)
 
 	if (reset)
 	{
-		if (!pgsql_init(&src, specs->connStrings.source_pguri, PGSQL_CONN_SOURCE))
+		if (!pgsql_init(&src, specs->connStrings.source_pguri, PGSQL_CONN_SOURCE,
+						specs->connectionRetryTimeout))
 		{
 			/* errors have already been logged */
 			return false;
@@ -318,7 +319,8 @@ copydb_copy_all_sequences(CopyDataSpec *specs, bool reset)
 
 	PGSQL dst = { 0 };
 
-	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET,
+					specs->connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		return false;

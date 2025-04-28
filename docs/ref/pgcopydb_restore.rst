@@ -266,6 +266,20 @@ The following options are available to ``pgcopydb restore schema``:
 Environment
 -----------
 
+Environment variables that begin with ``PGCOPYDB_`` can be set directly in the
+environment or read from the ``pgcopydb.conf`` file located in either
+``${XDG_CONFIG_HOME}/pgcopydb/pgcopydb.conf`` or ``${HOME}/.config/pgcopydb/pgcopydb.conf``.
+
+Example ``pgcopydb.conf`` file:
+
+.. code-block:: ini
+  :linenos:
+
+  [env]
+  PGCOPYDB_SOURCE_PGURI = postgres://username:password@source/dbname
+  PGCOPYDB_TARGET_PGURI = postgres://username:password@target/dbname
+
+
 PGCOPYDB_TARGET_PGURI
 
   Connection string to the target Postgres instance. When ``--target`` is

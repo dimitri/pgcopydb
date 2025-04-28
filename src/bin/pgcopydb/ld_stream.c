@@ -51,7 +51,8 @@ stream_init_specs(StreamSpecs *specs,
 				  DatabaseCatalog *sourceDB,
 				  bool stdin,
 				  bool stdout,
-				  bool logSQL)
+				  bool logSQL,
+				  int connectionRetryTimeout)
 {
 	/* just copy into StreamSpecs what's been initialized in copySpecs */
 	specs->mode = mode;
@@ -482,7 +483,8 @@ startLogicalStreaming(StreamSpecs *specs)
 							   specs->slot.plugin,
 							   specs->slot.slotName,
 							   specs->startpos,
-							   specs->endpos))
+							   specs->endpos,
+							   specs->connectionRetryTimeout))
 		{
 			/* errors have already been logged */
 			return false;
@@ -664,7 +666,8 @@ streamCheckResumePosition(StreamSpecs *specs)
 
 	PGSQL src = { 0 };
 
-	if (!pgsql_init(&src, specs->connStrings->source_pguri, PGSQL_CONN_SOURCE))
+	if (!pgsql_init(&src, specs->connStrings->source_pguri, PGSQL_CONN_SOURCE,
+					specs->connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		return false;
@@ -2366,7 +2369,8 @@ stream_cleanup_databases(CopyDataSpec *copySpecs, char *slotName, char *origin)
 	/*
 	 * Cleanup the source database (replication slot, pgcopydb sentinel).
 	 */
-	if (!pgsql_init(&src, copySpecs->connStrings.source_pguri, PGSQL_CONN_SOURCE))
+	if (!pgsql_init(&src, copySpecs->connStrings.source_pguri, PGSQL_CONN_SOURCE,
+					copySpecs->connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		return false;
@@ -2423,7 +2427,8 @@ stream_cleanup_databases(CopyDataSpec *copySpecs, char *slotName, char *origin)
 	/*
 	 * Now cleanup the target database (replication origin).
 	 */
-	if (!pgsql_init(&dst, copySpecs->connStrings.target_pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&dst, copySpecs->connStrings.target_pguri, PGSQL_CONN_TARGET,
+					copySpecs->connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		return false;
@@ -2447,7 +2452,8 @@ stream_create_origin(CopyDataSpec *copySpecs, char *nodeName, uint64_t startpos)
 {
 	PGSQL dst = { 0 };
 
-	if (!pgsql_init(&dst, copySpecs->connStrings.target_pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&dst, copySpecs->connStrings.target_pguri, PGSQL_CONN_TARGET,
+					copySpecs->connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		return false;
@@ -2569,11 +2575,12 @@ stream_create_sentinel(CopyDataSpec *copySpecs,
 bool
 stream_fetch_current_lsn(uint64_t *lsn,
 						 const char *pguri,
-						 ConnectionType connectionType)
+						 ConnectionType connectionType,
+						 int connectionRetryTimeout)
 {
 	PGSQL src = { 0 };
 
-	if (!pgsql_init(&src, (char *) pguri, connectionType))
+	if (!pgsql_init(&src, (char *) pguri, connectionType, connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		return false;
