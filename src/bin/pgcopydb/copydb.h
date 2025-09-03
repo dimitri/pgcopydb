@@ -319,6 +319,7 @@ bool catalog_open_from_specs(CopyDataSpec *copySpecs);
 bool catalog_close_from_specs(CopyDataSpec *copySpecs);
 bool catalog_register_setup_from_specs(CopyDataSpec *copySpecs);
 bool catalog_update_setup(CopyDataSpec *copySpecs);
+bool catalog_update_filters(DatabaseCatalog *catalog, const char *filters);
 
 /* snapshot.c */
 bool copydb_copy_snapshot(CopyDataSpec *specs, TransactionSnapshot *snapshot);
