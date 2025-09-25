@@ -81,7 +81,8 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 		}
 
 		/* we might have to prepare the snapshot locally */
-		if (specs->sourceSnapshot.state == SNAPSHOT_STATE_UNKNOWN)
+		if (specs->sourceSnapshot.state == SNAPSHOT_STATE_UNKNOWN ||
+			specs->sourceSnapshot.state == SNAPSHOT_STATE_CLOSED)
 		{
 			if (!copydb_prepare_snapshot(specs))
 			{
