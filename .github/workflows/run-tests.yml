@@ -19,6 +19,8 @@ jobs:
       matrix:
         PGVERSION:
           - 16
+          - 17
+          - 18
         TEST:
           - ci
           - pagila
