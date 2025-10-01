@@ -749,7 +749,8 @@ pg_restore_roles(PostgresPaths *pgPaths,
 		}
 
 
-		if (strncmp(currentLine, "\\restrict", 9) == 0 || strncmp(currentLine, "\\unrestrict", 11) == 0)
+		if (strncmp(currentLine, "\\restrict", 9) == 0 ||
+			strncmp(currentLine, "\\unrestrict", 11) == 0)
 		{
 			/* skip \restrict and \unrestrict meta commands */
 			continue;
