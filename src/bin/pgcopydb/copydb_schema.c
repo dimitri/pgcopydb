@@ -784,6 +784,9 @@ copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
 	if (specs->splitTablesLargerThan.bytes > 0 &&
 		source->bytes < specs->splitTablesLargerThan.bytes)
 	{
+		log_debug("Table %s is smaller than %s, skipping splitting",
+				  source->qname,
+				  specs->splitTablesLargerThan.bytesPretty);
 		return true;
 	}
 
@@ -890,6 +893,10 @@ copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
 	 * the range of unique key numbers (or CTID), and also fills-in our
 	 * internal catalogs s_table_part.
 	 */
+	log_info("Table %s is larger than %s, splitting it into parts",
+			 source->qname,
+			 specs->splitTablesLargerThan.bytesPretty);
+
 	if (!schema_list_partitions(context->pgsql,
 								sourceDB,
 								source,
