@@ -837,6 +837,7 @@ copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
 				 source->bytesPretty,
 				 specs->splitTablesLargerThan.bytesPretty);
 
+		log_debug("Using CTID as partition key for table %s", source->qname);
 		strlcpy(source->partKey, "ctid", sizeof(source->partKey));
 
 		/*
