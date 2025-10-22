@@ -126,15 +126,18 @@ static CommandLine copy_table_data_command =
 		"table-data",
 		"Copy the data from all tables in database from source to target",
 		" --source ... --target ... [ --table-jobs ... --index-jobs ... ] ",
-		"  --source             Postgres URI to the source database\n"
-		"  --target             Postgres URI to the target database\n"
-		"  --dir                Work directory to use\n"
-		"  --table-jobs         Number of concurrent COPY jobs to run\n"
-		"  --filters <filename> Use the filters defined in <filename>\n"
-		"  --restart            Allow restarting when temp files exist already\n"
-		"  --resume             Allow resuming operations after a failure\n"
-		"  --not-consistent     Allow taking a new snapshot on the source database\n"
-		"  --snapshot           Use snapshot obtained with pg_export_snapshot\n",
+		"  --source                    Postgres URI to the source database\n"
+		"  --target                    Postgres URI to the target database\n"
+		"  --dir                       Work directory to use\n"
+		"  --table-jobs                Number of concurrent COPY jobs to run\n"
+		"  --split-tables-larger-than  Split tables larger than this size into parts\n"
+		"  --split-max-parts           Maximum number of parts to split a table into\n"
+		"  --filters <filename>        Use the filters defined in <filename>\n"
+		"  --restart                   Allow restarting when temp files exist already\n"
+		"  --resume                    Allow resuming operations after a failure\n"
+		"  --not-consistent            Allow taking a new snapshot on the source database\n"
+		"  --snapshot                  Use snapshot obtained with pg_export_snapshot\n"
+		"  --use-copy-binary           Use the COPY BINARY format for COPY operations\n",
 		cli_copy_db_getopts,
 		cli_copy_table_data);
 
