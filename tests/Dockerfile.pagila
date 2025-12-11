@@ -1,4 +1,4 @@
-ARG PGVERSION=17
+ARG PGVERSION=16
 
 FROM debian:bookworm-slim
 

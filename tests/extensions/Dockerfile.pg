@@ -1,8 +1,9 @@
-FROM postgres:17-bookworm
+ARG PGVERSION=16
+FROM postgres:${PGVERSION}-bookworm
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-      postgresql-17-wal2json \
+      postgresql-${PGVERSION}-wal2json \
       postgresql-13-partman \
       postgresql-13-postgis-3 \
       postgis \
