@@ -124,7 +124,7 @@ cli_print_version(int argc, char **argv)
 	{
 		fformat(stdout, "pgcopydb version %s\n", VERSION_STRING);
 		fformat(stdout, "compiled with %s\n", PG_VERSION_STR);
-		fformat(stdout, "compatible with Postgres 11, 12, 13, 14, 15, and 16\n");
+		fformat(stdout, "compatible with Postgres 11, 12, 13, 14, 15, 16, 17, and 18\n");
 	}
 
 	exit(0);

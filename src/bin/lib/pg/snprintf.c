@@ -37,6 +37,17 @@
 #include <math.h>
 
 /*
+ * Fallback definitions for PostgreSQL 18+ which removed HAVE_LONG_INT_64
+ * and HAVE_LONG_LONG_INT_64 macros. On all modern platforms, long long
+ * is guaranteed to be at least 64 bits per C99.
+ */
+#if SIZEOF_SIZE_T == 8
+#if !defined(HAVE_LONG_INT_64) && !defined(HAVE_LONG_LONG_INT_64)
+#define HAVE_LONG_LONG_INT_64 1
+#endif
+#endif
+
+/*
  * We used to use the platform's NL_ARGMAX here, but that's a bad idea,
  * first because the point of this module is to remove platform dependencies
  * not perpetuate them, and second because some platforms use ridiculously
