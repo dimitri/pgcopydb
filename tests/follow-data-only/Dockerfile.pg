@@ -1,6 +1,7 @@
 ARG PGVERSION=16
-FROM postgres:${PGVERSION}-bookworm
+FROM postgres:${PGVERSION}
 
+ARG PGVERSION=16
 RUN apt-get update \
     && apt-get install -y --no-install-recommends postgresql-${PGVERSION}-wal2json \
     && rm -rf /var/lib/apt/lists/*
