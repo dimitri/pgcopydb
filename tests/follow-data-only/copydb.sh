@@ -58,12 +58,17 @@ pgcopydb copy table-data
 # insert another batch of 10 rows (11..20)
 psql -v a=11 -v b=20 -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 
-# start following and applying changes from source to target
-pgcopydb follow --notice
+ # start following and applying changes from source to target
+pgcopydb follow --plugin test_decoding --notice
 
 # the follow command ends when reaching endpos, set in inject.sh
 kill -TERM ${COPROC_PID}
 wait ${COPROC_PID}
+
+# sanity check transformed SQL contains quoted literal 'null' for null_texts
+SQLFILE=$(ls ${XDG_DATA_HOME}/pgcopydb/*.sql | sort | tail -n1)
+grep -q 'EXECUTE .*"null","\\\"null\\\""' "${SQLFILE}" \
+  || (echo "Expected quoted \"null\" literal in ${SQLFILE}" && exit 1)
 
 # cleanup files and replication slot now
 pgcopydb stream cleanup
@@ -76,6 +81,12 @@ psql -d ${PGCOPYDB_TARGET_PGURI} -c "${sql}" > /tmp/t.out
 diff /tmp/s.out /tmp/t.out
 
 sql="select f1, length(f2) from table_a where f2 is not null order by f1"
+psql -d ${PGCOPYDB_SOURCE_PGURI} -c "${sql}" > /tmp/s.out
+psql -d ${PGCOPYDB_TARGET_PGURI} -c "${sql}" > /tmp/t.out
+
+diff /tmp/s.out /tmp/t.out
+
+sql="select id, text_col, json_col from null_texts order by id"
 psql -d ${PGCOPYDB_SOURCE_PGURI} -c "${sql}" > /tmp/s.out
 psql -d ${PGCOPYDB_TARGET_PGURI} -c "${sql}" > /tmp/t.out
 
