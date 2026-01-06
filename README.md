@@ -194,6 +194,92 @@ an overall summary that looks like the following:
                           Total Wall Clock Duration         both       9s352                        24
 ```
 
+## Configuration with Environment Variables
+
+pgcopydb supports configuration through environment variables, which is particularly useful when working with Docker containers, CI/CD pipelines, or when you want to keep database credentials separate from your command line history.
+
+### Using .env Files
+
+You can create a `.env` file in your project directory to store connection strings and configuration options. This approach keeps sensitive credentials out of your shell history and version control.
+
+**Example .env file:**
+
+```bash
+# Source database connection
+PGCOPYDB_SOURCE_PGURI="postgres://username:password@source.example.com:5432/sourcedb"
+
+# Target database connection
+PGCOPYDB_TARGET_PGURI="postgres://username:password@target.example.com:5432/targetdb"
+
+# Optional: SSL mode configuration
+PGSSLMODE="require"
+
+# Optional: Performance tuning
+PGCOPYDB_TABLE_JOBS=8
+PGCOPYDB_INDEX_JOBS=2
+```
+
+**Loading environment variables from .env file:**
+
+```bash
+# Option 1: Using 'set -a' to export all variables
+set -a
+source .env
+set +a
+pgcopydb clone
+
+# Option 2: Using export with each variable
+export $(cat .env | xargs)
+pgcopydb clone
+
+# Option 3: Using a tool like 'dotenv'
+dotenv pgcopydb clone
+```
+
+### Supported Environment Variables
+
+#### Connection Configuration
+
+- **`PGCOPYDB_SOURCE_PGURI`** - PostgreSQL connection string for the source database
+- **`PGCOPYDB_TARGET_PGURI`** - PostgreSQL connection string for the target database
+
+Connection strings follow the standard PostgreSQL format:
+```
+postgres://[user[:password]@][host][:port][/dbname][?param1=value1&...]
+```
+
+#### Standard PostgreSQL Environment Variables
+
+pgcopydb also respects standard PostgreSQL client environment variables:
+
+- **`PGHOST`** - Database server host
+- **`PGPORT`** - Database server port (default: 5432)
+- **`PGDATABASE`** - Database name
+- **`PGUSER`** - Database user
+- **`PGPASSWORD`** - Database password (use with caution)
+- **`PGSSLMODE`** - SSL mode (disable, allow, prefer, require, verify-ca, verify-full)
+- **`PGSSLCERT`** - Client SSL certificate file
+- **`PGSSLKEY`** - Client SSL key file
+- **`PGSSLROOTCERT`** - Root certificate file
+
+#### Performance and Behavior Options
+
+- **`PGCOPYDB_TABLE_JOBS`** - Number of concurrent table data copy jobs
+- **`PGCOPYDB_INDEX_JOBS`** - Number of concurrent index creation jobs
+- **`PGCOPYDB_SPLIT_TABLES_LARGER_THAN`** - Size threshold for splitting large tables
+- **`TMPDIR`** - Working directory for temporary files
+- **`XDG_DATA_HOME`** - Data directory for CDC/replication state
+
+### Example Configurations
+
+```bash
+PGSSLMODE="verify-full"
+PGSSLROOTCERT="/path/to/ca-cert.pem"
+PGCOPYDB_SOURCE_PGURI="postgres://user@prod.example.com:5432/myapp?sslmode=verify-full"
+PGCOPYDB_TARGET_PGURI="postgres://user@backup.example.com:5432/myapp?sslmode=verify-full"
+```
+See the included `.env.example` file for a complete configuration template.
+
 ## Installing pgcopydb
 
 See our [documentation](https://pgcopydb.readthedocs.io/en/latest/install.html).

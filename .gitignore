@@ -45,3 +45,6 @@ ci/Dockerfile.docs
 
 # Local development guide
 CLAUDE.md
+
+# Environment files (may contain credentials)
+.env

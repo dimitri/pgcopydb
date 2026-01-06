@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:latest
 # Define a base image with all our build dependencies.
-FROM --platform=${TARGETPLATFORM} debian:11-slim AS build
+FROM debian:11-slim AS build
 
 # multi-arch
 ARG TARGETPLATFORM
@@ -86,7 +86,7 @@ RUN make -s clean && make -s -j$(nproc) install
 COPY tests tests
 
 # Now the "run" image, as small as possible
-FROM --platform=${TARGETPLATFORM} debian:11-slim AS run
+FROM debian:11-slim AS run
 
 # multi-arch
 ARG TARGETPLATFORM
