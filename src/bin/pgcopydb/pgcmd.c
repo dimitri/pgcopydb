@@ -1546,17 +1546,52 @@ parse_archive_list_entry(ArchiveContentItem *item, const char *line)
 	}
 	else
 	{
-		/* 10. restore list name */
-		size_t len = strlen(token.ptr) + 1;
-		item->restoreListName = (char *) calloc(len, sizeof(char));
+		/*
+		 * 10. restore list name
+		 *
+		 * Format: <schema> <name> <owner>
+		 *
+		 * We need to parse schema and name, but exclude the owner (last token).
+		 * The schema can be "-" (no parent schema) or a schema name.
+		 *
+		 * Examples:
+		 *   "- analytics api" -> "- analytics"
+		 *   "public mytable postgres" -> "public mytable"
+		 *   "- myschema api" -> "- myschema"
+		 */
+		char *restoreName = token.ptr;
 
-		if (item->restoreListName == NULL)
+		/* Find the last space (before the owner) */
+		char *lastSpace = strrchr(restoreName, ' ');
+
+		if (lastSpace == NULL)
 		{
-			log_error(ALLOCATION_FAILED_ERROR);
-			return false;
-		}
+			/* No owner specified (shouldn't happen, but handle gracefully) */
+			size_t len = strlen(restoreName) + 1;
+			item->restoreListName = (char *) calloc(len, sizeof(char));
 
-		strlcpy(item->restoreListName, token.ptr, len);
+			if (item->restoreListName == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			strlcpy(item->restoreListName, restoreName, len);
+		}
+		else
+		{
+			/* Exclude the owner by stopping at the last space */
+			size_t len = lastSpace - restoreName + 1;
+			item->restoreListName = (char *) calloc(len, sizeof(char));
+
+			if (item->restoreListName == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			strlcpy(item->restoreListName, restoreName, len);
+		}
 	}
 
 	return true;
@@ -1723,12 +1758,29 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 
 	if (token.desc == ARCHIVE_TAG_SCHEMA)
 	{
-		/* skip the space after the SCHEMA tag */
+		/*
+		 * Format after "SCHEMA ": <name> <owner>
+		 *
+		 * We need to parse only the name, excluding the owner.
+		 * Example: "public postgres" -> we want just "public"
+		 */
 		char *nsp_rol_name = token.ptr + 1;
-		int len = strlen(nsp_rol_name);
+		char *lastSpace = strrchr(nsp_rol_name, ' ');
 
-		/* add 2 bytes for the prefix: "- " */
-		int bytes = len + 1 + 2;
+		int nspname_len;
+		if (lastSpace != NULL)
+		{
+			/* Found owner, exclude it */
+			nspname_len = lastSpace - nsp_rol_name;
+		}
+		else
+		{
+			/* No owner (shouldn't happen, but handle gracefully) */
+			nspname_len = strlen(nsp_rol_name);
+		}
+
+		/* add 2 bytes for the prefix: "- " and null terminator */
+		int bytes = nspname_len + 1 + 2;
 
 		item->restoreListName = (char *) calloc(bytes, sizeof(char));
 
@@ -1738,8 +1790,17 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 			return false;
 		}
 
-		/* a schema pg_restore list name is "- nspname rolname" */
-		sformat(item->restoreListName, bytes, "- %s", nsp_rol_name);
+		/* a schema pg_restore list name is "- nspname" (without owner) */
+		char *nspname = (char *) calloc(nspname_len + 1, sizeof(char));
+
+		if (nspname == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		strlcpy(nspname, nsp_rol_name, nspname_len + 1);
+		sformat(item->restoreListName, bytes, "- %s", nspname);
 		item->tagType = ARCHIVE_TAG_TYPE_SCHEMA;
 	}
 	else if (token.desc == ARCHIVE_TAG_EXTENSION)
