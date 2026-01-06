@@ -10,6 +10,11 @@ on:
 
   workflow_dispatch:
 
+# Cancel redundant runs on the same PR/branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # ============================================================================
   # TIER 1: Fast checks (~2-3 minutes total)
@@ -95,8 +100,17 @@ jobs:
             echo "TEST=${{ matrix.TEST }}" >> $GITHUB_ENV
             echo "PGVERSION=${{ matrix.PGVERSION }}" >> $GITHUB_ENV
 
+      - name: Setup Docker buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build pgcopydb Docker image
-        run: make build
+        run: |
+          docker buildx build \
+            --build-arg PGVERSION=${{ matrix.PGVERSION }} \
+            --cache-from type=gha,scope=pg${{ matrix.PGVERSION }} \
+            --cache-to type=gha,mode=max,scope=pg${{ matrix.PGVERSION }} \
+            --load \
+            -t pgcopydb .
 
       - name: Create docker volumes
         run: docker volume create ${TEST}
@@ -151,8 +165,17 @@ jobs:
             echo "TEST=${{ matrix.TEST }}" >> $GITHUB_ENV
             echo "PGVERSION=${{ matrix.PGVERSION }}" >> $GITHUB_ENV
 
+      - name: Setup Docker buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build pgcopydb Docker image
-        run: make build
+        run: |
+          docker buildx build \
+            --build-arg PGVERSION=${{ matrix.PGVERSION }} \
+            --cache-from type=gha,scope=pg${{ matrix.PGVERSION }} \
+            --cache-to type=gha,mode=max,scope=pg${{ matrix.PGVERSION }} \
+            --load \
+            -t pgcopydb .
 
       - name: Create docker volumes
         run: docker volume create ${TEST}
