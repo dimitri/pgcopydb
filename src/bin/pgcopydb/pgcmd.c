@@ -1559,16 +1559,15 @@ parse_archive_list_entry(ArchiveContentItem *item, const char *line)
 		 *   "public mytable postgres" -> "public mytable"
 		 *   "- myschema api" -> "- myschema"
 		 */
-		char *start = token.ptr;
-		char *end = token.ptr + strlen(token.ptr);
+		char *restoreName = token.ptr;
 
 		/* Find the last space (before the owner) */
-		char *lastSpace = strrchr(start, ' ');
+		char *lastSpace = strrchr(restoreName, ' ');
 
 		if (lastSpace == NULL)
 		{
 			/* No owner specified (shouldn't happen, but handle gracefully) */
-			size_t len = strlen(start) + 1;
+			size_t len = strlen(restoreName) + 1;
 			item->restoreListName = (char *) calloc(len, sizeof(char));
 
 			if (item->restoreListName == NULL)
@@ -1577,12 +1576,12 @@ parse_archive_list_entry(ArchiveContentItem *item, const char *line)
 				return false;
 			}
 
-			strlcpy(item->restoreListName, start, len);
+			strlcpy(item->restoreListName, restoreName, len);
 		}
 		else
 		{
 			/* Exclude the owner by stopping at the last space */
-			size_t len = lastSpace - start + 1;
+			size_t len = lastSpace - restoreName + 1;
 			item->restoreListName = (char *) calloc(len, sizeof(char));
 
 			if (item->restoreListName == NULL)
@@ -1591,7 +1590,7 @@ parse_archive_list_entry(ArchiveContentItem *item, const char *line)
 				return false;
 			}
 
-			strlcpy(item->restoreListName, start, len);
+			strlcpy(item->restoreListName, restoreName, len);
 		}
 	}
 
@@ -1780,7 +1779,7 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 			nspname_len = strlen(nsp_rol_name);
 		}
 
-		/* add 2 bytes for the prefix: "- " */
+		/* add 2 bytes for the prefix: "- " and null terminator */
 		int bytes = nspname_len + 1 + 2;
 
 		item->restoreListName = (char *) calloc(bytes, sizeof(char));
@@ -1792,7 +1791,16 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 		}
 
 		/* a schema pg_restore list name is "- nspname" (without owner) */
-		snprintf(item->restoreListName, bytes, "- %.*s", nspname_len, nsp_rol_name);
+		char *nspname = (char *) calloc(nspname_len + 1, sizeof(char));
+
+		if (nspname == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		strlcpy(nspname, nsp_rol_name, nspname_len + 1);
+		sformat(item->restoreListName, bytes, "- %s", nspname);
 		item->tagType = ARCHIVE_TAG_TYPE_SCHEMA;
 	}
 	else if (token.desc == ARCHIVE_TAG_EXTENSION)
