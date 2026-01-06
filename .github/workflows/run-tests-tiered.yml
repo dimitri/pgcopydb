@@ -1,0 +1,162 @@
+name: Run Tests (Tiered)
+
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+    branches:
+    - main
+
+  workflow_dispatch:
+
+jobs:
+  # ============================================================================
+  # TIER 1: Fast checks (~2-3 minutes total)
+  # These are cheap and catch most common issues
+  # ============================================================================
+
+  style_checker:
+    name: Check code style
+    runs-on: ubuntu-latest
+    container: citus/stylechecker:no-py
+    steps:
+    - uses: actions/checkout@v4.1.7
+      name: Checkout code
+
+    - name: Set safe directory for git
+      run: |
+        git config --global --add safe.directory ${GITHUB_WORKSPACE}
+
+    - name: Check C style
+      run: citus_indent --check
+
+  banned_api_checker:
+    name: Check for banned APIs
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Check for banned APIs
+      run: sh ./ci/banned.h.sh
+
+  docs:
+    name: Build and verify docs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build docs
+        uses: ammaraskar/sphinx-action@master
+        with:
+          docs-folder: "docs/"
+
+      - name: Set Version String From .git
+        run: make version
+
+      - name: Check that docs are up to date
+        run: |
+          cat Dockerfile ci/Dockerfile.docs.template > ci/Dockerfile.docs && \
+          docker build --file=ci/Dockerfile.docs --tag test-docs . && \
+          docker run test-docs
+
+  # ============================================================================
+  # TIER 2: Basic smoke tests (~3-5 minutes)
+  # Build and run quick tests to verify basic functionality
+  # Only runs if Tier 1 passes
+  # ============================================================================
+
+  smoke_tests:
+    name: Smoke tests (PG ${{ matrix.PGVERSION }})
+    runs-on: ubuntu-latest
+    needs: [style_checker, banned_api_checker, docs]
+    strategy:
+      fail-fast: true
+      matrix:
+        PGVERSION:
+          - 16
+          - 17
+          - 18
+        TEST:
+          - ci
+          - unit
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set Version String From .git
+        run: make version
+
+      - name: Set environment variables
+        run: |
+            echo "TEST=${{ matrix.TEST }}" >> $GITHUB_ENV
+            echo "PGVERSION=${{ matrix.PGVERSION }}" >> $GITHUB_ENV
+
+      - name: Build pgcopydb Docker image
+        run: make build
+
+      - name: Create docker volumes
+        run: docker volume create ${TEST}
+
+      - name: Run test
+        timeout-minutes: 5
+        run: make tests/${TEST}
+
+  # ============================================================================
+  # TIER 3: Full integration tests (~3-5 minutes each)
+  # Only runs if Tier 1 and Tier 2 pass
+  # ============================================================================
+
+  integration_tests:
+    name: Integration (${{ matrix.TEST }}, PG ${{ matrix.PGVERSION }})
+    runs-on: ubuntu-latest
+    needs: [smoke_tests]
+    strategy:
+      fail-fast: false  # Continue running other tests even if one fails
+      matrix:
+        PGVERSION:
+          - 16
+          - 17
+          - 18
+        TEST:
+          - pagila
+          - pagila-multi-steps
+          - pagila-standby
+          - blobs
+          - filtering
+          - extensions
+          - timescaledb
+          - cdc-low-level
+          - cdc-test-decoding
+          - cdc-endpos-between-transaction
+          - cdc-wal2json
+          - follow-wal2json
+          - follow-9.6
+          - follow-data-only
+          - endpos-in-multi-wal-txn
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set Version String From .git
+        run: make version
+
+      - name: Set environment variables
+        run: |
+            echo "TEST=${{ matrix.TEST }}" >> $GITHUB_ENV
+            echo "PGVERSION=${{ matrix.PGVERSION }}" >> $GITHUB_ENV
+
+      - name: Build pgcopydb Docker image
+        run: make build
+
+      - name: Create docker volumes
+        run: docker volume create ${TEST}
+
+      - name: Run test
+        timeout-minutes: 5
+        run: make tests/${TEST}
