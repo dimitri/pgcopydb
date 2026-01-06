@@ -100,17 +100,22 @@ jobs:
             echo "TEST=${{ matrix.TEST }}" >> $GITHUB_ENV
             echo "PGVERSION=${{ matrix.PGVERSION }}" >> $GITHUB_ENV
 
-      - name: Setup Docker buildx
+      - name: Setup Docker buildx (caching only)
         uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
 
       - name: Build pgcopydb Docker image
-        run: |
-          docker buildx build \
-            --build-arg PGVERSION=${{ matrix.PGVERSION }} \
-            --cache-from type=gha,scope=pg${{ matrix.PGVERSION }} \
-            --cache-to type=gha,mode=max,scope=pg${{ matrix.PGVERSION }} \
-            --load \
-            -t pgcopydb .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: pgcopydb
+          build-args: |
+            PGVERSION=${{ matrix.PGVERSION }}
+          cache-from: type=gha,scope=pg${{ matrix.PGVERSION }}
+          cache-to: type=gha,mode=max,scope=pg${{ matrix.PGVERSION }}
 
       - name: Create docker volumes
         run: docker volume create ${TEST}
@@ -165,17 +170,22 @@ jobs:
             echo "TEST=${{ matrix.TEST }}" >> $GITHUB_ENV
             echo "PGVERSION=${{ matrix.PGVERSION }}" >> $GITHUB_ENV
 
-      - name: Setup Docker buildx
+      - name: Setup Docker buildx (caching only)
         uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
 
       - name: Build pgcopydb Docker image
-        run: |
-          docker buildx build \
-            --build-arg PGVERSION=${{ matrix.PGVERSION }} \
-            --cache-from type=gha,scope=pg${{ matrix.PGVERSION }} \
-            --cache-to type=gha,mode=max,scope=pg${{ matrix.PGVERSION }} \
-            --load \
-            -t pgcopydb .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: pgcopydb
+          build-args: |
+            PGVERSION=${{ matrix.PGVERSION }}
+          cache-from: type=gha,scope=pg${{ matrix.PGVERSION }}
+          cache-to: type=gha,mode=max,scope=pg${{ matrix.PGVERSION }}
 
       - name: Create docker volumes
         run: docker volume create ${TEST}
