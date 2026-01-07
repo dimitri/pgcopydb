@@ -4,6 +4,7 @@
 TOP := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 PGCOPYDB ?= $(TOP)src/bin/pgcopydb/pgcopydb
 PGVERSION ?= 16
+DOCKER ?= docker
 
 all: bin ;
 
@@ -33,8 +34,8 @@ update-docs: bin
 
 check-docs:
 	cat Dockerfile ci/Dockerfile.docs.template > ci/Dockerfile.docs
-	docker build --file=ci/Dockerfile.docs --tag test-docs .
-	docker run test-docs
+	$(DOCKER) build --file=ci/Dockerfile.docs --tag test-docs .
+	$(DOCKER) run test-docs
 
 test: build
 	$(MAKE) -C tests all
@@ -54,7 +55,7 @@ indent:
 	citus_indent
 
 build: version
-	docker build --build-arg PGVERSION=$(PGVERSION) -t pgcopydb .
+	$(DOCKER) build --build-arg PGVERSION=$(PGVERSION) -t pgcopydb .
 
 echo-version: GIT-VERSION-FILE
 	@awk '{print $$3}' $<
@@ -65,17 +66,17 @@ version: GIT-VERSION-FILE
 
 # debian packages built from the current sources
 deb:
-	docker build -f Dockerfile.debian -t pgcopydb_debian .
+	$(DOCKER) build -f Dockerfile.debian -t pgcopydb_debian .
 
 debsh: deb
-	docker run --rm -it pgcopydb_debian bash
+	$(DOCKER) run --rm -it pgcopydb_debian bash
 
 # debian packages built from latest tag, manually maintained in the Dockerfile
 deb-qa:
-	docker build -f Dockerfile.debian-qa -t pgcopydb_debian_qa .
+	$(DOCKER) build -f Dockerfile.debian-qa -t pgcopydb_debian_qa .
 
 debsh-qa: deb-qa
-	docker run --rm -it pgcopydb_debian_qa bash
+	$(DOCKER) run --rm -it pgcopydb_debian_qa bash
 
 .PHONY: all
 .PHONY: bin clean install docs maintainer-clean update-docs
