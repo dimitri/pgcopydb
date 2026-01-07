@@ -159,14 +159,14 @@ commit;
 
 --
 -- Test consecutive escaped quotes and json/jsonb type handling
--- See https://github.com/matixlol/pgcopydb/commit/5a1b756
 --
 begin;
 
--- Test consecutive single quotes (customer's reported issue)
+-- Test consecutive single quotes
 -- PostgreSQL stores these with doubled quotes: '''' becomes ''
 insert into quote_escaping_test (text_col, json_col, jsonb_col) values
     ('test ''''quotes', '{"key": "value"}', '{"key": "value"}'),
     ('has ''one quote', '{"this": "is a ''test''"}', '{"double": "single quotes ''''test''''"}');
 
 commit;
+

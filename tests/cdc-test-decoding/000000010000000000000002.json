@@ -72,3 +72,7 @@
 {"action":"C","xid":"508","lsn":"0/250A6F8","timestamp":"2024-08-19 18:34:12.84662+0000","message":"COMMIT 508"}
 {"action":"K","lsn":"0/24F2A68","timestamp":"2024-07-30 11:12:03.70544+0000"}
 {"action":"E","lsn":"0/24F2A68"}
+{"action":"B","xid":"999","lsn":"0/9999999","timestamp":"2024-01-01 00:00:00.00000+0000","message":"BEGIN 999"}
+{"action":"I","xid":"0","lsn":"0/9999999","timestamp":"2024-01-01 00:00:00.00000+0000","message":"table public.quote_escaping_test: INSERT: id[integer]:1 text_col[text]:'test ''''quotes' json_col[json]:'{\"key\": \"value\"}' jsonb_col[jsonb]:'{\"key\": \"value\"}'"}
+{"action":"I","xid":"0","lsn":"0/9999999","timestamp":"2024-01-01 00:00:00.00000+0000","message":"table public.quote_escaping_test: INSERT: id[integer]:2 text_col[text]:'has ''one quote' json_col[json]:'{\"this\": \"is a ''test''\"}' jsonb_col[jsonb]:'{\"double\": \"single quotes ''''test''''\"}'"}
+{"action":"C","xid":"999","lsn":"0/9999999","timestamp":"2024-01-01 00:00:00.00000+0000","message":"COMMIT 999"}
