@@ -52,6 +52,7 @@ typedef struct TestDecodingColumns
 	int colnameLen;
 	char *valueStart;
 	int valueLen;
+	bool isQuoted;
 
 	struct TestDecodingColumns *next;
 } TestDecodingColumns;
@@ -745,6 +746,9 @@ parseNextColumn(TestDecodingColumns *cols,
 {
 	char *ptr = (char *) (header->message + header->pos);
 
+	/* explicitly initialize isQuoted to false for code clarity */
+	cols->isQuoted = false;
+
 	if (ptr == NULL || *ptr == '\0')
 	{
 		header->eom = true;
@@ -852,6 +856,8 @@ parseNextColumn(TestDecodingColumns *cols,
 	 */
 	if (*ptr == '\'')
 	{
+		cols->isQuoted = true;
+
 		/* skip the opening single-quote now */
 		char *cur = ptr + 1;
 
@@ -901,6 +907,8 @@ parseNextColumn(TestDecodingColumns *cols,
 	 */
 	else if (*ptr == 'B')
 	{
+		cols->isQuoted = true;
+
 		/* skip B and ' */
 		char *start = ptr + 2;
 		char *end = strchr(start, '\'');
@@ -1015,7 +1023,9 @@ listToTuple(LogicalMessageTuple *tuple, TestDecodingColumns *cols, int count)
 		}
 
 		/* strlen("null") == 4 */
-		if (strncmp(cur->valueStart, "null", 4) == 0)
+		if (!cur->isQuoted &&
+			cur->valueLen == 4 &&
+			strncmp(cur->valueStart, "null", 4) == 0)
 		{
 			valueColumn->isNull = true;
 		}
