@@ -1,0 +1,61 @@
+#!/bin/sh
+#
+# Pre-commit hook to check for banned APIs and code style
+# This runs the same checks that CI uses to catch issues before pushing
+#
+
+echo "Running banned API check..."
+
+# Run the banned API check script
+if ! sh ./ci/banned.h.sh; then
+    echo ""
+    echo "❌ Pre-commit check failed: Banned API usage detected"
+    echo ""
+    echo "The following APIs are banned in this codebase:"
+    echo "  - snprintf, sprintf, vsprintf (use sformat instead)"
+    echo "  - strcpy, strncpy (use strlcpy instead)"
+    echo "  - strcat, strncat (use strlcat instead)"
+    echo "  - memcpy (use strlcpy or memmove for strings)"
+    echo ""
+    echo "See ci/banned.h.sh for the full list of banned APIs."
+    echo "To bypass this check (not recommended), use: git commit --no-verify"
+    echo ""
+    exit 1
+fi
+
+echo "✓ Banned API check passed"
+
+# Check for style issues
+echo "Running code style check..."
+
+# Detect docker/podman command
+if command -v docker >/dev/null 2>&1; then
+    DOCKER_CMD="docker"
+elif command -v podman >/dev/null 2>&1; then
+    DOCKER_CMD="podman"
+else
+    echo "⚠️  Warning: Neither docker nor podman found, skipping style check"
+    echo "   Install docker or podman to run style checks locally"
+    exit 0
+fi
+
+# Run style checker in container
+if ! $DOCKER_CMD run --rm -v "$(pwd):/app" -w /app citus/stylechecker:no-py citus_indent --check 2>&1 | grep -E "(FAIL|PASS)" | tail -20; then
+    echo ""
+    echo "❌ Pre-commit check failed: Code style issues detected"
+    echo ""
+    echo "Run this to see detailed output:"
+    echo "  $DOCKER_CMD run --rm -v \"\$(pwd):/app\" -w /app citus/stylechecker:no-py citus_indent --check"
+    echo ""
+    echo "To bypass this check (not recommended), use: git commit --no-verify"
+    echo ""
+    exit 1
+fi
+
+if [ -z "$(git diff --cached --name-only | grep '\.c$\|\.h$')" ]; then
+    echo "✓ No C/header files changed, skipping style check"
+else
+    echo "✓ Code style check passed"
+fi
+
+exit 0
