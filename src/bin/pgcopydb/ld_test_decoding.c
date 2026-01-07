@@ -746,6 +746,9 @@ parseNextColumn(TestDecodingColumns *cols,
 {
 	char *ptr = (char *) (header->message + header->pos);
 
+	/* explicitly initialize isQuoted to false for code clarity */
+	cols->isQuoted = false;
+
 	if (ptr == NULL || *ptr == '\0')
 	{
 		header->eom = true;
