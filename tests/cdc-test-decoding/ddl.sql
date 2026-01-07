@@ -217,3 +217,16 @@ create table xpto2 (
 );
 
 commit;
+
+--
+-- Test for consecutive escaped single quotes and json/jsonb types
+-- See https://github.com/matixlol/pgcopydb/commit/5a1b756
+--
+begin;
+create table quote_escaping_test (
+    id serial primary key,
+    text_col text,
+    json_col json,
+    jsonb_col jsonb
+);
+commit;

@@ -110,3 +110,7 @@ EXECUTE 1f8e1835["12345678910111213141516171819202122232425262728293031323334353
 COMMIT; -- {"xid":508,"lsn":"0/250B0D0","timestamp":"2024-08-20 17:18:39.578242+0000"}
 -- KEEPALIVE {"lsn":"0/250B0D0","timestamp":"2024-08-20 17:18:39.578289+0000"}
 -- ENDPOS {"lsn":"0/250B0D0"}
+BEGIN; -- {"xid":755,"lsn":"0/2449C20","timestamp":"2026-01-07 21:16:18.228400+0000","commit_lsn":"0/244A200"}
+PREPARE 27bb70c4 AS INSERT INTO public.quote_escaping_test (id, text_col, json_col, jsonb_col) overriding system value VALUES ($1, $2, $3, $4), ($5, $6, $7, $8), ($9, $10, $11, $12);
+EXECUTE 27bb70c4["1","test ''quotes","{\"key\": \"value\"}","{\"key\": \"value\"}","2","has 'one quote","{\"this\": \"is a test\"}","{\"double\": \"quotes\"}","3","json apostrophe","{\"msg\": \"it's working\"}","{\"msg\": \"it's working\"}"];
+COMMIT; -- {"xid":755,"lsn":"0/244A200","timestamp":"2026-01-07 21:16:18.228455+0000"}
