@@ -1050,19 +1050,26 @@ listToTuple(LogicalMessageTuple *tuple, TestDecodingColumns *cols, int count)
 				return false;
 			}
 
-			/* copy the string contents without the surrounding quotes */
-			for (int pidx = 0, vidx = 0; pidx < cur->valueLen; pidx++)
+			/*
+			 * Un-double the single-quotes: PostgreSQL doubles them as an escape
+			 * mechanism, so '' becomes '. We need to handle consecutive pairs
+			 * correctly: '''' should become '', not '.
+			 */
+			for (int src = 0, dst = 0; src < cur->valueLen; src++)
 			{
-				char *ptr = cur->valueStart + pidx;
-				char *nxt = cur->valueStart + pidx + 1;
-
-				/* unescape the single-quotes */
-				if (*ptr == '\'' && *nxt == '\'')
+				if (cur->valueStart[src] == '\'' &&
+					(src + 1) < cur->valueLen &&
+					cur->valueStart[src + 1] == '\'')
 				{
-					continue;
+					/* Found a doubled quote - copy one quote and skip the second */
+					valueColumn->val.str[dst++] = '\'';
+					src++;  /* Skip the second quote of the pair */
 				}
-
-				valueColumn->val.str[vidx++] = *ptr;
+				else
+				{
+					/* Regular character - copy as-is */
+					valueColumn->val.str[dst++] = cur->valueStart[src];
+				}
 			}
 		}
 		else
