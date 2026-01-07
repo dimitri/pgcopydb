@@ -13,6 +13,11 @@ on:
   pull_request:
     branches: [ main ]
 
+# Cancel redundant runs on the same PR/branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 env:
   # Use docker.io for Docker Hub if empty
   REGISTRY: ghcr.io

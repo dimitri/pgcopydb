@@ -10,6 +10,11 @@ on:
 
   workflow_dispatch:
 
+# Cancel redundant runs on the same PR/branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # ============================================================================
   # TIER 1: Fast checks (~2-3 minutes total)
