@@ -101,7 +101,12 @@ jobs:
             echo "PGVERSION=${{ matrix.PGVERSION }}" >> $GITHUB_ENV
 
       - name: Build pgcopydb Docker image
-        run: make build
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 10
+          command: make build
 
       - name: Create docker volumes
         run: docker volume create ${TEST}
@@ -157,7 +162,12 @@ jobs:
             echo "PGVERSION=${{ matrix.PGVERSION }}" >> $GITHUB_ENV
 
       - name: Build pgcopydb Docker image
-        run: make build
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 10
+          command: make build
 
       - name: Create docker volumes
         run: docker volume create ${TEST}
