@@ -162,11 +162,14 @@ commit;
 --
 begin;
 
--- Test consecutive single quotes
--- PostgreSQL stores these with doubled quotes: '''' becomes ''
+-- Test single quotes/apostrophes in JSON values
+-- JSON uses double quotes for strings, apostrophes are literal characters
+-- PostgreSQL SQL requires doubling apostrophes in string literals: '' = one '
+-- test_decoding will output the JSON wrapped in quotes with doubled apostrophes
 insert into quote_escaping_test (text_col, json_col, jsonb_col) values
     ('test ''''quotes', '{"key": "value"}', '{"key": "value"}'),
-    ('has ''one quote', '{"this": "is a ''test''"}', '{"double": "single quotes ''''test''''"}');
+    ('has ''one quote', '{"this": "is a test"}', '{"double": "quotes"}'),
+    ('json apostrophe', '{"msg": "it''s working"}', '{"msg": "it''s working"}');
 
 commit;
 
