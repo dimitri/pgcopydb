@@ -95,3 +95,19 @@ diff /usr/src/pgcopydb/continued-txn.sql /tmp/continued-txn.sql || (cat /tmp/con
 
 # cleanup
 pgcopydb stream cleanup
+
+# Verify quote escaping test data replicated correctly
+echo "Verifying quote escaping test data..."
+sql="select id, text_col, json_col::text, jsonb_col::text from quote_escaping_test order by id"
+psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c "${sql}" > /tmp/quote_source.out
+psql -At -d ${PGCOPYDB_TARGET_PGURI} -c "${sql}" > /tmp/quote_target.out
+
+diff /tmp/quote_source.out /tmp/quote_target.out || (
+    echo "ERROR: Quote escaping test data mismatch!"
+    echo "Source:"
+    cat /tmp/quote_source.out
+    echo "Target:"
+    cat /tmp/quote_target.out
+    exit 1
+)
+echo "Quote escaping test passed!"

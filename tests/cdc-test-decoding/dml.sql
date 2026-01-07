@@ -156,3 +156,17 @@ from generate_series(1, 2000) g(i);
 update xpto2 set toasted_col1 = toasted_col1, toasted_col2 = toasted_col2;
 
 commit;
+
+--
+-- Test consecutive escaped quotes and json/jsonb type handling
+-- See https://github.com/matixlol/pgcopydb/commit/5a1b756
+--
+begin;
+
+-- Test consecutive single quotes (customer's reported issue)
+-- PostgreSQL stores these with doubled quotes: '''' becomes ''
+insert into quote_escaping_test (text_col, json_col, jsonb_col) values
+    ('test ''''quotes', '{"key": "value"}', '{"key": "value"}'),
+    ('has ''one quote', '{"this": "is a ''test''"}', '{"double": "single quotes ''''test''''"}');
+
+commit;
