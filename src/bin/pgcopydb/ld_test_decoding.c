@@ -834,7 +834,14 @@ parseNextColumn(TestDecodingColumns *cols,
 
 	sformat(typname, sizeof(typname), "%.*s", typLen, typStart);
 
-	if (streq(typname, "text"))
+	/*
+	 * Treat text, json, and jsonb types the same way for quote un-escaping.
+	 * test_decoding outputs all of these with doubled single-quotes that need
+	 * to be collapsed.
+	 */
+	if (streq(typname, "text") ||
+		streq(typname, "json") ||
+		streq(typname, "jsonb"))
 	{
 		cols->oid = TEXTOID;
 	}
