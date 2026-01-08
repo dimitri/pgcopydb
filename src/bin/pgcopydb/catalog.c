@@ -56,7 +56,7 @@ static char *sourceDBcreateDDLs[] = {
 	"create index s_d_p_oid on s_database_property(datname)",
 
 	"create table s_namespace("
-	"  nspname text primary key, restore_list_name text"
+	"  oid integer primary key, nspname text, restore_list_name text "
 	")",
 
 	"create index s_n_rlname on s_namespace(restore_list_name)",
@@ -372,7 +372,7 @@ static char *targetDBcreateDDLs[] = {
 	")",
 
 	"create table s_namespace("
-	"  nspname text primary key, restore_list_name text"
+	"  oid integer primary key, nspname text, restore_list_name text "
 	")",
 
 	"create index s_n_rlname on s_namespace(restore_list_name)",

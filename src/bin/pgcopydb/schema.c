@@ -348,11 +348,9 @@ schema_list_schemas(PGSQL *pgsql, DatabaseCatalog *catalog)
 
 	char *sql =
 		"select n.oid, n.nspname, "
-		"       format('- %s %s', "
-		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')) "
+		"       format('- %s', "
+		"                regexp_replace(n.nspname, '[\\n\\r]', ' ')) "
 		"  from pg_namespace n "
-		"       join pg_roles auth ON auth.oid = n.nspowner "
 		" where nspname <> 'information_schema' and nspname !~ '^pg_'";
 
 	if (!pgsql_execute_with_params(pgsql, sql,
@@ -519,11 +517,9 @@ schema_list_ext_schemas(PGSQL *pgsql, DatabaseCatalog *catalog)
 
 	char *sql =
 		"select distinct on (n.oid) n.oid, n.nspname, "
-		"       format('- %s %s', "
-		"                regexp_replace(n.nspname, '[\\n\\r]', ' '), "
-		"                regexp_replace(auth.rolname, '[\\n\\r]', ' ')) "
+		"       format('- %s', "
+		"                regexp_replace(n.nspname, '[\\n\\r]', ' ')) "
 		"  from pg_namespace n "
-		"       join pg_roles auth ON auth.oid = n.nspowner "
 		"       join pg_depend d "
 		"         on d.refclassid = 'pg_namespace'::regclass "
 		"        and d.refobjid = n.oid "
