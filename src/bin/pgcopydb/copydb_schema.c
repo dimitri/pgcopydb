@@ -583,6 +583,7 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 	}
 
 	if ((specs->section == DATA_SECTION_ALL ||
+		 specs->section == DATA_SECTION_SCHEMA ||
 		 specs->section == DATA_SECTION_NAMESPACES) &&
 		!sourceDB->sections[DATA_SECTION_NAMESPACES].fetched)
 	{
