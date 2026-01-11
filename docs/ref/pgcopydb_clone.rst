@@ -66,6 +66,15 @@ The ``pgcopydb clone`` command implements the following steps:
      This step uses as many as ``--restore-jobs`` jobs for ``pg_restore`` to
      share the workload and restore the objects in parallel.
 
+     .. note::
+
+        pgcopydb tolerates minor ``pg_restore`` errors during schema restoration.
+        When ``pg_restore`` reports "errors ignored on restore: N" where N ≤ 10,
+        pgcopydb logs a warning and continues. This allows migrations to proceed
+        through extension version mismatches (e.g., PostGIS 3.1.5 → 3.5.3) that
+        don't affect data integrity. See :ref:`schema_restoration_error_tolerance`
+        for details.
+
   4. Then as many as ``--table-jobs`` COPY sub-processes are started to
      share the workload and COPY the data from the source to the target
      database one table at a time, in a loop.
