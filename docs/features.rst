@@ -219,3 +219,44 @@ using the recommended ``--dir`` option.
     such as the list of roles, the list of schemas, or the list of already
     existing constraints found on the target database.
 
+.. _schema_restoration_error_tolerance:
+
+Schema Restoration Error Tolerance
+-----------------------------------
+
+When migrating databases between PostgreSQL instances with different versions
+or extension versions, ``pg_restore`` may encounter minor errors that don't
+affect the integrity of the migration. A common example is PostgreSQL
+extension version mismatches, such as migrating from PostGIS 3.1.5 to 3.5.3.
+
+In these cases, ``pg_restore`` exits with code 1 but reports "errors ignored
+on restore: N" in its output. These errors are typically benign - the schema
+objects that couldn't be restored already exist or are incompatible in ways
+that don't affect the data migration.
+
+pgcopydb now tolerates such errors automatically. When ``pg_restore`` exits
+with code 1:
+
+  1. pgcopydb parses the output for "errors ignored on restore: N"
+  2. If N ≤ 10 (configurable threshold), pgcopydb logs a warning and continues
+  3. If N > 10 or N = 0, pgcopydb fails as before to prevent data corruption
+
+This behavior allows migrations to proceed through:
+
+  - Extension version mismatches between source and target
+  - Custom type definitions that differ slightly between PostgreSQL versions
+  - Minor schema compatibility issues that don't affect data integrity
+
+**Configuration**: The tolerance threshold is defined by
+``MAX_TOLERATED_RESTORE_ERRORS`` in ``src/bin/pgcopydb/pgcmd.c`` (default: 10).
+Modify this constant and rebuild pgcopydb to change the threshold.
+
+**Warning logs**: When errors are tolerated, pgcopydb logs::
+
+  WARN: pg_restore exited with code 1 but reported 2 ignored errors (within tolerance of 10)
+  WARN: Continuing despite pg_restore errors - please verify schema integrity
+
+After migration, verify that your schema is correct and that the ignored
+errors were indeed benign by checking the application behavior and running
+schema comparison tools.
+
