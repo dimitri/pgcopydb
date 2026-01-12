@@ -769,6 +769,7 @@ pg_restore_roles(PostgresPaths *pgPaths,
 		{
 			continue;
 		}
+
 		/* implement CREATE ROLE our own way (check if exists first) */
 		else if (strncmp(currentLine, createRole, createRoleLen) == 0)
 		{
