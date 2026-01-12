@@ -87,6 +87,15 @@ Change Data Capture
 
     See the reference manual for the ``pgcopydb fork --follow`` command.
 
+Schema Restoration Error Tolerance
+    When migrating between PostgreSQL instances with different extension
+    versions (e.g., PostGIS 3.1.5 → 3.5.3), ``pg_restore`` may report minor
+    errors that don't affect data integrity. pgcopydb automatically tolerates
+    these errors (up to 10 by default) and continues the migration, logging
+    warnings for verification.
+
+    See :ref:`schema_restoration_error_tolerance` for details.
+
 .. toctree::
    :hidden:
    :caption: Getting Started

@@ -460,6 +460,11 @@ splitLines(LinesBuffer *lbuf, char *buffer)
 
 
 /*
+ * Track the last count of "errors ignored on restore" from pg_restore output
+ */
+static int lastIgnoredRestoreErrors = 0;
+
+/*
  * processBufferCallback is a function callback to use with the subcommands.c
  * library when we want to output a command's output as it's running, such as
  * when running a pg_basebackup or vacuumdb command.
@@ -487,6 +492,27 @@ processBufferCallback(const char *buffer, bool error)
 			char *matchDebug = regexp_first_match(line, debugPattern);
 
 			int logLevel = error ? LOG_ERROR : LOG_INFO;
+
+			/* Parse "errors ignored on restore: N" from pg_restore */
+			if (strstr(line, "errors ignored on restore:") != NULL)
+			{
+				char *colon = strrchr(line, ':');
+				if (colon != NULL)
+				{
+					int count = 0;
+
+					/* Skip whitespace after colon */
+					char *numStart = colon + 1;
+					while (*numStart == ' ' || *numStart == '\t')
+					{
+						numStart++;
+					}
+					if (stringToInt(numStart, &count))
+					{
+						lastIgnoredRestoreErrors = count;
+					}
+				}
+			}
 
 			if (matchDebug != NULL)
 			{
@@ -621,4 +647,17 @@ pretty_print_count(char *buffer, size_t size, uint64_t number)
 
 		sformat(buffer, size, "%d %s", (int) count, suffixes[sIndex]);
 	}
+}
+
+
+/*
+ * Get the last count of ignored errors from pg_restore and reset it.
+ * This is used to determine if we should tolerate pg_restore exit code 1.
+ */
+int
+get_and_reset_ignored_restore_errors(void)
+{
+	int count = lastIgnoredRestoreErrors;
+	lastIgnoredRestoreErrors = 0;
+	return count;
 }

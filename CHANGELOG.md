@@ -10,6 +10,7 @@
 * Fix catalog mismatch errors when using different commands in sequence with filters (#869, #868)
 * Fix transaction state management for `clone --follow --snapshot` workflows
 * Make catalog_attach() idempotent to prevent concurrent process conflicts
+* Tolerate minor pg_restore errors during schema restoration - pgcopydb now continues when pg_restore exits with code 1 but reports "errors ignored on restore: N" where N ≤ 10 (configurable via MAX_TOLERATED_RESTORE_ERRORS). This allows migrations to proceed through minor extension version mismatches (e.g., PostGIS 3.1.5 → 3.5.3) that don't affect data integrity.
 
 ### pgcopydb v0.17 (August 7, 2024) ###
 
