@@ -11,6 +11,7 @@
 #include "parson.h"
 
 #include "copydb.h"
+#include "filtering.h"
 #include "queue_utils.h"
 #include "pgsql.h"
 #include "schema.h"
@@ -368,6 +369,9 @@ typedef struct StreamContext
 	/* hash table acts as a cache for tables with generated columns */
 	GeneratedColumnsCache *generatedColumnsCache;
 
+	/* table filtering configuration */
+	SourceFilters *filters;
+
 	Queue *transformQueue;
 	PGSQL *transformPGSQL;
 
@@ -457,6 +461,8 @@ typedef struct StreamApplyContext
 	char sqlFileName[MAXPGPATH];
 
 	PreparedStmt *preparedStmt;
+
+	SourceFilters *filters;     /* table filtering configuration */
 } StreamApplyContext;
 
 
@@ -522,6 +528,9 @@ struct StreamSpecs
 	/* transform needs some catalog lookups (pkey, type oid) */
 	DatabaseCatalog *sourceDB;
 
+	/* table filtering configuration */
+	SourceFilters *filters;
+
 	/* receive push json filenames to a queue for transform */
 	Queue transformQueue;
 	PGSQL transformPGSQL;
@@ -550,6 +559,7 @@ bool stream_init_specs(StreamSpecs *specs,
 					   uint64_t endpos,
 					   LogicalStreamMode mode,
 					   DatabaseCatalog *sourceDB,
+					   SourceFilters *filters,
 					   bool stdIn,
 					   bool stdOut,
 					   bool logSQL);
@@ -724,13 +734,15 @@ bool stream_apply_init_context(StreamApplyContext *context,
 							   CDCPaths *paths,
 							   ConnStrings *connStrings,
 							   char *origin,
-							   uint64_t endpos);
+							   uint64_t endpos,
+							   SourceFilters *filters);
 
 bool setupReplicationOrigin(StreamApplyContext *context);
 
 bool computeSQLFileName(StreamApplyContext *context);
 
-bool parseSQLAction(const char *query, LogicalMessageMetadata *metadata);
+bool parseSQLAction(const char *query, LogicalMessageMetadata *metadata,
+					SourceFilters *filters);
 
 bool stream_apply_find_durable_lsn(StreamApplyContext *context,
 								   uint64_t *durableLSN);

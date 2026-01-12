@@ -582,6 +582,7 @@ cli_stream_setup(int argc, char **argv)
 						   streamDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
 						   &(copySpecs.catalogs.source),
+						   &(copySpecs.filters),
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL))
@@ -709,6 +710,7 @@ cli_stream_catchup(int argc, char **argv)
 						   streamDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
 						   &(copySpecs.catalogs.source),
+						   &(copySpecs.filters),
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL))
@@ -792,6 +794,7 @@ cli_stream_replay(int argc, char **argv)
 						   streamDBoptions.endpos,
 						   STREAM_MODE_REPLAY,
 						   &(copySpecs.catalogs.source),
+						   &(copySpecs.filters),
 						   true,  /* stdin */
 						   true, /* stdout */
 						   logSQL))
@@ -917,6 +920,7 @@ cli_stream_transform(int argc, char **argv)
 						   streamDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
 						   &(copySpecs.catalogs.source),
+						   &(copySpecs.filters),
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL))
@@ -1079,6 +1083,7 @@ cli_stream_apply(int argc, char **argv)
 							   streamDBoptions.endpos,
 							   STREAM_MODE_CATCHUP,
 							   &(copySpecs.catalogs.source),
+							   &(copySpecs.filters),
 							   true, /* streamDBoptions.stdIn */
 							   false, /* streamDBoptions.stdOut */
 							   logSQL))
@@ -1105,7 +1110,8 @@ cli_stream_apply(int argc, char **argv)
 									   &(copySpecs.cfPaths.cdc),
 									   &(streamDBoptions.connStrings),
 									   streamDBoptions.origin,
-									   streamDBoptions.endpos))
+									   streamDBoptions.endpos,
+									   &(copySpecs.filters)))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_TARGET);
@@ -1190,6 +1196,7 @@ stream_start_in_mode(LogicalStreamMode mode)
 						   streamDBoptions.endpos,
 						   mode,
 						   &(copySpecs.catalogs.source),
+						   &(copySpecs.filters),
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL))

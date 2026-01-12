@@ -49,6 +49,7 @@ stream_init_specs(StreamSpecs *specs,
 				  uint64_t endpos,
 				  LogicalStreamMode mode,
 				  DatabaseCatalog *sourceDB,
+				  SourceFilters *filters,
 				  bool stdin,
 				  bool stdout,
 				  bool logSQL)
@@ -61,6 +62,7 @@ stream_init_specs(StreamSpecs *specs,
 
 	specs->paths = *paths;
 	specs->endpos = endpos;
+	specs->filters = filters;
 
 	/*
 	 * Open the specified sourceDB catalog.

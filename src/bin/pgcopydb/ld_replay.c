@@ -145,7 +145,7 @@ stream_replay_line(void *ctx, const char *line, bool *stop)
 
 	LogicalMessageMetadata metadata = { 0 };
 
-	if (!parseSQLAction((char *) line, &metadata))
+	if (!parseSQLAction((char *) line, &metadata, context->filters))
 	{
 		/* errors have already been logged */
 		return false;

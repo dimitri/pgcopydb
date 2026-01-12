@@ -187,7 +187,8 @@ stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
 								   &(specs->paths),
 								   specs->connStrings,
 								   specs->origin,
-								   specs->endpos))
+								   specs->endpos,
+								   specs->filters))
 	{
 		/* errors have already been logged */
 		return false;
@@ -485,7 +486,7 @@ stream_apply_file(StreamApplyContext *context)
 		const char *sql = content.lbuf.lines[i];
 		LogicalMessageMetadata *metadata = &(mArray[i]);
 
-		if (!parseSQLAction(sql, metadata))
+		if (!parseSQLAction(sql, metadata, context->filters))
 		{
 			/* errors have already been logged */
 			return false;
@@ -1036,6 +1037,15 @@ stream_apply_sql(StreamApplyContext *context,
 		case STREAM_ACTION_UPDATE:
 		case STREAM_ACTION_DELETE:
 		{
+			/* Skip filtered out statements */
+			if (metadata->filterOut)
+			{
+				log_trace("Skipping filtered %s statement",
+						  metadata->action == STREAM_ACTION_INSERT ? "INSERT" :
+						  metadata->action == STREAM_ACTION_UPDATE ? "UPDATE" : "DELETE");
+				return true;
+			}
+
 			/*
 			 * We still allow continuedTxn, COMMIT message determines whether
 			 * to keep the transaction or abort it.
@@ -1077,6 +1087,13 @@ stream_apply_sql(StreamApplyContext *context,
 
 		case STREAM_ACTION_EXECUTE:
 		{
+			/* Skip filtered out statements - check if corresponding PREPARE was filtered */
+			if (metadata->filterOut)
+			{
+				log_trace("Skipping filtered EXECUTE statement");
+				return true;
+			}
+
 			/*
 			 * We still allow continuedTxn, COMMIT message determines whether
 			 * to keep the transaction or abort it.
@@ -1146,6 +1163,13 @@ stream_apply_sql(StreamApplyContext *context,
 
 		case STREAM_ACTION_TRUNCATE:
 		{
+			/* Skip filtered out statements */
+			if (metadata->filterOut)
+			{
+				log_trace("Skipping filtered TRUNCATE statement");
+				return true;
+			}
+
 			/*
 			 * We still allow continuedTxn, COMMIT message determines whether
 			 * to keep the transaction or abort it.
@@ -1361,10 +1385,12 @@ stream_apply_init_context(StreamApplyContext *context,
 						  CDCPaths *paths,
 						  ConnStrings *connStrings,
 						  char *origin,
-						  uint64_t endpos)
+						  uint64_t endpos,
+						  SourceFilters *filters)
 {
 	context->sourceDB = sourceDB;
 	context->paths = *paths;
+	context->filters = filters;
 
 	/*
 	 * We have to consider both the --endpos command line option and the
@@ -1444,11 +1470,227 @@ computeSQLFileName(StreamApplyContext *context)
 
 
 /*
+ * extractTableNameFromPrepare extracts the schema and table name from a
+ * PREPARE statement like:
+ *   PREPARE hash AS INSERT INTO "schema"."table" ...
+ *   PREPARE hash AS UPDATE "schema"."table" SET ...
+ *   PREPARE hash AS DELETE FROM "schema"."table" WHERE ...
+ *
+ * Returns true if extraction succeeded, false otherwise.
+ */
+static bool
+extractTableNameFromPrepare(const char *stmt,
+							char *nspname, size_t nspnameSize,
+							char *relname, size_t relnameSize)
+{
+	/* Find the table name after INSERT INTO, UPDATE, or DELETE FROM */
+	const char *tableStart = NULL;
+
+	if ((tableStart = strstr(stmt, "INSERT INTO ")) != NULL)
+	{
+		tableStart += strlen("INSERT INTO ");
+	}
+	else if ((tableStart = strstr(stmt, "UPDATE ")) != NULL)
+	{
+		tableStart += strlen("UPDATE ");
+	}
+	else if ((tableStart = strstr(stmt, "DELETE FROM ")) != NULL)
+	{
+		tableStart += strlen("DELETE FROM ");
+	}
+	else
+	{
+		log_trace("Failed to find table name in PREPARE statement: %s", stmt);
+		return false;
+	}
+
+	/* Skip whitespace */
+	while (*tableStart == ' ' || *tableStart == '\t')
+	{
+		tableStart++;
+	}
+
+	/* Parse quoted or unquoted identifiers */
+	const char *ptr = tableStart;
+	char schema[PG_NAMEDATALEN] = { 0 };
+	char table[PG_NAMEDATALEN] = { 0 };
+	int schemaLen = 0;
+	int tableLen = 0;
+	bool inSchema = true;
+
+	/* Parse first identifier (could be schema or table) */
+	if (*ptr == '"')
+	{
+		/* Quoted identifier */
+		ptr++; /* skip opening quote */
+		const char *start = ptr;
+		while (*ptr != '\0' && *ptr != '"')
+		{
+			ptr++;
+		}
+		schemaLen = ptr - start;
+		if (schemaLen >= PG_NAMEDATALEN)
+		{
+			schemaLen = PG_NAMEDATALEN - 1;
+		}
+		sformat(schema, sizeof(schema), "%.*s", schemaLen, start);
+
+		if (*ptr == '"')
+		{
+			ptr++; /* skip closing quote */
+		}
+	}
+	else
+	{
+		/* Unquoted identifier */
+		const char *start = ptr;
+		while (*ptr != '\0' && *ptr != '.' && *ptr != ' ' && *ptr != '(')
+		{
+			ptr++;
+		}
+		schemaLen = ptr - start;
+		if (schemaLen >= PG_NAMEDATALEN)
+		{
+			schemaLen = PG_NAMEDATALEN - 1;
+		}
+		sformat(schema, sizeof(schema), "%.*s", schemaLen, start);
+	}
+
+	/* Check if there's a dot (schema.table) */
+	while (*ptr == ' ' || *ptr == '\t')
+	{
+		ptr++;
+	}
+
+	if (*ptr != '.')
+	{
+		/* No schema qualifier, use "public" as default */
+		strlcpy(nspname, "public", nspnameSize);
+		strlcpy(relname, schema, relnameSize);
+		return true;
+	}
+
+	/* Skip the dot */
+	ptr++;
+
+	/* Skip whitespace after dot */
+	while (*ptr == ' ' || *ptr == '\t')
+	{
+		ptr++;
+	}
+
+	/* Parse table name */
+	if (*ptr == '"')
+	{
+		/* Quoted identifier */
+		ptr++; /* skip opening quote */
+		const char *start = ptr;
+		while (*ptr != '\0' && *ptr != '"')
+		{
+			ptr++;
+		}
+		tableLen = ptr - start;
+		if (tableLen >= PG_NAMEDATALEN)
+		{
+			tableLen = PG_NAMEDATALEN - 1;
+		}
+		sformat(table, sizeof(table), "%.*s", tableLen, start);
+	}
+	else
+	{
+		/* Unquoted identifier */
+		const char *start = ptr;
+		while (*ptr != '\0' && *ptr != ' ' && *ptr != '(')
+		{
+			ptr++;
+		}
+		tableLen = ptr - start;
+		if (tableLen >= PG_NAMEDATALEN)
+		{
+			tableLen = PG_NAMEDATALEN - 1;
+		}
+		sformat(table, sizeof(table), "%.*s", tableLen, start);
+	}
+
+	strlcpy(nspname, schema, nspnameSize);
+	strlcpy(relname, table, relnameSize);
+
+	return true;
+}
+
+
+/*
+ * shouldFilterOutTable checks if a given table should be filtered out based
+ * on the configured filters.
+ */
+static bool
+shouldFilterOutTable(const char *nspname, const char *relname,
+					 SourceFilters *filters)
+{
+	if (filters == NULL)
+	{
+		return false;
+	}
+
+	/* Check include-only-table filter */
+	if (filters->includeOnlyTableList.count > 0)
+	{
+		bool found = false;
+		for (int i = 0; i < filters->includeOnlyTableList.count; i++)
+		{
+			SourceFilterTable *table = &(filters->includeOnlyTableList.array[i]);
+			if (strcmp(table->nspname, nspname) == 0 &&
+				strcmp(table->relname, relname) == 0)
+			{
+				found = true;
+				break;
+			}
+		}
+		if (!found)
+		{
+			log_trace("Filtering out table \"%s\".\"%s\" (not in include-only list)",
+					  nspname, relname);
+			return true;
+		}
+	}
+
+	/* Check exclude-table filter */
+	for (int i = 0; i < filters->excludeTableList.count; i++)
+	{
+		SourceFilterTable *table = &(filters->excludeTableList.array[i]);
+		if (strcmp(table->nspname, nspname) == 0 &&
+			strcmp(table->relname, relname) == 0)
+		{
+			log_trace("Filtering out table \"%s\".\"%s\" (in exclude-table list)",
+					  nspname, relname);
+			return true;
+		}
+	}
+
+	/* Check exclude-table-data filter */
+	for (int i = 0; i < filters->excludeTableDataList.count; i++)
+	{
+		SourceFilterTable *table = &(filters->excludeTableDataList.array[i]);
+		if (strcmp(table->nspname, nspname) == 0 &&
+			strcmp(table->relname, relname) == 0)
+		{
+			log_trace("Filtering out table \"%s\".\"%s\" (in exclude-table-data list)",
+					  nspname, relname);
+			return true;
+		}
+	}
+
+	return false;
+}
+
+
+/*
  * parseSQLAction returns the action that is implemented in the given SQL
  * query.
  */
 bool
-parseSQLAction(const char *query, LogicalMessageMetadata *metadata)
+parseSQLAction(const char *query, LogicalMessageMetadata *metadata,
+			   SourceFilters *filters)
 {
 	metadata->action = STREAM_ACTION_UNKNOWN;
 
@@ -1521,6 +1763,121 @@ parseSQLAction(const char *query, LogicalMessageMetadata *metadata)
 	if (strncmp(query, TRUNCATE, tLen) == 0)
 	{
 		metadata->action = STREAM_ACTION_TRUNCATE;
+
+		/* Extract table name and check filters for TRUNCATE */
+		const char *tableStart = query + tLen;
+		while (*tableStart == ' ' || *tableStart == '\t')
+		{
+			tableStart++;
+		}
+
+		char nspname[PG_NAMEDATALEN] = { 0 };
+		char relname[PG_NAMEDATALEN] = { 0 };
+
+		/* Parse schema.table from TRUNCATE statement */
+		const char *ptr = tableStart;
+		char schema[PG_NAMEDATALEN] = { 0 };
+		char table[PG_NAMEDATALEN] = { 0 };
+		int schemaLen = 0;
+
+		/* Parse first identifier */
+		if (*ptr == '"')
+		{
+			ptr++;
+			const char *start = ptr;
+			while (*ptr != '\0' && *ptr != '"')
+			{
+				ptr++;
+			}
+			schemaLen = ptr - start;
+			if (schemaLen >= PG_NAMEDATALEN)
+			{
+				schemaLen = PG_NAMEDATALEN - 1;
+			}
+			sformat(schema, sizeof(schema), "%.*s", schemaLen, start);
+			if (*ptr == '"')
+			{
+				ptr++;
+			}
+		}
+		else
+		{
+			const char *start = ptr;
+			while (*ptr != '\0' && *ptr != '.' && *ptr != ' ' && *ptr != ';')
+			{
+				ptr++;
+			}
+			schemaLen = ptr - start;
+			if (schemaLen >= PG_NAMEDATALEN)
+			{
+				schemaLen = PG_NAMEDATALEN - 1;
+			}
+			sformat(schema, sizeof(schema), "%.*s", schemaLen, start);
+		}
+
+		/* Skip whitespace */
+		while (*ptr == ' ' || *ptr == '\t')
+		{
+			ptr++;
+		}
+
+		/* Check for dot separator */
+		if (*ptr == '.')
+		{
+			ptr++;
+			while (*ptr == ' ' || *ptr == '\t')
+			{
+				ptr++;
+			}
+
+			/* Parse table name */
+			if (*ptr == '"')
+			{
+				ptr++;
+				const char *start = ptr;
+				while (*ptr != '\0' && *ptr != '"')
+				{
+					ptr++;
+				}
+				int tableLen = ptr - start;
+				if (tableLen >= PG_NAMEDATALEN)
+				{
+					tableLen = PG_NAMEDATALEN - 1;
+				}
+				sformat(table, sizeof(table), "%.*s", tableLen, start);
+			}
+			else
+			{
+				const char *start = ptr;
+				while (*ptr != '\0' && *ptr != ' ' && *ptr != ';')
+				{
+					ptr++;
+				}
+				int tableLen = ptr - start;
+				if (tableLen >= PG_NAMEDATALEN)
+				{
+					tableLen = PG_NAMEDATALEN - 1;
+				}
+				sformat(table, sizeof(table), "%.*s", tableLen, start);
+			}
+
+			strlcpy(nspname, schema, sizeof(nspname));
+			strlcpy(relname, table, sizeof(relname));
+		}
+		else
+		{
+			/* No schema qualifier, use "public" as default */
+			strlcpy(nspname, "public", sizeof(nspname));
+			strlcpy(relname, schema, sizeof(relname));
+		}
+
+		/* Check if this table should be filtered out */
+		if (shouldFilterOutTable(nspname, relname, filters))
+		{
+			metadata->filterOut = true;
+			log_debug("Filtering out TRUNCATE for table \"%s\".\"%s\"",
+					  nspname, relname);
+		}
 	}
 	else if (strncmp(query, PREPARE, pLen) == 0)
 	{
@@ -1569,6 +1926,28 @@ parseSQLAction(const char *query, LogicalMessageMetadata *metadata)
 			/* skip ' AS ' and point to DELETE */
 			metadata->stmt = spc + 1 + 3;
 			metadata->action = STREAM_ACTION_DELETE;
+		}
+
+		/* Extract table name and check filters for DML operations */
+		if (metadata->stmt != NULL)
+		{
+			char nspname[PG_NAMEDATALEN] = { 0 };
+			char relname[PG_NAMEDATALEN] = { 0 };
+
+			if (extractTableNameFromPrepare(metadata->stmt,
+											nspname, sizeof(nspname),
+											relname, sizeof(relname)))
+			{
+				if (shouldFilterOutTable(nspname, relname, filters))
+				{
+					metadata->filterOut = true;
+					log_debug("Filtering out %s for table \"%s\".\"%s\"",
+							  metadata->action == STREAM_ACTION_INSERT ? "INSERT" :
+							  metadata->action == STREAM_ACTION_UPDATE ? "UPDATE" :
+							  "DELETE",
+							  nspname, relname);
+				}
+			}
 		}
 	}
 	else if (strncmp(query, EXECUTE, eLen) == 0)
