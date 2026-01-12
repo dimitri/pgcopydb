@@ -3421,24 +3421,58 @@ pg_copy_large_object(PGSQL *src,
 
 	/*
 	 * 3. Open the blob on the target database
+	 *
+	 *    In PostgreSQL 17+, pg_dump no longer outputs large object metadata
+	 *    in the pre-data section, so the large object may not exist yet.
+	 *    If opening fails, try creating it first.
 	 */
 	int dstfd = lo_open(dst->connection, blobOid, INV_WRITE);
 
 	if (dstfd == -1)
 	{
-		char context[BUFSIZE] = { 0 };
+		/*
+		 * Large object doesn't exist yet (PG17+ behavior or fresh target).
+		 * Create it with the same OID as the source, then try opening again.
+		 */
+		log_debug("Large object %u not found on target, creating it", blobOid);
 
-		sformat(context, sizeof(context),
-				"Failed to open new large object %u", blobOid);
+		Oid createdOid = lo_create(dst->connection, blobOid);
 
-		(void) pgcopy_log_error(dst, NULL, context);
+		if (createdOid != blobOid)
+		{
+			char context[BUFSIZE] = { 0 };
 
-		lo_close(src->connection, srcfd);
+			sformat(context, sizeof(context),
+					"Failed to create large object %u on target", blobOid);
 
-		pgsql_finish(src);
-		pgsql_finish(dst);
+			(void) pgcopy_log_error(dst, NULL, context);
 
-		return false;
+			lo_close(src->connection, srcfd);
+
+			pgsql_finish(src);
+			pgsql_finish(dst);
+
+			return false;
+		}
+
+		dstfd = lo_open(dst->connection, blobOid, INV_WRITE);
+
+		if (dstfd == -1)
+		{
+			char context[BUFSIZE] = { 0 };
+
+			sformat(context, sizeof(context),
+					"Failed to open newly created large object %u", blobOid);
+
+			(void) pgcopy_log_error(dst, NULL, context);
+
+			lo_close(src->connection, srcfd);
+
+			pgsql_finish(src);
+			pgsql_finish(dst);
+
+			return false;
+		}
 	}
 
 	/*
