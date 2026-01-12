@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:latest
 # Define a base image with all our build dependencies.
-FROM --platform=${TARGETPLATFORM} debian:11-slim AS build
+FROM --platform=${TARGETPLATFORM} debian:12-slim AS build
 
 # multi-arch
 ARG TARGETPLATFORM
@@ -15,7 +15,7 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
 	gnupg
 
 RUN curl https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
-RUN echo "deb http://apt.postgresql.org/pub/repos/apt bullseye-pgdg main ${PGVERSION}" > /etc/apt/sources.list.d/pgdg.list
+RUN echo "deb http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main ${PGVERSION}" > /etc/apt/sources.list.d/pgdg.list
 
 RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
   && apt install -qqy --no-install-recommends \
@@ -86,7 +86,7 @@ RUN make -s clean && make -s -j$(nproc) install
 COPY tests tests
 
 # Now the "run" image, as small as possible
-FROM --platform=${TARGETPLATFORM} debian:11-slim AS run
+FROM --platform=${TARGETPLATFORM} debian:12-slim AS run
 
 # multi-arch
 ARG TARGETPLATFORM
@@ -104,7 +104,7 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
 	gnupg
 
 RUN curl https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
-RUN echo "deb http://apt.postgresql.org/pub/repos/apt bullseye-pgdg main ${PGVERSION}" > /etc/apt/sources.list.d/pgdg.list
+RUN echo "deb http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main ${PGVERSION}" > /etc/apt/sources.list.d/pgdg.list
 
 RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
   && apt install -qqy --no-install-suggests --no-install-recommends \
