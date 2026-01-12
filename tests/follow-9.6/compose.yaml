@@ -16,6 +16,11 @@ services:
       -c ssl=on
       -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
       -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
+    healthcheck:
+      test: 'pg_isready -U postgres --dbname=postgres'
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   target:
     image: postgres:${PGVERSION:-16}
@@ -27,6 +32,11 @@ services:
       -c ssl=on
       -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
       -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
+    healthcheck:
+      test: 'pg_isready -U postgres --dbname=postgres'
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   inject:
     image: follow-9.6-inject
@@ -41,6 +51,11 @@ services:
     # share TMPDIR between inject and test services
     volumes:
       - follow-9.6:/var/run/pgcopydb
+    depends_on:
+      source:
+        condition: service_healthy
+      target:
+        condition: service_healthy
 
   test:
     image: follow-9.6
@@ -57,9 +72,12 @@ services:
     volumes:
       - follow-9.6:/var/run/pgcopydb
     depends_on:
-      - source
-      - target
-      - inject
+      source:
+        condition: service_healthy
+      target:
+        condition: service_healthy
+      inject:
+        condition: service_started
 
 volumes:
   follow-9.6:

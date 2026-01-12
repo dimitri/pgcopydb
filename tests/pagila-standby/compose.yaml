@@ -52,8 +52,15 @@ services:
       chmod 0700 /var/lib/postgresql/data
       postgres -c ssl=on -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
      "
+    healthcheck:
+      test: 'pg_isready -U postgres --dbname=pagila'
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
     depends_on:
-      - source
+      source:
+        condition: service_healthy
 
   target:
     <<: *x-postgres-base
@@ -82,6 +89,9 @@ services:
       PGCOPYDB_SPLIT_TABLES_LARGER_THAN: 200kB
       PGCOPYDB_FAIL_FAST: "true"
     depends_on:
-      - source
-      - source-standby
-      - target
+      source:
+        condition: service_healthy
+      source-standby:
+        condition: service_healthy
+      target:
+        condition: service_healthy

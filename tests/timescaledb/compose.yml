@@ -1,6 +1,6 @@
 services:
   source:
-    image: timescale/timescaledb:latest-pg13
+    image: timescale/timescaledb:latest-pg${PGVERSION:-16}
     expose:
       - 5432
     environment:
@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: h4ckm3
       POSTGRES_HOST_AUTH_METHOD: trust
   target:
-    image: timescale/timescaledb:latest-pg13
+    image: timescale/timescaledb:latest-pg${PGVERSION:-16}
     expose:
       - 5432
     environment:
