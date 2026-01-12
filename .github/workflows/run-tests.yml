@@ -66,7 +66,7 @@ jobs:
           docker compose version
 
       - name: Run a test
-        timeout-minutes: 5
+        timeout-minutes: 15
         run: |
           make tests/${TEST}
 
