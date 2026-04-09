@@ -405,7 +405,8 @@ bool copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql, bool reset
 bool copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs);
 bool copydb_objectid_is_filtered_out(CopyDataSpec *specs,
 									 uint32_t oid,
-									 char *restoreListName);
+									 char *restoreListName,
+									 const char *archiveDesc);
 bool copydb_matview_refresh_is_filtered_out(CopyDataSpec *specs,
 											uint32_t oid);
 

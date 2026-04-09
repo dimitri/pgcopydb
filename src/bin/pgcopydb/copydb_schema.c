@@ -1012,13 +1012,51 @@ copydb_matview_refresh_is_filtered_out(CopyDataSpec *specs, uint32_t oid)
 
 
 /*
+ * filter_kind_matches_archive_desc returns true when a filter entry's kind
+ * is compatible with the archive item description being checked. This prevents
+ * OID collisions between different catalog types (e.g., pg_extension and
+ * pg_class can have the same OID value) from incorrectly filtering out
+ * unrelated objects.
+ *
+ * Filter kinds whose OIDs come from non-pg_class catalogs (extension from
+ * pg_extension, coll from pg_collation) must only match their own archive
+ * item type. Other kinds (table, index, sequence, etc.) use pg_class OIDs
+ * and match freely since they share the same OID namespace.
+ */
+static bool
+filter_kind_matches_archive_desc(const char *kind, const char *archiveDesc)
+{
+	/* if no archive description or no kind, assume match (backwards compat) */
+	if (archiveDesc == NULL || IS_EMPTY_STRING_BUFFER(kind))
+	{
+		return true;
+	}
+
+	/* extension OIDs come from pg_extension, not pg_class */
+	if (strcmp(kind, "extension") == 0)
+	{
+		return strcmp(archiveDesc, "EXTENSION") == 0;
+	}
+
+	/* collation OIDs come from pg_collation, not pg_class */
+	if (strcmp(kind, "coll") == 0)
+	{
+		return strcmp(archiveDesc, "COLLATION") == 0;
+	}
+
+	return true;
+}
+
+
+/*
  * copydb_objectid_is_filtered_out returns true when the given oid belongs to a
  * database object that's been filtered out by the filtering setup.
  */
 bool
 copydb_objectid_is_filtered_out(CopyDataSpec *specs,
 								uint32_t oid,
-								char *restoreListName)
+								char *restoreListName,
+								const char *archiveDesc)
 {
 	DatabaseCatalog *filtersDB = &(specs->catalogs.filter);
 	CatalogFilter result = { 0 };
@@ -1031,7 +1069,8 @@ copydb_objectid_is_filtered_out(CopyDataSpec *specs,
 			return false;
 		}
 
-		if (result.oid != 0)
+		if (result.oid != 0 &&
+			filter_kind_matches_archive_desc(result.kind, archiveDesc))
 		{
 			return true;
 		}
@@ -1045,7 +1084,8 @@ copydb_objectid_is_filtered_out(CopyDataSpec *specs,
 			return false;
 		}
 
-		if (!IS_EMPTY_STRING_BUFFER(result.restoreListName))
+		if (!IS_EMPTY_STRING_BUFFER(result.restoreListName) &&
+			filter_kind_matches_archive_desc(result.kind, archiveDesc))
 		{
 			return true;
 		}
