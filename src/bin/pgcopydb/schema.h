@@ -126,6 +126,7 @@ typedef struct SourceTableAttribute
 	uint32_t atttypid;
 	char attname[PG_NAMEDATALEN];
 	bool attisprimary;
+	bool attisreplident;
 	bool attisgenerated;
 } SourceTableAttribute;
 
