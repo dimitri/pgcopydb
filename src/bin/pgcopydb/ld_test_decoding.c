@@ -1182,7 +1182,17 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 
 			if (attribute.attnum > 0)
 			{
-				pkeyArray[c] = attribute.attisprimary;
+				/*
+				 * Use the replica identity columns as the WHERE clause key.
+				 *
+				 * For REPLICA IDENTITY DEFAULT (relreplident='d'), Postgres
+				 * implicitly uses the primary key, but pg_index.indisreplident
+				 * stays false on the PK index. So we have to check both:
+				 * attisprimary covers the default case, attisreplident covers
+				 * REPLICA IDENTITY USING INDEX on a non-PK unique index.
+				 */
+				pkeyArray[c] =
+					attribute.attisprimary || attribute.attisreplident;
 			}
 
 			if (pkeyArray[c])
