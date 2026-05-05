@@ -91,7 +91,7 @@ static char *sourceDBcreateDDLs[] = {
 	"create table s_attr("
 	"  oid integer references s_table(oid), "
 	"  attnum integer, attypid integer, attname text, "
-	"  attisprimary bool, attisgenerated bool, "
+	"  attisprimary bool, attisreplident bool, attisgenerated bool, "
 	"  primary key(oid, attnum) "
 	")",
 
@@ -278,7 +278,7 @@ static char *filterDBcreateDDLs[] = {
 	"create table s_attr("
 	"  oid integer references s_table(oid), "
 	"  attnum integer, attypid integer, attname text, "
-	"  attisprimary bool, attisgenerated bool, "
+	"  attisprimary bool, attisreplident bool, attisgenerated bool, "
 	"  primary key(oid, attnum) "
 	")",
 
@@ -392,7 +392,7 @@ static char *targetDBcreateDDLs[] = {
 	"create table s_attr("
 	"  oid integer references s_table(oid), "
 	"  attnum integer, attypid integer, attname text, "
-	"  attisprimary bool, attisgenerated bool, "
+	"  attisprimary bool, attisreplident bool, attisgenerated bool, "
 	"  primary key(oid, attnum) "
 	")",
 
@@ -2030,8 +2030,9 @@ catalog_add_attributes(DatabaseCatalog *catalog, SourceTable *table)
 
 	char *sql =
 		"insert into s_attr("
-		"oid, attnum, attypid, attname, attisprimary, attisgenerated)"
-		"values($1, $2, $3, $4, $5, $6)";
+		"oid, attnum, attypid, attname, "
+		"attisprimary, attisreplident, attisgenerated)"
+		"values($1, $2, $3, $4, $5, $6, $7)";
 
 	SQLiteQuery query = { 0 };
 
@@ -2053,6 +2054,9 @@ catalog_add_attributes(DatabaseCatalog *catalog, SourceTable *table)
 
 			{ BIND_PARAMETER_TYPE_INT, "attisprimary",
 			  attr->attisprimary ? 1 : 0, NULL },
+
+			{ BIND_PARAMETER_TYPE_INT, "attisreplident",
+			  attr->attisreplident ? 1 : 0, NULL },
 
 			{ BIND_PARAMETER_TYPE_INT, "attisgenerated",
 			  attr->attisgenerated ? 1 : 0, NULL }
@@ -2727,7 +2731,8 @@ catalog_lookup_s_attr_by_name(DatabaseCatalog *catalog,
 	}
 
 	char *sql =
-		"  select attnum, attypid, attname, attisprimary, attisgenerated "
+		"  select attnum, attypid, attname, "
+		"         attisprimary, attisreplident, attisgenerated "
 		"    from s_attr "
 		"   where oid = $1 and attname = $2";
 
@@ -3490,7 +3495,8 @@ catalog_iter_s_table_attrs_init(SourceTableAttrsIterator *iter)
 	char *sql =
 		"  select count(*) over(order by attnum) as num, "
 		"         count(*) over() as count, "
-		"         attnum, attypid, attname, attisprimary, attisgenerated "
+		"         attnum, attypid, attname, "
+		"         attisprimary, attisreplident, attisgenerated "
 		"    from s_attr "
 		"   where oid = $1 "
 		"order by attnum";
@@ -3603,7 +3609,8 @@ catalog_s_table_attrs_fetch(SQLiteQuery *query)
 			sizeof(attr->attname));
 
 	attr->attisprimary = sqlite3_column_int(query->ppStmt, 5) == 1;
-	attr->attisgenerated = sqlite3_column_int(query->ppStmt, 6) == 1;
+	attr->attisreplident = sqlite3_column_int(query->ppStmt, 6) == 1;
+	attr->attisgenerated = sqlite3_column_int(query->ppStmt, 7) == 1;
 
 	return true;
 }
@@ -3625,7 +3632,8 @@ catalog_s_attr_fetch(SQLiteQuery *query)
 			sizeof(attr->attname));
 
 	attr->attisprimary = sqlite3_column_int(query->ppStmt, 3) == 1;
-	attr->attisgenerated = sqlite3_column_int(query->ppStmt, 4) == 1;
+	attr->attisreplident = sqlite3_column_int(query->ppStmt, 4) == 1;
+	attr->attisgenerated = sqlite3_column_int(query->ppStmt, 5) == 1;
 
 	return true;
 }

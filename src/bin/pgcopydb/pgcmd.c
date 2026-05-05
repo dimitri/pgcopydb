@@ -748,6 +748,28 @@ pg_restore_roles(PostgresPaths *pgPaths,
 			continue;
 		}
 
+		/*
+		 * Postgres 17.6 (and 16.10, etc) added \restrict and \unrestrict
+		 * metacommands to pg_dump output to mitigate a security issue. This
+		 * code skips these lines when restoring roles.
+		 *
+		 * See 17.6 change notes:
+		 * https://www.postgresql.org/docs/17/release-17-6.html#RELEASE-17-6-CHANGES
+		 * CVE: https://www.postgresql.org/support/security/CVE-2025-8714/
+		 *
+		 * Because here we are implementing our own client behavior rather than
+		 * relying on psql implementation, we have to parse the new commands.
+		 * Given that we do not have backslash-commands implementation in our
+		 * SQL client, we do not need to restrict our parsing of them with the
+		 * \restrict and \unrestrict backslash-commands.
+		 */
+		if (strncmp(currentLine, "\\restrict", 9) == 0 ||
+			strncmp(currentLine, "\\unrestrict", 11) == 0)
+		{
+			/* skip \restrict and \unrestrict meta commands */
+			continue;
+		}
+
 		char *createRole = "CREATE ROLE ";
 		int createRoleLen = strlen(createRole);
 
