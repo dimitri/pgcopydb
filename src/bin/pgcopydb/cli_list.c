@@ -106,14 +106,15 @@ static CommandLine list_table_parts_command =
 		"table-parts",
 		"List a source table copy partitions",
 		" --source ... ",
-		"  --source                    Postgres URI to the source database\n"
-		"  --force                     Force fetching catalogs again\n"
-		"  --schema-name               Name of the schema where to find the table\n"
-		"  --table-name                Name of the target table\n"
-		"  --split-tables-larger-than  Size threshold to consider partitioning\n"
-		"  --split-max-parts           Maximum number of jobs for Same-table concurrency \n" \
-		"  --skip-split-by-ctid        Skip the ctid split\n"
-		"  --estimate-table-sizes      Allow using estimates for relation sizes\n",
+		"  --source                      Postgres URI to the source database\n"
+		"  --force                       Force fetching catalogs again\n"
+		"  --schema-name                 Name of the schema where to find the table\n"
+		"  --table-name                  Name of the target table\n"
+		"  --split-tables-larger-than    Size threshold to consider partitioning\n"
+		"  --split-max-parts             Maximum number of jobs for Same-table concurrency \n" \
+		"  --skip-split-by-ctid          Skip the ctid split\n"
+		"  --estimate-table-sizes        Allow using estimates for relation sizes\n"
+		"  --connection-retry-timeout    Number of seconds to retry before connection times out\n",
 		cli_list_db_getopts,
 		cli_list_table_parts);
 
@@ -211,6 +212,8 @@ cli_list_getenv(ListDBOptions *options)
 	int errors = 0;
 
 	EnvParser parsers[] = {
+		{ PGCOPYDB_SOURCE_PGURI, ENV_TYPE_STR_PTR,
+		  &(options->connStrings.source_pguri) },
 		{ PGCOPYDB_SPLIT_MAX_PARTS, ENV_TYPE_INT,
 		  &(options->splitMaxParts), 0, true, 1 },
 		{ PGCOPYDB_ESTIMATE_TABLE_SIZES, ENV_TYPE_BOOL,
@@ -227,13 +230,38 @@ cli_list_getenv(ListDBOptions *options)
 		++errors;
 	}
 
-	if (!cli_copydb_getenv_source_pguri(&(options->connStrings.source_pguri)))
+	if (!cli_copydb_getenv_split(&(options->splitTablesLargerThan)))
 	{
 		/* errors have already been logged */
 		++errors;
 	}
 
-	if (!cli_copydb_getenv_split(&(options->splitTablesLargerThan)))
+	return errors == 0;
+}
+
+
+/*
+ * cli_list_getenv_file reads the pgcopydb.conf file and fills-in the command line options
+ */
+static bool
+cli_list_getenv_file(ListDBOptions *options)
+{
+	int errors = 0;
+
+	EnvParser parsers[] = {
+		{ PGCOPYDB_SOURCE_PGURI, ENV_TYPE_STR_PTR,
+		  &(options->connStrings.source_pguri) },
+		{ PGCOPYDB_SPLIT_MAX_PARTS, ENV_TYPE_INT,
+		  &(options->splitMaxParts), 0, true, 1 },
+		{ PGCOPYDB_ESTIMATE_TABLE_SIZES, ENV_TYPE_BOOL,
+		  &(options->estimateTableSizes) },
+	};
+
+	int parserCount = sizeof(parsers) / sizeof(parsers[0]);
+
+	EnvParserArray parserArray = { .count = parserCount, .array = parsers };
+
+	if (!get_env_using_parsers_from_file(&parserArray))
 	{
 		/* errors have already been logged */
 		++errors;
@@ -282,6 +310,7 @@ cli_list_db_getopts(int argc, char **argv)
 		{ "notice", no_argument, NULL, 'v' },
 		{ "quiet", no_argument, NULL, 'q' },
 		{ "help", no_argument, NULL, 'h' },
+		{ "connection-retry-timeout", required_argument, NULL, 'W' },
 		{ NULL, 0, NULL, 0 }
 	};
 
@@ -294,7 +323,15 @@ cli_list_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	const char *optstring = "S:D:s:t:F:xPL:u:k:mfyarJRIN:Vdzvqh";
+	/* read values from the pgcopydb.conf file */
+	if (!cli_list_getenv_file(&options))
+	{
+		log_fatal("Failed to read default values from pgcopydb.conf file");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+
+	const char *optstring = "S:D:s:t:F:xPL:u:k:mfyarJRIN:VdzvqhW:";
 
 	while ((c = getopt_long(argc, argv, optstring,
 							long_options, &option_index)) != -1)
@@ -531,6 +568,18 @@ cli_list_db_getopts(int argc, char **argv)
 				break;
 			}
 
+			case 'W':
+			{
+				if (!stringToInt(optarg, &options.connectionRetryTimeout) ||
+					options.connectionRetryTimeout < 1)
+				{
+					log_fatal("Failed to parse --connection-retry-timeout: \"%s\"",
+							  optarg);
+					exit(EXIT_CODE_QUIT);
+				}
+				break;
+			}
+
 			case '?':
 			default:
 			{
@@ -606,7 +655,8 @@ cli_list_databases(int argc, char **argv)
 	PGSQL pgsql = { 0 };
 	ConnStrings *dsn = &(listDBoptions.connStrings);
 
-	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE))
+	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE,
+					copySpecs.connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);
@@ -870,7 +920,8 @@ cli_list_extension_versions(int argc, char **argv)
 
 	ConnStrings *dsn = &(listDBoptions.connStrings);
 
-	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE))
+	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE,
+					listDBoptions.connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);
@@ -951,7 +1002,8 @@ cli_list_extension_requirements(int argc, char **argv)
 	PGSQL pgsql = { 0 };
 	ConnStrings *dsn = &(listDBoptions.connStrings);
 
-	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE))
+	if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE,
+					listDBoptions.connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);

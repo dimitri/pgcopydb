@@ -518,6 +518,7 @@ copydb_init_specs(CopyDataSpec *specs,
 		.noRolesPasswords = options->noRolesPasswords,
 		.failFast = options->failFast,
 		.useCopyBinary = options->useCopyBinary,
+		.connectionRetryTimeout = options->connectionRetryTimeout,
 
 		.restart = options->restart,
 		.resume = options->resume,

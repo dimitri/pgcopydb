@@ -21,6 +21,7 @@ typedef struct ListDBOptions
 	char dir[MAXPGPATH];
 
 	ConnStrings connStrings;
+	int connectionRetryTimeout;
 
 	char schema_name[PG_NAMEDATALEN];
 	char table_name[PG_NAMEDATALEN];

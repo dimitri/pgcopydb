@@ -87,6 +87,7 @@ cli_compare_getopts(int argc, char **argv)
 		{ "trace", no_argument, NULL, 'z' },
 		{ "quiet", no_argument, NULL, 'q' },
 		{ "help", no_argument, NULL, 'h' },
+		{ "connection-retry-timeout", required_argument, NULL, 'W' },
 		{ NULL, 0, NULL, 0 }
 	};
 
@@ -99,11 +100,18 @@ cli_compare_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
+	/* read config values from the config file */
+	if (!cli_copydb_getenv_file(&options))
+	{
+		log_fatal("Failed to read the config values from the config file");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
 	/* bypass computing partitioning specs */
 	SplitTableLargerThan empty = { 0 };
 	options.splitTablesLargerThan = empty;
 
-	while ((c = getopt_long(argc, argv, "S:T:D:j:JVvdzqh",
+	while ((c = getopt_long(argc, argv, "S:T:D:j:JVvdzqhW:",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -224,6 +232,18 @@ cli_compare_getopts(int argc, char **argv)
 			{
 				commandline_help(stderr);
 				exit(EXIT_CODE_QUIT);
+				break;
+			}
+
+			case 'W':
+			{
+				if (!stringToInt(optarg, &options.connectionRetryTimeout) ||
+					options.connectionRetryTimeout < 1)
+				{
+					log_fatal("Failed to parse --connection-retry-timeout: \"%s\"",
+							  optarg);
+					++errors;
+				}
 				break;
 			}
 
