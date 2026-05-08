@@ -877,6 +877,52 @@ catalog_create_semaphore(DatabaseCatalog *catalog)
 bool
 catalog_attach(DatabaseCatalog *a, DatabaseCatalog *b, const char *name)
 {
+	/* Check if the database is already attached with this name */
+	char checkSql[BUFSIZE] = { 0 };
+	sformat(checkSql, sizeof(checkSql),
+			"SELECT name FROM pragma_database_list WHERE name = '%s'", name);
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(a->db, checkSql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* Check if the query returns a row (meaning the database is attached) */
+	int checkResult = catalog_sql_step(&query);
+	if (checkResult == SQLITE_ROW)
+	{
+		/* Database is already attached with this name */
+		log_debug("Database '%s' is already attached as %s, skipping attach", b->dbfile,
+				  name);
+		if (!catalog_sql_finalize(&query))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+		return true;
+	}
+	else if (checkResult != SQLITE_DONE)
+	{
+		/* Error occurred */
+		log_error("Failed to check if database is attached: %s", checkSql);
+		if (!catalog_sql_finalize(&query))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+		return false;
+	}
+
+	/* No row returned, database is not attached */
+	if (!catalog_sql_finalize(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	char *sqlTmpl = "attach '%s' as %s";
 	char buf[BUFSIZE + MAXPGPATH] = { 0 };
 
