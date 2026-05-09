@@ -6,6 +6,7 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/select.h>
 #include <time.h>
 #include <unistd.h>
@@ -751,12 +752,69 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 		{
 			log_info("Current filtering setup is: %s", json);
 			log_info("Catalog filtering setup is: %s", setup->filters);
-			log_error("Catalogs at \"%s\" have been setup for a different "
-					  "filtering than the current command, "
-					  "see above for details",
-					  sourceDB->dbfile);
 
-			return false;
+			/* If catalog has no filters but current command does, it's probably a clone command
+			 * after another command (like snapshot). Use the filters from the current command
+			 */
+			if (strstr(setup->filters, "SOURCE_FILTER_TYPE_NONE") != NULL &&
+				strstr(json, "SOURCE_FILTER_TYPE_NONE") == NULL)
+			{
+				log_warn("Catalogs at \"%s\" have been setup for a different "
+						 "filtering than the current command, "
+						 "see above for details",
+						 sourceDB->dbfile);
+				log_warn("Updating catalog filters from \"%s\" to \"%s\"",
+						 setup->filters, json);
+
+				/* Update the filters in the catalog database */
+				if (!catalog_update_filters(sourceDB, json))
+				{
+					log_error("Failed to update filters in catalog database");
+
+					return false;
+				}
+
+				/* Update the local setup structure */
+				if (setup->filters != NULL)
+				{
+					free(setup->filters);
+				}
+				setup->filters = strdup(json);
+
+				log_warn("Successfully updated catalog filters");
+			}
+			else if (strstr(setup->filters, "SOURCE_FILTER_TYPE_NONE") == NULL &&
+					 strstr(json, "SOURCE_FILTER_TYPE_NONE") == NULL)
+			{
+				/* If both have different filters, something is wrong */
+				log_error("Catalogs at \"%s\" have been setup for a different "
+						  "filtering than the current command, "
+						  "see above for details",
+						  sourceDB->dbfile);
+
+				return false;
+			}
+			else if (strstr(setup->filters, "SOURCE_FILTER_TYPE_NONE") == NULL &&
+					 strstr(json, "SOURCE_FILTER_TYPE_NONE") != NULL)
+			{
+				/* If the catalog has filters but current command doesn't, it's probably a command
+				 * (like stream or list) after a clone. Continue with previously used filters in the catalog */
+				log_warn("Catalogs at \"%s\" have been setup for a different "
+						 "filtering than the current command, "
+						 "see above for details",
+						 sourceDB->dbfile);
+				log_warn("Using previously configured filters");
+			}
+			else
+			{
+				/* Any other unanticipated mismatch, default to an error*/
+				log_error("Catalogs at \"%s\" have been setup for a different "
+						  "filtering than the current command, "
+						  "see above for details",
+						  sourceDB->dbfile);
+
+				return false;
+			}
 		}
 	}
 
@@ -877,6 +935,52 @@ catalog_create_semaphore(DatabaseCatalog *catalog)
 bool
 catalog_attach(DatabaseCatalog *a, DatabaseCatalog *b, const char *name)
 {
+	/* Check if the database is already attached with this name */
+	char checkSql[BUFSIZE] = { 0 };
+	sformat(checkSql, sizeof(checkSql),
+			"SELECT name FROM pragma_database_list WHERE name = '%s'", name);
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(a->db, checkSql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* Check if the query returns a row (meaning the database is attached) */
+	int checkResult = catalog_sql_step(&query);
+	if (checkResult == SQLITE_ROW)
+	{
+		/* Database is already attached with this name */
+		log_debug("Database '%s' is already attached as %s, skipping attach", b->dbfile,
+				  name);
+		if (!catalog_sql_finalize(&query))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+		return true;
+	}
+	else if (checkResult != SQLITE_DONE)
+	{
+		/* Error occurred */
+		log_error("Failed to check if database is attached: %s", checkSql);
+		if (!catalog_sql_finalize(&query))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+		return false;
+	}
+
+	/* No row returned, database is not attached */
+	if (!catalog_sql_finalize(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	char *sqlTmpl = "attach '%s' as %s";
 	char buf[BUFSIZE + MAXPGPATH] = { 0 };
 
@@ -1322,6 +1426,67 @@ catalog_update_setup(CopyDataSpec *copySpecs)
 	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which return exactly one row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
+ * catalog_update_filters updates just the filters field in the setup table.
+ */
+bool
+catalog_update_filters(DatabaseCatalog *catalog, const char *filters)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_update_filters: db is NULL");
+		return false;
+	}
+
+	SQLiteQuery query = { 0 };
+
+	char *sql =
+		"update setup "
+		"   set filters = $1 "
+		" where id = 1";
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_TEXT, "filters", 0, (char *) filters }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 

@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.pg
+      args:
+        - PGVERSION=${PGVERSION:-16}
     expose:
       - 5432
     environment:
@@ -14,10 +16,17 @@ services:
       -c ssl=on
       -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
       -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
+    healthcheck:
+      test: 'pg_isready -U postgres'
+      interval: 5s
+      timeout: 5s
+      retries: 10
   target:
     build:
       context: .
       dockerfile: Dockerfile.pg
+      args:
+        - PGVERSION=${PGVERSION:-16}
     expose:
       - 5432
     environment:
@@ -28,6 +37,11 @@ services:
       -c ssl=on
       -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
       -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
+    healthcheck:
+      test: 'pg_isready -U postgres'
+      interval: 5s
+      timeout: 5s
+      retries: 10
   test:
     build: .
     environment:
@@ -41,5 +55,7 @@ services:
       PGCOPYDB_TABLE_JOBS: 4
       PGCOPYDB_INDEX_JOBS: 2
     depends_on:
-      - source
-      - target
+      source:
+        condition: service_healthy
+      target:
+        condition: service_healthy

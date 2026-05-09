@@ -1,3 +1,10 @@
+### pgcopydb (Unreleased) ###
+
+### Added
+* Add support for PostgreSQL 17 and 18
+* Update all test infrastructure to PostgreSQL 17
+* Update CI pipeline to test against PostgreSQL 16, 17, and 18
+
 ### pgcopydb v0.17 (August 7, 2024) ###
 
 pgcopydb v0.17 is mostly a bugfix release. New features include

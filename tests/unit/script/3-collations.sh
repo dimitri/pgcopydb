@@ -7,4 +7,5 @@ set -e
 #
 #  - PGCOPYDB_SOURCE_PGURI
 
-pgcopydb list collations -q --dir /tmp/collations 2>&1
+# Strip OID column (first column) from output since OIDs vary between databases
+pgcopydb list collations -q --dir /tmp/collations 2>&1 | cut -d'|' -f2-

@@ -3,6 +3,7 @@
 
 TOP := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 PGCOPYDB ?= $(TOP)src/bin/pgcopydb/pgcopydb
+PGVERSION ?= 16
 
 all: bin ;
 
@@ -53,7 +54,7 @@ indent:
 	citus_indent
 
 build: version
-	docker build -t pgcopydb .
+	docker build --build-arg PGVERSION=$(PGVERSION) -t pgcopydb .
 
 echo-version: GIT-VERSION-FILE
 	@awk '{print $$3}' $<
