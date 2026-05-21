@@ -1007,7 +1007,7 @@ compare_fetch_schemas(CopyDataSpec *copySpecs,
 		{ NULL, NULL }
 	};
 
-	for (int i = 0; dbs[i].name != NULL; i++)
+	for (int i = 0; dbt[i].name != NULL; i++)
 	{
 		struct db *d = &(dbt[i]);
 		sformat(d->db->dbfile, MAXPGPATH, "%s/%s.db", targetDir, d->name);

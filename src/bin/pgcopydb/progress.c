@@ -341,6 +341,7 @@ copydb_table_array_as_json_hook(void *ctx, SourceTable *table)
 		json_object_set_number(jsAttrObj, "atttypid", attr->atttypid);
 		json_object_set_string(jsAttrObj, "attname", attr->attname);
 		json_object_set_boolean(jsAttrObj, "attisprimary", attr->attisprimary);
+		json_object_set_boolean(jsAttrObj, "attisreplident", attr->attisreplident);
 		json_object_set_boolean(jsAttrObj, "attisgenerated", attr->attisgenerated);
 
 		json_array_append_value(jsAttrArray, jsAttr);

@@ -328,3 +328,18 @@ Copyright (c) The PostgreSQL Global Development Group.
 This project is licensed under the PostgreSQL License, see LICENSE file for details.
 
 This project includes bundled third-party dependencies, see NOTICE file for details.
+
+## Maintenance & Support
+
+This project is maintained through [OSS
+Maintenance](https://oss.theartofpostgresql.com) — a funded model designed
+for **enterprises** running these tools in production.
+
+- Priority bug fixes and improvements via a paid queue
+- Quarterly releases with predictable delivery
+- Upstream-first: fixes land in the project itself
+
+PostgreSQL consultancies can also subscribe at the **Partner** tier to cover
+their entire client base under a single plan.
+
+**[View support plans](https://oss.theartofpostgresql.com/#pricing)**
