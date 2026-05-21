@@ -42,6 +42,12 @@ pgcopydb stream sentinel set apply
 # allow the catchup phase to finish, ensure the following data is streamed
 sleep 2
 
+# insert additional rows to exercise literal 'null' handling during live follow
+psql -d ${PGCOPYDB_SOURCE_PGURI} <<'EOF'
+insert into null_texts(text_col, json_col)
+values ('null', '"null"'), (null, null);
+EOF
+
 # then insert another batch of 10 rows (21..30)
 psql -v a=21 -v b=30 -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 
