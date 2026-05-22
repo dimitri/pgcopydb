@@ -801,7 +801,7 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 	}
 
 	if (!skip && copydb_objectid_is_filtered_out(specs, oid, name,
-											   item->description))
+												 item->description))
 	{
 		skip = true;
 
