@@ -987,6 +987,7 @@ copydb_matview_refresh_is_filtered_out(CopyDataSpec *specs, uint32_t oid)
 	 * to find out if the materialized view refresh has been filtered out.
 	 *
 	 * The filtering of materialized view as a whole handled by the
+
 	 * existing filtering setup(i.e. copydb_objectid_is_filtered_out).
 	 */
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
@@ -1033,15 +1034,15 @@ filter_kind_matches_archive_desc(const char *kind, const char *archiveDesc)
 	}
 
 	/* extension OIDs come from pg_extension, not pg_class */
-	if (strcmp(kind, "extension") == 0)
+	if (streq(kind, "extension"))
 	{
-		return strcmp(archiveDesc, "EXTENSION") == 0;
+		return streq(archiveDesc, "EXTENSION");
 	}
 
 	/* collation OIDs come from pg_collation, not pg_class */
-	if (strcmp(kind, "coll") == 0)
+	if (streq(kind, "coll"))
 	{
-		return strcmp(archiveDesc, "COLLATION") == 0;
+		return streq(archiveDesc, "COLLATION");
 	}
 
 	return true;
@@ -1054,38 +1055,39 @@ filter_kind_matches_archive_desc(const char *kind, const char *archiveDesc)
  */
 bool
 copydb_objectid_is_filtered_out(CopyDataSpec *specs,
-								uint32_t oid,
-								char *restoreListName,
-								const char *archiveDesc)
+								ArchiveContentItem *item)
 {
 	DatabaseCatalog *filtersDB = &(specs->catalogs.filter);
 	CatalogFilter result = { 0 };
 
-	if (oid != 0)
+	if (item->objectOid != 0)
 	{
-		if (!catalog_lookup_filter_by_oid(filtersDB, &result, oid))
+		if (!catalog_lookup_filter_by_oid(filtersDB, &result, item->objectOid))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 
 		if (result.oid != 0 &&
-			filter_kind_matches_archive_desc(result.kind, archiveDesc))
+			filter_kind_matches_archive_desc(result.kind, item->description))
 		{
 			return true;
 		}
 	}
 
-	if (restoreListName != NULL && !IS_EMPTY_STRING_BUFFER(restoreListName))
+	if (item->restoreListName != NULL &&
+		!IS_EMPTY_STRING_BUFFER(item->restoreListName))
 	{
-		if (!catalog_lookup_filter_by_rlname(filtersDB, &result, restoreListName))
+		if (!catalog_lookup_filter_by_rlname(filtersDB,
+											 &result,
+											 item->restoreListName))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 
 		if (!IS_EMPTY_STRING_BUFFER(result.restoreListName) &&
-			filter_kind_matches_archive_desc(result.kind, archiveDesc))
+			filter_kind_matches_archive_desc(result.kind, item->description))
 		{
 			return true;
 		}

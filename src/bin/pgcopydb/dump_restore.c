@@ -800,8 +800,7 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 				   item->restoreListName);
 	}
 
-	if (!skip && copydb_objectid_is_filtered_out(specs, oid, name,
-												 item->description))
+	if (!skip && copydb_objectid_is_filtered_out(specs, item))
 	{
 		skip = true;
 
