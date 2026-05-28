@@ -611,24 +611,63 @@ copydb_copy_supervisor_add_table_hook(void *ctx, SourceTable *table)
 		 * Add as many times the table OID as we have partitions, each with
 		 * their own partition number that starts at 1 (not zero).
 		 *
-		 * Before adding the table to be processed by workers, truncate it on
-		 * the target database now, avoiding concurrency issues.
+		 * Before adding the table to be processed by workers, we normally
+		 * TRUNCATE it on the target database to give all per-part workers a
+		 * clean slate (per-part workers do not TRUNCATE themselves).
+		 *
+		 * On --resume, when one or more parts of this table were already
+		 * COPYed successfully in a previous run, their rows live on the
+		 * target and the per-part worker for those parts will skip the COPY.
+		 * Truncating here would discard that good data, so we only TRUNCATE
+		 * when no parts of this table are marked done in the catalog.
+		 * If every part is already done we also skip enqueueing the parts.
 		 */
-		bool granted = false;
+		DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+		CopyTableDataSpec partsDoneSpec = { 0 };
 
-		if (!pgsql_has_table_privilege(dst, table->qname, "TRUNCATE", &granted))
+		partsDoneSpec.sourceTable = table;
+
+		if (!summary_table_count_parts_done(sourceDB, &partsDoneSpec))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 
-		if (granted)
+		if (partsDoneSpec.countPartsDone == 0)
 		{
-			if (!pgsql_truncate(dst, table->qname))
+			bool granted = false;
+
+			if (!pgsql_has_table_privilege(dst, table->qname,
+										   "TRUNCATE", &granted))
 			{
 				/* errors have already been logged */
 				return false;
 			}
+
+			if (granted)
+			{
+				if (!pgsql_truncate(dst, table->qname))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+			}
+		}
+		else if (partsDoneSpec.countPartsDone >= (uint32_t) table->partition.partCount)
+		{
+			log_info("Skipping table %s on resume: "
+					 "all %d parts already done in a previous run",
+					 table->qname,
+					 table->partition.partCount);
+			return true;
+		}
+		else
+		{
+			log_notice("Skipping TRUNCATE of %s on resume: "
+					   "%u of %d parts already done in a previous run",
+					   table->qname,
+					   partsDoneSpec.countPartsDone,
+					   table->partition.partCount);
 		}
 
 		for (int i = 0; i < table->partition.partCount; i++)
