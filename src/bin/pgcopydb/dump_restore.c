@@ -198,6 +198,14 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 	 *
 	 * As a result, we implement --drop-if-exists our own way first, with a big
 	 * DROP IF EXISTS ... CASCADE statement that includes all our target tables.
+	 *
+	 * Resume safety: this block only runs because schemaPreDataHasBeenRestored
+	 * is false (checked above). The expected invariant on resume is that table
+	 * data has not yet been copied — otherwise we would be wiping it here.
+	 * That invariant holds today because COPY's catalog short-circuit requires
+	 * schemaPreDataHasBeenRestored to be true. If a future change ever lets
+	 * COPY populate tables before the pre-data section is marked done, this
+	 * drop becomes a data-loss path and needs an additional guard.
 	 */
 	if (specs->restoreOptions.dropIfExists)
 	{

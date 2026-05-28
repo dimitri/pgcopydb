@@ -47,6 +47,12 @@ copydb_start_blob_process(CopyDataSpec *specs)
 		return true;
 	}
 
+	if (specs->runState.blobsCopyIsDone)
+	{
+		log_info("Skipping large objects, already done on a previous run");
+		return true;
+	}
+
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
 	if (!catalog_open(sourceDB))
