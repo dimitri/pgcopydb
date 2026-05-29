@@ -776,11 +776,11 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 	 * table a and used as a default value in table b, where table a has
 	 * been filtered-out from pgcopydb scope of operations, but not table
 	 * b.
+	 *
+	 * The kind-based matching in filter_kind_matches_archive_desc ensures
+	 * that 'default' and 'sequence owned by' filter entries do not match
+	 * SEQUENCE archive items, so no name override is needed here.
 	 */
-	if (item->desc == ARCHIVE_TAG_SEQUENCE)
-	{
-		name = NULL;
-	}
 
 	/*
 	 * There could be a case where the materalized view is included in the
@@ -800,7 +800,7 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 				   item->restoreListName);
 	}
 
-	if (!skip && copydb_objectid_is_filtered_out(specs, oid, name))
+	if (!skip && copydb_objectid_is_filtered_out(specs, item))
 	{
 		skip = true;
 
