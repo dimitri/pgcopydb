@@ -52,6 +52,7 @@ typedef struct TestDecodingColumns
 	int colnameLen;
 	char *valueStart;
 	int valueLen;
+	bool isQuoted;
 
 	struct TestDecodingColumns *next;
 } TestDecodingColumns;
@@ -81,6 +82,10 @@ static bool listToTuple(LogicalMessageTuple *tuple,
 
 static bool prepareUpdateTuppleArrays(StreamContext *privateContext,
 									  TestDecodingHeader *header);
+
+static TestDecodingTableCache * lookupOrCacheSourceTable(StreamContext *privateContext,
+														 const char *nspname,
+														 const char *relname);
 
 
 static bool findIdentifierEndPos(const char *message, char separator, int *position);
@@ -852,6 +857,8 @@ parseNextColumn(TestDecodingColumns *cols,
 	 */
 	if (*ptr == '\'')
 	{
+		cols->isQuoted = true;
+
 		/* skip the opening single-quote now */
 		char *cur = ptr + 1;
 
@@ -901,6 +908,8 @@ parseNextColumn(TestDecodingColumns *cols,
 	 */
 	else if (*ptr == 'B')
 	{
+		cols->isQuoted = true;
+
 		/* skip B and ' */
 		char *start = ptr + 2;
 		char *end = strchr(start, '\'');
@@ -1015,7 +1024,9 @@ listToTuple(LogicalMessageTuple *tuple, TestDecodingColumns *cols, int count)
 		}
 
 		/* strlen("null") == 4 */
-		if (strncmp(cur->valueStart, "null", 4) == 0)
+		if (!cur->isQuoted &&
+			cur->valueLen == 4 &&
+			strncmp(cur->valueStart, "null", 4) == 0)
 		{
 			valueColumn->isNull = true;
 		}
@@ -1107,42 +1118,19 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 	}
 
 	/*
-	 * Now lookup our internal catalogs to find out for every column if it is
-	 * part of the pkey definition (WHERE clause) or not (SET clause).
+	 * Look up the table + per-column attributes from the per-process cache.
+	 * On a miss this does the SQLite work once; subsequent UPDATEs against
+	 * the same table reuse the cached entries and avoid the 1 + 1 + N SQL
+	 * queries per row that previously dominated transform CPU.
 	 */
-	DatabaseCatalog *sourceDB = privateContext->sourceDB;
+	TestDecodingTableCache *cached =
+		lookupOrCacheSourceTable(privateContext,
+								 header->table.nspname,
+								 header->table.relname);
 
-	SourceTable *table = (SourceTable *) calloc(1, sizeof(SourceTable));
-
-	if (table == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	if (!catalog_lookup_s_table_by_name(sourceDB,
-										header->table.nspname,
-										header->table.relname,
-										table))
+	if (cached == NULL)
 	{
 		/* errors have already been logged */
-		return false;
-	}
-
-	if (table->oid == 0)
-	{
-		log_error("Failed to parse decoding message for UPDATE on "
-				  "table %s which is not in our catalogs",
-				  table->qname);
-		return false;
-	}
-
-	/* FIXME: lookup for the attribute in the SQLite database directly */
-	if (!catalog_s_table_fetch_attrs(sourceDB, table))
-	{
-		log_error("Failed to fetch table %s attribute list, "
-				  "see above for details",
-				  table->qname);
 		return false;
 	}
 
@@ -1166,21 +1154,18 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 		{
 			LogicalMessageAttribute *attr = &(cols->attributes.array[c]);
 
-			SourceTableAttribute attribute = { 0 };
+			TestDecodingAttrCache *attribute = NULL;
+			HASH_FIND_STR(cached->attrs, attr->attname, attribute);
 
-			if (!catalog_lookup_s_attr_by_name(sourceDB,
-											   table->oid,
-											   attr->attname,
-											   &attribute))
+			if (attribute == NULL)
 			{
-				log_error("Failed to lookup for table %s attribute %s in our "
-						  "internal catalogs, see above for details",
-						  table->qname,
-						  attr->attname);
+				log_error("Failed to lookup table \"%s\".\"%s\" attribute "
+						  "\"%s\" in our internal catalogs",
+						  cached->nspname, cached->relname, attr->attname);
 				return false;
 			}
 
-			if (attribute.attnum > 0)
+			if (attribute->attnum > 0)
 			{
 				/*
 				 * Use the replica identity columns as the WHERE clause key.
@@ -1192,7 +1177,7 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 				 * REPLICA IDENTITY USING INDEX on a non-PK unique index.
 				 */
 				pkeyArray[c] =
-					attribute.attisprimary || attribute.attisreplident;
+					attribute->attisprimary || attribute->attisreplident;
 			}
 
 			if (pkeyArray[c])
@@ -1209,16 +1194,16 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 	if (oldCount == 0)
 	{
 		log_error("Failed to parse decoding message for UPDATE on "
-				  "table %s: WHERE clause columns not found",
-				  table->qname);
+				  "table \"%s\".\"%s\": WHERE clause columns not found",
+				  cached->nspname, cached->relname);
 		return false;
 	}
 
 	if (newCount == 0)
 	{
 		log_error("Failed to parse decoding message for UPDATE on "
-				  "table %s: SET clause columns not found",
-				  table->qname);
+				  "table \"%s\".\"%s\": SET clause columns not found",
+				  cached->nspname, cached->relname);
 		return false;
 	}
 
@@ -1275,4 +1260,111 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 	}
 
 	return true;
+}
+
+
+/*
+ * lookupOrCacheSourceTable returns a per-process cached TestDecodingTableCache
+ * entry for (nspname, relname), populating it from the SQLite catalog on first
+ * use. The cache lives for the lifetime of the transform process and is never
+ * invalidated -- schema changes during follow are not supported by pgcopydb.
+ */
+static TestDecodingTableCache *
+lookupOrCacheSourceTable(StreamContext *privateContext,
+						 const char *nspname,
+						 const char *relname)
+{
+	/*
+	 * Defensively clear filterOut so the (NULL return, filterOut == true)
+	 * "table absent from catalog, drop the DML" contract with our caller is
+	 * not poisoned by a stale value set earlier on the same message. We are
+	 * the only writer to filterOut in this code path today, but the contract
+	 * is fragile if that ever changes.
+	 */
+	privateContext->metadata.filterOut = false;
+
+	TestDecodingTableCache lookup = { 0 };
+	strlcpy(lookup.nspname, nspname, sizeof(lookup.nspname));
+	strlcpy(lookup.relname, relname, sizeof(lookup.relname));
+
+	unsigned keylen = offsetof(TestDecodingTableCache, relname) +
+					  sizeof(lookup.relname) -
+					  offsetof(TestDecodingTableCache, nspname);
+
+	TestDecodingTableCache *item = NULL;
+	HASH_FIND(hh,
+			  privateContext->testDecodingTableCache,
+			  &lookup.nspname,
+			  keylen,
+			  item);
+
+	if (item != NULL)
+	{
+		return item;
+	}
+
+	/* cache miss: do the SQL work once */
+	DatabaseCatalog *sourceDB = privateContext->sourceDB;
+
+	SourceTable table = { 0 };
+
+	if (!catalog_lookup_s_table_by_name(sourceDB, nspname, relname, &table))
+	{
+		/* errors have already been logged */
+		return NULL;
+	}
+
+	if (table.oid == 0)
+	{
+		log_error("Failed to lookup table \"%s\".\"%s\" in our catalogs",
+				  nspname, relname);
+		return NULL;
+	}
+
+	if (!catalog_s_table_fetch_attrs(sourceDB, &table))
+	{
+		log_error("Failed to fetch table %s attribute list", table.qname);
+		return NULL;
+	}
+
+	item = (TestDecodingTableCache *) calloc(1, sizeof(TestDecodingTableCache));
+
+	if (item == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return NULL;
+	}
+
+	strlcpy(item->nspname, nspname, sizeof(item->nspname));
+	strlcpy(item->relname, relname, sizeof(item->relname));
+	item->oid = table.oid;
+
+	for (int i = 0; i < table.attributes.count; i++)
+	{
+		SourceTableAttribute *src = &(table.attributes.array[i]);
+
+		TestDecodingAttrCache *attr =
+			(TestDecodingAttrCache *) calloc(1, sizeof(TestDecodingAttrCache));
+
+		if (attr == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return NULL;
+		}
+
+		strlcpy(attr->attname, src->attname, sizeof(attr->attname));
+		attr->attnum = src->attnum;
+		attr->attisprimary = src->attisprimary;
+		attr->attisreplident = src->attisreplident;
+
+		HASH_ADD_STR(item->attrs, attname, attr);
+	}
+
+	HASH_ADD(hh,
+			 privateContext->testDecodingTableCache,
+			 nspname,
+			 keylen,
+			 item);
+
+	return item;
 }

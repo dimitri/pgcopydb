@@ -332,6 +332,51 @@ typedef struct GeneratedColumnsCache
 
 
 /*
+ * TestDecodingAttrCache caches per-column attributes needed by the
+ * test_decoding parser hot path (replica-identity classification of each
+ * column on UPDATE messages).
+ */
+typedef struct TestDecodingAttrCache
+{
+	char attname[PG_NAMEDATALEN];
+
+	int attnum;
+	bool attisprimary;
+	bool attisreplident;
+
+	UT_hash_handle hh;           /* hashable by attname */
+} TestDecodingAttrCache;
+
+
+/*
+ * TestDecodingTableCache caches the SourceTable + per-attribute lookups for
+ * each table seen by the test_decoding parser. Without it, every UPDATE
+ * message (for tables that lack an old-key section, i.e. REPLICA IDENTITY
+ * DEFAULT) costs one SQL query per row to look up the table, one to fetch
+ * its attributes, plus one SQL query per column to fetch each attribute --
+ * which dominates transform CPU on high-throughput workloads.
+ *
+ * The (nspname, relname) key is stored as-is without the normalization
+ * applied by GeneratedColumnsCache: test_decoding emits identifiers
+ * already escaped by Postgres' deterministic quote_identifier (see the
+ * comment in parseTestDecodingMessageHeader), so the same real table
+ * always produces the same byte sequence -- no normalization needed.
+ */
+typedef struct TestDecodingTableCache
+{
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
+
+	uint32_t oid;
+
+	/* per-column attribute info, keyed by attname */
+	TestDecodingAttrCache *attrs;
+
+	UT_hash_handle hh;           /* hashable by (nspname, relname) */
+} TestDecodingTableCache;
+
+
+/*
  * StreamContext allows tracking the progress of the ld_stream module and is
  * shared also with the ld_transform module, which has its own instance of a
  * StreamContext to track its own progress.
@@ -367,6 +412,9 @@ typedef struct StreamContext
 
 	/* hash table acts as a cache for tables with generated columns */
 	GeneratedColumnsCache *generatedColumnsCache;
+
+	/* per-table cache for the test_decoding parser hot path */
+	TestDecodingTableCache *testDecodingTableCache;
 
 	Queue *transformQueue;
 	PGSQL *transformPGSQL;

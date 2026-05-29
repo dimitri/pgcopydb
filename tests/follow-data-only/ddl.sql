@@ -7,6 +7,7 @@ begin;
 
 CREATE TABLE table_a (id serial PRIMARY KEY, f1 int4, f2 text);
 CREATE TABLE table_b (id serial PRIMARY KEY, f1 int4, f2 text[]);
+CREATE TABLE null_texts (id serial PRIMARY KEY, text_col text, json_col jsonb);
 
 commit;
 

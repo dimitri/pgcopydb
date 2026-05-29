@@ -1012,40 +1012,97 @@ copydb_matview_refresh_is_filtered_out(CopyDataSpec *specs, uint32_t oid)
 
 
 /*
+ * filter_kind_matches_archive_desc returns true when a filter entry's kind
+ * is compatible with the archive item description being checked. This prevents
+ * OID collisions between different catalog types (e.g., pg_extension and
+ * pg_class can have the same OID value) from incorrectly filtering out
+ * unrelated objects.
+ *
+ * Filter kinds whose OIDs come from non-pg_class catalogs (extension from
+ * pg_extension, coll from pg_collation) must only match their own archive
+ * item type. Other kinds (table, index, sequence, etc.) use pg_class OIDs
+ * and match freely since they share the same OID namespace.
+ */
+static bool
+filter_kind_matches_archive_desc(const char *kind, const char *archiveDesc)
+{
+	/* if no archive description or no kind, assume match (backwards compat) */
+	if (archiveDesc == NULL || IS_EMPTY_STRING_BUFFER(kind))
+	{
+		return true;
+	}
+
+	/* extension OIDs come from pg_extension, not pg_class */
+	if (streq(kind, "extension"))
+	{
+		return streq(archiveDesc, "EXTENSION");
+	}
+
+	/* collation OIDs come from pg_collation, not pg_class */
+	if (streq(kind, "coll"))
+	{
+		return streq(archiveDesc, "COLLATION");
+	}
+
+	return true;
+}
+
+
+/*
  * copydb_objectid_is_filtered_out returns true when the given oid belongs to a
  * database object that's been filtered out by the filtering setup.
  */
 bool
 copydb_objectid_is_filtered_out(CopyDataSpec *specs,
-								uint32_t oid,
-								char *restoreListName)
+								ArchiveContentItem *item)
 {
 	DatabaseCatalog *filtersDB = &(specs->catalogs.filter);
 	CatalogFilter result = { 0 };
 
-	if (oid != 0)
+	if (item->objectOid != 0)
 	{
-		if (!catalog_lookup_filter_by_oid(filtersDB, &result, oid))
+		if (!catalog_lookup_filter_by_oid(filtersDB, &result, item->objectOid))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 
-		if (result.oid != 0)
+		if (result.oid != 0 &&
+			filter_kind_matches_archive_desc(result.kind, item->description))
 		{
 			return true;
 		}
 	}
 
-	if (restoreListName != NULL && !IS_EMPTY_STRING_BUFFER(restoreListName))
+	/*
+	 * For SEQUENCE items, skip name-based lookup. The 'default' filter entry
+	 * for a sequence owned by an excluded table carries the sequence's own
+	 * restore_list_name so it can filter DEFAULT constraints and SEQUENCE
+	 * OWNED BY statements — but it must not filter the SEQUENCE definition
+	 * itself, which is needed when the sequence is referenced by an included
+	 * table (e.g. copy.foo shares app.foo_id_seq via LIKE ... INCLUDING ALL).
+	 *
+	 * SEQUENCE OWNED BY and DEFAULT items are not ARCHIVE_TAG_SEQUENCE, so
+	 * they still reach the name-based lookup below and are filtered correctly.
+	 */
+	if (item->desc == ARCHIVE_TAG_SEQUENCE)
 	{
-		if (!catalog_lookup_filter_by_rlname(filtersDB, &result, restoreListName))
+		return false;
+	}
+
+	if (item->restoreListName != NULL &&
+		!IS_EMPTY_STRING_BUFFER(item->restoreListName))
+	{
+		if (!catalog_lookup_filter_by_rlname(filtersDB,
+											 &result,
+											 item->restoreListName))
 		{
 			/* errors have already been logged */
 			return false;
 		}
 
-		if (!IS_EMPTY_STRING_BUFFER(result.restoreListName))
+		if (!IS_EMPTY_STRING_BUFFER(result.restoreListName) &&
+			filter_kind_matches_archive_desc(result.kind, item->description))
 		{
 			return true;
 		}
