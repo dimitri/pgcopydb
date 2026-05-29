@@ -5,7 +5,7 @@ ARG PGVERSION=16
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
       postgresql-${PGVERSION}-wal2json \
-      postgresql-13-partman \
-      postgresql-13-postgis-3 \
+      postgresql-${PGVERSION}-partman \
+      postgresql-${PGVERSION}-postgis-3 \
       postgis \
     && rm -rf /var/lib/apt/lists/*

@@ -7,6 +7,11 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: h4ckm3
       POSTGRES_HOST_AUTH_METHOD: trust
+    healthcheck:
+      test: 'pg_isready -U postgres'
+      interval: 5s
+      timeout: 5s
+      retries: 10
   target:
     image: postgres:${PGVERSION:-16}
     expose:
@@ -15,6 +20,11 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: h4ckm3
       POSTGRES_HOST_AUTH_METHOD: trust
+    healthcheck:
+      test: 'pg_isready -U postgres'
+      interval: 5s
+      timeout: 5s
+      retries: 10
   test:
     build: .
     environment:
@@ -23,5 +33,7 @@ services:
       PGCOPYDB_TABLE_JOBS: 4
       PGCOPYDB_INDEX_JOBS: 2
     depends_on:
-      - source
-      - target
+      source:
+        condition: service_healthy
+      target:
+        condition: service_healthy
