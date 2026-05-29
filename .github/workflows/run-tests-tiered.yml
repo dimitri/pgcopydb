@@ -139,7 +139,7 @@ jobs:
           - filtering
           - filtering-standby
           - extensions
-          - timescaledb
+          # - timescaledb  # temporarily disabled: failing due to an upstream timescaledb issue
           - skip-publications
           - skip-vacuum
           - skip-large-objects
