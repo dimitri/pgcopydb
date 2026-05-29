@@ -18,7 +18,7 @@ services:
       -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
 
   target:
-    image: postgres:17-bookworm
+    image: postgres:${PGVERSION:-16}-bookworm
     expose:
       - 5432
     env_file:

@@ -51,6 +51,7 @@ jobs:
       - name: Set environment variables
         run: |
             echo "TEST=${{ matrix.TEST }}" >> $GITHUB_ENV
+            echo "PGVERSION=${{ matrix.PGVERSION }}" >> $GITHUB_ENV
 
       - name: Create docker volumes
         run: |
