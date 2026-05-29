@@ -287,6 +287,8 @@ bool pgsql_has_table_privilege(PGSQL *pgsql,
 							   const char *privilege,
 							   bool *granted);
 
+bool pgsql_get_table_relkind(PGSQL *pgsql, const char *qname, char *relkind);
+
 bool pgsql_get_search_path(PGSQL *pgsql, char *search_path, size_t size);
 bool pgsql_set_search_path(PGSQL *pgsql, char *search_path, bool local);
 bool pgsql_prepend_search_path(PGSQL *pgsql, const char *namespace);
@@ -319,7 +321,7 @@ bool validate_connection_string(const char *connectionString);
 
 bool pgsql_lock_table(PGSQL *pgsql, const char *qname, const char *lockmode);
 
-bool pgsql_truncate(PGSQL *pgsql, const char *qname);
+bool pgsql_truncate(PGSQL *pgsql, const char *qname, char relkind);
 
 typedef struct CopyArgs
 {

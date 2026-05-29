@@ -579,7 +579,16 @@ copydb_copy_supervisor_add_table_hook(void *ctx, SourceTable *table)
 
 		if (granted)
 		{
-			if (!pgsql_truncate(dst, table->qname))
+			char relkind = '\0';
+
+			/*
+			 * Best-effort: on lookup failure relkind stays '\0' and we issue
+			 * TRUNCATE ONLY (the original behavior). pgsql_get_table_relkind
+			 * has already logged the underlying error.
+			 */
+			(void) pgsql_get_table_relkind(dst, table->qname, &relkind);
+
+			if (!pgsql_truncate(dst, table->qname, relkind))
 			{
 				/* errors have already been logged */
 				return false;

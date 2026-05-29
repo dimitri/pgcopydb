@@ -2507,6 +2507,13 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 /*
  * stream_write_truncate writes an TRUNCATE statement to the already open out
  * stream.
+ *
+ * Each call emits exactly one relation per statement; the data model
+ * (LogicalMessageTruncate.table) is singular by construction. The apply path
+ * in ld_apply.c (STREAM_ACTION_TRUNCATE) relies on this invariant to detect
+ * the partitioned-target case via a single regclass lookup. If this is ever
+ * changed to emit multi-relation TRUNCATE statements, update the apply path
+ * accordingly.
  */
 bool
 stream_write_truncate(FILE *out, LogicalMessageTruncate *truncate)

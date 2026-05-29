@@ -1164,7 +1164,51 @@ stream_apply_sql(StreamApplyContext *context,
 				*ptr = '\0';
 			}
 
-			if (!pgsql_execute(applyPgConn, sql))
+			/*
+			 * Postgres rejects TRUNCATE ONLY on partitioned tables. Mirror
+			 * the runtime fix in pgsql_truncate: when the target relation is
+			 * partitioned, drop the ONLY keyword. The lookup runs on the
+			 * non-pipeline controlPgConn because applyPgConn is in pipeline
+			 * mode (which forbids parseFun callbacks; see pgsql_execute_with_params).
+			 *
+			 * Invariant: stream_write_truncate emits exactly one relation per
+			 * statement (LogicalMessageTruncate.table is singular), so the
+			 * single-relation regclass lookup below is sufficient. If a future
+			 * change ever makes this multi-relation, the regclass cast will
+			 * fail, the rewrite will be skipped, and Postgres will surface a
+			 * loud error from the original TRUNCATE ONLY.
+			 */
+			char rewritten[BUFSIZE] = { 0 };
+			const char *truncateSQL = sql;
+			const char onlyPrefix[] = "TRUNCATE ONLY ";
+			size_t prefixLen = sizeof(onlyPrefix) - 1;
+
+			if (strncmp(sql, onlyPrefix, prefixLen) == 0)
+			{
+				char relkind = '\0';
+				const char *qname = sql + prefixLen;
+
+				if (pgsql_get_table_relkind(&(context->controlPgConn),
+											qname, &relkind))
+				{
+					if (relkind == 'p')
+					{
+						sformat(rewritten, sizeof(rewritten),
+								"TRUNCATE %s", qname);
+						truncateSQL = rewritten;
+					}
+				}
+				else
+				{
+					log_warn("Could not resolve relkind for replicated "
+							 "TRUNCATE on \"%s\"; replaying as TRUNCATE ONLY. "
+							 "If the target is partitioned, Postgres will "
+							 "reject this statement.",
+							 qname);
+				}
+			}
+
+			if (!pgsql_execute(applyPgConn, truncateSQL))
 			{
 				/* errors have already been logged */
 				return false;
