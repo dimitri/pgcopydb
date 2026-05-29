@@ -1044,23 +1044,6 @@ filter_kind_matches_archive_desc(const char *kind, const char *archiveDesc)
 		return streq(archiveDesc, "COLLATION");
 	}
 
-	/*
-	 * DEFAULT filter entries carry the sequence's restore_list_name to filter
-	 * out DEFAULT constraints, not the sequence definition itself. Without
-	 * this check a SEQUENCE archive item whose restore_list_name matches a
-	 * DEFAULT filter entry would be incorrectly excluded from the restore.
-	 */
-	if (streq(kind, "default"))
-	{
-		return streq(archiveDesc, "DEFAULT");
-	}
-
-	/* SEQUENCE OWNED BY entries only apply to ownership statements */
-	if (streq(kind, "sequence owned by"))
-	{
-		return streq(archiveDesc, "SEQUENCE OWNED BY");
-	}
-
 	return true;
 }
 
@@ -1089,6 +1072,22 @@ copydb_objectid_is_filtered_out(CopyDataSpec *specs,
 		{
 			return true;
 		}
+	}
+
+	/*
+	 * For SEQUENCE items, skip name-based lookup. The 'default' filter entry
+	 * for a sequence owned by an excluded table carries the sequence's own
+	 * restore_list_name so it can filter DEFAULT constraints and SEQUENCE
+	 * OWNED BY statements — but it must not filter the SEQUENCE definition
+	 * itself, which is needed when the sequence is referenced by an included
+	 * table (e.g. copy.foo shares app.foo_id_seq via LIKE ... INCLUDING ALL).
+	 *
+	 * SEQUENCE OWNED BY and DEFAULT items are not ARCHIVE_TAG_SEQUENCE, so
+	 * they still reach the name-based lookup below and are filtered correctly.
+	 */
+	if (item->desc == ARCHIVE_TAG_SEQUENCE)
+	{
+		return false;
 	}
 
 	if (item->restoreListName != NULL &&
