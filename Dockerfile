@@ -30,6 +30,7 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
     libkrb5-dev \
     liblz4-dev \
     libncurses6 \
+    libnuma-dev \
     libpam-dev \
     libpq-dev \
     libpq5 \

@@ -48,7 +48,7 @@ of pgcopydb used, and can do that in the JSON format when using the
    $ pgcopydb version
    pgcopydb version 0.13.1.g868ad77
    compiled with PostgreSQL 13.11 (Debian 13.11-0+deb11u1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 10.2.1-6) 10.2.1 20210110, 64-bit
-   compatible with Postgres 10, 11, 12, 13, 14, and 15
+   compatible with Postgres 11, 12, 13, 14, 15, 16, 17, and 18
 
 In JSON:
 

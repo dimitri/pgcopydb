@@ -2,6 +2,7 @@
 # Licensed under the PostgreSQL License.
 
 PGVERSION ?= 16
+export PGVERSION
 BUILD_ARGS = --build-arg PGVERSION=$(PGVERSION)
 
 all: pagila pagila-multi-steps blobs unit filtering extensions \
