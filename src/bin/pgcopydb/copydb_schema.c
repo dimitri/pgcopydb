@@ -987,7 +987,6 @@ copydb_matview_refresh_is_filtered_out(CopyDataSpec *specs, uint32_t oid)
 	 * to find out if the materialized view refresh has been filtered out.
 	 *
 	 * The filtering of materialized view as a whole handled by the
-
 	 * existing filtering setup(i.e. copydb_objectid_is_filtered_out).
 	 */
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
@@ -1043,6 +1042,23 @@ filter_kind_matches_archive_desc(const char *kind, const char *archiveDesc)
 	if (streq(kind, "coll"))
 	{
 		return streq(archiveDesc, "COLLATION");
+	}
+
+	/*
+	 * DEFAULT filter entries carry the sequence's restore_list_name to filter
+	 * out DEFAULT constraints, not the sequence definition itself. Without
+	 * this check a SEQUENCE archive item whose restore_list_name matches a
+	 * DEFAULT filter entry would be incorrectly excluded from the restore.
+	 */
+	if (streq(kind, "default"))
+	{
+		return streq(archiveDesc, "DEFAULT");
+	}
+
+	/* SEQUENCE OWNED BY entries only apply to ownership statements */
+	if (streq(kind, "sequence owned by"))
+	{
+		return streq(archiveDesc, "SEQUENCE OWNED BY");
 	}
 
 	return true;
