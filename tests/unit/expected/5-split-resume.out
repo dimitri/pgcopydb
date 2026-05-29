@@ -1,0 +1,4 @@
+source-rows: 100
+target-rows-after-first-run: 100
+marker-survived-resume: 1
+target-rows-after-resume: 101
