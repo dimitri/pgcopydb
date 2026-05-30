@@ -367,7 +367,8 @@ copydb_blob_worker(CopyDataSpec *specs)
 	bool dropIfExists = specs->restoreOptions.dropIfExists;
 
 	/* initialize our connection to the target database */
-	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET,
+					specs->connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		return false;

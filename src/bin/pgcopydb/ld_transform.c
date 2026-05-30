@@ -83,7 +83,8 @@ stream_transform_context_init(StreamSpecs *specs)
 	/* initialize our connection to the target database */
 	if (!pgsql_init(privateContext->transformPGSQL,
 					specs->connStrings->target_pguri,
-					PGSQL_CONN_TARGET))
+					PGSQL_CONN_TARGET,
+					specs->connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		return false;

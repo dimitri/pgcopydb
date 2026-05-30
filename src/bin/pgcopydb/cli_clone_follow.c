@@ -66,6 +66,7 @@
 	"  --origin                      Use this Postgres replication origin node name\n" \
 	"  --endpos                      Stop replaying changes when reaching this LSN\n" \
 	"  --use-copy-binary             Use the COPY BINARY format for COPY operations\n" \
+	"  --connection-retry-timeout    Number of seconds to retry before connection times out\n" \
 
 CommandLine clone_command =
 	make_command(
@@ -212,7 +213,8 @@ clone_and_follow(CopyDataSpec *copySpecs)
 						   &(copySpecs->catalogs.source),
 						   copyDBoptions.stdIn,
 						   copyDBoptions.stdOut,
-						   logSQL))
+						   logSQL,
+						   copyDBoptions.connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -390,7 +392,8 @@ cli_follow(int argc, char **argv)
 						   &(copySpecs.catalogs.source),
 						   copyDBoptions.stdIn,
 						   copyDBoptions.stdOut,
-						   logSQL))
+						   logSQL,
+						   copyDBoptions.connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -562,7 +565,8 @@ cloneDB(CopyDataSpec *copySpecs)
 		if (!pg_copy_roles(&(copySpecs->pgPaths),
 						   &(copySpecs->connStrings),
 						   copySpecs->dumpPaths.rolesFilename,
-						   copySpecs->noRolesPasswords))
+						   copySpecs->noRolesPasswords,
+						   copySpecs->connectionRetryTimeout))
 		{
 			/* errors have already been logged */
 			return false;

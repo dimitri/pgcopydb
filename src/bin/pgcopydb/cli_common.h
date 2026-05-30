@@ -53,6 +53,7 @@ typedef struct CopyDBOptions
 	int tableJobs;
 	int indexJobs;
 	int lObjectJobs;
+	int connectionRetryTimeout;
 
 	SplitTableLargerThan splitTablesLargerThan;
 	int splitMaxParts;
@@ -106,12 +107,10 @@ int cli_print_version_getopts(int argc, char **argv);
 void cli_print_version(int argc, char **argv);
 
 void cli_pprint_json(JSON_Value *js);
-char * logLevelToString(int logLevel);
-
-bool cli_copydb_getenv_source_pguri(char **pguri);
 bool cli_copydb_getenv_split(SplitTableLargerThan *splitTablesLargerThan);
 
 bool cli_copydb_getenv(CopyDBOptions *options);
+bool cli_copydb_getenv_file(CopyDBOptions *options);
 bool cli_copydb_is_consistent(CopyDBOptions *options);
 bool cli_read_previous_options(CopyDBOptions *options, CopyFilePaths *cfPaths);
 

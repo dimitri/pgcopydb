@@ -14,4 +14,5 @@
      --wal2json-numeric-as-string  Print numeric data type as string when using wal2json output plugin
      --slot-name                   Stream changes recorded by this slot
      --origin                      Name of the Postgres replication origin
+     --connection-retry-timeout    Number of seconds to retry before connection times out
    

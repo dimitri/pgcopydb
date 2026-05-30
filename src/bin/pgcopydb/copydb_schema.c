@@ -99,7 +99,8 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 	else
 	{
 		log_debug("--not-consistent, create a fresh connection");
-		if (!pgsql_init(&pgsql, specs->connStrings.source_pguri, PGSQL_CONN_SOURCE))
+		if (!pgsql_init(&pgsql, specs->connStrings.source_pguri, PGSQL_CONN_SOURCE,
+						specs->connectionRetryTimeout))
 		{
 			/* errors have already been logged */
 			return false;
@@ -1495,7 +1496,8 @@ copydb_prepare_target_catalog(CopyDataSpec *specs)
 		return false;
 	}
 
-	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET,
+					specs->connectionRetryTimeout))
 	{
 		/* errors have already been logged */
 		(void) semaphore_unlock(&(targetDB->sema));

@@ -249,7 +249,8 @@ copydb_index_worker(CopyDataSpec *specs)
 	PGSQL dst = { 0 };
 	char *pguri = specs->connStrings.target_pguri;
 
-	if (!pgsql_init(&dst, (char *) pguri, PGSQL_CONN_TARGET))
+	if (!pgsql_init(&dst, (char *) pguri, PGSQL_CONN_TARGET,
+					specs->connectionRetryTimeout))
 	{
 		return false;
 	}
