@@ -43,13 +43,14 @@ services:
         <<: *x-postgres-base-env
     command: |
      bash -c "
-      until pg_basebackup --pgdata=/var/lib/postgresql/data -R --slot=replication_slot -d postgres://postgres:h4ckm3@source/pagila
+      until pg_basebackup --pgdata=/var/lib/postgresql/data -R --checkpoint=fast --slot=replication_slot -d postgres://postgres:h4ckm3@source/pagila
       do
       echo 'Waiting for primary to connect...'
       sleep 1s
       done
       echo 'Backup done, starting replica...'
       chmod 0700 /var/lib/postgresql/data
+      rm -f /var/lib/postgresql/data/postmaster.pid
       postgres -c ssl=on -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
      "
     healthcheck:

@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile.pg
       args:
-        - PGVERSION
+        PGVERSION: "9.6"
     expose:
       - 5432
     env_file:
@@ -44,7 +44,7 @@ services:
       context: .
       dockerfile: Dockerfile.inject
     environment:
-      PGVERSION:
+      PGVERSION: "9.6"
     env_file:
       - ../uris.env
       - ../paths.env
@@ -61,7 +61,7 @@ services:
     image: follow-9.6
     build: .
     environment:
-      PGVERSION:
+      PGVERSION: "9.6"
       PGCOPYDB_TABLE_JOBS: 4
       PGCOPYDB_INDEX_JOBS: 2
       PGCOPYDB_SPLIT_TABLES_LARGER_THAN: 200kB
