@@ -950,10 +950,10 @@ stream_apply_sql(StreamApplyContext *context,
 					return false;
 				}
 
-				log_warn("KEEPALIVE at LSN %X/%X has empty timestamp, "
-						 "using current time \"%s\" as fallback",
-						 LSN_FORMAT_ARGS(metadata->lsn),
-						 metadata->timestamp);
+				log_debug("KEEPALIVE at LSN %X/%X has empty timestamp, "
+						  "using current time \"%s\" as fallback",
+						  LSN_FORMAT_ARGS(metadata->lsn),
+						  metadata->timestamp);
 			}
 
 			/*
