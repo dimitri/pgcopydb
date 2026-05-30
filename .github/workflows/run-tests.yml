@@ -39,6 +39,16 @@ jobs:
           - follow-9.6
           - follow-data-only
           - endpos-in-multi-wal-txn
+        exclude:
+          # timescaledb uses timescale/timescaledb:latest-pg13 for both source
+          # and target. pg_restore from PG17+ emits "SET transaction_timeout = 0"
+          # at connect time; the TimescaleDB pg13 server rejects this unknown GUC,
+          # causing pg_restore to fail.  The test exercises TimescaleDB
+          # compatibility, not PG version, so running it only under PG16 is fine.
+          - TEST: timescaledb
+            PGVERSION: 17
+          - TEST: timescaledb
+            PGVERSION: 18
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

@@ -41,6 +41,11 @@ services:
     <<: *x-postgres-base
     environment:
         <<: *x-postgres-base-env
+        # PG18 changed PGDATA from /var/lib/postgresql/data to a versioned
+        # subdirectory (/var/lib/postgresql/18/docker). Pin it back to the
+        # traditional path so that pg_basebackup and the subsequent postgres
+        # invocation both use the same directory regardless of PG version.
+        PGDATA: /var/lib/postgresql/data
     command: |
      bash -c "
       until pg_basebackup --pgdata=/var/lib/postgresql/data -R --checkpoint=fast --slot=replication_slot -d postgres://postgres:h4ckm3@source/pagila
