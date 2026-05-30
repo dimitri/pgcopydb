@@ -925,11 +925,35 @@ stream_apply_sql(StreamApplyContext *context,
 					  LSN_FORMAT_ARGS(context->previousLSN),
 					  context->reachedStartPos ? "" : "[skipping]");
 
-			if (metadata->lsn == InvalidXLogRecPtr ||
-				IS_EMPTY_STRING_BUFFER(metadata->timestamp))
+			if (metadata->lsn == InvalidXLogRecPtr)
 			{
 				log_fatal("Failed to parse KEEPALIVE message: %s", sql);
 				return false;
+			}
+
+			/*
+			 * When the timestamp is empty (e.g. from a stale SQL file
+			 * written before the empty-timestamp fix), use the current
+			 * time as a fallback. The timestamp is only used for
+			 * replication origin tracking, so a local timestamp is safe.
+			 */
+			if (IS_EMPTY_STRING_BUFFER(metadata->timestamp))
+			{
+				TimestampTz now = feGetCurrentTimestamp();
+
+				if (!pgsql_timestamptz_to_string(now,
+												 metadata->timestamp,
+												 sizeof(metadata->timestamp)))
+				{
+					log_fatal("Failed to generate fallback timestamp "
+							  "for KEEPALIVE message: %s", sql);
+					return false;
+				}
+
+				log_warn("KEEPALIVE at LSN %X/%X has empty timestamp, "
+						 "using current time \"%s\" as fallback",
+						 LSN_FORMAT_ARGS(metadata->lsn),
+						 metadata->timestamp);
 			}
 
 			/*
