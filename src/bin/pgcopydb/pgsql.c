@@ -3464,6 +3464,22 @@ pg_copy_large_object(PGSQL *src,
 	}
 
 	/*
+	 * In PostgreSQL 17+, lo_unlink() and lo_open() throw a SQL error
+	 * (aborting the current transaction) when the target large object does
+	 * not exist, rather than simply returning -1.  Also in PG17+, pg_dump
+	 * no longer outputs large object metadata in the pre-data section.
+	 *
+	 * For PG17+ we therefore use SQL-level existence checks via
+	 * pg_largeobject_metadata to avoid transaction-aborting errors.  For
+	 * older versions the libpq large-object functions return -1 safely, so
+	 * we keep the simpler direct-call path.
+	 *
+	 * PQserverVersion() reads the version from the connection struct --
+	 * it is an O(1) operation with no network round-trip.
+	 */
+	bool dstIsPG17orLater = PQserverVersion(dst->connection) >= 170000;
+
+	/*
 	 * 2. Drop/Create the blob on the target database.
 	 *
 	 *    When using --drop-if-exists, we first try to unlink the
@@ -3472,31 +3488,26 @@ pg_copy_large_object(PGSQL *src,
 	 *    In normal cases `pg_dump --section=pre-data` outputs the
 	 *    large object metadata and we only have to take care of the
 	 *    contents of the large objects.
-	 *
-	 *    In PostgreSQL 17+, lo_unlink() throws a SQL error (aborting the
-	 *    current transaction) when the large object does not exist, rather
-	 *    than simply returning -1.  Use a savepoint to recover.
 	 */
 	if (dropIfExists)
 	{
-		if (!pgsql_execute(dst, "SAVEPOINT pgcopydb_lo_unlink"))
-		{
-			lo_close(src->connection, srcfd);
-			pgsql_finish(src);
-			pgsql_finish(dst);
-			return false;
-		}
-
-		if (!lo_unlink(dst->connection, blobOid))
+		if (dstIsPG17orLater)
 		{
 			/*
-			 * Ignore errors, the object might not exist yet.  But in
-			 * PG17+ the failure aborts the current transaction, so roll
-			 * back to the savepoint before continuing.
+			 * In PG17+, lo_unlink() aborts the transaction when the
+			 * object does not exist.  Avoid that by filtering through
+			 * pg_largeobject_metadata: if the row is absent the SELECT
+			 * returns zero rows and lo_unlink() is never called.
 			 */
-			log_debug("Failed to delete large object %u", blobOid);
+			char sql[BUFSIZE] = { 0 };
 
-			if (!pgsql_execute(dst, "ROLLBACK TO SAVEPOINT pgcopydb_lo_unlink"))
+			sformat(sql, sizeof(sql),
+					"SELECT lo_unlink(oid) "
+					"FROM pg_largeobject_metadata "
+					"WHERE oid = %u",
+					blobOid);
+
+			if (!pgsql_execute(dst, sql))
 			{
 				lo_close(src->connection, srcfd);
 				pgsql_finish(src);
@@ -3504,13 +3515,17 @@ pg_copy_large_object(PGSQL *src,
 				return false;
 			}
 		}
-
-		if (!pgsql_execute(dst, "RELEASE SAVEPOINT pgcopydb_lo_unlink"))
+		else
 		{
-			lo_close(src->connection, srcfd);
-			pgsql_finish(src);
-			pgsql_finish(dst);
-			return false;
+			/*
+			 * On PG16 and earlier lo_unlink() returns -1 (does not abort
+			 * the transaction) when the object is absent, so we can call
+			 * it unconditionally and ignore the return value.
+			 */
+			if (!lo_unlink(dst->connection, blobOid))
+			{
+				log_debug("Failed to delete large object %u", blobOid);
+			}
 		}
 
 		Oid dstBlobOid = lo_create(dst->connection, blobOid);
@@ -3534,37 +3549,35 @@ pg_copy_large_object(PGSQL *src,
 	}
 
 	/*
-	 * 3. Open the blob on the target database
+	 * 3. Open the blob on the target database.
 	 *
 	 *    In PostgreSQL 17+, pg_dump no longer outputs large object metadata
-	 *    in the pre-data section, so the large object may not exist yet.
-	 *    If opening fails, try creating it first.
+	 *    in the pre-data section, so the large object may not exist yet on
+	 *    the target.  Also in PG17+, lo_open() throws a SQL error (aborting
+	 *    the current transaction) when the large object does not exist.
 	 *
-	 *    Also in PG17+, lo_open() throws a SQL error (aborting the current
-	 *    transaction) when the large object does not exist, rather than
-	 *    simply returning -1.  Use a savepoint to recover from that error
-	 *    so we can create the object and retry.
+	 *    For PG17+ we therefore check existence via pg_largeobject_metadata
+	 *    before opening, creating the object when it is absent.
+	 *
+	 *    For PG16 and earlier lo_open() safely returns -1 when the object
+	 *    is absent (no transaction abort), so we try to open first and only
+	 *    create when the open fails.
 	 */
-	if (!pgsql_execute(dst, "SAVEPOINT pgcopydb_lo_open"))
+	int dstfd = -1;
+
+	if (dstIsPG17orLater)
 	{
-		lo_close(src->connection, srcfd);
-		pgsql_finish(src);
-		pgsql_finish(dst);
-		return false;
-	}
+		SingleValueResultContext context = { { 0 }, PGSQL_RESULT_BOOL, false };
+		char sql[BUFSIZE] = { 0 };
 
-	int dstfd = lo_open(dst->connection, blobOid, INV_WRITE);
+		sformat(sql, sizeof(sql),
+				"SELECT EXISTS("
+				"SELECT 1 FROM pg_largeobject_metadata WHERE oid = %u"
+				")",
+				blobOid);
 
-	if (dstfd == -1)
-	{
-		/*
-		 * Large object doesn't exist yet (PG17+ behavior or fresh target).
-		 * In PG17+ the lo_open() failure aborts the current transaction,
-		 * so roll back to the savepoint before creating the object.
-		 */
-		log_debug("Large object %u not found on target, creating it", blobOid);
-
-		if (!pgsql_execute(dst, "ROLLBACK TO SAVEPOINT pgcopydb_lo_open"))
+		if (!pgsql_execute_with_params(dst, sql, 0, NULL, NULL,
+									   &context, &parseSingleValueResult))
 		{
 			lo_close(src->connection, srcfd);
 			pgsql_finish(src);
@@ -3572,35 +3585,51 @@ pg_copy_large_object(PGSQL *src,
 			return false;
 		}
 
-		Oid createdOid = lo_create(dst->connection, blobOid);
-
-		if (createdOid != blobOid)
+		if (!context.parsedOk)
 		{
-			char context[BUFSIZE] = { 0 };
-
-			sformat(context, sizeof(context),
-					"Failed to create large object %u on target", blobOid);
-
-			(void) pgcopy_log_error(dst, NULL, context);
+			log_error("Failed to check existence of large object %u on target",
+					  blobOid);
 
 			lo_close(src->connection, srcfd);
-
 			pgsql_finish(src);
 			pgsql_finish(dst);
-
 			return false;
+		}
+
+		if (!context.boolVal)
+		{
+			log_debug("Large object %u not found on target, creating it", blobOid);
+
+			Oid createdOid = lo_create(dst->connection, blobOid);
+
+			if (createdOid != blobOid)
+			{
+				char ctx[BUFSIZE] = { 0 };
+
+				sformat(ctx, sizeof(ctx),
+						"Failed to create large object %u on target", blobOid);
+
+				(void) pgcopy_log_error(dst, NULL, ctx);
+
+				lo_close(src->connection, srcfd);
+
+				pgsql_finish(src);
+				pgsql_finish(dst);
+
+				return false;
+			}
 		}
 
 		dstfd = lo_open(dst->connection, blobOid, INV_WRITE);
 
 		if (dstfd == -1)
 		{
-			char context[BUFSIZE] = { 0 };
+			char ctx[BUFSIZE] = { 0 };
 
-			sformat(context, sizeof(context),
-					"Failed to open newly created large object %u", blobOid);
+			sformat(ctx, sizeof(ctx),
+					"Failed to open large object %u on target", blobOid);
 
-			(void) pgcopy_log_error(dst, NULL, context);
+			(void) pgcopy_log_error(dst, NULL, ctx);
 
 			lo_close(src->connection, srcfd);
 
@@ -3610,14 +3639,57 @@ pg_copy_large_object(PGSQL *src,
 			return false;
 		}
 	}
-
-	if (!pgsql_execute(dst, "RELEASE SAVEPOINT pgcopydb_lo_open"))
+	else
 	{
-		lo_close(src->connection, srcfd);
-		lo_close(dst->connection, dstfd);
-		pgsql_finish(src);
-		pgsql_finish(dst);
-		return false;
+		/*
+		 * PG16 and earlier: lo_open() returns -1 when the object is absent
+		 * without aborting the transaction.  Try to open; if it fails,
+		 * create the object and retry.
+		 */
+		dstfd = lo_open(dst->connection, blobOid, INV_WRITE);
+
+		if (dstfd == -1)
+		{
+			log_debug("Large object %u not found on target, creating it", blobOid);
+
+			Oid createdOid = lo_create(dst->connection, blobOid);
+
+			if (createdOid != blobOid)
+			{
+				char ctx[BUFSIZE] = { 0 };
+
+				sformat(ctx, sizeof(ctx),
+						"Failed to create large object %u on target", blobOid);
+
+				(void) pgcopy_log_error(dst, NULL, ctx);
+
+				lo_close(src->connection, srcfd);
+
+				pgsql_finish(src);
+				pgsql_finish(dst);
+
+				return false;
+			}
+
+			dstfd = lo_open(dst->connection, blobOid, INV_WRITE);
+
+			if (dstfd == -1)
+			{
+				char ctx[BUFSIZE] = { 0 };
+
+				sformat(ctx, sizeof(ctx),
+						"Failed to open newly created large object %u", blobOid);
+
+				(void) pgcopy_log_error(dst, NULL, ctx);
+
+				lo_close(src->connection, srcfd);
+
+				pgsql_finish(src);
+				pgsql_finish(dst);
+
+				return false;
+			}
+		}
 	}
 
 	/*
