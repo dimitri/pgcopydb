@@ -3464,17 +3464,34 @@ pg_copy_large_object(PGSQL *src,
 	}
 
 	/*
-	 * In PostgreSQL 17+, lo_unlink() and lo_open() throw a SQL error
-	 * (aborting the current transaction) when the target large object does
-	 * not exist, rather than simply returning -1.  Also in PG17+, pg_dump
-	 * no longer outputs large object metadata in the pre-data section.
+	 * Both lo_open() and lo_unlink() call ereport(ERROR) — aborting the
+	 * current transaction — when the target large object does not exist.
+	 * This is true for all PostgreSQL versions: inv_open() checks
+	 * LargeObjectExistsWithSnapshot() and LargeObjectDrop() scans
+	 * pg_largeobject_metadata, both throwing ERROR if the OID is absent.
 	 *
-	 * For PG17+ we therefore use SQL-level existence checks via
-	 * pg_largeobject_metadata to avoid transaction-aborting errors.  For
-	 * older versions the libpq large-object functions return -1 safely, so
-	 * we keep the simpler direct-call path.
+	 * Whether those errors can actually be triggered depends on whether
+	 * the blobs have been created on the target before this function runs.
 	 *
-	 * PQserverVersion() reads the version from the connection struct --
+	 * In PostgreSQL 16 and earlier, pg_dump emits "BLOB" TOC entries in
+	 * SECTION_PRE_DATA containing "SELECT pg_catalog.lo_create(N)" for
+	 * every large object.  pgcopydb restores those in the pre-data step,
+	 * so by the time pg_copy_large_object() is called the blobs always
+	 * exist on the target.  lo_open() and lo_unlink() therefore never
+	 * encounter missing objects, and no special handling is needed.
+	 *
+	 * In PostgreSQL 17+, commit a45c78e3284 moved blob creation into
+	 * "BLOB METADATA" TOC entries placed in SECTION_DATA (not pre-data).
+	 * pgcopydb only restores the pre-data section, so blobs are never
+	 * pre-created.  pg_copy_large_object() must therefore create each
+	 * blob itself before opening it for writing, and must handle the
+	 * drop-if-exists case without calling lo_unlink() on absent blobs.
+	 *
+	 * For PG17+ we use SQL-level checks via pg_largeobject_metadata —
+	 * the same technique that pg_restore's own DropLOIfExists() has used
+	 * since PostgreSQL 9.0 (src/bin/pg_dump/pg_backup_db.c).
+	 *
+	 * PQserverVersion() reads the version from the connection struct;
 	 * it is an O(1) operation with no network round-trip.
 	 */
 	bool dstIsPG17orLater = PQserverVersion(dst->connection) >= 170000;
@@ -3494,10 +3511,14 @@ pg_copy_large_object(PGSQL *src,
 		if (dstIsPG17orLater)
 		{
 			/*
-			 * In PG17+, lo_unlink() aborts the transaction when the
-			 * object does not exist.  Avoid that by filtering through
-			 * pg_largeobject_metadata: if the row is absent the SELECT
-			 * returns zero rows and lo_unlink() is never called.
+			 * On PG17+, blobs are not pre-created by the pre-data
+			 * restore, so the blob may not exist yet.  Calling
+			 * lo_unlink() on a missing blob would reach LargeObjectDrop()
+			 * which calls ereport(ERROR), aborting the transaction.
+			 *
+			 * Instead, use a WHERE-filtered SELECT so that lo_unlink()
+			 * is only called when the row actually exists.  This is the
+			 * same pattern used by pg_restore's own DropLOIfExists().
 			 */
 			char sql[BUFSIZE] = { 0 };
 
@@ -3518,9 +3539,10 @@ pg_copy_large_object(PGSQL *src,
 		else
 		{
 			/*
-			 * On PG16 and earlier lo_unlink() returns -1 (does not abort
-			 * the transaction) when the object is absent, so we can call
-			 * it unconditionally and ignore the return value.
+			 * On PG16 and earlier, pg_dump places blob creation in the
+			 * pre-data section, so blobs are always present on the target
+			 * before this function runs.  lo_unlink() therefore always
+			 * finds the blob and succeeds.
 			 */
 			if (!lo_unlink(dst->connection, blobOid))
 			{
@@ -3551,17 +3573,16 @@ pg_copy_large_object(PGSQL *src,
 	/*
 	 * 3. Open the blob on the target database.
 	 *
-	 *    In PostgreSQL 17+, pg_dump no longer outputs large object metadata
-	 *    in the pre-data section, so the large object may not exist yet on
-	 *    the target.  Also in PG17+, lo_open() throws a SQL error (aborting
-	 *    the current transaction) when the large object does not exist.
+	 *    On PG17+, blobs are not pre-created by the pre-data restore (see
+	 *    comment above), so we must create the blob here if it does not
+	 *    exist yet.  We check via pg_largeobject_metadata first because
+	 *    calling lo_open() on an absent blob would call ereport(ERROR) in
+	 *    inv_open() and abort the current transaction.
 	 *
-	 *    For PG17+ we therefore check existence via pg_largeobject_metadata
-	 *    before opening, creating the object when it is absent.
-	 *
-	 *    For PG16 and earlier lo_open() safely returns -1 when the object
-	 *    is absent (no transaction abort), so we try to open first and only
-	 *    create when the open fails.
+	 *    On PG16 and earlier, blob creation happens in the pre-data
+	 *    section, so the blob always exists on the target by the time we
+	 *    reach this point.  lo_open() succeeds directly and the fallback
+	 *    create path is never exercised.
 	 */
 	int dstfd = -1;
 
@@ -3642,9 +3663,10 @@ pg_copy_large_object(PGSQL *src,
 	else
 	{
 		/*
-		 * PG16 and earlier: lo_open() returns -1 when the object is absent
-		 * without aborting the transaction.  Try to open; if it fails,
-		 * create the object and retry.
+		 * PG16 and earlier: blobs are always pre-created by the pre-data
+		 * restore, so lo_open() succeeds directly.  The fallback create
+		 * path below is a safety net that is not expected to be reached
+		 * in normal operation.
 		 */
 		dstfd = lo_open(dst->connection, blobOid, INV_WRITE);
 
