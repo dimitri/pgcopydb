@@ -1,0 +1,80 @@
+name: Nightly Tests
+
+on:
+  # Full PG16/17/18 matrix every night at 02:00 UTC.
+  schedule:
+    - cron: '0 2 * * *'
+
+  # Manual trigger — use this when you want a full matrix run on demand
+  # (e.g. before cutting a release or after a large refactor).
+  workflow_dispatch:
+
+jobs:
+  build_package:
+    name: Run tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        PGVERSION:
+          - 16
+          - 17
+          - 18
+        TEST:
+          - ci
+          - pagila
+          - pagila-multi-steps
+          - pagila-standby
+          - unit
+          - blobs
+          - filtering
+          - extensions
+          - timescaledb
+          - cdc-low-level
+          - cdc-test-decoding
+          - cdc-endpos-between-transaction
+          - cdc-wal2json
+          - follow-wal2json
+          - follow-9.6
+          - follow-data-only
+          - endpos-in-multi-wal-txn
+        exclude:
+          # timescaledb uses timescale/timescaledb:latest-pg13 for both source
+          # and target. pg_restore from PG17+ emits "SET transaction_timeout = 0"
+          # at connect time; the TimescaleDB pg13 server rejects this unknown GUC,
+          # causing pg_restore to fail.  The test exercises TimescaleDB
+          # compatibility, not PG version, so running it only under PG16 is fine.
+          - TEST: timescaledb
+            PGVERSION: 17
+          - TEST: timescaledb
+            PGVERSION: 18
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # all history for all branches and tags
+
+      - name: Set Version String From .git
+        run: make version
+
+      - name: Set environment variables
+        run: |
+            echo "TEST=${{ matrix.TEST }}" >> $GITHUB_ENV
+            echo "PGVERSION=${{ matrix.PGVERSION }}" >> $GITHUB_ENV
+
+      - name: Create docker volumes
+        run: |
+          docker volume create ${TEST}
+
+      - name: List docker volumes
+        run: |
+          docker volume ls
+
+      - name: Docker Compose Version
+        run: |
+          docker compose version
+
+      - name: Run a test
+        timeout-minutes: 15
+        run: |
+          make tests/${TEST}
