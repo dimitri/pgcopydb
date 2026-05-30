@@ -1,9 +1,11 @@
-FROM postgres:13-bullseye
+ARG PGVERSION=16
+FROM postgres:${PGVERSION}
 
+ARG PGVERSION=16
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-      postgresql-13-wal2json \
-      postgresql-13-partman \
-      postgresql-13-postgis-3 \
+      postgresql-${PGVERSION}-wal2json \
+      postgresql-${PGVERSION}-partman \
+      postgresql-${PGVERSION}-postgis-3 \
       postgis \
     && rm -rf /var/lib/apt/lists/*

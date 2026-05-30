@@ -8,6 +8,8 @@ on:
     branches:
     - main
 
+  # Manual trigger for a quick, PR-style run on any branch.
+  # For a full PG16/17/18 matrix run, use the Nightly workflow instead.
   workflow_dispatch:
 
 jobs:
@@ -17,8 +19,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # PR / push matrix: PG16 (smoke) + PG18 (full).
+        #
+        # PG17 is intentionally omitted here — it is covered by the nightly
+        # full-matrix run.  PG18 (latest) gets every test; PG16 (oldest
+        # supported) gets a representative core subset.  This keeps the PR
+        # gate at ~25 jobs instead of 49.
         PGVERSION:
           - 16
+          - 18
         TEST:
           - ci
           - pagila
@@ -37,6 +46,34 @@ jobs:
           - follow-9.6
           - follow-data-only
           - endpos-in-multi-wal-txn
+        exclude:
+          # timescaledb uses timescale/timescaledb:latest-pg13 for both source
+          # and target. pg_restore from PG17+ emits "SET transaction_timeout = 0"
+          # at connect time; the TimescaleDB pg13 server rejects this unknown GUC,
+          # causing pg_restore to fail.  The test exercises TimescaleDB
+          # compatibility, not PG version, so running it only under PG16 is fine.
+          - TEST: timescaledb
+            PGVERSION: 18
+
+          # CDC / WAL-streaming / follow tests are version-agnostic at the
+          # protocol level.  Running them on PG18 on every PR is enough signal;
+          # PG16 coverage is provided by the nightly full-matrix run.
+          - TEST: cdc-low-level
+            PGVERSION: 16
+          - TEST: cdc-test-decoding
+            PGVERSION: 16
+          - TEST: cdc-endpos-between-transaction
+            PGVERSION: 16
+          - TEST: cdc-wal2json
+            PGVERSION: 16
+          - TEST: follow-wal2json
+            PGVERSION: 16
+          - TEST: follow-9.6
+            PGVERSION: 16
+          - TEST: follow-data-only
+            PGVERSION: 16
+          - TEST: endpos-in-multi-wal-txn
+            PGVERSION: 16
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -49,6 +86,7 @@ jobs:
       - name: Set environment variables
         run: |
             echo "TEST=${{ matrix.TEST }}" >> $GITHUB_ENV
+            echo "PGVERSION=${{ matrix.PGVERSION }}" >> $GITHUB_ENV
 
       - name: Create docker volumes
         run: |
@@ -63,7 +101,7 @@ jobs:
           docker compose version
 
       - name: Run a test
-        timeout-minutes: 5
+        timeout-minutes: 15
         run: |
           make tests/${TEST}
 
