@@ -189,10 +189,20 @@ ld_store_set_cdc_filename_at_lsn(StreamSpecs *specs, uint64_t lsn)
 		return false;
 	}
 
+	/*
+	 * Find the CDC file whose LSN range covers the given position.
+	 * A file covers an LSN when its startpos <= lsn AND its endpos is
+	 * either NULL (still open / not yet closed) or >= lsn.
+	 *
+	 * The old predicate "startpos >= $1 AND endpos <= $2" was inverted and
+	 * also broke on NULL endpos (SQLite evaluates NULL <= x as NULL, not
+	 * TRUE), so the query returned zero rows for every open file.
+	 */
 	char *sql =
 		"  select filename "
 		"    from cdc_files "
-		"   where startpos >= $1 and endpos <= $2 "
+		"   where startpos <= $1 "
+		"     and (endpos is null or endpos >= $1) "
 		"order by id, filename ";
 
 	char candidate[MAXPGPATH] = { 0 };
@@ -211,15 +221,12 @@ ld_store_set_cdc_filename_at_lsn(StreamSpecs *specs, uint64_t lsn)
 	char pg_lsn[PG_LSN_MAXLENGTH] = { 0 };
 	sformat(pg_lsn, sizeof(pg_lsn), "%08X/%08X", LSN_FORMAT_ARGS(lsn));
 
-	/* bind our parameters now */
+	/* single parameter: the target LSN used for both <= and >= comparisons */
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "lsn", 0, (char *) pg_lsn },
 		{ BIND_PARAMETER_TYPE_TEXT, "lsn", 0, (char *) pg_lsn }
 	};
 
-	int count = sizeof(params) / sizeof(params[0]);
-
-	if (!catalog_sql_bind(&query, params, count))
+	if (!catalog_sql_bind(&query, params, 1))
 	{
 		/* errors have already been logged */
 		return false;
@@ -246,35 +253,46 @@ ld_store_set_cdc_filename_at_lsn(StreamSpecs *specs, uint64_t lsn)
 		DatabaseCatalog *candidateDB =
 			(DatabaseCatalog *) calloc(1, sizeof(DatabaseCatalog));
 
+		if (candidateDB == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
 		strlcpy(candidateDB->dbfile, candidate, sizeof(candidateDB->dbfile));
 
 		if (!catalog_open(candidateDB))
 		{
 			/* errors have already been logged */
+			free(candidateDB);
 			return false;
 		}
 
-		/* now check if the candidateDB contains the given LSN */
+		/*
+		 * Verify the file contains at least one output row at or after the
+		 * given LSN.  Use errorOnZeroRows = false: the transform_lsn might
+		 * sit between two message LSNs (e.g. when it equals the stream
+		 * startpos which precedes the first written message).
+		 */
 		ReplayDBOutputMessage output = { 0 };
 
-		if (!ld_store_lookup_output_at_lsn(candidateDB, lsn, &output))
+		if (!ld_store_lookup_output_after_lsn(candidateDB, lsn, &output))
 		{
 			/* errors have already been logged */
+			(void) catalog_close(candidateDB);
+			free(candidateDB);
 			return false;
 		}
 
-		/* found it? then we opened the right replay db file */
-		if (output.lsn == lsn)
+		if (output.lsn != InvalidXLogRecPtr)
 		{
+			/* this file contains messages at or after the given LSN */
 			specs->replayDB = candidateDB;
 			break;
 		}
 
-		if (!catalog_close(candidateDB))
-		{
-			/* errors have already been logged */
-			return false;
-		}
+		(void) catalog_close(candidateDB);
+		free(candidateDB);
 	}
 
 	if (!catalog_sql_finalize(&query))
