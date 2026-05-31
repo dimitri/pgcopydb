@@ -128,8 +128,8 @@ ld_store_set_current_cdc_filename(StreamSpecs *specs)
 	char slsn[PG_LSN_MAXLENGTH] = { 0 };
 	char elsn[PG_LSN_MAXLENGTH] = { 0 };
 
-	sformat(slsn, sizeof(slsn), "%X/%X", LSN_FORMAT_ARGS(startpos));
-	sformat(elsn, sizeof(elsn), "%X/%X", LSN_FORMAT_ARGS(endpos));
+	sformat(slsn, sizeof(slsn), "%08X/%08X", LSN_FORMAT_ARGS(startpos));
+	sformat(elsn, sizeof(elsn), "%08X/%08X", LSN_FORMAT_ARGS(endpos));
 
 	/* bind our parameters now */
 	BindParam params[] = {
@@ -209,7 +209,7 @@ ld_store_set_cdc_filename_at_lsn(StreamSpecs *specs, uint64_t lsn)
 	}
 
 	char pg_lsn[PG_LSN_MAXLENGTH] = { 0 };
-	sformat(pg_lsn, sizeof(pg_lsn), "%X/%X", LSN_FORMAT_ARGS(lsn));
+	sformat(pg_lsn, sizeof(pg_lsn), "%08X/%08X", LSN_FORMAT_ARGS(lsn));
 
 	/* bind our parameters now */
 	BindParam params[] = {
@@ -333,7 +333,7 @@ ld_store_lookup_output_at_lsn(DatabaseCatalog *catalog, uint64_t lsn,
 		"order by id "
 		"   limit 1";
 
-	log_warn("ld_store_lookup_output_at_lsn: %X/%X", LSN_FORMAT_ARGS(lsn));
+	log_debug("ld_store_lookup_output_at_lsn: %X/%X", LSN_FORMAT_ARGS(lsn));
 
 	SQLiteQuery query = {
 		.errorOnZeroRows = true,
@@ -407,7 +407,7 @@ ld_store_lookup_output_after_lsn(DatabaseCatalog *catalog,
 		"order by id "
 		"   limit 1";
 
-	log_warn("ld_store_lookup_output_after_lsn: %X/%X", LSN_FORMAT_ARGS(lsn));
+	log_debug("ld_store_lookup_output_after_lsn: %X/%X", LSN_FORMAT_ARGS(lsn));
 
 	SQLiteQuery query = {
 		.errorOnZeroRows = false,
@@ -470,7 +470,7 @@ ld_store_lookup_output_xid_end(DatabaseCatalog *catalog,
 		"order by id "
 		"   limit 1";
 
-	log_warn("ld_store_lookup_output_xid_end: %u", xid);
+	log_debug("ld_store_lookup_output_xid_end: %u", xid);
 
 	SQLiteQuery query = {
 		.errorOnZeroRows = true,
@@ -545,11 +545,11 @@ ld_store_output_fetch(SQLiteQuery *query)
 		output->lsn = sqlite3_column_int64(query->ppStmt, 3);
 	}
 
-	log_warn("ld_store_output_fetch: %lld %c %u %X/%X",
-			 (long long) output->id,
-			 output->action,
-			 output->xid,
-			 LSN_FORMAT_ARGS(output->lsn));
+	log_debug("ld_store_output_fetch: %lld %c %u %X/%X",
+			  (long long) output->id,
+			  output->action,
+			  output->xid,
+			  LSN_FORMAT_ARGS(output->lsn));
 
 	/* timestamp */
 	if (sqlite3_column_type(query->ppStmt, 4) != SQLITE_NULL)
@@ -612,7 +612,7 @@ ld_store_insert_cdc_filename(StreamSpecs *specs)
 	}
 
 	char lsn[PG_LSN_MAXLENGTH] = { 0 };
-	sformat(lsn, sizeof(lsn), "%X/%X", LSN_FORMAT_ARGS(privateContext->startpos));
+	sformat(lsn, sizeof(lsn), "%08X/%08X", LSN_FORMAT_ARGS(privateContext->startpos));
 
 	uint64_t startTime = time(NULL);
 
@@ -676,8 +676,8 @@ ld_store_insert_timeline_history(DatabaseCatalog *catalog,
 	char slsn[PG_LSN_MAXLENGTH] = { 0 };
 	char elsn[PG_LSN_MAXLENGTH] = { 0 };
 
-	sformat(slsn, sizeof(slsn), "%X/%X", LSN_FORMAT_ARGS(startpos));
-	sformat(elsn, sizeof(elsn), "%X/%X", LSN_FORMAT_ARGS(endpos));
+	sformat(slsn, sizeof(slsn), "%08X/%08X", LSN_FORMAT_ARGS(startpos));
+	sformat(elsn, sizeof(elsn), "%08X/%08X", LSN_FORMAT_ARGS(endpos));
 
 	/* bind our parameters now */
 	BindParam params[] = {
@@ -796,10 +796,6 @@ ld_store_insert_internal_message(DatabaseCatalog *catalog,
 	char *sql =
 		"insert or replace into output(action, lsn, timestamp)"
 		"values($1, $2, $3)";
-
-	log_warn("ld_store_insert_internal_message: %c %X/%X",
-			 message->action,
-			 LSN_FORMAT_ARGS(message->lsn));
 
 	if (!semaphore_lock(&(catalog->sema)))
 	{
@@ -1048,7 +1044,8 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 		iter->output->action == STREAM_ACTION_UNKNOWN)
 	{
 		/* no rows returned from the init */
-		log_warn("ld_store_iter_output: no rows");
+		log_debug("ld_store_iter_output: no rows yet at LSN %X/%X",
+				  LSN_FORMAT_ARGS(iter->transform_lsn));
 		(void) semaphore_unlock(&(catalog->sema));
 		return true;
 	}
@@ -1059,9 +1056,10 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 		bool stop = false;
 		ReplayDBOutputMessage *output = iter->output;
 
-		log_warn("ld_store_iter_output: %c %s",
-				 output->action,
-				 StreamActionToString(output->action));
+		log_debug("ld_store_iter_output: single message %c %s at LSN %X/%X",
+				  output->action,
+				  StreamActionToString(output->action),
+				  LSN_FORMAT_ARGS(output->lsn));
 
 		/* now call the provided callback */
 		if (!(*callback)(specs, output, &stop))
@@ -1194,7 +1192,8 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 		case STREAM_ACTION_ENDPOS:
 		{
 			/* single message, just return it */
-			log_warn("ld_store_iter_output_init: single message %c", first.action);
+			log_debug("ld_store_iter_output_init: single message %c at %X/%X",
+					  first.action, LSN_FORMAT_ARGS(first.lsn));
 			*(iter->output) = first;
 			return true;
 		}
@@ -1263,8 +1262,7 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 		return false;
 	}
 
-	log_warn("ld_store_iter_output_init: %s", sql);
-	log_warn("ld_store_iter_output_init: xid = %u", first.xid);
+	log_debug("ld_store_iter_output_init: iterating xid = %u", first.xid);
 
 	return true;
 }
@@ -1308,8 +1306,6 @@ ld_store_iter_output_next(ReplayDBOutputIterator *iter)
 		return false;
 	}
 
-	log_warn("ld_store_iter_output_next");
-
 	return ld_store_output_fetch(query);
 }
 
@@ -1329,6 +1325,211 @@ ld_store_iter_output_finish(ReplayDBOutputIterator *iter)
 	}
 
 	iter->output = NULL;
+
+	return true;
+}
+
+
+/*
+ * ld_store_replay_fetch fetches one row from the replay+stmt join query into
+ * the ReplayDBStmt pointed to by query->context.
+ */
+bool
+ld_store_replay_fetch(SQLiteQuery *query)
+{
+	ReplayDBStmt *s = (ReplayDBStmt *) query->context;
+
+	bzero(s, sizeof(ReplayDBStmt));
+
+	s->id = sqlite3_column_int64(query->ppStmt, 0);
+
+	if (sqlite3_column_type(query->ppStmt, 1) != SQLITE_NULL)
+	{
+		char *action = (char *) sqlite3_column_text(query->ppStmt, 1);
+		s->action = action[0];
+	}
+
+	if (sqlite3_column_type(query->ppStmt, 2) != SQLITE_NULL)
+		s->xid = sqlite3_column_int64(query->ppStmt, 2);
+
+	s->lsn = InvalidXLogRecPtr;
+	if (sqlite3_column_type(query->ppStmt, 3) != SQLITE_NULL)
+		s->lsn = sqlite3_column_int64(query->ppStmt, 3);
+
+	s->endlsn = InvalidXLogRecPtr;
+	if (sqlite3_column_type(query->ppStmt, 4) != SQLITE_NULL)
+		s->endlsn = sqlite3_column_int64(query->ppStmt, 4);
+
+	if (sqlite3_column_type(query->ppStmt, 5) != SQLITE_NULL)
+	{
+		strlcpy(s->timestamp,
+				(char *) sqlite3_column_text(query->ppStmt, 5),
+				sizeof(s->timestamp));
+	}
+
+	/* stmt.sql — the prepared statement template */
+	if (sqlite3_column_type(query->ppStmt, 6) != SQLITE_NULL)
+	{
+		int len = sqlite3_column_bytes(query->ppStmt, 6);
+
+		s->stmt = (char *) calloc(len + 1, sizeof(char));
+		if (s->stmt == NULL)
+		{
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+		strlcpy(s->stmt,
+				(char *) sqlite3_column_text(query->ppStmt, 6),
+				len + 1);
+	}
+
+	/* replay.stmt_args — JSON-encoded parameter array */
+	if (sqlite3_column_type(query->ppStmt, 7) != SQLITE_NULL)
+	{
+		int len = sqlite3_column_bytes(query->ppStmt, 7);
+
+		s->data = (char *) calloc(len + 1, sizeof(char));
+		if (s->data == NULL)
+		{
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+		strlcpy(s->data,
+				(char *) sqlite3_column_text(query->ppStmt, 7),
+				len + 1);
+	}
+
+	log_debug("ld_store_replay_fetch: %lld %c xid=%u lsn=%X/%X endlsn=%X/%X",
+			  (long long) s->id, s->action, s->xid,
+			  LSN_FORMAT_ARGS(s->lsn), LSN_FORMAT_ARGS(s->endlsn));
+
+	return true;
+}
+
+
+/*
+ * ld_store_iter_replay_init initialises an iterator over the replay table of
+ * the given replayDB, starting after previousLSN.  The replay table is joined
+ * with stmt so that every row already carries the SQL template.
+ *
+ * Rows are returned in insertion order (by replay.id) which is the same as
+ * the original WAL ordering produced by the transform step.
+ */
+bool
+ld_store_iter_replay_init(ReplayDBReplayIterator *iter)
+{
+	DatabaseCatalog *catalog = iter->catalog;
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: ld_store_iter_replay_init: db is NULL");
+		return false;
+	}
+
+	iter->current =
+		(ReplayDBStmt *) calloc(1, sizeof(ReplayDBStmt));
+
+	if (iter->current == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	/*
+	 * Select all replay rows after previousLSN, joined with the stmt table
+	 * to include the SQL template.  Rows with lsn IS NULL (e.g. some DML
+	 * rows where lsn tracks the BEGIN) are also included as long as their
+	 * id is greater than the last applied row's id.
+	 *
+	 * We use a LEFT JOIN so that internal rows without a stmt (KEEPALIVE,
+	 * SWITCH, ENDPOS) still appear.
+	 */
+	char *sql =
+		"   select r.id, r.action, r.xid, r.lsn, r.endlsn, r.timestamp, "
+		"          s.sql, r.stmt_args "
+		"     from replay r "
+		"left join stmt s on r.stmt_hash = s.hash "
+		"    where r.lsn > $1 or r.lsn is null "
+		" order by r.id";
+
+	SQLiteQuery *query = &(iter->query);
+
+	query->context = iter->current;
+	query->fetchFunction = &ld_store_replay_fetch;
+
+	if (!catalog_sql_prepare(db, sql, query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "previousLSN", iter->previousLSN, NULL }
+	};
+
+	if (!catalog_sql_bind(query, params, 1))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_debug("ld_store_iter_replay_init: starting after LSN %X/%X",
+			  LSN_FORMAT_ARGS(iter->previousLSN));
+
+	return true;
+}
+
+
+/*
+ * ld_store_iter_replay_next fetches the next row from the replay iterator.
+ * Sets iter->current to NULL when there are no more rows.
+ */
+bool
+ld_store_iter_replay_next(ReplayDBReplayIterator *iter)
+{
+	SQLiteQuery *query = &(iter->query);
+
+	int rc = catalog_sql_step(query);
+
+	if (rc == SQLITE_DONE)
+	{
+		iter->current = NULL;
+		return true;
+	}
+
+	if (rc != SQLITE_ROW)
+	{
+		log_error("Failed to step through replay iterator: %s", query->sql);
+
+		int errcode = sqlite3_extended_errcode(query->db);
+
+		log_error("[SQLite] %s: %s",
+				  sqlite3_errmsg(query->db),
+				  sqlite3_errstr(errcode));
+
+		return false;
+	}
+
+	return ld_store_replay_fetch(query);
+}
+
+
+/*
+ * ld_store_iter_replay_finish cleans up the iterator's prepared statement.
+ */
+bool
+ld_store_iter_replay_finish(ReplayDBReplayIterator *iter)
+{
+	SQLiteQuery *query = &(iter->query);
+
+	if (!catalog_sql_finalize(query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	iter->current = NULL;
 
 	return true;
 }

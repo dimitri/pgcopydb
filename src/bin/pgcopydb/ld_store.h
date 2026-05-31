@@ -105,4 +105,29 @@ bool ld_store_iter_output_init(ReplayDBOutputIterator *iter);
 bool ld_store_iter_output_next(ReplayDBOutputIterator *iter);
 bool ld_store_iter_output_finish(ReplayDBOutputIterator *iter);
 
+
+/*
+ * ReplayDBReplayIterator iterates over the replay table of a replayDB,
+ * returning one ReplayDBStmt per step. Used by the apply process to read
+ * transformed SQL statements from SQLite instead of reading .sql files.
+ *
+ * The query joins replay with stmt so that each row carries the full SQL
+ * template alongside its bound parameters.
+ */
+typedef struct ReplayDBReplayIterator
+{
+	DatabaseCatalog *catalog;
+	ReplayDBStmt *current;
+	SQLiteQuery query;
+
+	uint64_t previousLSN;       /* start after this LSN */
+	uint64_t endpos;            /* stop at this LSN (0 = no limit) */
+} ReplayDBReplayIterator;
+
+bool ld_store_replay_fetch(SQLiteQuery *query);
+
+bool ld_store_iter_replay_init(ReplayDBReplayIterator *iter);
+bool ld_store_iter_replay_next(ReplayDBReplayIterator *iter);
+bool ld_store_iter_replay_finish(ReplayDBReplayIterator *iter);
+
 #endif /* LD_STORE_H */
