@@ -42,3 +42,5 @@ lib*.pc
 /GIT-VERSION-FILE
 /version
 ci/Dockerfile.docs
+src/bin/pgcopydb/cscope.out
+src/bin/pgcopydb/catalog.h.uncrustify
