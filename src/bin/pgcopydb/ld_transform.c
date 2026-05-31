@@ -219,7 +219,7 @@ stream_transform_cdc_file(StreamSpecs *specs)
 	StreamContext *privateContext = &(specs->private);
 	LogicalMessageMetadata *metadata = &(privateContext->metadata);
 
-	log_warn("Transforming Logical Decoding messages from file \"%s\" [%X/%X]",
+	log_info("Transforming Logical Decoding messages from \"%s\" [%X/%X]",
 			 specs->replayDB->dbfile,
 			 LSN_FORMAT_ARGS(specs->sentinel.transform_lsn));
 
@@ -246,8 +246,8 @@ stream_transform_cdc_file(StreamSpecs *specs)
 			return false;
 		}
 
-		log_warn("stream_transform_cdc_file: endpos %X/%X",
-				 LSN_FORMAT_ARGS(sentinel->endpos));
+		log_debug("stream_transform_cdc_file: endpos %X/%X",
+				  LSN_FORMAT_ARGS(sentinel->endpos));
 
 		if (sentinel->endpos != InvalidXLogRecPtr &&
 			sentinel->endpos <= sentinel->transform_lsn)
@@ -381,8 +381,6 @@ stream_transform_prepare_message(StreamSpecs *specs,
 	StreamContext *privateContext = &(specs->private);
 	LogicalMessageMetadata *metadata = &(privateContext->metadata);
 
-	log_warn("stream_transform_prepare_message");
-
 	/* first re-build the metadata from the SQLite row */
 	LogicalMessageMetadata outputMetadata = {
 		.action = output->action,
@@ -396,12 +394,11 @@ stream_transform_prepare_message(StreamSpecs *specs,
 	/* copy the timestamp over */
 	strlcpy(metadata->timestamp, output->timestamp, PG_MAX_TIMESTAMP);
 
-	log_warn("stream_transform_prepare_message: %lld %c %lld %X/%X %s",
-			 (long long) output->id,
-			 metadata->action,
-			 (long long) metadata->xid,
-			 LSN_FORMAT_ARGS(metadata->lsn),
-			 metadata->jsonBuffer);
+	log_debug("stream_transform_prepare_message: %lld %c xid=%lld lsn=%X/%X",
+			  (long long) output->id,
+			  metadata->action,
+			  (long long) metadata->xid,
+			  LSN_FORMAT_ARGS(metadata->lsn));
 
 	JSON_Value *json = json_parse_string(output->jsonBuffer);
 
@@ -447,7 +444,8 @@ stream_transform_write_transaction(StreamSpecs *specs)
 			LogicalMessage empty = { 0 };
 			*currentMsg = empty;
 
-			log_warn("stream_transform_write_transaction: currentMsg is empty");
+			log_debug("stream_transform_write_transaction: transaction written, "
+					  "resetting current message");
 
 			return true;
 		}
@@ -2060,9 +2058,9 @@ stream_transform_write_replay_txn(StreamSpecs *specs)
 		.endlsn = txn->commit ? txn->commitLSN : txn->rollbackLSN
 	};
 
-	log_warn("stream_transform_write_replay_txn: lsn %X/%X endlsn %X/%X",
-			 LSN_FORMAT_ARGS(begin.lsn),
-			 LSN_FORMAT_ARGS(begin.endlsn));
+	log_debug("stream_transform_write_replay_txn: lsn %X/%X endlsn %X/%X",
+			  LSN_FORMAT_ARGS(begin.lsn),
+			  LSN_FORMAT_ARGS(begin.endlsn));
 
 	strlcpy(begin.timestamp, txn->timestamp, sizeof(begin.timestamp));
 

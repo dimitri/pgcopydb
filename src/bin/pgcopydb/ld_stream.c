@@ -1228,24 +1228,6 @@ streamFlush(LogicalStreamContext *context)
 			return false;
 		}
 
-		/*
-		 * streamKeepalive ensures we have a valid jsonFile by calling
-		 * streamRotateFile, so we can safely call fsync here.
-		 *
-		 * TODO: remove that code.
-		 */
-		if (privateContext->jsonFile != NULL)
-		{
-			int fd = fileno(privateContext->jsonFile);
-
-			if (fsync(fd) != 0)
-			{
-				log_error("Failed to fsync file \"%s\": %m",
-						  privateContext->partialFileName);
-				return false;
-			}
-		}
-
 		context->tracking->flushed_lsn = context->tracking->written_lsn;
 
 		log_debug("Flushed up to %X/%X in file \"%s\"",
