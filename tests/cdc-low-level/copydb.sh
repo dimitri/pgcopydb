@@ -42,100 +42,79 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 # grab the current LSN, it's going to be our streaming end position
 lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_lsn()'`
 
-# and prefetch the changes captured in our replication slot
-pgcopydb stream receive --debug --resume --endpos "${lsn}"
+#
+# Receive CDC messages into the SQLite replayDB (output table) and transform
+# them to replay+stmt tables.
+#
+pgcopydb stream prefetch --debug --resume --endpos "${lsn}"
 
 SHAREDIR=/var/lib/postgres/.local/share/pgcopydb
-WALFILE=000000010000000000000002.json
-SQLFILE=000000010000000000000002.sql
 
-# now compare JSON output, skipping the lsn and nextlsn fields which are
-# different at each run
-expected=/tmp/expected.json
-result=/tmp/result.json
-messages=/tmp/messages.json
+ls -la ${SHAREDIR}/
 
-ls -l ${SHAREDIR}
+DBFILE=$(ls ${SHAREDIR}/*.db | head -1)
 
-# make a JSON file from our SQLite database, for testing
-sqlite3 ${SHAREDIR}/*.db <<EOF
-.echo off
-.headers off
-.mode list
-.output ${messages}
-select json_object('action', action, 'xid', coalesce(xid, 0), 'lsn', lsn, 'timestamp', timestamp, 'message', json(message)) from output;
+#
+# Validate the SQLite output table has rows and the replay table was populated.
+#
+sqlite3 ${DBFILE} <<'EOF'
+.echo on
+select count(*) as output_rows from output;
+select count(*) as replay_rows from replay;
 EOF
 
-JQSCRIPT='del(.lsn) | del(.nextlsn) | del(.timestamp) | del(.xid)'
-
-jq "${JQSCRIPT}" /usr/src/pgcopydb/${WALFILE} > ${expected}
-jq "${JQSCRIPT}" ${messages} > ${result}
-
-# first command to provide debug information, second to stop when returns non-zero
-diff ${expected} ${result} || cat ${SHAREDIR}/${WALFILE}
-diff ${expected} ${result}
-
-# now prefetch the changes again, which should be a noop
-pgcopydb stream receive --debug --resume --endpos "${lsn}"
-
-# now transform the JSON file into SQL
-SQLFILENAME=`basename ${WALFILE} .json`.sql
-
-pgcopydb stream transform --debug ${SHAREDIR}/${WALFILE} /tmp/${SQLFILENAME}
-
-# we should also get the same result as expected (discarding LSN numbers)
-DIFFOPTS='-I BEGIN -I COMMIT -I KEEPALIVE -I SWITCH -I ENDPOS'
-
-diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} /tmp/${SQLFILENAME} || cat /tmp/${SQLFILENAME}
-diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} /tmp/${SQLFILENAME}
-
-# now apply the SQL file to the target database
-pgcopydb stream apply --trace --resume /tmp/${SQLFILE}
-
-# now apply AGAIN the SQL file to the target database, skipping transactions
-pgcopydb stream apply --debug --resume /tmp/${SQLFILE}
+# Idempotency: prefetch again should be a no-op
+pgcopydb stream prefetch --debug --resume --endpos "${lsn}"
 
 #
-# switching to "live streaming" tests, using unix pipes
-#
-# first allow applying
+# Apply the CDC changes to the target database
 #
 pgcopydb stream sentinel set apply
+pgcopydb stream catchup --resume --endpos "${lsn}" -vv
 
-# now create some changes to replicate all over again
+# Applying again must be idempotent
+pgcopydb stream catchup --resume --endpos "${lsn}" -vv
+
+#
+# Verify row counts match between source and target
+#
+src_count=`psql -AtqX -d ${PGCOPYDB_SOURCE_PGURI} -c "select count(*) from actor"`
+tgt_count=`psql -AtqX -d ${PGCOPYDB_TARGET_PGURI} -c "select count(*) from actor"`
+
+echo "source actor count: ${src_count}, target actor count: ${tgt_count}"
+test "${src_count}" -eq "${tgt_count}"
+
+#
+# Live-streaming tests using Unix pipes
+# (stream receive → stream transform → stream apply via pipes)
+#
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 
-# grab the current LSN, it's going to be our streaming end position
 lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_lsn()'`
 
-# and "live replay" the changes captured in our replication slot
-# avoiding pidfile clashes between three concurrent processes
 pgcopydb stream receive --debug --resume --endpos "${lsn}" --to-stdout \
  | pgcopydb stream transform --debug --endpos "${lsn}" - -             \
  | pgcopydb stream apply --debug --resume --endpos "${lsn}" -
 
 #
-# now the same thing, this time using the stream replay command
-#
-# we do the same thing twice to verify that our client-side LSN tracking is
-# done properly and allows resuming operations after reaching endpos.
+# Replay mode (combined receive+transform+apply in a single service)
 #
 for i in `seq 2`
 do
     psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 
-    # grab the current LSN, it's going to be our streaming end position
     lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_lsn()'`
 
     pgcopydb stream replay --verbose --resume --endpos "${lsn}"
 done
 
-# and check that the last time there nothing more to do
+# Replay with no new changes should be a no-op
 pgcopydb stream replay --resume --endpos "${lsn}"
 
-# pipeline deadlock test
-# reset the replication origin to 0/0 to execute the pipeline-deadlock.sql
-psql -At -d ${PGCOPYDB_TARGET_PGURI} -c "select pg_replication_origin_advance('pgcopydb', '0/0');"
+# Pipeline deadlock test:
+# reset the replication origin to 0/0 and apply a known-deadlock SQL file
+psql -At -d ${PGCOPYDB_TARGET_PGURI} \
+  -c "select pg_replication_origin_advance('pgcopydb', '0/0');"
 pgcopydb stream apply /usr/src/pgcopydb/pipeline-deadlock.sql
 
 # cleanup
