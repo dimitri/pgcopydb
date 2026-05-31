@@ -838,7 +838,6 @@ streamRotateFile(LogicalStreamContext *context)
 	XLogSegNo segno;
 	char wal[MAXPGPATH] = { 0 };
 	char walFileName[MAXPGPATH] = { 0 };
-	char partialFileName[MAXPGPATH] = { 0 };
 
 	/* skip LSN 0/0 at the start of streaming */
 	if (context->cur_record_lsn == InvalidXLogRecPtr)
@@ -924,23 +923,28 @@ streamRotateFile(LogicalStreamContext *context)
 	XLByteToSeg(jsonFileLSN, segno, privateContext->WalSegSz);
 	XLogFileName(wal, context->timeline, segno, privateContext->WalSegSz);
 
-	sformat(walFileName, sizeof(walFileName), "%s/%s.json",
+	/*
+	 * In the SQLite pipeline, the WAL segment name is used only to detect
+	 * epoch boundaries (when to write a SWITCH message and notify the
+	 * transform service).  We no longer open .json files on disk.
+	 */
+	sformat(walFileName, sizeof(walFileName), "%s/%s",
 			privateContext->paths.dir,
 			wal);
 
-	sformat(partialFileName, sizeof(partialFileName), "%s/%s.json.partial",
-			privateContext->paths.dir,
-			wal);
-
-	/* in most cases, the file name is still the same */
+	/* in most cases, the WAL segment is still the same */
 	if (streq(privateContext->walFileName, walFileName))
 	{
 		return true;
 	}
 
-	/* if we had a WAL file opened, close it now */
-	if (!IS_EMPTY_STRING_BUFFER(privateContext->partialFileName) &&
-		privateContext->jsonFile != NULL)
+	/*
+	 * The WAL segment boundary changed.  If we had already been streaming
+	 * (walFileName non-empty), emit a SWITCH internal message so that the
+	 * transform and apply processes know where one epoch ends and the next
+	 * begins.
+	 */
+	if (!IS_EMPTY_STRING_BUFFER(privateContext->walFileName))
 	{
 		bool time_to_abort = false;
 
@@ -963,65 +967,11 @@ streamRotateFile(LogicalStreamContext *context)
 	}
 
 	strlcpy(privateContext->walFileName, walFileName, MAXPGPATH);
-	strlcpy(privateContext->partialFileName, partialFileName, MAXPGPATH);
 
-	/* when dealing with a new JSON name, also prepare the SQL name */
-	sformat(privateContext->sqlFileName, sizeof(privateContext->sqlFileName),
-			"%s/%s.sql",
-			privateContext->paths.dir,
-			wal);
-
-	/* the jsonFileLSN is the firstLSN for this file */
+	/* the jsonFileLSN is the firstLSN for this epoch */
 	privateContext->firstLSN = jsonFileLSN;
 
-	/*
-	 * When the target file already exists, open it in append mode.
-	 */
-	if (file_exists(walFileName))
-	{
-		if (!unlink_file(partialFileName))
-		{
-			log_error("Failed to unlink stale partial file \"%s\", "
-					  "see above for details",
-					  partialFileName);
-			return false;
-		}
-
-		if (!duplicate_file(walFileName, partialFileName))
-		{
-			log_error("Failed to duplicate pre-existing file \"%s\" into "
-					  "current partial file \"%s\", see above for details",
-					  walFileName,
-					  partialFileName);
-			return false;
-		}
-
-		privateContext->jsonFile =
-			fopen_with_umask(partialFileName, "ab", FOPEN_FLAGS_A, 0644);
-	}
-	else if (file_exists(partialFileName))
-	{
-		/* previous run might have been interrupted before rename */
-		log_notice("Found pre-existing partial file \"%s\"", partialFileName);
-
-		privateContext->jsonFile =
-			fopen_with_umask(partialFileName, "ab", FOPEN_FLAGS_A, 0644);
-	}
-	else
-	{
-		privateContext->jsonFile =
-			fopen_with_umask(partialFileName, "ab", FOPEN_FLAGS_W, 0644);
-	}
-
-	if (privateContext->jsonFile == NULL)
-	{
-		/* errors have already been logged */
-		log_error("Failed to open file \"%s\": %m",
-				  privateContext->partialFileName);
-		return false;
-	}
-
-	log_notice("Now streaming changes to \"%s\"", partialFileName);
+	log_info("Now streaming changes for WAL segment \"%s\"", wal);
 
 	return true;
 }
@@ -1048,8 +998,6 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 	 * partial transaction.
 	 */
 	if (time_to_abort &&
-
-	    /* privateContext->jsonFile != NULL && */
 		privateContext->endpos != InvalidXLogRecPtr &&
 		privateContext->endpos <= context->cur_record_lsn)
 	{
@@ -1058,8 +1006,8 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 			.lsn = context->cur_record_lsn
 		};
 
-		log_warn("streamCloseFile: insert ENDPOS at %X/%X",
-				 LSN_FORMAT_ARGS(endpos.lsn));
+		log_debug("streamCloseFile: insert ENDPOS at %X/%X",
+				  LSN_FORMAT_ARGS(endpos.lsn));
 
 		if (!ld_store_insert_internal_message(replayDB, &endpos))
 		{
@@ -1078,9 +1026,11 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 	 * To handle this, we should read the last message from the "latest"
 	 * file and rollback any incomplete transaction found.
 	 */
-	if (time_to_abort &&
-		privateContext->jsonFile != NULL &&
-		privateContext->transactionInProgress)
+	/*
+	 * On graceful exit, ROLLBACK the last incomplete transaction so the
+	 * transform process sees a clean boundary when it resumes.
+	 */
+	if (time_to_abort && privateContext->transactionInProgress)
 	{
 		InternalMessage rollback = {
 			.action = STREAM_ACTION_ROLLBACK,
@@ -1094,44 +1044,8 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 		}
 	}
 
-
-	/*
-	 * If we have a JSON file currently opened, then close it.
-	 *
-	 * Some situations exist where there is no JSON file currently opened and
-	 * we still want to transform the latest JSON file into SQL: we might reach
-	 * endpos at startup, for instance.
-	 */
-	if (privateContext->jsonFile != NULL)
-	{
-		log_debug("Closing file \"%s\"", privateContext->partialFileName);
-
-		if (fclose(privateContext->jsonFile) != 0)
-		{
-			log_error("Failed to close file \"%s\": %m",
-					  privateContext->partialFileName);
-			return false;
-		}
-
-		/* reset the jsonFile FILE * pointer to NULL, it's closed now */
-		privateContext->jsonFile = NULL;
-
-		/* rename the .json.partial file to .json only */
-		log_debug("streamCloseFile: mv \"%s\" \"%s\"",
-				  privateContext->partialFileName,
-				  privateContext->walFileName);
-
-		if (rename(privateContext->partialFileName,
-				   privateContext->walFileName) != 0)
-		{
-			log_error("Failed to rename \"%s\" to \"%s\": %m",
-					  privateContext->partialFileName,
-					  privateContext->walFileName);
-			return false;
-		}
-
-		log_notice("Closed file \"%s\"", privateContext->walFileName);
-	}
+	log_debug("streamCloseFile: WAL epoch boundary at LSN %X/%X",
+			  LSN_FORMAT_ARGS(context->cur_record_lsn));
 
 	/* in prefetch mode, kick-in a transform process */
 	switch (privateContext->mode)
@@ -1207,11 +1121,9 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 bool
 streamFlush(LogicalStreamContext *context)
 {
-	StreamContext *privateContext = (StreamContext *) context->private;
-
-	log_warn("streamFlush: %X/%X %X/%X",
-			 LSN_FORMAT_ARGS(context->tracking->written_lsn),
-			 LSN_FORMAT_ARGS(context->cur_record_lsn));
+	log_debug("streamFlush: written %X/%X cur %X/%X",
+			  LSN_FORMAT_ARGS(context->tracking->written_lsn),
+			  LSN_FORMAT_ARGS(context->cur_record_lsn));
 
 	/* if needed, flush our current file now (fsync) */
 	if (context->tracking->flushed_lsn < context->tracking->written_lsn)
@@ -1230,9 +1142,8 @@ streamFlush(LogicalStreamContext *context)
 
 		context->tracking->flushed_lsn = context->tracking->written_lsn;
 
-		log_debug("Flushed up to %X/%X in file \"%s\"",
-				  LSN_FORMAT_ARGS(context->tracking->flushed_lsn),
-				  privateContext->partialFileName);
+		log_debug("Flushed up to %X/%X",
+				  LSN_FORMAT_ARGS(context->tracking->flushed_lsn));
 	}
 
 	/* at flush time also update our internal sentinel tracking */
@@ -1270,7 +1181,7 @@ streamKeepalive(LogicalStreamContext *context)
 	}
 
 	/* register progress made through receiving keepalive messages */
-	if (privateContext->jsonFile != NULL)
+	if (replayDB != NULL && replayDB->db != NULL)
 	{
 		/*
 		 * Use context->sendTime when available (from a real server keepalive
