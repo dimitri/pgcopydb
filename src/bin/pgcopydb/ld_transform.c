@@ -2027,6 +2027,29 @@ stream_write_switchwal(FILE *out, LogicalMessageSwitchWAL *switchwal)
 bool
 stream_write_keepalive(FILE *out, LogicalMessageKeepalive *keepalive)
 {
+	/*
+	 * When the timestamp is empty (e.g. from a synthetic keepalive where
+	 * sendTime was 0), generate a current timestamp so that the SQL file
+	 * always contains a valid KEEPALIVE that the apply process can use.
+	 */
+	if (IS_EMPTY_STRING_BUFFER(keepalive->timestamp))
+	{
+		TimestampTz now = feGetCurrentTimestamp();
+
+		if (!pgsql_timestamptz_to_string(now,
+										 keepalive->timestamp,
+										 sizeof(keepalive->timestamp)))
+		{
+			log_error("Failed to format current timestamp for KEEPALIVE");
+			return false;
+		}
+
+		log_debug("stream_write_keepalive: generated fallback timestamp "
+				  "\"%s\" for LSN %X/%X",
+				  keepalive->timestamp,
+				  LSN_FORMAT_ARGS(keepalive->lsn));
+	}
+
 	FFORMAT(out, "%s{\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
 			OUTPUT_KEEPALIVE,
 			LSN_FORMAT_ARGS(keepalive->lsn),

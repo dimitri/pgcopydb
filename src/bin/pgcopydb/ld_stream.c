@@ -1480,10 +1480,24 @@ streamKeepalive(LogicalStreamContext *context)
 	/* register progress made through receiving keepalive messages */
 	if (privateContext->jsonFile != NULL)
 	{
+		/*
+		 * Use context->sendTime when available (from a real server keepalive
+		 * packet). For synthetic keepalive messages (generated during flush or
+		 * empty transaction skipping), sendTime may be 0, so fall back to the
+		 * current local timestamp to ensure the KEEPALIVE always has a valid
+		 * timestamp for the apply process.
+		 */
+		TimestampTz keepaliveTime = context->sendTime;
+
+		if (keepaliveTime == 0)
+		{
+			keepaliveTime = feGetCurrentTimestamp();
+		}
+
 		InternalMessage keepalive = {
 			.action = STREAM_ACTION_KEEPALIVE,
 			.lsn = context->cur_record_lsn,
-			.time = context->sendTime
+			.time = keepaliveTime
 		};
 
 		if (!stream_write_internal_message(context, &keepalive))
