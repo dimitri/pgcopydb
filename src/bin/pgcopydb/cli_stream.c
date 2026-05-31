@@ -1091,42 +1091,16 @@ cli_stream_apply(int argc, char **argv)
 	}
 	else
 	{
-		/* prepare the replication origin tracking */
-		StreamApplyContext context = { 0 };
-
-		if (!stream_apply_init_context(&context,
-									   &(copySpecs.catalogs.source),
-									   &(copySpecs.catalogs.replay),
-									   &(copySpecs.cfPaths.cdc),
-									   &(streamDBoptions.connStrings),
-									   streamDBoptions.origin,
-									   streamDBoptions.endpos))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_TARGET);
-		}
-
-		context.apply = true;
-		strlcpy(context.sqlFileName, sqlfilename, sizeof(context.sqlFileName));
-
-		if (!setupReplicationOrigin(&context))
-		{
-			log_error("Failed to setup replication origin on the target database");
-			exit(EXIT_CODE_TARGET);
-		}
-
-		if (!catalog_open(context.sourceDB))
-		{
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
-
-		if (!stream_apply_file(&context))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
-
-		(void) catalog_close(context.sourceDB);
+		/*
+		 * Applying a named .sql file directly is no longer supported: the
+		 * SQLite-based CDC pipeline stores all transformed statements in the
+		 * replayDB and does not produce individual .sql files.
+		 *
+		 * Use "pgcopydb stream catchup" to apply changes from the replayDB.
+		 */
+		log_error("pgcopydb stream apply <file> is not supported in the "
+				  "SQLite CDC pipeline; use pgcopydb stream catchup instead");
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 }
 

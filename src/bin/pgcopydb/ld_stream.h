@@ -479,11 +479,8 @@ typedef struct StreamApplyContext
 	ConnStrings *connStrings;
 	char origin[BUFSIZE];
 
-	IdentifySystem system;      /* information about source database */
-	uint32_t WalSegSz;          /* information about source database */
-
 	uint64_t previousLSN;       /* register COMMIT LSN progress */
-	uint64_t switchLSN;         /* helps to find the next .sql file to apply */
+	uint64_t switchLSN;         /* LSN of the most recent SWITCH WAL message */
 
 	LSNTracking *lsnTrackingList;
 
@@ -498,9 +495,6 @@ typedef struct StreamApplyContext
 	bool reachedEOF;
 	bool transactionInProgress;
 	bool logSQL;
-
-	char wal[MAXPGPATH];
-	char sqlFileName[MAXPGPATH];
 
 	PreparedStmt *preparedStmt;
 } StreamApplyContext;
@@ -754,8 +748,6 @@ bool stream_apply_wait_for_sentinel(StreamSpecs *specs,
 bool stream_apply_sync_sentinel(StreamApplyContext *context,
 								bool findDurableLSN);
 
-bool stream_apply_file(StreamApplyContext *context);
-
 bool stream_apply_sql(StreamApplyContext *context,
 					  LogicalMessageMetadata *metadata,
 					  const char *sql);
@@ -770,7 +762,7 @@ bool stream_apply_init_context(StreamApplyContext *context,
 
 bool setupReplicationOrigin(StreamApplyContext *context);
 
-bool computeSQLFileName(StreamApplyContext *context);
+
 
 bool parseSQLAction(const char *query, LogicalMessageMetadata *metadata);
 

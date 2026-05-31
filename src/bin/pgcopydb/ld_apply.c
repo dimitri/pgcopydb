@@ -56,16 +56,20 @@ static bool writeTxnCommitMetadata(LogicalMessageMetadata *mesg, const char *dir
 
 static bool setupConnection(PGSQL *pgsql, StreamApplyContext *context);
 
+static bool stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context);
+
 /*
- * stream_apply_catchup catches up with SQL files that have been prepared by
- * either the `pgcopydb stream prefetch` command.
+ * stream_apply_catchup applies CDC changes stored in the SQLite replayDB to
+ * the target database, catching up from the last-known replay LSN position.
+ *
+ * It replaces the old file-based approach (read .sql files written by
+ * pgcopydb stream prefetch/transform) with a direct read from the replay
+ * and stmt tables of the replayDB SQLite file.
  */
 bool
 stream_apply_catchup(StreamSpecs *specs)
 {
 	StreamApplyContext context = { 0 };
-
-	return true;
 
 	if (!stream_apply_setup(specs, &context))
 	{
@@ -75,104 +79,204 @@ stream_apply_catchup(StreamSpecs *specs)
 
 	if (!context.apply)
 	{
-		/* errors have already been logged */
+		log_notice("Apply mode is still disabled, quitting now");
+		(void) stream_apply_cleanup(&context);
 		return true;
 	}
 
-	/*
-	 * Our main loop reads the current SQL file, applying all the queries from
-	 * there and tracking progress, and then goes on to the next file, until no
-	 * such file exists.
-	 */
-	char currentSQLFileName[MAXPGPATH] = { 0 };
+	bool success = stream_apply_replaydb(specs, &context);
+
+	(void) stream_apply_cleanup(&context);
+
+	return success;
+}
+
+
+/*
+ * stream_apply_replaydb is the main catchup loop for the SQLite-based CDC
+ * pipeline.  It opens a cursor over the replay table (joined with stmt),
+ * applies each row to the target database, and advances replay_lsn in the
+ * pgcopydb sentinel after every completed transaction.
+ *
+ * The loop exits when:
+ *  - no more rows are available (transform has not yet produced them), or
+ *  - endpos has been reached, or
+ *  - a signal to stop is received.
+ */
+static bool
+stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
+{
+	DatabaseCatalog *replayDB = specs->replayDB;
+
+	if (replayDB == NULL || replayDB->db == NULL)
+	{
+		log_error("BUG: stream_apply_replaydb: replayDB is NULL");
+		return false;
+	}
+
+	log_info("Applying CDC changes from replayDB \"%s\" after LSN %X/%X",
+			 replayDB->dbfile,
+			 LSN_FORMAT_ARGS(context->previousLSN));
+
+	ReplayDBReplayIterator iter = { 0 };
+
+	iter.catalog = replayDB;
+	iter.previousLSN = context->previousLSN;
+	iter.endpos = context->endpos;
+
+	if (!semaphore_lock(&(replayDB->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!ld_store_iter_replay_init(&iter))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(replayDB->sema));
+		return false;
+	}
+
+	bool success = true;
 
 	for (;;)
 	{
-		strlcpy(currentSQLFileName, context.sqlFileName, MAXPGPATH);
-
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
+			log_info("Apply process received a shutdown signal, stopping");
+			break;
+		}
+
+		if (!ld_store_iter_replay_next(&iter))
+		{
+			/* errors have already been logged */
+			success = false;
+			break;
+		}
+
+		ReplayDBStmt *s = iter.current;
+
+		if (s == NULL)
+		{
+			/*
+			 * No more rows: the transform process has not produced anything
+			 * past our current position.  Signal to the caller that we are
+			 * caught up with what is available.
+			 */
+			log_info("Apply caught up with replayDB at LSN %X/%X",
+					 LSN_FORMAT_ARGS(context->previousLSN));
 			break;
 		}
 
 		/*
-		 * It might be the expected file doesn't exist already, in that case
-		 * exit successfully so that the main process may switch from catchup
-		 * mode to replay mode.
+		 * Build a LogicalMessageMetadata from the ReplayDBStmt row so we
+		 * can pass it to stream_apply_sql() which drives all the
+		 * target-database operations (BEGIN / COMMIT / DML / KEEPALIVE …).
 		 */
-		if (!file_exists(context.sqlFileName))
-		{
-			log_info("File \"%s\" does not exists yet, exit",
-					 context.sqlFileName);
+		LogicalMessageMetadata metadata = { 0 };
 
-			(void) stream_apply_cleanup(&context);
-			return true;
+		metadata.action = s->action;
+		metadata.xid = s->xid;
+		metadata.lsn = s->lsn;
+		metadata.txnCommitLSN = s->endlsn;   /* pre-set: skips .txn file read */
+
+		if (!IS_EMPTY_STRING_BUFFER(s->timestamp))
+		{
+			strlcpy(metadata.timestamp, s->timestamp, sizeof(metadata.timestamp));
 		}
 
 		/*
-		 * The SQL file exists already, apply it now.
+		 * For DML rows (INSERT / UPDATE / DELETE): stmt.sql holds the
+		 * parameterised SQL template and replay.stmt_args holds the JSON
+		 * parameter array.  stream_apply_sql() first PREPAREs the statement
+		 * (on first encounter) and we immediately follow with an EXECUTE.
 		 */
-		if (!stream_apply_file(&context))
+		bool isDML =
+			s->action == STREAM_ACTION_INSERT ||
+			s->action == STREAM_ACTION_UPDATE ||
+			s->action == STREAM_ACTION_DELETE;
+
+		if (isDML && s->stmt != NULL)
 		{
-			/* errors have already been logged */
-			(void) stream_apply_cleanup(&context);
-			return false;
+			/* parse the hash from the stmt.sql preamble or use a CRC */
+			metadata.hash = s->hash;
+			metadata.stmt = s->stmt;
 		}
 
-		/*
-		 * When syncing with the pgcopydb sentinel we might receive a new
-		 * endpos, and it might mean we're done already.
-		 */
-		if (!context.reachedEndPos &&
-			context.endpos != InvalidXLogRecPtr &&
-			context.endpos <= context.previousLSN)
-		{
-			context.reachedEndPos = true;
+		const char *sql = s->stmt != NULL ? s->stmt : "";
 
-			log_info("Apply reached end position %X/%X at %X/%X",
-					 LSN_FORMAT_ARGS(context.endpos),
-					 LSN_FORMAT_ARGS(context.previousLSN));
-		}
-
-		if (context.reachedEndPos)
+		if (!stream_apply_sql(context, &metadata, sql))
 		{
-			/* information has already been logged */
+			log_error("Failed to apply replayDB row %lld (action %c, LSN %X/%X)",
+					  (long long) s->id, s->action,
+					  LSN_FORMAT_ARGS(s->lsn));
+			success = false;
 			break;
 		}
 
-		log_info("Apply reached %X/%X in \"%s\"",
-				 LSN_FORMAT_ARGS(context.previousLSN),
-				 currentSQLFileName);
-
-		if (!computeSQLFileName(&context))
+		/*
+		 * For DML: immediately execute the prepared statement with its
+		 * parameters.  The PREPARE step above registered the statement; now
+		 * we drive the EXECUTE phase using the JSON args from stmt_args.
+		 */
+		if (isDML && s->data != NULL)
 		{
-			/* errors have already been logged */
-			(void) stream_apply_cleanup(&context);
-			return false;
+			LogicalMessageMetadata execMeta = { 0 };
+
+			execMeta.action = STREAM_ACTION_EXECUTE;
+			execMeta.xid = s->xid;
+			execMeta.lsn = s->lsn;
+			execMeta.hash = s->hash;
+			execMeta.jsonBuffer = s->data;
+
+			strlcpy(execMeta.timestamp, metadata.timestamp,
+					sizeof(execMeta.timestamp));
+
+			if (!stream_apply_sql(context, &execMeta, s->data))
+			{
+				log_error("Failed to execute replayDB row %lld "
+						  "(action %c, LSN %X/%X)",
+						  (long long) s->id, s->action,
+						  LSN_FORMAT_ARGS(s->lsn));
+				success = false;
+				break;
+			}
 		}
 
 		/*
-		 * If we reached the end of the file and the current LSN still belongs
-		 * to the same file (a SWITCH did not occur), then we exit so that the
-		 * calling process may switch from catchup mode to live replay mode.
+		 * After a COMMIT or KEEPALIVE, sync progress back to the sentinel.
+		 * Errors are logged as warnings; we will retry on the next iteration.
 		 */
-		if (streq(context.sqlFileName, currentSQLFileName))
+		if (s->action == STREAM_ACTION_COMMIT ||
+			s->action == STREAM_ACTION_KEEPALIVE)
 		{
-			log_info("Reached end of file \"%s\" at %X/%X.",
-					 currentSQLFileName,
-					 LSN_FORMAT_ARGS(context.previousLSN));
+			bool findDurableLSN = false;
 
-			/* make sure we close the connection on the way out */
-			(void) stream_apply_cleanup(&context);
-			return true;
+			if (!stream_apply_sync_sentinel(context, findDurableLSN))
+			{
+				log_warn("Failed to sync sentinel at LSN %X/%X, "
+						 "will retry on next iteration",
+						 LSN_FORMAT_ARGS(context->previousLSN));
+			}
 		}
 
-		log_notice("Apply new filename: \"%s\"", context.sqlFileName);
+		if (context->reachedEndPos)
+		{
+			log_info("Apply reached endpos %X/%X",
+					 LSN_FORMAT_ARGS(context->endpos));
+			break;
+		}
 	}
 
-	/* make sure we close the connection on the way out */
-	(void) stream_apply_cleanup(&context);
-	return true;
+	if (!ld_store_iter_replay_finish(&iter))
+	{
+		/* errors have already been logged */
+		success = false;
+	}
+
+	(void) semaphore_unlock(&(replayDB->sema));
+
+	return success;
 }
 
 
@@ -327,17 +431,16 @@ stream_apply_wait_for_sentinel(StreamSpecs *specs, StreamApplyContext *context)
 					 LSN_FORMAT_ARGS(specs->endpos));
 		}
 
-		/* TODO: find more about this */
 		if (context->previousLSN == InvalidXLogRecPtr)
 		{
 			context->previousLSN = sentinel.replay_lsn;
 		}
 		else
 		{
-			log_warn("stream_apply_wait_for_sentinel: "
-					 "previous lsn %X/%X, replay_lsn %X/%X",
-					 LSN_FORMAT_ARGS(context->previousLSN),
-					 LSN_FORMAT_ARGS(sentinel.replay_lsn));
+			log_debug("stream_apply_wait_for_sentinel: "
+					  "previous lsn %X/%X, replay_lsn %X/%X",
+					  LSN_FORMAT_ARGS(context->previousLSN),
+					  LSN_FORMAT_ARGS(sentinel.replay_lsn));
 		}
 
 		log_debug("startpos %X/%X endpos %X/%X apply %s",
@@ -425,145 +528,6 @@ stream_apply_sync_sentinel(StreamApplyContext *context, bool findDurableLSN)
 }
 
 
-/*
- * stream_apply_file connects to the target database system and applies the
- * given SQL file as prepared by the stream_transform_file function.
- */
-bool
-stream_apply_file(StreamApplyContext *context)
-{
-	StreamContent content = { 0 };
-	long size = 0L;
-
-	strlcpy(content.filename, context->sqlFileName, sizeof(content.filename));
-
-	char *contents = NULL;
-
-	if (!read_file(content.filename, &contents, &size))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!splitLines(&(content.lbuf), contents))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	log_info("Replaying changes from file \"%s\"", context->sqlFileName);
-
-	log_debug("Read %lld lines in file \"%s\"",
-			  (long long) content.lbuf.count,
-			  content.filename);
-
-	/*
-	 * If the file contains zero lines, we're done already, Also malloc(zero)
-	 * leads to "corrupted size vs. prev_size" run-time errors.
-	 */
-	if (content.lbuf.count == 0)
-	{
-		return true;
-	}
-
-	LogicalMessageMetadata *mArray =
-		(LogicalMessageMetadata *) calloc(content.lbuf.count,
-										  sizeof(LogicalMessageMetadata));
-
-	LogicalMessageMetadata *lastCommit = NULL;
-
-	/* parse the SQL commands metadata from the SQL file */
-	for (uint64_t i = 0; i < content.lbuf.count && !context->reachedEndPos; i++)
-	{
-		const char *sql = content.lbuf.lines[i];
-		LogicalMessageMetadata *metadata = &(mArray[i]);
-
-		if (!parseSQLAction(sql, metadata))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		/*
-		 * The SWITCH WAL command should always be the last line of the file.
-		 */
-		if (metadata->action == STREAM_ACTION_SWITCH &&
-			i != (content.lbuf.count - 1))
-		{
-			log_error("SWITCH command for LSN %X/%X found in \"%s\" line %lld, "
-					  "before last line %lld",
-					  LSN_FORMAT_ARGS(metadata->lsn),
-					  content.filename,
-					  (long long) i + 1,
-					  (long long) content.lbuf.count);
-
-			return false;
-		}
-
-		if (metadata->action == STREAM_ACTION_COMMIT)
-		{
-			lastCommit = metadata;
-		}
-	}
-
-	/* replay the SQL commands from the SQL file */
-	for (uint64_t i = 0; i < content.lbuf.count && !context->reachedEndPos; i++)
-	{
-		const char *sql = content.lbuf.lines[i];
-		LogicalMessageMetadata *metadata = &(mArray[i]);
-
-		/* last commit of a file requires synchronous_commit on */
-		context->reachedEOF = metadata == lastCommit;
-
-		if (!stream_apply_sql(context, metadata, sql))
-		{
-			log_error("Failed to apply SQL from file \"%s\", "
-					  "see above for details",
-					  content.filename);
-
-			return false;
-		}
-
-
-		/* rate limit to 1 pipeline sync per second */
-		if ((metadata->action == STREAM_ACTION_COMMIT ||
-			 metadata->action == STREAM_ACTION_KEEPALIVE) &&
-			(1 < (time(NULL) - context->applyPgConn.pipelineSyncTime)))
-		{
-			/* fetch results until done */
-			if (!pgsql_sync_pipeline(&(context->applyPgConn)))
-			{
-				log_error("Failed to sync the pipeline, see previous error for "
-						  "details");
-				return false;
-			}
-		}
-	}
-
-	/* Always sync pipline at the end of file */
-	if (!pgsql_sync_pipeline(&(context->applyPgConn)))
-	{
-		log_error("Failed to sync the pipeline, see previous error for "
-				  "details");
-		return false;
-	}
-
-	/*
-	 * Each time we are done applying a file, we update our progress and
-	 * fetch new values from the pgcopydb sentinel. Errors are warning
-	 * here, we'll update next time.
-	 */
-	bool findDurableLSN = false;
-
-	if (!stream_apply_sync_sentinel(context, findDurableLSN))
-	{
-		log_error("Failed to sync replay_lsn %X/%X",
-				  LSN_FORMAT_ARGS(context->previousLSN));
-		return false;
-	}
-
-	return true;
-}
 
 
 /*
@@ -1377,21 +1341,10 @@ setupReplicationOrigin(StreamApplyContext *context)
 		context->previousLSN = originLSN;
 	}
 
-	if (IS_EMPTY_STRING_BUFFER(context->sqlFileName))
-	{
-		if (!computeSQLFileName(context))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-	}
-
-	/* compute the WAL filename that would host the previous LSN */
 	log_debug("setupReplicationOrigin: replication origin \"%s\" "
-			  "found at %X/%X, expected at \"%s\"",
+			  "found at %X/%X",
 			  nodeName,
-			  LSN_FORMAT_ARGS(context->previousLSN),
-			  context->sqlFileName);
+			  LSN_FORMAT_ARGS(context->previousLSN));
 
 	if (!pgsql_replication_origin_session_setup(applyPgConn, nodeName))
 	{
@@ -1457,58 +1410,10 @@ stream_apply_init_context(StreamApplyContext *context,
 
 	strlcpy(context->origin, origin, sizeof(context->origin));
 
-	/*
-	 * TODO: get rid of WalSegSz entirely. In the meantime, have it set to a
-	 * fixed value as in the old Postgres versions.
-	 */
-	context->WalSegSz = 16 * 1024 * 1024;
-
 	return true;
 }
 
 
-/*
- * computeSQLFileName updates the StreamApplyContext structure with the current
- * LSN applied to the target system, and computed
- */
-bool
-computeSQLFileName(StreamApplyContext *context)
-{
-	XLogSegNo segno;
-
-	uint64_t switchLSN = context->switchLSN;
-
-	/*
-	 * If we haven't switched WAL yet, then we're still at the previousLSN
-	 * position.
-	 */
-	if (switchLSN == InvalidXLogRecPtr)
-	{
-		switchLSN = context->previousLSN;
-	}
-
-	if (context->WalSegSz == 0)
-	{
-		log_error("Failed to compute the SQL filename for LSN %X/%X "
-				  "without context->wal_segment_size",
-				  LSN_FORMAT_ARGS(switchLSN));
-		return false;
-	}
-
-	XLByteToSeg(switchLSN, segno, context->WalSegSz);
-	XLogFileName(context->wal, context->system.timeline, segno, context->WalSegSz);
-
-	sformat(context->sqlFileName, sizeof(context->sqlFileName),
-			"%s/%s.sql",
-			context->paths.dir,
-			context->wal);
-
-	log_debug("computeSQLFileName: %X/%X \"%s\"",
-			  LSN_FORMAT_ARGS(switchLSN),
-			  context->sqlFileName);
-
-	return true;
-}
 
 
 /*
