@@ -48,8 +48,6 @@ typedef struct TransformStreamCtx
 
 static bool stream_transform_stream_internal(StreamSpecs *specs);
 
-static bool stream_transform_from_queue_internal(StreamSpecs *specs);
-
 static bool canCoalesceLogicalTransactionStatement(LogicalTransaction *txn,
 												   LogicalTransactionStatement *new);
 static bool coalesceLogicalTransactionStatement(LogicalTransaction *txn,
@@ -998,250 +996,6 @@ stream_transform_rotate(StreamContext *privateContext)
 }
 
 
-/*
- * stream_transform_worker is a worker process that loops over messages
- * received from a queue, each message contains the WAL.json and the WAL.sql
- * file names. When receiving such a message, the WAL.json file is transformed
- * into the WAL.sql file.
- */
-bool
-stream_transform_worker(StreamSpecs *specs)
-{
-	/* at startup, open the current replaydb file */
-	if (!ld_store_open_replaydb(specs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	return stream_transform_from_queue(specs);
-}
-
-
-/*
- * stream_transform_from_queue loops over messages from a System V queue, each
- * message contains the WAL.json and the WAL.sql file names. When receiving
- * such a message, the WAL.json file is transformed into the WAL.sql file.
- */
-bool
-stream_transform_from_queue(StreamSpecs *specs)
-{
-	DatabaseCatalog *sourceDB = specs->sourceDB;
-
-	if (!stream_init_context(specs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!stream_transform_context_init(specs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	bool success = stream_transform_from_queue_internal(specs);
-
-	pgsql_finish(&(specs->transformPGSQL));
-
-	if (!catalog_close(sourceDB))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	return success;
-}
-
-
-/*
- * stream_transform_from_queue_internal implements the core of
- * stream_transform_from_queue
- */
-static bool
-stream_transform_from_queue_internal(StreamSpecs *specs)
-{
-	Queue *transformQueue = &(specs->transformQueue);
-
-	int errors = 0;
-	bool stop = false;
-
-	while (!stop)
-	{
-		QMessage mesg = { 0 };
-		bool recv_ok = queue_receive(transformQueue, &mesg);
-
-		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
-		{
-			/*
-			 * It's part of the supervision protocol to return true here, so
-			 * that the follow sub-processes supervisor can then switch from
-			 * catchup mode to replay mode.
-			 */
-			log_debug("stream_transform_from_queue was asked to stop");
-			return true;
-		}
-
-		if (!recv_ok)
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		switch (mesg.type)
-		{
-			case QMSG_TYPE_STOP:
-			{
-				stop = true;
-				log_debug("stream_transform_from_queue: STOP");
-				break;
-			}
-
-			case QMSG_TYPE_STREAM_TRANSFORM:
-			{
-				log_debug("stream_transform_from_queue: %X/%X",
-						  LSN_FORMAT_ARGS(mesg.data.lsn));
-
-				if (!stream_transform_file_at_lsn(specs, mesg.data.lsn))
-				{
-					/* errors have already been logged, break from the loop */
-					++errors;
-					break;
-				}
-
-				break;
-			}
-
-			default:
-			{
-				log_error("Received unknown message type %ld on %s queue %d",
-						  mesg.type,
-						  transformQueue->name,
-						  transformQueue->qId);
-				++errors;
-				break;
-			}
-		}
-	}
-
-	bool success = (stop == true && errors == 0);
-
-	if (errors > 0)
-	{
-		log_error("Stream transform worker encountered %d errors, "
-				  "see above for details",
-				  errors);
-	}
-
-	return success;
-}
-
-
-/*
- * stream_transform_file_at_lsn computes the JSON and SQL filenames at given
- * LSN position in the WAL, and transform the JSON file into an SQL file.
- */
-bool
-stream_transform_file_at_lsn(StreamSpecs *specs, uint64_t lsn)
-{
-	char walFileName[MAXPGPATH] = { 0 };
-	char sqlFileName[MAXPGPATH] = { 0 };
-
-	if (!stream_compute_pathnames(specs->WalSegSz,
-								  specs->system.timeline,
-								  lsn,
-								  specs->paths.dir,
-								  walFileName,
-								  sqlFileName))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!stream_transform_file(specs, walFileName, sqlFileName))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	return true;
-}
-
-
-/*
- * stream_compute_pathnames computes the WAL.json and WAL.sql filenames from
- * the given LSN, which is expected to be the first LSN processed in the file
- * we need to find the name of.
- */
-bool
-stream_compute_pathnames(uint32_t WalSegSz,
-						 uint32_t timeline,
-						 uint64_t lsn,
-						 char *dir,
-						 char *walFileName,
-						 char *sqlFileName)
-{
-	char wal[MAXPGPATH] = { 0 };
-
-	/* compute the WAL filename that would host the current LSN */
-	XLogSegNo segno;
-	XLByteToSeg(lsn, segno, WalSegSz);
-	XLogFileName(wal, timeline, segno, WalSegSz);
-
-	log_trace("stream_compute_pathnames: %X/%X: %s", LSN_FORMAT_ARGS(lsn), wal);
-
-	sformat(walFileName, MAXPGPATH, "%s/%s.json", dir, wal);
-	sformat(sqlFileName, MAXPGPATH, "%s/%s.sql", dir, wal);
-
-	return true;
-}
-
-
-/*
- * vacuum_add_table sends a message to the VACUUM process queue to process
- * given table.
- */
-bool
-stream_transform_add_file(Queue *queue, uint64_t firstLSN)
-{
-	QMessage mesg = {
-		.type = QMSG_TYPE_STREAM_TRANSFORM,
-		.data.lsn = firstLSN
-	};
-
-	log_debug("stream_transform_add_file[%d]: %X/%X",
-			  queue->qId,
-			  LSN_FORMAT_ARGS(mesg.data.lsn));
-
-	if (!queue_send(queue, &mesg))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	return true;
-}
-
-
-/*
- * vacuum_send_stop sends the STOP message to the Stream Transform worker.
- */
-bool
-stream_transform_send_stop(Queue *queue)
-{
-	QMessage stop = { .type = QMSG_TYPE_STOP };
-
-	log_debug("Send STOP message to Transform Queue %d", queue->qId);
-
-	if (!queue_send(queue, &stop))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	return true;
-}
-
 
 /*
  * stream_transform_file transforms a JSON formatted file as received from the
@@ -1423,6 +1177,35 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 	log_info("Transformed %lld JSON messages into SQL file \"%s\"",
 			 (long long) content.lbuf.count,
 			 sqlfilename);
+
+	return true;
+}
+
+
+/*
+ * stream_compute_pathnames computes the WAL.json and WAL.sql filenames from
+ * the given LSN, which is expected to be the first LSN processed in the file
+ * we need to find the name of.
+ */
+bool
+stream_compute_pathnames(uint32_t WalSegSz,
+					 uint32_t timeline,
+					 uint64_t lsn,
+					 char *dir,
+					 char *walFileName,
+					 char *sqlFileName)
+{
+	char wal[MAXPGPATH] = { 0 };
+
+	/* compute the WAL filename that would host the current LSN */
+	XLogSegNo segno;
+	XLByteToSeg(lsn, segno, WalSegSz);
+	XLogFileName(wal, timeline, segno, WalSegSz);
+
+	log_trace("stream_compute_pathnames: %X/%X: %s", LSN_FORMAT_ARGS(lsn), wal);
+
+	sformat(walFileName, MAXPGPATH, "%s/%s.json", dir, wal);
+	sformat(sqlFileName, MAXPGPATH, "%s/%s.sql", dir, wal);
 
 	return true;
 }

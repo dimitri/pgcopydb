@@ -407,47 +407,8 @@ follow_prepare_mode_switch(StreamSpecs *streamSpecs,
 	log_info("Catching-up from existing on-disk files");
 
 	/*
-	 * If the previous mode was catch-up, then before proceeding, we might need
-	 * to empty the transform queue where the STOP message was sent.
-	 */
-	if (previousMode == STREAM_MODE_CATCHUP)
-	{
-		Queue *transformQueue = &(streamSpecs->transformQueue);
-		QueueStats qStats = { 0 };
-
-		if (!queue_stats(transformQueue, &qStats))
-		{
-			log_error("Failed to get the transform queue stats, "
-					  "see above for details");
-			return false;
-		}
-
-		if (qStats.msg_qnum > 0)
-		{
-			log_notice("Processing %lld messages from the transform queue",
-					   (long long) qStats.msg_qnum);
-
-			FollowSubProcess *transform = &(streamSpecs->transform);
-
-			if (!follow_start_subprocess(streamSpecs, transform))
-			{
-				log_error("Failed to start the transform process");
-				return false;
-			}
-
-			if (!follow_wait_subprocesses(streamSpecs))
-			{
-				log_error("Failed to transform %lld messages from the queue, "
-						  "see above for details",
-						  (long long) qStats.msg_qnum);
-				return false;
-			}
-		}
-	}
-
-	/*
-	 * Then catch-up with what's been stream and transformed already, which
-	 * means replaying the files that have already been prepared on-disk.
+	 * Catch-up with what has been streamed and transformed into the SQLite
+	 * replayDB, applying those changes to the target database.
 	 */
 	LogicalStreamMode mode = streamSpecs->mode;
 	streamSpecs->mode = STREAM_MODE_CATCHUP;
@@ -686,64 +647,6 @@ follow_start_transform(StreamSpecs *specs)
 	{
 		log_error("Transform process failed, see above for details");
 		return false;
-	}
-
-	return true;
-
-	/*
-	 * In replay mode, the JSON messages are read from stdin, which we
-	 * now setup to be a pipe between prefetch and transform processes;
-	 * and the SQL commands are written to stdout which we setup to be
-	 * a pipe between the transform and apply processes.
-	 */
-	if (specs->mode == STREAM_MODE_REPLAY)
-	{
-		/*
-		 * Arrange to read from receive-transform pipe and write to the
-		 * transform-apply pipe.
-		 */
-		specs->stdIn = true;
-		specs->stdOut = true;
-
-		specs->in = fdopen(specs->pipe_rt[0], "r");
-		specs->out = fdopen(specs->pipe_ta[1], "a");
-
-		/* close pipe ends we're not using */
-		close_fd_or_exit(specs->pipe_rt[1]);
-		close_fd_or_exit(specs->pipe_ta[0]);
-
-		/* switch out stream from block buffered to line buffered mode */
-		if (setvbuf(specs->out, NULL, _IOLBF, 0) != 0)
-		{
-			log_error("Failed to set out stream to line buffered mode: %m");
-			return false;
-		}
-
-		bool success = stream_transform_stream(specs);
-
-		log_info("Transform process has terminated");
-
-		close_fd_or_exit(specs->pipe_rt[0]);
-		close_fd_or_exit(specs->pipe_ta[1]);
-
-		return success;
-	}
-	else
-	{
-		/*
-		 * In other modes of operations (RECEIVE, CATCHUP) we start a
-		 * transform worker process that reads LSN positions from an
-		 * internal message queue and batch processes one file at a
-		 * time.
-		 */
-		specs->stdIn = false;
-		specs->stdOut = false;
-
-		bool success = stream_transform_worker(specs);
-
-		log_info("Transform process has terminated");
-
-		return success;
 	}
 
 	return true;

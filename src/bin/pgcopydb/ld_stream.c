@@ -177,44 +177,14 @@ stream_init_specs(StreamSpecs *specs,
 	specs->transform = transform;
 	specs->catchup = catchup;
 
-	switch (specs->mode)
+	/*
+	 * In replay mode, the receive, transform, and apply processes communicate
+	 * via Unix pipes.  Set up the stdin/stdout flags accordingly.
+	 */
+	if (specs->mode == STREAM_MODE_REPLAY)
 	{
-		/*
-		 * Create the message queue needed to communicate JSON files to
-		 * transform to SQL files on prefetch/catchup mode. See the supervisor
-		 * process implemented in function followDB() for the clean-up code
-		 * that unlinks the message queue.
-		 */
-		case STREAM_MODE_PREFETCH:
-		case STREAM_MODE_CATCHUP:
-		{
-			if (!queue_create(&(specs->transformQueue), "transform"))
-			{
-				log_error("Failed to create the transform queue");
-				return false;
-			}
-			break;
-		}
-
-		/*
-		 * Create the unix pipes needed for inter-process communication (data
-		 * flow) in replay mode. We override command line arguments for
-		 * --to-stdout and --from-stdin when stream mode is set to
-		 * STREAM_MODE_REPLAY.
-		 */
-		case STREAM_MODE_REPLAY:
-		{
-			specs->stdIn = true;
-			specs->stdOut = true;
-			break;
-		}
-
-		/* other stream modes don't need special treatment here */
-		default:
-		{
-			/* pass */
-			break;
-		}
+		specs->stdIn = true;
+		specs->stdOut = true;
 	}
 
 	return true;
@@ -351,8 +321,6 @@ stream_init_context(StreamSpecs *specs)
 	privateContext->startpos = specs->startpos;
 
 	privateContext->mode = specs->mode;
-
-	privateContext->transformQueue = &(specs->transformQueue);
 
 	privateContext->paths = specs->paths;
 
@@ -1017,18 +985,13 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 	}
 
 	/*
-	 * On graceful exit, ROLLBACK the last incomplete transaction.
-	 * As we resume from a consistent point, there's no concern about
-	 * the transaction being rolled back here.
-	 *
-	 * TODO: For process crashes (e.g., segmentation faults), this
-	 * method won't work, potentially leaving incomplete transactions.
-	 * To handle this, we should read the last message from the "latest"
-	 * file and rollback any incomplete transaction found.
-	 */
-	/*
 	 * On graceful exit, ROLLBACK the last incomplete transaction so the
 	 * transform process sees a clean boundary when it resumes.
+	 *
+	 * Note: for process crashes (segmentation faults etc.) this cannot
+	 * run, potentially leaving an incomplete transaction in the output
+	 * table.  The transform process must handle that case by detecting
+	 * a BEGIN without a matching COMMIT.
 	 */
 	if (time_to_abort && privateContext->transactionInProgress)
 	{
@@ -1046,65 +1009,6 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 
 	log_debug("streamCloseFile: WAL epoch boundary at LSN %X/%X",
 			  LSN_FORMAT_ARGS(context->cur_record_lsn));
-
-	/* in prefetch mode, kick-in a transform process */
-	switch (privateContext->mode)
-	{
-		case STREAM_MODE_RECEIVE:
-		{
-			/* nothing else to do in that streaming mode */
-			break;
-		}
-
-		case STREAM_MODE_PREFETCH:
-		case STREAM_MODE_CATCHUP:
-		{
-			/*
-			 * Now is the time to transform the JSON file into SQL.
-			 */
-			if (privateContext->firstLSN != InvalidXLogRecPtr)
-			{
-				if (!stream_transform_add_file(privateContext->transformQueue,
-											   privateContext->firstLSN))
-				{
-					log_error("Failed to add LSN %X/%X to the transform queue",
-							  LSN_FORMAT_ARGS(privateContext->firstLSN));
-					return false;
-				}
-			}
-
-			/*
-			 * While streaming logical decoding JSON messages, the transforming
-			 * of the previous JSON file happens in parallel to the receiving
-			 * of the current one.
-			 *
-			 * When it's time_to_abort, we need to make sure the current file
-			 * has been transformed before exiting.
-			 */
-			if (time_to_abort)
-			{
-				if (!stream_transform_send_stop(privateContext->transformQueue))
-				{
-					log_error("Failed to send STOP to the transform queue");
-					return false;
-				}
-			}
-
-			break;
-		}
-
-		case STREAM_MODE_REPLAY:
-		{
-			/* nothing else to do in that streaming mode */
-			break;
-		}
-
-		default:
-		{
-			log_error("BUG: unknown LogicalStreamMode %d", privateContext->mode);
-			return false;
-		}
-	}
 
 	return true;
 }

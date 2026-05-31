@@ -415,17 +415,14 @@ typedef struct StreamContext
 	/* per-table cache for the test_decoding parser hot path */
 	TestDecodingTableCache *testDecodingTableCache;
 
-	Queue *transformQueue;
 	PGSQL *transformPGSQL;
 
 	uint32_t WalSegSz;
 	uint32_t timeline;
 
 	uint64_t firstLSN;
-	char partialFileName[MAXPGPATH];
 	char walFileName[MAXPGPATH];
 	char sqlFileName[MAXPGPATH];
-	FILE *jsonFile;
 	FILE *sqlFile;
 
 	bool transactionInProgress;
@@ -563,8 +560,6 @@ struct StreamSpecs
 	DatabaseCatalog *sourceDB;
 	DatabaseCatalog *replayDB;
 
-	/* receive push json filenames to a queue for transform */
-	Queue transformQueue;
 	PGSQL transformPGSQL;
 
 	/* ld_stream and ld_transform needs their own StreamContext instance */
@@ -667,21 +662,6 @@ bool stream_transform_write_replay_txn(StreamSpecs *specs);
 bool stream_transform_write_message(StreamContext *privateContext,
 									uint64_t *currentMsgIndex);
 
-bool stream_transform_worker(StreamSpecs *specs);
-bool stream_transform_from_queue(StreamSpecs *specs);
-
-bool stream_transform_add_file(Queue *queue, uint64_t firstLSN);
-
-bool stream_transform_add_action(Queue *queue,
-								 StreamAction action,
-								 uint64_t lsn);
-
-bool stream_transform_send_stop(Queue *queue);
-
-bool stream_transform_action_at_lsn(StreamSpecs *specs,
-									StreamAction action,
-									uint64_t lsn);
-
 bool stream_transform_context_init(StreamSpecs *specs);
 bool stream_transform_stream(StreamSpecs *specs);
 bool stream_transform_resume(StreamSpecs *specs);
@@ -696,8 +676,6 @@ bool stream_transform_rotate(StreamContext *privateContext);
 bool stream_transform_file(StreamSpecs *specs,
 						   char *jsonfilename,
 						   char *sqlfilename);
-
-bool stream_transform_file_at_lsn(StreamSpecs *specs, uint64_t lsn);
 
 bool stream_compute_pathnames(uint32_t WalSegSz,
 							  uint32_t timeline,

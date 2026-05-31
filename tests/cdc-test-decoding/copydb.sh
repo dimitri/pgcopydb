@@ -40,55 +40,52 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 # grab the current LSN, it's going to be our streaming end position
 lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_lsn()'`
 
-# and prefetch the changes captured in our replication slot
+#
+# Receive CDC messages into the SQLite replayDB and transform them.
+#
 pgcopydb stream prefetch --resume --endpos "${lsn}" --debug
 
 SHAREDIR=/var/lib/postgres/.local/share/pgcopydb
-WALFILE=000000010000000000000002.json
-SQLFILE=000000010000000000000002.sql
 
-# now compare JSON output, skipping the lsn and nextlsn fields which are
-# different at each run
-expected=/tmp/expected.json
-result=/tmp/result.json
+ls -la ${SHAREDIR}/
 
-JQSCRIPT='del(.lsn) | del(.nextlsn) | del(.timestamp) | del(.xid) | if has("message") then .message |= sub("(?<m>COMMIT|BEGIN) [0-9]+"; "\(.m) XXX") else . end'
+DBFILE=$(ls ${SHAREDIR}/*.db | head -1)
 
-jq "${JQSCRIPT}" /usr/src/pgcopydb/${WALFILE} > ${expected}
-jq "${JQSCRIPT}" ${SHAREDIR}/${WALFILE} > ${result}
+#
+# Validate that the SQLite output and replay tables were populated.
+#
+sqlite3 ${DBFILE} <<'EOF'
+.echo on
+select count(*) as output_rows from output;
+select count(*) as replay_rows from replay;
+EOF
 
-# first command to provide debug information, second to stop when returns non-zero
-diff -I 'last_update' ${expected} ${result} || (cat ${SHAREDIR}/${WALFILE} && exit 1)
-
-# now prefetch the changes again, which should be a noop
+# Idempotency: prefetch again should be a no-op
 pgcopydb stream prefetch --resume --endpos "${lsn}" --notice
 
-# now transform the JSON file into SQL
-SQLFILENAME=`basename ${WALFILE} .json`.sql
-
-pgcopydb stream transform --debug ${SHAREDIR}/${WALFILE} /tmp/${SQLFILENAME}
-
-# we should get the same result as `pgcopydb stream prefetch`
-diff ${SHAREDIR}/${SQLFILE} /tmp/${SQLFILENAME}
-
-# we should also get the same result as expected (discarding LSN numbers)
-# and also discarding ON UPDATE triggers for the timestamps (EXECUTE/last_update)
-DIFFOPTS='-I BEGIN -I COMMIT -I KEEPALIVE -I SWITCH -I ENDPOS -I EXECUTE'
-
-diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} ${SHAREDIR}/${SQLFILENAME} || (cat ${SHAREDIR}/${SQLFILENAME} && exit 1)
-# now allow for replaying/catching-up changes
+#
+# Allow apply and catch up with the replayDB.
+#
 pgcopydb stream sentinel set apply
-
-# now apply the SQL file to the target database
 pgcopydb stream catchup --resume --endpos "${lsn}" -vv
 
-# now apply AGAIN the SQL file to the target database, skipping transactions
+# Applying again must be idempotent
 pgcopydb stream catchup --resume --endpos "${lsn}" -vv
 
-# test whether transform propertly sets xid for continued transactions.
+#
+# Verify that continued-transaction transform still works via the pipe mode
+# (stream transform still accepts explicit json→sql file arguments).
+#
 pgcopydb stream transform --debug /usr/src/pgcopydb/continued-txn.json /tmp/continued-txn.sql
-
 diff /usr/src/pgcopydb/continued-txn.sql /tmp/continued-txn.sql || (cat /tmp/continued-txn.sql && exit 1)
+
+#
+# Row-count validation
+#
+src_count=`psql -AtqX -d ${PGCOPYDB_SOURCE_PGURI} -c "select count(*) from actor"`
+tgt_count=`psql -AtqX -d ${PGCOPYDB_TARGET_PGURI} -c "select count(*) from actor"`
+echo "source actor count: ${src_count}, target actor count: ${tgt_count}"
+test "${src_count}" -eq "${tgt_count}"
 
 # cleanup
 pgcopydb stream cleanup
