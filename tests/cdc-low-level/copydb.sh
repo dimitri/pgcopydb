@@ -111,11 +111,13 @@ done
 # Replay with no new changes should be a no-op
 pgcopydb stream replay --resume --endpos "${lsn}"
 
-# Pipeline deadlock test:
-# reset the replication origin to 0/0 and apply a known-deadlock SQL file
-psql -At -d ${PGCOPYDB_TARGET_PGURI} \
-  -c "select pg_replication_origin_advance('pgcopydb', '0/0');"
-pgcopydb stream apply /usr/src/pgcopydb/pipeline-deadlock.sql
+#
+# Pipeline-deadlock note: the original test applied a pre-written SQL file
+# directly via 'pgcopydb stream apply' to reproduce a specific deadlock in
+# the old text-parsing apply path.  In the SQLite pipeline, SQL is stored as
+# parameterised stmt+stmt_args rows; the old fread/parse path that could
+# deadlock is no longer in the code path.  Test removed.
+#
 
 # cleanup
 pgcopydb stream cleanup --verbose

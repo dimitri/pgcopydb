@@ -85,14 +85,22 @@ ld_store_open_replaydb(StreamSpecs *specs)
 
 
 /*
- * ld_store_set_current_filename queries the sourceDB SQLite catalog for an
- * open file for the current timeline.
+ * ld_store_set_current_cdc_filename finds the most recently created open
+ * replayDB file in cdc_files and stores its path in specs->replayDB->dbfile.
+ *
+ * "Open" means done_time_epoch IS NULL.  We sort by id DESC to get the most
+ * recently inserted row, which corresponds to the current streaming epoch.
+ *
+ * This simple query works for all callers:
+ *  - streaming resume: finds the existing open file
+ *  - first start:      cdc_files is empty → returns no row (correct: caller
+ *                      will create a new file)
+ *  - apply process:    has no streaming context (startpos/timeline = 0) but
+ *                      still needs to open the file produced by prefetch
  */
 bool
 ld_store_set_current_cdc_filename(StreamSpecs *specs)
 {
-	StreamContext *privateContext = &(specs->private);
-
 	sqlite3 *db = specs->sourceDB->db;
 
 	if (db == NULL)
@@ -105,10 +113,7 @@ ld_store_set_current_cdc_filename(StreamSpecs *specs)
 		"  select filename "
 		"    from cdc_files "
 		"   where done_time_epoch is null "
-		"     and startpos <= $1 "
-		"     and (endpos is null or $2 <= endpos) "
-		"     and case when $3 > 0 then timeline = $4 end "
-		"order by timeline desc "
+		"order by id desc "
 		"   limit 1";
 
 	SQLiteQuery query = {
@@ -122,32 +127,7 @@ ld_store_set_current_cdc_filename(StreamSpecs *specs)
 		return false;
 	}
 
-	uint64_t startpos = privateContext->startpos;
-	uint64_t endpos = privateContext->endpos;
-
-	char slsn[PG_LSN_MAXLENGTH] = { 0 };
-	char elsn[PG_LSN_MAXLENGTH] = { 0 };
-
-	sformat(slsn, sizeof(slsn), "%08X/%08X", LSN_FORMAT_ARGS(startpos));
-	sformat(elsn, sizeof(elsn), "%08X/%08X", LSN_FORMAT_ARGS(endpos));
-
-	/* bind our parameters now */
-	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "startpos", 0, slsn },
-		{ BIND_PARAMETER_TYPE_TEXT, "endpos", 0, elsn },
-		{ BIND_PARAMETER_TYPE_INT, "timeline", privateContext->timeline, 0 },
-		{ BIND_PARAMETER_TYPE_INT, "timeline", privateContext->timeline, 0 },
-	};
-
-	int count = sizeof(params) / sizeof(params[0]);
-
-	if (!catalog_sql_bind(&query, params, count))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/* now execute the query, which does not return any row */
+	/* no parameters: the query is unconditional */
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */

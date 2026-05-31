@@ -637,12 +637,56 @@ follow_start_prefetch(StreamSpecs *specs)
 
 
 /*
- * follow_start_transform creates a sub-process that transform JSON files into
- * SQL files as needed, consuming requests from a queue.
+ * follow_start_transform runs in the transform sub-process.
+ *
+ * In PREFETCH/CATCHUP mode: reads from the SQLite output table and writes
+ * transformed statements to the replay+stmt tables.
+ *
+ * In REPLAY mode: reads JSON lines from the receive-transform Unix pipe and
+ * writes SQL to the transform-apply Unix pipe (streaming, no SQLite).
  */
 bool
 follow_start_transform(StreamSpecs *specs)
 {
+	if (specs->mode == STREAM_MODE_REPLAY)
+	{
+		/*
+		 * In replay mode the transform process reads JSON lines from the
+		 * receive → transform pipe and writes SQL to the transform → apply
+		 * pipe.  Set up the pipe file descriptors before calling into the
+		 * streaming transform.
+		 */
+		specs->stdIn = true;
+		specs->stdOut = true;
+
+		specs->in = fdopen(specs->pipe_rt[0], "r");
+		specs->out = fdopen(specs->pipe_ta[1], "a");
+
+		/* close the ends of each pipe that this process does not use */
+		close_fd_or_exit(specs->pipe_rt[1]);
+		close_fd_or_exit(specs->pipe_ta[0]);
+
+		/* line-buffer the output so the apply process sees complete lines */
+		if (setvbuf(specs->out, NULL, _IOLBF, 0) != 0)
+		{
+			log_error("Failed to set out stream to line buffered mode: %m");
+			return false;
+		}
+
+		bool success = stream_transform_stream(specs);
+
+		log_info("Transform process has terminated");
+
+		close_fd_or_exit(specs->pipe_rt[0]);
+		close_fd_or_exit(specs->pipe_ta[1]);
+
+		return success;
+	}
+
+	/*
+	 * In PREFETCH and CATCHUP modes the transform reads from the SQLite
+	 * output table and populates the replay+stmt tables.
+	 */
 	if (!stream_transform_messages(specs))
 	{
 		log_error("Transform process failed, see above for details");
