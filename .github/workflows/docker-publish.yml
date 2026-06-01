@@ -6,12 +6,12 @@ name: Docker
 # documentation.
 
 on:
+  # Build and publish the container image only on release (version tags).
+  # Not on every push to main or on PRs — the test workflow builds its own
+  # image per job, so a PR/main build here is redundant CI cost.
   push:
-    branches: [ main ]
-    # Publish semver tags as releases.
     tags: [ 'v*.*.*' ]
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:
 
 # Cancel redundant runs on the same PR/branch
 concurrency:
