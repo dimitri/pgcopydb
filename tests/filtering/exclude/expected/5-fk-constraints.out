@@ -1,0 +1,6 @@
+-[ RECORD 1 ]---------------+--
+fk_to_excluded_schema_count | 0
+
+-[ RECORD 1 ]--------------+--
+fk_to_excluded_table_count | 0
+

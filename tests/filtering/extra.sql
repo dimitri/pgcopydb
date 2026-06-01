@@ -156,6 +156,18 @@ create table foo.tbl_with_cross_fk (
     user_id bigint references excluded_test.users(id)
 );
 
+-- Table to be excluded by table-level filter (referenced by FK below)
+create table foo.tbl_ref_target (
+    id bigserial primary key,
+    name text
+);
+
+-- Table with FK referencing the excluded table above
+create table foo.tbl_with_fk_to_excluded_tbl (
+    id bigserial primary key,
+    ref_id bigint references foo.tbl_ref_target(id)
+);
+
 insert into foo.tbl_with_cross_fk (id, user_id) values (1, 1);
 
 -- View in foo schema referencing excluded schema
