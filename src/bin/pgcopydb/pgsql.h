@@ -257,6 +257,9 @@ int pgsql_compute_connection_retry_sleep_time(ConnectionRetryPolicy *retryPolicy
 bool pgsql_retry_policy_expired(ConnectionRetryPolicy *retryPolicy);
 
 bool pgsql_state_is_connection_error(PGSQL *pgsql);
+bool pgsql_is_permissions_error(PGSQL *pgsql);
+bool pgsql_is_origin_in_use_error(PGSQL *pgsql);
+bool pgsql_terminate_origin_holder(PGSQL *pgsql, PGSQL *applyConn, const char *nodeName);
 
 void pgsql_finish(PGSQL *pgsql);
 void parseSingleValueResult(void *ctx, PGresult *result);

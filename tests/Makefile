@@ -12,7 +12,7 @@ BUILD_ARGS = --build-arg PGVERSION=$(PGVERSION)
 
 all: pagila pagila-multi-steps blobs unit filtering filtering-standby extensions \
 	 cdc-wal2json cdc-test-decoding cdc-endpos-between-transaction cdc-low-level \
-	 follow-wal2json follow-standby follow-9.6 follow-data-only \
+	 follow-wal2json follow-standby follow-9.6 follow-data-only follow-target-reconnect \
 	 endpos-in-multi-wal-txn exclude-extension \
 	 blob-snapshot-release follow-defer-indexes fk-not-valid;
 
@@ -64,6 +64,9 @@ follow-9.6: build
 follow-data-only: build
 	$(MAKE) -C $@
 
+follow-target-reconnect: build
+	$(MAKE) -C $@
+
 endpos-in-multi-wal-txn: build
 	$(MAKE) -C $@
 
@@ -89,6 +92,6 @@ build:
 .PHONY: all build
 .PHONY: pagila pagila-multi-steps blobs unit filtering filtering-standby extensions
 .PHONY: cdc-wal2json cdc-test-decoding cdc-low-level
-.PHONY: follow-wal2json follow-standby follow-9.6
+.PHONY: follow-wal2json follow-standby follow-9.6 follow-target-reconnect
 .PHONY: endpos-in-multi-wal-txn exclude-extension
 .PHONY: blob-snapshot-release follow-defer-indexes fk-not-valid

@@ -272,9 +272,10 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	}
 
 	/*
-	 * In case of successful exit from the follow sub-processes, we
-	 * switch back and forth between CATCHUP and REPLAY modes and
-	 * continue replaying changes. In case of error, we stop.
+	 * Switch back and forth between CATCHUP and REPLAY modes, continuing
+	 * until endpos is reached. Connection-level failures are handled within
+	 * the prefetch and apply subprocesses themselves with per-subprocess
+	 * backoff and reconnect logic.
 	 */
 	LogicalStreamMode modeArray[] = {
 		STREAM_MODE_CATCHUP,
@@ -291,8 +292,7 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	{
 		if (!followDB(copySpecs, streamSpecs))
 		{
-			log_error("Failed to follow changes from source, "
-					  "see above for details");
+			log_error("Follow pipeline failed, see above for details");
 			return false;
 		}
 

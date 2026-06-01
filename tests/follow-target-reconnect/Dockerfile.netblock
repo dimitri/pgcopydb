@@ -1,0 +1,10 @@
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends iptables \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY netblock.sh /netblock.sh
+RUN chmod +x /netblock.sh
+
+CMD ["/netblock.sh"]
