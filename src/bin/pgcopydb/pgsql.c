@@ -1971,13 +1971,28 @@ pgsql_sync_pipeline(PGSQL *pgsql)
 			if (res == NULL)
 			{
 				/*
-				 * NULL represents a end of result for a single query, but we are
-				 * in pipeline mode and we can have multiple results.
+				 * End of results for this statement. In pipeline mode
+				 * there may be more results pending for later statements.
 				 *
-				 * We need to continue consuming until we get a SYNC message.
+				 * We must call PQconsumeInput here to update connection
+				 * state: on a dead connection PQisBusy stays 0 and
+				 * PQgetResult returns NULL forever without PQconsumeInput
+				 * being called — an infinite spin loop.
 				 */
+				if (PQconsumeInput(conn) == 0 ||
+					PQstatus(conn) == CONNECTION_BAD)
+				{
+					(void) pgcopy_log_error(pgsql, NULL,
+											"connection was lost during pipeline sync");
+					pgsql_finish(pgsql);
+					return false;
+				}
 
-				continue;
+				if (PQisBusy(conn) == 0)
+				{
+					continue; /* more results buffered, keep consuming */
+				}
+				break; /* no more buffered; wait for server in outer loop */
 			}
 
 			results++;
@@ -2459,6 +2474,92 @@ pgsql_state_is_connection_error(PGSQL *pgsql)
 	return pgsql->connection != NULL &&
 		   (PQstatus(pgsql->connection) == CONNECTION_BAD ||
 			SQLSTATE_IS_CONNECTION_EXCEPTION(pgsql));
+}
+
+
+/*
+ * pgsql_is_permissions_error returns true when the last error on this
+ * connection was an authorization or privilege failure. These errors should
+ * not be retried — they require manual intervention (e.g. migration user
+ * was revoked).
+ *
+ * SQLSTATE class 28 = invalid_authorization_specification
+ * SQLSTATE 42501   = insufficient_privilege
+ */
+bool
+pgsql_is_permissions_error(PGSQL *pgsql)
+{
+	return (pgsql->sqlstate[0] == '2' && pgsql->sqlstate[1] == '8') ||
+		   strncmp(pgsql->sqlstate, "42501", 5) == 0;
+}
+
+
+/*
+ * pgsql_is_origin_in_use_error returns true when the last error was
+ * SQLSTATE 55006 (object_in_use), which occurs when another backend
+ * already holds the replication origin session. This is retriable: the
+ * caller should terminate the blocking backend and retry.
+ */
+bool
+pgsql_is_origin_in_use_error(PGSQL *pgsql)
+{
+	return strncmp(pgsql->sqlstate, "55006", 5) == 0;
+}
+
+
+/*
+ * pgsql_terminate_origin_holder terminates the backend that holds the
+ * replication origin session. The holder PID is extracted from the 55006
+ * error message on applyConn — PostgreSQL includes it verbatim:
+ * "replication origin with ID N is already active for PID N".
+ * This works on all PostgreSQL versions that support replication origins.
+ */
+bool
+pgsql_terminate_origin_holder(PGSQL *pgsql, PGSQL *applyConn,
+							  const char *nodeName)
+{
+	const char *errMsg = PQerrorMessage(applyConn->connection);
+	const char *marker = (errMsg != NULL) ? strstr(errMsg, "active for PID ") : NULL;
+
+	if (marker == NULL)
+	{
+		log_warn("Cannot identify backend holding replication origin \"%s\": "
+				 "PID not found in error message",
+				 nodeName);
+		return false;
+	}
+
+	char *endptr = NULL;
+	long holderPid = strtol(marker + strlen("active for PID "), &endptr, 10);
+
+	if (holderPid <= 0 || endptr == marker + strlen("active for PID "))
+	{
+		log_warn("Cannot identify backend holding replication origin \"%s\": "
+				 "parsed PID %ld is invalid",
+				 nodeName, holderPid);
+		return false;
+	}
+
+	log_info("Terminating PID %ld holding replication origin \"%s\"",
+			 holderPid, nodeName);
+
+	const char *sql = "SELECT pg_terminate_backend($1)";
+	int paramCount = 1;
+	Oid paramTypes[1] = { INT4OID };
+	char pidStr[12];
+	sformat(pidStr, sizeof(pidStr), "%ld", holderPid);
+	const char *paramValues[1] = { pidStr };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   NULL, NULL))
+	{
+		log_warn("Failed to terminate PID %ld holding replication origin \"%s\"",
+				 holderPid, nodeName);
+		return false;
+	}
+
+	return true;
 }
 
 

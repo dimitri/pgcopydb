@@ -461,11 +461,16 @@ startLogicalStreaming(StreamSpecs *specs)
 
 	/*
 	 * In case of being disconnected or other transient errors, reconnect and
-	 * continue streaming.
+	 * continue streaming. Uses exponential backoff up to a 10-minute total
+	 * window; permissions errors bail out immediately.
+	 *
+	 * reconnectWindowStart tracks when the current outage began. It resets to
+	 * zero whenever streaming makes new progress, so each new outage gets its
+	 * own fresh 10-minute window.
 	 */
 	bool retry = true;
-	uint64_t retries = 0;
-	uint64_t waterMarkLSN = InvalidXLogRecPtr;
+	int reconnectAttempt = 0;
+	time_t reconnectWindowStart = 0;
 
 	while (retry)
 	{
@@ -498,74 +503,134 @@ startLogicalStreaming(StreamSpecs *specs)
 
 		if (!pgsql_start_replication(&stream))
 		{
-			/* errors have already been logged */
-			return false;
-		}
+			if (pgsql_is_permissions_error(&stream.pgsql))
+			{
+				log_error("Source connection failed with authorization error; "
+						  "manual intervention required");
+				return false;
+			}
 
-		/* write the wal_segment_size and timeline history files */
-		if (!stream_write_context(specs, &stream))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		/* ignore errors, try again unless asked to stop */
-		bool cleanExit = pgsql_stream_logical(&stream, &context);
-
-		if (cleanExit || asked_to_stop || asked_to_stop_fast || asked_to_quit)
-		{
-			retry = false;
-		}
-
-		if (cleanExit)
-		{
-			log_info("Streamed up to write_lsn %X/%X, flush_lsn %X/%X, stopping: "
-					 "endpos is %X/%X",
-					 LSN_FORMAT_ARGS(context.tracking->written_lsn),
-					 LSN_FORMAT_ARGS(context.tracking->flushed_lsn),
-					 LSN_FORMAT_ARGS(context.endpos));
-		}
-		else if (privateContext->pipelineBroken)
-		{
-			log_error("Downstream pipeline process has exited, "
-					  "stopping at %X/%X",
-					  LSN_FORMAT_ARGS(context.tracking->written_lsn));
-
-			return false;
-		}
-		else if (retries > 0 &&
-				 context.tracking->written_lsn == waterMarkLSN)
-		{
-			log_warn("Streaming got interrupted at %X/%X, and did not make "
-					 "any progress from previous attempt, stopping now",
-					 LSN_FORMAT_ARGS(context.tracking->written_lsn));
-
-			return false;
-		}
-		else if (retry)
-		{
-			log_warn("Streaming got interrupted at %X/%X, reconnecting in 1s",
-					 LSN_FORMAT_ARGS(context.tracking->written_lsn));
+			/* connection failure: skip streaming, go straight to backoff */
 		}
 		else
 		{
-			log_warn("Streaming got interrupted at %X/%X "
-					 "after processing %lld message%s",
-					 LSN_FORMAT_ARGS(context.tracking->written_lsn),
-					 (long long) privateContext->counters.total,
-					 privateContext->counters.total > 0 ? "s" : "");
+			/* write the wal_segment_size and timeline history files */
+			if (!stream_write_context(specs, &stream))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			/*
+			 * Save start LSN for this attempt so we can detect whether
+			 * we made any new progress (used to reset the reconnect window).
+			 */
+			XLogRecPtr attemptStartLSN = specs->startpos;
+
+			/* stream until clean exit, signal, or connection failure */
+			bool cleanExit = pgsql_stream_logical(&stream, &context);
+
+			if (cleanExit || asked_to_stop || asked_to_stop_fast || asked_to_quit)
+			{
+				retry = false;
+			}
+
+			if (cleanExit)
+			{
+				log_info("Streamed up to write_lsn %X/%X, flush_lsn %X/%X, "
+						 "stopping: endpos is %X/%X",
+						 LSN_FORMAT_ARGS(context.tracking->written_lsn),
+						 LSN_FORMAT_ARGS(context.tracking->flushed_lsn),
+						 LSN_FORMAT_ARGS(context.endpos));
+			}
+			else if (privateContext->pipelineBroken)
+			{
+				log_error("Downstream pipeline process has exited, "
+						  "stopping at %X/%X",
+						  LSN_FORMAT_ARGS(context.tracking->written_lsn));
+
+				return false;
+			}
+			else if (!retry)
+			{
+				log_warn("Streaming got interrupted at %X/%X "
+						 "after processing %lld message%s",
+						 LSN_FORMAT_ARGS(context.tracking->written_lsn),
+						 (long long) privateContext->counters.total,
+						 privateContext->counters.total > 0 ? "s" : "");
+			}
+
+			/* if we are going to retry, we need to rollback the last txn */
+			context.onRetry = retry;
+
+			if (!retry)
+			{
+				break;
+			}
+
+			/*
+			 * If this attempt made new progress, it marks the end of any
+			 * previous outage — reset the reconnect window so the next
+			 * outage gets a fresh 10-minute budget.
+			 */
+			if (context.tracking != NULL &&
+				context.tracking->written_lsn > attemptStartLSN)
+			{
+				reconnectWindowStart = 0;
+				reconnectAttempt = 0;
+			}
+
+			/* update resume position from last streamed LSN */
+			if (context.tracking != NULL &&
+				context.tracking->written_lsn != InvalidXLogRecPtr)
+			{
+				specs->startpos = context.tracking->written_lsn;
+			}
 		}
 
-		/* if we are going to retry, we need to rollback the last txn */
-		context.onRetry = retry;
-
-		/* sleep for one entire second before retrying */
-		if (retry)
+		/* reconnect backoff */
+		if (reconnectWindowStart == 0)
 		{
-			++retries;
-			waterMarkLSN = context.tracking->written_lsn;
+			reconnectWindowStart = time(NULL);
+		}
 
-			(void) pg_usleep(1 * 1000 * 1000); /* 1s */
+		int elapsed = (int) (time(NULL) - reconnectWindowStart);
+
+		if (elapsed >= STREAM_RECONNECT_MAX_TOTAL_SECS)
+		{
+			log_error("Source connection lost and could not reconnect "
+					  "within %d minutes; manual intervention required",
+					  STREAM_RECONNECT_MAX_TOTAL_SECS / 60);
+			return false;
+		}
+
+		int sleepSecs =
+			STREAM_RECONNECT_BASE_SLEEP_SECS * (1 << reconnectAttempt);
+
+		if (sleepSecs > STREAM_RECONNECT_MAX_SLEEP_SECS)
+		{
+			sleepSecs = STREAM_RECONNECT_MAX_SLEEP_SECS;
+		}
+
+		log_warn("Source connection lost at %X/%X, reconnecting in %ds "
+				 "(attempt %d, %ds/%ds elapsed)",
+				 LSN_FORMAT_ARGS(context.tracking != NULL
+								 ? context.tracking->written_lsn
+								 : specs->startpos),
+				 sleepSecs,
+				 reconnectAttempt + 1,
+				 elapsed,
+				 STREAM_RECONNECT_MAX_TOTAL_SECS);
+
+		++reconnectAttempt;
+
+		for (int s = 0; s < sleepSecs; s++)
+		{
+			if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+			{
+				return false;
+			}
+			pg_usleep(1000 * 1000);
 		}
 	}
 

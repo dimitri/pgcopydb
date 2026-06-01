@@ -24,6 +24,11 @@
 #define OUTPUT_KEEPALIVE "-- KEEPALIVE "
 #define OUTPUT_ENDPOS "-- ENDPOS "
 
+/* Per-subprocess reconnect backoff: 5s base, 30s cap, 10-minute total window */
+#define STREAM_RECONNECT_BASE_SLEEP_SECS 5
+#define STREAM_RECONNECT_MAX_SLEEP_SECS 30
+#define STREAM_RECONNECT_MAX_TOTAL_SECS 600
+
 #define PREPARE "PREPARE "
 #define EXECUTE "EXECUTE "
 #define TRUNCATE "TRUNCATE "

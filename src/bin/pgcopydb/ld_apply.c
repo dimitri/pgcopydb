@@ -1529,7 +1529,30 @@ setupReplicationOrigin(StreamApplyContext *context)
 			  LSN_FORMAT_ARGS(context->previousLSN),
 			  context->sqlFileName);
 
-	if (!pgsql_replication_origin_session_setup(applyPgConn, nodeName))
+	bool sessionOk =
+		pgsql_replication_origin_session_setup(applyPgConn, nodeName);
+
+	if (!sessionOk && pgsql_is_origin_in_use_error(applyPgConn))
+	{
+		/*
+		 * Another backend is still holding the replication origin session
+		 * (SQLSTATE 55006). This happens when the client-side connection was
+		 * killed by a network failure but the server-side backend has not yet
+		 * detected the dead connection. Terminate that backend and retry once.
+		 */
+		log_warn("Replication origin \"%s\" is already held by another "
+				 "backend; terminating it and retrying session setup",
+				 nodeName);
+
+		if (pgsql_terminate_origin_holder(&context->controlPgConn, applyPgConn, nodeName))
+		{
+			pg_usleep(500 * 1000); /* 500ms for the backend to exit */
+			sessionOk =
+				pgsql_replication_origin_session_setup(applyPgConn, nodeName);
+		}
+	}
+
+	if (!sessionOk)
 	{
 		/* errors have already been logged */
 		return false;
