@@ -67,7 +67,12 @@ wait ${COPROC_PID}
 
 # In the SQLite design, all SQL statements are stored in the replay table.
 # Verify that the transformed SQL contains the quoted null literals.
-sqlite3 ${TMPDIR}/pgcopydb/cdc/pgcopydb/*.db <<EOF
+db=$(find ${TMPDIR}/pgcopydb/cdc/pgcopydb -name "*.db" -type f | head -1)
+if [ -z "${db}" ]; then
+  echo "Error: No CDC database file found in ${TMPDIR}/pgcopydb/cdc/pgcopydb/" >&2
+  exit 1
+fi
+sqlite3 "${db}" <<EOF
 select count(*) as null_text_sqls from replay
   where stmt_hash in (select hash from stmt where sql like '%null%');
 EOF
