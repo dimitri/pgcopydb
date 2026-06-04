@@ -163,9 +163,17 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 		{
 			/*
 			 * No more rows: the transform process has not produced anything
-			 * past our current position. We need to check the sentinel to see
-			 * if endpos has been set. If endpos is set and reached, we can exit.
-			 * If endpos is not set yet, we should wait for more data to arrive.
+			 * past our current position.
+			 *
+			 * When endpos is not set, we are in "follow" mode waiting for more
+			 * DML from the source database. Exit and wait for endpos to be set.
+			 *
+			 * When endpos is set and reached, we are done - all data has been
+			 * applied.
+			 *
+			 * When endpos is set but not yet reached, the transform process is
+			 * still producing data. We exit here and will be restarted when more
+			 * data is available. The sentinel will track our progress.
 			 */
 			if (!stream_apply_sync_sentinel(context, false))
 			{
@@ -178,25 +186,24 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 				context->endpos <= context->previousLSN)
 			{
 				context->reachedEndPos = true;
-				log_info("Apply caught up with replayDB at LSN %X/%X, "
-						 "endpos %X/%X reached",
-						 LSN_FORMAT_ARGS(context->previousLSN),
-						 LSN_FORMAT_ARGS(context->endpos));
+				log_notice("Apply reached end position %X/%X at LSN %X/%X",
+						   LSN_FORMAT_ARGS(context->endpos),
+						   LSN_FORMAT_ARGS(context->previousLSN));
 				break;
 			}
 
 			/*
-			 * endpos is not set yet, or hasn't been reached. Wait a bit and
-			 * loop to check again.
+			 * We are caught up with the transform process, but endpos has not
+			 * been reached. Exit normally and the main follow loop will
+			 * eventually restart us once more data is available.
 			 */
-			log_debug("Apply caught up at LSN %X/%X, endpos %s set at %X/%X, waiting",
-					  LSN_FORMAT_ARGS(context->previousLSN),
-					  context->endpos == InvalidXLogRecPtr ? "not" : "",
-					  context->endpos == InvalidXLogRecPtr ? 0 :
-					  LSN_FORMAT_ARGS(context->endpos));
-
-			pg_usleep(50 * 1000);  /* sleep 50ms before retrying */
-			continue;
+			log_info("Apply caught up with replayDB at LSN %X/%X, "
+					 "endpos not yet reached (%s)",
+					 LSN_FORMAT_ARGS(context->previousLSN),
+					 context->endpos == InvalidXLogRecPtr ? "not set" :
+					 	(context->endpos > context->previousLSN ?
+					 	 "ahead" : "reached"));
+			break;
 		}
 
 		if (s.action == STREAM_ACTION_BEGIN)
