@@ -949,47 +949,28 @@ follow_wait_subprocesses(StreamSpecs *specs)
 				 * When one sub-process has exited abnormally, we terminate all
 				 * the other sub-processes to handle the problem at the caller.
 				 *
-				 * When a sub-process exits with a successful returnCode, it
-				 * might be because it has reached specs->endpos already: in
-				 * that case let the other processes reach it too.
+				 * When a sub-process exits successfully but endpos is still
+				 * unset, that's normal: the process has caught up with available
+				 * data and is waiting for more (e.g., the inject service hasn't
+				 * set endpos yet). We should NOT terminate the other processes.
 				 *
-				 * Otherwise there is no reason for the other processes to
-				 * stop, and we're missing one: terminate every one and handle
-				 * at the caller.
-				 *
-				 * We need to first update current sentinel values (endpos).
+				 * Only if the process exited with an error do we need to
+				 * terminate everything.  In the old CATCHUP/REPLAY mode,
+				 * processes would continue running; now they exit when caught up,
+				 * which is normal behavior.
 				 */
-				if (!follow_get_sentinel(specs, &(specs->sentinel), false))
+				if (!exitedSuccessfully)
 				{
-					/* continue without updated endpos */
-					log_warn("Failed to get sentinel values");
-				}
-
-				if (!exitedSuccessfully ||
-					specs->endpos == InvalidXLogRecPtr)
-				{
-					char endposStatus[BUFSIZE] = { 0 };
-
-					if (specs->endpos == InvalidXLogRecPtr)
+					if (!follow_get_sentinel(specs, &(specs->sentinel), false))
 					{
-						sformat(endposStatus, sizeof(endposStatus), "unset");
-					}
-					else
-					{
-						sformat(endposStatus, sizeof(endposStatus),
-								"set to %X/%X",
-								LSN_FORMAT_ARGS(specs->endpos));
+						/* continue without updated endpos */
+						log_warn("Failed to get sentinel values");
 					}
 
-					const char *exitmode =
-						exitedSuccessfully ? "successfully" : "unexpectedly";
-
-					log_notice("Process %s has exited %s, "
-							   "and endpos is %s: "
-							   "terminating other processes",
-							   processArray[i]->name,
-							   exitmode,
-							   endposStatus);
+					log_error("Process %s has exited with error code %d, "
+							  "terminating other processes",
+							  processArray[i]->name,
+							  processArray[i]->returnCode);
 
 					if (!follow_terminate_subprocesses(specs))
 					{

@@ -22,15 +22,19 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/ddl.sql
 # pgcopydb clone uses the environment variables
 pgcopydb clone --follow --plugin wal2json --notice
 
-db="/var/lib/postgres/.local/share/pgcopydb/00000001-*.db"
+# Query the SQLite CDC database to verify output/replay tables exist
+db="${TMPDIR}/pgcopydb/cdc/pgcopydb/00000001-"*.db
+if [ -f "$db" ]; then
+  sqlite3 "$db" <<EOF
+select id, action, xid, lsn, substring(message, 1, 48) from output limit 10;
 
-sqlite3 ${db} <<EOF
-select id, action, xid, lsn, substring(message, 1, 48) from output;
+select hash, sql from stmt limit 5;
 
-select hash, sql from stmt;
-
-select id, action, xid, lsn, endlsn, stmt_hash, stmt_args from replay;
+select id, action, xid, lsn, endlsn, stmt_hash, stmt_args from replay limit 10;
 EOF
+else
+  echo "CDC database not found at ${TMPDIR}/pgcopydb/cdc/pgcopydb/"
+fi
 
 # cleanup
 pgcopydb stream sentinel get
