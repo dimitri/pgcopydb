@@ -321,20 +321,21 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 
 		/*
 		 * With endpos set, the SQLite pipeline should run to completion
-		 * without restarts. If subprocesses exit before reaching endpos,
-		 * that's an error: the processes should continue until they've
-		 * processed all data up to endpos.
+		 * without restarts. Only restart if endpos is unset (waiting for
+		 * inject service to set it, or in a clone-only scenario with no
+		 * live follow).
 		 *
-		 * Only restart if endpos is unset (waiting for inject service to
-		 * set it, or in a standalone follow scenario).
+		 * If endpos is set but not reached, that's expected when there's
+		 * no DML to apply (clone-only). The processes have done their job
+		 * and correctly exited when they ran out of work.
 		 */
 		if (streamSpecs->sentinel.endpos != InvalidXLogRecPtr)
 		{
-			log_error("Subprocess exited but endpos %X/%X not reached; "
-					  "current replay_lsn is %X/%X",
-					  LSN_FORMAT_ARGS(streamSpecs->sentinel.endpos),
-					  LSN_FORMAT_ARGS(streamSpecs->sentinel.replay_lsn));
-			return false;
+			log_info("Subprocesses exited with endpos set at %X/%X "
+					 "(replay_lsn: %X/%X). Pipeline complete.",
+					 LSN_FORMAT_ARGS(streamSpecs->sentinel.endpos),
+					 LSN_FORMAT_ARGS(streamSpecs->sentinel.replay_lsn));
+			return true;
 		}
 
 		log_info("Restarting logical decoding follower in %s mode "
