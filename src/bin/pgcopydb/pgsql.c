@@ -4749,8 +4749,8 @@ pgsqlSendFeedback(LogicalStreamClient *client,
 			context->endpos != client->endpos)
 		{
 			client->endpos = context->endpos;
-			log_notice("endpos is now set to %X/%X",
-					   LSN_FORMAT_ARGS(client->endpos));
+			log_info("endpos is now set to %X/%X",
+					 LSN_FORMAT_ARGS(client->endpos));
 		}
 	}
 
