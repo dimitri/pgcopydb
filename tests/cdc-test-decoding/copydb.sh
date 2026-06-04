@@ -52,6 +52,14 @@ ls -la ${SHAREDIR}/
 DBFILE=$(ls ${SHAREDIR}/*.db | head -1)
 
 #
+# Validate SQL templates written by the transform step.
+#
+sqlite3 -init /dev/null -list -noheader ${DBFILE} \
+  "select s.sql from stmt s join replay r on r.stmt_hash = s.hash where r.action not in ('B','C','R','K','X','E') group by s.hash order by min(r.id)" \
+  > /tmp/stmt-actual.sql
+diff /usr/src/pgcopydb/stmt.sql /tmp/stmt-actual.sql
+
+#
 # Validate that the SQLite output and replay tables were populated.
 #
 sqlite3 ${DBFILE} <<'EOF'
@@ -71,13 +79,6 @@ pgcopydb stream catchup --resume --endpos "${lsn}" -vv
 
 # Applying again must be idempotent
 pgcopydb stream catchup --resume --endpos "${lsn}" -vv
-
-#
-# Verify that continued-transaction transform still works via the pipe mode
-# (stream transform still accepts explicit json→sql file arguments).
-#
-pgcopydb stream transform --debug /usr/src/pgcopydb/continued-txn.json /tmp/continued-txn.sql
-diff /usr/src/pgcopydb/continued-txn.sql /tmp/continued-txn.sql || (cat /tmp/continued-txn.sql && exit 1)
 
 #
 # Row-count validation

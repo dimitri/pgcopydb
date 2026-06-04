@@ -1,0 +1,6 @@
+{"lsn":"0/1519348","message":"BEGIN 733"}
+{"lsn":"0/1519400","message":"table public.items: INSERT: id[bigint]:4 name[text]:'cdc-new-1'"}
+{"lsn":"0/1519500","message":"table public.items: INSERT: id[bigint]:5 name[text]:'cdc-new-2'"}
+{"lsn":"0/1519600","message":"table public.items: UPDATE: id[bigint]:1 name[text]:'seed-updated-1'"}
+{"lsn":"0/1519700","message":"table public.items: DELETE: id[bigint]:2"}
+{"lsn":"0/1519A60","message":"COMMIT 733"}

@@ -84,6 +84,8 @@ typedef struct CopyDBOptions
 	bool stdIn;
 	bool stdOut;
 
+	char fromFile[MAXPGPATH];  /* pgcopydb stream receive --from-file */
+
 	bool follow;
 	bool createSlot;
 

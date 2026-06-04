@@ -334,9 +334,6 @@ bool copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 											ReplicationSlot *slot,
 											char *cdcPathDir);
 
-bool snapshot_write_slot(const char *filename, ReplicationSlot *slot);
-bool snapshot_read_slot(const char *filename, ReplicationSlot *slot);
-
 /* extensions.c */
 bool copydb_start_extension_data_process(CopyDataSpec *specs,
 										 bool createExtensions);

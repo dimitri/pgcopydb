@@ -52,6 +52,7 @@ typedef struct InternalMessage
 {
 	StreamAction action;
 	uint64_t lsn;
+	uint32_t xid;              /* current transaction XID (0 for non-txn messages) */
 	uint64_t time;
 	char timeStr[BUFSIZE];
 } InternalMessage;
@@ -426,6 +427,28 @@ typedef struct StreamContext
 	FILE *sqlFile;
 
 	bool transactionInProgress;
+
+	/*
+	 * Output plugin identity, copied from specs->slot.plugin at context init.
+	 * Used by the transform step to dispatch DML messages to the correct
+	 * parser (parseTestDecodingMessage vs parseWal2jsonMessage) without
+	 * inspecting the JSON shape of each individual message.
+	 */
+	StreamOutputPlugin plugin;
+
+	/*
+	 * pgcopydb normalisation: the current transaction XID.
+	 *
+	 * test_decoding only stamps XID on BEGIN and COMMIT messages; DML rows
+	 * carry no XID.  pgoutput follows the same convention.  wal2json
+	 * includes "xid" on every message.
+	 *
+	 * To produce a uniform output table (matching wal2json behaviour and
+	 * making WHERE xid = $1 queries reliable for all plugins), we track the
+	 * XID from the BEGIN message and stamp it onto every DML message before
+	 * inserting into the SQLite output table.
+	 */
+	uint32_t currentXid;
 } StreamContext;
 
 
@@ -543,6 +566,7 @@ struct StreamSpecs
 
 	uint64_t startpos;
 	uint64_t endpos;
+	uint64_t maxReplayDBSize;   /* rotate replayDB file at this size (bytes) */
 	CopyDBSentinel sentinel;
 
 	LogicalStreamMode mode;
@@ -600,6 +624,7 @@ bool stream_init_context(StreamSpecs *specs);
 bool stream_init_timeline(StreamSpecs *specs, LogicalStreamClient *stream);
 
 bool startLogicalStreaming(StreamSpecs *specs);
+bool stream_receive_from_file(StreamSpecs *specs, const char *filename);
 bool streamCheckResumePosition(StreamSpecs *specs);
 
 bool streamWrite(LogicalStreamContext *context);
@@ -715,6 +740,9 @@ bool parseWal2jsonMessage(StreamContext *privateContext,
 
 /* ld_apply.c */
 bool stream_apply_catchup(StreamSpecs *specs);
+bool stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context);
+bool stream_apply_stdin(StreamSpecs *specs, StreamApplyContext *context);
+bool stream_apply_to_stdout(StreamSpecs *specs, FILE *out);
 
 bool stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context);
 

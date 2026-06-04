@@ -84,6 +84,17 @@ lsn2=$(psql -At -d "${PGCOPYDB_SOURCE_PGURI}" \
             -c 'select pg_current_wal_flush_lsn()')
 
 pgcopydb stream prefetch --resume --endpos "${lsn2}" --notice
+
+SHAREDIR=/var/lib/postgres/.local/share/pgcopydb
+DBFILE=$(ls ${SHAREDIR}/*.db | head -1)
+
+truncate_sql=$(sqlite3 -init /dev/null -list -noheader ${DBFILE} \
+  "select sql from stmt where sql like 'TRUNCATE ONLY%' limit 1")
+if [ "${truncate_sql}" != "TRUNCATE ONLY partitioned_target.events" ]; then
+    echo "FAIL: truncate stmt: got '${truncate_sql}'"
+    exit 1
+fi
+
 pgcopydb stream catchup --resume --endpos "${lsn2}" --notice
 
 pgcopydb stream cleanup

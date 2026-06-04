@@ -368,6 +368,7 @@ cli_create_snapshot(int argc, char **argv)
 			PGSQL *pgsql = &(snapshot->pgsql);
 
 			(void) pgsql_finish(pgsql);
+			(void) catalog_close_from_specs(&copySpecs);
 
 			log_info("Asked to terminate, aborting");
 

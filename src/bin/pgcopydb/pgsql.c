@@ -5350,10 +5350,44 @@ pgsql_current_wal_flush_lsn(PGSQL *pgsql, uint64_t *lsn)
 char *
 pgsql_escape_identifier(PGSQL *pgsql, char *src)
 {
-	PGconn *conn = pgsql->connection;
+	PGconn *conn = pgsql != NULL ? pgsql->connection : NULL;
+
+	/*
+	 * When there is no live connection (e.g. transform --target - in a
+	 * unit-test context) fall back to a simple local quoting: wrap the
+	 * identifier in double quotes and escape any embedded double quotes by
+	 * doubling them.  This is correct for ASCII identifiers; for non-ASCII
+	 * identifiers the server-side PQescapeIdentifier is preferred because it
+	 * knows the connection encoding.
+	 */
 	if (conn == NULL)
 	{
-		return NULL;
+		size_t srclen = strlen(src);
+
+		/* worst case: every char is a double-quote → 2×srclen, plus 2 outer quotes + NUL */
+		char *local = (char *) malloc(2 * srclen + 3);
+
+		if (local == NULL)
+		{
+			log_error("Failed to allocate memory for local identifier escape of %s",
+					  src);
+			return NULL;
+		}
+
+		char *p = local;
+		*p++ = '"';
+		for (size_t i = 0; i < srclen; i++)
+		{
+			if (src[i] == '"')
+			{
+				*p++ = '"';  /* double any embedded double-quote */
+			}
+			*p++ = src[i];
+		}
+		*p++ = '"';
+		*p = '\0';
+
+		return local;
 	}
 
 	char *escapedIdentifier = PQescapeIdentifier(conn, src, strlen(src));

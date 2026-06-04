@@ -369,10 +369,6 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths,
 			"%s/origin",
 			cfPaths->cdc.dir);
 
-	sformat(cfPaths->cdc.slotfile, MAXPGPATH,
-			"%s/slot",
-			cfPaths->cdc.dir);
-
 	sformat(cfPaths->cdc.tlifile, MAXPGPATH,
 			"%s/tli",
 			cfPaths->cdc.dir);

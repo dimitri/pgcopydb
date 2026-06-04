@@ -18,6 +18,7 @@
 #include "commandline.h"
 #include "copydb.h"
 #include "env_utils.h"
+#include "ld_store.h"
 #include "ld_stream.h"
 #include "log.h"
 #include "pgcmd.h"
@@ -31,6 +32,7 @@ CopyDBOptions streamDBoptions = { 0 };
 
 static int cli_stream_getopts(int argc, char **argv);
 
+static void cli_stream_init(int argc, char **argv);
 static void cli_stream_receive(int argc, char **argv);
 static void cli_stream_transform(int argc, char **argv);
 static void cli_stream_apply(int argc, char **argv);
@@ -128,6 +130,21 @@ static CommandLine stream_replay_command =
 		cli_stream_getopts,
 		cli_stream_replay);
 
+static CommandLine stream_init_command =
+	make_command(
+		"init",
+		"Initialise the pgcopydb streaming work directory and SQLite catalogs",
+		"",
+		"  --source         Postgres URI to the source database\n"
+		"  --dir            Work directory to use\n"
+		"  --restart        Allow restarting when temp files exist already\n"
+		"  --resume         Allow resuming operations after a failure\n"
+		"  --slot-name      Replication slot name\n"
+		"  --plugin         Logical decoding output plugin (test_decoding or wal2json)\n"
+		"  --endpos         LSN position where to stop receiving changes",
+		cli_stream_getopts,
+		cli_stream_init);
+
 static CommandLine stream_receive_command =
 	make_command(
 		"receive",
@@ -136,6 +153,8 @@ static CommandLine stream_receive_command =
 		"  --source         Postgres URI to the source database\n"
 		"  --dir            Work directory to use\n"
 		"  --to-stdout      Stream logical decoding messages to stdout\n"
+		"  --from-file      Read CDC messages from a JSON-lines file instead of\n"
+		"                   a live replication connection\n"
 		"  --restart        Allow restarting when temp files exist already\n"
 		"  --resume         Allow resuming operations after a failure\n"
 		"  --not-consistent Allow taking a new snapshot on the source database\n"
@@ -147,22 +166,24 @@ static CommandLine stream_receive_command =
 static CommandLine stream_transform_command =
 	make_command(
 		"transform",
-		"Transform changes from the source database into SQL commands",
-		" <json filename> <sql filename> ",
-		"  --target         Postgres URI to the target database\n"
+		"Transform CDC messages from the replayDB output table into SQL",
+		"",
+		"  --source         Postgres URI to the source database\n"
 		"  --dir            Work directory to use\n"
 		"  --restart        Allow restarting when temp files exist already\n"
 		"  --resume         Allow resuming operations after a failure\n"
-		"  --not-consistent Allow taking a new snapshot on the source database\n",
+		"  --not-consistent Allow taking a new snapshot on the source database\n"
+		"  --endpos         LSN position where to stop transforming\n",
 		cli_stream_getopts,
 		cli_stream_transform);
 
 static CommandLine stream_apply_command =
 	make_command(
 		"apply",
-		"Apply changes from the source database into the target database",
-		" <sql filename> ",
+		"Apply changes from the replayDB to the target database, or stdout",
+		"",
 		"  --target         Postgres URI to the target database\n"
+		"                   Use '-' to emit SQL to stdout without connecting\n"
 		"  --dir            Work directory to use\n"
 		"  --restart        Allow restarting when temp files exist already\n"
 		"  --resume         Allow resuming operations after a failure\n"
@@ -173,6 +194,7 @@ static CommandLine stream_apply_command =
 
 
 static CommandLine *stream_subcommands[] = {
+	&stream_init_command,
 	&stream_setup_command,
 	&stream_cleanup_command,
 	&stream_prefetch_command,
@@ -216,6 +238,7 @@ cli_stream_getopts(int argc, char **argv)
 		{ "not-consistent", no_argument, NULL, 'C' },
 		{ "to-stdout", no_argument, NULL, 'O' },
 		{ "from-stdin", no_argument, NULL, 'I' },
+		{ "from-file", required_argument, NULL, 'f' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "notice", no_argument, NULL, 'v' },
@@ -235,7 +258,7 @@ cli_stream_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:D:p:ws:N:o:E:rRCOIVvdzqh",
+	while ((c = getopt_long(argc, argv, "S:T:D:p:ws:N:o:E:rRCOIf:Vvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -255,7 +278,8 @@ cli_stream_getopts(int argc, char **argv)
 
 			case 'T':
 			{
-				if (!validate_connection_string(optarg))
+				/* "-" means emit SQL to stdout — not a real connection string */
+				if (!streq(optarg, "-") && !validate_connection_string(optarg))
 				{
 					log_fatal("Failed to parse --target connection string, "
 							  "see above for details.");
@@ -361,6 +385,13 @@ cli_stream_getopts(int argc, char **argv)
 				break;
 			}
 
+			case 'f':
+			{
+				strlcpy(options.fromFile, optarg, sizeof(options.fromFile));
+				log_trace("--from-file %s", options.fromFile);
+				break;
+			}
+
 			case 'C':
 			{
 				options.notConsistent = true;
@@ -444,10 +475,23 @@ cli_stream_getopts(int argc, char **argv)
 		}
 	}
 
-	if (options.connStrings.source_pguri == NULL ||
-		options.connStrings.target_pguri == NULL)
+	/*
+	 * --target is optional for commands that do not connect to a target
+	 * database: stream init, stream receive --from-file, stream transform
+	 * --target -, and stream apply --target -.  Only enforce --source when a
+	 * real target URI (not the stdout sentinel "-") was provided.
+	 */
+	bool hasRealTarget =
+		options.connStrings.target_pguri != NULL &&
+		!streq(options.connStrings.target_pguri, "-");
+
+	if (options.connStrings.source_pguri == NULL && !hasRealTarget)
 	{
-		log_fatal("Options --source and --target are mandatory");
+		/* Both absent (or target is "-") — acceptable for fixture sub-commands. */
+	}
+	else if (options.connStrings.source_pguri == NULL)
+	{
+		log_fatal("Option --source is mandatory");
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
@@ -486,13 +530,96 @@ cli_stream_getopts(int argc, char **argv)
 
 
 /*
+ * cli_stream_init initialises the pgcopydb streaming work directory and
+ * SQLite catalogs.  It fetches just enough schema metadata from the source
+ * Postgres (table list + column attributes) so that subsequent transform and
+ * apply commands can operate without a live database connection.
+ *
+ * This is the streaming equivalent of "pgcopydb ping": a lightweight preflight
+ * tool useful for debugging and for populating the infrastructure needed by
+ * the lower-level unit-test commands (stream receive --from-file, stream
+ * transform, stream apply).
+ */
+static void
+cli_stream_init(int argc, char **argv)
+{
+	if (argc > 0)
+	{
+		commandline_help(stderr);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) find_pg_commands(&(copySpecs.pgPaths));
+
+	bool createWorkDir = true;
+
+	if (!copydb_init_workdir(&copySpecs,
+							 streamDBoptions.dir,
+							 false,  /* not a service */
+							 NULL,
+							 streamDBoptions.restart,
+							 streamDBoptions.resume,
+							 createWorkDir))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!copydb_init_specs(&copySpecs, &streamDBoptions, DATA_SECTION_NONE))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/*
+	 * Open (and create if necessary) the source SQLite catalog and the
+	 * replayDB.  This gives other stream commands a valid on-disk schema to
+	 * work against even before any live Postgres connection is made.
+	 */
+	if (!catalog_init_from_specs(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/*
+	 * Fetch table + column metadata from the source Postgres so that the
+	 * transform step can look up attisprimary / attisreplident for UPDATE
+	 * WHERE-clause construction.
+	 *
+	 * This is the same query that "pgcopydb clone" runs as its first step,
+	 * but here we stop right after the schema fetch.
+	 */
+	if (copySpecs.connStrings.source_pguri != NULL)
+	{
+		if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		log_info("Source schema cached into \"%s\"",
+				 copySpecs.catalogs.source.dbfile);
+	}
+	else
+	{
+		log_info("No --source given; work directory initialised without "
+				 "schema metadata.  Use --source or load a fixture with "
+				 "sqlite3 to populate the source catalog.");
+	}
+}
+
+
+/*
  * cli_stream_receive connects to the source database with the replication
  * protocol and streams changes associated with the replication slot
  * --slot-name.
  *
- * The replication slot is expected to use the wal2json replication plugin and
- * we store the received changes in JSON files named the same way as WAL files,
- * though with the ".json" suffix.
+ * When --from-file is given, no live Postgres connection is made; instead the
+ * named JSON-lines file is replayed through the same streamWrite() path,
+ * populating the replayDB output table.
  */
 static void
 cli_stream_receive(int argc, char **argv)
@@ -501,6 +628,86 @@ cli_stream_receive(int argc, char **argv)
 	{
 		commandline_help(stderr);
 		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	if (!IS_EMPTY_STRING_BUFFER(streamDBoptions.fromFile))
+	{
+		/* file-based receive: no live PG connection needed */
+		CopyDataSpec copySpecs = { 0 };
+
+		(void) find_pg_commands(&(copySpecs.pgPaths));
+
+		bool createWorkDir = false;
+
+		if (!copydb_init_workdir(&copySpecs,
+								 streamDBoptions.dir,
+								 false, /* not a service */
+								 NULL,
+								 streamDBoptions.restart,
+								 true,  /* resume */
+								 createWorkDir))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		if (!copydb_init_specs(&copySpecs, &streamDBoptions, DATA_SECTION_NONE))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		bool logSQL = log_get_level() <= LOG_TRACE;
+
+		StreamSpecs specs = { 0 };
+
+		if (!stream_init_specs(&specs,
+							   &(copySpecs.cfPaths.cdc),
+							   &(copySpecs.connStrings),
+							   &(streamDBoptions.slot),
+							   streamDBoptions.origin,
+							   streamDBoptions.endpos,
+							   STREAM_MODE_PREFETCH,
+							   &(copySpecs.catalogs.source),
+							   &(copySpecs.catalogs.replay),
+							   false, /* stdIn */
+							   false, /* stdOut */
+							   logSQL))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		/*
+		 * For --from-file the source catalog must be open (stream_init does
+		 * that in a separate process).  Open it here read-write.
+		 */
+		if (!catalog_open(specs.sourceDB))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		/*
+		 * Set default timeline (1) so ld_store_open_replaydb can compute the
+		 * replayDB filename.  A live receive gets this from IDENTIFY_SYSTEM;
+		 * for fixture injection we use the default timeline 1.
+		 */
+		specs.private.timeline = 1;
+
+		if (!ld_store_open_replaydb(&specs))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		if (!stream_receive_from_file(&specs, streamDBoptions.fromFile))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		return;
 	}
 
 	(void) stream_start_in_mode(STREAM_MODE_RECEIVE);
@@ -839,47 +1046,291 @@ cli_stream_replay(int argc, char **argv)
 
 
 /*
- * cli_stream_transform takes a logical decoding JSON file as obtained by the
- * previous command `pgcopydb stream receive` and transforms it into an SQL
- * file.
+ * cli_stream_transform reads the replayDB output table and transforms it into
+ * the stmt + replay tables (SQLite → SQLite).  It is silent: no SQL is written
+ * to stdout.
+ *
+ * The legacy two-argument form `stream transform - -` (stdin → stdout pipe)
+ * is kept for backward compatibility with the `stream receive | transform |
+ * apply` pipeline.
  */
 static void
 cli_stream_transform(int argc, char **argv)
 {
 	CopyDataSpec copySpecs = { 0 };
 
-	if (argc != 2)
-	{
-		log_fatal("Please provide a filename argument");
-		commandline_help(stderr);
-
-		exit(EXIT_CODE_BAD_ARGS);
-	}
-
-	char *jsonfilename = argv[0];
-	char *sqlfilename = argv[1];
-
 	(void) find_pg_commands(&(copySpecs.pgPaths));
 
 	/*
-	 * The command `pgcopydb stream transform` can be used with filenames, in
-	 * which case it is not a service, or with the JSON file connected to the
-	 * stdin stream (using '-' as the jsonfilename), in which case the command
-	 * is a service.
-	 *
-	 * Finally, always assume --resume has been used so that we can re-use an
-	 * existing work directory when it exists.
+	 * Legacy pipe mode: `pgcopydb stream transform - -`
+	 * Kept for backward compatibility; reads JSON from stdin, writes SQL to
+	 * stdout.
+	 */
+	if (argc == 2 && streq(argv[0], "-") && streq(argv[1], "-"))
+	{
+		bool createWorkDir = false;
+
+		if (!copydb_init_workdir(&copySpecs,
+								 streamDBoptions.dir,
+								 true,  /* service */
+								 "transform",
+								 streamDBoptions.restart,
+								 true,  /* resume */
+								 createWorkDir))
+		{
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		if (!copydb_init_specs(&copySpecs, &streamDBoptions, DATA_SECTION_NONE))
+		{
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		bool logSQL = log_get_level() <= LOG_TRACE;
+
+		StreamSpecs specs = { 0 };
+
+		if (!stream_init_specs(&specs,
+							   &(copySpecs.cfPaths.cdc),
+							   &(copySpecs.connStrings),
+							   &(streamDBoptions.slot),
+							   streamDBoptions.origin,
+							   streamDBoptions.endpos,
+							   STREAM_MODE_CATCHUP,
+							   &(copySpecs.catalogs.source),
+							   &(copySpecs.catalogs.replay),
+							   true,    /* stdIn */
+							   true,    /* stdOut */
+							   logSQL))
+		{
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		specs.in = stdin;
+		specs.out = stdout;
+
+		if (!stream_init_context(&specs))
+		{
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		if (!stream_transform_stream(&specs))
+		{
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		return;
+	}
+
+	if (argc != 0)
+	{
+		commandline_help(stderr);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	/*
+	 * SQLite path: read the replayDB output table, write stmt + replay tables.
+	 * No SQL is written to stdout.  Requires the work directory and replayDB
+	 * to already exist (run `pgcopydb stream init` and
+	 * `pgcopydb stream receive --from-file` first).
 	 */
 	bool createWorkDir = false;
-	bool service = streq(jsonfilename, "-");
-	char *serviceName = "transform";
 
 	if (!copydb_init_workdir(&copySpecs,
 							 streamDBoptions.dir,
-							 service,
-							 serviceName,
+							 false, /* not a service */
+							 NULL,
 							 streamDBoptions.restart,
-							 true, /* streamDBoptions.resume */
+							 true,  /* resume */
+							 createWorkDir))
+	{
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!copydb_init_specs(&copySpecs, &streamDBoptions, DATA_SECTION_NONE))
+	{
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	bool logSQL = log_get_level() <= LOG_TRACE;
+
+	StreamSpecs specs = { 0 };
+
+	if (!stream_init_specs(&specs,
+						   &(copySpecs.cfPaths.cdc),
+						   &(copySpecs.connStrings),
+						   &(streamDBoptions.slot),
+						   streamDBoptions.origin,
+						   streamDBoptions.endpos,
+						   STREAM_MODE_PREFETCH,
+						   &(copySpecs.catalogs.source),
+						   &(copySpecs.catalogs.replay),
+						   false, /* stdIn */
+						   false, /* stdOut */
+						   logSQL))
+	{
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!catalog_open(specs.sourceDB))
+	{
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/*
+	 * The replayDB filename is stored in the sourceDB cdc_files table.
+	 * Look it up before trying to open the replayDB.
+	 */
+	if (!ld_store_set_current_cdc_filename(&specs))
+	{
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!catalog_open(specs.replayDB))
+	{
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!stream_init_context(&specs))
+	{
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/*
+	 * Ensure the sentinel row exists.  The live streaming path creates it via
+	 * startLogicalStreaming; the standalone transform path must seed it here so
+	 * sentinel_sync_transform can update it after each COMMIT.
+	 */
+	if (!sentinel_setup(specs.sourceDB, specs.startpos, specs.endpos))
+	{
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!stream_transform_context_init(&specs))
+	{
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!stream_transform_cdc_file(&specs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	pgsql_finish(&(specs.transformPGSQL));
+
+	(void) catalog_close(specs.sourceDB);
+}
+
+
+/*
+ * cli_stream_apply reads the replayDB stmt + replay tables and either:
+ *
+ *   - applies the SQL to the target Postgres (when --target is given), or
+ *   - writes the SQL to stdout without a database connection (when --target
+ *     is absent or set to '-'), mimicking pg_restore --no-target behaviour.
+ *
+ * The legacy `apply -` form (read SQL from stdin, apply to Postgres) is kept
+ * for backward compatibility with the receive | transform | apply pipeline.
+ */
+static void
+cli_stream_apply(int argc, char **argv)
+{
+	/*
+	 * Legacy pipe mode: `pgcopydb stream apply -`
+	 *
+	 * Reads SQL text from stdin (output of `pgcopydb stream transform - -`)
+	 * and applies it to the target database line by line.  Kept for backward
+	 * compatibility with the receive | transform | apply Unix-pipe pipeline.
+	 */
+	if (argc == 1 && streq(argv[0], "-"))
+	{
+		CopyDataSpec copySpecs = { 0 };
+
+		(void) find_pg_commands(&(copySpecs.pgPaths));
+
+		bool createWorkDir = false;
+
+		if (!copydb_init_workdir(&copySpecs,
+								 streamDBoptions.dir,
+								 false,
+								 NULL,
+								 streamDBoptions.restart,
+								 true, /* resume */
+								 createWorkDir))
+		{
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		if (!copydb_init_specs(&copySpecs, &streamDBoptions, DATA_SECTION_NONE))
+		{
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		bool logSQL = log_get_level() <= LOG_TRACE;
+
+		StreamSpecs specs = { 0 };
+
+		if (!stream_init_specs(&specs,
+							   &(copySpecs.cfPaths.cdc),
+							   &(copySpecs.connStrings),
+							   &(streamDBoptions.slot),
+							   streamDBoptions.origin,
+							   streamDBoptions.endpos,
+							   STREAM_MODE_CATCHUP,
+							   &(copySpecs.catalogs.source),
+							   &(copySpecs.catalogs.replay),
+							   true,   /* stdIn */
+							   false,  /* stdOut */
+							   logSQL))
+		{
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		specs.in = stdin;
+
+		if (!stream_init_context(&specs))
+		{
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		StreamApplyContext context = { 0 };
+
+		if (!stream_apply_setup(&specs, &context))
+		{
+			log_error("Failed to setup apply context for stdin mode");
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		if (!stream_apply_stdin(&specs, &context))
+		{
+			/* errors have already been logged */
+			(void) stream_apply_cleanup(&context);
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		(void) stream_apply_cleanup(&context);
+		return;
+	}
+
+	if (argc > 0)
+	{
+		commandline_help(stderr);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) find_pg_commands(&(copySpecs.pgPaths));
+
+	bool createWorkDir = false;
+
+	if (!copydb_init_workdir(&copySpecs,
+							 streamDBoptions.dir,
+							 false, /* not a service */
+							 NULL,
+							 streamDBoptions.restart,
+							 true,  /* resume */
 							 createWorkDir))
 	{
 		/* errors have already been logged */
@@ -892,12 +1343,18 @@ cli_stream_transform(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	/*
-	 * Refrain from logging SQL statements in the apply module, because they
-	 * contain user data. That said, when --trace has been used, bypass that
-	 * privacy feature.
-	 */
 	bool logSQL = log_get_level() <= LOG_TRACE;
+
+	/*
+	 * Stdout mode: --target is absent or explicitly set to "-".
+	 * Read stmt + replay tables from the replayDB and emit SQL to stdout.
+	 * No Postgres connection is opened.  "--target -" is needed when
+	 * PGCOPYDB_TARGET_PGURI is set in the environment but the caller
+	 * still wants stdout output (e.g. unit tests).
+	 */
+	bool stdoutMode =
+		copySpecs.connStrings.target_pguri == NULL ||
+		streq(copySpecs.connStrings.target_pguri, "-");
 
 	StreamSpecs specs = { 0 };
 
@@ -910,9 +1367,30 @@ cli_stream_transform(int argc, char **argv)
 						   STREAM_MODE_CATCHUP,
 						   &(copySpecs.catalogs.source),
 						   &(copySpecs.catalogs.replay),
-						   streamDBoptions.stdIn,
-						   streamDBoptions.stdOut,
+						   false, /* stdIn */
+						   stdoutMode, /* stdOut */
 						   logSQL))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!catalog_open(specs.sourceDB))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/*
+	 * The replayDB filename is stored in the sourceDB cdc_files table.
+	 * Look it up before trying to open the replayDB.
+	 */
+	if (!ld_store_set_current_cdc_filename(&specs))
+	{
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!catalog_open(specs.replayDB))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -920,187 +1398,35 @@ cli_stream_transform(int argc, char **argv)
 
 	if (!stream_init_context(&specs))
 	{
-		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	/*
-	 * Do we use the file API, or the stream API?
-	 *
-	 * The filename arguments can be set to - to mean stdin and stdout
-	 * respectively, and in that case we use the streaming API so that we're
-	 * compatible with Unix pipes.
-	 *
-	 * When the input is a stream, even if the output is a file, we still use
-	 * the streaming API, we just open the output stream here before calling
-	 * into the stream API.
-	 */
-	if (streq(jsonfilename, "-"))
+	if (stdoutMode)
 	{
-		specs.in = stdin;
-		specs.out = stdout;
-
-		if (!streq(sqlfilename, "-"))
-		{
-			log_fatal("JSON filename is - (stdin), "
-					  "SQL filename should be - (stdout)");
-			log_fatal("When streaming from stdin, out filename is computed "
-					  "automatically from the current LSN.");
-			exit(EXIT_CODE_BAD_ARGS);
-		}
-
-		if (!stream_transform_stream(&specs))
+		if (!stream_apply_to_stdout(&specs, stdout))
 		{
 			/* errors have already been logged */
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
-
-		if (fclose(specs.out) != 0)
-		{
-			log_error("Failed to close file \"%s\": %m", sqlfilename);
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 	}
 	else
 	{
-		if (!catalog_open(specs.sourceDB))
+		StreamApplyContext context = { 0 };
+
+		if (!stream_apply_setup(&specs, &context))
 		{
+			log_error("Failed to setup apply context");
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 
-		if (!stream_transform_context_init(&specs))
-		{
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
+		bool success = stream_apply_replaydb(&specs, &context);
 
-		bool success = stream_transform_file(&specs, jsonfilename, sqlfilename);
-
-		pgsql_finish(&(specs.transformPGSQL));
-
-		if (!catalog_close(specs.sourceDB))
-		{
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
+		(void) stream_apply_cleanup(&context);
 
 		if (!success)
 		{
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
-	}
-}
-
-
-/*
- * cli_stream_apply takes a SQL file as obtained by the previous command
- * `pgcopydb stream transform` and applies it to the target database.
- */
-static void
-cli_stream_apply(int argc, char **argv)
-{
-	CopyDataSpec copySpecs = { 0 };
-
-	if (argc != 1)
-	{
-		log_fatal("Please provide a filename argument");
-		commandline_help(stderr);
-
-		exit(EXIT_CODE_BAD_ARGS);
-	}
-
-	(void) find_pg_commands(&(copySpecs.pgPaths));
-
-	char *sqlfilename = argv[0];
-
-	/*
-	 * The command `pgcopydb stream apply` can be used with a filename, in
-	 * which case it is not a service, or with the SQL file connected to the
-	 * stdin stream (using '-' as the filename), in which case the command is a
-	 * service.
-	 *
-	 * Then, both the catchup and the replay command starts the "apply"
-	 * service, so that they conflict with each other.
-	 *
-	 * Finally, always assume --resume has been used so that we can re-use an
-	 * existing work directory when it exists.
-	 */
-	bool createWorkDir = false;
-	bool service = streq(sqlfilename, "-");
-	char *serviceName = "apply";
-
-	if (!copydb_init_workdir(&copySpecs,
-							 streamDBoptions.dir,
-							 service,
-							 serviceName,
-							 streamDBoptions.restart,
-							 true, /* streamDBoptions.resume */
-							 createWorkDir))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	if (!copydb_init_specs(&copySpecs, &streamDBoptions, DATA_SECTION_NONE))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	/*
-	 * Refrain from logging SQL statements in the apply module, because they
-	 * contain user data. That said, when --trace has been used, bypass that
-	 * privacy feature.
-	 */
-	bool logSQL = log_get_level() <= LOG_TRACE;
-
-	/*
-	 * Force the SQL filename to the given argument, bypassing filename
-	 * computations based on origin tracking. Already known-applied
-	 * transactions are still skipped.
-	 *
-	 * The filename arguments can be set to - to mean stdin, and in that case
-	 * we use the streaming API so that we're compatible with Unix pipes.
-	 */
-	if (streq(sqlfilename, "-"))
-	{
-		StreamSpecs specs = { 0 };
-
-		if (!stream_init_specs(&specs,
-							   &(copySpecs.cfPaths.cdc),
-							   &(copySpecs.connStrings),
-							   &(streamDBoptions.slot),
-							   streamDBoptions.origin,
-							   streamDBoptions.endpos,
-							   STREAM_MODE_CATCHUP,
-							   &(copySpecs.catalogs.source),
-							   &(copySpecs.catalogs.replay),
-							   true, /* streamDBoptions.stdIn */
-							   false, /* streamDBoptions.stdOut */
-							   logSQL))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
-
-		specs.in = stdin;
-
-		if (!stream_apply_replay(&specs))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
-	}
-	else
-	{
-		/*
-		 * Applying a named .sql file directly is no longer supported: the
-		 * SQLite-based CDC pipeline stores all transformed statements in the
-		 * replayDB and does not produce individual .sql files.
-		 *
-		 * Use "pgcopydb stream catchup" to apply changes from the replayDB.
-		 */
-		log_error("pgcopydb stream apply <file> is not supported in the "
-				  "SQLite CDC pipeline; use pgcopydb stream catchup instead");
-		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 }
 

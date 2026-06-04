@@ -87,6 +87,12 @@ static bool stream_write_delete(ReplayDBStmt *replayStmt,
 static bool stream_write_truncate(ReplayDBStmt *replayStmt,
 								  LogicalMessageTruncate *truncate);
 
+static bool stream_write_file_txn(FILE *out, LogicalTransaction *txn);
+
+static bool stream_write_file_message(FILE *out,
+									   LogicalMessage *msg,
+									   LogicalMessageMetadata *metadata);
+
 
 /*
  * stream_transform_messages loops over the CDC files and transform messages in
@@ -150,6 +156,27 @@ stream_transform_messages(StreamSpecs *specs)
 			}
 		}
 
+		/*
+		 * Propagate sentinel.endpos → privateContext->endpos in follow/catchup
+		 * mode when --endpos was not given on the command line.
+		 *
+		 * In prefetch mode (or any mode with an explicit --endpos flag),
+		 * privateContext->endpos is already set from specs->endpos and must
+		 * NOT be overwritten here.  The sentinel.endpos may still hold a
+		 * stale value from a previous prefetch phase (e.g. lsn1 while the
+		 * current phase is running to lsn2); overwriting would cause the
+		 * transform to exit too early.
+		 *
+		 * In follow/catchup mode without --endpos, privateContext->endpos
+		 * starts as InvalidXLogRecPtr and must be kept in sync with the
+		 * sentinel table so the outer while-condition can eventually exit.
+		 */
+		if (privateContext->endpos == InvalidXLogRecPtr &&
+			sentinel->endpos != InvalidXLogRecPtr)
+		{
+			privateContext->endpos = sentinel->endpos;
+		}
+
 		/* allow some time for the files and content to be created */
 		pg_usleep(1500 * 1000); /* 1.5s */
 	}
@@ -175,21 +202,32 @@ stream_transform_context_init(StreamSpecs *specs)
 {
 	StreamContext *privateContext = &(specs->private);
 
+	/* record which output plugin we are transforming — used for dispatch */
+	privateContext->plugin = specs->slot.plugin;
+
 	privateContext->transformPGSQL = &(specs->transformPGSQL);
 
-	/* initialize our connection to the target database */
-	if (!pgsql_init(privateContext->transformPGSQL,
-					specs->connStrings->target_pguri,
-					PGSQL_CONN_TARGET))
-	{
-		/* errors have already been logged */
-		return false;
-	}
+	/*
+	 * Initialize and open the connection to the target database.  When the
+	 * target URI is "-" (stdout sentinel) or absent there is no target
+	 * connection; pgsql_escape_identifier handles the NULL-connection case
+	 * with a local quoting fallback.
+	 */
+	const char *tpguri = specs->connStrings->target_pguri;
 
-	if (!pgsql_open_connection(privateContext->transformPGSQL))
+	if (tpguri != NULL && !streq(tpguri, "-"))
 	{
-		/* errors have already been logged */
-		return false;
+		if (!pgsql_init(privateContext->transformPGSQL, tpguri, PGSQL_CONN_TARGET))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!pgsql_open_connection(privateContext->transformPGSQL))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	/*
@@ -283,14 +321,75 @@ stream_transform_cdc_file_hook(StreamSpecs *specs,
 		return false;
 	}
 
+	DatabaseCatalog *sourceDB = specs->sourceDB;
+
+	/*
+	 * For ENDPOS messages: check whether this is the current endpos boundary
+	 * BEFORE writing anything to the replay table.
+	 *
+	 * The ENDPOS row is inserted at cur_record_lsn >= sentinel.endpos, so a
+	 * "current" ENDPOS satisfies sentinel.endpos <= output->lsn.
+	 *
+	 * If we write a "current endpos" ENDPOS to the replay table, it becomes a
+	 * KEEPALIVE row.  The apply process would then commit a KEEPALIVE
+	 * transaction that advances the replication origin to the endpos LSN
+	 * (asynchronously, because synchronous_commit=off is set session-wide).
+	 * If the follow step queries the replication origin before that async
+	 * COMMIT is WAL-flushed, it sees the old origin value and re-applies
+	 * transactions that were already committed — causing primary-key
+	 * violations and silent rollbacks.
+	 *
+	 * The correct behaviour matches what the old synthetic-ROLLBACK code
+	 * achieved indirectly: after applying real transactions, the apply sees no
+	 * more replay rows and exits via the "Apply caught up with replayDB" path,
+	 * leaving the replication origin at the last real transaction's commit LSN.
+	 * The follow step then correctly identifies already-applied transactions
+	 * and skips them.
+	 *
+	 * A "superseded" ENDPOS (output->lsn < sentinel.endpos, from an earlier
+	 * run with a smaller endpos) is handled in the switch below: it is written
+	 * to replay normally and its transform_lsn is advanced by +1 to skip it.
+	 */
+	if (output->action == STREAM_ACTION_ENDPOS)
+	{
+		if (!sentinel_sync_transform(sourceDB,
+									 privateContext->transform_lsn,
+									 sentinel))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (sentinel->endpos != InvalidXLogRecPtr &&
+			sentinel->endpos <= output->lsn)
+		{
+			uint64_t transform_lsn = output->lsn;
+
+			privateContext->transform_lsn = transform_lsn;
+
+			if (!sentinel_sync_transform(sourceDB, transform_lsn, sentinel))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			*stop = true;
+
+			log_info("Transform process reached ENDPOS %X/%X",
+					 LSN_FORMAT_ARGS(output->lsn));
+
+			return true;
+		}
+
+		/* superseded ENDPOS: fall through to write it to replay */
+	}
+
 	/* insert the message into the SQLite replayDB (stmt, replay) */
 	if (!stream_transform_write_transaction(specs))
 	{
 		/* errors have already been logged */
 		return false;
 	}
-
-	DatabaseCatalog *sourceDB = specs->sourceDB;
 
 	/* make internal note of the progress */
 	uint64_t transform_lsn = privateContext->transform_lsn = output->lsn;
@@ -321,25 +420,41 @@ stream_transform_cdc_file_hook(StreamSpecs *specs,
 			break;
 		}
 
-		/* at ENDPOS check that it's the current sentinel value and exit */
+		/*
+		 * ENDPOS: the current-endpos case was already handled before
+		 * stream_transform_write_transaction was called (see the early-return
+		 * block above the switch).  We only reach here for a SUPERSEDED ENDPOS
+		 * — one whose lsn is below the current sentinel endpos, written by an
+		 * earlier run with a smaller endpos value.
+		 *
+		 * If we leave transform_lsn unchanged the next call to
+		 * ld_store_lookup_output_after_lsn(lsn) would return this same ENDPOS
+		 * row again (it has the smallest id at or after transform_lsn), causing
+		 * an infinite loop.
+		 *
+		 * Advance transform_lsn by one byte so the next output-table lookup
+		 * uses lsn >= transform_lsn+1, skipping the stale marker and finding
+		 * the fresh messages written by the current prefetch.  The +1 is a
+		 * virtual cursor — it need not correspond to a real WAL record; on
+		 * restart the transform will re-encounter and idempotently skip the
+		 * ENDPOS row again.
+		 */
 		case STREAM_ACTION_ENDPOS:
 		{
+			++transform_lsn;
+			privateContext->transform_lsn = transform_lsn;
+
 			if (!sentinel_sync_transform(sourceDB, transform_lsn, sentinel))
 			{
 				/* errors have already been logged */
 				return false;
 			}
 
-			if (sentinel->endpos != InvalidXLogRecPtr &&
-				sentinel->endpos <= transform_lsn)
-			{
-				*stop = true;
+			*stop = true;
 
-				log_info("Transform process reached ENDPOS %X/%X",
-						 LSN_FORMAT_ARGS(output->lsn));
-
-				return true;
-			}
+			log_debug("Transform skipped superseded ENDPOS, "
+					  "advanced transform_lsn to %X/%X",
+					  LSN_FORMAT_ARGS(transform_lsn));
 
 			break;
 		}
@@ -352,10 +467,25 @@ stream_transform_cdc_file_hook(StreamSpecs *specs,
 		}
 	}
 
-	/* we could reach the endpos on any message, not just ENDPOS */
+	/*
+	 * We could reach the endpos on any message, not just ENDPOS.  When that
+	 * happens we must sync the sentinel so that stream_transform_cdc_file's
+	 * outer sentinel check (which reads transform_lsn back from the DB) sees
+	 * the updated value and can exit its polling loop.
+	 *
+	 * Without this sync, DML messages whose LSN equals the endpos would set
+	 * *stop = true but leave sentinel.transform_lsn unchanged, causing
+	 * stream_transform_cdc_file to keep polling forever.
+	 */
 	if (sentinel->endpos != InvalidXLogRecPtr &&
 		sentinel->endpos <= transform_lsn)
 	{
+		if (!sentinel_sync_transform(sourceDB, transform_lsn, sentinel))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
 		*stop = true;
 
 		log_info("Transform reached end position %X/%X at %X/%X",
@@ -646,6 +776,20 @@ stream_transform_resume(StreamSpecs *specs)
 		log_warn("Sentinel endpos is %X/%X, overriden by --endpos %X/%X",
 				 LSN_FORMAT_ARGS(sentinel->endpos),
 				 LSN_FORMAT_ARGS(specs->endpos));
+
+		/*
+		 * Persist the overridden endpos to the sentinel table so that
+		 * stream_transform_cdc_file's exit condition (which re-reads the
+		 * sentinel via sentinel_get) sees the correct value and can stop the
+		 * polling loop.  The receive path does the same at startup.
+		 */
+		if (!sentinel_update_endpos(specs->sourceDB, specs->endpos))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		sentinel->endpos = specs->endpos;
 	}
 
 	if (specs->endpos != InvalidXLogRecPtr)
@@ -770,6 +914,242 @@ stream_transform_line(void *ctx, const char *line, bool *stop)
 
 
 /*
+ * stream_write_file_txn writes a completed LogicalTransaction to an already-
+ * open SQL FILE in the PREPARE/EXECUTE format used by the file-based
+ * `pgcopydb stream transform <json> <sql>` command.
+ *
+ * This restores the SQL-file output capability that was present before the
+ * SQLite pipeline refactoring removed stream_write_message().
+ */
+static bool
+stream_write_file_txn(FILE *out, LogicalTransaction *txn)
+{
+#define FFORMAT(stream, fmt, ...) \
+	{ if (fformat(stream, fmt, __VA_ARGS__) == -1) { \
+		  log_error("Failed to write to stream: %m"); \
+		  return false; } \
+	}
+
+	/* write BEGIN only for non-continued, non-empty transactions */
+	bool sentBEGIN = false;
+
+	LogicalTransactionStatement *currentStmt = txn->first;
+
+	for (; currentStmt != NULL; currentStmt = currentStmt->next)
+	{
+		if (currentStmt->action == STREAM_ACTION_SWITCH ||
+			currentStmt->action == STREAM_ACTION_KEEPALIVE ||
+			currentStmt->action == STREAM_ACTION_ENDPOS)
+		{
+			/* skip internal messages embedded in the transaction */
+			continue;
+		}
+
+		if (!sentBEGIN && !txn->continued)
+		{
+			if (txn->commitLSN != InvalidXLogRecPtr)
+			{
+				FFORMAT(out,
+						"%s{\"xid\":%lld,\"lsn\":\"%X/%X\","
+						"\"timestamp\":\"%s\","
+						"\"commit_lsn\":\"%X/%X\"}\n",
+						OUTPUT_BEGIN,
+						(long long) txn->xid,
+						LSN_FORMAT_ARGS(txn->beginLSN),
+						txn->timestamp,
+						LSN_FORMAT_ARGS(txn->commitLSN));
+			}
+			else
+			{
+				FFORMAT(out,
+						"%s{\"xid\":%lld,\"lsn\":\"%X/%X\","
+						"\"timestamp\":\"%s\"}\n",
+						OUTPUT_BEGIN,
+						(long long) txn->xid,
+						LSN_FORMAT_ARGS(txn->beginLSN),
+						txn->timestamp);
+			}
+
+			sentBEGIN = true;
+		}
+
+		/* generate the SQL template + args via the same helpers used for SQLite */
+		ReplayDBStmt replayStmt = {
+			.action = currentStmt->action,
+			.xid = currentStmt->xid,
+			.lsn = currentStmt->lsn
+		};
+
+		strlcpy(replayStmt.timestamp, currentStmt->timestamp,
+				sizeof(replayStmt.timestamp));
+
+		switch (currentStmt->action)
+		{
+			case STREAM_ACTION_INSERT:
+			{
+				if (!stream_write_insert(&replayStmt,
+										 &(currentStmt->stmt.insert)))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+				break;
+			}
+
+			case STREAM_ACTION_UPDATE:
+			{
+				if (!stream_write_update(&replayStmt,
+										 &(currentStmt->stmt.update)))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+				break;
+			}
+
+			case STREAM_ACTION_DELETE:
+			{
+				if (!stream_write_delete(&replayStmt,
+										 &(currentStmt->stmt.delete)))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+				break;
+			}
+
+			case STREAM_ACTION_TRUNCATE:
+			{
+				if (!stream_write_truncate(&replayStmt,
+										   &(currentStmt->stmt.truncate)))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+				break;
+			}
+
+			default:
+			{
+				log_error("BUG: stream_write_file_txn: unexpected action %c",
+						  currentStmt->action);
+				return false;
+			}
+		}
+
+		if (replayStmt.stmt != NULL)
+		{
+			char hash[9] = { 0 };
+
+			sformat(hash, sizeof(hash), "%x", replayStmt.hash);
+
+			FFORMAT(out, "PREPARE %s AS %s;\n", hash, replayStmt.stmt);
+
+			if (replayStmt.data != NULL)
+			{
+				FFORMAT(out, "EXECUTE %s%s;\n", hash, replayStmt.data);
+			}
+
+			free(replayStmt.stmt);
+			free(replayStmt.data);
+		}
+	}
+
+	/* write COMMIT or ROLLBACK */
+	if (txn->rollback)
+	{
+		FFORMAT(out,
+				"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
+				OUTPUT_ROLLBACK,
+				(long long) txn->xid,
+				LSN_FORMAT_ARGS(txn->rollbackLSN),
+				txn->timestamp);
+	}
+	else if (txn->commit || sentBEGIN)
+	{
+		FFORMAT(out,
+				"%s{\"xid\":%lld,\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
+				OUTPUT_COMMIT,
+				(long long) txn->xid,
+				LSN_FORMAT_ARGS(txn->commitLSN),
+				txn->timestamp);
+	}
+
+	if (fflush(out) != 0)
+	{
+		log_error("Failed to flush SQL file: %m");
+		return false;
+	}
+
+	return true;
+
+#undef FFORMAT
+}
+
+
+/*
+ * stream_write_file_message writes the current LogicalMessage to an open SQL
+ * FILE in the PREPARE/EXECUTE format.  Called by stream_transform_write_message
+ * when a sqlFile is open (file-to-file transform path only).
+ */
+static bool
+stream_write_file_message(FILE *out,
+						   LogicalMessage *msg,
+						   LogicalMessageMetadata *metadata)
+{
+#define FFORMAT(stream, fmt, ...) \
+	{ if (fformat(stream, fmt, __VA_ARGS__) == -1) { \
+		  log_error("Failed to write to stream: %m"); \
+		  return false; } \
+	}
+
+	if (msg->isTransaction)
+	{
+		return stream_write_file_txn(out, &(msg->command.tx));
+	}
+
+	/* non-transaction messages: SWITCH / KEEPALIVE / ENDPOS */
+	switch (msg->action)
+	{
+		case STREAM_ACTION_SWITCH:
+		{
+			FFORMAT(out, "%s{\"lsn\":\"%X/%X\"}\n",
+					OUTPUT_SWITCHWAL,
+					LSN_FORMAT_ARGS(msg->command.switchwal.lsn));
+			break;
+		}
+
+		case STREAM_ACTION_KEEPALIVE:
+		{
+			FFORMAT(out, "%s{\"lsn\":\"%X/%X\",\"timestamp\":\"%s\"}\n",
+					OUTPUT_KEEPALIVE,
+					LSN_FORMAT_ARGS(msg->command.keepalive.lsn),
+					msg->command.keepalive.timestamp);
+			break;
+		}
+
+		case STREAM_ACTION_ENDPOS:
+		{
+			FFORMAT(out, "%s{\"lsn\":\"%X/%X\"}\n",
+					OUTPUT_ENDPOS,
+					LSN_FORMAT_ARGS(msg->command.endpos.lsn));
+			break;
+		}
+
+		default:
+		{
+			/* COMMIT/ROLLBACK of a non-isTransaction message: skip */
+			break;
+		}
+	}
+
+	return true;
+
+#undef FFORMAT
+}
+
+
+/*
  * stream_transform_write_message checks if we need to flush-out the current
  * message down to file, and maybe also stdout (Unix PIPE).
  */
@@ -822,22 +1202,22 @@ stream_transform_write_message(StreamContext *privateContext,
 		}
 	}
 
-	/* now write the transaction out */
-	/* if (privateContext->out != NULL) */
-	/* { */
-	/*  if (!stream_write_message(privateContext->out, currentMsg)) */
-	/*  { */
-	/*      /\* errors have already been logged *\/ */
-	/*      return false; */
-	/*  } */
-	/* } */
-
-	/* /\* now write the transaction out also to file on-disk *\/ */
-	/* if (!stream_write_message(privateContext->sqlFile, currentMsg)) */
-	/* { */
-	/*  /\* errors have already been logged *\/ */
-	/*  return false; */
-	/* } */
+	/*
+	 * When stream_transform_file has opened an output SQL file, write the
+	 * current message there now.  The SQLite-based pipeline does not set
+	 * sqlFile (it uses stream_transform_write_replay_stmt instead), so this
+	 * branch is only taken by the explicit `pgcopydb stream transform
+	 * <json> <sql>` file-to-file path.
+	 */
+	if (privateContext->sqlFile != NULL)
+	{
+		if (!stream_write_file_message(privateContext->sqlFile, currentMsg,
+									   metadata))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
 
 	if (metadata->action == STREAM_ACTION_COMMIT ||
 		metadata->action == STREAM_ACTION_ROLLBACK)
@@ -1318,9 +1698,20 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 		{
 			if (mesg->isTransaction)
 			{
-				log_error("Failed to parse BEGIN: "
-						  "transaction already in progress");
-				return false;
+				/*
+				 * A new BEGIN arrived while a previous transaction was still
+				 * open in memory.  This can happen due to a pipeline race: the
+				 * range iterator saw only B (not C/T yet), set isTransaction,
+				 * then the iterator ended; on the next pass it finds B again
+				 * now that C is also visible.  Treat the abandoned partial
+				 * transaction as an implicit rollback and start fresh.
+				 */
+				log_debug("BEGIN %lld while previous transaction open "
+						  "(implicit rollback of incomplete txn)",
+						  (long long) metadata->xid);
+
+				LogicalMessage empty = { 0 };
+				*mesg = empty;
 			}
 
 			mesg->isTransaction = true;
@@ -1397,6 +1788,7 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 				/* maintain the LogicalMessage copy of the metadata */
 				mesg->action = metadata->action;
 				mesg->lsn = metadata->lsn;
+				mesg->command.switchwal.lsn = metadata->lsn;
 				strlcpy(mesg->timestamp, metadata->timestamp, PG_MAX_TIMESTAMP);
 			}
 
@@ -1449,16 +1841,14 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 			}
 
 			/*
-			 * When using test_decoding, we append the received message as a
-			 * JSON string in the "message" object key. When using wal2json, we
-			 * use the raw JSON message as a json object in the "message"
-			 * object key.
+			 * Dispatch to the correct DML parser based on the output plugin
+			 * that was recorded at slot creation time.  This avoids inspecting
+			 * the JSON shape of each individual message; the plugin is fixed
+			 * for the lifetime of the replication slot.
 			 */
-			JSON_Value_Type jsmesgtype = json_value_get_type(json);
-
-			switch (jsmesgtype)
+			switch (privateContext->plugin)
 			{
-				case JSONString:
+				case STREAM_PLUGIN_TEST_DECODING:
 				{
 					if (!parseTestDecodingMessage(privateContext, message, json))
 					{
@@ -1466,11 +1856,10 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 								  "see above for details");
 						return false;
 					}
-
 					break;
 				}
 
-				case JSONObject:
+				case STREAM_PLUGIN_WAL2JSON:
 				{
 					if (!parseWal2jsonMessage(privateContext, message, json))
 					{
@@ -1478,15 +1867,14 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 								  "see above for details");
 						return false;
 					}
-
 					break;
 				}
 
 				default:
 				{
-					log_error("Failed to parse JSON message with "
-							  "unknown JSON type %d",
-							  jsmesgtype);
+					log_error("Failed to parse DML message: "
+							  "unknown output plugin %d",
+							  privateContext->plugin);
 					return false;
 				}
 			}

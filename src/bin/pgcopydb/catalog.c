@@ -35,9 +35,21 @@ static char *sourceDBcreateDDLs[] = {
 	"  snapshot text, "
 	"  split_tables_larger_than integer, "
 	"  split_max_parts integer, "
-	"  filters text, "
-	"  plugin text, "
-	"  slot_name text "
+	"  filters text "
+	")",
+
+	/*
+	 * Dedicated table for replication slot metadata.  Replaces the slot file
+	 * ($XDG_DATA_HOME/pgcopydb/slot) as the single authoritative store.
+	 * One row (id = 1) per pgcopydb operation.
+	 */
+	"create table replication_slot("
+	"  id integer primary key check (id = 1), "
+	"  slot_name text not null, "
+	"  lsn integer not null, "
+	"  snapshot text not null, "
+	"  plugin text not null, "
+	"  wal2json_numeric_as_string integer not null default 0 "
 	")",
 
 	"create table section("
@@ -897,11 +909,18 @@ catalog_init(DatabaseCatalog *catalog)
 
 	if (sqlite3_open(catalog->dbfile, &(catalog->db)) != SQLITE_OK)
 	{
-		/* ensure a db is NULL unless it's opened */
-		catalog->db = NULL;
+		/* capture errmsg before closing/null-ing handle */
+		const char *errmsg = sqlite3_errmsg(catalog->db);
+
 		log_error("Failed to open \"%s\": %s",
 				  catalog->dbfile,
-				  sqlite3_errmsg(catalog->db));
+				  errmsg);
+
+		if (catalog->db != NULL)
+		{
+			sqlite3_close(catalog->db);
+		}
+		catalog->db = NULL;
 		return false;
 	}
 
@@ -912,6 +931,8 @@ catalog_init(DatabaseCatalog *catalog)
 	if (!catalog_create_semaphore(catalog))
 	{
 		/* errors have already been logged */
+		sqlite3_close(catalog->db);
+		catalog->db = NULL;
 		return false;
 	}
 
@@ -924,10 +945,20 @@ catalog_init(DatabaseCatalog *catalog)
 		if (!catalog_set_wal_mode(catalog))
 		{
 			/* errors have already been logged */
+			sqlite3_close(catalog->db);
+			catalog->db = NULL;
 			return false;
 		}
 
-		return catalog_create_schema(catalog);
+		if (!catalog_create_schema(catalog))
+		{
+			/* errors have already been logged */
+			sqlite3_close(catalog->db);
+			catalog->db = NULL;
+			return false;
+		}
+
+		return true;
 	}
 
 	return true;
@@ -1388,8 +1419,7 @@ catalog_setup(DatabaseCatalog *catalog)
 
 	char *sql =
 		"select id, source_pg_uri, target_pg_uri, snapshot, "
-		"       split_tables_larger_than, split_max_parts, filters, "
-		"       plugin, slot_name "
+		"       split_tables_larger_than, split_max_parts, filters "
 		"from setup";
 
 	if (!semaphore_lock(&(catalog->sema)))
@@ -1659,41 +1689,19 @@ catalog_setup_fetch(SQLiteQuery *query)
 				bytes);
 	}
 
-	/*
-	 * plugin (a string buffer)
-	 */
-	if (sqlite3_column_type(query->ppStmt, 7) != SQLITE_NULL)
-	{
-		strlcpy(setup->plugin,
-				(char *) sqlite3_column_text(query->ppStmt, 7),
-				sizeof(setup->plugin));
-	}
-
-	/*
-	 * slot_name (a string buffer)
-	 */
-	if (sqlite3_column_type(query->ppStmt, 8) != SQLITE_NULL)
-	{
-		strlcpy(setup->slotName,
-				(char *) sqlite3_column_text(query->ppStmt, 8),
-				sizeof(setup->slotName));
-	}
-
 	return true;
 }
 
 
 /*
- * catalog_setup_replication updates the catalog setup with the information
- * relevant to the logical replication setup. It is meant to be called after
- * having initialized the catalog, once the replication slot has been created,
- * exporting the snapshot.
+ * catalog_setup_replication updates the catalog setup snapshot field.  It is
+ * meant to be called after having initialized the catalog, once the replication
+ * slot has been created and the snapshot exported.  Plugin and slot_name are
+ * the sole authority of the replication_slot table; they are not duplicated
+ * here.
  */
 bool
-catalog_setup_replication(DatabaseCatalog *catalog,
-						  const char *snapshot,
-						  const char *plugin,
-						  const char *slotName)
+catalog_setup_replication(DatabaseCatalog *catalog, const char *snapshot)
 {
 	sqlite3 *db = catalog->db;
 
@@ -1705,7 +1713,7 @@ catalog_setup_replication(DatabaseCatalog *catalog,
 
 	char *sql =
 		"update setup "
-		"   set snapshot = $1, plugin = $2, slot_name = $3 "
+		"   set snapshot = $1 "
 		" where id = 1";
 
 	SQLiteQuery query = { .errorOnZeroRows = true };
@@ -1718,9 +1726,7 @@ catalog_setup_replication(DatabaseCatalog *catalog,
 
 	/* bind our parameters now */
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "snapshot", 0, (char *) snapshot },
-		{ BIND_PARAMETER_TYPE_TEXT, "plugin", 0, (char *) plugin },
-		{ BIND_PARAMETER_TYPE_TEXT, "slot_name", 0, (char *) slotName }
+		{ BIND_PARAMETER_TYPE_TEXT, "snapshot", 0, (char *) snapshot }
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -1735,6 +1741,244 @@ catalog_setup_replication(DatabaseCatalog *catalog,
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_write_replication_slot persists all five fields of a ReplicationSlot
+ * to the dedicated replication_slot table (INSERT OR REPLACE, id = 1).
+ *
+ * This replaces snapshot_write_slot() which wrote the same data to a flat
+ * text file.  The SQLite table is the single authoritative store.
+ */
+bool
+catalog_write_replication_slot(DatabaseCatalog *catalog,
+							   const ReplicationSlot *slot)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_write_replication_slot: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"insert or replace into replication_slot"
+		"  (id, slot_name, lsn, snapshot, plugin, wal2json_numeric_as_string)"
+		"  values(1, $1, $2, $3, $4, $5)";
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	char lsnStr[PG_LSN_MAXLENGTH] = { 0 };
+	sformat(lsnStr, sizeof(lsnStr), "%X/%X", LSN_FORMAT_ARGS(slot->lsn));
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_TEXT,  "slot_name", 0, (char *) slot->slotName },
+		{ BIND_PARAMETER_TYPE_INT64, "lsn", slot->lsn, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT,  "snapshot", 0, (char *) slot->snapshot },
+		{ BIND_PARAMETER_TYPE_TEXT,  "plugin",
+		  0, (char *) OutputPluginToString(slot->plugin) },
+		{ BIND_PARAMETER_TYPE_INT64, "wal2json_numeric_as_string",
+		  slot->wal2jsonNumericAsString ? 1 : 0, NULL }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	log_notice("Stored replication slot \"%s\" lsn %X/%X snapshot \"%s\" "
+			   "plugin \"%s\" in catalog \"%s\"",
+			   slot->slotName,
+			   LSN_FORMAT_ARGS(slot->lsn),
+			   slot->snapshot,
+			   OutputPluginToString(slot->plugin),
+			   catalog->dbfile);
+
+	return true;
+}
+
+
+/*
+ * catalog_replication_slot_fetch is a SQLiteQuery fetchFunction callback.
+ */
+static bool
+catalog_replication_slot_fetch(SQLiteQuery *query)
+{
+	ReplicationSlot *slot = (ReplicationSlot *) query->context;
+
+	/* slot_name */
+	if (sqlite3_column_type(query->ppStmt, 0) != SQLITE_NULL)
+	{
+		strlcpy(slot->slotName,
+				(char *) sqlite3_column_text(query->ppStmt, 0),
+				sizeof(slot->slotName));
+	}
+
+	/* lsn */
+	slot->lsn = (uint64_t) sqlite3_column_int64(query->ppStmt, 1);
+
+	/* snapshot */
+	if (sqlite3_column_type(query->ppStmt, 2) != SQLITE_NULL)
+	{
+		strlcpy(slot->snapshot,
+				(char *) sqlite3_column_text(query->ppStmt, 2),
+				sizeof(slot->snapshot));
+	}
+
+	/* plugin */
+	if (sqlite3_column_type(query->ppStmt, 3) != SQLITE_NULL)
+	{
+		slot->plugin =
+			OutputPluginFromString(
+				(char *) sqlite3_column_text(query->ppStmt, 3));
+	}
+
+	/* wal2json_numeric_as_string */
+	slot->wal2jsonNumericAsString = sqlite3_column_int(query->ppStmt, 4) != 0;
+
+	return true;
+}
+
+
+/*
+ * catalog_read_replication_slot reads the replication_slot row (id = 1) from
+ * the given catalog and populates *slot.
+ *
+ * Returns true with slot->slotName empty when no row has been written yet
+ * (first run).  Returns false only on a real database error.
+ */
+bool
+catalog_read_replication_slot(DatabaseCatalog *catalog, ReplicationSlot *slot)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_read_replication_slot: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"select slot_name, lsn, snapshot, plugin, wal2json_numeric_as_string "
+		"  from replication_slot where id = 1";
+
+	SQLiteQuery query = {
+		.errorOnZeroRows = false,
+		.context = slot,
+		.fetchFunction = &catalog_replication_slot_fetch
+	};
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
+ * catalog_open_for_slot opens the source catalog at `dbfile` read-only, just
+ * enough to call catalog_read_replication_slot.
+ *
+ * Returns false (not an error) when the file does not exist yet — the caller
+ * treats that as "no prior slot, use defaults".  Returns false with an error
+ * logged for actual open failures.
+ */
+bool
+catalog_open_for_slot(const char *dbfile, DatabaseCatalog *catalog)
+{
+	if (!file_exists(dbfile))
+	{
+		return false;           /* no catalog yet, not an error */
+	}
+
+	strlcpy(catalog->dbfile, dbfile, sizeof(catalog->dbfile));
+	catalog->type = DATABASE_CATALOG_TYPE_SOURCE;
+
+	/*
+	 * Open read-only: we only need to SELECT from replication_slot.
+	 * We bypass the full catalog_init / catalog_create_schema path to avoid
+	 * trying to CREATE TABLE on a read-only connection.
+	 */
+	int rc = sqlite3_open_v2(catalog->dbfile,
+							 &(catalog->db),
+							 SQLITE_OPEN_READONLY,
+							 NULL);
+
+	if (rc != SQLITE_OK)
+	{
+		log_error("Failed to open catalog \"%s\" read-only: %s",
+				  catalog->dbfile,
+				  sqlite3_errmsg(catalog->db));
+		sqlite3_close(catalog->db);
+		catalog->db = NULL;
+		return false;
+	}
+
+	/*
+	 * Create a private catalog semaphore so catalog_read_replication_slot
+	 * can lock it.  We must NOT use semaphore_init() here: that function
+	 * re-opens the shared log semaphore (PGCOPYDB_LOG_SEMAPHORE) when the
+	 * environment variable is set.  Using the log semaphore as the catalog
+	 * lock causes an immediate self-deadlock: catalog_read_replication_slot
+	 * acquires it, then catalog_sql_prepare calls log_sqlite() which tries
+	 * to acquire the same semaphore again (it is not reentrant).
+	 */
+	if (!catalog_create_semaphore(catalog))
+	{
+		/* errors have already been logged */
+		sqlite3_close(catalog->db);
+		catalog->db = NULL;
 		return false;
 	}
 

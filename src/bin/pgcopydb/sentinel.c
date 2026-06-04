@@ -289,8 +289,6 @@ sentinel_update_write_flush_lsn(DatabaseCatalog *catalog,
 		return false;
 	}
 
-	log_warn("sentinel_update_write_flush_lsn: \"%s\"", catalog->dbfile);
-
 	char *sql =
 		"update sentinel set startpos = $1, write_lsn = $2, flush_lsn = $3 "
 		"where id = 1";

@@ -6,6 +6,7 @@ COPY ./dml.sql dml.sql
 COPY ./ddl.sql ddl.sql
 COPY ./continued-txn.json continued-txn.json
 COPY ./continued-txn.sql continued-txn.sql
+COPY ./stmt.sql stmt.sql
 
 USER docker
 CMD ["/usr/src/pgcopydb/copydb.sh"]

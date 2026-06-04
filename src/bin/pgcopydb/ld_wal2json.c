@@ -133,6 +133,7 @@ parseWal2jsonMessage(StreamContext *privateContext,
 		log_error("Failed to parse truncated message missing "
 				  "schema or table property: %s",
 				  message);
+		return false;
 	}
 
 	switch (metadata->action)

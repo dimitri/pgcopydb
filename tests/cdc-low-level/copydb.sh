@@ -55,6 +55,14 @@ ls -la ${SHAREDIR}/
 DBFILE=$(ls ${SHAREDIR}/*.db | head -1)
 
 #
+# Validate SQL templates written by the transform step.
+#
+sqlite3 -init /dev/null -list -noheader ${DBFILE} \
+  "select s.sql from stmt s join replay r on r.stmt_hash = s.hash where r.action not in ('B','C','R','K','X','E') group by s.hash order by min(r.id)" \
+  > /tmp/stmt-actual.sql
+diff /usr/src/pgcopydb/stmt.sql /tmp/stmt-actual.sql
+
+#
 # Validate the SQLite output table has rows and the replay table was populated.
 #
 sqlite3 ${DBFILE} <<'EOF'

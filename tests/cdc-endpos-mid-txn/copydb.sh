@@ -89,6 +89,10 @@ timeout 5s pgcopydb stream catchup --resume --endpos "${lsn}" --trace
 #
 pgcopydb stream sentinel set endpos --current
 
+# Dump replay table to diagnose lsn values before follow
+DBFILE=$(ls ${SHAREDIR}/*.db | head -1)
+sqlite3 ${DBFILE} "select id, action, xid, printf('%X/%X', lsn>>32, lsn&0xFFFFFFFF) as lsn from replay order by id;"
+
 # Follow resumes from the sentinel endpos and applies all remaining changes
 pgcopydb follow --resume --trace
 

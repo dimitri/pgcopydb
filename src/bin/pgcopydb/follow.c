@@ -10,6 +10,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "catalog.h"
 #include "cli_common.h"
 #include "cli_root.h"
 #include "ld_stream.h"
@@ -41,15 +42,24 @@ follow_export_snapshot(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		return false;
 	}
 
-	if (!catalog_setup_replication(streamSpecs->sourceDB,
-								   streamSpecs->slot.snapshot,
-								   OutputPluginToString(streamSpecs->slot.plugin),
-								   streamSpecs->slot.slotName))
+	if (!catalog_write_replication_slot(streamSpecs->sourceDB,
+										&(streamSpecs->slot)))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
+	/*
+	 * Also update the setup table's snapshot/plugin/slot_name so that
+	 * catalog_register_setup_from_specs() can validate consistency when
+	 * later commands (e.g. pgcopydb clone) open the same catalog.
+	 */
+	if (!catalog_setup_replication(streamSpecs->sourceDB,
+								   streamSpecs->slot.snapshot))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	return true;
 }

@@ -139,7 +139,8 @@ stream_init_specs(StreamSpecs *specs,
 
 	specs->connStrings = connStrings;
 
-	if (!buildReplicationURI(specs->connStrings->source_pguri,
+	if (specs->connStrings->source_pguri != NULL &&
+		!buildReplicationURI(specs->connStrings->source_pguri,
 							 &(specs->connStrings->logrep_pguri)))
 	{
 		/* errors have already been logged */
@@ -321,6 +322,9 @@ stream_init_context(StreamSpecs *specs)
 	privateContext->startpos = specs->startpos;
 
 	privateContext->mode = specs->mode;
+
+	/* record the plugin so the receive and transform paths both dispatch correctly */
+	privateContext->plugin = specs->slot.plugin;
 
 	privateContext->paths = specs->paths;
 
@@ -574,6 +578,194 @@ startLogicalStreaming(StreamSpecs *specs)
 
 
 /*
+ * stream_receive_from_file reads a JSON-lines fixture file and feeds every
+ * message through the same streamWrite() path that a live replication
+ * connection would use, populating the replayDB output table.
+ *
+ * Each line in the file must be a JSON object with the following fields:
+ *
+ *   {
+ *     "lsn":       "0/1519348",
+ *     "timestamp": "2026-01-01 12:00:00.000000+00",
+ *     "message":   "<raw CDC message text>"
+ *   }
+ *
+ * For test_decoding the message is plain text ("BEGIN 733", "table ...: ...");
+ * for wal2json it is the raw JSON string that wal2json emits.
+ *
+ * The function returns false on the first parse or write error.
+ */
+bool
+stream_receive_from_file(StreamSpecs *specs, const char *filename)
+{
+	if (!stream_init_context(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	StreamContext *privateContext = &(specs->private);
+
+	LogicalStreamContext context = { 0 };
+	context.private = (void *) privateContext;
+	context.plugin = specs->slot.plugin;
+
+	/*
+	 * Bootstrap the tracking struct so streamWrite / streamFlush do not
+	 * dereference a NULL pointer.
+	 */
+	LogicalTrackLSN tracking = { 0 };
+	context.tracking = &tracking;
+
+	char *contents = NULL;
+	long size = 0L;
+
+	if (!read_file(filename, &contents, &size))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	LinesBuffer lbuf = { 0 };
+
+	if (!splitLines(&lbuf, contents))
+	{
+		/* errors have already been logged */
+		free(contents);
+		return false;
+	}
+
+	log_info("stream_receive_from_file: processing %lld lines from \"%s\"",
+			 (long long) lbuf.count, filename);
+
+	bool success = true;
+
+	for (uint64_t i = 0; i < lbuf.count; i++)
+	{
+		char *line = lbuf.lines[i];
+
+		/* skip empty lines */
+		if (line == NULL || line[0] == '\0')
+		{
+			continue;
+		}
+
+		JSON_Value *json = json_parse_string(line);
+
+		if (json == NULL)
+		{
+			log_error("stream_receive_from_file: failed to parse JSON line %lld:"
+					  " %s", (long long) (i + 1), line);
+			success = false;
+			break;
+		}
+
+		JSON_Object *jsobj = json_value_get_object(json);
+
+		if (jsobj == NULL)
+		{
+			log_error("stream_receive_from_file: line %lld is not a JSON object:"
+					  " %s", (long long) (i + 1), line);
+			json_value_free(json);
+			success = false;
+			break;
+		}
+
+		/* --- lsn --------------------------------------------------------- */
+		const char *lsn_str = json_object_get_string(jsobj, "lsn");
+
+		if (lsn_str == NULL)
+		{
+			log_error("stream_receive_from_file: line %lld missing \"lsn\"",
+					  (long long) (i + 1));
+			json_value_free(json);
+			success = false;
+			break;
+		}
+
+		uint64_t parsedLSN = 0;
+
+		if (!parseLSN(lsn_str, &parsedLSN))
+		{
+			log_error("stream_receive_from_file: failed to parse lsn \"%s\" "
+					  "on line %lld", lsn_str, (long long) (i + 1));
+			json_value_free(json);
+			success = false;
+			break;
+		}
+
+		context.cur_record_lsn = parsedLSN;
+
+		/* --- timestamp --------------------------------------------------- */
+		/*
+		 * Use a fixed PG-epoch timestamp so that fixture files are
+		 * fully deterministic (no wall-clock dependency).  sendTime = 0
+		 * corresponds to the Postgres epoch 2000-01-01 00:00:00 UTC.
+		 */
+		context.sendTime = 0;
+
+		/* --- message ----------------------------------------------------- */
+		const char *msg = json_object_get_string(jsobj, "message");
+
+		if (msg == NULL)
+		{
+			log_error("stream_receive_from_file: line %lld missing \"message\"",
+					  (long long) (i + 1));
+			json_value_free(json);
+			success = false;
+			break;
+		}
+
+		/*
+		 * context.buffer must point to a writable buffer; strlcpy into
+		 * a local buffer then point context.buffer at it.
+		 */
+		static char msgbuf[BUFSIZE * 16];
+
+		strlcpy(msgbuf, msg, sizeof(msgbuf));
+		context.buffer = msgbuf;
+
+		if (!streamWrite(&context))
+		{
+			log_error("stream_receive_from_file: streamWrite failed on line %lld",
+					  (long long) (i + 1));
+			json_value_free(json);
+			success = false;
+			break;
+		}
+
+		json_value_free(json);
+	}
+
+	free(contents);
+
+	if (!success)
+	{
+		return false;
+	}
+
+	/*
+	 * Inject a final ENDPOS keepalive so the replayDB output table gets a
+	 * proper endpos marker, which the transform step uses to know it has
+	 * consumed everything.
+	 */
+	if (specs->endpos != InvalidXLogRecPtr)
+	{
+		context.cur_record_lsn = (XLogRecPtr) specs->endpos;
+		context.sendTime = 0;
+
+		if (!streamKeepalive(&context))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
  * streamCheckResumePosition checks that the resume position on the replication
  * slot on the source database is in-sync with the lastest on-file LSN we have.
  */
@@ -716,20 +908,24 @@ streamWrite(LogicalStreamContext *context)
 		if (context->onRetry)
 		{
 			/*
-			 * When retrying due to a transient network error or server conn
-			 * failure, we need to rollback the last incomplete transaction.
+			 * When retrying after a transient network error or server
+			 * connection failure, delete any partial rows for the
+			 * in-progress transaction.
 			 *
-			 * Otherwise, we would end up with a partial transaction in the
-			 * JSON file, and the transform process would fail to process it.
+			 * The slot will re-deliver the entire transaction from its
+			 * BEGIN on the new connection, so those rows will be inserted
+			 * cleanly.  The transform simply waits for the COMMIT to
+			 * arrive (ld_store_lookup_output_xid_end returns zero rows
+			 * until the COMMIT is written).
+			 *
+			 * We do NOT insert a synthetic ROLLBACK: PostgreSQL never
+			 * sends ROLLBACK over logical replication, so it would never
+			 * be overwritten by the re-delivered COMMIT.
 			 */
 			if (privateContext->transactionInProgress)
 			{
-				InternalMessage rollback = {
-					.action = STREAM_ACTION_ROLLBACK,
-					.lsn = context->cur_record_lsn
-				};
-
-				if (!ld_store_insert_internal_message(replayDB, &rollback))
+				if (!ld_store_delete_output_xid(replayDB,
+												privateContext->currentXid))
 				{
 					/* errors have already been logged */
 					return false;
@@ -768,10 +964,22 @@ streamWrite(LogicalStreamContext *context)
 	if (metadata->action == STREAM_ACTION_BEGIN)
 	{
 		privateContext->transactionInProgress = true;
+
+		/*
+		 * Track the current transaction XID so that ROLLBACK internal messages
+		 * inserted by streamCloseFile carry the correct xid regardless of plugin.
+		 * test_decoding sets currentXid in its own parser but wal2json does not;
+		 * updating here covers both paths uniformly.
+		 */
+		if (metadata->xid > 0)
+		{
+			privateContext->currentXid = metadata->xid;
+		}
 	}
 	else if (metadata->action == STREAM_ACTION_COMMIT)
 	{
 		privateContext->transactionInProgress = false;
+		privateContext->currentXid = 0;
 	}
 
 	/*
@@ -985,22 +1193,29 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 	}
 
 	/*
-	 * On graceful exit, ROLLBACK the last incomplete transaction so the
-	 * transform process sees a clean boundary when it resumes.
+	 * On graceful exit mid-transaction, delete the partial rows for this xid
+	 * so the output table is clean for the reconnect.
 	 *
-	 * Note: for process crashes (segmentation faults etc.) this cannot
-	 * run, potentially leaving an incomplete transaction in the output
-	 * table.  The transform process must handle that case by detecting
-	 * a BEGIN without a matching COMMIT.
+	 * The ENDPOS marker inserted above already signals the transform to stop
+	 * without waiting for a COMMIT that will never arrive in this run.  On
+	 * reconnect, the logical decoding slot re-delivers the ENTIRE transaction
+	 * from its BEGIN, which is inserted fresh into the now-empty slot.
+	 *
+	 * We do NOT insert a synthetic ROLLBACK here.  PostgreSQL logical
+	 * decoding never emits a ROLLBACK message, so the unique index on
+	 * (action, lsn) would ensure a synthetic 'R' row is never overwritten by
+	 * the re-delivered 'C' COMMIT.  The phantom ROLLBACK row would then
+	 * persist across reconnects, requiring fragile workarounds.
+	 *
+	 * Note: for process crashes (segmentation faults etc.) this cannot run,
+	 * potentially leaving an incomplete transaction in the output table.  The
+	 * transform handles that case by detecting a BEGIN without a matching
+	 * COMMIT/ROLLBACK (ld_store_lookup_output_xid_end returns zero rows →
+	 * waits for the full transaction to be delivered on reconnect).
 	 */
 	if (time_to_abort && privateContext->transactionInProgress)
 	{
-		InternalMessage rollback = {
-			.action = STREAM_ACTION_ROLLBACK,
-			.lsn = context->cur_record_lsn
-		};
-
-		if (!ld_store_insert_internal_message(replayDB, &rollback))
+		if (!ld_store_delete_output_xid(replayDB, privateContext->currentXid))
 		{
 			/* errors have already been logged */
 			return false;
@@ -1227,14 +1442,14 @@ stream_sync_sentinel(LogicalStreamContext *context)
 
 	if (context->endpos != sentinel.endpos)
 	{
-		log_warn("stream_sync_sentinel: updating endpos to %X/%X",
-				 LSN_FORMAT_ARGS(sentinel.endpos));
+		log_debug("stream_sync_sentinel: updating endpos to %X/%X",
+				  LSN_FORMAT_ARGS(sentinel.endpos));
 	}
 
 	context->endpos = sentinel.endpos;
 	context->tracking->applied_lsn = sentinel.replay_lsn;
 
-	log_warn("stream_sync_sentinel: "
+	log_debug("stream_sync_sentinel: "
 			 "write_lsn %X/%X flush_lsn %X/%X apply_lsn %X/%X "
 			 "startpos %X/%X endpos %X/%X apply %s",
 			 LSN_FORMAT_ARGS(context->tracking->written_lsn),
@@ -1913,18 +2128,10 @@ stream_cleanup_databases(CopyDataSpec *copySpecs, char *slotName, char *origin)
 	}
 
 	/*
-	 * When we have dropped the replication slot, we can remove the slot file
-	 * on-disk and also the snapshot file.
+	 * When we have dropped the replication slot, we can remove the snapshot
+	 * file. The replication slot metadata is stored in the SQLite catalog and
+	 * will be cleaned up with it.
 	 */
-	log_notice("Removing slot file \"%s\"", copySpecs->cfPaths.cdc.slotfile);
-
-	if (!unlink_file(copySpecs->cfPaths.cdc.slotfile))
-	{
-		log_error("Failed to unlink the slot file \"%s\"",
-				  copySpecs->cfPaths.cdc.slotfile);
-		return false;
-	}
-
 	log_notice("Removing snapshot file \"%s\"", copySpecs->cfPaths.snfile);
 
 	if (!unlink_file(copySpecs->cfPaths.snfile))

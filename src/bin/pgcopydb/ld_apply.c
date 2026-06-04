@@ -56,7 +56,13 @@ static bool writeTxnCommitMetadata(LogicalMessageMetadata *mesg, const char *dir
 
 static bool setupConnection(PGSQL *pgsql, StreamApplyContext *context);
 
-static bool stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context);
+static bool stream_apply_dml(StreamApplyContext *context, ReplayDBStmt *s);
+static bool stream_apply_transaction(StreamApplyContext *context,
+									 uint32_t xid,
+									 uint64_t begin_id,
+									 uint64_t commitLSN);
+
+bool stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context);
 
 /*
  * stream_apply_catchup applies CDC changes stored in the SQLite replayDB to
@@ -94,16 +100,24 @@ stream_apply_catchup(StreamSpecs *specs)
 
 /*
  * stream_apply_replaydb is the main catchup loop for the SQLite-based CDC
- * pipeline.  It opens a cursor over the replay table (joined with stmt),
- * applies each row to the target database, and advances replay_lsn in the
- * pgcopydb sentinel after every completed transaction.
+ * pipeline.  It drives a transaction-oriented outer loop:
  *
- * The loop exits when:
- *  - no more rows are available (transform has not yet produced them), or
- *  - endpos has been reached, or
- *  - a signal to stop is received.
+ *   1. Fetch the next event (BEGIN or non-txn) from the replayDB.
+ *   2. For BEGIN rows, apply the full transaction via stream_apply_transaction().
+ *   3. For non-txn events (KEEPALIVE/SWITCH/ENDPOS), call stream_apply_sql().
+ *
+ * The outer query only returns BEGIN rows whose COMMIT has already been stored
+ * (endlsn > previousLSN), so the loop never sees a half-written transaction.
+ *
+ * Three explicit guards before each transaction:
+ *   Guard 1 – commitLSN <= previousLSN:  already applied, skip.
+ *   Guard 2 – endpos < beginLSN:         endpos before this txn, stop.
+ *   Guard 3 – beginLSN < endpos < commitLSN: endpos is mid-transaction;
+ *             we still apply the full transaction and stop afterwards.
+ *
+ * The loop exits when no more rows, endpos is reached, or a signal arrives.
  */
-static bool
+bool
 stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 {
 	DatabaseCatalog *replayDB = specs->replayDB;
@@ -118,11 +132,7 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 			 replayDB->dbfile,
 			 LSN_FORMAT_ARGS(context->previousLSN));
 
-	ReplayDBReplayIterator iter = { 0 };
-
-	iter.catalog = replayDB;
-	iter.previousLSN = context->previousLSN;
-	iter.endpos = context->endpos;
+	context->replayDB = replayDB;
 
 	if (!semaphore_lock(&(replayDB->sema)))
 	{
@@ -130,14 +140,9 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 		return false;
 	}
 
-	if (!ld_store_iter_replay_init(&iter))
-	{
-		/* errors have already been logged */
-		(void) semaphore_unlock(&(replayDB->sema));
-		return false;
-	}
-
 	bool success = true;
+
+	ReplayDBStmt s = { 0 };
 
 	for (;;)
 	{
@@ -147,7 +152,221 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 			break;
 		}
 
-		if (!ld_store_iter_replay_next(&iter))
+		if (!ld_store_replay_next_event(replayDB, context->previousLSN, &s))
+		{
+			/* errors have already been logged */
+			success = false;
+			break;
+		}
+
+		if (s.action == STREAM_ACTION_UNKNOWN)
+		{
+			/*
+			 * No more rows: the transform process has not produced anything
+			 * past our current position.
+			 */
+			log_info("Apply caught up with replayDB at LSN %X/%X",
+					 LSN_FORMAT_ARGS(context->previousLSN));
+			break;
+		}
+
+		if (s.action == STREAM_ACTION_BEGIN)
+		{
+			uint64_t beginLSN = s.lsn;
+			uint64_t commitLSN = s.endlsn;
+			uint32_t xid = s.xid;
+			uint64_t begin_id = s.id;
+
+			/* Guard 1: already applied — should not happen given the query,
+			 * but be safe on restart edge cases. */
+			if (commitLSN <= context->previousLSN)
+			{
+				log_debug("Skip already-applied txn %u commitLSN %X/%X "
+						  "<= previousLSN %X/%X",
+						  xid,
+						  LSN_FORMAT_ARGS(commitLSN),
+						  LSN_FORMAT_ARGS(context->previousLSN));
+				continue;
+			}
+
+			/* Guard 2: endpos lies entirely before this transaction. */
+			if (context->endpos != InvalidXLogRecPtr &&
+				context->endpos < beginLSN)
+			{
+				context->reachedEndPos = true;
+
+				log_notice("Apply reached end position %X/%X before "
+						   "xid %u beginLSN %X/%X — stopping",
+						   LSN_FORMAT_ARGS(context->endpos),
+						   xid,
+						   LSN_FORMAT_ARGS(beginLSN));
+				break;
+			}
+
+			/*
+			 * Guard 3: endpos falls mid-transaction.
+			 *
+			 * beginLSN < endpos < commitLSN means the endpos checkpoint was
+			 * set to a WAL position inside this uncommitted transaction.  We
+			 * must apply the full transaction (cannot partially apply it), so
+			 * we do not stop here.  After the commit we will set reachedEndPos.
+			 *
+			 * Note: when beginLSN == commitLSN (single-DML autocommit) the
+			 * strict inequalities make this condition false — correct, since
+			 * there is no "inside" the transaction to straddle.
+			 */
+			bool midTxnEndpos =
+				context->endpos != InvalidXLogRecPtr &&
+				beginLSN < context->endpos &&
+				context->endpos < commitLSN;
+
+			if (midTxnEndpos)
+			{
+				log_notice("Apply endpos %X/%X falls mid-transaction "
+						   "(xid %u begin %X/%X commit %X/%X); "
+						   "applying full transaction then stopping",
+						   LSN_FORMAT_ARGS(context->endpos),
+						   xid,
+						   LSN_FORMAT_ARGS(beginLSN),
+						   LSN_FORMAT_ARGS(commitLSN));
+			}
+
+			if (!stream_apply_transaction(context, xid, begin_id, commitLSN))
+			{
+				/* errors have already been logged */
+				success = false;
+				break;
+			}
+
+			/* After commit: check if endpos has been reached. */
+			if (context->endpos != InvalidXLogRecPtr &&
+				context->endpos <= context->previousLSN)
+			{
+				context->reachedEndPos = true;
+
+				log_notice("Apply reached end position %X/%X after "
+						   "committing xid %u at %X/%X",
+						   LSN_FORMAT_ARGS(context->endpos),
+						   xid,
+						   LSN_FORMAT_ARGS(context->previousLSN));
+				break;
+			}
+		}
+		else
+		{
+			/*
+			 * Non-transactional event: KEEPALIVE, SWITCH, or ENDPOS.
+			 * Delegate to stream_apply_sql() which handles all three.
+			 */
+			LogicalMessageMetadata metadata = { 0 };
+
+			metadata.action = s.action;
+			metadata.xid = s.xid;
+			metadata.lsn = s.lsn;
+
+			if (!IS_EMPTY_STRING_BUFFER(s.timestamp))
+			{
+				strlcpy(metadata.timestamp, s.timestamp,
+						sizeof(metadata.timestamp));
+			}
+
+			if (!stream_apply_sql(context, &metadata, ""))
+			{
+				log_error("Failed to apply replayDB event (action %c, LSN %X/%X)",
+						  s.action,
+						  LSN_FORMAT_ARGS(s.lsn));
+				success = false;
+				break;
+			}
+
+			if (s.action == STREAM_ACTION_KEEPALIVE)
+			{
+				bool findDurableLSN = false;
+
+				if (!stream_apply_sync_sentinel(context, findDurableLSN))
+				{
+					log_warn("Failed to sync sentinel at LSN %X/%X, "
+							 "will retry on next iteration",
+							 LSN_FORMAT_ARGS(context->previousLSN));
+				}
+			}
+
+			if (context->reachedEndPos)
+			{
+				log_info("Apply reached endpos %X/%X",
+						 LSN_FORMAT_ARGS(context->endpos));
+				break;
+			}
+		}
+	}
+
+	(void) semaphore_unlock(&(replayDB->sema));
+
+	return success;
+}
+
+
+/*
+ * stream_apply_transaction applies a single committed transaction to the
+ * target database.  It opens a Postgres transaction, iterates all DML rows
+ * for xid in replay order (starting from begin_id), and commits with the
+ * replication origin set to commitLSN.
+ *
+ * When endpos <= commitLSN, synchronous_commit = on is enabled so the origin
+ * position is durably flushed before the caller signals endpos reached.
+ *
+ * Returns false on error; on success context->previousLSN = commitLSN.
+ */
+static bool
+stream_apply_transaction(StreamApplyContext *context,
+						 uint32_t xid,
+						 uint64_t begin_id,
+						 uint64_t commitLSN)
+{
+	PGSQL *applyPgConn = &(context->applyPgConn);
+	DatabaseCatalog *replayDB = context->replayDB;
+
+	bool sync = (context->endpos != InvalidXLogRecPtr &&
+				 context->endpos <= commitLSN);
+
+	if (!pgsql_begin(applyPgConn))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_set_gucs(applyPgConn,
+						sync ? applySettingsSync : applySettings))
+	{
+		/* errors have already been logged */
+		(void) pgsql_execute(applyPgConn, "ROLLBACK");
+		return false;
+	}
+
+	context->transactionInProgress = true;
+	context->reachedStartPos = true;
+	context->continuedTxn = false;
+
+	ReplayDBReplayTxnIterator iter = { 0 };
+
+	iter.catalog = replayDB;
+	iter.xid = xid;
+	iter.begin_id = begin_id;
+
+	if (!ld_store_iter_replay_txn_init(&iter))
+	{
+		/* errors have already been logged */
+		(void) pgsql_execute(applyPgConn, "ROLLBACK");
+		context->transactionInProgress = false;
+		return false;
+	}
+
+	bool success = true;
+	char commitTimestamp[PG_MAX_TIMESTAMP] = { 0 };
+
+	for (;;)
+	{
+		if (!ld_store_iter_replay_txn_next(&iter))
 		{
 			/* errors have already been logged */
 			success = false;
@@ -158,125 +377,269 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 
 		if (s == NULL)
 		{
-			/*
-			 * No more rows: the transform process has not produced anything
-			 * past our current position.  Signal to the caller that we are
-			 * caught up with what is available.
-			 */
-			log_info("Apply caught up with replayDB at LSN %X/%X",
-					 LSN_FORMAT_ARGS(context->previousLSN));
-			break;
-		}
-
-		/*
-		 * Build a LogicalMessageMetadata from the ReplayDBStmt row so we
-		 * can pass it to stream_apply_sql() which drives all the
-		 * target-database operations (BEGIN / COMMIT / DML / KEEPALIVE …).
-		 */
-		LogicalMessageMetadata metadata = { 0 };
-
-		metadata.action = s->action;
-		metadata.xid = s->xid;
-		metadata.lsn = s->lsn;
-		metadata.txnCommitLSN = s->endlsn;   /* pre-set: skips .txn file read */
-
-		if (!IS_EMPTY_STRING_BUFFER(s->timestamp))
-		{
-			strlcpy(metadata.timestamp, s->timestamp, sizeof(metadata.timestamp));
-		}
-
-		/*
-		 * For DML rows (INSERT / UPDATE / DELETE): stmt.sql holds the
-		 * parameterised SQL template and replay.stmt_args holds the JSON
-		 * parameter array.  stream_apply_sql() first PREPAREs the statement
-		 * (on first encounter) and we immediately follow with an EXECUTE.
-		 */
-		bool isDML =
-			s->action == STREAM_ACTION_INSERT ||
-			s->action == STREAM_ACTION_UPDATE ||
-			s->action == STREAM_ACTION_DELETE;
-
-		if (isDML && s->stmt != NULL)
-		{
-			/* parse the hash from the stmt.sql preamble or use a CRC */
-			metadata.hash = s->hash;
-			metadata.stmt = s->stmt;
-		}
-
-		const char *sql = s->stmt != NULL ? s->stmt : "";
-
-		if (!stream_apply_sql(context, &metadata, sql))
-		{
-			log_error("Failed to apply replayDB row %lld (action %c, LSN %X/%X)",
-					  (long long) s->id, s->action,
-					  LSN_FORMAT_ARGS(s->lsn));
+			log_error("BUG: stream_apply_transaction: no COMMIT/ROLLBACK row "
+					  "found for xid %u (begin_id %lld commitLSN %X/%X)",
+					  xid, (long long) begin_id,
+					  LSN_FORMAT_ARGS(commitLSN));
 			success = false;
 			break;
 		}
 
-		/*
-		 * For DML: immediately execute the prepared statement with its
-		 * parameters.  The PREPARE step above registered the statement; now
-		 * we drive the EXECUTE phase using the JSON args from stmt_args.
-		 */
-		if (isDML && s->data != NULL)
+		if (s->action == STREAM_ACTION_BEGIN)
 		{
-			LogicalMessageMetadata execMeta = { 0 };
-
-			execMeta.action = STREAM_ACTION_EXECUTE;
-			execMeta.xid = s->xid;
-			execMeta.lsn = s->lsn;
-			execMeta.hash = s->hash;
-			execMeta.jsonBuffer = s->data;
-
-			strlcpy(execMeta.timestamp, metadata.timestamp,
-					sizeof(execMeta.timestamp));
-
-			if (!stream_apply_sql(context, &execMeta, s->data))
-			{
-				log_error("Failed to execute replayDB row %lld "
-						  "(action %c, LSN %X/%X)",
-						  (long long) s->id, s->action,
-						  LSN_FORMAT_ARGS(s->lsn));
-				success = false;
-				break;
-			}
+			/* skip: the outer loop already processed this */
+			continue;
 		}
 
-		/*
-		 * After a COMMIT or KEEPALIVE, sync progress back to the sentinel.
-		 * Errors are logged as warnings; we will retry on the next iteration.
-		 */
-		if (s->action == STREAM_ACTION_COMMIT ||
-			s->action == STREAM_ACTION_KEEPALIVE)
+		if (s->action == STREAM_ACTION_COMMIT)
 		{
-			bool findDurableLSN = false;
-
-			if (!stream_apply_sync_sentinel(context, findDurableLSN))
-			{
-				log_warn("Failed to sync sentinel at LSN %X/%X, "
-						 "will retry on next iteration",
-						 LSN_FORMAT_ARGS(context->previousLSN));
-			}
+			strlcpy(commitTimestamp, s->timestamp, sizeof(commitTimestamp));
+			break;
 		}
 
-		if (context->reachedEndPos)
+		if (s->action == STREAM_ACTION_ROLLBACK)
 		{
-			log_info("Apply reached endpos %X/%X",
-					 LSN_FORMAT_ARGS(context->endpos));
+			/*
+			 * Rolled-back transactions are normally not emitted by logical
+			 * decoding, but handle defensively.  We abort the target
+			 * transaction and leave previousLSN unchanged.
+			 */
+			log_notice("Rolling back transaction %u (rollback LSN %X/%X)",
+					   xid, LSN_FORMAT_ARGS(s->lsn));
+
+			(void) ld_store_iter_replay_txn_finish(&iter);
+
+			if (!pgsql_execute(applyPgConn, "ROLLBACK"))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			context->transactionInProgress = false;
+			return true;
+		}
+
+		/* DML row (INSERT / UPDATE / DELETE / TRUNCATE) */
+		if (!stream_apply_dml(context, s))
+		{
+			/* errors have already been logged */
+			success = false;
 			break;
 		}
 	}
 
-	if (!ld_store_iter_replay_finish(&iter))
+	(void) ld_store_iter_replay_txn_finish(&iter);
+
+	if (!success)
 	{
-		/* errors have already been logged */
-		success = false;
+		(void) pgsql_execute(applyPgConn, "ROLLBACK");
+		context->transactionInProgress = false;
+		return false;
 	}
 
-	(void) semaphore_unlock(&(replayDB->sema));
+	/* set replication origin to commitLSN before committing */
+	char lsn[PG_LSN_MAXLENGTH] = { 0 };
 
-	return success;
+	sformat(lsn, sizeof(lsn), "%X/%X", LSN_FORMAT_ARGS(commitLSN));
+
+	if (IS_EMPTY_STRING_BUFFER(commitTimestamp))
+	{
+		TimestampTz now = feGetCurrentTimestamp();
+
+		(void) pgsql_timestamptz_to_string(now,
+										   commitTimestamp,
+										   sizeof(commitTimestamp));
+	}
+
+	if (!pgsql_replication_origin_xact_setup(applyPgConn, lsn, commitTimestamp))
+	{
+		log_error("Failed to setup replication origin for xid %u at %X/%X",
+				  xid, LSN_FORMAT_ARGS(commitLSN));
+		(void) pgsql_execute(applyPgConn, "ROLLBACK");
+		context->transactionInProgress = false;
+		return false;
+	}
+
+	log_debug("COMMIT xid %u LSN %X/%X", xid, LSN_FORMAT_ARGS(commitLSN));
+
+	if (!pgsql_execute(applyPgConn, "COMMIT"))
+	{
+		/* errors have already been logged */
+		context->transactionInProgress = false;
+		return false;
+	}
+
+	context->transactionInProgress = false;
+	context->previousLSN = commitLSN;
+
+	bool findDurableLSN = false;
+
+	if (!stream_apply_sync_sentinel(context, findDurableLSN))
+	{
+		log_warn("Failed to sync sentinel after xid %u at %X/%X, "
+				 "will retry on next iteration",
+				 xid, LSN_FORMAT_ARGS(commitLSN));
+	}
+
+	return true;
+}
+
+
+/*
+ * stream_apply_dml applies a single DML row (INSERT/UPDATE/DELETE/TRUNCATE)
+ * to the target database.  The transaction must already be open.
+ *
+ * INSERT/UPDATE/DELETE use the PREPARE-once-per-hash + EXECUTE pattern.
+ * TRUNCATE is executed directly (with TRUNCATE ONLY → TRUNCATE rewrite for
+ * partitioned target tables).
+ *
+ * Rows with a NULL stmt and zero hash (generated-column degenerate rows) are
+ * silently skipped.
+ */
+static bool
+stream_apply_dml(StreamApplyContext *context, ReplayDBStmt *s)
+{
+	PGSQL *applyPgConn = &(context->applyPgConn);
+
+	if (s->action == STREAM_ACTION_TRUNCATE)
+	{
+		const char *sql = (s->stmt != NULL) ? s->stmt : "";
+		int len = strlen(sql);
+		char truncateSQL[BUFSIZE] = { 0 };
+
+		strlcpy(truncateSQL, sql, sizeof(truncateSQL));
+
+		/* chomp trailing semicolon */
+		if (len > 0 && truncateSQL[len - 1] == ';')
+			truncateSQL[len - 1] = '\0';
+
+		const char *execSQL = truncateSQL;
+		char rewritten[BUFSIZE] = { 0 };
+		const char onlyPrefix[] = "TRUNCATE ONLY ";
+		size_t prefixLen = sizeof(onlyPrefix) - 1;
+
+		if (strncmp(truncateSQL, onlyPrefix, prefixLen) == 0)
+		{
+			char relkind = '\0';
+			const char *qname = truncateSQL + prefixLen;
+
+			if (pgsql_get_table_relkind(&(context->controlPgConn),
+										qname, &relkind))
+			{
+				if (relkind == 'p')
+				{
+					sformat(rewritten, sizeof(rewritten), "TRUNCATE %s", qname);
+					execSQL = rewritten;
+				}
+			}
+			else
+			{
+				log_warn("Could not resolve relkind for replicated "
+						 "TRUNCATE on \"%s\"; replaying as TRUNCATE ONLY.",
+						 qname);
+			}
+		}
+
+		if (!pgsql_execute(applyPgConn, execSQL))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		return true;
+	}
+
+	/* INSERT / UPDATE / DELETE */
+
+	if (s->stmt == NULL && s->hash == 0)
+	{
+		/* degenerate row (e.g. UPDATE on a generated column) — skip */
+		return true;
+	}
+
+	uint32_t hash = s->hash;
+	PreparedStmt *stmtHashTable = context->preparedStmt;
+	PreparedStmt *stmt = NULL;
+
+	HASH_FIND(hh, stmtHashTable, &hash, sizeof(hash), stmt);
+
+	if (stmt == NULL)
+	{
+		char name[NAMEDATALEN] = { 0 };
+		sformat(name, sizeof(name), "%x", hash);
+
+		if (!pgsql_prepare(applyPgConn, name, s->stmt, 0, NULL))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		stmt = (PreparedStmt *) calloc(1, sizeof(PreparedStmt));
+
+		if (stmt == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		stmt->hash = hash;
+		stmt->prepared = true;
+
+		HASH_ADD(hh, stmtHashTable, hash, sizeof(hash), stmt);
+
+		/* HASH_ADD can change the pointer in place, update */
+		context->preparedStmt = stmtHashTable;
+	}
+
+	if (s->data != NULL)
+	{
+		char name[NAMEDATALEN] = { 0 };
+		sformat(name, sizeof(name), "%x", hash);
+
+		JSON_Value *js = json_parse_string(s->data);
+
+		if (json_value_get_type(js) != JSONArray)
+		{
+			log_error("Failed to parse DML args array: %s", s->data);
+			json_value_free(js);
+			return false;
+		}
+
+		JSON_Array *jsArray = json_value_get_array(js);
+		int count = json_array_get_count(jsArray);
+
+		if (count > 0)
+		{
+			const char **paramValues =
+				(const char **) calloc(count, sizeof(char *));
+
+			if (paramValues == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				json_value_free(js);
+				return false;
+			}
+
+			for (int i = 0; i < count; i++)
+				paramValues[i] = json_array_get_string(jsArray, i);
+
+			if (!pgsql_execute_prepared(applyPgConn, name,
+										count, paramValues,
+										NULL, NULL))
+			{
+				/* errors have already been logged */
+				free(paramValues);
+				json_value_free(js);
+				return false;
+			}
+
+			free(paramValues);
+		}
+
+		json_value_free(js);
+	}
+
+	return true;
 }
 
 
@@ -555,6 +918,42 @@ stream_apply_sql(StreamApplyContext *context,
 			 * .sql file to apply.
 			 */
 			context->switchLSN = metadata->lsn;
+
+			/*
+			 * Advance previousLSN and sync sentinel.replay_lsn to the SWITCH
+			 * position.  Without this, follow_reached_endpos() compares
+			 * sentinel.replay_lsn (last COMMIT) against sentinel.endpos and
+			 * finds them unequal, causing follow_main_loop() to restart the
+			 * CATCHUP→REPLAY cycle forever even though all WAL has been applied.
+			 *
+			 * A SWITCH message marks a WAL-segment boundary and is always the
+			 * last record in a replayDB segment; its LSN is the endpos that the
+			 * inject/sentinel process sets.  Syncing here allows
+			 * follow_reached_endpos() to detect completion correctly.
+			 */
+			context->previousLSN = metadata->lsn;
+
+			bool findDurableLSN =
+				context->reachedEOF ||
+				(context->endpos != InvalidXLogRecPtr &&
+				 context->endpos <= metadata->lsn);
+
+			if (!stream_apply_sync_sentinel(context, findDurableLSN))
+			{
+				log_warn("Failed to sync sentinel at SWITCH LSN %X/%X, "
+						 "will retry on next iteration",
+						 LSN_FORMAT_ARGS(metadata->lsn));
+			}
+
+			if (context->endpos != InvalidXLogRecPtr &&
+				context->endpos <= metadata->lsn)
+			{
+				context->reachedEndPos = true;
+
+				log_notice("Apply reached end position %X/%X at SWITCH %X/%X",
+						   LSN_FORMAT_ARGS(context->endpos),
+						   LSN_FORMAT_ARGS(metadata->lsn));
+			}
 
 			break;
 		}
@@ -971,10 +1370,34 @@ stream_apply_sql(StreamApplyContext *context,
 				return false;
 			}
 
+			/*
+			 * Use context->previousLSN (the last committed data-transaction
+			 * LSN) rather than metadata->lsn (the KEEPALIVE position) for the
+			 * replication origin advancement.
+			 *
+			 * A KEEPALIVE fires at cur_record_lsn which may be *inside* an
+			 * uncommitted transaction (the mid-transaction endpos scenario).
+			 * If we advance the origin to that position, the next apply
+			 * session starts its replay cursor at the KEEPALIVE lsn, which
+			 * skips the straddling transaction's BEGIN and DML rows (their
+			 * lsn < KEEPALIVE lsn).
+			 *
+			 * By recording only the last durably committed transaction's LSN,
+			 * the replay cursor on the next session will start from
+			 * previousLSN and naturally include any straddling transaction.
+			 *
+			 * Fall back to metadata->lsn when previousLSN is zero (origin
+			 * has never been advanced in this session).
+			 */
+			uint64_t originLSN =
+				(context->previousLSN != InvalidXLogRecPtr)
+				? context->previousLSN
+				: metadata->lsn;
+
 			char lsn[PG_LSN_MAXLENGTH] = { 0 };
 
 			sformat(lsn, sizeof(lsn), "%X/%X",
-					LSN_FORMAT_ARGS(metadata->lsn));
+					LSN_FORMAT_ARGS(originLSN));
 
 			if (!pgsql_replication_origin_xact_setup(applyPgConn,
 													 lsn,
@@ -1051,6 +1474,58 @@ stream_apply_sql(StreamApplyContext *context,
 
 				/* HASH_ADD can change the pointer in place, update */
 				context->preparedStmt = stmtHashTable;
+			}
+
+			/*
+			 * In the SQLite pipeline the replay row carries the parameter
+			 * array in the same row (passed here via metadata->jsonBuffer).
+			 * Execute the statement immediately after preparing it.
+			 */
+			if (metadata->jsonBuffer != NULL)
+			{
+				char name[NAMEDATALEN] = { 0 };
+				sformat(name, sizeof(name), "%x", metadata->hash);
+
+				JSON_Value *js = json_parse_string(metadata->jsonBuffer);
+
+				if (json_value_get_type(js) != JSONArray)
+				{
+					log_error("Failed to parse DML args array: %s",
+							  metadata->jsonBuffer);
+					return false;
+				}
+
+				JSON_Array *jsArray = json_value_get_array(js);
+				int count = json_array_get_count(jsArray);
+
+				if (0 < count)
+				{
+					const char **paramValues =
+						(const char **) calloc(count, sizeof(char *));
+
+					if (paramValues == NULL)
+					{
+						log_error(ALLOCATION_FAILED_ERROR);
+						return false;
+					}
+
+					for (int i = 0; i < count; i++)
+					{
+						paramValues[i] = json_array_get_string(jsArray, i);
+					}
+
+					if (!pgsql_execute_prepared(applyPgConn, name,
+												count, paramValues,
+												NULL, NULL))
+					{
+						/* errors have already been logged */
+						return false;
+					}
+
+					free(paramValues);
+				}
+
+				json_value_free(js);
 			}
 
 			break;
@@ -1791,6 +2266,293 @@ writeTxnCommitMetadata(LogicalMessageMetadata *mesg, const char *dir)
 	{
 		log_error("Failed to write file \"%s\"", txnfilename);
 		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * stream_apply_to_stdout reads the replayDB stmt + replay tables and writes
+ * the SQL that would normally be sent to the target Postgres to the given
+ * FILE * (typically stdout).
+ *
+ * This mirrors pg_restore --no-target behaviour: useful for debugging and for
+ * unit-testing the apply read path without an actual database connection.
+ *
+ * Output format per transaction:
+ *
+ *   BEGIN
+ *   PREPARE <stmt_name> AS <sql_template>;
+ *   EXECUTE <stmt_name> (arg1, arg2, ...);
+ *   ...
+ *   COMMIT
+ */
+bool
+stream_apply_to_stdout(StreamSpecs *specs, FILE *out)
+{
+	DatabaseCatalog *replayDB = specs->replayDB;
+
+	if (replayDB == NULL || replayDB->db == NULL)
+	{
+		log_error("BUG: stream_apply_to_stdout: replayDB is NULL");
+		return false;
+	}
+
+	if (!semaphore_lock(&(replayDB->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	ReplayDBReplayIterator iter = { 0 };
+
+	iter.catalog = replayDB;
+	iter.previousLSN = InvalidXLogRecPtr;   /* start from the beginning */
+	iter.endpos = specs->endpos;
+
+	if (!ld_store_iter_replay_init(&iter))
+	{
+		(void) semaphore_unlock(&(replayDB->sema));
+		return false;
+	}
+
+	bool inTxn = false;
+	char prevHash[16] = { 0 };   /* track which stmts have been PREPAREd */
+
+	/*
+	 * We use a simple in-memory hash set to avoid printing the same PREPARE
+	 * more than once.  For the expected number of distinct statements per
+	 * unit-test (< 10) a linear scan is fast enough.
+	 */
+#define MAX_PREPARED 64
+	uint32_t preparedHashes[MAX_PREPARED];
+	int preparedCount = 0;
+	memset(preparedHashes, 0, sizeof(preparedHashes));
+
+	(void) prevHash;   /* suppress unused-variable warning */
+
+	for (;;)
+	{
+		if (!ld_store_iter_replay_next(&iter))
+		{
+			/* errors have already been logged */
+			(void) semaphore_unlock(&(replayDB->sema));
+			return false;
+		}
+
+		ReplayDBStmt *s = iter.current;
+
+		if (s == NULL)
+		{
+			break;  /* no more rows */
+		}
+
+		switch (s->action)
+		{
+			case STREAM_ACTION_BEGIN:
+			{
+				fformat(out, "BEGIN\n");
+				inTxn = true;
+				break;
+			}
+
+			case STREAM_ACTION_COMMIT:
+			{
+				fformat(out, "COMMIT\n");
+				inTxn = false;
+
+				/* stop at endpos */
+				if (specs->endpos != InvalidXLogRecPtr &&
+					specs->endpos <= s->lsn)
+				{
+					goto done;
+				}
+
+				break;
+			}
+
+			case STREAM_ACTION_ROLLBACK:
+			{
+				fformat(out, "ROLLBACK\n");
+				inTxn = false;
+				break;
+			}
+
+			case STREAM_ACTION_INSERT:
+			case STREAM_ACTION_UPDATE:
+			case STREAM_ACTION_DELETE:
+			case STREAM_ACTION_TRUNCATE:
+			{
+				if (s->stmt == NULL || s->data == NULL)
+				{
+					/* no SQL template or args — skip */
+					break;
+				}
+
+				/* PREPARE once per distinct hash */
+				bool alreadyPrepared = false;
+
+				for (int i = 0; i < preparedCount; i++)
+				{
+					if (preparedHashes[i] == s->hash)
+					{
+						alreadyPrepared = true;
+						break;
+					}
+				}
+
+				if (!alreadyPrepared)
+				{
+					char name[NAMEDATALEN] = { 0 };
+					sformat(name, sizeof(name), "%x", s->hash);
+
+					fformat(out, "PREPARE %s AS %s;\n", name, s->stmt);
+
+					if (preparedCount < MAX_PREPARED)
+					{
+						preparedHashes[preparedCount++] = s->hash;
+					}
+				}
+
+				/* EXECUTE with args */
+				char name[NAMEDATALEN] = { 0 };
+				sformat(name, sizeof(name), "%x", s->hash);
+
+				/*
+				 * Parse the JSON array of argument values and format them as
+				 * a comma-separated list: EXECUTE name ('v1', 'v2', NULL, ...)
+				 */
+				JSON_Value *js = json_parse_string(s->data);
+
+				if (js == NULL ||
+					json_value_get_type(js) != JSONArray)
+				{
+					log_error("stream_apply_to_stdout: failed to parse "
+							  "args JSON for replay id %lld: %s",
+							  (long long) s->id, s->data);
+					json_value_free(js);
+					(void) semaphore_unlock(&(replayDB->sema));
+					return false;
+				}
+
+				JSON_Array *jsArray = json_value_get_array(js);
+				int count = json_array_get_count(jsArray);
+
+				fformat(out, "EXECUTE %s (", name);
+
+				for (int i = 0; i < count; i++)
+				{
+					const char *val = json_array_get_string(jsArray, i);
+
+					if (i > 0)
+					{
+						fformat(out, ", ");
+					}
+
+					if (val == NULL)
+					{
+						fformat(out, "NULL");
+					}
+					else
+					{
+						fformat(out, "'%s'", val);
+					}
+				}
+
+				fformat(out, ")\n");
+
+				json_value_free(js);
+				break;
+			}
+
+			default:
+			{
+				/* KEEPALIVE, SWITCH, ENDPOS: skip */
+				break;
+			}
+		}
+	}
+
+done:
+	if (inTxn)
+	{
+		/* unterminated transaction at end of file — emit ROLLBACK */
+		fformat(out, "ROLLBACK\n");
+	}
+
+	(void) semaphore_unlock(&(replayDB->sema));
+
+	if (fflush(out) != 0)
+	{
+		log_error("stream_apply_to_stdout: fflush failed: %m");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * stream_apply_stdin reads SQL text from stdin (as produced by
+ * `pgcopydb stream transform - -`) and applies each statement to the target
+ * database.  This is the legacy Unix-pipe path:
+ *
+ *   pgcopydb stream receive --to-stdout  \
+ *     | pgcopydb stream transform - -    \
+ *     | pgcopydb stream apply -
+ *
+ * Each line is parsed with parseSQLAction to determine the action, then
+ * handed to stream_apply_sql.  The transform step always includes
+ * "commit_lsn" in BEGIN lines, so readTxnCommitLSN never needs to read
+ * a .txnmeta file.
+ */
+bool
+stream_apply_stdin(StreamSpecs *specs, StreamApplyContext *context)
+{
+	char line[BUFSIZE * 16];
+
+	while (fgets(line, sizeof(line), stdin) != NULL)
+	{
+		/* strip trailing newline */
+		int len = strlen(line);
+
+		if (len > 0 && line[len - 1] == '\n')
+		{
+			line[--len] = '\0';
+		}
+
+		if (len == 0)
+		{
+			continue;
+		}
+
+		LogicalMessageMetadata metadata = { 0 };
+
+		if (!parseSQLAction(line, &metadata))
+		{
+			log_error("stream_apply_stdin: failed to parse line: %s", line);
+			return false;
+		}
+
+		if (metadata.action == STREAM_ACTION_UNKNOWN)
+		{
+			/* not a recognised control line — skip silently */
+			continue;
+		}
+
+		if (!stream_apply_sql(context, &metadata, line))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (context->reachedEndPos)
+		{
+			log_info("stream_apply_stdin: reached end position %X/%X",
+					 LSN_FORMAT_ARGS(context->endpos));
+			break;
+		}
 	}
 
 	return true;

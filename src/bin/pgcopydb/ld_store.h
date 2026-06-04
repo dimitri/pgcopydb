@@ -82,6 +82,8 @@ bool ld_store_insert_message(DatabaseCatalog *catalog,
 bool ld_store_insert_internal_message(DatabaseCatalog *catalog,
 									  InternalMessage *message);
 
+bool ld_store_delete_output_xid(DatabaseCatalog *catalog, uint32_t xid);
+
 bool ld_store_insert_replay_stmt(DatabaseCatalog *catalog,
 								 ReplayDBStmt *replayStmt);
 
@@ -129,5 +131,41 @@ bool ld_store_replay_fetch(SQLiteQuery *query);
 bool ld_store_iter_replay_init(ReplayDBReplayIterator *iter);
 bool ld_store_iter_replay_next(ReplayDBReplayIterator *iter);
 bool ld_store_iter_replay_finish(ReplayDBReplayIterator *iter);
+
+
+/*
+ * ld_store_replay_next_event returns the next event to apply after
+ * previousLSN.  For transactions it returns the BEGIN row only when the
+ * full transaction has been written (endlsn > previousLSN).  For
+ * non-transactional events (KEEPALIVE/SWITCH/ENDPOS) it returns the first
+ * row at lsn >= previousLSN.
+ *
+ * s->action is set to STREAM_ACTION_UNKNOWN when no rows are available.
+ */
+bool ld_store_replay_event_fetch(SQLiteQuery *query);
+
+bool ld_store_replay_next_event(DatabaseCatalog *catalog,
+								uint64_t previousLSN,
+								ReplayDBStmt *s);
+
+
+/*
+ * ReplayDBReplayTxnIterator iterates over all rows of a single transaction
+ * in the replay table (BEGIN + DML rows + COMMIT/ROLLBACK), starting from
+ * the given begin_id, ordered by id.
+ */
+typedef struct ReplayDBReplayTxnIterator
+{
+	DatabaseCatalog *catalog;
+	ReplayDBStmt *current;
+	SQLiteQuery query;
+
+	uint32_t xid;
+	uint64_t begin_id;
+} ReplayDBReplayTxnIterator;
+
+bool ld_store_iter_replay_txn_init(ReplayDBReplayTxnIterator *iter);
+bool ld_store_iter_replay_txn_next(ReplayDBReplayTxnIterator *iter);
+bool ld_store_iter_replay_txn_finish(ReplayDBReplayTxnIterator *iter);
 
 #endif /* LD_STORE_H */

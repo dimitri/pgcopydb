@@ -154,6 +154,16 @@ parseTestDecodingMessageActionAndXid(LogicalStreamContext *context)
 			log_error("Failed to parse XID \"%s\"", begin + s);
 			return false;
 		}
+
+		/*
+		 * pgcopydb normalisation: remember the transaction XID so we can
+		 * stamp it onto every DML message in this transaction.
+		 * test_decoding (and pgoutput) only emit XID on BEGIN/COMMIT; wal2json
+		 * includes it on every message.  By tracking it here we make all
+		 * plugins behave the same way in the output table, which lets
+		 * WHERE xid = $1 work reliably for the transform iterator.
+		 */
+		privateContext->currentXid = metadata->xid;
 	}
 	else if (context->buffer == commit)
 	{
@@ -166,6 +176,9 @@ parseTestDecodingMessageActionAndXid(LogicalStreamContext *context)
 			log_error("Failed to parse XID \"%s\"", commit + s);
 			return false;
 		}
+
+		/* clear the tracked XID after the transaction closes */
+		privateContext->currentXid = 0;
 	}
 	else if (context->buffer == table)
 	{
@@ -186,6 +199,13 @@ parseTestDecodingMessageActionAndXid(LogicalStreamContext *context)
 		}
 
 		metadata->action = header.action;
+
+		/*
+		 * pgcopydb normalisation: stamp the current transaction XID onto
+		 * the DML row so the output table entry carries xid just like
+		 * wal2json would.
+		 */
+		metadata->xid = privateContext->currentXid;
 	}
 	else
 	{
@@ -231,11 +251,32 @@ parseTestDecodingMessage(StreamContext *privateContext,
 	LogicalTransactionStatement *stmt = privateContext->stmt;
 	LogicalMessageMetadata *metadata = &(privateContext->metadata);
 
-	JSON_Object *jsobj = json_value_get_object(json);
 	TestDecodingHeader header = { 0 };
 
-	/* extract the test_decoding raw message */
-	const char *td_message = json_object_get_string(jsobj, "message");
+	/*
+	 * The test_decoding message text arrives in two different forms:
+	 *
+	 *  SQLite path: json is a JSONString whose value IS the raw message,
+	 *               e.g. the output.message column holds
+	 *               "table public.foo: INSERT: ...".  Use the string value
+	 *               directly.
+	 *
+	 *  File path:   json is a JSONObject with a "message" string key that
+	 *               wraps the raw message, e.g.
+	 *               {"action":"I","lsn":"...","message":"table ..."}.
+	 *               Extract the "message" value from the object.
+	 */
+	const char *td_message = NULL;
+
+	if (json_value_get_type(json) == JSONString)
+	{
+		td_message = json_value_get_string(json);
+	}
+	else
+	{
+		JSON_Object *jsobj = json_value_get_object(json);
+		td_message = json_object_get_string(jsobj, "message");
+	}
 
 	if (!parseTestDecodingMessageHeader(&header, td_message))
 	{

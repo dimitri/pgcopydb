@@ -230,6 +230,19 @@ ld_store_set_cdc_filename_at_lsn(StreamSpecs *specs, uint64_t lsn)
 			return false;
 		}
 
+		/*
+		 * If we already have this file open, skip the probe/promotion.
+		 * Every ~1.5s the transform loop calls this function and the same
+		 * file is returned; recreating the replayDB each time would leak a
+		 * SysV semaphore into the global array (max 16 slots).
+		 */
+		if (specs->replayDB != NULL &&
+			specs->replayDB->db != NULL &&
+			strcmp(specs->replayDB->dbfile, candidate) == 0)
+		{
+			break;
+		}
+
 		DatabaseCatalog *candidateDB =
 			(DatabaseCatalog *) calloc(1, sizeof(DatabaseCatalog));
 
@@ -241,12 +254,38 @@ ld_store_set_cdc_filename_at_lsn(StreamSpecs *specs, uint64_t lsn)
 
 		strlcpy(candidateDB->dbfile, candidate, sizeof(candidateDB->dbfile));
 
-		if (!catalog_open(candidateDB))
+		/*
+		 * Probe the database file with a raw read-only SQLite open.
+		 * We avoid catalog_open/catalog_init here because that would create a
+		 * new SysV semaphore and register it in the global system_res_array,
+		 * which has only 16 slots.  The transform loop calls this function
+		 * every ~1.5s, so the array would fill up within seconds.
+		 */
+		sqlite3 *probeDB = NULL;
+
+		int sqlite_rc = sqlite3_open_v2(candidateDB->dbfile,
+										&probeDB,
+										SQLITE_OPEN_READONLY,
+										NULL);
+
+		if (sqlite_rc != SQLITE_OK)
 		{
-			/* errors have already been logged */
+			log_error("Failed to open \"%s\": %s",
+					  candidateDB->dbfile,
+					  sqlite3_errmsg(probeDB));
+			if (probeDB != NULL)
+			{
+				sqlite3_close(probeDB);
+			}
 			free(candidateDB);
 			return false;
 		}
+
+		/*
+		 * Temporarily attach the raw handle so ld_store_lookup_output_after_lsn
+		 * can run its query through the usual catalog_sql_* helpers.
+		 */
+		candidateDB->db = probeDB;
 
 		/*
 		 * Verify the file contains at least one output row at or after the
@@ -259,19 +298,39 @@ ld_store_set_cdc_filename_at_lsn(StreamSpecs *specs, uint64_t lsn)
 		if (!ld_store_lookup_output_after_lsn(candidateDB, lsn, &output))
 		{
 			/* errors have already been logged */
-			(void) catalog_close(candidateDB);
+			sqlite3_close(probeDB);
+			candidateDB->db = NULL;
 			free(candidateDB);
 			return false;
 		}
 
+		sqlite3_close(probeDB);
+		candidateDB->db = NULL;
+
 		if (output.lsn != InvalidXLogRecPtr)
 		{
-			/* this file contains messages at or after the given LSN */
+			/*
+			 * This file contains messages at or after the given LSN.
+			 * Fully initialize it (semaphore, WAL mode, schema) so it
+			 * becomes the active replayDB.
+			 */
+			if (!catalog_init(candidateDB))
+			{
+				/* errors have already been logged */
+				free(candidateDB);
+				return false;
+			}
+
+			/* close the old replayDB SQLite handle before replacing */
+			if (specs->replayDB != NULL && specs->replayDB->db != NULL)
+			{
+				(void) catalog_close(specs->replayDB);
+			}
+
 			specs->replayDB = candidateDB;
 			break;
 		}
 
-		(void) catalog_close(candidateDB);
 		free(candidateDB);
 	}
 
@@ -392,7 +451,19 @@ ld_store_lookup_output_after_lsn(DatabaseCatalog *catalog,
 		return false;
 	}
 
+	/*
+	 * Order by LSN so that a BEGIN (which has the lowest LSN in its
+	 * transaction) is found before any internal markers (ENDPOS, KEEPALIVE)
+	 * that may have been inserted at a higher LSN but kept a lower row-id
+	 * after an INSERT OR REPLACE re-delivery of the same transaction.
+	 * Within the same LSN, prefer BEGIN (action='B') over other actions,
+	 * then fall back to insertion order (id) as a tiebreaker.
+	 *
+	 * SQLite requires ORDER BY on a UNION to reference result-set columns by
+	 * name, so wrap the UNION in a subquery to allow the CASE expression.
+	 */
 	char *sql =
+		"select id, action, xid, lsn, timestamp, message from ("
 		"  select id, action, xid, lsn, timestamp, message "
 		"    from output "
 
@@ -402,8 +473,9 @@ ld_store_lookup_output_after_lsn(DatabaseCatalog *catalog,
 		"  select id, action, xid, lsn, timestamp, message "
 		"    from output "
 		"   where lsn > $2 "
-		"order by id "
-		"   limit 1";
+		") "
+		"order by lsn asc, case when action = 'B' then 0 else 1 end, id asc "
+		"limit 1";
 
 	log_debug("ld_store_lookup_output_after_lsn: %X/%X", LSN_FORMAT_ARGS(lsn));
 
@@ -461,17 +533,33 @@ ld_store_lookup_output_xid_end(DatabaseCatalog *catalog,
 		return false;
 	}
 
+	/*
+	 * Prefer COMMIT (action='C') over ROLLBACK (action='R') when both exist.
+	 *
+	 * In the mid-transaction endpos scenario, the prefetch inserts an
+	 * artificial ROLLBACK so the transform can advance past the partial
+	 * transaction boundary.  When pgcopydb follow reconnects and the slot
+	 * re-delivers the complete transaction, the real COMMIT is inserted with
+	 * a higher id than the stale ROLLBACK.  Ordering by COMMIT first ensures
+	 * we find the real COMMIT rather than the stale ROLLBACK.
+	 */
 	char *sql =
 		"  select id, action, xid, lsn, timestamp, message "
 		"    from output "
 		"   where xid = $1 and (action = 'C' or action = 'R') "
-		"order by id "
+		"order by case when action = 'C' then 0 else 1 end, id "
 		"   limit 1";
 
 	log_debug("ld_store_lookup_output_xid_end: %u", xid);
 
+	/*
+	 * errorOnZeroRows = false: the COMMIT for the given xid may not have
+	 * been written by the receive subprocess yet (concurrent pipeline).
+	 * The caller (ld_store_iter_output_init) checks last.lsn ==
+	 * InvalidXLogRecPtr and treats zero rows as "not yet available".
+	 */
 	SQLiteQuery query = {
-		.errorOnZeroRows = true,
+		.errorOnZeroRows = false,
 		.context = output,
 		.fetchFunction = &ld_store_output_fetch
 	};
@@ -493,7 +581,6 @@ ld_store_lookup_output_xid_end(DatabaseCatalog *catalog,
 		return false;
 	}
 
-	/* now execute the query, which return exactly one row */
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
@@ -720,7 +807,7 @@ ld_store_insert_message(DatabaseCatalog *catalog,
 	}
 
 	char *sql =
-		"insert into output(action, xid, lsn, timestamp, message)"
+		"insert or replace into output(action, xid, lsn, timestamp, message)"
 		"values($1, $2, $3, $4, $5) ";
 
 	if (!semaphore_lock(&(catalog->sema)))
@@ -734,10 +821,17 @@ ld_store_insert_message(DatabaseCatalog *catalog,
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
-	/* only BEGIN/COMMIT messages have an xid */
+	/*
+	 * Store xid as NULL only for messages that genuinely have no transaction
+	 * context (KEEPALIVE, SWITCH, ENDPOS).  After pgcopydb normalisation,
+	 * test_decoding DML rows carry the current transaction XID (propagated
+	 * from BEGIN by parseTestDecodingMessageActionAndXid), so xid > 0 for
+	 * all transactional actions (BEGIN, DML, COMMIT).
+	 */
 	BindParameterType xidParamType =
 		metadata->xid == 0 ? BIND_PARAMETER_TYPE_NULL : BIND_PARAMETER_TYPE_INT64;
 
@@ -792,8 +886,8 @@ ld_store_insert_internal_message(DatabaseCatalog *catalog,
 	}
 
 	char *sql =
-		"insert or replace into output(action, lsn, timestamp)"
-		"values($1, $2, $3)";
+		"insert or replace into output(action, xid, lsn, timestamp)"
+		"values($1, $2, $3, $4)";
 
 	if (!semaphore_lock(&(catalog->sema)))
 	{
@@ -806,6 +900,7 @@ ld_store_insert_internal_message(DatabaseCatalog *catalog,
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -822,15 +917,20 @@ ld_store_insert_internal_message(DatabaseCatalog *catalog,
 		{
 			log_error("Failed to format server send time %lld to time string",
 					  (long long) message->time);
+			(void) semaphore_unlock(&(catalog->sema));
 			return false;
 		}
 	}
 
 	char action[2] = { message->action, '\0' };
 
+	BindParameterType xidParamType =
+		message->xid > 0 ? BIND_PARAMETER_TYPE_INT64 : BIND_PARAMETER_TYPE_NULL;
+
 	/* bind our parameters now */
 	BindParam params[] = {
 		{ BIND_PARAMETER_TYPE_TEXT, "action", 0, action },
+		{ xidParamType, "xid", message->xid, NULL },
 		{ BIND_PARAMETER_TYPE_INT64, "lsn", message->lsn, NULL },
 		{ timeParamType, "timestamp", 0, message->timeStr }
 	};
@@ -851,6 +951,74 @@ ld_store_insert_internal_message(DatabaseCatalog *catalog,
 		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
+ * ld_store_delete_output_xid removes all output rows for the given xid.
+ *
+ * Called when streaming stops mid-transaction (endpos reached or connection
+ * retry).  Removing the partial rows lets the reconnect re-deliver the full
+ * transaction cleanly without leaving a phantom ROLLBACK row in the table.
+ *
+ * We do NOT insert a synthetic ROLLBACK instead, because PostgreSQL logical
+ * decoding never emits a ROLLBACK message.  The unique index on (action, lsn)
+ * means a synthetic ROLLBACK row (action='R') would never be overwritten by
+ * the re-delivered COMMIT (action='C') on reconnect.
+ */
+bool
+ld_store_delete_output_xid(DatabaseCatalog *catalog, uint32_t xid)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: ld_store_delete_output_xid: db is NULL");
+		return false;
+	}
+
+	char *sql = "DELETE FROM output WHERE xid = $1";
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "xid", xid, NULL },
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	log_debug("ld_store_delete_output_xid: deleted partial rows for xid %u", xid);
 
 	(void) semaphore_unlock(&(catalog->sema));
 
@@ -1221,19 +1389,109 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 
 		default:
 		{
-			log_error("Failed to start iterating over output at LSN %X/%X "
-					  "with unexpected action %s",
-					  LSN_FORMAT_ARGS(iter->transform_lsn),
-					  StreamActionToString(first.action));
-			iter->output = NULL;
-			return false;
+			/*
+			 * A DML message (INSERT/UPDATE/DELETE) appeared as the first
+			 * entry after transform_lsn.  This happens when transform_lsn
+			 * was advanced past a partial transaction boundary (via the
+			 * artificial ROLLBACK in streamCloseFile) and the slot then
+			 * re-delivered the complete transaction on reconnect.
+			 *
+			 * The BEGIN for this XID is at a lower LSN — look it up and
+			 * treat it just like the BEGIN case above.
+			 */
+			if (first.xid == 0)
+			{
+				log_error("Failed to start iterating over output at LSN %X/%X "
+						  "with unexpected action %s (no xid)",
+						  LSN_FORMAT_ARGS(iter->transform_lsn),
+						  StreamActionToString(first.action));
+				iter->output = NULL;
+				return false;
+			}
+
+			/* check the transaction has a COMMIT (prefer over ROLLBACK) */
+			if (!ld_store_lookup_output_xid_end(catalog, first.xid, &last))
+			{
+				iter->output = NULL;
+				return false;
+			}
+
+			if (last.lsn == InvalidXLogRecPtr)
+			{
+				/* transaction not yet complete — wait */
+				iter->output = NULL;
+				return true;
+			}
+
+			/* find the BEGIN for this XID */
+			{
+				char *begin_sql =
+					"  select id, action, xid, lsn, timestamp, message "
+					"    from output "
+					"   where xid = $1 and action = 'B' "
+					"order by id limit 1";
+
+				ReplayDBOutputMessage begin = { 0 };
+				SQLiteQuery bq = {
+					.errorOnZeroRows = false,
+					.context = &begin,
+					.fetchFunction = &ld_store_output_fetch
+				};
+
+				if (!catalog_sql_prepare(db, begin_sql, &bq))
+				{
+					iter->output = NULL;
+					return false;
+				}
+
+				BindParam bp[1] = {
+					{ BIND_PARAMETER_TYPE_INT64, "xid", first.xid },
+				};
+
+				if (!catalog_sql_bind(&bq, bp, 1) ||
+					!catalog_sql_execute_once(&bq))
+				{
+					iter->output = NULL;
+					return false;
+				}
+
+				if (begin.lsn == InvalidXLogRecPtr)
+				{
+					log_error("No BEGIN found for xid %u "
+							  "while resuming after transform_lsn %X/%X",
+							  first.xid,
+							  LSN_FORMAT_ARGS(iter->transform_lsn));
+					iter->output = NULL;
+					return false;
+				}
+
+				log_notice("ld_store_iter_output_init: resuming xid=%u "
+						   "past superseded ENDPOS/ROLLBACK at %X/%X, "
+						   "iterating from BEGIN id=%lld",
+						   first.xid,
+						   LSN_FORMAT_ARGS(iter->transform_lsn),
+						   (long long) begin.id);
+
+				*(iter->output) = begin;
+			}
+
+			break;
 		}
 	}
 
+	/*
+	 * Select all output rows for this transaction in insertion order.
+	 *
+	 * We start at id >= iter->output->id (the BEGIN's row-id) to skip any
+	 * artificial ROLLBACK rows that were inserted during an earlier partial
+	 * run and now have a lower id than the re-delivered BEGIN (because
+	 * INSERT OR REPLACE renewed the BEGIN's id).  For a first-time run the
+	 * BEGIN has the lowest id so this filter is a no-op.
+	 */
 	char *sql =
 		"   select id, action, xid, lsn, timestamp, message "
 		"     from output "
-		"    where xid = $1 "
+		"    where xid = $1 and id >= $2 "
 		" order by id";
 
 	SQLiteQuery *query = &(iter->query);
@@ -1242,7 +1500,8 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 	query->fetchFunction = &ld_store_output_fetch;
 
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_INT64, "xid", first.xid, NULL }
+		{ BIND_PARAMETER_TYPE_INT64, "xid", first.xid, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "id",  iter->output->id, NULL }
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -1260,7 +1519,9 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 		return false;
 	}
 
-	log_debug("ld_store_iter_output_init: iterating xid = %u", first.xid);
+	log_debug("ld_store_iter_output_init: iterating xid=%u (begin id=%lld)",
+			  first.xid,
+			  (long long) first.id);
 
 	return true;
 }
@@ -1397,6 +1658,13 @@ ld_store_replay_fetch(SQLiteQuery *query)
 				len + 1);
 	}
 
+	/* r.stmt_hash — stored as 8-char hex text, e.g. "a14fc954" */
+	if (sqlite3_column_type(query->ppStmt, 8) != SQLITE_NULL)
+	{
+		const char *hashStr = (char *) sqlite3_column_text(query->ppStmt, 8);
+		s->hash = (uint32_t) strtoul(hashStr, NULL, 16);
+	}
+
 	log_debug("ld_store_replay_fetch: %lld %c xid=%u lsn=%X/%X endlsn=%X/%X",
 			  (long long) s->id, s->action, s->xid,
 			  LSN_FORMAT_ARGS(s->lsn), LSN_FORMAT_ARGS(s->endlsn));
@@ -1435,20 +1703,28 @@ ld_store_iter_replay_init(ReplayDBReplayIterator *iter)
 	}
 
 	/*
-	 * Select all replay rows after previousLSN, joined with the stmt table
-	 * to include the SQL template.  Rows with lsn IS NULL (e.g. some DML
-	 * rows where lsn tracks the BEGIN) are also included as long as their
-	 * id is greater than the last applied row's id.
+	 * Select all replay rows that still need to be applied, joined with the
+	 * stmt table to include the SQL template.
 	 *
 	 * We use a LEFT JOIN so that internal rows without a stmt (KEEPALIVE,
 	 * SWITCH, ENDPOS) still appear.
+	 *
+	 * Use >= so that rows whose lsn equals previousLSN are included.
+	 * This handles the case where the first DML transaction's BEGIN/INSERT
+	 * share an LSN with the replication origin's starting position
+	 * (e.g. when the slot was created immediately before the DML).
+	 *
+	 * Idempotency is preserved: when a COMMIT appears at lsn == previousLSN
+	 * on a restart, stream_apply_sql skips it via the reachedStartPos check
+	 * (which requires previousLSN < metadata->txnCommitLSN, so equal lsn
+	 * means skip).
 	 */
 	char *sql =
 		"   select r.id, r.action, r.xid, r.lsn, r.endlsn, r.timestamp, "
-		"          s.sql, r.stmt_args "
+		"          s.sql, r.stmt_args, r.stmt_hash "
 		"     from replay r "
 		"left join stmt s on r.stmt_hash = s.hash "
-		"    where r.lsn > $1 or r.lsn is null "
+		"    where r.lsn >= $1 or r.lsn is null "
 		" order by r.id";
 
 	SQLiteQuery *query = &(iter->query);
@@ -1518,6 +1794,255 @@ ld_store_iter_replay_next(ReplayDBReplayIterator *iter)
  */
 bool
 ld_store_iter_replay_finish(ReplayDBReplayIterator *iter)
+{
+	SQLiteQuery *query = &(iter->query);
+
+	if (!catalog_sql_finalize(query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	iter->current = NULL;
+
+	return true;
+}
+
+
+/*
+ * ld_store_replay_event_fetch populates a ReplayDBStmt from the first 6
+ * columns of the outer-event query (id, action, xid, lsn, endlsn, timestamp).
+ * No stmt.sql / stmt_args / stmt_hash columns are present.
+ */
+bool
+ld_store_replay_event_fetch(SQLiteQuery *query)
+{
+	ReplayDBStmt *s = (ReplayDBStmt *) query->context;
+
+	bzero(s, sizeof(ReplayDBStmt));
+
+	s->id = sqlite3_column_int64(query->ppStmt, 0);
+
+	if (sqlite3_column_type(query->ppStmt, 1) != SQLITE_NULL)
+	{
+		char *action = (char *) sqlite3_column_text(query->ppStmt, 1);
+		s->action = action[0];
+	}
+
+	if (sqlite3_column_type(query->ppStmt, 2) != SQLITE_NULL)
+		s->xid = sqlite3_column_int64(query->ppStmt, 2);
+
+	s->lsn = InvalidXLogRecPtr;
+	if (sqlite3_column_type(query->ppStmt, 3) != SQLITE_NULL)
+		s->lsn = sqlite3_column_int64(query->ppStmt, 3);
+
+	s->endlsn = InvalidXLogRecPtr;
+	if (sqlite3_column_type(query->ppStmt, 4) != SQLITE_NULL)
+		s->endlsn = sqlite3_column_int64(query->ppStmt, 4);
+
+	if (sqlite3_column_type(query->ppStmt, 5) != SQLITE_NULL)
+	{
+		strlcpy(s->timestamp,
+				(char *) sqlite3_column_text(query->ppStmt, 5),
+				sizeof(s->timestamp));
+	}
+
+	log_debug("ld_store_replay_event_fetch: %lld %c xid=%u lsn=%X/%X endlsn=%X/%X",
+			  (long long) s->id, s->action, s->xid,
+			  LSN_FORMAT_ARGS(s->lsn), LSN_FORMAT_ARGS(s->endlsn));
+
+	return true;
+}
+
+
+/*
+ * ld_store_replay_next_event returns the next event to apply after
+ * previousLSN into s.  s->action is STREAM_ACTION_UNKNOWN when no rows.
+ *
+ * For transactions: returns the BEGIN row only when endlsn > previousLSN
+ * (i.e. the transform has already written the COMMIT, so commitLSN is known).
+ *
+ * For non-transactional events (KEEPALIVE/SWITCH/ENDPOS): returns the first
+ * row at lsn >= previousLSN or lsn IS NULL.
+ *
+ * The UNION ALL orders by lsn ASC, id ASC so that a non-txn event whose LSN
+ * is earlier than any pending BEGIN is returned first.
+ */
+bool
+ld_store_replay_next_event(DatabaseCatalog *catalog,
+						   uint64_t previousLSN,
+						   ReplayDBStmt *s)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: ld_store_replay_next_event: db is NULL");
+		return false;
+	}
+
+	/*
+	 * Return the next event that is ready to apply.
+	 *
+	 * For transactions (action='B'): only return the BEGIN row when the
+	 * matching COMMIT or ROLLBACK row already exists in the replay table.
+	 * The JOIN on replay c ensures this: the transform writes BEGIN first
+	 * (with endlsn populated), then DML rows, then COMMIT — each as a
+	 * separate SQLite statement.  Without the JOIN we could see a BEGIN
+	 * before its COMMIT and DML rows have been written.
+	 *
+	 * For non-transactional events (KEEPALIVE/SWITCH/ENDPOS): return the
+	 * first row at lsn >= previousLSN.
+	 */
+	char *sql =
+		"select b.id, b.action, b.xid, b.lsn, b.endlsn, b.timestamp "
+		"  from replay b "
+		"  join replay c on c.xid = b.xid and c.action in ('C', 'R') "
+		" where b.action = 'B' and b.endlsn > $1 "
+		"union all "
+		"select id, action, xid, lsn, endlsn, timestamp "
+		"  from replay "
+		" where action in ('K', 'X', 'E') "
+		"   and (lsn >= $1 or lsn is null) "
+		"order by lsn asc, id asc "
+		"limit 1";
+
+	bzero(s, sizeof(ReplayDBStmt));
+
+	SQLiteQuery query = {
+		.errorOnZeroRows = false,
+		.context = s,
+		.fetchFunction = &ld_store_replay_event_fetch
+	};
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "previousLSN", previousLSN, NULL }
+	};
+
+	if (!catalog_sql_bind(&query, params, 1))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * ld_store_iter_replay_txn_init prepares the inner-transaction iterator.
+ * It fetches all rows for the given xid with id >= begin_id, in id order.
+ * This covers: the BEGIN row itself, all DML rows, and the COMMIT/ROLLBACK row.
+ */
+bool
+ld_store_iter_replay_txn_init(ReplayDBReplayTxnIterator *iter)
+{
+	DatabaseCatalog *catalog = iter->catalog;
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: ld_store_iter_replay_txn_init: db is NULL");
+		return false;
+	}
+
+	iter->current =
+		(ReplayDBStmt *) calloc(1, sizeof(ReplayDBStmt));
+
+	if (iter->current == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	char *sql =
+		"   select r.id, r.action, r.xid, r.lsn, r.endlsn, r.timestamp, "
+		"          s.sql, r.stmt_args, r.stmt_hash "
+		"     from replay r "
+		"left join stmt s on r.stmt_hash = s.hash "
+		"    where r.xid = $1 and r.id >= $2 "
+		" order by r.id";
+
+	SQLiteQuery *query = &(iter->query);
+
+	query->context = iter->current;
+	query->fetchFunction = &ld_store_replay_fetch;
+
+	if (!catalog_sql_prepare(db, sql, query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "xid", iter->xid, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "begin_id", iter->begin_id, NULL }
+	};
+
+	if (!catalog_sql_bind(query, params, 2))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_debug("ld_store_iter_replay_txn_init: xid %u begin_id %lld",
+			  iter->xid, (long long) iter->begin_id);
+
+	return true;
+}
+
+
+/*
+ * ld_store_iter_replay_txn_next fetches the next row from the txn iterator.
+ * Sets iter->current to NULL when there are no more rows.
+ */
+bool
+ld_store_iter_replay_txn_next(ReplayDBReplayTxnIterator *iter)
+{
+	SQLiteQuery *query = &(iter->query);
+
+	int rc = catalog_sql_step(query);
+
+	if (rc == SQLITE_DONE)
+	{
+		iter->current = NULL;
+		return true;
+	}
+
+	if (rc != SQLITE_ROW)
+	{
+		log_error("Failed to step through txn replay iterator: %s", query->sql);
+
+		int errcode = sqlite3_extended_errcode(query->db);
+
+		log_error("[SQLite] %s: %s",
+				  sqlite3_errmsg(query->db),
+				  sqlite3_errstr(errcode));
+
+		return false;
+	}
+
+	return ld_store_replay_fetch(query);
+}
+
+
+/*
+ * ld_store_iter_replay_txn_finish cleans up the txn iterator's statement.
+ */
+bool
+ld_store_iter_replay_txn_finish(ReplayDBReplayTxnIterator *iter)
 {
 	SQLiteQuery *query = &(iter->query);
 
