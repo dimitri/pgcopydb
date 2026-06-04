@@ -42,17 +42,27 @@ pgcopydb stream sentinel set apply
 # allow the catchup phase to finish, ensure the following data is streamed
 sleep 2
 
+# Insert test data: rows that exercise null handling, large batches, and updates
+# across WAL segment boundaries to show the SQLite CDC pipeline is independent
+# of PostgreSQL WAL segments (old file-based design depended on them critically).
+
 # insert additional rows to exercise literal 'null' handling during live follow
 psql -d ${PGCOPYDB_SOURCE_PGURI} <<'EOF'
 insert into null_texts(text_col, json_col)
 values ('null', '"null"'), (null, null);
 EOF
 
+psql -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_switch_wal()'
+
 # then insert another batch of 10 rows (21..30)
 psql -v a=21 -v b=30 -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 
+psql -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_switch_wal()'
+
 # also insert data that won't fit in a single Unix PIPE buffer
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml-bufsize.sql
+
+psql -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_switch_wal()'
 
 # add some data to update_test table
 psql -d ${PGCOPYDB_SOURCE_PGURI} << EOF
@@ -90,7 +100,6 @@ do
 done
 
 #
-# Still give some time to the pgcopydb service to finish its processing,
-# with the cleanup and all.
+# Give some time to the pgcopydb service to finish cleanup.
 #
-sleep 10
+sleep 5

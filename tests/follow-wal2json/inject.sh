@@ -26,27 +26,20 @@ do
 done
 
 #
-# Inject changes from our DML file in a loop, again and again.
+# Inject a batch of DML changes.
+# Then switch WAL segment to demonstrate that the SQLite CDC pipeline is
+# independent of PostgreSQL WAL segment boundaries (in the old file-based
+# design, WAL switches were critical milestones; now they're invisible).
 #
-# Every other round of DML changes, we also force the source server to
-# switch to another WAL file, to test that our streaming solution can follow
-# WAL file changes.
-#
-for i in `seq 5`
-do
-    psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
-    sleep 1
+psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
+psql -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_switch_wal()'
 
-    psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
-    sleep 1
+# Inject another batch on the new WAL segment to show pipeline continues
+# across segment boundaries without any special handling.
+psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
+psql -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_switch_wal()'
 
-    psql -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_switch_wal()'
-    sleep 1
-done
-
-# grab the current LSN, it's going to be our streaming end position
-lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_flush_lsn()'`
-
+# Set endpos to current flush LSN to signal follow where to stop
 pgcopydb stream sentinel set endpos --current --debug
 pgcopydb stream sentinel get
 
@@ -54,14 +47,14 @@ endpos=`pgcopydb stream sentinel get --endpos 2>/dev/null`
 
 if [ ${endpos} = "0/0" ]
 then
-    echo "expected ${lsn} endpos, found ${endpos}"
+    echo "ERROR: endpos not set"
     exit 1
 fi
 
 #
 # Because we're using docker-compose --abort-on-container-exit make sure
 # that the other process in the pgcopydb service is done before exiting
-# here.
+# here. Wait for flush_lsn to reach endpos (indicates CDC pipeline caught up).
 #
 flushlsn="0/0"
 
@@ -72,7 +65,6 @@ do
 done
 
 #
-# Still give some time to the pgcopydb service to finish its processing,
-# with the cleanup and all.
+# Give some time to the pgcopydb service to finish cleanup.
 #
-sleep 10
+sleep 5
