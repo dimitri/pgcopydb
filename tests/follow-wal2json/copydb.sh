@@ -23,8 +23,8 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/ddl.sql
 pgcopydb clone --follow --plugin wal2json --notice
 
 # Query the SQLite CDC database to verify output/replay tables exist
-db="${TMPDIR}/pgcopydb/cdc/pgcopydb/00000001-"*.db
-if [ -f "$db" ]; then
+db=$(find ${TMPDIR}/cdc/pgcopydb -name "00000001-*.db" -type f | head -1)
+if [ -n "$db" ] && [ -f "$db" ]; then
   sqlite3 "$db" <<EOF
 select id, action, xid, lsn, substring(message, 1, 48) from output limit 10;
 
@@ -33,7 +33,7 @@ select hash, sql from stmt limit 5;
 select id, action, xid, lsn, endlsn, stmt_hash, stmt_args from replay limit 10;
 EOF
 else
-  echo "CDC database not found at ${TMPDIR}/pgcopydb/cdc/pgcopydb/"
+  echo "CDC database not found at ${TMPDIR}/cdc/pgcopydb/"
 fi
 
 # cleanup
