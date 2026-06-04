@@ -153,11 +153,19 @@ stream_init_specs(StreamSpecs *specs,
 
 	/*
 	 * Now prepare for the follow mode sub-process management.
+	 *
+	 * The process names reflect their actual function:
+	 * - receive: receives changes from the PostgreSQL replication slot
+	 * - transform: transforms logical decoding output to SQL statements
+	 * - apply: applies the SQL statements to the target database
+	 *
+	 * In replay mode (no live Postgres), we use "replay" instead of "apply"
+	 * since there's no target database involved.
 	 */
 	bool replayMode = specs->mode == STREAM_MODE_REPLAY;
 
 	FollowSubProcess prefetch = {
-		.name = replayMode ? "receive" : "prefetch",
+		.name = replayMode ? "receive" : "receive",
 		.command = &follow_start_prefetch,
 		.pid = -1
 	};
@@ -169,7 +177,7 @@ stream_init_specs(StreamSpecs *specs,
 	};
 
 	FollowSubProcess catchup = {
-		.name = replayMode ? "replay" : "catchup",
+		.name = replayMode ? "replay" : "apply",
 		.command = &follow_start_catchup,
 		.pid = -1
 	};
