@@ -163,11 +163,40 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 		{
 			/*
 			 * No more rows: the transform process has not produced anything
-			 * past our current position.
+			 * past our current position. We need to check the sentinel to see
+			 * if endpos has been set. If endpos is set and reached, we can exit.
+			 * If endpos is not set yet, we should wait for more data to arrive.
 			 */
-			log_info("Apply caught up with replayDB at LSN %X/%X",
-					 LSN_FORMAT_ARGS(context->previousLSN));
-			break;
+			if (!stream_apply_sync_sentinel(context, false))
+			{
+				log_warn("Failed to sync sentinel when caught up with replayDB");
+				/* continue anyway, don't fail hard */
+			}
+
+			/* Check if endpos has been reached */
+			if (context->endpos != InvalidXLogRecPtr &&
+				context->endpos <= context->previousLSN)
+			{
+				context->reachedEndPos = true;
+				log_info("Apply caught up with replayDB at LSN %X/%X, "
+						 "endpos %X/%X reached",
+						 LSN_FORMAT_ARGS(context->previousLSN),
+						 LSN_FORMAT_ARGS(context->endpos));
+				break;
+			}
+
+			/*
+			 * endpos is not set yet, or hasn't been reached. Wait a bit and
+			 * loop to check again.
+			 */
+			log_debug("Apply caught up at LSN %X/%X, endpos %s set at %X/%X, waiting",
+					  LSN_FORMAT_ARGS(context->previousLSN),
+					  context->endpos == InvalidXLogRecPtr ? "not" : "",
+					  context->endpos == InvalidXLogRecPtr ? 0 :
+					  LSN_FORMAT_ARGS(context->endpos));
+
+			pg_usleep(50 * 1000);  /* sleep 50ms before retrying */
+			continue;
 		}
 
 		if (s.action == STREAM_ACTION_BEGIN)
