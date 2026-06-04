@@ -43,7 +43,7 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/multi-wal-txn.sql
 # In the SQLite design, slot info is stored in the catalog, not in a separate file.
 # Verify the replication slot was created by querying the catalog.
 sqlite3 ${TMPDIR}/pgcopydb/schema/source.db <<EOF
-select slot_name, slot_lsn, snapshot_id, plugin from logical_decoding_slot;
+select slot_name, lsn, snapshot, plugin from replication_slot;
 EOF
 
 # check the sqlite setup contents too
