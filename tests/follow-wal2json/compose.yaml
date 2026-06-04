@@ -58,4 +58,3 @@ services:
 
 volumes:
   follow-wal2json:
-    external: true

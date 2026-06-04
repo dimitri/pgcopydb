@@ -1353,7 +1353,6 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 
 	switch (first.action)
 	{
-		case STREAM_ACTION_SWITCH:
 		case STREAM_ACTION_KEEPALIVE:
 		case STREAM_ACTION_ENDPOS:
 		{
@@ -1457,6 +1456,19 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 
 				if (begin.lsn == InvalidXLogRecPtr)
 				{
+					/*
+					 * The BEGIN for this transaction is missing from the
+					 * output table.  This happens when the onRetry cleanup
+					 * path in the prefetch process deleted the BEGIN row
+					 * (because confirmed_flush had already advanced past it)
+					 * while the DML rows were written on a subsequent
+					 * reconnect.  The transaction cannot be properly
+					 * transformed without its BEGIN.
+					 *
+					 * Signal the caller (ld_store_iter_output) to advance
+					 * sentinel.transform_lsn to the COMMIT lsn so these
+					 * orphaned rows are skipped cleanly.
+					 */
 					log_error("No BEGIN found for xid %u "
 							  "while resuming after transform_lsn %X/%X",
 							  first.xid,
@@ -1902,7 +1914,7 @@ ld_store_replay_next_event(DatabaseCatalog *catalog,
 		"union all "
 		"select id, action, xid, lsn, endlsn, timestamp "
 		"  from replay "
-		" where action in ('K', 'X', 'E') "
+		" where action in ('K', 'E') "
 		"   and (lsn >= $1 or lsn is null) "
 		"order by lsn asc, id asc "
 		"limit 1";

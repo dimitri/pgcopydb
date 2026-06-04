@@ -124,8 +124,11 @@ stream_transform_messages(StreamSpecs *specs)
 	}
 
 	/*
-	 * And loop over iterating our replayDB files one transaction at a time,
-	 * switching over to the next file when necessary.
+	 * Process one output-table event per iteration.  SWITCH markers are no
+	 * longer synthesised by the prefetch process, so the loop is driven purely
+	 * by the outer condition (transform_lsn < endpos).  When no rows are
+	 * available yet we sleep briefly and retry; the loop exits once endpos is
+	 * reached or we are asked to stop.
 	 */
 	while (privateContext->endpos == InvalidXLogRecPtr ||
 		   sentinel->transform_lsn < privateContext->endpos)
@@ -147,29 +150,38 @@ stream_transform_messages(StreamSpecs *specs)
 		/* race conditions: we could have zero file registered yet */
 		if (specs->replayDB->db != NULL)
 		{
-			if (!stream_transform_cdc_file(specs))
+			log_debug("Transforming output table messages at %X/%X",
+					  LSN_FORMAT_ARGS(sentinel->transform_lsn));
+
+			if (!ld_store_iter_output(specs, &stream_transform_cdc_file_hook))
 			{
-				log_error("Failed to transform CDC messages from file \"%s\", "
+				log_error("Failed to transform CDC messages at %X/%X, "
 						  "see above for details",
-						  specs->replayDB->dbfile);
+						  LSN_FORMAT_ARGS(sentinel->transform_lsn));
 				return false;
+			}
+
+			/* re-read sentinel after the hook may have advanced transform_lsn */
+			if (!sentinel_get(specs->sourceDB, sentinel))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			/* exit early when endpos has been reached */
+			if (sentinel->endpos != InvalidXLogRecPtr &&
+				sentinel->endpos <= sentinel->transform_lsn)
+			{
+				log_notice("Transform reached end position %X/%X at %X/%X",
+						   LSN_FORMAT_ARGS(sentinel->endpos),
+						   LSN_FORMAT_ARGS(sentinel->transform_lsn));
+				return true;
 			}
 		}
 
 		/*
 		 * Propagate sentinel.endpos → privateContext->endpos in follow/catchup
 		 * mode when --endpos was not given on the command line.
-		 *
-		 * In prefetch mode (or any mode with an explicit --endpos flag),
-		 * privateContext->endpos is already set from specs->endpos and must
-		 * NOT be overwritten here.  The sentinel.endpos may still hold a
-		 * stale value from a previous prefetch phase (e.g. lsn1 while the
-		 * current phase is running to lsn2); overwriting would cause the
-		 * transform to exit too early.
-		 *
-		 * In follow/catchup mode without --endpos, privateContext->endpos
-		 * starts as InvalidXLogRecPtr and must be kept in sync with the
-		 * sentinel table so the outer while-condition can eventually exit.
 		 */
 		if (privateContext->endpos == InvalidXLogRecPtr &&
 			sentinel->endpos != InvalidXLogRecPtr)
@@ -245,58 +257,44 @@ stream_transform_context_init(StreamSpecs *specs)
 
 
 /*
- * stream_transform_cdc_file loops through a SQLite CDC file and transform
- * messages found in the file.
+ * stream_transform_cdc_file is kept for callers that use the file-based path
+ * (e.g. stream_transform_stream / stdin mode).  In the SQLite pipeline,
+ * stream_transform_messages now calls ld_store_iter_output directly.
+ *
+ * This function processes one round of output-table messages and returns.
+ * It no longer loops internally — the outer loop in stream_transform_messages
+ * drives the repetition.
  */
 bool
 stream_transform_cdc_file(StreamSpecs *specs)
 {
 	CopyDBSentinel *sentinel = &(specs->sentinel);
 	StreamContext *privateContext = &(specs->private);
-	LogicalMessageMetadata *metadata = &(privateContext->metadata);
 
-	log_info("Transforming Logical Decoding messages from \"%s\" [%X/%X]",
-			 specs->replayDB->dbfile,
-			 LSN_FORMAT_ARGS(specs->sentinel.transform_lsn));
-
-	while (metadata->action != STREAM_ACTION_SWITCH)
+	if (!ld_store_iter_output(specs, &stream_transform_cdc_file_hook))
 	{
-		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
-		{
-			log_debug("stream_transform_messages was asked to stop");
-			return true;
-		}
+		log_error("Failed to iterate over CDC messages at %X/%X, "
+				  "see above for details",
+				  LSN_FORMAT_ARGS(sentinel->transform_lsn));
+		return false;
+	}
 
-		if (!ld_store_iter_output(specs, &stream_transform_cdc_file_hook))
-		{
-			log_error("Failed to iterate over CDC file \"%s\", "
-					  "see above for details",
-					  specs->replayDB->dbfile);
-			return false;
-		}
+	/* endpos might have been set now */
+	if (!sentinel_get(specs->sourceDB, sentinel))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
-		/* endpos might have been set now */
-		if (!sentinel_get(specs->sourceDB, sentinel))
-		{
-			/* errors have already been logged */
-			return false;
-		}
+	if (sentinel->endpos != InvalidXLogRecPtr &&
+		sentinel->endpos <= sentinel->transform_lsn)
+	{
+		log_notice("Transform reached end position %X/%X at %X/%X",
+				   LSN_FORMAT_ARGS(sentinel->endpos),
+				   LSN_FORMAT_ARGS(sentinel->transform_lsn));
 
-		log_debug("stream_transform_cdc_file: endpos %X/%X",
-				  LSN_FORMAT_ARGS(sentinel->endpos));
-
-		if (sentinel->endpos != InvalidXLogRecPtr &&
-			sentinel->endpos <= sentinel->transform_lsn)
-		{
-			log_notice("Transform reached end position %X/%X at %X/%X",
-					   LSN_FORMAT_ARGS(privateContext->endpos),
-					   LSN_FORMAT_ARGS(sentinel->transform_lsn));
-
-			return true;
-		}
-
-		/* allow some time for the files and content to be created */
-		pg_usleep(50 * 1000); /* 50ms */
+		/* signal the caller to stop */
+		privateContext->endpos = sentinel->endpos;
 	}
 
 	return true;
@@ -395,26 +393,36 @@ stream_transform_cdc_file_hook(StreamSpecs *specs,
 	uint64_t transform_lsn = privateContext->transform_lsn = output->lsn;
 
 	/*
-	 * At COMMIT, ROLLBACK, and KEEPALIVE, sync the sentinel transform_lsn.
-	 * At SWITCH, also sync transform_lsn so that we move on to the next file.
+	 * Sync the sentinel transform_lsn at transaction boundaries and at the
+	 * non-transactional events KEEPALIVE and SWITCH.
+	 *
+	 * KEEPALIVE appears between committed transactions in the output table
+	 * (ld_store_iter_output_init always returns a full transaction atomically
+	 * starting at BEGIN; a KEEPALIVE sitting between a BEGIN and its DML is
+	 * never returned as a standalone row).  It is therefore safe to advance
+	 * sentinel.transform_lsn at KEEPALIVE, and necessary: if we do not, the
+	 * ld_store_iter_output cursor (which reads sentinel.transform_lsn) never
+	 * advances past the KEEPALIVE, causing an infinite inner loop.
+	 *
+	 * SWITCH marks a WAL-segment boundary and must also be synced so that
+	 * ld_store_set_cdc_filename_at_lsn can open the next CDC file on restart.
+	 *
+	 * The earlier concern ("KEEPALIVE mid-transaction causes No BEGIN found")
+	 * was caused by the row-deletion paths in streamCloseFile / onRetry, which
+	 * have been removed.  With INSERT OR REPLACE semantics and no deletion,
+	 * BEGIN rows are always present in the output table and the default-case
+	 * BEGIN lookup succeeds regardless of where transform_lsn was saved.
 	 */
 	switch (output->action)
 	{
 		case STREAM_ACTION_COMMIT:
 		case STREAM_ACTION_ROLLBACK:
-		case STREAM_ACTION_SWITCH:
 		case STREAM_ACTION_KEEPALIVE:
 		{
 			if (!sentinel_sync_transform(sourceDB, transform_lsn, sentinel))
 			{
 				/* errors have already been logged */
 				return false;
-			}
-
-			/* SWITCH is expected to be the last entry in the file */
-			if (output->action == STREAM_ACTION_SWITCH)
-			{
-				*stop = true;
 			}
 
 			break;

@@ -200,6 +200,15 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 						   LSN_FORMAT_ARGS(context->endpos),
 						   xid,
 						   LSN_FORMAT_ARGS(beginLSN));
+
+				/*
+				 * Advance previousLSN to endpos so that replay_lsn reaches
+				 * endpos in the sentinel.  Without this, follow_reached_endpos
+				 * compares replay_lsn (last COMMIT) against endpos and finds
+				 * them unequal — causing an infinite restart loop.
+				 */
+				context->previousLSN = context->endpos;
+				(void) stream_apply_sync_sentinel(context, false);
 				break;
 			}
 
@@ -249,14 +258,20 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 						   LSN_FORMAT_ARGS(context->endpos),
 						   xid,
 						   LSN_FORMAT_ARGS(context->previousLSN));
+
+				/* ensure replay_lsn advances to endpos for follow_reached_endpos */
+				if (context->previousLSN < context->endpos)
+					context->previousLSN = context->endpos;
+				(void) stream_apply_sync_sentinel(context, false);
 				break;
 			}
 		}
 		else
 		{
 			/*
-			 * Non-transactional event: KEEPALIVE, SWITCH, or ENDPOS.
-			 * Delegate to stream_apply_sql() which handles all three.
+			 * Non-transactional event: KEEPALIVE or ENDPOS.
+			 * Delegate to stream_apply_sql() which handles both.
+			 * SWITCH is no longer emitted by the pipeline.
 			 */
 			LogicalMessageMetadata metadata = { 0 };
 
@@ -295,6 +310,11 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 			{
 				log_info("Apply reached endpos %X/%X",
 						 LSN_FORMAT_ARGS(context->endpos));
+
+				/* ensure replay_lsn advances to endpos for follow_reached_endpos */
+				if (context->previousLSN < context->endpos)
+					context->previousLSN = context->endpos;
+				(void) stream_apply_sync_sentinel(context, false);
 				break;
 			}
 		}

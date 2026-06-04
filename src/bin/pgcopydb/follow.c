@@ -271,21 +271,15 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	}
 
 	/*
-	 * In case of successful exit from the follow sub-processes, we
-	 * switch back and forth between CATCHUP and REPLAY modes and
-	 * continue replaying changes. In case of error, we stop.
+	 * The SQLite-based CDC pipeline uses a single CATCHUP mode for all
+	 * operations: prefetch writes WAL records to the output table, transform
+	 * converts them to parameterised SQL in the replay table, and catchup
+	 * applies them to the target.  The old CATCHUP↔REPLAY alternation (which
+	 * switched to Unix-pipe live streaming once the on-disk files were caught
+	 * up) is no longer needed — SQLite provides the inter-process
+	 * communication and the three workers can restart in the same mode every
+	 * time.
 	 */
-	LogicalStreamMode modeArray[] = {
-		STREAM_MODE_CATCHUP,
-		STREAM_MODE_REPLAY
-	};
-
-	int count = sizeof(modeArray) / sizeof(modeArray[0]);
-
-	uint64_t loop = 0;
-	LogicalStreamMode currentMode = modeArray[0];
-	LogicalStreamMode previousMode = STREAM_MODE_UNKNOW;
-
 	while (true)
 	{
 		if (!followDB(copySpecs, streamSpecs))
@@ -319,53 +313,14 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 			return true;
 		}
 
-		/* switch to the next mode, increment loop counter */
-		previousMode = currentMode;
-		currentMode = modeArray[++loop % count];
-
-		/*
-		 * Whatever the current/previous mode was, we need to
-		 * ensure to catch-up with files on-disk before switching
-		 * to another mode of operations.
-		 */
-		if (!follow_prepare_mode_switch(streamSpecs, previousMode, currentMode))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		/* we could have reached endpos in this step: */
-		if (!follow_reached_endpos(streamSpecs, &done))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
 			log_warn("Main follow process was asked to terminate, exiting");
 			return true;
 		}
 
-		if (done)
-		{
-			log_info("Follow mode is now done, "
-					 "reached replay_lsn %X/%X with endpos %X/%X",
-					 LSN_FORMAT_ARGS(streamSpecs->sentinel.endpos),
-					 LSN_FORMAT_ARGS(streamSpecs->sentinel.replay_lsn));
-
-			return true;
-		}
-
 		log_info("Restarting logical decoding follower in %s mode",
-				 LogicalStreamModeToString(currentMode));
-
-		/* and re-init our streamSpecs for the new mode */
-		if (!stream_init_for_mode(streamSpecs, currentMode))
-		{
-			/* errors have already been logged */
-			return false;
-		}
+				 LogicalStreamModeToString(streamSpecs->mode));
 	}
 
 	/* keep compiler happy */

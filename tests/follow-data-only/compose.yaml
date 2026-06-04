@@ -55,4 +55,3 @@ services:
 
 volumes:
   follow-data-only:
-    external: true

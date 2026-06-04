@@ -289,8 +289,16 @@ sentinel_update_write_flush_lsn(DatabaseCatalog *catalog,
 		return false;
 	}
 
+	/*
+	 * In the SQLite-based CDC pipeline, startpos is the replication slot's
+	 * initial LSN and must not be overwritten with the current flush_lsn.
+	 * The correct restart cursor for the transform process is transform_lsn
+	 * (maintained separately by sentinel_sync_transform).  Updating startpos
+	 * to flush_lsn here caused the transform to see startpos > endpos on
+	 * restart and exit immediately without processing remaining output rows.
+	 */
 	char *sql =
-		"update sentinel set startpos = $1, write_lsn = $2, flush_lsn = $3 "
+		"update sentinel set write_lsn = $1, flush_lsn = $2 "
 		"where id = 1";
 
 	if (!semaphore_lock(&(catalog->sema)))
@@ -308,9 +316,6 @@ sentinel_update_write_flush_lsn(DatabaseCatalog *catalog,
 		return false;
 	}
 
-	/*
-	 * Update startpos to flush_lsn, which is our safe restart point.
-	 */
 	char writeLSN[PG_LSN_MAXLENGTH] = { 0 };
 	char flushLSN[PG_LSN_MAXLENGTH] = { 0 };
 
@@ -319,7 +324,6 @@ sentinel_update_write_flush_lsn(DatabaseCatalog *catalog,
 
 	/* bind our parameters now */
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "startpos", 0, (char *) flushLSN },
 		{ BIND_PARAMETER_TYPE_TEXT, "write_lsn", 0, (char *) writeLSN },
 		{ BIND_PARAMETER_TYPE_TEXT, "flush_lsn", 0, (char *) flushLSN }
 	};

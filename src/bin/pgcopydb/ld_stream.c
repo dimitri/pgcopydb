@@ -854,18 +854,23 @@ streamCheckResumePosition(StreamSpecs *specs)
 			  LSN_FORMAT_ARGS(lsn));
 
 	/*
-	 * The receive process knows how to skip over LSNs that have already been
-	 * fetched in a previous run. What we are not able to do is fill-in a gap
-	 * between what we have on-disk and what the replication slot can send us.
+	 * After a restart, sentinel.startpos is the original replication slot
+	 * LSN (never updated), while the slot's confirmed_flush has already
+	 * advanced to flush_lsn from the previous run.  startpos < slot_lsn is
+	 * therefore normal and expected: it means the output table already
+	 * contains rows up to flush_lsn and the transform process will consume
+	 * them from transform_lsn independently.  Clamp our streaming start
+	 * position to the slot's current LSN so we begin receiving new WAL from
+	 * there and let PostgreSQL serve what it still has.
 	 */
 	if (specs->startpos < lsn)
 	{
-		log_error("Failed to resume replication: sentinel.startpos is %X/%X "
-				  "and replication slot LSN is %X/%X",
-				  LSN_FORMAT_ARGS(specs->startpos),
-				  LSN_FORMAT_ARGS(lsn));
+		log_notice("Prefetch restart: sentinel.startpos %X/%X is behind "
+				   "replication slot LSN %X/%X; clamping to slot LSN",
+				   LSN_FORMAT_ARGS(specs->startpos),
+				   LSN_FORMAT_ARGS(lsn));
 
-		return false;
+		specs->startpos = lsn;
 	}
 
 	return true;
@@ -908,30 +913,25 @@ streamWrite(LogicalStreamContext *context)
 		if (context->onRetry)
 		{
 			/*
-			 * When retrying after a transient network error or server
-			 * connection failure, delete any partial rows for the
+			 * After a transient reconnect do NOT delete partial rows for the
 			 * in-progress transaction.
 			 *
-			 * The slot will re-deliver the entire transaction from its
-			 * BEGIN on the new connection, so those rows will be inserted
-			 * cleanly.  The transform simply waits for the COMMIT to
-			 * arrive (ld_store_lookup_output_xid_end returns zero rows
-			 * until the COMMIT is written).
+			 * Previously this path deleted partial rows assuming "the slot
+			 * will re-deliver the entire transaction from its BEGIN on the
+			 * new connection."  That assumption fails when flush_lsn (now
+			 * tied to transform_lsn, not written_lsn) has already advanced
+			 * past the transaction's BEGIN lsn: the slot starts from
+			 * confirmed_flush > BEGIN lsn and therefore never re-sends the
+			 * BEGIN, leaving orphaned DML rows without a matching BEGIN in
+			 * the output table.
 			 *
-			 * We do NOT insert a synthetic ROLLBACK: PostgreSQL never
-			 * sends ROLLBACK over logical replication, so it would never
-			 * be overwritten by the re-delivered COMMIT.
+			 * With flush_lsn = transform_lsn and INSERT OR REPLACE semantics
+			 * on the output table the partial rows from the previous
+			 * connection are safely completed by the re-delivered messages:
+			 * the BEGIN is already in the table (or will be re-inserted
+			 * idempotently if confirmed_flush < BEGIN lsn), and any
+			 * re-delivered DML/COMMIT rows are upserted without duplication.
 			 */
-			if (privateContext->transactionInProgress)
-			{
-				if (!ld_store_delete_output_xid(replayDB,
-												privateContext->currentXid))
-				{
-					/* errors have already been logged */
-					return false;
-				}
-			}
-
 			context->onRetry = false;
 		}
 
@@ -1115,25 +1115,15 @@ streamRotateFile(LogicalStreamContext *context)
 	}
 
 	/*
-	 * The WAL segment boundary changed.  If we had already been streaming
-	 * (walFileName non-empty), emit a SWITCH internal message so that the
-	 * transform and apply processes know where one epoch ends and the next
-	 * begins.
+	 * The WAL segment boundary changed.  In the SQLite pipeline there is a
+	 * single output table that spans all WAL segments — no per-segment file
+	 * rotation is performed and no SWITCH marker is needed.  We only call
+	 * streamCloseFile() to flush any in-progress state for the current segment
+	 * before continuing with the next one.
 	 */
 	if (!IS_EMPTY_STRING_BUFFER(privateContext->walFileName))
 	{
 		bool time_to_abort = false;
-
-		InternalMessage switchwal = {
-			.action = STREAM_ACTION_SWITCH,
-			.lsn = jsonFileLSN
-		};
-
-		if (!ld_store_insert_internal_message(replayDB, &switchwal))
-		{
-			/* errors have already been logged */
-			return false;
-		}
 
 		if (!streamCloseFile(context, time_to_abort))
 		{
@@ -1193,34 +1183,21 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 	}
 
 	/*
-	 * On graceful exit mid-transaction, delete the partial rows for this xid
-	 * so the output table is clean for the reconnect.
+	 * Do NOT delete partial transaction rows when aborting.
 	 *
-	 * The ENDPOS marker inserted above already signals the transform to stop
-	 * without waiting for a COMMIT that will never arrive in this run.  On
-	 * reconnect, the logical decoding slot re-delivers the ENTIRE transaction
-	 * from its BEGIN, which is inserted fresh into the now-empty slot.
+	 * Previously this deleted the in-progress transaction's rows so the
+	 * "slot re-delivers from BEGIN on reconnect" assumption held.  That
+	 * assumption breaks when flush_lsn (= transform_lsn) has already advanced
+	 * past the transaction's BEGIN lsn: the slot starts from confirmed_flush
+	 * and never re-delivers the BEGIN, leaving orphaned DML rows.
 	 *
-	 * We do NOT insert a synthetic ROLLBACK here.  PostgreSQL logical
-	 * decoding never emits a ROLLBACK message, so the unique index on
-	 * (action, lsn) would ensure a synthetic 'R' row is never overwritten by
-	 * the re-delivered 'C' COMMIT.  The phantom ROLLBACK row would then
-	 * persist across reconnects, requiring fragile workarounds.
-	 *
-	 * Note: for process crashes (segmentation faults etc.) this cannot run,
-	 * potentially leaving an incomplete transaction in the output table.  The
-	 * transform handles that case by detecting a BEGIN without a matching
-	 * COMMIT/ROLLBACK (ld_store_lookup_output_xid_end returns zero rows →
-	 * waits for the full transaction to be delivered on reconnect).
+	 * With flush_lsn = transform_lsn the slot always re-delivers from
+	 * transform_lsn (a transaction boundary).  Partial rows already in the
+	 * output table are completed by re-delivered messages via INSERT OR
+	 * REPLACE; the BEGIN row is either already present (BEGIN lsn <
+	 * transform_lsn) or will be re-inserted (BEGIN lsn >= transform_lsn).
+	 * No deletion is needed or safe.
 	 */
-	if (time_to_abort && privateContext->transactionInProgress)
-	{
-		if (!ld_store_delete_output_xid(replayDB, privateContext->currentXid))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-	}
 
 	log_debug("streamCloseFile: WAL epoch boundary at LSN %X/%X",
 			  LSN_FORMAT_ARGS(context->cur_record_lsn));
@@ -1449,8 +1426,32 @@ stream_sync_sentinel(LogicalStreamContext *context)
 	context->endpos = sentinel.endpos;
 	context->tracking->applied_lsn = sentinel.replay_lsn;
 
+	/*
+	 * Report transform_lsn as the flushed position in the PostgreSQL
+	 * replication feedback message.
+	 *
+	 * PostgreSQL uses flush_lsn to advance the logical slot's confirmed_flush.
+	 * confirmed_flush is the point from which the slot re-delivers WAL on
+	 * reconnect (max(startlsn, confirmed_flush)).  Using written_lsn (the raw
+	 * WAL receive position) here races ahead of what transform has actually
+	 * processed: if prefetch is killed mid-segment, confirmed_flush ends up
+	 * beyond the last row in the output table, creating a permanent gap that
+	 * can never be recovered.
+	 *
+	 * Using transform_lsn ensures confirmed_flush advances only when transform
+	 * has fully committed a transaction to the relay table.  On any restart
+	 * the slot re-delivers from transform_lsn, which is always a transaction
+	 * boundary (we sync transform_lsn only at COMMIT/ROLLBACK), and INSERT OR
+	 * REPLACE handles idempotent re-insertion of already-present output rows.
+	 *
+	 * write_lsn is still reported as-is (how far prefetch has received) for
+	 * monitoring; only flush_lsn (which drives confirmed_flush) is changed.
+	 */
+	if (sentinel.transform_lsn != InvalidXLogRecPtr)
+		context->tracking->flushed_lsn = sentinel.transform_lsn;
+
 	log_debug("stream_sync_sentinel: "
-			 "write_lsn %X/%X flush_lsn %X/%X apply_lsn %X/%X "
+			 "write_lsn %X/%X flush_lsn(=transform_lsn) %X/%X apply_lsn %X/%X "
 			 "startpos %X/%X endpos %X/%X apply %s",
 			 LSN_FORMAT_ARGS(context->tracking->written_lsn),
 			 LSN_FORMAT_ARGS(context->tracking->flushed_lsn),
