@@ -1378,6 +1378,30 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 			/* the COMMIT/ROLLBACK message is not available yet */
 			if (last.lsn == InvalidXLogRecPtr)
 			{
+				/*
+				 * Transaction is incomplete (no COMMIT/ROLLBACK yet). This can happen
+				 * when endpos is set mid-transaction: the WAL stream stops at endpos,
+				 * so the COMMIT (which comes after endpos) never arrives.
+				 *
+				 * If endpos is reached, we gracefully skip this incomplete transaction.
+				 * The transaction rows remain in the output table and will be re-delivered
+				 * when the slot reconnects and re-streams from the sentinel's startpos.
+				 */
+				if (iter->endpos != InvalidXLogRecPtr &&
+					iter->endpos <= first.lsn)
+				{
+					log_notice("ld_store_iter_output_init: "
+							   "skipping incomplete transaction xid %u at endpos %X/%X, "
+							   "will be re-delivered on restart",
+							   first.xid, LSN_FORMAT_ARGS(iter->endpos));
+					iter->output = NULL;
+					return true;
+				}
+
+				/*
+				 * Endpos not reached yet - transaction might complete soon,
+				 * return NULL to signal caller to retry later
+				 */
 				iter->output = NULL;
 				return true;
 			}
@@ -1419,6 +1443,23 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 
 			if (last.lsn == InvalidXLogRecPtr)
 			{
+				/*
+				 * Transaction is incomplete (no COMMIT/ROLLBACK yet).
+				 * If endpos is reached, skip this incomplete transaction.
+				 */
+				if (iter->endpos != InvalidXLogRecPtr &&
+					iter->endpos <= first.lsn)
+				{
+					log_notice("ld_store_iter_output_init: "
+							   "skipping incomplete transaction xid %u "
+							   "(DML at %X/%X, endpos %X/%X), "
+							   "will be re-delivered on restart",
+							   first.xid, LSN_FORMAT_ARGS(first.lsn),
+							   LSN_FORMAT_ARGS(iter->endpos));
+					iter->output = NULL;
+					return true;
+				}
+
 				/* transaction not yet complete — wait */
 				iter->output = NULL;
 				return true;
