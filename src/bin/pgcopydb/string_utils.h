@@ -6,6 +6,7 @@
 #define STRING_UTILS_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #define IS_EMPTY_STRING_BUFFER(strbuf) (strbuf[0] == '\0')
 

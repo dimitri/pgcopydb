@@ -8,6 +8,7 @@
 #include <time.h>
 
 #include "copydb.h"
+#include "file_utils.h"
 #include "log.h"
 #include "follow_coordinator.h"
 
@@ -24,7 +25,7 @@ follow_coordinator_init(FollowCoordinator *coord, const char *work_dir,
 	coord->last_sentinel_update = time(NULL);
 
 	/* Start listening on Unix socket from receive process */
-	snprintf(socket_path, sizeof(socket_path), "%s/follow-receive.sock", work_dir);
+	sformat(socket_path, sizeof(socket_path), "%s/follow-receive.sock", work_dir);
 
 	if (!ld_ipc_unix_listen(&coord->ipc_listen, socket_path)) {
 		log_error("Failed to listen on IPC socket");

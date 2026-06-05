@@ -13,6 +13,7 @@
 #include "copydb.h"
 #include "commandline.h"
 #include "env_utils.h"
+#include "file_utils.h"
 #include "ld_ipc.h"
 #include "ld_service.h"
 #include "ld_stream.h"
@@ -527,7 +528,7 @@ cli_sentinel_set_endpos(int argc, char **argv)
 		IPC_INIT_MESSAGE(request, IPC_MSG_SET_ENDPOS);
 		IPCPayloadSetEndpos *cmd = (IPCPayloadSetEndpos *)request.payload;
 		cmd->endpos_lsn = endpos;
-		snprintf(cmd->reason, sizeof(cmd->reason), "CLI: pgcopydb sentinel set endpos");
+		sformat(cmd->reason, sizeof(cmd->reason), "CLI: pgcopydb sentinel set endpos");
 		request.payload_len = sizeof(IPCPayloadSetEndpos);
 
 		if (!ld_service_send_command(service, &request, &response)) {

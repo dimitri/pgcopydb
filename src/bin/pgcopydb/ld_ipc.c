@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include "log.h"
+#include "file_utils.h"
 #include "string_utils.h"
 #include "ld_ipc.h"
 
@@ -45,7 +46,7 @@ ld_ipc_unix_listen(IPCConn *conn, const char *socket_path)
 
 	/* Bind socket */
 	addr.sun_family = AF_UNIX;
-	strlcpy(addr.sun_path, socket_path, sizeof(addr.sun_path));
+	sformat(addr.sun_path, sizeof(addr.sun_path), "%s", socket_path);
 
 	if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
 		log_error("Failed to bind Unix socket at %s: %m", socket_path);
@@ -61,7 +62,7 @@ ld_ipc_unix_listen(IPCConn *conn, const char *socket_path)
 	}
 
 	conn->fd = fd;
-	strlcpy(conn->path, socket_path, sizeof(conn->path));
+	sformat(conn->path, sizeof(conn->path), "%s", socket_path);
 	conn->last_activity = time(NULL);
 
 	log_debug("Listening on Unix socket: %s", socket_path);
@@ -122,13 +123,13 @@ ld_ipc_unix_connect(IPCConn *conn, const char *socket_path)
 	}
 
 	addr.sun_family = AF_UNIX;
-	strlcpy(addr.sun_path, socket_path, sizeof(addr.sun_path));
+	sformat(addr.sun_path, sizeof(addr.sun_path), "%s", socket_path);
 
 	/* Retry connection for a few seconds (coordinator might not be ready) */
 	while (retry > 0) {
 		if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
 			conn->fd = fd;
-			strlcpy(conn->path, socket_path, sizeof(conn->path));
+			sformat(conn->path, sizeof(conn->path), "%s", socket_path);
 			conn->last_activity = time(NULL);
 			log_debug("Connected to Unix socket: %s", socket_path);
 			return true;
@@ -190,7 +191,7 @@ ld_ipc_tcp_listen(IPCConn *conn, const char *host, int port)
 	}
 
 	conn->fd = fd;
-	snprintf(conn->path, sizeof(conn->path), "%s:%d", host, port);
+	sformat(conn->path, sizeof(conn->path), "%s:%d", host, port);
 	conn->last_activity = time(NULL);
 
 	log_info("Listening on TCP socket: %s:%d", host, port);
@@ -269,7 +270,7 @@ ld_ipc_tcp_connect(IPCConn *conn, const char *host, int port)
 	}
 
 	conn->fd = fd;
-	snprintf(conn->path, sizeof(conn->path), "%s:%d", host, port);
+	sformat(conn->path, sizeof(conn->path), "%s:%d", host, port);
 	conn->last_activity = time(NULL);
 
 	log_debug("Connected to TCP socket: %s:%d", host, port);

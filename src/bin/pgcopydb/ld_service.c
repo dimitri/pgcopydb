@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "log.h"
+#include "file_utils.h"
 #include "string_utils.h"
 #include "ld_service.h"
 
@@ -26,9 +27,9 @@ ld_service_get_endpoint(void)
 
 	/* Use provided host or default to localhost */
 	if (host != NULL) {
-		strlcpy(endpoint.host, host, sizeof(endpoint.host));
+		sformat(endpoint.host, sizeof(endpoint.host), "%s", host);
 	} else {
-		strlcpy(endpoint.host, "localhost", sizeof(endpoint.host));
+		sformat(endpoint.host, sizeof(endpoint.host), "%s", "localhost");
 	}
 
 	/* Use provided port or default to 5442 */
