@@ -27,8 +27,8 @@ do
     sleep 1
 done
 
-sql="select pid from process where ps_type = 'prefetch'"
-pidf=/tmp/prefetch.pid
+sql="select pid from process where ps_type = 'receive'"
+pidf=/tmp/receive.pid
 
 while [ ! -s ${pidf} ]
 do
