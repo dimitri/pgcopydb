@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include "log.h"
+#include "string_utils.h"
 #include "ld_ipc.h"
 
 /* Unix domain socket operations */

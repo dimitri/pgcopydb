@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "log.h"
+#include "string_utils.h"
 #include "ld_service.h"
 
 ServiceEndpoint
