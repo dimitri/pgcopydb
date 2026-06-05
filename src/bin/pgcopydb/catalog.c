@@ -746,8 +746,8 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 			 * has already been populated.
 			 */
 			if (tablePartsDataSection->fetched &&
-				copySpecs->splitTablesLargerThan.bytes !=
-				setup->splitTablesLargerThanBytes)
+				copySpecs->splitTablesLargerThan.bytes != setup->
+				splitTablesLargerThanBytes)
 			{
 				char bytesPretty[BUFSIZE] = { 0 };
 
@@ -1340,10 +1340,14 @@ catalog_register_setup(DatabaseCatalog *catalog,
 		{ BIND_PARAMETER_TYPE_TEXT, "snapshot", 0, (char *) snapshot },
 		{ BIND_PARAMETER_TYPE_TEXT, "filters", 0, (char *) filters },
 
-		{ BIND_PARAMETER_TYPE_INT64, "split_tables_larger_than",
-		  splitTablesLargerThanBytes, NULL },
-		{ BIND_PARAMETER_TYPE_INT64, "split_max_parts",
-		  splitMaxParts, NULL }
+		{
+			BIND_PARAMETER_TYPE_INT64, "split_tables_larger_than",
+			splitTablesLargerThanBytes, NULL
+		},
+		{
+			BIND_PARAMETER_TYPE_INT64, "split_max_parts",
+			splitMaxParts, NULL
+		}
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -1483,10 +1487,14 @@ catalog_update_setup(CopyDataSpec *copySpecs)
 
 	BindParam params[] = {
 		{ BIND_PARAMETER_TYPE_TEXT, "target_pg_uri", 0, (char *) tpguri.pguri },
-		{ BIND_PARAMETER_TYPE_INT64, "split_tables_larger_than",
-		  copySpecs->splitTablesLargerThan.bytes, NULL },
-		{ BIND_PARAMETER_TYPE_INT, "split_max_parts",
-		  copySpecs->splitMaxParts, NULL }
+		{
+			BIND_PARAMETER_TYPE_INT64, "split_tables_larger_than",
+			copySpecs->splitTablesLargerThan.bytes, NULL
+		},
+		{
+			BIND_PARAMETER_TYPE_INT, "split_max_parts",
+			copySpecs->splitMaxParts, NULL
+		}
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -1791,13 +1799,17 @@ catalog_write_replication_slot(DatabaseCatalog *catalog,
 	sformat(lsnStr, sizeof(lsnStr), "%X/%X", LSN_FORMAT_ARGS(slot->lsn));
 
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_TEXT,  "slot_name", 0, (char *) slot->slotName },
+		{ BIND_PARAMETER_TYPE_TEXT, "slot_name", 0, (char *) slot->slotName },
 		{ BIND_PARAMETER_TYPE_INT64, "lsn", slot->lsn, NULL },
-		{ BIND_PARAMETER_TYPE_TEXT,  "snapshot", 0, (char *) slot->snapshot },
-		{ BIND_PARAMETER_TYPE_TEXT,  "plugin",
-		  0, (char *) OutputPluginToString(slot->plugin) },
-		{ BIND_PARAMETER_TYPE_INT64, "wal2json_numeric_as_string",
-		  slot->wal2jsonNumericAsString ? 1 : 0, NULL }
+		{ BIND_PARAMETER_TYPE_TEXT, "snapshot", 0, (char *) slot->snapshot },
+		{
+			BIND_PARAMETER_TYPE_TEXT, "plugin",
+			0, (char *) OutputPluginToString(slot->plugin)
+		},
+		{
+			BIND_PARAMETER_TYPE_INT64, "wal2json_numeric_as_string",
+			slot->wal2jsonNumericAsString ? 1 : 0, NULL
+		}
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -2071,8 +2083,10 @@ catalog_section_state(DatabaseCatalog *catalog, CatalogSection *section)
 
 	/* bind our parameters now */
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "name", 0,
-		  CopyDataSectionToString(section->section) }
+		{
+			BIND_PARAMETER_TYPE_TEXT, "name", 0,
+			CopyDataSectionToString(section->section)
+		}
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -2266,11 +2280,15 @@ catalog_add_s_matview(DatabaseCatalog *catalog, SourceTable *table)
 		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, table->nspname },
 		{ BIND_PARAMETER_TYPE_TEXT, "relname", 0, table->relname },
 
-		{ BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
-		  table->restoreListName },
+		{
+			BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
+			table->restoreListName
+		},
 
-		{ BIND_PARAMETER_TYPE_INT, "exclude_data",
-		  table->excludeData ? 1 : 0, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT, "exclude_data",
+			table->excludeData ? 1 : 0, NULL
+		},
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -2434,14 +2452,18 @@ catalog_add_s_table(DatabaseCatalog *catalog, SourceTable *table)
 		{ BIND_PARAMETER_TYPE_TEXT, "relname", 0, table->relname },
 		{ BIND_PARAMETER_TYPE_TEXT, "amname", 0, table->amname },
 
-		{ BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
-		  table->restoreListName },
+		{
+			BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
+			table->restoreListName
+		},
 
 		{ BIND_PARAMETER_TYPE_INT64, "relpages", table->relpages, NULL },
 		{ BIND_PARAMETER_TYPE_INT64, "reltuples", table->reltuples, NULL },
 
-		{ BIND_PARAMETER_TYPE_INT, "exclude_data",
-		  table->excludeData ? 1 : 0, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT, "exclude_data",
+			table->excludeData ? 1 : 0, NULL
+		},
 
 		{ BIND_PARAMETER_TYPE_TEXT, "part_key", 0, table->partKey }
 	};
@@ -2512,14 +2534,20 @@ catalog_add_attributes(DatabaseCatalog *catalog, SourceTable *table)
 			{ BIND_PARAMETER_TYPE_INT64, "atttypid", attr->atttypid, NULL },
 			{ BIND_PARAMETER_TYPE_TEXT, "attname", 0, attr->attname },
 
-			{ BIND_PARAMETER_TYPE_INT, "attisprimary",
-			  attr->attisprimary ? 1 : 0, NULL },
+			{
+				BIND_PARAMETER_TYPE_INT, "attisprimary",
+				attr->attisprimary ? 1 : 0, NULL
+			},
 
-			{ BIND_PARAMETER_TYPE_INT, "attisreplident",
-			  attr->attisreplident ? 1 : 0, NULL },
+			{
+				BIND_PARAMETER_TYPE_INT, "attisreplident",
+				attr->attisreplident ? 1 : 0, NULL
+			},
 
-			{ BIND_PARAMETER_TYPE_INT, "attisgenerated",
-			  attr->attisgenerated ? 1 : 0, NULL }
+			{
+				BIND_PARAMETER_TYPE_INT, "attisgenerated",
+				attr->attisgenerated ? 1 : 0, NULL
+			}
 		};
 
 		int count = sizeof(params) / sizeof(params[0]);
@@ -4134,8 +4162,10 @@ catalog_add_s_index(DatabaseCatalog *catalog, SourceIndex *index)
 		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, index->indexNamespace },
 		{ BIND_PARAMETER_TYPE_TEXT, "relname", 0, index->indexRelname },
 
-		{ BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
-		  index->indexRestoreListName },
+		{
+			BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
+			index->indexRestoreListName
+		},
 
 		{ BIND_PARAMETER_TYPE_INT64, "tableoid", index->tableOid, NULL },
 
@@ -4199,10 +4229,14 @@ catalog_add_s_constraint(DatabaseCatalog *catalog, SourceIndex *index)
 		{ BIND_PARAMETER_TYPE_TEXT, "conname", 0, index->constraintName },
 		{ BIND_PARAMETER_TYPE_INT64, "indexoid", index->indexOid, NULL },
 
-		{ BIND_PARAMETER_TYPE_INT, "condeferable",
-		  index->condeferrable ? 1 : 0, NULL },
-		{ BIND_PARAMETER_TYPE_INT, "condeffered",
-		  index->condeferred ? 1 : 0, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT, "condeferable",
+			index->condeferrable ? 1 : 0, NULL
+		},
+		{
+			BIND_PARAMETER_TYPE_INT, "condeffered",
+			index->condeferred ? 1 : 0, NULL
+		},
 
 		{ BIND_PARAMETER_TYPE_TEXT, "sql", 0, index->constraintDef }
 	};
@@ -4939,8 +4973,10 @@ catalog_add_s_seq(DatabaseCatalog *catalog, SourceSequence *seq)
 		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, seq->nspname },
 		{ BIND_PARAMETER_TYPE_TEXT, "relname", 0, seq->relname },
 
-		{ BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
-		  seq->restoreListName }
+		{
+			BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
+			seq->restoreListName
+		}
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -5634,8 +5670,10 @@ catalog_lookup_filter_by_rlname(DatabaseCatalog *catalog,
 
 	/* bind our parameters now */
 	BindParam params[1] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
-		  (char *) restoreListName },
+		{
+			BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
+			(char *) restoreListName
+		},
 	};
 
 	if (!catalog_sql_bind(&query, params, 1))
@@ -5772,8 +5810,10 @@ catalog_add_s_database_properties(DatabaseCatalog *catalog, SourceProperty *guc)
 
 	/* bind our parameters now */
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_INT, "role_in_database",
-		  guc->roleInDatabase ? 1 : 0, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT, "role_in_database",
+			guc->roleInDatabase ? 1 : 0, NULL
+		},
 
 		{ BIND_PARAMETER_TYPE_TEXT, "rolname", 0, guc->rolname },
 		{ BIND_PARAMETER_TYPE_TEXT, "datname", 0, guc->datname },
@@ -6228,8 +6268,10 @@ catalog_add_s_coll(DatabaseCatalog *catalog, SourceCollation *coll)
 		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, coll->collname },
 		{ BIND_PARAMETER_TYPE_TEXT, "description", 0, coll->desc },
 
-		{ BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
-		  coll->restoreListName }
+		{
+			BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
+			coll->restoreListName
+		}
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -6479,8 +6521,10 @@ catalog_add_s_namespace(DatabaseCatalog *catalog, SourceSchema *namespace)
 		{ BIND_PARAMETER_TYPE_INT64, "oid", namespace->oid, NULL },
 		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, namespace->nspname },
 
-		{ BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
-		  namespace->restoreListName }
+		{
+			BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
+			namespace->restoreListName
+		}
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -6544,8 +6588,10 @@ catalog_lookup_s_namespace_by_nspname(DatabaseCatalog *catalog,
 
 	/* bind our parameters now */
 	BindParam params[1] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0,
-		  (char *) nspname },
+		{
+			BIND_PARAMETER_TYPE_TEXT, "nspname", 0,
+			(char *) nspname
+		},
 	};
 
 	if (!catalog_sql_bind(&query, params, 1))
@@ -6731,8 +6777,10 @@ catalog_lookup_s_extension_by_extname(DatabaseCatalog *catalog,
 
 	/* bind our parameters now */
 	BindParam params[1] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "extname", 0,
-		  (char *) extname },
+		{
+			BIND_PARAMETER_TYPE_TEXT, "extname", 0,
+			(char *) extname
+		},
 	};
 
 	if (!catalog_sql_bind(&query, params, 1))
@@ -6789,8 +6837,10 @@ catalog_add_s_extension(DatabaseCatalog *catalog, SourceExtension *extension)
 		{ BIND_PARAMETER_TYPE_TEXT, "extname", 0, extension->extname },
 		{ BIND_PARAMETER_TYPE_TEXT, "extnamespace", 0, extension->extnamespace },
 
-		{ BIND_PARAMETER_TYPE_INT, "extrelocatable",
-		  extension->extrelocatable ? 1 : 0, NULL }
+		{
+			BIND_PARAMETER_TYPE_INT, "extrelocatable",
+			extension->extrelocatable ? 1 : 0, NULL
+		}
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -8400,6 +8450,7 @@ catalog_sql_execute(SQLiteQuery *query)
 			return false;
 		}
 	}
+
 	/* when we have a fetchFunction we expect only one row, and exactly one */
 	else
 	{

@@ -4,6 +4,7 @@
    
    Available commands:
      pgcopydb stream
+       init       Initialise the pgcopydb streaming work directory and SQLite catalogs
        setup      Setup source and target systems for logical decoding
        cleanup    Cleanup source and target systems for logical decoding
        prefetch   Stream JSON changes from the source database and transform them to SQL
@@ -11,6 +12,6 @@
        replay     Replay changes from the source to the target database, live
      + sentinel   Maintain a sentinel table
        receive    Stream changes from the source database
-       transform  Transform changes from the source database into SQL commands
-       apply      Apply changes from the source database into the target database
+       transform  Transform CDC messages from the replayDB output table into SQL
+       apply      Apply changes from the replayDB to the target database, or stdout
    
