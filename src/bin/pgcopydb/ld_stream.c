@@ -20,6 +20,7 @@
 #include "cli_root.h"
 #include "copydb.h"
 #include "env_utils.h"
+#include "ld_ipc.h"
 #include "ld_store.h"
 #include "ld_stream.h"
 #include "lock_utils.h"
@@ -1171,6 +1172,14 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 	 * to be able to stop replay because of endpos and still skip replaying a
 	 * partial transaction.
 	 */
+	log_notice("streamCloseFile: time_to_abort=%d, endpos=%X/%X, cur_record_lsn=%X/%X, "
+			   "privateContext->endpos=%X/%X, replayDB=%p",
+			   time_to_abort,
+			   LSN_FORMAT_ARGS(privateContext->endpos),
+			   LSN_FORMAT_ARGS(context->cur_record_lsn),
+			   LSN_FORMAT_ARGS(privateContext->endpos),
+			   replayDB);
+
 	if (time_to_abort &&
 		privateContext->endpos != InvalidXLogRecPtr &&
 		privateContext->endpos <= context->cur_record_lsn)
@@ -1180,14 +1189,59 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 			.lsn = context->cur_record_lsn
 		};
 
-		log_debug("streamCloseFile: insert ENDPOS at %X/%X",
-				  LSN_FORMAT_ARGS(endpos.lsn));
+		log_notice("streamCloseFile: INSERTING ENDPOS at %X/%X",
+				   LSN_FORMAT_ARGS(endpos.lsn));
 
 		if (!ld_store_insert_internal_message(replayDB, &endpos))
 		{
 			/* errors have already been logged */
 			return false;
 		}
+
+		/*
+		 * Force a WAL checkpoint to ensure the ENDPOS message is immediately
+		 * visible to other processes (transform, apply). Without this, the
+		 * ENDPOS message might be buffered and not yet visible to readers,
+		 * causing them to hang waiting for data that will never come.
+		 *
+		 * In SQLite WAL mode, writes are buffered and may not be immediately
+		 * visible to concurrent readers until a checkpoint is performed or
+		 * the connection is closed.
+		 */
+		if (replayDB != NULL && replayDB->db != NULL)
+		{
+			int rc = sqlite3_wal_checkpoint(replayDB->db, NULL);
+
+			log_notice("streamCloseFile: sqlite3_wal_checkpoint returned %d", rc);
+
+			if (rc != SQLITE_OK && rc != SQLITE_BUSY)
+			{
+				log_warn("streamCloseFile: sqlite3_wal_checkpoint failed: %s",
+						 sqlite3_errmsg(replayDB->db));
+				/* Continue anyway; checkpoint is not critical */
+			}
+		}
+
+		/*
+		 * Report ENDPOS to follow coordinator via IPC socket if available.
+		 * Note: IPC reporting is optional - follow will detect ENDPOS via the
+		 * output table query when it polls. The core fix is in the SQL query
+		 * using >= instead of > to find ENDPOS messages at the exact endpos LSN.
+		 */
+	}
+	else if (!time_to_abort)
+	{
+		log_notice("streamCloseFile: SKIPPED (time_to_abort=false)");
+	}
+	else if (privateContext->endpos == InvalidXLogRecPtr)
+	{
+		log_notice("streamCloseFile: SKIPPED (endpos=InvalidXLogRecPtr)");
+	}
+	else
+	{
+		log_notice("streamCloseFile: SKIPPED (endpos %X/%X > cur_record_lsn %X/%X)",
+				   LSN_FORMAT_ARGS(privateContext->endpos),
+				   LSN_FORMAT_ARGS(context->cur_record_lsn));
 	}
 
 	/*

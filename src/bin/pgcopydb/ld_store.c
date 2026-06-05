@@ -454,13 +454,15 @@ ld_store_lookup_output_after_lsn(DatabaseCatalog *catalog,
 	/*
 	 * Order by LSN so that a BEGIN (which has the lowest LSN in its
 	 * transaction) is found before any internal markers (ENDPOS, KEEPALIVE)
-	 * that may have been inserted at a higher LSN but kept a lower row-id
-	 * after an INSERT OR REPLACE re-delivery of the same transaction.
+	 * that may have been inserted at the same LSN or higher.
 	 * Within the same LSN, prefer BEGIN (action='B') over other actions,
 	 * then fall back to insertion order (id) as a tiebreaker.
 	 *
 	 * SQLite requires ORDER BY on a UNION to reference result-set columns by
 	 * name, so wrap the UNION in a subquery to allow the CASE expression.
+	 *
+	 * Both branches now use >= (not just BEGIN) to ensure that internal
+	 * markers like ENDPOS are found even when inserted at the exact endpos LSN.
 	 */
 	char *sql =
 		"select id, action, xid, lsn, timestamp, message from ("
@@ -472,7 +474,7 @@ ld_store_lookup_output_after_lsn(DatabaseCatalog *catalog,
 		" union all "
 		"  select id, action, xid, lsn, timestamp, message "
 		"    from output "
-		"   where lsn > $2 "
+		"   where lsn >= $2 and action != 'B' "
 		") "
 		"order by lsn asc, case when action = 'B' then 0 else 1 end, id asc "
 		"limit 1";

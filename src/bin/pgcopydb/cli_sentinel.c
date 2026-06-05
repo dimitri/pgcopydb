@@ -13,6 +13,8 @@
 #include "copydb.h"
 #include "commandline.h"
 #include "env_utils.h"
+#include "ld_ipc.h"
+#include "ld_service.h"
 #include "ld_stream.h"
 #include "log.h"
 #include "parsing_utils.h"
@@ -514,26 +516,48 @@ cli_sentinel_set_endpos(int argc, char **argv)
 				 LSN_FORMAT_ARGS(endpos));
 	}
 
-	DatabaseCatalog *sourceDB = &(copySpecs.catalogs.source);
+	/* Check if service endpoint is configured */
+	ServiceEndpoint service = ld_service_get_endpoint();
 
-	if (!sentinel_update_endpos(sourceDB, endpos))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
+	if (service.enabled) {
+		/* Send command via service */
+		IPCMessage request = {0};
+		IPCMessage response = {0};
+
+		IPC_INIT_MESSAGE(request, IPC_MSG_SET_ENDPOS);
+		IPCPayloadSetEndpos *cmd = (IPCPayloadSetEndpos *)request.payload;
+		cmd->endpos_lsn = endpos;
+		snprintf(cmd->reason, sizeof(cmd->reason), "CLI: pgcopydb sentinel set endpos");
+		request.payload_len = sizeof(IPCPayloadSetEndpos);
+
+		if (!ld_service_send_command(service, &request, &response)) {
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		log_info("pgcopydb sentinel endpos has been set to %X/%X via service",
+				 LSN_FORMAT_ARGS(endpos));
+		fformat(stdout, "%X/%X\n", LSN_FORMAT_ARGS(endpos));
+	} else {
+		/* Update local sentinel database */
+		DatabaseCatalog *sourceDB = &(copySpecs.catalogs.source);
+
+		if (!sentinel_update_endpos(sourceDB, endpos)) {
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		CopyDBSentinel sentinel = { 0 };
+
+		if (!sentinel_get(sourceDB, &sentinel)) {
+			/* errors have already been logged */
+			exit(EXIT_CODE_SOURCE);
+		}
+
+		log_info("pgcopydb sentinel endpos has been set to %X/%X",
+				 LSN_FORMAT_ARGS(sentinel.endpos));
+
+		fformat(stdout, "%X/%X\n", LSN_FORMAT_ARGS(sentinel.endpos));
 	}
-
-	CopyDBSentinel sentinel = { 0 };
-
-	if (!sentinel_get(sourceDB, &sentinel))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
-	}
-
-	log_info("pgcopydb sentinel endpos has been set to %X/%X",
-			 LSN_FORMAT_ARGS(sentinel.endpos));
-
-	fformat(stdout, "%X/%X\n", LSN_FORMAT_ARGS(sentinel.endpos));
 }
 
 
