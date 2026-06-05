@@ -134,15 +134,9 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 
 	context->replayDB = replayDB;
 
-	if (!semaphore_lock(&(replayDB->sema)))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	bool success = true;
-
 	ReplayDBStmt s = { 0 };
+	bool lock_held = false;
 
 	for (;;)
 	{
@@ -151,6 +145,18 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 			log_info("Apply process received a shutdown signal, stopping");
 			break;
 		}
+
+		/*
+		 * Lock the replayDB only while querying for the next event.
+		 * This allows transform to write new rows while apply is sleeping,
+		 * avoiding the deadlock where apply would hold the lock while sleeping.
+		 */
+		if (!semaphore_lock(&(replayDB->sema)))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+		lock_held = true;
 
 		if (!ld_store_replay_next_event(replayDB, context->previousLSN, &s))
 		{
@@ -162,18 +168,18 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 		if (s.action == STREAM_ACTION_UNKNOWN)
 		{
 			/*
-			 * No more rows: the transform process has not produced anything
-			 * past our current position.
+			 * No more rows available in replayDB. Release the lock so that
+			 * transform can write new rows, then wait and retry.
 			 *
-			 * When endpos is not set, we are in "follow" mode waiting for more
-			 * DML from the source database. Exit and wait for endpos to be set.
-			 *
-			 * When endpos is set and reached, we are done - all data has been
-			 * applied.
-			 *
-			 * When endpos is set but not yet reached, the transform process is
-			 * still producing data. We exit here and will be restarted when more
-			 * data is available. The sentinel will track our progress.
+			 * The sentinel tracks our position (previousLSN), so we can safely
+			 * release the lock and reacquire it later.
+			 */
+			semaphore_unlock(&(replayDB->sema));
+			lock_held = false;
+
+			/*
+			 * Sync sentinel to check if endpos has been set or reached while
+			 * we were applying data. This doesn't require the replayDB lock.
 			 */
 			if (!stream_apply_sync_sentinel(context, false))
 			{
@@ -194,17 +200,25 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 
 			/*
 			 * We are caught up with the transform process, but endpos has not
-			 * been reached. Exit normally and the main follow loop will
-			 * eventually restart us once more data is available.
+			 * been reached. Wait briefly for transform to produce more data,
+			 * then loop back to query again. This allows transform to write
+			 * while we're sleeping.
 			 */
-			log_info("Apply caught up with replayDB at LSN %X/%X, "
-					 "endpos not yet reached (%s)",
-					 LSN_FORMAT_ARGS(context->previousLSN),
-					 context->endpos == InvalidXLogRecPtr ? "not set" :
-					 	(context->endpos > context->previousLSN ?
-					 	 "ahead" : "reached"));
-			break;
+			log_debug("Apply caught up at LSN %X/%X, endpos %s, waiting for more data",
+					  LSN_FORMAT_ARGS(context->previousLSN),
+					  context->endpos == InvalidXLogRecPtr ? "not set" : "ahead");
+
+			pg_usleep(500 * 1000);  /* 500ms - long enough for transform to batch work */
+			continue;
 		}
+
+		/*
+		 * We have a row to process. Release the lock now since we've already
+		 * fetched the row data. This allows transform to keep writing while
+		 * we apply the row.
+		 */
+		semaphore_unlock(&(replayDB->sema));
+		lock_held = false;
 
 		if (s.action == STREAM_ACTION_BEGIN)
 		{
@@ -356,7 +370,10 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 		}
 	}
 
-	(void) semaphore_unlock(&(replayDB->sema));
+	if (lock_held)
+	{
+		(void) semaphore_unlock(&(replayDB->sema));
+	}
 
 	return success;
 }
