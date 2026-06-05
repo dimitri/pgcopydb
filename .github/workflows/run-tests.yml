@@ -40,8 +40,11 @@ jobs:
           - timescaledb
           - cdc-low-level
           - cdc-test-decoding
-          - cdc-endpos-between-transaction
+          - cdc-endpos-mid-txn
           - cdc-wal2json
+          - cdc-transform-apply
+          - cdc-partitioned-target
+          - cdc-replica-identity-index
           - follow-wal2json
           - follow-9.6
           - follow-data-only
@@ -62,9 +65,15 @@ jobs:
             PGVERSION: 16
           - TEST: cdc-test-decoding
             PGVERSION: 16
-          - TEST: cdc-endpos-between-transaction
+          - TEST: cdc-endpos-mid-txn
             PGVERSION: 16
           - TEST: cdc-wal2json
+            PGVERSION: 16
+          - TEST: cdc-transform-apply
+            PGVERSION: 16
+          - TEST: cdc-partitioned-target
+            PGVERSION: 16
+          - TEST: cdc-replica-identity-index
             PGVERSION: 16
           - TEST: follow-wal2json
             PGVERSION: 16
