@@ -19,10 +19,11 @@ pgcopydb ping
 # catalogs database, where the prefetch/transform/catchup sub-processes
 # register themselves in the process table.
 #
-dbfile=${TMPDIR}/pgcopydb/schema/source.db
+dbfile=$(find ${TMPDIR}/pgcopydb/schema -name "source.db" -type f 2>/dev/null | head -1)
 
-until [ -s ${dbfile} ]
+until [ -n "${dbfile}" ] && [ -s "${dbfile}" ]
 do
+    dbfile=$(find ${TMPDIR}/pgcopydb/schema -name "source.db" -type f 2>/dev/null | head -1)
     sleep 1
 done
 
@@ -32,12 +33,13 @@ pidf=/tmp/prefetch.pid
 while [ ! -s ${pidf} ]
 do
     # sometimes we have "Error: database is locked", ignore
-    sqlite3 -batch -bail -noheader ${dbfile} "${sql}" > ${pidf} || echo error
+    sqlite3 -batch -bail -noheader "${dbfile}" "${sql}" > ${pidf} 2>/dev/null || echo error
     sleep 1
 done
 
 # allow replaying changes now that pgcopydb follow command is running
-pgcopydb stream sentinel set apply
+echo "Setting sentinel apply mode..."
+pgcopydb stream sentinel set apply || { echo "Failed to set apply mode"; exit 1; }
 
 # allow the catchup phase to finish, ensure the following data is streamed
 sleep 2
@@ -83,8 +85,9 @@ commit;
 EOF
 
 # grab the current LSN, it's going to be our streaming end position
-lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_flush_lsn()'`
-pgcopydb stream sentinel set endpos --current
+echo "Setting endpos to current WAL position..."
+pgcopydb stream sentinel set endpos --current || { echo "Failed to set endpos"; exit 1; }
+echo "Final sentinel state:"
 pgcopydb stream sentinel get
 
 #

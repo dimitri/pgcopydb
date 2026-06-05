@@ -18,10 +18,11 @@ pgcopydb ping
 # that's the case is the existence of the pgcopydb.sentinel table on the
 # source database.
 #
-dbfile=${TMPDIR}/pgcopydb/schema/source.db
+dbfile=$(find ${TMPDIR}/pgcopydb/schema -name "source.db" -type f 2>/dev/null | head -1)
 
-until [ -s ${dbfile} ]
+until [ -n "${dbfile}" ] && [ -s "${dbfile}" ]
 do
+    dbfile=$(find ${TMPDIR}/pgcopydb/schema -name "source.db" -type f 2>/dev/null | head -1)
     sleep 1
 done
 
@@ -40,16 +41,19 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 psql -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_switch_wal()'
 
 # Set endpos to current flush LSN to signal follow where to stop
-pgcopydb stream sentinel set endpos --current --debug
+echo "Setting endpos to current WAL position..."
+pgcopydb stream sentinel set endpos --current --debug || { echo "Failed to set endpos"; exit 1; }
+echo "Final sentinel state:"
 pgcopydb stream sentinel get
 
 endpos=`pgcopydb stream sentinel get --endpos 2>/dev/null`
 
-if [ ${endpos} = "0/0" ]
+if [ -z "${endpos}" ] || [ "${endpos}" = "0/0" ]
 then
-    echo "ERROR: endpos not set"
+    echo "ERROR: endpos not set correctly (got: ${endpos})"
     exit 1
 fi
+echo "Successfully set endpos to ${endpos}"
 
 #
 # Because we're using docker-compose --abort-on-container-exit make sure
