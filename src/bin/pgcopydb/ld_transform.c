@@ -172,9 +172,6 @@ stream_transform_messages(StreamSpecs *specs)
 			if (sentinel->endpos != InvalidXLogRecPtr &&
 				sentinel->endpos <= sentinel->transform_lsn)
 			{
-				log_notice("Transform reached end position %X/%X at %X/%X",
-						   LSN_FORMAT_ARGS(sentinel->endpos),
-						   LSN_FORMAT_ARGS(sentinel->transform_lsn));
 				return true;
 			}
 		}
