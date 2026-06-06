@@ -82,9 +82,8 @@ static bool stream_write_truncate(ReplayDBStmt *replayStmt,
 static bool stream_write_file_txn(FILE *out, LogicalTransaction *txn);
 
 static bool stream_write_file_message(FILE *out,
-									   LogicalMessage *msg,
-									   LogicalMessageMetadata *metadata);
-
+									  LogicalMessage *msg,
+									  LogicalMessageMetadata *metadata);
 
 
 /*
@@ -94,7 +93,6 @@ static bool stream_write_file_message(FILE *out,
 bool
 stream_transform_context_init(StreamSpecs *specs)
 {
-
 	StreamContext *privateContext = &(specs->private);
 
 
@@ -130,8 +128,8 @@ stream_transform_context_init(StreamSpecs *specs)
 
 	if (tpguri != NULL && !streq(tpguri, "-"))
 	{
-
-		if (!pgsql_init(privateContext->transformPGSQL, (char *) tpguri, PGSQL_CONN_TARGET))
+		if (!pgsql_init(privateContext->transformPGSQL, (char *) tpguri,
+						PGSQL_CONN_TARGET))
 		{
 			/* errors have already been logged */
 			return false;
@@ -143,7 +141,6 @@ stream_transform_context_init(StreamSpecs *specs)
 			/* errors have already been logged */
 			return false;
 		}
-
 	}
 
 	/*
@@ -162,7 +159,6 @@ stream_transform_context_init(StreamSpecs *specs)
 }
 
 
-
 /*
  * stream_transform_from_outputdb is the public entry point for the inline
  * transform step that is now run inside the apply process.
@@ -178,7 +174,6 @@ stream_transform_context_init(StreamSpecs *specs)
 bool
 stream_transform_from_outputdb(StreamSpecs *specs, uint64_t previousLSN)
 {
-
 	/* tell ld_store_iter_output where to start (last committed LSN) */
 	specs->sentinel.replay_lsn = previousLSN;
 
@@ -241,10 +236,10 @@ stream_transform_cdc_file_hook(StreamSpecs *specs,
 		{
 			case STREAM_ACTION_BEGIN:
 			{
-				as->last_xid           = output->xid;
+				as->last_xid = output->xid;
 				as->last_txn_begin_lsn = output->lsn;
-				as->last_txn_end_lsn   = InvalidXLogRecPtr;
-				as->last_txn_complete  = false;
+				as->last_txn_end_lsn = InvalidXLogRecPtr;
+				as->last_txn_complete = false;
 				as->last_txn_processed = false;
 				break;
 			}
@@ -252,8 +247,8 @@ stream_transform_cdc_file_hook(StreamSpecs *specs,
 			case STREAM_ACTION_COMMIT:
 			case STREAM_ACTION_ROLLBACK:
 			{
-				as->last_xid          = output->xid;
-				as->last_txn_end_lsn  = output->lsn;
+				as->last_xid = output->xid;
+				as->last_txn_end_lsn = output->lsn;
 				as->last_txn_complete = true;
 
 				/* transformed into replay, not yet applied to the target */
@@ -380,7 +375,6 @@ stream_transform_write_transaction(StreamSpecs *specs)
 
 	return true;
 }
-
 
 
 /*
@@ -564,8 +558,8 @@ stream_write_file_txn(FILE *out, LogicalTransaction *txn)
  */
 static bool
 stream_write_file_message(FILE *out,
-						   LogicalMessage *msg,
-						   LogicalMessageMetadata *metadata)
+						  LogicalMessage *msg,
+						  LogicalMessageMetadata *metadata)
 {
 #define FFORMAT(stream, fmt, ...) \
 	{ if (fformat(stream, fmt, __VA_ARGS__) == -1) { \
@@ -846,7 +840,6 @@ stream_transform_rotate(StreamContext *privateContext)
 }
 
 
-
 /*
  * stream_transform_file transforms a JSON formatted file as received from the
  * wal2json logical decoding plugin into an SQL file ready for applying to the
@@ -1039,11 +1032,11 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
  */
 bool
 stream_compute_pathnames(uint32_t WalSegSz,
-					 uint32_t timeline,
-					 uint64_t lsn,
-					 char *dir,
-					 char *walFileName,
-					 char *sqlFileName)
+						 uint32_t timeline,
+						 uint64_t lsn,
+						 char *dir,
+						 char *walFileName,
+						 char *sqlFileName)
 {
 	char wal[MAXPGPATH] = { 0 };
 
@@ -2044,7 +2037,7 @@ stream_write_update(ReplayDBStmt *replayStmt, LogicalMessageUpdate *update)
 							return false;
 						}
 					}
-					
+
 					if (first)
 					{
 						first = false;

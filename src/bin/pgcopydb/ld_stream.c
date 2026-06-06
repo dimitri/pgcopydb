@@ -337,7 +337,9 @@ bool
 stream_signal_upstream_done(int pipe_write_fd, uint64_t done_lsn)
 {
 	if (pipe_write_fd <= 0)
+	{
 		return true;  /* -1 = no pipe; 0 = stdin (not a write pipe) */
+	}
 
 	/* Network byte order: big-endian 64-bit LSN */
 	uint64_t wire = pg_hton64(done_lsn);
@@ -347,8 +349,10 @@ stream_signal_upstream_done(int pipe_write_fd, uint64_t done_lsn)
 	{
 		/* EPIPE = downstream already gone; not fatal */
 		if (errno != EPIPE)
+		{
 			log_warn("stream_signal_upstream_done: write(%d) returned %zd: %m",
 					 pipe_write_fd, n);
+		}
 	}
 
 	close(pipe_write_fd);
@@ -367,7 +371,7 @@ bool
 stream_recv_upstream_done(StreamSpecs *specs, int pipe_read_fd)
 {
 	uint64_t wire = 0;
-	ssize_t  n = read(pipe_read_fd, &wire, sizeof(wire));
+	ssize_t n = read(pipe_read_fd, &wire, sizeof(wire));
 
 	specs->upstream_done = true;
 
@@ -403,7 +407,7 @@ stream_init_context(StreamSpecs *specs)
 {
 	StreamContext *privateContext = &(specs->private);
 
-	privateContext->specs  = specs;      /* back-pointer for pipe signalling */
+	privateContext->specs = specs;       /* back-pointer for pipe signalling */
 	privateContext->endpos = specs->endpos;
 	privateContext->startpos = specs->startpos;
 
@@ -1385,17 +1389,19 @@ stream_sync_sentinel(LogicalStreamContext *context)
 	 * monitoring; only flush_lsn (which drives confirmed_flush) is changed.
 	 */
 	if (sentinel.replay_lsn != InvalidXLogRecPtr)
+	{
 		context->tracking->flushed_lsn = sentinel.replay_lsn;
+	}
 
 	log_debug("stream_sync_sentinel: "
-			 "write_lsn %X/%X flush_lsn(=replay_lsn) %X/%X apply_lsn %X/%X "
-			 "startpos %X/%X endpos %X/%X apply %s",
-			 LSN_FORMAT_ARGS(context->tracking->written_lsn),
-			 LSN_FORMAT_ARGS(context->tracking->flushed_lsn),
-			 LSN_FORMAT_ARGS(context->tracking->applied_lsn),
-			 LSN_FORMAT_ARGS(privateContext->startpos),
-			 LSN_FORMAT_ARGS(privateContext->endpos),
-			 privateContext->apply ? "enabled" : "disabled");
+			  "write_lsn %X/%X flush_lsn(=replay_lsn) %X/%X apply_lsn %X/%X "
+			  "startpos %X/%X endpos %X/%X apply %s",
+			  LSN_FORMAT_ARGS(context->tracking->written_lsn),
+			  LSN_FORMAT_ARGS(context->tracking->flushed_lsn),
+			  LSN_FORMAT_ARGS(context->tracking->applied_lsn),
+			  LSN_FORMAT_ARGS(privateContext->startpos),
+			  LSN_FORMAT_ARGS(privateContext->endpos),
+			  privateContext->apply ? "enabled" : "disabled");
 
 	return true;
 }

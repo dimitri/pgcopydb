@@ -159,12 +159,12 @@ static bool
 stream_apply_state_progressed(const PipelineStateEntry *before,
 							  const PipelineStateEntry *after)
 {
-	return before->last_xid           != after->last_xid
-		   || before->last_txn_begin_lsn  != after->last_txn_begin_lsn
-		   || before->last_txn_end_lsn    != after->last_txn_end_lsn
-		   || before->last_txn_complete   != after->last_txn_complete
-		   || before->last_txn_processed  != after->last_txn_processed
-		   || before->run_end_lsn         != after->run_end_lsn;
+	return before->last_xid != after->last_xid ||
+		   before->last_txn_begin_lsn != after->last_txn_begin_lsn ||
+		   before->last_txn_end_lsn != after->last_txn_end_lsn ||
+		   before->last_txn_complete != after->last_txn_complete ||
+		   before->last_txn_processed != after->last_txn_processed ||
+		   before->run_end_lsn != after->run_end_lsn;
 }
 
 
@@ -230,9 +230,9 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 	 */
 	PipelineStateEntry current = { 0 };
 	strlcpy(current.process_name, "apply", sizeof(current.process_name));
-	current.run_start_lsn    = context->previousLSN;
+	current.run_start_lsn = context->previousLSN;
 	current.last_txn_end_lsn = context->previousLSN;
-	current.run_end_lsn      = context->previousLSN;
+	current.run_end_lsn = context->previousLSN;
 
 	specs->private.applyState = &current;
 
@@ -426,8 +426,9 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 			 * ≤100 ms latency; in catchup-only mode sleep briefly.
 			 */
 			if (pipe_rd < 0 && !specs->upstream_done)
+			{
 				pg_usleep(100 * 1000);  /* 100 ms */
-
+			}
 			continue;
 		}
 
@@ -514,10 +515,10 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 			}
 
 			/* Record (in-memory) that a transaction is about to be applied. */
-			current.last_xid           = xid;
+			current.last_xid = xid;
 			current.last_txn_begin_lsn = beginLSN;
-			current.last_txn_end_lsn   = InvalidXLogRecPtr;
-			current.last_txn_complete  = false;
+			current.last_txn_end_lsn = InvalidXLogRecPtr;
+			current.last_txn_complete = false;
 			current.last_txn_processed = false;
 
 			if (!stream_apply_transaction(context, xid, begin_id, commitLSN))
@@ -528,10 +529,10 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 			}
 
 			/* Transaction applied to target: record completion in-memory. */
-			current.last_txn_end_lsn   = commitLSN;
-			current.last_txn_complete  = true;
+			current.last_txn_end_lsn = commitLSN;
+			current.last_txn_complete = true;
 			current.last_txn_processed = true;
-			current.run_end_lsn        = context->previousLSN;
+			current.run_end_lsn = context->previousLSN;
 
 			/* After commit: check if endpos has been reached. */
 			if (context->endpos != InvalidXLogRecPtr &&
@@ -547,7 +548,9 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 
 				/* ensure replay_lsn advances to endpos for follow_reached_endpos */
 				if (context->previousLSN < context->endpos)
+				{
 					context->previousLSN = context->endpos;
+				}
 				(void) stream_apply_sync_sentinel(context, false);
 				break;
 			}
@@ -602,7 +605,9 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 
 				/* ensure replay_lsn advances to endpos for follow_reached_endpos */
 				if (context->previousLSN < context->endpos)
+				{
 					context->previousLSN = context->endpos;
+				}
 				(void) stream_apply_sync_sentinel(context, false);
 				break;
 			}
@@ -832,7 +837,9 @@ stream_apply_dml(StreamApplyContext *context, ReplayDBStmt *s)
 
 		/* chomp trailing semicolon */
 		if (len > 0 && truncateSQL[len - 1] == ';')
+		{
 			truncateSQL[len - 1] = '\0';
+		}
 
 		const char *execSQL = truncateSQL;
 		char rewritten[BUFSIZE] = { 0 };
@@ -942,7 +949,9 @@ stream_apply_dml(StreamApplyContext *context, ReplayDBStmt *s)
 			}
 
 			for (int i = 0; i < count; i++)
+			{
 				paramValues[i] = json_array_get_string(jsArray, i);
+			}
 
 			if (!pgsql_execute_prepared(applyPgConn, name,
 										count, paramValues,
@@ -1216,8 +1225,6 @@ stream_apply_sync_sentinel(StreamApplyContext *context, bool findDurableLSN)
 
 	return true;
 }
-
-
 
 
 /*
@@ -2214,8 +2221,6 @@ stream_apply_init_context(StreamApplyContext *context,
 
 	return true;
 }
-
-
 
 
 /*

@@ -18,8 +18,9 @@
 #include "ld_ipc.h"
 #include "ld_stream.h"
 
-typedef struct {
-	IPCConn  tcp_listen;
+typedef struct
+{
+	IPCConn tcp_listen;
 
 	uint64_t sentinel_startpos;
 	uint64_t sentinel_endpos;
@@ -27,17 +28,17 @@ typedef struct {
 	uint64_t sentinel_flush_lsn;
 	uint64_t sentinel_replay_lsn;
 
-	time_t   last_sentinel_update;
+	time_t last_sentinel_update;
 	uint64_t last_update_lsn;
-	int      update_interval_sec;
+	int update_interval_sec;
 } FollowCoordinator;
 
 bool follow_coordinator_init(FollowCoordinator *coord,
-                             const char *host, int port);
+							 const char *host, int port);
 void follow_coordinator_shutdown(FollowCoordinator *coord);
 bool follow_coordinator_handle_messages(FollowCoordinator *coord,
-                                        StreamSpecs *specs);
+										StreamSpecs *specs);
 bool follow_coordinator_update_sentinel(FollowCoordinator *coord,
-                                        StreamSpecs *specs);
+										StreamSpecs *specs);
 
 #endif /* FOLLOW_COORDINATOR_H */

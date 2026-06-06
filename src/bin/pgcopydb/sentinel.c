@@ -350,7 +350,6 @@ sentinel_update_write_flush_lsn(DatabaseCatalog *catalog,
 }
 
 
-
 /*
  * sentinel_update_replay_lsn updates our pgcopydb sentinel table end pos.
  */
@@ -567,7 +566,6 @@ sentinel_sync_recv(DatabaseCatalog *catalog,
 }
 
 
-
 /*
  * sentinel_sync_apply updates the current sentinel values for replay_lsn, and
  * fetches the current value for endpos and apply.
@@ -595,6 +593,7 @@ sentinel_sync_apply(DatabaseCatalog *catalog,
 	return true;
 }
 
+
 /*
  * ────────────────────────────────────────────────────────────────────────────
  * pipeline_state — per-process lifecycle tracking
@@ -614,7 +613,7 @@ sentinel_sync_apply(DatabaseCatalog *catalog,
 bool
 pipeline_state_start(DatabaseCatalog *catalog,
 					 const char *process_name,
-					 uint64_t    run_start_lsn)
+					 uint64_t run_start_lsn)
 {
 	sqlite3 *db = catalog->db;
 
@@ -638,7 +637,9 @@ pipeline_state_start(DatabaseCatalog *catalog,
 		"       null, null, null, 0, 0)";
 
 	if (!semaphore_lock(&(catalog->sema)))
+	{
 		return false;
+	}
 
 	SQLiteQuery q = { 0 };
 
@@ -649,9 +650,9 @@ pipeline_state_start(DatabaseCatalog *catalog,
 	}
 
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_TEXT,  "process_name",  0,          (char *) process_name },
-		{ BIND_PARAMETER_TYPE_INT64, "pid",           getpid(),   NULL },
-		{ BIND_PARAMETER_TYPE_TEXT,  "run_start_lsn", 0,          startLSN }
+		{ BIND_PARAMETER_TYPE_TEXT, "process_name", 0, (char *) process_name },
+		{ BIND_PARAMETER_TYPE_INT64, "pid", getpid(), NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "run_start_lsn", 0, startLSN }
 	};
 
 	if (!catalog_sql_bind(&q, params, 3) || !catalog_sql_execute_once(&q))
@@ -675,9 +676,9 @@ pipeline_state_start(DatabaseCatalog *catalog,
  */
 bool
 pipeline_state_txn_begin(DatabaseCatalog *catalog,
-						 const char      *process_name,
-						 uint32_t         xid,
-						 uint64_t         begin_lsn)
+						 const char *process_name,
+						 uint32_t xid,
+						 uint64_t begin_lsn)
 {
 	sqlite3 *db = catalog->db;
 
@@ -700,7 +701,9 @@ pipeline_state_txn_begin(DatabaseCatalog *catalog,
 		" where process_name = $3";
 
 	if (!semaphore_lock(&(catalog->sema)))
+	{
 		return false;
+	}
 
 	SQLiteQuery q = { 0 };
 
@@ -711,9 +714,9 @@ pipeline_state_txn_begin(DatabaseCatalog *catalog,
 	}
 
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_INT64, "xid",          xid, NULL },
-		{ BIND_PARAMETER_TYPE_TEXT,  "begin_lsn",    0,   beginLSN },
-		{ BIND_PARAMETER_TYPE_TEXT,  "process_name", 0,   (char *) process_name }
+		{ BIND_PARAMETER_TYPE_INT64, "xid", xid, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "begin_lsn", 0, beginLSN },
+		{ BIND_PARAMETER_TYPE_TEXT, "process_name", 0, (char *) process_name }
 	};
 
 	if (!catalog_sql_bind(&q, params, 3) || !catalog_sql_execute_once(&q))
@@ -735,9 +738,9 @@ pipeline_state_txn_begin(DatabaseCatalog *catalog,
  */
 bool
 pipeline_state_txn_done(DatabaseCatalog *catalog,
-						const char      *process_name,
-						uint32_t         xid,
-						uint64_t         end_lsn)
+						const char *process_name,
+						uint32_t xid,
+						uint64_t end_lsn)
 {
 	sqlite3 *db = catalog->db;
 
@@ -759,7 +762,9 @@ pipeline_state_txn_done(DatabaseCatalog *catalog,
 		" where process_name = $3";
 
 	if (!semaphore_lock(&(catalog->sema)))
+	{
 		return false;
+	}
 
 	SQLiteQuery q = { 0 };
 
@@ -770,9 +775,9 @@ pipeline_state_txn_done(DatabaseCatalog *catalog,
 	}
 
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_INT64, "xid",          xid, NULL },
-		{ BIND_PARAMETER_TYPE_TEXT,  "end_lsn",      0,   endLSN },
-		{ BIND_PARAMETER_TYPE_TEXT,  "process_name", 0,   (char *) process_name }
+		{ BIND_PARAMETER_TYPE_INT64, "xid", xid, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "end_lsn", 0, endLSN },
+		{ BIND_PARAMETER_TYPE_TEXT, "process_name", 0, (char *) process_name }
 	};
 
 	if (!catalog_sql_bind(&q, params, 3) || !catalog_sql_execute_once(&q))
@@ -792,9 +797,9 @@ pipeline_state_txn_done(DatabaseCatalog *catalog,
  */
 bool
 pipeline_state_end(DatabaseCatalog *catalog,
-				   const char      *process_name,
-				   uint64_t         run_end_lsn,
-				   bool             success)
+				   const char *process_name,
+				   uint64_t run_end_lsn,
+				   bool success)
 {
 	sqlite3 *db = catalog->db;
 
@@ -817,7 +822,9 @@ pipeline_state_end(DatabaseCatalog *catalog,
 		" where process_name = $3";
 
 	if (!semaphore_lock(&(catalog->sema)))
+	{
 		return false;
+	}
 
 	SQLiteQuery q = { 0 };
 
@@ -828,8 +835,8 @@ pipeline_state_end(DatabaseCatalog *catalog,
 	}
 
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "run_state",    0, (char *) state },
-		{ BIND_PARAMETER_TYPE_TEXT, "run_end_lsn",  0, endLSN },
+		{ BIND_PARAMETER_TYPE_TEXT, "run_state", 0, (char *) state },
+		{ BIND_PARAMETER_TYPE_TEXT, "run_end_lsn", 0, endLSN },
 		{ BIND_PARAMETER_TYPE_TEXT, "process_name", 0, (char *) process_name }
 	};
 
@@ -855,7 +862,7 @@ pipeline_state_end(DatabaseCatalog *catalog,
  * pipeline_state_start/_end and are intentionally left untouched here.
  */
 bool
-pipeline_state_sync(DatabaseCatalog        *catalog,
+pipeline_state_sync(DatabaseCatalog *catalog,
 					const PipelineStateEntry *state)
 {
 	sqlite3 *db = catalog->db;
@@ -888,7 +895,9 @@ pipeline_state_sync(DatabaseCatalog        *catalog,
 		" where process_name = $7";
 
 	if (!semaphore_lock(&(catalog->sema)))
+	{
 		return false;
+	}
 
 	SQLiteQuery q = { 0 };
 
@@ -899,13 +908,14 @@ pipeline_state_sync(DatabaseCatalog        *catalog,
 	}
 
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_INT64, "last_xid",     state->last_xid,                  NULL },
-		{ BIND_PARAMETER_TYPE_TEXT,  "begin_lsn",    0,                                beginLSN },
-		{ BIND_PARAMETER_TYPE_TEXT,  "end_lsn",      0,                                endLSN },
-		{ BIND_PARAMETER_TYPE_INT64, "complete",     state->last_txn_complete ? 1 : 0, NULL },
-		{ BIND_PARAMETER_TYPE_INT64, "processed",    state->last_txn_processed ? 1 : 0, NULL },
-		{ BIND_PARAMETER_TYPE_TEXT,  "run_end_lsn",  0,                                runEndLSN },
-		{ BIND_PARAMETER_TYPE_TEXT,  "process_name", 0,                                (char *) state->process_name }
+		{ BIND_PARAMETER_TYPE_INT64, "last_xid", state->last_xid, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "begin_lsn", 0, beginLSN },
+		{ BIND_PARAMETER_TYPE_TEXT, "end_lsn", 0, endLSN },
+		{ BIND_PARAMETER_TYPE_INT64, "complete", state->last_txn_complete ? 1 : 0, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "processed", state->last_txn_processed ? 1 : 0,
+		  NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "run_end_lsn", 0, runEndLSN },
+		{ BIND_PARAMETER_TYPE_TEXT, "process_name", 0, (char *) state->process_name }
 	};
 
 	if (!catalog_sql_bind(&q, params, 7) || !catalog_sql_execute_once(&q))
@@ -927,8 +937,8 @@ static bool pipeline_state_fetch(SQLiteQuery *query);
  * Returns false on SQL error; sets state->process_name[0] = '\0' if no row.
  */
 bool
-pipeline_state_get(DatabaseCatalog   *catalog,
-				   const char        *process_name,
+pipeline_state_get(DatabaseCatalog *catalog,
+				   const char *process_name,
 				   PipelineStateEntry *state)
 {
 	sqlite3 *db = catalog->db;
@@ -951,12 +961,14 @@ pipeline_state_get(DatabaseCatalog   *catalog,
 		" where process_name = $1";
 
 	if (!semaphore_lock(&(catalog->sema)))
+	{
 		return false;
+	}
 
 	SQLiteQuery q = {
 		.errorOnZeroRows = false,
-		.context         = state,
-		.fetchFunction   = &pipeline_state_fetch
+		.context = state,
+		.fetchFunction = &pipeline_state_fetch
 	};
 
 	if (!catalog_sql_prepare(db, sql, &q))
@@ -987,47 +999,59 @@ pipeline_state_fetch(SQLiteQuery *query)
 
 	/* column 0: process_name */
 	if (sqlite3_column_type(query->ppStmt, 0) != SQLITE_NULL)
+	{
 		strlcpy(state->process_name,
 				(char *) sqlite3_column_text(query->ppStmt, 0),
 				sizeof(state->process_name));
+	}
 
 	/* column 1: pid */
 	state->pid = (int) sqlite3_column_int64(query->ppStmt, 1);
 
 	/* column 2: run_state */
 	if (sqlite3_column_type(query->ppStmt, 2) != SQLITE_NULL)
+	{
 		strlcpy(state->run_state,
 				(char *) sqlite3_column_text(query->ppStmt, 2),
 				sizeof(state->run_state));
+	}
 
 	/* columns 3,4: run_start_lsn, run_end_lsn */
 	if (sqlite3_column_type(query->ppStmt, 3) != SQLITE_NULL)
+	{
 		(void) parseLSN((char *) sqlite3_column_text(query->ppStmt, 3),
 						&state->run_start_lsn);
+	}
 
 	if (sqlite3_column_type(query->ppStmt, 4) != SQLITE_NULL)
+	{
 		(void) parseLSN((char *) sqlite3_column_text(query->ppStmt, 4),
 						&state->run_end_lsn);
+	}
 
 	/* columns 5,6: started_at, ended_at */
 	state->started_at = sqlite3_column_int64(query->ppStmt, 5);
-	state->ended_at   = sqlite3_column_int64(query->ppStmt, 6);
+	state->ended_at = sqlite3_column_int64(query->ppStmt, 6);
 
 	/* column 7: last_xid */
 	state->last_xid = (uint32_t) sqlite3_column_int64(query->ppStmt, 7);
 
 	/* columns 8,9: last_txn_begin_lsn, last_txn_end_lsn */
 	if (sqlite3_column_type(query->ppStmt, 8) != SQLITE_NULL)
+	{
 		(void) parseLSN((char *) sqlite3_column_text(query->ppStmt, 8),
 						&state->last_txn_begin_lsn);
+	}
 
 	if (sqlite3_column_type(query->ppStmt, 9) != SQLITE_NULL)
+	{
 		(void) parseLSN((char *) sqlite3_column_text(query->ppStmt, 9),
 						&state->last_txn_end_lsn);
+	}
 
 	/* columns 10,11: last_txn_complete, last_txn_processed */
-	state->last_txn_complete   = (bool) sqlite3_column_int(query->ppStmt, 10);
-	state->last_txn_processed  = (bool) sqlite3_column_int(query->ppStmt, 11);
+	state->last_txn_complete = (bool) sqlite3_column_int(query->ppStmt, 10);
+	state->last_txn_processed = (bool) sqlite3_column_int(query->ppStmt, 11);
 
 	return true;
 }

@@ -613,17 +613,33 @@ cli_read_one_line(const char *filename,
 void
 cli_read_coordinator_env(CopyDBOptions *options)
 {
-	char *host = getenv("PGCOPYDB_HOST");
-	char *port = getenv("PGCOPYDB_PORT");
-
-	if (host != NULL && host[0] != '\0')
+	if (env_exists("PGCOPYDB_HOST"))
 	{
-		strlcpy(options->host, host, sizeof(options->host));
+		char host[256] = { 0 };
+
+		if (get_env_copy("PGCOPYDB_HOST", host, sizeof(host)) && host[0] != '\0')
+		{
+			strlcpy(options->host, host, sizeof(options->host));
+		}
 	}
 
-	if (port != NULL && port[0] != '\0')
+	if (env_exists("PGCOPYDB_PORT"))
 	{
-		options->port = atoi(port);
+		char port[16] = { 0 };
+
+		if (get_env_copy("PGCOPYDB_PORT", port, sizeof(port)) && port[0] != '\0')
+		{
+			int portNumber = 0;
+
+			if (stringToInt(port, &portNumber))
+			{
+				options->port = portNumber;
+			}
+			else
+			{
+				log_warn("Ignoring invalid PGCOPYDB_PORT value \"%s\"", port);
+			}
+		}
 	}
 }
 
@@ -1064,7 +1080,12 @@ cli_copy_db_getopts(int argc, char **argv)
 
 			case 1002:      /* --port: follow coordinator TCP listen port */
 			{
-				options.port = atoi(optarg);
+				if (!stringToInt(optarg, &(options.port)))
+				{
+					log_fatal("--port value \"%s\" is not a valid integer",
+							  optarg);
+					exit(EXIT_CODE_BAD_ARGS);
+				}
 				log_trace("--port %d", options.port);
 				break;
 			}

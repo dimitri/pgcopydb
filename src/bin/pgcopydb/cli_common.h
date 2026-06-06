@@ -105,7 +105,7 @@ typedef struct CopyDBOptions
 	 * coordinator over TCP instead of opening the SQLite catalog directly.
 	 */
 	char host[256];
-	int  port;
+	int port;
 } CopyDBOptions;
 
 extern bool outputJSON;

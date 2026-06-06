@@ -19,11 +19,11 @@
 
 bool
 follow_coordinator_init(FollowCoordinator *coord,
-                        const char *host, int port)
+						const char *host, int port)
 {
 	memset(coord, 0, sizeof(FollowCoordinator));
 
-	coord->update_interval_sec  = 5;
+	coord->update_interval_sec = 5;
 	coord->last_sentinel_update = time(NULL);
 
 	if (host == NULL || port <= 0)
@@ -55,15 +55,18 @@ bool
 follow_coordinator_handle_messages(FollowCoordinator *coord, StreamSpecs *specs)
 {
 	if (coord->tcp_listen.fd < 0)
+	{
 		return true;   /* TCP coordinator not active */
-
-	IPCConn    peer     = { 0 };
-	IPCMessage msg      = { 0 };
+	}
+	IPCConn peer = { 0 };
+	IPCMessage msg = { 0 };
 	IPCMessage response = { 0 };
 
 	/* Non-blocking accept (100 ms timeout) */
 	if (!ld_ipc_tcp_accept(&coord->tcp_listen, &peer, 100))
+	{
 		return true;
+	}
 
 	if (!ld_ipc_recv_message(&peer, &msg, 1000))
 	{
@@ -98,7 +101,7 @@ follow_coordinator_handle_messages(FollowCoordinator *coord, StreamSpecs *specs)
 				response.type = IPC_MSG_ERROR;
 				const char *err = "Failed to update sentinel endpos";
 				response.payload_len = strlen(err);
-				memcpy(response.payload, err, response.payload_len);
+				memcpy(response.payload, err, response.payload_len); /* IGNORE-BANNED */
 			}
 			break;
 		}
@@ -117,7 +120,7 @@ follow_coordinator_handle_messages(FollowCoordinator *coord, StreamSpecs *specs)
 				response.type = IPC_MSG_ERROR;
 				const char *err = "Failed to update sentinel startpos";
 				response.payload_len = strlen(err);
-				memcpy(response.payload, err, response.payload_len);
+				memcpy(response.payload, err, response.payload_len); /* IGNORE-BANNED */
 			}
 			break;
 		}
@@ -134,7 +137,7 @@ follow_coordinator_handle_messages(FollowCoordinator *coord, StreamSpecs *specs)
 				response.type = IPC_MSG_ERROR;
 				const char *err = "Failed to update sentinel apply flag";
 				response.payload_len = strlen(err);
-				memcpy(response.payload, err, response.payload_len);
+				memcpy(response.payload, err, response.payload_len); /* IGNORE-BANNED */
 			}
 			break;
 		}
@@ -148,13 +151,13 @@ follow_coordinator_handle_messages(FollowCoordinator *coord, StreamSpecs *specs)
 				response.type = IPC_MSG_ERROR;
 				const char *err = "Failed to read sentinel";
 				response.payload_len = strlen(err);
-				memcpy(response.payload, err, response.payload_len);
+				memcpy(response.payload, err, response.payload_len); /* IGNORE-BANNED */
 			}
 			else
 			{
-				response.type        = IPC_MSG_SENTINEL_REPLY;
+				response.type = IPC_MSG_SENTINEL_REPLY;
 				response.payload_len = sizeof(CopyDBSentinel);
-				memcpy(response.payload, &s, sizeof(CopyDBSentinel));
+				memcpy(response.payload, &s, sizeof(CopyDBSentinel)); /* IGNORE-BANNED */
 			}
 			break;
 		}
@@ -166,26 +169,28 @@ follow_coordinator_handle_messages(FollowCoordinator *coord, StreamSpecs *specs)
 
 			response.type = IPC_MSG_STATUS_REPLY;
 			IPCPayloadStatusReply *st = (IPCPayloadStatusReply *) response.payload;
-			st->startpos   = s.startpos;
-			st->endpos     = s.endpos;
-			st->write_lsn  = s.write_lsn;
-			st->flush_lsn  = s.flush_lsn;
+			st->startpos = s.startpos;
+			st->endpos = s.endpos;
+			st->write_lsn = s.write_lsn;
+			st->flush_lsn = s.flush_lsn;
 			st->replay_lsn = s.replay_lsn;
-			st->state      = 1;
+			st->state = 1;
 			response.payload_len = sizeof(IPCPayloadStatusReply);
 			break;
 		}
 
 		case IPC_MSG_PING:
+		{
 			response.type = IPC_MSG_PONG;
 			break;
+		}
 
 		default:
 		{
 			response.type = IPC_MSG_ERROR;
 			const char *err = "Unknown command";
 			response.payload_len = strlen(err);
-			memcpy(response.payload, err, response.payload_len);
+			memcpy(response.payload, err, response.payload_len); /* IGNORE-BANNED */
 			break;
 		}
 	}
@@ -203,13 +208,15 @@ follow_coordinator_update_sentinel(FollowCoordinator *coord, StreamSpecs *specs)
 
 	bool endpos_changed = (specs->sentinel.endpos != coord->sentinel_endpos);
 
-	uint64_t progress          = coord->sentinel_write_lsn - coord->last_update_lsn;
-	const uint64_t THRESH_1MB  = 1 * 1024 * 1024;
+	uint64_t progress = coord->sentinel_write_lsn - coord->last_update_lsn;
+	const uint64_t THRESH_1MB = 1 * 1024 * 1024;
 
 	if (!endpos_changed &&
 		progress < THRESH_1MB &&
 		(now - coord->last_sentinel_update) < coord->update_interval_sec)
+	{
 		return true;
+	}
 
 	if (endpos_changed)
 	{
@@ -226,8 +233,8 @@ follow_coordinator_update_sentinel(FollowCoordinator *coord, StreamSpecs *specs)
 	if (coord->sentinel_write_lsn != specs->sentinel.write_lsn)
 	{
 		if (!sentinel_update_write_flush_lsn(specs->sourceDB,
-											  coord->sentinel_write_lsn,
-											  coord->sentinel_flush_lsn))
+											 coord->sentinel_write_lsn,
+											 coord->sentinel_flush_lsn))
 		{
 			log_error("Failed to update sentinel write/flush LSNs");
 			return false;
@@ -235,6 +242,6 @@ follow_coordinator_update_sentinel(FollowCoordinator *coord, StreamSpecs *specs)
 	}
 
 	coord->last_sentinel_update = now;
-	coord->last_update_lsn      = coord->sentinel_write_lsn;
+	coord->last_update_lsn = coord->sentinel_write_lsn;
 	return true;
 }

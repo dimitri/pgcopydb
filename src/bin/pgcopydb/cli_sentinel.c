@@ -203,7 +203,12 @@ cli_sentinel_getopts(int argc, char **argv)
 
 			case 'P':
 			{
-				options.port = atoi(optarg);
+				if (!stringToInt(optarg, &(options.port)))
+				{
+					log_fatal("--port value \"%s\" is not a valid integer",
+							  optarg);
+					exit(EXIT_CODE_BAD_ARGS);
+				}
 				log_trace("--port %d", options.port);
 				break;
 			}
@@ -783,7 +788,7 @@ cli_sentinel_get(int argc, char **argv)
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 
-		memcpy(&sentinel, response.payload, sizeof(CopyDBSentinel));
+		memcpy(&sentinel, response.payload, sizeof(CopyDBSentinel)); /* IGNORE-BANNED */
 	}
 	else
 	{

@@ -632,7 +632,7 @@ struct StreamSpecs
 	 * upstream_done     == true once the signal has been read.
 	 */
 	uint64_t upstream_done_lsn;   /* final LSN signalled by upstream */
-	bool     upstream_done;       /* have we received the upstream signal? */
+	bool upstream_done;           /* have we received the upstream signal? */
 
 	/*
 	 * Optional follow coordinator TCP endpoint (--host/--port).  When coordHost
@@ -640,8 +640,8 @@ struct StreamSpecs
 	 * coordHost:coordPort, letting "pgcopydb stream sentinel" CLI clients
 	 * read/write the sentinel over TCP instead of opening the SQLite catalog.
 	 */
-	char     coordHost[256];
-	int      coordPort;
+	char coordHost[256];
+	int coordPort;
 };
 
 /* ld_stream.c */
@@ -810,7 +810,6 @@ bool stream_apply_init_context(StreamApplyContext *context,
 							   uint64_t endpos);
 
 bool setupReplicationOrigin(StreamApplyContext *context);
-
 
 
 bool parseSQLAction(const char *query, LogicalMessageMetadata *metadata);

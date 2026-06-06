@@ -23,59 +23,65 @@
 #include <stdint.h>
 #include <time.h>
 
-#define IPC_PROTOCOL_VERSION  1
-#define IPC_MAX_PAYLOAD_SIZE  1024
+#define IPC_PROTOCOL_VERSION 1
+#define IPC_MAX_PAYLOAD_SIZE 1024
 
 /*
  * Message types used by the optional TCP coordinator.
  * Only the minimal set actually referenced by follow_coordinator.c and
  * cli_sentinel.c is kept here.
  */
-typedef enum {
-	IPC_MSG_PING           = 0,   /* liveness check */
-	IPC_MSG_PONG           = 1,   /* liveness reply */
+typedef enum
+{
+	IPC_MSG_PING = 0,             /* liveness check */
+	IPC_MSG_PONG = 1,             /* liveness reply */
 
-	IPC_MSG_SET_ENDPOS     = 3,   /* CLI → coordinator: set sentinel.endpos */
+	IPC_MSG_SET_ENDPOS = 3,       /* CLI → coordinator: set sentinel.endpos */
 	IPC_MSG_QUERY_SENTINEL = 4,   /* CLI → coordinator: read sentinel */
 	IPC_MSG_SENTINEL_REPLY = 5,   /* coordinator → CLI: sentinel data */
-	IPC_MSG_QUERY_STATUS   = 6,   /* CLI → coordinator: process status */
-	IPC_MSG_STATUS_REPLY   = 7,   /* coordinator → CLI: status data */
-	IPC_MSG_SET_STARTPOS   = 8,   /* CLI → coordinator: set sentinel.startpos */
-	IPC_MSG_SET_APPLY      = 9,   /* CLI → coordinator: set sentinel.apply flag */
+	IPC_MSG_QUERY_STATUS = 6,     /* CLI → coordinator: process status */
+	IPC_MSG_STATUS_REPLY = 7,     /* coordinator → CLI: status data */
+	IPC_MSG_SET_STARTPOS = 8,     /* CLI → coordinator: set sentinel.startpos */
+	IPC_MSG_SET_APPLY = 9,        /* CLI → coordinator: set sentinel.apply flag */
 
-	IPC_MSG_ACK_CONFIRMED  = 18,  /* coordinator → CLI: request accepted */
-	IPC_MSG_ERROR          = 99,  /* generic error */
+	IPC_MSG_ACK_CONFIRMED = 18,   /* coordinator → CLI: request accepted */
+	IPC_MSG_ERROR = 99,           /* generic error */
 } IPCMessageType;
 
 /*
  * Wire format: [version:1][type:1][payload_len:2][payload:N]
  */
-typedef struct {
-	uint8_t  version;
-	uint8_t  type;
+typedef struct
+{
+	uint8_t version;
+	uint8_t type;
 	uint16_t payload_len;
-	uint8_t  payload[IPC_MAX_PAYLOAD_SIZE];
+	uint8_t payload[IPC_MAX_PAYLOAD_SIZE];
 } IPCMessage;
 
 /* Payload for IPC_MSG_SET_ENDPOS */
-typedef struct {
+typedef struct
+{
 	uint64_t endpos_lsn;
-	char     reason[256];
+	char reason[256];
 } IPCPayloadSetEndpos;
 
 /* Payload for IPC_MSG_SET_STARTPOS */
-typedef struct {
+typedef struct
+{
 	uint64_t startpos_lsn;
-	char     reason[256];
+	char reason[256];
 } IPCPayloadSetStartpos;
 
 /* Payload for IPC_MSG_SET_APPLY (apply=1 enables apply mode, 0 = prefetch) */
-typedef struct {
-	uint8_t  apply;
+typedef struct
+{
+	uint8_t apply;
 } IPCPayloadSetApply;
 
 /* Payload for IPC_MSG_STATUS_REPLY */
-typedef struct {
+typedef struct
+{
 	uint64_t startpos;
 	uint64_t endpos;
 	uint64_t write_lsn;
@@ -85,18 +91,20 @@ typedef struct {
 } IPCPayloadStatusReply;
 
 /* Payload for IPC_MSG_ERROR */
-typedef struct {
+typedef struct
+{
 	char error_message[256];
 } IPCPayloadError;
 
 /*
  * TCP connection context.
  */
-typedef struct {
-	int    fd;
-	char   path[512];          /* host:port string for logging */
+typedef struct
+{
+	int fd;
+	char path[512];            /* host:port string for logging */
 	time_t last_activity;
-	int    read_timeout_ms;
+	int read_timeout_ms;
 } IPCConn;
 
 /* TCP socket operations (used by follow_coordinator and ld_service) */
@@ -114,7 +122,7 @@ bool ld_ipc_is_alive(IPCConn *conn);
 	do { \
 		memset(&(msg), 0, sizeof(IPCMessage)); \
 		(msg).version = IPC_PROTOCOL_VERSION; \
-		(msg).type    = (msg_type); \
+		(msg).type = (msg_type); \
 	} while (0)
 
 #endif /* LD_IPC_H */

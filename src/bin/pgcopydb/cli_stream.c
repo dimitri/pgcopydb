@@ -33,6 +33,7 @@ CopyDBOptions streamDBoptions = { 0 };
 static int cli_stream_getopts(int argc, char **argv);
 
 static void cli_stream_receive(int argc, char **argv);
+
 /* cli_stream_transform removed: stream transform command no longer exists */
 static void cli_stream_apply(int argc, char **argv);
 
@@ -278,7 +279,12 @@ cli_stream_getopts(int argc, char **argv)
 
 			case 1002:      /* --port: follow coordinator TCP listen port */
 			{
-				options.port = atoi(optarg);
+				if (!stringToInt(optarg, &(options.port)))
+				{
+					log_fatal("--port value \"%s\" is not a valid integer",
+							  optarg);
+					exit(EXIT_CODE_BAD_ARGS);
+				}
 				log_trace("--port %d", options.port);
 				break;
 			}
@@ -1038,6 +1044,8 @@ cli_stream_transform(int argc, char **argv)
 
 	(void) catalog_close(specs.sourceDB);
 }
+
+
 #endif /* removed cli_stream_transform */
 
 

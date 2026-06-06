@@ -509,18 +509,18 @@ bool sentinel_sync_apply(DatabaseCatalog *catalog,
  */
 typedef struct PipelineStateEntry
 {
-	char     process_name[16];     /* 'receive' | 'apply' */
-	int      pid;
-	char     run_state[16];        /* 'running' | 'done' | 'error' */
+	char process_name[16];         /* 'receive' | 'apply' */
+	int pid;
+	char run_state[16];            /* 'running' | 'done' | 'error' */
 	uint64_t run_start_lsn;
 	uint64_t run_end_lsn;          /* 0 = still running */
-	int64_t  started_at;           /* Unix epoch */
-	int64_t  ended_at;             /* 0 = still running */
+	int64_t started_at;            /* Unix epoch */
+	int64_t ended_at;              /* 0 = still running */
 	uint32_t last_xid;
 	uint64_t last_txn_begin_lsn;
 	uint64_t last_txn_end_lsn;     /* 0 = transaction still open */
-	bool     last_txn_complete;    /* had COMMIT or ROLLBACK */
-	bool     last_txn_processed;   /* fully written/applied */
+	bool last_txn_complete;        /* had COMMIT or ROLLBACK */
+	bool last_txn_processed;       /* fully written/applied */
 } PipelineStateEntry;
 
 bool pipeline_state_start(DatabaseCatalog *catalog,

@@ -478,4 +478,3 @@ copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 
 	return true;
 }
-

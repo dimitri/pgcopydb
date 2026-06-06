@@ -12,14 +12,12 @@
 #include "ld_ipc.h"
 
 /* Service endpoint configuration */
-typedef struct {
+typedef struct
+{
 	char host[256];
 	int port;
 	bool enabled;
 } ServiceEndpoint;
-
-/* Get service endpoint from environment variables */
-ServiceEndpoint ld_service_get_endpoint(void);
 
 /*
  * Build a service endpoint from an explicit host/port (the --host/--port CLI
@@ -29,7 +27,7 @@ ServiceEndpoint ld_service_endpoint(const char *host, int port);
 
 /* Connect to service and send command, get response */
 bool ld_service_send_command(ServiceEndpoint endpoint,
-                             IPCMessage *request,
-                             IPCMessage *response);
+							 IPCMessage *request,
+							 IPCMessage *response);
 
 #endif /* LD_SERVICE_H */

@@ -744,7 +744,6 @@ follow_start_prefetch(StreamSpecs *specs)
 }
 
 
-
 /*
  * follow_start_catchup starts a sub-process that catches-up using the SQL
  * files that have been prepared by the prefetch process.

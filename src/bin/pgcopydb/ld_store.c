@@ -29,8 +29,8 @@
  */
 static void
 ld_store_replaydb_filename_from_outputdb(const char *outputFile,
-										  char *replayFile,
-										  size_t replayFileSize)
+										 char *replayFile,
+										 size_t replayFileSize)
 {
 	/*
 	 * outputFile ends with "-output.db"; replace that suffix with "-replay.db".
@@ -49,9 +49,13 @@ ld_store_replaydb_filename_from_outputdb(const char *outputFile,
 		/* fallback: strip .db and append -replay.db */
 		char *dot = strrchr(replayFile, '.');
 		if (dot != NULL)
+		{
 			strlcpy(dot, "-replay.db", replayFileSize - (dot - replayFile));
+		}
 		else
+		{
 			strlcat(replayFile, "-replay.db", replayFileSize);
+		}
 	}
 }
 
@@ -141,8 +145,8 @@ ld_store_open_replaydb(StreamSpecs *specs)
 
 	/* derive replay.db path from output.db path */
 	ld_store_replaydb_filename_from_outputdb(outputDB->dbfile,
-											  replayDB->dbfile,
-											  sizeof(replayDB->dbfile));
+											 replayDB->dbfile,
+											 sizeof(replayDB->dbfile));
 
 	bool createReplayDB = (access(replayDB->dbfile, F_OK) != 0);
 
@@ -535,8 +539,6 @@ ld_store_lookup_output_after_lsn(DatabaseCatalog *catalog,
 								 uint64_t lsn,
 								 ReplayDBOutputMessage *output)
 {
-
-
 	sqlite3 *db = catalog->db;
 
 
@@ -560,6 +562,7 @@ ld_store_lookup_output_after_lsn(DatabaseCatalog *catalog,
 	 * Both branches now use >= (not just BEGIN) to ensure that internal
 	 * markers like ENDPOS are found even when inserted at the exact endpos LSN.
 	 */
+
 	/*
 	 * Find the next thing to process starting from transform_lsn.
 	 *
@@ -583,6 +586,7 @@ ld_store_lookup_output_after_lsn(DatabaseCatalog *catalog,
 	 * Note: ld_store_lookup_output_xid_end uses a separate query that still
 	 * looks for C/R — it is not affected by this change.
 	 */
+
 	/*
 	 * Outer query: find the next unit of work for transform.
 	 *
@@ -1327,7 +1331,6 @@ ld_store_insert_replay_stmt(DatabaseCatalog *catalog,
 bool
 ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 {
-
 	ReplayDBOutputIterator *iter =
 		(ReplayDBOutputIterator *) calloc(1, sizeof(ReplayDBOutputIterator));
 
@@ -1338,9 +1341,9 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 		return false;
 	}
 
-	iter->catalog       = specs->outputDB;
+	iter->catalog = specs->outputDB;
 	iter->transform_lsn = specs->sentinel.replay_lsn;  /* apply reads from replay_lsn */
-	iter->endpos        = specs->endpos;
+	iter->endpos = specs->endpos;
 
 
 	DatabaseCatalog *catalog = iter->catalog;
@@ -1362,8 +1365,7 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 
 
 	if (iter->output != NULL)
-	{
-	}
+	{ }
 
 	if (iter->output == NULL ||
 		iter->output->action == STREAM_ACTION_UNKNOWN)
@@ -1389,8 +1391,8 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 			 * If receive is still running: return with no progress — the outer
 			 * loop's select() on pipe_rt sleeps up to 100 ms before retrying.
 			 */
-			bool     receive_done = specs->upstream_done;
-			uint64_t end_lsn      = specs->upstream_done_lsn;
+			bool receive_done = specs->upstream_done;
+			uint64_t end_lsn = specs->upstream_done_lsn;
 
 			/*
 			 * Cross-check with the pipeline_state table.  This catches the
@@ -1405,16 +1407,19 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 				recv_state.process_name[0] != '\0')
 			{
 				if (strcmp(recv_state.run_state, "done") == 0)
+				{
 					receive_done = true;
+				}
 
 				if (recv_state.run_end_lsn != InvalidXLogRecPtr &&
 					(end_lsn == InvalidXLogRecPtr || end_lsn == 0))
+				{
 					end_lsn = recv_state.run_end_lsn;
+				}
 			}
 
 			if (receive_done && end_lsn != InvalidXLogRecPtr && end_lsn != 0)
 			{
-
 				/*
 				 * Do NOT call sentinel_sync_transform(end_lsn) here.
 				 *
@@ -1542,7 +1547,6 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 bool
 ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 {
-
 	DatabaseCatalog *catalog = iter->catalog;
 	sqlite3 *db = catalog->db;
 
@@ -1603,7 +1607,6 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 
 		case STREAM_ACTION_BEGIN:
 		{
-
 			/* greab the COMMIT or ROLLBACK output entry if there is one */
 
 			if (!ld_store_lookup_output_xid_end(catalog, first.xid, &last))
@@ -1791,7 +1794,7 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 
 	BindParam params[] = {
 		{ BIND_PARAMETER_TYPE_INT64, "xid", first.xid, NULL },
-		{ BIND_PARAMETER_TYPE_INT64, "id",  iter->output->id, NULL }
+		{ BIND_PARAMETER_TYPE_INT64, "id", iter->output->id, NULL }
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -1802,7 +1805,6 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 		/* errors have already been logged */
 		return false;
 	}
-
 
 
 	/* re-use params, hard code the count */
@@ -1902,15 +1904,21 @@ ld_store_replay_fetch(SQLiteQuery *query)
 	}
 
 	if (sqlite3_column_type(query->ppStmt, 2) != SQLITE_NULL)
+	{
 		s->xid = sqlite3_column_int64(query->ppStmt, 2);
+	}
 
 	s->lsn = InvalidXLogRecPtr;
 	if (sqlite3_column_type(query->ppStmt, 3) != SQLITE_NULL)
+	{
 		s->lsn = sqlite3_column_int64(query->ppStmt, 3);
+	}
 
 	s->endlsn = InvalidXLogRecPtr;
 	if (sqlite3_column_type(query->ppStmt, 4) != SQLITE_NULL)
+	{
 		s->endlsn = sqlite3_column_int64(query->ppStmt, 4);
+	}
 
 	if (sqlite3_column_type(query->ppStmt, 5) != SQLITE_NULL)
 	{
@@ -2123,15 +2131,21 @@ ld_store_replay_event_fetch(SQLiteQuery *query)
 	}
 
 	if (sqlite3_column_type(query->ppStmt, 2) != SQLITE_NULL)
+	{
 		s->xid = sqlite3_column_int64(query->ppStmt, 2);
+	}
 
 	s->lsn = InvalidXLogRecPtr;
 	if (sqlite3_column_type(query->ppStmt, 3) != SQLITE_NULL)
+	{
 		s->lsn = sqlite3_column_int64(query->ppStmt, 3);
+	}
 
 	s->endlsn = InvalidXLogRecPtr;
 	if (sqlite3_column_type(query->ppStmt, 4) != SQLITE_NULL)
+	{
 		s->endlsn = sqlite3_column_int64(query->ppStmt, 4);
+	}
 
 	if (sqlite3_column_type(query->ppStmt, 5) != SQLITE_NULL)
 	{
