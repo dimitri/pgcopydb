@@ -48,7 +48,7 @@ lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_lsn()'`
 #
 pgcopydb stream prefetch --resume --endpos "${lsn}" -vv
 
-SHAREDIR=${XDG_DATA_HOME}/pgcopydb
+SHAREDIR=${XDG_DATA_HOME:-/var/lib/postgres/.local/share}/pgcopydb
 
 ls -la ${SHAREDIR}/
 

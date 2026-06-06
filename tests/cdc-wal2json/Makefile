@@ -8,26 +8,16 @@ test: down run down ;
 up: down build
 	docker compose up $(COMPOSE_EXIT)
 
-run: build fix-volumes
-	docker compose run test
+run: build
+	docker compose run --rm test
 
 down:
-	docker compose down
+	docker compose down -v
 
 build:
 	docker compose build --quiet
 
-VPATH   = /var/run/pgcopydb
-CNAME   = cdc-wal2json
-VNAME   = cdc-wal2json
-VOLUMES = -v $(VNAME):$(VPATH)
-OPTS    = --env-file=../paths.env $(VOLUMES)
-CLEANUP = make -f /var/lib/postgres/cleanup.mk
-
-fix-volumes:
-	docker run --rm $(OPTS) $(CNAME) $(CLEANUP)
-
 attach:
-	docker run --rm -it $(OPTS) $(CNAME) bash
+	docker run --rm -it cdc-wal2json bash
 
-.PHONY: run down build test fix-volumes attach
+.PHONY: run down build test attach

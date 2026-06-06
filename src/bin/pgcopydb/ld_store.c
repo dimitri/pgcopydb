@@ -69,6 +69,30 @@ ld_store_open_replaydb(StreamSpecs *specs)
 		return false;
 	}
 
+	/*
+	 * Disable SQLite's automatic WAL checkpoint on this connection.
+	 *
+	 * In the PREFETCH pipeline, receive and transform are concurrent processes
+	 * that both write to the same replayDB file (output vs replay/stmt tables).
+	 * When receive finishes and its connection is closed, SQLite's default
+	 * auto-checkpoint (threshold 1000 pages) acquires the WAL write lock to
+	 * flush frames to the main database file.  While that checkpoint runs,
+	 * transform's write attempts get SQLITE_BUSY and may exhaust the retry
+	 * budget before the checkpoint completes.
+	 *
+	 * Setting wal_autocheckpoint = 0 disables the checkpoint on close.  The
+	 * WAL accumulates until the next process opens the file (SQLite performs
+	 * WAL recovery automatically on open), which is safe for our single-writer-
+	 * at-a-time sequential pipeline.
+	 */
+	if (sqlite3_wal_autocheckpoint(replayDB->db, 0) != SQLITE_OK)
+	{
+		log_warn("Failed to disable WAL auto-checkpoint on \"%s\": %s",
+				 replayDB->dbfile,
+				 sqlite3_errmsg(replayDB->db));
+		/* non-fatal: pipeline still works, just may see brief SQLITE_BUSY */
+	}
+
 	if (createReplayDB)
 	{
 		if (!ld_store_insert_cdc_filename(specs))
@@ -464,17 +488,58 @@ ld_store_lookup_output_after_lsn(DatabaseCatalog *catalog,
 	 * Both branches now use >= (not just BEGIN) to ensure that internal
 	 * markers like ENDPOS are found even when inserted at the exact endpos LSN.
 	 */
+	/*
+	 * Find the next thing to process starting from transform_lsn.
+	 *
+	 * Valid "first row" types are: BEGIN (start of a new transaction),
+	 * KEEPALIVE, ENDPOS, SWITCH (non-transactional markers), or a DML row
+	 * (when transform_lsn was advanced past a partial boundary and the slot
+	 * re-delivered the complete transaction — the "resuming" case).
+	 *
+	 * COMMIT (action='C') and ROLLBACK (action='R') are NEVER valid starting
+	 * points: they are the END of a transaction, never the start.  If we
+	 * returned them here we would re-iterate the same transaction forever:
+	 *
+	 *   transform_lsn = COMMIT_LSN
+	 *   → query returns COMMIT (lsn = COMMIT_LSN, lowest id that is not B)
+	 *   → default: case resumes from BEGIN, processes txn, sets transform_lsn
+	 *     back to COMMIT_LSN  → infinite loop
+	 *
+	 * By excluding C and R, the query instead returns the ENDPOS or next
+	 * BEGIN sitting at COMMIT_LSN, which breaks the loop.
+	 *
+	 * Note: ld_store_lookup_output_xid_end uses a separate query that still
+	 * looks for C/R — it is not affected by this change.
+	 */
+	/*
+	 * Outer query: find the next unit of work for transform.
+	 *
+	 * There are exactly two kinds of row that the outer loop should see:
+	 *
+	 *   1. BEGIN ('B') — the start of a transaction.  Transform iterates
+	 *      the full transaction (B … DML … C/R) via the inner iterator.
+	 *      BEGIN may legitimately share a LSN with the previous COMMIT
+	 *      (wal2json emits them at the same WAL position), so use >=.
+	 *
+	 *   2. KEEPALIVE ('K') or SWITCH ('X') — non-transactional markers
+	 *      that appear between committed transactions.  Use strict > so
+	 *      that after recording transform_lsn = keepalive.lsn the next
+	 *      call moves past the row without a +1 trick.
+	 *
+	 * DML rows (I/U/D/T) are NEVER returned here: they are always inside
+	 * a transaction and are consumed exclusively by the inner iterator
+	 * once the BEGIN has been found.  COMMIT and ROLLBACK are also
+	 * excluded — they are end-of-transaction anchors, not starting points.
+	 */
 	char *sql =
 		"select id, action, xid, lsn, timestamp, message from ("
 		"  select id, action, xid, lsn, timestamp, message "
 		"    from output "
-
-		/* only a BEGIN action is expected to have the same LSN again */
 		"   where lsn >= $1 and action = 'B' "
 		" union all "
 		"  select id, action, xid, lsn, timestamp, message "
 		"    from output "
-		"   where lsn >= $2 and action != 'B' "
+		"   where lsn > $2 and action in ('K', 'X') "
 		") "
 		"order by lsn asc, case when action = 'B' then 0 else 1 end, id asc "
 		"limit 1";
@@ -1189,9 +1254,9 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 	ReplayDBOutputIterator *iter =
 		(ReplayDBOutputIterator *) calloc(1, sizeof(ReplayDBOutputIterator));
 
-	iter->catalog = specs->replayDB;
+	iter->catalog       = specs->replayDB;
 	iter->transform_lsn = specs->sentinel.transform_lsn;
-	iter->endpos = specs->endpos;
+	iter->endpos        = specs->endpos;
 
 	DatabaseCatalog *catalog = iter->catalog;
 
@@ -1211,10 +1276,89 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 	if (iter->output == NULL ||
 		iter->output->action == STREAM_ACTION_UNKNOWN)
 	{
-		/* no rows returned from the init */
-		log_debug("ld_store_iter_output: no rows yet at LSN %X/%X",
-				  LSN_FORMAT_ARGS(iter->transform_lsn));
 		(void) semaphore_unlock(&(catalog->sema));
+
+		if (iter->pending_xid != 0)
+		{
+			/*
+			 * A BEGIN for xid N is in the output table but its COMMIT has
+			 * not been written yet.  Decide whether to wait or exit cleanly:
+			 *
+			 *   Pipe signal   (specs->upstream_done):  receive sent lifecycle
+			 *                                          signal — fast path.
+			 *   pipeline_state['receive'].run_state:   durable end-of-receive
+			 *                                          record — reliable check.
+			 *   sentinel.endpos:                       configured stop position.
+			 *
+			 * If any source confirms receive has finished, endpos fell inside
+			 * this transaction.  Advance transform_lsn to the receive run_end_lsn
+			 * so the outer loop's exit condition (transform_lsn >= endpos) fires.
+			 *
+			 * If receive is still running: return with no progress — the outer
+			 * loop's select() on pipe_rt sleeps up to 100 ms before retrying.
+			 */
+			bool     receive_done = specs->upstream_done;
+			uint64_t end_lsn      = specs->upstream_done_lsn;
+
+			/*
+			 * Cross-check with the pipeline_state table.  This catches the
+			 * race where the pipe was closed by EOF (receive crash) without
+			 * the 8-byte lifecycle payload, giving upstream_done_lsn == 0,
+			 * and also gives the canonical run_end_lsn when the in-memory
+			 * value is zero.
+			 */
+			PipelineStateEntry recv_state = { 0 };
+
+			if (pipeline_state_get(specs->sourceDB, "receive", &recv_state) &&
+				recv_state.process_name[0] != '\0')
+			{
+				if (strcmp(recv_state.run_state, "done") == 0)
+					receive_done = true;
+
+				if (recv_state.run_end_lsn != InvalidXLogRecPtr &&
+					(end_lsn == InvalidXLogRecPtr || end_lsn == 0))
+					end_lsn = recv_state.run_end_lsn;
+			}
+
+			if (receive_done && end_lsn != InvalidXLogRecPtr && end_lsn != 0)
+			{
+				log_notice("ld_store_iter_output: xid %u has no COMMIT "
+						   "and receive stopped at %X/%X — "
+						   "endpos fell mid-transaction; "
+						   "signalling transform via midTxnEndpos flag",
+						   iter->pending_xid,
+						   LSN_FORMAT_ARGS(end_lsn));
+
+				/*
+				 * Do NOT call sentinel_sync_transform(end_lsn) here.
+				 *
+				 * end_lsn is the receive run_end_lsn, which equals the
+				 * user-supplied endpos.  That position is INSIDE an
+				 * uncommitted transaction (the BEGIN was seen but COMMIT
+				 * has not arrived).  Setting transform_lsn = end_lsn would
+				 * advance confirmed_flush_lsn past the transaction's BEGIN,
+				 * causing the PostgreSQL slot to skip that XID on the next
+				 * run — data loss.
+				 *
+				 * Instead, set the midTxnEndpos flag on the owning specs.
+				 * stream_transform_messages() checks this flag after each
+				 * ld_store_iter_output() call and exits cleanly, leaving
+				 * transform_lsn at the last committed transaction boundary.
+				 */
+				specs->private.midTxnEndpos = true;
+			}
+			else
+			{
+				log_debug("ld_store_iter_output: xid %u has no COMMIT yet "
+						  "and receive is still running — outer loop will wait",
+						  iter->pending_xid);
+			}
+		}
+
+		log_debug("ld_store_iter_output: no rows at LSN %X/%X (upstream_done=%s)",
+				  LSN_FORMAT_ARGS(iter->transform_lsn),
+				  specs->upstream_done ? "true" : "false");
+
 		return true;
 	}
 
@@ -1335,9 +1479,11 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 
 	/*
 	 * Grab the output row for the given LSN, and then if it's a single message
-	 * (action is SWITCH, ENDPOS, or KEEPALIVE) return it. If the message is a
-	 * BEGIN message, lookup the associated COMMIT message's lsn (same xid) and
-	 * then grab all the messages from that transaction.
+	 * (KEEPALIVE or SWITCH) return it directly.  If it's a BEGIN, look up the
+	 * matching COMMIT so the full transaction can be iterated.
+	 *
+	 * ENDPOS rows no longer appear in the output table: receive signals
+	 * transform via the pipe_rt lifecycle pipe instead.
 	 */
 	if (!ld_store_lookup_output_after_lsn(catalog, iter->transform_lsn, &first))
 	{
@@ -1356,7 +1502,6 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 	switch (first.action)
 	{
 		case STREAM_ACTION_KEEPALIVE:
-		case STREAM_ACTION_ENDPOS:
 		{
 			/* single message, just return it */
 			log_debug("ld_store_iter_output_init: single message %c at %X/%X",
@@ -1379,29 +1524,29 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 			if (last.lsn == InvalidXLogRecPtr)
 			{
 				/*
-				 * Transaction is incomplete (no COMMIT/ROLLBACK yet). This can happen
-				 * when endpos is set mid-transaction: the WAL stream stops at endpos,
-				 * so the COMMIT (which comes after endpos) never arrives.
+				 * Transaction is incomplete (no COMMIT/ROLLBACK yet).
 				 *
-				 * If endpos is reached, we gracefully skip this incomplete transaction.
-				 * The transaction rows remain in the output table and will be re-delivered
-				 * when the slot reconnects and re-streams from the sentinel's startpos.
+				 * Two possible situations:
+				 *   1. Receive is still running — the COMMIT will arrive
+				 *      soon.  The caller should wait (outer loop select()).
+				 *   2. Receive has finished — endpos fell inside this
+				 *      transaction; the COMMIT will never arrive.  The
+				 *      caller should advance transform_lsn to receive's
+				 *      run_end_lsn so the outer loop exits cleanly.
+				 *
+				 * This function does not have access to specs (pipe fd,
+				 * sourceDB) so it cannot make that determination here.
+				 * Signal the situation to the caller via pending_xid; the
+				 * caller (ld_store_iter_output) will consult the pipe,
+				 * the pipeline_state table, and the sentinel to decide.
 				 */
-				if (iter->endpos != InvalidXLogRecPtr &&
-					iter->endpos <= first.lsn)
-				{
-					log_notice("ld_store_iter_output_init: "
-							   "skipping incomplete transaction xid %u at endpos %X/%X, "
-							   "will be re-delivered on restart",
-							   first.xid, LSN_FORMAT_ARGS(iter->endpos));
-					iter->output = NULL;
-					return true;
-				}
+				log_debug("ld_store_iter_output_init: "
+						  "xid %u (begin %X/%X) has no COMMIT yet — "
+						  "signalling caller via pending_xid",
+						  first.xid,
+						  LSN_FORMAT_ARGS(first.lsn));
 
-				/*
-				 * Endpos not reached yet - transaction might complete soon,
-				 * return NULL to signal caller to retry later
-				 */
+				iter->pending_xid = first.xid;
 				iter->output = NULL;
 				return true;
 			}
@@ -1441,26 +1586,27 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 				return false;
 			}
 
+			/*
+			 * The non-transactional branch in ld_store_lookup_output_after_lsn
+			 * uses `lsn > transform_lsn` (strict), so a DML row at exactly
+			 * transform_lsn is never returned — the cursor-collision can no
+			 * longer occur.
+			 */
 			if (last.lsn == InvalidXLogRecPtr)
 			{
 				/*
-				 * Transaction is incomplete (no COMMIT/ROLLBACK yet).
-				 * If endpos is reached, skip this incomplete transaction.
+				 * Incomplete transaction — same situation as the BEGIN case.
+				 * Signal the caller via pending_xid; it will consult the
+				 * pipe, pipeline_state, and sentinel to decide whether to
+				 * wait or advance transform_lsn.
 				 */
-				if (iter->endpos != InvalidXLogRecPtr &&
-					iter->endpos <= first.lsn)
-				{
-					log_notice("ld_store_iter_output_init: "
-							   "skipping incomplete transaction xid %u "
-							   "(DML at %X/%X, endpos %X/%X), "
-							   "will be re-delivered on restart",
-							   first.xid, LSN_FORMAT_ARGS(first.lsn),
-							   LSN_FORMAT_ARGS(iter->endpos));
-					iter->output = NULL;
-					return true;
-				}
+				log_debug("ld_store_iter_output_init: "
+						  "xid %u (DML at %X/%X) has no COMMIT yet — "
+						  "signalling caller via pending_xid",
+						  first.xid,
+						  LSN_FORMAT_ARGS(first.lsn));
 
-				/* transaction not yet complete — wait */
+				iter->pending_xid = first.xid;
 				iter->output = NULL;
 				return true;
 			}
@@ -1914,11 +2060,14 @@ ld_store_replay_event_fetch(SQLiteQuery *query)
  * ld_store_replay_next_event returns the next event to apply after
  * previousLSN into s.  s->action is STREAM_ACTION_UNKNOWN when no rows.
  *
- * For transactions: returns the BEGIN row only when endlsn > previousLSN
- * (i.e. the transform has already written the COMMIT, so commitLSN is known).
+ * For transactions: returns the BEGIN row only when the matching COMMIT
+ * already exists in the replay table (endlsn > previousLSN ensures this).
  *
- * For non-transactional events (KEEPALIVE/SWITCH/ENDPOS): returns the first
- * row at lsn >= previousLSN or lsn IS NULL.
+ * For non-transactional events (KEEPALIVE only — ENDPOS rows are no longer
+ * written to the replay table): returns the first row at lsn >= previousLSN.
+ *
+ * Apply exits when no more rows AND pipeline_state['transform'].run_end_lsn
+ * has been reached (set at stream_apply_catchup startup).
  *
  * The UNION ALL orders by lsn ASC, id ASC so that a non-txn event whose LSN
  * is earlier than any pending BEGIN is returned first.
@@ -1946,8 +2095,14 @@ ld_store_replay_next_event(DatabaseCatalog *catalog,
 	 * separate SQLite statement.  Without the JOIN we could see a BEGIN
 	 * before its COMMIT and DML rows have been written.
 	 *
-	 * For non-transactional events (KEEPALIVE/SWITCH/ENDPOS): return the
-	 * first row at lsn >= previousLSN.
+	 * For non-transactional events (KEEPALIVE only — ENDPOS rows are no
+	 * longer written to the replay table): return the first KEEPALIVE row
+	 * at lsn STRICTLY greater than previousLSN.
+	 *
+	 * Using lsn > $1 (strict) rather than lsn >= $1 is essential: after
+	 * apply processes a KEEPALIVE at lsn=X and sets previousLSN=X, the
+	 * next call uses $1=X.  With >=, the same KEEPALIVE is returned again
+	 * and apply spins.  With >, the same row is not returned a second time.
 	 */
 	char *sql =
 		"select b.id, b.action, b.xid, b.lsn, b.endlsn, b.timestamp "
@@ -1957,8 +2112,8 @@ ld_store_replay_next_event(DatabaseCatalog *catalog,
 		"union all "
 		"select id, action, xid, lsn, endlsn, timestamp "
 		"  from replay "
-		" where action in ('K', 'E') "
-		"   and (lsn >= $1 or lsn is null) "
+		" where action = 'K' "            /* KEEPALIVE only — no ENDPOS rows */
+		"   and lsn > $1 "                /* strict: avoids re-delivering same row */
 		"order by lsn asc, id asc "
 		"limit 1";
 

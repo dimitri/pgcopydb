@@ -209,7 +209,33 @@ static char *sourceDBcreateDDLs[] = {
 	"  start_time_epoch integer, done_time_epoch integer)",
 
 	"create table timeline_history("
-	"  tli integer primary key, startpos pg_lsn, endpos pg_lsn)"
+	"  tli integer primary key, startpos pg_lsn, endpos pg_lsn)",
+
+	/*
+	 * pipeline_state — one row per CDC process (receive / transform / apply).
+	 *
+	 * Written at the start and end of every run and kept current at every
+	 * transaction boundary (piggybacking on sentinel_sync calls).  Used on
+	 * restart to decide whether the last transaction was fully processed and
+	 * whether an incomplete transaction must be skipped.
+	 *
+	 * LSN columns use pg_lsn (text) for consistency with the sentinel table.
+	 * last_txn_end_lsn is NULL while the transaction is still open.
+	 */
+	"create table pipeline_state("
+	"  process_name      text     primary key, "  /* 'receive'|'transform'|'apply' */
+	"  pid               integer, "
+	"  run_state         text     not null, "     /* 'running'|'done'|'error' */
+	"  run_start_lsn     pg_lsn   not null, "
+	"  run_end_lsn       pg_lsn, "               /* NULL while running */
+	"  started_at        integer  not null, "     /* Unix epoch */
+	"  ended_at          integer, "              /* NULL while running */
+	"  last_xid          integer, "
+	"  last_txn_begin_lsn  pg_lsn, "
+	"  last_txn_end_lsn    pg_lsn, "             /* NULL = transaction still open */
+	"  last_txn_complete   integer, "            /* 1 = had COMMIT or ROLLBACK */
+	"  last_txn_processed  integer"              /* 1 = fully written/applied */
+	")"
 };
 
 
@@ -1257,7 +1283,7 @@ catalog_begin(DatabaseCatalog *catalog, bool immediate)
 	{
 		ConnectionRetryPolicy retryPolicy = { 0 };
 
-		int maxT = 5;            /* 5s */
+		int maxT = 30;           /* 30s: large enough for a WAL checkpoint */
 		int maxSleepTime = 350;  /* 350ms */
 		int baseSleepTime = 10;  /* 10ms */
 
@@ -8560,7 +8586,7 @@ catalog_sql_step(SQLiteQuery *query)
 	{
 		ConnectionRetryPolicy retryPolicy = { 0 };
 
-		int maxT = 5;            /* 5s */
+		int maxT = 30;           /* 30s: large enough for a WAL checkpoint */
 		int maxSleepTime = 350;  /* 350ms */
 		int baseSleepTime = 10;  /* 10ms */
 

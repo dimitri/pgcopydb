@@ -20,6 +20,52 @@
 
 
 /*
+ * follow_assert_pipe_fd validates that a pipe file descriptor is positive and
+ * ready for use.  A non-positive fd means the pipe was never created, or was
+ * already closed and set to -1 by stream_signal_upstream_done — either way
+ * the follow pipeline cannot make progress.  We exit immediately with a FATAL
+ * so the operator gets a clear diagnostic rather than a confusing EBADF later.
+ */
+static void
+follow_assert_pipe_fd(int fd, const char *label)
+{
+	if (fd <= 0)
+	{
+		log_fatal("BUG: pipe fd %s = %d is invalid; "
+				  "--follow pipeline is broken and cannot proceed",
+				  label, fd);
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+}
+
+
+/*
+ * follow_close_pipe_fd closes a pipe fd when it is still open.
+ *
+ * stream_signal_upstream_done sets specs->pipe_XX[n] = -1 after it has closed
+ * the underlying file descriptor.  Callers that close the fd as a safety net
+ * after their main loop use this helper so that the already-handled case is
+ * silently skipped rather than calling close(-1) and dying with EBADF.
+ */
+static void
+follow_close_pipe_fd(int fd, const char *label)
+{
+	if (fd <= 0)
+	{
+		log_debug("follow_close_pipe_fd: %s already closed (fd=%d), skipping",
+				  label, fd);
+		return;
+	}
+
+	if (close(fd) != 0)
+	{
+		log_fatal("Failed to close pipe fd %s (%d): %m", label, fd);
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+}
+
+
+/*
  * follow_export_snapshot opens a snapshot that we're going to re-use in all
  * our connections to the source database. When the --snapshot option has been
  * used, instead of exporting a new snapshot, we can just re-use it.
@@ -306,7 +352,7 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		if (done)
 		{
 			log_info("Follow mode is now done, "
-					 "reached replay_lsn %X/%X with endpos %X/%X",
+					 "reached endpos %X/%X with replay_lsn %X/%X",
 					 LSN_FORMAT_ARGS(streamSpecs->sentinel.endpos),
 					 LSN_FORMAT_ARGS(streamSpecs->sentinel.replay_lsn));
 
@@ -320,11 +366,14 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		}
 
 		/*
-		 * With endpos set, check whether it has been reached.
+		 * With endpos set, subprocesses have exited but follow_reached_endpos
+		 * returned done=false — meaning neither the replay_lsn check nor the
+		 * pipeline_state 'done' check fired.  This is a genuine pipeline
+		 * failure: endpos is set but the data was not fully applied.
 		 *
-		 * Success: endpos is set and replay_lsn >= endpos (all data applied)
-		 * Error: endpos is set but replay_lsn < endpos (data not fully applied)
-		 * Waiting: endpos is not set (inject service hasn't called sentinel set endpos)
+		 * The replay_lsn >= endpos check here is a fallback safety net (the
+		 * primary check is inside follow_reached_endpos); if it somehow fires
+		 * here, accept it as success rather than returning a spurious error.
 		 */
 		if (streamSpecs->sentinel.endpos != InvalidXLogRecPtr)
 		{
@@ -339,7 +388,8 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 			else
 			{
 				log_error("Subprocesses exited with endpos set at %X/%X "
-						  "but replay_lsn only reached %X/%X. "
+						  "but replay_lsn only reached %X/%X and pipeline_state "
+						  "did not confirm clean completion. "
 						  "Data not fully applied.",
 						  LSN_FORMAT_ARGS(streamSpecs->sentinel.endpos),
 						  LSN_FORMAT_ARGS(streamSpecs->sentinel.replay_lsn));
@@ -360,6 +410,21 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 
 /*
  * follow_reached_endpos sets done to true when endpos has been reached.
+ *
+ * Two checks are performed:
+ *
+ * Check (a) — primary: sentinel.replay_lsn >= sentinel.endpos.
+ *   Fires when the last applied commit naturally covered endpos (normal case,
+ *   Guard 3 mid-txn where the full transaction was committed and its
+ *   commitLSN >= endpos).
+ *
+ * Check (b) — secondary: both transform and apply exited with run_state='done'.
+ *   Fires when endpos fell between two transactions (Guard 2: endpos < beginLSN)
+ *   or inside an uncommitted transaction (mid-txn endpos).  In those cases
+ *   apply exits cleanly without advancing replay_lsn past endpos, so check (a)
+ *   does not fire.  Both processes mark run_state='done' only on a successful,
+ *   intentional exit; signal-driven exits leave transform as 'error', preventing
+ *   false positives.
  */
 bool
 follow_reached_endpos(StreamSpecs *streamSpecs, bool *done)
@@ -373,15 +438,55 @@ follow_reached_endpos(StreamSpecs *streamSpecs, bool *done)
 		return false;
 	}
 
+	/* Check (a): normal commit-boundary endpos */
 	if (sentinel->endpos != InvalidXLogRecPtr &&
 		sentinel->endpos <= sentinel->replay_lsn)
 	{
 		/* follow_get_sentinel logs replay_lsn and endpos already */
 		*done = true;
 
-		log_info("Current endpos %X/%X has been reached at %X/%X",
+		log_info("Current endpos %X/%X has been reached at replay_lsn %X/%X",
 				 LSN_FORMAT_ARGS(sentinel->endpos),
 				 LSN_FORMAT_ARGS(sentinel->replay_lsn));
+
+		return true;
+	}
+
+	/*
+	 * Check (b): endpos fell between or inside transactions.
+	 *
+	 * replay_lsn is still at the last real commit (< endpos).  The pipeline
+	 * signals completion by having both transform and apply exit with
+	 * run_state='done'.
+	 */
+	if (sentinel->endpos != InvalidXLogRecPtr)
+	{
+		PipelineStateEntry ts = { 0 };
+		PipelineStateEntry as = { 0 };
+		DatabaseCatalog *sourceDB = streamSpecs->sourceDB;
+
+		bool transform_done =
+			pipeline_state_get(sourceDB, "transform", &ts) &&
+			ts.process_name[0] != '\0' &&
+			strcmp(ts.run_state, "done") == 0;
+
+		bool apply_done =
+			pipeline_state_get(sourceDB, "apply", &as) &&
+			as.process_name[0] != '\0' &&
+			strcmp(as.run_state, "done") == 0;
+
+		if (transform_done && apply_done)
+		{
+			*done = true;
+
+			log_info("Current endpos %X/%X reached: transform done at %X/%X, "
+					 "apply done at %X/%X (replay_lsn %X/%X; "
+					 "endpos was at a transaction boundary)",
+					 LSN_FORMAT_ARGS(sentinel->endpos),
+					 LSN_FORMAT_ARGS(ts.run_end_lsn),
+					 LSN_FORMAT_ARGS(as.run_end_lsn),
+					 LSN_FORMAT_ARGS(sentinel->replay_lsn));
+		}
 	}
 
 	return true;
@@ -462,29 +567,31 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	}
 
 	/*
-	 * Prepare the sub-process communication mechanisms, when needed:
+	 * Create the lifecycle signal pipes.
 	 *
-	 *   - pgcopydb stream receive --to-stdout
-	 *   - pgcopydb stream transform - -
-	 *   - pgcopydb stream apply -
-	 *   - pgcopydb stream replay
+	 * pipe_rt carries an 8-byte big-endian done-LSN from receive → transform.
+	 * pipe_ta carries an 8-byte big-endian done-LSN from transform → apply.
+	 *
+	 * These are always created when both endpoints will run together so that
+	 * the downstream process can select() on the read end and wake up
+	 * immediately when upstream finishes, without polling SQLite.
+	 *
+	 * In text-streaming mode (stdOut / stdIn), the same pipe fds are also
+	 * used for the JSON data stream; in replayDB mode they carry only the
+	 * single lifecycle signal message.
 	 */
-	if (streamSpecs->stdOut)
+	if (pipe(streamSpecs->pipe_rt) != 0)
 	{
-		if (pipe(streamSpecs->pipe_rt) != 0)
-		{
-			log_fatal("Failed to create a pipe for streaming: %m");
-			return false;
-		}
+		log_fatal("Failed to create receive→transform pipe: %m");
+		return false;
 	}
 
-	if (streamSpecs->stdIn)
+	if (pipe(streamSpecs->pipe_ta) != 0)
 	{
-		if (pipe(streamSpecs->pipe_ta) != 0)
-		{
-			log_fatal("Failed to create a pipe for streaming: %m");
-			return false;
-		}
+		log_fatal("Failed to create transform→apply pipe: %m");
+		close(streamSpecs->pipe_rt[0]);
+		close(streamSpecs->pipe_rt[1]);
+		return false;
 	}
 
 	FollowSubProcess *prefetch = &(streamSpecs->prefetch);
@@ -592,6 +699,10 @@ follow_start_prefetch(StreamSpecs *specs)
 		specs->stdIn = false;
 		specs->stdOut = true;
 
+		/* validate before use: a bad fd here means follow_start_subprocesses
+		 * failed to create the pipe, which is a programming error */
+		follow_assert_pipe_fd(specs->pipe_rt[1], "pipe_rt[1]");
+
 		specs->out = fdopen(specs->pipe_rt[1], "a");
 
 		/* close pipe ends we're not using */
@@ -608,7 +719,13 @@ follow_start_prefetch(StreamSpecs *specs)
 
 		bool success = startLogicalStreaming(specs);
 
-		close_fd_or_exit(specs->pipe_rt[1]);
+		/*
+		 * Safety net: close pipe_rt[1] if it was not already closed by
+		 * stream_signal_upstream_done inside streamCloseFile.  That function
+		 * closes the raw fd and sets specs->pipe_rt[1] = -1 to prevent
+		 * double-close.  follow_close_pipe_fd skips the close when fd <= 0.
+		 */
+		follow_close_pipe_fd(specs->pipe_rt[1], "pipe_rt[1]");
 
 		log_info("Prefetch process has terminated");
 
@@ -653,6 +770,9 @@ follow_start_transform(StreamSpecs *specs)
 		specs->stdIn = true;
 		specs->stdOut = true;
 
+		follow_assert_pipe_fd(specs->pipe_rt[0], "pipe_rt[0]");
+		follow_assert_pipe_fd(specs->pipe_ta[1], "pipe_ta[1]");
+
 		specs->in = fdopen(specs->pipe_rt[0], "r");
 		specs->out = fdopen(specs->pipe_ta[1], "a");
 
@@ -671,8 +791,19 @@ follow_start_transform(StreamSpecs *specs)
 
 		log_info("Transform process has terminated");
 
+		/*
+		 * pipe_rt[0]: the receive side of the receive→transform pipe.  We
+		 * only read from it; receive closes the write end when done.  This
+		 * fd is never set to -1 by our code, so a plain close is correct.
+		 *
+		 * pipe_ta[1]: the write end of the transform→apply pipe.
+		 * stream_signal_upstream_done (called from the midTxnEndpos or normal
+		 * exit paths inside stream_transform_stream) may have already closed
+		 * this fd and set specs->pipe_ta[1] = -1.  Use follow_close_pipe_fd
+		 * to skip the close in that case.
+		 */
 		close_fd_or_exit(specs->pipe_rt[0]);
-		close_fd_or_exit(specs->pipe_ta[1]);
+		follow_close_pipe_fd(specs->pipe_ta[1], "pipe_ta[1]");
 
 		return success;
 	}
@@ -707,6 +838,8 @@ follow_start_catchup(StreamSpecs *specs)
 		specs->stdIn = true;
 		specs->stdOut = false;
 
+		follow_assert_pipe_fd(specs->pipe_ta[0], "pipe_ta[0]");
+
 		specs->in = fdopen(specs->pipe_ta[0], "r");
 
 		/* close pipe ends we're not using */
@@ -718,7 +851,13 @@ follow_start_catchup(StreamSpecs *specs)
 
 		log_info("Apply process has terminated");
 
-		close_fd_or_exit(specs->pipe_ta[0]);
+		/*
+		 * pipe_ta[0] is the read end of the transform→apply pipe.  The apply
+		 * process only reads from it; transform holds and closes the write end.
+		 * This fd is never set to -1 by our code paths, so a plain close is
+		 * correct.  Use follow_close_pipe_fd as a defensive measure nonetheless.
+		 */
+		follow_close_pipe_fd(specs->pipe_ta[0], "pipe_ta[0]");
 
 		return success;
 	}
