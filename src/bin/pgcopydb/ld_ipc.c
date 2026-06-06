@@ -26,39 +26,64 @@
 bool
 ld_ipc_tcp_listen(IPCConn *conn, const char *host, int port)
 {
-	struct sockaddr_in addr = { 0 };
+	char portstr[16] = { 0 };
+	struct addrinfo hints = { 0 };
+	struct addrinfo *res = NULL;
+	struct addrinfo *rp = NULL;
 	int fd = -1;
 	int opt = 1;
 
-	fd = socket(AF_INET, SOCK_STREAM, 0);
+	sformat(portstr, sizeof(portstr), "%d", port);
+
+	/*
+	 * Resolve host as either a numeric IP or a hostname (e.g. "localhost" or a
+	 * docker-compose service name).  inet_aton only handled numeric IPs, which
+	 * broke binding to "localhost" in the single-container test setups.
+	 */
+	hints.ai_family = AF_INET;          /* IPv4, matching the connect side */
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_flags = AI_PASSIVE;        /* for bind() */
+
+	int gai = getaddrinfo(host, portstr, &hints, &res);
+
+	if (gai != 0)
+	{
+		log_error("Failed to resolve %s:%d: %s", host, port, gai_strerror(gai));
+		return false;
+	}
+
+	for (rp = res; rp != NULL; rp = rp->ai_next)
+	{
+		fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+
+		if (fd < 0)
+		{
+			continue;
+		}
+
+		/* Allow reuse of port */
+		if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
+		{
+			log_error("Failed to set SO_REUSEADDR: %m");
+			close(fd);
+			fd = -1;
+			continue;
+		}
+
+		if (bind(fd, rp->ai_addr, rp->ai_addrlen) == 0)
+		{
+			break;          /* success */
+		}
+
+		close(fd);
+		fd = -1;
+	}
+
+	freeaddrinfo(res);
+
 	if (fd < 0)
 	{
-		log_error("Failed to create TCP socket: %m");
-		return false;
-	}
-
-	/* Allow reuse of port */
-	if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
-	{
-		log_error("Failed to set SO_REUSEADDR: %m");
-		close(fd);
-		return false;
-	}
-
-	addr.sin_family = AF_INET;
-	addr.sin_port = htons(port);
-
-	if (inet_aton(host, &addr.sin_addr) == 0)
-	{
-		log_error("Invalid IP address: %s", host);
-		close(fd);
-		return false;
-	}
-
-	if (bind(fd, (struct sockaddr *) &addr, sizeof(addr)) < 0)
-	{
 		log_error("Failed to bind TCP socket at %s:%d: %m", host, port);
-		close(fd);
 		return false;
 	}
 
