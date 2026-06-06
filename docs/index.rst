@@ -103,6 +103,7 @@ Change Data Capture
    concurrency
    resume
    logical-decoding
+   sentinel-protocol
 
 .. toctree::
    :hidden:

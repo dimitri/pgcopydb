@@ -25,6 +25,11 @@ pgcopydb stream - Stream changes from source database
    follow`` process. See :ref:`change_data_capture_example_1` for a detailed
    example using :ref:`pgcopydb_stream_sentinel_set_endpos`.
 
+   By default these commands read/write the sentinel directly in the source
+   SQLite catalog, which requires running where the catalog files live. Pass
+   ``--host`` (and optionally ``--port``) to instead talk to the running follow
+   process over TCP, with no shared catalog files. See :ref:`sentinel_protocol`.
+
    Also the commands :ref:`pgcopydb_stream_setup` and
    :ref:`pgcopydb_stream_cleanup` might be used directly in normal
    operations. See :ref:`change_data_capture_example_2` for a detailed
@@ -333,6 +338,27 @@ The following options are available to ``pgcopydb stream`` sub-commands:
   target, where each source should have their own unique origin node name.
 
   __ https://www.postgresql.org/docs/current/replication-origins.html
+
+--host
+
+  Optional follow-coordinator TCP endpoint host.
+
+  On ``clone --follow`` / ``follow`` / ``stream replay`` (the server side),
+  when set the follow process starts a TCP coordinator listening on
+  ``--host``:``--port`` (use ``0.0.0.0`` to accept connections from other
+  hosts/containers). On ``stream sentinel`` get/set (the client side), when set
+  the command talks to that coordinator over TCP instead of opening the SQLite
+  catalog directly — so it works without sharing the catalog files. See
+  :ref:`sentinel_protocol`.
+
+  On the server side this may also be provided via the ``PGCOPYDB_HOST``
+  environment variable.
+
+--port
+
+  TCP port for the follow-coordinator endpoint (see ``--host``). Defaults to
+  ``5442``. On the server side this may also be provided via the
+  ``PGCOPYDB_PORT`` environment variable.
 
 --verbose
 

@@ -54,7 +54,9 @@ CommandLine sentinel_get_command =
 		"  --write-lsn      Get only the write LSN value\n"
 		"  --flush-lsn      Get only the flush LSN value\n"
 		"  --transform-lsn  Get only the tranform LSN value\n"
-		"  --replay-lsn     Get only the replay LSN value\n",
+		"  --replay-lsn     Get only the replay LSN value\n"
+		"  --host           Reach the follow coordinator over TCP at this host\n"
+		"  --port           Follow coordinator TCP port (default 5442)\n",
 		cli_sentinel_getopts,
 		cli_sentinel_get);
 
@@ -62,7 +64,9 @@ CommandLine sentinel_set_startpos_command =
 	make_command(
 		"startpos",
 		"Set the sentinel start position LSN",
-		"<start lsn>", "",
+		"<start lsn>",
+		"  --host        Reach the follow coordinator over TCP at this host\n"
+		"  --port        Follow coordinator TCP port (default 5442)\n",
 		cli_sentinel_getopts,
 		cli_sentinel_set_startpos);
 
@@ -72,19 +76,25 @@ CommandLine sentinel_set_endpos_command =
 		"Set the sentinel end position LSN",
 		"[ --source ... ] [ <end lsn> | --current ]",
 		"  --source      Postgres URI to the source database\n"
-		"  --current     Use pg_current_wal_flush_lsn() as the endpos\n",
+		"  --current     Use pg_current_wal_flush_lsn() as the endpos\n"
+		"  --host        Reach the follow coordinator over TCP at this host\n"
+		"  --port        Follow coordinator TCP port (default 5442)\n",
 		cli_sentinel_getopts,
 		cli_sentinel_set_endpos);
 
 CommandLine sentinel_set_apply_command =
 	make_command(
-		"apply", "Set the sentinel apply mode", "", "",
+		"apply", "Set the sentinel apply mode", "",
+		"  --host        Reach the follow coordinator over TCP at this host\n"
+		"  --port        Follow coordinator TCP port (default 5442)\n",
 		cli_sentinel_getopts,
 		cli_sentinel_set_apply);
 
 CommandLine sentinel_set_prefetch_command =
 	make_command(
-		"prefetch", "Set the sentinel prefetch mode", "", "",
+		"prefetch", "Set the sentinel prefetch mode", "",
+		"  --host        Reach the follow coordinator over TCP at this host\n"
+		"  --port        Follow coordinator TCP port (default 5442)\n",
 		cli_sentinel_getopts,
 		cli_sentinel_set_prefetch);
 
