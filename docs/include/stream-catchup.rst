@@ -1,6 +1,6 @@
 ::
 
-   pgcopydb stream catchup: Apply prefetched changes from SQL files to the target database
+   pgcopydb stream catchup: Transform and apply prefetched changes from the SQLite CDC store to the target
    usage: pgcopydb stream catchup 
    
      --source         Postgres URI to the source database

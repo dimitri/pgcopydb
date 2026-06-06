@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <sys/select.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -48,6 +49,7 @@ stream_init_specs(StreamSpecs *specs,
 				  uint64_t endpos,
 				  LogicalStreamMode mode,
 				  DatabaseCatalog *sourceDB,
+				  DatabaseCatalog *outputDB,
 				  DatabaseCatalog *replayDB,
 				  bool stdin,
 				  bool stdout,
@@ -59,6 +61,16 @@ stream_init_specs(StreamSpecs *specs,
 	specs->stdOut = stdout;
 	specs->logSQL = logSQL;
 
+	/*
+	 * Initialize pipe fds to -1 so that callers can safely test
+	 * "pipe_rt[0] >= 0" or "pipe_rt[1] >= 0" to detect whether pipes
+	 * have been created.  Zero-init would leave them at 0 (stdin/stdout)
+	 * which is a valid open fd and causes false positives in select() and
+	 * write() calls.
+	 */
+	specs->pipe_rt[0] = -1;
+	specs->pipe_rt[1] = -1;
+
 	specs->paths = *paths;
 	specs->endpos = endpos;
 
@@ -66,6 +78,7 @@ stream_init_specs(StreamSpecs *specs,
 	 * Open the specified sourceDB catalog.
 	 */
 	specs->sourceDB = sourceDB;
+	specs->outputDB = outputDB;
 	specs->replayDB = replayDB;
 
 	if (!catalog_init(specs->sourceDB))
@@ -155,10 +168,8 @@ stream_init_specs(StreamSpecs *specs,
 	/*
 	 * Now prepare for the follow mode sub-process management.
 	 *
-	 * The process names reflect their actual function:
-	 * - receive: receives changes from the PostgreSQL replication slot
-	 * - transform: transforms logical decoding output to SQL statements
-	 * - apply: applies the SQL statements to the target database
+	 * 2-process pipeline: receive (prefetch) and apply (catchup).
+	 * Apply performs inline transform — no separate transform subprocess.
 	 *
 	 * In replay mode (no live Postgres), we use "replay" instead of "apply"
 	 * since there's no target database involved.
@@ -166,14 +177,8 @@ stream_init_specs(StreamSpecs *specs,
 	bool replayMode = specs->mode == STREAM_MODE_REPLAY;
 
 	FollowSubProcess prefetch = {
-		.name = replayMode ? "receive" : "receive",
+		.name = "receive",
 		.command = &follow_start_prefetch,
-		.pid = -1
-	};
-
-	FollowSubProcess transform = {
-		.name = "transform",
-		.command = &follow_start_transform,
 		.pid = -1
 	};
 
@@ -184,12 +189,11 @@ stream_init_specs(StreamSpecs *specs,
 	};
 
 	specs->prefetch = prefetch;
-	specs->transform = transform;
 	specs->catchup = catchup;
 
 	/*
-	 * In replay mode, the receive, transform, and apply processes communicate
-	 * via Unix pipes.  Set up the stdin/stdout flags accordingly.
+	 * In replay mode, the receive and apply processes communicate via a Unix
+	 * pipe.  Set up the stdin/stdout flags accordingly.
 	 */
 	if (specs->mode == STREAM_MODE_REPLAY)
 	{
@@ -320,6 +324,78 @@ stream_check_in_out(StreamSpecs *specs)
 
 
 /*
+ * stream_signal_upstream_done writes the 8-byte big-endian done-LSN to
+ * pipe_write_fd then closes it.  This is the single out-of-band lifecycle
+ * signal from receive→transform and from transform→apply.
+ *
+ * Pattern inspired by PostgreSQL's postmaster_alive_fds: the write end is held
+ * open by the upstream process and closed on exit.  Downstream uses select()
+ * on the read end and treats EOF (write-end closed) as "upstream died".
+ * We additionally write the final LSN so downstream can drain cleanly.
+ */
+bool
+stream_signal_upstream_done(int pipe_write_fd, uint64_t done_lsn)
+{
+	if (pipe_write_fd <= 0)
+		return true;  /* -1 = no pipe; 0 = stdin (not a write pipe) */
+
+	/* Network byte order: big-endian 64-bit LSN */
+	uint64_t wire = pg_hton64(done_lsn);
+
+	ssize_t n = write(pipe_write_fd, &wire, sizeof(wire));
+	if (n != sizeof(wire))
+	{
+		/* EPIPE = downstream already gone; not fatal */
+		if (errno != EPIPE)
+			log_warn("stream_signal_upstream_done: write(%d) returned %zd: %m",
+					 pipe_write_fd, n);
+	}
+
+	close(pipe_write_fd);
+	return true;
+}
+
+
+/*
+ * stream_recv_upstream_done reads the lifecycle signal from pipe_read_fd.
+ * Should be called once select() reports the fd readable.
+ *
+ * Sets specs->upstream_done = true and specs->upstream_done_lsn.
+ * On EOF without data (upstream crashed), sets upstream_done_lsn = 0.
+ */
+bool
+stream_recv_upstream_done(StreamSpecs *specs, int pipe_read_fd)
+{
+	uint64_t wire = 0;
+	ssize_t  n = read(pipe_read_fd, &wire, sizeof(wire));
+
+	specs->upstream_done = true;
+
+	if (n == (ssize_t) sizeof(wire))
+	{
+		specs->upstream_done_lsn = pg_ntoh64(wire);
+		log_info("Upstream done signal received: final LSN %X/%X",
+				 LSN_FORMAT_ARGS(specs->upstream_done_lsn));
+	}
+	else if (n == 0)
+	{
+		/* EOF: upstream closed without writing — treat as "done at 0" */
+		specs->upstream_done_lsn = 0;
+		log_warn("Upstream pipe closed without done-LSN (upstream crashed?)");
+	}
+	else
+	{
+		log_error("stream_recv_upstream_done: read(%d) returned %zd: %m",
+				  pipe_read_fd, n);
+		specs->upstream_done_lsn = 0;
+	}
+
+	close(pipe_read_fd);
+	return true;
+}
+
+
+/*
  * stream_init_context initializes a LogicalStreamContext.
  */
 bool
@@ -327,6 +403,7 @@ stream_init_context(StreamSpecs *specs)
 {
 	StreamContext *privateContext = &(specs->private);
 
+	privateContext->specs  = specs;      /* back-pointer for pipe signalling */
 	privateContext->endpos = specs->endpos;
 	privateContext->startpos = specs->startpos;
 
@@ -394,10 +471,9 @@ stream_init_context(StreamSpecs *specs)
 	 */
 	privateContext->maxWrittenLSN = specs->startpos;
 
-	/* transform needs some catalog lookups (pkey, type oid) */
+	/* transform/apply needs catalog lookups (pkey, type oid) */
 	privateContext->sourceDB = specs->sourceDB;
-
-	/* replayDB is needed too */
+	privateContext->outputDB = specs->outputDB;
 	privateContext->replayDB = specs->replayDB;
 
 	return true;
@@ -428,8 +504,8 @@ stream_init_timeline(StreamSpecs *specs, LogicalStreamClient *stream)
 	specs->system = stream->system;
 	specs->private.timeline = stream->system.timeline;
 
-	/* now that we have the current timeline and startpos lsn */
-	if (!ld_store_open_replaydb(specs))
+	/* now that we have the current timeline and startpos lsn, open output.db */
+	if (!ld_store_open_outputdb(specs))
 	{
 		/* errors have already been logged */
 		return false;
@@ -478,6 +554,8 @@ startLogicalStreaming(StreamSpecs *specs)
 	context.private = (void *) privateContext;
 
 	log_notice("Connecting to logical decoding replication stream");
+
+	(void) pipeline_state_start(specs->sourceDB, "receive", specs->startpos);
 
 	/*
 	 * In case of being disconnected or other transient errors, reconnect and
@@ -582,194 +660,16 @@ startLogicalStreaming(StreamSpecs *specs)
 		}
 	}
 
-	return true;
-}
-
-
-/*
- * stream_receive_from_file reads a JSON-lines fixture file and feeds every
- * message through the same streamWrite() path that a live replication
- * connection would use, populating the replayDB output table.
- *
- * Each line in the file must be a JSON object with the following fields:
- *
- *   {
- *     "lsn":       "0/1519348",
- *     "timestamp": "2026-01-01 12:00:00.000000+00",
- *     "message":   "<raw CDC message text>"
- *   }
- *
- * For test_decoding the message is plain text ("BEGIN 733", "table ...: ...");
- * for wal2json it is the raw JSON string that wal2json emits.
- *
- * The function returns false on the first parse or write error.
- */
-bool
-stream_receive_from_file(StreamSpecs *specs, const char *filename)
-{
-	if (!stream_init_context(specs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	StreamContext *privateContext = &(specs->private);
-
-	LogicalStreamContext context = { 0 };
-	context.private = (void *) privateContext;
-	context.plugin = specs->slot.plugin;
-
 	/*
-	 * Bootstrap the tracking struct so streamWrite / streamFlush do not
-	 * dereference a NULL pointer.
+	 * Record that the receive process has finished.  The pipe signal was
+	 * already sent from streamCloseFile; pipeline_state_end makes it durable
+	 * in the sentinel database for restart recovery.
 	 */
-	LogicalTrackLSN tracking = { 0 };
-	context.tracking = &tracking;
-
-	char *contents = NULL;
-	long size = 0L;
-
-	if (!read_file(filename, &contents, &size))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	LinesBuffer lbuf = { 0 };
-
-	if (!splitLines(&lbuf, contents))
-	{
-		/* errors have already been logged */
-		free(contents);
-		return false;
-	}
-
-	log_info("stream_receive_from_file: processing %lld lines from \"%s\"",
-			 (long long) lbuf.count, filename);
-
-	bool success = true;
-
-	for (uint64_t i = 0; i < lbuf.count; i++)
-	{
-		char *line = lbuf.lines[i];
-
-		/* skip empty lines */
-		if (line == NULL || line[0] == '\0')
-		{
-			continue;
-		}
-
-		JSON_Value *json = json_parse_string(line);
-
-		if (json == NULL)
-		{
-			log_error("stream_receive_from_file: failed to parse JSON line %lld:"
-					  " %s", (long long) (i + 1), line);
-			success = false;
-			break;
-		}
-
-		JSON_Object *jsobj = json_value_get_object(json);
-
-		if (jsobj == NULL)
-		{
-			log_error("stream_receive_from_file: line %lld is not a JSON object:"
-					  " %s", (long long) (i + 1), line);
-			json_value_free(json);
-			success = false;
-			break;
-		}
-
-		/* --- lsn --------------------------------------------------------- */
-		const char *lsn_str = json_object_get_string(jsobj, "lsn");
-
-		if (lsn_str == NULL)
-		{
-			log_error("stream_receive_from_file: line %lld missing \"lsn\"",
-					  (long long) (i + 1));
-			json_value_free(json);
-			success = false;
-			break;
-		}
-
-		uint64_t parsedLSN = 0;
-
-		if (!parseLSN(lsn_str, &parsedLSN))
-		{
-			log_error("stream_receive_from_file: failed to parse lsn \"%s\" "
-					  "on line %lld", lsn_str, (long long) (i + 1));
-			json_value_free(json);
-			success = false;
-			break;
-		}
-
-		context.cur_record_lsn = parsedLSN;
-
-		/* --- timestamp --------------------------------------------------- */
-		/*
-		 * Use a fixed PG-epoch timestamp so that fixture files are
-		 * fully deterministic (no wall-clock dependency).  sendTime = 0
-		 * corresponds to the Postgres epoch 2000-01-01 00:00:00 UTC.
-		 */
-		context.sendTime = 0;
-
-		/* --- message ----------------------------------------------------- */
-		const char *msg = json_object_get_string(jsobj, "message");
-
-		if (msg == NULL)
-		{
-			log_error("stream_receive_from_file: line %lld missing \"message\"",
-					  (long long) (i + 1));
-			json_value_free(json);
-			success = false;
-			break;
-		}
-
-		/*
-		 * context.buffer must point to a writable buffer; strlcpy into
-		 * a local buffer then point context.buffer at it.
-		 */
-		static char msgbuf[BUFSIZE * 16];
-
-		strlcpy(msgbuf, msg, sizeof(msgbuf));
-		context.buffer = msgbuf;
-
-		if (!streamWrite(&context))
-		{
-			log_error("stream_receive_from_file: streamWrite failed on line %lld",
-					  (long long) (i + 1));
-			json_value_free(json);
-			success = false;
-			break;
-		}
-
-		json_value_free(json);
-	}
-
-	free(contents);
-
-	if (!success)
-	{
-		return false;
-	}
-
-	/*
-	 * Inject a final ENDPOS keepalive so the replayDB output table gets a
-	 * proper endpos marker, which the transform step uses to know it has
-	 * consumed everything.
-	 */
-	if (specs->endpos != InvalidXLogRecPtr)
-	{
-		context.cur_record_lsn = (XLogRecPtr) specs->endpos;
-		context.sendTime = 0;
-
-		if (!streamKeepalive(&context))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-	}
-
+	(void) pipeline_state_end(specs->sourceDB, "receive",
+							  privateContext->endpos != InvalidXLogRecPtr
+							  ? privateContext->endpos
+							  : context.tracking->written_lsn,
+							  true);
 	return true;
 }
 
@@ -898,7 +798,7 @@ streamWrite(LogicalStreamContext *context)
 {
 	StreamContext *privateContext = (StreamContext *) context->private;
 	LogicalMessageMetadata *metadata = &(privateContext->metadata);
-	DatabaseCatalog *replayDB = privateContext->replayDB;
+	DatabaseCatalog *replayDB = privateContext->outputDB;
 
 	if (!prepareMessageMetadataFromContext(context))
 	{
@@ -1017,7 +917,6 @@ bool
 streamRotateFile(LogicalStreamContext *context)
 {
 	StreamContext *privateContext = (StreamContext *) context->private;
-	DatabaseCatalog *replayDB = privateContext->replayDB;
 
 	/* get the segment number from the current_record_lsn */
 	XLogSegNo segno;
@@ -1161,7 +1060,7 @@ bool
 streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 {
 	StreamContext *privateContext = (StreamContext *) context->private;
-	DatabaseCatalog *replayDB = privateContext->replayDB;
+	DatabaseCatalog *replayDB = privateContext->outputDB;
 
 	/*
 	 * Before closing the JSON file, when we have reached endpos add a pgcopydb
@@ -1184,64 +1083,41 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 		privateContext->endpos != InvalidXLogRecPtr &&
 		privateContext->endpos <= context->cur_record_lsn)
 	{
-		InternalMessage endpos = {
-			.action = STREAM_ACTION_ENDPOS,
-			.lsn = context->cur_record_lsn
-		};
+		uint64_t done_lsn = context->cur_record_lsn;
 
-		log_notice("streamCloseFile: INSERTING ENDPOS at %X/%X",
-				   LSN_FORMAT_ARGS(endpos.lsn));
-
-		if (!ld_store_insert_internal_message(replayDB, &endpos))
-		{
-			/* errors have already been logged */
-			return false;
-		}
+		log_info("streamCloseFile: receive done at %X/%X, signalling transform",
+				 LSN_FORMAT_ARGS(done_lsn));
 
 		/*
-		 * Force a WAL checkpoint to ensure the ENDPOS message is immediately
-		 * visible to other processes (transform, apply). Without this, the
-		 * ENDPOS message might be buffered and not yet visible to readers,
-		 * causing them to hang waiting for data that will never come.
+		 * Out-of-band lifecycle signal: write the final LSN to pipe_rt[1]
+		 * then close it.  Transform is select()-ing on pipe_rt[0] and will
+		 * wake up immediately, read the LSN, and drain the output table up
+		 * to that point before exiting.  This replaces the old in-band
+		 * ENDPOS signal that used to be inserted into the SQLite output table.
 		 *
-		 * In SQLite WAL mode, writes are buffered and may not be immediately
-		 * visible to concurrent readers until a checkpoint is performed or
-		 * the connection is closed.
+		 * See docs/cdc-pipeline-ipc.md for the full design rationale.
 		 */
-		if (replayDB != NULL && replayDB->db != NULL)
+		StreamSpecs *specs = privateContext->specs;
+
+		if (specs != NULL && specs->pipe_rt[1] > 0)
 		{
-			int rc = sqlite3_wal_checkpoint(replayDB->db, NULL);
-
-			log_notice("streamCloseFile: sqlite3_wal_checkpoint returned %d", rc);
-
-			if (rc != SQLITE_OK && rc != SQLITE_BUSY)
-			{
-				log_warn("streamCloseFile: sqlite3_wal_checkpoint failed: %s",
-						 sqlite3_errmsg(replayDB->db));
-				/* Continue anyway; checkpoint is not critical */
-			}
+			(void) stream_signal_upstream_done(specs->pipe_rt[1], done_lsn);
+			specs->pipe_rt[1] = -1;  /* prevent double-close */
 		}
-
-		/*
-		 * Report ENDPOS to follow coordinator via IPC socket if available.
-		 * Note: IPC reporting is optional - follow will detect ENDPOS via the
-		 * output table query when it polls. The core fix is in the SQL query
-		 * using >= instead of > to find ENDPOS messages at the exact endpos LSN.
-		 */
 	}
 	else if (!time_to_abort)
 	{
-		log_notice("streamCloseFile: SKIPPED (time_to_abort=false)");
+		log_debug("streamCloseFile: SKIPPED (time_to_abort=false)");
 	}
 	else if (privateContext->endpos == InvalidXLogRecPtr)
 	{
-		log_notice("streamCloseFile: SKIPPED (endpos=InvalidXLogRecPtr)");
+		log_debug("streamCloseFile: SKIPPED (endpos=InvalidXLogRecPtr)");
 	}
 	else
 	{
-		log_notice("streamCloseFile: SKIPPED (endpos %X/%X > cur_record_lsn %X/%X)",
-				   LSN_FORMAT_ARGS(privateContext->endpos),
-				   LSN_FORMAT_ARGS(context->cur_record_lsn));
+		log_debug("streamCloseFile: SKIPPED (endpos %X/%X > cur_record_lsn %X/%X)",
+				  LSN_FORMAT_ARGS(privateContext->endpos),
+				  LSN_FORMAT_ARGS(context->cur_record_lsn));
 	}
 
 	/*
@@ -1323,7 +1199,7 @@ bool
 streamKeepalive(LogicalStreamContext *context)
 {
 	StreamContext *privateContext = (StreamContext *) context->private;
-	DatabaseCatalog *replayDB = privateContext->replayDB;
+	DatabaseCatalog *replayDB = privateContext->outputDB;
 
 	/* skip LSN 0/0 at the start of streaming */
 	if (context->cur_record_lsn == InvalidXLogRecPtr)
@@ -1489,31 +1365,30 @@ stream_sync_sentinel(LogicalStreamContext *context)
 	context->tracking->applied_lsn = sentinel.replay_lsn;
 
 	/*
-	 * Report transform_lsn as the flushed position in the PostgreSQL
-	 * replication feedback message.
+	 * Report replay_lsn as the flushed position in the PostgreSQL replication
+	 * feedback message.
 	 *
 	 * PostgreSQL uses flush_lsn to advance the logical slot's confirmed_flush.
 	 * confirmed_flush is the point from which the slot re-delivers WAL on
 	 * reconnect (max(startlsn, confirmed_flush)).  Using written_lsn (the raw
-	 * WAL receive position) here races ahead of what transform has actually
-	 * processed: if prefetch is killed mid-segment, confirmed_flush ends up
-	 * beyond the last row in the output table, creating a permanent gap that
-	 * can never be recovered.
+	 * WAL receive position) would race ahead of what apply has actually
+	 * committed: if receive is killed mid-segment, confirmed_flush ends up
+	 * beyond the last committed transaction, creating a gap.
 	 *
-	 * Using transform_lsn ensures confirmed_flush advances only when transform
-	 * has fully committed a transaction to the relay table.  On any restart
-	 * the slot re-delivers from transform_lsn, which is always a transaction
-	 * boundary (we sync transform_lsn only at COMMIT/ROLLBACK), and INSERT OR
-	 * REPLACE handles idempotent re-insertion of already-present output rows.
+	 * Using replay_lsn ensures confirmed_flush advances only when apply has
+	 * fully committed a transaction on the target.  On any restart the slot
+	 * re-delivers from replay_lsn, which is always a transaction boundary
+	 * (we sync replay_lsn only at COMMIT), and INSERT OR REPLACE handles
+	 * idempotent re-insertion of already-present output rows.
 	 *
-	 * write_lsn is still reported as-is (how far prefetch has received) for
+	 * write_lsn is still reported as-is (how far receive has received) for
 	 * monitoring; only flush_lsn (which drives confirmed_flush) is changed.
 	 */
-	if (sentinel.transform_lsn != InvalidXLogRecPtr)
-		context->tracking->flushed_lsn = sentinel.transform_lsn;
+	if (sentinel.replay_lsn != InvalidXLogRecPtr)
+		context->tracking->flushed_lsn = sentinel.replay_lsn;
 
 	log_debug("stream_sync_sentinel: "
-			 "write_lsn %X/%X flush_lsn(=transform_lsn) %X/%X apply_lsn %X/%X "
+			 "write_lsn %X/%X flush_lsn(=replay_lsn) %X/%X apply_lsn %X/%X "
 			 "startpos %X/%X endpos %X/%X apply %s",
 			 LSN_FORMAT_ARGS(context->tracking->written_lsn),
 			 LSN_FORMAT_ARGS(context->tracking->flushed_lsn),
@@ -1627,7 +1502,7 @@ prepareMessageMetadataFromContext(LogicalStreamContext *context)
 		metadata->skipping = false;
 
 		/* insert the message to our current SQLite logical decoding file */
-		if (!ld_store_insert_message(privateContext->replayDB, previous))
+		if (!ld_store_insert_message(privateContext->outputDB, previous))
 		{
 			/* errors have already been logged */
 			return false;

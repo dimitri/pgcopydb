@@ -48,13 +48,12 @@ The process tree then looks like the following::
 
    + pgcopydb follow worker [ --follow ]
      - pgcopydb stream receive
-     - pgcopydb stream transform
-     - pgcopydb stream catchup
+     - pgcopydb stream apply
 
 Observe that when using ``pgcopydb clone --follow --table-jobs 4 --index-jobs
-4 --large-objects-jobs 4``, pgcopydb creates 27 sub-processes.
+4 --large-objects-jobs 4``, pgcopydb creates 26 sub-processes.
 
-The 27 total is counted from:
+The 26 total is counted from:
 
  - 1 clone worker + 1 copy supervisor + 1 copy queue worker + 4 copy
    workers + 1 blob metadata worker + 4 blob data workers + 1 index
@@ -63,11 +62,11 @@ The 27 total is counted from:
 
    that's 1 + 1 + 1 + 4 + 1 + 4 + 1 + 4 + 1 + 4 + 1 = 23
 
- - 1 follow worker + 1 stream receive + 1 stream transform + 1 stream catchup
+ - 1 follow worker + 1 stream receive + 1 stream apply
 
-   that's 1 + 1 + 1 + 1 = 4
+   that's 1 + 1 + 1 = 3
 
- - At the end, it is 23 + 4 = 27 total
+ - At the end, it is 23 + 3 = 26 total
 
 Here is a description of the process tree:
 
@@ -106,20 +105,17 @@ Here is a description of the process tree:
    creates a single dedicated sub-process.
 
  * When using the ``--follow`` option then another sub-process leader is
-   created to handle the three Change Data Capture processes.
+   created to handle the two Change Data Capture processes.
 
     - One process implements :ref:`pgcopydb_stream_receive` to fetch changes
-      in the JSON format and to pre-fetch them in JSON files.
+      using logical decoding and store them in the SQLite Change Data Capture
+      *output* database.
 
-    - As soon as JSON file is completed, the pgcopydb stream transform
-      worker transforms the JSON file into SQL, as if by calling the command
-      :ref:`pgcopydb_stream_transform`.
-
-    - Another process implements :ref:`pgcopydb_stream_catchup` to apply SQL
-      changes to the target Postgres instance. This process loops over
-      querying the pgcopydb sentinel table until the apply mode has been
-      enabled, and then loops over the SQL files and run the queries from
-      them.
+    - Another process implements :ref:`pgcopydb_stream_apply` to transform
+      those changes inline (writing parameterised statements to the CDC
+      *replay* database) and apply them to the target Postgres instance. This
+      process loops over querying the pgcopydb sentinel table until the apply
+      mode has been enabled, and then applies the replayed transactions.
 
 .. _index_concurrency:
 

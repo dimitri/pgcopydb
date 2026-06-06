@@ -61,16 +61,13 @@ SHAREDIR=/var/lib/postgres/.local/share/pgcopydb
 
 ls -la ${SHAREDIR}/
 
-DBFILE=$(ls ${SHAREDIR}/*.db | head -1)
+OUTPUTDB=$(find ${SHAREDIR} -maxdepth 1 -name '*-output.db' -type f | head -1)
 
 #
-# Validate that the SQLite output and replay tables were populated.
+# Validate that the SQLite output table was populated by receive.
+# (stmt+replay are produced later, by the apply/catchup process.)
 #
-sqlite3 ${DBFILE} <<'EOF'
-.echo on
-select count(*) as output_rows from output;
-select count(*) as replay_rows from replay;
-EOF
+sqlite3 ${OUTPUTDB} "select count(*) as output_rows from output;"
 
 # Idempotency: prefetch again with the same endpos should be a no-op
 pgcopydb stream prefetch --resume --endpos "${lsn}" --trace
@@ -84,14 +81,21 @@ pgcopydb stream sentinel set apply
 timeout 5s pgcopydb stream catchup --resume --endpos "${lsn}" --trace
 
 #
+# replayDB now exists (created by the apply/catchup process): validate the
+# replay table was populated.
+#
+REPLAYDB=$(find ${SHAREDIR} -maxdepth 1 -name '*-replay.db' -type f | head -1)
+sqlite3 ${REPLAYDB} "select count(*) as replay_rows from replay;"
+
+#
 # Advance endpos to current WAL position so the follow step can consume
 # the remainder of the transaction that was split at the original endpos.
 #
 pgcopydb stream sentinel set endpos --current
 
 # Dump replay table to diagnose lsn values before follow
-DBFILE=$(ls ${SHAREDIR}/*.db | head -1)
-sqlite3 ${DBFILE} "select id, action, xid, printf('%X/%X', lsn>>32, lsn&0xFFFFFFFF) as lsn from replay order by id;"
+REPLAYDB=$(find ${SHAREDIR} -maxdepth 1 -name '*-replay.db' -type f | head -1)
+sqlite3 ${REPLAYDB} "select id, action, xid, printf('%X/%X', lsn>>32, lsn&0xFFFFFFFF) as lsn from replay order by id;"
 
 # Follow resumes from the sentinel endpos and applies all remaining changes
 pgcopydb follow --resume --trace

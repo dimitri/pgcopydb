@@ -24,14 +24,49 @@
 
 
 /*
- * ld_store_open_replaydb opens the current replaydb file if it already exists,
- * or create a new replaydb SQLite file for processing the streaming data.
+ * ld_store_replaydb_filename_from_outputdb derives the replay.db path from the
+ * output.db path by suffix substitution ("-output.db" -> "-replay.db").
+ */
+static void
+ld_store_replaydb_filename_from_outputdb(const char *outputFile,
+										  char *replayFile,
+										  size_t replayFileSize)
+{
+	/*
+	 * outputFile ends with "-output.db"; replace that suffix with "-replay.db".
+	 * If the suffix is absent (legacy file without suffix), just append "-replay".
+	 */
+	strlcpy(replayFile, outputFile, replayFileSize);
+
+	char *suffix = strstr(replayFile, "-output.db");
+
+	if (suffix != NULL)
+	{
+		strlcpy(suffix, "-replay.db", replayFileSize - (suffix - replayFile));
+	}
+	else
+	{
+		/* fallback: strip .db and append -replay.db */
+		char *dot = strrchr(replayFile, '.');
+		if (dot != NULL)
+			strlcpy(dot, "-replay.db", replayFileSize - (dot - replayFile));
+		else
+			strlcat(replayFile, "-replay.db", replayFileSize);
+	}
+}
+
+
+/*
+ * ld_store_open_outputdb opens (or creates) the output.db file for receive.
+ *
+ * output.db contains only the "output" table and is written exclusively by
+ * the receive process.  Apply opens it read-only via its own catalog handle.
  */
 bool
-ld_store_open_replaydb(StreamSpecs *specs)
+ld_store_open_outputdb(StreamSpecs *specs)
 {
 	StreamContext *privateContext = &(specs->private);
-	DatabaseCatalog *replayDB = specs->replayDB;
+	DatabaseCatalog *outputDB = specs->outputDB;
 
 	if (!ld_store_set_current_cdc_filename(specs))
 	{
@@ -39,69 +74,90 @@ ld_store_open_replaydb(StreamSpecs *specs)
 		return false;
 	}
 
-	bool createReplayDB = IS_EMPTY_STRING_BUFFER(replayDB->dbfile);
+	bool createOutputDB = IS_EMPTY_STRING_BUFFER(outputDB->dbfile);
 
-	/* if we don't have a replayDB filename yet, it's time to create it */
-	if (IS_EMPTY_STRING_BUFFER(replayDB->dbfile))
+	/* if we don't have a filename yet, derive one from timeline + startpos */
+	if (IS_EMPTY_STRING_BUFFER(outputDB->dbfile))
 	{
 		if (privateContext->timeline == 0)
 		{
-			log_error("BUG: ld_store_open_replaydb: timeline is zero");
+			log_error("BUG: ld_store_open_outputdb: timeline is zero");
 			return false;
 		}
 
-		sformat(replayDB->dbfile, MAXPGPATH, "%s/%08d-%08X-%08X.db",
+		sformat(outputDB->dbfile, MAXPGPATH, "%s/%08d-%08X-%08X-output.db",
 				specs->paths.dir,
 				privateContext->timeline,
 				LSN_FORMAT_ARGS(privateContext->startpos));
 	}
 
-	log_info("%s CDC file \"%s\"",
-			 createReplayDB ? "Creating" : "Opening",
-			 replayDB->dbfile);
+	log_info("%s output CDC file \"%s\"",
+			 createOutputDB ? "Creating" : "Opening",
+			 outputDB->dbfile);
 
-	/* now open the replaydb */
-	if (!catalog_init(replayDB))
+	outputDB->type = DATABASE_CATALOG_TYPE_OUTPUT;
+
+	if (!catalog_init(outputDB))
 	{
-		log_error("Failed to open the current replay database \"%s\", "
+		log_error("Failed to open output database \"%s\", "
 				  "see above for details",
-				  replayDB->dbfile);
+				  outputDB->dbfile);
 		return false;
 	}
 
-	/*
-	 * Disable SQLite's automatic WAL checkpoint on this connection.
-	 *
-	 * In the PREFETCH pipeline, receive and transform are concurrent processes
-	 * that both write to the same replayDB file (output vs replay/stmt tables).
-	 * When receive finishes and its connection is closed, SQLite's default
-	 * auto-checkpoint (threshold 1000 pages) acquires the WAL write lock to
-	 * flush frames to the main database file.  While that checkpoint runs,
-	 * transform's write attempts get SQLITE_BUSY and may exhaust the retry
-	 * budget before the checkpoint completes.
-	 *
-	 * Setting wal_autocheckpoint = 0 disables the checkpoint on close.  The
-	 * WAL accumulates until the next process opens the file (SQLite performs
-	 * WAL recovery automatically on open), which is safe for our single-writer-
-	 * at-a-time sequential pipeline.
-	 */
-	if (sqlite3_wal_autocheckpoint(replayDB->db, 0) != SQLITE_OK)
-	{
-		log_warn("Failed to disable WAL auto-checkpoint on \"%s\": %s",
-				 replayDB->dbfile,
-				 sqlite3_errmsg(replayDB->db));
-		/* non-fatal: pipeline still works, just may see brief SQLITE_BUSY */
-	}
-
-	if (createReplayDB)
+	if (createOutputDB)
 	{
 		if (!ld_store_insert_cdc_filename(specs))
 		{
-			log_error("Failed to register the current replay database \"%s\", "
+			log_error("Failed to register output CDC file \"%s\", "
 					  "see above for details",
-					  replayDB->dbfile);
+					  outputDB->dbfile);
 			return false;
 		}
+	}
+
+	return true;
+}
+
+
+/*
+ * ld_store_open_replaydb opens (or creates) the replay.db file for apply.
+ *
+ * replay.db contains stmt and replay tables and is written exclusively by
+ * the apply process.  Its filename is derived from the matching output.db
+ * filename by replacing the "-output.db" suffix with "-replay.db".
+ */
+bool
+ld_store_open_replaydb(StreamSpecs *specs)
+{
+	DatabaseCatalog *outputDB = specs->outputDB;
+	DatabaseCatalog *replayDB = specs->replayDB;
+
+	if (IS_EMPTY_STRING_BUFFER(outputDB->dbfile))
+	{
+		log_error("BUG: ld_store_open_replaydb called before outputDB filename is set");
+		return false;
+	}
+
+	/* derive replay.db path from output.db path */
+	ld_store_replaydb_filename_from_outputdb(outputDB->dbfile,
+											  replayDB->dbfile,
+											  sizeof(replayDB->dbfile));
+
+	bool createReplayDB = (access(replayDB->dbfile, F_OK) != 0);
+
+	log_info("%s replay CDC file \"%s\"",
+			 createReplayDB ? "Creating" : "Opening",
+			 replayDB->dbfile);
+
+	replayDB->type = DATABASE_CATALOG_TYPE_REPLAY;
+
+	if (!catalog_init(replayDB))
+	{
+		log_error("Failed to open replay database \"%s\", "
+				  "see above for details",
+				  replayDB->dbfile);
+		return false;
 	}
 
 	return true;
@@ -141,7 +197,7 @@ ld_store_set_current_cdc_filename(StreamSpecs *specs)
 		"   limit 1";
 
 	SQLiteQuery query = {
-		.context = specs->replayDB->dbfile,
+		.context = specs->outputDB->dbfile,
 		.fetchFunction = &ld_store_cdc_filename_fetch
 	};
 
@@ -256,13 +312,13 @@ ld_store_set_cdc_filename_at_lsn(StreamSpecs *specs, uint64_t lsn)
 
 		/*
 		 * If we already have this file open, skip the probe/promotion.
-		 * Every ~1.5s the transform loop calls this function and the same
-		 * file is returned; recreating the replayDB each time would leak a
+		 * Every ~1.5s the apply loop calls this function and the same
+		 * file is returned; recreating the outputDB each time would leak a
 		 * SysV semaphore into the global array (max 16 slots).
 		 */
-		if (specs->replayDB != NULL &&
-			specs->replayDB->db != NULL &&
-			strcmp(specs->replayDB->dbfile, candidate) == 0)
+		if (specs->outputDB != NULL &&
+			specs->outputDB->db != NULL &&
+			strcmp(specs->outputDB->dbfile, candidate) == 0)
 		{
 			break;
 		}
@@ -282,7 +338,7 @@ ld_store_set_cdc_filename_at_lsn(StreamSpecs *specs, uint64_t lsn)
 		 * Probe the database file with a raw read-only SQLite open.
 		 * We avoid catalog_open/catalog_init here because that would create a
 		 * new SysV semaphore and register it in the global system_res_array,
-		 * which has only 16 slots.  The transform loop calls this function
+		 * which has only 16 slots.  The apply loop calls this function
 		 * every ~1.5s, so the array would fill up within seconds.
 		 */
 		sqlite3 *probeDB = NULL;
@@ -313,7 +369,7 @@ ld_store_set_cdc_filename_at_lsn(StreamSpecs *specs, uint64_t lsn)
 
 		/*
 		 * Verify the file contains at least one output row at or after the
-		 * given LSN.  Use errorOnZeroRows = false: the transform_lsn might
+		 * given LSN.  Use errorOnZeroRows = false: the apply_lsn might
 		 * sit between two message LSNs (e.g. when it equals the stream
 		 * startpos which precedes the first written message).
 		 */
@@ -336,8 +392,10 @@ ld_store_set_cdc_filename_at_lsn(StreamSpecs *specs, uint64_t lsn)
 			/*
 			 * This file contains messages at or after the given LSN.
 			 * Fully initialize it (semaphore, WAL mode, schema) so it
-			 * becomes the active replayDB.
+			 * becomes the active outputDB.
 			 */
+			candidateDB->type = DATABASE_CATALOG_TYPE_OUTPUT;
+
 			if (!catalog_init(candidateDB))
 			{
 				/* errors have already been logged */
@@ -345,13 +403,23 @@ ld_store_set_cdc_filename_at_lsn(StreamSpecs *specs, uint64_t lsn)
 				return false;
 			}
 
-			/* close the old replayDB SQLite handle before replacing */
-			if (specs->replayDB != NULL && specs->replayDB->db != NULL)
+			/* close the old outputDB SQLite handle before replacing */
+			if (specs->outputDB != NULL && specs->outputDB->db != NULL)
 			{
-				(void) catalog_close(specs->replayDB);
+				(void) catalog_close(specs->outputDB);
 			}
 
-			specs->replayDB = candidateDB;
+			specs->outputDB = candidateDB;
+
+			/* derive the matching replay.db filename */
+			if (specs->replayDB != NULL)
+			{
+				ld_store_replaydb_filename_from_outputdb(
+					candidateDB->dbfile,
+					specs->replayDB->dbfile,
+					sizeof(specs->replayDB->dbfile));
+			}
+
 			break;
 		}
 
@@ -467,13 +535,17 @@ ld_store_lookup_output_after_lsn(DatabaseCatalog *catalog,
 								 uint64_t lsn,
 								 ReplayDBOutputMessage *output)
 {
+
+
 	sqlite3 *db = catalog->db;
+
 
 	if (db == NULL)
 	{
 		log_error("BUG: ld_store_lookup_output_after_lsn: db is NULL");
 		return false;
 	}
+
 
 	/*
 	 * Order by LSN so that a BEGIN (which has the lowest LSN in its
@@ -552,11 +624,13 @@ ld_store_lookup_output_after_lsn(DatabaseCatalog *catalog,
 		.fetchFunction = &ld_store_output_fetch
 	};
 
+
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
 		/* errors have already been logged */
 		return false;
 	}
+
 
 	/* bind our parameters now */
 	BindParam params[] = {
@@ -572,12 +646,14 @@ ld_store_lookup_output_after_lsn(DatabaseCatalog *catalog,
 		return false;
 	}
 
+
 	/* now execute the query, which return exactly one row */
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
 		return false;
 	}
+
 
 	return true;
 }
@@ -770,7 +846,7 @@ ld_store_insert_cdc_filename(StreamSpecs *specs)
 
 	/* bind our parameters now */
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "filename", 0, specs->replayDB->dbfile },
+		{ BIND_PARAMETER_TYPE_TEXT, "filename", 0, specs->outputDB->dbfile },
 		{ BIND_PARAMETER_TYPE_INT, "timeline", privateContext->timeline, NULL },
 		{ BIND_PARAMETER_TYPE_TEXT, "startpos", 0, lsn },
 		{ BIND_PARAMETER_TYPE_INT64, "start_time_epoch", startTime, NULL }
@@ -1251,14 +1327,24 @@ ld_store_insert_replay_stmt(DatabaseCatalog *catalog,
 bool
 ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 {
+
 	ReplayDBOutputIterator *iter =
 		(ReplayDBOutputIterator *) calloc(1, sizeof(ReplayDBOutputIterator));
 
-	iter->catalog       = specs->replayDB;
-	iter->transform_lsn = specs->sentinel.transform_lsn;
+
+	if (iter == NULL)
+	{
+		log_error("ld_store_iter_output: calloc failed for ReplayDBOutputIterator");
+		return false;
+	}
+
+	iter->catalog       = specs->outputDB;
+	iter->transform_lsn = specs->sentinel.replay_lsn;  /* apply reads from replay_lsn */
 	iter->endpos        = specs->endpos;
 
+
 	DatabaseCatalog *catalog = iter->catalog;
+
 
 	if (!semaphore_lock(&(catalog->sema)))
 	{
@@ -1266,11 +1352,17 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 		return false;
 	}
 
+
 	if (!ld_store_iter_output_init(iter))
 	{
 		/* errors have already been logged */
 		(void) semaphore_unlock(&(catalog->sema));
 		return false;
+	}
+
+
+	if (iter->output != NULL)
+	{
 	}
 
 	if (iter->output == NULL ||
@@ -1322,12 +1414,6 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 
 			if (receive_done && end_lsn != InvalidXLogRecPtr && end_lsn != 0)
 			{
-				log_notice("ld_store_iter_output: xid %u has no COMMIT "
-						   "and receive stopped at %X/%X — "
-						   "endpos fell mid-transaction; "
-						   "signalling transform via midTxnEndpos flag",
-						   iter->pending_xid,
-						   LSN_FORMAT_ARGS(end_lsn));
 
 				/*
 				 * Do NOT call sentinel_sync_transform(end_lsn) here.
@@ -1456,8 +1542,10 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 bool
 ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 {
+
 	DatabaseCatalog *catalog = iter->catalog;
 	sqlite3 *db = catalog->db;
+
 
 	if (db == NULL)
 	{
@@ -1468,6 +1556,7 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 	iter->output =
 		(ReplayDBOutputMessage *) calloc(1, sizeof(ReplayDBOutputMessage));
 
+
 	if (iter->output == NULL)
 	{
 		log_error(ALLOCATION_FAILED_ERROR);
@@ -1476,6 +1565,7 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 
 	ReplayDBOutputMessage first = { 0 };
 	ReplayDBOutputMessage last = { 0 };
+
 
 	/*
 	 * Grab the output row for the given LSN, and then if it's a single message
@@ -1491,6 +1581,7 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 		iter->output = NULL;
 		return false;
 	}
+
 
 	if (first.lsn == InvalidXLogRecPtr)
 	{
@@ -1512,13 +1603,16 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 
 		case STREAM_ACTION_BEGIN:
 		{
+
 			/* greab the COMMIT or ROLLBACK output entry if there is one */
+
 			if (!ld_store_lookup_output_xid_end(catalog, first.xid, &last))
 			{
 				/* errors have already been logged */
 				iter->output = NULL;
 				return false;
 			}
+
 
 			/* the COMMIT/ROLLBACK message is not available yet */
 			if (last.lsn == InvalidXLogRecPtr)
@@ -1666,12 +1760,6 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 					return false;
 				}
 
-				log_notice("ld_store_iter_output_init: resuming xid=%u "
-						   "past superseded ENDPOS/ROLLBACK at %X/%X, "
-						   "iterating from BEGIN id=%lld",
-						   first.xid,
-						   LSN_FORMAT_ARGS(iter->transform_lsn),
-						   (long long) begin.id);
 
 				*(iter->output) = begin;
 			}
@@ -1695,6 +1783,7 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 		"    where xid = $1 and id >= $2 "
 		" order by id";
 
+
 	SQLiteQuery *query = &(iter->query);
 
 	query->context = iter->output;
@@ -1707,11 +1796,14 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 
 	int count = sizeof(params) / sizeof(params[0]);
 
+
 	if (!catalog_sql_prepare(db, sql, query))
 	{
 		/* errors have already been logged */
 		return false;
 	}
+
+
 
 	/* re-use params, hard code the count */
 	if (!catalog_sql_bind(query, params, count))

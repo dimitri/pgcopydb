@@ -1,5 +1,6 @@
 # Global excludes across all subdirectories
 *.o
+*.o.tmp
 *.bc
 *.so
 *.so.[0-9]

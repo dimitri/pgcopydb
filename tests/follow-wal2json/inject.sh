@@ -13,16 +13,19 @@ set -e
 pgcopydb ping
 
 #
-# Only start injecting DML traffic on the source database when the pagila
-# schema and base data set has been deployed already. Our proxy to know that
-# that's the case is the existence of the pgcopydb.sentinel table on the
-# source database.
+# Follow coordinator TCP endpoint (provided by docker-compose). We remote-control
+# the sentinel over TCP, so this container does NOT share the SQLite catalog
+# volume with the follow process.
 #
-dbfile=$(find ${TMPDIR}/pgcopydb/schema -name "source.db" -type f 2>/dev/null | head -1)
+HP="--host ${PGCOPYDB_HOST} --port ${PGCOPYDB_PORT}"
 
-until [ -n "${dbfile}" ] && [ -s "${dbfile}" ]
+#
+# Only start injecting DML traffic once the follow process is streaming: that is
+# exactly when `pgcopydb clone --follow` has finished the initial copy and opened
+# its TCP coordinator.  Poll the coordinator over TCP until it answers.
+#
+until pgcopydb stream sentinel get ${HP} >/dev/null 2>&1
 do
-    dbfile=$(find ${TMPDIR}/pgcopydb/schema -name "source.db" -type f 2>/dev/null | head -1)
     sleep 1
 done
 
@@ -40,13 +43,13 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_switch_wal()'
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 psql -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_switch_wal()'
 
-# Set endpos to current flush LSN to signal follow where to stop
+# Set endpos to current flush LSN to signal follow where to stop (over TCP)
 echo "Setting endpos to current WAL position..."
-pgcopydb stream sentinel set endpos --current --debug || { echo "Failed to set endpos"; exit 1; }
+pgcopydb stream sentinel set endpos --current --debug ${HP} || { echo "Failed to set endpos"; exit 1; }
 echo "Final sentinel state:"
-pgcopydb stream sentinel get
+pgcopydb stream sentinel get ${HP}
 
-endpos=`pgcopydb stream sentinel get --endpos 2>/dev/null`
+endpos=`pgcopydb stream sentinel get --endpos ${HP} 2>/dev/null`
 
 if [ -z "${endpos}" ] || [ "${endpos}" = "0/0" ]
 then
@@ -64,7 +67,7 @@ flushlsn="0/0"
 
 while [ ${flushlsn} \< ${endpos} ]
 do
-    flushlsn=`pgcopydb stream sentinel get --flush-lsn 2>/dev/null`
+    flushlsn=`pgcopydb stream sentinel get --flush-lsn ${HP} 2>/dev/null`
     sleep 1
 done
 

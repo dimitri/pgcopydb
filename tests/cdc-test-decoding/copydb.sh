@@ -38,10 +38,12 @@ wait ${COPROC_PID}
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 
 # grab the current LSN, it's going to be our streaming end position
-lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_lsn()'`
+lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_flush_lsn()'`
 
 #
-# Receive CDC messages into the SQLite replayDB and transform them.
+# Receive CDC messages into the SQLite outputDB (output table).  In the
+# 2-process model the receive step only fills the output table; the transform
+# into stmt+replay happens later, inside the apply (catchup) process.
 #
 pgcopydb stream prefetch --resume --endpos "${lsn}" --debug
 
@@ -49,33 +51,35 @@ SHAREDIR=/var/lib/postgres/.local/share/pgcopydb
 
 ls -la ${SHAREDIR}/
 
-DBFILE=$(ls ${SHAREDIR}/*.db | head -1)
+OUTPUTDB=$(find ${SHAREDIR} -maxdepth 1 -name '*-output.db' -type f | head -1)
 
 #
-# Validate SQL templates written by the transform step.
+# Validate that the SQLite output table was populated by receive.
 #
-sqlite3 -init /dev/null -list -noheader ${DBFILE} \
-  "select s.sql from stmt s join replay r on r.stmt_hash = s.hash where r.action not in ('B','C','R','K','X','E') group by s.hash order by min(r.id)" \
-  > /tmp/stmt-actual.sql
-diff /usr/src/pgcopydb/stmt.sql /tmp/stmt-actual.sql
-
-#
-# Validate that the SQLite output and replay tables were populated.
-#
-sqlite3 ${DBFILE} <<'EOF'
-.echo on
-select count(*) as output_rows from output;
-select count(*) as replay_rows from replay;
-EOF
+sqlite3 ${OUTPUTDB} "select count(*) as output_rows from output;"
 
 # Idempotency: prefetch again should be a no-op
 pgcopydb stream prefetch --resume --endpos "${lsn}" --notice
 
 #
-# Allow apply and catch up with the replayDB.
+# Allow apply and catch up.  The apply process performs the inline transform
+# (output -> stmt+replay), creating the replayDB, then applies to the target.
 #
 pgcopydb stream sentinel set apply
 pgcopydb stream catchup --resume --endpos "${lsn}" -vv
+
+#
+# replayDB now exists: validate the SQL templates written by the transform
+# step and that the replay table was populated.
+#
+REPLAYDB=$(find ${SHAREDIR} -maxdepth 1 -name '*-replay.db' -type f | head -1)
+
+sqlite3 -init /dev/null -list -noheader ${REPLAYDB} \
+  "select s.sql from stmt s join replay r on r.stmt_hash = s.hash where r.action not in ('B','C','R','K','X','E') group by s.hash order by min(r.id)" \
+  > /tmp/stmt-actual.sql
+diff /usr/src/pgcopydb/stmt.sql /tmp/stmt-actual.sql
+
+sqlite3 ${REPLAYDB} "select count(*) as replay_rows from replay;"
 
 # Applying again must be idempotent
 pgcopydb stream catchup --resume --endpos "${lsn}" -vv

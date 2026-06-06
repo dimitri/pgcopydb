@@ -40,11 +40,12 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/special-dml.sql
 
 # grab the current LSN, it's going to be our streaming end position
-lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_lsn()'`
+lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_flush_lsn()'`
 
 #
-# Receive CDC messages into the SQLite replayDB (output table) and transform
-# them into replay statements (replay+stmt tables) in a single step.
+# Receive CDC messages into the SQLite outputDB (output table).  In the
+# 2-process model the receive step only fills the output table; the transform
+# into stmt+replay happens later, inside the apply (catchup) process.
 #
 pgcopydb stream prefetch --resume --endpos "${lsn}" -vv
 
@@ -57,23 +58,11 @@ ls -la ${SHAREDIR}/
 # Extract the JSON message field from every output row and compare against
 # the golden file (ignoring volatile fields: lsn, xid, timestamp).
 #
-DBFILE=$(ls ${SHAREDIR}/*.db | head -1)
+OUTPUTDB=$(find ${SHAREDIR} -maxdepth 1 -name '*-output.db' -type f | head -1)
 
-sqlite3 ${DBFILE} <<'EOF'
-.echo on
-select count(*) as output_rows from output;
-select count(*) as replay_rows from replay;
-EOF
+sqlite3 ${OUTPUTDB} "select count(*) as output_rows from output;"
 
-#
-# Validate SQL templates written by the transform step.
-#
-sqlite3 -init /dev/null -list -noheader ${DBFILE} \
-  "select s.sql from stmt s join replay r on r.stmt_hash = s.hash where r.action not in ('B','C','R','K','X','E') group by s.hash order by min(r.id)" \
-  > /tmp/stmt-actual.sql
-diff /usr/src/pgcopydb/stmt.sql /tmp/stmt-actual.sql
-
-sqlite3 -init /dev/null -json ${DBFILE} \
+sqlite3 -init /dev/null -json ${OUTPUTDB} \
   "select action, json(message) as message from output where action not in ('K','X','E') order by id" \
   > /tmp/result.jsonl
 
@@ -85,11 +74,26 @@ diff /usr/src/pgcopydb/output.jsonl /tmp/result.jsonl
 pgcopydb stream prefetch --resume --endpos "${lsn}" -vv
 
 #
-# Allow the apply process and apply the CDC changes to the target.
+# Allow the apply process and apply the CDC changes to the target.  The apply
+# process performs the inline transform (output -> stmt+replay), creating the
+# replayDB, then applies to the target.
 #
 pgcopydb stream sentinel set apply
 
 pgcopydb stream catchup --resume --endpos "${lsn}" -vv
+
+#
+# replayDB now exists: validate the replay table and the SQL templates
+# written by the transform step.
+#
+REPLAYDB=$(find ${SHAREDIR} -maxdepth 1 -name '*-replay.db' -type f | head -1)
+
+sqlite3 ${REPLAYDB} "select count(*) as replay_rows from replay;"
+
+sqlite3 -init /dev/null -list -noheader ${REPLAYDB} \
+  "select s.sql from stmt s join replay r on r.stmt_hash = s.hash where r.action not in ('B','C','R','K','X','E') group by s.hash order by min(r.id)" \
+  > /tmp/stmt-actual.sql
+diff /usr/src/pgcopydb/stmt.sql /tmp/stmt-actual.sql
 
 # Applying the same endpos again should be a no-op (already reached).
 pgcopydb stream catchup --resume --endpos "${lsn}" -vv

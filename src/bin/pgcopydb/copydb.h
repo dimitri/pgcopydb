@@ -184,7 +184,6 @@ typedef struct CopyDBSentinel
 	uint64_t startpos;
 	uint64_t endpos;
 	uint64_t write_lsn;
-	uint64_t transform_lsn;
 	uint64_t flush_lsn;
 	uint64_t replay_lsn;
 } CopyDBSentinel;
@@ -490,7 +489,6 @@ bool sentinel_update_write_flush_lsn(DatabaseCatalog *catalog,
 									 uint64_t write_lsn,
 									 uint64_t flush_lsn);
 
-bool sentinel_update_transform_lsn(DatabaseCatalog *catalog, uint64_t transform_lsn);
 bool sentinel_update_replay_lsn(DatabaseCatalog *catalog, uint64_t replay_lsn);
 
 bool sentinel_get(DatabaseCatalog *catalog, CopyDBSentinel *sentinel);
@@ -501,13 +499,51 @@ bool sentinel_sync_recv(DatabaseCatalog *catalog,
 						uint64_t flush_lsn,
 						CopyDBSentinel *sentinel);
 
-bool sentinel_sync_transform(DatabaseCatalog *catalog,
-							 uint64_t transform_lsn,
-							 CopyDBSentinel *sentinel);
-
 bool sentinel_sync_apply(DatabaseCatalog *catalog,
 						 uint64_t replay_lsn,
 						 CopyDBSentinel *sentinel);
+
+
+/*
+ * pipeline_state — per-process lifecycle row (also in sentinel.c / sourceDB).
+ */
+typedef struct PipelineStateEntry
+{
+	char     process_name[16];     /* 'receive' | 'apply' */
+	int      pid;
+	char     run_state[16];        /* 'running' | 'done' | 'error' */
+	uint64_t run_start_lsn;
+	uint64_t run_end_lsn;          /* 0 = still running */
+	int64_t  started_at;           /* Unix epoch */
+	int64_t  ended_at;             /* 0 = still running */
+	uint32_t last_xid;
+	uint64_t last_txn_begin_lsn;
+	uint64_t last_txn_end_lsn;     /* 0 = transaction still open */
+	bool     last_txn_complete;    /* had COMMIT or ROLLBACK */
+	bool     last_txn_processed;   /* fully written/applied */
+} PipelineStateEntry;
+
+bool pipeline_state_start(DatabaseCatalog *catalog,
+						  const char *process_name, uint64_t run_start_lsn);
+
+bool pipeline_state_txn_begin(DatabaseCatalog *catalog,
+							  const char *process_name,
+							  uint32_t xid, uint64_t begin_lsn);
+
+bool pipeline_state_txn_done(DatabaseCatalog *catalog,
+							 const char *process_name,
+							 uint32_t xid, uint64_t end_lsn);
+
+bool pipeline_state_end(DatabaseCatalog *catalog,
+						const char *process_name,
+						uint64_t run_end_lsn, bool success);
+
+bool pipeline_state_get(DatabaseCatalog *catalog,
+						const char *process_name,
+						PipelineStateEntry *state);
+
+bool pipeline_state_sync(DatabaseCatalog *catalog,
+						 const PipelineStateEntry *state);
 
 
 /* summary.c */

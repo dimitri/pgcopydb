@@ -1,7 +1,0 @@
-services:
-  test:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    environment:
-      PGSSLMODE: "require"

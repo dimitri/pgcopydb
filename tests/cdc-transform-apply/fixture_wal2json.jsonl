@@ -1,6 +1,0 @@
-{"lsn":"0/1519348","message":"{\"action\":\"B\",\"timestamp\":\"2000-01-01 00:00:00+00\",\"xid\":733}"}
-{"lsn":"0/1519400","message":"{\"action\":\"I\",\"timestamp\":\"2000-01-01 00:00:00+00\",\"xid\":733,\"schema\":\"public\",\"table\":\"items\",\"columns\":[{\"name\":\"id\",\"type\":\"bigint\",\"value\":4},{\"name\":\"name\",\"type\":\"text\",\"value\":\"cdc-new-1\"}]}"}
-{"lsn":"0/1519500","message":"{\"action\":\"I\",\"timestamp\":\"2000-01-01 00:00:00+00\",\"xid\":733,\"schema\":\"public\",\"table\":\"items\",\"columns\":[{\"name\":\"id\",\"type\":\"bigint\",\"value\":5},{\"name\":\"name\",\"type\":\"text\",\"value\":\"cdc-new-2\"}]}"}
-{"lsn":"0/1519600","message":"{\"action\":\"U\",\"timestamp\":\"2000-01-01 00:00:00+00\",\"xid\":733,\"schema\":\"public\",\"table\":\"items\",\"identity\":[{\"name\":\"id\",\"type\":\"bigint\",\"value\":1}],\"columns\":[{\"name\":\"id\",\"type\":\"bigint\",\"value\":1},{\"name\":\"name\",\"type\":\"text\",\"value\":\"seed-updated-1\"}]}"}
-{"lsn":"0/1519700","message":"{\"action\":\"D\",\"timestamp\":\"2000-01-01 00:00:00+00\",\"xid\":733,\"schema\":\"public\",\"table\":\"items\",\"identity\":[{\"name\":\"id\",\"type\":\"bigint\",\"value\":2}]}"}
-{"lsn":"0/1519A60","message":"{\"action\":\"C\",\"timestamp\":\"2000-01-01 00:00:00+00\",\"xid\":733}"}

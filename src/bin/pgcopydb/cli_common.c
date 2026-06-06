@@ -603,6 +603,32 @@ cli_read_one_line(const char *filename,
 
 
 /*
+ * cli_read_coordinator_env fills-in the optional follow coordinator TCP
+ * endpoint (host/port) from the PGCOPYDB_HOST and PGCOPYDB_PORT environment
+ * variables.  This is a server-side convenience (e.g. docker-compose): the
+ * follow/clone/replay commands listen on that endpoint.  Explicit --host /
+ * --port options, parsed afterwards, take precedence.  The "stream sentinel"
+ * client does NOT read these — it requires explicit --host/--port.
+ */
+void
+cli_read_coordinator_env(CopyDBOptions *options)
+{
+	char *host = getenv("PGCOPYDB_HOST");
+	char *port = getenv("PGCOPYDB_PORT");
+
+	if (host != NULL && host[0] != '\0')
+	{
+		strlcpy(options->host, host, sizeof(options->host));
+	}
+
+	if (port != NULL && port[0] != '\0')
+	{
+		options->port = atoi(port);
+	}
+}
+
+
+/*
  * cli_copy_db_getopts parses the CLI options for the `copy db` command.
  */
 int
@@ -658,6 +684,8 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "origin", required_argument, NULL, 'o' },
 		{ "create-slot", no_argument, NULL, 't' },
 		{ "endpos", required_argument, NULL, 'E' },
+		{ "host", required_argument, NULL, 1001 },
+		{ "port", required_argument, NULL, 1002 },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "notice", no_argument, NULL, 'v' },
@@ -676,6 +704,9 @@ cli_copy_db_getopts(int argc, char **argv)
 		log_fatal("Failed to read default values from the environment");
 		exit(EXIT_CODE_BAD_ARGS);
 	}
+
+	/* server-side: PGCOPYDB_HOST/PGCOPYDB_PORT may set the coordinator endpoint */
+	cli_read_coordinator_env(&options);
 
 	const char *optstring =
 		"S:T:D:J:I:b:L:u:mcAPOXj:xBeMlUagkynF:F:Q:irRCN:fp:ws:o:tE:Vvdzqh";
@@ -1021,6 +1052,20 @@ cli_copy_db_getopts(int argc, char **argv)
 				log_trace("--endpos %X/%X",
 						  (uint32_t) (options.endpos >> 32),
 						  (uint32_t) options.endpos);
+				break;
+			}
+
+			case 1001:      /* --host: follow coordinator TCP listen host */
+			{
+				strlcpy(options.host, optarg, sizeof(options.host));
+				log_trace("--host %s", options.host);
+				break;
+			}
+
+			case 1002:      /* --port: follow coordinator TCP listen port */
+			{
+				options.port = atoi(optarg);
+				log_trace("--port %d", options.port);
 				break;
 			}
 

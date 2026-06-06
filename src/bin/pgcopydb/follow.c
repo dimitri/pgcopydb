@@ -13,10 +13,23 @@
 #include "catalog.h"
 #include "cli_common.h"
 #include "cli_root.h"
+#include "follow_coordinator.h"
 #include "ld_stream.h"
 #include "log.h"
 #include "progress.h"
 #include "signals.h"
+
+
+/*
+ * Optional follow coordinator: a TCP server, run inside this (the follow
+ * supervisor) process, that serves "pgcopydb stream sentinel" CLI clients over
+ * TCP.  It shares the supervisor's open sourceDB catalog and its IPC_PRIVATE
+ * write semaphore, so CLI clients never open the SQLite catalog themselves.
+ *
+ * Initialised to an inactive state (fd = -1); follow_coordinator_handle_messages
+ * is a no-op until followDB() starts it (only when --host was given).
+ */
+static FollowCoordinator followCoord = { .tcp_listen = { .fd = -1 } };
 
 
 /*
@@ -418,12 +431,12 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
  *   Guard 3 mid-txn where the full transaction was committed and its
  *   commitLSN >= endpos).
  *
- * Check (b) — secondary: both transform and apply exited with run_state='done'.
+ * Check (b) — secondary: apply exited with run_state='done'.
  *   Fires when endpos fell between two transactions (Guard 2: endpos < beginLSN)
  *   or inside an uncommitted transaction (mid-txn endpos).  In those cases
  *   apply exits cleanly without advancing replay_lsn past endpos, so check (a)
- *   does not fire.  Both processes mark run_state='done' only on a successful,
- *   intentional exit; signal-driven exits leave transform as 'error', preventing
+ *   does not fire.  apply marks run_state='done' only on a successful,
+ *   intentional exit; signal-driven exits leave it as 'error', preventing
  *   false positives.
  */
 bool
@@ -456,34 +469,25 @@ follow_reached_endpos(StreamSpecs *streamSpecs, bool *done)
 	 * Check (b): endpos fell between or inside transactions.
 	 *
 	 * replay_lsn is still at the last real commit (< endpos).  The pipeline
-	 * signals completion by having both transform and apply exit with
-	 * run_state='done'.
+	 * signals completion by having apply exit with run_state='done'.
 	 */
 	if (sentinel->endpos != InvalidXLogRecPtr)
 	{
-		PipelineStateEntry ts = { 0 };
 		PipelineStateEntry as = { 0 };
 		DatabaseCatalog *sourceDB = streamSpecs->sourceDB;
-
-		bool transform_done =
-			pipeline_state_get(sourceDB, "transform", &ts) &&
-			ts.process_name[0] != '\0' &&
-			strcmp(ts.run_state, "done") == 0;
 
 		bool apply_done =
 			pipeline_state_get(sourceDB, "apply", &as) &&
 			as.process_name[0] != '\0' &&
 			strcmp(as.run_state, "done") == 0;
 
-		if (transform_done && apply_done)
+		if (apply_done)
 		{
 			*done = true;
 
-			log_info("Current endpos %X/%X reached: transform done at %X/%X, "
-					 "apply done at %X/%X (replay_lsn %X/%X; "
-					 "endpos was at a transaction boundary)",
+			log_info("Current endpos %X/%X reached: apply done at %X/%X "
+					 "(replay_lsn %X/%X; endpos was at a transaction boundary)",
 					 LSN_FORMAT_ARGS(sentinel->endpos),
-					 LSN_FORMAT_ARGS(ts.run_end_lsn),
 					 LSN_FORMAT_ARGS(as.run_end_lsn),
 					 LSN_FORMAT_ARGS(sentinel->replay_lsn));
 		}
@@ -567,55 +571,36 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	}
 
 	/*
-	 * Create the lifecycle signal pipes.
+	 * Create the lifecycle signal pipe.
 	 *
-	 * pipe_rt carries an 8-byte big-endian done-LSN from receive → transform.
-	 * pipe_ta carries an 8-byte big-endian done-LSN from transform → apply.
+	 * pipe_rt carries an 8-byte big-endian done-LSN from receive → apply.
 	 *
-	 * These are always created when both endpoints will run together so that
+	 * This is always created when both endpoints will run together so that
 	 * the downstream process can select() on the read end and wake up
 	 * immediately when upstream finishes, without polling SQLite.
 	 *
-	 * In text-streaming mode (stdOut / stdIn), the same pipe fds are also
-	 * used for the JSON data stream; in replayDB mode they carry only the
+	 * In text-streaming mode (stdOut / stdIn), the same pipe fd is also
+	 * used for the JSON data stream; in replayDB mode it carries only the
 	 * single lifecycle signal message.
 	 */
 	if (pipe(streamSpecs->pipe_rt) != 0)
 	{
-		log_fatal("Failed to create receive→transform pipe: %m");
-		return false;
-	}
-
-	if (pipe(streamSpecs->pipe_ta) != 0)
-	{
-		log_fatal("Failed to create transform→apply pipe: %m");
-		close(streamSpecs->pipe_rt[0]);
-		close(streamSpecs->pipe_rt[1]);
+		log_fatal("Failed to create receive→apply pipe: %m");
 		return false;
 	}
 
 	FollowSubProcess *prefetch = &(streamSpecs->prefetch);
-	FollowSubProcess *transform = &(streamSpecs->transform);
 	FollowSubProcess *catchup = &(streamSpecs->catchup);
 
 	/*
-	 * When set to prefetch changes, we always also run the transform process
-	 * to prepare the SQL files from the JSON files. Also upper modes (catchup,
-	 * replay) does imply prefetching (and transform).
+	 * When set to prefetch changes, we start the receive (prefetch) process.
+	 * Upper modes (catchup, replay) imply prefetching too.
 	 */
 	if (streamSpecs->mode >= STREAM_MODE_PREFETCH)
 	{
 		if (!follow_start_subprocess(streamSpecs, prefetch))
 		{
 			log_error("Failed to start the %s process", prefetch->name);
-			return false;
-		}
-
-		if (!follow_start_subprocess(streamSpecs, transform))
-		{
-			log_error("Failed to start the transform process");
-
-			(void) follow_exit_early(streamSpecs);
 			return false;
 		}
 	}
@@ -635,20 +620,13 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	}
 
 	/*
-	 * Close pipe ends which follow is not using. Otherwise the processes
-	 * like transform and apply which reads from the pipe during replay
-	 * will never see EOF.
+	 * Close pipe ends which follow is not using. Otherwise the apply process
+	 * which reads from the pipe during replay will never see EOF.
 	 */
 	if (streamSpecs->stdOut)
 	{
 		close_fd_or_exit(streamSpecs->pipe_rt[1]);
 		close_fd_or_exit(streamSpecs->pipe_rt[0]);
-	}
-
-	if (streamSpecs->stdIn)
-	{
-		close_fd_or_exit(streamSpecs->pipe_ta[0]);
-		close_fd_or_exit(streamSpecs->pipe_ta[1]);
 	}
 
 	/*
@@ -668,11 +646,30 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		return false;
 	}
 
+	/*
+	 * Start the optional TCP coordinator when --host was given.  It serves
+	 * "stream sentinel" CLI clients from inside this supervisor process, using
+	 * the sourceDB catalog we just opened (sharing the write semaphore with the
+	 * receive/apply children).  init() with a NULL host leaves it inactive.
+	 */
+	{
+		const char *coordHost =
+			IS_EMPTY_STRING_BUFFER(streamSpecs->coordHost)
+			? NULL
+			: streamSpecs->coordHost;
+
+		if (!follow_coordinator_init(&followCoord, coordHost,
+									 streamSpecs->coordPort))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
 	if (follow_wait_subprocesses(streamSpecs))
 	{
-		log_info("Subprocesses for %s, %s, and %s have now all exited",
+		log_info("Subprocesses for %s and %s have now all exited",
 				 prefetch->name,
-				 transform->name,
 				 catchup->name);
 	}
 	else
@@ -681,6 +678,8 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		log_error("Some sub-process exited with errors, "
 				  "see above for details");
 	}
+
+	(void) follow_coordinator_shutdown(&followCoord);
 
 	return errors == 0;
 }
@@ -705,10 +704,8 @@ follow_start_prefetch(StreamSpecs *specs)
 
 		specs->out = fdopen(specs->pipe_rt[1], "a");
 
-		/* close pipe ends we're not using */
+		/* close the read end of the pipe: receive only writes */
 		close_fd_or_exit(specs->pipe_rt[0]);
-		close_fd_or_exit(specs->pipe_ta[0]);
-		close_fd_or_exit(specs->pipe_ta[1]);
 
 		/* switch out stream from block buffered to line buffered mode */
 		if (setvbuf(specs->out, NULL, _IOLBF, 0) != 0)
@@ -747,80 +744,6 @@ follow_start_prefetch(StreamSpecs *specs)
 }
 
 
-/*
- * follow_start_transform runs in the transform sub-process.
- *
- * In PREFETCH/CATCHUP mode: reads from the SQLite output table and writes
- * transformed statements to the replay+stmt tables.
- *
- * In REPLAY mode: reads JSON lines from the receive-transform Unix pipe and
- * writes SQL to the transform-apply Unix pipe (streaming, no SQLite).
- */
-bool
-follow_start_transform(StreamSpecs *specs)
-{
-	if (specs->mode == STREAM_MODE_REPLAY)
-	{
-		/*
-		 * In replay mode the transform process reads JSON lines from the
-		 * receive → transform pipe and writes SQL to the transform → apply
-		 * pipe.  Set up the pipe file descriptors before calling into the
-		 * streaming transform.
-		 */
-		specs->stdIn = true;
-		specs->stdOut = true;
-
-		follow_assert_pipe_fd(specs->pipe_rt[0], "pipe_rt[0]");
-		follow_assert_pipe_fd(specs->pipe_ta[1], "pipe_ta[1]");
-
-		specs->in = fdopen(specs->pipe_rt[0], "r");
-		specs->out = fdopen(specs->pipe_ta[1], "a");
-
-		/* close the ends of each pipe that this process does not use */
-		close_fd_or_exit(specs->pipe_rt[1]);
-		close_fd_or_exit(specs->pipe_ta[0]);
-
-		/* line-buffer the output so the apply process sees complete lines */
-		if (setvbuf(specs->out, NULL, _IOLBF, 0) != 0)
-		{
-			log_error("Failed to set out stream to line buffered mode: %m");
-			return false;
-		}
-
-		bool success = stream_transform_stream(specs);
-
-		log_info("Transform process has terminated");
-
-		/*
-		 * pipe_rt[0]: the receive side of the receive→transform pipe.  We
-		 * only read from it; receive closes the write end when done.  This
-		 * fd is never set to -1 by our code, so a plain close is correct.
-		 *
-		 * pipe_ta[1]: the write end of the transform→apply pipe.
-		 * stream_signal_upstream_done (called from the midTxnEndpos or normal
-		 * exit paths inside stream_transform_stream) may have already closed
-		 * this fd and set specs->pipe_ta[1] = -1.  Use follow_close_pipe_fd
-		 * to skip the close in that case.
-		 */
-		close_fd_or_exit(specs->pipe_rt[0]);
-		follow_close_pipe_fd(specs->pipe_ta[1], "pipe_ta[1]");
-
-		return success;
-	}
-
-	/*
-	 * In PREFETCH and CATCHUP modes the transform reads from the SQLite
-	 * output table and populates the replay+stmt tables.
-	 */
-	if (!stream_transform_messages(specs))
-	{
-		log_error("Transform process failed, see above for details");
-		return false;
-	}
-
-	return true;
-}
-
 
 /*
  * follow_start_catchup starts a sub-process that catches-up using the SQL
@@ -834,30 +757,28 @@ follow_start_catchup(StreamSpecs *specs)
 	 */
 	if (specs->mode == STREAM_MODE_REPLAY)
 	{
-		/* arrange to read from the transform-apply pipe */
+		/* arrange to read from the receive→apply pipe */
 		specs->stdIn = true;
 		specs->stdOut = false;
 
-		follow_assert_pipe_fd(specs->pipe_ta[0], "pipe_ta[0]");
+		follow_assert_pipe_fd(specs->pipe_rt[0], "pipe_rt[0]");
 
-		specs->in = fdopen(specs->pipe_ta[0], "r");
+		specs->in = fdopen(specs->pipe_rt[0], "r");
 
-		/* close pipe ends we're not using */
-		close_fd_or_exit(specs->pipe_rt[0]);
+		/* close the write end: apply only reads from pipe_rt */
 		close_fd_or_exit(specs->pipe_rt[1]);
-		close_fd_or_exit(specs->pipe_ta[1]);
 
 		bool success = stream_apply_replay(specs);
 
 		log_info("Apply process has terminated");
 
 		/*
-		 * pipe_ta[0] is the read end of the transform→apply pipe.  The apply
-		 * process only reads from it; transform holds and closes the write end.
+		 * pipe_rt[0] is the read end of the receive→apply pipe.  The apply
+		 * process only reads from it; receive holds and closes the write end.
 		 * This fd is never set to -1 by our code paths, so a plain close is
 		 * correct.  Use follow_close_pipe_fd as a defensive measure nonetheless.
 		 */
-		follow_close_pipe_fd(specs->pipe_ta[0], "pipe_ta[0]");
+		follow_close_pipe_fd(specs->pipe_rt[0], "pipe_rt[0]");
 
 		return success;
 	}
@@ -998,7 +919,6 @@ follow_wait_subprocesses(StreamSpecs *specs)
 {
 	FollowSubProcess *processArray[] = {
 		&(specs->prefetch),
-		&(specs->transform),
 		&(specs->catchup)
 	};
 
@@ -1152,8 +1072,16 @@ follow_wait_subprocesses(StreamSpecs *specs)
 			}
 		}
 
-		/* avoid busy looping, wait for 150ms before checking again */
-		pg_usleep(150 * 1000);
+		/*
+		 * Serve any pending follow-coordinator CLI request (no-op unless the
+		 * coordinator was started with --host).  The accept() call uses a
+		 * 100 ms timeout, which also paces this loop; add a short sleep so the
+		 * cadence stays close to the original 150 ms.
+		 */
+		(void) follow_coordinator_handle_messages(&followCoord, specs);
+
+		/* avoid busy looping */
+		pg_usleep(50 * 1000);
 	}
 
 	return success;
@@ -1169,7 +1097,6 @@ follow_terminate_subprocesses(StreamSpecs *specs)
 {
 	FollowSubProcess *processArray[] = {
 		&(specs->prefetch),
-		&(specs->transform),
 		&(specs->catchup)
 	};
 	int count = sizeof(processArray) / sizeof(processArray[0]);

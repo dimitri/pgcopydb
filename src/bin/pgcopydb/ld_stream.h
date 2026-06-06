@@ -400,15 +400,14 @@ typedef struct StreamContext
 	LogicalMessageMetadata previous;
 	LogicalTransactionStatement *stmt;
 
-	uint64_t transform_lsn;     /* current transform_lsn in-memory */
-
 	uint64_t maxWrittenLSN;     /* max LSN written so far to the JSON files */
 
 	uint64_t lastWriteTime;
 
 	/* transform needs some catalog lookups (pkey, type oid) */
 	DatabaseCatalog *sourceDB;
-	DatabaseCatalog *replayDB;
+	DatabaseCatalog *outputDB;   /* output.db — receive writes, apply reads */
+	DatabaseCatalog *replayDB;   /* replay.db — apply writes exclusively */
 
 	/* hash table acts as a cache for tables with generated columns */
 	GeneratedColumnsCache *generatedColumnsCache;
@@ -449,6 +448,31 @@ typedef struct StreamContext
 	 * inserting into the SQLite output table.
 	 */
 	uint32_t currentXid;
+
+	/*
+	 * Back-pointer to the owning StreamSpecs so that streamCloseFile can
+	 * send the lifecycle pipe signal when endpos is reached.
+	 */
+	struct StreamSpecs *specs;
+
+	/*
+	 * Set by ld_store_iter_output when the pending_xid path detects that
+	 * receive has finished but the open transaction has no COMMIT in the
+	 * output table — i.e. endpos fell mid-transaction.
+	 *
+	 * stream_transform_messages checks this flag after each ld_store_iter_output
+	 * call and exits cleanly without advancing transform_lsn to endpos.
+	 */
+	bool midTxnEndpos;
+
+	/*
+	 * In-memory apply pipeline state owned by the apply driver loop
+	 * (stream_apply_replaydb).  The inline-transform hook updates these fields
+	 * as it writes each complete transaction to replayDB, so the driver can
+	 * detect transform-stage progress by snapshotting and comparing.  NULL
+	 * when there is no driver (e.g. the stdout/file apply path).
+	 */
+	struct PipelineStateEntry *applyState;
 } StreamContext;
 
 
@@ -575,14 +599,14 @@ struct StreamSpecs
 	bool resume;
 	bool logSQL;
 
-	/* subprocess management */
+	/* subprocess management: receive (prefetch) and apply (catchup) */
 	FollowSubProcess prefetch;
-	FollowSubProcess transform;
 	FollowSubProcess catchup;
 
-	/* transform needs some catalog lookups (pkey, type oid) */
+	/* catalog handles: outputDB owned by receive, replayDB owned by apply */
 	DatabaseCatalog *sourceDB;
-	DatabaseCatalog *replayDB;
+	DatabaseCatalog *outputDB;   /* output.db — receive writes, apply reads */
+	DatabaseCatalog *replayDB;   /* replay.db — apply writes exclusively */
 
 	PGSQL transformPGSQL;
 
@@ -592,13 +616,32 @@ struct StreamSpecs
 	bool stdIn;                 /* read from stdin? */
 	bool stdOut;                /* (also) write to stdout? */
 
-	/* STREAM_MODE_REPLAY (and other operations) requires two unix pipes */
-	int pipe_rt[2];     /* receive-transform pipe */
-	int pipe_ta[2];     /* transform-apply pipe */
+	/* STREAM_MODE_REPLAY (and other operations) requires one unix pipe */
+	int pipe_rt[2];     /* receive→apply lifecycle signal pipe */
 
 	/* The previous pipe ends are connected to in/out for the sub-processes */
 	FILE *in;
 	FILE *out;
+
+	/*
+	 * Out-of-band lifecycle signal: upstream process writes its final LSN as
+	 * an 8-byte big-endian value to the pipe and then closes the write end.
+	 * Downstream reads it once; EOF (n==0) means upstream crashed.
+	 *
+	 * upstream_done_lsn == InvalidXLogRecPtr means "not yet received".
+	 * upstream_done     == true once the signal has been read.
+	 */
+	uint64_t upstream_done_lsn;   /* final LSN signalled by upstream */
+	bool     upstream_done;       /* have we received the upstream signal? */
+
+	/*
+	 * Optional follow coordinator TCP endpoint (--host/--port).  When coordHost
+	 * is non-empty the follow supervisor starts a TCP coordinator listening on
+	 * coordHost:coordPort, letting "pgcopydb stream sentinel" CLI clients
+	 * read/write the sentinel over TCP instead of opening the SQLite catalog.
+	 */
+	char     coordHost[256];
+	int      coordPort;
 };
 
 /* ld_stream.c */
@@ -610,6 +653,7 @@ bool stream_init_specs(StreamSpecs *specs,
 					   uint64_t endpos,
 					   LogicalStreamMode mode,
 					   DatabaseCatalog *sourceDB,
+					   DatabaseCatalog *outputDB,
 					   DatabaseCatalog *replayDB,
 					   bool stdIn,
 					   bool stdOut,
@@ -620,11 +664,14 @@ bool stream_init_for_mode(StreamSpecs *specs, LogicalStreamMode mode);
 char * LogicalStreamModeToString(LogicalStreamMode mode);
 
 bool stream_check_in_out(StreamSpecs *specs);
+
+/* Lifecycle pipe signals (out-of-band, 8-byte big-endian LSN) */
+bool stream_signal_upstream_done(int pipe_write_fd, uint64_t done_lsn);
+bool stream_recv_upstream_done(StreamSpecs *specs, int pipe_read_fd);
 bool stream_init_context(StreamSpecs *specs);
 bool stream_init_timeline(StreamSpecs *specs, LogicalStreamClient *stream);
 
 bool startLogicalStreaming(StreamSpecs *specs);
-bool stream_receive_from_file(StreamSpecs *specs, const char *filename);
 bool streamCheckResumePosition(StreamSpecs *specs);
 
 bool streamWrite(LogicalStreamContext *context);
@@ -677,21 +724,17 @@ bool StreamActionIsInternal(StreamAction action);
 
 
 /* ld_transform.c */
-bool stream_transform_messages(StreamSpecs *specs);
-bool stream_transform_cdc_file(StreamSpecs *specs);
+/* stream_transform_messages: removed (inline transform now done by apply) */
+/* stream_transform_cdc_file: removed (was outer loop driver)             */
+/* stream_transform_stream:   removed (REPLAY mode pipe path removed)     */
+/* stream_transform_resume:   removed                                     */
 
 bool stream_transform_write_transaction(StreamSpecs *specs);
 bool stream_transform_write_replay_stmt(StreamSpecs *specs);
 bool stream_transform_write_replay_txn(StreamSpecs *specs);
 
-bool stream_transform_write_message(StreamContext *privateContext,
-									uint64_t *currentMsgIndex);
-
 bool stream_transform_context_init(StreamSpecs *specs);
-bool stream_transform_stream(StreamSpecs *specs);
-bool stream_transform_resume(StreamSpecs *specs);
-bool stream_transform_line(void *ctx, const char *line, bool *stop);
-
+bool stream_transform_from_outputdb(StreamSpecs *specs, uint64_t previousLSN);
 
 bool stream_transform_message(StreamContext *privateContext,
 							  char *message);
@@ -804,7 +847,6 @@ bool follow_prepare_mode_switch(StreamSpecs *streamSpecs,
 bool follow_start_subprocess(StreamSpecs *specs, FollowSubProcess *subprocess);
 
 bool follow_start_prefetch(StreamSpecs *specs);
-bool follow_start_transform(StreamSpecs *specs);
 bool follow_start_catchup(StreamSpecs *specs);
 
 void follow_exit_early(StreamSpecs *specs);

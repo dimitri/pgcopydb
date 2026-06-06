@@ -463,9 +463,10 @@ copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 		return false;
 	}
 
-	/* initialize catalog timeline history and create a replayDB SQLite file */
+	/* initialize catalog timeline history and create the output.db SQLite file */
 	specs.paths = copySpecs->cfPaths.cdc;
 	specs.sourceDB = &(copySpecs->catalogs.source);
+	specs.outputDB = &(copySpecs->catalogs.output);
 	specs.replayDB = &(copySpecs->catalogs.replay);
 	specs.private.startpos = slot->lsn;
 

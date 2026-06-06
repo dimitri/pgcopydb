@@ -200,7 +200,6 @@ static char *sourceDBcreateDDLs[] = {
 	"  id integer primary key check (id = 1), "
 	"  startpos pg_lsn, endpos pg_lsn, apply bool, "
 	"  write_lsn pg_lsn, flush_lsn pg_lsn, "
-	"  transform_lsn pg_lsn, "
 	"  replay_lsn pg_lsn)",
 
 	"create table cdc_files("
@@ -212,7 +211,7 @@ static char *sourceDBcreateDDLs[] = {
 	"  tli integer primary key, startpos pg_lsn, endpos pg_lsn)",
 
 	/*
-	 * pipeline_state — one row per CDC process (receive / transform / apply).
+	 * pipeline_state — one row per CDC process (receive / apply).
 	 *
 	 * Written at the start and end of every run and kept current at every
 	 * transaction boundary (piggybacking on sentinel_sync calls).  Used on
@@ -223,7 +222,7 @@ static char *sourceDBcreateDDLs[] = {
 	 * last_txn_end_lsn is NULL while the transaction is still open.
 	 */
 	"create table pipeline_state("
-	"  process_name      text     primary key, "  /* 'receive'|'transform'|'apply' */
+	"  process_name      text     primary key, "  /* 'receive'|'apply' */
 	"  pid               integer, "
 	"  run_state         text     not null, "     /* 'running'|'done'|'error' */
 	"  run_start_lsn     pg_lsn   not null, "
@@ -459,7 +458,11 @@ static char *targetDBcreateDDLs[] = {
 };
 
 
-static char *replayDBcreateDDLs[] = {
+/*
+ * output.db schema — written exclusively by receive.
+ * Apply opens this file read-only to iterate output rows (inline transform).
+ */
+static char *outputDBcreateDDLs[] = {
 	"create table output("
 	"  id integer primary key, "
 	"  action text, xid integer, lsn integer, timestamp text, "
@@ -467,7 +470,13 @@ static char *replayDBcreateDDLs[] = {
 
 	"create unique index o_a_lsn on output(action, lsn)",
 	"create index o_a_xid on output(action, xid)",
+};
 
+/*
+ * replay.db schema — written exclusively by apply.
+ * stream catchup reads from this file.
+ */
+static char *replayDBcreateDDLs[] = {
 	"create table stmt(hash text primary key, sql text)",
 	"create unique index stmt_hash on stmt(hash)",
 
@@ -548,9 +557,13 @@ static char *targetDBdropDDLs[] = {
 };
 
 
+static char *outputDBdropDDLs[] = {
+	"drop table if exists output"
+};
+
 static char *replayDBdropDDLs[] = {
-	"drop table if exists output",
-	"drop table if exists replay"
+	"drop table if exists replay",
+	"drop table if exists stmt"
 };
 
 
@@ -1157,6 +1170,13 @@ catalog_create_schema(DatabaseCatalog *catalog)
 			break;
 		}
 
+		case DATABASE_CATALOG_TYPE_OUTPUT:
+		{
+			createDDLs = outputDBcreateDDLs;
+			count = sizeof(outputDBcreateDDLs) / sizeof(outputDBcreateDDLs[0]);
+			break;
+		}
+
 		default:
 		{
 			log_error("BUG: called catalog_init for unknown type %d",
@@ -1224,6 +1244,13 @@ catalog_drop_schema(DatabaseCatalog *catalog)
 			break;
 		}
 
+		case DATABASE_CATALOG_TYPE_OUTPUT:
+		{
+			dropDDLs = outputDBdropDDLs;
+			count = sizeof(outputDBdropDDLs) / sizeof(outputDBdropDDLs[0]);
+			break;
+		}
+
 		default:
 		{
 			log_error("BUG: called catalog_drop_schema for unknown type %d",
@@ -1283,7 +1310,7 @@ catalog_begin(DatabaseCatalog *catalog, bool immediate)
 	{
 		ConnectionRetryPolicy retryPolicy = { 0 };
 
-		int maxT = 30;           /* 30s: large enough for a WAL checkpoint */
+		int maxT = 5;            /* 5s */
 		int maxSleepTime = 350;  /* 350ms */
 		int baseSleepTime = 10;  /* 10ms */
 
@@ -2989,6 +3016,15 @@ catalog_count_objects(DatabaseCatalog *catalog, CatalogCounts *count)
 				"       0 as ext,"
 				"       0 as colls,"
 				"       0 as pg_depend";
+			break;
+		}
+
+		case DATABASE_CATALOG_TYPE_REPLAY:
+		case DATABASE_CATALOG_TYPE_OUTPUT:
+		{
+			/* CDC databases don't have schema objects to count */
+			sql =
+				"select 0,0,0,0,0,0,0,0,0,0";
 			break;
 		}
 
@@ -8586,7 +8622,7 @@ catalog_sql_step(SQLiteQuery *query)
 	{
 		ConnectionRetryPolicy retryPolicy = { 0 };
 
-		int maxT = 30;           /* 30s: large enough for a WAL checkpoint */
+		int maxT = 5;            /* 5s */
 		int maxSleepTime = 350;  /* 350ms */
 		int baseSleepTime = 10;  /* 10ms */
 

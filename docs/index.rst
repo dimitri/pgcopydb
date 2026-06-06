@@ -102,6 +102,7 @@ Change Data Capture
    features
    concurrency
    resume
+   logical-decoding
 
 .. toctree::
    :hidden:

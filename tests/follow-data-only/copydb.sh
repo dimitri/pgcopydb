@@ -65,11 +65,11 @@ pgcopydb follow --plugin test_decoding --notice
 kill -TERM ${COPROC_PID}
 wait ${COPROC_PID}
 
-# In the SQLite design, all SQL statements are stored in the replay table.
-# Verify that the transformed SQL contains the quoted null literals.
-db=$(find ${TMPDIR}/cdc/pgcopydb -name "*.db" -type f | head -1)
+# In the SQLite design, the stmt/replay tables live in the *-replay.db
+# (the *-output.db only holds the output table).
+db=$(find ${TMPDIR}/cdc/pgcopydb -name "*-replay.db" -type f | head -1)
 if [ -z "${db}" ]; then
-  echo "Error: No CDC database file found in ${TMPDIR}/cdc/pgcopydb/" >&2
+  echo "Error: No CDC replay database file found in ${TMPDIR}/cdc/pgcopydb/" >&2
   exit 1
 fi
 sqlite3 "${db}" <<EOF

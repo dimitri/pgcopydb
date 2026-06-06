@@ -48,6 +48,7 @@ typedef struct ReplayDBStmt
 } ReplayDBStmt;
 
 
+bool ld_store_open_outputdb(StreamSpecs *specs);
 bool ld_store_open_replaydb(StreamSpecs *specs);
 
 bool ld_store_set_current_cdc_filename(StreamSpecs *specs);
@@ -101,6 +102,19 @@ typedef struct ReplayDBOutputIterator
 
 	uint64_t transform_lsn;
 	uint64_t endpos;
+
+	/*
+	 * pending_xid is set when the init step found a BEGIN for xid N in the
+	 * output table but no matching COMMIT/ROLLBACK yet.  The outer function
+	 * (ld_store_iter_output) checks this to decide between two situations:
+	 *
+	 *   pending_xid == 0  — no rows at all; upstream is still producing.
+	 *   pending_xid != 0  — a BEGIN exists but COMMIT has not arrived yet.
+	 *     → receive still running: outer loop select() will wait.
+	 *     → receive finished (pipeline_state/pipe): advance transform_lsn
+	 *       to the receive run_end_lsn so the outer loop exits cleanly.
+	 */
+	uint32_t pending_xid;
 } ReplayDBOutputIterator;
 
 bool ld_store_iter_output_init(ReplayDBOutputIterator *iter);

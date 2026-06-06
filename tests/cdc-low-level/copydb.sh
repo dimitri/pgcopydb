@@ -40,11 +40,12 @@ wait ${COPROC_PID}
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 
 # grab the current LSN, it's going to be our streaming end position
-lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_lsn()'`
+lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_flush_lsn()'`
 
 #
-# Receive CDC messages into the SQLite replayDB (output table) and transform
-# them to replay+stmt tables.
+# Receive CDC messages into the SQLite outputDB (output table).  In the
+# 2-process model the receive step only fills the output table; the transform
+# into stmt+replay happens later, inside the apply (catchup) process.
 #
 pgcopydb stream prefetch --debug --resume --endpos "${lsn}"
 
@@ -52,33 +53,35 @@ SHAREDIR=/var/lib/postgres/.local/share/pgcopydb
 
 ls -la ${SHAREDIR}/
 
-DBFILE=$(ls ${SHAREDIR}/*.db | head -1)
+OUTPUTDB=$(find ${SHAREDIR} -maxdepth 1 -name '*-output.db' -type f | head -1)
 
 #
-# Validate SQL templates written by the transform step.
+# Validate the SQLite output table has rows.
 #
-sqlite3 -init /dev/null -list -noheader ${DBFILE} \
-  "select s.sql from stmt s join replay r on r.stmt_hash = s.hash where r.action not in ('B','C','R','K','X','E') group by s.hash order by min(r.id)" \
-  > /tmp/stmt-actual.sql
-diff /usr/src/pgcopydb/stmt.sql /tmp/stmt-actual.sql
-
-#
-# Validate the SQLite output table has rows and the replay table was populated.
-#
-sqlite3 ${DBFILE} <<'EOF'
-.echo on
-select count(*) as output_rows from output;
-select count(*) as replay_rows from replay;
-EOF
+sqlite3 ${OUTPUTDB} "select count(*) as output_rows from output;"
 
 # Idempotency: prefetch again should be a no-op
 pgcopydb stream prefetch --debug --resume --endpos "${lsn}"
 
 #
-# Apply the CDC changes to the target database
+# Apply the CDC changes to the target database.  The apply process performs the
+# inline transform (output -> stmt+replay), creating the replayDB.
 #
 pgcopydb stream sentinel set apply
 pgcopydb stream catchup --resume --endpos "${lsn}" -vv
+
+#
+# replayDB now exists: validate the SQL templates written by the transform
+# step and that the replay table was populated.
+#
+REPLAYDB=$(find ${SHAREDIR} -maxdepth 1 -name '*-replay.db' -type f | head -1)
+
+sqlite3 -init /dev/null -list -noheader ${REPLAYDB} \
+  "select s.sql from stmt s join replay r on r.stmt_hash = s.hash where r.action not in ('B','C','R','K','X','E') group by s.hash order by min(r.id)" \
+  > /tmp/stmt-actual.sql
+diff /usr/src/pgcopydb/stmt.sql /tmp/stmt-actual.sql
+
+sqlite3 ${REPLAYDB} "select count(*) as replay_rows from replay;"
 
 # Applying again must be idempotent
 pgcopydb stream catchup --resume --endpos "${lsn}" -vv
@@ -93,25 +96,16 @@ echo "source actor count: ${src_count}, target actor count: ${tgt_count}"
 test "${src_count}" -eq "${tgt_count}"
 
 #
-# Live-streaming tests using Unix pipes
-# (stream receive → stream transform → stream apply via pipes)
-#
-psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
-
-lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_lsn()'`
-
-pgcopydb stream receive --debug --resume --endpos "${lsn}" --to-stdout \
- | pgcopydb stream transform --debug --endpos "${lsn}" - -             \
- | pgcopydb stream apply --debug --resume --endpos "${lsn}" -
-
-#
-# Replay mode (combined receive+transform+apply in a single service)
+# Live-streaming via 'stream replay' (combined receive + inline transform +
+# apply in a single service).  The standalone 'stream transform' command and
+# the receive|transform|apply pipe were removed in the 2-process SQLite model;
+# 'stream replay' is the supported live-streaming path.
 #
 for i in `seq 2`
 do
     psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 
-    lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_lsn()'`
+    lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_flush_lsn()'`
 
     pgcopydb stream replay --verbose --resume --endpos "${lsn}"
 done

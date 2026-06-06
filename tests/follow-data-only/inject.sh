@@ -14,32 +14,24 @@ set -e
 pgcopydb ping
 
 #
-# Only start injecting DML traffic on the source database when pgcopydb
-# follow command has been started. We know that by querying the SQLite
-# catalogs database, where the prefetch/transform/catchup sub-processes
-# register themselves in the process table.
+# Follow coordinator TCP endpoint (from docker-compose). We remote-control the
+# sentinel over TCP, so this container does not share the SQLite catalog volume.
 #
-dbfile=$(find ${TMPDIR}/pgcopydb/schema -name "source.db" -type f 2>/dev/null | head -1)
+HP="--host ${PGCOPYDB_HOST} --port ${PGCOPYDB_PORT}"
 
-until [ -n "${dbfile}" ] && [ -s "${dbfile}" ]
+#
+# Only start injecting DML once the pgcopydb follow command is up and streaming:
+# that is exactly when its TCP coordinator starts answering.  Poll it over TCP
+# (this replaces the old shared-volume `process` table readiness check).
+#
+until pgcopydb stream sentinel get ${HP} >/dev/null 2>&1
 do
-    dbfile=$(find ${TMPDIR}/pgcopydb/schema -name "source.db" -type f 2>/dev/null | head -1)
-    sleep 1
-done
-
-sql="select pid from process where ps_type = 'receive'"
-pidf=/tmp/receive.pid
-
-while [ ! -s ${pidf} ]
-do
-    # sometimes we have "Error: database is locked", ignore
-    sqlite3 -batch -bail -noheader "${dbfile}" "${sql}" > ${pidf} 2>/dev/null || echo error
     sleep 1
 done
 
 # allow replaying changes now that pgcopydb follow command is running
 echo "Setting sentinel apply mode..."
-pgcopydb stream sentinel set apply || { echo "Failed to set apply mode"; exit 1; }
+pgcopydb stream sentinel set apply ${HP} || { echo "Failed to set apply mode"; exit 1; }
 
 # allow the catchup phase to finish, ensure the following data is streamed
 sleep 2
@@ -86,9 +78,9 @@ EOF
 
 # grab the current LSN, it's going to be our streaming end position
 echo "Setting endpos to current WAL position..."
-pgcopydb stream sentinel set endpos --current || { echo "Failed to set endpos"; exit 1; }
+pgcopydb stream sentinel set endpos --current ${HP} || { echo "Failed to set endpos"; exit 1; }
 echo "Final sentinel state:"
-pgcopydb stream sentinel get
+pgcopydb stream sentinel get ${HP}
 
 #
 # Becaure we're using docker compose --abort-on-container-exit make sure

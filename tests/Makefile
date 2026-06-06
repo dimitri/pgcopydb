@@ -8,10 +8,9 @@ BUILD_ARGS = --build-arg PGVERSION=$(PGVERSION)
 all: pagila pagila-multi-steps blobs unit filtering extensions \
 	 partitioned-target \
 	 cdc-wal2json cdc-test-decoding cdc-endpos-mid-txn cdc-low-level \
-	 cdc-transform-apply \
 	 cdc-replica-identity-index cdc-partitioned-target \
-	 follow-wal2json follow-9.6 follow-data-only \
-	 endpos-in-multi-wal-txn;
+	 cdc-endpos-in-multi-wal-txn \
+	 follow-wal2json follow-9.6 follow-data-only;
 
 pagila: build
 	$(MAKE) -C $@
@@ -46,9 +45,6 @@ cdc-test-decoding: build
 cdc-endpos-mid-txn: build
 	$(MAKE) -C $@
 
-cdc-transform-apply: build
-	$(MAKE) -C $@
-
 cdc-low-level: build
 	$(MAKE) -C $@
 
@@ -67,9 +63,9 @@ follow-9.6: build
 follow-data-only: build
 	$(MAKE) -C $@
 
-endpos-in-multi-wal-txn: build
+cdc-endpos-in-multi-wal-txn: build
 	$(MAKE) -C $@
-	
+
 timescaledb: build
 	$(MAKE) -C $@
 
@@ -78,6 +74,6 @@ build:
 
 .PHONY: all build
 .PHONY: pagila pagila-multi-steps blobs unit filtering partitioned-target extensions
-.PHONY: cdc-wal2json cdc-test-decoding cdc-endpos-mid-txn cdc-low-level cdc-transform-apply cdc-replica-identity-index cdc-partitioned-target
+.PHONY: cdc-wal2json cdc-test-decoding cdc-endpos-mid-txn cdc-low-level cdc-replica-identity-index cdc-partitioned-target
+.PHONY: cdc-endpos-in-multi-wal-txn
 .PHONY: follow-wal2json follow-9.6
-.PHONY: endpos-in-multi-wal-txn

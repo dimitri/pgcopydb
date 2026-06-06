@@ -73,10 +73,13 @@ pgcopydb clone
 │   ├── vacuum supervisor + N vacuum workers
 │   └── sequences reset worker
 └── follow worker  (only with --follow)
-    ├── stream receive   (ld_stream.c)
-    ├── stream transform (ld_transform.c)
-    └── stream apply     (ld_apply.c)
+    ├── stream receive   (ld_stream.c)        → writes *-output.db
+    └── stream apply     (ld_apply.c)         → inline transform (ld_transform.c)
+                                                 → *-replay.db, then apply to target
 ```
+
+(2-process CDC: the former standalone `stream transform` step is now performed
+inline by the apply process — see "CDC is a 2-process SQLite pipeline" below.)
 
 ### Key data structure
 
@@ -239,9 +242,10 @@ PGVERSION=17 make tests/pagila
 # Available suites
 pagila  pagila-multi-steps  blobs  unit  filtering  extensions
 partitioned-target  cdc-wal2json  cdc-test-decoding  cdc-endpos-mid-txn
-cdc-low-level  cdc-transform-apply  cdc-replica-identity-index
-cdc-partitioned-target  follow-wal2json  follow-9.6  follow-data-only
-endpos-in-multi-wal-txn  timescaledb  pagila-standby
+cdc-low-level  cdc-replica-identity-index
+cdc-partitioned-target  cdc-endpos-in-multi-wal-txn
+follow-wal2json  follow-9.6  follow-data-only
+timescaledb  pagila-standby
 ```
 
 ### Interactive debugging inside a test container
@@ -312,8 +316,13 @@ SELECT * FROM timings;
 # Sentinel table on source — CDC LSN tracking
 psql ${PGCOPYDB_SOURCE_PGURI} -c "SELECT * FROM pgcopydb.sentinel"
 
-# CDC intermediate stream files (JSON from WAL, SQL ready to apply)
-ls ${XDG_DATA_HOME:-/var/run/pgcopydb/cdc}/
+# CDC SQLite stores (2-process model): receive writes the *-output.db; apply
+# transforms inline and writes *-replay.db (stmt + replay tables) before
+# applying to the target. No JSON/SQL files on disk anymore.
+ls ${XDG_DATA_HOME:-/var/lib/postgres/.local/share}/pgcopydb/
+sqlite3 .../<tli>-<startlsn>-output.db "select id,action,xid,lsn from output order by id"
+sqlite3 .../<tli>-<startlsn>-replay.db \
+  "select s.sql from stmt s join replay r on r.stmt_hash=s.hash order by min(r.id)"
 ```
 
 ### Banned API check
@@ -349,6 +358,26 @@ lldb -- src/bin/pgcopydb/pgcopydb clone --debug ...
 (lldb) run
 ```
 
+**Debugging a crash in a forked CDC subprocess (receive/apply).** The
+catchup/replay pipeline forks several times (psql probes, then receive and
+apply); gdb's `follow-fork-mode` reliably lands on the wrong child, and lldb
+can't attach to the test binary on macOS. Use a post-mortem core instead:
+
+```bash
+./tests/run-test --debug <cdc-test>   # automates the steps below
+```
+
+Under the hood `--debug`: (1) sets the Docker VM `core_pattern` to an absolute
+path via a privileged helper container; (2) runs the test with
+`ulimit -c unlimited` so the crash writes a core; (3) copies the core out and
+runs `gdb -batch -ex 'bt full' -ex 'thread apply all bt'` inside a throwaway of
+the *same test image* (which has the matching shared libraries and the `-g`
+binary). The backtrace is saved to `/tmp/pgcopydb-tests/<name>/backtrace.txt`.
+
+On macOS, a native crash also leaves a symbolized report in
+`~/Library/Logs/DiagnosticReports/pgcopydb-*.ips` — useful for the no-Postgres
+stdout repro path (`pgcopydb stream apply --target -`).
+
 ---
 
 ## Non-obvious Gotchas
@@ -379,6 +408,36 @@ lldb -- src/bin/pgcopydb/pgcopydb clone --debug ...
   - `ld_transform.c`: replica identity index UPDATE/DELETE, generated column
     handling, and parameter limit check for COPY operations all have open TODOs
   - `ld_stream.c`: `WalSegSz` hardcoded — tracked for removal
+
+- **CDC is a 2-process SQLite pipeline.** `stream prefetch`/`receive` only fills
+  `*-output.db` (the `output` table); the transform into `stmt`+`replay` happens
+  inline inside `stream catchup`/`apply`, which writes `*-replay.db` and applies
+  to the target. The standalone `stream transform` command was removed. In CDC
+  tests, validate `stmt`/`replay` **after** catchup, not after prefetch.
+
+- **endpos on a commit boundary.** `pg_current_wal_flush_lsn()` returns the
+  `COMMIT.end_lsn` of the last committed batch; a transaction whose commit LSN
+  equals endpos must be fully applied. The apply driver loop dispatches
+  transform→replay each iteration and only stops when an iteration makes *no*
+  progress (tracked via an in-memory `pipeline_state` snapshot/compare), so it
+  never declares "done" while the transform just produced a transaction. Tests
+  should use `pg_current_wal_flush_lsn()` (a commit boundary), not
+  `pg_current_wal_lsn()` (may fall mid-record), for `--endpos`.
+
+- **test_decoding UPDATE/DELETE without an old-key needs `sourceDB`.** Such a
+  message (REPLICA IDENTITY DEFAULT, PK unchanged) makes the parser look up the
+  table's PK columns via `privateContext->sourceDB`; the transform context must
+  have the catalog handles set (see `stream_transform_context_init`). A NULL
+  there is a segfault that only the apply/catchup path hits (the stdout path
+  sets it via `stream_init_context`).
+
+- **Reproducing a CDC bug without live Postgres.** `pgcopydb stream apply
+  --target -` (stdout) runs the inline transform with no target connection and
+  prints SQL — handy with a captured `*-output.db` + `schema/source.db` (repoint
+  the `cdc_files` path). Caveat: it processes a single transaction and skips the
+  catchup-only paths (target connection, generated-columns cache), so it won't
+  reproduce apply-stage or multi-transaction issues; for those use
+  `run-test --debug` against the full pipeline.
 
 - **Open issues / recent changes:** `CHANGELOG.md` tracks releases.
   `git log --oneline -20` is the fastest way to see what changed recently.

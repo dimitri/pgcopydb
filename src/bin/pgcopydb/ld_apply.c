@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <sys/select.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -90,11 +91,80 @@ stream_apply_catchup(StreamSpecs *specs)
 		return true;
 	}
 
+	/*
+	 * In catchup-only mode (no live pipe from receive), read the receive
+	 * process's pipeline_state to learn where it stopped.  Use that LSN as
+	 * our endpos if the caller didn't supply one — this is how apply knows
+	 * when to stop without an ENDPOS marker in the replay table.
+	 */
+	if (specs->pipe_rt[0] < 0 && context.endpos == InvalidXLogRecPtr)
+	{
+		PipelineStateEntry rs = { 0 };
+
+		if (pipeline_state_get(specs->sourceDB, "receive", &rs) &&
+			rs.process_name[0] != '\0' &&
+			strcmp(rs.run_state, "done") == 0 &&
+			rs.run_end_lsn != InvalidXLogRecPtr)
+		{
+			context.endpos = rs.run_end_lsn;
+			log_info("Apply catchup: using receive run_end_lsn %X/%X as endpos",
+					 LSN_FORMAT_ARGS(context.endpos));
+		}
+	}
+
+	/*
+	 * Initialise the transform context once (opens target connection for
+	 * identifier quoting and prepares the generated-columns cache).
+	 * Then do an initial pass to populate replayDB from whatever outputDB
+	 * already contains (in CATCHUP mode this covers everything; in FOLLOW
+	 * mode the main loop will call stream_transform_from_outputdb() again
+	 * as more rows arrive in outputDB).
+	 */
+	if (!stream_transform_context_init(specs))
+	{
+		log_error("Failed to initialize inline transform context");
+		return false;
+	}
+
+	/*
+	 * The single apply driver loop (stream_apply_replaydb) performs the inline
+	 * transform stage itself, one dispatch per iteration, so there is no
+	 * separate pre-loop transform pass: the first iteration primes replayDB
+	 * from whatever outputDB already contains, and a mid-transaction endpos is
+	 * handled inside the loop like any other terminal condition.
+	 */
+	(void) pipeline_state_start(specs->sourceDB, "apply", context.previousLSN);
+
 	bool success = stream_apply_replaydb(specs, &context);
 
+	(void) pipeline_state_end(specs->sourceDB, "apply",
+							  context.previousLSN, success);
 	(void) stream_apply_cleanup(&context);
 
 	return success;
+}
+
+
+/* how often (in driver iterations) to checkpoint the in-memory apply state */
+#define APPLY_STATE_SYNC_EVERY 64
+
+/*
+ * stream_apply_state_progressed returns true when the in-memory apply pipeline
+ * state advanced between two snapshots — i.e. the transform stage wrote a new
+ * transaction to replayDB, or the apply stage committed one to the target.
+ * The driver uses this to avoid declaring "done" in the same iteration in
+ * which work was actually produced.
+ */
+static bool
+stream_apply_state_progressed(const PipelineStateEntry *before,
+							  const PipelineStateEntry *after)
+{
+	return before->last_xid           != after->last_xid
+		   || before->last_txn_begin_lsn  != after->last_txn_begin_lsn
+		   || before->last_txn_end_lsn    != after->last_txn_end_lsn
+		   || before->last_txn_complete   != after->last_txn_complete
+		   || before->last_txn_processed  != after->last_txn_processed
+		   || before->run_end_lsn         != after->run_end_lsn;
 }
 
 
@@ -138,6 +208,36 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 	ReplayDBStmt s = { 0 };
 	bool lock_held = false;
 
+	/*
+	 * pipe_rt[0] carries the out-of-band "receive done" lifecycle signal.
+	 * When receive finishes it writes the final LSN and closes the write end.
+	 * We select() on this fd while waiting for more replay rows, so we wake
+	 * up immediately rather than sleeping 500 ms.
+	 *
+	 * In catchup-only mode (no live pipe) pipe_rd == -1 and we fall back to
+	 * the sentinel.endpos / previousLSN comparison.
+	 */
+	int pipe_rd = (specs->pipe_rt[0] > 0) ? specs->pipe_rt[0] : -1;
+
+	/*
+	 * In-memory apply pipeline state.  Both data-processing stages update it as
+	 * they work: the inline-transform hook (via specs->private.applyState) when
+	 * it writes a complete transaction to replayDB, and the apply stage below
+	 * when it commits one to the target.  Each iteration snapshots it before
+	 * dispatching work and compares afterwards to decide progress.  It is
+	 * checkpointed to sourceDB every APPLY_STATE_SYNC_EVERY iterations and once
+	 * more at end of processing.
+	 */
+	PipelineStateEntry current = { 0 };
+	strlcpy(current.process_name, "apply", sizeof(current.process_name));
+	current.run_start_lsn    = context->previousLSN;
+	current.last_txn_end_lsn = context->previousLSN;
+	current.run_end_lsn      = context->previousLSN;
+
+	specs->private.applyState = &current;
+
+	int syncCounter = 0;
+
 	for (;;)
 	{
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
@@ -146,10 +246,41 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 			break;
 		}
 
+		/* ── check for upstream-done signal ──────────────────────────── */
+		if (!specs->upstream_done && pipe_rd >= 0)
+		{
+			fd_set rfds;
+			FD_ZERO(&rfds);
+			FD_SET(pipe_rd, &rfds);
+			struct timeval tv = { .tv_sec = 0, .tv_usec = 100 * 1000 };
+
+			int nready = select(pipe_rd + 1, &rfds, NULL, NULL, &tv);
+			if (nready < 0 && errno != EINTR)
+			{
+				log_error("apply select() on pipe: %m");
+				return false;
+			}
+			if (nready > 0 && FD_ISSET(pipe_rd, &rfds))
+			{
+				(void) stream_recv_upstream_done(specs, pipe_rd);
+				pipe_rd = -1;
+
+				/* use signal LSN as our endpos if not already set */
+				if (context->endpos == InvalidXLogRecPtr &&
+					specs->upstream_done_lsn != InvalidXLogRecPtr)
+				{
+					context->endpos = specs->upstream_done_lsn;
+					log_info("Apply endpos set from receive signal: %X/%X",
+							 LSN_FORMAT_ARGS(context->endpos));
+				}
+			}
+		}
+
 		/*
 		 * Lock the replayDB only while querying for the next event.
-		 * This allows transform to write new rows while apply is sleeping,
-		 * avoiding the deadlock where apply would hold the lock while sleeping.
+		 * This allows the inline transform (ld_store_iter_output in the
+		 * "no rows" path above) to write new rows without contention,
+		 * avoiding deadlock while apply sleeps waiting for more data.
 		 */
 		if (!semaphore_lock(&(replayDB->sema)))
 		{
@@ -168,26 +299,60 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 		if (s.action == STREAM_ACTION_UNKNOWN)
 		{
 			/*
-			 * No more rows available in replayDB. Release the lock so that
-			 * transform can write new rows, then wait and retry.
-			 *
-			 * The sentinel tracks our position (previousLSN), so we can safely
-			 * release the lock and reacquire it later.
+			 * No more rows available in replayDB.  Release the lock so that
+			 * the inline transform can write new rows, then attempt to
+			 * transform more data from outputDB into replayDB.
 			 */
 			semaphore_unlock(&(replayDB->sema));
 			lock_held = false;
 
 			/*
-			 * Sync sentinel to check if endpos has been set or reached while
-			 * we were applying data. This doesn't require the replayDB lock.
+			 * Replay is drained.  Snapshot the in-memory apply state, then
+			 * dispatch the transform stage (outputDB -> replayDB).  The
+			 * inline-transform hook updates `current` for every complete
+			 * transaction it writes, so comparing against this snapshot tells
+			 * us whether the transform stage made progress this pass.
+			 *
+			 * The call is safe to repeat: ld_store_iter_output uses
+			 * specs->sentinel.replay_lsn as a cursor and only processes rows
+			 * newer than the last committed apply position.  Afterwards
+			 * specs->private.midTxnEndpos may be set, meaning receive finished
+			 * with an uncommitted transaction open.
 			 */
+			PipelineStateEntry before = current;
+
+			if (!stream_transform_from_outputdb(specs, context->previousLSN))
+			{
+				log_warn("Failed to transform from outputDB, will retry");
+			}
+
+			if (specs->private.midTxnEndpos)
+			{
+				log_notice("Apply: inline transform detected mid-transaction "
+						   "endpos — endpos %X/%X fell inside an uncommitted "
+						   "transaction; stopping at last commit %X/%X "
+						   "(replay_lsn stays at last commit boundary)",
+						   LSN_FORMAT_ARGS(context->endpos),
+						   LSN_FORMAT_ARGS(context->previousLSN));
+
+				/*
+				 * Do NOT advance previousLSN to endpos: endpos is inside
+				 * an uncommitted transaction and has no backing Postgres
+				 * COMMIT.  Leave replay_lsn at the last real commit.
+				 * follow_reached_endpos() detects completion via
+				 * pipeline_state["apply"].run_state = 'done'.
+				 */
+				context->reachedEndPos = true;
+				(void) stream_apply_sync_sentinel(context, false);
+				break;
+			}
+
 			if (!stream_apply_sync_sentinel(context, false))
 			{
 				log_warn("Failed to sync sentinel when caught up with replayDB");
-				/* continue anyway, don't fail hard */
 			}
 
-			/* Check if endpos has been reached */
+			/* Exit if endpos has been reached via previousLSN */
 			if (context->endpos != InvalidXLogRecPtr &&
 				context->endpos <= context->previousLSN)
 			{
@@ -199,16 +364,70 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 			}
 
 			/*
-			 * We are caught up with the transform process, but endpos has not
-			 * been reached. Wait briefly for transform to produce more data,
-			 * then loop back to query again. This allows transform to write
-			 * while we're sleeping.
+			 * Driver invariant: if the transform stage produced new work this
+			 * pass, loop back and apply it before deciding we are done.  This
+			 * is precisely what prevents declaring "done" in the same
+			 * iteration in which transform wrote a fully-committed transaction
+			 * to replayDB (the bug that dropped the last transaction(s) when
+			 * endpos landed on a commit boundary).
 			 */
-			log_debug("Apply caught up at LSN %X/%X, endpos %s, waiting for more data",
-					  LSN_FORMAT_ARGS(context->previousLSN),
-					  context->endpos == InvalidXLogRecPtr ? "not set" : "ahead");
+			if (stream_apply_state_progressed(&before, &current))
+			{
+				/* checkpoint progress to sourceDB once in a while */
+				if ((++syncCounter % APPLY_STATE_SYNC_EVERY) == 0)
+				{
+					(void) pipeline_state_sync(specs->sourceDB, &current);
+				}
 
-			pg_usleep(500 * 1000);  /* 500ms - long enough for transform to batch work */
+				continue;
+			}
+
+			/*
+			 * No new work from the transform stage.  If receive has finished
+			 * there is nothing left to do: everything up to the last committed
+			 * transaction boundary at or before endpos has been applied.
+			 *
+			 * In FOLLOW mode the upstream_done flag signals receive completion;
+			 * in CATCHUP mode (no pipe) consult receive's pipeline_state row.
+			 */
+			if (context->endpos != InvalidXLogRecPtr)
+			{
+				bool receive_done = specs->upstream_done;
+
+				if (!receive_done && pipe_rd < 0)
+				{
+					/* Catchup mode: consult the durable pipeline_state record */
+					PipelineStateEntry ts = { 0 };
+
+					if (pipeline_state_get(specs->sourceDB,
+										   "receive", &ts) &&
+						ts.process_name[0] != '\0' &&
+						strcmp(ts.run_state, "done") == 0)
+					{
+						receive_done = true;
+					}
+				}
+
+				if (receive_done)
+				{
+					log_notice("Apply: receive done and no more complete "
+							   "transactions to transform — stopping at last "
+							   "commit %X/%X",
+							   LSN_FORMAT_ARGS(context->previousLSN));
+
+					context->reachedEndPos = true;
+					(void) stream_apply_sync_sentinel(context, false);
+					break;
+				}
+			}
+
+			/*
+			 * Not caught up yet.  In pipe mode the select() ceiling gives
+			 * ≤100 ms latency; in catchup-only mode sleep briefly.
+			 */
+			if (pipe_rd < 0 && !specs->upstream_done)
+				pg_usleep(100 * 1000);  /* 100 ms */
+
 			continue;
 		}
 
@@ -246,18 +465,22 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 				context->reachedEndPos = true;
 
 				log_notice("Apply reached end position %X/%X before "
-						   "xid %u beginLSN %X/%X — stopping",
+						   "xid %u beginLSN %X/%X — stopping at "
+						   "last commit %X/%X",
 						   LSN_FORMAT_ARGS(context->endpos),
 						   xid,
-						   LSN_FORMAT_ARGS(beginLSN));
+						   LSN_FORMAT_ARGS(beginLSN),
+						   LSN_FORMAT_ARGS(context->previousLSN));
 
 				/*
-				 * Advance previousLSN to endpos so that replay_lsn reaches
-				 * endpos in the sentinel.  Without this, follow_reached_endpos
-				 * compares replay_lsn (last COMMIT) against endpos and finds
-				 * them unequal — causing an infinite restart loop.
+				 * Do NOT advance previousLSN to endpos.  endpos is between
+				 * two transactions and has no backing Postgres COMMIT.
+				 * Leave replay_lsn at the last real commit so the Postgres
+				 * origin position remains accurate.
+				 *
+				 * follow_reached_endpos() detects this case via its secondary
+				 * pipeline_state check (both transform and apply 'done').
 				 */
-				context->previousLSN = context->endpos;
 				(void) stream_apply_sync_sentinel(context, false);
 				break;
 			}
@@ -290,12 +513,25 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 						   LSN_FORMAT_ARGS(commitLSN));
 			}
 
+			/* Record (in-memory) that a transaction is about to be applied. */
+			current.last_xid           = xid;
+			current.last_txn_begin_lsn = beginLSN;
+			current.last_txn_end_lsn   = InvalidXLogRecPtr;
+			current.last_txn_complete  = false;
+			current.last_txn_processed = false;
+
 			if (!stream_apply_transaction(context, xid, begin_id, commitLSN))
 			{
 				/* errors have already been logged */
 				success = false;
 				break;
 			}
+
+			/* Transaction applied to target: record completion in-memory. */
+			current.last_txn_end_lsn   = commitLSN;
+			current.last_txn_complete  = true;
+			current.last_txn_processed = true;
+			current.run_end_lsn        = context->previousLSN;
 
 			/* After commit: check if endpos has been reached. */
 			if (context->endpos != InvalidXLogRecPtr &&
@@ -319,8 +555,8 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 		else
 		{
 			/*
-			 * Non-transactional event: KEEPALIVE or ENDPOS.
-			 * Delegate to stream_apply_sql() which handles both.
+			 * Non-transactional event: KEEPALIVE only.
+			 * ENDPOS rows no longer appear in the replay table.
 			 * SWITCH is no longer emitted by the pipeline.
 			 */
 			LogicalMessageMetadata metadata = { 0 };
@@ -354,6 +590,9 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 							 "will retry on next iteration",
 							 LSN_FORMAT_ARGS(context->previousLSN));
 				}
+
+				/* record progress in the in-memory apply state */
+				current.run_end_lsn = context->previousLSN;
 			}
 
 			if (context->reachedEndPos)
@@ -374,6 +613,10 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 	{
 		(void) semaphore_unlock(&(replayDB->sema));
 	}
+
+	/* enforce a final durable checkpoint of the in-memory apply state */
+	(void) pipeline_state_sync(specs->sourceDB, &current);
+	specs->private.applyState = NULL;
 
 	return success;
 }
@@ -554,6 +797,11 @@ stream_apply_transaction(StreamApplyContext *context,
 				 xid, LSN_FORMAT_ARGS(commitLSN));
 	}
 
+	/*
+	 * The driver loop (stream_apply_replaydb) records completion of this
+	 * transaction in its in-memory pipeline state once we return, and
+	 * checkpoints it to sourceDB periodically and at end of processing.
+	 */
 	return true;
 }
 
@@ -750,6 +998,12 @@ stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
 	{
 		log_notice("Apply mode is still disabled, quitting now");
 		return true;
+	}
+
+	if (!ld_store_open_outputdb(specs))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	if (!ld_store_open_replaydb(specs))

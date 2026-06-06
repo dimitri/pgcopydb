@@ -21,6 +21,12 @@ typedef struct {
 /* Get service endpoint from environment variables */
 ServiceEndpoint ld_service_get_endpoint(void);
 
+/*
+ * Build a service endpoint from an explicit host/port (the --host/--port CLI
+ * options).  Enabled when host is non-empty; port defaults to 5442 when 0.
+ */
+ServiceEndpoint ld_service_endpoint(const char *host, int port);
+
 /* Connect to service and send command, get response */
 bool ld_service_send_command(ServiceEndpoint endpoint,
                              IPCMessage *request,
