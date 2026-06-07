@@ -93,6 +93,9 @@ typedef struct CopyDBOptions
 	/* pgcopydb stream receive|transform|apply --endpos %X%X */
 	uint64_t endpos;
 
+	/* pgcopydb stream receive --max-replaydb-size (0 = use default 1 GiB) */
+	uint64_t maxReplayDBSize;
+
 	char filterFileName[MAXPGPATH];
 	char requirementsFileName[MAXPGPATH];
 

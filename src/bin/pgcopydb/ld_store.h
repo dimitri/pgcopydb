@@ -71,6 +71,9 @@ bool ld_store_lookup_output_xid_end(DatabaseCatalog *catalog,
 bool ld_store_output_fetch(SQLiteQuery *query);
 
 bool ld_store_insert_cdc_filename(StreamSpecs *specs);
+bool ld_store_close_outputdb_cdc(StreamSpecs *specs, uint64_t endpos_lsn);
+bool ld_store_rotate_outputdb(StreamSpecs *specs, uint64_t commit_lsn);
+bool ld_store_advance_cdc_files(StreamSpecs *specs, bool *advanced);
 
 bool ld_store_insert_timeline_history(DatabaseCatalog *catalog,
 									  uint32_t tli,

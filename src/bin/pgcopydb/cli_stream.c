@@ -21,6 +21,7 @@
 #include "ld_store.h"
 #include "ld_stream.h"
 #include "log.h"
+#include "parsing_utils.h"
 #include "pgcmd.h"
 #include "pgsql.h"
 #include "progress.h"
@@ -91,8 +92,9 @@ static CommandLine stream_prefetch_command =
 		"  --restart        Allow restarting when temp files exist already\n"
 		"  --resume         Allow resuming operations after a failure\n"
 		"  --not-consistent Allow taking a new snapshot on the source database\n"
-		"  --slot-name      Stream changes recorded by this slot\n"
-		"  --endpos         LSN position where to stop receiving changes",
+		"  --slot-name           Stream changes recorded by this slot\n"
+		"  --endpos              LSN position where to stop receiving changes\n"
+		"  --max-replaydb-size   Rotate CDC files at this size (default 1GB)",
 		cli_stream_getopts,
 		cli_stream_prefetch);
 
@@ -101,15 +103,16 @@ static CommandLine stream_catchup_command =
 		"catchup",
 		"Transform and apply prefetched changes from the SQLite CDC store to the target",
 		"",
-		"  --source         Postgres URI to the source database\n"
-		"  --target         Postgres URI to the target database\n"
-		"  --dir            Work directory to use\n"
-		"  --restart        Allow restarting when temp files exist already\n"
-		"  --resume         Allow resuming operations after a failure\n"
-		"  --not-consistent Allow taking a new snapshot on the source database\n"
-		"  --slot-name      Stream changes recorded by this slot\n"
-		"  --endpos         LSN position where to stop receiving changes\n"
-		"  --origin         Name of the Postgres replication origin\n",
+		"  --source              Postgres URI to the source database\n"
+		"  --target              Postgres URI to the target database\n"
+		"  --dir                 Work directory to use\n"
+		"  --restart             Allow restarting when temp files exist already\n"
+		"  --resume              Allow resuming operations after a failure\n"
+		"  --not-consistent      Allow taking a new snapshot on the source database\n"
+		"  --slot-name           Stream changes recorded by this slot\n"
+		"  --endpos              LSN position where to stop receiving changes\n"
+		"  --max-replaydb-size   Rotate CDC files at this size (default 1GB)\n"
+		"  --origin              Name of the Postgres replication origin\n",
 		cli_stream_getopts,
 		cli_stream_catchup);
 
@@ -118,15 +121,16 @@ static CommandLine stream_replay_command =
 		"replay",
 		"Replay changes from the source to the target database, live",
 		"",
-		"  --source         Postgres URI to the source database\n"
-		"  --target         Postgres URI to the target database\n"
-		"  --dir            Work directory to use\n"
-		"  --restart        Allow restarting when temp files exist already\n"
-		"  --resume         Allow resuming operations after a failure\n"
-		"  --not-consistent Allow taking a new snapshot on the source database\n"
-		"  --slot-name      Stream changes recorded by this slot\n"
-		"  --endpos         LSN position where to stop receiving changes\n"
-		"  --origin         Name of the Postgres replication origin\n",
+		"  --source              Postgres URI to the source database\n"
+		"  --target              Postgres URI to the target database\n"
+		"  --dir                 Work directory to use\n"
+		"  --restart             Allow restarting when temp files exist already\n"
+		"  --resume              Allow resuming operations after a failure\n"
+		"  --not-consistent      Allow taking a new snapshot on the source database\n"
+		"  --slot-name           Stream changes recorded by this slot\n"
+		"  --endpos              LSN position where to stop receiving changes\n"
+		"  --max-replaydb-size   Rotate CDC files at this size (default 1GB)\n"
+		"  --origin              Name of the Postgres replication origin\n",
 		cli_stream_getopts,
 		cli_stream_replay);
 
@@ -135,14 +139,15 @@ static CommandLine stream_receive_command =
 		"receive",
 		"Stream changes from the source database",
 		"",
-		"  --source         Postgres URI to the source database\n"
-		"  --dir            Work directory to use\n"
-		"  --to-stdout      Stream logical decoding messages to stdout\n"
-		"  --restart        Allow restarting when temp files exist already\n"
-		"  --resume         Allow resuming operations after a failure\n"
-		"  --not-consistent Allow taking a new snapshot on the source database\n"
-		"  --slot-name      Stream changes recorded by this slot\n"
-		"  --endpos         LSN position where to stop receiving changes",
+		"  --source              Postgres URI to the source database\n"
+		"  --dir                 Work directory to use\n"
+		"  --to-stdout           Stream logical decoding messages to stdout\n"
+		"  --restart             Allow restarting when temp files exist already\n"
+		"  --resume              Allow resuming operations after a failure\n"
+		"  --not-consistent      Allow taking a new snapshot on the source database\n"
+		"  --slot-name           Stream changes recorded by this slot\n"
+		"  --endpos              LSN position where to stop receiving changes\n"
+		"  --max-replaydb-size   Rotate CDC files at this size (default 1GB)",
 		cli_stream_getopts,
 		cli_stream_receive);
 
@@ -202,6 +207,7 @@ cli_stream_getopts(int argc, char **argv)
 		{ "snapshot", required_argument, NULL, 'N' },
 		{ "origin", required_argument, NULL, 'o' },
 		{ "endpos", required_argument, NULL, 'E' },
+		{ "max-replaydb-size", required_argument, NULL, 1003 },
 		{ "host", required_argument, NULL, 1001 },
 		{ "port", required_argument, NULL, 1002 },
 		{ "restart", no_argument, NULL, 'r' },
@@ -336,6 +342,21 @@ cli_stream_getopts(int argc, char **argv)
 				log_trace("--endpos %X/%X",
 						  (uint32_t) (options.endpos >> 32),
 						  (uint32_t) options.endpos);
+				break;
+			}
+
+			case 1003:
+			{
+				if (!parse_pretty_printed_bytes(optarg,
+												&(options.maxReplayDBSize)))
+				{
+					log_fatal("Failed to parse --max-replaydb-size \"%s\"",
+							  optarg);
+					++errors;
+				}
+
+				log_trace("--max-replaydb-size %llu",
+						  (unsigned long long) options.maxReplayDBSize);
 				break;
 			}
 
@@ -617,6 +638,10 @@ cli_stream_setup(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	specs.maxReplayDBSize = streamDBoptions.maxReplayDBSize > 0
+		? streamDBoptions.maxReplayDBSize
+		: (1ULL << 30);
+
 	if (!stream_setup_databases(&copySpecs, &specs))
 	{
 		/* errors have already been logged */
@@ -746,6 +771,10 @@ cli_stream_catchup(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	specs.maxReplayDBSize = streamDBoptions.maxReplayDBSize > 0
+		? streamDBoptions.maxReplayDBSize
+		: (1ULL << 30);
+
 	/*
 	 * First, we need to know enough about the source database system to be
 	 * able to generate WAL file names. That's means the current timeline and
@@ -830,6 +859,10 @@ cli_stream_replay(int argc, char **argv)
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
+
+	specs.maxReplayDBSize = streamDBoptions.maxReplayDBSize > 0
+		? streamDBoptions.maxReplayDBSize
+		: (1ULL << 30);
 
 	/* optional follow coordinator TCP endpoint (--host/--port or env) */
 	strlcpy(specs.coordHost, streamDBoptions.host, sizeof(specs.coordHost));
@@ -928,6 +961,10 @@ cli_stream_transform(int argc, char **argv)
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 
+		specs.maxReplayDBSize = streamDBoptions.maxReplayDBSize > 0
+			? streamDBoptions.maxReplayDBSize
+			: (1ULL << 30);
+
 		specs.in = stdin;
 		specs.out = stdout;
 
@@ -994,6 +1031,10 @@ cli_stream_transform(int argc, char **argv)
 	{
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
+
+	specs.maxReplayDBSize = streamDBoptions.maxReplayDBSize > 0
+		? streamDBoptions.maxReplayDBSize
+		: (1ULL << 30);
 
 	if (!catalog_open(specs.sourceDB))
 	{
@@ -1114,6 +1155,10 @@ cli_stream_apply(int argc, char **argv)
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 
+		specs.maxReplayDBSize = streamDBoptions.maxReplayDBSize > 0
+			? streamDBoptions.maxReplayDBSize
+			: (1ULL << 30);
+
 		specs.in = stdin;
 
 		if (!stream_init_context(&specs))
@@ -1202,6 +1247,10 @@ cli_stream_apply(int argc, char **argv)
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
+
+	specs.maxReplayDBSize = streamDBoptions.maxReplayDBSize > 0
+		? streamDBoptions.maxReplayDBSize
+		: (1ULL << 30);
 
 	if (!catalog_open(specs.sourceDB))
 	{
@@ -1351,6 +1400,10 @@ stream_start_in_mode(LogicalStreamMode mode)
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
+
+	specs.maxReplayDBSize = streamDBoptions.maxReplayDBSize > 0
+		? streamDBoptions.maxReplayDBSize
+		: (1ULL << 30);
 
 	switch (specs.mode)
 	{

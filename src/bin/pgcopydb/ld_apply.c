@@ -383,6 +383,36 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 			}
 
 			/*
+			 * No new work from the transform stage.  Before checking whether
+			 * receive has finished, see if the receive process rotated to a new
+			 * output.db file.  If the current output.db has been closed
+			 * (done_time_epoch IS NOT NULL in cdc_files) and a successor file
+			 * exists, advance to it immediately rather than spinning.
+			 */
+			{
+				bool advanced = false;
+
+				if (!ld_store_advance_cdc_files(specs, &advanced))
+				{
+					log_warn("Failed to check/advance CDC file rotation, "
+							 "will retry");
+
+					/* non-fatal — try again next iteration */
+				}
+				else if (advanced)
+				{
+					/*
+					 * Successfully switched to the next output.db/replay.db
+					 * pair.  Update local aliases so this loop iteration
+					 * processes the new file.
+					 */
+					replayDB = specs->replayDB;
+					context->replayDB = replayDB;
+					continue;
+				}
+			}
+
+			/*
 			 * No new work from the transform stage.  If receive has finished
 			 * there is nothing left to do: everything up to the last committed
 			 * transaction boundary at or before endpos has been applied.

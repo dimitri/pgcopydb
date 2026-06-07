@@ -7,6 +7,7 @@
 #include <getopt.h>
 #include <inttypes.h>
 #include <sys/select.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -893,6 +894,46 @@ streamWrite(LogicalStreamContext *context)
 	{
 		privateContext->transactionInProgress = false;
 		privateContext->currentXid = 0;
+
+		/*
+		 * Size-based outputDB rotation: after every committed transaction,
+		 * check whether the output.db file has grown past the configured
+		 * threshold.  Rotation only happens at transaction boundaries so that
+		 * no transaction is ever split across two files.
+		 *
+		 * privateContext->specs is a back-pointer to the owning StreamSpecs.
+		 */
+		StreamSpecs *specs = privateContext->specs;
+
+		if (specs != NULL && specs->maxReplayDBSize > 0 &&
+			specs->outputDB != NULL &&
+			!IS_EMPTY_STRING_BUFFER(specs->outputDB->dbfile))
+		{
+			struct stat st = { 0 };
+
+			if (stat(specs->outputDB->dbfile, &st) == 0 &&
+				(uint64_t) st.st_size >= specs->maxReplayDBSize)
+			{
+				log_info("outputDB \"%s\" reached %lld bytes "
+						 "(threshold %llu bytes), rotating",
+						 specs->outputDB->dbfile,
+						 (long long) st.st_size,
+						 (unsigned long long) specs->maxReplayDBSize);
+
+				if (!ld_store_rotate_outputdb(specs,
+											  context->cur_record_lsn))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+
+				/*
+				 * Keep privateContext->outputDB in sync with specs->outputDB
+				 * so subsequent streamWrite calls write to the new file.
+				 */
+				privateContext->outputDB = specs->outputDB;
+			}
+		}
 	}
 
 	/*
@@ -1942,7 +1983,9 @@ StreamActionIsTCL(StreamAction action)
 		}
 
 		default:
+		{
 			return false;
+		}
 	}
 
 	/* keep compiler happy */
@@ -1967,7 +2010,9 @@ StreamActionIsDML(StreamAction action)
 		}
 
 		default:
+		{
 			return false;
+		}
 	}
 
 	/* keep compiler happy */
@@ -1991,7 +2036,9 @@ StreamActionIsInternal(StreamAction action)
 		}
 
 		default:
+		{
 			return false;
+		}
 	}
 
 	/* keep compiler happy */
