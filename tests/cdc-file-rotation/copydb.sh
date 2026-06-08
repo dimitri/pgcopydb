@@ -66,7 +66,7 @@ test "${output_count}" -ge 2
 # Verify cdc_files tracking: all files except the last should have non-NULL
 # endpos (done_time_epoch IS NOT NULL).
 #
-SOURCE_DB=$(find ${SHAREDIR} -maxdepth 1 -name 'source.db' -type f | head -1)
+SOURCE_DB=${TMPDIR:-/tmp}/pgcopydb/schema/source.db
 
 total_files=$(sqlite3 ${SOURCE_DB} "select count(*) from cdc_files;")
 closed_files=$(sqlite3 ${SOURCE_DB} "select count(*) from cdc_files where done_time_epoch is not null;")

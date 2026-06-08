@@ -72,10 +72,19 @@ ld_store_open_outputdb(StreamSpecs *specs)
 	StreamContext *privateContext = &(specs->private);
 	DatabaseCatalog *outputDB = specs->outputDB;
 
-	if (!ld_store_set_current_cdc_filename(specs))
+	/*
+	 * Only query cdc_files when the caller has not already pre-populated the
+	 * filename.  The apply path sets the filename via ld_store_set_first_cdc_filename
+	 * or ld_store_set_cdc_filename_at_lsn before calling here, so we must not
+	 * overwrite it with the (potentially different) newest-open-file result.
+	 */
+	if (IS_EMPTY_STRING_BUFFER(outputDB->dbfile))
 	{
-		/* errors have already been logged */
-		return false;
+		if (!ld_store_set_current_cdc_filename(specs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	bool createOutputDB = IS_EMPTY_STRING_BUFFER(outputDB->dbfile);
@@ -169,18 +178,64 @@ ld_store_open_replaydb(StreamSpecs *specs)
 
 
 /*
+ * ld_store_set_first_cdc_filename selects the CDC file with the smallest id
+ * in cdc_files (regardless of done_time_epoch) and stores its path in
+ * specs->outputDB->dbfile.
+ *
+ * Used by the apply process when previousLSN == 0 (fresh start): in the
+ * prefetch+catchup workflow with file rotation there may be several closed
+ * files before the single open one, and the apply must start from file 1.
+ */
+bool
+ld_store_set_first_cdc_filename(StreamSpecs *specs)
+{
+	sqlite3 *db = specs->sourceDB->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: ld_store_set_first_cdc_filename: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"select filename "
+		"  from cdc_files "
+		"order by id asc "
+		"   limit 1";
+
+	SQLiteQuery query = {
+		.context = specs->outputDB->dbfile,
+		.fetchFunction = &ld_store_cdc_filename_fetch
+	};
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* no parameters: the query is unconditional */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * ld_store_set_current_cdc_filename finds the most recently created open
- * replayDB file in cdc_files and stores its path in specs->replayDB->dbfile.
+ * replayDB file in cdc_files and stores its path in specs->outputDB->dbfile.
  *
  * "Open" means done_time_epoch IS NULL.  We sort by id DESC to get the most
  * recently inserted row, which corresponds to the current streaming epoch.
  *
- * This simple query works for all callers:
- *  - streaming resume: finds the existing open file
- *  - first start:      cdc_files is empty → returns no row (correct: caller
- *                      will create a new file)
- *  - apply process:    has no streaming context (startpos/timeline = 0) but
- *                      still needs to open the file produced by prefetch
+ * This is only used by the RECEIVE path.  The APPLY path should call
+ * ld_store_set_first_cdc_filename (previousLSN == 0) or
+ * ld_store_set_cdc_filename_at_lsn (previousLSN > 0) to land on the right
+ * starting file after file rotation.
  */
 bool
 ld_store_set_current_cdc_filename(StreamSpecs *specs)
@@ -1078,14 +1133,19 @@ ld_store_advance_cdc_files(StreamSpecs *specs, bool *advanced)
 	}
 
 	/*
-	 * Step 2: find the next open file (done_time_epoch IS NULL, id > current).
+	 * Step 2: find the next file (id > current), open or closed.
+	 *
+	 * In the prefetch+catchup workflow receive may have already rotated
+	 * through several files before catchup starts; those intermediate files
+	 * have done_time_epoch IS NOT NULL.  We must visit every file in id
+	 * order regardless of its close status, so we do NOT filter on
+	 * done_time_epoch here.
 	 */
 	char *nextSQL =
 		"  select c2.filename "
 		"    from cdc_files c2 "
 		"   where c2.id > (select c1.id from cdc_files c1 "
 		"                   where c1.filename = $1) "
-		"     and c2.done_time_epoch is null "
 		"order by c2.id asc "
 		"   limit 1";
 

@@ -211,10 +211,14 @@ cli_list_getenv(ListDBOptions *options)
 	int errors = 0;
 
 	EnvParser parsers[] = {
-		{ PGCOPYDB_SPLIT_MAX_PARTS, ENV_TYPE_INT,
-		  &(options->splitMaxParts), 0, true, 1 },
-		{ PGCOPYDB_ESTIMATE_TABLE_SIZES, ENV_TYPE_BOOL,
-		  &(options->estimateTableSizes) },
+		{
+			PGCOPYDB_SPLIT_MAX_PARTS, ENV_TYPE_INT,
+			&(options->splitMaxParts), 0, true, 1
+		},
+		{
+			PGCOPYDB_ESTIMATE_TABLE_SIZES, ENV_TYPE_BOOL,
+			&(options->estimateTableSizes)
+		},
 	};
 
 	int parserCount = sizeof(parsers) / sizeof(parsers[0]);

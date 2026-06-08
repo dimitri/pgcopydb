@@ -243,7 +243,7 @@ pgsql_set_interactive_retry_policy(ConnectionRetryPolicy *retryPolicy)
  * With additional protection against division-by-zero.
  */
 #define random_between(R, M, N) \
-	((((N) -(M) +1) == 0) \
+		((((N) -(M) +1) == 0) \
 	 ? ((M) + R / (RAND_MAX / ((N) -(M)) + 1)) \
 	 : ((M) + R / (RAND_MAX / ((N) -(M) +1) + 1)))
 
@@ -602,7 +602,7 @@ pgsql_open_connection(PGSQL *pgsql)
  * to help anyone. A good trade-off seems to be a warning every 30s.
  */
 #define SHOULD_WARN_AGAIN(duration) \
-	(INSTR_TIME_GET_MILLISEC(duration) > 30000)
+		(INSTR_TIME_GET_MILLISEC(duration) > 30000)
 
 /*
  * pgsql_retry_open_connection loops over a PQping call until the remote server
@@ -1354,7 +1354,7 @@ pgsql_set_search_path(PGSQL *pgsql, char *search_path, bool local)
  * namespace, only for the current transaction, using SET LOCAL.
  */
 bool
-pgsql_prepend_search_path(PGSQL *pgsql, const char *namespace)
+pgsql_prepend_search_path(PGSQL *pgsql, const char *nsp)
 {
 	char search_path[BUFSIZE] = { 0 };
 
@@ -1366,7 +1366,7 @@ pgsql_prepend_search_path(PGSQL *pgsql, const char *namespace)
 
 	if (IS_EMPTY_STRING_BUFFER(search_path))
 	{
-		return pgsql_set_search_path(pgsql, (char *) namespace, true);
+		return pgsql_set_search_path(pgsql, (char *) nsp, true);
 	}
 	else
 	{
@@ -1374,7 +1374,7 @@ pgsql_prepend_search_path(PGSQL *pgsql, const char *namespace)
 
 		sformat(new_search_path, sizeof(new_search_path),
 				"%s, %s",
-				namespace,
+				nsp,
 				search_path);
 
 		return pgsql_set_search_path(pgsql, new_search_path, true);
@@ -2478,7 +2478,7 @@ is_response_ok(PGresult *result)
  * 08P01	protocol_violation
  */
 #define SQLSTATE_IS_CONNECTION_EXCEPTION(pgsql) \
-	(pgsql->sqlstate[0] == '0' && pgsql->sqlstate[1] == '8')
+		(pgsql->sqlstate[0] == '0' && pgsql->sqlstate[1] == '8')
 
 bool
 pgsql_state_is_connection_error(PGSQL *pgsql)

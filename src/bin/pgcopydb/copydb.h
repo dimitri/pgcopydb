@@ -22,10 +22,10 @@
  * controled by pgcopydb without a way for the user to override them.
  */
 #define COMMON_GUC_SETTINGS \
-	{ "client_encoding", "'UTF-8'" }, \
-	{ "extra_float_digits", "3" }, \
-	{ "statement_timeout", "0" }, \
-	{ "default_transaction_read_only", "off" }
+		{ "client_encoding", "'UTF-8'" }, \
+		{ "extra_float_digits", "3" }, \
+		{ "statement_timeout", "0" }, \
+		{ "default_transaction_read_only", "off" }
 
 /*
  * These parameters are added to the connection strings, unless the user has

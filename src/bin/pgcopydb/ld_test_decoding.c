@@ -228,7 +228,7 @@ parseTestDecodingMessageActionAndXid(LogicalStreamContext *context)
 #define TD_UNCHANGED_TOAST "unchanged-toast-datum"
 #define TD_UNCHANGED_TOAST_LEN strlen(TD_UNCHANGED_TOAST)
 #define TD_FOUND_UNCHANGED_TOAST(ptr) \
-	(strncmp(ptr, TD_UNCHANGED_TOAST, TD_UNCHANGED_TOAST_LEN) == 0)
+		(strncmp(ptr, TD_UNCHANGED_TOAST, TD_UNCHANGED_TOAST_LEN) == 0)
 
 /*
  * parseTestDecodingMessage parses a message as emitted by test_decoding into

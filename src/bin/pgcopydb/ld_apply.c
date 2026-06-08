@@ -1039,6 +1039,45 @@ stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
 		return true;
 	}
 
+	/*
+	 * Determine previousLSN (the apply cursor) before opening the CDC files
+	 * so we can select the correct starting file when file rotation has
+	 * produced multiple output.db files during prefetch.
+	 */
+	if (!setupReplicationOrigin(context))
+	{
+		log_error("Failed to setup replication origin on the target database");
+		return false;
+	}
+
+	/*
+	 * Pre-populate specs->outputDB->dbfile with the correct starting file:
+	 *
+	 *  - previousLSN > 0: the origin already has progress; open the file
+	 *    whose LSN range contains that LSN.
+	 *  - previousLSN == 0: fresh start; open the oldest file (smallest id)
+	 *    so we process every file in order when rotation has already happened.
+	 *
+	 * ld_store_open_outputdb skips its own set_current call when the
+	 * filename is already set.
+	 */
+	if (context->previousLSN != InvalidXLogRecPtr)
+	{
+		if (!ld_store_set_cdc_filename_at_lsn(specs, context->previousLSN))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+	else
+	{
+		if (!ld_store_set_first_cdc_filename(specs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
 	if (!ld_store_open_outputdb(specs))
 	{
 		/* errors have already been logged */
@@ -1048,15 +1087,6 @@ stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
 	if (!ld_store_open_replaydb(specs))
 	{
 		/* errors have already been logged */
-		return false;
-	}
-
-	/*
-	 * Use the replication origin for our setup (context->previousLSN).
-	 */
-	if (!setupReplicationOrigin(context))
-	{
-		log_error("Failed to setup replication origin on the target database");
 		return false;
 	}
 
