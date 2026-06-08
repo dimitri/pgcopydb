@@ -1,3 +1,68 @@
+### pgcopydb v0.19 ###
+
+Builds on v0.18 with a focus on foreign-key constraint handling for
+databases with pre-existing data violations, large-migration FK
+validation control, and resume/CDC robustness.
+
+### Added
+
+* `--defer-validate-fks` flag to create target foreign keys as `NOT VALID`,
+  skipping the one-time validation scan of pre-existing rows so the COPY →
+  CDC handoff happens immediately. The operator validates later on their own
+  schedule with `ALTER TABLE ... VALIDATE CONSTRAINT`. Safe for CDC —
+  `NOT VALID` still enforces referential integrity on every new write.
+  Hardened for the `clone --follow --defer-indexes --defer-validate-fks
+  --split-tables-larger-than` combination: the flag is persisted in the
+  catalog and a resume that changes it is rejected; missing referenced
+  unique constraints (SQLSTATE 42830) and partitioned-parent constraints
+  (SQLSTATE 42809) are skipped with an end-of-run summary instead of
+  aborting; and the deferred-FK validation reminder is re-emitted at
+  follow/cutover completion
+* Retry with exponential backoff on the `--follow` (CDC) pipeline when the
+  target connection drops mid-stream — the apply/replay side now reconnects
+  and resumes streaming instead of failing the migration
+
+### Changed
+
+* Foreign-key constraints are now created directly by pgcopydb rather than
+  through pg_restore. When a constraint fails on pre-existing data
+  violations (SQLSTATE 23503), it is automatically retried as `NOT VALID`,
+  preserving the constraint in the schema and enforcing it on future writes
+  while letting the operator `VALIDATE` later. Always-on, no flag required,
+  and zero impact when there are no violations. FK constraints referencing
+  filtered-out schemas/tables and inline FK constraints already present on
+  the target are handled gracefully
+
+### Fixed
+
+**Data integrity / resume:**
+* Fix split-table TRUNCATE on resume — the COPY supervisor unconditionally
+  truncated partitioned tables on `--resume`, after which per-part workers
+  skipped the already-completed COPY and left the table empty. The
+  supervisor now checks completed parts before truncating. Most reliably
+  triggered by `--split-tables-larger-than` combined with `--defer-indexes`
+* Honor the large-objects-done flag on resume so blobs are not needlessly
+  re-copied
+* Apply table/schema filters when fetching FK constraints — excluded-schema
+  and excluded-table foreign keys were previously still attempted in the
+  post-restore constraint step and caused a hard failure
+
+**CDC Reliability:**
+* Fix invalid WHERE clauses for `json` columns with REPLICA IDENTITY FULL —
+  `json` has no equality operator, so generated `col = $N` predicates failed
+  on UPDATE/DELETE. Such columns are now compared with a `::text` cast
+* Fix a pipeline spin loop and a stale replication-origin session on
+  follow-pipeline reconnect, and correct replication-origin holder
+  termination
+
+### Security / CI
+
+* Pin all third-party GitHub Actions to full-length commit SHAs and add a
+  Dependabot github-actions block
+* Publish the Docker image only on release tags
+* Add apt retries to the pagila test image to tolerate transient mirror
+  failures
+
 ### pgcopydb v0.18 ###
 
 Based on upstream pgcopydb v0.17 with reliability, filtering, and CDC
