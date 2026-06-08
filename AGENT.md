@@ -448,20 +448,35 @@ stdout repro path (`pgcopydb stream apply --target -`).
 ## Code Style
 
 ```bash
-# Auto-format all C sources
+# Auto-format all C sources (local install, quick iteration)
 make indent          # runs citus_indent (requires uncrustify)
 
-# Check only (what CI runs)
-citus_indent --check --diff
+# Check only (mirrors what CI runs)
+citus_indent --check
+```
 
-# Install citus_indent
-sudo apt-get install uncrustify
-git clone https://github.com/citusdata/tools.git && cd tools && make uncrustify/.install
+**Important:** the CI `style_checker` job runs inside the `citus/stylechecker:no-py`
+Docker image, which pins a specific `uncrustify` version. A locally installed
+`citus_indent` may produce subtly different output (different byte counts, minor
+whitespace changes) and pass locally while CI still fails. To format with the
+exact same tool version CI uses:
 
-# Recommended: git pre-commit hook
+```bash
+# Format in-place using the CI image (run from the repo root)
+docker run --rm -v $(pwd):/work -w /work citus/stylechecker:no-py citus_indent
+
+# Then verify — must print no FAIL lines
+docker run --rm -v $(pwd):/work -w /work citus/stylechecker:no-py citus_indent --check
+```
+
+Use the Docker form whenever you are about to push a style-fix commit or your
+local `citus_indent --check` passes but CI still reports FAILs.
+
+```bash
+# Recommended: git pre-commit hook (uses local install for speed)
 cat > .git/hooks/pre-commit << 'EOF'
 #!/bin/bash
-citus_indent --check --diff || { citus_indent --diff; exit 1; }
+citus_indent --check || { citus_indent; exit 1; }
 EOF
 chmod +x .git/hooks/pre-commit
 ```
