@@ -14,33 +14,31 @@ set -e
 pgcopydb ping
 
 #
-# Only start injecting DML traffic on the source database when pgcopydb
-# follow command has been started. We know that by querying the SQLite
-# catalogs database, where the prefetch/transform/catchup sub-processes
-# register themselves in the process table.
+# Follow coordinator TCP endpoint (from docker-compose). We remote-control the
+# sentinel over TCP, so this container does not share the SQLite catalog volume.
 #
-dbfile=${TMPDIR}/pgcopydb/schema/source.db
+HP="--host ${PGCOPYDB_HOST} --port ${PGCOPYDB_PORT}"
 
-until [ -s ${dbfile} ]
+#
+# Only start injecting DML once the pgcopydb follow command is up and streaming:
+# that is exactly when its TCP coordinator starts answering.  Poll it over TCP
+# (this replaces the old shared-volume `process` table readiness check).
+#
+until pgcopydb stream sentinel get ${HP} >/dev/null 2>&1
 do
-    sleep 1
-done
-
-sql="select pid from process where ps_type = 'prefetch'"
-pidf=/tmp/prefetch.pid
-
-while [ ! -s ${pidf} ]
-do
-    # sometimes we have "Error: database is locked", ignore
-    sqlite3 -batch -bail -noheader ${dbfile} "${sql}" > ${pidf} || echo error
     sleep 1
 done
 
 # allow replaying changes now that pgcopydb follow command is running
-pgcopydb stream sentinel set apply
+echo "Setting sentinel apply mode..."
+pgcopydb stream sentinel set apply ${HP} || { echo "Failed to set apply mode"; exit 1; }
 
 # allow the catchup phase to finish, ensure the following data is streamed
 sleep 2
+
+# Insert test data: rows that exercise null handling, large batches, and updates
+# across WAL segment boundaries to show the SQLite CDC pipeline is independent
+# of PostgreSQL WAL segments (old file-based design depended on them critically).
 
 # insert additional rows to exercise literal 'null' handling during live follow
 psql -d ${PGCOPYDB_SOURCE_PGURI} <<'EOF'
@@ -48,11 +46,17 @@ insert into null_texts(text_col, json_col)
 values ('null', '"null"'), (null, null);
 EOF
 
+psql -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_switch_wal()'
+
 # then insert another batch of 10 rows (21..30)
 psql -v a=21 -v b=30 -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 
+psql -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_switch_wal()'
+
 # also insert data that won't fit in a single Unix PIPE buffer
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml-bufsize.sql
+
+psql -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_switch_wal()'
 
 # add some data to update_test table
 psql -d ${PGCOPYDB_SOURCE_PGURI} << EOF
@@ -73,9 +77,10 @@ commit;
 EOF
 
 # grab the current LSN, it's going to be our streaming end position
-lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_flush_lsn()'`
-pgcopydb stream sentinel set endpos --current
-pgcopydb stream sentinel get
+echo "Setting endpos to current WAL position..."
+pgcopydb stream sentinel set endpos --current ${HP} || { echo "Failed to set endpos"; exit 1; }
+echo "Final sentinel state:"
+pgcopydb stream sentinel get ${HP}
 
 #
 # Becaure we're using docker compose --abort-on-container-exit make sure
@@ -90,7 +95,6 @@ do
 done
 
 #
-# Still give some time to the pgcopydb service to finish its processing,
-# with the cleanup and all.
+# Give some time to the pgcopydb service to finish cleanup.
 #
-sleep 10
+sleep 5

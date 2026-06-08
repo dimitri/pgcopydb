@@ -37,6 +37,10 @@ services:
       PGCOPYDB_TABLE_JOBS: 4
       PGCOPYDB_INDEX_JOBS: 2
       PGCOPYDB_OUTPUT_PLUGIN: wal2json
+      # follow coordinator TCP endpoint: the follow process listens here, and
+      # "stream sentinel --host localhost --port 5442" talks to it over TCP
+      PGCOPYDB_HOST: localhost
+      PGCOPYDB_PORT: "5442"
     depends_on:
       - source
       - target

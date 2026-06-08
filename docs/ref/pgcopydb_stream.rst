@@ -25,6 +25,11 @@ pgcopydb stream - Stream changes from source database
    follow`` process. See :ref:`change_data_capture_example_1` for a detailed
    example using :ref:`pgcopydb_stream_sentinel_set_endpos`.
 
+   By default these commands read/write the sentinel directly in the source
+   SQLite catalog, which requires running where the catalog files live. Pass
+   ``--host`` (and optionally ``--port``) to instead talk to the running follow
+   process over TCP, with no shared catalog files. See :ref:`sentinel_protocol`.
+
    Also the commands :ref:`pgcopydb_stream_setup` and
    :ref:`pgcopydb_stream_cleanup` might be used directly in normal
    operations. See :ref:`change_data_capture_example_2` for a detailed
@@ -45,14 +50,14 @@ step.
 .. note::
 
    The sub-commands ``stream setup`` then ``stream prefetch`` and ``stream
-   catchup`` are higher level commands, that use internal information to
-   know which files to process. Those commands also keep track of their
-   progress.
+   catchup`` are higher level commands that use internal information to
+   track their progress in the SQLite Change Data Capture store.
 
-   The sub-commands ``stream receive``, ``stream transform``, and ``stream
-   apply`` are lower level interface that work on given files. Those
-   commands still keep track of their progress, but have to be given more
-   information to work.
+   The sub-commands ``stream receive`` and ``stream apply`` are lower level
+   interfaces to the same SQLite store: ``receive`` writes decoded changes to
+   the CDC *output* database, and ``apply`` performs the inline transform and
+   writes the resulting statements to the CDC *replay* database before
+   applying them to the target.
 
 .. _pgcopydb_stream_setup:
 
@@ -87,16 +92,15 @@ step.
 pgcopydb stream prefetch
 ------------------------
 
-pgcopydb stream prefetch - Stream JSON changes from the source database and transform them to SQL
+pgcopydb stream prefetch - Stream changes from the source database into the SQLite CDC store
 
 The command ``pgcopydb stream prefetch`` connects to the source database
-using the logical replication protocl and the given replication slot.
+using the logical replication protocol and the given replication slot.
 
 The prefetch command receives the changes from the source database in a
-streaming fashion, and writes them in a series of JSON files named the same
-as their origin WAL filename (with the ``.json`` extension). Each time a
-JSON file is closed, a subprocess is started to transform the JSON into an
-SQL file.
+streaming fashion and writes them to the SQLite Change Data Capture *output*
+database (named ``<timeline>-<startlsn>-output.db``). The transform into
+replay statements happens later, inside the ``stream catchup`` (apply) step.
 
 .. include:: ../include/stream-prefetch.rst
 
@@ -105,11 +109,12 @@ SQL file.
 pgcopydb stream catchup
 -----------------------
 
-pgcopydb stream catchup - Apply prefetched changes from SQL files to the target database
+pgcopydb stream catchup - Transform and apply prefetched changes to the target database
 
-The command ``pgcopydb stream catchup`` connects to the target database and
-applies changes from the SQL files that have been prepared with the
-``pgcopydb stream prefetch`` command.
+The command ``pgcopydb stream catchup`` connects to the target database,
+transforms the changes prefetched into the CDC *output* database into replay
+statements (stored in the CDC *replay* database), and applies them to the
+target. Progress is tracked using the Postgres replication origin.
 
 .. include:: ../include/stream-catchup.rst
 
@@ -121,17 +126,16 @@ pgcopydb stream replay
 pgcopydb stream replay - Replay changes from the source to the target database, live
 
 The command ``pgcopydb stream replay`` connects to the source database and
-streams changes using the logical decoding protocol, and internally streams
-those changes to a transform process and then a replay process, which
-connects to the target database and applies SQL changes.
+streams changes using the logical decoding protocol, running the receive and
+apply stages together as a single live pipeline that applies changes to the
+target database as they arrive.
 
 .. include:: ../include/stream-replay.rst
 
-This command is equivalent to running the following script::
-
-  pgcopydb stream receive --to-stdout
-  | pgcopydb stream transform - -
-  | pgcopydb stream apply -
+This command is equivalent to running ``pgcopydb stream receive`` and
+``pgcopydb stream apply`` together: the apply stage performs the inline
+transform from the CDC *output* database to the CDC *replay* database before
+applying the changes to the target.
 
 .. _pgcopydb_stream_sentinel_get:
 
@@ -207,50 +211,40 @@ pgcopydb stream receive
 pgcopydb stream receive - Stream changes from the source database
 
 The command ``pgcopydb stream receive`` connects to the source database
-using the logical replication protocl and the given replication slot.
+using the logical replication protocol and the given replication slot.
 
 The receive command receives the changes from the source database in a
-streaming fashion, and writes them in a series of JSON files named the same
-as their origin WAL filename (with the ``.json`` extension).
+streaming fashion and writes them to the SQLite Change Data Capture *output*
+database. It can also stream raw decoded messages to standard output with
+``--to-stdout``.
+
+.. note::
+
+   The separate ``pgcopydb stream transform`` command has been removed. In
+   the SQLite-based pipeline the transform from the *output* database to the
+   *replay* database is performed inline by the apply stage (see
+   :ref:`pgcopydb_stream_apply`).
 
 .. include:: ../include/stream-receive.rst
-
-.. _pgcopydb_stream_transform:
-
-pgcopydb stream transform
--------------------------
-
-pgcopydb stream transform - Transform changes from the source database into SQL commands
-
-The command ``pgcopydb stream transform`` transforms a JSON file as received
-by the ``pgcopydb stream receive`` command into an SQL file with one query
-per line.
-
-.. include:: ../include/stream-transform.rst
-
-The command supports using ``-`` as the filename for either the JSON input
-or the SQL output, or both. In that case reading from standard input and/or
-writing to standard output is implemented, in a streaming fashion. A classic
-use case is to use Unix Pipes, see :ref:`pgcopydb_stream_replay` too.
 
 .. _pgcopydb_stream_apply:
 
 pgcopydb stream apply
 ---------------------
 
-pgcopydb stream apply - Apply changes from the source database into the target database
+pgcopydb stream apply - Apply changes from the CDC store to the target database
 
-The command ``pgcopydb stream apply`` applies a SQL file as prepared by the
-``pgcopydb stream transform`` command in the target database. The apply
-process tracks progress thanks to the Postgres API for `Replication Progress
-Tracking`__.
+The command ``pgcopydb stream apply`` transforms the changes received into
+the CDC *output* database into replay statements (stored in the CDC *replay*
+database) and applies them to the target database. The apply process tracks
+progress thanks to the Postgres API for `Replication Progress Tracking`__.
 
 __ https://www.postgresql.org/docs/current/replication-origins.html
 
 .. include:: ../include/stream-apply.rst
 
-This command supports using ``-`` as the filename to read from, and in that
-case reads from the standard input in a streaming fashion instead.
+Use ``--target -`` to emit the SQL to standard output instead of connecting
+to a target database (used by the unit tests).
 
 Options
 -------
@@ -345,6 +339,27 @@ The following options are available to ``pgcopydb stream`` sub-commands:
 
   __ https://www.postgresql.org/docs/current/replication-origins.html
 
+--host
+
+  Optional follow-coordinator TCP endpoint host.
+
+  On ``clone --follow`` / ``follow`` / ``stream replay`` (the server side),
+  when set the follow process starts a TCP coordinator listening on
+  ``--host``:``--port`` (use ``0.0.0.0`` to accept connections from other
+  hosts/containers). On ``stream sentinel`` get/set (the client side), when set
+  the command talks to that coordinator over TCP instead of opening the SQLite
+  catalog directly — so it works without sharing the catalog files. See
+  :ref:`sentinel_protocol`.
+
+  On the server side this may also be provided via the ``PGCOPYDB_HOST``
+  environment variable.
+
+--port
+
+  TCP port for the follow-coordinator endpoint (see ``--host``). Defaults to
+  ``5442``. On the server side this may also be provided via the
+  ``PGCOPYDB_PORT`` environment variable.
+
 --verbose
 
   Increase current verbosity. The default level of verbosity is INFO. In
@@ -405,6 +420,14 @@ XDG_DATA_HOME
 
 Examples
 --------
+
+.. note::
+
+   The captured output below predates the SQLite-based Change Data Capture
+   store and is kept for illustration of the logical decoding messages. The
+   current implementation stores received changes in the CDC *output* SQLite
+   database and the transformed statements in the CDC *replay* SQLite
+   database, rather than in ``.json`` and ``.sql`` files on disk.
 
 As an example here is the output generated from running the cdc test case,
 where a replication slot is created before the initial copy of the data, and
@@ -480,18 +503,12 @@ made from the same run.
    {"action":"I","xid":489,"timestamp":"2022-06-27 13:24:31.460822+00","lsn":"0/236F278","schema":"public","table":"payment_p2020_06","columns":[{"name":"payment_id","type":"integer","value":32099},{"name":"customer_id","type":"integer","value":291},{"name":"staff_id","type":"integer","value":1},{"name":"rental_id","type":"integer","value":16050},{"name":"amount","type":"numeric(5,2)","value":5.99},{"name":"payment_date","type":"timestamp with time zone","value":"2020-06-01 00:00:00+00"}]}
    {"action":"C","xid":489,"timestamp":"2022-06-27 13:24:31.460822+00","lsn":"0/236F5A8","nextlsn":"0/236F5D8"}
 
-It's then possible to transform the JSON into SQL:
+In the SQLite-based pipeline the equivalent transform is performed inline by
+the ``pgcopydb stream catchup`` (apply) step, which reads the changes from the
+CDC *output* database, writes parameterised statements to the CDC *replay*
+database, and applies them to the target. The resulting replay statements are
+equivalent to::
 
-
-::
-
-   $ pgcopydb stream transform  ./tests/cdc/000000010000000000000002.json /tmp/000000010000000000000002.sql
-
-And the SQL file obtained looks like this:
-
-::
-
-   $ cat /tmp/000000010000000000000002.sql
    BEGIN; -- {"xid":489,"lsn":"0/236F5A8"}
    INSERT INTO "public"."rental" (rental_id, rental_date, inventory_id, customer_id, return_date, staff_id, last_update) VALUES (16050, '2022-06-01 00:00:00+00', 371, 291, NULL, 1, '2022-06-01 00:00:00+00');
    INSERT INTO "public"."payment_p2020_06" (payment_id, customer_id, staff_id, rental_id, amount, payment_date) VALUES (32099, 291, 1, 16050, 5.99, '2020-06-01 00:00:00+00');

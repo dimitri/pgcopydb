@@ -32,9 +32,11 @@ services:
     env_file:
       - ../uris.env
       - ../paths.env
-    # share TMPDIR between inject and test services
-    volumes:
-      - follow-wal2json:/var/run/pgcopydb
+    environment:
+      # remote-control the follow coordinator over TCP (no shared volume):
+      # connect to the "test" service where `pgcopydb clone --follow` listens.
+      PGCOPYDB_HOST: test
+      PGCOPYDB_PORT: "5442"
 
   test:
     image: follow-wal2json
@@ -45,17 +47,13 @@ services:
     environment:
       PGCOPYDB_TABLE_JOBS: 4
       PGCOPYDB_INDEX_JOBS: 2
+      # the follow supervisor listens here for sentinel CLI clients over TCP
+      PGCOPYDB_HOST: "0.0.0.0"
+      PGCOPYDB_PORT: "5442"
     env_file:
       - ../uris.env
       - ../paths.env
-    # share TMPDIR between inject and test services
-    volumes:
-      - follow-wal2json:/var/run/pgcopydb
     depends_on:
       - source
       - target
       - inject
-
-volumes:
-  follow-wal2json:
-    external: true

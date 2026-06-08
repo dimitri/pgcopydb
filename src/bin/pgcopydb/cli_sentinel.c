@@ -13,6 +13,9 @@
 #include "copydb.h"
 #include "commandline.h"
 #include "env_utils.h"
+#include "file_utils.h"
+#include "ld_ipc.h"
+#include "ld_service.h"
 #include "ld_stream.h"
 #include "log.h"
 #include "parsing_utils.h"
@@ -50,7 +53,10 @@ CommandLine sentinel_get_command =
 		"  --apply          Get only the apply value\n"
 		"  --write-lsn      Get only the write LSN value\n"
 		"  --flush-lsn      Get only the flush LSN value\n"
-		"  --replay-lsn     Get only the replay LSN value\n",
+		"  --transform-lsn  Get only the tranform LSN value\n"
+		"  --replay-lsn     Get only the replay LSN value\n"
+		"  --host           Reach the follow coordinator over TCP at this host\n"
+		"  --port           Follow coordinator TCP port (default 5442)\n",
 		cli_sentinel_getopts,
 		cli_sentinel_get);
 
@@ -58,7 +64,9 @@ CommandLine sentinel_set_startpos_command =
 	make_command(
 		"startpos",
 		"Set the sentinel start position LSN",
-		"<start lsn>", "",
+		"<start lsn>",
+		"  --host        Reach the follow coordinator over TCP at this host\n"
+		"  --port        Follow coordinator TCP port (default 5442)\n",
 		cli_sentinel_getopts,
 		cli_sentinel_set_startpos);
 
@@ -68,19 +76,25 @@ CommandLine sentinel_set_endpos_command =
 		"Set the sentinel end position LSN",
 		"[ --source ... ] [ <end lsn> | --current ]",
 		"  --source      Postgres URI to the source database\n"
-		"  --current     Use pg_current_wal_flush_lsn() as the endpos\n",
+		"  --current     Use pg_current_wal_flush_lsn() as the endpos\n"
+		"  --host        Reach the follow coordinator over TCP at this host\n"
+		"  --port        Follow coordinator TCP port (default 5442)\n",
 		cli_sentinel_getopts,
 		cli_sentinel_set_endpos);
 
 CommandLine sentinel_set_apply_command =
 	make_command(
-		"apply", "Set the sentinel apply mode", "", "",
+		"apply", "Set the sentinel apply mode", "",
+		"  --host        Reach the follow coordinator over TCP at this host\n"
+		"  --port        Follow coordinator TCP port (default 5442)\n",
 		cli_sentinel_getopts,
 		cli_sentinel_set_apply);
 
 CommandLine sentinel_set_prefetch_command =
 	make_command(
-		"prefetch", "Set the sentinel prefetch mode", "", "",
+		"prefetch", "Set the sentinel prefetch mode", "",
+		"  --host        Reach the follow coordinator over TCP at this host\n"
+		"  --port        Follow coordinator TCP port (default 5442)\n",
 		cli_sentinel_getopts,
 		cli_sentinel_set_prefetch);
 
@@ -123,10 +137,13 @@ cli_sentinel_getopts(int argc, char **argv)
 	static struct option long_options[] = {
 		{ "source", required_argument, NULL, 'S' },
 		{ "dir", required_argument, NULL, 'D' },
+		{ "host", required_argument, NULL, 'H' },
+		{ "port", required_argument, NULL, 'P' },
 		{ "startpos", no_argument, NULL, 's' },
 		{ "endpos", no_argument, NULL, 'e' },
 		{ "apply", no_argument, NULL, 'a' },
 		{ "write-lsn", no_argument, NULL, 'w' },
+		{ "transform-lsn", no_argument, NULL, 't' },
 		{ "flush-lsn", no_argument, NULL, 'f' },
 		{ "replay-lsn", no_argument, NULL, 'r' },
 		{ "current", no_argument, NULL, 'C' },
@@ -152,7 +169,7 @@ cli_sentinel_getopts(int argc, char **argv)
 
 	int sentinelOptionsCount = 0;
 
-	while ((c = getopt_long(argc, argv, "S:D:esawtfrCJVvdzqh",
+	while ((c = getopt_long(argc, argv, "S:D:H:P:esawtfrCJVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -174,6 +191,25 @@ cli_sentinel_getopts(int argc, char **argv)
 			{
 				strlcpy(options.dir, optarg, MAXPGPATH);
 				log_trace("--dir %s", options.dir);
+				break;
+			}
+
+			case 'H':
+			{
+				strlcpy(options.host, optarg, sizeof(options.host));
+				log_trace("--host %s", options.host);
+				break;
+			}
+
+			case 'P':
+			{
+				if (!stringToInt(optarg, &(options.port)))
+				{
+					log_fatal("--port value \"%s\" is not a valid integer",
+							  optarg);
+					exit(EXIT_CODE_BAD_ARGS);
+				}
+				log_trace("--port %d", options.port);
 				break;
 			}
 
@@ -206,6 +242,14 @@ cli_sentinel_getopts(int argc, char **argv)
 				++sentinelOptionsCount;
 				options.sentinelOptions.writeLSN = true;
 				log_trace("--write-lsn");
+				break;
+			}
+
+			case 't':
+			{
+				++sentinelOptionsCount;
+				options.sentinelOptions.transformLSN = true;
+				log_trace("--transform-lsn");
 				break;
 			}
 
@@ -316,7 +360,7 @@ cli_sentinel_getopts(int argc, char **argv)
 	if (sentinelOptionsCount > 1)
 	{
 		log_fatal("Please choose only one of --startpos --endpos --apply "
-				  "--write-lsn --flush-lsn --replay-lsn");
+				  "--write-lsn --transform-lsn --flush-lsn --replay-lsn");
 		++errors;
 	}
 
@@ -346,6 +390,45 @@ cli_sentinel_getopts(int argc, char **argv)
 	sentinelDBoptions = options;
 
 	return optind;
+}
+
+
+/*
+ * cli_sentinel_service returns the TCP endpoint requested via --host/--port,
+ * or a disabled endpoint when --host is not given (use SQLite directly).
+ *
+ * When enabled, the sentinel command talks to a running follow process'
+ * coordinator over TCP and never opens the SQLite catalog — so it works
+ * without sharing the catalog files (e.g. across containers).
+ */
+static ServiceEndpoint
+cli_sentinel_service(void)
+{
+	return ld_service_endpoint(sentinelDBoptions.host, sentinelDBoptions.port);
+}
+
+
+/*
+ * cli_sentinel_tcp_send sends a request to the coordinator and exits on error.
+ * The response is returned to the caller when out is not NULL.
+ */
+static void
+cli_sentinel_tcp_send(ServiceEndpoint service, IPCMessage *request,
+					  IPCMessage *out)
+{
+	IPCMessage response = { 0 };
+
+	if (!ld_service_send_command(service, request, &response))
+	{
+		log_error("Failed to reach the follow coordinator at %s:%d",
+				  service.host, service.port);
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (out != NULL)
+	{
+		*out = response;
+	}
 }
 
 
@@ -416,6 +499,28 @@ cli_sentinel_set_startpos(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
+	/* --host/--port: talk to the follow coordinator over TCP (no catalog) */
+	ServiceEndpoint service = cli_sentinel_service();
+
+	if (service.enabled)
+	{
+		IPCMessage request = { 0 };
+
+		IPC_INIT_MESSAGE(request, IPC_MSG_SET_STARTPOS);
+		IPCPayloadSetStartpos *cmd = (IPCPayloadSetStartpos *) request.payload;
+		cmd->startpos_lsn = startpos;
+		sformat(cmd->reason, sizeof(cmd->reason),
+				"CLI: pgcopydb sentinel set startpos");
+		request.payload_len = sizeof(IPCPayloadSetStartpos);
+
+		cli_sentinel_tcp_send(service, &request, NULL);
+
+		log_info("pgcopydb sentinel startpos has been set to %X/%X via service",
+				 LSN_FORMAT_ARGS(startpos));
+		fformat(stdout, "%X/%X\n", LSN_FORMAT_ARGS(startpos));
+		return;
+	}
+
 	CopyDataSpec copySpecs = { 0 };
 
 	if (!cli_sentinel_init_specs(&copySpecs))
@@ -483,14 +588,6 @@ cli_sentinel_set_endpos(int argc, char **argv)
 		}
 	}
 
-	CopyDataSpec copySpecs = { 0 };
-
-	if (!cli_sentinel_init_specs(&copySpecs))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
 	if (useCurrentLSN)
 	{
 		char *pguri = (char *) sentinelDBoptions.connStrings.source_pguri;
@@ -502,6 +599,36 @@ cli_sentinel_set_endpos(int argc, char **argv)
 
 		log_info("Fetched endpos %X/%X from source database",
 				 LSN_FORMAT_ARGS(endpos));
+	}
+
+	/* --host/--port: talk to the follow coordinator over TCP (no catalog) */
+	ServiceEndpoint service = cli_sentinel_service();
+
+	if (service.enabled)
+	{
+		IPCMessage request = { 0 };
+
+		IPC_INIT_MESSAGE(request, IPC_MSG_SET_ENDPOS);
+		IPCPayloadSetEndpos *cmd = (IPCPayloadSetEndpos *) request.payload;
+		cmd->endpos_lsn = endpos;
+		sformat(cmd->reason, sizeof(cmd->reason),
+				"CLI: pgcopydb sentinel set endpos");
+		request.payload_len = sizeof(IPCPayloadSetEndpos);
+
+		cli_sentinel_tcp_send(service, &request, NULL);
+
+		log_info("pgcopydb sentinel endpos has been set to %X/%X via service",
+				 LSN_FORMAT_ARGS(endpos));
+		fformat(stdout, "%X/%X\n", LSN_FORMAT_ARGS(endpos));
+		return;
+	}
+
+	CopyDataSpec copySpecs = { 0 };
+
+	if (!cli_sentinel_init_specs(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
 	DatabaseCatalog *sourceDB = &(copySpecs.catalogs.source);
@@ -541,6 +668,24 @@ cli_sentinel_set_apply(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
+	/* --host/--port: talk to the follow coordinator over TCP (no catalog) */
+	ServiceEndpoint service = cli_sentinel_service();
+
+	if (service.enabled)
+	{
+		IPCMessage request = { 0 };
+
+		IPC_INIT_MESSAGE(request, IPC_MSG_SET_APPLY);
+		IPCPayloadSetApply *cmd = (IPCPayloadSetApply *) request.payload;
+		cmd->apply = 1;
+		request.payload_len = sizeof(IPCPayloadSetApply);
+
+		cli_sentinel_tcp_send(service, &request, NULL);
+
+		log_info("pgcopydb sentinel apply mode has been enabled via service");
+		return;
+	}
+
 	CopyDataSpec copySpecs = { 0 };
 
 	if (!cli_sentinel_init_specs(&copySpecs))
@@ -573,6 +718,24 @@ cli_sentinel_set_prefetch(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
+	/* --host/--port: talk to the follow coordinator over TCP (no catalog) */
+	ServiceEndpoint service = cli_sentinel_service();
+
+	if (service.enabled)
+	{
+		IPCMessage request = { 0 };
+
+		IPC_INIT_MESSAGE(request, IPC_MSG_SET_APPLY);
+		IPCPayloadSetApply *cmd = (IPCPayloadSetApply *) request.payload;
+		cmd->apply = 0;
+		request.payload_len = sizeof(IPCPayloadSetApply);
+
+		cli_sentinel_tcp_send(service, &request, NULL);
+
+		log_info("pgcopydb sentinel apply mode has been disabled via service");
+		return;
+	}
+
 	CopyDataSpec copySpecs = { 0 };
 
 	if (!cli_sentinel_init_specs(&copySpecs))
@@ -603,22 +766,47 @@ cli_sentinel_get(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	CopyDataSpec copySpecs = { 0 };
-
-	if (!cli_sentinel_init_specs(&copySpecs))
-	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	DatabaseCatalog *sourceDB = &(copySpecs.catalogs.source);
-
 	CopyDBSentinel sentinel = { 0 };
 
-	if (!sentinel_get(sourceDB, &sentinel))
+	/* --host/--port: read the sentinel from the follow coordinator over TCP */
+	ServiceEndpoint service = cli_sentinel_service();
+
+	if (service.enabled)
 	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
+		IPCMessage request = { 0 };
+		IPCMessage response = { 0 };
+
+		IPC_INIT_MESSAGE(request, IPC_MSG_QUERY_SENTINEL);
+		request.payload_len = 0;
+
+		cli_sentinel_tcp_send(service, &request, &response);
+
+		if (response.type != IPC_MSG_SENTINEL_REPLY ||
+			response.payload_len < sizeof(CopyDBSentinel))
+		{
+			log_error("Unexpected response from the follow coordinator");
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		memcpy(&sentinel, response.payload, sizeof(CopyDBSentinel)); /* IGNORE-BANNED */
+	}
+	else
+	{
+		CopyDataSpec copySpecs = { 0 };
+
+		if (!cli_sentinel_init_specs(&copySpecs))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		DatabaseCatalog *sourceDB = &(copySpecs.catalogs.source);
+
+		if (!sentinel_get(sourceDB, &sentinel))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_SOURCE);
+		}
 	}
 
 	if (sentinelDBoptions.sentinelOptions.startpos)
@@ -682,17 +870,17 @@ cli_sentinel_get(int argc, char **argv)
 	}
 	else
 	{
-		fformat(stdout, "%-10s %X/%X\n", "startpos",
+		fformat(stdout, "%-15s %X/%X\n", "startpos",
 				LSN_FORMAT_ARGS(sentinel.startpos));
-		fformat(stdout, "%-10s %X/%X\n", "endpos",
+		fformat(stdout, "%-15s %X/%X\n", "endpos",
 				LSN_FORMAT_ARGS(sentinel.endpos));
-		fformat(stdout, "%-10s %s\n", "apply",
+		fformat(stdout, "%-15s %s\n", "apply",
 				sentinel.apply ? "enabled" : "disabled");
-		fformat(stdout, "%-10s %X/%X\n", "write_lsn",
+		fformat(stdout, "%-15s %X/%X\n", "write_lsn",
 				LSN_FORMAT_ARGS(sentinel.write_lsn));
-		fformat(stdout, "%-10s %X/%X\n", "flush_lsn",
+		fformat(stdout, "%-15s %X/%X\n", "flush_lsn",
 				LSN_FORMAT_ARGS(sentinel.flush_lsn));
-		fformat(stdout, "%-10s %X/%X\n", "replay_lsn",
+		fformat(stdout, "%-15s %X/%X\n", "replay_lsn",
 				LSN_FORMAT_ARGS(sentinel.replay_lsn));
 	}
 }

@@ -86,6 +86,20 @@ lsn2=$(psql -At -d "${PGCOPYDB_SOURCE_PGURI}" \
 pgcopydb stream prefetch --resume --endpos "${lsn2}" --notice
 pgcopydb stream catchup --resume --endpos "${lsn2}" --notice
 
+# The apply/catchup process performed the inline transform, so the stmt table
+# now holds the TRUNCATE template.  Assert the transform emitted "TRUNCATE ONLY"
+# (apply rewrites it to plain TRUNCATE for the partitioned target at apply time,
+# using a local buffer, without modifying the stored template).
+SHAREDIR=/var/lib/postgres/.local/share/pgcopydb
+REPLAYDB=$(find ${SHAREDIR} -maxdepth 1 -name '*-replay.db' -type f | head -1)
+
+truncate_sql=$(sqlite3 -init /dev/null -list -noheader ${REPLAYDB} \
+  "select sql from stmt where sql like 'TRUNCATE ONLY%' limit 1")
+if [ "${truncate_sql}" != "TRUNCATE ONLY partitioned_target.events" ]; then
+    echo "FAIL: truncate stmt: got '${truncate_sql}'"
+    exit 1
+fi
+
 pgcopydb stream cleanup
 
 final_count=$(psql -At -d "${PGCOPYDB_TARGET_PGURI}" \

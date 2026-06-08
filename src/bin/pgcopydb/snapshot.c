@@ -6,8 +6,11 @@
 #include <errno.h>
 #include <inttypes.h>
 
+#include "catalog.h"
 #include "copydb.h"
+#include "ld_stream.h"
 #include "log.h"
+#include "pgsql_timeline.h"
 
 /*
  * copydb_copy_snapshot initializes a new TransactionSnapshot from another
@@ -374,7 +377,8 @@ copydb_should_export_snapshot(CopyDataSpec *copySpecs)
 bool
 copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 									   const char *logrep_pguri,
-									   ReplicationSlot *slot)
+									   ReplicationSlot *slot,
+									   char *cdcPathDir)
 {
 	TransactionSnapshot *sourceSnapshot = &(copySpecs->sourceSnapshot);
 
@@ -410,10 +414,12 @@ copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 
 	sourceSnapshot->kind = SNAPSHOT_KIND_LOGICAL;
 
+	StreamSpecs specs = { 0 };
 	LogicalStreamClient *stream = &(sourceSnapshot->stream);
 
 	if (!pgsql_init_stream(stream,
 						   logrep_pguri,
+						   cdcPathDir,
 						   slot->plugin,
 						   slot->slotName,
 						   InvalidXLogRecPtr,
@@ -423,6 +429,7 @@ copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 		return false;
 	}
 
+	/* now create the replication slot, exporting the snapshot */
 	if (!pgsql_create_logical_replication_slot(stream, slot))
 	{
 		log_error("Failed to create a logical replication slot "
@@ -448,152 +455,26 @@ copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 		return false;
 	}
 
-	/* store the replication slot information in a file, same reasons */
-	if (!snapshot_write_slot(copySpecs->cfPaths.cdc.slotfile, slot))
+	/* store the replication slot information in the SQLite source catalog */
+	if (!catalog_write_replication_slot(&(copySpecs->catalogs.source), slot))
 	{
-		log_fatal("Failed to create the slot file \"%s\"",
-				  copySpecs->cfPaths.cdc.slotfile);
+		log_fatal("Failed to store replication slot in catalog \"%s\"",
+				  copySpecs->catalogs.source.dbfile);
 		return false;
 	}
 
-	return true;
-}
+	/* initialize catalog timeline history and create the output.db SQLite file */
+	specs.paths = copySpecs->cfPaths.cdc;
+	specs.sourceDB = &(copySpecs->catalogs.source);
+	specs.outputDB = &(copySpecs->catalogs.output);
+	specs.replayDB = &(copySpecs->catalogs.replay);
+	specs.private.startpos = slot->lsn;
 
-
-/*
- * snapshot_write_slot writes a replication slot information to file.
- */
-bool
-snapshot_write_slot(const char *filename, ReplicationSlot *slot)
-{
-	PQExpBuffer contents = createPQExpBuffer();
-
-	appendPQExpBuffer(contents, "%s\n", slot->slotName);
-	appendPQExpBuffer(contents, "%X/%X\n", LSN_FORMAT_ARGS(slot->lsn));
-	appendPQExpBuffer(contents, "%s\n", slot->snapshot);
-	appendPQExpBuffer(contents, "%s\n", OutputPluginToString(slot->plugin));
-	appendPQExpBuffer(contents, "%s\n", boolToString(slot->wal2jsonNumericAsString));
-
-	if (PQExpBufferBroken(contents))
-	{
-		log_error("Failed to allocate memory");
-		destroyPQExpBuffer(contents);
-		return false;
-	}
-
-	if (!write_file(contents->data, contents->len, filename))
-	{
-		log_fatal("Failed to create slot file \"%s\"", filename);
-
-		destroyPQExpBuffer(contents);
-		return false;
-	}
-
-	destroyPQExpBuffer(contents);
-	return true;
-}
-
-
-/*
- * snapshot_read_slot reads a replication slot information from file.
- */
-bool
-snapshot_read_slot(const char *filename, ReplicationSlot *slot)
-{
-	char *contents = NULL;
-	long fileSize = 0L;
-
-	log_trace("snapshot_read_slot: %s", filename);
-
-	if (!read_file(filename, &contents, &fileSize))
+	if (!stream_init_timeline(&specs, stream))
 	{
 		/* errors have already been logged */
 		return false;
 	}
-
-	/* make sure to use only the first line of the file, without \n */
-	LinesBuffer lbuf = { 0 };
-
-	if (!splitLines(&lbuf, contents))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (lbuf.count != 5)
-	{
-		log_error("Failed to parse replication slot file \"%s\"", filename);
-		return false;
-	}
-
-	/* 1. slotName */
-	int length = strlcpy(slot->slotName, lbuf.lines[0], sizeof(slot->slotName));
-
-	if (length >= sizeof(slot->slotName))
-	{
-		log_error("Failed to read replication slot name \"%s\" from file \"%s\", "
-				  "length is %lld bytes which exceeds maximum %lld bytes",
-				  lbuf.lines[0],
-				  filename,
-				  (long long) strlen(lbuf.lines[0]),
-				  (long long) sizeof(slot->slotName));
-		return false;
-	}
-
-	/* 2. LSN (consistent_point) */
-	if (!parseLSN(lbuf.lines[1], &(slot->lsn)))
-	{
-		log_error("Failed to parse LSN \"%s\" from file \"%s\"",
-				  lbuf.lines[1],
-				  filename);
-		return false;
-	}
-
-	/* 3. snapshot */
-	length = strlcpy(slot->snapshot, lbuf.lines[2], sizeof(slot->snapshot));
-
-	if (length >= sizeof(slot->snapshot))
-	{
-		log_error("Failed to read replication snapshot \"%s\" from file \"%s\", "
-				  "length is %lld bytes which exceeds maximum %lld bytes",
-				  lbuf.lines[2],
-				  filename,
-				  (long long) strlen(lbuf.lines[2]),
-				  (long long) sizeof(slot->snapshot));
-		return false;
-	}
-
-	/* 4. plugin */
-	slot->plugin = OutputPluginFromString(lbuf.lines[3]);
-
-	if (slot->plugin == STREAM_PLUGIN_UNKNOWN)
-	{
-		log_error("Failed to read plugin \"%s\" from file \"%s\"",
-				  lbuf.lines[3],
-				  filename);
-		return false;
-	}
-
-	/* 5. wal2json-numeric-as-string */
-	parse_bool(lbuf.lines[4], &(slot->wal2jsonNumericAsString));
-
-	if (slot->wal2jsonNumericAsString &&
-		slot->plugin != STREAM_PLUGIN_WAL2JSON)
-	{
-		log_error("Failed to read wal2json-numeric-as-string \"%s\" from file \"%s\" "
-				  "because the plugin is not wal2json",
-				  lbuf.lines[4],
-				  filename);
-	}
-
-
-	log_notice("Read replication slot file \"%s\" with snapshot \"%s\", "
-			   "slot \"%s\", lsn %X/%X, and plugin \"%s\"",
-			   filename,
-			   slot->snapshot,
-			   slot->slotName,
-			   LSN_FORMAT_ARGS(slot->lsn),
-			   OutputPluginToString(slot->plugin));
 
 	return true;
 }

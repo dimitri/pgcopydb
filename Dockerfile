@@ -127,6 +127,11 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
 RUN useradd -rm -d /var/lib/postgres -s /bin/bash -g postgres -G sudo docker
 RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 
+# Pre-create the work directory so that a fresh Docker named volume mounted at
+# /var/run/pgcopydb is pre-populated with the right ownership (docker:postgres)
+# rather than starting as root-owned and unwritable by the test user.
+RUN mkdir -p /var/run/pgcopydb && chown docker:postgres /var/run/pgcopydb
+
 COPY --from=build --chmod=755 /usr/lib/postgresql/${PGVERSION}/bin/pgcopydb /usr/local/bin
 COPY --from=build /usr/local/bin/sqlite3 /usr/local/bin/sqlite3
 

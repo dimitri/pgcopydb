@@ -90,46 +90,49 @@ PostgreSQL Logical Decoding Client
 
 The replication client of pgcopydb has been designed to be able to fetch
 changes from the source Postgres instance concurrently to the initial COPY
-of the data. Three worker processes are created to handle the logical
-decoding client:
+of the data. Two worker processes are created to handle the logical decoding
+client:
 
-  - The **streaming** process fetches data from the Postgres replication slot
-    using the Postgres replication protocol.
+  - The **receive** process fetches data from the Postgres replication slot
+    using the Postgres replication protocol and stores the decoded messages
+    into the *output table* of a SQLite database (the ``*-output.db`` file).
 
-  - The **transform** process transforms the data fetched from an intermediate
-    JSON format into a derivative of the SQL language. In *prefetch mode*
-    this is implemented as a batch operation; in *replay mode* this is done
-    in a streaming fashion, one line at a time, reading from a unix pipe.
-
-  - The **apply** process then applies the SQL script to the target Postgres
-    database system and uses Postgres APIs for `Replication Progress
-    Tracking`__.
+  - The **apply** process reads from the output table, transforms the decoded
+    messages into parameterized SQL statements (stored in the *stmt* and
+    *replay* tables of the ``*-replay.db`` file), and applies those statements
+    to the target Postgres database system, using Postgres APIs for
+    `Replication Progress Tracking`__.
 
     __ https://www.postgresql.org/docs/current//replication-origins.html
 
-During the initial COPY phase of operations, pgcopydb follow runs in
-prefetch mode and does not apply changes yet. After the initial COPY is
-done, then pgcopy replication system enters a loop that switches between the
-following two modes of operation:
+The transform step is no longer a separate worker process: it is now done
+*inline* by the apply process, which reads the output table and produces the
+replay statements as part of the same catchup loop. There is no standalone
+``stream transform`` command anymore.
 
-  1. In **prefetch mode**, changes are stored to JSON files on-disk, the
-     transform process operates on files when a SWITCH occurs, and the apply
-     process catches-up with changes on-disk by applying one file at time.
+The SQLite-based CDC pipeline uses a unified **catchup mode** for all
+operations. Both worker processes (receive, apply) can restart in the same
+mode every time. The SQLite databases provide inter-process communication,
+eliminating the need for complex mode-switching or Unix pipes.
 
-     When the next file to apply does not exists (yet), then the 3 transform
-     worker processes stop and the main follow supervisor process then
-     switches to *replay mode*.
+During the initial COPY phase of operations, pgcopydb follow starts the two
+worker processes which then:
 
-  2. In **replay mode** changes are streamed from the streaming worker
-     process to the transform worker process using a Unix PIPE mechanism,
-     and the obtained SQL statements are sent to the replay worker process
-     using another Unix PIPE.
+  1. **Receive** writes raw logical decoding messages to the output table in
+     the ``*-output.db`` file.
+  2. **Apply** continuously reads from the output table, transforms entries
+     into parameterized SQL in the ``*-replay.db`` file (stmt and replay
+     tables), and applies those changes to the target database, tracking
+     progress via replication origins.
 
-     Changes are then replayed in a streaming fashion, end-to-end, with a
-     transaction granularity.
+This pipelined approach allows both phases to operate concurrently, with the
+SQLite databases acting as a durable intermediate store and providing
+transaction-level synchronization between processes. Changes are applied with
+transaction granularity, and the system can be safely paused/resumed from the
+last applied LSN position.
 
-The internal SQL-like script format
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Internal CDC Storage Format
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The Postgres Logical Decoding API does not provide a CDC format, instead it
 allows Postgres extension developers to implement *logical decoding output
@@ -140,43 +143,43 @@ named `test_decoding`__. Another commonly used output plugin is named
 __ https://www.postgresql.org/docs/16/test-decoding.html
 __ https://github.com/eulerto/wal2json
 
-pgcopydb is compatible with both ``test_decoding`` and ``wal2json`` plugins. 
+pgcopydb is compatible with both ``test_decoding`` and ``wal2json`` plugins.
 As a user it's possible to choose an output plugin with the ``--plugin``
 command-line option.
 
 The output plugin compatibility means that pgcopydb has to implement code to
-parse the output plugin syntax and make sense of it. Internally, the
-messages from the output plugin are stored by pgcopydb in a `JSON Lines`__
-formatted file, where each line is a JSON record with decoded metadata about
-the changes and the output plugin message, as-is.
+parse the output plugin syntax and make sense of it. Internally, pgcopydb
+stores the decoded messages in two SQLite databases: the ``*-output.db`` file
+holds the raw decoded stream, and the ``*-replay.db`` file holds the
+transformed SQL statements. Together they use three main tables:
 
-__ https://jsonlines.org
+- **output table** (in ``*-output.db``): Stores the raw decoded messages from
+  the logical decoding output plugin, with metadata about the logical operation
+  and a normalized copy of the output plugin message.
 
-This JSON Lines format is transformed into SQL scripts. At first, pgcopydb
-would just use SQL for the intermediate format, but then support for 
-`prepared statements`__ was added  as an optimization. This means that our SQL
-script uses commands such as the following examples::
+- **replay table** (in ``*-replay.db``): Stores the transformed SQL statements,
+  with references to the prepared statements in the stmt table.
 
-  PREPARE d33a643f AS INSERT INTO public.rental ("rental_id", "rental_date", "inventory_id", "customer_id", "return_date", "staff_id", "last_update") overriding system value VALUES ($1, $2, $3, $4, $5, $6, $7), ($8, $9, $10, $11, $12, $13, $14);
-  EXECUTE d33a643f["16050","2022-06-01 00:00:00+00","371","291",null,"1","2022-06-01 00:00:00+00","16051","2022-06-01 00:00:00+00","373","293",null,"2","2022-06-01 00:00:00+00"];
+- **stmt table** (in ``*-replay.db``): A dictionary of prepared statements that
+  can be reused across multiple EXECUTE calls, with the actual SQL and a hash
+  for fast lookup.
+
+The apply process converts the output table entries into parameterized SQL
+using `prepared statements`__ as an optimization, as part of its inline
+transform step. This means that pgcopydb efficiently reuses prepared statements
+across multiple rows, avoiding the overhead of re-preparing identical
+statements.
 
 __ https://www.postgresql.org/docs/current/sql-prepare.html
 
-As you can see in the example, pgcopydb is now able to use a single INSERT
-statement with multiple VALUES, which is a huge performance boost. In order
-to simplify pgcopydb parsing of the SQL syntax, the choice was made to
-format the EXECUTE argument list as a JSON array, which does not comply with
-the actual SQL syntax, but is simple and fast to process.
+For example, a single INSERT template might be prepared once and then executed
+multiple times with different parameter values, providing a huge performance
+boost compared to individual INSERT statements.
 
-Finally, it's not possible for the transform process to anticipate the
-actual session management of the apply process, so SQL statements are always
-included with both the PREPARE and the EXECUTE steps. The pgcopydb apply
-code knows how to skip PREPARing again, of course.
-
-Unfortunately that means that our SQL files are not actually using SQL
-syntax and can't be processed as-is with any SQL client software. At the
-moment either using :ref:`pgcopydb_stream_apply` or writing your own
-processing code is required.
+The pgcopydb apply process reads from the replay table and executes the
+statements on the target database. It automatically handles statement caching
+and knows how to skip re-preparing statements that have already been prepared
+in the current session.
 
 .. _catalogs:
 

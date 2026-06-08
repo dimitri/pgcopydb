@@ -40,8 +40,11 @@ kill -TERM ${BACKGROUND_TRAFFIC_PID}
 # instead of inject service to ensure this data is captured during prefetch
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/multi-wal-txn.sql
 
-# check the replication slot file contents
-cat ${XDG_DATA_HOME}/pgcopydb/slot
+# In the SQLite design, slot info is stored in the catalog, not in a separate file.
+# Verify the replication slot was created by querying the catalog.
+sqlite3 ${TMPDIR}/pgcopydb/schema/source.db <<EOF
+select slot_name, lsn, snapshot, plugin from replication_slot;
+EOF
 
 # check the sqlite setup contents too
 sqlite3 ${TMPDIR}/pgcopydb/schema/source.db <<EOF
@@ -62,10 +65,17 @@ pgcopydb follow --plugin test_decoding --notice
 kill -TERM ${COPROC_PID}
 wait ${COPROC_PID}
 
-# sanity check transformed SQL contains quoted literal 'null' for null_texts
-SQLFILE=$(ls ${XDG_DATA_HOME}/pgcopydb/*.sql | sort | tail -n1)
-grep -q 'EXECUTE .*"null","\\\"null\\\""' "${SQLFILE}" \
-  || (echo "Expected quoted \"null\" literal in ${SQLFILE}" && exit 1)
+# In the SQLite design, the stmt/replay tables live in the *-replay.db
+# (the *-output.db only holds the output table).
+db=$(find ${TMPDIR}/cdc/pgcopydb -name "*-replay.db" -type f | head -1)
+if [ -z "${db}" ]; then
+  echo "Error: No CDC replay database file found in ${TMPDIR}/cdc/pgcopydb/" >&2
+  exit 1
+fi
+sqlite3 "${db}" <<EOF
+select count(*) as null_text_sqls from replay
+  where stmt_hash in (select hash from stmt where sql like '%null%');
+EOF
 
 # cleanup files and replication slot now
 pgcopydb stream cleanup

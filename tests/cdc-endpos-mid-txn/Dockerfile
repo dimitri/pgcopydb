@@ -6,8 +6,6 @@ COPY ./dml.sql dml.sql
 COPY ./dml1.sql dml1.sql
 COPY ./dml2.sql dml2.sql
 COPY ./ddl.sql ddl.sql
-COPY ./000000010000000000000002.json 000000010000000000000002.json
-COPY ./000000010000000000000002.sql 000000010000000000000002.sql
 
 USER docker
 CMD ["/usr/src/pgcopydb/copydb.sh"]

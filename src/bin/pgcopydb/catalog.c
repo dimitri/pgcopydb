@@ -35,9 +35,21 @@ static char *sourceDBcreateDDLs[] = {
 	"  snapshot text, "
 	"  split_tables_larger_than integer, "
 	"  split_max_parts integer, "
-	"  filters text, "
-	"  plugin text, "
-	"  slot_name text "
+	"  filters text "
+	")",
+
+	/*
+	 * Dedicated table for replication slot metadata.  Replaces the slot file
+	 * ($XDG_DATA_HOME/pgcopydb/slot) as the single authoritative store.
+	 * One row (id = 1) per pgcopydb operation.
+	 */
+	"create table replication_slot("
+	"  id integer primary key check (id = 1), "
+	"  slot_name text not null, "
+	"  lsn integer not null, "
+	"  snapshot text not null, "
+	"  plugin text not null, "
+	"  wal2json_numeric_as_string integer not null default 0 "
 	")",
 
 	"create table section("
@@ -187,10 +199,42 @@ static char *sourceDBcreateDDLs[] = {
 	"create table sentinel("
 	"  id integer primary key check (id = 1), "
 	"  startpos pg_lsn, endpos pg_lsn, apply bool, "
-	" write_lsn pg_lsn, flush_lsn pg_lsn, replay_lsn pg_lsn)",
+	"  write_lsn pg_lsn, flush_lsn pg_lsn, "
+	"  replay_lsn pg_lsn)",
+
+	"create table cdc_files("
+	"  id integer primary key, filename text unique, timeline integer, "
+	"  startpos pg_lsn, endpos pg_lsn, "
+	"  start_time_epoch integer, done_time_epoch integer)",
 
 	"create table timeline_history("
-	"  tli integer primary key, startpos pg_lsn, endpos pg_lsn)"
+	"  tli integer primary key, startpos pg_lsn, endpos pg_lsn)",
+
+	/*
+	 * pipeline_state — one row per CDC process (receive / apply).
+	 *
+	 * Written at the start and end of every run and kept current at every
+	 * transaction boundary (piggybacking on sentinel_sync calls).  Used on
+	 * restart to decide whether the last transaction was fully processed and
+	 * whether an incomplete transaction must be skipped.
+	 *
+	 * LSN columns use pg_lsn (text) for consistency with the sentinel table.
+	 * last_txn_end_lsn is NULL while the transaction is still open.
+	 */
+	"create table pipeline_state("
+	"  process_name      text     primary key, "  /* 'receive'|'apply' */
+	"  pid               integer, "
+	"  run_state         text     not null, "     /* 'running'|'done'|'error' */
+	"  run_start_lsn     pg_lsn   not null, "
+	"  run_end_lsn       pg_lsn, "               /* NULL while running */
+	"  started_at        integer  not null, "     /* Unix epoch */
+	"  ended_at          integer, "              /* NULL while running */
+	"  last_xid          integer, "
+	"  last_txn_begin_lsn  pg_lsn, "
+	"  last_txn_end_lsn    pg_lsn, "             /* NULL = transaction still open */
+	"  last_txn_complete   integer, "            /* 1 = had COMMIT or ROLLBACK */
+	"  last_txn_processed  integer"              /* 1 = fully written/applied */
+	")"
 };
 
 
@@ -414,6 +458,38 @@ static char *targetDBcreateDDLs[] = {
 };
 
 
+/*
+ * output.db schema — written exclusively by receive.
+ * Apply opens this file read-only to iterate output rows (inline transform).
+ */
+static char *outputDBcreateDDLs[] = {
+	"create table output("
+	"  id integer primary key, "
+	"  action text, xid integer, lsn integer, timestamp text, "
+	"  message text)",
+
+	"create unique index o_a_lsn on output(action, lsn)",
+	"create index o_a_xid on output(action, xid)",
+};
+
+/*
+ * replay.db schema — written exclusively by apply.
+ * stream catchup reads from this file.
+ */
+static char *replayDBcreateDDLs[] = {
+	"create table stmt(hash text primary key, sql text)",
+	"create unique index stmt_hash on stmt(hash)",
+
+	"create table replay("
+	"  id integer primary key, "
+	"  action text, xid integer, lsn integer, endlsn integer, timestamp text, "
+	"  stmt_hash text references stmt(hash), stmt_args jsonb)",
+
+	"create index r_xid on replay(xid)",
+	"create index r_lsn on replay(lsn)",
+};
+
+
 static char *sourceDBdropDDLs[] = {
 	"drop table if exists setup",
 	"drop table if exists section",
@@ -478,6 +554,16 @@ static char *targetDBdropDDLs[] = {
 	"drop table if exists s_attr",
 	"drop table if exists s_index",
 	"drop table if exists s_constraint"
+};
+
+
+static char *outputDBdropDDLs[] = {
+	"drop table if exists output"
+};
+
+static char *replayDBdropDDLs[] = {
+	"drop table if exists replay",
+	"drop table if exists stmt"
 };
 
 
@@ -699,8 +785,8 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 			 * has already been populated.
 			 */
 			if (tablePartsDataSection->fetched &&
-				copySpecs->splitTablesLargerThan.bytes !=
-				setup->splitTablesLargerThanBytes)
+				copySpecs->splitTablesLargerThan.bytes != setup->
+				splitTablesLargerThanBytes)
 			{
 				char bytesPretty[BUFSIZE] = { 0 };
 
@@ -862,9 +948,18 @@ catalog_init(DatabaseCatalog *catalog)
 
 	if (sqlite3_open(catalog->dbfile, &(catalog->db)) != SQLITE_OK)
 	{
+		/* capture errmsg before closing/null-ing handle */
+		const char *errmsg = sqlite3_errmsg(catalog->db);
+
 		log_error("Failed to open \"%s\": %s",
 				  catalog->dbfile,
-				  sqlite3_errmsg(catalog->db));
+				  errmsg);
+
+		if (catalog->db != NULL)
+		{
+			sqlite3_close(catalog->db);
+		}
+		catalog->db = NULL;
 		return false;
 	}
 
@@ -875,6 +970,8 @@ catalog_init(DatabaseCatalog *catalog)
 	if (!catalog_create_semaphore(catalog))
 	{
 		/* errors have already been logged */
+		sqlite3_close(catalog->db);
+		catalog->db = NULL;
 		return false;
 	}
 
@@ -887,10 +984,20 @@ catalog_init(DatabaseCatalog *catalog)
 		if (!catalog_set_wal_mode(catalog))
 		{
 			/* errors have already been logged */
+			sqlite3_close(catalog->db);
+			catalog->db = NULL;
 			return false;
 		}
 
-		return catalog_create_schema(catalog);
+		if (!catalog_create_schema(catalog))
+		{
+			/* errors have already been logged */
+			sqlite3_close(catalog->db);
+			catalog->db = NULL;
+			return false;
+		}
+
+		return true;
 	}
 
 	return true;
@@ -1056,6 +1163,20 @@ catalog_create_schema(DatabaseCatalog *catalog)
 			break;
 		}
 
+		case DATABASE_CATALOG_TYPE_REPLAY:
+		{
+			createDDLs = replayDBcreateDDLs;
+			count = sizeof(replayDBcreateDDLs) / sizeof(replayDBcreateDDLs[0]);
+			break;
+		}
+
+		case DATABASE_CATALOG_TYPE_OUTPUT:
+		{
+			createDDLs = outputDBcreateDDLs;
+			count = sizeof(outputDBcreateDDLs) / sizeof(outputDBcreateDDLs[0]);
+			break;
+		}
+
 		default:
 		{
 			log_error("BUG: called catalog_init for unknown type %d",
@@ -1113,6 +1234,20 @@ catalog_drop_schema(DatabaseCatalog *catalog)
 		{
 			dropDDLs = targetDBdropDDLs;
 			count = sizeof(targetDBdropDDLs) / sizeof(targetDBdropDDLs[0]);
+			break;
+		}
+
+		case DATABASE_CATALOG_TYPE_REPLAY:
+		{
+			dropDDLs = replayDBdropDDLs;
+			count = sizeof(replayDBdropDDLs) / sizeof(replayDBdropDDLs[0]);
+			break;
+		}
+
+		case DATABASE_CATALOG_TYPE_OUTPUT:
+		{
+			dropDDLs = outputDBdropDDLs;
+			count = sizeof(outputDBdropDDLs) / sizeof(outputDBdropDDLs[0]);
 			break;
 		}
 
@@ -1258,10 +1393,14 @@ catalog_register_setup(DatabaseCatalog *catalog,
 		{ BIND_PARAMETER_TYPE_TEXT, "snapshot", 0, (char *) snapshot },
 		{ BIND_PARAMETER_TYPE_TEXT, "filters", 0, (char *) filters },
 
-		{ BIND_PARAMETER_TYPE_INT64, "split_tables_larger_than",
-		  splitTablesLargerThanBytes, NULL },
-		{ BIND_PARAMETER_TYPE_INT64, "split_max_parts",
-		  splitMaxParts, NULL }
+		{
+			BIND_PARAMETER_TYPE_INT64, "split_tables_larger_than",
+			splitTablesLargerThanBytes, NULL
+		},
+		{
+			BIND_PARAMETER_TYPE_INT64, "split_max_parts",
+			splitMaxParts, NULL
+		}
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -1337,8 +1476,7 @@ catalog_setup(DatabaseCatalog *catalog)
 
 	char *sql =
 		"select id, source_pg_uri, target_pg_uri, snapshot, "
-		"       split_tables_larger_than, split_max_parts, filters, "
-		"       plugin, slot_name "
+		"       split_tables_larger_than, split_max_parts, filters "
 		"from setup";
 
 	if (!semaphore_lock(&(catalog->sema)))
@@ -1402,10 +1540,14 @@ catalog_update_setup(CopyDataSpec *copySpecs)
 
 	BindParam params[] = {
 		{ BIND_PARAMETER_TYPE_TEXT, "target_pg_uri", 0, (char *) tpguri.pguri },
-		{ BIND_PARAMETER_TYPE_INT64, "split_tables_larger_than",
-		  copySpecs->splitTablesLargerThan.bytes, NULL },
-		{ BIND_PARAMETER_TYPE_INT, "split_max_parts",
-		  copySpecs->splitMaxParts, NULL }
+		{
+			BIND_PARAMETER_TYPE_INT64, "split_tables_larger_than",
+			copySpecs->splitTablesLargerThan.bytes, NULL
+		},
+		{
+			BIND_PARAMETER_TYPE_INT, "split_max_parts",
+			copySpecs->splitMaxParts, NULL
+		}
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -1608,41 +1750,19 @@ catalog_setup_fetch(SQLiteQuery *query)
 				bytes);
 	}
 
-	/*
-	 * plugin (a string buffer)
-	 */
-	if (sqlite3_column_type(query->ppStmt, 7) != SQLITE_NULL)
-	{
-		strlcpy(setup->plugin,
-				(char *) sqlite3_column_text(query->ppStmt, 7),
-				sizeof(setup->plugin));
-	}
-
-	/*
-	 * slot_name (a string buffer)
-	 */
-	if (sqlite3_column_type(query->ppStmt, 8) != SQLITE_NULL)
-	{
-		strlcpy(setup->slotName,
-				(char *) sqlite3_column_text(query->ppStmt, 8),
-				sizeof(setup->slotName));
-	}
-
 	return true;
 }
 
 
 /*
- * catalog_setup_replication updates the catalog setup with the information
- * relevant to the logical replication setup. It is meant to be called after
- * having initialized the catalog, once the replication slot has been created,
- * exporting the snapshot.
+ * catalog_setup_replication updates the catalog setup snapshot field.  It is
+ * meant to be called after having initialized the catalog, once the replication
+ * slot has been created and the snapshot exported.  Plugin and slot_name are
+ * the sole authority of the replication_slot table; they are not duplicated
+ * here.
  */
 bool
-catalog_setup_replication(DatabaseCatalog *catalog,
-						  const char *snapshot,
-						  const char *plugin,
-						  const char *slotName)
+catalog_setup_replication(DatabaseCatalog *catalog, const char *snapshot)
 {
 	sqlite3 *db = catalog->db;
 
@@ -1654,7 +1774,7 @@ catalog_setup_replication(DatabaseCatalog *catalog,
 
 	char *sql =
 		"update setup "
-		"   set snapshot = $1, plugin = $2, slot_name = $3 "
+		"   set snapshot = $1 "
 		" where id = 1";
 
 	SQLiteQuery query = { .errorOnZeroRows = true };
@@ -1667,9 +1787,7 @@ catalog_setup_replication(DatabaseCatalog *catalog,
 
 	/* bind our parameters now */
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "snapshot", 0, (char *) snapshot },
-		{ BIND_PARAMETER_TYPE_TEXT, "plugin", 0, (char *) plugin },
-		{ BIND_PARAMETER_TYPE_TEXT, "slot_name", 0, (char *) slotName }
+		{ BIND_PARAMETER_TYPE_TEXT, "snapshot", 0, (char *) snapshot }
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -1684,6 +1802,248 @@ catalog_setup_replication(DatabaseCatalog *catalog,
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_write_replication_slot persists all five fields of a ReplicationSlot
+ * to the dedicated replication_slot table (INSERT OR REPLACE, id = 1).
+ *
+ * This replaces snapshot_write_slot() which wrote the same data to a flat
+ * text file.  The SQLite table is the single authoritative store.
+ */
+bool
+catalog_write_replication_slot(DatabaseCatalog *catalog,
+							   const ReplicationSlot *slot)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_write_replication_slot: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"insert or replace into replication_slot"
+		"  (id, slot_name, lsn, snapshot, plugin, wal2json_numeric_as_string)"
+		"  values(1, $1, $2, $3, $4, $5)";
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	char lsnStr[PG_LSN_MAXLENGTH] = { 0 };
+	sformat(lsnStr, sizeof(lsnStr), "%X/%X", LSN_FORMAT_ARGS(slot->lsn));
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_TEXT, "slot_name", 0, (char *) slot->slotName },
+		{ BIND_PARAMETER_TYPE_INT64, "lsn", slot->lsn, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "snapshot", 0, (char *) slot->snapshot },
+		{
+			BIND_PARAMETER_TYPE_TEXT, "plugin",
+			0, (char *) OutputPluginToString(slot->plugin)
+		},
+		{
+			BIND_PARAMETER_TYPE_INT64, "wal2json_numeric_as_string",
+			slot->wal2jsonNumericAsString ? 1 : 0, NULL
+		}
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	log_notice("Stored replication slot \"%s\" lsn %X/%X snapshot \"%s\" "
+			   "plugin \"%s\" in catalog \"%s\"",
+			   slot->slotName,
+			   LSN_FORMAT_ARGS(slot->lsn),
+			   slot->snapshot,
+			   OutputPluginToString(slot->plugin),
+			   catalog->dbfile);
+
+	return true;
+}
+
+
+/*
+ * catalog_replication_slot_fetch is a SQLiteQuery fetchFunction callback.
+ */
+static bool
+catalog_replication_slot_fetch(SQLiteQuery *query)
+{
+	ReplicationSlot *slot = (ReplicationSlot *) query->context;
+
+	/* slot_name */
+	if (sqlite3_column_type(query->ppStmt, 0) != SQLITE_NULL)
+	{
+		strlcpy(slot->slotName,
+				(char *) sqlite3_column_text(query->ppStmt, 0),
+				sizeof(slot->slotName));
+	}
+
+	/* lsn */
+	slot->lsn = (uint64_t) sqlite3_column_int64(query->ppStmt, 1);
+
+	/* snapshot */
+	if (sqlite3_column_type(query->ppStmt, 2) != SQLITE_NULL)
+	{
+		strlcpy(slot->snapshot,
+				(char *) sqlite3_column_text(query->ppStmt, 2),
+				sizeof(slot->snapshot));
+	}
+
+	/* plugin */
+	if (sqlite3_column_type(query->ppStmt, 3) != SQLITE_NULL)
+	{
+		slot->plugin =
+			OutputPluginFromString(
+				(char *) sqlite3_column_text(query->ppStmt, 3));
+	}
+
+	/* wal2json_numeric_as_string */
+	slot->wal2jsonNumericAsString = sqlite3_column_int(query->ppStmt, 4) != 0;
+
+	return true;
+}
+
+
+/*
+ * catalog_read_replication_slot reads the replication_slot row (id = 1) from
+ * the given catalog and populates *slot.
+ *
+ * Returns true with slot->slotName empty when no row has been written yet
+ * (first run).  Returns false only on a real database error.
+ */
+bool
+catalog_read_replication_slot(DatabaseCatalog *catalog, ReplicationSlot *slot)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_read_replication_slot: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"select slot_name, lsn, snapshot, plugin, wal2json_numeric_as_string "
+		"  from replication_slot where id = 1";
+
+	SQLiteQuery query = {
+		.errorOnZeroRows = false,
+		.context = slot,
+		.fetchFunction = &catalog_replication_slot_fetch
+	};
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
+ * catalog_open_for_slot opens the source catalog at `dbfile` read-only, just
+ * enough to call catalog_read_replication_slot.
+ *
+ * Returns false (not an error) when the file does not exist yet — the caller
+ * treats that as "no prior slot, use defaults".  Returns false with an error
+ * logged for actual open failures.
+ */
+bool
+catalog_open_for_slot(const char *dbfile, DatabaseCatalog *catalog)
+{
+	if (!file_exists(dbfile))
+	{
+		return false;           /* no catalog yet, not an error */
+	}
+
+	strlcpy(catalog->dbfile, dbfile, sizeof(catalog->dbfile));
+	catalog->type = DATABASE_CATALOG_TYPE_SOURCE;
+
+	/*
+	 * Open read-only: we only need to SELECT from replication_slot.
+	 * We bypass the full catalog_init / catalog_create_schema path to avoid
+	 * trying to CREATE TABLE on a read-only connection.
+	 */
+	int rc = sqlite3_open_v2(catalog->dbfile,
+							 &(catalog->db),
+							 SQLITE_OPEN_READONLY,
+							 NULL);
+
+	if (rc != SQLITE_OK)
+	{
+		log_error("Failed to open catalog \"%s\" read-only: %s",
+				  catalog->dbfile,
+				  sqlite3_errmsg(catalog->db));
+		sqlite3_close(catalog->db);
+		catalog->db = NULL;
+		return false;
+	}
+
+	/*
+	 * Create a private catalog semaphore so catalog_read_replication_slot
+	 * can lock it.  We must NOT use semaphore_init() here: that function
+	 * re-opens the shared log semaphore (PGCOPYDB_LOG_SEMAPHORE) when the
+	 * environment variable is set.  Using the log semaphore as the catalog
+	 * lock causes an immediate self-deadlock: catalog_read_replication_slot
+	 * acquires it, then catalog_sql_prepare calls log_sqlite() which tries
+	 * to acquire the same semaphore again (it is not reentrant).
+	 */
+	if (!catalog_create_semaphore(catalog))
+	{
+		/* errors have already been logged */
+		sqlite3_close(catalog->db);
+		catalog->db = NULL;
 		return false;
 	}
 
@@ -1776,8 +2136,10 @@ catalog_section_state(DatabaseCatalog *catalog, CatalogSection *section)
 
 	/* bind our parameters now */
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "name", 0,
-		  CopyDataSectionToString(section->section) }
+		{
+			BIND_PARAMETER_TYPE_TEXT, "name", 0,
+			CopyDataSectionToString(section->section)
+		}
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -1971,11 +2333,15 @@ catalog_add_s_matview(DatabaseCatalog *catalog, SourceTable *table)
 		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, table->nspname },
 		{ BIND_PARAMETER_TYPE_TEXT, "relname", 0, table->relname },
 
-		{ BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
-		  table->restoreListName },
+		{
+			BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
+			table->restoreListName
+		},
 
-		{ BIND_PARAMETER_TYPE_INT, "exclude_data",
-		  table->excludeData ? 1 : 0, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT, "exclude_data",
+			table->excludeData ? 1 : 0, NULL
+		},
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -2139,14 +2505,18 @@ catalog_add_s_table(DatabaseCatalog *catalog, SourceTable *table)
 		{ BIND_PARAMETER_TYPE_TEXT, "relname", 0, table->relname },
 		{ BIND_PARAMETER_TYPE_TEXT, "amname", 0, table->amname },
 
-		{ BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
-		  table->restoreListName },
+		{
+			BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
+			table->restoreListName
+		},
 
 		{ BIND_PARAMETER_TYPE_INT64, "relpages", table->relpages, NULL },
 		{ BIND_PARAMETER_TYPE_INT64, "reltuples", table->reltuples, NULL },
 
-		{ BIND_PARAMETER_TYPE_INT, "exclude_data",
-		  table->excludeData ? 1 : 0, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT, "exclude_data",
+			table->excludeData ? 1 : 0, NULL
+		},
 
 		{ BIND_PARAMETER_TYPE_TEXT, "part_key", 0, table->partKey }
 	};
@@ -2217,14 +2587,20 @@ catalog_add_attributes(DatabaseCatalog *catalog, SourceTable *table)
 			{ BIND_PARAMETER_TYPE_INT64, "atttypid", attr->atttypid, NULL },
 			{ BIND_PARAMETER_TYPE_TEXT, "attname", 0, attr->attname },
 
-			{ BIND_PARAMETER_TYPE_INT, "attisprimary",
-			  attr->attisprimary ? 1 : 0, NULL },
+			{
+				BIND_PARAMETER_TYPE_INT, "attisprimary",
+				attr->attisprimary ? 1 : 0, NULL
+			},
 
-			{ BIND_PARAMETER_TYPE_INT, "attisreplident",
-			  attr->attisreplident ? 1 : 0, NULL },
+			{
+				BIND_PARAMETER_TYPE_INT, "attisreplident",
+				attr->attisreplident ? 1 : 0, NULL
+			},
 
-			{ BIND_PARAMETER_TYPE_INT, "attisgenerated",
-			  attr->attisgenerated ? 1 : 0, NULL }
+			{
+				BIND_PARAMETER_TYPE_INT, "attisgenerated",
+				attr->attisgenerated ? 1 : 0, NULL
+			}
 		};
 
 		int count = sizeof(params) / sizeof(params[0]);
@@ -2640,6 +3016,15 @@ catalog_count_objects(DatabaseCatalog *catalog, CatalogCounts *count)
 				"       0 as ext,"
 				"       0 as colls,"
 				"       0 as pg_depend";
+			break;
+		}
+
+		case DATABASE_CATALOG_TYPE_REPLAY:
+		case DATABASE_CATALOG_TYPE_OUTPUT:
+		{
+			/* CDC databases don't have schema objects to count */
+			sql =
+				"select 0,0,0,0,0,0,0,0,0,0";
 			break;
 		}
 
@@ -3839,8 +4224,10 @@ catalog_add_s_index(DatabaseCatalog *catalog, SourceIndex *index)
 		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, index->indexNamespace },
 		{ BIND_PARAMETER_TYPE_TEXT, "relname", 0, index->indexRelname },
 
-		{ BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
-		  index->indexRestoreListName },
+		{
+			BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
+			index->indexRestoreListName
+		},
 
 		{ BIND_PARAMETER_TYPE_INT64, "tableoid", index->tableOid, NULL },
 
@@ -3904,10 +4291,14 @@ catalog_add_s_constraint(DatabaseCatalog *catalog, SourceIndex *index)
 		{ BIND_PARAMETER_TYPE_TEXT, "conname", 0, index->constraintName },
 		{ BIND_PARAMETER_TYPE_INT64, "indexoid", index->indexOid, NULL },
 
-		{ BIND_PARAMETER_TYPE_INT, "condeferable",
-		  index->condeferrable ? 1 : 0, NULL },
-		{ BIND_PARAMETER_TYPE_INT, "condeffered",
-		  index->condeferred ? 1 : 0, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT, "condeferable",
+			index->condeferrable ? 1 : 0, NULL
+		},
+		{
+			BIND_PARAMETER_TYPE_INT, "condeffered",
+			index->condeferred ? 1 : 0, NULL
+		},
 
 		{ BIND_PARAMETER_TYPE_TEXT, "sql", 0, index->constraintDef }
 	};
@@ -4644,8 +5035,10 @@ catalog_add_s_seq(DatabaseCatalog *catalog, SourceSequence *seq)
 		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, seq->nspname },
 		{ BIND_PARAMETER_TYPE_TEXT, "relname", 0, seq->relname },
 
-		{ BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
-		  seq->restoreListName }
+		{
+			BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
+			seq->restoreListName
+		}
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -5339,8 +5732,10 @@ catalog_lookup_filter_by_rlname(DatabaseCatalog *catalog,
 
 	/* bind our parameters now */
 	BindParam params[1] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
-		  (char *) restoreListName },
+		{
+			BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
+			(char *) restoreListName
+		},
 	};
 
 	if (!catalog_sql_bind(&query, params, 1))
@@ -5477,8 +5872,10 @@ catalog_add_s_database_properties(DatabaseCatalog *catalog, SourceProperty *guc)
 
 	/* bind our parameters now */
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_INT, "role_in_database",
-		  guc->roleInDatabase ? 1 : 0, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT, "role_in_database",
+			guc->roleInDatabase ? 1 : 0, NULL
+		},
 
 		{ BIND_PARAMETER_TYPE_TEXT, "rolname", 0, guc->rolname },
 		{ BIND_PARAMETER_TYPE_TEXT, "datname", 0, guc->datname },
@@ -5933,8 +6330,10 @@ catalog_add_s_coll(DatabaseCatalog *catalog, SourceCollation *coll)
 		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, coll->collname },
 		{ BIND_PARAMETER_TYPE_TEXT, "description", 0, coll->desc },
 
-		{ BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
-		  coll->restoreListName }
+		{
+			BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
+			coll->restoreListName
+		}
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -6184,8 +6583,10 @@ catalog_add_s_namespace(DatabaseCatalog *catalog, SourceSchema *namespace)
 		{ BIND_PARAMETER_TYPE_INT64, "oid", namespace->oid, NULL },
 		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, namespace->nspname },
 
-		{ BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
-		  namespace->restoreListName }
+		{
+			BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
+			namespace->restoreListName
+		}
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -6249,8 +6650,10 @@ catalog_lookup_s_namespace_by_nspname(DatabaseCatalog *catalog,
 
 	/* bind our parameters now */
 	BindParam params[1] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0,
-		  (char *) nspname },
+		{
+			BIND_PARAMETER_TYPE_TEXT, "nspname", 0,
+			(char *) nspname
+		},
 	};
 
 	if (!catalog_sql_bind(&query, params, 1))
@@ -6436,8 +6839,10 @@ catalog_lookup_s_extension_by_extname(DatabaseCatalog *catalog,
 
 	/* bind our parameters now */
 	BindParam params[1] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "extname", 0,
-		  (char *) extname },
+		{
+			BIND_PARAMETER_TYPE_TEXT, "extname", 0,
+			(char *) extname
+		},
 	};
 
 	if (!catalog_sql_bind(&query, params, 1))
@@ -6494,8 +6899,10 @@ catalog_add_s_extension(DatabaseCatalog *catalog, SourceExtension *extension)
 		{ BIND_PARAMETER_TYPE_TEXT, "extname", 0, extension->extname },
 		{ BIND_PARAMETER_TYPE_TEXT, "extnamespace", 0, extension->extnamespace },
 
-		{ BIND_PARAMETER_TYPE_INT, "extrelocatable",
-		  extension->extrelocatable ? 1 : 0, NULL }
+		{
+			BIND_PARAMETER_TYPE_INT, "extrelocatable",
+			extension->extrelocatable ? 1 : 0, NULL
+		}
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -8037,7 +8444,9 @@ catalog_sql_bind(SQLiteQuery *query, BindParam *params, int count)
 {
 	if (!catalog_bind_parameters(query->db, query->ppStmt, params, count))
 	{
-		/* errors have already been logged */
+		log_error("[SQLite] Failed to bind parameters in query: %s",
+				  query->sql);
+
 		(void) sqlite3_clear_bindings(query->ppStmt);
 		(void) sqlite3_finalize(query->ppStmt);
 		return false;
@@ -8083,7 +8492,19 @@ catalog_sql_execute(SQLiteQuery *query)
 		if (rc != SQLITE_DONE)
 		{
 			log_error("Failed to execute statement: %s", query->sql);
-			log_error("[SQLite %d] %s", rc, sqlite3_errstr(rc));
+
+			int offset = sqlite3_error_offset(query->db);
+
+			if (offset != -1)
+			{
+				/* "Failed to step through statement: %s" is 34 chars of prefix */
+				log_error("%34s%*s^", " ", offset, " ");
+			}
+
+			log_error("[SQLite %d: %s]: %s",
+					  rc,
+					  sqlite3_errstr(rc),
+					  sqlite3_errmsg(query->db));
 
 			(void) sqlite3_clear_bindings(query->ppStmt);
 			(void) sqlite3_finalize(query->ppStmt);
@@ -8091,6 +8512,7 @@ catalog_sql_execute(SQLiteQuery *query)
 			return false;
 		}
 	}
+
 	/* when we have a fetchFunction we expect only one row, and exactly one */
 	else
 	{
@@ -8109,7 +8531,19 @@ catalog_sql_execute(SQLiteQuery *query)
 			if (rc != SQLITE_ROW)
 			{
 				log_error("Failed to step through statement: %s", query->sql);
-				log_error("[SQLite %d] %s", rc, sqlite3_errstr(rc));
+
+				int offset = sqlite3_error_offset(query->db);
+
+				if (offset != -1)
+				{
+					/* "Failed to step through statement: %s" is 34 chars of prefix */
+					log_error("%34s%*s^", " ", offset, " ");
+				}
+
+				log_error("[SQLite %d: %s]: %s",
+						  rc,
+						  sqlite3_errstr(rc),
+						  sqlite3_errmsg(query->db));
 
 				(void) sqlite3_clear_bindings(query->ppStmt);
 				(void) sqlite3_finalize(query->ppStmt);
@@ -8130,7 +8564,19 @@ catalog_sql_execute(SQLiteQuery *query)
 			if (catalog_sql_step(query) != SQLITE_DONE)
 			{
 				log_error("Failed to execute statement: %s", query->sql);
-				log_error("[SQLite %d] %s", rc, sqlite3_errstr(rc));
+
+				int offset = sqlite3_error_offset(query->db);
+
+				if (offset != -1)
+				{
+					/* "Failed to step through statement: %s" is 34 chars of prefix */
+					log_error("%34s%*s^", " ", offset, " ");
+				}
+
+				log_error("[SQLite %d: %s]: %s",
+						  rc,
+						  sqlite3_errstr(rc),
+						  sqlite3_errmsg(query->db));
 
 				(void) sqlite3_clear_bindings(query->ppStmt);
 				(void) sqlite3_finalize(query->ppStmt);
@@ -8192,7 +8638,7 @@ catalog_sql_step(SQLiteQuery *query)
 			int sleepTimeMs =
 				pgsql_compute_connection_retry_sleep_time(&retryPolicy);
 
-			log_sqlite("[SQLite %d]: %s, try again in %dms",
+			log_notice("[SQLite %d]: %s, try again in %dms",
 					   rc,
 					   sqlite3_errmsg(query->db),
 					   sleepTimeMs);
@@ -8255,6 +8701,27 @@ catalog_bind_parameters(sqlite3 *db,
 
 		switch (p->type)
 		{
+			case BIND_PARAMETER_TYPE_NULL:
+			{
+				int rc = sqlite3_bind_null(ppStmt, n);
+
+				if (rc != SQLITE_OK)
+				{
+					log_error("[SQLite %d] Failed to bind \"%s\" to NULL: %s",
+							  rc,
+							  p->name,
+							  sqlite3_errstr(rc));
+					return false;
+				}
+
+				if (logSQL)
+				{
+					appendPQExpBuffer(debugParameters, "%s", "null");
+				}
+
+				break;
+			}
+
 			case BIND_PARAMETER_TYPE_INT:
 			{
 				int rc = sqlite3_bind_int(ppStmt, n, p->intVal);

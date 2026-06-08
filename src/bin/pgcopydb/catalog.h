@@ -6,6 +6,7 @@
 #ifndef CATALOG_H
 #define CATALOG_H
 
+#include "pgsql.h"
 #include "schema.h"
 #include "string_utils.h"
 
@@ -53,13 +54,17 @@ bool catalog_register_setup(DatabaseCatalog *catalog,
 							int splitMaxParts,
 							const char *filters);
 
-bool catalog_setup_replication(DatabaseCatalog *catalog,
-							   const char *snapshot,
-							   const char *plugin,
-							   const char *slotName);
+bool catalog_setup_replication(DatabaseCatalog *catalog, const char *snapshot);
 
 bool catalog_setup(DatabaseCatalog *catalog);
 bool catalog_setup_fetch(SQLiteQuery *query);
+
+/* Replication slot — replaces the slot flat file */
+bool catalog_write_replication_slot(DatabaseCatalog *catalog,
+									const ReplicationSlot *slot);
+bool catalog_read_replication_slot(DatabaseCatalog *catalog,
+								   ReplicationSlot *slot);
+bool catalog_open_for_slot(const char *dbfile, DatabaseCatalog *catalog);
 
 /*
  * Catalog sections keep track of items that have been fetched to cache
@@ -634,6 +639,7 @@ bool catalog_timeline_history_fetch(SQLiteQuery *query);
 typedef enum
 {
 	BIND_PARAMETER_TYPE_UNKNOWN = 0,
+	BIND_PARAMETER_TYPE_NULL,
 	BIND_PARAMETER_TYPE_INT,
 	BIND_PARAMETER_TYPE_INT64,
 	BIND_PARAMETER_TYPE_TEXT

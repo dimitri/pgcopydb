@@ -17,6 +17,7 @@
 #include "cli_common.h"
 #include "cli_root.h"
 #include "commandline.h"
+#include "catalog.h"
 #include "copydb.h"
 #include "env_utils.h"
 #include "file_utils.h"
@@ -458,10 +459,13 @@ cli_read_previous_options(CopyDBOptions *options, CopyFilePaths *cfPaths)
 	}
 
 	/*
-	 * Now read the replication slot file, which includes information for both
-	 * --slot-name and --plugin option, and more.
+	 * Now read the replication slot from the SQLite source catalog, which
+	 * includes information for both --slot-name and --plugin option, and more.
 	 */
-	if (options->restart || !file_exists(cfPaths->cdc.slotfile))
+	DatabaseCatalog sourceCatalog = { 0 };
+	bool slotExists = catalog_open_for_slot(cfPaths->sdbfile, &sourceCatalog);
+
+	if (options->restart || !slotExists)
 	{
 		/*
 		 * Only install a default value for the --plugin option when it wasn't
@@ -480,38 +484,58 @@ cli_read_previous_options(CopyDBOptions *options, CopyFilePaths *cfPaths)
 	}
 	else
 	{
-		ReplicationSlot onFileSlot = { 0 };
+		ReplicationSlot onCatalogSlot = { 0 };
 
-		if (!snapshot_read_slot(cfPaths->cdc.slotfile, &onFileSlot))
+		if (!catalog_read_replication_slot(&sourceCatalog, &onCatalogSlot))
 		{
 			/* errors have already been logged */
+			(void) catalog_close(&sourceCatalog);
 			return false;
 		}
 
-		if (!IS_EMPTY_STRING_BUFFER(options->slot.slotName) &&
-			!streq(options->slot.slotName, onFileSlot.slotName))
+		(void) catalog_close(&sourceCatalog);
+
+		if (IS_EMPTY_STRING_BUFFER(onCatalogSlot.slotName))
 		{
-			log_error("Failed to ensure consistency of --slot-name");
-			log_error("Previous run was done with slot-name \"%s\" and "
-					  "current run is using --slot-name \"%s\"",
-					  onFileSlot.slotName,
-					  options->slot.slotName);
-			return false;
-		}
+			/* catalog exists but no slot row yet: treat as first run */
+			if (IS_EMPTY_STRING_BUFFER(options->slot.slotName))
+			{
+				strlcpy(options->slot.slotName, REPLICATION_SLOT_NAME,
+						sizeof(options->slot.slotName));
+			}
 
-		if (options->slot.plugin != STREAM_PLUGIN_UNKNOWN &&
-			options->slot.plugin != onFileSlot.plugin)
+			if (options->slot.plugin == STREAM_PLUGIN_UNKNOWN)
+			{
+				options->slot.plugin = OutputPluginFromString(REPLICATION_PLUGIN);
+			}
+		}
+		else
 		{
-			log_error("Failed to ensure consistency of --plugin");
-			log_error("Previous run was done with plugin \"%s\" and "
-					  "current run is using --plugin \"%s\"",
-					  OutputPluginToString(onFileSlot.plugin),
-					  OutputPluginToString(options->slot.plugin));
-			return false;
-		}
+			if (!IS_EMPTY_STRING_BUFFER(options->slot.slotName) &&
+				!streq(options->slot.slotName, onCatalogSlot.slotName))
+			{
+				log_error("Failed to ensure consistency of --slot-name");
+				log_error("Previous run was done with slot-name \"%s\" and "
+						  "current run is using --slot-name \"%s\"",
+						  onCatalogSlot.slotName,
+						  options->slot.slotName);
+				return false;
+			}
 
-		/* copy the onFileSlot over to our options, wholesale */
-		options->slot = onFileSlot;
+			if (options->slot.plugin != STREAM_PLUGIN_UNKNOWN &&
+				options->slot.plugin != onCatalogSlot.plugin)
+			{
+				log_error("Failed to ensure consistency of --plugin");
+				log_error("Previous run was done with plugin \"%s\" and "
+						  "current run is using --plugin \"%s\"",
+						  OutputPluginToString(onCatalogSlot.plugin),
+						  OutputPluginToString(options->slot.plugin));
+				return false;
+			}
+
+			/* copy the onCatalogSlot over to our options, wholesale */
+			options->slot = onCatalogSlot;
+		}
 	}
 
 	if (options->slot.plugin == STREAM_PLUGIN_UNKNOWN)
@@ -579,6 +603,48 @@ cli_read_one_line(const char *filename,
 
 
 /*
+ * cli_read_coordinator_env fills-in the optional follow coordinator TCP
+ * endpoint (host/port) from the PGCOPYDB_HOST and PGCOPYDB_PORT environment
+ * variables.  This is a server-side convenience (e.g. docker-compose): the
+ * follow/clone/replay commands listen on that endpoint.  Explicit --host /
+ * --port options, parsed afterwards, take precedence.  The "stream sentinel"
+ * client does NOT read these — it requires explicit --host/--port.
+ */
+void
+cli_read_coordinator_env(CopyDBOptions *options)
+{
+	if (env_exists("PGCOPYDB_HOST"))
+	{
+		char host[256] = { 0 };
+
+		if (get_env_copy("PGCOPYDB_HOST", host, sizeof(host)) && host[0] != '\0')
+		{
+			strlcpy(options->host, host, sizeof(options->host));
+		}
+	}
+
+	if (env_exists("PGCOPYDB_PORT"))
+	{
+		char port[16] = { 0 };
+
+		if (get_env_copy("PGCOPYDB_PORT", port, sizeof(port)) && port[0] != '\0')
+		{
+			int portNumber = 0;
+
+			if (stringToInt(port, &portNumber))
+			{
+				options->port = portNumber;
+			}
+			else
+			{
+				log_warn("Ignoring invalid PGCOPYDB_PORT value \"%s\"", port);
+			}
+		}
+	}
+}
+
+
+/*
  * cli_copy_db_getopts parses the CLI options for the `copy db` command.
  */
 int
@@ -634,6 +700,8 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "origin", required_argument, NULL, 'o' },
 		{ "create-slot", no_argument, NULL, 't' },
 		{ "endpos", required_argument, NULL, 'E' },
+		{ "host", required_argument, NULL, 1001 },
+		{ "port", required_argument, NULL, 1002 },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "notice", no_argument, NULL, 'v' },
@@ -652,6 +720,9 @@ cli_copy_db_getopts(int argc, char **argv)
 		log_fatal("Failed to read default values from the environment");
 		exit(EXIT_CODE_BAD_ARGS);
 	}
+
+	/* server-side: PGCOPYDB_HOST/PGCOPYDB_PORT may set the coordinator endpoint */
+	cli_read_coordinator_env(&options);
 
 	const char *optstring =
 		"S:T:D:J:I:b:L:u:mcAPOXj:xBeMlUagkynF:F:Q:irRCN:fp:ws:o:tE:Vvdzqh";
@@ -1000,6 +1071,25 @@ cli_copy_db_getopts(int argc, char **argv)
 				break;
 			}
 
+			case 1001:      /* --host: follow coordinator TCP listen host */
+			{
+				strlcpy(options.host, optarg, sizeof(options.host));
+				log_trace("--host %s", options.host);
+				break;
+			}
+
+			case 1002:      /* --port: follow coordinator TCP listen port */
+			{
+				if (!stringToInt(optarg, &(options.port)))
+				{
+					log_fatal("--port value \"%s\" is not a valid integer",
+							  optarg);
+					exit(EXIT_CODE_BAD_ARGS);
+				}
+				log_trace("--port %d", options.port);
+				break;
+			}
+
 			case 'F':
 			{
 				strlcpy(options.filterFileName, optarg, MAXPGPATH);
@@ -1200,7 +1290,9 @@ cli_prepare_pguris(ConnStrings *connStrings)
 		++errors;
 	}
 
-	if (!parse_and_scrub_connection_string(tpguri, safeTargetPGURI))
+	/* "-" is the stdout sentinel for stream apply — not a real PG URI */
+	if (tpguri != NULL && !streq(tpguri, "-") &&
+		!parse_and_scrub_connection_string(tpguri, safeTargetPGURI))
 	{
 		log_error("Failed to parse target connection string: \"%s\"", tpguri);
 		++errors;

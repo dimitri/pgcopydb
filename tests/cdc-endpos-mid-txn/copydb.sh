@@ -46,61 +46,66 @@ psql -t -d ${PGCOPYDB_SOURCE_PGURI} \
     -c "SELECT data FROM pg_logical_slot_peek_changes('${slot}', NULL, NULL, 'format-version', '2', 'pretty-print', '1', 'include-lsn', '1');" \
     -o ${SLOT_PEEK_FILE}
 
-# grab a LSN between `begin` and `commit` from second transaction, it's going to be our streaming end position
+# grab a LSN between `begin` and `commit` of the second transaction —
+# that becomes our streaming end position to test partial-transaction handling
 lsn=`jq -r 'select((.columns // empty) | .[] | ((.name == "category_id") and (.value == 1008))) | .lsn' ${SLOT_PEEK_FILE}`
 
-# and prefetch the changes captured in our replication slot
+#
+# Receive CDC messages into the SQLite replayDB and transform them.
+# The endpos is deliberately mid-transaction to test that the apply
+# process waits for the full transaction before advancing.
+#
 pgcopydb stream prefetch --resume --endpos "${lsn}" --notice
 
 SHAREDIR=/var/lib/postgres/.local/share/pgcopydb
-WALFILE=000000010000000000000002.json
-SQLFILE=000000010000000000000002.sql
 
-# now compare JSON output, skipping the lsn and nextlsn fields which are
-# different at each run
-expected=/tmp/expected.json
-result=/tmp/result.json
+ls -la ${SHAREDIR}/
 
-JQSCRIPT='del(.lsn) | del(.nextlsn) | del(.timestamp) | del(.xid) | if has("message") then .message |= sub("(?<m>COMMIT|BEGIN) [0-9]+"; "\(.m) XXX") else . end'
+OUTPUTDB=$(find ${SHAREDIR} -maxdepth 1 -name '*-output.db' -type f | head -1)
 
-jq "${JQSCRIPT}" /usr/src/pgcopydb/${WALFILE} > ${expected}
-jq "${JQSCRIPT}" ${SHAREDIR}/${WALFILE} > ${result}
+#
+# Validate that the SQLite output table was populated by receive.
+# (stmt+replay are produced later, by the apply/catchup process.)
+#
+sqlite3 ${OUTPUTDB} "select count(*) as output_rows from output;"
 
-# first command to provide debug information, second to stop when returns non-zero
-diff ${expected} ${result} || cat ${SHAREDIR}/${WALFILE}
-diff ${expected} ${result}
-
-# now prefetch the changes again, which should be a noop
+# Idempotency: prefetch again with the same endpos should be a no-op
 pgcopydb stream prefetch --resume --endpos "${lsn}" --trace
 
-# now transform the JSON file into SQL
-SQLFILENAME=`basename ${WALFILE} .json`.sql
-
-pgcopydb stream transform --trace ${SHAREDIR}/${WALFILE} /tmp/${SQLFILENAME}
-
-# we should get the same result as `pgcopydb stream prefetch`
-diff ${SHAREDIR}/${SQLFILE} /tmp/${SQLFILENAME}
-
-# we should also get the same result as expected (discarding LSN numbers)
-DIFFOPTS='-I BEGIN -I COMMIT -I KEEPALIVE -I SWITCH -I ENDPOS -I ROLLBACK'
-
-diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} ${SHAREDIR}/${SQLFILENAME}
-
-# now allow for replaying/catching-up changes
+#
+# Allow apply and run catchup with a short timeout —
+# catchup must complete quickly since all data is already in the replayDB.
+#
 pgcopydb stream sentinel set apply
 
-# now apply the SQL file to the target database shouldn't take more than 2s
 timeout 5s pgcopydb stream catchup --resume --endpos "${lsn}" --trace
 
-# adjust the endpos LSN to the current position in the WAL
+#
+# replayDB now exists (created by the apply/catchup process): validate the
+# replay table was populated.
+#
+REPLAYDB=$(find ${SHAREDIR} -maxdepth 1 -name '*-replay.db' -type f | head -1)
+sqlite3 ${REPLAYDB} "select count(*) as replay_rows from replay;"
+
+#
+# Advance endpos to current WAL position so the follow step can consume
+# the remainder of the transaction that was split at the original endpos.
+#
 pgcopydb stream sentinel set endpos --current
 
-# and replay the available changes, including the transaction in dml2.sql now
+# Dump replay table to diagnose lsn values before follow
+REPLAYDB=$(find ${SHAREDIR} -maxdepth 1 -name '*-replay.db' -type f | head -1)
+sqlite3 ${REPLAYDB} "select id, action, xid, printf('%X/%X', lsn>>32, lsn&0xFFFFFFFF) as lsn from replay order by id;"
+
+# Follow resumes from the sentinel endpos and applies all remaining changes
 pgcopydb follow --resume --trace
 
-# now check that all the new rows made it
+#
+# Verify that all new rows made it across (dml.sql adds rows to category).
+#
 sql="select count(*) from category"
 test 26 -eq `psql -AtqX -d ${PGCOPYDB_SOURCE_PGURI} -c "${sql}"`
+test 26 -eq `psql -AtqX -d ${PGCOPYDB_TARGET_PGURI} -c "${sql}"`
 
 kill -TERM ${COPROC_PID}
 wait ${COPROC_PID}

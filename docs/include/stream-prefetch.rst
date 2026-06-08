@@ -1,6 +1,6 @@
 ::
 
-   pgcopydb stream prefetch: Stream JSON changes from the source database and transform them to SQL
+   pgcopydb stream prefetch: Stream changes from the source database into the SQLite CDC store
    usage: pgcopydb stream prefetch 
    
      --source         Postgres URI to the source database

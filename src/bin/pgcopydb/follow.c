@@ -10,12 +10,72 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "catalog.h"
 #include "cli_common.h"
 #include "cli_root.h"
+#include "follow_coordinator.h"
 #include "ld_stream.h"
 #include "log.h"
 #include "progress.h"
 #include "signals.h"
+
+
+/*
+ * Optional follow coordinator: a TCP server, run inside this (the follow
+ * supervisor) process, that serves "pgcopydb stream sentinel" CLI clients over
+ * TCP.  It shares the supervisor's open sourceDB catalog and its IPC_PRIVATE
+ * write semaphore, so CLI clients never open the SQLite catalog themselves.
+ *
+ * Initialised to an inactive state (fd = -1); follow_coordinator_handle_messages
+ * is a no-op until followDB() starts it (only when --host was given).
+ */
+static FollowCoordinator followCoord = { .tcp_listen = { .fd = -1 } };
+
+
+/*
+ * follow_assert_pipe_fd validates that a pipe file descriptor is positive and
+ * ready for use.  A non-positive fd means the pipe was never created, or was
+ * already closed and set to -1 by stream_signal_upstream_done — either way
+ * the follow pipeline cannot make progress.  We exit immediately with a FATAL
+ * so the operator gets a clear diagnostic rather than a confusing EBADF later.
+ */
+static void
+follow_assert_pipe_fd(int fd, const char *label)
+{
+	if (fd <= 0)
+	{
+		log_fatal("BUG: pipe fd %s = %d is invalid; "
+				  "--follow pipeline is broken and cannot proceed",
+				  label, fd);
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+}
+
+
+/*
+ * follow_close_pipe_fd closes a pipe fd when it is still open.
+ *
+ * stream_signal_upstream_done sets specs->pipe_XX[n] = -1 after it has closed
+ * the underlying file descriptor.  Callers that close the fd as a safety net
+ * after their main loop use this helper so that the already-handled case is
+ * silently skipped rather than calling close(-1) and dying with EBADF.
+ */
+static void
+follow_close_pipe_fd(int fd, const char *label)
+{
+	if (fd <= 0)
+	{
+		log_debug("follow_close_pipe_fd: %s already closed (fd=%d), skipping",
+				  label, fd);
+		return;
+	}
+
+	if (close(fd) != 0)
+	{
+		log_fatal("Failed to close pipe fd %s (%d): %m", label, fd);
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+}
 
 
 /*
@@ -34,21 +94,31 @@ follow_export_snapshot(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 
 	if (!copydb_create_logical_replication_slot(copySpecs,
 												logrep_pguri,
-												&(streamSpecs->slot)))
+												&(streamSpecs->slot),
+												streamSpecs->paths.dir))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
+	if (!catalog_write_replication_slot(streamSpecs->sourceDB,
+										&(streamSpecs->slot)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * Also update the setup table's snapshot/plugin/slot_name so that
+	 * catalog_register_setup_from_specs() can validate consistency when
+	 * later commands (e.g. pgcopydb clone) open the same catalog.
+	 */
 	if (!catalog_setup_replication(streamSpecs->sourceDB,
-								   streamSpecs->slot.snapshot,
-								   OutputPluginToString(streamSpecs->slot.plugin),
-								   streamSpecs->slot.slotName))
+								   streamSpecs->slot.snapshot))
 	{
 		/* errors have already been logged */
 		return false;
 	}
-
 
 	return true;
 }
@@ -251,18 +321,6 @@ follow_get_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel, bool verbose)
 bool
 follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 {
-	/*
-	 * Remove the possibly still existing stream context files from
-	 * previous round of operations (--resume, etc). We want to make
-	 * sure that the catchup process reads the files created on this
-	 * connection.
-	 */
-	if (!stream_cleanup_context(streamSpecs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	DatabaseCatalog *sourceDB = &(copySpecs->catalogs.source);
 
 	if (!catalog_open(sourceDB))
@@ -272,21 +330,15 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	}
 
 	/*
-	 * In case of successful exit from the follow sub-processes, we
-	 * switch back and forth between CATCHUP and REPLAY modes and
-	 * continue replaying changes. In case of error, we stop.
+	 * The SQLite-based CDC pipeline uses a single CATCHUP mode for all
+	 * operations: prefetch writes WAL records to the output table, transform
+	 * converts them to parameterised SQL in the replay table, and catchup
+	 * applies them to the target.  The old CATCHUP↔REPLAY alternation (which
+	 * switched to Unix-pipe live streaming once the on-disk files were caught
+	 * up) is no longer needed — SQLite provides the inter-process
+	 * communication and the three workers can restart in the same mode every
+	 * time.
 	 */
-	LogicalStreamMode modeArray[] = {
-		STREAM_MODE_CATCHUP,
-		STREAM_MODE_REPLAY
-	};
-
-	int count = sizeof(modeArray) / sizeof(modeArray[0]);
-
-	uint64_t loop = 0;
-	LogicalStreamMode currentMode = modeArray[0];
-	LogicalStreamMode previousMode = STREAM_MODE_UNKNOW;
-
 	while (true)
 	{
 		if (!followDB(copySpecs, streamSpecs))
@@ -313,33 +365,11 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		if (done)
 		{
 			log_info("Follow mode is now done, "
-					 "reached replay_lsn %X/%X with endpos %X/%X",
+					 "reached endpos %X/%X with replay_lsn %X/%X",
 					 LSN_FORMAT_ARGS(streamSpecs->sentinel.endpos),
 					 LSN_FORMAT_ARGS(streamSpecs->sentinel.replay_lsn));
 
 			return true;
-		}
-
-		/* switch to the next mode, increment loop counter */
-		previousMode = currentMode;
-		currentMode = modeArray[++loop % count];
-
-		/*
-		 * Whatever the current/previous mode was, we need to
-		 * ensure to catch-up with files on-disk before switching
-		 * to another mode of operations.
-		 */
-		if (!follow_prepare_mode_switch(streamSpecs, previousMode, currentMode))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		/* we could have reached endpos in this step: */
-		if (!follow_reached_endpos(streamSpecs, &done))
-		{
-			/* errors have already been logged */
-			return false;
 		}
 
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
@@ -348,25 +378,41 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 			return true;
 		}
 
-		if (done)
+		/*
+		 * With endpos set, subprocesses have exited but follow_reached_endpos
+		 * returned done=false — meaning neither the replay_lsn check nor the
+		 * pipeline_state 'done' check fired.  This is a genuine pipeline
+		 * failure: endpos is set but the data was not fully applied.
+		 *
+		 * The replay_lsn >= endpos check here is a fallback safety net (the
+		 * primary check is inside follow_reached_endpos); if it somehow fires
+		 * here, accept it as success rather than returning a spurious error.
+		 */
+		if (streamSpecs->sentinel.endpos != InvalidXLogRecPtr)
 		{
-			log_info("Follow mode is now done, "
-					 "reached replay_lsn %X/%X with endpos %X/%X",
-					 LSN_FORMAT_ARGS(streamSpecs->sentinel.endpos),
-					 LSN_FORMAT_ARGS(streamSpecs->sentinel.replay_lsn));
-
-			return true;
+			if (streamSpecs->sentinel.endpos <= streamSpecs->sentinel.replay_lsn)
+			{
+				log_info("Subprocesses exited with endpos reached at %X/%X "
+						 "(replay_lsn: %X/%X). Pipeline complete.",
+						 LSN_FORMAT_ARGS(streamSpecs->sentinel.endpos),
+						 LSN_FORMAT_ARGS(streamSpecs->sentinel.replay_lsn));
+				return true;
+			}
+			else
+			{
+				log_error("Subprocesses exited with endpos set at %X/%X "
+						  "but replay_lsn only reached %X/%X and pipeline_state "
+						  "did not confirm clean completion. "
+						  "Data not fully applied.",
+						  LSN_FORMAT_ARGS(streamSpecs->sentinel.endpos),
+						  LSN_FORMAT_ARGS(streamSpecs->sentinel.replay_lsn));
+				return false;
+			}
 		}
 
-		log_info("Restarting logical decoding follower in %s mode",
-				 LogicalStreamModeToString(currentMode));
-
-		/* and re-init our streamSpecs for the new mode */
-		if (!stream_init_for_mode(streamSpecs, currentMode))
-		{
-			/* errors have already been logged */
-			return false;
-		}
+		log_info("Restarting logical decoding follower in %s mode "
+				 "(endpos unset, waiting for more data)",
+				 LogicalStreamModeToString(streamSpecs->mode));
 	}
 
 	/* keep compiler happy */
@@ -377,6 +423,21 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 
 /*
  * follow_reached_endpos sets done to true when endpos has been reached.
+ *
+ * Two checks are performed:
+ *
+ * Check (a) — primary: sentinel.replay_lsn >= sentinel.endpos.
+ *   Fires when the last applied commit naturally covered endpos (normal case,
+ *   Guard 3 mid-txn where the full transaction was committed and its
+ *   commitLSN >= endpos).
+ *
+ * Check (b) — secondary: apply exited with run_state='done'.
+ *   Fires when endpos fell between two transactions (Guard 2: endpos < beginLSN)
+ *   or inside an uncommitted transaction (mid-txn endpos).  In those cases
+ *   apply exits cleanly without advancing replay_lsn past endpos, so check (a)
+ *   does not fire.  apply marks run_state='done' only on a successful,
+ *   intentional exit; signal-driven exits leave it as 'error', preventing
+ *   false positives.
  */
 bool
 follow_reached_endpos(StreamSpecs *streamSpecs, bool *done)
@@ -390,15 +451,46 @@ follow_reached_endpos(StreamSpecs *streamSpecs, bool *done)
 		return false;
 	}
 
+	/* Check (a): normal commit-boundary endpos */
 	if (sentinel->endpos != InvalidXLogRecPtr &&
 		sentinel->endpos <= sentinel->replay_lsn)
 	{
 		/* follow_get_sentinel logs replay_lsn and endpos already */
 		*done = true;
 
-		log_info("Current endpos %X/%X has been reached at %X/%X",
+		log_info("Current endpos %X/%X has been reached at replay_lsn %X/%X",
 				 LSN_FORMAT_ARGS(sentinel->endpos),
 				 LSN_FORMAT_ARGS(sentinel->replay_lsn));
+
+		return true;
+	}
+
+	/*
+	 * Check (b): endpos fell between or inside transactions.
+	 *
+	 * replay_lsn is still at the last real commit (< endpos).  The pipeline
+	 * signals completion by having apply exit with run_state='done'.
+	 */
+	if (sentinel->endpos != InvalidXLogRecPtr)
+	{
+		PipelineStateEntry as = { 0 };
+		DatabaseCatalog *sourceDB = streamSpecs->sourceDB;
+
+		bool apply_done =
+			pipeline_state_get(sourceDB, "apply", &as) &&
+			as.process_name[0] != '\0' &&
+			strcmp(as.run_state, "done") == 0;
+
+		if (apply_done)
+		{
+			*done = true;
+
+			log_info("Current endpos %X/%X reached: apply done at %X/%X "
+					 "(replay_lsn %X/%X; endpos was at a transaction boundary)",
+					 LSN_FORMAT_ARGS(sentinel->endpos),
+					 LSN_FORMAT_ARGS(as.run_end_lsn),
+					 LSN_FORMAT_ARGS(sentinel->replay_lsn));
+		}
 	}
 
 	return true;
@@ -417,59 +509,9 @@ follow_prepare_mode_switch(StreamSpecs *streamSpecs,
 {
 	log_info("Catching-up from existing on-disk files");
 
-	if (streamSpecs->system.timeline == 0)
-	{
-		if (!stream_read_context(streamSpecs))
-		{
-			log_error("Failed to read the streaming context information "
-					  "from the source database and internal catalogs, "
-					  "see above for details");
-			return false;
-		}
-	}
-
 	/*
-	 * If the previous mode was catch-up, then before proceeding, we might need
-	 * to empty the transform queue where the STOP message was sent.
-	 */
-	if (previousMode == STREAM_MODE_CATCHUP)
-	{
-		Queue *transformQueue = &(streamSpecs->transformQueue);
-		QueueStats qStats = { 0 };
-
-		if (!queue_stats(transformQueue, &qStats))
-		{
-			log_error("Failed to get the transform queue stats, "
-					  "see above for details");
-			return false;
-		}
-
-		if (qStats.msg_qnum > 0)
-		{
-			log_notice("Processing %lld messages from the transform queue",
-					   (long long) qStats.msg_qnum);
-
-			FollowSubProcess *transform = &(streamSpecs->transform);
-
-			if (!follow_start_subprocess(streamSpecs, transform))
-			{
-				log_error("Failed to start the transform process");
-				return false;
-			}
-
-			if (!follow_wait_subprocesses(streamSpecs))
-			{
-				log_error("Failed to transform %lld messages from the queue, "
-						  "see above for details",
-						  (long long) qStats.msg_qnum);
-				return false;
-			}
-		}
-	}
-
-	/*
-	 * Then catch-up with what's been stream and transformed already, which
-	 * means replaying the files that have already been prepared on-disk.
+	 * Catch-up with what has been streamed and transformed into the SQLite
+	 * replayDB, applying those changes to the target database.
 	 */
 	LogicalStreamMode mode = streamSpecs->mode;
 	streamSpecs->mode = STREAM_MODE_CATCHUP;
@@ -518,19 +560,6 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	}
 
 	/*
-	 * Before starting sub-processes, clean-up intermediate files from previous
-	 * round. Here that's the stream context with WAL segment size and timeline
-	 * history, which are fetched from the source server to compute WAL file
-	 * names. The current timeline can only change at a server restart or a
-	 * failover, both with trigger a reconnect.
-	 */
-	if (!stream_cleanup_context(streamSpecs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/*
 	 * Before starting sub-processes, make sure to close our SQLite catalogs.
 	 * We open the SQLite catalogs again before returning from this function
 	 * (if only when reaching the end of it and returning true).
@@ -542,53 +571,36 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	}
 
 	/*
-	 * Prepare the sub-process communication mechanisms, when needed:
+	 * Create the lifecycle signal pipe.
 	 *
-	 *   - pgcopydb stream receive --to-stdout
-	 *   - pgcopydb stream transform - -
-	 *   - pgcopydb stream apply -
-	 *   - pgcopydb stream replay
+	 * pipe_rt carries an 8-byte big-endian done-LSN from receive → apply.
+	 *
+	 * This is always created when both endpoints will run together so that
+	 * the downstream process can select() on the read end and wake up
+	 * immediately when upstream finishes, without polling SQLite.
+	 *
+	 * In text-streaming mode (stdOut / stdIn), the same pipe fd is also
+	 * used for the JSON data stream; in replayDB mode it carries only the
+	 * single lifecycle signal message.
 	 */
-	if (streamSpecs->stdOut)
+	if (pipe(streamSpecs->pipe_rt) != 0)
 	{
-		if (pipe(streamSpecs->pipe_rt) != 0)
-		{
-			log_fatal("Failed to create a pipe for streaming: %m");
-			return false;
-		}
-	}
-
-	if (streamSpecs->stdIn)
-	{
-		if (pipe(streamSpecs->pipe_ta) != 0)
-		{
-			log_fatal("Failed to create a pipe for streaming: %m");
-			return false;
-		}
+		log_fatal("Failed to create receive→apply pipe: %m");
+		return false;
 	}
 
 	FollowSubProcess *prefetch = &(streamSpecs->prefetch);
-	FollowSubProcess *transform = &(streamSpecs->transform);
 	FollowSubProcess *catchup = &(streamSpecs->catchup);
 
 	/*
-	 * When set to prefetch changes, we always also run the transform process
-	 * to prepare the SQL files from the JSON files. Also upper modes (catchup,
-	 * replay) does imply prefetching (and transform).
+	 * When set to prefetch changes, we start the receive (prefetch) process.
+	 * Upper modes (catchup, replay) imply prefetching too.
 	 */
 	if (streamSpecs->mode >= STREAM_MODE_PREFETCH)
 	{
 		if (!follow_start_subprocess(streamSpecs, prefetch))
 		{
 			log_error("Failed to start the %s process", prefetch->name);
-			return false;
-		}
-
-		if (!follow_start_subprocess(streamSpecs, transform))
-		{
-			log_error("Failed to start the transform process");
-
-			(void) follow_exit_early(streamSpecs);
 			return false;
 		}
 	}
@@ -608,20 +620,13 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	}
 
 	/*
-	 * Close pipe ends which follow is not using. Otherwise the processes
-	 * like transform and apply which reads from the pipe during replay
-	 * will never see EOF.
+	 * Close pipe ends which follow is not using. Otherwise the apply process
+	 * which reads from the pipe during replay will never see EOF.
 	 */
 	if (streamSpecs->stdOut)
 	{
 		close_fd_or_exit(streamSpecs->pipe_rt[1]);
 		close_fd_or_exit(streamSpecs->pipe_rt[0]);
-	}
-
-	if (streamSpecs->stdIn)
-	{
-		close_fd_or_exit(streamSpecs->pipe_ta[0]);
-		close_fd_or_exit(streamSpecs->pipe_ta[1]);
 	}
 
 	/*
@@ -641,11 +646,30 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		return false;
 	}
 
+	/*
+	 * Start the optional TCP coordinator when --host was given.  It serves
+	 * "stream sentinel" CLI clients from inside this supervisor process, using
+	 * the sourceDB catalog we just opened (sharing the write semaphore with the
+	 * receive/apply children).  init() with a NULL host leaves it inactive.
+	 */
+	{
+		const char *coordHost =
+			IS_EMPTY_STRING_BUFFER(streamSpecs->coordHost)
+			? NULL
+			: streamSpecs->coordHost;
+
+		if (!follow_coordinator_init(&followCoord, coordHost,
+									 streamSpecs->coordPort))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
 	if (follow_wait_subprocesses(streamSpecs))
 	{
-		log_info("Subprocesses for %s, %s, and %s have now all exited",
+		log_info("Subprocesses for %s and %s have now all exited",
 				 prefetch->name,
-				 transform->name,
 				 catchup->name);
 	}
 	else
@@ -654,6 +678,8 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		log_error("Some sub-process exited with errors, "
 				  "see above for details");
 	}
+
+	(void) follow_coordinator_shutdown(&followCoord);
 
 	return errors == 0;
 }
@@ -672,12 +698,14 @@ follow_start_prefetch(StreamSpecs *specs)
 		specs->stdIn = false;
 		specs->stdOut = true;
 
+		/* validate before use: a bad fd here means follow_start_subprocesses
+		 * failed to create the pipe, which is a programming error */
+		follow_assert_pipe_fd(specs->pipe_rt[1], "pipe_rt[1]");
+
 		specs->out = fdopen(specs->pipe_rt[1], "a");
 
-		/* close pipe ends we're not using */
+		/* close the read end of the pipe: receive only writes */
 		close_fd_or_exit(specs->pipe_rt[0]);
-		close_fd_or_exit(specs->pipe_ta[0]);
-		close_fd_or_exit(specs->pipe_ta[1]);
 
 		/* switch out stream from block buffered to line buffered mode */
 		if (setvbuf(specs->out, NULL, _IOLBF, 0) != 0)
@@ -688,7 +716,13 @@ follow_start_prefetch(StreamSpecs *specs)
 
 		bool success = startLogicalStreaming(specs);
 
-		close_fd_or_exit(specs->pipe_rt[1]);
+		/*
+		 * Safety net: close pipe_rt[1] if it was not already closed by
+		 * stream_signal_upstream_done inside streamCloseFile.  That function
+		 * closes the raw fd and sets specs->pipe_rt[1] = -1 to prevent
+		 * double-close.  follow_close_pipe_fd skips the close when fd <= 0.
+		 */
+		follow_close_pipe_fd(specs->pipe_rt[1], "pipe_rt[1]");
 
 		log_info("Prefetch process has terminated");
 
@@ -702,73 +736,6 @@ follow_start_prefetch(StreamSpecs *specs)
 		bool success = startLogicalStreaming(specs);
 
 		log_info("Prefetch process has terminated");
-
-		return success;
-	}
-
-	return true;
-}
-
-
-/*
- * follow_start_transform creates a sub-process that transform JSON files into
- * SQL files as needed, consuming requests from a queue.
- */
-bool
-follow_start_transform(StreamSpecs *specs)
-{
-	/*
-	 * In replay mode, the JSON messages are read from stdin, which we
-	 * now setup to be a pipe between prefetch and transform processes;
-	 * and the SQL commands are written to stdout which we setup to be
-	 * a pipe between the transform and apply processes.
-	 */
-	if (specs->mode == STREAM_MODE_REPLAY)
-	{
-		/*
-		 * Arrange to read from receive-transform pipe and write to the
-		 * transform-apply pipe.
-		 */
-		specs->stdIn = true;
-		specs->stdOut = true;
-
-		specs->in = fdopen(specs->pipe_rt[0], "r");
-		specs->out = fdopen(specs->pipe_ta[1], "a");
-
-		/* close pipe ends we're not using */
-		close_fd_or_exit(specs->pipe_rt[1]);
-		close_fd_or_exit(specs->pipe_ta[0]);
-
-		/* switch out stream from block buffered to line buffered mode */
-		if (setvbuf(specs->out, NULL, _IOLBF, 0) != 0)
-		{
-			log_error("Failed to set out stream to line buffered mode: %m");
-			return false;
-		}
-
-		bool success = stream_transform_stream(specs);
-
-		log_info("Transform process has terminated");
-
-		close_fd_or_exit(specs->pipe_rt[0]);
-		close_fd_or_exit(specs->pipe_ta[1]);
-
-		return success;
-	}
-	else
-	{
-		/*
-		 * In other modes of operations (RECEIVE, CATCHUP) we start a
-		 * transform worker process that reads LSN positions from an
-		 * internal message queue and batch processes one file at a
-		 * time.
-		 */
-		specs->stdIn = false;
-		specs->stdOut = false;
-
-		bool success = stream_transform_worker(specs);
-
-		log_info("Transform process has terminated");
 
 		return success;
 	}
@@ -789,22 +756,28 @@ follow_start_catchup(StreamSpecs *specs)
 	 */
 	if (specs->mode == STREAM_MODE_REPLAY)
 	{
-		/* arrange to read from the transform-apply pipe */
+		/* arrange to read from the receive→apply pipe */
 		specs->stdIn = true;
 		specs->stdOut = false;
 
-		specs->in = fdopen(specs->pipe_ta[0], "r");
+		follow_assert_pipe_fd(specs->pipe_rt[0], "pipe_rt[0]");
 
-		/* close pipe ends we're not using */
-		close_fd_or_exit(specs->pipe_rt[0]);
+		specs->in = fdopen(specs->pipe_rt[0], "r");
+
+		/* close the write end: apply only reads from pipe_rt */
 		close_fd_or_exit(specs->pipe_rt[1]);
-		close_fd_or_exit(specs->pipe_ta[1]);
 
 		bool success = stream_apply_replay(specs);
 
 		log_info("Apply process has terminated");
 
-		close_fd_or_exit(specs->pipe_ta[0]);
+		/*
+		 * pipe_rt[0] is the read end of the receive→apply pipe.  The apply
+		 * process only reads from it; receive holds and closes the write end.
+		 * This fd is never set to -1 by our code paths, so a plain close is
+		 * correct.  Use follow_close_pipe_fd as a defensive measure nonetheless.
+		 */
+		follow_close_pipe_fd(specs->pipe_rt[0], "pipe_rt[0]");
 
 		return success;
 	}
@@ -945,7 +918,6 @@ follow_wait_subprocesses(StreamSpecs *specs)
 {
 	FollowSubProcess *processArray[] = {
 		&(specs->prefetch),
-		&(specs->transform),
 		&(specs->catchup)
 	};
 
@@ -1064,47 +1036,28 @@ follow_wait_subprocesses(StreamSpecs *specs)
 				 * When one sub-process has exited abnormally, we terminate all
 				 * the other sub-processes to handle the problem at the caller.
 				 *
-				 * When a sub-process exits with a successful returnCode, it
-				 * might be because it has reached specs->endpos already: in
-				 * that case let the other processes reach it too.
+				 * When a sub-process exits successfully but endpos is still
+				 * unset, that's normal: the process has caught up with available
+				 * data and is waiting for more (e.g., the inject service hasn't
+				 * set endpos yet). We should NOT terminate the other processes.
 				 *
-				 * Otherwise there is no reason for the other processes to
-				 * stop, and we're missing one: terminate every one and handle
-				 * at the caller.
-				 *
-				 * We need to first update current sentinel values (endpos).
+				 * Only if the process exited with an error do we need to
+				 * terminate everything.  In the old CATCHUP/REPLAY mode,
+				 * processes would continue running; now they exit when caught up,
+				 * which is normal behavior.
 				 */
-				if (!follow_get_sentinel(specs, &(specs->sentinel), false))
+				if (!exitedSuccessfully)
 				{
-					/* continue without updated endpos */
-					log_warn("Failed to get sentinel values");
-				}
-
-				if (!exitedSuccessfully ||
-					specs->endpos == InvalidXLogRecPtr)
-				{
-					char endposStatus[BUFSIZE] = { 0 };
-
-					if (specs->endpos == InvalidXLogRecPtr)
+					if (!follow_get_sentinel(specs, &(specs->sentinel), false))
 					{
-						sformat(endposStatus, sizeof(endposStatus), "unset");
-					}
-					else
-					{
-						sformat(endposStatus, sizeof(endposStatus),
-								"set to %X/%X",
-								LSN_FORMAT_ARGS(specs->endpos));
+						/* continue without updated endpos */
+						log_warn("Failed to get sentinel values");
 					}
 
-					const char *exitmode =
-						exitedSuccessfully ? "successfully" : "unexpectedly";
-
-					log_notice("Process %s has exited %s, "
-							   "and endpos is %s: "
-							   "terminating other processes",
-							   processArray[i]->name,
-							   exitmode,
-							   endposStatus);
+					log_error("Process %s has exited with error code %d, "
+							  "terminating other processes",
+							  processArray[i]->name,
+							  processArray[i]->returnCode);
 
 					if (!follow_terminate_subprocesses(specs))
 					{
@@ -1118,8 +1071,16 @@ follow_wait_subprocesses(StreamSpecs *specs)
 			}
 		}
 
-		/* avoid busy looping, wait for 150ms before checking again */
-		pg_usleep(150 * 1000);
+		/*
+		 * Serve any pending follow-coordinator CLI request (no-op unless the
+		 * coordinator was started with --host).  The accept() call uses a
+		 * 100 ms timeout, which also paces this loop; add a short sleep so the
+		 * cadence stays close to the original 150 ms.
+		 */
+		(void) follow_coordinator_handle_messages(&followCoord, specs);
+
+		/* avoid busy looping */
+		pg_usleep(50 * 1000);
 	}
 
 	return success;
@@ -1135,7 +1096,6 @@ follow_terminate_subprocesses(StreamSpecs *specs)
 {
 	FollowSubProcess *processArray[] = {
 		&(specs->prefetch),
-		&(specs->transform),
 		&(specs->catchup)
 	};
 	int count = sizeof(processArray) / sizeof(processArray[0]);

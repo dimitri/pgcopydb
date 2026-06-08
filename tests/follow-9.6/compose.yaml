@@ -45,12 +45,12 @@ services:
       dockerfile: Dockerfile.inject
     environment:
       PGVERSION: "9.6"
+      # remote-control the follow coordinator over TCP (no shared volume)
+      PGCOPYDB_HOST: test
+      PGCOPYDB_PORT: "5442"
     env_file:
       - ../uris.env
       - ../paths.env
-    # share TMPDIR between inject and test services
-    volumes:
-      - follow-9.6:/var/run/pgcopydb
     depends_on:
       source:
         condition: service_healthy
@@ -65,12 +65,12 @@ services:
       PGCOPYDB_TABLE_JOBS: 4
       PGCOPYDB_INDEX_JOBS: 2
       PGCOPYDB_SPLIT_TABLES_LARGER_THAN: 200kB
+      # the follow supervisor listens here for sentinel CLI clients over TCP
+      PGCOPYDB_HOST: "0.0.0.0"
+      PGCOPYDB_PORT: "5442"
     env_file:
       - ../uris.env
       - ../paths.env
-    # share TMPDIR between inject and test services
-    volumes:
-      - follow-9.6:/var/run/pgcopydb
     depends_on:
       source:
         condition: service_healthy
@@ -78,7 +78,3 @@ services:
         condition: service_healthy
       inject:
         condition: service_started
-
-volumes:
-  follow-9.6:
-    external: true

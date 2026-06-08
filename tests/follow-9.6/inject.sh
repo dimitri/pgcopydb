@@ -13,14 +13,17 @@ set -e
 pgcopydb ping
 
 #
-# Only start injecting DML traffic on the source database when the pagila
-# schema and base data set has been deployed already. Our proxy to know that
-# that's the case is the existence of the pgcopydb.sentinel table on the
-# source database.
+# Follow coordinator TCP endpoint (from docker-compose). We remote-control the
+# sentinel over TCP, so this container does not share the SQLite catalog volume.
 #
-dbfile=${TMPDIR}/pgcopydb/schema/source.db
+HP="--host ${PGCOPYDB_HOST} --port ${PGCOPYDB_PORT}"
 
-until [ -s ${dbfile} ]
+#
+# Only start injecting DML traffic once the follow process is streaming: that is
+# when `pgcopydb clone --follow` has finished the initial copy and opened its TCP
+# coordinator.  Poll it over TCP until it answers.
+#
+until pgcopydb stream sentinel get ${HP} >/dev/null 2>&1
 do
     sleep 1
 done
@@ -65,10 +68,10 @@ fi
 # print current lsn, see that it's the same when using --current
 lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c "${sql}"`
 
-pgcopydb stream sentinel set endpos --current
-pgcopydb stream sentinel get
+pgcopydb stream sentinel set endpos --current ${HP}
+pgcopydb stream sentinel get ${HP}
 
-endpos=`pgcopydb stream sentinel get --endpos 2>/dev/null`
+endpos=`pgcopydb stream sentinel get --endpos ${HP} 2>/dev/null`
 
 if [ ${endpos} = "0/0" ]
 then
@@ -85,7 +88,7 @@ flushlsn="0/0"
 
 while [ ${flushlsn} \< ${endpos} ]
 do
-    flushlsn=`pgcopydb stream sentinel get --flush-lsn 2>/dev/null`
+    flushlsn=`pgcopydb stream sentinel get --flush-lsn ${HP} 2>/dev/null`
     sleep 1
 done
 

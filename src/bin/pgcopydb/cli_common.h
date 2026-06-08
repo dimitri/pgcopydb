@@ -95,6 +95,17 @@ typedef struct CopyDBOptions
 
 	char filterFileName[MAXPGPATH];
 	char requirementsFileName[MAXPGPATH];
+
+	/*
+	 * Follow coordinator TCP endpoint (--host/--port).
+	 *
+	 * On the server side (follow/replay), when host is set the follow process
+	 * starts a TCP coordinator listening on host:port.  On the client side
+	 * (stream sentinel get/set), when host is set the command talks to that
+	 * coordinator over TCP instead of opening the SQLite catalog directly.
+	 */
+	char host[256];
+	int port;
 } CopyDBOptions;
 
 extern bool outputJSON;
@@ -112,6 +123,7 @@ bool cli_copydb_getenv_source_pguri(char **pguri);
 bool cli_copydb_getenv_split(SplitTableLargerThan *splitTablesLargerThan);
 
 bool cli_copydb_getenv(CopyDBOptions *options);
+void cli_read_coordinator_env(CopyDBOptions *options);
 bool cli_copydb_is_consistent(CopyDBOptions *options);
 bool cli_read_previous_options(CopyDBOptions *options, CopyFilePaths *cfPaths);
 

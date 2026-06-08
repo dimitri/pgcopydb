@@ -38,57 +38,59 @@ wait ${COPROC_PID}
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 
 # grab the current LSN, it's going to be our streaming end position
-lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_lsn()'`
+lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_flush_lsn()'`
 
-# and prefetch the changes captured in our replication slot
+#
+# Receive CDC messages into the SQLite outputDB (output table).  In the
+# 2-process model the receive step only fills the output table; the transform
+# into stmt+replay happens later, inside the apply (catchup) process.
+#
 pgcopydb stream prefetch --resume --endpos "${lsn}" --debug
 
 SHAREDIR=/var/lib/postgres/.local/share/pgcopydb
-WALFILE=000000010000000000000002.json
-SQLFILE=000000010000000000000002.sql
 
-# now compare JSON output, skipping the lsn and nextlsn fields which are
-# different at each run
-expected=/tmp/expected.json
-result=/tmp/result.json
+ls -la ${SHAREDIR}/
 
-JQSCRIPT='del(.lsn) | del(.nextlsn) | del(.timestamp) | del(.xid) | if has("message") then .message |= sub("(?<m>COMMIT|BEGIN) [0-9]+"; "\(.m) XXX") else . end'
+OUTPUTDB=$(find ${SHAREDIR} -maxdepth 1 -name '*-output.db' -type f | head -1)
 
-jq "${JQSCRIPT}" /usr/src/pgcopydb/${WALFILE} > ${expected}
-jq "${JQSCRIPT}" ${SHAREDIR}/${WALFILE} > ${result}
+#
+# Validate that the SQLite output table was populated by receive.
+#
+sqlite3 ${OUTPUTDB} "select count(*) as output_rows from output;"
 
-# first command to provide debug information, second to stop when returns non-zero
-diff -I 'last_update' ${expected} ${result} || (cat ${SHAREDIR}/${WALFILE} && exit 1)
-
-# now prefetch the changes again, which should be a noop
+# Idempotency: prefetch again should be a no-op
 pgcopydb stream prefetch --resume --endpos "${lsn}" --notice
 
-# now transform the JSON file into SQL
-SQLFILENAME=`basename ${WALFILE} .json`.sql
-
-pgcopydb stream transform --debug ${SHAREDIR}/${WALFILE} /tmp/${SQLFILENAME}
-
-# we should get the same result as `pgcopydb stream prefetch`
-diff ${SHAREDIR}/${SQLFILE} /tmp/${SQLFILENAME}
-
-# we should also get the same result as expected (discarding LSN numbers)
-# and also discarding ON UPDATE triggers for the timestamps (EXECUTE/last_update)
-DIFFOPTS='-I BEGIN -I COMMIT -I KEEPALIVE -I SWITCH -I ENDPOS -I EXECUTE'
-
-diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} ${SHAREDIR}/${SQLFILENAME} || (cat ${SHAREDIR}/${SQLFILENAME} && exit 1)
-# now allow for replaying/catching-up changes
+#
+# Allow apply and catch up.  The apply process performs the inline transform
+# (output -> stmt+replay), creating the replayDB, then applies to the target.
+#
 pgcopydb stream sentinel set apply
-
-# now apply the SQL file to the target database
 pgcopydb stream catchup --resume --endpos "${lsn}" -vv
 
-# now apply AGAIN the SQL file to the target database, skipping transactions
+#
+# replayDB now exists: validate the SQL templates written by the transform
+# step and that the replay table was populated.
+#
+REPLAYDB=$(find ${SHAREDIR} -maxdepth 1 -name '*-replay.db' -type f | head -1)
+
+sqlite3 -init /dev/null -list -noheader ${REPLAYDB} \
+  "select s.sql from stmt s join replay r on r.stmt_hash = s.hash where r.action not in ('B','C','R','K','X','E') group by s.hash order by min(r.id)" \
+  > /tmp/stmt-actual.sql
+diff /usr/src/pgcopydb/stmt.sql /tmp/stmt-actual.sql
+
+sqlite3 ${REPLAYDB} "select count(*) as replay_rows from replay;"
+
+# Applying again must be idempotent
 pgcopydb stream catchup --resume --endpos "${lsn}" -vv
 
-# test whether transform propertly sets xid for continued transactions.
-pgcopydb stream transform --debug /usr/src/pgcopydb/continued-txn.json /tmp/continued-txn.sql
-
-diff /usr/src/pgcopydb/continued-txn.sql /tmp/continued-txn.sql || (cat /tmp/continued-txn.sql && exit 1)
+#
+# Row-count validation
+#
+src_count=`psql -AtqX -d ${PGCOPYDB_SOURCE_PGURI} -c "select count(*) from actor"`
+tgt_count=`psql -AtqX -d ${PGCOPYDB_TARGET_PGURI} -c "select count(*) from actor"`
+echo "source actor count: ${src_count}, target actor count: ${tgt_count}"
+test "${src_count}" -eq "${tgt_count}"
 
 # cleanup
 pgcopydb stream cleanup

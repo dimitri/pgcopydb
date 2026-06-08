@@ -325,7 +325,9 @@ typedef enum
 	DATABASE_CATALOG_TYPE_UNKNOWN = 0,
 	DATABASE_CATALOG_TYPE_SOURCE,
 	DATABASE_CATALOG_TYPE_FILTER,
-	DATABASE_CATALOG_TYPE_TARGET
+	DATABASE_CATALOG_TYPE_TARGET,
+	DATABASE_CATALOG_TYPE_REPLAY,  /* replay.db — stmt + replay tables */
+	DATABASE_CATALOG_TYPE_OUTPUT   /* output.db — output table (receive-owned) */
 } DatabaseCatalogType;
 
 
@@ -342,8 +344,6 @@ typedef struct CatalogSetup
 	uint64_t splitTablesLargerThanBytes;
 	int splitMaxParts;
 	char *filters;              /* malloc'ed area */
-	char plugin[BUFSIZE];
-	char slotName[BUFSIZE];
 } CatalogSetup;
 
 typedef enum
@@ -396,6 +396,8 @@ typedef struct Catalogs
 	DatabaseCatalog source;
 	DatabaseCatalog filter;
 	DatabaseCatalog target;
+	DatabaseCatalog output;  /* output.db — receive writes, apply reads */
+	DatabaseCatalog replay;
 } Catalogs;
 
 

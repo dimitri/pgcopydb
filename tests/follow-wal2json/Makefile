@@ -8,11 +8,14 @@ test: down run down ;
 up: down build
 	docker compose up $(COMPOSE_EXIT)
 
-run: build fix-volumes
-	docker compose run test
+run: build
+	# --use-aliases gives the one-off `run` container its "test" network alias
+	# so the inject container can reach the follow coordinator at test:5442.
+	# No fix-volumes: this test no longer shares a SQLite catalog volume.
+	docker compose run --use-aliases test
 
 down:
-	docker compose down
+	docker compose down --volumes --remove-orphans
 
 build:
 	docker compose build --quiet
@@ -30,4 +33,4 @@ fix-volumes:
 attach:
 	docker run --rm -it $(OPTS) $(CNAME) bash
 
-.PHONY: run down build test fix-volumes
+.PHONY: run down build test fix-volumes attach

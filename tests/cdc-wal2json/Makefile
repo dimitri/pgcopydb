@@ -9,12 +9,15 @@ up: down build
 	docker compose up $(COMPOSE_EXIT)
 
 run: build
-	docker compose run test
+	docker compose run --rm test
 
 down:
-	docker compose down
+	docker compose down -v
 
 build:
 	docker compose build --quiet
 
-.PHONY: run down build test
+attach:
+	docker run --rm -it cdc-wal2json bash
+
+.PHONY: run down build test attach

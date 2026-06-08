@@ -210,6 +210,8 @@ clone_and_follow(CopyDataSpec *copySpecs)
 						   copyDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
 						   &(copySpecs->catalogs.source),
+						   &(copySpecs->catalogs.output),
+						   &(copySpecs->catalogs.replay),
 						   copyDBoptions.stdIn,
 						   copyDBoptions.stdOut,
 						   logSQL))
@@ -217,6 +219,11 @@ clone_and_follow(CopyDataSpec *copySpecs)
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
+
+	/* optional follow coordinator TCP endpoint (--host/--port) */
+	strlcpy(streamSpecs.coordHost, copyDBoptions.host,
+			sizeof(streamSpecs.coordHost));
+	streamSpecs.coordPort = copyDBoptions.port;
 
 	/*
 	 * When using pgcopydb clone --follow --restart we first cleanup the
@@ -388,6 +395,8 @@ cli_follow(int argc, char **argv)
 						   copyDBoptions.endpos,
 						   STREAM_MODE_CATCHUP,
 						   &(copySpecs.catalogs.source),
+						   &(copySpecs.catalogs.output),
+						   &(copySpecs.catalogs.replay),
 						   copyDBoptions.stdIn,
 						   copyDBoptions.stdOut,
 						   logSQL))
@@ -395,6 +404,10 @@ cli_follow(int argc, char **argv)
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
+
+	/* optional follow coordinator TCP endpoint (--host/--port or env) */
+	strlcpy(specs.coordHost, copyDBoptions.host, sizeof(specs.coordHost));
+	specs.coordPort = copyDBoptions.port;
 
 	/*
 	 * First create/export a snapshot for the whole clone --follow operations.

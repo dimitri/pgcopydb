@@ -1,0 +1,431 @@
+#!/usr/bin/env bash
+# run-test — non-interactive test runner with timeout, sampling and reporting
+#
+# Usage:
+#   ./tests/run-test NAME [NAME ...]        # run one or more test suites
+#   ./tests/run-test --list                 # list available tests
+#   ./tests/run-test --all                  # run every CDC test
+#   ./tests/run-test --debug NAME           # run with core dumps + gdb backtrace
+#
+# Output goes to /tmp/pgcopydb-tests/NAME/
+#   exit_code     — numeric exit code
+#   duration      — wall-clock seconds
+#   log           — filtered container logs (no DEBUG/SQL/TRACE noise)
+#   log.full      — raw container logs
+#   samples/      — periodic ps + wchan snapshots while running
+#   result        — PASS / FAIL / TIMEOUT
+#   backtrace.txt — gdb backtrace of any crash (--debug mode only)
+#   cores/        — core files copied out of the test container (--debug only)
+#
+# Each test is driven by `make tests/<name>` from the repo root, which builds
+# the pgcopydb + pagila + test images and runs the test under docker compose.
+#
+# --debug mode (also PGCOPYDB_TEST_DEBUG=1): enable core dumps and, on a crash,
+# produce a symbolized gdb backtrace.  This automates the setup needed to debug
+# a SIGSEGV in a forked apply/receive subprocess inside the container:
+#   1. set the Docker VM core_pattern to an absolute path (privileged helper);
+#   2. run the test with `ulimit -c unlimited` so the crash writes a core;
+#   3. copy the core(s) out and run gdb post-mortem inside a throwaway of the
+#      same test image (which has the matching libraries and the -g binary),
+#      installing gdb on the fly.
+# Post-mortem on a core sidesteps gdb's fork-following limitations with the
+# multi-process catchup/replay pipeline.
+
+set -euo pipefail
+
+# ── configuration ────────────────────────────────────────────────────────────
+TIMEOUT_SEC=${PGCOPYDB_TEST_TIMEOUT:-300}     # 5 min default
+SAMPLE_INTERVAL=15                             # seconds between ps samples
+OUTDIR_BASE=/tmp/pgcopydb-tests
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+DEBUG_CORE=${PGCOPYDB_TEST_DEBUG:-0}          # 1 = core dumps + gdb backtrace
+CORE_DUMPS_ENABLED=false                       # set once enable_core_dumps runs
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+die()  { echo "ERROR: $*" >&2; exit 1; }
+log()  { echo "[$(date '+%H:%M:%S')] $*"; }
+sep()  { printf '%.0s─' {1..72}; echo; }
+
+# Resolve the docker-compose project name / test container prefix
+container_prefix() {
+    local test_name="$1"
+    # compose project name = directory name, lowercased, with dashes
+    echo "${test_name}"
+}
+
+# Find the running "test" service container for a given test
+find_test_container() {
+    local prefix="$1"
+    docker ps --filter "name=${prefix}-test" --format "{{.Names}}" 2>/dev/null \
+        | grep -E "${prefix}.*test" | head -1
+}
+
+# Collect a process snapshot from the test container
+sample_container() {
+    local cid="$1"
+    local out="$2"
+
+    {
+        echo "=== $(date '+%T') ps ==="
+        docker exec "$cid" ps auxf 2>/dev/null || true
+
+        echo "=== $(date '+%T') wchan ==="
+        for pid in $(docker exec "$cid" pgrep pgcopydb 2>/dev/null || true); do
+            wchan=$(docker exec "$cid" cat /proc/$pid/wchan 2>/dev/null || echo "?")
+            status=$(docker exec "$cid" cat /proc/$pid/status 2>/dev/null \
+                     | grep -E "^Name:|^State:" | tr '\n' ' ' || true)
+            echo "  pid=$pid wchan=$wchan  $status"
+        done
+
+        echo "=== $(date '+%T') open fds (pgcopydb pids) ==="
+        for pid in $(docker exec "$cid" pgrep pgcopydb 2>/dev/null | head -5 || true); do
+            echo "  --- pid $pid ---"
+            docker exec "$cid" ls -la /proc/$pid/fd 2>/dev/null | head -15 || true
+        done
+    } >> "$out" 2>&1
+}
+
+# Strip noise; keep warnings, errors, notices, and script (+) lines
+filter_logs() {
+    grep -vE "^2[0-9]{3}.*( DEBUG | SQL | SQLite | TRACE )" \
+        | grep -vE "^\s*$"
+}
+
+# ── debug / core-dump helpers (--debug mode) ──────────────────────────────────
+
+# Point the Docker VM's core_pattern at an absolute path so a crashing process
+# writes a core file we can extract.  Runs once per invocation; needs a
+# privileged helper container because core_pattern is a host (VM) kernel knob.
+enable_core_dumps() {
+    $CORE_DUMPS_ENABLED && return 0
+    log "Enabling core dumps (Docker VM core_pattern → /tmp/core.%e.%p)…"
+    docker run --privileged --rm alpine \
+        sh -c 'echo "/tmp/core.%e.%p" > /proc/sys/kernel/core_pattern' \
+        >/dev/null 2>&1 \
+        || log "warning: could not set core_pattern (privileged docker needed)"
+    CORE_DUMPS_ENABLED=true
+}
+
+# Copy any core file out of the (stopped) test container and produce a gdb
+# backtrace inside a throwaway of the same test image: that image carries the
+# matching shared libraries and the -g pgcopydb binary, so frames symbolize.
+capture_core_backtrace() {
+    local container="$1" outdir="$2"
+    local coredir="$outdir/cores"
+    local bt="$outdir/backtrace.txt"
+
+    mkdir -p "$coredir"
+
+    # the crash may be in a forked subprocess; cores land in the container /tmp
+    docker cp "$container:/tmp/." "$coredir/" 2>/dev/null || true
+
+    local cores
+    cores=$(ls "$coredir"/core.* 2>/dev/null || true)
+    if [ -z "$cores" ]; then
+        log "No core file found (RLIMIT_CORE / core_pattern not effective?)"
+        return 0
+    fi
+
+    local img
+    img=$(docker inspect "$container" --format '{{.Config.Image}}' 2>/dev/null || true)
+    if [ -z "$img" ]; then
+        log "Could not resolve test image for gdb; cores in $coredir"
+        return 0
+    fi
+
+    log "Capturing gdb backtrace(s) → $bt"
+    docker run --rm --entrypoint bash -v "$coredir":/cores "$img" -lc '
+        apt-get update >/dev/null 2>&1 && apt-get install -y gdb >/dev/null 2>&1
+        for c in /cores/core.*; do
+            [ -f "$c" ] || continue
+            echo "==================== $c ===================="
+            gdb -batch \
+                -ex "bt full" \
+                -ex "echo \n==== ALL THREADS ====\n" \
+                -ex "thread apply all bt" \
+                /usr/local/bin/pgcopydb "$c"
+        done' > "$bt" 2>&1 || true
+}
+
+# ── per-test runner ───────────────────────────────────────────────────────────
+run_one() {
+    local name="$1"
+    local testdir="$REPO_ROOT/tests/$name"
+    local outdir="$OUTDIR_BASE/$name"
+
+    [ -d "$testdir" ] || die "test directory not found: $testdir"
+
+    mkdir -p "$outdir/samples"
+    local logfile="$outdir/log.full"
+    local result_file="$outdir/result"
+
+    log "Starting test: $name  (timeout=${TIMEOUT_SEC}s)"
+    sep
+
+    # ── clean up any leftovers ────────────────────────────────────────────
+    (cd "$testdir" && docker compose down -v 2>/dev/null) || true
+    docker ps -a --filter "name=${name}" --format "{{.Names}}" \
+        | xargs -r docker rm -f 2>/dev/null || true
+
+    # ── build + run with timeout ──────────────────────────────────────────
+    # Use the canonical `make tests/<name>` target from the repo root.  That
+    # target (root Makefile rule `tests/*: build`) builds the pgcopydb image,
+    # the pagila base image, and the test-specific image, then runs the test
+    # via docker compose (the test's own Makefile handles fix-volumes / run).
+    local start_time=$SECONDS
+    (cd "$REPO_ROOT" && make "tests/$name") \
+        > "$logfile" 2>&1 &
+    local compose_pid=$!
+
+    local sample_num=0
+    local timed_out=false
+
+    while kill -0 $compose_pid 2>/dev/null; do
+        elapsed=$(( SECONDS - start_time ))
+
+        if (( elapsed >= TIMEOUT_SEC )); then
+            log "TIMEOUT after ${elapsed}s — killing test $name"
+            timed_out=true
+
+            # Final sample before kill
+            local cid
+            cid=$(find_test_container "$(container_prefix "$name")") || true
+            if [ -n "$cid" ]; then
+                local sfile="$outdir/samples/timeout.txt"
+                log "Taking final sample from $cid → $sfile"
+                sample_container "$cid" "$sfile"
+            fi
+
+            # Kill the compose process and its children
+            kill $compose_pid 2>/dev/null || true
+            (cd "$testdir" && docker compose kill 2>/dev/null) || true
+            break
+        fi
+
+        # Periodic sampling
+        if (( elapsed > 0 && elapsed % SAMPLE_INTERVAL == 0 )); then
+            local cid
+            cid=$(find_test_container "$(container_prefix "$name")") || true
+            if [ -n "$cid" ]; then
+                sample_num=$(( sample_num + 1 ))
+                local sfile
+                sfile="$outdir/samples/$(printf '%03d' $sample_num)_${elapsed}s.txt"
+                sample_container "$cid" "$sfile"
+            fi
+        fi
+
+        sleep 1
+    done
+
+    local duration=$(( SECONDS - start_time ))
+    echo "$duration" > "$outdir/duration"
+
+    # ── collect result ────────────────────────────────────────────────────
+    local exit_code=0
+    if $timed_out; then
+        exit_code=124
+        echo "TIMEOUT" > "$result_file"
+    else
+        wait $compose_pid 2>/dev/null || exit_code=$?
+        if [ $exit_code -eq 0 ]; then
+            echo "PASS" > "$result_file"
+        else
+            echo "FAIL" > "$result_file"
+        fi
+    fi
+    echo "$exit_code" > "$outdir/exit_code"
+
+    # ── collect final container logs ──────────────────────────────────────
+    # Try to capture logs from any remaining test container
+    local final_cid
+    final_cid=$(docker ps -a --filter "name=${name}-test" \
+                --format "{{.Names}}" 2>/dev/null | head -1) || true
+    if [ -n "$final_cid" ]; then
+        docker logs "$final_cid" >> "$logfile" 2>&1 || true
+    fi
+
+    # Filtered version
+    filter_logs < "$logfile" > "$outdir/log" || true
+
+    # ── cleanup ───────────────────────────────────────────────────────────
+    (cd "$testdir" && docker compose down -v 2>/dev/null) || true
+
+    # ── print summary ─────────────────────────────────────────────────────
+    local result
+    result=$(cat "$result_file")
+    local sym="✓"
+    [ "$result" != "PASS" ] && sym="✗"
+
+    sep
+    log "$sym  $name: $result  (exit=$exit_code, ${duration}s)"
+
+    # On failure or timeout, print tail of filtered log
+    if [ "$result" != "PASS" ]; then
+        log "=== Last 40 log lines ==="
+        tail -40 "$outdir/log" 2>/dev/null || tail -40 "$logfile" || true
+        sep
+        if [ -n "$(ls "$outdir/samples/" 2>/dev/null)" ]; then
+            log "=== Last process sample ==="
+            ls -t "$outdir/samples/"*.txt 2>/dev/null | head -1 \
+                | xargs -r cat
+        fi
+    fi
+
+    echo "$result"
+}
+
+# ── per-test runner: --debug / core-dump mode ────────────────────────────────
+# Runs the test directly via docker compose with `ulimit -c unlimited` so a
+# SIGSEGV writes a core, then extracts it and prints a gdb backtrace.  Bypasses
+# the timeout/sampling loop of run_one — use it to investigate a known crash.
+run_one_debug() {
+    local name="$1"
+    local testdir="$REPO_ROOT/tests/$name"
+    local outdir="$OUTDIR_BASE/$name"
+
+    [ -d "$testdir" ] || die "test directory not found: $testdir"
+
+    mkdir -p "$outdir"
+    local logfile="$outdir/log.full"
+    local result_file="$outdir/result"
+    local container="${name}-debug-run"
+
+    log "Starting test (debug/core mode): $name"
+    sep
+
+    enable_core_dumps
+
+    # clean up leftovers
+    (cd "$testdir" && docker compose down -v 2>/dev/null) || true
+    docker rm -f "$container" 2>/dev/null || true
+
+    # ensure dependency images exist: pgcopydb, pagila, then the test image
+    log "Building images (pgcopydb, pagila, $name)…"
+    (cd "$REPO_ROOT" && make build)             >"$logfile"  2>&1 || true
+    (cd "$REPO_ROOT/tests" && make build)       >>"$logfile" 2>&1 || true
+    (cd "$testdir" && docker compose build --quiet) >>"$logfile" 2>&1 || true
+
+    # run the test with core dumps enabled (ulimit set before copydb.sh runs)
+    log "Running $name with core dumps enabled…"
+    local start_time=$SECONDS
+    local exit_code=0
+    (cd "$testdir" && docker compose run --name "$container" test \
+        bash -lc 'ulimit -c unlimited; exec /usr/src/pgcopydb/copydb.sh') \
+        >>"$logfile" 2>&1 || exit_code=$?
+
+    local duration=$(( SECONDS - start_time ))
+    echo "$duration"  > "$outdir/duration"
+    echo "$exit_code" > "$outdir/exit_code"
+    if [ "$exit_code" -eq 0 ]; then
+        echo "PASS" > "$result_file"
+    else
+        echo "FAIL" > "$result_file"
+    fi
+
+    docker logs "$container" >>"$logfile" 2>&1 || true
+    filter_logs < "$logfile" > "$outdir/log" || true
+
+    # a crash exits with 128+signal (139 = SIGSEGV); grab a backtrace
+    if [ "$exit_code" -ge 128 ]; then
+        capture_core_backtrace "$container" "$outdir" || true
+    fi
+
+    # cleanup
+    docker rm -f "$container" 2>/dev/null || true
+    (cd "$testdir" && docker compose down -v 2>/dev/null) || true
+
+    local result; result=$(cat "$result_file")
+    local sym="✓"; [ "$result" != "PASS" ] && sym="✗"
+    sep
+    log "$sym  $name: $result  (exit=$exit_code, ${duration}s)"
+    if [ "$result" != "PASS" ]; then
+        log "=== Last 40 log lines ==="
+        tail -40 "$outdir/log" 2>/dev/null || true
+        if [ -f "$outdir/backtrace.txt" ]; then
+            sep
+            log "=== gdb backtrace (full → $outdir/backtrace.txt) ==="
+            sed -n '1,40p' "$outdir/backtrace.txt"
+        fi
+    fi
+
+    echo "$result"
+}
+
+# ── main ──────────────────────────────────────────────────────────────────────
+CDC_TESTS=(
+    cdc-endpos-mid-txn
+    cdc-wal2json
+    cdc-test-decoding
+    cdc-low-level
+    cdc-partitioned-target
+    cdc-replica-identity-index
+    cdc-endpos-in-multi-wal-txn
+)
+
+# Extract flags (which may appear anywhere) and keep positional test names.
+positional=()
+for arg in "$@"; do
+    case "$arg" in
+        --debug|--core) DEBUG_CORE=1 ;;
+        *)              positional+=("$arg") ;;
+    esac
+done
+
+if [ ${#positional[@]} -eq 0 ]; then
+    echo "Usage: $0 [--list|--all|--debug] TEST_NAME ..."
+    exit 1
+fi
+set -- "${positional[@]}"
+
+case "$1" in
+    --list)
+        echo "Available tests:"
+        for t in "${CDC_TESTS[@]}"; do printf '  %s\n' "$t"; done
+        exit 0
+        ;;
+    --all)
+        shift
+        set -- "${CDC_TESTS[@]}"
+        ;;
+esac
+
+mkdir -p "$OUTDIR_BASE"
+# Ensure the log redirect target directory always exists
+touch "$OUTDIR_BASE/.keep"
+
+overall_start=$SECONDS
+pass=0; fail=0; timeout_count=0
+
+for name in "$@"; do
+    # run_one writes progress to stdout; its last line is the bare result word.
+    # Redirect progress to the terminal (fd 3 → original stdout) while
+    # capturing only stdout for the result word.
+    if [ "$DEBUG_CORE" = "1" ]; then
+        run_one_debug "$name"   # writes result to $outdir/result file
+    else
+        run_one "$name"         # writes result to $outdir/result file
+    fi
+    result=$(cat "$OUTDIR_BASE/$name/result" 2>/dev/null || echo "FAIL")
+    case "$result" in
+        PASS)    (( pass++ ))          ;;
+        TIMEOUT) (( timeout_count++ )) ;;
+        *)       (( fail++ ))          ;;
+    esac
+done
+
+total_duration=$(( SECONDS - overall_start ))
+total=$(( pass + fail + timeout_count ))
+
+sep
+printf "RESULTS: %d/%d passed, %d failed, %d timed-out  (%ds total)\n" \
+    "$pass" "$total" "$fail" "$timeout_count" "$total_duration"
+printf "Artifacts in: %s/\n" "$OUTDIR_BASE"
+
+# Final per-test summary
+for name in "$@"; do
+    r=$(cat "$OUTDIR_BASE/$name/result" 2>/dev/null || echo "?")
+    d=$(cat "$OUTDIR_BASE/$name/duration" 2>/dev/null || echo "?")
+    printf "  %-40s %s (%ss)\n" "$name" "$r" "$d"
+done
+
+[ $fail -eq 0 ] && [ $timeout_count -eq 0 ]

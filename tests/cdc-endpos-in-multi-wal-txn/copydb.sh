@@ -112,8 +112,10 @@ pgcopydb follow --resume --trace
 
 # This operation is expected to be a no-op. It tests the scenario where,
 # upon resuming, we skip a transaction that lacks a commitLSN in its
-# BEGIN message but has already been applied.
-pgcopydb stream apply --trace --resume /var/lib/postgres/.local/share/pgcopydb/000000010000000000000004.sql
+# BEGIN message but has already been applied.  In the 2-process SQLite model
+# the apply driver's Guard 1 (commitLSN <= previousLSN) handles this, so a
+# plain resume re-runs the pipeline and applies nothing new.
+pgcopydb follow --resume --trace
 
 # now check that all the new rows made it
 sql="select count(*) from table_a"
