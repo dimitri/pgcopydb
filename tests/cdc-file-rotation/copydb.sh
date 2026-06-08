@@ -68,9 +68,9 @@ test "${output_count}" -ge 2
 #
 SOURCE_DB=${TMPDIR:-/tmp}/pgcopydb/schema/source.db
 
-total_files=$(sqlite3 ${SOURCE_DB} "select count(*) from cdc_files;")
-closed_files=$(sqlite3 ${SOURCE_DB} "select count(*) from cdc_files where done_time_epoch is not null;")
-open_files=$(sqlite3 ${SOURCE_DB} "select count(*) from cdc_files where done_time_epoch is null;")
+total_files=$(sqlite3 -noheader -list ${SOURCE_DB} "select count(*) from cdc_files;")
+closed_files=$(sqlite3 -noheader -list ${SOURCE_DB} "select count(*) from cdc_files where done_time_epoch is not null;")
+open_files=$(sqlite3 -noheader -list ${SOURCE_DB} "select count(*) from cdc_files where done_time_epoch is null;")
 
 echo "cdc_files: total=${total_files} closed=${closed_files} open=${open_files}"
 
@@ -86,7 +86,7 @@ test "${closed_files}" -ge 1
 #
 large_row_count=0
 for dbfile in $(find ${SHAREDIR} -maxdepth 1 -name '*-output.db' -type f | sort); do
-    n=$(sqlite3 ${dbfile} \
+    n=$(sqlite3 -noheader -list ${dbfile} \
         "select count(*) from output where message like '%large-txn-row%';" 2>/dev/null || echo 0)
     echo "  ${dbfile}: ${n} large-txn rows"
     if [ "${n}" -gt 0 ]; then
