@@ -47,5 +47,6 @@
      --endpos                      Stop replaying changes when reaching this LSN
      --defer-indexes               Defer index building until after all table data is copied
      --defer-analyze               Defer ANALYZE until after post-data restore
+     --defer-validate-fks          Create FK constraints as NOT VALID, skipping validation scan
      --use-copy-binary             Use the COPY BINARY format for COPY operations
    

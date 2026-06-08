@@ -260,7 +260,9 @@ cli_copydb_getenv(CopyDBOptions *options)
 		{ PGCOPYDB_DEFER_INDEXES, ENV_TYPE_BOOL,
 		  &(options->deferIndexes) },
 		{ PGCOPYDB_DEFER_ANALYZE, ENV_TYPE_BOOL,
-		  &(options->deferAnalyze) }
+		  &(options->deferAnalyze) },
+		{ PGCOPYDB_DEFER_VALIDATE_FKS, ENV_TYPE_BOOL,
+		  &(options->deferValidateFKs) }
 	};
 
 	int parserCount = sizeof(parsers) / sizeof(parsers[0]);
@@ -654,6 +656,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "restore-tolerance", required_argument, NULL, 256 },
 		{ "defer-indexes", no_argument, NULL, 257 },
 		{ "defer-analyze", no_argument, NULL, 258 },
+		{ "defer-validate-fks", no_argument, NULL, 259 },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 }
 	};
@@ -1146,6 +1149,13 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				options.deferAnalyze = true;
 				log_trace("--defer-analyze");
+				break;
+			}
+
+			case 259:
+			{
+				options.deferValidateFKs = true;
+				log_trace("--defer-validate-fks");
 				break;
 			}
 

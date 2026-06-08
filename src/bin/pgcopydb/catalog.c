@@ -37,7 +37,8 @@ static char *sourceDBcreateDDLs[] = {
 	"  split_max_parts integer, "
 	"  filters text, "
 	"  plugin text, "
-	"  slot_name text "
+	"  slot_name text, "
+	"  defer_validate_fks integer "
 	")",
 
 	"create table section("
@@ -694,7 +695,8 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 									copySpecs->sourceSnapshot.snapshot,
 									copySpecs->splitTablesLargerThan.bytes,
 									copySpecs->splitMaxParts,
-									json))
+									json,
+									copySpecs->deferValidateFKs))
 		{
 			/* errors have already been logged */
 			json_free_serialized_string(json);
@@ -819,6 +821,27 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 
 				return false;
 			}
+		}
+
+		/*
+		 * --defer-validate-fks must be consistent across resume. Changing it
+		 * mid-migration is a footgun: dropping it on resume would create the
+		 * not-yet-created FK constraints as VALID and trigger the very
+		 * validation scan the flag exists to avoid (and vice versa). Only
+		 * enforce this for a full clone (DATA_SECTION_ALL); other commands do
+		 * not carry the flag and must not trip on it.
+		 */
+		if (copySpecs->section == DATA_SECTION_ALL &&
+			copySpecs->deferValidateFKs != setup->deferValidateFKs)
+		{
+			log_error("Catalogs at \"%s\" have been setup with "
+					  "--defer-validate-fks %s and current run uses %s; "
+					  "resume with the same flag value",
+					  sourceDB->dbfile,
+					  setup->deferValidateFKs ? "enabled" : "disabled",
+					  copySpecs->deferValidateFKs ? "enabled" : "disabled");
+
+			return false;
 		}
 
 		if (!streq(json, setup->filters))
@@ -1350,7 +1373,8 @@ catalog_register_setup(DatabaseCatalog *catalog,
 					   const char *snapshot,
 					   uint64_t splitTablesLargerThanBytes,
 					   int splitMaxParts,
-					   const char *filters)
+					   const char *filters,
+					   bool deferValidateFKs)
 {
 	sqlite3 *db = catalog->db;
 
@@ -1363,17 +1387,24 @@ catalog_register_setup(DatabaseCatalog *catalog,
 	char *sql =
 		"insert into setup("
 		"  id, source_pg_uri, target_pg_uri, snapshot, filters, "
-		"  split_tables_larger_than, split_max_parts) "
-		"values($1, $2, $3, $4, $5, $6, $7)";
+		"  defer_validate_fks, split_tables_larger_than, split_max_parts) "
+		"values($1, $2, $3, $4, $5, $6, $7, $8)";
 
 	SQLiteQuery query = { 0 };
 
+	/*
+	 * defer_validate_fks is placed before the split columns so that the
+	 * count-trimming below (which drops the trailing split params) keeps it.
+	 */
 	BindParam params[] = {
 		{ BIND_PARAMETER_TYPE_INT64, "id", 1, NULL },
 		{ BIND_PARAMETER_TYPE_TEXT, "source_pg_uri", 0, (char *) source_pg_uri },
 		{ BIND_PARAMETER_TYPE_TEXT, "target_pg_uri", 0, (char *) target_pg_uri },
 		{ BIND_PARAMETER_TYPE_TEXT, "snapshot", 0, (char *) snapshot },
 		{ BIND_PARAMETER_TYPE_TEXT, "filters", 0, (char *) filters },
+
+		{ BIND_PARAMETER_TYPE_INT, "defer_validate_fks",
+		  deferValidateFKs ? 1 : 0, NULL },
 
 		{ BIND_PARAMETER_TYPE_INT64, "split_tables_larger_than",
 		  splitTablesLargerThanBytes, NULL },
@@ -1394,8 +1425,9 @@ catalog_register_setup(DatabaseCatalog *catalog,
 	{
 		sql =
 			"insert into setup("
-			"  id, source_pg_uri, target_pg_uri, snapshot, filters) "
-			"values($1, $2, $3, $4, $5)";
+			"  id, source_pg_uri, target_pg_uri, snapshot, filters, "
+			"  defer_validate_fks) "
+			"values($1, $2, $3, $4, $5, $6)";
 
 		count -= 2;
 	}
@@ -1404,8 +1436,8 @@ catalog_register_setup(DatabaseCatalog *catalog,
 		sql =
 			"insert into setup("
 			"  id, source_pg_uri, target_pg_uri, snapshot, filters, "
-			"  split_tables_larger_than) "
-			"values($1, $2, $3, $4, $5, $6)";
+			"  defer_validate_fks, split_tables_larger_than) "
+			"values($1, $2, $3, $4, $5, $6, $7)";
 
 		--count;
 	}
@@ -1455,7 +1487,7 @@ catalog_setup(DatabaseCatalog *catalog)
 	char *sql =
 		"select id, source_pg_uri, target_pg_uri, snapshot, "
 		"       split_tables_larger_than, split_max_parts, filters, "
-		"       plugin, slot_name "
+		"       plugin, slot_name, defer_validate_fks "
 		"from setup";
 
 	if (!semaphore_lock(&(catalog->sema)))
@@ -1744,6 +1776,14 @@ catalog_setup_fetch(SQLiteQuery *query)
 				(char *) sqlite3_column_text(query->ppStmt, 8),
 				sizeof(setup->slotName));
 	}
+
+	/*
+	 * defer_validate_fks (NULL on catalogs registered before this column
+	 * existed; treat as false)
+	 */
+	setup->deferValidateFKs =
+		sqlite3_column_type(query->ppStmt, 9) != SQLITE_NULL &&
+		sqlite3_column_int(query->ppStmt, 9) == 1;
 
 	return true;
 }

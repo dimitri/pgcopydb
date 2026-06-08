@@ -1,0 +1,94 @@
+services:
+  source:
+    image: postgres-wal2json:${PGVERSION:-17}
+    build:
+      context: .
+      dockerfile: Dockerfile.pg
+      args:
+        PGVERSION: ${PGVERSION:-17}
+    user: postgres
+    expose:
+      - 5432
+    healthcheck:
+      test: 'pg_isready -U postgres --dbname=pagila'
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: h4ckm3
+      POSTGRES_DB: pagila
+      POSTGRES_HOST_AUTH_METHOD: "trust"
+    command: >
+      -c ssl=on
+      -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
+      -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
+      -c wal_level=logical
+      -c max_wal_senders=10
+      -c max_replication_slots=10
+
+  target:
+    image: postgres:${PGVERSION:-17}
+    user: postgres
+    expose:
+      - 5432
+    healthcheck:
+      test: 'pg_isready -U postgres --dbname=pagila'
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: h4ckm3
+      POSTGRES_DB: pagila
+      POSTGRES_HOST_AUTH_METHOD: "trust"
+    command: >
+      -c ssl=on
+      -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
+      -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
+
+  inject:
+    build:
+      context: .
+      dockerfile: Dockerfile.inject
+    environment:
+      PGCOPYDB_SOURCE_PGURI: postgres://postgres:h4ckm3@source/pagila
+      PGCOPYDB_TARGET_PGURI: postgres://postgres:h4ckm3@target/pagila
+      TMPDIR: /var/run/pgcopydb
+      XDG_DATA_HOME: /var/run/pgcopydb/cdc
+    volumes:
+      - follow-defer-validate-fks:/var/run/pgcopydb
+    depends_on:
+      source:
+        condition: service_healthy
+
+  test:
+    image: follow-defer-validate-fks
+    build:
+      context: .
+      dockerfile: Dockerfile
+    cap_add:
+      - SYS_ADMIN
+      - SYS_PTRACE
+    environment:
+      PGSSLMODE: "require"
+      PGCOPYDB_SOURCE_PGURI: postgres://postgres:h4ckm3@source/pagila
+      PGCOPYDB_TARGET_PGURI: postgres://postgres:h4ckm3@target/pagila
+      PGCOPYDB_TABLE_JOBS: 4
+      PGCOPYDB_INDEX_JOBS: 4
+      PGCOPYDB_FAIL_FAST: "true"
+      TMPDIR: /var/run/pgcopydb
+      XDG_DATA_HOME: /var/run/pgcopydb/cdc
+    volumes:
+      - follow-defer-validate-fks:/var/run/pgcopydb
+    depends_on:
+      source:
+        condition: service_healthy
+      target:
+        condition: service_healthy
+      inject:
+        condition: service_started
+
+volumes:
+  follow-defer-validate-fks:
+    external: true

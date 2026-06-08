@@ -235,6 +235,7 @@ typedef struct CopyDataSpec
 	bool skipXidCheck;
 	bool deferIndexes;
 	bool deferAnalyze;
+	bool deferValidateFKs;
 	bool noRolesPasswords;
 	bool useCopyBinary;
 

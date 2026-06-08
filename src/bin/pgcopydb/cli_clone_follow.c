@@ -70,6 +70,7 @@
 	"  --endpos                      Stop replaying changes when reaching this LSN\n" \
 	"  --defer-indexes               Defer index building until after all table data is copied\n" \
 	"  --defer-analyze               Defer ANALYZE until after post-data restore\n" \
+	"  --defer-validate-fks          Create FK constraints as NOT VALID, skipping validation scan\n" \
 	"  --use-copy-binary             Use the COPY BINARY format for COPY operations\n" \
 
 CommandLine clone_command =
@@ -640,6 +641,20 @@ cli_follow(int argc, char **argv)
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/*
+	 * CDC has ended (endpos reached / cutover). If FKs were created NOT VALID
+	 * via --defer-validate-fks, remind the operator at this final, visible
+	 * point to validate them before relying on the target — the per-FK
+	 * warning emitted during STEP 10 may be buried far up in a multi-day log.
+	 */
+	if (copySpecs.deferValidateFKs)
+	{
+		log_warn("--defer-validate-fks was used: foreign key constraints on "
+				 "the target were created NOT VALID and have NOT been "
+				 "validated. Before cutover, validate them on the target with "
+				 "ALTER TABLE ... VALIDATE CONSTRAINT <name> for each FK");
 	}
 }
 

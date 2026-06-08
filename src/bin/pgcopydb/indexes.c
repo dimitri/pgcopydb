@@ -1483,6 +1483,9 @@ copydb_create_fk_constraints(CopyDataSpec *specs)
 	bool success = true;
 	int notValidCount = 0;
 	int sourceNotValidCount = 0;
+	int deferredNotValidCount = 0;
+	int skippedCount = 0;
+	int partitionedSkipCount = 0;
 
 	for (int i = 0; i < fkArray.count; i++)
 	{
@@ -1509,18 +1512,46 @@ copydb_create_fk_constraints(CopyDataSpec *specs)
 		}
 
 		/*
-		 * If the constraint is already NOT VALID on the source, create it
-		 * as NOT VALID directly — no need to try normal creation first.
-		 * pg_get_constraintdef() already includes NOT VALID in the output
-		 * for such constraints, so the constraintDef handles this, but we
-		 * log it explicitly for clarity.
+		 * Decide whether this constraint should be created as NOT VALID.
+		 *
+		 * There are two distinct reasons to skip the validation scan:
+		 *
+		 *  1. The constraint is already NOT VALID on the source
+		 *     (convalidated = false). pg_get_constraintdef() already includes
+		 *     NOT VALID in its output for such constraints, so the
+		 *     constraintDef carries it; we only log here for clarity.
+		 *
+		 *  2. The caller asked for --defer-validate-fks, in which case a
+		 *     source-validated constraint is created as NOT VALID so the
+		 *     (potentially hours-long) validation scan does not block the
+		 *     transition into CDC. The operator validates later at their
+		 *     convenience with ALTER TABLE ... VALIDATE CONSTRAINT.
+		 *
+		 * In both cases the constraint still enforces referential integrity
+		 * on all new writes (NOT VALID only skips the scan of pre-existing
+		 * rows), so CDC replay remains safe: any change replayed from the
+		 * source already satisfies the constraint there.
 		 */
+		bool notValid = false;
+		bool appendNotValid = false;
+
 		if (!fk->convalidated)
 		{
 			log_notice("FK constraint \"%s\" on %s is NOT VALID on source, "
 					   "creating as NOT VALID on target",
 					   fk->conname, fk->tableQname);
+			notValid = true;
 			sourceNotValidCount++;
+		}
+		else if (specs->deferValidateFKs)
+		{
+			log_notice("Deferring FK validation (--defer-validate-fks): "
+					   "creating FK constraint \"%s\" on %s as NOT VALID "
+					   "on target",
+					   fk->conname, fk->tableQname);
+			notValid = true;
+			appendNotValid = true;
+			deferredNotValidCount++;
 		}
 
 		/*
@@ -1542,6 +1573,16 @@ copydb_create_fk_constraints(CopyDataSpec *specs)
 			{
 				appendPQExpBufferStr(cmd, " INITIALLY DEFERRED");
 			}
+		}
+
+		/*
+		 * Source-NOT-VALID constraints already carry NOT VALID inside
+		 * constraintDef (from pg_get_constraintdef), so only append it here
+		 * when the source was validated and we are deferring validation.
+		 */
+		if (appendNotValid)
+		{
+			appendPQExpBufferStr(cmd, " NOT VALID");
 		}
 
 		if (PQExpBufferBroken(cmd))
@@ -1567,16 +1608,17 @@ copydb_create_fk_constraints(CopyDataSpec *specs)
 
 		log_notice("Creating FK constraint: %s", cmd->data);
 
-		bool notValid = false;
-
 		if (!pgsql_execute(&dst, cmd->data))
 		{
 			/*
 			 * Check if the failure is due to a foreign key violation
-			 * (SQLSTATE 23503). If so, retry with NOT VALID.
+			 * (SQLSTATE 23503). If so, retry with NOT VALID — but only if
+			 * the command did not already include NOT VALID, since in that
+			 * case a 23503 cannot come from the validation scan and a retry
+			 * would not help.
 			 */
 			if (strcmp(dst.sqlstate,
-					   STR_ERRCODE_FOREIGN_KEY_VIOLATION) == 0)
+					   STR_ERRCODE_FOREIGN_KEY_VIOLATION) == 0 && !notValid)
 			{
 				log_warn("FK constraint \"%s\" on %s has pre-existing data "
 						 "violations, retrying with NOT VALID",
@@ -1650,6 +1692,61 @@ copydb_create_fk_constraints(CopyDataSpec *specs)
 						   "referenced table or schema does not exist "
 						   "on target (likely filtered out)",
 						   fk->conname, fk->tableQname);
+				skippedCount++;
+				memset(dst.sqlstate, 0, sizeof(dst.sqlstate));
+			}
+			else if (strcmp(dst.sqlstate,
+							STR_ERRCODE_INVALID_FOREIGN_KEY) == 0)
+			{
+				/*
+				 * There is no unique/PK constraint on the target matching the
+				 * referenced columns (SQLSTATE 42830). This typically happens
+				 * when the referenced table's unique index was filtered out
+				 * while the FK and its table were kept. We cannot create this
+				 * FK, but it must not abort the whole migration: skip it and
+				 * capture it for the end-of-run summary so the operator can
+				 * reconcile it afterwards.
+				 */
+				log_warn("Skipping FK constraint \"%s\" on %s: no matching "
+						 "unique or primary key constraint exists on the "
+						 "referenced table on target (likely filtered out)",
+						 fk->conname, fk->tableQname);
+				skippedCount++;
+				memset(dst.sqlstate, 0, sizeof(dst.sqlstate));
+			}
+			else if (specs->deferValidateFKs && appendNotValid &&
+					 strcmp(dst.sqlstate,
+							STR_ERRCODE_WRONG_OBJECT_TYPE) == 0)
+			{
+				/*
+				 * PostgreSQL does not support NOT VALID foreign keys declared
+				 * on a partitioned table itself (SQLSTATE 42809: "cannot add
+				 * NOT VALID foreign key on partitioned table"). We only reach
+				 * here because --defer-validate-fks asked us to append NOT
+				 * VALID to a source-validated constraint.
+				 *
+				 * Creating it VALID instead would run the full validation scan
+				 * across the (typically very large) partitioned table, which
+				 * is exactly the multi-hour block the flag exists to avoid and
+				 * would stall the transition into CDC. So, consistent with the
+				 * flag's contract, skip it and capture it loudly: the operator
+				 * adds it after cutover on their own schedule (e.g. per-leaf
+				 * NOT VALID constraints, then VALIDATE). CDC replay stays safe
+				 * meanwhile because every change comes from the source, which
+				 * already enforces the constraint.
+				 */
+				log_warn("Skipping parent-level FK constraint \"%s\" on "
+						 "partitioned table %s: PostgreSQL cannot create it as "
+						 "NOT VALID, and --defer-validate-fks must not trigger a "
+						 "validation scan. Per-partition FK constraints are "
+						 "still created directly where the source defines them; "
+						 "reconcile the parent-level constraint manually after "
+						 "the migration if you need it",
+						 fk->conname, fk->tableQname);
+				partitionedSkipCount++;
+
+				/* it was counted as deferred at decision time; it isn't */
+				deferredNotValidCount--;
 				memset(dst.sqlstate, 0, sizeof(dst.sqlstate));
 			}
 			else
@@ -1701,6 +1798,35 @@ copydb_create_fk_constraints(CopyDataSpec *specs)
 		log_warn("%d FK constraint(s) created as NOT VALID due to "
 				 "pre-existing data violations on the source database",
 				 notValidCount);
+	}
+
+	if (deferredNotValidCount > 0)
+	{
+		log_warn("%d FK constraint(s) created as NOT VALID because "
+				 "--defer-validate-fks was used; validate them manually "
+				 "with ALTER TABLE ... VALIDATE CONSTRAINT once the "
+				 "migration is complete",
+				 deferredNotValidCount);
+	}
+
+	if (skippedCount > 0)
+	{
+		log_warn("%d FK constraint(s) were skipped because their referenced "
+				 "table, schema, or unique/primary key constraint does not "
+				 "exist on the target (see warnings above); they were NOT "
+				 "created and must be reconciled manually if needed",
+				 skippedCount);
+	}
+
+	if (partitionedSkipCount > 0)
+	{
+		log_warn("%d parent-level FK constraint(s) on partitioned tables were "
+				 "not created as NOT VALID (PostgreSQL limitation), so as not "
+				 "to block the transition into CDC with a validation scan. "
+				 "Per-partition constraints are created where present; "
+				 "reconcile the parent-level constraints manually after the "
+				 "migration if you need them",
+				 partitionedSkipCount);
 	}
 
 	/* cleanup */
