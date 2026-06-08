@@ -371,6 +371,53 @@ On the next run:
 
 ---
 
+.. _pipe_protocol:
+
+The receive→apply lifecycle pipe
+--------------------------------
+
+Alongside the LSN bookkeeping above, the ``receive`` and ``apply`` workers need
+one small piece of direct coordination: ``apply`` must learn, with minimal
+latency, that ``receive`` has reached the end position and will produce no
+further changes. Like the rest of the pipeline this is a deliberate design
+choice worth recording.
+
+In the SQLite CDC model the change data itself never travels between the two
+workers directly. ``receive`` records decoded changes into the *output* store
+and ``apply`` reads from there, transforms the rows inline, and writes them to
+the target; concurrent access to those stores is serialised by a shared write
+semaphore. The only thing the workers exchange directly is the *"I am done"*
+signal.
+
+That single fact is delivered over a one-way pipe from ``receive`` to ``apply``.
+The pipe carries exactly one message for its whole lifetime: the final LSN that
+``receive`` stopped at — in effect, *"I am done, at position X"*. ``apply`` waits
+on the pipe while it drains the store, so it wakes immediately when the signal
+arrives instead of discovering completion by polling.
+
+This follows the pattern PostgreSQL uses for postmaster-death detection — the
+"death watch" pipe behind ``PostmasterIsAlive()``. The upstream process holds
+the write end open for its entire run and closes it on exit, while the
+downstream process watches the read end for readiness:
+
+- a readable pipe **with data** is the normal *"done at LSN X"* hand-off;
+- a closed pipe **with no data** (end-of-file) means the upstream went away
+  unexpectedly.
+
+pgcopydb layers the final-LSN payload on top of that bare death-watch so that
+``apply`` can also drain cleanly up to the right transaction boundary, rather
+than merely learning *that* the upstream is gone.
+
+The pipe is purely a latency optimisation, and it exists only when ``receive``
+and ``apply`` run together under the same follow supervisor. When ``apply`` (or
+``stream catchup``) runs on its own, there is no live pipe; it instead consults
+the durable ``pipeline_state`` record that ``receive`` leaves behind in the
+source catalog to decide when the upstream has finished. Unexpected upstream
+death is, in the live case, ultimately caught by the supervisor monitoring its
+children, with the pipe end-of-file serving as a belt-and-suspenders fallback.
+
+---
+
 Invariant summary
 -----------------
 
