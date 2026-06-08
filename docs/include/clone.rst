@@ -42,6 +42,5 @@
      --create-slot                 Create the replication slot
      --origin                      Use this Postgres replication origin node name
      --endpos                      Stop replaying changes when reaching this LSN
-     --max-replaydb-size           Rotate CDC files at this size (default 1GB)
      --use-copy-binary             Use the COPY BINARY format for COPY operations
    

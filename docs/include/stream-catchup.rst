@@ -3,13 +3,13 @@
    pgcopydb stream catchup: Transform and apply prefetched changes from the SQLite CDC store to the target
    usage: pgcopydb stream catchup 
    
-     --source         Postgres URI to the source database
-     --target         Postgres URI to the target database
-     --dir            Work directory to use
-     --restart        Allow restarting when temp files exist already
-     --resume         Allow resuming operations after a failure
-     --not-consistent Allow taking a new snapshot on the source database
-     --slot-name      Stream changes recorded by this slot
+     --source              Postgres URI to the source database
+     --target              Postgres URI to the target database
+     --dir                 Work directory to use
+     --restart             Allow restarting when temp files exist already
+     --resume              Allow resuming operations after a failure
+     --not-consistent      Allow taking a new snapshot on the source database
+     --slot-name           Stream changes recorded by this slot
      --endpos              LSN position where to stop receiving changes
      --max-replaydb-size   Rotate CDC files at this size (default 1GB)
      --origin              Name of the Postgres replication origin

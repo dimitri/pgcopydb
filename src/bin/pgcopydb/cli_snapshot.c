@@ -334,8 +334,8 @@ cli_create_snapshot(int argc, char **argv)
 		}
 
 		streamSpecs.maxReplayDBSize = createSNoptions.maxReplayDBSize > 0
-			? createSNoptions.maxReplayDBSize
-			: (1ULL << 30);
+									  ? createSNoptions.maxReplayDBSize
+									  : (1ULL << 30);
 
 		/*
 		 * Make sure to register our setup here, as usually the command

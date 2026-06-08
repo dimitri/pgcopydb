@@ -639,8 +639,8 @@ cli_stream_setup(int argc, char **argv)
 	}
 
 	specs.maxReplayDBSize = streamDBoptions.maxReplayDBSize > 0
-		? streamDBoptions.maxReplayDBSize
-		: (1ULL << 30);
+							? streamDBoptions.maxReplayDBSize
+							: (1ULL << 30);
 
 	if (!stream_setup_databases(&copySpecs, &specs))
 	{
@@ -772,8 +772,8 @@ cli_stream_catchup(int argc, char **argv)
 	}
 
 	specs.maxReplayDBSize = streamDBoptions.maxReplayDBSize > 0
-		? streamDBoptions.maxReplayDBSize
-		: (1ULL << 30);
+							? streamDBoptions.maxReplayDBSize
+							: (1ULL << 30);
 
 	/*
 	 * First, we need to know enough about the source database system to be
@@ -861,8 +861,8 @@ cli_stream_replay(int argc, char **argv)
 	}
 
 	specs.maxReplayDBSize = streamDBoptions.maxReplayDBSize > 0
-		? streamDBoptions.maxReplayDBSize
-		: (1ULL << 30);
+							? streamDBoptions.maxReplayDBSize
+							: (1ULL << 30);
 
 	/* optional follow coordinator TCP endpoint (--host/--port or env) */
 	strlcpy(specs.coordHost, streamDBoptions.host, sizeof(specs.coordHost));
@@ -962,8 +962,8 @@ cli_stream_transform(int argc, char **argv)
 		}
 
 		specs.maxReplayDBSize = streamDBoptions.maxReplayDBSize > 0
-			? streamDBoptions.maxReplayDBSize
-			: (1ULL << 30);
+								? streamDBoptions.maxReplayDBSize
+								: (1ULL << 30);
 
 		specs.in = stdin;
 		specs.out = stdout;
@@ -1033,8 +1033,8 @@ cli_stream_transform(int argc, char **argv)
 	}
 
 	specs.maxReplayDBSize = streamDBoptions.maxReplayDBSize > 0
-		? streamDBoptions.maxReplayDBSize
-		: (1ULL << 30);
+							? streamDBoptions.maxReplayDBSize
+							: (1ULL << 30);
 
 	if (!catalog_open(specs.sourceDB))
 	{
@@ -1156,8 +1156,8 @@ cli_stream_apply(int argc, char **argv)
 		}
 
 		specs.maxReplayDBSize = streamDBoptions.maxReplayDBSize > 0
-			? streamDBoptions.maxReplayDBSize
-			: (1ULL << 30);
+								? streamDBoptions.maxReplayDBSize
+								: (1ULL << 30);
 
 		specs.in = stdin;
 
@@ -1249,8 +1249,8 @@ cli_stream_apply(int argc, char **argv)
 	}
 
 	specs.maxReplayDBSize = streamDBoptions.maxReplayDBSize > 0
-		? streamDBoptions.maxReplayDBSize
-		: (1ULL << 30);
+							? streamDBoptions.maxReplayDBSize
+							: (1ULL << 30);
 
 	if (!catalog_open(specs.sourceDB))
 	{
@@ -1402,8 +1402,8 @@ stream_start_in_mode(LogicalStreamMode mode)
 	}
 
 	specs.maxReplayDBSize = streamDBoptions.maxReplayDBSize > 0
-		? streamDBoptions.maxReplayDBSize
-		: (1ULL << 30);
+							? streamDBoptions.maxReplayDBSize
+							: (1ULL << 30);
 
 	switch (specs.mode)
 	{
