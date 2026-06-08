@@ -1098,8 +1098,6 @@ streamCloseFile(LogicalStreamContext *context, bool time_to_abort)
 		 * wake up immediately, read the LSN, and drain the output table up
 		 * to that point before exiting.  This replaces the old in-band
 		 * ENDPOS signal that used to be inserted into the SQLite output table.
-		 *
-		 * See docs/cdc-pipeline-ipc.md for the full design rationale.
 		 */
 		StreamSpecs *specs = privateContext->specs;
 

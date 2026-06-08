@@ -306,7 +306,9 @@ XID's COMMIT has never arrived (``pending_xid != 0`` after receive-done):
    NOT advanced to ``endpos``.
 4. ``pipeline_state_end("transform", transform_lsn, true)`` records the clean
    exit at the last commit boundary.
-5. The apply pipe receives the transform-done signal.
+5. The apply process is woken over the receive→apply lifecycle pipe (the
+   one-way "done at LSN X" signal modelled on PostgreSQL's postmaster
+   death-watch; see :ref:`pipe_protocol`).
 
 ``sentinel.transform_lsn`` never moves past a committed transaction boundary.
 The slot's ``confirmed_flush_lsn`` is unaffected by the mid-transaction endpos.

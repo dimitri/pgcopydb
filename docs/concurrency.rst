@@ -117,6 +117,10 @@ Here is a description of the process tree:
       process loops over querying the pgcopydb sentinel table until the apply
       mode has been enabled, and then applies the replayed transactions.
 
+   The ``receive`` and ``apply`` processes coordinate their shutdown over a
+   small lifecycle pipe (modelled on PostgreSQL's postmaster death-watch); see
+   :ref:`pipe_protocol` for the design.
+
 .. _index_concurrency:
 
 For each table, build all indexes concurrently
