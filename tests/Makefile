@@ -14,7 +14,8 @@ all: pagila pagila-multi-steps blobs unit filtering filtering-standby extensions
 	 cdc-wal2json cdc-test-decoding cdc-endpos-between-transaction cdc-low-level \
 	 follow-wal2json follow-standby follow-9.6 follow-data-only follow-target-reconnect \
 	 endpos-in-multi-wal-txn exclude-extension \
-	 blob-snapshot-release follow-defer-indexes fk-not-valid;
+	 blob-snapshot-release follow-defer-indexes fk-not-valid defer-validate-fks \
+	 follow-defer-validate-fks;
 
 pagila: build
 	$(MAKE) -C $@
@@ -82,6 +83,12 @@ follow-defer-indexes: build
 fk-not-valid: build
 	$(MAKE) -C $@
 
+defer-validate-fks: build
+	$(MAKE) -C $@
+
+follow-defer-validate-fks: build
+	$(MAKE) -C $@
+
 timescaledb: build
 	$(MAKE) -C $@
 
@@ -94,4 +101,5 @@ build:
 .PHONY: cdc-wal2json cdc-test-decoding cdc-low-level
 .PHONY: follow-wal2json follow-standby follow-9.6 follow-target-reconnect
 .PHONY: endpos-in-multi-wal-txn exclude-extension
-.PHONY: blob-snapshot-release follow-defer-indexes fk-not-valid
+.PHONY: blob-snapshot-release follow-defer-indexes fk-not-valid defer-validate-fks
+.PHONY: follow-defer-validate-fks

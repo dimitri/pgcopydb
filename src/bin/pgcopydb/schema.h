@@ -416,6 +416,7 @@ typedef struct CatalogSetup
 	char *filters;              /* malloc'ed area */
 	char plugin[BUFSIZE];
 	char slotName[BUFSIZE];
+	bool deferValidateFKs;      /* --defer-validate-fks, validated on resume */
 } CatalogSetup;
 
 typedef enum
