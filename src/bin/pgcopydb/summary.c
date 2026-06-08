@@ -171,8 +171,10 @@ summary_lookup_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 	BindParam params[] = {
 		{ BIND_PARAMETER_TYPE_INT64, "tableoid", table->oid, NULL },
 
-		{ BIND_PARAMETER_TYPE_INT64, "partnum",
-		  table->partition.partNumber, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT64, "partnum",
+			table->partition.partNumber, NULL
+		},
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -282,11 +284,15 @@ summary_delete_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 
 	/* bind our parameters now */
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_INT64, "tableoid",
-		  tableSpecs->sourceTable->oid, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT64, "tableoid",
+			tableSpecs->sourceTable->oid, NULL
+		},
 
-		{ BIND_PARAMETER_TYPE_INT64, "partnum",
-		  tableSpecs->sourceTable->partition.partNumber, NULL }
+		{
+			BIND_PARAMETER_TYPE_INT64, "partnum",
+			tableSpecs->sourceTable->partition.partNumber, NULL
+		}
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -366,14 +372,20 @@ summary_add_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 		{ BIND_PARAMETER_TYPE_INT64, "pid", tableSummary->pid, NULL },
 		{ BIND_PARAMETER_TYPE_INT64, "tableoid", table->oid, NULL },
 
-		{ BIND_PARAMETER_TYPE_INT64, "partnum",
-		  table->partition.partNumber, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT64, "partnum",
+			table->partition.partNumber, NULL
+		},
 
-		{ BIND_PARAMETER_TYPE_INT64, "start_time_epoch",
-		  tableSummary->startTime, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT64, "start_time_epoch",
+			tableSummary->startTime, NULL
+		},
 
-		{ BIND_PARAMETER_TYPE_TEXT, "command",
-		  0, (char *) tableSummary->command }
+		{
+			BIND_PARAMETER_TYPE_TEXT, "command",
+			0, (char *) tableSummary->command
+		}
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -444,20 +456,28 @@ summary_finish_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 
 	/* bind our parameters now */
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_INT64, "done_time_epoch",
-		  tableSummary->doneTime, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT64, "done_time_epoch",
+			tableSummary->doneTime, NULL
+		},
 
-		{ BIND_PARAMETER_TYPE_INT64, "duration",
-		  tableSummary->durationMs, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT64, "duration",
+			tableSummary->durationMs, NULL
+		},
 
-		{ BIND_PARAMETER_TYPE_INT64, "bytes",
-		  tableSummary->bytesTransmitted, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT64, "bytes",
+			tableSummary->bytesTransmitted, NULL
+		},
 
 		{ BIND_PARAMETER_TYPE_INT64, "pid", getpid(), NULL },
 		{ BIND_PARAMETER_TYPE_INT64, "tableoid", table->oid, NULL },
 
-		{ BIND_PARAMETER_TYPE_INT64, "partnum",
-		  table->partition.partNumber, NULL }
+		{
+			BIND_PARAMETER_TYPE_INT64, "partnum",
+			table->partition.partNumber, NULL
+		}
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -524,17 +544,23 @@ summary_update_table_copy_stats(DatabaseCatalog *catalog,
 
 	/* bind our parameters now */
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_INT64, "duration",
-		  tableSummary->durationMs, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT64, "duration",
+			tableSummary->durationMs, NULL
+		},
 
-		{ BIND_PARAMETER_TYPE_INT64, "bytes",
-		  tableSummary->bytesTransmitted, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT64, "bytes",
+			tableSummary->bytesTransmitted, NULL
+		},
 
 		{ BIND_PARAMETER_TYPE_INT64, "pid", getpid(), NULL },
 		{ BIND_PARAMETER_TYPE_INT64, "tableoid", table->oid, NULL },
 
-		{ BIND_PARAMETER_TYPE_INT64, "partnum",
-		  table->partition.partNumber, NULL }
+		{
+			BIND_PARAMETER_TYPE_INT64, "partnum",
+			table->partition.partNumber, NULL
+		}
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -854,8 +880,10 @@ summary_add_vacuum(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 		{ BIND_PARAMETER_TYPE_INT64, "pid", vacuumSummary->pid, NULL },
 		{ BIND_PARAMETER_TYPE_INT64, "tableoid", table->oid, NULL },
 
-		{ BIND_PARAMETER_TYPE_INT64, "start_time_epoch",
-		  vacuumSummary->startTime, NULL }
+		{
+			BIND_PARAMETER_TYPE_INT64, "start_time_epoch",
+			vacuumSummary->startTime, NULL
+		}
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -927,11 +955,15 @@ summary_finish_vacuum(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 
 	/* bind our parameters now */
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_INT64, "done_time_epoch",
-		  vacuumSummary->doneTime, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT64, "done_time_epoch",
+			vacuumSummary->doneTime, NULL
+		},
 
-		{ BIND_PARAMETER_TYPE_INT64, "duration",
-		  vacuumSummary->durationMs, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT64, "duration",
+			vacuumSummary->durationMs, NULL
+		},
 
 		{ BIND_PARAMETER_TYPE_INT64, "pid", getpid(), NULL },
 		{ BIND_PARAMETER_TYPE_INT64, "tableoid", table->oid, NULL }
@@ -1273,11 +1305,15 @@ summary_add_index(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 		{ BIND_PARAMETER_TYPE_INT64, "pid", indexSummary->pid, NULL },
 		{ BIND_PARAMETER_TYPE_INT64, "indexoid", index->indexOid, NULL },
 
-		{ BIND_PARAMETER_TYPE_INT64, "start_time_epoch",
-		  indexSummary->startTime, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT64, "start_time_epoch",
+			indexSummary->startTime, NULL
+		},
 
-		{ BIND_PARAMETER_TYPE_TEXT, "command",
-		  0, (char *) indexSummary->command }
+		{
+			BIND_PARAMETER_TYPE_TEXT, "command",
+			0, (char *) indexSummary->command
+		}
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -1348,11 +1384,15 @@ summary_finish_index(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 
 	/* bind our parameters now */
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_INT64, "done_time_epoch",
-		  indexSummary->doneTime, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT64, "done_time_epoch",
+			indexSummary->doneTime, NULL
+		},
 
-		{ BIND_PARAMETER_TYPE_INT64, "duration",
-		  indexSummary->durationMs, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT64, "duration",
+			indexSummary->durationMs, NULL
+		},
 
 		{ BIND_PARAMETER_TYPE_INT64, "pid", getpid(), NULL },
 		{ BIND_PARAMETER_TYPE_INT64, "indexoid", index->indexOid, NULL }
@@ -1435,11 +1475,15 @@ summary_add_constraint(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 		{ BIND_PARAMETER_TYPE_INT64, "pid", indexSummary->pid, NULL },
 		{ BIND_PARAMETER_TYPE_INT64, "conoid", index->constraintOid, NULL },
 
-		{ BIND_PARAMETER_TYPE_INT64, "start_time_epoch",
-		  indexSummary->startTime, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT64, "start_time_epoch",
+			indexSummary->startTime, NULL
+		},
 
-		{ BIND_PARAMETER_TYPE_TEXT, "command",
-		  0, (char *) indexSummary->command }
+		{
+			BIND_PARAMETER_TYPE_TEXT, "command",
+			0, (char *) indexSummary->command
+		}
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -1511,11 +1555,15 @@ summary_finish_constraint(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 
 	/* bind our parameters now */
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_INT64, "done_time_epoch",
-		  indexSummary->doneTime, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT64, "done_time_epoch",
+			indexSummary->doneTime, NULL
+		},
 
-		{ BIND_PARAMETER_TYPE_INT64, "duration",
-		  indexSummary->durationMs, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT64, "duration",
+			indexSummary->durationMs, NULL
+		},
 
 		{ BIND_PARAMETER_TYPE_INT64, "pid", getpid(), NULL },
 		{ BIND_PARAMETER_TYPE_INT64, "conoid", index->constraintOid, NULL }

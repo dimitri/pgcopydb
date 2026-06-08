@@ -72,10 +72,19 @@ ld_store_open_outputdb(StreamSpecs *specs)
 	StreamContext *privateContext = &(specs->private);
 	DatabaseCatalog *outputDB = specs->outputDB;
 
-	if (!ld_store_set_current_cdc_filename(specs))
+	/*
+	 * Only query cdc_files when the caller has not already pre-populated the
+	 * filename.  The apply path sets the filename via ld_store_set_first_cdc_filename
+	 * or ld_store_set_cdc_filename_at_lsn before calling here, so we must not
+	 * overwrite it with the (potentially different) newest-open-file result.
+	 */
+	if (IS_EMPTY_STRING_BUFFER(outputDB->dbfile))
 	{
-		/* errors have already been logged */
-		return false;
+		if (!ld_store_set_current_cdc_filename(specs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	bool createOutputDB = IS_EMPTY_STRING_BUFFER(outputDB->dbfile);
@@ -169,18 +178,64 @@ ld_store_open_replaydb(StreamSpecs *specs)
 
 
 /*
+ * ld_store_set_first_cdc_filename selects the CDC file with the smallest id
+ * in cdc_files (regardless of done_time_epoch) and stores its path in
+ * specs->outputDB->dbfile.
+ *
+ * Used by the apply process when previousLSN == 0 (fresh start): in the
+ * prefetch+catchup workflow with file rotation there may be several closed
+ * files before the single open one, and the apply must start from file 1.
+ */
+bool
+ld_store_set_first_cdc_filename(StreamSpecs *specs)
+{
+	sqlite3 *db = specs->sourceDB->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: ld_store_set_first_cdc_filename: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"select filename "
+		"  from cdc_files "
+		"order by id asc "
+		"   limit 1";
+
+	SQLiteQuery query = {
+		.context = specs->outputDB->dbfile,
+		.fetchFunction = &ld_store_cdc_filename_fetch
+	};
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* no parameters: the query is unconditional */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * ld_store_set_current_cdc_filename finds the most recently created open
- * replayDB file in cdc_files and stores its path in specs->replayDB->dbfile.
+ * replayDB file in cdc_files and stores its path in specs->outputDB->dbfile.
  *
  * "Open" means done_time_epoch IS NULL.  We sort by id DESC to get the most
  * recently inserted row, which corresponds to the current streaming epoch.
  *
- * This simple query works for all callers:
- *  - streaming resume: finds the existing open file
- *  - first start:      cdc_files is empty → returns no row (correct: caller
- *                      will create a new file)
- *  - apply process:    has no streaming context (startpos/timeline = 0) but
- *                      still needs to open the file produced by prefetch
+ * This is only used by the RECEIVE path.  The APPLY path should call
+ * ld_store_set_first_cdc_filename (previousLSN == 0) or
+ * ld_store_set_cdc_filename_at_lsn (previousLSN > 0) to land on the right
+ * starting file after file rotation.
  */
 bool
 ld_store_set_current_cdc_filename(StreamSpecs *specs)
@@ -870,6 +925,313 @@ ld_store_insert_cdc_filename(StreamSpecs *specs)
 		/* errors have already been logged */
 		return false;
 	}
+
+	return true;
+}
+
+
+/*
+ * ld_store_fetch_int64 is a generic SQLiteQuery fetchFunction that reads
+ * column 0 as an int64 into a (int64_t *) context.  Used by the count-based
+ * queries in this file.
+ */
+static bool
+ld_store_fetch_int64(SQLiteQuery *query)
+{
+	int64_t *result = (int64_t *) query->context;
+
+	*result = sqlite3_column_int64(query->ppStmt, 0);
+	return true;
+}
+
+
+/*
+ * ld_store_close_outputdb_cdc marks the current output.db file as done in
+ * cdc_files by setting endpos and done_time_epoch.  This is called by
+ * ld_store_rotate_outputdb before the receive process opens a new output.db.
+ */
+bool
+ld_store_close_outputdb_cdc(StreamSpecs *specs, uint64_t endpos_lsn)
+{
+	sqlite3 *db = specs->sourceDB->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: ld_store_close_outputdb_cdc: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"update cdc_files "
+		"   set endpos = $1, done_time_epoch = $2 "
+		" where filename = $3";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	char lsn[PG_LSN_MAXLENGTH] = { 0 };
+	sformat(lsn, sizeof(lsn), "%08X/%08X", LSN_FORMAT_ARGS(endpos_lsn));
+
+	uint64_t doneTime = time(NULL);
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_TEXT, "endpos", 0, lsn },
+		{ BIND_PARAMETER_TYPE_INT64, "done_time_epoch", doneTime, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "filename", 0, specs->outputDB->dbfile }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_debug("ld_store_close_outputdb_cdc: closed \"%s\" at %X/%X",
+			  specs->outputDB->dbfile,
+			  LSN_FORMAT_ARGS(endpos_lsn));
+
+	return true;
+}
+
+
+/*
+ * ld_store_rotate_outputdb closes the current output.db at commit_lsn, then
+ * opens a new output.db file for the receive process to continue writing into.
+ *
+ * Called from streamWrite() after a COMMIT when the current output.db has
+ * reached or exceeded specs->maxReplayDBSize bytes.
+ */
+bool
+ld_store_rotate_outputdb(StreamSpecs *specs, uint64_t commit_lsn)
+{
+	StreamContext *privateContext = &(specs->private);
+
+	log_info("Rotating outputDB \"%s\" at LSN %X/%X",
+			 specs->outputDB->dbfile,
+			 LSN_FORMAT_ARGS(commit_lsn));
+
+	/* 1. mark current output.db as done in cdc_files */
+	if (!ld_store_close_outputdb_cdc(specs, commit_lsn))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* 2. close the SQLite handle and release the semaphore */
+	if (!catalog_close(specs->outputDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* clear so ld_store_open_outputdb creates a fresh file */
+	memset(specs->outputDB->dbfile, 0, sizeof(specs->outputDB->dbfile));
+	specs->outputDB->db = NULL;
+
+	/* 3. advance startpos — new file starts at the commit boundary */
+	privateContext->startpos = commit_lsn;
+
+	/* 4. open the new output.db (creates file + inserts cdc_files row) */
+	if (!ld_store_open_outputdb(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_info("Rotated to new outputDB \"%s\"", specs->outputDB->dbfile);
+
+	return true;
+}
+
+
+/*
+ * ld_store_advance_cdc_files is called by the apply process when
+ * stream_transform_from_outputdb() returns no new rows and no progress was
+ * made.  It checks whether the current output.db has been closed by the
+ * receive process (done_time_epoch IS NOT NULL) and, if so, opens the next
+ * output.db / replay.db file pair.
+ *
+ * Sets *advanced to true when a new file pair was successfully opened;
+ * false when the current pair is still the latest (caller should wait).
+ */
+bool
+ld_store_advance_cdc_files(StreamSpecs *specs, bool *advanced)
+{
+	*advanced = false;
+
+	sqlite3 *db = specs->sourceDB->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: ld_store_advance_cdc_files: db is NULL");
+		return false;
+	}
+
+	if (specs->outputDB == NULL || IS_EMPTY_STRING_BUFFER(specs->outputDB->dbfile))
+	{
+		log_error("BUG: ld_store_advance_cdc_files: outputDB has no filename");
+		return false;
+	}
+
+	/*
+	 * Step 1: check whether the current output.db is closed (done_time_epoch
+	 * IS NOT NULL in cdc_files).  We count matching rows with a non-null
+	 * done_time_epoch; a count of 1 means the file is closed.
+	 */
+	char *closedSQL =
+		"select count(*) "
+		"  from cdc_files "
+		" where filename = $1 "
+		"   and done_time_epoch is not null";
+
+	int64_t closedCount = 0;
+
+	SQLiteQuery closedQuery = {
+		.context = &closedCount,
+		.fetchFunction = &ld_store_fetch_int64
+	};
+
+	if (!catalog_sql_prepare(db, closedSQL, &closedQuery))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	BindParam closedParams[1] = {
+		{ BIND_PARAMETER_TYPE_TEXT, "filename", 0, specs->outputDB->dbfile }
+	};
+
+	if (!catalog_sql_bind(&closedQuery, closedParams, 1))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&closedQuery))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (closedCount == 0)
+	{
+		/* current file is still open — nothing to advance to */
+		return true;
+	}
+
+	/*
+	 * Step 2: find the next file (id > current), open or closed.
+	 *
+	 * In the prefetch+catchup workflow receive may have already rotated
+	 * through several files before catchup starts; those intermediate files
+	 * have done_time_epoch IS NOT NULL.  We must visit every file in id
+	 * order regardless of its close status, so we do NOT filter on
+	 * done_time_epoch here.
+	 */
+	char *nextSQL =
+		"  select c2.filename "
+		"    from cdc_files c2 "
+		"   where c2.id > (select c1.id from cdc_files c1 "
+		"                   where c1.filename = $1) "
+		"order by c2.id asc "
+		"   limit 1";
+
+	char nextFile[MAXPGPATH] = { 0 };
+
+	SQLiteQuery nextQuery = {
+		.context = nextFile,
+		.fetchFunction = &ld_store_cdc_filename_fetch
+	};
+
+	if (!catalog_sql_prepare(db, nextSQL, &nextQuery))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	BindParam nextParams[1] = {
+		{ BIND_PARAMETER_TYPE_TEXT, "filename", 0, specs->outputDB->dbfile }
+	};
+
+	if (!catalog_sql_bind(&nextQuery, nextParams, 1))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&nextQuery))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (IS_EMPTY_STRING_BUFFER(nextFile))
+	{
+		/* next file not yet created — caller should wait */
+		log_debug("ld_store_advance_cdc_files: current file closed, "
+				  "waiting for receive to create next file");
+		return true;
+	}
+
+	/*
+	 * Step 3: close old outputDB and replayDB handles, open the new pair.
+	 */
+	log_info("Apply advancing from outputDB \"%s\" to \"%s\"",
+			 specs->outputDB->dbfile, nextFile);
+
+	(void) catalog_close(specs->outputDB);
+
+	if (specs->replayDB != NULL && specs->replayDB->db != NULL)
+	{
+		(void) catalog_close(specs->replayDB);
+	}
+
+	/* open new outputDB */
+	strlcpy(specs->outputDB->dbfile, nextFile, sizeof(specs->outputDB->dbfile));
+	specs->outputDB->db = NULL;
+	specs->outputDB->type = DATABASE_CATALOG_TYPE_OUTPUT;
+
+	if (!catalog_init(specs->outputDB))
+	{
+		log_error("Failed to open new outputDB \"%s\"", nextFile);
+		return false;
+	}
+
+	/* derive and open the matching replayDB */
+	if (specs->replayDB != NULL)
+	{
+		ld_store_replaydb_filename_from_outputdb(specs->outputDB->dbfile,
+												 specs->replayDB->dbfile,
+												 sizeof(specs->replayDB->dbfile));
+
+		specs->replayDB->db = NULL;
+		specs->replayDB->type = DATABASE_CATALOG_TYPE_REPLAY;
+
+		if (!catalog_init(specs->replayDB))
+		{
+			log_error("Failed to open new replayDB \"%s\"",
+					  specs->replayDB->dbfile);
+			return false;
+		}
+
+		log_info("Apply advanced to outputDB \"%s\" / replayDB \"%s\"",
+				 specs->outputDB->dbfile, specs->replayDB->dbfile);
+	}
+
+	*advanced = true;
 
 	return true;
 }

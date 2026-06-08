@@ -6556,7 +6556,7 @@ catalog_iter_s_coll_finish(SourceCollationIterator *iter)
  * database.
  */
 bool
-catalog_add_s_namespace(DatabaseCatalog *catalog, SourceSchema *namespace)
+catalog_add_s_namespace(DatabaseCatalog *catalog, SourceSchema *nsp)
 {
 	sqlite3 *db = catalog->db;
 
@@ -6580,12 +6580,12 @@ catalog_add_s_namespace(DatabaseCatalog *catalog, SourceSchema *namespace)
 
 	/* bind our parameters now */
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_INT64, "oid", namespace->oid, NULL },
-		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, namespace->nspname },
+		{ BIND_PARAMETER_TYPE_INT64, "oid", nsp->oid, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, nsp->nspname },
 
 		{
 			BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
-			namespace->restoreListName
+			nsp->restoreListName
 		}
 	};
 

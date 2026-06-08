@@ -220,6 +220,10 @@ clone_and_follow(CopyDataSpec *copySpecs)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	streamSpecs.maxReplayDBSize = copyDBoptions.maxReplayDBSize > 0
+								  ? copyDBoptions.maxReplayDBSize
+								  : (1ULL << 30);
+
 	/* optional follow coordinator TCP endpoint (--host/--port) */
 	strlcpy(streamSpecs.coordHost, copyDBoptions.host,
 			sizeof(streamSpecs.coordHost));
@@ -404,6 +408,10 @@ cli_follow(int argc, char **argv)
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
+
+	specs.maxReplayDBSize = copyDBoptions.maxReplayDBSize > 0
+							? copyDBoptions.maxReplayDBSize
+							: (1ULL << 30);
 
 	/* optional follow coordinator TCP endpoint (--host/--port or env) */
 	strlcpy(specs.coordHost, copyDBoptions.host, sizeof(specs.coordHost));

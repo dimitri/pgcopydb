@@ -378,6 +378,17 @@ The following options are available to ``pgcopydb stream`` sub-commands:
 
   Set current verbosity to ERROR level.
 
+--max-replaydb-size
+
+  Maximum on-disk size of a single SQLite ``output.db`` file before it is
+  rotated to a new file pair.  Accepts human-readable units: ``1kB``,
+  ``500MB``, ``1GB``, etc.  Defaults to ``1GB``.
+
+  A transaction larger than the threshold is always kept intact in one
+  file — rotation only happens at a transaction commit boundary.  This
+  means a single oversized transaction causes the file to exceed the
+  threshold, which is expected and safe.
+
 Environment
 -----------
 

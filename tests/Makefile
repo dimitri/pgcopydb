@@ -9,7 +9,7 @@ all: pagila pagila-multi-steps blobs unit filtering extensions \
 	 partitioned-target \
 	 cdc-wal2json cdc-test-decoding cdc-endpos-mid-txn cdc-low-level \
 	 cdc-replica-identity-index cdc-partitioned-target \
-	 cdc-endpos-in-multi-wal-txn \
+	 cdc-endpos-in-multi-wal-txn cdc-file-rotation \
 	 follow-wal2json follow-9.6 follow-data-only;
 
 pagila: build
@@ -66,6 +66,9 @@ follow-data-only: build
 cdc-endpos-in-multi-wal-txn: build
 	$(MAKE) -C $@
 
+cdc-file-rotation: build
+	$(MAKE) -C $@
+
 timescaledb: build
 	$(MAKE) -C $@
 
@@ -75,5 +78,5 @@ build:
 .PHONY: all build
 .PHONY: pagila pagila-multi-steps blobs unit filtering partitioned-target extensions
 .PHONY: cdc-wal2json cdc-test-decoding cdc-endpos-mid-txn cdc-low-level cdc-replica-identity-index cdc-partitioned-target
-.PHONY: cdc-endpos-in-multi-wal-txn
+.PHONY: cdc-endpos-in-multi-wal-txn cdc-file-rotation
 .PHONY: follow-wal2json follow-9.6

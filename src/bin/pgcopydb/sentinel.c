@@ -912,8 +912,10 @@ pipeline_state_sync(DatabaseCatalog *catalog,
 		{ BIND_PARAMETER_TYPE_TEXT, "begin_lsn", 0, beginLSN },
 		{ BIND_PARAMETER_TYPE_TEXT, "end_lsn", 0, endLSN },
 		{ BIND_PARAMETER_TYPE_INT64, "complete", state->last_txn_complete ? 1 : 0, NULL },
-		{ BIND_PARAMETER_TYPE_INT64, "processed", state->last_txn_processed ? 1 : 0,
-		  NULL },
+		{
+			BIND_PARAMETER_TYPE_INT64, "processed", state->last_txn_processed ? 1 : 0,
+			NULL
+		},
 		{ BIND_PARAMETER_TYPE_TEXT, "run_end_lsn", 0, runEndLSN },
 		{ BIND_PARAMETER_TYPE_TEXT, "process_name", 0, (char *) state->process_name }
 	};

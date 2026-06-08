@@ -333,6 +333,10 @@ cli_create_snapshot(int argc, char **argv)
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 
+		streamSpecs.maxReplayDBSize = createSNoptions.maxReplayDBSize > 0
+									  ? createSNoptions.maxReplayDBSize
+									  : (1ULL << 30);
+
 		/*
 		 * Make sure to register our setup here, as usually the command
 		 * `pgcopydb snapshot` is used first.

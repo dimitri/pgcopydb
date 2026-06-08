@@ -453,8 +453,8 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	if (specs->sourceSnapshot.isReadOnly && specs->filters.type !=
-		SOURCE_FILTER_TYPE_NONE)
+	if (specs->sourceSnapshot.isReadOnly && specs->filters.type != SOURCE_FILTER_TYPE_NONE
+		)
 	{
 		log_fatal("Connected to a standby server where pg_is_in_recovery(): "
 				  "pgcopydb does not support operating on standby server "

@@ -291,7 +291,7 @@ bool pgsql_get_table_relkind(PGSQL *pgsql, const char *qname, char *relkind);
 
 bool pgsql_get_search_path(PGSQL *pgsql, char *search_path, size_t size);
 bool pgsql_set_search_path(PGSQL *pgsql, char *search_path, bool local);
-bool pgsql_prepend_search_path(PGSQL *pgsql, const char *namespace);
+bool pgsql_prepend_search_path(PGSQL *pgsql, const char *nsp);
 
 bool pgsql_export_snapshot(PGSQL *pgsql, char *snapshot, size_t size);
 bool pgsql_set_snapshot(PGSQL *pgsql, char *snapshot);

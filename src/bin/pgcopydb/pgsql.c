@@ -1354,7 +1354,7 @@ pgsql_set_search_path(PGSQL *pgsql, char *search_path, bool local)
  * namespace, only for the current transaction, using SET LOCAL.
  */
 bool
-pgsql_prepend_search_path(PGSQL *pgsql, const char *namespace)
+pgsql_prepend_search_path(PGSQL *pgsql, const char *nsp)
 {
 	char search_path[BUFSIZE] = { 0 };
 
@@ -1366,7 +1366,7 @@ pgsql_prepend_search_path(PGSQL *pgsql, const char *namespace)
 
 	if (IS_EMPTY_STRING_BUFFER(search_path))
 	{
-		return pgsql_set_search_path(pgsql, (char *) namespace, true);
+		return pgsql_set_search_path(pgsql, (char *) nsp, true);
 	}
 	else
 	{
@@ -1374,7 +1374,7 @@ pgsql_prepend_search_path(PGSQL *pgsql, const char *namespace)
 
 		sformat(new_search_path, sizeof(new_search_path),
 				"%s, %s",
-				namespace,
+				nsp,
 				search_path);
 
 		return pgsql_set_search_path(pgsql, new_search_path, true);
