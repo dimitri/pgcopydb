@@ -90,40 +90,43 @@ PostgreSQL Logical Decoding Client
 
 The replication client of pgcopydb has been designed to be able to fetch
 changes from the source Postgres instance concurrently to the initial COPY
-of the data. Three worker processes are created to handle the logical
-decoding client:
+of the data. Two worker processes are created to handle the logical decoding
+client:
 
   - The **receive** process fetches data from the Postgres replication slot
     using the Postgres replication protocol and stores the decoded messages
-    into a SQLite database (the output table).
+    into the *output table* of a SQLite database (the ``*-output.db`` file).
 
-  - The **transform** process reads from the output table and transforms the
-    data from an intermediate format into parameterized SQL statements,
-    storing them in the replay table of the same SQLite database.
-
-  - The **apply** process then reads from the replay table and applies the
-    SQL statements to the target Postgres database system, using Postgres APIs
-    for `Replication Progress Tracking`__.
+  - The **apply** process reads from the output table, transforms the decoded
+    messages into parameterized SQL statements (stored in the *stmt* and
+    *replay* tables of the ``*-replay.db`` file), and applies those statements
+    to the target Postgres database system, using Postgres APIs for
+    `Replication Progress Tracking`__.
 
     __ https://www.postgresql.org/docs/current//replication-origins.html
 
-The SQLite-based CDC pipeline uses a unified **catchup mode** for all
-operations. All three worker processes (receive, transform, apply) can
-restart in the same mode every time. The SQLite database provides
-inter-process communication, eliminating the need for complex mode-switching
-or Unix pipes.
+The transform step is no longer a separate worker process: it is now done
+*inline* by the apply process, which reads the output table and produces the
+replay statements as part of the same catchup loop. There is no standalone
+``stream transform`` command anymore.
 
-During the initial COPY phase of operations, pgcopydb follow starts the three
+The SQLite-based CDC pipeline uses a unified **catchup mode** for all
+operations. Both worker processes (receive, apply) can restart in the same
+mode every time. The SQLite databases provide inter-process communication,
+eliminating the need for complex mode-switching or Unix pipes.
+
+During the initial COPY phase of operations, pgcopydb follow starts the two
 worker processes which then:
 
-  1. **Receive** writes raw logical decoding messages to the output table.
-  2. **Transform** continuously reads from output and writes parameterized SQL
-     to the replay table.
-  3. **Apply** continuously reads from replay and applies changes to the target
-     database, tracking progress via replication origins.
+  1. **Receive** writes raw logical decoding messages to the output table in
+     the ``*-output.db`` file.
+  2. **Apply** continuously reads from the output table, transforms entries
+     into parameterized SQL in the ``*-replay.db`` file (stmt and replay
+     tables), and applies those changes to the target database, tracking
+     progress via replication origins.
 
-This pipelined approach allows all three phases to operate concurrently,
-with the SQLite database acting as a durable intermediate store and providing
+This pipelined approach allows both phases to operate concurrently, with the
+SQLite databases acting as a durable intermediate store and providing
 transaction-level synchronization between processes. Changes are applied with
 transaction granularity, and the system can be safely paused/resumed from the
 last applied LSN position.
@@ -146,22 +149,26 @@ command-line option.
 
 The output plugin compatibility means that pgcopydb has to implement code to
 parse the output plugin syntax and make sense of it. Internally, pgcopydb
-stores the decoded messages in a SQLite database with two main tables:
+stores the decoded messages in two SQLite databases: the ``*-output.db`` file
+holds the raw decoded stream, and the ``*-replay.db`` file holds the
+transformed SQL statements. Together they use three main tables:
 
-- **output table**: Stores the raw decoded messages from the logical decoding
-  output plugin, with metadata about the logical operation and a normalized
-  copy of the output plugin message.
+- **output table** (in ``*-output.db``): Stores the raw decoded messages from
+  the logical decoding output plugin, with metadata about the logical operation
+  and a normalized copy of the output plugin message.
 
-- **replay table**: Stores the transformed SQL statements, with references to
-  the prepared statements in the stmt table.
+- **replay table** (in ``*-replay.db``): Stores the transformed SQL statements,
+  with references to the prepared statements in the stmt table.
 
-- **stmt table**: A dictionary of prepared statements that can be reused across
-  multiple EXECUTE calls, with the actual SQL and a hash for fast lookup.
+- **stmt table** (in ``*-replay.db``): A dictionary of prepared statements that
+  can be reused across multiple EXECUTE calls, with the actual SQL and a hash
+  for fast lookup.
 
-The transform process converts the output table entries into parameterized SQL
-using `prepared statements`__ as an optimization. This means that pgcopydb
-efficiently reuses prepared statements across multiple rows, avoiding the
-overhead of re-preparing identical statements.
+The apply process converts the output table entries into parameterized SQL
+using `prepared statements`__ as an optimization, as part of its inline
+transform step. This means that pgcopydb efficiently reuses prepared statements
+across multiple rows, avoiding the overhead of re-preparing identical
+statements.
 
 __ https://www.postgresql.org/docs/current/sql-prepare.html
 
