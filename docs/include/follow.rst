@@ -11,7 +11,7 @@
      --resume                      Allow resuming operations after a failure
      --not-consistent              Allow taking a new snapshot on the source database
      --snapshot                    Use snapshot obtained with pg_export_snapshot
-     --plugin                      Output plugin to use (test_decoding, wal2json)
+     --plugin                      Output plugin to use (pgoutput, test_decoding, wal2json)
      --wal2json-numeric-as-string  Print numeric data type as string when using wal2json output plugin
      --slot-name                   Use this Postgres replication slot name
      --create-slot                 Create the replication slot

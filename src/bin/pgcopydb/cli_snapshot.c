@@ -32,7 +32,7 @@ CommandLine snapshot_command =
 		"  --source                      Postgres URI to the source database\n"
 		"  --dir                         Work directory to use\n"
 		"  --follow                      Implement logical decoding to replay changes\n"
-		"  --plugin                      Output plugin to use (test_decoding, wal2json)\n"
+		"  --plugin                      Output plugin to use (pgoutput, test_decoding, wal2json)\n"
 		"  --wal2json-numeric-as-string  Print numeric data type as string when using wal2json output plugin\n"
 		"  --slot-name                   Use this Postgres replication slot name\n",
 		cli_create_snapshot_getopts,

@@ -34,11 +34,14 @@ Description
 -----------
 
 The ``pgcopydb clone`` command implements both a base copy of a source
-database into a target database and also a full `Logical Decoding`__ client
-for the `wal2json`__ logical decoding plugin.
+database into a target database and also a full `Logical Decoding`__ client.
+The default plugin is `pgoutput`__, built into PostgreSQL core since version 10.
+The `wal2json`__ and `test_decoding`__ plugins are also supported.
 
 __ https://www.postgresql.org/docs/current/logicaldecoding.html
+__ https://www.postgresql.org/docs/current/protocol-logical-replication.html
 __ https://github.com/eulerto/wal2json/
+__ https://www.postgresql.org/docs/current/test-decoding.html
 
 Base copy, or the clone operation
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -621,14 +624,16 @@ The following options are available to ``pgcopydb clone``:
 
 --plugin
 
-  Logical decoding output plugin to use. The default is `test_decoding`__
-  which ships with Postgres core itself, so is probably already available on
-  your source server.
+  Logical decoding output plugin to use. The default is `pgoutput`__ which
+  is built into PostgreSQL core (since Postgres 10) and does not require
+  any extension installation on the source server. Using pgoutput avoids
+  the need for superuser to install an extension and works with any
+  PostgreSQL publication-based setup.
 
-  It is possible to use `wal2json`__ instead. The support for wal2json is
-  mostly historical in pgcopydb, it should not make a user visible
-  difference whether you use the default test_decoding or wal2json.
+  It is also possible to use `test_decoding`__ or `wal2json`__. Both are
+  still supported for backwards compatibility.
 
+  __ https://www.postgresql.org/docs/current/protocol-logical-replication.html
   __ https://www.postgresql.org/docs/current/test-decoding.html
   __ https://github.com/eulerto/wal2json/
 

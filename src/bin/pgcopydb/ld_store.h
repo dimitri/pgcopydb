@@ -20,7 +20,12 @@ typedef struct ReplayDBOutputMessage
 
 	char timestamp[PG_MAX_TIMESTAMP];
 
-	char *jsonBuffer;           /* malloc'ed area */
+	char *jsonBuffer;           /* malloc'ed area; NULL for pgoutput rows */
+
+	/* pgoutput-specific fields (NULL/0 for other plugins) */
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
+	char old_type;              /* 'K', 'O', or 0 */
 
 	PQExpBuffer stmt;
 	PQExpBuffer data;
@@ -83,6 +88,10 @@ bool ld_store_insert_timeline_history(DatabaseCatalog *catalog,
 
 bool ld_store_insert_message(DatabaseCatalog *catalog,
 							 LogicalMessageMetadata *metadata);
+
+bool ld_store_insert_pgoutput_message(DatabaseCatalog *catalog,
+									  LogicalMessageMetadata *metadata,
+									  PgoutputMessage *pgmsg);
 
 bool ld_store_insert_internal_message(DatabaseCatalog *catalog,
 									  InternalMessage *message);

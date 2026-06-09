@@ -23,6 +23,7 @@
 #include "copydb.h"
 #include "env_utils.h"
 #include "ld_ipc.h"
+#include "ld_pgoutput.h"
 #include "ld_store.h"
 #include "ld_stream.h"
 #include "lock_utils.h"
@@ -135,6 +136,24 @@ stream_init_specs(StreamSpecs *specs,
 					"true",
 					"pgcopydb.*",
 					"true"
+				}
+			};
+
+			specs->pluginOptions = options;
+			break;
+		}
+
+		case STREAM_PLUGIN_PGOUTPUT:
+		{
+			KeyVal options = {
+				.count = 2,
+				.keywords = {
+					"proto_version",
+					"publication_names"
+				},
+				.values = {
+					"1",
+					specs->slot.publicationName
 				}
 			};
 
@@ -850,10 +869,23 @@ streamWrite(LogicalStreamContext *context)
 		}
 
 		/* insert the message to our current SQLite logical decoding file */
-		if (!ld_store_insert_message(replayDB, metadata))
+		if (privateContext->plugin == STREAM_PLUGIN_PGOUTPUT)
 		{
-			/* errors have already been logged */
-			return false;
+			if (!ld_store_insert_pgoutput_message(replayDB, metadata,
+												  &privateContext->pgoutputMsg))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+			free_pgoutput_message(&privateContext->pgoutputMsg);
+		}
+		else
+		{
+			if (!ld_store_insert_message(replayDB, metadata))
+			{
+				/* errors have already been logged */
+				return false;
+			}
 		}
 	}
 
@@ -1590,6 +1622,11 @@ parseMessageActionAndXid(LogicalStreamContext *context)
 			return parseWal2jsonMessageActionAndXid(context);
 		}
 
+		case STREAM_PLUGIN_PGOUTPUT:
+		{
+			return parsePgoutputMessageActionAndXid(context);
+		}
+
 		default:
 		{
 			log_error("BUG in parseMessageActionAndXid: unknown plugin %d",
@@ -1619,6 +1656,11 @@ prepareMessageJSONbuffer(LogicalStreamContext *context)
 		case STREAM_PLUGIN_WAL2JSON:
 		{
 			return prepareWal2jsonMessage(context);
+		}
+
+		case STREAM_PLUGIN_PGOUTPUT:
+		{
+			return preparePgoutputMessage(context);
 		}
 
 		default:
@@ -2100,6 +2142,27 @@ stream_cleanup_databases(CopyDataSpec *copySpecs, char *slotName, char *origin)
 	{
 		log_error("Failed to drop replication slot \"%s\"", slotName);
 		return false;
+	}
+
+	/*
+	 * If we auto-created a pgoutput publication, drop it now.
+	 * Read the slot metadata from the source catalog to find the name.
+	 */
+	ReplicationSlot slot = { 0 };
+	if (catalog_read_replication_slot(&(copySpecs->catalogs.source), &slot))
+	{
+		if (slot.publicationAutoManaged &&
+			!IS_EMPTY_STRING_BUFFER(slot.publicationName))
+		{
+			PGSQL pubconn = { 0 };
+			if (pgsql_init(&pubconn,
+						   copySpecs->connStrings.source_pguri,
+						   PGSQL_CONN_SOURCE))
+			{
+				(void) pgsql_drop_publication(&pubconn, slot.publicationName);
+				(void) pgsql_finish(&pubconn);
+			}
+		}
 	}
 
 	log_info("Removing schema pgcopydb and its objects");

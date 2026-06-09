@@ -429,6 +429,30 @@ copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 		return false;
 	}
 
+	/* for pgoutput, create publication before the slot */
+	if (slot->plugin == STREAM_PLUGIN_PGOUTPUT && slot->publicationAutoManaged)
+	{
+		PGSQL src = { 0 };
+
+		if (!pgsql_init(&src,
+						copySpecs->connStrings.source_pguri,
+						PGSQL_CONN_SOURCE))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!pgsql_create_publication(&src, slot->publicationName))
+		{
+			log_error("Failed to create publication \"%s\"",
+					  slot->publicationName);
+			pgsql_finish(&src);
+			return false;
+		}
+
+		pgsql_finish(&src);
+	}
+
 	/* now create the replication slot, exporting the snapshot */
 	if (!pgsql_create_logical_replication_slot(stream, slot))
 	{

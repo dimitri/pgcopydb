@@ -335,7 +335,7 @@ cli_copydb_getenv(CopyDBOptions *options)
 		if (options->slot.plugin == STREAM_PLUGIN_UNKNOWN)
 		{
 			log_fatal("Unknown replication plugin \"%s\", please use either "
-					  "test_decoding (the default) or wal2json",
+					  "pgoutput (the default), test_decoding, or wal2json",
 					  OutputPluginToString(options->slot.plugin));
 			++errors;
 		}
@@ -573,9 +573,19 @@ cli_read_previous_options(CopyDBOptions *options, CopyFilePaths *cfPaths)
 	if (options->slot.plugin == STREAM_PLUGIN_UNKNOWN)
 	{
 		log_fatal("Unknown replication plugin \"%s\", please use either "
-				  "test_decoding (the default) or wal2json",
+				  "pgoutput (the default), test_decoding, or wal2json",
 				  OutputPluginToString(options->slot.plugin));
 		return false;
+	}
+
+	/* for pgoutput without an explicit --publication, derive from slot name */
+	if (options->slot.plugin == STREAM_PLUGIN_PGOUTPUT &&
+		IS_EMPTY_STRING_BUFFER(options->slot.publicationName))
+	{
+		strlcpy(options->slot.publicationName,
+				options->slot.slotName,
+				sizeof(options->slot.publicationName));
+		options->slot.publicationAutoManaged = true;
 	}
 
 	return true;
@@ -732,6 +742,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "origin", required_argument, NULL, 'o' },
 		{ "create-slot", no_argument, NULL, 't' },
 		{ "endpos", required_argument, NULL, 'E' },
+		{ "publication", required_argument, NULL, 1003 },
 		{ "host", required_argument, NULL, 1001 },
 		{ "port", required_argument, NULL, 1002 },
 		{ "version", no_argument, NULL, 'V' },
@@ -1100,6 +1111,15 @@ cli_copy_db_getopts(int argc, char **argv)
 				log_trace("--endpos %X/%X",
 						  (uint32_t) (options.endpos >> 32),
 						  (uint32_t) options.endpos);
+				break;
+			}
+
+			case 1003:      /* --publication: pgoutput publication name */
+			{
+				strlcpy(options.slot.publicationName, optarg,
+						sizeof(options.slot.publicationName));
+				options.slot.publicationAutoManaged = false;
+				log_trace("--publication %s", options.slot.publicationName);
 				break;
 			}
 

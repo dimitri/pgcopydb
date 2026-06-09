@@ -59,7 +59,7 @@ static CommandLine stream_setup_command =
 		"  --resume                      Allow resuming operations after a failure\n"
 		"  --not-consistent              Allow taking a new snapshot on the source database\n"
 		"  --snapshot                    Use snapshot obtained with pg_export_snapshot\n"
-		"  --plugin                      Output plugin to use (test_decoding, wal2json)\n"
+		"  --plugin                      Output plugin to use (pgoutput, test_decoding, wal2json)\n"
 		"  --wal2json-numeric-as-string  Print numeric data type as string when using wal2json output plugin\n"
 		"  --slot-name                   Stream changes recorded by this slot\n"
 		"  --origin                      Name of the Postgres replication origin\n",
@@ -691,13 +691,33 @@ cli_stream_cleanup(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	/*
+	 * copydb_init_specs ran before copydb_init_workdir, so cfPaths was empty
+	 * when source.dbfile was set.  Repair it now that cfPaths is complete.
+	 */
+	strlcpy(copySpecs.catalogs.source.dbfile,
+			copySpecs.cfPaths.sdbfile,
+			sizeof(copySpecs.catalogs.source.dbfile));
+
+	/*
+	 * Open the source catalog so that stream_cleanup_databases can read the
+	 * replication slot metadata (e.g. publication name / auto-managed flag).
+	 * The catalog may not exist if a previous run failed early; ignore the
+	 * open failure — cleanup proceeds on a best-effort basis.
+	 */
+	(void) catalog_open(&(copySpecs.catalogs.source));
+
 	if (!stream_cleanup_databases(&copySpecs,
 								  streamDBoptions.slot.slotName,
 								  streamDBoptions.origin))
 	{
+		(void) catalog_close(&(copySpecs.catalogs.source));
+
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
+
+	(void) catalog_close(&(copySpecs.catalogs.source));
 }
 
 

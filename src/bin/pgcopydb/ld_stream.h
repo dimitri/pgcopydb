@@ -15,6 +15,7 @@
 #include "pgsql.h"
 #include "schema.h"
 #include "string_utils.h"
+#include "ld_pgoutput.h"
 
 #define OUTPUT_BEGIN "BEGIN; -- "
 #define OUTPUT_COMMIT "COMMIT; -- "
@@ -414,6 +415,12 @@ typedef struct StreamContext
 
 	/* per-table cache for the test_decoding parser hot path */
 	TestDecodingTableCache *testDecodingTableCache;
+
+	/* relation cache for pgoutput binary protocol */
+	PgoutputRelationCache *pgoutputRelationCache;
+
+	/* current decoded pgoutput message (receive step) */
+	PgoutputMessage pgoutputMsg;
 
 	PGSQL *transformPGSQL;
 

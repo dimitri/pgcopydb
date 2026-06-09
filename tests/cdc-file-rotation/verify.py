@@ -80,16 +80,50 @@ def check_cdc_files():
           f"cdc_files rows ({total}) matches output.db count ({len(files)})")
 
 
+def _count_large_txn_rows(con):
+    """Count large-txn INSERT rows in one output.db file.
+
+    Works with both output plugins:
+
+    * **pgoutput** — data is stored as structured columns in the
+      ``pgoutput_col`` table (``output.message`` is NULL for DML rows).
+      We join ``output`` with ``pgoutput_col`` and look for 'large-txn-row'
+      in the column value.
+
+    * **test_decoding / wal2json** — the full row is serialised as a text
+      blob in ``output.message``; we fall back to a LIKE match there when
+      the pgoutput join returns zero rows.
+    """
+    # pgoutput path: column data lives in pgoutput_col
+    try:
+        (n,) = con.execute(
+            "select count(distinct o.id)"
+            "  from output o"
+            "  join pgoutput_col c on c.output_id = o.id"
+            " where o.action = 'I'"
+            "   and o.relname = 'rotation_test'"
+            "   and c.value like '%large-txn-row%'"
+        ).fetchone()
+        if n > 0:
+            return n
+    except sqlite3.OperationalError:
+        pass  # pgoutput_col absent in very old output.db
+
+    # text-plugin fallback: test_decoding / wal2json store in message
+    (n,) = con.execute(
+        "select count(*) from output"
+        " where message like '%large-txn-row%'"
+    ).fetchone()
+    return n
+
+
 def check_large_txn_atomicity():
     """All 100 large-txn rows must land in exactly one output.db file."""
     hits = []
     for path in output_files():
         try:
             con = sqlite3.connect(path)
-            (n,) = con.execute(
-                "select count(*) from output"
-                " where message like '%large-txn-row%'"
-            ).fetchone()
+            n = _count_large_txn_rows(con)
             con.close()
         except sqlite3.DatabaseError:
             n = 0

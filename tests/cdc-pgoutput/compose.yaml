@@ -1,6 +1,8 @@
 services:
   source:
-    image: postgres:${PGVERSION:-16}
+    build:
+      context: .
+      dockerfile: Dockerfile.pg
     expose:
       - 5432
     environment:
@@ -12,6 +14,7 @@ services:
       -c ssl=on
       -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
       -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
+
   target:
     image: postgres:${PGVERSION:-16}
     expose:
@@ -24,10 +27,10 @@ services:
       -c ssl=on
       -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
       -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
+
   test:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: cdc-pgoutput
+    build: .
     cap_add:
       - SYS_ADMIN
       - SYS_PTRACE

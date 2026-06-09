@@ -26,10 +26,14 @@ internally so that all indexes may be built concurrently.
 pgcopydb implements both the base copy of a database and also Change Data
 Capture to allow replay of changes from the source database to the target
 database. The Change Data Capture facility is implemented using Postgres
-Logical Decoding infrastructure and the wal2json plugin.
+Logical Decoding infrastructure. The default plugin is `pgoutput`, which
+is built into PostgreSQL core (since version 10) and requires no extension
+installation. The `test_decoding` and `wal2json` plugins are also
+supported.
 
 The `pgcopydb follow` command implements a logical replication client for
-the logical decoding plugin wal2json.
+the `pgoutput` logical decoding plugin (built into PostgreSQL core), as
+well as `test_decoding` and `wal2json`.
 
 The `pgcopydb clone --follow` command implements a full solution for online
 migration. Beware that online migrations involve a lot more complexities
