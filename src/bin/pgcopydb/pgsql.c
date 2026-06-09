@@ -244,7 +244,7 @@ pgsql_set_interactive_retry_policy(ConnectionRetryPolicy *retryPolicy)
  * With additional protection against division-by-zero.
  */
 #define random_between(R, M, N) \
-	((((N) -(M) +1) == 0) \
+		((((N) -(M) +1) == 0) \
 	 ? ((M) + R / (RAND_MAX / ((N) -(M)) + 1)) \
 	 : ((M) + R / (RAND_MAX / ((N) -(M) +1) + 1)))
 
@@ -603,7 +603,7 @@ pgsql_open_connection(PGSQL *pgsql)
  * to help anyone. A good trade-off seems to be a warning every 30s.
  */
 #define SHOULD_WARN_AGAIN(duration) \
-	(INSTR_TIME_GET_MILLISEC(duration) > 30000)
+		(INSTR_TIME_GET_MILLISEC(duration) > 30000)
 
 /*
  * pgsql_retry_open_connection loops over a PQping call until the remote server
@@ -2479,7 +2479,7 @@ is_response_ok(PGresult *result)
  * 08P01	protocol_violation
  */
 #define SQLSTATE_IS_CONNECTION_EXCEPTION(pgsql) \
-	(pgsql->sqlstate[0] == '0' && pgsql->sqlstate[1] == '8')
+		(pgsql->sqlstate[0] == '0' && pgsql->sqlstate[1] == '8')
 
 bool
 pgsql_state_is_connection_error(PGSQL *pgsql)
@@ -5199,13 +5199,16 @@ publication_table_list_parse(void *ctx, PGresult *result)
 		char *tablename = PQgetvalue(result, i, 1);
 
 		if (context->hasTable)
+		{
 			appendPQExpBufferStr(context->tableList, ", ");
+		}
 
 		appendPQExpBuffer(context->tableList, "\"%s\".\"%s\"",
 						  schemaname, tablename);
 		context->hasTable = true;
 	}
 }
+
 
 bool
 pgsql_create_publication(PGSQL *pgsql, const char *pubName)
@@ -5224,8 +5227,10 @@ pgsql_create_publication(PGSQL *pgsql, const char *pubName)
 		return false;
 	}
 
-	PublicationTableListContext ctx = { .tableList = tableList,
-										.hasTable = false };
+	PublicationTableListContext ctx = {
+		.tableList = tableList,
+		.hasTable = false
+	};
 
 	if (!pgsql_execute_with_params(pgsql, query, 0, NULL, NULL,
 								   &ctx, &publication_table_list_parse))
@@ -5243,10 +5248,14 @@ pgsql_create_publication(PGSQL *pgsql, const char *pubName)
 	}
 
 	if (ctx.hasTable)
+	{
 		appendPQExpBuffer(sql, "CREATE PUBLICATION \"%s\" FOR TABLE %s",
 						  pubName, tableList->data);
+	}
 	else
+	{
 		appendPQExpBuffer(sql, "CREATE PUBLICATION \"%s\"", pubName);
+	}
 
 	destroyPQExpBuffer(tableList);
 

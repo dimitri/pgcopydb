@@ -15,7 +15,7 @@
 #define streq(a, b) (a != NULL && b != NULL && strcmp(a, b) == 0)
 
 #define strneq(x, y) \
-	((x != NULL) && (y != NULL) && (strcmp(x, y) != 0))
+		((x != NULL) && (y != NULL) && (strcmp(x, y) != 0))
 
 /* maximum decimal int64 length with minus and NUL */
 #define INTSTRING_MAX_DIGITS 21

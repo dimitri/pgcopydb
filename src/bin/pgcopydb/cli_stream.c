@@ -59,7 +59,7 @@ static CommandLine stream_setup_command =
 		"  --resume                      Allow resuming operations after a failure\n"
 		"  --not-consistent              Allow taking a new snapshot on the source database\n"
 		"  --snapshot                    Use snapshot obtained with pg_export_snapshot\n"
-		"  --plugin                      Output plugin to use (test_decoding, wal2json)\n"
+		"  --plugin                      Output plugin to use (pgoutput, test_decoding, wal2json)\n"
 		"  --wal2json-numeric-as-string  Print numeric data type as string when using wal2json output plugin\n"
 		"  --slot-name                   Stream changes recorded by this slot\n"
 		"  --origin                      Name of the Postgres replication origin\n",
@@ -712,6 +712,7 @@ cli_stream_cleanup(int argc, char **argv)
 								  streamDBoptions.origin))
 	{
 		(void) catalog_close(&(copySpecs.catalogs.source));
+
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}

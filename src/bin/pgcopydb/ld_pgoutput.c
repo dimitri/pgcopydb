@@ -51,7 +51,6 @@
  * All bounds-check against bufLen; log_error + return 0/NULL on overflow.
  * ----------
  */
-
 static uint8_t
 pgout_u8(const char *buf, int *pos, int bufLen)
 {
@@ -74,8 +73,8 @@ pgout_i16(const char *buf, int *pos, int bufLen)
 				  *pos, bufLen);
 		return 0;
 	}
-	uint16_t v = ((uint16_t)(uint8_t) buf[*pos] << 8) |
-				 (uint16_t)(uint8_t) buf[*pos + 1];
+	uint16_t v = ((uint16_t) (uint8_t) buf[*pos] << 8) |
+				 (uint16_t) (uint8_t) buf[*pos + 1];
 	*pos += 2;
 	return (int16_t) v;
 }
@@ -90,10 +89,10 @@ pgout_u32(const char *buf, int *pos, int bufLen)
 				  *pos, bufLen);
 		return 0;
 	}
-	uint32_t v = ((uint32_t)(uint8_t) buf[*pos] << 24) |
-				 ((uint32_t)(uint8_t) buf[*pos + 1] << 16) |
-				 ((uint32_t)(uint8_t) buf[*pos + 2] << 8) |
-				 (uint32_t)(uint8_t) buf[*pos + 3];
+	uint32_t v = ((uint32_t) (uint8_t) buf[*pos] << 24) |
+				 ((uint32_t) (uint8_t) buf[*pos + 1] << 16) |
+				 ((uint32_t) (uint8_t) buf[*pos + 2] << 8) |
+				 (uint32_t) (uint8_t) buf[*pos + 3];
 	*pos += 4;
 	return v;
 }
@@ -131,7 +130,9 @@ pgout_cstr(const char *buf, int *pos, int bufLen)
 	int start = *pos;
 
 	while (*pos < bufLen && buf[*pos] != '\0')
+	{
 		(*pos)++;
+	}
 
 	if (*pos >= bufLen)
 	{
@@ -166,15 +167,21 @@ pgoutput_cache_relation(StreamContext *privateContext,
 
 	const char *nspname = pgout_cstr(buf, &pos, bufLen);
 	if (nspname == NULL)
+	{
 		return false;
+	}
 
 	/* empty namespace means pg_catalog */
 	if (nspname[0] == '\0')
+	{
 		nspname = "pg_catalog";
+	}
 
 	const char *relname = pgout_cstr(buf, &pos, bufLen);
 	if (relname == NULL)
+	{
 		return false;
+	}
 
 	uint8_t replident = pgout_u8(buf, &pos, bufLen);
 
@@ -294,7 +301,9 @@ decode_tuple(const char *buf, int bufLen, int *pos,
 			PgoutputAttrCache *attr = NULL;
 			HASH_FIND_INT(rel->attrs, &i, attr);
 			if (attr != NULL)
+			{
 				strlcpy(cols[i].name, attr->attname, sizeof(cols[i].name));
+			}
 		}
 
 		if (status == 't')
@@ -314,15 +323,13 @@ decode_tuple(const char *buf, int bufLen, int *pos,
 				free(cols);
 				return false;
 			}
-			cols[i].value = (char *) calloc(len + 1, sizeof(char));
+			cols[i].value = strndup(buf + *pos, len);
 			if (cols[i].value == NULL)
 			{
 				log_error(ALLOCATION_FAILED_ERROR);
 				free(cols);
 				return false;
 			}
-			memcpy(cols[i].value, buf + *pos, len);
-			cols[i].value[len] = '\0';
 			*pos += len;
 		}
 		else if (status == 'b')
@@ -330,9 +337,12 @@ decode_tuple(const char *buf, int bufLen, int *pos,
 			/* binary column (proto >= 14): read and discard */
 			int32_t len = pgout_i32(buf, pos, bufLen);
 			if (len >= 0 && *pos + len <= bufLen)
+			{
 				*pos += len;
+			}
 			cols[i].status = 'u';   /* treat as unchanged for our purposes */
 		}
+
 		/* 'n' and 'u' have no payload */
 	}
 
@@ -395,6 +405,7 @@ parsePgoutputMessageActionAndXid(LogicalStreamContext *context)
 		{
 			metadata->action = STREAM_ACTION_COMMIT;
 			metadata->xid = privateContext->currentXid;
+
 			/* don't clear currentXid here; preparePgoutputMessage needs it */
 			break;
 		}
@@ -443,10 +454,29 @@ parsePgoutputMessageActionAndXid(LogicalStreamContext *context)
 
 			switch (msgtype)
 			{
-				case 'I': metadata->action = STREAM_ACTION_INSERT; break;
-				case 'U': metadata->action = STREAM_ACTION_UPDATE; break;
-				case 'D': metadata->action = STREAM_ACTION_DELETE; break;
-				case 'T': metadata->action = STREAM_ACTION_TRUNCATE; break;
+				case 'I':
+				{
+					metadata->action = STREAM_ACTION_INSERT;
+					break;
+				}
+
+				case 'U':
+				{
+					metadata->action = STREAM_ACTION_UPDATE;
+					break;
+				}
+
+				case 'D':
+				{
+					metadata->action = STREAM_ACTION_DELETE;
+					break;
+				}
+
+				case 'T':
+				{
+					metadata->action = STREAM_ACTION_TRUNCATE;
+					break;
+				}
 			}
 
 			metadata->xid = privateContext->currentXid;
@@ -494,8 +524,9 @@ preparePgoutputMessage(LogicalStreamContext *context)
 	memset(msg, 0, sizeof(PgoutputMessage));
 
 	if (bufLen < 1)
+	{
 		return true;            /* filtered-out messages are fine */
-
+	}
 	char msgtype = buf[0];
 	int pos = 1;
 
@@ -551,7 +582,9 @@ preparePgoutputMessage(LogicalStreamContext *context)
 
 			if (!decode_tuple(buf, bufLen, &pos, rel,
 							  &msg->new_cols, &msg->ncols_new))
+			{
 				return false;
+			}
 
 			msg->oldType = 0;
 			break;
@@ -579,7 +612,9 @@ preparePgoutputMessage(LogicalStreamContext *context)
 				msg->oldType = (char) next;
 				if (!decode_tuple(buf, bufLen, &pos, rel,
 								  &msg->old_cols, &msg->ncols_old))
+				{
 					return false;
+				}
 
 				/* read the 'N' marker for the new tuple */
 				uint8_t n_marker = pgout_u8(buf, &pos, bufLen);
@@ -610,7 +645,9 @@ preparePgoutputMessage(LogicalStreamContext *context)
 
 			if (!decode_tuple(buf, bufLen, &pos, rel,
 							  &msg->new_cols, &msg->ncols_new))
+			{
 				return false;
+			}
 
 			/*
 			 * Synthesize old-key tuple from new tuple when no old tuple was
@@ -625,7 +662,9 @@ preparePgoutputMessage(LogicalStreamContext *context)
 					PgoutputAttrCache *attr = NULL;
 					HASH_FIND_INT(rel->attrs, &i, attr);
 					if (attr != NULL && attr->isReplicaIdentity)
+					{
 						nkey++;
+					}
 				}
 
 				if (nkey == 0)
@@ -651,7 +690,9 @@ preparePgoutputMessage(LogicalStreamContext *context)
 					PgoutputAttrCache *attr = NULL;
 					HASH_FIND_INT(rel->attrs, &i, attr);
 					if (attr == NULL || !attr->isReplicaIdentity)
+					{
 						continue;
+					}
 
 					msg->old_cols[ki] = msg->new_cols[i];
 
@@ -698,7 +739,9 @@ preparePgoutputMessage(LogicalStreamContext *context)
 			msg->oldType = (char) marker;
 			if (!decode_tuple(buf, bufLen, &pos, rel,
 							  &msg->old_cols, &msg->ncols_old))
+			{
 				return false;
+			}
 			break;
 		}
 
@@ -728,8 +771,10 @@ preparePgoutputMessage(LogicalStreamContext *context)
 		}
 
 		default:
+		{
 			/* filtered-out type — nothing to decode */
 			break;
+		}
 	}
 
 	return true;
@@ -756,20 +801,27 @@ static char *
 quote_and_dup(const char *name)
 {
 	if (name == NULL)
+	{
 		return strdup("");
+	}
 
 	size_t len = strlen(name);
+
 	/* Worst case: every char is '"' (doubled) + 2 outer quotes + NUL */
 	char *result = malloc(2 * len + 3);
 	if (!result)
+	{
 		return NULL;
+	}
 
 	result[0] = '"';
 	size_t pos = 1;
 	for (size_t i = 0; i < len; i++)
 	{
 		if (name[i] == '"')
+		{
 			result[pos++] = '"'; /* escape internal double-quote */
+		}
 		result[pos++] = name[i];
 	}
 	result[pos++] = '"';
@@ -828,19 +880,29 @@ fill_tuple(LogicalMessageTuple *tuple, PgoutputColContext *ctx, char section)
 	for (int i = 0; i < ctx->colCount; i++)
 	{
 		if (ctx->sections[i][0] != section)
+		{
 			continue;
+		}
 		if (ctx->statuses[i][0] == 'u')
+		{
 			continue;
+		}
 		if (key_section && ctx->statuses[i][0] == 'n')
+		{
 			continue;
+		}
 		count++;
 	}
 
 	if (!AllocateLogicalMessageTuple(tuple, count))
+	{
 		return false;
+	}
 
 	if (count == 0)
+	{
 		return true;
+	}
 
 	LogicalMessageValues *vals = &(tuple->values.array[0]);
 	int j = 0;
@@ -848,11 +910,17 @@ fill_tuple(LogicalMessageTuple *tuple, PgoutputColContext *ctx, char section)
 	for (int i = 0; i < ctx->colCount && j < count; i++)
 	{
 		if (ctx->sections[i][0] != section)
+		{
 			continue;
+		}
 		if (ctx->statuses[i][0] == 'u')
+		{
 			continue;
+		}
 		if (key_section && ctx->statuses[i][0] == 'n')
+		{
 			continue;
+		}
 
 		LogicalMessageAttribute *attr = &(tuple->attributes.array[j]);
 		LogicalMessageValue *val = &(vals->array[j]);
@@ -917,23 +985,27 @@ parsePgoutputMessage(StreamContext *privateContext,
 	query.errorOnZeroRows = false;
 
 	if (!catalog_sql_prepare(db, sql, &query))
+	{
 		return false;
+	}
 
 	BindParam params[1] = {
 		{ BIND_PARAMETER_TYPE_INT64, "output_id", outputId, NULL }
 	};
 
 	if (!catalog_sql_bind(&query, params, 1))
+	{
 		return false;
+	}
 
 	/* We don't know the count upfront, so use a dynamic array */
 	int colCap = 64;
 	int colCount = 0;
-	char (*sections)[2] = (char (*)[2]) calloc(colCap, 2);
+	char (*sections)[2] = (char (*)[2])calloc(colCap, 2);
 	int *positions = (int *) calloc(colCap, sizeof(int));
 	char (*names)[PG_NAMEDATALEN] = (char (*)[PG_NAMEDATALEN])
-		calloc(colCap, PG_NAMEDATALEN);
-	char (*statuses)[2] = (char (*)[2]) calloc(colCap, 2);
+									calloc(colCap, PG_NAMEDATALEN);
+	char (*statuses)[2] = (char (*)[2])calloc(colCap, 2);
 	char **values = (char **) calloc(colCap, sizeof(char *));
 
 	if (!sections || !positions || !names || !statuses || !values)
@@ -970,7 +1042,9 @@ parsePgoutputMessage(StreamContext *privateContext,
 
 		const char *nm = (char *) sqlite3_column_text(query.ppStmt, 2);
 		if (nm)
+		{
 			strlcpy(names[colCount], nm, PG_NAMEDATALEN);
+		}
 
 		const char *st = (char *) sqlite3_column_text(query.ppStmt, 3);
 		statuses[colCount][0] = st ? st[0] : 't';
@@ -1038,9 +1112,18 @@ parsePgoutputMessage(StreamContext *privateContext,
 				const char *ns = (char *) sqlite3_column_text(nsq.ppStmt, 0);
 				const char *rn = (char *) sqlite3_column_text(nsq.ppStmt, 1);
 				const char *ot = (char *) sqlite3_column_text(nsq.ppStmt, 2);
-				if (ns) strlcpy(nspname, ns, sizeof(nspname));
-				if (rn) strlcpy(relname, rn, sizeof(relname));
-				if (ot) old_type = ot[0];
+				if (ns)
+				{
+					strlcpy(nspname, ns, sizeof(nspname));
+				}
+				if (rn)
+				{
+					strlcpy(relname, rn, sizeof(relname));
+				}
+				if (ot)
+				{
+					old_type = ot[0];
+				}
 			}
 		}
 		(void) catalog_sql_finalize(&nsq);
@@ -1064,7 +1147,9 @@ parsePgoutputMessage(StreamContext *privateContext,
 				return false;
 			}
 			if (!fill_tuple(&stmt->stmt.insert.new.array[0], &ctx, 'N'))
+			{
 				return false;
+			}
 			break;
 		}
 
@@ -1088,9 +1173,13 @@ parsePgoutputMessage(StreamContext *privateContext,
 			/* old tuple: section = old_type ('K' or 'O') */
 			char old_sec = (old_type == 'O') ? 'O' : 'K';
 			if (!fill_tuple(&stmt->stmt.update.old.array[0], &ctx, old_sec))
+			{
 				return false;
+			}
 			if (!fill_tuple(&stmt->stmt.update.new.array[0], &ctx, 'N'))
+			{
 				return false;
+			}
 			break;
 		}
 
@@ -1110,7 +1199,9 @@ parsePgoutputMessage(StreamContext *privateContext,
 
 			char old_sec = (old_type == 'O') ? 'O' : 'K';
 			if (!fill_tuple(&stmt->stmt.delete.old.array[0], &ctx, old_sec))
+			{
 				return false;
+			}
 			break;
 		}
 
@@ -1131,7 +1222,9 @@ parsePgoutputMessage(StreamContext *privateContext,
 
 	/* free the temporary column arrays */
 	for (int i = 0; i < colCount; i++)
+	{
 		free(values[i]);
+	}
 	free(sections);
 	free(positions);
 	free(names);
@@ -1146,17 +1239,20 @@ parsePgoutputMessage(StreamContext *privateContext,
  * Public API: free_pgoutput_message
  * ----------
  */
-
 void
 free_pgoutput_message(PgoutputMessage *msg)
 {
 	if (msg == NULL)
+	{
 		return;
+	}
 
 	if (msg->old_cols != NULL)
 	{
 		for (int i = 0; i < msg->ncols_old; i++)
+		{
 			free(msg->old_cols[i].value);
+		}
 		free(msg->old_cols);
 		msg->old_cols = NULL;
 	}
@@ -1164,7 +1260,9 @@ free_pgoutput_message(PgoutputMessage *msg)
 	if (msg->new_cols != NULL)
 	{
 		for (int i = 0; i < msg->ncols_new; i++)
+		{
 			free(msg->new_cols[i].value);
+		}
 		free(msg->new_cols);
 		msg->new_cols = NULL;
 	}
