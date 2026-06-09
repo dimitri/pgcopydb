@@ -96,6 +96,74 @@ before copying the data over:
 Note that to ensure consistency of operations, the ``pgcopydb snapshot``
 command has been used. See :ref:`resuming_operations` for details.
 
+Use pgcopydb to migrate from a Citus database to a Citus database
+-----------------------------------------------------------------
+
+It is possible to use the previous tutorial to implement support for
+migrating a Citus database to its new hosting environment. For that, the
+``schema-changes.sql`` script from the previous section needs to be the
+Citus script that calls into the `Citus DDL`__ functions.
+
+__ https://docs.citusdata.com/en/latest/develop/reference_ddl.html
+
+Here is an SQL query that exports the commands to use to reproduce a Citus
+distribution scheme:
+
+.. code-block:: sql
+  :linenos:
+   
+   with citus_tables AS
+   (
+     SELECT logicalrelid AS table_name,
+            CASE WHEN colocationid IN (SELECT colocationid FROM pg_dist_schema)
+                 THEN 'schema'
+
+                 WHEN partkey IS NOT NULL
+                 THEN 'distributed'
+
+                 WHEN repmodel = 't'
+                 THEN 'reference'
+
+                 ELSE 'distributed'
+           END AS citus_table_type,
+
+           coalesce(column_to_column_name(logicalrelid, partkey), '<none>')
+           AS distribution_column,
+
+           colocationid AS colocation_id,
+
+           (select count(*) from pg_dist_shard where logicalrelid = p.logicalrelid)
+           AS shard_count,
+
+           rank() OVER (PARTITION BY colocationid ORDER BY logicalrelid DESC)
+           AS colo_rank
+
+       FROM
+           pg_dist_partition p
+
+       ORDER BY
+           logicalrelid::text
+   )
+   SELECT
+       CASE
+           WHEN citus_table_type = 'distributed' AND colo_rank = 1
+           THEN 'SELECT create_distributed_table(''' || table_name || ''', ''' || distribution_column || ''', colocate_with := ''none'', shard_count := ''' || shard_count || ''');'
+
+           WHEN citus_table_type = 'distributed'
+           THEN 'SELECT create_distributed_table(''' || table_name || ''', ''' || distribution_column || ''', colocate_with := ''' || lag(table_name) OVER (PARTITION BY colocation_id ORDER BY colo_rank) || ''' );'
+           
+           WHEN citus_table_type = 'reference'
+           THEN 'SELECT create_reference_table(''' || table_name || ''');'
+       END AS command
+   FROM
+       citus_tables
+   ORDER BY
+       colocation_id, colo_rank;
+
+Store the output of that query in the ``schema-changes.sql`` script and
+follow the previous section of the tutorial for a Citus-to-Citus migration
+using pgcopydb.
+
 Follow mode, or Change Data Capture
 -----------------------------------
 
