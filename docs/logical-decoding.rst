@@ -1,14 +1,12 @@
 .. _logical_decoding_internals:
 
-Logical Decoding — Design Considerations
-=========================================
+Logical Decoding
+================
 
 This document records the detailed understanding of PostgreSQL logical decoding
 LSN semantics, the replication protocol, and how pgcopydb exploits that
 understanding to track progress and support user-defined ``endpos`` values
 safely.
-
----
 
 PostgreSQL WAL LSN semantics
 -----------------------------
@@ -42,181 +40,97 @@ per decoded transaction:
 
    * - Field
      - Meaning
-   * - ``first_lsn``
-     - ``ReadRecPtr`` of the first WAL record belonging to this XID (the BEGIN
+   * - first_lsn
+     - ReadRecPtr of the first WAL record belonging to this XID (the BEGIN
        record)
-   * - ``final_lsn``
-     - ``ReadRecPtr`` of the COMMIT record ("beginning of commit record")
-   * - ``end_lsn``
-     - ``EndRecPtr`` of the COMMIT record = ``ReadRecPtr`` of the NEXT WAL
+   * - final_lsn
+     - ReadRecPtr of the COMMIT record ("beginning of commit record")
+   * - end_lsn
+     - EndRecPtr of the COMMIT record = ReadRecPtr of the NEXT WAL
        record
 
 The relationship ``end_lsn = final_lsn + sizeof(COMMIT_record)`` always holds.
 ``end_lsn`` is one byte past the COMMIT, which equals the start of whatever WAL
 record follows.
 
----
-
 LSN values on the replication protocol wire
 --------------------------------------------
 
 When the logical decoding plugin callbacks fire, ``ctx->write_location`` is set
-differently for BEGIN and COMMIT:
-
-.. code-block:: c
-
-    /* logical.c: begin_cb_wrapper */
-    ctx->write_location = txn->first_lsn;   /* start of BEGIN record */
-
-    /* logical.c: commit_cb_wrapper */
-    ctx->write_location = txn->end_lsn;     /* byte past end of COMMIT */
-
-``WalSndPrepareWrite`` (``walsender.c``) embeds ``ctx->write_location`` as the
-``dataStart`` field of the XLogData protocol message.  The replication client
-reads ``dataStart`` as ``cur_record_lsn``.
+to ``txn->first_lsn`` (the start of the BEGIN record) for BEGIN callbacks and
+to ``txn->end_lsn`` (the byte immediately past the end of the COMMIT record)
+for COMMIT callbacks.  ``WalSndPrepareWrite`` (``walsender.c``) embeds
+``ctx->write_location`` as the ``dataStart`` field of the XLogData protocol
+message, which the replication client reads as ``cur_record_lsn``.
 
 pgcopydb does **not** pass ``include-lsn=true`` to wal2json, so wal2json does
 not embed an ``"lsn"`` field in its JSON output.  pgcopydb uses the raw
 protocol ``dataStart`` value as ``metadata->lsn`` for every message.
 
-The result for consecutive transactions N and N+1::
+For consecutive transactions N and N+1, COMMIT_N is therefore delivered with
+``dataStart = txn_N->end_lsn`` and BEGIN_{N+1} with ``dataStart =
+txn_{N+1}->first_lsn``.  Because ``txn_N->end_lsn`` equals
+``EndRecPtr(COMMIT_N)`` which equals ``ReadRecPtr`` of the next WAL record
+which equals ``txn_{N+1}->first_lsn``, the two messages carry the same LSN
+value.  This LSN collision is not an edge case but the guaranteed layout
+whenever two transactions are consecutive in WAL; the
+``ld_store_lookup_output_after_lsn`` cursor handles it by using ``>=`` when
+filtering for BEGIN rows (so that the next transaction's BEGIN is included at
+exactly that LSN) and strict ``>`` for KEEPALIVE and COMMIT rows (which can
+share an LSN with the preceding COMMIT without being the next transaction's
+BEGIN).
 
-    COMMIT_N  delivered at dataStart = txn_N->end_lsn
-    BEGIN_{N+1} delivered at dataStart = txn_{N+1}->first_lsn
+Replication feedback and safe restart points
+---------------------------------------------
 
-Because ``txn_N->end_lsn = EndRecPtr(COMMIT_N) = ReadRecPtr(next record) =
-txn_{N+1}->first_lsn``::
+The PostgreSQL streaming replication protocol requires the client to send
+periodic standby status updates reporting three LSN positions: bytes received,
+bytes flushed (durable on the client), and bytes applied to a downstream.  For
+logical replication PostgreSQL uses the reported flush LSN to advance the
+slot's ``confirmed_flush_lsn`` via ``LogicalConfirmReceivedLocation``, a value
+that only ever increases.  The slot's ``restart_lsn`` — the oldest WAL
+position the server must retain — is derived from ``confirmed_flush_lsn`` and
+determines how far back WAL segments can be recycled.  On reconnect, WAL
+streaming resumes from the greater of the client's requested start position and
+``confirmed_flush_lsn``, so whatever the client last reported as flushed
+becomes the effective replay starting point.
 
-    COMMIT_N.lsn  ==  BEGIN_{N+1}.lsn          ← LSN COLLISION, always
+pgcopydb reports ``sentinel.transform_lsn`` as the flush LSN.
+``transform_lsn`` advances only at committed transaction boundaries — to
+``COMMIT.end_lsn``, the byte immediately after a completed COMMIT record,
+which is identical to ``first_lsn`` of the next transaction.  Advancing to any
+position inside an uncommitted transaction (past a BEGIN but before its COMMIT)
+would cause the slot to skip that transaction on reconnect, silently losing
+data.  Because ``confirmed_flush_lsn`` after processing transaction N equals
+``end_lsn_N = first_lsn_{N+1}``, streaming on reconnect resumes exactly at the
+first byte of the next unprocessed transaction, the ``>=`` predicate on BEGIN
+rows in the restart cursor matches it at exactly that LSN, and no message is
+lost or replayed twice.
 
-This is not an edge case — it is the guaranteed layout whenever two
-transactions are consecutive in WAL.
+pgcopydb also records ``pipeline_state.last_xid`` alongside
+``transform_lsn``.  The pair ``(transform_lsn, last_xid)`` forms a complete
+restart descriptor — the last fully processed transaction was XID X whose
+COMMIT ended at LSN L.  Only ``transform_lsn`` drives the PostgreSQL slot
+position; ``last_xid`` is kept for debugging and cross-process assertions.
 
----
+A separate watermark, ``sentinel.replay_lsn``, tracks progress on the target
+side: it records the LSN of the last transaction successfully committed to the
+target PostgreSQL database by the apply process, and is updated only after
+``pgsql_execute(COMMIT)`` returns successfully.  ``replay_lsn`` is used to
+detect that the user's ``--endpos`` has been reached and to drive the pgcopydb
+progress display; it is not the apply restart point.
 
-The LSN collision and how pgcopydb handles it
-----------------------------------------------
+On restart, ``setupReplicationOrigin`` reads
+``pg_replication_origin_progress()`` from the durable PostgreSQL origin
+catalog and overwrites ``context->previousLSN`` unconditionally —
+``replay_lsn`` plays no role in that lookup.
 
-The ``ld_store_lookup_output_after_lsn`` cursor uses a union query that handles
-the collision explicitly:
-
-.. code-block:: sql
-
-    SELECT … FROM (
-      SELECT … FROM output WHERE lsn >= $1 AND action = 'B'
-      UNION ALL
-      SELECT … FROM output WHERE lsn >  $2 AND action IN ('K','X')
-    )
-    ORDER BY lsn, CASE WHEN action='B' THEN 0 ELSE 1 END, id
-    LIMIT 1
-
-The ``>=`` (not ``>``) for BEGIN rows is intentional::
-
-    After processing COMMIT_N:  transform_lsn = end_lsn_N = first_lsn_{N+1}
-
-      BEGIN_N    has lsn = first_lsn_N  < end_lsn_N  → excluded by >= ✓
-      BEGIN_{N+1} has lsn = first_lsn_{N+1} = end_lsn_N → included by >= ✓
-
-KEEPALIVE rows use strict ``>`` because they can share an LSN with the
-preceding COMMIT without being the next transaction's BEGIN.
-
----
-
-``transform_lsn`` — the safe restart point
--------------------------------------------
-
-``sentinel.transform_lsn`` is set to ``COMMIT.end_lsn`` (= ``txn->end_lsn``)
-at the end of every committed transaction.  This value is reported to
-PostgreSQL as ``flush_lsn`` via:
-
-.. code-block:: c
-
-    /* ld_stream.c: stream_sync_sentinel */
-    if (sentinel.transform_lsn != InvalidXLogRecPtr)
-        context->tracking->flushed_lsn = sentinel.transform_lsn;
-
-PostgreSQL advances ``confirmed_flush_lsn = flushed_lsn`` via
-``LogicalConfirmReceivedLocation`` (which never decreases).  On reconnect, WAL
-streaming restarts from ``max(requested_start, confirmed_flush)``.
-
-With ``confirmed_flush = end_lsn_N = first_lsn_{N+1}``:
-
-- Streaming resumes exactly at the first byte of the next unprocessed WAL
-  record — the BEGIN of transaction N+1.
-- The ``>=`` cursor finds ``BEGIN_{N+1}`` (lsn = ``first_lsn_{N+1}`` =
-  ``end_lsn_N``). ✓
-- No data is lost.  No data is replayed twice.
-
-The fundamental invariant:
-
-.. admonition:: transform_lsn invariant
-
-   ``transform_lsn`` must only advance to ``COMMIT.end_lsn`` — the byte
-   immediately after a completed COMMIT record.  It must never advance to a
-   position inside an uncommitted transaction (past a BEGIN but before the
-   corresponding COMMIT), because doing so would make the logical replication
-   slot skip that transaction on reconnect.
-
----
-
-LSN+XID watermark
-------------------
-
-pgcopydb tracks two complementary watermarks:
-
-.. list-table::
-   :header-rows: 1
-   :widths: 30 30 40
-
-   * - Watermark
-     - Field
-     - Advances at
-   * - ``transform_lsn``
-     - ``sentinel.transform_lsn``
-     - COMMIT/ROLLBACK/KEEPALIVE (commit boundary)
-   * - ``last_xid``
-     - ``pipeline_state.last_xid``
-     - Same events
-
-``(transform_lsn, last_xid)`` together form a complete restart descriptor: "the
-last fully processed transaction was XID X, whose COMMIT ended at LSN L."
-``last_xid`` is stored for debugging and cross-process assertions; only
-``transform_lsn`` drives the PostgreSQL slot position.
-
----
-
-``replay_lsn`` — the apply watermark
---------------------------------------
-
-``sentinel.replay_lsn`` is the LSN of the last transaction committed to the
-**target** PostgreSQL database by the apply process.  It is updated by
-``sentinel_sync_apply()``, called only after ``pgsql_execute(COMMIT)`` returns
-successfully.
-
-``replay_lsn`` is used for:
-
-1. **``follow_reached_endpos``** — detecting that endpos has been applied.
-2. **Monitoring** — pgcopydb progress display.
-
-It is NOT the apply restart point.  On restart, ``setupReplicationOrigin``
-reads ``pg_replication_origin_progress()`` (the durable Postgres origin
-catalog) and unconditionally overwrites ``context->previousLSN``.
-``sentinel.replay_lsn`` plays no role in the restart cursor.
-
-.. admonition:: replay_lsn invariant
-
-   ``replay_lsn`` only advances to a LSN that has been confirmed durable by
-   the target PostgreSQL server (i.e., after a successful ``COMMIT`` that
-   included ``pg_replication_origin_xact_setup``).
-
-KEEPALIVE processing commits ``SELECT txid_current()`` with
-``pg_replication_origin_xact_setup(previousLSN)`` (the last data commit, not
-``KEEPALIVE.lsn``).  After that Postgres COMMIT, ``context->previousLSN`` is
-advanced to ``KEEPALIVE.lsn`` and ``replay_lsn`` follows.  This is acceptable:
-the Postgres origin records the last data commit; ``replay_lsn`` records the
-WAL progress beacon.
-
----
+During KEEPALIVE processing, pgcopydb commits a ``SELECT txid_current()``
+with ``pg_replication_origin_xact_setup(previousLSN)`` (the last data commit
+LSN, not the KEEPALIVE LSN itself), and only after that commit succeeds does
+it advance ``context->previousLSN`` to the KEEPALIVE LSN and update
+``replay_lsn`` accordingly — so the origin always records the last durable
+data commit while ``replay_lsn`` follows the WAL progress beacon.
 
 Why pgcopydb supports endpos mid-transaction
 ---------------------------------------------
@@ -256,8 +170,6 @@ with source workload — impractical.  Instead pgcopydb handles all three cases:
 For the "between txns" and "mid-transaction" cases the straddling transaction
 is NOT applied to the target.  On the next ``pgcopydb`` run the slot
 re-delivers it from the last safe ``transform_lsn`` position.
-
----
 
 Internal model for endpos tracking
 ------------------------------------
@@ -369,8 +281,6 @@ On the next run:
   ``end_lsn_of_last_commit``).
 - Any transaction that straddled the endpos is fully re-delivered and applied.
 
----
-
 .. _pipe_protocol:
 
 The receive→apply lifecycle pipe
@@ -415,8 +325,6 @@ the durable ``pipeline_state`` record that ``receive`` leaves behind in the
 source catalog to decide when the upstream has finished. Unexpected upstream
 death is, in the live case, ultimately caught by the supervisor monitoring its
 children, with the pipe end-of-file serving as a belt-and-suspenders fallback.
-
----
 
 Invariant summary
 -----------------
