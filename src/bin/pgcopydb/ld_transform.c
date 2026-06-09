@@ -386,7 +386,7 @@ stream_transform_prepare_message(StreamSpecs *specs,
 		log_error("Failed to parse JSON message: %.1024s%s",
 				  output->jsonBuffer != NULL ? output->jsonBuffer : "(null)",
 				  output->jsonBuffer != NULL && strlen(output->jsonBuffer) > 1024
-					? "..." : "");
+				  ? "..." : "");
 		return false;
 	}
 
@@ -457,10 +457,10 @@ static bool
 stream_write_file_txn(FILE *out, LogicalTransaction *txn)
 {
 #define FFORMAT(stream, fmt, ...) \
-		{ if (fformat(stream, fmt, __VA_ARGS__) == -1) { \
-			  log_error("Failed to write to stream: %m"); \
-			  return false; } \
-		}
+	{ if (fformat(stream, fmt, __VA_ARGS__) == -1) { \
+		  log_error("Failed to write to stream: %m"); \
+		  return false; } \
+	}
 
 	/* write BEGIN only for non-continued, non-empty transactions */
 	bool sentBEGIN = false;
@@ -630,10 +630,10 @@ stream_write_file_message(FILE *out,
 						  LogicalMessageMetadata *metadata)
 {
 #define FFORMAT(stream, fmt, ...) \
-		{ if (fformat(stream, fmt, __VA_ARGS__) == -1) { \
-			  log_error("Failed to write to stream: %m"); \
-			  return false; } \
-		}
+	{ if (fformat(stream, fmt, __VA_ARGS__) == -1) { \
+		  log_error("Failed to write to stream: %m"); \
+		  return false; } \
+	}
 
 	if (msg->isTransaction)
 	{
@@ -2499,17 +2499,17 @@ LogicalMessageValueEq(LogicalMessageValue *a, LogicalMessageValue *b)
  * comparable in the context of Hash Table.
  */
 #define NORMALIZED_PG_NAMEDATA_COPY(dst, src) \
+	{ \
+		int len = strlen(src); \
+		if (src[0] == '"' && src[len - 1] == '"') \
 		{ \
-			int len = strlen(src); \
-			if (src[0] == '"' && src[len - 1] == '"') \
-			{ \
-				strlcpy(dst, src, PG_NAMEDATALEN); \
-			} \
-			else \
-			{ \
-				sformat(dst, PG_NAMEDATALEN, "\"%s\"", src); \
-			} \
-		}
+			strlcpy(dst, src, PG_NAMEDATALEN); \
+		} \
+		else \
+		{ \
+			sformat(dst, PG_NAMEDATALEN, "\"%s\"", src); \
+		} \
+	}
 
 /*
  * lookupGeneratedColumnsForTable lookup the generated columns set for the given
