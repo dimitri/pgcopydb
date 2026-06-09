@@ -5,10 +5,12 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 
 #include "catalog.h"
 #include "copydb.h"
 #include "defaults.h"
+#include "file_utils.h"
 #include "log.h"
 #include "multi_db.h"
 #include "parsing_utils.h"
@@ -17,6 +19,7 @@
 #include "schema.h"
 #include "signals.h"
 #include "string_utils.h"
+#include "summary.h"
 
 static bool multidb_is_system_database(const char *datname);
 static bool multidb_target_database_exists(PGSQL *dst, const char *datname,
@@ -34,6 +37,7 @@ static bool multidb_init_db_specs(CopyDataSpec *dbSpecs,
 								  ConnStrings *connStrings);
 static bool multidb_clone_one_database(CopyDataSpec *parentSpecs,
 									   SourceDatabase *db);
+static bool multidb_wait_child(pid_t pid, const char *datname);
 
 
 /*
@@ -130,6 +134,9 @@ clone_all_databases(CopyDataSpec *copySpecs)
 	while (catalog_iter_s_database_next(&dbIter))
 	{
 		SourceDatabase *db = dbIter.dat;
+
+		if (db == NULL)
+			break;
 
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
@@ -431,7 +438,11 @@ multidb_init_db_specs(CopyDataSpec *dbSpecs,
 	/* connection strings */
 	dbSpecs->connStrings = *connStrings;
 
-	/* source snapshot — will be populated during clone */
+	/*
+	 * Refresh the pguri/safeURI pointers after the connStrings copy above.
+	 * The snapshot string and state are already set (exported in the parent
+	 * before fork) and must not be touched here.
+	 */
 	dbSpecs->sourceSnapshot.pguri = dbSpecs->connStrings.source_pguri;
 	dbSpecs->sourceSnapshot.safeURI = dbSpecs->connStrings.safeSourcePGURI;
 	dbSpecs->sourceSnapshot.connectionType = PGSQL_CONN_SOURCE;
@@ -559,15 +570,15 @@ multidb_clone_one_database(CopyDataSpec *parentSpecs, SourceDatabase *db)
 	log_info("[TARGET] Cloning database \"%s\" into \"%s\"",
 			 db->datname, dbConnStrings.safeTargetPGURI.pguri);
 
-	/* initialise per-db CopyDataSpec */
+	/* initialise per-db CopyDataSpec (pgPaths + cfPaths only, before fork) */
 	CopyDataSpec dbSpecs = { 0 };
 
 	dbSpecs.pgPaths = parentSpecs->pgPaths;
 
 	/*
-	 * Set up work directory under <topdir>/db/<datname>/.
+	 * Create the work directory under <topdir>/db/<datname>/.
+	 * Must happen in the parent so the directory exists before the fork.
 	 * Use service=false so no pidfile is created for per-db dirs.
-	 * Use restart/resume from parent settings.
 	 */
 	if (!copydb_init_workdir(&dbSpecs, dbdir,
 							 false,     /* service */
@@ -581,17 +592,105 @@ multidb_clone_one_database(CopyDataSpec *parentSpecs, SourceDatabase *db)
 		goto cleanup;
 	}
 
-	if (!multidb_init_db_specs(&dbSpecs, parentSpecs, &dbConnStrings))
+	/*
+	 * Set up connection strings and snapshot fields before the fork so the
+	 * child inherits the exported snapshot string.
+	 */
+	dbSpecs.connStrings = dbConnStrings;
+	dbSpecs.sourceSnapshot.pguri = dbSpecs.connStrings.source_pguri;
+	dbSpecs.sourceSnapshot.safeURI = dbSpecs.connStrings.safeSourcePGURI;
+	dbSpecs.sourceSnapshot.connectionType = PGSQL_CONN_SOURCE;
+	dbSpecs.consistent = parentSpecs->consistent;
+
+	/*
+	 * Export a per-database snapshot in the parent.  The parent keeps this
+	 * connection open until the child exits so worker subprocesses can import
+	 * the snapshot via SET TRANSACTION SNAPSHOT.
+	 */
+	if (dbSpecs.consistent)
 	{
-		log_error("Failed to initialise specs for database \"%s\"",
-				  db->datname);
-		goto cleanup;
+		if (!copydb_prepare_snapshot(&dbSpecs))
+		{
+			log_error("Failed to export snapshot for database \"%s\"",
+					  db->datname);
+			goto cleanup;
+		}
 	}
 
-	bool result = copydb_clone_database(&dbSpecs);
+	/*
+	 * Fork a subprocess for each database clone.  This isolates three kinds
+	 * of process-global state that would otherwise bleed across databases:
+	 *
+	 *  1. topLevelTimingArray (reset explicitly in child before first use)
+	 *  2. system_res_array (System V semaphore/queue registrations)
+	 *  3. SQLite catalog connections
+	 */
+	pid_t fpid = fork();
 
-	/* close any open catalog connections */
-	(void) catalog_close_from_specs(&dbSpecs);
+	switch (fpid)
+	{
+		case -1:
+		{
+			log_error("Failed to fork subprocess for database \"%s\": %m",
+					  db->datname);
+			goto cleanup_snapshot;
+		}
+
+		case 0:
+		{
+			/* child process */
+			char psTitle[MAXPGPATH] = { 0 };
+			sformat(psTitle, sizeof(psTitle), "pgcopydb: clone %s", db->datname);
+			(void) set_ps_title(psTitle);
+
+			/*
+			 * Reset the inherited timing global so that
+			 * copydb_fetch_previous_run_state sees a clean slate for this
+			 * database, not stale doneTime values from the previous one.
+			 */
+			summary_reset_toplevel_timings();
+
+			/*
+			 * Now initialise the rest of dbSpecs (flags, queues, catalog
+			 * paths).  Queues are created here so they register in this
+			 * child's copy of system_res_array, not the parent's.
+			 */
+			if (!multidb_init_db_specs(&dbSpecs, parentSpecs, &dbConnStrings))
+			{
+				log_error("Failed to initialise specs for database \"%s\"",
+						  db->datname);
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			if (!copydb_clone_database(&dbSpecs))
+			{
+				log_error("Failed to clone database \"%s\"",
+						  db->datname);
+				exit(EXIT_CODE_SOURCE);
+			}
+
+			exit(EXIT_CODE_QUIT);
+		}
+
+		default:
+			break;
+	}
+
+	/* parent: wait for the per-db child subprocess */
+	bool success = multidb_wait_child(fpid, db->datname);
+
+	/*
+	 * Parent closes the snapshot connection now that the child and all of
+	 * its worker sub-processes have finished.
+	 */
+	if (dbSpecs.consistent)
+	{
+		if (!copydb_close_snapshot(&dbSpecs))
+		{
+			/* errors have already been logged */
+			success = false;
+		}
+	}
 
 	free(dbConnStrings.source_pguri);
 	free(dbConnStrings.target_pguri);
@@ -600,7 +699,10 @@ multidb_clone_one_database(CopyDataSpec *parentSpecs, SourceDatabase *db)
 	if (dbConnStrings.safeTargetPGURI.pguri)
 		free(dbConnStrings.safeTargetPGURI.pguri);
 
-	return result;
+	return success;
+
+cleanup_snapshot:
+	(void) copydb_close_snapshot(&dbSpecs);
 
 cleanup:
 	free(dbConnStrings.source_pguri);
@@ -610,4 +712,42 @@ cleanup:
 	if (dbConnStrings.safeTargetPGURI.pguri)
 		free(dbConnStrings.safeTargetPGURI.pguri);
 	return false;
+}
+
+
+/*
+ * multidb_wait_child blocks until the given subprocess exits, then returns
+ * true iff it exited with status 0.
+ */
+static bool
+multidb_wait_child(pid_t pid, const char *datname)
+{
+	int status = 0;
+	pid_t result = waitpid(pid, &status, 0);
+
+	if (result < 0)
+	{
+		log_error("Failed to wait for subprocess %d (database \"%s\"): %m",
+				  pid, datname);
+		return false;
+	}
+
+	if (!WIFEXITED(status))
+	{
+		int sig = WTERMSIG(status);
+		log_error("Subprocess %d (database \"%s\") terminated by signal %d",
+				  pid, datname, sig);
+		return false;
+	}
+
+	int returnCode = WEXITSTATUS(status);
+
+	if (returnCode != 0)
+	{
+		log_error("Subprocess %d (database \"%s\") exited with status %d",
+				  pid, datname, returnCode);
+		return false;
+	}
+
+	return true;
 }

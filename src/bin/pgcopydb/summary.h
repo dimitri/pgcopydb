@@ -159,6 +159,9 @@ typedef struct SummaryTable
  * Keep track of the timing for the main steps of the pgcopydb operations.
  */
 extern TopLevelTiming topLevelTimingArray[];
+extern int topLevelTimingArrayCount;
+
+void summary_reset_toplevel_timings(void);
 
 typedef struct Summary
 {

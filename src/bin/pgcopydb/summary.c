@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <string.h>
 #include <unistd.h>
 
 #include "parson.h"
@@ -113,6 +114,31 @@ TopLevelTiming topLevelTimingArray[] = {
 
 int topLevelTimingArrayCount =
 	sizeof(topLevelTimingArray) / sizeof(topLevelTimingArray[0]);
+
+
+/*
+ * summary_reset_toplevel_timings zeroes the dynamic timing fields of the
+ * global topLevelTimingArray. Call this in a freshly-forked child before the
+ * first clone so stale values from the parent process don't bleed into
+ * copydb_fetch_previous_run_state for the new database.
+ */
+void
+summary_reset_toplevel_timings(void)
+{
+	for (int i = 0; i < topLevelTimingArrayCount; i++)
+	{
+		TopLevelTiming *t = &(topLevelTimingArray[i]);
+		t->startTime = 0;
+		t->doneTime = 0;
+		t->durationMs = 0;
+		memset(&t->startTimeInstr, 0, sizeof(t->startTimeInstr));
+		memset(&t->durationInstr, 0, sizeof(t->durationInstr));
+		memset(t->ppDuration, 0, sizeof(t->ppDuration));
+		t->count = 0;
+		t->bytes = 0;
+		memset(t->ppBytes, 0, sizeof(t->ppBytes));
+	}
+}
 
 
 static void prepareLineSeparator(char dashes[], int size);
