@@ -19,6 +19,7 @@
 #include "common/pg_prng.h"
 #endif
 
+#include "catalog.h"
 #include "cli_root.h"
 #include "defaults.h"
 #include "env_utils.h"
@@ -3856,6 +3857,10 @@ OutputPluginFromString(char *plugin)
 	{
 		return STREAM_PLUGIN_WAL2JSON;
 	}
+	else if (strcmp(plugin, "pgoutput") == 0)
+	{
+		return STREAM_PLUGIN_PGOUTPUT;
+	}
 
 	return STREAM_PLUGIN_UNKNOWN;
 }
@@ -3882,6 +3887,11 @@ OutputPluginToString(StreamOutputPlugin plugin)
 		case STREAM_PLUGIN_WAL2JSON:
 		{
 			return "wal2json";
+		}
+
+		case STREAM_PLUGIN_PGOUTPUT:
+		{
+			return "pgoutput";
 		}
 
 		default:
@@ -4530,6 +4540,7 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 		/* call the consumer function */
 		context->cur_record_lsn = cur_record_lsn;
 		context->buffer = copybuf + hdr_len;
+		context->bufferLen = r - hdr_len;
 		context->now = client->now;
 
 		/* the tracking LSN information is updated in the writeFunction */
@@ -5160,6 +5171,105 @@ pgsql_drop_replication_slot(PGSQL *pgsql, const char *slotName)
 	return pgsql_execute_with_params(pgsql, sql,
 									 1, paramTypes, paramValues,
 									 NULL, NULL);
+}
+
+
+/*
+ * pgsql_create_publication creates a publication FOR TABLE <table list>
+ * by querying pg_tables directly on the live source connection.  Excludes
+ * system schemas and the pgcopydb internal schema.  Uses only CREATE
+ * privilege on the database — no superuser needed.
+ */
+
+typedef struct PublicationTableListContext
+{
+	PQExpBuffer tableList;
+	bool hasTable;
+} PublicationTableListContext;
+
+static void
+publication_table_list_parse(void *ctx, PGresult *result)
+{
+	PublicationTableListContext *context = (PublicationTableListContext *) ctx;
+	int nTuples = PQntuples(result);
+
+	for (int i = 0; i < nTuples; i++)
+	{
+		char *schemaname = PQgetvalue(result, i, 0);
+		char *tablename = PQgetvalue(result, i, 1);
+
+		if (context->hasTable)
+			appendPQExpBufferStr(context->tableList, ", ");
+
+		appendPQExpBuffer(context->tableList, "\"%s\".\"%s\"",
+						  schemaname, tablename);
+		context->hasTable = true;
+	}
+}
+
+bool
+pgsql_create_publication(PGSQL *pgsql, const char *pubName)
+{
+	const char *query =
+		"SELECT schemaname, tablename"
+		" FROM pg_tables"
+		" WHERE schemaname NOT IN"
+		" ('pg_catalog', 'information_schema', 'pgcopydb')"
+		" ORDER BY schemaname, tablename";
+
+	PQExpBuffer tableList = createPQExpBuffer();
+	if (tableList == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	PublicationTableListContext ctx = { .tableList = tableList,
+										.hasTable = false };
+
+	if (!pgsql_execute_with_params(pgsql, query, 0, NULL, NULL,
+								   &ctx, &publication_table_list_parse))
+	{
+		destroyPQExpBuffer(tableList);
+		return false;
+	}
+
+	PQExpBuffer sql = createPQExpBuffer();
+	if (sql == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		destroyPQExpBuffer(tableList);
+		return false;
+	}
+
+	if (ctx.hasTable)
+		appendPQExpBuffer(sql, "CREATE PUBLICATION \"%s\" FOR TABLE %s",
+						  pubName, tableList->data);
+	else
+		appendPQExpBuffer(sql, "CREATE PUBLICATION \"%s\"", pubName);
+
+	destroyPQExpBuffer(tableList);
+
+	log_info("Creating publication \"%s\"", pubName);
+	log_debug("%s", sql->data);
+
+	bool result = pgsql_execute(pgsql, sql->data);
+	destroyPQExpBuffer(sql);
+	return result;
+}
+
+
+/*
+ * pgsql_drop_publication drops a publication by name (IF EXISTS).
+ */
+bool
+pgsql_drop_publication(PGSQL *pgsql, const char *pubName)
+{
+	char sql[BUFSIZE];
+	sformat(sql, sizeof(sql), "DROP PUBLICATION IF EXISTS \"%s\"", pubName);
+
+	log_info("Dropping publication \"%s\"", pubName);
+	return pgsql_execute(pgsql, sql);
 }
 
 

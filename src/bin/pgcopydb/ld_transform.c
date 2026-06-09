@@ -26,6 +26,7 @@
 #include "cli_root.h"
 #include "copydb.h"
 #include "env_utils.h"
+#include "ld_pgoutput.h"
 #include "ld_store.h"
 #include "ld_stream.h"
 #include "lock_utils.h"
@@ -312,13 +313,78 @@ stream_transform_prepare_message(StreamSpecs *specs,
 			  (long long) metadata->xid,
 			  LSN_FORMAT_ARGS(metadata->lsn));
 
+	/*
+	 * pgoutput stores structured column data in pgoutput_col instead of a
+	 * text blob.  For TCL messages (BEGIN/COMMIT/ROLLBACK) we call the normal
+	 * parseMessage path with a non-NULL sentinel message so error log lines
+	 * don't crash on NULL.  For DML messages we call parsePgoutputMessage
+	 * directly, which queries pgoutput_col.
+	 */
+	if (privateContext->plugin == STREAM_PLUGIN_PGOUTPUT)
+	{
+		if (StreamActionIsDML(metadata->action))
+		{
+			/*
+			 * The stmt pointer must be set before parsePgoutputMessage so it
+			 * can populate stmt->stmt.insert / .update / .delete.
+			 * parseMessage would normally allocate and set privateContext->stmt;
+			 * replicate that here.
+			 */
+			LogicalTransactionStatement *pgstmt = (LogicalTransactionStatement *)
+				calloc(1, sizeof(LogicalTransactionStatement));
+			if (pgstmt == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+			pgstmt->action = metadata->action;
+			pgstmt->xid = metadata->xid;
+			pgstmt->lsn = metadata->lsn;
+			strlcpy(pgstmt->timestamp, metadata->timestamp,
+					sizeof(pgstmt->timestamp));
+			privateContext->stmt = pgstmt;
+
+			if (!parsePgoutputMessage(privateContext,
+									  privateContext->outputDB,
+									  (int64_t) output->id))
+			{
+				log_error("Failed to parse pgoutput columns for output id=%lld",
+						  (long long) output->id);
+				return false;
+			}
+
+			LogicalMessage *mesg = &(privateContext->currentMsg);
+			if (!mesg->isTransaction)
+			{
+				log_error("pgoutput DML received outside of transaction");
+				return false;
+			}
+			(void) streamLogicalTransactionAppendStatement(
+				&(mesg->command.tx), pgstmt);
+		}
+		else
+		{
+			/* BEGIN, COMMIT, ROLLBACK, KEEPALIVE, etc. — use the common path.
+			 * Pass an empty string as message so log lines don't segfault. */
+			if (!parseMessage(privateContext, "", NULL))
+			{
+				log_error("Failed to parse pgoutput TCL message id=%lld",
+						  (long long) output->id);
+				return false;
+			}
+		}
+
+		return true;
+	}
+
 	JSON_Value *json = json_parse_string(output->jsonBuffer);
 
 	if (!parseMessage(privateContext, output->jsonBuffer, json))
 	{
 		log_error("Failed to parse JSON message: %.1024s%s",
-				  output->jsonBuffer,
-				  strlen(output->jsonBuffer) > 1024 ? "..." : "");
+				  output->jsonBuffer != NULL ? output->jsonBuffer : "(null)",
+				  output->jsonBuffer != NULL && strlen(output->jsonBuffer) > 1024
+					? "..." : "");
 		return false;
 	}
 

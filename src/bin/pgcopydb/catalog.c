@@ -49,7 +49,9 @@ static char *sourceDBcreateDDLs[] = {
 	"  lsn integer not null, "
 	"  snapshot text not null, "
 	"  plugin text not null, "
-	"  wal2json_numeric_as_string integer not null default 0 "
+	"  wal2json_numeric_as_string integer not null default 0, "
+	"  publication_name text not null default '', "
+	"  publication_auto_managed integer not null default 0 "
 	")",
 
 	"create table section("
@@ -466,10 +468,26 @@ static char *outputDBcreateDDLs[] = {
 	"create table output("
 	"  id integer primary key, "
 	"  action text, xid integer, lsn integer, timestamp text, "
-	"  message text)",
+	"  message text, "
+	"  nspname text, relname text, old_type text)",
 
 	"create unique index o_a_lsn on output(action, lsn)",
 	"create index o_a_xid on output(action, xid)",
+
+	/*
+	 * pgoutput stores structured column data here instead of a text blob.
+	 * Other plugins never touch this table.
+	 */
+	"create table pgoutput_col("
+	"  output_id integer not null, "
+	"  section   text    not null, "
+	"  pos       integer not null, "
+	"  name      text    not null, "
+	"  status    text    not null, "
+	"  value     text"
+	")",
+
+	"create index pgoutput_col_idx on pgoutput_col(output_id, section, pos)",
 };
 
 /*
@@ -1810,7 +1828,7 @@ catalog_setup_replication(DatabaseCatalog *catalog, const char *snapshot)
 
 
 /*
- * catalog_write_replication_slot persists all five fields of a ReplicationSlot
+ * catalog_write_replication_slot persists all fields of a ReplicationSlot
  * to the dedicated replication_slot table (INSERT OR REPLACE, id = 1).
  *
  * This replaces snapshot_write_slot() which wrote the same data to a flat
@@ -1830,8 +1848,9 @@ catalog_write_replication_slot(DatabaseCatalog *catalog,
 
 	char *sql =
 		"insert or replace into replication_slot"
-		"  (id, slot_name, lsn, snapshot, plugin, wal2json_numeric_as_string)"
-		"  values(1, $1, $2, $3, $4, $5)";
+		"  (id, slot_name, lsn, snapshot, plugin, wal2json_numeric_as_string,"
+		"   publication_name, publication_auto_managed)"
+		"  values(1, $1, $2, $3, $4, $5, $6, $7)";
 
 	if (!semaphore_lock(&(catalog->sema)))
 	{
@@ -1862,6 +1881,14 @@ catalog_write_replication_slot(DatabaseCatalog *catalog,
 		{
 			BIND_PARAMETER_TYPE_INT64, "wal2json_numeric_as_string",
 			slot->wal2jsonNumericAsString ? 1 : 0, NULL
+		},
+		{
+			BIND_PARAMETER_TYPE_TEXT, "publication_name",
+			0, (char *) slot->publicationName
+		},
+		{
+			BIND_PARAMETER_TYPE_INT64, "publication_auto_managed",
+			slot->publicationAutoManaged ? 1 : 0, NULL
 		}
 	};
 
@@ -1933,6 +1960,17 @@ catalog_replication_slot_fetch(SQLiteQuery *query)
 	/* wal2json_numeric_as_string */
 	slot->wal2jsonNumericAsString = sqlite3_column_int(query->ppStmt, 4) != 0;
 
+	/* publication_name (col 5) */
+	if (sqlite3_column_type(query->ppStmt, 5) != SQLITE_NULL)
+	{
+		strlcpy(slot->publicationName,
+				(char *) sqlite3_column_text(query->ppStmt, 5),
+				sizeof(slot->publicationName));
+	}
+
+	/* publication_auto_managed (col 6) */
+	slot->publicationAutoManaged = sqlite3_column_int(query->ppStmt, 6) != 0;
+
 	return true;
 }
 
@@ -1956,7 +1994,8 @@ catalog_read_replication_slot(DatabaseCatalog *catalog, ReplicationSlot *slot)
 	}
 
 	char *sql =
-		"select slot_name, lsn, snapshot, plugin, wal2json_numeric_as_string "
+		"select slot_name, lsn, snapshot, plugin, wal2json_numeric_as_string,"
+		"       publication_name, publication_auto_managed "
 		"  from replication_slot where id = 1";
 
 	SQLiteQuery query = {

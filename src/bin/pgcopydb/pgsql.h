@@ -417,7 +417,8 @@ typedef enum
 {
 	STREAM_PLUGIN_UNKNOWN = 0,
 	STREAM_PLUGIN_TEST_DECODING,
-	STREAM_PLUGIN_WAL2JSON
+	STREAM_PLUGIN_WAL2JSON,
+	STREAM_PLUGIN_PGOUTPUT
 } StreamOutputPlugin;
 
 typedef struct LogicalTrackLSN
@@ -436,6 +437,7 @@ typedef struct LogicalStreamContext
 	int timeline;
 
 	const char *buffer;         /* expose internal buffer */
+	int bufferLen;              /* byte length of binary plugin data in buffer */
 	StreamOutputPlugin plugin;
 
 	bool forceFeedback;
@@ -509,6 +511,8 @@ typedef struct ReplicationSlot
 	char snapshot[BUFSIZE];
 	StreamOutputPlugin plugin;
 	bool wal2jsonNumericAsString;
+	char publicationName[BUFSIZE]; /* pgoutput publication name */
+	bool publicationAutoManaged;   /* true = pgcopydb created it, drop on cleanup */
 } ReplicationSlot;
 
 bool pgsql_create_logical_replication_slot(LogicalStreamClient *client,
@@ -544,6 +548,9 @@ bool pgsql_replication_slot_exists(PGSQL *pgsql,
 								   uint64_t *lsn);
 
 bool pgsql_drop_replication_slot(PGSQL *pgsql, const char *slotName);
+
+bool pgsql_create_publication(PGSQL *pgsql, const char *pubName);
+bool pgsql_drop_publication(PGSQL *pgsql, const char *pubName);
 
 bool pgsql_role_exists(PGSQL *pgsql, const char *roleName, bool *exists);
 
