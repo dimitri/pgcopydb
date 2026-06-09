@@ -205,6 +205,62 @@ typedef struct PreviousRunState
 } PreviousRunState;
 
 
+/*
+ * Per-database info needed by global COPY workers in --all-databases mode.
+ * The parent process populates this array before forking workers; workers
+ * read it via post-fork COW copy.
+ */
+typedef struct MultiDbInfo
+{
+	char datname[PG_NAMEDATALEN];   /* database name (quoted identifier) */
+	char snapshot[BUFSIZE];         /* exported snapshot identifier, or "" */
+	char source_pguri[BUFSIZE];     /* per-database source URI */
+	char target_pguri[BUFSIZE];     /* per-database target URI */
+	char topdir[MAXPGPATH];         /* per-database work dir */
+	bool isReadOnly;                /* true when source is in recovery */
+} MultiDbInfo;
+
+
+/*
+ * Per-database connection cache entry used by global COPY workers in
+ * --all-databases mode.  Each entry holds a heap-allocated per-database
+ * CopyDataSpec (catalog + paths + snapshot connection) and a target PGSQL
+ * connection.
+ */
+struct CopyDataSpec;             /* forward declaration */
+
+typedef struct MultiDbEntry
+{
+	char datname[PG_NAMEDATALEN];
+	bool active;
+	struct CopyDataSpec *dbSpecs; /* heap-allocated per-database specs */
+	PGSQL dst;                    /* target connection for this database */
+} MultiDbEntry;
+
+#define MULTIDB_ENTRY_CACHE_MAX 4
+
+typedef struct MultiDbContext
+{
+	struct CopyDataSpec *parentSpecs;
+	int count;
+	int nextEvict;               /* round-robin eviction index */
+	MultiDbEntry entries[MULTIDB_ENTRY_CACHE_MAX];
+} MultiDbContext;
+
+/*
+ * Lightweight table entry used by the global COPY supervisor to collect and
+ * sort tables from all databases before enqueuing.
+ */
+typedef struct MultiDbTableEntry
+{
+	char datname[PG_NAMEDATALEN];
+	uint32_t oid;
+	int64_t bytes;
+	bool excludeData;
+	int partCount;               /* 0 when not partitioned */
+} MultiDbTableEntry;
+
+
 /* all that's needed to start a TABLE DATA copy for a whole database */
 typedef struct CopyDataSpec
 {
@@ -243,6 +299,14 @@ typedef struct CopyDataSpec
 
 	bool follow;                /* pgcopydb fork --follow */
 	bool allDatabases;          /* pgcopydb clone --all-databases */
+
+	/*
+	 * For --all-databases: per-database snapshot + connection info used by the
+	 * global COPY worker pool.  Populated by clone_all_databases() in the parent
+	 * before workers are forked, and read by workers (post-fork COW copy).
+	 */
+	int multiDbCount;
+	struct MultiDbInfo *multiDbInfos;
 
 	int tableJobs;
 	int indexJobs;
@@ -433,8 +497,14 @@ bool copydb_start_table_data_workers(CopyDataSpec *specs);
 bool copydb_table_data_worker(CopyDataSpec *specs);
 
 bool copydb_add_copy(CopyDataSpec *specs, uint32_t oid, uint32_t part);
+bool copydb_add_copy_for_db(CopyDataSpec *specs, uint32_t oid, uint32_t part,
+							const char *datname);
 bool copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src,
 							 PGSQL *dst, uint32_t oid, uint32_t part);
+
+/* --all-databases global COPY phase */
+bool copydb_table_data_worker_multidb(CopyDataSpec *parentSpecs);
+bool copydb_copy_worker_queue_tables_multidb(CopyDataSpec *parentSpecs);
 
 bool copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 					   CopyTableDataSpec *tableSpecs);
@@ -636,6 +706,13 @@ bool summary_prepare_index_entry(DatabaseCatalog *catalog,
 								 SourceIndex *index,
 								 bool constraint,
 								 SummaryIndexEntry *indexEntry);
+
+/* multi_db.c (worker helpers called from table-data.c) */
+bool multidb_context_init(MultiDbContext *ctx, CopyDataSpec *parentSpecs);
+MultiDbEntry *multidb_context_get_entry(MultiDbContext *ctx,
+										const char *datname);
+bool multidb_context_close_entry(MultiDbEntry *entry);
+bool multidb_context_close_all(MultiDbContext *ctx);
 
 /* compare.c */
 bool compare_schemas(CopyDataSpec *copySpecs);

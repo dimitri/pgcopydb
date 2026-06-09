@@ -51,6 +51,7 @@ typedef struct QMessage
 		{
 			uint32_t oid;
 			uint32_t part;
+			char datname[NAMEDATALEN]; /* for --all-databases: target database */
 		} tp;
 	} data;
 } QMessage;

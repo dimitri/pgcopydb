@@ -1620,3 +1620,360 @@ copydb_check_table_exists(PGSQL *pgsql, SourceTable *table, bool *exists)
 
 	return locked || !(*exists);
 }
+
+
+/* ============================================================
+ * Cross-database global COPY functions (--all-databases)
+ * ============================================================ */
+
+/*
+ * copydb_add_copy_for_db sends a TABLEPOID message that includes the target
+ * database name, used by copydb_table_data_worker_multidb to route work.
+ */
+bool
+copydb_add_copy_for_db(CopyDataSpec *specs, uint32_t oid, uint32_t part,
+					   const char *datname)
+{
+	QMessage mesg = {
+		.type = QMSG_TYPE_TABLEPOID,
+		.data.tp = { .oid = oid, .part = part }
+	};
+
+	strlcpy(mesg.data.tp.datname, datname, sizeof(mesg.data.tp.datname));
+
+	if (!queue_send(&(specs->copyQueue), &mesg))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * compare_multidb_table_entry_by_bytes is a qsort comparison function that
+ * sorts MultiDbTableEntry by bytes descending (largest tables first).
+ */
+static int
+compare_multidb_table_entry_by_bytes(const void *a, const void *b)
+{
+	const MultiDbTableEntry *ta = (const MultiDbTableEntry *) a;
+	const MultiDbTableEntry *tb = (const MultiDbTableEntry *) b;
+
+	if (ta->bytes > tb->bytes)
+		return -1;
+	else if (ta->bytes < tb->bytes)
+		return 1;
+	return 0;
+}
+
+
+/*
+ * copydb_copy_worker_queue_tables_multidb is the supervisor process for the
+ * global COPY phase.  It opens each per-database source catalog, collects all
+ * tables with their sizes, sorts them by size descending, enqueues them, then
+ * sends STOP messages.
+ */
+bool
+copydb_copy_worker_queue_tables_multidb(CopyDataSpec *parentSpecs)
+{
+	int dbCount = parentSpecs->multiDbCount;
+	MultiDbInfo *infos = parentSpecs->multiDbInfos;
+
+	if (dbCount == 0)
+	{
+		log_info("No databases to process in global COPY supervisor");
+		return true;
+	}
+
+	/*
+	 * We collect all table entries from all databases into a dynamic array,
+	 * then sort and enqueue.
+	 */
+	int capacity = 4096;
+	int count = 0;
+
+	MultiDbTableEntry *entries =
+		(MultiDbTableEntry *) malloc(capacity * sizeof(MultiDbTableEntry));
+
+	if (entries == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	for (int dbIdx = 0; dbIdx < dbCount; dbIdx++)
+	{
+		MultiDbInfo *info = &infos[dbIdx];
+
+		log_info("Global COPY supervisor: reading table catalog for \"%s\"",
+				 info->datname);
+
+		/* open the per-database source catalog read-only */
+		DatabaseCatalog sdb = { 0 };
+		sdb.type = DATABASE_CATALOG_TYPE_SOURCE;
+		strlcpy(sdb.dbfile, info->topdir, sizeof(sdb.dbfile));
+		strlcat(sdb.dbfile, "/schema/source.db", sizeof(sdb.dbfile));
+
+		if (!catalog_open(&sdb))
+		{
+			log_error("Failed to open source catalog for database \"%s\"",
+					  info->datname);
+			free(entries);
+			return false;
+		}
+
+		/* iterate tables in this database's catalog */
+		SourceTableIterator iter = { .catalog = &sdb, .table = NULL };
+
+		if (!catalog_iter_s_table_init(&iter))
+		{
+			log_error("Failed to init table iterator for database \"%s\"",
+					  info->datname);
+			catalog_close(&sdb);
+			free(entries);
+			return false;
+		}
+
+		for (;;)
+		{
+			if (!catalog_iter_s_table_next(&iter))
+			{
+				log_error("Failed to iterate tables for database \"%s\"",
+						  info->datname);
+				catalog_iter_s_table_finish(&iter);
+				catalog_close(&sdb);
+				free(entries);
+				return false;
+			}
+
+			SourceTable *table = iter.table;
+
+			if (table == NULL)
+				break;  /* end of results */
+
+			/* grow array if needed */
+			if (count >= capacity)
+			{
+				capacity *= 2;
+				MultiDbTableEntry *newEntries =
+					(MultiDbTableEntry *) realloc(entries,
+												  capacity * sizeof(MultiDbTableEntry));
+				if (newEntries == NULL)
+				{
+					log_error(ALLOCATION_FAILED_ERROR);
+					catalog_iter_s_table_finish(&iter);
+					catalog_close(&sdb);
+					free(entries);
+					return false;
+				}
+				entries = newEntries;
+			}
+
+			MultiDbTableEntry *e = &entries[count++];
+			strlcpy(e->datname, info->datname, sizeof(e->datname));
+			e->oid = table->oid;
+			e->bytes = table->bytes;
+			e->excludeData = table->excludeData;
+			e->partCount = table->partition.partCount;
+		}
+
+		if (!catalog_iter_s_table_finish(&iter))
+		{
+			log_warn("Failed to finish table iterator for database \"%s\"",
+					 info->datname);
+		}
+
+		if (!catalog_close(&sdb))
+		{
+			log_warn("Failed to close source catalog for database \"%s\"",
+					 info->datname);
+		}
+	}
+
+	log_info("Global COPY supervisor: sorting %d tables across %d databases",
+			 count, dbCount);
+
+	/* sort all tables by bytes descending */
+	qsort(entries, count, sizeof(MultiDbTableEntry),
+		  compare_multidb_table_entry_by_bytes);
+
+	/* enqueue all tables */
+	uint64_t tableCount = 0;
+	uint64_t partCount = 0;
+
+	for (int i = 0; i < count; i++)
+	{
+		MultiDbTableEntry *e = &entries[i];
+
+		if (e->excludeData)
+			continue;
+
+		if (e->partCount == 0)
+		{
+			/* unpartitioned table */
+			if (!copydb_add_copy_for_db(parentSpecs, e->oid, 0, e->datname))
+			{
+				log_error("Failed to enqueue table oid %u from database \"%s\"",
+						  e->oid, e->datname);
+				free(entries);
+				return false;
+			}
+			tableCount++;
+		}
+		else
+		{
+			/* partitioned table: enqueue each partition separately */
+			for (int p = 1; p <= e->partCount; p++)
+			{
+				if (!copydb_add_copy_for_db(parentSpecs, e->oid, p, e->datname))
+				{
+					log_error("Failed to enqueue table oid %u part %d "
+							  "from database \"%s\"",
+							  e->oid, p, e->datname);
+					free(entries);
+					return false;
+				}
+				partCount++;
+			}
+		}
+	}
+
+	free(entries);
+
+	log_info("Global COPY supervisor: enqueued %llu tables and %llu partitions",
+			 (unsigned long long) tableCount,
+			 (unsigned long long) partCount);
+
+	/* send one STOP message per worker */
+	for (int i = 0; i < parentSpecs->tableJobs; i++)
+	{
+		QMessage stop = { .type = QMSG_TYPE_STOP };
+
+		if (!queue_send(&(parentSpecs->copyQueue), &stop))
+		{
+			log_error("Failed to send STOP message to global COPY queue");
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * copydb_table_data_worker_multidb is a COPY worker process for the global
+ * cross-database COPY phase.  It dequeues messages from the shared copyQueue,
+ * using a MultiDbContext to manage per-database connections.
+ */
+bool
+copydb_table_data_worker_multidb(CopyDataSpec *parentSpecs)
+{
+	uint64_t errors = 0;
+	pid_t pid = getpid();
+
+	log_notice("Started global COPY worker %d [%d]", pid, getppid());
+
+	MultiDbContext ctx = { 0 };
+
+	if (!multidb_context_init(&ctx, parentSpecs))
+	{
+		log_error("Failed to initialise multi-database context");
+		return false;
+	}
+
+	bool stop = false;
+
+	while (!stop)
+	{
+		QMessage mesg = { 0 };
+		bool recv_ok = queue_receive(&(parentSpecs->copyQueue), &mesg);
+
+		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		{
+			log_error("Global COPY worker has been interrupted");
+			break;
+		}
+
+		if (!recv_ok)
+		{
+			log_error("Global COPY worker failed to receive message from queue");
+			break;
+		}
+
+		switch (mesg.type)
+		{
+			case QMSG_TYPE_STOP:
+			{
+				stop = true;
+				log_debug("Stop message received by global COPY worker");
+				break;
+			}
+
+			case QMSG_TYPE_TABLEPOID:
+			{
+				const char *datname = mesg.data.tp.datname;
+				uint32_t oid = mesg.data.tp.oid;
+				uint32_t part = mesg.data.tp.part;
+
+				MultiDbEntry *entry =
+					multidb_context_get_entry(&ctx, datname);
+
+				if (entry == NULL)
+				{
+					log_error("Failed to get connection for database \"%s\", "
+							  "skipping table oid %u part %u",
+							  datname, oid, part);
+					++errors;
+
+					if (parentSpecs->failFast)
+					{
+						(void) multidb_context_close_all(&ctx);
+						return false;
+					}
+					break;
+				}
+
+				PGSQL *src = &(entry->dbSpecs->sourceSnapshot.pgsql);
+				PGSQL *dst = &(entry->dst);
+
+				if (!copydb_copy_data_by_oid(entry->dbSpecs, src, dst, oid, part))
+				{
+					log_error("Failed to copy table oid %u part %u "
+							  "from database \"%s\"",
+							  oid, part, datname);
+					++errors;
+
+					if (parentSpecs->failFast)
+					{
+						(void) multidb_context_close_all(&ctx);
+						return false;
+					}
+
+					/*
+					 * The snapshot connection might be in a bad state after
+					 * an error; close and re-open the entry.
+					 */
+					(void) multidb_context_close_entry(entry);
+				}
+				break;
+			}
+
+			default:
+			{
+				log_error("Received unknown message type %ld on global copy queue %d",
+						  mesg.type,
+						  parentSpecs->copyQueue.qId);
+				break;
+			}
+		}
+	}
+
+	(void) multidb_context_close_all(&ctx);
+
+	log_notice("Global COPY worker %d finished with %llu error(s)",
+			   pid, (unsigned long long) errors);
+
+	return stop == true && errors == 0;
+}
