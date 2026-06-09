@@ -194,13 +194,28 @@ make bin
 # Debug build (-Og, full symbols)
 DEBUG=1 make bin
 
-# Build the Docker image used by all tests
-make build                   # defaults to PGVERSION=16
+# Build the Docker images used by all tests
+make build                   # defaults to PGVERSION=16; skips if pgcopydb image exists
 PGVERSION=17 make build
 
-# Clean
+# Force a full rebuild even when images already exist locally
+make force-build             # root: rebuilds pgcopydb
+PGVERSION=17 make force-build
+make -C tests force-build    # tests: rebuilds pagila
+
+# Remove both cached Docker images (triggers full rebuild on next test run)
+make clean-images
+
+# Clean compiled objects
 make clean
 ```
+
+> **Skip-if-present behaviour:** `make build` (and `make -C tests build`) checks
+> whether the `pgcopydb` / `pagila` image already exists in the local Docker
+> daemon and skips the `docker build` when it does.  This is what allows CI to
+> pre-build images once per PostgreSQL version and reuse them across all parallel
+> test jobs.  Locally it means you will not automatically pick up source changes
+> unless you run `make force-build` or `make clean-images` first.
 
 ---
 
@@ -228,7 +243,7 @@ Shared env files (auto-loaded by compose):
 ### Run tests
 
 ```bash
-# All tests (builds Docker image first)
+# All tests (builds Docker images first if not present)
 make tests
 
 # Single suite
@@ -240,13 +255,25 @@ make tests/cdc-wal2json
 PGVERSION=17 make tests/pagila
 
 # Available suites
-pagila  pagila-multi-steps  blobs  unit  filtering  extensions
+pagila  pagila-multi-steps  pagila-standby  blobs  unit  filtering  extensions
 partitioned-target  cdc-wal2json  cdc-test-decoding  cdc-endpos-mid-txn
 cdc-low-level  cdc-replica-identity-index
 cdc-partitioned-target  cdc-endpos-in-multi-wal-txn
 follow-wal2json  follow-9.6  follow-data-only
-timescaledb  pagila-standby
+timescaledb
 ```
+
+> **After source changes:** `make tests/pagila` will reuse the existing
+> `pgcopydb` and `pagila` images (see skip-if-present above).  To incorporate
+> source changes into the test images run:
+>
+> ```bash
+> make force-build            # rebuilds pgcopydb image
+> make -C tests force-build   # rebuilds pagila image (copies new pgcopydb binary)
+> make tests/pagila           # now runs with fresh images
+> ```
+>
+> Or in one shot: `make clean-images && make tests/pagila`
 
 ### Interactive debugging inside a test container
 
@@ -500,7 +527,29 @@ make check-docs     # verify docs build via Docker
 | PR/push  | `.github/workflows/run-tests.yml` | push/PR to main | PG16 + PG18 |
 | Nightly  | `.github/workflows/nightly.yml`   | daily 02:00 UTC  | PG16/17/18 × all tests |
 
-Simulate CI locally:
+### CI job structure (both workflows)
+
+```
+build_images (PG16)  ──┐
+build_images (PG17)  ──┤  (parallel, one per PGVERSION)
+build_images (PG18)  ──┘
+        │ artifact: docker-images-pgN.tar.zst
+        ▼
+build_package (PGN × TEST)   (parallel, needs: build_images)
+        downloads artifact → docker load → make tests/${TEST}
+
+ci_check  (independent, no Docker, runs concurrently with build_images)
+```
+
+`build_images` builds `pgcopydb:N` and `pagila:N`, saves them as a compressed
+tar artifact, and uploads it. Each `build_package` job downloads the artifact
+for its PGVERSION, loads both images into the local Docker daemon (tagged
+without version suffix for Makefile/compose compatibility), and then runs
+`make tests/${TEST}`. Because the base images are already present, the
+`docker build` calls in the Makefile skip immediately and only the tiny
+test-specific compose layer is built (~5 s).
+
+### Simulate CI locally
 
 ```bash
 TEST=pagila PGVERSION=16 make tests/pagila
