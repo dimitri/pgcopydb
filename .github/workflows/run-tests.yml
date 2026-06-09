@@ -49,8 +49,10 @@ jobs:
           docker build \
             --build-arg PGVERSION=${{ matrix.PGVERSION }} \
             -t pagila:${{ matrix.PGVERSION }} \
-            -f tests/Dockerfile.pagila \
+            -t pagila \
+            -f Dockerfile.pagila \
             .
+        working-directory: tests
 
       - name: Save and compress images
         run: |
