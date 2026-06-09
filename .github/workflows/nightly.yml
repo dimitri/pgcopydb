@@ -39,6 +39,7 @@ jobs:
           docker build \
             --build-arg PGVERSION=${{ matrix.PGVERSION }} \
             -t pgcopydb:${{ matrix.PGVERSION }} \
+            -t pgcopydb \
             .
 
       - name: Build pagila base image
