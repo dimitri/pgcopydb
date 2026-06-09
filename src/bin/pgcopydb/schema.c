@@ -104,6 +104,7 @@ typedef struct SourceTableArrayContext
 	DatabaseCatalog *catalog;
 	bool estimateTableSizes;
 	bool parsedOk;
+	char datname[PG_NAMEDATALEN]; /* database name, filled by schema_list_ordinary_tables */
 } SourceTableArrayContext;
 
 
@@ -130,6 +131,7 @@ typedef struct SourceSequenceArrayContext
 	char sqlstate[SQLSTATE_LENGTH];
 	DatabaseCatalog *catalog;
 	bool parsedOk;
+	char datname[PG_NAMEDATALEN];
 } SourceSequenceArrayContext;
 
 /* Context used when fetching all the indexes definitions */
@@ -1433,6 +1435,12 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 
 	log_trace("schema_list_ordinary_tables");
 
+	if (pgsql->safeURI.uriParams.dbname != NULL)
+	{
+		strlcpy(context.datname, pgsql->safeURI.uriParams.dbname,
+				sizeof(context.datname));
+	}
+
 	SourceFilterType filterType = SOURCE_FILTER_TYPE_NONE;
 
 	switch (filters->type)
@@ -2189,6 +2197,12 @@ schema_list_sequences(PGSQL *pgsql,
 	SourceSequenceArrayContext context = { { 0 }, catalog, false };
 
 	log_trace("schema_list_sequences");
+
+	if (pgsql->safeURI.uriParams.dbname != NULL)
+	{
+		strlcpy(context.datname, pgsql->safeURI.uriParams.dbname,
+				sizeof(context.datname));
+	}
 
 	SourceFilterType filterType = SOURCE_FILTER_TYPE_NONE;
 
@@ -4690,6 +4704,8 @@ getTableArray(void *ctx, PGresult *result)
 			break;
 		}
 
+		strlcpy(table->datname, context->datname, sizeof(table->datname));
+
 		if (context->catalog != NULL && context->catalog->db != NULL)
 		{
 			switch (table->relkind)
@@ -5180,6 +5196,8 @@ getSequenceArray(void *ctx, PGresult *result)
 			parsedOk = false;
 			break;
 		}
+
+		strlcpy(seq->datname, context->datname, sizeof(seq->datname));
 
 		if (context->catalog != NULL && context->catalog->db != NULL)
 		{
