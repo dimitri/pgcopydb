@@ -1,7 +1,7 @@
 .. _sentinel_protocol:
 
-Sentinel Control — Design Considerations
-========================================
+Sentinel Control
+================
 
 This document describes how the ``pgcopydb stream sentinel`` commands
 communicate with a running ``pgcopydb clone --follow`` / ``pgcopydb follow``
@@ -11,8 +11,6 @@ channel in addition to the default SQLite catalog.
 This is the *external* control channel. The follow pipeline also has an
 *internal* coordination signal between its ``receive`` and ``apply`` workers,
 documented separately under :ref:`pipe_protocol`.
-
----
 
 The sentinel and how it is read/written
 ---------------------------------------
@@ -33,8 +31,6 @@ Two transports are available:
 - **TCP (opt-in, ``--host``/``--port``).** The command connects to the follow
   process' coordinator over TCP; the follow side performs the SQLite update on
   its behalf. The client never opens the catalog files.
-
----
 
 Why a TCP transport: the SQLite write-locking constraint
 --------------------------------------------------------
@@ -61,8 +57,6 @@ The TCP transport removes that requirement: the CLI sends a request over the
 network and the **follow process** applies the sentinel change using the same
 shared semaphore as the rest of the pipeline. No catalog files are shared.
 
----
-
 Where the coordinator runs: in the follow supervisor
 ----------------------------------------------------
 
@@ -85,8 +79,6 @@ The coordinator is **optional**: it is started only when a listen endpoint is
 configured, via ``--host`` / ``--port`` on ``clone --follow`` / ``follow`` /
 ``stream replay``, or via the ``PGCOPYDB_HOST`` / ``PGCOPYDB_PORT`` environment
 variables (a convenience for ``docker-compose``).
-
----
 
 Wire protocol
 -------------
@@ -126,8 +118,6 @@ The coordinator answers every request by reading/writing SQLite
 ``write/flush/replay_lsn`` values are maintained by the ``receive`` / ``apply``
 children and are stale in the supervisor.
 
----
-
 CLI client behaviour
 --------------------
 
@@ -144,8 +134,6 @@ sentinel table itself.
 
 Hostnames are resolved with ``getaddrinfo``, so ``--host`` accepts a
 docker-compose service name (e.g. ``--host test``) as well as a numeric address.
-
----
 
 Testing without a shared volume
 -------------------------------
