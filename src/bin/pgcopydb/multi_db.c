@@ -50,16 +50,20 @@ static bool multidb_setup_one_database(CopyDataSpec *parentSpecs,
 									   CopyDataSpec *dbSpecs,
 									   ConnStrings *dbConnStrings,
 									   MultiDbInfo *info);
-static bool multidb_clone_one_database_pre_data(CopyDataSpec *parentSpecs,
-												 SourceDatabase *db,
-												 CopyDataSpec *dbSpecs,
-												 ConnStrings *dbConnStrings);
+
+/* Phase I: parallel pre-data (schema fetch + pg_dump + pg_restore --pre-data) */
+static bool multidb_pre_data_supervisor(CopyDataSpec *parentSpecs);
+static bool multidb_pre_data_queue_filler(CopyDataSpec *parentSpecs);
+static bool multidb_pre_data_worker(CopyDataSpec *parentSpecs);
+static bool multidb_pre_data_one_db(CopyDataSpec *parentSpecs,
+									const char *datname);
+
 static bool multidb_clone_one_database_post_data(CopyDataSpec *parentSpecs,
 												  SourceDatabase *db,
 												  CopyDataSpec *dbSpecs,
 												  ConnStrings *dbConnStrings);
 static bool multidb_global_copy(CopyDataSpec *parentSpecs);
-static bool multidb_wait_child(pid_t pid, const char *datname);
+static bool multidb_wait_child(pid_t pid, const char *label);
 
 /* connection cache helpers (also called from table-data.c) */
 static bool multidb_init_entry(MultiDbEntry *entry,
@@ -290,34 +294,43 @@ clone_all_databases(CopyDataSpec *parentSpecs)
 		goto cleanup_snapshots;
 	}
 
-	/* ====== PHASE I: PRE-DATA (sequential per-database) ====== */
-	log_info("Phase I: schema fetch, dump, and pre-data restore for %d databases",
-			 dbCount);
+	/* ====== PHASE I: PRE-DATA (parallel, bounded by --table-jobs) ====== */
+	log_info("Phase I: parallel schema fetch, dump, and pre-data restore "
+			 "for %d databases (--table-jobs=%d)",
+			 dbCount, parentSpecs->tableJobs);
 
-	for (int i = 0; i < dbCount && ok; i++)
 	{
-		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
-		{
-			ok = false;
-			break;
-		}
+		fflush(stdout);
+		fflush(stderr);
 
-		log_info("Pre-data for database \"%s\"", dbArray[i].datname);
+		pid_t prePid = fork();
 
-		if (!multidb_clone_one_database_pre_data(parentSpecs,
-												 &dbArray[i],
-												 &dbSpecsArray[i],
-												 &dbConnStringsArray[i]))
+		switch (prePid)
 		{
-			log_error("Pre-data failed for database \"%s\"", dbArray[i].datname);
-			ok = false;
-			if (parentSpecs->failFast)
+			case -1:
+			{
+				log_error("Failed to fork pre-data supervisor: %m");
+				ok = false;
+				goto cleanup_snapshots;
+			}
+
+			case 0:
+			{
+				/* pre-data supervisor process */
+				bool res = multidb_pre_data_supervisor(parentSpecs);
+				exit(res ? EXIT_CODE_QUIT : EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			default:
 				break;
 		}
-	}
 
-	if (!ok)
-		goto cleanup_snapshots;
+		if (!multidb_wait_child(prePid, "pre-data supervisor"))
+		{
+			ok = false;
+			goto cleanup_snapshots;
+		}
+	}
 
 	/* ====== PHASE II: GLOBAL COPY ====== */
 	log_info("Phase II: global COPY for %d databases (largest tables first)",
@@ -474,102 +487,378 @@ multidb_setup_one_database(CopyDataSpec *parentSpecs,
 
 
 /*
- * multidb_clone_one_database_pre_data forks a subprocess that performs the
- * pre-data phase for one database: schema fetch, pg_dump, pg_restore pre-data.
+ * multidb_pre_data_supervisor is the supervisor for Phase I.
+ *
+ * It runs inside a dedicated subprocess (forked by clone_all_databases).
+ * The supervisor creates a preDataQueue, forks tableJobs workers, forks one
+ * queue-filler child, then calls waitpid(-1) to collect all children.
+ *
+ * Process tree:
+ *   clone_all_databases
+ *   └── pre-data supervisor  (this function)
+ *           ├── pre-data worker 1
+ *           ├── pre-data worker N  (N = --table-jobs)
+ *           └── pre-data queue filler  (sends database names, then STOPs)
  */
 static bool
-multidb_clone_one_database_pre_data(CopyDataSpec *parentSpecs,
-									SourceDatabase *db,
-									CopyDataSpec *dbSpecs,
-									ConnStrings *dbConnStrings)
+multidb_pre_data_supervisor(CopyDataSpec *parentSpecs)
 {
-	log_info("[SOURCE] Pre-data for database \"%s\" from \"%s\"",
-			 db->datname, dbConnStrings->safeSourcePGURI.pguri);
+	(void) set_ps_title("pgcopydb: pre-data supervisor");
+	log_notice("Started pre-data supervisor %d [%d]", getpid(), getppid());
 
-	fflush(stdout);
-	fflush(stderr);
-
-	pid_t fpid = fork();
-
-	switch (fpid)
+	/* create the IPC queue for Phase I — workers inherit qId after fork */
+	if (!queue_create(&parentSpecs->preDataQueue, "pre-data"))
 	{
-		case -1:
+		log_error("Failed to create the pre-data process queue");
+		return false;
+	}
+
+	/* fork tableJobs pre-data workers */
+	for (int i = 0; i < parentSpecs->tableJobs; i++)
+	{
+		fflush(stdout);
+		fflush(stderr);
+
+		pid_t wpid = fork();
+
+		switch (wpid)
 		{
-			log_error("Failed to fork pre-data subprocess for database \"%s\": %m",
-					  db->datname);
-			return false;
-		}
-
-		case 0:
-		{
-			/* child process */
-			char psTitle[MAXPGPATH] = { 0 };
-			sformat(psTitle, sizeof(psTitle), "pgcopydb: pre-data %s", db->datname);
-			(void) set_ps_title(psTitle);
-
-			summary_reset_toplevel_timings();
-
-			/*
-			 * Init db specs in the child so System V queues are registered in
-			 * this child's copy of system_res_array.
-			 */
-			if (!multidb_init_db_specs(dbSpecs, parentSpecs, dbConnStrings))
+			case -1:
 			{
-				log_error("Failed to initialise specs for database \"%s\"",
-						  db->datname);
+				log_error("Failed to fork pre-data worker: %m");
+				(void) copydb_fatal_exit();
 				exit(EXIT_CODE_INTERNAL_ERROR);
 			}
 
-			/* STEP 1: fetch source database schema */
-			if (!copydb_fetch_schema_and_prepare_specs(dbSpecs))
+			case 0:
 			{
-				log_error("Failed to fetch schema for database \"%s\"",
-						  db->datname);
-				exit(EXIT_CODE_SOURCE);
+				(void) set_ps_title("pgcopydb: pre-data worker");
+				bool ok = multidb_pre_data_worker(parentSpecs);
+				exit(ok ? EXIT_CODE_QUIT : EXIT_CODE_INTERNAL_ERROR);
 			}
 
-			/*
-			 * Make a process-local copy of the snapshot so we have our own
-			 * PGSQL connection to hold the transaction open.
-			 */
-			TransactionSnapshot localSnapshot = { 0 };
-
-			if (!copydb_copy_snapshot(dbSpecs, &localSnapshot))
-			{
-				log_error("Failed to copy snapshot for database \"%s\"",
-						  db->datname);
-				exit(EXIT_CODE_SOURCE);
-			}
-
-			dbSpecs->sourceSnapshot = localSnapshot;
-
-			/* STEP 2: dump the source schema (pre-data + post-data sections) */
-			if (!copydb_dump_source_schema(dbSpecs,
-										   localSnapshot.snapshot))
-			{
-				log_error("Failed to dump schema for database \"%s\"",
-						  db->datname);
-				exit(EXIT_CODE_SOURCE);
-			}
-
-			/* STEP 3: restore the pre-data section to the target */
-			if (!copydb_target_prepare_schema(dbSpecs))
-			{
-				log_error("Failed to restore pre-data for database \"%s\"",
-						  db->datname);
-				exit(EXIT_CODE_TARGET);
-			}
-
-			(void) catalog_close_from_specs(dbSpecs);
-			exit(EXIT_CODE_QUIT);
+			default:
+				break;
 		}
-
-		default:
-			break;
 	}
 
-	/* parent: wait for pre-data subprocess */
-	return multidb_wait_child(fpid, db->datname);
+	/* fork the queue filler (child of supervisor) */
+	{
+		fflush(stdout);
+		fflush(stderr);
+
+		pid_t qpid = fork();
+
+		switch (qpid)
+		{
+			case -1:
+			{
+				log_error("Failed to fork pre-data queue filler: %m");
+				(void) copydb_fatal_exit();
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			case 0:
+			{
+				(void) set_ps_title("pgcopydb: pre-data queue databases");
+				bool ok = multidb_pre_data_queue_filler(parentSpecs);
+				exit(ok ? EXIT_CODE_QUIT : EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			default:
+				break;
+		}
+	}
+
+	/* supervisor waits for all children: workers + queue filler */
+	bool ok = copydb_wait_for_subprocesses(parentSpecs->failFast);
+
+	(void) queue_unlink(&parentSpecs->preDataQueue);
+	parentSpecs->preDataQueue.qId = -1;
+
+	return ok;
+}
+
+
+/*
+ * multidb_pre_data_queue_filler sends one DBNAME message per database to the
+ * preDataQueue, then sends tableJobs STOP messages so all workers terminate.
+ */
+static bool
+multidb_pre_data_queue_filler(CopyDataSpec *parentSpecs)
+{
+	log_notice("Started pre-data queue filler %d [%d]", getpid(), getppid());
+
+	for (int i = 0; i < parentSpecs->multiDbCount; i++)
+	{
+		MultiDbInfo *info = &parentSpecs->multiDbInfos[i];
+
+		QMessage mesg = { .type = QMSG_TYPE_DBNAME };
+		strlcpy(mesg.data.datname, info->datname, sizeof(mesg.data.datname));
+
+		if (!queue_send(&parentSpecs->preDataQueue, &mesg))
+		{
+			log_error("Failed to enqueue database \"%s\" for pre-data",
+					  info->datname);
+			return false;
+		}
+
+		log_info("Pre-data queue filler: enqueued database \"%s\"",
+				 info->datname);
+	}
+
+	/* one STOP per worker */
+	for (int i = 0; i < parentSpecs->tableJobs; i++)
+	{
+		QMessage stop = { .type = QMSG_TYPE_STOP };
+
+		if (!queue_send(&parentSpecs->preDataQueue, &stop))
+		{
+			log_error("Failed to send STOP to pre-data queue");
+			return false;
+		}
+	}
+
+	log_info("Pre-data queue filler: sent %d databases, %d STOP messages",
+			 parentSpecs->multiDbCount, parentSpecs->tableJobs);
+
+	return true;
+}
+
+
+/*
+ * multidb_pre_data_worker dequeues database names from preDataQueue and runs
+ * the full pre-data pipeline for each one (schema fetch, pg_dump,
+ * pg_restore --pre-data).  Processes databases sequentially until it receives
+ * a STOP message.
+ */
+static bool
+multidb_pre_data_worker(CopyDataSpec *parentSpecs)
+{
+	pid_t pid = getpid();
+	uint64_t errors = 0;
+	bool stop = false;
+
+	log_notice("Started pre-data worker %d [%d]", pid, getppid());
+
+	while (!stop)
+	{
+		QMessage mesg = { 0 };
+		bool recv_ok = queue_receive(&parentSpecs->preDataQueue, &mesg);
+
+		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		{
+			log_error("Pre-data worker %d interrupted by signal", pid);
+			break;
+		}
+
+		if (!recv_ok)
+		{
+			log_error("Pre-data worker %d failed to receive from queue", pid);
+			break;
+		}
+
+		switch (mesg.type)
+		{
+			case QMSG_TYPE_STOP:
+			{
+				stop = true;
+				log_debug("Pre-data worker %d received STOP", pid);
+				break;
+			}
+
+			case QMSG_TYPE_DBNAME:
+			{
+				const char *datname = mesg.data.datname;
+
+				log_info("Pre-data worker %d: processing database \"%s\"",
+						 pid, datname);
+
+				summary_reset_toplevel_timings();
+
+				if (!multidb_pre_data_one_db(parentSpecs, datname))
+				{
+					log_error("Pre-data worker %d: failed for database \"%s\"",
+							  pid, datname);
+					++errors;
+
+					if (parentSpecs->failFast)
+						return false;
+				}
+				break;
+			}
+
+			default:
+			{
+				log_error("Pre-data worker %d: unknown message type %ld",
+						  pid, mesg.type);
+				break;
+			}
+		}
+	}
+
+	log_notice("Pre-data worker %d finished with %llu error(s)",
+			   pid, (unsigned long long) errors);
+
+	return stop && errors == 0;
+}
+
+
+/*
+ * multidb_pre_data_one_db performs the full pre-data pipeline for one
+ * database: schema fetch from source, pg_dump, pg_restore --pre-data.
+ *
+ * Called from within a pre-data worker process.  All resources are
+ * allocated locally and released before returning so the worker can
+ * proceed to the next database.
+ */
+static bool
+multidb_pre_data_one_db(CopyDataSpec *parentSpecs, const char *datname)
+{
+	/* locate MultiDbInfo for this database */
+	MultiDbInfo *info = NULL;
+
+	for (int i = 0; i < parentSpecs->multiDbCount; i++)
+	{
+		if (strcmp(parentSpecs->multiDbInfos[i].datname, datname) == 0)
+		{
+			info = &parentSpecs->multiDbInfos[i];
+			break;
+		}
+	}
+
+	if (info == NULL)
+	{
+		log_error("BUG: multidb_pre_data_one_db: no MultiDbInfo for "
+				  "database \"%s\"", datname);
+		return false;
+	}
+
+	log_info("[SOURCE] Pre-data for database \"%s\"", datname);
+
+	/*
+	 * Build per-database connection strings.  These are strdup'd here and
+	 * freed at the end of this function.
+	 */
+	ConnStrings cs = { 0 };
+
+	cs.source_pguri = strdup(info->source_pguri);
+	cs.target_pguri = strdup(info->target_pguri);
+
+	if (cs.source_pguri == NULL || cs.target_pguri == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		free(cs.source_pguri);
+		return false;
+	}
+
+	if (!parse_and_scrub_connection_string(cs.source_pguri,
+										   &cs.safeSourcePGURI))
+	{
+		log_error("Failed to scrub source URI for database \"%s\"", datname);
+		free(cs.source_pguri);
+		free(cs.target_pguri);
+		return false;
+	}
+
+	if (!parse_and_scrub_connection_string(cs.target_pguri,
+										   &cs.safeTargetPGURI))
+	{
+		log_error("Failed to scrub target URI for database \"%s\"", datname);
+		free(cs.source_pguri);
+		free(cs.target_pguri);
+		if (cs.safeSourcePGURI.pguri)
+			free(cs.safeSourcePGURI.pguri);
+		return false;
+	}
+
+	bool ok = true;
+
+	/*
+	 * Build a local CopyDataSpec for this database.
+	 * copydb_init_workdir must be called before multidb_init_db_specs so
+	 * that cfPaths is populated.
+	 */
+	CopyDataSpec dbSpecs = { 0 };
+	dbSpecs.pgPaths = parentSpecs->pgPaths;
+
+	if (!copydb_init_workdir(&dbSpecs, info->topdir,
+							 false,   /* service */
+							 NULL,    /* serviceName */
+							 false,   /* restart */
+							 true,    /* resume */
+							 false))  /* createWorkDir (already created) */
+	{
+		log_error("Failed to init work dir for database \"%s\"", datname);
+		ok = false;
+		goto cleanup_cs;
+	}
+
+	if (!multidb_init_db_specs(&dbSpecs, parentSpecs, &cs))
+	{
+		log_error("Failed to init db specs for database \"%s\"", datname);
+		ok = false;
+		goto cleanup_cs;
+	}
+
+	/*
+	 * Pre-data workers do not run index or vacuum workers — destroy the
+	 * queues multidb_init_db_specs may have created.
+	 */
+	if (dbSpecs.vacuumQueue.qId != -1)
+	{
+		(void) queue_unlink(&dbSpecs.vacuumQueue);
+		dbSpecs.vacuumQueue.qId = -1;
+	}
+
+	if (dbSpecs.indexQueue.qId != -1)
+	{
+		(void) queue_unlink(&dbSpecs.indexQueue);
+		dbSpecs.indexQueue.qId = -1;
+	}
+
+	/*
+	 * Propagate the exported snapshot identifier so that pg_dump can use
+	 * it via --snapshot=<id>.
+	 */
+	strlcpy(dbSpecs.sourceSnapshot.snapshot, info->snapshot,
+			sizeof(dbSpecs.sourceSnapshot.snapshot));
+
+	/* STEP 1: fetch source database schema into source.db */
+	if (!copydb_fetch_schema_and_prepare_specs(&dbSpecs))
+	{
+		log_error("Failed to fetch schema for database \"%s\"", datname);
+		ok = false;
+		goto cleanup_specs;
+	}
+
+	/* STEP 2: dump source schema (pre-data + post-data) via pg_dump */
+	if (!copydb_dump_source_schema(&dbSpecs, info->snapshot))
+	{
+		log_error("Failed to dump schema for database \"%s\"", datname);
+		ok = false;
+		goto cleanup_specs;
+	}
+
+	/* STEP 3: restore the pre-data section to the target via pg_restore */
+	if (!copydb_target_prepare_schema(&dbSpecs))
+	{
+		log_error("Failed to restore pre-data for database \"%s\"", datname);
+		ok = false;
+	}
+
+cleanup_specs:
+	(void) catalog_close_from_specs(&dbSpecs);
+
+cleanup_cs:
+	free(cs.source_pguri);
+	free(cs.target_pguri);
+	if (cs.safeSourcePGURI.pguri)
+		free(cs.safeSourcePGURI.pguri);
+	if (cs.safeTargetPGURI.pguri)
+		free(cs.safeTargetPGURI.pguri);
+
+	return ok;
 }
 
 
@@ -660,9 +949,23 @@ multidb_clone_one_database_post_data(CopyDataSpec *parentSpecs,
 
 
 /*
- * multidb_global_copy runs the global COPY phase: all tables from all
- * databases are enqueued in descending size order and processed by a shared
- * pool of tableJobs COPY workers.
+ * multidb_global_copy runs the global COPY phase.
+ *
+ * Process tree:
+ *   clone_all_databases
+ *   └── global copy supervisor  (this function forks it, then waits)
+ *           ├── global copy worker 1
+ *           ├── global copy worker N  (N = --table-jobs)
+ *           └── global copy queue tables  (fills queue, then exits)
+ *
+ * Fix A — shared catalog semaphores:
+ *   One System V semaphore is created per database before forking the
+ *   supervisor.  All workers inherit the semaphore IDs via COW.
+ *   multidb_init_entry wires the semaphore into the DatabaseCatalog
+ *   before calling catalog_init(), so catalog_create_semaphore() finds
+ *   semId != 0 and skips creating a second independent semaphore.
+ *   Without this, each worker creates its own semaphore, breaking
+ *   write serialisation and producing SQLite BUSY errors.
  */
 static bool
 multidb_global_copy(CopyDataSpec *parentSpecs)
@@ -675,56 +978,48 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 	}
 
 	/*
-	 * Create the global COPY queue.  Workers are forked from parentSpecs and
-	 * inherit the queue ID.
+	 * Fix A: create one shared semaphore per database BEFORE forking the
+	 * supervisor.  Workers inherit the semId via COW; catalog_init() then
+	 * skips creating its own semaphore.
 	 */
-	if (!queue_create(&(parentSpecs->copyQueue), "global copy"))
+	for (int i = 0; i < parentSpecs->multiDbCount; i++)
 	{
-		log_error("Failed to create the global COPY queue");
-		return false;
-	}
+		MultiDbInfo *info = &parentSpecs->multiDbInfos[i];
 
-	/*
-	 * Fork tableJobs COPY workers.  Each worker uses copydb_table_data_worker_multidb
-	 * which maintains a per-database connection cache.
-	 */
-	log_info("Starting %d global COPY workers", parentSpecs->tableJobs);
+		if (info->catalogSemId != 0)
+			continue;   /* already created (shouldn't happen, but be safe) */
 
-	for (int i = 0; i < parentSpecs->tableJobs; i++)
-	{
-		fflush(stdout);
-		fflush(stderr);
+		Semaphore sema = { .initValue = 1, .reentrant = true };
 
-		pid_t wpid = fork();
-
-		switch (wpid)
+		if (!semaphore_create(&sema))
 		{
-			case -1:
-			{
-				log_error("Failed to fork global COPY worker: %m");
-				(void) copydb_fatal_exit();
-				return false;
-			}
+			log_error("Failed to create catalog semaphore for database \"%s\"",
+					  info->datname);
 
-			case 0:
+			/* best-effort cleanup of already-created semaphores */
+			for (int j = 0; j < i; j++)
 			{
-				/* worker child */
-				(void) set_ps_title("pgcopydb: global copy worker");
+				MultiDbInfo *prev = &parentSpecs->multiDbInfos[j];
 
-				if (!copydb_table_data_worker_multidb(parentSpecs))
+				if (prev->catalogSemId != 0)
 				{
-					exit(EXIT_CODE_INTERNAL_ERROR);
+					Semaphore s = { .semId = prev->catalogSemId };
+					(void) semaphore_unlink(&s);
+					prev->catalogSemId = 0;
 				}
-				exit(EXIT_CODE_QUIT);
 			}
-
-			default:
-				break;
+			return false;
 		}
+
+		info->catalogSemId = sema.semId;
+
+		log_debug("Created catalog semaphore %d for database \"%s\"",
+				  sema.semId, info->datname);
 	}
 
 	/*
-	 * Fork the supervisor that fills the queue from all per-database catalogs.
+	 * Fork the global copy supervisor.  The supervisor creates the copyQueue,
+	 * forks workers and the queue filler, then collects all children.
 	 */
 	fflush(stdout);
 	fflush(stderr);
@@ -735,40 +1030,117 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 	{
 		case -1:
 		{
-			log_error("Failed to fork global COPY supervisor: %m");
-			(void) copydb_fatal_exit();
+			log_error("Failed to fork global copy supervisor: %m");
 			return false;
 		}
 
 		case 0:
 		{
-			/* supervisor child */
+			/* ====== global copy supervisor process ====== */
 			(void) set_ps_title("pgcopydb: global copy supervisor");
+			log_notice("Started global copy supervisor %d [%d]",
+					   getpid(), getppid());
 
-			if (!copydb_copy_worker_queue_tables_multidb(parentSpecs))
+			/*
+			 * Create the copyQueue here so workers can inherit its qId
+			 * after they are forked below.
+			 */
+			if (!queue_create(&parentSpecs->copyQueue, "global copy"))
 			{
+				log_error("Failed to create the global COPY queue");
 				exit(EXIT_CODE_INTERNAL_ERROR);
 			}
-			exit(EXIT_CODE_QUIT);
+
+			/* fork tableJobs COPY workers */
+			log_info("Starting %d global COPY workers", parentSpecs->tableJobs);
+
+			for (int i = 0; i < parentSpecs->tableJobs; i++)
+			{
+				fflush(stdout);
+				fflush(stderr);
+
+				pid_t wpid = fork();
+
+				switch (wpid)
+				{
+					case -1:
+					{
+						log_error("Failed to fork global COPY worker: %m");
+						(void) copydb_fatal_exit();
+						exit(EXIT_CODE_INTERNAL_ERROR);
+					}
+
+					case 0:
+					{
+						(void) set_ps_title("pgcopydb: global copy worker");
+						bool ok = copydb_table_data_worker_multidb(parentSpecs);
+						exit(ok ? EXIT_CODE_QUIT : EXIT_CODE_INTERNAL_ERROR);
+					}
+
+					default:
+						break;
+				}
+			}
+
+			/* fork the queue filler as a child of the supervisor */
+			{
+				fflush(stdout);
+				fflush(stderr);
+
+				pid_t qpid = fork();
+
+				switch (qpid)
+				{
+					case -1:
+					{
+						log_error("Failed to fork global COPY queue filler: %m");
+						(void) copydb_fatal_exit();
+						exit(EXIT_CODE_INTERNAL_ERROR);
+					}
+
+					case 0:
+					{
+						(void) set_ps_title("pgcopydb: global copy queue tables");
+						bool ok =
+							copydb_copy_worker_queue_tables_multidb(parentSpecs);
+						exit(ok ? EXIT_CODE_QUIT : EXIT_CODE_INTERNAL_ERROR);
+					}
+
+					default:
+						break;
+				}
+			}
+
+			/* supervisor waits for all children (workers + queue filler) */
+			bool ok = copydb_wait_for_subprocesses(parentSpecs->failFast);
+
+			(void) queue_unlink(&parentSpecs->copyQueue);
+			parentSpecs->copyQueue.qId = -1;
+
+			exit(ok ? EXIT_CODE_QUIT : EXIT_CODE_INTERNAL_ERROR);
 		}
 
 		default:
 			break;
 	}
 
-	/* parent: wait for all workers + supervisor */
-	if (!copydb_wait_for_subprocesses(parentSpecs->failFast))
+	/* clone_all_databases waits for the one supervisor child */
+	bool ok = multidb_wait_child(spid, "global copy supervisor");
+
+	/* destroy the shared catalog semaphores */
+	for (int i = 0; i < parentSpecs->multiDbCount; i++)
 	{
-		log_error("Some global COPY worker processes exited with error");
-		(void) queue_unlink(&(parentSpecs->copyQueue));
-		return false;
+		MultiDbInfo *info = &parentSpecs->multiDbInfos[i];
+
+		if (info->catalogSemId != 0)
+		{
+			Semaphore sema = { .semId = info->catalogSemId };
+			(void) semaphore_unlink(&sema);
+			info->catalogSemId = 0;
+		}
 	}
 
-	/* clean up the global COPY queue */
-	(void) queue_unlink(&(parentSpecs->copyQueue));
-	parentSpecs->copyQueue.qId = -1;
-
-	return true;
+	return ok;
 }
 
 
@@ -1047,6 +1419,18 @@ multidb_init_entry(MultiDbEntry *entry, CopyDataSpec *parentSpecs,
 	strlcpy(sourceDB->dbfile, dbSpecs->cfPaths.sdbfile, sizeof(sourceDB->dbfile));
 	strlcpy(filterDB->dbfile, dbSpecs->cfPaths.fdbfile, sizeof(filterDB->dbfile));
 	strlcpy(targetDB->dbfile, dbSpecs->cfPaths.tdbfile, sizeof(targetDB->dbfile));
+
+	/*
+	 * Fix A: wire the shared catalog semaphore so catalog_create_semaphore()
+	 * finds semId != 0 and reuses it rather than creating a fresh independent
+	 * semaphore.  All workers for the same database thus share one lock,
+	 * serialising SQLite writes and eliminating SQLITE_BUSY contention.
+	 */
+	if (info->catalogSemId != 0)
+	{
+		sourceDB->sema.semId = info->catalogSemId;
+		sourceDB->sema.reentrant = true;
+	}
 
 	/* open the per-database source catalog (populated by pre-data) */
 	if (!catalog_init(sourceDB))
@@ -1447,26 +1831,27 @@ multidb_init_db_specs(CopyDataSpec *dbSpecs,
 
 
 /*
- * multidb_wait_child blocks until the given subprocess exits.
+ * multidb_wait_child blocks until the given subprocess exits and returns
+ * true iff it exited with EXIT_CODE_QUIT (0).  The label is used only in
+ * log messages (it may be a database name or a supervisor description).
  */
 static bool
-multidb_wait_child(pid_t pid, const char *datname)
+multidb_wait_child(pid_t pid, const char *label)
 {
 	int status = 0;
 	pid_t result = waitpid(pid, &status, 0);
 
 	if (result < 0)
 	{
-		log_error("Failed to wait for subprocess %d (database \"%s\"): %m",
-				  pid, datname);
+		log_error("Failed to wait for subprocess %d (%s): %m", pid, label);
 		return false;
 	}
 
 	if (!WIFEXITED(status))
 	{
 		int sig = WTERMSIG(status);
-		log_error("Subprocess %d (database \"%s\") terminated by signal %d",
-				  pid, datname, sig);
+		log_error("Subprocess %d (%s) terminated by signal %d",
+				  pid, label, sig);
 		return false;
 	}
 
@@ -1474,8 +1859,8 @@ multidb_wait_child(pid_t pid, const char *datname)
 
 	if (returnCode != 0)
 	{
-		log_error("Subprocess %d (database \"%s\") exited with status %d",
-				  pid, datname, returnCode);
+		log_error("Subprocess %d (%s) exited with status %d",
+				  pid, label, returnCode);
 		return false;
 	}
 

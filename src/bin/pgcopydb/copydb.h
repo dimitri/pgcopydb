@@ -218,6 +218,14 @@ typedef struct MultiDbInfo
 	char target_pguri[BUFSIZE];     /* per-database target URI */
 	char topdir[MAXPGPATH];         /* per-database work dir */
 	bool isReadOnly;                /* true when source is in recovery */
+
+	/*
+	 * System V semaphore shared by all global COPY workers that access this
+	 * database's source.db catalog.  Created by the parent before forking the
+	 * global copy supervisor; workers inherit the semId via COW.
+	 * catalog_create_semaphore() skips creation when semId != 0.
+	 */
+	int catalogSemId;
 } MultiDbInfo;
 
 
@@ -317,6 +325,7 @@ typedef struct CopyDataSpec
 	int splitMaxParts;
 	bool estimateTableSizes;
 
+	Queue preDataQueue;         /* for --all-databases Phase I parallel pre-data */
 	Queue copyQueue;
 	Queue indexQueue;
 	Queue vacuumQueue;

@@ -535,6 +535,7 @@ copydb_init_specs(CopyDataSpec *specs,
 		.splitMaxParts = options->splitMaxParts,
 		.estimateTableSizes = options->estimateTableSizes,
 
+		.preDataQueue = { NULL, -1 },
 		.vacuumQueue = { NULL, -1 },
 		.indexQueue = { NULL, -1 },
 
