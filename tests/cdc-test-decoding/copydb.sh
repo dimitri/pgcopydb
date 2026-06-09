@@ -20,7 +20,7 @@ psql -o /tmp/d.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/ddl.sql
 
 # create the replication slot that captures all the changes
-# PGCOPYDB_OUTPUT_PLUGIN is set to test_decoding in docker-compose.yml
+# PGCOPYDB_OUTPUT_PLUGIN is set to test_decoding in compose.yaml
 coproc ( pgcopydb snapshot --follow )
 
 sleep 1
