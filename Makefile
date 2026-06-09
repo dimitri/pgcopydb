@@ -54,7 +54,18 @@ indent:
 	citus_indent
 
 build: version
+	@docker image inspect pgcopydb > /dev/null 2>&1 \
+	  && echo "pgcopydb image already present — skipping build (run 'make force-build' to rebuild)" \
+	  || docker build --build-arg PGVERSION=$(PGVERSION) -t pgcopydb .
+
+# Force a full rebuild even when the pgcopydb image already exists locally
+# (use after source-code changes or when switching PGVERSION)
+force-build: version
 	docker build --build-arg PGVERSION=$(PGVERSION) -t pgcopydb .
+
+# Remove cached Docker images so the next build/test starts from scratch
+clean-images:
+	-docker rmi pgcopydb pagila 2>/dev/null; true
 
 echo-version: GIT-VERSION-FILE
 	@awk '{print $$3}' $<
@@ -80,5 +91,6 @@ debsh-qa: deb-qa
 .PHONY: all
 .PHONY: bin clean install docs maintainer-clean update-docs
 .PHONY: test tests tests/ci tests/*
+.PHONY: build force-build clean-images
 .PHONY: deb debsh deb-qa debsh-qa
 .PHONY: GIT-VERSION-FILE
