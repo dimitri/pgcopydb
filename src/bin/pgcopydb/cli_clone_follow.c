@@ -18,6 +18,7 @@
 #include "env_utils.h"
 #include "ld_stream.h"
 #include "log.h"
+#include "multi_db.h"
 #include "parsing_utils.h"
 #include "pgsql.h"
 #include "progress.h"
@@ -66,6 +67,7 @@
 	"  --origin                      Use this Postgres replication origin node name\n" \
 	"  --endpos                      Stop replaying changes when reaching this LSN\n" \
 	"  --use-copy-binary             Use the COPY BINARY format for COPY operations\n" \
+	"  --all-databases               Clone all databases found on the source instance\n" \
 
 CommandLine clone_command =
 	make_command(
@@ -119,8 +121,6 @@ static bool start_follow_process(CopyDataSpec *copySpecs,
 
 static bool cli_clone_follow_wait_subprocess(const char *name, pid_t pid);
 
-static bool cloneDB(CopyDataSpec *copySpecs);
-
 
 /*
  * cli_clone implements the command: pgcopydb clone
@@ -132,8 +132,22 @@ cli_clone(int argc, char **argv)
 
 	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_ALL);
 
-	/* at the moment this is not covered by cli_copy_prepare_specs() */
+	/* at the moment these are not covered by cli_copy_prepare_specs() */
 	copySpecs.follow = copyDBoptions.follow;
+	copySpecs.allDatabases = copyDBoptions.allDatabases;
+
+	/*
+	 * When --all-databases is used, delegate to the multi-database orchestrator.
+	 */
+	if (copySpecs.allDatabases)
+	{
+		if (!clone_all_databases(&copySpecs))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+		exit(EXIT_CODE_QUIT);
+	}
 
 	/*
 	 * When pgcopydb clone --follow is used, we call the clone_and_follow()
@@ -520,7 +534,7 @@ start_clone_process(CopyDataSpec *copySpecs, pid_t *pid)
 
 			log_notice("Starting the clone sub-process");
 
-			if (!cloneDB(copySpecs))
+			if (!copydb_clone_database(copySpecs))
 			{
 				log_error("Failed to clone source database, "
 						  "see above for details");
@@ -543,10 +557,10 @@ start_clone_process(CopyDataSpec *copySpecs, pid_t *pid)
 
 
 /*
- * cloneDB clones a source database into a target database.
+ * copydb_clone_database clones a source database into a target database.
  */
-static bool
-cloneDB(CopyDataSpec *copySpecs)
+bool
+copydb_clone_database(CopyDataSpec *copySpecs)
 {
 	/*
 	 * The top-level process implements the preparation steps and exports a

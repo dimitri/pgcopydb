@@ -242,6 +242,7 @@ typedef struct CopyDataSpec
 	bool fetchFilteredOids;     /* allow bypassing dump/restore filter prep */
 
 	bool follow;                /* pgcopydb fork --follow */
+	bool allDatabases;          /* pgcopydb clone --all-databases */
 
 	int tableJobs;
 	int indexJobs;
@@ -272,6 +273,8 @@ extern GUC dstSettings[];
 
 /* copydb.h */
 void cli_copy_prepare_specs(CopyDataSpec *copySpecs, CopyDataSection section);
+
+bool copydb_clone_database(CopyDataSpec *copySpecs);
 
 bool copydb_init_workdir(CopyDataSpec *copySpecs,
 						 char *dir,
