@@ -31,7 +31,6 @@
 #include "pg_utils.h"
 #include "signals.h"
 #include "string_utils.h"
-#include "copydb.h"
 
 #if defined(LIBPQ_HAS_PIPELINING) && LIBPQ_HAS_PIPELINING
 #define pqPipelineModeEnabled(conn) (PQpipelineStatus(conn) == PQ_PIPELINE_ON)
@@ -3907,7 +3906,8 @@ OutputPluginToString(StreamOutputPlugin plugin)
  */
 bool
 pgsql_create_logical_replication_slot(LogicalStreamClient *client,
-									  ReplicationSlot *slot)
+									  ReplicationSlot *slot,
+                                      GUC *settings)
 {
 	PGSQL *pgsql = &(client->pgsql);
 
@@ -3926,15 +3926,6 @@ pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 	}
 
 	/* also set our GUC values for the source connection */
-	if (!pgsql_server_version(pgsql))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	GUC *settings =
-		pgsql->pgversion_num < 90600 ? srcSettings95 : srcSettings;
-
 	if (!pgsql_set_gucs(pgsql, settings))
 	{
 		log_fatal("Failed to set our GUC settings on the source connection, "
