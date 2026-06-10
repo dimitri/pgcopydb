@@ -1,0 +1,24 @@
+CREATE DATABASE
+CREATE COLLATION
+-[ RECORD 1 ]-----------------------------
+conname | excl_with_pkey_pkey
+contype | p
+condef  | PRIMARY KEY (id)
+-[ RECORD 2 ]-----------------------------
+conname | excl_with_pkey_excl
+contype | x
+condef  | EXCLUDE USING btree (val WITH =)
+
+DROP DATABASE
+CREATE DATABASE
+CREATE COLLATION
+-[ RECORD 1 ]-----------------------------
+conname | excl_with_pkey_pkey
+contype | p
+condef  | PRIMARY KEY (id)
+-[ RECORD 2 ]-----------------------------
+conname | excl_with_pkey_excl
+contype | x
+condef  | EXCLUDE USING btree (val WITH =)
+
+DROP DATABASE

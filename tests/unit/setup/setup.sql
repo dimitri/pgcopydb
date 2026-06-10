@@ -13,3 +13,4 @@
 \ir 14-uuid.sql
 \ir 15-attgenerated.sql
 \ir 16-sequences.sql
+\ir 17-exclusion-with-pkey.sql

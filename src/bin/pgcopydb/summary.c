@@ -1452,7 +1452,7 @@ summary_add_constraint(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 	}
 
 	char *sql =
-		"insert or replace into summary(pid, conoid, start_time_epoch, command)"
+		"insert or ignore into summary(pid, conoid, start_time_epoch, command)"
 		"values($1, $2, $3, $4)";
 
 	if (!semaphore_lock(&(catalog->sema)))
@@ -1613,16 +1613,17 @@ summary_table_count_indexes_left(DatabaseCatalog *catalog,
 
 	/*
 	 * When asked to create an index for a constraint and the index is neither
-	 * a UNIQUE nor a PRIMARY KEY index, then we can't use the ALTER TABLE ...
-	 * ADD CONSTRAINT ... USING INDEX ... command, because this only works with
-	 * UNIQUE and PRIMARY KEY indexes.
+	 * a UNIQUE nor a PRIMARY KEY index (such as an EXCLUSION constraint), then
+	 * we skip creating the index directly and instead create it as part of the
+	 * "plain" ALTER TABLE ... ADD CONSTRAINT ... command during the constraint
+	 * phase.
 	 *
-	 * This means that we have to skip creating the index first, and will only
-	 * then create it during the constraint phase, as part of the "plain" ALTER
-	 * TABLE ... ADD CONSTRAINT ... command.
-	 *
-	 * So when counting the indexes that are left to be created before we can
-	 * install the constraints, we should also skip counting these.
+	 * Even though we skip running CREATE INDEX for such indexes, each one is
+	 * still queued and processed by a worker, which calls
+	 * copydb_mark_index_as_done before checking whether all indexes are done.
+	 * We must therefore count these indexes here so that countIndexesLeft
+	 * reaches zero exactly once — when the last worker finishes its index —
+	 * rather than once per non-skipped index and again for each skipped index.
 	 */
 	char *sql =
 		"with idx(indexoid) as"
@@ -1630,29 +1631,14 @@ summary_table_count_indexes_left(DatabaseCatalog *catalog,
 		"  select i.oid as indexoid "
 		"    from s_table t join s_index i on i.tableoid = t.oid"
 		"   where tableoid = $1 "
-		" ), "
-		" skipidx(indexoid) as "
-		" ("
-		"  select i.oid as indexoid "
-		"    from s_table t "
-		"         join s_index i on i.tableoid = t.oid "
-		"         join s_constraint c on c.indexoid = i.oid "
-		"   where not i.isprimary and not i.isunique"
-		"     and tableoid = $2 "
-		" ),"
-		" indexlist(indexoid) as"
-		" ( "
-		"  select indexoid from idx "
-		"  except "
-		"  select indexoid from skipidx "
 		" ) "
-		" select count(l.indexoid) "
-		"   from indexlist l "
+		" select count(i.indexoid) "
+		"   from idx i "
 		"  where not exists "
 		"        ( "
 		"          select 1 "
 		"            from summary s "
-		"           where s.indexoid = l.indexoid "
+		"           where s.indexoid = i.indexoid "
 		"             and s.pid > 0 and s.done_time_epoch > 0"
 		"        ) ";
 
@@ -1676,7 +1662,6 @@ summary_table_count_indexes_left(DatabaseCatalog *catalog,
 
 	/* bind our parameters now */
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_INT64, "tableoid", table->oid, NULL },
 		{ BIND_PARAMETER_TYPE_INT64, "tableoid", table->oid, NULL }
 	};
 
