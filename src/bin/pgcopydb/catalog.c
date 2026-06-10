@@ -948,6 +948,55 @@ catalog_open(DatabaseCatalog *catalog)
 
 
 /*
+ * catalog_open_readonly opens an existing catalog file in read-only mode
+ * without creating or acquiring any semaphore.  Use this for catalogs that
+ * are only ever read (never written) — SQLite WAL provides snapshot-
+ * consistent reads with no contention between any number of readers.
+ */
+bool
+catalog_open_readonly(DatabaseCatalog *catalog)
+{
+	if (catalog->db != NULL)
+	{
+		log_debug("Skipping opening read-only SQLite database \"%s\": "
+				  "already opened", catalog->dbfile);
+		return true;
+	}
+
+	if (!file_exists(catalog->dbfile))
+	{
+		log_error("Failed to open catalog \"%s\", file does not exist",
+				  catalog->dbfile);
+		return false;
+	}
+
+	log_debug("Opening read-only SQLite database \"%s\"", catalog->dbfile);
+
+	int rc = sqlite3_open_v2(catalog->dbfile,
+							 &(catalog->db),
+							 SQLITE_OPEN_READONLY,
+							 NULL);
+
+	if (rc != SQLITE_OK)
+	{
+		const char *errmsg = sqlite3_errmsg(catalog->db);
+
+		log_error("Failed to open \"%s\" read-only: %s",
+				  catalog->dbfile, errmsg);
+
+		if (catalog->db != NULL)
+		{
+			sqlite3_close(catalog->db);
+		}
+		catalog->db = NULL;
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * source_catalog_init initializes our internal catalog database file.
  */
 bool

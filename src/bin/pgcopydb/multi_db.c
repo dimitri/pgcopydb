@@ -1354,36 +1354,19 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 	}
 
 	/*
-	 * Fix A: create one shared semaphore per database BEFORE forking.
-	 * Workers inherit the semId via COW; catalog_init() then skips creating
-	 * its own semaphore, so all workers for the same database share one lock.
+	 * Create ONE semaphore set with one slot per database.  All workers for
+	 * database[i] share slot i, serialising concurrent SQLite writes without
+	 * consuming O(N) system_res_array slots — the entire set costs one entry.
+	 * Workers inherit the semId via COW; catalog_init() skips creation when
+	 * semId is already set.
 	 */
-	for (int i = 0; i < parentSpecs->multiDbCount; i++)
 	{
-		MultiDbInfo *info = &parentSpecs->multiDbInfos[i];
+		Semaphore catalogSemaSet = { 0 };
 
-		if (info->catalogSemId != 0)
-			continue;
-
-		Semaphore sema = { .initValue = 1, .reentrant = true };
-
-		if (!semaphore_create(&sema))
+		if (!semaphore_create_set(&catalogSemaSet, parentSpecs->multiDbCount))
 		{
-			log_error("Failed to create catalog semaphore for database \"%s\"",
-					  info->datname);
-
-			for (int j = 0; j < i; j++)
-			{
-				MultiDbInfo *prev = &parentSpecs->multiDbInfos[j];
-
-				if (prev->catalogSemId != 0)
-				{
-					Semaphore s = { .semId = prev->catalogSemId };
-					(void) semaphore_unlink(&s);
-					prev->catalogSemId = 0;
-				}
-			}
-
+			log_error("Failed to create catalog semaphore set for %d databases",
+					  parentSpecs->multiDbCount);
 			(void) queue_unlink(&parentSpecs->indexQueue);
 			parentSpecs->indexQueue.qId = -1;
 
@@ -1396,18 +1379,29 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 			return false;
 		}
 
-		info->catalogSemId = sema.semId;
+		for (int i = 0; i < parentSpecs->multiDbCount; i++)
+		{
+			parentSpecs->multiDbInfos[i].catalogSemId    = catalogSemaSet.semId;
+			parentSpecs->multiDbInfos[i].catalogSemIndex = i;
 
-		log_debug("Created catalog semaphore %d for database \"%s\"",
-				  sema.semId, info->datname);
+			log_debug("Assigned catalog semaphore set %d[%d] to database \"%s\"",
+					  catalogSemaSet.semId, i,
+					  parentSpecs->multiDbInfos[i].datname);
+		}
+	}
 
-		/*
-		 * Pre-seed the COPY_DATA timing row so workers' summary_increment_timing
-		 * calls have a valid start_time_epoch to anchor the wall-clock range.
-		 */
+	/*
+	 * Pre-seed the COPY_DATA timing row for each database so that workers'
+	 * summary_increment_timing calls have a valid start_time_epoch.
+	 */
+	for (int i = 0; i < parentSpecs->multiDbCount; i++)
+	{
+		MultiDbInfo *info = &parentSpecs->multiDbInfos[i];
+
 		DatabaseCatalog dbCat = {
 			.type = DATABASE_CATALOG_TYPE_SOURCE,
-			.sema.semId = sema.semId,
+			.sema.semId    = info->catalogSemId,
+			.sema.semIndex = info->catalogSemIndex,
 			.sema.reentrant = true,
 		};
 		sformat(dbCat.dbfile, sizeof(dbCat.dbfile),
@@ -1593,7 +1587,8 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 
 		DatabaseCatalog dbCat = {
 			.type = DATABASE_CATALOG_TYPE_SOURCE,
-			.sema.semId = info->catalogSemId,
+			.sema.semId    = info->catalogSemId,
+			.sema.semIndex = info->catalogSemIndex,
 			.sema.reentrant = true,
 		};
 		sformat(dbCat.dbfile, sizeof(dbCat.dbfile),
@@ -1616,17 +1611,20 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 		(void) catalog_close(&dbCat);
 	}
 
-	/* Destroy shared catalog semaphores. */
-	for (int i = 0; i < parentSpecs->multiDbCount; i++)
+	/*
+	 * Destroy the catalog semaphore set.  One IPC_RMID removes all N slots.
+	 * All multiDbInfos share the same semId; unlink it once via [0].
+	 */
+	if (parentSpecs->multiDbCount > 0 &&
+		parentSpecs->multiDbInfos[0].catalogSemId != 0)
 	{
-		MultiDbInfo *info = &parentSpecs->multiDbInfos[i];
+		Semaphore setHandle = {
+			.semId = parentSpecs->multiDbInfos[0].catalogSemId
+		};
+		(void) semaphore_unlink(&setHandle);
 
-		if (info->catalogSemId != 0)
-		{
-			Semaphore sema = { .semId = info->catalogSemId };
-			(void) semaphore_unlink(&sema);
-			info->catalogSemId = 0;
-		}
+		for (int i = 0; i < parentSpecs->multiDbCount; i++)
+			parentSpecs->multiDbInfos[i].catalogSemId = 0;
 	}
 
 	/* Clean up index/vacuum queues (copy queue cleaned up by copy supervisor). */
@@ -1865,12 +1863,13 @@ multidb_init_index_entry(MultiDbEntry *entry, CopyDataSpec *parentSpecs,
 	strlcpy(sourceDB->dbfile, dbSpecs->cfPaths.sdbfile, sizeof(sourceDB->dbfile));
 
 	/*
-	 * Reuse the parent-created shared semaphore for sourceDB so that all index
-	 * workers for the same database share one lock (avoids SQLITE_BUSY).
+	 * Reuse the parent-created shared semaphore set slot for sourceDB so that
+	 * all index workers for the same database share one lock (no SQLITE_BUSY).
 	 */
 	if (info->catalogSemId != 0)
 	{
-		sourceDB->sema.semId = info->catalogSemId;
+		sourceDB->sema.semId    = info->catalogSemId;
+		sourceDB->sema.semIndex = info->catalogSemIndex;
 		sourceDB->sema.reentrant = true;
 	}
 
@@ -1884,16 +1883,16 @@ multidb_init_index_entry(MultiDbEntry *entry, CopyDataSpec *parentSpecs,
 
 	/*
 	 * Open the target catalog read-only for constraint resume checks
-	 * (catalog_s_table_count_indexes, catalog_lookup_s_index_by_name).  A
-	 * fresh per-entry semaphore is correct here: targetDB is only read (never
-	 * written) in the index worker, so there is no cross-process coordination
-	 * requirement, and a separate semId avoids deadlocking with the sourceDB
-	 * semaphore held by catalog_iter_s_index_table during iteration.
+	 * (catalog_s_table_count_indexes, catalog_lookup_s_index_by_name).
+	 * No semaphore: SQLite WAL guarantees snapshot-consistent reads and
+	 * never produces SQLITE_BUSY for readers.  Separate from sourceDB's
+	 * semaphore slot to avoid deadlocking with catalog_iter_s_index_table
+	 * which holds that slot for the entire iteration.
 	 */
 	targetDB->type = DATABASE_CATALOG_TYPE_TARGET;
 	strlcpy(targetDB->dbfile, dbSpecs->cfPaths.tdbfile, sizeof(targetDB->dbfile));
 
-	if (!catalog_init(targetDB))
+	if (!catalog_open_readonly(targetDB))
 	{
 		log_error("Failed to open target catalog for database \"%s\"", datname);
 		catalog_close(sourceDB);
@@ -2184,14 +2183,15 @@ multidb_init_entry(MultiDbEntry *entry, CopyDataSpec *parentSpecs,
 	strlcpy(targetDB->dbfile, dbSpecs->cfPaths.tdbfile, sizeof(targetDB->dbfile));
 
 	/*
-	 * Fix A: wire the shared catalog semaphore so catalog_create_semaphore()
-	 * finds semId != 0 and reuses it rather than creating a fresh independent
-	 * semaphore.  All workers for the same database thus share one lock,
-	 * serialising SQLite writes and eliminating SQLITE_BUSY contention.
+	 * Wire the shared catalog semaphore set slot so catalog_create_semaphore()
+	 * finds semId != 0 and reuses it rather than creating a fresh semaphore.
+	 * All workers for the same database thus share one lock, serialising
+	 * SQLite writes and guaranteeing no SQLITE_BUSY contention.
 	 */
 	if (info->catalogSemId != 0)
 	{
-		sourceDB->sema.semId = info->catalogSemId;
+		sourceDB->sema.semId    = info->catalogSemId;
+		sourceDB->sema.semIndex = info->catalogSemIndex;
 		sourceDB->sema.reentrant = true;
 	}
 

@@ -38,12 +38,12 @@ extern KeyVal connStringDefaults;
  * pgcopydb creates System V OS level objects such as message queues and
  * semaphores, and those have to be cleaned-up "manually".
  *
- * With --all-databases, the parent creates one semaphore per database for the
- * source catalog plus global queues and per-instance catalogs.  Index workers
- * additionally create one semaphore per database for the target catalog.
- * 64 slots supports up to ~50 concurrent databases with comfortable headroom.
+ * With --all-databases, all per-database catalog semaphores are packed into
+ * a single SysV semaphore set (one system_res_array slot regardless of the
+ * number of databases).  The fixed overhead is ~10 slots, so 16 is sufficient
+ * even for very large multi-database runs.
  */
-#define SYSV_RES_MAX_COUNT 64
+#define SYSV_RES_MAX_COUNT 16
 
 typedef enum
 {
@@ -225,12 +225,13 @@ typedef struct MultiDbInfo
 	char topdir[MAXPGPATH];         /* per-database work dir */
 
 	/*
-	 * System V semaphore shared by all global COPY workers that access this
-	 * database's source.db catalog.  Created by the parent before forking the
-	 * global copy supervisor; workers inherit the semId via COW.
+	 * Slot within the parent-created semaphore SET that guards this database's
+	 * source.db catalog.  All databases share one SysV semaphore set (one
+	 * system_res_array slot); each database uses a unique slot index within it.
 	 * catalog_create_semaphore() skips creation when semId != 0.
 	 */
-	int catalogSemId;
+	int catalogSemId;       /* semaphore set id (same for all databases) */
+	int catalogSemIndex;    /* slot index within the set for this database */
 } MultiDbInfo;
 
 
