@@ -1727,6 +1727,19 @@ copydb_copy_worker_queue_tables_multidb(CopyDataSpec *parentSpecs)
 		strlcpy(sdb.dbfile, info->topdir, sizeof(sdb.dbfile));
 		strlcat(sdb.dbfile, "/schema/source.db", sizeof(sdb.dbfile));
 
+		/*
+		 * Reuse the pre-created shared semaphore so catalog_create_semaphore
+		 * does not allocate a new System V semaphore in this child process.
+		 * The system_res_array has a fixed capacity (SYSV_RES_MAX_COUNT) and
+		 * child processes inherit the parent's full count — creating per-db
+		 * semaphores here exhausts that capacity.
+		 */
+		if (info->catalogSemId != 0)
+		{
+			sdb.sema.semId = info->catalogSemId;
+			sdb.sema.reentrant = true;
+		}
+
 		if (!catalog_open(&sdb))
 		{
 			log_error("Failed to open source catalog for database \"%s\"",

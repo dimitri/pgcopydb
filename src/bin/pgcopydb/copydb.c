@@ -107,7 +107,7 @@ copydb_init_workdir(CopyDataSpec *copySpecs,
 		return false;
 	}
 
-	log_info("Using work dir \"%s\"", cfPaths->topdir);
+	log_debug("Using work dir \"%s\"", cfPaths->topdir);
 
 	/*
 	 * Some inspection commands piggy-back on the work directory that has been
