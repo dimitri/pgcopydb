@@ -45,17 +45,18 @@ pgcopydb clone --all-databases \
          --target "${PGCOPYDB_TARGET_PGURI}"
 
 #
-# Verify each database: schema and data must match.
-# Point --dir at the per-database work directory created by --all-databases.
+# Verify all databases at once using --all-databases.
+# Point --source/--target at the instance URIs (same as used for clone).
+# --dir is the top-level work directory so compare can find the per-db catalogs.
 #
-for db in pagila f1db chinook; do
-    pgcopydb compare schema \
-             --source "postgres://postgres@source/${db}" \
-             --target "postgres://postgres@target/${db}" \
-             --dir "/tmp/pgcopydb/db/${db}"
+pgcopydb compare schema \
+         --all-databases \
+         --source "${PGCOPYDB_SOURCE_PGURI}" \
+         --target "${PGCOPYDB_TARGET_PGURI}" \
+         --dir "/tmp/pgcopydb"
 
-    pgcopydb compare data \
-             --source "postgres://postgres@source/${db}" \
-             --target "postgres://postgres@target/${db}" \
-             --dir "/tmp/pgcopydb/db/${db}"
-done
+pgcopydb compare data \
+         --all-databases \
+         --source "${PGCOPYDB_SOURCE_PGURI}" \
+         --target "${PGCOPYDB_TARGET_PGURI}" \
+         --dir "/tmp/pgcopydb"

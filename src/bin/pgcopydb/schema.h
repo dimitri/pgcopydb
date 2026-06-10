@@ -28,6 +28,7 @@ typedef struct SourceDatabase
 	char datname[PG_NAMEDATALEN];
 	int64_t bytes;
 	char bytesPretty[PG_NAMEDATALEN]; /* pg_size_pretty */
+	char snapshot[BUFSIZE];           /* exported snapshot ID, or "" */
 } SourceDatabase;
 
 

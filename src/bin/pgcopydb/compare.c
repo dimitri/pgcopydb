@@ -13,7 +13,9 @@
 #include "env_utils.h"
 #include "lock_utils.h"
 #include "log.h"
+#include "multi_db.h"
 #include "progress.h"
+#include "schema.h"
 #include "signals.h"
 #include "summary.h"
 
@@ -1028,4 +1030,388 @@ compare_fetch_schemas(CopyDataSpec *copySpecs,
 	}
 
 	return true;
+}
+
+
+/*
+ * compare_all_databases_schema iterates all user databases on the source
+ * instance and runs compare_schemas for each one.
+ *
+ * parentSpecs must have instance-level source/target URIs.
+ */
+bool
+compare_all_databases_schema(CopyDataSpec *parentSpecs)
+{
+	/* initialise the instance-level catalog to get the database list */
+	if (!catalog_init_from_specs(parentSpecs))
+	{
+		log_error("Failed to initialise instance catalog for --all-databases compare");
+		return false;
+	}
+
+	DatabaseCatalog *instanceCatalog = &(parentSpecs->catalogs.source);
+
+	PGSQL src = { 0 };
+
+	if (!pgsql_init(&src, parentSpecs->connStrings.source_pguri, PGSQL_CONN_SOURCE))
+	{
+		log_error("Failed to connect to source instance for --all-databases compare");
+		(void) catalog_close_from_specs(parentSpecs);
+		return false;
+	}
+
+	if (!schema_list_databases(&src, instanceCatalog))
+	{
+		log_error("Failed to list databases for --all-databases compare schema");
+		pgsql_finish(&src);
+		(void) catalog_close_from_specs(parentSpecs);
+		return false;
+	}
+
+	pgsql_finish(&src);
+
+	bool ok = true;
+
+	SourceDatabaseIterator dbIter = {
+		.catalog = instanceCatalog,
+		.dat = NULL
+	};
+
+	if (!catalog_iter_s_database_init(&dbIter))
+	{
+		(void) catalog_close_from_specs(parentSpecs);
+		return false;
+	}
+
+	for (;;)
+	{
+		if (!catalog_iter_s_database_next(&dbIter))
+		{
+			ok = false;
+			break;
+		}
+
+		SourceDatabase *db = dbIter.dat;
+
+		if (db == NULL)
+			break;
+
+		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		{
+			ok = false;
+			break;
+		}
+
+		log_info("Comparing schema for database \"%s\"", db->datname);
+
+		/* build per-database URIs */
+		char *srcuri = NULL;
+		char *tgturi = NULL;
+
+		if (!multidb_build_uri_for_database(parentSpecs->connStrings.source_pguri,
+											 db->datname, &srcuri) ||
+			!multidb_build_uri_for_database(parentSpecs->connStrings.target_pguri,
+											 db->datname, &tgturi))
+		{
+			log_error("Failed to build URIs for database \"%s\"", db->datname);
+			free(srcuri);
+			free(tgturi);
+			ok = false;
+			if (parentSpecs->failFast)
+				break;
+			continue;
+		}
+
+		/* create per-db work directory */
+		char dbdir[MAXPGPATH] = { 0 };
+
+		sformat(dbdir, sizeof(dbdir), "%s/db/%s",
+				parentSpecs->cfPaths.topdir, db->datname);
+
+		CopyDataSpec dbSpecs = *parentSpecs;
+
+		/*
+		 * The parent catalog is currently open (db handle != NULL).
+		 * Null out all inherited SQLite handles so that catalog_init
+		 * inside compare_schemas opens fresh connections to the per-db
+		 * catalog files rather than reusing the instance-level handle
+		 * (which would cause a setup URI mismatch).
+		 */
+		dbSpecs.catalogs.source.db = NULL;
+		dbSpecs.catalogs.filter.db = NULL;
+		dbSpecs.catalogs.target.db = NULL;
+		dbSpecs.catalogs.replay.db = NULL;
+
+		dbSpecs.connStrings.source_pguri = srcuri;
+		dbSpecs.connStrings.target_pguri = tgturi;
+
+		if (!parse_and_scrub_connection_string(srcuri,
+											   &dbSpecs.connStrings.safeSourcePGURI))
+		{
+			log_error("Failed to scrub source URI for database \"%s\"",
+					  db->datname);
+			free(srcuri);
+			free(tgturi);
+			ok = false;
+			if (parentSpecs->failFast)
+				break;
+			continue;
+		}
+
+		if (!parse_and_scrub_connection_string(tgturi,
+											   &dbSpecs.connStrings.safeTargetPGURI))
+		{
+			log_error("Failed to scrub target URI for database \"%s\"",
+					  db->datname);
+			free(srcuri);
+			free(tgturi);
+			if (dbSpecs.connStrings.safeSourcePGURI.pguri)
+				free(dbSpecs.connStrings.safeSourcePGURI.pguri);
+			ok = false;
+			if (parentSpecs->failFast)
+				break;
+			continue;
+		}
+
+		if (!copydb_init_workdir(&dbSpecs, dbdir,
+								 false,  /* service */
+								 NULL,   /* serviceName */
+								 parentSpecs->restart,
+								 parentSpecs->resume,
+								 true))  /* createWorkDir */
+		{
+			log_error("Failed to init work dir for database \"%s\"",
+					  db->datname);
+			free(srcuri);
+			free(tgturi);
+			if (dbSpecs.connStrings.safeSourcePGURI.pguri)
+				free(dbSpecs.connStrings.safeSourcePGURI.pguri);
+			if (dbSpecs.connStrings.safeTargetPGURI.pguri)
+				free(dbSpecs.connStrings.safeTargetPGURI.pguri);
+			ok = false;
+			if (parentSpecs->failFast)
+				break;
+			continue;
+		}
+
+		if (!compare_schemas(&dbSpecs))
+		{
+			log_error("Schema comparison failed for database \"%s\"",
+					  db->datname);
+			ok = false;
+		}
+		else
+		{
+			log_info("Schema comparison succeeded for database \"%s\"",
+					 db->datname);
+		}
+
+		free(srcuri);
+		free(tgturi);
+		if (dbSpecs.connStrings.safeSourcePGURI.pguri)
+			free(dbSpecs.connStrings.safeSourcePGURI.pguri);
+		if (dbSpecs.connStrings.safeTargetPGURI.pguri)
+			free(dbSpecs.connStrings.safeTargetPGURI.pguri);
+
+		if (!ok && parentSpecs->failFast)
+			break;
+	}
+
+	(void) catalog_iter_s_database_finish(&dbIter);
+	(void) catalog_close_from_specs(parentSpecs);
+
+	return ok;
+}
+
+
+/*
+ * compare_all_databases_data iterates all user databases on the source
+ * instance, computes checksums for all tables, and prints a summary.
+ *
+ * Table names in the text output are formatted as datname.nspname.relname.
+ */
+bool
+compare_all_databases_data(CopyDataSpec *parentSpecs)
+{
+	/* initialise the instance-level catalog to get the database list */
+	if (!catalog_init_from_specs(parentSpecs))
+	{
+		log_error("Failed to initialise instance catalog for --all-databases compare");
+		return false;
+	}
+
+	DatabaseCatalog *instanceCatalog = &(parentSpecs->catalogs.source);
+
+	PGSQL src = { 0 };
+
+	if (!pgsql_init(&src, parentSpecs->connStrings.source_pguri, PGSQL_CONN_SOURCE))
+	{
+		log_error("Failed to connect to source instance for --all-databases compare");
+		(void) catalog_close_from_specs(parentSpecs);
+		return false;
+	}
+
+	if (!schema_list_databases(&src, instanceCatalog))
+	{
+		log_error("Failed to list databases for --all-databases compare data");
+		pgsql_finish(&src);
+		(void) catalog_close_from_specs(parentSpecs);
+		return false;
+	}
+
+	pgsql_finish(&src);
+
+	bool ok = true;
+
+	SourceDatabaseIterator dbIter = {
+		.catalog = instanceCatalog,
+		.dat = NULL
+	};
+
+	if (!catalog_iter_s_database_init(&dbIter))
+	{
+		(void) catalog_close_from_specs(parentSpecs);
+		return false;
+	}
+
+	for (;;)
+	{
+		if (!catalog_iter_s_database_next(&dbIter))
+		{
+			ok = false;
+			break;
+		}
+
+		SourceDatabase *db = dbIter.dat;
+
+		if (db == NULL)
+			break;
+
+		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		{
+			ok = false;
+			break;
+		}
+
+		log_info("Comparing data for database \"%s\"", db->datname);
+
+		char *srcuri = NULL;
+		char *tgturi = NULL;
+
+		if (!multidb_build_uri_for_database(parentSpecs->connStrings.source_pguri,
+											 db->datname, &srcuri) ||
+			!multidb_build_uri_for_database(parentSpecs->connStrings.target_pguri,
+											 db->datname, &tgturi))
+		{
+			log_error("Failed to build URIs for database \"%s\"", db->datname);
+			free(srcuri);
+			free(tgturi);
+			ok = false;
+			if (parentSpecs->failFast)
+				break;
+			continue;
+		}
+
+		char dbdir[MAXPGPATH] = { 0 };
+
+		sformat(dbdir, sizeof(dbdir), "%s/db/%s",
+				parentSpecs->cfPaths.topdir, db->datname);
+
+		CopyDataSpec dbSpecs = *parentSpecs;
+
+		/*
+		 * Null out inherited SQLite handles so that catalog_init inside
+		 * compare_data opens fresh connections to per-db catalog files.
+		 */
+		dbSpecs.catalogs.source.db = NULL;
+		dbSpecs.catalogs.filter.db = NULL;
+		dbSpecs.catalogs.target.db = NULL;
+		dbSpecs.catalogs.replay.db = NULL;
+
+		dbSpecs.connStrings.source_pguri = srcuri;
+		dbSpecs.connStrings.target_pguri = tgturi;
+		strlcpy(dbSpecs.datname, db->datname, sizeof(dbSpecs.datname));
+
+		if (!parse_and_scrub_connection_string(srcuri,
+											   &dbSpecs.connStrings.safeSourcePGURI))
+		{
+			log_error("Failed to scrub source URI for database \"%s\"",
+					  db->datname);
+			free(srcuri);
+			free(tgturi);
+			ok = false;
+			if (parentSpecs->failFast)
+				break;
+			continue;
+		}
+
+		if (!parse_and_scrub_connection_string(tgturi,
+											   &dbSpecs.connStrings.safeTargetPGURI))
+		{
+			log_error("Failed to scrub target URI for database \"%s\"",
+					  db->datname);
+			free(srcuri);
+			free(tgturi);
+			if (dbSpecs.connStrings.safeSourcePGURI.pguri)
+				free(dbSpecs.connStrings.safeSourcePGURI.pguri);
+			ok = false;
+			if (parentSpecs->failFast)
+				break;
+			continue;
+		}
+
+		if (!copydb_init_workdir(&dbSpecs, dbdir,
+								 false, NULL,
+								 parentSpecs->restart,
+								 parentSpecs->resume,
+								 true))
+		{
+			log_error("Failed to init work dir for database \"%s\"",
+					  db->datname);
+			free(srcuri);
+			free(tgturi);
+			if (dbSpecs.connStrings.safeSourcePGURI.pguri)
+				free(dbSpecs.connStrings.safeSourcePGURI.pguri);
+			if (dbSpecs.connStrings.safeTargetPGURI.pguri)
+				free(dbSpecs.connStrings.safeTargetPGURI.pguri);
+			ok = false;
+			if (parentSpecs->failFast)
+				break;
+			continue;
+		}
+
+		/*
+		 * copydb_init_workdir updates cfPaths.{s,f,t}dbfile but not the
+		 * catalogs.*.dbfile fields. Sync them so that compare_data uses the
+		 * per-database catalog rather than the inherited instance-level path.
+		 */
+		strlcpy(dbSpecs.catalogs.source.dbfile, dbSpecs.cfPaths.sdbfile,
+				sizeof(dbSpecs.catalogs.source.dbfile));
+		strlcpy(dbSpecs.catalogs.filter.dbfile, dbSpecs.cfPaths.fdbfile,
+				sizeof(dbSpecs.catalogs.filter.dbfile));
+		strlcpy(dbSpecs.catalogs.target.dbfile, dbSpecs.cfPaths.tdbfile,
+				sizeof(dbSpecs.catalogs.target.dbfile));
+
+		if (!compare_data(&dbSpecs))
+		{
+			log_error("Data comparison failed for database \"%s\"",
+					  db->datname);
+			ok = false;
+		}
+
+		free(srcuri);
+		free(tgturi);
+		if (dbSpecs.connStrings.safeSourcePGURI.pguri)
+			free(dbSpecs.connStrings.safeSourcePGURI.pguri);
+		if (dbSpecs.connStrings.safeTargetPGURI.pguri)
+			free(dbSpecs.connStrings.safeTargetPGURI.pguri);
+
+		if (!ok && parentSpecs->failFast)
+			break;
+	}
+
+	(void) catalog_iter_s_database_finish(&dbIter);
+	(void) catalog_close_from_specs(parentSpecs);
+
+	return ok;
 }

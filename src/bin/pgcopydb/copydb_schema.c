@@ -759,14 +759,30 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 		return false;
 	}
 
-	log_info("Fetched information for %lld tables "
-			 "(including %lld tables split in %lld partitions total), "
-			 "with an estimated total of %s tuples and %s on-disk",
-			 (long long) stats.count,
-			 (long long) stats.countSplits,
-			 (long long) stats.countParts,
-			 stats.relTuplesPretty,
-			 stats.bytesPretty);
+	if (IS_EMPTY_STRING_BUFFER(specs->datname))
+	{
+		log_info("Fetched information for %lld tables "
+				 "(including %lld tables split in %lld partitions total), "
+				 "with an estimated total of %s tuples and %s on-disk",
+				 (long long) stats.count,
+				 (long long) stats.countSplits,
+				 (long long) stats.countParts,
+				 stats.relTuplesPretty,
+				 stats.bytesPretty);
+	}
+	else
+	{
+		log_info("Fetched information for %lld tables "
+				 "(including %lld tables split in %lld partitions total), "
+				 "with an estimated total of %s tuples and %s on-disk, "
+				 "in database \"%s\"",
+				 (long long) stats.count,
+				 (long long) stats.countSplits,
+				 (long long) stats.countParts,
+				 stats.relTuplesPretty,
+				 stats.bytesPretty,
+				 specs->datname);
+	}
 
 	return true;
 }
@@ -966,9 +982,21 @@ copydb_prepare_index_specs(CopyDataSpec *specs, PGSQL *pgsql)
 		return false;
 	}
 
-	log_info("Fetched information for %lld indexes (supporting %lld constraints)",
-			 (long long) count.indexes,
-			 (long long) count.constraints);
+	if (IS_EMPTY_STRING_BUFFER(specs->datname))
+	{
+		log_info("Fetched information for %lld indexes "
+				 "(supporting %lld constraints)",
+				 (long long) count.indexes,
+				 (long long) count.constraints);
+	}
+	else
+	{
+		log_info("Fetched information for %lld indexes "
+				 "(supporting %lld constraints) in database \"%s\"",
+				 (long long) count.indexes,
+				 (long long) count.constraints,
+				 specs->datname);
+	}
 
 	return true;
 }
@@ -1177,8 +1205,18 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 			return false;
 		}
 
-		log_info("Fetched information for %lld extensions",
-				 (long long) count.extensions);
+		if (IS_EMPTY_STRING_BUFFER(specs->datname))
+		{
+			log_info("Fetched information for %lld extensions",
+					 (long long) count.extensions);
+		}
+		else
+		{
+			log_info("Fetched information for %lld extensions "
+					 "in database \"%s\"",
+					 (long long) count.extensions,
+					 specs->datname);
+		}
 	}
 
 	if (specs->skipCollations &&
@@ -1213,8 +1251,18 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 			return false;
 		}
 
-		log_info("Fetched information for %lld collations",
-				 (long long) count.colls);
+		if (IS_EMPTY_STRING_BUFFER(specs->datname))
+		{
+			log_info("Fetched information for %lld collations",
+					 (long long) count.colls);
+		}
+		else
+		{
+			log_info("Fetched information for %lld collations "
+					 "in database \"%s\"",
+					 (long long) count.colls,
+					 specs->datname);
+		}
 	}
 
 	/*

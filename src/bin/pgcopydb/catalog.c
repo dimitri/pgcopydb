@@ -60,7 +60,8 @@ static char *sourceDBcreateDDLs[] = {
 	")",
 
 	"create table s_database("
-	"  oid integer primary key, datname text, bytes integer, bytes_pretty text"
+	"  oid integer primary key, datname text, bytes integer, bytes_pretty text,"
+	"  snapshot text"
 	")",
 
 	"create table s_database_property("
@@ -704,6 +705,7 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 	/*
 	 * Now see if the catalog already have been setup.
 	 */
+
 	if (!catalog_setup(sourceDB))
 	{
 		/* errors have already been logged */
@@ -1486,6 +1488,19 @@ catalog_setup(DatabaseCatalog *catalog)
 		log_error("BUG: catalog_setup: db is NULL");
 		return false;
 	}
+
+	/*
+	 * Reset the setup struct before querying so that stale values inherited
+	 * from a parent CopyDataSpec (via struct copy) do not persist when the
+	 * catalog is fresh and the setup table has no rows.
+	 */
+	catalog->setup.id = 0;
+	catalog->setup.source_pguri = NULL;
+	catalog->setup.target_pguri = NULL;
+	catalog->setup.snapshot[0] = '\0';
+	catalog->setup.filters = NULL;
+	catalog->setup.splitTablesLargerThanBytes = 0;
+	catalog->setup.splitMaxParts = 0;
 
 	SQLiteQuery query = {
 		.context = &(catalog->setup),
@@ -6034,7 +6049,7 @@ catalog_iter_s_database_init(SourceDatabaseIterator *iter)
 	}
 
 	char *sql =
-		"  select oid, datname, bytes, bytes_pretty"
+		"  select oid, datname, bytes, bytes_pretty, coalesce(snapshot, '')"
 		"    from s_database "
 		"order by datname";
 
@@ -6105,6 +6120,62 @@ catalog_s_database_fetch(SQLiteQuery *query)
 	strlcpy(dat->bytesPretty,
 			(char *) sqlite3_column_text(query->ppStmt, 3),
 			sizeof(dat->bytesPretty));
+
+	strlcpy(dat->snapshot,
+			(char *) sqlite3_column_text(query->ppStmt, 4),
+			sizeof(dat->snapshot));
+
+	return true;
+}
+
+
+/*
+ * catalog_update_s_database_snapshot stores the exported snapshot identifier
+ * for a given database in the instance catalog.  Called by the snapshot holder
+ * subprocess after it has exported a per-database REPEATABLE READ snapshot.
+ */
+bool
+catalog_update_s_database_snapshot(DatabaseCatalog *catalog,
+									const char *datname,
+									const char *snapshot)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_update_s_database_snapshot: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"update s_database set snapshot = $1 where datname = $2";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_TEXT, "snapshot", 0, (char *) snapshot },
+		{ BIND_PARAMETER_TYPE_TEXT, "datname", 0, (char *) datname }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	return true;
 }

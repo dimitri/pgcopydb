@@ -12,8 +12,10 @@
  *                           pg_restore --post-data, set sequences
  */
 
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <sys/wait.h>
 
 #include "catalog.h"
@@ -36,32 +38,37 @@ static bool multidb_target_database_exists(PGSQL *dst, const char *datname,
 										   bool *exists);
 static bool multidb_create_target_database(PGSQL *dst, const char *datname,
 										   bool dropIfExists);
-static bool multidb_build_uri_for_database(const char *pguri,
-										   const char *datname,
-										   char **result_uri);
+bool multidb_build_uri_for_database(const char *pguri,
+									const char *datname,
+									char **result_uri);
 static bool multidb_build_conn_strings(ConnStrings *parent,
 									   const char *datname,
 									   ConnStrings *dbConnStrings);
 static bool multidb_init_db_specs(CopyDataSpec *dbSpecs,
 								  CopyDataSpec *parent,
 								  ConnStrings *connStrings);
-static bool multidb_setup_one_database(CopyDataSpec *parentSpecs,
-									   SourceDatabase *db,
-									   CopyDataSpec *dbSpecs,
-									   ConnStrings *dbConnStrings,
-									   MultiDbInfo *info);
 
-/* Phase I: parallel pre-data (schema fetch + pg_dump + pg_restore --pre-data) */
+/*
+ * Phase I: snapshot holder + parallel pre-data workers.
+ *
+ * The snapshot holder is a long-lived direct child of clone_all_databases.
+ * It exports one REPEATABLE READ snapshot per database, writes the snapshot
+ * IDs into the instance catalog, enqueues DBNAME messages, and then waits
+ * until the parent signals it is done (by closing the write end of donepipe).
+ *
+ * Pre-data workers are forked by the supervisor (after the snapshot holder
+ * has signalled "ready").  They import the held snapshot via SET TRANSACTION
+ * SNAPSHOT to do consistent schema fetch + pg_dump + pg_restore --pre-data.
+ */
+static bool multidb_snapshot_holder(CopyDataSpec *parentSpecs,
+									 int readyfd, int donefd);
 static bool multidb_pre_data_supervisor(CopyDataSpec *parentSpecs);
-static bool multidb_pre_data_queue_filler(CopyDataSpec *parentSpecs);
 static bool multidb_pre_data_worker(CopyDataSpec *parentSpecs);
 static bool multidb_pre_data_one_db(CopyDataSpec *parentSpecs,
 									const char *datname);
 
 static bool multidb_clone_one_database_post_data(CopyDataSpec *parentSpecs,
-												  SourceDatabase *db,
-												  CopyDataSpec *dbSpecs,
-												  ConnStrings *dbConnStrings);
+												  const char *datname);
 static bool multidb_global_copy(CopyDataSpec *parentSpecs);
 static bool multidb_wait_child(pid_t pid, const char *label);
 
@@ -75,9 +82,24 @@ static bool multidb_init_entry(MultiDbEntry *entry,
  * clone_all_databases clones all user databases from a source Postgres
  * instance in three phases:
  *
- *  Phase I  — per-database pre-data (sequential subprocesses)
+ *  Phase I  — per-database pre-data (parallel, bounded by --table-jobs)
  *  Phase II — global COPY with shared worker pool sorted by table size
  *  Phase III — per-database post-data (sequential subprocesses)
+ *
+ * Snapshot design
+ * ---------------
+ * A long-lived "snapshot holder" subprocess is forked as a direct child.
+ * It connects to each per-database source URI, exports a REPEATABLE READ
+ * snapshot, writes the snapshot ID into the instance catalog, enqueues
+ * DBNAME messages for Phase I workers, and then blocks on a "done" pipe.
+ *
+ * After the holder signals "ready" (via readypipe), the parent re-reads the
+ * instance catalog to build multiDbInfos[] with snapshot IDs, then forks
+ * the Phase I supervisor.  Phase I and II workers import those snapshots
+ * using SET TRANSACTION SNAPSHOT — the holder's transactions are still live.
+ *
+ * After Phase III the parent closes the write end of donepipe; the holder
+ * gets EOF, commits all snapshot transactions, and exits.
  */
 bool
 clone_all_databases(CopyDataSpec *parentSpecs)
@@ -99,7 +121,8 @@ clone_all_databases(CopyDataSpec *parentSpecs)
 	}
 
 	/*
-	 * Initialise the top-level source catalog (stores the database list).
+	 * Initialise the instance-level catalog schema on disk.  The snapshot
+	 * holder subprocess will write the database list and snapshot IDs into it.
 	 */
 	if (!catalog_init_from_specs(parentSpecs))
 	{
@@ -107,27 +130,7 @@ clone_all_databases(CopyDataSpec *parentSpecs)
 		return false;
 	}
 
-	/* connect to the source instance and populate the database list */
-	PGSQL src = { 0 };
-
-	if (!pgsql_init(&src, parentSpecs->connStrings.source_pguri, PGSQL_CONN_SOURCE))
-	{
-		log_error("Failed to initialise source connection");
-		return false;
-	}
-
-	DatabaseCatalog *instanceCatalog = &(parentSpecs->catalogs.source);
-
-	if (!schema_list_databases(&src, instanceCatalog))
-	{
-		log_error("Failed to list databases on the source instance");
-		pgsql_finish(&src);
-		return false;
-	}
-
-	pgsql_finish(&src);
-
-	/* copy instance-level roles once */
+	/* copy instance-level roles first (single connection to instance) */
 	log_info("Copying instance-level roles");
 
 	if (!pg_copy_roles(&parentSpecs->pgPaths,
@@ -136,163 +139,258 @@ clone_all_databases(CopyDataSpec *parentSpecs)
 					   parentSpecs->noRolesPasswords))
 	{
 		log_error("Failed to copy roles from source instance");
+		(void) catalog_close_from_specs(parentSpecs);
 		return false;
 	}
 
 	/*
-	 * Count databases so we can allocate arrays.
+	 * Close the catalog before forking: the snapshot holder subprocess will
+	 * be the sole writer; we re-open read-only after it signals "ready".
 	 */
-	CatalogCounts counts = { 0 };
-
-	if (!catalog_count_objects(instanceCatalog, &counts))
+	if (!catalog_close_from_specs(parentSpecs))
 	{
-		log_error("Failed to count objects in the instance catalog");
+		log_error("Failed to close instance catalog before forking");
 		return false;
 	}
 
-	int maxDbs = (int) counts.databases;
-
-	if (maxDbs == 0)
+	/*
+	 * Create the Phase I queue before forking the snapshot holder so that the
+	 * holder inherits the qId via COW and can send DBNAME messages directly.
+	 */
+	if (!queue_create(&parentSpecs->preDataQueue, "pre-data"))
 	{
-		log_info("No databases found on the source instance");
-		(void) catalog_close_from_specs(parentSpecs);
-		return true;
-	}
-
-	/* allocate per-database arrays */
-	SourceDatabase *dbArray =
-		(SourceDatabase *) calloc(maxDbs, sizeof(SourceDatabase));
-	CopyDataSpec *dbSpecsArray =
-		(CopyDataSpec *) calloc(maxDbs, sizeof(CopyDataSpec));
-	ConnStrings *dbConnStringsArray =
-		(ConnStrings *) calloc(maxDbs, sizeof(ConnStrings));
-	MultiDbInfo *multiDbInfos =
-		(MultiDbInfo *) calloc(maxDbs, sizeof(MultiDbInfo));
-
-	if (dbArray == NULL || dbSpecsArray == NULL ||
-		dbConnStringsArray == NULL || multiDbInfos == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
+		log_error("Failed to create the pre-data process queue");
 		return false;
 	}
 
-	/* open a connection to the target instance for CREATE DATABASE */
-	PGSQL dst = { 0 };
+	/*
+	 * Two pipes coordinate the snapshot holder with the parent.
+	 *
+	 *  readypipe  — holder writes one byte after all snapshots are exported
+	 *               and all snapshot IDs are in the catalog.  Parent blocks
+	 *               here until the holder is ready.
+	 *
+	 *  donepipe   — parent holds the write end open throughout Phase I, II,
+	 *               and III.  Closing it sends EOF to the holder, which then
+	 *               commits all snapshot transactions and exits.
+	 *
+	 * FD_CLOEXEC prevents the pipe descriptors from being inherited by
+	 * exec'd children (pg_dump, pg_restore).
+	 */
+	int readypipe[2] = { -1, -1 };
+	int donepipe[2]  = { -1, -1 };
 
-	if (!pgsql_init(&dst, parentSpecs->connStrings.target_pguri, PGSQL_CONN_TARGET))
+	if (pipe(readypipe) < 0 || pipe(donepipe) < 0)
 	{
-		log_error("Failed to initialise target connection");
+		log_error("Failed to create synchronisation pipes: %m");
+		(void) queue_unlink(&parentSpecs->preDataQueue);
 		return false;
 	}
 
+	for (int i = 0; i < 2; i++)
+	{
+		(void) fcntl(readypipe[i], F_SETFD, FD_CLOEXEC);
+		(void) fcntl(donepipe[i],  F_SETFD, FD_CLOEXEC);
+	}
+
+	fflush(stdout);
+	fflush(stderr);
+
+	pid_t holderPid = fork();
+
+	switch (holderPid)
+	{
+		case -1:
+		{
+			log_error("Failed to fork snapshot holder: %m");
+			close(readypipe[0]); close(readypipe[1]);
+			close(donepipe[0]);  close(donepipe[1]);
+			(void) queue_unlink(&parentSpecs->preDataQueue);
+			return false;
+		}
+
+		case 0:
+		{
+			/* ====== snapshot holder subprocess ====== */
+			close(readypipe[0]);  /* not reading from ready pipe */
+			close(donepipe[1]);   /* not writing to done pipe */
+			(void) set_ps_title("pgcopydb: snapshot holder");
+
+			bool res = multidb_snapshot_holder(parentSpecs,
+											   readypipe[1],
+											   donepipe[0]);
+			exit(res ? EXIT_CODE_QUIT : EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		default:
+			break;
+	}
+
+	/* parent: close pipe ends not needed here */
+	close(readypipe[1]);
+	close(donepipe[0]);
+
+	/*
+	 * Block until the snapshot holder has exported all per-database snapshots,
+	 * written their IDs to the instance catalog, and enqueued the DBNAME
+	 * messages.  Only then can we safely re-read the catalog.
+	 */
+	{
+		char ready = 0;
+		ssize_t n = read(readypipe[0], &ready, 1);
+
+		close(readypipe[0]);
+
+		if (n <= 0)
+		{
+			log_error("Snapshot holder failed to signal ready (read=%zd): %m", n);
+			(void) multidb_wait_child(holderPid, "snapshot holder");
+			close(donepipe[1]);
+			(void) queue_unlink(&parentSpecs->preDataQueue);
+			return false;
+		}
+
+		log_debug("Received ready signal from snapshot holder");
+	}
+
+	/*
+	 * Re-open the instance catalog — the snapshot holder has populated it with
+	 * the database list and per-database snapshot IDs.  Build multiDbInfos[].
+	 */
 	bool ok = true;
+	MultiDbInfo *multiDbInfos = NULL;
 	int dbCount = 0;
 
-	SourceDatabaseIterator dbIter = {
-		.catalog = instanceCatalog,
-		.dat = NULL
-	};
-
-	if (!catalog_iter_s_database_init(&dbIter))
+	if (!catalog_init_from_specs(parentSpecs))
 	{
-		pgsql_finish(&dst);
+		log_error("Failed to re-open instance catalog after snapshot holder ready");
 		ok = false;
-		goto cleanup_arrays;
+		goto signal_done;
 	}
 
-	for (;;)
 	{
-		if (!catalog_iter_s_database_next(&dbIter))
+		DatabaseCatalog *instanceCatalog = &(parentSpecs->catalogs.source);
+		CatalogCounts counts = { 0 };
+
+		if (!catalog_count_objects(instanceCatalog, &counts))
 		{
+			log_error("Failed to count databases in instance catalog");
+			(void) catalog_close_from_specs(parentSpecs);
 			ok = false;
-			break;
+			goto signal_done;
 		}
 
-		SourceDatabase *db = dbIter.dat;
+		int maxDbs = (int) counts.databases;
 
-		if (db == NULL)
-			break;        /* end of results */
-
-		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+		if (maxDbs == 0)
 		{
-			log_info("Stopping --all-databases setup due to signal");
-			ok = false;
-			break;
+			log_info("No databases found on the source instance");
+			(void) catalog_close_from_specs(parentSpecs);
+			goto signal_done;
 		}
 
-		if (multidb_is_system_database(db->datname))
+		multiDbInfos = (MultiDbInfo *) calloc(maxDbs, sizeof(MultiDbInfo));
+
+		if (multiDbInfos == NULL)
 		{
-			log_debug("Skipping system database \"%s\"", db->datname);
-			continue;
+			log_error(ALLOCATION_FAILED_ERROR);
+			(void) catalog_close_from_specs(parentSpecs);
+			ok = false;
+			goto signal_done;
 		}
 
-		if (dbCount >= maxDbs)
+		SourceDatabaseIterator dbIter = {
+			.catalog = instanceCatalog,
+			.dat = NULL
+		};
+
+		if (!catalog_iter_s_database_init(&dbIter))
 		{
-			log_error("More databases than expected (%d), internal error",
-					  maxDbs);
+			(void) catalog_close_from_specs(parentSpecs);
 			ok = false;
-			break;
+			goto signal_done;
 		}
 
-		log_info("Found database \"%s\" (%s)", db->datname, db->bytesPretty);
-
-		/* copy db info into our array */
-		dbArray[dbCount] = *db;
-
-		/* create target database */
-		if (!multidb_create_target_database(&dst, db->datname,
-											parentSpecs->restoreOptions.dropIfExists))
+		for (;;)
 		{
-			log_error("Failed to create database \"%s\" on target", db->datname);
-			ok = false;
-			if (parentSpecs->failFast)
-				break;
-			else
+			if (!catalog_iter_s_database_next(&dbIter))
 			{
-				dbCount++;
+				ok = false;
+				break;
+			}
+
+			SourceDatabase *db = dbIter.dat;
+
+			if (db == NULL)
+				break;        /* end of results */
+
+			if (multidb_is_system_database(db->datname))
+			{
+				log_debug("Skipping system database \"%s\"", db->datname);
 				continue;
 			}
-		}
 
-		/* set up work dir and export snapshot for this database */
-		dbSpecsArray[dbCount].pgPaths = parentSpecs->pgPaths;
-
-		if (!multidb_setup_one_database(parentSpecs,
-										&dbArray[dbCount],
-										&dbSpecsArray[dbCount],
-										&dbConnStringsArray[dbCount],
-										&multiDbInfos[dbCount]))
-		{
-			log_error("Failed to setup database \"%s\"", db->datname);
-			ok = false;
-			if (parentSpecs->failFast)
+			if (dbCount >= maxDbs)
+			{
+				log_error("More databases than expected (%d), internal error",
+						  maxDbs);
+				ok = false;
 				break;
+			}
+
+			log_info("Found database \"%s\" (%s) snapshot \"%s\"",
+					 db->datname, db->bytesPretty, db->snapshot);
+
+			MultiDbInfo *info = &multiDbInfos[dbCount++];
+
+			strlcpy(info->datname, db->datname, sizeof(info->datname));
+			strlcpy(info->snapshot, db->snapshot, sizeof(info->snapshot));
+
+			sformat(info->topdir, sizeof(info->topdir), "%s/db/%s",
+					parentSpecs->cfPaths.topdir, db->datname);
+
+			char *srcuri = NULL;
+			char *tgturi = NULL;
+
+			if (!multidb_build_uri_for_database(
+					parentSpecs->connStrings.source_pguri,
+					db->datname, &srcuri) ||
+				!multidb_build_uri_for_database(
+					parentSpecs->connStrings.target_pguri,
+					db->datname, &tgturi))
+			{
+				log_error("Failed to build URIs for database \"%s\"", db->datname);
+				free(srcuri);
+				free(tgturi);
+				ok = false;
+				break;
+			}
+
+			strlcpy(info->source_pguri, srcuri, sizeof(info->source_pguri));
+			strlcpy(info->target_pguri, tgturi, sizeof(info->target_pguri));
+			free(srcuri);
+			free(tgturi);
 		}
 
-		dbCount++;
+		if (!catalog_iter_s_database_finish(&dbIter))
+			ok = false;
+
+		(void) catalog_close_from_specs(parentSpecs);
 	}
 
-	if (!catalog_iter_s_database_finish(&dbIter))
-		ok = false;
-
-	pgsql_finish(&dst);
-
-	if (!ok)
-		goto cleanup_snapshots;
+	if (!ok || dbCount == 0)
+	{
+		if (ok && dbCount == 0)
+			log_warn("No user databases found after filtering");
+		goto signal_done;
+	}
 
 	/*
-	 * Store per-database info in parentSpecs so the global COPY workers (which
-	 * are forked after this point) can access it via the COW post-fork copy.
+	 * Publish the per-database info so that the Phase I and II supervisors
+	 * (forked below) can access it via the COW post-fork copy.
 	 */
 	parentSpecs->multiDbCount = dbCount;
 	parentSpecs->multiDbInfos = multiDbInfos;
-
-	/* close instance-level catalog before forking subprocesses */
-	if (!catalog_close_from_specs(parentSpecs))
-	{
-		ok = false;
-		goto cleanup_snapshots;
-	}
 
 	/* ====== PHASE I: PRE-DATA (parallel, bounded by --table-jobs) ====== */
 	log_info("Phase I: parallel schema fetch, dump, and pre-data restore "
@@ -311,12 +409,11 @@ clone_all_databases(CopyDataSpec *parentSpecs)
 			{
 				log_error("Failed to fork pre-data supervisor: %m");
 				ok = false;
-				goto cleanup_snapshots;
+				goto signal_done;
 			}
 
 			case 0:
 			{
-				/* pre-data supervisor process */
 				bool res = multidb_pre_data_supervisor(parentSpecs);
 				exit(res ? EXIT_CODE_QUIT : EXIT_CODE_INTERNAL_ERROR);
 			}
@@ -328,8 +425,19 @@ clone_all_databases(CopyDataSpec *parentSpecs)
 		if (!multidb_wait_child(prePid, "pre-data supervisor"))
 		{
 			ok = false;
-			goto cleanup_snapshots;
+			goto signal_done;
 		}
+
+		/*
+		 * The pre-data supervisor already called queue_unlink on
+		 * preDataQueue before it exited.  Mark it as unlinked in the
+		 * parent's system_res_array so that the atexit/signal cleanup
+		 * handler does not attempt a second IPC_RMID and log a
+		 * spurious "Invalid argument" error.
+		 */
+		(void) copydb_unlink_sysv_queue(&system_res_array,
+										&parentSpecs->preDataQueue);
+		parentSpecs->preDataQueue.qId = -1;
 	}
 
 	/* ====== PHASE II: GLOBAL COPY ====== */
@@ -340,7 +448,7 @@ clone_all_databases(CopyDataSpec *parentSpecs)
 	{
 		log_error("Global COPY phase failed");
 		ok = false;
-		goto cleanup_snapshots;
+		goto signal_done;
 	}
 
 	/* ====== PHASE III: POST-DATA (sequential per-database) ====== */
@@ -355,163 +463,319 @@ clone_all_databases(CopyDataSpec *parentSpecs)
 			break;
 		}
 
-		log_info("Post-data for database \"%s\"", dbArray[i].datname);
+		log_info("Post-data for database \"%s\"", multiDbInfos[i].datname);
 
 		if (!multidb_clone_one_database_post_data(parentSpecs,
-												  &dbArray[i],
-												  &dbSpecsArray[i],
-												  &dbConnStringsArray[i]))
+												  multiDbInfos[i].datname))
 		{
-			log_error("Post-data failed for database \"%s\"", dbArray[i].datname);
+			log_error("Post-data failed for database \"%s\"",
+					  multiDbInfos[i].datname);
 			ok = false;
 			if (parentSpecs->failFast)
 				break;
 		}
 	}
 
-cleanup_snapshots:
-	/* close all per-database snapshot connections held in the parent */
-	for (int i = 0; i < dbCount; i++)
-	{
-		if (dbSpecsArray[i].consistent &&
-			dbSpecsArray[i].sourceSnapshot.state == SNAPSHOT_STATE_EXPORTED)
-		{
-			if (!copydb_close_snapshot(&dbSpecsArray[i]))
-			{
-				log_warn("Failed to close snapshot for database \"%s\"",
-						 dbArray[i].datname);
-			}
-		}
+signal_done:
+	/*
+	 * Close the write end of donepipe, signalling the snapshot holder to commit
+	 * all its REPEATABLE READ transactions and exit.
+	 */
+	close(donepipe[1]);
 
-		/* free heap-allocated connection strings */
-		if (dbConnStringsArray[i].source_pguri)
-			free(dbConnStringsArray[i].source_pguri);
-		if (dbConnStringsArray[i].target_pguri)
-			free(dbConnStringsArray[i].target_pguri);
-		if (dbConnStringsArray[i].safeSourcePGURI.pguri)
-			free(dbConnStringsArray[i].safeSourcePGURI.pguri);
-		if (dbConnStringsArray[i].safeTargetPGURI.pguri)
-			free(dbConnStringsArray[i].safeTargetPGURI.pguri);
-	}
+	if (!multidb_wait_child(holderPid, "snapshot holder"))
+		ok = false;
 
 	parentSpecs->multiDbInfos = NULL;
 	parentSpecs->multiDbCount = 0;
 
-cleanup_arrays:
 	free(multiDbInfos);
-	free(dbConnStringsArray);
-	free(dbSpecsArray);
-	free(dbArray);
 
 	return ok;
 }
 
 
 /*
- * multidb_setup_one_database builds the per-database work directory, exports
- * a Postgres snapshot (held by the parent), and fills in info.
+ * multidb_snapshot_holder is a long-lived subprocess (direct child of
+ * clone_all_databases) that:
+ *
+ *  1. Opens the instance catalog and calls schema_list_databases().
+ *  2. For each user database, exports a per-database REPEATABLE READ snapshot
+ *     and writes the snapshot ID back to the instance catalog.
+ *  3. Sends one QMSG_TYPE_DBNAME message per database to parentSpecs->preDataQueue,
+ *     followed by tableJobs QMSG_TYPE_STOP messages.
+ *  4. Signals the parent by writing one byte to readyfd, then closes readyfd.
+ *  5. Blocks on donefd (EOF from parent) while holding all snapshot transactions
+ *     open so that Phase I and II workers can import them.
+ *  6. On EOF: commits all snapshot transactions and exits.
+ *
+ * Process tree context:
+ *   clone_all_databases
+ *   ├── snapshot holder  ← this function (long-lived)
+ *   ├── pre-data supervisor
+ *   └── global copy supervisor
  */
 static bool
-multidb_setup_one_database(CopyDataSpec *parentSpecs,
-						   SourceDatabase *db,
-						   CopyDataSpec *dbSpecs,
-						   ConnStrings *dbConnStrings,
-						   MultiDbInfo *info)
+multidb_snapshot_holder(CopyDataSpec *parentSpecs, int readyfd, int donefd)
 {
-	/* build per-db work directory path */
-	char dbdir[MAXPGPATH] = { 0 };
+	log_notice("Started snapshot holder %d [%d]", getpid(), getppid());
 
-	sformat(dbdir, sizeof(dbdir), "%s/db/%s",
-			parentSpecs->cfPaths.topdir, db->datname);
-
-	/* build per-db connection strings */
-	if (!multidb_build_conn_strings(&parentSpecs->connStrings, db->datname,
-									dbConnStrings))
+	/* open the instance catalog for writing */
+	if (!catalog_init_from_specs(parentSpecs))
 	{
-		log_error("Failed to build connection strings for database \"%s\"",
-				  db->datname);
+		log_error("Snapshot holder: failed to open instance catalog");
 		return false;
 	}
 
-	/*
-	 * Create the per-database work directory.  Must happen in the parent so
-	 * the directory exists before forking subprocesses.
-	 */
-	if (!copydb_init_workdir(dbSpecs, dbdir,
-							 false,     /* service */
-							 NULL,      /* serviceName */
-							 parentSpecs->restart,
-							 parentSpecs->resume,
-							 true))     /* createWorkDir */
+	DatabaseCatalog *instanceCatalog = &(parentSpecs->catalogs.source);
+
+	/* connect to source instance and list databases */
+	PGSQL src = { 0 };
+
+	if (!pgsql_init(&src, parentSpecs->connStrings.source_pguri,
+					PGSQL_CONN_SOURCE))
 	{
-		log_error("Failed to initialise work directory \"%s\" for database \"%s\"",
-				  dbdir, db->datname);
+		log_error("Snapshot holder: failed to connect to source instance");
+		(void) catalog_close_from_specs(parentSpecs);
 		return false;
 	}
 
-	/* wire up connection strings and snapshot fields */
-	dbSpecs->connStrings = *dbConnStrings;
-	dbSpecs->sourceSnapshot.pguri = dbSpecs->connStrings.source_pguri;
-	dbSpecs->sourceSnapshot.safeURI = dbSpecs->connStrings.safeSourcePGURI;
-	dbSpecs->sourceSnapshot.connectionType = PGSQL_CONN_SOURCE;
-	dbSpecs->consistent = parentSpecs->consistent;
+	if (!schema_list_databases(&src, instanceCatalog))
+	{
+		log_error("Snapshot holder: failed to list databases");
+		pgsql_finish(&src);
+		(void) catalog_close_from_specs(parentSpecs);
+		return false;
+	}
+
+	pgsql_finish(&src);
+
+	/* count non-system databases */
+	CatalogCounts counts = { 0 };
+
+	if (!catalog_count_objects(instanceCatalog, &counts))
+	{
+		log_error("Snapshot holder: failed to count databases");
+		(void) catalog_close_from_specs(parentSpecs);
+		return false;
+	}
+
+	int maxDbs = (int) counts.databases;
 
 	/*
-	 * Export a per-database snapshot in the parent.  The parent keeps this
-	 * connection open throughout Phase I and Phase II (global COPY) so that
-	 * COPY workers can import it via SET TRANSACTION SNAPSHOT.
+	 * Allocate per-database snapshot structs and source URI strings.
+	 * The snapshots stay open until the parent signals "done".
 	 */
-	if (dbSpecs->consistent)
+	TransactionSnapshot *snapshots =
+		(TransactionSnapshot *) calloc(maxDbs, sizeof(TransactionSnapshot));
+	char **sourceUris =
+		(char **) calloc(maxDbs, sizeof(char *));
+
+	if (snapshots == NULL || sourceUris == NULL)
 	{
-		if (!copydb_prepare_snapshot(dbSpecs))
+		log_error(ALLOCATION_FAILED_ERROR);
+		free(snapshots);
+		free(sourceUris);
+		(void) catalog_close_from_specs(parentSpecs);
+		return false;
+	}
+
+	bool ok = true;
+	int dbCount = 0;
+
+	SourceDatabaseIterator dbIter = {
+		.catalog = instanceCatalog,
+		.dat = NULL
+	};
+
+	if (!catalog_iter_s_database_init(&dbIter))
+	{
+		ok = false;
+		goto cleanup_snapshots;
+	}
+
+	for (;;)
+	{
+		if (!catalog_iter_s_database_next(&dbIter))
 		{
-			log_error("Failed to export snapshot for database \"%s\"",
+			ok = false;
+			break;
+		}
+
+		SourceDatabase *db = dbIter.dat;
+
+		if (db == NULL)
+			break;
+
+		if (multidb_is_system_database(db->datname))
+		{
+			log_debug("Snapshot holder: skipping system database \"%s\"",
 					  db->datname);
-			return false;
+			continue;
+		}
+
+		if (dbCount >= maxDbs)
+		{
+			log_error("Snapshot holder: more databases than expected (%d)",
+					  maxDbs);
+			ok = false;
+			break;
+		}
+
+		/* build per-database source URI */
+		if (!multidb_build_uri_for_database(
+				parentSpecs->connStrings.source_pguri,
+				db->datname, &sourceUris[dbCount]))
+		{
+			log_error("Snapshot holder: failed to build source URI "
+					  "for database \"%s\"", db->datname);
+			ok = false;
+			break;
+		}
+
+		/* export a REPEATABLE READ snapshot for this database */
+		TransactionSnapshot *snap = &snapshots[dbCount];
+
+		snap->pguri = sourceUris[dbCount];
+		snap->connectionType = PGSQL_CONN_SOURCE;
+
+		if (!copydb_export_snapshot(snap))
+		{
+			log_error("Snapshot holder: failed to export snapshot "
+					  "for database \"%s\"", db->datname);
+			ok = false;
+			break;
+		}
+
+		log_info("Snapshot holder: database \"%s\" snapshot \"%s\"",
+				 db->datname, snap->snapshot);
+
+		/* persist snapshot ID in the instance catalog */
+		if (!catalog_update_s_database_snapshot(instanceCatalog,
+												 db->datname,
+												 snap->snapshot))
+		{
+			log_error("Snapshot holder: failed to record snapshot "
+					  "for database \"%s\"", db->datname);
+			ok = false;
+			break;
+		}
+
+		/* send DBNAME message to Phase I queue */
+		QMessage mesg = { .type = QMSG_TYPE_DBNAME };
+		strlcpy(mesg.data.datname, db->datname, sizeof(mesg.data.datname));
+
+		if (!queue_send(&parentSpecs->preDataQueue, &mesg))
+		{
+			log_error("Snapshot holder: failed to enqueue database \"%s\"",
+					  db->datname);
+			ok = false;
+			break;
+		}
+
+		dbCount++;
+	}
+
+	if (!catalog_iter_s_database_finish(&dbIter))
+		ok = false;
+
+	(void) catalog_close_from_specs(parentSpecs);
+
+	if (!ok)
+		goto signal_ready;
+
+	/* send one STOP message per worker */
+	for (int i = 0; i < parentSpecs->tableJobs; i++)
+	{
+		QMessage stop = { .type = QMSG_TYPE_STOP };
+
+		if (!queue_send(&parentSpecs->preDataQueue, &stop))
+		{
+			log_error("Snapshot holder: failed to send STOP to pre-data queue");
+			ok = false;
+			break;
 		}
 	}
 
-	/* populate MultiDbInfo for workers */
-	strlcpy(info->datname, db->datname, sizeof(info->datname));
-	strlcpy(info->snapshot, dbSpecs->sourceSnapshot.snapshot,
-			sizeof(info->snapshot));
-	strlcpy(info->source_pguri, dbConnStrings->source_pguri,
-			sizeof(info->source_pguri));
-	strlcpy(info->target_pguri, dbConnStrings->target_pguri,
-			sizeof(info->target_pguri));
-	strlcpy(info->topdir, dbdir, sizeof(info->topdir));
-	info->isReadOnly = dbSpecs->sourceSnapshot.isReadOnly;
+	log_info("Snapshot holder: ready — %d databases, %d STOP messages",
+			 dbCount, parentSpecs->tableJobs);
 
-	return true;
+signal_ready:
+	/*
+	 * Signal the parent that the catalog is fully written and all DBNAME/STOP
+	 * messages are in the queue.  The parent will re-open the catalog, build
+	 * multiDbInfos[], and fork the Phase I supervisor.
+	 *
+	 * We signal ready even on failure so the parent does not block forever;
+	 * the parent detects the failure via the snapshot holder's exit status.
+	 */
+	{
+		char rdy = 'R';
+		(void) write(readyfd, &rdy, 1);
+		close(readyfd);
+	}
+
+	if (!ok)
+		goto cleanup_snapshots;
+
+	/*
+	 * Wait for the parent to close the write end of donepipe (after Phase III).
+	 * While we block here, Phase I and II workers use SET TRANSACTION SNAPSHOT
+	 * to import our held snapshots for consistent reads.
+	 */
+	{
+		char buf = 0;
+		(void) read(donefd, &buf, 1);  /* blocks until EOF */
+		close(donefd);
+	}
+
+	log_notice("Snapshot holder: received done signal, closing snapshots");
+
+cleanup_snapshots:
+	/* commit all held snapshot transactions */
+	for (int i = 0; i < dbCount; i++)
+	{
+		if (snapshots[i].state == SNAPSHOT_STATE_EXPORTED)
+		{
+			if (!pgsql_commit(&snapshots[i].pgsql))
+			{
+				log_warn("Snapshot holder: failed to commit snapshot "
+						 "for database %d", i);
+			}
+
+			pgsql_finish(&snapshots[i].pgsql);
+		}
+
+		free(sourceUris[i]);
+	}
+
+	free(snapshots);
+	free(sourceUris);
+
+	log_notice("Snapshot holder %d exiting", getpid());
+
+	return ok;
 }
 
 
 /*
  * multidb_pre_data_supervisor is the supervisor for Phase I.
  *
- * It runs inside a dedicated subprocess (forked by clone_all_databases).
- * The supervisor creates a preDataQueue, forks tableJobs workers, forks one
- * queue-filler child, then calls waitpid(-1) to collect all children.
+ * By the time this runs the snapshot holder has already filled preDataQueue
+ * with DBNAME and STOP messages, so the supervisor only needs to fork workers
+ * and wait for them.
  *
  * Process tree:
  *   clone_all_databases
  *   └── pre-data supervisor  (this function)
  *           ├── pre-data worker 1
- *           ├── pre-data worker N  (N = --table-jobs)
- *           └── pre-data queue filler  (sends database names, then STOPs)
+ *           └── pre-data worker N  (N = --table-jobs)
  */
 static bool
 multidb_pre_data_supervisor(CopyDataSpec *parentSpecs)
 {
 	(void) set_ps_title("pgcopydb: pre-data supervisor");
 	log_notice("Started pre-data supervisor %d [%d]", getpid(), getppid());
-
-	/* create the IPC queue for Phase I — workers inherit qId after fork */
-	if (!queue_create(&parentSpecs->preDataQueue, "pre-data"))
-	{
-		log_error("Failed to create the pre-data process queue");
-		return false;
-	}
 
 	/* fork tableJobs pre-data workers */
 	for (int i = 0; i < parentSpecs->tableJobs; i++)
@@ -542,35 +806,7 @@ multidb_pre_data_supervisor(CopyDataSpec *parentSpecs)
 		}
 	}
 
-	/* fork the queue filler (child of supervisor) */
-	{
-		fflush(stdout);
-		fflush(stderr);
-
-		pid_t qpid = fork();
-
-		switch (qpid)
-		{
-			case -1:
-			{
-				log_error("Failed to fork pre-data queue filler: %m");
-				(void) copydb_fatal_exit();
-				exit(EXIT_CODE_INTERNAL_ERROR);
-			}
-
-			case 0:
-			{
-				(void) set_ps_title("pgcopydb: pre-data queue databases");
-				bool ok = multidb_pre_data_queue_filler(parentSpecs);
-				exit(ok ? EXIT_CODE_QUIT : EXIT_CODE_INTERNAL_ERROR);
-			}
-
-			default:
-				break;
-		}
-	}
-
-	/* supervisor waits for all children: workers + queue filler */
+	/* supervisor waits for all workers to drain the queue */
 	bool ok = copydb_wait_for_subprocesses(parentSpecs->failFast);
 
 	(void) queue_unlink(&parentSpecs->preDataQueue);
@@ -579,51 +815,6 @@ multidb_pre_data_supervisor(CopyDataSpec *parentSpecs)
 	return ok;
 }
 
-
-/*
- * multidb_pre_data_queue_filler sends one DBNAME message per database to the
- * preDataQueue, then sends tableJobs STOP messages so all workers terminate.
- */
-static bool
-multidb_pre_data_queue_filler(CopyDataSpec *parentSpecs)
-{
-	log_notice("Started pre-data queue filler %d [%d]", getpid(), getppid());
-
-	for (int i = 0; i < parentSpecs->multiDbCount; i++)
-	{
-		MultiDbInfo *info = &parentSpecs->multiDbInfos[i];
-
-		QMessage mesg = { .type = QMSG_TYPE_DBNAME };
-		strlcpy(mesg.data.datname, info->datname, sizeof(mesg.data.datname));
-
-		if (!queue_send(&parentSpecs->preDataQueue, &mesg))
-		{
-			log_error("Failed to enqueue database \"%s\" for pre-data",
-					  info->datname);
-			return false;
-		}
-
-		log_info("Pre-data queue filler: enqueued database \"%s\"",
-				 info->datname);
-	}
-
-	/* one STOP per worker */
-	for (int i = 0; i < parentSpecs->tableJobs; i++)
-	{
-		QMessage stop = { .type = QMSG_TYPE_STOP };
-
-		if (!queue_send(&parentSpecs->preDataQueue, &stop))
-		{
-			log_error("Failed to send STOP to pre-data queue");
-			return false;
-		}
-	}
-
-	log_info("Pre-data queue filler: sent %d databases, %d STOP messages",
-			 parentSpecs->multiDbCount, parentSpecs->tableJobs);
-
-	return true;
-}
 
 
 /*
@@ -706,7 +897,13 @@ multidb_pre_data_worker(CopyDataSpec *parentSpecs)
 
 /*
  * multidb_pre_data_one_db performs the full pre-data pipeline for one
- * database: schema fetch from source, pg_dump, pg_restore --pre-data.
+ * database:
+ *   1. CREATE DATABASE on the target (if not already present)
+ *   2. Import snapshot exported by the snapshot holder
+ *   3. Fetch source database schema into source.db
+ *   4. pg_dump --snapshot=<id> (pre-data + post-data sections)
+ *   5. Close the worker's snapshot connection (holder still holds the real one)
+ *   6. pg_restore --pre-data to the target
  *
  * Called from within a pre-data worker process.  All resources are
  * allocated locally and released before returning so the worker can
@@ -735,6 +932,32 @@ multidb_pre_data_one_db(CopyDataSpec *parentSpecs, const char *datname)
 	}
 
 	log_info("[SOURCE] Pre-data for database \"%s\"", datname);
+
+	/* STEP 0: CREATE DATABASE on the target instance */
+	{
+		PGSQL dst = { 0 };
+
+		if (!pgsql_init(&dst, parentSpecs->connStrings.target_pguri,
+						PGSQL_CONN_TARGET))
+		{
+			log_error("Failed to connect to target instance for "
+					  "database \"%s\"", datname);
+			return false;
+		}
+
+		bool created = multidb_create_target_database(
+			&dst,
+			datname,
+			parentSpecs->restoreOptions.dropIfExists);
+
+		pgsql_finish(&dst);
+
+		if (!created)
+		{
+			log_error("Failed to create database \"%s\" on target", datname);
+			return false;
+		}
+	}
 
 	/*
 	 * Build per-database connection strings.  These are strdup'd here and
@@ -778,16 +1001,21 @@ multidb_pre_data_one_db(CopyDataSpec *parentSpecs, const char *datname)
 	 * Build a local CopyDataSpec for this database.
 	 * copydb_init_workdir must be called before multidb_init_db_specs so
 	 * that cfPaths is populated.
+	 *
+	 * The per-database work directory is created here (createWorkDir=true)
+	 * on a first run.  On --resume, the directory already exists.
 	 */
 	CopyDataSpec dbSpecs = { 0 };
 	dbSpecs.pgPaths = parentSpecs->pgPaths;
 
+	bool createWorkDir = !parentSpecs->resume;
+
 	if (!copydb_init_workdir(&dbSpecs, info->topdir,
-							 false,   /* service */
-							 NULL,    /* serviceName */
-							 false,   /* restart */
-							 true,    /* resume */
-							 false))  /* createWorkDir (already created) */
+							 false,          /* service */
+							 NULL,           /* serviceName */
+							 parentSpecs->restart,
+							 parentSpecs->resume,
+							 createWorkDir))
 	{
 		log_error("Failed to init work dir for database \"%s\"", datname);
 		ok = false;
@@ -817,9 +1045,13 @@ multidb_pre_data_one_db(CopyDataSpec *parentSpecs, const char *datname)
 		dbSpecs.indexQueue.qId = -1;
 	}
 
+	/* set database name for enriched log messages */
+	strlcpy(dbSpecs.datname, datname, sizeof(dbSpecs.datname));
+
 	/*
-	 * Propagate the exported snapshot identifier so that pg_dump can use
-	 * it via --snapshot=<id>.
+	 * Set the snapshot identifier so that copydb_prepare_snapshot (called
+	 * inside copydb_fetch_schema_and_prepare_specs) will call
+	 * copydb_set_snapshot to import the snapshot held by the snapshot holder.
 	 */
 	strlcpy(dbSpecs.sourceSnapshot.snapshot, info->snapshot,
 			sizeof(dbSpecs.sourceSnapshot.snapshot));
@@ -839,6 +1071,13 @@ multidb_pre_data_one_db(CopyDataSpec *parentSpecs, const char *datname)
 		ok = false;
 		goto cleanup_specs;
 	}
+
+	/*
+	 * Close the worker's SET TRANSACTION SNAPSHOT connection.  The snapshot
+	 * holder's exporting connection stays open, so the snapshot remains valid
+	 * for Phase II workers.
+	 */
+	(void) copydb_close_snapshot(&dbSpecs);
 
 	/* STEP 3: restore the pre-data section to the target via pg_restore */
 	if (!copydb_target_prepare_schema(&dbSpecs))
@@ -867,15 +1106,32 @@ cleanup_cs:
  * post-data phase for one database: pg_restore post-data and set sequences.
  *
  * This runs after the global COPY phase has completed for all databases.
+ * The function is self-contained: it derives all specs from MultiDbInfo.
  */
 static bool
 multidb_clone_one_database_post_data(CopyDataSpec *parentSpecs,
-									 SourceDatabase *db,
-									 CopyDataSpec *dbSpecs,
-									 ConnStrings *dbConnStrings)
+									  const char *datname)
 {
-	log_info("[TARGET] Post-data for database \"%s\" into \"%s\"",
-			 db->datname, dbConnStrings->safeTargetPGURI.pguri);
+	/* locate MultiDbInfo for this database */
+	MultiDbInfo *info = NULL;
+
+	for (int i = 0; i < parentSpecs->multiDbCount; i++)
+	{
+		if (strcmp(parentSpecs->multiDbInfos[i].datname, datname) == 0)
+		{
+			info = &parentSpecs->multiDbInfos[i];
+			break;
+		}
+	}
+
+	if (info == NULL)
+	{
+		log_error("BUG: multidb_clone_one_database_post_data: "
+				  "no MultiDbInfo for database \"%s\"", datname);
+		return false;
+	}
+
+	log_info("[TARGET] Post-data for database \"%s\"", datname);
 
 	fflush(stdout);
 	fflush(stderr);
@@ -886,8 +1142,8 @@ multidb_clone_one_database_post_data(CopyDataSpec *parentSpecs,
 	{
 		case -1:
 		{
-			log_error("Failed to fork post-data subprocess for database \"%s\": %m",
-					  db->datname);
+			log_error("Failed to fork post-data subprocess for "
+					  "database \"%s\": %m", datname);
 			return false;
 		}
 
@@ -895,47 +1151,97 @@ multidb_clone_one_database_post_data(CopyDataSpec *parentSpecs,
 		{
 			/* child process */
 			char psTitle[MAXPGPATH] = { 0 };
-			sformat(psTitle, sizeof(psTitle), "pgcopydb: post-data %s", db->datname);
+			sformat(psTitle, sizeof(psTitle), "pgcopydb: post-data %s", datname);
 			(void) set_ps_title(psTitle);
 
 			summary_reset_toplevel_timings();
 
-			if (!multidb_init_db_specs(dbSpecs, parentSpecs, dbConnStrings))
+			/* build per-db connection strings */
+			ConnStrings cs = { 0 };
+
+			cs.source_pguri = strdup(info->source_pguri);
+			cs.target_pguri = strdup(info->target_pguri);
+
+			if (cs.source_pguri == NULL || cs.target_pguri == NULL)
 			{
-				log_error("Failed to initialise specs for database \"%s\"",
-						  db->datname);
+				log_error(ALLOCATION_FAILED_ERROR);
 				exit(EXIT_CODE_INTERNAL_ERROR);
 			}
+
+			if (!parse_and_scrub_connection_string(cs.source_pguri,
+												   &cs.safeSourcePGURI) ||
+				!parse_and_scrub_connection_string(cs.target_pguri,
+												   &cs.safeTargetPGURI))
+			{
+				log_error("Failed to scrub URIs for database \"%s\"", datname);
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			CopyDataSpec dbSpecs = { 0 };
+			dbSpecs.pgPaths = parentSpecs->pgPaths;
+
+			if (!copydb_init_workdir(&dbSpecs, info->topdir,
+									 false,  /* service */
+									 NULL,   /* serviceName */
+									 false,  /* restart */
+									 true,   /* resume */
+									 false)) /* createWorkDir (already created) */
+			{
+				log_error("Failed to init work dir for database \"%s\"",
+						  datname);
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			if (!multidb_init_db_specs(&dbSpecs, parentSpecs, &cs))
+			{
+				log_error("Failed to initialise specs for database \"%s\"",
+						  datname);
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+
+			strlcpy(dbSpecs.datname, datname, sizeof(dbSpecs.datname));
+
+			/*
+			 * The catalog was created in Phase I with a specific snapshot ID.
+			 * The consistency check in catalog_init_from_specs compares
+			 * dbSpecs.sourceSnapshot.snapshot against the stored value, so we
+			 * must populate it here.  The post-data phase does not open a new
+			 * snapshot transaction — it just needs the ID to match so the
+			 * catalog opens successfully.
+			 */
+			strlcpy(dbSpecs.sourceSnapshot.snapshot,
+					info->snapshot,
+					sizeof(dbSpecs.sourceSnapshot.snapshot));
 
 			/*
 			 * Re-use the existing catalog (pre-data already populated it).
 			 * copydb_fetch_schema_and_prepare_specs will detect this and
 			 * return early without re-fetching from source.
 			 */
-			if (!copydb_fetch_schema_and_prepare_specs(dbSpecs))
+			if (!copydb_fetch_schema_and_prepare_specs(&dbSpecs))
 			{
 				log_error("Failed to open catalog for database \"%s\"",
-						  db->datname);
+						  datname);
 				exit(EXIT_CODE_INTERNAL_ERROR);
 			}
 
-			/* STEP 10: restore the post-data section (indexes, constraints, …) */
-			if (!copydb_target_finalize_schema(dbSpecs))
+			/* restore the post-data section (indexes, constraints, …) */
+			if (!copydb_target_finalize_schema(&dbSpecs))
 			{
 				log_error("Failed to finalize schema for database \"%s\"",
-						  db->datname);
+						  datname);
 				exit(EXIT_CODE_TARGET);
 			}
 
-			/* Set sequences to match the source values captured during schema fetch */
-			if (!copydb_copy_all_sequences(dbSpecs, false))
+			/* set sequences to match source values captured during schema fetch */
+			if (!copydb_copy_all_sequences(&dbSpecs, false))
 			{
 				log_error("Failed to set sequences for database \"%s\"",
-						  db->datname);
+						  datname);
 				exit(EXIT_CODE_TARGET);
 			}
 
-			(void) catalog_close_from_specs(dbSpecs);
+			(void) catalog_close_from_specs(&dbSpecs);
 			exit(EXIT_CODE_QUIT);
 		}
 
@@ -944,7 +1250,7 @@ multidb_clone_one_database_post_data(CopyDataSpec *parentSpecs,
 	}
 
 	/* parent: wait for post-data subprocess */
-	return multidb_wait_child(fpid, db->datname);
+	return multidb_wait_child(fpid, datname);
 }
 
 
@@ -1446,7 +1752,6 @@ multidb_init_entry(MultiDbEntry *entry, CopyDataSpec *parentSpecs,
 	dbSpecs->sourceSnapshot.pguri = dbSpecs->connStrings.source_pguri;
 	dbSpecs->sourceSnapshot.safeURI = dbSpecs->connStrings.safeSourcePGURI;
 	dbSpecs->sourceSnapshot.connectionType = PGSQL_CONN_SOURCE;
-	dbSpecs->sourceSnapshot.isReadOnly = info->isReadOnly;
 
 	strlcpy(dbSpecs->sourceSnapshot.snapshot, info->snapshot,
 			sizeof(dbSpecs->sourceSnapshot.snapshot));
@@ -1484,6 +1789,7 @@ multidb_init_entry(MultiDbEntry *entry, CopyDataSpec *parentSpecs,
 
 	/* populate the entry */
 	strlcpy(entry->datname, datname, sizeof(entry->datname));
+	strlcpy(dbSpecs->datname, datname, sizeof(dbSpecs->datname));
 	entry->dbSpecs = dbSpecs;
 	entry->active = true;
 
@@ -1632,7 +1938,7 @@ multidb_create_target_database(PGSQL *dst, const char *datname,
  * multidb_build_uri_for_database takes an existing Postgres URI and returns a
  * new one with the dbname component replaced by datname.
  */
-static bool
+bool
 multidb_build_uri_for_database(const char *pguri, const char *datname,
 								char **result_uri)
 {

@@ -212,12 +212,11 @@ typedef struct PreviousRunState
  */
 typedef struct MultiDbInfo
 {
-	char datname[PG_NAMEDATALEN];   /* database name (quoted identifier) */
-	char snapshot[BUFSIZE];         /* exported snapshot identifier, or "" */
+	char datname[PG_NAMEDATALEN];   /* database name */
+	char snapshot[BUFSIZE];         /* snapshot ID exported by snapshot holder */
 	char source_pguri[BUFSIZE];     /* per-database source URI */
 	char target_pguri[BUFSIZE];     /* per-database target URI */
 	char topdir[MAXPGPATH];         /* per-database work dir */
-	bool isReadOnly;                /* true when source is in recovery */
 
 	/*
 	 * System V semaphore shared by all global COPY workers that access this
@@ -307,6 +306,13 @@ typedef struct CopyDataSpec
 
 	bool follow;                /* pgcopydb fork --follow */
 	bool allDatabases;          /* pgcopydb clone --all-databases */
+
+	/*
+	 * Database name for log messages in per-database workers.  Empty string
+	 * in the single-database code path; set to the database name in
+	 * --all-databases workers so log messages include "in database <name>".
+	 */
+	char datname[PG_NAMEDATALEN];
 
 	/*
 	 * For --all-databases: per-database snapshot + connection info used by the
@@ -726,6 +732,8 @@ bool multidb_context_close_all(MultiDbContext *ctx);
 /* compare.c */
 bool compare_schemas(CopyDataSpec *copySpecs);
 bool compare_data(CopyDataSpec *copySpecs);
+bool compare_all_databases_schema(CopyDataSpec *parentSpecs);
+bool compare_all_databases_data(CopyDataSpec *parentSpecs);
 
 bool compare_start_workers(CopyDataSpec *copySpecs, Queue *queue);
 bool compare_queue_tables(CopyDataSpec *copySpecs, Queue *queue);
