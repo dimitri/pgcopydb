@@ -11,6 +11,7 @@
 #include "catalog.h"
 #include "copydb.h"
 #include "env_utils.h"
+#include "file_utils.h"
 #include "lock_utils.h"
 #include "log.h"
 #include "multi_db.h"
@@ -24,6 +25,7 @@ static bool compare_queue_table_hook(void *ctx, SourceTable *sourceTable);
 static bool compare_schemas_table_hook(void *ctx, SourceTable *sourceTable);
 static bool compare_schemas_index_hook(void *ctx, SourceIndex *sourceIndex);
 static bool compare_schemas_seq_hook(void *ctx, SourceSequence *sourceSeq);
+static bool compare_alldb_chksum_hook(void *ctx, SourceTable *table);
 
 
 /*
@@ -1225,6 +1227,26 @@ compare_all_databases_schema(CopyDataSpec *parentSpecs)
 
 
 /*
+ * compare_alldb_chksum_hook prints one table's checksum row in the
+ * --all-databases data comparison text summary.
+ */
+static bool
+compare_alldb_chksum_hook(void *ctx, SourceTable *table)
+{
+	TableChecksum *srcChk = &(table->sourceChecksum);
+	TableChecksum *dstChk = &(table->targetChecksum);
+
+	fformat(stdout, "%30s | %s | %36s | %36s \n",
+			table->qname,
+			streq(srcChk->checksum, dstChk->checksum) ? " " : "!",
+			srcChk->checksum,
+			dstChk->checksum);
+
+	return true;
+}
+
+
+/*
  * compare_all_databases_data iterates all user databases on the source
  * instance, computes checksums for all tables, and prints a summary.
  *
@@ -1397,6 +1419,29 @@ compare_all_databases_data(CopyDataSpec *parentSpecs)
 			log_error("Data comparison failed for database \"%s\"",
 					  db->datname);
 			ok = false;
+		}
+		else
+		{
+			/*
+			 * Print the per-database checksum table.  compare_data closes
+			 * the catalog before returning, so we reopen it here.
+			 */
+			DatabaseCatalog *sourceDB = &dbSpecs.catalogs.source;
+
+			if (catalog_init(sourceDB))
+			{
+				fformat(stdout, "\n%s\n", db->datname);
+				fformat(stdout, "%30s | %s | %36s | %36s \n",
+						"Table Name", "!", "Source Checksum", "Target Checksum");
+				fformat(stdout, "%30s-+-%s-+-%36s-+-%36s \n",
+						"------------------------------", "-",
+						"------------------------------------",
+						"------------------------------------");
+				(void) catalog_iter_s_table(sourceDB, NULL,
+											&compare_alldb_chksum_hook);
+				fformat(stdout, "\n");
+				(void) catalog_close(sourceDB);
+			}
 		}
 
 		free(srcuri);

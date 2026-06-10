@@ -16,6 +16,7 @@
 #include "copydb.h"
 #include "commandline.h"
 #include "env_utils.h"
+#include "file_utils.h"
 #include "ld_stream.h"
 #include "log.h"
 #include "multi_db.h"
@@ -123,6 +124,78 @@ static bool cli_clone_follow_wait_subprocess(const char *name, pid_t pid);
 
 
 /*
+ * cli_clone_all_databases_print_summaries prints a per-database table summary
+ * after a successful --all-databases clone.  It reopens the instance-level
+ * catalog (to get the database list) and then the per-database catalog for
+ * each database, calling print_summary on each.
+ */
+static void
+cli_clone_all_databases_print_summaries(CopyDataSpec *copySpecs)
+{
+	DatabaseCatalog *instanceCatalog = &copySpecs->catalogs.source;
+
+	if (!catalog_init(instanceCatalog))
+	{
+		log_warn("Could not open instance catalog for summary");
+		return;
+	}
+
+	SourceDatabaseIterator iter = {
+		.catalog = instanceCatalog,
+		.dat = NULL
+	};
+
+	if (!catalog_iter_s_database_init(&iter))
+	{
+		(void) catalog_close(instanceCatalog);
+		return;
+	}
+
+	for (;;)
+	{
+		if (!catalog_iter_s_database_next(&iter))
+			break;
+
+		SourceDatabase *db = iter.dat;
+
+		if (db == NULL)
+			break;
+
+		CopyDataSpec dbSpecs = *copySpecs;
+
+		/* point the source catalog at the per-db schema/source.db */
+		sformat(dbSpecs.catalogs.source.dbfile,
+				sizeof(dbSpecs.catalogs.source.dbfile),
+				"%s/db/%s/schema/source.db",
+				copySpecs->cfPaths.topdir, db->datname);
+		dbSpecs.catalogs.source.db = NULL;
+
+		/* per-db summary.json goes in the per-db directory */
+		sformat(dbSpecs.cfPaths.summaryfile,
+				sizeof(dbSpecs.cfPaths.summaryfile),
+				"%s/db/%s/summary.json",
+				copySpecs->cfPaths.topdir, db->datname);
+
+		if (!catalog_init(&dbSpecs.catalogs.source))
+		{
+			log_warn("Could not open catalog for database \"%s\"", db->datname);
+			continue;
+		}
+
+		fformat(stdout, "\n");
+		log_info("Summary for database \"%s\"", db->datname);
+
+		(void) print_summary(&dbSpecs);
+
+		(void) catalog_close(&dbSpecs.catalogs.source);
+	}
+
+	(void) catalog_iter_s_database_finish(&iter);
+	(void) catalog_close(instanceCatalog);
+}
+
+
+/*
  * cli_clone implements the command: pgcopydb clone
  */
 void
@@ -146,6 +219,7 @@ cli_clone(int argc, char **argv)
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
+		cli_clone_all_databases_print_summaries(&copySpecs);
 		exit(EXIT_CODE_QUIT);
 	}
 
