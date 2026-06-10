@@ -1188,6 +1188,20 @@ copydb_create_constraints_hook(void *ctx, SourceIndex *index)
 		return false;
 	}
 
+	if (!summary_lookup_constraint(sourceDB, &indexSpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (indexSummary->doneTime > 0)
+	{
+		log_debug("Skipping constraint %s: already created (done at %lld)",
+				  index->constraintName,
+				  (long long) indexSummary->doneTime);
+		return true;
+	}
+
 	if (!summary_add_constraint(sourceDB, &indexSpecs))
 	{
 		/* errors have already been logged */

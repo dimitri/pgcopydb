@@ -1,0 +1,10 @@
+CREATE DATABASE
+CREATE COLLATION
+excl_with_pkey_excl x
+excl_with_pkey_pkey p
+DROP DATABASE
+CREATE DATABASE
+CREATE COLLATION
+excl_with_pkey_excl x
+excl_with_pkey_pkey p
+DROP DATABASE
