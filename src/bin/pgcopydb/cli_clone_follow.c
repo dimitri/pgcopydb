@@ -124,13 +124,71 @@ static bool cli_clone_follow_wait_subprocess(const char *name, pid_t pid);
 
 
 /*
- * cli_clone_all_databases_print_summaries prints a per-database table summary
- * after a successful --all-databases clone.  It reopens the instance-level
- * catalog (to get the database list) and then the per-database catalog for
- * each database, calling print_summary on each.
+ * alldb_timing_agg_hook aggregates per-database timing rows into the global
+ * topLevelTimingArray.  For phases that run in parallel (Phase I + TOTAL_DATA)
+ * we take the MAX of durations; for everything else we SUM.  Counts and bytes
+ * are always summed.  Pass a pointer to a bool set to true for the first
+ * database; it is set to false after the first call.
+ */
+static bool
+alldb_timing_agg_hook(void *ctx, TopLevelTiming *timing)
+{
+	bool *first = (bool *) ctx;
+
+	if (timing->section == TIMING_SECTION_UNKNOWN ||
+		timing->section >= topLevelTimingArrayCount)
+	{
+		return true;
+	}
+
+	TopLevelTiming *entry = &(topLevelTimingArray[timing->section]);
+
+	/* parallel phases: MAX duration; sequential/cumulative: SUM */
+	bool useMax = (timing->section == TIMING_SECTION_CATALOG_QUERIES ||
+				   timing->section == TIMING_SECTION_DUMP_SCHEMA ||
+				   timing->section == TIMING_SECTION_PREPARE_SCHEMA ||
+				   timing->section == TIMING_SECTION_TOTAL_DATA ||
+				   timing->section == TIMING_SECTION_TOTAL);
+
+	if (*first)
+	{
+		entry->section = timing->section;
+		entry->durationMs = timing->durationMs;
+		entry->count = timing->count;
+		entry->bytes = timing->bytes;
+		entry->startTime = timing->startTime;
+		entry->doneTime = timing->doneTime;
+	}
+	else
+	{
+		entry->count += timing->count;
+		entry->bytes += timing->bytes;
+
+		if (useMax)
+		{
+			if (timing->durationMs > entry->durationMs)
+				entry->durationMs = timing->durationMs;
+		}
+		else
+		{
+			entry->durationMs += timing->durationMs;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * cli_clone_all_databases_consolidated_summary prints a single unified summary
+ * for all databases after a successful --all-databases clone.
+ *
+ * Per-table section: one combined table with a leading "Database" column.
+ * Steps section: timings aggregated across all databases (MAX for parallel
+ * phases, SUM for sequential/cumulative ones).
  */
 static void
-cli_clone_all_databases_print_summaries(CopyDataSpec *copySpecs)
+cli_clone_all_databases_consolidated_summary(CopyDataSpec *copySpecs)
 {
 	DatabaseCatalog *instanceCatalog = &copySpecs->catalogs.source;
 
@@ -140,12 +198,13 @@ cli_clone_all_databases_print_summaries(CopyDataSpec *copySpecs)
 		return;
 	}
 
-	SourceDatabaseIterator iter = {
-		.catalog = instanceCatalog,
-		.dat = NULL
-	};
+	/* First pass: count total tables and number of databases */
+	int totalTables = 0;
+	int dbCount = 0;
 
-	if (!catalog_iter_s_database_init(&iter))
+	SourceDatabaseIterator iter1 = { .catalog = instanceCatalog };
+
+	if (!catalog_iter_s_database_init(&iter1))
 	{
 		(void) catalog_close(instanceCatalog);
 		return;
@@ -153,24 +212,88 @@ cli_clone_all_databases_print_summaries(CopyDataSpec *copySpecs)
 
 	for (;;)
 	{
-		if (!catalog_iter_s_database_next(&iter))
+		if (!catalog_iter_s_database_next(&iter1))
 			break;
 
-		SourceDatabase *db = iter.dat;
+		SourceDatabase *db = iter1.dat;
+
+		if (db == NULL)
+			break;
+
+		dbCount++;
+
+		DatabaseCatalog dbCat = { .type = DATABASE_CATALOG_TYPE_SOURCE };
+
+		sformat(dbCat.dbfile, sizeof(dbCat.dbfile),
+				"%s/db/%s/schema/source.db",
+				copySpecs->cfPaths.topdir, db->datname);
+
+		if (!catalog_init(&dbCat))
+			continue;
+
+		CatalogCounts count = { 0 };
+
+		if (catalog_count_objects(&dbCat, &count))
+			totalTables += (int) count.tables;
+
+		(void) catalog_close(&dbCat);
+	}
+
+	(void) catalog_iter_s_database_finish(&iter1);
+
+	if (totalTables == 0 || dbCount == 0)
+	{
+		(void) catalog_close(instanceCatalog);
+		return;
+	}
+
+	/* Allocate the combined summary table */
+	SummaryTable combinedTable = { .count = totalTables };
+
+	combinedTable.array =
+		(SummaryTableEntry *) calloc(totalTables, sizeof(SummaryTableEntry));
+
+	if (combinedTable.array == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		(void) catalog_close(instanceCatalog);
+		return;
+	}
+
+	/* Reset timing globals so we aggregate from scratch */
+	summary_reset_toplevel_timings();
+
+	bool firstDb = true;
+	int tableOffset = 0;
+
+	SourceDatabaseIterator iter2 = { .catalog = instanceCatalog };
+
+	if (!catalog_iter_s_database_init(&iter2))
+	{
+		free(combinedTable.array);
+		(void) catalog_close(instanceCatalog);
+		return;
+	}
+
+	for (;;)
+	{
+		if (!catalog_iter_s_database_next(&iter2))
+			break;
+
+		SourceDatabase *db = iter2.dat;
 
 		if (db == NULL)
 			break;
 
 		CopyDataSpec dbSpecs = *copySpecs;
 
-		/* point the source catalog at the per-db schema/source.db */
+		dbSpecs.catalogs.source.db = NULL;
+
 		sformat(dbSpecs.catalogs.source.dbfile,
 				sizeof(dbSpecs.catalogs.source.dbfile),
 				"%s/db/%s/schema/source.db",
 				copySpecs->cfPaths.topdir, db->datname);
-		dbSpecs.catalogs.source.db = NULL;
 
-		/* per-db summary.json goes in the per-db directory */
 		sformat(dbSpecs.cfPaths.summaryfile,
 				sizeof(dbSpecs.cfPaths.summaryfile),
 				"%s/db/%s/summary.json",
@@ -182,16 +305,127 @@ cli_clone_all_databases_print_summaries(CopyDataSpec *copySpecs)
 			continue;
 		}
 
-		fformat(stdout, "\n");
-		log_info("Summary for database \"%s\"", db->datname);
+		Summary dbSummary = {
+			.tableJobs = copySpecs->tableJobs,
+			.indexJobs = copySpecs->indexJobs,
+			.vacuumJobs = copySpecs->vacuumJobs,
+			.lObjectJobs = copySpecs->lObjectJobs,
+			.restoreJobs = copySpecs->restoreOptions.jobs
+		};
 
-		(void) print_summary(&dbSpecs);
+		if (prepare_summary_table(&dbSummary, &dbSpecs))
+		{
+			for (int i = 0;
+				 i < dbSummary.table.count && tableOffset + i < totalTables;
+				 i++)
+			{
+				SummaryTableEntry *dst =
+					&(combinedTable.array[tableOffset + i]);
+
+				*dst = dbSummary.table.array[i];
+				strlcpy(dst->datname, db->datname, sizeof(dst->datname));
+			}
+
+			tableOffset += dbSummary.table.count;
+			combinedTable.totalBytes += dbSummary.table.totalBytes;
+		}
+
+		/* Aggregate timing data into topLevelTimingArray */
+		(void) summary_iter_timing(&dbSpecs.catalogs.source,
+								   &firstDb,
+								   &alldb_timing_agg_hook);
+		firstDb = false;
 
 		(void) catalog_close(&dbSpecs.catalogs.source);
 	}
 
-	(void) catalog_iter_s_database_finish(&iter);
+	(void) catalog_iter_s_database_finish(&iter2);
 	(void) catalog_close(instanceCatalog);
+
+	/* Re-pretty-print aggregated timing strings */
+	for (int i = 0; i < topLevelTimingArrayCount; i++)
+	{
+		TopLevelTiming *entry = &(topLevelTimingArray[i]);
+
+		if (entry->section == TIMING_SECTION_UNKNOWN)
+			continue;
+
+		(void) IntervalToString(entry->durationMs,
+								entry->ppDuration,
+								sizeof(entry->ppDuration));
+
+		(void) pretty_print_bytes(entry->ppBytes,
+								  sizeof(entry->ppBytes),
+								  entry->bytes);
+	}
+
+	/* Print the combined per-table section */
+	(void) pretty_print_bytes(combinedTable.totalBytesStr,
+							  sizeof(combinedTable.totalBytesStr),
+							  combinedTable.totalBytes);
+	(void) prepare_summary_table_headers(&combinedTable);
+	(void) print_summary_table(&combinedTable);
+
+	/* Print aggregated step durations with correct Phase I concurrency */
+	int phaseOneConcurrency =
+		(dbCount < copySpecs->tableJobs) ? dbCount : copySpecs->tableJobs;
+
+	char *d10s = "----------";
+	char *d12s = "------------";
+	char *d50s = "--------------------------------------------------";
+
+	Summary summary = {
+		.tableJobs = copySpecs->tableJobs,
+		.indexJobs = copySpecs->indexJobs,
+		.vacuumJobs = copySpecs->vacuumJobs,
+		.lObjectJobs = copySpecs->lObjectJobs,
+		.restoreJobs = copySpecs->restoreOptions.jobs
+	};
+
+	fformat(stdout, "\n");
+	fformat(stdout, " %50s   %10s  %10s  %10s  %12s\n",
+			"Step", "Connection", "Duration", "Transfer", "Concurrency");
+	fformat(stdout, " %50s   %10s  %10s  %10s  %12s\n",
+			d50s, d10s, d10s, d10s, d12s);
+
+	for (int i = 0; i < topLevelTimingArrayCount; i++)
+	{
+		TopLevelTiming *timing = &(topLevelTimingArray[i]);
+
+		if (timing->section == TIMING_SECTION_UNKNOWN)
+			continue;
+
+		if (i + 1 == topLevelTimingArrayCount)
+		{
+			fformat(stdout, " %50s   %10s  %10s  %10s  %12s\n",
+					d50s, d10s, d10s, d10s, d12s);
+		}
+
+		/* Phase I runs min(tableJobs, dbCount) parallel DB workers */
+		int concurrency;
+
+		if (timing->section == TIMING_SECTION_CATALOG_QUERIES ||
+			timing->section == TIMING_SECTION_DUMP_SCHEMA ||
+			timing->section == TIMING_SECTION_PREPARE_SCHEMA)
+		{
+			concurrency = phaseOneConcurrency;
+		}
+		else
+		{
+			concurrency = TopLevelTimingConcurrency(&summary, timing);
+		}
+
+		fformat(stdout, " %50s   %10s  %10s  %10s  %12d\n",
+				timing->label,
+				timing->conn,
+				timing->ppDuration,
+				timing->bytes > 0 ? timing->ppBytes : "",
+				concurrency);
+	}
+
+	fformat(stdout, "\n");
+
+	free(combinedTable.array);
 }
 
 
@@ -219,7 +453,7 @@ cli_clone(int argc, char **argv)
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
-		cli_clone_all_databases_print_summaries(&copySpecs);
+		cli_clone_all_databases_consolidated_summary(&copySpecs);
 		exit(EXIT_CODE_QUIT);
 	}
 

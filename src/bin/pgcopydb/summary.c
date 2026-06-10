@@ -2848,39 +2848,84 @@ print_summary_table(SummaryTable *summary)
 
 	fformat(stdout, "\n");
 
-	fformat(stdout, "%*s | %*s | %*s | %*s | %*s | %*s | %*s | %*s \n",
-			headers->maxOidSize, "OID",
-			headers->maxNspnameSize, "Schema",
-			headers->maxRelnameSize, "Name",
-			headers->maxPartCountSize, "Parts",
-			headers->maxTableMsSize, "copy duration",
-			headers->maxBytesSize, "transmitted bytes",
-			headers->maxIndexCountSize, "indexes",
-			headers->maxIndexMsSize, "create index duration");
+	bool showDb = headers->maxDatnameSize > 0;
 
-	fformat(stdout, "%s-+-%s-+-%s-+-%s-+-%s-+-%s-+-%s-+-%s\n",
-			headers->oidSeparator,
-			headers->nspnameSeparator,
-			headers->relnameSeparator,
-			headers->partCountSeparator,
-			headers->tableMsSeparator,
-			headers->bytesSeparator,
-			headers->indexCountSeparator,
-			headers->indexMsSeparator);
+	if (showDb)
+	{
+		fformat(stdout, "%*s | %*s | %*s | %*s | %*s | %*s | %*s | %*s | %*s \n",
+				headers->maxDatnameSize, "Database",
+				headers->maxOidSize, "OID",
+				headers->maxNspnameSize, "Schema",
+				headers->maxRelnameSize, "Name",
+				headers->maxPartCountSize, "Parts",
+				headers->maxTableMsSize, "copy duration",
+				headers->maxBytesSize, "transmitted bytes",
+				headers->maxIndexCountSize, "indexes",
+				headers->maxIndexMsSize, "create index duration");
+
+		fformat(stdout, "%s-+-%s-+-%s-+-%s-+-%s-+-%s-+-%s-+-%s-+-%s\n",
+				headers->datnameSeparator,
+				headers->oidSeparator,
+				headers->nspnameSeparator,
+				headers->relnameSeparator,
+				headers->partCountSeparator,
+				headers->tableMsSeparator,
+				headers->bytesSeparator,
+				headers->indexCountSeparator,
+				headers->indexMsSeparator);
+	}
+	else
+	{
+		fformat(stdout, "%*s | %*s | %*s | %*s | %*s | %*s | %*s | %*s \n",
+				headers->maxOidSize, "OID",
+				headers->maxNspnameSize, "Schema",
+				headers->maxRelnameSize, "Name",
+				headers->maxPartCountSize, "Parts",
+				headers->maxTableMsSize, "copy duration",
+				headers->maxBytesSize, "transmitted bytes",
+				headers->maxIndexCountSize, "indexes",
+				headers->maxIndexMsSize, "create index duration");
+
+		fformat(stdout, "%s-+-%s-+-%s-+-%s-+-%s-+-%s-+-%s-+-%s\n",
+				headers->oidSeparator,
+				headers->nspnameSeparator,
+				headers->relnameSeparator,
+				headers->partCountSeparator,
+				headers->tableMsSeparator,
+				headers->bytesSeparator,
+				headers->indexCountSeparator,
+				headers->indexMsSeparator);
+	}
 
 	for (int i = 0; i < summary->count; i++)
 	{
 		SummaryTableEntry *entry = &(summary->array[i]);
 
-		fformat(stdout, "%*s | %*s | %*s | %*s | %*s | %*s | %*s | %*s\n",
-				headers->maxOidSize, entry->oidStr,
-				headers->maxNspnameSize, entry->nspname,
-				headers->maxRelnameSize, entry->relname,
-				headers->maxPartCountSize, entry->partCount,
-				headers->maxTableMsSize, entry->tableMs,
-				headers->maxBytesSize, entry->bytesStr,
-				headers->maxIndexCountSize, entry->indexCount,
-				headers->maxIndexMsSize, entry->indexMs);
+		if (showDb)
+		{
+			fformat(stdout, "%*s | %*s | %*s | %*s | %*s | %*s | %*s | %*s | %*s\n",
+					headers->maxDatnameSize, entry->datname,
+					headers->maxOidSize, entry->oidStr,
+					headers->maxNspnameSize, entry->nspname,
+					headers->maxRelnameSize, entry->relname,
+					headers->maxPartCountSize, entry->partCount,
+					headers->maxTableMsSize, entry->tableMs,
+					headers->maxBytesSize, entry->bytesStr,
+					headers->maxIndexCountSize, entry->indexCount,
+					headers->maxIndexMsSize, entry->indexMs);
+		}
+		else
+		{
+			fformat(stdout, "%*s | %*s | %*s | %*s | %*s | %*s | %*s | %*s\n",
+					headers->maxOidSize, entry->oidStr,
+					headers->maxNspnameSize, entry->nspname,
+					headers->maxRelnameSize, entry->relname,
+					headers->maxPartCountSize, entry->partCount,
+					headers->maxTableMsSize, entry->tableMs,
+					headers->maxBytesSize, entry->bytesStr,
+					headers->maxIndexCountSize, entry->indexCount,
+					headers->maxIndexMsSize, entry->indexMs);
+		}
 	}
 
 	fformat(stdout, "\n");
@@ -3031,6 +3076,7 @@ prepare_summary_table_headers(SummaryTable *summary)
 	SummaryTableHeaders *headers = &(summary->headers);
 
 	/* assign static maximums from the lenghts of the column headers */
+	headers->maxDatnameSize = 0;    /* hidden unless any entry has datname */
 	headers->maxOidSize = 3;        /* "oid" */
 	headers->maxNspnameSize = 6;    /* "schema" */
 	headers->maxRelnameSize = 4;    /* "name" */
@@ -3045,6 +3091,17 @@ prepare_summary_table_headers(SummaryTable *summary)
 	{
 		int len = 0;
 		SummaryTableEntry *entry = &(summary->array[i]);
+
+		len = strlen(entry->datname);
+
+		if (len > 0)
+		{
+			int minLen = 8; /* "Database" */
+			len = (len > minLen) ? len : minLen;
+
+			if (headers->maxDatnameSize < len)
+				headers->maxDatnameSize = len;
+		}
 
 		len = strlen(entry->oidStr);
 
@@ -3104,6 +3161,8 @@ prepare_summary_table_headers(SummaryTable *summary)
 	}
 
 	/* now prepare the header line with dashes */
+	if (headers->maxDatnameSize > 0)
+		prepareLineSeparator(headers->datnameSeparator, headers->maxDatnameSize);
 	prepareLineSeparator(headers->oidSeparator, headers->maxOidSize);
 	prepareLineSeparator(headers->nspnameSeparator, headers->maxNspnameSize);
 	prepareLineSeparator(headers->relnameSeparator, headers->maxRelnameSize);

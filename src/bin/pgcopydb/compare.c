@@ -1036,10 +1036,223 @@ compare_fetch_schemas(CopyDataSpec *copySpecs,
 
 
 /*
- * compare_all_databases_schema iterates all user databases on the source
- * instance and runs compare_schemas for each one.
+ * compare_wait_any_child waits for any child process to exit and returns
+ * true iff it exited with EXIT_CODE_QUIT (success).
+ */
+static bool
+compare_wait_any_child(void)
+{
+	int status = 0;
+	pid_t pid = waitpid(-1, &status, 0);
+
+	if (pid < 0)
+	{
+		log_error("waitpid: %m");
+		return false;
+	}
+
+	if (!WIFEXITED(status))
+	{
+		log_error("Compare worker %d terminated by signal %d",
+				  pid, WTERMSIG(status));
+		return false;
+	}
+
+	return WEXITSTATUS(status) == EXIT_CODE_QUIT;
+}
+
+
+/*
+ * compare_one_database_schema sets up per-database specs and runs
+ * compare_schemas for a single named database.  Returns false on error;
+ * compare_schemas itself may call exit() on schema differences.
+ */
+static bool
+compare_one_database_schema(CopyDataSpec *parentSpecs, const char *datname)
+{
+	char *srcuri = NULL;
+	char *tgturi = NULL;
+
+	if (!multidb_build_uri_for_database(parentSpecs->connStrings.source_pguri,
+										 datname, &srcuri) ||
+		!multidb_build_uri_for_database(parentSpecs->connStrings.target_pguri,
+										 datname, &tgturi))
+	{
+		log_error("Failed to build URIs for database \"%s\"", datname);
+		free(srcuri);
+		free(tgturi);
+		return false;
+	}
+
+	char dbdir[MAXPGPATH] = { 0 };
+
+	sformat(dbdir, sizeof(dbdir), "%s/db/%s",
+			parentSpecs->cfPaths.topdir, datname);
+
+	CopyDataSpec dbSpecs = *parentSpecs;
+
+	dbSpecs.catalogs.source.db = NULL;
+	dbSpecs.catalogs.filter.db = NULL;
+	dbSpecs.catalogs.target.db = NULL;
+	dbSpecs.catalogs.replay.db = NULL;
+
+	dbSpecs.connStrings.source_pguri = srcuri;
+	dbSpecs.connStrings.target_pguri = tgturi;
+
+	if (!parse_and_scrub_connection_string(srcuri,
+										   &dbSpecs.connStrings.safeSourcePGURI))
+	{
+		log_error("Failed to scrub source URI for database \"%s\"", datname);
+		free(srcuri);
+		free(tgturi);
+		return false;
+	}
+
+	if (!parse_and_scrub_connection_string(tgturi,
+										   &dbSpecs.connStrings.safeTargetPGURI))
+	{
+		log_error("Failed to scrub target URI for database \"%s\"", datname);
+		free(srcuri);
+		free(tgturi);
+		if (dbSpecs.connStrings.safeSourcePGURI.pguri)
+			free(dbSpecs.connStrings.safeSourcePGURI.pguri);
+		return false;
+	}
+
+	if (!copydb_init_workdir(&dbSpecs, dbdir, false, NULL,
+							 parentSpecs->restart, parentSpecs->resume, true))
+	{
+		log_error("Failed to init work dir for database \"%s\"", datname);
+		free(srcuri);
+		free(tgturi);
+		if (dbSpecs.connStrings.safeSourcePGURI.pguri)
+			free(dbSpecs.connStrings.safeSourcePGURI.pguri);
+		if (dbSpecs.connStrings.safeTargetPGURI.pguri)
+			free(dbSpecs.connStrings.safeTargetPGURI.pguri);
+		return false;
+	}
+
+	bool ok = compare_schemas(&dbSpecs);
+
+	free(srcuri);
+	free(tgturi);
+	if (dbSpecs.connStrings.safeSourcePGURI.pguri)
+		free(dbSpecs.connStrings.safeSourcePGURI.pguri);
+	if (dbSpecs.connStrings.safeTargetPGURI.pguri)
+		free(dbSpecs.connStrings.safeTargetPGURI.pguri);
+
+	return ok;
+}
+
+
+/*
+ * compare_alldb_schema_summary prints a table showing per-database object
+ * counts after all schema comparisons have completed.
  *
- * parentSpecs must have instance-level source/target URIs.
+ * Format:
+ *   Database         |   Tables    |   Indexes   | Constraints |  Sequences
+ *                    | Src | Tgt   | Src | Tgt   | Src | Tgt   | Src | Tgt
+ *   -----------------+-----+-------+-----+-------+-----+-------+-----+------
+ *   chinook          |  11 |    11 |  22 |    22 |  11 |    11 |   4 |     4
+ */
+static void
+compare_alldb_schema_summary(CopyDataSpec *parentSpecs,
+							 const char (*datnames)[PG_NAMEDATALEN],
+							 int dbCount)
+{
+	/* Collect per-database counts */
+	typedef struct
+	{
+		char datname[PG_NAMEDATALEN];
+		CatalogCounts src;
+		CatalogCounts tgt;
+	} DbCounts;
+
+	DbCounts *counts = (DbCounts *) calloc(dbCount, sizeof(DbCounts));
+
+	if (counts == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return;
+	}
+
+	int maxNameLen = 8; /* "Database" */
+
+	for (int i = 0; i < dbCount; i++)
+	{
+		strlcpy(counts[i].datname, datnames[i], PG_NAMEDATALEN);
+
+		int nameLen = strlen(datnames[i]);
+
+		if (nameLen > maxNameLen)
+			maxNameLen = nameLen;
+
+		/* source catalog: <topdir>/db/<datname>/schema/source/source.db */
+		DatabaseCatalog srcCat = { .type = DATABASE_CATALOG_TYPE_SOURCE };
+
+		sformat(srcCat.dbfile, sizeof(srcCat.dbfile),
+				"%s/db/%s/schema/source/source.db",
+				parentSpecs->cfPaths.topdir, datnames[i]);
+
+		if (catalog_init(&srcCat))
+		{
+			(void) catalog_count_objects(&srcCat, &counts[i].src);
+			(void) catalog_close(&srcCat);
+		}
+
+		/* target catalog: <topdir>/db/<datname>/schema/target/source.db */
+		DatabaseCatalog tgtCat = { .type = DATABASE_CATALOG_TYPE_SOURCE };
+
+		sformat(tgtCat.dbfile, sizeof(tgtCat.dbfile),
+				"%s/db/%s/schema/target/source.db",
+				parentSpecs->cfPaths.topdir, datnames[i]);
+
+		if (catalog_init(&tgtCat))
+		{
+			(void) catalog_count_objects(&tgtCat, &counts[i].tgt);
+			(void) catalog_close(&tgtCat);
+		}
+	}
+
+	/* Build separator string for database name column */
+	char dbSep[NAMEDATALEN] = { 0 };
+
+	for (int j = 0; j < maxNameLen && j < (int) sizeof(dbSep) - 1; j++)
+		dbSep[j] = '-';
+
+	fformat(stdout, "\n");
+	fformat(stdout, "%-*s |   Tables    |   Indexes   | Constraints |  Sequences\n",
+			maxNameLen, "Database");
+	fformat(stdout, "%-*s | Src | Tgt   | Src | Tgt   | Src | Tgt   | Src | Tgt\n",
+			maxNameLen, "");
+	fformat(stdout, "%s-+-----+-------+-----+-------+-----+-------+-----+------\n",
+			dbSep);
+
+	for (int i = 0; i < dbCount; i++)
+	{
+		fformat(stdout, "%-*s | %3lld | %5lld | %3lld | %5lld | %3lld | %5lld | %3lld | %5lld\n",
+				maxNameLen, counts[i].datname,
+				(long long) counts[i].src.tables,
+				(long long) counts[i].tgt.tables,
+				(long long) counts[i].src.indexes,
+				(long long) counts[i].tgt.indexes,
+				(long long) counts[i].src.constraints,
+				(long long) counts[i].tgt.constraints,
+				(long long) counts[i].src.sequences,
+				(long long) counts[i].tgt.sequences);
+	}
+
+	fformat(stdout, "\n");
+
+	free(counts);
+}
+
+
+/*
+ * compare_all_databases_schema iterates all user databases on the source
+ * instance and runs compare_schemas for each one in parallel (up to
+ * tableJobs concurrent workers).  After all workers finish, it prints a
+ * per-database object-count summary table.
  */
 bool
 compare_all_databases_schema(CopyDataSpec *parentSpecs)
@@ -1072,163 +1285,158 @@ compare_all_databases_schema(CopyDataSpec *parentSpecs)
 
 	pgsql_finish(&src);
 
-	bool ok = true;
+	/* Collect all datnames before forking (SQLite iterators are not fork-safe) */
+	int dbCount = 0;
+	char (*datnames)[PG_NAMEDATALEN] = NULL;
 
-	SourceDatabaseIterator dbIter = {
-		.catalog = instanceCatalog,
-		.dat = NULL
-	};
-
-	if (!catalog_iter_s_database_init(&dbIter))
 	{
+		SourceDatabaseIterator dbIter = {
+			.catalog = instanceCatalog,
+			.dat = NULL
+		};
+
+		if (!catalog_iter_s_database_init(&dbIter))
+		{
+			(void) catalog_close_from_specs(parentSpecs);
+			return false;
+		}
+
+		for (;;)
+		{
+			if (!catalog_iter_s_database_next(&dbIter))
+				break;
+
+			SourceDatabase *db = dbIter.dat;
+
+			if (db == NULL)
+				break;
+
+			dbCount++;
+		}
+
+		(void) catalog_iter_s_database_finish(&dbIter);
+	}
+
+	if (dbCount == 0)
+	{
+		(void) catalog_close_from_specs(parentSpecs);
+		return true;
+	}
+
+	datnames = (char (*)[PG_NAMEDATALEN]) calloc(dbCount, PG_NAMEDATALEN);
+
+	if (datnames == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
 		(void) catalog_close_from_specs(parentSpecs);
 		return false;
 	}
 
-	for (;;)
 	{
-		if (!catalog_iter_s_database_next(&dbIter))
+		SourceDatabaseIterator dbIter = {
+			.catalog = instanceCatalog,
+			.dat = NULL
+		};
+		int idx = 0;
+
+		if (!catalog_iter_s_database_init(&dbIter))
 		{
-			ok = false;
-			break;
+			free(datnames);
+			(void) catalog_close_from_specs(parentSpecs);
+			return false;
 		}
 
-		SourceDatabase *db = dbIter.dat;
+		for (;;)
+		{
+			if (!catalog_iter_s_database_next(&dbIter))
+				break;
 
-		if (db == NULL)
-			break;
+			SourceDatabase *db = dbIter.dat;
 
+			if (db == NULL)
+				break;
+
+			if (idx < dbCount)
+				strlcpy(datnames[idx++], db->datname, PG_NAMEDATALEN);
+		}
+
+		(void) catalog_iter_s_database_finish(&dbIter);
+	}
+
+	(void) catalog_close_from_specs(parentSpecs);
+
+	/* Fork up to tableJobs parallel compare workers */
+	int maxWorkers = (parentSpecs->tableJobs < dbCount)
+		? parentSpecs->tableJobs : dbCount;
+
+	int activeCount = 0;
+	bool ok = true;
+
+	log_info("Comparing schema for %d databases with up to %d parallel workers",
+			 dbCount, maxWorkers);
+
+	for (int i = 0; i < dbCount; i++)
+	{
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
 			ok = false;
 			break;
 		}
 
-		log_info("Comparing schema for database \"%s\"", db->datname);
-
-		/* build per-database URIs */
-		char *srcuri = NULL;
-		char *tgturi = NULL;
-
-		if (!multidb_build_uri_for_database(parentSpecs->connStrings.source_pguri,
-											 db->datname, &srcuri) ||
-			!multidb_build_uri_for_database(parentSpecs->connStrings.target_pguri,
-											 db->datname, &tgturi))
+		/* Wait for a slot if at capacity */
+		if (activeCount >= maxWorkers)
 		{
-			log_error("Failed to build URIs for database \"%s\"", db->datname);
-			free(srcuri);
-			free(tgturi);
+			if (!compare_wait_any_child())
+				ok = false;
+
+			activeCount--;
+		}
+
+		log_info("Comparing schema for database \"%s\"", datnames[i]);
+
+		fflush(stdout);
+		fflush(stderr);
+
+		pid_t pid = fork();
+
+		if (pid < 0)
+		{
+			log_error("Failed to fork schema-compare worker: %m");
 			ok = false;
-			if (parentSpecs->failFast)
-				break;
-			continue;
-		}
-
-		/* create per-db work directory */
-		char dbdir[MAXPGPATH] = { 0 };
-
-		sformat(dbdir, sizeof(dbdir), "%s/db/%s",
-				parentSpecs->cfPaths.topdir, db->datname);
-
-		CopyDataSpec dbSpecs = *parentSpecs;
-
-		/*
-		 * The parent catalog is currently open (db handle != NULL).
-		 * Null out all inherited SQLite handles so that catalog_init
-		 * inside compare_schemas opens fresh connections to the per-db
-		 * catalog files rather than reusing the instance-level handle
-		 * (which would cause a setup URI mismatch).
-		 */
-		dbSpecs.catalogs.source.db = NULL;
-		dbSpecs.catalogs.filter.db = NULL;
-		dbSpecs.catalogs.target.db = NULL;
-		dbSpecs.catalogs.replay.db = NULL;
-
-		dbSpecs.connStrings.source_pguri = srcuri;
-		dbSpecs.connStrings.target_pguri = tgturi;
-
-		if (!parse_and_scrub_connection_string(srcuri,
-											   &dbSpecs.connStrings.safeSourcePGURI))
-		{
-			log_error("Failed to scrub source URI for database \"%s\"",
-					  db->datname);
-			free(srcuri);
-			free(tgturi);
-			ok = false;
-			if (parentSpecs->failFast)
-				break;
-			continue;
-		}
-
-		if (!parse_and_scrub_connection_string(tgturi,
-											   &dbSpecs.connStrings.safeTargetPGURI))
-		{
-			log_error("Failed to scrub target URI for database \"%s\"",
-					  db->datname);
-			free(srcuri);
-			free(tgturi);
-			if (dbSpecs.connStrings.safeSourcePGURI.pguri)
-				free(dbSpecs.connStrings.safeSourcePGURI.pguri);
-			ok = false;
-			if (parentSpecs->failFast)
-				break;
-			continue;
-		}
-
-		if (!copydb_init_workdir(&dbSpecs, dbdir,
-								 false,  /* service */
-								 NULL,   /* serviceName */
-								 parentSpecs->restart,
-								 parentSpecs->resume,
-								 true))  /* createWorkDir */
-		{
-			log_error("Failed to init work dir for database \"%s\"",
-					  db->datname);
-			free(srcuri);
-			free(tgturi);
-			if (dbSpecs.connStrings.safeSourcePGURI.pguri)
-				free(dbSpecs.connStrings.safeSourcePGURI.pguri);
-			if (dbSpecs.connStrings.safeTargetPGURI.pguri)
-				free(dbSpecs.connStrings.safeTargetPGURI.pguri);
-			ok = false;
-			if (parentSpecs->failFast)
-				break;
-			continue;
-		}
-
-		if (!compare_schemas(&dbSpecs))
-		{
-			log_error("Schema comparison failed for database \"%s\"",
-					  db->datname);
-			ok = false;
-		}
-		else
-		{
-			log_info("Schema comparison succeeded for database \"%s\"",
-					 db->datname);
-		}
-
-		free(srcuri);
-		free(tgturi);
-		if (dbSpecs.connStrings.safeSourcePGURI.pguri)
-			free(dbSpecs.connStrings.safeSourcePGURI.pguri);
-		if (dbSpecs.connStrings.safeTargetPGURI.pguri)
-			free(dbSpecs.connStrings.safeTargetPGURI.pguri);
-
-		if (!ok && parentSpecs->failFast)
 			break;
+		}
+		else if (pid == 0)
+		{
+			bool res = compare_one_database_schema(parentSpecs, datnames[i]);
+			exit(res ? EXIT_CODE_QUIT : EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		activeCount++;
 	}
 
-	(void) catalog_iter_s_database_finish(&dbIter);
-	(void) catalog_close_from_specs(parentSpecs);
+	/* Wait for remaining workers */
+	while (activeCount > 0)
+	{
+		if (!compare_wait_any_child())
+			ok = false;
+
+		activeCount--;
+	}
+
+	/* Print per-database object count summary */
+	if (ok || !parentSpecs->failFast)
+		compare_alldb_schema_summary(parentSpecs, datnames, dbCount);
+
+	free(datnames);
 
 	return ok;
 }
 
 
 /*
- * compare_alldb_chksum_hook prints one table's checksum row in the
- * --all-databases data comparison text summary.
+ * compare_alldb_chksum_hook prints one table's checksum row in the unified
+ * --all-databases data comparison summary.  The datname is prepended to qname
+ * to produce a fully-qualified "datname.nspname.relname" identifier.
  */
 static bool
 compare_alldb_chksum_hook(void *ctx, SourceTable *table)
@@ -1236,8 +1444,15 @@ compare_alldb_chksum_hook(void *ctx, SourceTable *table)
 	TableChecksum *srcChk = &(table->sourceChecksum);
 	TableChecksum *dstChk = &(table->targetChecksum);
 
-	fformat(stdout, "%30s | %s | %36s | %36s \n",
-			table->qname,
+	char fqname[2 * PG_NAMEDATALEN + 64] = { 0 };
+
+	if (table->datname[0] != '\0')
+		sformat(fqname, sizeof(fqname), "%s.%s", table->datname, table->qname);
+	else
+		strlcpy(fqname, table->qname, sizeof(fqname));
+
+	fformat(stdout, "%50s | %s | %36s | %36s \n",
+			fqname,
 			streq(srcChk->checksum, dstChk->checksum) ? " " : "!",
 			srcChk->checksum,
 			dstChk->checksum);
@@ -1247,10 +1462,101 @@ compare_alldb_chksum_hook(void *ctx, SourceTable *table)
 
 
 /*
+ * compare_one_database_data sets up per-database specs and runs compare_data
+ * for a single named database.  Returns false on error.
+ */
+static bool
+compare_one_database_data(CopyDataSpec *parentSpecs, const char *datname)
+{
+	char *srcuri = NULL;
+	char *tgturi = NULL;
+
+	if (!multidb_build_uri_for_database(parentSpecs->connStrings.source_pguri,
+										 datname, &srcuri) ||
+		!multidb_build_uri_for_database(parentSpecs->connStrings.target_pguri,
+										 datname, &tgturi))
+	{
+		log_error("Failed to build URIs for database \"%s\"", datname);
+		free(srcuri);
+		free(tgturi);
+		return false;
+	}
+
+	char dbdir[MAXPGPATH] = { 0 };
+
+	sformat(dbdir, sizeof(dbdir), "%s/db/%s",
+			parentSpecs->cfPaths.topdir, datname);
+
+	CopyDataSpec dbSpecs = *parentSpecs;
+
+	dbSpecs.catalogs.source.db = NULL;
+	dbSpecs.catalogs.filter.db = NULL;
+	dbSpecs.catalogs.target.db = NULL;
+	dbSpecs.catalogs.replay.db = NULL;
+
+	dbSpecs.connStrings.source_pguri = srcuri;
+	dbSpecs.connStrings.target_pguri = tgturi;
+	strlcpy(dbSpecs.datname, datname, sizeof(dbSpecs.datname));
+
+	if (!parse_and_scrub_connection_string(srcuri,
+										   &dbSpecs.connStrings.safeSourcePGURI))
+	{
+		log_error("Failed to scrub source URI for database \"%s\"", datname);
+		free(srcuri);
+		free(tgturi);
+		return false;
+	}
+
+	if (!parse_and_scrub_connection_string(tgturi,
+										   &dbSpecs.connStrings.safeTargetPGURI))
+	{
+		log_error("Failed to scrub target URI for database \"%s\"", datname);
+		free(srcuri);
+		free(tgturi);
+		if (dbSpecs.connStrings.safeSourcePGURI.pguri)
+			free(dbSpecs.connStrings.safeSourcePGURI.pguri);
+		return false;
+	}
+
+	if (!copydb_init_workdir(&dbSpecs, dbdir, false, NULL,
+							 parentSpecs->restart, parentSpecs->resume, true))
+	{
+		log_error("Failed to init work dir for database \"%s\"", datname);
+		free(srcuri);
+		free(tgturi);
+		if (dbSpecs.connStrings.safeSourcePGURI.pguri)
+			free(dbSpecs.connStrings.safeSourcePGURI.pguri);
+		if (dbSpecs.connStrings.safeTargetPGURI.pguri)
+			free(dbSpecs.connStrings.safeTargetPGURI.pguri);
+		return false;
+	}
+
+	strlcpy(dbSpecs.catalogs.source.dbfile, dbSpecs.cfPaths.sdbfile,
+			sizeof(dbSpecs.catalogs.source.dbfile));
+	strlcpy(dbSpecs.catalogs.filter.dbfile, dbSpecs.cfPaths.fdbfile,
+			sizeof(dbSpecs.catalogs.filter.dbfile));
+	strlcpy(dbSpecs.catalogs.target.dbfile, dbSpecs.cfPaths.tdbfile,
+			sizeof(dbSpecs.catalogs.target.dbfile));
+
+	bool ok = compare_data(&dbSpecs);
+
+	free(srcuri);
+	free(tgturi);
+	if (dbSpecs.connStrings.safeSourcePGURI.pguri)
+		free(dbSpecs.connStrings.safeSourcePGURI.pguri);
+	if (dbSpecs.connStrings.safeTargetPGURI.pguri)
+		free(dbSpecs.connStrings.safeTargetPGURI.pguri);
+
+	return ok;
+}
+
+
+/*
  * compare_all_databases_data iterates all user databases on the source
- * instance, computes checksums for all tables, and prints a summary.
+ * instance, computes checksums for all tables in parallel (up to tableJobs
+ * concurrent workers), and prints a single unified summary table.
  *
- * Table names in the text output are formatted as datname.nspname.relname.
+ * Table names in the text output use "datname.nspname.relname" format.
  */
 bool
 compare_all_databases_data(CopyDataSpec *parentSpecs)
@@ -1283,180 +1589,173 @@ compare_all_databases_data(CopyDataSpec *parentSpecs)
 
 	pgsql_finish(&src);
 
-	bool ok = true;
+	/* Collect datnames before forking */
+	int dbCount = 0;
+	char (*datnames)[PG_NAMEDATALEN] = NULL;
 
-	SourceDatabaseIterator dbIter = {
-		.catalog = instanceCatalog,
-		.dat = NULL
-	};
-
-	if (!catalog_iter_s_database_init(&dbIter))
 	{
+		SourceDatabaseIterator dbIter = {
+			.catalog = instanceCatalog,
+			.dat = NULL
+		};
+
+		if (!catalog_iter_s_database_init(&dbIter))
+		{
+			(void) catalog_close_from_specs(parentSpecs);
+			return false;
+		}
+
+		for (;;)
+		{
+			if (!catalog_iter_s_database_next(&dbIter))
+				break;
+
+			if (dbIter.dat == NULL)
+				break;
+
+			dbCount++;
+		}
+
+		(void) catalog_iter_s_database_finish(&dbIter);
+	}
+
+	if (dbCount == 0)
+	{
+		(void) catalog_close_from_specs(parentSpecs);
+		return true;
+	}
+
+	datnames = (char (*)[PG_NAMEDATALEN]) calloc(dbCount, PG_NAMEDATALEN);
+
+	if (datnames == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
 		(void) catalog_close_from_specs(parentSpecs);
 		return false;
 	}
 
-	for (;;)
 	{
-		if (!catalog_iter_s_database_next(&dbIter))
+		SourceDatabaseIterator dbIter = {
+			.catalog = instanceCatalog,
+			.dat = NULL
+		};
+		int idx = 0;
+
+		if (!catalog_iter_s_database_init(&dbIter))
 		{
-			ok = false;
-			break;
+			free(datnames);
+			(void) catalog_close_from_specs(parentSpecs);
+			return false;
 		}
 
-		SourceDatabase *db = dbIter.dat;
+		for (;;)
+		{
+			if (!catalog_iter_s_database_next(&dbIter))
+				break;
 
-		if (db == NULL)
-			break;
+			SourceDatabase *db = dbIter.dat;
 
+			if (db == NULL)
+				break;
+
+			if (idx < dbCount)
+				strlcpy(datnames[idx++], db->datname, PG_NAMEDATALEN);
+		}
+
+		(void) catalog_iter_s_database_finish(&dbIter);
+	}
+
+	(void) catalog_close_from_specs(parentSpecs);
+
+	/* Fork up to tableJobs parallel workers */
+	int maxWorkers = (parentSpecs->tableJobs < dbCount)
+		? parentSpecs->tableJobs : dbCount;
+
+	int activeCount = 0;
+	bool ok = true;
+
+	log_info("Comparing data for %d databases with up to %d parallel workers",
+			 dbCount, maxWorkers);
+
+	for (int i = 0; i < dbCount; i++)
+	{
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
 			ok = false;
 			break;
 		}
 
-		log_info("Comparing data for database \"%s\"", db->datname);
-
-		char *srcuri = NULL;
-		char *tgturi = NULL;
-
-		if (!multidb_build_uri_for_database(parentSpecs->connStrings.source_pguri,
-											 db->datname, &srcuri) ||
-			!multidb_build_uri_for_database(parentSpecs->connStrings.target_pguri,
-											 db->datname, &tgturi))
+		/* Wait for a slot if at capacity */
+		if (activeCount >= maxWorkers)
 		{
-			log_error("Failed to build URIs for database \"%s\"", db->datname);
-			free(srcuri);
-			free(tgturi);
+			if (!compare_wait_any_child())
+				ok = false;
+
+			activeCount--;
+		}
+
+		log_info("Comparing data for database \"%s\"", datnames[i]);
+
+		fflush(stdout);
+		fflush(stderr);
+
+		pid_t pid = fork();
+
+		if (pid < 0)
+		{
+			log_error("Failed to fork data-compare worker: %m");
 			ok = false;
-			if (parentSpecs->failFast)
-				break;
-			continue;
-		}
-
-		char dbdir[MAXPGPATH] = { 0 };
-
-		sformat(dbdir, sizeof(dbdir), "%s/db/%s",
-				parentSpecs->cfPaths.topdir, db->datname);
-
-		CopyDataSpec dbSpecs = *parentSpecs;
-
-		/*
-		 * Null out inherited SQLite handles so that catalog_init inside
-		 * compare_data opens fresh connections to per-db catalog files.
-		 */
-		dbSpecs.catalogs.source.db = NULL;
-		dbSpecs.catalogs.filter.db = NULL;
-		dbSpecs.catalogs.target.db = NULL;
-		dbSpecs.catalogs.replay.db = NULL;
-
-		dbSpecs.connStrings.source_pguri = srcuri;
-		dbSpecs.connStrings.target_pguri = tgturi;
-		strlcpy(dbSpecs.datname, db->datname, sizeof(dbSpecs.datname));
-
-		if (!parse_and_scrub_connection_string(srcuri,
-											   &dbSpecs.connStrings.safeSourcePGURI))
-		{
-			log_error("Failed to scrub source URI for database \"%s\"",
-					  db->datname);
-			free(srcuri);
-			free(tgturi);
-			ok = false;
-			if (parentSpecs->failFast)
-				break;
-			continue;
-		}
-
-		if (!parse_and_scrub_connection_string(tgturi,
-											   &dbSpecs.connStrings.safeTargetPGURI))
-		{
-			log_error("Failed to scrub target URI for database \"%s\"",
-					  db->datname);
-			free(srcuri);
-			free(tgturi);
-			if (dbSpecs.connStrings.safeSourcePGURI.pguri)
-				free(dbSpecs.connStrings.safeSourcePGURI.pguri);
-			ok = false;
-			if (parentSpecs->failFast)
-				break;
-			continue;
-		}
-
-		if (!copydb_init_workdir(&dbSpecs, dbdir,
-								 false, NULL,
-								 parentSpecs->restart,
-								 parentSpecs->resume,
-								 true))
-		{
-			log_error("Failed to init work dir for database \"%s\"",
-					  db->datname);
-			free(srcuri);
-			free(tgturi);
-			if (dbSpecs.connStrings.safeSourcePGURI.pguri)
-				free(dbSpecs.connStrings.safeSourcePGURI.pguri);
-			if (dbSpecs.connStrings.safeTargetPGURI.pguri)
-				free(dbSpecs.connStrings.safeTargetPGURI.pguri);
-			ok = false;
-			if (parentSpecs->failFast)
-				break;
-			continue;
-		}
-
-		/*
-		 * copydb_init_workdir updates cfPaths.{s,f,t}dbfile but not the
-		 * catalogs.*.dbfile fields. Sync them so that compare_data uses the
-		 * per-database catalog rather than the inherited instance-level path.
-		 */
-		strlcpy(dbSpecs.catalogs.source.dbfile, dbSpecs.cfPaths.sdbfile,
-				sizeof(dbSpecs.catalogs.source.dbfile));
-		strlcpy(dbSpecs.catalogs.filter.dbfile, dbSpecs.cfPaths.fdbfile,
-				sizeof(dbSpecs.catalogs.filter.dbfile));
-		strlcpy(dbSpecs.catalogs.target.dbfile, dbSpecs.cfPaths.tdbfile,
-				sizeof(dbSpecs.catalogs.target.dbfile));
-
-		if (!compare_data(&dbSpecs))
-		{
-			log_error("Data comparison failed for database \"%s\"",
-					  db->datname);
-			ok = false;
-		}
-		else
-		{
-			/*
-			 * Print the per-database checksum table.  compare_data closes
-			 * the catalog before returning, so we reopen it here.
-			 */
-			DatabaseCatalog *sourceDB = &dbSpecs.catalogs.source;
-
-			if (catalog_init(sourceDB))
-			{
-				fformat(stdout, "\n%s\n", db->datname);
-				fformat(stdout, "%30s | %s | %36s | %36s \n",
-						"Table Name", "!", "Source Checksum", "Target Checksum");
-				fformat(stdout, "%30s-+-%s-+-%36s-+-%36s \n",
-						"------------------------------", "-",
-						"------------------------------------",
-						"------------------------------------");
-				(void) catalog_iter_s_table(sourceDB, NULL,
-											&compare_alldb_chksum_hook);
-				fformat(stdout, "\n");
-				(void) catalog_close(sourceDB);
-			}
-		}
-
-		free(srcuri);
-		free(tgturi);
-		if (dbSpecs.connStrings.safeSourcePGURI.pguri)
-			free(dbSpecs.connStrings.safeSourcePGURI.pguri);
-		if (dbSpecs.connStrings.safeTargetPGURI.pguri)
-			free(dbSpecs.connStrings.safeTargetPGURI.pguri);
-
-		if (!ok && parentSpecs->failFast)
 			break;
+		}
+		else if (pid == 0)
+		{
+			bool res = compare_one_database_data(parentSpecs, datnames[i]);
+			exit(res ? EXIT_CODE_QUIT : EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		activeCount++;
 	}
 
-	(void) catalog_iter_s_database_finish(&dbIter);
-	(void) catalog_close_from_specs(parentSpecs);
+	/* Wait for remaining workers */
+	while (activeCount > 0)
+	{
+		if (!compare_wait_any_child())
+			ok = false;
+
+		activeCount--;
+	}
+
+	/* Print unified checksum table (parent reads per-db catalogs) */
+	fformat(stdout, "\n");
+	fformat(stdout, "%50s | %s | %36s | %36s \n",
+			"Table Name", "!", "Source Checksum", "Target Checksum");
+	fformat(stdout, "%50s-+-%s-+-%36s-+-%36s \n",
+			"--------------------------------------------------", "-",
+			"------------------------------------",
+			"------------------------------------");
+
+	for (int i = 0; i < dbCount; i++)
+	{
+		/* Reopen per-db catalog to iterate checksum results */
+		char sdbfile[MAXPGPATH] = { 0 };
+
+		sformat(sdbfile, sizeof(sdbfile), "%s/db/%s/schema/source.db",
+				parentSpecs->cfPaths.topdir, datnames[i]);
+
+		DatabaseCatalog dbCat = { 0 };
+
+		strlcpy(dbCat.dbfile, sdbfile, sizeof(dbCat.dbfile));
+
+		if (catalog_init(&dbCat))
+		{
+			(void) catalog_iter_s_table(&dbCat, NULL, &compare_alldb_chksum_hook);
+			(void) catalog_close(&dbCat);
+		}
+	}
+
+	fformat(stdout, "\n");
+
+	free(datnames);
 
 	return ok;
 }
