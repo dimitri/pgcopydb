@@ -43,16 +43,14 @@ do
         --skip-collations \
         --fail-fast > /dev/null
 
+    # Verify both constraints survived the copy, using the same SQL as the
+    # SQL test suite. The SQL test covers a standard copy; this script
+    # additionally exercises --index-jobs 1 and --index-jobs 4 separately
+    # to catch the double-constraint-creation bug described in issue #808.
     psql -d "${TARGET_URI}" \
          --no-psqlrc \
-         --tuples-only \
-         --no-align \
-         -c "select c.conname || ' ' || c.contype::text
-               from pg_constraint c
-                    join pg_class r on r.oid = c.conrelid
-              where r.relname = 'excl_with_pkey'
-                and c.contype != 'n'
-           order by c.conname"
+         --expanded \
+         --file ./sql/17-exclusion-with-pkey.sql
 
     psql -q -d "${PGCOPYDB_TARGET_PGURI}" -c "DROP DATABASE ${TMPDB}"
 
