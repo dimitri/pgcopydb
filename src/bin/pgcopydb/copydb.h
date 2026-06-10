@@ -562,7 +562,7 @@ bool vacuum_supervisor(CopyDataSpec *specs);
 bool vacuum_start_workers(CopyDataSpec *specs);
 bool vacuum_worker(CopyDataSpec *specs);
 bool vacuum_analyze_table_by_oid(CopyDataSpec *specs, uint32_t oid);
-bool vacuum_add_table(CopyDataSpec *specs, uint32_t oid);
+bool vacuum_add_table(CopyDataSpec *specs, uint32_t oid, const char *datname);
 bool vacuum_send_stop(CopyDataSpec *specs);
 
 /* sentinel.c */
@@ -728,6 +728,11 @@ MultiDbEntry *multidb_context_get_entry(MultiDbContext *ctx,
 										const char *datname);
 bool multidb_context_close_entry(MultiDbEntry *entry);
 bool multidb_context_close_all(MultiDbContext *ctx);
+
+/* lighter pool for index/vacuum workers: catalog + target only, no snapshot */
+MultiDbEntry *multidb_index_context_get_entry(MultiDbContext *ctx,
+											  const char *datname);
+bool multidb_index_context_close_all(MultiDbContext *ctx);
 
 /* compare.c */
 bool compare_schemas(CopyDataSpec *copySpecs);

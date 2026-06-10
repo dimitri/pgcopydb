@@ -1029,7 +1029,8 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 				{
 					SourceTable *sourceTable = tableSpecs->sourceTable;
 
-					if (!vacuum_add_table(specs, sourceTable->oid))
+					if (!vacuum_add_table(specs, sourceTable->oid,
+									  sourceTable->datname))
 					{
 						log_error("Failed to queue VACUUM ANALYZE %s [%u]",
 								  sourceTable->qname,

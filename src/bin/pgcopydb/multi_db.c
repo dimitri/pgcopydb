@@ -28,9 +28,9 @@
 #include "pgcmd.h"
 #include "pgsql.h"
 #include "schema.h"
+#include "summary.h"
 #include "signals.h"
 #include "string_utils.h"
-#include "summary.h"
 
 
 static bool multidb_is_system_database(const char *datname);
@@ -41,9 +41,6 @@ static bool multidb_create_target_database(PGSQL *dst, const char *datname,
 bool multidb_build_uri_for_database(const char *pguri,
 									const char *datname,
 									char **result_uri);
-static bool multidb_build_conn_strings(ConnStrings *parent,
-									   const char *datname,
-									   ConnStrings *dbConnStrings);
 static bool multidb_init_db_specs(CopyDataSpec *dbSpecs,
 								  CopyDataSpec *parent,
 								  ConnStrings *connStrings);
@@ -76,6 +73,12 @@ static bool multidb_wait_child(pid_t pid, const char *label);
 static bool multidb_init_entry(MultiDbEntry *entry,
 								CopyDataSpec *parentSpecs,
 								const char *datname);
+
+/* lighter index/vacuum pool helpers */
+static bool multidb_init_index_entry(MultiDbEntry *entry,
+									  CopyDataSpec *parentSpecs,
+									  const char *datname);
+static bool multidb_index_context_close_entry(MultiDbEntry *entry);
 
 
 /*
@@ -444,12 +447,34 @@ clone_all_databases(CopyDataSpec *parentSpecs)
 	log_info("Phase II: global COPY for %d databases (largest tables first)",
 			 dbCount);
 
-	if (!multidb_global_copy(parentSpecs))
+	/*
+	 * Open the instance catalog to record Phase II wall-clock timing.
+	 * The catalog was closed after reading multiDbInfos; re-open it now.
+	 */
+	if (!catalog_init_from_specs(parentSpecs))
 	{
-		log_error("Global COPY phase failed");
+		log_error("Failed to open instance catalog for Phase II timing");
 		ok = false;
 		goto signal_done;
 	}
+
+	(void) summary_start_timing(&parentSpecs->catalogs.source,
+								TIMING_SECTION_TOTAL_DATA);
+
+	if (!multidb_global_copy(parentSpecs))
+	{
+		log_error("Global COPY phase failed");
+		(void) summary_stop_timing(&parentSpecs->catalogs.source,
+								   TIMING_SECTION_TOTAL_DATA);
+		(void) catalog_close_from_specs(parentSpecs);
+		ok = false;
+		goto signal_done;
+	}
+
+	(void) summary_stop_timing(&parentSpecs->catalogs.source,
+							   TIMING_SECTION_TOTAL_DATA);
+
+	(void) catalog_close_from_specs(parentSpecs);
 
 	/* ====== PHASE III: POST-DATA (sequential per-database) ====== */
 	log_info("Phase III: post-data restore and sequences for %d databases",
@@ -1199,6 +1224,23 @@ multidb_clone_one_database_post_data(CopyDataSpec *parentSpecs,
 				exit(EXIT_CODE_INTERNAL_ERROR);
 			}
 
+			/*
+			 * Index and vacuum operations are done by the global supervisors
+			 * in Phase II.  Destroy any per-db queues that multidb_init_db_specs
+			 * may have created to avoid leaking System V resources.
+			 */
+			if (dbSpecs.vacuumQueue.qId != -1)
+			{
+				(void) queue_unlink(&dbSpecs.vacuumQueue);
+				dbSpecs.vacuumQueue.qId = -1;
+			}
+
+			if (dbSpecs.indexQueue.qId != -1)
+			{
+				(void) queue_unlink(&dbSpecs.indexQueue);
+				dbSpecs.indexQueue.qId = -1;
+			}
+
 			strlcpy(dbSpecs.datname, datname, sizeof(dbSpecs.datname));
 
 			/*
@@ -1225,7 +1267,17 @@ multidb_clone_one_database_post_data(CopyDataSpec *parentSpecs,
 				exit(EXIT_CODE_INTERNAL_ERROR);
 			}
 
-			/* restore the post-data section (indexes, constraints, …) */
+			/*
+			 * Indexes and vacuum were already handled by the global supervisors
+			 * during the COPY phase (Phase II).  Post-data here only needs to
+			 * restore the remaining objects that pg_restore --post-data covers
+			 * but pgcopydb's index workers do not: triggers, rules, comments,
+			 * etc.  copydb_target_finalize_schema filters out already-built
+			 * indexes via copydb_objectid_has_been_processed_already so that
+			 * pg_restore does not try to recreate them.
+			 */
+
+			/* restore remaining post-data (triggers, rules, …) */
 			if (!copydb_target_finalize_schema(&dbSpecs))
 			{
 				log_error("Failed to finalize schema for database \"%s\"",
@@ -1255,23 +1307,23 @@ multidb_clone_one_database_post_data(CopyDataSpec *parentSpecs,
 
 
 /*
- * multidb_global_copy runs the global COPY phase.
+ * multidb_global_copy runs the global COPY + index + vacuum phase.
  *
- * Process tree:
- *   clone_all_databases
- *   └── global copy supervisor  (this function forks it, then waits)
- *           ├── global copy worker 1
- *           ├── global copy worker N  (N = --table-jobs)
- *           └── global copy queue tables  (fills queue, then exits)
+ * Process tree (mirrors singledb copydb_process_table_data):
+ *   multidb_global_copy (parent)
+ *   ├── global vacuum supervisor  (async; reads vacuumQueue)
+ *   ├── global index supervisor   (async; reads indexQueue; sends vacuum STOP)
+ *   └── global copy supervisor    (forks copy workers + queue filler; waits)
+ *
+ * Copy workers fill indexQueue and vacuumQueue as they finish each table,
+ * exactly as in the singledb path.  Index/vacuum workers use a per-db
+ * connection pool (catalog + target, no snapshot) to route to the right db.
  *
  * Fix A — shared catalog semaphores:
- *   One System V semaphore is created per database before forking the
- *   supervisor.  All workers inherit the semaphore IDs via COW.
- *   multidb_init_entry wires the semaphore into the DatabaseCatalog
- *   before calling catalog_init(), so catalog_create_semaphore() finds
- *   semId != 0 and skips creating a second independent semaphore.
- *   Without this, each worker creates its own semaphore, breaking
- *   write serialisation and producing SQLite BUSY errors.
+ *   One System V semaphore is created per database before forking.  All
+ *   workers inherit the semaphore IDs via COW.  multidb_init_entry (copy
+ *   workers) and multidb_init_index_entry (index/vacuum workers) wire the
+ *   semaphore into DatabaseCatalog so catalog_create_semaphore() reuses it.
  */
 static bool
 multidb_global_copy(CopyDataSpec *parentSpecs)
@@ -1283,17 +1335,35 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 		return true;
 	}
 
+	/* Create global index and vacuum queues before any forking. */
+	if (!queue_create(&parentSpecs->indexQueue, "global index"))
+	{
+		log_error("Failed to create the global INDEX process queue");
+		return false;
+	}
+
+	if (!parentSpecs->skipVacuum)
+	{
+		if (!queue_create(&parentSpecs->vacuumQueue, "global vacuum"))
+		{
+			log_error("Failed to create the global VACUUM process queue");
+			(void) queue_unlink(&parentSpecs->indexQueue);
+			parentSpecs->indexQueue.qId = -1;
+			return false;
+		}
+	}
+
 	/*
-	 * Fix A: create one shared semaphore per database BEFORE forking the
-	 * supervisor.  Workers inherit the semId via COW; catalog_init() then
-	 * skips creating its own semaphore.
+	 * Fix A: create one shared semaphore per database BEFORE forking.
+	 * Workers inherit the semId via COW; catalog_init() then skips creating
+	 * its own semaphore, so all workers for the same database share one lock.
 	 */
 	for (int i = 0; i < parentSpecs->multiDbCount; i++)
 	{
 		MultiDbInfo *info = &parentSpecs->multiDbInfos[i];
 
 		if (info->catalogSemId != 0)
-			continue;   /* already created (shouldn't happen, but be safe) */
+			continue;
 
 		Semaphore sema = { .initValue = 1, .reentrant = true };
 
@@ -1302,7 +1372,6 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 			log_error("Failed to create catalog semaphore for database \"%s\"",
 					  info->datname);
 
-			/* best-effort cleanup of already-created semaphores */
 			for (int j = 0; j < i; j++)
 			{
 				MultiDbInfo *prev = &parentSpecs->multiDbInfos[j];
@@ -1314,6 +1383,16 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 					prev->catalogSemId = 0;
 				}
 			}
+
+			(void) queue_unlink(&parentSpecs->indexQueue);
+			parentSpecs->indexQueue.qId = -1;
+
+			if (!parentSpecs->skipVacuum)
+			{
+				(void) queue_unlink(&parentSpecs->vacuumQueue);
+				parentSpecs->vacuumQueue.qId = -1;
+			}
+
 			return false;
 		}
 
@@ -1321,11 +1400,68 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 
 		log_debug("Created catalog semaphore %d for database \"%s\"",
 				  sema.semId, info->datname);
+
+		/*
+		 * Pre-seed the COPY_DATA timing row so workers' summary_increment_timing
+		 * calls have a valid start_time_epoch to anchor the wall-clock range.
+		 */
+		DatabaseCatalog dbCat = {
+			.type = DATABASE_CATALOG_TYPE_SOURCE,
+			.sema.semId = sema.semId,
+			.sema.reentrant = true,
+		};
+		sformat(dbCat.dbfile, sizeof(dbCat.dbfile),
+				"%s/schema/source.db", info->topdir);
+
+		if (catalog_init(&dbCat))
+		{
+			(void) summary_start_timing(&dbCat, TIMING_SECTION_COPY_DATA);
+			(void) catalog_close(&dbCat);
+		}
+		else
+		{
+			log_warn("Failed to open catalog for \"%s\": "
+					 "COPY_DATA start timing not recorded", info->datname);
+		}
+	}
+
+	/*
+	 * Close the global catalog before forking so that no child inherits an
+	 * open SQLite handle (fork-safety).  The caller re-opens it after we
+	 * return via catalog_open_from_specs.
+	 */
+	if (!catalog_close_from_specs(parentSpecs))
+	{
+		log_error("Failed to close global catalog before forking");
+		return false;
+	}
+
+	/*
+	 * Fork vacuum supervisor first (reads vacuumQueue; waits for workers).
+	 * The index supervisor sends the STOP messages after all indexes are done.
+	 */
+	if (!parentSpecs->skipVacuum)
+	{
+		if (!vacuum_start_supervisor(parentSpecs))
+		{
+			log_error("Failed to start global vacuum supervisor");
+			return false;
+		}
+	}
+
+	/*
+	 * Fork index supervisor (reads indexQueue; after done, sends vacuum STOP).
+	 */
+	if (!copydb_start_index_supervisor(parentSpecs))
+	{
+		log_error("Failed to start global index supervisor");
+		return false;
 	}
 
 	/*
 	 * Fork the global copy supervisor.  The supervisor creates the copyQueue,
-	 * forks workers and the queue filler, then collects all children.
+	 * forks copy workers and the queue filler, then waits for them.
+	 * Copy workers fill indexQueue/vacuumQueue after each table copy.
 	 */
 	fflush(stdout);
 	fflush(stderr);
@@ -1347,17 +1483,12 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 			log_notice("Started global copy supervisor %d [%d]",
 					   getpid(), getppid());
 
-			/*
-			 * Create the copyQueue here so workers can inherit its qId
-			 * after they are forked below.
-			 */
 			if (!queue_create(&parentSpecs->copyQueue, "global copy"))
 			{
 				log_error("Failed to create the global COPY queue");
 				exit(EXIT_CODE_INTERNAL_ERROR);
 			}
 
-			/* fork tableJobs COPY workers */
 			log_info("Starting %d global COPY workers", parentSpecs->tableJobs);
 
 			for (int i = 0; i < parentSpecs->tableJobs; i++)
@@ -1388,7 +1519,6 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 				}
 			}
 
-			/* fork the queue filler as a child of the supervisor */
 			{
 				fflush(stdout);
 				fflush(stderr);
@@ -1417,7 +1547,6 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 				}
 			}
 
-			/* supervisor waits for all children (workers + queue filler) */
 			bool ok = copydb_wait_for_subprocesses(parentSpecs->failFast);
 
 			(void) queue_unlink(&parentSpecs->copyQueue);
@@ -1430,10 +1559,22 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 			break;
 	}
 
-	/* clone_all_databases waits for the one supervisor child */
-	bool ok = multidb_wait_child(spid, "global copy supervisor");
+	/*
+	 * Wait for all three supervisor children: copy supervisor, index
+	 * supervisor, vacuum supervisor.
+	 */
+	bool ok = copydb_wait_for_subprocesses(parentSpecs->failFast);
 
-	/* destroy the shared catalog semaphores */
+	/*
+	 * Reopen the global catalog so the caller can write summary_stop_timing.
+	 */
+	if (!catalog_open_from_specs(parentSpecs))
+	{
+		log_error("Failed to reopen global catalog after copy/index/vacuum phase");
+		ok = false;
+	}
+
+	/* Destroy shared catalog semaphores. */
 	for (int i = 0; i < parentSpecs->multiDbCount; i++)
 	{
 		MultiDbInfo *info = &parentSpecs->multiDbInfos[i];
@@ -1444,6 +1585,19 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 			(void) semaphore_unlink(&sema);
 			info->catalogSemId = 0;
 		}
+	}
+
+	/* Clean up index/vacuum queues (copy queue cleaned up by copy supervisor). */
+	if (parentSpecs->indexQueue.qId != -1)
+	{
+		(void) queue_unlink(&parentSpecs->indexQueue);
+		parentSpecs->indexQueue.qId = -1;
+	}
+
+	if (parentSpecs->vacuumQueue.qId != -1)
+	{
+		(void) queue_unlink(&parentSpecs->vacuumQueue);
+		parentSpecs->vacuumQueue.qId = -1;
 	}
 
 	return ok;
@@ -1583,6 +1737,236 @@ multidb_context_close_all(MultiDbContext *ctx)
 
 
 /*
+ * multidb_init_index_entry is a lighter version of multidb_init_entry for use
+ * by index and vacuum workers.  It opens the per-db catalog and target
+ * connection but does NOT open a source connection or import a snapshot,
+ * because index/vacuum workers only need catalog lookups and target writes.
+ */
+static bool
+multidb_init_index_entry(MultiDbEntry *entry, CopyDataSpec *parentSpecs,
+						  const char *datname)
+{
+	MultiDbInfo *info = NULL;
+
+	for (int i = 0; i < parentSpecs->multiDbCount; i++)
+	{
+		if (strcmp(parentSpecs->multiDbInfos[i].datname, datname) == 0)
+		{
+			info = &parentSpecs->multiDbInfos[i];
+			break;
+		}
+	}
+
+	if (info == NULL)
+	{
+		log_error("BUG: multidb_init_index_entry: no MultiDbInfo for \"%s\"",
+				  datname);
+		return false;
+	}
+
+	CopyDataSpec *dbSpecs = (CopyDataSpec *) calloc(1, sizeof(CopyDataSpec));
+
+	if (dbSpecs == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	dbSpecs->pgPaths = parentSpecs->pgPaths;
+	dbSpecs->filters = parentSpecs->filters;
+	dbSpecs->section = parentSpecs->section;
+	dbSpecs->restoreOptions = parentSpecs->restoreOptions;
+	dbSpecs->skipVacuum = parentSpecs->skipVacuum;
+	dbSpecs->skipAnalyze = parentSpecs->skipAnalyze;
+	dbSpecs->skipLargeObjects = parentSpecs->skipLargeObjects;
+	dbSpecs->failFast = parentSpecs->failFast;
+	dbSpecs->resume = parentSpecs->resume;
+	dbSpecs->allDatabases = false;
+
+	/* queues inherited from parent — index/vacuum workers enqueue into them */
+	dbSpecs->indexQueue = parentSpecs->indexQueue;
+	dbSpecs->vacuumQueue = parentSpecs->vacuumQueue;
+	dbSpecs->copyQueue.qId = -1;
+	dbSpecs->loQueue.qId = -1;
+
+	dbSpecs->connStrings.target_pguri = strdup(info->target_pguri);
+
+	if (dbSpecs->connStrings.target_pguri == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		free(dbSpecs);
+		return false;
+	}
+
+	if (!parse_and_scrub_connection_string(dbSpecs->connStrings.target_pguri,
+										   &dbSpecs->connStrings.safeTargetPGURI))
+	{
+		log_error("Failed to scrub target URI for database \"%s\"", datname);
+		free(dbSpecs->connStrings.target_pguri);
+		free(dbSpecs);
+		return false;
+	}
+
+	if (!copydb_init_workdir(dbSpecs, info->topdir,
+							 false, NULL, false, true, false))
+	{
+		log_error("Failed to init work dir for database \"%s\"", datname);
+		free(dbSpecs->connStrings.target_pguri);
+		free(dbSpecs);
+		return false;
+	}
+
+	DatabaseCatalog *sourceDB = &dbSpecs->catalogs.source;
+
+	sourceDB->type = DATABASE_CATALOG_TYPE_SOURCE;
+	strlcpy(sourceDB->dbfile, dbSpecs->cfPaths.sdbfile, sizeof(sourceDB->dbfile));
+
+	if (info->catalogSemId != 0)
+	{
+		sourceDB->sema.semId = info->catalogSemId;
+		sourceDB->sema.reentrant = true;
+	}
+
+	if (!catalog_init(sourceDB))
+	{
+		log_error("Failed to open catalog for database \"%s\"", datname);
+		free(dbSpecs->connStrings.target_pguri);
+		free(dbSpecs);
+		return false;
+	}
+
+	if (!pgsql_init(&entry->dst, dbSpecs->connStrings.target_pguri,
+					PGSQL_CONN_TARGET))
+	{
+		log_error("Failed to connect to target for database \"%s\"", datname);
+		catalog_close(sourceDB);
+		free(dbSpecs->connStrings.target_pguri);
+		free(dbSpecs);
+		return false;
+	}
+
+	if (!pgsql_set_gucs(&entry->dst, dstSettings))
+	{
+		log_warn("Failed to set GUCs on target for database \"%s\"", datname);
+	}
+
+	strlcpy(entry->datname, datname, sizeof(entry->datname));
+	strlcpy(dbSpecs->datname, datname, sizeof(dbSpecs->datname));
+	entry->dbSpecs = dbSpecs;
+	entry->active = true;
+
+	log_debug("Opened index/vacuum connections for database \"%s\"", datname);
+
+	return true;
+}
+
+
+/*
+ * multidb_index_context_close_entry closes an index/vacuum pool entry: catalog
+ * and target connection only (no snapshot to close).
+ */
+static bool
+multidb_index_context_close_entry(MultiDbEntry *entry)
+{
+	if (!entry->active)
+		return true;
+
+	log_debug("Closing index/vacuum connection cache entry for \"%s\"",
+			  entry->datname);
+
+	if (entry->dbSpecs != NULL)
+	{
+		(void) catalog_close(&entry->dbSpecs->catalogs.source);
+		free(entry->dbSpecs->connStrings.target_pguri);
+		free(entry->dbSpecs);
+		entry->dbSpecs = NULL;
+	}
+
+	(void) pgsql_finish(&entry->dst);
+
+	entry->active = false;
+	memset(entry->datname, 0, sizeof(entry->datname));
+
+	return true;
+}
+
+
+/*
+ * multidb_index_context_close_all closes all active entries in an
+ * index/vacuum pool.
+ */
+bool
+multidb_index_context_close_all(MultiDbContext *ctx)
+{
+	bool ok = true;
+
+	for (int i = 0; i < MULTIDB_ENTRY_CACHE_MAX; i++)
+	{
+		if (ctx->entries[i].active)
+		{
+			if (!multidb_index_context_close_entry(&ctx->entries[i]))
+				ok = false;
+		}
+	}
+
+	return ok;
+}
+
+
+/*
+ * multidb_index_context_get_entry returns the pool entry for datname, opening
+ * a new one (with catalog + target connection only) if not cached.
+ */
+MultiDbEntry *
+multidb_index_context_get_entry(MultiDbContext *ctx, const char *datname)
+{
+	for (int i = 0; i < MULTIDB_ENTRY_CACHE_MAX; i++)
+	{
+		if (ctx->entries[i].active &&
+			strcmp(ctx->entries[i].datname, datname) == 0)
+		{
+			return &ctx->entries[i];
+		}
+	}
+
+	int slot = -1;
+
+	for (int i = 0; i < MULTIDB_ENTRY_CACHE_MAX; i++)
+	{
+		if (!ctx->entries[i].active)
+		{
+			slot = i;
+			break;
+		}
+	}
+
+	if (slot < 0)
+	{
+		slot = ctx->nextEvict % MULTIDB_ENTRY_CACHE_MAX;
+		ctx->nextEvict = (ctx->nextEvict + 1) % MULTIDB_ENTRY_CACHE_MAX;
+
+		log_debug("Evicting index/vacuum cache entry for \"%s\"",
+				  ctx->entries[slot].datname);
+
+		if (!multidb_index_context_close_entry(&ctx->entries[slot]))
+		{
+			return NULL;
+		}
+	}
+
+	MultiDbEntry *entry = &ctx->entries[slot];
+
+	if (!multidb_init_index_entry(entry, ctx->parentSpecs, datname))
+	{
+		return NULL;
+	}
+
+	ctx->count++;
+	return entry;
+}
+
+
+/*
  * multidb_init_entry initialises a MultiDbEntry for the given database.
  *
  * This involves:
@@ -1630,14 +2014,14 @@ multidb_init_entry(MultiDbEntry *entry, CopyDataSpec *parentSpecs,
 	dbSpecs->pgPaths = parentSpecs->pgPaths;
 	dbSpecs->filters = parentSpecs->filters;
 	dbSpecs->extRequirements = parentSpecs->extRequirements;
-	dbSpecs->section = DATA_SECTION_TABLE_DATA;  /* skip inline index routing */
+	dbSpecs->section = parentSpecs->section;
 	dbSpecs->restoreOptions = parentSpecs->restoreOptions;
 	dbSpecs->roles = false;
 	dbSpecs->skipLargeObjects = parentSpecs->skipLargeObjects;
 	dbSpecs->skipExtensions = parentSpecs->skipExtensions;
 	dbSpecs->skipCommentOnExtension = parentSpecs->skipCommentOnExtension;
 	dbSpecs->skipCollations = parentSpecs->skipCollations;
-	dbSpecs->skipVacuum = true;    /* vacuum done separately in post-data */
+	dbSpecs->skipVacuum = parentSpecs->skipVacuum;
 	dbSpecs->skipAnalyze = parentSpecs->skipAnalyze;
 	dbSpecs->skipDBproperties = parentSpecs->skipDBproperties;
 	dbSpecs->skipCtidSplit = parentSpecs->skipCtidSplit;
@@ -1658,10 +2042,14 @@ multidb_init_entry(MultiDbEntry *entry, CopyDataSpec *parentSpecs,
 	dbSpecs->estimateTableSizes = parentSpecs->estimateTableSizes;
 	dbSpecs->allDatabases = false;  /* per-db context, not the global flag */
 
-	/* no queues for per-database workers — index/vacuum done in post-data */
+	/*
+	 * Wire the global index and vacuum queues so that copy workers fill them
+	 * as they finish each table, exactly as in the singledb code path.
+	 * copyQueue is not used by per-db workers; loQueue is handled separately.
+	 */
 	dbSpecs->copyQueue.qId = -1;
-	dbSpecs->indexQueue.qId = -1;
-	dbSpecs->vacuumQueue.qId = -1;
+	dbSpecs->indexQueue = parentSpecs->indexQueue;
+	dbSpecs->vacuumQueue = parentSpecs->vacuumQueue;
 	dbSpecs->loQueue.qId = -1;
 
 	/* set up per-database connection strings (heap-allocated) */
@@ -1978,53 +2366,6 @@ multidb_build_uri_for_database(const char *pguri, const char *datname,
 	}
 
 	return ok;
-}
-
-
-/*
- * multidb_build_conn_strings constructs per-database ConnStrings.
- */
-static bool
-multidb_build_conn_strings(ConnStrings *parent, const char *datname,
-						   ConnStrings *dbConnStrings)
-{
-	if (!multidb_build_uri_for_database(parent->source_pguri, datname,
-										&dbConnStrings->source_pguri))
-	{
-		log_error("Failed to build source URI for database \"%s\"", datname);
-		return false;
-	}
-
-	if (!multidb_build_uri_for_database(parent->target_pguri, datname,
-										&dbConnStrings->target_pguri))
-	{
-		log_error("Failed to build target URI for database \"%s\"", datname);
-		free(dbConnStrings->source_pguri);
-		dbConnStrings->source_pguri = NULL;
-		return false;
-	}
-
-	if (!parse_and_scrub_connection_string(dbConnStrings->source_pguri,
-										   &dbConnStrings->safeSourcePGURI))
-	{
-		log_error("Failed to scrub source URI for database \"%s\"", datname);
-		free(dbConnStrings->source_pguri);
-		free(dbConnStrings->target_pguri);
-		return false;
-	}
-
-	if (!parse_and_scrub_connection_string(dbConnStrings->target_pguri,
-										   &dbConnStrings->safeTargetPGURI))
-	{
-		log_error("Failed to scrub target URI for database \"%s\"", datname);
-		free(dbConnStrings->source_pguri);
-		free(dbConnStrings->target_pguri);
-		if (dbConnStrings->safeSourcePGURI.pguri)
-			free(dbConnStrings->safeSourcePGURI.pguri);
-		return false;
-	}
-
-	return true;
 }
 
 
