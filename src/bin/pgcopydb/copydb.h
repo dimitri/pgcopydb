@@ -37,8 +37,13 @@ extern KeyVal connStringDefaults;
 /*
  * pgcopydb creates System V OS level objects such as message queues and
  * semaphores, and those have to be cleaned-up "manually".
+ *
+ * With --all-databases, the parent creates one semaphore per database for the
+ * source catalog plus global queues and per-instance catalogs.  Index workers
+ * additionally create one semaphore per database for the target catalog.
+ * 64 slots supports up to ~50 concurrent databases with comfortable headroom.
  */
-#define SYSV_RES_MAX_COUNT 16
+#define SYSV_RES_MAX_COUNT 64
 
 typedef enum
 {

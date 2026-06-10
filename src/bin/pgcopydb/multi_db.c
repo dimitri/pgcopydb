@@ -1859,10 +1859,15 @@ multidb_init_index_entry(MultiDbEntry *entry, CopyDataSpec *parentSpecs,
 	}
 
 	DatabaseCatalog *sourceDB = &dbSpecs->catalogs.source;
+	DatabaseCatalog *targetDB = &dbSpecs->catalogs.target;
 
 	sourceDB->type = DATABASE_CATALOG_TYPE_SOURCE;
 	strlcpy(sourceDB->dbfile, dbSpecs->cfPaths.sdbfile, sizeof(sourceDB->dbfile));
 
+	/*
+	 * Reuse the parent-created shared semaphore for sourceDB so that all index
+	 * workers for the same database share one lock (avoids SQLITE_BUSY).
+	 */
 	if (info->catalogSemId != 0)
 	{
 		sourceDB->sema.semId = info->catalogSemId;
@@ -1877,10 +1882,31 @@ multidb_init_index_entry(MultiDbEntry *entry, CopyDataSpec *parentSpecs,
 		return false;
 	}
 
+	/*
+	 * Open the target catalog read-only for constraint resume checks
+	 * (catalog_s_table_count_indexes, catalog_lookup_s_index_by_name).  A
+	 * fresh per-entry semaphore is correct here: targetDB is only read (never
+	 * written) in the index worker, so there is no cross-process coordination
+	 * requirement, and a separate semId avoids deadlocking with the sourceDB
+	 * semaphore held by catalog_iter_s_index_table during iteration.
+	 */
+	targetDB->type = DATABASE_CATALOG_TYPE_TARGET;
+	strlcpy(targetDB->dbfile, dbSpecs->cfPaths.tdbfile, sizeof(targetDB->dbfile));
+
+	if (!catalog_init(targetDB))
+	{
+		log_error("Failed to open target catalog for database \"%s\"", datname);
+		catalog_close(sourceDB);
+		free(dbSpecs->connStrings.target_pguri);
+		free(dbSpecs);
+		return false;
+	}
+
 	if (!pgsql_init(&entry->dst, dbSpecs->connStrings.target_pguri,
 					PGSQL_CONN_TARGET))
 	{
 		log_error("Failed to connect to target for database \"%s\"", datname);
+		catalog_close(targetDB);
 		catalog_close(sourceDB);
 		free(dbSpecs->connStrings.target_pguri);
 		free(dbSpecs);
@@ -1918,6 +1944,7 @@ multidb_index_context_close_entry(MultiDbEntry *entry)
 
 	if (entry->dbSpecs != NULL)
 	{
+		(void) catalog_close(&entry->dbSpecs->catalogs.target);
 		(void) catalog_close(&entry->dbSpecs->catalogs.source);
 		free(entry->dbSpecs->connStrings.target_pguri);
 		free(entry->dbSpecs);
