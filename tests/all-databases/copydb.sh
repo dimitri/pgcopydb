@@ -44,11 +44,6 @@ pgcopydb clone --all-databases \
          --source "${PGCOPYDB_SOURCE_PGURI}" \
          --target "${PGCOPYDB_TARGET_PGURI}"
 
-#
-# Verify all databases at once using --all-databases.
-# Point --source/--target at the instance URIs (same as used for clone).
-# --dir is the top-level work directory so compare can find the per-db catalogs.
-#
 pgcopydb compare schema \
          --all-databases \
          --source "${PGCOPYDB_SOURCE_PGURI}" \

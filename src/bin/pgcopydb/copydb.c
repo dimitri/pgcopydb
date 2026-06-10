@@ -634,6 +634,7 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 
 		.section = specs->section,
 		.resume = specs->resume,
+		.allDatabases = specs->allDatabases,
 
 		.sourceTable = source,
 		.summary = { 0 },

@@ -132,6 +132,7 @@ typedef struct CopyTableDataSpec
 
 	CopyDataSection section;
 	bool resume;
+	bool allDatabases;          /* true when running --all-databases */
 
 	SourceTable *sourceTable;
 	CopyTableSummary summary;

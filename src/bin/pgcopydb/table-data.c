@@ -1549,7 +1549,17 @@ copydb_prepare_summary_command(CopyTableDataSpec *tableSpecs)
 
 	PQExpBuffer command = createPQExpBuffer();
 
-	appendPQExpBuffer(command, "COPY %s", tableSpecs->sourceTable->qname);
+	if (tableSpecs->allDatabases &&
+		!IS_EMPTY_STRING_BUFFER(tableSpecs->sourceTable->datname))
+	{
+		appendPQExpBuffer(command, "COPY %s.%s",
+						  tableSpecs->sourceTable->datname,
+						  tableSpecs->sourceTable->qname);
+	}
+	else
+	{
+		appendPQExpBuffer(command, "COPY %s", tableSpecs->sourceTable->qname);
+	}
 
 	if (tableSpecs->copyArgs.srcWhereClause != NULL)
 	{

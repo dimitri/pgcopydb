@@ -1574,6 +1574,48 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 		ok = false;
 	}
 
+	/*
+	 * Finalize per-database timing sections.  Each per-db catalog has
+	 * accumulated summary_increment_timing calls from copy/index/vacuum
+	 * workers; calling summary_stop_timing here sets done_time_epoch and
+	 * pretty-prints the duration so the consolidated summary displays
+	 * non-zero values.
+	 *
+	 * Must happen BEFORE destroying semaphores so catalog_init can reuse
+	 * the existing semId.
+	 */
+	for (int i = 0; i < parentSpecs->multiDbCount; i++)
+	{
+		MultiDbInfo *info = &parentSpecs->multiDbInfos[i];
+
+		if (info->catalogSemId == 0)
+			continue;
+
+		DatabaseCatalog dbCat = {
+			.type = DATABASE_CATALOG_TYPE_SOURCE,
+			.sema.semId = info->catalogSemId,
+			.sema.reentrant = true,
+		};
+		sformat(dbCat.dbfile, sizeof(dbCat.dbfile),
+				"%s/schema/source.db", info->topdir);
+
+		if (!catalog_init(&dbCat))
+		{
+			log_warn("Failed to open per-db catalog for \"%s\": "
+					 "timings not finalized", info->datname);
+			continue;
+		}
+
+		(void) summary_stop_timing(&dbCat, TIMING_SECTION_COPY_DATA);
+		(void) summary_stop_timing(&dbCat, TIMING_SECTION_CREATE_INDEX);
+		(void) summary_stop_timing(&dbCat, TIMING_SECTION_ALTER_TABLE);
+
+		if (!parentSpecs->skipVacuum)
+			(void) summary_stop_timing(&dbCat, TIMING_SECTION_VACUUM);
+
+		(void) catalog_close(&dbCat);
+	}
+
 	/* Destroy shared catalog semaphores. */
 	for (int i = 0; i < parentSpecs->multiDbCount; i++)
 	{

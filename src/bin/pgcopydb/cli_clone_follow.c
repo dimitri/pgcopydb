@@ -340,6 +340,26 @@ cli_clone_all_databases_consolidated_summary(CopyDataSpec *copySpecs)
 	}
 
 	(void) catalog_iter_s_database_finish(&iter2);
+
+	/*
+	 * Overlay Phase II (TOTAL_DATA) wall-clock from the instance catalog.
+	 * This timing is written by clone_all_databases to the instance catalog
+	 * and is absent from per-db catalogs, so alldb_timing_agg_hook leaves it
+	 * at zero.
+	 */
+	{
+		TopLevelTiming t = { .section = TIMING_SECTION_TOTAL_DATA };
+
+		if (summary_lookup_timing(instanceCatalog, &t, TIMING_SECTION_TOTAL_DATA))
+		{
+			TopLevelTiming *entry = &(topLevelTimingArray[TIMING_SECTION_TOTAL_DATA]);
+
+			entry->durationMs = t.durationMs;
+			entry->count = t.count;
+			entry->bytes = t.bytes;
+		}
+	}
+
 	(void) catalog_close(instanceCatalog);
 
 	/* Re-pretty-print aggregated timing strings */

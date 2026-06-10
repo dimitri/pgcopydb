@@ -2090,14 +2090,21 @@ summary_increment_timing(DatabaseCatalog *catalog,
 
 	TopLevelTiming *timing = &(topLevelTimingArray[section]);
 
+	/*
+	 * Use an upsert so that workers can increment a timing section even when
+	 * summary_start_timing was never called for that section in this catalog
+	 * (e.g. COPY_DATA in a per-database catalog opened by a global COPY worker
+	 * that never received a start-timing call from the orchestrator).
+	 */
 	char *sql =
-		"update timings "
-		"set count = coalesce(count, 0) + $1, "
-		"    bytes = coalesce(bytes, 0) + $2, "
-		"    duration = coalesce(duration, 0) + $3 "
-		"where id = $4";
+		"insert into timings(id, label, count, bytes, duration) "
+		"values($4, $5, $1, $2, $3) "
+		"on conflict(id) do update set "
+		"  count    = coalesce(timings.count,    0) + excluded.count, "
+		"  bytes    = coalesce(timings.bytes,    0) + excluded.bytes, "
+		"  duration = coalesce(timings.duration, 0) + excluded.duration";
 
-	SQLiteQuery query = { .errorOnZeroRows = true };
+	SQLiteQuery query = { 0 };
 
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
@@ -2111,7 +2118,8 @@ summary_increment_timing(DatabaseCatalog *catalog,
 		{ BIND_PARAMETER_TYPE_INT64, "count", count, NULL },
 		{ BIND_PARAMETER_TYPE_INT64, "bytes", bytes, NULL },
 		{ BIND_PARAMETER_TYPE_INT64, "duration", durationMs, NULL },
-		{ BIND_PARAMETER_TYPE_INT, "id", timing->section, NULL }
+		{ BIND_PARAMETER_TYPE_INT, "id", timing->section, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "label", 0, (char *) timing->label }
 	};
 
 	int pCount = sizeof(params) / sizeof(params[0]);
@@ -2861,7 +2869,7 @@ print_summary_table(SummaryTable *summary)
 				headers->maxTableMsSize, "copy duration",
 				headers->maxBytesSize, "transmitted bytes",
 				headers->maxIndexCountSize, "indexes",
-				headers->maxIndexMsSize, "create index duration");
+				headers->maxIndexMsSize, "create index");
 
 		fformat(stdout, "%s-+-%s-+-%s-+-%s-+-%s-+-%s-+-%s-+-%s-+-%s\n",
 				headers->datnameSeparator,
@@ -2884,7 +2892,7 @@ print_summary_table(SummaryTable *summary)
 				headers->maxTableMsSize, "copy duration",
 				headers->maxBytesSize, "transmitted bytes",
 				headers->maxIndexCountSize, "indexes",
-				headers->maxIndexMsSize, "create index duration");
+				headers->maxIndexMsSize, "create index");
 
 		fformat(stdout, "%s-+-%s-+-%s-+-%s-+-%s-+-%s-+-%s-+-%s\n",
 				headers->oidSeparator,
@@ -3084,7 +3092,7 @@ prepare_summary_table_headers(SummaryTable *summary)
 	headers->maxTableMsSize = 13;   /* "copy duration" */
 	headers->maxBytesSize = 17;     /* "transmitted bytes" */
 	headers->maxIndexCountSize = 7; /* "indexes" */
-	headers->maxIndexMsSize = 21;   /* "create index duration" */
+	headers->maxIndexMsSize = 12;   /* "create index" */
 
 	/* now adjust to the actual table's content */
 	for (int i = 0; i < summary->count; i++)
