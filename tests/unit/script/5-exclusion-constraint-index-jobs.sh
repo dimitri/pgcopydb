@@ -51,6 +51,7 @@ do
                from pg_constraint c
                     join pg_class r on r.oid = c.conrelid
               where r.relname = 'excl_with_pkey'
+                and c.contype != 'n'
            order by c.conname"
 
     psql -q -d "${PGCOPYDB_TARGET_PGURI}" -c "DROP DATABASE ${TMPDB}"
