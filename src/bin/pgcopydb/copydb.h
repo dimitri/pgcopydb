@@ -436,7 +436,7 @@ bool timescaledb_pre_restore(CopyDataSpec *copySpecs, SourceExtension *ext);
 bool timescaledb_post_restore(CopyDataSpec *copySpecs, SourceExtension *ext);
 
 /* indexes.c */
-bool copydb_start_index_supervisor(CopyDataSpec *specs);
+bool copydb_start_index_supervisor(CopyDataSpec *specs, pid_t *pidOut);
 bool copydb_index_supervisor(CopyDataSpec *specs);
 bool copydb_start_index_workers(CopyDataSpec *specs);
 bool copydb_index_worker(CopyDataSpec *specs);
@@ -564,7 +564,7 @@ bool copydb_add_blob(CopyDataSpec *specs, uint32_t oid);
 bool copydb_send_lo_stop(CopyDataSpec *specs);
 
 /* vacuum.c */
-bool vacuum_start_supervisor(CopyDataSpec *specs);
+bool vacuum_start_supervisor(CopyDataSpec *specs, pid_t *pidOut);
 bool vacuum_supervisor(CopyDataSpec *specs);
 bool vacuum_start_workers(CopyDataSpec *specs);
 bool vacuum_worker(CopyDataSpec *specs);

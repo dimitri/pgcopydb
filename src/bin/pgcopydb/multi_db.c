@@ -1434,9 +1434,11 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 	 * Fork vacuum supervisor first (reads vacuumQueue; waits for workers).
 	 * The index supervisor sends the STOP messages after all indexes are done.
 	 */
+	pid_t vacPid = -1;
+
 	if (!parentSpecs->skipVacuum)
 	{
-		if (!vacuum_start_supervisor(parentSpecs))
+		if (!vacuum_start_supervisor(parentSpecs, &vacPid))
 		{
 			log_error("Failed to start global vacuum supervisor");
 			return false;
@@ -1446,7 +1448,9 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 	/*
 	 * Fork index supervisor (reads indexQueue; after done, sends vacuum STOP).
 	 */
-	if (!copydb_start_index_supervisor(parentSpecs))
+	pid_t idxPid = -1;
+
+	if (!copydb_start_index_supervisor(parentSpecs, &idxPid))
 	{
 		log_error("Failed to start global index supervisor");
 		return false;
@@ -1543,6 +1547,17 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 
 			bool ok = copydb_wait_for_subprocesses(parentSpecs->failFast);
 
+			/*
+			 * All COPY workers finished; send STOP to index workers so they
+			 * can drain the index queue and terminate.  Mirror what
+			 * copydb_copy_supervisor() does in table-data.c.
+			 */
+			if (!copydb_index_workers_send_stop(parentSpecs))
+			{
+				log_error("Failed to send STOP messages to index workers");
+				ok = false;
+			}
+
 			(void) queue_unlink(&parentSpecs->copyQueue);
 			parentSpecs->copyQueue.qId = -1;
 
@@ -1554,10 +1569,61 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 	}
 
 	/*
-	 * Wait for all three supervisor children: copy supervisor, index
-	 * supervisor, vacuum supervisor.
+	 * Wait for all three supervisor children using targeted waitpid() calls.
+	 *
+	 * We MUST NOT use copydb_wait_for_subprocesses() here because it calls
+	 * waitpid(-1, ...) which would accidentally reap the snapshot holder — a
+	 * sibling child process forked before multidb_global_copy() was called.
+	 * The snapshot holder blocks on donepipe EOF and would never exit until
+	 * clone_all_databases() closes the pipe AFTER this function returns,
+	 * causing a deadlock.
 	 */
-	bool ok = copydb_wait_for_subprocesses(parentSpecs->failFast);
+	pid_t supervisor_pids[3] = { spid, idxPid, vacPid };
+	bool ok = true;
+	int remaining = (vacPid > 0) ? 3 : 2;
+
+	while (remaining > 0)
+	{
+		pg_usleep(100 * 1000); /* 100 ms */
+
+		for (int i = 0; i < 3; i++)
+		{
+			if (supervisor_pids[i] <= 0)
+				continue;
+
+			int status = 0;
+			pid_t reaped = waitpid(supervisor_pids[i], &status, WNOHANG);
+
+			if (reaped == supervisor_pids[i])
+			{
+				int returnCode = WEXITSTATUS(status);
+
+				if (WIFSIGNALED(status))
+				{
+					log_error("Global supervisor %d killed by signal %s",
+							  reaped,
+							  signal_to_string(WTERMSIG(status)));
+					ok = false;
+				}
+				else if (returnCode != 0)
+				{
+					log_error("Global supervisor %d exited with code %d",
+							  reaped, returnCode);
+					ok = false;
+				}
+
+				supervisor_pids[i] = -1;
+				--remaining;
+			}
+			else if (reaped < 0 && errno != EINTR)
+			{
+				log_error("waitpid(%d) failed: %m", supervisor_pids[i]);
+				ok = false;
+				supervisor_pids[i] = -1;
+				--remaining;
+			}
+		}
+	}
 
 	/*
 	 * Reopen the global catalog so the caller can write summary_stop_timing.

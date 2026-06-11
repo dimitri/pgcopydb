@@ -31,7 +31,7 @@ static bool copydb_copy_all_indexes_hook(void *ctx, SourceIndex *index);
  * copydb_start_index_supervisor starts a CREATE INDEX supervisor process.
  */
 bool
-copydb_start_index_supervisor(CopyDataSpec *specs)
+copydb_start_index_supervisor(CopyDataSpec *specs, pid_t *pidOut)
 {
 	/*
 	 * Flush stdio channels just before fork, to avoid double-output problems.
@@ -66,6 +66,8 @@ copydb_start_index_supervisor(CopyDataSpec *specs)
 		default:
 		{
 			/* fork succeeded, in parent */
+			if (pidOut != NULL)
+				*pidOut = fpid;
 			break;
 		}
 	}
@@ -768,7 +770,7 @@ copydb_copy_all_indexes(CopyDataSpec *specs)
 			 specs->indexJobs);
 
 	/* first start index workers that feed from the indexQueue */
-	if (!copydb_start_index_supervisor(specs))
+	if (!copydb_start_index_supervisor(specs, NULL))
 	{
 		/* errors have already been logged */
 		return false;

@@ -21,7 +21,7 @@
  * vacuum_start_supervisor starts a VACUUM supervisor process.
  */
 bool
-vacuum_start_supervisor(CopyDataSpec *specs)
+vacuum_start_supervisor(CopyDataSpec *specs, pid_t *pidOut)
 {
 	/*
 	 * Flush stdio channels just before fork, to avoid double-output problems.
@@ -57,6 +57,8 @@ vacuum_start_supervisor(CopyDataSpec *specs)
 		default:
 		{
 			/* fork succeeded, in parent */
+			if (pidOut != NULL)
+				*pidOut = fpid;
 			break;
 		}
 	}

@@ -143,7 +143,7 @@ copydb_process_table_data(CopyDataSpec *specs)
 		/*
 		 * Start as many index worker process as --index-jobs
 		 */
-		if (errors == 0 && !copydb_start_index_supervisor(specs))
+		if (errors == 0 && !copydb_start_index_supervisor(specs, NULL))
 		{
 			/* errors have already been logged */
 			++errors;
@@ -154,7 +154,7 @@ copydb_process_table_data(CopyDataSpec *specs)
 		 * --table-jobs. Could be exposed separately as --vacuumJobs too, but
 		 * that's not been done at this time.
 		 */
-		if (errors == 0 && !vacuum_start_supervisor(specs))
+		if (errors == 0 && !vacuum_start_supervisor(specs, NULL))
 		{
 			/* errors have already been logged */
 			++errors;
