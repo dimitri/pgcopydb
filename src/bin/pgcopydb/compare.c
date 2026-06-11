@@ -1170,6 +1170,11 @@ compare_alldb_schema_summary(CopyDataSpec *parentSpecs,
 							 const char (*datnames)[PG_NAMEDATALEN],
 							 int dbCount)
 {
+	if (dbCount <= 0)
+	{
+		return;
+	}
+
 	/* Collect per-database counts */
 	typedef struct
 	{
@@ -1178,7 +1183,7 @@ compare_alldb_schema_summary(CopyDataSpec *parentSpecs,
 		CatalogCounts tgt;
 	} DbCounts;
 
-	DbCounts *counts = (DbCounts *) calloc(dbCount, sizeof(DbCounts));
+	DbCounts *counts = (DbCounts *) calloc((size_t) dbCount, sizeof(DbCounts));
 
 	if (counts == NULL)
 	{

@@ -759,7 +759,11 @@ signal_ready:
 	 */
 	{
 		char rdy = 'R';
-		(void) write(readyfd, &rdy, 1);
+
+		if (write(readyfd, &rdy, 1) != 1)
+		{
+			log_error("Failed to signal snapshot-holder ready to parent: %m");
+		}
 		close(readyfd);
 	}
 
@@ -775,7 +779,10 @@ signal_ready:
 	 */
 	{
 		char buf = 0;
-		(void) read(donefd, &buf, 1);  /* blocks until EOF */
+
+		/* blocks until the parent closes the write end (EOF) */
+		while (read(donefd, &buf, 1) > 0)
+		{ }
 		close(donefd);
 	}
 
