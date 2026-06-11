@@ -23,6 +23,7 @@
 typedef struct Semaphore
 {
 	int semId;
+	int semIndex;    /* index within the semaphore set; 0 for single-element sets */
 	int initValue;
 	pid_t owner;
 
@@ -37,6 +38,7 @@ bool semaphore_init(Semaphore *semaphore);
 bool semaphore_finish(Semaphore *semaphore);
 
 bool semaphore_create(Semaphore *semaphore);
+bool semaphore_create_set(Semaphore *semaphore, int count);
 bool semaphore_open(Semaphore *semaphore);
 bool semaphore_unlink(Semaphore *semaphore);
 

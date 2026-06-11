@@ -41,6 +41,8 @@ psql -h source -U postgres -f /usr/src/chinook/Chinook_PostgreSql.sql
 # ─── Clone each database individually ────────────────────────────────────────
 #
 for db in pagila f1db chinook; do
+    createdb -h target -U postgres "${db}"
+
     pgcopydb clone \
              --notice \
              --skip-collations \

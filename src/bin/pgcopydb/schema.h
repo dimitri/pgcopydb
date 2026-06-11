@@ -28,6 +28,7 @@ typedef struct SourceDatabase
 	char datname[PG_NAMEDATALEN];
 	int64_t bytes;
 	char bytesPretty[PG_NAMEDATALEN]; /* pg_size_pretty */
+	char snapshot[BUFSIZE];           /* exported snapshot ID, or "" */
 } SourceDatabase;
 
 
@@ -152,6 +153,7 @@ typedef struct SourceTable
 {
 	uint32_t oid;
 
+	char datname[PG_NAMEDATALEN];
 	char qname[PG_NAMEDATALEN_FQ];
 	char nspname[PG_NAMEDATALEN];
 	char relname[PG_NAMEDATALEN];
@@ -220,6 +222,7 @@ typedef struct SourceSequence
 	uint32_t attrelid;          /* pg_class oid of table using as DEFAULT */
 	uint32_t attroid;           /* pg_attrdef DEFAULT value OID */
 
+	char datname[PG_NAMEDATALEN];
 	char qname[PG_NAMEDATALEN_FQ];
 	char nspname[PG_NAMEDATALEN];
 	char relname[PG_NAMEDATALEN];

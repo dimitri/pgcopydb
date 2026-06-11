@@ -70,6 +70,55 @@ Running such a query on a large table can take a lot of time.
 
 .. include:: ../include/compare-data.rst
 
+.. _pgcopydb_compare_all_databases:
+
+Comparing all databases with ``--all-databases``
+-------------------------------------------------
+
+When ``--all-databases`` is given, the ``--source`` URI must point to the
+Postgres instance rather than to a specific database (e.g.
+``postgres://host/postgres``). ``pgcopydb`` enumerates all non-template
+user databases via a catalog query on the source instance and then runs the
+requested comparison for each database.
+
+Both ``compare schema`` and ``compare data`` support ``--all-databases``
+and share the same concurrency model: up to ``--table-jobs`` subprocesses
+run in parallel, each handling one database at a time.  When there are more
+databases than ``--table-jobs``, the pool is kept at capacity with a
+sliding-window approach — a new worker starts as soon as a running one
+finishes.
+
+``compare schema --all-databases``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Each worker subprocess runs the full single-database schema comparison for
+its assigned database and exits.  After all workers have completed, the
+parent prints a consolidated summary table::
+
+  Database         |   Tables    |   Indexes   | Constraints |  Sequences
+                   | Src | Tgt   | Src | Tgt   | Src | Tgt   | Src | Tgt
+  -----------------+-----+-------+-----+-------+-----+-------+-----+------
+  pagila           |  25 |    25 |  49 |    49 |  25 |    25 |  16 |    16
+  f1db             |  14 |    14 |  28 |    28 |  14 |    14 |   0 |     0
+  chinook          |  11 |    11 |  22 |    22 |  11 |    11 |   4 |     4
+
+``compare data --all-databases``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Each worker subprocess computes row counts and checksums for every table in
+its assigned database and stores the results in a per-database SQLite
+catalog under the work directory.  After all workers have completed, the
+parent reads each per-database catalog in turn and prints a single unified
+checksum table.  Table names in that table use the three-part
+``datname.nspname.relname`` format so that tables from different databases
+can be distinguished::
+
+                            Table Name | ! |               Source Checksum |               Target Checksum
+  -------------------------------------+---+-------------------------------+------------------------------
+                  pagila.public.rental |   |  e7dfabf3-baa8-473a-…        |  e7dfabf3-baa8-473a-…
+              f1db.public.constructors |   |  c5058d1e-aaf4-f058-…        |  c5058d1e-aaf4-f058-…
+         chinook.public."InvoiceLine"  | ! |  a244eba3-376b-75e6-…        |  594ae64d-2216-f687-…
+
 Options
 -------
 
@@ -85,6 +134,10 @@ compare data`` subcommands:
 
   __ https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNSTRING
 
+  When using ``--all-databases``, this must be an instance-level URI (the
+  database component is used only to connect for the initial catalog query;
+  per-database URIs are derived automatically).
+
 --target
 
   Connection string to the target Postgres instance.
@@ -96,6 +149,12 @@ compare data`` subcommands:
   specified by this option, or defaults to
   ``${TMPDIR}/pgcopydb`` when the environment variable is set, or
   otherwise to ``/tmp/pgcopydb``.
+
+--all-databases
+
+  Compare all non-template user databases found on the source instance
+  rather than a single database. Requires an instance-level ``--source``
+  URI. Up to ``--table-jobs`` databases are compared in parallel.
 
 --json
 

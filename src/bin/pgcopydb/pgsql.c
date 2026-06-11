@@ -2663,7 +2663,8 @@ pgsql_lock_table(PGSQL *pgsql, const char *qname, const char *lockmode)
  * to keep this function predictable and side-effect-free.
  */
 bool
-pgsql_truncate(PGSQL *pgsql, const char *qname, char relkind)
+pgsql_truncate(PGSQL *pgsql, const char *qname, char relkind,
+			   const char *datname)
 {
 	char sql[BUFSIZE] = { 0 };
 
@@ -2677,7 +2678,14 @@ pgsql_truncate(PGSQL *pgsql, const char *qname, char relkind)
 	}
 
 	/* this being more like a DDL operation, proper log level is NOTICE */
-	log_notice("%s", sql);
+	if (datname != NULL && datname[0] != '\0')
+	{
+		log_notice("%s: %s", datname, sql);
+	}
+	else
+	{
+		log_notice("%s", sql);
+	}
 
 	return pgsql_execute(pgsql, sql);
 }
@@ -2759,7 +2767,7 @@ pg_copy_data(PGSQL *src, PGSQL *dst,
 
 	if (args->truncate)
 	{
-		if (!pgsql_truncate(dst, args->dstQname, relkind))
+		if (!pgsql_truncate(dst, args->dstQname, relkind, args->datname))
 		{
 			/* errors have already been logged */
 			return false;
@@ -2782,7 +2790,14 @@ pg_copy_data(PGSQL *src, PGSQL *dst,
 	}
 
 	/* make sure to log TRUNCATE before we log COPY, avoid confusion */
-	log_notice("%s", args->logCommand);
+	if (args->datname != NULL && args->datname[0] != '\0')
+	{
+		log_notice("%s: %s", args->datname, args->logCommand);
+	}
+	else
+	{
+		log_notice("%s", args->logCommand);
+	}
 
 	/* SRC: COPY schema.table TO STDOUT */
 	if (!pg_copy_send_query(src, args, PGRES_COPY_OUT))

@@ -10,6 +10,7 @@
 
 #include "catalog.h"
 #include "cli_common.h"
+#include "file_utils.h"
 #include "cli_root.h"
 #include "commandline.h"
 #include "copydb.h"
@@ -34,9 +35,10 @@ static CommandLine compare_schema_command =
 		"schema",
 		"Compare source and target schema",
 		" --source ... ",
-		"  --source         Postgres URI to the source database\n"
-		"  --target         Postgres URI to the target database\n"
-		"  --dir            Work directory to use\n",
+		"  --source             Postgres URI to the source database\n"
+		"  --target             Postgres URI to the target database\n"
+		"  --dir                Work directory to use\n"
+		"  --all-databases      Compare all databases from the source instance\n",
 		cli_compare_getopts,
 		cli_compare_schema);
 
@@ -45,10 +47,11 @@ static CommandLine compare_data_command =
 		"data",
 		"Compare source and target data",
 		" --source ... ",
-		"  --source         Postgres URI to the source database\n"
-		"  --target         Postgres URI to the target database\n"
-		"  --dir            Work directory to use\n"
-		"  --json           Format the output using JSON\n",
+		"  --source             Postgres URI to the source database\n"
+		"  --target             Postgres URI to the target database\n"
+		"  --dir                Work directory to use\n"
+		"  --all-databases      Compare all databases from the source instance\n"
+		"  --json               Format the output using JSON\n",
 		cli_compare_getopts,
 		cli_compare_data);
 
@@ -79,6 +82,7 @@ cli_compare_getopts(int argc, char **argv)
 		{ "dir", required_argument, NULL, 'D' },
 		{ "jobs", required_argument, NULL, 'j' },
 		{ "table-jobs", required_argument, NULL, 'j' },
+		{ "all-databases", no_argument, NULL, 'a' },
 		{ "json", no_argument, NULL, 'J' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
@@ -103,7 +107,7 @@ cli_compare_getopts(int argc, char **argv)
 	SplitTableLargerThan empty = { 0 };
 	options.splitTablesLargerThan = empty;
 
-	while ((c = getopt_long(argc, argv, "S:T:D:j:JVvdzqh",
+	while ((c = getopt_long(argc, argv, "S:T:D:j:aJVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -151,6 +155,13 @@ cli_compare_getopts(int argc, char **argv)
 					++errors;
 				}
 				log_trace("--table-jobs %d", options.tableJobs);
+				break;
+			}
+
+			case 'a':
+			{
+				options.allDatabases = true;
+				log_trace("--all-databases");
 				break;
 			}
 
@@ -306,10 +317,22 @@ cli_compare_schema(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	if (!compare_schemas(&copySpecs))
+	if (compareOptions.allDatabases)
 	{
-		log_fatal("Comparing the schemas failed, see above for details");
-		exit(EXIT_CODE_INTERNAL_ERROR);
+		if (!compare_all_databases_schema(&copySpecs))
+		{
+			log_fatal("Comparing all database schemas failed, "
+					  "see above for details");
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+	}
+	else
+	{
+		if (!compare_schemas(&copySpecs))
+		{
+			log_fatal("Comparing the schemas failed, see above for details");
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
 	}
 }
 
@@ -353,6 +376,18 @@ cli_compare_data(int argc, char **argv)
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (compareOptions.allDatabases)
+	{
+		if (!compare_all_databases_data(&copySpecs))
+		{
+			log_fatal("Failed to compute checksums for all databases, "
+					  "see above for details");
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		return;
 	}
 
 	if (!compare_data(&copySpecs))
@@ -458,8 +493,25 @@ cli_compare_data_table_hook(void *ctx, SourceTable *table)
 		TableChecksum *srcChk = &(table->sourceChecksum);
 		TableChecksum *dstChk = &(table->targetChecksum);
 
+		/*
+		 * In --all-databases mode, table->datname is populated and we emit a
+		 * three-part qualified name (datname.nspname.relname) so the user can
+		 * tell which database each row belongs to.
+		 */
+		char tableName[BUFSIZE] = { 0 };
+
+		if (!IS_EMPTY_STRING_BUFFER(table->datname))
+		{
+			sformat(tableName, sizeof(tableName),
+					"%s.%s", table->datname, table->qname);
+		}
+		else
+		{
+			strlcpy(tableName, table->qname, sizeof(tableName));
+		}
+
 		fformat(stdout, "%30s | %s | %36s | %36s \n",
-				table->qname,
+				tableName,
 				streq(srcChk->checksum, dstChk->checksum) ? " " : "!",
 				srcChk->checksum,
 				dstChk->checksum);

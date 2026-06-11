@@ -60,7 +60,8 @@ static char *sourceDBcreateDDLs[] = {
 	")",
 
 	"create table s_database("
-	"  oid integer primary key, datname text, bytes integer, bytes_pretty text"
+	"  oid integer primary key, datname text, bytes integer, bytes_pretty text,"
+	"  snapshot text"
 	")",
 
 	"create table s_database_property("
@@ -704,6 +705,7 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 	/*
 	 * Now see if the catalog already have been setup.
 	 */
+
 	if (!catalog_setup(sourceDB))
 	{
 		/* errors have already been logged */
@@ -942,6 +944,55 @@ catalog_open(DatabaseCatalog *catalog)
 	}
 
 	return catalog_init(catalog);
+}
+
+
+/*
+ * catalog_open_readonly opens an existing catalog file in read-only mode
+ * without creating or acquiring any semaphore.  Use this for catalogs that
+ * are only ever read (never written) — SQLite WAL provides snapshot-
+ * consistent reads with no contention between any number of readers.
+ */
+bool
+catalog_open_readonly(DatabaseCatalog *catalog)
+{
+	if (catalog->db != NULL)
+	{
+		log_debug("Skipping opening read-only SQLite database \"%s\": "
+				  "already opened", catalog->dbfile);
+		return true;
+	}
+
+	if (!file_exists(catalog->dbfile))
+	{
+		log_error("Failed to open catalog \"%s\", file does not exist",
+				  catalog->dbfile);
+		return false;
+	}
+
+	log_debug("Opening read-only SQLite database \"%s\"", catalog->dbfile);
+
+	int rc = sqlite3_open_v2(catalog->dbfile,
+							 &(catalog->db),
+							 SQLITE_OPEN_READONLY,
+							 NULL);
+
+	if (rc != SQLITE_OK)
+	{
+		const char *errmsg = sqlite3_errmsg(catalog->db);
+
+		log_error("Failed to open \"%s\" read-only: %s",
+				  catalog->dbfile, errmsg);
+
+		if (catalog->db != NULL)
+		{
+			sqlite3_close(catalog->db);
+		}
+		catalog->db = NULL;
+		return false;
+	}
+
+	return true;
 }
 
 
@@ -1486,6 +1537,19 @@ catalog_setup(DatabaseCatalog *catalog)
 		log_error("BUG: catalog_setup: db is NULL");
 		return false;
 	}
+
+	/*
+	 * Reset the setup struct before querying so that stale values inherited
+	 * from a parent CopyDataSpec (via struct copy) do not persist when the
+	 * catalog is fresh and the setup table has no rows.
+	 */
+	catalog->setup.id = 0;
+	catalog->setup.source_pguri = NULL;
+	catalog->setup.target_pguri = NULL;
+	catalog->setup.snapshot[0] = '\0';
+	catalog->setup.filters = NULL;
+	catalog->setup.splitTablesLargerThanBytes = 0;
+	catalog->setup.splitMaxParts = 0;
 
 	SQLiteQuery query = {
 		.context = &(catalog->setup),
@@ -2524,9 +2588,9 @@ catalog_add_s_table(DatabaseCatalog *catalog, SourceTable *table)
 
 	char *sql =
 		"insert into s_table("
-		"  oid, qname, nspname, relname, amname, restore_list_name, "
+		"  oid, datname, qname, nspname, relname, amname, restore_list_name, "
 		"  relpages, reltuples, exclude_data, part_key) "
-		"values($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)";
+		"values($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)";
 
 	SQLiteQuery query = { 0 };
 
@@ -2539,6 +2603,7 @@ catalog_add_s_table(DatabaseCatalog *catalog, SourceTable *table)
 	/* bind our parameters now */
 	BindParam params[] = {
 		{ BIND_PARAMETER_TYPE_INT64, "oid", table->oid, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "datname", 0, table->datname },
 		{ BIND_PARAMETER_TYPE_TEXT, "qname", 0, table->qname },
 		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, table->nspname },
 		{ BIND_PARAMETER_TYPE_TEXT, "relname", 0, table->relname },
@@ -3153,7 +3218,7 @@ catalog_lookup_s_table(DatabaseCatalog *catalog,
 	if (partNumber > 0)
 	{
 		char *sql =
-			"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
+			"  select t.oid, t.datname, qname, nspname, relname, amname, restore_list_name, "
 			"         relpages, reltuples, ts.bytes, ts.bytes_pretty, "
 			"         exclude_data, part_key, "
 			"         p.partcount as partcount, p.partnum, p.min, p.max "
@@ -3189,7 +3254,7 @@ catalog_lookup_s_table(DatabaseCatalog *catalog,
 	else
 	{
 		char *sql =
-			"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
+			"  select t.oid, t.datname, qname, nspname, relname, amname, restore_list_name, "
 			"         relpages, reltuples, ts.bytes, ts.bytes_pretty, "
 			"         exclude_data, part_key, "
 			"         count(p.oid) as partcount "
@@ -3251,7 +3316,7 @@ catalog_lookup_s_table_by_name(DatabaseCatalog *catalog,
 	}
 
 	char *sql =
-		"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
+		"  select t.oid, t.datname, qname, nspname, relname, amname, restore_list_name, "
 		"         relpages, reltuples, ts.bytes, ts.bytes_pretty, "
 		"         exclude_data, part_key, "
 		"         p.partcount, 0 as partnum, 0 as min, 0 as max "
@@ -3494,7 +3559,7 @@ catalog_iter_s_table_init(SourceTableIterator *iter)
 	}
 
 	char *sql =
-		"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
+		"  select t.oid, t.datname, qname, nspname, relname, amname, restore_list_name, "
 		"         relpages, reltuples, ts.bytes, ts.bytes_pretty, "
 		"         exclude_data, part_key, "
 		"         coalesce(p.partcount, 0) as partcount, "
@@ -3549,7 +3614,7 @@ catalog_iter_s_table_nopk_init(SourceTableIterator *iter)
 	}
 
 	char *sql =
-		"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
+		"  select t.oid, t.datname, qname, nspname, relname, amname, restore_list_name, "
 		"         relpages, reltuples, ts.bytes, ts.bytes_pretty, "
 		"         exclude_data, part_key, "
 		"         (select count(1) from s_table_part p where p.oid = t.oid) "
@@ -3618,60 +3683,67 @@ catalog_s_table_fetch(SQLiteQuery *query)
 
 	if (sqlite3_column_type(query->ppStmt, 1) != SQLITE_NULL)
 	{
-		strlcpy(table->qname,
+		strlcpy(table->datname,
 				(char *) sqlite3_column_text(query->ppStmt, 1),
-				sizeof(table->qname));
+				sizeof(table->datname));
 	}
 
 	if (sqlite3_column_type(query->ppStmt, 2) != SQLITE_NULL)
 	{
-		strlcpy(table->nspname,
+		strlcpy(table->qname,
 				(char *) sqlite3_column_text(query->ppStmt, 2),
-				sizeof(table->nspname));
+				sizeof(table->qname));
 	}
 
 	if (sqlite3_column_type(query->ppStmt, 3) != SQLITE_NULL)
 	{
-		strlcpy(table->relname,
+		strlcpy(table->nspname,
 				(char *) sqlite3_column_text(query->ppStmt, 3),
-				sizeof(table->relname));
+				sizeof(table->nspname));
 	}
 
 	if (sqlite3_column_type(query->ppStmt, 4) != SQLITE_NULL)
 	{
-		strlcpy(table->amname,
+		strlcpy(table->relname,
 				(char *) sqlite3_column_text(query->ppStmt, 4),
-				sizeof(table->amname));
+				sizeof(table->relname));
 	}
 
 	if (sqlite3_column_type(query->ppStmt, 5) != SQLITE_NULL)
 	{
-		strlcpy(table->restoreListName,
+		strlcpy(table->amname,
 				(char *) sqlite3_column_text(query->ppStmt, 5),
+				sizeof(table->amname));
+	}
+
+	if (sqlite3_column_type(query->ppStmt, 6) != SQLITE_NULL)
+	{
+		strlcpy(table->restoreListName,
+				(char *) sqlite3_column_text(query->ppStmt, 6),
 				sizeof(table->restoreListName));
 	}
 
-	table->relpages = sqlite3_column_int64(query->ppStmt, 6);
-	table->reltuples = sqlite3_column_int64(query->ppStmt, 7);
-	table->bytes = sqlite3_column_int64(query->ppStmt, 8);
+	table->relpages = sqlite3_column_int64(query->ppStmt, 7);
+	table->reltuples = sqlite3_column_int64(query->ppStmt, 8);
+	table->bytes = sqlite3_column_int64(query->ppStmt, 9);
 
-	if (sqlite3_column_type(query->ppStmt, 9) != SQLITE_NULL)
+	if (sqlite3_column_type(query->ppStmt, 10) != SQLITE_NULL)
 	{
 		strlcpy(table->bytesPretty,
-				(char *) sqlite3_column_text(query->ppStmt, 9),
+				(char *) sqlite3_column_text(query->ppStmt, 10),
 				sizeof(table->bytesPretty));
 	}
 
-	table->excludeData = sqlite3_column_int64(query->ppStmt, 10) == 1;
+	table->excludeData = sqlite3_column_int64(query->ppStmt, 11) == 1;
 
-	if (sqlite3_column_type(query->ppStmt, 11) != SQLITE_NULL)
+	if (sqlite3_column_type(query->ppStmt, 12) != SQLITE_NULL)
 	{
 		strlcpy(table->partKey,
-				(char *) sqlite3_column_text(query->ppStmt, 11),
+				(char *) sqlite3_column_text(query->ppStmt, 12),
 				sizeof(table->partKey));
 	}
 
-	table->partition.partCount = sqlite3_column_int64(query->ppStmt, 12);
+	table->partition.partCount = sqlite3_column_int64(query->ppStmt, 13);
 
 	/*
 	 * The main iterator query returns partition count, whereas the catalog
@@ -3681,42 +3753,42 @@ catalog_s_table_fetch(SQLiteQuery *query)
 	int cols = sqlite3_column_count(query->ppStmt);
 
 	/* partition information from s_table_part */
-	if (cols >= 16)
+	if (cols >= 17)
 	{
-		table->partition.partNumber = sqlite3_column_int64(query->ppStmt, 13);
-		table->partition.min = sqlite3_column_int64(query->ppStmt, 14);
-		table->partition.max = sqlite3_column_int64(query->ppStmt, 15);
+		table->partition.partNumber = sqlite3_column_int64(query->ppStmt, 14);
+		table->partition.min = sqlite3_column_int64(query->ppStmt, 15);
+		table->partition.max = sqlite3_column_int64(query->ppStmt, 16);
 	}
 
 	/* checksum information from s_table_chksum */
-	if (cols >= 20)
+	if (cols >= 21)
 	{
 		table->sourceChecksum.rowcount =
-			sqlite3_column_int64(query->ppStmt, 16);
+			sqlite3_column_int64(query->ppStmt, 17);
 
-		if (sqlite3_column_type(query->ppStmt, 17) != SQLITE_NULL)
+		if (sqlite3_column_type(query->ppStmt, 18) != SQLITE_NULL)
 		{
 			strlcpy(table->sourceChecksum.checksum,
-					(char *) sqlite3_column_text(query->ppStmt, 17),
+					(char *) sqlite3_column_text(query->ppStmt, 18),
 					sizeof(table->sourceChecksum.checksum));
 		}
 
 		table->targetChecksum.rowcount =
-			sqlite3_column_int64(query->ppStmt, 18);
+			sqlite3_column_int64(query->ppStmt, 19);
 
-		if (sqlite3_column_type(query->ppStmt, 19) != SQLITE_NULL)
+		if (sqlite3_column_type(query->ppStmt, 20) != SQLITE_NULL)
 		{
 			strlcpy(table->targetChecksum.checksum,
-					(char *) sqlite3_column_text(query->ppStmt, 19),
+					(char *) sqlite3_column_text(query->ppStmt, 20),
 					sizeof(table->targetChecksum.checksum));
 		}
 	}
 
 	/* summary information from s_table_parts_done */
-	if (cols == 22)
+	if (cols == 23)
 	{
-		table->durationMs = sqlite3_column_int64(query->ppStmt, 20);
-		table->bytesTransmitted = sqlite3_column_int64(query->ppStmt, 21);
+		table->durationMs = sqlite3_column_int64(query->ppStmt, 21);
+		table->bytesTransmitted = sqlite3_column_int64(query->ppStmt, 22);
 	}
 
 	return true;
@@ -5052,8 +5124,8 @@ catalog_add_s_seq(DatabaseCatalog *catalog, SourceSequence *seq)
 	char *sql =
 		"insert into s_seq("
 		"  oid, ownedby, attrelid, attroid, "
-		"  qname, nspname, relname, restore_list_name)"
-		"values($1, $2, $3, $4, $5, $6, $7, $8)";
+		"  datname, qname, nspname, relname, restore_list_name)"
+		"values($1, $2, $3, $4, $5, $6, $7, $8, $9)";
 
 	SQLiteQuery query = { 0 };
 
@@ -5070,6 +5142,7 @@ catalog_add_s_seq(DatabaseCatalog *catalog, SourceSequence *seq)
 		{ BIND_PARAMETER_TYPE_INT64, "attrelid", seq->attrelid, NULL },
 		{ BIND_PARAMETER_TYPE_INT64, "attroid", seq->attroid, NULL },
 
+		{ BIND_PARAMETER_TYPE_TEXT, "datname", 0, seq->datname },
 		{ BIND_PARAMETER_TYPE_TEXT, "qname", 0, seq->qname },
 		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, seq->nspname },
 		{ BIND_PARAMETER_TYPE_TEXT, "relname", 0, seq->relname },
@@ -5225,7 +5298,7 @@ catalog_lookup_s_seq_by_name(DatabaseCatalog *catalog,
 
 	char *sql =
 		"  select oid, ownedby, attrelid, attroid, "
-		"         qname, nspname, relname, restore_list_name, "
+		"         datname, qname, nspname, relname, restore_list_name, "
 		"         last_value, isCalled "
 		"    from s_seq "
 		"   where nspname = $1 and relname = $2 ";
@@ -5345,7 +5418,7 @@ catalog_iter_s_seq_init(SourceSeqIterator *iter)
 
 	char *sql =
 		"  select oid, ownedby, attrelid, attroid, "
-		"         qname, nspname, relname, restore_list_name, "
+		"         datname, qname, nspname, relname, restore_list_name, "
 		"         last_value, isCalled "
 		"    from s_seq "
 		"order by nspname, relname";
@@ -5410,24 +5483,31 @@ catalog_s_seq_fetch(SQLiteQuery *query)
 	seq->attrelid = sqlite3_column_int64(query->ppStmt, 2);
 	seq->attroid = sqlite3_column_int64(query->ppStmt, 3);
 
+	if (sqlite3_column_type(query->ppStmt, 4) != SQLITE_NULL)
+	{
+		strlcpy(seq->datname,
+				(char *) sqlite3_column_text(query->ppStmt, 4),
+				sizeof(seq->datname));
+	}
+
 	strlcpy(seq->qname,
-			(char *) sqlite3_column_text(query->ppStmt, 4),
+			(char *) sqlite3_column_text(query->ppStmt, 5),
 			sizeof(seq->qname));
 
 	strlcpy(seq->nspname,
-			(char *) sqlite3_column_text(query->ppStmt, 5),
+			(char *) sqlite3_column_text(query->ppStmt, 6),
 			sizeof(seq->nspname));
 
 	strlcpy(seq->relname,
-			(char *) sqlite3_column_text(query->ppStmt, 6),
+			(char *) sqlite3_column_text(query->ppStmt, 7),
 			sizeof(seq->relname));
 
 	strlcpy(seq->restoreListName,
-			(char *) sqlite3_column_text(query->ppStmt, 7),
+			(char *) sqlite3_column_text(query->ppStmt, 8),
 			sizeof(seq->restoreListName));
 
-	seq->lastValue = sqlite3_column_int64(query->ppStmt, 8);
-	seq->isCalled = sqlite3_column_int(query->ppStmt, 9);
+	seq->lastValue = sqlite3_column_int64(query->ppStmt, 9);
+	seq->isCalled = sqlite3_column_int(query->ppStmt, 10);
 
 	return true;
 }
@@ -6018,7 +6098,7 @@ catalog_iter_s_database_init(SourceDatabaseIterator *iter)
 	}
 
 	char *sql =
-		"  select oid, datname, bytes, bytes_pretty"
+		"  select oid, datname, bytes, bytes_pretty, coalesce(snapshot, '')"
 		"    from s_database "
 		"order by datname";
 
@@ -6089,6 +6169,62 @@ catalog_s_database_fetch(SQLiteQuery *query)
 	strlcpy(dat->bytesPretty,
 			(char *) sqlite3_column_text(query->ppStmt, 3),
 			sizeof(dat->bytesPretty));
+
+	strlcpy(dat->snapshot,
+			(char *) sqlite3_column_text(query->ppStmt, 4),
+			sizeof(dat->snapshot));
+
+	return true;
+}
+
+
+/*
+ * catalog_update_s_database_snapshot stores the exported snapshot identifier
+ * for a given database in the instance catalog.  Called by the snapshot holder
+ * subprocess after it has exported a per-database REPEATABLE READ snapshot.
+ */
+bool
+catalog_update_s_database_snapshot(DatabaseCatalog *catalog,
+								   const char *datname,
+								   const char *snapshot)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_update_s_database_snapshot: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"update s_database set snapshot = $1 where datname = $2";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_TEXT, "snapshot", 0, (char *) snapshot },
+		{ BIND_PARAMETER_TYPE_TEXT, "datname", 0, (char *) datname }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	return true;
 }
@@ -8015,7 +8151,7 @@ catalog_iter_s_table_in_copy_init(SourceTableIterator *iter)
 	}
 
 	char *sql =
-		"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
+		"  select t.oid, t.datname, qname, nspname, relname, amname, restore_list_name, "
 		"         relpages, reltuples, ts.bytes, ts.bytes_pretty, "
 		"         exclude_data, part_key, "
 		"         part.partcount, s.partnum, part.min, part.max "
@@ -8991,7 +9127,7 @@ catalog_iter_s_table_generated_columns_init(SourceTableIterator *iter)
 	}
 
 	char *sql =
-		"  select t.oid, qname, nspname, relname, amname, restore_list_name, "
+		"  select t.oid, t.datname, qname, nspname, relname, amname, restore_list_name, "
 		"         relpages, reltuples, ts.bytes, ts.bytes_pretty, "
 		"         exclude_data, part_key, "
 		"         (select count(1) from s_table_part p where p.oid = t.oid) "
