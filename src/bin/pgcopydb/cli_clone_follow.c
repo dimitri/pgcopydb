@@ -360,6 +360,21 @@ cli_clone_all_databases_consolidated_summary(CopyDataSpec *copySpecs)
 		}
 	}
 
+	/*
+	 * Overlay total wall-clock from the instance catalog (written by
+	 * cli_clone around clone_all_databases).
+	 */
+	{
+		TopLevelTiming t = { .section = TIMING_SECTION_TOTAL };
+
+		if (summary_lookup_timing(instanceCatalog, &t, TIMING_SECTION_TOTAL))
+		{
+			TopLevelTiming *entry = &(topLevelTimingArray[TIMING_SECTION_TOTAL]);
+
+			entry->durationMs = t.durationMs;
+		}
+	}
+
 	(void) catalog_close(instanceCatalog);
 
 	/* Re-pretty-print aggregated timing strings */
@@ -468,11 +483,34 @@ cli_clone(int argc, char **argv)
 	 */
 	if (copySpecs.allDatabases)
 	{
+		/*
+		 * Start the total wall-clock timer before Phase I begins.  We open
+		 * the instance catalog briefly to persist the start timestamp, then
+		 * close it — clone_all_databases will reopen it as needed.
+		 */
+		if (!catalog_init_from_specs(&copySpecs))
+		{
+			log_error("Failed to open instance catalog for TOTAL timing");
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+		(void) summary_start_timing(&copySpecs.catalogs.source,
+									TIMING_SECTION_TOTAL);
+		(void) catalog_close_from_specs(&copySpecs);
+
 		if (!clone_all_databases(&copySpecs))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
+
+		/* Record total wall-clock stop time in the instance catalog. */
+		if (catalog_init_from_specs(&copySpecs))
+		{
+			(void) summary_stop_timing(&copySpecs.catalogs.source,
+									   TIMING_SECTION_TOTAL);
+			(void) catalog_close_from_specs(&copySpecs);
+		}
+
 		cli_clone_all_databases_consolidated_summary(&copySpecs);
 		exit(EXIT_CODE_QUIT);
 	}

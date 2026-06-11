@@ -55,3 +55,21 @@ pgcopydb compare data \
          --source "${PGCOPYDB_SOURCE_PGURI}" \
          --target "${PGCOPYDB_TARGET_PGURI}" \
          --dir "/tmp/pgcopydb"
+
+#
+# Debug: dump timing tables from per-database catalogs
+#
+echo "=== Timing table dump ==="
+for db in pagila f1db chinook; do
+    dbfile="/tmp/pgcopydb/db/${db}/schema/source.db"
+    if [ -f "${dbfile}" ]; then
+        echo "--- ${db}: timings ---"
+        sqlite3 -separator '|' "${dbfile}" \
+            "select id, label, duration, count, bytes from timings order by id;"
+        echo "--- ${db}: summary count ---"
+        sqlite3 "${dbfile}" \
+            "select count(*), sum(duration), sum(bytes) from summary where done_time_epoch > 0;"
+    else
+        echo "--- ${db}: source.db not found at ${dbfile}"
+    fi
+done

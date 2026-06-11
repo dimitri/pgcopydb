@@ -2098,7 +2098,7 @@ summary_increment_timing(DatabaseCatalog *catalog,
 	 */
 	char *sql =
 		"insert into timings(id, label, count, bytes, duration) "
-		"values($4, $5, $1, $2, $3) "
+		"values($1, $2, $3, $4, $5) "
 		"on conflict(id) do update set "
 		"  count    = coalesce(timings.count,    0) + excluded.count, "
 		"  bytes    = coalesce(timings.bytes,    0) + excluded.bytes, "
@@ -2115,11 +2115,11 @@ summary_increment_timing(DatabaseCatalog *catalog,
 
 	/* bind our parameters now */
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_INT64, "count", count, NULL },
-		{ BIND_PARAMETER_TYPE_INT64, "bytes", bytes, NULL },
+		{ BIND_PARAMETER_TYPE_INT,   "id",       timing->section, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT,  "label",    0, (char *) timing->label },
+		{ BIND_PARAMETER_TYPE_INT64, "count",    count, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "bytes",    bytes, NULL },
 		{ BIND_PARAMETER_TYPE_INT64, "duration", durationMs, NULL },
-		{ BIND_PARAMETER_TYPE_INT, "id", timing->section, NULL },
-		{ BIND_PARAMETER_TYPE_TEXT, "label", 0, (char *) timing->label }
 	};
 
 	int pCount = sizeof(params) / sizeof(params[0]);
@@ -2454,15 +2454,45 @@ catalog_timing_fetch(SQLiteQuery *query)
 {
 	TopLevelTiming *timing = (TopLevelTiming *) query->context;
 
-	/* cleanup the memory area before re-use */
-	bzero(timing, sizeof(TopLevelTiming));
+	/*
+	 * Preserve fields that live only in memory, not in the database.  When
+	 * this function is called with &topLevelTimingArray[N] as the context
+	 * (e.g. from summary_lookup_timing or summary_increment_timing), a full
+	 * bzero would clobber the static initialiser values for conn, cumulative,
+	 * jobsMask, and startTimeInstr, corrupting every subsequent use of that
+	 * array entry.
+	 */
+	const char *savedConn = timing->conn;
+	char *savedLabel = timing->label;
+	bool savedCumulative = timing->cumulative;
+	uint32_t savedJobsMask = timing->jobsMask;
+	instr_time savedStartTimeInstr = timing->startTimeInstr;
+	instr_time savedDurationInstr = timing->durationInstr;
+
+	/* Reset only the DB-sourced fields */
+	timing->section = 0;
+	timing->label = NULL;
+	timing->startTime = 0;
+	timing->doneTime = 0;
+	timing->durationMs = 0;
+	memset(timing->ppDuration, 0, sizeof(timing->ppDuration));
+	timing->count = 0;
+	timing->bytes = 0;
+	memset(timing->ppBytes, 0, sizeof(timing->ppBytes));
+
+	/* Restore memory-only fields */
+	timing->conn = savedConn;
+	timing->cumulative = savedCumulative;
+	timing->jobsMask = savedJobsMask;
+	timing->startTimeInstr = savedStartTimeInstr;
+	timing->durationInstr = savedDurationInstr;
 
 	/* the section is an Enum in memory, an integer value on-disk */
 	timing->section = sqlite3_column_int(query->ppStmt, 0);
 
 	if (sqlite3_column_type(query->ppStmt, 1) == SQLITE_NULL)
 	{
-		timing->label = NULL;
+		timing->label = savedLabel;
 	}
 	else
 	{

@@ -390,7 +390,10 @@ vacuum_analyze_table_by_oid(CopyDataSpec *specs, uint32_t oid)
 	sformat(psTitle, sizeof(psTitle), "pgcopydb: %s", vacuum);
 	(void) set_ps_title(psTitle);
 
-	log_notice("%s;", vacuum);
+	if (specs->datname[0] != '\0')
+		log_notice("%s: %s;", specs->datname, vacuum);
+	else
+		log_notice("%s;", vacuum);
 
 	/* also track the process information in our catalogs */
 	ProcessInfo ps = {
