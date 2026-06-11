@@ -1074,9 +1074,9 @@ compare_one_database_schema(CopyDataSpec *parentSpecs, const char *datname)
 	char *tgturi = NULL;
 
 	if (!multidb_build_uri_for_database(parentSpecs->connStrings.source_pguri,
-										 datname, &srcuri) ||
+										datname, &srcuri) ||
 		!multidb_build_uri_for_database(parentSpecs->connStrings.target_pguri,
-										 datname, &tgturi))
+										datname, &tgturi))
 	{
 		log_error("Failed to build URIs for database \"%s\"", datname);
 		free(srcuri);
@@ -1115,7 +1115,9 @@ compare_one_database_schema(CopyDataSpec *parentSpecs, const char *datname)
 		free(srcuri);
 		free(tgturi);
 		if (dbSpecs.connStrings.safeSourcePGURI.pguri)
+		{
 			free(dbSpecs.connStrings.safeSourcePGURI.pguri);
+		}
 		return false;
 	}
 
@@ -1126,9 +1128,13 @@ compare_one_database_schema(CopyDataSpec *parentSpecs, const char *datname)
 		free(srcuri);
 		free(tgturi);
 		if (dbSpecs.connStrings.safeSourcePGURI.pguri)
+		{
 			free(dbSpecs.connStrings.safeSourcePGURI.pguri);
+		}
 		if (dbSpecs.connStrings.safeTargetPGURI.pguri)
+		{
 			free(dbSpecs.connStrings.safeTargetPGURI.pguri);
+		}
 		return false;
 	}
 
@@ -1137,9 +1143,13 @@ compare_one_database_schema(CopyDataSpec *parentSpecs, const char *datname)
 	free(srcuri);
 	free(tgturi);
 	if (dbSpecs.connStrings.safeSourcePGURI.pguri)
+	{
 		free(dbSpecs.connStrings.safeSourcePGURI.pguri);
+	}
 	if (dbSpecs.connStrings.safeTargetPGURI.pguri)
+	{
 		free(dbSpecs.connStrings.safeTargetPGURI.pguri);
+	}
 
 	return ok;
 }
@@ -1185,7 +1195,9 @@ compare_alldb_schema_summary(CopyDataSpec *parentSpecs,
 		int nameLen = strlen(datnames[i]);
 
 		if (nameLen > maxNameLen)
+		{
 			maxNameLen = nameLen;
+		}
 
 		/* source catalog: <topdir>/db/<datname>/schema/source/source.db */
 		DatabaseCatalog srcCat = { .type = DATABASE_CATALOG_TYPE_SOURCE };
@@ -1218,7 +1230,9 @@ compare_alldb_schema_summary(CopyDataSpec *parentSpecs,
 	char dbSep[NAMEDATALEN] = { 0 };
 
 	for (int j = 0; j < maxNameLen && j < (int) sizeof(dbSep) - 1; j++)
+	{
 		dbSep[j] = '-';
+	}
 
 	fformat(stdout, "\n");
 	fformat(stdout, "%-*s |   Tables    |   Indexes   | Constraints |  Sequences\n",
@@ -1230,7 +1244,8 @@ compare_alldb_schema_summary(CopyDataSpec *parentSpecs,
 
 	for (int i = 0; i < dbCount; i++)
 	{
-		fformat(stdout, "%-*s | %3lld | %5lld | %3lld | %5lld | %3lld | %5lld | %3lld | %5lld\n",
+		fformat(stdout,
+				"%-*s | %3lld | %5lld | %3lld | %5lld | %3lld | %5lld | %3lld | %5lld\n",
 				maxNameLen, counts[i].datname,
 				(long long) counts[i].src.tables,
 				(long long) counts[i].tgt.tables,
@@ -1304,12 +1319,16 @@ compare_all_databases_schema(CopyDataSpec *parentSpecs)
 		for (;;)
 		{
 			if (!catalog_iter_s_database_next(&dbIter))
+			{
 				break;
+			}
 
 			SourceDatabase *db = dbIter.dat;
 
 			if (db == NULL)
+			{
 				break;
+			}
 
 			dbCount++;
 		}
@@ -1323,7 +1342,7 @@ compare_all_databases_schema(CopyDataSpec *parentSpecs)
 		return true;
 	}
 
-	datnames = (char (*)[PG_NAMEDATALEN]) calloc(dbCount, PG_NAMEDATALEN);
+	datnames = (char (*)[PG_NAMEDATALEN])calloc(dbCount, PG_NAMEDATALEN);
 
 	if (datnames == NULL)
 	{
@@ -1349,15 +1368,21 @@ compare_all_databases_schema(CopyDataSpec *parentSpecs)
 		for (;;)
 		{
 			if (!catalog_iter_s_database_next(&dbIter))
+			{
 				break;
+			}
 
 			SourceDatabase *db = dbIter.dat;
 
 			if (db == NULL)
+			{
 				break;
+			}
 
 			if (idx < dbCount)
+			{
 				strlcpy(datnames[idx++], db->datname, PG_NAMEDATALEN);
+			}
 		}
 
 		(void) catalog_iter_s_database_finish(&dbIter);
@@ -1367,7 +1392,7 @@ compare_all_databases_schema(CopyDataSpec *parentSpecs)
 
 	/* Fork up to tableJobs parallel compare workers */
 	int maxWorkers = (parentSpecs->tableJobs < dbCount)
-		? parentSpecs->tableJobs : dbCount;
+					 ? parentSpecs->tableJobs : dbCount;
 
 	int activeCount = 0;
 	bool ok = true;
@@ -1387,7 +1412,9 @@ compare_all_databases_schema(CopyDataSpec *parentSpecs)
 		if (activeCount >= maxWorkers)
 		{
 			if (!compare_wait_any_child())
+			{
 				ok = false;
+			}
 
 			activeCount--;
 		}
@@ -1418,14 +1445,18 @@ compare_all_databases_schema(CopyDataSpec *parentSpecs)
 	while (activeCount > 0)
 	{
 		if (!compare_wait_any_child())
+		{
 			ok = false;
+		}
 
 		activeCount--;
 	}
 
 	/* Print per-database object count summary */
 	if (ok || !parentSpecs->failFast)
+	{
 		compare_alldb_schema_summary(parentSpecs, datnames, dbCount);
+	}
 
 	free(datnames);
 
@@ -1447,9 +1478,13 @@ compare_alldb_chksum_hook(void *ctx, SourceTable *table)
 	char fqname[2 * PG_NAMEDATALEN + 64] = { 0 };
 
 	if (table->datname[0] != '\0')
+	{
 		sformat(fqname, sizeof(fqname), "%s.%s", table->datname, table->qname);
+	}
 	else
+	{
 		strlcpy(fqname, table->qname, sizeof(fqname));
+	}
 
 	fformat(stdout, "%50s | %s | %36s | %36s \n",
 			fqname,
@@ -1472,9 +1507,9 @@ compare_one_database_data(CopyDataSpec *parentSpecs, const char *datname)
 	char *tgturi = NULL;
 
 	if (!multidb_build_uri_for_database(parentSpecs->connStrings.source_pguri,
-										 datname, &srcuri) ||
+										datname, &srcuri) ||
 		!multidb_build_uri_for_database(parentSpecs->connStrings.target_pguri,
-										 datname, &tgturi))
+										datname, &tgturi))
 	{
 		log_error("Failed to build URIs for database \"%s\"", datname);
 		free(srcuri);
@@ -1514,7 +1549,9 @@ compare_one_database_data(CopyDataSpec *parentSpecs, const char *datname)
 		free(srcuri);
 		free(tgturi);
 		if (dbSpecs.connStrings.safeSourcePGURI.pguri)
+		{
 			free(dbSpecs.connStrings.safeSourcePGURI.pguri);
+		}
 		return false;
 	}
 
@@ -1525,9 +1562,13 @@ compare_one_database_data(CopyDataSpec *parentSpecs, const char *datname)
 		free(srcuri);
 		free(tgturi);
 		if (dbSpecs.connStrings.safeSourcePGURI.pguri)
+		{
 			free(dbSpecs.connStrings.safeSourcePGURI.pguri);
+		}
 		if (dbSpecs.connStrings.safeTargetPGURI.pguri)
+		{
 			free(dbSpecs.connStrings.safeTargetPGURI.pguri);
+		}
 		return false;
 	}
 
@@ -1543,9 +1584,13 @@ compare_one_database_data(CopyDataSpec *parentSpecs, const char *datname)
 	free(srcuri);
 	free(tgturi);
 	if (dbSpecs.connStrings.safeSourcePGURI.pguri)
+	{
 		free(dbSpecs.connStrings.safeSourcePGURI.pguri);
+	}
 	if (dbSpecs.connStrings.safeTargetPGURI.pguri)
+	{
 		free(dbSpecs.connStrings.safeTargetPGURI.pguri);
+	}
 
 	return ok;
 }
@@ -1608,10 +1653,14 @@ compare_all_databases_data(CopyDataSpec *parentSpecs)
 		for (;;)
 		{
 			if (!catalog_iter_s_database_next(&dbIter))
+			{
 				break;
+			}
 
 			if (dbIter.dat == NULL)
+			{
 				break;
+			}
 
 			dbCount++;
 		}
@@ -1625,7 +1674,7 @@ compare_all_databases_data(CopyDataSpec *parentSpecs)
 		return true;
 	}
 
-	datnames = (char (*)[PG_NAMEDATALEN]) calloc(dbCount, PG_NAMEDATALEN);
+	datnames = (char (*)[PG_NAMEDATALEN])calloc(dbCount, PG_NAMEDATALEN);
 
 	if (datnames == NULL)
 	{
@@ -1651,15 +1700,21 @@ compare_all_databases_data(CopyDataSpec *parentSpecs)
 		for (;;)
 		{
 			if (!catalog_iter_s_database_next(&dbIter))
+			{
 				break;
+			}
 
 			SourceDatabase *db = dbIter.dat;
 
 			if (db == NULL)
+			{
 				break;
+			}
 
 			if (idx < dbCount)
+			{
 				strlcpy(datnames[idx++], db->datname, PG_NAMEDATALEN);
+			}
 		}
 
 		(void) catalog_iter_s_database_finish(&dbIter);
@@ -1669,7 +1724,7 @@ compare_all_databases_data(CopyDataSpec *parentSpecs)
 
 	/* Fork up to tableJobs parallel workers */
 	int maxWorkers = (parentSpecs->tableJobs < dbCount)
-		? parentSpecs->tableJobs : dbCount;
+					 ? parentSpecs->tableJobs : dbCount;
 
 	int activeCount = 0;
 	bool ok = true;
@@ -1689,7 +1744,9 @@ compare_all_databases_data(CopyDataSpec *parentSpecs)
 		if (activeCount >= maxWorkers)
 		{
 			if (!compare_wait_any_child())
+			{
 				ok = false;
+			}
 
 			activeCount--;
 		}
@@ -1720,7 +1777,9 @@ compare_all_databases_data(CopyDataSpec *parentSpecs)
 	while (activeCount > 0)
 	{
 		if (!compare_wait_any_child())
+		{
 			ok = false;
+		}
 
 		activeCount--;
 	}

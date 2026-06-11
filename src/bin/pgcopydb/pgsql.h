@@ -321,7 +321,8 @@ bool validate_connection_string(const char *connectionString);
 
 bool pgsql_lock_table(PGSQL *pgsql, const char *qname, const char *lockmode);
 
-bool pgsql_truncate(PGSQL *pgsql, const char *qname, char relkind);
+bool pgsql_truncate(PGSQL *pgsql, const char *qname, char relkind,
+					const char *datname);
 
 typedef struct CopyArgs
 {
@@ -331,6 +332,7 @@ typedef struct CopyArgs
 	char *dstQname;
 	char *dstAttrList;
 	char *logCommand;
+	char *datname;
 	bool truncate;
 	bool freeze;
 	bool useCopyBinary;

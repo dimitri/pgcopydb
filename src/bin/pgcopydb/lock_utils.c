@@ -197,7 +197,9 @@ semaphore_create_set(Semaphore *semaphore, int count)
 	}
 
 	for (int i = 0; i < count; i++)
+	{
 		vals[i] = 1;
+	}
 
 	semun.array = vals;
 
@@ -352,7 +354,9 @@ semaphore_lock(Semaphore *semaphore)
 {
 	/* semId == 0: no semaphore allocated (e.g. read-only catalog) — no-op */
 	if (semaphore->semId == 0)
+	{
 		return true;
+	}
 
 	if (semaphore->reentrant && semaphore->depth > 0)
 	{
@@ -413,7 +417,9 @@ semaphore_unlock(Semaphore *semaphore)
 {
 	/* semId == 0: no semaphore allocated (e.g. read-only catalog) — no-op */
 	if (semaphore->semId == 0)
+	{
 		return true;
+	}
 
 	/* unlocking a reentrant semaphore skips an actual semop() call */
 	if (semaphore->reentrant && semaphore->depth > 1)

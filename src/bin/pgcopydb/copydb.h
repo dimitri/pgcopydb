@@ -731,14 +731,14 @@ bool summary_prepare_index_entry(DatabaseCatalog *catalog,
 
 /* multi_db.c (worker helpers called from table-data.c) */
 bool multidb_context_init(MultiDbContext *ctx, CopyDataSpec *parentSpecs);
-MultiDbEntry *multidb_context_get_entry(MultiDbContext *ctx,
-										const char *datname);
+MultiDbEntry * multidb_context_get_entry(MultiDbContext *ctx,
+										 const char *datname);
 bool multidb_context_close_entry(MultiDbEntry *entry);
 bool multidb_context_close_all(MultiDbContext *ctx);
 
 /* lighter pool for index/vacuum workers: catalog + target only, no snapshot */
-MultiDbEntry *multidb_index_context_get_entry(MultiDbContext *ctx,
-											  const char *datname);
+MultiDbEntry * multidb_index_context_get_entry(MultiDbContext *ctx,
+											   const char *datname);
 bool multidb_index_context_close_all(MultiDbContext *ctx);
 
 /* compare.c */

@@ -588,7 +588,7 @@ copydb_copy_supervisor_add_table_hook(void *ctx, SourceTable *table)
 			 */
 			(void) pgsql_get_table_relkind(dst, table->qname, &relkind);
 
-			if (!pgsql_truncate(dst, table->qname, relkind))
+			if (!pgsql_truncate(dst, table->qname, relkind, table->datname))
 			{
 				/* errors have already been logged */
 				return false;
@@ -1030,7 +1030,7 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 					SourceTable *sourceTable = tableSpecs->sourceTable;
 
 					if (!vacuum_add_table(specs, sourceTable->oid,
-									  sourceTable->datname))
+										  sourceTable->datname))
 					{
 						log_error("Failed to queue VACUUM ANALYZE %s [%u]",
 								  sourceTable->qname,
@@ -1137,6 +1137,7 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 	args->srcWhereClause = NULL;
 	args->dstQname = tableSpecs->sourceTable->qname;
 	args->dstAttrList = tableSpecs->sourceTable->attrList;
+	args->datname = tableSpecs->sourceTable->datname;
 	args->truncate = false;     /* default value, see below */
 	args->freeze = tableSpecs->sourceTable->partition.partCount <= 1;
 	args->useCopyBinary = specs->useCopyBinary;
@@ -1673,9 +1674,13 @@ compare_multidb_table_entry_by_bytes(const void *a, const void *b)
 	const MultiDbTableEntry *tb = (const MultiDbTableEntry *) b;
 
 	if (ta->bytes > tb->bytes)
+	{
 		return -1;
+	}
 	else if (ta->bytes < tb->bytes)
+	{
 		return 1;
+	}
 	return 0;
 }
 
@@ -1733,7 +1738,7 @@ copydb_copy_worker_queue_tables_multidb(CopyDataSpec *parentSpecs)
 		 */
 		if (info->catalogSemId != 0)
 		{
-			sdb.sema.semId    = info->catalogSemId;
+			sdb.sema.semId = info->catalogSemId;
 			sdb.sema.semIndex = info->catalogSemIndex;
 			sdb.sema.reentrant = true;
 		}
@@ -1773,7 +1778,9 @@ copydb_copy_worker_queue_tables_multidb(CopyDataSpec *parentSpecs)
 			SourceTable *table = iter.table;
 
 			if (table == NULL)
+			{
 				break;  /* end of results */
+			}
 
 			/* grow array if needed */
 			if (count >= capacity)
@@ -1818,7 +1825,7 @@ copydb_copy_worker_queue_tables_multidb(CopyDataSpec *parentSpecs)
 			 count, dbCount);
 
 	/* sort all tables by bytes descending */
-	qsort(entries, count, sizeof(MultiDbTableEntry),
+	qsort(entries, count, sizeof(MultiDbTableEntry),        /* IGNORE-BANNED */
 		  compare_multidb_table_entry_by_bytes);
 
 	/* enqueue all tables */
@@ -1830,7 +1837,9 @@ copydb_copy_worker_queue_tables_multidb(CopyDataSpec *parentSpecs)
 		MultiDbTableEntry *e = &entries[i];
 
 		if (e->excludeData)
+		{
 			continue;
+		}
 
 		if (e->partCount == 0)
 		{

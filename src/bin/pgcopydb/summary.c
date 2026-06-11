@@ -2115,10 +2115,10 @@ summary_increment_timing(DatabaseCatalog *catalog,
 
 	/* bind our parameters now */
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_INT,   "id",       timing->section, NULL },
-		{ BIND_PARAMETER_TYPE_TEXT,  "label",    0, (char *) timing->label },
-		{ BIND_PARAMETER_TYPE_INT64, "count",    count, NULL },
-		{ BIND_PARAMETER_TYPE_INT64, "bytes",    bytes, NULL },
+		{ BIND_PARAMETER_TYPE_INT, "id", timing->section, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "label", 0, (char *) timing->label },
+		{ BIND_PARAMETER_TYPE_INT64, "count", count, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "bytes", bytes, NULL },
 		{ BIND_PARAMETER_TYPE_INT64, "duration", durationMs, NULL },
 	};
 
@@ -3138,7 +3138,9 @@ prepare_summary_table_headers(SummaryTable *summary)
 			len = (len > minLen) ? len : minLen;
 
 			if (headers->maxDatnameSize < len)
+			{
 				headers->maxDatnameSize = len;
+			}
 		}
 
 		len = strlen(entry->oidStr);
@@ -3200,7 +3202,9 @@ prepare_summary_table_headers(SummaryTable *summary)
 
 	/* now prepare the header line with dashes */
 	if (headers->maxDatnameSize > 0)
+	{
 		prepareLineSeparator(headers->datnameSeparator, headers->maxDatnameSize);
+	}
 	prepareLineSeparator(headers->oidSeparator, headers->maxOidSize);
 	prepareLineSeparator(headers->nspnameSeparator, headers->maxNspnameSize);
 	prepareLineSeparator(headers->relnameSeparator, headers->maxRelnameSize);

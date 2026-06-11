@@ -446,8 +446,8 @@ bool catalog_iter_s_database_finish(SourceDatabaseIterator *iter);
 bool catalog_s_database_fetch(SQLiteQuery *query);
 
 bool catalog_update_s_database_snapshot(DatabaseCatalog *catalog,
-										 const char *datname,
-										 const char *snapshot);
+										const char *datname,
+										const char *snapshot);
 
 typedef bool (SourcePropertyIterFun)(void *context, SourceProperty *property);
 

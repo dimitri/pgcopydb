@@ -43,4 +43,5 @@
      --origin                      Use this Postgres replication origin node name
      --endpos                      Stop replaying changes when reaching this LSN
      --use-copy-binary             Use the COPY BINARY format for COPY operations
+     --all-databases               Clone all databases found on the source instance
    

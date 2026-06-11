@@ -58,7 +58,9 @@ vacuum_start_supervisor(CopyDataSpec *specs, pid_t *pidOut)
 		{
 			/* fork succeeded, in parent */
 			if (pidOut != NULL)
+			{
 				*pidOut = fpid;
+			}
 			break;
 		}
 	}
@@ -391,9 +393,13 @@ vacuum_analyze_table_by_oid(CopyDataSpec *specs, uint32_t oid)
 	(void) set_ps_title(psTitle);
 
 	if (specs->datname[0] != '\0')
+	{
 		log_notice("%s: %s;", specs->datname, vacuum);
+	}
 	else
+	{
 		log_notice("%s;", vacuum);
+	}
 
 	/* also track the process information in our catalogs */
 	ProcessInfo ps = {

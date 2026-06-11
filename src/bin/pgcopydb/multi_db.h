@@ -12,7 +12,7 @@
 bool clone_all_databases(CopyDataSpec *copySpecs);
 
 bool multidb_build_uri_for_database(const char *pguri,
-									 const char *datname,
-									 char **result_uri);
+									const char *datname,
+									char **result_uri);
 
 #endif /* MULTI_DB_H */

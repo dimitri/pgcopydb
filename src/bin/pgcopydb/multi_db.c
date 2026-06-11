@@ -58,26 +58,26 @@ static bool multidb_init_db_specs(CopyDataSpec *dbSpecs,
  * SNAPSHOT to do consistent schema fetch + pg_dump + pg_restore --pre-data.
  */
 static bool multidb_snapshot_holder(CopyDataSpec *parentSpecs,
-									 int readyfd, int donefd);
+									int readyfd, int donefd);
 static bool multidb_pre_data_supervisor(CopyDataSpec *parentSpecs);
 static bool multidb_pre_data_worker(CopyDataSpec *parentSpecs);
 static bool multidb_pre_data_one_db(CopyDataSpec *parentSpecs,
 									const char *datname);
 
 static bool multidb_clone_one_database_post_data(CopyDataSpec *parentSpecs,
-												  const char *datname);
+												 const char *datname);
 static bool multidb_global_copy(CopyDataSpec *parentSpecs);
 static bool multidb_wait_child(pid_t pid, const char *label);
 
 /* connection cache helpers (also called from table-data.c) */
 static bool multidb_init_entry(MultiDbEntry *entry,
-								CopyDataSpec *parentSpecs,
-								const char *datname);
+							   CopyDataSpec *parentSpecs,
+							   const char *datname);
 
 /* lighter index/vacuum pool helpers */
 static bool multidb_init_index_entry(MultiDbEntry *entry,
-									  CopyDataSpec *parentSpecs,
-									  const char *datname);
+									 CopyDataSpec *parentSpecs,
+									 const char *datname);
 static bool multidb_index_context_close_entry(MultiDbEntry *entry);
 
 
@@ -181,7 +181,7 @@ clone_all_databases(CopyDataSpec *parentSpecs)
 	 * exec'd children (pg_dump, pg_restore).
 	 */
 	int readypipe[2] = { -1, -1 };
-	int donepipe[2]  = { -1, -1 };
+	int donepipe[2] = { -1, -1 };
 
 	if (pipe(readypipe) < 0 || pipe(donepipe) < 0)
 	{
@@ -193,7 +193,7 @@ clone_all_databases(CopyDataSpec *parentSpecs)
 	for (int i = 0; i < 2; i++)
 	{
 		(void) fcntl(readypipe[i], F_SETFD, FD_CLOEXEC);
-		(void) fcntl(donepipe[i],  F_SETFD, FD_CLOEXEC);
+		(void) fcntl(donepipe[i], F_SETFD, FD_CLOEXEC);
 	}
 
 	fflush(stdout);
@@ -206,8 +206,10 @@ clone_all_databases(CopyDataSpec *parentSpecs)
 		case -1:
 		{
 			log_error("Failed to fork snapshot holder: %m");
-			close(readypipe[0]); close(readypipe[1]);
-			close(donepipe[0]);  close(donepipe[1]);
+			close(readypipe[0]);
+			close(readypipe[1]);
+			close(donepipe[0]);
+			close(donepipe[1]);
 			(void) queue_unlink(&parentSpecs->preDataQueue);
 			return false;
 		}
@@ -226,7 +228,9 @@ clone_all_databases(CopyDataSpec *parentSpecs)
 		}
 
 		default:
+		{
 			break;
+		}
 	}
 
 	/* parent: close pipe ends not needed here */
@@ -325,8 +329,9 @@ clone_all_databases(CopyDataSpec *parentSpecs)
 			SourceDatabase *db = dbIter.dat;
 
 			if (db == NULL)
+			{
 				break;        /* end of results */
-
+			}
 			if (multidb_is_system_database(db->datname))
 			{
 				log_debug("Skipping system database \"%s\"", db->datname);
@@ -376,7 +381,9 @@ clone_all_databases(CopyDataSpec *parentSpecs)
 		}
 
 		if (!catalog_iter_s_database_finish(&dbIter))
+		{
 			ok = false;
+		}
 
 		(void) catalog_close_from_specs(parentSpecs);
 	}
@@ -384,7 +391,9 @@ clone_all_databases(CopyDataSpec *parentSpecs)
 	if (!ok || dbCount == 0)
 	{
 		if (ok && dbCount == 0)
+		{
 			log_warn("No user databases found after filtering");
+		}
 		goto signal_done;
 	}
 
@@ -422,7 +431,9 @@ clone_all_databases(CopyDataSpec *parentSpecs)
 			}
 
 			default:
+			{
 				break;
+			}
 		}
 
 		if (!multidb_wait_child(prePid, "pre-data supervisor"))
@@ -497,11 +508,14 @@ clone_all_databases(CopyDataSpec *parentSpecs)
 					  multiDbInfos[i].datname);
 			ok = false;
 			if (parentSpecs->failFast)
+			{
 				break;
+			}
 		}
 	}
 
 signal_done:
+
 	/*
 	 * Close the write end of donepipe, signalling the snapshot holder to commit
 	 * all its REPEATABLE READ transactions and exit.
@@ -509,7 +523,9 @@ signal_done:
 	close(donepipe[1]);
 
 	if (!multidb_wait_child(holderPid, "snapshot holder"))
+	{
 		ok = false;
+	}
 
 	parentSpecs->multiDbInfos = NULL;
 	parentSpecs->multiDbCount = 0;
@@ -630,7 +646,9 @@ multidb_snapshot_holder(CopyDataSpec *parentSpecs, int readyfd, int donefd)
 		SourceDatabase *db = dbIter.dat;
 
 		if (db == NULL)
+		{
 			break;
+		}
 
 		if (multidb_is_system_database(db->datname))
 		{
@@ -677,8 +695,8 @@ multidb_snapshot_holder(CopyDataSpec *parentSpecs, int readyfd, int donefd)
 
 		/* persist snapshot ID in the instance catalog */
 		if (!catalog_update_s_database_snapshot(instanceCatalog,
-												 db->datname,
-												 snap->snapshot))
+												db->datname,
+												snap->snapshot))
 		{
 			log_error("Snapshot holder: failed to record snapshot "
 					  "for database \"%s\"", db->datname);
@@ -702,12 +720,16 @@ multidb_snapshot_holder(CopyDataSpec *parentSpecs, int readyfd, int donefd)
 	}
 
 	if (!catalog_iter_s_database_finish(&dbIter))
+	{
 		ok = false;
+	}
 
 	(void) catalog_close_from_specs(parentSpecs);
 
 	if (!ok)
+	{
 		goto signal_ready;
+	}
 
 	/* send one STOP message per worker */
 	for (int i = 0; i < parentSpecs->tableJobs; i++)
@@ -726,6 +748,7 @@ multidb_snapshot_holder(CopyDataSpec *parentSpecs, int readyfd, int donefd)
 			 dbCount, parentSpecs->tableJobs);
 
 signal_ready:
+
 	/*
 	 * Signal the parent that the catalog is fully written and all DBNAME/STOP
 	 * messages are in the queue.  The parent will re-open the catalog, build
@@ -741,7 +764,9 @@ signal_ready:
 	}
 
 	if (!ok)
+	{
 		goto cleanup_snapshots;
+	}
 
 	/*
 	 * Wait for the parent to close the write end of donepipe (after Phase III).
@@ -757,6 +782,7 @@ signal_ready:
 	log_notice("Snapshot holder: received done signal, closing snapshots");
 
 cleanup_snapshots:
+
 	/* commit all held snapshot transactions */
 	for (int i = 0; i < dbCount; i++)
 	{
@@ -827,7 +853,9 @@ multidb_pre_data_supervisor(CopyDataSpec *parentSpecs)
 			}
 
 			default:
+			{
 				break;
+			}
 		}
 	}
 
@@ -839,7 +867,6 @@ multidb_pre_data_supervisor(CopyDataSpec *parentSpecs)
 
 	return ok;
 }
-
 
 
 /*
@@ -899,7 +926,9 @@ multidb_pre_data_worker(CopyDataSpec *parentSpecs)
 					++errors;
 
 					if (parentSpecs->failFast)
+					{
 						return false;
+					}
 				}
 				break;
 			}
@@ -1016,7 +1045,9 @@ multidb_pre_data_one_db(CopyDataSpec *parentSpecs, const char *datname)
 		free(cs.source_pguri);
 		free(cs.target_pguri);
 		if (cs.safeSourcePGURI.pguri)
+		{
 			free(cs.safeSourcePGURI.pguri);
+		}
 		return false;
 	}
 
@@ -1118,9 +1149,13 @@ cleanup_cs:
 	free(cs.source_pguri);
 	free(cs.target_pguri);
 	if (cs.safeSourcePGURI.pguri)
+	{
 		free(cs.safeSourcePGURI.pguri);
+	}
 	if (cs.safeTargetPGURI.pguri)
+	{
 		free(cs.safeTargetPGURI.pguri);
+	}
 
 	return ok;
 }
@@ -1135,7 +1170,7 @@ cleanup_cs:
  */
 static bool
 multidb_clone_one_database_post_data(CopyDataSpec *parentSpecs,
-									  const char *datname)
+									 const char *datname)
 {
 	/* locate MultiDbInfo for this database */
 	MultiDbInfo *info = NULL;
@@ -1298,7 +1333,9 @@ multidb_clone_one_database_post_data(CopyDataSpec *parentSpecs,
 		}
 
 		default:
+		{
 			break;
+		}
 	}
 
 	/* parent: wait for post-data subprocess */
@@ -1381,7 +1418,7 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 
 		for (int i = 0; i < parentSpecs->multiDbCount; i++)
 		{
-			parentSpecs->multiDbInfos[i].catalogSemId    = catalogSemaSet.semId;
+			parentSpecs->multiDbInfos[i].catalogSemId = catalogSemaSet.semId;
 			parentSpecs->multiDbInfos[i].catalogSemIndex = i;
 
 			log_debug("Assigned catalog semaphore set %d[%d] to database \"%s\"",
@@ -1400,7 +1437,7 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 
 		DatabaseCatalog dbCat = {
 			.type = DATABASE_CATALOG_TYPE_SOURCE,
-			.sema.semId    = info->catalogSemId,
+			.sema.semId = info->catalogSemId,
 			.sema.semIndex = info->catalogSemIndex,
 			.sema.reentrant = true,
 		};
@@ -1513,7 +1550,9 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 					}
 
 					default:
+					{
 						break;
+					}
 				}
 			}
 
@@ -1541,7 +1580,9 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 					}
 
 					default:
+					{
 						break;
+					}
 				}
 			}
 
@@ -1565,7 +1606,9 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 		}
 
 		default:
+		{
 			break;
+		}
 	}
 
 	/*
@@ -1589,7 +1632,9 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 		for (int i = 0; i < 3; i++)
 		{
 			if (supervisor_pids[i] <= 0)
+			{
 				continue;
+			}
 
 			int status = 0;
 			pid_t reaped = waitpid(supervisor_pids[i], &status, WNOHANG);
@@ -1649,11 +1694,13 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 		MultiDbInfo *info = &parentSpecs->multiDbInfos[i];
 
 		if (info->catalogSemId == 0)
+		{
 			continue;
+		}
 
 		DatabaseCatalog dbCat = {
 			.type = DATABASE_CATALOG_TYPE_SOURCE,
-			.sema.semId    = info->catalogSemId,
+			.sema.semId = info->catalogSemId,
 			.sema.semIndex = info->catalogSemIndex,
 			.sema.reentrant = true,
 		};
@@ -1672,7 +1719,9 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 		(void) summary_stop_timing(&dbCat, TIMING_SECTION_ALTER_TABLE);
 
 		if (!parentSpecs->skipVacuum)
+		{
 			(void) summary_stop_timing(&dbCat, TIMING_SECTION_VACUUM);
+		}
 
 		(void) catalog_close(&dbCat);
 	}
@@ -1690,7 +1739,9 @@ multidb_global_copy(CopyDataSpec *parentSpecs)
 		(void) semaphore_unlink(&setHandle);
 
 		for (int i = 0; i < parentSpecs->multiDbCount; i++)
+		{
 			parentSpecs->multiDbInfos[i].catalogSemId = 0;
+		}
 	}
 
 	/* Clean up index/vacuum queues (copy queue cleaned up by copy supervisor). */
@@ -1795,7 +1846,9 @@ bool
 multidb_context_close_entry(MultiDbEntry *entry)
 {
 	if (!entry->active)
+	{
 		return true;
+	}
 
 	log_debug("Closing multidb connection cache entry for \"%s\"",
 			  entry->datname);
@@ -1834,7 +1887,9 @@ multidb_context_close_all(MultiDbContext *ctx)
 		if (ctx->entries[i].active)
 		{
 			if (!multidb_context_close_entry(&ctx->entries[i]))
+			{
 				ok = false;
+			}
 		}
 	}
 
@@ -1850,7 +1905,7 @@ multidb_context_close_all(MultiDbContext *ctx)
  */
 static bool
 multidb_init_index_entry(MultiDbEntry *entry, CopyDataSpec *parentSpecs,
-						  const char *datname)
+						 const char *datname)
 {
 	MultiDbInfo *info = NULL;
 
@@ -1934,7 +1989,7 @@ multidb_init_index_entry(MultiDbEntry *entry, CopyDataSpec *parentSpecs,
 	 */
 	if (info->catalogSemId != 0)
 	{
-		sourceDB->sema.semId    = info->catalogSemId;
+		sourceDB->sema.semId = info->catalogSemId;
 		sourceDB->sema.semIndex = info->catalogSemIndex;
 		sourceDB->sema.reentrant = true;
 	}
@@ -2002,7 +2057,9 @@ static bool
 multidb_index_context_close_entry(MultiDbEntry *entry)
 {
 	if (!entry->active)
+	{
 		return true;
+	}
 
 	log_debug("Closing index/vacuum connection cache entry for \"%s\"",
 			  entry->datname);
@@ -2039,7 +2096,9 @@ multidb_index_context_close_all(MultiDbContext *ctx)
 		if (ctx->entries[i].active)
 		{
 			if (!multidb_index_context_close_entry(&ctx->entries[i]))
+			{
 				ok = false;
+			}
 		}
 	}
 
@@ -2215,7 +2274,9 @@ multidb_init_entry(MultiDbEntry *entry, CopyDataSpec *parentSpecs,
 		free(dbSpecs->connStrings.source_pguri);
 		free(dbSpecs->connStrings.target_pguri);
 		if (dbSpecs->connStrings.safeSourcePGURI.pguri)
+		{
 			free(dbSpecs->connStrings.safeSourcePGURI.pguri);
+		}
 		free(dbSpecs);
 		return false;
 	}
@@ -2256,7 +2317,7 @@ multidb_init_entry(MultiDbEntry *entry, CopyDataSpec *parentSpecs,
 	 */
 	if (info->catalogSemId != 0)
 	{
-		sourceDB->sema.semId    = info->catalogSemId;
+		sourceDB->sema.semId = info->catalogSemId;
 		sourceDB->sema.semIndex = info->catalogSemIndex;
 		sourceDB->sema.reentrant = true;
 	}
@@ -2307,6 +2368,7 @@ multidb_init_entry(MultiDbEntry *entry, CopyDataSpec *parentSpecs,
 	if (!pgsql_set_gucs(&entry->dst, dstSettings))
 	{
 		log_warn("Failed to set GUCs on target for database \"%s\"", datname);
+
 		/* non-fatal: continue */
 	}
 
@@ -2374,12 +2436,14 @@ multidb_target_database_exists(PGSQL *dst, const char *datname, bool *exists)
  */
 static bool
 multidb_create_target_database(PGSQL *dst, const char *datname,
-								bool dropIfExists)
+							   bool dropIfExists)
 {
 	bool exists = false;
 
 	if (!multidb_target_database_exists(dst, datname, &exists))
+	{
 		return false;
+	}
 
 	if (exists)
 	{
@@ -2394,7 +2458,9 @@ multidb_create_target_database(PGSQL *dst, const char *datname,
 		PGconn *conn = pgsql_open_connection(dst);
 
 		if (conn == NULL)
+		{
 			return false;
+		}
 
 		char *quotedName = PQescapeIdentifier(conn, datname, strlen(datname));
 
@@ -2425,7 +2491,9 @@ multidb_create_target_database(PGSQL *dst, const char *datname,
 		PGconn *conn = pgsql_open_connection(dst);
 
 		if (conn == NULL)
+		{
 			return false;
+		}
 
 		char *quotedName = PQescapeIdentifier(conn, datname, strlen(datname));
 
@@ -2463,7 +2531,7 @@ multidb_create_target_database(PGSQL *dst, const char *datname,
  */
 bool
 multidb_build_uri_for_database(const char *pguri, const char *datname,
-								char **result_uri)
+							   char **result_uri)
 {
 	KeyVal noDefaults = { 0 };
 	KeyVal noOverrides = { 0 };

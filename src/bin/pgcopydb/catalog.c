@@ -6185,8 +6185,8 @@ catalog_s_database_fetch(SQLiteQuery *query)
  */
 bool
 catalog_update_s_database_snapshot(DatabaseCatalog *catalog,
-									const char *datname,
-									const char *snapshot)
+								   const char *datname,
+								   const char *snapshot)
 {
 	sqlite3 *db = catalog->db;
 

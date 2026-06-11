@@ -167,7 +167,9 @@ alldb_timing_agg_hook(void *ctx, TopLevelTiming *timing)
 		if (useMax)
 		{
 			if (timing->durationMs > entry->durationMs)
+			{
 				entry->durationMs = timing->durationMs;
+			}
 		}
 		else
 		{
@@ -213,12 +215,16 @@ cli_clone_all_databases_consolidated_summary(CopyDataSpec *copySpecs)
 	for (;;)
 	{
 		if (!catalog_iter_s_database_next(&iter1))
+		{
 			break;
+		}
 
 		SourceDatabase *db = iter1.dat;
 
 		if (db == NULL)
+		{
 			break;
+		}
 
 		dbCount++;
 
@@ -229,12 +235,16 @@ cli_clone_all_databases_consolidated_summary(CopyDataSpec *copySpecs)
 				copySpecs->cfPaths.topdir, db->datname);
 
 		if (!catalog_init(&dbCat))
+		{
 			continue;
+		}
 
 		CatalogCounts count = { 0 };
 
 		if (catalog_count_objects(&dbCat, &count))
+		{
 			totalTables += (int) count.tables;
+		}
 
 		(void) catalog_close(&dbCat);
 	}
@@ -278,12 +288,16 @@ cli_clone_all_databases_consolidated_summary(CopyDataSpec *copySpecs)
 	for (;;)
 	{
 		if (!catalog_iter_s_database_next(&iter2))
+		{
 			break;
+		}
 
 		SourceDatabase *db = iter2.dat;
 
 		if (db == NULL)
+		{
 			break;
+		}
 
 		CopyDataSpec dbSpecs = *copySpecs;
 
@@ -383,7 +397,9 @@ cli_clone_all_databases_consolidated_summary(CopyDataSpec *copySpecs)
 		TopLevelTiming *entry = &(topLevelTimingArray[i]);
 
 		if (entry->section == TIMING_SECTION_UNKNOWN)
+		{
 			continue;
+		}
 
 		(void) IntervalToString(entry->durationMs,
 								entry->ppDuration,
@@ -428,7 +444,9 @@ cli_clone_all_databases_consolidated_summary(CopyDataSpec *copySpecs)
 		TopLevelTiming *timing = &(topLevelTimingArray[i]);
 
 		if (timing->section == TIMING_SECTION_UNKNOWN)
+		{
 			continue;
+		}
 
 		if (i + 1 == topLevelTimingArrayCount)
 		{

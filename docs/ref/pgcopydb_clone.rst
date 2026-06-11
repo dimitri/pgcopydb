@@ -204,6 +204,40 @@ owns the source and target databases.
    does not apply to extension members, and pg_dump does not provide a
    mechanism to exclude extensions.
 
+.. _all_databases:
+
+Cloning all databases with ``--all-databases``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When using the ``--all-databases`` option, ``pgcopydb clone`` enumerates
+all non-template user databases on the source Postgres instance and clones
+each of them to the target instance in a single invocation.
+
+The source and target URIs must point to the instance level (e.g.
+``postgres://host/postgres``) rather than to a specific application
+database. ``pgcopydb`` derives per-database connection strings by
+substituting the database name component.
+
+The following steps are performed:
+
+  1. **Roles** are copied once at the instance level using the equivalent of
+     :ref:`pgcopydb_copy_roles`.
+
+  2. **Databases** are created on the target with ``CREATE DATABASE`` for
+     each non-template database found on the source (respecting
+     ``--drop-if-exists``).
+
+  3. For each database, the full clone pipeline runs: pre-data restore,
+     parallel COPY of all tables across databases (largest first), index
+     builds, constraints, VACUUM ANALYZE, sequence resets, and post-data
+     restore.
+
+  4. A **consolidated summary** is printed at the end aggregating timings
+     across all databases.
+
+For details about the concurrency model and the cross-database COPY queue,
+see :ref:`all_databases_concurrency`.
+
 .. _change_data_capture:
 
 Change Data Capture using Postgres Logical Decoding

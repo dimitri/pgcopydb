@@ -67,7 +67,9 @@ copydb_start_index_supervisor(CopyDataSpec *specs, pid_t *pidOut)
 		{
 			/* fork succeeded, in parent */
 			if (pidOut != NULL)
+			{
 				*pidOut = fpid;
+			}
 			break;
 		}
 	}
@@ -890,9 +892,13 @@ copydb_create_index(CopyDataSpec *specs,
 		}
 
 		if (specs->datname[0] != '\0')
+		{
 			log_notice("%s: %s", specs->datname, indexSummary->command);
+		}
 		else
+		{
 			log_notice("%s", indexSummary->command);
+		}
 
 		if (!pgsql_execute(dst, indexSummary->command))
 		{
@@ -1293,9 +1299,13 @@ copydb_create_constraints_hook(void *ctx, SourceIndex *index)
 	if (!foundConstraintOnTarget)
 	{
 		if (specs->datname[0] != '\0')
+		{
 			log_notice("%s: %s", specs->datname, indexSummary->command);
+		}
 		else
+		{
 			log_notice("%s", indexSummary->command);
+		}
 
 		/*
 		 * Constraints are built by the CREATE INDEX worker process that is

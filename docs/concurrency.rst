@@ -351,3 +351,97 @@ to use this feature:
 
     Use your usual Postgres configuration editing for testing.
 
+.. _all_databases_concurrency:
+
+Cloning all databases: the ``--all-databases`` option
+------------------------------------------------------
+
+The ``--all-databases`` option to ``pgcopydb clone`` allows cloning every
+non-template user database from a source Postgres instance to a target
+instance in a single invocation. This is the equivalent of ``pg_dumpall``
+for the data phase.
+
+When ``--all-databases`` is active, ``pgcopydb`` coordinates the copy in
+three phases:
+
+Phase 1 — instance-level setup
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+  1. The source instance URI is used to enumerate all non-template user
+     databases via :ref:`pgcopydb_list_databases`.
+
+  2. Roles are copied once at the instance level using ``pg_dumpall
+     --roles-only`` and restored on the target, equivalent to
+     :ref:`pgcopydb_copy_roles`.
+
+  3. For each discovered database a ``CREATE DATABASE`` command is issued
+     on the target (or the database is left as-is when it already exists,
+     unless ``--drop-if-exists`` is given).
+
+Phase 2 — per-database schema and data copy
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For each database a full ``pgcopydb clone`` pipeline is run: pre-data
+restore, COPY data workers, index workers, constraint workers, VACUUM
+workers, sequence reset, and post-data restore.  Each per-database pipeline
+uses the shared ``--table-jobs`` and ``--index-jobs`` pools.
+
+When ``--all-databases`` is active, each progress log line that produces a
+DDL or DML command is prefixed with the database name so that concurrent
+output from workers handling different databases stays distinguishable::
+
+  pagila: CREATE UNIQUE INDEX actor_pkey ON actor USING btree (actor_id)
+  f1db:   TRUNCATE ONLY "public"."constructorstandings"
+  f1db:   COPY "public"."constructorstandings"
+  chinook: VACUUM ANALYZE "public"."Track"
+
+Phase 3 — cross-database global COPY queue
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+All tables across all databases are sorted by size (largest first) and
+enqueued into a single global COPY queue shared by all ``--table-jobs``
+workers.  This ensures that the largest tables are started first regardless
+of which database they belong to, keeping all workers busy and minimising
+total elapsed time — even when the database sizes are very uneven.
+
+Each COPY worker maintains a small connection cache keyed by database name
+so that it can serve tables from multiple databases without reopening a
+connection for every table when the table order happens to alternate between
+databases.
+
+The process tree for ``pgcopydb clone --all-databases --table-jobs 4 --index-jobs 4``
+looks like the following, repeated once per database::
+
+  $ pgcopydb clone --all-databases --table-jobs 4 --index-jobs 4
+   + pgcopydb clone all-databases coordinator
+     for each database db1, db2, ...:
+       + pgcopydb copy supervisor [ --table-jobs 4, global queue ]
+         - pgcopydb copy queue worker
+         - pgcopydb global copy worker (db1)
+         - pgcopydb global copy worker (db2)
+         - pgcopydb global copy worker (db1)
+         - pgcopydb global copy worker (db2)
+
+       + pgcopydb index supervisor [ --index-jobs 4 ]
+         - pgcopydb index/constraints worker
+         - pgcopydb index/constraints worker
+         - pgcopydb index/constraints worker
+         - pgcopydb index/constraints worker
+
+       + pgcopydb vacuum supervisor [ --table-jobs 4 ]
+         - pgcopydb vacuum analyze worker
+         - pgcopydb vacuum analyze worker
+         - pgcopydb vacuum analyze worker
+         - pgcopydb vacuum analyze worker
+
+       + pgcopydb sequences reset worker
+
+Consolidated summary
+^^^^^^^^^^^^^^^^^^^^
+
+At the end of an ``--all-databases`` run, ``pgcopydb`` prints a
+consolidated summary that aggregates timing statistics across all databases:
+COPY throughput, index build time, constraint time, VACUUM time, and total
+wall-clock duration.  Individual per-database summaries are also printed
+before the consolidated one.
+
