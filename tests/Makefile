@@ -102,12 +102,16 @@ force-build:
 all-databases: build-multi
 	$(MAKE) -C $@
 
+three-databases: build-multi
+	$(MAKE) -C $@
+
 # Remove the cached images so the next test starts from scratch
 clean-images:
 	-docker rmi pagila multi 2>/dev/null; true
 
 .PHONY: all build build-pagila build-multi force-build clean-images
-.PHONY: pagila pagila-multi-steps blobs unit filtering partitioned-target extensions all-databases
+.PHONY: pagila pagila-multi-steps blobs unit filtering partitioned-target extensions
+.PHONY: all-databases three-databases
 .PHONY: cdc-wal2json cdc-test-decoding cdc-endpos-mid-txn cdc-low-level cdc-replica-identity-index cdc-partitioned-target
 .PHONY: cdc-endpos-in-multi-wal-txn cdc-file-rotation
 .PHONY: cdc-pgoutput cdc-filtering-pgoutput follow-pgoutput
