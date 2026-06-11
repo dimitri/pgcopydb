@@ -362,79 +362,95 @@ instance in a single invocation. This is the equivalent of ``pg_dumpall``
 for the data phase.
 
 When ``--all-databases`` is active, ``pgcopydb`` coordinates the copy in
-three phases:
+three phases that run sequentially, while keeping the ``--table-jobs`` and
+``--index-jobs`` worker pools **global** — shared across all databases, not
+allocated per-database.
 
-Phase 1 — instance-level setup
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Phase I — snapshot export and pre-data (parallel across databases)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-  1. The source instance URI is used to enumerate all non-template user
-     databases via :ref:`pgcopydb_list_databases`.
+A long-lived *snapshot holder* subprocess is forked first. It connects to
+each source database, exports one ``REPEATABLE READ`` snapshot per
+database, writes the snapshot IDs into the instance catalog, and then
+blocks on a pipe until Phase III completes. This keeps all per-database
+snapshot transactions open so that Phase I and II workers can call
+``SET TRANSACTION SNAPSHOT`` to import them for consistent reads.
 
-  2. Roles are copied once at the instance level using ``pg_dumpall
-     --roles-only`` and restored on the target, equivalent to
-     :ref:`pgcopydb_copy_roles`.
+Once all snapshots are ready, a *pre-data supervisor* is forked. It starts
+``--table-jobs`` *pre-data workers* that each dequeue a database name from
+a shared queue, then run the full pre-data pipeline for that database:
+schema fetch from the source, ``pg_dump --pre-data``, and
+``pg_restore --pre-data`` on the target. Roles are copied once at the
+instance level before any of this begins.
 
-  3. For each discovered database a ``CREATE DATABASE`` command is issued
-     on the target (or the database is left as-is when it already exists,
-     unless ``--drop-if-exists`` is given).
+The process tree for this phase looks like the following::
 
-Phase 2 — per-database schema and data copy
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  $ pgcopydb clone --all-databases --table-jobs 4 --index-jobs 4
+   + pgcopydb snapshot holder           (blocks until Phase III done)
+   + pgcopydb pre-data supervisor
+       - pgcopydb pre-data worker       (processes db1, then db4, …)
+       - pgcopydb pre-data worker       (processes db2, then db5, …)
+       - pgcopydb pre-data worker       (processes db3, then db6, …)
+       - pgcopydb pre-data worker
 
-For each database a full ``pgcopydb clone`` pipeline is run: pre-data
-restore, COPY data workers, index workers, constraint workers, VACUUM
-workers, sequence reset, and post-data restore.  Each per-database pipeline
-uses the shared ``--table-jobs`` and ``--index-jobs`` pools.
+Phase II — global COPY, indexes, and vacuum (single shared pool)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-When ``--all-databases`` is active, each progress log line that produces a
-DDL or DML command is prefixed with the database name so that concurrent
-output from workers handling different databases stays distinguishable::
+After all pre-data work is complete, the COPY phase begins. All tables
+from all databases are collected and sorted by size (largest first), then
+enqueued into a single global COPY queue. The ``--table-jobs`` COPY workers
+and ``--index-jobs`` index workers are each created once and serve the
+entire workload regardless of which database each table belongs to.
+
+This is the key resource-sharing optimisation: the largest tables get
+started first across database boundaries, keeping all workers busy even
+when the database sizes are very uneven.
+
+Each COPY worker maintains a small connection cache keyed by database name
+so that connections are reused when consecutive queue entries belong to the
+same database.  Index and vacuum workers open their own per-database
+connections on demand.
+
+When ``--all-databases`` is active, each DDL and DML progress log line is
+prefixed with the database name so that interleaved output from workers
+handling different databases stays distinguishable::
 
   pagila: CREATE UNIQUE INDEX actor_pkey ON actor USING btree (actor_id)
   f1db:   TRUNCATE ONLY "public"."constructorstandings"
   f1db:   COPY "public"."constructorstandings"
   chinook: VACUUM ANALYZE "public"."Track"
 
-Phase 3 — cross-database global COPY queue
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+The process tree for this phase looks like the following::
 
-All tables across all databases are sorted by size (largest first) and
-enqueued into a single global COPY queue shared by all ``--table-jobs``
-workers.  This ensures that the largest tables are started first regardless
-of which database they belong to, keeping all workers busy and minimising
-total elapsed time — even when the database sizes are very uneven.
+   + pgcopydb global copy supervisor
+       - pgcopydb global copy queue filler  (enqueues all tables, sorted by size)
+       - pgcopydb global copy worker        (--table-jobs workers, any database)
+       - pgcopydb global copy worker
+       - pgcopydb global copy worker
+       - pgcopydb global copy worker
+   + pgcopydb global index supervisor
+       - pgcopydb index/constraints worker  (--index-jobs workers, any database)
+       - pgcopydb index/constraints worker
+       - pgcopydb index/constraints worker
+       - pgcopydb index/constraints worker
+   + pgcopydb global vacuum supervisor
+       - pgcopydb vacuum analyze worker     (--table-jobs workers, any database)
+       - pgcopydb vacuum analyze worker
+       - pgcopydb vacuum analyze worker
+       - pgcopydb vacuum analyze worker
 
-Each COPY worker maintains a small connection cache keyed by database name
-so that it can serve tables from multiple databases without reopening a
-connection for every table when the table order happens to alternate between
-databases.
+Phase III — post-data (sequential, one database at a time)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The process tree for ``pgcopydb clone --all-databases --table-jobs 4 --index-jobs 4``
-looks like the following, repeated once per database::
+After the global COPY phase completes, the remaining post-data work runs
+sequentially: for each database, a subprocess is forked that calls
+``pg_restore --post-data`` (triggers, rules, comments, and any objects not
+already created by the index workers) and resets sequences to match the
+source values captured during Phase I. The databases are processed one at a
+time in the order they were discovered.
 
-  $ pgcopydb clone --all-databases --table-jobs 4 --index-jobs 4
-   + pgcopydb clone all-databases coordinator
-     for each database db1, db2, ...:
-       + pgcopydb copy supervisor [ --table-jobs 4, global queue ]
-         - pgcopydb copy queue worker
-         - pgcopydb global copy worker (db1)
-         - pgcopydb global copy worker (db2)
-         - pgcopydb global copy worker (db1)
-         - pgcopydb global copy worker (db2)
-
-       + pgcopydb index supervisor [ --index-jobs 4 ]
-         - pgcopydb index/constraints worker
-         - pgcopydb index/constraints worker
-         - pgcopydb index/constraints worker
-         - pgcopydb index/constraints worker
-
-       + pgcopydb vacuum supervisor [ --table-jobs 4 ]
-         - pgcopydb vacuum analyze worker
-         - pgcopydb vacuum analyze worker
-         - pgcopydb vacuum analyze worker
-         - pgcopydb vacuum analyze worker
-
-       + pgcopydb sequences reset worker
+Once all post-data work is done, the parent closes the done-pipe to the
+snapshot holder, which then commits all its held transactions and exits.
 
 Consolidated summary
 ^^^^^^^^^^^^^^^^^^^^

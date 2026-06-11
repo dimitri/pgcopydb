@@ -218,24 +218,30 @@ The source and target URIs must point to the instance level (e.g.
 database. ``pgcopydb`` derives per-database connection strings by
 substituting the database name component.
 
-The following steps are performed:
+The operation is structured in three sequential phases:
 
-  1. **Roles** are copied once at the instance level using the equivalent of
-     :ref:`pgcopydb_copy_roles`.
+  1. **Phase I — snapshot export and pre-data**: Roles are copied once at
+     the instance level. A snapshot holder subprocess exports one consistent
+     ``REPEATABLE READ`` snapshot per source database and holds those
+     transactions open. A pool of ``--table-jobs`` pre-data workers then
+     processes the databases in parallel, running schema fetch,
+     ``pg_dump --pre-data``, and ``pg_restore --pre-data`` for each.
 
-  2. **Databases** are created on the target with ``CREATE DATABASE`` for
-     each non-template database found on the source (respecting
-     ``--drop-if-exists``).
+  2. **Phase II — global COPY, indexes, and VACUUM**: All tables across all
+     databases are sorted by size (largest first) and processed by a single
+     shared pool of workers — ``--table-jobs`` COPY workers,
+     ``--index-jobs`` index/constraint workers, and ``--table-jobs`` VACUUM
+     workers. The pools are not allocated per-database; they serve the
+     entire workload globally.
 
-  3. For each database, the full clone pipeline runs: pre-data restore,
-     parallel COPY of all tables across databases (largest first), index
-     builds, constraints, VACUUM ANALYZE, sequence resets, and post-data
-     restore.
+  3. **Phase III — post-data**: Databases are finalized one at a time:
+     ``pg_restore --post-data`` applies remaining objects (triggers, rules,
+     comments, etc.) and sequences are reset to match the source.
 
-  4. A **consolidated summary** is printed at the end aggregating timings
-     across all databases.
+A **consolidated summary** is printed at the end aggregating timings
+across all databases.
 
-For details about the concurrency model and the cross-database COPY queue,
+For details about the process tree and the cross-database COPY queue,
 see :ref:`all_databases_concurrency`.
 
 .. _change_data_capture:
