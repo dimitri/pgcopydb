@@ -2393,7 +2393,18 @@ stream_add_value_in_json_array(LogicalMessageValue *value, JSON_Array *jsArray)
 				}
 				else
 				{
-					sformat(string, sizeof(string), "%f", value->val.float8);
+					sformat(string, sizeof(string), "%.17f", value->val.float8);
+
+					// Trim trailing zeros
+					char *p = string + strlen(string) - 1;
+					while (p > string && *p == '0')
+					{
+						*p-- = '\0';
+					}
+					if (*p == '.')
+					{
+						*p = '\0';
+					}
 				}
 
 				json_array_append_string(jsArray, string);
