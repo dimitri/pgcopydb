@@ -2386,7 +2386,7 @@ stream_add_value_in_json_array(LogicalMessageValue *value, JSON_Array *jsArray)
 			{
 				char string[BUFSIZE] = { 0 };
 
-				sformat(string, sizeof(string), "%.17g", value->val.float8);
+				sformat(string, sizeof(string), "%.17f", value->val.float8);
 
 				json_array_append_string(jsArray, string);
 				break;
