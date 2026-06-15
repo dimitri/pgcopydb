@@ -876,11 +876,6 @@ parseNextColumn(TestDecodingColumns *cols,
 
 	sformat(typname, sizeof(typname), "%.*s", typLen, typStart);
 
-	if (streq(typname, "text"))
-	{
-		cols->oid = TEXTOID;
-	}
-
 	cols->colnameStart = ptr;
 	cols->colnameLen = typA - ptr;
 
@@ -900,6 +895,8 @@ parseNextColumn(TestDecodingColumns *cols,
 	{
 		cols->isQuoted = true;
 
+		/* this column has quoted string value */
+		cols->oid = TEXTOID;
 		/* skip the opening single-quote now */
 		char *cur = ptr + 1;
 
@@ -1099,7 +1096,7 @@ listToTuple(LogicalMessageTuple *tuple, TestDecodingColumns *cols, int count)
 				char *nxt = cur->valueStart + pidx + 1;
 
 				/* unescape the single-quotes */
-				if (*ptr == '\'' && *nxt == '\'')
+				if (*ptr == '\'' && *nxt == '\'' && pidx < cur->valueLen - 1)
 				{
 					continue;
 				}
