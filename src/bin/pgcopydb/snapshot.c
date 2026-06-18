@@ -442,7 +442,8 @@ copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 			return false;
 		}
 
-		if (!pgsql_create_publication(&src, slot->publicationName))
+		if (!pgsql_create_publication(&src, slot->publicationName,
+									  &copySpecs->filters))
 		{
 			log_error("Failed to create publication \"%s\"",
 					  slot->publicationName);

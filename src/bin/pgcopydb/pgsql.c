@@ -22,6 +22,7 @@
 #include "catalog.h"
 #include "cli_root.h"
 #include "defaults.h"
+#include "filtering.h"
 #include "env_utils.h"
 #include "file_utils.h"
 #include "log.h"
@@ -5194,6 +5195,10 @@ pgsql_drop_replication_slot(PGSQL *pgsql, const char *slotName)
  * by querying pg_tables directly on the live source connection.  Excludes
  * system schemas and the pgcopydb internal schema.  Uses only CREATE
  * privilege on the database — no superuser needed.
+ *
+ * When filters is non-NULL, exclude-table and exclude-schema entries are
+ * applied so that the publication matches the user-specified filter, giving
+ * true server-side filtering for the pgoutput plugin.
  */
 
 typedef struct PublicationTableListContext
@@ -5225,20 +5230,123 @@ publication_table_list_parse(void *ctx, PGresult *result)
 }
 
 
-bool
-pgsql_create_publication(PGSQL *pgsql, const char *pubName)
+/*
+ * appendStringLiteralPub appends a SQL string literal (single-quoted,
+ * with internal single quotes doubled) to the buffer.
+ */
+static void
+appendStringLiteralPub(PQExpBuffer buf, const char *str)
 {
-	const char *query =
-		"SELECT schemaname, tablename"
-		" FROM pg_tables"
-		" WHERE schemaname NOT IN"
-		" ('pg_catalog', 'information_schema', 'pgcopydb')"
-		" ORDER BY schemaname, tablename";
+	appendPQExpBufferChar(buf, '\'');
+	for (const char *p = str; *p; p++)
+	{
+		if (*p == '\'')
+			appendPQExpBufferChar(buf, '\'');
+		appendPQExpBufferChar(buf, *p);
+	}
+	appendPQExpBufferChar(buf, '\'');
+}
+
+
+bool
+pgsql_create_publication(PGSQL *pgsql, const char *pubName,
+						 SourceFilters *filters)
+{
+	PQExpBuffer query = createPQExpBuffer();
+	if (query == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	appendPQExpBufferStr(query,
+						 "SELECT schemaname, tablename"
+						 " FROM pg_tables"
+						 " WHERE schemaname NOT IN"
+						 " ('pg_catalog', 'information_schema', 'pgcopydb')");
+
+	if (filters != NULL)
+	{
+		/*
+		 * For include-only filter: restrict to specified schemas and tables.
+		 * We build an AND ( ... ) clause that ORs together all allowed entries.
+		 */
+		if (filters->type == SOURCE_FILTER_TYPE_INCL)
+		{
+			bool firstCond = true;
+
+			appendPQExpBufferStr(query, " AND (");
+
+			for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
+			{
+				if (!firstCond)
+					appendPQExpBufferStr(query, " OR ");
+
+				appendPQExpBufferStr(query, "schemaname = ");
+				appendStringLiteralPub(query,
+									   filters->includeOnlySchemaList.array[i].nspname);
+				firstCond = false;
+			}
+
+			for (int i = 0; i < filters->includeOnlyTableList.count; i++)
+			{
+				if (!firstCond)
+					appendPQExpBufferStr(query, " OR ");
+
+				appendPQExpBufferStr(query, "(schemaname = ");
+				appendStringLiteralPub(query,
+									   filters->includeOnlyTableList.array[i].nspname);
+				appendPQExpBufferStr(query, " AND tablename = ");
+				appendStringLiteralPub(query,
+									   filters->includeOnlyTableList.array[i].relname);
+				appendPQExpBufferChar(query, ')');
+				firstCond = false;
+			}
+
+			if (firstCond)
+			{
+				/* No include entries: include nothing → publication FOR ALL TABLES won't work */
+				appendPQExpBufferStr(query, "false");
+			}
+
+			appendPQExpBufferChar(query, ')');
+		}
+
+		/*
+		 * For exclude filter: strip out specified schemas and tables.
+		 */
+		if (filters->type == SOURCE_FILTER_TYPE_EXCL ||
+			filters->type == SOURCE_FILTER_TYPE_LIST_EXCL ||
+			filters->type == SOURCE_FILTER_TYPE_LIST_NOT_INCL)
+		{
+			for (int i = 0; i < filters->excludeSchemaList.count; i++)
+			{
+				appendPQExpBufferStr(query, " AND schemaname != ");
+				appendStringLiteralPub(query,
+									   filters->excludeSchemaList.array[i].nspname);
+			}
+
+			for (int i = 0; i < filters->excludeTableList.count; i++)
+			{
+				appendPQExpBufferStr(query,
+									 " AND NOT (schemaname = ");
+				appendStringLiteralPub(query,
+									   filters->excludeTableList.array[i].nspname);
+				appendPQExpBufferStr(query, " AND tablename = ");
+				appendStringLiteralPub(query,
+									   filters->excludeTableList.array[i].relname);
+				appendPQExpBufferChar(query, ')');
+			}
+		}
+	}
+
+	appendPQExpBufferStr(query, " ORDER BY schemaname, tablename");
 
 	PQExpBuffer tableList = createPQExpBuffer();
 	if (tableList == NULL)
 	{
 		log_error(ALLOCATION_FAILED_ERROR);
+		destroyPQExpBuffer(query);
 		return false;
 	}
 
@@ -5247,12 +5355,15 @@ pgsql_create_publication(PGSQL *pgsql, const char *pubName)
 		.hasTable = false
 	};
 
-	if (!pgsql_execute_with_params(pgsql, query, 0, NULL, NULL,
+	if (!pgsql_execute_with_params(pgsql, query->data, 0, NULL, NULL,
 								   &ctx, &publication_table_list_parse))
 	{
+		destroyPQExpBuffer(query);
 		destroyPQExpBuffer(tableList);
 		return false;
 	}
+
+	destroyPQExpBuffer(query);
 
 	PQExpBuffer sql = createPQExpBuffer();
 	if (sql == NULL)

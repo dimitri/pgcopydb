@@ -28,47 +28,47 @@
 #include "summary.h"
 
 #define PGCOPYDB_CLONE_GETOPTS_HELP \
-	"  --source                      Postgres URI to the source database\n" \
-	"  --target                      Postgres URI to the target database\n" \
-	"  --dir                         Work directory to use\n" \
-	"  --table-jobs                  Number of concurrent COPY jobs to run\n" \
-	"  --index-jobs                  Number of concurrent CREATE INDEX jobs to run\n" \
-	"  --restore-jobs                Number of concurrent jobs for pg_restore\n" \
-	"  --large-objects-jobs          Number of concurrent Large Objects jobs to run\n" \
-	"  --split-tables-larger-than    Same-table concurrency size threshold\n" \
-	"  --split-max-parts             Maximum number of jobs for Same-table concurrency \n" \
-	"  --estimate-table-sizes        Allow using estimates for relation sizes\n" \
-	"  --drop-if-exists              On the target database, clean-up from a previous run first\n" \
-	"  --roles                       Also copy roles found on source to target\n" \
-	"  --no-role-passwords           Do not dump passwords for roles\n" \
-	"  --no-owner                    Do not set ownership of objects to match the original database\n" \
-	"  --no-acl                      Prevent restoration of access privileges (grant/revoke commands).\n" \
-	"  --no-comments                 Do not output commands to restore comments\n" \
-	"  --no-tablespaces              Do not output commands to select tablespaces\n" \
-	"  --skip-large-objects          Skip copying large objects (blobs)\n" \
-	"  --skip-extensions             Skip restoring extensions\n" \
-	"  --skip-ext-comments           Skip restoring COMMENT ON EXTENSION\n" \
-	"  --skip-collations             Skip restoring collations\n" \
-	"  --skip-vacuum                 Skip running VACUUM ANALYZE\n" \
-	"  --skip-analyze                Skip running vacuumdb --analyze-only\n" \
-	"  --skip-db-properties          Skip copying ALTER DATABASE SET properties\n" \
-	"  --skip-split-by-ctid          Skip spliting tables by ctid\n" \
-	"  --requirements <filename>     List extensions requirements\n" \
-	"  --filters <filename>          Use the filters defined in <filename>\n" \
-	"  --fail-fast                   Abort early in case of error\n" \
-	"  --restart                     Allow restarting when temp files exist already\n" \
-	"  --resume                      Allow resuming operations after a failure\n" \
-	"  --not-consistent              Allow taking a new snapshot on the source database\n" \
-	"  --snapshot                    Use snapshot obtained with pg_export_snapshot\n" \
-	"  --follow                      Implement logical decoding to replay changes\n" \
-	"  --plugin                      Output plugin to use (pgoutput, test_decoding, wal2json)\n" \
-	"  --wal2json-numeric-as-string  Print numeric data type as string when using wal2json output plugin\n" \
-	"  --slot-name                   Use this Postgres replication slot name\n" \
-	"  --create-slot                 Create the replication slot\n" \
-	"  --origin                      Use this Postgres replication origin node name\n" \
-	"  --endpos                      Stop replaying changes when reaching this LSN\n" \
-	"  --use-copy-binary             Use the COPY BINARY format for COPY operations\n" \
-	"  --all-databases               Clone all databases found on the source instance\n" \
+		"  --source                      Postgres URI to the source database\n" \
+		"  --target                      Postgres URI to the target database\n" \
+		"  --dir                         Work directory to use\n" \
+		"  --table-jobs                  Number of concurrent COPY jobs to run\n" \
+		"  --index-jobs                  Number of concurrent CREATE INDEX jobs to run\n" \
+		"  --restore-jobs                Number of concurrent jobs for pg_restore\n" \
+		"  --large-objects-jobs          Number of concurrent Large Objects jobs to run\n" \
+		"  --split-tables-larger-than    Same-table concurrency size threshold\n" \
+		"  --split-max-parts             Maximum number of jobs for Same-table concurrency \n" \
+		"  --estimate-table-sizes        Allow using estimates for relation sizes\n" \
+		"  --drop-if-exists              On the target database, clean-up from a previous run first\n" \
+		"  --roles                       Also copy roles found on source to target\n" \
+		"  --no-role-passwords           Do not dump passwords for roles\n" \
+		"  --no-owner                    Do not set ownership of objects to match the original database\n" \
+		"  --no-acl                      Prevent restoration of access privileges (grant/revoke commands).\n" \
+		"  --no-comments                 Do not output commands to restore comments\n" \
+		"  --no-tablespaces              Do not output commands to select tablespaces\n" \
+		"  --skip-large-objects          Skip copying large objects (blobs)\n" \
+		"  --skip-extensions             Skip restoring extensions\n" \
+		"  --skip-ext-comments           Skip restoring COMMENT ON EXTENSION\n" \
+		"  --skip-collations             Skip restoring collations\n" \
+		"  --skip-vacuum                 Skip running VACUUM ANALYZE\n" \
+		"  --skip-analyze                Skip running vacuumdb --analyze-only\n" \
+		"  --skip-db-properties          Skip copying ALTER DATABASE SET properties\n" \
+		"  --skip-split-by-ctid          Skip spliting tables by ctid\n" \
+		"  --requirements <filename>     List extensions requirements\n" \
+		"  --filters <filename>          Use the filters defined in <filename>\n" \
+		"  --fail-fast                   Abort early in case of error\n" \
+		"  --restart                     Allow restarting when temp files exist already\n" \
+		"  --resume                      Allow resuming operations after a failure\n" \
+		"  --not-consistent              Allow taking a new snapshot on the source database\n" \
+		"  --snapshot                    Use snapshot obtained with pg_export_snapshot\n" \
+		"  --follow                      Implement logical decoding to replay changes\n" \
+		"  --plugin                      Output plugin to use (pgoutput, test_decoding, wal2json)\n" \
+		"  --wal2json-numeric-as-string  Print numeric data type as string when using wal2json output plugin\n" \
+		"  --slot-name                   Use this Postgres replication slot name\n" \
+		"  --create-slot                 Create the replication slot\n" \
+		"  --origin                      Use this Postgres replication origin node name\n" \
+		"  --endpos                      Stop replaying changes when reaching this LSN\n" \
+		"  --use-copy-binary             Use the COPY BINARY format for COPY operations\n" \
+		"  --all-databases               Clone all databases found on the source instance\n" \
 
 CommandLine clone_command =
 	make_command(
@@ -612,7 +612,8 @@ clone_and_follow(CopyDataSpec *copySpecs)
 						   &(copySpecs->catalogs.replay),
 						   copyDBoptions.stdIn,
 						   copyDBoptions.stdOut,
-						   logSQL))
+						   logSQL,
+						   &(copySpecs->filters)))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -814,7 +815,8 @@ cli_follow(int argc, char **argv)
 						   &(copySpecs.catalogs.replay),
 						   copyDBoptions.stdIn,
 						   copyDBoptions.stdOut,
-						   logSQL))
+						   logSQL,
+						   &(copySpecs.filters)))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

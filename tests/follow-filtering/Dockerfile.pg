@@ -1,0 +1,2 @@
+ARG PGVERSION=16
+FROM postgres:${PGVERSION}
