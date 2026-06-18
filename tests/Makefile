@@ -6,7 +6,7 @@ export PGVERSION
 BUILD_ARGS = --build-arg PGVERSION=$(PGVERSION)
 
 all: pagila pagila-multi-steps blobs unit filtering extensions \
-	 partitioned-target \
+	 partitioned-target all-databases \
 	 cdc-wal2json cdc-test-decoding cdc-endpos-mid-txn cdc-low-level \
 	 cdc-replica-identity-index cdc-partitioned-target \
 	 cdc-endpos-in-multi-wal-txn cdc-file-rotation \
@@ -88,17 +88,30 @@ build:
 	  && echo "pagila image already present — skipping build (run 'make force-build' to rebuild)" \
 	  || docker build $(BUILD_ARGS) -t pagila -f Dockerfile.pagila .
 
-# Force a full rebuild even when the pagila image already exists locally
-# (use after Dockerfile.pagila changes or when switching PGVERSION)
+build-multi:
+	@docker image inspect multi > /dev/null 2>&1 \
+	  && echo "multi image already present — skipping build (run 'make force-build' to rebuild)" \
+	  || docker build $(BUILD_ARGS) -t multi -f Dockerfile.multi .
+
+# Force a full rebuild even when the images already exist locally
+# (use after Dockerfile changes or when switching PGVERSION)
 force-build:
 	docker build $(BUILD_ARGS) -t pagila -f Dockerfile.pagila .
+	docker build $(BUILD_ARGS) -t multi -f Dockerfile.multi .
 
-# Remove the cached pagila image so the next test starts from scratch
+all-databases: build-multi
+	$(MAKE) -C $@
+
+three-databases: build-multi
+	$(MAKE) -C $@
+
+# Remove the cached images so the next test starts from scratch
 clean-images:
-	-docker rmi pagila 2>/dev/null; true
+	-docker rmi pagila multi 2>/dev/null; true
 
-.PHONY: all build force-build clean-images
+.PHONY: all build build-pagila build-multi force-build clean-images
 .PHONY: pagila pagila-multi-steps blobs unit filtering partitioned-target extensions
+.PHONY: all-databases three-databases
 .PHONY: cdc-wal2json cdc-test-decoding cdc-endpos-mid-txn cdc-low-level cdc-replica-identity-index cdc-partitioned-target
 .PHONY: cdc-endpos-in-multi-wal-txn cdc-file-rotation
 .PHONY: cdc-pgoutput cdc-filtering-pgoutput follow-pgoutput

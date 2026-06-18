@@ -512,7 +512,12 @@ chmod +x .git/hooks/pre-commit
 
 ## Documentation
 
+The Sphinx dependencies (`sphinx_rtd_theme`, etc.) live in a project-local
+Python venv at `.venv/`. Always activate it before building docs:
+
 ```bash
+source .venv/bin/activate
+
 make docs           # rebuild Sphinx HTML + man pages
 make update-docs    # sync CLI --help text into docs (run after changing options)
 make check-docs     # verify docs build via Docker

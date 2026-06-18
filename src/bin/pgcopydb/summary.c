@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <string.h>
 #include <unistd.h>
 
 #include "parson.h"
@@ -113,6 +114,31 @@ TopLevelTiming topLevelTimingArray[] = {
 
 int topLevelTimingArrayCount =
 	sizeof(topLevelTimingArray) / sizeof(topLevelTimingArray[0]);
+
+
+/*
+ * summary_reset_toplevel_timings zeroes the dynamic timing fields of the
+ * global topLevelTimingArray. Call this in a freshly-forked child before the
+ * first clone so stale values from the parent process don't bleed into
+ * copydb_fetch_previous_run_state for the new database.
+ */
+void
+summary_reset_toplevel_timings(void)
+{
+	for (int i = 0; i < topLevelTimingArrayCount; i++)
+	{
+		TopLevelTiming *t = &(topLevelTimingArray[i]);
+		t->startTime = 0;
+		t->doneTime = 0;
+		t->durationMs = 0;
+		memset(&t->startTimeInstr, 0, sizeof(t->startTimeInstr));
+		memset(&t->durationInstr, 0, sizeof(t->durationInstr));
+		memset(t->ppDuration, 0, sizeof(t->ppDuration));
+		t->count = 0;
+		t->bytes = 0;
+		memset(t->ppBytes, 0, sizeof(t->ppBytes));
+	}
+}
 
 
 static void prepareLineSeparator(char dashes[], int size);
@@ -2064,14 +2090,21 @@ summary_increment_timing(DatabaseCatalog *catalog,
 
 	TopLevelTiming *timing = &(topLevelTimingArray[section]);
 
+	/*
+	 * Use an upsert so that workers can increment a timing section even when
+	 * summary_start_timing was never called for that section in this catalog
+	 * (e.g. COPY_DATA in a per-database catalog opened by a global COPY worker
+	 * that never received a start-timing call from the orchestrator).
+	 */
 	char *sql =
-		"update timings "
-		"set count = coalesce(count, 0) + $1, "
-		"    bytes = coalesce(bytes, 0) + $2, "
-		"    duration = coalesce(duration, 0) + $3 "
-		"where id = $4";
+		"insert into timings(id, label, count, bytes, duration) "
+		"values($1, $2, $3, $4, $5) "
+		"on conflict(id) do update set "
+		"  count    = coalesce(timings.count,    0) + excluded.count, "
+		"  bytes    = coalesce(timings.bytes,    0) + excluded.bytes, "
+		"  duration = coalesce(timings.duration, 0) + excluded.duration";
 
-	SQLiteQuery query = { .errorOnZeroRows = true };
+	SQLiteQuery query = { 0 };
 
 	if (!catalog_sql_prepare(db, sql, &query))
 	{
@@ -2082,10 +2115,11 @@ summary_increment_timing(DatabaseCatalog *catalog,
 
 	/* bind our parameters now */
 	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT, "id", timing->section, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "label", 0, (char *) timing->label },
 		{ BIND_PARAMETER_TYPE_INT64, "count", count, NULL },
 		{ BIND_PARAMETER_TYPE_INT64, "bytes", bytes, NULL },
 		{ BIND_PARAMETER_TYPE_INT64, "duration", durationMs, NULL },
-		{ BIND_PARAMETER_TYPE_INT, "id", timing->section, NULL }
 	};
 
 	int pCount = sizeof(params) / sizeof(params[0]);
@@ -2420,15 +2454,45 @@ catalog_timing_fetch(SQLiteQuery *query)
 {
 	TopLevelTiming *timing = (TopLevelTiming *) query->context;
 
-	/* cleanup the memory area before re-use */
-	bzero(timing, sizeof(TopLevelTiming));
+	/*
+	 * Preserve fields that live only in memory, not in the database.  When
+	 * this function is called with &topLevelTimingArray[N] as the context
+	 * (e.g. from summary_lookup_timing or summary_increment_timing), a full
+	 * bzero would clobber the static initialiser values for conn, cumulative,
+	 * jobsMask, and startTimeInstr, corrupting every subsequent use of that
+	 * array entry.
+	 */
+	const char *savedConn = timing->conn;
+	char *savedLabel = timing->label;
+	bool savedCumulative = timing->cumulative;
+	uint32_t savedJobsMask = timing->jobsMask;
+	instr_time savedStartTimeInstr = timing->startTimeInstr;
+	instr_time savedDurationInstr = timing->durationInstr;
+
+	/* Reset only the DB-sourced fields */
+	timing->section = 0;
+	timing->label = NULL;
+	timing->startTime = 0;
+	timing->doneTime = 0;
+	timing->durationMs = 0;
+	memset(timing->ppDuration, 0, sizeof(timing->ppDuration));
+	timing->count = 0;
+	timing->bytes = 0;
+	memset(timing->ppBytes, 0, sizeof(timing->ppBytes));
+
+	/* Restore memory-only fields */
+	timing->conn = savedConn;
+	timing->cumulative = savedCumulative;
+	timing->jobsMask = savedJobsMask;
+	timing->startTimeInstr = savedStartTimeInstr;
+	timing->durationInstr = savedDurationInstr;
 
 	/* the section is an Enum in memory, an integer value on-disk */
 	timing->section = sqlite3_column_int(query->ppStmt, 0);
 
 	if (sqlite3_column_type(query->ppStmt, 1) == SQLITE_NULL)
 	{
-		timing->label = NULL;
+		timing->label = savedLabel;
 	}
 	else
 	{
@@ -2822,39 +2886,84 @@ print_summary_table(SummaryTable *summary)
 
 	fformat(stdout, "\n");
 
-	fformat(stdout, "%*s | %*s | %*s | %*s | %*s | %*s | %*s | %*s \n",
-			headers->maxOidSize, "OID",
-			headers->maxNspnameSize, "Schema",
-			headers->maxRelnameSize, "Name",
-			headers->maxPartCountSize, "Parts",
-			headers->maxTableMsSize, "copy duration",
-			headers->maxBytesSize, "transmitted bytes",
-			headers->maxIndexCountSize, "indexes",
-			headers->maxIndexMsSize, "create index duration");
+	bool showDb = headers->maxDatnameSize > 0;
 
-	fformat(stdout, "%s-+-%s-+-%s-+-%s-+-%s-+-%s-+-%s-+-%s\n",
-			headers->oidSeparator,
-			headers->nspnameSeparator,
-			headers->relnameSeparator,
-			headers->partCountSeparator,
-			headers->tableMsSeparator,
-			headers->bytesSeparator,
-			headers->indexCountSeparator,
-			headers->indexMsSeparator);
+	if (showDb)
+	{
+		fformat(stdout, "%*s | %*s | %*s | %*s | %*s | %*s | %*s | %*s | %*s \n",
+				headers->maxDatnameSize, "Database",
+				headers->maxOidSize, "OID",
+				headers->maxNspnameSize, "Schema",
+				headers->maxRelnameSize, "Name",
+				headers->maxPartCountSize, "Parts",
+				headers->maxTableMsSize, "copy duration",
+				headers->maxBytesSize, "transmitted bytes",
+				headers->maxIndexCountSize, "indexes",
+				headers->maxIndexMsSize, "create index");
+
+		fformat(stdout, "%s-+-%s-+-%s-+-%s-+-%s-+-%s-+-%s-+-%s-+-%s\n",
+				headers->datnameSeparator,
+				headers->oidSeparator,
+				headers->nspnameSeparator,
+				headers->relnameSeparator,
+				headers->partCountSeparator,
+				headers->tableMsSeparator,
+				headers->bytesSeparator,
+				headers->indexCountSeparator,
+				headers->indexMsSeparator);
+	}
+	else
+	{
+		fformat(stdout, "%*s | %*s | %*s | %*s | %*s | %*s | %*s | %*s \n",
+				headers->maxOidSize, "OID",
+				headers->maxNspnameSize, "Schema",
+				headers->maxRelnameSize, "Name",
+				headers->maxPartCountSize, "Parts",
+				headers->maxTableMsSize, "copy duration",
+				headers->maxBytesSize, "transmitted bytes",
+				headers->maxIndexCountSize, "indexes",
+				headers->maxIndexMsSize, "create index");
+
+		fformat(stdout, "%s-+-%s-+-%s-+-%s-+-%s-+-%s-+-%s-+-%s\n",
+				headers->oidSeparator,
+				headers->nspnameSeparator,
+				headers->relnameSeparator,
+				headers->partCountSeparator,
+				headers->tableMsSeparator,
+				headers->bytesSeparator,
+				headers->indexCountSeparator,
+				headers->indexMsSeparator);
+	}
 
 	for (int i = 0; i < summary->count; i++)
 	{
 		SummaryTableEntry *entry = &(summary->array[i]);
 
-		fformat(stdout, "%*s | %*s | %*s | %*s | %*s | %*s | %*s | %*s\n",
-				headers->maxOidSize, entry->oidStr,
-				headers->maxNspnameSize, entry->nspname,
-				headers->maxRelnameSize, entry->relname,
-				headers->maxPartCountSize, entry->partCount,
-				headers->maxTableMsSize, entry->tableMs,
-				headers->maxBytesSize, entry->bytesStr,
-				headers->maxIndexCountSize, entry->indexCount,
-				headers->maxIndexMsSize, entry->indexMs);
+		if (showDb)
+		{
+			fformat(stdout, "%*s | %*s | %*s | %*s | %*s | %*s | %*s | %*s | %*s\n",
+					headers->maxDatnameSize, entry->datname,
+					headers->maxOidSize, entry->oidStr,
+					headers->maxNspnameSize, entry->nspname,
+					headers->maxRelnameSize, entry->relname,
+					headers->maxPartCountSize, entry->partCount,
+					headers->maxTableMsSize, entry->tableMs,
+					headers->maxBytesSize, entry->bytesStr,
+					headers->maxIndexCountSize, entry->indexCount,
+					headers->maxIndexMsSize, entry->indexMs);
+		}
+		else
+		{
+			fformat(stdout, "%*s | %*s | %*s | %*s | %*s | %*s | %*s | %*s\n",
+					headers->maxOidSize, entry->oidStr,
+					headers->maxNspnameSize, entry->nspname,
+					headers->maxRelnameSize, entry->relname,
+					headers->maxPartCountSize, entry->partCount,
+					headers->maxTableMsSize, entry->tableMs,
+					headers->maxBytesSize, entry->bytesStr,
+					headers->maxIndexCountSize, entry->indexCount,
+					headers->maxIndexMsSize, entry->indexMs);
+		}
 	}
 
 	fformat(stdout, "\n");
@@ -3005,6 +3114,7 @@ prepare_summary_table_headers(SummaryTable *summary)
 	SummaryTableHeaders *headers = &(summary->headers);
 
 	/* assign static maximums from the lenghts of the column headers */
+	headers->maxDatnameSize = 0;    /* hidden unless any entry has datname */
 	headers->maxOidSize = 3;        /* "oid" */
 	headers->maxNspnameSize = 6;    /* "schema" */
 	headers->maxRelnameSize = 4;    /* "name" */
@@ -3012,13 +3122,26 @@ prepare_summary_table_headers(SummaryTable *summary)
 	headers->maxTableMsSize = 13;   /* "copy duration" */
 	headers->maxBytesSize = 17;     /* "transmitted bytes" */
 	headers->maxIndexCountSize = 7; /* "indexes" */
-	headers->maxIndexMsSize = 21;   /* "create index duration" */
+	headers->maxIndexMsSize = 12;   /* "create index" */
 
 	/* now adjust to the actual table's content */
 	for (int i = 0; i < summary->count; i++)
 	{
 		int len = 0;
 		SummaryTableEntry *entry = &(summary->array[i]);
+
+		len = strlen(entry->datname);
+
+		if (len > 0)
+		{
+			int minLen = 8; /* "Database" */
+			len = (len > minLen) ? len : minLen;
+
+			if (headers->maxDatnameSize < len)
+			{
+				headers->maxDatnameSize = len;
+			}
+		}
 
 		len = strlen(entry->oidStr);
 
@@ -3078,6 +3201,10 @@ prepare_summary_table_headers(SummaryTable *summary)
 	}
 
 	/* now prepare the header line with dashes */
+	if (headers->maxDatnameSize > 0)
+	{
+		prepareLineSeparator(headers->datnameSeparator, headers->maxDatnameSize);
+	}
 	prepareLineSeparator(headers->oidSeparator, headers->maxOidSize);
 	prepareLineSeparator(headers->nspnameSeparator, headers->maxNspnameSize);
 	prepareLineSeparator(headers->relnameSeparator, headers->maxRelnameSize);

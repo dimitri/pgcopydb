@@ -35,6 +35,7 @@ typedef enum
 	QMSG_TYPE_INDEXOID,         /* index oid */
 	QMSG_TYPE_STREAM_TRANSFORM, /* lsn position for transform process */
 	QMSG_TYPE_BLOBOID,          /* large object oid */
+	QMSG_TYPE_DBNAME,           /* database name (for --all-databases pre/post-data) */
 	QMSG_TYPE_STOP
 } QMessageType;
 
@@ -45,12 +46,14 @@ typedef struct QMessage
 	{
 		uint32_t oid;
 		uint64_t lsn;
+		char datname[NAMEDATALEN]; /* for QMSG_TYPE_DBNAME */
 
 		/* table parts (support for COPY partitionning) */
 		struct tp
 		{
 			uint32_t oid;
 			uint32_t part;
+			char datname[NAMEDATALEN]; /* for --all-databases: target database */
 		} tp;
 	} data;
 } QMessage;

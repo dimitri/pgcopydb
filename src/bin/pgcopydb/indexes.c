@@ -31,7 +31,7 @@ static bool copydb_copy_all_indexes_hook(void *ctx, SourceIndex *index);
  * copydb_start_index_supervisor starts a CREATE INDEX supervisor process.
  */
 bool
-copydb_start_index_supervisor(CopyDataSpec *specs)
+copydb_start_index_supervisor(CopyDataSpec *specs, pid_t *pidOut)
 {
 	/*
 	 * Flush stdio channels just before fork, to avoid double-output problems.
@@ -66,6 +66,10 @@ copydb_start_index_supervisor(CopyDataSpec *specs)
 		default:
 		{
 			/* fork succeeded, in parent */
+			if (pidOut != NULL)
+			{
+				*pidOut = fpid;
+			}
 			break;
 		}
 	}
@@ -246,20 +250,37 @@ copydb_index_worker(CopyDataSpec *specs)
 		return false;
 	}
 
+	/*
+	 * Singledb path: open a single target connection reused for all indexes.
+	 * Multidb path: maintain a lightweight pool keyed by datname; each entry
+	 * holds a per-db CopyDataSpec (catalog) and a target connection.
+	 */
 	PGSQL dst = { 0 };
-	char *pguri = specs->connStrings.target_pguri;
+	MultiDbContext idxCtx = { 0 };
 
-	if (!pgsql_init(&dst, (char *) pguri, PGSQL_CONN_TARGET))
+	if (specs->allDatabases)
 	{
-		return false;
+		if (!multidb_context_init(&idxCtx, specs))
+		{
+			log_error("Failed to initialise index multi-database context");
+			return false;
+		}
 	}
-
-	/* also set our GUC values for the target connection */
-	if (!pgsql_set_gucs(&dst, dstSettings))
+	else
 	{
-		log_fatal("Failed to set our GUC settings on the target connection, "
-				  "see above for details");
-		return false;
+		char *pguri = specs->connStrings.target_pguri;
+
+		if (!pgsql_init(&dst, (char *) pguri, PGSQL_CONN_TARGET))
+		{
+			return false;
+		}
+
+		if (!pgsql_set_gucs(&dst, dstSettings))
+		{
+			log_fatal("Failed to set our GUC settings on the target connection, "
+					  "see above for details");
+			return false;
+		}
 	}
 
 	int errors = 0;
@@ -274,12 +295,15 @@ copydb_index_worker(CopyDataSpec *specs)
 		{
 			log_error("CREATE INDEX worker has been interrupted");
 			(void) pgsql_finish(&dst);
+			(void) multidb_index_context_close_all(&idxCtx);
 			return false;
 		}
 
 		if (!recv_ok)
 		{
 			/* errors have already been logged */
+			(void) pgsql_finish(&dst);
+			(void) multidb_index_context_close_all(&idxCtx);
 			return false;
 		}
 
@@ -294,17 +318,47 @@ copydb_index_worker(CopyDataSpec *specs)
 
 			case QMSG_TYPE_INDEXOID:
 			{
-				if (!copydb_create_index_by_oid(specs, &dst, mesg.data.oid))
+				uint32_t oid = mesg.data.tp.oid;
+				CopyDataSpec *useSpecs = specs;
+				PGSQL *useDst = &dst;
+
+				if (specs->allDatabases)
+				{
+					const char *datname = mesg.data.tp.datname;
+					MultiDbEntry *entry =
+						multidb_index_context_get_entry(&idxCtx, datname);
+
+					if (entry == NULL)
+					{
+						log_error("Failed to get context for database \"%s\", "
+								  "skipping index oid %u",
+								  datname, oid);
+						++errors;
+
+						if (specs->failFast)
+						{
+							(void) multidb_index_context_close_all(&idxCtx);
+							return false;
+						}
+						break;
+					}
+
+					useSpecs = entry->dbSpecs;
+					useDst = &entry->dst;
+				}
+
+				if (!copydb_create_index_by_oid(useSpecs, useDst, oid))
 				{
 					++errors;
 
 					log_error("Failed to create index with oid %u, "
 							  "see above for details",
-							  mesg.data.oid);
+							  oid);
 
 					if (specs->failFast)
 					{
 						(void) pgsql_finish(&dst);
+						(void) multidb_index_context_close_all(&idxCtx);
 						return false;
 					}
 				}
@@ -322,6 +376,7 @@ copydb_index_worker(CopyDataSpec *specs)
 	}
 
 	pgsql_finish(&dst);
+	(void) multidb_index_context_close_all(&idxCtx);
 
 	if (!catalog_delete_process(&(specs->catalogs.source), pid))
 	{
@@ -449,7 +504,7 @@ copydb_create_index_by_oid(CopyDataSpec *specs, PGSQL *dst, uint32_t indexOid)
 
 		if (!specs->skipVacuum)
 		{
-			if (!vacuum_add_table(specs, table->oid))
+			if (!vacuum_add_table(specs, table->oid, table->datname))
 			{
 				log_error("Failed to queue VACUUM ANALYZE %s [%u]",
 						  table->qname,
@@ -609,13 +664,18 @@ copydb_add_table_indexes(CopyDataSpec *specs, CopyTableDataSpec *tableSpecs)
 	{
 		QMessage mesg = {
 			.type = QMSG_TYPE_INDEXOID,
-			.data.oid = indexArray.array[i]
+			.data.tp.oid = indexArray.array[i],
 		};
 
-		log_trace("Queueing index [%u] for table %s [%u]",
-				  mesg.data.oid,
+		strlcpy(mesg.data.tp.datname,
+				tableSpecs->sourceTable->datname,
+				sizeof(mesg.data.tp.datname));
+
+		log_trace("Queueing index [%u] for table %s [%u] db \"%s\"",
+				  mesg.data.tp.oid,
 				  tableSpecs->sourceTable->qname,
-				  tableSpecs->sourceTable->oid);
+				  tableSpecs->sourceTable->oid,
+				  mesg.data.tp.datname);
 
 		if (!queue_send(&(specs->indexQueue), &mesg))
 		{
@@ -712,7 +772,7 @@ copydb_copy_all_indexes(CopyDataSpec *specs)
 			 specs->indexJobs);
 
 	/* first start index workers that feed from the indexQueue */
-	if (!copydb_start_index_supervisor(specs))
+	if (!copydb_start_index_supervisor(specs, NULL))
 	{
 		/* errors have already been logged */
 		return false;
@@ -831,7 +891,14 @@ copydb_create_index(CopyDataSpec *specs,
 			return false;
 		}
 
-		log_notice("%s", indexSummary->command);
+		if (specs->datname[0] != '\0')
+		{
+			log_notice("%s: %s", specs->datname, indexSummary->command);
+		}
+		else
+		{
+			log_notice("%s", indexSummary->command);
+		}
 
 		if (!pgsql_execute(dst, indexSummary->command))
 		{
@@ -1231,7 +1298,14 @@ copydb_create_constraints_hook(void *ctx, SourceIndex *index)
 
 	if (!foundConstraintOnTarget)
 	{
-		log_notice("%s", indexSummary->command);
+		if (specs->datname[0] != '\0')
+		{
+			log_notice("%s: %s", specs->datname, indexSummary->command);
+		}
+		else
+		{
+			log_notice("%s", indexSummary->command);
+		}
 
 		/*
 		 * Constraints are built by the CREATE INDEX worker process that is

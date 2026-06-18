@@ -33,6 +33,7 @@ struct SQLiteQuery
  * Catalog API.
  */
 bool catalog_open(DatabaseCatalog *catalog);
+bool catalog_open_readonly(DatabaseCatalog *catalog);
 bool catalog_init(DatabaseCatalog *catalog);
 bool catalog_create_semaphore(DatabaseCatalog *catalog);
 bool catalog_attach(DatabaseCatalog *a, DatabaseCatalog *b, const char *name);
@@ -443,6 +444,10 @@ bool catalog_iter_s_database_next(SourceDatabaseIterator *iter);
 bool catalog_iter_s_database_finish(SourceDatabaseIterator *iter);
 
 bool catalog_s_database_fetch(SQLiteQuery *query);
+
+bool catalog_update_s_database_snapshot(DatabaseCatalog *catalog,
+										const char *datname,
+										const char *snapshot);
 
 typedef bool (SourcePropertyIterFun)(void *context, SourceProperty *property);
 

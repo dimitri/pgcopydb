@@ -54,9 +54,22 @@ jobs:
             .
         working-directory: tests
 
+      - name: Build multi base image (all-databases / three-databases tests)
+        run: |
+          docker build \
+            --build-arg PGVERSION=${{ matrix.PGVERSION }} \
+            -t multi:${{ matrix.PGVERSION }} \
+            -t multi \
+            -f Dockerfile.multi \
+            .
+        working-directory: tests
+
       - name: Save and compress images
         run: |
-          docker save pgcopydb:${{ matrix.PGVERSION }} pagila:${{ matrix.PGVERSION }} \
+          docker save \
+            pgcopydb:${{ matrix.PGVERSION }} \
+            pagila:${{ matrix.PGVERSION }} \
+            multi:${{ matrix.PGVERSION }} \
             | zstd -T0 -9 - -o images.tar.zst
 
       - name: Upload artifact
@@ -108,6 +121,8 @@ jobs:
           - filtering
           - extensions
           - timescaledb
+          - all-databases
+          - three-databases
           - cdc-low-level
           - cdc-test-decoding
           - cdc-endpos-mid-txn
@@ -174,6 +189,7 @@ jobs:
           zstd -d < images.tar.zst | docker load
           docker tag pgcopydb:${{ matrix.PGVERSION }} pgcopydb
           docker tag pagila:${{ matrix.PGVERSION }} pagila
+          docker tag multi:${{ matrix.PGVERSION }} multi
 
       - name: Create docker volumes
         run: |
