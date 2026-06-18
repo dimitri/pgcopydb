@@ -5241,7 +5241,9 @@ appendStringLiteralPub(PQExpBuffer buf, const char *str)
 	for (const char *p = str; *p; p++)
 	{
 		if (*p == '\'')
+		{
 			appendPQExpBufferChar(buf, '\'');
+		}
 		appendPQExpBufferChar(buf, *p);
 	}
 	appendPQExpBufferChar(buf, '\'');
@@ -5280,7 +5282,9 @@ pgsql_create_publication(PGSQL *pgsql, const char *pubName,
 			for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
 			{
 				if (!firstCond)
+				{
 					appendPQExpBufferStr(query, " OR ");
+				}
 
 				appendPQExpBufferStr(query, "schemaname = ");
 				appendStringLiteralPub(query,
@@ -5291,7 +5295,9 @@ pgsql_create_publication(PGSQL *pgsql, const char *pubName,
 			for (int i = 0; i < filters->includeOnlyTableList.count; i++)
 			{
 				if (!firstCond)
+				{
 					appendPQExpBufferStr(query, " OR ");
+				}
 
 				appendPQExpBufferStr(query, "(schemaname = ");
 				appendStringLiteralPub(query,
