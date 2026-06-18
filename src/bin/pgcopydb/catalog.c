@@ -5960,8 +5960,8 @@ catalog_lookup_filter_by_oid(DatabaseCatalog *catalog,
  */
 bool
 catalog_lookup_filter_by_oid_only(DatabaseCatalog *catalog,
-								   CatalogFilter *result,
-								   uint32_t objectOid)
+								  CatalogFilter *result,
+								  uint32_t objectOid)
 {
 	sqlite3 *db = catalog->db;
 
