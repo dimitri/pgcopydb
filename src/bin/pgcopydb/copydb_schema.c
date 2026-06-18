@@ -1088,9 +1088,10 @@ copydb_objectid_is_filtered_out(CopyDataSpec *specs,
 	DatabaseCatalog *filtersDB = &(specs->catalogs.filter);
 	CatalogFilter result = { 0 };
 
-	if (item->objectOid != 0)
+	if (item->objectOid != 0 && item->catalogOid != 0)
 	{
-		if (!catalog_lookup_filter_by_oid(filtersDB, &result, item->objectOid))
+		if (!catalog_lookup_filter_by_oid(filtersDB, &result,
+										  item->catalogOid, item->objectOid))
 		{
 			/* errors have already been logged */
 			return false;
@@ -1293,6 +1294,13 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 
 			(void) catalog_start_timing(&timing);
 
+			if (!catalog_fetch_catnames(filtersDB, pgsql))
+			{
+				/* errors have already been logged */
+				(void) semaphore_unlock(&(filtersDB->sema));
+				return false;
+			}
+
 			if (!catalog_prepare_filter(filtersDB,
 										specs->skipExtensions,
 										specs->skipCollations))
@@ -1473,6 +1481,13 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		};
 
 		(void) catalog_start_timing(&timing);
+
+		if (!catalog_fetch_catnames(filtersDB, pgsql))
+		{
+			/* errors have already been logged */
+			(void) semaphore_unlock(&(filtersDB->sema));
+			return false;
+		}
 
 		if (!catalog_prepare_filter(filtersDB,
 									specs->skipExtensions,
