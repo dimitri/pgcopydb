@@ -551,7 +551,11 @@ bool pgsql_replication_slot_exists(PGSQL *pgsql,
 
 bool pgsql_drop_replication_slot(PGSQL *pgsql, const char *slotName);
 
-bool pgsql_create_publication(PGSQL *pgsql, const char *pubName);
+/* Forward declaration; full definition in filtering.h */
+struct SourceFilters;
+
+bool pgsql_create_publication(PGSQL *pgsql, const char *pubName,
+							  struct SourceFilters *filters);
 bool pgsql_drop_publication(PGSQL *pgsql, const char *pubName);
 
 bool pgsql_role_exists(PGSQL *pgsql, const char *roleName, bool *exists);

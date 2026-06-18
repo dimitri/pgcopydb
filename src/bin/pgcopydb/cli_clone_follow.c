@@ -612,7 +612,8 @@ clone_and_follow(CopyDataSpec *copySpecs)
 						   &(copySpecs->catalogs.replay),
 						   copyDBoptions.stdIn,
 						   copyDBoptions.stdOut,
-						   logSQL))
+						   logSQL,
+						   &(copySpecs->filters)))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -814,7 +815,8 @@ cli_follow(int argc, char **argv)
 						   &(copySpecs.catalogs.replay),
 						   copyDBoptions.stdIn,
 						   copyDBoptions.stdOut,
-						   logSQL))
+						   logSQL,
+						   &(copySpecs.filters)))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

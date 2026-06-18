@@ -649,6 +649,19 @@ struct StreamSpecs
 	 */
 	char coordHost[256];
 	int coordPort;
+
+	/*
+	 * User-specified source filters.  For pgoutput the publication is created
+	 * with a filter-aware FOR TABLE list; for wal2json the filter-tables (and
+	 * optionally add-tables) plugin option is extended accordingly.
+	 */
+	SourceFilters filters;
+
+	/* Stable buffer for the dynamically-built wal2json filter-tables value */
+	char wal2jsonFilterTables[4096];
+
+	/* Stable buffer for the dynamically-built wal2json add-tables value */
+	char wal2jsonAddTables[4096];
 };
 
 /* ld_stream.c */
@@ -664,7 +677,8 @@ bool stream_init_specs(StreamSpecs *specs,
 					   DatabaseCatalog *replayDB,
 					   bool stdIn,
 					   bool stdOut,
-					   bool logSQL);
+					   bool logSQL,
+					   SourceFilters *filters);
 
 bool stream_init_for_mode(StreamSpecs *specs, LogicalStreamMode mode);
 

@@ -130,6 +130,7 @@ jobs:
           - follow-9.6
           - follow-data-only
           - follow-pgoutput
+          - follow-filtering
           - cdc-endpos-in-multi-wal-txn
         exclude:
           # timescaledb uses timescale/timescaledb:latest-pg13 for both source

@@ -132,6 +132,7 @@ jobs:
           - follow-wal2json
           - follow-9.6
           - follow-data-only
+          - follow-filtering
           - cdc-endpos-in-multi-wal-txn
         exclude:
           # timescaledb uses timescale/timescaledb:latest-pg13 for both source
@@ -162,6 +163,8 @@ jobs:
           - TEST: follow-9.6
             PGVERSION: 16
           - TEST: follow-data-only
+            PGVERSION: 16
+          - TEST: follow-filtering
             PGVERSION: 16
           - TEST: cdc-endpos-in-multi-wal-txn
             PGVERSION: 16
