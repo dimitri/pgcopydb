@@ -5951,6 +5951,76 @@ catalog_lookup_filter_by_oid(DatabaseCatalog *catalog,
 
 
 /*
+ * catalog_lookup_filter_by_oid_only fetches a filter entry using the objectOid
+ * alone, without a catoid constraint. Used for pg_dump TOC entries that have
+ * catalogId.tableoid == 0 (such as REFRESH MATERIALIZED VIEW), where the
+ * (catoid, oid) pair is not available. PostgreSQL draws OIDs from a single
+ * counter per database, so any objectOid is unique across all system catalogs
+ * within that database, making an OID-only lookup safe in this case.
+ */
+bool
+catalog_lookup_filter_by_oid_only(DatabaseCatalog *catalog,
+								   CatalogFilter *result,
+								   uint32_t objectOid)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_lookup_filter_by_oid_only: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"  select catoid, oid, restore_list_name, kind "
+		"    from filter "
+		"   where oid = $1 ";
+
+	SQLiteQuery query = {
+		.context = result,
+		.fetchFunction = &catalog_filter_fetch
+	};
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[1] = {
+		{ BIND_PARAMETER_TYPE_INT64, "oid", objectOid, NULL },
+	};
+
+	if (!catalog_sql_bind(&query, params, 1))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* now execute the query, which return exactly one row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
  * catalog_lookup_filter_by_rlname fetches a filter entry from our catalogs.
  */
 bool

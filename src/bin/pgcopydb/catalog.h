@@ -419,6 +419,10 @@ bool catalog_lookup_filter_by_oid(DatabaseCatalog *catalog,
 								  uint32_t catalogOid,
 								  uint32_t objectOid);
 
+bool catalog_lookup_filter_by_oid_only(DatabaseCatalog *catalog,
+									   CatalogFilter *result,
+									   uint32_t objectOid);
+
 bool catalog_lookup_filter_by_rlname(DatabaseCatalog *catalog,
 									 CatalogFilter *result,
 									 const char *restoreListName);

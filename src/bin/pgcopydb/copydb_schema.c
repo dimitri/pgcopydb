@@ -1088,13 +1088,32 @@ copydb_objectid_is_filtered_out(CopyDataSpec *specs,
 	DatabaseCatalog *filtersDB = &(specs->catalogs.filter);
 	CatalogFilter result = { 0 };
 
-	if (item->objectOid != 0 && item->catalogOid != 0)
+	if (item->objectOid != 0)
 	{
-		if (!catalog_lookup_filter_by_oid(filtersDB, &result,
-										  item->catalogOid, item->objectOid))
+		if (item->catalogOid != 0)
 		{
-			/* errors have already been logged */
-			return false;
+			if (!catalog_lookup_filter_by_oid(filtersDB, &result,
+											  item->catalogOid, item->objectOid))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+		}
+		else
+		{
+			/*
+			 * Some TOC entries (e.g. REFRESH MATERIALIZED VIEW) carry
+			 * catalogId.tableoid == 0 in the pg_dump format, so we have no
+			 * catoid to disambiguate. Fall back to an OID-only lookup;
+			 * PostgreSQL OIDs are drawn from a single counter per database,
+			 * so any objectOid is unique across all system catalogs.
+			 */
+			if (!catalog_lookup_filter_by_oid_only(filtersDB, &result,
+												   item->objectOid))
+			{
+				/* errors have already been logged */
+				return false;
+			}
 		}
 
 		if (result.oid != 0 &&
