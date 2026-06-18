@@ -112,18 +112,25 @@ jobs:
           - unit
           - blobs
           - filtering
+          - partitioned-target
           - extensions
           - timescaledb
           - all-databases
           - three-databases
           - cdc-low-level
           - cdc-test-decoding
-          - cdc-endpos-between-transaction
+          - cdc-endpos-mid-txn
           - cdc-wal2json
+          - cdc-partitioned-target
+          - cdc-replica-identity-index
+          - cdc-file-rotation
+          - cdc-pgoutput
+          - cdc-filtering-pgoutput
           - follow-wal2json
           - follow-9.6
           - follow-data-only
-          - endpos-in-multi-wal-txn
+          - follow-pgoutput
+          - cdc-endpos-in-multi-wal-txn
         exclude:
           # timescaledb uses timescale/timescaledb:latest-pg13 for both source
           # and target. pg_restore from PG17+ emits "SET transaction_timeout = 0"
