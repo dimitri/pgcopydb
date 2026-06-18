@@ -685,7 +685,20 @@ clone_and_follow(CopyDataSpec *copySpecs)
 	/*
 	 * Preparation and snapshot are now done, time to fork our two main worker
 	 * processes.
+	 *
+	 * SQLite database connections are not safe to use across fork(). Close
+	 * them here in the parent before forking so that each child process opens
+	 * its own fresh connection. The IPC semaphores (semId) are inherited by
+	 * the children and remain valid — only the sqlite3 handles are recycled.
+	 * The catalog data written above persists on disk; children will reopen
+	 * and reuse it without refetching.
 	 */
+	if (!catalog_close_from_specs(copySpecs))
+	{
+		log_error("Failed to close catalog connections before forking");
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
 	pid_t clonePID = -1;
 	pid_t followPID = -1;
 
