@@ -19,6 +19,9 @@ pgcopydb ping
 # Build the source schema (table + matview with unique index for CONCURRENT).
 psql -a -d "${PGCOPYDB_SOURCE_PGURI}" -1 -f /usr/src/pgcopydb/source.sql
 
+# Build the target schema: same table + matview, initially empty.
+psql -a -d "${PGCOPYDB_TARGET_PGURI}" -1 -f /usr/src/pgcopydb/target.sql
+
 # Create the replication slot before the initial copy.
 coproc ( pgcopydb snapshot --follow --plugin test_decoding )
 
@@ -26,6 +29,10 @@ sleep 1
 
 pgcopydb stream setup
 pgcopydb copy table-data
+
+# Refresh mv1 on target to match source after the initial data copy.
+# pgcopydb copy table-data copies src rows but not materialized view data.
+psql -a -d "${PGCOPYDB_TARGET_PGURI}" -c "REFRESH MATERIALIZED VIEW mv1"
 
 kill -TERM ${COPROC_PID}
 wait ${COPROC_PID}
