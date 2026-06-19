@@ -1492,13 +1492,46 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 	log_debug("listSourceTablesSQL[%s]", filterTypeToString(filterType));
 
 	char *sql = listSourceTablesSQL[filterType].sql;
+	char *versionedSQL = NULL;
+
+	/*
+	 * pg_attribute.attidentity was added in PostgreSQL 10.  For older source
+	 * servers, rewrite the one reference in the query to a safe literal ''.
+	 */
+	if (pgsql->pgversion_num > 0 && pgsql->pgversion_num < 100000)
+	{
+		const char *old = "coalesce(a.attidentity, '') as attidentity ";
+		const char *new_sql = "'' as attidentity ";
+		size_t oldLen = strlen(old);
+		size_t newLen = strlen(new_sql);
+		char *pos;
+
+		versionedSQL = strdup(sql);
+
+		if (versionedSQL != NULL)
+		{
+			pos = strstr(versionedSQL, old);
+
+			if (pos != NULL)
+			{
+				memmove(pos + newLen, pos + oldLen,
+						strlen(pos + oldLen) + 1);
+				memcpy(pos, new_sql, newLen);
+			}
+
+			sql = versionedSQL;
+		}
+	}
 
 	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
 								   &context, &getTableArray))
 	{
+		free(versionedSQL);
 		log_error("Failed to list tables");
 		return false;
 	}
+
+	free(versionedSQL);
 
 	if (!context.parsedOk)
 	{
@@ -5155,6 +5188,7 @@ parseAttributesArray(SourceTable *table, JSON_Value *json)
 	{
 		SourceTableAttribute *attr = &(table->attributes.array[i]);
 		JSON_Object *jsAttr = json_array_get_object(jsAttsArray, i);
+		const char *identity;
 
 		attr->attnum = json_object_get_number(jsAttr, "attnum");
 		attr->atttypid = json_object_get_number(jsAttr, "atttypid");
@@ -5167,8 +5201,12 @@ parseAttributesArray(SourceTable *table, JSON_Value *json)
 		attr->attisreplident = json_object_get_boolean(jsAttr, "attisreplident");
 		attr->attisgenerated = json_object_get_boolean(jsAttr, "attisgenerated");
 
-		const char *identity = json_object_get_string(jsAttr, "attidentity");
-		attr->attidentity = (identity != NULL && identity[0] != '\0') ? identity[0] : '\0';
+		identity = json_object_get_string(jsAttr, "attidentity");
+
+		if (identity != NULL && identity[0] != '\0')
+		{
+			attr->attidentity = identity[0];
+		}
 	}
 
 	return true;

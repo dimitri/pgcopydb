@@ -2633,7 +2633,6 @@ prepareGeneratedColumnsCache_hook(void *ctx, SourceTable *table)
 		}
 	}
 
-
 	NORMALIZED_PG_NAMEDATA_COPY(item->nspname, table->nspname);
 	NORMALIZED_PG_NAMEDATA_COPY(item->relname, table->relname);
 
