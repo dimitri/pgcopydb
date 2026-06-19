@@ -2734,7 +2734,7 @@ markGeneratedColumnsFromStatement(GeneratedColumnsCache *cache,
 	}
 
 	GeneratedColumnSet *tableColumns = lookupGeneratedColumnsForTable(cache, nspname,
-																	   relname);
+																	  relname);
 
 	if (tableColumns == NULL)
 	{

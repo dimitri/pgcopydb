@@ -1497,7 +1497,14 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 	/*
 	 * pg_attribute.attidentity was added in PostgreSQL 10.  For older source
 	 * servers, rewrite the one reference in the query to a safe literal ''.
+	 * Fetch the server version if not yet known (pgsql_server_version caches
+	 * the result, so repeated calls are cheap).
 	 */
+	if (pgsql->pgversion_num == 0)
+	{
+		(void) pgsql_server_version(pgsql);
+	}
+
 	if (pgsql->pgversion_num > 0 && pgsql->pgversion_num < 100000)
 	{
 		const char *old = "coalesce(a.attidentity, '') as attidentity ";
