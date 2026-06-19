@@ -492,10 +492,10 @@ typedef struct StreamContext
  */
 typedef struct TargetRelkind
 {
-	char            nspname[PG_NAMEDATALEN]; /* compound hash key, part 1 */
-	char            relname[PG_NAMEDATALEN]; /* compound hash key, part 2 */
-	char            relkind;
-	UT_hash_handle  hh;
+	char nspname[PG_NAMEDATALEN];            /* compound hash key, part 1 */
+	char relname[PG_NAMEDATALEN];            /* compound hash key, part 2 */
+	char relkind;
+	UT_hash_handle hh;
 } TargetRelkind;
 
 
