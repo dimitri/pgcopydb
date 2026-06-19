@@ -27,7 +27,8 @@ typedef enum
 
 typedef struct SourceFilterSchema
 {
-	char nspname[PG_NAMEDATALEN];
+	char nspname[PG_NAMEDATALEN];        /* bare name from pg_namespace (after normalization) */
+	char restoreListName[PG_NAMEDATALEN]; /* quote_ident form for pg_dump/pg_restore args */
 } SourceFilterSchema;
 
 typedef struct SourceFilterSchemaList
@@ -86,6 +87,7 @@ typedef enum
 typedef struct SourceFilters
 {
 	bool prepared;
+	bool normalized;
 	SourceFilterType type;
 	SourceFilterSchemaList includeOnlySchemaList;
 	SourceFilterSchemaList excludeSchemaList;
@@ -98,6 +100,7 @@ typedef struct SourceFilters
 char * filterTypeToString(SourceFilterType type);
 SourceFilterType filterTypeComplement(SourceFilterType type);
 bool parse_filters(const char *filebname, SourceFilters *filters);
+bool filters_validate_and_normalize(PGSQL *pgsql, SourceFilters *filters);
 
 bool filters_as_json(SourceFilters *filters, JSON_Value *jsFilter);
 
