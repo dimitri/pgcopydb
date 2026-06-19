@@ -119,7 +119,8 @@ typedef struct LogicalMessageAttribute
 {
 	char *attname; /* malloc'ed area */
 
-	bool isgenerated;
+	bool isgenerated;        /* GENERATED ALWAYS AS (expr) stored column */
+	bool isidentityalways;   /* GENERATED ALWAYS AS IDENTITY column */
 } LogicalMessageAttribute;
 
 typedef struct LogicalMessageAttributeArray
@@ -300,6 +301,7 @@ typedef struct GeneratedColumnsCache_Lookup
 typedef struct GeneratedColumnSet
 {
 	char attname[PG_NAMEDATALEN];
+	bool isidentityalways;       /* true when GENERATED ALWAYS AS IDENTITY */
 
 	UT_hash_handle hh;           /* makes this structure hashable */
 } GeneratedColumnSet;

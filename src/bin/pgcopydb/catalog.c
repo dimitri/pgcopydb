@@ -108,6 +108,7 @@ static char *sourceDBcreateDDLs[] = {
 	"  oid integer references s_table(oid), "
 	"  attnum integer, attypid integer, attname text, "
 	"  attisprimary bool, attisreplident bool, attisgenerated bool, "
+	"  attidentity text default '', "
 	"  primary key(oid, attnum) "
 	")",
 
@@ -327,6 +328,7 @@ static char *filterDBcreateDDLs[] = {
 	"  oid integer references s_table(oid), "
 	"  attnum integer, attypid integer, attname text, "
 	"  attisprimary bool, attisreplident bool, attisgenerated bool, "
+	"  attidentity text default '', "
 	"  primary key(oid, attnum) "
 	")",
 
@@ -447,6 +449,7 @@ static char *targetDBcreateDDLs[] = {
 	"  oid integer references s_table(oid), "
 	"  attnum integer, attypid integer, attname text, "
 	"  attisprimary bool, attisreplident bool, attisgenerated bool, "
+	"  attidentity text default '', "
 	"  primary key(oid, attnum) "
 	")",
 
@@ -2676,8 +2679,8 @@ catalog_add_attributes(DatabaseCatalog *catalog, SourceTable *table)
 	char *sql =
 		"insert into s_attr("
 		"oid, attnum, attypid, attname, "
-		"attisprimary, attisreplident, attisgenerated)"
-		"values($1, $2, $3, $4, $5, $6, $7)";
+		"attisprimary, attisreplident, attisgenerated, attidentity)"
+		"values($1, $2, $3, $4, $5, $6, $7, $8)";
 
 	SQLiteQuery query = { 0 };
 
@@ -2690,6 +2693,9 @@ catalog_add_attributes(DatabaseCatalog *catalog, SourceTable *table)
 	for (int i = 0; i < table->attributes.count; i++)
 	{
 		SourceTableAttribute *attr = &(table->attributes.array[i]);
+
+		/* store attidentity as a one-char string, or "" when not an identity col */
+		char identityStr[2] = { attr->attidentity, '\0' };
 
 		BindParam params[] = {
 			{ BIND_PARAMETER_TYPE_INT64, "oid", table->oid, NULL },
@@ -2710,7 +2716,9 @@ catalog_add_attributes(DatabaseCatalog *catalog, SourceTable *table)
 			{
 				BIND_PARAMETER_TYPE_INT, "attisgenerated",
 				attr->attisgenerated ? 1 : 0, NULL
-			}
+			},
+
+			{ BIND_PARAMETER_TYPE_TEXT, "attidentity", 0, identityStr }
 		};
 
 		int count = sizeof(params) / sizeof(params[0]);
@@ -3392,7 +3400,7 @@ catalog_lookup_s_attr_by_name(DatabaseCatalog *catalog,
 
 	char *sql =
 		"  select attnum, attypid, attname, "
-		"         attisprimary, attisreplident, attisgenerated "
+		"         attisprimary, attisreplident, attisgenerated, attidentity "
 		"    from s_attr "
 		"   where oid = $1 and attname = $2";
 
@@ -4163,7 +4171,7 @@ catalog_iter_s_table_attrs_init(SourceTableAttrsIterator *iter)
 		"  select count(*) over(order by attnum) as num, "
 		"         count(*) over() as count, "
 		"         attnum, attypid, attname, "
-		"         attisprimary, attisreplident, attisgenerated "
+		"         attisprimary, attisreplident, attisgenerated, attidentity "
 		"    from s_attr "
 		"   where oid = $1 "
 		"order by attnum";
@@ -4279,6 +4287,9 @@ catalog_s_table_attrs_fetch(SQLiteQuery *query)
 	attr->attisreplident = sqlite3_column_int(query->ppStmt, 6) == 1;
 	attr->attisgenerated = sqlite3_column_int(query->ppStmt, 7) == 1;
 
+	const char *identity = (const char *) sqlite3_column_text(query->ppStmt, 8);
+	attr->attidentity = (identity != NULL && identity[0] != '\0') ? identity[0] : '\0';
+
 	return true;
 }
 
@@ -4301,6 +4312,9 @@ catalog_s_attr_fetch(SQLiteQuery *query)
 	attr->attisprimary = sqlite3_column_int(query->ppStmt, 3) == 1;
 	attr->attisreplident = sqlite3_column_int(query->ppStmt, 4) == 1;
 	attr->attisgenerated = sqlite3_column_int(query->ppStmt, 5) == 1;
+
+	const char *identity = (const char *) sqlite3_column_text(query->ppStmt, 6);
+	attr->attidentity = (identity != NULL && identity[0] != '\0') ? identity[0] : '\0';
 
 	return true;
 }
@@ -9354,18 +9368,13 @@ catalog_iter_s_table_generated_columns_init(SourceTableIterator *iter)
 		"         (select count(1) from s_table_part p where p.oid = t.oid) "
 		"    from s_table t join s_attr a "
 
-		/*
-		 * Currently, we handle only:
-		 * - Generated columns with is_generated = 'ALWAYS' for INSERT and UPDATE
-		 * - IDENTITY columns for INSERT using "overriding system value"
-		 *
-		 * TODO: Add support for IDENTITY columns in UPDATE.
-		 * https://github.com/dimitri/pgcopydb/issues/844
-		 */
-		"       on (a.oid = t.oid and a.attisgenerated = 1) "
+		/* match tables that have generated or identity-always columns */
+		"       on (a.oid = t.oid "
+		"           and (a.attisgenerated = 1 or a.attidentity = 'a')) "
 		"       left join s_table_size ts on ts.oid = t.oid "
 		"group by t.oid "
-		"  having sum(a.attisgenerated) > 0 "
+		"  having sum(case when a.attisgenerated = 1 or a.attidentity = 'a'"
+		"                  then 1 else 0 end) > 0 "
 		"order by bytes desc";
 
 	SQLiteQuery *query = &(iter->query);

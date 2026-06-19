@@ -55,8 +55,6 @@ static bool prepareGeneratedColumnsCache_hook(void *ctx, SourceTable *table);
 
 static bool prepareGeneratedColumnsCache(StreamSpecs *specs);
 
-static bool isGeneratedColumn(GeneratedColumnSet *columns, const char *attname);
-
 static GeneratedColumnSet * lookupGeneratedColumnsForTable(GeneratedColumnsCache *cache,
 														   const char *nspname,
 														   const char *relname);
@@ -1772,6 +1770,17 @@ stream_transform_write_replay_txn(StreamSpecs *specs)
 		return false;
 	}
 
+	GeneratedColumnsCache *cache = privateContext->generatedColumnsCache;
+
+	if (cache != NULL)
+	{
+		if (!markGeneratedColumnsFromTransaction(cache, txn))
+		{
+			log_error("Failed to mark generated columns from transaction");
+			return false;
+		}
+	}
+
 	LogicalTransactionStatement *currentStmt = txn->first;
 
 	for (; currentStmt != NULL; currentStmt = currentStmt->next)
@@ -2079,8 +2088,22 @@ stream_write_update(ReplayDBStmt *replayStmt, LogicalMessageUpdate *update)
 					}
 				}
 
-				if (skip)
+				if (skip || attr->isidentityalways)
 				{
+					/*
+					 * Skip this column from the SET clause.
+					 *
+					 * For value-unchanged columns (skip=true): the old and new
+					 * values are equal, so setting it is a no-op.
+					 *
+					 * For GENERATED ALWAYS AS IDENTITY columns: PostgreSQL
+					 * rejects "SET col = $N" with "can only be updated to
+					 * DEFAULT".  Unlike INSERT (where OVERRIDING SYSTEM VALUE
+					 * lets us supply the value), there is no equivalent for
+					 * UPDATE, so we must omit these columns from the SET clause.
+					 * The identity value is stable across normal UPDATEs, so
+					 * omitting it is correct.
+					 */
 					++skipColumnCount;
 				}
 				else
@@ -2563,36 +2586,6 @@ lookupGeneratedColumnsForTable(GeneratedColumnsCache *cache,
 
 
 /*
- * isGeneratedColumn checks whether the given "attname" is a generated column.
- *
- * Returns true if the column is generated, false otherwise.
- *
- * NOTE: There is no error condition, if the columns is NULL, it means that we
- * don't have any generated columns in the catalog.
- */
-static bool
-isGeneratedColumn(GeneratedColumnSet *columns, const char *attname)
-{
-	char attnameNormalized[PG_NAMEDATALEN] = { 0 };
-
-	NORMALIZED_PG_NAMEDATA_COPY(attnameNormalized, attname);
-
-	GeneratedColumnSet *generatedColumns = NULL;
-
-	HASH_FIND_STR(columns, attnameNormalized, generatedColumns);
-
-	if (generatedColumns != NULL)
-	{
-		log_trace("Column \"%s\" is generated", attnameNormalized);
-
-		return true;
-	}
-
-	return false;
-}
-
-
-/*
  * prepareGeneratedColumnsCache_hook is a callback function that populates the
  * generated columns cache from the catalog.
  */
@@ -2623,9 +2616,9 @@ prepareGeneratedColumnsCache_hook(void *ctx, SourceTable *table)
 	{
 		SourceTableAttribute *attr = &(table->attributes.array[i]);
 
-		if (attr->attisgenerated)
+		if (attr->attisgenerated || attr->attidentity == 'a')
 		{
-			/* Add a generated column to the GeneratedColumnSet */
+			/* Add a generated or identity-always column to the set */
 			GeneratedColumnSet *generatedColumn = (GeneratedColumnSet *)
 												  calloc(1, sizeof(GeneratedColumnSet));
 			if (generatedColumn == NULL)
@@ -2635,6 +2628,7 @@ prepareGeneratedColumnsCache_hook(void *ctx, SourceTable *table)
 			}
 
 			NORMALIZED_PG_NAMEDATA_COPY(generatedColumn->attname, attr->attname);
+			generatedColumn->isidentityalways = (attr->attidentity == 'a');
 			HASH_ADD_STR(item->columns, attname, generatedColumn);
 		}
 	}
@@ -2740,12 +2734,12 @@ markGeneratedColumnsFromStatement(GeneratedColumnsCache *cache,
 		return true;
 	}
 
-	GeneratedColumnSet *generatedColumns = lookupGeneratedColumnsForTable(cache, nspname,
-																		  relname);
+	GeneratedColumnSet *tableColumns = lookupGeneratedColumnsForTable(cache, nspname,
+																	   relname);
 
-	if (generatedColumns == NULL)
+	if (tableColumns == NULL)
 	{
-		/* no generated columns in this table */
+		/* no generated or identity columns in this table */
 		return true;
 	}
 
@@ -2757,9 +2751,16 @@ markGeneratedColumnsFromStatement(GeneratedColumnsCache *cache,
 		{
 			LogicalMessageAttribute *attr = &(tuple->attributes.array[c]);
 
-			if (isGeneratedColumn(generatedColumns, attr->attname))
+			char attnameNormalized[PG_NAMEDATALEN] = { 0 };
+			NORMALIZED_PG_NAMEDATA_COPY(attnameNormalized, attr->attname);
+
+			GeneratedColumnSet *entry = NULL;
+			HASH_FIND_STR(tableColumns, attnameNormalized, entry);
+
+			if (entry != NULL)
 			{
-				attr->isgenerated = true;
+				attr->isidentityalways = entry->isidentityalways;
+				attr->isgenerated = !entry->isidentityalways;
 			}
 		}
 	}

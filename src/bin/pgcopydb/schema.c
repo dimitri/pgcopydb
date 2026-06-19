@@ -954,7 +954,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                         format('%I', attname) as attname, "
 		"                         i.indrelid is not null as attisprimary, "
 		"                         ri.indrelid is not null as attisreplident, "
-		"						  col.is_generated = 'ALWAYS' as attisgenerated "
+		"						  col.is_generated = 'ALWAYS' as attisgenerated, "
+		"                         coalesce(a.attidentity, '') as attidentity "
 		"                    from pg_attribute a "
 		"                         left join pg_index i "
 		"                                on i.indrelid = a.attrelid "
@@ -1047,7 +1048,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                         format('%I', attname) as attname, "
 		"                         i.indrelid is not null as attisprimary, "
 		"                         ri.indrelid is not null as attisreplident, "
-		"						  col.is_generated = 'ALWAYS' as attisgenerated "
+		"						  col.is_generated = 'ALWAYS' as attisgenerated, "
+		"                         coalesce(a.attidentity, '') as attidentity "
 		"                    from pg_attribute a "
 		"                         left join pg_index i "
 		"                                on i.indrelid = a.attrelid "
@@ -1142,7 +1144,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                         format('%I', attname) as attname, "
 		"                         i.indrelid is not null as attisprimary, "
 		"                         ri.indrelid is not null as attisreplident, "
-		"						  col.is_generated = 'ALWAYS' as attisgenerated "
+		"						  col.is_generated = 'ALWAYS' as attisgenerated, "
+		"                         coalesce(a.attidentity, '') as attidentity "
 		"                    from pg_attribute a "
 		"                         left join pg_index i "
 		"                                on i.indrelid = a.attrelid "
@@ -1250,7 +1253,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                         format('%I', attname) as attname, "
 		"                         i.indrelid is not null as attisprimary, "
 		"                         ri.indrelid is not null as attisreplident, "
-		"						  col.is_generated = 'ALWAYS' as attisgenerated "
+		"						  col.is_generated = 'ALWAYS' as attisgenerated, "
+		"                         coalesce(a.attidentity, '') as attidentity "
 		"                    from pg_attribute a "
 		"                         left join pg_index i "
 		"                                on i.indrelid = a.attrelid "
@@ -1348,7 +1352,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                         format('%I', attname) as attname, "
 		"                         i.indrelid is not null as attisprimary, "
 		"                         ri.indrelid is not null as attisreplident, "
-		"						  col.is_generated = 'ALWAYS' as attisgenerated "
+		"						  col.is_generated = 'ALWAYS' as attisgenerated, "
+		"                         coalesce(a.attidentity, '') as attidentity "
 		"                    from pg_attribute a "
 		"                         left join pg_index i "
 		"                                on i.indrelid = a.attrelid "
@@ -5161,6 +5166,9 @@ parseAttributesArray(SourceTable *table, JSON_Value *json)
 		attr->attisprimary = json_object_get_boolean(jsAttr, "attisprimary");
 		attr->attisreplident = json_object_get_boolean(jsAttr, "attisreplident");
 		attr->attisgenerated = json_object_get_boolean(jsAttr, "attisgenerated");
+
+		const char *identity = json_object_get_string(jsAttr, "attidentity");
+		attr->attidentity = (identity != NULL && identity[0] != '\0') ? identity[0] : '\0';
 	}
 
 	return true;
