@@ -3560,6 +3560,21 @@ prepareFilters(PGSQL *pgsql, SourceFilters *filters)
 		return false;
 	}
 
+	/*
+	 * Resolve and normalise every filter name against the live source
+	 * catalogs before using them in temp-table uploads or pg_dump args.
+	 * The function is idempotent: it sets filters->normalized = true on
+	 * first success and returns immediately on subsequent calls.
+	 */
+	if (!filters->normalized)
+	{
+		if (!filters_validate_and_normalize(pgsql, filters))
+		{
+			log_error("Failed to validate and normalize filter names");
+			return false;
+		}
+	}
+
 	/* if the filters have already been prepared, we're good */
 	if (filters->prepared)
 	{
