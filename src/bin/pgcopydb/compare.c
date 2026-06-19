@@ -659,7 +659,7 @@ compare_schemas_table_hook(void *ctx, SourceTable *sourceTable)
 				  "internal target catalogs",
 				  sourceTable->nspname,
 				  sourceTable->relname);
-
+		free(targetTable);
 		return false;
 	}
 
@@ -668,6 +668,8 @@ compare_schemas_table_hook(void *ctx, SourceTable *sourceTable)
 		++context->diffCount;
 		log_error("Failed to find table %s in target database",
 				  sourceTable->qname);
+		free(targetTable);
+		return true;
 	}
 
 	/* now fetch table attributes lists */
@@ -677,8 +679,11 @@ compare_schemas_table_hook(void *ctx, SourceTable *sourceTable)
 		log_error("Failed to fetch table %s attribute list, "
 				  "see above for details",
 				  sourceTable->qname);
+		free(targetTable);
 		return false;
 	}
+
+	int diffsBefore = context->diffCount;
 
 	/* check table columns */
 	if (sourceTable->attributes.count != targetTable->attributes.count)
@@ -688,32 +693,58 @@ compare_schemas_table_hook(void *ctx, SourceTable *sourceTable)
 				  sourceTable->qname,
 				  sourceTable->attributes.count,
 				  targetTable->attributes.count);
+
+		/*
+		 * TODO: a future improvement could let the caller choose a
+		 * reconciliation strategy — for example, allowing extra columns on the
+		 * target (added post-migration) to be ignored.  For now we match
+		 * columns by name so the caller still learns about individual missing
+		 * columns even when the total counts differ.
+		 */
 	}
 
-	for (int c = 0; c < sourceTable->attributes.count; c++)
+	/*
+	 * Compare columns by name rather than by position.  We scan the target
+	 * attribute list for each source column (N*M loop).  This is correct when
+	 * column order or column sets differ, and is fast enough because tables
+	 * have a small, bounded number of attributes in practice.
+	 *
+	 * A cross-database SQLite JOIN (via ATTACH) could do this in a single
+	 * query, but it would require exposing the catalog file path and managing
+	 * an ATTACH/DETACH around the lookup; the extra complexity is not worth it
+	 * given the small N.
+	 */
+	for (int s = 0; s < sourceTable->attributes.count; s++)
 	{
-		char *srcAttName = sourceTable->attributes.array[c].attname;
-		char *tgtAttName = targetTable->attributes.array[c].attname;
+		SourceTableAttribute *srcAttr = &sourceTable->attributes.array[s];
+		SourceTableAttribute *tgtAttr = NULL;
 
-		if (!streq(srcAttName, tgtAttName))
+		for (int t = 0; t < targetTable->attributes.count; t++)
+		{
+			if (streq(srcAttr->attname, targetTable->attributes.array[t].attname))
+			{
+				tgtAttr = &targetTable->attributes.array[t];
+				break;
+			}
+		}
+
+		if (tgtAttr == NULL)
 		{
 			++context->diffCount;
-			log_error("Table %s attribute number %d "
-					  "has name \"%s\" (%d) on source and "
-					  "has name \"%s\" (%d) on target",
+			log_error("Table %s column \"%s\" exists on source but not on target",
 					  sourceTable->qname,
-					  c,
-					  srcAttName,
-					  sourceTable->attributes.array[c].attnum,
-					  tgtAttName,
-					  targetTable->attributes.array[c].attnum);
+					  srcAttr->attname);
 		}
 	}
 
+	if (context->diffCount == diffsBefore)
+	{
+		log_notice("Matched table %s with %d columns ok",
+				   sourceTable->qname,
+				   sourceTable->attributes.count);
+	}
 
-	log_notice("Matched table %s with %d columns ok",
-			   sourceTable->qname,
-			   sourceTable->attributes.count);
+	free(targetTable);
 
 	return true;
 }
@@ -744,7 +775,7 @@ compare_schemas_index_hook(void *ctx, SourceIndex *sourceIndex)
 				  "internal target catalogs",
 				  sourceIndex->indexNamespace,
 				  sourceIndex->indexRelname);
-
+		free(targetIndex);
 		return false;
 	}
 
@@ -753,7 +784,11 @@ compare_schemas_index_hook(void *ctx, SourceIndex *sourceIndex)
 		++context->diffCount;
 		log_error("Failed to find index %s in target database",
 				  sourceIndex->indexQname);
+		free(targetIndex);
+		return true;
 	}
+
+	int diffsBefore = context->diffCount;
 
 	if (!streq(sourceIndex->indexNamespace, targetIndex->indexNamespace) ||
 		!streq(sourceIndex->indexRelname, targetIndex->indexRelname))
@@ -837,11 +872,15 @@ compare_schemas_index_hook(void *ctx, SourceIndex *sourceIndex)
 				 targetIndex->constraintDef);
 	}
 
+	if (context->diffCount == diffsBefore)
+	{
+		log_notice("Matched index %s ok (%s, %s)",
+				   sourceIndex->indexQname,
+				   sourceIndex->isPrimary ? "primary" : "not primary",
+				   sourceIndex->isUnique ? "unique" : "not unique");
+	}
 
-	log_notice("Matched index %s ok (%s, %s)",
-			   sourceIndex->indexQname,
-			   sourceIndex->isPrimary ? "primary" : "not primary",
-			   sourceIndex->isUnique ? "unique" : "not unique");
+	free(targetIndex);
 
 	return true;
 }
@@ -873,7 +912,7 @@ compare_schemas_seq_hook(void *ctx, SourceSequence *sourceSeq)
 				  "internal target catalogs",
 				  sourceSeq->nspname,
 				  sourceSeq->relname);
-
+		free(targetSeq);
 		return false;
 	}
 
@@ -882,7 +921,11 @@ compare_schemas_seq_hook(void *ctx, SourceSequence *sourceSeq)
 		++context->diffCount;
 		log_error("Failed to find seq %s in target database",
 				  sourceSeq->qname);
+		free(targetSeq);
+		return true;
 	}
+
+	int diffsBefore = context->diffCount;
 
 	if (sourceSeq->lastValue != targetSeq->lastValue)
 	{
@@ -902,10 +945,14 @@ compare_schemas_seq_hook(void *ctx, SourceSequence *sourceSeq)
 				  targetSeq->isCalled ? "yes" : "no");
 	}
 
-	log_notice("Matched sequence %s (last value %lld)",
-			   sourceSeq->qname,
-			   (long long) sourceSeq->lastValue);
+	if (context->diffCount == diffsBefore)
+	{
+		log_notice("Matched sequence %s (last value %lld)",
+				   sourceSeq->qname,
+				   (long long) sourceSeq->lastValue);
+	}
 
+	free(targetSeq);
 
 	return true;
 }
