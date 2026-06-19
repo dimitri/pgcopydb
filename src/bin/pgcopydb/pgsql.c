@@ -5693,6 +5693,19 @@ typedef struct FilterNormalizeContext
  * parseFilterNormalize processes one (or more, in non-single-row mode) result
  * rows from the validation query and writes the canonical names back into the
  * SourceFilters struct.
+ *
+ * Column layout:
+ *   0  kind            ('schema' | 'table')
+ *   1  input           (user-supplied name, used as the match key)
+ *   2  is_include_only (boolean: true = include-only list, false = exclude list)
+ *   3  nspname         (NULL when not found)
+ *   4  relname         (NULL when not a table hit, or not found)
+ *   5  quoted_nspname  (quote_ident output; NULL when nspname is NULL)
+ *   6  quoted_relname  (quote_ident output; NULL when relname is NULL)
+ *
+ * NULL nspname means the object was not found in the catalog.  For include-only
+ * entries that is a hard error.  For exclude entries it is a no-op (pg_dump
+ * silently ignores exclusion patterns that match nothing).
  */
 static void
 parseFilterNormalize(void *ctx, PGresult *result)
@@ -5716,20 +5729,30 @@ parseFilterNormalize(void *ctx, PGresult *result)
 	{
 		char *kind = PQgetvalue(result, row, 0);
 		char *input = PQgetvalue(result, row, 1);
-		bool nspIsNull = PQgetisnull(result, row, 2);
-		char *nspname = nspIsNull ? NULL : PQgetvalue(result, row, 2);
-		bool relIsNull = PQgetisnull(result, row, 3);
-		char *relname = relIsNull ? NULL : PQgetvalue(result, row, 3);
-		char *quotedNsp = PQgetisnull(result, row, 4) ? NULL : PQgetvalue(result, row, 4);
-		char *quotedRel = PQgetisnull(result, row, 5) ? NULL : PQgetvalue(result, row, 5);
+		bool isIncludeOnly = strcmp(PQgetvalue(result, row, 2), "t") == 0;
+		bool nspIsNull = PQgetisnull(result, row, 3);
+		char *nspname = nspIsNull ? NULL : PQgetvalue(result, row, 3);
+		bool relIsNull = PQgetisnull(result, row, 4);
+		char *relname = relIsNull ? NULL : PQgetvalue(result, row, 4);
+		char *quotedNsp = PQgetisnull(result, row, 5) ? NULL : PQgetvalue(result, row, 5);
+		char *quotedRel = PQgetisnull(result, row, 6) ? NULL : PQgetvalue(result, row, 6);
 
 		if (nspIsNull)
 		{
-			log_error("Failed to find %s \"%s\" in the source database catalogs; "
-					  "check that the name exists and is correctly quoted "
-					  "(uppercase and special characters require double-quotes)",
-					  kind, input);
-			++context->errorCount;
+			if (isIncludeOnly)
+			{
+				log_error("Failed to find %s \"%s\" in the source database catalogs; "
+						  "check that the name exists and is correctly quoted "
+						  "(uppercase and special characters require double-quotes)",
+						  kind, input);
+				++context->errorCount;
+			}
+			else
+			{
+				log_notice("Exclude filter %s \"%s\" does not exist in the source "
+						   "database — exclusion is a no-op",
+						   kind, input);
+			}
 			continue;
 		}
 
@@ -5784,7 +5807,7 @@ parseFilterNormalize(void *ctx, PGresult *result)
 						strlcpy(table->nspname, nspname, sizeof(table->nspname));
 						strlcpy(table->relname, relname, sizeof(table->relname));
 
-						(void) quotedRel; /* used only for logging if needed */
+						(void) quotedRel;
 					}
 				}
 			}
@@ -5800,8 +5823,13 @@ parseFilterNormalize(void *ctx, PGresult *result)
  *   schemas  → to_regnamespace()  → returns nspname + quote_ident(nspname)
  *   tables   → to_regclass()      → returns nspname + relname (from pg_class)
  *
- * Any entry that produces NULL (object not found) is reported as an error and
- * the function returns false.  On success every SourceFilterSchema gets:
+ * A NULL result (object not found) is treated differently depending on the
+ * filter list:
+ *
+ *   include-only lists  → hard error; the copy would silently include nothing
+ *   exclude lists       → notice + no-op (pg_dump ignores unknown patterns)
+ *
+ * On success every SourceFilterSchema gets:
  *
  *   .nspname         – bare name as stored in pg_namespace (canonical)
  *   .restoreListName – quote_ident(nspname) ready for pg_dump/pg_restore args
@@ -5836,6 +5864,30 @@ filters_validate_and_normalize(PGSQL *pgsql, SourceFilters *filters)
 		return true;
 	}
 
+	/*
+	 * Pre-initialize every schema's restoreListName with a synthetic
+	 * double-quoted form so that exclude entries which are not found in the
+	 * catalog still produce a valid (if harmless) pg_dump argument instead of
+	 * an empty string.  The catalog query below will overwrite this with the
+	 * proper quote_ident() output for schemas that do exist.
+	 */
+	SourceFilterSchemaList *allSchemaLists[2] = {
+		&filters->includeOnlySchemaList,
+		&filters->excludeSchemaList
+	};
+
+	for (int li = 0; li < 2; li++)
+	{
+		for (int i = 0; i < allSchemaLists[li]->count; i++)
+		{
+			SourceFilterSchema *schema = &allSchemaLists[li]->array[i];
+
+			sformat(schema->restoreListName,
+					sizeof(schema->restoreListName),
+					"\"%s\"", schema->nspname);
+		}
+	}
+
 	PQExpBuffer query = createPQExpBuffer();
 
 	if (query == NULL)
@@ -5850,12 +5902,16 @@ filters_validate_and_normalize(PGSQL *pgsql, SourceFilters *filters)
 	 * Schema branch: resolve every schema name via to_regnamespace().
 	 * The user may write either a bare name (case-insensitive, PostgreSQL
 	 * will fold to lowercase) or a double-quoted name (case-sensitive).
+	 *
+	 * The is_include_only column is true for includeOnlySchemaList entries
+	 * (li == 0) and false for excludeSchemaList entries (li == 1).
 	 */
 	if (totalSchemas > 0)
 	{
 		appendPQExpBufferStr(query,
 							 "SELECT 'schema'::text AS kind,"
 							 " v.input,"
+							 " v.is_include_only,"
 							 " n.nspname,"
 							 " NULL::name AS relname,"
 							 " quote_ident(n.nspname) AS quoted_nspname,"
@@ -5871,6 +5927,8 @@ filters_validate_and_normalize(PGSQL *pgsql, SourceFilters *filters)
 
 		for (int li = 0; li < 2; li++)
 		{
+			const char *boolLit = (li == 0) ? "true" : "false";
+
 			for (int i = 0; i < schemaLists[li]->count; i++)
 			{
 				if (!first)
@@ -5880,13 +5938,14 @@ filters_validate_and_normalize(PGSQL *pgsql, SourceFilters *filters)
 
 				appendPQExpBufferChar(query, '(');
 				appendStringLiteralPub(query, schemaLists[li]->array[i].nspname);
+				appendPQExpBuffer(query, ",%s", boolLit);
 				appendPQExpBufferChar(query, ')');
 				first = false;
 			}
 		}
 
 		appendPQExpBufferStr(query,
-							 ") AS v(input)"
+							 ") AS v(input, is_include_only)"
 							 " LEFT JOIN pg_namespace n"
 							 " ON n.oid = to_regnamespace(v.input)");
 
@@ -5900,6 +5959,8 @@ filters_validate_and_normalize(PGSQL *pgsql, SourceFilters *filters)
 	 * correctly round-trips even names that contain internal double-quote
 	 * characters because parse_filter_quoted_table_name() preserves the "" SQL
 	 * escaping when it strips the outer quotes.
+	 *
+	 * The is_include_only column is true only for includeOnlyTableList (li == 0).
 	 */
 	if (totalTables > 0)
 	{
@@ -5911,6 +5972,7 @@ filters_validate_and_normalize(PGSQL *pgsql, SourceFilters *filters)
 		appendPQExpBufferStr(query,
 							 "SELECT 'table'::text AS kind,"
 							 " v.input,"
+							 " v.is_include_only,"
 							 " n.nspname,"
 							 " c.relname,"
 							 " quote_ident(n.nspname) AS quoted_nspname,"
@@ -5928,6 +5990,8 @@ filters_validate_and_normalize(PGSQL *pgsql, SourceFilters *filters)
 
 		for (int li = 0; li < 4; li++)
 		{
+			const char *boolLit = (li == 0) ? "true" : "false";
+
 			for (int i = 0; i < tableLists[li]->count; i++)
 			{
 				SourceFilterTable *table = &tableLists[li]->array[i];
@@ -5944,13 +6008,14 @@ filters_validate_and_normalize(PGSQL *pgsql, SourceFilters *filters)
 
 				appendPQExpBufferChar(query, '(');
 				appendStringLiteralPub(query, tableInput);
+				appendPQExpBuffer(query, ",%s", boolLit);
 				appendPQExpBufferChar(query, ')');
 				first = false;
 			}
 		}
 
 		appendPQExpBufferStr(query,
-							 ") AS v(input)"
+							 ") AS v(input, is_include_only)"
 							 " LEFT JOIN pg_class c"
 							 " ON c.oid = to_regclass(v.input)"
 							 " LEFT JOIN pg_namespace n"
