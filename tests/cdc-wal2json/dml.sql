@@ -105,3 +105,29 @@ begin;
 update single_column_table set id = id;
 update multi_column_table set id = id, name = name, email = email;
 commit;
+
+--
+-- See https://github.com/dimitri/pgcopydb/issues/968
+-- Double precision values require 17 significant digits to round-trip without
+-- loss.  The previous %f format emitted only 6 decimal places.
+--
+begin;
+
+insert into float8_precision_test(id, val) values
+(1, -216237.00000035969),
+(2,  14.949999999999999),
+(3,  1.0);
+
+commit;
+
+begin;
+
+update float8_precision_test set val = 3.141592653589793 where id = 1;
+
+commit;
+
+begin;
+
+delete from float8_precision_test where id = 2;
+
+commit;

@@ -15,6 +15,9 @@ UPDATE "public"."generated_column_test" SET "name" = $1, "greet_hello" = DEFAULT
 DELETE FROM "public"."generated_column_test" WHERE "id" = $1
 INSERT INTO "public"."single_column_table" ("id") overriding system value VALUES ($1), ($2)
 INSERT INTO "public"."multi_column_table" ("id", "name", "email") overriding system value VALUES ($1, $2, $3), ($4, $5, $6)
+INSERT INTO "public"."float8_precision_test" ("id", "val") overriding system value VALUES ($1, $2), ($3, $4), ($5, $6)
+UPDATE "public"."float8_precision_test" SET "val" = $1 WHERE "id" = $2
+DELETE FROM "public"."float8_precision_test" WHERE "id" = $1
 TRUNCATE ONLY "Sp1eCial .Char"."source1testing"
 
 INSERT INTO "Sp1eCial .Char"."source1testing" ("s0", "s""1") overriding system value VALUES ($1, $2), ($3, $4), ($5, $6), ($7, $8), ($9, $10)
