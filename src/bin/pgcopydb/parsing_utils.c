@@ -809,7 +809,9 @@ buildPostgresURIfromPieces(URIParams *uriParams, char **pguri)
 		}
 		else
 		{
-			log_warn("buildPostgresURIfromPieces: %s is NULL", keyword);
+			log_debug("buildPostgresURIfromPieces: skipping parameter \"%s\" "
+					  "with empty or NULL value",
+					  keyword != NULL ? keyword : "(null)");
 		}
 	}
 

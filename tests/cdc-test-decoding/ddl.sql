@@ -217,3 +217,21 @@ create table xpto2 (
 );
 
 commit;
+
+--
+-- See https://github.com/dimitri/pgcopydb/issues/844
+-- CDC UPDATE fails for GENERATED ALWAYS AS IDENTITY columns
+--
+-- id_col is a non-PK GENERATED ALWAYS AS IDENTITY column: UPDATE must not
+-- include it in the SET clause (PostgreSQL rejects "SET id_col = $N").
+--
+begin;
+
+create table identity_column_test
+(
+    pk_col bigint primary key,
+    id_col integer generated always as identity,
+    name   text
+);
+
+commit;

@@ -321,7 +321,8 @@ bool validate_connection_string(const char *connectionString);
 
 bool pgsql_lock_table(PGSQL *pgsql, const char *qname, const char *lockmode);
 
-bool pgsql_truncate(PGSQL *pgsql, const char *qname, char relkind);
+bool pgsql_truncate(PGSQL *pgsql, const char *qname, char relkind,
+					const char *datname);
 
 typedef struct CopyArgs
 {
@@ -331,6 +332,7 @@ typedef struct CopyArgs
 	char *dstQname;
 	char *dstAttrList;
 	char *logCommand;
+	char *datname;
 	bool truncate;
 	bool freeze;
 	bool useCopyBinary;
@@ -549,7 +551,11 @@ bool pgsql_replication_slot_exists(PGSQL *pgsql,
 
 bool pgsql_drop_replication_slot(PGSQL *pgsql, const char *slotName);
 
-bool pgsql_create_publication(PGSQL *pgsql, const char *pubName);
+/* Forward declaration; full definition in filtering.h */
+struct SourceFilters;
+
+bool pgsql_create_publication(PGSQL *pgsql, const char *pubName,
+							  struct SourceFilters *filters);
 bool pgsql_drop_publication(PGSQL *pgsql, const char *pubName);
 
 bool pgsql_role_exists(PGSQL *pgsql, const char *roleName, bool *exists);

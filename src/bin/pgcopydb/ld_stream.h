@@ -119,7 +119,8 @@ typedef struct LogicalMessageAttribute
 {
 	char *attname; /* malloc'ed area */
 
-	bool isgenerated;
+	bool isgenerated;        /* GENERATED ALWAYS AS (expr) stored column */
+	bool isidentityalways;   /* GENERATED ALWAYS AS IDENTITY column */
 } LogicalMessageAttribute;
 
 typedef struct LogicalMessageAttributeArray
@@ -300,6 +301,7 @@ typedef struct GeneratedColumnsCache_Lookup
 typedef struct GeneratedColumnSet
 {
 	char attname[PG_NAMEDATALEN];
+	bool isidentityalways;       /* true when GENERATED ALWAYS AS IDENTITY */
 
 	UT_hash_handle hh;           /* makes this structure hashable */
 } GeneratedColumnSet;
@@ -649,6 +651,19 @@ struct StreamSpecs
 	 */
 	char coordHost[256];
 	int coordPort;
+
+	/*
+	 * User-specified source filters.  For pgoutput the publication is created
+	 * with a filter-aware FOR TABLE list; for wal2json the filter-tables (and
+	 * optionally add-tables) plugin option is extended accordingly.
+	 */
+	SourceFilters filters;
+
+	/* Stable buffer for the dynamically-built wal2json filter-tables value */
+	char wal2jsonFilterTables[4096];
+
+	/* Stable buffer for the dynamically-built wal2json add-tables value */
+	char wal2jsonAddTables[4096];
 };
 
 /* ld_stream.c */
@@ -664,7 +679,8 @@ bool stream_init_specs(StreamSpecs *specs,
 					   DatabaseCatalog *replayDB,
 					   bool stdIn,
 					   bool stdOut,
-					   bool logSQL);
+					   bool logSQL,
+					   SourceFilters *filters);
 
 bool stream_init_for_mode(StreamSpecs *specs, LogicalStreamMode mode);
 

@@ -107,7 +107,7 @@ copydb_init_workdir(CopyDataSpec *copySpecs,
 		return false;
 	}
 
-	log_info("Using work dir \"%s\"", cfPaths->topdir);
+	log_debug("Using work dir \"%s\"", cfPaths->topdir);
 
 	/*
 	 * Some inspection commands piggy-back on the work directory that has been
@@ -535,6 +535,7 @@ copydb_init_specs(CopyDataSpec *specs,
 		.splitMaxParts = options->splitMaxParts,
 		.estimateTableSizes = options->estimateTableSizes,
 
+		.preDataQueue = { NULL, -1 },
 		.vacuumQueue = { NULL, -1 },
 		.indexQueue = { NULL, -1 },
 
@@ -633,6 +634,7 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
 
 		.section = specs->section,
 		.resume = specs->resume,
+		.allDatabases = specs->allDatabases,
 
 		.sourceTable = source,
 		.summary = { 0 },
