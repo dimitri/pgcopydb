@@ -898,6 +898,8 @@ pg_restore_db(PostgresPaths *pgPaths,
 
 	char command[BUFSIZE] = { 0 };
 
+	IntString optJobsStr = { 0 };
+
 	char *PGPASSWORD = NULL;
 	bool pgpassword_found_in_env = env_exists("PGPASSWORD");
 
@@ -937,7 +939,7 @@ pg_restore_db(PostgresPaths *pgPaths,
 	}
 	else
 	{
-		IntString optJobsStr = intToString(options.jobs);
+		optJobsStr = intToString(options.jobs);
 		args[argsIndex++] = "--jobs";
 		args[argsIndex++] = optJobsStr.strValue;
 	}

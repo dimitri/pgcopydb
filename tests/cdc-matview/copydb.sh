@@ -19,32 +19,27 @@ pgcopydb ping
 # Build the source schema (table + matview with unique index for CONCURRENT).
 psql -a -d "${PGCOPYDB_SOURCE_PGURI}" -1 -f /usr/src/pgcopydb/source.sql
 
-# Build the target schema: same table + matview, initially empty.
-psql -a -d "${PGCOPYDB_TARGET_PGURI}" -1 -f /usr/src/pgcopydb/target.sql
-
-# Create the replication slot before the initial copy.
+# Take a snapshot and create the replication slot, then clone the source to
+# the target.  pgcopydb clone copies the schema (including the materialized
+# view definition and its initial data) and the table rows in one step.
 coproc ( pgcopydb snapshot --follow --plugin test_decoding )
 
 sleep 1
 
 pgcopydb stream setup
-pgcopydb copy table-data
-
-# Refresh mv1 on target to match source after the initial data copy.
-# pgcopydb copy table-data copies src rows but not materialized view data.
-psql -a -d "${PGCOPYDB_TARGET_PGURI}" -c "REFRESH MATERIALIZED VIEW mv1"
+pgcopydb clone
 
 kill -TERM ${COPROC_PID}
 wait ${COPROC_PID}
 
-# Confirm initial copy: source mv1 = target mv1.
+# Confirm initial clone: source mv1 = target mv1.
 src_initial=$(psql -AtqX -d "${PGCOPYDB_SOURCE_PGURI}" \
                    -c 'select count(*) from mv1')
 tgt_initial=$(psql -AtqX -d "${PGCOPYDB_TARGET_PGURI}" \
                    -c 'select count(*) from mv1')
 
 if [ "${src_initial}" != "${tgt_initial}" ]; then
-    echo "FAIL: initial copy matview row counts differ " \
+    echo "FAIL: initial clone matview row counts differ " \
          "(src=${src_initial}, tgt=${tgt_initial})"
     exit 1
 fi
