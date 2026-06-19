@@ -27,3 +27,6 @@ INSERT INTO public.xpto2 (toasted_col1, toasted_col2) overriding system value VA
 INSERT INTO public.identity_column_test (pk_col, id_col, name) overriding system value VALUES ($1, $2, $3), ($4, $5, $6)
 UPDATE public.identity_column_test SET name = $1 WHERE pk_col = $2
 DELETE FROM public.identity_column_test WHERE pk_col = $1
+INSERT INTO public.quote_escaping_test (id, varchar_col, text_col) overriding system value VALUES ($1, $2, $3), ($4, $5, $6)
+UPDATE public.quote_escaping_test SET varchar_col = $1, text_col = $2 WHERE id = $3
+DELETE FROM public.quote_escaping_test WHERE id = $1

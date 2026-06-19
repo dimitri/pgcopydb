@@ -179,3 +179,28 @@ begin;
 delete from identity_column_test where pk_col = 2;
 
 commit;
+
+--
+-- See https://github.com/dimitri/pgcopydb/issues/969
+-- Single-quote escaping: VARCHAR columns with embedded quotes, and values
+-- whose last character is a single-quote.
+--
+begin;
+
+insert into quote_escaping_test(id, varchar_col, text_col) values
+(1, 'It''s a varchar', 'It''s a text'),
+(2, 'trailing quote''', 'also trailing''');
+
+commit;
+
+begin;
+
+update quote_escaping_test set varchar_col = 'updated ''varchar' where id = 1;
+
+commit;
+
+begin;
+
+delete from quote_escaping_test where id = 2;
+
+commit;

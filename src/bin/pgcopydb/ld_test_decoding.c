@@ -876,11 +876,6 @@ parseNextColumn(TestDecodingColumns *cols,
 
 	sformat(typname, sizeof(typname), "%.*s", typLen, typStart);
 
-	if (streq(typname, "text"))
-	{
-		cols->oid = TEXTOID;
-	}
-
 	cols->colnameStart = ptr;
 	cols->colnameLen = typA - ptr;
 
@@ -899,6 +894,16 @@ parseNextColumn(TestDecodingColumns *cols,
 	if (*ptr == '\'')
 	{
 		cols->isQuoted = true;
+
+		/*
+		 * Set oid to TEXTOID for any quoted string value, regardless of the
+		 * declared SQL type.  test_decoding uses SQL single-quote escaping
+		 * (doubling '' to represent a literal ') for all quoted types —
+		 * text, varchar, bpchar, name, etc.  The listToTuple() function
+		 * checks oid == TEXTOID to decide whether to unescape those doubled
+		 * single-quotes before storing the value.
+		 */
+		cols->oid = TEXTOID;
 
 		/* skip the opening single-quote now */
 		char *cur = ptr + 1;
@@ -1098,8 +1103,16 @@ listToTuple(LogicalMessageTuple *tuple, TestDecodingColumns *cols, int count)
 				char *ptr = cur->valueStart + pidx;
 				char *nxt = cur->valueStart + pidx + 1;
 
-				/* unescape the single-quotes */
-				if (*ptr == '\'' && *nxt == '\'')
+				/*
+				 * Unescape doubled single-quotes ('' → '), but only when
+				 * the second quote is not the closing delimiter of the
+				 * value.  Without the bounds check, a value ending in a
+				 * single-quote (e.g. "test'", encoded as 'test''' in the
+				 * stream) would have its final character silently dropped:
+				 * the trailing ' would be consumed as the first half of an
+				 * escaped pair rather than treated as a literal character.
+				 */
+				if (*ptr == '\'' && *nxt == '\'' && pidx < cur->valueLen - 1)
 				{
 					continue;
 				}

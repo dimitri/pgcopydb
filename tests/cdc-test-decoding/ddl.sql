@@ -219,6 +219,27 @@ create table xpto2 (
 commit;
 
 --
+-- See https://github.com/dimitri/pgcopydb/issues/969
+-- Single-quote escaping for varchar/text columns via test_decoding.
+-- Two bugs were fixed:
+--   1. VARCHAR (and other non-text quoted types) had their '' pairs left
+--      doubled in the generated SQL instead of being unescaped to a single '.
+--   2. A value ending in a single-quote had its last character silently
+--      dropped because the unescaping loop consumed the closing ' as the
+--      first half of a doubled-quote pair.
+--
+begin;
+
+create table if not exists quote_escaping_test
+(
+    id bigint primary key,
+    varchar_col varchar(100),
+    text_col text
+);
+
+commit;
+
+--
 -- See https://github.com/dimitri/pgcopydb/issues/844
 -- CDC UPDATE fails for GENERATED ALWAYS AS IDENTITY columns
 --
