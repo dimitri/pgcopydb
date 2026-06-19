@@ -466,6 +466,11 @@ static char *targetDBcreateDDLs[] = {
 	"  oid integer primary key, conname text, "
 	"  indexoid references s_index(oid), "
 	"  condeferrable bool, condeferred bool, sql text "
+	")",
+
+	"create table s_matview("
+	"  nspname text not null, relname text not null, ispopulated bool, "
+	"  primary key(nspname, relname)"
 	")"
 };
 
@@ -511,6 +516,7 @@ static char *replayDBcreateDDLs[] = {
 	"create table replay("
 	"  id integer primary key, "
 	"  action text, xid integer, lsn integer, endlsn integer, timestamp text, "
+	"  nspname text, relname text, "
 	"  stmt_hash text references stmt(hash), stmt_args jsonb)",
 
 	"create index r_xid on replay(xid)",
@@ -581,7 +587,8 @@ static char *targetDBdropDDLs[] = {
 	"drop table if exists s_table",
 	"drop table if exists s_attr",
 	"drop table if exists s_index",
-	"drop table if exists s_constraint"
+	"drop table if exists s_constraint",
+	"drop table if exists s_matview"
 };
 
 
@@ -2465,6 +2472,62 @@ catalog_add_s_matview(DatabaseCatalog *catalog, SourceTable *table)
 	}
 
 	/* now execute the query, which does not return any row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_upsert_target_s_matview inserts or replaces a row in the target
+ * catalog's s_matview table (schema: nspname, relname, ispopulated).
+ */
+bool
+catalog_upsert_target_s_matview(DatabaseCatalog *catalog,
+								const char *nspname,
+								const char *relname,
+								bool ispopulated)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_upsert_target_s_matview: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"insert into s_matview(nspname, relname, ispopulated)"
+		" values($1, $2, $3)"
+		" on conflict(nspname, relname) do update"
+		"   set ispopulated = excluded.ispopulated";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, (char *) nspname },
+		{ BIND_PARAMETER_TYPE_TEXT, "relname", 0, (char *) relname },
+		{ BIND_PARAMETER_TYPE_INT, "ispopulated", ispopulated ? 1 : 0, NULL },
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */

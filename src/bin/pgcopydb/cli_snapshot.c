@@ -328,7 +328,8 @@ cli_create_snapshot(int argc, char **argv)
 							   createSNoptions.stdIn,
 							   createSNoptions.stdOut,
 							   logSQL,
-							   &(copySpecs.filters)))
+							   &(copySpecs.filters),
+							   &(copySpecs.catalogs.target)))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);

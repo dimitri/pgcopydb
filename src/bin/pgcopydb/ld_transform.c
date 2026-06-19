@@ -1875,6 +1875,9 @@ stream_transform_write_replay_txn(StreamSpecs *specs)
 static bool
 stream_write_insert(ReplayDBStmt *replayStmt, LogicalMessageInsert *insert)
 {
+	strlcpy(replayStmt->nspname, insert->table.nspname, sizeof(replayStmt->nspname));
+	strlcpy(replayStmt->relname, insert->table.relname, sizeof(replayStmt->relname));
+
 	/* loop over INSERT statements targeting the same table */
 	for (int s = 0; s < insert->new.count; s++)
 	{
@@ -1995,6 +1998,9 @@ stream_write_insert(ReplayDBStmt *replayStmt, LogicalMessageInsert *insert)
 static bool
 stream_write_update(ReplayDBStmt *replayStmt, LogicalMessageUpdate *update)
 {
+	strlcpy(replayStmt->nspname, update->table.nspname, sizeof(replayStmt->nspname));
+	strlcpy(replayStmt->relname, update->table.relname, sizeof(replayStmt->relname));
+
 	if (update->old.count != update->new.count)
 	{
 		log_error("Failed to write UPDATE statement "
@@ -2240,6 +2246,9 @@ stream_write_update(ReplayDBStmt *replayStmt, LogicalMessageUpdate *update)
 static bool
 stream_write_delete(ReplayDBStmt *replayStmt, LogicalMessageDelete *delete)
 {
+	strlcpy(replayStmt->nspname, delete->table.nspname, sizeof(replayStmt->nspname));
+	strlcpy(replayStmt->relname, delete->table.relname, sizeof(replayStmt->relname));
+
 	/* loop over DELETE statements targeting the same table */
 	for (int s = 0; s < delete->old.count; s++)
 	{
@@ -2341,6 +2350,9 @@ stream_write_delete(ReplayDBStmt *replayStmt, LogicalMessageDelete *delete)
 static bool
 stream_write_truncate(ReplayDBStmt *replayStmt, LogicalMessageTruncate *truncate)
 {
+	strlcpy(replayStmt->nspname, truncate->table.nspname, sizeof(replayStmt->nspname));
+	strlcpy(replayStmt->relname, truncate->table.relname, sizeof(replayStmt->relname));
+
 	PQExpBuffer buf = createPQExpBuffer();
 
 	printfPQExpBuffer(buf, "TRUNCATE ONLY %s.%s\n",

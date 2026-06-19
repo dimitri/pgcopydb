@@ -56,7 +56,8 @@ stream_init_specs(StreamSpecs *specs,
 				  bool stdin,
 				  bool stdout,
 				  bool logSQL,
-				  SourceFilters *filters)
+				  SourceFilters *filters,
+				  DatabaseCatalog *targetDB)
 {
 	/* just copy into StreamSpecs what's been initialized in copySpecs */
 	specs->mode = mode;
@@ -83,6 +84,7 @@ stream_init_specs(StreamSpecs *specs,
 	specs->sourceDB = sourceDB;
 	specs->outputDB = outputDB;
 	specs->replayDB = replayDB;
+	specs->targetDB = targetDB;
 
 	if (!catalog_init(specs->sourceDB))
 	{

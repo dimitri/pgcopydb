@@ -17,6 +17,7 @@
 
 #include "parson.h"
 
+#include "catalog.h"
 #include "cli_common.h"
 #include "cli_root.h"
 #include "copydb.h"
@@ -56,6 +57,7 @@ static bool computeTxnMetadataFilename(uint32_t xid, const char *dir, char *file
 static bool writeTxnCommitMetadata(LogicalMessageMetadata *mesg, const char *dir);
 
 static bool setupConnection(PGSQL *pgsql, StreamApplyContext *context);
+static bool stream_apply_load_target_relkinds(StreamApplyContext *context);
 
 static bool stream_apply_dml(StreamApplyContext *context, ReplayDBStmt *s);
 static bool stream_apply_transaction(StreamApplyContext *context,
@@ -715,6 +717,9 @@ stream_apply_transaction(StreamApplyContext *context,
 	bool success = true;
 	char commitTimestamp[PG_MAX_TIMESTAMP] = { 0 };
 
+	/* per-transaction pending REFRESH set (matview DML interception) */
+	TargetRelkind *pendingRefresh = NULL;
+
 	for (;;)
 	{
 		if (!ld_store_iter_replay_txn_next(&iter))
@@ -771,6 +776,65 @@ stream_apply_transaction(StreamApplyContext *context,
 		}
 
 		/* DML row (INSERT / UPDATE / DELETE / TRUNCATE) */
+
+		/*
+		 * If the target relation is a materialized view, skip the DML and
+		 * schedule a REFRESH MATERIALIZED VIEW instead.  REFRESH runs inside
+		 * the current transaction (no CONCURRENTLY), so no separate connection
+		 * is required.  We deduplicate within the transaction via pendingRefresh.
+		 */
+		if (s->action != STREAM_ACTION_TRUNCATE &&
+			context->targetRelkindCache != NULL &&
+			!IS_EMPTY_STRING_BUFFER(s->nspname))
+		{
+			TargetRelkind lookupKey = { 0 };
+			strlcpy(lookupKey.nspname, s->nspname, sizeof(lookupKey.nspname));
+			strlcpy(lookupKey.relname, s->relname, sizeof(lookupKey.relname));
+
+			unsigned keylen =
+				offsetof(TargetRelkind, relname) +
+				sizeof(lookupKey.relname) -
+				offsetof(TargetRelkind, nspname);
+
+			TargetRelkind *found = NULL;
+
+			HASH_FIND(hh, context->targetRelkindCache,
+					  lookupKey.nspname, keylen, found);
+
+			if (found != NULL && found->relkind == 'm')
+			{
+				/*
+				 * Add to pending refresh set (deduplicated by compound key).
+				 * We reuse TargetRelkind as the pending-refresh node type.
+				 */
+				TargetRelkind *pending = NULL;
+
+				HASH_FIND(hh, pendingRefresh,
+						  lookupKey.nspname, keylen, pending);
+
+				if (pending == NULL)
+				{
+					pending = (TargetRelkind *) calloc(1, sizeof(TargetRelkind));
+
+					if (pending == NULL)
+					{
+						log_error(ALLOCATION_FAILED_ERROR);
+						success = false;
+						break;
+					}
+
+					strlcpy(pending->nspname, s->nspname, sizeof(pending->nspname));
+					strlcpy(pending->relname, s->relname, sizeof(pending->relname));
+					pending->relkind = 'm';
+
+					HASH_ADD(hh, pendingRefresh, nspname, keylen, pending);
+				}
+
+				/* skip the DML execution for this row */
+				continue;
+			}
+		}
+
 		if (!stream_apply_dml(context, s))
 		{
 			/* errors have already been logged */
@@ -780,6 +844,52 @@ stream_apply_transaction(StreamApplyContext *context,
 	}
 
 	(void) ld_store_iter_replay_txn_finish(&iter);
+
+	if (!success)
+	{
+		/* free pending refresh set before returning */
+		TargetRelkind *pr, *prTmp;
+		HASH_ITER(hh, pendingRefresh, pr, prTmp)
+		{
+			HASH_DEL(pendingRefresh, pr);
+			free(pr);
+		}
+
+		(void) pgsql_execute(applyPgConn, "ROLLBACK");
+		context->transactionInProgress = false;
+		return false;
+	}
+
+	/*
+	 * Emit REFRESH MATERIALIZED VIEW for any matviews whose CDC DML was
+	 * suppressed.  REFRESH without CONCURRENTLY runs inside a transaction,
+	 * so it executes on applyPgConn before the COMMIT.
+	 */
+	{
+		TargetRelkind *pr, *prTmp;
+
+		HASH_ITER(hh, pendingRefresh, pr, prTmp)
+		{
+			char refreshSQL[BUFSIZE] = { 0 };
+
+			sformat(refreshSQL, sizeof(refreshSQL),
+					"REFRESH MATERIALIZED VIEW %s.%s",
+					pr->nspname, pr->relname);
+
+			log_info("Refreshing materialized view %s.%s (xid %u)",
+					 pr->nspname, pr->relname, xid);
+
+			if (!pgsql_execute(applyPgConn, refreshSQL))
+			{
+				log_error("Failed to refresh materialized view %s.%s",
+						  pr->nspname, pr->relname);
+				success = false;
+			}
+
+			HASH_DEL(pendingRefresh, pr);
+			free(pr);
+		}
+	}
 
 	if (!success)
 	{
@@ -1039,6 +1149,9 @@ stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
 		return true;
 	}
 
+	/* propagate targetDB from specs to context */
+	context->targetDB = specs->targetDB;
+
 	/*
 	 * Determine previousLSN (the apply cursor) before opening the CDC files
 	 * so we can select the correct starting file when file rotation has
@@ -1048,6 +1161,14 @@ stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
 	{
 		log_error("Failed to setup replication origin on the target database");
 		return false;
+	}
+
+	/* build the target relkind cache (matview detection) */
+	if (!stream_apply_load_target_relkinds(context))
+	{
+		/* non-fatal: log warning and continue without matview interception */
+		log_warn("Failed to load target relkind cache; "
+				 "CDC against materialized views will fail if encountered");
 	}
 
 	/*
@@ -1130,6 +1251,15 @@ stream_apply_cleanup(StreamApplyContext *context)
 	(void) pgsql_finish(&(context->controlPgConn));
 
 	(void) pgsql_finish(&(context->applyPgConn));
+
+	/* free the target relkind in-memory cache */
+	TargetRelkind *entry, *tmp;
+
+	HASH_ITER(hh, context->targetRelkindCache, entry, tmp)
+	{
+		HASH_DEL(context->targetRelkindCache, entry);
+		free(entry);
+	}
 
 	return true;
 }
@@ -2074,6 +2204,142 @@ stream_apply_sql(StreamApplyContext *context,
 
 			return false;
 		}
+	}
+
+	return true;
+}
+
+
+/*
+ * TargetMatviewContext is used as callback context when querying pg_class
+ * on the target to discover materialized views for the relkind cache.
+ */
+typedef struct TargetMatviewContext
+{
+	char sqlstate[6];
+
+	StreamApplyContext *applyContext;
+	bool parsedOk;
+} TargetMatviewContext;
+
+
+/*
+ * parseTargetMatviews is the pgsql_execute_with_params callback that processes
+ * each row from the pg_class matview query: inserts into the target SQLite
+ * catalog and adds to the in-memory TargetRelkind hash.
+ */
+static void
+parseTargetMatviews(void *ctx, PGresult *result)
+{
+	TargetMatviewContext *context = (TargetMatviewContext *) ctx;
+	StreamApplyContext *applyContext = context->applyContext;
+
+	int nTuples = PQntuples(result);
+
+	for (int i = 0; i < nTuples; i++)
+	{
+		char *nspname = PQgetvalue(result, i, 0);
+		char *relname = PQgetvalue(result, i, 1);
+		char *ispopstr = PQgetvalue(result, i, 2);
+		bool ispopulated = (ispopstr[0] == 't');
+
+		/* populate SQLite target catalog when available */
+		if (applyContext->targetDB != NULL &&
+			applyContext->targetDB->db != NULL)
+		{
+			if (!catalog_upsert_target_s_matview(applyContext->targetDB,
+												 nspname, relname,
+												 ispopulated))
+			{
+				log_warn("Failed to cache target matview \"%s\".\"%s\" in SQLite",
+						 nspname, relname);
+			}
+		}
+
+		/* always populate the in-memory hash */
+		TargetRelkind *entry =
+			(TargetRelkind *) calloc(1, sizeof(TargetRelkind));
+
+		if (entry == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			context->parsedOk = false;
+			return;
+		}
+
+		strlcpy(entry->nspname, nspname, sizeof(entry->nspname));
+		strlcpy(entry->relname, relname, sizeof(entry->relname));
+		entry->relkind = 'm';
+
+		unsigned keylen =
+			offsetof(TargetRelkind, relname) +
+			sizeof(entry->relname) -
+			offsetof(TargetRelkind, nspname);
+
+		HASH_ADD(hh, applyContext->targetRelkindCache, nspname, keylen, entry);
+	}
+
+	context->parsedOk = true;
+}
+
+
+/*
+ * stream_apply_load_target_relkinds queries the target database for all
+ * materialized views, populates the target SQLite catalog's s_matview table,
+ * and builds the in-memory TargetRelkind hash used during DML apply.
+ */
+static bool
+stream_apply_load_target_relkinds(StreamApplyContext *context)
+{
+	/* open/init the target SQLite catalog when provided */
+	if (context->targetDB != NULL && context->targetDB->db == NULL)
+	{
+		if (!catalog_init(context->targetDB))
+		{
+			log_warn("Failed to open target schema catalog; "
+					 "matview detection will use in-memory cache only");
+		}
+	}
+
+	char *sql =
+		"  select n.nspname, c.relname, c.relispopulated "
+		"    from pg_class c "
+		"    join pg_namespace n on n.oid = c.relnamespace "
+		"   where c.relkind = 'm' "
+		"     and n.nspname not in ('pg_catalog', 'information_schema', 'pg_toast')"
+		"   order by n.nspname, c.relname";
+
+	TargetMatviewContext matviewContext = {
+		.applyContext = context,
+		.parsedOk = false,
+	};
+
+	if (!pgsql_execute_with_params(&(context->controlPgConn), sql,
+								   0, NULL, NULL,
+								   &matviewContext, &parseTargetMatviews))
+	{
+		log_error("Failed to query target database for materialized views");
+		return false;
+	}
+
+	if (!matviewContext.parsedOk)
+	{
+		log_error("Failed to cache target materialized view metadata");
+		return false;
+	}
+
+	/* count loaded entries */
+	int count = HASH_COUNT(context->targetRelkindCache);
+
+	if (count > 0)
+	{
+		log_info("Loaded %d materialized view(s) from target schema into relkind cache",
+				 count);
+	}
+	else
+	{
+		log_debug("No materialized views found on target; "
+				  "REFRESH interception is inactive");
 	}
 
 	return true;
