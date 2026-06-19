@@ -1501,10 +1501,12 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 	if (pgsql->pgversion_num > 0 && pgsql->pgversion_num < 100000)
 	{
 		const char *old = "coalesce(a.attidentity, '') as attidentity ";
-		const char *new_sql = "'' as attidentity ";
+		const char *rep = "'' as attidentity ";
 		size_t oldLen = strlen(old);
-		size_t newLen = strlen(new_sql);
 		char *pos;
+		char *newSQL;
+		size_t prefixLen;
+		size_t totalLen;
 
 		versionedSQL = strdup(sql);
 
@@ -1514,9 +1516,20 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 
 			if (pos != NULL)
 			{
-				memmove(pos + newLen, pos + oldLen,
-						strlen(pos + oldLen) + 1);
-				memcpy(pos, new_sql, newLen);
+				prefixLen = pos - versionedSQL;
+				totalLen =
+					prefixLen + strlen(rep) + strlen(pos + oldLen) + 1;
+				newSQL = (char *) malloc(totalLen);
+
+				if (newSQL != NULL)
+				{
+					newSQL[0] = '\0';
+					strlcat(newSQL, versionedSQL, prefixLen + 1);
+					strlcat(newSQL, rep, totalLen);
+					strlcat(newSQL, pos + oldLen, totalLen);
+					free(versionedSQL);
+					versionedSQL = newSQL;
+				}
 			}
 
 			sql = versionedSQL;
