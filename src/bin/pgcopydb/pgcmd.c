@@ -407,7 +407,8 @@ pg_dump_db(PostgresPaths *pgPaths,
 	/* apply [include-only-schema] filtering */
 	for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
 	{
-		char *nspname = filters->includeOnlySchemaList.array[i].nspname;
+		char *restoreListName =
+			filters->includeOnlySchemaList.array[i].restoreListName;
 
 		/* check that we still have room for --includeOnly-schema args */
 		if (PG_CMD_MAX_ARG < (argsIndex + 2))
@@ -419,13 +420,14 @@ pg_dump_db(PostgresPaths *pgPaths,
 		}
 
 		args[argsIndex++] = "--schema";
-		args[argsIndex++] = nspname;
+		args[argsIndex++] = restoreListName;
 	}
 
 	/* apply [exclude-schema] filtering */
 	for (int i = 0; i < filters->excludeSchemaList.count; i++)
 	{
-		char *nspname = filters->excludeSchemaList.array[i].nspname;
+		char *restoreListName =
+			filters->excludeSchemaList.array[i].restoreListName;
 
 		/* check that we still have room for --exclude-schema args */
 		if (PG_CMD_MAX_ARG < (argsIndex + 6))
@@ -438,7 +440,7 @@ pg_dump_db(PostgresPaths *pgPaths,
 		}
 
 		args[argsIndex++] = "--exclude-schema";
-		args[argsIndex++] = nspname;
+		args[argsIndex++] = restoreListName;
 	}
 
 	args[argsIndex++] = "--file";
@@ -976,7 +978,8 @@ pg_restore_db(PostgresPaths *pgPaths,
 	/* apply [exclude-schema] filtering */
 	for (int i = 0; i < filters->excludeSchemaList.count; i++)
 	{
-		char *nspname = filters->excludeSchemaList.array[i].nspname;
+		char *restoreListName =
+			filters->excludeSchemaList.array[i].restoreListName;
 
 		/* check that we still have room for --exclude-schema args */
 		if (PG_CMD_MAX_ARG < (argsIndex + 2))
@@ -989,7 +992,7 @@ pg_restore_db(PostgresPaths *pgPaths,
 		}
 
 		args[argsIndex++] = "--exclude-schema";
-		args[argsIndex++] = nspname;
+		args[argsIndex++] = restoreListName;
 	}
 
 	if (listFilename != NULL)

@@ -351,3 +351,113 @@ to use this feature:
 
     Use your usual Postgres configuration editing for testing.
 
+.. _all_databases_concurrency:
+
+Cloning all databases: the ``--all-databases`` option
+------------------------------------------------------
+
+The ``--all-databases`` option to ``pgcopydb clone`` allows cloning every
+non-template user database from a source Postgres instance to a target
+instance in a single invocation. This is the equivalent of ``pg_dumpall``
+for the data phase.
+
+When ``--all-databases`` is active, ``pgcopydb`` coordinates the copy in
+three phases that run sequentially, while keeping the ``--table-jobs`` and
+``--index-jobs`` worker pools **global** — shared across all databases, not
+allocated per-database.
+
+Phase I — snapshot export and pre-data (parallel across databases)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A long-lived *snapshot holder* subprocess is forked first. It connects to
+each source database, exports one ``REPEATABLE READ`` snapshot per
+database, writes the snapshot IDs into the instance catalog, and then
+blocks on a pipe until Phase III completes. This keeps all per-database
+snapshot transactions open so that Phase I and II workers can call
+``SET TRANSACTION SNAPSHOT`` to import them for consistent reads.
+
+Once all snapshots are ready, a *pre-data supervisor* is forked. It starts
+``--table-jobs`` *pre-data workers* that each dequeue a database name from
+a shared queue, then run the full pre-data pipeline for that database:
+schema fetch from the source, ``pg_dump --pre-data``, and
+``pg_restore --pre-data`` on the target. Roles are copied once at the
+instance level before any of this begins.
+
+The process tree for this phase looks like the following::
+
+  $ pgcopydb clone --all-databases --table-jobs 4 --index-jobs 4
+   + pgcopydb snapshot holder           (blocks until Phase III done)
+   + pgcopydb pre-data supervisor
+       - pgcopydb pre-data worker       (processes db1, then db4, …)
+       - pgcopydb pre-data worker       (processes db2, then db5, …)
+       - pgcopydb pre-data worker       (processes db3, then db6, …)
+       - pgcopydb pre-data worker
+
+Phase II — global COPY, indexes, and vacuum (single shared pool)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+After all pre-data work is complete, the COPY phase begins. All tables
+from all databases are collected and sorted by size (largest first), then
+enqueued into a single global COPY queue. The ``--table-jobs`` COPY workers
+and ``--index-jobs`` index workers are each created once and serve the
+entire workload regardless of which database each table belongs to.
+
+This is the key resource-sharing optimisation: the largest tables get
+started first across database boundaries, keeping all workers busy even
+when the database sizes are very uneven.
+
+Each COPY worker maintains a small connection cache keyed by database name
+so that connections are reused when consecutive queue entries belong to the
+same database.  Index and vacuum workers open their own per-database
+connections on demand.
+
+When ``--all-databases`` is active, each DDL and DML progress log line is
+prefixed with the database name so that interleaved output from workers
+handling different databases stays distinguishable::
+
+  pagila: CREATE UNIQUE INDEX actor_pkey ON actor USING btree (actor_id)
+  f1db:   TRUNCATE ONLY "public"."constructorstandings"
+  f1db:   COPY "public"."constructorstandings"
+  chinook: VACUUM ANALYZE "public"."Track"
+
+The process tree for this phase looks like the following::
+
+   + pgcopydb global copy supervisor
+       - pgcopydb global copy queue filler  (enqueues all tables, sorted by size)
+       - pgcopydb global copy worker        (--table-jobs workers, any database)
+       - pgcopydb global copy worker
+       - pgcopydb global copy worker
+       - pgcopydb global copy worker
+   + pgcopydb global index supervisor
+       - pgcopydb index/constraints worker  (--index-jobs workers, any database)
+       - pgcopydb index/constraints worker
+       - pgcopydb index/constraints worker
+       - pgcopydb index/constraints worker
+   + pgcopydb global vacuum supervisor
+       - pgcopydb vacuum analyze worker     (--table-jobs workers, any database)
+       - pgcopydb vacuum analyze worker
+       - pgcopydb vacuum analyze worker
+       - pgcopydb vacuum analyze worker
+
+Phase III — post-data (sequential, one database at a time)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+After the global COPY phase completes, the remaining post-data work runs
+sequentially: for each database, a subprocess is forked that calls
+``pg_restore --post-data`` (triggers, rules, comments, and any objects not
+already created by the index workers) and resets sequences to match the
+source values captured during Phase I. The databases are processed one at a
+time in the order they were discovered.
+
+Once all post-data work is done, the parent closes the done-pipe to the
+snapshot holder, which then commits all its held transactions and exits.
+
+Consolidated summary
+^^^^^^^^^^^^^^^^^^^^
+
+At the end of an ``--all-databases`` run, ``pgcopydb`` prints a
+consolidated summary that aggregates timing statistics across all databases:
+COPY throughput, index build time, constraint time, VACUUM time, and total
+wall-clock duration.  Individual per-database summaries are also printed
+before the consolidated one.
+

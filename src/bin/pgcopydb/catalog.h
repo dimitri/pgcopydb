@@ -33,6 +33,7 @@ struct SQLiteQuery
  * Catalog API.
  */
 bool catalog_open(DatabaseCatalog *catalog);
+bool catalog_open_readonly(DatabaseCatalog *catalog);
 bool catalog_init(DatabaseCatalog *catalog);
 bool catalog_create_semaphore(DatabaseCatalog *catalog);
 bool catalog_attach(DatabaseCatalog *a, DatabaseCatalog *b, const char *name);
@@ -392,16 +393,22 @@ bool catalog_iter_s_seq_finish(SourceSeqIterator *iter);
 bool catalog_s_seq_fetch(SQLiteQuery *query);
 
 /*
- * Filtering is done through a single table that concatenates the Oid and
- * pg_restore archives TOC list names (restore_list_name) in such a way that we
- * can get away with a single hash-table like lookup.
+ * Filtering is done through a single table keyed by (catoid, oid) — the same
+ * object identity scheme PostgreSQL uses in pg_depend (classid + objid).
+ * catoid is the OID of the system catalog table that owns the object, fetched
+ * at runtime via catalog_fetch_catnames().
  */
+bool catalog_fetch_catnames(DatabaseCatalog *filterDB, PGSQL *pgsql);
+bool catalog_add_catname(DatabaseCatalog *catalog, uint32_t oid,
+						 const char *catname);
+
 bool catalog_prepare_filter(DatabaseCatalog *catalog,
 							bool skipExtensions,
 							bool skipCollations);
 
 typedef struct CatalogFilter
 {
+	uint32_t catoid;
 	uint32_t oid;
 	char restoreListName[RESTORE_LIST_NAMEDATALEN];
 	char kind[PG_NAMEDATALEN];
@@ -409,7 +416,12 @@ typedef struct CatalogFilter
 
 bool catalog_lookup_filter_by_oid(DatabaseCatalog *catalog,
 								  CatalogFilter *result,
-								  uint32_t oid);
+								  uint32_t catalogOid,
+								  uint32_t objectOid);
+
+bool catalog_lookup_filter_by_oid_only(DatabaseCatalog *catalog,
+									   CatalogFilter *result,
+									   uint32_t objectOid);
 
 bool catalog_lookup_filter_by_rlname(DatabaseCatalog *catalog,
 									 CatalogFilter *result,
@@ -443,6 +455,10 @@ bool catalog_iter_s_database_next(SourceDatabaseIterator *iter);
 bool catalog_iter_s_database_finish(SourceDatabaseIterator *iter);
 
 bool catalog_s_database_fetch(SQLiteQuery *query);
+
+bool catalog_update_s_database_snapshot(DatabaseCatalog *catalog,
+										const char *datname,
+										const char *snapshot);
 
 typedef bool (SourcePropertyIterFun)(void *context, SourceProperty *property);
 

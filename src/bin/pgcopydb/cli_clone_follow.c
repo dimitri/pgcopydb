@@ -16,8 +16,10 @@
 #include "copydb.h"
 #include "commandline.h"
 #include "env_utils.h"
+#include "file_utils.h"
 #include "ld_stream.h"
 #include "log.h"
+#include "multi_db.h"
 #include "parsing_utils.h"
 #include "pgsql.h"
 #include "progress.h"
@@ -66,6 +68,7 @@
 	"  --origin                      Use this Postgres replication origin node name\n" \
 	"  --endpos                      Stop replaying changes when reaching this LSN\n" \
 	"  --use-copy-binary             Use the COPY BINARY format for COPY operations\n" \
+	"  --all-databases               Clone all databases found on the source instance\n" \
 
 CommandLine clone_command =
 	make_command(
@@ -119,7 +122,364 @@ static bool start_follow_process(CopyDataSpec *copySpecs,
 
 static bool cli_clone_follow_wait_subprocess(const char *name, pid_t pid);
 
-static bool cloneDB(CopyDataSpec *copySpecs);
+
+/*
+ * alldb_timing_agg_hook aggregates per-database timing rows into the global
+ * topLevelTimingArray.  For phases that run in parallel (Phase I + TOTAL_DATA)
+ * we take the MAX of durations; for everything else we SUM.  Counts and bytes
+ * are always summed.  Pass a pointer to a bool set to true for the first
+ * database; it is set to false after the first call.
+ */
+static bool
+alldb_timing_agg_hook(void *ctx, TopLevelTiming *timing)
+{
+	bool *first = (bool *) ctx;
+
+	if (timing->section == TIMING_SECTION_UNKNOWN ||
+		timing->section >= topLevelTimingArrayCount)
+	{
+		return true;
+	}
+
+	TopLevelTiming *entry = &(topLevelTimingArray[timing->section]);
+
+	/* parallel phases: MAX duration; sequential/cumulative: SUM */
+	bool useMax = (timing->section == TIMING_SECTION_CATALOG_QUERIES ||
+				   timing->section == TIMING_SECTION_DUMP_SCHEMA ||
+				   timing->section == TIMING_SECTION_PREPARE_SCHEMA ||
+				   timing->section == TIMING_SECTION_TOTAL_DATA ||
+				   timing->section == TIMING_SECTION_TOTAL);
+
+	if (*first)
+	{
+		entry->section = timing->section;
+		entry->durationMs = timing->durationMs;
+		entry->count = timing->count;
+		entry->bytes = timing->bytes;
+		entry->startTime = timing->startTime;
+		entry->doneTime = timing->doneTime;
+	}
+	else
+	{
+		entry->count += timing->count;
+		entry->bytes += timing->bytes;
+
+		if (useMax)
+		{
+			if (timing->durationMs > entry->durationMs)
+			{
+				entry->durationMs = timing->durationMs;
+			}
+		}
+		else
+		{
+			entry->durationMs += timing->durationMs;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * cli_clone_all_databases_consolidated_summary prints a single unified summary
+ * for all databases after a successful --all-databases clone.
+ *
+ * Per-table section: one combined table with a leading "Database" column.
+ * Steps section: timings aggregated across all databases (MAX for parallel
+ * phases, SUM for sequential/cumulative ones).
+ */
+static void
+cli_clone_all_databases_consolidated_summary(CopyDataSpec *copySpecs)
+{
+	DatabaseCatalog *instanceCatalog = &copySpecs->catalogs.source;
+
+	if (!catalog_init(instanceCatalog))
+	{
+		log_warn("Could not open instance catalog for summary");
+		return;
+	}
+
+	/* First pass: count total tables and number of databases */
+	int totalTables = 0;
+	int dbCount = 0;
+
+	SourceDatabaseIterator iter1 = { .catalog = instanceCatalog };
+
+	if (!catalog_iter_s_database_init(&iter1))
+	{
+		(void) catalog_close(instanceCatalog);
+		return;
+	}
+
+	for (;;)
+	{
+		if (!catalog_iter_s_database_next(&iter1))
+		{
+			break;
+		}
+
+		SourceDatabase *db = iter1.dat;
+
+		if (db == NULL)
+		{
+			break;
+		}
+
+		dbCount++;
+
+		DatabaseCatalog dbCat = { .type = DATABASE_CATALOG_TYPE_SOURCE };
+
+		sformat(dbCat.dbfile, sizeof(dbCat.dbfile),
+				"%s/db/%s/schema/source.db",
+				copySpecs->cfPaths.topdir, db->datname);
+
+		if (!catalog_init(&dbCat))
+		{
+			continue;
+		}
+
+		CatalogCounts count = { 0 };
+
+		if (catalog_count_objects(&dbCat, &count))
+		{
+			totalTables += (int) count.tables;
+		}
+
+		(void) catalog_close(&dbCat);
+	}
+
+	(void) catalog_iter_s_database_finish(&iter1);
+
+	if (totalTables == 0 || dbCount == 0)
+	{
+		(void) catalog_close(instanceCatalog);
+		return;
+	}
+
+	/* Allocate the combined summary table */
+	SummaryTable combinedTable = { .count = totalTables };
+
+	combinedTable.array =
+		(SummaryTableEntry *) calloc(totalTables, sizeof(SummaryTableEntry));
+
+	if (combinedTable.array == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		(void) catalog_close(instanceCatalog);
+		return;
+	}
+
+	/* Reset timing globals so we aggregate from scratch */
+	summary_reset_toplevel_timings();
+
+	bool firstDb = true;
+	int tableOffset = 0;
+
+	SourceDatabaseIterator iter2 = { .catalog = instanceCatalog };
+
+	if (!catalog_iter_s_database_init(&iter2))
+	{
+		free(combinedTable.array);
+		(void) catalog_close(instanceCatalog);
+		return;
+	}
+
+	for (;;)
+	{
+		if (!catalog_iter_s_database_next(&iter2))
+		{
+			break;
+		}
+
+		SourceDatabase *db = iter2.dat;
+
+		if (db == NULL)
+		{
+			break;
+		}
+
+		CopyDataSpec dbSpecs = *copySpecs;
+
+		dbSpecs.catalogs.source.db = NULL;
+
+		sformat(dbSpecs.catalogs.source.dbfile,
+				sizeof(dbSpecs.catalogs.source.dbfile),
+				"%s/db/%s/schema/source.db",
+				copySpecs->cfPaths.topdir, db->datname);
+
+		sformat(dbSpecs.cfPaths.summaryfile,
+				sizeof(dbSpecs.cfPaths.summaryfile),
+				"%s/db/%s/summary.json",
+				copySpecs->cfPaths.topdir, db->datname);
+
+		if (!catalog_init(&dbSpecs.catalogs.source))
+		{
+			log_warn("Could not open catalog for database \"%s\"", db->datname);
+			continue;
+		}
+
+		Summary dbSummary = {
+			.tableJobs = copySpecs->tableJobs,
+			.indexJobs = copySpecs->indexJobs,
+			.vacuumJobs = copySpecs->vacuumJobs,
+			.lObjectJobs = copySpecs->lObjectJobs,
+			.restoreJobs = copySpecs->restoreOptions.jobs
+		};
+
+		if (prepare_summary_table(&dbSummary, &dbSpecs))
+		{
+			for (int i = 0;
+				 i < dbSummary.table.count && tableOffset + i < totalTables;
+				 i++)
+			{
+				SummaryTableEntry *dst =
+					&(combinedTable.array[tableOffset + i]);
+
+				*dst = dbSummary.table.array[i];
+				strlcpy(dst->datname, db->datname, sizeof(dst->datname));
+			}
+
+			tableOffset += dbSummary.table.count;
+			combinedTable.totalBytes += dbSummary.table.totalBytes;
+		}
+
+		/* Aggregate timing data into topLevelTimingArray */
+		(void) summary_iter_timing(&dbSpecs.catalogs.source,
+								   &firstDb,
+								   &alldb_timing_agg_hook);
+		firstDb = false;
+
+		(void) catalog_close(&dbSpecs.catalogs.source);
+	}
+
+	(void) catalog_iter_s_database_finish(&iter2);
+
+	/*
+	 * Overlay Phase II (TOTAL_DATA) wall-clock from the instance catalog.
+	 * This timing is written by clone_all_databases to the instance catalog
+	 * and is absent from per-db catalogs, so alldb_timing_agg_hook leaves it
+	 * at zero.
+	 */
+	{
+		TopLevelTiming t = { .section = TIMING_SECTION_TOTAL_DATA };
+
+		if (summary_lookup_timing(instanceCatalog, &t, TIMING_SECTION_TOTAL_DATA))
+		{
+			TopLevelTiming *entry = &(topLevelTimingArray[TIMING_SECTION_TOTAL_DATA]);
+
+			entry->durationMs = t.durationMs;
+			entry->count = t.count;
+			entry->bytes = t.bytes;
+		}
+	}
+
+	/*
+	 * Overlay total wall-clock from the instance catalog (written by
+	 * cli_clone around clone_all_databases).
+	 */
+	{
+		TopLevelTiming t = { .section = TIMING_SECTION_TOTAL };
+
+		if (summary_lookup_timing(instanceCatalog, &t, TIMING_SECTION_TOTAL))
+		{
+			TopLevelTiming *entry = &(topLevelTimingArray[TIMING_SECTION_TOTAL]);
+
+			entry->durationMs = t.durationMs;
+		}
+	}
+
+	(void) catalog_close(instanceCatalog);
+
+	/* Re-pretty-print aggregated timing strings */
+	for (int i = 0; i < topLevelTimingArrayCount; i++)
+	{
+		TopLevelTiming *entry = &(topLevelTimingArray[i]);
+
+		if (entry->section == TIMING_SECTION_UNKNOWN)
+		{
+			continue;
+		}
+
+		(void) IntervalToString(entry->durationMs,
+								entry->ppDuration,
+								sizeof(entry->ppDuration));
+
+		(void) pretty_print_bytes(entry->ppBytes,
+								  sizeof(entry->ppBytes),
+								  entry->bytes);
+	}
+
+	/* Print the combined per-table section */
+	(void) pretty_print_bytes(combinedTable.totalBytesStr,
+							  sizeof(combinedTable.totalBytesStr),
+							  combinedTable.totalBytes);
+	(void) prepare_summary_table_headers(&combinedTable);
+	(void) print_summary_table(&combinedTable);
+
+	/* Print aggregated step durations with correct Phase I concurrency */
+	int phaseOneConcurrency =
+		(dbCount < copySpecs->tableJobs) ? dbCount : copySpecs->tableJobs;
+
+	char *d10s = "----------";
+	char *d12s = "------------";
+	char *d50s = "--------------------------------------------------";
+
+	Summary summary = {
+		.tableJobs = copySpecs->tableJobs,
+		.indexJobs = copySpecs->indexJobs,
+		.vacuumJobs = copySpecs->vacuumJobs,
+		.lObjectJobs = copySpecs->lObjectJobs,
+		.restoreJobs = copySpecs->restoreOptions.jobs
+	};
+
+	fformat(stdout, "\n");
+	fformat(stdout, " %50s   %10s  %10s  %10s  %12s\n",
+			"Step", "Connection", "Duration", "Transfer", "Concurrency");
+	fformat(stdout, " %50s   %10s  %10s  %10s  %12s\n",
+			d50s, d10s, d10s, d10s, d12s);
+
+	for (int i = 0; i < topLevelTimingArrayCount; i++)
+	{
+		TopLevelTiming *timing = &(topLevelTimingArray[i]);
+
+		if (timing->section == TIMING_SECTION_UNKNOWN)
+		{
+			continue;
+		}
+
+		if (i + 1 == topLevelTimingArrayCount)
+		{
+			fformat(stdout, " %50s   %10s  %10s  %10s  %12s\n",
+					d50s, d10s, d10s, d10s, d12s);
+		}
+
+		/* Phase I runs min(tableJobs, dbCount) parallel DB workers */
+		int concurrency;
+
+		if (timing->section == TIMING_SECTION_CATALOG_QUERIES ||
+			timing->section == TIMING_SECTION_DUMP_SCHEMA ||
+			timing->section == TIMING_SECTION_PREPARE_SCHEMA)
+		{
+			concurrency = phaseOneConcurrency;
+		}
+		else
+		{
+			concurrency = TopLevelTimingConcurrency(&summary, timing);
+		}
+
+		fformat(stdout, " %50s   %10s  %10s  %10s  %12d\n",
+				timing->label,
+				timing->conn,
+				timing->ppDuration,
+				timing->bytes > 0 ? timing->ppBytes : "",
+				concurrency);
+	}
+
+	fformat(stdout, "\n");
+
+	free(combinedTable.array);
+}
 
 
 /*
@@ -132,8 +492,46 @@ cli_clone(int argc, char **argv)
 
 	(void) cli_copy_prepare_specs(&copySpecs, DATA_SECTION_ALL);
 
-	/* at the moment this is not covered by cli_copy_prepare_specs() */
+	/* at the moment these are not covered by cli_copy_prepare_specs() */
 	copySpecs.follow = copyDBoptions.follow;
+	copySpecs.allDatabases = copyDBoptions.allDatabases;
+
+	/*
+	 * When --all-databases is used, delegate to the multi-database orchestrator.
+	 */
+	if (copySpecs.allDatabases)
+	{
+		/*
+		 * Start the total wall-clock timer before Phase I begins.  We open
+		 * the instance catalog briefly to persist the start timestamp, then
+		 * close it — clone_all_databases will reopen it as needed.
+		 */
+		if (!catalog_init_from_specs(&copySpecs))
+		{
+			log_error("Failed to open instance catalog for TOTAL timing");
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+		(void) summary_start_timing(&copySpecs.catalogs.source,
+									TIMING_SECTION_TOTAL);
+		(void) catalog_close_from_specs(&copySpecs);
+
+		if (!clone_all_databases(&copySpecs))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		/* Record total wall-clock stop time in the instance catalog. */
+		if (catalog_init_from_specs(&copySpecs))
+		{
+			(void) summary_stop_timing(&copySpecs.catalogs.source,
+									   TIMING_SECTION_TOTAL);
+			(void) catalog_close_from_specs(&copySpecs);
+		}
+
+		cli_clone_all_databases_consolidated_summary(&copySpecs);
+		exit(EXIT_CODE_QUIT);
+	}
 
 	/*
 	 * When pgcopydb clone --follow is used, we call the clone_and_follow()
@@ -214,7 +612,8 @@ clone_and_follow(CopyDataSpec *copySpecs)
 						   &(copySpecs->catalogs.replay),
 						   copyDBoptions.stdIn,
 						   copyDBoptions.stdOut,
-						   logSQL))
+						   logSQL,
+						   &(copySpecs->filters)))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -287,7 +686,20 @@ clone_and_follow(CopyDataSpec *copySpecs)
 	/*
 	 * Preparation and snapshot are now done, time to fork our two main worker
 	 * processes.
+	 *
+	 * SQLite database connections are not safe to use across fork(). Close
+	 * them here in the parent before forking so that each child process opens
+	 * its own fresh connection. The IPC semaphores (semId) are inherited by
+	 * the children and remain valid — only the sqlite3 handles are recycled.
+	 * The catalog data written above persists on disk; children will reopen
+	 * and reuse it without refetching.
 	 */
+	if (!catalog_close_from_specs(copySpecs))
+	{
+		log_error("Failed to close catalog connections before forking");
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
 	pid_t clonePID = -1;
 	pid_t followPID = -1;
 
@@ -403,7 +815,8 @@ cli_follow(int argc, char **argv)
 						   &(copySpecs.catalogs.replay),
 						   copyDBoptions.stdIn,
 						   copyDBoptions.stdOut,
-						   logSQL))
+						   logSQL,
+						   &(copySpecs.filters)))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -520,7 +933,7 @@ start_clone_process(CopyDataSpec *copySpecs, pid_t *pid)
 
 			log_notice("Starting the clone sub-process");
 
-			if (!cloneDB(copySpecs))
+			if (!copydb_clone_database(copySpecs))
 			{
 				log_error("Failed to clone source database, "
 						  "see above for details");
@@ -543,10 +956,10 @@ start_clone_process(CopyDataSpec *copySpecs, pid_t *pid)
 
 
 /*
- * cloneDB clones a source database into a target database.
+ * copydb_clone_database clones a source database into a target database.
  */
-static bool
-cloneDB(CopyDataSpec *copySpecs)
+bool
+copydb_clone_database(CopyDataSpec *copySpecs)
 {
 	/*
 	 * The top-level process implements the preparation steps and exports a

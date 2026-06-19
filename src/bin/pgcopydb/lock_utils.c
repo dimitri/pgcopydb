@@ -162,6 +162,70 @@ semaphore_create(Semaphore *semaphore)
 
 
 /*
+ * semaphore_create_set creates a single SysV semaphore SET with `count`
+ * independent slots, all initialised to 1 (unlocked).  The entire set
+ * occupies ONE slot in system_res_array and is removed with a single
+ * IPC_RMID call.  Individual database-level semaphores are addressed by
+ * setting Semaphore.semIndex to the slot number (0 … count-1).
+ */
+bool
+semaphore_create_set(Semaphore *semaphore, int count)
+{
+	union semun semun = { .val = 0 };   /* initialise to silence compiler */
+
+	semaphore->owner = getpid();
+	semaphore->semId = semget(IPC_PRIVATE, count, 0600);
+
+	if (semaphore->semId < 0)
+	{
+		log_error("Failed to create semaphore set of %d slots: %m", count);
+		return false;
+	}
+
+	log_debug("Created semaphore set %d with %d slots (ipcrm -s %d)",
+			  semaphore->semId, count, semaphore->semId);
+
+	/* Initialise all slots to 1 (unlocked) via SETALL. */
+	unsigned short *vals =
+		(unsigned short *) calloc(count, sizeof(unsigned short));
+
+	if (vals == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		semctl(semaphore->semId, 0, IPC_RMID, semun);
+		return false;
+	}
+
+	for (int i = 0; i < count; i++)
+	{
+		vals[i] = 1;
+	}
+
+	semun.array = vals;
+
+	if (semctl(semaphore->semId, 0, SETALL, semun) < 0)
+	{
+		log_error("Failed to initialise semaphore set %d: %m",
+				  semaphore->semId);
+		free(vals);
+		semctl(semaphore->semId, 0, IPC_RMID, semun);
+		return false;
+	}
+
+	free(vals);
+
+	/* Register once — IPC_RMID removes the entire set. */
+	if (!copydb_register_sysv_semaphore(&system_res_array, semaphore))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * semaphore_open opens our IPC_PRIVATE semaphore.
  *
  * We don't have a key for it, because we asked the kernel to create a new
@@ -288,10 +352,16 @@ semaphore_cleanup(const char *pidfile)
 bool
 semaphore_lock(Semaphore *semaphore)
 {
+	/* semId == 0: no semaphore allocated (e.g. read-only catalog) — no-op */
+	if (semaphore->semId == 0)
+	{
+		return true;
+	}
+
 	if (semaphore->reentrant && semaphore->depth > 0)
 	{
-		int sempid = semctl(semaphore->semId, 0, GETPID, 0);
-		int semval = semctl(semaphore->semId, 0, GETVAL, 0);
+		int sempid = semctl(semaphore->semId, semaphore->semIndex, GETPID, 0);
+		int semval = semctl(semaphore->semId, semaphore->semIndex, GETVAL, 0);
 
 		/* semval is only zero if we're in the critical section already */
 		if (sempid == getpid() && semval == 0)
@@ -311,7 +381,7 @@ semaphore_lock(Semaphore *semaphore)
 
 	sops.sem_op = -1;           /* decrement */
 	sops.sem_flg = SEM_UNDO;
-	sops.sem_num = 0;
+	sops.sem_num = semaphore->semIndex;
 
 	do {
 		if (errStatus < 0 &&
@@ -345,10 +415,16 @@ semaphore_lock(Semaphore *semaphore)
 bool
 semaphore_unlock(Semaphore *semaphore)
 {
+	/* semId == 0: no semaphore allocated (e.g. read-only catalog) — no-op */
+	if (semaphore->semId == 0)
+	{
+		return true;
+	}
+
 	/* unlocking a reentrant semaphore skips an actual semop() call */
 	if (semaphore->reentrant && semaphore->depth > 1)
 	{
-		int sempid = semctl(semaphore->semId, 0, GETPID, 0);
+		int sempid = semctl(semaphore->semId, semaphore->semIndex, GETPID, 0);
 
 		if (sempid == getpid())
 		{
@@ -367,7 +443,7 @@ semaphore_unlock(Semaphore *semaphore)
 
 	sops.sem_op = 1;            /* increment */
 	sops.sem_flg = SEM_UNDO;
-	sops.sem_num = 0;
+	sops.sem_num = semaphore->semIndex;
 
 	do {
 		if (errStatus < 0 &&

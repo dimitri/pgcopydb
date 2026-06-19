@@ -109,6 +109,8 @@ typedef struct CopyDBOptions
 	 */
 	char host[256];
 	int port;
+
+	bool allDatabases;
 } CopyDBOptions;
 
 extern bool outputJSON;

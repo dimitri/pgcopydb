@@ -52,9 +52,22 @@ jobs:
             .
         working-directory: tests
 
+      - name: Build multi base image (all-databases / three-databases tests)
+        run: |
+          docker build \
+            --build-arg PGVERSION=${{ matrix.PGVERSION }} \
+            -t multi:${{ matrix.PGVERSION }} \
+            -t multi \
+            -f Dockerfile.multi \
+            .
+        working-directory: tests
+
       - name: Save and compress images
         run: |
-          docker save pgcopydb:${{ matrix.PGVERSION }} pagila:${{ matrix.PGVERSION }} \
+          docker save \
+            pgcopydb:${{ matrix.PGVERSION }} \
+            pagila:${{ matrix.PGVERSION }} \
+            multi:${{ matrix.PGVERSION }} \
             | zstd -T0 -9 - -o images.tar.zst
 
       - name: Upload artifact
@@ -99,16 +112,26 @@ jobs:
           - unit
           - blobs
           - filtering
+          - partitioned-target
           - extensions
           - timescaledb
+          - all-databases
+          - three-databases
           - cdc-low-level
           - cdc-test-decoding
-          - cdc-endpos-between-transaction
+          - cdc-endpos-mid-txn
           - cdc-wal2json
+          - cdc-partitioned-target
+          - cdc-replica-identity-index
+          - cdc-file-rotation
+          - cdc-pgoutput
+          - cdc-filtering-pgoutput
           - follow-wal2json
           - follow-9.6
           - follow-data-only
-          - endpos-in-multi-wal-txn
+          - follow-pgoutput
+          - follow-filtering
+          - cdc-endpos-in-multi-wal-txn
         exclude:
           # timescaledb uses timescale/timescaledb:latest-pg13 for both source
           # and target. pg_restore from PG17+ emits "SET transaction_timeout = 0"
@@ -143,6 +166,7 @@ jobs:
           zstd -d < images.tar.zst | docker load
           docker tag pgcopydb:${{ matrix.PGVERSION }} pgcopydb
           docker tag pagila:${{ matrix.PGVERSION }} pagila
+          docker tag multi:${{ matrix.PGVERSION }} multi
 
       - name: Create docker volumes
         run: |

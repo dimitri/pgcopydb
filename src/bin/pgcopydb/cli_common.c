@@ -743,6 +743,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "create-slot", no_argument, NULL, 't' },
 		{ "endpos", required_argument, NULL, 'E' },
 		{ "publication", required_argument, NULL, 1003 },
+		{ "all-databases", no_argument, NULL, 1004 },
 		{ "host", required_argument, NULL, 1001 },
 		{ "port", required_argument, NULL, 1002 },
 		{ "version", no_argument, NULL, 'V' },
@@ -1120,6 +1121,13 @@ cli_copy_db_getopts(int argc, char **argv)
 						sizeof(options.slot.publicationName));
 				options.slot.publicationAutoManaged = false;
 				log_trace("--publication %s", options.slot.publicationName);
+				break;
+			}
+
+			case 1004:      /* --all-databases */
+			{
+				options.allDatabases = true;
+				log_trace("--all-databases");
 				break;
 			}
 

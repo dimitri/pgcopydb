@@ -759,14 +759,30 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 		return false;
 	}
 
-	log_info("Fetched information for %lld tables "
-			 "(including %lld tables split in %lld partitions total), "
-			 "with an estimated total of %s tuples and %s on-disk",
-			 (long long) stats.count,
-			 (long long) stats.countSplits,
-			 (long long) stats.countParts,
-			 stats.relTuplesPretty,
-			 stats.bytesPretty);
+	if (IS_EMPTY_STRING_BUFFER(specs->datname))
+	{
+		log_info("Fetched information for %lld tables "
+				 "(including %lld tables split in %lld partitions total), "
+				 "with an estimated total of %s tuples and %s on-disk",
+				 (long long) stats.count,
+				 (long long) stats.countSplits,
+				 (long long) stats.countParts,
+				 stats.relTuplesPretty,
+				 stats.bytesPretty);
+	}
+	else
+	{
+		log_info("Fetched information for %lld tables "
+				 "(including %lld tables split in %lld partitions total), "
+				 "with an estimated total of %s tuples and %s on-disk, "
+				 "in database \"%s\"",
+				 (long long) stats.count,
+				 (long long) stats.countSplits,
+				 (long long) stats.countParts,
+				 stats.relTuplesPretty,
+				 stats.bytesPretty,
+				 specs->datname);
+	}
 
 	return true;
 }
@@ -966,9 +982,21 @@ copydb_prepare_index_specs(CopyDataSpec *specs, PGSQL *pgsql)
 		return false;
 	}
 
-	log_info("Fetched information for %lld indexes (supporting %lld constraints)",
-			 (long long) count.indexes,
-			 (long long) count.constraints);
+	if (IS_EMPTY_STRING_BUFFER(specs->datname))
+	{
+		log_info("Fetched information for %lld indexes "
+				 "(supporting %lld constraints)",
+				 (long long) count.indexes,
+				 (long long) count.constraints);
+	}
+	else
+	{
+		log_info("Fetched information for %lld indexes "
+				 "(supporting %lld constraints) in database \"%s\"",
+				 (long long) count.indexes,
+				 (long long) count.constraints,
+				 specs->datname);
+	}
 
 	return true;
 }
@@ -1062,10 +1090,30 @@ copydb_objectid_is_filtered_out(CopyDataSpec *specs,
 
 	if (item->objectOid != 0)
 	{
-		if (!catalog_lookup_filter_by_oid(filtersDB, &result, item->objectOid))
+		if (item->catalogOid != 0)
 		{
-			/* errors have already been logged */
-			return false;
+			if (!catalog_lookup_filter_by_oid(filtersDB, &result,
+											  item->catalogOid, item->objectOid))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+		}
+		else
+		{
+			/*
+			 * Some TOC entries (e.g. REFRESH MATERIALIZED VIEW) carry
+			 * catalogId.tableoid == 0 in the pg_dump format, so we have no
+			 * catoid to disambiguate. Fall back to an OID-only lookup;
+			 * PostgreSQL OIDs are drawn from a single counter per database,
+			 * so any objectOid is unique across all system catalogs.
+			 */
+			if (!catalog_lookup_filter_by_oid_only(filtersDB, &result,
+												   item->objectOid))
+			{
+				/* errors have already been logged */
+				return false;
+			}
 		}
 
 		if (result.oid != 0 &&
@@ -1177,8 +1225,18 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 			return false;
 		}
 
-		log_info("Fetched information for %lld extensions",
-				 (long long) count.extensions);
+		if (IS_EMPTY_STRING_BUFFER(specs->datname))
+		{
+			log_info("Fetched information for %lld extensions",
+					 (long long) count.extensions);
+		}
+		else
+		{
+			log_info("Fetched information for %lld extensions "
+					 "in database \"%s\"",
+					 (long long) count.extensions,
+					 specs->datname);
+		}
 	}
 
 	if (specs->skipCollations &&
@@ -1213,8 +1271,18 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 			return false;
 		}
 
-		log_info("Fetched information for %lld collations",
-				 (long long) count.colls);
+		if (IS_EMPTY_STRING_BUFFER(specs->datname))
+		{
+			log_info("Fetched information for %lld collations",
+					 (long long) count.colls);
+		}
+		else
+		{
+			log_info("Fetched information for %lld collations "
+					 "in database \"%s\"",
+					 (long long) count.colls,
+					 specs->datname);
+		}
 	}
 
 	/*
@@ -1244,6 +1312,13 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 			};
 
 			(void) catalog_start_timing(&timing);
+
+			if (!catalog_fetch_catnames(filtersDB, pgsql))
+			{
+				/* errors have already been logged */
+				(void) semaphore_unlock(&(filtersDB->sema));
+				return false;
+			}
 
 			if (!catalog_prepare_filter(filtersDB,
 										specs->skipExtensions,
@@ -1425,6 +1500,13 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		};
 
 		(void) catalog_start_timing(&timing);
+
+		if (!catalog_fetch_catnames(filtersDB, pgsql))
+		{
+			/* errors have already been logged */
+			(void) semaphore_unlock(&(filtersDB->sema));
+			return false;
+		}
 
 		if (!catalog_prepare_filter(filtersDB,
 									specs->skipExtensions,

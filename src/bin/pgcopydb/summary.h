@@ -88,6 +88,7 @@ typedef struct CopyBlobsSummary
  */
 typedef struct SummaryTableHeaders
 {
+	int maxDatnameSize;             /* 0 means: don't show the database column */
 	int maxOidSize;
 	int maxNspnameSize;
 	int maxRelnameSize;
@@ -97,6 +98,7 @@ typedef struct SummaryTableHeaders
 	int maxIndexCountSize;
 	int maxIndexMsSize;
 
+	char datnameSeparator[NAMEDATALEN];
 	char oidSeparator[NAMEDATALEN];
 	char nspnameSeparator[NAMEDATALEN];
 	char relnameSeparator[NAMEDATALEN];
@@ -131,6 +133,7 @@ typedef struct SummaryTableEntry
 {
 	uint32_t oid;
 	char oidStr[INTSTRING_MAX_DIGITS];
+	char datname[PG_NAMEDATALEN];   /* empty unless --all-databases */
 	char nspname[PG_NAMEDATALEN];
 	char relname[PG_NAMEDATALEN];
 	char partCount[INTSTRING_MAX_DIGITS];
@@ -159,6 +162,9 @@ typedef struct SummaryTable
  * Keep track of the timing for the main steps of the pgcopydb operations.
  */
 extern TopLevelTiming topLevelTimingArray[];
+extern int topLevelTimingArrayCount;
+
+void summary_reset_toplevel_timings(void);
 
 typedef struct Summary
 {
@@ -244,6 +250,8 @@ void print_summary_as_json(Summary *summary, const char *filename);
 void print_toplevel_summary(Summary *summary);
 void print_summary_table(SummaryTable *summary);
 void prepare_summary_table_headers(SummaryTable *summary);
+struct CopyDataSpec;  /* forward declaration to avoid circular include */
+bool prepare_summary_table(Summary *summary, struct CopyDataSpec *specs);
 
 int TopLevelTimingConcurrency(Summary *summary, TopLevelTiming *timing);
 

@@ -10,8 +10,8 @@ DELETE FROM "public"."payment_p2022_06" WHERE "payment_id" = $1 and "customer_id
 DELETE FROM "public"."rental" WHERE "rental_id" = $1
 DELETE FROM "public"."address" WHERE "address_id" = $1 and "address" = $2 and "address2" IS NULL and "district" = $3 and "city_id" = $4 and "postal_code" = $5 and "phone" = $6 and "last_update" = $7
 UPDATE "public"."address" SET "postal_code" = $1 WHERE "address_id" = $2 and "address" = $3 and "address2" IS NULL and "district" = $4 and "city_id" = $5 and "postal_code" = $6 and "phone" = $7 and "last_update" = $8
-INSERT INTO "public"."generated_column_test" ("id", "name", "greet_hello", "greet_hi", "time", "email", "table", """table""", """hel""lo""") overriding system value VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9), ($10, $11, $12, $13, $14, $15, $16, $17, $18), ($19, $20, $21, $22, $23, $24, $25, $26, $27)
-UPDATE "public"."generated_column_test" SET "name" = $1, "greet_hello" = $2, "greet_hi" = $3, "time" = $4, "email" = $5, "table" = $6, """table""" = $7, """hel""lo""" = $8 WHERE "id" = $9
+INSERT INTO "public"."generated_column_test" ("id", "name", "email") overriding system value VALUES ($1, $2, $3), ($4, $5, $6), ($7, $8, $9)
+UPDATE "public"."generated_column_test" SET "name" = $1, "greet_hello" = DEFAULT, "greet_hi" = DEFAULT, "time" = DEFAULT, "email" = $2, "table" = DEFAULT, """table""" = DEFAULT, """hel""lo""" = DEFAULT WHERE "id" = $3
 DELETE FROM "public"."generated_column_test" WHERE "id" = $1
 INSERT INTO "public"."single_column_table" ("id") overriding system value VALUES ($1), ($2)
 INSERT INTO "public"."multi_column_table" ("id", "name", "email") overriding system value VALUES ($1, $2, $3), ($4, $5, $6)
