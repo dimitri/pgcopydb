@@ -240,6 +240,20 @@ create table if not exists quote_escaping_test
 commit;
 
 --
+-- See https://github.com/dimitri/pgcopydb/issues/968
+-- Loss of double precision during CDC replay: %f only gives 6 decimal places.
+--
+begin;
+
+create table float8_precision_test
+(
+    id   bigint primary key,
+    val  double precision
+);
+
+commit;
+
+--
 -- See https://github.com/dimitri/pgcopydb/issues/844
 -- CDC UPDATE fails for GENERATED ALWAYS AS IDENTITY columns
 --

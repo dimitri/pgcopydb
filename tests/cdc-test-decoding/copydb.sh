@@ -92,6 +92,16 @@ tgt_count=`psql -AtqX -d ${PGCOPYDB_TARGET_PGURI} -c "select count(*) from actor
 echo "source actor count: ${src_count}, target actor count: ${tgt_count}"
 test "${src_count}" -eq "${tgt_count}"
 
+# Verify that double precision values are replayed without loss of precision
+# (issue #968): the previous %f format emitted only 6 decimal places.
+psql -AtqX -d ${PGCOPYDB_SOURCE_PGURI} \
+     -c "select id, val::text from float8_precision_test order by id" \
+     > /tmp/src_float8.txt
+psql -AtqX -d ${PGCOPYDB_TARGET_PGURI} \
+     -c "select id, val::text from float8_precision_test order by id" \
+     > /tmp/tgt_float8.txt
+diff /tmp/src_float8.txt /tmp/tgt_float8.txt
+
 # Verify that single-quote characters inside VARCHAR and TEXT values are
 # preserved correctly after CDC replay (issue #969).
 psql -AtqX -d ${PGCOPYDB_SOURCE_PGURI} \

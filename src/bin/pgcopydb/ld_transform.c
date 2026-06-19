@@ -2416,7 +2416,27 @@ stream_add_value_in_json_array(LogicalMessageValue *value, JSON_Array *jsArray)
 				}
 				else
 				{
-					sformat(string, sizeof(string), "%f", value->val.float8);
+					/*
+					 * IEEE 754 double precision requires 17 significant decimal
+					 * digits to round-trip without loss.  The previous "%f"
+					 * format produced only 6 decimal places, silently corrupting
+					 * values like -216237.00000035969.  Trailing zeros are
+					 * stripped so that the serialised form stays compact and
+					 * matches what wal2json / Postgres itself would emit.
+					 */
+					sformat(string, sizeof(string), "%.17f", value->val.float8);
+
+					char *p = string + strlen(string) - 1;
+
+					while (p > string && *p == '0')
+					{
+						*p-- = '\0';
+					}
+
+					if (*p == '.')
+					{
+						*p = '\0';
+					}
 				}
 
 				json_array_append_string(jsArray, string);

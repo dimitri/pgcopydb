@@ -35,6 +35,16 @@ create table if not exists generated_column_test
 commit;
 
 begin;
+--
+-- See https://github.com/dimitri/pgcopydb/issues/968
+-- Loss of double precision during CDC replay: %f only gives 6 decimal places.
+--
+create table if not exists float8_precision_test
+(
+    id  bigint primary key,
+    val double precision
+);
+
 -- table with single column to test update is not failing when value is not changed
 create table if not exists single_column_table
 (
