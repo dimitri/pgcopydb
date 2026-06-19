@@ -468,8 +468,9 @@ static char *targetDBcreateDDLs[] = {
 	"  condeferrable bool, condeferred bool, sql text "
 	")",
 
-	"create table s_matview("
-	"  nspname text not null, relname text not null, ispopulated bool, "
+	"create table s_rel("
+	"  nspname text not null, relname text not null, "
+	"  relkind char(1) not null, ispopulated bool, "
 	"  primary key(nspname, relname)"
 	")"
 };
@@ -588,7 +589,7 @@ static char *targetDBdropDDLs[] = {
 	"drop table if exists s_attr",
 	"drop table if exists s_index",
 	"drop table if exists s_constraint",
-	"drop table if exists s_matview"
+	"drop table if exists s_rel"
 };
 
 
@@ -2483,28 +2484,33 @@ catalog_add_s_matview(DatabaseCatalog *catalog, SourceTable *table)
 
 
 /*
- * catalog_upsert_target_s_matview inserts or replaces a row in the target
- * catalog's s_matview table (schema: nspname, relname, ispopulated).
+ * catalog_upsert_target_s_rel inserts or replaces a row in the target
+ * catalog's s_rel table (nspname, relname, relkind, ispopulated).
+ * Used to cache matviews ('m') and partitioned tables ('p') from the target.
  */
 bool
-catalog_upsert_target_s_matview(DatabaseCatalog *catalog,
-								const char *nspname,
-								const char *relname,
-								bool ispopulated)
+catalog_upsert_target_s_rel(DatabaseCatalog *catalog,
+							const char *nspname,
+							const char *relname,
+							char relkind,
+							bool ispopulated)
 {
 	sqlite3 *db = catalog->db;
 
 	if (db == NULL)
 	{
-		log_error("BUG: catalog_upsert_target_s_matview: db is NULL");
+		log_error("BUG: catalog_upsert_target_s_rel: db is NULL");
 		return false;
 	}
 
+	char relkindStr[2] = { relkind, '\0' };
+
 	char *sql =
-		"insert into s_matview(nspname, relname, ispopulated)"
-		" values($1, $2, $3)"
+		"insert into s_rel(nspname, relname, relkind, ispopulated)"
+		" values($1, $2, $3, $4)"
 		" on conflict(nspname, relname) do update"
-		"   set ispopulated = excluded.ispopulated";
+		"   set relkind = excluded.relkind,"
+		"       ispopulated = excluded.ispopulated";
 
 	SQLiteQuery query = { 0 };
 
@@ -2517,6 +2523,7 @@ catalog_upsert_target_s_matview(DatabaseCatalog *catalog,
 	BindParam params[] = {
 		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, (char *) nspname },
 		{ BIND_PARAMETER_TYPE_TEXT, "relname", 0, (char *) relname },
+		{ BIND_PARAMETER_TYPE_TEXT, "relkind", 0, relkindStr },
 		{ BIND_PARAMETER_TYPE_INT, "ispopulated", ispopulated ? 1 : 0, NULL },
 	};
 

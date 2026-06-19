@@ -192,10 +192,11 @@ typedef struct CatalogMatView
 
 bool catalog_add_s_matview(DatabaseCatalog *catalog, SourceTable *table);
 
-bool catalog_upsert_target_s_matview(DatabaseCatalog *catalog,
-									 const char *nspname,
-									 const char *relname,
-									 bool ispopulated);
+bool catalog_upsert_target_s_rel(DatabaseCatalog *catalog,
+								 const char *nspname,
+								 const char *relname,
+								 char relkind,
+								 bool ispopulated);
 
 bool catalog_lookup_s_matview_by_oid(DatabaseCatalog *catalog,
 									 CatalogMatView *result,
