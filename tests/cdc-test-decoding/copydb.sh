@@ -92,5 +92,15 @@ tgt_count=`psql -AtqX -d ${PGCOPYDB_TARGET_PGURI} -c "select count(*) from actor
 echo "source actor count: ${src_count}, target actor count: ${tgt_count}"
 test "${src_count}" -eq "${tgt_count}"
 
+# Verify that single-quote characters inside VARCHAR and TEXT values are
+# preserved correctly after CDC replay (issue #969).
+psql -AtqX -d ${PGCOPYDB_SOURCE_PGURI} \
+     -c "select id, varchar_col, text_col from quote_escaping_test order by id" \
+     > /tmp/src_quotes.txt
+psql -AtqX -d ${PGCOPYDB_TARGET_PGURI} \
+     -c "select id, varchar_col, text_col from quote_escaping_test order by id" \
+     > /tmp/tgt_quotes.txt
+diff /tmp/src_quotes.txt /tmp/tgt_quotes.txt
+
 # cleanup
 pgcopydb stream cleanup
