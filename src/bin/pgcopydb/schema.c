@@ -2446,8 +2446,9 @@ schema_set_sequence_value(PGSQL *pgsql, SourceSequence *seq)
 	Oid paramTypes[3] = { TEXTOID, INT8OID, BOOLOID };
 	const char *paramValues[3];
 
+	IntString lastValueStr = intToString(seq->lastValue);
 	paramValues[0] = seq->qname;
-	paramValues[1] = intToString(seq->lastValue).strValue;
+	paramValues[1] = lastValueStr.strValue;
 	paramValues[2] = seq->isCalled ? "true" : "false";
 
 	if (!pgsql_execute_with_params(pgsql, sql,
