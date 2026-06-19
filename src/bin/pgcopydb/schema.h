@@ -129,6 +129,7 @@ typedef struct SourceTableAttribute
 	bool attisprimary;
 	bool attisreplident;
 	bool attisgenerated;
+	char attidentity;       /* 'a' GENERATED ALWAYS, 'd' BY DEFAULT, '\0' none */
 } SourceTableAttribute;
 
 typedef struct SourceTableAttributeArray

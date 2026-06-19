@@ -17,10 +17,13 @@ INSERT INTO "Unicode""Test"."слон" (id, "слон", "колонка") overri
 UPDATE "Unicode""Test"."слон" SET id = $1, "слон" = $2, "колонка" = $3 WHERE id = $4 and "слон" = $5
 DELETE FROM "Unicode""Test"."слон" WHERE id = $1 and "слон" = $2
 INSERT INTO public.t_bit_types (id, a, b) overriding system value VALUES ($1, $2, $3)
-INSERT INTO public.generated_column_test (id, name, greet_hello, greet_hi, "time", email, "table", """table""", """hel""lo""") overriding system value VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9), ($10, $11, $12, $13, $14, $15, $16, $17, $18), ($19, $20, $21, $22, $23, $24, $25, $26, $27)
-UPDATE public.generated_column_test SET name = $1, greet_hello = $2, greet_hi = $3, "time" = $4, email = $5, "table" = $6, """table""" = $7, """hel""lo""" = $8 WHERE id = $9
+INSERT INTO public.generated_column_test (id, name, email) overriding system value VALUES ($1, $2, $3), ($4, $5, $6), ($7, $8, $9)
+UPDATE public.generated_column_test SET name = $1, greet_hello = DEFAULT, greet_hi = DEFAULT, "time" = DEFAULT, email = $2, "table" = DEFAULT, """table""" = DEFAULT, """hel""lo""" = DEFAULT WHERE id = $3
 DELETE FROM public.generated_column_test WHERE id = $1
 INSERT INTO public.xpto (id, toasted_col1, rand1, toasted_col2, rand2) overriding system value VALUES ($1, $2, $3, $4, $5), ($6, $7, $8, $9, $10)
 UPDATE public.xpto SET toasted_col1 = $1, rand1 = $2, rand2 = $3 WHERE id = $4
 UPDATE public.xpto SET rand1 = $1, rand2 = $2 WHERE id = $3
 INSERT INTO public.xpto2 (toasted_col1, toasted_col2) overriding system value VALUES ($1, $2)
+INSERT INTO public.identity_column_test (pk_col, id_col, name) overriding system value VALUES ($1, $2, $3), ($4, $5, $6)
+UPDATE public.identity_column_test SET name = $1 WHERE pk_col = $2
+DELETE FROM public.identity_column_test WHERE pk_col = $1

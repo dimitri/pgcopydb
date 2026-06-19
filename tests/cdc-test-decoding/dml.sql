@@ -156,3 +156,26 @@ from generate_series(1, 2000) g(i);
 update xpto2 set toasted_col1 = toasted_col1, toasted_col2 = toasted_col2;
 
 commit;
+
+--
+-- See https://github.com/dimitri/pgcopydb/issues/844
+-- Verify INSERT, UPDATE, DELETE on a table with a non-PK GENERATED ALWAYS AS
+-- IDENTITY column.  The UPDATE must not include id_col in the SET clause.
+--
+begin;
+
+insert into identity_column_test (pk_col, name) values (1, 'Alice'), (2, 'Bob');
+
+commit;
+
+begin;
+
+update identity_column_test set name = 'Alicia' where pk_col = 1;
+
+commit;
+
+begin;
+
+delete from identity_column_test where pk_col = 2;
+
+commit;

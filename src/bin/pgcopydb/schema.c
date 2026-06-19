@@ -954,7 +954,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                         format('%I', attname) as attname, "
 		"                         i.indrelid is not null as attisprimary, "
 		"                         ri.indrelid is not null as attisreplident, "
-		"						  col.is_generated = 'ALWAYS' as attisgenerated "
+		"						  col.is_generated = 'ALWAYS' as attisgenerated, "
+		"                         coalesce(a.attidentity, '') as attidentity "
 		"                    from pg_attribute a "
 		"                         left join pg_index i "
 		"                                on i.indrelid = a.attrelid "
@@ -1047,7 +1048,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                         format('%I', attname) as attname, "
 		"                         i.indrelid is not null as attisprimary, "
 		"                         ri.indrelid is not null as attisreplident, "
-		"						  col.is_generated = 'ALWAYS' as attisgenerated "
+		"						  col.is_generated = 'ALWAYS' as attisgenerated, "
+		"                         coalesce(a.attidentity, '') as attidentity "
 		"                    from pg_attribute a "
 		"                         left join pg_index i "
 		"                                on i.indrelid = a.attrelid "
@@ -1142,7 +1144,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                         format('%I', attname) as attname, "
 		"                         i.indrelid is not null as attisprimary, "
 		"                         ri.indrelid is not null as attisreplident, "
-		"						  col.is_generated = 'ALWAYS' as attisgenerated "
+		"						  col.is_generated = 'ALWAYS' as attisgenerated, "
+		"                         coalesce(a.attidentity, '') as attidentity "
 		"                    from pg_attribute a "
 		"                         left join pg_index i "
 		"                                on i.indrelid = a.attrelid "
@@ -1250,7 +1253,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                         format('%I', attname) as attname, "
 		"                         i.indrelid is not null as attisprimary, "
 		"                         ri.indrelid is not null as attisreplident, "
-		"						  col.is_generated = 'ALWAYS' as attisgenerated "
+		"						  col.is_generated = 'ALWAYS' as attisgenerated, "
+		"                         coalesce(a.attidentity, '') as attidentity "
 		"                    from pg_attribute a "
 		"                         left join pg_index i "
 		"                                on i.indrelid = a.attrelid "
@@ -1348,7 +1352,8 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"                         format('%I', attname) as attname, "
 		"                         i.indrelid is not null as attisprimary, "
 		"                         ri.indrelid is not null as attisreplident, "
-		"						  col.is_generated = 'ALWAYS' as attisgenerated "
+		"						  col.is_generated = 'ALWAYS' as attisgenerated, "
+		"                         coalesce(a.attidentity, '') as attidentity "
 		"                    from pg_attribute a "
 		"                         left join pg_index i "
 		"                                on i.indrelid = a.attrelid "
@@ -1487,13 +1492,66 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 	log_debug("listSourceTablesSQL[%s]", filterTypeToString(filterType));
 
 	char *sql = listSourceTablesSQL[filterType].sql;
+	char *versionedSQL = NULL;
+
+	/*
+	 * pg_attribute.attidentity was added in PostgreSQL 10.  For older source
+	 * servers, rewrite the one reference in the query to a safe literal ''.
+	 * Fetch the server version if not yet known (pgsql_server_version caches
+	 * the result, so repeated calls are cheap).
+	 */
+	if (pgsql->pgversion_num == 0)
+	{
+		(void) pgsql_server_version(pgsql);
+	}
+
+	if (pgsql->pgversion_num > 0 && pgsql->pgversion_num < 100000)
+	{
+		const char *old = "coalesce(a.attidentity, '') as attidentity ";
+		const char *rep = "'' as attidentity ";
+		size_t oldLen = strlen(old);
+		char *pos;
+		char *newSQL;
+		size_t prefixLen;
+		size_t totalLen;
+
+		versionedSQL = strdup(sql);
+
+		if (versionedSQL != NULL)
+		{
+			pos = strstr(versionedSQL, old);
+
+			if (pos != NULL)
+			{
+				prefixLen = pos - versionedSQL;
+				totalLen =
+					prefixLen + strlen(rep) + strlen(pos + oldLen) + 1;
+				newSQL = (char *) malloc(totalLen);
+
+				if (newSQL != NULL)
+				{
+					newSQL[0] = '\0';
+					strlcat(newSQL, versionedSQL, prefixLen + 1);
+					strlcat(newSQL, rep, totalLen);
+					strlcat(newSQL, pos + oldLen, totalLen);
+					free(versionedSQL);
+					versionedSQL = newSQL;
+				}
+			}
+
+			sql = versionedSQL;
+		}
+	}
 
 	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
 								   &context, &getTableArray))
 	{
+		free(versionedSQL);
 		log_error("Failed to list tables");
 		return false;
 	}
+
+	free(versionedSQL);
 
 	if (!context.parsedOk)
 	{
@@ -5150,6 +5208,7 @@ parseAttributesArray(SourceTable *table, JSON_Value *json)
 	{
 		SourceTableAttribute *attr = &(table->attributes.array[i]);
 		JSON_Object *jsAttr = json_array_get_object(jsAttsArray, i);
+		const char *identity;
 
 		attr->attnum = json_object_get_number(jsAttr, "attnum");
 		attr->atttypid = json_object_get_number(jsAttr, "atttypid");
@@ -5161,6 +5220,13 @@ parseAttributesArray(SourceTable *table, JSON_Value *json)
 		attr->attisprimary = json_object_get_boolean(jsAttr, "attisprimary");
 		attr->attisreplident = json_object_get_boolean(jsAttr, "attisreplident");
 		attr->attisgenerated = json_object_get_boolean(jsAttr, "attisgenerated");
+
+		identity = json_object_get_string(jsAttr, "attidentity");
+
+		if (identity != NULL && identity[0] != '\0')
+		{
+			attr->attidentity = identity[0];
+		}
 	}
 
 	return true;
