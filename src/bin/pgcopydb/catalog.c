@@ -763,12 +763,23 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 
 		if (!streq(spguri.pguri, setup->source_pguri))
 		{
-			log_error("Catalogs at \"%s\" have been setup for "
-					  "Postgres source \"%s\" and current source is \"%s\"",
-					  sourceDB->dbfile,
-					  setup->source_pguri,
-					  spguri.pguri);
-			return false;
+			if (copySpecs->skipSourceURICheck)
+			{
+				log_debug("Catalogs at \"%s\" have been setup for "
+						  "a different Postgres source \"%s\", "
+						  "ignoring for this read-only command",
+						  sourceDB->dbfile,
+						  setup->source_pguri);
+			}
+			else
+			{
+				log_error("Catalogs at \"%s\" have been setup for "
+						  "Postgres source \"%s\" and current source is \"%s\"",
+						  sourceDB->dbfile,
+						  setup->source_pguri,
+						  spguri.pguri);
+				return false;
+			}
 		}
 
 		/*
