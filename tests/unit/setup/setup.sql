@@ -15,3 +15,4 @@
 \ir 16-sequences.sql
 \ir 17-exclusion-with-pkey.sql
 \ir 18-function-acl.sql
+\ir 19-pg-stat-statements-acl.sql

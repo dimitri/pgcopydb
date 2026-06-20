@@ -1,6 +1,7 @@
 services:
   source:
     image: postgres:${PGVERSION:-16}
+    command: postgres -c shared_preload_libraries=pg_stat_statements
     expose:
       - 5432
     environment:
@@ -14,6 +15,7 @@ services:
       retries: 10
   target:
     image: postgres:${PGVERSION:-16}
+    command: postgres -c shared_preload_libraries=pg_stat_statements
     expose:
       - 5432
     environment:

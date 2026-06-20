@@ -288,7 +288,6 @@ read_file_internal(FILE *fileStream,
  */
 bool
 file_iter_lines(const char *filename,
-				size_t bufsize,
 				void *context, FileIterLinesFun *callback)
 {
 	FileLinesIterator *iter =
@@ -301,7 +300,6 @@ file_iter_lines(const char *filename,
 	}
 
 	iter->filename = filename;
-	iter->bufsize = bufsize;
 
 	if (!file_iter_lines_init(iter))
 	{
@@ -356,12 +354,7 @@ file_iter_lines_init(FileLinesIterator *iter)
 		return false;
 	}
 
-	/*
-	 * Start with a reasonable initial size.  file_iter_lines_next will grow
-	 * the buffer automatically whenever a line does not fit.
-	 */
-	iter->bufsize = BUFSIZE * 8;
-	iter->linebuf = (char *) calloc(1, iter->bufsize);
+	iter->linebuf = createPQExpBuffer();
 
 	if (iter->linebuf == NULL)
 	{
@@ -374,62 +367,41 @@ file_iter_lines_init(FileLinesIterator *iter)
 
 
 /*
- * file_iter_lines_next fetches the next line in the opened file. It reads
- * with fgets and grows the GC-managed buffer if the line doesn't fit, so
+ * file_iter_lines_next fetches the next line in the opened file. Characters
+ * are appended one-by-one into a PQExpBuffer, which grows automatically, so
  * lines of arbitrary length are handled without truncation.
  */
 bool
 file_iter_lines_next(FileLinesIterator *iter)
 {
-	size_t offset = 0;
+	resetPQExpBuffer(iter->linebuf);
 
-	for (;;)
+	int c;
+
+	while ((c = fgetc(iter->stream)) != EOF)
 	{
-		char *cur = iter->linebuf + offset;
-		size_t avail = iter->bufsize - offset;
-
-		if (fgets(cur, avail, iter->stream) == NULL)
+		if (c == '\n')
 		{
-			if (feof(iter->stream) != 0)
-			{
-				/* signal end-of-file; if we buffered a partial line, return it */
-				iter->line = (offset > 0) ? iter->linebuf : NULL;
-				return true;
-			}
-			log_error("Failed to iterate over file \"%s\": %m", iter->filename);
-			return false;
+			break;
 		}
-
-		size_t nread = strlen(cur);
-
-		if (nread > 0 && cur[nread - 1] == '\n')
-		{
-			/* complete line ending with \n */
-			iter->line = iter->linebuf;
-			return true;
-		}
-
-		if (feof(iter->stream) != 0)
-		{
-			/* last line of file with no trailing newline */
-			iter->line = iter->linebuf;
-			return true;
-		}
-
-		/* fgets filled the buffer without hitting \n: grow and continue */
-		offset += nread;
-		size_t new_size = iter->bufsize * 2;
-		char *new_buf = (char *) realloc(iter->linebuf, new_size);
-
-		if (new_buf == NULL)
-		{
-			log_error(ALLOCATION_FAILED_ERROR);
-			return false;
-		}
-		iter->linebuf = new_buf;
-		iter->bufsize = new_size;
-		iter->line = iter->linebuf;
+		appendPQExpBufferChar(iter->linebuf, (char) c);
 	}
+
+	if (PQExpBufferBroken(iter->linebuf))
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	/* empty buffer at EOF means we are done */
+	if (iter->linebuf->len == 0 && feof(iter->stream) != 0)
+	{
+		iter->line = NULL;
+		return true;
+	}
+
+	iter->line = iter->linebuf->data;
+	return true;
 }
 
 
@@ -439,7 +411,7 @@ file_iter_lines_next(FileLinesIterator *iter)
 bool
 file_iter_lines_finish(FileLinesIterator *iter)
 {
-	free(iter->linebuf);
+	destroyPQExpBuffer(iter->linebuf);
 	iter->linebuf = NULL;
 
 	if (fclose(iter->stream) == EOF)
