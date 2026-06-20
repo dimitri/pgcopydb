@@ -594,6 +594,13 @@ cli_list_databases(int argc, char **argv)
 	}
 
 	/*
+	 * list databases is a stateless read-only query; it must not be blocked by
+	 * a stale source.db left over from a previous run against a different
+	 * server.
+	 */
+	copySpecs.skipSourceURICheck = true;
+
+	/*
 	 * Prepare our internal catalogs for storing the source database catalog
 	 * query results. When --force is used then we fetch the catalogs again.
 	 */
