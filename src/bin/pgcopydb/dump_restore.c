@@ -820,7 +820,7 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 					  item->catalogOid,
 					  item->objectOid,
 					  item->description,
-					  item->restoreListName);
+					  item->restoreListName != NULL ? item->restoreListName : "");
 
 	/* memory allocation could have failed while building string */
 	if (PQExpBufferBroken(buf))

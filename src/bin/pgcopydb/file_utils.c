@@ -288,7 +288,6 @@ read_file_internal(FILE *fileStream,
  */
 bool
 file_iter_lines(const char *filename,
-				size_t bufsize,
 				void *context, FileIterLinesFun *callback)
 {
 	FileLinesIterator *iter =
@@ -301,7 +300,6 @@ file_iter_lines(const char *filename,
 	}
 
 	iter->filename = filename;
-	iter->bufsize = bufsize;
 
 	if (!file_iter_lines_init(iter))
 	{
@@ -343,7 +341,7 @@ file_iter_lines(const char *filename,
 
 /*
  * file_iter_lines_init initializes an Iterator over a file to read it
- * line-by-line and allocate only one line at a time.
+ * line-by-line with a dynamically growing line buffer.
  */
 bool
 file_iter_lines_init(FileLinesIterator *iter)
@@ -356,13 +354,9 @@ file_iter_lines_init(FileLinesIterator *iter)
 		return false;
 	}
 
-	/*
-	 * Allocate a buffer to hold the line contents, and re-use the same buffer
-	 * over and over when reading the next line.
-	 */
-	iter->line = calloc(1, iter->bufsize * sizeof(char));
+	iter->linebuf = createPQExpBuffer();
 
-	if (iter->line == NULL)
+	if (iter->linebuf == NULL)
 	{
 		log_error(ALLOCATION_FAILED_ERROR);
 		return false;
@@ -373,43 +367,40 @@ file_iter_lines_init(FileLinesIterator *iter)
 
 
 /*
- * file_iter_lines_next fetches the next line in the opened file.
+ * file_iter_lines_next fetches the next line in the opened file. Characters
+ * are appended one-by-one into a PQExpBuffer, which grows automatically, so
+ * lines of arbitrary length are handled without truncation.
  */
 bool
 file_iter_lines_next(FileLinesIterator *iter)
 {
-	size_t len = iter->bufsize - 1;
+	resetPQExpBuffer(iter->linebuf);
 
-	char *lineptr = fgets(iter->line, len, iter->stream);
+	int c;
 
-	/* Upon successful completion, fgets() shall return s. */
-	if (lineptr == iter->line)
+	while ((c = fgetc(iter->stream)) != EOF)
 	{
-		return true;
+		if (c == '\n')
+		{
+			break;
+		}
+		appendPQExpBufferChar(iter->linebuf, (char) c);
 	}
 
-	if (lineptr == NULL)
+	if (PQExpBufferBroken(iter->linebuf))
 	{
-		/*
-		 * If the stream is at end-of-file, the end-of-file indicator for the
-		 * stream shall be set and fgets() shall return a null pointer.
-		 */
-		if (feof(iter->stream) != 0)
-		{
-			/* signal end-of-file by setting line to NULL */
-			iter->line = NULL;
-			return true;
-		}
-
-		/*
-		 * If a read error occurs, the error indicator for the stream shall be
-		 * set, fgets() shall return a null pointer, and shall set errno to
-		 * indicate the error.
-		 */
-		log_error("Failed to iterate over file \"%s\": %m", iter->filename);
+		log_error(ALLOCATION_FAILED_ERROR);
 		return false;
 	}
 
+	/* empty buffer at EOF means we are done */
+	if (iter->linebuf->len == 0 && feof(iter->stream) != 0)
+	{
+		iter->line = NULL;
+		return true;
+	}
+
+	iter->line = iter->linebuf->data;
 	return true;
 }
 
@@ -420,6 +411,9 @@ file_iter_lines_next(FileLinesIterator *iter)
 bool
 file_iter_lines_finish(FileLinesIterator *iter)
 {
+	destroyPQExpBuffer(iter->linebuf);
+	iter->linebuf = NULL;
+
 	if (fclose(iter->stream) == EOF)
 	{
 		log_error("Failed to read file \"%s\"", iter->filename);

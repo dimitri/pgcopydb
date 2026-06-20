@@ -9,6 +9,7 @@
 #include <stdarg.h>
 
 #include "postgres_fe.h"
+#include "pqexpbuffer.h"
 
 #include <fcntl.h>
 
@@ -55,7 +56,7 @@ bool read_file(const char *filePath, char **contents, long *fileSize);
 /* iterate over a file one line at a time */
 typedef bool (FileIterLinesFun)(void *context, char *line);
 
-bool file_iter_lines(const char *filename, size_t bufsize,
+bool file_iter_lines(const char *filename,
 					 void *context,
 					 FileIterLinesFun *callback);
 
@@ -63,8 +64,8 @@ typedef struct FileLinesIterator
 {
 	const char *filename;
 	FILE *stream;
-	size_t bufsize;
-	char *line;                 /* malloc'ed area */
+	PQExpBuffer linebuf;        /* line buffer, grows automatically */
+	char *line;                 /* current line, NULL signals EOF */
 } FileLinesIterator;
 
 bool file_iter_lines_init(FileLinesIterator *iter);

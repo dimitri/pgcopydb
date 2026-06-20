@@ -285,7 +285,7 @@ parse_timeline_history_file(char *filename,
 	/* step 2: iterate over the file */
 	if (currentTimeline > 1)
 	{
-		if (!file_iter_lines(filename, BUFSIZE, &context, register_timeline_hook))
+		if (!file_iter_lines(filename, &context, register_timeline_hook))
 		{
 			/* errors have already been logged */
 			return false;
