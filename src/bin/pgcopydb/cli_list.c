@@ -1344,6 +1344,89 @@ cli_list_table_parts(int argc, char **argv)
 		exit(EXIT_CODE_QUIT);
 	}
 
+	/*
+	 * Check whether the parts section was already cached from a previous run.
+	 * If so, re-use the catalog rows directly; otherwise compute them now and
+	 * store them so the next call is instant.
+	 */
+	CatalogSection partsSection = {
+		.section = DATA_SECTION_TABLE_DATA_PARTS
+	};
+
+	if (!catalog_section_state(sourceDB, &partsSection))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!partsSection.fetched)
+	{
+		PGSQL pgsql = { 0 };
+		ConnStrings *dsn = &(listDBoptions.connStrings);
+
+		if (!pgsql_init(&pgsql, dsn->source_pguri, PGSQL_CONN_SOURCE))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_SOURCE);
+		}
+
+		/*
+		 * For CTID-based splits we need fresh relpages from pg_class.
+		 * Run ANALYZE first (unless the user asked for estimates only) so that
+		 * the page count reflects the current table size.
+		 */
+		if (streq(table->partKey, "ctid"))
+		{
+			if (!copySpecs.estimateTableSizes)
+			{
+				char sql[BUFSIZE] = { 0 };
+
+				sformat(sql, sizeof(sql), "ANALYZE %s", table->qname);
+				log_notice("%s", sql);
+
+				if (!pgsql_execute(&pgsql, sql))
+				{
+					log_error("Failed to refresh table %s statistics",
+							  table->qname);
+					exit(EXIT_CODE_INTERNAL_ERROR);
+				}
+			}
+
+			if (!schema_list_relpages(&pgsql, table, sourceDB))
+			{
+				log_error("Failed to fetch table %s relpages", table->qname);
+				exit(EXIT_CODE_INTERNAL_ERROR);
+			}
+		}
+
+		TopLevelTiming timing = {
+			.label = CopyDataSectionToString(DATA_SECTION_TABLE_DATA_PARTS)
+		};
+
+		(void) catalog_start_timing(&timing);
+
+		if (!schema_list_partitions(&pgsql,
+									sourceDB,
+									table,
+									listDBoptions.splitTablesLargerThan.bytes,
+									listDBoptions.splitMaxParts))
+		{
+			log_error("Failed to compute partitions for table %s",
+					  table->qname);
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		(void) catalog_stop_timing(&timing);
+
+		if (!catalog_register_section(sourceDB, &timing))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		pgsql_finish(&pgsql);
+	}
+
 	log_info("Table %s COPY will be split %d-ways",
 			 table->qname,
 			 table->partition.partCount);
