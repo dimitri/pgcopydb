@@ -633,7 +633,8 @@ cli_stream_setup(int argc, char **argv)
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL,
-						   NULL))
+						   NULL,
+						   &(copySpecs.catalogs.target)))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -787,7 +788,8 @@ cli_stream_catchup(int argc, char **argv)
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL,
-						   NULL))
+						   NULL,
+						   &(copySpecs.catalogs.target)))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -877,7 +879,8 @@ cli_stream_replay(int argc, char **argv)
 						   true,  /* stdin */
 						   true, /* stdout */
 						   logSQL,
-						   NULL))
+						   NULL,
+						   &(copySpecs.catalogs.target)))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -980,7 +983,8 @@ cli_stream_transform(int argc, char **argv)
 							   true,    /* stdIn */
 							   true,    /* stdOut */
 							   logSQL,
-							   NULL))
+							   NULL,
+							   &(copySpecs.catalogs.target)))
 		{
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
@@ -1052,7 +1056,8 @@ cli_stream_transform(int argc, char **argv)
 						   false, /* stdIn */
 						   false, /* stdOut */
 						   logSQL,
-						   NULL))
+						   NULL,
+						   &(copySpecs.catalogs.target)))
 	{
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
@@ -1176,7 +1181,8 @@ cli_stream_apply(int argc, char **argv)
 							   true,   /* stdIn */
 							   false,  /* stdOut */
 							   logSQL,
-							   NULL))
+							   NULL,
+							   &(copySpecs.catalogs.target)))
 		{
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
@@ -1269,7 +1275,8 @@ cli_stream_apply(int argc, char **argv)
 						   false, /* stdIn */
 						   stdoutMode, /* stdOut */
 						   logSQL,
-						   NULL))
+						   NULL,
+						   &(copySpecs.catalogs.target)))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -1423,7 +1430,8 @@ stream_start_in_mode(LogicalStreamMode mode)
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL,
-						   NULL))
+						   NULL,
+						   &(copySpecs.catalogs.target)))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

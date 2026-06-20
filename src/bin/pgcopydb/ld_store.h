@@ -47,6 +47,10 @@ typedef struct ReplayDBStmt
 
 	char timestamp[PG_MAX_TIMESTAMP];
 
+	/* schema-qualified relation (quoted identifiers, DML rows only) */
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
+
 	uint32_t hash;
 	char *stmt;                 /* malloc'ed area */
 	char *data;                 /* malloc'ed area */

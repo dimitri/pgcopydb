@@ -128,6 +128,7 @@ jobs:
           - cdc-endpos-mid-txn
           - cdc-wal2json
           - cdc-partitioned-target
+          - cdc-matview
           - cdc-replica-identity-index
           - follow-wal2json
           - follow-9.6
@@ -155,6 +156,8 @@ jobs:
           - TEST: cdc-wal2json
             PGVERSION: 16
           - TEST: cdc-partitioned-target
+            PGVERSION: 16
+          - TEST: cdc-matview
             PGVERSION: 16
           - TEST: cdc-replica-identity-index
             PGVERSION: 16

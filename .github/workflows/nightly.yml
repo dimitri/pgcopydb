@@ -122,6 +122,7 @@ jobs:
           - cdc-endpos-mid-txn
           - cdc-wal2json
           - cdc-partitioned-target
+          - cdc-matview
           - cdc-replica-identity-index
           - cdc-file-rotation
           - cdc-pgoutput

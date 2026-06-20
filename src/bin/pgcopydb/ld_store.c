@@ -1766,8 +1766,8 @@ ld_store_insert_replay_stmt(DatabaseCatalog *catalog,
 
 	char *sql =
 		"insert into replay"
-		"(action, xid, lsn, endlsn, timestamp, stmt_hash, stmt_args)"
-		"values($1, $2, $3, $4, $5, $6, $7)";
+		"(action, xid, lsn, endlsn, timestamp, nspname, relname, stmt_hash, stmt_args)"
+		"values($1, $2, $3, $4, $5, $6, $7, $8, $9)";
 
 	SQLiteQuery query = { 0 };
 
@@ -1819,6 +1819,16 @@ ld_store_insert_replay_stmt(DatabaseCatalog *catalog,
 		BIND_PARAMETER_TYPE_TEXT :
 		BIND_PARAMETER_TYPE_NULL;
 
+	BindParameterType nspnameParamType =
+		IS_EMPTY_STRING_BUFFER(replayStmt->nspname) ?
+		BIND_PARAMETER_TYPE_NULL :
+		BIND_PARAMETER_TYPE_TEXT;
+
+	BindParameterType relnameParamType =
+		IS_EMPTY_STRING_BUFFER(replayStmt->relname) ?
+		BIND_PARAMETER_TYPE_NULL :
+		BIND_PARAMETER_TYPE_TEXT;
+
 	/* bind our parameters now */
 	BindParam params[] = {
 		{ BIND_PARAMETER_TYPE_TEXT, "action", 0, action },
@@ -1826,6 +1836,8 @@ ld_store_insert_replay_stmt(DatabaseCatalog *catalog,
 		{ lsnParamType, "lsn", replayStmt->lsn, NULL },
 		{ endlsnParamType, "endlsn", replayStmt->endlsn, NULL },
 		{ timeParamType, "timestamp", 0, timestr },
+		{ nspnameParamType, "nspname", 0, replayStmt->nspname },
+		{ relnameParamType, "relname", 0, replayStmt->relname },
 		{ hashParamType, "stmt_hash", 0, hash },
 		{ dataParamType, "stmt_args", 0, replayStmt->data },
 	};
@@ -2494,6 +2506,22 @@ ld_store_replay_fetch(SQLiteQuery *query)
 		s->hash = (uint32_t) strtoul(hashStr, NULL, 16);
 	}
 
+	/* r.nspname — quoted schema name, DML rows only */
+	if (sqlite3_column_type(query->ppStmt, 9) != SQLITE_NULL)
+	{
+		strlcpy(s->nspname,
+				(char *) sqlite3_column_text(query->ppStmt, 9),
+				sizeof(s->nspname));
+	}
+
+	/* r.relname — quoted relation name, DML rows only */
+	if (sqlite3_column_type(query->ppStmt, 10) != SQLITE_NULL)
+	{
+		strlcpy(s->relname,
+				(char *) sqlite3_column_text(query->ppStmt, 10),
+				sizeof(s->relname));
+	}
+
 	log_debug("ld_store_replay_fetch: %lld %c xid=%u lsn=%X/%X endlsn=%X/%X",
 			  (long long) s->id, s->action, s->xid,
 			  LSN_FORMAT_ARGS(s->lsn), LSN_FORMAT_ARGS(s->endlsn));
@@ -2550,7 +2578,7 @@ ld_store_iter_replay_init(ReplayDBReplayIterator *iter)
 	 */
 	char *sql =
 		"   select r.id, r.action, r.xid, r.lsn, r.endlsn, r.timestamp, "
-		"          s.sql, r.stmt_args, r.stmt_hash "
+		"          s.sql, r.stmt_args, r.stmt_hash, r.nspname, r.relname "
 		"     from replay r "
 		"left join stmt s on r.stmt_hash = s.hash "
 		"    where r.lsn >= $1 or r.lsn is null "
@@ -2813,7 +2841,7 @@ ld_store_iter_replay_txn_init(ReplayDBReplayTxnIterator *iter)
 
 	char *sql =
 		"   select r.id, r.action, r.xid, r.lsn, r.endlsn, r.timestamp, "
-		"          s.sql, r.stmt_args, r.stmt_hash "
+		"          s.sql, r.stmt_args, r.stmt_hash, r.nspname, r.relname "
 		"     from replay r "
 		"left join stmt s on r.stmt_hash = s.hash "
 		"    where r.xid = $1 and r.id >= $2 "

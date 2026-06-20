@@ -8,7 +8,7 @@ BUILD_ARGS = --build-arg PGVERSION=$(PGVERSION)
 all: pagila pagila-multi-steps blobs unit filtering extensions \
 	 partitioned-target all-databases \
 	 cdc-wal2json cdc-test-decoding cdc-endpos-mid-txn cdc-low-level \
-	 cdc-replica-identity-index cdc-partitioned-target \
+	 cdc-replica-identity-index cdc-partitioned-target cdc-matview \
 	 cdc-endpos-in-multi-wal-txn cdc-file-rotation \
 	 cdc-pgoutput cdc-filtering-pgoutput \
 	 follow-wal2json follow-9.6 follow-data-only \
@@ -54,6 +54,9 @@ cdc-replica-identity-index: build
 	$(MAKE) -C $@
 
 cdc-partitioned-target: build
+	$(MAKE) -C $@
+
+cdc-matview: build
 	$(MAKE) -C $@
 
 follow-wal2json: build

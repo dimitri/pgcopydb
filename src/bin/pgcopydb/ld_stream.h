@@ -486,6 +486,20 @@ typedef struct StreamContext
 
 
 /*
+ * In-memory cache entry for a target-schema relation's relkind.
+ * Populated once at apply startup from the target pg_class; used to detect
+ * when a DML row targets a materialized view so we can substitute a REFRESH.
+ */
+typedef struct TargetRelkind
+{
+	char nspname[PG_NAMEDATALEN];            /* compound hash key, part 1 */
+	char relname[PG_NAMEDATALEN];            /* compound hash key, part 2 */
+	char relkind;
+	UT_hash_handle hh;
+} TargetRelkind;
+
+
+/*
  * Keep track of the statements that have already been prepared in this
  * session.
  */
@@ -527,6 +541,7 @@ typedef struct StreamApplyContext
 	/* apply needs access to the catalogs to register sentinel replay_lsn */
 	DatabaseCatalog *sourceDB;
 	DatabaseCatalog *replayDB;
+	DatabaseCatalog *targetDB;  /* target schema SQLite catalog */
 	uint64_t sentinelSyncTime;
 
 	ConnStrings *connStrings;
@@ -550,6 +565,9 @@ typedef struct StreamApplyContext
 	bool logSQL;
 
 	PreparedStmt *preparedStmt;
+
+	/* target relkind cache: populated at startup, used for matview detection */
+	TargetRelkind *targetRelkindCache;
 } StreamApplyContext;
 
 
@@ -616,6 +634,7 @@ struct StreamSpecs
 	DatabaseCatalog *sourceDB;
 	DatabaseCatalog *outputDB;   /* output.db — receive writes, apply reads */
 	DatabaseCatalog *replayDB;   /* replay.db — apply writes exclusively */
+	DatabaseCatalog *targetDB;   /* target schema SQLite catalog (apply only) */
 
 	PGSQL transformPGSQL;
 
@@ -680,7 +699,8 @@ bool stream_init_specs(StreamSpecs *specs,
 					   bool stdIn,
 					   bool stdOut,
 					   bool logSQL,
-					   SourceFilters *filters);
+					   SourceFilters *filters,
+					   DatabaseCatalog *targetDB);
 
 bool stream_init_for_mode(StreamSpecs *specs, LogicalStreamMode mode);
 

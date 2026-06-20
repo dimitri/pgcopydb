@@ -522,8 +522,9 @@ pg_vacuumdb_analyze_only(PostgresPaths *pgPaths, ConnStrings *connStrings, int j
 
 	args[argsIndex++] = (char *) pgPaths->vacuumdb;
 	args[argsIndex++] = "--analyze-only";
+	IntString jobsStr = intToString(jobs);
 	args[argsIndex++] = "--jobs";
-	args[argsIndex++] = intToString(jobs).strValue;
+	args[argsIndex++] = jobsStr.strValue;
 	args[argsIndex++] = "--dbname";
 	args[argsIndex++] = (char *) connStrings->safeSourcePGURI.pguri;
 
@@ -897,6 +898,8 @@ pg_restore_db(PostgresPaths *pgPaths,
 
 	char command[BUFSIZE] = { 0 };
 
+	IntString optJobsStr = { 0 };
+
 	char *PGPASSWORD = NULL;
 	bool pgpassword_found_in_env = env_exists("PGPASSWORD");
 
@@ -936,8 +939,9 @@ pg_restore_db(PostgresPaths *pgPaths,
 	}
 	else
 	{
+		optJobsStr = intToString(options.jobs);
 		args[argsIndex++] = "--jobs";
-		args[argsIndex++] = intToString(options.jobs).strValue;
+		args[argsIndex++] = optJobsStr.strValue;
 	}
 
 	if (options.dropIfExists)
