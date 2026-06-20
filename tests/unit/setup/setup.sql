@@ -16,3 +16,4 @@
 \ir 17-exclusion-with-pkey.sql
 \ir 18-function-acl.sql
 \ir 19-pg-stat-statements-acl.sql
+\ir 20-collation-multi-use.sql
