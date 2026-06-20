@@ -619,6 +619,19 @@ schema_list_collations(PGSQL *pgsql, DatabaseCatalog *catalog)
 {
 	SourceCollationArrayContext parseContext = { { 0 }, catalog, false };
 
+	/*
+	 * Each arm of the UNION may return the same colloid multiple times (once
+	 * per column or index that references it).  UNION deduplicates only fully
+	 * identical rows, so two rows that differ only in their description column
+	 * (e.g. two views that both use collation "C") both survive.  Inserting
+	 * them into s_coll, which has oid as PRIMARY KEY, then fails with a
+	 * SQLite constraint error.
+	 *
+	 * The all_colls CTE collects every usage row, and the outer SELECT uses
+	 * DISTINCT ON (colloid) to return exactly one row per collation OID.  The
+	 * description column is informational only (shown by pgcopydb list
+	 * collations) so any single value among the multiple usages is fine.
+	 */
 	char *sql =
 		"with indcols as "
 		" ( "
@@ -628,51 +641,58 @@ schema_list_collations(PGSQL *pgsql, DatabaseCatalog *catalog)
 		"     join pg_namespace n on n.oid = c.relnamespace, "
 		"          unnest(indcollation) with ordinality as t (colloid, n) "
 		"    where n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
+		" ), "
+		"all_colls as "
+		" ( "
+		"   select colloid, collname, "
+		"          pg_describe_object('pg_class'::regclass, indexrelid, 0) "
+		"              as description, "
+		"          format('%s %s %s', "
+		"                 regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"                 regexp_replace(c.collname, '[\\n\\r]', ' '), "
+		"                 regexp_replace(auth.rolname, '[\\n\\r]', ' ')) "
+		"              as restore_list_name "
+		"     from indcols "
+		"          join pg_collation c on c.oid = colloid "
+		"          join pg_roles auth ON auth.oid = c.collowner "
+		"          join pg_namespace n on n.oid = c.collnamespace "
+		"    where colloid <> 0 "
+		"      and collname <> 'default' "
+		"   union "
+		"   select c.oid as colloid, c.collname, "
+		"          format('database %s', d.datname) as description, "
+		"          format('%s %s %s', "
+		"                 regexp_replace(n.nspname, '[\\n\\r]', ' '), "
+		"                 regexp_replace(c.collname, '[\\n\\r]', ' '), "
+		"                 regexp_replace(auth.rolname, '[\\n\\r]', ' ')) "
+		"              as restore_list_name "
+		"     from pg_database d "
+		"          join pg_collation c on c.collname = d.datcollate "
+		"          join pg_roles auth ON auth.oid = c.collowner "
+		"          join pg_namespace n on n.oid = c.collnamespace "
+		"    where d.datname = current_database() "
+		"   union "
+		"   select coll.oid as colloid, coll.collname, "
+		"          pg_describe_object('pg_class'::regclass, attrelid, attnum) "
+		"              as description, "
+		"          format('%s %s %s', "
+		"                 regexp_replace(cn.nspname, '[\\n\\r]', ' '), "
+		"                 regexp_replace(coll.collname, '[\\n\\r]', ' '), "
+		"                 regexp_replace(auth.rolname, '[\\n\\r]', ' ')) "
+		"              as restore_list_name "
+		"     from pg_attribute a "
+		"          join pg_class c on c.oid = a.attrelid "
+		"          join pg_namespace n on n.oid = c.relnamespace "
+		"          join pg_collation coll on coll.oid = attcollation "
+		"          join pg_roles auth ON auth.oid = coll.collowner "
+		"          join pg_namespace cn on cn.oid = coll.collnamespace "
+		"    where collname <> 'default' "
+		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		" ) "
-		"select colloid, collname, "
-		"       pg_describe_object('pg_class'::regclass, indexrelid, 0), "
-		"       format('%s %s %s', "
-		"              regexp_replace(n.nspname, '[\\n\\r]', ' '), "
-		"              regexp_replace(c.collname, '[\\n\\r]', ' '), "
-		"              regexp_replace(auth.rolname, '[\\n\\r]', ' ')) "
-		"  from indcols "
-		"       join pg_collation c on c.oid = colloid "
-		"       join pg_roles auth ON auth.oid = c.collowner "
-		"       join pg_namespace n on n.oid = c.collnamespace "
-		" where colloid <> 0 "
-		"   and collname <> 'default' "
-
-		"union "
-
-		"select c.oid as colloid, c.collname, "
-		"       format('database %s', d.datname) as desc, "
-		"       format('%s %s %s', "
-		"              regexp_replace(n.nspname, '[\\n\\r]', ' '), "
-		"              regexp_replace(c.collname, '[\\n\\r]', ' '), "
-		"              regexp_replace(auth.rolname, '[\\n\\r]', ' ')) "
-		"  from pg_database d "
-		"       join pg_collation c on c.collname = d.datcollate "
-		"       join pg_roles auth ON auth.oid = c.collowner "
-		"       join pg_namespace n on n.oid = c.collnamespace "
-		" where d.datname = current_database() "
-
-		"union "
-
-		"select coll.oid as colloid, coll.collname, "
-		"       pg_describe_object('pg_class'::regclass, attrelid, attnum), "
-		"       format('%s %s %s', "
-		"              regexp_replace(cn.nspname, '[\\n\\r]', ' '), "
-		"              regexp_replace(coll.collname, '[\\n\\r]', ' '), "
-		"              regexp_replace(auth.rolname, '[\\n\\r]', ' ')) "
-		"  from pg_attribute a "
-		"       join pg_class c on c.oid = a.attrelid "
-		"       join pg_namespace n on n.oid = c.relnamespace "
-		"       join pg_collation coll on coll.oid = attcollation "
-		"       join pg_roles auth ON auth.oid = coll.collowner "
-		"       join pg_namespace cn on cn.oid = coll.collnamespace "
-		" where collname <> 'default' "
-		"   and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
-		"order by colloid";
+		"select distinct on (colloid) colloid, collname, description, "
+		"       restore_list_name "
+		"  from all_colls "
+		"order by colloid, description";
 
 	if (!pgsql_execute_with_params(pgsql, sql,
 								   0, NULL, NULL,

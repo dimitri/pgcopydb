@@ -1,5 +1,6 @@
                  Name | Object name
 ----------------------+---------------------
+                    C | column ?column? of view v_coll_test
            en_US.utf8 | database postgres
           de-DE-x-icu | column f2 of table colls
           en-US-x-icu | column f2 of table mycoltab
