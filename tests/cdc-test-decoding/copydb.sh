@@ -112,5 +112,30 @@ psql -AtqX -d ${PGCOPYDB_TARGET_PGURI} \
      > /tmp/tgt_quotes.txt
 diff /tmp/src_quotes.txt /tmp/tgt_quotes.txt
 
+#
+# Round 2: --replay-no-op-updates
+#
+# Inject a second no-op UPDATE on noop_update_test (REPLICA IDENTITY FULL).
+# Run prefetch + catchup with --replay-no-op-updates and verify that the
+# UPDATE now appears in the replay, unlike in the default (skip) round above.
+#
+psql -d ${PGCOPYDB_SOURCE_PGURI} \
+     -c "UPDATE noop_update_test SET val = 'hello' WHERE id = 1;"
+
+lsn2=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_flush_lsn()'`
+
+pgcopydb stream prefetch --resume --endpos "${lsn2}" --debug
+
+pgcopydb stream catchup --resume --endpos "${lsn2}" --replay-no-op-updates -vv
+
+noop_update_count=$(sqlite3 -init /dev/null -list -noheader ${REPLAYDB} \
+    "select count(*)
+     from stmt s
+     join replay r on r.stmt_hash = s.hash
+     where s.sql like 'UPDATE public.noop_update_test%'")
+
+echo "noop_update_count with --replay-no-op-updates: ${noop_update_count}"
+test "${noop_update_count}" -ge 1
+
 # cleanup
 pgcopydb stream cleanup

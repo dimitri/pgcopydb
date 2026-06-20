@@ -33,3 +33,5 @@ DELETE FROM public.float8_precision_test WHERE id = $1
 INSERT INTO public.quote_escaping_test (id, varchar_col, text_col) overriding system value VALUES ($1, $2, $3), ($4, $5, $6)
 UPDATE public.quote_escaping_test SET varchar_col = $1, text_col = $2 WHERE id = $3
 DELETE FROM public.quote_escaping_test WHERE id = $1
+INSERT INTO public.noop_update_test (id, val) overriding system value VALUES ($1, $2)
+INSERT INTO public.all_pk_test (a, b) overriding system value VALUES ($1, $2)

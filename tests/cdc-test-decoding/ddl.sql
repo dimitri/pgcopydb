@@ -270,3 +270,30 @@ create table identity_column_test
 );
 
 commit;
+
+--
+-- Tables for no-op UPDATE testing (--replay-no-op-updates, issue #983)
+--
+begin;
+
+-- REPLICA IDENTITY FULL: test_decoding emits old-key: and new-tuple: with
+-- identical values for a no-op UPDATE.  The transform layer compares them and
+-- skips by default; --replay-no-op-updates disables the skip.
+create table noop_update_test (
+    id  bigint primary key,
+    val text
+);
+
+alter table noop_update_test replica identity full;
+
+-- All columns are part of the primary key.  A no-op UPDATE (SET a = a) has
+-- no old-key: prefix in the test_decoding message, and prepareUpdateTupleArrays
+-- finds newCount == 0 (nothing for the SET clause).  The UPDATE must be
+-- skipped gracefully rather than aborting the apply process.
+create table all_pk_test (
+    a bigint,
+    b bigint,
+    primary key (a, b)
+);
+
+commit;
