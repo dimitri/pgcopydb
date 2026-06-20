@@ -343,7 +343,7 @@ file_iter_lines(const char *filename,
 
 /*
  * file_iter_lines_init initializes an Iterator over a file to read it
- * line-by-line and allocate only one line at a time.
+ * line-by-line with a dynamically growing line buffer.
  */
 bool
 file_iter_lines_init(FileLinesIterator *iter)
@@ -357,12 +357,13 @@ file_iter_lines_init(FileLinesIterator *iter)
 	}
 
 	/*
-	 * Allocate a buffer to hold the line contents, and re-use the same buffer
-	 * over and over when reading the next line.
+	 * Start with a reasonable initial size.  file_iter_lines_next will grow
+	 * the buffer automatically whenever a line does not fit.
 	 */
-	iter->line = calloc(1, iter->bufsize * sizeof(char));
+	iter->bufsize = BUFSIZE * 8;
+	iter->linebuf = (char *) calloc(1, iter->bufsize);
 
-	if (iter->line == NULL)
+	if (iter->linebuf == NULL)
 	{
 		log_error(ALLOCATION_FAILED_ERROR);
 		return false;
@@ -373,44 +374,62 @@ file_iter_lines_init(FileLinesIterator *iter)
 
 
 /*
- * file_iter_lines_next fetches the next line in the opened file.
+ * file_iter_lines_next fetches the next line in the opened file. It reads
+ * with fgets and grows the GC-managed buffer if the line doesn't fit, so
+ * lines of arbitrary length are handled without truncation.
  */
 bool
 file_iter_lines_next(FileLinesIterator *iter)
 {
-	size_t len = iter->bufsize - 1;
+	size_t offset = 0;
 
-	char *lineptr = fgets(iter->line, len, iter->stream);
-
-	/* Upon successful completion, fgets() shall return s. */
-	if (lineptr == iter->line)
+	for (;;)
 	{
-		return true;
-	}
+		char *cur = iter->linebuf + offset;
+		size_t avail = iter->bufsize - offset;
 
-	if (lineptr == NULL)
-	{
-		/*
-		 * If the stream is at end-of-file, the end-of-file indicator for the
-		 * stream shall be set and fgets() shall return a null pointer.
-		 */
-		if (feof(iter->stream) != 0)
+		if (fgets(cur, avail, iter->stream) == NULL)
 		{
-			/* signal end-of-file by setting line to NULL */
-			iter->line = NULL;
+			if (feof(iter->stream) != 0)
+			{
+				/* signal end-of-file; if we buffered a partial line, return it */
+				iter->line = (offset > 0) ? iter->linebuf : NULL;
+				return true;
+			}
+			log_error("Failed to iterate over file \"%s\": %m", iter->filename);
+			return false;
+		}
+
+		size_t nread = strlen(cur);
+
+		if (nread > 0 && cur[nread - 1] == '\n')
+		{
+			/* complete line ending with \n */
+			iter->line = iter->linebuf;
 			return true;
 		}
 
-		/*
-		 * If a read error occurs, the error indicator for the stream shall be
-		 * set, fgets() shall return a null pointer, and shall set errno to
-		 * indicate the error.
-		 */
-		log_error("Failed to iterate over file \"%s\": %m", iter->filename);
-		return false;
-	}
+		if (feof(iter->stream) != 0)
+		{
+			/* last line of file with no trailing newline */
+			iter->line = iter->linebuf;
+			return true;
+		}
 
-	return true;
+		/* fgets filled the buffer without hitting \n: grow and continue */
+		offset += nread;
+		size_t new_size = iter->bufsize * 2;
+		char *new_buf = (char *) realloc(iter->linebuf, new_size);
+
+		if (new_buf == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+		iter->linebuf = new_buf;
+		iter->bufsize = new_size;
+		iter->line = iter->linebuf;
+	}
 }
 
 
@@ -420,6 +439,9 @@ file_iter_lines_next(FileLinesIterator *iter)
 bool
 file_iter_lines_finish(FileLinesIterator *iter)
 {
+	free(iter->linebuf);
+	iter->linebuf = NULL;
+
 	if (fclose(iter->stream) == EOF)
 	{
 		log_error("Failed to read file \"%s\"", iter->filename);

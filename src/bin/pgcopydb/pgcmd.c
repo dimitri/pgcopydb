@@ -1176,47 +1176,9 @@ archive_iter_toc_init(ArchiveTOCIterator *iter)
 	iter->fileIterator->filename = iter->filename;
 
 	/*
-	 * An archive TOC entry has a fixed format that looks like the following:
-	 *
-	 * ahprintf(AH, "%d; %u %u %s %s %s %s\n", te->dumpId,
-	 * te->catalogId.tableoid, te->catalogId.oid, te->desc, sanitized_schema,
-	 * sanitized_name, sanitized_owner);
-	 *
-	 * The %s parts are PG_NAMEDATALEN except for sanitized_name for functions.
-	 * Let's calculate the maximum line length we can expect for all objects
-	 * except for functions, and add some headroom for the sanitized function
-	 * names later.
-	 *
-	 * Numbers require up to 10 chars (digits) to be printed, and PG_NAMEDATALEN
-	 * is 64 characters, but we need to double that for quoting rules. Add in
-	 * the semi-colon. And the desc is less than 32 characters, the longest
-	 * known being "PUBLICATION TABLES IN SCHEMA" at 30. Let's make it 64 for
-	 * headroom:
-	 *
-	 * 3 * (10 + 1) + 1 + 3 * (2 * 64) + 64 = 482 chars
-	 *
-	 * The sanitized name of a function contains the name of the function
-	 * followed by a list of parameters types in parantheses, which can be quite
-	 * long. Let's calculate the upper limit for the length of the parameter
-	 * list:
-	 *
-	 * max_function_args is a compile-time constant that is set to 100 by
-	 * default in Postgres. Although it can be changed at compile time, we don't
-	 * want to care about that here.
-	 *
-	 * A type name can be up to PG_NAMEDATALEN characters long, and assuming we
-	 * have BUFSIZE is 1024 bytes.
-	 *
-	 * 100 * (PG_NAMEDATALEN + 2) = 100 * (64 + 2) = 100 * 66 = 6600 chars
-	 *
-	 * 6600 + 482 = 7082 chars
-	 *
-	 * BUFSIZE is 1024 bytes.
-	 *
-	 * 8 kilobytes is a reasonable size for a buffer.
+	 * file_iter_lines_init allocates a GC-managed buffer that grows
+	 * automatically, so TOC lines of any length are handled correctly.
 	 */
-	iter->fileIterator->bufsize = BUFSIZE * 8;
-
 	if (!file_iter_lines_init(iter->fileIterator))
 	{
 		/* errors have already been logged */
@@ -1267,19 +1229,9 @@ archive_iter_toc_next(ArchiveTOCIterator *iter)
 	/* remove end-of-line \n character in our line buffer */
 	size_t len = strlen(iter->fileIterator->line);
 
-	if (iter->fileIterator->line[len - 1] == '\n')
+	if (len > 0 && iter->fileIterator->line[len - 1] == '\n')
 	{
 		iter->fileIterator->line[len - 1] = '\0';
-	}
-	else
-	{
-		/* if that's not the last line, then we got a partial read */
-		if (feof(iter->fileIterator->stream) != 0)
-		{
-			log_error("Failed to parse archive TOC file \"%s\": partial read",
-					  iter->filename);
-			return false;
-		}
 	}
 
 	/* reset our memory area before re-use */
@@ -1712,24 +1664,40 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 	ArchiveToken token = { .ptr = ptr };
 
 	/*
-	 * At the moment we only support filtering ACLs and COMMENTS for SCHEMA and
-	 * EXTENSION objects, see --skip-extensions. So first, we skip the
-	 * namespace, which in our case would always be a dash.
+	 * The namespace field is "-" for global objects (SCHEMA, EXTENSION) or a
+	 * real schema name for schema-qualified objects (FUNCTION, TABLE, etc.).
+	 *
+	 * tokenize_archive_list_entry advances token.ptr for DASH and SPACE, but
+	 * returns ARCHIVE_TOKEN_UNKNOWN without advancing for anything else, so we
+	 * advance past a schema-name namespace manually.
 	 */
-	ArchiveTokenType list[] = {
-		ARCHIVE_TOKEN_DASH,
-		ARCHIVE_TOKEN_SPACE
-	};
-
-	int count = sizeof(list) / sizeof(list[0]);
-
-	for (int i = 0; i < count; i++)
+	if (!tokenize_archive_list_entry(&token))
 	{
-		if (!tokenize_archive_list_entry(&token) || token.type != list[i])
+		return false;
+	}
+
+	if (token.type == ARCHIVE_TOKEN_DASH)
+	{
+		/* consume the space following the dash */
+		if (!tokenize_archive_list_entry(&token) ||
+			token.type != ARCHIVE_TOKEN_SPACE)
 		{
-			log_trace("Unsupported ACL or COMMENT (namespace is not -): \"%s\"",
+			log_debug("Failed to parse ACL or COMMENT after namespace dash: \"%s\"",
 					  ptr);
 			return false;
+		}
+	}
+	else
+	{
+		/* advance manually past the schema-name identifier and the space */
+		while (*token.ptr != '\0' && *token.ptr != ' ')
+		{
+			++token.ptr;
+		}
+
+		if (*token.ptr == ' ')
+		{
+			++token.ptr;
 		}
 	}
 
@@ -1799,13 +1767,25 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 	}
 	else
 	{
-		log_debug("Failed to parse %s \"%s\": not supported yet",
-				  item->description,
-				  ptr);
+		/*
+		 * Other object types (FUNCTION, TABLE, SEQUENCE, …): preserve the
+		 * full remainder of the TOC entry as restoreListName.  These ACL
+		 * items have objectOid == 0 so they are not subject to name-based
+		 * filter lookups; the name is kept for logging and so that the
+		 * pre-filtered pg_restore list file is valid.
+		 */
+		size_t len = strlen(ptr) + 1;
 
+		item->restoreListName = (char *) calloc(len, sizeof(char));
+
+		if (item->restoreListName == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		strlcpy(item->restoreListName, ptr, len);
 		item->tagType = ARCHIVE_TAG_TYPE_OTHER;
-
-		return false;
 	}
 
 	log_trace("parse_archive_acl_or_comment: %s [%s]",

@@ -30,6 +30,7 @@ EOF
 export PGCOPYDB_SPLIT_TABLES_LARGER_THAN="2MB"
 pgcopydb fork --skip-collations --fail-fast --debug
 
+
 # now compare the output of running the SQL command with what's expected
 # as we're not root when running tests, can't write in /usr/src
 mkdir -p /tmp/results

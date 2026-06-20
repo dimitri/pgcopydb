@@ -64,7 +64,8 @@ typedef struct FileLinesIterator
 	const char *filename;
 	FILE *stream;
 	size_t bufsize;
-	char *line;                 /* malloc'ed area */
+	char *linebuf;              /* GC-managed line buffer, grows as needed */
+	char *line;                 /* current line, NULL signals EOF */
 } FileLinesIterator;
 
 bool file_iter_lines_init(FileLinesIterator *iter);
