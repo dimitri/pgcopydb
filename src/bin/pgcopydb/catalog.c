@@ -884,23 +884,21 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 
 		if (!streq(json, setup->filters))
 		{
-			log_info("Current filtering setup is: %s", json);
-			log_info("Catalog filtering setup is: %s", setup->filters);
-
-			/* If catalog has no filters but current command does, it's probably a clone command
-			 * after another command (like snapshot). Use the filters from the current command
-			 */
 			if (strstr(setup->filters, "SOURCE_FILTER_TYPE_NONE") != NULL &&
 				strstr(json, "SOURCE_FILTER_TYPE_NONE") == NULL)
 			{
-				log_warn("Catalogs at \"%s\" have been setup for a different "
-						 "filtering than the current command, "
-						 "see above for details",
+				/*
+				 * Catalog was created without filters (e.g. by pgcopydb
+				 * snapshot) and the current command uses filters (e.g.
+				 * pgcopydb clone --filters). Update the stored filter so
+				 * subsequent commands see the right setup.
+				 */
+				log_info("Current filtering setup is: %s", json);
+				log_info("Catalog filtering setup is: %s", setup->filters);
+				log_warn("Catalogs at \"%s\" have been setup without filters; "
+						 "updating to current command filters",
 						 sourceDB->dbfile);
-				log_warn("Updating catalog filters from \"%s\" to \"%s\"",
-						 setup->filters, json);
 
-				/* Update the filters in the catalog database */
 				if (!catalog_update_filters(sourceDB, json))
 				{
 					log_error("Failed to update filters in catalog database");
@@ -908,19 +906,20 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 					return false;
 				}
 
-				/* Update the local setup structure */
 				if (setup->filters != NULL)
 				{
 					free(setup->filters);
 				}
 				setup->filters = strdup(json);
 
-				log_warn("Successfully updated catalog filters");
+				log_info("Catalog filters updated to: %s", setup->filters);
 			}
 			else if (strstr(setup->filters, "SOURCE_FILTER_TYPE_NONE") == NULL &&
 					 strstr(json, "SOURCE_FILTER_TYPE_NONE") == NULL)
 			{
-				/* If both have different filters, something is wrong */
+				/* Both sides have filters but they differ — genuine conflict. */
+				log_info("Current filtering setup is: %s", json);
+				log_info("Catalog filtering setup is: %s", setup->filters);
 				log_error("Catalogs at \"%s\" have been setup for a different "
 						  "filtering than the current command, "
 						  "see above for details",
@@ -931,17 +930,22 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 			else if (strstr(setup->filters, "SOURCE_FILTER_TYPE_NONE") == NULL &&
 					 strstr(json, "SOURCE_FILTER_TYPE_NONE") != NULL)
 			{
-				/* If the catalog has filters but current command doesn't, it's probably a command
-				 * (like stream or list) after a clone. Continue with previously used filters in the catalog */
-				log_warn("Catalogs at \"%s\" have been setup for a different "
-						 "filtering than the current command, "
-						 "see above for details",
-						 sourceDB->dbfile);
-				log_warn("Using previously configured filters");
+				/*
+				 * Catalog was created with filters; the current command has
+				 * none (e.g. pgcopydb list table-parts, pgcopydb stream
+				 * sentinel). These read-only commands operate on the already-
+				 * filtered catalog data and do not need --filters repeated.
+				 * Silently adopt the catalog's stored filter.
+				 */
+				log_debug("Adopting catalog's stored filters for this command "
+						  "(catalog: %s)",
+						  setup->filters);
 			}
 			else
 			{
-				/* Any other unanticipated mismatch, default to an error*/
+				/* Unanticipated mismatch. */
+				log_info("Current filtering setup is: %s", json);
+				log_info("Catalog filtering setup is: %s", setup->filters);
 				log_error("Catalogs at \"%s\" have been setup for a different "
 						  "filtering than the current command, "
 						  "see above for details",
