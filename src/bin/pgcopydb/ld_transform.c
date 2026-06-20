@@ -69,7 +69,8 @@ static bool stream_transform_prepare_message(StreamSpecs *specs,
 static bool stream_write_insert(ReplayDBStmt *replayStmt,
 								LogicalMessageInsert *insert);
 
-static bool stream_write_update(ReplayDBStmt *replayStmt,
+static bool stream_write_update(bool replayNoOpUpdates,
+								ReplayDBStmt *replayStmt,
 								LogicalMessageUpdate *update);
 
 static bool stream_write_delete(ReplayDBStmt *replayStmt,
@@ -78,11 +79,14 @@ static bool stream_write_delete(ReplayDBStmt *replayStmt,
 static bool stream_write_truncate(ReplayDBStmt *replayStmt,
 								  LogicalMessageTruncate *truncate);
 
-static bool stream_write_file_txn(FILE *out, LogicalTransaction *txn);
+static bool stream_write_file_txn(FILE *out,
+								  LogicalTransaction *txn,
+								  bool replayNoOpUpdates);
 
 static bool stream_write_file_message(FILE *out,
 									  LogicalMessage *msg,
-									  LogicalMessageMetadata *metadata);
+									  LogicalMessageMetadata *metadata,
+									  bool replayNoOpUpdates);
 
 
 /*
@@ -452,13 +456,13 @@ stream_transform_write_transaction(StreamSpecs *specs)
  * SQLite pipeline refactoring removed stream_write_message().
  */
 static bool
-stream_write_file_txn(FILE *out, LogicalTransaction *txn)
+stream_write_file_txn(FILE *out, LogicalTransaction *txn, bool replayNoOpUpdates)
 {
 #define FFORMAT(stream, fmt, ...) \
-	{ if (fformat(stream, fmt, __VA_ARGS__) == -1) { \
-		  log_error("Failed to write to stream: %m"); \
-		  return false; } \
-	}
+		{ if (fformat(stream, fmt, __VA_ARGS__) == -1) { \
+			  log_error("Failed to write to stream: %m"); \
+			  return false; } \
+		}
 
 	/* write BEGIN only for non-continued, non-empty transactions */
 	bool sentBEGIN = false;
@@ -528,7 +532,8 @@ stream_write_file_txn(FILE *out, LogicalTransaction *txn)
 
 			case STREAM_ACTION_UPDATE:
 			{
-				if (!stream_write_update(&replayStmt,
+				if (!stream_write_update(replayNoOpUpdates,
+										 &replayStmt,
 										 &(currentStmt->stmt.update)))
 				{
 					/* errors have already been logged */
@@ -625,17 +630,18 @@ stream_write_file_txn(FILE *out, LogicalTransaction *txn)
 static bool
 stream_write_file_message(FILE *out,
 						  LogicalMessage *msg,
-						  LogicalMessageMetadata *metadata)
+						  LogicalMessageMetadata *metadata,
+						  bool replayNoOpUpdates)
 {
 #define FFORMAT(stream, fmt, ...) \
-	{ if (fformat(stream, fmt, __VA_ARGS__) == -1) { \
-		  log_error("Failed to write to stream: %m"); \
-		  return false; } \
-	}
+		{ if (fformat(stream, fmt, __VA_ARGS__) == -1) { \
+			  log_error("Failed to write to stream: %m"); \
+			  return false; } \
+		}
 
 	if (msg->isTransaction)
 	{
-		return stream_write_file_txn(out, &(msg->command.tx));
+		return stream_write_file_txn(out, &(msg->command.tx), replayNoOpUpdates);
 	}
 
 	/* non-transaction messages: SWITCH / KEEPALIVE / ENDPOS */
@@ -741,8 +747,11 @@ stream_transform_write_message(StreamContext *privateContext,
 	 */
 	if (privateContext->sqlFile != NULL)
 	{
+		bool replayNoOpUpdates = privateContext->specs != NULL &&
+								 privateContext->specs->replayNoOpUpdates;
+
 		if (!stream_write_file_message(privateContext->sqlFile, currentMsg,
-									   metadata))
+									   metadata, replayNoOpUpdates))
 		{
 			/* errors have already been logged */
 			return false;
@@ -1808,7 +1817,8 @@ stream_transform_write_replay_txn(StreamSpecs *specs)
 
 			case STREAM_ACTION_UPDATE:
 			{
-				if (!stream_write_update(&stmt, &(currentStmt->stmt.update)))
+				if (!stream_write_update(specs->replayNoOpUpdates,
+										 &stmt, &(currentStmt->stmt.update)))
 				{
 					/* errors have already been logged */
 					return false;
@@ -1996,7 +2006,9 @@ stream_write_insert(ReplayDBStmt *replayStmt, LogicalMessageInsert *insert)
  * stream_write_update writes an UPDATE statement.
  */
 static bool
-stream_write_update(ReplayDBStmt *replayStmt, LogicalMessageUpdate *update)
+stream_write_update(bool replayNoOpUpdates,
+					ReplayDBStmt *replayStmt,
+					LogicalMessageUpdate *update)
 {
 	strlcpy(replayStmt->nspname, update->table.nspname, sizeof(replayStmt->nspname));
 	strlcpy(replayStmt->relname, update->table.relname, sizeof(replayStmt->relname));
@@ -2086,7 +2098,8 @@ stream_write_update(ReplayDBStmt *replayStmt, LogicalMessageUpdate *update)
 						LogicalMessageValue *oldValue =
 							&(old->values.array[0].array[oc]);
 
-						if (LogicalMessageValueEq(oldValue, value))
+						if (!replayNoOpUpdates &&
+							LogicalMessageValueEq(oldValue, value))
 						{
 							skip = true;
 							break;
@@ -2217,8 +2230,8 @@ stream_write_update(ReplayDBStmt *replayStmt, LogicalMessageUpdate *update)
 
 		if (skipUpdate)
 		{
-			log_warn("Skipping UPDATE statement as all columns are "
-					 "the same as the old");
+			log_debug("Skipping no-op UPDATE statement: "
+					  "all column values are unchanged");
 
 			destroyPQExpBuffer(buf);
 			return true;
@@ -2554,17 +2567,17 @@ LogicalMessageValueEq(LogicalMessageValue *a, LogicalMessageValue *b)
  * comparable in the context of Hash Table.
  */
 #define NORMALIZED_PG_NAMEDATA_COPY(dst, src) \
-	{ \
-		int len = strlen(src); \
-		if (src[0] == '"' && src[len - 1] == '"') \
 		{ \
-			strlcpy(dst, src, PG_NAMEDATALEN); \
-		} \
-		else \
-		{ \
-			sformat(dst, PG_NAMEDATALEN, "\"%s\"", src); \
-		} \
-	}
+			int len = strlen(src); \
+			if (src[0] == '"' && src[len - 1] == '"') \
+			{ \
+				strlcpy(dst, src, PG_NAMEDATALEN); \
+			} \
+			else \
+			{ \
+				sformat(dst, PG_NAMEDATALEN, "\"%s\"", src); \
+			} \
+		}
 
 /*
  * lookupGeneratedColumnsForTable lookup the generated columns set for the given

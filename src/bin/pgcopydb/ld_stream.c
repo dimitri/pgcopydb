@@ -56,6 +56,7 @@ stream_init_specs(StreamSpecs *specs,
 				  bool stdin,
 				  bool stdout,
 				  bool logSQL,
+				  bool replayNoOpUpdates,
 				  SourceFilters *filters,
 				  DatabaseCatalog *targetDB)
 {
@@ -64,6 +65,7 @@ stream_init_specs(StreamSpecs *specs,
 	specs->stdIn = stdin;
 	specs->stdOut = stdout;
 	specs->logSQL = logSQL;
+	specs->replayNoOpUpdates = replayNoOpUpdates;
 
 	/*
 	 * Initialize pipe fds to -1 so that callers can safely test

@@ -1493,38 +1493,38 @@ ld_store_insert_pgoutput_message(DatabaseCatalog *catalog,
 	 * It is #undef'd immediately after its two call sites.
 	 */
 	#define INSERT_COLS(cols_arr, ncols, section_char) \
-	do { \
-		char sec[2] = { (section_char), '\0' }; \
-		for (int _i = 0; _i < (ncols); _i++) \
-		{ \
-			PgoutputColumn *_c = &(cols_arr)[_i]; \
-			char _st[2] = { _c->status, '\0' }; \
-			SQLiteQuery _cq = { 0 }; \
-			if (!catalog_sql_prepare(db, col_sql, &_cq)) \
-			{ \
-				(void) semaphore_unlock(&(catalog->sema)); \
-				return false; \
-			} \
-			BindParam _cp[] = { \
-				{ BIND_PARAMETER_TYPE_INT64, "output_id", output_id, NULL }, \
-				{ BIND_PARAMETER_TYPE_TEXT, "section", 0, sec }, \
-				{ BIND_PARAMETER_TYPE_INT64, "pos", _i, NULL }, \
-				{ BIND_PARAMETER_TYPE_TEXT, "name", 0, _c->name }, \
-				{ BIND_PARAMETER_TYPE_TEXT, "status", 0, _st }, \
+			do { \
+				char sec[2] = { (section_char), '\0' }; \
+				for (int _i = 0; _i < (ncols); _i++) \
 				{ \
-					_c->status == 't' ? BIND_PARAMETER_TYPE_TEXT \
+					PgoutputColumn *_c = &(cols_arr)[_i]; \
+					char _st[2] = { _c->status, '\0' }; \
+					SQLiteQuery _cq = { 0 }; \
+					if (!catalog_sql_prepare(db, col_sql, &_cq)) \
+					{ \
+						(void) semaphore_unlock(&(catalog->sema)); \
+						return false; \
+					} \
+					BindParam _cp[] = { \
+						{ BIND_PARAMETER_TYPE_INT64, "output_id", output_id, NULL }, \
+						{ BIND_PARAMETER_TYPE_TEXT, "section", 0, sec }, \
+						{ BIND_PARAMETER_TYPE_INT64, "pos", _i, NULL }, \
+						{ BIND_PARAMETER_TYPE_TEXT, "name", 0, _c->name }, \
+						{ BIND_PARAMETER_TYPE_TEXT, "status", 0, _st }, \
+						{ \
+							_c->status == 't' ? BIND_PARAMETER_TYPE_TEXT \
 					: BIND_PARAMETER_TYPE_NULL, \
-					"value", 0, _c->value \
+							"value", 0, _c->value \
+						} \
+					}; \
+					if (!catalog_sql_bind(&_cq, _cp, lengthof(_cp)) || \
+						!catalog_sql_execute_once(&_cq)) \
+					{ \
+						(void) semaphore_unlock(&(catalog->sema)); \
+						return false; \
+					} \
 				} \
-			}; \
-			if (!catalog_sql_bind(&_cq, _cp, lengthof(_cp)) || \
-				!catalog_sql_execute_once(&_cq)) \
-			{ \
-				(void) semaphore_unlock(&(catalog->sema)); \
-				return false; \
-			} \
-		} \
-	} while (0)
+			} while (0)
 
 	if (pgmsg->old_cols != NULL)
 	{

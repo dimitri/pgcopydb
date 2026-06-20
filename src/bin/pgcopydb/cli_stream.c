@@ -61,6 +61,7 @@ static CommandLine stream_setup_command =
 		"  --snapshot                    Use snapshot obtained with pg_export_snapshot\n"
 		"  --plugin                      Output plugin to use (pgoutput, test_decoding, wal2json)\n"
 		"  --wal2json-numeric-as-string  Print numeric data type as string when using wal2json output plugin\n"
+		"  --replay-no-op-updates        Replay UPDATE statements even when no column values changed\n"
 		"  --slot-name                   Stream changes recorded by this slot\n"
 		"  --origin                      Name of the Postgres replication origin\n",
 		cli_stream_getopts,
@@ -208,6 +209,7 @@ cli_stream_getopts(int argc, char **argv)
 		{ "origin", required_argument, NULL, 'o' },
 		{ "endpos", required_argument, NULL, 'E' },
 		{ "max-replaydb-size", required_argument, NULL, 1003 },
+		{ "replay-no-op-updates", no_argument, NULL, 1004 },
 		{ "host", required_argument, NULL, 1001 },
 		{ "port", required_argument, NULL, 1002 },
 		{ "restart", no_argument, NULL, 'r' },
@@ -342,6 +344,13 @@ cli_stream_getopts(int argc, char **argv)
 				log_trace("--endpos %X/%X",
 						  (uint32_t) (options.endpos >> 32),
 						  (uint32_t) options.endpos);
+				break;
+			}
+
+			case 1004:      /* --replay-no-op-updates */
+			{
+				options.replayNoOpUpdates = true;
+				log_trace("--replay-no-op-updates");
 				break;
 			}
 
@@ -633,6 +642,7 @@ cli_stream_setup(int argc, char **argv)
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL,
+						   streamDBoptions.replayNoOpUpdates,
 						   NULL,
 						   &(copySpecs.catalogs.target)))
 	{
@@ -788,6 +798,7 @@ cli_stream_catchup(int argc, char **argv)
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL,
+						   streamDBoptions.replayNoOpUpdates,
 						   NULL,
 						   &(copySpecs.catalogs.target)))
 	{
@@ -879,6 +890,7 @@ cli_stream_replay(int argc, char **argv)
 						   true,  /* stdin */
 						   true, /* stdout */
 						   logSQL,
+						   streamDBoptions.replayNoOpUpdates,
 						   NULL,
 						   &(copySpecs.catalogs.target)))
 	{
@@ -983,6 +995,7 @@ cli_stream_transform(int argc, char **argv)
 							   true,    /* stdIn */
 							   true,    /* stdOut */
 							   logSQL,
+							   streamDBoptions.replayNoOpUpdates,
 							   NULL,
 							   &(copySpecs.catalogs.target)))
 		{
@@ -1056,6 +1069,7 @@ cli_stream_transform(int argc, char **argv)
 						   false, /* stdIn */
 						   false, /* stdOut */
 						   logSQL,
+						   streamDBoptions.replayNoOpUpdates,
 						   NULL,
 						   &(copySpecs.catalogs.target)))
 	{
@@ -1181,6 +1195,7 @@ cli_stream_apply(int argc, char **argv)
 							   true,   /* stdIn */
 							   false,  /* stdOut */
 							   logSQL,
+							   streamDBoptions.replayNoOpUpdates,
 							   NULL,
 							   &(copySpecs.catalogs.target)))
 		{
@@ -1275,6 +1290,7 @@ cli_stream_apply(int argc, char **argv)
 						   false, /* stdIn */
 						   stdoutMode, /* stdOut */
 						   logSQL,
+						   streamDBoptions.replayNoOpUpdates,
 						   NULL,
 						   &(copySpecs.catalogs.target)))
 	{
@@ -1430,6 +1446,7 @@ stream_start_in_mode(LogicalStreamMode mode)
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL,
+						   streamDBoptions.replayNoOpUpdates,
 						   NULL,
 						   &(copySpecs.catalogs.target)))
 	{

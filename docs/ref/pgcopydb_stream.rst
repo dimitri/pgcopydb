@@ -325,6 +325,21 @@ The following options are available to ``pgcopydb stream`` sub-commands:
 
   __ https://github.com/eulerto/wal2json/pull/255
 
+--replay-no-op-updates
+
+  When set, pgcopydb replays UPDATE statements even when no column values
+  changed between the old and new tuple. By default, such no-op UPDATEs are
+  skipped as an optimisation (the default is appropriate for migration
+  workloads where target triggers do not need to fire for every UPDATE).
+
+  Enable this option when the target database has UPDATE triggers that must
+  fire for every UPDATE, including those that do not change any column
+  values. PostgreSQL's own logical replication always replays all UPDATEs;
+  this option restores that behaviour.
+
+  No-op UPDATEs arise most often with ``REPLICA IDENTITY FULL`` tables,
+  where both the old and new full row are available for comparison.
+
 --slot-name
 
   Logical decoding slot name to use.

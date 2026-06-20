@@ -228,7 +228,7 @@ parseTestDecodingMessageActionAndXid(LogicalStreamContext *context)
 #define TD_UNCHANGED_TOAST "unchanged-toast-datum"
 #define TD_UNCHANGED_TOAST_LEN strlen(TD_UNCHANGED_TOAST)
 #define TD_FOUND_UNCHANGED_TOAST(ptr) \
-	(strncmp(ptr, TD_UNCHANGED_TOAST, TD_UNCHANGED_TOAST_LEN) == 0)
+		(strncmp(ptr, TD_UNCHANGED_TOAST, TD_UNCHANGED_TOAST_LEN) == 0)
 
 /*
  * parseTestDecodingMessage parses a message as emitted by test_decoding into
@@ -1255,10 +1255,10 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 
 	if (newCount == 0)
 	{
-		log_error("Failed to parse decoding message for UPDATE on "
-				  "table \"%s\".\"%s\": SET clause columns not found",
+		log_debug("Skipping no-op UPDATE on table \"%s\".\"%s\": "
+				  "all columns are identity columns, none changed",
 				  cached->nspname, cached->relname);
-		return false;
+		return true;
 	}
 
 	/*
