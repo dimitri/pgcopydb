@@ -274,7 +274,9 @@ sentinel_update_apply(DatabaseCatalog *catalog, bool apply)
 
 /*
  * sentinel_update_write_flush_lsn updates the current sentinel values for
- * write_lsn and flush_lsn, and startpos too.
+ * write_lsn and flush_lsn. startpos is intentionally NOT updated here; it
+ * records the static replication slot creation LSN for the lifetime of the
+ * migration.
  */
 bool
 sentinel_update_write_flush_lsn(DatabaseCatalog *catalog,
