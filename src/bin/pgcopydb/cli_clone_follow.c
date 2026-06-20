@@ -613,6 +613,7 @@ clone_and_follow(CopyDataSpec *copySpecs)
 						   copyDBoptions.stdIn,
 						   copyDBoptions.stdOut,
 						   logSQL,
+						   copyDBoptions.replayNoOpUpdates,
 						   &(copySpecs->filters),
 						   &(copySpecs->catalogs.target)))
 	{
@@ -817,6 +818,7 @@ cli_follow(int argc, char **argv)
 						   copyDBoptions.stdIn,
 						   copyDBoptions.stdOut,
 						   logSQL,
+						   copyDBoptions.replayNoOpUpdates,
 						   &(copySpecs.filters),
 						   &(copySpecs.catalogs.target)))
 	{

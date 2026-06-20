@@ -625,6 +625,7 @@ struct StreamSpecs
 	bool restart;
 	bool resume;
 	bool logSQL;
+	bool replayNoOpUpdates;
 
 	/* subprocess management: receive (prefetch) and apply (catchup) */
 	FollowSubProcess prefetch;
@@ -699,6 +700,7 @@ bool stream_init_specs(StreamSpecs *specs,
 					   bool stdIn,
 					   bool stdOut,
 					   bool logSQL,
+					   bool replayNoOpUpdates,
 					   SourceFilters *filters,
 					   DatabaseCatalog *targetDB);
 

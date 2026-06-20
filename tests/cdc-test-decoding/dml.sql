@@ -230,3 +230,30 @@ begin;
 delete from quote_escaping_test where id = 2;
 
 commit;
+
+--
+-- No-op UPDATE tests for --replay-no-op-updates (issue #983)
+--
+begin;
+
+insert into noop_update_test (id, val) values (1, 'hello');
+
+-- This UPDATE assigns the same value that is already stored.  With REPLICA
+-- IDENTITY FULL, test_decoding emits both old-key: and new-tuple: with
+-- identical column values.  Default behaviour: the transform layer detects
+-- no change and skips the UPDATE.  With --replay-no-op-updates: replayed.
+update noop_update_test set val = 'hello' where id = 1;
+
+commit;
+
+begin;
+
+insert into all_pk_test (a, b) values (1, 2);
+
+-- Every column is part of the primary key, so test_decoding does not emit an
+-- old-key: prefix.  prepareUpdateTupleArrays finds newCount == 0 (no columns
+-- for the SET clause) and returns true without aborting.  The transform layer
+-- then skips the UPDATE because skipUpdate is true — with or without the flag.
+update all_pk_test set a = 1 where a = 1 and b = 2;
+
+commit;

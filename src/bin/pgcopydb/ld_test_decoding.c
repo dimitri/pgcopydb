@@ -1255,10 +1255,10 @@ prepareUpdateTuppleArrays(StreamContext *privateContext,
 
 	if (newCount == 0)
 	{
-		log_error("Failed to parse decoding message for UPDATE on "
-				  "table \"%s\".\"%s\": SET clause columns not found",
+		log_debug("Skipping no-op UPDATE on table \"%s\".\"%s\": "
+				  "all columns are identity columns, none changed",
 				  cached->nspname, cached->relname);
-		return false;
+		return true;
 	}
 
 	/*

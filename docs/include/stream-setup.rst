@@ -12,6 +12,7 @@
      --snapshot                    Use snapshot obtained with pg_export_snapshot
      --plugin                      Output plugin to use (pgoutput, test_decoding, wal2json)
      --wal2json-numeric-as-string  Print numeric data type as string when using wal2json output plugin
+     --replay-no-op-updates        Replay UPDATE statements even when no column values changed
      --slot-name                   Stream changes recorded by this slot
      --origin                      Name of the Postgres replication origin
    

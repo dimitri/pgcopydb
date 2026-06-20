@@ -328,6 +328,7 @@ cli_create_snapshot(int argc, char **argv)
 							   createSNoptions.stdIn,
 							   createSNoptions.stdOut,
 							   logSQL,
+							   createSNoptions.replayNoOpUpdates,
 							   &(copySpecs.filters),
 							   &(copySpecs.catalogs.target)))
 		{

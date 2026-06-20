@@ -70,6 +70,7 @@ typedef struct CopyDBOptions
 	bool skipDBproperties;
 	bool skipCtidSplit;
 	bool noRolesPasswords;
+	bool replayNoOpUpdates;
 	bool failFast;
 	bool useCopyBinary;
 
