@@ -119,10 +119,10 @@ void ld_ipc_close(IPCConn *conn);
 bool ld_ipc_is_alive(IPCConn *conn);
 
 #define IPC_INIT_MESSAGE(msg, msg_type) \
-		do { \
-			memset(&(msg), 0, sizeof(IPCMessage)); \
-			(msg).version = IPC_PROTOCOL_VERSION; \
-			(msg).type = (msg_type); \
-		} while (0)
+	do { \
+		memset(&(msg), 0, sizeof(IPCMessage)); \
+		(msg).version = IPC_PROTOCOL_VERSION; \
+		(msg).type = (msg_type); \
+	} while (0)
 
 #endif /* LD_IPC_H */
