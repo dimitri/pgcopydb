@@ -5779,7 +5779,9 @@ catalog_fetch_catnames(DatabaseCatalog *filterDB, PGSQL *pgsql)
 bool
 catalog_prepare_filter(DatabaseCatalog *catalog,
 					   bool skipExtensions,
-					   bool skipCollations)
+					   bool skipCollations,
+					   SourceFilterExtensionList *excludeExtensionList,
+					   SourceFilterExtensionList *includeOnlyExtensionList)
 {
 	sqlite3 *db = catalog->db;
 
@@ -5948,6 +5950,117 @@ catalog_prepare_filter(DatabaseCatalog *catalog,
 		{
 			/* errors have already been logged */
 			return false;
+		}
+	}
+
+	/*
+	 * Implement [exclude-extension]: insert each named extension into the
+	 * filter table so that copydb_objectid_is_filtered_out skips its TOC
+	 * entry during the pg_restore list pass.
+	 */
+	if (excludeExtensionList != NULL && excludeExtensionList->count > 0)
+	{
+		char *s_excl_ext_sql =
+			"insert or ignore into filter(catoid, oid, restore_list_name, kind) "
+			"     select (select oid from catnames where catname = 'pg_extension'),"
+			"            oid, extname, 'extension' "
+			"       from s_extension "
+			"      where extname = $1 ";
+
+		for (int i = 0; i < excludeExtensionList->count; i++)
+		{
+			SQLiteQuery extQuery = { 0 };
+
+			if (!catalog_sql_prepare(db, s_excl_ext_sql, &extQuery))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			BindParam params[1] = {
+				{
+					BIND_PARAMETER_TYPE_TEXT,
+					"extname",
+					0,
+					excludeExtensionList->array[i].extname
+				}
+			};
+
+			if (!catalog_sql_bind(&extQuery, params, 1))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			if (!catalog_sql_execute_once(&extQuery))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+		}
+	}
+
+	/*
+	 * Implement [include-only-extension]: insert ALL extensions into the
+	 * filter table, then remove the ones we want to keep, so that only
+	 * the excluded extensions remain in the filter.
+	 */
+	if (includeOnlyExtensionList != NULL && includeOnlyExtensionList->count > 0)
+	{
+		char *s_all_ext_sql =
+			"insert or ignore into filter(catoid, oid, restore_list_name, kind) "
+			"     select (select oid from catnames where catname = 'pg_extension'),"
+			"            oid, extname, 'extension' "
+			"       from s_extension ";
+
+		if (!catalog_sql_prepare(db, s_all_ext_sql, &query))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!catalog_sql_execute_once(&query))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		char *s_keep_ext_sql =
+			"delete from filter "
+			" where catoid = (select oid from catnames "
+			"                  where catname = 'pg_extension') "
+			"   and restore_list_name = $1 ";
+
+		for (int i = 0; i < includeOnlyExtensionList->count; i++)
+		{
+			SQLiteQuery keepQuery = { 0 };
+
+			if (!catalog_sql_prepare(db, s_keep_ext_sql, &keepQuery))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			BindParam params[1] = {
+				{
+					BIND_PARAMETER_TYPE_TEXT,
+					"extname",
+					0,
+					includeOnlyExtensionList->array[i].extname
+				}
+			};
+
+			if (!catalog_sql_bind(&keepQuery, params, 1))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			if (!catalog_sql_execute_once(&keepQuery))
+			{
+				/* errors have already been logged */
+				return false;
+			}
 		}
 	}
 

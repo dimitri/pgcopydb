@@ -31,6 +31,19 @@ copydb_start_extension_data_process(CopyDataSpec *specs, bool createExtensions)
 {
 	if (specs->skipExtensions)
 	{
+		if (specs->filters.excludeExtensionList.count > 0)
+		{
+			log_warn("--skip-extensions already skips all extensions; "
+					 "[exclude-extension] filter entries are redundant");
+		}
+
+		if (specs->filters.includeOnlyExtensionList.count > 0)
+		{
+			log_error("--skip-extensions and [include-only-extension] are "
+					  "contradictory; use one or the other");
+			return false;
+		}
+
 		return true;
 	}
 
@@ -84,6 +97,7 @@ typedef struct CopyExtensionsContext
 	PGSQL *dst;
 	bool createExtensions;
 	ExtensionReqs *reqs;
+	SourceFilters *filters;
 } CopyExtensionsContext;
 
 
@@ -136,7 +150,8 @@ copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions)
 		.src = &(copySpecs->sourceSnapshot.pgsql),
 		.dst = &dst,
 		.createExtensions = createExtensions,
-		.reqs = copySpecs->extRequirements
+		.reqs = copySpecs->extRequirements,
+		.filters = &(copySpecs->filters)
 	};
 
 	if (!catalog_iter_s_extension(filtersDB,
@@ -224,6 +239,50 @@ copydb_copy_extensions_hook(void *ctx, SourceExtension *ext)
 	CopyExtensionsContext *context = (CopyExtensionsContext *) ctx;
 	PGSQL *src = context->src;
 	PGSQL *dst = context->dst;
+
+	SourceFilters *filters = context->filters;
+
+	/* [exclude-extension]: skip explicitly excluded extensions */
+	if (filters != NULL)
+	{
+		SourceFilterExtensionList *excl = &(filters->excludeExtensionList);
+
+		for (int i = 0; i < excl->count; i++)
+		{
+			if (streq(ext->extname, excl->array[i].extname))
+			{
+				log_debug("Skipping excluded extension \"%s\"", ext->extname);
+				return true;
+			}
+		}
+	}
+
+	/* [include-only-extension]: skip extensions not in the include list */
+	if (filters != NULL)
+	{
+		SourceFilterExtensionList *incl = &(filters->includeOnlyExtensionList);
+
+		if (incl->count > 0)
+		{
+			bool found = false;
+
+			for (int i = 0; i < incl->count; i++)
+			{
+				if (streq(ext->extname, incl->array[i].extname))
+				{
+					found = true;
+					break;
+				}
+			}
+
+			if (!found)
+			{
+				log_debug("Skipping extension \"%s\" "
+						  "(not in include-only-extension)", ext->extname);
+				return true;
+			}
+		}
+	}
 
 	if (context->createExtensions)
 	{
