@@ -167,5 +167,11 @@ install: $(PGCOPYDB)
 	install -d $(DESTDIR)$(BINDIR)
 	install -m 0755 $(PGCOPYDB) $(DESTDIR)$(BINDIR)
 
-.PHONY: all monitor clean
+gen-sql:
+	python3 $(SRC_DIR)../../../tools/sql2c.py \
+	    $(SRC_DIR)sql \
+	    $(SRC_DIR)sql_queries.h \
+	    $(SRC_DIR)sql_queries.c
+
+.PHONY: all monitor clean gen-sql
 .PHONY: VERSION-FILE
