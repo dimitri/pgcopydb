@@ -1,0 +1,6 @@
+# Integer values match SourceFilterType enum in filtering.h
+no-filter       0
+incl            1
+excl            2
+list-not-incl   3
+list-excl       4

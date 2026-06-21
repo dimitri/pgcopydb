@@ -2,36 +2,62 @@
 """
 tools/sql2c.py — SQL-to-C generator for pgcopydb
 
-Reads SQL files from a directory tree and emits two C files:
-    <output>.h  — enum types and function declarations
+Reads SQL files from a directory tree and emits two generated C files:
+    <output>.h  — function declarations
     <output>.c  — static string constants and dispatch functions
 
 Directory layout
 ----------------
-    <sql-dir>/<query>/[<N>-<dim>/]<version>.sql
+    <sql-dir>/<query>/[<dim>/]<version>.sql
 
-  <query>     Function name suffix; becomes pgcopydb_sql_<query>().
-  <N>-<dim>   Optional numbered filter-dimension directory.  N is the
-              integer enum value; <dim> becomes the enum label.
-              When absent the query takes no filter argument.
-  <version>   Version specifier (without .sql):
+  <query>     maps to C function pgcopydb_sql_<query>()
+  <dim>       optional filter-dimension subdirectory.
+              When present the query directory must also contain
+              a filter.map file that defines the mapping from
+              directory names to C enum constants.
+  <version>   version specifier (filename stem, without .sql):
 
-                default    — matches any server version (lowest priority)
+                default    — matches any server version (lowest priority,
+                             used as fallback when no specific variant matches)
                 pg-96      — server version < 100000 (before PG 10)
-                pg10       — 100000 <= version <= 109999 (PG 10.x)
+                pg10       — 100000 <= version <= 109999 (PG 10.x only)
                 pg10-12    — 100000 <= version <= 129999 (PG 10 through 12)
                 pg12-      — version >= 120000 (PG 12 and later)
 
-Generated API (Option B — enum + 3-arg)
------------------------------------------
-  typedef enum SqlListSourceTablesFilter {
-      SQL_LIST_SOURCE_TABLES_NONE = 0,
-      ...
-  } SqlListSourceTablesFilter;
+filter.map format
+-----------------
+    # comment
+    # include <header.h>    — header to include in generated sql_queries.h
+    # type <TypeName>       — C type for the filter parameter
+    <dir-name>  <C-constant>
 
-  bool pgcopydb_sql_list_source_tables(int pg_version,
-                                        SqlListSourceTablesFilter filter,
-                                        const char **sql);
+Example (src/bin/pgcopydb/sql/list_source_tables/filter.map):
+    # include filtering.h
+    # type SourceFilterType
+    no-filter     SOURCE_FILTER_TYPE_NONE
+    incl          SOURCE_FILTER_TYPE_INCL
+    excl          SOURCE_FILTER_TYPE_EXCL
+    list-not-incl SOURCE_FILTER_TYPE_LIST_NOT_INCL
+    list-excl     SOURCE_FILTER_TYPE_LIST_EXCL
+
+Generated API
+-------------
+When a filter.map is present the generated function uses the declared
+C type for the filter parameter (no cast needed at the call site):
+
+    bool pgcopydb_sql_list_source_tables(int pg_version,
+                                          SourceFilterType filter,
+                                          const char **sql);
+
+When there is no filter.map the function takes only pg_version:
+
+    bool pgcopydb_sql_simple_query(int pg_version, const char **sql);
+
+When there are no version variants (only default.sql) the pg_version
+parameter is omitted:
+
+    bool pgcopydb_sql_simple_query(SourceFilterType filter,
+                                   const char **sql);
 """
 
 import os
@@ -47,11 +73,6 @@ from collections import OrderedDict
 
 def to_c_ident(s):
     return re.sub(r'[^a-zA-Z0-9]', '_', s).strip('_')
-
-
-def camel(s):
-    """list_source_tables -> ListSourceTables"""
-    return ''.join(w.capitalize() for w in s.split('_'))
 
 
 def parse_version_specifier(ver):
@@ -117,18 +138,49 @@ def version_priority(v):
     return (2, 0)
 
 
-def c_string_lines(path):
-    """Read a SQL file and return a list of C string literal lines."""
-    lines = []
+def c_string_lines(path, preamble=None):
+    """Read a SQL file and return a list of C string literal lines.
+
+    If preamble is provided (a string), it is prepended before the file
+    content — used for a shared query-level preamble.sql across filters.
+    """
     with open(path) as f:
         content = f.read()
-    for line in content.split('\n'):
+    full = (preamble or '') + content
+    lines = []
+    for line in full.split('\n'):
         escaped = line.replace('\\', '\\\\').replace('"', '\\"')
         lines.append(f'    "{escaped}\\n"')
-    # Strip trailing empty-line entries that would add a bare \n at end
+    # Drop trailing empty-line entries
     while lines and lines[-1] == '    "\\n"':
         lines.pop()
     return lines
+
+
+def parse_filter_map(path):
+    """Parse a filter.map file.
+
+    Returns dict with keys:
+        'entries'  — list of (dir_name, int_value) in file order
+
+    File format:
+        # comment line (ignored)
+        <dir-name>  <integer-value>
+    """
+    result = {'entries': []}
+    with open(path) as f:
+        for raw in f:
+            line = raw.strip()
+            if not line or line.startswith('#'):
+                continue
+            parts = line.split()
+            if len(parts) >= 2:
+                try:
+                    result['entries'].append((parts[0], int(parts[1])))
+                except ValueError:
+                    raise ValueError(
+                        f"{path}: expected integer value, got {parts[1]!r}")
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +188,7 @@ def c_string_lines(path):
 # ---------------------------------------------------------------------------
 
 def discover(sql_dir):
-    """Walk sql_dir and build an ordered dict of query info."""
+    """Walk sql_dir and return an ordered dict of query info."""
     sql_dir = Path(sql_dir)
     queries = OrderedDict()
 
@@ -144,32 +196,50 @@ def discover(sql_dir):
         if not qdir.is_dir():
             continue
         query = qdir.name
-        qdims = sorted(d for d in qdir.iterdir() if d.is_dir())
+        qdims  = sorted(d for d in qdir.iterdir() if d.is_dir())
         qfiles = sorted(qdir.glob('*.sql'))
+        fmap_path = qdir / 'filter.map'
 
-        if qdims:
-            # Has numbered dimension subdirectories
+        if qdims and fmap_path.exists():
+            # Has filter dimension directories with an explicit integer mapping
+            fmap = parse_filter_map(fmap_path)
+
+            # Optional preamble prepended to every filter's SQL
+            preamble_path = qdir / 'preamble.sql'
+            preamble = preamble_path.read_text() if preamble_path.exists() else None
+
             dims = []
-            for dimdir in qdims:
-                m = re.fullmatch(r'(\d+)-(.*)', dimdir.name)
-                if not m:
-                    raise ValueError(
-                        f"Dimension directory must match N-name: {dimdir}")
-                enum_val = int(m.group(1))
-                label    = m.group(2)
+            for dir_name, int_val in fmap['entries']:
+                dimdir = qdir / dir_name
+                if not dimdir.is_dir():
+                    raise FileNotFoundError(
+                        f"filter.map references {dir_name!r} but"
+                        f" {dimdir} does not exist")
                 versions = []
                 for sqlfile in sorted(dimdir.glob('*.sql')):
                     ver = sqlfile.stem
                     mn, mx = parse_version_specifier(ver)
                     versions.append(
-                        {'ver': ver, 'min': mn, 'max': mx, 'path': sqlfile})
+                        {'ver': ver, 'min': mn, 'max': mx,
+                         'path': sqlfile})
                 versions.sort(key=version_priority)
-                dims.append({'name': dimdir.name, 'label': label,
-                             'enum_val': enum_val, 'versions': versions})
-            dims.sort(key=lambda d: d['enum_val'])
-            queries[query] = {'has_dims': True, 'dims': dims}
+                dims.append({'name': dir_name, 'int_val': int_val,
+                             'versions': versions})
+
+            has_version_dispatch = any(
+                any(v['min'] > 0 or v['max'] > 0 for v in d['versions'])
+                for d in dims
+            )
+
+            queries[query] = {
+                'has_dims': True,
+                'dims': dims,
+                'preamble': preamble,
+                'has_version_dispatch': has_version_dispatch,
+            }
 
         elif qfiles:
+            # Only version files, no filter dimension
             versions = []
             for sqlfile in qfiles:
                 ver = sqlfile.stem
@@ -177,7 +247,13 @@ def discover(sql_dir):
                 versions.append(
                     {'ver': ver, 'min': mn, 'max': mx, 'path': sqlfile})
             versions.sort(key=version_priority)
-            queries[query] = {'has_dims': False, 'versions': versions}
+            has_version_dispatch = any(
+                v['min'] > 0 or v['max'] > 0 for v in versions)
+            queries[query] = {
+                'has_dims': False,
+                'versions': versions,
+                'has_version_dispatch': has_version_dispatch,
+            }
 
     return queries
 
@@ -197,14 +273,13 @@ HEADER_TOP = """\
 #define PGCOPYDB_SQL_QUERIES_H
 
 #include <stdbool.h>
-
 """
 
 HEADER_BOT = """\
 #endif  /* PGCOPYDB_SQL_QUERIES_H */
 """
 
-SOURCE_TOP = """\
+SOURCE_TOP_TMPL = """\
 /*
  * GENERATED FILE - do not edit.
  * Source: src/bin/pgcopydb/sql/
@@ -212,21 +287,22 @@ SOURCE_TOP = """\
  */
 
 #include "sql_queries.h"
-
 """
+
+SEP = '/' * 62
 
 
 def emit_version_dispatch(f, varname_prefix, versions, indent):
-    """Emit if-chain for version dispatch, returning via *sql."""
+    """Emit if-chain for version dispatch, writing to *sql."""
     i = indent
     for v in versions:
         mn, mx = v['min'], v['max']
         vname = f"{varname_prefix}__{to_c_ident(v['ver'])}"
         if mn == 0 and mx == 0:
-            # default — always matches, write unconditionally (fallback)
+            # default — unconditional fallback
             f.write(f"{i}*sql = {vname};\n")
             f.write(f"{i}return true;\n")
-            return   # nothing after default
+            return
         elif mn > 0 and mx > 0:
             cond = f"pg_version >= {mn} && pg_version <= {mx}"
         elif mx > 0:
@@ -238,8 +314,6 @@ def emit_version_dispatch(f, varname_prefix, versions, indent):
         f.write(f"{i}    *sql = {vname};\n")
         f.write(f"{i}    return true;\n")
         f.write(f"{i}}}\n")
-
-    # If we get here there was no default — caller returns false
     f.write(f"{i}return false;\n")
 
 
@@ -247,77 +321,88 @@ def generate(sql_dir, hdr_path, src_path):
     queries = discover(sql_dir)
 
     # ---------------------------------------------------------------- header
+    # The header only uses `int filter` — no external type dependency.
     with open(hdr_path, 'w') as h:
         h.write(HEADER_TOP)
+        h.write('\n')
 
         for query, info in queries.items():
             qident = to_c_ident(query)
-            sep = '/' * 62
-            h.write(f"/{sep}/\n")
+            h.write(f"/{SEP}/\n")
             h.write(f"/* {query:<60} */\n")
-            h.write(f"/{sep}/\n\n")
+            h.write(f"/{SEP}/\n\n")
+
+            pad = ' ' * (len("bool pgcopydb_sql_") + len(qident) + 1)
 
             if info['has_dims']:
-                enum_type = f"Sql{camel(qident)}Filter"
-                h.write(f"typedef enum {enum_type}\n{{\n")
-                for dim in info['dims']:
-                    const = (f"SQL_{qident.upper()}_"
-                             f"{to_c_ident(dim['label']).upper()}")
-                    h.write(f"    {const} = {dim['enum_val']},\n")
-                h.write(f"}} {enum_type};\n\n")
+                has_ver = info['has_version_dispatch']
+                if has_ver:
+                    h.write(f"bool pgcopydb_sql_{qident}(int pg_version,\n")
+                    h.write(f"{pad}int filter,\n")
+                    h.write(f"{pad}const char **sql);\n\n")
+                else:
+                    h.write(f"bool pgcopydb_sql_{qident}(int filter,\n")
+                    h.write(f"{pad}const char **sql);\n\n")
 
-                pad = ' ' * (len("bool pgcopydb_sql_") + len(qident) + 1)
-                h.write(f"bool pgcopydb_sql_{qident}(int pg_version,\n")
-                h.write(f"{pad}{enum_type} filter,\n")
-                h.write(f"{pad}const char **sql);\n\n")
             else:
-                pad = ' ' * (len("bool pgcopydb_sql_") + len(qident) + 1)
-                h.write(f"bool pgcopydb_sql_{qident}(int pg_version,\n")
-                h.write(f"{pad}const char **sql);\n\n")
+                # No filter dimension
+                has_ver = info['has_version_dispatch']
+                if has_ver:
+                    h.write(f"bool pgcopydb_sql_{qident}(int pg_version,\n")
+                    h.write(f"{pad}const char **sql);\n\n")
+                else:
+                    h.write(f"bool pgcopydb_sql_{qident}(const char **sql);\n\n")
 
         h.write(HEADER_BOT)
 
     # ---------------------------------------------------------------- source
     with open(src_path, 'w') as c:
-        c.write(SOURCE_TOP)
+        c.write(SOURCE_TOP_TMPL)
+        c.write('\n\n')
 
         for query, info in queries.items():
             qident = to_c_ident(query)
-            sep = '/' * 62
-            c.write(f"/{sep}/\n")
+            c.write(f"/{SEP}/\n")
             c.write(f"/* {query:<60} */\n")
-            c.write(f"/{sep}/\n\n")
+            c.write(f"/{SEP}/\n\n")
 
             if info['has_dims']:
-                enum_type = f"Sql{camel(qident)}Filter"
+                has_ver = info['has_version_dispatch']
+                preamble = info.get('preamble')
 
-                # Static string constants
+                # Static string constants (all dims × all versions)
                 for dim in info['dims']:
                     for v in dim['versions']:
                         vident = to_c_ident(v['ver'])
                         vname  = (f"sql__{qident}"
-                                  f"__{to_c_ident(dim['label'])}__{vident}")
-                        c.write(f"/* {query}/{dim['name']}/{v['ver']}.sql */\n")
+                                  f"__{to_c_ident(dim['name'])}__{vident}")
+                        c.write(
+                            f"/* {query}/{dim['name']}/{v['ver']}.sql */\n")
                         c.write(f"static const char {vname}[] =\n")
-                        for line in c_string_lines(v['path']):
+                        for line in c_string_lines(v['path'], preamble):
                             c.write(line + '\n')
                         c.write(";\n\n")
 
                 # Function
-                c.write(f"bool\n")
-                c.write(f"pgcopydb_sql_{qident}(int pg_version,\n")
+                c.write("bool\n")
                 pad = ' ' * (len("pgcopydb_sql_") + len(qident) + 1)
-                c.write(f"{pad}{enum_type} filter,\n")
-                c.write(f"{pad}const char **sql)\n")
+                if has_ver:
+                    c.write(f"pgcopydb_sql_{qident}(int pg_version,\n")
+                    c.write(f"{pad}int filter,\n")
+                    c.write(f"{pad}const char **sql)\n")
+                else:
+                    c.write(f"pgcopydb_sql_{qident}(int filter,\n")
+                    c.write(f"{pad}const char **sql)\n")
                 c.write("{\n")
-                c.write("    switch ((int) filter)\n")
+                c.write("    switch (filter)\n")
                 c.write("    {\n")
 
                 for dim in info['dims']:
-                    c.write(f"        case {dim['enum_val']}: /* {dim['label']} */\n")
+                    int_val = dim['int_val']
+                    c.write(f"        case {int_val}: /* {dim['name']} */\n")
                     c.write("        {\n")
                     vprefix = (f"sql__{qident}"
-                               f"__{to_c_ident(dim['label'])}")
+                               f"__{to_c_ident(dim['name'])}")
                     emit_version_dispatch(c, vprefix, dim['versions'],
                                          indent="            ")
                     c.write("        }\n\n")
@@ -330,6 +415,8 @@ def generate(sql_dir, hdr_path, src_path):
 
             else:
                 # No filter dimension — just version dispatch
+                has_ver = info['has_version_dispatch']
+
                 for v in info['versions']:
                     vident = to_c_ident(v['ver'])
                     vname  = f"sql__{qident}__{vident}"
@@ -339,12 +426,25 @@ def generate(sql_dir, hdr_path, src_path):
                         c.write(line + '\n')
                     c.write(";\n\n")
 
-                c.write(f"bool\n")
-                c.write(f"pgcopydb_sql_{qident}(int pg_version, const char **sql)\n")
+                c.write("bool\n")
+                if has_ver:
+                    c.write(f"pgcopydb_sql_{qident}(int pg_version,\n")
+                    pad = ' ' * (len("pgcopydb_sql_") + len(qident) + 1)
+                    c.write(f"{pad}const char **sql)\n")
+                else:
+                    c.write(f"pgcopydb_sql_{qident}(const char **sql)\n")
                 c.write("{\n")
-                vprefix = f"sql__{qident}"
-                emit_version_dispatch(c, vprefix, info['versions'],
-                                      indent="    ")
+                if has_ver:
+                    vprefix = f"sql__{qident}"
+                    emit_version_dispatch(c, vprefix, info['versions'],
+                                         indent="    ")
+                else:
+                    # Only a default — no version check needed
+                    v = info['versions'][0]
+                    vident = to_c_ident(v['ver'])
+                    vname = f"sql__{qident}__{vident}"
+                    c.write(f"    *sql = {vname};\n")
+                    c.write("    return true;\n")
                 c.write("}\n\n")
 
 
