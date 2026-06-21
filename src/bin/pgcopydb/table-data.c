@@ -1143,13 +1143,21 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 	args->useCopyBinary = specs->useCopyBinary;
 
 	/*
-	 * When binary COPY is requested, check each attribute for binary transfer
-	 * compatibility.  Columns whose send function is known to produce alignment
-	 * faults (e.g. tsvector) force a per-table fallback to text COPY so that
-	 * the data is transferred safely.
+	 * When binary COPY is requested, load the full attribute array from the
+	 * catalog and check each column for binary transfer compatibility.
+	 * Columns whose send function is known to produce alignment faults
+	 * (e.g. tsvector) force a per-table fallback to text COPY.
 	 */
-	if (args->useCopyBinary && tableSpecs->sourceTable->attributes.count > 0)
+	if (args->useCopyBinary)
 	{
+		if (!catalog_s_table_fetch_attrs(sourceDB, tableSpecs->sourceTable))
+		{
+			log_error("Failed to fetch table %s attributes, "
+					  "see above for details",
+					  tableSpecs->sourceTable->qname);
+			return false;
+		}
+
 		SourceTableAttributeArray *attrs = &tableSpecs->sourceTable->attributes;
 
 		for (int i = 0; i < attrs->count; i++)
