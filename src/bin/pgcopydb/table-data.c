@@ -1143,6 +1143,37 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 	args->useCopyBinary = specs->useCopyBinary;
 
 	/*
+	 * When binary COPY is requested, check each attribute for binary transfer
+	 * compatibility.  Columns whose send function is known to produce alignment
+	 * faults (e.g. tsvector) force a per-table fallback to text COPY so that
+	 * the data is transferred safely.
+	 */
+	if (args->useCopyBinary && tableSpecs->sourceTable->attributes.count > 0)
+	{
+		SourceTableAttributeArray *attrs = &tableSpecs->sourceTable->attributes;
+
+		for (int i = 0; i < attrs->count; i++)
+		{
+			SourceTableAttribute *attr = &attrs->array[i];
+
+			if (!attr->attisbinarycompatible)
+			{
+				log_warn("Table %s column \"%s\" uses send function \"%s\" "
+						 "which is not safe for COPY BINARY; "
+						 "falling back to text COPY for this table",
+						 tableSpecs->sourceTable->qname,
+						 attr->attname,
+						 attr->atttypsend[0] != '\0'
+						 ? attr->atttypsend
+						 : "unknown");
+
+				args->useCopyBinary = false;
+				break;
+			}
+		}
+	}
+
+	/*
 	 * Check to see if we want to TRUNCATE the table and benefit from the COPY
 	 * FREEZE optimisation.
 	 *

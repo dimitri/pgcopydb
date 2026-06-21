@@ -109,6 +109,8 @@ static char *sourceDBcreateDDLs[] = {
 	"  attnum integer, attypid integer, attname text, "
 	"  attisprimary bool, attisreplident bool, attisgenerated bool, "
 	"  attidentity text default '', "
+	"  attisbinarycompatible bool default true, "
+	"  atttypsend text default '', "
 	"  primary key(oid, attnum) "
 	")",
 
@@ -332,6 +334,8 @@ static char *filterDBcreateDDLs[] = {
 	"  attnum integer, attypid integer, attname text, "
 	"  attisprimary bool, attisreplident bool, attisgenerated bool, "
 	"  attidentity text default '', "
+	"  attisbinarycompatible bool default true, "
+	"  atttypsend text default '', "
 	"  primary key(oid, attnum) "
 	")",
 
@@ -461,6 +465,8 @@ static char *targetDBcreateDDLs[] = {
 	"  attnum integer, attypid integer, attname text, "
 	"  attisprimary bool, attisreplident bool, attisgenerated bool, "
 	"  attidentity text default '', "
+	"  attisbinarycompatible bool default true, "
+	"  atttypsend text default '', "
 	"  primary key(oid, attnum) "
 	")",
 
@@ -2806,8 +2812,9 @@ catalog_add_attributes(DatabaseCatalog *catalog, SourceTable *table)
 	char *sql =
 		"insert into s_attr("
 		"oid, attnum, attypid, attname, "
-		"attisprimary, attisreplident, attisgenerated, attidentity)"
-		"values($1, $2, $3, $4, $5, $6, $7, $8)";
+		"attisprimary, attisreplident, attisgenerated, attidentity, "
+		"attisbinarycompatible, atttypsend)"
+		"values($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)";
 
 	SQLiteQuery query = { 0 };
 
@@ -2845,7 +2852,16 @@ catalog_add_attributes(DatabaseCatalog *catalog, SourceTable *table)
 				attr->attisgenerated ? 1 : 0, NULL
 			},
 
-			{ BIND_PARAMETER_TYPE_TEXT, "attidentity", 0, identityStr }
+			{ BIND_PARAMETER_TYPE_TEXT, "attidentity", 0, identityStr },
+
+			{
+				BIND_PARAMETER_TYPE_INT, "attisbinarycompatible",
+				attr->attisbinarycompatible ? 1 : 0, NULL
+			},
+
+			{
+				BIND_PARAMETER_TYPE_TEXT, "atttypsend", 0, attr->atttypsend
+			}
 		};
 
 		int count = sizeof(params) / sizeof(params[0]);
@@ -3527,7 +3543,8 @@ catalog_lookup_s_attr_by_name(DatabaseCatalog *catalog,
 
 	char *sql =
 		"  select attnum, attypid, attname, "
-		"         attisprimary, attisreplident, attisgenerated, attidentity "
+		"         attisprimary, attisreplident, attisgenerated, attidentity, "
+		"         attisbinarycompatible, atttypsend "
 		"    from s_attr "
 		"   where oid = $1 and attname = $2";
 
@@ -4298,7 +4315,8 @@ catalog_iter_s_table_attrs_init(SourceTableAttrsIterator *iter)
 		"  select count(*) over(order by attnum) as num, "
 		"         count(*) over() as count, "
 		"         attnum, attypid, attname, "
-		"         attisprimary, attisreplident, attisgenerated, attidentity "
+		"         attisprimary, attisreplident, attisgenerated, attidentity, "
+		"         attisbinarycompatible, atttypsend "
 		"    from s_attr "
 		"   where oid = $1 "
 		"order by attnum";
@@ -4417,6 +4435,15 @@ catalog_s_table_attrs_fetch(SQLiteQuery *query)
 	const char *identity = (const char *) sqlite3_column_text(query->ppStmt, 8);
 	attr->attidentity = (identity != NULL && identity[0] != '\0') ? identity[0] : '\0';
 
+	attr->attisbinarycompatible = sqlite3_column_int(query->ppStmt, 9) == 1;
+
+	const char *typsend = (const char *) sqlite3_column_text(query->ppStmt, 10);
+
+	if (typsend != NULL)
+	{
+		strlcpy(attr->atttypsend, typsend, sizeof(attr->atttypsend));
+	}
+
 	return true;
 }
 
@@ -4442,6 +4469,15 @@ catalog_s_attr_fetch(SQLiteQuery *query)
 
 	const char *identity = (const char *) sqlite3_column_text(query->ppStmt, 6);
 	attr->attidentity = (identity != NULL && identity[0] != '\0') ? identity[0] : '\0';
+
+	attr->attisbinarycompatible = sqlite3_column_int(query->ppStmt, 7) == 1;
+
+	const char *typsend = (const char *) sqlite3_column_text(query->ppStmt, 8);
+
+	if (typsend != NULL)
+	{
+		strlcpy(attr->atttypsend, typsend, sizeof(attr->atttypsend));
+	}
 
 	return true;
 }
