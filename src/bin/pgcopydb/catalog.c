@@ -395,6 +395,13 @@ static char *filterDBcreateDDLs[] = {
 	"create index filter_rlname on filter(restore_list_name)",
 
 	/*
+	 * extension_filter stores the user's [exclude-extension] and
+	 * [include-only-extension] configuration so that catalog_prepare_filter
+	 * can read it internally without needing it passed as C pointers.
+	 */
+	"create table extension_filter(extname text primary key, action text)",
+
+	/*
 	 * While we don't use a summary table in the filter database, some queries
 	 * that are meant to work on both filters database and source database use
 	 * LEFT JOIN summary.
@@ -953,6 +960,37 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 
 				return false;
 			}
+		}
+	}
+
+	/*
+	 * Populate extension_filter in the filter catalog from the in-memory
+	 * filter configuration so that catalog_prepare_filter can read it via
+	 * SQL without needing the C lists as parameters.
+	 */
+	DatabaseCatalog *filtersDB = &(copySpecs->catalogs.filter);
+
+	for (int i = 0; i < filters->excludeExtensionList.count; i++)
+	{
+		if (!catalog_add_extension_filter(
+				filtersDB,
+				filters->excludeExtensionList.array[i].extname,
+				"exclude"))
+		{
+			json_free_serialized_string(json);
+			return false;
+		}
+	}
+
+	for (int i = 0; i < filters->includeOnlyExtensionList.count; i++)
+	{
+		if (!catalog_add_extension_filter(
+				filtersDB,
+				filters->includeOnlyExtensionList.array[i].extname,
+				"include-only"))
+		{
+			json_free_serialized_string(json);
+			return false;
 		}
 	}
 
@@ -5772,6 +5810,52 @@ catalog_fetch_catnames(DatabaseCatalog *filterDB, PGSQL *pgsql)
 
 
 /*
+ * catalog_add_extension_filter stores one entry from [exclude-extension] or
+ * [include-only-extension] in the filter catalog's extension_filter table.
+ * catalog_prepare_filter reads this table instead of accepting the C lists
+ * as parameters, keeping its signature stable.
+ */
+bool
+catalog_add_extension_filter(DatabaseCatalog *catalog,
+							 const char *extname,
+							 const char *action)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_add_extension_filter: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"insert or replace into extension_filter(extname, action) "
+		"values ($1, $2)";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	BindParam params[2] = {
+		{ BIND_PARAMETER_TYPE_TEXT, "extname", 0, (char *) extname },
+		{ BIND_PARAMETER_TYPE_TEXT, "action", 0, (char *) action }
+	};
+
+	if (!catalog_sql_bind(&query, params, 2))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return catalog_sql_execute_once(&query);
+}
+
+
+/*
  * catalog_prepare_filter prepares our filter Hash-Table, that used to be an
  * in-memory only thing, and now is a SQLite table with indexes, so that it can
  * spill to disk when we have giant database catalogs to take care of.
@@ -5949,6 +6033,82 @@ catalog_prepare_filter(DatabaseCatalog *catalog,
 			/* errors have already been logged */
 			return false;
 		}
+	}
+
+	/*
+	 * Implement [exclude-extension]: join s_extension against
+	 * extension_filter (action = 'exclude') to insert named extensions into
+	 * the filter table so that copydb_objectid_is_filtered_out skips their
+	 * TOC entries during the pg_restore list pass.
+	 */
+	char *s_excl_ext_sql =
+		"insert or ignore into filter(catoid, oid, restore_list_name, kind) "
+		"     select (select oid from catnames where catname = 'pg_extension'),"
+		"            e.oid, e.extname, 'extension' "
+		"       from s_extension e "
+		"      where exists "
+		"            (select 1 from extension_filter ef "
+		"              where ef.extname = e.extname "
+		"                and ef.action = 'exclude')";
+
+	if (!catalog_sql_prepare(db, s_excl_ext_sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * Implement [include-only-extension]: insert ALL extensions into the
+	 * filter table, then remove the ones listed in extension_filter (action =
+	 * 'include-only'), so that only the non-listed extensions remain in the
+	 * filter and are therefore excluded from the copy.
+	 */
+	char *s_all_ext_sql =
+		"insert or ignore into filter(catoid, oid, restore_list_name, kind) "
+		"     select (select oid from catnames where catname = 'pg_extension'),"
+		"            e.oid, e.extname, 'extension' "
+		"       from s_extension e "
+		"      where (select count(*) from extension_filter "
+		"              where action = 'include-only') > 0";
+
+	if (!catalog_sql_prepare(db, s_all_ext_sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	char *s_keep_ext_sql =
+		"delete from filter "
+		" where catoid = (select oid from catnames "
+		"                  where catname = 'pg_extension') "
+		"   and kind = 'extension' "
+		"   and exists "
+		"       (select 1 from extension_filter ef "
+		"         where ef.extname = filter.restore_list_name "
+		"           and ef.action = 'include-only')";
+
+	if (!catalog_sql_prepare(db, s_keep_ext_sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	/*

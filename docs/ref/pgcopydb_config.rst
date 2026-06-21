@@ -59,6 +59,9 @@ Here is an exclusion based filter configuration example:
   public.bar
   nsitra.test1
 
+  [exclude-extension]
+  aiven_extras
+
 Filtering can be done with pgcopydb by using the following rules, which are
 also the name of the sections of the INI file.
 
@@ -129,6 +132,39 @@ names. The schema, index, constraints, etc of the table are still copied
 over.
 
 NOTE: Materialized views are also considered as tables during the filtering.
+
+exclude-extension
+^^^^^^^^^^^^^^^^^
+
+This section allows to skip specific PostgreSQL extensions by name. The
+listed extensions are not created on the target database and their
+configuration tables are not copied.
+
+Each entry is a bare extension name (no schema prefix), one per line::
+
+  [exclude-extension]
+  aiven_extras
+  timescaledb
+
+This section is not allowed when the section ``include-only-extension`` is
+used at the same time.
+
+include-only-extension
+^^^^^^^^^^^^^^^^^^^^^^
+
+This section restricts extension handling to only the listed extensions.
+All other extensions found in the source database are skipped — they are
+not created on the target and their configuration tables are not copied.
+
+Each entry is a bare extension name (no schema prefix), one per line::
+
+  [include-only-extension]
+  postgis
+  uuid-ossp
+
+This section is not allowed when the section ``exclude-extension`` is
+used at the same time, and it cannot be combined with ``--skip-extensions``
+(which skips all extensions).
 
 Reviewing and Debugging the filters
 -----------------------------------

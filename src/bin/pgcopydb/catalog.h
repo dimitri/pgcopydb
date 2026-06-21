@@ -408,6 +408,10 @@ bool catalog_fetch_catnames(DatabaseCatalog *filterDB, PGSQL *pgsql);
 bool catalog_add_catname(DatabaseCatalog *catalog, uint32_t oid,
 						 const char *catname);
 
+bool catalog_add_extension_filter(DatabaseCatalog *catalog,
+								  const char *extname,
+								  const char *action);
+
 bool catalog_prepare_filter(DatabaseCatalog *catalog,
 							bool skipExtensions,
 							bool skipCollations);

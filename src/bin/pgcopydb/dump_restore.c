@@ -732,6 +732,65 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 		log_debug("Skipping COMMENT ON EXTENSION \"%s\"", name);
 	}
 
+	/*
+	 * Skip COMMENT ON EXTENSION for extensions named in [exclude-extension].
+	 * Bare EXTENSION TOC entries are handled via the filter table in
+	 * copydb_objectid_is_filtered_out; COMMENT ON EXTENSION has objectOid=0
+	 * so it needs an explicit name-based check here.
+	 */
+	if (!skip &&
+		item->isCompositeTag &&
+		item->tagKind == ARCHIVE_TAG_KIND_COMMENT &&
+		item->tagType == ARCHIVE_TAG_TYPE_EXTENSION)
+	{
+		SourceFilterExtensionList *excl =
+			&(specs->filters.excludeExtensionList);
+
+		for (int i = 0; i < excl->count; i++)
+		{
+			if (streq(name, excl->array[i].extname))
+			{
+				skip = true;
+				log_debug("Skipping COMMENT ON EXTENSION \"%s\" "
+						  "(exclude-extension)", name);
+				break;
+			}
+		}
+	}
+
+	/*
+	 * Skip COMMENT ON EXTENSION for extensions not in [include-only-extension].
+	 */
+	if (!skip &&
+		item->isCompositeTag &&
+		item->tagKind == ARCHIVE_TAG_KIND_COMMENT &&
+		item->tagType == ARCHIVE_TAG_TYPE_EXTENSION)
+	{
+		SourceFilterExtensionList *incl =
+			&(specs->filters.includeOnlyExtensionList);
+
+		if (incl->count > 0)
+		{
+			bool found = false;
+
+			for (int i = 0; i < incl->count; i++)
+			{
+				if (streq(name, incl->array[i].extname))
+				{
+					found = true;
+					break;
+				}
+			}
+
+			if (!found)
+			{
+				skip = true;
+				log_debug("Skipping COMMENT ON EXTENSION \"%s\" "
+						  "(not in include-only-extension)", name);
+			}
+		}
+	}
+
 	if (!skip && catOid == PG_NAMESPACE_OID)
 	{
 		bool exists = false;

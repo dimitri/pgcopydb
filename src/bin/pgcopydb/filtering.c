@@ -172,6 +172,8 @@ parse_filters(const char *filename, SourceFilters *filters)
 			SOURCE_FILTER_INCLUDE_ONLY_TABLE,
 			&(filters->includeOnlyTableList)
 		},
+		{ "exclude-extension", SOURCE_FILTER_EXCLUDE_EXTENSION, NULL },
+		{ "include-only-extension", SOURCE_FILTER_INCLUDE_ONLY_EXTENSION, NULL },
 		{ "", SOURCE_FILTER_UNKNOWN, NULL },
 	};
 
@@ -304,6 +306,64 @@ parse_filters(const char *filename, SourceFilters *filters)
 				break;
 			}
 
+			case SOURCE_FILTER_EXCLUDE_EXTENSION:
+			{
+				filters->excludeExtensionList.count = optionCount;
+				filters->excludeExtensionList.array =
+					(SourceFilterExtension *) calloc(optionCount,
+													 sizeof(SourceFilterExtension));
+
+				if (filters->excludeExtensionList.array == NULL)
+				{
+					log_error(ALLOCATION_FAILED_ERROR);
+					return false;
+				}
+
+				for (int o = 0; o < optionCount; o++)
+				{
+					SourceFilterExtension *extension =
+						&(filters->excludeExtensionList.array[o]);
+
+					const char *optionName =
+						ini_property_name(ini, sectionIndex, o);
+
+					strlcpy(extension->extname, optionName,
+							sizeof(extension->extname));
+
+					log_debug("excluding extension \"%s\"", extension->extname);
+				}
+				break;
+			}
+
+			case SOURCE_FILTER_INCLUDE_ONLY_EXTENSION:
+			{
+				filters->includeOnlyExtensionList.count = optionCount;
+				filters->includeOnlyExtensionList.array =
+					(SourceFilterExtension *) calloc(optionCount,
+													 sizeof(SourceFilterExtension));
+
+				if (filters->includeOnlyExtensionList.array == NULL)
+				{
+					log_error(ALLOCATION_FAILED_ERROR);
+					return false;
+				}
+
+				for (int o = 0; o < optionCount; o++)
+				{
+					SourceFilterExtension *extension =
+						&(filters->includeOnlyExtensionList.array[o]);
+
+					const char *optionName =
+						ini_property_name(ini, sectionIndex, o);
+
+					strlcpy(extension->extname, optionName,
+							sizeof(extension->extname));
+
+					log_debug("including only extension \"%s\"", extension->extname);
+				}
+				break;
+			}
+
 			default:
 			{
 				log_error("BUG: unknown section number %d", i);
@@ -368,6 +428,20 @@ parse_filters(const char *filename, SourceFilters *filters)
 				 "include-only-table",
 				 filters->excludeSchemaList.count,
 				 "exclude-schema");
+	}
+
+	if (filters->includeOnlyExtensionList.count > 0 &&
+		filters->excludeExtensionList.count > 0)
+	{
+		log_error("Filtering setup in \"%s\" contains %d entries "
+				  "in section \"%s\" and %d entries in section \"%s\", "
+				  "please use only one of these sections.",
+				  filename,
+				  filters->includeOnlyExtensionList.count,
+				  "include-only-extension",
+				  filters->excludeExtensionList.count,
+				  "exclude-extension");
+		return false;
 	}
 
 	/*
@@ -584,6 +658,38 @@ filters_as_json(SourceFilters *filters, JSON_Value *jsFilter)
 				json_object_set_string(jsTableObj, "name", table->relname);
 
 				json_array_append_value(jsListArray, jsTable);
+			}
+
+			json_object_set_value(jsFilterObj, sectionName, jsList);
+		}
+	}
+
+	/* extension filter lists */
+	struct extsection
+	{
+		char name[PG_NAMEDATALEN];
+		SourceFilterExtensionList *list;
+	};
+
+	struct extsection extsections[] = {
+		{ "exclude-extension", &(filters->excludeExtensionList) },
+		{ "include-only-extension", &(filters->includeOnlyExtensionList) },
+		{ "", NULL },
+	};
+
+	for (int i = 0; extsections[i].list != NULL; i++)
+	{
+		char *sectionName = extsections[i].name;
+		SourceFilterExtensionList *list = extsections[i].list;
+
+		if (list->count > 0)
+		{
+			JSON_Value *jsList = json_value_init_array();
+			JSON_Array *jsListArray = json_value_get_array(jsList);
+
+			for (int j = 0; j < list->count; j++)
+			{
+				json_array_append_string(jsListArray, list->array[j].extname);
 			}
 
 			json_object_set_value(jsFilterObj, sectionName, jsList);
