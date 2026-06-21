@@ -93,6 +93,7 @@ copydb_start_extension_data_process(CopyDataSpec *specs, bool createExtensions)
 typedef struct CopyExtensionsContext
 {
 	DatabaseCatalog *filtersDB;
+	DatabaseCatalog *sourceDB;
 	PGSQL *src;
 	PGSQL *dst;
 	bool createExtensions;
@@ -147,6 +148,7 @@ copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions)
 
 	CopyExtensionsContext context = {
 		.filtersDB = filtersDB,
+		.sourceDB = &(copySpecs->catalogs.source),
 		.src = &(copySpecs->sourceSnapshot.pgsql),
 		.dst = &dst,
 		.createExtensions = createExtensions,
@@ -284,6 +286,22 @@ copydb_copy_extensions_hook(void *ctx, SourceExtension *ext)
 		}
 	}
 
+	/* resume: skip this extension if it was fully copied in a previous run */
+	CopyExtensionSummary extSummary = { .extoid = ext->oid };
+
+	if (!summary_lookup_extension(context->sourceDB, &extSummary))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (extSummary.doneTime > 0)
+	{
+		log_debug("Skipping extension \"%s\": already done in a previous run",
+				  ext->extname);
+		return true;
+	}
+
 	if (context->createExtensions)
 	{
 		PQExpBuffer sql = createPQExpBuffer();
@@ -333,6 +351,18 @@ copydb_copy_extensions_hook(void *ctx, SourceExtension *ext)
 
 	if (ext->config.count > 0)
 	{
+		if (!summary_add_extension(context->sourceDB, &extSummary))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!pgsql_begin(dst))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
 		for (int i = 0; i < ext->config.count; i++)
 		{
 			SourceExtensionConfig *config = &(ext->config.array[i]);
@@ -364,6 +394,7 @@ copydb_copy_extensions_hook(void *ctx, SourceExtension *ext)
 											   config->condition))
 					{
 						/* errors have already been logged */
+						(void) pgsql_rollback(dst);
 						return false;
 					}
 
@@ -382,6 +413,7 @@ copydb_copy_extensions_hook(void *ctx, SourceExtension *ext)
 												  qname))
 					{
 						/* errors have already been logged */
+						(void) pgsql_rollback(dst);
 						return false;
 					}
 
@@ -401,9 +433,40 @@ copydb_copy_extensions_hook(void *ctx, SourceExtension *ext)
 							  (char) config->relkind,
 							  ext->extname,
 							  qname);
+					(void) pgsql_rollback(dst);
 					return false;
 				}
 			}
+		}
+
+		if (!pgsql_commit(dst))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!summary_finish_extension(context->sourceDB, &extSummary))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+	else
+	{
+		/*
+		 * Extension has no config tables to copy; stamp it done immediately so
+		 * a subsequent --resume skips the CREATE EXTENSION as well.
+		 */
+		if (!summary_add_extension(context->sourceDB, &extSummary))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!summary_finish_extension(context->sourceDB, &extSummary))
+		{
+			/* errors have already been logged */
+			return false;
 		}
 	}
 
