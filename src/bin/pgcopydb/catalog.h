@@ -11,17 +11,6 @@
 #include "string_utils.h"
 
 /*
- * Forward declaration so that catalog_prepare_filter's signature can use
- * SourceFilterExtensionList without pulling in parson.h (which filtering.h
- * transitively needs via its filters_as_json declaration). Files that call
- * catalog_prepare_filter must include filtering.h for the full definition.
- */
-#ifndef FILTERING_H
-struct SourceFilterExtensionList;
-typedef struct SourceFilterExtensionList SourceFilterExtensionList;
-#endif
-
-/*
  * Internal infrastructure to bind values to SQLite prepared statements.
  */
 typedef struct SQLiteQuery SQLiteQuery;
@@ -419,11 +408,13 @@ bool catalog_fetch_catnames(DatabaseCatalog *filterDB, PGSQL *pgsql);
 bool catalog_add_catname(DatabaseCatalog *catalog, uint32_t oid,
 						 const char *catname);
 
+bool catalog_add_extension_filter(DatabaseCatalog *catalog,
+								  const char *extname,
+								  const char *action);
+
 bool catalog_prepare_filter(DatabaseCatalog *catalog,
 							bool skipExtensions,
-							bool skipCollations,
-							SourceFilterExtensionList *excludeExtensionList,
-							SourceFilterExtensionList *includeOnlyExtensionList);
+							bool skipCollations);
 
 typedef struct CatalogFilter
 {
