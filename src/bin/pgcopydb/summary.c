@@ -1619,6 +1619,264 @@ summary_finish_constraint(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 
 
 /*
+ * summary_lookup_extension looks-up an extension summary in our catalogs, in
+ * case the given extension has already been done in a previous run.
+ */
+bool
+summary_lookup_extension(DatabaseCatalog *catalog,
+						 CopyExtensionSummary *extSummary)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: summary_lookup_extension: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"  select pid, start_time_epoch, done_time_epoch, duration "
+		"    from summary "
+		"   where extoid = $1";
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	SQLiteQuery query = {
+		.context = extSummary,
+		.fetchFunction = &summary_extension_fetch
+	};
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "extoid", extSummary->extoid, NULL }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* now execute the query, which return exactly one row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
+ * summary_extension_fetch fetches a CopyExtensionSummary entry from a SQLite
+ * ppStmt result set.
+ */
+bool
+summary_extension_fetch(SQLiteQuery *query)
+{
+	CopyExtensionSummary *extSummary = (CopyExtensionSummary *) query->context;
+
+	extSummary->pid = sqlite3_column_int64(query->ppStmt, 0);
+	extSummary->startTime = sqlite3_column_int64(query->ppStmt, 1);
+	extSummary->doneTime = sqlite3_column_int64(query->ppStmt, 2);
+	extSummary->durationMs = sqlite3_column_int64(query->ppStmt, 3);
+
+	extSummary->startTimeInstr = (instr_time) {
+		0
+	};
+	extSummary->durationInstr = (instr_time) {
+		0
+	};
+
+	INSTR_TIME_SET_CURRENT(extSummary->startTimeInstr);
+
+	return true;
+}
+
+
+/*
+ * summary_add_extension INSERTs an extension summary entry to our internal
+ * catalogs database, recording that this extension's copy has started.
+ */
+bool
+summary_add_extension(DatabaseCatalog *catalog,
+					  CopyExtensionSummary *extSummary)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: summary_add_extension: db is NULL");
+		return false;
+	}
+
+	extSummary->pid = getpid();
+	extSummary->startTime = time(NULL);
+	extSummary->doneTime = 0;
+	extSummary->durationMs = 0;
+
+	extSummary->startTimeInstr = (instr_time) {
+		0
+	};
+	extSummary->durationInstr = (instr_time) {
+		0
+	};
+
+	INSTR_TIME_SET_CURRENT(extSummary->startTimeInstr);
+
+	char *sql =
+		"insert or ignore into summary(pid, extoid, start_time_epoch) "
+		"values($1, $2, $3)";
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "pid", extSummary->pid, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "extoid", extSummary->extoid, NULL },
+
+		{
+			BIND_PARAMETER_TYPE_INT64, "start_time_epoch",
+			extSummary->startTime, NULL
+		}
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* now execute the query, which does not return any row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
+ * summary_finish_extension UPDATEs an extension summary entry in our internal
+ * catalogs database to record that the extension's copy has completed.
+ */
+bool
+summary_finish_extension(DatabaseCatalog *catalog,
+						 CopyExtensionSummary *extSummary)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: summary_finish_extension: db is NULL");
+		return false;
+	}
+
+	extSummary->doneTime = time(NULL);
+
+	INSTR_TIME_SET_CURRENT(extSummary->durationInstr);
+	INSTR_TIME_SUBTRACT(extSummary->durationInstr, extSummary->startTimeInstr);
+
+	extSummary->durationMs = INSTR_TIME_GET_MILLISEC(extSummary->durationInstr);
+
+	char *sql =
+		"update summary set done_time_epoch = $1, duration = $2 "
+		"where pid = $3 and extoid = $4";
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{
+			BIND_PARAMETER_TYPE_INT64, "done_time_epoch",
+			extSummary->doneTime, NULL
+		},
+
+		{
+			BIND_PARAMETER_TYPE_INT64, "duration",
+			extSummary->durationMs, NULL
+		},
+
+		{ BIND_PARAMETER_TYPE_INT64, "pid", extSummary->pid, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "extoid", extSummary->extoid, NULL }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* now execute the query, which does not return any row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
  * summary_table_all_indexes_done sets tableSpecs->allIndexesAreDone to true
  * when all the indexes have already been done in the summary table of our
  * internal catalogs.

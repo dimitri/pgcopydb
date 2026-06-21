@@ -178,11 +178,14 @@ static char *sourceDBcreateDDLs[] = {
 	"  partnum integer, "
 	"  indexoid integer references s_index(oid), "
 	"  conoid integer references s_constraint(oid), "
+	"  extoid integer, "
 	"  start_time_epoch integer, done_time_epoch integer, duration integer, "
 	"  bytes integer, "
 	"  command text, "
 	"  unique(tableoid, partnum)"
 	")",
+
+	"create unique index summary_extoid on summary(extoid) where extoid is not null",
 
 	"create table vacuum_summary("
 	"  pid integer, "
@@ -412,6 +415,7 @@ static char *filterDBcreateDDLs[] = {
 	"  partnum integer, "
 	"  indexoid integer references s_index(oid), "
 	"  conoid integer references s_constraint(oid), "
+	"  extoid integer, "
 	"  start_time_epoch integer, done_time_epoch integer, duration integer, "
 	"  bytes integer, "
 	"  command text, "

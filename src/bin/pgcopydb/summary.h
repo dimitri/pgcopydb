@@ -69,6 +69,17 @@ typedef struct CopyOidSummary
 	uint64_t durationMs;        /* instr_time duration in milliseconds */
 } CopyOidSummary;
 
+typedef struct CopyExtensionSummary
+{
+	pid_t pid;                  /* pid */
+	uint32_t extoid;            /* oid */
+	uint64_t startTime;         /* time(NULL) at start time */
+	uint64_t doneTime;          /* time(NULL) at done time */
+	uint64_t durationMs;        /* instr_time duration in milliseconds */
+	instr_time startTimeInstr;  /* internal instr_time tracker */
+	instr_time durationInstr;   /* internal instr_time tracker */
+} CopyExtensionSummary;
+
 #define COPY_BLOBS_SUMMARY_LINES 3
 
 typedef struct CopyBlobsSummary

@@ -712,6 +712,17 @@ bool summary_add_constraint(DatabaseCatalog *catalog,
 bool summary_finish_constraint(DatabaseCatalog *catalog,
 							   CopyIndexSpec *indexSpecs);
 
+bool summary_lookup_extension(DatabaseCatalog *catalog,
+							  CopyExtensionSummary *extSummary);
+
+bool summary_extension_fetch(SQLiteQuery *query);
+
+bool summary_add_extension(DatabaseCatalog *catalog,
+						   CopyExtensionSummary *extSummary);
+
+bool summary_finish_extension(DatabaseCatalog *catalog,
+							  CopyExtensionSummary *extSummary);
+
 bool summary_table_count_indexes_left(DatabaseCatalog *catalog,
 									  CopyTableDataSpec *tableSpecs);
 
