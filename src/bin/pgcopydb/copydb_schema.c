@@ -1321,7 +1321,8 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 			}
 
 			if (!catalog_prepare_filter(filtersDB,
-										specs->skipExtensions,
+										specs->skipExtensions ||
+										(specs->extRequirements != NULL),
 										specs->skipCollations))
 			{
 				log_error("Failed to prepare filtering hash-table, "
@@ -1509,7 +1510,8 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		}
 
 		if (!catalog_prepare_filter(filtersDB,
-									specs->skipExtensions,
+									specs->skipExtensions ||
+									(specs->extRequirements != NULL),
 									specs->skipCollations))
 		{
 			log_error("Failed to prepare filtering hash-table, "

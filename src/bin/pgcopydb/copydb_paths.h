@@ -61,6 +61,7 @@ typedef struct DumpPaths
 
 	char preListOutFilename[MAXPGPATH]; /* pg_restore --list */
 	char preListFilename[MAXPGPATH]; /* pg_restore --use-list */
+	char schemaListFilename[MAXPGPATH]; /* schemas-only pg_restore --use-list */
 
 	char postListOutFilename[MAXPGPATH]; /* pg_restore --list */
 	char postListFilename[MAXPGPATH];    /* pg_restore --use-list */

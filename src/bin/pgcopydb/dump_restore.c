@@ -179,7 +179,55 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 	}
 
 	/*
-	 * Now prepare the pg_restore --use-list file.
+	 * When --requirements is given, use a two-pass approach so that extension
+	 * namespaces exist before the extensions themselves are created, and
+	 * extensions exist before pg_restore creates objects that depend on their
+	 * types (e.g. PostGIS geometry columns):
+	 *
+	 *   Pass 1: restore schemas only → namespaces created with correct
+	 *           ownership and grants.
+	 *   Then:   create pinned extensions (schemas already exist).
+	 *   Pass 2: restore everything except schemas and extensions → tables,
+	 *           functions, etc. can reference extension types.
+	 *
+	 * Without --requirements, a single pg_restore pass suffices: extensions
+	 * are either handled by pg_restore (skipExtensions=false) or skipped
+	 * entirely (skipExtensions=true).
+	 */
+	if (specs->extRequirements != NULL)
+	{
+		if (!copydb_write_schemas_restore_list(specs))
+		{
+			log_error("Failed to prepare the schemas-only pg_restore list, "
+					  "see above for details");
+			return false;
+		}
+
+		specs->restoreOptions.section = PG_RESTORE_SECTION_PRE_DATA;
+		if (!pg_restore_db(&(specs->pgPaths),
+						   &(specs->connStrings),
+						   &(specs->filters),
+						   specs->dumpPaths.dumpFilename,
+						   specs->dumpPaths.schemaListFilename,
+						   specs->restoreOptions))
+		{
+			log_error("Failed to restore schemas (first pass), "
+					  "see above for details");
+			return false;
+		}
+	}
+
+	if (!copydb_create_pinned_extensions(specs))
+	{
+		log_error("Failed to create extensions with version pinning, "
+				  "see above for details");
+		return false;
+	}
+
+	/*
+	 * Now prepare the pg_restore --use-list file.  When --requirements is
+	 * used, SCHEMA entries are skipped here because they were already restored
+	 * in the first pass above.
 	 */
 	if (!copydb_write_restore_list(specs, PG_DUMP_SECTION_PRE_DATA))
 	{
@@ -595,6 +643,7 @@ typedef struct RestoreListContext
 {
 	CopyDataSpec *specs;
 	FILE *outStream;
+	bool schemasOnly;   /* write only SCHEMA entries (first pass) */
 } RestoreListContext;
 
 /*
@@ -694,6 +743,61 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 
 
 /*
+ * copydb_write_schemas_restore_list writes a pg_restore --use-list file that
+ * contains only SCHEMA entries from the pre-data section.  This is used as the
+ * first pass when --requirements is active: pg_restore runs with this list to
+ * create all schemas (with correct ownership and grants), after which
+ * copydb_create_pinned_extensions can safely create extensions into those
+ * schemas without needing to pre-create them itself.
+ */
+bool
+copydb_write_schemas_restore_list(CopyDataSpec *specs)
+{
+	char *dumpFilename = specs->dumpPaths.dumpFilename;
+	char *listOutFilename = specs->dumpPaths.preListOutFilename;
+	char *listFilename = specs->dumpPaths.schemaListFilename;
+
+	if (!pg_restore_list(&(specs->pgPaths), dumpFilename, listOutFilename))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	FILE *out = fopen_with_umask(listFilename, "ab", FOPEN_FLAGS_A, 0644);
+
+	if (out == NULL)
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	RestoreListContext context = {
+		.specs = specs,
+		.outStream = out,
+		.schemasOnly = true
+	};
+
+	if (!archive_iter_toc(listOutFilename,
+						  &context,
+						  copydb_write_restore_list_hook))
+	{
+		log_error("Failed to prepare the schemas-only pg_restore list file, "
+				  "see above for details");
+		(void) fclose(out);
+		return false;
+	}
+
+	if (fclose(out) == EOF)
+	{
+		log_error("Failed to write file \"%s\"", listFilename);
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * copydb_write_restore_list_hook is an iterator callback function.
  */
 static bool
@@ -716,6 +820,17 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 	{
 		skip = true;
 		log_debug("Skipping DATABASE \"%s\"", name);
+	}
+
+	/*
+	 * In schemas-only mode (first pass when --requirements is used), skip all
+	 * non-SCHEMA archive entries so that only CREATE SCHEMA statements reach
+	 * pg_restore.  This guarantees extension namespaces exist before
+	 * copydb_create_pinned_extensions runs.
+	 */
+	if (!skip && context->schemasOnly && catOid != PG_NAMESPACE_OID)
+	{
+		skip = true;
 	}
 
 	/*
@@ -793,25 +908,40 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 
 	if (!skip && catOid == PG_NAMESPACE_OID)
 	{
-		bool exists = false;
-
-		if (!copydb_schema_already_exists(specs, oid, &exists))
+		if (!context->schemasOnly && specs->extRequirements != NULL)
 		{
-			log_error("Failed to check if restore name \"%s\" "
-					  "already exists",
-					  name);
-			return false;
-		}
-
-		if (exists)
-		{
+			/*
+			 * When --requirements is used, schemas are restored in a
+			 * dedicated first pass via copydb_write_schemas_restore_list.
+			 * Always skip them in the main second pass.
+			 */
 			skip = true;
 
-			log_debug("Skipping already existing dumpId %d: %s %u %s",
-					  item->dumpId,
-					  item->description,
-					  item->objectOid,
-					  item->restoreListName);
+			log_debug("Skipping SCHEMA (restored in first pass) dumpId %d: %s",
+					  item->dumpId, name);
+		}
+		else
+		{
+			bool exists = false;
+
+			if (!copydb_schema_already_exists(specs, oid, &exists))
+			{
+				log_error("Failed to check if restore name \"%s\" "
+						  "already exists",
+						  name);
+				return false;
+			}
+
+			if (exists)
+			{
+				skip = true;
+
+				log_debug("Skipping already existing dumpId %d: %s %u %s",
+						  item->dumpId,
+						  item->description,
+						  item->objectOid,
+						  item->restoreListName);
+			}
 		}
 	}
 

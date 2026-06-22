@@ -429,6 +429,9 @@ copydb_prepare_dump_paths(CopyFilePaths *cfPaths, DumpPaths *dumpPaths)
 	sformat(dumpPaths->preListFilename, MAXPGPATH, "%s/%s",
 			cfPaths->schemadir, "pre-filtered.list");
 
+	sformat(dumpPaths->schemaListFilename, MAXPGPATH, "%s/%s",
+			cfPaths->schemadir, "schemas-only.list");
+
 	sformat(dumpPaths->postListOutFilename, MAXPGPATH, "%s/%s",
 			cfPaths->schemadir, "post-out.list");
 

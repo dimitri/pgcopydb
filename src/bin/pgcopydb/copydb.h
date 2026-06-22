@@ -430,6 +430,7 @@ bool copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions);
 
 bool copydb_parse_extensions_requirements(CopyDataSpec *copySpecs,
 										  char *filename);
+bool copydb_create_pinned_extensions(CopyDataSpec *copySpecs);
 bool copydb_prepare_extensions_restore(CopyDataSpec *copySpecs);
 bool copydb_finalize_extensions_restore(CopyDataSpec *copySpecs);
 
@@ -484,6 +485,7 @@ bool copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
 												ArchiveContentItem *item);
 
 bool copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section);
+bool copydb_write_schemas_restore_list(CopyDataSpec *specs);
 
 /* sequences.c */
 bool copydb_copy_all_sequences(CopyDataSpec *specs, bool reset);
