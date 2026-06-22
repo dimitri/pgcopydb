@@ -205,7 +205,7 @@ static void parsePartKeyMinMaxValue(void *ctx, PGresult *result);
 
 static bool getPartKeyMinMaxValue(PGSQL *pgsql, SourceTable *table);
 
-static bool parseAttributesArray(SourceTable *table, JSON_Value *json);
+static bool schema_list_table_attributes(PGSQL *pgsql, DatabaseCatalog *catalog);
 
 static void getSequenceArray(void *ctx, PGresult *result);
 
@@ -684,20 +684,11 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 	log_debug("pgcopydb_sql_list_source_tables[%s]",
 			  filterTypeToString(filterType));
 
-	if (pgsql->pgversion_num == 0)
-	{
-		(void) pgsql_server_version(pgsql);
-	}
-
 	const char *sql = NULL;
 
-	if (!pgcopydb_sql_list_source_tables(pgsql->pgversion_num,
-										 filterType,
-										 &sql))
+	if (!pgcopydb_sql_list_source_tables(filterType, &sql))
 	{
-		log_error("BUG: no SQL for list_source_tables filter %d "
-				  "at server version %d",
-				  filterType, pgsql->pgversion_num);
+		log_error("BUG: no SQL for list_source_tables filter %d", filterType);
 		return false;
 	}
 
@@ -711,6 +702,12 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 	if (!context.parsedOk)
 	{
 		log_error("Failed to list tables");
+		return false;
+	}
+
+	if (!schema_list_table_attributes(pgsql, catalog))
+	{
+		log_error("Failed to list table attributes");
 		return false;
 	}
 
@@ -2605,9 +2602,9 @@ getTableArray(void *ctx, PGresult *result)
 
 	int nTuples = PQntuples(result);
 
-	if (PQnfields(result) != 13)
+	if (PQnfields(result) != 12)
 	{
-		log_error("Query returned %d columns, expected 13", PQnfields(result));
+		log_error("Query returned %d columns, expected 12", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -2815,7 +2812,6 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	int fnexcldata = PQfnumber(result, "excludedata");
 	int fnrestorelistname = PQfnumber(result, "format");
 	int fnpartkey = PQfnumber(result, "partkey");
-	int fnattrs = PQfnumber(result, "attributes");
 
 	/* c.oid */
 	char *value = PQgetvalue(result, rowNumber, fnoid);
@@ -3006,92 +3002,168 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		}
 	}
 
-	/* attributes */
-	if (PQgetisnull(result, rowNumber, fnattrs))
-	{
-		/* the query didn't care to add the attributes, skip parsing them */
-		table->attributes.count = 0;
-	}
-	else
-	{
-		value = PQgetvalue(result, rowNumber, fnattrs);
-
-		JSON_Value *json = json_parse_string(value);
-
-		if (!parseAttributesArray(table, json))
-		{
-			log_error("Failed to parse table %s attribute array: %s",
-					  table->qname,
-					  value);
-			++errors;
-		}
-	}
-
 	log_trace("parseCurrentSourceTable: %s.%s", table->nspname, table->relname);
 
 	return errors == 0;
 }
 
 
+typedef struct SourceAttributeContext
+{
+	DatabaseCatalog *catalog;
+	bool parsedOk;
+} SourceAttributeContext;
+
+static void getTableAttributeArray(void *ctx, PGresult *result);
+
 /*
- * parseAttributesArray parses a JSON representation of table list of
- * attributes and allocates the table's attribute array.
+ * schema_list_table_attributes issues the list_table_attributes query for all
+ * table OIDs stored in s_table and inserts the result rows into s_attr.
  */
 static bool
-parseAttributesArray(SourceTable *table, JSON_Value *json)
+schema_list_table_attributes(PGSQL *pgsql, DatabaseCatalog *catalog)
 {
-	if (json == NULL || json_type(json) != JSONArray)
+	if (catalog == NULL || catalog->db == NULL)
 	{
-		return false;
-	}
-
-	JSON_Array *jsAttsArray = json_array(json);
-
-	int count = json_array_get_count(jsAttsArray);
-
-	table->attributes.count = count;
-
-	if (count == 0)
-	{
-		table->attributes.array = NULL;
 		return true;
 	}
 
-	table->attributes.array =
-		(SourceTableAttribute *) calloc(count, sizeof(SourceTableAttribute));
+	char *oidArray = NULL;
+	int count = 0;
 
-	if (table->attributes.array == NULL)
+	if (!catalog_s_table_oid_array(catalog, &oidArray, &count))
 	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
+		log_error("Failed to collect table OIDs from catalog");
 		return false;
 	}
 
-	for (int i = 0; i < count; i++)
+	if (count == 0)
 	{
-		SourceTableAttribute *attr = &(table->attributes.array[i]);
-		JSON_Object *jsAttr = json_array_get_object(jsAttsArray, i);
-		const char *identity;
+		free(oidArray);
+		return true;
+	}
 
-		attr->attnum = json_object_get_number(jsAttr, "attnum");
-		attr->atttypid = json_object_get_number(jsAttr, "atttypid");
+	if (pgsql->pgversion_num == 0)
+	{
+		(void) pgsql_server_version(pgsql);
+	}
 
-		strlcpy(attr->attname,
-				json_object_get_string(jsAttr, "attname"),
-				sizeof(attr->attname));
+	const char *sql = NULL;
 
-		attr->attisprimary = json_object_get_boolean(jsAttr, "attisprimary");
-		attr->attisreplident = json_object_get_boolean(jsAttr, "attisreplident");
-		attr->attisgenerated = json_object_get_boolean(jsAttr, "attisgenerated");
+	if (!pgcopydb_sql_list_table_attributes(pgsql->pgversion_num, &sql))
+	{
+		free(oidArray);
+		return false;
+	}
 
-		identity = json_object_get_string(jsAttr, "attidentity");
+	SourceAttributeContext context = { catalog, true };
+	int paramCount = 1;
+	Oid paramTypes[1] = { TEXTOID };
+	const char *paramValues[1] = { oidArray };
 
-		if (identity != NULL && identity[0] != '\0')
-		{
-			attr->attidentity = identity[0];
-		}
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   &context, &getTableAttributeArray))
+	{
+		log_error("Failed to list table attributes");
+		free(oidArray);
+		return false;
+	}
+
+	free(oidArray);
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to list table attributes");
+		return false;
 	}
 
 	return true;
+}
+
+
+/*
+ * getTableAttributeArray is the PGresult callback for the list_table_attributes
+ * query.  Each row is one (table, column) pair; we insert it directly into
+ * s_attr via catalog_add_s_attr.
+ */
+static void
+getTableAttributeArray(void *ctx, PGresult *result)
+{
+	SourceAttributeContext *context = (SourceAttributeContext *) ctx;
+
+	int nTuples = PQntuples(result);
+
+	if (PQnfields(result) != 8)
+	{
+		log_error("Query returned %d columns, expected 8", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	int fnreloid = PQfnumber(result, "attrelid");
+	int fnattnum = PQfnumber(result, "attnum");
+	int fnatttypid = PQfnumber(result, "atttypid");
+	int fnattname = PQfnumber(result, "attname");
+	int fnattisprimary = PQfnumber(result, "attisprimary");
+	int fnattisreplident = PQfnumber(result, "attisreplident");
+	int fnattisgenerated = PQfnumber(result, "attisgenerated");
+	int fnattidentity = PQfnumber(result, "attidentity");
+
+	for (int rowNumber = 0; rowNumber < nTuples && context->parsedOk; rowNumber++)
+	{
+		uint32_t tableoid = 0;
+		SourceTableAttribute attr = { 0 };
+
+		char *value = PQgetvalue(result, rowNumber, fnreloid);
+
+		if (!stringToUInt32(value, &tableoid) || tableoid == 0)
+		{
+			log_error("Invalid attrelid OID \"%s\"", value);
+			context->parsedOk = false;
+			return;
+		}
+
+		value = PQgetvalue(result, rowNumber, fnattnum);
+		if (!stringToInt(value, &attr.attnum))
+		{
+			log_error("Invalid attnum \"%s\"", value);
+			context->parsedOk = false;
+			return;
+		}
+
+		value = PQgetvalue(result, rowNumber, fnatttypid);
+		if (!stringToUInt32(value, &attr.atttypid))
+		{
+			log_error("Invalid atttypid \"%s\"", value);
+			context->parsedOk = false;
+			return;
+		}
+
+		value = PQgetvalue(result, rowNumber, fnattname);
+		strlcpy(attr.attname, value, sizeof(attr.attname));
+
+		value = PQgetvalue(result, rowNumber, fnattisprimary);
+		attr.attisprimary = (*value == 't');
+
+		value = PQgetvalue(result, rowNumber, fnattisreplident);
+		attr.attisreplident = (*value == 't');
+
+		value = PQgetvalue(result, rowNumber, fnattisgenerated);
+		attr.attisgenerated = (*value == 't');
+
+		value = PQgetvalue(result, rowNumber, fnattidentity);
+		if (value != NULL && value[0] != '\0')
+		{
+			attr.attidentity = value[0];
+		}
+
+		if (!catalog_add_s_attr(context->catalog, tableoid, &attr))
+		{
+			context->parsedOk = false;
+			return;
+		}
+	}
 }
 
 

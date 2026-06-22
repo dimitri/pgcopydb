@@ -14,6 +14,7 @@
 #include "sqlite3.h"
 
 #include "catalog.h"
+#include "pqexpbuffer.h"
 #include "copydb.h"
 #include "defaults.h"
 #include "log.h"
@@ -2776,30 +2777,24 @@ catalog_add_s_table(DatabaseCatalog *catalog, SourceTable *table)
 		return false;
 	}
 
-	/* now add the attributes */
-	if (!catalog_add_attributes(catalog, table))
-	{
-		log_error("Failed to add table %s attributes, see above for details",
-				  table->qname);
-		return false;
-	}
-
 	return true;
 }
 
 
 /*
- * catalog_add_attributes INSERTs a SourceTable attributes array to our
- * internal catalogs database (s_attr).
+ * catalog_add_s_attr INSERTs a single SourceTableAttribute into s_attr.
+ * Used when streaming attributes from the separate list_table_attributes query.
  */
 bool
-catalog_add_attributes(DatabaseCatalog *catalog, SourceTable *table)
+catalog_add_s_attr(DatabaseCatalog *catalog,
+				   uint32_t tableoid,
+				   SourceTableAttribute *attr)
 {
 	sqlite3 *db = catalog->db;
 
 	if (db == NULL)
 	{
-		log_error("BUG: catalog_add_attributes: db is NULL");
+		log_error("BUG: catalog_add_s_attr: db is NULL");
 		return false;
 	}
 
@@ -2809,6 +2804,35 @@ catalog_add_attributes(DatabaseCatalog *catalog, SourceTable *table)
 		"attisprimary, attisreplident, attisgenerated, attidentity)"
 		"values($1, $2, $3, $4, $5, $6, $7, $8)";
 
+	/* store attidentity as a one-char string, or "" when not an identity col */
+	char identityStr[2] = { attr->attidentity, '\0' };
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "oid", tableoid, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "attnum", attr->attnum, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "atttypid", attr->atttypid, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "attname", 0, attr->attname },
+
+		{
+			BIND_PARAMETER_TYPE_INT, "attisprimary",
+			attr->attisprimary ? 1 : 0, NULL
+		},
+
+		{
+			BIND_PARAMETER_TYPE_INT, "attisreplident",
+			attr->attisreplident ? 1 : 0, NULL
+		},
+
+		{
+			BIND_PARAMETER_TYPE_INT, "attisgenerated",
+			attr->attisgenerated ? 1 : 0, NULL
+		},
+
+		{ BIND_PARAMETER_TYPE_TEXT, "attidentity", 0, identityStr }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
 	SQLiteQuery query = { 0 };
 
 	if (!catalog_sql_prepare(db, sql, &query))
@@ -2817,61 +2841,102 @@ catalog_add_attributes(DatabaseCatalog *catalog, SourceTable *table)
 		return false;
 	}
 
-	for (int i = 0; i < table->attributes.count; i++)
+	if (!catalog_sql_bind(&query, params, count))
 	{
-		SourceTableAttribute *attr = &(table->attributes.array[i]);
-
-		/* store attidentity as a one-char string, or "" when not an identity col */
-		char identityStr[2] = { attr->attidentity, '\0' };
-
-		BindParam params[] = {
-			{ BIND_PARAMETER_TYPE_INT64, "oid", table->oid, NULL },
-			{ BIND_PARAMETER_TYPE_INT64, "attnum", attr->attnum, NULL },
-			{ BIND_PARAMETER_TYPE_INT64, "atttypid", attr->atttypid, NULL },
-			{ BIND_PARAMETER_TYPE_TEXT, "attname", 0, attr->attname },
-
-			{
-				BIND_PARAMETER_TYPE_INT, "attisprimary",
-				attr->attisprimary ? 1 : 0, NULL
-			},
-
-			{
-				BIND_PARAMETER_TYPE_INT, "attisreplident",
-				attr->attisreplident ? 1 : 0, NULL
-			},
-
-			{
-				BIND_PARAMETER_TYPE_INT, "attisgenerated",
-				attr->attisgenerated ? 1 : 0, NULL
-			},
-
-			{ BIND_PARAMETER_TYPE_TEXT, "attidentity", 0, identityStr }
-		};
-
-		int count = sizeof(params) / sizeof(params[0]);
-
-		if (!catalog_sql_bind(&query, params, count))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-
-		/* now execute the query, which does not return any row */
-		if (!catalog_sql_execute(&query))
-		{
-			/* errors have already been logged */
-			return false;
-		}
+		/* errors have already been logged */
+		return false;
 	}
 
-	/* and finalize the query */
-	if (!catalog_sql_finalize(&query))
+	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
 	return true;
+}
+
+
+/*
+ * catalog_s_table_oid_array builds a PostgreSQL array literal of all table
+ * OIDs stored in s_table, formatted as "{oid1,oid2,...}" for use as a $1
+ * text parameter with ::oid[] casting in SQL.  The caller must free *text.
+ */
+bool
+catalog_s_table_oid_array(DatabaseCatalog *catalog, char **text, int *count)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_s_table_oid_array: db is NULL");
+		return false;
+	}
+
+	PQExpBufferData buf;
+	initPQExpBuffer(&buf);
+	appendPQExpBufferChar(&buf, '{');
+
+	*count = 0;
+
+	char *oidSql = "select oid from s_table order by oid";
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, oidSql, &query))
+	{
+		termPQExpBuffer(&buf);
+		return false;
+	}
+
+	for (;;)
+	{
+		int rc = catalog_sql_step(&query);
+
+		if (rc == SQLITE_DONE)
+		{
+			break;
+		}
+
+		if (rc != SQLITE_ROW)
+		{
+			log_error("[SQLite %d: %s]: %s",
+					  rc,
+					  query.sql,
+					  sqlite3_errmsg(db));
+			(void) catalog_sql_finalize(&query);
+			termPQExpBuffer(&buf);
+			return false;
+		}
+
+		if (*count > 0)
+		{
+			appendPQExpBufferChar(&buf, ',');
+		}
+
+		uint64_t oid = sqlite3_column_int64(query.ppStmt, 0);
+		appendPQExpBuffer(&buf, "%llu", (unsigned long long) oid);
+		++(*count);
+	}
+
+	if (!catalog_sql_finalize(&query))
+	{
+		termPQExpBuffer(&buf);
+		return false;
+	}
+
+	appendPQExpBufferChar(&buf, '}');
+
+	if (PQExpBufferBroken(&buf))
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		termPQExpBuffer(&buf);
+		return false;
+	}
+
+	*text = strdup(buf.data);
+	termPQExpBuffer(&buf);
+
+	return *text != NULL;
 }
 
 
