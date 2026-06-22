@@ -39,6 +39,7 @@ lib*.pc
 /Makefile.global
 /src/Makefile.custom
 /tests/__pycache__/
+/tools/__pycache__/
 /env/
 /GIT-VERSION-FILE
 /version

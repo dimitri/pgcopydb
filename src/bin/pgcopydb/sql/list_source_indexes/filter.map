@@ -1,8 +1,9 @@
-# Integer values match SourceFilterType enum in filtering.h
-no-filter       0
-incl            1
-excl            2
-list-not-incl   3
-list-excl       4
-excl-index      5
-list-excl-index 6
+# header filtering.h
+# enum SourceFilterType
+no-filter       SOURCE_FILTER_TYPE_NONE
+incl            SOURCE_FILTER_TYPE_INCL
+excl            SOURCE_FILTER_TYPE_EXCL
+list-not-incl   SOURCE_FILTER_TYPE_LIST_NOT_INCL
+list-excl       SOURCE_FILTER_TYPE_LIST_EXCL
+excl-index      SOURCE_FILTER_TYPE_EXCL_INDEX
+list-excl-index SOURCE_FILTER_TYPE_LIST_EXCL_INDEX

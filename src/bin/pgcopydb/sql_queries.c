@@ -6,6 +6,322 @@
 
 #include "sql_queries.h"
 
+/*////////////////////////////////////////////////////////////// */
+
+/* list_collations                                              */
+/*////////////////////////////////////////////////////////////// */
+
+/* list_collations.sql */
+static const char sql__list_collations[] =
+	"   select indexrelid, n, colloid\n"
+	"     from pg_index i\n"
+	"     join pg_class c on c.oid = i.indexrelid\n"
+	"     join pg_namespace n on n.oid = c.relnamespace,\n"
+	"          unnest(indcollation) with ordinality as t (colloid, n)\n"
+	"    where n.nspname !~ '^pg_' and n.nspname <> 'information_schema'\n"
+	" ),\n"
+	"all_colls as\n"
+	" (\n"
+	"   select colloid, collname,\n"
+	"          pg_describe_object('pg_class'::regclass, indexrelid, 0)\n"
+	"              as description,\n"
+	"          format('%s %s %s',\n"
+	"                 regexp_replace(n.nspname, '[\\n\\r]', ' '),\n"
+	"                 regexp_replace(c.collname, '[\\n\\r]', ' '),\n"
+	"                 regexp_replace(auth.rolname, '[\\n\\r]', ' '))\n"
+	"              as restore_list_name\n"
+	"     from indcols\n"
+	"          join pg_collation c on c.oid = colloid\n"
+	"          join pg_roles auth ON auth.oid = c.collowner\n"
+	"          join pg_namespace n on n.oid = c.collnamespace\n"
+	"    where colloid <> 0\n"
+	"      and collname <> 'default'\n"
+	"   union\n"
+	"   select c.oid as colloid, c.collname,\n"
+	"          format('database %s', d.datname) as description,\n"
+	"          format('%s %s %s',\n"
+	"                 regexp_replace(n.nspname, '[\\n\\r]', ' '),\n"
+	"                 regexp_replace(c.collname, '[\\n\\r]', ' '),\n"
+	"                 regexp_replace(auth.rolname, '[\\n\\r]', ' '))\n"
+	"              as restore_list_name\n"
+	"     from pg_database d\n"
+	"          join pg_collation c on c.collname = d.datcollate\n"
+	"          join pg_roles auth ON auth.oid = c.collowner\n"
+	"          join pg_namespace n on n.oid = c.collnamespace\n"
+	"    where d.datname = current_database()\n"
+	"   union\n"
+	"   select coll.oid as colloid, coll.collname,\n"
+	"          pg_describe_object('pg_class'::regclass, attrelid, attnum)\n"
+	"              as description,\n"
+	"          format('%s %s %s',\n"
+	"                 regexp_replace(cn.nspname, '[\\n\\r]', ' '),\n"
+	"                 regexp_replace(coll.collname, '[\\n\\r]', ' '),\n"
+	"                 regexp_replace(auth.rolname, '[\\n\\r]', ' '))\n"
+	"              as restore_list_name\n"
+	"     from pg_attribute a\n"
+	"          join pg_class c on c.oid = a.attrelid\n"
+	"          join pg_namespace n on n.oid = c.relnamespace\n"
+	"          join pg_collation coll on coll.oid = attcollation\n"
+	"          join pg_roles auth ON auth.oid = coll.collowner\n"
+	"          join pg_namespace cn on cn.oid = coll.collnamespace\n"
+	"    where collname <> 'default'\n"
+	"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'\n"
+	" )\n"
+	"select distinct on (colloid) colloid, collname, description,\n"
+	"       restore_list_name\n"
+	"  from all_colls\n"
+	"order by colloid, description\n"
+;
+
+bool
+pgcopydb_sql_list_collations(const char **sql)
+{
+	*sql = sql__list_collations;
+	return true;
+}
+
+
+/*////////////////////////////////////////////////////////////// */
+
+/* list_database_properties                                     */
+/*////////////////////////////////////////////////////////////// */
+
+/* list_database_properties.sql */
+static const char sql__list_database_properties[] =
+	"select d.datname, NULL as rolname,\n"
+	"       unnest(rs.setconfig) as setconfig\n"
+	"  from pg_db_role_setting rs\n"
+	"       join pg_database d on d.oid = rs.setdatabase\n"
+	" where d.datname = current_database()\n"
+	"   and setrole = 0\n"
+	"\n"
+	"union all\n"
+	"\n"
+	"select d.datname, format('%I', rolname) as rolname,\n"
+	"       unnest(rs.setconfig)  as setconfig\n"
+	"  from pg_db_role_setting rs\n"
+	"       join pg_database d on d.oid = rs.setdatabase\n"
+	"       join pg_roles r on r.oid = rs.setrole\n"
+	" where d.datname = current_database()\n"
+;
+
+bool
+pgcopydb_sql_list_database_properties(const char **sql)
+{
+	*sql = sql__list_database_properties;
+	return true;
+}
+
+
+/*////////////////////////////////////////////////////////////// */
+
+/* list_databases                                               */
+/*////////////////////////////////////////////////////////////// */
+
+/* list_databases.sql */
+static const char sql__list_databases[] =
+	"select d.oid, datname, pg_database_size(d.oid) as bytes,\n"
+	"       pg_size_pretty(pg_database_size(d.oid))\n"
+	"  from pg_database d\n"
+	" where datname not in ('template0', 'template1')\n"
+	"order by datname\n"
+;
+
+bool
+pgcopydb_sql_list_databases(const char **sql)
+{
+	*sql = sql__list_databases;
+	return true;
+}
+
+
+/*////////////////////////////////////////////////////////////// */
+
+/* list_ext_schemas                                             */
+/*////////////////////////////////////////////////////////////// */
+
+/* list_ext_schemas.sql */
+static const char sql__list_ext_schemas[] =
+	"select distinct on (n.oid) n.oid, n.nspname,\n"
+	"       format('- %s %s',\n"
+	"                regexp_replace(n.nspname, '[\\n\\r]', ' '),\n"
+	"                regexp_replace(auth.rolname, '[\\n\\r]', ' '))\n"
+	"  from pg_namespace n\n"
+	"       join pg_roles auth ON auth.oid = n.nspowner\n"
+	"       join pg_depend d\n"
+	"         on d.refclassid = 'pg_namespace'::regclass\n"
+	"        and d.refobjid = n.oid\n"
+	"        and d.classid = 'pg_extension'::regclass\n"
+	" where nspname <> 'public' and nspname !~ '^pg_'\n"
+;
+
+bool
+pgcopydb_sql_list_ext_schemas(const char **sql)
+{
+	*sql = sql__list_ext_schemas;
+	return true;
+}
+
+
+/*////////////////////////////////////////////////////////////// */
+
+/* list_ext_versions                                            */
+/*////////////////////////////////////////////////////////////// */
+
+/* list_ext_versions.sql */
+static const char sql__list_ext_versions[] =
+	"select e.name, e.default_version, e.installed_version,\n"
+	"       u.versions\n"
+	"\n"
+	"from pg_available_extensions e\n"
+	"     left join lateral\n"
+	"     (\n"
+	"       with updates as\n"
+	"       (\n"
+	"         select source,\n"
+	"                array_length(regexp_split_to_array(path, '--'), 1) as steps\n"
+	"           from pg_extension_update_paths(e.name)\n"
+	"          where (   target = e.default_version\n"
+	"                 or source = e.default_version)\n"
+	"           and source not in ('unpackaged', 'ANY')\n"
+	"           and path is not null\n"
+	"\n"
+	"     union all\n"
+	"\n"
+	"        select e.default_version, 0\n"
+	"\n"
+	"      order by steps, source desc\n"
+	"       )\n"
+	"       select coalesce(jsonb_agg(source),\n"
+	"                       jsonb_build_array(e.default_version))\n"
+	"       from updates\n"
+	"     )\n"
+	"     as u(versions) on true\n"
+	"\n"
+	"group by e.name, e.default_version, e.installed_version, u.versions\n"
+	"order by e.name\n"
+;
+
+bool
+pgcopydb_sql_list_ext_versions(const char **sql)
+{
+	*sql = sql__list_ext_versions;
+	return true;
+}
+
+
+/*////////////////////////////////////////////////////////////// */
+
+/* list_extensions                                              */
+/*////////////////////////////////////////////////////////////// */
+
+/* list_extensions.sql */
+static const char sql__list_extensions[] =
+	"with recursive extconfig_paths as (\n"
+	"     select extconfig\n"
+	"     from pg_extension\n"
+	"     where extconfig is not null\n"
+	" ), fk_constraints as (\n"
+	"     select fk.oid, fk.conrelid, fk.confrelid\n"
+	"     from pg_constraint fk\n"
+	"     inner join extconfig_paths\n"
+	"         on fk.conrelid = any(extconfig_paths.extconfig)\n"
+	"         or fk.confrelid = any(extconfig_paths.extconfig)\n"
+	"     where fk.contype = 'f' and fk.conrelid <> fk.confrelid\n"
+	" ), raw_ordered_fk_constraints as (\n"
+	"     select\n"
+	"            distinct c.confrelid as relid,\n"
+	"            0 as depth,\n"
+	"            false as is_cycle,\n"
+	"            ARRAY[c.oid] as path\n"
+	"       from fk_constraints c\n"
+	"      where not exists (\n"
+	"            select 1\n"
+	"              from fk_constraints fc\n"
+	"             where fc.conrelid = c.confrelid\n"
+	"            )\n"
+	"     UNION\n"
+	"     select\n"
+	"            distinct c.conrelid as relid,\n"
+	"            r.depth + 1 as depth,\n"
+	"            c.oid = ANY(path) as is_cycle,\n"
+	"            path || c.oid as path\n"
+	"       from raw_ordered_fk_constraints r\n"
+	"       join fk_constraints c ON c.confrelid = r.relid\n"
+	"      where not is_cycle\n"
+	" ), ordered_fk_constraints AS (\n"
+	"     select\n"
+	"            relid,\n"
+	"            max(depth) as depth\n"
+	"       from raw_ordered_fk_constraints group by relid\n"
+	" ), extension_config_data as (\n"
+	"select e.oid, extname, extnamespace::regnamespace, extrelocatable,\n"
+	"       0 as count, null as n,\n"
+	"       null as extconfig, null as nspname, null as relname,\n"
+	"       null as extcondition,\n"
+	"       null as relkind\n"
+	"  from pg_extension e\n"
+	" where extconfig is null\n"
+	"\n"
+	" UNION ALL\n"
+	"\n"
+	"  select e.oid, extname, extnamespace::regnamespace, extrelocatable,\n"
+	"         array_length(e.extconfig, 1) as count,\n"
+	"         extconfig.n,\n"
+	"         extconfig.extconfig,\n"
+	"         format('%I', n.nspname) as nspname,\n"
+	"         format('%I', c.relname) as relname,\n"
+	"         extcondition[extconfig.n],\n"
+	"         c.relkind as relkind\n"
+	"    from pg_extension e,\n"
+	"         unnest(extconfig) with ordinality as extconfig(extconfig, n)\n"
+	"          left join pg_class c on c.oid = extconfig.extconfig\n"
+	"          join pg_namespace n on c.relnamespace = n.oid\n"
+	"   where extconfig.extconfig is not null\n"
+	")\n"
+	"select oid, extname, extnamespace, extrelocatable,\n"
+	"       count,\n"
+	"       row_number() over (partition by oid order by depth) as n,\n"
+	"       extconfig,\n"
+	"       nspname,\n"
+	"       relname,\n"
+	"       extcondition,\n"
+	"       relkind\n"
+	" from extension_config_data\n"
+	"      left outer join ordered_fk_constraints ofc on extconfig = ofc.relid\n"
+;
+
+bool
+pgcopydb_sql_list_extensions(const char **sql)
+{
+	*sql = sql__list_extensions;
+	return true;
+}
+
+
+/*////////////////////////////////////////////////////////////// */
+
+/* list_schemas                                                 */
+/*////////////////////////////////////////////////////////////// */
+
+/* list_schemas.sql */
+static const char sql__list_schemas[] =
+	"select n.oid, n.nspname,\n"
+	"       format('- %s %s',\n"
+	"                regexp_replace(n.nspname, '[\\n\\r]', ' '),\n"
+	"                regexp_replace(auth.rolname, '[\\n\\r]', ' '))\n"
+	"  from pg_namespace n\n"
+	"       join pg_roles auth ON auth.oid = n.nspowner\n"
+	" where nspname <> 'information_schema' and nspname !~ '^pg_'\n"
+;
+
+bool
+pgcopydb_sql_list_schemas(const char **sql)
+{
+	*sql = sql__list_schemas;
+	return true;
+}
+
 
 /*////////////////////////////////////////////////////////////// */
 
