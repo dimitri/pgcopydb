@@ -2782,14 +2782,6 @@ catalog_add_s_table(DatabaseCatalog *catalog, SourceTable *table)
 		return false;
 	}
 
-	/* now add the attributes */
-	if (!catalog_add_attributes(catalog, table))
-	{
-		log_error("Failed to add table %s attributes, see above for details",
-				  table->qname);
-		return false;
-	}
-
 	return true;
 }
 
@@ -2887,6 +2879,212 @@ catalog_add_attributes(DatabaseCatalog *catalog, SourceTable *table)
 		return false;
 	}
 
+	return true;
+}
+
+
+static bool catalog_s_table_count_fetch(SQLiteQuery *query);
+
+/*
+ * catalog_add_s_attr INSERTs a single SourceTableAttribute into s_attr.
+ * Used when streaming attributes from the separate list_table_attributes query.
+ */
+bool
+catalog_add_s_attr(DatabaseCatalog *catalog,
+				   uint32_t tableoid,
+				   SourceTableAttribute *attr)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_add_s_attr: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"insert into s_attr("
+		"oid, attnum, attypid, attname, "
+		"attisprimary, attisreplident, attisgenerated, attidentity, "
+		"attisbinarycompatible, atttypsend)"
+		"values($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)";
+
+	/* store attidentity as a one-char string, or "" when not an identity col */
+	char identityStr[2] = { attr->attidentity, '\0' };
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "oid", tableoid, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "attnum", attr->attnum, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "atttypid", attr->atttypid, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "attname", 0, attr->attname },
+
+		{
+			BIND_PARAMETER_TYPE_INT, "attisprimary",
+			attr->attisprimary ? 1 : 0, NULL
+		},
+
+		{
+			BIND_PARAMETER_TYPE_INT, "attisreplident",
+			attr->attisreplident ? 1 : 0, NULL
+		},
+
+		{
+			BIND_PARAMETER_TYPE_INT, "attisgenerated",
+			attr->attisgenerated ? 1 : 0, NULL
+		},
+
+		{ BIND_PARAMETER_TYPE_TEXT, "attidentity", 0, identityStr },
+
+		{
+			BIND_PARAMETER_TYPE_INT, "attisbinarycompatible",
+			attr->attisbinarycompatible ? 1 : 0, NULL
+		},
+
+		{
+			BIND_PARAMETER_TYPE_TEXT, "atttypsend", 0, attr->atttypsend
+		}
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_s_table_oid_array builds a PostgreSQL array literal of all table
+ * OIDs stored in s_table, formatted as "{oid1,oid2,...}" for use as a $1
+ * text parameter with ::oid[] casting in SQL.  The caller must free *text.
+ */
+bool
+catalog_s_table_oid_array(DatabaseCatalog *catalog, char **text, int *count)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_s_table_oid_array: db is NULL");
+		return false;
+	}
+
+	/* first pass: count rows */
+	char *countSql = "select count(*) from s_table";
+	SQLiteQuery countQuery = {
+		.context = count,
+		.fetchFunction = &catalog_s_table_count_fetch
+	};
+
+	if (!catalog_sql_prepare(db, countSql, &countQuery))
+	{
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&countQuery))
+	{
+		return false;
+	}
+
+	if (*count == 0)
+	{
+		*text = strdup("{}");
+		return *text != NULL;
+	}
+
+	/* second pass: collect oids into a "{oid1,oid2,...}" string */
+	char *oidSql = "select oid from s_table order by oid";
+
+	/* rough upper bound: each oid is at most 10 digits + comma */
+	int capacity = 2 + (*count * 11) + 1;
+	char *buf = (char *) calloc(capacity, 1);
+
+	if (buf == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	buf[0] = '{';
+	int pos = 1;
+	bool first = true;
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, oidSql, &query))
+	{
+		free(buf);
+		return false;
+	}
+
+	for (;;)
+	{
+		int rc = catalog_sql_step(&query);
+
+		if (rc == SQLITE_DONE)
+		{
+			break;
+		}
+
+		if (rc != SQLITE_ROW)
+		{
+			log_error("[SQLite %d: %s]: %s",
+					  rc,
+					  query.sql,
+					  sqlite3_errmsg(db));
+			(void) catalog_sql_finalize(&query);
+			free(buf);
+			return false;
+		}
+
+		uint64_t oid = sqlite3_column_int64(query.ppStmt, 0);
+
+		if (!first)
+		{
+			buf[pos++] = ',';
+		}
+		first = false;
+
+		pos += sformat(buf + pos, capacity - pos, "%llu", (unsigned long long) oid);
+	}
+
+	if (!catalog_sql_finalize(&query))
+	{
+		free(buf);
+		return false;
+	}
+
+	buf[pos++] = '}';
+	buf[pos] = '\0';
+
+	*text = buf;
+	return true;
+}
+
+
+static bool
+catalog_s_table_count_fetch(SQLiteQuery *query)
+{
+	int *count = (int *) query->context;
+	*count = sqlite3_column_int(query->ppStmt, 0);
 	return true;
 }
 

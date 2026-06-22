@@ -20,6 +20,8 @@ bool pgcopydb_sql_list_ext_versions(const char **sql);
 bool pgcopydb_sql_list_extensions(const char **sql);
 bool pgcopydb_sql_list_schemas(const char **sql);
 
+bool pgcopydb_sql_list_table_attributes(int pg_version, const char **sql);
+
 bool pgcopydb_sql_list_source_depend(int filter, const char **sql);
 bool pgcopydb_sql_list_source_indexes(int filter, const char **sql);
 bool pgcopydb_sql_list_source_sequences(int filter, const char **sql);

@@ -205,7 +205,7 @@ static void parsePartKeyMinMaxValue(void *ctx, PGresult *result);
 
 static bool getPartKeyMinMaxValue(PGSQL *pgsql, SourceTable *table);
 
-static bool parseAttributesArray(SourceTable *table, JSON_Value *json);
+static bool schema_list_table_attributes(PGSQL *pgsql, DatabaseCatalog *catalog);
 
 static void getSequenceArray(void *ctx, PGresult *result);
 
@@ -711,6 +711,12 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 	if (!context.parsedOk)
 	{
 		log_error("Failed to list tables");
+		return false;
+	}
+
+	if (!schema_list_table_attributes(pgsql, catalog))
+	{
+		log_error("Failed to list table attributes");
 		return false;
 	}
 
@@ -2605,9 +2611,9 @@ getTableArray(void *ctx, PGresult *result)
 
 	int nTuples = PQntuples(result);
 
-	if (PQnfields(result) != 13)
+	if (PQnfields(result) != 12)
 	{
-		log_error("Query returned %d columns, expected 13", PQnfields(result));
+		log_error("Query returned %d columns, expected 12", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -2815,7 +2821,6 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 	int fnexcldata = PQfnumber(result, "excludedata");
 	int fnrestorelistname = PQfnumber(result, "format");
 	int fnpartkey = PQfnumber(result, "partkey");
-	int fnattrs = PQfnumber(result, "attributes");
 
 	/* c.oid */
 	char *value = PQgetvalue(result, rowNumber, fnoid);
@@ -3006,27 +3011,6 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 		}
 	}
 
-	/* attributes */
-	if (PQgetisnull(result, rowNumber, fnattrs))
-	{
-		/* the query didn't care to add the attributes, skip parsing them */
-		table->attributes.count = 0;
-	}
-	else
-	{
-		value = PQgetvalue(result, rowNumber, fnattrs);
-
-		JSON_Value *json = json_parse_string(value);
-
-		if (!parseAttributesArray(table, json))
-		{
-			log_error("Failed to parse table %s attribute array: %s",
-					  table->qname,
-					  value);
-			++errors;
-		}
-	}
-
 	log_trace("parseCurrentSourceTable: %s.%s", table->nspname, table->relname);
 
 	return errors == 0;
@@ -3034,64 +3018,223 @@ parseCurrentSourceTable(PGresult *result, int rowNumber, SourceTable *table)
 
 
 /*
- * parseAttributesArray parses a JSON representation of table list of
- * attributes and allocates the table's attribute array.
+ * SourceAttributeContext is used by getTableAttributeArray to stream
+ * attribute rows directly into the SQLite catalog.
+ */
+typedef struct SourceAttributeContext
+{
+	DatabaseCatalog *catalog;
+	bool parsedOk;
+} SourceAttributeContext;
+
+static void getTableAttributeArray(void *ctx, PGresult *result);
+
+
+/*
+ * schema_list_table_attributes issues the list_table_attributes query for all
+ * tables already recorded in the catalog and inserts each row into s_attr.
  */
 static bool
-parseAttributesArray(SourceTable *table, JSON_Value *json)
+schema_list_table_attributes(PGSQL *pgsql, DatabaseCatalog *catalog)
 {
-	if (json == NULL || json_type(json) != JSONArray)
+	if (catalog == NULL || catalog->db == NULL)
 	{
-		return false;
-	}
-
-	JSON_Array *jsAttsArray = json_array(json);
-
-	int count = json_array_get_count(jsAttsArray);
-
-	table->attributes.count = count;
-
-	if (count == 0)
-	{
-		table->attributes.array = NULL;
 		return true;
 	}
 
-	table->attributes.array =
-		(SourceTableAttribute *) calloc(count, sizeof(SourceTableAttribute));
+	char *oidArray = NULL;
+	int count = 0;
 
-	if (table->attributes.array == NULL)
+	if (!catalog_s_table_oid_array(catalog, &oidArray, &count))
 	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
+		log_error("Failed to collect table OIDs from catalog");
 		return false;
 	}
 
-	for (int i = 0; i < count; i++)
+	if (count == 0)
 	{
-		SourceTableAttribute *attr = &(table->attributes.array[i]);
-		JSON_Object *jsAttr = json_array_get_object(jsAttsArray, i);
-		const char *identity;
+		free(oidArray);
+		return true;
+	}
 
-		attr->attnum = json_object_get_number(jsAttr, "attnum");
-		attr->atttypid = json_object_get_number(jsAttr, "atttypid");
+	if (pgsql->pgversion_num == 0)
+	{
+		(void) pgsql_server_version(pgsql);
+	}
 
-		strlcpy(attr->attname,
-				json_object_get_string(jsAttr, "attname"),
-				sizeof(attr->attname));
+	const char *sql = NULL;
 
-		attr->attisprimary = json_object_get_boolean(jsAttr, "attisprimary");
-		attr->attisreplident = json_object_get_boolean(jsAttr, "attisreplident");
-		attr->attisgenerated = json_object_get_boolean(jsAttr, "attisgenerated");
+	if (!pgcopydb_sql_list_table_attributes(pgsql->pgversion_num, &sql))
+	{
+		free(oidArray);
+		return false;
+	}
 
-		identity = json_object_get_string(jsAttr, "attidentity");
+	SourceAttributeContext context = { catalog, true };
 
-		if (identity != NULL && identity[0] != '\0')
-		{
-			attr->attidentity = identity[0];
-		}
+	int paramCount = 1;
+	Oid paramTypes[1] = { TEXTOID };
+	const char *paramValues[1] = { oidArray };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   &context, &getTableAttributeArray))
+	{
+		log_error("Failed to list table attributes");
+		free(oidArray);
+		return false;
+	}
+
+	free(oidArray);
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to list table attributes");
+		return false;
 	}
 
 	return true;
+}
+
+
+/*
+ * send functions whose binary output is known to cause alignment faults on some
+ * platforms (e.g. tsvector on ARM64).  Any column whose resolved type chain
+ * includes one of these functions is not safe for COPY BINARY.
+ */
+static const char *binaryCopyBlocklist[] = {
+	"tsvectorsend",
+	NULL
+};
+
+
+/*
+ * sendFuncBlocked returns true when any comma-separated name in funcList
+ * matches an entry in binaryCopyBlocklist.
+ */
+static bool
+sendFuncBlocked(const char *funcList)
+{
+	for (int i = 0; binaryCopyBlocklist[i] != NULL; i++)
+	{
+		const char *name = binaryCopyBlocklist[i];
+		size_t nameLen = strlen(name);
+		const char *p = funcList;
+
+		while ((p = strstr(p, name)) != NULL)
+		{
+			bool startOk = (p == funcList) || (*(p - 1) == ',');
+			bool endOk = (*(p + nameLen) == '\0') || (*(p + nameLen) == ',');
+
+			if (startOk && endOk)
+			{
+				return true;
+			}
+			p += nameLen;
+		}
+	}
+	return false;
+}
+
+
+/*
+ * getTableAttributeArray is the PGresult callback for the list_table_attributes
+ * query.  Each row is one (table, column) pair; we insert it directly into
+ * s_attr via catalog_add_s_attr.
+ */
+static void
+getTableAttributeArray(void *ctx, PGresult *result)
+{
+	SourceAttributeContext *context = (SourceAttributeContext *) ctx;
+
+	int nTuples = PQntuples(result);
+
+	if (PQnfields(result) != 10)
+	{
+		log_error("Query returned %d columns, expected 10", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	int fnreloid = PQfnumber(result, "attrelid");
+	int fnattnum = PQfnumber(result, "attnum");
+	int fnatttypid = PQfnumber(result, "atttypid");
+	int fnattname = PQfnumber(result, "attname");
+	int fnattisprimary = PQfnumber(result, "attisprimary");
+	int fnattisreplident = PQfnumber(result, "attisreplident");
+	int fnattisgenerated = PQfnumber(result, "attisgenerated");
+	int fnattidentity = PQfnumber(result, "attidentity");
+	int fnhasbinaryio = PQfnumber(result, "hasbinaryio");
+	int fntypsendfunc = PQfnumber(result, "typsendfunc");
+
+	for (int rowNumber = 0; rowNumber < nTuples && context->parsedOk; rowNumber++)
+	{
+		uint32_t tableoid = 0;
+		SourceTableAttribute attr = { 0 };
+
+		char *value = PQgetvalue(result, rowNumber, fnreloid);
+
+		if (!stringToUInt32(value, &tableoid) || tableoid == 0)
+		{
+			log_error("Invalid attrelid OID \"%s\"", value);
+			context->parsedOk = false;
+			return;
+		}
+
+		value = PQgetvalue(result, rowNumber, fnattnum);
+		if (!stringToInt(value, &attr.attnum))
+		{
+			log_error("Invalid attnum \"%s\"", value);
+			context->parsedOk = false;
+			return;
+		}
+
+		value = PQgetvalue(result, rowNumber, fnatttypid);
+		if (!stringToUInt32(value, &attr.atttypid))
+		{
+			log_error("Invalid atttypid \"%s\"", value);
+			context->parsedOk = false;
+			return;
+		}
+
+		value = PQgetvalue(result, rowNumber, fnattname);
+		strlcpy(attr.attname, value, sizeof(attr.attname));
+
+		value = PQgetvalue(result, rowNumber, fnattisprimary);
+		attr.attisprimary = (*value == 't');
+
+		value = PQgetvalue(result, rowNumber, fnattisreplident);
+		attr.attisreplident = (*value == 't');
+
+		value = PQgetvalue(result, rowNumber, fnattisgenerated);
+		attr.attisgenerated = (*value == 't');
+
+		value = PQgetvalue(result, rowNumber, fnattidentity);
+		if (value != NULL && value[0] != '\0')
+		{
+			attr.attidentity = value[0];
+		}
+
+		value = PQgetvalue(result, rowNumber, fnhasbinaryio);
+		bool hasBinaryIO = (*value == 't');
+
+		if (!PQgetisnull(result, rowNumber, fntypsendfunc))
+		{
+			value = PQgetvalue(result, rowNumber, fntypsendfunc);
+			strlcpy(attr.atttypsend, value, sizeof(attr.atttypsend));
+			attr.attisbinarycompatible = hasBinaryIO && !sendFuncBlocked(attr.atttypsend);
+		}
+		else
+		{
+			attr.attisbinarycompatible = hasBinaryIO;
+		}
+
+		if (!catalog_add_s_attr(context->catalog, tableoid, &attr))
+		{
+			context->parsedOk = false;
+			return;
+		}
+	}
 }
 
 

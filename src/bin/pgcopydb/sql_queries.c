@@ -260,6 +260,16 @@ pgcopydb_sql_list_source_table_size(int filter, const char **sql)
 }
 
 
+bool
+pgcopydb_sql_list_table_attributes(int pg_version, const char **sql)
+{
+	*sql = (pg_version < 100000)
+		   ? sql_list_table_attributes_pg96
+		   : sql_list_table_attributes;
+	return true;
+}
+
+
 /*
  * list_source_tables has both filter and pg_version dispatch.
  * The pg-96 variants cover pg_version < 100000 (before PG 10).

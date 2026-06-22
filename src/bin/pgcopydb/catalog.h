@@ -208,6 +208,10 @@ bool catalog_s_matview_fetch(SQLiteQuery *query);
  */
 bool catalog_add_s_table(DatabaseCatalog *catalog, SourceTable *table);
 bool catalog_add_attributes(DatabaseCatalog *catalog, SourceTable *table);
+bool catalog_add_s_attr(DatabaseCatalog *catalog,
+						uint32_t tableoid,
+						SourceTableAttribute *attr);
+bool catalog_s_table_oid_array(DatabaseCatalog *catalog, char **text, int *count);
 bool catalog_add_s_table_part(DatabaseCatalog *catalog, SourceTable *table);
 
 bool catalog_add_s_table_chksum(DatabaseCatalog *catalog,
