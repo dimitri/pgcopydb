@@ -586,43 +586,6 @@ copydb_create_extension_hook(void *ctx, SourceExtension *ext)
 		}
 	}
 
-	/*
-	 * Ensure the target schema exists before creating the extension.
-	 * System schemas (pg_*, information_schema) are always present and
-	 * cannot be re-created; skip those.  For user schemas (e.g. "foo" for
-	 * hstore) we issue CREATE SCHEMA IF NOT EXISTS so the extension creation
-	 * below can succeed.  copydb_write_restore_list then detects the schema
-	 * already exists and omits its CREATE SCHEMA entry from the pg_restore
-	 * list, avoiding a duplicate-schema error.
-	 */
-	if (strncmp(ext->extnamespace, "pg_", 3) != 0 &&
-		strcmp(ext->extnamespace, "information_schema") != 0)
-	{
-		PQExpBuffer schemaSql = createPQExpBuffer();
-
-		appendPQExpBuffer(schemaSql,
-						  "create schema if not exists \"%s\"",
-						  ext->extnamespace);
-
-		if (PQExpBufferBroken(schemaSql))
-		{
-			log_error("Failed to build CREATE SCHEMA sql buffer: "
-					  "Out of Memory");
-			(void) destroyPQExpBuffer(schemaSql);
-			return false;
-		}
-
-		if (!pgsql_execute(context->dst, schemaSql->data))
-		{
-			log_error("Failed to create schema \"%s\" for extension \"%s\"",
-					  ext->extnamespace, ext->extname);
-			(void) destroyPQExpBuffer(schemaSql);
-			return false;
-		}
-
-		(void) destroyPQExpBuffer(schemaSql);
-	}
-
 	ExtensionReqs *req = NULL;
 	HASH_FIND(hh, context->reqs, ext->extname, strlen(ext->extname), req);
 
