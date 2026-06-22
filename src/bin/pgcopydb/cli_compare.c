@@ -426,14 +426,14 @@ cli_compare_data(int argc, char **argv)
 	}
 	else
 	{
-		fformat(stdout, "%30s | %s | %36s | %36s \n",
+		fformat(stdout, "%30s | %s | %64s | %64s \n",
 				"Table Name", "!", "Source Checksum", "Target Checksum");
 
-		fformat(stdout, "%30s-+-%s-+-%36s-+-%36s \n",
+		fformat(stdout, "%30s-+-%s-+-%64s-+-%64s \n",
 				"------------------------------",
 				"-",
-				"------------------------------------",
-				"------------------------------------");
+				"----------------------------------------------------------------",
+				"----------------------------------------------------------------");
 
 		if (!catalog_iter_s_table(sourceDB,
 								  NULL,
@@ -510,7 +510,7 @@ cli_compare_data_table_hook(void *ctx, SourceTable *table)
 			strlcpy(tableName, table->qname, sizeof(tableName));
 		}
 
-		fformat(stdout, "%30s | %s | %36s | %36s \n",
+		fformat(stdout, "%30s | %s | %64s | %64s \n",
 				tableName,
 				streq(srcChk->checksum, dstChk->checksum) ? " " : "!",
 				srcChk->checksum,

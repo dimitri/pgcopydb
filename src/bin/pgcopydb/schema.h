@@ -143,8 +143,8 @@ typedef struct SourceTableAttributeArray
 /* forward declaration */
 struct SourceIndexList;
 
-/* checksum is formatted as uuid */
-#define CHECKSUMLEN 36
+/* checksum is a SHA256 hex digest (64 hex chars + NUL) */
+#define CHECKSUMLEN 65
 
 typedef struct TableChecksum
 {
