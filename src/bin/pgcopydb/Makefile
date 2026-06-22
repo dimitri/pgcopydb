@@ -167,11 +167,16 @@ install: $(PGCOPYDB)
 	install -d $(DESTDIR)$(BINDIR)
 	install -m 0755 $(PGCOPYDB) $(DESTDIR)$(BINDIR)
 
-gen-sql:
+SQL_INPUTS := $(shell find $(SRC_DIR)sql -name '*.sql' -o -name 'filter.map') \
+              $(SRC_DIR)../../../tools/sql2c.py
+
+$(SRC_DIR)sql_queries.h $(SRC_DIR)sql_queries.c: $(SQL_INPUTS)
 	python3 $(SRC_DIR)../../../tools/sql2c.py generate \
 	    $(SRC_DIR)sql \
 	    $(SRC_DIR)sql_queries.h \
 	    $(SRC_DIR)sql_queries.c
+
+gen-sql: $(SRC_DIR)sql_queries.h $(SRC_DIR)sql_queries.c
 
 .PHONY: all monitor clean gen-sql
 .PHONY: VERSION-FILE
