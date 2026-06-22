@@ -129,7 +129,9 @@ typedef struct SourceTableAttribute
 	bool attisprimary;
 	bool attisreplident;
 	bool attisgenerated;
-	char attidentity;       /* 'a' GENERATED ALWAYS, 'd' BY DEFAULT, '\0' none */
+	char attidentity;           /* 'a' GENERATED ALWAYS, 'd' BY DEFAULT, '\0' none */
+	bool attisbinarycompatible; /* false when type is unsafe for COPY BINARY */
+	char atttypsend[PG_NAMEDATALEN]; /* comma-separated send func names */
 } SourceTableAttribute;
 
 typedef struct SourceTableAttributeArray

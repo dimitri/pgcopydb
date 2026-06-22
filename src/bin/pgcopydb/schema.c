@@ -3082,6 +3082,40 @@ schema_list_table_attributes(PGSQL *pgsql, DatabaseCatalog *catalog)
 }
 
 
+static const char *binaryCopyBlocklist[] = {
+	"tsvectorsend",
+	NULL
+};
+
+/*
+ * sendFuncBlocked returns true when any comma-separated name in funcList
+ * matches an entry in binaryCopyBlocklist (whole-word match).
+ */
+static bool
+sendFuncBlocked(const char *funcList)
+{
+	for (int i = 0; binaryCopyBlocklist[i] != NULL; i++)
+	{
+		const char *name = binaryCopyBlocklist[i];
+		size_t nameLen = strlen(name);
+		const char *p = funcList;
+
+		while ((p = strstr(p, name)) != NULL)
+		{
+			bool startOk = (p == funcList) || (*(p - 1) == ',');
+			bool endOk = (*(p + nameLen) == '\0') || (*(p + nameLen) == ',');
+
+			if (startOk && endOk)
+			{
+				return true;
+			}
+			p += nameLen;
+		}
+	}
+	return false;
+}
+
+
 /*
  * getTableAttributeArray is the PGresult callback for the list_table_attributes
  * query.  Each row is one (table, column) pair; we insert it directly into
@@ -3094,9 +3128,9 @@ getTableAttributeArray(void *ctx, PGresult *result)
 
 	int nTuples = PQntuples(result);
 
-	if (PQnfields(result) != 8)
+	if (PQnfields(result) != 10)
 	{
-		log_error("Query returned %d columns, expected 8", PQnfields(result));
+		log_error("Query returned %d columns, expected 10", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -3109,6 +3143,8 @@ getTableAttributeArray(void *ctx, PGresult *result)
 	int fnattisreplident = PQfnumber(result, "attisreplident");
 	int fnattisgenerated = PQfnumber(result, "attisgenerated");
 	int fnattidentity = PQfnumber(result, "attidentity");
+	int fnhasbinaryio = PQfnumber(result, "hasbinaryio");
+	int fntypsendfunc = PQfnumber(result, "typsendfunc");
 
 	for (int rowNumber = 0; rowNumber < nTuples && context->parsedOk; rowNumber++)
 	{
@@ -3156,6 +3192,20 @@ getTableAttributeArray(void *ctx, PGresult *result)
 		if (value != NULL && value[0] != '\0')
 		{
 			attr.attidentity = value[0];
+		}
+
+		value = PQgetvalue(result, rowNumber, fnhasbinaryio);
+		bool hasBinaryIO = (*value == 't');
+
+		if (!PQgetisnull(result, rowNumber, fntypsendfunc))
+		{
+			value = PQgetvalue(result, rowNumber, fntypsendfunc);
+			strlcpy(attr.atttypsend, value, sizeof(attr.atttypsend));
+			attr.attisbinarycompatible = hasBinaryIO && !sendFuncBlocked(attr.atttypsend);
+		}
+		else
+		{
+			attr.attisbinarycompatible = hasBinaryIO;
 		}
 
 		if (!catalog_add_s_attr(context->catalog, tableoid, &attr))

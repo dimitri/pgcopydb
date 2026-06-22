@@ -110,6 +110,8 @@ static char *sourceDBcreateDDLs[] = {
 	"  attnum integer, attypid integer, attname text, "
 	"  attisprimary bool, attisreplident bool, attisgenerated bool, "
 	"  attidentity text default '', "
+	"  attisbinarycompatible bool default true, "
+	"  atttypsend text default '', "
 	"  primary key(oid, attnum) "
 	")",
 
@@ -333,6 +335,8 @@ static char *filterDBcreateDDLs[] = {
 	"  attnum integer, attypid integer, attname text, "
 	"  attisprimary bool, attisreplident bool, attisgenerated bool, "
 	"  attidentity text default '', "
+	"  attisbinarycompatible bool default true, "
+	"  atttypsend text default '', "
 	"  primary key(oid, attnum) "
 	")",
 
@@ -462,6 +466,8 @@ static char *targetDBcreateDDLs[] = {
 	"  attnum integer, attypid integer, attname text, "
 	"  attisprimary bool, attisreplident bool, attisgenerated bool, "
 	"  attidentity text default '', "
+	"  attisbinarycompatible bool default true, "
+	"  atttypsend text default '', "
 	"  primary key(oid, attnum) "
 	")",
 
@@ -2801,8 +2807,9 @@ catalog_add_s_attr(DatabaseCatalog *catalog,
 	char *sql =
 		"insert into s_attr("
 		"oid, attnum, attypid, attname, "
-		"attisprimary, attisreplident, attisgenerated, attidentity)"
-		"values($1, $2, $3, $4, $5, $6, $7, $8)";
+		"attisprimary, attisreplident, attisgenerated, attidentity, "
+		"attisbinarycompatible, atttypsend)"
+		"values($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)";
 
 	/* store attidentity as a one-char string, or "" when not an identity col */
 	char identityStr[2] = { attr->attidentity, '\0' };
@@ -2828,7 +2835,16 @@ catalog_add_s_attr(DatabaseCatalog *catalog,
 			attr->attisgenerated ? 1 : 0, NULL
 		},
 
-		{ BIND_PARAMETER_TYPE_TEXT, "attidentity", 0, identityStr }
+		{ BIND_PARAMETER_TYPE_TEXT, "attidentity", 0, identityStr },
+
+		{
+			BIND_PARAMETER_TYPE_INT, "attisbinarycompatible",
+			attr->attisbinarycompatible ? 1 : 0, NULL
+		},
+
+		{
+			BIND_PARAMETER_TYPE_TEXT, "atttypsend", 0, attr->atttypsend
+		}
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
