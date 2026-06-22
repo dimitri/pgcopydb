@@ -1,6 +1,0 @@
-# header filtering.h
-# enum SourceFilterType
-incl            SOURCE_FILTER_TYPE_INCL
-excl            SOURCE_FILTER_TYPE_EXCL
-list-not-incl   SOURCE_FILTER_TYPE_LIST_NOT_INCL
-list-excl       SOURCE_FILTER_TYPE_LIST_EXCL
