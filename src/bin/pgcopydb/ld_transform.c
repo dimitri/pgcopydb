@@ -2698,7 +2698,25 @@ stream_add_value_in_json_array(LogicalMessageValue *value, JSON_Array *jsArray)
 				}
 				else
 				{
-					sformat(string, sizeof(string), "%f", value->val.float8);
+					/*
+					 * Emit the shortest decimal that round-trips to the same
+					 * double (15 to 17 significant digits). This both preserves
+					 * full precision and keeps clean values exact: "5.99" stays
+					 * "5.99" rather than "5.9900000000000002", which matters
+					 * because under REPLICA IDENTITY FULL the value is also a
+					 * WHERE-clause key and an over-precise literal would not
+					 * match the stored value.
+					 */
+					for (int precision = 15; precision <= 17; precision++)
+					{
+						sformat(string, sizeof(string), "%.*g",
+								precision, value->val.float8);
+
+						if (strtod(string, NULL) == value->val.float8)
+						{
+							break;
+						}
+					}
 				}
 
 				json_array_append_string(jsArray, string);
