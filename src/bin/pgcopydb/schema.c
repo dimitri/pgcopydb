@@ -3021,94 +3021,9 @@ typedef struct SourceAttributeContext
 static void getTableAttributeArray(void *ctx, PGresult *result);
 
 
-typedef struct UploadOidsContext
-{
-	PGconn *conn;
-} UploadOidsContext;
-
-
-static bool
-upload_oid_row(void *ctx, uint32_t oid)
-{
-	PGconn *conn = ((UploadOidsContext *) ctx)->conn;
-	char line[16];
-	(void) sformat(line, sizeof(line), "%u\n", oid);
-	int len = strlen(line);
-
-	if (PQputCopyData(conn, line, len) != 1)
-	{
-		log_error("PQputCopyData: %s", PQerrorMessage(conn));
-		return false;
-	}
-	return true;
-}
-
-
 /*
- * schema_upload_oids_to_temp_table creates pgcopydb_table_oids (if absent),
- * clears it, then streams the OIDs from the SQLite s_table catalog into
- * PostgreSQL via COPY FROM STDIN.  The attributes query joins against this
- * temp table instead of using an $1::oid[] parameter.
- */
-static bool
-schema_upload_oids_to_temp_table(PGSQL *pgsql, DatabaseCatalog *catalog)
-{
-	if (!pgsql_execute(pgsql,
-					   "CREATE TEMP TABLE IF NOT EXISTS"
-					   " pgcopydb_table_oids (reloid oid)"))
-	{
-		return false;
-	}
-
-	if (!pgsql_execute(pgsql, "TRUNCATE pgcopydb_table_oids"))
-	{
-		return false;
-	}
-
-	PGconn *conn = pgsql->connection;
-
-	PGresult *res = PQexec(conn, "COPY pgcopydb_table_oids FROM STDIN");
-
-	if (PQresultStatus(res) != PGRES_COPY_IN)
-	{
-		log_error("COPY pgcopydb_table_oids FROM STDIN: %s",
-				  PQresultErrorMessage(res));
-		PQclear(res);
-		return false;
-	}
-	PQclear(res);
-
-	UploadOidsContext oidCtx = { .conn = conn };
-	bool copyOk = catalog_foreach_s_table_oid(catalog, upload_oid_row, &oidCtx);
-
-	const char *copyEndErr = copyOk ? NULL : "error loading OIDs from catalog";
-
-	if (PQputCopyEnd(conn, copyEndErr) != 1)
-	{
-		log_error("PQputCopyEnd: %s", PQerrorMessage(conn));
-		return false;
-	}
-
-	while ((res = PQgetResult(conn)) != NULL)
-	{
-		if (PQresultStatus(res) != PGRES_COMMAND_OK)
-		{
-			log_error("COPY pgcopydb_table_oids: %s",
-					  PQresultErrorMessage(res));
-			PQclear(res);
-			return false;
-		}
-		PQclear(res);
-	}
-
-	return copyOk;
-}
-
-
-/*
- * schema_list_table_attributes uploads the table OIDs from the SQLite catalog
- * into a PostgreSQL temp table, then runs the list_table_attributes query
- * (which JOINs against that temp table) and streams each row into s_attr.
+ * schema_list_table_attributes issues the list_table_attributes query for all
+ * tables already recorded in the catalog and inserts each row into s_attr.
  */
 static bool
 schema_list_table_attributes(PGSQL *pgsql, DatabaseCatalog *catalog)
@@ -3118,10 +3033,19 @@ schema_list_table_attributes(PGSQL *pgsql, DatabaseCatalog *catalog)
 		return true;
 	}
 
-	if (!schema_upload_oids_to_temp_table(pgsql, catalog))
+	char *oidArray = NULL;
+	int count = 0;
+
+	if (!catalog_s_table_oid_array(catalog, &oidArray, &count))
 	{
-		log_error("Failed to upload table OIDs to temp table");
+		log_error("Failed to collect table OIDs from catalog");
 		return false;
+	}
+
+	if (count == 0)
+	{
+		free(oidArray);
+		return true;
 	}
 
 	if (pgsql->pgversion_num == 0)
@@ -3133,21 +3057,30 @@ schema_list_table_attributes(PGSQL *pgsql, DatabaseCatalog *catalog)
 
 	if (!pgcopydb_sql_list_table_attributes(pgsql->pgversion_num, &sql))
 	{
+		free(oidArray);
 		return false;
 	}
 
 	SourceAttributeContext context = { catalog, true };
 
-	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+	int paramCount = 1;
+	Oid paramTypes[1] = { TEXTOID };
+	const char *paramValues[1] = { oidArray };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
 								   &context, &getTableAttributeArray))
 	{
 		log_error("Failed to list table attributes");
+		free(oidArray);
 		return false;
 	}
 
+	free(oidArray);
+
 	if (!context.parsedOk)
 	{
-		log_error("Failed to parse table attributes");
+		log_error("Failed to list table attributes");
 		return false;
 	}
 

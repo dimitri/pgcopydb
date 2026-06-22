@@ -2969,29 +2969,69 @@ catalog_add_s_attr(DatabaseCatalog *catalog,
 }
 
 
+static bool catalog_s_table_count_fetch(SQLiteQuery *query);
+
 /*
- * catalog_foreach_s_table_oid iterates every OID in s_table (ordered) and
- * calls callback(ctx, oid) for each one.  Returns false on the first error
- * (either from SQLite or from the callback).
+ * catalog_s_table_oid_array builds a PostgreSQL array literal of all table
+ * OIDs stored in s_table, formatted as "{oid1,oid2,...}" for use as a $1
+ * text parameter with ::oid[] casting in SQL.  The caller must free *text.
  */
 bool
-catalog_foreach_s_table_oid(DatabaseCatalog *catalog,
-							CatalogOidCallback callback,
-							void *ctx)
+catalog_s_table_oid_array(DatabaseCatalog *catalog, char **text, int *count)
 {
 	sqlite3 *db = catalog->db;
 
 	if (db == NULL)
 	{
-		log_error("BUG: catalog_foreach_s_table_oid: db is NULL");
+		log_error("BUG: catalog_s_table_oid_array: db is NULL");
 		return false;
 	}
 
-	SQLiteQuery query = { 0 };
-	char *sql = "select oid from s_table order by oid";
+	/* first pass: count rows */
+	char *countSql = "select count(*) from s_table";
+	SQLiteQuery countQuery = {
+		.context = count,
+		.fetchFunction = &catalog_s_table_count_fetch
+	};
 
-	if (!catalog_sql_prepare(db, sql, &query))
+	if (!catalog_sql_prepare(db, countSql, &countQuery))
 	{
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&countQuery))
+	{
+		return false;
+	}
+
+	if (*count == 0)
+	{
+		*text = strdup("{}");
+		return *text != NULL;
+	}
+
+	/* second pass: collect oids into a "{oid1,oid2,...}" string */
+	char *oidSql = "select oid from s_table order by oid";
+
+	/* rough upper bound: each oid is at most 10 digits + comma */
+	int capacity = 2 + (*count * 11) + 1;
+	char *buf = (char *) calloc(capacity, 1);
+
+	if (buf == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	buf[0] = '{';
+	int pos = 1;
+	bool first = true;
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, oidSql, &query))
+	{
+		free(buf);
 		return false;
 	}
 
@@ -3011,19 +3051,41 @@ catalog_foreach_s_table_oid(DatabaseCatalog *catalog,
 					  query.sql,
 					  sqlite3_errmsg(db));
 			(void) catalog_sql_finalize(&query);
+			free(buf);
 			return false;
 		}
 
-		uint32_t oid = (uint32_t) sqlite3_column_int64(query.ppStmt, 0);
+		uint64_t oid = sqlite3_column_int64(query.ppStmt, 0);
 
-		if (!callback(ctx, oid))
+		if (!first)
 		{
-			(void) catalog_sql_finalize(&query);
-			return false;
+			buf[pos++] = ',';
 		}
+		first = false;
+
+		pos += sformat(buf + pos, capacity - pos, "%llu", (unsigned long long) oid);
 	}
 
-	return catalog_sql_finalize(&query);
+	if (!catalog_sql_finalize(&query))
+	{
+		free(buf);
+		return false;
+	}
+
+	buf[pos++] = '}';
+	buf[pos] = '\0';
+
+	*text = buf;
+	return true;
+}
+
+
+static bool
+catalog_s_table_count_fetch(SQLiteQuery *query)
+{
+	int *count = (int *) query->context;
+	*count = sqlite3_column_int(query->ppStmt, 0);
+	return true;
 }
 
 
