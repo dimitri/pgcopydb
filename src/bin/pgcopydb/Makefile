@@ -167,5 +167,16 @@ install: $(PGCOPYDB)
 	install -d $(DESTDIR)$(BINDIR)
 	install -m 0755 $(PGCOPYDB) $(DESTDIR)$(BINDIR)
 
-.PHONY: all monitor clean
+SQL_AWK   := $(SRC_DIR)sql/sql2c.awk
+SQL_FILES := $(sort $(wildcard $(SRC_DIR)sql/*.sql))
+
+$(SRC_DIR)sql/sql_queries_data.inc: $(SQL_FILES) $(SQL_AWK)
+	$(MAKE) -C $(SRC_DIR)sql
+
+# sql_queries.c #includes sql/sql_queries_data.inc
+sql_queries.o: $(SRC_DIR)sql/sql_queries_data.inc
+
+gen-sql: $(SRC_DIR)sql/sql_queries_data.inc
+
+.PHONY: all monitor clean gen-sql
 .PHONY: VERSION-FILE
