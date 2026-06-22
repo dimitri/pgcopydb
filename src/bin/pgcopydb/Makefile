@@ -168,7 +168,7 @@ install: $(PGCOPYDB)
 	install -m 0755 $(PGCOPYDB) $(DESTDIR)$(BINDIR)
 
 gen-sql:
-	python3 $(SRC_DIR)../../../tools/sql2c.py \
+	python3 $(SRC_DIR)../../../tools/sql2c.py generate \
 	    $(SRC_DIR)sql \
 	    $(SRC_DIR)sql_queries.h \
 	    $(SRC_DIR)sql_queries.c

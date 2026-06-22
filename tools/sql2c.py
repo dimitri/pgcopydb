@@ -533,12 +533,103 @@ def generate(sql_dir, hdr_path, src_path):
 
 
 # ---------------------------------------------------------------------------
+# print sub-command
+# ---------------------------------------------------------------------------
+
+def cmd_print(sql_dir, query_name, filter_name=None):
+    """Assemble and print a complete SQL query to stdout.
+
+    For flat and versioned queries the .sql file is printed as-is (it already
+    ends with ';').  For filtered queries the preamble (if any) is prepended to
+    the chosen filter variant and a final ';' is appended — regardless of
+    whether the individual pieces carry one — so the output is always a
+    copy-pasteable standalone query.
+
+    filter_name defaults to 'no-filter' when the query has that dimension.
+    """
+    sql_dir = Path(sql_dir)
+    queries = discover(sql_dir)
+
+    if query_name not in queries:
+        avail = ', '.join(queries)
+        print(f"Unknown query {query_name!r}. Available: {avail}",
+              file=sys.stderr)
+        sys.exit(1)
+
+    info = queries[query_name]
+    shape = info['shape']
+
+    def stripped(path):
+        return path.read_text().rstrip().rstrip(';').rstrip()
+
+    if shape == 'flat':
+        content = stripped(info['path'])
+
+    elif shape == 'versioned':
+        default_v = next((v for v in info['versions'] if v['ver'] == 'default'),
+                         info['versions'][-1])
+        content = stripped(default_v['path'])
+
+    else:  # filtered
+        dims_by_name = {d['name']: d for d in info['dims']}
+        available = list(dims_by_name)
+
+        if filter_name is None:
+            if 'no-filter' in dims_by_name:
+                filter_name = 'no-filter'
+            else:
+                print(f"Filter name required. Available: {', '.join(available)}",
+                      file=sys.stderr)
+                sys.exit(1)
+
+        if filter_name not in dims_by_name:
+            print(f"Unknown filter {filter_name!r}. "
+                  f"Available: {', '.join(available)}",
+                  file=sys.stderr)
+            sys.exit(1)
+
+        dim = dims_by_name[filter_name]
+        default_v = next((v for v in dim['versions'] if v['ver'] == 'default'),
+                         dim['versions'][-1])
+
+        preamble = info.get('preamble') or ''
+        body = default_v['path'].read_text()
+        content = (preamble + body).rstrip().rstrip(';').rstrip()
+
+    print(content + ';')
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _usage():
+    prog = sys.argv[0]
+    print(f"Usage:", file=sys.stderr)
+    print(f"  {prog} generate <sql-dir> <output.h> <output.c>", file=sys.stderr)
+    print(f"  {prog} print    <sql-dir> <query-name> [<filter>]", file=sys.stderr)
+
+
 if __name__ == '__main__':
-    if len(sys.argv) != 4:
-        print(f"Usage: {sys.argv[0]} <sql-dir> <output.h> <output.c>",
-              file=sys.stderr)
+    if len(sys.argv) < 2:
+        _usage()
         sys.exit(1)
-    generate(sys.argv[1], sys.argv[2], sys.argv[3])
+
+    subcmd = sys.argv[1]
+
+    if subcmd == 'generate':
+        if len(sys.argv) != 5:
+            _usage()
+            sys.exit(1)
+        generate(sys.argv[2], sys.argv[3], sys.argv[4])
+
+    elif subcmd == 'print':
+        if len(sys.argv) < 4:
+            _usage()
+            sys.exit(1)
+        filter_arg = sys.argv[4] if len(sys.argv) > 4 else None
+        cmd_print(sys.argv[2], sys.argv[3], filter_arg)
+
+    else:
+        _usage()
+        sys.exit(1)
