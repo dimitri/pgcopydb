@@ -60,3 +60,14 @@ create table if not exists json_column_table
 );
 alter table json_column_table replica identity full;
 commit;
+
+begin;
+-- table to test float8 precision in CDC. REPLICA IDENTITY FULL means the
+-- value is replayed both as a column value and as a WHERE-clause key.
+create table if not exists float_precision_table
+(
+   id bigint,
+   val double precision
+);
+alter table float_precision_table replica identity full;
+commit;

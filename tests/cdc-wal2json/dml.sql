@@ -132,3 +132,22 @@ begin;
 delete from json_column_table where id = 3;
 delete from json_column_table where id = 4;
 commit;
+
+--
+-- Test float8 precision in change data capture. These values need more than
+-- 6 fractional digits (or are too small for fixed notation), which the old
+-- "%f" formatting truncated to "-216237.000000" / "0.000000". Under REPLICA
+-- IDENTITY FULL the value is also a WHERE-clause key on UPDATE/DELETE, so it
+-- must round-trip exactly or the row would not match.
+--
+begin;
+insert into float_precision_table(id, val) values
+(1, -216237.00000035969),
+(2, 0.1234567890123),
+(3, 1e-20);
+commit;
+
+begin;
+update float_precision_table set val = 999.0000004 where id = 1;
+delete from float_precision_table where id = 2;
+commit;
