@@ -239,11 +239,14 @@ def c_string_lines(path, preamble=None):
     """
     with open(path) as f:
         content = f.read()
-    # Strip trailing semicolon so the embedded C string is valid for
-    # PQexecParams (the .sql files carry ';' for psql copy-paste convenience).
     full = (preamble or '') + content
-    # Strip trailing semicolon; .sql files carry ';' for psql convenience
-    # but PQexecParams doesn't need it.
+    # The .sql files carry a trailing ';' for psql copy-paste convenience.
+    # Strip it before embedding in C: PQsendQuery (simple protocol, paramCount
+    # == 0) and PQsendQueryParams (extended protocol) both accept trailing
+    # semicolons, but PQprepare does not — it rejects any query string that
+    # contains more than one command, and a trailing ';' is treated as an empty
+    # second command.  Current call sites all use PQsendQuery, but stripping
+    # keeps the strings safe for the full libpq API.
     full = full.rstrip()
     if full.endswith(';'):
         full = full[:-1]
