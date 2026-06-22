@@ -430,6 +430,7 @@ bool copydb_copy_extensions(CopyDataSpec *copySpecs, bool createExtensions);
 
 bool copydb_parse_extensions_requirements(CopyDataSpec *copySpecs,
 										  char *filename);
+bool copydb_create_pinned_extensions(CopyDataSpec *copySpecs);
 bool copydb_prepare_extensions_restore(CopyDataSpec *copySpecs);
 bool copydb_finalize_extensions_restore(CopyDataSpec *copySpecs);
 

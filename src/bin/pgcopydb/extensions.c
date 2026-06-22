@@ -19,6 +19,7 @@
 static bool copydb_copy_ext_table(PGSQL *src, PGSQL *dst, char *qname, char *condition);
 static bool copydb_copy_ext_sequence(PGSQL *src, PGSQL *dst, char *qname);
 static bool copydb_copy_extensions_hook(void *ctx, SourceExtension *ext);
+static bool copydb_create_extension_hook(void *ctx, SourceExtension *ext);
 
 
 /*
@@ -527,6 +528,185 @@ copydb_parse_extensions_requirements(CopyDataSpec *copySpecs, char *filename)
 
 	copySpecs->extRequirements = reqs;
 
+	return true;
+}
+
+
+/*
+ * copydb_create_extension_hook creates a single extension on the target,
+ * pinning its version from the requirements hash when available.  Unlike
+ * copydb_copy_extensions_hook it does not copy extension config table data;
+ * that is handled later by copydb_start_extension_data_process.
+ */
+static bool
+copydb_create_extension_hook(void *ctx, SourceExtension *ext)
+{
+	CopyExtensionsContext *context = (CopyExtensionsContext *) ctx;
+	SourceFilters *filters = context->filters;
+
+	/* [exclude-extension]: skip explicitly excluded extensions */
+	if (filters != NULL)
+	{
+		SourceFilterExtensionList *excl = &(filters->excludeExtensionList);
+
+		for (int i = 0; i < excl->count; i++)
+		{
+			if (streq(ext->extname, excl->array[i].extname))
+			{
+				log_debug("Skipping excluded extension \"%s\"", ext->extname);
+				return true;
+			}
+		}
+	}
+
+	/* [include-only-extension]: skip extensions not in the include list */
+	if (filters != NULL)
+	{
+		SourceFilterExtensionList *incl = &(filters->includeOnlyExtensionList);
+
+		if (incl->count > 0)
+		{
+			bool found = false;
+
+			for (int i = 0; i < incl->count; i++)
+			{
+				if (streq(ext->extname, incl->array[i].extname))
+				{
+					found = true;
+					break;
+				}
+			}
+
+			if (!found)
+			{
+				log_debug("Skipping extension \"%s\" "
+						  "(not in include-only-extension)", ext->extname);
+				return true;
+			}
+		}
+	}
+
+	/*
+	 * Ensure the target schema exists before creating the extension.
+	 * System schemas (pg_*, information_schema) are always present and
+	 * cannot be re-created; skip those.  For user schemas (e.g. "foo" for
+	 * hstore) we issue CREATE SCHEMA IF NOT EXISTS so the extension creation
+	 * below can succeed.  copydb_write_restore_list then detects the schema
+	 * already exists and omits its CREATE SCHEMA entry from the pg_restore
+	 * list, avoiding a duplicate-schema error.
+	 */
+	if (strncmp(ext->extnamespace, "pg_", 3) != 0 &&
+		strcmp(ext->extnamespace, "information_schema") != 0)
+	{
+		PQExpBuffer schemaSql = createPQExpBuffer();
+
+		appendPQExpBuffer(schemaSql,
+						  "create schema if not exists \"%s\"",
+						  ext->extnamespace);
+
+		if (PQExpBufferBroken(schemaSql))
+		{
+			log_error("Failed to build CREATE SCHEMA sql buffer: "
+					  "Out of Memory");
+			(void) destroyPQExpBuffer(schemaSql);
+			return false;
+		}
+
+		if (!pgsql_execute(context->dst, schemaSql->data))
+		{
+			log_error("Failed to create schema \"%s\" for extension \"%s\"",
+					  ext->extnamespace, ext->extname);
+			(void) destroyPQExpBuffer(schemaSql);
+			return false;
+		}
+
+		(void) destroyPQExpBuffer(schemaSql);
+	}
+
+	ExtensionReqs *req = NULL;
+	HASH_FIND(hh, context->reqs, ext->extname, strlen(ext->extname), req);
+
+	PQExpBuffer sql = createPQExpBuffer();
+
+	appendPQExpBuffer(sql,
+					  "create extension if not exists \"%s\" "
+					  "with schema \"%s\" cascade",
+					  ext->extname, ext->extnamespace);
+
+	if (req != NULL)
+	{
+		appendPQExpBuffer(sql, " version \"%s\"", req->version);
+		log_notice("Pinning extension \"%s\" to version \"%s\"",
+				   ext->extname, req->version);
+	}
+
+	if (PQExpBufferBroken(sql))
+	{
+		log_error("Failed to build CREATE EXTENSION sql buffer: "
+				  "Out of Memory");
+		(void) destroyPQExpBuffer(sql);
+		return false;
+	}
+
+	log_info("Creating extension \"%s\"", ext->extname);
+
+	if (!pgsql_execute(context->dst, sql->data))
+	{
+		log_error("Failed to create extension \"%s\"", ext->extname);
+		(void) destroyPQExpBuffer(sql);
+		return false;
+	}
+
+	(void) destroyPQExpBuffer(sql);
+	return true;
+}
+
+
+/*
+ * copydb_create_pinned_extensions creates all extensions found in the source
+ * catalog on the target, pinning each to the version recorded in
+ * copySpecs->extRequirements.  Extensions not listed in the requirements file
+ * are created without a VERSION clause (latest available).
+ *
+ * This must be called BEFORE pg_restore --section=pre-data so that schema
+ * objects that depend on extension types (e.g. PostGIS geometry columns) are
+ * available when pg_restore processes CREATE TABLE statements.
+ */
+bool
+copydb_create_pinned_extensions(CopyDataSpec *copySpecs)
+{
+	if (copySpecs->extRequirements == NULL || copySpecs->skipExtensions)
+	{
+		return true;
+	}
+
+	DatabaseCatalog *filterDB = &(copySpecs->catalogs.filter);
+	PGSQL dst = { 0 };
+
+	if (!pgsql_init(&dst, copySpecs->connStrings.target_pguri, PGSQL_CONN_TARGET))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	CopyExtensionsContext context = {
+		.filtersDB = filterDB,
+		.dst = &dst,
+		.reqs = copySpecs->extRequirements,
+		.filters = &(copySpecs->filters),
+	};
+
+	if (!catalog_iter_s_extension(filterDB,
+								  &context,
+								  &copydb_create_extension_hook))
+	{
+		log_error("Failed to create extensions with version pinning, "
+				  "see above for details");
+		(void) pgsql_finish(&dst);
+		return false;
+	}
+
+	(void) pgsql_finish(&dst);
 	return true;
 }
 

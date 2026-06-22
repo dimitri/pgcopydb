@@ -179,6 +179,23 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 	}
 
 	/*
+	 * When --requirements is given, extensions are excluded from the
+	 * pg_restore list so we can pin their versions ourselves.  Create them
+	 * before copydb_write_restore_list so that the schema-already-exists
+	 * check in that function sees the extension schemas (e.g. foo for
+	 * hstore) and omits their CREATE SCHEMA entries from the list, avoiding
+	 * a conflict when pg_restore runs.  Extensions must also be installed
+	 * before pg_restore so that schema objects depending on extension types
+	 * (e.g. PostGIS geometry columns) can be created successfully.
+	 */
+	if (!copydb_create_pinned_extensions(specs))
+	{
+		log_error("Failed to create extensions with version pinning, "
+				  "see above for details");
+		return false;
+	}
+
+	/*
 	 * Now prepare the pg_restore --use-list file.
 	 */
 	if (!copydb_write_restore_list(specs, PG_DUMP_SECTION_PRE_DATA))
