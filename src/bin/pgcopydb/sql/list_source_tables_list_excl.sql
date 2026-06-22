@@ -13,42 +13,12 @@
                 regexp_replace(auth.rolname, '[\n\r]', ' ')),
          case when pkeys.attname is not null
               then format('%I', pkeys.attname)
-               end as partkey,
-         attrs.js as attributes
+               end as partkey
 
     from pg_catalog.pg_class c
          join pg_catalog.pg_namespace n on c.relnamespace = n.oid
          left join pg_catalog.pg_am on c.relam = pg_am.oid
          join pg_roles auth ON auth.oid = c.relowner
-         join lateral (
-               with atts as
-               (
-                  select attnum, atttypid::integer,
-                         format('%I', attname) as attname,
-                         i.indrelid is not null as attisprimary,
-                         ri.indrelid is not null as attisreplident,
-						  col.is_generated = 'ALWAYS' as attisgenerated,
-                         coalesce(a.attidentity, '') as attidentity
-                    from pg_attribute a
-                         left join pg_index i
-                                on i.indrelid = a.attrelid
-                               and a.attnum = ANY(i.indkey)
-                               and i.indisprimary
-                         left join pg_index ri
-                                on ri.indrelid = a.attrelid
-                               and a.attnum = ANY(ri.indkey)
-                               and ri.indisreplident
-					 	  left join information_schema.columns col
-                    			on col.column_name = a.attname
-					  			and col.table_name = c.relname
-          			 			and col.table_schema = n.nspname
-                   where a.attrelid = c.oid and not a.attisdropped
-                     and a.attnum > 0
-                order by attnum
-               )
-               select json_agg(row_to_json(atts)) as js
-                from atts
-              ) as attrs on true
 
 -- exclude-schema
          left join pg_temp.filter_exclude_schema fn

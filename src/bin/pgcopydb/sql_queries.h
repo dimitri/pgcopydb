@@ -24,7 +24,7 @@ bool pgcopydb_sql_list_source_depend(int filter, const char **sql);
 bool pgcopydb_sql_list_source_indexes(int filter, const char **sql);
 bool pgcopydb_sql_list_source_sequences(int filter, const char **sql);
 bool pgcopydb_sql_list_source_table_size(int filter, const char **sql);
-bool pgcopydb_sql_list_source_tables(int pg_version, int filter,
-									 const char **sql);
+bool pgcopydb_sql_list_source_tables(int filter, const char **sql);
+bool pgcopydb_sql_list_table_attributes(int pg_version, const char **sql);
 
 #endif  /* PGCOPYDB_SQL_QUERIES_H */
