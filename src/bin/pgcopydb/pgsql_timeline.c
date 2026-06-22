@@ -152,11 +152,19 @@ writeTimelineHistoryFile(char *filename, char *content)
 static void
 parseIdentifySystemResult(IdentifySystemResult *context, PGresult *result)
 {
-	if (PQnfields(result) != 4)
+	if (PQnfields(result) < 4)
 	{
-		log_error("Query returned %d columns, expected 4", PQnfields(result));
+		log_error("Query returned %d columns, expected at least 4",
+				  PQnfields(result));
 		context->parsedOk = false;
 		return;
+	}
+
+	if (PQnfields(result) > 4)
+	{
+		log_debug("IDENTIFY_SYSTEM returned %d columns, expected 4: "
+				  "ignoring extra columns from non-standard server",
+				  PQnfields(result));
 	}
 
 	if (PQntuples(result) == 0)
@@ -172,8 +180,23 @@ parseIdentifySystemResult(IdentifySystemResult *context, PGresult *result)
 		return;
 	}
 
+	int fn_systemid = PQfnumber(result, "systemid");
+	int fn_timeline = PQfnumber(result, "timeline");
+	int fn_xlogpos = PQfnumber(result, "xlogpos");
+	int fn_dbname = PQfnumber(result, "dbname");
+
+	if (fn_systemid < 0 || fn_timeline < 0 ||
+		fn_xlogpos < 0 || fn_dbname < 0)
+	{
+		log_error("IDENTIFY_SYSTEM response is missing a required column "
+				  "(systemid=%d, timeline=%d, xlogpos=%d, dbname=%d)",
+				  fn_systemid, fn_timeline, fn_xlogpos, fn_dbname);
+		context->parsedOk = false;
+		return;
+	}
+
 	/* systemid (text) */
-	char *value = PQgetvalue(result, 0, 0);
+	char *value = PQgetvalue(result, 0, fn_systemid);
 	if (!stringToUInt64(value, &(context->system->identifier)))
 	{
 		log_error("Failed to parse system_identifier \"%s\"", value);
@@ -182,7 +205,7 @@ parseIdentifySystemResult(IdentifySystemResult *context, PGresult *result)
 	}
 
 	/* timeline (int4) */
-	value = PQgetvalue(result, 0, 1);
+	value = PQgetvalue(result, 0, fn_timeline);
 	if (!stringToUInt32(value, &(context->system->timeline)))
 	{
 		log_error("Failed to parse timeline \"%s\"", value);
@@ -191,13 +214,13 @@ parseIdentifySystemResult(IdentifySystemResult *context, PGresult *result)
 	}
 
 	/* xlogpos (text) */
-	value = PQgetvalue(result, 0, 2);
+	value = PQgetvalue(result, 0, fn_xlogpos);
 	strlcpy(context->system->xlogpos, value, PG_LSN_MAXLENGTH);
 
-	/* dbname (text) Database connected to or null */
-	if (!PQgetisnull(result, 0, 3))
+	/* dbname (text) — may be null for non-database walsenders */
+	if (!PQgetisnull(result, 0, fn_dbname))
 	{
-		value = PQgetvalue(result, 0, 3);
+		value = PQgetvalue(result, 0, fn_dbname);
 		strlcpy(context->system->dbname, value, NAMEDATALEN);
 	}
 
@@ -214,11 +237,19 @@ static void
 parseTimelineHistoryResult(TimelineHistoryResult *context, PGresult *result,
 						   char *cdcPathDir)
 {
-	if (PQnfields(result) != 2)
+	if (PQnfields(result) < 2)
 	{
-		log_error("Query returned %d columns, expected 2", PQnfields(result));
+		log_error("Query returned %d columns, expected at least 2",
+				  PQnfields(result));
 		context->parsedOk = false;
 		return;
+	}
+
+	if (PQnfields(result) > 2)
+	{
+		log_debug("TIMELINE_HISTORY returned %d columns, expected 2: "
+				  "ignoring extra columns from non-standard server",
+				  PQnfields(result));
 	}
 
 	if (PQntuples(result) == 0)
@@ -235,8 +266,20 @@ parseTimelineHistoryResult(TimelineHistoryResult *context, PGresult *result,
 		return;
 	}
 
+	int fn_filename = PQfnumber(result, "filename");
+	int fn_content = PQfnumber(result, "content");
+
+	if (fn_filename < 0 || fn_content < 0)
+	{
+		log_error("TIMELINE_HISTORY response is missing a required column "
+				  "(filename=%d, content=%d)",
+				  fn_filename, fn_content);
+		context->parsedOk = false;
+		return;
+	}
+
 	/* filename (text) */
-	char *value = PQgetvalue(result, 0, 0);
+	char *value = PQgetvalue(result, 0, fn_filename);
 	sformat(context->filename, sizeof(context->filename), "%s/%s", cdcPathDir, value);
 
 	/*
@@ -245,7 +288,7 @@ parseTimelineHistoryResult(TimelineHistoryResult *context, PGresult *result,
 	 * We do not want to store this value in memory. Instead we write it to disk
 	 * as it is.
 	 */
-	value = PQgetvalue(result, 0, 1);
+	value = PQgetvalue(result, 0, fn_content);
 	if (!writeTimelineHistoryFile(context->filename, value))
 	{
 		log_error("Failed to write timeline history file \"%s\"", context->filename);
