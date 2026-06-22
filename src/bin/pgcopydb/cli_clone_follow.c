@@ -644,6 +644,38 @@ cli_follow(int argc, char **argv)
 	}
 
 	/*
+	 * When CDC has durably reached endpos (cutover), reset the sequences on the
+	 * target database to their current values on the source. Postgres logical
+	 * decoding does not replicate sequences, so without this final step the
+	 * target sequences are left at the values captured during the initial base
+	 * copy. This mirrors what "clone --follow" does at the end of its run, and
+	 * makes a resumed follow that catches up to endpos safe to cut over from.
+	 *
+	 * We only do this once endpos is reached: an interrupted continuous follow
+	 * (no endpos, or stopped early by a signal) must not advance sequences ahead
+	 * of the data that was actually applied to the target.
+	 */
+	bool reachedEndpos = false;
+
+	if (!follow_reached_endpos(&specs, &reachedEndpos))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (reachedEndpos)
+	{
+		log_info("Resetting sequences on the target database to match the "
+				 "current values on the source database");
+
+		if (!follow_reset_sequences(&copySpecs, &specs))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_TARGET);
+		}
+	}
+
+	/*
 	 * CDC has ended (endpos reached / cutover). If FKs were created NOT VALID
 	 * via --defer-validate-fks, remind the operator at this final, visible
 	 * point to validate them before relying on the target — the per-FK
