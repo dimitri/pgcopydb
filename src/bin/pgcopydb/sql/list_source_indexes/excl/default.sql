@@ -75,4 +75,4 @@
             and d.deptype = 'e'
        )
 
- order by n.nspname, r.relname, i.relname
+ order by n.nspname, r.relname, i.relname;

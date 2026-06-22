@@ -33,4 +33,4 @@
           where d.classid = 'pg_class'::regclass
             and d.objid = c.oid
             and d.deptype = 'e'
-       )
+       );

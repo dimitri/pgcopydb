@@ -27,4 +27,4 @@ from pg_available_extensions e
      as u(versions) on true
 
 group by e.name, e.default_version, e.installed_version, u.versions
-order by e.name
+order by e.name;

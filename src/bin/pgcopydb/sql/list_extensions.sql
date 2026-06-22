@@ -69,4 +69,4 @@ select oid, extname, extnamespace, extrelocatable,
        extcondition,
        relkind
  from extension_config_data
-      left outer join ordered_fk_constraints ofc on extconfig = ofc.relid
+      left outer join ordered_fk_constraints ofc on extconfig = ofc.relid;

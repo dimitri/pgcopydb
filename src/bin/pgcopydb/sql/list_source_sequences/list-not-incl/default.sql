@@ -64,4 +64,4 @@ with
       where (r1.relname is not null and inc1.relname is null)
          or (r2.relname is not null and inc2.relname is null)
 
-   order by nspname, relname
+   order by nspname, relname;

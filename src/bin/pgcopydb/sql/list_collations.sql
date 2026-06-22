@@ -55,4 +55,4 @@ all_colls as
 select distinct on (colloid) colloid, collname, description,
        restore_list_name
   from all_colls
-order by colloid, description
+order by colloid, description;

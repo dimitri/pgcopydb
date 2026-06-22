@@ -66,4 +66,4 @@ with
      where (   fn.nspname is not null
             or ft.relname is not null)
 
-   order by nspname, relname
+   order by nspname, relname;

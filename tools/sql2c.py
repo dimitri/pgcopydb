@@ -239,7 +239,14 @@ def c_string_lines(path, preamble=None):
     """
     with open(path) as f:
         content = f.read()
+    # Strip trailing semicolon so the embedded C string is valid for
+    # PQexecParams (the .sql files carry ';' for psql copy-paste convenience).
     full = (preamble or '') + content
+    # Strip trailing semicolon; .sql files carry ';' for psql convenience
+    # but PQexecParams doesn't need it.
+    full = full.rstrip()
+    if full.endswith(';'):
+        full = full[:-1]
     lines = []
     for line in full.split('\n'):
         escaped = line.replace('\\', '\\\\').replace('"', '\\"')

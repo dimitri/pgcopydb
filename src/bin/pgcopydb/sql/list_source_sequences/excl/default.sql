@@ -99,4 +99,4 @@ with
            else s.nspname is not null and fn3.nspname is null
            end
 
-   order by nspname, relname
+   order by nspname, relname;

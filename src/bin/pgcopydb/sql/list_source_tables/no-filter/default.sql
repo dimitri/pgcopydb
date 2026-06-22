@@ -83,4 +83,4 @@
             and d.deptype = 'e'
        )
 
-order by n.nspname, c.relname
+order by n.nspname, c.relname;

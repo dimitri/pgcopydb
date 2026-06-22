@@ -8,4 +8,4 @@ select distinct on (n.oid) n.oid, n.nspname,
          on d.refclassid = 'pg_namespace'::regclass
         and d.refobjid = n.oid
         and d.classid = 'pg_extension'::regclass
- where nspname <> 'public' and nspname !~ '^pg_'
+ where nspname <> 'public' and nspname !~ '^pg_';

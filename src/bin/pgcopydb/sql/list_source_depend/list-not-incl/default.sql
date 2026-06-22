@@ -26,4 +26,4 @@
 
 -- remove duplicates due to multiple refobjsubid / objsubid
 GROUP BY n.nspname, c.relname,
-         refclassid, refobjid, classid, objid, deptype, type, identity
+         refclassid, refobjid, classid, objid, deptype, type, identity;
