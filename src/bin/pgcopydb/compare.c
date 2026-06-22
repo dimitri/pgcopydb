@@ -1538,7 +1538,7 @@ compare_alldb_chksum_hook(void *ctx, SourceTable *table)
 		strlcpy(fqname, table->qname, sizeof(fqname));
 	}
 
-	fformat(stdout, "%50s | %s | %36s | %36s \n",
+	fformat(stdout, "%50s | %s | %64s | %64s \n",
 			fqname,
 			streq(srcChk->checksum, dstChk->checksum) ? " " : "!",
 			srcChk->checksum,
@@ -1838,12 +1838,12 @@ compare_all_databases_data(CopyDataSpec *parentSpecs)
 
 	/* Print unified checksum table (parent reads per-db catalogs) */
 	fformat(stdout, "\n");
-	fformat(stdout, "%50s | %s | %36s | %36s \n",
+	fformat(stdout, "%50s | %s | %64s | %64s \n",
 			"Table Name", "!", "Source Checksum", "Target Checksum");
-	fformat(stdout, "%50s-+-%s-+-%36s-+-%36s \n",
+	fformat(stdout, "%50s-+-%s-+-%64s-+-%64s \n",
 			"--------------------------------------------------", "-",
-			"------------------------------------",
-			"------------------------------------");
+			"----------------------------------------------------------------",
+			"----------------------------------------------------------------");
 
 	for (int i = 0; i < dbCount; i++)
 	{

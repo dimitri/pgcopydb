@@ -1320,19 +1320,20 @@ schema_send_table_checksum(PGSQL *pgsql, SourceTable *table)
 	/*
 	 * Compute the hashtext of every single row in the table, and aggregate the
 	 * results as a sum of bigint numbers. Because the sum of bigint could
-	 * overflow to numeric, the aggregated sum is then hashed into an MD5
-	 * value: bigint is 64 bits, MD5 is 128 bits.
+	 * overflow to numeric, the aggregated sum is then hashed with SHA256.
 	 *
 	 * Also, to lower the chances of a collision, include the row count in the
-	 * computation of the MD5 by appending it to the input string of the MD5
-	 * function.
+	 * computation of the hash by appending it to the input string.
+	 *
+	 * SHA256 is used instead of MD5 so that the query works on FIPS-compliant
+	 * systems (e.g. Azure Database for PostgreSQL) where md5() is disabled.
+	 * sha256() has been built into PostgreSQL since version 11.
 	 */
 	appendPQExpBuffer(sql,
 					  "select count(1) as cnt, "
-					  "md5(format('%%s-%%s', "
+					  "encode(sha256(format('%%s-%%s', "
 					  "      sum(hashtext(%s::text)::bigint),"
-					  "      count(1))"
-					  ")::uuid as chksum "
+					  "      count(1))::bytea), 'hex') as chksum "
 					  "from only %s",
 					  attrList->data,
 					  table->qname);
