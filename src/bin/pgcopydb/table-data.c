@@ -1142,6 +1142,27 @@ copydb_table_create_lockfile(CopyDataSpec *specs,
 	args->freeze = tableSpecs->sourceTable->partition.partCount <= 1;
 	args->useCopyBinary = specs->useCopyBinary;
 
+	if (args->useCopyBinary)
+	{
+		bool allBinaryCompatible = true;
+
+		if (!catalog_s_table_all_binary_compatible(sourceDB,
+												   tableSpecs->sourceTable,
+												   &allBinaryCompatible))
+		{
+			return false;
+		}
+
+		if (!allBinaryCompatible)
+		{
+			log_notice("Table \"%s\" is not safe for COPY BINARY: "
+					   "at least one column type has an alignment-unsafe "
+					   "binary encoding; falling back to text COPY",
+					   tableSpecs->sourceTable->qname);
+			args->useCopyBinary = false;
+		}
+	}
+
 	/*
 	 * Check to see if we want to TRUNCATE the table and benefit from the COPY
 	 * FREEZE optimisation.
