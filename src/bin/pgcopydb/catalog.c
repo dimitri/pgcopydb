@@ -14,6 +14,7 @@
 #include "sqlite3.h"
 
 #include "catalog.h"
+#include "pqexpbuffer.h"
 #include "copydb.h"
 #include "defaults.h"
 #include "log.h"
@@ -2780,8 +2781,6 @@ catalog_add_s_table(DatabaseCatalog *catalog, SourceTable *table)
 }
 
 
-static bool catalog_s_table_count_fetch(SQLiteQuery *query);
-
 /*
  * catalog_add_s_attr INSERTs a single SourceTableAttribute into s_attr.
  * Used when streaming attributes from the separate list_table_attributes query.
@@ -2874,51 +2873,18 @@ catalog_s_table_oid_array(DatabaseCatalog *catalog, char **text, int *count)
 		return false;
 	}
 
-	/* first pass: count rows */
-	char *countSql = "select count(*) from s_table";
-	SQLiteQuery countQuery = {
-		.context = count,
-		.fetchFunction = &catalog_s_table_count_fetch
-	};
+	PQExpBufferData buf;
+	initPQExpBuffer(&buf);
+	appendPQExpBufferChar(&buf, '{');
 
-	if (!catalog_sql_prepare(db, countSql, &countQuery))
-	{
-		return false;
-	}
+	*count = 0;
 
-	if (!catalog_sql_execute_once(&countQuery))
-	{
-		return false;
-	}
-
-	if (*count == 0)
-	{
-		*text = strdup("{}");
-		return *text != NULL;
-	}
-
-	/* second pass: collect oids into a "{oid1,oid2,...}" string */
 	char *oidSql = "select oid from s_table order by oid";
-
-	/* rough upper bound: each oid is at most 10 digits + comma */
-	int capacity = 2 + (*count * 11) + 1;
-	char *buf = (char *) calloc(capacity, 1);
-
-	if (buf == NULL)
-	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	buf[0] = '{';
-	int pos = 1;
-	bool first = true;
-
 	SQLiteQuery query = { 0 };
 
 	if (!catalog_sql_prepare(db, oidSql, &query))
 	{
-		free(buf);
+		termPQExpBuffer(&buf);
 		return false;
 	}
 
@@ -2938,41 +2904,39 @@ catalog_s_table_oid_array(DatabaseCatalog *catalog, char **text, int *count)
 					  query.sql,
 					  sqlite3_errmsg(db));
 			(void) catalog_sql_finalize(&query);
-			free(buf);
+			termPQExpBuffer(&buf);
 			return false;
 		}
 
-		uint64_t oid = sqlite3_column_int64(query.ppStmt, 0);
-
-		if (!first)
+		if (*count > 0)
 		{
-			buf[pos++] = ',';
+			appendPQExpBufferChar(&buf, ',');
 		}
-		first = false;
 
-		pos += sformat(buf + pos, capacity - pos, "%llu", (unsigned long long) oid);
+		uint64_t oid = sqlite3_column_int64(query.ppStmt, 0);
+		appendPQExpBuffer(&buf, "%llu", (unsigned long long) oid);
+		++(*count);
 	}
 
 	if (!catalog_sql_finalize(&query))
 	{
-		free(buf);
+		termPQExpBuffer(&buf);
 		return false;
 	}
 
-	buf[pos++] = '}';
-	buf[pos] = '\0';
+	appendPQExpBufferChar(&buf, '}');
 
-	*text = buf;
-	return true;
-}
+	if (PQExpBufferBroken(&buf))
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		termPQExpBuffer(&buf);
+		return false;
+	}
 
+	*text = strdup(buf.data);
+	termPQExpBuffer(&buf);
 
-static bool
-catalog_s_table_count_fetch(SQLiteQuery *query)
-{
-	int *count = (int *) query->context;
-	*count = sqlite3_column_int(query->ppStmt, 0);
-	return true;
+	return *text != NULL;
 }
 
 
