@@ -1122,6 +1122,54 @@ follow_wait_subprocesses(StreamSpecs *specs)
 		pg_usleep(150 * 1000);
 	}
 
+	/*
+	 * Data-safe backstop for the endpos shutdown race.
+	 *
+	 * The apply (catchup) process is authoritative: it exits successfully only
+	 * once it has durably applied changes through endpos, syncing replay_lsn in
+	 * the sentinel. When that has happened, the migration's CDC goal is met and
+	 * the data is on the target through endpos. Any non-zero exit from the
+	 * upstream prefetch/transform processes at that point is teardown noise
+	 * (typically EPIPE as the apply process closes the pipe) and must not turn a
+	 * completed migration into a reported failure.
+	 *
+	 * This is strictly gated: we only override when the apply process itself
+	 * exited successfully AND endpos has been reached (endpos <= replay_lsn). If
+	 * apply crashed, or endpos was not reached, we leave success as-is so the
+	 * failure propagates and the operator can resume.
+	 */
+	if (!success)
+	{
+		FollowSubProcess *catchup = &(specs->catchup);
+
+		bool applyExitedOk =
+			catchup->pid > 0 &&
+			catchup->exited &&
+			catchup->returnCode == 0 &&
+			signal_is_handled(catchup->sig);
+
+		if (applyExitedOk)
+		{
+			/* refresh sentinel so replay_lsn reflects the final apply state */
+			if (!follow_get_sentinel(specs, &(specs->sentinel), false))
+			{
+				log_warn("Failed to get sentinel values");
+			}
+
+			if (specs->sentinel.endpos != InvalidXLogRecPtr &&
+				specs->sentinel.endpos <= specs->sentinel.replay_lsn)
+			{
+				log_info("Apply process durably reached endpos %X/%X "
+						 "(replay_lsn %X/%X); treating upstream pipeline "
+						 "teardown as a clean shutdown",
+						 LSN_FORMAT_ARGS(specs->sentinel.endpos),
+						 LSN_FORMAT_ARGS(specs->sentinel.replay_lsn));
+
+				success = true;
+			}
+		}
+	}
+
 	return success;
 }
 

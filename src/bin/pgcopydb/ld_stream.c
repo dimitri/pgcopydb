@@ -545,11 +545,34 @@ startLogicalStreaming(StreamSpecs *specs)
 			}
 			else if (privateContext->pipelineBroken)
 			{
-				log_error("Downstream pipeline process has exited, "
-						  "stopping at %X/%X",
-						  LSN_FORMAT_ARGS(context.tracking->written_lsn));
+				/*
+				 * The downstream pipeline closed its read end. When endpos has
+				 * been reached (we have streamed at or past it), that's the
+				 * expected clean shutdown: the transform/apply processes are
+				 * done on purpose. Otherwise the downstream died unexpectedly
+				 * and we must report failure. Either way, a genuine downstream
+				 * failure is also caught independently by the apply process's
+				 * own non-zero exit at the follow supervisor.
+				 */
+				if (context.endpos != InvalidXLogRecPtr &&
+					context.tracking != NULL &&
+					context.endpos <= context.tracking->written_lsn)
+				{
+					log_info("Downstream pipeline reached endpos %X/%X and "
+							 "closed the pipe; receive stopping cleanly at %X/%X",
+							 LSN_FORMAT_ARGS(context.endpos),
+							 LSN_FORMAT_ARGS(context.tracking->written_lsn));
 
-				return false;
+					retry = false;
+				}
+				else
+				{
+					log_error("Downstream pipeline process has exited, "
+							  "stopping at %X/%X",
+							  LSN_FORMAT_ARGS(context.tracking->written_lsn));
+
+					return false;
+				}
 			}
 			else if (!retry)
 			{

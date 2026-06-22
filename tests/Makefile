@@ -15,7 +15,7 @@ all: pagila pagila-multi-steps blobs unit filtering filtering-standby extensions
 	 follow-wal2json follow-standby follow-9.6 follow-data-only follow-target-reconnect \
 	 endpos-in-multi-wal-txn exclude-extension \
 	 blob-snapshot-release follow-defer-indexes fk-not-valid defer-validate-fks \
-	 follow-defer-validate-fks;
+	 follow-defer-validate-fks follow-sequence-reset;
 
 pagila: build
 	$(MAKE) -C $@
@@ -89,6 +89,9 @@ defer-validate-fks: build
 follow-defer-validate-fks: build
 	$(MAKE) -C $@
 
+follow-sequence-reset: build
+	$(MAKE) -C $@
+
 timescaledb: build
 	$(MAKE) -C $@
 
@@ -102,4 +105,4 @@ build:
 .PHONY: follow-wal2json follow-standby follow-9.6 follow-target-reconnect
 .PHONY: endpos-in-multi-wal-txn exclude-extension
 .PHONY: blob-snapshot-release follow-defer-indexes fk-not-valid defer-validate-fks
-.PHONY: follow-defer-validate-fks
+.PHONY: follow-defer-validate-fks follow-sequence-reset
