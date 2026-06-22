@@ -3,6 +3,8 @@
  */
 
 static const char sql_list_collations[] =
+	"with indcols as\n"
+	" (\n"
 	"   select indexrelid, n, colloid\n"
 	"     from pg_index i\n"
 	"     join pg_class c on c.oid = i.indexrelid\n"
@@ -60,7 +62,7 @@ static const char sql_list_collations[] =
 	"select distinct on (colloid) colloid, collname, description,\n"
 	"       restore_list_name\n"
 	"  from all_colls\n"
-	"order by colloid, description;\n"
+	"order by colloid, description\n"
 ;
 
 static const char sql_list_database_properties[] =
@@ -78,7 +80,7 @@ static const char sql_list_database_properties[] =
 	"  from pg_db_role_setting rs\n"
 	"       join pg_database d on d.oid = rs.setdatabase\n"
 	"       join pg_roles r on r.oid = rs.setrole\n"
-	" where d.datname = current_database();\n"
+	" where d.datname = current_database()\n"
 ;
 
 static const char sql_list_databases[] =
@@ -86,7 +88,7 @@ static const char sql_list_databases[] =
 	"       pg_size_pretty(pg_database_size(d.oid))\n"
 	"  from pg_database d\n"
 	" where datname not in ('template0', 'template1')\n"
-	"order by datname;\n"
+	"order by datname\n"
 ;
 
 static const char sql_list_ext_schemas[] =
@@ -100,7 +102,7 @@ static const char sql_list_ext_schemas[] =
 	"         on d.refclassid = 'pg_namespace'::regclass\n"
 	"        and d.refobjid = n.oid\n"
 	"        and d.classid = 'pg_extension'::regclass\n"
-	" where nspname <> 'public' and nspname !~ '^pg_';\n"
+	" where nspname <> 'public' and nspname !~ '^pg_'\n"
 ;
 
 static const char sql_list_ext_versions[] =
@@ -133,7 +135,7 @@ static const char sql_list_ext_versions[] =
 	"     as u(versions) on true\n"
 	"\n"
 	"group by e.name, e.default_version, e.installed_version, u.versions\n"
-	"order by e.name;\n"
+	"order by e.name\n"
 ;
 
 static const char sql_list_extensions[] =
@@ -208,7 +210,7 @@ static const char sql_list_extensions[] =
 	"       extcondition,\n"
 	"       relkind\n"
 	" from extension_config_data\n"
-	"      left outer join ordered_fk_constraints ofc on extconfig = ofc.relid;\n"
+	"      left outer join ordered_fk_constraints ofc on extconfig = ofc.relid\n"
 ;
 
 static const char sql_list_schemas[] =
@@ -218,7 +220,7 @@ static const char sql_list_schemas[] =
 	"                regexp_replace(auth.rolname, '[\\n\\r]', ' '))\n"
 	"  from pg_namespace n\n"
 	"       join pg_roles auth ON auth.oid = n.nspowner\n"
-	" where nspname <> 'information_schema' and nspname !~ '^pg_';\n"
+	" where nspname <> 'information_schema' and nspname !~ '^pg_'\n"
 ;
 
 static const char sql_list_source_depend_excl[] =
@@ -322,7 +324,6 @@ static const char sql_list_source_depend_excl[] =
 	"-- remove duplicates due to multiple refobjsubid / objsubid\n"
 	"GROUP BY cn.nspname, c.relname,\n"
 	"         refclassid, refobjid, classid, objid, deptype, type, identity\n"
-	";\n"
 ;
 
 static const char sql_list_source_depend_incl[] =
@@ -417,7 +418,6 @@ static const char sql_list_source_depend_incl[] =
 	"-- remove duplicates due to multiple refobjsubid / objsubid\n"
 	"GROUP BY n.nspname, c.relname,\n"
 	"         refclassid, refobjid, classid, objid, deptype, type, identity\n"
-	";\n"
 ;
 
 static const char sql_list_source_depend_list_excl[] =
@@ -521,7 +521,6 @@ static const char sql_list_source_depend_list_excl[] =
 	"-- remove duplicates due to multiple refobjsubid / objsubid\n"
 	"GROUP BY n.nspname, c.relname,\n"
 	"         refclassid, refobjid, classid, objid, deptype, type, identity\n"
-	";\n"
 ;
 
 static const char sql_list_source_depend_list_not_incl[] =
@@ -619,7 +618,6 @@ static const char sql_list_source_depend_list_not_incl[] =
 	"-- remove duplicates due to multiple refobjsubid / objsubid\n"
 	"GROUP BY n.nspname, c.relname,\n"
 	"         refclassid, refobjid, classid, objid, deptype, type, identity\n"
-	";\n"
 ;
 
 static const char sql_list_source_indexes_excl[] =
@@ -700,7 +698,7 @@ static const char sql_list_source_indexes_excl[] =
 	"            and d.deptype = 'e'\n"
 	"       )\n"
 	"\n"
-	" order by n.nspname, r.relname, i.relname;\n"
+	" order by n.nspname, r.relname, i.relname\n"
 ;
 
 static const char sql_list_source_indexes_excl_index[] =
@@ -764,7 +762,7 @@ static const char sql_list_source_indexes_excl_index[] =
 	"            and d.deptype = 'e'\n"
 	"       )\n"
 	"\n"
-	" order by n.nspname, r.relname, i.relname;\n"
+	" order by n.nspname, r.relname, i.relname\n"
 ;
 
 static const char sql_list_source_indexes_incl[] =
@@ -833,7 +831,7 @@ static const char sql_list_source_indexes_incl[] =
 	"            and d.deptype = 'e'\n"
 	"       )\n"
 	"\n"
-	" order by n.nspname, r.relname, i.relname;\n"
+	" order by n.nspname, r.relname, i.relname\n"
 ;
 
 static const char sql_list_source_indexes_list_excl[] =
@@ -908,7 +906,7 @@ static const char sql_list_source_indexes_list_excl[] =
 	"            and d.deptype = 'e'\n"
 	"       )\n"
 	"\n"
-	" order by n.nspname, r.relname, i.relname;\n"
+	" order by n.nspname, r.relname, i.relname\n"
 ;
 
 static const char sql_list_source_indexes_list_excl_index[] =
@@ -969,7 +967,7 @@ static const char sql_list_source_indexes_list_excl_index[] =
 	"            and d.deptype = 'e'\n"
 	"       )\n"
 	"\n"
-	" order by n.nspname, r.relname, i.relname;\n"
+	" order by n.nspname, r.relname, i.relname\n"
 ;
 
 static const char sql_list_source_indexes_list_not_incl[] =
@@ -1040,7 +1038,7 @@ static const char sql_list_source_indexes_list_not_incl[] =
 	"            and d.deptype = 'e'\n"
 	"       )\n"
 	"\n"
-	" order by n.nspname, r.relname, i.relname;\n"
+	" order by n.nspname, r.relname, i.relname\n"
 ;
 
 static const char sql_list_source_indexes_no_filter[] =
@@ -1097,7 +1095,7 @@ static const char sql_list_source_indexes_no_filter[] =
 	"            and d.deptype = 'e'\n"
 	"       )\n"
 	"\n"
-	" order by n.nspname, r.relname, i.relname;\n"
+	" order by n.nspname, r.relname, i.relname\n"
 ;
 
 static const char sql_list_source_sequences_excl[] =
@@ -1202,7 +1200,7 @@ static const char sql_list_source_sequences_excl[] =
 	"           else s.nspname is not null and fn3.nspname is null\n"
 	"           end\n"
 	"\n"
-	"   order by nspname, relname;\n"
+	"   order by nspname, relname\n"
 ;
 
 static const char sql_list_source_sequences_incl[] =
@@ -1272,7 +1270,7 @@ static const char sql_list_source_sequences_incl[] =
 	"      where (r1.relname is not null and inc1.relname is not null)\n"
 	"         or (r2.relname is not null and inc2.relname is not null)\n"
 	"\n"
-	"   order by nspname, relname;\n"
+	"   order by nspname, relname\n"
 ;
 
 static const char sql_list_source_sequences_list_excl[] =
@@ -1344,7 +1342,7 @@ static const char sql_list_source_sequences_list_excl[] =
 	"     where (   fn.nspname is not null\n"
 	"            or ft.relname is not null)\n"
 	"\n"
-	"   order by nspname, relname;\n"
+	"   order by nspname, relname\n"
 ;
 
 static const char sql_list_source_sequences_list_not_incl[] =
@@ -1414,7 +1412,7 @@ static const char sql_list_source_sequences_list_not_incl[] =
 	"      where (r1.relname is not null and inc1.relname is null)\n"
 	"         or (r2.relname is not null and inc2.relname is null)\n"
 	"\n"
-	"   order by nspname, relname;\n"
+	"   order by nspname, relname\n"
 ;
 
 static const char sql_list_source_sequences_no_filter[] =
@@ -1447,7 +1445,7 @@ static const char sql_list_source_sequences_no_filter[] =
 	"            and d.deptype = 'e'\n"
 	"       )\n"
 	"\n"
-	"order by n.nspname, c.relname;\n"
+	"order by n.nspname, c.relname\n"
 ;
 
 static const char sql_list_source_table_size_excl[] =
@@ -1486,7 +1484,7 @@ static const char sql_list_source_table_size_excl[] =
 	"          where d.classid = 'pg_class'::regclass\n"
 	"            and d.objid = c.oid\n"
 	"            and d.deptype = 'e'\n"
-	"       );\n"
+	"       )\n"
 ;
 
 static const char sql_list_source_table_size_incl[] =
@@ -1511,7 +1509,7 @@ static const char sql_list_source_table_size_incl[] =
 	"          where d.classid = 'pg_class'::regclass\n"
 	"            and d.objid = c.oid\n"
 	"            and d.deptype = 'e'\n"
-	"       );\n"
+	"       )\n"
 ;
 
 static const char sql_list_source_table_size_list_excl[] =
@@ -1541,7 +1539,7 @@ static const char sql_list_source_table_size_list_excl[] =
 	"          where d.classid = 'pg_class'::regclass\n"
 	"            and d.objid = c.oid\n"
 	"            and d.deptype = 'e'\n"
-	"       );\n"
+	"       )\n"
 ;
 
 static const char sql_list_source_table_size_list_not_incl[] =
@@ -1569,7 +1567,7 @@ static const char sql_list_source_table_size_list_not_incl[] =
 	"          where d.classid = 'pg_class'::regclass\n"
 	"            and d.objid = c.oid\n"
 	"            and d.deptype = 'e'\n"
-	"       );\n"
+	"       )\n"
 ;
 
 static const char sql_list_source_table_size_no_filter[] =
@@ -1589,7 +1587,7 @@ static const char sql_list_source_table_size_no_filter[] =
 	"          where d.classid = 'pg_class'::regclass\n"
 	"            and d.objid = c.oid\n"
 	"            and d.deptype = 'e'\n"
-	"       );\n"
+	"       )\n"
 ;
 
 static const char sql_list_source_tables_excl[] =
@@ -1696,7 +1694,7 @@ static const char sql_list_source_tables_excl[] =
 	"            and d.deptype = 'e'\n"
 	"       )\n"
 	"\n"
-	"order by n.nspname, c.relname;\n"
+	"order by n.nspname, c.relname\n"
 ;
 
 static const char sql_list_source_tables_excl_pg96[] =
@@ -1803,7 +1801,7 @@ static const char sql_list_source_tables_excl_pg96[] =
 	"            and d.deptype = 'e'\n"
 	"       )\n"
 	"\n"
-	"order by n.nspname, c.relname;\n"
+	"order by n.nspname, c.relname\n"
 ;
 
 static const char sql_list_source_tables_incl[] =
@@ -1900,7 +1898,7 @@ static const char sql_list_source_tables_incl[] =
 	"            and d.deptype = 'e'\n"
 	"       )\n"
 	"\n"
-	"order by n.nspname, c.relname;\n"
+	"order by n.nspname, c.relname\n"
 ;
 
 static const char sql_list_source_tables_incl_pg96[] =
@@ -1997,7 +1995,7 @@ static const char sql_list_source_tables_incl_pg96[] =
 	"            and d.deptype = 'e'\n"
 	"       )\n"
 	"\n"
-	"order by n.nspname, c.relname;\n"
+	"order by n.nspname, c.relname\n"
 ;
 
 static const char sql_list_source_tables_list_excl[] =
@@ -2099,7 +2097,7 @@ static const char sql_list_source_tables_list_excl[] =
 	"            and d.deptype = 'e'\n"
 	"       )\n"
 	"\n"
-	"order by n.nspname, c.relname;\n"
+	"order by n.nspname, c.relname\n"
 ;
 
 static const char sql_list_source_tables_list_excl_pg96[] =
@@ -2201,7 +2199,7 @@ static const char sql_list_source_tables_list_excl_pg96[] =
 	"            and d.deptype = 'e'\n"
 	"       )\n"
 	"\n"
-	"order by n.nspname, c.relname;\n"
+	"order by n.nspname, c.relname\n"
 ;
 
 static const char sql_list_source_tables_list_not_incl[] =
@@ -2298,7 +2296,7 @@ static const char sql_list_source_tables_list_not_incl[] =
 	"            and d.deptype = 'e'\n"
 	"       )\n"
 	"\n"
-	"order by n.nspname, c.relname;\n"
+	"order by n.nspname, c.relname\n"
 ;
 
 static const char sql_list_source_tables_list_not_incl_pg96[] =
@@ -2395,7 +2393,7 @@ static const char sql_list_source_tables_list_not_incl_pg96[] =
 	"            and d.deptype = 'e'\n"
 	"       )\n"
 	"\n"
-	"order by n.nspname, c.relname;\n"
+	"order by n.nspname, c.relname\n"
 ;
 
 static const char sql_list_source_tables_no_filter[] =
@@ -2484,7 +2482,7 @@ static const char sql_list_source_tables_no_filter[] =
 	"            and d.deptype = 'e'\n"
 	"       )\n"
 	"\n"
-	"order by n.nspname, c.relname;\n"
+	"order by n.nspname, c.relname\n"
 ;
 
 static const char sql_list_source_tables_no_filter_pg96[] =
@@ -2573,5 +2571,5 @@ static const char sql_list_source_tables_no_filter_pg96[] =
 	"            and d.deptype = 'e'\n"
 	"       )\n"
 	"\n"
-	"order by n.nspname, c.relname;\n"
+	"order by n.nspname, c.relname\n"
 ;

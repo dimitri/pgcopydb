@@ -1,3 +1,5 @@
+with indcols as
+ (
    select indexrelid, n, colloid
      from pg_index i
      join pg_class c on c.oid = i.indexrelid
