@@ -211,7 +211,11 @@ bool catalog_add_attributes(DatabaseCatalog *catalog, SourceTable *table);
 bool catalog_add_s_attr(DatabaseCatalog *catalog,
 						uint32_t tableoid,
 						SourceTableAttribute *attr);
-bool catalog_s_table_oid_array(DatabaseCatalog *catalog, char **text, int *count);
+
+typedef bool (*CatalogOidCallback)(void *ctx, uint32_t oid);
+bool catalog_foreach_s_table_oid(DatabaseCatalog *catalog,
+								 CatalogOidCallback callback,
+								 void *ctx);
 bool catalog_add_s_table_part(DatabaseCatalog *catalog, SourceTable *table);
 
 bool catalog_add_s_table_chksum(DatabaseCatalog *catalog,

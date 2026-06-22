@@ -270,52 +270,38 @@ pgcopydb_sql_list_table_attributes(int pg_version, const char **sql)
 }
 
 
-/*
- * list_source_tables has both filter and pg_version dispatch.
- * The pg-96 variants cover pg_version < 100000 (before PG 10).
- */
 bool
-pgcopydb_sql_list_source_tables(int pg_version, int filter, const char **sql)
+pgcopydb_sql_list_source_tables(int filter, const char **sql)
 {
 	switch (filter)
 	{
 		case SOURCE_FILTER_TYPE_NONE:
 		{
-			*sql = (pg_version < 100000)
-				   ? sql_list_source_tables_no_filter_pg96
-				   : sql_list_source_tables_no_filter;
+			*sql = sql_list_source_tables_no_filter;
 			return true;
 		}
 
 		case SOURCE_FILTER_TYPE_INCL:
 		{
-			*sql = (pg_version < 100000)
-				   ? sql_list_source_tables_incl_pg96
-				   : sql_list_source_tables_incl;
+			*sql = sql_list_source_tables_incl;
 			return true;
 		}
 
 		case SOURCE_FILTER_TYPE_EXCL:
 		{
-			*sql = (pg_version < 100000)
-				   ? sql_list_source_tables_excl_pg96
-				   : sql_list_source_tables_excl;
+			*sql = sql_list_source_tables_excl;
 			return true;
 		}
 
 		case SOURCE_FILTER_TYPE_LIST_NOT_INCL:
 		{
-			*sql = (pg_version < 100000)
-				   ? sql_list_source_tables_list_not_incl_pg96
-				   : sql_list_source_tables_list_not_incl;
+			*sql = sql_list_source_tables_list_not_incl;
 			return true;
 		}
 
 		case SOURCE_FILTER_TYPE_LIST_EXCL:
 		{
-			*sql = (pg_version < 100000)
-				   ? sql_list_source_tables_list_excl_pg96
-				   : sql_list_source_tables_list_excl;
+			*sql = sql_list_source_tables_list_excl;
 			return true;
 		}
 

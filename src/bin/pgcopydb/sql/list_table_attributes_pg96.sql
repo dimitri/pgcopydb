@@ -9,7 +9,8 @@ select a.attrelid,
        bincompat.hasbinaryio,
        bincompat.typsendfunc
 
-  from pg_attribute a
+  from pgcopydb_table_oids t
+       join pg_attribute a on a.attrelid = t.reloid
        join pg_class c on c.oid = a.attrelid
        join pg_namespace n on n.oid = c.relnamespace
        left join pg_index i
@@ -108,8 +109,7 @@ select a.attrelid,
              from resolved r
        ) bincompat on true
 
- where a.attrelid = any($1::oid[])
-   and not a.attisdropped
+ where not a.attisdropped
    and a.attnum > 0
 
  order by a.attrelid, a.attnum

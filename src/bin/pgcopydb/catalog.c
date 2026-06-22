@@ -2883,8 +2883,6 @@ catalog_add_attributes(DatabaseCatalog *catalog, SourceTable *table)
 }
 
 
-static bool catalog_s_table_count_fetch(SQLiteQuery *query);
-
 /*
  * catalog_add_s_attr INSERTs a single SourceTableAttribute into s_attr.
  * Used when streaming attributes from the separate list_table_attributes query.
@@ -2972,66 +2970,28 @@ catalog_add_s_attr(DatabaseCatalog *catalog,
 
 
 /*
- * catalog_s_table_oid_array builds a PostgreSQL array literal of all table
- * OIDs stored in s_table, formatted as "{oid1,oid2,...}" for use as a $1
- * text parameter with ::oid[] casting in SQL.  The caller must free *text.
+ * catalog_foreach_s_table_oid iterates every OID in s_table (ordered) and
+ * calls callback(ctx, oid) for each one.  Returns false on the first error
+ * (either from SQLite or from the callback).
  */
 bool
-catalog_s_table_oid_array(DatabaseCatalog *catalog, char **text, int *count)
+catalog_foreach_s_table_oid(DatabaseCatalog *catalog,
+							CatalogOidCallback callback,
+							void *ctx)
 {
 	sqlite3 *db = catalog->db;
 
 	if (db == NULL)
 	{
-		log_error("BUG: catalog_s_table_oid_array: db is NULL");
+		log_error("BUG: catalog_foreach_s_table_oid: db is NULL");
 		return false;
 	}
-
-	/* first pass: count rows */
-	char *countSql = "select count(*) from s_table";
-	SQLiteQuery countQuery = {
-		.context = count,
-		.fetchFunction = &catalog_s_table_count_fetch
-	};
-
-	if (!catalog_sql_prepare(db, countSql, &countQuery))
-	{
-		return false;
-	}
-
-	if (!catalog_sql_execute_once(&countQuery))
-	{
-		return false;
-	}
-
-	if (*count == 0)
-	{
-		*text = strdup("{}");
-		return *text != NULL;
-	}
-
-	/* second pass: collect oids into a "{oid1,oid2,...}" string */
-	char *oidSql = "select oid from s_table order by oid";
-
-	/* rough upper bound: each oid is at most 10 digits + comma */
-	int capacity = 2 + (*count * 11) + 1;
-	char *buf = (char *) calloc(capacity, 1);
-
-	if (buf == NULL)
-	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	buf[0] = '{';
-	int pos = 1;
-	bool first = true;
 
 	SQLiteQuery query = { 0 };
+	char *sql = "select oid from s_table order by oid";
 
-	if (!catalog_sql_prepare(db, oidSql, &query))
+	if (!catalog_sql_prepare(db, sql, &query))
 	{
-		free(buf);
 		return false;
 	}
 
@@ -3051,41 +3011,19 @@ catalog_s_table_oid_array(DatabaseCatalog *catalog, char **text, int *count)
 					  query.sql,
 					  sqlite3_errmsg(db));
 			(void) catalog_sql_finalize(&query);
-			free(buf);
 			return false;
 		}
 
-		uint64_t oid = sqlite3_column_int64(query.ppStmt, 0);
+		uint32_t oid = (uint32_t) sqlite3_column_int64(query.ppStmt, 0);
 
-		if (!first)
+		if (!callback(ctx, oid))
 		{
-			buf[pos++] = ',';
+			(void) catalog_sql_finalize(&query);
+			return false;
 		}
-		first = false;
-
-		pos += sformat(buf + pos, capacity - pos, "%llu", (unsigned long long) oid);
 	}
 
-	if (!catalog_sql_finalize(&query))
-	{
-		free(buf);
-		return false;
-	}
-
-	buf[pos++] = '}';
-	buf[pos] = '\0';
-
-	*text = buf;
-	return true;
-}
-
-
-static bool
-catalog_s_table_count_fetch(SQLiteQuery *query)
-{
-	int *count = (int *) query->context;
-	*count = sqlite3_column_int(query->ppStmt, 0);
-	return true;
+	return catalog_sql_finalize(&query);
 }
 
 
