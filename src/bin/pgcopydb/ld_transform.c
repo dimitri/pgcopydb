@@ -2698,7 +2698,41 @@ stream_add_value_in_json_array(LogicalMessageValue *value, JSON_Array *jsArray)
 				}
 				else
 				{
-					sformat(string, sizeof(string), "%f", value->val.float8);
+					/*
+					 * Emit the shortest decimal string that round-trips back to
+					 * the exact same IEEE-754 double: start at 15 significant
+					 * digits and increase up to the 17 required for a guaranteed
+					 * round-trip, stopping at the first precision that parses
+					 * back to the same value.
+					 *
+					 * This matters twice over during CDC replay: the value is
+					 * used both as an inserted/updated value AND, under REPLICA
+					 * IDENTITY FULL, as a WHERE-clause key for UPDATE/DELETE.
+					 *
+					 *   - The previous "%f" format truncated to 6 decimal places
+					 *     and silently corrupted float8 values that need more.
+					 *   - A fixed "%.17g" (or "%.17f") preserves precision but
+					 *     over-expands clean values: 5.99 becomes
+					 *     "5.9900000000000002", which then fails to match the
+					 *     stored numeric value 5.99 in a WHERE clause, so the
+					 *     UPDATE/DELETE silently affects zero rows.
+					 *
+					 * The shortest round-trip form keeps "5.99" as "5.99" while
+					 * still emitting "-216237.00000035969" in full when needed,
+					 * avoiding both failure modes. PostgreSQL accepts the "%g"
+					 * output (including scientific notation) as float input when
+					 * the value is bound as a query parameter.
+					 */
+					for (int precision = 15; precision <= 17; precision++)
+					{
+						sformat(string, sizeof(string), "%.*g",
+								precision, value->val.float8);
+
+						if (strtod(string, NULL) == value->val.float8)
+						{
+							break;
+						}
+					}
 				}
 
 				json_array_append_string(jsArray, string);
