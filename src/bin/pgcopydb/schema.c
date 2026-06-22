@@ -3083,6 +3083,71 @@ schema_list_table_attributes(PGSQL *pgsql, DatabaseCatalog *catalog)
 
 
 /*
+ * COPY BINARY safety blocklist — send functions known to produce
+ * alignment-unsafe wire encodings.
+ *
+ * Background: the COPY BINARY protocol streams raw output from each type's
+ * send function back-to-back, separated only by a 4-byte length word.  There
+ * is no inter-value padding.  On x86 (which tolerates unaligned loads) this
+ * works even when a value's natural alignment requirement exceeds its actual
+ * position in the stream.  On ARMv8 (Apple Silicon, AWS Graviton, …) the
+ * hardware enforces strict alignment: a load of a 4- or 8-byte value from an
+ * odd address raises SIGBUS / ASAN alignment fault inside the receiving
+ * backend.
+ *
+ * Why can't we detect this from the catalogs?
+ *
+ * pg_type carries typalign ('c', 's', 'i', 'd') but that describes the
+ * on-disk alignment of the stored value, not the alignment of the bytes
+ * emitted by the send function.  A send function is free to write any byte
+ * sequence it likes — it is not required to honour typalign in its output.
+ *
+ * tsvector is the canonical example: pg_type.typalign = 'i' (4 bytes), yet
+ * tsvectorsend() writes the lexeme array with internal 4-byte-aligned
+ * pointers relative to the start of the tsvector datum.  When the datum
+ * lands at an odd byte offset inside the COPY BINARY stream the pointer
+ * arithmetic inside tsvectorrecv() dereferences a misaligned address.
+ *
+ * There is no catalog flag for "my send output requires N-byte alignment of
+ * the first byte in the stream", so we maintain this explicit list.  Add a
+ * send function name here whenever its receiver is known to fault on strict-
+ * alignment hardware.
+ */
+static const char *binaryCopyBlocklist[] = {
+	"tsvectorsend",
+	NULL
+};
+
+/*
+ * sendFuncBlocked returns true when any comma-separated name in funcList
+ * matches an entry in binaryCopyBlocklist (whole-word match).
+ */
+static bool
+sendFuncBlocked(const char *funcList)
+{
+	for (int i = 0; binaryCopyBlocklist[i] != NULL; i++)
+	{
+		const char *name = binaryCopyBlocklist[i];
+		size_t nameLen = strlen(name);
+		const char *p = funcList;
+
+		while ((p = strstr(p, name)) != NULL)
+		{
+			bool startOk = (p == funcList) || (*(p - 1) == ',');
+			bool endOk = (*(p + nameLen) == '\0') || (*(p + nameLen) == ',');
+
+			if (startOk && endOk)
+			{
+				return true;
+			}
+			p += nameLen;
+		}
+	}
+	return false;
+}
+
+
+/*
  * getTableAttributeArray is the PGresult callback for the list_table_attributes
  * query.  Each row is one (table, column) pair; we insert it directly into
  * s_attr via catalog_add_s_attr.
@@ -3094,9 +3159,9 @@ getTableAttributeArray(void *ctx, PGresult *result)
 
 	int nTuples = PQntuples(result);
 
-	if (PQnfields(result) != 8)
+	if (PQnfields(result) != 10)
 	{
-		log_error("Query returned %d columns, expected 8", PQnfields(result));
+		log_error("Query returned %d columns, expected 10", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -3109,6 +3174,8 @@ getTableAttributeArray(void *ctx, PGresult *result)
 	int fnattisreplident = PQfnumber(result, "attisreplident");
 	int fnattisgenerated = PQfnumber(result, "attisgenerated");
 	int fnattidentity = PQfnumber(result, "attidentity");
+	int fnhasbinaryio = PQfnumber(result, "hasbinaryio");
+	int fntypsendfunc = PQfnumber(result, "typsendfunc");
 
 	for (int rowNumber = 0; rowNumber < nTuples && context->parsedOk; rowNumber++)
 	{
@@ -3156,6 +3223,20 @@ getTableAttributeArray(void *ctx, PGresult *result)
 		if (value != NULL && value[0] != '\0')
 		{
 			attr.attidentity = value[0];
+		}
+
+		value = PQgetvalue(result, rowNumber, fnhasbinaryio);
+		bool hasBinaryIO = (*value == 't');
+
+		if (!PQgetisnull(result, rowNumber, fntypsendfunc))
+		{
+			value = PQgetvalue(result, rowNumber, fntypsendfunc);
+			strlcpy(attr.atttypsend, value, sizeof(attr.atttypsend));
+			attr.attisbinarycompatible = hasBinaryIO && !sendFuncBlocked(attr.atttypsend);
+		}
+		else
+		{
+			attr.attisbinarycompatible = hasBinaryIO;
 		}
 
 		if (!catalog_add_s_attr(context->catalog, tableoid, &attr))

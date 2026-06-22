@@ -110,6 +110,8 @@ static char *sourceDBcreateDDLs[] = {
 	"  attnum integer, attypid integer, attname text, "
 	"  attisprimary bool, attisreplident bool, attisgenerated bool, "
 	"  attidentity text default '', "
+	"  attisbinarycompatible bool default true, "
+	"  atttypsend text default '', "
 	"  primary key(oid, attnum) "
 	")",
 
@@ -333,6 +335,8 @@ static char *filterDBcreateDDLs[] = {
 	"  attnum integer, attypid integer, attname text, "
 	"  attisprimary bool, attisreplident bool, attisgenerated bool, "
 	"  attidentity text default '', "
+	"  attisbinarycompatible bool default true, "
+	"  atttypsend text default '', "
 	"  primary key(oid, attnum) "
 	")",
 
@@ -462,6 +466,8 @@ static char *targetDBcreateDDLs[] = {
 	"  attnum integer, attypid integer, attname text, "
 	"  attisprimary bool, attisreplident bool, attisgenerated bool, "
 	"  attidentity text default '', "
+	"  attisbinarycompatible bool default true, "
+	"  atttypsend text default '', "
 	"  primary key(oid, attnum) "
 	")",
 
@@ -2801,8 +2807,9 @@ catalog_add_s_attr(DatabaseCatalog *catalog,
 	char *sql =
 		"insert into s_attr("
 		"oid, attnum, attypid, attname, "
-		"attisprimary, attisreplident, attisgenerated, attidentity)"
-		"values($1, $2, $3, $4, $5, $6, $7, $8)";
+		"attisprimary, attisreplident, attisgenerated, attidentity, "
+		"attisbinarycompatible, atttypsend)"
+		"values($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)";
 
 	/* store attidentity as a one-char string, or "" when not an identity col */
 	char identityStr[2] = { attr->attidentity, '\0' };
@@ -2828,7 +2835,16 @@ catalog_add_s_attr(DatabaseCatalog *catalog,
 			attr->attisgenerated ? 1 : 0, NULL
 		},
 
-		{ BIND_PARAMETER_TYPE_TEXT, "attidentity", 0, identityStr }
+		{ BIND_PARAMETER_TYPE_TEXT, "attidentity", 0, identityStr },
+
+		{
+			BIND_PARAMETER_TYPE_INT, "attisbinarycompatible",
+			attr->attisbinarycompatible ? 1 : 0, NULL
+		},
+
+		{
+			BIND_PARAMETER_TYPE_TEXT, "atttypsend", 0, attr->atttypsend
+		}
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -4286,6 +4302,69 @@ catalog_s_table_fetch_attrlist(SQLiteQuery *query)
 				bytes);
 	}
 
+	return true;
+}
+
+
+/*
+ * catalog_s_table_all_binary_compatible returns true in *allCompatible when
+ * every column of the given table has attisbinarycompatible = 1 in s_attr.
+ * Returns false when any column's type has a send function known to produce
+ * alignment-unsafe binary output (i.e., the column is on the blocklist).
+ */
+bool
+catalog_s_table_all_binary_compatible(DatabaseCatalog *catalog,
+									  SourceTable *table,
+									  bool *allCompatible)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_s_table_all_binary_compatible: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"select count(*) from s_attr "
+		" where oid = $1 and attisbinarycompatible = 0";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	BindParam params[1] = {
+		{ BIND_PARAMETER_TYPE_INT64, "oid", table->oid, NULL }
+	};
+
+	if (!catalog_sql_bind(&query, params, 1))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	int rc = catalog_sql_step(&query);
+
+	if (rc != SQLITE_ROW)
+	{
+		log_error("[SQLite %d: %s]: %s", rc, query.sql, sqlite3_errmsg(db));
+		(void) catalog_sql_finalize(&query);
+		return false;
+	}
+
+	int incompatCount = sqlite3_column_int(query.ppStmt, 0);
+
+	if (!catalog_sql_finalize(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	*allCompatible = (incompatCount == 0);
 	return true;
 }
 
