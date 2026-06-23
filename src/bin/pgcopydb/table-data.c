@@ -1291,7 +1291,7 @@ copydb_mark_table_as_done(CopyDataSpec *specs,
 	if (!summary_increment_timing(sourceDB,
 								  TIMING_SECTION_COPY_DATA,
 								  1, /* count */
-								  tableSpecs->sourceTable->bytes,
+								  tableSpecs->summary.bytesTransmitted,
 								  tableSpecs->summary.durationMs))
 	{
 		/* errors have already been logged */
