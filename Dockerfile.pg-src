@@ -1,0 +1,103 @@
+# syntax=docker/dockerfile:latest
+# Build pgcopydb against PostgreSQL compiled from source.
+# Used to diagnose build compatibility with unreleased PG versions
+# before packages are available in PGDG apt/yum.
+#
+# Usage:
+#   docker build -f Dockerfile.pg-src \
+#     --build-arg PGVERSION=19 \
+#     --build-arg PGTARBALL=https://ftp.postgresql.org/pub/source/v19beta1/postgresql-19beta1.tar.bz2 \
+#     --progress=plain \
+#     -t pgcopydb-pg-src .
+#
+# --progress=plain ensures full compiler output is visible.
+# The build will fail at the pgcopydb compile step if there are errors;
+# all warnings and errors from both stages appear in the output.
+
+FROM debian:12-slim AS pg-build
+
+ARG PGVERSION=19
+ARG PGTARBALL=https://ftp.postgresql.org/pub/source/v19beta1/postgresql-19beta1.tar.bz2
+ARG PGINSTALL=/opt/pgsrc
+
+# PostgreSQL meson build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bison \
+    build-essential \
+    ca-certificates \
+    curl \
+    flex \
+    gettext \
+    libicu-dev \
+    liblz4-dev \
+    libncurses-dev \
+    libpam-dev \
+    libreadline-dev \
+    libssl-dev \
+    libxml2-dev \
+    libxslt1-dev \
+    libzstd-dev \
+    meson \
+    ninja-build \
+    perl \
+    pkg-config \
+    python3 \
+    python3-pip \
+    zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /usr/src/postgresql
+
+RUN curl -fsSL "${PGTARBALL}" | tar -xj --strip-components=1
+
+# Build PostgreSQL with meson/ninja and install to ${PGINSTALL}
+RUN meson setup build \
+        --prefix="${PGINSTALL}" \
+        -Dssl=openssl \
+        -Dreadline=enabled \
+        -Dicu=enabled \
+        -Dlz4=enabled \
+        -Dzstd=enabled \
+        -Dlibxml=enabled \
+        -Dnls=disabled \
+        -Dtap_tests=disabled \
+        -Dplpython=disabled \
+        -Dplperl=disabled \
+        -Dpltcl=disabled \
+  && ninja -C build install
+
+# Verify install
+RUN "${PGINSTALL}/bin/pg_config" --version
+
+
+FROM pg-build AS pgcopydb-build
+
+# pgcopydb additional build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgc-dev \
+    libpq-dev \
+    make \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /usr/src/pgcopydb
+
+COPY Makefile GIT-VERSION-GEN GIT-VERSION-FILE version ./
+
+COPY src/bin/lib/sqlite src/bin/lib/sqlite
+RUN make -C src/bin/lib/sqlite clean sqlite3.o sqlite3
+
+COPY src/bin/lib/jenkins src/bin/lib/jenkins
+COPY src/bin/lib/libs    src/bin/lib/libs
+COPY src/bin/lib/log     src/bin/lib/log
+COPY src/bin/lib/parson  src/bin/lib/parson
+COPY src/bin/lib/pg      src/bin/lib/pg
+COPY src/bin/lib/subcommands.c src/bin/lib/subcommands.c
+COPY src/bin/lib/uthash  src/bin/lib/uthash
+COPY src/bin/Makefile    src/bin/Makefile
+COPY src/bin/pgcopydb    src/bin/pgcopydb
+
+# Build pgcopydb against the from-source PostgreSQL installation.
+# PG_CONFIG points to the freshly-built pg_config.
+# We do NOT silence warnings so that all build issues are visible.
+# The build will fail here if there are compilation errors.
+RUN PG_CONFIG="${PGINSTALL}/bin/pg_config" make -s -j$(nproc) 2>&1
