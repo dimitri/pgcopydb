@@ -1097,8 +1097,11 @@ ld_store_rotate_outputdb(StreamSpecs *specs, uint64_t commit_lsn)
  *
  * dry_run=true logs what would be deleted without touching the filesystem.
  * On completion, *filesDeleted and *bytesFreed are updated with counts.
- * VACUUM is run on sourceDB after deletion so that the freed freelist pages
- * are returned (source.db is small; the cost is negligible).
+ *
+ * No VACUUM is issued: source.db contains the full schema catalog and can be
+ * tens of megabytes; vacuuming it periodically for the sake of ~150 bytes per
+ * deleted cdc_files row is poor trade.  SQLite recycles the freed freelist
+ * pages automatically when the receive process inserts new cdc_files rows.
  */
 bool
 ld_store_cleanup_cdc_files(StreamSpecs *specs,
@@ -1316,12 +1319,6 @@ ld_store_cleanup_cdc_files(StreamSpecs *specs,
 				 freedPretty,
 				 LSN_FORMAT_ARGS(sentinel.replay_lsn));
 
-		/* reclaim freed SQLite freelist pages in the catalog */
-		if (!catalog_execute(sourceDB, "VACUUM"))
-		{
-			log_warn("VACUUM of source catalog after CDC cleanup failed, "
-					 "disk space may not be fully reclaimed");
-		}
 	}
 
 	return success;
