@@ -100,7 +100,7 @@ if [ "${truncate_sql}" != "TRUNCATE ONLY partitioned_target.events" ]; then
     exit 1
 fi
 
-pgcopydb stream cleanup
+pgcopydb stream drop
 
 final_count=$(psql -At -d "${PGCOPYDB_TARGET_PGURI}" \
                    -c 'select count(*) from partitioned_target.events')

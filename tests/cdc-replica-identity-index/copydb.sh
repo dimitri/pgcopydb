@@ -49,7 +49,7 @@ pgcopydb stream sentinel set apply
 pgcopydb stream catchup --resume --endpos "${lsn}" --notice
 
 # cleanup replication slot + origin
-pgcopydb stream cleanup
+pgcopydb stream drop
 
 # verify source and target match for the table we care about.
 #

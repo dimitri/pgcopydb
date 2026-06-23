@@ -61,7 +61,7 @@ pgcopydb stream sentinel get
 
 # make sure the inject service has had time to see the final sentinel values
 sleep 2
-pgcopydb stream cleanup
+pgcopydb stream drop
 
 sql="select count(*), sum(amount) from payment"
 psql -d ${PGCOPYDB_SOURCE_PGURI} -c "${sql}" > /tmp/s.out

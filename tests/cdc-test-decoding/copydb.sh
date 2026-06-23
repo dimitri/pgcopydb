@@ -113,6 +113,13 @@ psql -AtqX -d ${PGCOPYDB_TARGET_PGURI} \
 diff /tmp/src_quotes.txt /tmp/tgt_quotes.txt
 
 #
+# Stream cleanup between rounds: remove already-applied CDC file pairs.
+# replay_lsn is now set (round 1 committed all transactions); this should
+# prune the closed output.db/replay.db files whose endpos < replay_lsn.
+#
+pgcopydb stream cleanup
+
+#
 # Round 2: --replay-no-op-updates
 #
 # Inject a second no-op UPDATE on noop_update_test (REPLICA IDENTITY FULL).
@@ -138,4 +145,4 @@ echo "noop_update_count with --replay-no-op-updates: ${noop_update_count}"
 test "${noop_update_count}" -ge 1
 
 # cleanup
-pgcopydb stream cleanup
+pgcopydb stream drop

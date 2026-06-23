@@ -68,5 +68,18 @@ pgcopydb stream catchup --resume --endpos "${lsn}" --max-replaydb-size 1kB -vv
 
 verify row-counts
 
-# cleanup
+#
+# stream cleanup: remove already-applied CDC file pairs to reclaim disk space.
+# Files whose endpos < sentinel.replay_lsn are safe to delete; the slot will
+# never re-deliver those transactions.
+#
+ls -la ${XDG_DATA_HOME:-/var/lib/postgres/.local/share}/pgcopydb/
+
 pgcopydb stream cleanup
+
+ls -la ${XDG_DATA_HOME:-/var/lib/postgres/.local/share}/pgcopydb/
+
+verify cleanup
+
+# tear down the replication slot and origin
+pgcopydb stream drop
