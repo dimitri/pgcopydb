@@ -625,6 +625,13 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 
 	(void) semaphore_unlock(&(sourceDB->sema));
 
+	/* build indexes after bulk load — much faster than maintaining them inline */
+	if (!catalog_create_indexes(sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	return true;
 }
 
@@ -1532,6 +1539,13 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 
 	(void) semaphore_unlock(&(filtersDB->sema));
 
+	/* build indexes after bulk load — much faster than maintaining them inline */
+	if (!catalog_create_indexes(filtersDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	return true;
 }
 
@@ -1665,6 +1679,20 @@ copydb_prepare_target_catalog(CopyDataSpec *specs)
 	{
 		/* errors have already been logged */
 		(void) semaphore_unlock(&(targetDB->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(targetDB->sema));
+
+	/* build indexes after bulk load — much faster than maintaining them inline */
+	if (!catalog_create_indexes(targetDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!semaphore_lock(&(targetDB->sema)))
+	{
 		return false;
 	}
 

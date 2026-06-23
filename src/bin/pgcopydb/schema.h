@@ -382,6 +382,17 @@ typedef struct CatalogSection
 	uint64_t durationMs;
 } CatalogSection;
 
+/*
+ * Prepared-statement cache entry — forward declared here so DatabaseCatalog
+ * can embed the hash-table pointer.  The full definition lives in catalog.h.
+ */
+typedef struct CachedStmt
+{
+	const char *sql;            /* hash key (pointer identity of a literal) */
+	sqlite3_stmt *stmt;
+	UT_hash_handle hh;
+} CachedStmt;
+
 typedef struct DatabaseCatalog
 {
 	DatabaseCatalogType type;
@@ -394,6 +405,7 @@ typedef struct DatabaseCatalog
 	sqlite3 *db;
 
 	Semaphore sema;
+	CachedStmt *stmtCache;      /* prepared-statement cache, keyed by SQL ptr */
 } DatabaseCatalog;
 
 
