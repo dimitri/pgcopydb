@@ -1318,7 +1318,6 @@ ld_store_cleanup_cdc_files(StreamSpecs *specs,
 				 (unsigned long long) *filesDeleted,
 				 freedPretty,
 				 LSN_FORMAT_ARGS(sentinel.replay_lsn));
-
 	}
 
 	return success;
