@@ -98,9 +98,28 @@ vacuum_supervisor(CopyDataSpec *specs)
 		return false;
 	}
 
+	/*
+	 * Close the catalog before forking so that each vacuum worker opens its
+	 * own SQLite connection.  Inheriting a forked sqlite3* handle causes WAL
+	 * write-lock conflicts between sibling workers even when the SysV
+	 * semaphore is held (issue #881).
+	 */
+	if (!catalog_close(sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (!vacuum_start_workers(specs))
 	{
 		log_error("Failed to start vacuum workers, see above for details");
+		return false;
+	}
+
+	/* reopen in the supervisor process after the fork */
+	if (!catalog_open(sourceDB))
+	{
+		/* errors have already been logged */
 		return false;
 	}
 

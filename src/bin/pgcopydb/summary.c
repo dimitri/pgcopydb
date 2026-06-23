@@ -345,6 +345,64 @@ summary_delete_table(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 
 
 /*
+ * summary_delete_incomplete_table_copy removes every summary row for a table
+ * COPY that started but never finished (done_time_epoch IS NULL).  These
+ * rows carry a pid from the previous run.  On a resumed run the existing
+ * code calls kill(old_pid, 0) to decide whether that pid is still alive;
+ * inside a Docker container whose PID namespace was reset the same numeric
+ * pid is often reused by an unrelated process, so kill() returns 0 and
+ * pgcopydb incorrectly refuses to copy the table (issue #692).
+ *
+ * Deleting the incomplete rows here, before any worker is forked, turns the
+ * affected tables back into "not yet started" so that workers copy them from
+ * scratch.  Completed rows (done_time_epoch IS NOT NULL) are preserved so
+ * that --resume still skips tables that finished in the previous run.
+ */
+bool
+summary_delete_incomplete_table_copy(DatabaseCatalog *catalog)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: summary_delete_incomplete_table_copy: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"delete from summary "
+		" where tableoid is not null "
+		"   and done_time_epoch is null";
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
  * summary_add_table INSERTs a SourceTable summary entry to our internal
  * catalogs database.
  */

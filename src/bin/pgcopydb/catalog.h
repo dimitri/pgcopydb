@@ -660,6 +660,7 @@ typedef struct ProcessInfo
 
 bool catalog_upsert_process_info(DatabaseCatalog *catalog, ProcessInfo *ps);
 bool catalog_delete_process(DatabaseCatalog *catalog, pid_t pid);
+bool catalog_delete_all_process_entries(DatabaseCatalog *catalog);
 
 bool catalog_iter_s_table_in_copy(DatabaseCatalog *catalog,
 								  void *context,
