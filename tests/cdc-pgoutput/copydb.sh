@@ -174,7 +174,7 @@ echo "source actor count: ${src_count}, target actor count: ${tgt_count}"
 test "${src_count}" -eq "${tgt_count}"
 
 # cleanup (drops the auto-managed publication for pgoutput)
-pgcopydb stream drop
+pgcopydb stream cleanup
 
 #
 # Validate that the auto-managed publication was dropped by cleanup.

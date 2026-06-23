@@ -74,4 +74,4 @@ echo "injected actor on target (should be 1): ${actor_on_target}"
 test "${actor_on_target}" -eq 1
 
 # Drop the publication created by pgcopydb
-pgcopydb stream drop
+pgcopydb stream cleanup

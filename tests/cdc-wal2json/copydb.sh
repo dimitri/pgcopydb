@@ -119,4 +119,4 @@ psql -AtqX -d ${PGCOPYDB_TARGET_PGURI} \
 diff /tmp/src_float8.txt /tmp/tgt_float8.txt
 
 # cleanup
-pgcopydb stream drop
+pgcopydb stream cleanup

@@ -41,8 +41,8 @@ static void cli_stream_receive(int argc, char **argv);
 static void cli_stream_apply(int argc, char **argv);
 
 static void cli_stream_setup(int argc, char **argv);
-static void cli_stream_drop(int argc, char **argv);
 static void cli_stream_cleanup(int argc, char **argv);
+static void cli_stream_prune(int argc, char **argv);
 
 static void cli_stream_prefetch(int argc, char **argv);
 static void cli_stream_catchup(int argc, char **argv);
@@ -70,10 +70,10 @@ static CommandLine stream_setup_command =
 		cli_stream_getopts,
 		cli_stream_setup);
 
-static CommandLine stream_drop_command =
+static CommandLine stream_cleanup_command =
 	make_command(
-		"drop",
-		"Drop source and target systems for logical decoding",
+		"cleanup",
+		"Cleanup source and target systems for logical decoding",
 		"",
 		"  --source         Postgres URI to the source database\n"
 		"  --target         Postgres URI to the target database\n"
@@ -84,11 +84,11 @@ static CommandLine stream_drop_command =
 		"  --slot-name      Stream changes recorded by this slot\n"
 		"  --origin         Name of the Postgres replication origin\n",
 		cli_stream_getopts,
-		cli_stream_drop);
+		cli_stream_cleanup);
 
-static CommandLine stream_cleanup_command =
+static CommandLine stream_prune_command =
 	make_command(
-		"cleanup",
+		"prune",
 		"Remove already-applied CDC files from disk to reclaim disk space",
 		" [ --dir ] [ --dry-run ] [ --host ] [ --port ]",
 		"  --dir            Work directory to use\n"
@@ -96,7 +96,7 @@ static CommandLine stream_cleanup_command =
 		"  --host           Host of the running pgcopydb follow process to connect to\n"
 		"  --port           Port of the running pgcopydb follow process to connect to\n",
 		cli_stream_getopts,
-		cli_stream_cleanup);
+		cli_stream_prune);
 
 static CommandLine stream_prefetch_command =
 	make_command(
@@ -187,8 +187,8 @@ static CommandLine stream_apply_command =
 
 static CommandLine *stream_subcommands[] = {
 	&stream_setup_command,
-	&stream_drop_command,
 	&stream_cleanup_command,
+	&stream_prune_command,
 	&stream_prefetch_command,
 	&stream_catchup_command,
 	&stream_replay_command,
@@ -687,12 +687,11 @@ cli_stream_setup(int argc, char **argv)
 
 
 /*
- * cli_stream_drop drops source sentinel table and replication slot, and drops
- * target replication origin.  This is the end-of-migration teardown step,
- * renamed from "cleanup" to free that name for CDC file reclamation.
+ * cli_stream_cleanup cleans-up by dropping source sentinel table and
+ * replication slot, and dropping target replication origin.
  */
 static void
-cli_stream_drop(int argc, char **argv)
+cli_stream_cleanup(int argc, char **argv)
 {
 	CopyDataSpec copySpecs = { 0 };
 
@@ -759,7 +758,7 @@ cli_stream_drop(int argc, char **argv)
 
 
 /*
- * cli_stream_cleanup removes already-applied CDC output.db / replay.db file
+ * cli_stream_prune removes already-applied CDC output.db / replay.db file
  * pairs from disk to reclaim disk space during long-running migrations.
  *
  * Safe deletion criterion: endpos < sentinel.replay_lsn AND done_time_epoch
@@ -774,7 +773,7 @@ cli_stream_drop(int argc, char **argv)
  *  - Direct mode (--dir, no --host): opens source.db directly.
  */
 static void
-cli_stream_cleanup(int argc, char **argv)
+cli_stream_prune(int argc, char **argv)
 {
 	if (argc > 0)
 	{

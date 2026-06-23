@@ -78,7 +78,7 @@ select count(*) as null_text_sqls from replay
 EOF
 
 # cleanup files and replication slot now
-pgcopydb stream drop
+pgcopydb stream cleanup
 
 # check how many rows we have on source and target
 sql="select count(*), sum(f1) from table_a"

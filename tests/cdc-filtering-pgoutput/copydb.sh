@@ -126,7 +126,7 @@ echo "source actor: ${src_actor}, target actor: ${tgt_actor}"
 test "${src_actor}" -eq "${tgt_actor}"
 
 # cleanup (drops the auto-managed publication for pgoutput)
-pgcopydb stream drop
+pgcopydb stream cleanup
 
 #
 # Validate that the auto-managed publication was dropped by cleanup.

@@ -125,4 +125,4 @@ kill -TERM ${COPROC_PID}
 wait ${COPROC_PID}
 
 # cleanup
-pgcopydb stream drop
+pgcopydb stream cleanup

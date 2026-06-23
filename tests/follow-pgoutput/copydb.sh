@@ -79,7 +79,7 @@ pgcopydb stream sentinel get
 
 # make sure the inject service has had time to see the final sentinel values
 sleep 2
-pgcopydb stream drop
+pgcopydb stream cleanup
 
 #
 # Validate that the auto-managed publication was dropped by cleanup.

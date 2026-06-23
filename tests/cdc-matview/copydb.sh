@@ -74,4 +74,4 @@ psql -AtqX -d "${PGCOPYDB_TARGET_PGURI}" \
 
 diff /tmp/src_mv1.txt /tmp/tgt_mv1.txt
 
-pgcopydb stream drop
+pgcopydb stream cleanup
