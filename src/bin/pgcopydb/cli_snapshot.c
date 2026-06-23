@@ -343,7 +343,16 @@ cli_create_snapshot(int argc, char **argv)
 		/*
 		 * Make sure to register our setup here, as usually the command
 		 * `pgcopydb snapshot` is used first.
+		 *
+		 * snapshot is filter-agnostic: it holds the snapshot connection open
+		 * but never reads or writes filter-dependent catalog data.  Setting
+		 * skipFilterCheck causes setup to be registered with filters = NULL
+		 * (not SOURCE_FILTER_TYPE_NONE), which signals to subsequent
+		 * filter-owner commands (e.g. clone --filters) that no prior owner
+		 * has populated the source catalog, so no invalidation is needed.
 		 */
+		copySpecs.skipFilterCheck = true;
+
 		if (!catalog_register_setup_from_specs(&copySpecs))
 		{
 			/* errors have already been logged */

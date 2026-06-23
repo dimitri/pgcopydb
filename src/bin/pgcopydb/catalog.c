@@ -14,6 +14,7 @@
 #include "sqlite3.h"
 
 #include "catalog.h"
+#include "cli_root.h"
 #include "pqexpbuffer.h"
 #include "copydb.h"
 #include "defaults.h"
@@ -241,6 +242,18 @@ static char *sourceDBcreateTableDDLs[] = {
 	"  last_txn_end_lsn    pg_lsn, "             /* NULL = transaction still open */
 	"  last_txn_complete   integer, "            /* 1 = had COMMIT or ROLLBACK */
 	"  last_txn_processed  integer"              /* 1 = fully written/applied */
+	")",
+
+	/*
+	 * One row per pgcopydb invocation that opens this catalog.  Persists
+	 * across filter invalidation (not cleared by catalog_delete_source_schema_data)
+	 * so that operators can trace the exact command sequence that led to the
+	 * current state.  Dropped and recreated only on --restart.
+	 */
+	"create table command_log("
+	"  id integer primary key, "
+	"  started_at integer not null default (strftime('%s', 'now')), "
+	"  cmdline text not null"
 	")",
 
 	/* All indexes other than s_i_tableoid / s_c_indexoid stay here so they are
@@ -604,7 +617,8 @@ static char *sourceDBdropDDLs[] = {
 	"drop table if exists s_table_indexes_done",
 
 	"drop table if exists sentinel",
-	"drop table if exists timeline_history"
+	"drop table if exists timeline_history",
+	"drop table if exists command_log"
 };
 
 
@@ -789,13 +803,23 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 				   tpguri.pguri,
 				   copySpecs->sourceSnapshot.snapshot);
 
+		/*
+		 * Filter-agnostic commands (snapshot, sentinel) register setup with
+		 * filters = NULL so that a subsequent filter-owner command (clone
+		 * --filters) can distinguish "no owner has ever claimed this catalog"
+		 * from "an owner explicitly ran without filters".  The latter case
+		 * (SOURCE_FILTER_TYPE_NONE stored by a real owner) requires catalog
+		 * invalidation; the former does not.
+		 */
+		const char *filterJson = copySpecs->skipFilterCheck ? NULL : json;
+
 		if (!catalog_register_setup(sourceDB,
 									spguri.pguri,
 									tpguri.pguri,
 									copySpecs->sourceSnapshot.snapshot,
 									copySpecs->splitTablesLargerThan.bytes,
 									copySpecs->splitMaxParts,
-									json))
+									filterJson))
 		{
 			/* errors have already been logged */
 			json_free_serialized_string(json);
@@ -933,16 +957,59 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 			}
 		}
 
-		if (!streq(json, setup->filters))
+		if (copySpecs->skipFilterCheck)
+		{
+			/*
+			 * Filter-agnostic commands (snapshot, sentinel) open an existing
+			 * catalog but have no stake in filter consistency — they neither
+			 * read nor write filter-dependent data.  Skip the whole check.
+			 */
+			log_debug("Skipping filter consistency check for filter-agnostic command");
+		}
+		else if (setup->filters == NULL)
+		{
+			/*
+			 * Case 0: catalog was first registered by a filter-agnostic
+			 * command (e.g. pgcopydb snapshot with skipFilterCheck=true),
+			 * which stored filters = NULL as a sentinel meaning "no filter
+			 * owner has ever claimed this catalog yet".
+			 *
+			 * The source catalog sections are therefore empty (allDone=false),
+			 * so no invalidation is needed — just write the current filter and
+			 * proceed.
+			 */
+			log_info("Catalog was initialized by a filter-agnostic command; "
+					 "registering current command filters");
+
+			if (!catalog_update_filters(sourceDB, json))
+			{
+				log_error("Failed to register filters in catalog database");
+				json_free_serialized_string(json);
+				return false;
+			}
+
+			setup->filters = strdup(json);
+		}
+		else if (!streq(json, setup->filters))
 		{
 			if (strstr(setup->filters, "SOURCE_FILTER_TYPE_NONE") != NULL &&
 				strstr(json, "SOURCE_FILTER_TYPE_NONE") == NULL)
 			{
 				/*
-				 * Catalog was created without filters (e.g. by pgcopydb
-				 * snapshot) and the current command uses filters (e.g.
-				 * pgcopydb clone --filters). Update the stored filter so
-				 * subsequent commands see the right setup.
+				 * Case 1: a filter-owner command previously ran without
+				 * filters (SOURCE_FILTER_TYPE_NONE) and may have populated
+				 * the source catalog; the current command introduces filters.
+				 * Update the stored filter and — only when the catalog was
+				 * actually populated — invalidate the stale unfiltered data so
+				 * fetchCatalogs=true forces a fresh fetch with the new filter.
+				 *
+				 * catalog_iter_s_table_init queries s_table directly (no
+				 * runtime filter join), so stale rows would cause all tables
+				 * to be copied regardless of --filters.
+				 *
+				 * Also reset the filter catalog (filterDB) if the source
+				 * catalog has data: it holds OID-based filter data built
+				 * against the old unfiltered view and must be rebuilt.
 				 */
 				log_info("Current filtering setup is: %s", json);
 				log_info("Catalog filtering setup is: %s", setup->filters);
@@ -953,7 +1020,7 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 				if (!catalog_update_filters(sourceDB, json))
 				{
 					log_error("Failed to update filters in catalog database");
-
+					json_free_serialized_string(json);
 					return false;
 				}
 
@@ -964,11 +1031,84 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 				setup->filters = strdup(json);
 
 				log_info("Catalog filters updated to: %s", setup->filters);
+
+				/*
+				 * Only invalidate when the source catalog was actually
+				 * populated by the prior no-filter run.  If it is empty (e.g.
+				 * the prior command was interrupted before fetch, or was
+				 * itself a filter-agnostic command that somehow stored NONE),
+				 * the DELETE statements and filterDB reset are unnecessary.
+				 */
+				int sourceHasData = 0;
+				{
+					char *existsSql =
+						"select exists(select 1 from s_table limit 1)";
+					SQLiteQuery existsQuery = { 0 };
+
+					if (!catalog_sql_prepare(sourceDB->db,
+											 existsSql,
+											 &existsQuery))
+					{
+						/* errors have already been logged */
+						json_free_serialized_string(json);
+						return false;
+					}
+
+					if (catalog_sql_step(&existsQuery) == SQLITE_ROW)
+					{
+						sourceHasData =
+							sqlite3_column_int(existsQuery.ppStmt, 0);
+					}
+
+					if (!catalog_sql_finalize(&existsQuery))
+					{
+						/* errors have already been logged */
+						json_free_serialized_string(json);
+						return false;
+					}
+				}
+
+				if (sourceHasData)
+				{
+					if (!catalog_delete_source_schema_data(sourceDB))
+					{
+						log_error("Failed to invalidate source catalog data "
+								  "after filter update");
+						json_free_serialized_string(json);
+						return false;
+					}
+
+					DatabaseCatalog *filterCatalog =
+						&(copySpecs->catalogs.filter);
+
+					if (filterCatalog->db != NULL)
+					{
+						if (!semaphore_lock(&(filterCatalog->sema)))
+						{
+							/* errors have already been logged */
+							json_free_serialized_string(json);
+							return false;
+						}
+
+						if (!catalog_drop_schema(filterCatalog) ||
+							!catalog_create_schema(filterCatalog) ||
+							!catalog_create_indexes(filterCatalog))
+						{
+							log_error("Failed to reset filter catalog "
+									  "after filter update");
+							(void) semaphore_unlock(&(filterCatalog->sema));
+							json_free_serialized_string(json);
+							return false;
+						}
+
+						(void) semaphore_unlock(&(filterCatalog->sema));
+					}
+				}
 			}
 			else if (strstr(setup->filters, "SOURCE_FILTER_TYPE_NONE") == NULL &&
 					 strstr(json, "SOURCE_FILTER_TYPE_NONE") == NULL)
 			{
-				/* Both sides have filters but they differ — genuine conflict. */
+				/* Case 2: both sides have filters but they differ — conflict. */
 				log_info("Current filtering setup is: %s", json);
 				log_info("Catalog filtering setup is: %s", setup->filters);
 				log_error("Catalogs at \"%s\" have been setup for a different "
@@ -976,17 +1116,18 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 						  "see above for details",
 						  sourceDB->dbfile);
 
+				json_free_serialized_string(json);
 				return false;
 			}
 			else if (strstr(setup->filters, "SOURCE_FILTER_TYPE_NONE") == NULL &&
 					 strstr(json, "SOURCE_FILTER_TYPE_NONE") != NULL)
 			{
 				/*
-				 * Catalog was created with filters; the current command has
-				 * none (e.g. pgcopydb list table-parts, pgcopydb stream
-				 * sentinel). These read-only commands operate on the already-
-				 * filtered catalog data and do not need --filters repeated.
-				 * Silently adopt the catalog's stored filter.
+				 * Case 3: catalog was created with filters; the current
+				 * command has none (e.g. pgcopydb list table-parts,
+				 * pgcopydb stream sentinel).  These read-only commands
+				 * operate on the already-filtered catalog data and do not
+				 * need --filters repeated.  Silently adopt the stored filter.
 				 */
 				log_debug("Adopting catalog's stored filters for this command "
 						  "(catalog: %s)",
@@ -1002,6 +1143,7 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 						  "see above for details",
 						  sourceDB->dbfile);
 
+				json_free_serialized_string(json);
 				return false;
 			}
 		}
@@ -1039,6 +1181,17 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 	}
 
 	json_free_serialized_string(json);
+
+	/*
+	 * Record this invocation in the command log so operators can trace the
+	 * exact sequence of commands that led to the current catalog state.
+	 * Best-effort: a failure here does not abort the command.
+	 */
+	if (!catalog_log_command(&(copySpecs->catalogs.source)))
+	{
+		log_warn("Failed to write command log entry to catalog \"%s\"",
+				 copySpecs->catalogs.source.dbfile);
+	}
 
 	return true;
 }
@@ -9373,6 +9526,171 @@ catalog_delete_all_process_entries(DatabaseCatalog *catalog)
 	}
 
 	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
+ * catalog_delete_source_schema_data clears all source catalog DATA rows
+ * while preserving rows that must survive a filter change: setup,
+ * replication_slot, process, timings, sentinel, cdc_files,
+ * timeline_history, and pipeline_state.
+ *
+ * Called when the stored filter is updated from SOURCE_FILTER_TYPE_NONE to
+ * a real filter (Case 1 in catalog_register_setup_from_specs).  Clearing
+ * the data forces fetchCatalogs=true on the next call so the catalog is
+ * re-populated from PostgreSQL using the new filter.
+ */
+bool
+catalog_delete_source_schema_data(DatabaseCatalog *catalog)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_delete_source_schema_data: db is NULL");
+		return false;
+	}
+
+	static char *sqls[] = {
+		/* delete in FK-safe order: dependents first, then referenced tables */
+		"delete from summary",
+		"delete from s_table_parts_done",
+		"delete from s_table_indexes_done",
+		"delete from vacuum_summary",
+		"delete from s_table_chksum",
+		"delete from s_table_size",
+		"delete from s_table_part",
+		"delete from s_attr",
+		"delete from s_constraint",
+		"delete from s_index",
+		"delete from s_depend",
+		"delete from s_seq",
+		"delete from s_matview",
+		"delete from s_table",
+		"delete from s_namespace",
+		"delete from s_database_property",
+		"delete from s_database",
+		"delete from catnames",
+
+		/* clear fetched flags last so allDone=false forces a re-fetch */
+		"delete from section"
+	};
+
+	int count = sizeof(sqls) / sizeof(sqls[0]);
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_begin(catalog, false))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	for (int i = 0; i < count; i++)
+	{
+		if (!catalog_execute(catalog, sqls[i]))
+		{
+			/* errors have already been logged */
+			(void) catalog_execute(catalog, "ROLLBACK");
+			(void) semaphore_unlock(&(catalog->sema));
+			return false;
+		}
+	}
+
+	if (!catalog_commit(catalog))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
+ * catalog_log_command records the current pgcopydb invocation in the
+ * command_log table of the source catalog.  This provides an audit trail for
+ * diagnosing filter-related issues and other operational problems: operators
+ * can inspect `sqlite3 source.db "select * from command_log"` to see exactly
+ * which commands ran against a catalog directory and in what order.
+ *
+ * The full command line is taken from the pgcopydb_cmdline global, which is
+ * populated in main() from argc/argv before any other code runs.
+ *
+ * Failure is non-fatal: errors are logged at WARN level and the caller
+ * continues.  Never call this inside a held semaphore or open transaction.
+ */
+bool
+catalog_log_command(DatabaseCatalog *catalog)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		return true;
+	}
+
+	/*
+	 * Only one row per user-invoked command.  Two guards:
+	 *
+	 * 1. already_logged: catalog_init_from_specs can be called more than once
+	 *    in a single command (e.g. restore pre-data calls it explicitly, then
+	 *    copydb_fetch_source_catalog_setup calls it again).  The static flag
+	 *    ensures only the first call logs; subsequent calls in the same process
+	 *    are no-ops.  Fork'd children inherit already_logged=true once the
+	 *    parent has logged, so they are also silenced by this guard.
+	 *
+	 * 2. getpid() != getpgid(0): guards the race where a child is forked
+	 *    before the parent's first catalog_log_command call.  main() calls
+	 *    setpgrp() so the top-level process has PID==PGID; fork-only children
+	 *    inherit the parent's PGID but have a different PID.
+	 */
+	static bool already_logged = false;
+
+	if (already_logged || getpid() != getpgid(0))
+	{
+		return true;
+	}
+
+	char *sql = "insert into command_log(cmdline) values($1)";
+
+	SQLiteQuery query = { 0 };
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_TEXT, "cmdline", 0, pgcopydb_cmdline },
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	already_logged = true;
 
 	return true;
 }

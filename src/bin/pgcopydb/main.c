@@ -15,6 +15,7 @@
 #endif
 
 #include "parson.h"
+#include "pqexpbuffer.h"
 
 #include "cli_root.h"
 #include "copydb.h"
@@ -29,6 +30,7 @@
 
 char pgcopydb_argv0[MAXPGPATH];
 char pgcopydb_program[MAXPGPATH];
+char *pgcopydb_cmdline = NULL;
 
 char *ps_buffer;                /* will point to argv area */
 size_t ps_buffer_size;          /* space determined at run time */
@@ -115,6 +117,18 @@ main(int argc, char **argv)
 	 * environment variable.
 	 */
 	strlcpy(pgcopydb_argv0, argv[0], MAXPGPATH);
+
+	PQExpBufferData cmdlineBuf;
+	initPQExpBuffer(&cmdlineBuf);
+	for (int i = 0; i < argc; i++)
+	{
+		if (i > 0)
+		{
+			appendPQExpBufferChar(&cmdlineBuf, ' ');
+		}
+		appendPQExpBufferStr(&cmdlineBuf, argv[i]);
+	}
+	pgcopydb_cmdline = cmdlineBuf.data;
 	if (env_exists("PGCOPYDB_DEBUG_BIN_PATH"))
 	{
 		if (!get_env_copy("PGCOPYDB_DEBUG_BIN_PATH", pgcopydb_program, MAXPGPATH))

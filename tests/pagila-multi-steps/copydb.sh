@@ -48,3 +48,8 @@ wait ${COPROC_PID}
 
 pgcopydb compare schema
 pgcopydb compare data
+
+WORKDIR=${TMPDIR:-/tmp}/pgcopydb
+sqlite3 -init /dev/null -header -column \
+  "${WORKDIR}/schema/source.db" \
+  "select id, datetime(started_at, 'unixepoch') as started_at, cmdline from command_log"

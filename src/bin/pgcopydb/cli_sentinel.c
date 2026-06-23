@@ -925,6 +925,14 @@ cli_sentinel_init_specs(CopyDataSpec *copySpecs)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	/*
+	 * sentinel commands are filter-agnostic: they manage CDC state (start/end
+	 * LSN, apply mode) and never read or write filter-dependent catalog data.
+	 * Skip the filter consistency check so that sentinel works correctly both
+	 * before and after a filter-aware clone without triggering case-3 adoption.
+	 */
+	copySpecs->skipFilterCheck = true;
+
 	if (!catalog_init_from_specs(copySpecs))
 	{
 		log_error("Failed to initialize pgcopydb internal catalogs");
