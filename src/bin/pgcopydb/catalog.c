@@ -235,23 +235,25 @@ static char *sourceDBcreateTableDDLs[] = {
  *   s_c_indexoid — s_constraint rows are joined to s_index by indexoid
  */
 static char *sourceDBcreateIndexDDLs[] = {
-	"create index s_d_p_oid on s_database_property(datname)",
-	"create index s_n_rlname on s_namespace(restore_list_name)",
-	"create unique index s_t_qname on s_table(qname)",
-	"create unique index s_t_rlname on s_table(restore_list_name)",
-	"create unique index s_mv_rlname on s_matview(restore_list_name)",
-	"create unique index s_mv_qname on s_matview(nspname, relname)",
-	"create unique index s_ts_oid on s_table_size(oid)",
-	"create index s_a_oid_attname on s_attr(oid, attname)",
+	"create index if not exists s_d_p_oid on s_database_property(datname)",
+	"create index if not exists s_n_rlname on s_namespace(restore_list_name)",
+	"create unique index if not exists s_t_qname on s_table(qname)",
+	"create unique index if not exists s_t_rlname on s_table(restore_list_name)",
+	"create unique index if not exists s_mv_rlname on s_matview(restore_list_name)",
+	"create unique index if not exists s_mv_qname on s_matview(nspname, relname)",
+	"create unique index if not exists s_ts_oid on s_table_size(oid)",
+	"create index if not exists s_a_oid_attname on s_attr(oid, attname)",
 
 	/* index for filtering out generated columns */
-	"create index s_a_attisgenerated on s_attr(attisgenerated) where attisgenerated",
+	"create index if not exists s_a_attisgenerated on s_attr(attisgenerated) "
+	"  where attisgenerated",
 
-	"create unique index s_i_rlname on s_index(restore_list_name)",
-	"create index s_i_tableoid on s_index(tableoid)",
-	"create index s_c_indexoid on s_constraint(indexoid)",
-	"create index s_s_rlname on s_seq(restore_list_name)",
-	"create unique index summary_extoid on summary(extoid) where extoid is not null"
+	"create unique index if not exists s_i_rlname on s_index(restore_list_name)",
+	"create index if not exists s_i_tableoid on s_index(tableoid)",
+	"create index if not exists s_c_indexoid on s_constraint(indexoid)",
+	"create index if not exists s_s_rlname on s_seq(restore_list_name)",
+	"create unique index if not exists summary_extoid on summary(extoid) "
+	"  where extoid is not null"
 };
 
 
@@ -412,22 +414,23 @@ static char *filterDBcreateTableDDLs[] = {
 };
 
 static char *filterDBcreateIndexDDLs[] = {
-	"create unique index s_coll_rlname on s_coll(restore_list_name)",
-	"create index s_ec_oid on s_extension_config(extoid)",
-	"create index s_n_rlname on s_namespace(restore_list_name)",
-	"create unique index s_t_qname on s_table(qname)",
-	"create unique index s_t_rlname on s_table(restore_list_name)",
-	"create unique index s_mv_rlname on s_matview(restore_list_name)",
-	"create unique index s_mv_qname on s_matview(nspname, relname)",
-	"create unique index s_ts_oid on s_table_size(oid)",
-	"create unique index s_i_rlname on s_index(restore_list_name)",
-	"create index s_i_tableoid on s_index(tableoid)",
-	"create index s_c_indexoid on s_constraint(indexoid)",
-	"create index s_s_rlname on s_seq(restore_list_name)",
-	"create index s_d_refobjid on s_depend(refobjid)",
-	"create index s_d_objid on s_depend(objid)",
-	"create unique index filter_catoid_oid on filter(catoid, oid) where oid > 0",
-	"create index filter_rlname on filter(restore_list_name)"
+	"create unique index if not exists s_coll_rlname on s_coll(restore_list_name)",
+	"create index if not exists s_ec_oid on s_extension_config(extoid)",
+	"create index if not exists s_n_rlname on s_namespace(restore_list_name)",
+	"create unique index if not exists s_t_qname on s_table(qname)",
+	"create unique index if not exists s_t_rlname on s_table(restore_list_name)",
+	"create unique index if not exists s_mv_rlname on s_matview(restore_list_name)",
+	"create unique index if not exists s_mv_qname on s_matview(nspname, relname)",
+	"create unique index if not exists s_ts_oid on s_table_size(oid)",
+	"create unique index if not exists s_i_rlname on s_index(restore_list_name)",
+	"create index if not exists s_i_tableoid on s_index(tableoid)",
+	"create index if not exists s_c_indexoid on s_constraint(indexoid)",
+	"create index if not exists s_s_rlname on s_seq(restore_list_name)",
+	"create index if not exists s_d_refobjid on s_depend(refobjid)",
+	"create index if not exists s_d_objid on s_depend(objid)",
+	"create unique index if not exists filter_catoid_oid on filter(catoid, oid) "
+	"  where oid > 0",
+	"create index if not exists filter_rlname on filter(restore_list_name)"
 };
 
 
@@ -489,12 +492,12 @@ static char *targetDBcreateTableDDLs[] = {
 };
 
 static char *targetDBcreateIndexDDLs[] = {
-	"create index s_n_rlname on s_namespace(restore_list_name)",
-	"create unique index s_t_qname on s_table(qname)",
-	"create unique index s_t_rlname on s_table(restore_list_name)",
-	"create unique index s_i_rlname on s_index(restore_list_name)",
-	"create index s_i_tableoid on s_index(tableoid)",
-	"create index s_c_indexoid on s_constraint(indexoid)"
+	"create index if not exists s_n_rlname on s_namespace(restore_list_name)",
+	"create unique index if not exists s_t_qname on s_table(qname)",
+	"create unique index if not exists s_t_rlname on s_table(restore_list_name)",
+	"create unique index if not exists s_i_rlname on s_index(restore_list_name)",
+	"create index if not exists s_i_tableoid on s_index(tableoid)",
+	"create index if not exists s_c_indexoid on s_constraint(indexoid)"
 };
 
 
