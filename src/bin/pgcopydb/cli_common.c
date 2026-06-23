@@ -653,8 +653,13 @@ cli_read_one_line(const char *filename,
  * endpoint (host/port) from the PGCOPYDB_HOST and PGCOPYDB_PORT environment
  * variables.  This is a server-side convenience (e.g. docker-compose): the
  * follow/clone/replay commands listen on that endpoint.  Explicit --host /
- * --port options, parsed afterwards, take precedence.  The "stream sentinel"
- * client does NOT read these — it requires explicit --host/--port.
+ * --port options, parsed afterwards, take precedence.
+ *
+ * Client-side commands ("stream sentinel", "stream prune") do NOT use the env
+ * vars to trigger IPC mode: sentinel has its own getopts and never calls this
+ * function; prune calls this function (shared cli_stream_getopts) but guards
+ * ld_service_endpoint() behind hostFromCLI — IPC mode only activates when
+ * --host is given explicitly on the command line.
  */
 void
 cli_read_coordinator_env(CopyDBOptions *options)
