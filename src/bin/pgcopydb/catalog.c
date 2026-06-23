@@ -9331,6 +9331,54 @@ catalog_delete_process(DatabaseCatalog *catalog, pid_t pid)
 
 
 /*
+ * catalog_delete_all_process_entries removes all rows from the process table.
+ * Called by each supervisor before forking workers so that stale entries from
+ * a previous run (including entries left by crashed workers or by a prior
+ * Docker container whose PID namespace has been reset) cannot interfere with
+ * resume logic or SQLite write contention checks.
+ */
+bool
+catalog_delete_all_process_entries(DatabaseCatalog *catalog)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_delete_all_process_entries: db is NULL");
+		return false;
+	}
+
+	char *sql = "delete from process";
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
  * catalog_iter_s_table_in_copy iterates over the list of tables with a COPY
  * process in our catalogs.
  */

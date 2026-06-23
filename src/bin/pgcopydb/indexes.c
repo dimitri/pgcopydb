@@ -99,6 +99,18 @@ copydb_index_supervisor(CopyDataSpec *specs)
 	}
 
 	/*
+	 * Remove stale process table entries from any previous run before workers
+	 * start.  Entries left by crashed workers or by a prior container whose
+	 * PID namespace was reset would cause resume logic to misidentify live
+	 * PIDs (issue #692) and could block retried index creation (issue #881).
+	 */
+	if (!catalog_delete_all_process_entries(sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
 	 * Start cumulative sections timings for indexes and constraints
 	 */
 	if (!summary_start_timing(sourceDB, TIMING_SECTION_CREATE_INDEX))
@@ -113,9 +125,29 @@ copydb_index_supervisor(CopyDataSpec *specs)
 		return false;
 	}
 
+	/*
+	 * Close the catalog before forking so that each worker process opens its
+	 * own SQLite connection.  Inheriting a forked sqlite3* handle causes WAL
+	 * write-lock conflicts between sibling workers even when the SysV
+	 * semaphore is held, exhausting the 5-second busy-retry and aborting
+	 * index creation (issue #881).
+	 */
+	if (!catalog_close(sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (!copydb_start_index_workers(specs))
 	{
 		log_error("Failed to start index workers, see above for details");
+		return false;
+	}
+
+	/* reopen in the supervisor process after the fork */
+	if (!catalog_open(sourceDB))
+	{
+		/* errors have already been logged */
 		return false;
 	}
 

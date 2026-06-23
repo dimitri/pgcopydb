@@ -295,6 +295,50 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 		return false;
 	}
 
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	/*
+	 * Before forking any workers, open the catalog briefly to clear two kinds
+	 * of stale state left by a previous run:
+	 *
+	 *  1. process table entries: written by workers that crashed without
+	 *     calling catalog_delete_process.  Stale entries make the progress
+	 *     view report non-existent work and can block resume logic.
+	 *
+	 *  2. incomplete table-copy summary rows (done_time_epoch IS NULL):
+	 *     these carry the PID of the previous worker.  On resume pgcopydb
+	 *     calls kill(old_pid, 0) to see if that worker is still running.
+	 *     Inside a Docker container whose PID namespace was reset the same
+	 *     numeric PID is often recycled by an unrelated process, so kill()
+	 *     returns 0 and pgcopydb wrongly refuses to copy the table (#692).
+	 *
+	 * After cleanup, close the catalog again so that table-data workers
+	 * (forked next) open their own fresh connections (#881).
+	 */
+	if (!catalog_open(sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_delete_all_process_entries(sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!summary_delete_incomplete_table_copy(sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_close(sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	/*
 	 * Start COPY table-data workers, as many as --table-jobs.
 	 */
@@ -308,8 +352,7 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 		return false;
 	}
 
-	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
-
+	/* reopen catalog in the supervisor process after the fork */
 	if (!catalog_open(sourceDB))
 	{
 		/* errors have already been logged */

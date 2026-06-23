@@ -669,6 +669,8 @@ bool summary_update_table_copy_stats(DatabaseCatalog *catalog,
 bool summary_delete_table(DatabaseCatalog *catalog,
 						  CopyTableDataSpec *tableSpecs);
 
+bool summary_delete_incomplete_table_copy(DatabaseCatalog *catalog);
+
 bool summary_table_count_parts_done(DatabaseCatalog *catalog,
 									CopyTableDataSpec *tableSpecs);
 
