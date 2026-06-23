@@ -13,6 +13,7 @@
 
 #include "copydb.h"
 #include "file_utils.h"
+#include "ld_store.h"
 #include "log.h"
 #include "follow_coordinator.h"
 
@@ -179,6 +180,41 @@ follow_coordinator_handle_messages(FollowCoordinator *coord, StreamSpecs *specs)
 			break;
 		}
 
+		case IPC_MSG_CLEANUP:
+		{
+			IPCPayloadCleanup *cmd = (IPCPayloadCleanup *) msg.payload;
+
+			log_info("Coordinator: CDC file cleanup requested (dry_run=%d)",
+					 cmd->dry_run);
+
+			uint64_t filesDeleted = 0;
+			uint64_t bytesFreed = 0;
+
+			if (!ld_store_cleanup_cdc_files(specs,
+											cmd->dry_run != 0,
+											&filesDeleted,
+											&bytesFreed))
+			{
+				response.type = IPC_MSG_ERROR;
+				const char *err = "CDC file cleanup failed";
+
+				response.payload_len = strlen(err);
+				memcpy(response.payload, err, response.payload_len); /* IGNORE-BANNED */
+			}
+			else
+			{
+				response.type = IPC_MSG_CLEANUP_REPLY;
+				IPCPayloadCleanupReply *reply =
+					(IPCPayloadCleanupReply *) response.payload;
+
+				reply->files_deleted = filesDeleted;
+				reply->bytes_freed = bytesFreed;
+				reply->dry_run = cmd->dry_run;
+				response.payload_len = sizeof(IPCPayloadCleanupReply);
+			}
+			break;
+		}
+
 		case IPC_MSG_PING:
 		{
 			response.type = IPC_MSG_PONG;
@@ -244,4 +280,34 @@ follow_coordinator_update_sentinel(FollowCoordinator *coord, StreamSpecs *specs)
 	coord->last_sentinel_update = now;
 	coord->last_update_lsn = coord->sentinel_write_lsn;
 	return true;
+}
+
+
+/*
+ * follow_coordinator_maybe_cleanup runs CDC file cleanup at most once every
+ * CLEANUP_INTERVAL_SECS seconds.  Mirrors PostgreSQL's checkpoint_timeout
+ * default of 5 minutes.  Only whole file pairs whose endpos < replay_lsn
+ * are removed; no partial deletion, no override.
+ */
+bool
+follow_coordinator_maybe_cleanup(FollowCoordinator *coord, StreamSpecs *specs)
+{
+	const time_t CLEANUP_INTERVAL_SECS = 300;   /* 5 minutes */
+
+	time_t now = time(NULL);
+
+	if (now - coord->last_cleanup_time < CLEANUP_INTERVAL_SECS)
+	{
+		return true;
+	}
+
+	coord->last_cleanup_time = now;
+
+	uint64_t filesDeleted = 0;
+	uint64_t bytesFreed = 0;
+
+	return ld_store_cleanup_cdc_files(specs,
+									  false, /* dry_run */
+									  &filesDeleted,
+									  &bytesFreed);
 }

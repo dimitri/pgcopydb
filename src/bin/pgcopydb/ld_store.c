@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -21,6 +22,7 @@
 #include "pg_utils.h"
 #include "schema.h"
 #include "signals.h"
+#include "file_utils.h"
 #include "string_utils.h"
 
 
@@ -1078,6 +1080,247 @@ ld_store_rotate_outputdb(StreamSpecs *specs, uint64_t commit_lsn)
 	log_info("Rotated to new outputDB \"%s\"", specs->outputDB->dbfile);
 
 	return true;
+}
+
+
+/*
+ * ld_store_cleanup_cdc_files removes output.db/replay.db file pairs that
+ * have been fully applied to the target.  A pair is safe to delete when its
+ * endpos is strictly less than sentinel.replay_lsn AND done_time_epoch is set
+ * (i.e. the receive process has closed it).
+ *
+ * The sentinel.replay_lsn is the LSN through which every transaction has been
+ * committed on the target and acknowledged back to the source slot as
+ * flush_lsn (confirmed_flush).  The slot will never re-deliver transactions
+ * before that point, so the corresponding CDC files are no longer needed for
+ * resume/restart.
+ *
+ * dry_run=true logs what would be deleted without touching the filesystem.
+ * On completion, *filesDeleted and *bytesFreed are updated with counts.
+ *
+ * No VACUUM is issued: source.db contains the full schema catalog and can be
+ * tens of megabytes; vacuuming it periodically for the sake of ~150 bytes per
+ * deleted cdc_files row is poor trade.  SQLite recycles the freed freelist
+ * pages automatically when the receive process inserts new cdc_files rows.
+ */
+bool
+ld_store_cleanup_cdc_files(StreamSpecs *specs,
+						   bool dry_run,
+						   uint64_t *filesDeleted,
+						   uint64_t *bytesFreed)
+{
+	DatabaseCatalog *sourceDB = specs->sourceDB;
+	sqlite3 *db = sourceDB->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: ld_store_cleanup_cdc_files: sourceDB is NULL");
+		return false;
+	}
+
+	/* read the current apply progress */
+	CopyDBSentinel sentinel = { 0 };
+
+	if (!sentinel_get(sourceDB, &sentinel))
+	{
+		log_error("Failed to read sentinel for CDC file cleanup");
+		return false;
+	}
+
+	if (sentinel.replay_lsn == InvalidXLogRecPtr)
+	{
+		log_debug("ld_store_cleanup_cdc_files: replay_lsn is not set, skipping");
+		return true;
+	}
+
+	/* query cdc_files for file pairs whose endpos < replay_lsn */
+	char safe_lsn[PG_LSN_MAXLENGTH] = { 0 };
+
+	sformat(safe_lsn, sizeof(safe_lsn),
+			"%08X/%08X", LSN_FORMAT_ARGS(sentinel.replay_lsn));
+
+	char *sql =
+		"select id, filename "
+		"  from cdc_files "
+		" where done_time_epoch is not null "
+		"   and endpos < $1 "
+		" order by id";
+
+	typedef struct
+	{
+		int id;
+		char filename[MAXPGPATH];
+	} CDCFileRow;
+
+	/* collect rows first so we can delete without cursor iteration issues */
+	int capacity = 64;
+	int count = 0;
+	CDCFileRow *rows = (CDCFileRow *) calloc(capacity, sizeof(CDCFileRow));
+
+	if (rows == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	/*
+	 * Use a direct SQLite query rather than the catalog iterator framework,
+	 * because we need to collect all rows before issuing DELETE statements
+	 * on the same table.
+	 */
+	sqlite3_stmt *ppStmt = NULL;
+
+	if (sqlite3_prepare_v2(db, sql, -1, &ppStmt, NULL) != SQLITE_OK)
+	{
+		log_error("Failed to prepare CDC file query: %s", sqlite3_errmsg(db));
+		free(rows);
+		return false;
+	}
+
+	sqlite3_bind_text(ppStmt, 1, safe_lsn, -1, SQLITE_STATIC);
+
+	int rc;
+
+	while ((rc = sqlite3_step(ppStmt)) == SQLITE_ROW)
+	{
+		if (count >= capacity)
+		{
+			capacity *= 2;
+			CDCFileRow *tmp = realloc(rows, capacity * sizeof(CDCFileRow));
+
+			if (tmp == NULL)
+			{
+				log_fatal(ALLOCATION_FAILED_ERROR);
+				sqlite3_finalize(ppStmt);
+				free(rows);
+				return false;
+			}
+			rows = tmp;
+		}
+
+		rows[count].id = sqlite3_column_int(ppStmt, 0);
+		strlcpy(rows[count].filename,
+				(const char *) sqlite3_column_text(ppStmt, 1),
+				MAXPGPATH);
+		++count;
+	}
+
+	sqlite3_finalize(ppStmt);
+
+	if (count == 0)
+	{
+		log_debug("ld_store_cleanup_cdc_files: no files to clean up "
+				  "(replay_lsn %X/%X)",
+				  LSN_FORMAT_ARGS(sentinel.replay_lsn));
+		free(rows);
+		return true;
+	}
+
+	bool success = true;
+
+	for (int i = 0; i < count; i++)
+	{
+		char replayFile[MAXPGPATH] = { 0 };
+
+		ld_store_replaydb_filename_from_outputdb(rows[i].filename,
+												 replayFile,
+												 sizeof(replayFile));
+
+		/* tally sizes before deletion */
+		struct stat st = { 0 };
+		uint64_t pairBytes = 0;
+
+		if (stat(rows[i].filename, &st) == 0)
+		{
+			pairBytes += st.st_size;
+		}
+
+		struct stat stReplay = { 0 };
+
+		if (stat(replayFile, &stReplay) == 0)
+		{
+			pairBytes += stReplay.st_size;
+		}
+
+		if (dry_run)
+		{
+			char pairPretty[BUFSIZE] = { 0 };
+
+			pretty_print_bytes(pairPretty, sizeof(pairPretty), pairBytes);
+			log_info("Would remove CDC file pair: %s + %s (%s)",
+					 rows[i].filename,
+					 replayFile,
+					 pairPretty);
+			*bytesFreed += pairBytes;
+			++(*filesDeleted);
+			continue;
+		}
+
+		/* remove output.db */
+		if (unlink_file(rows[i].filename))
+		{
+			log_info("Removed CDC output file: %s", rows[i].filename);
+		}
+		else
+		{
+			/* file missing on disk is not fatal — catalog entry still needs removal */
+			log_warn("CDC output file not found on disk, removing catalog entry: %s",
+					 rows[i].filename);
+		}
+
+		/* remove replay.db */
+		if (unlink_file(replayFile))
+		{
+			log_info("Removed CDC replay file: %s", replayFile);
+		}
+		else
+		{
+			log_warn("CDC replay file not found on disk, removing catalog entry: %s",
+					 replayFile);
+		}
+
+		/* remove the catalog entry */
+		char *del = "delete from cdc_files where id = $1";
+		sqlite3_stmt *delStmt = NULL;
+
+		if (sqlite3_prepare_v2(db, del, -1, &delStmt, NULL) != SQLITE_OK)
+		{
+			log_error("Failed to prepare cdc_files delete: %s",
+					  sqlite3_errmsg(db));
+			success = false;
+			continue;
+		}
+
+		sqlite3_bind_int(delStmt, 1, rows[i].id);
+
+		if (sqlite3_step(delStmt) != SQLITE_DONE)
+		{
+			log_error("Failed to delete cdc_files row %d: %s",
+					  rows[i].id, sqlite3_errmsg(db));
+			success = false;
+		}
+
+		sqlite3_finalize(delStmt);
+
+		*bytesFreed += pairBytes;
+		++(*filesDeleted);
+	}
+
+	free(rows);
+
+	if (!dry_run && *filesDeleted > 0)
+	{
+		char freedPretty[BUFSIZE] = { 0 };
+
+		pretty_print_bytes(freedPretty, sizeof(freedPretty), *bytesFreed);
+		log_info("CDC cleanup: removed %llu file pair(s), freed %s "
+				 "(replay_lsn %X/%X)",
+				 (unsigned long long) *filesDeleted,
+				 freedPretty,
+				 LSN_FORMAT_ARGS(sentinel.replay_lsn));
+	}
+
+	return success;
 }
 
 

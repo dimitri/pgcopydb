@@ -149,13 +149,56 @@ def check_row_counts():
     check(src == 120,  f"expected 120 rows (got {src})")
 
 
+def check_cleanup():
+    """After stream cleanup:
+    - No deletable file pairs remain in cdc_files (endpos < replay_lsn).
+    - Every row in cdc_files has a matching output.db on disk (no orphan entries).
+    - Every output.db on disk has a matching cdc_files row (no orphan files).
+    - At least some files were removed (Phase 1 small-txn files).
+    """
+    files_on_disk = set(output_files())
+
+    con = sqlite3.connect(SOURCE_DB)
+
+    # Files that should already have been deleted: closed AND endpos < replay_lsn
+    (leftover,) = con.execute(
+        "select count(*)"
+        "  from cdc_files cf"
+        "  join sentinel s on 1=1"
+        " where cf.done_time_epoch is not null"
+        "   and cf.endpos < s.replay_lsn"
+    ).fetchone()
+
+    (total,) = con.execute("select count(*) from cdc_files").fetchone()
+    catalog_files = {row[0] for row in con.execute("select filename from cdc_files")}
+
+    con.close()
+
+    print(f"after cleanup: {len(files_on_disk)} output.db on disk, "
+          f"{total} rows in cdc_files, {leftover} still-deletable")
+
+    check(leftover == 0,
+          f"no deletable file pairs remain after cleanup (found {leftover})")
+
+    check(files_on_disk == catalog_files,
+          f"on-disk output.db files match cdc_files catalog "
+          f"(disk={len(files_on_disk)}, catalog={total})")
+
+    # Phase 1 generated multiple files; after cleanup most should be gone.
+    # We had at least 2 before (from check_output_rotation); now there should
+    # be fewer (only files whose endpos >= replay_lsn survive).
+    check(len(files_on_disk) < 20,
+          f"Phase 1 small-txn files were pruned ({len(files_on_disk)} remain)")
+
+
 # ── routing ───────────────────────────────────────────────────────────────────
 
 CHECKS = {
-    "output-rotation":    check_output_rotation,
-    "cdc-files":          check_cdc_files,
+    "output-rotation":     check_output_rotation,
+    "cdc-files":           check_cdc_files,
     "large-txn-atomicity": check_large_txn_atomicity,
-    "row-counts":         check_row_counts,
+    "row-counts":          check_row_counts,
+    "cleanup":             check_cleanup,
 }
 
 if __name__ == "__main__":

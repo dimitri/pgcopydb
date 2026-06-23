@@ -31,6 +31,8 @@ typedef struct
 	time_t last_sentinel_update;
 	uint64_t last_update_lsn;
 	int update_interval_sec;
+
+	time_t last_cleanup_time;   /* last time CDC file cleanup ran */
 } FollowCoordinator;
 
 bool follow_coordinator_init(FollowCoordinator *coord,
@@ -40,5 +42,7 @@ bool follow_coordinator_handle_messages(FollowCoordinator *coord,
 										StreamSpecs *specs);
 bool follow_coordinator_update_sentinel(FollowCoordinator *coord,
 										StreamSpecs *specs);
+bool follow_coordinator_maybe_cleanup(FollowCoordinator *coord,
+									  StreamSpecs *specs);
 
 #endif /* FOLLOW_COORDINATOR_H */

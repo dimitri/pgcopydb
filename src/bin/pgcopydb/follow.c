@@ -1078,6 +1078,7 @@ follow_wait_subprocesses(StreamSpecs *specs)
 		 * cadence stays close to the original 150 ms.
 		 */
 		(void) follow_coordinator_handle_messages(&followCoord, specs);
+		(void) follow_coordinator_maybe_cleanup(&followCoord, specs);
 
 		/* avoid busy looping */
 		pg_usleep(50 * 1000);

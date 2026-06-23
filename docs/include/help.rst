@@ -57,6 +57,7 @@
      pgcopydb stream
        setup     Setup source and target systems for logical decoding
        cleanup   Cleanup source and target systems for logical decoding
+       prune     Remove already-applied CDC files from disk to reclaim disk space
        prefetch  Stream changes from the source database into the SQLite CDC store
        catchup   Transform and apply prefetched changes from the SQLite CDC store to the target
        replay    Replay changes from the source to the target database, live

@@ -87,6 +87,45 @@ step.
 
 .. include:: ../include/stream-cleanup.rst
 
+.. _pgcopydb_stream_prune:
+
+pgcopydb stream prune
+---------------------
+
+pgcopydb stream prune - Remove already-applied CDC files from disk to reclaim disk space
+
+The command ``pgcopydb stream prune`` removes CDC output.db / replay.db file
+pairs that have already been fully applied to the target and are no longer
+needed for resume or restart.
+
+A file pair is safe to delete when its ``endpos`` is strictly less than
+``sentinel.replay_lsn`` (the LSN acknowledged back to the PostgreSQL
+replication slot as ``confirmed_flush``) and its ``done_time_epoch`` is set
+(the receive process has closed it). Those transactions have been durably
+committed on the target; the slot will never re-deliver them.
+
+The deleted entries are removed from the ``cdc_files`` catalog table in
+``source.db``. The freed SQLite freelist pages are recycled automatically
+when the receive process inserts new ``cdc_files`` rows, so no explicit
+``VACUUM`` is needed.
+
+The command runs in two modes:
+
+- **Direct mode** (``--dir``, no ``--host``): opens ``source.db`` in the work
+  directory directly. Suitable when the follow process is not running or the
+  caller shares the filesystem.
+
+- **Coordinator mode** (``--host`` / ``--port``): sends an IPC message to a
+  running ``pgcopydb follow`` (or ``pgcopydb clone --follow``) process. The
+  follow process owns the SQLite catalog exclusively and performs the cleanup
+  safely without requiring shared filesystem access.
+
+The follow process also runs ``stream prune`` automatically every 300 seconds
+(matching PostgreSQL's default ``checkpoint_timeout``), so manual invocation
+is optional during a live follow operation.
+
+.. include:: ../include/stream-prune.rst
+
 .. _pgcopydb_stream_prefetch:
 
 pgcopydb stream prefetch
@@ -396,6 +435,13 @@ The following options are available to ``pgcopydb stream`` sub-commands:
 --quiet
 
   Set current verbosity to ERROR level.
+
+--dry-run
+
+  Used with ``pgcopydb stream prune``. Lists the CDC file pairs that would
+  be deleted without actually removing them from disk or from the catalog.
+  Useful to preview how much disk space would be reclaimed before committing
+  to the deletion.
 
 --max-replaydb-size
 
