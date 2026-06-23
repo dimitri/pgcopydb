@@ -16,11 +16,11 @@
  * compute correct ?NNN parameter numbers and stay within SQLite's
  * SQLITE_LIMIT_VARIABLE_NUMBER limit.
  */
-#define CATALOG_INSERT_NCOLS_S_TABLE       11
-#define CATALOG_INSERT_NCOLS_S_ATTR        10
-#define CATALOG_INSERT_NCOLS_S_INDEX       10
-#define CATALOG_INSERT_NCOLS_S_CONSTRAINT   6
-#define CATALOG_INSERT_NCOLS_S_SEQ          9
+#define CATALOG_INSERT_NCOLS_S_TABLE 11
+#define CATALOG_INSERT_NCOLS_S_ATTR 10
+#define CATALOG_INSERT_NCOLS_S_INDEX 10
+#define CATALOG_INSERT_NCOLS_S_CONSTRAINT 6
+#define CATALOG_INSERT_NCOLS_S_SEQ 9
 
 /*
  * Internal infrastructure to bind values to SQLite prepared statements.

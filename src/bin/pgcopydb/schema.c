@@ -3549,7 +3549,9 @@ getIndexArray(void *ctx, PGresult *result)
 	for (int rowNumber = 0; rowNumber < nTuples && parsedOk; rowNumber++)
 	{
 		SourceIndex *idx = &indexBatch[batchCount];
-		*idx = (SourceIndex) { 0 };
+		*idx = (SourceIndex) {
+			0
+		};
 
 		if (!parseCurrentSourceIndex(result, rowNumber, idx))
 		{
