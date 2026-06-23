@@ -9995,6 +9995,74 @@ catalog_count_summary_done_fetch(SQLiteQuery *query)
 
 
 /*
+ * catalog_count_bytes returns byte totals used by list progress to show
+ * transfer volume.  total is the sum of source catalog sizes (s_table.bytes);
+ * transferred is the sum of summary.bytes for all table rows — done rows
+ * hold their final bytesTransmitted, in-progress rows hold the last value
+ * flushed by the periodic stats hook (every ~5 s with PID-based jitter).
+ */
+bool
+catalog_count_bytes(DatabaseCatalog *catalog, CatalogBytesCounts *count)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_count_bytes: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"select "
+		"  coalesce((select sum(bytes) from s_table), 0) as total, "
+		"  coalesce((select sum(bytes) from summary"
+		"             where tableoid is not null and done_time_epoch is not null), 0)"
+		"    as done, "
+		"  coalesce((select sum(bytes) from summary"
+		"             where tableoid is not null and done_time_epoch is null), 0)"
+		"    as in_progress";
+
+	SQLiteQuery query = {
+		.context = count,
+		.fetchFunction = &catalog_count_bytes_fetch
+	};
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which returns exactly one row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_count_bytes_fetch fetches a CatalogBytesCounts from a query result.
+ */
+bool
+catalog_count_bytes_fetch(SQLiteQuery *query)
+{
+	CatalogBytesCounts *count = (CatalogBytesCounts *) query->context;
+
+	bzero(count, sizeof(CatalogBytesCounts));
+
+	count->total = sqlite3_column_int64(query->ppStmt, 0);
+	count->done = sqlite3_column_int64(query->ppStmt, 1);
+	count->inProgress = sqlite3_column_int64(query->ppStmt, 2);
+
+	return true;
+}
+
+
+/*
  * catalog_add_timeline_history inserts a timeline history entry to our
  * internal catalogs database.
  */

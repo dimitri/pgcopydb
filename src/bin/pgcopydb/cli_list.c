@@ -2094,6 +2094,21 @@ cli_list_progress(int argc, char **argv)
 				progress.indexCount,
 				progress.indexInProgress.count,
 				progress.indexDoneCount);
+
+		char totalBytesPretty[BUFSIZE] = { 0 };
+		char doneBytesPretty[BUFSIZE] = { 0 };
+		char inProgressBytesPretty[BUFSIZE] = { 0 };
+
+		pretty_print_bytes(totalBytesPretty, BUFSIZE, progress.totalBytes);
+		pretty_print_bytes(doneBytesPretty, BUFSIZE, progress.doneBytes);
+		pretty_print_bytes(inProgressBytesPretty, BUFSIZE,
+						   progress.inProgressBytes);
+
+		fformat(stdout, "%12s | %12s | %12s | %12s\n",
+				"Bytes",
+				totalBytesPretty,
+				inProgressBytesPretty,
+				doneBytesPretty);
 	}
 }
 

@@ -1485,13 +1485,19 @@ copydb_update_copy_stats_hook(void *ctx, CopyStats *stats)
 
 	uint64_t now = time(NULL);
 
-	if (context->lastWrite == 0)
-	{
-		context->lastWrite = now;
-	}
-
 	/* refrain from updating the statistics too often */
 	const uint64_t WRITE_INTERVAL_SECS = 5;
+
+	if (context->lastWrite == 0)
+	{
+		/*
+		 * Spread the first flush across [1, WRITE_INTERVAL_SECS] seconds
+		 * using the worker's PID as a deterministic jitter source.  Without
+		 * this, all N table workers initialize at roughly the same instant and
+		 * then hammer SQLite in lock-step every WRITE_INTERVAL_SECS seconds.
+		 */
+		context->lastWrite = now - (getpid() % WRITE_INTERVAL_SECS);
+	}
 
 	if ((now - context->lastWrite) < WRITE_INTERVAL_SECS)
 	{
