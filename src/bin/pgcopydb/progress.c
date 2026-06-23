@@ -720,6 +720,18 @@ copydb_update_progress(CopyDataSpec *copySpecs, CopyProgress *progress)
 		return false;
 	}
 
+	CatalogBytesCounts bytes = { 0 };
+
+	if (!catalog_count_bytes(sourceDB, &bytes))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	progress->totalBytes = bytes.total;
+	progress->doneBytes = bytes.done;
+	progress->inProgressBytes = bytes.inProgress;
+
 	return true;
 }
 
@@ -974,6 +986,30 @@ copydb_progress_as_json(CopyDataSpec *copySpecs,
 	}
 
 	json_object_set_value(jsobj, "indexes", jsIndex);
+
+	/* byte counts */
+	JSON_Value *jsBytes = json_value_init_object();
+	JSON_Object *jsBytesObj = json_value_get_object(jsBytes);
+
+	json_object_set_number(jsBytesObj, "total", (double) progress->totalBytes);
+	json_object_set_number(jsBytesObj, "done", (double) progress->doneBytes);
+	json_object_set_number(jsBytesObj, "in-progress",
+						   (double) progress->inProgressBytes);
+
+	char totalBytesPretty[BUFSIZE] = { 0 };
+	char doneBytesPretty[BUFSIZE] = { 0 };
+	char inProgressBytesPretty[BUFSIZE] = { 0 };
+
+	pretty_print_bytes(totalBytesPretty, BUFSIZE, progress->totalBytes);
+	pretty_print_bytes(doneBytesPretty, BUFSIZE, progress->doneBytes);
+	pretty_print_bytes(inProgressBytesPretty, BUFSIZE, progress->inProgressBytes);
+
+	json_object_set_string(jsBytesObj, "total-pretty", totalBytesPretty);
+	json_object_set_string(jsBytesObj, "done-pretty", doneBytesPretty);
+	json_object_set_string(jsBytesObj, "in-progress-pretty",
+						   inProgressBytesPretty);
+
+	json_object_set_value(jsobj, "bytes", jsBytes);
 
 	return true;
 }

@@ -40,6 +40,10 @@ typedef struct CopyProgress
 	int indexDoneCount;
 	SourceIndexArray indexInProgress;
 	CopyIndexSummaryArray indexSummaryArray;
+
+	uint64_t totalBytes;      /* source catalog bytes, all tables */
+	uint64_t doneBytes;       /* bytes from completed tables (final) */
+	uint64_t inProgressBytes; /* bytes from in-progress tables (last flush) */
 } CopyProgress;
 
 

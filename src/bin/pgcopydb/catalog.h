@@ -688,6 +688,17 @@ bool catalog_count_summary_done(DatabaseCatalog *catalog,
 bool catalog_count_summary_done_fetch(SQLiteQuery *query);
 
 
+typedef struct CatalogBytesCounts
+{
+	uint64_t total;       /* sum of s_table.bytes (source catalog sizes) */
+	uint64_t done;        /* sum of summary.bytes for completed tables */
+	uint64_t inProgress;  /* sum of summary.bytes for in-progress tables (last flush) */
+} CatalogBytesCounts;
+
+bool catalog_count_bytes(DatabaseCatalog *catalog, CatalogBytesCounts *count);
+bool catalog_count_bytes_fetch(SQLiteQuery *query);
+
+
 /*
  * Logical decoding
  */
