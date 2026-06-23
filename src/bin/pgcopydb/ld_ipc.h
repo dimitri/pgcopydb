@@ -44,6 +44,9 @@ typedef enum
 	IPC_MSG_SET_STARTPOS = 8,     /* CLI → coordinator: set sentinel.startpos */
 	IPC_MSG_SET_APPLY = 9,        /* CLI → coordinator: set sentinel.apply flag */
 
+	IPC_MSG_CLEANUP = 10,         /* CLI → coordinator: cleanup old CDC files */
+	IPC_MSG_CLEANUP_REPLY = 11,   /* coordinator → CLI: cleanup result */
+
 	IPC_MSG_ACK_CONFIRMED = 18,   /* coordinator → CLI: request accepted */
 	IPC_MSG_ERROR = 99,           /* generic error */
 } IPCMessageType;
@@ -89,6 +92,21 @@ typedef struct
 	uint64_t replay_lsn;
 	uint32_t state;         /* 0=init 1=streaming 2=done 3=error */
 } IPCPayloadStatusReply;
+
+/* Payload for IPC_MSG_CLEANUP */
+typedef struct
+{
+	uint8_t dry_run;
+} IPCPayloadCleanup;
+
+/* Payload for IPC_MSG_CLEANUP_REPLY */
+typedef struct
+{
+	uint64_t files_deleted;
+	uint64_t bytes_freed;
+	uint64_t safe_lsn;       /* replay_lsn used as the cleanup boundary */
+	uint8_t dry_run;
+} IPCPayloadCleanupReply;
 
 /* Payload for IPC_MSG_ERROR */
 typedef struct

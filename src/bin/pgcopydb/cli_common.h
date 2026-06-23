@@ -111,6 +111,7 @@ typedef struct CopyDBOptions
 	char host[256];
 	int port;
 
+	bool dryRun;        /* --dry-run: report what would happen, do nothing */
 	bool allDatabases;
 } CopyDBOptions;
 

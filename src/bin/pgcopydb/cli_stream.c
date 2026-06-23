@@ -18,6 +18,8 @@
 #include "commandline.h"
 #include "copydb.h"
 #include "env_utils.h"
+#include "ld_ipc.h"
+#include "ld_service.h"
 #include "ld_store.h"
 #include "ld_stream.h"
 #include "log.h"
@@ -39,6 +41,7 @@ static void cli_stream_receive(int argc, char **argv);
 static void cli_stream_apply(int argc, char **argv);
 
 static void cli_stream_setup(int argc, char **argv);
+static void cli_stream_drop(int argc, char **argv);
 static void cli_stream_cleanup(int argc, char **argv);
 
 static void cli_stream_prefetch(int argc, char **argv);
@@ -67,10 +70,10 @@ static CommandLine stream_setup_command =
 		cli_stream_getopts,
 		cli_stream_setup);
 
-static CommandLine stream_cleanup_command =
+static CommandLine stream_drop_command =
 	make_command(
-		"cleanup",
-		"Cleanup source and target systems for logical decoding",
+		"drop",
+		"Drop source and target systems for logical decoding",
 		"",
 		"  --source         Postgres URI to the source database\n"
 		"  --target         Postgres URI to the target database\n"
@@ -80,6 +83,18 @@ static CommandLine stream_cleanup_command =
 		"  --snapshot       Use snapshot obtained with pg_export_snapshot\n"
 		"  --slot-name      Stream changes recorded by this slot\n"
 		"  --origin         Name of the Postgres replication origin\n",
+		cli_stream_getopts,
+		cli_stream_drop);
+
+static CommandLine stream_cleanup_command =
+	make_command(
+		"cleanup",
+		"Remove already-applied CDC files from disk to reclaim disk space",
+		" [ --dir ] [ --dry-run ] [ --host ] [ --port ]",
+		"  --dir            Work directory to use\n"
+		"  --dry-run        List files that would be removed without deleting them\n"
+		"  --host           Host of the running pgcopydb follow process to connect to\n"
+		"  --port           Port of the running pgcopydb follow process to connect to\n",
 		cli_stream_getopts,
 		cli_stream_cleanup);
 
@@ -172,6 +187,7 @@ static CommandLine stream_apply_command =
 
 static CommandLine *stream_subcommands[] = {
 	&stream_setup_command,
+	&stream_drop_command,
 	&stream_cleanup_command,
 	&stream_prefetch_command,
 	&stream_catchup_command,
@@ -212,6 +228,7 @@ cli_stream_getopts(int argc, char **argv)
 		{ "replay-no-op-updates", no_argument, NULL, 1004 },
 		{ "host", required_argument, NULL, 1001 },
 		{ "port", required_argument, NULL, 1002 },
+		{ "dry-run", no_argument, NULL, 1005 },
 		{ "restart", no_argument, NULL, 'r' },
 		{ "resume", no_argument, NULL, 'R' },
 		{ "not-consistent", no_argument, NULL, 'C' },
@@ -351,6 +368,13 @@ cli_stream_getopts(int argc, char **argv)
 			{
 				options.replayNoOpUpdates = true;
 				log_trace("--replay-no-op-updates");
+				break;
+			}
+
+			case 1005:      /* --dry-run */
+			{
+				options.dryRun = true;
+				log_trace("--dry-run");
 				break;
 			}
 
@@ -663,11 +687,12 @@ cli_stream_setup(int argc, char **argv)
 
 
 /*
- * cli_stream_cleanup cleans-up by dropping source sentinel table and
- * replication slot, and dropping target replication origin.
+ * cli_stream_drop drops source sentinel table and replication slot, and drops
+ * target replication origin.  This is the end-of-migration teardown step,
+ * renamed from "cleanup" to free that name for CDC file reclamation.
  */
 static void
-cli_stream_cleanup(int argc, char **argv)
+cli_stream_drop(int argc, char **argv)
 {
 	CopyDataSpec copySpecs = { 0 };
 
@@ -726,6 +751,142 @@ cli_stream_cleanup(int argc, char **argv)
 		(void) catalog_close(&(copySpecs.catalogs.source));
 
 		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	(void) catalog_close(&(copySpecs.catalogs.source));
+}
+
+
+/*
+ * cli_stream_cleanup removes already-applied CDC output.db / replay.db file
+ * pairs from disk to reclaim disk space during long-running migrations.
+ *
+ * Safe deletion criterion: endpos < sentinel.replay_lsn AND done_time_epoch
+ * IS NOT NULL.  This guarantees the apply process has committed all
+ * transactions from those files to the target and the slot will never
+ * re-deliver that range.
+ *
+ * Two modes:
+ *  - Coordinator mode (--host/--port): sends IPC_MSG_CLEANUP to a running
+ *    follow process so that cleanup runs under the process that owns
+ *    source.db.
+ *  - Direct mode (--dir, no --host): opens source.db directly.
+ */
+static void
+cli_stream_cleanup(int argc, char **argv)
+{
+	if (argc > 0)
+	{
+		commandline_help(stderr);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	bool dry_run = streamDBoptions.dryRun;
+
+	/* coordinator mode */
+	ServiceEndpoint service =
+		ld_service_endpoint(streamDBoptions.host, streamDBoptions.port);
+
+	if (service.enabled)
+	{
+		IPCMessage request = { 0 };
+
+		IPC_INIT_MESSAGE(request, IPC_MSG_CLEANUP);
+		IPCPayloadCleanup *cmd = (IPCPayloadCleanup *) request.payload;
+		cmd->dry_run = dry_run ? 1 : 0;
+		request.payload_len = sizeof(IPCPayloadCleanup);
+
+		IPCMessage response = { 0 };
+
+		if (!ld_service_send_command(service, &request, &response))
+		{
+			log_error("Failed to reach the follow coordinator at %s:%d",
+					  service.host, service.port);
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		if (response.type == IPC_MSG_ERROR)
+		{
+			log_error("Follow coordinator reported cleanup error: %s",
+					  (char *) response.payload);
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		if (response.type == IPC_MSG_CLEANUP_REPLY)
+		{
+			IPCPayloadCleanupReply *reply =
+				(IPCPayloadCleanupReply *) response.payload;
+
+			char bytesStr[BUFSIZE] = { 0 };
+
+			pretty_print_bytes(bytesStr, sizeof(bytesStr), reply->bytes_freed);
+
+			if (dry_run)
+			{
+				log_info("DRY RUN: would remove %llu CDC file pair(s), "
+						 "freeing %s (replay_lsn %X/%X)",
+						 (unsigned long long) reply->files_deleted,
+						 bytesStr,
+						 LSN_FORMAT_ARGS(reply->safe_lsn));
+			}
+			else
+			{
+				log_info("Removed %llu CDC file pair(s), freed %s "
+						 "(replay_lsn %X/%X)",
+						 (unsigned long long) reply->files_deleted,
+						 bytesStr,
+						 LSN_FORMAT_ARGS(reply->safe_lsn));
+			}
+		}
+		return;
+	}
+
+	/* direct mode: open source.db in the work directory */
+	CopyDataSpec copySpecs = { 0 };
+
+	(void) find_pg_commands(&(copySpecs.pgPaths));
+
+	if (!copydb_init_specs(&copySpecs, &streamDBoptions, DATA_SECTION_NONE))
+	{
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	bool resume = true;
+	bool restart = false;
+	bool createWorkDir = false;
+	bool service_mode = false;
+
+	if (!copydb_init_workdir(&copySpecs,
+							 streamDBoptions.dir,
+							 service_mode,
+							 NULL,
+							 restart,
+							 resume,
+							 createWorkDir))
+	{
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	strlcpy(copySpecs.catalogs.source.dbfile,
+			copySpecs.cfPaths.sdbfile,
+			sizeof(copySpecs.catalogs.source.dbfile));
+
+	if (!catalog_open(&(copySpecs.catalogs.source)))
+	{
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	StreamSpecs specs = { 0 };
+
+	specs.sourceDB = &(copySpecs.catalogs.source);
+
+	uint64_t filesDeleted = 0;
+	uint64_t bytesFreed = 0;
+
+	if (!ld_store_cleanup_cdc_files(&specs, dry_run, &filesDeleted, &bytesFreed))
+	{
+		(void) catalog_close(&(copySpecs.catalogs.source));
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
