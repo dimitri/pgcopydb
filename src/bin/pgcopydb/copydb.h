@@ -311,6 +311,7 @@ typedef struct CopyDataSpec
 	bool fetchCatalogs;         /* cache invalidation of local catalogs db */
 	bool fetchFilteredOids;     /* allow bypassing dump/restore filter prep */
 	bool skipSourceURICheck;    /* skip source URI mismatch check on open */
+	bool skipFilterCheck;       /* skip filter consistency check (agnostic cmds) */
 
 	bool follow;                /* pgcopydb fork --follow */
 	bool allDatabases;          /* pgcopydb clone --all-databases */

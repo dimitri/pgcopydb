@@ -12,6 +12,7 @@
 
 extern char pgcopydb_argv0[];
 extern char pgcopydb_program[];
+extern char *pgcopydb_cmdline;
 extern int logLevel;
 
 extern Semaphore log_semaphore;
