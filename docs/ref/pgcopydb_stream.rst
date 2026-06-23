@@ -104,10 +104,10 @@ replication slot as ``confirmed_flush``) and its ``done_time_epoch`` is set
 (the receive process has closed it). Those transactions have been durably
 committed on the target; the slot will never re-deliver them.
 
-After deleting the files, ``pgcopydb stream prune`` runs ``VACUUM`` on the
-source catalog (``source.db``) to return freed SQLite freelist pages to the
-operating system. ``DELETE`` in SQLite marks pages free within the file but
-does not shrink it; ``VACUUM`` is needed to actually reclaim the space.
+The deleted entries are removed from the ``cdc_files`` catalog table in
+``source.db``. The freed SQLite freelist pages are recycled automatically
+when the receive process inserts new ``cdc_files`` rows, so no explicit
+``VACUUM`` is needed.
 
 The command runs in two modes:
 
