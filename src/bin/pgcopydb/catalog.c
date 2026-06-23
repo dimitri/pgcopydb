@@ -28,6 +28,26 @@
 /*
  * pgcopydb catalog cache is a SQLite database with the following schema:
  */
+
+/*
+ * pgcopydb catalog cache is a SQLite database with the following schema.
+ *
+ * Note: indexes are split from tables for two reasons:
+ *
+ *  1. Two new non-unique indexes (s_i_tableoid, s_c_indexoid) are built after
+ *     bulk data load so they land on a fully-populated table, which is 3-5×
+ *     faster than maintaining them row-by-row.  They fix the O(N²) scan in
+ *     catalog_s_table_count_indexes (called ~211K times on a 317K-row table).
+ *
+ *  2. catalog_create_indexes() is also called when resuming an operation on an
+ *     existing catalog that pre-dates these indexes.  Using IF NOT EXISTS makes
+ *     every call idempotent.
+ *
+ * All *other* indexes (including all UNIQUE indexes) are kept in the table DDL
+ * arrays so that catalog_create_schema() installs them on the empty tables.
+ * This is critical for INSERT OR IGNORE / INSERT OR REPLACE semantics: SQLite
+ * needs the unique index present at insert time to suppress duplicates.
+ */
 static char *sourceDBcreateTableDDLs[] = {
 	"create table setup("
 	"  id integer primary key check (id = 1), "
@@ -221,39 +241,38 @@ static char *sourceDBcreateTableDDLs[] = {
 	"  last_txn_end_lsn    pg_lsn, "             /* NULL = transaction still open */
 	"  last_txn_complete   integer, "            /* 1 = had COMMIT or ROLLBACK */
 	"  last_txn_processed  integer"              /* 1 = fully written/applied */
-	")"
+	")",
+
+	/* All indexes other than s_i_tableoid / s_c_indexoid stay here so they are
+	 * created on empty tables and enforce uniqueness during data load. */
+	"create index s_d_p_oid on s_database_property(datname)",
+	"create index s_n_rlname on s_namespace(restore_list_name)",
+	"create unique index s_t_qname on s_table(qname)",
+	"create unique index s_t_rlname on s_table(restore_list_name)",
+	"create unique index s_mv_rlname on s_matview(restore_list_name)",
+	"create unique index s_mv_qname on s_matview(nspname, relname)",
+	"create unique index s_ts_oid on s_table_size(oid)",
+	"create index s_a_oid_attname on s_attr(oid, attname)",
+	"create index s_a_attisgenerated on s_attr(attisgenerated) where attisgenerated",
+	"create unique index s_i_rlname on s_index(restore_list_name)",
+	"create index s_s_rlname on s_seq(restore_list_name)",
+	"create unique index summary_extoid on summary(extoid) where extoid is not null"
 };
 
 
 /*
- * Indexes deferred until after bulk data load for source DB.  Building
- * indexes on a fully-populated table is 3-5× faster than maintaining them
- * during single-row inserts.
+ * Two non-unique indexes deferred until after bulk data load.  Building them
+ * on a fully-populated table is 3-5× faster and they fix the O(N²) scan in
+ * catalog_s_table_count_indexes (called ~211K times against a 317K-row table):
  *
- * Two new indexes fix the O(N²) full-table scan in catalog_s_table_count_indexes:
- *   s_i_tableoid — s_index rows are looked up by tableoid for every table copy
- *   s_c_indexoid — s_constraint rows are joined to s_index by indexoid
+ *   s_i_tableoid — s_index rows looked up by tableoid for every table copy
+ *   s_c_indexoid — s_constraint rows joined to s_index by indexoid
+ *
+ * IF NOT EXISTS makes every call idempotent (safe for --resume / multi-step).
  */
 static char *sourceDBcreateIndexDDLs[] = {
-	"create index if not exists s_d_p_oid on s_database_property(datname)",
-	"create index if not exists s_n_rlname on s_namespace(restore_list_name)",
-	"create unique index if not exists s_t_qname on s_table(qname)",
-	"create unique index if not exists s_t_rlname on s_table(restore_list_name)",
-	"create unique index if not exists s_mv_rlname on s_matview(restore_list_name)",
-	"create unique index if not exists s_mv_qname on s_matview(nspname, relname)",
-	"create unique index if not exists s_ts_oid on s_table_size(oid)",
-	"create index if not exists s_a_oid_attname on s_attr(oid, attname)",
-
-	/* index for filtering out generated columns */
-	"create index if not exists s_a_attisgenerated on s_attr(attisgenerated) "
-	"  where attisgenerated",
-
-	"create unique index if not exists s_i_rlname on s_index(restore_list_name)",
 	"create index if not exists s_i_tableoid on s_index(tableoid)",
-	"create index if not exists s_c_indexoid on s_constraint(indexoid)",
-	"create index if not exists s_s_rlname on s_seq(restore_list_name)",
-	"create unique index if not exists summary_extoid on summary(extoid) "
-	"  where extoid is not null"
+	"create index if not exists s_c_indexoid on s_constraint(indexoid)"
 };
 
 
@@ -411,26 +430,30 @@ static char *filterDBcreateTableDDLs[] = {
 	"  command text, "
 	"  unique(tableoid, partnum)"
 	")",
+
+	/* Indexes that must be present before data load (unique = INSERT OR IGNORE). */
+	"create unique index s_coll_rlname on s_coll(restore_list_name)",
+	"create index s_ec_oid on s_extension_config(extoid)",
+	"create index s_n_rlname on s_namespace(restore_list_name)",
+	"create unique index s_t_qname on s_table(qname)",
+	"create unique index s_t_rlname on s_table(restore_list_name)",
+	"create unique index s_mv_rlname on s_matview(restore_list_name)",
+	"create unique index s_mv_qname on s_matview(nspname, relname)",
+	"create unique index s_ts_oid on s_table_size(oid)",
+	"create unique index s_i_rlname on s_index(restore_list_name)",
+	"create index s_s_rlname on s_seq(restore_list_name)",
+	"create index s_d_refobjid on s_depend(refobjid)",
+	"create index s_d_objid on s_depend(objid)",
+
+	/* filter_catoid_oid is critical: INSERT OR IGNORE into filter() relies on it. */
+	"create unique index filter_catoid_oid on filter(catoid, oid) where oid > 0",
+	"create index filter_rlname on filter(restore_list_name)"
 };
 
+/* Deferred indexes for filter DB — same two non-unique performance indexes. */
 static char *filterDBcreateIndexDDLs[] = {
-	"create unique index if not exists s_coll_rlname on s_coll(restore_list_name)",
-	"create index if not exists s_ec_oid on s_extension_config(extoid)",
-	"create index if not exists s_n_rlname on s_namespace(restore_list_name)",
-	"create unique index if not exists s_t_qname on s_table(qname)",
-	"create unique index if not exists s_t_rlname on s_table(restore_list_name)",
-	"create unique index if not exists s_mv_rlname on s_matview(restore_list_name)",
-	"create unique index if not exists s_mv_qname on s_matview(nspname, relname)",
-	"create unique index if not exists s_ts_oid on s_table_size(oid)",
-	"create unique index if not exists s_i_rlname on s_index(restore_list_name)",
 	"create index if not exists s_i_tableoid on s_index(tableoid)",
-	"create index if not exists s_c_indexoid on s_constraint(indexoid)",
-	"create index if not exists s_s_rlname on s_seq(restore_list_name)",
-	"create index if not exists s_d_refobjid on s_depend(refobjid)",
-	"create index if not exists s_d_objid on s_depend(objid)",
-	"create unique index if not exists filter_catoid_oid on filter(catoid, oid) "
-	"  where oid > 0",
-	"create index if not exists filter_rlname on filter(restore_list_name)"
+	"create index if not exists s_c_indexoid on s_constraint(indexoid)"
 };
 
 
@@ -488,14 +511,17 @@ static char *targetDBcreateTableDDLs[] = {
 	"  nspname text not null, relname text not null, "
 	"  relkind char(1) not null, ispopulated bool, "
 	"  primary key(nspname, relname)"
-	")"
+	")",
+
+	/* Indexes created before data load (unique indexes need to be inline). */
+	"create index s_n_rlname on s_namespace(restore_list_name)",
+	"create unique index s_t_qname on s_table(qname)",
+	"create unique index s_t_rlname on s_table(restore_list_name)",
+	"create unique index s_i_rlname on s_index(restore_list_name)"
 };
 
+/* Deferred indexes for target DB — same two non-unique performance indexes. */
 static char *targetDBcreateIndexDDLs[] = {
-	"create index if not exists s_n_rlname on s_namespace(restore_list_name)",
-	"create unique index if not exists s_t_qname on s_table(qname)",
-	"create unique index if not exists s_t_rlname on s_table(restore_list_name)",
-	"create unique index if not exists s_i_rlname on s_index(restore_list_name)",
 	"create index if not exists s_i_tableoid on s_index(tableoid)",
 	"create index if not exists s_c_indexoid on s_constraint(indexoid)"
 };
@@ -1319,8 +1345,10 @@ catalog_close_stmts(DatabaseCatalog *catalog)
 
 /*
  * catalog_create_schema creates the expected schema in the given catalog.
- * Only table DDLs are run here; indexes are deferred to catalog_create_indexes
- * so they can be built after bulk data load (3-5x faster).
+ * This includes all tables and all indexes *except* s_i_tableoid and
+ * s_c_indexoid, which are deferred to catalog_create_indexes so they can
+ * be built on a fully-populated table (3-5× faster than maintaining them
+ * row-by-row during the bulk load).
  */
 bool
 catalog_create_schema(DatabaseCatalog *catalog)
