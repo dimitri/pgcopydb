@@ -110,6 +110,7 @@ typedef struct CopyDBOptions
 	 */
 	char host[256];
 	int port;
+	bool hostFromCLI;   /* true when --host was given on the command line */
 
 	bool dryRun;        /* --dry-run: report what would happen, do nothing */
 	bool allDatabases;

@@ -298,6 +298,7 @@ cli_stream_getopts(int argc, char **argv)
 			case 1001:      /* --host: follow coordinator TCP listen host */
 			{
 				strlcpy(options.host, optarg, sizeof(options.host));
+				options.hostFromCLI = true;
 				log_trace("--host %s", options.host);
 				break;
 			}
@@ -783,9 +784,18 @@ cli_stream_prune(int argc, char **argv)
 
 	bool dry_run = streamDBoptions.dryRun;
 
-	/* coordinator mode */
-	ServiceEndpoint service =
-		ld_service_endpoint(streamDBoptions.host, streamDBoptions.port);
+	/*
+	 * Coordinator mode only when --host was given explicitly on the command
+	 * line.  PGCOPYDB_HOST / PGCOPYDB_PORT are used by the follow process on
+	 * the server side (to know where to listen); they should not force prune
+	 * into coordinator mode when no follow process is running.
+	 */
+	ServiceEndpoint service = { 0 };
+
+	if (streamDBoptions.hostFromCLI)
+	{
+		service = ld_service_endpoint(streamDBoptions.host, streamDBoptions.port);
+	}
 
 	if (service.enabled)
 	{
