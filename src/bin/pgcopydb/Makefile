@@ -43,11 +43,11 @@ COMMON_LIBS += -I${SRC_DIR}../lib/sqlite/
 CC = $(shell $(PG_CONFIG) --cc)
 
 DEFAULT_CFLAGS = -std=c99 -D_GNU_SOURCE -g
+DEFAULT_CFLAGS += -Wformat
 DEFAULT_CFLAGS += -I $(shell $(PG_CONFIG) --includedir)
 DEFAULT_CFLAGS += -I $(shell $(PG_CONFIG) --includedir-server)
 DEFAULT_CFLAGS += -I $(shell $(PG_CONFIG) --pkgincludedir)/internal
 DEFAULT_CFLAGS += $(shell $(PG_CONFIG) --cflags)
-DEFAULT_CFLAGS += -Wformat
 DEFAULT_CFLAGS += -Wall
 DEFAULT_CFLAGS += -Werror=implicit-int
 DEFAULT_CFLAGS += -Werror=implicit-function-declaration
@@ -98,6 +98,11 @@ LIBS += $(shell $(PG_CONFIG) --libs)
 LIBS += -lpq
 LIBS += -lncurses
 LIBS += -lgc
+# meson-built PostgreSQL leaves pg_config --libs empty (PG16 through PG19+);
+# we must link libpgcommon and libpgport explicitly for strlcpy, pg_usleep, etc.
+LIBS += -lpgcommon
+LIBS += -lpgport
+LIBS += -lm
 
 # Needed for ARM64 based OSX
 ifeq ($(shell uname -s),Darwin)

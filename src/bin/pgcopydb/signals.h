@@ -9,6 +9,8 @@
 #include <inttypes.h>
 #include <signal.h>
 
+#include "postgres_fe.h"   /* SIGNAL_ARGS, pqsigfunc */
+
 /* This flag controls termination of the main loop. */
 extern volatile sig_atomic_t asked_to_stop;      /* SIGTERM */
 extern volatile sig_atomic_t asked_to_stop_fast; /* SIGINT */
@@ -19,11 +21,11 @@ extern volatile sig_atomic_t asked_to_quit;      /* SIGQUIT */
 }
 
 void set_signal_handlers(bool exitOnQuit);
-void catch_reload(int sig);
-void catch_int(int sig);
-void catch_term(int sig);
-void catch_quit(int sig);
-void catch_quit_and_exit(int sig);
+void catch_reload(SIGNAL_ARGS);
+void catch_int(SIGNAL_ARGS);
+void catch_term(SIGNAL_ARGS);
+void catch_quit(SIGNAL_ARGS);
+void catch_quit_and_exit(SIGNAL_ARGS);
 void unset_signal_flags(void);
 
 int get_current_signal(int defaultSignal);

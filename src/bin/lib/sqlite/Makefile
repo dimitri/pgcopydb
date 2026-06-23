@@ -7,7 +7,7 @@ OBJS = $(patsubst %.c,%.o,$(SRC))
 PG_CONFIG ?= pg_config
 
 CC = $(shell $(PG_CONFIG) --cc)
-DEFAULT_CFLAGS = $(shell $(PG_CONFIG) --cflags)
+DEFAULT_CFLAGS = -Wformat $(shell $(PG_CONFIG) --cflags)
 
 ifdef DEBUG
 # Use optimization option that provides good debugging experience

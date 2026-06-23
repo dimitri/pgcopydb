@@ -1,0 +1,161 @@
+# Build pgcopydb against multiple PostgreSQL versions compiled from source.
+# Used to diagnose and verify build compatibility with unreleased PG versions
+# before packages are available in PGDG apt/yum.
+#
+# Each PG version is a separate FROM stage so BuildKit can build them all in
+# parallel and cache them independently.
+#
+# Usage:
+#   docker build -f Dockerfile.pg-src --progress=plain -t pgcopydb-pg-src .
+#
+# Override a specific version tarball:
+#   docker build -f Dockerfile.pg-src \
+#     --build-arg PG19_TARBALL=https://ftp.postgresql.org/pub/source/v19beta2/postgresql-19beta2.tar.bz2 \
+#     --progress=plain -t pgcopydb-pg-src .
+#
+# --progress=plain shows full compiler output including warnings and errors.
+
+# ---------------------------------------------------------------------------
+# Common build dependencies (shared base for all PG source builds)
+# ---------------------------------------------------------------------------
+FROM debian:12-slim AS pg-deps
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bison \
+    build-essential \
+    ca-certificates \
+    curl \
+    flex \
+    gettext \
+    libicu-dev \
+    liblz4-dev \
+    libncurses-dev \
+    libpam-dev \
+    libreadline-dev \
+    libssl-dev \
+    libxml2-dev \
+    libxslt1-dev \
+    libzstd-dev \
+    meson \
+    ninja-build \
+    perl \
+    pkg-config \
+    python3 \
+    python3-pip \
+    zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---------------------------------------------------------------------------
+# Common meson options shared across all PG versions
+# ---------------------------------------------------------------------------
+ARG MESON_COMMON_OPTS="\
+  -Dtap_tests=disabled \
+  -Ddocs=disabled \
+  -Dplpython=disabled \
+  -Dplperl=disabled \
+  -Dpltcl=disabled"
+
+# ---------------------------------------------------------------------------
+# PG 16 — latest stable
+# Each PG version uses its own src/ + an out-of-source build/ directory.
+# PG16 release tarballs ship pre-generated catalog headers, node support
+# files, parser outputs, etc. which conflict with meson's "non-clean source
+# directory" check.  We use a two-pass approach: first pass collects the
+# list of conflicting files from meson's error message, then we delete them
+# and retry — meson regenerates them in the out-of-source build directory.
+# ---------------------------------------------------------------------------
+FROM pg-deps AS pg16-build
+ARG PG16_TARBALL=https://ftp.postgresql.org/pub/source/v16.14/postgresql-16.14.tar.bz2
+WORKDIR /usr/src/pg16
+RUN curl -fsSL "${PG16_TARBALL}" | tar -xj --strip-components=1
+RUN MOPTS="-Dtap_tests=disabled -Ddocs=disabled -Dplpython=disabled -Dplperl=disabled -Dpltcl=disabled"; \
+    meson setup /usr/build/pg16 --prefix=/opt/pgsql/16 $MOPTS >/tmp/meson16.log 2>&1 || \
+    ( tr ' ' '\n' </tmp/meson16.log | grep "^/usr/src/pg16/" | xargs -r rm -f \
+      && meson setup /usr/build/pg16 --prefix=/opt/pgsql/16 $MOPTS ) \
+    && ninja -C /usr/build/pg16 install
+RUN /opt/pgsql/16/bin/pg_config --version
+
+# ---------------------------------------------------------------------------
+# PG 17 — latest stable
+# ---------------------------------------------------------------------------
+FROM pg-deps AS pg17-build
+ARG PG17_TARBALL=https://ftp.postgresql.org/pub/source/v17.10/postgresql-17.10.tar.bz2
+WORKDIR /usr/src/pg17
+RUN curl -fsSL "${PG17_TARBALL}" | tar -xj --strip-components=1
+RUN meson setup /usr/build/pg17 --prefix=/opt/pgsql/17 ${MESON_COMMON_OPTS} \
+  && ninja -C /usr/build/pg17 install
+RUN /opt/pgsql/17/bin/pg_config --version
+
+# ---------------------------------------------------------------------------
+# PG 18 — latest stable
+# ---------------------------------------------------------------------------
+FROM pg-deps AS pg18-build
+ARG PG18_TARBALL=https://ftp.postgresql.org/pub/source/v18.4/postgresql-18.4.tar.bz2
+WORKDIR /usr/src/pg18
+RUN curl -fsSL "${PG18_TARBALL}" | tar -xj --strip-components=1
+RUN meson setup /usr/build/pg18 --prefix=/opt/pgsql/18 ${MESON_COMMON_OPTS} \
+  && ninja -C /usr/build/pg18 install
+RUN /opt/pgsql/18/bin/pg_config --version
+
+# ---------------------------------------------------------------------------
+# PG 19 — beta / development
+# ---------------------------------------------------------------------------
+FROM pg-deps AS pg19-build
+ARG PG19_TARBALL=https://ftp.postgresql.org/pub/source/v19beta1/postgresql-19beta1.tar.bz2
+WORKDIR /usr/src/pg19
+RUN curl -fsSL "${PG19_TARBALL}" | tar -xj --strip-components=1
+RUN meson setup /usr/build/pg19 --prefix=/opt/pgsql/19 ${MESON_COMMON_OPTS} \
+  && ninja -C /usr/build/pg19 install
+RUN /opt/pgsql/19/bin/pg_config --version
+
+# ---------------------------------------------------------------------------
+# pgcopydb build — compile against each installed PG version in a loop
+# ---------------------------------------------------------------------------
+FROM pg-deps AS pgcopydb-build
+
+# Additional deps needed only for pgcopydb (not for PG itself)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgc-dev \
+    make \
+    && rm -rf /var/lib/apt/lists/*
+
+# Collect all four PG installations from their respective build stages
+COPY --from=pg16-build /opt/pgsql/16 /opt/pgsql/16
+COPY --from=pg17-build /opt/pgsql/17 /opt/pgsql/17
+COPY --from=pg18-build /opt/pgsql/18 /opt/pgsql/18
+COPY --from=pg19-build /opt/pgsql/19 /opt/pgsql/19
+
+WORKDIR /usr/src/pgcopydb
+
+COPY Makefile GIT-VERSION-GEN GIT-VERSION-FILE version ./
+
+COPY src/bin/lib/sqlite src/bin/lib/sqlite
+RUN make -C src/bin/lib/sqlite clean sqlite3.o sqlite3
+
+COPY src/bin/lib/jenkins  src/bin/lib/jenkins
+COPY src/bin/lib/libs     src/bin/lib/libs
+COPY src/bin/lib/log      src/bin/lib/log
+COPY src/bin/lib/parson   src/bin/lib/parson
+COPY src/bin/lib/pg       src/bin/lib/pg
+COPY src/bin/lib/subcommands.c src/bin/lib/subcommands.c
+COPY src/bin/lib/uthash   src/bin/lib/uthash
+COPY src/bin/Makefile     src/bin/Makefile
+COPY src/bin/pgcopydb     src/bin/pgcopydb
+
+# Build pgcopydb against each PG version.
+# On failure, print a clear header then re-run without -s to show full errors.
+RUN for v in 16 17 18 19; do \
+      echo ""; \
+      echo "=========================================================="; \
+      echo " Building pgcopydb against PostgreSQL $v"; \
+      echo " pg_config: $(/opt/pgsql/$v/bin/pg_config --version)"; \
+      echo "=========================================================="; \
+      make -s clean; \
+      PG_CONFIG="/opt/pgsql/$v/bin/pg_config" make -j$(nproc) 2>&1 || { \
+        echo "FAILED for PG$v — re-running without -s for full output:" >&2; \
+        make clean; \
+        PG_CONFIG="/opt/pgsql/$v/bin/pg_config" make -j$(nproc); \
+        exit 1; \
+      }; \
+      echo "OK: pgcopydb built successfully against PG$v"; \
+    done
