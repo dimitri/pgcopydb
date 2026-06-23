@@ -2612,63 +2612,103 @@ getTableArray(void *ctx, PGresult *result)
 
 	bool parsedOk = true;
 
+	if (context->catalog == NULL || context->catalog->db == NULL)
+	{
+		context->parsedOk = false;
+		return;
+	}
+
+	/*
+	 * Accumulate regular tables into a batch buffer, flush to SQLite in
+	 * chunks bounded by SQLITE_LIMIT_VARIABLE_NUMBER.  Matviews are rare
+	 * and go through the single-row path.
+	 */
+	int maxVars =
+		sqlite3_limit(context->catalog->db, SQLITE_LIMIT_VARIABLE_NUMBER, -1);
+	int batchCapacity = maxVars / CATALOG_INSERT_NCOLS_S_TABLE;
+
+	SourceTable *tableBatch = (SourceTable *) calloc(batchCapacity, sizeof(SourceTable));
+
+	if (tableBatch == NULL)
+	{
+		log_error("Failed to allocate table batch buffer");
+		context->parsedOk = false;
+		return;
+	}
+
+	int tableBatchCount = 0;
+
 	for (int rowNumber = 0; rowNumber < nTuples && parsedOk; rowNumber++)
 	{
-		SourceTable *table = (SourceTable *) calloc(1, sizeof(SourceTable));
+		SourceTable table = { 0 };
 
-		if (!parseCurrentSourceTable(result, rowNumber, table))
+		if (!parseCurrentSourceTable(result, rowNumber, &table))
 		{
 			parsedOk = false;
 			break;
 		}
 
-		strlcpy(table->datname, context->datname, sizeof(table->datname));
+		strlcpy(table.datname, context->datname, sizeof(table.datname));
 
-		if (context->catalog != NULL && context->catalog->db != NULL)
+		switch (table.relkind)
 		{
-			switch (table->relkind)
+			/* regular or partitioned table — accumulate into batch */
+			case 'r':
+			case 'p':
 			{
-				/* regular or partitioned table */
-				case 'r':
-				case 'p':
+				tableBatch[tableBatchCount++] = table;
+
+				if (tableBatchCount == batchCapacity)
 				{
-					parsedOk = catalog_add_s_table(context->catalog, table);
-
-					if (parsedOk && context->estimateTableSizes)
-					{
-						SourceTableSize sourceTableSize = {
-							.oid = table->oid,
-							.bytes = table->bytesEstimate
-						};
-
-						strlcpy(sourceTableSize.bytesPretty,
-								table->bytesEstimatePretty,
-								sizeof(sourceTableSize.bytesPretty));
-
-						parsedOk = catalog_add_s_table_size(context->catalog,
-															&sourceTableSize);
-					}
-
-					break;
+					parsedOk = catalog_add_s_table_batch(context->catalog,
+														 tableBatch,
+														 tableBatchCount);
+					tableBatchCount = 0;
 				}
 
-				/* materialized view */
-				case 'm':
+				if (parsedOk && context->estimateTableSizes)
 				{
-					parsedOk = catalog_add_s_matview(context->catalog, table);
-					break;
+					SourceTableSize sourceTableSize = {
+						.oid = table.oid,
+						.bytes = table.bytesEstimate
+					};
+
+					strlcpy(sourceTableSize.bytesPretty,
+							table.bytesEstimatePretty,
+							sizeof(sourceTableSize.bytesPretty));
+
+					parsedOk = catalog_add_s_table_size(context->catalog,
+														&sourceTableSize);
 				}
 
-				default:
-				{
-					log_error("Unknown relkind \"%c\" for relation \"%s\"",
-							  table->relkind, table->qname);
-					parsedOk = false;
-					break;
-				}
+				break;
+			}
+
+			/* materialized view — infrequent, keep single-row path */
+			case 'm':
+			{
+				parsedOk = catalog_add_s_matview(context->catalog, &table);
+				break;
+			}
+
+			default:
+			{
+				log_error("Unknown relkind \"%c\" for relation \"%s\"",
+						  table.relkind, table.qname);
+				parsedOk = false;
+				break;
 			}
 		}
 	}
+
+	/* flush remaining regular tables */
+	if (parsedOk && tableBatchCount > 0)
+	{
+		parsedOk = catalog_add_s_table_batch(context->catalog,
+											 tableBatch, tableBatchCount);
+	}
+
+	free(tableBatch);
 
 	context->parsedOk = parsedOk;
 }
@@ -3167,6 +3207,12 @@ getTableAttributeArray(void *ctx, PGresult *result)
 		return;
 	}
 
+	if (context->catalog == NULL || context->catalog->db == NULL)
+	{
+		context->parsedOk = false;
+		return;
+	}
+
 	int fnreloid = PQfnumber(result, "attrelid");
 	int fnattnum = PQfnumber(result, "attnum");
 	int fnatttypid = PQfnumber(result, "atttypid");
@@ -3178,7 +3224,27 @@ getTableAttributeArray(void *ctx, PGresult *result)
 	int fnhasbinaryio = PQfnumber(result, "hasbinaryio");
 	int fntypsendfunc = PQfnumber(result, "typsendfunc");
 
-	for (int rowNumber = 0; rowNumber < nTuples && context->parsedOk; rowNumber++)
+	int maxVars =
+		sqlite3_limit(context->catalog->db, SQLITE_LIMIT_VARIABLE_NUMBER, -1);
+	int batchCapacity = maxVars / CATALOG_INSERT_NCOLS_S_ATTR;
+
+	SourceTableAttribute *attrBatch =
+		(SourceTableAttribute *) calloc(batchCapacity, sizeof(SourceTableAttribute));
+	uint32_t *oidBatch = (uint32_t *) calloc(batchCapacity, sizeof(uint32_t));
+
+	if (attrBatch == NULL || oidBatch == NULL)
+	{
+		log_error("Failed to allocate attribute batch buffers");
+		free(attrBatch);
+		free(oidBatch);
+		context->parsedOk = false;
+		return;
+	}
+
+	bool parsedOk = true;
+	int batchCount = 0;
+
+	for (int rowNumber = 0; rowNumber < nTuples && parsedOk; rowNumber++)
 	{
 		uint32_t tableoid = 0;
 		SourceTableAttribute attr = { 0 };
@@ -3188,24 +3254,24 @@ getTableAttributeArray(void *ctx, PGresult *result)
 		if (!stringToUInt32(value, &tableoid) || tableoid == 0)
 		{
 			log_error("Invalid attrelid OID \"%s\"", value);
-			context->parsedOk = false;
-			return;
+			parsedOk = false;
+			break;
 		}
 
 		value = PQgetvalue(result, rowNumber, fnattnum);
 		if (!stringToInt(value, &attr.attnum))
 		{
 			log_error("Invalid attnum \"%s\"", value);
-			context->parsedOk = false;
-			return;
+			parsedOk = false;
+			break;
 		}
 
 		value = PQgetvalue(result, rowNumber, fnatttypid);
 		if (!stringToUInt32(value, &attr.atttypid))
 		{
 			log_error("Invalid atttypid \"%s\"", value);
-			context->parsedOk = false;
-			return;
+			parsedOk = false;
+			break;
 		}
 
 		value = PQgetvalue(result, rowNumber, fnattname);
@@ -3240,12 +3306,29 @@ getTableAttributeArray(void *ctx, PGresult *result)
 			attr.attisbinarycompatible = hasBinaryIO;
 		}
 
-		if (!catalog_add_s_attr(context->catalog, tableoid, &attr))
+		oidBatch[batchCount] = tableoid;
+		attrBatch[batchCount] = attr;
+		batchCount++;
+
+		if (batchCount == batchCapacity)
 		{
-			context->parsedOk = false;
-			return;
+			parsedOk = catalog_add_s_attr_batch(context->catalog,
+												oidBatch, attrBatch, batchCount);
+			batchCount = 0;
 		}
 	}
+
+	/* flush remaining attributes */
+	if (parsedOk && batchCount > 0)
+	{
+		parsedOk = catalog_add_s_attr_batch(context->catalog,
+											oidBatch, attrBatch, batchCount);
+	}
+
+	free(attrBatch);
+	free(oidBatch);
+
+	context->parsedOk = parsedOk;
 }
 
 
@@ -3435,39 +3518,85 @@ getIndexArray(void *ctx, PGresult *result)
 		return;
 	}
 
-	bool parsedOk = true;
-
-	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
+	if (context->catalog == NULL || context->catalog->db == NULL)
 	{
-		SourceIndex *index = (SourceIndex *) calloc(1, sizeof(SourceIndex));
+		context->parsedOk = false;
+		return;
+	}
 
-		if (!parseCurrentSourceIndex(result, rowNumber, index))
+	/*
+	 * Batch s_index inserts.  s_constraint uses the same source array but
+	 * only a subset of entries (those with constraintOid != 0); the batch
+	 * function filters them internally.
+	 */
+	int maxVars =
+		sqlite3_limit(context->catalog->db, SQLITE_LIMIT_VARIABLE_NUMBER, -1);
+	int batchCapacity = maxVars / CATALOG_INSERT_NCOLS_S_INDEX;
+
+	SourceIndex *indexBatch =
+		(SourceIndex *) calloc(batchCapacity, sizeof(SourceIndex));
+
+	if (indexBatch == NULL)
+	{
+		log_error("Failed to allocate index batch buffer");
+		context->parsedOk = false;
+		return;
+	}
+
+	bool parsedOk = true;
+	int batchCount = 0;
+
+	for (int rowNumber = 0; rowNumber < nTuples && parsedOk; rowNumber++)
+	{
+		SourceIndex *idx = &indexBatch[batchCount];
+		*idx = (SourceIndex) {
+			0
+		};
+
+		if (!parseCurrentSourceIndex(result, rowNumber, idx))
 		{
 			parsedOk = false;
 			break;
 		}
 
-		if (context->catalog != NULL && context->catalog->db != NULL)
+		batchCount++;
+
+		if (batchCount == batchCapacity)
 		{
-			if (!catalog_add_s_index(context->catalog, index))
+			parsedOk = catalog_add_s_index_batch(context->catalog,
+												 indexBatch, batchCount) &&
+					   catalog_add_s_constraint_batch(context->catalog,
+													  indexBatch, batchCount);
+
+			/* free heap strings from this batch before reuse */
+			for (int i = 0; i < batchCount; i++)
 			{
-				/* errors have already been logged */
-				parsedOk = false;
-				break;
+				free(indexBatch[i].indexColumns);
+				free(indexBatch[i].indexDef);
+				free(indexBatch[i].constraintDef);
 			}
 
-			/* not all indexes are supporting a constraint, of course */
-			if (index->constraintOid > 0)
-			{
-				if (!catalog_add_s_constraint(context->catalog, index))
-				{
-					/* errors have already been logged */
-					parsedOk = false;
-					break;
-				}
-			}
+			batchCount = 0;
 		}
 	}
+
+	/* flush remaining rows */
+	if (parsedOk && batchCount > 0)
+	{
+		parsedOk = catalog_add_s_index_batch(context->catalog,
+											 indexBatch, batchCount) &&
+				   catalog_add_s_constraint_batch(context->catalog,
+												  indexBatch, batchCount);
+
+		for (int i = 0; i < batchCount; i++)
+		{
+			free(indexBatch[i].indexColumns);
+			free(indexBatch[i].indexDef);
+			free(indexBatch[i].constraintDef);
+		}
+	}
+
+	free(indexBatch);
 
 	context->parsedOk = parsedOk;
 }

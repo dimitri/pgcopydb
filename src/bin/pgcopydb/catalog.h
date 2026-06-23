@@ -11,6 +11,18 @@
 #include "string_utils.h"
 
 /*
+ * Column counts for batch INSERT SQL generation.  These must match the
+ * parameter lists in catalog_add_s_*() exactly so that the batch functions
+ * compute correct ?NNN parameter numbers and stay within SQLite's
+ * SQLITE_LIMIT_VARIABLE_NUMBER limit.
+ */
+#define CATALOG_INSERT_NCOLS_S_TABLE 11
+#define CATALOG_INSERT_NCOLS_S_ATTR 10
+#define CATALOG_INSERT_NCOLS_S_INDEX 10
+#define CATALOG_INSERT_NCOLS_S_CONSTRAINT 6
+#define CATALOG_INSERT_NCOLS_S_SEQ 9
+
+/*
  * Internal infrastructure to bind values to SQLite prepared statements.
  */
 typedef struct SQLiteQuery SQLiteQuery;
@@ -23,6 +35,7 @@ struct SQLiteQuery
 	const char *sql;
 
 	bool errorOnZeroRows;
+	bool fromCache;             /* true when ppStmt is owned by the stmtCache */
 
 	CatalogFetchResult *fetchFunction;
 	void *context;
@@ -40,6 +53,7 @@ bool catalog_attach(DatabaseCatalog *a, DatabaseCatalog *b, const char *name);
 bool catalog_close(DatabaseCatalog *catalog);
 
 bool catalog_create_schema(DatabaseCatalog *catalog);
+bool catalog_create_indexes(DatabaseCatalog *catalog);
 bool catalog_drop_schema(DatabaseCatalog *catalog);
 
 bool catalog_set_wal_mode(DatabaseCatalog *catalog);
@@ -207,6 +221,9 @@ bool catalog_s_matview_fetch(SQLiteQuery *query);
  * Tables and their attributes and parts (COPY partitioning).
  */
 bool catalog_add_s_table(DatabaseCatalog *catalog, SourceTable *table);
+bool catalog_add_s_table_batch(DatabaseCatalog *catalog,
+							   SourceTable *tables,
+							   int count);
 bool catalog_add_s_table_part(DatabaseCatalog *catalog, SourceTable *table);
 
 bool catalog_add_s_table_chksum(DatabaseCatalog *catalog,
@@ -312,6 +329,10 @@ bool catalog_s_table_attrs_fetch(SQLiteQuery *query);
 bool catalog_add_s_attr(DatabaseCatalog *catalog,
 						uint32_t tableoid,
 						SourceTableAttribute *attr);
+bool catalog_add_s_attr_batch(DatabaseCatalog *catalog,
+							  uint32_t *tableoids,
+							  SourceTableAttribute *attrs,
+							  int count);
 bool catalog_s_table_oid_array(DatabaseCatalog *catalog,
 							   char **text,
 							   int *count);
@@ -327,7 +348,13 @@ bool catalog_s_attr_fetch(SQLiteQuery *query);
  * Indexes
  */
 bool catalog_add_s_index(DatabaseCatalog *catalog, SourceIndex *index);
+bool catalog_add_s_index_batch(DatabaseCatalog *catalog,
+							   SourceIndex *indexes,
+							   int count);
 bool catalog_add_s_constraint(DatabaseCatalog *catalog, SourceIndex *index);
+bool catalog_add_s_constraint_batch(DatabaseCatalog *catalog,
+									SourceIndex *indexes,
+									int count);
 
 bool catalog_lookup_s_index(DatabaseCatalog *catalog,
 							uint32_t oid,
@@ -693,6 +720,10 @@ typedef struct BindParam
 bool catalog_execute(DatabaseCatalog *catalog, char *sql);
 
 bool catalog_sql_prepare(sqlite3 *db, const char *sql, SQLiteQuery *query);
+bool catalog_sql_prepare_cached(DatabaseCatalog *catalog,
+								const char *sql,
+								SQLiteQuery *query);
+bool catalog_close_stmts(DatabaseCatalog *catalog);
 bool catalog_sql_bind(SQLiteQuery *query, BindParam *params, int count);
 bool catalog_sql_execute(SQLiteQuery *query);
 bool catalog_sql_execute_once(SQLiteQuery *query);
