@@ -8,12 +8,24 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "postgres_fe.h"        /* pqsignal, portable sigaction wrapper */
+#include "postgres_fe.h"        /* pqsignal, SIGNAL_ARGS, pqsigfunc */
 
 #include "defaults.h"
 #include "lock_utils.h"
 #include "log.h"
 #include "signals.h"
+
+/*
+ * PG19 introduced PG_SIG_IGN / PG_SIG_DFL as properly typed casts of SIG_IGN
+ * and SIG_DFL to pqsigfunc (whose signature grew a second arg in PG19).
+ * Define them here for older PG versions so the call sites are uniform.
+ */
+#ifndef PG_SIG_IGN
+#define PG_SIG_IGN ((pqsigfunc) SIG_IGN)
+#endif
+#ifndef PG_SIG_DFL
+#define PG_SIG_DFL ((pqsigfunc) SIG_DFL)
+#endif
 
 /* This flag controls termination of the main loop. */
 volatile sig_atomic_t asked_to_stop = 0;      /* SIGTERM */
@@ -36,7 +48,7 @@ set_signal_handlers(bool exitOnQuit)
 	pqsignal(SIGTERM, catch_term);
 
 	/* ignore SIGPIPE so that EPIPE is returned instead */
-	pqsignal(SIGPIPE, SIG_IGN);
+	pqsignal(SIGPIPE, PG_SIG_IGN);
 
 	if (exitOnQuit)
 	{
@@ -53,8 +65,10 @@ set_signal_handlers(bool exitOnQuit)
  * catch_reload receives the SIGHUP signal.
  */
 void
-catch_reload(int sig)
+catch_reload(SIGNAL_ARGS)
 {
+	int sig = postgres_signal_arg;
+
 	asked_to_reload = 1;
 	pqsignal(sig, catch_reload);
 }
@@ -64,8 +78,10 @@ catch_reload(int sig)
  * catch_int receives the SIGINT signal.
  */
 void
-catch_int(int sig)
+catch_int(SIGNAL_ARGS)
 {
+	int sig = postgres_signal_arg;
+
 	asked_to_stop_fast = 1;
 	pqsignal(sig, catch_int);
 }
@@ -75,8 +91,10 @@ catch_int(int sig)
  * catch_stop receives SIGTERM signal.
  */
 void
-catch_term(int sig)
+catch_term(SIGNAL_ARGS)
 {
+	int sig = postgres_signal_arg;
+
 	asked_to_stop = 1;
 	pqsignal(sig, catch_term);
 }
@@ -86,8 +104,10 @@ catch_term(int sig)
  * catch_quit receives the SIGQUIT signal.
  */
 void
-catch_quit(int sig)
+catch_quit(SIGNAL_ARGS)
 {
+	int sig = postgres_signal_arg;
+
 	/* default signal handler disposition is to core dump, we don't */
 	asked_to_quit = 1;
 	pqsignal(sig, catch_quit);
@@ -98,7 +118,7 @@ catch_quit(int sig)
  * quit_and_exit exit(EXIT_CODE_QUIT) upon receiving the SIGQUIT signal.
  */
 void
-catch_quit_and_exit(int sig)
+catch_quit_and_exit(SIGNAL_ARGS)
 {
 	/* default signal handler disposition is to core dump, we don't */
 	log_warn("SIGQUIT");
@@ -136,7 +156,7 @@ get_current_signal(int defaultSignal)
  * re-processing an exit flag that is currently being processed already.
  */
 void
-unset_signal_flags()
+unset_signal_flags(void)
 {
 	asked_to_stop = 0;
 	asked_to_stop_fast = 0;

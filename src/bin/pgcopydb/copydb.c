@@ -689,7 +689,7 @@ copydb_init_table_specs(CopyTableDataSpec *tableSpecs,
  * until all the known subprocess are finished, then returns true.
  */
 bool
-copydb_fatal_exit()
+copydb_fatal_exit(void)
 {
 	log_fatal("Terminating all processes in our process group");
 

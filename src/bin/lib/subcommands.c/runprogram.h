@@ -435,7 +435,7 @@ free_program(Program *prog)
  * and stdout and exits with the exit code EXIT_CODE_INTERNAL_ERROR.
  */
 static void
-exit_internal_error()
+exit_internal_error(void)
 {
 	fprintf(stdout, "%s\n", strerror(errno));
 	fprintf(stderr, "%s\n", strerror(errno));

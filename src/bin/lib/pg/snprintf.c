@@ -449,6 +449,7 @@ nextch2:
 				if (accum == 0 && !pointflag)
 					zpad = '0';
 				/* FALL THRU */
+				__attribute__((fallthrough));
 			case '1':
 			case '2':
 			case '3':
