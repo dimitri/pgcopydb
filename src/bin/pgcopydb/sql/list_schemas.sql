@@ -15,8 +15,11 @@ SELECT n.oid,
  WHERE n.nspname <> 'information_schema'
    AND n.nspname !~ '^pg_'
    AND n.nspname <> 'pgcopydb'
-   AND (f.incl_exact IS NULL OR n.nspname = ANY(f.incl_exact))
-   AND (f.incl_re IS NULL OR n.nspname ~ ANY(f.incl_re))
+   AND (
+       f.incl_exact IS NULL AND f.incl_re IS NULL
+       OR (f.incl_exact IS NOT NULL AND n.nspname = ANY(f.incl_exact))
+       OR (f.incl_re IS NOT NULL AND n.nspname ~ ANY(f.incl_re))
+   )
    AND (f.excl_exact IS NULL OR n.nspname <> ALL(f.excl_exact))
    AND (f.excl_re IS NULL OR NOT (n.nspname ~ ANY(f.excl_re)))
  ORDER BY n.nspname;

@@ -54,10 +54,8 @@
  */
 static char *sourceDBcreateTableDDLs[] = {
 	/*
-	 * filters      : JSON representation of the parsed SourceFilters struct
-	 * filters_ini_text: verbatim INI file content; stored so that a resume can
-	 *   detect filter-file changes via exact text comparison (semantic diff is
-	 *   a future improvement).
+	 * filters: JSON representation of the parsed SourceFilters struct,
+	 * used to detect filter changes on resume.
 	 */
 	"create table setup("
 	"  id integer primary key check (id = 1), "
@@ -66,8 +64,7 @@ static char *sourceDBcreateTableDDLs[] = {
 	"  snapshot text, "
 	"  split_tables_larger_than integer, "
 	"  split_max_parts integer, "
-	"  filters text, "
-	"  filters_ini_text text "
+	"  filters text"
 	")",
 
 	/*
@@ -463,9 +460,6 @@ static char *filterDBcreateTableDDLs[] = {
 	 *
 	 * These tables are not used by the migration pipeline itself — expansion
 	 * into exact (nspname, relname) pairs happens in filters_validate_and_normalize().
-	 * Stored via catalog_register_filters_ini_text(); exact text diff vs the
-	 * stored copy detects filter-file changes across resume attempts (semantic
-	 * diff is a future improvement).
 	 */
 	"create table filter_incl_schema_pattern(nspname_re text not null)",
 	"create table filter_excl_schema_pattern(nspname_re text not null)",
@@ -3771,66 +3765,6 @@ catalog_filter_table_arrays(DatabaseCatalog *catalog, const char *section,
 	(void) catalog_sql_finalize(&query);
 
 	return true;
-}
-
-
-/*
- * catalog_filters_as_json produces the same JSON object as filters_as_json()
- * but derives it from the f_schema / f_table SQLite tables (populated by
- * catalog_populate_filters).  The SQL (filters_as_json.sql) aggregates both
- * tables once each via CTEs and builds the object with json_group_object();
- * keys with empty arrays are omitted by the kv CTE's WHERE clauses.
- */
-bool
-catalog_filters_as_json(DatabaseCatalog *catalog, const char *filter_type,
-						char **json)
-{
-	sqlite3 *db = catalog->db;
-
-	if (db == NULL)
-	{
-		log_error("BUG: catalog_filters_as_json: db is NULL");
-		return false;
-	}
-
-	const char *sql = NULL;
-
-	if (!pgcopydb_sql_filters_as_json(&sql))
-	{
-		return false;
-	}
-
-	SQLiteQuery query = { 0 };
-
-	if (!catalog_sql_prepare(db, sql, &query))
-	{
-		return false;
-	}
-
-	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_TEXT, "type", 0, (char *) filter_type },
-	};
-
-	if (!catalog_sql_bind(&query, params, 1))
-	{
-		return false;
-	}
-
-	int rc = catalog_sql_step(&query);
-
-	if (rc != SQLITE_ROW)
-	{
-		log_error("[SQLite %d: %s]: %s", rc, query.sql, sqlite3_errmsg(db));
-		(void) catalog_sql_finalize(&query);
-		return false;
-	}
-
-	const char *str = (const char *) sqlite3_column_text(query.ppStmt, 0);
-
-	*json = str ? strdup(str) : NULL;
-	(void) catalog_sql_finalize(&query);
-
-	return *json != NULL;
 }
 
 

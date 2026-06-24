@@ -145,11 +145,3 @@ pgcopydb_sql_filter_table_arrays(const char **sql)
 	*sql = sql_filter_table_arrays;
 	return true;
 }
-
-
-bool
-pgcopydb_sql_filters_as_json(const char **sql)
-{
-	*sql = sql_filters_as_json;
-	return true;
-}

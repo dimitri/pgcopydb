@@ -65,9 +65,13 @@ SELECT c.oid,
    -- table is in the excluded set if its schema is excluded OR if the table itself
    -- matches an exclude-table entry
    AND (
-       -- schema not in include-only set (when include-only-schema is active)
-       (f.incl_schema_exact IS NOT NULL AND n.nspname <> ALL(f.incl_schema_exact))
-    OR (f.incl_schema_re IS NOT NULL AND NOT (n.nspname ~ ANY(f.incl_schema_re)))
+       -- schema not in include-only set (when include-only-schema is active):
+       -- a schema is excluded only when it matches NONE of the include rules
+       (
+           (f.incl_schema_exact IS NOT NULL OR f.incl_schema_re IS NOT NULL)
+           AND (f.incl_schema_exact IS NULL OR n.nspname <> ALL(f.incl_schema_exact))
+           AND (f.incl_schema_re IS NULL OR NOT (n.nspname ~ ANY(f.incl_schema_re)))
+       )
     OR -- schema matches an explicit exclude-schema rule
        n.nspname = ANY(f.excl_schema_exact)
     OR (f.excl_schema_re IS NOT NULL AND n.nspname ~ ANY(f.excl_schema_re))

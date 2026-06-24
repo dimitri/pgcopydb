@@ -354,10 +354,6 @@ bool catalog_filter_table_arrays(DatabaseCatalog *catalog,
 								 char **er_nsp, char **er_rel,
 								 char **re_nsp, char **re_rel,
 								 char **rr_nsp, char **rr_rel);
-bool catalog_filters_as_json(DatabaseCatalog *catalog,
-							 const char *filter_type,
-							 char **json);
-
 bool catalog_lookup_s_attr_by_name(DatabaseCatalog *catalog,
 								   uint32_t reloid,
 								   const char *attname,
