@@ -50,6 +50,12 @@
  * needs the unique index present at insert time to suppress duplicates.
  */
 static char *sourceDBcreateTableDDLs[] = {
+	/*
+	 * filters      : JSON representation of the parsed SourceFilters struct
+	 * filters_ini_text: verbatim INI file content; stored so that a resume can
+	 *   detect filter-file changes via exact text comparison (semantic diff is
+	 *   a future improvement).
+	 */
 	"create table setup("
 	"  id integer primary key check (id = 1), "
 	"  source_pg_uri text, "
@@ -57,7 +63,8 @@ static char *sourceDBcreateTableDDLs[] = {
 	"  snapshot text, "
 	"  split_tables_larger_than integer, "
 	"  split_max_parts integer, "
-	"  filters text "
+	"  filters text, "
+	"  filters_ini_text text "
 	")",
 
 	/*
@@ -425,6 +432,32 @@ static char *filterDBcreateTableDDLs[] = {
 	 * can read it internally without needing it passed as C pointers.
 	 */
 	"create table extension_filter(extname text primary key, action text)",
+
+	/*
+	 * filter_*_pattern tables store the user's ~/regex/ filter rules verbatim
+	 * (before expansion into exact OID lists) for debugging and change-detection.
+	 *
+	 * For schema patterns:  nspname_re holds the POSIX ERE pattern.
+	 * For table patterns:   exactly one of (nspname, nspname_re) is non-NULL and
+	 *                       exactly one of (relname, relname_re) is non-NULL.
+	 *
+	 * These tables are not used by the migration pipeline itself — expansion
+	 * into exact (nspname, relname) pairs happens in filters_validate_and_normalize().
+	 * Stored via catalog_register_filters_ini_text(); exact text diff vs the
+	 * stored copy detects filter-file changes across resume attempts (semantic
+	 * diff is a future improvement).
+	 */
+	"create table filter_incl_schema_pattern(nspname_re text not null)",
+	"create table filter_excl_schema_pattern(nspname_re text not null)",
+
+	"create table filter_incl_table_pattern("
+	"  nspname text, nspname_re text, relname text, relname_re text)",
+	"create table filter_excl_table_pattern("
+	"  nspname text, nspname_re text, relname text, relname_re text)",
+	"create table filter_excl_table_data_pattern("
+	"  nspname text, nspname_re text, relname text, relname_re text)",
+	"create table filter_excl_index_pattern("
+	"  nspname text, nspname_re text, relname text, relname_re text)",
 
 	/*
 	 * While we don't use a summary table in the filter database, some queries

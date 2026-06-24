@@ -5679,6 +5679,410 @@ pgsql_escape_identifier(PGSQL *pgsql, char *src)
 
 
 /*
+ * FilterExpandTableContext and FilterExpandSchemaContext hold results from a
+ * single pattern-expansion query (one per ~/.../ entry in a filter section).
+ */
+typedef struct FilterExpandTableContext
+{
+	bool parsedOk;
+	int count;
+	SourceFilterTable *tables;
+} FilterExpandTableContext;
+
+typedef struct FilterExpandSchemaContext
+{
+	bool parsedOk;
+	int count;
+	SourceFilterSchema *schemas;
+} FilterExpandSchemaContext;
+
+
+static void
+parseFilterExpandTable(void *ctx, PGresult *result)
+{
+	FilterExpandTableContext *context = (FilterExpandTableContext *) ctx;
+
+	ExecStatusType status = PQresultStatus(result);
+
+	if (status != PGRES_TUPLES_OK)
+	{
+		log_error("Failed to expand table filter pattern: %s",
+				  PQresultErrorMessage(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	int ntuples = PQntuples(result);
+
+	if (ntuples == 0)
+	{
+		context->count = 0;
+		context->tables = NULL;
+		return;
+	}
+
+	context->tables = calloc(ntuples, sizeof(SourceFilterTable));
+
+	if (context->tables == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		context->parsedOk = false;
+		return;
+	}
+
+	for (int row = 0; row < ntuples; row++)
+	{
+		SourceFilterTable *t = &context->tables[row];
+
+		strlcpy(t->nspname, PQgetvalue(result, row, 0), sizeof(t->nspname));
+		strlcpy(t->relname, PQgetvalue(result, row, 1), sizeof(t->relname));
+	}
+
+	context->count = ntuples;
+}
+
+
+static void
+parseFilterExpandSchema(void *ctx, PGresult *result)
+{
+	FilterExpandSchemaContext *context = (FilterExpandSchemaContext *) ctx;
+
+	ExecStatusType status = PQresultStatus(result);
+
+	if (status != PGRES_TUPLES_OK)
+	{
+		log_error("Failed to expand schema filter pattern: %s",
+				  PQresultErrorMessage(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	int ntuples = PQntuples(result);
+
+	if (ntuples == 0)
+	{
+		context->count = 0;
+		context->schemas = NULL;
+		return;
+	}
+
+	context->schemas = calloc(ntuples, sizeof(SourceFilterSchema));
+
+	if (context->schemas == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		context->parsedOk = false;
+		return;
+	}
+
+	for (int row = 0; row < ntuples; row++)
+	{
+		SourceFilterSchema *s = &context->schemas[row];
+
+		strlcpy(s->nspname, PQgetvalue(result, row, 0), sizeof(s->nspname));
+		strlcpy(s->restoreListName, PQgetvalue(result, row, 1),
+				sizeof(s->restoreListName));
+	}
+
+	context->count = ntuples;
+}
+
+
+/* Append newCount entries from newEntries to list (creating a new backing array). */
+static bool
+schema_list_append(SourceFilterSchemaList *list,
+				   SourceFilterSchema *newEntries, int newCount)
+{
+	if (newCount == 0)
+	{
+		return true;
+	}
+
+	int oldCount = list->count;
+	int total = oldCount + newCount;
+
+	SourceFilterSchema *newArray = calloc(total, sizeof(SourceFilterSchema));
+
+	if (newArray == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	for (int i = 0; i < oldCount; i++)
+	{
+		newArray[i] = list->array[i];
+	}
+
+	for (int i = 0; i < newCount; i++)
+	{
+		newArray[oldCount + i] = newEntries[i];
+	}
+
+	list->array = newArray;
+	list->count = total;
+
+	return true;
+}
+
+
+/* Append newCount entries from newEntries to list (creating a new backing array). */
+static bool
+table_list_append(SourceFilterTableList *list,
+				  SourceFilterTable *newEntries, int newCount)
+{
+	if (newCount == 0)
+	{
+		return true;
+	}
+
+	int oldCount = list->count;
+	int total = oldCount + newCount;
+
+	SourceFilterTable *newArray = calloc(total, sizeof(SourceFilterTable));
+
+	if (newArray == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	for (int i = 0; i < oldCount; i++)
+	{
+		newArray[i] = list->array[i];
+	}
+
+	for (int i = 0; i < newCount; i++)
+	{
+		newArray[oldCount + i] = newEntries[i];
+	}
+
+	list->array = newArray;
+	list->count = total;
+
+	return true;
+}
+
+
+/*
+ * filters_expand_patterns runs one SQL query per pattern entry in each pattern
+ * list, using PostgreSQL's ~ operator to expand the regex against pg_catalog.
+ * Matching rows are appended to the corresponding exact list so that the rest
+ * of the pipeline (prepareFilters, SQL temp tables, pg_dump args) is unchanged.
+ */
+static bool
+filters_expand_patterns(PGSQL *pgsql, SourceFilters *filters)
+{
+	/* ---- schema pattern expansion ---- */
+	struct
+	{
+		SourceFilterSchemaPatternList *patList;
+		SourceFilterSchemaList *exactList;
+		bool isIncludeOnly;
+	}
+	schemaSlots[] = {
+		{
+			&filters->includeOnlySchemaPatternList,
+			&filters->includeOnlySchemaList,
+			true
+		},
+		{
+			&filters->excludeSchemaPatternList,
+			&filters->excludeSchemaList,
+			false
+		},
+		{ NULL, NULL, false }
+	};
+
+	for (int e = 0; schemaSlots[e].patList != NULL; e++)
+	{
+		SourceFilterSchemaPatternList *patList = schemaSlots[e].patList;
+		SourceFilterSchemaList *exactList = schemaSlots[e].exactList;
+		bool isIncludeOnly = schemaSlots[e].isIncludeOnly;
+
+		for (int i = 0; i < patList->count; i++)
+		{
+			SourceFilterSchemaPattern *pat = &patList->array[i];
+
+			PQExpBuffer query = createPQExpBuffer();
+
+			if (query == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			appendPQExpBufferStr(query,
+								 "SELECT n.nspname,"
+								 " quote_ident(n.nspname) AS quoted_nspname"
+								 " FROM pg_catalog.pg_namespace n"
+								 " WHERE n.nspname ~ ");
+			appendStringLiteralPub(query, pat->nspname_re);
+			appendPQExpBufferStr(query,
+								 " AND n.nspname NOT LIKE 'pg_%'"
+								 " AND n.nspname <> 'information_schema'"
+								 " AND n.nspname <> 'pgcopydb'"
+								 " ORDER BY n.nspname");
+
+			FilterExpandSchemaContext ctx = { .parsedOk = true };
+
+			bool ok = pgsql_execute_with_params(pgsql, query->data,
+												0, NULL, NULL,
+												&ctx, &parseFilterExpandSchema);
+
+			destroyPQExpBuffer(query);
+
+			if (!ok || !ctx.parsedOk)
+			{
+				log_error("Failed to expand schema pattern \"%s\"",
+						  pat->nspname_re);
+				return false;
+			}
+
+			log_info("Schema pattern \"%s\" matched %d schema(s)",
+					 pat->nspname_re, ctx.count);
+
+			if (ctx.count == 0 && isIncludeOnly)
+			{
+				log_warn("include-only-schema pattern \"%s\" matched no schemas"
+						 " in the source database", pat->nspname_re);
+			}
+
+			if (!schema_list_append(exactList, ctx.schemas, ctx.count))
+			{
+				return false;
+			}
+		}
+	}
+
+	/* ---- table pattern expansion ---- */
+	struct
+	{
+		SourceFilterTablePatternList *patList;
+		SourceFilterTableList *exactList;
+		bool isIncludeOnly;
+	}
+	tableSlots[] = {
+		{
+			&filters->includeOnlyTablePatternList,
+			&filters->includeOnlyTableList,
+			true
+		},
+		{
+			&filters->excludeTablePatternList,
+			&filters->excludeTableList,
+			false
+		},
+		{
+			&filters->excludeTableDataPatternList,
+			&filters->excludeTableDataList,
+			false
+		},
+		{
+			&filters->excludeIndexPatternList,
+			&filters->excludeIndexList,
+			false
+		},
+		{ NULL, NULL, false }
+	};
+
+	for (int e = 0; tableSlots[e].patList != NULL; e++)
+	{
+		SourceFilterTablePatternList *patList = tableSlots[e].patList;
+		SourceFilterTableList *exactList = tableSlots[e].exactList;
+		bool isIncludeOnly = tableSlots[e].isIncludeOnly;
+
+		for (int i = 0; i < patList->count; i++)
+		{
+			SourceFilterTablePattern *pat = &patList->array[i];
+
+			PQExpBuffer query = createPQExpBuffer();
+
+			if (query == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			appendPQExpBufferStr(query,
+								 "SELECT n.nspname, c.relname"
+								 " FROM pg_catalog.pg_class c"
+								 " JOIN pg_catalog.pg_namespace n"
+								 " ON n.oid = c.relnamespace"
+								 " WHERE ");
+
+			if (pat->nspname_re[0] != '\0')
+			{
+				appendPQExpBufferStr(query, "n.nspname ~ ");
+				appendStringLiteralPub(query, pat->nspname_re);
+			}
+			else
+			{
+				appendPQExpBufferStr(query, "n.nspname = ");
+				appendStringLiteralPub(query, pat->nspname);
+			}
+
+			appendPQExpBufferStr(query, " AND ");
+
+			if (pat->relname_re[0] != '\0')
+			{
+				appendPQExpBufferStr(query, "c.relname ~ ");
+				appendStringLiteralPub(query, pat->relname_re);
+			}
+			else
+			{
+				appendPQExpBufferStr(query, "c.relname = ");
+				appendStringLiteralPub(query, pat->relname);
+			}
+
+			appendPQExpBufferStr(query,
+								 " AND c.relkind IN ('r', 'm', 'p')"
+								 " AND n.nspname NOT LIKE 'pg_%'"
+								 " AND n.nspname <> 'information_schema'"
+								 " AND n.nspname <> 'pgcopydb'"
+								 " ORDER BY n.nspname, c.relname");
+
+			FilterExpandTableContext ctx = { .parsedOk = true };
+
+			bool ok = pgsql_execute_with_params(pgsql, query->data,
+												0, NULL, NULL,
+												&ctx, &parseFilterExpandTable);
+
+			destroyPQExpBuffer(query);
+
+			if (!ok || !ctx.parsedOk)
+			{
+				log_error("Failed to expand table pattern nspname=%s relname=%s",
+						  pat->nspname_re[0] ? pat->nspname_re : pat->nspname,
+						  pat->relname_re[0] ? pat->relname_re : pat->relname);
+				return false;
+			}
+
+			log_info("Table pattern %s.%s matched %d table(s)",
+					 pat->nspname_re[0] ? pat->nspname_re : pat->nspname,
+					 pat->relname_re[0] ? pat->relname_re : pat->relname,
+					 ctx.count);
+
+			if (ctx.count == 0 && isIncludeOnly)
+			{
+				log_warn("include-only-table pattern %s.%s matched no tables"
+						 " in the source database",
+						 pat->nspname_re[0] ? pat->nspname_re : pat->nspname,
+						 pat->relname_re[0] ? pat->relname_re : pat->relname);
+			}
+
+			if (!table_list_append(exactList, ctx.tables, ctx.count))
+			{
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
+
+/*
  * FilterNormalizeContext is the callback context for parseFilterNormalize.
  */
 typedef struct FilterNormalizeContext
@@ -5851,15 +6255,24 @@ filters_validate_and_normalize(PGSQL *pgsql, SourceFilters *filters)
 		return true;
 	}
 
-	int totalSchemas = filters->includeOnlySchemaList.count +
+	int exactSchemas = filters->includeOnlySchemaList.count +
 					   filters->excludeSchemaList.count;
 
-	int totalTables = filters->includeOnlyTableList.count +
+	int exactTables = filters->includeOnlyTableList.count +
 					  filters->excludeTableList.count +
 					  filters->excludeTableDataList.count +
 					  filters->excludeIndexList.count;
 
-	if (totalSchemas == 0 && totalTables == 0)
+	int patternSchemas = filters->includeOnlySchemaPatternList.count +
+						 filters->excludeSchemaPatternList.count;
+
+	int patternTables = filters->includeOnlyTablePatternList.count +
+						filters->excludeTablePatternList.count +
+						filters->excludeTableDataPatternList.count +
+						filters->excludeIndexPatternList.count;
+
+	if (exactSchemas == 0 && exactTables == 0 &&
+		patternSchemas == 0 && patternTables == 0)
 	{
 		filters->normalized = true;
 		return true;
@@ -5907,7 +6320,7 @@ filters_validate_and_normalize(PGSQL *pgsql, SourceFilters *filters)
 	 * The is_include_only column is true for includeOnlySchemaList entries
 	 * (li == 0) and false for excludeSchemaList entries (li == 1).
 	 */
-	if (totalSchemas > 0)
+	if (exactSchemas > 0)
 	{
 		appendPQExpBufferStr(query,
 							 "SELECT 'schema'::text AS kind,"
@@ -5963,7 +6376,7 @@ filters_validate_and_normalize(PGSQL *pgsql, SourceFilters *filters)
 	 *
 	 * The is_include_only column is true only for includeOnlyTableList (li == 0).
 	 */
-	if (totalTables > 0)
+	if (exactTables > 0)
 	{
 		if (!firstBranch)
 		{
@@ -6023,21 +6436,37 @@ filters_validate_and_normalize(PGSQL *pgsql, SourceFilters *filters)
 							 " ON n.oid = c.relnamespace");
 	}
 
-	FilterNormalizeContext context = {
-		.filters = filters,
-		.parsedOk = true,
-		.errorCount = 0
-	};
-
-	bool ok = pgsql_execute_with_params(pgsql, query->data, 0, NULL, NULL,
-										&context, &parseFilterNormalize);
-
-	destroyPQExpBuffer(query);
-
-	if (!ok || !context.parsedOk || context.errorCount > 0)
+	if (exactSchemas > 0 || exactTables > 0)
 	{
-		log_error("Failed to validate filter names against source catalogs");
-		return false;
+		FilterNormalizeContext context = {
+			.filters = filters,
+			.parsedOk = true,
+			.errorCount = 0
+		};
+
+		bool ok = pgsql_execute_with_params(pgsql, query->data, 0, NULL, NULL,
+											&context, &parseFilterNormalize);
+
+		destroyPQExpBuffer(query);
+
+		if (!ok || !context.parsedOk || context.errorCount > 0)
+		{
+			log_error("Failed to validate filter names against source catalogs");
+			return false;
+		}
+	}
+	else
+	{
+		destroyPQExpBuffer(query);
+	}
+
+	/* Expand regex pattern lists into the corresponding exact lists. */
+	if (patternSchemas > 0 || patternTables > 0)
+	{
+		if (!filters_expand_patterns(pgsql, filters))
+		{
+			return false;
+		}
 	}
 
 	filters->normalized = true;
