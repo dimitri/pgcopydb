@@ -6,13 +6,13 @@ COMPOSE_EXIT = --exit-code-from=test --abort-on-container-exit
 test: down run down ;
 
 up: down build
-	docker compose up $(COMPOSE_EXIT)
+	docker compose up --remove-orphans $(COMPOSE_EXIT)
 
 run: build
 	# --use-aliases gives the one-off `run` container its "test" network alias
 	# so the inject container can reach the follow coordinator at test:5442.
 	# No fix-volumes: this test no longer shares a SQLite catalog volume.
-	docker compose run --use-aliases test
+	docker compose run --remove-orphans --use-aliases test
 
 down:
 	docker compose down --volumes --remove-orphans
