@@ -107,6 +107,18 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 
 		src = &pgsql;
 
+		/*
+		 * Detect whether the source is a standby (pg_is_in_recovery() = true).
+		 * The consistent/snapshot path sets this via copydb_export_snapshot();
+		 * the not-consistent path must set it here so that
+		 * copydb_prepare_table_specs_hook can skip ANALYZE on standbys.
+		 */
+		if (!pgsql_is_in_recovery(src, &(specs->sourceSnapshot.isReadOnly)))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
 		if (!pgsql_begin(src))
 		{
 			/* errors have already been logged */
