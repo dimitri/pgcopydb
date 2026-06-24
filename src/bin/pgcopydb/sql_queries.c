@@ -137,3 +137,19 @@ pgcopydb_sql_list_table_attributes(int pg_version, const char **sql)
 		   : sql_list_table_attributes;
 	return true;
 }
+
+
+bool
+pgcopydb_sql_filter_table_arrays(const char **sql)
+{
+	*sql = sql_filter_table_arrays;
+	return true;
+}
+
+
+bool
+pgcopydb_sql_filters_as_json(const char **sql)
+{
+	*sql = sql_filters_as_json;
+	return true;
+}

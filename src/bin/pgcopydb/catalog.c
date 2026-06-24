@@ -25,6 +25,7 @@
 #include "schema.h"
 #include "signals.h"
 #include "string_utils.h"
+#include "sql_queries.h"
 #include "summary.h"
 
 
@@ -3690,9 +3691,10 @@ catalog_filter_schema_array(DatabaseCatalog *catalog, const char *section,
 /*
  * catalog_filter_table_arrays builds all eight EE/ER/RE/RR paired array
  * literals for one filter section (e.g. "excl_table", "incl_table", ...) in
- * a single SQLite query.  NULL output pointers are skipped.  Each output is
- * set to a PostgreSQL array literal "{v1,v2,...}" or NULL when the category
- * has no entries.
+ * a single SQLite query (filter_table_arrays.sql).  One CTE scan of f_table
+ * with conditional group_concat() FILTER clauses replaces eight correlated
+ * subqueries.  NULL output pointers are skipped.  Each output is set to a
+ * PostgreSQL array literal "{v1,v2,...}" or NULL when the category is empty.
  */
 bool
 catalog_filter_table_arrays(DatabaseCatalog *catalog, const char *section,
@@ -3709,49 +3711,12 @@ catalog_filter_table_arrays(DatabaseCatalog *catalog, const char *section,
 		return false;
 	}
 
-	/* All eight arrays in one round-trip. $1 is reused by all subqueries. */
-	const char *sql =
-		"select"
+	const char *sql = NULL;
 
-		/* EE: exact nsp + exact rel */
-		" (select '{' || group_concat(nspname,    ',') || '}' from f_table"
-		"   where section=$1 and nspname    is not null and nspname_re is null"
-		"     and relname    is not null and relname_re is null"
-		"   having count(*) > 0),"
-		" (select '{' || group_concat(relname,    ',') || '}' from f_table"
-		"   where section=$1 and nspname    is not null and nspname_re is null"
-		"     and relname    is not null and relname_re is null"
-		"   having count(*) > 0),"
-
-		/* ER: exact nsp + regex rel */
-		" (select '{' || group_concat(nspname,    ',') || '}' from f_table"
-		"   where section=$1 and nspname    is not null and nspname_re is null"
-		"     and relname    is null     and relname_re is not null"
-		"   having count(*) > 0),"
-		" (select '{' || group_concat(relname_re, ',') || '}' from f_table"
-		"   where section=$1 and nspname    is not null and nspname_re is null"
-		"     and relname    is null     and relname_re is not null"
-		"   having count(*) > 0),"
-
-		/* RE: regex nsp + exact rel */
-		" (select '{' || group_concat(nspname_re, ',') || '}' from f_table"
-		"   where section=$1 and nspname    is null     and nspname_re is not null"
-		"     and relname    is not null and relname_re is null"
-		"   having count(*) > 0),"
-		" (select '{' || group_concat(relname,    ',') || '}' from f_table"
-		"   where section=$1 and nspname    is null     and nspname_re is not null"
-		"     and relname    is not null and relname_re is null"
-		"   having count(*) > 0),"
-
-		/* RR: regex nsp + regex rel */
-		" (select '{' || group_concat(nspname_re, ',') || '}' from f_table"
-		"   where section=$1 and nspname    is null     and nspname_re is not null"
-		"     and relname    is null     and relname_re is not null"
-		"   having count(*) > 0),"
-		" (select '{' || group_concat(relname_re, ',') || '}' from f_table"
-		"   where section=$1 and nspname    is null     and nspname_re is not null"
-		"     and relname    is null     and relname_re is not null"
-		"   having count(*) > 0)";
+	if (!pgcopydb_sql_filter_table_arrays(&sql))
+	{
+		return false;
+	}
 
 	SQLiteQuery query = { 0 };
 
@@ -3812,9 +3777,9 @@ catalog_filter_table_arrays(DatabaseCatalog *catalog, const char *section,
 /*
  * catalog_filters_as_json produces the same JSON object as filters_as_json()
  * but derives it from the f_schema / f_table SQLite tables (populated by
- * catalog_populate_filters) using SQLite's json1 extension.  Keys whose
- * arrays are empty are omitted (HAVING count(*) > 0 returns no row → the
- * scalar subquery yields NULL → COALESCE swallows it).
+ * catalog_populate_filters).  The SQL (filters_as_json.sql) aggregates both
+ * tables once each via CTEs and builds the object with json_group_object();
+ * keys with empty arrays are omitted by the kv CTE's WHERE clauses.
  */
 bool
 catalog_filters_as_json(DatabaseCatalog *catalog, const char *filter_type,
@@ -3828,117 +3793,12 @@ catalog_filters_as_json(DatabaseCatalog *catalog, const char *filter_type,
 		return false;
 	}
 
-	/*
-	 * Build the JSON as a string by concatenating key:value fragments.
-	 * COALESCE(subquery, '') omits the fragment when the subquery returns no
-	 * rows (i.e. the category has no filter entries), matching the output of
-	 * filters_as_json() which only adds keys when count > 0.
-	 */
-	const char *sql =
-		"select"
-		" '{\"type\":' || json_quote($1) ||"
+	const char *sql = NULL;
 
-		/* include-only-schema / include-only-schema-pattern */
-		" coalesce(',\"include-only-schema\":'    || (select json_group_array(nspname)"
-		"    from f_schema where section='incl_schema' and nspname    is not null"
-		"    having count(*) > 0), '') ||"
-		" coalesce(',\"include-only-schema-pattern\":' || (select json_group_array(nspname_re)"
-		"    from f_schema where section='incl_schema' and nspname_re is not null"
-		"    having count(*) > 0), '') ||"
-
-		/* exclude-schema / exclude-schema-pattern */
-		" coalesce(',\"exclude-schema\":'    || (select json_group_array(nspname)"
-		"    from f_schema where section='excl_schema' and nspname    is not null"
-		"    having count(*) > 0), '') ||"
-		" coalesce(',\"exclude-schema-pattern\":' || (select json_group_array(nspname_re)"
-		"    from f_schema where section='excl_schema' and nspname_re is not null"
-		"    having count(*) > 0), '') ||"
-
-		/* exclude-table (EE exact matches) */
-		" coalesce(',\"exclude-table\":'    || (select json_group_array("
-		"    json_object('schema', nspname, 'name', relname))"
-		"    from f_table where section='excl_table'"
-		"      and nspname_re is null and relname_re is null"
-		"    having count(*) > 0), '') ||"
-
-		/* exclude-table-pattern (ER/RE/RR) */
-		" coalesce(',\"exclude-table-pattern\":' || (select json_group_array("
-		"    case"
-		"      when nspname is not null and relname_re is not null"
-		"        then json_object('schema',    nspname,    'name-re',    relname_re)"
-		"      when nspname_re is not null and relname is not null"
-		"        then json_object('schema-re', nspname_re, 'name',       relname)"
-		"      when nspname_re is not null and relname_re is not null"
-		"        then json_object('schema-re', nspname_re, 'name-re',    relname_re)"
-		"    end)"
-		"    from f_table where section='excl_table'"
-		"      and (nspname_re is not null or relname_re is not null)"
-		"    having count(*) > 0), '') ||"
-
-		/* exclude-table-data (EE exact matches) */
-		" coalesce(',\"exclude-table-data\":'    || (select json_group_array("
-		"    json_object('schema', nspname, 'name', relname))"
-		"    from f_table where section='xdat_table'"
-		"      and nspname_re is null and relname_re is null"
-		"    having count(*) > 0), '') ||"
-
-		/* exclude-table-data-pattern (ER/RE/RR) */
-		" coalesce(',\"exclude-table-data-pattern\":' || (select json_group_array("
-		"    case"
-		"      when nspname is not null and relname_re is not null"
-		"        then json_object('schema',    nspname,    'name-re',    relname_re)"
-		"      when nspname_re is not null and relname is not null"
-		"        then json_object('schema-re', nspname_re, 'name',       relname)"
-		"      when nspname_re is not null and relname_re is not null"
-		"        then json_object('schema-re', nspname_re, 'name-re',    relname_re)"
-		"    end)"
-		"    from f_table where section='xdat_table'"
-		"      and (nspname_re is not null or relname_re is not null)"
-		"    having count(*) > 0), '') ||"
-
-		/* exclude-index (EE exact matches) */
-		" coalesce(',\"exclude-index\":'    || (select json_group_array("
-		"    json_object('schema', nspname, 'name', relname))"
-		"    from f_table where section='excl_index'"
-		"      and nspname_re is null and relname_re is null"
-		"    having count(*) > 0), '') ||"
-
-		/* exclude-index-pattern (ER/RE/RR) */
-		" coalesce(',\"exclude-index-pattern\":' || (select json_group_array("
-		"    case"
-		"      when nspname is not null and relname_re is not null"
-		"        then json_object('schema',    nspname,    'name-re',    relname_re)"
-		"      when nspname_re is not null and relname is not null"
-		"        then json_object('schema-re', nspname_re, 'name',       relname)"
-		"      when nspname_re is not null and relname_re is not null"
-		"        then json_object('schema-re', nspname_re, 'name-re',    relname_re)"
-		"    end)"
-		"    from f_table where section='excl_index'"
-		"      and (nspname_re is not null or relname_re is not null)"
-		"    having count(*) > 0), '') ||"
-
-		/* include-only-table (EE exact matches) */
-		" coalesce(',\"include-only-table\":'    || (select json_group_array("
-		"    json_object('schema', nspname, 'name', relname))"
-		"    from f_table where section='incl_table'"
-		"      and nspname_re is null and relname_re is null"
-		"    having count(*) > 0), '') ||"
-
-		/* include-only-table-pattern (ER/RE/RR) */
-		" coalesce(',\"include-only-table-pattern\":' || (select json_group_array("
-		"    case"
-		"      when nspname is not null and relname_re is not null"
-		"        then json_object('schema',    nspname,    'name-re',    relname_re)"
-		"      when nspname_re is not null and relname is not null"
-		"        then json_object('schema-re', nspname_re, 'name',       relname)"
-		"      when nspname_re is not null and relname_re is not null"
-		"        then json_object('schema-re', nspname_re, 'name-re',    relname_re)"
-		"    end)"
-		"    from f_table where section='incl_table'"
-		"      and (nspname_re is not null or relname_re is not null)"
-		"    having count(*) > 0), '') ||"
-
-		" '}'";
+	if (!pgcopydb_sql_filters_as_json(&sql))
+	{
+		return false;
+	}
 
 	SQLiteQuery query = { 0 };
 

@@ -31,4 +31,8 @@ bool pgcopydb_sql_list_source_table_size(const char **sql);
 
 bool pgcopydb_sql_list_table_attributes(int pg_version, const char **sql);
 
+/* SQLite queries against f_schema / f_table catalog tables */
+bool pgcopydb_sql_filter_table_arrays(const char **sql);
+bool pgcopydb_sql_filters_as_json(const char **sql);
+
 #endif  /* PGCOPYDB_SQL_QUERIES_H */
