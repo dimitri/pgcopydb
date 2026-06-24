@@ -6,11 +6,11 @@ WITH filters AS (
         -- include-only table: exact nsp + exact rel
         $1::text[] AS incl_ee_nsp,  $2::text[] AS incl_ee_rel,
         -- include-only table: exact nsp + regex rel
-        $3::text[] AS incl_er_nsp,  $4::text[] AS incl_er_rel_re,
+        $3::text[] AS incl_er_nsp,  $4::text[] AS incl_er_rel,
         -- include-only table: regex nsp + exact rel
-        $5::text[] AS incl_re_nsp_re, $6::text[] AS incl_re_rel,
+        $5::text[] AS incl_re_nsp, $6::text[] AS incl_re_rel,
         -- include-only table: regex nsp + regex rel
-        $7::text[] AS incl_rr_nsp_re, $8::text[] AS incl_rr_rel_re
+        $7::text[] AS incl_rr_nsp, $8::text[] AS incl_rr_rel
 )
 SELECT c.oid,
        format('%I', n.nspname) AS nspname,
@@ -57,11 +57,11 @@ SELECT c.oid,
    AND NOT (
        EXISTS (SELECT 1 FROM unnest(f.incl_ee_nsp, f.incl_ee_rel) AS t(nsp, rel)
                WHERE n.nspname = t.nsp AND c.relname = t.rel)
-    OR EXISTS (SELECT 1 FROM unnest(f.incl_er_nsp, f.incl_er_rel_re) AS t(nsp, rel_re)
+    OR EXISTS (SELECT 1 FROM unnest(f.incl_er_nsp, f.incl_er_rel) AS t(nsp, rel_re)
                WHERE n.nspname = t.nsp AND c.relname ~ t.rel_re)
-    OR EXISTS (SELECT 1 FROM unnest(f.incl_re_nsp_re, f.incl_re_rel) AS t(nsp_re, rel)
+    OR EXISTS (SELECT 1 FROM unnest(f.incl_re_nsp, f.incl_re_rel) AS t(nsp_re, rel)
                WHERE n.nspname ~ t.nsp_re AND c.relname = t.rel)
-    OR EXISTS (SELECT 1 FROM unnest(f.incl_rr_nsp_re, f.incl_rr_rel_re) AS t(nsp_re, rel_re)
+    OR EXISTS (SELECT 1 FROM unnest(f.incl_rr_nsp, f.incl_rr_rel) AS t(nsp_re, rel_re)
                WHERE n.nspname ~ t.nsp_re AND c.relname ~ t.rel_re)
    )
    -- extension guard

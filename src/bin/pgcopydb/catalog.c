@@ -15,6 +15,8 @@
 
 #include "catalog.h"
 #include "cli_root.h"
+#include "filtering.h"
+#include "parson.h"
 #include "pqexpbuffer.h"
 #include "copydb.h"
 #include "defaults.h"
@@ -263,6 +265,22 @@ static char *sourceDBcreateTableDDLs[] = {
 	"  cmdline text not null"
 	")",
 
+	/* Filter entry tables — populated from SourceFilters to avoid C-side
+	 * PQExpBuffer building; queried with group_concat / json1 functions. */
+	"create table if not exists f_schema("
+	"  section text not null, "
+	"  nspname text, "
+	"  nspname_re text"
+	")",
+
+	"create table if not exists f_table("
+	"  section text not null, "
+	"  nspname text, "
+	"  nspname_re text, "
+	"  relname text, "
+	"  relname_re text"
+	")",
+
 	/* All indexes other than s_i_tableoid / s_c_indexoid stay here so they are
 	 * created on empty tables and enforce uniqueness during data load. */
 	"create index s_d_p_oid on s_database_property(datname)",
@@ -451,14 +469,19 @@ static char *filterDBcreateTableDDLs[] = {
 	"create table filter_incl_schema_pattern(nspname_re text not null)",
 	"create table filter_excl_schema_pattern(nspname_re text not null)",
 
-	"create table filter_incl_table_pattern("
-	"  nspname text, nspname_re text, relname text, relname_re text)",
-	"create table filter_excl_table_pattern("
-	"  nspname text, nspname_re text, relname text, relname_re text)",
-	"create table filter_excl_table_data_pattern("
-	"  nspname text, nspname_re text, relname text, relname_re text)",
-	"create table filter_excl_index_pattern("
-	"  nspname text, nspname_re text, relname text, relname_re text)",
+	"create table if not exists f_schema("
+	"  section text not null, "
+	"  nspname text, "
+	"  nspname_re text"
+	")",
+
+	"create table if not exists f_table("
+	"  section text not null, "
+	"  nspname text, "
+	"  nspname_re text, "
+	"  relname text, "
+	"  relname_re text"
+	")",
 
 	/*
 	 * While we don't use a summary table in the filter database, some queries
@@ -560,6 +583,20 @@ static char *targetDBcreateTableDDLs[] = {
 	"  primary key(nspname, relname)"
 	")",
 
+	"create table if not exists f_schema("
+	"  section text not null, "
+	"  nspname text, "
+	"  nspname_re text"
+	")",
+
+	"create table if not exists f_table("
+	"  section text not null, "
+	"  nspname text, "
+	"  nspname_re text, "
+	"  relname text, "
+	"  relname_re text"
+	")",
+
 	/* Indexes created before data load (unique indexes need to be inline). */
 	"create index s_n_rlname on s_namespace(restore_list_name)",
 	"create unique index s_t_qname on s_table(qname)",
@@ -652,7 +689,10 @@ static char *sourceDBdropDDLs[] = {
 
 	"drop table if exists sentinel",
 	"drop table if exists timeline_history",
-	"drop table if exists command_log"
+	"drop table if exists command_log",
+
+	"drop table if exists f_schema",
+	"drop table if exists f_table"
 };
 
 
@@ -675,7 +715,10 @@ static char *filterDBdropDDLs[] = {
 	"drop table if exists s_seq",
 	"drop table if exists s_depend",
 	"drop table if exists filter",
-	"drop table if exists summary"
+	"drop table if exists summary",
+
+	"drop table if exists f_schema",
+	"drop table if exists f_table"
 };
 
 
@@ -688,7 +731,10 @@ static char *targetDBdropDDLs[] = {
 	"drop table if exists s_attr",
 	"drop table if exists s_index",
 	"drop table if exists s_constraint",
-	"drop table if exists s_rel"
+	"drop table if exists s_rel",
+
+	"drop table if exists f_schema",
+	"drop table if exists f_table"
 };
 
 
@@ -3249,85 +3295,74 @@ catalog_add_s_attr(DatabaseCatalog *catalog,
 
 
 /*
+ * catalog_oid_array_sql runs a single-row aggregation query of the form
+ *
+ *   SELECT coalesce('{' || group_concat(...) || '}', fallback), count(*)
+ *
+ * and returns the resulting text and count.  When null_if_empty is true,
+ * *text is set to NULL (not '{}') when the table is empty; callers that
+ * pass NULL to mean "no filter" require this behaviour.
+ */
+static bool
+catalog_oid_array_sql(sqlite3 *db, const char *sql, bool null_if_empty,
+					  char **text, int *count)
+{
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		return false;
+	}
+
+	int rc = catalog_sql_step(&query);
+
+	if (rc != SQLITE_ROW)
+	{
+		log_error("[SQLite %d: %s]: %s", rc, query.sql, sqlite3_errmsg(db));
+		(void) catalog_sql_finalize(&query);
+		return false;
+	}
+
+	*count = sqlite3_column_int(query.ppStmt, 1);
+
+	if (null_if_empty && *count == 0)
+	{
+		*text = NULL;
+	}
+	else
+	{
+		const char *str = (const char *) sqlite3_column_text(query.ppStmt, 0);
+
+		*text = str ? strdup(str) : NULL;
+	}
+
+	(void) catalog_sql_finalize(&query);
+
+	return *count == 0 || *text != NULL;
+}
+
+
+/*
  * catalog_s_table_oid_array builds a PostgreSQL array literal of all table
  * OIDs stored in s_table, formatted as "{oid1,oid2,...}" for use as a $1
- * text parameter with ::oid[] casting in SQL.  The caller must free *text.
+ * text parameter with ::oid[] casting in SQL.  Returns "{}" when empty.
+ * The caller must free *text.
  */
 bool
 catalog_s_table_oid_array(DatabaseCatalog *catalog, char **text, int *count)
 {
-	sqlite3 *db = catalog->db;
-
-	if (db == NULL)
+	if (catalog->db == NULL)
 	{
 		log_error("BUG: catalog_s_table_oid_array: db is NULL");
 		return false;
 	}
 
-	PQExpBufferData buf;
-	initPQExpBuffer(&buf);
-	appendPQExpBufferChar(&buf, '{');
+	char *sql =
+		"select coalesce('{' || group_concat(cast(oid as text), ',') || '}', '{}'),"
+		"       count(*)"
+		"  from s_table";
 
-	*count = 0;
-
-	char *oidSql = "select oid from s_table order by oid";
-	SQLiteQuery query = { 0 };
-
-	if (!catalog_sql_prepare(db, oidSql, &query))
-	{
-		termPQExpBuffer(&buf);
-		return false;
-	}
-
-	for (;;)
-	{
-		int rc = catalog_sql_step(&query);
-
-		if (rc == SQLITE_DONE)
-		{
-			break;
-		}
-
-		if (rc != SQLITE_ROW)
-		{
-			log_error("[SQLite %d: %s]: %s",
-					  rc,
-					  query.sql,
-					  sqlite3_errmsg(db));
-			(void) catalog_sql_finalize(&query);
-			termPQExpBuffer(&buf);
-			return false;
-		}
-
-		if (*count > 0)
-		{
-			appendPQExpBufferChar(&buf, ',');
-		}
-
-		uint64_t oid = sqlite3_column_int64(query.ppStmt, 0);
-		appendPQExpBuffer(&buf, "%llu", (unsigned long long) oid);
-		++(*count);
-	}
-
-	if (!catalog_sql_finalize(&query))
-	{
-		termPQExpBuffer(&buf);
-		return false;
-	}
-
-	appendPQExpBufferChar(&buf, '}');
-
-	if (PQExpBufferBroken(&buf))
-	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
-		termPQExpBuffer(&buf);
-		return false;
-	}
-
-	*text = strdup(buf.data);
-	termPQExpBuffer(&buf);
-
-	return *text != NULL;
+	return catalog_oid_array_sql(catalog->db, sql, false, text, count);
 }
 
 
@@ -3335,177 +3370,607 @@ catalog_s_table_oid_array(DatabaseCatalog *catalog, char **text, int *count)
  * catalog_s_class_oid_array is like catalog_s_table_oid_array but also
  * includes OIDs from s_matview.  Used by schema_list_pg_depend so that
  * dependencies on excluded materialized views are captured as well as
- * dependencies on excluded regular tables.
+ * dependencies on excluded regular tables.  Returns "{}" when empty.
  */
 bool
 catalog_s_class_oid_array(DatabaseCatalog *catalog, char **text, int *count)
 {
-	sqlite3 *db = catalog->db;
-
-	if (db == NULL)
+	if (catalog->db == NULL)
 	{
 		log_error("BUG: catalog_s_class_oid_array: db is NULL");
 		return false;
 	}
 
-	PQExpBufferData buf;
-	initPQExpBuffer(&buf);
-	appendPQExpBufferChar(&buf, '{');
+	char *sql =
+		"select coalesce('{' || group_concat(cast(oid as text), ',') || '}', '{}'),"
+		"       count(*)"
+		"  from (select oid from s_table union all select oid from s_matview)";
 
-	*count = 0;
-
-	char *oidSql =
-		"select oid from s_table"
-		" union all select oid from s_matview"
-		" order by oid";
-	SQLiteQuery query = { 0 };
-
-	if (!catalog_sql_prepare(db, oidSql, &query))
-	{
-		termPQExpBuffer(&buf);
-		return false;
-	}
-
-	for (;;)
-	{
-		int rc = catalog_sql_step(&query);
-
-		if (rc == SQLITE_DONE)
-		{
-			break;
-		}
-
-		if (rc != SQLITE_ROW)
-		{
-			log_error("[SQLite %d: %s]: %s",
-					  rc,
-					  query.sql,
-					  sqlite3_errmsg(db));
-			(void) catalog_sql_finalize(&query);
-			termPQExpBuffer(&buf);
-			return false;
-		}
-
-		if (*count > 0)
-		{
-			appendPQExpBufferChar(&buf, ',');
-		}
-
-		uint64_t oid = sqlite3_column_int64(query.ppStmt, 0);
-		appendPQExpBuffer(&buf, "%llu", (unsigned long long) oid);
-		++(*count);
-	}
-
-	if (!catalog_sql_finalize(&query))
-	{
-		termPQExpBuffer(&buf);
-		return false;
-	}
-
-	appendPQExpBufferChar(&buf, '}');
-
-	if (PQExpBufferBroken(&buf))
-	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
-		termPQExpBuffer(&buf);
-		return false;
-	}
-
-	*text = strdup(buf.data);
-	termPQExpBuffer(&buf);
-
-	return *text != NULL;
+	return catalog_oid_array_sql(catalog->db, sql, false, text, count);
 }
 
 
 /*
  * catalog_s_namespace_oid_array builds a PostgreSQL array literal of all
  * namespace OIDs stored in s_namespace, formatted as "{oid1,oid2,...}" for
- * use as a $1 text parameter with ::oid[] casting in SQL.  Returns NULL when
- * the catalog has no namespaces.  The caller must free *text.
+ * use as a $1 text parameter with ::oid[] casting in SQL.  Returns NULL
+ * (not "{}") when the catalog has no namespaces, because callers treat a
+ * NULL parameter as "no filter".  The caller must free *text.
  */
 bool
 catalog_s_namespace_oid_array(DatabaseCatalog *catalog, char **text, int *count)
 {
-	sqlite3 *db = catalog->db;
-
-	if (db == NULL)
+	if (catalog->db == NULL)
 	{
 		log_error("BUG: catalog_s_namespace_oid_array: db is NULL");
 		return false;
 	}
 
-	PQExpBufferData buf;
-	initPQExpBuffer(&buf);
-	appendPQExpBufferChar(&buf, '{');
+	char *sql =
+		"select case when count(*) = 0 then null"
+		"            else '{' || group_concat(cast(oid as text), ',') || '}'"
+		"       end,"
+		"       count(*)"
+		"  from s_namespace";
 
-	*count = 0;
+	return catalog_oid_array_sql(catalog->db, sql, true, text, count);
+}
 
-	char *oidSql = "select oid from s_namespace order by oid";
+
+/*
+ * catalog_populate_filters writes all SourceFilters entries into the f_schema
+ * and f_table SQLite tables.  The previous contents are replaced (DELETE +
+ * INSERT) so this call is idempotent.  Callers use the tables through
+ * catalog_filter_schema_array() and catalog_filter_table_arrays() instead of
+ * building PostgreSQL array literals with PQExpBuffer loops in C.
+ */
+bool
+catalog_populate_filters(DatabaseCatalog *catalog, SourceFilters *filters)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_populate_filters: db is NULL");
+		return false;
+	}
+
+	if (!catalog_execute(catalog, "delete from f_schema; delete from f_table"))
+	{
+		log_error("Failed to clear filter tables");
+		return false;
+	}
+
+	/* Schema sections: exact names and regex patterns share the f_schema table
+	 * — exact entries have nspname IS NOT NULL, regex entries have nspname_re. */
+	struct
+	{
+		const char *section;
+		SourceFilterSchemaList *list;
+		SourceFilterSchemaPatternList *plist;
+	}
+	sschemas[] = {
+		{ "incl_schema", &(filters->includeOnlySchemaList),
+		  &(filters->includeOnlySchemaPatternList) },
+		{ "excl_schema", &(filters->excludeSchemaList),
+		  &(filters->excludeSchemaPatternList) },
+		{ NULL }
+	};
+
+	const char *ins_schema =
+		"insert into f_schema(section, nspname, nspname_re) values($1, $2, $3)";
+
+	for (int i = 0; sschemas[i].section != NULL; i++)
+	{
+		const char *sec = sschemas[i].section;
+		SourceFilterSchemaList *list = sschemas[i].list;
+
+		for (int j = 0; j < list->count; j++)
+		{
+			SQLiteQuery query = { 0 };
+
+			if (!catalog_sql_prepare(db, ins_schema, &query))
+			{
+				return false;
+			}
+
+			BindParam params[] = {
+				{ BIND_PARAMETER_TYPE_TEXT, "section", 0, (char *) sec },
+				{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0,
+				  list->array[j].nspname },
+				{ BIND_PARAMETER_TYPE_NULL, "nspname_re", 0, NULL },
+			};
+
+			if (!catalog_sql_bind(&query, params, 3) ||
+				!catalog_sql_execute_once(&query))
+			{
+				return false;
+			}
+		}
+
+		SourceFilterSchemaPatternList *plist = sschemas[i].plist;
+
+		for (int j = 0; j < plist->count; j++)
+		{
+			SQLiteQuery query = { 0 };
+
+			if (!catalog_sql_prepare(db, ins_schema, &query))
+			{
+				return false;
+			}
+
+			BindParam params[] = {
+				{ BIND_PARAMETER_TYPE_TEXT, "section", 0, (char *) sec },
+				{ BIND_PARAMETER_TYPE_NULL, "nspname", 0, NULL },
+				{ BIND_PARAMETER_TYPE_TEXT, "nspname_re", 0,
+				  plist->array[j].nspname_re },
+			};
+
+			if (!catalog_sql_bind(&query, params, 3) ||
+				!catalog_sql_execute_once(&query))
+			{
+				return false;
+			}
+		}
+	}
+
+	/* Table / index sections: EE entries come from the exact list (both
+	 * nspname and relname non-NULL), ER/RE/RR entries come from the pattern
+	 * list (at least one _re field non-empty). */
+	struct
+	{
+		const char *section;
+		SourceFilterTableList *list;
+		SourceFilterTablePatternList *plist;
+	}
+	stables[] = {
+		{ "incl_table", &(filters->includeOnlyTableList),
+		  &(filters->includeOnlyTablePatternList) },
+		{ "excl_table", &(filters->excludeTableList),
+		  &(filters->excludeTablePatternList) },
+		{ "xdat_table", &(filters->excludeTableDataList),
+		  &(filters->excludeTableDataPatternList) },
+		{ "excl_index", &(filters->excludeIndexList),
+		  &(filters->excludeIndexPatternList) },
+		{ NULL }
+	};
+
+	const char *ins_table =
+		"insert into f_table(section, nspname, nspname_re, relname, relname_re)"
+		" values($1, $2, $3, $4, $5)";
+
+	for (int i = 0; stables[i].section != NULL; i++)
+	{
+		const char *sec = stables[i].section;
+		SourceFilterTableList *list = stables[i].list;
+
+		for (int j = 0; j < list->count; j++)
+		{
+			SQLiteQuery query = { 0 };
+
+			if (!catalog_sql_prepare(db, ins_table, &query))
+			{
+				return false;
+			}
+
+			BindParam params[] = {
+				{ BIND_PARAMETER_TYPE_TEXT, "section", 0, (char *) sec },
+				{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0,
+				  list->array[j].nspname },
+				{ BIND_PARAMETER_TYPE_NULL, "nspname_re", 0, NULL },
+				{ BIND_PARAMETER_TYPE_TEXT, "relname", 0,
+				  list->array[j].relname },
+				{ BIND_PARAMETER_TYPE_NULL, "relname_re", 0, NULL },
+			};
+
+			if (!catalog_sql_bind(&query, params, 5) ||
+				!catalog_sql_execute_once(&query))
+			{
+				return false;
+			}
+		}
+
+		SourceFilterTablePatternList *plist = stables[i].plist;
+
+		for (int j = 0; j < plist->count; j++)
+		{
+			SQLiteQuery query = { 0 };
+
+			if (!catalog_sql_prepare(db, ins_table, &query))
+			{
+				return false;
+			}
+
+			SourceFilterTablePattern *p = &(plist->array[j]);
+
+			BindParam params[] = {
+				{ BIND_PARAMETER_TYPE_TEXT, "section", 0, (char *) sec },
+				{ p->nspname[0] != '\0' ? BIND_PARAMETER_TYPE_TEXT
+				  : BIND_PARAMETER_TYPE_NULL,
+				  "nspname", 0, p->nspname },
+				{ p->nspname_re[0] != '\0' ? BIND_PARAMETER_TYPE_TEXT
+				  : BIND_PARAMETER_TYPE_NULL,
+				  "nspname_re", 0, p->nspname_re },
+				{ p->relname[0] != '\0' ? BIND_PARAMETER_TYPE_TEXT
+				  : BIND_PARAMETER_TYPE_NULL,
+				  "relname", 0, p->relname },
+				{ p->relname_re[0] != '\0' ? BIND_PARAMETER_TYPE_TEXT
+				  : BIND_PARAMETER_TYPE_NULL,
+				  "relname_re", 0, p->relname_re },
+			};
+
+			if (!catalog_sql_bind(&query, params, 5) ||
+				!catalog_sql_execute_once(&query))
+			{
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_filter_schema_array returns a PostgreSQL array literal
+ * "{name1,name2,...}" (or NULL when there are no matching entries) built by
+ * querying f_schema with SQLite's group_concat aggregation.  use_re=false
+ * reads the exact nspname column; use_re=true reads nspname_re.
+ */
+bool
+catalog_filter_schema_array(DatabaseCatalog *catalog, const char *section,
+							bool use_re, char **out)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_filter_schema_array: db is NULL");
+		return false;
+	}
+
+	/* One query for exact names, another for regex patterns. */
+	const char *col = use_re ? "nspname_re" : "nspname";
+	const char *where = use_re
+						? "nspname_re is not null"
+						: "nspname is not null";
+
+	/* Build the SQL with the column/where baked in (not user input). */
+	char sql[512];
+
+	sformat(sql, sizeof(sql),
+			"select '{' || group_concat(%s, ',') || '}'"
+			"  from f_schema"
+			" where section = $1 and %s"
+			" having count(*) > 0",
+			col, where);
+
 	SQLiteQuery query = { 0 };
 
-	if (!catalog_sql_prepare(db, oidSql, &query))
+	if (!catalog_sql_prepare(db, sql, &query))
 	{
-		termPQExpBuffer(&buf);
 		return false;
 	}
 
-	for (;;)
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_TEXT, "section", 0, (char *) section },
+	};
+
+	if (!catalog_sql_bind(&query, params, 1))
 	{
-		int rc = catalog_sql_step(&query);
-
-		if (rc == SQLITE_DONE)
-		{
-			break;
-		}
-
-		if (rc != SQLITE_ROW)
-		{
-			log_error("[SQLite %d: %s]: %s",
-					  rc,
-					  query.sql,
-					  sqlite3_errmsg(db));
-			(void) catalog_sql_finalize(&query);
-			termPQExpBuffer(&buf);
-			return false;
-		}
-
-		if (*count > 0)
-		{
-			appendPQExpBufferChar(&buf, ',');
-		}
-
-		uint64_t oid = sqlite3_column_int64(query.ppStmt, 0);
-		appendPQExpBuffer(&buf, "%llu", (unsigned long long) oid);
-		++(*count);
-	}
-
-	if (!catalog_sql_finalize(&query))
-	{
-		termPQExpBuffer(&buf);
 		return false;
 	}
 
-	appendPQExpBufferChar(&buf, '}');
+	int rc = catalog_sql_step(&query);
 
-	if (PQExpBufferBroken(&buf))
+	if (rc == SQLITE_DONE)
 	{
-		log_fatal(ALLOCATION_FAILED_ERROR);
-		termPQExpBuffer(&buf);
-		return false;
-	}
-
-	if (*count == 0)
-	{
-		*text = NULL;
-		termPQExpBuffer(&buf);
+		/* HAVING count(*) > 0 filtered out the zero-row case → NULL */
+		*out = NULL;
+		(void) catalog_sql_finalize(&query);
 		return true;
 	}
 
-	*text = strdup(buf.data);
-	termPQExpBuffer(&buf);
+	if (rc != SQLITE_ROW)
+	{
+		log_error("[SQLite %d: %s]: %s", rc, query.sql, sqlite3_errmsg(db));
+		(void) catalog_sql_finalize(&query);
+		return false;
+	}
 
-	return *text != NULL;
+	const char *str = (const char *) sqlite3_column_text(query.ppStmt, 0);
+
+	*out = str ? strdup(str) : NULL;
+	(void) catalog_sql_finalize(&query);
+
+	return *out != NULL;
+}
+
+
+/*
+ * catalog_filter_table_arrays builds all eight EE/ER/RE/RR paired array
+ * literals for one filter section (e.g. "excl_table", "incl_table", ...) in
+ * a single SQLite query.  NULL output pointers are skipped.  Each output is
+ * set to a PostgreSQL array literal "{v1,v2,...}" or NULL when the category
+ * has no entries.
+ */
+bool
+catalog_filter_table_arrays(DatabaseCatalog *catalog, const char *section,
+							char **ee_nsp, char **ee_rel,
+							char **er_nsp, char **er_rel,
+							char **re_nsp, char **re_rel,
+							char **rr_nsp, char **rr_rel)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_filter_table_arrays: db is NULL");
+		return false;
+	}
+
+	/* All eight arrays in one round-trip. $1 is reused by all subqueries. */
+	const char *sql =
+		"select"
+
+		/* EE: exact nsp + exact rel */
+		" (select '{' || group_concat(nspname,    ',') || '}' from f_table"
+		"   where section=$1 and nspname    is not null and nspname_re is null"
+		"     and relname    is not null and relname_re is null"
+		"   having count(*) > 0),"
+		" (select '{' || group_concat(relname,    ',') || '}' from f_table"
+		"   where section=$1 and nspname    is not null and nspname_re is null"
+		"     and relname    is not null and relname_re is null"
+		"   having count(*) > 0),"
+
+		/* ER: exact nsp + regex rel */
+		" (select '{' || group_concat(nspname,    ',') || '}' from f_table"
+		"   where section=$1 and nspname    is not null and nspname_re is null"
+		"     and relname    is null     and relname_re is not null"
+		"   having count(*) > 0),"
+		" (select '{' || group_concat(relname_re, ',') || '}' from f_table"
+		"   where section=$1 and nspname    is not null and nspname_re is null"
+		"     and relname    is null     and relname_re is not null"
+		"   having count(*) > 0),"
+
+		/* RE: regex nsp + exact rel */
+		" (select '{' || group_concat(nspname_re, ',') || '}' from f_table"
+		"   where section=$1 and nspname    is null     and nspname_re is not null"
+		"     and relname    is not null and relname_re is null"
+		"   having count(*) > 0),"
+		" (select '{' || group_concat(relname,    ',') || '}' from f_table"
+		"   where section=$1 and nspname    is null     and nspname_re is not null"
+		"     and relname    is not null and relname_re is null"
+		"   having count(*) > 0),"
+
+		/* RR: regex nsp + regex rel */
+		" (select '{' || group_concat(nspname_re, ',') || '}' from f_table"
+		"   where section=$1 and nspname    is null     and nspname_re is not null"
+		"     and relname    is null     and relname_re is not null"
+		"   having count(*) > 0),"
+		" (select '{' || group_concat(relname_re, ',') || '}' from f_table"
+		"   where section=$1 and nspname    is null     and nspname_re is not null"
+		"     and relname    is null     and relname_re is not null"
+		"   having count(*) > 0)";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		return false;
+	}
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_TEXT, "section", 0, (char *) section },
+	};
+
+	if (!catalog_sql_bind(&query, params, 1))
+	{
+		return false;
+	}
+
+	int rc = catalog_sql_step(&query);
+
+	if (rc != SQLITE_ROW)
+	{
+		log_error("[SQLite %d: %s]: %s", rc, query.sql, sqlite3_errmsg(db));
+		(void) catalog_sql_finalize(&query);
+		return false;
+	}
+
+	char **outputs[8] = {
+		ee_nsp, ee_rel, er_nsp, er_rel,
+		re_nsp, re_rel, rr_nsp, rr_rel
+	};
+
+	for (int col = 0; col < 8; col++)
+	{
+		if (outputs[col] == NULL)
+		{
+			continue;
+		}
+
+		if (sqlite3_column_type(query.ppStmt, col) == SQLITE_NULL)
+		{
+			*(outputs[col]) = NULL;
+		}
+		else
+		{
+			const char *str =
+				(const char *) sqlite3_column_text(query.ppStmt, col);
+
+			*(outputs[col]) = str ? strdup(str) : NULL;
+		}
+	}
+
+	(void) catalog_sql_finalize(&query);
+
+	return true;
+}
+
+
+/*
+ * catalog_filters_as_json produces the same JSON object as filters_as_json()
+ * but derives it from the f_schema / f_table SQLite tables (populated by
+ * catalog_populate_filters) using SQLite's json1 extension.  Keys whose
+ * arrays are empty are omitted (HAVING count(*) > 0 returns no row → the
+ * scalar subquery yields NULL → COALESCE swallows it).
+ */
+bool
+catalog_filters_as_json(DatabaseCatalog *catalog, const char *filter_type,
+						char **json)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_filters_as_json: db is NULL");
+		return false;
+	}
+
+	/*
+	 * Build the JSON as a string by concatenating key:value fragments.
+	 * COALESCE(subquery, '') omits the fragment when the subquery returns no
+	 * rows (i.e. the category has no filter entries), matching the output of
+	 * filters_as_json() which only adds keys when count > 0.
+	 */
+	const char *sql =
+		"select"
+		" '{\"type\":' || json_quote($1) ||"
+
+		/* include-only-schema / include-only-schema-pattern */
+		" coalesce(',\"include-only-schema\":'    || (select json_group_array(nspname)"
+		"    from f_schema where section='incl_schema' and nspname    is not null"
+		"    having count(*) > 0), '') ||"
+		" coalesce(',\"include-only-schema-pattern\":' || (select json_group_array(nspname_re)"
+		"    from f_schema where section='incl_schema' and nspname_re is not null"
+		"    having count(*) > 0), '') ||"
+
+		/* exclude-schema / exclude-schema-pattern */
+		" coalesce(',\"exclude-schema\":'    || (select json_group_array(nspname)"
+		"    from f_schema where section='excl_schema' and nspname    is not null"
+		"    having count(*) > 0), '') ||"
+		" coalesce(',\"exclude-schema-pattern\":' || (select json_group_array(nspname_re)"
+		"    from f_schema where section='excl_schema' and nspname_re is not null"
+		"    having count(*) > 0), '') ||"
+
+		/* exclude-table (EE exact matches) */
+		" coalesce(',\"exclude-table\":'    || (select json_group_array("
+		"    json_object('schema', nspname, 'name', relname))"
+		"    from f_table where section='excl_table'"
+		"      and nspname_re is null and relname_re is null"
+		"    having count(*) > 0), '') ||"
+
+		/* exclude-table-pattern (ER/RE/RR) */
+		" coalesce(',\"exclude-table-pattern\":' || (select json_group_array("
+		"    case"
+		"      when nspname is not null and relname_re is not null"
+		"        then json_object('schema',    nspname,    'name-re',    relname_re)"
+		"      when nspname_re is not null and relname is not null"
+		"        then json_object('schema-re', nspname_re, 'name',       relname)"
+		"      when nspname_re is not null and relname_re is not null"
+		"        then json_object('schema-re', nspname_re, 'name-re',    relname_re)"
+		"    end)"
+		"    from f_table where section='excl_table'"
+		"      and (nspname_re is not null or relname_re is not null)"
+		"    having count(*) > 0), '') ||"
+
+		/* exclude-table-data (EE exact matches) */
+		" coalesce(',\"exclude-table-data\":'    || (select json_group_array("
+		"    json_object('schema', nspname, 'name', relname))"
+		"    from f_table where section='xdat_table'"
+		"      and nspname_re is null and relname_re is null"
+		"    having count(*) > 0), '') ||"
+
+		/* exclude-table-data-pattern (ER/RE/RR) */
+		" coalesce(',\"exclude-table-data-pattern\":' || (select json_group_array("
+		"    case"
+		"      when nspname is not null and relname_re is not null"
+		"        then json_object('schema',    nspname,    'name-re',    relname_re)"
+		"      when nspname_re is not null and relname is not null"
+		"        then json_object('schema-re', nspname_re, 'name',       relname)"
+		"      when nspname_re is not null and relname_re is not null"
+		"        then json_object('schema-re', nspname_re, 'name-re',    relname_re)"
+		"    end)"
+		"    from f_table where section='xdat_table'"
+		"      and (nspname_re is not null or relname_re is not null)"
+		"    having count(*) > 0), '') ||"
+
+		/* exclude-index (EE exact matches) */
+		" coalesce(',\"exclude-index\":'    || (select json_group_array("
+		"    json_object('schema', nspname, 'name', relname))"
+		"    from f_table where section='excl_index'"
+		"      and nspname_re is null and relname_re is null"
+		"    having count(*) > 0), '') ||"
+
+		/* exclude-index-pattern (ER/RE/RR) */
+		" coalesce(',\"exclude-index-pattern\":' || (select json_group_array("
+		"    case"
+		"      when nspname is not null and relname_re is not null"
+		"        then json_object('schema',    nspname,    'name-re',    relname_re)"
+		"      when nspname_re is not null and relname is not null"
+		"        then json_object('schema-re', nspname_re, 'name',       relname)"
+		"      when nspname_re is not null and relname_re is not null"
+		"        then json_object('schema-re', nspname_re, 'name-re',    relname_re)"
+		"    end)"
+		"    from f_table where section='excl_index'"
+		"      and (nspname_re is not null or relname_re is not null)"
+		"    having count(*) > 0), '') ||"
+
+		/* include-only-table (EE exact matches) */
+		" coalesce(',\"include-only-table\":'    || (select json_group_array("
+		"    json_object('schema', nspname, 'name', relname))"
+		"    from f_table where section='incl_table'"
+		"      and nspname_re is null and relname_re is null"
+		"    having count(*) > 0), '') ||"
+
+		/* include-only-table-pattern (ER/RE/RR) */
+		" coalesce(',\"include-only-table-pattern\":' || (select json_group_array("
+		"    case"
+		"      when nspname is not null and relname_re is not null"
+		"        then json_object('schema',    nspname,    'name-re',    relname_re)"
+		"      when nspname_re is not null and relname is not null"
+		"        then json_object('schema-re', nspname_re, 'name',       relname)"
+		"      when nspname_re is not null and relname_re is not null"
+		"        then json_object('schema-re', nspname_re, 'name-re',    relname_re)"
+		"    end)"
+		"    from f_table where section='incl_table'"
+		"      and (nspname_re is not null or relname_re is not null)"
+		"    having count(*) > 0), '') ||"
+
+		" '}'";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		return false;
+	}
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_TEXT, "type", 0, (char *) filter_type },
+	};
+
+	if (!catalog_sql_bind(&query, params, 1))
+	{
+		return false;
+	}
+
+	int rc = catalog_sql_step(&query);
+
+	if (rc != SQLITE_ROW)
+	{
+		log_error("[SQLite %d: %s]: %s", rc, query.sql, sqlite3_errmsg(db));
+		(void) catalog_sql_finalize(&query);
+		return false;
+	}
+
+	const char *str = (const char *) sqlite3_column_text(query.ppStmt, 0);
+
+	*json = str ? strdup(str) : NULL;
+	(void) catalog_sql_finalize(&query);
+
+	return *json != NULL;
 }
 
 

@@ -15,11 +15,11 @@ WITH filters AS (
         -- exclude table: exact nsp + exact rel
         $5::text[] AS excl_ee_nsp, $6::text[] AS excl_ee_rel,
         -- exclude table: exact nsp + regex rel
-        $7::text[] AS excl_er_nsp, $8::text[] AS excl_er_rel_re,
+        $7::text[] AS excl_er_nsp, $8::text[] AS excl_er_rel,
         -- exclude table: regex nsp + exact rel
-        $9::text[] AS excl_re_nsp_re, $10::text[] AS excl_re_rel,
+        $9::text[] AS excl_re_nsp, $10::text[] AS excl_re_rel,
         -- exclude table: regex nsp + regex rel
-        $11::text[] AS excl_rr_nsp_re, $12::text[] AS excl_rr_rel_re
+        $11::text[] AS excl_rr_nsp, $12::text[] AS excl_rr_rel
 )
 SELECT c.oid,
        format('%I', n.nspname) AS nspname,
@@ -69,17 +69,16 @@ SELECT c.oid,
        (f.incl_schema_exact IS NOT NULL AND n.nspname <> ALL(f.incl_schema_exact))
     OR (f.incl_schema_re IS NOT NULL AND NOT (n.nspname ~ ANY(f.incl_schema_re)))
     OR -- schema matches an explicit exclude-schema rule
-       EXISTS (SELECT 1 FROM unnest(f.excl_schema_exact) AS t(nsp)
-               WHERE n.nspname = t.nsp)
+       n.nspname = ANY(f.excl_schema_exact)
     OR (f.excl_schema_re IS NOT NULL AND n.nspname ~ ANY(f.excl_schema_re))
     OR -- table matches an explicit exclude-table rule
        EXISTS (SELECT 1 FROM unnest(f.excl_ee_nsp, f.excl_ee_rel) AS t(nsp, rel)
                WHERE n.nspname = t.nsp AND c.relname = t.rel)
-    OR EXISTS (SELECT 1 FROM unnest(f.excl_er_nsp, f.excl_er_rel_re) AS t(nsp, rel_re)
+    OR EXISTS (SELECT 1 FROM unnest(f.excl_er_nsp, f.excl_er_rel) AS t(nsp, rel_re)
                WHERE n.nspname = t.nsp AND c.relname ~ t.rel_re)
-    OR EXISTS (SELECT 1 FROM unnest(f.excl_re_nsp_re, f.excl_re_rel) AS t(nsp_re, rel)
+    OR EXISTS (SELECT 1 FROM unnest(f.excl_re_nsp, f.excl_re_rel) AS t(nsp_re, rel)
                WHERE n.nspname ~ t.nsp_re AND c.relname = t.rel)
-    OR EXISTS (SELECT 1 FROM unnest(f.excl_rr_nsp_re, f.excl_rr_rel_re) AS t(nsp_re, rel_re)
+    OR EXISTS (SELECT 1 FROM unnest(f.excl_rr_nsp, f.excl_rr_rel) AS t(nsp_re, rel_re)
                WHERE n.nspname ~ t.nsp_re AND c.relname ~ t.rel_re)
    )
    -- extension guard

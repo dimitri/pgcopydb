@@ -28,17 +28,6 @@
 #include "string_utils.h"
 #include <math.h>
 
-static bool build_text_array_schema_list(SourceFilterSchemaList *list,
-										 char **out);
-static bool build_text_array_schema_patterns(SourceFilterSchemaPatternList *list,
-											 char **out);
-static bool build_table_filter_arrays(SourceFilterTableList *exact,
-									  SourceFilterTablePatternList *patterns,
-									  char **ee_nsp, char **ee_rel,
-									  char **er_nsp, char **er_rel_re,
-									  char **re_nsp_re, char **re_rel,
-									  char **rr_nsp_re, char **rr_rel_re);
-
 
 /* Context used when fetching database definitions */
 typedef struct SourceDatabaseArrayContext
@@ -343,16 +332,21 @@ schema_list_schemas(PGSQL *pgsql, SourceFilters *filters, DatabaseCatalog *catal
 		}
 	}
 
+	if (!catalog_populate_filters(catalog, filters))
+	{
+		log_error("Failed to populate filter tables");
+		return false;
+	}
+
 	char *incl_exact = NULL;
 	char *incl_re = NULL;
 	char *excl_exact = NULL;
 	char *excl_re = NULL;
 
-	if (!build_text_array_schema_list(&(filters->includeOnlySchemaList), &incl_exact) ||
-		!build_text_array_schema_patterns(&(filters->includeOnlySchemaPatternList),
-										  &incl_re) ||
-		!build_text_array_schema_list(&(filters->excludeSchemaList), &excl_exact) ||
-		!build_text_array_schema_patterns(&(filters->excludeSchemaPatternList), &excl_re))
+	if (!catalog_filter_schema_array(catalog, "incl_schema", false, &incl_exact) ||
+		!catalog_filter_schema_array(catalog, "incl_schema", true, &incl_re) ||
+		!catalog_filter_schema_array(catalog, "excl_schema", false, &excl_exact) ||
+		!catalog_filter_schema_array(catalog, "excl_schema", true, &excl_re))
 	{
 		log_error("Failed to build schema filter arrays");
 		return false;
@@ -684,6 +678,12 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 		}
 	}
 
+	if (!catalog_populate_filters(catalog, filters))
+	{
+		log_error("Failed to populate filter tables");
+		return false;
+	}
+
 	/*
 	 * For the complement (filtersDB) queries we use different SQL files that
 	 * return the EXCLUDED tables.  These don't need the namespace OID array.
@@ -692,17 +692,15 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 	{
 		/* 8 params: EE/ER/RE/RR pairs for include-only-table filter */
 		char *ee_nsp = NULL, *ee_rel = NULL;
-		char *er_nsp = NULL, *er_rel_re = NULL;
-		char *re_nsp_re = NULL, *re_rel = NULL;
-		char *rr_nsp_re = NULL, *rr_rel_re = NULL;
+		char *er_nsp = NULL, *er_rel = NULL;
+		char *re_nsp = NULL, *re_rel = NULL;
+		char *rr_nsp = NULL, *rr_rel = NULL;
 
-		if (!build_table_filter_arrays(
-				&(filters->includeOnlyTableList),
-				&(filters->includeOnlyTablePatternList),
-				&ee_nsp, &ee_rel,
-				&er_nsp, &er_rel_re,
-				&re_nsp_re, &re_rel,
-				&rr_nsp_re, &rr_rel_re))
+		if (!catalog_filter_table_arrays(catalog, "incl_table",
+										 &ee_nsp, &ee_rel,
+										 &er_nsp, &er_rel,
+										 &re_nsp, &re_rel,
+										 &rr_nsp, &rr_rel))
 		{
 			log_error("Failed to build include-only-table filter arrays");
 			return false;
@@ -722,9 +720,9 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 		};
 		const char *paramValues[8] = {
 			ee_nsp, ee_rel,
-			er_nsp, er_rel_re,
-			re_nsp_re, re_rel,
-			rr_nsp_re, rr_rel_re
+			er_nsp, er_rel,
+			re_nsp, re_rel,
+			rr_nsp, rr_rel
 		};
 
 		if (!pgsql_execute_with_params(pgsql, sql,
@@ -751,30 +749,28 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 		char *incl_schema_exact = NULL, *incl_schema_re = NULL;
 		char *excl_schema_exact = NULL, *excl_schema_re = NULL;
 		char *ee_nsp = NULL, *ee_rel = NULL;
-		char *er_nsp = NULL, *er_rel_re = NULL;
-		char *re_nsp_re = NULL, *re_rel = NULL;
-		char *rr_nsp_re = NULL, *rr_rel_re = NULL;
+		char *er_nsp = NULL, *er_rel = NULL;
+		char *re_nsp = NULL, *re_rel = NULL;
+		char *rr_nsp = NULL, *rr_rel = NULL;
 
-		if (!build_text_array_schema_list(&(filters->includeOnlySchemaList),
-										  &incl_schema_exact) ||
-			!build_text_array_schema_patterns(&(filters->includeOnlySchemaPatternList),
-											  &incl_schema_re) ||
-			!build_text_array_schema_list(&(filters->excludeSchemaList),
-										  &excl_schema_exact) ||
-			!build_text_array_schema_patterns(&(filters->excludeSchemaPatternList),
-											  &excl_schema_re))
+		if (!catalog_filter_schema_array(catalog, "incl_schema", false,
+										 &incl_schema_exact) ||
+			!catalog_filter_schema_array(catalog, "incl_schema", true,
+										 &incl_schema_re) ||
+			!catalog_filter_schema_array(catalog, "excl_schema", false,
+										 &excl_schema_exact) ||
+			!catalog_filter_schema_array(catalog, "excl_schema", true,
+										 &excl_schema_re))
 		{
 			log_error("Failed to build schema filter arrays for LIST_EXCL");
 			return false;
 		}
 
-		if (!build_table_filter_arrays(
-				&(filters->excludeTableList),
-				&(filters->excludeTablePatternList),
-				&ee_nsp, &ee_rel,
-				&er_nsp, &er_rel_re,
-				&re_nsp_re, &re_rel,
-				&rr_nsp_re, &rr_rel_re))
+		if (!catalog_filter_table_arrays(catalog, "excl_table",
+										 &ee_nsp, &ee_rel,
+										 &er_nsp, &er_rel,
+										 &re_nsp, &re_rel,
+										 &rr_nsp, &rr_rel))
 		{
 			log_error("Failed to build exclude-table filter arrays");
 			return false;
@@ -797,9 +793,9 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 			incl_schema_exact, incl_schema_re,
 			excl_schema_exact, excl_schema_re,
 			ee_nsp, ee_rel,
-			er_nsp, er_rel_re,
-			re_nsp_re, re_rel,
-			rr_nsp_re, rr_rel_re
+			er_nsp, er_rel,
+			re_nsp, re_rel,
+			rr_nsp, rr_rel
 		};
 
 		if (!pgsql_execute_with_params(pgsql, sql,
@@ -836,41 +832,35 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 	}
 
 	char *incl_ee_nsp = NULL, *incl_ee_rel = NULL;
-	char *incl_er_nsp = NULL, *incl_er_rel_re = NULL;
-	char *incl_re_nsp_re = NULL, *incl_re_rel = NULL;
-	char *incl_rr_nsp_re = NULL, *incl_rr_rel_re = NULL;
+	char *incl_er_nsp = NULL, *incl_er_rel = NULL;
+	char *incl_re_nsp = NULL, *incl_re_rel = NULL;
+	char *incl_rr_nsp = NULL, *incl_rr_rel = NULL;
 
 	char *excl_ee_nsp = NULL, *excl_ee_rel = NULL;
-	char *excl_er_nsp = NULL, *excl_er_rel_re = NULL;
-	char *excl_re_nsp_re = NULL, *excl_re_rel = NULL;
-	char *excl_rr_nsp_re = NULL, *excl_rr_rel_re = NULL;
+	char *excl_er_nsp = NULL, *excl_er_rel = NULL;
+	char *excl_re_nsp = NULL, *excl_re_rel = NULL;
+	char *excl_rr_nsp = NULL, *excl_rr_rel = NULL;
 
 	char *xdat_ee_nsp = NULL, *xdat_ee_rel = NULL;
-	char *xdat_er_nsp = NULL, *xdat_er_rel_re = NULL;
-	char *xdat_re_nsp_re = NULL, *xdat_re_rel = NULL;
-	char *xdat_rr_nsp_re = NULL, *xdat_rr_rel_re = NULL;
+	char *xdat_er_nsp = NULL, *xdat_er_rel = NULL;
+	char *xdat_re_nsp = NULL, *xdat_re_rel = NULL;
+	char *xdat_rr_nsp = NULL, *xdat_rr_rel = NULL;
 
-	if (!build_table_filter_arrays(
-			&(filters->includeOnlyTableList),
-			&(filters->includeOnlyTablePatternList),
-			&incl_ee_nsp, &incl_ee_rel,
-			&incl_er_nsp, &incl_er_rel_re,
-			&incl_re_nsp_re, &incl_re_rel,
-			&incl_rr_nsp_re, &incl_rr_rel_re) ||
-		!build_table_filter_arrays(
-			&(filters->excludeTableList),
-			&(filters->excludeTablePatternList),
-			&excl_ee_nsp, &excl_ee_rel,
-			&excl_er_nsp, &excl_er_rel_re,
-			&excl_re_nsp_re, &excl_re_rel,
-			&excl_rr_nsp_re, &excl_rr_rel_re) ||
-		!build_table_filter_arrays(
-			&(filters->excludeTableDataList),
-			&(filters->excludeTableDataPatternList),
-			&xdat_ee_nsp, &xdat_ee_rel,
-			&xdat_er_nsp, &xdat_er_rel_re,
-			&xdat_re_nsp_re, &xdat_re_rel,
-			&xdat_rr_nsp_re, &xdat_rr_rel_re))
+	if (!catalog_filter_table_arrays(catalog, "incl_table",
+									 &incl_ee_nsp, &incl_ee_rel,
+									 &incl_er_nsp, &incl_er_rel,
+									 &incl_re_nsp, &incl_re_rel,
+									 &incl_rr_nsp, &incl_rr_rel) ||
+		!catalog_filter_table_arrays(catalog, "excl_table",
+									 &excl_ee_nsp, &excl_ee_rel,
+									 &excl_er_nsp, &excl_er_rel,
+									 &excl_re_nsp, &excl_re_rel,
+									 &excl_rr_nsp, &excl_rr_rel) ||
+		!catalog_filter_table_arrays(catalog, "xdat_table",
+									 &xdat_ee_nsp, &xdat_ee_rel,
+									 &xdat_er_nsp, &xdat_er_rel,
+									 &xdat_re_nsp, &xdat_re_rel,
+									 &xdat_rr_nsp, &xdat_rr_rel))
 	{
 		log_error("Failed to build table filter arrays");
 		return false;
@@ -902,17 +892,17 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 	const char *paramValues[25] = {
 		nsp_oids,
 		incl_ee_nsp, incl_ee_rel,
-		incl_er_nsp, incl_er_rel_re,
-		incl_re_nsp_re, incl_re_rel,
-		incl_rr_nsp_re, incl_rr_rel_re,
+		incl_er_nsp, incl_er_rel,
+		incl_re_nsp, incl_re_rel,
+		incl_rr_nsp, incl_rr_rel,
 		excl_ee_nsp, excl_ee_rel,
-		excl_er_nsp, excl_er_rel_re,
-		excl_re_nsp_re, excl_re_rel,
-		excl_rr_nsp_re, excl_rr_rel_re,
+		excl_er_nsp, excl_er_rel,
+		excl_re_nsp, excl_re_rel,
+		excl_rr_nsp, excl_rr_rel,
 		xdat_ee_nsp, xdat_ee_rel,
-		xdat_er_nsp, xdat_er_rel_re,
-		xdat_re_nsp_re, xdat_re_rel,
-		xdat_rr_nsp_re, xdat_rr_rel_re
+		xdat_er_nsp, xdat_er_rel,
+		xdat_re_nsp, xdat_re_rel,
+		xdat_rr_nsp, xdat_rr_rel
 	};
 
 	if (!pgsql_execute_with_params(pgsql, sql,
@@ -1167,47 +1157,22 @@ schema_list_all_indexes(PGSQL *pgsql,
 		return false;
 	}
 
-	/* Build exclude-index arrays (nspname and relname in parallel) */
+	if (!catalog_populate_filters(catalog, filters))
+	{
+		log_error("Failed to populate filter tables");
+		return false;
+	}
+
+	/* Build exclude-index arrays (nspname and relname in parallel; EE only) */
 	char *excl_idx_nsp = NULL;
 	char *excl_idx_rel = NULL;
 
-	SourceFilterTableList *idxList = &(filters->excludeIndexList);
-
-	if (idxList->count > 0)
+	if (!catalog_filter_table_arrays(catalog, "excl_index",
+									 &excl_idx_nsp, &excl_idx_rel,
+									 NULL, NULL, NULL, NULL, NULL, NULL))
 	{
-		PQExpBuffer nspBuf = createPQExpBuffer();
-		PQExpBuffer relBuf = createPQExpBuffer();
-
-		if (!nspBuf || !relBuf)
-		{
-			log_error(ALLOCATION_FAILED_ERROR);
-			(void) destroyPQExpBuffer(nspBuf);
-			(void) destroyPQExpBuffer(relBuf);
-			return false;
-		}
-
-		appendPQExpBufferChar(nspBuf, '{');
-		appendPQExpBufferChar(relBuf, '{');
-
-		for (int i = 0; i < idxList->count; i++)
-		{
-			if (i > 0)
-			{
-				appendPQExpBufferChar(nspBuf, ',');
-				appendPQExpBufferChar(relBuf, ',');
-			}
-			appendPQExpBufferStr(nspBuf, idxList->array[i].nspname);
-			appendPQExpBufferStr(relBuf, idxList->array[i].relname);
-		}
-
-		appendPQExpBufferChar(nspBuf, '}');
-		appendPQExpBufferChar(relBuf, '}');
-
-		excl_idx_nsp = strndup(nspBuf->data, nspBuf->len);
-		excl_idx_rel = strndup(relBuf->data, relBuf->len);
-
-		(void) destroyPQExpBuffer(nspBuf);
-		(void) destroyPQExpBuffer(relBuf);
+		log_error("Failed to build exclude-index filter arrays");
+		return false;
 	}
 
 	const char *sql = NULL;
@@ -1610,287 +1575,6 @@ schema_fetch_table_checksum(PGSQL *pgsql, TableChecksum *sum, bool *done)
 		log_error("Failed to fetch table checksum results");
 		return false;
 	}
-
-	return true;
-}
-
-
-/*
- * build_text_array_schema_list builds a PostgreSQL text-array literal
- * "{name1,name2,...}" from a SourceFilterSchemaList's nspname fields.
- * Sets *out = NULL when the list is empty (SQL NULL → "no filter").
- */
-static bool
-build_text_array_schema_list(SourceFilterSchemaList *list, char **out)
-{
-	if (list->count == 0)
-	{
-		*out = NULL;
-		return true;
-	}
-
-	PQExpBuffer buf = createPQExpBuffer();
-
-	if (buf == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	appendPQExpBufferChar(buf, '{');
-
-	for (int i = 0; i < list->count; i++)
-	{
-		if (i > 0)
-		{
-			appendPQExpBufferChar(buf, ',');
-		}
-		appendPQExpBufferStr(buf, list->array[i].nspname);
-	}
-
-	appendPQExpBufferChar(buf, '}');
-
-	*out = strndup(buf->data, buf->len);
-	destroyPQExpBuffer(buf);
-
-	if (*out == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	return true;
-}
-
-
-/*
- * build_text_array_schema_patterns builds a PostgreSQL text-array literal
- * from a SourceFilterSchemaPatternList's nspname_re fields.
- * Sets *out = NULL when the list is empty.
- */
-static bool
-build_text_array_schema_patterns(SourceFilterSchemaPatternList *list, char **out)
-{
-	if (list->count == 0)
-	{
-		*out = NULL;
-		return true;
-	}
-
-	PQExpBuffer buf = createPQExpBuffer();
-
-	if (buf == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	appendPQExpBufferChar(buf, '{');
-
-	for (int i = 0; i < list->count; i++)
-	{
-		if (i > 0)
-		{
-			appendPQExpBufferChar(buf, ',');
-		}
-		appendPQExpBufferStr(buf, list->array[i].nspname_re);
-	}
-
-	appendPQExpBufferChar(buf, '}');
-
-	*out = strndup(buf->data, buf->len);
-	destroyPQExpBuffer(buf);
-
-	if (*out == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	return true;
-}
-
-
-/*
- * build_table_filter_arrays splits a (SourceFilterTableList, SourceFilterTablePatternList)
- * pair into four category pairs of text-array literals for parameterized SQL:
- *
- *   EE (exact nsp + exact rel)    → from exact list
- *   ER (exact nsp + regex rel)    → from pattern list where nspname_re[0]=='\0'
- *   RE (regex nsp + exact rel)    → from pattern list where relname_re[0]=='\0'
- *   RR (regex nsp + regex rel)    → from pattern list where both non-empty
- *
- * Each output is a PostgreSQL text-array literal "{v1,v2,...}" or NULL (no
- * entries in that category).  The nsp and rel arrays for each category are
- * parallel: nsp[i] matches rel[i].
- */
-static bool
-build_table_filter_arrays(SourceFilterTableList *exact,
-						  SourceFilterTablePatternList *patterns,
-						  char **ee_nsp, char **ee_rel,
-						  char **er_nsp, char **er_rel_re,
-						  char **re_nsp_re, char **re_rel,
-						  char **rr_nsp_re, char **rr_rel_re)
-{
-	/* initialise all outputs to NULL */
-	*ee_nsp = *ee_rel = NULL;
-	*er_nsp = *er_rel_re = NULL;
-	*re_nsp_re = *re_rel = NULL;
-	*rr_nsp_re = *rr_rel_re = NULL;
-
-	/* ---- EE: from exact list ---- */
-	if (exact != NULL && exact->count > 0)
-	{
-		PQExpBuffer nBuf = createPQExpBuffer();
-		PQExpBuffer rBuf = createPQExpBuffer();
-
-		if (!nBuf || !rBuf)
-		{
-			log_error(ALLOCATION_FAILED_ERROR);
-			(void) destroyPQExpBuffer(nBuf);
-			(void) destroyPQExpBuffer(rBuf);
-			return false;
-		}
-
-		appendPQExpBufferChar(nBuf, '{');
-		appendPQExpBufferChar(rBuf, '{');
-
-		for (int i = 0; i < exact->count; i++)
-		{
-			if (i > 0)
-			{
-				appendPQExpBufferChar(nBuf, ',');
-				appendPQExpBufferChar(rBuf, ',');
-			}
-			appendPQExpBufferStr(nBuf, exact->array[i].nspname);
-			appendPQExpBufferStr(rBuf, exact->array[i].relname);
-		}
-
-		appendPQExpBufferChar(nBuf, '}');
-		appendPQExpBufferChar(rBuf, '}');
-
-		*ee_nsp = strndup(nBuf->data, nBuf->len);
-		*ee_rel = strndup(rBuf->data, rBuf->len);
-
-		(void) destroyPQExpBuffer(nBuf);
-		(void) destroyPQExpBuffer(rBuf);
-
-		if (!*ee_nsp || !*ee_rel)
-		{
-			log_error(ALLOCATION_FAILED_ERROR);
-			return false;
-		}
-	}
-
-	if (patterns == NULL || patterns->count == 0)
-	{
-		return true;
-	}
-
-	/* ---- ER / RE / RR: from pattern list ---- */
-	PQExpBuffer er_n = createPQExpBuffer(), er_r = createPQExpBuffer();
-	PQExpBuffer re_n = createPQExpBuffer(), re_r = createPQExpBuffer();
-	PQExpBuffer rr_n = createPQExpBuffer(), rr_r = createPQExpBuffer();
-
-	if (!er_n || !er_r || !re_n || !re_r || !rr_n || !rr_r)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		(void) destroyPQExpBuffer(er_n);
-		(void) destroyPQExpBuffer(er_r);
-		(void) destroyPQExpBuffer(re_n);
-		(void) destroyPQExpBuffer(re_r);
-		(void) destroyPQExpBuffer(rr_n);
-		(void) destroyPQExpBuffer(rr_r);
-		return false;
-	}
-
-	appendPQExpBufferChar(er_n, '{');
-	appendPQExpBufferChar(er_r, '{');
-	appendPQExpBufferChar(re_n, '{');
-	appendPQExpBufferChar(re_r, '{');
-	appendPQExpBufferChar(rr_n, '{');
-	appendPQExpBufferChar(rr_r, '{');
-
-	int er_count = 0, re_count = 0, rr_count = 0;
-
-	for (int i = 0; i < patterns->count; i++)
-	{
-		SourceFilterTablePattern *p = &patterns->array[i];
-		bool nsp_is_re = (p->nspname_re[0] != '\0');
-		bool rel_is_re = (p->relname_re[0] != '\0');
-
-		if (!nsp_is_re && rel_is_re)
-		{
-			/* ER: exact nsp, regex rel */
-			if (er_count > 0)
-			{
-				appendPQExpBufferChar(er_n, ',');
-				appendPQExpBufferChar(er_r, ',');
-			}
-			appendPQExpBufferStr(er_n, p->nspname);
-			appendPQExpBufferStr(er_r, p->relname_re);
-			++er_count;
-		}
-		else if (nsp_is_re && !rel_is_re)
-		{
-			/* RE: regex nsp, exact rel */
-			if (re_count > 0)
-			{
-				appendPQExpBufferChar(re_n, ',');
-				appendPQExpBufferChar(re_r, ',');
-			}
-			appendPQExpBufferStr(re_n, p->nspname_re);
-			appendPQExpBufferStr(re_r, p->relname);
-			++re_count;
-		}
-		else if (nsp_is_re && rel_is_re)
-		{
-			/* RR: both regex */
-			if (rr_count > 0)
-			{
-				appendPQExpBufferChar(rr_n, ',');
-				appendPQExpBufferChar(rr_r, ',');
-			}
-			appendPQExpBufferStr(rr_n, p->nspname_re);
-			appendPQExpBufferStr(rr_r, p->relname_re);
-			++rr_count;
-		}
-
-		/* (!nsp_is_re && !rel_is_re) would be EE, but pattern list only has
-		 * entries with at least one regex — this case cannot occur. */
-	}
-
-	appendPQExpBufferChar(er_n, '}');
-	appendPQExpBufferChar(er_r, '}');
-	appendPQExpBufferChar(re_n, '}');
-	appendPQExpBufferChar(re_r, '}');
-	appendPQExpBufferChar(rr_n, '}');
-	appendPQExpBufferChar(rr_r, '}');
-
-	if (er_count > 0)
-	{
-		*er_nsp = strndup(er_n->data, er_n->len);
-		*er_rel_re = strndup(er_r->data, er_r->len);
-	}
-
-	if (re_count > 0)
-	{
-		*re_nsp_re = strndup(re_n->data, re_n->len);
-		*re_rel = strndup(re_r->data, re_r->len);
-	}
-
-	if (rr_count > 0)
-	{
-		*rr_nsp_re = strndup(rr_n->data, rr_n->len);
-		*rr_rel_re = strndup(rr_r->data, rr_r->len);
-	}
-
-	(void) destroyPQExpBuffer(er_n);
-	(void) destroyPQExpBuffer(er_r);
-	(void) destroyPQExpBuffer(re_n);
-	(void) destroyPQExpBuffer(re_r);
-	(void) destroyPQExpBuffer(rr_n);
-	(void) destroyPQExpBuffer(rr_r);
 
 	return true;
 }
