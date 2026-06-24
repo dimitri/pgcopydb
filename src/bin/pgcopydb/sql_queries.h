@@ -12,6 +12,9 @@
 
 #include <stdbool.h>
 
+bool pgcopydb_sql_expand_filter_schema(const char **sql);
+bool pgcopydb_sql_expand_filter_tables(const char **sql);
+
 bool pgcopydb_sql_list_collations(const char **sql);
 bool pgcopydb_sql_list_database_properties(const char **sql);
 bool pgcopydb_sql_list_databases(const char **sql);

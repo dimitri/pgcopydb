@@ -36,6 +36,7 @@ typedef struct SourceFilterSchema
 typedef struct SourceFilterSchemaList
 {
 	int count;
+	int countOriginal;          /* count before pattern expansion (0 = no expansion) */
 	SourceFilterSchema *array;  /* malloc'ed area */
 } SourceFilterSchemaList;
 
@@ -49,6 +50,7 @@ typedef struct SourceFilterTable
 typedef struct SourceFilterTableList
 {
 	int count;
+	int countOriginal;          /* count before pattern expansion (0 = no expansion) */
 	SourceFilterTable *array;   /* malloc'ed area */
 } SourceFilterTableList;
 

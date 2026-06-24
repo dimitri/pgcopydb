@@ -2,6 +2,37 @@
  * Run 'make gen-sql' after modifying any .sql file.
  */
 
+static const char sql_expand_filter_schema[] =
+	"  select n.nspname,\n"
+	"         quote_ident(n.nspname) as restorelistname\n"
+	"\n"
+	"    from pg_catalog.pg_namespace n\n"
+	"\n"
+	"   where n.nspname ~ $1\n"
+	"     and n.nspname not like 'pg_%'\n"
+	"     and n.nspname <> 'information_schema'\n"
+	"     and n.nspname <> 'pgcopydb'\n"
+	"\n"
+	"order by n.nspname\n"
+;
+
+static const char sql_expand_filter_tables[] =
+	"  select n.nspname, c.relname\n"
+	"\n"
+	"    from pg_catalog.pg_class c\n"
+	"    join pg_catalog.pg_namespace n on n.oid = c.relnamespace\n"
+	"\n"
+	"   where c.relkind in ('r', 'm', 'p')\n"
+	"     and c.relpersistence in ('p', 'u')\n"
+	"     and n.nspname not like 'pg_%'\n"
+	"     and n.nspname <> 'information_schema'\n"
+	"     and n.nspname <> 'pgcopydb'\n"
+	"     and ($1::text[] is null or n.nspname = any($1::text[]))\n"
+	"     and ($2::text[] is null or n.nspname <> all($2::text[]))\n"
+	"\n"
+	"order by n.nspname, c.relname\n"
+;
+
 static const char sql_list_collations[] =
 	"with indcols as\n"
 	" (\n"

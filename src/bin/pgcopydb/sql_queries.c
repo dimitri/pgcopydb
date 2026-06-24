@@ -19,6 +19,22 @@
 
 
 bool
+pgcopydb_sql_expand_filter_schema(const char **sql)
+{
+	*sql = sql_expand_filter_schema;
+	return true;
+}
+
+
+bool
+pgcopydb_sql_expand_filter_tables(const char **sql)
+{
+	*sql = sql_expand_filter_tables;
+	return true;
+}
+
+
+bool
 pgcopydb_sql_list_collations(const char **sql)
 {
 	*sql = sql_list_collations;

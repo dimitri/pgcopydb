@@ -708,64 +708,120 @@ filters_as_json(SourceFilters *filters, JSON_Value *jsFilter)
 						   "type",
 						   filterTypeToString(filters->type));
 
-	/* include-only-schema */
-	if (filters->includeOnlySchemaList.count > 0)
+	/*
+	 * Schema exact lists.  When patterns have been expanded (countOriginal > 0)
+	 * only serialize the user-supplied entries so the JSON stays stable across
+	 * pre- and post-expansion catalog checks.
+	 */
+	struct schemasection
 	{
-		JSON_Value *jsSchema = json_value_init_array();
-		JSON_Array *jsSchemaArray = json_value_get_array(jsSchema);
+		char name[PG_NAMEDATALEN];
+		char patname[PG_NAMEDATALEN];
+		SourceFilterSchemaList *list;
+		SourceFilterSchemaPatternList *patList;
+	};
 
-		for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
+	struct schemasection schemasections[] = {
 		{
-			char *nspname = filters->includeOnlySchemaList.array[i].nspname;
+			"include-only-schema",
+			"include-only-schema-pattern",
+			&(filters->includeOnlySchemaList),
+			&(filters->includeOnlySchemaPatternList)
+		},
+		{
+			"exclude-schema",
+			"exclude-schema-pattern",
+			&(filters->excludeSchemaList),
+			&(filters->excludeSchemaPatternList)
+		},
+		{ "", "", NULL, NULL },
+	};
 
-			json_array_append_string(jsSchemaArray, nspname);
+	for (int i = 0; schemasections[i].list != NULL; i++)
+	{
+		SourceFilterSchemaList *slist = schemasections[i].list;
+		SourceFilterSchemaPatternList *splist = schemasections[i].patList;
+
+		int limit = (slist->countOriginal > 0) ? slist->countOriginal : slist->count;
+
+		if (limit > 0)
+		{
+			JSON_Value *jsSchema = json_value_init_array();
+			JSON_Array *jsSchemaArray = json_value_get_array(jsSchema);
+
+			for (int j = 0; j < limit; j++)
+			{
+				json_array_append_string(jsSchemaArray, slist->array[j].nspname);
+			}
+
+			json_object_set_value(jsFilterObj, schemasections[i].name, jsSchema);
 		}
 
-		json_object_set_value(jsFilterObj, "include-only-schema", jsSchema);
-	}
-
-	/* exclude-schema */
-	if (filters->excludeSchemaList.count > 0)
-	{
-		JSON_Value *jsSchema = json_value_init_array();
-		JSON_Array *jsSchemaArray = json_value_get_array(jsSchema);
-
-		for (int i = 0; i < filters->excludeSchemaList.count; i++)
+		if (splist->count > 0)
 		{
-			char *nspname = filters->excludeSchemaList.array[i].nspname;
+			JSON_Value *jsPat = json_value_init_array();
+			JSON_Array *jsPatArray = json_value_get_array(jsPat);
 
-			json_array_append_string(jsSchemaArray, nspname);
+			for (int j = 0; j < splist->count; j++)
+			{
+				json_array_append_string(jsPatArray, splist->array[j].nspname_re);
+			}
+
+			json_object_set_value(jsFilterObj, schemasections[i].patname, jsPat);
 		}
-
-		json_object_set_value(jsFilterObj, "exclude-schema", jsSchema);
 	}
 
 	/* exclude table lists */
 	struct section
 	{
 		char name[PG_NAMEDATALEN];
+		char patname[PG_NAMEDATALEN];
 		SourceFilterTableList *list;
+		SourceFilterTablePatternList *patList;
 	};
 
 	struct section sections[] = {
-		{ "exclude-table", &(filters->excludeTableList) },
-		{ "exclude-table-data", &(filters->excludeTableDataList) },
-		{ "exclude-index", &(filters->excludeIndexList) },
-		{ "include-only-table", &(filters->includeOnlyTableList) },
-		{ "", NULL },
+		{
+			"exclude-table",
+			"exclude-table-pattern",
+			&(filters->excludeTableList),
+			&(filters->excludeTablePatternList)
+		},
+		{
+			"exclude-table-data",
+			"exclude-table-data-pattern",
+			&(filters->excludeTableDataList),
+			&(filters->excludeTableDataPatternList)
+		},
+		{
+			"exclude-index",
+			"exclude-index-pattern",
+			&(filters->excludeIndexList),
+			&(filters->excludeIndexPatternList)
+		},
+		{
+			"include-only-table",
+			"include-only-table-pattern",
+			&(filters->includeOnlyTableList),
+			&(filters->includeOnlyTablePatternList)
+		},
+		{ "", "", NULL, NULL },
 	};
 
 	for (int i = 0; sections[i].list != NULL; i++)
 	{
 		char *sectionName = sections[i].name;
 		SourceFilterTableList *list = sections[i].list;
+		SourceFilterTablePatternList *patList = sections[i].patList;
 
-		if (list->count > 0)
+		int limit = (list->countOriginal > 0) ? list->countOriginal : list->count;
+
+		if (limit > 0)
 		{
 			JSON_Value *jsList = json_value_init_array();
 			JSON_Array *jsListArray = json_value_get_array(jsList);
 
-			for (int j = 0; j < list->count; j++)
+			for (int j = 0; j < limit; j++)
 			{
 				SourceFilterTable *table = &(list->array[j]);
 
@@ -779,6 +835,45 @@ filters_as_json(SourceFilters *filters, JSON_Value *jsFilter)
 			}
 
 			json_object_set_value(jsFilterObj, sectionName, jsList);
+		}
+
+		if (patList->count > 0)
+		{
+			JSON_Value *jsPat = json_value_init_array();
+			JSON_Array *jsPatArray = json_value_get_array(jsPat);
+
+			for (int j = 0; j < patList->count; j++)
+			{
+				SourceFilterTablePattern *pat = &(patList->array[j]);
+
+				JSON_Value *jsPEntry = json_value_init_object();
+				JSON_Object *jsPEntryObj = json_value_get_object(jsPEntry);
+
+				if (pat->nspname[0] != '\0')
+				{
+					json_object_set_string(jsPEntryObj, "schema", pat->nspname);
+				}
+
+				if (pat->nspname_re[0] != '\0')
+				{
+					json_object_set_string(jsPEntryObj, "schema-re",
+										   pat->nspname_re);
+				}
+
+				if (pat->relname[0] != '\0')
+				{
+					json_object_set_string(jsPEntryObj, "name", pat->relname);
+				}
+
+				if (pat->relname_re[0] != '\0')
+				{
+					json_object_set_string(jsPEntryObj, "name-re", pat->relname_re);
+				}
+
+				json_array_append_value(jsPatArray, jsPEntry);
+			}
+
+			json_object_set_value(jsFilterObj, sections[i].patname, jsPat);
 		}
 	}
 
