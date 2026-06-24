@@ -22,6 +22,27 @@ grep -v "OWNER TO postgres" /usr/src/pagila/pagila-schema.sql > /tmp/pagila-sche
 psql -o /tmp/s.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /tmp/pagila-schema.sql
 psql -o /tmp/d.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
 
+# Demonstrate that filtering (including regex patterns) works from a standby
+# source.  The ~/^payment_p/ regex matches the seven payment partition tables;
+# they should appear in the "skipped" list and be absent from the selected list.
+cat > /tmp/standby-filter.ini <<'INI'
+[exclude-table]
+public.~/^payment_p/
+INI
+
+pgcopydb list tables \
+         --filters /tmp/standby-filter.ini \
+         --source ${PGCOPYDB_SOURCE_STANDBY_PGURI}
+
+pgcopydb list tables \
+         --filters /tmp/standby-filter.ini \
+         --source ${PGCOPYDB_SOURCE_STANDBY_PGURI} \
+         --list-skipped
+
+pgcopydb list sequences \
+         --filters /tmp/standby-filter.ini \
+         --source ${PGCOPYDB_SOURCE_STANDBY_PGURI}
+
 pgcopydb clone --skip-ext-comments --notice \
          --source ${PGCOPYDB_SOURCE_STANDBY_PGURI} \
          --target ${PGCOPYDB_TARGET_PGURI}
