@@ -2174,5 +2174,8 @@ copydb_init_specs_from_listdboptions(CopyDataSpec *copySpecs,
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	/* list commands never export a snapshot; they are snapshot-agnostic */
+	copySpecs->skipSnapshotCheck = true;
+
 	return true;
 }

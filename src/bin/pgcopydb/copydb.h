@@ -312,6 +312,7 @@ typedef struct CopyDataSpec
 	bool fetchFilteredOids;     /* allow bypassing dump/restore filter prep */
 	bool skipSourceURICheck;    /* skip source URI mismatch check on open */
 	bool skipFilterCheck;       /* skip filter consistency check (agnostic cmds) */
+	bool skipSnapshotCheck;     /* skip snapshot consistency check (list cmds) */
 
 	bool follow;                /* pgcopydb fork --follow */
 	bool allDatabases;          /* pgcopydb clone --all-databases */
