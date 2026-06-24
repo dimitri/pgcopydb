@@ -5704,7 +5704,7 @@ parseFilterExpandTable(void *ctx, PGresult *result)
 
 	ExecStatusType status = PQresultStatus(result);
 
-	if (status != PGRES_TUPLES_OK)
+	if (status != PGRES_TUPLES_OK && status != PGRES_SINGLE_TUPLE)
 	{
 		log_error("Failed to expand table filter pattern: %s",
 				  PQresultErrorMessage(result));
@@ -5714,31 +5714,30 @@ parseFilterExpandTable(void *ctx, PGresult *result)
 
 	int ntuples = PQntuples(result);
 
-	if (ntuples == 0)
-	{
-		context->count = 0;
-		context->tables = NULL;
-		return;
-	}
-
-	context->tables = calloc(ntuples, sizeof(SourceFilterTable));
-
-	if (context->tables == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		context->parsedOk = false;
-		return;
-	}
-
 	for (int row = 0; row < ntuples; row++)
 	{
-		SourceFilterTable *t = &context->tables[row];
+		int newCount = context->count + 1;
+		SourceFilterTable *newTables = calloc(newCount, sizeof(SourceFilterTable));
 
+		if (newTables == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			context->parsedOk = false;
+			return;
+		}
+
+		for (int i = 0; i < context->count; i++)
+		{
+			newTables[i] = context->tables[i];
+		}
+
+		SourceFilterTable *t = &newTables[context->count];
 		strlcpy(t->nspname, PQgetvalue(result, row, 0), sizeof(t->nspname));
 		strlcpy(t->relname, PQgetvalue(result, row, 1), sizeof(t->relname));
-	}
 
-	context->count = ntuples;
+		context->tables = newTables;
+		context->count = newCount;
+	}
 }
 
 
@@ -5749,7 +5748,7 @@ parseFilterExpandSchema(void *ctx, PGresult *result)
 
 	ExecStatusType status = PQresultStatus(result);
 
-	if (status != PGRES_TUPLES_OK)
+	if (status != PGRES_TUPLES_OK && status != PGRES_SINGLE_TUPLE)
 	{
 		log_error("Failed to expand schema filter pattern: %s",
 				  PQresultErrorMessage(result));
@@ -5759,32 +5758,31 @@ parseFilterExpandSchema(void *ctx, PGresult *result)
 
 	int ntuples = PQntuples(result);
 
-	if (ntuples == 0)
-	{
-		context->count = 0;
-		context->schemas = NULL;
-		return;
-	}
-
-	context->schemas = calloc(ntuples, sizeof(SourceFilterSchema));
-
-	if (context->schemas == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		context->parsedOk = false;
-		return;
-	}
-
 	for (int row = 0; row < ntuples; row++)
 	{
-		SourceFilterSchema *s = &context->schemas[row];
+		int newCount = context->count + 1;
+		SourceFilterSchema *newSchemas = calloc(newCount, sizeof(SourceFilterSchema));
 
+		if (newSchemas == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			context->parsedOk = false;
+			return;
+		}
+
+		for (int i = 0; i < context->count; i++)
+		{
+			newSchemas[i] = context->schemas[i];
+		}
+
+		SourceFilterSchema *s = &newSchemas[context->count];
 		strlcpy(s->nspname, PQgetvalue(result, row, 0), sizeof(s->nspname));
 		strlcpy(s->restoreListName, PQgetvalue(result, row, 1),
 				sizeof(s->restoreListName));
-	}
 
-	context->count = ntuples;
+		context->schemas = newSchemas;
+		context->count = newCount;
+	}
 }
 
 
