@@ -98,7 +98,7 @@ static char *sourceDBcreateTableDDLs[] = {
 	")",
 
 	"create table s_namespace("
-	"  nspname text primary key, restore_list_name text"
+	"  oid integer primary key, nspname text not null, restore_list_name text"
 	")",
 
 	"create table s_table("
@@ -266,6 +266,7 @@ static char *sourceDBcreateTableDDLs[] = {
 	/* All indexes other than s_i_tableoid / s_c_indexoid stay here so they are
 	 * created on empty tables and enforce uniqueness during data load. */
 	"create index s_d_p_oid on s_database_property(datname)",
+	"create unique index s_n_nspname on s_namespace(nspname)",
 	"create index s_n_rlname on s_namespace(restore_list_name)",
 	"create unique index s_t_qname on s_table(qname)",
 	"create unique index s_t_rlname on s_table(restore_list_name)",
@@ -3321,6 +3322,184 @@ catalog_s_table_oid_array(DatabaseCatalog *catalog, char **text, int *count)
 		log_fatal(ALLOCATION_FAILED_ERROR);
 		termPQExpBuffer(&buf);
 		return false;
+	}
+
+	*text = strdup(buf.data);
+	termPQExpBuffer(&buf);
+
+	return *text != NULL;
+}
+
+
+/*
+ * catalog_s_class_oid_array is like catalog_s_table_oid_array but also
+ * includes OIDs from s_matview.  Used by schema_list_pg_depend so that
+ * dependencies on excluded materialized views are captured as well as
+ * dependencies on excluded regular tables.
+ */
+bool
+catalog_s_class_oid_array(DatabaseCatalog *catalog, char **text, int *count)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_s_class_oid_array: db is NULL");
+		return false;
+	}
+
+	PQExpBufferData buf;
+	initPQExpBuffer(&buf);
+	appendPQExpBufferChar(&buf, '{');
+
+	*count = 0;
+
+	char *oidSql =
+		"select oid from s_table"
+		" union all select oid from s_matview"
+		" order by oid";
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, oidSql, &query))
+	{
+		termPQExpBuffer(&buf);
+		return false;
+	}
+
+	for (;;)
+	{
+		int rc = catalog_sql_step(&query);
+
+		if (rc == SQLITE_DONE)
+		{
+			break;
+		}
+
+		if (rc != SQLITE_ROW)
+		{
+			log_error("[SQLite %d: %s]: %s",
+					  rc,
+					  query.sql,
+					  sqlite3_errmsg(db));
+			(void) catalog_sql_finalize(&query);
+			termPQExpBuffer(&buf);
+			return false;
+		}
+
+		if (*count > 0)
+		{
+			appendPQExpBufferChar(&buf, ',');
+		}
+
+		uint64_t oid = sqlite3_column_int64(query.ppStmt, 0);
+		appendPQExpBuffer(&buf, "%llu", (unsigned long long) oid);
+		++(*count);
+	}
+
+	if (!catalog_sql_finalize(&query))
+	{
+		termPQExpBuffer(&buf);
+		return false;
+	}
+
+	appendPQExpBufferChar(&buf, '}');
+
+	if (PQExpBufferBroken(&buf))
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		termPQExpBuffer(&buf);
+		return false;
+	}
+
+	*text = strdup(buf.data);
+	termPQExpBuffer(&buf);
+
+	return *text != NULL;
+}
+
+
+/*
+ * catalog_s_namespace_oid_array builds a PostgreSQL array literal of all
+ * namespace OIDs stored in s_namespace, formatted as "{oid1,oid2,...}" for
+ * use as a $1 text parameter with ::oid[] casting in SQL.  Returns NULL when
+ * the catalog has no namespaces.  The caller must free *text.
+ */
+bool
+catalog_s_namespace_oid_array(DatabaseCatalog *catalog, char **text, int *count)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_s_namespace_oid_array: db is NULL");
+		return false;
+	}
+
+	PQExpBufferData buf;
+	initPQExpBuffer(&buf);
+	appendPQExpBufferChar(&buf, '{');
+
+	*count = 0;
+
+	char *oidSql = "select oid from s_namespace order by oid";
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, oidSql, &query))
+	{
+		termPQExpBuffer(&buf);
+		return false;
+	}
+
+	for (;;)
+	{
+		int rc = catalog_sql_step(&query);
+
+		if (rc == SQLITE_DONE)
+		{
+			break;
+		}
+
+		if (rc != SQLITE_ROW)
+		{
+			log_error("[SQLite %d: %s]: %s",
+					  rc,
+					  query.sql,
+					  sqlite3_errmsg(db));
+			(void) catalog_sql_finalize(&query);
+			termPQExpBuffer(&buf);
+			return false;
+		}
+
+		if (*count > 0)
+		{
+			appendPQExpBufferChar(&buf, ',');
+		}
+
+		uint64_t oid = sqlite3_column_int64(query.ppStmt, 0);
+		appendPQExpBuffer(&buf, "%llu", (unsigned long long) oid);
+		++(*count);
+	}
+
+	if (!catalog_sql_finalize(&query))
+	{
+		termPQExpBuffer(&buf);
+		return false;
+	}
+
+	appendPQExpBufferChar(&buf, '}');
+
+	if (PQExpBufferBroken(&buf))
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		termPQExpBuffer(&buf);
+		return false;
+	}
+
+	if (*count == 0)
+	{
+		*text = NULL;
+		termPQExpBuffer(&buf);
+		return true;
 	}
 
 	*text = strdup(buf.data);

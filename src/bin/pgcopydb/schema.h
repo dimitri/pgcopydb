@@ -427,7 +427,9 @@ bool schema_list_databases(PGSQL *pgsql, DatabaseCatalog *catalog);
 
 bool schema_list_database_properties(PGSQL *pgsql, DatabaseCatalog *catalog);
 
-bool schema_list_schemas(PGSQL *pgsql, DatabaseCatalog *catalog);
+bool schema_list_schemas(PGSQL *pgsql,
+						 SourceFilters *filters,
+						 DatabaseCatalog *catalog);
 
 bool schema_list_roles(PGSQL *pgsql, DatabaseCatalog *catalog);
 

@@ -336,6 +336,12 @@ bool catalog_add_s_attr_batch(DatabaseCatalog *catalog,
 bool catalog_s_table_oid_array(DatabaseCatalog *catalog,
 							   char **text,
 							   int *count);
+bool catalog_s_class_oid_array(DatabaseCatalog *catalog,
+							   char **text,
+							   int *count);
+bool catalog_s_namespace_oid_array(DatabaseCatalog *catalog,
+								   char **text,
+								   int *count);
 
 bool catalog_lookup_s_attr_by_name(DatabaseCatalog *catalog,
 								   uint32_t reloid,

@@ -2,9 +2,8 @@
  * sql_queries.c — SQL query string selection for pgcopydb.
  *
  * sql_queries_data.inc is generated from src/bin/pgcopydb/sql/ by
- * 'make gen-sql'.  It contains one static const char array per SQL variant.
- * The dispatch functions below select the right array for a given filter type
- * and/or PostgreSQL server version.
+ * 'make gen-sql'.  It contains one static const char array per SQL file.
+ * The dispatch functions below expose the right array for each query.
  *
  * When the .sql file tree changes, regenerate the data file with:
  *   make -C src/bin/pgcopydb gen-sql
@@ -16,22 +15,6 @@
 
 /* Generated SQL string data — included here so the static arrays share this TU */
 #include "sql/sql_queries_data.inc"
-
-
-bool
-pgcopydb_sql_expand_filter_schema(const char **sql)
-{
-	*sql = sql_expand_filter_schema;
-	return true;
-}
-
-
-bool
-pgcopydb_sql_expand_filter_tables(const char **sql)
-{
-	*sql = sql_expand_filter_tables;
-	return true;
-}
 
 
 bool
@@ -90,233 +73,59 @@ pgcopydb_sql_list_schemas(const char **sql)
 }
 
 
-/*
- * list_source_depend is filtered but has no no-filter variant — it is always
- * called with a specific filter type (incl, excl, list-not-incl, list-excl).
- */
 bool
-pgcopydb_sql_list_source_depend(int filter, const char **sql)
+pgcopydb_sql_list_source_tables(const char **sql)
 {
-	switch (filter)
-	{
-		case SOURCE_FILTER_TYPE_INCL:
-		{
-			*sql = sql_list_source_depend_incl;
-			return true;
-		}
-
-		case SOURCE_FILTER_TYPE_EXCL:
-		{
-			*sql = sql_list_source_depend_excl;
-			return true;
-		}
-
-		case SOURCE_FILTER_TYPE_LIST_NOT_INCL:
-		{
-			*sql = sql_list_source_depend_list_not_incl;
-			return true;
-		}
-
-		case SOURCE_FILTER_TYPE_LIST_EXCL:
-		{
-			*sql = sql_list_source_depend_list_excl;
-			return true;
-		}
-
-		default:
-		{
-			break;
-		}
-	}
-	return false;
+	*sql = sql_list_source_tables;
+	return true;
 }
 
 
 bool
-pgcopydb_sql_list_source_indexes(int filter, const char **sql)
+pgcopydb_sql_list_filtered_not_incl_tables(const char **sql)
 {
-	switch (filter)
-	{
-		case SOURCE_FILTER_TYPE_NONE:
-		{
-			*sql = sql_list_source_indexes_no_filter;
-			return true;
-		}
-
-		case SOURCE_FILTER_TYPE_INCL:
-		{
-			*sql = sql_list_source_indexes_incl;
-			return true;
-		}
-
-		case SOURCE_FILTER_TYPE_EXCL:
-		{
-			*sql = sql_list_source_indexes_excl;
-			return true;
-		}
-
-		case SOURCE_FILTER_TYPE_LIST_NOT_INCL:
-		{
-			*sql = sql_list_source_indexes_list_not_incl;
-			return true;
-		}
-
-		case SOURCE_FILTER_TYPE_LIST_EXCL:
-		{
-			*sql = sql_list_source_indexes_list_excl;
-			return true;
-		}
-
-		case SOURCE_FILTER_TYPE_EXCL_INDEX:
-		{
-			*sql = sql_list_source_indexes_excl_index;
-			return true;
-		}
-
-		case SOURCE_FILTER_TYPE_LIST_EXCL_INDEX:
-		{
-			*sql = sql_list_source_indexes_list_excl_index;
-			return true;
-		}
-
-		default:
-		{
-			break;
-		}
-	}
-	return false;
+	*sql = sql_list_filtered_not_incl_tables;
+	return true;
 }
 
 
 bool
-pgcopydb_sql_list_source_sequences(int filter, const char **sql)
+pgcopydb_sql_list_filtered_excl_tables(const char **sql)
 {
-	switch (filter)
-	{
-		case SOURCE_FILTER_TYPE_NONE:
-		{
-			*sql = sql_list_source_sequences_no_filter;
-			return true;
-		}
-
-		case SOURCE_FILTER_TYPE_INCL:
-		{
-			*sql = sql_list_source_sequences_incl;
-			return true;
-		}
-
-		case SOURCE_FILTER_TYPE_EXCL:
-		{
-			*sql = sql_list_source_sequences_excl;
-			return true;
-		}
-
-		case SOURCE_FILTER_TYPE_LIST_NOT_INCL:
-		{
-			*sql = sql_list_source_sequences_list_not_incl;
-			return true;
-		}
-
-		case SOURCE_FILTER_TYPE_LIST_EXCL:
-		{
-			*sql = sql_list_source_sequences_list_excl;
-			return true;
-		}
-
-		default:
-		{
-			break;
-		}
-	}
-	return false;
+	*sql = sql_list_filtered_excl_tables;
+	return true;
 }
 
 
 bool
-pgcopydb_sql_list_source_table_size(int filter, const char **sql)
+pgcopydb_sql_list_source_indexes(const char **sql)
 {
-	switch (filter)
-	{
-		case SOURCE_FILTER_TYPE_NONE:
-		{
-			*sql = sql_list_source_table_size_no_filter;
-			return true;
-		}
-
-		case SOURCE_FILTER_TYPE_INCL:
-		{
-			*sql = sql_list_source_table_size_incl;
-			return true;
-		}
-
-		case SOURCE_FILTER_TYPE_EXCL:
-		{
-			*sql = sql_list_source_table_size_excl;
-			return true;
-		}
-
-		case SOURCE_FILTER_TYPE_LIST_NOT_INCL:
-		{
-			*sql = sql_list_source_table_size_list_not_incl;
-			return true;
-		}
-
-		case SOURCE_FILTER_TYPE_LIST_EXCL:
-		{
-			*sql = sql_list_source_table_size_list_excl;
-			return true;
-		}
-
-		default:
-		{
-			break;
-		}
-	}
-	return false;
+	*sql = sql_list_source_indexes;
+	return true;
 }
 
 
 bool
-pgcopydb_sql_list_source_tables(int filter, const char **sql)
+pgcopydb_sql_list_source_sequences(const char **sql)
 {
-	switch (filter)
-	{
-		case SOURCE_FILTER_TYPE_NONE:
-		{
-			*sql = sql_list_source_tables_no_filter;
-			return true;
-		}
+	*sql = sql_list_source_sequences;
+	return true;
+}
 
-		case SOURCE_FILTER_TYPE_INCL:
-		{
-			*sql = sql_list_source_tables_incl;
-			return true;
-		}
 
-		case SOURCE_FILTER_TYPE_EXCL:
-		{
-			*sql = sql_list_source_tables_excl;
-			return true;
-		}
+bool
+pgcopydb_sql_list_source_depend(const char **sql)
+{
+	*sql = sql_list_source_depend;
+	return true;
+}
 
-		case SOURCE_FILTER_TYPE_LIST_NOT_INCL:
-		{
-			*sql = sql_list_source_tables_list_not_incl;
-			return true;
-		}
 
-		case SOURCE_FILTER_TYPE_LIST_EXCL:
-		{
-			*sql = sql_list_source_tables_list_excl;
-			return true;
-		}
-
-		default:
-		{
-			break;
-		}
-	}
-	return false;
+bool
+pgcopydb_sql_list_source_table_size(const char **sql)
+{
+	*sql = sql_list_source_table_size;
+	return true;
 }
 
 

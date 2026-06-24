@@ -310,6 +310,11 @@ parse_filters(const char *filename, SourceFilters *filters)
 						strlcpy(schema->nspname, optionName,
 								sizeof(schema->nspname));
 
+						/* best-effort; filters_validate_and_normalize will update */
+						sformat(schema->restoreListName,
+								sizeof(schema->restoreListName),
+								"\"%s\"", schema->nspname);
+
 						log_debug("%s schema \"%s\"", secLabel, schema->nspname);
 					}
 				}
