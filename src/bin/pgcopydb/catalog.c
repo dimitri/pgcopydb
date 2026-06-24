@@ -810,13 +810,25 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 		 * from "an owner explicitly ran without filters".  The latter case
 		 * (SOURCE_FILTER_TYPE_NONE stored by a real owner) requires catalog
 		 * invalidation; the former does not.
+		 *
+		 * Snapshot-agnostic commands (list tables, list sequences, etc.)
+		 * register setup with snapshot = NULL for the same reason: a
+		 * subsequent clone command must be able to distinguish "no snapshot
+		 * owner has claimed this catalog yet" (NULL) from "an owner
+		 * explicitly set snapshot X" (non-empty string).
 		 */
 		const char *filterJson = copySpecs->skipFilterCheck ? NULL : json;
+
+		const char *snapStr =
+			(copySpecs->skipSnapshotCheck ||
+			 IS_EMPTY_STRING_BUFFER(copySpecs->sourceSnapshot.snapshot))
+			? NULL
+			: copySpecs->sourceSnapshot.snapshot;
 
 		if (!catalog_register_setup(sourceDB,
 									spguri.pguri,
 									tpguri.pguri,
-									copySpecs->sourceSnapshot.snapshot,
+									snapStr,
 									copySpecs->splitTablesLargerThan.bytes,
 									copySpecs->splitMaxParts,
 									filterJson))
@@ -873,10 +885,49 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 			return false;
 		}
 
-		/* skip comparing snapshots when --not-consistent is used */
-		if (copySpecs->consistent)
+		/*
+		 * Skip snapshot comparison for snapshot-agnostic commands (e.g. list
+		 * tables, list sequences): they never export a snapshot and have no
+		 * stake in snapshot consistency.
+		 *
+		 * For snapshot-owner commands (e.g. clone), apply the check only when
+		 * --not-consistent is not in effect.
+		 */
+		if (copySpecs->skipSnapshotCheck)
 		{
-			if (!streq(copySpecs->sourceSnapshot.snapshot, setup->snapshot))
+			log_debug("Skipping snapshot consistency check for "
+					  "snapshot-agnostic command");
+		}
+		else if (copySpecs->consistent)
+		{
+			if (IS_EMPTY_STRING_BUFFER(setup->snapshot))
+			{
+				/*
+				 * Case 0: catalog was first registered by a snapshot-agnostic
+				 * command (e.g. pgcopydb list tables), which stored snapshot =
+				 * NULL as a sentinel meaning "no snapshot owner has ever
+				 * claimed this catalog yet".
+				 *
+				 * Accept the current snapshot and persist it so future
+				 * commands can validate consistency against it.
+				 */
+				log_info("Catalog snapshot not yet set; "
+						 "registering current snapshot \"%s\"",
+						 copySpecs->sourceSnapshot.snapshot);
+
+				if (!catalog_setup_replication(sourceDB,
+											   copySpecs->sourceSnapshot.snapshot))
+				{
+					/* errors have already been logged */
+					json_free_serialized_string(json);
+					return false;
+				}
+
+				strlcpy(setup->snapshot,
+						copySpecs->sourceSnapshot.snapshot,
+						sizeof(setup->snapshot));
+			}
+			else if (!streq(copySpecs->sourceSnapshot.snapshot, setup->snapshot))
 			{
 				log_error("Catalogs at \"%s\" have been setup for "
 						  "snapshot \"%s\" and current snapshot is \"%s\"",
