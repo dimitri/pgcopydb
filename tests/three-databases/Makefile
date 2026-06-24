@@ -4,10 +4,10 @@
 test: down run down ;
 
 run: build
-	docker compose run test
+	docker compose run --remove-orphans test
 
 down:
-	docker compose down -v
+	docker compose down -v --remove-orphans
 
 build:
 	docker compose build --quiet
