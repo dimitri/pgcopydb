@@ -14,6 +14,7 @@
 #include "log.h"
 #include "schema.h"
 #include "signals.h"
+#include "sql_queries.h"
 
 
 static bool copydb_copy_ext_table(PGSQL *src, PGSQL *dst, char *qname, char *condition);
@@ -916,45 +917,14 @@ citus_prepare_restore(CopyDataSpec *copySpecs)
 		.ok = true
 	};
 
-	/*
-	 * Query 1: distributed tables.
-	 *
-	 * Within each co-location group (same colocation_id) order tables
-	 * alphabetically; the first one becomes the anchor and is created with
-	 * shard_count := N, colocate_with := 'none'.  Subsequent tables in the
-	 * group reference the anchor by name.
-	 */
-	char *distSql =
-		"with ordered as ("
-		"  select"
-		"    table_name::text                                          as tname,"
-		"    distribution_column,"
-		"    colocation_id,"
-		"    shard_count,"
-		"    row_number() over (partition by colocation_id"
-		"                       order by table_name::text)            as rn,"
-		"    first_value(table_name::text) over ("
-		"        partition by colocation_id"
-		"        order by table_name::text)                           as anchor"
-		"  from citus_tables"
-		"  where citus_table_type = 'distributed'"
-		")"
-		" select"
-		"  case"
-		"    when rn = 1 then"
-		"      format("
-		"        'select create_distributed_table(%L, %L,"
-		"                                         shard_count := %s,"
-		"                                         colocate_with := %L)',"
-		"        tname, distribution_column, shard_count, 'none')"
-		"    else"
-		"      format("
-		"        'select create_distributed_table(%L, %L,"
-		"                                         colocate_with := %L)',"
-		"        tname, distribution_column, anchor)"
-		"  end"
-		" from ordered"
-		" order by colocation_id, rn";
+	const char *distSql = NULL;
+
+	if (!pgcopydb_sql_citus_distributed_tables(&distSql))
+	{
+		(void) pgsql_finish(&src);
+		(void) pgsql_finish(&dst);
+		return false;
+	}
 
 	if (!pgsql_execute_with_params(&src, distSql,
 								   0, NULL, NULL,
@@ -974,18 +944,14 @@ citus_prepare_restore(CopyDataSpec *copySpecs)
 		return false;
 	}
 
-	/*
-	 * Query 2: reference tables.
-	 *
-	 * These are replicated in full to every worker node and must be created
-	 * after all distributed tables so they are never used as co-location
-	 * anchors by accident.
-	 */
-	char *refSql =
-		"select format('select create_reference_table(%L)', table_name::text)"
-		"  from citus_tables"
-		" where citus_table_type = 'reference'"
-		" order by table_name::text";
+	const char *refSql = NULL;
+
+	if (!pgcopydb_sql_citus_reference_tables(&refSql))
+	{
+		(void) pgsql_finish(&src);
+		(void) pgsql_finish(&dst);
+		return false;
+	}
 
 	if (!pgsql_execute_with_params(&src, refSql,
 								   0, NULL, NULL,

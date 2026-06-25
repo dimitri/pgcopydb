@@ -18,6 +18,22 @@
 
 
 bool
+pgcopydb_sql_citus_distributed_tables(const char **sql)
+{
+	*sql = sql_citus_distributed_tables;
+	return true;
+}
+
+
+bool
+pgcopydb_sql_citus_reference_tables(const char **sql)
+{
+	*sql = sql_citus_reference_tables;
+	return true;
+}
+
+
+bool
 pgcopydb_sql_list_collations(const char **sql)
 {
 	*sql = sql_list_collations;
