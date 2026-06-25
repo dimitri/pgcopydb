@@ -26,17 +26,32 @@ psql -d "${PGCOPYDB_SOURCE_PGURI}" -f /usr/src/pgcopydb/dml.sql
 pgcopydb clone --notice
 
 # Verify that the distribution metadata matches on both sides.
+# Show the full citus_tables output (table_name, citus_table_type,
+# distribution_column, shard_count) so the result is visible in the
+# test log, then diff the two sides to confirm they are identical.
+# colocation_id is excluded: it is an autoincrement that restarts from
+# a different value on the fresh target cluster.  table_size and
+# shard_size are excluded because they are not stable across copies.
+
+CITUS_DISTRIBUTION_QUERY="
+select table_name::text,
+       citus_table_type::text,
+       distribution_column,
+       shard_count
+  from citus_tables
+ order by table_name::text"
+
+echo "=== source citus_tables ==="
+psql -d "${PGCOPYDB_SOURCE_PGURI}" -c "${CITUS_DISTRIBUTION_QUERY}"
+
+echo "=== target citus_tables ==="
+psql -d "${PGCOPYDB_TARGET_PGURI}" -c "${CITUS_DISTRIBUTION_QUERY}"
+
 psql -d "${PGCOPYDB_SOURCE_PGURI}" \
-     -c "\copy (select table_name::text, citus_table_type::text, distribution_column \
-                from citus_tables \
-                order by table_name::text) \
-         to '/tmp/source_citus_tables.out'"
+     -c "\copy (${CITUS_DISTRIBUTION_QUERY}) to '/tmp/source_citus_tables.out'"
 
 psql -d "${PGCOPYDB_TARGET_PGURI}" \
-     -c "\copy (select table_name::text, citus_table_type::text, distribution_column \
-                from citus_tables \
-                order by table_name::text) \
-         to '/tmp/target_citus_tables.out'"
+     -c "\copy (${CITUS_DISTRIBUTION_QUERY}) to '/tmp/target_citus_tables.out'"
 
 diff /tmp/source_citus_tables.out /tmp/target_citus_tables.out
 
