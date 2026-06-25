@@ -2,6 +2,43 @@
  * Run 'make gen-sql' after modifying any .sql file.
  */
 
+static const char sql_citus_distributed_tables[] =
+	"with ordered as (\n"
+	"  select\n"
+	"    table_name::text                                            as tname,\n"
+	"    distribution_column,\n"
+	"    colocation_id,\n"
+	"    shard_count,\n"
+	"    row_number() over (partition by colocation_id\n"
+	"                       order by table_name::text)              as rn,\n"
+	"    first_value(table_name::text) over (\n"
+	"        partition by colocation_id\n"
+	"        order by table_name::text)                             as anchor\n"
+	"  from citus_tables\n"
+	"  where citus_table_type = 'distributed'\n"
+	")\n"
+	" select\n"
+	"  case\n"
+	"    when rn = 1 then\n"
+	"      format(\n"
+	"        'select create_distributed_table(%L, %L, shard_count := %s, colocate_with := %L)',\n"
+	"        tname, distribution_column, shard_count, 'none')\n"
+	"    else\n"
+	"      format(\n"
+	"        'select create_distributed_table(%L, %L, colocate_with := %L)',\n"
+	"        tname, distribution_column, anchor)\n"
+	"  end\n"
+	" from ordered\n"
+	" order by colocation_id, rn\n"
+;
+
+static const char sql_citus_reference_tables[] =
+	"select format('select create_reference_table(%L)', table_name::text)\n"
+	"  from citus_tables\n"
+	" where citus_table_type = 'reference'\n"
+	" order by table_name::text\n"
+;
+
 static const char sql_filter_table_arrays[] =
 	"-- SQLite query used by catalog_filter_table_arrays().\n"
 	"-- $1 : section name ('excl_table', 'incl_table', 'xdat_table', 'excl_index')\n"

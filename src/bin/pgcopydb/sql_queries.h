@@ -12,6 +12,10 @@
 
 #include <stdbool.h>
 
+/* Citus extension support */
+bool pgcopydb_sql_citus_distributed_tables(const char **sql);
+bool pgcopydb_sql_citus_reference_tables(const char **sql);
+
 bool pgcopydb_sql_list_collations(const char **sql);
 bool pgcopydb_sql_list_database_properties(const char **sql);
 bool pgcopydb_sql_list_databases(const char **sql);
