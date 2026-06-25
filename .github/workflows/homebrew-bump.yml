@@ -1,0 +1,20 @@
+name: Homebrew
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  bump-formula:
+    if: "!contains(github.ref_name, '-')"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: mislav/bump-homebrew-formula-action@v3
+        with:
+          formula-name: pgcopydb
+          homebrew-tap: Homebrew/homebrew-core
+          tag-name: ${{ github.ref_name }}
+          create-pullrequest: true
+        env:
+          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_CORE_TOKEN }}
