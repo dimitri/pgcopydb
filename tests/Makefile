@@ -89,6 +89,9 @@ follow-filtering: build
 timescaledb: build
 	$(MAKE) -C $@
 
+citus: build
+	$(MAKE) -C $@
+
 build:
 	@docker image inspect pagila > /dev/null 2>&1 \
 	  && echo "pagila image already present — skipping build (run 'make force-build' to rebuild)" \
@@ -122,3 +125,4 @@ clean-images:
 .PHONY: cdc-endpos-in-multi-wal-txn cdc-file-rotation
 .PHONY: cdc-pgoutput cdc-filtering-pgoutput follow-pgoutput follow-filtering
 .PHONY: follow-wal2json follow-9.6
+.PHONY: timescaledb citus

@@ -20,6 +20,8 @@ static bool copydb_copy_ext_table(PGSQL *src, PGSQL *dst, char *qname, char *con
 static bool copydb_copy_ext_sequence(PGSQL *src, PGSQL *dst, char *qname);
 static bool copydb_copy_extensions_hook(void *ctx, SourceExtension *ext);
 static bool copydb_create_extension_hook(void *ctx, SourceExtension *ext);
+static bool citus_prepare_restore(CopyDataSpec *copySpecs);
+static void citusDistributeCallback(void *ctx, PGresult *result);
 
 
 /*
@@ -679,13 +681,13 @@ copydb_create_pinned_extensions(CopyDataSpec *copySpecs)
  * be needed for some extensions.
  *
  * At the moment we need to call timescaledb_pre_restore() when timescaledb has
- * been used.
+ * been used, and to distribute tables and reference tables when citus has been
+ * used.
  */
 bool
 copydb_prepare_extensions_restore(CopyDataSpec *copySpecs)
 {
 	DatabaseCatalog *filterDB = &(copySpecs->catalogs.filter);
-	const char *extensionName = "timescaledb";
 
 	SourceExtension *extension = (SourceExtension *) calloc(1, sizeof(SourceExtension));
 
@@ -695,7 +697,7 @@ copydb_prepare_extensions_restore(CopyDataSpec *copySpecs)
 		return false;
 	}
 
-	if (!catalog_lookup_s_extension_by_extname(filterDB, extensionName, extension))
+	if (!catalog_lookup_s_extension_by_extname(filterDB, "timescaledb", extension))
 	{
 		/* errors have already been logged*/
 		return false;
@@ -706,6 +708,25 @@ copydb_prepare_extensions_restore(CopyDataSpec *copySpecs)
 		log_info("Executing pre-restore steps for timescaledb extension");
 
 		if (!timescaledb_pre_restore(copySpecs, extension))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
+	bzero(extension, sizeof(SourceExtension));
+
+	if (!catalog_lookup_s_extension_by_extname(filterDB, "citus", extension))
+	{
+		/* errors have already been logged*/
+		return false;
+	}
+
+	if (extension->oid > 0)
+	{
+		log_info("Executing post-schema restore steps for citus extension");
+
+		if (!citus_prepare_restore(copySpecs))
 		{
 			/* errors have already been logged */
 			return false;
@@ -812,6 +833,180 @@ timescaledb_post_restore(CopyDataSpec *copySpecs, SourceExtension *extension)
 				  extension->extnamespace);
 		return false;
 	}
+
+	return true;
+}
+
+
+/*
+ * Context for the Citus distribution callback: carries the open target
+ * connection and a success flag (callbacks cannot return bool).
+ */
+typedef struct CitusRestoreContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	PGSQL *dst;
+	bool ok;
+} CitusRestoreContext;
+
+
+/*
+ * citusDistributeCallback executes each DDL string returned by the source
+ * query against the target database.  A single PGresult may contain many rows;
+ * each row's first column is a ready-to-execute SQL statement.
+ */
+static void
+citusDistributeCallback(void *ctx, PGresult *result)
+{
+	CitusRestoreContext *context = (CitusRestoreContext *) ctx;
+
+	int nTuples = PQntuples(result);
+
+	for (int rowNum = 0; rowNum < nTuples; rowNum++)
+	{
+		char *ddl = PQgetvalue(result, rowNum, 0);
+
+		log_info("Citus: %s", ddl);
+
+		if (!pgsql_execute(context->dst, ddl))
+		{
+			context->ok = false;
+			return;
+		}
+	}
+}
+
+
+/*
+ * citus_prepare_restore reads the Citus distribution metadata from the source
+ * database and replays it on the target.  It is called after pg_restore
+ * --pre-data (tables exist as plain relations on target) and before the data
+ * copy phase.
+ *
+ * Two queries drive the work:
+ *
+ *  1. Distributed tables – the anchor of each co-location group is created
+ *     with an explicit shard_count; co-located peers reference the anchor via
+ *     colocate_with so Citus places their shards on the same nodes.
+ *
+ *  2. Reference tables – replicated to every node, created last so they are
+ *     never accidentally chosen as a co-location anchor.
+ */
+static bool
+citus_prepare_restore(CopyDataSpec *copySpecs)
+{
+	PGSQL src = { 0 };
+	PGSQL dst = { 0 };
+
+	if (!pgsql_init(&src, copySpecs->connStrings.source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_init(&dst, copySpecs->connStrings.target_pguri, PGSQL_CONN_TARGET))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	CitusRestoreContext context = {
+		.sqlstate = { 0 },
+		.dst = &dst,
+		.ok = true
+	};
+
+	/*
+	 * Query 1: distributed tables.
+	 *
+	 * Within each co-location group (same colocation_id) order tables
+	 * alphabetically; the first one becomes the anchor and is created with
+	 * shard_count := N, colocate_with := 'none'.  Subsequent tables in the
+	 * group reference the anchor by name.
+	 */
+	char *distSql =
+		"with ordered as ("
+		"  select"
+		"    table_name::text                                          as tname,"
+		"    distribution_column,"
+		"    colocation_id,"
+		"    shard_count,"
+		"    row_number() over (partition by colocation_id"
+		"                       order by table_name::text)            as rn,"
+		"    first_value(table_name::text) over ("
+		"        partition by colocation_id"
+		"        order by table_name::text)                           as anchor"
+		"  from citus_tables"
+		"  where citus_table_type = 'distributed'"
+		")"
+		" select"
+		"  case"
+		"    when rn = 1 then"
+		"      format("
+		"        'select create_distributed_table(%L, %L,"
+		"                                         shard_count := %s,"
+		"                                         colocate_with := %L)',"
+		"        tname, distribution_column, shard_count, 'none')"
+		"    else"
+		"      format("
+		"        'select create_distributed_table(%L, %L,"
+		"                                         colocate_with := %L)',"
+		"        tname, distribution_column, anchor)"
+		"  end"
+		" from ordered"
+		" order by colocation_id, rn";
+
+	if (!pgsql_execute_with_params(&src, distSql,
+								   0, NULL, NULL,
+								   &context, &citusDistributeCallback))
+	{
+		/* errors have already been logged */
+		(void) pgsql_finish(&src);
+		(void) pgsql_finish(&dst);
+		return false;
+	}
+
+	if (!context.ok)
+	{
+		log_error("Failed to distribute tables on Citus target");
+		(void) pgsql_finish(&src);
+		(void) pgsql_finish(&dst);
+		return false;
+	}
+
+	/*
+	 * Query 2: reference tables.
+	 *
+	 * These are replicated in full to every worker node and must be created
+	 * after all distributed tables so they are never used as co-location
+	 * anchors by accident.
+	 */
+	char *refSql =
+		"select format('select create_reference_table(%L)', table_name::text)"
+		"  from citus_tables"
+		" where citus_table_type = 'reference'"
+		" order by table_name::text";
+
+	if (!pgsql_execute_with_params(&src, refSql,
+								   0, NULL, NULL,
+								   &context, &citusDistributeCallback))
+	{
+		/* errors have already been logged */
+		(void) pgsql_finish(&src);
+		(void) pgsql_finish(&dst);
+		return false;
+	}
+
+	if (!context.ok)
+	{
+		log_error("Failed to create reference tables on Citus target");
+		(void) pgsql_finish(&src);
+		(void) pgsql_finish(&dst);
+		return false;
+	}
+
+	(void) pgsql_finish(&src);
+	(void) pgsql_finish(&dst);
 
 	return true;
 }
