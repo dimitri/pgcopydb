@@ -13,6 +13,15 @@ set -e
 # make sure source and target databases are ready
 pgcopydb ping
 
+# Verify that the source has a short idle_in_transaction_session_timeout so
+# that this test exercises the fix for #960: GUC settings must be applied on
+# the replication connection before CREATE_REPLICATION_SLOT is sent, otherwise
+# a strict server-side timeout would abort slot creation.
+timeout_ms=$(psql -AtqX -d ${PGCOPYDB_SOURCE_PGURI} \
+  -c "show idle_in_transaction_session_timeout")
+echo "source idle_in_transaction_session_timeout: ${timeout_ms}"
+test "${timeout_ms}" = "1s"
+
 psql -o /tmp/s.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-schema.sql
 psql -o /tmp/d.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
 
