@@ -458,8 +458,7 @@ bool schema_list_partitions(PGSQL *pgsql,
 
 bool schema_list_sequences(PGSQL *pgsql,
 						   SourceFilters *filters,
-						   DatabaseCatalog *catalog,
-						   DatabaseCatalog *sourceCatalog);
+						   DatabaseCatalog *catalog);
 
 bool schema_get_sequence_value(PGSQL *pgsql, SourceSequence *seq);
 bool schema_list_relpages(PGSQL *pgsql, SourceTable *table, DatabaseCatalog *catalog);

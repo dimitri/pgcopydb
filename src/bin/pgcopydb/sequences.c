@@ -60,7 +60,7 @@ copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql, bool reset)
 	{
 		(void) catalog_start_timing(&timing);
 
-		if (!schema_list_sequences(pgsql, &(specs->filters), sourceDB, NULL))
+		if (!schema_list_sequences(pgsql, &(specs->filters), sourceDB))
 		{
 			/* errors have already been logged */
 			return false;

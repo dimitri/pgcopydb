@@ -7482,8 +7482,12 @@ catalog_prepare_filter(DatabaseCatalog *catalog,
 		"            (select 1 from source.s_seq ss where ss.oid = s.oid)"
 
 		/*
-		 * Only filter-out the SEQUENCE OWNED BY when our catalog selection
-		 * does not contain the target table.
+		 * Filter out SEQUENCE OWNED BY when the owning table is not being
+		 * cloned.  This covers the case where a sequence is shared between an
+		 * excluded table and an included one (e.g. via LIKE … INCLUDING ALL):
+		 * the sequence itself must still be created for the included table, but
+		 * the OWNED BY link to the excluded table must be suppressed so that
+		 * pg_restore does not fail trying to attach it to a non-existent table.
 		 */
 		"  union all "
 
@@ -7493,10 +7497,6 @@ catalog_prepare_filter(DatabaseCatalog *catalog,
 		"              select distinct s.restore_list_name "
 		"                from s_seq s "
 		"               where not exists"
-		"                     (select 1 "
-		"                        from source.s_seq ss "
-		"                       where ss.oid = s.oid) "
-		"                and not exists"
 		"                    (select 1 "
 		"                       from source.s_table st "
 		"                      where st.oid = s.ownedby) "
