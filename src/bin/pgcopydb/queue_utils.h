@@ -36,6 +36,7 @@ typedef enum
 	QMSG_TYPE_STREAM_TRANSFORM, /* lsn position for transform process */
 	QMSG_TYPE_BLOBOID,          /* large object oid */
 	QMSG_TYPE_DBNAME,           /* database name (for --all-databases pre/post-data) */
+	QMSG_TYPE_MATVIEW_OID,      /* materialized view oid for REFRESH */
 	QMSG_TYPE_STOP
 } QMessageType;
 

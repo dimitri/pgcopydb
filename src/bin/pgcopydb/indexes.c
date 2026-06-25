@@ -176,6 +176,17 @@ copydb_index_supervisor(CopyDataSpec *specs)
 	}
 
 	/*
+	 * All source-table indexes are built.  Now queue REFRESH MATERIALIZED VIEW
+	 * for every matview in pg_dump dependency order so vacuum workers can run
+	 * them in parallel with any remaining VACUUM ANALYZE work.
+	 */
+	if (!vacuum_send_matviews(specs))
+	{
+		(void) copydb_fatal_exit();
+		return false;
+	}
+
+	/*
 	 * Send the STOP message to the VACUUM ANALYZE workers, so they can stop
 	 * processing the tables.
 	 */

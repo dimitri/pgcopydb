@@ -206,6 +206,33 @@ typedef struct CatalogMatView
 
 bool catalog_add_s_matview(DatabaseCatalog *catalog, SourceTable *table);
 
+bool catalog_update_s_matview_toc_seq(DatabaseCatalog *catalog,
+									  uint32_t oid,
+									  int seq);
+
+bool catalog_add_s_matview_dep(DatabaseCatalog *catalog,
+							   uint32_t matview_oid,
+							   uint32_t dep_oid);
+
+bool catalog_matview_deps_are_done(DatabaseCatalog *catalog,
+								   uint32_t oid,
+								   bool *done);
+
+bool catalog_mark_matview_refresh_done(DatabaseCatalog *catalog, uint32_t oid);
+
+typedef bool (CatalogMatViewIterFun)(void *context, CatalogMatView *matview);
+
+typedef struct CatalogMatViewIterator
+{
+	DatabaseCatalog *catalog;
+	CatalogMatView matview;
+	SQLiteQuery query;
+} CatalogMatViewIterator;
+
+bool catalog_iter_s_matview_toc_order(DatabaseCatalog *catalog,
+									  void *context,
+									  CatalogMatViewIterFun *callback);
+
 bool catalog_upsert_target_s_rel(DatabaseCatalog *catalog,
 								 const char *nspname,
 								 const char *relname,

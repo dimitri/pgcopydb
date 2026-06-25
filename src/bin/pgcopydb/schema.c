@@ -1309,6 +1309,80 @@ schema_list_pg_depend(PGSQL *pgsql,
 }
 
 
+typedef struct MatViewDepContext
+{
+	DatabaseCatalog *catalog;
+	bool parsedOk;
+} MatViewDepContext;
+
+static void getMatViewDeps(void *ctx, PGresult *result);
+
+
+/*
+ * schema_list_matview_deps queries pg_depend for matview-to-matview
+ * dependencies and stores them in s_matview_dep.  Both the dependent and the
+ * referenced relation must be materialized views (relkind = 'm') and both must
+ * already exist in s_matview (i.e. not filtered out).
+ */
+bool
+schema_list_matview_deps(PGSQL *pgsql, DatabaseCatalog *catalog)
+{
+	MatViewDepContext context = { .catalog = catalog, .parsedOk = true };
+
+	char *sql =
+		"select d.objid, d.refobjid"
+		"  from pg_catalog.pg_depend d"
+		"  join pg_catalog.pg_class c1"
+		"    on c1.oid = d.objid and c1.relkind = 'm'"
+		"  join pg_catalog.pg_class c2"
+		"    on c2.oid = d.refobjid and c2.relkind = 'm'"
+		" where d.deptype = 'n'"
+		"   and d.classid = 'pg_catalog.pg_class'::regclass"
+		"   and d.refclassid = 'pg_catalog.pg_class'::regclass";
+
+	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+								   &context, &getMatViewDeps))
+	{
+		log_error("Failed to query matview dependencies from pg_depend");
+		return false;
+	}
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to store matview dependencies in catalog");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * getMatViewDeps iterates over the pg_depend query result and stores each
+ * matview-to-matview dependency in s_matview_dep.
+ */
+static void
+getMatViewDeps(void *ctx, PGresult *result)
+{
+	MatViewDepContext *context = (MatViewDepContext *) ctx;
+
+	int nTuples = PQntuples(result);
+
+	for (int i = 0; i < nTuples; i++)
+	{
+		uint32_t matview_oid = (uint32_t) strtoul(PQgetvalue(result, i, 0), NULL, 10);
+		uint32_t dep_oid = (uint32_t) strtoul(PQgetvalue(result, i, 1), NULL, 10);
+
+		if (!catalog_add_s_matview_dep(context->catalog, matview_oid, dep_oid))
+		{
+			log_error("Failed to store matview dep %u -> %u", matview_oid, dep_oid);
+			context->parsedOk = false;
+			return;
+		}
+	}
+}
+
+
 /*
  * schema_list_partitions prepares the list of partitions that we can drive from
  * our parameters: table size, --split-tables-larger-than, and

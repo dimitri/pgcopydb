@@ -153,17 +153,24 @@ vacuum_supervisor(CopyDataSpec *specs)
  * vacuum_start_workers create as many sub-process as needed, per --table-jobs.
  * Could be exposed separately as --vacuumJobs too, but that's not been done at
  * this time.
+ *
+ * Workers always start (even with --skip-vacuum) so they are available to
+ * service QMSG_TYPE_MATVIEW_OID messages sent by the INDEX supervisor after all
+ * CREATE INDEX work is done.
  */
 bool
 vacuum_start_workers(CopyDataSpec *specs)
 {
 	if (specs->skipVacuum)
 	{
-		log_info("STEP 8: skipping VACUUM jobs per --skip-vacuum");
-		return true;
+		log_info("STEP 8: starting %d VACUUM/REFRESH processes "
+				 "(VACUUM ANALYZE skipped per --skip-vacuum)",
+				 specs->vacuumJobs);
 	}
-
-	log_info("STEP 8: starting %d VACUUM processes", specs->vacuumJobs);
+	else
+	{
+		log_info("STEP 8: starting %d VACUUM processes", specs->vacuumJobs);
+	}
 
 	for (int i = 0; i < specs->vacuumJobs; i++)
 	{
@@ -322,6 +329,63 @@ vacuum_worker(CopyDataSpec *specs)
 				break;
 			}
 
+			case QMSG_TYPE_MATVIEW_OID:
+			{
+				uint32_t oid = mesg.data.oid;
+
+				/*
+				 * Wait until all matviews this one depends on have been
+				 * refreshed.  Sleep 10 ms between checks to avoid burning CPU
+				 * while upstream workers are still running.
+				 */
+				bool depsDone = false;
+
+				while (!depsDone)
+				{
+					if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+					{
+						log_error("VACUUM worker interrupted while waiting "
+								  "for matview dep oid %u", oid);
+						(void) multidb_index_context_close_all(&vacCtx);
+						return false;
+					}
+
+					if (!catalog_matview_deps_are_done(
+							&(specs->catalogs.source), oid, &depsDone))
+					{
+						log_error("Failed to check matview deps for oid %u",
+								  oid);
+						++errors;
+						depsDone = true; /* break out; refresh attempt below */
+					}
+
+					if (!depsDone)
+					{
+						pg_usleep(10 * 1000); /* 10 ms */
+					}
+				}
+
+				if (!vacuum_refresh_matview_by_oid(specs, oid))
+				{
+					++errors;
+
+					log_error("Failed to refresh materialized view oid %u, "
+							  "see above for details", oid);
+
+					if (specs->failFast)
+					{
+						(void) multidb_index_context_close_all(&vacCtx);
+						return false;
+					}
+				}
+				else if (!catalog_mark_matview_refresh_done(
+							 &(specs->catalogs.source), oid))
+				{
+					log_warn("Failed to mark matview oid %u as done", oid);
+				}
+				break;
+			}
+
 			default:
 			{
 				log_error("Received unknown message type %ld on vacuum queue %d",
@@ -470,6 +534,133 @@ vacuum_analyze_table_by_oid(CopyDataSpec *specs, uint32_t oid)
 
 
 /*
+ * vacuum_refresh_matview_by_oid looks up the materialized view OID in the
+ * source catalog, then connects to the target database and issues a REFRESH
+ * MATERIALIZED VIEW statement.
+ *
+ * The connection opens with the target database's configured search_path
+ * (inherited from ALTER DATABASE SET search_path, restored in pre-data).  No
+ * explicit SET is needed: pg_restore's empty-search_path trick does not apply
+ * here because we open a fresh libpq connection, not a pg_restore session.
+ */
+bool
+vacuum_refresh_matview_by_oid(CopyDataSpec *specs, uint32_t oid)
+{
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+	CatalogMatView matview = { 0 };
+
+	if (!catalog_lookup_s_matview_by_oid(sourceDB, &matview, oid))
+	{
+		log_error("Failed to lookup materialized view oid %u in internal "
+				  "catalogs, see above for details", oid);
+		return false;
+	}
+
+	if (matview.oid == 0)
+	{
+		log_error("Materialized view oid %u not found in internal catalogs",
+				  oid);
+		return false;
+	}
+
+	char refreshSQL[2 * PG_NAMEDATALEN + 50];
+
+	sformat(refreshSQL, sizeof(refreshSQL),
+			"refresh materialized view \"%s\".\"%s\"",
+			matview.nspname,
+			matview.relname);
+
+	log_info("Refreshing materialized view \"%s\".\"%s\"",
+			 matview.nspname, matview.relname);
+
+	char psTitle[BUFSIZE] = { 0 };
+	sformat(psTitle, sizeof(psTitle),
+			"pgcopydb: REFRESH \"%s\".\"%s\"",
+			matview.nspname, matview.relname);
+	(void) set_ps_title(psTitle);
+
+	PGSQL dst = { 0 };
+
+	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
+	{
+		return false;
+	}
+
+	if (!pgsql_execute(&dst, refreshSQL))
+	{
+		log_error("Failed to refresh materialized view \"%s\".\"%s\"",
+				  matview.nspname, matview.relname);
+		(void) pgsql_finish(&dst);
+		return false;
+	}
+
+	(void) pgsql_finish(&dst);
+
+	return true;
+}
+
+
+typedef struct MatViewQueueContext
+{
+	CopyDataSpec *specs;
+	bool ok;
+} MatViewQueueContext;
+
+static bool vacuum_send_matview_hook(void *ctx, CatalogMatView *matview);
+
+
+/*
+ * vacuum_send_matviews reads the list of materialized views in toc_seq order
+ * from the source catalog and sends one QMSG_TYPE_MATVIEW_OID message per view
+ * to the vacuum queue.  The INDEX supervisor calls this after all CREATE INDEX
+ * work is done, just before vacuum_send_stop.
+ */
+bool
+vacuum_send_matviews(CopyDataSpec *specs)
+{
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	MatViewQueueContext ctx = { .specs = specs, .ok = true };
+
+	if (!catalog_iter_s_matview_toc_order(sourceDB, &ctx,
+										  vacuum_send_matview_hook))
+	{
+		log_error("Failed to queue materialized view refresh messages");
+		return false;
+	}
+
+	return ctx.ok;
+}
+
+
+/*
+ * vacuum_send_matview_hook sends a single QMSG_TYPE_MATVIEW_OID message for
+ * the given materialized view.
+ */
+static bool
+vacuum_send_matview_hook(void *ctx, CatalogMatView *matview)
+{
+	MatViewQueueContext *context = (MatViewQueueContext *) ctx;
+
+	QMessage mesg = {
+		.type = QMSG_TYPE_MATVIEW_OID,
+		.data.oid = matview->oid,
+	};
+
+	log_debug("vacuum_send_matviews: oid %u \"%s\".\"%s\"",
+			  matview->oid, matview->nspname, matview->relname);
+
+	if (!queue_send(&(context->specs->vacuumQueue), &mesg))
+	{
+		context->ok = false;
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * vacuum_add_table sends a message to the VACUUM process queue to process
  * given table.
  */
@@ -506,11 +697,6 @@ vacuum_add_table(CopyDataSpec *specs, uint32_t oid, const char *datname)
 bool
 vacuum_send_stop(CopyDataSpec *specs)
 {
-	if (specs->skipVacuum)
-	{
-		return true;
-	}
-
 	for (int i = 0; i < specs->vacuumJobs; i++)
 	{
 		QMessage stop = { .type = QMSG_TYPE_STOP, .data.oid = 0 };

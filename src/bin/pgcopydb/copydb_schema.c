@@ -703,6 +703,14 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 		return false;
 	}
 
+	/* record matview-to-matview deps for REFRESH ordering in vacuum workers */
+	if (!schema_list_matview_deps(pgsql, sourceDB))
+	{
+		log_error("Failed to prepare matview dependency catalog, "
+				  "see above for details");
+		return false;
+	}
+
 	/*
 	 * if we did not enable estimates, update table sizes in our internal
 	 * catalogue with exact values

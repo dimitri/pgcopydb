@@ -33,6 +33,8 @@ static bool copydb_copy_database_properties_hook(void *ctx,
 static bool copydb_write_restore_list_hook(void *ctx,
 										   ArchiveContentItem *item);
 
+static bool copydb_collect_matview_toc_order(CopyDataSpec *specs);
+
 
 /*
  * copydb_objectid_has_been_processed_already returns true when the given
@@ -229,10 +231,23 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 	 * used, SCHEMA entries are skipped here because they were already restored
 	 * in the first pass above.
 	 */
-	if (!copydb_write_restore_list(specs, PG_DUMP_SECTION_PRE_DATA, NULL))
+	if (!copydb_write_restore_list(specs, PG_DUMP_SECTION_PRE_DATA))
 	{
 		log_error("Failed to prepare the pg_restore --use-list catalogs, "
 				  "see above for details");
+		return false;
+	}
+
+	/*
+	 * Scan the full archive TOC (already written to preListOutFilename) to
+	 * assign toc_seq to each REFRESH MATERIALIZED VIEW entry.  This must be
+	 * done before the data phase starts so the INDEX supervisor can feed
+	 * vacuum workers in the correct pg_dump dependency order.
+	 */
+	if (!copydb_collect_matview_toc_order(specs))
+	{
+		log_error("Failed to collect materialized view refresh order from "
+				  "pg_dump TOC");
 		return false;
 	}
 
@@ -600,10 +615,7 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 		return false;
 	}
 
-	MatViewRefreshList matviewRefreshList = { 0 };
-
-	if (!copydb_write_restore_list(specs, PG_DUMP_SECTION_POST_DATA,
-								   &matviewRefreshList))
+	if (!copydb_write_restore_list(specs, PG_DUMP_SECTION_POST_DATA))
 	{
 		log_error("Failed to prepare the pg_restore --use-list catalogs, "
 				  "see above for details");
@@ -619,19 +631,8 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 					   specs->restoreOptions))
 	{
 		/* errors have already been logged */
-		free(matviewRefreshList.items);
 		return false;
 	}
-
-	/* Run REFRESH MATERIALIZED VIEW directly with the correct search_path. */
-	if (!copydb_refresh_materialized_views(specs, &matviewRefreshList))
-	{
-		log_error("Failed to refresh materialized views, see above for details");
-		free(matviewRefreshList.items);
-		return false;
-	}
-
-	free(matviewRefreshList.items);
 
 	/*
 	 * Some extensions such as timescaledb need a post restore step.
@@ -658,7 +659,8 @@ typedef struct RestoreListContext
 	CopyDataSpec *specs;
 	FILE *outStream;
 	bool schemasOnly;            /* write only SCHEMA entries (first pass) */
-	MatViewRefreshList *refreshList; /* non-NULL: collect REFRESH entries */
+	bool assignTocSeq;           /* true when scanning TOC to assign toc_seq */
+	int matviewTocSeq;           /* counter for REFRESH entries seen so far */
 } RestoreListContext;
 
 /*
@@ -667,8 +669,7 @@ typedef struct RestoreListContext
  * catalog that is meant to be used as pg_restore --use-list argument.
  */
 bool
-copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section,
-						  MatViewRefreshList *refreshList)
+copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 {
 	char *dumpFilename = NULL;
 	char *listFilename = NULL;
@@ -737,7 +738,6 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section,
 	RestoreListContext context = {
 		.specs = specs,
 		.outStream = out,
-		.refreshList = refreshList
 	};
 
 	if (!archive_iter_toc(listOutFilename,
@@ -1019,52 +1019,45 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 	}
 
 	/*
-	 * Intercept non-filtered REFRESH MATERIALIZED VIEW entries: skip them
-	 * in the pg_restore list and collect them for direct execution with the
-	 * correct search_path.  pg_restore runs REFRESH with an empty
-	 * search_path, which breaks matviews whose definition embeds unqualified
-	 * object names inside text arguments (e.g. ts_stat()).
+	 * Skip non-filtered REFRESH MATERIALIZED VIEW entries from the pg_restore
+	 * list.  pgcopydb drives REFRESH via vacuum workers during the data phase
+	 * (after all source-table COPY and CREATE INDEX), so they must not also be
+	 * run by pg_restore post-data.
+	 *
+	 * When assignTocSeq is set (TOC order scan during prepare_schema) we also
+	 * record the pg_dump dependency order in s_matview.toc_seq so that the
+	 * INDEX supervisor can feed vacuum workers in the right sequence.
 	 */
-	if (!skip &&
-		item->desc == ARCHIVE_TAG_REFRESH_MATERIALIZED_VIEW &&
-		context->refreshList != NULL)
+	if (!skip && item->desc == ARCHIVE_TAG_REFRESH_MATERIALIZED_VIEW)
 	{
-		DatabaseCatalog *sourceDB = &(specs->catalogs.source);
-		CatalogMatView matview = { 0 };
+		skip = true;
 
-		if (oid != 0 &&
-			catalog_lookup_s_matview_by_oid(sourceDB, &matview, oid) &&
-			matview.oid != 0)
+		if (context->assignTocSeq && oid != 0)
 		{
-			MatViewRefreshList *list = context->refreshList;
+			DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+			int seq = ++context->matviewTocSeq;
 
-			if (list->count >= list->capacity)
+			if (!catalog_update_s_matview_toc_seq(sourceDB, oid, seq))
 			{
-				int newCap = list->capacity == 0 ? 8 : list->capacity * 2;
-				MatViewRefreshItem *newItems = (MatViewRefreshItem *)
-											   realloc(list->items, newCap *
-													   sizeof(MatViewRefreshItem));
-
-				if (newItems == NULL)
-				{
-					log_error("Failed to allocate memory for matview refresh list");
-					return false;
-				}
-				list->items = newItems;
-				list->capacity = newCap;
+				log_error("Failed to record toc_seq for matview oid %u", oid);
+				return false;
 			}
 
-			MatViewRefreshItem *it = &list->items[list->count++];
-			it->oid = oid;
-			strlcpy(it->nspname, matview.nspname, sizeof(it->nspname));
-			strlcpy(it->relname, matview.relname, sizeof(it->relname));
-
-			skip = true;
-
-			log_debug("Deferring REFRESH MATERIALIZED VIEW \"%s\".\"%s\" "
-					  "(dumpId %d) for direct execution with correct search_path",
-					  matview.nspname, matview.relname, item->dumpId);
+			log_debug("Scheduled REFRESH MATERIALIZED VIEW oid %u "
+					  "(dumpId %d, toc_seq %d) via vacuum worker queue",
+					  oid, item->dumpId, seq);
 		}
+		else
+		{
+			log_debug("Skipping REFRESH MATERIALIZED VIEW dumpId %d "
+					  "(handled by vacuum workers)", item->dumpId);
+		}
+	}
+
+	/* In TOC-scan mode (outStream == NULL) we only assign toc_seq, no output. */
+	if (context->outStream == NULL)
+	{
+		return true;
 	}
 
 	PQExpBuffer buf = createPQExpBuffer();
@@ -1099,112 +1092,49 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 
 
 /*
- * copydb_refresh_materialized_views runs REFRESH MATERIALIZED VIEW for each
- * entry in the list, in the order they appear (pg_dump dependency order).
+ * copydb_collect_matview_toc_order scans the pg_dump archive TOC (already
+ * produced in preListOutFilename by the pre-data pass) and assigns a monotone
+ * toc_seq to each REFRESH MATERIALIZED VIEW entry.  The TOC is in pg_dump
+ * dependency order, so this sequence is safe for the vacuum workers to follow
+ * when refreshing: each worker that receives a QMSG_TYPE_MATVIEW_OID checks
+ * s_matview_dep and waits until all dep matviews are done before proceeding.
  *
- * Each REFRESH is run with a search_path that includes all user schemas so
- * that unqualified object names embedded in function text arguments (e.g.
- * ts_stat('SELECT ... FROM documents')) can be resolved correctly.
- *
- * pg_restore would run REFRESH with an empty search_path, which breaks these
- * matviews (#484, #501).
+ * This must be called after copydb_write_restore_list(PRE_DATA) so that
+ * preListOutFilename exists, and before the data phase begins so the INDEX
+ * supervisor can read the toc_seq when all indexes are built.
  */
-bool
-copydb_refresh_materialized_views(CopyDataSpec *specs,
-								  MatViewRefreshList *list)
+static bool
+copydb_collect_matview_toc_order(CopyDataSpec *specs)
 {
-	if (list == NULL || list->count == 0)
+	/*
+	 * The preListOutFilename file was produced by pg_restore --list during
+	 * the pre-data pass.  It lists ALL entries from the dump (not just
+	 * pre-data), so REFRESH MATERIALIZED VIEW entries appear here too.
+	 */
+	char *listOutFilename = specs->dumpPaths.preListOutFilename;
+
+	if (!file_exists(listOutFilename))
 	{
+		/* no dump file yet — nothing to do (e.g. --resume after full run) */
 		return true;
 	}
 
-	PGSQL pgsql = { 0 };
-
-	if (!pgsql_init(&pgsql, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/*
-	 * Keep the same connection open across the SET search_path and all
-	 * REFRESH statements so the search_path setting is visible to each one.
-	 * In SINGLE_STATEMENT mode (the default) pgsql_execute closes the
-	 * connection after every query, causing the next query to open a fresh
-	 * connection with the default empty search_path.
-	 */
-	pgsql.connectionStatementType = PGSQL_CONNECTION_MULTI_STATEMENT;
-
-	/*
-	 * Build a search_path from all user schemas in the target database so
-	 * that unqualified names in matview definitions resolve regardless of
-	 * which schema the view belongs to.
-	 */
-	char *sql =
-		"select string_agg(quote_ident(nspname), ', ' order by oid)"
-		"  from pg_catalog.pg_namespace"
-		" where nspname not like 'pg_%'"
-		"   and nspname <> 'information_schema'";
-
-	SingleValueResultContext pathCtx = {
-		.resultType = PGSQL_RESULT_STRING
+	RestoreListContext context = {
+		.specs = specs,
+		.outStream = NULL,
+		.assignTocSeq = true,
 	};
 
-	if (!pgsql_execute_with_params(&pgsql, sql, 0, NULL, NULL,
-								   &pathCtx, &parseSingleValueResult))
+	if (!archive_iter_toc(listOutFilename, &context,
+						  copydb_write_restore_list_hook))
 	{
-		log_error("Failed to query target schemas for matview refresh search_path");
-		pgsql_finish(&pgsql);
+		log_error("Failed to assign toc_seq from pg_dump TOC, "
+				  "see above for details");
 		return false;
 	}
 
-	PQExpBuffer setCmd = createPQExpBuffer();
-
-	if (pathCtx.parsedOk && !pathCtx.isNull && pathCtx.strVal != NULL)
-	{
-		appendPQExpBuffer(setCmd, "set search_path to %s, pg_catalog",
-						  pathCtx.strVal);
-		free(pathCtx.strVal);
-	}
-	else
-	{
-		appendPQExpBufferStr(setCmd, "set search_path to pg_catalog");
-	}
-
-	bool ok = pgsql_execute(&pgsql, setCmd->data);
-	destroyPQExpBuffer(setCmd);
-
-	if (!ok)
-	{
-		log_error("Failed to set search_path for matview refresh");
-		pgsql_finish(&pgsql);
-		return false;
-	}
-
-	for (int i = 0; i < list->count; i++)
-	{
-		MatViewRefreshItem *it = &list->items[i];
-
-		char refreshSQL[2 * PG_NAMEDATALEN + 50];
-
-		sformat(refreshSQL, sizeof(refreshSQL),
-				"refresh materialized view \"%s\".\"%s\"",
-				it->nspname,
-				it->relname);
-
-		log_info("Refreshing materialized view \"%s\".\"%s\"",
-				 it->nspname, it->relname);
-
-		if (!pgsql_execute(&pgsql, refreshSQL))
-		{
-			log_error("Failed to refresh materialized view \"%s\".\"%s\"",
-					  it->nspname, it->relname);
-			pgsql_finish(&pgsql);
-			return false;
-		}
-	}
-
-	pgsql_finish(&pgsql);
+	log_debug("Assigned toc_seq 1..%d to materialized view REFRESH entries",
+			  context.matviewTocSeq);
 
 	return true;
 }

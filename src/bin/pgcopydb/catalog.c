@@ -113,7 +113,18 @@ static char *sourceDBcreateTableDDLs[] = {
 	"create table s_matview("
 	"  oid integer primary key, "
 	"  qname text, nspname text, relname text, restore_list_name text, "
-	"  exclude_data boolean"
+	"  exclude_data boolean, "
+	"  toc_seq integer default 0"
+	")",
+
+	"create table s_matview_dep("
+	"  matview_oid integer references s_matview(oid), "
+	"  dep_oid integer references s_matview(oid), "
+	"  primary key(matview_oid, dep_oid)"
+	")",
+
+	"create table s_matview_refresh_done("
+	"  oid integer primary key references s_matview(oid)"
 	")",
 
 	"create table s_table_size("
@@ -661,6 +672,8 @@ static char *sourceDBdropDDLs[] = {
 
 	"drop table if exists s_database",
 	"drop table if exists s_database_property",
+	"drop table if exists s_matview_refresh_done",
+	"drop table if exists s_matview_dep",
 	"drop table if exists s_table",
 	"drop table if exists s_matview",
 	"drop table if exists s_attr",
@@ -3218,6 +3231,322 @@ catalog_s_matview_fetch(SQLiteQuery *query)
 	}
 
 	entry->excludeData = sqlite3_column_int64(query->ppStmt, 4) == 1;
+
+	return true;
+}
+
+
+/*
+ * catalog_update_s_matview_toc_seq sets the TOC sequence number for a matview.
+ * Used to record the pg_dump dependency order so vacuum workers can REFRESH in
+ * the correct sequence without waiting for pg_restore post-data.
+ */
+bool
+catalog_update_s_matview_toc_seq(DatabaseCatalog *catalog,
+								 uint32_t oid,
+								 int seq)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_update_s_matview_toc_seq: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"update s_matview set toc_seq = $1 where oid = $2";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		return false;
+	}
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "toc_seq", seq, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "oid", oid, NULL },
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&query))
+	{
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_add_s_matview_dep records a matview-to-matview dependency: dep_oid
+ * must be refreshed before matview_oid.  Ignored when either OID is absent
+ * from s_matview (e.g. filtered out).
+ */
+bool
+catalog_add_s_matview_dep(DatabaseCatalog *catalog,
+						  uint32_t matview_oid,
+						  uint32_t dep_oid)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_add_s_matview_dep: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"insert or ignore into s_matview_dep(matview_oid, dep_oid)"
+		" select $1, $2"
+		" where exists (select 1 from s_matview where oid = $1)"
+		"   and exists (select 1 from s_matview where oid = $2)";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		return false;
+	}
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "matview_oid", matview_oid, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "dep_oid", dep_oid, NULL },
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&query))
+	{
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_matview_deps_are_done sets *done to true when every matview that
+ * matview_oid depends on (via s_matview_dep) has an entry in
+ * s_matview_refresh_done.  A matview with no deps is immediately done.
+ */
+bool
+catalog_matview_deps_are_done(DatabaseCatalog *catalog,
+							  uint32_t oid,
+							  bool *done)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_matview_deps_are_done: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"select count(*) = 0"
+		"  from s_matview_dep"
+		" where matview_oid = $1"
+		"   and dep_oid not in (select oid from s_matview_refresh_done)";
+
+	SQLiteQuery query = { 0 };
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		return false;
+	}
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "oid", oid, NULL },
+	};
+
+	if (!catalog_sql_bind(&query, params, 1))
+	{
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	int rc = catalog_sql_step(&query);
+
+	if (rc != SQLITE_ROW)
+	{
+		log_error("[SQLite %d: %s]: %s", rc, query.sql, sqlite3_errmsg(db));
+		(void) catalog_sql_finalize(&query);
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	*done = sqlite3_column_int(query.ppStmt, 0) != 0;
+
+	(void) catalog_sql_finalize(&query);
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
+ * catalog_mark_matview_refresh_done records that a materialized view has been
+ * successfully refreshed.  Idempotent: ignored if already present.
+ */
+bool
+catalog_mark_matview_refresh_done(DatabaseCatalog *catalog, uint32_t oid)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_mark_matview_refresh_done: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"insert or ignore into s_matview_refresh_done(oid) values($1)";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		return false;
+	}
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "oid", oid, NULL },
+	};
+
+	if (!catalog_sql_bind(&query, params, 1))
+	{
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&query))
+	{
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_iter_s_matview_toc_order iterates over materialized views that have a
+ * toc_seq > 0, ordered by toc_seq ascending — i.e. in the pg_dump dependency
+ * order that guarantees REFRESH can proceed without missing deps.
+ */
+bool
+catalog_iter_s_matview_toc_order(DatabaseCatalog *catalog,
+								 void *context,
+								 CatalogMatViewIterFun *callback)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_iter_s_matview_toc_order: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"select oid, nspname, relname"
+		"  from s_matview"
+		" where toc_seq > 0"
+		" order by toc_seq asc";
+
+	CatalogMatViewIterator iter = {
+		.catalog = catalog,
+	};
+
+	iter.query.context = &(iter.matview);
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		return false;
+	}
+
+	if (!catalog_sql_prepare(db, sql, &(iter.query)))
+	{
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	for (;;)
+	{
+		int rc = catalog_sql_step(&(iter.query));
+
+		if (rc == SQLITE_DONE)
+		{
+			break;
+		}
+
+		if (rc != SQLITE_ROW)
+		{
+			log_error("Failed to step through s_matview: %s",
+					  sqlite3_errmsg(db));
+			(void) catalog_sql_finalize(&(iter.query));
+			(void) semaphore_unlock(&(catalog->sema));
+			return false;
+		}
+
+		CatalogMatView *mv = &(iter.matview);
+
+		bzero(mv, sizeof(CatalogMatView));
+		mv->oid = sqlite3_column_int64(iter.query.ppStmt, 0);
+
+		if (sqlite3_column_type(iter.query.ppStmt, 1) != SQLITE_NULL)
+		{
+			strlcpy(mv->nspname,
+					(char *) sqlite3_column_text(iter.query.ppStmt, 1),
+					sizeof(mv->nspname));
+		}
+
+		if (sqlite3_column_type(iter.query.ppStmt, 2) != SQLITE_NULL)
+		{
+			strlcpy(mv->relname,
+					(char *) sqlite3_column_text(iter.query.ppStmt, 2),
+					sizeof(mv->relname));
+		}
+
+		(void) semaphore_unlock(&(catalog->sema));
+
+		if (!(*callback)(context, mv))
+		{
+			log_error("Failed to iterate over materialized views, "
+					  "see above for details");
+			if (!semaphore_lock(&(catalog->sema)))
+			{
+				return false;
+			}
+			(void) catalog_sql_finalize(&(iter.query));
+			(void) semaphore_unlock(&(catalog->sema));
+			return false;
+		}
+
+		if (!semaphore_lock(&(catalog->sema)))
+		{
+			return false;
+		}
+	}
+
+	(void) catalog_sql_finalize(&(iter.query));
+	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }
@@ -10181,6 +10510,8 @@ catalog_delete_source_schema_data(DatabaseCatalog *catalog)
 		"delete from s_index",
 		"delete from s_depend",
 		"delete from s_seq",
+		"delete from s_matview_refresh_done",
+		"delete from s_matview_dep",
 		"delete from s_matview",
 		"delete from s_table",
 		"delete from s_namespace",

@@ -597,7 +597,7 @@ cli_restore_schema_parse_list(int argc, char **argv)
 			 copySpecs.dumpPaths.dumpFilename,
 			 copySpecs.dumpPaths.preListFilename);
 
-	if (!copydb_write_restore_list(&copySpecs, PG_DUMP_SECTION_PRE_DATA, NULL))
+	if (!copydb_write_restore_list(&copySpecs, PG_DUMP_SECTION_PRE_DATA))
 	{
 		log_error("Failed to prepare the pg_restore --use-list catalogs, "
 				  "see above for details");
@@ -609,7 +609,7 @@ cli_restore_schema_parse_list(int argc, char **argv)
 			 copySpecs.dumpPaths.dumpFilename,
 			 copySpecs.dumpPaths.postListFilename);
 
-	if (!copydb_write_restore_list(&copySpecs, PG_DUMP_SECTION_POST_DATA, NULL))
+	if (!copydb_write_restore_list(&copySpecs, PG_DUMP_SECTION_POST_DATA))
 	{
 		log_error("Failed to prepare the pg_restore --use-list catalogs, "
 				  "see above for details");

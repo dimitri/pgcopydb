@@ -136,3 +136,14 @@ REFRESH MATERIALIZED VIEW mvtest.mv_combined;
 REFRESH MATERIALIZED VIEW mvtest.mv_final;
 
 RESET search_path;
+
+--
+-- Set the database-level search_path so that new connections on the target
+-- (including the fresh libpq connections opened by pgcopydb vacuum workers
+-- when they run REFRESH MATERIALIZED VIEW) can resolve the unqualified table
+-- name "documents" embedded inside public.mv_word_stats.
+--
+-- pgcopydb restores ALTER DATABASE SET ... during pre-data, so this setting
+-- is in effect when vacuum workers connect to the target during the data phase.
+--
+ALTER DATABASE postgres SET search_path TO mvtest, public, """abc""";

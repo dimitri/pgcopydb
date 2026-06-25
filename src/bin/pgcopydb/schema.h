@@ -473,6 +473,8 @@ bool schema_list_pg_depend(PGSQL *pgsql,
 						   SourceFilters *filters,
 						   DatabaseCatalog *catalog);
 
+bool schema_list_matview_deps(PGSQL *pgsql, DatabaseCatalog *catalog);
+
 bool schema_send_table_checksum(PGSQL *pgsql, SourceTable *table);
 bool schema_fetch_table_checksum(PGSQL *pgsql, TableChecksum *sum, bool *done);
 
