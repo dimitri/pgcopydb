@@ -107,6 +107,18 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 
 		src = &pgsql;
 
+		/*
+		 * Detect whether the source is a standby (pg_is_in_recovery() = true).
+		 * The consistent/snapshot path sets this via copydb_export_snapshot();
+		 * the not-consistent path must set it here so that
+		 * copydb_prepare_table_specs_hook can skip ANALYZE on standbys.
+		 */
+		if (!pgsql_is_in_recovery(src, &(specs->sourceSnapshot.isReadOnly)))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
 		if (!pgsql_begin(src))
 		{
 			/* errors have already been logged */
@@ -425,7 +437,7 @@ copydb_prepare_namespace_specs(CopyDataSpec *specs, PGSQL *pgsql)
 
 	(void) catalog_start_timing(&timing);
 
-	if (!schema_list_schemas(pgsql, sourceDB))
+	if (!schema_list_schemas(pgsql, &(specs->filters), sourceDB))
 	{
 		log_error("Failed to prepare namespace specs in our catalogs, "
 				  "see above for details");
@@ -453,28 +465,12 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	if (specs->sourceSnapshot.isReadOnly && specs->filters.type != SOURCE_FILTER_TYPE_NONE
-		)
-	{
-		log_fatal("Connected to a standby server where pg_is_in_recovery(): "
-				  "pgcopydb does not support operating on standby server "
-				  "when --filters are used, as it needs to create temp tables");
-		return false;
-	}
-
 	/* check if we have needed privileges here */
 	if (!schema_query_privileges(src,
 								 &(specs->hasDBCreatePrivilege),
 								 &(specs->hasDBTempPrivilege)))
 	{
 		log_error("Failed to query database privileges, see above for details");
-		return false;
-	}
-
-	if (!specs->hasDBTempPrivilege)
-	{
-		log_fatal("Connecting with a role that does not have TEMP privileges "
-				  "on the current database on the source server");
 		return false;
 	}
 
@@ -540,6 +536,27 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 		}
 	}
 
+	/*
+	 * Fetch namespaces first: the table query uses namespace OIDs from
+	 * s_namespace to restrict which schemas are scanned.
+	 */
+	if ((specs->section == DATA_SECTION_ALL ||
+		 specs->section == DATA_SECTION_NAMESPACES ||
+		 specs->section == DATA_SECTION_TABLE_DATA ||
+		 specs->section == DATA_SECTION_TABLE_DATA_PARTS ||
+		 specs->section == DATA_SECTION_INDEXES ||
+		 specs->section == DATA_SECTION_CONSTRAINTS ||
+		 specs->section == DATA_SECTION_SET_SEQUENCES) &&
+		!sourceDB->sections[DATA_SECTION_NAMESPACES].fetched)
+	{
+		if (!copydb_prepare_namespace_specs(specs, src))
+		{
+			/* errors have already been logged */
+			(void) semaphore_unlock(&(sourceDB->sema));
+			return false;
+		}
+	}
+
 	/* now fetch the list of tables from the source database */
 	if ((specs->section == DATA_SECTION_ALL ||
 		 specs->section == DATA_SECTION_TABLE_DATA ||
@@ -575,18 +592,6 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 		bool reset = false;
 
 		if (!copydb_prepare_sequence_specs(specs, src, reset))
-		{
-			/* errors have already been logged */
-			(void) semaphore_unlock(&(sourceDB->sema));
-			return false;
-		}
-	}
-
-	if ((specs->section == DATA_SECTION_ALL ||
-		 specs->section == DATA_SECTION_NAMESPACES) &&
-		!sourceDB->sections[DATA_SECTION_NAMESPACES].fetched)
-	{
-		if (!copydb_prepare_namespace_specs(specs, src))
 		{
 			/* errors have already been logged */
 			(void) semaphore_unlock(&(sourceDB->sema));
@@ -1440,7 +1445,9 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 
 		(void) catalog_start_timing(&timing);
 
-		if (!schema_list_sequences(pgsql, filters, filtersDB))
+		DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+		if (!schema_list_sequences(pgsql, filters, filtersDB, sourceDB))
 		{
 			/* errors have already been logged */
 			filters->type = type;
@@ -1620,7 +1627,9 @@ copydb_prepare_target_catalog(CopyDataSpec *specs)
 	 * dependency between the extension and the schema (using a DO $$ ... $$
 	 * block for instance), and there is no CREATE SCHEMA IF NOT EXISTS.
 	 */
-	if (!schema_list_schemas(&dst, targetDB))
+	SourceFilters noFilters = { 0 };     /* type=NONE, all filter lists empty */
+
+	if (!schema_list_schemas(&dst, &noFilters, targetDB))
 	{
 		log_error("Failed to list schemas on the target database");
 		(void) semaphore_unlock(&(targetDB->sema));

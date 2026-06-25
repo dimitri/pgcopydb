@@ -1,4 +1,8 @@
+-- $1::oid[] : table OIDs from s_table (NULL means no filter)
 WITH RECURSIVE
+filters AS (
+    SELECT $1::oid[] AS table_oids
+),
 edges AS (
 SELECT
     ARRAY[refclassid::int, refobjid::int, refobjsubid] AS from_obj,
@@ -63,30 +67,29 @@ SELECT
     deptype
 FROM remap_edges
 )
-  SELECT n.nspname, c.relname,
+  SELECT cn.nspname, c.relname,
          refclassid, refobjid, classid, objid,
          deptype, type, identity
     FROM unconcat
 
--- include-only-table
-         join pg_class c
-           on unconcat.refclassid = 'pg_class'::regclass
-          and unconcat.refobjid = c.oid
+         JOIN pg_class c
+           ON unconcat.refclassid = 'pg_class'::regclass
+          AND unconcat.refobjid = c.oid
 
-         join pg_catalog.pg_namespace n on c.relnamespace = n.oid
+         JOIN pg_catalog.pg_namespace cn
+           ON c.relnamespace = cn.oid
 
-         join pg_temp.filter_include_only_table inc
-           on n.nspname = inc.nspname
-          and c.relname = inc.relname
+         CROSS JOIN filters f
 
          , pg_identify_object(classid, objid, objsubid)
 
    WHERE NOT (refclassid = classid AND refobjid = objid)
-      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'
-      and n.nspname !~ 'pgcopydb'
-      and type not in ('toast table column', 'default value')
+     AND cn.nspname !~ '^pg_' AND cn.nspname <> 'information_schema'
+     AND cn.nspname !~ 'pgcopydb'
+     AND type NOT IN ('toast table column', 'default value')
+     -- table filter: restrict to included tables (or all when NULL)
+     AND (f.table_oids IS NULL OR c.oid = ANY(f.table_oids))
 
--- remove duplicates due to multiple refobjsubid / objsubid
-GROUP BY n.nspname, c.relname,
+GROUP BY cn.nspname, c.relname,
          refclassid, refobjid, classid, objid, deptype, type, identity
 ;

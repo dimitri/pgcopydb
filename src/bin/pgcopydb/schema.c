@@ -28,18 +28,6 @@
 #include "string_utils.h"
 #include <math.h>
 
-static bool prepareFilters(PGSQL *pgsql, SourceFilters *filters);
-
-static bool prepareFilterCopyIncludeOnlySchema(PGSQL *pgsql,
-											   SourceFilters *filters);
-
-static bool prepareFilterCopyExcludeSchema(PGSQL *pgsql,
-										   SourceFilters *filters);
-
-static bool prepareFilterCopyTableList(PGSQL *pgsql,
-									   SourceFilterTableList *tableList,
-									   const char *temp_table_name);
-
 
 /* Context used when fetching database definitions */
 typedef struct SourceDatabaseArrayContext
@@ -324,33 +312,68 @@ schema_list_database_properties(PGSQL *pgsql, DatabaseCatalog *catalog)
 
 
 /*
- * schema_list_schemas grabs the list of schema from the given Postgres
- * instance and allocates a SourceSchemaArray array with the result of the
- * query.
+ * schema_list_schemas grabs the list of schemas from the given Postgres
+ * instance, applying schema-level filters, and stores the result in the
+ * SQLite catalog.  The four parameters map to the WITH filters CTE in
+ * list_schemas.sql: $1 incl_exact, $2 incl_re, $3 excl_exact, $4 excl_re.
+ * A NULL value means "no filter for that slot".
  */
 bool
-schema_list_schemas(PGSQL *pgsql, DatabaseCatalog *catalog)
+schema_list_schemas(PGSQL *pgsql, SourceFilters *filters, DatabaseCatalog *catalog)
 {
 	SourceSchemaArrayContext parseContext = { { 0 }, catalog, false };
+
+	if (!filters->normalized)
+	{
+		if (!filters_validate_and_normalize(pgsql, filters))
+		{
+			log_error("Failed to validate and normalize filter names");
+			return false;
+		}
+	}
+
+	if (!catalog_populate_filters(catalog, filters))
+	{
+		log_error("Failed to populate filter tables");
+		return false;
+	}
+
+	char *incl_exact = NULL;
+	char *incl_re = NULL;
+	char *excl_exact = NULL;
+	char *excl_re = NULL;
+
+	if (!catalog_filter_schema_array(catalog, "incl_schema", false, &incl_exact) ||
+		!catalog_filter_schema_array(catalog, "incl_schema", true, &incl_re) ||
+		!catalog_filter_schema_array(catalog, "excl_schema", false, &excl_exact) ||
+		!catalog_filter_schema_array(catalog, "excl_schema", true, &excl_re))
+	{
+		log_error("Failed to build schema filter arrays");
+		return false;
+	}
 
 	const char *sql = NULL;
 
 	if (!pgcopydb_sql_list_schemas(&sql))
 	{
-		/* can't happen — always returns true */
 		return false;
 	}
+
+	int paramCount = 4;
+	Oid paramTypes[4] = { TEXTOID, TEXTOID, TEXTOID, TEXTOID };
+	const char *paramValues[4] = { incl_exact, incl_re, excl_exact, excl_re };
+
 	if (!pgsql_execute_with_params(pgsql, sql,
-								   0, NULL, NULL,
+								   paramCount, paramTypes, paramValues,
 								   &parseContext, &getSchemaList))
 	{
-		log_error("Failed to list schemas that extensions depend on");
+		log_error("Failed to list schemas");
 		return false;
 	}
 
 	if (!parseContext.parsedOk)
 	{
-		log_error("Failed to list schemas that extensions depend on");
+		log_error("Failed to list schemas");
 		return false;
 	}
 
@@ -543,7 +566,8 @@ schema_list_collations(PGSQL *pgsql, DatabaseCatalog *catalog)
 
 /*
  * schema_prepare_pgcopydb_table_size creates an internal catalog table named
- * s_table_size.
+ * s_table_size.  Uses the table OIDs already stored in the catalog's s_table
+ * as a $1::oid[] parameter filter.
  */
 bool
 schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
@@ -552,35 +576,8 @@ schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
 {
 	log_trace("schema_prepare_pgcopydb_table_size");
 
-	SourceFilterType filterType = SOURCE_FILTER_TYPE_NONE;
-
 	switch (filters->type)
 	{
-		case SOURCE_FILTER_TYPE_NONE:
-		case SOURCE_FILTER_TYPE_EXCL_INDEX:
-		{
-			/* skip filters preparing (temp tables) */
-			break;
-		}
-
-		case SOURCE_FILTER_TYPE_INCL:
-		case SOURCE_FILTER_TYPE_EXCL:
-		case SOURCE_FILTER_TYPE_LIST_NOT_INCL:
-		case SOURCE_FILTER_TYPE_LIST_EXCL:
-		{
-			if (!prepareFilters(pgsql, filters))
-			{
-				log_error("Failed to prepare pgcopydb filters, "
-						  "see above for details");
-				return false;
-			}
-
-			filterType = filters->type;
-
-			break;
-		}
-
-		/* ignore "exclude-index" here */
 		case SOURCE_FILTER_TYPE_LIST_EXCL_INDEX:
 		{
 			return true;
@@ -588,25 +585,34 @@ schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
 
 		default:
 		{
-			log_error("BUG: schema_prepare_pgcopydb_table_size called with "
-					  "filtering type %d",
-					  filters->type);
-			return false;
+			break;
 		}
+	}
+
+	char *table_oids = NULL;
+	int table_count = 0;
+
+	if (!catalog_s_table_oid_array(catalog, &table_oids, &table_count))
+	{
+		log_error("Failed to build table OID array for table size query");
+		return false;
 	}
 
 	SourceTableSizeArrayContext context = { { 0 }, catalog, false };
 
 	const char *sql = NULL;
 
-	if (!pgcopydb_sql_list_source_table_size(filterType, &sql))
+	if (!pgcopydb_sql_list_source_table_size(&sql))
 	{
-		log_error("BUG: no SQL for list_source_table_size filter %d", filterType);
 		return false;
 	}
 
+	int paramCount = 1;
+	Oid paramTypes[1] = { TEXTOID };
+	const char *paramValues[1] = { table_oids };
+
 	if (!pgsql_execute_with_params(pgsql, sql,
-								   0, NULL, NULL,
+								   paramCount, paramTypes, paramValues,
 								   &context, &getTableSizeArray))
 	{
 		log_error("Failed to compute table size, see above for details");
@@ -619,8 +625,14 @@ schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
 
 /*
  * schema_list_ordinary_tables grabs the list of tables from the given source
- * Postgres instance and allocates a SourceTable array with the result of the
- * query.
+ * Postgres instance and stores the result in the SQLite catalog.
+ *
+ * For the main sourceDB query (NONE/INCL/EXCL/EXCL_INDEX): uses
+ * list_source_tables.sql with 25 parameters ($1 = namespace OIDs from
+ * s_namespace; $2-$25 = EE/ER/RE/RR arrays for incl/excl/xdat table filters).
+ *
+ * For the filtersDB complement queries (LIST_NOT_INCL/LIST_EXCL): uses
+ * dedicated SQL files with only the filter arrays needed.
  */
 bool
 schema_list_ordinary_tables(PGSQL *pgsql,
@@ -630,7 +642,21 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 {
 	SourceTableArrayContext context = { { 0 }, catalog, estimateTableSizes, false };
 
-	log_trace("schema_list_ordinary_tables");
+	log_trace("schema_list_ordinary_tables[%s]",
+			  filterTypeToString(filters->type));
+
+	/*
+	 * Normalize filters here too: in --resume mode schema_list_schemas may be
+	 * skipped (namespace section already fetched), so restoreListName for
+	 * schema filter entries might not be set yet.
+	 */
+	if (!filters->normalized)
+	{
+		if (!filters_validate_and_normalize(pgsql, filters))
+		{
+			return false;
+		}
+	}
 
 	if (pgsql->safeURI.uriParams.dbname != NULL)
 	{
@@ -638,61 +664,249 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 				sizeof(context.datname));
 	}
 
-	SourceFilterType filterType = SOURCE_FILTER_TYPE_NONE;
-
 	switch (filters->type)
 	{
-		case SOURCE_FILTER_TYPE_NONE:
-		case SOURCE_FILTER_TYPE_EXCL_INDEX:
-		{
-			/* skip filters preparing (temp tables) */
-			break;
-		}
-
-		case SOURCE_FILTER_TYPE_INCL:
-		case SOURCE_FILTER_TYPE_EXCL:
-		case SOURCE_FILTER_TYPE_LIST_NOT_INCL:
-		case SOURCE_FILTER_TYPE_LIST_EXCL:
-		{
-			if (!prepareFilters(pgsql, filters))
-			{
-				log_error("Failed to prepare pgcopydb filters, "
-						  "see above for details");
-				return false;
-			}
-
-			filterType = filters->type;
-
-			break;
-		}
-
-		/* ignore "exclude-index" listing of filtered-out tables */
 		case SOURCE_FILTER_TYPE_LIST_EXCL_INDEX:
 		{
+			/* not needed for index-only exclusion */
 			return true;
 		}
 
 		default:
 		{
-			log_error("BUG: schema_list_ordinary_tables called with "
-					  "filtering type %d",
-					  filters->type);
-			return false;
+			break;
 		}
 	}
 
-	log_debug("pgcopydb_sql_list_source_tables[%s]",
-			  filterTypeToString(filterType));
-
-	const char *sql = NULL;
-
-	if (!pgcopydb_sql_list_source_tables(filterType, &sql))
+	if (!catalog_populate_filters(catalog, filters))
 	{
-		log_error("BUG: no SQL for list_source_tables filter %d", filterType);
+		log_error("Failed to populate filter tables");
 		return false;
 	}
 
-	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+	/*
+	 * For the complement (filtersDB) queries we use different SQL files that
+	 * return the EXCLUDED tables.  These don't need the namespace OID array.
+	 */
+	if (filters->type == SOURCE_FILTER_TYPE_LIST_NOT_INCL)
+	{
+		/* 8 params: EE/ER/RE/RR pairs for include-only-table filter */
+		char *ee_nsp = NULL, *ee_rel = NULL;
+		char *er_nsp = NULL, *er_rel = NULL;
+		char *re_nsp = NULL, *re_rel = NULL;
+		char *rr_nsp = NULL, *rr_rel = NULL;
+
+		if (!catalog_filter_table_arrays(catalog, "incl_table",
+										 &ee_nsp, &ee_rel,
+										 &er_nsp, &er_rel,
+										 &re_nsp, &re_rel,
+										 &rr_nsp, &rr_rel))
+		{
+			log_error("Failed to build include-only-table filter arrays");
+			return false;
+		}
+
+		const char *sql = NULL;
+
+		if (!pgcopydb_sql_list_filtered_not_incl_tables(&sql))
+		{
+			return false;
+		}
+
+		int paramCount = 8;
+		Oid paramTypes[8] = {
+			TEXTOID, TEXTOID, TEXTOID, TEXTOID,
+			TEXTOID, TEXTOID, TEXTOID, TEXTOID
+		};
+		const char *paramValues[8] = {
+			ee_nsp, ee_rel,
+			er_nsp, er_rel,
+			re_nsp, re_rel,
+			rr_nsp, rr_rel
+		};
+
+		if (!pgsql_execute_with_params(pgsql, sql,
+									   paramCount, paramTypes, paramValues,
+									   &context, &getTableArray))
+		{
+			log_error("Failed to list filtered-out (not-included) tables");
+			return false;
+		}
+
+		if (!context.parsedOk)
+		{
+			log_error("Failed to list filtered-out (not-included) tables");
+			return false;
+		}
+
+		return true;
+	}
+
+	if (filters->type == SOURCE_FILTER_TYPE_LIST_EXCL)
+	{
+		/* 12 params: incl_schema exact/re, excl_schema exact/re,
+		 *            EE/ER/RE/RR pairs for exclude-table filter */
+		char *incl_schema_exact = NULL, *incl_schema_re = NULL;
+		char *excl_schema_exact = NULL, *excl_schema_re = NULL;
+		char *ee_nsp = NULL, *ee_rel = NULL;
+		char *er_nsp = NULL, *er_rel = NULL;
+		char *re_nsp = NULL, *re_rel = NULL;
+		char *rr_nsp = NULL, *rr_rel = NULL;
+
+		if (!catalog_filter_schema_array(catalog, "incl_schema", false,
+										 &incl_schema_exact) ||
+			!catalog_filter_schema_array(catalog, "incl_schema", true,
+										 &incl_schema_re) ||
+			!catalog_filter_schema_array(catalog, "excl_schema", false,
+										 &excl_schema_exact) ||
+			!catalog_filter_schema_array(catalog, "excl_schema", true,
+										 &excl_schema_re))
+		{
+			log_error("Failed to build schema filter arrays for LIST_EXCL");
+			return false;
+		}
+
+		if (!catalog_filter_table_arrays(catalog, "excl_table",
+										 &ee_nsp, &ee_rel,
+										 &er_nsp, &er_rel,
+										 &re_nsp, &re_rel,
+										 &rr_nsp, &rr_rel))
+		{
+			log_error("Failed to build exclude-table filter arrays");
+			return false;
+		}
+
+		const char *sql = NULL;
+
+		if (!pgcopydb_sql_list_filtered_excl_tables(&sql))
+		{
+			return false;
+		}
+
+		int paramCount = 12;
+		Oid paramTypes[12] = {
+			TEXTOID, TEXTOID, TEXTOID, TEXTOID,
+			TEXTOID, TEXTOID, TEXTOID, TEXTOID,
+			TEXTOID, TEXTOID, TEXTOID, TEXTOID
+		};
+		const char *paramValues[12] = {
+			incl_schema_exact, incl_schema_re,
+			excl_schema_exact, excl_schema_re,
+			ee_nsp, ee_rel,
+			er_nsp, er_rel,
+			re_nsp, re_rel,
+			rr_nsp, rr_rel
+		};
+
+		if (!pgsql_execute_with_params(pgsql, sql,
+									   paramCount, paramTypes, paramValues,
+									   &context, &getTableArray))
+		{
+			log_error("Failed to list filtered-out (excluded) tables");
+			return false;
+		}
+
+		if (!context.parsedOk)
+		{
+			log_error("Failed to list filtered-out (excluded) tables");
+			return false;
+		}
+
+		return true;
+	}
+
+	/*
+	 * Main sourceDB query: list_source_tables.sql with 25 parameters.
+	 * $1 = namespace OIDs from s_namespace (populated by schema_list_schemas).
+	 * $2-$9   = include-only-table EE/ER/RE/RR pairs.
+	 * $10-$17 = exclude-table EE/ER/RE/RR pairs.
+	 * $18-$25 = exclude-table-data EE/ER/RE/RR pairs.
+	 */
+	char *nsp_oids = NULL;
+	int nsp_count = 0;
+
+	if (!catalog_s_namespace_oid_array(catalog, &nsp_oids, &nsp_count))
+	{
+		log_error("Failed to build namespace OID array");
+		return false;
+	}
+
+	char *incl_ee_nsp = NULL, *incl_ee_rel = NULL;
+	char *incl_er_nsp = NULL, *incl_er_rel = NULL;
+	char *incl_re_nsp = NULL, *incl_re_rel = NULL;
+	char *incl_rr_nsp = NULL, *incl_rr_rel = NULL;
+
+	char *excl_ee_nsp = NULL, *excl_ee_rel = NULL;
+	char *excl_er_nsp = NULL, *excl_er_rel = NULL;
+	char *excl_re_nsp = NULL, *excl_re_rel = NULL;
+	char *excl_rr_nsp = NULL, *excl_rr_rel = NULL;
+
+	char *xdat_ee_nsp = NULL, *xdat_ee_rel = NULL;
+	char *xdat_er_nsp = NULL, *xdat_er_rel = NULL;
+	char *xdat_re_nsp = NULL, *xdat_re_rel = NULL;
+	char *xdat_rr_nsp = NULL, *xdat_rr_rel = NULL;
+
+	if (!catalog_filter_table_arrays(catalog, "incl_table",
+									 &incl_ee_nsp, &incl_ee_rel,
+									 &incl_er_nsp, &incl_er_rel,
+									 &incl_re_nsp, &incl_re_rel,
+									 &incl_rr_nsp, &incl_rr_rel) ||
+		!catalog_filter_table_arrays(catalog, "excl_table",
+									 &excl_ee_nsp, &excl_ee_rel,
+									 &excl_er_nsp, &excl_er_rel,
+									 &excl_re_nsp, &excl_re_rel,
+									 &excl_rr_nsp, &excl_rr_rel) ||
+		!catalog_filter_table_arrays(catalog, "xdat_table",
+									 &xdat_ee_nsp, &xdat_ee_rel,
+									 &xdat_er_nsp, &xdat_er_rel,
+									 &xdat_re_nsp, &xdat_re_rel,
+									 &xdat_rr_nsp, &xdat_rr_rel))
+	{
+		log_error("Failed to build table filter arrays");
+		return false;
+	}
+
+	const char *sql = NULL;
+
+	if (!pgcopydb_sql_list_source_tables(&sql))
+	{
+		return false;
+	}
+
+	int paramCount = 25;
+	Oid paramTypes[25] = {
+		TEXTOID,                                /* $1  nsp_oids */
+		TEXTOID, TEXTOID,                       /* $2-$3  incl EE */
+		TEXTOID, TEXTOID,                       /* $4-$5  incl ER */
+		TEXTOID, TEXTOID,                       /* $6-$7  incl RE */
+		TEXTOID, TEXTOID,                       /* $8-$9  incl RR */
+		TEXTOID, TEXTOID,                       /* $10-$11 excl EE */
+		TEXTOID, TEXTOID,                       /* $12-$13 excl ER */
+		TEXTOID, TEXTOID,                       /* $14-$15 excl RE */
+		TEXTOID, TEXTOID,                       /* $16-$17 excl RR */
+		TEXTOID, TEXTOID,                       /* $18-$19 xdat EE */
+		TEXTOID, TEXTOID,                       /* $20-$21 xdat ER */
+		TEXTOID, TEXTOID,                       /* $22-$23 xdat RE */
+		TEXTOID, TEXTOID                        /* $24-$25 xdat RR */
+	};
+	const char *paramValues[25] = {
+		nsp_oids,
+		incl_ee_nsp, incl_ee_rel,
+		incl_er_nsp, incl_er_rel,
+		incl_re_nsp, incl_re_rel,
+		incl_rr_nsp, incl_rr_rel,
+		excl_ee_nsp, excl_ee_rel,
+		excl_er_nsp, excl_er_rel,
+		excl_re_nsp, excl_re_rel,
+		excl_rr_nsp, excl_rr_rel,
+		xdat_ee_nsp, xdat_ee_rel,
+		xdat_er_nsp, xdat_er_rel,
+		xdat_re_nsp, xdat_re_rel,
+		xdat_rr_nsp, xdat_rr_rel
+	};
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
 								   &context, &getTableArray))
 	{
 		log_error("Failed to list tables");
@@ -717,17 +931,26 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 
 /*
  * schema_list_sequences grabs the list of sequences from the given source
- * Postgres instance and allocates a SourceSequence array with the result of
- * the query.
+ * Postgres instance and stores the result in the SQLite catalog.
+ *
+ * Uses list_source_sequences.sql with two parameters:
+ *   $1::oid[] = table OIDs from catalog's s_table (NULL = no table filter)
+ *   $2::oid[] = namespace OIDs from catalog's s_namespace (NULL = no ns filter;
+ *               '{}'::oid[] = exclude standalone sequences, used for filtersDB)
+ *
+ * For sourceDB queries the namespace OIDs restrict standalone sequences to
+ * included schemas.  For filtersDB complement queries an empty array is passed
+ * so standalone sequences are excluded (matching prior behaviour).
  */
 bool
 schema_list_sequences(PGSQL *pgsql,
 					  SourceFilters *filters,
-					  DatabaseCatalog *catalog)
+					  DatabaseCatalog *catalog,
+					  DatabaseCatalog *keepDB)
 {
 	SourceSequenceArrayContext context = { { 0 }, catalog, false };
 
-	log_trace("schema_list_sequences");
+	log_trace("schema_list_sequences[%s]", filterTypeToString(filters->type));
 
 	if (pgsql->safeURI.uriParams.dbname != NULL)
 	{
@@ -735,35 +958,8 @@ schema_list_sequences(PGSQL *pgsql,
 				sizeof(context.datname));
 	}
 
-	SourceFilterType filterType = SOURCE_FILTER_TYPE_NONE;
-
 	switch (filters->type)
 	{
-		case SOURCE_FILTER_TYPE_NONE:
-		case SOURCE_FILTER_TYPE_EXCL_INDEX:
-		{
-			/* skip filters preparing (temp tables) */
-			break;
-		}
-
-		case SOURCE_FILTER_TYPE_INCL:
-		case SOURCE_FILTER_TYPE_EXCL:
-		case SOURCE_FILTER_TYPE_LIST_NOT_INCL:
-		case SOURCE_FILTER_TYPE_LIST_EXCL:
-		{
-			if (!prepareFilters(pgsql, filters))
-			{
-				log_error("Failed to prepare pgcopydb filters, "
-						  "see above for details");
-				return false;
-			}
-
-			filterType = filters->type;
-
-			break;
-		}
-
-		/* ignore "exclude-index" listing of filtered-out tables */
 		case SOURCE_FILTER_TYPE_LIST_EXCL_INDEX:
 		{
 			return true;
@@ -771,91 +967,87 @@ schema_list_sequences(PGSQL *pgsql,
 
 		default:
 		{
-			log_error("BUG: schema_list_sequences called with "
-					  "filtering type %d",
-					  filters->type);
-			return false;
+			break;
 		}
 	}
 
-	log_debug("listSourceSequencesSQL[%s]", filterTypeToString(filterType));
+	char *table_oids = NULL;
+	int table_count = 0;
 
-	const char *sql = NULL;
-
-	if (!pgcopydb_sql_list_source_sequences(filterType, &sql))
+	if (!catalog_s_table_oid_array(catalog, &table_oids, &table_count))
 	{
-		log_error("BUG: no SQL for list_source_sequences filter %d", filterType);
+		log_error("Failed to build table OID array for sequences query");
 		return false;
 	}
 
 	/*
-	 * A single sequence can be attached to more than one table, and it could
-	 * be that some of the tables are excluded and some of the tables are
-	 * included in our filtering. In that case we want to remove from the
-	 * SOURCE_FILTER_TYPE_LIST_EXCL list of sequences the sequences from the
-	 * SOURCE_FILTER_TYPE_EXCL list.
+	 * For filtersDB complement queries (LIST_NOT_INCL, LIST_EXCL) pass an
+	 * empty array for namespace OIDs so standalone sequences are not returned
+	 * (they are not excluded objects, the excluded objects are owned sequences).
+	 * For sourceDB queries pass the real namespace OIDs.
 	 */
-	PQExpBuffer buffer = NULL;
+	char *ns_oids = NULL;
+	int ns_count = 0;
 
-	if (filters->type == SOURCE_FILTER_TYPE_LIST_EXCL)
+	bool isFiltersDB = (filters->type == SOURCE_FILTER_TYPE_LIST_NOT_INCL ||
+						filters->type == SOURCE_FILTER_TYPE_LIST_EXCL);
+
+	if (isFiltersDB)
 	{
-		buffer = createPQExpBuffer();
-
-		const char *exclude = sql;
-		const char *keep = NULL;
-
-		if (!pgcopydb_sql_list_source_sequences(SOURCE_FILTER_TYPE_EXCL, &keep))
+		ns_oids = "{}";   /* empty array → standalone sequences excluded */
+		ns_count = 0;
+	}
+	else
+	{
+		if (!catalog_s_namespace_oid_array(catalog, &ns_oids, &ns_count))
 		{
-			log_error("BUG: no SQL for list_source_sequences filter EXCL");
-			(void) destroyPQExpBuffer(buffer);
+			log_error("Failed to build namespace OID array for sequences query");
 			return false;
 		}
-
-		char *sqlTmpl =
-			"select seqoid, "
-			"       format('%%I', nspname) as nspname, "
-			"       format('%%I', relname) as relname, "
-			"       restore_list_name, "
-			"       ownedby, attrelid, attroid "
-			"  from (%s) as exclude "
-			" where not exists "
-			" ( "
-			"   select 1 "
-			"     from (%s) as keep "
-			"    where keep.seqoid = exclude.seqoid "
-			"      and keep.ownedby is not distinct from exclude.ownedby "
-			"      and keep.attrelid is not distinct from exclude.attrelid "
-			"      and keep.attroid is not distinct from exclude.attroid "
-			" ) ";
-
-		appendPQExpBuffer(buffer, sqlTmpl, exclude, keep);
-
-		if (PQExpBufferBroken(buffer))
-		{
-			log_error("Failed to create SQL query: out of memory");
-			(void) destroyPQExpBuffer(buffer);
-			return false;
-		}
-
-		sql = buffer->data;
 	}
 
-	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+	/*
+	 * For LIST_EXCL complement queries, pass the sourceDB table OIDs as
+	 * keep_table_oids so the SQL can subtract sequences OWNED BY non-excluded
+	 * tables (e.g. a partitioned parent with relkind='p' that is absent from
+	 * s_table but whose sequence must still be created on the target).
+	 */
+	char *keep_table_oids = "{}";
+	int keep_count = 0;
+
+	if (filters->type == SOURCE_FILTER_TYPE_LIST_EXCL && keepDB != NULL)
+	{
+		if (!catalog_s_table_oid_array(keepDB, &keep_table_oids, &keep_count))
+		{
+			log_error("Failed to build keep table OID array for sequences query");
+			return false;
+		}
+	}
+
+	const char *sql = NULL;
+
+	if (!pgcopydb_sql_list_source_sequences(&sql))
+	{
+		return false;
+	}
+
+	int paramCount = 3;
+	Oid paramTypes[3] = { TEXTOID, TEXTOID, TEXTOID };
+	const char *paramValues[3] = { table_oids, ns_oids, keep_table_oids };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
 								   &context, &getSequenceArray))
 	{
 		log_error("Failed to list sequences");
-		(void) destroyPQExpBuffer(buffer);
 		return false;
 	}
 
 	if (!context.parsedOk)
 	{
 		log_error("Failed to list sequences");
-		(void) destroyPQExpBuffer(buffer);
 		return false;
 	}
-
-	(void) destroyPQExpBuffer(buffer);
 
 	return true;
 }
@@ -959,8 +1151,12 @@ schema_set_sequence_value(PGSQL *pgsql, SourceSequence *seq)
 
 /*
  * schema_list_all_indexes grabs the list of indexes from the given source
- * Postgres instance and allocates a SourceIndex array with the result of the
- * query.
+ * Postgres instance and stores the result in the SQLite catalog.
+ *
+ * Uses list_source_indexes.sql with three parameters:
+ *   $1::oid[] = table OIDs from s_table (NULL = no table filter)
+ *   $2::text[] = exclude-index nspname array (NULL = no excl-index filter)
+ *   $3::text[] = exclude-index relname array (NULL = no excl-index filter)
  */
 bool
 schema_list_all_indexes(PGSQL *pgsql,
@@ -969,30 +1165,56 @@ schema_list_all_indexes(PGSQL *pgsql,
 {
 	SourceIndexArrayContext context = { { 0 }, catalog, false };
 
-	log_trace("schema_list_all_indexes");
+	log_trace("schema_list_all_indexes[%s]", filterTypeToString(filters->type));
 
-	if (filters->type != SOURCE_FILTER_TYPE_NONE)
+	char *table_oids = NULL;
+	int table_count = 0;
+
+	if (!catalog_s_table_oid_array(catalog, &table_oids, &table_count))
 	{
-		if (!prepareFilters(pgsql, filters))
-		{
-			log_error("Failed to prepare pgcopydb filters, "
-					  "see above for details");
-			return false;
-		}
-	}
-
-	log_debug("listSourceIndexesSQL[%s]", filterTypeToString(filters->type));
-
-	const char *sql = NULL;
-
-	if (!pgcopydb_sql_list_source_indexes(filters->type, &sql))
-	{
-		log_error("BUG: no SQL for list_source_indexes filter %d",
-				  filters->type);
+		log_error("Failed to build table OID array for indexes query");
 		return false;
 	}
 
-	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+	if (!catalog_populate_filters(catalog, filters))
+	{
+		log_error("Failed to populate filter tables");
+		return false;
+	}
+
+	/* Build exclude-index arrays (nspname and relname in parallel; EE only) */
+	char *excl_idx_nsp = NULL;
+	char *excl_idx_rel = NULL;
+
+	if (!catalog_filter_table_arrays(catalog, "excl_index",
+									 &excl_idx_nsp, &excl_idx_rel,
+									 NULL, NULL, NULL, NULL, NULL, NULL))
+	{
+		log_error("Failed to build exclude-index filter arrays");
+		return false;
+	}
+
+	const char *sql = NULL;
+
+	if (!pgcopydb_sql_list_source_indexes(&sql))
+	{
+		return false;
+	}
+
+	/* for_filter=true means filtersDB path: excl_idx entries are INCLUDED */
+	bool for_filter = (filters->type == SOURCE_FILTER_TYPE_LIST_NOT_INCL ||
+					   filters->type == SOURCE_FILTER_TYPE_LIST_EXCL ||
+					   filters->type == SOURCE_FILTER_TYPE_LIST_EXCL_INDEX);
+	const char *for_filter_str = for_filter ? "true" : "false";
+
+	int paramCount = 4;
+	Oid paramTypes[4] = { TEXTOID, TEXTOID, TEXTOID, TEXTOID };
+	const char *paramValues[4] = {
+		table_oids, excl_idx_nsp, excl_idx_rel, for_filter_str
+	};
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
 								   &context, &getIndexArray))
 	{
 		log_error("Failed to list all indexes");
@@ -1010,9 +1232,13 @@ schema_list_all_indexes(PGSQL *pgsql,
 
 
 /*
- * schema_list_pg_depend recursively walks the pg_catalog.pg_depend view and
- * builds the list of objects that depend on tables that are filtered-out from
- * our operations.
+ * schema_list_pg_depend recursively walks pg_catalog.pg_depend and builds
+ * the list of objects that depend on tables in the catalog.  For filtersDB
+ * complement queries this is the list of objects that depend on filtered-out
+ * tables; for sourceDB queries it is unused (the depend table is empty).
+ *
+ * Uses list_source_depend.sql with one parameter:
+ *   $1::oid[] = table OIDs from s_table (NULL = no table filter → no rows)
  */
 bool
 schema_list_pg_depend(PGSQL *pgsql,
@@ -1021,58 +1247,52 @@ schema_list_pg_depend(PGSQL *pgsql,
 {
 	SourceDependArrayContext context = { { 0 }, catalog, false };
 
-	log_trace("schema_list_pg_depend");
+	log_trace("schema_list_pg_depend[%s]", filterTypeToString(filters->type));
 
 	switch (filters->type)
 	{
 		case SOURCE_FILTER_TYPE_NONE:
 		case SOURCE_FILTER_TYPE_EXCL_INDEX:
-		{
-			/* skip pg_depend computing entirely */
-			return true;
-		}
-
-		case SOURCE_FILTER_TYPE_INCL:
-		case SOURCE_FILTER_TYPE_EXCL:
-		case SOURCE_FILTER_TYPE_LIST_NOT_INCL:
-		case SOURCE_FILTER_TYPE_LIST_EXCL:
-		{
-			if (!prepareFilters(pgsql, filters))
-			{
-				log_error("Failed to prepare pgcopydb filters, "
-						  "see above for details");
-				return false;
-			}
-			break;
-		}
-
-		/* ignore "exclude-index" listing of filtered-out tables */
 		case SOURCE_FILTER_TYPE_LIST_EXCL_INDEX:
 		{
+			/* depend is only needed for filtersDB complement queries */
 			return true;
 		}
 
 		default:
 		{
-			log_error("BUG: schema_list_pg_depend called with "
-					  "filtering type %d",
-					  filters->type);
-			return false;
+			break;
 		}
 	}
 
-	log_debug("listSourceDependSQL[%s]", filterTypeToString(filters->type));
+	char *table_oids = NULL;
+	int table_count = 0;
 
-	const char *sql = NULL;
-
-	if (!pgcopydb_sql_list_source_depend(filters->type, &sql))
+	if (!catalog_s_class_oid_array(catalog, &table_oids, &table_count))
 	{
-		log_error("BUG: no SQL for list_source_depend filter %d",
-				  filters->type);
+		log_error("Failed to build table OID array for depend query");
 		return false;
 	}
 
-	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+	if (table_count == 0)
+	{
+		/* nothing to do when no filtered-out tables */
+		return true;
+	}
+
+	const char *sql = NULL;
+
+	if (!pgcopydb_sql_list_source_depend(&sql))
+	{
+		return false;
+	}
+
+	int paramCount = 1;
+	Oid paramTypes[1] = { TEXTOID };
+	const char *paramValues[1] = { table_oids };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
 								   &context, &getDependArray))
 	{
 		log_error("Failed to list table dependencies");
@@ -1372,269 +1592,6 @@ schema_fetch_table_checksum(PGSQL *pgsql, TableChecksum *sum, bool *done)
 	if (!pgsql_fetch_results(pgsql, done, &parseContext, &getTableChecksum))
 	{
 		log_error("Failed to fetch table checksum results");
-		return false;
-	}
-
-	return true;
-}
-
-
-/*
- * prepareFilters prepares the temporary tables that are needed on the Postgres
- * session where we want to implement a catalog query with filtering. The
- * filtering rules are then uploaded in those temp tables, and the filtering is
- * implemented with SQL joins.
- */
-static bool
-prepareFilters(PGSQL *pgsql, SourceFilters *filters)
-{
-	/*
-	 * Temporary tables only are available within a session, so we need a
-	 * multi-statement connection here.
-	 */
-	if (pgsql->connection == NULL)
-	{
-		/* open a multi-statements connection then */
-		pgsql->connectionStatementType = PGSQL_CONNECTION_MULTI_STATEMENT;
-	}
-	else if (pgsql->connectionStatementType != PGSQL_CONNECTION_MULTI_STATEMENT)
-	{
-		log_error("BUG: calling prepareFilters with a "
-				  "non PGSQL_CONNECTION_MULTI_STATEMENT connection");
-		pgsql_finish(pgsql);
-		return false;
-	}
-
-	/*
-	 * Resolve and normalise every filter name against the live source
-	 * catalogs before using them in temp-table uploads or pg_dump args.
-	 * The function is idempotent: it sets filters->normalized = true on
-	 * first success and returns immediately on subsequent calls.
-	 */
-	if (!filters->normalized)
-	{
-		if (!filters_validate_and_normalize(pgsql, filters))
-		{
-			log_error("Failed to validate and normalize filter names");
-			return false;
-		}
-	}
-
-	/* if the filters have already been prepared, we're good */
-	if (filters->prepared)
-	{
-		return true;
-	}
-
-	/*
-	 * First, create the temp tables.
-	 */
-	char *tempTables[] = {
-		"create temp table filter_exclude_schema(nspname name)",
-		"create temp table filter_include_only_schema(nspname name)",
-		"create temp table filter_include_only_table(nspname name, relname name)",
-		"create temp table filter_exclude_table(nspname name, relname name)",
-		"create temp table filter_exclude_table_data(nspname name, relname name)",
-		"create temp table filter_exclude_index(nspname name, relname name)",
-		NULL
-	};
-
-	for (int i = 0; tempTables[i] != NULL; i++)
-	{
-		if (!pgsql_execute(pgsql, tempTables[i]))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-	}
-
-	/*
-	 * Now, fill-in the temp tables with the data that we have.
-	 */
-	if (!prepareFilterCopyIncludeOnlySchema(pgsql, filters))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!prepareFilterCopyExcludeSchema(pgsql, filters))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	struct name_list_pair
-	{
-		char *name;
-		SourceFilterTableList *list;
-	}
-	nameListPair[] =
-	{
-		{ "filter_include_only_table", &(filters->includeOnlyTableList) },
-		{ "filter_exclude_table", &(filters->excludeTableList) },
-		{ "filter_exclude_table_data", &(filters->excludeTableDataList) },
-		{ "filter_exclude_index", &(filters->excludeIndexList) },
-		{ NULL, NULL },
-	};
-
-	for (int i = 0; nameListPair[i].name != NULL; i++)
-	{
-		if (!prepareFilterCopyTableList(pgsql,
-										nameListPair[i].list,
-										nameListPair[i].name))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-	}
-
-	/* mark the filters as prepared already */
-	filters->prepared = true;
-
-	return true;
-}
-
-
-/*
- * prepareFilterCopyExcludeSchema sends a COPY from STDIN query and then
- * uploads the local filters that we have in the pg_temp.filter_exclude_schema
- * table.
- */
-static bool
-prepareFilterCopyExcludeSchema(PGSQL *pgsql, SourceFilters *filters)
-{
-	if (filters->excludeSchemaList.count == 0)
-	{
-		return true;
-	}
-
-	char *qname = "\"pg_temp\".\"filter_exclude_schema\"";
-
-	if (!pg_copy_from_stdin(pgsql, qname))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	for (int i = 0; i < filters->excludeSchemaList.count; i++)
-	{
-		char *nspname = filters->excludeSchemaList.array[i].nspname;
-
-		if (!pg_copy_row_from_stdin(pgsql, "s", nspname))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-	}
-
-	if (!pg_copy_end(pgsql))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	return true;
-}
-
-
-/*
- * prepareFilterCopyIncludeOnlySchema sends a COPY from STDIN query and then
- * uploads the local filters that we have in the
- * pg_temp.filter_include_only_schema table.
- *
- * Then it prepares the pg_temp.filter_exclude_schema table with all the schema
- * names found in pg_namespace that are not in the include-only-schema list.
- */
-static bool
-prepareFilterCopyIncludeOnlySchema(PGSQL *pgsql, SourceFilters *filters)
-{
-	if (filters->includeOnlySchemaList.count == 0)
-	{
-		return true;
-	}
-
-	char *qname = "\"pg_temp\".\"filter_include_only_schema\"";
-
-	if (!pg_copy_from_stdin(pgsql, qname))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
-	{
-		char *nspname = filters->includeOnlySchemaList.array[i].nspname;
-
-		log_trace("prepareFilterCopyIncludeOnlySchema: \"%s\"", nspname);
-
-		if (!pg_copy_row_from_stdin(pgsql, "s", nspname))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-	}
-
-	if (!pg_copy_end(pgsql))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	char *sql =
-		"insert into \"pg_temp\".\"filter_exclude_schema\" "
-		"     select n.nspname "
-		"       from pg_namespace n "
-		"  left join \"pg_temp\".\"filter_include_only_schema\" inc "
-		"         on n.nspname = inc.nspname "
-		"      where inc.nspname is null ";
-
-	if (!pgsql_execute(pgsql, sql))
-	{
-		log_error("Failed to prepare include-only-schema filters, "
-				  "see above for details");
-		return false;
-	}
-
-	return true;
-}
-
-
-/*
- * prepareFilterCopyTableList sends a COPY from STDIN query and then uploads
- * the local filters that we have in the given target table.
- */
-static bool
-prepareFilterCopyTableList(PGSQL *pgsql,
-						   SourceFilterTableList *tableList,
-						   const char *temp_table_name)
-{
-	char qname[BUFSIZE] = { 0 };
-
-	sformat(qname, sizeof(qname), "\"pg_temp\".\"%s\"", temp_table_name);
-
-	if (!pg_copy_from_stdin(pgsql, qname))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	for (int i = 0; i < tableList->count; i++)
-	{
-		char *nspname = tableList->array[i].nspname;
-		char *relname = tableList->array[i].relname;
-
-		log_trace("\"%s\"\t\"%s\"", nspname, relname);
-
-		if (!pg_copy_row_from_stdin(pgsql, "ss", nspname, relname))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-	}
-
-	if (!pg_copy_end(pgsql))
-	{
-		/* errors have already been logged */
 		return false;
 	}
 

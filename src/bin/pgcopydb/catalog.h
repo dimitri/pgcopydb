@@ -336,7 +336,24 @@ bool catalog_add_s_attr_batch(DatabaseCatalog *catalog,
 bool catalog_s_table_oid_array(DatabaseCatalog *catalog,
 							   char **text,
 							   int *count);
+bool catalog_s_class_oid_array(DatabaseCatalog *catalog,
+							   char **text,
+							   int *count);
+bool catalog_s_namespace_oid_array(DatabaseCatalog *catalog,
+								   char **text,
+								   int *count);
 
+bool catalog_populate_filters(DatabaseCatalog *catalog, SourceFilters *filters);
+bool catalog_filter_schema_array(DatabaseCatalog *catalog,
+								 const char *section,
+								 bool use_re,
+								 char **out);
+bool catalog_filter_table_arrays(DatabaseCatalog *catalog,
+								 const char *section,
+								 char **ee_nsp, char **ee_rel,
+								 char **er_nsp, char **er_rel,
+								 char **re_nsp, char **re_rel,
+								 char **rr_nsp, char **rr_rel);
 bool catalog_lookup_s_attr_by_name(DatabaseCatalog *catalog,
 								   uint32_t reloid,
 								   const char *attname,

@@ -1,0 +1,15 @@
+-- Regression for the AND-vs-OR bug in list_schemas.sql: when
+-- [include-only-schema] mixes exact names with ~/regex/ patterns, exact-name
+-- schemas that do not match the regex must still reach the target.
+--
+-- include.ini has:
+--   [include-only-schema]
+--   public
+--   schema_name_20_chars   ← exact name, does NOT match ~/^seq$/
+--   ~/^seq$/
+--
+-- With the bug, the SQL required a schema to match BOTH incl_exact AND
+-- incl_re simultaneously.  schema_name_20_chars was in incl_exact but failed
+-- incl_re, so s_namespace contained only "seq" and the clone silently omitted
+-- public and schema_name_20_chars.
+select count(*) from pg_tables where schemaname = 'schema_name_20_chars';

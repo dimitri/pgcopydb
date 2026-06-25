@@ -36,6 +36,7 @@ typedef struct SourceFilterSchema
 typedef struct SourceFilterSchemaList
 {
 	int count;
+	int countOriginal;          /* count before pattern expansion (0 = no expansion) */
 	SourceFilterSchema *array;  /* malloc'ed area */
 } SourceFilterSchemaList;
 
@@ -49,6 +50,7 @@ typedef struct SourceFilterTable
 typedef struct SourceFilterTableList
 {
 	int count;
+	int countOriginal;          /* count before pattern expansion (0 = no expansion) */
 	SourceFilterTable *array;   /* malloc'ed area */
 } SourceFilterTableList;
 
@@ -63,6 +65,56 @@ typedef struct SourceFilterExtensionList
 	int count;
 	SourceFilterExtension *array;   /* malloc'ed area */
 } SourceFilterExtensionList;
+
+
+/*
+ * SourceFilterSchemaPattern holds a single POSIX ERE pattern for a schema
+ * name, parsed from an INI entry with the ~/pattern/ delimiter syntax.
+ * Patterns are non-anchored by default: ~/staging_/ matches any schema whose
+ * name contains "staging_".  Use ~/^staging_/ to anchor at the start.
+ *
+ * The regex is validated at parse time (compiled and immediately freed) but
+ * the actual matching is done server-side via PostgreSQL's ~ operator in
+ * filters_validate_and_normalize(), so no compiled regex_t is stored here.
+ */
+typedef struct SourceFilterSchemaPattern
+{
+	char nspname_re[BUFSIZE];   /* POSIX ERE pattern for the schema name */
+} SourceFilterSchemaPattern;
+
+typedef struct SourceFilterSchemaPatternList
+{
+	int count;
+	SourceFilterSchemaPattern *array;   /* malloc'ed area */
+} SourceFilterSchemaPatternList;
+
+
+/*
+ * SourceFilterTablePattern holds one row of the SQLite filter_*_pattern
+ * tables: exactly one of (nspname, nspname_re) is non-empty and exactly
+ * one of (relname, relname_re) is non-empty.
+ *
+ *   nspname[0]    != '\0' && nspname_re[0] == '\0'  -> exact schema match
+ *   nspname[0]    == '\0' && nspname_re[0] != '\0'  -> regex schema match
+ *   relname[0]    != '\0' && relname_re[0] == '\0'  -> exact table match
+ *   relname_re[0] != '\0' && relname[0]   == '\0'   -> regex table match
+ *
+ * Regexes are validated at parse time but matching is done server-side via
+ * PostgreSQL's ~ operator in filters_validate_and_normalize().
+ */
+typedef struct SourceFilterTablePattern
+{
+	char nspname[PG_NAMEDATALEN];   /* exact schema name, or empty */
+	char nspname_re[BUFSIZE];        /* POSIX ERE for schema, or empty */
+	char relname[PG_NAMEDATALEN];   /* exact table name, or empty */
+	char relname_re[BUFSIZE];        /* POSIX ERE for table, or empty */
+} SourceFilterTablePattern;
+
+typedef struct SourceFilterTablePatternList
+{
+	int count;
+	SourceFilterTablePattern *array;   /* malloc'ed area */
+} SourceFilterTablePatternList;
 
 
 /*
@@ -111,6 +163,19 @@ typedef struct SourceFilters
 	SourceFilterTableList excludeIndexList;
 	SourceFilterExtensionList excludeExtensionList;
 	SourceFilterExtensionList includeOnlyExtensionList;
+
+	/*
+	 * Regex pattern lists, parsed from ~/pattern/ INI entries.
+	 * filters_validate_and_normalize() expands each pattern by querying
+	 * pg_catalog and appending exact matches to the corresponding list above.
+	 * The pattern lists themselves are written to SQLite for debugging.
+	 */
+	SourceFilterSchemaPatternList includeOnlySchemaPatternList;
+	SourceFilterSchemaPatternList excludeSchemaPatternList;
+	SourceFilterTablePatternList includeOnlyTablePatternList;
+	SourceFilterTablePatternList excludeTablePatternList;
+	SourceFilterTablePatternList excludeTableDataPatternList;
+	SourceFilterTablePatternList excludeIndexPatternList;
 } SourceFilters;
 
 char * filterTypeToString(SourceFilterType type);
@@ -119,5 +184,11 @@ bool parse_filters(const char *filebname, SourceFilters *filters);
 bool filters_validate_and_normalize(PGSQL *pgsql, SourceFilters *filters);
 
 bool filters_as_json(SourceFilters *filters, JSON_Value *jsFilter);
+
+bool filter_entry_is_pattern(const char *entry);
+bool parse_filter_table_pattern(SourceFilterTablePattern *pattern,
+								const char *entry);
+bool parse_filter_schema_pattern(SourceFilterSchemaPattern *pattern,
+								 const char *entry);
 
 #endif  /* FILTERING_H */

@@ -24,6 +24,10 @@ Here is an inclusion based filter configuration example:
 .. code-block:: ini
   :linenos:
 
+  [include-only-schema]
+  public
+  ~/^audit_/
+
   [include-only-table]
   public.allcols
   public.csv
@@ -50,7 +54,7 @@ Here is an exclusion based filter configuration example:
   "schema"."name"
   schema.othername
   err.errors
-  public.serial
+  public.~/^tmp_/
 
   [exclude-index]
   schema.indexname
@@ -62,6 +66,47 @@ Here is an exclusion based filter configuration example:
   [exclude-extension]
   aiven_extras
 
+Pattern matching
+^^^^^^^^^^^^^^^^
+
+In any filter section that accepts schema-qualified names, each name component
+(schema or table) may be written as a regular-expression pattern using the
+syntax ``~/pattern/`` instead of a literal name.  The ``~/`` prefix and
+trailing ``/`` are the delimiters; everything between them is a POSIX extended
+regular expression matched with ``regcomp(3)`` / ``regexec(3)``.
+
+Patterns may appear as the schema part, the name part, or both:
+
+.. code-block:: ini
+
+  [exclude-table]
+  ; exact schema, regex table — excludes all tables starting with "tmp_" in public
+  public.~/^tmp_/
+
+  ; regex schema, exact table — excludes "audit_log" in any schema starting with "log"
+  ~/^log/.audit_log
+
+  ; regex schema, regex table — excludes any table ending with "_bak" in any "archive" schema
+  ~/archive/.~/_bak$/
+
+For ``[exclude-schema]`` and ``[include-only-schema]`` entries are bare schema
+names and the whole entry is treated as the pattern:
+
+.. code-block:: ini
+
+  [exclude-schema]
+  ; excludes every schema whose name starts with "tmp_"
+  ~/^tmp_/
+
+  [include-only-schema]
+  public
+  ; also include every schema whose name matches "audit_YYYY" (four digits)
+  ~/^audit_[0-9]{4}$/
+
+A pattern is matched against each object name from the source database catalog.
+Entries that resolve to zero matching objects are silently ignored; pgcopydb
+does not treat an unmatched pattern as an error.
+
 Filtering can be done with pgcopydb by using the following rules, which are
 also the name of the sections of the INI file.
 
@@ -72,7 +117,9 @@ This section allows listing the exclusive list of the source tables to copy
 to the target database. No other table will be processed by pgcopydb.
 
 Each line in that section should be a schema-qualified table name. `Postgres
-identifier quoting rules`__ can be used to avoid ambiguity.
+identifier quoting rules`__ can be used to avoid ambiguity.  Either the schema
+component or the table component (or both) may be a ``~/pattern/`` regex
+instead of a literal name; see `Pattern matching`_ above.
 
 __ https://www.postgresql.org/docs/current/sql-syntax-lexical.html#SQL-SYNTAX-IDENTIFIERS
 
@@ -90,18 +137,24 @@ This section allows adding schemas (Postgres namespaces) to the exclusion
 filters. All the tables that belong to any listed schema in this section are
 going to be ignored by the pgcopydb command.
 
+Each line is a bare schema name or a ``~/pattern/`` regex that is matched
+against schema names; see `Pattern matching`_ above.
+
 This section is not allowed when the section ``include-only-table`` is
 used.
 
 include-only-schema
 ^^^^^^^^^^^^^^^^^^^
 
-This section allows editing schema (Postgres namespaces) to the exclusion
-filters by listing the schema that are not going to be excluded. This is a
-syntaxic sugar facility that helps with entering a long list of schemas to
-exclude when a single schema is to be selected.
+This section restricts processing to the listed schemas: only tables that
+belong to one of the named schemas are copied; all others are skipped.  This
+is a syntactic shortcut for excluding every other schema without having to
+list them all under ``exclude-schema``.
 
-Despite the name, this section is an exclusion filter.
+Despite the name, this section is implemented as an exclusion filter.
+
+Each line is a bare schema name or a ``~/pattern/`` regex that is matched
+against schema names; see `Pattern matching`_ above.
 
 This section is not allowed when the section ``exclude-schema`` is used.
 
@@ -111,6 +164,10 @@ exclude-table
 This section allows to add a list of qualified table names to the exclusion
 filters. All the tables that are listed in the ``exclude-table`` section are
 going to be ignored by the pgcopydb command.
+
+Each line is a schema-qualified table name.  Either the schema component or
+the table component (or both) may be a ``~/pattern/`` regex; see `Pattern
+matching`_ above.
 
 This section is not allowed when the section ``include-only-table`` is
 used.
@@ -124,12 +181,20 @@ This section allows to add a list of qualified index names to the exclusion
 filters. It is then possible for pgcopydb to operate on a table and skip a
 single index definition that belong to a table that is still processed.
 
+Each line is a schema-qualified index name.  Either the schema component or
+the index-name component (or both) may be a ``~/pattern/`` regex; see
+`Pattern matching`_ below.
+
 exclude-table-data
 ^^^^^^^^^^^^^^^^^^
 
 This section allows to skip copying the data from a list of qualified table
 names. The schema, index, constraints, etc of the table are still copied
 over.
+
+Each line is a schema-qualified table name.  Either the schema component or
+the table component (or both) may be a ``~/pattern/`` regex; see `Pattern
+matching`_ above.
 
 NOTE: Materialized views are also considered as tables during the filtering.
 

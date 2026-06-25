@@ -2,6 +2,7 @@
  * src/bin/pgcopydb/pgsql.c
  *	 API for sending SQL commands to a PostgreSQL server
  */
+#include <regex.h>
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
@@ -23,6 +24,7 @@
 #include "cli_root.h"
 #include "defaults.h"
 #include "filtering.h"
+#include "sql_queries.h"
 #include "env_utils.h"
 #include "file_utils.h"
 #include "log.h"
@@ -5851,15 +5853,24 @@ filters_validate_and_normalize(PGSQL *pgsql, SourceFilters *filters)
 		return true;
 	}
 
-	int totalSchemas = filters->includeOnlySchemaList.count +
+	int exactSchemas = filters->includeOnlySchemaList.count +
 					   filters->excludeSchemaList.count;
 
-	int totalTables = filters->includeOnlyTableList.count +
+	int exactTables = filters->includeOnlyTableList.count +
 					  filters->excludeTableList.count +
 					  filters->excludeTableDataList.count +
 					  filters->excludeIndexList.count;
 
-	if (totalSchemas == 0 && totalTables == 0)
+	int patternSchemas = filters->includeOnlySchemaPatternList.count +
+						 filters->excludeSchemaPatternList.count;
+
+	int patternTables = filters->includeOnlyTablePatternList.count +
+						filters->excludeTablePatternList.count +
+						filters->excludeTableDataPatternList.count +
+						filters->excludeIndexPatternList.count;
+
+	if (exactSchemas == 0 && exactTables == 0 &&
+		patternSchemas == 0 && patternTables == 0)
 	{
 		filters->normalized = true;
 		return true;
@@ -5907,7 +5918,7 @@ filters_validate_and_normalize(PGSQL *pgsql, SourceFilters *filters)
 	 * The is_include_only column is true for includeOnlySchemaList entries
 	 * (li == 0) and false for excludeSchemaList entries (li == 1).
 	 */
-	if (totalSchemas > 0)
+	if (exactSchemas > 0)
 	{
 		appendPQExpBufferStr(query,
 							 "SELECT 'schema'::text AS kind,"
@@ -5963,7 +5974,7 @@ filters_validate_and_normalize(PGSQL *pgsql, SourceFilters *filters)
 	 *
 	 * The is_include_only column is true only for includeOnlyTableList (li == 0).
 	 */
-	if (totalTables > 0)
+	if (exactTables > 0)
 	{
 		if (!firstBranch)
 		{
@@ -6023,21 +6034,28 @@ filters_validate_and_normalize(PGSQL *pgsql, SourceFilters *filters)
 							 " ON n.oid = c.relnamespace");
 	}
 
-	FilterNormalizeContext context = {
-		.filters = filters,
-		.parsedOk = true,
-		.errorCount = 0
-	};
-
-	bool ok = pgsql_execute_with_params(pgsql, query->data, 0, NULL, NULL,
-										&context, &parseFilterNormalize);
-
-	destroyPQExpBuffer(query);
-
-	if (!ok || !context.parsedOk || context.errorCount > 0)
+	if (exactSchemas > 0 || exactTables > 0)
 	{
-		log_error("Failed to validate filter names against source catalogs");
-		return false;
+		FilterNormalizeContext context = {
+			.filters = filters,
+			.parsedOk = true,
+			.errorCount = 0
+		};
+
+		bool ok = pgsql_execute_with_params(pgsql, query->data, 0, NULL, NULL,
+											&context, &parseFilterNormalize);
+
+		destroyPQExpBuffer(query);
+
+		if (!ok || !context.parsedOk || context.errorCount > 0)
+		{
+			log_error("Failed to validate filter names against source catalogs");
+			return false;
+		}
+	}
+	else
+	{
+		destroyPQExpBuffer(query);
 	}
 
 	filters->normalized = true;
