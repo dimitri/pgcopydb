@@ -35,6 +35,22 @@ create table if not exists generated_column_test
 commit;
 
 begin;
+create table if not exists multi_delete_test
+(
+    id  bigint primary key,
+    val text
+);
+
+create table if not exists multi_delete_composite_test
+(
+    id1 bigint,
+    id2 bigint,
+    val text,
+    primary key (id1, id2)
+);
+commit;
+
+begin;
 -- table with single column to test update is not failing when value is not changed
 create table if not exists single_column_table
 (

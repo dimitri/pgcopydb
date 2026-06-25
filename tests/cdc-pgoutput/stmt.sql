@@ -15,6 +15,10 @@ UPDATE "public"."generated_column_test" SET "name" = $1, "email" = $2 WHERE "id"
 DELETE FROM "public"."generated_column_test" WHERE "id" = $1
 INSERT INTO "public"."single_column_table" ("id") overriding system value VALUES ($1), ($2)
 INSERT INTO "public"."multi_column_table" ("id", "name", "email") overriding system value VALUES ($1, $2, $3), ($4, $5, $6)
+INSERT INTO "public"."multi_delete_test" ("id", "val") overriding system value VALUES ($1, $2), ($3, $4), ($5, $6), ($7, $8), ($9, $10)
+DELETE FROM "public"."multi_delete_test" WHERE "id" IN ($1, $2, $3, $4, $5)
+INSERT INTO "public"."multi_delete_composite_test" ("id1", "id2", "val") overriding system value VALUES ($1, $2, $3), ($4, $5, $6), ($7, $8, $9)
+DELETE FROM "public"."multi_delete_composite_test" WHERE ("id1", "id2") IN (($1, $2), ($3, $4), ($5, $6))
 TRUNCATE ONLY "Sp1eCial .Char"."source1testing"
 
 INSERT INTO "Sp1eCial .Char"."source1testing" ("s0", "s""1") overriding system value VALUES ($1, $2), ($3, $4), ($5, $6), ($7, $8), ($9, $10)
