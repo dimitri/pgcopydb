@@ -3938,7 +3938,7 @@ OutputPluginToString(StreamOutputPlugin plugin)
 bool
 pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 									  ReplicationSlot *slot,
-                                      GUC *settings)
+									  GUC *settings)
 {
 	PGSQL *pgsql = &(client->pgsql);
 
