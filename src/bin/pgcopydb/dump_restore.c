@@ -229,7 +229,7 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 	 * used, SCHEMA entries are skipped here because they were already restored
 	 * in the first pass above.
 	 */
-	if (!copydb_write_restore_list(specs, PG_DUMP_SECTION_PRE_DATA))
+	if (!copydb_write_restore_list(specs, PG_DUMP_SECTION_PRE_DATA, NULL))
 	{
 		log_error("Failed to prepare the pg_restore --use-list catalogs, "
 				  "see above for details");
@@ -600,7 +600,10 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 		return false;
 	}
 
-	if (!copydb_write_restore_list(specs, PG_DUMP_SECTION_POST_DATA))
+	MatViewRefreshList matviewRefreshList = { 0 };
+
+	if (!copydb_write_restore_list(specs, PG_DUMP_SECTION_POST_DATA,
+								   &matviewRefreshList))
 	{
 		log_error("Failed to prepare the pg_restore --use-list catalogs, "
 				  "see above for details");
@@ -616,8 +619,19 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 					   specs->restoreOptions))
 	{
 		/* errors have already been logged */
+		free(matviewRefreshList.items);
 		return false;
 	}
+
+	/* Run REFRESH MATERIALIZED VIEW directly with the correct search_path. */
+	if (!copydb_refresh_materialized_views(specs, &matviewRefreshList))
+	{
+		log_error("Failed to refresh materialized views, see above for details");
+		free(matviewRefreshList.items);
+		return false;
+	}
+
+	free(matviewRefreshList.items);
 
 	/*
 	 * Some extensions such as timescaledb need a post restore step.
@@ -643,7 +657,8 @@ typedef struct RestoreListContext
 {
 	CopyDataSpec *specs;
 	FILE *outStream;
-	bool schemasOnly;   /* write only SCHEMA entries (first pass) */
+	bool schemasOnly;            /* write only SCHEMA entries (first pass) */
+	MatViewRefreshList *refreshList; /* non-NULL: collect REFRESH entries */
 } RestoreListContext;
 
 /*
@@ -652,7 +667,8 @@ typedef struct RestoreListContext
  * catalog that is meant to be used as pg_restore --use-list argument.
  */
 bool
-copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
+copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section,
+						  MatViewRefreshList *refreshList)
 {
 	char *dumpFilename = NULL;
 	char *listFilename = NULL;
@@ -720,7 +736,8 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 
 	RestoreListContext context = {
 		.specs = specs,
-		.outStream = out
+		.outStream = out,
+		.refreshList = refreshList
 	};
 
 	if (!archive_iter_toc(listOutFilename,
@@ -1001,6 +1018,55 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 				  item->restoreListName);
 	}
 
+	/*
+	 * Intercept non-filtered REFRESH MATERIALIZED VIEW entries: skip them
+	 * in the pg_restore list and collect them for direct execution with the
+	 * correct search_path.  pg_restore runs REFRESH with an empty
+	 * search_path, which breaks matviews whose definition embeds unqualified
+	 * object names inside text arguments (e.g. ts_stat()).
+	 */
+	if (!skip &&
+		item->desc == ARCHIVE_TAG_REFRESH_MATERIALIZED_VIEW &&
+		context->refreshList != NULL)
+	{
+		DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+		CatalogMatView matview = { 0 };
+
+		if (oid != 0 &&
+			catalog_lookup_s_matview_by_oid(sourceDB, &matview, oid) &&
+			matview.oid != 0)
+		{
+			MatViewRefreshList *list = context->refreshList;
+
+			if (list->count >= list->capacity)
+			{
+				int newCap = list->capacity == 0 ? 8 : list->capacity * 2;
+				MatViewRefreshItem *newItems = (MatViewRefreshItem *)
+											   realloc(list->items, newCap *
+													   sizeof(MatViewRefreshItem));
+
+				if (newItems == NULL)
+				{
+					log_error("Failed to allocate memory for matview refresh list");
+					return false;
+				}
+				list->items = newItems;
+				list->capacity = newCap;
+			}
+
+			MatViewRefreshItem *it = &list->items[list->count++];
+			it->oid = oid;
+			strlcpy(it->nspname, matview.nspname, sizeof(it->nspname));
+			strlcpy(it->relname, matview.relname, sizeof(it->relname));
+
+			skip = true;
+
+			log_debug("Deferring REFRESH MATERIALIZED VIEW \"%s\".\"%s\" "
+					  "(dumpId %d) for direct execution with correct search_path",
+					  matview.nspname, matview.relname, item->dumpId);
+		}
+	}
+
 	PQExpBuffer buf = createPQExpBuffer();
 
 	printfPQExpBuffer(buf, "%s%d; %u %u %s %s\n",
@@ -1027,6 +1093,118 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 	}
 
 	destroyPQExpBuffer(buf);
+
+	return true;
+}
+
+
+/*
+ * copydb_refresh_materialized_views runs REFRESH MATERIALIZED VIEW for each
+ * entry in the list, in the order they appear (pg_dump dependency order).
+ *
+ * Each REFRESH is run with a search_path that includes all user schemas so
+ * that unqualified object names embedded in function text arguments (e.g.
+ * ts_stat('SELECT ... FROM documents')) can be resolved correctly.
+ *
+ * pg_restore would run REFRESH with an empty search_path, which breaks these
+ * matviews (#484, #501).
+ */
+bool
+copydb_refresh_materialized_views(CopyDataSpec *specs,
+								  MatViewRefreshList *list)
+{
+	if (list == NULL || list->count == 0)
+	{
+		return true;
+	}
+
+	PGSQL pgsql = { 0 };
+
+	if (!pgsql_init(&pgsql, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * Keep the same connection open across the SET search_path and all
+	 * REFRESH statements so the search_path setting is visible to each one.
+	 * In SINGLE_STATEMENT mode (the default) pgsql_execute closes the
+	 * connection after every query, causing the next query to open a fresh
+	 * connection with the default empty search_path.
+	 */
+	pgsql.connectionStatementType = PGSQL_CONNECTION_MULTI_STATEMENT;
+
+	/*
+	 * Build a search_path from all user schemas in the target database so
+	 * that unqualified names in matview definitions resolve regardless of
+	 * which schema the view belongs to.
+	 */
+	char *sql =
+		"select string_agg(quote_ident(nspname), ', ' order by oid)"
+		"  from pg_catalog.pg_namespace"
+		" where nspname not like 'pg_%'"
+		"   and nspname <> 'information_schema'";
+
+	SingleValueResultContext pathCtx = {
+		.resultType = PGSQL_RESULT_STRING
+	};
+
+	if (!pgsql_execute_with_params(&pgsql, sql, 0, NULL, NULL,
+								   &pathCtx, &parseSingleValueResult))
+	{
+		log_error("Failed to query target schemas for matview refresh search_path");
+		pgsql_finish(&pgsql);
+		return false;
+	}
+
+	PQExpBuffer setCmd = createPQExpBuffer();
+
+	if (pathCtx.parsedOk && !pathCtx.isNull && pathCtx.strVal != NULL)
+	{
+		appendPQExpBuffer(setCmd, "set search_path to %s, pg_catalog",
+						  pathCtx.strVal);
+		free(pathCtx.strVal);
+	}
+	else
+	{
+		appendPQExpBufferStr(setCmd, "set search_path to pg_catalog");
+	}
+
+	bool ok = pgsql_execute(&pgsql, setCmd->data);
+	destroyPQExpBuffer(setCmd);
+
+	if (!ok)
+	{
+		log_error("Failed to set search_path for matview refresh");
+		pgsql_finish(&pgsql);
+		return false;
+	}
+
+	for (int i = 0; i < list->count; i++)
+	{
+		MatViewRefreshItem *it = &list->items[i];
+
+		char refreshSQL[2 * PG_NAMEDATALEN + 50];
+
+		sformat(refreshSQL, sizeof(refreshSQL),
+				"refresh materialized view \"%s\".\"%s\"",
+				it->nspname,
+				it->relname);
+
+		log_info("Refreshing materialized view \"%s\".\"%s\"",
+				 it->nspname, it->relname);
+
+		if (!pgsql_execute(&pgsql, refreshSQL))
+		{
+			log_error("Failed to refresh materialized view \"%s\".\"%s\"",
+					  it->nspname, it->relname);
+			pgsql_finish(&pgsql);
+			return false;
+		}
+	}
+
+	pgsql_finish(&pgsql);
 
 	return true;
 }

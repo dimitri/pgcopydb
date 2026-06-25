@@ -1,0 +1,15 @@
+-[ RECORD 1 ]----------+--
+mv_word_stats_has_rows | t
+
+-[ RECORD 1 ]-----------+--
+mv_author_summary_count | 3
+
+-[ RECORD 1 ]------+--
+mv_tag_stats_count | 3
+
+-[ RECORD 1 ]--------+--
+mv_combined_has_rows | t
+
+-[ RECORD 1 ]-----+--
+mv_final_has_rows | t
+

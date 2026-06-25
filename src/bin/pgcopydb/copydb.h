@@ -486,8 +486,25 @@ bool copydb_target_finalize_schema(CopyDataSpec *specs);
 bool copydb_objectid_has_been_processed_already(CopyDataSpec *specs,
 												ArchiveContentItem *item);
 
-bool copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section);
+typedef struct MatViewRefreshItem
+{
+	uint32_t oid;
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
+} MatViewRefreshItem;
+
+typedef struct MatViewRefreshList
+{
+	int count;
+	int capacity;
+	MatViewRefreshItem *items;
+} MatViewRefreshList;
+
+bool copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section,
+							   MatViewRefreshList *refreshList);
 bool copydb_write_schemas_restore_list(CopyDataSpec *specs);
+bool copydb_refresh_materialized_views(CopyDataSpec *specs,
+									   MatViewRefreshList *list);
 
 /* sequences.c */
 bool copydb_copy_all_sequences(CopyDataSpec *specs, bool reset);
