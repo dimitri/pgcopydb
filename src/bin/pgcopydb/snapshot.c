@@ -455,15 +455,7 @@ copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 	}
 
 	/* now create the replication slot, exporting the snapshot */
-	if (!pgsql_server_version(&stream->pgsql))
-	{
-		return false;
-	}
-
-	GUC *settings =
-		stream->pgsql.pgversion_num < 90600 ? srcSettings95 : srcSettings;
-
-	if (!pgsql_create_logical_replication_slot(stream, slot, settings))
+	if (!pgsql_create_logical_replication_slot(stream, slot))
 	{
 		log_error("Failed to create a logical replication slot "
 				  "and export a snapshot, see above for details");

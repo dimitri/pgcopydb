@@ -518,8 +518,7 @@ typedef struct ReplicationSlot
 } ReplicationSlot;
 
 bool pgsql_create_logical_replication_slot(LogicalStreamClient *client,
-										   ReplicationSlot *slot,
-										   GUC *settings);
+										   ReplicationSlot *slot);
 
 bool pgsql_timestamptz_to_string(TimestampTz ts, char *str, size_t size);
 

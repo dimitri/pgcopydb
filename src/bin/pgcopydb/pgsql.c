@@ -3924,6 +3924,26 @@ OutputPluginToString(StreamOutputPlugin plugin)
 
 
 /*
+ * GUC settings applied to the replication connection before issuing
+ * CREATE_REPLICATION_SLOT, so that server-level timeouts (most importantly
+ * idle_in_transaction_session_timeout) do not abort slot creation.
+ *
+ * idle_in_transaction_session_timeout was introduced in PG9.6, so the _95
+ * variant is used for older servers.
+ */
+static GUC replicationSlotSettings[] = {
+	{ "statement_timeout", "0" },
+	{ "idle_in_transaction_session_timeout", "0" },
+	{ NULL, NULL }
+};
+
+static GUC replicationSlotSettings95[] = {
+	{ "statement_timeout", "0" },
+	{ NULL, NULL }
+};
+
+
+/*
  * Send the CREATE_REPLICATION_SLOT logical replication command.
  *
  * This is a Postgres 9.6 compatibility function.
@@ -3937,8 +3957,7 @@ OutputPluginToString(StreamOutputPlugin plugin)
  */
 bool
 pgsql_create_logical_replication_slot(LogicalStreamClient *client,
-									  ReplicationSlot *slot,
-									  GUC *settings)
+									  ReplicationSlot *slot)
 {
 	PGSQL *pgsql = &(client->pgsql);
 
@@ -3963,7 +3982,17 @@ pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 		return false;
 	}
 
-	/* also set our GUC values for the source connection */
+	/*
+	 * Set GUCs to clear any restrictive server-level timeouts before the slot
+	 * command.  Use PQserverVersion() (no SQL query) to pick the right set:
+	 * idle_in_transaction_session_timeout only exists in PG9.6+.  Running a
+	 * SELECT on the replication connection is avoided on purpose — walsender
+	 * on older servers restricts the SQL syntax it accepts.
+	 */
+	GUC *settings = PQserverVersion(pgsql->connection) < 90600
+					? replicationSlotSettings95
+					: replicationSlotSettings;
+
 	if (!pgsql_set_gucs(pgsql, settings))
 	{
 		log_fatal("Failed to set our GUC settings on the source connection, "
