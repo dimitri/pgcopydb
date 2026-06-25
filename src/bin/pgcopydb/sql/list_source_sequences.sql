@@ -1,9 +1,16 @@
 -- $1::oid[] : table OIDs from s_table (NULL means no table filter)
 -- $2::oid[] : namespace OIDs from s_namespace (NULL means no namespace filter)
+-- $3::oid[] : "keep" table OIDs — when non-empty, subtract sequences that are
+--             OWNED BY a table not in the excluded set ($1).  Used for
+--             SOURCE_FILTER_TYPE_LIST_EXCL to prevent placing sequences owned
+--             by non-excluded tables (e.g. a partitioned parent, relkind='p',
+--             which is absent from s_table) into filtersDB.  Pass '{}' when
+--             no subtraction is needed.
 WITH
  filters AS (
      SELECT $1::oid[] AS table_oids,
-            $2::oid[] AS namespace_oids
+            $2::oid[] AS namespace_oids,
+            $3::oid[] AS keep_table_oids
  ),
  seqs AS (
     SELECT s.oid AS seqoid,
@@ -101,6 +108,27 @@ SELECT s.seqoid,
              AND d2x.classid = 'pg_attrdef'::regclass
              AND at2.attrelid = ANY(f.table_oids)
       ))
+ )
+
+   -- Subtract sequences that should not be placed into filtersDB.
+   -- When keep_table_oids is non-empty (LIST_EXCL complement queries), drop
+   -- any sequence whose OWNED BY table (r1) is NOT in the excluded set
+   -- (table_oids).  This handles sequences OWNED BY non-excluded objects such
+   -- as a partitioned parent table (relkind='p', absent from s_table).
+   --
+   -- Example: payment_payment_id_seq is OWNED BY payment (partitioned parent,
+   -- NOT in the excluded payment_p* set) and also used as DEFAULT by the
+   -- excluded payment_p* partitions.  Without this clause it lands in filtersDB
+   -- and catalog_prepare_filter wrongly excludes CREATE SEQUENCE for it.
+   --
+   -- Note: we intentionally do NOT subtract based on "used as DEFAULT by a
+   -- non-excluded table" — that case (e.g. app.foo_id_seq shared via LIKE
+   -- INCLUDING ALL) is handled in catalog_prepare_filter instead.
+ AND NOT (
+     f.keep_table_oids IS NOT NULL
+     AND cardinality(f.keep_table_oids) > 0
+     AND r1.oid IS NOT NULL
+     AND NOT r1.oid = ANY(f.table_oids)
  )
 
  ORDER BY nspname, relname;

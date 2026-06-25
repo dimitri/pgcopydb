@@ -945,7 +945,8 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 bool
 schema_list_sequences(PGSQL *pgsql,
 					  SourceFilters *filters,
-					  DatabaseCatalog *catalog)
+					  DatabaseCatalog *catalog,
+					  DatabaseCatalog *keepDB)
 {
 	SourceSequenceArrayContext context = { { 0 }, catalog, false };
 
@@ -1005,6 +1006,24 @@ schema_list_sequences(PGSQL *pgsql,
 		}
 	}
 
+	/*
+	 * For LIST_EXCL complement queries, pass the sourceDB table OIDs as
+	 * keep_table_oids so the SQL can subtract sequences OWNED BY non-excluded
+	 * tables (e.g. a partitioned parent with relkind='p' that is absent from
+	 * s_table but whose sequence must still be created on the target).
+	 */
+	char *keep_table_oids = "{}";
+	int keep_count = 0;
+
+	if (filters->type == SOURCE_FILTER_TYPE_LIST_EXCL && keepDB != NULL)
+	{
+		if (!catalog_s_table_oid_array(keepDB, &keep_table_oids, &keep_count))
+		{
+			log_error("Failed to build keep table OID array for sequences query");
+			return false;
+		}
+	}
+
 	const char *sql = NULL;
 
 	if (!pgcopydb_sql_list_source_sequences(&sql))
@@ -1012,9 +1031,9 @@ schema_list_sequences(PGSQL *pgsql,
 		return false;
 	}
 
-	int paramCount = 2;
-	Oid paramTypes[2] = { TEXTOID, TEXTOID };
-	const char *paramValues[2] = { table_oids, ns_oids };
+	int paramCount = 3;
+	Oid paramTypes[3] = { TEXTOID, TEXTOID, TEXTOID };
+	const char *paramValues[3] = { table_oids, ns_oids, keep_table_oids };
 
 	if (!pgsql_execute_with_params(pgsql, sql,
 								   paramCount, paramTypes, paramValues,
