@@ -1,11 +1,11 @@
 -- $1::oid[] : table OIDs from s_table (NULL means no table filter)
 -- $2::oid[] : namespace OIDs from s_namespace (NULL means no namespace filter)
--- $3::oid[] : "keep" table OIDs — when non-empty, subtract sequences that are
---             OWNED BY a table not in the excluded set ($1).  Used for
---             SOURCE_FILTER_TYPE_LIST_EXCL to prevent placing sequences owned
---             by non-excluded tables (e.g. a partitioned parent, relkind='p',
---             which is absent from s_table) into filtersDB.  Pass '{}' when
---             no subtraction is needed.
+-- $3::oid[] : "keep" table OIDs — when non-empty, subtract sequences owned by
+--             or used as DEFAULT by a non-excluded table.  Used for
+--             SOURCE_FILTER_TYPE_LIST_EXCL to prevent landing sequences that
+--             belong to non-excluded tables (e.g. a partitioned parent,
+--             relkind='p', absent from s_table) into filtersDB.  Pass '{}'
+--             when no subtraction is needed.
 WITH
  filters AS (
      SELECT $1::oid[] AS table_oids,
@@ -112,23 +112,39 @@ SELECT s.seqoid,
 
    -- Subtract sequences that should not be placed into filtersDB.
    -- When keep_table_oids is non-empty (LIST_EXCL complement queries), drop
-   -- any sequence whose OWNED BY table (r1) is NOT in the excluded set
-   -- (table_oids).  This handles sequences OWNED BY non-excluded objects such
-   -- as a partitioned parent table (relkind='p', absent from s_table).
+   -- any sequence that is "owned" (directly or via DEFAULT) by a non-excluded
+   -- table.  Two cases:
    --
-   -- Example: payment_payment_id_seq is OWNED BY payment (partitioned parent,
-   -- NOT in the excluded payment_p* set) and also used as DEFAULT by the
-   -- excluded payment_p* partitions.  Without this clause it lands in filtersDB
-   -- and catalog_prepare_filter wrongly excludes CREATE SEQUENCE for it.
+   -- Case 1: sequence has an explicit OWNED BY (r1.oid IS NOT NULL) pointing
+   --         to a table that is NOT in the excluded set.
    --
-   -- Note: we intentionally do NOT subtract based on "used as DEFAULT by a
-   -- non-excluded table" — that case (e.g. app.foo_id_seq shared via LIKE
-   -- INCLUDING ALL) is handled in catalog_prepare_filter instead.
+   -- Case 2: sequence has no OWNED BY (r1.oid IS NULL) but at least one
+   --         non-excluded table uses it as a column DEFAULT.  This covers
+   --         partitioned parents whose child partitions are excluded but whose
+   --         parent is not.  For example, payment_payment_id_seq has no OWNED
+   --         BY in pagila but is DEFAULT on both payment (non-excluded) and
+   --         payment_p* (excluded).  Without this clause it lands in filtersDB
+   --         via condition 5 and catalog_prepare_filter wrongly suppresses
+   --         CREATE SEQUENCE, causing payment to fail with "relation does not
+   --         exist".  We scan ALL attrdef entries (not just the d2 LATERAL
+   --         pick) to avoid OID-order sensitivity.
  AND NOT (
      f.keep_table_oids IS NOT NULL
      AND cardinality(f.keep_table_oids) > 0
-     AND r1.oid IS NOT NULL
-     AND NOT r1.oid = ANY(f.table_oids)
+     AND (
+         (r1.oid IS NOT NULL AND NOT r1.oid = ANY(f.table_oids))
+         OR (r1.oid IS NULL AND EXISTS (
+             SELECT 1
+               FROM pg_depend d3
+               JOIN pg_attrdef a3 ON a3.oid = d3.objid
+               JOIN pg_attribute at3 ON at3.attrelid = a3.adrelid
+                AND at3.attnum = a3.adnum
+              WHERE d3.refobjid = s.seqoid
+                AND d3.refclassid = 'pg_class'::regclass
+                AND d3.classid = 'pg_attrdef'::regclass
+                AND NOT at3.attrelid = ANY(f.table_oids)
+         ))
+     )
  )
 
  ORDER BY nspname, relname;
