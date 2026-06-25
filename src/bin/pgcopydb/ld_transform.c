@@ -1428,27 +1428,15 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 
 
 /*
- * coalesceLogicalTransactionStatement appends a new entry to an existing tuple
- * array created during the last INSERT statement in a logical transaction.
- *
- * This functionality enables the generation of multi-values INSERT or COPY
- * commands, enhancing efficiency.
- *
- * Important: Before invoking this function, ensure that validation is performed
- * using canCoalesceLogicalTransactionStatement.
+ * appendValuesArray appends the first entry of newValuesArray into
+ * lastValuesArray, resizing the backing array with doubling if needed.
+ * The moved entry is removed from newValuesArray (count set to 0) so that
+ * it is not freed when the source statement is released.
  */
 static bool
-coalesceLogicalTransactionStatement(LogicalTransaction *txn,
-									LogicalTransactionStatement *new)
+appendValuesArray(LogicalMessageValuesArray *lastValuesArray,
+				  LogicalMessageValuesArray *newValuesArray)
 {
-	LogicalTransactionStatement *last = txn->last;
-
-	LogicalMessageValuesArray *lastValuesArray =
-		&(last->stmt.insert.new.array->values);
-
-	LogicalMessageValuesArray *newValuesArray =
-		&(new->stmt.insert.new.array->values);
-
 	int capacity = lastValuesArray->capacity;
 	LogicalMessageValues *array = lastValuesArray->array;
 
@@ -1493,6 +1481,42 @@ coalesceLogicalTransactionStatement(LogicalTransaction *txn,
 
 
 /*
+ * coalesceLogicalTransactionStatement appends a new entry to an existing tuple
+ * array created during the last INSERT or DELETE statement in a logical
+ * transaction.
+ *
+ * This functionality enables the generation of multi-values INSERT/COPY
+ * commands and multi-row DELETE ... WHERE pk IN (...) statements, enhancing
+ * efficiency.
+ *
+ * Important: Before invoking this function, ensure that validation is performed
+ * using canCoalesceLogicalTransactionStatement.
+ */
+static bool
+coalesceLogicalTransactionStatement(LogicalTransaction *txn,
+									LogicalTransactionStatement *new)
+{
+	LogicalTransactionStatement *last = txn->last;
+
+	if (last->action == STREAM_ACTION_INSERT)
+	{
+		return appendValuesArray(&(last->stmt.insert.new.array->values),
+								 &(new->stmt.insert.new.array->values));
+	}
+	else if (last->action == STREAM_ACTION_DELETE)
+	{
+		return appendValuesArray(&(last->stmt.delete.old.array->values),
+								 &(new->stmt.delete.old.array->values));
+	}
+
+	/* should not be reached */
+	log_error("BUG: coalesceLogicalTransactionStatement called for action %c",
+			  last->action);
+	return false;
+}
+
+
+/*
  * canCoalesceLogicalTransactionStatement checks the new statement is
  * same as the last statement in the txn by comparing the relation name,
  * column count and column names.
@@ -1505,62 +1529,142 @@ canCoalesceLogicalTransactionStatement(LogicalTransaction *txn,
 {
 	LogicalTransactionStatement *last = txn->last;
 
-	/* TODO: Support UPDATE and DELETE */
-	if (last->action != STREAM_ACTION_INSERT ||
-		new->action != STREAM_ACTION_INSERT)
+	/* Only coalesce same-action pairs */
+	if (last->action != new->action)
 	{
 		return false;
 	}
 
-	LogicalMessageInsert *lastInsert = &last->stmt.insert;
-	LogicalMessageInsert *newInsert = &new->stmt.insert;
-
-	/* Last and current statements must target same relation */
-	if (!streq(lastInsert->table.nspname, newInsert->table.nspname) ||
-		!streq(lastInsert->table.relname, newInsert->table.relname))
+	if (last->action == STREAM_ACTION_INSERT)
 	{
-		return false;
-	}
+		LogicalMessageInsert *lastInsert = &last->stmt.insert;
+		LogicalMessageInsert *newInsert = &new->stmt.insert;
 
-	LogicalMessageTuple *lastInsertColumns = lastInsert->new.array;
-	LogicalMessageTuple *newInsertColumns = newInsert->new.array;
-
-	/* Last and current statements must have same number of columns */
-	if (lastInsertColumns->attributes.count != newInsertColumns->attributes.count)
-	{
-		return false;
-	}
-
-	LogicalMessageValuesArray *lastValuesArray = &(lastInsert->new.array->values);
-
-	/*
-	 * Check if adding the new statement would exceed libpq's limit on the total
-	 * number of parameters allowed in a single PQsendPrepare call.
-	 * If it would exceed the limit, return false to indicate that coalescing
-	 * should not be performed.
-	 *
-	 * TODO: This parameter limit check is not applicable for COPY operations.
-	 * It should be removed once we switch to using COPY.
-	 */
-	if (((lastValuesArray->count + 1) * lastInsertColumns->attributes.count) >
-		PQ_QUERY_PARAM_MAX_LIMIT)
-	{
-		return false;
-	}
-
-
-	/* Last and current statements cols must have same name and order */
-	for (int i = 0; i < lastInsertColumns->attributes.count; i++)
-	{
-		LogicalMessageAttribute *lastAttr = &(lastInsertColumns->attributes.array[i]);
-		LogicalMessageAttribute *newAttr = &(newInsertColumns->attributes.array[i]);
-		if (!streq(lastAttr->attname, newAttr->attname))
+		/* Last and current statements must target same relation */
+		if (!streq(lastInsert->table.nspname, newInsert->table.nspname) ||
+			!streq(lastInsert->table.relname, newInsert->table.relname))
 		{
 			return false;
 		}
+
+		LogicalMessageTuple *lastInsertColumns = lastInsert->new.array;
+		LogicalMessageTuple *newInsertColumns = newInsert->new.array;
+
+		/* Last and current statements must have same number of columns */
+		if (lastInsertColumns->attributes.count != newInsertColumns->attributes.count)
+		{
+			return false;
+		}
+
+		LogicalMessageValuesArray *lastValuesArray = &(lastInsert->new.array->values);
+
+		/*
+		 * Check if adding the new statement would exceed libpq's limit on the
+		 * total number of parameters allowed in a single PQsendPrepare call.
+		 *
+		 * TODO: This parameter limit check is not applicable for COPY
+		 * operations. It should be removed once we switch to using COPY.
+		 */
+		if (((lastValuesArray->count + 1) * lastInsertColumns->attributes.count) >
+			PQ_QUERY_PARAM_MAX_LIMIT)
+		{
+			return false;
+		}
+
+		/* Last and current statements cols must have same name and order */
+		for (int i = 0; i < lastInsertColumns->attributes.count; i++)
+		{
+			LogicalMessageAttribute *lastAttr =
+				&(lastInsertColumns->attributes.array[i]);
+			LogicalMessageAttribute *newAttr =
+				&(newInsertColumns->attributes.array[i]);
+
+			if (!streq(lastAttr->attname, newAttr->attname))
+			{
+				return false;
+			}
+		}
+
+		return true;
 	}
 
-	return true;
+	if (last->action == STREAM_ACTION_DELETE)
+	{
+		LogicalMessageDelete *lastDelete = &last->stmt.delete;
+		LogicalMessageDelete *newDelete = &new->stmt.delete;
+
+		/* Both must target the same relation */
+		if (!streq(lastDelete->table.nspname, newDelete->table.nspname) ||
+			!streq(lastDelete->table.relname, newDelete->table.relname))
+		{
+			return false;
+		}
+
+		LogicalMessageTuple *lastTuple = lastDelete->old.array;
+		LogicalMessageTuple *newTuple = newDelete->old.array;
+
+		/* Same number of identity columns */
+		if (lastTuple->attributes.count != newTuple->attributes.count)
+		{
+			return false;
+		}
+
+		int colCount = newTuple->attributes.count;
+		LogicalMessageValuesArray *lastValuesArray = &(lastTuple->values);
+
+		/* Parameter count limit: same reasoning as INSERT */
+		if (((lastValuesArray->count + 1) * colCount) > PQ_QUERY_PARAM_MAX_LIMIT)
+		{
+			return false;
+		}
+
+		/*
+		 * The multi-row DELETE uses WHERE (k1, k2) IN (($1,$2), ($3,$4)), which
+		 * does not handle NULLs (NULL = NULL is false in SQL).  For primary-key
+		 * tables this never matters: PRIMARY KEY implies NOT NULL.  For
+		 * REPLICA IDENTITY FULL or nullable REPLICA IDENTITY INDEX columns,
+		 * fall back to per-row by refusing to coalesce any NULL-bearing row.
+		 *
+		 * Check the incoming (new) row unconditionally.  Check the existing
+		 * batch's first row when the batch has exactly one row (i.e., the first
+		 * coalesce into this batch): once count > 1 the batch is null-free by
+		 * construction (every prior new row passed the same check).
+		 */
+		LogicalMessageValues *newValues = &(newTuple->values.array[0]);
+		for (int v = 0; v < newValues->cols; v++)
+		{
+			if (newValues->array[v].isNull)
+			{
+				return false;
+			}
+		}
+
+		if (lastValuesArray->count == 1)
+		{
+			LogicalMessageValues *existingFirstRow = &(lastValuesArray->array[0]);
+			for (int v = 0; v < existingFirstRow->cols; v++)
+			{
+				if (existingFirstRow->array[v].isNull)
+				{
+					return false;
+				}
+			}
+		}
+
+		/* Same identity column names in the same order */
+		for (int i = 0; i < colCount; i++)
+		{
+			if (!streq(lastTuple->attributes.array[i].attname,
+					   newTuple->attributes.array[i].attname))
+			{
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	return false;
 }
 
 
@@ -2254,7 +2358,21 @@ stream_write_update(bool replayNoOpUpdates,
 
 
 /*
- * stream_write_delete writes an DELETE statement.
+ * stream_write_delete writes a DELETE statement.
+ *
+ * When multiple DELETE rows for the same table have been coalesced into a
+ * single LogicalMessageDelete (old->values.count > 1), a single batched
+ * statement is emitted:
+ *
+ *   Single-column identity:
+ *     DELETE FROM ns.tbl WHERE col IN ($1, $2, $3)
+ *
+ *   Multi-column identity:
+ *     DELETE FROM ns.tbl WHERE (k1, k2) IN (($1, $2), ($3, $4))
+ *
+ * The batch form is only used when all identity values are non-NULL, which
+ * canCoalesceLogicalTransactionStatement guarantees.  A single row with NULL
+ * identity values falls through to the per-row path which uses IS NULL.
  */
 static bool
 stream_write_delete(ReplayDBStmt *replayStmt, LogicalMessageDelete *delete)
@@ -2262,50 +2380,47 @@ stream_write_delete(ReplayDBStmt *replayStmt, LogicalMessageDelete *delete)
 	strlcpy(replayStmt->nspname, delete->table.nspname, sizeof(replayStmt->nspname));
 	strlcpy(replayStmt->relname, delete->table.relname, sizeof(replayStmt->relname));
 
-	/* loop over DELETE statements targeting the same table */
+	/* loop over distinct identity schemas (count == 1 in all practical cases) */
 	for (int s = 0; s < delete->old.count; s++)
 	{
 		LogicalMessageTuple *old = &(delete->old.array[s]);
+		int rowCount = old->values.count;
+		int colCount = old->attributes.count;
 
 		PQExpBuffer buf = createPQExpBuffer();
 		JSON_Value *js = json_value_init_array();
 		JSON_Array *jsArray = json_value_get_array(js);
 
-		/*
-		 * First, the PREPARE part.
-		 */
 		appendPQExpBuffer(buf, "DELETE FROM %s.%s WHERE ",
 						  delete->table.nspname,
 						  delete->table.relname);
 
-		int pos = 0;
-
-		for (int r = 0; r < old->values.count; r++)
+		if (rowCount == 1)
 		{
-			LogicalMessageValues *values = &(old->values.array[r]);
+			/*
+			 * Single-row path: col1 = $1 AND col2 = $2 ...
+			 * NULL identity values are rendered as col IS NULL.
+			 */
+			LogicalMessageValues *values = &(old->values.array[0]);
+			int pos = 0;
 
-			/* now loop over column values for this VALUES row */
 			for (int v = 0; v < values->cols; v++)
 			{
 				LogicalMessageValue *value = &(values->array[v]);
 				LogicalMessageAttribute *attr = &(old->attributes.array[v]);
 
-				if (old->attributes.count <= v)
+				if (colCount <= v)
 				{
 					log_error("Failed to write DELETE statement with more "
 							  "VALUES (%d) than COLUMNS (%d)",
 							  values->cols,
-							  old->attributes.count);
+							  colCount);
 					destroyPQExpBuffer(buf);
 					return false;
 				}
 
 				if (value->isNull)
 				{
-					/*
-					 * Attributes with the value `NULL` require `IS NULL`
-					 * instead of `=` in the WHERE clause.
-					 */
 					appendPQExpBuffer(buf, "%s%s IS NULL",
 									  v > 0 ? " and " : "",
 									  attr->attname);
@@ -2319,11 +2434,77 @@ stream_write_delete(ReplayDBStmt *replayStmt, LogicalMessageDelete *delete)
 
 					if (!stream_add_value_in_json_array(value, jsArray))
 					{
-						/* errors have already been logged */
 						destroyPQExpBuffer(buf);
 						return false;
 					}
 				}
+			}
+		}
+		else
+		{
+			/*
+			 * Multi-row batch path.  All values are non-NULL (enforced by
+			 * canCoalesceLogicalTransactionStatement).
+			 */
+			int pos = 0;
+
+			if (colCount == 1)
+			{
+				/* WHERE col IN ($1, $2, $3) */
+				appendPQExpBuffer(buf, "%s IN (",
+								  old->attributes.array[0].attname);
+
+				for (int r = 0; r < rowCount; r++)
+				{
+					LogicalMessageValues *values = &(old->values.array[r]);
+
+					appendPQExpBuffer(buf, "%s$%d", r > 0 ? ", " : "", ++pos);
+
+					if (!stream_add_value_in_json_array(&values->array[0], jsArray))
+					{
+						destroyPQExpBuffer(buf);
+						return false;
+					}
+				}
+
+				appendPQExpBuffer(buf, ")");
+			}
+			else
+			{
+				/* WHERE (k1, k2) IN (($1, $2), ($3, $4)) */
+				appendPQExpBuffer(buf, "(");
+				for (int v = 0; v < colCount; v++)
+				{
+					appendPQExpBuffer(buf, "%s%s",
+									  v > 0 ? ", " : "",
+									  old->attributes.array[v].attname);
+				}
+				appendPQExpBuffer(buf, ") IN (");
+
+				for (int r = 0; r < rowCount; r++)
+				{
+					LogicalMessageValues *values = &(old->values.array[r]);
+
+					appendPQExpBuffer(buf, "%s(", r > 0 ? ", " : "");
+
+					for (int v = 0; v < colCount; v++)
+					{
+						appendPQExpBuffer(buf, "%s$%d",
+										  v > 0 ? ", " : "",
+										  ++pos);
+
+						if (!stream_add_value_in_json_array(&values->array[v],
+															jsArray))
+						{
+							destroyPQExpBuffer(buf);
+							return false;
+						}
+					}
+
+					appendPQExpBuffer(buf, ")");
+				}
+
+				appendPQExpBuffer(buf, ")");
 			}
 		}
 
