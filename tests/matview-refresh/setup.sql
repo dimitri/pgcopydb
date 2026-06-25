@@ -50,8 +50,15 @@ INSERT INTO mvtest.authors (name) VALUES ('Alice'), ('Bob'), ('Carol');
 INSERT INTO mvtest.tags (label) VALUES ('postgres'), ('database'), ('index');
 
 -- Set search_path so that unqualified names resolve to mvtest.
--- pg_dump will emit a SET search_path = '' before running REFRESH, which
--- is exactly the condition that triggers the bug.
+-- CREATE MATERIALIZED VIEW ... WITH DATA populates via ExecCreateTableAs(),
+-- which runs in the current session context and sees this search_path.
+-- pg_dump will later emit SET search_path = '' before running REFRESH,
+-- which is exactly the condition that triggers the bug on the target side.
+--
+-- Note: REFRESH MATERIALIZED VIEW (ExecRefreshMatView) forces search_path=''
+-- since PostgreSQL 17 for security hardening — so we populate the source
+-- matviews at CREATE time (WITH DATA), not via explicit REFRESH, to stay
+-- compatible with PG17+.
 SET search_path TO mvtest, public;
 
 ------------------------------------------------------------------------
@@ -69,8 +76,7 @@ FROM ts_stat(
             coalesce(title, '''') || '' '' || coalesce(body, ''''))
      FROM documents'
 )
-ORDER BY ndoc DESC, nentry DESC, word
-WITH NO DATA;
+ORDER BY ndoc DESC, nentry DESC, word;
 
 ------------------------------------------------------------------------
 -- Root 2: mvtest.mv_author_summary
@@ -81,8 +87,7 @@ CREATE MATERIALIZED VIEW mvtest.mv_author_summary AS
 SELECT name,
        row_number() OVER (ORDER BY name) AS rn
 FROM   mvtest.authors
-ORDER  BY name
-WITH NO DATA;
+ORDER  BY name;
 
 ------------------------------------------------------------------------
 -- Root 3: mvtest.mv_tag_stats
@@ -94,8 +99,7 @@ CREATE MATERIALIZED VIEW mvtest.mv_tag_stats AS
 SELECT label,
        length(label) AS label_len
 FROM   mvtest.tags
-ORDER  BY label
-WITH NO DATA;
+ORDER  BY label;
 
 ------------------------------------------------------------------------
 -- Level 2: mvtest.mv_combined
@@ -112,8 +116,7 @@ SELECT w.word,
        w.nentry
 FROM   public.mv_word_stats       w
        CROSS JOIN mvtest.mv_author_summary a
-ORDER  BY w.ndoc DESC, w.word, a.rn
-WITH NO DATA;
+ORDER  BY w.ndoc DESC, w.word, a.rn;
 
 ------------------------------------------------------------------------
 -- Level 3: mvtest.mv_final
@@ -129,12 +132,6 @@ SELECT word,
        sum(nentry) AS total_nentry
 FROM   mvtest.mv_combined
 GROUP  BY word
-ORDER  BY total_ndoc DESC, word
-WITH NO DATA;
+ORDER  BY total_ndoc DESC, word;
 
--- Populate all matviews on source (search_path is still mvtest,public here).
-REFRESH MATERIALIZED VIEW public.mv_word_stats;
-REFRESH MATERIALIZED VIEW mvtest.mv_author_summary;
-REFRESH MATERIALIZED VIEW mvtest.mv_tag_stats;
-REFRESH MATERIALIZED VIEW mvtest.mv_combined;
-REFRESH MATERIALIZED VIEW mvtest.mv_final;
+RESET search_path;
