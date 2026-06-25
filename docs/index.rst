@@ -87,6 +87,14 @@ Change Data Capture
 
     See the reference manual for the ``pgcopydb fork --follow`` command.
 
+Extension-aware migration
+    pgcopydb detects TimescaleDB and Citus in the source database and
+    automatically runs the required pre/post-restore hooks so that
+    hypertables and distributed tables are correctly set up on the target
+    without any manual intervention.
+
+    See :ref:`extension_aware_migration` for details.
+
 .. toctree::
    :hidden:
    :caption: Getting Started
