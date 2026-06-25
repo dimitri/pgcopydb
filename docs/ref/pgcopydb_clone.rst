@@ -204,6 +204,53 @@ owns the source and target databases.
    does not apply to extension members, and pg_dump does not provide a
    mechanism to exclude extensions.
 
+.. _extension_aware_migration:
+
+Extension-aware migration
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+pgcopydb detects certain extensions in the source catalog and automatically
+runs extension-specific steps at the right point in the pipeline. No
+configuration is required: the behaviour is triggered by the presence of the
+extension in the source database. If an extension is listed under
+``[exclude-extension]`` in the :ref:`config` filter file it is
+never fetched into the catalog, so its hook is skipped.
+
+TimescaleDB
+~~~~~~~~~~~
+
+When ``timescaledb`` is detected in the source database, pgcopydb calls two
+functions on the *target* database:
+
+- **Before** ``pg_restore --pre-data``: ``timescaledb_pre_restore()`` puts
+  TimescaleDB into restore mode so it does not interfere with schema
+  restore.
+
+- **After** ``pg_restore --post-data``: ``timescaledb_post_restore()``
+  re-enables normal TimescaleDB operation.
+
+Both the source and the target databases must have the TimescaleDB extension
+installed.
+
+Citus
+~~~~~
+
+When ``citus`` is detected in the source database, pgcopydb queries the
+``citus_tables`` view on the source coordinator and, **after**
+``pg_restore --pre-data`` (at which point tables exist on the target as
+empty plain PostgreSQL tables), calls ``create_distributed_table()`` and
+``create_reference_table()`` on the *target* coordinator.
+
+Co-location groups are preserved: within each group the alphabetically
+first table is created with ``shard_count := N, colocate_with := 'none'``
+and the remaining tables reference it via ``colocate_with``. Reference
+tables are always created after all distributed tables.
+
+Data is then copied through the Citus coordinator, which routes rows to the
+correct shards transparently — shard tables are never visible to pgcopydb.
+Both the source and the target must be Citus coordinators (multi-worker
+clusters are fully supported).
+
 .. _all_databases:
 
 Cloning all databases with ``--all-databases``
