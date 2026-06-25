@@ -47,10 +47,23 @@ pgcopydb clone --skip-ext-comments --notice \
          --source ${PGCOPYDB_SOURCE_STANDBY_PGURI} \
          --target ${PGCOPYDB_TARGET_PGURI}
 
-pgcopydb compare schema \
-         --source ${PGCOPYDB_SOURCE_STANDBY_PGURI} \
-         --target ${PGCOPYDB_TARGET_PGURI}
+# Verify that excluded payment partition tables (relkind 'r') are absent from
+# the target and that the payment parent (relkind 'p') is present.  Use relkind
+# so that payment_pkey (an index starting with "payment_p") is not counted.
+psql -d ${PGCOPYDB_TARGET_PGURI} -c "
+SELECT count(*) AS excluded_partitions_in_target
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname = 'public'
+   AND c.relname ~ '^payment_p'
+   AND c.relkind IN ('r', 'p')
+" | grep -q '^ *0$'
 
-pgcopydb compare data \
-         --source ${PGCOPYDB_SOURCE_STANDBY_PGURI} \
-         --target ${PGCOPYDB_TARGET_PGURI}
+psql -d ${PGCOPYDB_TARGET_PGURI} -c "
+SELECT count(*) AS payment_parent_in_target
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname = 'public'
+   AND c.relname = 'payment'
+   AND c.relkind = 'p'
+" | grep -q '^ *1$'

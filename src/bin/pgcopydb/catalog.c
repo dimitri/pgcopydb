@@ -805,6 +805,52 @@ catalog_close_from_specs(CopyDataSpec *copySpecs)
 
 
 /*
+ * catalog_stored_filter_type parses the filter type from the JSON string
+ * stored in the catalog setup, returning SOURCE_FILTER_TYPE_NONE on failure.
+ */
+static SourceFilterType
+catalog_stored_filter_type(const char *filtersJson)
+{
+	if (filtersJson == NULL)
+	{
+		return SOURCE_FILTER_TYPE_NONE;
+	}
+
+	JSON_Value *root = json_parse_string(filtersJson);
+
+	if (root == NULL)
+	{
+		return SOURCE_FILTER_TYPE_NONE;
+	}
+
+	JSON_Object *obj = json_value_get_object(root);
+	const char *typeStr = json_object_get_string(obj, "type");
+
+	SourceFilterType type = SOURCE_FILTER_TYPE_NONE;
+
+	if (typeStr != NULL)
+	{
+		if (streq(typeStr, filterTypeToString(SOURCE_FILTER_TYPE_INCL)))
+		{
+			type = SOURCE_FILTER_TYPE_INCL;
+		}
+		else if (streq(typeStr, filterTypeToString(SOURCE_FILTER_TYPE_EXCL_INDEX)))
+		{
+			type = SOURCE_FILTER_TYPE_EXCL_INDEX;
+		}
+		else if (streq(typeStr, filterTypeToString(SOURCE_FILTER_TYPE_EXCL)))
+		{
+			type = SOURCE_FILTER_TYPE_EXCL;
+		}
+	}
+
+	json_value_free(root);
+
+	return type;
+}
+
+
+/*
  * catalog_register_setup_from_specs registers the current copySpecs setup.
  */
 bool
@@ -1250,14 +1296,60 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 			{
 				/*
 				 * Case 3: catalog was created with filters; the current
-				 * command has none (e.g. pgcopydb list table-parts,
-				 * pgcopydb stream sentinel).  These read-only commands
-				 * operate on the already-filtered catalog data and do not
-				 * need --filters repeated.  Silently adopt the stored filter.
+				 * command has none (e.g. pgcopydb clone without --filters,
+				 * pgcopydb list table-parts, pgcopydb stream sentinel).
+				 * These commands operate on the already-filtered catalog
+				 * data and do not need --filters repeated.
+				 *
+				 * Adopt the stored filter TYPE so that
+				 * copydb_fetch_filtered_oids uses the correct complement
+				 * (e.g. EXCL to LIST_EXCL) and populates s_index for
+				 * INDEX ATTACH filtering.  The filter patterns themselves
+				 * are not needed: filtersDB already holds the pre-computed
+				 * OIDs from the earlier list commands.
+				 *
+				 * Also update the stored JSON in source.db to match the
+				 * current command's serialization (adopted type, empty
+				 * patterns).  Worker processes independently call this
+				 * function and must see the same stored JSON or they would
+				 * trigger Case 2 (both sides non-NONE but mismatched).
 				 */
-				log_debug("Adopting catalog's stored filters for this command "
-						  "(catalog: %s)",
-						  setup->filters);
+				SourceFilterType storedType =
+					catalog_stored_filter_type(setup->filters);
+
+				if (storedType != SOURCE_FILTER_TYPE_NONE)
+				{
+					filters->type = storedType;
+
+					json_free_serialized_string(json);
+
+					JSON_Value *jsAdopted = json_value_init_object();
+
+					if (!filters_as_json(filters, jsAdopted))
+					{
+						/* errors have already been logged */
+						return false;
+					}
+
+					json = json_serialize_to_string(jsAdopted);
+
+					if (!catalog_update_filters(sourceDB, json))
+					{
+						log_error("Failed to update filters in catalog database");
+						json_free_serialized_string(json);
+						return false;
+					}
+
+					if (setup->filters != NULL)
+					{
+						free(setup->filters);
+					}
+					setup->filters = strdup(json);
+				}
+
+				log_debug("Adopting catalog's stored filter type (%s) for "
+						  "this command",
+						  filterTypeToString(filters->type));
 			}
 			else
 			{

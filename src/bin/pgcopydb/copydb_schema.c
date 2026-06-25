@@ -1445,7 +1445,9 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 
 		(void) catalog_start_timing(&timing);
 
-		if (!schema_list_sequences(pgsql, filters, filtersDB))
+		DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+		if (!schema_list_sequences(pgsql, filters, filtersDB, sourceDB))
 		{
 			/* errors have already been logged */
 			filters->type = type;

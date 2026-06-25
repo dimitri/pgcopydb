@@ -945,7 +945,8 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 bool
 schema_list_sequences(PGSQL *pgsql,
 					  SourceFilters *filters,
-					  DatabaseCatalog *catalog)
+					  DatabaseCatalog *catalog,
+					  DatabaseCatalog *sourceCatalog)
 {
 	SourceSequenceArrayContext context = { { 0 }, catalog, false };
 
@@ -1005,6 +1006,30 @@ schema_list_sequences(PGSQL *pgsql,
 		}
 	}
 
+	/*
+	 * For LIST_EXCL, subtract sequences that are also used by included tables.
+	 * A sequence shared between an excluded partition and its included parent
+	 * (e.g. payment_payment_id_seq owned by payment, used as DEFAULT by
+	 * payment_p* partitions) must NOT appear in filtersDB.  Pass the included
+	 * table OIDs from sourceDB as $3 so the SQL can apply a NOT EXISTS guard.
+	 */
+	char *keep_table_oids = "{}";
+	int keep_count = 0;
+
+	if (filters->type == SOURCE_FILTER_TYPE_LIST_EXCL && sourceCatalog != NULL)
+	{
+		if (!catalog_s_table_oid_array(sourceCatalog, &keep_table_oids, &keep_count))
+		{
+			log_error("Failed to build keep table OID array for sequences query");
+			return false;
+		}
+	}
+
+	log_notice("schema_list_sequences[%s]: table_oids=%s keep_table_oids=%s",
+			   filterTypeToString(filters->type),
+			   table_oids ? table_oids : "NULL",
+			   keep_table_oids ? keep_table_oids : "NULL");
+
 	const char *sql = NULL;
 
 	if (!pgcopydb_sql_list_source_sequences(&sql))
@@ -1012,9 +1037,9 @@ schema_list_sequences(PGSQL *pgsql,
 		return false;
 	}
 
-	int paramCount = 2;
-	Oid paramTypes[2] = { TEXTOID, TEXTOID };
-	const char *paramValues[2] = { table_oids, ns_oids };
+	int paramCount = 3;
+	Oid paramTypes[3] = { TEXTOID, TEXTOID, TEXTOID };
+	const char *paramValues[3] = { table_oids, ns_oids, keep_table_oids };
 
 	if (!pgsql_execute_with_params(pgsql, sql,
 								   paramCount, paramTypes, paramValues,

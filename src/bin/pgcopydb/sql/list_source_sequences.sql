@@ -1,9 +1,15 @@
 -- $1::oid[] : table OIDs from s_table (NULL means no table filter)
 -- $2::oid[] : namespace OIDs from s_namespace (NULL means no namespace filter)
+-- $3::oid[] : "keep" table OIDs — when non-empty, subtract sequences that are
+--             also used by these tables.  Used for SOURCE_FILTER_TYPE_LIST_EXCL
+--             to avoid placing shared sequences (e.g. a sequence OWNED BY an
+--             included parent table but also used as DEFAULT by an excluded
+--             partition) into filtersDB.  Pass '{}' when no subtraction needed.
 WITH
  filters AS (
      SELECT $1::oid[] AS table_oids,
-            $2::oid[] AS namespace_oids
+            $2::oid[] AS namespace_oids,
+            $3::oid[] AS keep_table_oids
  ),
  seqs AS (
     SELECT s.oid AS seqoid,
@@ -101,6 +107,36 @@ SELECT s.seqoid,
              AND d2x.classid = 'pg_attrdef'::regclass
              AND at2.attrelid = ANY(f.table_oids)
       ))
+ )
+
+   -- MINUS: when keep_table_oids is provided (LIST_EXCL complement queries),
+   -- subtract sequences that are not exclusively for the excluded tables.
+   -- Specifically, drop the sequence if:
+   --   - its OWNED BY table is NOT in the excluded set ($1 = table_oids), OR
+   --   - any non-excluded table uses it as a column DEFAULT.
+   -- This handles the case where a sequence is OWNED BY an included parent
+   -- partitioned table (relkind='p', absent from s_table) but also used as
+   -- DEFAULT by excluded child partitions (relkind='r').
+ AND NOT (
+     f.keep_table_oids IS NOT NULL
+     AND cardinality(f.keep_table_oids) > 0
+     AND (
+         -- OWNED BY a table that is NOT in the excluded set
+         (r1.oid IS NOT NULL AND NOT r1.oid = ANY(f.table_oids))
+
+         -- OR used as DEFAULT by any table NOT in the excluded set
+         OR EXISTS (
+             SELECT 1
+               FROM pg_depend d3
+               JOIN pg_attrdef a3  ON a3.oid = d3.objid
+               JOIN pg_attribute at3 ON at3.attrelid = a3.adrelid
+                                    AND at3.attnum = a3.adnum
+              WHERE d3.refobjid = s.seqoid
+                AND d3.refclassid = 'pg_class'::regclass
+                AND d3.classid = 'pg_attrdef'::regclass
+                AND NOT at3.attrelid = ANY(f.table_oids)
+         )
+     )
  )
 
  ORDER BY nspname, relname;
