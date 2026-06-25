@@ -105,3 +105,21 @@ begin;
 update single_column_table set id = id;
 update multi_column_table set id = id, name = name, email = email;
 commit;
+
+begin;
+insert into multi_delete_test (id, val) values
+(1, 'row1'), (2, 'row2'), (3, 'row3'), (4, 'row4'), (5, 'row5');
+commit;
+
+begin;
+delete from multi_delete_test;
+commit;
+
+begin;
+insert into multi_delete_composite_test (id1, id2, val) values
+(1, 10, 'a'), (2, 20, 'b'), (3, 30, 'c');
+commit;
+
+begin;
+delete from multi_delete_composite_test;
+commit;

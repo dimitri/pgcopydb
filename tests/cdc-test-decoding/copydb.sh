@@ -113,6 +113,46 @@ psql -AtqX -d ${PGCOPYDB_TARGET_PGURI} \
 diff /tmp/src_quotes.txt /tmp/tgt_quotes.txt
 
 #
+# Multi-row DELETE batching validation (issue #828).
+#
+# The DML deletes 5 rows from multi_delete_test and 3 rows from
+# multi_delete_composite_test in separate transactions.  Each deletion
+# produces one logical decoding message per row; the transform layer coalesces
+# them into a single parameterised statement per table.  Verify that exactly
+# one replay entry exists per table (5 individual DELETEs → 1 batched one).
+#
+multi_delete_count=$(sqlite3 -init /dev/null -list -noheader ${REPLAYDB} \
+    "select count(*)
+     from stmt s
+     join replay r on r.stmt_hash = s.hash
+     where s.sql like 'DELETE FROM public.multi_delete_test %'")
+
+echo "multi_delete_count (expected 1 batched statement): ${multi_delete_count}"
+test "${multi_delete_count}" -eq 1
+
+multi_delete_composite_count=$(sqlite3 -init /dev/null -list -noheader ${REPLAYDB} \
+    "select count(*)
+     from stmt s
+     join replay r on r.stmt_hash = s.hash
+     where s.sql like 'DELETE FROM public.multi_delete_composite_test %'")
+
+echo "multi_delete_composite_count (expected 1 batched statement): ${multi_delete_composite_count}"
+test "${multi_delete_composite_count}" -eq 1
+
+# Verify source and target agree that all rows were deleted
+src_multi=`psql -AtqX -d ${PGCOPYDB_SOURCE_PGURI} -c "select count(*) from multi_delete_test"`
+tgt_multi=`psql -AtqX -d ${PGCOPYDB_TARGET_PGURI} -c "select count(*) from multi_delete_test"`
+echo "multi_delete_test source: ${src_multi}, target: ${tgt_multi}"
+test "${src_multi}" -eq "${tgt_multi}"
+test "${tgt_multi}" -eq 0
+
+src_comp=`psql -AtqX -d ${PGCOPYDB_SOURCE_PGURI} -c "select count(*) from multi_delete_composite_test"`
+tgt_comp=`psql -AtqX -d ${PGCOPYDB_TARGET_PGURI} -c "select count(*) from multi_delete_composite_test"`
+echo "multi_delete_composite_test source: ${src_comp}, target: ${tgt_comp}"
+test "${src_comp}" -eq "${tgt_comp}"
+test "${tgt_comp}" -eq 0
+
+#
 # Stream prune between rounds: remove already-applied CDC file pairs.
 # replay_lsn is now set (round 1 committed all transactions); this should
 # prune the closed output.db/replay.db files whose endpos < replay_lsn.

@@ -297,3 +297,27 @@ create table all_pk_test (
 );
 
 commit;
+
+--
+-- See https://github.com/dimitri/pgcopydb/issues/828
+-- Multi-row DELETE batching: consecutive DELETEs in a single transaction are
+-- coalesced into WHERE pk IN ($1, $2, ...) for a single-column PK, or
+-- WHERE (k1, k2) IN (($1, $2), ($3, $4)) for a composite PK.
+--
+begin;
+
+create table if not exists multi_delete_test
+(
+    id  bigint primary key,
+    val text
+);
+
+create table if not exists multi_delete_composite_test
+(
+    id1 bigint,
+    id2 bigint,
+    val text,
+    primary key (id1, id2)
+);
+
+commit;
