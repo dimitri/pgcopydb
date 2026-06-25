@@ -257,3 +257,39 @@ insert into all_pk_test (a, b) values (1, 2);
 update all_pk_test set a = 1 where a = 1 and b = 2;
 
 commit;
+
+--
+-- See https://github.com/dimitri/pgcopydb/issues/828
+-- Multi-row DELETE: a single SQL DELETE statement that removes multiple rows
+-- produces one logical decoding DELETE message per row.  The transform layer
+-- coalesces consecutive DELETEs on the same table within a transaction into a
+-- single WHERE pk IN ($1, $2, ...) statement (single-column PK case).
+--
+begin;
+
+insert into multi_delete_test (id, val) values
+(1, 'row1'), (2, 'row2'), (3, 'row3'), (4, 'row4'), (5, 'row5');
+
+commit;
+
+begin;
+
+delete from multi_delete_test;
+
+commit;
+
+--
+-- Composite PK case: coalesces into WHERE (id1, id2) IN (($1, $2), ...).
+--
+begin;
+
+insert into multi_delete_composite_test (id1, id2, val) values
+(1, 10, 'a'), (2, 20, 'b'), (3, 30, 'c');
+
+commit;
+
+begin;
+
+delete from multi_delete_composite_test;
+
+commit;
