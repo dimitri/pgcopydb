@@ -308,6 +308,16 @@ typedef struct CopyDataSpec
 	bool consistent;
 	bool failFast;
 
+	/*
+	 * Cached target PostgreSQL server version number (e.g. 170000 for PG17).
+	 * Set once in copydb_target_prepare_schema; used to gate behaviour that
+	 * is only needed on PG <= 16 (e.g. owning REFRESH MATERIALIZED VIEW to
+	 * work around the pg_restore empty-search_path bug, issues #484/#501).
+	 * On PG17+, RestrictSearchPath() inside RefreshMatViewByOid() makes the
+	 * original bug impossible, so pg_restore handles REFRESH directly.
+	 */
+	int targetPgVersionNum;
+
 	bool fetchCatalogs;         /* cache invalidation of local catalogs db */
 	bool fetchFilteredOids;     /* allow bypassing dump/restore filter prep */
 	bool skipSourceURICheck;    /* skip source URI mismatch check on open */

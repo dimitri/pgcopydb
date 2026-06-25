@@ -239,10 +239,42 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 	}
 
 	/*
+	 * Determine the target PostgreSQL version.  On PG17+,
+	 * RestrictSearchPath() inside RefreshMatViewByOid() forces search_path
+	 * to 'pg_catalog, pg_temp' for every REFRESH (and CREATE MATERIALIZED
+	 * VIEW ... WITH DATA), making the original bug (#484/#501) impossible.
+	 * pg_restore then handles REFRESH directly, and pgcopydb does not need
+	 * to own that step.  The version is inherited by forked worker processes.
+	 */
+	if (specs->targetPgVersionNum == 0)
+	{
+		PGSQL dst = { 0 };
+
+		if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!pgsql_server_version(&dst))
+		{
+			/* errors have already been logged */
+			(void) pgsql_finish(&dst);
+			return false;
+		}
+
+		specs->targetPgVersionNum = dst.pgversion_num;
+		(void) pgsql_finish(&dst);
+
+		log_info("Target PostgreSQL version: %d", specs->targetPgVersionNum);
+	}
+
+	/*
 	 * Scan the full archive TOC (already written to preListOutFilename) to
 	 * assign toc_seq to each REFRESH MATERIALIZED VIEW entry.  This must be
 	 * done before the data phase starts so the INDEX supervisor can feed
 	 * vacuum workers in the correct pg_dump dependency order.
+	 * On PG17+ targets this is skipped: pg_restore handles REFRESH directly.
 	 */
 	if (!copydb_collect_matview_toc_order(specs))
 	{
@@ -1019,16 +1051,19 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 	}
 
 	/*
-	 * Skip non-filtered REFRESH MATERIALIZED VIEW entries from the pg_restore
-	 * list.  pgcopydb drives REFRESH via vacuum workers during the data phase
-	 * (after all source-table COPY and CREATE INDEX), so they must not also be
-	 * run by pg_restore post-data.
+	 * On PG <= 16 targets, pgcopydb owns REFRESH MATERIALIZED VIEW: entries
+	 * are stripped from the pg_restore list here and dispatched via vacuum
+	 * workers instead, using fresh libpq connections that inherit the
+	 * database-level search_path (avoiding the pg_restore empty-search_path
+	 * bug, issues #484/#501).
 	 *
-	 * When assignTocSeq is set (TOC order scan during prepare_schema) we also
-	 * record the pg_dump dependency order in s_matview.toc_seq so that the
-	 * INDEX supervisor can feed vacuum workers in the right sequence.
+	 * On PG17+ targets the bug cannot arise (RestrictSearchPath() in
+	 * RefreshMatViewByOid() forces a safe search_path unconditionally), so
+	 * REFRESH entries are left in the list for pg_restore to handle.
 	 */
-	if (!skip && item->desc == ARCHIVE_TAG_REFRESH_MATERIALIZED_VIEW)
+	if (!skip &&
+		item->desc == ARCHIVE_TAG_REFRESH_MATERIALIZED_VIEW &&
+		specs->targetPgVersionNum < 170000)
 	{
 		skip = true;
 
@@ -1106,6 +1141,21 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 static bool
 copydb_collect_matview_toc_order(CopyDataSpec *specs)
 {
+	/*
+	 * On PG17+ targets, pg_restore owns REFRESH MATERIALIZED VIEW (the
+	 * search_path bug that motivated pgcopydb owning it cannot arise there).
+	 * Skip the toc_seq assignment entirely; vacuum workers will receive no
+	 * QMSG_TYPE_MATVIEW_OID messages, and the REFRESH entries are left in
+	 * the pg_restore post-data list for pg_restore to execute.
+	 */
+	if (specs->targetPgVersionNum >= 170000)
+	{
+		log_info("Target is PG%d (>= 17): REFRESH MATERIALIZED VIEW "
+				 "handled by pg_restore, not pgcopydb vacuum workers",
+				 specs->targetPgVersionNum / 10000);
+		return true;
+	}
+
 	/*
 	 * The preListOutFilename file was produced by pg_restore --list during
 	 * the pre-data pass.  It lists ALL entries from the dump (not just

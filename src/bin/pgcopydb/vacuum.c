@@ -154,13 +154,23 @@ vacuum_supervisor(CopyDataSpec *specs)
  * Could be exposed separately as --vacuumJobs too, but that's not been done at
  * this time.
  *
- * Workers always start (even with --skip-vacuum) so they are available to
- * service QMSG_TYPE_MATVIEW_OID messages sent by the INDEX supervisor after all
- * CREATE INDEX work is done.
+ * On PG <= 16 targets, workers always start even with --skip-vacuum because
+ * they also service QMSG_TYPE_MATVIEW_OID messages (pgcopydb owns REFRESH
+ * on PG <= 16 to work around the pg_restore empty-search_path bug, #484/#501).
+ * On PG17+ targets, pg_restore handles REFRESH directly, so workers are only
+ * needed when VACUUM ANALYZE is also requested.
  */
 bool
 vacuum_start_workers(CopyDataSpec *specs)
 {
+	if (specs->skipVacuum && specs->targetPgVersionNum >= 170000)
+	{
+		log_info("STEP 8: skipping VACUUM processes "
+				 "(--skip-vacuum, target is PG%d and REFRESH is handled by pg_restore)",
+				 specs->targetPgVersionNum / 10000);
+		return true;
+	}
+
 	if (specs->skipVacuum)
 	{
 		log_info("STEP 8: starting %d VACUUM/REFRESH processes "
@@ -697,6 +707,12 @@ vacuum_add_table(CopyDataSpec *specs, uint32_t oid, const char *datname)
 bool
 vacuum_send_stop(CopyDataSpec *specs)
 {
+	/* No workers were started; nothing to stop. */
+	if (specs->skipVacuum && specs->targetPgVersionNum >= 170000)
+	{
+		return true;
+	}
+
 	for (int i = 0; i < specs->vacuumJobs; i++)
 	{
 		QMessage stop = { .type = QMSG_TYPE_STOP, .data.oid = 0 };
