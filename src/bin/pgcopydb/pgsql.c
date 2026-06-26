@@ -3928,17 +3928,12 @@ OutputPluginToString(StreamOutputPlugin plugin)
  * CREATE_REPLICATION_SLOT, so that server-level timeouts (most importantly
  * idle_in_transaction_session_timeout) do not abort slot creation.
  *
- * idle_in_transaction_session_timeout was introduced in PG9.6, so the _95
- * variant is used for older servers.
+ * Only applied on PG10+: PG9.6's walsender does not accept SET commands at
+ * all, so we skip this step for older servers.
  */
 static GUC replicationSlotSettings[] = {
 	{ "statement_timeout", "0" },
 	{ "idle_in_transaction_session_timeout", "0" },
-	{ NULL, NULL }
-};
-
-static GUC replicationSlotSettings95[] = {
-	{ "statement_timeout", "0" },
 	{ NULL, NULL }
 };
 
@@ -3984,20 +3979,19 @@ pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 
 	/*
 	 * Set GUCs to clear any restrictive server-level timeouts before the slot
-	 * command.  Use PQserverVersion() (no SQL query) to pick the right set:
-	 * idle_in_transaction_session_timeout only exists in PG9.6+.  Running a
-	 * SELECT on the replication connection is avoided on purpose — walsender
-	 * on older servers restricts the SQL syntax it accepts.
+	 * command.  PG9.6's walsender does not accept SET commands on replication
+	 * connections; support was added in PG10, so skip this step on older
+	 * servers.  PQserverVersion() reads the version from the connection struct
+	 * (no SQL query), so it is safe to call on a replication connection.
 	 */
-	GUC *settings = PQserverVersion(pgsql->connection) < 90600
-					? replicationSlotSettings95
-					: replicationSlotSettings;
-
-	if (!pgsql_set_gucs(pgsql, settings))
+	if (PQserverVersion(pgsql->connection) >= 100000)
 	{
-		log_fatal("Failed to set our GUC settings on the source connection, "
-				  "see above for details");
-		return false;
+		if (!pgsql_set_gucs(pgsql, replicationSlotSettings))
+		{
+			log_fatal("Failed to set our GUC settings on the source connection, "
+					  "see above for details");
+			return false;
+		}
 	}
 
 	PGresult *result = PQexec(pgsql->connection, query);
