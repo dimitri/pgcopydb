@@ -27,7 +27,7 @@ jobs:
           - 18
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0 # all history for all branches and tags
 
@@ -71,7 +71,7 @@ jobs:
             | zstd -T0 -9 - -o images.tar.zst
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: docker-images-pg${{ matrix.PGVERSION }}
           path: images.tar.zst
@@ -86,7 +86,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Run banned.h check
         run: sh ./ci/banned.h.sh
@@ -145,7 +145,7 @@ jobs:
             PGVERSION: 18
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0 # all history for all branches and tags
 
@@ -158,7 +158,7 @@ jobs:
             echo "PGVERSION=${{ matrix.PGVERSION }}" >> $GITHUB_ENV
 
       - name: Download pre-built Docker images
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: docker-images-pg${{ matrix.PGVERSION }}
 
