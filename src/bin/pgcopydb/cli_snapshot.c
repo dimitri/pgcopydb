@@ -364,6 +364,19 @@ cli_create_snapshot(int argc, char **argv)
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
+
+		/*
+		 * When the replication slot already existed, the fast path in
+		 * copydb_create_logical_replication_slot returned without creating a
+		 * fresh snapshot.  sourceSnapshot.snapshot still holds the identifier
+		 * read from the on-disk snapshot file written by a previous run; that
+		 * snapshot is no longer live.  Clear the field so the print below stays
+		 * silent and callers do not receive a stale identifier.
+		 */
+		if (!copySpecs.sourceSnapshot.exportedCreateSlotSnapshot)
+		{
+			copySpecs.sourceSnapshot.snapshot[0] = '\0';
+		}
 	}
 	else
 	{
@@ -374,17 +387,30 @@ cli_create_snapshot(int argc, char **argv)
 		}
 	}
 
-	fformat(stdout, "%s\n", copySpecs.sourceSnapshot.snapshot);
-	fflush(stdout);
+	/*
+	 * Print the snapshot identifier to stdout so that callers (e.g. a
+	 * shell script running pgcopydb clone --snapshot "$(pgcopydb snapshot)")
+	 * can capture it.  When the slot already existed but its snapshot has
+	 * been closed, sourceSnapshot.snapshot is empty and we print nothing —
+	 * a stale identifier would be worse than silence here.
+	 */
+	if (!IS_EMPTY_STRING_BUFFER(copySpecs.sourceSnapshot.snapshot))
+	{
+		fformat(stdout, "%s\n", copySpecs.sourceSnapshot.snapshot);
+		fflush(stdout);
+	}
 
 	for (;;)
 	{
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
-			TransactionSnapshot *snapshot = &(copySpecs.sourceSnapshot);
-			PGSQL *pgsql = &(snapshot->pgsql);
-
-			(void) pgsql_finish(pgsql);
+			/*
+			 * Close the snapshot connection properly: for a SQL snapshot this
+			 * commits the transaction (releasing the PG snapshot); for a
+			 * logical replication slot snapshot this closes the replication
+			 * connection.
+			 */
+			(void) copydb_close_snapshot(&copySpecs);
 			(void) catalog_close_from_specs(&copySpecs);
 
 			log_info("Asked to terminate, aborting");
