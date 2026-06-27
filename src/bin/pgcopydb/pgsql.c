@@ -1084,6 +1084,48 @@ pgsql_server_version(PGSQL *pgsql)
 
 
 /*
+ * pgsql_set_client_encoding_for_server overrides client_encoding to match the
+ * server encoding when the server uses SQL_ASCII.
+ *
+ * COMMON_GUC_SETTINGS forces client_encoding='UTF-8' on every connection so
+ * that data flows through pgcopydb as UTF-8. That is the right default for
+ * most migrations (e.g. SQL_ASCII → UTF-8) because it makes Postgres validate
+ * the bytes on the way out of the source.
+ *
+ * However when the source itself is SQL_ASCII the forced UTF-8 client encoding
+ * causes COPY TO STDOUT to fail for any byte that is not valid UTF-8 (e.g.
+ * 0xff), even when the target database is also SQL_ASCII and would happily
+ * store those bytes. For a SQL_ASCII source we want raw bytes to pass through
+ * unchanged; the target-side connection (still using client_encoding=UTF-8)
+ * will then validate the data against the target encoding, which is the right
+ * place for that check.
+ *
+ * PQparameterStatus() returns the cached value libpq received during
+ * connection setup — no extra SQL query is issued.
+ */
+bool
+pgsql_set_client_encoding_for_server(PGSQL *pgsql)
+{
+	const char *server_enc =
+		PQparameterStatus(pgsql->connection, "server_encoding");
+
+	if (server_enc != NULL && strcmp(server_enc, "SQL_ASCII") == 0)
+	{
+		log_notice("Source database server encoding is SQL_ASCII; "
+				   "overriding client_encoding to SQL_ASCII so that "
+				   "bytes are passed through unchanged during COPY");
+
+		if (!pgsql_execute(pgsql, "SET client_encoding = 'SQL_ASCII'"))
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
  * pgsql_set_transaction calls SET ISOLATION LEVEl with the specific
  * transaction modes parameters.
  */

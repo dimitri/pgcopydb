@@ -266,6 +266,7 @@ bool pgsql_commit(PGSQL *pgsql);
 bool pgsql_rollback(PGSQL *pgsql);
 
 bool pgsql_server_version(PGSQL *pgsql);
+bool pgsql_set_client_encoding_for_server(PGSQL *pgsql);
 
 bool pgsql_set_transaction(PGSQL *pgsql,
 						   IsolationLevel level,
