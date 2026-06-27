@@ -1658,6 +1658,15 @@ copydb_prepare_summary_command(CopyTableDataSpec *tableSpecs)
  * copydb_check_table_exists checks that a table still exists. In order to
  * avoid race conditions when checking for existence, grab a explicit ACCESS
  * SHARE LOCK on the table.
+ *
+ * The LOCK runs inside a SAVEPOINT because the source connection is held in a
+ * REPEATABLE READ transaction (the export snapshot). If the table was dropped
+ * between the first exists-check and the LOCK, Postgres aborts the current
+ * command and puts the transaction in an error state. Without the SAVEPOINT we
+ * cannot run any further query on that connection, and the COPY worker would
+ * fail instead of gracefully skipping the missing table. ROLLBACK TO SAVEPOINT
+ * resets the error state while keeping the outer REPEATABLE READ transaction
+ * (and its snapshot) alive.
  */
 bool
 copydb_check_table_exists(PGSQL *pgsql, SourceTable *table, bool *exists)
@@ -1672,35 +1681,59 @@ copydb_check_table_exists(PGSQL *pgsql, SourceTable *table, bool *exists)
 		return false;
 	}
 
-	/* if the table does not exists, we stop here */
-	if (!exists)
+	/* if the table does not exist, we stop here */
+	if (!(*exists))
 	{
 		return true;
 	}
 
-	/* if the table was reported to exists, try and lock it */
+	/*
+	 * Set a savepoint before attempting the lock. If the table is dropped
+	 * between the existence check above and the LOCK below, the LOCK will fail
+	 * and abort the current transaction state. ROLLBACK TO SAVEPOINT recovers
+	 * the connection without losing the outer REPEATABLE READ snapshot.
+	 */
+	if (!pgsql_execute(pgsql, "SAVEPOINT check_table_lock"))
+	{
+		return false;
+	}
+
+	/* if the table was reported to exist, try and lock it */
 	bool locked = pgsql_lock_table(pgsql, table->qname, "ACCESS SHARE");
 
 	if (!locked)
 	{
-		log_error("Failed to LOCK table %s in ACCESS SHARE mode", table->qname);
-	}
+		/*
+		 * The LOCK failed. The transaction may now be in an aborted state.
+		 * Roll back to the savepoint to recover, then re-check existence to
+		 * distinguish a dropped table (not an error) from a genuine lock
+		 * failure (an error).
+		 */
+		(void) pgsql_execute(pgsql, "ROLLBACK TO SAVEPOINT check_table_lock");
 
-	/*
-	 * If we failed to obtain the lock, maybe the table doesn't exists anymore,
-	 * in which case we do not want to report an error condition.
-	 */
-	if (!pgsql_table_exists(pgsql,
-							table->oid,
-							table->nspname,
-							table->relname,
-							exists))
-	{
-		/* errors have already been logged */
+		if (!pgsql_table_exists(pgsql,
+								table->oid,
+								table->nspname,
+								table->relname,
+								exists))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!(*exists))
+		{
+			log_notice("Table %s no longer exists, skipping", table->qname);
+			return true;
+		}
+
+		log_error("Failed to LOCK table %s in ACCESS SHARE mode", table->qname);
 		return false;
 	}
 
-	return locked || !(*exists);
+	(void) pgsql_execute(pgsql, "RELEASE SAVEPOINT check_table_lock");
+
+	return true;
 }
 
 
