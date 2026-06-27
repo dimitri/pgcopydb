@@ -127,6 +127,13 @@ copydb_export_snapshot(TransactionSnapshot *snapshot)
 		return false;
 	}
 
+	if (!pgsql_set_client_encoding_for_server(pgsql))
+	{
+		log_fatal("Failed to set client_encoding on the source connection, "
+				  "see above for details");
+		return false;
+	}
+
 	return true;
 }
 
@@ -206,6 +213,13 @@ copydb_set_snapshot(CopyDataSpec *copySpecs)
 	if (!pgsql_set_gucs(pgsql, settings))
 	{
 		log_fatal("Failed to set our GUC settings on the source connection, "
+				  "see above for details");
+		return false;
+	}
+
+	if (!pgsql_set_client_encoding_for_server(pgsql))
+	{
+		log_fatal("Failed to set client_encoding on the source connection, "
 				  "see above for details");
 		return false;
 	}
