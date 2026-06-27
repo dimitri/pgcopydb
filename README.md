@@ -31,6 +31,11 @@ is built into PostgreSQL core (since version 10) and requires no extension
 installation. The `test_decoding` and `wal2json` plugins are also
 supported.
 
+WAL changes are stored in structured SQLite databases (`output.db` and
+`replay.db`) in the pgcopydb work directory, enabling reliable processing
+across process restarts, size-based file rotation, and a `stream prune`
+command to reclaim disk space.
+
 The `pgcopydb follow` command implements a logical replication client for
 the `pgoutput` logical decoding plugin (built into PostgreSQL core), as
 well as `test_decoding` and `wal2json`.
@@ -40,6 +45,9 @@ migration. Beware that online migrations involve a lot more complexities
 when compared to offline migration. It is always a good idea to first
 implement offline migration first. The command `pgcopydb clone` is used to
 implement the offline migration approach.
+
+The `pgcopydb clone --all-databases` command copies an entire Postgres
+instance (all databases) from source to target in a single operation.
 
 ## Documentation
 
@@ -104,15 +112,15 @@ $ pgcopydb help
     progress     List the progress
 
   pgcopydb stream
-    setup      Setup source and target systems for logical decoding
-    cleanup    Cleanup source and target systems for logical decoding
-    prefetch   Stream JSON changes from the source database and transform them to SQL
-    catchup    Apply prefetched changes from SQL files to the target database
-    replay     Replay changes from the source to the target database, live
-  + sentinel   Maintain a sentinel table
-    receive    Stream changes from the source database
-    transform  Transform changes from the source database into SQL commands
-    apply      Apply changes from the source database into the target database
+    setup     Setup source and target systems for logical decoding
+    cleanup   Cleanup source and target systems for logical decoding
+    prune     Remove already-applied CDC files from disk to reclaim disk space
+    prefetch  Stream changes from the source database into the SQLite CDC store
+    catchup   Transform and apply prefetched changes from the SQLite CDC store to the target
+    replay    Replay changes from the source to the target database, live
+  + sentinel  Maintain a sentinel table
+    receive   Stream changes from the source database
+    apply     Apply changes from the replayDB to the target database, or stdout
 
   pgcopydb stream sentinel
     setup   Setup the sentinel table
@@ -144,58 +152,66 @@ the table COPY, cumulative timing for the CREATE INDEX commands), and then
 an overall summary that looks like the following:
 
 ```
-19:18:24.447 76974 INFO   Running pgcopydb version 0.15.74.gc74047a from "/usr/bin/pgcopydb"
-19:18:24.451 76974 INFO   [SOURCE] Copying database from "postgres://pagila:0wn3d@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
-19:18:24.451 76974 INFO   [TARGET] Copying database into "postgres://pagila:0wn3d@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
-19:18:24.506 76974 INFO   Using work dir "/tmp/pgcopydb"
-19:18:24.519 76974 INFO   Exported snapshot "00000003-00000023-1" from the source database
-19:18:24.522 76985 INFO   STEP 1: fetch source database tables, indexes, and sequences
-19:18:24.886 76985 INFO   Fetched information for 5 tables (including 0 tables split in 0 partitions total), with an estimated total of 1000 thousands tuples and 128 MB on-disk
-19:18:24.892 76985 INFO   Fetched information for 4 indexes (supporting 4 constraints)
-19:18:24.894 76985 INFO   Fetching information for 1 sequences
-19:18:24.909 76985 INFO   Fetched information for 1 extensions
-19:18:25.030 76985 INFO   Found 0 indexes (supporting 0 constraints) in the target database
-19:18:25.042 76985 INFO   STEP 2: dump the source database schema (pre/post data)
-19:18:25.046 76985 INFO    /usr/bin/pg_dump -Fc --snapshot 00000003-00000023-1 --section=pre-data --section=post-data --file /tmp/pgcopydb/schema/schema.dump 'postgres://pagila:0wn3d@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60'
-19:18:25.182 76985 INFO   STEP 3: restore the pre-data section to the target database
-19:18:25.202 76985 INFO    /usr/bin/pg_restore --dbname 'postgres://pagila:0wn3d@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60' --section pre-data --jobs 2 --use-list /tmp/pgcopydb/schema/pre-filtered.list /tmp/pgcopydb/schema/schema.dump
-19:18:25.354 77000 INFO   STEP 4: starting 8 table-data COPY processes
-19:18:25.428 77002 INFO   STEP 8: starting 8 VACUUM processes
-19:18:25.451 76985 INFO   Skipping large objects: none found.
-2024-06-10 19:18:25.462 +03 [77031] LOG:  unexpected EOF on client connection with an open transaction
-19:18:25.471 77001 INFO   STEP 6: starting 2 CREATE INDEX processes
-19:18:25.471 77001 INFO   STEP 7: constraints are built by the CREATE INDEX processes
-19:18:25.482 76985 INFO   STEP 9: reset sequences values
-19:18:25.483 77040 INFO   Set sequences values on the target database
-19:18:33.807 76985 INFO   STEP 10: restore the post-data section to the target database
-19:18:33.821 76985 INFO    /usr/bin/pg_restore --dbname 'postgres://pagila:0wn3d@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60' --section post-data --jobs 2 --use-list /tmp/pgcopydb/schema/post-filtered.list /tmp/pgcopydb/schema/schema.dump
-19:18:33.879 76985 INFO   All step are now done,  9s352 elapsed
-19:18:33.880 76985 INFO   Printing summary for 5 tables and 4 indexes
+22:37:01.564 22 INFO   Running pgcopydb version 0.18 from "/usr/bin/pgcopydb"
+22:37:01.565 22 INFO   [SOURCE] Copying database from "postgres://pagila@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
+22:37:01.565 22 INFO   [TARGET] Copying database into "postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60"
+22:37:01.582 22 INFO   Exported snapshot "00000003-0000002D-1" from the source database
+22:37:01.583 24 INFO   STEP 1: fetch source database tables, indexes, and sequences
+22:37:01.737 24 INFO   Fetched information for 21 tables (including 11 tables split in 30 partitions total), with an estimated total of 49 636 tuples and 5224 kB on-disk
+22:37:01.743 24 INFO   Fetched information for 54 indexes (supporting 21 constraints)
+22:37:01.756 24 INFO   Fetched information for 7 extensions
+22:37:01.795 24 INFO   STEP 2: dump the source database schema (pre/post data)
+22:37:01.796 24 INFO    /usr/bin/pg_dump -Fc --snapshot 00000003-0000002D-1 --section=pre-data --section=post-data --file /tmp/pgcopydb/schema/schema.dump 'postgres://pagila@source/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60'
+22:37:01.846 24 INFO   STEP 3: restore the pre-data section to the target database
+22:37:01.862 24 INFO    /usr/bin/pg_restore --dbname 'postgres://pagila@target/pagila?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60' --section pre-data --jobs 4 --use-list /tmp/pgcopydb/schema/pre-filtered.list /tmp/pgcopydb/schema/schema.dump
+22:37:01.956 34 INFO   STEP 4: starting 4 table-data COPY processes
+22:37:01.956 36 INFO   STEP 8: starting 4 VACUUM processes
+22:37:01.959 24 INFO   STEP 9: reset sequences values
+22:37:01.965 35 INFO   STEP 6: starting 4 CREATE INDEX processes
+22:37:01.965 35 INFO   STEP 7: constraints are built by the CREATE INDEX processes
+22:37:02.895 24 INFO   All step are now done,  1s100 elapsed
+22:37:02.895 24 INFO   Printing summary for 21 tables and 54 indexes
 
   OID | Schema |             Name | Parts | copy duration | transmitted bytes | indexes | create index duration
 ------+--------+------------------+-------+---------------+-------------------+---------+----------------------
-16398 | public | pgbench_accounts |     1 |         7s130 |             91 MB |       1 |                 878ms
-16395 | public |  pgbench_tellers |     1 |          69ms |            1002 B |       1 |                  44ms
-16401 | public | pgbench_branches |     1 |          46ms |              71 B |       1 |                  37ms
-16386 | public |           table1 |     1 |          56ms |               0 B |       1 |                  40ms
-16392 | public |  pgbench_history |     1 |          67ms |               0 B |       0 |                   0ms
+17182 | public |           rental |     5 |         250ms |           5477 kB |       3 |                  34ms
+17071 | public |             film |     4 |         124ms |           1336 kB |       5 |                  26ms
+17130 | public |        inventory |     4 |         104ms |            680 kB |       2 |                  17ms
+17082 | public |       film_actor |     2 |          60ms |            320 kB |       2 |                  15ms
+17200 | public |            staff |     3 |          96ms |            718 kB |       1 |                   5ms
+17157 | public | payment_p2022_02 |     2 |          46ms |            289 kB |       4 |                  28ms
+17161 | public | payment_p2022_03 |     2 |          60ms |            326 kB |       4 |                  20ms
+17165 | public | payment_p2022_04 |     2 |          28ms |            306 kB |       4 |                  22ms
+17169 | public | payment_p2022_05 |     2 |          54ms |            322 kB |       4 |                  26ms
+17173 | public | payment_p2022_06 |     2 |          40ms |            319 kB |       4 |                  25ms
+17177 | public | payment_p2022_07 |     2 |          60ms |            280 kB |       1 |                   6ms
+17086 | public |    film_category |     1 |          14ms |             69 kB |       1 |                   6ms
+17043 | public |         customer |     1 |          15ms |             67 kB |       4 |                  20ms
+17096 | public |          address |     1 |          17ms |             55 kB |       2 |                   7ms
+17153 | public | payment_p2022_01 |     1 |          16ms |             43 kB |       4 |                  19ms
+17104 | public |             city |     1 |          13ms |             24 kB |       2 |                   9ms
+17209 | public |            store |     1 |          10ms |             18 kB |       2 |                  11ms
+17055 | public |            actor |     1 |          14ms |           8328  B |       2 |                  13ms
+17063 | public |         category |     1 |          15ms |            540  B |       1 |                   3ms
+17112 | public |          country |     1 |          14ms |           3829  B |       1 |                   5ms
+17136 | public |         language |     1 |          14ms |            297  B |       1 |                   6ms
 
 
                                                Step   Connection    Duration    Transfer   Concurrency
  --------------------------------------------------   ----------  ----------  ----------  ------------
-   Catalog Queries (table ordering, filtering, etc)       source       183ms                         1
-                                        Dump Schema       source       134ms                         1
-                                     Prepare Schema       target       128ms                         1
-      COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both       8s483                        18
-                                  COPY (cumulative)         both       7s368      128 MB             8
-                          CREATE INDEX (cumulative)       target       965ms                         2
-                           CONSTRAINTS (cumulative)       target        34ms                         2
-                                VACUUM (cumulative)       target       120ms                         8
-                                    Reset Sequences         both        38ms                         1
-                         Large Objects (cumulative)       (null)         0ms                         0
-                                    Finalize Schema         both        61ms                         2
+   Catalog Queries (table ordering, filtering, etc)       source       124ms                         1
+                                        Dump Schema       source        50ms                         1
+                                     Prepare Schema       target        94ms                         1
+      COPY, INDEX, CONSTRAINTS, VACUUM (wall clock)         both       834ms                        12
+                                  COPY (cumulative)         both       455ms     3213 kB             4
+                          CREATE INDEX (cumulative)       target       318ms                         4
+                           CONSTRAINTS (cumulative)       target         5ms                         4
+                                VACUUM (cumulative)       target       185ms                         4
+                                    Reset Sequences         both        12ms                         1
+                         Large Objects (cumulative)         both         0ms                         4
+                                    Finalize Schema         both       112ms                         4
  --------------------------------------------------   ----------  ----------  ----------  ------------
-                          Total Wall Clock Duration         both       9s352                        24
+                          Total Wall Clock Duration         both       1s100                        20
 ```
 
 ## Installing pgcopydb
