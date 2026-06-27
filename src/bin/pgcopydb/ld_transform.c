@@ -2005,7 +2005,7 @@ stream_write_insert(ReplayDBStmt *replayStmt, LogicalMessageInsert *insert)
 		/*
 		 * First, the PREPARE part.
 		 */
-		appendPQExpBuffer(buf, "INSERT INTO %s.%s ",
+		appendPQExpBuffer(buf, "INSERT INTO \"%s\".\"%s\" ",
 						  insert->table.nspname,
 						  insert->table.relname);
 
