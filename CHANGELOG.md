@@ -1,9 +1,97 @@
-### pgcopydb (Unreleased) ###
+### pgcopydb v0.18 (June 27, 2026) ###
+
+pgcopydb v0.18 is a major feature release. PostgreSQL 17 and 18 are now
+fully supported and tested. The pgoutput logical decoding plugin is now the
+default, replacing test_decoding, and CDC filtering has been significantly
+extended: publications are created to match the active filter set, wal2json
+respects filter-tables, and new [include-only-extension] and
+[exclude-extension] sections control which extensions are copied.
+
+The internal format for CDC streaming data has been rewritten to use SQLite.
+WAL changes are now stored in structured output.db and replay.db databases
+instead of JSON files, enabling reliable processing across process restarts,
+size-based file rotation, and a new stream cleanup command to reclaim disk
+space.
+
+Other major additions include support for cloning an entire Postgres
+instance with --all-databases, Citus-to-Citus migration, regex patterns in
+filter INI files, and arm64 Docker images.
 
 ### Added
-* Add support for PostgreSQL 17 and 18
-* Update all test infrastructure to PostgreSQL 17
-* Update CI pipeline to test against PostgreSQL 16, 17, and 18
+* Use SQLite as the file format for CDC streaming (#715)
+* Add pgoutput logical decoding plugin support, now the default (#962)
+* Add --all-databases flag to clone an entire Postgres instance (#967)
+* Add size-based file rotation for SQLite outputDB/replayDB (#961)
+* Add Citus-to-Citus migration support (#1011)
+* Batch consecutive DELETEs into a single parameterised statement (#1010)
+* Add regex/pattern syntax (~/pattern/) in filter INI files (#1004)
+* Add filter-aware publication creation and wal2json filter-tables (#975)
+* Add [exclude-extension] and [include-only-extension] filter sections (#989)
+* Add --replay-no-op-updates option to CDC streaming (#983)
+* Add support for the timescaledb extension (#849)
+* Add PostgreSQL 17 and 18 build and test support (#958)
+* Add arm64 Docker image build (#911)
+
+### Changed
+* Batch SQLite catalog inserts and defer index creation for performance (#999)
+* Cache table and attribute catalog lookups in transform hot path (#950)
+* Add filter role model, command_log table, and conditional catalog invalidation (#1001)
+* Add stream cleanup command to reclaim CDC file disk space (#1003)
+* Fetch table attributes in a separate query using OID arrays (#993)
+* Extract SQL queries from schema.c into standalone .sql files (#992)
+* Set idle_in_transaction_session_timeout to zero on the target (#904)
+* Use our own memory area for editing libpq error messages (#903)
+
+### Fix
+* Fix client_encoding forced to UTF-8 breaking COPY from SQL_ASCII source databases (#874)
+* Fix missing --split-tables-larger-than and --split-max-parts in copy table-data help (#921)
+* Fix LOCK TABLE failure aborting COPY worker transaction; recover with SAVEPOINT (#875)
+* Fix snapshot file not cleaned up when logical replication snapshot closes (#1014)
+* Fix GUC settings not applied on replication slot creation connection (#1013)
+* Fix list commands to be snapshot-agnostic (#1007)
+* Fix COPY Transfer column to report actual wire bytes (#1002)
+* Fix stale process/summary entries and reopen catalog after fork (#1000)
+* Fix build compatibility with PostgreSQL 16-19 meson-built installations (#998)
+* Replace md5() with sha256() in compare data checksum query (#997)
+* Honour --requirements version pins when cloning extensions (#996)
+* Detect binary-incompatible column types and fall back to text COPY (#994)
+* Use named column access for IDENTIFY_SYSTEM to support AlloyDB (#995)
+* Make extension copy resumable using summary table (#990)
+* Fix noisy filter-mismatch warning for list/sentinel commands (#988)
+* Fix --skip-collations failure when the same collation spans multiple objects (#986)
+* Fix crash and ACL loss for function/table ACL entries (#985)
+* Fix source URI check in catalog for list databases (#984)
+* Fix list table-parts always reporting 0 parts (#982)
+* Fix CDC apply for materialized views (#981)
+* Preserve full double precision in CDC replay (#980)
+* Fix single-quote escaping for VARCHAR/text in test_decoding CDC (#979)
+* Validate and normalize filter names against source catalogs (#978)
+* Prevent segfault in compare schema when object missing on target (#977)
+* Skip GENERATED ALWAYS AS IDENTITY columns in CDC UPDATE SET clause (#976)
+* Close SQLite catalog connections before fork (#974)
+* Use (catoid, oid) object identity to fix filter OID collisions (#972)
+* Fix double constraint creation for tables with EXCLUSION constraint indexes (#965)
+* Fix KEEPALIVE crash when timestamp is empty (#959)
+* Create large object on target if it doesn't exist (PG17+ compat) (#957)
+* Fix no open transaction in clone --follow --snapshot (#956)
+* Fix TRUNCATE ONLY and COPY FREEZE on partitioned target tables (#949)
+* Fix test_decoding parser for REPLICA IDENTITY USING INDEX (#946)
+* Fix parsing quoted null (#933)
+* Fix invalid UPDATE stmt when none of the columns change (#883)
+* Skip toast columns with unchanged values in test_decoding transform (#877)
+* Fix deadlock during pipeline sync (#880)
+* Fix bug in passing logSQL from spec to context (#878)
+* Fix bad copy-paste in compare_fetch_schemas using source schema for target (#935)
+* Fix database source already in use error when re-running commands (#953)
+* Fix catalog mismatch after resume (#952)
+* Fix extension OID collision in skip-extensions logic (#954)
+* Fix archive TOC line parser truncating lines longer than 1024 chars (#867)
+* Fix pg_dump \restrict / \unrestrict metacommand syntax (CVE-2025-8714) (#947)
+* Fix build failure with PostgreSQL 18 (#938)
+* Fix a segfault when SQL state is NULL (#902)
+* Fix zero allocation during pgcopydb list progress (#891)
+* Fix pipe done read condition (#890)
+* Remove one double free (#908)
 
 ### pgcopydb v0.17 (August 7, 2024) ###
 
