@@ -206,6 +206,68 @@ echo "multi_delete_composite_test source: ${src_comp}, target: ${tgt_comp}"
 test "${src_comp}" -eq "${tgt_comp}"
 test "${tgt_comp}" -eq 0
 
+#
+# Verify that a second run of pgcopydb snapshot --follow does not reprint a
+# stale snapshot identifier (issue #559).
+#
+# Use an isolated slot name and work directory so this phase does not
+# interfere with the main test state.
+#
+# Phase 1: first run creates the slot and exports a snapshot, writing the
+#   identifier to stdout.  After SIGTERM the snapshot file persists on disk
+#   (it is needed for --resume commands) but the replication connection is
+#   closed so the snapshot is no longer live on the server.
+#
+# Phase 2: second run finds the slot in the SQLite catalog.  It must NOT
+#   reprint the old identifier — stdout must be empty.
+#
+
+SNAP559_SLOT=pgcopydb559
+SNAP559_DIR=/tmp/pgcopydb559
+
+pgcopydb snapshot --follow \
+	--plugin pgoutput \
+	--slot-name ${SNAP559_SLOT} \
+	--dir ${SNAP559_DIR} \
+	>/tmp/snapshot559a.out 2>/dev/null &
+SNAP559_PID=$!
+
+sleep 2
+
+snapshot_a=$(cat /tmp/snapshot559a.out)
+echo "first run snapshot: ${snapshot_a}"
+test -n "${snapshot_a}"
+
+test -f "${SNAP559_DIR}/snapshot"
+echo "snapshot file exists while process is running"
+
+kill -TERM ${SNAP559_PID}
+wait ${SNAP559_PID} 2>/dev/null || true
+echo "snapshot holder exited cleanly"
+
+pgcopydb snapshot --follow \
+	--plugin pgoutput \
+	--slot-name ${SNAP559_SLOT} \
+	--dir ${SNAP559_DIR} \
+	>/tmp/snapshot559b.out 2>/dev/null &
+SNAP559B_PID=$!
+
+sleep 2
+
+kill -TERM ${SNAP559B_PID}
+wait ${SNAP559B_PID} 2>/dev/null || true
+
+snapshot_b=$(cat /tmp/snapshot559b.out)
+echo "second run snapshot: '${snapshot_b}'"
+test -z "${snapshot_b}"
+echo "second run correctly produced no stale snapshot identifier"
+
+# Drop the isolated replication slot and its auto-managed publication.
+psql -d "${PGCOPYDB_SOURCE_PGURI}" \
+	-c "select pg_drop_replication_slot('${SNAP559_SLOT}')" 2>/dev/null || true
+psql -d "${PGCOPYDB_SOURCE_PGURI}" \
+	-c "DROP PUBLICATION IF EXISTS ${SNAP559_SLOT}" 2>/dev/null || true
+
 # cleanup (drops the auto-managed publication for pgoutput)
 pgcopydb stream cleanup
 
