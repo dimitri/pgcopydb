@@ -43,6 +43,9 @@ filter INI files, and arm64 Docker images.
 * Use our own memory area for editing libpq error messages (#903)
 
 ### Fix
+* Fix client_encoding forced to UTF-8 breaking COPY from SQL_ASCII source databases (#874)
+* Fix missing --split-tables-larger-than and --split-max-parts in copy table-data help (#921)
+* Fix LOCK TABLE failure aborting COPY worker transaction; recover with SAVEPOINT (#875)
 * Fix snapshot file not cleaned up when logical replication snapshot closes (#1014)
 * Fix GUC settings not applied on replication slot creation connection (#1013)
 * Fix list commands to be snapshot-agnostic (#1007)
