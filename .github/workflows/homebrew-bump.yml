@@ -5,17 +5,21 @@ on:
     tags:
       - 'v*.*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to bump (e.g. v0.18)'
+        required: true
 
 jobs:
   bump-formula:
-    if: "!contains(github.ref_name, '-')"
+    if: "!contains(inputs.tag || github.ref_name, '-')"
     runs-on: ubuntu-latest
     steps:
       - uses: mislav/bump-homebrew-formula-action@v3
         with:
           formula-name: pgcopydb
           homebrew-tap: Homebrew/homebrew-core
-          tag-name: ${{ github.ref_name }}
+          tag-name: ${{ inputs.tag || github.ref_name }}
           create-pullrequest: true
         env:
           COMMITTER_TOKEN: ${{ secrets.HOMEBREW_CORE_TOKEN }}
