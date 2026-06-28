@@ -8,8 +8,9 @@ name: Docker
 on:
   push:
     branches: [ main ]
-    # Publish semver tags as releases.
-    tags: [ 'v*.*.*' ]
+    # Publish semver tags as releases. Matches v0.18, v0.18.1, etc.
+    tags: [ 'v*.*' ]
+  workflow_dispatch:
 
 env:
   # Use docker.io for Docker Hub if empty
