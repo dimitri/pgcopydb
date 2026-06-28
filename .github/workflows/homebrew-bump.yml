@@ -15,7 +15,7 @@ jobs:
     if: "!contains(inputs.tag || github.ref_name, '-')"
     runs-on: ubuntu-latest
     steps:
-      - uses: mislav/bump-homebrew-formula-action@v3
+      - uses: mislav/bump-homebrew-formula-action@v4.1
         with:
           formula-name: pgcopydb
           homebrew-tap: Homebrew/homebrew-core
