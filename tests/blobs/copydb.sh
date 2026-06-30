@@ -13,12 +13,21 @@ set -e
 # make sure source and target databases are ready
 pgcopydb ping
 
+# import.sql reassigns one large object to a dedicated, non-connecting role to
+# exercise ownership preservation.  The role must exist on both ends: pgcopydb
+# does not copy roles as part of `dump schema` / `restore pre-data`, so we
+# create it explicitly on each side (this mirrors real deployments where the
+# owner role is provisioned on the target cluster ahead of the migration).
+psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -c "create role blobowner with login;"
+psql -d ${PGCOPYDB_TARGET_PGURI} -1 -c "create role blobowner with login;"
+
 psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pgcopydb/import.sql
 
 # Save info of blobs on the source to compare against the target after migration
 # for validation. We are doing this because we are going to insert some blobs
-# after taking snapshot and ensure we don't migrate them.
-SQL="select loid, count(data) as parts, sum(length(data)) as size from pg_largeobject group by loid order by loid;"
+# after taking snapshot and ensure we don't migrate them. The owner column also
+# proves pg_largeobject_metadata.lomowner is carried across (see import.sql).
+SQL="select m.oid, pg_catalog.pg_get_userbyid(m.lomowner) as owner, count(l.data) as parts, sum(length(l.data)) as size from pg_largeobject_metadata m join pg_largeobject l on l.loid = m.oid group by m.oid, m.lomowner order by m.oid;"
 
 psql -d ${PGCOPYDB_SOURCE_PGURI} -1 -c "${SQL}" > /tmp/source.lo
 
