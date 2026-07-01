@@ -3885,14 +3885,9 @@ pg_copy_large_object(PGSQL *src,
 
 		if (!pgsql_execute(dst, sql))
 		{
-			char context[BUFSIZE] = { 0 };
-
-			sformat(context, sizeof(context),
-					"Failed to set owner of large object %u to %s",
-					blobOid,
-					rolname);
-
-			(void) pgcopy_log_error(dst, NULL, context);
+			log_error("Failed to set owner of large object %u to %s",
+					  blobOid,
+					  rolname);
 
 			pgsql_finish(src);
 			pgsql_finish(dst);
