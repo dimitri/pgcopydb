@@ -825,18 +825,11 @@ copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
 	 * CTID range scan is supported (see columnar storage extensions), so
 	 * we skip partitioning altogether in that case.
 	 *
-	 * Also, we cannot execute ANALYZE on a database that is in recovery mode,
-	 * so we skip partitioning in that case too.
+	 * When the source is a standby (pg_is_in_recovery()), ANALYZE cannot run
+	 * because it writes WAL. We skip ANALYZE below but still partition using
+	 * the pre-existing pg_class.relpages statistics replicated from the
+	 * primary, which are available as a plain read on the standby.
 	 */
-
-	if (specs->sourceSnapshot.isReadOnly)
-	{
-		log_warn("Connected to a standby server where pg_is_in_recovery(): "
-				 "skipping partitioning for table %s",
-				 source->qname);
-
-		return true;
-	}
 
 	if (IS_EMPTY_STRING_BUFFER(source->partKey) &&
 		streq(source->amname, "heap"))
@@ -867,9 +860,13 @@ copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
 
 		/*
 		 * Make sure we have proper statistics (relpages) about the table
-		 * before compute the CTID ranges for the concurrent table scans.
+		 * before computing the CTID ranges for the concurrent table scans.
+		 *
+		 * Skip ANALYZE when estimating table sizes (the caller already has
+		 * size information) or when connected to a standby server (ANALYZE
+		 * writes WAL and is rejected during recovery).
 		 */
-		if (specs->estimateTableSizes)
+		if (specs->estimateTableSizes || specs->sourceSnapshot.isReadOnly)
 		{
 			log_debug("Skipping running ANALYZE on table %s for CTID split",
 					  source->qname);
@@ -896,6 +893,22 @@ copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
 			log_error("Failed to fetch table %s relpages",
 					  source->qname);
 			return false;
+		}
+
+		/*
+		 * On a standby, pg_class.relpages may be zero if the table has
+		 * never been analyzed on the primary. Without page-count statistics
+		 * we cannot compute CTID partition boundaries, so fall back to a
+		 * single COPY and advise the user to run ANALYZE on the primary.
+		 */
+		if (source->relpages == 0 && specs->sourceSnapshot.isReadOnly)
+		{
+			log_warn("Table %s has no statistics on the standby server "
+					 "(relpages = 0 in pg_class): skipping CTID split. "
+					 "Run ANALYZE on the primary to enable partitioning.",
+					 source->qname);
+
+			return true;
 		}
 	}
 	else if (!streq(source->amname, "heap"))
