@@ -3223,8 +3223,14 @@ static void getFKConstraintArray(void *ctx, PGresult *result);
 	"  JOIN pg_class ref ON c.confrelid = ref.oid " \
 	"  JOIN pg_namespace rn ON ref.relnamespace = rn.oid "
 
+/*
+ * conparentid = 0 skips Postgres's internal per-partition FK clones, which
+ * recreate as bogus single-partition FKs or collide via CASCADE. Mirrors
+ * pg_dump; conparentid exists since PG 11.
+ */
 #define FK_BASE_WHERE \
 	" WHERE c.contype = 'f' " \
+	"   AND c.conparentid = 0 " \
 	"   AND n.nspname !~ '^pg_' " \
 	"   AND n.nspname <> 'information_schema' " \
 	"   AND rn.nspname !~ '^pg_' " \
