@@ -162,9 +162,8 @@ parse_dotted_version_string(const char *pg_version_string, int *pg_version)
 		{
 			if (dotFound)
 			{
-				log_error("Failed to parse Postgres version number \"%s\"",
-						  pg_version_string);
-				return false;
+				/* Stop at the second dot: we already have major and minor digits */
+				break;
 			}
 
 			dotFound = true;
