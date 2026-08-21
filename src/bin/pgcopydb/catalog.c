@@ -10610,8 +10610,8 @@ catalog_count_summary_done_fetch(SQLiteQuery *query)
 
 /*
  * catalog_count_bytes returns byte totals used by list progress to show
- * transfer volume.  total is the sum of source catalog sizes (s_table.bytes);
- * transferred is the sum of summary.bytes for all table rows — done rows
+ * transfer volume.  total sums the source catalog sizes, which live in
+ * s_table_size and not in s_table; transferred sums summary.bytes: done rows
  * hold their final bytesTransmitted, in-progress rows hold the last value
  * flushed by the periodic stats hook (every ~5 s with PID-based jitter).
  */
@@ -10628,7 +10628,8 @@ catalog_count_bytes(DatabaseCatalog *catalog, CatalogBytesCounts *count)
 
 	char *sql =
 		"select "
-		"  coalesce((select sum(bytes) from s_table), 0) as total, "
+		"  coalesce((select sum(ts.bytes) from s_table t"
+		"             left join s_table_size ts on ts.oid = t.oid), 0) as total, "
 		"  coalesce((select sum(bytes) from summary"
 		"             where tableoid is not null and done_time_epoch is not null), 0)"
 		"    as done, "
