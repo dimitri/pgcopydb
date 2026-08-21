@@ -851,6 +851,49 @@ catalog_stored_filter_type(const char *filtersJson)
 
 
 /*
+ * catalog_filters_match_adoption returns true when the given serialized filters
+ * are what the current command would write after adopting the catalog's stored
+ * filter type: that type, no relation filters, and the extension filters of the
+ * command itself.
+ */
+static bool
+catalog_filters_match_adoption(SourceFilters *filters,
+							   const char *filtersJson,
+							   SourceFilterType storedType)
+{
+	SourceFilters adopted = { 0 };
+
+	adopted.type = storedType;
+
+	/*
+	 * Extension filtering never contributes to the filter type, so a command
+	 * filtering only extensions still adopts the stored type and keeps its own
+	 * extension lists.  Borrow them for the comparison; filters_as_json only
+	 * reads the lists, and this struct owns nothing.
+	 */
+	adopted.excludeExtensionList = filters->excludeExtensionList;
+	adopted.includeOnlyExtensionList = filters->includeOnlyExtensionList;
+
+	JSON_Value *js = json_value_init_object();
+
+	if (!filters_as_json(&adopted, js))
+	{
+		/* errors have already been logged */
+		json_value_free(js);
+		return false;
+	}
+
+	char *adoptedJson = json_serialize_to_string(js);
+	bool match = streq(filtersJson, adoptedJson);
+
+	json_free_serialized_string(adoptedJson);
+	json_value_free(js);
+
+	return match;
+}
+
+
+/*
  * catalog_register_setup_from_specs registers the current copySpecs setup.
  */
 bool
@@ -1280,16 +1323,42 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 			else if (strstr(setup->filters, "SOURCE_FILTER_TYPE_NONE") == NULL &&
 					 strstr(json, "SOURCE_FILTER_TYPE_NONE") == NULL)
 			{
-				/* Case 2: both sides have filters but they differ — conflict. */
-				log_info("Current filtering setup is: %s", json);
-				log_info("Catalog filtering setup is: %s", setup->filters);
-				log_error("Catalogs at \"%s\" have been setup for a different "
-						  "filtering than the current command, "
-						  "see above for details",
-						  sourceDB->dbfile);
+				/*
+				 * Case 2: both sides have filters, and they differ.
+				 *
+				 * Before calling that a conflict, allow for a command that
+				 * adopted the catalog's stored filter type in case 3 below:
+				 * its own filters then serialize to that type, no relation
+				 * filters, and whatever extensions it filters itself.  Worker
+				 * processes forked by a clone that runs without the stored
+				 * filters land here, having inherited that from their parent.
+				 *
+				 * A real filters file always fills at least one relation list,
+				 * which is what gives it its type, so it cannot match here.
+				 */
+				SourceFilterType storedType =
+					catalog_stored_filter_type(setup->filters);
 
-				json_free_serialized_string(json);
-				return false;
+				if (storedType != SOURCE_FILTER_TYPE_NONE &&
+					catalog_filters_match_adoption(filters, json, storedType))
+				{
+					log_debug("Current filtering is the catalog's stored "
+							  "filter type (%s), as adopted by our parent "
+							  "process",
+							  filterTypeToString(storedType));
+				}
+				else
+				{
+					log_info("Current filtering setup is: %s", json);
+					log_info("Catalog filtering setup is: %s", setup->filters);
+					log_error("Catalogs at \"%s\" have been setup for a different "
+							  "filtering than the current command, "
+							  "see above for details",
+							  sourceDB->dbfile);
+
+					json_free_serialized_string(json);
+					return false;
+				}
 			}
 			else if (strstr(setup->filters, "SOURCE_FILTER_TYPE_NONE") == NULL &&
 					 strstr(json, "SOURCE_FILTER_TYPE_NONE") != NULL)
@@ -1297,9 +1366,9 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 				/*
 				 * Case 3: catalog was created with filters; the current
 				 * command has none (e.g. pgcopydb clone without --filters,
-				 * pgcopydb list table-parts, pgcopydb stream sentinel).
-				 * These commands operate on the already-filtered catalog
-				 * data and do not need --filters repeated.
+				 * pgcopydb list table-parts).  These commands operate on
+				 * the already-filtered catalog data and do not need
+				 * --filters repeated.
 				 *
 				 * Adopt the stored filter TYPE so that
 				 * copydb_fetch_filtered_oids uses the correct complement
@@ -1308,11 +1377,15 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 				 * are not needed: filtersDB already holds the pre-computed
 				 * OIDs from the earlier list commands.
 				 *
-				 * Also update the stored JSON in source.db to match the
-				 * current command's serialization (adopted type, empty
-				 * patterns).  Worker processes independently call this
-				 * function and must see the same stored JSON or they would
-				 * trigger Case 2 (both sides non-NONE but mismatched).
+				 * The adoption stays in memory: the stored record is never
+				 * rewritten from here.  Every filter-checked command run
+				 * without the stored filters lands in this case, so writing
+				 * the adopted type back replaced the stored patterns with the
+				 * serialization of our own empty lists, and a single
+				 * `pgcopydb list tables` was enough to leave the directory
+				 * unusable by its --filters owner (#1038).  Worker processes
+				 * that inherit the adopted type are recognized by the
+				 * comparison in case 2 above instead.
 				 */
 				SourceFilterType storedType =
 					catalog_stored_filter_type(setup->filters);
@@ -1320,31 +1393,6 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 				if (storedType != SOURCE_FILTER_TYPE_NONE)
 				{
 					filters->type = storedType;
-
-					json_free_serialized_string(json);
-
-					JSON_Value *jsAdopted = json_value_init_object();
-
-					if (!filters_as_json(filters, jsAdopted))
-					{
-						/* errors have already been logged */
-						return false;
-					}
-
-					json = json_serialize_to_string(jsAdopted);
-
-					if (!catalog_update_filters(sourceDB, json))
-					{
-						log_error("Failed to update filters in catalog database");
-						json_free_serialized_string(json);
-						return false;
-					}
-
-					if (setup->filters != NULL)
-					{
-						free(setup->filters);
-					}
-					setup->filters = strdup(json);
 				}
 
 				log_debug("Adopting catalog's stored filter type (%s) for "
