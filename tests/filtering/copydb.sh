@@ -51,6 +51,42 @@ EOF
 
 pgcopydb clone --filters /usr/src/pgcopydb/exclude.ini --resume --not-consistent
 
+# Whatever runs against this work directory without repeating its filters must
+# leave them stored as they are (#1038).
+assert_filters_intact()
+{
+    sqlite3 /tmp/exclude/pgcopydb/schema/source.db 'select filters from setup;' \
+        | grep -F exclude-schema \
+        || { echo "the exclude filters are gone from the work directory (#1038)"; exit 1; }
+}
+
+# A list command that opens the catalog without --filters.
+pgcopydb list table-parts --split-tables-larger-than 10GB \
+         --schema-name seq --table-name default_table
+
+# list progress can fail here for its own reasons (#1036); what we check is
+# what it leaves behind in the catalog.
+pgcopydb list progress --json || true
+
+assert_filters_intact
+
+pgcopydb clone --filters /usr/src/pgcopydb/exclude.ini --resume --not-consistent
+
+# A filterless clone, whose forked workers re-enter the setup check carrying
+# the filter type their parent adopted.
+pgcopydb clone --resume --not-consistent
+
+assert_filters_intact
+
+# Extension filtering carries no filter type, so this clone adopts the stored
+# one and its workers carry the extension list along with it.
+pgcopydb clone --filters /usr/src/pgcopydb/ext-only.ini --resume --not-consistent
+
+assert_filters_intact
+
+# The directory must still be usable by the filters it was created with.
+pgcopydb clone --filters /usr/src/pgcopydb/exclude.ini --resume --not-consistent
+
 export TMPDIR=/tmp/include
 
 # now compare the output of running the SQL command with what's expected

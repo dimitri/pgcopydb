@@ -2039,6 +2039,14 @@ cli_list_progress(int argc, char **argv)
 		}
 	}
 
+	/*
+	 * list progress is filter-agnostic: it reports on the work that previous
+	 * commands recorded in the catalogs and never reads or writes any
+	 * filter-dependent data.  Skip the filter consistency check so that it
+	 * works the same on a filtered and on an unfiltered work directory.
+	 */
+	copySpecs.skipFilterCheck = true;
+
 	if (!catalog_init_from_specs(&copySpecs))
 	{
 		log_error("Failed to initialize pgcopydb internal catalogs");
