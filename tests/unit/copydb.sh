@@ -46,7 +46,11 @@ do
     e=./expected/${t}.out
     psql -d "${PGCOPYDB_TARGET_PGURI}" ${pgopts} --file ./sql/$t.sql &> $r
     test -f $e || cat $r
-    diff $e $r || exit 1
+    # -w: psql's expanded-mode padding for multi-line values changed in
+    # the August 2026 minor releases (16.15 / 17.11 / 18.6), so column
+    # widths are not stable across client versions.  Compare content,
+    # not alignment -- same as the script/ loop below.
+    diff -w $e $r || exit 1
 done
 
 

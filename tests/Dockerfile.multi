@@ -37,7 +37,12 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src/
-RUN git clone --depth 1 https://github.com/devrimgunduz/pagila.git
+# Pin pagila to the last commit before the upstream 4.x line, which
+# raised its minimum to PostgreSQL 18 and started requiring uuidv7(),
+# pgvector and pg_partman.  Cloning master unpinned broke every
+# pagila-based test overnight; see the CI notes in the PR.
+RUN git clone https://github.com/devrimgunduz/pagila.git \
+ && git -C pagila checkout 5ba5a57aeb159f75f02aca2432d3c262186d13d3
 
 COPY f1db/f1db.dump /usr/src/f1db/f1db.dump
 COPY chinook/Chinook_PostgreSql.sql /usr/src/chinook/Chinook_PostgreSql.sql
