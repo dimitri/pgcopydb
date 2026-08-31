@@ -578,11 +578,13 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 						   xid,
 						   LSN_FORMAT_ARGS(context->previousLSN));
 
-				/* ensure replay_lsn advances to endpos for follow_reached_endpos */
-				if (context->previousLSN < context->endpos)
-				{
-					context->previousLSN = context->endpos;
-				}
+				/*
+				 * Do NOT push previousLSN up to endpos here. It is published
+				 * as the sentinel replay_lsn, and overwriting it reports work
+				 * the apply did not do. follow_reached_endpos() check (b)
+				 * already ends the loop from the apply exiting run_state=done
+				 * when endpos falls between or inside transactions.
+				 */
 				(void) stream_apply_sync_sentinel(context, false);
 				break;
 			}
@@ -635,11 +637,13 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 				log_info("Apply reached endpos %X/%X",
 						 LSN_FORMAT_ARGS(context->endpos));
 
-				/* ensure replay_lsn advances to endpos for follow_reached_endpos */
-				if (context->previousLSN < context->endpos)
-				{
-					context->previousLSN = context->endpos;
-				}
+				/*
+				 * Do NOT push previousLSN up to endpos here. It is published
+				 * as the sentinel replay_lsn, and overwriting it reports work
+				 * the apply did not do. follow_reached_endpos() check (b)
+				 * already ends the loop from the apply exiting run_state=done
+				 * when endpos falls between or inside transactions.
+				 */
 				(void) stream_apply_sync_sentinel(context, false);
 				break;
 			}
@@ -1399,7 +1403,9 @@ stream_apply_sync_sentinel(StreamApplyContext *context, bool findDurableLSN)
 	uint64_t durableLSN = InvalidXLogRecPtr;
 
 	/*
-	 * If we know we reached endpos, then publish that as the replay_lsn.
+	 * At endpos, publish the last LSN the apply actually committed. It is not
+	 * necessarily endpos: endpos can fall between or inside transactions, and
+	 * replay_lsn has to stay a measurement of applied work.
 	 */
 	if (context->reachedEndPos || !findDurableLSN)
 	{
