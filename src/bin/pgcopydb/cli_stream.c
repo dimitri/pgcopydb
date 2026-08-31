@@ -1524,7 +1524,9 @@ cli_stream_apply(int argc, char **argv)
 		 */
 		specs.sentinel.replay_lsn = InvalidXLogRecPtr;
 
-		if (!stream_transform_from_outputdb(&specs, InvalidXLogRecPtr))
+		if (!stream_transform_from_outputdb(&specs,
+											InvalidXLogRecPtr,
+											InvalidXLogRecPtr))
 		{
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}

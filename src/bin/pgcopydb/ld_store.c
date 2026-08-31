@@ -437,7 +437,8 @@ ld_store_set_cdc_filename_at_lsn(StreamSpecs *specs, uint64_t lsn)
 		 */
 		ReplayDBOutputMessage output = { 0 };
 
-		if (!ld_store_lookup_output_after_lsn(candidateDB, lsn, &output))
+		/* the probe asks "any row from here on", so both cursors are lsn */
+		if (!ld_store_lookup_output_after_lsn(candidateDB, lsn, lsn, &output))
 		{
 			/* errors have already been logged */
 			sqlite3_close(probeDB);
@@ -595,6 +596,7 @@ ld_store_lookup_output_at_lsn(DatabaseCatalog *catalog, uint64_t lsn,
 bool
 ld_store_lookup_output_after_lsn(DatabaseCatalog *catalog,
 								 uint64_t lsn,
+								 uint64_t keepaliveLSN,
 								 ReplayDBOutputMessage *output)
 {
 	sqlite3 *db = catalog->db;
@@ -656,9 +658,12 @@ ld_store_lookup_output_after_lsn(DatabaseCatalog *catalog,
 	 *      (wal2json emits them at the same WAL position), so use >=.
 	 *
 	 *   2. KEEPALIVE ('K') or SWITCH ('X') — non-transactional markers
-	 *      that appear between committed transactions.  Use strict > so
-	 *      that after recording transform_lsn = keepalive.lsn the next
-	 *      call moves past the row without a +1 trick.
+	 *      that appear between committed transactions.  They carry the
+	 *      server's walEnd, which sits above transactions the server has
+	 *      not decoded yet, so they get their own cursor ($2) instead of
+	 *      riding on the transaction cursor ($1), which would hide those
+	 *      transactions.  Strict > so that the marker the apply just
+	 *      consumed is not handed back.
 	 *
 	 * DML rows (I/U/D/T) are NEVER returned here: they are always inside
 	 * a transaction and are consumed exclusively by the inner iterator
@@ -678,7 +683,9 @@ ld_store_lookup_output_after_lsn(DatabaseCatalog *catalog,
 		"order by lsn asc, case when action = 'B' then 0 else 1 end, id asc "
 		"limit 1";
 
-	log_debug("ld_store_lookup_output_after_lsn: %X/%X", LSN_FORMAT_ARGS(lsn));
+	log_debug("ld_store_lookup_output_after_lsn: %X/%X (keepalive %X/%X)",
+			  LSN_FORMAT_ARGS(lsn),
+			  LSN_FORMAT_ARGS(keepaliveLSN));
 
 	SQLiteQuery query = {
 		.errorOnZeroRows = false,
@@ -697,7 +704,7 @@ ld_store_lookup_output_after_lsn(DatabaseCatalog *catalog,
 	/* bind our parameters now */
 	BindParam params[] = {
 		{ BIND_PARAMETER_TYPE_INT64, "lsn", lsn },
-		{ BIND_PARAMETER_TYPE_INT64, "lsn", lsn }
+		{ BIND_PARAMETER_TYPE_INT64, "keepaliveLSN", keepaliveLSN }
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
@@ -781,6 +788,93 @@ ld_store_lookup_output_xid_end(DatabaseCatalog *catalog,
 	};
 
 	if (!catalog_sql_bind(&query, params, 1))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * ld_store_lookup_output_complete_txn returns the oldest complete transaction
+ * in the output table that commits after previousLSN and at or before endpos,
+ * with the commit LSN in output->lsn.  output->lsn is InvalidXLogRecPtr when
+ * there is none.
+ *
+ * The join to the COMMIT row is what makes a transaction count as complete: an
+ * endpos that falls inside a transaction still leaves nothing to drain here,
+ * which is how the apply loop terminates in that case.
+ *
+ * Only a COMMIT terminates a transaction for this purpose.  A ROLLBACK leaves
+ * previousLSN where it was, by design, so counting one as work left to drain
+ * would hold the window open on a transaction the apply is never going to
+ * move past.  ld_store_lookup_output_xid_end documents the reconnect case
+ * where one xid carries both a stale artificial ROLLBACK and the re-delivered
+ * real COMMIT; correlating on c.id > b.id keeps the stale row from pairing
+ * with the later BEGIN.
+ */
+bool
+ld_store_lookup_output_complete_txn(DatabaseCatalog *catalog,
+									uint64_t previousLSN,
+									uint64_t endpos,
+									ReplayDBOutputMessage *output)
+{
+	/* the apply closes and re-opens this handle on CDC file rotation */
+	if (catalog == NULL || catalog->db == NULL)
+	{
+		log_error("BUG: ld_store_lookup_output_complete_txn: db is NULL");
+		return false;
+	}
+
+	sqlite3 *db = catalog->db;
+
+	/*
+	 * The BEGIN row carries the transaction, the C/R row carries the position
+	 * the apply compares against: report c.lsn as the row lsn.  The message
+	 * body is never read here, so select null for it and skip its malloc.
+	 */
+	char *sql =
+		"  select b.id, b.action, b.xid, c.lsn, b.timestamp, null, "
+		"         b.nspname, b.relname, b.old_type "
+		"    from output b "
+		"    join output c on c.xid = b.xid and c.action = 'C' and c.id > b.id "
+		"   where b.action = 'B' and c.lsn > $1 and c.lsn <= $2 "
+		"order by c.lsn asc "
+		"   limit 1";
+
+	log_debug("ld_store_lookup_output_complete_txn: %X/%X .. %X/%X",
+			  LSN_FORMAT_ARGS(previousLSN),
+			  LSN_FORMAT_ARGS(endpos));
+
+	/* errorOnZeroRows = false: an empty drain is the expected answer */
+	SQLiteQuery query = {
+		.errorOnZeroRows = false,
+		.context = output,
+		.fetchFunction = &ld_store_output_fetch
+	};
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "previousLSN", previousLSN, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "endpos", endpos, NULL }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
 		return false;
@@ -2126,6 +2220,7 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 
 	iter->catalog = specs->outputDB;
 	iter->transform_lsn = specs->sentinel.replay_lsn;  /* apply reads from replay_lsn */
+	iter->keepalive_lsn = specs->private.keepaliveLSN;
 	iter->endpos = specs->endpos;
 
 
@@ -2362,7 +2457,10 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 	 * ENDPOS rows no longer appear in the output table: receive signals
 	 * transform via the pipe_rt lifecycle pipe instead.
 	 */
-	if (!ld_store_lookup_output_after_lsn(catalog, iter->transform_lsn, &first))
+	if (!ld_store_lookup_output_after_lsn(catalog,
+										  iter->transform_lsn,
+										  iter->keepalive_lsn,
+										  &first))
 	{
 		/* errors have already been logged */
 		iter->output = NULL;
@@ -2467,10 +2565,9 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 			}
 
 			/*
-			 * The non-transactional branch in ld_store_lookup_output_after_lsn
-			 * uses `lsn > transform_lsn` (strict), so a DML row at exactly
-			 * transform_lsn is never returned — the cursor-collision can no
-			 * longer occur.
+			 * ld_store_lookup_output_after_lsn returns BEGIN rows and markers
+			 * only, and the markers ride their own strict cursor, so a row at
+			 * exactly transform_lsn cannot come back as a starting point.
 			 */
 			if (last.lsn == InvalidXLogRecPtr)
 			{
@@ -2969,7 +3066,7 @@ ld_store_replay_event_fetch(SQLiteQuery *query)
  * already exists in the replay table (endlsn > previousLSN ensures this).
  *
  * For non-transactional events (KEEPALIVE only — ENDPOS rows are no longer
- * written to the replay table): returns the first row at lsn >= previousLSN.
+ * written to the replay table): returns the first row at lsn > keepaliveLSN.
  *
  * Apply exits when no more rows AND pipeline_state['transform'].run_end_lsn
  * has been reached (set at stream_apply_catchup startup).
@@ -2980,6 +3077,7 @@ ld_store_replay_event_fetch(SQLiteQuery *query)
 bool
 ld_store_replay_next_event(DatabaseCatalog *catalog,
 						   uint64_t previousLSN,
+						   uint64_t keepaliveLSN,
 						   ReplayDBStmt *s)
 {
 	sqlite3 *db = catalog->db;
@@ -3002,12 +3100,13 @@ ld_store_replay_next_event(DatabaseCatalog *catalog,
 	 *
 	 * For non-transactional events (KEEPALIVE only — ENDPOS rows are no
 	 * longer written to the replay table): return the first KEEPALIVE row
-	 * at lsn STRICTLY greater than previousLSN.
+	 * at lsn STRICTLY greater than keepaliveLSN.
 	 *
-	 * Using lsn > $1 (strict) rather than lsn >= $1 is essential: after
-	 * apply processes a KEEPALIVE at lsn=X and sets previousLSN=X, the
-	 * next call uses $1=X.  With >=, the same KEEPALIVE is returned again
-	 * and apply spins.  With >, the same row is not returned a second time.
+	 * Keepalives get their own cursor because previousLSN also selects the
+	 * transactions still to apply.  A keepalive LSN sits above transactions
+	 * that commit below it and have not been applied yet, so filtering them
+	 * with it would drop them.  The cursor is still strict (>), because with
+	 * >= the row apply just consumed comes back and apply spins.
 	 */
 	char *sql =
 		"select b.id, b.action, b.xid, b.lsn, b.endlsn, b.timestamp "
@@ -3018,7 +3117,7 @@ ld_store_replay_next_event(DatabaseCatalog *catalog,
 		"select id, action, xid, lsn, endlsn, timestamp "
 		"  from replay "
 		" where action = 'K' "            /* KEEPALIVE only — no ENDPOS rows */
-		"   and lsn > $1 "                /* strict: avoids re-delivering same row */
+		"   and lsn > $2 "                /* strict: avoids re-delivering same row */
 		"order by lsn asc, id asc "
 		"limit 1";
 
@@ -3037,10 +3136,13 @@ ld_store_replay_next_event(DatabaseCatalog *catalog,
 	}
 
 	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_INT64, "previousLSN", previousLSN, NULL }
+		{ BIND_PARAMETER_TYPE_INT64, "previousLSN", previousLSN, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "keepaliveLSN", keepaliveLSN, NULL }
 	};
 
-	if (!catalog_sql_bind(&query, params, 1))
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
 	{
 		/* errors have already been logged */
 		return false;
