@@ -151,6 +151,15 @@ stream_apply_catchup(StreamSpecs *specs)
 #define APPLY_STATE_SYNC_EVERY 64
 
 /*
+ * How many consecutive passes may move nothing at all while the spool still
+ * holds committed work below endpos.  Those passes sleep 100 ms, so this is
+ * thirty seconds: three times STREAM_EMPTY_TX_TIMEOUT, so a receive that is
+ * merely idle still resets the count with its keepalives well before the
+ * bound, and only a pipeline that has actually stopped reaches it.
+ */
+#define APPLY_DRAIN_STALL_LIMIT 300
+
+/*
  * stream_apply_state_progressed returns true when the in-memory apply pipeline
  * state advanced between two snapshots — i.e. the transform stage wrote a new
  * transaction to replayDB, or the apply stage committed one to the target.
@@ -239,6 +248,7 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 	specs->private.applyState = &current;
 
 	int syncCounter = 0;
+	int stalledPasses = 0;
 
 	for (;;)
 	{
@@ -291,7 +301,10 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 		}
 		lock_held = true;
 
-		if (!ld_store_replay_next_event(replayDB, context->previousLSN, &s))
+		if (!ld_store_replay_next_event(replayDB,
+										context->previousLSN,
+										context->keepaliveLSN,
+										&s))
 		{
 			/* errors have already been logged */
 			success = false;
@@ -315,17 +328,28 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 			 * transaction it writes, so comparing against this snapshot tells
 			 * us whether the transform stage made progress this pass.
 			 *
-			 * The call is safe to repeat: ld_store_iter_output uses
-			 * specs->sentinel.replay_lsn as a cursor and only processes rows
-			 * newer than the last committed apply position.  Afterwards
-			 * specs->private.midTxnEndpos may be set, meaning receive finished
-			 * with an uncommitted transaction open.
+			 * The call is safe to repeat: ld_store_iter_output only processes
+			 * transactions committing above previousLSN and markers above
+			 * keepaliveLSN, so a pass that hands over nothing changes nothing.
+			 * Afterwards specs->private.midTxnEndpos may be set, meaning
+			 * receive finished with an uncommitted transaction open.
 			 */
 			PipelineStateEntry before = current;
 
-			if (!stream_transform_from_outputdb(specs, context->previousLSN))
+			if (!stream_transform_from_outputdb(specs,
+												context->previousLSN,
+												context->keepaliveLSN))
 			{
-				log_warn("Failed to transform from outputDB, will retry");
+				/*
+				 * A transform that keeps failing never produces the rest of
+				 * the spool, and this loop reads "no new work" as "nothing
+				 * left to do": swallowing the failure ends the run short of
+				 * endpos and calls it a success.
+				 */
+				log_error("Failed to transform from outputDB, "
+						  "see above for details");
+				success = false;
+				break;
 			}
 
 			if (specs->private.midTxnEndpos)
@@ -375,6 +399,8 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 			 */
 			if (stream_apply_state_progressed(&before, &current))
 			{
+				stalledPasses = 0;
+
 				/* checkpoint progress to sourceDB once in a while */
 				if ((++syncCounter % APPLY_STATE_SYNC_EVERY) == 0)
 				{
@@ -385,12 +411,37 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 			}
 
 			/*
-			 * No new work from the transform stage.  Before checking whether
-			 * receive has finished, see if the receive process rotated to a new
-			 * output.db file.  If the current output.db has been closed
-			 * (done_time_epoch IS NOT NULL in cdc_files) and a successor file
-			 * exists, advance to it immediately rather than spinning.
+			 * No new work from the transform stage.  What outputDB still holds
+			 * below endpos decides two things: whether the current CDC file may
+			 * be retired, and whether the drain is finished.  Ask once.
+			 *
+			 * Only complete transactions count, so an endpos falling inside an
+			 * open transaction still drains empty and the loop terminates.
 			 */
+			ReplayDBOutputMessage pending = { 0 };
+
+			if (context->endpos != InvalidXLogRecPtr &&
+				!ld_store_lookup_output_complete_txn(specs->outputDB,
+													 context->previousLSN,
+													 context->endpos,
+													 &pending))
+			{
+				log_error("Failed to look up the transactions left to apply "
+						  "in outputDB, see above for details");
+				success = false;
+				break;
+			}
+
+			/*
+			 * Receive rotates to a new output.db once it has closed the current
+			 * one (done_time_epoch IS NOT NULL in cdc_files); follow it rather
+			 * than spin.  Not while this file still holds committed work below
+			 * endpos, though: every later pass asks the drain question of
+			 * whichever file is open, so moving on would hide that work and let
+			 * the drain report success.  Receive only closes a file it has
+			 * finished writing, so this cannot wait on rows that never arrive.
+			 */
+			if (pending.lsn == InvalidXLogRecPtr)
 			{
 				bool advanced = false;
 
@@ -410,14 +461,17 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 					 */
 					replayDB = specs->replayDB;
 					context->replayDB = replayDB;
+					stalledPasses = 0;
 					continue;
 				}
 			}
 
 			/*
-			 * No new work from the transform stage.  If receive has finished
-			 * there is nothing left to do: everything up to the last committed
-			 * transaction boundary at or before endpos has been applied.
+			 * Receive being finished is necessary to stop here, and not
+			 * sufficient: the transform hands over one unit per pass and a
+			 * KEEPALIVE unit reports no transaction progress, so "this pass
+			 * produced nothing" says nothing about what is still spooled.  The
+			 * lookup above answers that; this only decides who asked.
 			 *
 			 * In FOLLOW mode the upstream_done flag signals receive completion;
 			 * in CATCHUP mode (no pipe) consult receive's pipeline_state row.
@@ -440,24 +494,52 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 					}
 				}
 
-				if (receive_done)
+				if (receive_done && pending.lsn == InvalidXLogRecPtr)
 				{
-					log_notice("Apply: receive done and no more complete "
-							   "transactions to transform — stopping at last "
+					log_notice("Apply: receive is done and outputDB holds "
+							   "no complete transaction committing at or "
+							   "below endpos %X/%X, stopping at last "
 							   "commit %X/%X",
+							   LSN_FORMAT_ARGS(context->endpos),
 							   LSN_FORMAT_ARGS(context->previousLSN));
 
 					context->reachedEndPos = true;
 					(void) stream_apply_sync_sentinel(context, false);
 					break;
 				}
+
+				/*
+				 * Committed work is still spooled below endpos and nothing has
+				 * come through the pipeline for a while.  Fail rather than
+				 * spin, and above all rather than report a cutover that
+				 * dropped those transactions.
+				 */
+				if (pending.lsn != InvalidXLogRecPtr &&
+					(receive_done || context->endPosRecordSeen) &&
+					++stalledPasses >= APPLY_DRAIN_STALL_LIMIT)
+				{
+					log_error("Apply is stuck draining: %d passes moved "
+							  "nothing while outputDB still holds xid %u "
+							  "committing at %X/%X, at or below endpos "
+							  "%X/%X, with apply at %X/%X",
+							  stalledPasses,
+							  pending.xid,
+							  LSN_FORMAT_ARGS(pending.lsn),
+							  LSN_FORMAT_ARGS(context->endpos),
+							  LSN_FORMAT_ARGS(context->previousLSN));
+
+					success = false;
+					break;
+				}
 			}
 
 			/*
 			 * Not caught up yet.  In pipe mode the select() ceiling gives
-			 * ≤100 ms latency; in catchup-only mode sleep briefly.
+			 * ≤100 ms latency; with no pipe left to wait on, sleep briefly so
+			 * a count of idle passes is also a wall-clock bound.  Passes that
+			 * produced work have already continued above.
 			 */
-			if (pipe_rd < 0 && !specs->upstream_done)
+			if (pipe_rd < 0)
 			{
 				pg_usleep(100 * 1000);  /* 100 ms */
 			}
@@ -471,6 +553,14 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 		 */
 		semaphore_unlock(&(replayDB->sema));
 		lock_held = false;
+
+		/*
+		 * The pipeline moved: the transform put this row in replayDB and the
+		 * apply is taking it.  A KEEPALIVE row reaches this point too, and it
+		 * changes no transaction state, so the drain bound would otherwise
+		 * count an idle source's keepalives as a stall.
+		 */
+		stalledPasses = 0;
 
 		if (s.action == STREAM_ACTION_BEGIN)
 		{
@@ -578,11 +668,13 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 						   xid,
 						   LSN_FORMAT_ARGS(context->previousLSN));
 
-				/* ensure replay_lsn advances to endpos for follow_reached_endpos */
-				if (context->previousLSN < context->endpos)
-				{
-					context->previousLSN = context->endpos;
-				}
+				/*
+				 * Do NOT push previousLSN up to endpos here. It is published
+				 * as the sentinel replay_lsn, and overwriting it reports work
+				 * the apply did not do. follow_reached_endpos() check (b)
+				 * already ends the loop from the apply exiting run_state=done
+				 * when endpos falls between or inside transactions.
+				 */
 				(void) stream_apply_sync_sentinel(context, false);
 				break;
 			}
@@ -617,6 +709,14 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 
 			if (s.action == STREAM_ACTION_KEEPALIVE)
 			{
+				/*
+				 * The row is consumed now, whichever way the handler took it,
+				 * and the query must not hand it back.  The cursor lives here
+				 * rather than in previousLSN, which selects the transactions
+				 * still to apply.
+				 */
+				context->keepaliveLSN = s.lsn;
+
 				bool findDurableLSN = false;
 
 				if (!stream_apply_sync_sentinel(context, findDurableLSN))
@@ -630,19 +730,14 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 				current.run_end_lsn = context->previousLSN;
 			}
 
-			if (context->reachedEndPos)
-			{
-				log_info("Apply reached endpos %X/%X",
-						 LSN_FORMAT_ARGS(context->endpos));
-
-				/* ensure replay_lsn advances to endpos for follow_reached_endpos */
-				if (context->previousLSN < context->endpos)
-				{
-					context->previousLSN = context->endpos;
-				}
-				(void) stream_apply_sync_sentinel(context, false);
-				break;
-			}
+			/*
+			 * A KEEPALIVE at or past endpos does not end the run on its own.
+			 * The walEnd it carries can sit ahead of transactions the server
+			 * has not decoded yet, and those still commit below endpos and
+			 * belong to this migration.  Termination is decided in the drained
+			 * path above: receive done, and nothing complete left in outputDB
+			 * below endpos.
+			 */
 		}
 	}
 
@@ -1188,6 +1283,13 @@ stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
 		return false;
 	}
 
+	/*
+	 * Keepalives are consumed with their own cursor, so that previousLSN only
+	 * ever moves to a COMMIT the apply executed.  Start it at the origin, or a
+	 * resumed run replays every keepalive the previous one already saw.
+	 */
+	context->keepaliveLSN = context->previousLSN;
+
 	/* build the target relkind cache (matview detection) */
 	if (!stream_apply_load_target_relkinds(context))
 	{
@@ -1399,7 +1501,9 @@ stream_apply_sync_sentinel(StreamApplyContext *context, bool findDurableLSN)
 	uint64_t durableLSN = InvalidXLogRecPtr;
 
 	/*
-	 * If we know we reached endpos, then publish that as the replay_lsn.
+	 * At endpos, publish the last LSN the apply actually committed. It is not
+	 * necessarily endpos: endpos can fall between or inside transactions, and
+	 * replay_lsn has to stay a measurement of applied work.
 	 */
 	if (context->reachedEndPos || !findDurableLSN)
 	{
@@ -1870,12 +1974,21 @@ stream_apply_sql(StreamApplyContext *context,
 			if (context->endpos != InvalidXLogRecPtr &&
 				context->endpos < metadata->lsn)
 			{
+				/*
+				 * previousLSN is the apply filter, the transform cursor and
+				 * the restart seed at once, and it only ever moves forward.
+				 * Moving it to a keepalive at or past endpos hides every
+				 * transaction that commits below that position from this run
+				 * and from any later one, which is how committed rows go
+				 * missing at cutover.  Record the sighting separately and
+				 * leave the cursor on the last commit we applied.
+				 */
 				context->reachedEndPos = true;
-				context->previousLSN = metadata->lsn;
+				context->endPosRecordSeen = true;
 
 				log_notice("Apply reached end position %X/%X at KEEPALIVE %X/%X",
 						   LSN_FORMAT_ARGS(context->endpos),
-						   LSN_FORMAT_ARGS(context->previousLSN));
+						   LSN_FORMAT_ARGS(metadata->lsn));
 
 				return true;
 			}
@@ -1963,7 +2076,7 @@ stream_apply_sql(StreamApplyContext *context,
 				return false;
 			}
 
-			context->previousLSN = metadata->lsn;
+			/* only a COMMIT moves previousLSN: see the endpos check above */
 
 			/*
 			 * At COMMIT time we might have reached the endpos: we know
@@ -1972,13 +2085,14 @@ stream_apply_sql(StreamApplyContext *context,
 			 * last entry of the file we're applying.
 			 */
 			if (context->endpos != InvalidXLogRecPtr &&
-				context->endpos <= context->previousLSN)
+				context->endpos <= metadata->lsn)
 			{
 				context->reachedEndPos = true;
+				context->endPosRecordSeen = true;
 
 				log_notice("Apply reached end position %X/%X at KEEPALIVE %X/%X",
 						   LSN_FORMAT_ARGS(context->endpos),
-						   LSN_FORMAT_ARGS(context->previousLSN));
+						   LSN_FORMAT_ARGS(metadata->lsn));
 				break;
 			}
 

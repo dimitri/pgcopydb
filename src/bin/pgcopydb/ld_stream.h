@@ -475,6 +475,12 @@ typedef struct StreamContext
 	bool midTxnEndpos;
 
 	/*
+	 * Cursor over the KEEPALIVE and SWITCH rows of outputDB, set by
+	 * stream_transform_from_outputdb from the apply's own marker cursor.
+	 */
+	uint64_t keepaliveLSN;
+
+	/*
 	 * In-memory apply pipeline state owned by the apply driver loop
 	 * (stream_apply_replaydb).  The inline-transform hook updates these fields
 	 * as it writes each complete transaction to replayDB, so the driver can
@@ -548,6 +554,7 @@ typedef struct StreamApplyContext
 	char origin[BUFSIZE];
 
 	uint64_t previousLSN;       /* register COMMIT LSN progress */
+	uint64_t keepaliveLSN;      /* last KEEPALIVE consumed, cursor only */
 	uint64_t switchLSN;         /* LSN of the most recent SWITCH WAL message */
 
 	LSNTracking *lsnTrackingList;
@@ -560,6 +567,7 @@ typedef struct StreamApplyContext
 	bool reachedStartPos;
 	bool continuedTxn;
 	bool reachedEndPos;
+	bool endPosRecordSeen;      /* saw a record at or past endpos */
 	bool reachedEOF;
 	bool transactionInProgress;
 	bool logSQL;
@@ -779,7 +787,9 @@ bool stream_transform_write_replay_stmt(StreamSpecs *specs);
 bool stream_transform_write_replay_txn(StreamSpecs *specs);
 
 bool stream_transform_context_init(StreamSpecs *specs);
-bool stream_transform_from_outputdb(StreamSpecs *specs, uint64_t previousLSN);
+bool stream_transform_from_outputdb(StreamSpecs *specs,
+									uint64_t previousLSN,
+									uint64_t keepaliveLSN);
 
 bool stream_transform_message(StreamContext *privateContext,
 							  char *message);
