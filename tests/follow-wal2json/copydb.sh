@@ -22,6 +22,14 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/ddl.sql
 # pgcopydb clone uses the environment variables
 pgcopydb clone --follow --plugin wal2json --notice
 
+# dml.sql inserts actor rows after logical decoding messages: all of them must
+# have reached the target by the time follow is done
+src_count=`psql -AtqX -d ${PGCOPYDB_SOURCE_PGURI} -c "select count(*) from actor"`
+tgt_count=`psql -AtqX -d ${PGCOPYDB_TARGET_PGURI} -c "select count(*) from actor"`
+
+echo "source actor count: ${src_count}, target actor count: ${tgt_count}"
+test "${src_count}" -eq "${tgt_count}" || exit 1
+
 # Query the SQLite CDC databases to verify the tables were populated.  In the
 # 2-process model the `output` table lives in the *-output.db while `stmt` and
 # `replay` live in the *-replay.db.

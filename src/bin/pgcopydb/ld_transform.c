@@ -1172,6 +1172,19 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 	}
 
 	/*
+	 * Logical decoding messages (pg_logical_emit_message, wal2json action "M")
+	 * carry no DML to replay: skip them, as the receive path already does.
+	 * Without this they fall into the DML default case below and the wal2json
+	 * parser fails on the missing schema/table properties.
+	 */
+	if (metadata->action == STREAM_ACTION_MESSAGE)
+	{
+		log_debug("Skipping logical decoding message: %.1024s",
+				  message != NULL ? message : "(null)");
+		return true;
+	}
+
+	/*
 	 * Check that XID make sense for DML actions (Insert, Update, Delete,
 	 * Truncate).
 	 */

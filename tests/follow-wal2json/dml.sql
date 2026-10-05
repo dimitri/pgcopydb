@@ -48,3 +48,20 @@ begin;
 update public.payment set amount = 11.99 where amount = 11.95;
 
 commit;
+
+--
+-- Logical decoding messages (pg_logical_emit_message, wal2json action "M")
+-- carry no DML and must be skipped: transactional within a DML transaction,
+-- transactional on its own (like PeerDB / ClickPipes heartbeats), and
+-- non-transactional. The actor row is a net change that copydb.sh checks on
+-- the target.
+--
+begin;
+
+insert into actor(first_name, last_name) values ('LOGICAL', 'MESSAGE');
+select pg_logical_emit_message(true, 'pgcopydb_test', 'within a transaction');
+
+commit;
+
+select pg_logical_emit_message(true, 'pgcopydb_test', 'transactional');
+select pg_logical_emit_message(false, 'pgcopydb_test', 'non-transactional');
