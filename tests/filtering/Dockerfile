@@ -4,6 +4,7 @@ WORKDIR /usr/src/pgcopydb
 COPY ./copydb.sh copydb.sh
 COPY ./include.ini include.ini
 COPY ./exclude.ini exclude.ini
+COPY ./ext-only.ini ext-only.ini
 COPY ./extra.sql extra.sql
 
 # unit tests
