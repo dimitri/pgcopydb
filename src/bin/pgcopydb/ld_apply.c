@@ -160,6 +160,26 @@ stream_apply_catchup(StreamSpecs *specs)
 #define APPLY_DRAIN_STALL_LIMIT 300
 
 /*
+ * stream_apply_flush_pipeline makes the work queued on the apply connection
+ * real: it drains the libpq pipeline, so every statement sent so far has
+ * reached the server and had its result checked.
+ *
+ * The apply connection is in pipeline mode for its whole life (see
+ * stream_apply_setup), which means pgsql_execute() only *queues* statements.
+ * A COMMIT is not on the target until the pipeline has been synced.  Nothing
+ * on the follow path used to sync it: pgsql_sync_pipeline() was reachable only
+ * from ld_replay.c, which follow does not use.  Whatever was still buffered
+ * when the apply exited was therefore dropped by PQfinish(), silently and with
+ * exit status 0, which lost the tail of committed transactions at cutover.
+ */
+static bool
+stream_apply_flush_pipeline(StreamApplyContext *context)
+{
+	return pgsql_flush_pipeline(&(context->applyPgConn));
+}
+
+
+/*
  * stream_apply_state_progressed returns true when the in-memory apply pipeline
  * state advanced between two snapshots — i.e. the transform stage wrote a new
  * transaction to replayDB, or the apply stage committed one to the target.
@@ -369,6 +389,17 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 				 * pipeline_state["apply"].run_state = 'done'.
 				 */
 				context->reachedEndPos = true;
+
+				/*
+				 * Flush before publishing: replay_lsn must only report
+				 * transactions the server has actually confirmed.
+				 */
+				if (!stream_apply_flush_pipeline(context))
+				{
+					success = false;
+					break;
+				}
+
 				(void) stream_apply_sync_sentinel(context, false);
 				break;
 			}
@@ -504,6 +535,17 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 							   LSN_FORMAT_ARGS(context->previousLSN));
 
 					context->reachedEndPos = true;
+
+					/*
+					 * Flush before publishing: replay_lsn must only report
+					 * transactions the server has actually confirmed.
+					 */
+					if (!stream_apply_flush_pipeline(context))
+					{
+						success = false;
+						break;
+					}
+
 					(void) stream_apply_sync_sentinel(context, false);
 					break;
 				}
@@ -669,6 +711,16 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 						   LSN_FORMAT_ARGS(context->previousLSN));
 
 				/*
+				 * Flush before publishing: replay_lsn must only report
+				 * transactions the server has actually confirmed.
+				 */
+				if (!stream_apply_flush_pipeline(context))
+				{
+					success = false;
+					break;
+				}
+
+				/*
 				 * Do NOT push previousLSN up to endpos here. It is published
 				 * as the sentinel replay_lsn, and overwriting it reports work
 				 * the apply did not do. follow_reached_endpos() check (b)
@@ -744,6 +796,18 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 	if (lock_held)
 	{
 		(void) semaphore_unlock(&(replayDB->sema));
+	}
+
+	/*
+	 * Last chance to make queued work real before this process goes away: any
+	 * other exit from the loop above (including error paths, where nothing is
+	 * committed and the flush is a no-op) must not leave COMMITs sitting in
+	 * the pipeline buffer for PQfinish() to discard.
+	 */
+	if (success && !stream_apply_flush_pipeline(context))
+	{
+		/* errors have already been logged */
+		success = false;
 	}
 
 	/* enforce a final durable checkpoint of the in-memory apply state */
@@ -1374,6 +1438,12 @@ stream_apply_setup(StreamSpecs *specs, StreamApplyContext *context)
 bool
 stream_apply_cleanup(StreamApplyContext *context)
 {
+	/*
+	 * Drain the pipeline before closing: PQfinish() discards anything still
+	 * buffered, and on this connection that can include COMMITs.
+	 */
+	(void) pgsql_flush_pipeline(&(context->applyPgConn));
+
 	/* make sure we close the connection on the way out */
 	(void) pgsql_finish(&(context->controlPgConn));
 
