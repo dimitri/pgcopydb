@@ -22,6 +22,8 @@ typedef struct BlobMetadataArray
 	int count;
 	Oid oids[MAX_BLOB_PER_FETCH];
 	char rolnames[MAX_BLOB_PER_FETCH][PG_NAMEDATALEN];
+	bool hasACL[MAX_BLOB_PER_FETCH];
+	bool hasComment[MAX_BLOB_PER_FETCH];
 } BlobMetadataArray;
 
 typedef struct BlobMetadataArrayContext
@@ -324,6 +326,217 @@ copydb_start_blob_workers(CopyDataSpec *specs)
 
 
 /*
+ * copydb_blob_worker_flush_batch copies a batch of large objects to the
+ * target database.
+ *
+ * The common case (a large object that does not exist on the target and is
+ * smaller than LOBATCHMAXSIZE) is handled by the batched fast path of
+ * pg_copy_large_object_batch(), which minimizes client/server round-trips.
+ * The other large objects (already existing on the target, larger than
+ * LOBATCHMAXSIZE, or for which the batched copy failed) are handled one at a
+ * time by the streaming pg_copy_large_object() code path, each within its own
+ * transaction.
+ *
+ * No transaction spans more than one large object: each large object of the
+ * batched fast path is its own implicit transaction (one pipeline sync point
+ * per large object), so that the target lock table usage stays bounded
+ * whatever the total number of large objects.
+ */
+static bool
+copydb_blob_worker_flush_batch(CopyDataSpec *specs,
+							   DatabaseCatalog *sourceDB,
+							   PGSQL *src,
+							   PGSQL *dst,
+							   QMessage *batch,
+							   int count,
+							   uint64_t *skippedBlobs,
+							   uint64_t *metadataErrors)
+{
+	if (count == 0)
+	{
+		return true;
+	}
+
+	bool dropIfExists = specs->restoreOptions.dropIfExists;
+	bool restoreOwner = !specs->restoreOptions.noOwner;
+	bool noACL = specs->restoreOptions.noACL;
+	bool noComments = specs->restoreOptions.noComments;
+
+	instr_time startTime;
+
+	INSTR_TIME_SET_CURRENT(startTime);
+
+	uint32_t oids[LOBATCHSIZE] = { 0 };
+	const char *rolnames[LOBATCHSIZE] = { 0 };
+	LargeObjectBatchStatus status[LOBATCHSIZE] = { 0 };
+	bool exists[LOBATCHSIZE] = { 0 };
+
+	for (int i = 0; i < count; i++)
+	{
+		oids[i] = batch[i].data.lo.oid;
+		rolnames[i] = batch[i].data.lo.rolname;
+		status[i] = LO_BATCH_TRY;
+	}
+
+	if (dropIfExists)
+	{
+		/* drop the existing large objects of the batch in one round-trip */
+		if (!pg_drop_large_objects(dst, count, oids))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+	else
+	{
+		/*
+		 * Route the large objects that already exist on the target database
+		 * to the per-object code path, which implements the skip-or-copy
+		 * semantics (skip them, unless they exist empty).
+		 */
+		if (!pg_large_object_list_existing(dst, count, oids, exists))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		for (int i = 0; i < count; i++)
+		{
+			if (exists[i])
+			{
+				status[i] = LO_BATCH_SKIP;
+			}
+		}
+	}
+
+	uint64_t bytesTransmitted = 0;
+
+	if (!pg_copy_large_object_batch(src, dst, restoreOwner,
+									count, oids, rolnames,
+									status,
+									&bytesTransmitted))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	uint64_t copiedBlobs = 0;
+
+	for (int i = 0; i < count; i++)
+	{
+		bool skipped = false;
+
+		if (status[i] != LO_BATCH_DONE)
+		{
+			/*
+			 * Large objects that exist on the target (skip-or-copy
+			 * semantics), are larger than LOBATCHMAXSIZE (streaming copy),
+			 * or failed in the batched fast path (retry with precise error
+			 * reporting) are copied one at a time, each within its own
+			 * transaction: the large object client API (lo_open, lo_read,
+			 * lo_write) requires a transaction block.
+			 *
+			 * Use explicit BEGIN/COMMIT commands rather than pgsql_begin and
+			 * pgsql_commit: the worker keeps its target connection open (and
+			 * in PGSQL_CONNECTION_MULTI_STATEMENT mode) for its whole life,
+			 * while pgsql_commit() also closes the connection.
+			 */
+			if (!pgsql_execute(dst, "BEGIN"))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			/*
+			 * With --drop-if-exists the batch dropped the blob already, and
+			 * passing the option down again keeps the documented overwrite
+			 * semantics on this retry path too (the check is a cheap no-op
+			 * when the blob is already gone).
+			 */
+			if (!pg_copy_large_object(src, dst,
+									  dropIfExists,
+									  restoreOwner,
+									  oids[i],
+									  rolnames[i],
+									  &skipped,
+									  &bytesTransmitted))
+			{
+				log_error("Failed to copy Large Object with oid %u, "
+						  "see above for details",
+						  oids[i]);
+				return false;
+			}
+
+			if (!pgsql_execute(dst, "COMMIT"))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			if (skipped)
+			{
+				++(*skippedBlobs);
+			}
+		}
+
+		if (!skipped)
+		{
+			++copiedBlobs;
+		}
+
+		/*
+		 * Only run the per-blob metadata query when the large object
+		 * actually has an ACL and/or a comment to copy, as advertised in the
+		 * queue message by the metadata producer process.
+		 *
+		 * A failure to apply a large object's ACL or comment on the target
+		 * (e.g. a grantee role that does not exist there) only affects the
+		 * commands of the large object at hand, which run in their own
+		 * implicit transaction: account for the failure and keep copying.
+		 */
+		bool copyMetadata =
+			(!noACL && batch[i].data.lo.hasACL) ||
+			(!noComments && batch[i].data.lo.hasComment);
+
+		if (!skipped && copyMetadata)
+		{
+			if (!pg_copy_large_object_metadata(src, dst,
+											   noACL,
+											   noComments,
+											   restoreOwner,
+											   oids[i]))
+			{
+				log_error("Failed to copy Large Object metadata "
+						  "for oid %u, see above for details",
+						  oids[i]);
+
+				++(*metadataErrors);
+			}
+		}
+	}
+
+	instr_time duration;
+
+	INSTR_TIME_SET_CURRENT(duration);
+	INSTR_TIME_SUBTRACT(duration, startTime);
+
+	uint64_t durationMs = INSTR_TIME_GET_MILLISEC(duration);
+
+	if (!summary_increment_timing(sourceDB,
+								  TIMING_SECTION_LARGE_OBJECTS,
+								  copiedBlobs,
+								  bytesTransmitted,
+								  durationMs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * copydb_blob_worker is a worker process that loops over messages received
  * from a queue, each message being the Oid of a large object to copy over to
  * the target database.
@@ -365,8 +578,6 @@ copydb_blob_worker(CopyDataSpec *specs)
 	PGSQL *src = &(specs->sourceSnapshot.pgsql);
 	PGSQL dst = { 0 };
 
-	bool dropIfExists = specs->restoreOptions.dropIfExists;
-
 	/* initialize our connection to the target database */
 	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
 	{
@@ -374,14 +585,24 @@ copydb_blob_worker(CopyDataSpec *specs)
 		return false;
 	}
 
-	if (!pgsql_begin(&dst))
-	{
-		/* errors have already been logged */
-		return false;
-	}
+	/*
+	 * Keep the target connection open for the whole life of the worker: we
+	 * run many queries and transactions on it, and the batched fast path
+	 * drives it with the raw libpq pipeline API.
+	 */
+	dst.connectionStatementType = PGSQL_CONNECTION_MULTI_STATEMENT;
 
 	int errors = 0;
 	bool stop = false;
+	uint64_t skippedBlobs = 0;
+	uint64_t metadataErrors = 0;
+
+	/*
+	 * Large objects are copied in batches of LOBATCHSIZE to minimize
+	 * client/server round-trips, see copydb_blob_worker_flush_batch.
+	 */
+	QMessage batch[LOBATCHSIZE] = { 0 };
+	int batchCount = 0;
 
 	while (!stop)
 	{
@@ -407,50 +628,38 @@ copydb_blob_worker(CopyDataSpec *specs)
 				stop = true;
 				log_debug("Stop message received by Large Objects worker");
 
-				if (!pgsql_commit(&dst))
+				if (!copydb_blob_worker_flush_batch(specs, sourceDB,
+													src, &dst,
+													batch, batchCount,
+													&skippedBlobs,
+													&metadataErrors))
 				{
 					/* errors have already been logged */
 					return false;
 				}
+
+				batchCount = 0;
 
 				break;
 			}
 
 			case QMSG_TYPE_BLOBOID:
 			{
-				uint64_t bytesTransmitted = 0;
+				batch[batchCount++] = mesg;
 
-				instr_time startTime;
-				INSTR_TIME_SET_CURRENT(startTime);
-
-				if (!pg_copy_large_object(src, &dst,
-										  dropIfExists,
-										  !specs->restoreOptions.noOwner,
-										  mesg.data.lo.oid,
-										  mesg.data.lo.rolname,
-										  &bytesTransmitted))
+				if (batchCount == LOBATCHSIZE)
 				{
-					log_error("Failed to copy Large Object with oid %u, "
-							  "see above for details",
-							  mesg.data.lo.oid);
-					return false;
-				}
+					if (!copydb_blob_worker_flush_batch(specs, sourceDB,
+														src, &dst,
+														batch, batchCount,
+														&skippedBlobs,
+														&metadataErrors))
+					{
+						/* errors have already been logged */
+						return false;
+					}
 
-				instr_time duration;
-
-				INSTR_TIME_SET_CURRENT(duration);
-				INSTR_TIME_SUBTRACT(duration, startTime);
-
-				uint64_t durationMs = INSTR_TIME_GET_MILLISEC(duration);
-
-				if (!summary_increment_timing(sourceDB,
-											  TIMING_SECTION_LARGE_OBJECTS,
-											  1, /* count */
-											  bytesTransmitted,
-											  durationMs))
-				{
-					/* errors have already been logged */
-					return false;
+					batchCount = 0;
 				}
 
 				break;
@@ -478,7 +687,16 @@ copydb_blob_worker(CopyDataSpec *specs)
 		return false;
 	}
 
-	bool success = (stop == true && errors == 0);
+	if (skippedBlobs > 0)
+	{
+		log_info("Large Objects worker %d skipped %lld large objects that "
+				 "already exist on the target database, "
+				 "consider --drop-if-exists to copy them again",
+				 pid,
+				 (long long) skippedBlobs);
+	}
+
+	bool success = (stop == true && errors == 0 && metadataErrors == 0);
 
 	if (errors > 0)
 	{
@@ -486,6 +704,15 @@ copydb_blob_worker(CopyDataSpec *specs)
 				  "see above for details",
 				  pid,
 				  errors);
+	}
+
+	if (metadataErrors > 0)
+	{
+		log_error("Large Objects worker %d failed to copy the ACLs or "
+				  "comments of %lld large objects, see above for details; "
+				  "the large objects data has been copied and committed",
+				  pid,
+				  (long long) metadataErrors);
 	}
 
 	return success;
@@ -497,12 +724,15 @@ copydb_blob_worker(CopyDataSpec *specs)
  * given blob.
  */
 bool
-copydb_add_blob(CopyDataSpec *specs, uint32_t oid, const char *rolname)
+copydb_add_blob(CopyDataSpec *specs, uint32_t oid, const char *rolname,
+				bool hasACL, bool hasComment)
 {
 	QMessage mesg = { .type = QMSG_TYPE_BLOBOID };
 
 	mesg.data.lo.oid = oid;
 	strlcpy(mesg.data.lo.rolname, rolname, sizeof(mesg.data.lo.rolname));
+	mesg.data.lo.hasACL = hasACL;
+	mesg.data.lo.hasComment = hasComment;
 
 	log_debug("copydb_add_blob(%d): %u", specs->loQueue.qId, oid);
 
@@ -575,11 +805,22 @@ copydb_queue_largeobject_metadata(CopyDataSpec *specs, uint64_t *count)
 
 	PGSQL *src = &(specs->sourceSnapshot.pgsql);
 
+	/*
+	 * Also fetch whether each large object has an ACL and/or a comment, so
+	 * that the workers only have to run the per-blob metadata query for the
+	 * (rare) large objects that actually have some metadata to copy.
+	 */
 	BlobMetadataArrayContext context = { 0 };
 	char *sql =
 		"DECLARE bloboid CURSOR FOR "
-		"SELECT oid, format('%I', pg_catalog.pg_get_userbyid(lomowner)) "
-		"FROM pg_largeobject_metadata ORDER BY 1";
+		"SELECT m.oid, "
+		"       format('%I', pg_catalog.pg_get_userbyid(m.lomowner)), "
+		"       m.lomacl IS NOT NULL, "
+		"       EXISTS(SELECT 1 FROM pg_catalog.pg_description d "
+		"               WHERE d.classoid = "
+		"                     'pg_catalog.pg_largeobject'::pg_catalog.regclass "
+		"                 AND d.objoid = m.oid) "
+		"FROM pg_largeobject_metadata m ORDER BY 1";
 
 	if (!pgsql_execute(src, sql))
 	{
@@ -620,7 +861,10 @@ copydb_queue_largeobject_metadata(CopyDataSpec *specs, uint64_t *count)
 		{
 			Oid blobOid = context.array.oids[i];
 
-			if (!copydb_add_blob(specs, blobOid, context.array.rolnames[i]))
+			if (!copydb_add_blob(specs, blobOid,
+								 context.array.rolnames[i],
+								 context.array.hasACL[i],
+								 context.array.hasComment[i]))
 			{
 				log_error("Failed to queue Large Object %u, "
 						  "see above for details",
@@ -652,9 +896,9 @@ parseBlobMetadataArray(void *ctx, PGresult *result)
 {
 	BlobMetadataArrayContext *context = (BlobMetadataArrayContext *) ctx;
 
-	if (PQnfields(result) != 2)
+	if (PQnfields(result) != 4)
 	{
-		log_error("Query returned %d columns, expected 2", PQnfields(result));
+		log_error("Query returned %d columns, expected 4", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -677,5 +921,8 @@ parseBlobMetadataArray(void *ctx, PGresult *result)
 
 		strlcpy(context->array.rolnames[i], rolname,
 				sizeof(context->array.rolnames[i]));
+
+		context->array.hasACL[i] = (*PQgetvalue(result, i, 2)) == 't';
+		context->array.hasComment[i] = (*PQgetvalue(result, i, 3)) == 't';
 	}
 }

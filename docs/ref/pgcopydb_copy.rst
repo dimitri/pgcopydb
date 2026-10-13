@@ -145,10 +145,39 @@ pgcopydb copy blobs
 pgcopydb copy blobs - Copy the blob data from the source database to the target
 
 The command ``pgcopydb copy blobs`` fetches list of large objects (aka
-blobs) from the source database and copies their data parts to the target
-database. By default the command assumes that the large objects metadata
-have already been taken care of, because of the behaviour of
-``pg_dump --section=pre-data``.
+blobs) from the source database and copies them to the target database. The
+large objects are created on the target database (re-using the same OID as
+on the source database), then their data parts are copied over, and finally
+their metadata (owner, ACL, and comment) is copied too, honoring the
+``--no-owner``, ``--no-acl``, and ``--no-comments`` options. Security
+labels on large objects are not copied.
+
+When a large object already exists on the target database with some data,
+it is entirely skipped (neither its data nor its metadata are copied),
+which saves time when resuming a previous run. A large object that exists
+on the target but contains no data at all is not considered copied: it is
+dropped and copied again, so that large objects pre-created empty (for
+instance by restoring a schema dump taken without ``--no-blobs``, as
+previous versions of pgcopydb did) are not mistaken for already-copied
+ones. Use ``--drop-if-exists`` to instead drop every existing large object
+and copy it all over again.
+
+As with ``pg_restore``, the grantee roles referenced by the large objects
+ACLs must already exist on the target database; the ``--no-acl`` option
+allows skipping the ACLs entirely. When ``--no-owner`` is used, the
+generated commands never reference the source owner role, which then does
+not need to exist on the target database. A failure to apply the ACL or
+comment of a large object does not abort the whole operation: the large
+object data is still copied and committed, the failure is reported, and
+the command exits with a non-zero return code.
+
+The ACL entries are re-created in their original order. A grant that was
+performed by a role other than the large object owner on the source
+database (a ``WITH GRANT OPTION`` chain) is replayed using ``SET SESSION
+AUTHORIZATION``, the same way a ``pg_dump`` script would, so that the
+grantor of every privilege is preserved on the target database. Replaying
+such a grant requires the grantor role to exist on the target database
+and the connecting role to be a superuser.
 
 .. include:: ../include/copy-blobs.rst
 

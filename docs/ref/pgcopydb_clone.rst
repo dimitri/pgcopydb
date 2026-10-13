@@ -79,12 +79,24 @@ The ``pgcopydb clone`` command implements the following steps:
      greatest number of rows first, as an attempt to minimize the copy time.
 
   5. An auxiliary process loops through all the Large Objects found on the
-     source database and copies its data parts over to the target database,
-     much like pg_dump itself would.
+     source database and drives as many as ``--large-objects-jobs`` worker
+     sub-processes that create the large objects on the target database,
+     copy their data parts over, and copy their metadata (owner, ACL,
+     comment) too.
 
-     This step is much like ``pg_dump | pg_restore`` for large objects data
-     parts, except that there isn't a good way to do just that with the
-     tooling.
+     The schema dump is done with ``pg_dump --no-blobs`` so that the large
+     objects are not created by the serial ``lo_create()`` statements that
+     pg_dump versions up to 16 would otherwise place in the pre-data
+     section: instead the large objects are created concurrently by the
+     worker sub-processes.
+
+     Large objects that already exist on the target database with some
+     data are skipped entirely, which saves time when resuming a previous
+     run; large objects existing on the target with no data at all (e.g.
+     pre-created empty by restoring a schema dump taken without
+     ``--no-blobs``) are dropped and copied again. When using
+     ``--drop-if-exists`` every existing large object is dropped and
+     copied all over again.
 
   6. As many as ``--index-jobs`` CREATE INDEX sub-processes are started to
      share the workload and build indexes. In order to make sure to start

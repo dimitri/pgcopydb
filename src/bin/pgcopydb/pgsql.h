@@ -48,6 +48,30 @@
  */
 #define LOBBUFSIZE 16 * 1024 * 1024 /* 16 MB */
 
+/*
+ * Large objects are copied in batches to save client/server round-trips: a
+ * single query fetches the data of LOBATCHSIZE large objects from the source
+ * database in binary format, and the target side writes are sent in a libpq
+ * pipeline. Large objects bigger than LOBATCHMAXSIZE are copied one at a
+ * time with the streaming (lo_read/lo_write) code path instead, so that a
+ * batch never fetches more than about LOBATCHSIZE * LOBATCHMAXSIZE bytes
+ * (25 MB per worker with the default values).
+ */
+#define LOBATCHSIZE 100
+#define LOBATCHMAXSIZE (256 * 1024) /* 256 kB */
+
+/*
+ * Per-large-object status of the batched copy fast path.
+ */
+typedef enum
+{
+	LO_BATCH_SKIP = 0,          /* handled by the per-object code path */
+	LO_BATCH_TRY,               /* to be copied by the batched fast path */
+	LO_BATCH_DONE,              /* data (and owner) copied by the fast path */
+	LO_BATCH_TOO_LARGE,         /* payload larger than LOBATCHMAXSIZE */
+	LO_BATCH_FAILED             /* batch failed: use the per-object path */
+} LargeObjectBatchStatus;
+
 
 /*
  * pg_stat_replication.sync_state is one if:
@@ -368,7 +392,31 @@ bool pg_copy_large_object(PGSQL *src,
 						  bool restoreOwner,
 						  uint32_t oid,
 						  const char *rolname,
+						  bool *skipped,
 						  uint64_t *bytesTransmitted);
+
+bool pg_copy_large_object_metadata(PGSQL *src,
+								   PGSQL *dst,
+								   bool noACL,
+								   bool noComments,
+								   bool restoreOwner,
+								   uint32_t blobOid);
+
+bool pg_drop_large_objects(PGSQL *dst, int count, uint32_t *oids);
+
+bool pg_large_object_list_existing(PGSQL *dst,
+								   int count,
+								   uint32_t *oids,
+								   bool *exists);
+
+bool pg_copy_large_object_batch(PGSQL *src,
+								PGSQL *dst,
+								bool restoreOwner,
+								int count,
+								uint32_t *oids,
+								const char **rolnames,
+								LargeObjectBatchStatus *status,
+								uint64_t *bytesTransmitted);
 
 /*
  * Maximum length of serialized pg_lsn value

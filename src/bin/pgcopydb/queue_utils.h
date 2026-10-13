@@ -63,6 +63,8 @@ typedef struct QMessage
 		{
 			uint32_t oid;
 			char rolname[PG_NAMEDATALEN]; /* format('%I', ...); "" when unknown */
+			bool hasACL;                  /* lomacl is non-NULL on the source */
+			bool hasComment;              /* a pg_description entry exists */
 		} lo;
 	} data;
 } QMessage;
