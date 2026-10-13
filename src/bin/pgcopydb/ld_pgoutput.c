@@ -17,6 +17,8 @@
  *  TRUNCATE: 'T' u32(nrelids) u8(flags) nrelids*u32(relOid)
  *  TYPE:     'Y' ...  (filtered out)
  *  ORIGIN:   'O' ...  (filtered out)
+ *  MESSAGE:  'M' u8(flags) u64(lsn) cstr(prefix) u32(length) length*byte(content)
+ *                (only kept when prefix == PGCOPYDB_MESSAGE_PREFIX)
  *
  * Tuple: u16(ncols) per-col[u8(status) if-'t': i32(len) + len bytes]
  *   status: 'n'=null, 'u'=unchanged TOAST, 't'=text value
@@ -428,6 +430,46 @@ parsePgoutputMessageActionAndXid(LogicalStreamContext *context)
 			break;
 		}
 
+		case 'M':               /* MESSAGE (pg_logical_emit_message) */
+		{
+			/* type + flags + lsn + empty prefix (min 1 byte) + length */
+			if (bufLen < 1 + 1 + 8 + 1 + 4)
+			{
+				log_error("pgoutput: MESSAGE too short (%d bytes)", bufLen);
+				return false;
+			}
+
+			pgout_u8(buf, &pos, bufLen);              /* flags */
+			uint64_t lsn = pgout_u64(buf, &pos, bufLen);
+			const char *prefix = pgout_cstr(buf, &pos, bufLen);
+
+			if (prefix == NULL)
+			{
+				return false;
+			}
+
+			/* only our own prefix is ours to interpret */
+			if (strcmp(prefix, PGCOPYDB_MESSAGE_PREFIX) != 0)
+			{
+				log_debug("pgoutput: filtering out MESSAGE with prefix \"%s\"",
+						  prefix);
+				metadata->filterOut = true;
+				break;
+			}
+
+			metadata->action = STREAM_ACTION_MESSAGE;
+			metadata->lsn = lsn;
+
+			/*
+			 * The message rides inside the current transaction when emitted
+			 * with transactional=true. pgcopydb's proto_version=1,
+			 * non-streaming setup never sends an xid field in this frame, so
+			 * use the BEGIN-tracked currentXid here, same as DML messages.
+			 */
+			metadata->xid = privateContext->currentXid;
+			break;
+		}
+
 		case 'I':               /* INSERT */
 		case 'U':               /* UPDATE */
 		case 'D':               /* DELETE */
@@ -767,6 +809,48 @@ preparePgoutputMessage(LogicalStreamContext *context)
 					}
 				}
 			}
+			break;
+		}
+
+		case 'M':
+		{
+			pgout_u8(buf, &pos, bufLen);               /* flags */
+			pgout_u64(buf, &pos, bufLen);              /* lsn */
+
+			const char *prefix = pgout_cstr(buf, &pos, bufLen);
+
+			if (prefix == NULL)
+			{
+				return false;
+			}
+
+			uint32_t len = pgout_u32(buf, &pos, bufLen);
+
+			if (pos + (int) len > bufLen)
+			{
+				log_error("pgoutput: MESSAGE content length %u exceeds "
+						  "buffer (pos %d, bufLen %d)",
+						  len, pos, bufLen);
+				return false;
+			}
+
+			/*
+			 * The content is `len` bytes, not NUL-terminated on the wire.
+			 * Copy exactly those bytes into a malloc'd, NUL-terminated
+			 * buffer; this is only ever our own JSON envelope text
+			 * (filtered by prefix in ActionAndXid), so no embedded NULs are
+			 * expected.
+			 */
+			msg->message = (char *) malloc(len + 1);
+			if (msg->message == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+			memcpy(msg->message, buf + pos, len);
+			msg->message[len] = '\0';
+
+			pos += len;
 			break;
 		}
 
@@ -1265,6 +1349,12 @@ free_pgoutput_message(PgoutputMessage *msg)
 		}
 		free(msg->new_cols);
 		msg->new_cols = NULL;
+	}
+
+	if (msg->message != NULL)
+	{
+		free(msg->message);
+		msg->message = NULL;
 	}
 
 	msg->ncols_old = 0;

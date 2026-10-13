@@ -226,15 +226,30 @@ stream_init_specs(StreamSpecs *specs,
 
 		case STREAM_PLUGIN_PGOUTPUT:
 		{
+			/*
+			 * pgoutput only emits logical-decoding Message frames (from
+			 * pg_logical_emit_message()) when the "messages" replication
+			 * option is requested at START_REPLICATION time. Without it,
+			 * Postgres core silently drops Message frames before they ever
+			 * reach the output plugin. Always request it: decoding and
+			 * applying a MESSAGE frame is itself unconditional (see
+			 * ld_pgoutput.c, ld_transform.c, ld_apply.c), gated only by the
+			 * "pgcopydb" prefix and the "ddl" envelope type, both of which
+			 * are already skip-not-error for anything else. A source that
+			 * never calls pg_logical_emit_message() sees zero behavioral
+			 * change either way.
+			 */
 			KeyVal options = {
-				.count = 2,
+				.count = 3,
 				.keywords = {
 					"proto_version",
-					"publication_names"
+					"publication_names",
+					"messages"
 				},
 				.values = {
 					"1",
-					specs->slot.publicationName
+					specs->slot.publicationName,
+					"true"
 				}
 			};
 

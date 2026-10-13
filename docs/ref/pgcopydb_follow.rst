@@ -154,6 +154,23 @@ Finally, it is also possible to setup the streaming replication options
 before using the ``pgcopydb follow`` command: see the
 :ref:`pgcopydb_stream_setup` and :ref:`pgcopydb_stream_cleanup` commands.
 
+Replicating DDL
+----------------
+
+``pgcopydb follow`` always decodes and applies DDL carried as a
+``pg_logical_emit_message()`` message (when the output plugin is
+``pgoutput``, the default) — there is no option to turn this off, and a
+source that never emits such a message sees no change in behaviour. The
+only step needed to start getting DDL replicated is to install the event
+trigger that emits those messages, with
+:ref:`pgcopydb_stream_event_trigger`::
+
+   $ pgcopydb stream event-trigger --source ${PGCOPYDB_SOURCE_PGURI}
+
+See :ref:`pgcopydb_stream_event_trigger` for the message format, the
+default set of DDL command tags that are captured, and this feature's
+current limitations.
+
 Replica Identity and lack of Primary Keys
 -----------------------------------------
 

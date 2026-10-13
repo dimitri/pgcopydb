@@ -126,6 +126,85 @@ is optional during a live follow operation.
 
 .. include:: ../include/stream-prune.rst
 
+.. _pgcopydb_stream_event_trigger:
+
+pgcopydb stream event-trigger
+------------------------------
+
+pgcopydb stream event-trigger - Install the event trigger that emits DDL as logical decoding messages
+
+``pgcopydb follow`` (and ``pgcopydb clone --follow``) always decode and
+apply DDL carried over logical replication as a typed message, when the
+output plugin is ``pgoutput`` (the default). There is no option to turn
+this off, and nothing to turn on either: a source database that never
+emits such a message sees no behavioral change at all, and a message using
+a different prefix or an unrecognized type is logged and skipped rather
+than applied or treated as an error.
+
+The only step left to the user is **getting the source database to emit
+those messages in the first place**, and that is exactly what ``pgcopydb
+stream event-trigger`` does: it connects to the source database and
+installs a ``plpgsql`` function together with an event trigger on
+``ddl_command_end`` that calls `pg_logical_emit_message`__ for a reasonable
+default set of DDL command tags (``CREATE/ALTER/DROP TABLE``,
+``CREATE/ALTER/DROP INDEX``, ``CREATE/ALTER/DROP SEQUENCE``, and
+``CREATE/ALTER/DROP VIEW``).
+
+__ https://www.postgresql.org/docs/current/functions-admin.html#id-1.5.8.25.9
+
+.. include:: ../include/stream-event-trigger.rst
+
+Running the command again is safe: the function is installed with ``create
+or replace function``, and the event trigger is dropped and re-created.
+Pass ``--drop`` to remove both instead.
+
+The message content is a small JSON envelope::
+
+   {"type": "ddl", "body": "<the literal DDL SQL text, as submitted>"}
+
+emitted with the fixed prefix ``"pgcopydb"``, using
+``pg_logical_emit_message(true, 'pgcopydb', ...)`` so the message rides
+inside the same transaction as the DDL and is only decoded if that
+transaction commits. ``type`` selects the handler on the apply side;
+``"ddl"`` is the only type pgcopydb ships today, and an unrecognized type
+is simply skipped, so a second type can be added later without breaking
+older ``pgcopydb follow`` binaries reading a newer source. ``body`` is the
+literal command text captured with PostgreSQL's `current_query()`__
+function, the same text the statement was submitted as.
+
+__ https://www.postgresql.org/docs/current/functions-info.html
+
+Once installed, running ordinary DDL on the source — for example ``alter
+table orders add column urgent boolean default false`` — is enough:
+``pgcopydb follow`` decodes the message and runs the DDL text verbatim
+against the target database, inside the same apply transaction as every
+other change in that source transaction, with no separate connection and no
+separate commit.
+
+Limitations (v1)
+~~~~~~~~~~~~~~~~~
+
+- Only the ``pgoutput`` output plugin decodes DDL messages.
+  ``test_decoding`` and ``wal2json`` do not support this feature yet.
+
+- ``current_query()`` captures the statement exactly as submitted. A
+  command sent as several statements in a single round trip (for example
+  via a multi-statement ``psql -c`` invocation) is captured whole, as one
+  string, not split into individual statements.
+
+- The DDL text replays using whichever role and ``search_path`` the apply
+  worker's target connection has, not necessarily the role or
+  ``search_path`` the original session on the source had. Schema-qualify
+  object names in DDL you expect to be replicated this way if that
+  matters to you.
+
+- The event trigger's default command-tag list is a reasonable starting
+  point, not exhaustive. Extend it by editing the installed trigger
+  directly on the source database (``alter event trigger ... when tag
+  in (...)`` is not supported by PostgreSQL; drop and recreate the
+  trigger with your own tag list instead) if you need to capture
+  additional DDL command tags.
+
 .. _pgcopydb_stream_prefetch:
 
 pgcopydb stream prefetch
@@ -453,6 +532,11 @@ The following options are available to ``pgcopydb stream`` sub-commands:
   file — rotation only happens at a transaction commit boundary.  This
   means a single oversized transaction causes the file to exceed the
   threshold, which is expected and safe.
+
+--drop
+
+  Used with ``pgcopydb stream event-trigger``. Removes the event trigger
+  and its function from the source database instead of installing them.
 
 Environment
 -----------

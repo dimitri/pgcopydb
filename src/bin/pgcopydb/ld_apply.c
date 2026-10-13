@@ -1201,6 +1201,26 @@ stream_apply_dml(StreamApplyContext *context, ReplayDBStmt *s)
 		return true;
 	}
 
+	if (s->action == STREAM_ACTION_MESSAGE)
+	{
+		/*
+		 * A decoded DDL message (pg_logical_emit_message(), envelope type
+		 * "ddl", pgoutput only). s->stmt holds the literal DDL SQL text,
+		 * stored verbatim by stream_write_ddl; run it as-is, inside the
+		 * already-open apply transaction, same commit ordering as every
+		 * other statement in this transaction.
+		 */
+		const char *ddl = (s->stmt != NULL) ? s->stmt : "";
+
+		if (!pgsql_execute(applyPgConn, ddl))
+		{
+			log_error("Failed to apply DDL message: %s", ddl);
+			return false;
+		}
+
+		return true;
+	}
+
 	/* INSERT / UPDATE / DELETE */
 
 	if (s->stmt == NULL && s->hash == 0)

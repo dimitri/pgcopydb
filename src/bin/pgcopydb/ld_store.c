@@ -1768,7 +1768,7 @@ ld_store_insert_pgoutput_message(DatabaseCatalog *catalog,
 	char *output_sql =
 		"insert or replace into output"
 		"  (action, xid, lsn, timestamp, message, nspname, relname, old_type)"
-		"  values($1, $2, $3, $4, NULL, $5, $6, $7)";
+		"  values($1, $2, $3, $4, $5, $6, $7, $8)";
 
 	SQLiteQuery oq = { 0 };
 	if (!catalog_sql_prepare(db, output_sql, &oq))
@@ -1788,6 +1788,10 @@ ld_store_insert_pgoutput_message(DatabaseCatalog *catalog,
 		{ xidType, "xid", metadata->xid, NULL },
 		{ BIND_PARAMETER_TYPE_INT64, "lsn", metadata->lsn, NULL },
 		{ BIND_PARAMETER_TYPE_TEXT, "timestamp", 0, metadata->timestamp },
+		{
+			pgmsg->message != NULL ? BIND_PARAMETER_TYPE_TEXT : BIND_PARAMETER_TYPE_NULL,
+			"message", 0, pgmsg->message
+		},
 		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, pgmsg->nspname },
 		{ BIND_PARAMETER_TYPE_TEXT, "relname", 0, pgmsg->relname },
 		{
