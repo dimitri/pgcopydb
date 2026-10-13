@@ -1,7 +1,11 @@
 #! /bin/bash
 
 set -x
-#set -e
+# Without -e this script kept going after `pgcopydb clone --follow` had
+# failed outright and still exited 0, so the test reported success while
+# no CDC happened at all.  That is what hid the output_plugin_libraries
+# breakage until #1057: every other test caught it immediately.
+set -e
 
 # This script expects the following environment variables to be set:
 #

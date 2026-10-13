@@ -398,11 +398,19 @@ pg_dump_db(PostgresPaths *pgPaths,
 	/*
 	 * To address a migration issue (https://github.com/dimitri/pgcopydb/issues/760),
 	 * we need to dump the pre-data and post-data sections together in a single file.
-	 * Using --schema-only instead is not an option because it does not include
-	 * the necessary large object metadata.
+	 *
+	 * Large objects are excluded from the dump entirely (--no-blobs): the
+	 * parallel Large Objects workers create the large objects on the target
+	 * and copy their metadata (owner, ACL, comment) themselves, instead of
+	 * relying on the serial lo_create() statements that pg_dump versions up
+	 * to 16 would emit in the pre-data section.
+	 *
+	 * We use the --no-blobs spelling rather than --no-large-objects because
+	 * the latter is only known to pg_dump 16 and later.
 	 */
 	args[argsIndex++] = "--section=pre-data";
 	args[argsIndex++] = "--section=post-data";
+	args[argsIndex++] = "--no-blobs";
 
 	/* apply [include-only-schema] filtering */
 	for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
