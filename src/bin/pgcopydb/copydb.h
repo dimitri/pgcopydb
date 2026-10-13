@@ -565,7 +565,8 @@ bool copydb_blob_supervisor(CopyDataSpec *specs);
 bool copydb_start_blob_workers(CopyDataSpec *specs);
 bool copydb_blob_worker(CopyDataSpec *specs);
 bool copydb_queue_largeobject_metadata(CopyDataSpec *specs, uint64_t *count);
-bool copydb_add_blob(CopyDataSpec *specs, uint32_t oid, const char *rolname);
+bool copydb_add_blob(CopyDataSpec *specs, uint32_t oid, const char *rolname,
+					 bool hasACL, bool hasComment);
 bool copydb_send_lo_stop(CopyDataSpec *specs);
 
 /* vacuum.c */

@@ -52,6 +52,14 @@ database.
 When the command runs, it calls ``pg_dump`` to get the pre-data schema and
 the post-data schema output in a Postgres custom file called ``schema.dump``.
 
+Large objects are entirely excluded from the dump (``pg_dump --no-blobs``):
+pgcopydb creates them on the target database and copies their data and
+metadata (owner, ACL, comment) as part of the :ref:`pgcopydb_copy_blobs`
+step instead. This applies to every workflow using the schema dump: in
+particular, restoring the schema never creates any large object on the
+target database, not even empty ones, including when the large objects
+copy step itself is disabled with ``--skip-blobs``.
+
 The output files are written to the ``schema`` sub-directory of the
 ``--target`` directory.
 

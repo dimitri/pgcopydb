@@ -37,7 +37,13 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src/
-RUN git clone --depth 1 https://github.com/devrimgunduz/pagila.git
+# Pin pagila to a known commit: later versions depend on pgvector,
+# pg_partman and Postgres 18+ features such as uuidv7().
+ARG PAGILA_COMMIT=5ba5a57aeb159f75f02aca2432d3c262186d13d3
+RUN git init --quiet pagila \
+  && git -C pagila remote add origin https://github.com/devrimgunduz/pagila.git \
+  && git -C pagila fetch --quiet --depth 1 origin ${PAGILA_COMMIT} \
+  && git -C pagila checkout --quiet FETCH_HEAD
 
 COPY f1db/f1db.dump /usr/src/f1db/f1db.dump
 COPY chinook/Chinook_PostgreSql.sql /usr/src/chinook/Chinook_PostgreSql.sql
