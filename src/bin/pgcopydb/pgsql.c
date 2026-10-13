@@ -1941,6 +1941,31 @@ pgsql_enable_pipeline_mode(PGSQL *pgsql)
 
 
 /*
+ * pgsql_flush_pipeline syncs the pipeline when the connection is in pipeline
+ * mode, and does nothing when it is not.
+ *
+ * Callers that just need "everything queued so far has reached the server and
+ * its result has been checked" use this rather than pgsql_sync_pipeline, which
+ * treats a connection that is not pipelined as a bug.
+ */
+bool
+pgsql_flush_pipeline(PGSQL *pgsql)
+{
+	if (pgsql->connection == NULL)
+	{
+		return true;
+	}
+
+	if (!pqPipelineModeEnabled(pgsql->connection))
+	{
+		return true;
+	}
+
+	return pgsql_sync_pipeline(pgsql);
+}
+
+
+/*
  * pgsql_sync_pipeline drains the pipeline by sending a SYNC message and
  * reads results until we get a PGRES_PIPELINE_SYNC result.
  */

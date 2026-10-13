@@ -171,14 +171,22 @@ stream_transform_context_init(StreamSpecs *specs)
  * static hook to parse each JSON row from outputDB and write the corresponding
  * parameterised SQL into replayDB (stmt + replay tables).
  *
+ * KEEPALIVE and SWITCH markers are selected by keepaliveLSN instead, the
+ * position of the last marker the apply consumed.  previousLSN cannot serve:
+ * a marker carries the server's walEnd and sits above transactions that
+ * commit below it, so skipping past one with previousLSN would drop them.
+ *
  * After this call returns, specs->private.midTxnEndpos may be true; the caller
  * must check that flag and exit cleanly without advancing previousLSN if so.
  */
 bool
-stream_transform_from_outputdb(StreamSpecs *specs, uint64_t previousLSN)
+stream_transform_from_outputdb(StreamSpecs *specs,
+							   uint64_t previousLSN,
+							   uint64_t keepaliveLSN)
 {
 	/* tell ld_store_iter_output where to start (last committed LSN) */
 	specs->sentinel.replay_lsn = previousLSN;
+	specs->private.keepaliveLSN = keepaliveLSN;
 
 
 	/* reset the mid-transaction endpos flag before each pass */

@@ -72,11 +72,17 @@ bool ld_store_lookup_output_at_lsn(DatabaseCatalog *catalog,
 
 bool ld_store_lookup_output_after_lsn(DatabaseCatalog *catalog,
 									  uint64_t lsn,
+									  uint64_t keepaliveLSN,
 									  ReplayDBOutputMessage *output);
 
 bool ld_store_lookup_output_xid_end(DatabaseCatalog *catalog,
 									uint32_t xid,
 									ReplayDBOutputMessage *output);
+
+bool ld_store_lookup_output_complete_txn(DatabaseCatalog *catalog,
+										 uint64_t previousLSN,
+										 uint64_t endpos,
+										 ReplayDBOutputMessage *output);
 
 bool ld_store_output_fetch(SQLiteQuery *query);
 
@@ -122,6 +128,15 @@ typedef struct ReplayDBOutputIterator
 	SQLiteQuery query;
 
 	uint64_t transform_lsn;
+
+	/*
+	 * KEEPALIVE and SWITCH rows sit above the transactions that commit below
+	 * them, so transform_lsn cannot skip them: it selects the transactions
+	 * still to transform.  They get their own cursor, advanced by the apply
+	 * as it consumes each marker out of replayDB.
+	 */
+	uint64_t keepalive_lsn;
+
 	uint64_t endpos;
 
 	/*
@@ -169,11 +184,11 @@ bool ld_store_iter_replay_finish(ReplayDBReplayIterator *iter);
 
 
 /*
- * ld_store_replay_next_event returns the next event to apply after
- * previousLSN.  For transactions it returns the BEGIN row only when the
- * full transaction has been written (endlsn > previousLSN).  For
- * non-transactional events (KEEPALIVE/SWITCH/ENDPOS) it returns the first
- * row at lsn >= previousLSN.
+ * ld_store_replay_next_event returns the next event to apply.  For
+ * transactions it returns the BEGIN row only when the full transaction has
+ * been written (endlsn > previousLSN).  KEEPALIVE rows have their own cursor,
+ * keepaliveLSN: they must not be re-delivered, and previousLSN only ever
+ * moves to a COMMIT the apply executed.
  *
  * s->action is set to STREAM_ACTION_UNKNOWN when no rows are available.
  */
@@ -181,6 +196,7 @@ bool ld_store_replay_event_fetch(SQLiteQuery *query);
 
 bool ld_store_replay_next_event(DatabaseCatalog *catalog,
 								uint64_t previousLSN,
+								uint64_t keepaliveLSN,
 								ReplayDBStmt *s);
 
 
