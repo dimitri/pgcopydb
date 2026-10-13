@@ -147,7 +147,7 @@ static char *sourceDBcreateTableDDLs[] = {
 	"  oid integer primary key, "
 	"  qname text, nspname text, relname text, restore_list_name text, "
 	"  tableoid references s_table(oid), "
-	"  isprimary bool, isunique bool, columns text, sql text "
+	"  isprimary bool, isunique bool, isreplident bool, columns text, sql text "
 	")",
 
 	"create table s_constraint("
@@ -407,7 +407,7 @@ static char *filterDBcreateTableDDLs[] = {
 	"  oid integer primary key, "
 	"  qname text, nspname text, relname text, restore_list_name text, "
 	"  tableoid references s_table(oid), "
-	"  isprimary bool, isunique bool, columns text, sql text "
+	"  isprimary bool, isunique bool, isreplident bool, columns text, sql text "
 	")",
 
 	"create table s_constraint("
@@ -563,7 +563,7 @@ static char *targetDBcreateTableDDLs[] = {
 	"  oid integer primary key, "
 	"  qname text, nspname text, relname text, restore_list_name text, "
 	"  tableoid integer references s_table(oid), "
-	"  isprimary bool, isunique bool, columns text, sql text "
+	"  isprimary bool, isunique bool, isreplident bool, columns text, sql text "
 	")",
 
 	"create table s_constraint("
@@ -5512,8 +5512,8 @@ catalog_add_s_index(DatabaseCatalog *catalog, SourceIndex *index)
 	char *sql =
 		"insert into s_index("
 		"  oid, qname, nspname, relname, restore_list_name, tableoid, "
-		"  isprimary, isunique, columns, sql) "
-		"values($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)";
+		"  isprimary, isunique, isreplident, columns, sql) "
+		"values($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)";
 
 	SQLiteQuery query = { 0 };
 
@@ -5539,6 +5539,10 @@ catalog_add_s_index(DatabaseCatalog *catalog, SourceIndex *index)
 
 		{ BIND_PARAMETER_TYPE_INT, "isprimary", index->isPrimary ? 1 : 0, NULL },
 		{ BIND_PARAMETER_TYPE_INT, "isunique", index->isUnique ? 1 : 0, NULL },
+		{
+			BIND_PARAMETER_TYPE_INT, "isreplident",
+			index->isReplicaIdentity ? 1 : 0, NULL
+		},
 
 		{ BIND_PARAMETER_TYPE_TEXT, "columns", 0, index->indexColumns },
 		{ BIND_PARAMETER_TYPE_TEXT, "sql", 0, index->indexDef }
@@ -5905,19 +5909,20 @@ catalog_add_s_index_batch(DatabaseCatalog *catalog,
 		appendPQExpBufferStr(&buf,
 							 "insert into s_index("
 							 "oid, qname, nspname, relname, restore_list_name, "
-							 "tableoid, isprimary, isunique, columns, sql) values");
+							 "tableoid, isprimary, isunique, isreplident, "
+							 "columns, sql) values");
 
 		int paramIdx = 1;
 
 		for (int r = 0; r < rows; r++)
 		{
 			appendPQExpBuffer(&buf,
-							  "%s(?%d,?%d,?%d,?%d,?%d,?%d,?%d,?%d,?%d,?%d)",
+							  "%s(?%d,?%d,?%d,?%d,?%d,?%d,?%d,?%d,?%d,?%d,?%d)",
 							  r == 0 ? "" : ",",
 							  paramIdx, paramIdx + 1, paramIdx + 2,
 							  paramIdx + 3, paramIdx + 4, paramIdx + 5,
 							  paramIdx + 6, paramIdx + 7, paramIdx + 8,
-							  paramIdx + 9);
+							  paramIdx + 9, paramIdx + 10);
 			paramIdx += CATALOG_INSERT_NCOLS_S_INDEX;
 		}
 
@@ -5954,8 +5959,9 @@ catalog_add_s_index_batch(DatabaseCatalog *catalog,
 			sqlite3_bind_int64(stmt, base + 5, idx->tableOid);
 			sqlite3_bind_int(stmt, base + 6, idx->isPrimary ? 1 : 0);
 			sqlite3_bind_int(stmt, base + 7, idx->isUnique ? 1 : 0);
-			sqlite3_bind_text(stmt, base + 8, idx->indexColumns, -1, SQLITE_STATIC);
-			sqlite3_bind_text(stmt, base + 9, idx->indexDef, -1, SQLITE_STATIC);
+			sqlite3_bind_int(stmt, base + 8, idx->isReplicaIdentity ? 1 : 0);
+			sqlite3_bind_text(stmt, base + 9, idx->indexColumns, -1, SQLITE_STATIC);
+			sqlite3_bind_text(stmt, base + 10, idx->indexDef, -1, SQLITE_STATIC);
 		}
 
 		rc = sqlite3_step(stmt);
@@ -6142,7 +6148,8 @@ catalog_lookup_s_index(DatabaseCatalog *catalog, uint32_t oid, SourceIndex *inde
 		"         i.tableoid, t.qname, t.nspname, t.relname, "
 		"         isprimary, isunique, columns, i.sql, "
 		"         c.oid as constraintoid, conname, "
-		"         condeferrable, condeferred, c.sql as condef"
+		"         condeferrable, condeferred, c.sql as condef, "
+		"         i.isreplident"
 		"    from s_index i "
 		"         join s_table t on t.oid = i.tableoid "
 		"         left join s_constraint c on c.indexoid = i.oid"
@@ -6214,7 +6221,8 @@ catalog_lookup_s_index_by_name(DatabaseCatalog *catalog,
 		"         i.tableoid, t.qname, t.nspname, t.relname, "
 		"         isprimary, isunique, columns, i.sql, "
 		"         c.oid as constraintoid, conname, "
-		"         condeferrable, condeferred, c.sql as condef"
+		"         condeferrable, condeferred, c.sql as condef, "
+		"         i.isreplident"
 		"    from s_index i "
 		"         join s_table t on t.oid = i.tableoid "
 		"         left join s_constraint c on c.indexoid = i.oid"
@@ -6382,6 +6390,8 @@ catalog_s_index_fetch(SQLiteQuery *query)
 		}
 	}
 
+	index->isReplicaIdentity = sqlite3_column_int(query->ppStmt, 18) == 1;
+
 	return true;
 }
 
@@ -6543,7 +6553,8 @@ catalog_iter_s_index_init(SourceIndexIterator *iter)
 		"         i.tableoid, t.qname, t.nspname, t.relname, "
 		"         isprimary, isunique, columns, i.sql, "
 		"         c.oid as constraintoid, conname, "
-		"         condeferrable, condeferred, c.sql as condef"
+		"         condeferrable, condeferred, c.sql as condef, "
+		"         i.isreplident"
 		"    from s_index i "
 		"         join s_table t on t.oid = i.tableoid "
 		"		  left join s_table_size ts on ts.oid = i.tableoid"
@@ -6593,7 +6604,8 @@ catalog_iter_s_index_table_init(SourceIndexIterator *iter)
 		"         i.tableoid, t.qname, t.nspname, t.relname, "
 		"         isprimary, isunique, columns, i.sql, "
 		"         c.oid as constraintoid, conname, "
-		"         condeferrable, condeferred, c.sql as condef"
+		"         condeferrable, condeferred, c.sql as condef, "
+		"         i.isreplident"
 		"    from s_index i "
 		"         join s_table t on t.oid = i.tableoid "
 		"         left join s_constraint c on c.indexoid = i.oid "
@@ -10506,7 +10518,8 @@ catalog_iter_s_index_in_progress_init(SourceIndexIterator *iter)
 		"         i.tableoid, t.qname, t.nspname, t.relname, "
 		"         isprimary, isunique, columns, i.sql, "
 		"         c.oid as constraintoid, conname, "
-		"         condeferrable, condeferred, c.sql as condef"
+		"         condeferrable, condeferred, c.sql as condef, "
+		"         i.isreplident"
 		"    from process p "
 		"         join s_index i on p.indexoid = i.oid "
 		"         join s_table t on t.oid = i.tableoid "
