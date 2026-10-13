@@ -1,0 +1,91 @@
+FROM almalinux:8 AS build
+
+ARG PGVERSION=16
+
+RUN dnf install -y epel-release https://download.postgresql.org/pub/repos/yum/reporpms/EL-8-x86_64/pgdg-redhat-repo-latest.noarch.rpm \
+    && dnf -qy module disable postgresql \
+    && dnf install -y --enablerepo=powertools \
+        gcc \
+        make \
+        gawk \
+        diffutils \
+        git \
+        bzip2 \
+        tar \
+        redhat-rpm-config \
+        autoconf \
+        automake \
+        libtool \
+        ncurses-devel \
+        readline-devel \
+        postgresql${PGVERSION}-devel \
+        openssl-devel \
+        zlib-devel \
+    && dnf clean all
+
+# 1. Build static Boehm GC (libgc.a) with -fPIC for PIE binary linking
+RUN git clone --depth=1 --branch v8.2.6 https://github.com/ivmai/bdwgc.git /tmp/bdwgc \
+    && cd /tmp/bdwgc \
+    && git clone --depth=1 https://github.com/ivmai/libatomic_ops.git libatomic_ops \
+    && ./autogen.sh \
+    && ./configure CFLAGS="-fPIC -O2" --enable-static --disable-shared --prefix=/usr/local \
+    && make -j$(nproc) install \
+    && rm -rf /tmp/bdwgc
+
+# 2. Build static libpq.a, libpgcommon.a, libpgport.a with -fPIC
+RUN cd /tmp \
+    && curl -sL https://ftp.postgresql.org/pub/source/v16.8/postgresql-16.8.tar.bz2 | tar -xj \
+    && cd postgresql-16.8 \
+    && ./configure CFLAGS="-fPIC -O2" --prefix=/usr/local --without-readline --without-zlib --with-ssl=openssl --without-icu --disable-shared --enable-static \
+    && make -C src/interfaces/libpq -j$(nproc) \
+    && make -C src/common -j$(nproc) \
+    && make -C src/port -j$(nproc) \
+    && cp src/interfaces/libpq/libpq.a /usr/local/lib/libpq.a \
+    && cp src/common/libpgcommon.a /usr/local/lib/libpgcommon.a \
+    && cp src/port/libpgport.a /usr/local/lib/libpgport.a \
+    && rm -rf /tmp/postgresql-16.8
+
+ENV PATH="/usr/pgsql-${PGVERSION}/bin:${PATH}"
+
+WORKDIR /usr/src/pgcopydb
+
+COPY Makefile .
+COPY GIT-VERSION-GEN .
+COPY GIT-VERSION-FILE* .
+COPY version* .
+
+# Build SQLite lib and binary
+COPY src/bin/lib/sqlite src/bin/lib/sqlite
+RUN make -C src/bin/lib/sqlite clean sqlite3.o sqlite3
+
+COPY src/bin/lib/jenkins src/bin/lib/jenkins
+COPY src/bin/lib/libs src/bin/lib/libs
+COPY src/bin/lib/log src/bin/lib/log
+COPY src/bin/lib/parson src/bin/lib/parson
+COPY src/bin/lib/pg src/bin/lib/pg
+COPY src/bin/lib/subcommands.c src/bin/lib/subcommands.c
+COPY src/bin/lib/uthash src/bin/lib/uthash
+
+COPY src/bin/Makefile src/bin/Makefile
+COPY src/bin/pgcopydb src/bin/pgcopydb
+
+# Statically link libpq and libgc into pgcopydb (without unneeded server libs like xslt/xml2/pam)
+RUN sed -i '/^LIBS/d' src/bin/pgcopydb/Makefile \
+    && printf "\nLIBS = -L \$(shell \$(PG_CONFIG) --pkglibdir) -L \$(shell \$(PG_CONFIG) --libdir) \$(shell \$(PG_CONFIG) --ldflags) /usr/local/lib/libpq.a /usr/local/lib/libpgcommon.a /usr/local/lib/libpgport.a /usr/local/lib/libgc.a -lncurses -lssl -lcrypto -lz -lm -lpthread -ldl\n" >> src/bin/pgcopydb/Makefile \
+    && make clean \
+    && make -j$(nproc)
+
+# -------------------------------------------------------------
+# Test run stage with a 100% VIRGIN Red Hat Enterprise Linux 8
+# NO DNF INSTALL! NO EXTRA PACKAGES! PURE BARE-METAL RHEL 8!
+# -------------------------------------------------------------
+FROM registry.access.redhat.com/ubi8/ubi:latest AS test-virgin
+
+COPY --from=build /usr/src/pgcopydb/src/bin/pgcopydb/pgcopydb /usr/local/bin/pgcopydb
+COPY --from=build /usr/src/pgcopydb/src/bin/lib/sqlite/sqlite3 /usr/local/bin/sqlite3
+
+# Test both --version and --help in the completely virgin container
+RUN /usr/local/bin/pgcopydb --version
+RUN /usr/local/bin/pgcopydb --help
+
+CMD ["pgcopydb", "--help"]
