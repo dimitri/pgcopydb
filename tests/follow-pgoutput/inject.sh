@@ -66,6 +66,19 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_switch_wal()'
 #
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/messages.sql
 
+#
+# Nudge the WAL forward once more before capturing --current below.
+#
+# pg_current_wal_flush_lsn() (what --current uses) can land past the exact
+# LSN that logical decoding's confirmed_flush_lsn will ever reach on its own
+# when nothing else writes to the source afterward: receive's flush_lsn then
+# sits a few bytes short of endpos forever, follow never declares itself
+# done, and the apply pipeline (which only flushes at endpos/shutdown, see
+# ld_apply.c:163-174) never applies anything it already queued -- with no
+# error anywhere. A trivial WAL-generating statement here reliably closes
+# that gap before endpos is captured.
+psql -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_switch_wal()'
+
 # Set endpos to current flush LSN to signal follow where to stop (over TCP)
 echo "Setting endpos to current WAL position..."
 pgcopydb stream sentinel set endpos --current --debug ${HP} || { echo "Failed to set endpos"; exit 1; }
