@@ -1722,53 +1722,127 @@ parse_archive_identifier(ArchiveToken *token, char *name, size_t size)
 
 
 /*
- * parse_archive_acl_or_comment_column parses the tag of a column ACL or
- * COMMENT entry of the pg_restore archive catalog TOC:
+ * parse_archive_acl_or_comment_relation parses the tag of an ACL or COMMENT
+ * entry of the pg_restore archive catalog TOC that belongs to a relation:
  *
- * 4841; 0 0 COMMENT public COLUMN column_acl_test.name postgres
+ * 4841; 0 0 COMMENT public TABLE foo postgres
  * 4842; 0 0 ACL public COLUMN "Foo Bar".id postgres
+ * 4843; 0 0 COMMENT public INDEX foo_idx postgres
+ * 4844; 0 0 COMMENT public TRIGGER foo_trg ON foo postgres
  *
- * Those entries have no objectOid, and pg_dump has no TOC entry for the
- * column itself, so we use the restore list name of the owning table,
- * "nspname relname rolname", which is what filtering matches against: column
- * ACL and COMMENT entries are then filtered out together with their table.
+ * Those entries have no objectOid, so filtering matches them by restore list
+ * name only. We use the restore list name of the relation they belong to,
+ * "nspname relname rolname", so that they are filtered out together with it:
+ *
+ *  - TABLE, VIEW, MATERIALIZED VIEW, FOREIGN TABLE, INDEX, SEQUENCE x -> x
+ *  - COLUMN x.col                                                      -> x
+ *  - CONSTRAINT, TRIGGER, POLICY, RULE name ON x                       -> x
+ *
+ * Other tags are not supported here, and the caller keeps the full remainder
+ * of the TOC entry as the restore list name, as before.
  *
  * The nspname argument is not NUL-terminated, its length is nspnameLen. The
- * ptr argument is positioned after the space following the COLUMN tag.
+ * token argument is the tag token, its ptr is positioned after the tag.
  */
 bool
-parse_archive_acl_or_comment_column(const char *nspname, int nspnameLen,
-									char *ptr,
-									ArchiveContentItem *item)
+parse_archive_acl_or_comment_relation(const char *nspname, int nspnameLen,
+									  ArchiveToken *token,
+									  ArchiveContentItem *item)
 {
-	ArchiveToken token = { .ptr = ptr };
-
-	char relname[PG_NAMEDATALEN] = { 0 };
-	char attname[PG_NAMEDATALEN] = { 0 };
-
-	if (!parse_archive_identifier(&token, relname, sizeof(relname)) ||
-		*token.ptr != '.')
+	/* make sure we matched a whole tag, as in TABLE but not TABLESPACE */
+	if (*token->ptr != ' ')
 	{
-		log_debug("Failed to parse column ACL or COMMENT table name: %s", ptr);
 		return false;
 	}
 
-	/* skip the dot */
-	++token.ptr;
+	ArchiveToken nameToken = { .ptr = token->ptr + 1 };
 
-	if (!parse_archive_identifier(&token, attname, sizeof(attname)))
+	char relname[PG_NAMEDATALEN] = { 0 };
+	char name[PG_NAMEDATALEN] = { 0 };
+
+	switch (token->desc)
 	{
-		log_debug("Failed to parse column ACL or COMMENT column name: %s", ptr);
-		return false;
+		case ARCHIVE_TAG_TABLE:
+		case ARCHIVE_TAG_VIEW:
+		case ARCHIVE_TAG_MATERIALIZED_VIEW:
+		case ARCHIVE_TAG_FOREIGN_TABLE:
+		case ARCHIVE_TAG_INDEX:
+		case ARCHIVE_TAG_SEQUENCE:
+		{
+			if (!parse_archive_identifier(&nameToken, relname, sizeof(relname)))
+			{
+				return false;
+			}
+
+			break;
+		}
+
+		case ARCHIVE_TAG_COLUMN:
+		{
+			if (!parse_archive_identifier(&nameToken, relname, sizeof(relname)) ||
+				*nameToken.ptr != '.')
+			{
+				return false;
+			}
+
+			/* skip the dot */
+			++nameToken.ptr;
+
+			if (!parse_archive_identifier(&nameToken, name, sizeof(name)))
+			{
+				return false;
+			}
+
+			break;
+		}
+
+		case ARCHIVE_TAG_CONSTRAINT:
+		case ARCHIVE_TAG_TRIGGER:
+		case ARCHIVE_TAG_POLICY:
+		case ARCHIVE_TAG_RULE:
+		{
+			if (!parse_archive_identifier(&nameToken, name, sizeof(name)) ||
+				strncmp(nameToken.ptr, " ON ", 4) != 0)
+			{
+				return false;
+			}
+
+			/* skip " ON " */
+			nameToken.ptr += 4;
+
+			/* domain constraints are "CONSTRAINT name ON DOMAIN domain" */
+			if (strncmp(nameToken.ptr, "DOMAIN ", 7) == 0)
+			{
+				return false;
+			}
+
+			if (!parse_archive_identifier(&nameToken, relname, sizeof(relname)))
+			{
+				return false;
+			}
+
+			break;
+		}
+
+		default:
+		{
+			return false;
+		}
 	}
 
 	/* skip the space before the owner, which might be missing */
-	if (*token.ptr == ' ')
+	if (*nameToken.ptr == ' ')
 	{
-		++token.ptr;
+		++nameToken.ptr;
+	}
+	else if (*nameToken.ptr != '\0')
+	{
+		log_debug("Failed to parse ACL or COMMENT relation name: %s",
+				  token->ptr);
+		return false;
 	}
 
-	char *rolname = token.ptr;
+	char *rolname = nameToken.ptr;
 
 	/* "nspname relname rolname" */
 	int bytes = nspnameLen + 1 + strlen(relname) + 1 + strlen(rolname) + 1;
@@ -1783,6 +1857,8 @@ parse_archive_acl_or_comment_column(const char *nspname, int nspnameLen,
 
 	sformat(item->restoreListName, bytes, "%.*s %s %s",
 			nspnameLen, nspname, relname, rolname);
+
+	item->tagType = ARCHIVE_TAG_TYPE_OTHER;
 
 	return true;
 }
@@ -1917,25 +1993,22 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 		sformat(item->restoreListName, bytes, "%s", extname);
 		item->tagType = ARCHIVE_TAG_TYPE_EXTENSION;
 	}
-	else if (token.desc == ARCHIVE_TAG_COLUMN &&
-			 nspnameLen > 0 &&
-			 parse_archive_acl_or_comment_column(ptr, nspnameLen,
-												 token.ptr + 1, item))
+	else if (nspnameLen > 0 &&
+			 parse_archive_acl_or_comment_relation(ptr, nspnameLen,
+												   &token, item))
 	{
 		/*
-		 * Column ACL or COMMENT: restoreListName is now the owning table's
-		 * restore list name, so that the entry is filtered with its table.
+		 * ACL or COMMENT of a relation: restoreListName is now the restore
+		 * list name of the relation, so that the entry is filtered with it.
 		 */
-		item->tagType = ARCHIVE_TAG_TYPE_OTHER;
 	}
 	else
 	{
 		/*
-		 * Other object types (FUNCTION, TABLE, SEQUENCE, …): preserve the
-		 * full remainder of the TOC entry as restoreListName.  These ACL
-		 * items have objectOid == 0 so they are not subject to name-based
-		 * filter lookups; the name is kept for logging and so that the
-		 * pre-filtered pg_restore list file is valid.
+		 * Other object types (FUNCTION, TYPE, DOMAIN, …): preserve the full
+		 * remainder of the TOC entry as restoreListName. The name is kept
+		 * for logging and so that the pre-filtered pg_restore list file is
+		 * valid.
 		 */
 		size_t len = strlen(ptr) + 1;
 
