@@ -927,11 +927,19 @@ cli_stream_prune(int argc, char **argv)
 /*
  * PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION and PGCOPYDB_DDL_EVENT_TRIGGER_NAME
  * name the plpgsql function and the event trigger installed by `pgcopydb
- * stream event-trigger`.  Both live in the "pgcopydb" schema/catalog
- * namespace that pgcopydb already owns on the source database.
+ * stream event-trigger`.
+ *
+ * The function deliberately lives in "public", not in a dedicated
+ * "pgcopydb"-named schema: pgcopydb's own schema/dump/restore pipeline only
+ * tracks schemas that own at least one table, sequence, or extension (see
+ * copydb_schema.c), so a schema created purely to hold this one function
+ * would never make it into that list, while pg_dump still dumps it — the
+ * following `pgcopydb clone` then fails to resolve that schema's OID while
+ * preparing the pg_restore --use-list catalog. "public" already exists and
+ * is already part of that tracked-schema list in any database that has
+ * user data, so it does not hit this gap.
  */
-#define PGCOPYDB_DDL_EVENT_TRIGGER_SCHEMA "pgcopydb"
-#define PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION "pgcopydb.emit_ddl_message"
+#define PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION "public.emit_ddl_message"
 #define PGCOPYDB_DDL_EVENT_TRIGGER_NAME "pgcopydb_emit_ddl_message"
 
 /*
@@ -998,9 +1006,6 @@ cli_stream_event_trigger(int argc, char **argv)
 	log_info("Installing event trigger \"%s\" on the source database",
 			 PGCOPYDB_DDL_EVENT_TRIGGER_NAME);
 
-	char *createSchemaSQL =
-		"create schema if not exists " PGCOPYDB_DDL_EVENT_TRIGGER_SCHEMA;
-
 	/*
 	 * CREATE OR REPLACE FUNCTION makes the function idempotent; event
 	 * triggers have no IF NOT EXISTS, so DROP then CREATE instead.
@@ -1041,8 +1046,7 @@ cli_stream_event_trigger(int argc, char **argv)
 		" )"
 		" execute function " PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION "()";
 
-	if (!pgsql_execute(&src, createSchemaSQL) ||
-		!pgsql_execute(&src, createFunctionSQL) ||
+	if (!pgsql_execute(&src, createFunctionSQL) ||
 		!pgsql_execute(&src, dropTriggerSQL) ||
 		!pgsql_execute(&src, createTriggerSQL))
 	{
