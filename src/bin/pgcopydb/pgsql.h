@@ -621,6 +621,7 @@ bool pgsql_table_exists(PGSQL *pgsql,
 						bool *exists);
 
 bool pgsql_current_wal_flush_lsn(PGSQL *pgsql, uint64_t *lsn);
+bool pgsql_emit_endpos_marker(PGSQL *pgsql, uint64_t *lsn);
 
 char * pgsql_escape_identifier(PGSQL *pgsql, char *src);
 #endif /* PGSQL_H */
