@@ -189,15 +189,35 @@ pgoutput_cache_relation(StreamContext *privateContext,
 
 	int16_t natts = pgout_i16(buf, &pos, bufLen);
 
-	/* check if already cached */
+	/*
+	 * Postgres resends a RELATION message for a given relOid whenever that
+	 * relation's schema has changed since the last one it sent (that is how
+	 * a DDL message's own ALTER TABLE, applied moments earlier via this same
+	 * decoder, becomes visible here too). Replace the cached entry rather
+	 * than keeping the stale one: decode_tuple() below looks up column names
+	 * by position in rel->attrs, and a tuple for the new, wider row shape
+	 * would otherwise find no entry for the added column(s), leaving
+	 * PgoutputColumn.name unset and failing the pgoutput_col.name NOT NULL
+	 * constraint on store.
+	 */
 	PgoutputRelationCache *rel = NULL;
 	HASH_FIND_INT(privateContext->pgoutputRelationCache, &relOid, rel);
 	if (rel != NULL)
 	{
-		/* already cached; skip re-parsing (schema changes not supported) */
-		log_debug("pgoutput: relation %u already cached, skipping R message",
+		log_debug("pgoutput: relation %u already cached, replacing with "
+				  "the new RELATION message (schema may have changed)",
 				  relOid);
-		return true;
+
+		HASH_DEL(privateContext->pgoutputRelationCache, rel);
+
+		PgoutputAttrCache *attr, *attrTmp;
+		HASH_ITER(hh, rel->attrs, attr, attrTmp)
+		{
+			HASH_DEL(rel->attrs, attr);
+			free(attr);
+		}
+
+		free(rel);
 	}
 
 	rel = (PgoutputRelationCache *) calloc(1, sizeof(PgoutputRelationCache));
