@@ -1,7 +1,7 @@
 ::
 
    pgcopydb stream: Stream changes from the source database
-
+   
    Available commands:
      pgcopydb stream
        setup          Setup source and target systems for logical decoding
@@ -14,4 +14,4 @@
      + sentinel       Maintain a sentinel table
        receive        Stream changes from the source database
        apply          Apply changes from the replayDB to the target database, or stdout
-
+   
