@@ -1,0 +1,3 @@
+cold bytes.total: 0
+cold catalog: source.db absent (read-only open)
+warm catalog: bytes.total is numeric

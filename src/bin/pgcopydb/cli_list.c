@@ -2039,18 +2039,39 @@ cli_list_progress(int argc, char **argv)
 		}
 	}
 
-	if (!catalog_init_from_specs(&copySpecs))
-	{
-		log_error("Failed to initialize pgcopydb internal catalogs");
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
+	/*
+	 * Open the source catalog read-only. `list progress` only ever reads the
+	 * catalog, and the read-write path (catalog_init_from_specs) opens it with
+	 * a plain sqlite3_open plus a write semaphore and checkpoints WAL on close,
+	 * which contends with a concurrently running clone's writers and surfaces
+	 * as "[SQLite 5: database is locked]" in that clone (then --fail-fast tears
+	 * the whole transfer down). A read-only connection takes no write lock and
+	 * never checkpoints: SQLite WAL gives readers a snapshot-consistent view
+	 * with no contention, so polling progress during a live clone is safe.
+	 *
+	 * The catalog file may not exist yet very early in a run (before the clone
+	 * has created it). The read-write path used to create it as a side effect
+	 * and report zeros; we preserve that "nothing yet" result without touching
+	 * the filesystem by leaving progress zeroed when the catalog is absent.
+	 */
+	DatabaseCatalog *sourceDB = &(copySpecs.catalogs.source);
 
 	CopyProgress progress = { 0 };
 
-	if (!copydb_update_progress(&copySpecs, &progress))
+	if (file_exists(sourceDB->dbfile))
 	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_INTERNAL_ERROR);
+		if (!catalog_open_readonly(sourceDB))
+		{
+			log_error("Failed to open source catalog read-only");
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		if (!copydb_update_progress(&copySpecs, &progress))
+		{
+			/* errors have already been logged */
+			(void) catalog_close(sourceDB);
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
 	}
 
 	if (outputJSON)
@@ -2110,6 +2131,8 @@ cli_list_progress(int argc, char **argv)
 				inProgressBytesPretty,
 				doneBytesPretty);
 	}
+
+	(void) catalog_close(sourceDB);
 }
 
 
