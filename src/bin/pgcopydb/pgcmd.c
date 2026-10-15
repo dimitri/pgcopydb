@@ -1651,6 +1651,144 @@ tokenize_archive_list_entry(ArchiveToken *token)
 
 
 /*
+ * parse_archive_identifier parses an identifier at token->ptr, as quoted by
+ * pg_dump with fmtId(), copies its unquoted value to name, and advances
+ * token->ptr past the identifier.
+ *
+ *   column_acl_test     ->  column_acl_test
+ *   "Foo.Bar"           ->  Foo.Bar
+ *   "say ""hi"""        ->  say "hi"
+ */
+bool
+parse_archive_identifier(ArchiveToken *token, char *name, size_t size)
+{
+	char *ptr = token->ptr;
+	size_t len = 0;
+
+	if (*ptr == '"')
+	{
+		/* skip the opening double-quote */
+		++ptr;
+
+		for (;;)
+		{
+			if (*ptr == '\0')
+			{
+				log_debug("Failed to parse quoted identifier: %s", token->ptr);
+				return false;
+			}
+
+			if (*ptr == '"')
+			{
+				/* a doubled double-quote is an escaped double-quote */
+				if (*(ptr + 1) != '"')
+				{
+					/* skip the closing double-quote */
+					++ptr;
+					break;
+				}
+
+				++ptr;
+			}
+
+			if (len + 1 >= size)
+			{
+				log_debug("Failed to parse identifier, too long: %s", token->ptr);
+				return false;
+			}
+
+			name[len++] = *ptr++;
+		}
+	}
+	else
+	{
+		while (*ptr != '\0' && *ptr != '.' && *ptr != ' ')
+		{
+			if (len + 1 >= size)
+			{
+				log_debug("Failed to parse identifier, too long: %s", token->ptr);
+				return false;
+			}
+
+			name[len++] = *ptr++;
+		}
+	}
+
+	name[len] = '\0';
+	token->ptr = ptr;
+
+	return len > 0;
+}
+
+
+/*
+ * parse_archive_acl_or_comment_column parses the tag of a column ACL or
+ * COMMENT entry of the pg_restore archive catalog TOC:
+ *
+ * 4841; 0 0 COMMENT public COLUMN column_acl_test.name postgres
+ * 4842; 0 0 ACL public COLUMN "Foo Bar".id postgres
+ *
+ * Those entries have no objectOid, and pg_dump has no TOC entry for the
+ * column itself, so we use the restore list name of the owning table,
+ * "nspname relname rolname", which is what filtering matches against: column
+ * ACL and COMMENT entries are then filtered out together with their table.
+ *
+ * The nspname argument is not NUL-terminated, its length is nspnameLen. The
+ * ptr argument is positioned after the space following the COLUMN tag.
+ */
+bool
+parse_archive_acl_or_comment_column(const char *nspname, int nspnameLen,
+									char *ptr,
+									ArchiveContentItem *item)
+{
+	ArchiveToken token = { .ptr = ptr };
+
+	char relname[PG_NAMEDATALEN] = { 0 };
+	char attname[PG_NAMEDATALEN] = { 0 };
+
+	if (!parse_archive_identifier(&token, relname, sizeof(relname)) ||
+		*token.ptr != '.')
+	{
+		log_debug("Failed to parse column ACL or COMMENT table name: %s", ptr);
+		return false;
+	}
+
+	/* skip the dot */
+	++token.ptr;
+
+	if (!parse_archive_identifier(&token, attname, sizeof(attname)))
+	{
+		log_debug("Failed to parse column ACL or COMMENT column name: %s", ptr);
+		return false;
+	}
+
+	/* skip the space before the owner, which might be missing */
+	if (*token.ptr == ' ')
+	{
+		++token.ptr;
+	}
+
+	char *rolname = token.ptr;
+
+	/* "nspname relname rolname" */
+	int bytes = nspnameLen + 1 + strlen(relname) + 1 + strlen(rolname) + 1;
+
+	item->restoreListName = (char *) calloc(bytes, sizeof(char));
+
+	if (item->restoreListName == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	sformat(item->restoreListName, bytes, "%.*s %s %s",
+			nspnameLen, nspname, relname, rolname);
+
+	return true;
+}
+
+
+/*
  * parse_archive_acl_or_comment parses the ACL or COMMENT entry of the
  * pg_restore archive catalog TOC.
  *
@@ -1671,6 +1809,9 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 	log_trace("parse_archive_acl_or_comment: \"%s\"", ptr);
 
 	ArchiveToken token = { .ptr = ptr };
+
+	/* length of the namespace field, when it's a schema name */
+	int nspnameLen = 0;
 
 	/*
 	 * The namespace field is "-" for global objects (SCHEMA, EXTENSION) or a
@@ -1703,6 +1844,8 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 		{
 			++token.ptr;
 		}
+
+		nspnameLen = token.ptr - ptr;
 
 		if (*token.ptr == ' ')
 		{
@@ -1773,6 +1916,17 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 		/* an extension's pg_restore list name is just its name */
 		sformat(item->restoreListName, bytes, "%s", extname);
 		item->tagType = ARCHIVE_TAG_TYPE_EXTENSION;
+	}
+	else if (token.desc == ARCHIVE_TAG_COLUMN &&
+			 nspnameLen > 0 &&
+			 parse_archive_acl_or_comment_column(ptr, nspnameLen,
+												 token.ptr + 1, item))
+	{
+		/*
+		 * Column ACL or COMMENT: restoreListName is now the owning table's
+		 * restore list name, so that the entry is filtered with its table.
+		 */
+		item->tagType = ARCHIVE_TAG_TYPE_OTHER;
 	}
 	else
 	{
