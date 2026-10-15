@@ -100,9 +100,9 @@ typedef struct PgoutputMessage
 	PgoutputColumn *new_cols;       /* malloc'd array; NULL for DELETE */
 
 	char *message;                  /* malloc'd; NUL-terminated; the raw
-									  * envelope content bytes of a 'M'
-									  * (MESSAGE) frame with our prefix, only
-									  * set when action == 'M' */
+	                                 * envelope content bytes of a 'M'
+	                                 * (MESSAGE) frame with our prefix, only
+	                                 * set when action == 'M' */
 } PgoutputMessage;
 
 

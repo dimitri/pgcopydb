@@ -1007,19 +1007,19 @@ cli_stream_event_trigger(int argc, char **argv)
 	 */
 	char *createFunctionSQL =
 		"create or replace function " PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION "()"
-		" returns event_trigger"
-		" language plpgsql as $pgcopydb$"
-		"begin"
-		"  perform pg_logical_emit_message("
-		"    true,"
-		"    'pgcopydb',"
-		"    json_build_object("
-		"      'type', 'ddl',"
-		"      'body', current_query()"
-		"    )::text"
-		"  );"
-		"end;"
-		"$pgcopydb$";
+																		  " returns event_trigger"
+																		  " language plpgsql as $pgcopydb$"
+																		  "begin"
+																		  "  perform pg_logical_emit_message("
+																		  "    true,"
+																		  "    'pgcopydb',"
+																		  "    json_build_object("
+																		  "      'type', 'ddl',"
+																		  "      'body', current_query()"
+																		  "    )::text"
+																		  "  );"
+																		  "end;"
+																		  "$pgcopydb$";
 
 	char *dropTriggerSQL =
 		"drop event trigger if exists " PGCOPYDB_DDL_EVENT_TRIGGER_NAME;

@@ -847,7 +847,7 @@ preparePgoutputMessage(LogicalStreamContext *context)
 				log_error(ALLOCATION_FAILED_ERROR);
 				return false;
 			}
-			memcpy(msg->message, buf + pos, len);
+			memcpy(msg->message, buf + pos, len); /* IGNORE-BANNED */
 			msg->message[len] = '\0';
 
 			pos += len;
