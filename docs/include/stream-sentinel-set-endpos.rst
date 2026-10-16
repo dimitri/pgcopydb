@@ -4,7 +4,7 @@
    usage: pgcopydb stream sentinel set endpos [ --source ... ] [ <end lsn> | --current ]
    
      --source      Postgres URI to the source database
-     --current     Use pg_current_wal_flush_lsn() as the endpos
+     --current     Use the LSN of a pg_logical_emit_message() marker written now as the endpos
      --host        Reach the follow coordinator over TCP at this host
      --port        Follow coordinator TCP port (default 5442)
    
