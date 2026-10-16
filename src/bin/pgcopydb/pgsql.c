@@ -6535,6 +6535,17 @@ pgsql_current_wal_flush_lsn(PGSQL *pgsql, uint64_t *lsn)
  * non-transactional message has no such pair and is never picked up by
  * that machinery, so flush_lsn never advances past it either -- the same
  * hang this function exists to avoid, just moved one message later.
+ *
+ * The content is a {"type": "endpos"} JSON envelope under the "pgcopydb"
+ * prefix, matching the typed-message convention a pgoutput decoder may
+ * apply to every message under that prefix (type "ddl" being the only
+ * one it ever acts on): an unrecognised type there is logged and skipped,
+ * not an error, but a message that fails to parse as JSON at all, or
+ * parses but has no "type" key, is treated as a real error. Plain text
+ * here would hit that second case and turn this fix into a hard failure
+ * on every cutover. "endpos" is simply a type no decoder's dispatch table
+ * recognises, by construction, so it always falls through to that safe
+ * skip, now and if this prefix's message vocabulary grows later.
  */
 bool
 pgsql_emit_endpos_marker(PGSQL *pgsql, uint64_t *lsn)
@@ -6548,7 +6559,8 @@ pgsql_emit_endpos_marker(PGSQL *pgsql, uint64_t *lsn)
 	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_STRING, false };
 
 	const char *sql =
-		"select pg_logical_emit_message(true, 'pgcopydb', 'endpos marker')";
+		"select pg_logical_emit_message(true, 'pgcopydb', "
+		"'{\"type\": \"endpos\"}')";
 
 	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
 								   &context, &parseSingleValueResult))
