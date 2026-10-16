@@ -1416,6 +1416,22 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 		 */
 		case STREAM_ACTION_MESSAGE:
 		{
+			/*
+			 * A message is not always transactional: pg_logical_emit_message()
+			 * takes a "transactional" argument, and when false, Postgres
+			 * delivers it to the output plugin outright, bypassing the
+			 * reorder buffer's commit-ordered replay entirely -- no
+			 * preceding BEGIN at all (see ReorderBufferQueueMessage's
+			 * non-transactional branch and message_cb_wrapper calling
+			 * message_cb directly, in
+			 * src/backend/replication/logical/reorderbuffer.c and logical.c).
+			 *
+			 * Our own event trigger always calls pg_logical_emit_message()
+			 * with transactional=true (cli_stream.c), so a "pgcopydb"-prefixed
+			 * "ddl" envelope is always transactional in practice; this check
+			 * only rejects a different, non-transactional emitter spoofing
+			 * our prefix, rather than assuming every message is one of ours.
+			 */
 			if (!mesg->isTransaction)
 			{
 				log_error("Failed to parse MESSAGE: no transaction in progress");

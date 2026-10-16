@@ -196,7 +196,7 @@ stream — see the limitation below). For a ``CREATE``/``ALTER`` command
 ``schema``/``object`` are populated (for example ``"public"`` /
 ``"public.orders"``); for a ``DROP`` command they are always ``null``,
 since PostgreSQL only reports dropped objects via a separate event
-(``sql_drop``) this trigger does not use (v1). ``command_tag`` (for
+(``sql_drop``) this trigger does not use. ``command_tag`` (for
 example ``"CREATE TABLE"``) is always populated, for every command tag
 the trigger is configured for.
 
@@ -210,8 +210,8 @@ against the target database, inside the same apply transaction as every
 other change in that source transaction, with no separate connection and no
 separate commit.
 
-Limitations (v1)
-~~~~~~~~~~~~~~~~~
+Limitations
+~~~~~~~~~~~
 
 - ``current_query()`` captures the statement exactly as submitted. A
   command sent as several statements in a single round trip (for example

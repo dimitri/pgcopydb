@@ -342,4 +342,11 @@ bool parse_archive_identifier(ArchiveToken *token, char *name, size_t size);
 bool parse_archive_list_entry(ArchiveContentItem *item, const char *line);
 bool tokenize_archive_list_entry(ArchiveToken *token);
 
+bool archive_item_schema_name(const char *restoreListName,
+							  char *schemaName,
+							  size_t size);
+bool archive_item_global_object_name(const char *restoreListName,
+									 char *objectName,
+									 size_t size);
+
 #endif /* PGCMD_H */

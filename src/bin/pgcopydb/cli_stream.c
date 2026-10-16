@@ -924,6 +924,68 @@ cli_stream_prune(int argc, char **argv)
 }
 
 
+#define PGCOPYDB_DDL_EVENT_TRIGGER_CREATE_SCHEMA_SQL \
+	"create schema if not exists %s"
+
+#define PGCOPYDB_DDL_EVENT_TRIGGER_DROP_TRIGGER_SQL \
+	"drop event trigger if exists %s"
+
+#define PGCOPYDB_DDL_EVENT_TRIGGER_DROP_FUNCTION_SQL \
+	"drop function if exists %s()"
+
+/*
+ * "schema" and "object" come from pg_event_trigger_ddl_commands(), which
+ * identifies the object a CREATE/ALTER command just acted on
+ * (schema-qualified, quoted as needed). It returns no rows at all for DROP
+ * commands -- Postgres only reports those via a separate sql_drop event,
+ * not captured here -- so both are NULL for a DROP; the "command_tag"
+ * field is TG_TAG instead, which is always available and does not depend
+ * on the command having that structured representation. Nothing decodes
+ * these three fields yet: they ride along, unused, for a later feature
+ * (keeping new tables added to pgoutput's publication automatically) to
+ * consume without needing another trigger-side change.
+ */
+#define PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION_SQL \
+	"create or replace function %s()" \
+	" returns event_trigger" \
+	" language plpgsql as $pgcopydb$" \
+	"declare" \
+	"  r record;" \
+	"begin" \
+	"  select schema_name, object_identity" \
+	"    into r" \
+	"    from pg_event_trigger_ddl_commands()" \
+	"   limit 1;" \
+	"  perform pg_logical_emit_message(" \
+	"    true," \
+	"    'pgcopydb'," \
+	"    json_build_object(" \
+	"      'type', 'ddl'," \
+	"      'body', current_query()," \
+	"      'schema', r.schema_name," \
+	"      'object', r.object_identity," \
+	"      'command_tag', TG_TAG" \
+	"    )::text" \
+	"  );" \
+	"end;" \
+	"$pgcopydb$"
+
+/*
+ * A reasonable default set of schema-changing command tags: tables,
+ * indexes, sequences and views. Not exhaustive by design; extend this
+ * list, or re-run with a locally edited trigger, as the need arises.
+ */
+#define PGCOPYDB_DDL_EVENT_TRIGGER_CREATE_SQL \
+	"create event trigger %s" \
+	" on ddl_command_end" \
+	" when tag in (" \
+	"  'CREATE TABLE', 'ALTER TABLE', 'DROP TABLE'," \
+	"  'CREATE INDEX', 'ALTER INDEX', 'DROP INDEX'," \
+	"  'CREATE SEQUENCE', 'ALTER SEQUENCE', 'DROP SEQUENCE'," \
+	"  'CREATE VIEW', 'ALTER VIEW', 'DROP VIEW'" \
+	" )" \
+	" execute function %s()"
+
 /*
  * cli_stream_event_trigger installs (or, with --drop, removes) the event
  * trigger that turns DDL run on the source database into a typed
@@ -938,7 +1000,7 @@ cli_stream_prune(int argc, char **argv)
  * The event trigger fires for a generic, reasonable set of schema-changing
  * command tags; `current_query()` captures the triggering statement as
  * submitted (a multi-statement round trip is captured whole, not split —
- * see the --help docs and the user manual for this and other v1 caveats).
+ * see the --help docs and the user manual for this and other caveats).
  */
 static void
 cli_stream_event_trigger(int argc, char **argv)
@@ -964,17 +1026,29 @@ cli_stream_event_trigger(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
+	char sql[BUFSIZE] = { 0 };
+
 	if (streamDBoptions.dropEventTrigger)
 	{
 		log_info("Dropping event trigger \"%s\" and its function",
 				 PGCOPYDB_DDL_EVENT_TRIGGER_NAME);
 
-		if (!pgsql_execute(&src,
-						   "drop event trigger if exists "
-						   PGCOPYDB_DDL_EVENT_TRIGGER_NAME) ||
-			!pgsql_execute(&src,
-						   "drop function if exists "
-						   PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION "()"))
+		sformat(sql, sizeof(sql),
+				PGCOPYDB_DDL_EVENT_TRIGGER_DROP_TRIGGER_SQL,
+				PGCOPYDB_DDL_EVENT_TRIGGER_NAME);
+
+		if (!pgsql_execute(&src, sql))
+		{
+			/* errors have already been logged */
+			(void) pgsql_finish(&src);
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		sformat(sql, sizeof(sql),
+				PGCOPYDB_DDL_EVENT_TRIGGER_DROP_FUNCTION_SQL,
+				PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION);
+
+		if (!pgsql_execute(&src, sql))
 		{
 			/* errors have already been logged */
 			(void) pgsql_finish(&src);
@@ -988,10 +1062,11 @@ cli_stream_event_trigger(int argc, char **argv)
 	log_info("Installing event trigger \"%s\" on the source database",
 			 PGCOPYDB_DDL_EVENT_TRIGGER_NAME);
 
-	char *createSchemaSQL =
-		"create schema if not exists " PGCOPYDB_DDL_EVENT_TRIGGER_SCHEMA;
+	sformat(sql, sizeof(sql),
+			PGCOPYDB_DDL_EVENT_TRIGGER_CREATE_SCHEMA_SQL,
+			PGCOPYDB_DDL_EVENT_TRIGGER_SCHEMA);
 
-	if (!pgsql_execute(&src, createSchemaSQL))
+	if (!pgsql_execute(&src, sql))
 	{
 		/* errors have already been logged */
 		(void) pgsql_finish(&src);
@@ -1001,66 +1076,35 @@ cli_stream_event_trigger(int argc, char **argv)
 	/*
 	 * CREATE OR REPLACE FUNCTION makes the function idempotent; event
 	 * triggers have no IF NOT EXISTS, so DROP then CREATE instead.
-	 *
-	 * "schema" and "object" come from pg_event_trigger_ddl_commands(),
-	 * which identifies the object a CREATE/ALTER command just acted on
-	 * (schema-qualified, quoted as needed). It returns no rows at all for
-	 * DROP commands -- Postgres only reports those via a separate sql_drop
-	 * event, not captured here (v1) -- so both are NULL for a DROP; the
-	 * "command_tag" field is TG_TAG instead, which is always available and
-	 * does not depend on the command having that structured representation.
-	 * Nothing decodes these three fields yet: they ride along, unused, for
-	 * a later feature (keeping new tables added to pgoutput's publication
-	 * automatically) to consume without needing another trigger-side change.
 	 */
-	char *createFunctionSQL =
-		"create or replace function " PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION "()"
-																		  " returns event_trigger"
-																		  " language plpgsql as $pgcopydb$"
-																		  "declare"
-																		  "  r record;"
-																		  "begin"
-																		  "  select schema_name, object_identity"
-																		  "    into r"
-																		  "    from pg_event_trigger_ddl_commands()"
-																		  "   limit 1;"
-																		  "  perform pg_logical_emit_message("
-																		  "    true,"
-																		  "    'pgcopydb',"
-																		  "    json_build_object("
-																		  "      'type', 'ddl',"
-																		  "      'body', current_query(),"
-																		  "      'schema', r.schema_name,"
-																		  "      'object', r.object_identity,"
-																		  "      'command_tag', TG_TAG"
-																		  "    )::text"
-																		  "  );"
-																		  "end;"
-																		  "$pgcopydb$";
+	sformat(sql, sizeof(sql),
+			PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION_SQL,
+			PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION);
 
-	char *dropTriggerSQL =
-		"drop event trigger if exists " PGCOPYDB_DDL_EVENT_TRIGGER_NAME;
+	if (!pgsql_execute(&src, sql))
+	{
+		/* errors have already been logged */
+		(void) pgsql_finish(&src);
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
 
-	/*
-	 * A reasonable default set of schema-changing command tags: tables,
-	 * indexes, sequences and views. Not exhaustive by design (v1); extend
-	 * this list, or re-run with a locally edited trigger, as the need
-	 * arises.
-	 */
-	char *createTriggerSQL =
-		"create event trigger " PGCOPYDB_DDL_EVENT_TRIGGER_NAME
-		" on ddl_command_end"
-		" when tag in ("
-		"  'CREATE TABLE', 'ALTER TABLE', 'DROP TABLE',"
-		"  'CREATE INDEX', 'ALTER INDEX', 'DROP INDEX',"
-		"  'CREATE SEQUENCE', 'ALTER SEQUENCE', 'DROP SEQUENCE',"
-		"  'CREATE VIEW', 'ALTER VIEW', 'DROP VIEW'"
-		" )"
-		" execute function " PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION "()";
+	sformat(sql, sizeof(sql),
+			PGCOPYDB_DDL_EVENT_TRIGGER_DROP_TRIGGER_SQL,
+			PGCOPYDB_DDL_EVENT_TRIGGER_NAME);
 
-	if (!pgsql_execute(&src, createFunctionSQL) ||
-		!pgsql_execute(&src, dropTriggerSQL) ||
-		!pgsql_execute(&src, createTriggerSQL))
+	if (!pgsql_execute(&src, sql))
+	{
+		/* errors have already been logged */
+		(void) pgsql_finish(&src);
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	sformat(sql, sizeof(sql),
+			PGCOPYDB_DDL_EVENT_TRIGGER_CREATE_SQL,
+			PGCOPYDB_DDL_EVENT_TRIGGER_NAME,
+			PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION);
+
+	if (!pgsql_execute(&src, sql))
 	{
 		/* errors have already been logged */
 		(void) pgsql_finish(&src);

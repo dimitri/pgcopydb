@@ -2030,3 +2030,85 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 
 	return true;
 }
+
+
+/*
+ * archive_item_schema_name extracts the schema name a plain (non-composite)
+ * archive TOC entry belongs to, from its already-parsed restoreListName (see
+ * parse_archive_list_entry): the first space-delimited token, e.g. "pgcopydb"
+ * out of "pgcopydb emit_ddl_message() postgres" for a FUNCTION entry.
+ *
+ * Returns false, with schemaName untouched, when the entry has no enclosing
+ * schema to report: its restoreListName starts with "-", which means either
+ * a database-global object (DATABASE, EVENT TRIGGER, ...) that never has
+ * one, or the SCHEMA entry itself -- its own name is the *second* token
+ * instead, since a schema does not belong to a schema (see
+ * archive_item_global_object_name for that case instead).
+ */
+bool
+archive_item_schema_name(const char *restoreListName, char *schemaName, size_t size)
+{
+	if (restoreListName == NULL || restoreListName[0] == '-')
+	{
+		return false;
+	}
+
+	char *space = strchr(restoreListName, ' ');
+
+	if (space == NULL)
+	{
+		return false;
+	}
+
+	size_t len = space - restoreListName;
+
+	if (len >= size)
+	{
+		return false;
+	}
+
+	strlcpy(schemaName, restoreListName, len + 1);
+
+	return true;
+}
+
+
+/*
+ * archive_item_global_object_name extracts the object's own name from a
+ * plain (non-composite) archive TOC entry that has no enclosing schema --
+ * its restoreListName starts with "- " (DATABASE, EVENT TRIGGER, ... and
+ * also SCHEMA itself, whose own name is not something it belongs to): the
+ * second space-delimited token, e.g. "pgcopydb_emit_ddl_message" out of
+ * "- pgcopydb_emit_ddl_message postgres" for an EVENT TRIGGER entry, or
+ * "pgcopydb" out of "- pgcopydb postgres" for a SCHEMA entry.
+ */
+bool
+archive_item_global_object_name(const char *restoreListName, char *objectName,
+								size_t size)
+{
+	if (restoreListName == NULL ||
+		restoreListName[0] != '-' ||
+		restoreListName[1] != ' ')
+	{
+		return false;
+	}
+
+	char *start = (char *) restoreListName + 2;
+	char *space = strchr(start, ' ');
+
+	if (space == NULL)
+	{
+		return false;
+	}
+
+	size_t len = space - start;
+
+	if (len >= size)
+	{
+		return false;
+	}
+
+	strlcpy(objectName, start, len + 1);
+
+	return true;
+}

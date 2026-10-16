@@ -823,10 +823,15 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 	}
 
 	/*
-	 * Always skip the "pgcopydb" schema itself, and the event trigger
-	 * function and event trigger that `pgcopydb stream event-trigger`
-	 * installs in it (see pgcmd.h): source-only tooling that must never
-	 * reach the target, regardless of the user's own filters.
+	 * Always skip the "pgcopydb" schema itself, and anything living in it
+	 * (currently just the event trigger function from `pgcopydb stream
+	 * event-trigger`, see pgcmd.h): source-only tooling that must never
+	 * reach the target, regardless of the user's own filters. Also always
+	 * skip the event trigger itself, by name: it is a database-global
+	 * object, not schema-owned, so it does not show up as "living in" that
+	 * schema the way the function does, and it can't be kept out with a
+	 * schema-based filter either (pg_dump has no --exclude-event-trigger
+	 * flag).
 	 *
 	 * "pgcopydb" is already a reserved schema name that schema_list_schemas
 	 * (sql_list_schemas) always excludes from pgcopydb's own catalog, so if
@@ -834,17 +839,19 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 	 * below (catOid == PG_NAMESPACE_OID) would fail to resolve its OID --
 	 * the catalog never learned about it, while pg_dump still dumped it.
 	 *
-	 * The event trigger itself is a database-global object, not
-	 * schema-owned, so it can't be kept out with a schema-based filter
-	 * either (pg_dump has no --exclude-event-trigger flag) -- hence
-	 * matching all three by name here, where pgcopydb already fully
-	 * controls what reaches pg_restore.
+	 * The FUNCTION check matches only the schema name, not the function
+	 * name: anything in the "pgcopydb" schema is ours by convention, and
+	 * matching the function name too would both miss a rename and, more
+	 * subtly, wrongly single out one specific name as if a same-named
+	 * function elsewhere were the concern -- it is not; the schema is.
 	 */
+	char schemaName[PG_NAMEDATALEN] = { 0 };
+	char objectName[PG_NAMEDATALEN] = { 0 };
+
 	if (!skip &&
 		item->desc == ARCHIVE_TAG_SCHEMA &&
-		strncmp(name,
-				"- " PGCOPYDB_DDL_EVENT_TRIGGER_SCHEMA " ",
-				strlen("- " PGCOPYDB_DDL_EVENT_TRIGGER_SCHEMA " ")) == 0)
+		archive_item_global_object_name(name, objectName, sizeof(objectName)) &&
+		streq(objectName, PGCOPYDB_DDL_EVENT_TRIGGER_SCHEMA))
 	{
 		skip = true;
 		log_debug("Skipping pgcopydb SCHEMA \"%s\"", name);
@@ -852,9 +859,8 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 
 	if (!skip &&
 		item->desc == ARCHIVE_TAG_FUNCTION &&
-		strncmp(name,
-				PGCOPYDB_DDL_EVENT_TRIGGER_SCHEMA " emit_ddl_message(",
-				strlen(PGCOPYDB_DDL_EVENT_TRIGGER_SCHEMA " emit_ddl_message(")) == 0)
+		archive_item_schema_name(name, schemaName, sizeof(schemaName)) &&
+		streq(schemaName, PGCOPYDB_DDL_EVENT_TRIGGER_SCHEMA))
 	{
 		skip = true;
 		log_debug("Skipping pgcopydb event trigger FUNCTION \"%s\"", name);
@@ -862,9 +868,8 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 
 	if (!skip &&
 		item->desc == ARCHIVE_TAG_EVENT_TRIGGER &&
-		strncmp(name,
-				"- " PGCOPYDB_DDL_EVENT_TRIGGER_NAME " ",
-				strlen("- " PGCOPYDB_DDL_EVENT_TRIGGER_NAME " ")) == 0)
+		archive_item_global_object_name(name, objectName, sizeof(objectName)) &&
+		streq(objectName, PGCOPYDB_DDL_EVENT_TRIGGER_NAME))
 	{
 		skip = true;
 		log_debug("Skipping pgcopydb EVENT TRIGGER \"%s\"", name);

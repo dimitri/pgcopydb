@@ -1210,12 +1210,22 @@ stream_apply_dml(StreamApplyContext *context, ReplayDBStmt *s)
 		 * transaction, same commit ordering as every other statement in
 		 * this transaction. All three supported output plugins decode and
 		 * apply this the same way (see parseMessage in ld_transform.c).
+		 *
+		 * Unlike INSERT/UPDATE/DELETE, there is no degenerate-row case
+		 * here: parseMessage only ever appends a STREAM_ACTION_MESSAGE
+		 * statement to the transaction after successfully setting
+		 * stmt->stmt.ddl.body, so a NULL s->stmt reaching this point is a
+		 * bug, not a row to skip or a default to paper over.
 		 */
-		const char *ddl = (s->stmt != NULL) ? s->stmt : "";
-
-		if (!pgsql_execute(applyPgConn, ddl))
+		if (s->stmt == NULL)
 		{
-			log_error("Failed to apply DDL message: %s", ddl);
+			log_error("BUG: stream_apply_dml: DDL message has a NULL stmt");
+			return false;
+		}
+
+		if (!pgsql_execute(applyPgConn, s->stmt))
+		{
+			log_error("Failed to apply DDL message: %s", s->stmt);
 			return false;
 		}
 
