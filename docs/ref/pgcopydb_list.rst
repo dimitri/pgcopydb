@@ -157,6 +157,37 @@ list of all the tables and indexes that are currently being processed.
 
 .. include:: ../include/list-progress.rst
 
+.. _pgcopydb_list_toc:
+
+pgcopydb list toc
+------------------
+
+pgcopydb list toc - List and filter a pg_dump archive's Table of Contents
+
+The command ``pgcopydb list toc`` parses the Table of Contents of a
+custom-format ``pg_dump`` archive (or an already-saved ``pg_restore
+--list`` text output) and lists its entries, with their schema, name,
+and owner split out into their own fields.
+
+Unlike ``pg_dump``/``pg_restore``'s own filtering (``-n``, ``-t``,
+``-N``, ``-T``, and the ``--filter`` file format added in PostgreSQL 17),
+which filters by re-querying the source catalogs, ``pgcopydb list toc``
+filters an archive you already have, and can filter on fields
+``pg_dump`` has no concept of at all, such as "any function whose
+signature mentions this type".
+
+When ``--filter`` is used together with ``--source``, the pgcopydb
+filtering setup (see :ref:`filtering`) is applied too, exactly as an
+actual ``pgcopydb restore`` would apply it, which is useful to check what
+a given filter file actually keeps or skips without running a restore.
+
+When ``--use-list`` is given, a ``pg_restore --use-list`` compatible
+file is written out of the result: matching entries are kept as-is, and
+the others are commented out with a leading ``;``, the same convention
+``pgcopydb`` itself uses internally when preparing a filtered restore.
+
+.. include:: ../include/list-toc.rst
+
 Options
 -------
 

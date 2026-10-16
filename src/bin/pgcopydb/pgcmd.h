@@ -120,31 +120,6 @@ typedef enum
 
 
 /*
- * Archive List tokenizer.
- */
-typedef enum
-{
-	ARCHIVE_TOKEN_UNKNOWN = 0,
-	ARCHIVE_TOKEN_SEMICOLON,
-	ARCHIVE_TOKEN_SPACE,
-	ARCHIVE_TOKEN_OID,
-	ARCHIVE_TOKEN_DESC,
-	ARCHIVE_TOKEN_DASH,
-	ARCHIVE_TOKEN_EOL
-} ArchiveTokenType;
-
-
-typedef struct ArchiveToken
-{
-	char *ptr;
-	ArchiveTokenType type;
-	ArchiveItemDesc desc;
-
-	/* we also parse/prepare some of the values */
-	uint32_t oid;
-} ArchiveToken;
-
-/*
  * The Postgres pg_restore tool allows listing the contents of an archive. The
  * archive content is formatted the following way:
  *
@@ -161,6 +136,68 @@ typedef struct ArchiveToken
  * contents by their OID on the source database, so that's the most important
  * field we need.
  */
+
+/*
+ * ArchiveTocShape classifies how an entry's remainder (everything after
+ * the TAG token) is laid out, so the parser knows how many fields to split
+ * it into and what each one means. See tests/toc-coverage/ for real
+ * captured examples of each shape.
+ */
+typedef enum
+{
+	ARCHIVE_SHAPE_UNKNOWN = 0,
+
+	/*
+	 * "<namespace> <name> <owner>" -- namespace is "-" for a global
+	 * (non-schema-owned) object. Covers both: SCHEMA's own "- name owner"
+	 * (name is the schema's own name) and schema-owned entries like
+	 * TABLE, FUNCTION, SEQUENCE, VIEW, ... ("schema name owner").
+	 */
+	ARCHIVE_SHAPE_SIMPLE,
+
+	/*
+	 * "<namespace> <relname> <name> <owner>" -- an object that belongs to
+	 * a relation (or, for the two PUBLICATION tags below, a publication):
+	 * CONSTRAINT, FK_CONSTRAINT, TRIGGER, RULE, POLICY, DEFAULT (name is
+	 * the column name here, not an object with its own identity),
+	 * PUBLICATION_TABLE (relname is the publication name, name is the
+	 * published table), PUBLICATION_TABLES_IN_SCHEMA (relname is the
+	 * publication name, name is the published schema).
+	 */
+	ARCHIVE_SHAPE_RELATION,
+
+	/*
+	 * ACL or COMMENT: "<namespace> <TAG2> ...", recursing into one of the
+	 * shapes above (picked by TAG2, not by the outer ACL/COMMENT tag) for
+	 * the remainder after TAG2.
+	 */
+	ARCHIVE_SHAPE_ACL_OR_COMMENT,
+
+	/*
+	 * Genuinely irregular one-off shapes, not worth generalizing: CAST
+	 * ("CAST (domain AS type)"), USER_MAPPING ("USER MAPPING user SERVER
+	 * server", repeating its own tag name), DEFAULT_ACL ("DEFAULT
+	 * PRIVILEGES FOR TABLES"). The whole remainder up to the trailing
+	 * owner (if any) is kept as-is in `name`.
+	 */
+	ARCHIVE_SHAPE_OPAQUE
+} ArchiveTocShape;
+
+
+/*
+ * Naming note, for anyone cross-referencing with pg_dump's own source
+ * (pg_backup_archiver.h's TocEntry, pg_dump.c's dumpACL/dumpCommentExtended):
+ * pg_dump's te->desc is the category string ("ACL", "TABLE", "COMMENT", ...)
+ * -- what WE call desc/description and the ArchiveItemDesc enum below --
+ * while pg_dump's te->tag is the object's OWN name, which is what WE split
+ * into relname/name below (pg_dump has no separate field for it, it's one
+ * composite string). Our nspname and owner do match pg_dump's own naming
+ * (nspname is dumpACL's own parameter name for the same thing; owner is
+ * te->owner verbatim). pg_dump itself has no name or abstraction for what
+ * we call "TAG2" (the nested keyword inside an ACL/COMMENT's tag, e.g.
+ * TRIGGER or COLUMN) or "shape" below -- both are this parser's own
+ * invention, not something pg_dump already names and we failed to reuse.
+ */
 typedef struct ArchiveContentItem
 {
 	int dumpId;
@@ -175,6 +212,28 @@ typedef struct ArchiveContentItem
 	bool isCompositeTag;
 	ArchiveCompositeTagKind tagKind;
 	ArchiveCompositeTagType tagType;
+
+	/*
+	 * Structured fields, split out of restoreListName according to
+	 * ArchiveTocShape -- see archive_toc_parser.c. Empty ("") rather than
+	 * NULL when not applicable to this entry's shape, so callers can
+	 * always safely read them.
+	 */
+	ArchiveTocShape shape;
+
+	bool hasNamespace;              /* false when the namespace field is "-" */
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];   /* owning relation/publication, SHAPE_RELATION only */
+	char name[PG_NAMEDATALEN];      /* the object's own name (or column name for DEFAULT) */
+	char owner[PG_NAMEDATALEN];     /* role name; may be empty, never NULL */
+
+	/*
+	 * Set when shape == ARCHIVE_SHAPE_ACL_OR_COMMENT: innerDesc is TAG2
+	 * (e.g. ARCHIVE_TAG_COLUMN, ARCHIVE_TAG_TRIGGER, ...), and
+	 * hasNamespace/nspname/relname/name/owner above describe TAG2's own
+	 * remainder, parsed per TAG2's shape, not the outer ACL/COMMENT tag.
+	 */
+	ArchiveItemDesc innerDesc;
 } ArchiveContentItem;
 
 
@@ -304,13 +363,8 @@ bool archive_iter_toc_init(ArchiveTOCIterator *iter);
 bool archive_iter_toc_next(ArchiveTOCIterator *iter);
 bool archive_iter_toc_finish(ArchiveTOCIterator *iter);
 
-bool parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item);
-bool parse_archive_acl_or_comment_relation(const char *nspname, int nspnameLen,
-										   ArchiveToken *token,
-										   ArchiveContentItem *item);
-bool parse_archive_identifier(ArchiveToken *token, char *name, size_t size);
-
-bool parse_archive_list_entry(ArchiveContentItem *item, const char *line);
-bool tokenize_archive_list_entry(ArchiveToken *token);
+/* archive_toc_parser.c: see the file header */
+ArchiveTocShape archive_toc_shape_for_desc(ArchiveItemDesc desc);
+bool archive_toc_parse_line(const char *line, ArchiveContentItem *item);
 
 #endif /* PGCMD_H */

@@ -26,6 +26,13 @@ typedef struct ListDBOptions
 	char table_name[PG_NAMEDATALEN];
 	char filterFileName[MAXPGPATH];
 
+	/* used by "pgcopydb list toc" only */
+	char dumpFilename[MAXPGPATH];
+	char restoreListFilename[MAXPGPATH];
+	char tocNamePattern[PG_NAMEDATALEN];
+	char tocTypePattern[PG_NAMEDATALEN];
+	char useListFilename[MAXPGPATH];
+
 	bool listSkipped;
 	bool noPKey;
 	bool force;
