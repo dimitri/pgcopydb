@@ -1246,8 +1246,15 @@ archive_iter_toc_next(ArchiveTOCIterator *iter)
 	ArchiveContentItem empty = { 0 };
 	*(iter->item) = empty;
 
-	/* now parse the line */
-	if (!parse_archive_list_entry(iter->item, iter->fileIterator->line))
+	/*
+	 * Use the flex-lexer-based parser (archive_toc_parser.c) rather than
+	 * the older hand-rolled parse_archive_list_entry: it produces the same
+	 * dumpId/catalogOid/objectOid/desc/restoreListName fields every
+	 * existing caller of this iterator already relies on, plus the
+	 * structured nspname/relname/name/owner split that parse_archive_list_entry
+	 * never computed.
+	 */
+	if (!archive_toc_parse_line(iter->fileIterator->line, iter->item))
 	{
 		/* errors have already been logged  */
 		return false;

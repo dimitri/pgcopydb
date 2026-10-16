@@ -183,5 +183,15 @@ sql_queries.o: $(SRC_DIR)sql/sql_queries_data.inc
 
 gen-sql: $(SRC_DIR)sql/sql_queries_data.inc
 
-.PHONY: all monitor clean gen-sql
+FLEX ?= flex
+
+# archive_toc_lexer.c is generated from archive_toc_lexer.l and committed,
+# the same way sql_queries_data.inc is: regenerated here only when the .l
+# source is newer, so building from a checkout never requires flex.
+$(SRC_DIR)archive_toc_lexer.c: $(SRC_DIR)archive_toc_lexer.l
+	$(FLEX) -o $@ $<
+
+gen-lexer: $(SRC_DIR)archive_toc_lexer.c
+
+.PHONY: all monitor clean gen-sql gen-lexer
 .PHONY: VERSION-FILE
