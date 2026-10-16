@@ -24,35 +24,6 @@
 #define PG_CMD_MAX_ARG 128
 #define PG_VERSION_STRING_MAX 12
 
-/*
- * PGCOPYDB_DDL_EVENT_TRIGGER_SCHEMA, PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION and
- * PGCOPYDB_DDL_EVENT_TRIGGER_NAME name the schema, plpgsql function and
- * event trigger installed by `pgcopydb stream event-trigger`.
- *
- * These are source-only tooling and must never reach the target database:
- * dump_restore.c's copydb_write_restore_list_hook always skips the matching
- * SCHEMA, FUNCTION and EVENT TRIGGER archive entries by name, the same way
- * it always skips DATABASE entries, regardless of the user's own filters.
- *
- * All three need an explicit skip, for two different reasons:
- *
- *  - "pgcopydb" is already a reserved schema name that schema_list_schemas
- *    (sql_list_schemas) always excludes from pgcopydb's own catalog. If the
- *    SCHEMA entry itself were not also skipped here, pg_restore would still
- *    try to create it (pg_dump has no reason to omit it), but pgcopydb's
- *    restore-list preparation would fail to resolve its OID -- the catalog
- *    never learned about it. This is exactly the bug this feature hit
- *    during development.
- *  - the event trigger is a database-global object, not schema-owned, so
- *    putting the function in a dedicated "pgcopydb" schema does not by
- *    itself keep the trigger out of a dump -- pg_dump has no
- *    --exclude-event-trigger flag -- hence the name-based skip here
- *    instead of relying on schema exclusion.
- */
-#define PGCOPYDB_DDL_EVENT_TRIGGER_SCHEMA "pgcopydb"
-#define PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION "pgcopydb.emit_ddl_message"
-#define PGCOPYDB_DDL_EVENT_TRIGGER_NAME "pgcopydb_emit_ddl_message"
-
 typedef struct PostgresPaths
 {
 	char psql[MAXPGPATH];
@@ -341,12 +312,5 @@ bool parse_archive_identifier(ArchiveToken *token, char *name, size_t size);
 
 bool parse_archive_list_entry(ArchiveContentItem *item, const char *line);
 bool tokenize_archive_list_entry(ArchiveToken *token);
-
-bool archive_item_schema_name(const char *restoreListName,
-							  char *schemaName,
-							  size_t size);
-bool archive_item_global_object_name(const char *restoreListName,
-									 char *objectName,
-									 size_t size);
 
 #endif /* PGCMD_H */
