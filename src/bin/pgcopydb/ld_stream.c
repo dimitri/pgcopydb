@@ -2441,14 +2441,11 @@ stream_create_sentinel(CopyDataSpec *copySpecs,
  * (see pgsql_emit_endpos_marker for why pg_current_wal_flush_lsn() is not
  * used directly here anymore).
  *
- * This relies on all three supported output plugins discarding a message
- * instead of erroring out on one: pgoutput's wire-level decode switch has
- * no case for a Message ('M') frame at all, so it falls to the default
- * branch and gets filtered out unconditionally, regardless of content; and
- * test_decoding/wal2json now discard any STREAM_ACTION_MESSAGE row outright
- * in the transform step (see parseMessage in ld_transform.c, and the
- * "message: " recognition in parseTestDecodingMessageActionAndXid) rather
- * than trying to parse it as a row change.
+ * This relies on all three supported output plugins tolerating a message
+ * they don't recognize instead of erroring out: the marker's envelope has
+ * "type": "endpos", which every plugin's parseMessage dispatch (ld_transform.c)
+ * logs and skips as an unrecognized type, the same way it would for a
+ * genuinely unknown type from a newer pgcopydb source.
  */
 bool
 stream_fetch_current_lsn(uint64_t *lsn,

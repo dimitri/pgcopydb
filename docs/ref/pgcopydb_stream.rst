@@ -184,9 +184,6 @@ separate commit.
 Limitations (v1)
 ~~~~~~~~~~~~~~~~~
 
-- Only the ``pgoutput`` output plugin decodes DDL messages.
-  ``test_decoding`` and ``wal2json`` do not support this feature yet.
-
 - ``current_query()`` captures the statement exactly as submitted. A
   command sent as several statements in a single round trip (for example
   via a multi-statement ``psql -c`` invocation) is captured whole, as one

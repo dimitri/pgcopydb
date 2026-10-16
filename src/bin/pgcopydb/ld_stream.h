@@ -837,6 +837,13 @@ bool parseTestDecodingMessage(StreamContext *privateContext,
 							  char *message,
 							  JSON_Value *json);
 
+bool parseTestDecodingMessageEnvelopeHeader(const char *line,
+											bool *transactional,
+											char *prefix,
+											size_t prefixSize,
+											const char **contentPtr,
+											size_t *contentSize);
+
 /* ld_wal2json.c */
 bool prepareWal2jsonMessage(LogicalStreamContext *context);
 

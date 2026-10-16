@@ -38,10 +38,32 @@ done
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 psql -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_switch_wal()'
 
+#
+# Install the event trigger that turns DDL into a pg_logical_emit_message()
+# "ddl" envelope. This is the only opt-in step of the feature: decoding and
+# applying such a message is always on, with no CLI flag, on the follow side.
+#
+pgcopydb stream event-trigger --source ${PGCOPYDB_SOURCE_PGURI}
+
+#
+# Run a plain DDL statement: the event trigger fires automatically and
+# emits the DDL as a message. No manual pg_logical_emit_message() call here;
+# this proves the real, intended usage end to end, for wal2json too.
+#
+psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/ddl-trigger.sql
+
 # Inject another batch on the new WAL segment to show pipeline continues
 # across segment boundaries without any special handling.
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 psql -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_switch_wal()'
+
+#
+# Inject pg_logical_emit_message() traffic that pgcopydb must safely ignore:
+# a message of an unrecognized type (must be skipped, not break the stream)
+# and a message with a different prefix (must be filtered out at decode
+# time, never applied).
+#
+psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/messages.sql
 
 # Set endpos to current flush LSN to signal follow where to stop (over TCP)
 echo "Setting endpos to current WAL position..."

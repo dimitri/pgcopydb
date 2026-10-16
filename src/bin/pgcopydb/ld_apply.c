@@ -1205,10 +1205,11 @@ stream_apply_dml(StreamApplyContext *context, ReplayDBStmt *s)
 	{
 		/*
 		 * A decoded DDL message (pg_logical_emit_message(), envelope type
-		 * "ddl", pgoutput only). s->stmt holds the literal DDL SQL text,
-		 * stored verbatim by stream_write_ddl; run it as-is, inside the
-		 * already-open apply transaction, same commit ordering as every
-		 * other statement in this transaction.
+		 * "ddl"). s->stmt holds the literal DDL SQL text, stored verbatim
+		 * by stream_write_ddl; run it as-is, inside the already-open apply
+		 * transaction, same commit ordering as every other statement in
+		 * this transaction. All three supported output plugins decode and
+		 * apply this the same way (see parseMessage in ld_transform.c).
 		 */
 		const char *ddl = (s->stmt != NULL) ? s->stmt : "";
 

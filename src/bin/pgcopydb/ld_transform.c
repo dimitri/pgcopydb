@@ -1400,32 +1400,101 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 		}
 
 		/*
-		 * A pg_logical_emit_message() message. Only pgoutput decodes and
-		 * applies a "pgcopydb"-prefixed "ddl" envelope: preparePgoutputMessage
-		 * (ld_pgoutput.c) already filtered by prefix before this point and
-		 * stores the envelope directly as jsonBuffer. test_decoding and
-		 * wal2json have no equivalent support -- their jsonBuffer here wraps
-		 * their own plugin-specific message text/JSON, not our envelope --
-		 * so discard their message rows outright (freeing the already-
-		 * allocated stmt, since STREAM_ACTION_MESSAGE is not TCL) rather than
-		 * misinterpreting their wrapper as ours.
+		 * A pg_logical_emit_message() message. All three plugins filtered
+		 * by the "pgcopydb" prefix already, at decode time (pgoutput in
+		 * preparePgoutputMessage, wal2json in parseWal2jsonMessageActionAndXid,
+		 * test_decoding in parseTestDecodingMessageActionAndXid) -- getting
+		 * here means the prefix matched. What's left is unwrapping the
+		 * envelope JSON text, which each plugin carries differently:
+		 *
+		 *  - pgoutput stores the envelope bytes directly as jsonBuffer, so
+		 *    json IS the envelope already.
+		 *  - wal2json's jsonBuffer is its own JSON object, with our envelope
+		 *    JSON text nested under the "content" key.
+		 *  - test_decoding's jsonBuffer is the raw decoder line, JSON-string
+		 *    escaped; our envelope JSON text follows "content:" in there.
 		 */
 		case STREAM_ACTION_MESSAGE:
 		{
-			if (privateContext->plugin != STREAM_PLUGIN_PGOUTPUT)
-			{
-				free(stmt);
-				privateContext->stmt = NULL;
-				break;
-			}
-
 			if (!mesg->isTransaction)
 			{
 				log_error("Failed to parse MESSAGE: no transaction in progress");
 				return false;
 			}
 
-			JSON_Object *jsobj = json_value_get_object(json);
+			JSON_Object *jsobj = NULL;
+
+			switch (privateContext->plugin)
+			{
+				case STREAM_PLUGIN_PGOUTPUT:
+				{
+					jsobj = json_value_get_object(json);
+					break;
+				}
+
+				case STREAM_PLUGIN_WAL2JSON:
+				{
+					JSON_Object *outer = json_value_get_object(json);
+					const char *content = outer != NULL ?
+										  json_object_get_string(outer, "content") : NULL;
+
+					if (content == NULL)
+					{
+						log_error("Failed to parse wal2json message, "
+								  "missing \"content\": %.1024s",
+								  message != NULL ? message : "(null)");
+						return false;
+					}
+
+					JSON_Value *envelope = json_parse_string(content);
+					jsobj = json_value_get_object(envelope);
+					break;
+				}
+
+				case STREAM_PLUGIN_TEST_DECODING:
+				{
+					const char *line = json_value_get_string(json);
+
+					bool transactional = false;
+					char prefix[PG_NAMEDATALEN] = { 0 };
+					const char *contentPtr = NULL;
+					size_t contentSize = 0;
+
+					if (line == NULL ||
+						!parseTestDecodingMessageEnvelopeHeader(line,
+																&transactional,
+																prefix,
+																sizeof(prefix),
+																&contentPtr,
+																&contentSize))
+					{
+						log_error("Failed to parse test_decoding message: "
+								  "%.1024s", message != NULL ? message : "(null)");
+						return false;
+					}
+
+					char *content = strndup(contentPtr, contentSize);
+
+					if (content == NULL)
+					{
+						log_error(ALLOCATION_FAILED_ERROR);
+						return false;
+					}
+
+					JSON_Value *envelope = json_parse_string(content);
+					free(content);
+					jsobj = json_value_get_object(envelope);
+					break;
+				}
+
+				default:
+				{
+					log_error("BUG: parseMessage called with unknown plugin %d",
+							  privateContext->plugin);
+					return false;
+				}
+			}
+
 			const char *type = jsobj != NULL ?
 							   json_object_get_string(jsobj, "type") : NULL;
 
