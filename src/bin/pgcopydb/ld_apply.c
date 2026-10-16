@@ -1211,16 +1211,21 @@ stream_apply_dml(StreamApplyContext *context, ReplayDBStmt *s)
 		 * this transaction. All three supported output plugins decode and
 		 * apply this the same way (see parseMessage in ld_transform.c).
 		 *
-		 * Unlike INSERT/UPDATE/DELETE, there is no degenerate-row case
-		 * here: parseMessage only ever appends a STREAM_ACTION_MESSAGE
-		 * statement to the transaction after successfully setting
-		 * stmt->stmt.ddl.body, so a NULL s->stmt reaching this point is a
-		 * bug, not a row to skip or a default to paper over.
+		 * A NULL s->stmt should not happen in current code -- parseMessage
+		 * only appends a STREAM_ACTION_MESSAGE statement after successfully
+		 * setting stmt->stmt.ddl.body -- but a message is content pgcopydb
+		 * does not fully control (unlike DML, which it generates itself
+		 * from the source's own rows): warn and skip this one statement
+		 * rather than failing the whole apply pipeline over it, the same
+		 * tolerance already given to an envelope with an unrecognized
+		 * "type" (see parseMessage) and to a stale KEEPALIVE with an empty
+		 * timestamp (see stream_apply_sql, issue #943).
 		 */
 		if (s->stmt == NULL)
 		{
-			log_error("BUG: stream_apply_dml: DDL message has a NULL stmt");
-			return false;
+			log_warn("Skipping DDL message with no SQL text at LSN %X/%X",
+					 LSN_FORMAT_ARGS(s->lsn));
+			return true;
 		}
 
 		if (!pgsql_execute(applyPgConn, s->stmt))
