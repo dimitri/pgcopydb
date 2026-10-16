@@ -1376,6 +1376,23 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 			break;
 		}
 
+		/*
+		 * A pg_logical_emit_message() message. test_decoding and wal2json
+		 * have no support for applying such a message's content (unlike
+		 * pgoutput, where a "pgcopydb"-prefixed "ddl" envelope is decoded
+		 * and applied) -- discard it outright rather than falling into the
+		 * DML dispatch below, which would try to parse it as a row change
+		 * and fail. stmt was already allocated above (STREAM_ACTION_MESSAGE
+		 * is not TCL); free it since it is never appended to the
+		 * transaction.
+		 */
+		case STREAM_ACTION_MESSAGE:
+		{
+			free(stmt);
+			privateContext->stmt = NULL;
+			break;
+		}
+
 		/* now handle DML messages from the output plugin */
 		default:
 		{

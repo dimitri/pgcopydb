@@ -601,10 +601,6 @@ bool pgsql_replication_slot_exists(PGSQL *pgsql,
 								   bool *slotExists,
 								   uint64_t *lsn);
 
-bool pgsql_get_replication_slot_plugin(PGSQL *pgsql,
-									   const char *slotName,
-									   StreamOutputPlugin *plugin);
-
 bool pgsql_drop_replication_slot(PGSQL *pgsql, const char *slotName);
 
 /* Forward declaration; full definition in filtering.h */

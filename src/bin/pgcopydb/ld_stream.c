@@ -2421,29 +2421,19 @@ stream_create_sentinel(CopyDataSpec *copySpecs,
 
 /*
  * stream_fetch_current_source_lsn connects to the given Postgres service and
- * fetches an endpos LSN that logical decoding is guaranteed to reach.
+ * fetches an endpos LSN that logical decoding is guaranteed to reach, by
+ * calling pg_logical_emit_message() there and using the LSN of that message
+ * (see pgsql_emit_endpos_marker for why pg_current_wal_flush_lsn() is not
+ * used directly here anymore).
  *
- * For pgoutput, that means calling pg_logical_emit_message() there and using
- * the LSN of that message (see pgsql_emit_endpos_marker for why
- * pg_current_wal_flush_lsn() is not reachable-safe on its own). For
- * test_decoding and wal2json, that marker message cannot be used: pgcopydb's
- * own decoders for those two plugins have no support at all for a message-
- * type ('M') entry and error out hard on one (confirmed: both plugins
- * faithfully report the marker back from Postgres, but
- * ld_test_decoding.c / ld_wal2json.c fail to parse it and abort the whole
- * stream). Fall back to the plain pg_current_wal_flush_lsn() reading for
- * those two, same as before this marker existed -- the LSN-reachability gap
- * it fixes for pgoutput remains open for test_decoding/wal2json, but that is
- * no worse than the pre-existing behaviour, and strictly better than
- * breaking every test_decoding/wal2json `follow` session on every --current
- * call.
- *
- * Which plugin is active is read from pg_replication_slots on this same
- * connection, not from a local catalog file: the caller may be the
- * `pgcopydb stream sentinel set endpos --host ... --port ...` TCP client,
- * which never opens the local SQLite catalog (see the --host/--port branch
- * in cli_sentinel_set_endpos) -- a live round trip to the source is the one
- * thing available in every case this function is called from.
+ * This relies on all three supported output plugins discarding a message
+ * they do not know what to do with instead of erroring out: pgoutput
+ * filters out anything that is not a "pgcopydb"-prefixed "ddl" envelope at
+ * decode time, and test_decoding/wal2json now discard any
+ * STREAM_ACTION_MESSAGE row outright in the transform step (see
+ * parseMessage in ld_transform.c, and the "message: " recognition in
+ * parseTestDecodingMessageActionAndXid) rather than trying to parse it as
+ * a row change.
  */
 bool
 stream_fetch_current_lsn(uint64_t *lsn,
@@ -2475,20 +2465,7 @@ stream_fetch_current_lsn(uint64_t *lsn,
 		return false;
 	}
 
-	StreamOutputPlugin plugin = STREAM_PLUGIN_UNKNOWN;
-
-	if (!pgsql_get_replication_slot_plugin(&src, REPLICATION_SLOT_NAME, &plugin))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	bool fetched =
-		plugin == STREAM_PLUGIN_PGOUTPUT
-		? pgsql_emit_endpos_marker(&src, &markerLSN)
-		: pgsql_current_wal_flush_lsn(&src, &markerLSN);
-
-	if (!fetched)
+	if (!pgsql_emit_endpos_marker(&src, &markerLSN))
 	{
 		/* errors have already been logged */
 		return false;
