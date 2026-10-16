@@ -6079,6 +6079,47 @@ pgsql_replication_slot_exists(PGSQL *pgsql, const char *slotName,
 
 
 /*
+ * pgsql_get_replication_slot_plugin reads the output plugin of an existing
+ * replication slot directly from the server, independently of any local
+ * catalog file. Used by --current (see stream_fetch_current_lsn) to decide
+ * whether it is safe to use the pg_logical_emit_message()-based endpos
+ * marker: that marker is only reachable-safe for pgoutput today, and the
+ * caller may be the `pgcopydb stream sentinel set endpos --host ...` TCP
+ * client, which never opens the local SQLite catalog that would otherwise
+ * carry this information.
+ */
+bool
+pgsql_get_replication_slot_plugin(PGSQL *pgsql, const char *slotName,
+								  StreamOutputPlugin *plugin)
+{
+	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_STRING, false };
+	char *sql = "SELECT plugin FROM pg_replication_slots WHERE slot_name = $1";
+
+	int paramCount = 1;
+	Oid paramTypes[1] = { NAMEOID };
+	const char *paramValues[1] = { slotName };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   paramCount, paramTypes, paramValues,
+								   &context, &parseSingleValueResult))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (context.ntuples == 0 || !context.parsedOk || context.isNull)
+	{
+		*plugin = STREAM_PLUGIN_UNKNOWN;
+		return true;
+	}
+
+	*plugin = OutputPluginFromString(context.strVal);
+
+	return true;
+}
+
+
+/*
  * pgsql_drop_replication_slot drops a given replication slot.
  */
 bool
