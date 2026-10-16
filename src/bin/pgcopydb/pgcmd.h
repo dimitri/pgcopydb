@@ -120,31 +120,6 @@ typedef enum
 
 
 /*
- * Archive List tokenizer.
- */
-typedef enum
-{
-	ARCHIVE_TOKEN_UNKNOWN = 0,
-	ARCHIVE_TOKEN_SEMICOLON,
-	ARCHIVE_TOKEN_SPACE,
-	ARCHIVE_TOKEN_OID,
-	ARCHIVE_TOKEN_DESC,
-	ARCHIVE_TOKEN_DASH,
-	ARCHIVE_TOKEN_EOL
-} ArchiveTokenType;
-
-
-typedef struct ArchiveToken
-{
-	char *ptr;
-	ArchiveTokenType type;
-	ArchiveItemDesc desc;
-
-	/* we also parse/prepare some of the values */
-	uint32_t oid;
-} ArchiveToken;
-
-/*
  * The Postgres pg_restore tool allows listing the contents of an archive. The
  * archive content is formatted the following way:
  *
@@ -374,16 +349,7 @@ bool archive_iter_toc_init(ArchiveTOCIterator *iter);
 bool archive_iter_toc_next(ArchiveTOCIterator *iter);
 bool archive_iter_toc_finish(ArchiveTOCIterator *iter);
 
-bool parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item);
-bool parse_archive_acl_or_comment_relation(const char *nspname, int nspnameLen,
-										   ArchiveToken *token,
-										   ArchiveContentItem *item);
-bool parse_archive_identifier(ArchiveToken *token, char *name, size_t size);
-
-bool parse_archive_list_entry(ArchiveContentItem *item, const char *line);
-bool tokenize_archive_list_entry(ArchiveToken *token);
-
-/* archive_toc_parser.c: flex-lexer-based replacement, see the file header */
+/* archive_toc_parser.c: see the file header */
 ArchiveTocShape archive_toc_shape_for_desc(ArchiveItemDesc desc);
 bool archive_toc_parse_line(const char *line, ArchiveContentItem *item);
 
