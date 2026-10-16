@@ -47,6 +47,7 @@ typedef enum
 	ARCHIVE_TAG_CAST,
 	ARCHIVE_TAG_CHECK_CONSTRAINT,
 	ARCHIVE_TAG_COLLATION,
+	ARCHIVE_TAG_COLUMN,
 	ARCHIVE_TAG_COMMENT,
 	ARCHIVE_TAG_CONSTRAINT,
 	ARCHIVE_TAG_CONVERSION,
@@ -304,6 +305,10 @@ bool archive_iter_toc_next(ArchiveTOCIterator *iter);
 bool archive_iter_toc_finish(ArchiveTOCIterator *iter);
 
 bool parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item);
+bool parse_archive_acl_or_comment_relation(const char *nspname, int nspnameLen,
+										   ArchiveToken *token,
+										   ArchiveContentItem *item);
+bool parse_archive_identifier(ArchiveToken *token, char *name, size_t size);
 
 bool parse_archive_list_entry(ArchiveContentItem *item, const char *line);
 bool tokenize_archive_list_entry(ArchiveToken *token);
