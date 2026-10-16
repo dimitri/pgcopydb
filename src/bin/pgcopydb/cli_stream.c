@@ -1001,18 +1001,38 @@ cli_stream_event_trigger(int argc, char **argv)
 	/*
 	 * CREATE OR REPLACE FUNCTION makes the function idempotent; event
 	 * triggers have no IF NOT EXISTS, so DROP then CREATE instead.
+	 *
+	 * "schema" and "object" come from pg_event_trigger_ddl_commands(),
+	 * which identifies the object a CREATE/ALTER command just acted on
+	 * (schema-qualified, quoted as needed). It returns no rows at all for
+	 * DROP commands -- Postgres only reports those via a separate sql_drop
+	 * event, not captured here (v1) -- so both are NULL for a DROP; the
+	 * "command_tag" field is TG_TAG instead, which is always available and
+	 * does not depend on the command having that structured representation.
+	 * Nothing decodes these three fields yet: they ride along, unused, for
+	 * a later feature (keeping new tables added to pgoutput's publication
+	 * automatically) to consume without needing another trigger-side change.
 	 */
 	char *createFunctionSQL =
 		"create or replace function " PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION "()"
 																		  " returns event_trigger"
 																		  " language plpgsql as $pgcopydb$"
+																		  "declare"
+																		  "  r record;"
 																		  "begin"
+																		  "  select schema_name, object_identity"
+																		  "    into r"
+																		  "    from pg_event_trigger_ddl_commands()"
+																		  "   limit 1;"
 																		  "  perform pg_logical_emit_message("
 																		  "    true,"
 																		  "    'pgcopydb',"
 																		  "    json_build_object("
 																		  "      'type', 'ddl',"
-																		  "      'body', current_query()"
+																		  "      'body', current_query(),"
+																		  "      'schema', r.schema_name,"
+																		  "      'object', r.object_identity,"
+																		  "      'command_tag', TG_TAG"
 																		  "    )::text"
 																		  "  );"
 																		  "end;"

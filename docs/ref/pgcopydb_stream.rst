@@ -168,7 +168,13 @@ Pass ``--drop`` to remove both instead.
 
 The message content is a small JSON envelope::
 
-   {"type": "ddl", "body": "<the literal DDL SQL text, as submitted>"}
+   {
+     "type": "ddl",
+     "body": "<the literal DDL SQL text, as submitted>",
+     "schema": "<schema-qualified namespace, or null>",
+     "object": "<schema-qualified object identity, or null>",
+     "command_tag": "<the PostgreSQL command tag, e.g. \"CREATE TABLE\">"
+   }
 
 emitted with the fixed prefix ``"pgcopydb"``, using
 ``pg_logical_emit_message(true, 'pgcopydb', ...)`` so the message rides
@@ -178,9 +184,24 @@ transaction commits. ``type`` selects the handler on the apply side;
 is simply skipped, so a second type can be added later without breaking
 older ``pgcopydb follow`` binaries reading a newer source. ``body`` is the
 literal command text captured with PostgreSQL's `current_query()`__
-function, the same text the statement was submitted as.
+function, the same text the statement was submitted as; this is what
+``pgcopydb follow`` actually replays, unchanged.
+
+``schema``, ``object`` and ``command_tag`` identify the object the
+command acted on, from `pg_event_trigger_ddl_commands()`__ and
+``TG_TAG``. Nothing on the apply side reads them yet — they ride along
+for a future feature (keeping new tables added to ``pgoutput``'s
+publication automatically, without which their data changes won't
+stream — see the limitation below). For a ``CREATE``/``ALTER`` command
+``schema``/``object`` are populated (for example ``"public"`` /
+``"public.orders"``); for a ``DROP`` command they are always ``null``,
+since PostgreSQL only reports dropped objects via a separate event
+(``sql_drop``) this trigger does not use (v1). ``command_tag`` (for
+example ``"CREATE TABLE"``) is always populated, for every command tag
+the trigger is configured for.
 
 __ https://www.postgresql.org/docs/current/functions-info.html
+__ https://www.postgresql.org/docs/current/functions-event-triggers.html
 
 Once installed, running ordinary DDL on the source — for example ``alter
 table orders add column urgent boolean default false`` — is enough:
