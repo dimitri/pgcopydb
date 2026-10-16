@@ -925,24 +925,6 @@ cli_stream_prune(int argc, char **argv)
 
 
 /*
- * PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION and PGCOPYDB_DDL_EVENT_TRIGGER_NAME
- * name the plpgsql function and the event trigger installed by `pgcopydb
- * stream event-trigger`.
- *
- * The function deliberately lives in "public", not in a dedicated
- * "pgcopydb"-named schema: pgcopydb's own schema/dump/restore pipeline only
- * tracks schemas that own at least one table, sequence, or extension (see
- * copydb_schema.c), so a schema created purely to hold this one function
- * would never make it into that list, while pg_dump still dumps it — the
- * following `pgcopydb clone` then fails to resolve that schema's OID while
- * preparing the pg_restore --use-list catalog. "public" already exists and
- * is already part of that tracked-schema list in any database that has
- * user data, so it does not hit this gap.
- */
-#define PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION "public.emit_ddl_message"
-#define PGCOPYDB_DDL_EVENT_TRIGGER_NAME "pgcopydb_emit_ddl_message"
-
-/*
  * cli_stream_event_trigger installs (or, with --drop, removes) the event
  * trigger that turns DDL run on the source database into a typed
  * pg_logical_emit_message() envelope: {"type": "ddl", "body": "<the DDL
@@ -1005,6 +987,16 @@ cli_stream_event_trigger(int argc, char **argv)
 
 	log_info("Installing event trigger \"%s\" on the source database",
 			 PGCOPYDB_DDL_EVENT_TRIGGER_NAME);
+
+	char *createSchemaSQL =
+		"create schema if not exists " PGCOPYDB_DDL_EVENT_TRIGGER_SCHEMA;
+
+	if (!pgsql_execute(&src, createSchemaSQL))
+	{
+		/* errors have already been logged */
+		(void) pgsql_finish(&src);
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
 
 	/*
 	 * CREATE OR REPLACE FUNCTION makes the function idempotent; event

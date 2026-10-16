@@ -134,21 +134,29 @@ pgcopydb stream event-trigger
 pgcopydb stream event-trigger - Install the event trigger that emits DDL as logical decoding messages
 
 ``pgcopydb follow`` (and ``pgcopydb clone --follow``) always decode and
-apply DDL carried over logical replication as a typed message, when the
-output plugin is ``pgoutput`` (the default). There is no option to turn
-this off, and nothing to turn on either: a source database that never
-emits such a message sees no behavioral change at all, and a message using
-a different prefix or an unrecognized type is logged and skipped rather
-than applied or treated as an error.
+apply DDL carried over logical replication as a typed message, with any of
+the three supported output plugins (``pgoutput``, ``wal2json``,
+``test_decoding``). There is no option to turn this off, and nothing to
+turn on either: a source database that never emits such a message sees no
+behavioral change at all, and a message using a different prefix or an
+unrecognized type is logged and skipped rather than applied or treated as
+an error.
 
 The only step left to the user is **getting the source database to emit
 those messages in the first place**, and that is exactly what ``pgcopydb
 stream event-trigger`` does: it connects to the source database and
-installs a ``plpgsql`` function together with an event trigger on
-``ddl_command_end`` that calls `pg_logical_emit_message`__ for a reasonable
-default set of DDL command tags (``CREATE/ALTER/DROP TABLE``,
-``CREATE/ALTER/DROP INDEX``, ``CREATE/ALTER/DROP SEQUENCE``, and
-``CREATE/ALTER/DROP VIEW``).
+installs a ``plpgsql`` function, in a dedicated ``pgcopydb`` schema
+(created if missing), together with an event trigger on ``ddl_command_end``
+that calls `pg_logical_emit_message`__ for a reasonable default set of DDL
+command tags (``CREATE/ALTER/DROP TABLE``, ``CREATE/ALTER/DROP INDEX``,
+``CREATE/ALTER/DROP SEQUENCE``, and ``CREATE/ALTER/DROP VIEW``).
+
+This function and event trigger are source-only tooling: ``pgcopydb
+clone`` always excludes them from the target database, regardless of
+``--source``/``--target`` order or of the user's own filters, whether the
+trigger was installed before or after the clone. Copying them to the
+target would otherwise leave a live copy there, firing on every DDL
+statement ``follow`` itself replays, for no purpose.
 
 __ https://www.postgresql.org/docs/current/functions-admin.html#id-1.5.8.25.9
 
@@ -201,6 +209,22 @@ Limitations (v1)
   in (...)`` is not supported by PostgreSQL; drop and recreate the
   trigger with your own tag list instead) if you need to capture
   additional DDL command tags.
+
+- A ``CREATE TABLE`` message creates the table on the target, but with the
+  ``pgoutput`` plugin it does **not** by itself make that new table's data
+  changes stream: ``pgoutput`` only replicates tables that belong to its
+  replication slot's publication, and that publication's table list is
+  computed once, at ``pgcopydb clone``/``pgcopydb stream setup`` time, to
+  honor table filters; nothing here runs ``alter publication ... add
+  table`` for tables created afterward. Either add the new table to the
+  publication yourself (``alter publication <name> add table ...``,
+  matching whatever filters apply), or re-run ``pgcopydb stream setup``.
+  This limitation does not apply to ``wal2json`` or ``test_decoding``,
+  neither of which uses a publication. See `issue #892`__ for the broader
+  "new table is not picked up automatically" gap this only partially
+  closes (schema, not data).
+
+  __ https://github.com/dimitri/pgcopydb/issues/892
 
 .. _pgcopydb_stream_prefetch:
 

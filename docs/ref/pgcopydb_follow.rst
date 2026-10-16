@@ -23,7 +23,9 @@ apply. In particular:
 
 __ https://www.postgresql.org/docs/current/logical-replication-restrictions.html
 
- - DDL are not replicated.
+ - DDL are not replicated, unless :ref:`pgcopydb_stream_event_trigger` is
+   installed on the source (see :ref:`Replicating DDL <replicating_ddl>`
+   below).
 
    When using DDL for partition scheme maintenance, such as when using the
    `pg_partman`__ extension, then consider creating a week or a month of
@@ -154,13 +156,15 @@ Finally, it is also possible to setup the streaming replication options
 before using the ``pgcopydb follow`` command: see the
 :ref:`pgcopydb_stream_setup` and :ref:`pgcopydb_stream_cleanup` commands.
 
+.. _replicating_ddl:
+
 Replicating DDL
 ----------------
 
 ``pgcopydb follow`` always decodes and applies DDL carried as a
-``pg_logical_emit_message()`` message (when the output plugin is
-``pgoutput``, the default) — there is no option to turn this off, and a
-source that never emits such a message sees no change in behaviour. The
+``pg_logical_emit_message()`` message, with any of the three supported
+output plugins — there is no option to turn this off, and a source that
+never emits such a message sees no change in behaviour. The
 only step needed to start getting DDL replicated is to install the event
 trigger that emits those messages, with
 :ref:`pgcopydb_stream_event_trigger`::

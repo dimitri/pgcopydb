@@ -93,14 +93,15 @@ if [ -n "$outdb" ] && [ -f "$outdb" ]; then
 
   #
   # Validate that the "M" (MESSAGE) rows were decoded: our own-prefix "ddl"
-  # message and the unknown-type message both reach the output table (the
-  # different-prefix message is filtered out at decode time and must NOT
-  # appear here at all).
+  # message and the unknown-type message both reach the output table, and
+  # so does the "endpos" marker message that setting --current emits (see
+  # pgsql_emit_endpos_marker) -- the different-prefix message is filtered
+  # out at decode time and must NOT appear here at all.
   #
   message_rows=$(sqlite3 -init /dev/null -noheader -list "$outdb" \
     "select count(*) from output where action = 'M';")
-  echo "decoded MESSAGE rows (should be 2: our ddl + the unknown type): ${message_rows}"
-  test "${message_rows}" -eq 2
+  echo "decoded MESSAGE rows (should be 3: our ddl + the unknown type + the endpos marker): ${message_rows}"
+  test "${message_rows}" -eq 3
 
   other_prefix_rows=$(sqlite3 -init /dev/null -noheader -list "$outdb" \
     "select count(*) from output where action = 'M' and message like '%should_not_apply%';")
