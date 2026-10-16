@@ -44,6 +44,8 @@ static void cli_stream_setup(int argc, char **argv);
 static void cli_stream_cleanup(int argc, char **argv);
 static void cli_stream_prune(int argc, char **argv);
 static void cli_stream_event_trigger(int argc, char **argv);
+static bool cli_stream_event_trigger_create(PGSQL *pgsql);
+static bool cli_stream_event_trigger_drop(PGSQL *pgsql);
 
 static void cli_stream_prefetch(int argc, char **argv);
 static void cli_stream_catchup(int argc, char **argv);
@@ -987,10 +989,46 @@ cli_stream_prune(int argc, char **argv)
 	" execute function %s()"
 
 /*
- * cli_stream_event_trigger installs (or, with --drop, removes) the event
- * trigger that turns DDL run on the source database into a typed
- * pg_logical_emit_message() envelope: {"type": "ddl", "body": "<the DDL
- * text>"}, emitted with the "pgcopydb" prefix.
+ * cli_stream_event_trigger_drop drops the event trigger and its underlying
+ * function, if they exist. Used by `pgcopydb stream event-trigger --drop`.
+ */
+static bool
+cli_stream_event_trigger_drop(PGSQL *pgsql)
+{
+	log_info("Dropping event trigger \"%s\" and its function",
+			 PGCOPYDB_DDL_EVENT_TRIGGER_NAME);
+
+	char sql[BUFSIZE] = { 0 };
+
+	sformat(sql, sizeof(sql),
+			PGCOPYDB_DDL_EVENT_TRIGGER_DROP_TRIGGER_SQL,
+			PGCOPYDB_DDL_EVENT_TRIGGER_NAME);
+
+	if (!pgsql_execute(pgsql, sql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	sformat(sql, sizeof(sql),
+			PGCOPYDB_DDL_EVENT_TRIGGER_DROP_FUNCTION_SQL,
+			PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION);
+
+	if (!pgsql_execute(pgsql, sql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * cli_stream_event_trigger_create installs the event trigger that turns DDL
+ * run on the source database into a typed pg_logical_emit_message()
+ * envelope: {"type": "ddl", "body": "<the DDL text>"}, emitted with the
+ * "pgcopydb" prefix. Used by `pgcopydb stream event-trigger`.
  *
  * This is the only opt-in part of the DDL-messages feature: decoding and
  * applying such a message is always on (see ld_pgoutput.c / ld_transform.c /
@@ -1001,6 +1039,75 @@ cli_stream_prune(int argc, char **argv)
  * command tags; `current_query()` captures the triggering statement as
  * submitted (a multi-statement round trip is captured whole, not split —
  * see the --help docs and the user manual for this and other caveats).
+ */
+static bool
+cli_stream_event_trigger_create(PGSQL *pgsql)
+{
+	log_info("Installing event trigger \"%s\" on the source database",
+			 PGCOPYDB_DDL_EVENT_TRIGGER_NAME);
+
+	char sql[BUFSIZE] = { 0 };
+
+	sformat(sql, sizeof(sql),
+			PGCOPYDB_DDL_EVENT_TRIGGER_CREATE_SCHEMA_SQL,
+			PGCOPYDB_DDL_EVENT_TRIGGER_SCHEMA);
+
+	if (!pgsql_execute(pgsql, sql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * CREATE OR REPLACE FUNCTION makes the function idempotent; event
+	 * triggers have no IF NOT EXISTS, so DROP then CREATE instead.
+	 */
+	sformat(sql, sizeof(sql),
+			PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION_SQL,
+			PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION);
+
+	if (!pgsql_execute(pgsql, sql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	sformat(sql, sizeof(sql),
+			PGCOPYDB_DDL_EVENT_TRIGGER_DROP_TRIGGER_SQL,
+			PGCOPYDB_DDL_EVENT_TRIGGER_NAME);
+
+	if (!pgsql_execute(pgsql, sql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	sformat(sql, sizeof(sql),
+			PGCOPYDB_DDL_EVENT_TRIGGER_CREATE_SQL,
+			PGCOPYDB_DDL_EVENT_TRIGGER_NAME,
+			PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION);
+
+	if (!pgsql_execute(pgsql, sql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_info("Event trigger \"%s\" installed: DDL matching the configured "
+			 "command tags will now be replicated as a pg_logical_emit_message() "
+			 "\"ddl\" message to any pgcopydb follow process reading this slot",
+			 PGCOPYDB_DDL_EVENT_TRIGGER_NAME);
+
+	return true;
+}
+
+
+/*
+ * cli_stream_event_trigger installs (or, with --drop, removes) the event
+ * trigger that turns DDL run on the source database into a typed
+ * pg_logical_emit_message() "ddl" message. The actual SQL is in
+ * cli_stream_event_trigger_create and cli_stream_event_trigger_drop; this
+ * function only parses arguments and manages the source connection.
  */
 static void
 cli_stream_event_trigger(int argc, char **argv)
@@ -1026,97 +1133,17 @@ cli_stream_event_trigger(int argc, char **argv)
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 
-	char sql[BUFSIZE] = { 0 };
-
-	if (streamDBoptions.dropEventTrigger)
-	{
-		log_info("Dropping event trigger \"%s\" and its function",
-				 PGCOPYDB_DDL_EVENT_TRIGGER_NAME);
-
-		sformat(sql, sizeof(sql),
-				PGCOPYDB_DDL_EVENT_TRIGGER_DROP_TRIGGER_SQL,
-				PGCOPYDB_DDL_EVENT_TRIGGER_NAME);
-
-		if (!pgsql_execute(&src, sql))
-		{
-			/* errors have already been logged */
-			(void) pgsql_finish(&src);
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
-
-		sformat(sql, sizeof(sql),
-				PGCOPYDB_DDL_EVENT_TRIGGER_DROP_FUNCTION_SQL,
-				PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION);
-
-		if (!pgsql_execute(&src, sql))
-		{
-			/* errors have already been logged */
-			(void) pgsql_finish(&src);
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
-
-		(void) pgsql_finish(&src);
-		return;
-	}
-
-	log_info("Installing event trigger \"%s\" on the source database",
-			 PGCOPYDB_DDL_EVENT_TRIGGER_NAME);
-
-	sformat(sql, sizeof(sql),
-			PGCOPYDB_DDL_EVENT_TRIGGER_CREATE_SCHEMA_SQL,
-			PGCOPYDB_DDL_EVENT_TRIGGER_SCHEMA);
-
-	if (!pgsql_execute(&src, sql))
-	{
-		/* errors have already been logged */
-		(void) pgsql_finish(&src);
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	/*
-	 * CREATE OR REPLACE FUNCTION makes the function idempotent; event
-	 * triggers have no IF NOT EXISTS, so DROP then CREATE instead.
-	 */
-	sformat(sql, sizeof(sql),
-			PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION_SQL,
-			PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION);
-
-	if (!pgsql_execute(&src, sql))
-	{
-		/* errors have already been logged */
-		(void) pgsql_finish(&src);
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	sformat(sql, sizeof(sql),
-			PGCOPYDB_DDL_EVENT_TRIGGER_DROP_TRIGGER_SQL,
-			PGCOPYDB_DDL_EVENT_TRIGGER_NAME);
-
-	if (!pgsql_execute(&src, sql))
-	{
-		/* errors have already been logged */
-		(void) pgsql_finish(&src);
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	sformat(sql, sizeof(sql),
-			PGCOPYDB_DDL_EVENT_TRIGGER_CREATE_SQL,
-			PGCOPYDB_DDL_EVENT_TRIGGER_NAME,
-			PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION);
-
-	if (!pgsql_execute(&src, sql))
-	{
-		/* errors have already been logged */
-		(void) pgsql_finish(&src);
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
+	bool success = streamDBoptions.dropEventTrigger
+				   ? cli_stream_event_trigger_drop(&src)
+				   : cli_stream_event_trigger_create(&src);
 
 	(void) pgsql_finish(&src);
 
-	log_info("Event trigger \"%s\" installed: DDL matching the configured "
-			 "command tags will now be replicated as a pg_logical_emit_message() "
-			 "\"ddl\" message to any pgcopydb follow process reading this slot",
-			 PGCOPYDB_DDL_EVENT_TRIGGER_NAME);
+	if (!success)
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
 }
 
 

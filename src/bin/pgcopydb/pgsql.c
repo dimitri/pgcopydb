@@ -6108,6 +6108,11 @@ typedef struct PgcopydbReservedOidsContext
 } PgcopydbReservedOidsContext;
 
 
+/*
+ * parsePgcopydbReservedOids parses the result of the query that resolves
+ * the "pgcopydb" schema's OID and the DDL event trigger's OID, run by
+ * pgsql_get_pgcopydb_reserved_oids.
+ */
 static void
 parsePgcopydbReservedOids(void *ctx, PGresult *result)
 {
@@ -6159,6 +6164,11 @@ typedef struct SchemaProcOidsContext
 }   SchemaProcOidsContext;
 
 
+/*
+ * parseSchemaProcOids parses the result of the query that lists the OIDs
+ * of every function (pg_proc entry) owned by a given schema, run by
+ * pgsql_get_pgcopydb_reserved_oids.
+ */
 static void
 parseSchemaProcOids(void *ctx, PGresult *result)
 {
