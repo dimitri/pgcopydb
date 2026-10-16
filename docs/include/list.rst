@@ -14,4 +14,5 @@
        depends      List all the dependencies to filter-out
        schema       List the schema to migrate, formatted in JSON
        progress     List the progress
+       toc          List and filter a pg_dump archive's Table of Contents
    
