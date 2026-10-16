@@ -2427,13 +2427,13 @@ stream_create_sentinel(CopyDataSpec *copySpecs,
  * used directly here anymore).
  *
  * This relies on all three supported output plugins discarding a message
- * they do not know what to do with instead of erroring out: pgoutput
- * filters out anything that is not a "pgcopydb"-prefixed "ddl" envelope at
- * decode time, and test_decoding/wal2json now discard any
- * STREAM_ACTION_MESSAGE row outright in the transform step (see
- * parseMessage in ld_transform.c, and the "message: " recognition in
- * parseTestDecodingMessageActionAndXid) rather than trying to parse it as
- * a row change.
+ * instead of erroring out on one: pgoutput's wire-level decode switch has
+ * no case for a Message ('M') frame at all, so it falls to the default
+ * branch and gets filtered out unconditionally, regardless of content; and
+ * test_decoding/wal2json now discard any STREAM_ACTION_MESSAGE row outright
+ * in the transform step (see parseMessage in ld_transform.c, and the
+ * "message: " recognition in parseTestDecodingMessageActionAndXid) rather
+ * than trying to parse it as a row change.
  */
 bool
 stream_fetch_current_lsn(uint64_t *lsn,

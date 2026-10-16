@@ -214,12 +214,11 @@ parseTestDecodingMessageActionAndXid(LogicalStreamContext *context)
 		 * its own fourth line shape: "message: transactional: <0|1> prefix:
 		 * <text>, sz: <n> content:<n bytes>". Recognizing it here is only to
 		 * avoid erroring out below -- test_decoding has no support for
-		 * applying the content of such a message (unlike pgoutput, which
-		 * decodes and applies a "pgcopydb"-prefixed "ddl" envelope); the
-		 * transform step discards every STREAM_ACTION_MESSAGE row outright
-		 * for this reason (see parseMessage in ld_transform.c), the same way
-		 * pgoutput itself discards any message content it does not
-		 * recognize at decode time.
+		 * applying the content of such a message, so the transform step
+		 * discards every STREAM_ACTION_MESSAGE row outright (see
+		 * parseMessage in ld_transform.c), the same way pgoutput itself
+		 * discards any message content it does not recognize at decode time
+		 * (see stream_fetch_current_lsn in ld_stream.c).
 		 */
 		metadata->action = STREAM_ACTION_MESSAGE;
 		metadata->xid = privateContext->currentXid;
