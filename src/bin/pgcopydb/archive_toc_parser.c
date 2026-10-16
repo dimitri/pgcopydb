@@ -275,107 +275,47 @@ splitSimpleOrRelationRemainder(const char *remainder, ArchiveContentItem *item)
 
 
 /*
- * parseQuotedIdentifier parses the identifier at *pp, as quoted by pg_dump
- * with fmtId(), copies its unquoted value to name, and advances *pp past
- * the identifier -- the only place in the whole TOC format where
- * identifiers are quoted at all (every other field, including the outer
- * namespace ACL/COMMENT entries carry, is plain, unquoted text):
- *
- *   column_acl_test     ->  column_acl_test
- *   "Foo.Bar"           ->  Foo.Bar
- *   "say ""hi"""        ->  say "hi"
- */
-static bool
-parseQuotedIdentifier(const char **pp, char *name, size_t size)
-{
-	const char *ptr = *pp;
-	size_t len = 0;
-
-	if (*ptr == '"')
-	{
-		/* skip the opening double-quote */
-		++ptr;
-
-		for (;;)
-		{
-			if (*ptr == '\0')
-			{
-				return false;
-			}
-
-			if (*ptr == '"')
-			{
-				/* a doubled double-quote is an escaped double-quote */
-				if (*(ptr + 1) != '"')
-				{
-					/* skip the closing double-quote */
-					++ptr;
-					break;
-				}
-
-				++ptr;
-			}
-
-			if (len + 1 >= size)
-			{
-				return false;
-			}
-
-			name[len++] = *ptr++;
-		}
-	}
-	else
-	{
-		while (*ptr != '\0' && *ptr != '.' && *ptr != ' ')
-		{
-			if (len + 1 >= size)
-			{
-				return false;
-			}
-
-			name[len++] = *ptr++;
-		}
-	}
-
-	name[len] = '\0';
-	*pp = ptr;
-
-	return len > 0;
-}
-
-
-/*
- * buildRelationAclOrCommentRestoreListName finishes parsing an ACL/COMMENT
- * entry that belongs to a relation, once TAG2's own name(s) have been
- * parsed and q is left pointing right before the owner field (which may be
- * missing). It builds "nspname relname rolname" as item->restoreListName,
- * the restore list name of the *relation*, not of the ACL/COMMENT entry
+ * finishRelationAclOrComment finishes parsing an ACL/COMMENT entry that
+ * belongs to a relation, once TAG2's own identifier(s) have already been
+ * pulled as ARCHIVE_TOC_TOKEN_IDENT tokens: it pulls the one token that's
+ * left, either SPACE (an owner follows) or EOF (no owner at all), and
+ * builds "nspname relname rolname" as item->restoreListName -- the
+ * restore list name of the *relation*, not of the ACL/COMMENT entry
  * itself, so that e.g. a COMMENT ON COLUMN is filtered out together with
- * the table it belongs to -- matching the only kind of name-based lookup
+ * the table it belongs to, matching the only kind of name-based lookup
  * copydb_objectid_is_filtered_out performs for these OID-less entries.
+ *
+ * The owner, when present, is grabbed as one raw REMAINDER token (see
+ * archive_toc_begin_remainder) rather than as an IDENT: unlike relname/
+ * colname/name, it is never itself quoted or escaped by pg_dump.
  *
  * name, when not empty, is TAG2's own identifier (a constraint, trigger,
  * policy or rule name, or a column name) -- kept in item->name for callers
  * that want it, even though it plays no part in restoreListName.
  */
 static bool
-buildRelationAclOrCommentRestoreListName(ArchiveContentItem *item,
-										 const char *nspname,
-										 const char *relname,
-										 const char *name,
-										 const char *q)
+finishRelationAclOrComment(ArchiveContentItem *item, const char *nspname,
+						   const char *relname, const char *name)
 {
-	/* skip the space before the owner, which might be missing */
-	if (*q == ' ')
+	char owner[PG_NAMEDATALEN] = { 0 };
+
+	int next = archive_toc_lex();
+
+	if (next == ARCHIVE_TOC_TOKEN_SPACE)
 	{
-		++q;
+		archive_toc_begin_remainder();
+
+		if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_REMAINDER)
+		{
+			return false;
+		}
+
+		strlcpy(owner, archive_toc_text, sizeof(owner));
 	}
-	else if (*q != '\0')
+	else if (next != ARCHIVE_TOC_TOKEN_EOF)
 	{
 		return false;
 	}
-
-	const char *owner = q;
 
 	size_t bytes = strlen(nspname) + 1 + strlen(relname) + 1 + strlen(owner) + 1;
 
@@ -414,7 +354,9 @@ buildRelationAclOrCommentRestoreListName(ArchiveContentItem *item,
  * like every top-level TOC field -- unlike the identifier(s) embedded in
  * TAG2's own remainder (a relation, column, constraint, trigger, policy
  * or rule name), which pg_dump builds with fmtId() and so can be
- * double-quoted (see parseQuotedIdentifier).
+ * double-quoted; the lexer's TAG2BODY/TAG2QIDENT states handle that
+ * unescaping (see archive_toc_lexer.l), this function only consumes the
+ * resulting tokens.
  *
  * TAG2 itself is recognized by re-entering the same flex lexer on the
  * substring starting at TAG2's own keyword text: by the time this runs,
@@ -424,12 +366,12 @@ buildRelationAclOrCommentRestoreListName(ArchiveContentItem *item,
  *
  * On success, populates item->restoreListName (the filtering-relevant
  * name -- the owning relation's for a relation-scoped TAG2, see
- * buildRelationAclOrCommentRestoreListName) and the structured
- * innerDesc/hasNamespace/nspname/relname/name/owner fields. On failure (a
- * TAG2 this function doesn't know how to split, or malformed input),
- * leaves item->restoreListName untouched, so the caller's raw-text
- * fallback (the whole, unsplit remainder) stands -- exactly as "we don't
- * support this one yet" has always been handled here.
+ * finishRelationAclOrComment) and the structured innerDesc/hasNamespace/
+ * nspname/relname/name/owner fields. On failure (a TAG2 this function
+ * doesn't know how to split, or malformed input), leaves
+ * item->restoreListName untouched, so the caller's raw-text fallback (the
+ * whole, unsplit remainder) stands -- exactly as "we don't support this
+ * one yet" has always been handled here.
  */
 static bool
 parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
@@ -464,8 +406,12 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 		p = space + 1;
 	}
 
-	/* p now points right at TAG2's own keyword text */
-	archive_toc_lex_line(p);
+	/*
+	 * p now points right at TAG2's own keyword text. archive_toc_lex_tag2_line
+	 * (rather than archive_toc_lex_line) arms TAG2BODY tokenizing for
+	 * whichever TAG2 owns an identifier of its own.
+	 */
+	archive_toc_lex_tag2_line(p);
 
 	if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_DESC)
 	{
@@ -473,18 +419,6 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 	}
 
 	ArchiveItemDesc tag2 = archive_toc_last_desc;
-
-	if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_REMAINDER)
-	{
-		return false;
-	}
-
-	const char *tag2Remainder = archive_toc_text;
-
-	if (*tag2Remainder == ' ')
-	{
-		tag2Remainder++;
-	}
 
 	item->innerDesc = tag2;
 	item->hasNamespace = hasNamespace;
@@ -495,6 +429,18 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 		case ARCHIVE_TAG_SCHEMA:
 		{
 			/* "- nspname rolname"; the outer namespace is unused here */
+			if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_REMAINDER)
+			{
+				return false;
+			}
+
+			const char *tag2Remainder = archive_toc_text;
+
+			if (*tag2Remainder == ' ')
+			{
+				tag2Remainder++;
+			}
+
 			size_t bytes = strlen(tag2Remainder) + 3;
 
 			item->restoreListName = (char *) calloc(bytes, sizeof(char));
@@ -513,6 +459,18 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 
 		case ARCHIVE_TAG_EXTENSION:
 		{
+			if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_REMAINDER)
+			{
+				return false;
+			}
+
+			const char *tag2Remainder = archive_toc_text;
+
+			if (*tag2Remainder == ' ')
+			{
+				tag2Remainder++;
+			}
+
 			/*
 			 * The extension name is followed by a space, even when there
 			 * is no owner to follow that space: trim it so it doesn't end
@@ -556,16 +514,17 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 				return false;
 			}
 
-			const char *q = tag2Remainder;
 			char relname[PG_NAMEDATALEN] = { 0 };
 
-			if (!parseQuotedIdentifier(&q, relname, sizeof(relname)))
+			if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_SPACE ||
+				archive_toc_lex() != ARCHIVE_TOC_TOKEN_IDENT)
 			{
 				return false;
 			}
 
-			return buildRelationAclOrCommentRestoreListName(item, nspname,
-															relname, "", q);
+			strlcpy(relname, archive_toc_ident, sizeof(relname));
+
+			return finishRelationAclOrComment(item, nspname, relname, "");
 		}
 
 		case ARCHIVE_TAG_COLUMN:
@@ -575,26 +534,26 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 				return false;
 			}
 
-			const char *q = tag2Remainder;
 			char relname[PG_NAMEDATALEN] = { 0 };
 			char colname[PG_NAMEDATALEN] = { 0 };
 
-			if (!parseQuotedIdentifier(&q, relname, sizeof(relname)) ||
-				*q != '.')
+			if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_SPACE ||
+				archive_toc_lex() != ARCHIVE_TOC_TOKEN_IDENT)
 			{
 				return false;
 			}
 
-			/* skip the dot */
-			++q;
+			strlcpy(relname, archive_toc_ident, sizeof(relname));
 
-			if (!parseQuotedIdentifier(&q, colname, sizeof(colname)))
+			if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_DOT ||
+				archive_toc_lex() != ARCHIVE_TOC_TOKEN_IDENT)
 			{
 				return false;
 			}
 
-			return buildRelationAclOrCommentRestoreListName(item, nspname,
-															relname, colname, q);
+			strlcpy(colname, archive_toc_ident, sizeof(colname));
+
+			return finishRelationAclOrComment(item, nspname, relname, colname);
 		}
 
 		case ARCHIVE_TAG_CONSTRAINT:
@@ -607,32 +566,40 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 				return false;
 			}
 
-			const char *q = tag2Remainder;
 			char name[PG_NAMEDATALEN] = { 0 };
 			char relname[PG_NAMEDATALEN] = { 0 };
 
-			if (!parseQuotedIdentifier(&q, name, sizeof(name)) ||
-				strncmp(q, " ON ", 4) != 0)
+			if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_SPACE ||
+				archive_toc_lex() != ARCHIVE_TOC_TOKEN_IDENT)
 			{
 				return false;
 			}
 
-			/* skip " ON " */
-			q += 4;
+			strlcpy(name, archive_toc_ident, sizeof(name));
+
+			if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_SPACE ||
+				archive_toc_lex() != ARCHIVE_TOC_TOKEN_ON ||
+				archive_toc_lex() != ARCHIVE_TOC_TOKEN_SPACE)
+			{
+				return false;
+			}
+
+			int next = archive_toc_lex();
 
 			/* domain constraints are "CONSTRAINT name ON DOMAIN domain" */
-			if (strncmp(q, "DOMAIN ", 7) == 0)
+			if (next == ARCHIVE_TOC_TOKEN_DOMAIN)
 			{
 				return false;
 			}
 
-			if (!parseQuotedIdentifier(&q, relname, sizeof(relname)))
+			if (next != ARCHIVE_TOC_TOKEN_IDENT)
 			{
 				return false;
 			}
 
-			return buildRelationAclOrCommentRestoreListName(item, nspname,
-															relname, name, q);
+			strlcpy(relname, archive_toc_ident, sizeof(relname));
+
+			return finishRelationAclOrComment(item, nspname, relname, name);
 		}
 
 		default:
