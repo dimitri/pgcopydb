@@ -184,6 +184,20 @@ typedef enum
 } ArchiveTocShape;
 
 
+/*
+ * Naming note, for anyone cross-referencing with pg_dump's own source
+ * (pg_backup_archiver.h's TocEntry, pg_dump.c's dumpACL/dumpCommentExtended):
+ * pg_dump's te->desc is the category string ("ACL", "TABLE", "COMMENT", ...)
+ * -- what WE call desc/description and the ArchiveItemDesc enum below --
+ * while pg_dump's te->tag is the object's OWN name, which is what WE split
+ * into relname/name below (pg_dump has no separate field for it, it's one
+ * composite string). Our nspname and owner do match pg_dump's own naming
+ * (nspname is dumpACL's own parameter name for the same thing; owner is
+ * te->owner verbatim). pg_dump itself has no name or abstraction for what
+ * we call "TAG2" (the nested keyword inside an ACL/COMMENT's tag, e.g.
+ * TRIGGER or COLUMN) or "shape" below -- both are this parser's own
+ * invention, not something pg_dump already names and we failed to reuse.
+ */
 typedef struct ArchiveContentItem
 {
 	int dumpId;

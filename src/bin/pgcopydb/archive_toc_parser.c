@@ -534,6 +534,12 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 				return false;
 			}
 
+			/*
+			 * colname here is what pg_dump itself calls a sub-object name
+			 * (subname/objsubid in dumpACL's own parameters, pg_dump.c): a
+			 * column is just the one kind of sub-object this format ever
+			 * puts in an ACL/COMMENT tag.
+			 */
 			char relname[PG_NAMEDATALEN] = { 0 };
 			char colname[PG_NAMEDATALEN] = { 0 };
 
