@@ -114,6 +114,8 @@ typedef struct CopyDBOptions
 
 	bool dryRun;        /* --dry-run: report what would happen, do nothing */
 	bool allDatabases;
+
+	bool dropEventTrigger;   /* pgcopydb stream event-trigger --drop */
 } CopyDBOptions;
 
 extern bool outputJSON;

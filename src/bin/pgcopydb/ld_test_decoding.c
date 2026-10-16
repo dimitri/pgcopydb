@@ -124,6 +124,92 @@ prepareTestDecodingMessage(LogicalStreamContext *context)
 
 
 /*
+ * parseTestDecodingMessageEnvelopeHeader parses the line test_decoding
+ * renders a pg_logical_emit_message() call as:
+ *
+ *   message: transactional: <0|1> prefix: <text>, sz: <n> content:<n bytes>
+ *
+ * (see pg_decode_message in contrib/test_decoding/test_decoding.c). The
+ * content bytes follow "content:" directly, with no delimiter other than
+ * the sz count parsed just before, so contentPtr and contentSize point
+ * back into the caller's line rather than copying: the content may
+ * contain anything, including characters that look like more header
+ * fields.
+ */
+bool
+parseTestDecodingMessageEnvelopeHeader(const char *line,
+									   bool *transactional,
+									   char *prefix,
+									   size_t prefixSize,
+									   const char **contentPtr,
+									   size_t *contentSize)
+{
+	const char *marker = "message: transactional: ";
+	size_t markerLen = strlen(marker);
+
+	if (strncmp(line, marker, markerLen) != 0)
+	{
+		return false;
+	}
+
+	const char *p = line + markerLen;
+
+	*transactional = (*p == '1');
+	++p;
+
+	const char *prefixMarker = " prefix: ";
+	size_t prefixMarkerLen = strlen(prefixMarker);
+
+	if (strncmp(p, prefixMarker, prefixMarkerLen) != 0)
+	{
+		return false;
+	}
+
+	p += prefixMarkerLen;
+
+	const char *comma = strstr(p, ", sz: ");
+
+	if (comma == NULL)
+	{
+		return false;
+	}
+
+	size_t prefixLen = comma - p;
+
+	if (prefixLen >= prefixSize)
+	{
+		return false;
+	}
+
+	memcpy(prefix, p, prefixLen); /* IGNORE-BANNED */
+	prefix[prefixLen] = '\0';
+
+	p = comma + strlen(", sz: ");
+
+	char *endptr = NULL;
+	long sz = strtol(p, &endptr, 10);
+
+	if (sz < 0 || endptr == p)
+	{
+		return false;
+	}
+
+	const char *contentMarker = " content:";
+	size_t contentMarkerLen = strlen(contentMarker);
+
+	if (strncmp(endptr, contentMarker, contentMarkerLen) != 0)
+	{
+		return false;
+	}
+
+	*contentPtr = endptr + contentMarkerLen;
+	*contentSize = (size_t) sz;
+
+	return true;
+}
+
+
+/*
  * parseTestDecodingMessageActionAndXid retrieves the XID from the logical
  * replication message found in the buffer as received from the test_decoding
  * output plugin.
@@ -212,14 +298,33 @@ parseTestDecodingMessageActionAndXid(LogicalStreamContext *context)
 		/*
 		 * A pg_logical_emit_message() message, rendered by test_decoding as
 		 * its own fourth line shape: "message: transactional: <0|1> prefix:
-		 * <text>, sz: <n> content:<n bytes>". Recognizing it here is only to
-		 * avoid erroring out below -- test_decoding has no support for
-		 * applying the content of such a message, so the transform step
-		 * discards every STREAM_ACTION_MESSAGE row outright (see
-		 * parseMessage in ld_transform.c), the same way pgoutput itself
-		 * discards any message content it does not recognize at decode time
-		 * (see stream_fetch_current_lsn in ld_stream.c).
+		 * <text>, sz: <n> content:<n bytes>". Only our own "pgcopydb" prefix
+		 * is ours to interpret, same as pgoutput and wal2json: filter out
+		 * anything else here, at decode time, rather than storing it only to
+		 * discard it later in the transform step.
 		 */
+		bool transactional = false;
+		char prefix[PG_NAMEDATALEN] = { 0 };
+		const char *contentPtr = NULL;
+		size_t contentSize = 0;
+
+		if (!parseTestDecodingMessageEnvelopeHeader(context->buffer,
+													&transactional,
+													prefix, sizeof(prefix),
+													&contentPtr, &contentSize))
+		{
+			log_error("Failed to parse test_decoding message: %s",
+					  context->buffer);
+			return false;
+		}
+
+		if (strcmp(prefix, PGCOPYDB_MESSAGE_PREFIX) != 0)
+		{
+			log_debug("test_decoding: filtering out MESSAGE with prefix \"%s\"",
+					  prefix);
+			metadata->filterOut = true;
+		}
+
 		metadata->action = STREAM_ACTION_MESSAGE;
 		metadata->xid = privateContext->currentXid;
 	}

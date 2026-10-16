@@ -644,7 +644,39 @@ typedef struct RestoreListContext
 	CopyDataSpec *specs;
 	FILE *outStream;
 	bool schemasOnly;   /* write only SCHEMA entries (first pass) */
+	PgcopydbReservedOids reservedOids;
 } RestoreListContext;
+
+
+/*
+ * copydb_fetch_reserved_oids resolves the OIDs of pgcopydb's own reserved
+ * objects (see defaults.h) on the source, for copydb_write_restore_list_hook
+ * to skip by OID rather than by parsing them out of the pg_restore --list
+ * text output.
+ */
+static bool
+copydb_fetch_reserved_oids(CopyDataSpec *specs, PgcopydbReservedOids *oids)
+{
+	PGSQL src = { 0 };
+
+	if (!pgsql_init(&src, specs->connStrings.source_pguri, PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!pgsql_get_pgcopydb_reserved_oids(&src, oids))
+	{
+		/* errors have already been logged */
+		(void) pgsql_finish(&src);
+		return false;
+	}
+
+	(void) pgsql_finish(&src);
+
+	return true;
+}
+
 
 /*
  * copydb_write_restore_list fetches the pg_restore --list output, parses it,
@@ -723,6 +755,12 @@ copydb_write_restore_list(CopyDataSpec *specs, PostgresDumpSection section)
 		.outStream = out
 	};
 
+	if (!copydb_fetch_reserved_oids(specs, &(context.reservedOids)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	if (!archive_iter_toc(listOutFilename,
 						  &context,
 						  copydb_write_restore_list_hook))
@@ -777,6 +815,13 @@ copydb_write_schemas_restore_list(CopyDataSpec *specs)
 		.schemasOnly = true
 	};
 
+	if (!copydb_fetch_reserved_oids(specs, &(context.reservedOids)))
+	{
+		/* errors have already been logged */
+		(void) fclose(out);
+		return false;
+	}
+
 	if (!archive_iter_toc(listOutFilename,
 						  &context,
 						  copydb_write_restore_list_hook))
@@ -820,6 +865,62 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 	{
 		skip = true;
 		log_debug("Skipping DATABASE \"%s\"", name);
+	}
+
+	/*
+	 * Always skip the "pgcopydb" schema itself, anything living in it
+	 * (currently just the event trigger function from `pgcopydb stream
+	 * event-trigger`, see defaults.h), and the event trigger itself:
+	 * source-only tooling that must never reach the target, regardless of
+	 * the user's own filters.
+	 *
+	 * Matched by OID, resolved once on the source by
+	 * copydb_fetch_reserved_oids into context->reservedOids, rather than by
+	 * parsing names out of the pg_restore --list text output: PostgreSQL
+	 * itself documents that format as not reliably parseable (sanitize_line
+	 * in pg_dump's dumputils.c says plainly that it does not bother to quote
+	 * names, "meaning that the name fields aren't automatically parseable";
+	 * pg_restore's own --use-list reader only ever looks at the leading
+	 * dumpId for exactly that reason). OIDs have no such ambiguity, and a
+	 * function elsewhere named the same as ours by coincidence is never a
+	 * false match.
+	 *
+	 * The event trigger needs its own OID lookup, separate from the schema
+	 * membership one: it is a database-global object, not schema-owned, so
+	 * it is never "in" the schema the way the function is.
+	 */
+	PgcopydbReservedOids *reserved = &(context->reservedOids);
+
+	if (!skip &&
+		item->desc == ARCHIVE_TAG_SCHEMA &&
+		reserved->schemaOid != 0 &&
+		oid == reserved->schemaOid)
+	{
+		skip = true;
+		log_debug("Skipping pgcopydb SCHEMA \"%s\"", name);
+	}
+
+	if (!skip && item->desc == ARCHIVE_TAG_FUNCTION)
+	{
+		for (int i = 0; i < reserved->schemaObjectOidsCount; i++)
+		{
+			if (oid == reserved->schemaObjectOids[i])
+			{
+				skip = true;
+				log_debug("Skipping pgcopydb event trigger FUNCTION \"%s\"",
+						  name);
+				break;
+			}
+		}
+	}
+
+	if (!skip &&
+		item->desc == ARCHIVE_TAG_EVENT_TRIGGER &&
+		reserved->eventTriggerOid != 0 &&
+		oid == reserved->eventTriggerOid)
+	{
+		skip = true;
+		log_debug("Skipping pgcopydb EVENT TRIGGER \"%s\"", name);
 	}
 
 	/*

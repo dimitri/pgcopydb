@@ -101,6 +101,18 @@ parseWal2jsonMessageActionAndXid(LogicalStreamContext *context)
 		metadata->xid = (uint32_t) xid;
 	}
 
+	if (metadata->action == STREAM_ACTION_MESSAGE)
+	{
+		/* only our own prefix is ours to interpret, same as pgoutput */
+		const char *prefix = json_object_get_string(jsobj, "prefix");
+
+		if (prefix == NULL || strcmp(prefix, PGCOPYDB_MESSAGE_PREFIX) != 0)
+		{
+			log_debug("wal2json: filtering out MESSAGE with prefix \"%s\"",
+					  prefix != NULL ? prefix : "(null)");
+			metadata->filterOut = true;
+		}
+	}
 
 	return true;
 }

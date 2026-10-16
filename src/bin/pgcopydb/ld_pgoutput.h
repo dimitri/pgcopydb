@@ -21,6 +21,14 @@
 #include "pgsql.h"
 #include "uthash.h"
 
+/*
+ * Only messages emitted with this prefix (pg_logical_emit_message(...,
+ * "pgcopydb", ...)) are ours to interpret. Anything else sharing the same
+ * publication (another tool's own use of pg_logical_emit_message) is
+ * filtered out, not treated as an error.
+ */
+#define PGCOPYDB_MESSAGE_PREFIX "pgcopydb"
+
 
 /*
  * Per-column entry stored in the relation definition cache built from
@@ -77,7 +85,7 @@ typedef struct PgoutputColumn
  */
 typedef struct PgoutputMessage
 {
-	char action;                    /* 'B','C','I','U','D','T' */
+	char action;                    /* 'B','C','I','U','D','T','M' */
 	uint32_t xid;
 	uint64_t lsn;
 
@@ -90,6 +98,11 @@ typedef struct PgoutputMessage
 
 	int ncols_new;
 	PgoutputColumn *new_cols;       /* malloc'd array; NULL for DELETE */
+
+	char *message;                  /* malloc'd; NUL-terminated; the raw
+	                                 * envelope content bytes of a 'M'
+	                                 * (MESSAGE) frame with our prefix, only
+	                                 * set when action == 'M' */
 } PgoutputMessage;
 
 

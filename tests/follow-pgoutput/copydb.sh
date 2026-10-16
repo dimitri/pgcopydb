@@ -29,6 +29,8 @@ psql -o /tmp/d.out -d ${PGCOPYDB_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/ddl.sql
 
 # pgcopydb clone uses the environment variables (pgoutput plugin, auto-managed publication)
+# DDL-as-message decoding/apply is always on (no CLI flag): the "pgcopydb
+# stream event-trigger" subcommand (see inject.sh) is the only opt-in step.
 pgcopydb clone --follow --plugin pgoutput --notice
 
 #
@@ -40,6 +42,25 @@ for tbl in actor film category address; do
   echo "source ${tbl}: ${src_count}, target ${tbl}: ${tgt_count}"
   test "${src_count}" -eq "${tgt_count}"
 done
+
+#
+# Verify the DDL message was actually applied to the target database: the
+# "note" column must exist on the target's "rental" table (added by the
+# "ddl" message emitted with our own "pgcopydb" prefix, see messages.sql).
+#
+note_col=$(psql -AtqX -d ${PGCOPYDB_TARGET_PGURI} \
+  -c "select count(*) from information_schema.columns where table_name = 'rental' and column_name = 'note'")
+echo "target rental.note column present (should be 1): ${note_col}"
+test "${note_col}" -eq 1
+
+#
+# Verify that a message with a different prefix never gets applied: the
+# "should_not_apply" column must NOT exist on the target.
+#
+other_col=$(psql -AtqX -d ${PGCOPYDB_TARGET_PGURI} \
+  -c "select count(*) from information_schema.columns where table_name = 'rental' and column_name = 'should_not_apply'")
+echo "target rental.should_not_apply column present (should be 0): ${other_col}"
+test "${other_col}" -eq 0
 
 # Query the SQLite CDC databases to verify the tables were populated.
 outdb=$(find ${TMPDIR}/cdc/pgcopydb -name "*-output.db" -type f | head -1)
@@ -69,6 +90,23 @@ if [ -n "$outdb" ] && [ -f "$outdb" ]; then
     "select count(*) from output where action in ('I','U','D') and nspname is not null;")
   echo "DML rows with nspname set: ${nspname_set}"
   test "${nspname_set}" -gt 0
+
+  #
+  # Validate that the "M" (MESSAGE) rows were decoded: our own-prefix "ddl"
+  # message and the unknown-type message both reach the output table, and
+  # so does the "endpos" marker message that setting --current emits (see
+  # pgsql_emit_endpos_marker) -- the different-prefix message is filtered
+  # out at decode time and must NOT appear here at all.
+  #
+  message_rows=$(sqlite3 -init /dev/null -noheader -list "$outdb" \
+    "select count(*) from output where action = 'M';")
+  echo "decoded MESSAGE rows (should be 3: our ddl + the unknown type + the endpos marker): ${message_rows}"
+  test "${message_rows}" -eq 3
+
+  other_prefix_rows=$(sqlite3 -init /dev/null -noheader -list "$outdb" \
+    "select count(*) from output where action = 'M' and message like '%should_not_apply%';")
+  echo "MESSAGE rows from a different prefix (should be 0): ${other_prefix_rows}"
+  test "${other_prefix_rows}" -eq 0
 else
   echo "CDC output database not found at ${TMPDIR}/cdc/pgcopydb/"
   exit 1

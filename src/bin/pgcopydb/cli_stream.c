@@ -43,6 +43,9 @@ static void cli_stream_apply(int argc, char **argv);
 static void cli_stream_setup(int argc, char **argv);
 static void cli_stream_cleanup(int argc, char **argv);
 static void cli_stream_prune(int argc, char **argv);
+static void cli_stream_event_trigger(int argc, char **argv);
+static bool cli_stream_event_trigger_create(PGSQL *pgsql);
+static bool cli_stream_event_trigger_drop(PGSQL *pgsql);
 
 static void cli_stream_prefetch(int argc, char **argv);
 static void cli_stream_catchup(int argc, char **argv);
@@ -97,6 +100,17 @@ static CommandLine stream_prune_command =
 		"  --port           Port of the running pgcopydb follow process to connect to\n",
 		cli_stream_getopts,
 		cli_stream_prune);
+
+static CommandLine stream_event_trigger_command =
+	make_command(
+		"event-trigger",
+		"Install the event trigger that emits DDL as logical decoding messages",
+		"",
+		"  --source         Postgres URI to the source database\n"
+		"  --drop           Remove the event trigger and its function instead of "
+		"installing them\n",
+		cli_stream_getopts,
+		cli_stream_event_trigger);
 
 static CommandLine stream_prefetch_command =
 	make_command(
@@ -189,6 +203,7 @@ static CommandLine *stream_subcommands[] = {
 	&stream_setup_command,
 	&stream_cleanup_command,
 	&stream_prune_command,
+	&stream_event_trigger_command,
 	&stream_prefetch_command,
 	&stream_catchup_command,
 	&stream_replay_command,
@@ -229,6 +244,7 @@ cli_stream_getopts(int argc, char **argv)
 		{ "host", required_argument, NULL, 1001 },
 		{ "port", required_argument, NULL, 1002 },
 		{ "dry-run", no_argument, NULL, 1005 },
+		{ "drop", no_argument, NULL, 1006 },
 		{ "restart", no_argument, NULL, 'r' },
 		{ "resume", no_argument, NULL, 'R' },
 		{ "not-consistent", no_argument, NULL, 'C' },
@@ -369,6 +385,13 @@ cli_stream_getopts(int argc, char **argv)
 			{
 				options.replayNoOpUpdates = true;
 				log_trace("--replay-no-op-updates");
+				break;
+			}
+
+			case 1006:      /* --drop */
+			{
+				options.dropEventTrigger = true;
+				log_trace("--drop");
 				break;
 			}
 
@@ -900,6 +923,227 @@ cli_stream_prune(int argc, char **argv)
 	}
 
 	(void) catalog_close(&(copySpecs.catalogs.source));
+}
+
+
+#define PGCOPYDB_DDL_EVENT_TRIGGER_CREATE_SCHEMA_SQL \
+	"create schema if not exists %s"
+
+#define PGCOPYDB_DDL_EVENT_TRIGGER_DROP_TRIGGER_SQL \
+	"drop event trigger if exists %s"
+
+#define PGCOPYDB_DDL_EVENT_TRIGGER_DROP_FUNCTION_SQL \
+	"drop function if exists %s()"
+
+/*
+ * "schema" and "object" come from pg_event_trigger_ddl_commands(), which
+ * identifies the object a CREATE/ALTER command just acted on
+ * (schema-qualified, quoted as needed). It returns no rows at all for DROP
+ * commands -- Postgres only reports those via a separate sql_drop event,
+ * not captured here -- so both are NULL for a DROP; the "command_tag"
+ * field is TG_TAG instead, which is always available and does not depend
+ * on the command having that structured representation. Nothing decodes
+ * these three fields yet: they ride along, unused, for a later feature
+ * (keeping new tables added to pgoutput's publication automatically) to
+ * consume without needing another trigger-side change.
+ */
+#define PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION_SQL \
+	"create or replace function %s()" \
+	" returns event_trigger" \
+	" language plpgsql as $pgcopydb$" \
+	"declare" \
+	"  r record;" \
+	"begin" \
+	"  select schema_name, object_identity" \
+	"    into r" \
+	"    from pg_event_trigger_ddl_commands()" \
+	"   limit 1;" \
+	"  perform pg_logical_emit_message(" \
+	"    true," \
+	"    'pgcopydb'," \
+	"    json_build_object(" \
+	"      'type', 'ddl'," \
+	"      'body', current_query()," \
+	"      'schema', r.schema_name," \
+	"      'object', r.object_identity," \
+	"      'command_tag', TG_TAG" \
+	"    )::text" \
+	"  );" \
+	"end;" \
+	"$pgcopydb$"
+
+/*
+ * A reasonable default set of schema-changing command tags: tables,
+ * indexes, sequences and views. Not exhaustive by design; extend this
+ * list, or re-run with a locally edited trigger, as the need arises.
+ */
+#define PGCOPYDB_DDL_EVENT_TRIGGER_CREATE_SQL \
+	"create event trigger %s" \
+	" on ddl_command_end" \
+	" when tag in (" \
+	"  'CREATE TABLE', 'ALTER TABLE', 'DROP TABLE'," \
+	"  'CREATE INDEX', 'ALTER INDEX', 'DROP INDEX'," \
+	"  'CREATE SEQUENCE', 'ALTER SEQUENCE', 'DROP SEQUENCE'," \
+	"  'CREATE VIEW', 'ALTER VIEW', 'DROP VIEW'" \
+	" )" \
+	" execute function %s()"
+
+/*
+ * cli_stream_event_trigger_drop drops the event trigger and its underlying
+ * function, if they exist. Used by `pgcopydb stream event-trigger --drop`.
+ */
+static bool
+cli_stream_event_trigger_drop(PGSQL *pgsql)
+{
+	log_info("Dropping event trigger \"%s\" and its function",
+			 PGCOPYDB_DDL_EVENT_TRIGGER_NAME);
+
+	char sql[BUFSIZE] = { 0 };
+
+	sformat(sql, sizeof(sql),
+			PGCOPYDB_DDL_EVENT_TRIGGER_DROP_TRIGGER_SQL,
+			PGCOPYDB_DDL_EVENT_TRIGGER_NAME);
+
+	if (!pgsql_execute(pgsql, sql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	sformat(sql, sizeof(sql),
+			PGCOPYDB_DDL_EVENT_TRIGGER_DROP_FUNCTION_SQL,
+			PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION);
+
+	if (!pgsql_execute(pgsql, sql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * cli_stream_event_trigger_create installs the event trigger that turns DDL
+ * run on the source database into a typed pg_logical_emit_message()
+ * envelope: {"type": "ddl", "body": "<the DDL text>"}, emitted with the
+ * "pgcopydb" prefix. Used by `pgcopydb stream event-trigger`.
+ *
+ * This is the only opt-in part of the DDL-messages feature: decoding and
+ * applying such a message is always on (see ld_pgoutput.c / ld_transform.c /
+ * ld_apply.c) and is a no-op for anyone who never installs this trigger, or
+ * who emits messages with some other prefix or type.
+ *
+ * The event trigger fires for a generic, reasonable set of schema-changing
+ * command tags; `current_query()` captures the triggering statement as
+ * submitted (a multi-statement round trip is captured whole, not split —
+ * see the --help docs and the user manual for this and other caveats).
+ */
+static bool
+cli_stream_event_trigger_create(PGSQL *pgsql)
+{
+	log_info("Installing event trigger \"%s\" on the source database",
+			 PGCOPYDB_DDL_EVENT_TRIGGER_NAME);
+
+	char sql[BUFSIZE] = { 0 };
+
+	sformat(sql, sizeof(sql),
+			PGCOPYDB_DDL_EVENT_TRIGGER_CREATE_SCHEMA_SQL,
+			PGCOPYDB_DDL_EVENT_TRIGGER_SCHEMA);
+
+	if (!pgsql_execute(pgsql, sql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/*
+	 * CREATE OR REPLACE FUNCTION makes the function idempotent; event
+	 * triggers have no IF NOT EXISTS, so DROP then CREATE instead.
+	 */
+	sformat(sql, sizeof(sql),
+			PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION_SQL,
+			PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION);
+
+	if (!pgsql_execute(pgsql, sql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	sformat(sql, sizeof(sql),
+			PGCOPYDB_DDL_EVENT_TRIGGER_DROP_TRIGGER_SQL,
+			PGCOPYDB_DDL_EVENT_TRIGGER_NAME);
+
+	if (!pgsql_execute(pgsql, sql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	sformat(sql, sizeof(sql),
+			PGCOPYDB_DDL_EVENT_TRIGGER_CREATE_SQL,
+			PGCOPYDB_DDL_EVENT_TRIGGER_NAME,
+			PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION);
+
+	if (!pgsql_execute(pgsql, sql))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	log_info("Event trigger \"%s\" installed: DDL matching the configured "
+			 "command tags will now be replicated as a pg_logical_emit_message() "
+			 "\"ddl\" message to any pgcopydb follow process reading this slot",
+			 PGCOPYDB_DDL_EVENT_TRIGGER_NAME);
+
+	return true;
+}
+
+
+/*
+ * cli_stream_event_trigger installs (or, with --drop, removes) the event
+ * trigger that turns DDL run on the source database into a typed
+ * pg_logical_emit_message() "ddl" message. The actual SQL is in
+ * cli_stream_event_trigger_create and cli_stream_event_trigger_drop; this
+ * function only parses arguments and manages the source connection.
+ */
+static void
+cli_stream_event_trigger(int argc, char **argv)
+{
+	if (argc > 0)
+	{
+		commandline_help(stderr);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	if (streamDBoptions.connStrings.source_pguri == NULL)
+	{
+		log_fatal("Option --source is mandatory");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	PGSQL src = { 0 };
+
+	if (!pgsql_init(&src, streamDBoptions.connStrings.source_pguri,
+					PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	bool success = streamDBoptions.dropEventTrigger
+				   ? cli_stream_event_trigger_drop(&src)
+				   : cli_stream_event_trigger_create(&src);
+
+	(void) pgsql_finish(&src);
+
+	if (!success)
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
 }
 
 

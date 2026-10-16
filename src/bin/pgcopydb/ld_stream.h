@@ -188,6 +188,15 @@ typedef struct LogicalMessageEndpos
 } LogicalMessageEndpos;
 
 /*
+ * A decoded {"type": "ddl", "body": "..."} message envelope, carried over
+ * pg_logical_emit_message() and decoded for the pgoutput plugin only.
+ */
+typedef struct LogicalMessageDDL
+{
+	char *body;   /* malloc'd; the literal DDL SQL text to apply verbatim */
+} LogicalMessageDDL;
+
+/*
  * The JSON-lines logical decoding stream is then parsed into transactions that
  * contains a series of insert/update/delete/truncate commands.
  */
@@ -207,6 +216,7 @@ typedef struct LogicalTransactionStatement
 		LogicalMessageSwitchWAL switchwal;
 		LogicalMessageKeepalive keepalive;
 		LogicalMessageEndpos endpos;
+		LogicalMessageDDL ddl;
 	} stmt;
 
 	struct LogicalTransactionStatement *prev; /* double linked-list */
@@ -826,6 +836,13 @@ bool parseTestDecodingMessageActionAndXid(LogicalStreamContext *context);
 bool parseTestDecodingMessage(StreamContext *privateContext,
 							  char *message,
 							  JSON_Value *json);
+
+bool parseTestDecodingMessageEnvelopeHeader(const char *line,
+											bool *transactional,
+											char *prefix,
+											size_t prefixSize,
+											const char **contentPtr,
+											size_t *contentSize);
 
 /* ld_wal2json.c */
 bool prepareWal2jsonMessage(LogicalStreamContext *context);

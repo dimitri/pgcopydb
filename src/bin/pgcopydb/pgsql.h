@@ -603,6 +603,22 @@ bool pgsql_replication_slot_exists(PGSQL *pgsql,
 
 bool pgsql_drop_replication_slot(PGSQL *pgsql, const char *slotName);
 
+/*
+ * PgcopydbReservedOids holds the real OIDs of pgcopydb's own reserved
+ * objects (see defaults.h), resolved on a live connection by
+ * pgsql_get_pgcopydb_reserved_oids. Any OID left at 0 means that object
+ * was never installed on this source.
+ */
+typedef struct PgcopydbReservedOids
+{
+	uint32_t schemaOid;
+	uint32_t eventTriggerOid;
+	uint32_t *schemaObjectOids;  /* malloc'ed area, schemaObjectOidsCount entries */
+	int schemaObjectOidsCount;
+} PgcopydbReservedOids;
+
+bool pgsql_get_pgcopydb_reserved_oids(PGSQL *pgsql, PgcopydbReservedOids *oids);
+
 /* Forward declaration; full definition in filtering.h */
 struct SourceFilters;
 

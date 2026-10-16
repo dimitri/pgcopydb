@@ -126,6 +126,127 @@ is optional during a live follow operation.
 
 .. include:: ../include/stream-prune.rst
 
+.. _pgcopydb_stream_event_trigger:
+
+pgcopydb stream event-trigger
+------------------------------
+
+pgcopydb stream event-trigger - Install the event trigger that emits DDL as logical decoding messages
+
+``pgcopydb follow`` (and ``pgcopydb clone --follow``) always decode and
+apply DDL carried over logical replication as a typed message, with any of
+the three supported output plugins (``pgoutput``, ``wal2json``,
+``test_decoding``). There is no option to turn this off, and nothing to
+turn on either: a source database that never emits such a message sees no
+behavioral change at all, and a message using a different prefix or an
+unrecognized type is logged and skipped rather than applied or treated as
+an error.
+
+The only step left to the user is **getting the source database to emit
+those messages in the first place**, and that is exactly what ``pgcopydb
+stream event-trigger`` does: it connects to the source database and
+installs a ``plpgsql`` function, in a dedicated ``pgcopydb`` schema
+(created if missing), together with an event trigger on ``ddl_command_end``
+that calls `pg_logical_emit_message`__ for a reasonable default set of DDL
+command tags (``CREATE/ALTER/DROP TABLE``, ``CREATE/ALTER/DROP INDEX``,
+``CREATE/ALTER/DROP SEQUENCE``, and ``CREATE/ALTER/DROP VIEW``).
+
+This function and event trigger are source-only tooling: ``pgcopydb
+clone`` always excludes them from the target database, regardless of
+``--source``/``--target`` order or of the user's own filters, whether the
+trigger was installed before or after the clone. Copying them to the
+target would otherwise leave a live copy there, firing on every DDL
+statement ``follow`` itself replays, for no purpose.
+
+__ https://www.postgresql.org/docs/current/functions-admin.html#id-1.5.8.25.9
+
+.. include:: ../include/stream-event-trigger.rst
+
+Running the command again is safe: the function is installed with ``create
+or replace function``, and the event trigger is dropped and re-created.
+Pass ``--drop`` to remove both instead.
+
+The message content is a small JSON envelope::
+
+   {
+     "type": "ddl",
+     "body": "<the literal DDL SQL text, as submitted>",
+     "schema": "<schema-qualified namespace, or null>",
+     "object": "<schema-qualified object identity, or null>",
+     "command_tag": "<the PostgreSQL command tag, e.g. \"CREATE TABLE\">"
+   }
+
+emitted with the fixed prefix ``"pgcopydb"``, using
+``pg_logical_emit_message(true, 'pgcopydb', ...)`` so the message rides
+inside the same transaction as the DDL and is only decoded if that
+transaction commits. ``type`` selects the handler on the apply side;
+``"ddl"`` is the only type pgcopydb ships today, and an unrecognized type
+is simply skipped, so a second type can be added later without breaking
+older ``pgcopydb follow`` binaries reading a newer source. ``body`` is the
+literal command text captured with PostgreSQL's `current_query()`__
+function, the same text the statement was submitted as; this is what
+``pgcopydb follow`` actually replays, unchanged.
+
+``schema``, ``object`` and ``command_tag`` identify the object the
+command acted on, from `pg_event_trigger_ddl_commands()`__ and
+``TG_TAG``. Nothing on the apply side reads them yet — they ride along
+for a future feature (keeping new tables added to ``pgoutput``'s
+publication automatically, without which their data changes won't
+stream — see the limitation below). For a ``CREATE``/``ALTER`` command
+``schema``/``object`` are populated (for example ``"public"`` /
+``"public.orders"``); for a ``DROP`` command they are always ``null``,
+since PostgreSQL only reports dropped objects via a separate event
+(``sql_drop``) this trigger does not use. ``command_tag`` (for
+example ``"CREATE TABLE"``) is always populated, for every command tag
+the trigger is configured for.
+
+__ https://www.postgresql.org/docs/current/functions-info.html
+__ https://www.postgresql.org/docs/current/functions-event-triggers.html
+
+Once installed, running ordinary DDL on the source — for example ``alter
+table orders add column urgent boolean default false`` — is enough:
+``pgcopydb follow`` decodes the message and runs the DDL text verbatim
+against the target database, inside the same apply transaction as every
+other change in that source transaction, with no separate connection and no
+separate commit.
+
+Limitations
+~~~~~~~~~~~
+
+- ``current_query()`` captures the statement exactly as submitted. A
+  command sent as several statements in a single round trip (for example
+  via a multi-statement ``psql -c`` invocation) is captured whole, as one
+  string, not split into individual statements.
+
+- The DDL text replays using whichever role and ``search_path`` the apply
+  worker's target connection has, not necessarily the role or
+  ``search_path`` the original session on the source had. Schema-qualify
+  object names in DDL you expect to be replicated this way if that
+  matters to you.
+
+- The event trigger's default command-tag list is a reasonable starting
+  point, not exhaustive. Extend it by editing the installed trigger
+  directly on the source database (``alter event trigger ... when tag
+  in (...)`` is not supported by PostgreSQL; drop and recreate the
+  trigger with your own tag list instead) if you need to capture
+  additional DDL command tags.
+
+- A ``CREATE TABLE`` message creates the table on the target, but with the
+  ``pgoutput`` plugin it does **not** by itself make that new table's data
+  changes stream: ``pgoutput`` only replicates tables that belong to its
+  replication slot's publication, and that publication's table list is
+  computed once, at ``pgcopydb clone``/``pgcopydb stream setup`` time, to
+  honor table filters; nothing here runs ``alter publication ... add
+  table`` for tables created afterward. Either add the new table to the
+  publication yourself (``alter publication <name> add table ...``,
+  matching whatever filters apply), or re-run ``pgcopydb stream setup``.
+  This limitation does not apply to ``wal2json`` or ``test_decoding``,
+  neither of which uses a publication. See `issue #892`__ for the broader
+  "new table is not picked up automatically" gap this only partially
+  closes (schema, not data).
+
+  __ https://github.com/dimitri/pgcopydb/issues/892
+
 .. _pgcopydb_stream_prefetch:
 
 pgcopydb stream prefetch
@@ -453,6 +574,11 @@ The following options are available to ``pgcopydb stream`` sub-commands:
   file — rotation only happens at a transaction commit boundary.  This
   means a single oversized transaction causes the file to exceed the
   threshold, which is expected and safe.
+
+--drop
+
+  Used with ``pgcopydb stream event-trigger``. Removes the event trigger
+  and its function from the source database instead of installing them.
 
 Environment
 -----------

@@ -26,6 +26,35 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/ddl.sql
 # pgcopydb clone uses the environment variables
 pgcopydb clone --follow --plugin wal2json --notice
 
+# dml.sql inserts actor rows after logical decoding messages: all of them must
+# have reached the target by the time follow is done
+src_count=`psql -AtqX -d ${PGCOPYDB_SOURCE_PGURI} -c "select count(*) from actor"`
+tgt_count=`psql -AtqX -d ${PGCOPYDB_TARGET_PGURI} -c "select count(*) from actor"`
+
+echo "source actor count: ${src_count}, target actor count: ${tgt_count}"
+test "${src_count}" -eq "${tgt_count}" || exit 1
+
+#
+# Verify the DDL message was actually applied to the target database: the
+# "note" column must exist on the target's "rental" table (added by the
+# "ddl" message emitted with our own "pgcopydb" prefix, see ddl-trigger.sql
+# and inject.sh). wal2json decodes and applies this the same way pgoutput
+# does.
+#
+note_col=$(psql -AtqX -d ${PGCOPYDB_TARGET_PGURI} \
+  -c "select count(*) from information_schema.columns where table_name = 'rental' and column_name = 'note'")
+echo "target rental.note column present (should be 1): ${note_col}"
+test "${note_col}" -eq 1
+
+#
+# Verify that a message with a different prefix never gets applied: the
+# "should_not_apply" column must NOT exist on the target (see messages.sql).
+#
+other_col=$(psql -AtqX -d ${PGCOPYDB_TARGET_PGURI} \
+  -c "select count(*) from information_schema.columns where table_name = 'rental' and column_name = 'should_not_apply'")
+echo "target rental.should_not_apply column present (should be 0): ${other_col}"
+test "${other_col}" -eq 0
+
 # Query the SQLite CDC databases to verify the tables were populated.  In the
 # 2-process model the `output` table lives in the *-output.db while `stmt` and
 # `replay` live in the *-replay.db.

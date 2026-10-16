@@ -58,6 +58,26 @@
 #define PGCOPYDB_DROP_IF_EXISTS "PGCOPYDB_DROP_IF_EXISTS"
 #define PGCOPYDB_SNAPSHOT "PGCOPYDB_SNAPSHOT"
 #define PGCOPYDB_OUTPUT_PLUGIN "PGCOPYDB_OUTPUT_PLUGIN"
+
+/*
+ * PGCOPYDB_DDL_EVENT_TRIGGER_SCHEMA, PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION and
+ * PGCOPYDB_DDL_EVENT_TRIGGER_NAME name the schema, plpgsql function and
+ * event trigger installed by `pgcopydb stream event-trigger` (cli_stream.c).
+ *
+ * These are source-only tooling and must never reach the target database:
+ * pgsql_get_pgcopydb_reserved_oids (pgsql.c) resolves their real OIDs on
+ * the source, and dump_restore.c's copydb_write_restore_list_hook always
+ * skips the matching SCHEMA, FUNCTION and EVENT TRIGGER archive entries by
+ * OID, the same way it always skips DATABASE entries, regardless of the
+ * user's own filters -- matching by OID rather than by parsing names out
+ * of the pg_restore --list text format, which PostgreSQL itself documents
+ * as not reliably parseable (see sanitize_line() in pg_dump's
+ * dumputils.c: "we currently don't bother to quote names, meaning that
+ * the name fields aren't automatically parseable").
+ */
+#define PGCOPYDB_DDL_EVENT_TRIGGER_SCHEMA "pgcopydb"
+#define PGCOPYDB_DDL_EVENT_TRIGGER_FUNCTION "pgcopydb.emit_ddl_message"
+#define PGCOPYDB_DDL_EVENT_TRIGGER_NAME "pgcopydb_emit_ddl_message"
 #define PGCOPYDB_WAL2JSON_NUMERIC_AS_STRING "PGCOPYDB_WAL2JSON_NUMERIC_AS_STRING"
 #define PGCOPYDB_LOG_TIME_FORMAT "PGCOPYDB_LOG_TIME_FORMAT"
 #define PGCOPYDB_LOG_JSON "PGCOPYDB_LOG_JSON"

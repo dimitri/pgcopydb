@@ -6099,6 +6099,181 @@ pgsql_drop_replication_slot(PGSQL *pgsql, const char *slotName)
 }
 
 
+/* Context used when fetching pgcopydb's own reserved object OIDs */
+typedef struct PgcopydbReservedOidsContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	bool parsedOk;
+	PgcopydbReservedOids *oids;
+} PgcopydbReservedOidsContext;
+
+
+/*
+ * parsePgcopydbReservedOids parses the result of the query that resolves
+ * the "pgcopydb" schema's OID and the DDL event trigger's OID, run by
+ * pgsql_get_pgcopydb_reserved_oids.
+ */
+static void
+parsePgcopydbReservedOids(void *ctx, PGresult *result)
+{
+	PgcopydbReservedOidsContext *context = (PgcopydbReservedOidsContext *) ctx;
+
+	if (PQntuples(result) != 1 || PQnfields(result) != 2)
+	{
+		log_error("Query returned %d rows and %d columns, expected 1 and 2",
+				  PQntuples(result), PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	if (!PQgetisnull(result, 0, 0))
+	{
+		char *value = PQgetvalue(result, 0, 0);
+
+		if (!stringToUInt32(value, &(context->oids->schemaOid)))
+		{
+			log_error("Failed to parse schema oid \"%s\"", value);
+			context->parsedOk = false;
+			return;
+		}
+	}
+
+	if (!PQgetisnull(result, 0, 1))
+	{
+		char *value = PQgetvalue(result, 0, 1);
+
+		if (!stringToUInt32(value, &(context->oids->eventTriggerOid)))
+		{
+			log_error("Failed to parse event trigger oid \"%s\"", value);
+			context->parsedOk = false;
+			return;
+		}
+	}
+
+	context->parsedOk = true;
+}
+
+
+/* Context used when fetching the OIDs of functions owned by a schema */
+typedef struct SchemaProcOidsContext
+{
+	char sqlstate[SQLSTATE_LENGTH];
+	bool parsedOk;
+	uint32_t *array;
+	int count;
+}   SchemaProcOidsContext;
+
+
+/*
+ * parseSchemaProcOids parses the result of the query that lists the OIDs
+ * of every function (pg_proc entry) owned by a given schema, run by
+ * pgsql_get_pgcopydb_reserved_oids.
+ */
+static void
+parseSchemaProcOids(void *ctx, PGresult *result)
+{
+	SchemaProcOidsContext *context = (SchemaProcOidsContext *) ctx;
+	int nTuples = PQntuples(result);
+
+	context->array = (uint32_t *) calloc(nTuples, sizeof(uint32_t));
+
+	if (context->array == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		context->parsedOk = false;
+		return;
+	}
+
+	for (int i = 0; i < nTuples; i++)
+	{
+		if (!stringToUInt32(PQgetvalue(result, i, 0), &(context->array[i])))
+		{
+			log_error("Failed to parse proc oid \"%s\"", PQgetvalue(result, i, 0));
+			context->parsedOk = false;
+			return;
+		}
+	}
+
+	context->count = nTuples;
+	context->parsedOk = true;
+}
+
+
+/*
+ * pgsql_get_pgcopydb_reserved_oids resolves the OIDs of pgcopydb's own
+ * reserved objects on the given connection (see pgcmd.h): the "pgcopydb"
+ * schema, the event trigger `pgcopydb stream event-trigger` installs, and
+ * the OIDs of every function living in that schema (the only kind of
+ * object it currently ever holds).
+ *
+ * Any object that was never installed (nobody ran `pgcopydb stream
+ * event-trigger` on this source) is simply absent: schemaOid and
+ * eventTriggerOid are left at 0, and schemaObjectOidsCount is 0. A plain
+ * OID comparison against 0 never matches a real archive item, so callers
+ * don't need to special-case "not installed" themselves.
+ *
+ * The connection is expected to be opened and closed by the caller.
+ */
+bool
+pgsql_get_pgcopydb_reserved_oids(PGSQL *pgsql, PgcopydbReservedOids *oids)
+{
+	*oids = (PgcopydbReservedOids) {
+		0
+	};
+
+	char *sql =
+		"select"
+		"  (select oid from pg_namespace where nspname = $1),"
+		"  (select oid from pg_event_trigger where evtname = $2)";
+
+	Oid paramTypes[2] = { TEXTOID, TEXTOID };
+	const char *paramValues[2] = {
+		PGCOPYDB_DDL_EVENT_TRIGGER_SCHEMA,
+		PGCOPYDB_DDL_EVENT_TRIGGER_NAME
+	};
+
+	PgcopydbReservedOidsContext context = { .oids = oids };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   2, paramTypes, paramValues,
+								   &context, &parsePgcopydbReservedOids) ||
+		!context.parsedOk)
+	{
+		log_error("Failed to resolve pgcopydb's own reserved object OIDs");
+		return false;
+	}
+
+	if (oids->schemaOid == 0)
+	{
+		/* nobody ever installed anything in the reserved schema */
+		return true;
+	}
+
+	char *procSql = "select oid from pg_proc where pronamespace = $1";
+
+	Oid procParamTypes[1] = { OIDOID };
+	IntString schemaOidStr = intToString(oids->schemaOid);
+	const char *procParamValues[1] = { schemaOidStr.strValue };
+
+	SchemaProcOidsContext procContext = { 0 };
+
+	if (!pgsql_execute_with_params(pgsql, procSql,
+								   1, procParamTypes, procParamValues,
+								   &procContext, &parseSchemaProcOids) ||
+		!procContext.parsedOk)
+	{
+		log_error("Failed to resolve functions owned by the \"%s\" schema",
+				  PGCOPYDB_DDL_EVENT_TRIGGER_SCHEMA);
+		return false;
+	}
+
+	oids->schemaObjectOids = procContext.array;
+	oids->schemaObjectOidsCount = procContext.count;
+
+	return true;
+}
+
+
 /*
  * pgsql_create_publication creates a publication FOR TABLE <table list>
  * by querying pg_tables directly on the live source connection.  Excludes

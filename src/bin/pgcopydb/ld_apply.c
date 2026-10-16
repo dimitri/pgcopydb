@@ -1201,6 +1201,42 @@ stream_apply_dml(StreamApplyContext *context, ReplayDBStmt *s)
 		return true;
 	}
 
+	if (s->action == STREAM_ACTION_MESSAGE)
+	{
+		/*
+		 * A decoded DDL message (pg_logical_emit_message(), envelope type
+		 * "ddl"). s->stmt holds the literal DDL SQL text, stored verbatim
+		 * by stream_write_ddl; run it as-is, inside the already-open apply
+		 * transaction, same commit ordering as every other statement in
+		 * this transaction. All three supported output plugins decode and
+		 * apply this the same way (see parseMessage in ld_transform.c).
+		 *
+		 * A NULL s->stmt should not happen in current code -- parseMessage
+		 * only appends a STREAM_ACTION_MESSAGE statement after successfully
+		 * setting stmt->stmt.ddl.body -- but a message is content pgcopydb
+		 * does not fully control (unlike DML, which it generates itself
+		 * from the source's own rows): warn and skip this one statement
+		 * rather than failing the whole apply pipeline over it, the same
+		 * tolerance already given to an envelope with an unrecognized
+		 * "type" (see parseMessage) and to a stale KEEPALIVE with an empty
+		 * timestamp (see stream_apply_sql, issue #943).
+		 */
+		if (s->stmt == NULL)
+		{
+			log_warn("Skipping DDL message with no SQL text at LSN %X/%X",
+					 LSN_FORMAT_ARGS(s->lsn));
+			return true;
+		}
+
+		if (!pgsql_execute(applyPgConn, s->stmt))
+		{
+			log_error("Failed to apply DDL message: %s", s->stmt);
+			return false;
+		}
+
+		return true;
+	}
+
 	/* INSERT / UPDATE / DELETE */
 
 	if (s->stmt == NULL && s->hash == 0)

@@ -79,6 +79,9 @@ static bool stream_write_delete(ReplayDBStmt *replayStmt,
 static bool stream_write_truncate(ReplayDBStmt *replayStmt,
 								  LogicalMessageTruncate *truncate);
 
+static bool stream_write_ddl(ReplayDBStmt *replayStmt,
+							 LogicalMessageDDL *ddl);
+
 static bool stream_write_file_txn(FILE *out,
 								  LogicalTransaction *txn,
 								  bool replayNoOpUpdates);
@@ -373,6 +376,26 @@ stream_transform_prepare_message(StreamSpecs *specs,
 			}
 			(void) streamLogicalTransactionAppendStatement(
 				&(mesg->command.tx), pgstmt);
+		}
+		else if (metadata->action == STREAM_ACTION_MESSAGE)
+		{
+			/*
+			 * Unlike DML, a pgoutput MESSAGE row carries its content as a
+			 * real JSON envelope in the output->jsonBuffer column (see
+			 * ld_store_insert_pgoutput_message / preparePgoutputMessage) —
+			 * same as test_decoding/wal2json — so use the common path.
+			 */
+			JSON_Value *json = json_parse_string(output->jsonBuffer);
+
+			if (!parseMessage(privateContext, output->jsonBuffer, json))
+			{
+				log_error("Failed to parse pgoutput MESSAGE id=%lld: %.1024s%s",
+						  (long long) output->id,
+						  output->jsonBuffer != NULL ? output->jsonBuffer : "(null)",
+						  output->jsonBuffer != NULL &&
+						  strlen(output->jsonBuffer) > 1024 ? "..." : "");
+				return false;
+			}
 		}
 		else
 		{
@@ -1377,19 +1400,161 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 		}
 
 		/*
-		 * A pg_logical_emit_message() message. Neither test_decoding nor
-		 * wal2json have any support for applying such a message's content
-		 * -- discard it outright rather than falling into the DML dispatch
-		 * below, which would try to parse it as a row change and fail
-		 * (pgoutput discards it too, earlier, at decode time: see
-		 * stream_fetch_current_lsn in ld_stream.c). stmt was already
-		 * allocated above (STREAM_ACTION_MESSAGE is not TCL); free it since
-		 * it is never appended to the transaction.
+		 * A pg_logical_emit_message() message. All three plugins filtered
+		 * by the "pgcopydb" prefix already, at decode time (pgoutput in
+		 * preparePgoutputMessage, wal2json in parseWal2jsonMessageActionAndXid,
+		 * test_decoding in parseTestDecodingMessageActionAndXid) -- getting
+		 * here means the prefix matched. What's left is unwrapping the
+		 * envelope JSON text, which each plugin carries differently:
+		 *
+		 *  - pgoutput stores the envelope bytes directly as jsonBuffer, so
+		 *    json IS the envelope already.
+		 *  - wal2json's jsonBuffer is its own JSON object, with our envelope
+		 *    JSON text nested under the "content" key.
+		 *  - test_decoding's jsonBuffer is the raw decoder line, JSON-string
+		 *    escaped; our envelope JSON text follows "content:" in there.
 		 */
 		case STREAM_ACTION_MESSAGE:
 		{
-			free(stmt);
-			privateContext->stmt = NULL;
+			/*
+			 * A message is not always transactional: pg_logical_emit_message()
+			 * takes a "transactional" argument, and when false, Postgres
+			 * delivers it to the output plugin outright, bypassing the
+			 * reorder buffer's commit-ordered replay entirely -- no
+			 * preceding BEGIN at all (see ReorderBufferQueueMessage's
+			 * non-transactional branch and message_cb_wrapper calling
+			 * message_cb directly, in
+			 * src/backend/replication/logical/reorderbuffer.c and logical.c).
+			 *
+			 * Our own event trigger always calls pg_logical_emit_message()
+			 * with transactional=true (cli_stream.c), so a "pgcopydb"-prefixed
+			 * "ddl" envelope is always transactional in practice; this check
+			 * only rejects a different, non-transactional emitter spoofing
+			 * our prefix, rather than assuming every message is one of ours.
+			 */
+			if (!mesg->isTransaction)
+			{
+				log_error("Failed to parse MESSAGE: no transaction in progress");
+				return false;
+			}
+
+			JSON_Object *jsobj = NULL;
+
+			switch (privateContext->plugin)
+			{
+				case STREAM_PLUGIN_PGOUTPUT:
+				{
+					jsobj = json_value_get_object(json);
+					break;
+				}
+
+				case STREAM_PLUGIN_WAL2JSON:
+				{
+					JSON_Object *outer = json_value_get_object(json);
+					const char *content = outer != NULL ?
+										  json_object_get_string(outer, "content") : NULL;
+
+					if (content == NULL)
+					{
+						log_error("Failed to parse wal2json message, "
+								  "missing \"content\": %.1024s",
+								  message != NULL ? message : "(null)");
+						return false;
+					}
+
+					JSON_Value *envelope = json_parse_string(content);
+					jsobj = json_value_get_object(envelope);
+					break;
+				}
+
+				case STREAM_PLUGIN_TEST_DECODING:
+				{
+					const char *line = json_value_get_string(json);
+
+					bool transactional = false;
+					char prefix[PG_NAMEDATALEN] = { 0 };
+					const char *contentPtr = NULL;
+					size_t contentSize = 0;
+
+					if (line == NULL ||
+						!parseTestDecodingMessageEnvelopeHeader(line,
+																&transactional,
+																prefix,
+																sizeof(prefix),
+																&contentPtr,
+																&contentSize))
+					{
+						log_error("Failed to parse test_decoding message: "
+								  "%.1024s", message != NULL ? message : "(null)");
+						return false;
+					}
+
+					char *content = strndup(contentPtr, contentSize);
+
+					if (content == NULL)
+					{
+						log_error(ALLOCATION_FAILED_ERROR);
+						return false;
+					}
+
+					JSON_Value *envelope = json_parse_string(content);
+					free(content);
+					jsobj = json_value_get_object(envelope);
+					break;
+				}
+
+				default:
+				{
+					log_error("BUG: parseMessage called with unknown plugin %d",
+							  privateContext->plugin);
+					return false;
+				}
+			}
+
+			const char *type = jsobj != NULL ?
+							   json_object_get_string(jsobj, "type") : NULL;
+
+			if (type == NULL)
+			{
+				log_error("Failed to parse message envelope, missing \"type\": "
+						  "%.1024s", message != NULL ? message : "(null)");
+				return false;
+			}
+
+			if (strcmp(type, "ddl") == 0)
+			{
+				const char *body = json_object_get_string(jsobj, "body");
+
+				if (body == NULL)
+				{
+					log_error("Failed to parse ddl message, missing \"body\": "
+							  "%.1024s", message != NULL ? message : "(null)");
+					return false;
+				}
+
+				stmt->stmt.ddl.body = strdup(body);
+
+				if (stmt->stmt.ddl.body == NULL)
+				{
+					log_error(ALLOCATION_FAILED_ERROR);
+					return false;
+				}
+
+				(void) streamLogicalTransactionAppendStatement(txn, stmt);
+			}
+			else
+			{
+				/*
+				 * Unrecognised type: log and skip, not an error, so an
+				 * older pgcopydb binary tolerates a newer source emitting
+				 * a type it does not know about yet. stmt was allocated
+				 * above but never appended; free it.
+				 */
+				log_warn("Ignoring message of unknown type \"%s\"", type);
+				free(stmt);
+				privateContext->stmt = NULL;
+			}
+
 			break;
 		}
 
@@ -1968,6 +2133,16 @@ stream_transform_write_replay_txn(StreamSpecs *specs)
 			case STREAM_ACTION_TRUNCATE:
 			{
 				if (!stream_write_truncate(&stmt, &(currentStmt->stmt.truncate)))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+				break;
+			}
+
+			case STREAM_ACTION_MESSAGE:
+			{
+				if (!stream_write_ddl(&stmt, &(currentStmt->stmt.ddl)))
 				{
 					/* errors have already been logged */
 					return false;
@@ -2592,6 +2767,43 @@ stream_write_truncate(ReplayDBStmt *replayStmt, LogicalMessageTruncate *truncate
 	replayStmt->stmt = strdup(buf->data);
 
 	destroyPQExpBuffer(buf);
+
+	return true;
+}
+
+
+/*
+ * stream_write_ddl writes a decoded DDL message (STREAM_ACTION_MESSAGE with
+ * envelope type "ddl") into the replayDB. The body is the literal DDL SQL
+ * text; it is executed verbatim at apply time (ld_apply.c), with no
+ * PREPARE/EXECUTE caching, unlike DML statements.
+ */
+static bool
+stream_write_ddl(ReplayDBStmt *replayStmt, LogicalMessageDDL *ddl)
+{
+	if (ddl->body == NULL)
+	{
+		log_error("BUG: stream_write_ddl called with a NULL body");
+		return false;
+	}
+
+	replayStmt->stmt = strdup(ddl->body);
+
+	if (replayStmt->stmt == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	/*
+	 * ld_store_insert_replay_stmt only stores (and later re-reads) a
+	 * statement when replayStmt->hash > 0 — see its hashParamType check.
+	 * Without a non-zero hash the stmt text is written to the "stmt" table
+	 * but the replay row's stmt_hash stays NULL, so the apply side would
+	 * read back an empty statement (silent no-op). Hash the same way
+	 * stream_write_truncate does.
+	 */
+	replayStmt->hash = hashlittle(replayStmt->stmt, strlen(replayStmt->stmt), 5381);
 
 	return true;
 }
