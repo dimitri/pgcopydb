@@ -76,7 +76,8 @@ CommandLine sentinel_set_endpos_command =
 		"Set the sentinel end position LSN",
 		"[ --source ... ] [ <end lsn> | --current ]",
 		"  --source      Postgres URI to the source database\n"
-		"  --current     Use pg_current_wal_flush_lsn() as the endpos\n"
+		"  --current     Use the LSN of a pg_logical_emit_message() marker "
+		"written now as the endpos\n"
 		"  --host        Reach the follow coordinator over TCP at this host\n"
 		"  --port        Follow coordinator TCP port (default 5442)\n",
 		cli_sentinel_getopts,

@@ -2421,9 +2421,19 @@ stream_create_sentinel(CopyDataSpec *copySpecs,
 
 /*
  * stream_fetch_current_source_lsn connects to the given Postgres service and
- * fetches the current WAL LSN position by calling pg_current_wal_flush_lsn
- * there, or the variant of that function that is supported by this Postgres
- * version.
+ * fetches an endpos LSN that logical decoding is guaranteed to reach, by
+ * calling pg_logical_emit_message() there and using the LSN of that message
+ * (see pgsql_emit_endpos_marker for why pg_current_wal_flush_lsn() is not
+ * used directly here anymore).
+ *
+ * This relies on all three supported output plugins discarding a message
+ * instead of erroring out on one: pgoutput's wire-level decode switch has
+ * no case for a Message ('M') frame at all, so it falls to the default
+ * branch and gets filtered out unconditionally, regardless of content; and
+ * test_decoding/wal2json now discard any STREAM_ACTION_MESSAGE row outright
+ * in the transform step (see parseMessage in ld_transform.c, and the
+ * "message: " recognition in parseTestDecodingMessageActionAndXid) rather
+ * than trying to parse it as a row change.
  */
 bool
 stream_fetch_current_lsn(uint64_t *lsn,
@@ -2441,7 +2451,7 @@ stream_fetch_current_lsn(uint64_t *lsn,
 	/* limit the amount of logging of the apply process */
 	src.logSQL = false;
 
-	uint64_t flushLSN = InvalidXLogRecPtr;
+	uint64_t markerLSN = InvalidXLogRecPtr;
 
 	if (!pgsql_begin(&src))
 	{
@@ -2455,7 +2465,7 @@ stream_fetch_current_lsn(uint64_t *lsn,
 		return false;
 	}
 
-	if (!pgsql_current_wal_flush_lsn(&src, &flushLSN))
+	if (!pgsql_emit_endpos_marker(&src, &markerLSN))
 	{
 		/* errors have already been logged */
 		return false;
@@ -2467,7 +2477,7 @@ stream_fetch_current_lsn(uint64_t *lsn,
 		return false;
 	}
 
-	*lsn = flushLSN;
+	*lsn = markerLSN;
 
 	return true;
 }

@@ -1376,6 +1376,23 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 			break;
 		}
 
+		/*
+		 * A pg_logical_emit_message() message. Neither test_decoding nor
+		 * wal2json have any support for applying such a message's content
+		 * -- discard it outright rather than falling into the DML dispatch
+		 * below, which would try to parse it as a row change and fail
+		 * (pgoutput discards it too, earlier, at decode time: see
+		 * stream_fetch_current_lsn in ld_stream.c). stmt was already
+		 * allocated above (STREAM_ACTION_MESSAGE is not TCL); free it since
+		 * it is never appended to the transaction.
+		 */
+		case STREAM_ACTION_MESSAGE:
+		{
+			free(stmt);
+			privateContext->stmt = NULL;
+			break;
+		}
+
 		/* now handle DML messages from the output plugin */
 		default:
 		{

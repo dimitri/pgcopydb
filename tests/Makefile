@@ -86,6 +86,12 @@ follow-pgoutput: build
 follow-filtering: build
 	$(MAKE) -C $@
 
+follow-endpos-tail: build
+	$(MAKE) -C $@
+
+follow-endpos-quiet-tail: build
+	$(MAKE) -C $@
+
 timescaledb: build
 	$(MAKE) -C $@
 
@@ -125,4 +131,5 @@ clean-images:
 .PHONY: cdc-endpos-in-multi-wal-txn cdc-file-rotation
 .PHONY: cdc-pgoutput cdc-filtering-pgoutput follow-pgoutput follow-filtering
 .PHONY: follow-wal2json follow-9.6
+.PHONY: follow-endpos-tail follow-endpos-quiet-tail
 .PHONY: timescaledb citus

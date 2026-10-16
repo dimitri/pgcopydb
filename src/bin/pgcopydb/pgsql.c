@@ -6504,6 +6504,92 @@ pgsql_current_wal_flush_lsn(PGSQL *pgsql, uint64_t *lsn)
 
 
 /*
+ * pgsql_emit_endpos_marker calls pg_logical_emit_message() on the source and
+ * returns the LSN of the message it just wrote, to be used as an --current
+ * endpos that logical decoding is guaranteed to actually reach.
+ *
+ * pg_current_wal_flush_lsn() (the previous implementation of --current) can
+ * return a position past the last LSN logical decoding's confirmed_flush
+ * will ever report on its own when nothing writes to the source afterward:
+ * a replication slot only confirms flush up to record boundaries it has
+ * decoded, and an arbitrary WAL offset is not guaranteed to fall on one.
+ * When that happens, `pgcopydb follow`'s receive side waits forever for its
+ * own flush_lsn to catch up to that endpos, never signals "done", and the
+ * apply side -- which only flushes its own libpq pipeline once endpos is
+ * reached (see stream_apply_flush_pipeline in ld_apply.c) -- never applies
+ * the work it already queued. No error is logged anywhere; `follow` simply
+ * never finishes.
+ *
+ * A message written by pg_logical_emit_message() always produces its own
+ * decodable WAL record that every logical decoding output plugin reports
+ * back as received and flushed once decoded, regardless of what the plugin
+ * or pgcopydb's own filtering does with its content (filtering happens
+ * after decode). Using that record's own LSN as the endpos guarantees it is
+ * reachable.
+ *
+ * The message is written transactional (first argument true), run as a
+ * single top-level statement so it commits immediately as its own
+ * implicit one-statement transaction: pgcopydb's receive/transform/apply
+ * pipeline discovers work by finding complete transactions bounded by a
+ * BEGIN/COMMIT pair (see ld_store_iter_output), not by raw LSN alone. A
+ * non-transactional message has no such pair and is never picked up by
+ * that machinery, so flush_lsn never advances past it either -- the same
+ * hang this function exists to avoid, just moved one message later.
+ *
+ * The content is a {"type": "endpos"} JSON envelope under the "pgcopydb"
+ * prefix, matching the typed-message convention a pgoutput decoder may
+ * apply to every message under that prefix (type "ddl" being the only
+ * one it ever acts on): an unrecognised type there is logged and skipped,
+ * not an error, but a message that fails to parse as JSON at all, or
+ * parses but has no "type" key, is treated as a real error. Plain text
+ * here would hit that second case and turn this fix into a hard failure
+ * on every cutover. "endpos" is simply a type no decoder's dispatch table
+ * recognises, by construction, so it always falls through to that safe
+ * skip, now and if this prefix's message vocabulary grows later.
+ */
+bool
+pgsql_emit_endpos_marker(PGSQL *pgsql, uint64_t *lsn)
+{
+	if (pgsql->pgversion_num < 90600)
+	{
+		/* pg_logical_emit_message() does not exist before Postgres 9.6 */
+		return pgsql_current_wal_flush_lsn(pgsql, lsn);
+	}
+
+	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_STRING, false };
+
+	const char *sql =
+		"select pg_logical_emit_message(true, 'pgcopydb', "
+		"'{\"type\": \"endpos\"}')";
+
+	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+								   &context, &parseSingleValueResult))
+	{
+		log_error("Failed to call pg_logical_emit_message()");
+		return false;
+	}
+
+	if (context.isNull)
+	{
+		*lsn = InvalidXLogRecPtr;
+	}
+	else
+	{
+		if (!parseLSN(context.strVal, lsn))
+		{
+			log_error("Failed to parse LSN \"%s\" returned from "
+					  "pg_logical_emit_message()",
+					  context.strVal);
+
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
  * pgsql_escape_identifier escapes PostgreSQL identifiers and always encloses
  * the resulting string in quotes. It utilizes the PQescapeIdentifier function
  * (https://www.postgresql.org/docs/current/libpq-exec.html#LIBPQ-PQESCAPEIDENTIFIER).
