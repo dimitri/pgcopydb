@@ -6,7 +6,7 @@ FROM --platform=${TARGETPLATFORM} debian:12-slim AS build
 ARG TARGETPLATFORM
 ARG TARGETOS
 ARG TARGETARCH
-ARG PGVERSION=16
+ARG PGVERSION=18
 
 RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
   && apt install -qqy --no-install-recommends \
@@ -92,7 +92,22 @@ FROM --platform=${TARGETPLATFORM} debian:12-slim AS run
 ARG TARGETPLATFORM
 ARG TARGETOS
 ARG TARGETARCH
-ARG PGVERSION=16
+ARG PGVERSION=18
+
+# Postgres client tool versions installed side by side in the run image.
+#
+# pgcopydb resolves psql, and then pg_dump/pg_restore/vacuumdb from that same
+# directory, out of PATH (see find_pg_commands() in src/bin/pgcopydb/pgcmd.c),
+# so PATH is what selects the client version used at run time.
+#
+# The client must match the *target* server: a pg_restore from PG17 or above
+# unconditionally emits "SET transaction_timeout = 0", which a PG16 or older
+# server rejects with "unrecognized configuration parameter".  In the other
+# direction pg_dump refuses a source server newer than itself.
+#
+# Two clients cover the whole supported range: 16 handles target servers 14
+# through 16, and 18 handles 17 and 18.
+ARG PGCLIENTVERSIONS="16 18"
 
 # used to configure Github Packages
 LABEL org.opencontainers.image.source=https://github.com/dimitri/pgcopydb
@@ -104,7 +119,7 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
 	gnupg
 
 RUN curl https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
-RUN echo "deb http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main ${PGVERSION}" > /etc/apt/sources.list.d/pgdg.list
+RUN echo "deb http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main ${PGCLIENTVERSIONS}" > /etc/apt/sources.list.d/pgdg.list
 
 RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
   && apt install -qqy --no-install-suggests --no-install-recommends \
@@ -119,8 +134,8 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
     psmisc \
     openssl \
     postgresql-common \
-    postgresql-client-${PGVERSION} \
     postgresql-client-common \
+    $(for v in ${PGCLIENTVERSIONS}; do echo postgresql-client-$v; done) \
     && apt clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -134,6 +149,10 @@ RUN mkdir -p /var/run/pgcopydb && chown docker:postgres /var/run/pgcopydb
 
 COPY --from=build --chmod=755 /usr/lib/postgresql/${PGVERSION}/bin/pgcopydb /usr/local/bin
 COPY --from=build /usr/local/bin/sqlite3 /usr/local/bin/sqlite3
+
+# Default to the newest installed client tools, and pin the directory
+# explicitly rather than relying on Debian's pg_wrapper to pick a version.
+ENV PATH=/usr/lib/postgresql/${PGVERSION}/bin:${PATH}
 
 USER docker
 
