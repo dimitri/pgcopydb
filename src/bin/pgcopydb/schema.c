@@ -3468,9 +3468,9 @@ getIndexArray(void *ctx, PGresult *result)
 	SourceIndexArrayContext *context = (SourceIndexArrayContext *) ctx;
 	int nTuples = PQntuples(result);
 
-	if (PQnfields(result) != 16)
+	if (PQnfields(result) != 17)
 	{
-		log_error("Query returned %d columns, expected 16", PQnfields(result));
+		log_error("Query returned %d columns, expected 17", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -3805,6 +3805,18 @@ parseCurrentSourceIndex(PGresult *result, int rowNumber, SourceIndex *index)
 				  "the maximum expected is %d (RESTORE_LIST_NAMEDATALEN - 1)",
 				  value, length, RESTORE_LIST_NAMEDATALEN - 1);
 		++errors;
+	}
+
+	/* 17. indisreplident */
+	value = PQgetvalue(result, rowNumber, 16);
+	if (value == NULL || ((*value != 't') && (*value != 'f')))
+	{
+		log_error("Invalid indisreplident value \"%s\"", value);
+		++errors;
+	}
+	else
+	{
+		index->isReplicaIdentity = (*value) == 't';
 	}
 
 	return errors == 0;

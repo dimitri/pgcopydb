@@ -937,6 +937,52 @@ copydb_create_index(CopyDataSpec *specs,
 			/* errors have already been logged */
 			return false;
 		}
+
+		/*
+		 * pg_get_indexdef() only returns the CREATE INDEX statement. When the
+		 * source index is the table's replica identity (pg_index.indisreplident,
+		 * set by ALTER TABLE ... REPLICA IDENTITY USING INDEX ...), that clause
+		 * lives outside the index definition and must be replayed here, or CDC
+		 * set up against the target afterwards is unable to identify rows for
+		 * UPDATE/DELETE.
+		 */
+		if (index->isReplicaIdentity)
+		{
+			PQExpBuffer ri = createPQExpBuffer();
+
+			appendPQExpBuffer(ri,
+							  "ALTER TABLE ONLY %s REPLICA IDENTITY USING INDEX %s;",
+							  index->tableQname,
+							  index->indexRelname);
+
+			if (PQExpBufferBroken(ri))
+			{
+				log_error("Failed to create query for REPLICA IDENTITY \"%s\": "
+						  "out of memory",
+						  index->indexRelname);
+				destroyPQExpBuffer(ri);
+				return false;
+			}
+
+			if (specs->datname[0] != '\0')
+			{
+				log_notice("%s: %s", specs->datname, ri->data);
+			}
+			else
+			{
+				log_notice("%s", ri->data);
+			}
+
+			bool success = pgsql_execute(dst, ri->data);
+
+			destroyPQExpBuffer(ri);
+
+			if (!success)
+			{
+				/* errors have already been logged */
+				return false;
+			}
+		}
 	}
 
 	if (!copydb_mark_index_as_done(specs, &indexSpecs))
