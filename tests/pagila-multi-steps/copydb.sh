@@ -42,6 +42,8 @@ pgcopydb copy constraints --resume --notice
 pgcopydb restore post-data --resume
 
 pgcopydb list progress --summary
+pgcopydb list progress --json > /tmp/progress.json
+jq --exit-status '.bytes.total > 0' < /tmp/progress.json
 
 kill -TERM ${COPROC_PID}
 wait ${COPROC_PID}
