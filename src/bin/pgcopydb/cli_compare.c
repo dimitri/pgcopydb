@@ -30,6 +30,13 @@ static void cli_compare_data(int argc, char **argv);
 
 static bool cli_compare_data_table_hook(void *ctx, SourceTable *table);
 
+/*
+ * Counts tables whose contents differ between source and target. compare data
+ * reported differences only in the log and still exited zero, so callers that
+ * checked the exit status read a mismatch as a match.
+ */
+static uint64_t compareDataDiffCount = 0;
+
 static CommandLine compare_schema_command =
 	make_command(
 		"schema",
@@ -451,6 +458,19 @@ cli_compare_data(int argc, char **argv)
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
+
+	/*
+	 * After the report, so a caller keeps the per-table detail that says which
+	 * tables differ. Same verdict shape as compare schema, which already exits
+	 * non-zero on diffCount > 0.
+	 */
+	if (compareDataDiffCount > 0)
+	{
+		log_fatal("Data on source and target database differ: "
+				  "%lld table(s) do not match",
+				  (long long) compareDataDiffCount);
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
 }
 
 
@@ -460,6 +480,16 @@ cli_compare_data(int argc, char **argv)
 static bool
 cli_compare_data_table_hook(void *ctx, SourceTable *table)
 {
+	/*
+	 * Count before formatting, so both the JSON and the tabular output paths
+	 * feed the same verdict.
+	 */
+	if (table->sourceChecksum.rowcount != table->targetChecksum.rowcount ||
+		!streq(table->sourceChecksum.checksum, table->targetChecksum.checksum))
+	{
+		++compareDataDiffCount;
+	}
+
 	if (outputJSON)
 	{
 		JSON_Array *jsArray = (JSON_Array *) ctx;
