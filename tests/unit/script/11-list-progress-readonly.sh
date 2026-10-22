@@ -7,24 +7,9 @@ set -e
 #
 #  - PGCOPYDB_SOURCE_PGURI
 
-# Regression for `list progress` opening the source catalog read-write.
-#
-# `list progress` only reads the catalog, but it used to open it read-write
-# (catalog_init_from_specs): a plain sqlite3_open that takes a write semaphore
-# and checkpoints the WAL on close. Polling progress during a live clone then
-# contended with the clone's writers and surfaced as "[SQLite 5: database is
-# locked]" in the clone, which --fail-fast turned into a torn-down transfer.
-#
-# The fix opens the catalog read-only. Two observable guarantees prove it:
-#
-#  1. Cold catalog: when schema/source.db does not exist yet (very early in a
-#     run), a read-only open cannot create it. The old read-write path created
-#     the file as a side effect of sqlite3_open; the read-only path reports
-#     zeroed progress and leaves the filesystem untouched. "source.db absent"
-#     after the call is the race-free signal that the open was read-only.
-#
-#  2. Warm catalog: against a populated catalog, progress still reports real
-#     numeric byte totals (the read path itself is unchanged).
+# Regression for `list progress` opening the source catalog read-write, which
+# contended with a concurrently running clone and surfaced as "[SQLite 5:
+# database is locked]". A read-only open must poll without a write lock.
 
 WORKDIR=/tmp/list-progress-readonly
 

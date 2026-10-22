@@ -2040,19 +2040,14 @@ cli_list_progress(int argc, char **argv)
 	}
 
 	/*
-	 * Open the source catalog read-only. `list progress` only ever reads the
-	 * catalog, and the read-write path (catalog_init_from_specs) opens it with
-	 * a plain sqlite3_open plus a write semaphore and checkpoints WAL on close,
-	 * which contends with a concurrently running clone's writers and surfaces
-	 * as "[SQLite 5: database is locked]" in that clone (then --fail-fast tears
-	 * the whole transfer down). A read-only connection takes no write lock and
-	 * never checkpoints: SQLite WAL gives readers a snapshot-consistent view
-	 * with no contention, so polling progress during a live clone is safe.
+	 * Open the source catalog read-only: `list progress` only reads it, and a
+	 * read-only connection takes no write lock and never checkpoints the WAL,
+	 * so it can safely poll a catalog that a clone is concurrently writing. A
+	 * read-write open would contend with the clone's writers and surface as
+	 * "[SQLite 5: database is locked]" in that clone.
 	 *
-	 * The catalog file may not exist yet very early in a run (before the clone
-	 * has created it). The read-write path used to create it as a side effect
-	 * and report zeros; we preserve that "nothing yet" result without touching
-	 * the filesystem by leaving progress zeroed when the catalog is absent.
+	 * Early in a run the catalog file may not exist yet; a read-only open
+	 * cannot create it, so report zeroed progress when it is absent.
 	 */
 	DatabaseCatalog *sourceDB = &(copySpecs.catalogs.source);
 

@@ -7,16 +7,10 @@ set -e
 #
 #  - PGCOPYDB_SOURCE_PGURI
 
-# Regression for the `list progress` byte totals query: it summed
-# `bytes` from s_table, but table sizes live in s_table_size (since #684).
-# The stray column made SQLite fail to prepare the statement, so
-# `list progress --json` aborted with no output instead of reporting bytes.
-#
-# Steps:
-#  1. Populate a work directory and its catalog with `pgcopydb list tables`,
-#     which fills s_table_size with real per-table byte counts.
-#  2. Run `pgcopydb list progress --json` against that catalog. Before the fix
-#     it errored out; now it must succeed and carry a numeric bytes.total.
+# Regression for the `list progress` byte totals query: it summed `bytes` from
+# s_table, but table sizes live in s_table_size (since #684). The stray column
+# made SQLite fail to prepare the statement, so `list progress --json` aborted
+# with no output instead of reporting a numeric bytes.total.
 
 WORKDIR=/tmp/list-progress-bytes
 
