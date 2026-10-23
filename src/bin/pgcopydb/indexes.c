@@ -25,6 +25,7 @@
 static bool copydb_add_table_indexes_hook(void *context, SourceIndex *index);
 static bool copydb_create_constraints_hook(void *context, SourceIndex *index);
 static bool copydb_copy_all_indexes_hook(void *ctx, SourceIndex *index);
+static bool copydb_index_worker_connect(PGSQL *dst);
 
 
 /*
@@ -379,7 +380,8 @@ copydb_index_worker(CopyDataSpec *specs)
 					useDst = &entry->dst;
 				}
 
-				if (!copydb_create_index_by_oid(useSpecs, useDst, oid))
+				if (!copydb_index_worker_connect(useDst) ||
+					!copydb_create_index_by_oid(useSpecs, useDst, oid))
 				{
 					++errors;
 
@@ -432,6 +434,34 @@ copydb_index_worker(CopyDataSpec *specs)
 	}
 
 	return success;
+}
+
+
+/*
+ * copydb_index_worker_connect ensures the worker's target connection is open.
+ * The worker can wait hours for a table's COPY to finish, and an idle
+ * connection may be closed meanwhile. Reading from the socket surfaces a
+ * pending close; read twice because the first read may only consume a FATAL
+ * message the server sent before closing.
+ */
+static bool
+copydb_index_worker_connect(PGSQL *dst)
+{
+	if (dst->connection != NULL &&
+		(PQconsumeInput(dst->connection) == 0 ||
+		 PQconsumeInput(dst->connection) == 0))
+	{
+		log_warn("Target connection was closed while idle, reconnecting: %s",
+				 PQerrorMessage(dst->connection));
+		(void) pgsql_finish(dst);
+	}
+
+	if (dst->connection == NULL)
+	{
+		return pgsql_set_gucs(dst, dstSettings);
+	}
+
+	return true;
 }
 
 
