@@ -92,6 +92,9 @@ follow-endpos-tail: build
 follow-endpos-quiet-tail: build
 	$(MAKE) -C $@
 
+follow-ddl-message-stall: build
+	$(MAKE) -C $@
+
 timescaledb: build
 	$(MAKE) -C $@
 
@@ -131,5 +134,5 @@ clean-images:
 .PHONY: cdc-endpos-in-multi-wal-txn cdc-file-rotation
 .PHONY: cdc-pgoutput cdc-filtering-pgoutput follow-pgoutput follow-filtering
 .PHONY: follow-wal2json follow-9.6
-.PHONY: follow-endpos-tail follow-endpos-quiet-tail
+.PHONY: follow-endpos-tail follow-endpos-quiet-tail follow-ddl-message-stall
 .PHONY: timescaledb citus

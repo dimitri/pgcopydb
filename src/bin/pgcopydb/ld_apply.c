@@ -1087,6 +1087,27 @@ stream_apply_transaction(StreamApplyContext *context,
 		return false;
 	}
 
+	/*
+	 * Make this COMMIT real before trusting it: pgsql_execute() only
+	 * queues on a pipelined connection (see stream_apply_flush_pipeline),
+	 * and libpq does not actually write queued data to the socket until
+	 * either the queue reaches 64kB (OUTBUFFER_THRESHOLD, pqPipelineFlush
+	 * in libpq's fe-exec.c) or an explicit sync is requested. A single
+	 * transaction's worth of SQL text essentially never reaches 64kB, so
+	 * without this, the whole transaction -- BEGIN through COMMIT --
+	 * stays sitting in the client process's own memory, never reaching
+	 * the target server at all, while this function already advances
+	 * previousLSN and the sentinel below as if it had. The apply loop
+	 * then goes back to idling for more upstream work, believing this
+	 * transaction is done.
+	 */
+	if (!stream_apply_flush_pipeline(context))
+	{
+		/* errors have already been logged */
+		context->transactionInProgress = false;
+		return false;
+	}
+
 	context->transactionInProgress = false;
 	context->previousLSN = commitLSN;
 
