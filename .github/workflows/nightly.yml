@@ -135,6 +135,7 @@ jobs:
           - cdc-endpos-in-multi-wal-txn
           - follow-endpos-tail
           - follow-endpos-quiet-tail
+          - follow-ddl-message-stall
         exclude:
           # timescaledb uses timescale/timescaledb:latest-pg13 for both source
           # and target. pg_restore from PG17+ emits "SET transaction_timeout = 0"
