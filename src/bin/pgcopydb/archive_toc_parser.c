@@ -275,6 +275,60 @@ splitSimpleOrRelationRemainder(const char *remainder, ArchiveContentItem *item)
 
 
 /*
+ * splitAclOrCommentOpaqueNameAndOwner splits the remainder of an
+ * ACL/COMMENT entry whose nested object type is itself ARCHIVE_SHAPE_SIMPLE
+ * (FUNCTION, PROCEDURE, AGGREGATE, OPERATOR, TYPE, DOMAIN, ...) into name
+ * and owner, using the exact same trailing-space convention as
+ * splitSimpleOrRelationRemainder's own SIMPLE/OPAQUE case (see its
+ * comment): name may itself contain embedded spaces (e.g. a FUNCTION's own
+ * argument list), so only the LAST space-delimited token, when there is
+ * one at all, is ever taken as the owner boundary. The object type's own
+ * identifier was already consumed by the caller (parseAclOrCommentRemainder)
+ * before this is reached -- there is no separate namespace left to strip
+ * here, unlike splitSimpleOrRelationRemainder.
+ */
+static bool
+splitAclOrCommentOpaqueNameAndOwner(const char *remainder,
+									ArchiveContentItem *item)
+{
+	char buffer[2 * PG_NAMEDATALEN + BUFSIZE] = { 0 };
+
+	strlcpy(buffer, remainder, sizeof(buffer));
+
+	size_t bufferLen = strlen(buffer);
+	bool hasOwner = !(bufferLen > 0 && buffer[bufferLen - 1] == ' ');
+
+	if (!hasOwner && bufferLen > 0)
+	{
+		buffer[bufferLen - 1] = '\0';
+	}
+
+	if (hasOwner)
+	{
+		char *lastSpace = strrchr(buffer, ' ');
+
+		if (lastSpace == NULL)
+		{
+			log_debug("archive_toc_parser: no owner boundary in \"%s\"",
+					  remainder);
+			return false;
+		}
+
+		*lastSpace = '\0';
+		strlcpy(item->owner, lastSpace + 1, sizeof(item->owner));
+	}
+	else
+	{
+		item->owner[0] = '\0';
+	}
+
+	strlcpy(item->name, buffer, sizeof(item->name));
+
+	return true;
+}
+
+
+/*
  * finishRelationAclOrComment finishes parsing an ACL/COMMENT entry that
  * belongs to a relation, once the object type's own identifier(s) have
  * already been pulled as ARCHIVE_TOC_TOKEN_IDENT tokens: it pulls the one
@@ -691,10 +745,83 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 		default:
 		{
 			/*
-			 * FUNCTION, TYPE, DOMAIN, ...: not split, the caller keeps the
-			 * whole raw remainder as restoreListName, as it always has.
+			 * FUNCTION, PROCEDURE, AGGREGATE, OPERATOR, TYPE, DOMAIN, ...:
+			 * handle every object type whose own top-level (non-ACL) shape
+			 * is ARCHIVE_SHAPE_SIMPLE the same way splitSimpleOrRelationRemainder
+			 * does for a top-level entry of the same tag -- their own
+			 * signature can contain embedded spaces, but the owner is
+			 * still reliably the last space-delimited token. Genuinely
+			 * irregular ARCHIVE_SHAPE_OPAQUE/RELATION tags (CAST,
+			 * USER_MAPPING, DEFAULT_ACL, ...) don't meaningfully occur
+			 * inside an ACL/COMMENT and are left unsplit, falling back to
+			 * the raw remainder as restoreListName, as they always have.
 			 */
-			return false;
+			if (archive_toc_shape_for_desc(objectType) != ARCHIVE_SHAPE_SIMPLE)
+			{
+				return false;
+			}
+
+			if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_REMAINDER)
+			{
+				return false;
+			}
+
+			const char *objTypeRemainder = archive_toc_text;
+
+			if (*objTypeRemainder == ' ')
+			{
+				objTypeRemainder++;
+			}
+
+			if (!splitAclOrCommentOpaqueNameAndOwner(objTypeRemainder, item))
+			{
+				return false;
+			}
+
+			const char *rlNamespace = hasNamespace ? nspname : "-";
+
+			/*
+			 * restoreListName stays narrow and keyword-free, the same
+			 * convention finishRelationAclOrComment uses ("nspname relname
+			 * owner") -- even though no filters catalog currently
+			 * populates restore_list_name rows for these object types
+			 * (list_collations.sql/list_source_sequences.sql are the only
+			 * two that do), so this is inert for filtering today, exactly
+			 * as the old full-remainder fallback was.
+			 */
+			size_t bytes = strlen(rlNamespace) + 1 + strlen(item->name) + 1 +
+						   strlen(item->owner) + 1;
+
+			item->restoreListName = (char *) calloc(bytes, sizeof(char));
+
+			if (item->restoreListName == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			sformat(item->restoreListName, bytes, "%s %s %s",
+					rlNamespace, item->name, item->owner);
+
+			item->tagType = ARCHIVE_TAG_TYPE_OTHER;
+
+			/* useListRemainder reproduces the full original line, as ever */
+			size_t ulrBytes = strlen(rlNamespace) + 1 +
+							  strlen(item->objectTypeText) + 1 +
+							  strlen(objTypeRemainder) + 1;
+
+			item->useListRemainder = (char *) calloc(ulrBytes, sizeof(char));
+
+			if (item->useListRemainder == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			sformat(item->useListRemainder, ulrBytes, "%s %s %s",
+					rlNamespace, item->objectTypeText, objTypeRemainder);
+
+			return true;
 		}
 	}
 }
