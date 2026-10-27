@@ -563,7 +563,12 @@ typedef struct StreamApplyContext
 	ConnStrings *connStrings;
 	char origin[BUFSIZE];
 
-	uint64_t previousLSN;       /* register COMMIT LSN progress */
+	uint64_t previousLSN;       /* fetch cursor: past every queued COMMIT */
+	uint64_t confirmedLSN;      /* highest commitLSN a pipeline sync actually
+	                             * confirmed; replay_lsn publishes this, not
+	                             * previousLSN -- see stream_apply_flush_pipeline */
+	int pendingTxnCount;        /* transactions queued since the last sync */
+	uint64_t lastFlushTime;     /* time(NULL) of the last successful sync */
 	uint64_t keepaliveLSN;      /* last KEEPALIVE consumed, cursor only */
 	uint64_t switchLSN;         /* LSN of the most recent SWITCH WAL message */
 
