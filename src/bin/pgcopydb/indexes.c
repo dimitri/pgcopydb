@@ -302,15 +302,13 @@ copydb_index_worker(CopyDataSpec *specs)
 	{
 		char *pguri = specs->connStrings.target_pguri;
 
+		/*
+		 * Only set up the connection string here; the connection itself is
+		 * opened lazily per index, right before it's needed, and closed
+		 * again right after. See the QMSG_TYPE_INDEXOID case below for why.
+		 */
 		if (!pgsql_init(&dst, (char *) pguri, PGSQL_CONN_TARGET))
 		{
-			return false;
-		}
-
-		if (!pgsql_set_gucs(&dst, dstSettings))
-		{
-			log_fatal("Failed to set our GUC settings on the target connection, "
-					  "see above for details");
 			return false;
 		}
 	}
@@ -379,7 +377,24 @@ copydb_index_worker(CopyDataSpec *specs)
 					useDst = &entry->dst;
 				}
 
-				if (!copydb_create_index_by_oid(useSpecs, useDst, oid))
+				/*
+				 * Connect only for as long as it takes to create this one
+				 * index, rather than holding the connection open across the
+				 * wait for the next index to show up on the queue: that
+				 * wait follows the whole table's COPY and can last hours,
+				 * plenty of time for the network or the server itself to
+				 * close an idle connection out from under us. There is
+				 * nothing to gain from keeping it open while there is no
+				 * work to do, so don't try to detect and recover from that
+				 * after the fact -- just never leave it idle in the first
+				 * place.
+				 */
+				bool ok = pgsql_set_gucs(useDst, dstSettings) &&
+						  copydb_create_index_by_oid(useSpecs, useDst, oid);
+
+				(void) pgsql_finish(useDst);
+
+				if (!ok)
 				{
 					++errors;
 
@@ -389,7 +404,6 @@ copydb_index_worker(CopyDataSpec *specs)
 
 					if (specs->failFast)
 					{
-						(void) pgsql_finish(&dst);
 						(void) multidb_index_context_close_all(&idxCtx);
 						return false;
 					}

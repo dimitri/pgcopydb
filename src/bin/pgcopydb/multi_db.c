@@ -2029,6 +2029,17 @@ multidb_init_index_entry(MultiDbEntry *entry, CopyDataSpec *parentSpecs,
 		return false;
 	}
 
+	/*
+	 * Only set up the connection string here; the connection itself is
+	 * opened lazily, by whichever caller actually uses entry->dst (the
+	 * index worker's multidb path -- the vacuum worker's multidb path
+	 * doesn't use entry->dst at all, it opens its own short-lived
+	 * connection per table in vacuum_analyze_table_by_oid), right before
+	 * it's needed and closed again right after. An idle connection held
+	 * across this entry's lifetime in the pool -- which can span the time
+	 * it takes to copy every table in the database -- is liable to be
+	 * closed by the network or by the server itself before it's next used.
+	 */
 	if (!pgsql_init(&entry->dst, dbSpecs->connStrings.target_pguri,
 					PGSQL_CONN_TARGET))
 	{
@@ -2038,11 +2049,6 @@ multidb_init_index_entry(MultiDbEntry *entry, CopyDataSpec *parentSpecs,
 		free(dbSpecs->connStrings.target_pguri);
 		free(dbSpecs);
 		return false;
-	}
-
-	if (!pgsql_set_gucs(&entry->dst, dstSettings))
-	{
-		log_warn("Failed to set GUCs on target for database \"%s\"", datname);
 	}
 
 	strlcpy(entry->datname, datname, sizeof(entry->datname));
