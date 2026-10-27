@@ -241,4 +241,4 @@ at times, and we also have to deal with dependencies in pgcopydb itself.
 The following commands can be used to explore a set of filtering rules:
 
   - :ref:`pgcopydb_list_depends`
-  - :ref:`pgcopydb_restore_parse_list`
+  - :ref:`pgcopydb_list_toc`
