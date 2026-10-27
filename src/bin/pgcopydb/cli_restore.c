@@ -26,7 +26,6 @@ static int cli_restore_schema_getopts(int argc, char **argv);
 static void cli_restore_schema(int argc, char **argv);
 static void cli_restore_schema_pre_data(int argc, char **argv);
 static void cli_restore_schema_post_data(int argc, char **argv);
-static void cli_restore_schema_parse_list(int argc, char **argv);
 static void cli_restore_roles(int argc, char **argv);
 
 static void cli_restore_prepare_specs(CopyDataSpec *copySpecs);
@@ -109,30 +108,11 @@ static CommandLine restore_roles_command =
 		cli_restore_schema_getopts,
 		cli_restore_roles);
 
-static CommandLine restore_schema_parse_list_command =
-	make_command(
-		"parse-list",
-		"Parse pg_restore --list output from custom file",
-		" [ <pre.list> ] ",
-		"  --source             Postgres URI to the source database\n"
-		"  --target             Postgres URI to the target database\n"
-		"  --dir                Work directory to use\n"
-		"  --filters <filename> Use the filters defined in <filename>\n"
-		"  --skip-extensions    Skip restoring extensions\n"
-		"  --skip-ext-comments  Skip restoring COMMENT ON EXTENSION\n"
-		"  --restart            Allow restarting when temp files exist already\n"
-		"  --resume             Allow resuming operations after a failure\n"
-		"  --not-consistent     Allow taking a new snapshot on the source database\n",
-		cli_restore_schema_getopts,
-		cli_restore_schema_parse_list);
-
-
 static CommandLine *restore_subcommands[] = {
 	&restore_schema_command,
 	&restore_schema_pre_data_command,
 	&restore_schema_post_data_command,
 	&restore_roles_command,
-	&restore_schema_parse_list_command,
 	NULL
 };
 
@@ -545,75 +525,6 @@ cli_restore_roles(int argc, char **argv)
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_TARGET);
-	}
-}
-
-
-/*
- * print_archive_toc_item_hook is an iterator callback function.
- */
-static bool
-print_archive_toc_item_hook(void *context, ArchiveContentItem *item)
-{
-	fformat(stdout,
-			"%d; %u %u %s %s\n",
-			item->dumpId,
-			item->catalogOid,
-			item->objectOid,
-			item->description ? item->description : "",
-			item->restoreListName ? item->restoreListName : "");
-
-	return true;
-}
-
-
-/*
- * cli_restore_schema implements the command: pgcopydb restore parse-list
- */
-static void
-cli_restore_schema_parse_list(int argc, char **argv)
-{
-	if (argc == 1)
-	{
-		char *filename = argv[0];
-
-		log_info("Parsing Archive Content pre.list file: \"%s\"", filename);
-
-		if (!archive_iter_toc(filename, NULL, print_archive_toc_item_hook))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
-
-		exit(EXIT_CODE_QUIT);
-	}
-
-	CopyDataSpec copySpecs = { 0 };
-
-	(void) cli_restore_prepare_specs(&copySpecs);
-
-	log_info("Preparing the pg_restore --use-list for the pre-data "
-			 "archive file \"%s\" at: \"%s\"",
-			 copySpecs.dumpPaths.dumpFilename,
-			 copySpecs.dumpPaths.preListFilename);
-
-	if (!copydb_write_restore_list(&copySpecs, PG_DUMP_SECTION_PRE_DATA))
-	{
-		log_error("Failed to prepare the pg_restore --use-list catalogs, "
-				  "see above for details");
-		exit(EXIT_CODE_INTERNAL_ERROR);
-	}
-
-	log_info("Preparing the pg_restore --use-list for the post-data "
-			 "archive file \"%s\" at: \"%s\"",
-			 copySpecs.dumpPaths.dumpFilename,
-			 copySpecs.dumpPaths.postListFilename);
-
-	if (!copydb_write_restore_list(&copySpecs, PG_DUMP_SECTION_POST_DATA))
-	{
-		log_error("Failed to prepare the pg_restore --use-list catalogs, "
-				  "see above for details");
-		exit(EXIT_CODE_INTERNAL_ERROR);
 	}
 }
 

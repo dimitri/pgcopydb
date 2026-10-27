@@ -93,11 +93,10 @@ $ pgcopydb help
     roles      Dump source database roles as custom file in work directory
 
   pgcopydb restore
-    schema      Restore a database schema from custom files to target database
-    pre-data    Restore a database pre-data schema from custom file to target database
-    post-data   Restore a database post-data schema from custom file to target database
-    roles       Restore database roles from SQL file to target database
-    parse-list  Parse pg_restore --list output from custom file
+    schema     Restore a database schema from custom files to target database
+    pre-data   Restore a database pre-data schema from custom file to target database
+    post-data  Restore a database post-data schema from custom file to target database
+    roles      Restore database roles from SQL file to target database
 
   pgcopydb list
     databases    List databases
