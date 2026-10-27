@@ -670,17 +670,41 @@ ld_store_lookup_output_after_lsn(DatabaseCatalog *catalog,
 	 * once the BEGIN has been found.  COMMIT and ROLLBACK are also
 	 * excluded — they are end-of-transaction anchors, not starting points.
 	 */
+
+	/*
+	 * Picking the next BEGIN by ascending LSN is wrong once transactions
+	 * overlap: a transaction's own BEGIN LSN reflects only when that
+	 * session issued BEGIN, which has no reliable relationship to commit
+	 * order under concurrency.  A slow transaction that began early but
+	 * commits late can have a lower BEGIN LSN than many fast, fully
+	 * concurrent transactions that both began and committed inside its
+	 * range.  Once that slow transaction is finally applied, transform_lsn
+	 * jumps past every one of those transactions' LSN ranges, and
+	 * "lsn >= $1" then permanently hides them -- silent data loss, not a
+	 * stall: apply keeps going, just over a shrinking set of transactions.
+	 *
+	 * `id` is autoincrement insertion order, and receive always writes a
+	 * transaction's full BEGIN..COMMIT to this table at the moment its
+	 * COMMIT is encountered while scanning WAL sequentially, so id is a
+	 * reliable proxy for true commit order -- unlike each transaction's own
+	 * BEGIN LSN. COMMIT rows themselves stay consistent in id/lsn order
+	 * (commits are always encountered, and written, in strictly increasing
+	 * LSN order), so the COMMIT row matching transform_lsn reliably gives
+	 * the id boundary of everything already applied.
+	 */
 	char *sql =
 		"select id, action, xid, lsn, timestamp, message, nspname, relname, old_type from ("
 		"  select id, action, xid, lsn, timestamp, message, nspname, relname, old_type "
 		"    from output "
-		"   where lsn >= $1 and action = 'B' "
+		"   where action = 'B' "
+		"     and id > (select coalesce(max(id), 0) from output "
+		"                 where action = 'C' and lsn <= $1) "
 		" union all "
 		"  select id, action, xid, lsn, timestamp, message, nspname, relname, old_type "
 		"    from output "
 		"   where lsn > $2 and action in ('K', 'X') "
 		") "
-		"order by lsn asc, case when action = 'B' then 0 else 1 end, id asc "
+		"order by id asc "
 		"limit 1";
 
 	log_debug("ld_store_lookup_output_after_lsn: %X/%X (keepalive %X/%X)",
